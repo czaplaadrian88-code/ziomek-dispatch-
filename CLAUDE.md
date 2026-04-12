@@ -196,11 +196,85 @@ nie w git)
 **Production:** NO RESTART required (osrm_client on-demand, shadow dispatcher Fazy 1
 użyje fallbacka).
 
-### ⏳ P0.6-P0.8 DO ZROBIENIA (kolejność)
+### ✅ P0.6 DONE — fetch_order_details recon (12.04)
 
-- **P0.6** Recon: co panel zwraca w `fetch_order_details` dla `prep_ready_at`? (~30 min)
-- **P0.7** `gap_fill_restaurant_meta.py` — filozofia D16 (alerty biznesowe, NIE bufory) (~5h)
-- **P0.8** Meta integration w `route_simulator_v2` (inline do Fazy 1)
+**Co zrobione:** 10 sample orderów (statusy 2/3/5/7) → pełny dump pól
+`zlecenie` (dict[50]) + `czas_kuriera` (top-level). Dump w
+`/tmp/p06_order_details_sample.json`.
+
+**DECYZJA:** `prep_ready_at` **nie istnieje** w panel API. Zero pól semantyki
+"fizycznie gotowe w kuchni". Panel wie tylko deklarację (`czas_odbioru`) +
+moment odbioru (`dzien_odbioru`) + doręczenia (`czas_doreczenia`).
+
+**Bonus:** potwierdzona semantyka `czas_kuriera` = deklarowany przyjazd kuriera
+do restauracji, ustawiany przez koordynatora (dropdown) lub kuriera
+(jednorazowa ekstensja przy akceptacji). Kontrakt z restauracją ±5min liczy
+się OD `czas_kuriera`. Historical `(czas_kuriera - czas_odbioru_timestamp)` per
+restauracja = dodatkowy sygnał dla P0.7.
+
+**Implikacja dla Fazy 1:** `prep_ready_at_estimate = czas_odbioru_timestamp +
+prep_variance(restauracja)` — prep_variance policzyliśmy w P0.7.
+
+**Backup:** N/A (zero kodu produkcyjnego, sama recon + dokumentacja)
+
+**Commit:** `12285ef`
+
+### ✅ P0.7 DONE — restaurant_meta.json gap-fill (12.04)
+
+**Co zrobione:**
+- **Nowy offline tool:** `/root/.openclaw/workspace/scripts/tools/gap_fill_restaurant_meta.py`
+  (595 linii, stdlib-only, argparse --csv/--output/--dry-run, **POZA git repo**
+  dispatch_v2 zgodnie z V3.2)
+- **Wygenerowany:** `/root/.openclaw/workspace/dispatch_state/restaurant_meta.json`
+  (115807 B = 113.1 KB, 68 restauracji)
+- **Source:** `/tmp/zestawienie_all.csv` (9 plików panel CSV merged, 24007
+  delivered orderów, 76 dni 2026-01-26 → 2026-04-12)
+
+**Metryki per restauracja:**
+- `prep_variance_min` (pickup_dt - czas_odbioru_timestamp)
+- `waiting_time_sec` (oczekiwanie odbiór z CSV, z i bez zer)
+- `extension_min` (czas_kuriera - czas_odbioru_timestamp)
+- Flagi: `low_confidence`, `chronically_late`, `prep_variance_high`,
+  `unreliable`, `critical` (z suppress dla low_confidence — zero
+  false-positive alertów na <30 sample)
+- Fallback: low_confidence dostaje `*_fallback_min/_sec` z fleet medians
+
+**Fleet medians (z 57 restauracji sample_n≥30):**
+- `prep_variance_median`: **13 min** — typowa restauracja deklaruje 13 min
+  krócej niż realny prep
+- `waiting_time_median_sec`: **0 s** — ekstensja koordynatora działa
+- `extension_median_min`: **7 min** — typowo przedłuża o 7 min
+
+**Biznesowe findings:**
+- 62 active / 6 inactive (14-day window)
+- **4 critical (>5% volume):** Grill Kebab 9.45%, Rany Julek 8.85%,
+  Chicago Pizza 6.47%, Rukola Sienkiewicza 5.60% (razem 30.37% wolumenu)
+- **19 prep_variance_high** (28% flotu deklaruje za krótko) — Aztek Tex-Mex
+  worst case median=29 min
+- **11 low_confidence** (sample_n<30) → fleet_median fallback aktywny
+- **0 chronically_late** / **0 unreliable** po suppress — koordynator
+  ekstensją kompensuje prep_variance (77.5% orderów zero wait)
+
+**Kluczowy insight:** system koordynatora absorbuje prep_variance przez
+ekstensję `czas_kuriera`. Faza 1 Ziomek musi replikować kompensację (bez tego
+kurierzy będą czekać na jedzenie u 28% restauracji).
+
+**Testy (7/7 etapów PASS):**
+py_compile → dry-run → real run → clean struct verify → production rewrite
+(auto-backup) → diff verify (276 linii, tylko timestamps) → readback sanity
+
+**Backupy safety net w dispatch_state/:**
+- `restaurant_meta.json.bak-PRE-P07-20260412-190421` (V3.1, 2081 B)
+- `restaurant_meta.json.bak-20260412-192448` (3c smoke test, 123093 B)
+- `restaurant_meta.json` (current clean struct, 115807 B)
+
+**Production:** NO RESTART required. Meta dostępne dla Fazy 1
+`route_simulator_v2`.
+
+### ⏳ P0.8 DO ZROBIENIA (ostatni Fazy 0)
+
+- **P0.8** Meta integration notes w docs + cleanup /tmp + final snapshot
+  POST_P07 + CLAUDE.md V3.1→V3.2 scalenie
 
 ---
 

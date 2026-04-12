@@ -279,3 +279,129 @@ panelowi momentu ukończenia przygotowania.
 - [ ] **Zero flag "restauracja już gotowa"** — nie ma way żeby ziomek wiedział,
   że Rany Julek już zawołał kuriera przed `czas_odbioru_timestamp`. Hipotetyczna
   P3 integracja przez restaurant-panel API lub button "gotowe" w panelu.
+
+## P0.7 DONE (12.04)
+
+**Co zrobione:**
+- Nowy offline tool: `/root/.openclaw/workspace/scripts/tools/gap_fill_restaurant_meta.py`
+  (595 linii, stdlib only, POZA git repo dispatch_v2 zgodnie z V3.2)
+- Wygenerowany `/root/.openclaw/workspace/dispatch_state/restaurant_meta.json`
+  (115807 B = 113.1 KB, 68 restauracji)
+- Source: `/tmp/zestawienie_all.csv` (9 plików panel CSV merged, 24007
+  delivered orderów, 76 dni: 2026-01-26 → 2026-04-12)
+
+**Struktura output (clean, zero redundancji):**
+```
+{
+  "restaurants": {
+    "<nazwa_restauracji>": {
+      "sample_n", "first_order", "last_order", "active", "volume_pct",
+      "prep_variance_min": {median, p75, p90, mean, stddev, min, max, sample_n},
+      "waiting_time_sec": {median_sec, p75_sec, p90_sec, mean_sec, max_sec,
+                           median_non_zero_sec, p75_non_zero_sec,
+                           non_zero_count, non_zero_pct, sample_n},
+      "extension_min": {median_min, p75_min, p90_min, mean_min,
+                        never_extended_pct, extended_count, extended_pct,
+                        shortened_count, sample_n},
+      "flags": {low_confidence, chronically_late, prep_variance_high,
+                unreliable, critical},
+      "courier_sample": [top 5],
+      "delivery_addresses_sample": [top 5],
+      "last_updated": <iso>,
+      "prep_variance_fallback_min", "waiting_time_fallback_sec",
+      "extension_fallback_min"   // nie-None tylko gdy low_confidence
+    }
+  },
+  "fleet_medians": {
+    "fleet_prep_variance_median": 13.0,
+    "fleet_waiting_time_median_sec": 0,
+    "fleet_extension_median_min": 7.0,
+    "source_restaurants_n": 57
+  },
+  "metadata": {
+    "total_delivered_orders": 23607,
+    "unique_restaurants": 68,
+    "reference_date", "source_csv", "computed_from", "computed_at",
+    "min_sample_confident": 30,
+    "active_window_days": 14,
+    "critical_volume_pct": 5.0
+  }
+}
+```
+
+**Kluczowe findings biznesowe:**
+
+- **68 unikalnych restauracji** (55 z restaurant_coords.json + 13
+  zagonionych/niszowych z historii)
+- **62 active** (last order ≤14d), **6 inactive**
+- **4 critical** (>5% volume):
+  - Grill Kebab 9.45% (2231 orderów)
+  - Rany Julek 8.85% (2089)
+  - Chicago Pizza 6.47% (1527)
+  - Rukola Sienkiewicza 5.60% (1322)
+  - **Razem 30.37% wolumenu** w 4 partnerach (long tail po to)
+- **19 prep_variance_high** (median prep_variance >15 min) — **28% flotu
+  kłamie w deklaracji** o średnio 15-29 min
+- **11 low_confidence** (sample_n<30) → fleet_median fallback active
+- **0 chronically_late** po suppress (Bar Słoneczny, Ziemniaczek miały
+  waiting_median>5min ale są low_confidence → suppressed)
+- **0 unreliable** po suppress
+- **Fleet medians** (z 57 restauracji sample_n≥30):
+  - prep_variance_median = **13 min** (typowa restauracja deklaruje 13 min
+    za krótko niż realny prep)
+  - waiting_time_median_sec = **0 s** (mediana wszystkich czekań = 0)
+  - extension_median_min = **7 min** (koordynator typowo przedłuża o 7 min)
+
+**Kluczowy insight: system koordynatora absorbuje prep_variance.**
+77.5% orderów zero wait mimo 28% restauracji `prep_variance_high`. Koordynator
+aktywnie kompensuje ekstensją `czas_kuriera` (~54% orderów extended >1 min).
+Faza 1 Ziomek musi replikować tę kompensację: `pickup_ready_at_estimate =
+czas_odbioru_timestamp + prep_variance.median(restauracja)` (lub fallback).
+
+**Flagi (z suppress dla low_confidence zgodnie z R16/R17 filozofia — zero
+false-positive alertów na <30 sample):**
+- `low_confidence` (sample_n<30) — 11 restauracji
+- `chronically_late` (waiting_median>300s AND NOT low_confidence) — 0
+- `prep_variance_high` (prep_median>15min AND NOT low_confidence) — 19
+- `unreliable` (waiting_p75>600s AND NOT low_confidence) — 0
+- `critical` (volume_pct>5%) — 4 (NIE suppressed, volume zawsze wiarygodne)
+
+**Fallback dla low_confidence (sample_n<30):**
+- `prep_variance_fallback_min`: 13 (fleet median)
+- `waiting_time_fallback_sec`: 0
+- `extension_fallback_min`: 7
+
+**Backupy safety net w dispatch_state/:**
+- `restaurant_meta.json.bak-PRE-P07-20260412-190421` — V3.1 oryginał (2081 B)
+- `restaurant_meta.json.bak-20260412-192448` — 3c smoke test (redundant
+  per-restaurant source_csv/computed_from, 123093 B)
+- `restaurant_meta.json` — **current clean struct** (115807 B, 113.1 KB)
+
+**Walidacja (7/7 etapów PASS):**
+- py_compile OK
+- Dry-run: zero write, pełen raport stdout
+- Real run: `/tmp/test_meta_clean.json` 115807 B
+- Clean struct: per-restaurant 15 kluczy (zero source_csv/computed_from),
+  metadata 9 kluczy (ma source_csv + computed_from — provenance raz)
+- Production rewrite: auto-backup + atomic write
+- Diff verify: 276 linii diff, tylko `last_updated` + `computed_at`
+  (zero strukturalnych regresji)
+- Readback sanity: 68 restauracji, fleet_medians identyczne z 3c
+
+**TECH_DEBT z P0.7:**
+- [ ] **indywidual_time=1 jako sygnał czasówki** — P1, rozważyć zamiast
+  threshold `czas_odbioru>=60` (już w P0.6 TECH_DEBT, ale re-raising)
+- [ ] **Klucz meta = nazwa+pickup_address dla multi-filia brands** — P2.
+  Dziś Grill Kebab (4 filie) agregowany jako jedno wpis → uśredniony
+  prep_variance nie odróżnia Barszczańskiej od Ogrodowej. Unblock przy
+  ekspansji Warszawy albo gdy Białystok dostanie 2. filię krytycznego
+  partnera.
+- [ ] **Uzupełnić `restaurant_coords.json` o per-filia entries** — P2.
+  Prerequisite dla klucza multi-filia.
+- [ ] **Heurystyka filia-detection** — P2. `delivery_coords` klienta →
+  najbliższa filia (spośród coords) → użyj per-filia meta.
+- [ ] **Naming convention bak files** — standardize `PRE-{patch}` vs
+  `AUTO-{ts}`. Obecnie mixed (`.bak-PRE-P07-*` vs `.bak-*`). Drobne.
+- [ ] **P0.8 cleanup** — `rm /tmp/p07_test.py /tmp/zestawienie_*.csv
+  /tmp/test_meta*.json /tmp/p06_order_details_sample.json /tmp/p07_diff*.txt
+  /tmp/p07_analysis.md /tmp/demand_analysis_backup.md`
