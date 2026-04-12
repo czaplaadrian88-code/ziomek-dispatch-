@@ -343,39 +343,9 @@ def compute_oldest_picked_up_age_min(bag, now_utc):
 
 
 def _parse_picked_up_at(value):
-    """Parsuje picked_up_at. Zwraca datetime w UTC lub None gdy niepoprawny.
-
-    Akceptuje:
-      - datetime z tzinfo (zwracany znormalizowany do UTC)
-      - datetime naive (interpretowany jako Warsaw)
-      - str ISO z 'T' i offsetem/Z
-      - str naive Warsaw "YYYY-MM-DD HH:MM:SS" (format panelu)
-    """
-    from zoneinfo import ZoneInfo
-    WARSAW = ZoneInfo("Europe/Warsaw")
-
-    try:
-        if isinstance(value, datetime):
-            dt = value
-        elif isinstance(value, str):
-            v = value.strip()
-            if not v:
-                return None
-            if "T" in v:
-                # ISO: "2026-04-12T11:45:00+00:00" lub z "Z"
-                dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
-            else:
-                # naive Warsaw z panelu: "2026-04-12 11:45:00"
-                dt = datetime.strptime(v, "%Y-%m-%d %H:%M:%S").replace(tzinfo=WARSAW)
-        else:
-            return None
-
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=WARSAW)
-
-        return dt.astimezone(timezone.utc)
-    except (ValueError, TypeError):
-        return None
+    """Wrapper na common.parse_panel_timestamp dla kompatybilnosci wewnetrznej."""
+    from dispatch_v2.common import parse_panel_timestamp
+    return parse_panel_timestamp(value)
 
 
 def stats() -> dict:

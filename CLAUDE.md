@@ -104,10 +104,31 @@
 
 R27 wymaga `simulate_bag_route` zwracającego `predicted_arrival_at_pickup`. Obecny `route_simulator.py` v1 idzie do kosza (→ `route_simulator_v2` PDP-TSP w Fazie 1). Pisanie R27 dla v1 = martwy kod.
 
-### ⏳ P0.3-P0.8 DO ZROBIENIA (kolejność)
+### ✅ P0.3 DONE — courier_resolver position priority (12.04)
 
-- **P0.3** `courier_resolver.py` priority bug (PILNE, ~25 min)
-- **P0.4** `panel_watcher.py` pickup_coords null → inline geocoding + centroid fallback (~25 min)
+**Co zrobione:**
+- `common.py`: `parse_panel_timestamp` + `WARSAW` + `DT_MIN_UTC` (module-level, DRY dla wielomiastowości)
+- `state_machine.py`: `_parse_picked_up_at` → wrapper na `common.parse_panel_timestamp`
+- `courier_resolver.py`: docstring update + import + `_bag_sort_key` module-level + blok priorytetów
+
+**Nowa reguła priorytetu:**
+1. GPS fresh <5min (skip dziś)
+2. Aktywny bag (picked_up > assigned, sorted by datetime malejąco) — iteracja gdy broken
+3. last_delivered (fallback dla bag pusty/broken)
+4. None
+
+**Testy:**
+- 9/9 P0.3 PASS (w tym test 7: broken newest + OK starszy → bierze OK + warning)
+- 12/12 P0.2a regression PASS
+- Live kurier 471: bug fix działa (był 'last_delivered', po patchu 'last_assigned_pickup' bo picked_up broken)
+
+**Data quality discovery:** 12 kurierów produkcyjnie z broken delivery_coords → P0.4 krytyczny
+
+**Backup:** `*.bak-20260412-112626` (3 pliki)
+
+### ⏳ P0.4-P0.8 DO ZROBIENIA (kolejność)
+
+- **P0.4** `panel_watcher.py` pickup_coords null → inline geocoding + centroid fallback (PILNE, ~25 min)
 - **P0.5** OSRM haversine fallback × 1.4 / 25 km/h (~40 min)
 - **P0.6** Recon: co panel zwraca w `fetch_order_details` dla `prep_ready_at`? (~30 min)
 - **P0.7** `gap_fill_restaurant_meta.py` — filozofia D16 (alerty biznesowe, NIE bufory) (~5h)

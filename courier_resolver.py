@@ -1,9 +1,9 @@
 """Courier resolver - fleet snapshot z GPS + fallback last-click.
 
-Priorytet zrodel pozycji kuriera:
+Priorytet zrodel pozycji kuriera (V3.1 P0.3):
 1. Traccar GPS (swieze < 5 min)
-2. Ostatnia aktywnosc w state (delivered/picked_up/assigned w tej kolejnosci)
-3. Domyslny pin z kurier_piny.json
+2. Aktywny bag (picked_up > assigned, najnowszy timestamp)
+3. Last delivered (TYLKO gdy bag pusty)
 4. None = skip w dispatchu
 
 Pure dataclass-based, lazy-load GPS aby nie blokowac dispatchu gdy Traccar offline.
@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from dispatch_v2.common import setup_logger, now_iso
+from dispatch_v2.common import setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC
 from dispatch_v2 import state_machine
 
 _log = setup_logger("courier_resolver", "/root/.openclaw/workspace/scripts/logs/courier_resolver.log")
@@ -81,6 +81,18 @@ def _latest_order_by_event(orders: List[Dict], event_field: str) -> Optional[Dic
     return max(filtered, key=lambda o: o.get(event_field, ""))
 
 
+def _bag_sort_key(o: dict) -> tuple:
+    """Klucz sortowania orderow w aktywnym bagu: picked_up > assigned, nowszy > starszy.
+
+    Zwraca tuple (status_priority, parsed_datetime) dla stabilnego sortowania.
+    Module-level: alokacja raz, wolany N razy bez GC pressure.
+    """
+    is_picked = 1 if o.get("status") == "picked_up" else 0
+    ts_raw = o.get("picked_up_at") if is_picked else o.get("assigned_at")
+    ts_dt = parse_panel_timestamp(ts_raw) or DT_MIN_UTC
+    return (is_picked, ts_dt)
+
+
 def build_fleet_snapshot(
     include_koordynator: bool = False,
 ) -> Dict[str, CourierState]:
@@ -140,7 +152,40 @@ def build_fleet_snapshot(
                     fleet[kid] = cs
                     continue
 
-        # 2. Last delivered (najswiezszy)
+        # 2. AKTYWNY BAG priorytet (picked_up > assigned, najnowszy wygrywa)
+        #    picked_up -> delivery_coords (kurier wiezie do klienta)
+        #    assigned -> pickup_coords (kurier jedzie odebrac)
+        #    Iteracja malejaco: jesli najnowszy broken -> probuj kolejny
+        active_bag_orders = [o for o in orders if o.get("status") in ("picked_up", "assigned")]
+        if active_bag_orders:
+            sorted_bag = sorted(active_bag_orders, key=_bag_sort_key, reverse=True)
+            resolved = False
+            for order in sorted_bag:
+                if order.get("status") == "picked_up":
+                    if order.get("delivery_coords"):
+                        cs.pos = tuple(order["delivery_coords"])
+                        cs.pos_source = "last_picked_up_delivery"
+                        resolved = True
+                        break
+                    _log.warning(
+                        f"courier {kid} picked_up order {order.get('order_id')} "
+                        f"bez delivery_coords - data quality alert (P0.4)"
+                    )
+                else:  # assigned
+                    if order.get("pickup_coords"):
+                        cs.pos = tuple(order["pickup_coords"])
+                        cs.pos_source = "last_assigned_pickup"
+                        resolved = True
+                        break
+                    _log.warning(
+                        f"courier {kid} assigned order {order.get('order_id')} "
+                        f"bez pickup_coords - data quality alert (P0.4)"
+                    )
+            if resolved:
+                fleet[kid] = cs
+                continue
+
+        # 3. Last delivered — TYLKO gdy bag pusty lub aktywny bag bez coords
         last_del = _latest_order_by_event(orders, "delivered_at")
         if last_del and last_del.get("delivery_coords"):
             cs.pos = tuple(last_del["delivery_coords"])
@@ -148,28 +193,7 @@ def build_fleet_snapshot(
             fleet[kid] = cs
             continue
 
-        # 3. Last picked_up (kurier w drodze do klienta - uzyj delivery jako target)
-        last_pu = _latest_order_by_event(orders, "picked_up_at")
-        if last_pu and last_pu.get("delivery_coords"):
-            cs.pos = tuple(last_pu["delivery_coords"])
-            cs.pos_source = "last_picked_up_delivery"
-            fleet[kid] = cs
-            continue
-        if last_pu and last_pu.get("pickup_coords"):
-            cs.pos = tuple(last_pu["pickup_coords"])
-            cs.pos_source = "last_picked_up_pickup"
-            fleet[kid] = cs
-            continue
-
-        # 4. Last assigned (kurier jedzie do restauracji)
-        last_as = _latest_order_by_event(orders, "assigned_at")
-        if last_as and last_as.get("pickup_coords"):
-            cs.pos = tuple(last_as["pickup_coords"])
-            cs.pos_source = "last_assigned_pickup"
-            fleet[kid] = cs
-            continue
-
-        # 5. None - skip w dispatchu (brak danych, nie mozemy scorowac)
+        # 4. None — skip w dispatchu (brak danych pozycji)
         cs.pos_source = "none"
         fleet[kid] = cs
 

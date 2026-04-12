@@ -112,6 +112,15 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 - Aplikacja kuriera / jak kurier dostaje informację o przypisaniu
 - Koordynator id=26 jako bucket czasówek — jak fizycznie działa
 
+## P0.3 DISCOVERY (12.04)
+
+- 12 kurierów w produkcji ma picked_up ordery bez delivery_coords
+- Przykłady z logów: 471 (order 465443), 500 (465453), 511 (465460), 509 (465468)
+- Konsekwencja: dla tych kurierów courier_resolver spada do last_assigned_pickup albo last_delivered
+- P0.4 krytyczny - bez niego 20%+ dispatchable fleet ma pozycję z fallbacku zamiast z aktualnego ruchu
+- P0.4 priorytet: następny po P0.3 (ZAMIAST czekać na harmonogram)
+- NIE ZMIENIAJ kolejności — P0.4 pilny
+
 ## NATĘŻENIE jako P1 feature
 
 - [ ] **Ziomek ustawia natężenie automatycznie** na podstawie `avg_load_per_courier`

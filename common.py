@@ -4,6 +4,7 @@ import logging
 import os
 from pathlib import Path
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 SCRIPTS_DIR = Path("/root/.openclaw/workspace/scripts")
 CONFIG_PATH = SCRIPTS_DIR / "config.json"
@@ -89,3 +90,45 @@ MAX_BAG_TSP_BRUTEFORCE = 5
 # Anomaly guard: bag >8 = blad stanu albo koordynatora.
 # Feasibility zwraca NO + alert krytyczny.
 MAX_BAG_SANITY_CAP = 8
+
+
+# === TIMEZONE + TIMESTAMP PARSING (V3.1 P0.3) ===
+
+WARSAW = ZoneInfo("Europe/Warsaw")
+
+# Sentinel: gwarantuje determinizm sortowania przy None timestamps
+DT_MIN_UTC = datetime(1, 1, 1, tzinfo=timezone.utc)
+
+
+def parse_panel_timestamp(value) -> "datetime | None":
+    """Parsuje timestamp z panelu/state do aware UTC datetime.
+
+    Akceptuje:
+      - datetime z tzinfo (znormalizowany do UTC)
+      - datetime naive (interpretowany jako Warsaw)
+      - str ISO z 'T' i offsetem/Z: "2026-04-12T10:50:21.736800+00:00"
+      - str naive Warsaw panel: "2026-04-12 13:08:07"
+    Zwraca None dla None/garbage (caller decyduje o fallback).
+    """
+    if value is None:
+        return None
+    try:
+        if isinstance(value, datetime):
+            dt = value
+        elif isinstance(value, str):
+            v = value.strip()
+            if not v:
+                return None
+            if "T" in v:
+                dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+            else:
+                dt = datetime.strptime(v, "%Y-%m-%d %H:%M:%S").replace(tzinfo=WARSAW)
+        else:
+            return None
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=WARSAW)
+
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
