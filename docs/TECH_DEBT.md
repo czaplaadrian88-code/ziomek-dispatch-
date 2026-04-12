@@ -171,3 +171,111 @@ P1 BACKLOG z P0.5:
   15-17 ≠ środa 15-17 (różne korki weekday).
 - Backfill starych orderów bez delivery_coords - nadal P1 task po Fazie 0
   (unchanged from P0.4 notes).
+
+## P0.6 RECON RESULTS (12.04)
+
+### GŁÓWNY WNIOSEK P0.6
+
+Pytanie: czy panel Rutcom zwraca prep_ready_at?
+Odpowiedź: NIE. 50 pól w zlecenie + 2 top-level (zlecenie, czas_kuriera) — zero
+pól z semantyką "fizycznie gotowe w kuchni". Panel wie tylko deklarację przy
+złożeniu + kiedy kurier kliknął "odebrane".
+Decyzja Fazy 1: prep_ready_at_estimate = czas_odbioru_timestamp +
+prep_variance(restauracja). prep_variance liczymy w P0.7 z historical
+dzien_odbioru - czas_odbioru_timestamp per id_address.
+Bonus: pole czas_kuriera (top-level, HH:MM) wygląda jak wartość z dropdownu
+koordynatora. Weryfikacja semantyki w P1.
+
+**Cel:** ustalić czy panel Rutcom zwraca `prep_ready_at` (moment gdy jedzenie
+faktycznie gotowe) w odpowiedzi na POST /admin2017/new/orders/edit-zamowienie.
+
+**Próbka:** 10 orderów, statusy 2/3/5/7, różne restauracje. Dump:
+`/tmp/p06_order_details_sample.json`.
+
+**Schema panel response:**
+- 2 klucze top-level: `zlecenie` (dict[50]) + `czas_kuriera` (str HH:MM)
+- 50 pól w `zlecenie` (UNION ze wszystkich 10 sample)
+- Pola zagnieżdżone: `address` (metadata restauracji), `lokalizacja` (strefa miasto)
+
+**DECYZJA: `prep_ready_at` NIE ISTNIEJE.** Zero pól z nazwą
+`ready`/`prep`/`gotowe`/`kuchnia`/`kitchen`/`done`. Restauracja NIE komunikuje
+panelowi momentu ukończenia przygotowania.
+
+**Jedyne czasowe pola związane z odbiorem:**
+- `czas_odbioru` (str int min) — deklaracja restauracji przy zamówieniu ("40 min
+  na przygotowanie"). Ustawiana raz, nie aktualizowana.
+- `czas_odbioru_timestamp` (Warsaw naive) — `created_at + czas_odbioru min`.
+  Planowana godzina odbioru, NIE faktyczna gotowość. Koordynator może ręcznie
+  edytować (flag `zmiana_czasu_odbioru`).
+- `dzien_odbioru` (Warsaw naive) — FAKTYCZNY pickup (kurier kliknął odebrane).
+  None dla new/assigned, filled dla picked_up/delivered.
+- `czas_doreczenia` (Warsaw naive) — faktyczny delivered.
+- `czas_kuriera` (TOP-level, str HH:MM) = **DEKLAROWANY CZAS PRZYJAZDU KURIERA
+  DO RESTAURACJI**. Dwa źródła ustawienia:
+  (a) koordynator przy przypisaniu kuriera w panelu głównym wybiera z dropdownu
+      5/10/.../60min → staje się `czas_kuriera`
+  (b) kurier przy AKCEPTACJI zlecenia na panelu `/admin2017/kurier2` może
+      JEDNORAZOWO "przedłużyć" zlecenie (zmienić `czas_kuriera` raz). Po
+      akceptacji kurier NIE modyfikuje tego pola ad hoc w trakcie realizacji.
+
+  Ta wartość jest wysyłana restauracji w zwrotce ("kurier będzie o HH:MM").
+  Kontrakt z restauracją ±5min liczy się OD `czas_kuriera` (nie od
+  `czas_odbioru_timestamp`).
+
+  Obserwacje z 10 sample:
+  - 8/10: `czas_kuriera ≈ czas_odbioru_timestamp ±1min` (brak przedłużenia)
+  - 465215: `czas_kuriera = czas_odbioru_timestamp +16.05 min` (przedłużenie)
+  - 465274: `czas_kuriera = czas_odbioru_timestamp +16.95 min` (przedłużenie)
+
+  Z samego API nie odróżnimy czy przedłużenie zrobił koordynator przy
+  przypisaniu, czy kurier przy akceptacji — obie akcje dają identyczny rezultat.
+
+  Historical `(czas_kuriera - czas_odbioru_timestamp)` per restauracja = sygnał
+  ile średnio jest przedłużane = **DODATKOWY input dla P0.7 prep_variance**.
+
+**Flagi okołoprepowe (bez realnego contentu dziś):**
+- `indywidual_time` (int 0/1) — 1 w 1/10 sample (czasówka 465584, 86 min).
+  Hipoteza: flag dla manualnie zatwierdzonych czasówek. Weryfikacja w P1 na
+  >50 sample czy koreluje z czas_odbioru >= 60 czy z innym kryterium.
+- `zmiana_czasu_odbioru` / `zmiana_czasu_odbioru_kurier` — oba 0 we wszystkich
+  10 próbkach. Flagi manualnej korekty, rzadkie.
+- `is_odbior_status` (int 0/1) — duplikat `id_status_zamowienia >= 5` (po
+  pickup). Redundantne.
+
+**Implikacje dla Fazy 1 (route_simulator_v2 + scoring):**
+1. **Real `prep_ready_at` nie do odzyskania z panelu.** Musimy go oszacować
+   heurystycznie: `prep_ready_at_estimate = czas_odbioru_timestamp +
+   prep_variance(restaurant)`.
+2. **P0.7 `gap_fill_restaurant_meta.py` KRYTYCZNY** — bez `prep_variance` per
+   restauracja estymata zjada D8 ("kurier czeka"). Filozofia D16: NIE bufor na
+   czasówki, ALE alert biznesowy "restauracja X regularnie +N min po
+   czas_odbioru_timestamp".
+3. **Shadow dispatcher wywoła** route_simulator_v2 z `pickup_ready_at =
+   max(now, czas_odbioru_timestamp + prep_variance_restauracji)`. Jeśli
+   predicted_arrival < pickup_ready_at → kurier czeka, penalty w scoringu.
+4. **Kalibracja `prep_variance`:** per `id_address` restauracji z historical
+   `dzien_odbioru - czas_odbioru_timestamp` delta. Wymagane ≥30 delivered
+   orderów per restauracja dla wiarygodnej mediany. Restauracje bez
+   wystarczającej próbki (sample_n < 30) → `prep_variance = fleet_median`
+   (globalna mediana spóźnień jako bezpieczny default). Flag
+   `low_confidence=True` dla alertowania w Fazie 1 że dane są prowizoryczne.
+   Fallback 0 złamałby D8 od pierwszego dnia dla nowych restauracji.
+5. **Bonus dla Fazy 1:** możemy mierzyć `dzien_odbioru - czas_odbioru_timestamp`
+   per restauracja live i trigger alert Telegram gdy delta > 10 min przez
+   3 ordery pod rząd (D16 data quality).
+
+**P0.7 ACTION ITEMS (unchanged):**
+- Napisać `tools/gap_fill_restaurant_meta.py` — policzyć `prep_variance` median,
+  P50/P75/P90 per `id_address` z `sla_log.jsonl` + dzisiejsze delivered orders
+  (364 w state).
+- Meta dict: `{id_address: {prep_variance_min: float, sample_n: int,
+  p75_min: float, last_updated: iso}}`.
+- Sanity: restauracje z `prep_variance > 15 min` → flag "chronically_late" do
+  operacyjnej listy.
+
+**TECH_DEBT z P0.6:**
+- [ ] **`indywidual_time=1` jako sygnał czasówki** — pewniejsze niż
+  `czas_odbioru >= 60` (V3.1 threshold). Rozważyć w Fazie 1 zamiast threshold.
+- [ ] **Zero flag "restauracja już gotowa"** — nie ma way żeby ziomek wiedział,
+  że Rany Julek już zawołał kuriera przed `czas_odbioru_timestamp`. Hipotetyczna
+  P3 integracja przez restaurant-panel API lub button "gotowe" w panelu.
