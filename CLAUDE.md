@@ -242,3 +242,28 @@ dispatch_v2/
 - Fleet utilization <60% przez >4h
 - Agreement rate <60% przez 3 dni (Ziomek przegrywa z intuicją = problem scoringu)
 - **Każda prośba o restart systemd** — Adrian akceptuje LUB odrzuca
+
+---
+
+## Git workflow (OBOWIĄZKOWY)
+
+Repo zainicjowane 12.04.2026, commit bazowy `602b476`.
+
+**Przed każdym patchem:**
+cd /root/.openclaw/workspace/scripts/dispatch_v2
+git status
+
+**Po każdym udanym patchu (py_compile OK + testy PASS):**
+git add <zmienione pliki> docs/TECH_DEBT.md CLAUDE.md
+git commit -m "Pn.X: <co zrobione>
+Files: <pliki>
+Tests: N/N PASS
+Backup: <plik.py.bak-TIMESTAMP>
+Production: active"
+
+**Rollback trzy poziomy:**
+1. Jeden plik: `git checkout <plik.py>`
+2. Wszystko niecommitowane: `git reset --hard HEAD`
+3. Totalna katastrofa: `bash /root/backups/ROLLBACK_NOW.sh`
+
+Backupy `.bak-TIMESTAMP` nadal robione (double safety).
