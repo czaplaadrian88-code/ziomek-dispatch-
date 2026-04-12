@@ -1,0 +1,26 @@
+# Backupy
+*.bak-*
+*.bak
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logi lokalne (logi produkcyjne są w /root/.openclaw/workspace/scripts/logs/ - też ignoruj jeśli widać)
+*.log
+logs/
+
+# Temp
+.tmp_*
+*.swp
+*.swo
+.*.swp
+
+# Git (jeszcze nie zainicjowany ale gdy będzie)
+.git/
+
+# IDE
+.vscode/
+.idea/
