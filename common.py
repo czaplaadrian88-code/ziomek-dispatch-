@@ -132,3 +132,51 @@ def parse_panel_timestamp(value) -> "datetime | None":
         return dt.astimezone(timezone.utc)
     except (ValueError, TypeError):
         return None
+
+
+# === OSRM FALLBACK CONFIG (V3.1 P0.5) ===
+# Kalibracja 12.04.2026: 206 delivered orders, median=1.371, std=0.354
+# Raw data: dispatch_state/calibration_20260412_baseline.json
+HAVERSINE_ROAD_FACTOR_BIALYSTOK = 1.37
+
+# Buckety prędkości oparte na KORKACH (nie na popycie).
+# Peak operacyjny (Nd 15:00 = 45 orders/h) ma PUSTE ulice.
+# Peak korkowy (Pt 17-19) ma SZCZYT ruchu.
+FALLBACK_BASE_SPEEDS_KMH = {
+    "weekday_rush": 20,       # Pn-Pt 15-19 — peak korkowy Białegostoku
+    "weekday_evening": 24,    # Pn-Pt 19-22 — po rushu, jeszcze spory ruch
+    "weekend_evening": 26,    # Sb-Nd 17-22 — popyt wysoki, ruch umiarkowany
+    "lunch_midday": 28,       # Pn-Pt 11-15 — średni ruch
+    "off_peak": 32,           # reszta (noc, poranek, Nd popołudnie) — luźno
+}
+
+
+def get_time_bucket(dt_utc: datetime) -> str:
+    """Mapuje aware UTC datetime na bucket korkowy (Warsaw local time).
+
+    Raises TypeError jeśli dt_utc nie ma tzinfo (fail fast, nie zgadujemy TZ).
+    """
+    if dt_utc.tzinfo is None:
+        raise TypeError("get_time_bucket requires aware datetime (got naive)")
+    local = dt_utc.astimezone(WARSAW)
+    hour = local.hour
+    wd = local.weekday()  # 0=Pn, 6=Nd
+
+    if wd < 5:  # Pn-Pt
+        if 15 <= hour < 19:
+            return "weekday_rush"
+        if 19 <= hour < 22:
+            return "weekday_evening"
+        if 11 <= hour < 15:
+            return "lunch_midday"
+        return "off_peak"
+    else:  # Sb-Nd
+        if 17 <= hour < 22:
+            return "weekend_evening"
+        return "off_peak"
+
+
+def get_fallback_speed_kmh(dt_utc: datetime) -> float:
+    """Zwraca prędkość fallback [km/h] dla danego momentu."""
+    bucket = get_time_bucket(dt_utc)
+    return FALLBACK_BASE_SPEEDS_KMH[bucket]

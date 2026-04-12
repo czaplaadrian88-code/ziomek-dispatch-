@@ -138,3 +138,36 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
   - Endpoint w panelu do zmiany natężenia — do znalezienia (grep wokół "Natezenie" w panel HTML/JS)
   - Dzisiaj: tylko obserwacja i logging do `natezenie_history.jsonl`, nie zmienia globalnej zmiennej
   - Jutro: aktywne ustawianie po weryfikacji że Ziomek predykcje zgadzają się z operatorem
+
+## P0.5 NOTES (12.04)
+
+- Kalibracja: HAVERSINE_ROAD_FACTOR_BIALYSTOK=1.37 (206 delivered orders, median=1.371,
+  std=0.354, P10-P90: 1.197-1.825). Raw data: dispatch_state/calibration_20260412_baseline.json.
+  Histogram peak 1.08-1.60 (81% samples). Outliers (top 5 factor) = krótkie trasy <1km
+  w centrum Białegostoku (jednokierunkowe uliczki). Walidacja fizyczna: długie trasy
+  (Łapy 8-9km) → factor 1.08-1.12 → asymptotycznie do 1.0 (drogi proste poza miastem).
+
+- 4 warstwy architektury: traffic-aware speeds (5 bucketów), empiryczny road factor,
+  circuit breaker (3×fail → 60s skip), hourly metrics (INFO log co godzinę, nie
+  spam warningów).
+
+- Flaga per-cell: osrm_fallback + osrm_circuit_open + time_bucket (dla debugowania).
+  Shadow dispatcher Fazy 1 będzie mógł alertować "decyzja z >X% fallback legs =
+  niepewna".
+
+- route() i table() zmieniły kontrakt: nigdy nie zwracają None (zawsze dict/list).
+  Istniejący kod robi "if result is None → crash", teraz dostanie fallback zamiast
+  None. Regresja zero - route_simulator i feasibility import OK.
+
+P1 BACKLOG z P0.5:
+- Multi-city calibration: HAVERSINE_ROAD_FACTOR_WARSZAWA przy ekspansji (inne miasto
+  = inny grid uliczny = inny factor). Uruchom calibrate_road_factor.py z Warsaw
+  orders.
+- Circuit threshold kalibracja po pierwszym realnym OSRM outage. Obecnie 3 fails /
+  60s cooldown - może być za ostre lub za luźne.
+- Telegram alert gdy >10% fallback rate w godzinie (_osrm_stats analysis). Dopisz
+  w Faza 4 gdy telegram_bot gotowy.
+- Ewentualnie rozszerzenie bucketów speed jeśli dane pokażą że mamy np. piątek
+  15-17 ≠ środa 15-17 (różne korki weekday).
+- Backfill starych orderów bez delivery_coords - nadal P1 task po Fazie 0
+  (unchanged from P0.4 notes).

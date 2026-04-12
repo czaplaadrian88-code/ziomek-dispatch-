@@ -152,9 +152,52 @@ R27 wymaga `simulate_bag_route` zwracającego `predicted_arrival_at_pickup`. Obe
 
 **Backup:** `*.bak-20260412-112626` (P0.3) + `*.bak-20260412-1219*` (P0.4)
 
-### ⏳ P0.5-P0.8 DO ZROBIENIA (kolejność)
+### ✅ P0.5 DONE — OSRM haversine fallback + circuit breaker + traffic-aware speeds (12.04)
 
-- **P0.5** OSRM haversine fallback × 1.4 / 25 km/h (~40 min)
+**Co zrobione:**
+- common.py: FALLBACK_BASE_SPEEDS_KMH dict (5 bucketów), HAVERSINE_ROAD_FACTOR_BIALYSTOK=1.37,
+  get_time_bucket(dt_utc), get_fallback_speed_kmh(dt_utc)
+- osrm_client.py: circuit breaker state, hourly metrics, route()/table() zwracają
+  zawsze dict/list z osrm_fallback+osrm_circuit_open+time_bucket flags.
+  Timeout 5/10→3s konsekwentnie.
+- tools/calibrate_road_factor.py: offline script (rerun przy ekspansji Warszawy,
+  produkuje baseline JSON)
+
+**Architektura (4 warstwy):**
+- Traffic-aware fallback - 5 bucketów korków Białegostoku (weekday_rush 20 km/h,
+  weekday_evening 24, weekend_evening 26, lunch_midday 28, off_peak 32) - oparte na
+  realnym wzorcu korków, nie popycie
+- Empirycznie skalibrowany HAVERSINE_ROAD_FACTOR_BIALYSTOK=1.37 - 206 delivered
+  orders, median, walidacja fizyczna (długie trasy → 1.08 asymptotycznie)
+- Circuit breaker - 3 consecutive failures → 60s skip OSRM, chroni watcher przed
+  225s lagiem przy OSRM outage (75 calls × 3s timeout)
+- Hourly metrics - log INFO co godzinę (total calls, fallback %, circuit opens),
+  zamiast spam per-call warningów
+
+**Kontrakt:**
+- route() zawsze zwraca dict (nigdy None) - osrm_fallback:False gdy OSRM OK, True
+  gdy fallback
+- table() zawsze zwraca matrix (nigdy None) - pusta list tylko dla empty inputs
+- Nowe pola: osrm_fallback, osrm_circuit_open, time_bucket (shadow dispatcher Fazy 1
+  użyje)
+
+**Testy:**
+- 24/24 unit tests PASS (get_time_bucket 7, get_fallback_speed_kmh 2, haversine
+  regression 1, mock timeout 3, mock 200 2, circuit breaker 5, table fallback 3,
+  table empty 1)
+- Live OSRM test: osrm_fallback:False, 5.6 min / 2.54 km (realistic)
+- Regression: route_simulator + feasibility import OK
+
+**Backup:** common.py.bak-20260412-135930, osrm_client.py.bak-20260412-135930
+
+**Kalibracja baseline:** dispatch_state/calibration_20260412_baseline.json (state,
+nie w git)
+
+**Production:** NO RESTART required (osrm_client on-demand, shadow dispatcher Fazy 1
+użyje fallbacka).
+
+### ⏳ P0.6-P0.8 DO ZROBIENIA (kolejność)
+
 - **P0.6** Recon: co panel zwraca w `fetch_order_details` dla `prep_ready_at`? (~30 min)
 - **P0.7** `gap_fill_restaurant_meta.py` — filozofia D16 (alerty biznesowe, NIE bufory) (~5h)
 - **P0.8** Meta integration w `route_simulator_v2` (inline do Fazy 1)
