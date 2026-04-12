@@ -168,6 +168,7 @@ def update_from_event(event: dict) -> Optional[dict]:
             "first_seen": payload.get("first_seen", now_iso()),
             "address_id": payload.get("address_id"),
             "pickup_coords": payload.get("pickup_coords"),
+            "delivery_coords": payload.get("delivery_coords"),
             "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
             "prep_minutes": payload.get("prep_minutes"),
             "order_type": payload.get("order_type"),

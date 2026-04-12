@@ -126,9 +126,34 @@ R27 wymaga `simulate_bag_route` zwracającego `predicted_arrival_at_pickup`. Obe
 
 **Backup:** `*.bak-20260412-112626` (3 pliki)
 
-### ⏳ P0.4-P0.8 DO ZROBIENIA (kolejność)
+### ✅ P0.4 DONE — panel_watcher delivery_coords enrichment (12.04)
 
-- **P0.4** `panel_watcher.py` pickup_coords null → inline geocoding + centroid fallback (PILNE, ~25 min)
+**Co zrobione:**
+- `geocoding.py`: timeout parametryzowany w `_google_geocode` + `geocode()` (default 5s, watcher używa 2s)
+- `panel_watcher.py`: import geocode top-level + `_diff_and_emit` inline geocoding delivery_address w NEW_ORDER
+- `state_machine.py`: `delivery_coords` w NEW_ORDER upsert path
+
+**Architektura:**
+- Inline geocode w watcher hot path, timeout=2.0s (vs Google default 5s)
+- Zero ThreadPoolExecutor — timeout u źródła w geocoding.py = zero race conditions, zero zombie threads
+- Cache hit ~90% (237/262 unique delivery_addrs) = ~0ms
+- Cache miss ~10% → Google API, max 2s
+- Historical failure rate 0% (294/294 successful) = forward-fix only, retry NIE potrzebny
+
+**Edge case handling:**
+- geocode fail/timeout → delivery_coords=None + warning log
+- P0.3 fall-through obsłuży orders bez delivery_coords (last_assigned_pickup albo last_delivered)
+
+**Testy:**
+- 9/9 P0.4 PASS (cache hit, timeout forced fail, cache hit ignoruje timeout, ev_payload stub)
+- 3/3 P0.2a regression + P0.3 build_fleet_snapshot OK
+
+**Live state przed restartem:** 29 aktywnych (3 planned, 17 assigned, 9 picked_up)
+
+**Backup:** `*.bak-20260412-112626` (P0.3) + `*.bak-20260412-1219*` (P0.4)
+
+### ⏳ P0.5-P0.8 DO ZROBIENIA (kolejność)
+
 - **P0.5** OSRM haversine fallback × 1.4 / 25 km/h (~40 min)
 - **P0.6** Recon: co panel zwraca w `fetch_order_details` dla `prep_ready_at`? (~30 min)
 - **P0.7** `gap_fill_restaurant_meta.py` — filozofia D16 (alerty biznesowe, NIE bufory) (~5h)

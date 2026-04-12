@@ -77,7 +77,7 @@ def _normalize(address: str, hint_city: str = "Białystok") -> str:
     return s
 
 
-def _google_geocode(address: str) -> Optional[tuple]:
+def _google_geocode(address: str, timeout: float = 5.0) -> Optional[tuple]:
     key = _load_key()
     if not key:
         _log.warning("Brak GMAPS_KEY")
@@ -90,7 +90,7 @@ def _google_geocode(address: str) -> Optional[tuple]:
     })
     url = f"https://maps.googleapis.com/maps/api/geocode/json?{params}"
     try:
-        with urllib.request.urlopen(url, timeout=5) as r:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
             data = json.loads(r.read().decode())
         if data.get("status") != "OK" or not data.get("results"):
             _log.debug(f"Google ZERO_RESULTS: {address} status={data.get('status')}")
@@ -115,8 +115,12 @@ def _osrm_fallback(address: str) -> Optional[tuple]:
     return None
 
 
-def geocode(address: str, hint_city: str = "Białystok") -> Optional[tuple]:
-    """Google primary + cache. Zwraca (lat, lon) lub None."""
+def geocode(address: str, hint_city: str = "Białystok", timeout: float = 5.0) -> Optional[tuple]:
+    """Google primary + cache. Zwraca (lat, lon) lub None.
+
+    timeout: max czas oczekiwania na Google API (cache hit = 0ms, nie dotyczy).
+    Watcher uzywa timeout=2.0 (ochrona przed burst freeze).
+    """
     if not address or not address.strip():
         return None
 
@@ -132,7 +136,7 @@ def geocode(address: str, hint_city: str = "Białystok") -> Optional[tuple]:
     _stats["misses"] += 1
 
     # Google primary
-    result = _google_geocode(f"{address}, {hint_city}, Polska")
+    result = _google_geocode(f"{address}, {hint_city}, Polska", timeout=timeout)
     if result is None:
         result = _osrm_fallback(address)
 

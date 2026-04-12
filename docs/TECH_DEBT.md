@@ -121,6 +121,14 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 - P0.4 priorytet: następny po P0.3 (ZAMIAST czekać na harmonogram)
 - NIE ZMIENIAJ kolejności — P0.4 pilny
 
+## P0.4 NOTES (12.04)
+
+- Forward-fix only: od teraz NEW_ORDER eventy dostają delivery_coords z geocoding (cache 90%, Google 10%)
+- Backfill 80 starych orderów bez delivery_coords — P1 task po Fazie 0 (osobny skrypt, rate limit consideration)
+- Geocode failure rate historycznie: 0% (294/294 successful). Przeglądać co miesiąc — jeśli >1% → dodać retry logic (3×20s)
+- Timeout w watcher: 2s (vs Google default 5s). Burst 5 orderów × 2s = 10s max (cykl 20s OK)
+- Architektura: timeout parametryzowany w geocoding.geocode() (nie ThreadPoolExecutor) — zero race conditions, zero zombie threads
+
 ## NATĘŻENIE jako P1 feature
 
 - [ ] **Ziomek ustawia natężenie automatycznie** na podstawie `avg_load_per_courier`

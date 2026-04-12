@@ -43,6 +43,7 @@ from dispatch_v2.state_machine import (
     upsert_order,
     touch_check_cursor,
 )
+from dispatch_v2.geocoding import geocode
 
 _log = setup_logger("panel_watcher", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
 
@@ -121,6 +122,15 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         _aid = norm.get("address_id")
         _aid_str = str(_aid) if _aid is not None else None
         _pcoords = _COORDS.get(_aid_str) if _aid_str else None
+
+        # Geocode delivery address (cache hit ~90% = 0ms, miss = Google API max 2s)
+        _del_addr = norm.get("delivery_address")
+        _dcoords = None
+        if _del_addr:
+            _dcoords = geocode(_del_addr, timeout=2.0)
+            if _dcoords is None:
+                _log.warning(f"NEW_ORDER {zid}: geocode fail for '{_del_addr}'")
+
         ev_payload = {
             "restaurant": norm["restaurant"],
             "pickup_address": norm["pickup_address"],
@@ -132,6 +142,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             "first_seen": now_iso(),
             "address_id": _aid_str,
             "pickup_coords": list(_pcoords) if _pcoords else None,
+            "delivery_coords": list(_dcoords) if _dcoords else None,
         }
 
         # Deterministyczny event_id: {order_id}_NEW_ORDER_first_seen (bez timestamp - raz na zycie)
