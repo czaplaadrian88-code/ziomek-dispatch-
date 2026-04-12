@@ -405,3 +405,53 @@ false-positive alertów na <30 sample):**
 - [ ] **P0.8 cleanup** — `rm /tmp/p07_test.py /tmp/zestawienie_*.csv
   /tmp/test_meta*.json /tmp/p06_order_details_sample.json /tmp/p07_diff*.txt
   /tmp/p07_analysis.md /tmp/demand_analysis_backup.md`
+
+## P0.8 DONE (12.04) — Final cleanup + meta integration note
+
+**Meta integration note (dla Fazy 1 route_simulator_v2):**
+
+`route_simulator_v2.py` (Faza 1) wczytuje `restaurant_meta.json` przy starcie.
+Scoring i PDP-TSP korzystają z `prep_variance.median` per restauracja
+dla obliczenia `pickup_ready_at`:
+
+```python
+# W route_simulator_v2:
+meta = load_restaurant_meta()  # /root/.openclaw/workspace/dispatch_state/restaurant_meta.json
+
+def get_pickup_ready_at(restaurant_name, czas_odbioru_timestamp, now):
+    r = meta["restaurants"].get(restaurant_name)
+    if r is None:
+        # Nieznana restauracja (świeżo onboardowana) → fleet defaults
+        prep_variance = meta["fleet_medians"]["fleet_prep_variance_median"]
+    elif r["flags"]["low_confidence"]:
+        # Za mało sample → fleet fallback
+        prep_variance = r["prep_variance_fallback_min"]
+    else:
+        # Standard case — używamy median restauracji
+        prep_variance = r["prep_variance_min"]["median"]
+
+    pickup_ready = czas_odbioru_timestamp + timedelta(minutes=prep_variance)
+    return max(now, pickup_ready)
+```
+
+Scoring penalty gdy `predicted_arrival < pickup_ready_at`:
+- Kurier przyjedzie za wcześnie → będzie czekał → D8 violation
+- Penalty proporcjonalny do waiting time
+
+**Restart strategia (po Fazie 1):**
+Meta jest plikiem JSON, nie SQL. Reload co N minut (np. 60) w
+route_simulator_v2 zapewni że nowo zregenerowane meta (po onboardingu nowej
+restauracji) zostanie podchwycone bez restartu systemd.
+
+**Regen cadence:**
+- Po onboardingu nowej restauracji (ręczne regen)
+- Co tydzień (nightly job? — decyzja dla Fazy 2)
+- Przy ekspansji Warszawy (nowy CSV export + per-city meta)
+
+**Co zrobione w P0.8:**
+- Archive source CSV → `/root/archive/p07_source/` (10 plików, ~32 MB —
+  safety net dla regen restaurant_meta.json)
+- Cleanup `/tmp` roboczych plików (p07_test.py, test_meta*, p06/p07
+  diff/analysis/draft, demand_analysis_backup)
+- Meta integration note dla Fazy 1 (ta sekcja)
+- Final snapshots w `/root/backups/` (dispatch_v2 + dispatch_state + tools)

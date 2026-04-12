@@ -271,10 +271,42 @@ py_compile → dry-run → real run → clean struct verify → production rewri
 **Production:** NO RESTART required. Meta dostępne dla Fazy 1
 `route_simulator_v2`.
 
-### ⏳ P0.8 DO ZROBIENIA (ostatni Fazy 0)
+### ✅ P0.8 DONE — Final cleanup + meta integration note (12.04)
 
-- **P0.8** Meta integration notes w docs + cleanup /tmp + final snapshot
-  POST_P07 + CLAUDE.md V3.1→V3.2 scalenie
+**Co zrobione:**
+- Archive source CSV → `/root/archive/p07_source/` (10 plików, ~32 MB)
+- Cleanup `/tmp` roboczych plików (p07_test.py, test_meta*, p06/p07
+  diff/analysis/draft, demand_analysis_backup)
+- Meta integration note dla Fazy 1 `route_simulator_v2` (w `docs/TECH_DEBT.md`):
+  `pickup_ready_at = max(now, czas_odbioru_timestamp + prep_variance.median)`
+  z fallback dla low_confidence (fleet medians 13/0/7)
+- Final snapshots w `/root/backups/`:
+  - `dispatch_v2_POST_FAZA_0_*.tar.gz` (440K)
+  - `dispatch_state_POST_FAZA_0_*.tar.gz` (295K)
+  - `tools_POST_FAZA_0_*.tar.gz` (26K)
+
+**Production:** NO RESTART. Zero zmian w kodzie produkcyjnym dispatch_v2/.
+
+---
+
+## ✅ FAZA 0: 8/8 DONE (100%)
+
+Commity:
+- `602b476`  Initial commit
+- `6d99416`  docs: Git workflow
+- `d3ee6aa`  P0.3: courier position priority fix
+- `214fe17`  P0.4: delivery_coords enrichment
+- `15493ea`  P0.5: OSRM haversine fallback + circuit breaker
+- `12285ef`  P0.6: RECON panel API (prep_ready_at nie istnieje)
+- `bfd1dfc`  docs: DEMAND_ANALYSIS.md
+- `57a5d34`  P0.7: gap_fill_restaurant_meta.py + restaurant_meta.json
+- `[nowy]`   P0.8: Final cleanup + meta integration note
+
+## ⏳ FAZA 1 START (po przerwie)
+
+Shadow dispatcher — `route_simulator_v2` + `feasibility_v2` + `dispatch_pipeline`
++ `shadow_dispatcher` systemd + `telegram_approver`. Plan szczegółowy w CLAUDE.md
+jest (docs/SKILL.md V3.1 sekcja Faza 1).
 
 ---
 
