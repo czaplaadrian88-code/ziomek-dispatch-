@@ -1,0 +1,214 @@
+"""shadow_dispatcher - systemd loop konsumujący NEW_ORDER z event_bus.
+
+Tryb shadow (D15): imituje koordynatora BEZ faktycznego przypisania kuriera.
+Dla każdego NEW_ORDER:
+    1. build_fleet_snapshot() → dispatch_pipeline.assess_order()
+    2. log decyzji do shadow_decisions.jsonl (append-only)
+    3. event_bus.mark_processed()
+
+Nie emituje żadnych eventów, nie dotyka panel_client, nie wysyła Telegramów.
+Czysty obserwator dla Fazy 1 (Ziomek imituje koordynatora).
+
+Testowanie:
+    process_event(event, fleet, meta, now) -- pure function, wywoływalna z testów.
+"""
+import json
+import os
+import signal
+import sys
+import time
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from dispatch_v2 import event_bus
+from dispatch_v2.common import load_config, now_iso, setup_logger
+from dispatch_v2.courier_resolver import build_fleet_snapshot
+from dispatch_v2.dispatch_pipeline import assess_order, PipelineResult
+
+
+POLL_INTERVAL_SEC = 5
+HEARTBEAT_INTERVAL_SEC = 60
+POLL_BATCH_SIZE = 50
+
+_log = setup_logger(
+    "shadow_dispatcher",
+    "/root/.openclaw/workspace/scripts/logs/shadow.log",
+)
+_shutdown = False
+
+
+def _sigterm_handler(signum, frame):
+    global _shutdown
+    _log.info(f"signal {signum} received → graceful shutdown")
+    _shutdown = True
+
+
+def _load_restaurant_meta(path: str) -> Optional[dict]:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        _log.warning(f"restaurant_meta not found: {path} — using fleet fallback only")
+        return None
+    except Exception as e:
+        _log.warning(f"restaurant_meta load fail: {e}")
+        return None
+
+
+def _serialize_candidate(c) -> dict:
+    plan = c.plan
+    return {
+        "courier_id": c.courier_id,
+        "name": c.name,
+        "score": c.score,
+        "feasibility": c.feasibility_verdict,
+        "reason": c.feasibility_reason,
+        "best_effort": c.best_effort,
+        "plan": None if plan is None else {
+            "sequence": plan.sequence,
+            "total_duration_min": plan.total_duration_min,
+            "strategy": plan.strategy,
+            "sla_violations": plan.sla_violations,
+            "osrm_fallback_used": plan.osrm_fallback_used,
+        },
+    }
+
+
+def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) -> dict:
+    best = result.best
+    return {
+        "ts": now_iso(),
+        "event_id": event_id,
+        "order_id": result.order_id,
+        "restaurant": result.restaurant,
+        "verdict": result.verdict,
+        "reason": result.reason,
+        "best": None if best is None else {
+            "courier_id": best.courier_id,
+            "name": best.name,
+            "score": best.score,
+            "best_effort": best.best_effort,
+        },
+        "alternatives": [
+            _serialize_candidate(c) for c in result.candidates[1:]
+        ],
+        "pickup_ready_at": (
+            result.pickup_ready_at.isoformat()
+            if result.pickup_ready_at else None
+        ),
+        "latency_ms": round(latency_ms, 1),
+    }
+
+
+def _append_decision(path: str, record: dict) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def process_event(
+    event: dict,
+    fleet: Dict,
+    meta: Optional[dict],
+    now: Optional[datetime] = None,
+) -> PipelineResult:
+    """Pure: NEW_ORDER event + snapshot → PipelineResult. Safe to test."""
+    payload = event.get("payload") or {}
+    order_event = {
+        "order_id": event.get("order_id"),
+        "restaurant": payload.get("restaurant"),
+        "pickup_coords": payload.get("pickup_coords"),
+        "delivery_coords": payload.get("delivery_coords"),
+        "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
+        "pickup_time_minutes": payload.get("pickup_time_minutes"),
+    }
+    return assess_order(order_event, fleet, meta, now=now)
+
+
+def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
+    """One poll cycle. Returns {processed, failed, skipped}."""
+    stats = {"processed": 0, "failed": 0, "skipped": 0}
+    events = event_bus.get_pending(limit=POLL_BATCH_SIZE, event_types=["NEW_ORDER"])
+    if not events:
+        return stats
+
+    fleet = build_fleet_snapshot()
+
+    for ev in events:
+        eid = ev["event_id"]
+        oid = ev.get("order_id")
+        t0 = time.time()
+        try:
+            payload = ev.get("payload") or {}
+            # Skip orders without coords — data quality / geocode fail
+            if not payload.get("pickup_coords") or not payload.get("delivery_coords"):
+                _log.warning(f"skip {eid}: missing coords (order={oid})")
+                event_bus.mark_processed(eid)
+                stats["skipped"] += 1
+                continue
+
+            result = process_event(ev, fleet, meta)
+            latency_ms = (time.time() - t0) * 1000.0
+            record = _serialize_result(result, eid, latency_ms)
+            _append_decision(shadow_log_path, record)
+            event_bus.mark_processed(eid)
+            stats["processed"] += 1
+            _log.info(
+                f"SHADOW {oid} → {result.verdict} "
+                f"best={record['best']['courier_id'] if record['best'] else None} "
+                f"latency={record['latency_ms']}ms"
+            )
+        except Exception as e:
+            stats["failed"] += 1
+            _log.error(f"process_event fail {eid}: {e}\n{traceback.format_exc()}")
+            event_bus.mark_failed(eid, str(e))
+    return stats
+
+
+def run() -> int:
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+    signal.signal(signal.SIGINT, _sigterm_handler)
+
+    cfg = load_config()
+    shadow_log_path = cfg["paths"]["shadow_log"]
+    meta_path = cfg["paths"]["restaurant_meta"]
+    meta = _load_restaurant_meta(meta_path)
+
+    _log.info(
+        f"shadow_dispatcher START poll={POLL_INTERVAL_SEC}s "
+        f"log={shadow_log_path} meta_n={len((meta or {}).get('restaurants', {}))}"
+    )
+
+    totals = {"processed": 0, "failed": 0, "skipped": 0}
+    last_heartbeat = time.time()
+
+    while not _shutdown:
+        try:
+            tick_stats = _tick(shadow_log_path, meta)
+            for k, v in tick_stats.items():
+                totals[k] += v
+        except Exception as e:
+            _log.error(f"tick loop error: {e}\n{traceback.format_exc()}")
+
+        if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_SEC:
+            eb = event_bus.stats()
+            _log.info(
+                f"HEARTBEAT totals={totals} "
+                f"event_bus=pending:{eb['pending']}/processed:{eb['processed']}/failed:{eb['failed']}"
+            )
+            last_heartbeat = time.time()
+
+        # Sleep in short slices so shutdown signal is responsive
+        for _ in range(POLL_INTERVAL_SEC * 2):
+            if _shutdown:
+                break
+            time.sleep(0.5)
+
+    _log.info(f"shadow_dispatcher STOP totals={totals}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run())
