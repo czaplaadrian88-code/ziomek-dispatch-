@@ -455,3 +455,59 @@ restauracji) zostanie podchwycone bez restartu systemd.
   diff/analysis/draft, demand_analysis_backup)
 - Meta integration note dla Fazy 1 (ta sekcja)
 - Final snapshots w `/root/backups/` (dispatch_v2 + dispatch_state + tools)
+
+## F1.1 DONE (13.04) — Faza 1 core modules live
+
+**Commit:** `dd73048`
+
+**Co zrobione (5 modułów Fazy 1, live na produkcji):**
+- `route_simulator_v2.py` — PDP-TSP z prep_variance
+- `feasibility_v2.py` — R1/R3/R8/R20/R27/D8 constraints
+- `dispatch_pipeline.py` — scoring + R28 + R29
+- `shadow_dispatcher.py` — systemd runner (`dispatch-shadow.service` active)
+- `telegram_approver.py` — Telegram listen + learning_log (`dispatch-telegram.service` active)
+
+**Pierwsza propozycja Telegram dostarczona 13.04.2026 ~23:05.**
+Shadow mode LIVE, Adrian ręcznie akceptuje decyzje → Ziomek imituje koordynatora.
+
+**Review ref:** D19 FAZA_1_DECYZJA_ARCH.md (greedy hybrid)
+
+---
+
+## F1.1 FOLLOW-UP TECH_DEBT (13.04 po live run)
+
+### P1 — wykryte przy pierwszych propozycjach Telegram
+
+- [ ] **courier_names.json gap** — propozycja pokazuje `K207` zamiast `"Grzegorz W"`.
+  State ma courier_id, ale brakuje lookup table id→imię. Fix: wygeneruj
+  `courier_names.json` z `kurier_piny.json` albo z panel scrape
+  `/admin2017/new/admin/kurierzy`. Blocker: Ziomek wygląda "surowo" w Telegramie.
+
+- [ ] **`shadow_dispatcher._serialize_result` enrichment** — obecny output ma
+  tylko courier_id + score + reason. Brakuje:
+  - `total_km` (suma dystansu trasy)
+  - `eta_delivery_min` (ETA doręczenia)
+  - `pickup_address` + `delivery_address` (human-readable, nie coords)
+  - `route_stops[]` (kolejność pickup→delivery per order w bagu)
+  Telegram message bez tego jest mało informatywny dla Adriana.
+
+- [ ] **GPS lookup: `gps_positions.json` klucze=imiona, nie courier_id** —
+  istniejący Traccar watcher zapisuje imiona kurierów jako klucze (legacy).
+  Shadow dispatcher czyta courier_id → fail lookup → fallback do
+  last_delivered position. Fix: migracja watchera Traccar na courier_id.
+  **DEPENDS ON:** courier_names.json (bez tego nie ma way zmapować).
+
+- [ ] **`kurier_piny.json` vs state `courier_id`: różne ID spaces** —
+  `kurier_piny.json` ma 4-cyfrowe PIN-y (np. `1234`), state ma 3-cyfrowe
+  courier_id z panelu (np. `508`). To są DWA osobne identyfikatory — PIN
+  kurier→app login, courier_id panel→state. Rozwiązanie: trzymać oba w
+  `courier_names.json` jako `{courier_id, name, pin}` tuple. Bez tego każdy
+  fix (GPS, imię w Telegramie) wymaga osobnego mappingu.
+
+### P1 — tydzień 2 dependency
+
+- [ ] **PWA GPS z PIN-em** — tydzień 2, **niezależne od Rutcom**. Scenariusz:
+  kurier otwiera PWA na telefonie, wpisuje PIN (4-digit, auth przeciw
+  `kurier_piny.json`), PWA emituje GPS co 30s do server endpoint. Zastępuje
+  GPSLogger per-telefon. Unblock: świeża GPS data dla wszystkich kurierów
+  (obecnie 3/12 realnych z Traccar). Projekt osobny, `ziomek-pwa-gps` repo.
