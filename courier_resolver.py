@@ -21,6 +21,7 @@ from dispatch_v2 import state_machine
 _log = setup_logger("courier_resolver", "/root/.openclaw/workspace/scripts/logs/courier_resolver.log")
 
 KURIER_PINY_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny.json"
+COURIER_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
 GPS_POSITIONS_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions.json"
 GPS_FRESHNESS_MIN = 5  # GPS nowszy niz 5 min = aktualny
 TRACCAR_URL = os.environ.get("TRACCAR_URL", "http://localhost:8082")
@@ -51,6 +52,11 @@ class CourierState:
 
 
 def _load_kurier_piny() -> Dict:
+    """kurier_piny.json = {PIN_4digit: name} (legacy, ID space różny od courier_id).
+
+    UWAGA: keys to PIN-y, nie courier_id. Większość `piny.get(courier_id)`
+    zwraca None. Zachowane jako fallback dla backwards compat.
+    """
     try:
         with open(KURIER_PINY_PATH) as f:
             return json.load(f)
@@ -58,6 +64,23 @@ def _load_kurier_piny() -> Dict:
         return {}
     except Exception as e:
         _log.warning(f"_load_kurier_piny fail: {e}")
+        return {}
+
+
+def _load_courier_names() -> Dict:
+    """courier_names.json = {courier_id_str: name} (P0.5b F1.1 fix).
+
+    Zbudowany z odwrócenia kurier_ids.json. Primary source dla name lookup
+    w build_fleet_snapshot. Bez tego Telegram propozycje pokazują raw K<id>
+    zamiast imienia.
+    """
+    try:
+        with open(COURIER_NAMES_PATH) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        _log.warning(f"_load_courier_names fail: {e}")
         return {}
 
 
@@ -103,6 +126,7 @@ def build_fleet_snapshot(
     """
     state = state_machine.get_all()
     piny = _load_kurier_piny()
+    names = _load_courier_names()
     gps = _load_gps_positions()
     now_utc = datetime.now(timezone.utc)
 
@@ -119,8 +143,8 @@ def build_fleet_snapshot(
 
     fleet: Dict[str, CourierState] = {}
 
-    # Dla kazdego kuriera w pinach LUB majacego ordery
-    all_kids = set(per_courier.keys()) | set(str(k) for k in piny.keys())
+    # Dla kazdego kuriera w names/pinach LUB majacego ordery
+    all_kids = set(per_courier.keys()) | set(names.keys()) | set(str(k) for k in piny.keys())
 
     for kid in all_kids:
         orders = per_courier.get(kid, [])
@@ -128,12 +152,18 @@ def build_fleet_snapshot(
 
         cs = CourierState(courier_id=kid)
         cs.bag = active_bag
-        # kurier_piny.json ma format {id_str: "Nazwa"} - tylko mapa nazw
-        pin_name = piny.get(kid)
-        if pin_name is None and kid.isdigit():
-            pin_name = piny.get(int(kid))
-        if isinstance(pin_name, str):
-            cs.name = pin_name
+        # Name lookup: courier_names.json (primary, correct ID space) → kurier_piny (legacy fallback)
+        name = names.get(kid)
+        if name is None and kid.isdigit():
+            name = names.get(str(int(kid)))  # normalize leading zeros etc.
+        if name is None:
+            pin_name = piny.get(kid)
+            if pin_name is None and kid.isdigit():
+                pin_name = piny.get(int(kid))
+            if isinstance(pin_name, str):
+                name = pin_name
+        if isinstance(name, str):
+            cs.name = name
 
         # 1. GPS fresh
         gps_entry = gps.get(kid)
