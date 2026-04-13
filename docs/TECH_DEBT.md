@@ -506,8 +506,129 @@ Shadow mode LIVE, Adrian ręcznie akceptuje decyzje → Ziomek imituje koordynat
 
 ### P1 — tydzień 2 dependency
 
-- [ ] **PWA GPS z PIN-em** — tydzień 2, **niezależne od Rutcom**. Scenariusz:
-  kurier otwiera PWA na telefonie, wpisuje PIN (4-digit, auth przeciw
-  `kurier_piny.json`), PWA emituje GPS co 30s do server endpoint. Zastępuje
-  GPSLogger per-telefon. Unblock: świeża GPS data dla wszystkich kurierów
-  (obecnie 3/12 realnych z Traccar). Projekt osobny, `ziomek-pwa-gps` repo.
+- [x] **PWA GPS z PIN-em** — ✅ DONE 13.04 jako F1.5 (`7af8ce1`). Deployed:
+  `dispatch_v2/gps_server.py` (stdlib http.server), `https://gps.nadajesz.pl`
+  (nginx + Let's Encrypt cert), PIN auth 4-cyfra z `kurier_piny.json`,
+  `gps_positions_pwa.json` separate file (courier_id keys), merge PWA
+  primary + Traccar legacy fallback w `courier_resolver._load_gps_positions()`.
+
+---
+
+## ✅ FAZA 1 DONE (13-14.04.2026)
+
+**12 commitów Fazy 1** (od `dd73048` F1.1 do `842f961` F1.6) — shadow dispatcher
+live od 13.04 23:05, pierwsza propozycja Telegram dostarczona.
+
+### P0.5b DONE ✅ (TIER 0 pre-Faza-1 blocker)
+Commit `0f574c1` — 4 code fixes + .gitignore + spec note:
+- Fix 1: HARD EXCLUSIONS dla allow-list CC (settings.json deny rules: 16 reguł Bash+Read)
+- Fix 2: state_machine._read_state 3 retry + fcntl LOCK_SH
+- Fix 3: geocoding._save_cache → atomic mkstemp + LOCK_EX + fsync
+- Fix 4: panel_client._open_with_relogin wrapper (401/419) dla fetch_order_details
+- Fix 5: .gitignore audit + cleanup — BRAK tracked secrets
+
+### F1.1-F1.6 DONE ✅
+- **F1.1** `dd73048` — Faza 1 core 5 modułów (route_simulator_v2 PDP-TSP greedy hybrid,
+  feasibility_v2 R1/R3/R8/R20/R27/D8, dispatch_pipeline scoring + verdict,
+  shadow_dispatcher systemd runner, telegram_approver long-poll async)
+- **F1.2** `4b7d1b4` — `courier_names.json` lookup (44 entries z odwrócenia
+  kurier_ids.json), fix name=None w propozycjach (K207 → Marek, K289 → Grzegorz W)
+- **F1.3** `f7ff9eb` — [PROPOZYCJA] enrichment: imiona + km do pickup (haversine ×
+  1.37 road factor) + ETA (fleet_speed traffic bucket) + delivery_address + per-alt km
+- **F1.4a** `2649ac7` — `/status` komenda Telegram (systemctl status, stats state, agreement rate)
+- **F1.4b** `23bfa7d` + `3afeae4` — `daily_briefing.py` (morning wczoraj + evening dziś)
+- **F1.4c** `535047c` — `courier_ranking.py` (top N SLA z sla_log.jsonl + gwiazdki)
+- **F1.5** `7af8ce1` — GPS PWA server (`dispatch_v2/gps_server.py`, port 8766,
+  stdlib http.server, dark PWA HTML 4.5KB), nginx + HTTPS `gps.nadajesz.pl`,
+  Let's Encrypt cert + pre/post/renew hooks, `courier_resolver._load_gps_positions`
+  merge PWA primary + legacy fallback
+- **F1.6** `842f961` — `/status` 3-w-1 (bieżący + dziś + wczoraj + top 3 wczoraj),
+  wyłączenie cron daily_briefing + courier_ranking (on-demand > push per Adrian preference)
+
+### Deployment state po Fazie 1
+- **6 serwisów systemd:** `dispatch-panel-watcher`, `dispatch-sla-tracker`,
+  `dispatch-shadow`, `dispatch-telegram`, `dispatch-gps`, `nginx`
+- **HTTPS endpoint:** `https://gps.nadajesz.pl` (Let's Encrypt, renewal hooks OK)
+- **Cron:** 7 entries (fetch_schedule pre/post, git push hourly, reboot hooks) —
+  briefing/ranking wyłączone w F1.6
+- **Git:** 22 commitów pushed do `github.com/czaplaadrian88-code/ziomek-dispatch-`
+
+---
+
+## F1 FOLLOW-UP TECH_DEBT (wykryte 13-14.04)
+
+### P1 — po tygodniu shadow (dotyczy agreement rate fine-tune)
+
+- [ ] **delivery_address w NEW_ORDER payload** — F1.3 serializer nagłówek Telegram
+  używa `result.delivery_address`, ale **nie zweryfikowałem** czy watcher emituje
+  to pole w `NEW_ORDER.payload`. Jeśli nie, Telegram pokaże `→ —`. Check: po
+  następnej żywej propozycji sprawdzić `shadow_decisions.jsonl[-1].delivery_address`.
+
+- [ ] **GPS coverage < 5%** — F1.5 live deploy + merge OK, ale wiadomość do
+  kurierów z PIN + link `https://gps.nadajesz.pl` nie wysłana. Fresh GPS
+  (<5min): 2/82 (tylko ci 2 co są w Traccar żywy). Action: dystrybucja PIN
+  per kurier (SMS/Telegram group/fizyczne kartki z QR code). Bez tego PWA jest
+  dead code.
+
+- [ ] **`courier_resolver` fallback order** dla GPS — obecnie PWA primary,
+  legacy fallback. Co jeśli **PWA stale** (>5min) ale legacy jeszcze fresh?
+  Obecnie PWA always wins nawet gdy stale. Fix: dodać freshness check per
+  source, wybierz najfreshszy.
+
+- [ ] **`kurier_piny.json` vs `kurier_ids.json`** — dwa osobne ID spaces
+  (PIN 4-cyfra vs courier_id 3-4 cyfra), zero referential integrity. F1.2 fix
+  przez odwrócenie kurier_ids, ale jeśli admin doda nowego kuriera tylko w
+  jednym pliku → niespójność. Propozycja: **`couriers.json` jako single source
+  of truth** `{courier_id: {name, pin, phone?, active}}`, migration script
+  + update kurier_piny/kurier_ids w tym samym commit.
+
+### P1 — po monitorze
+
+- [ ] **Agreement rate meaningful threshold** — pierwsza propozycja 13.04 23:05
+  była `action=NIE` przez Adriana. Nie wiemy czy NIE bo scoring zły czy
+  operational (kurier just delivered). Potrzeba >100 propozycji i breakdown
+  (learning_log feedback details) żeby policzyć realny agreement. Target:
+  **>85% przez 24h** = auto-approve trigger.
+
+- [ ] **`learning_log.jsonl` format** — obecnie `{ts, order_id, action, ok,
+  feedback, decision}` dict. Brakuje: `courier_chosen_by_koordynator`
+  (jeśli Adrian wybrał INNY), `reason_nie` (dlaczego odrzucił). Bez tego
+  learning analyzer w tygodniu 2 nie może policzyć false-positive per
+  scoring dimension.
+
+- [ ] **Shadow latency monitoring** — F1.1 `latency_ms` w każdym decision,
+  ale nikt nie agreguje. Add: sla_tracker reads last N shadow_decisions,
+  alert Telegram gdy p95 > 500ms.
+
+---
+
+## LEARNING — zaplanowane
+
+### Poziom 2 — 21.04.2026 (po 7 dniach shadow)
+
+**Cel:** analizować `learning_log.jsonl` + `shadow_decisions.jsonl` po pełnym
+tygodniu shadow operation. Potrzeba min **100 propozycji** dla meaningful stats.
+
+**Metryki:**
+- Agreement rate global + per kurier + per restauracja + per godzina
+- Top 10 false-positive decisions (Ziomek wybrał X, Adrian wybrał Y — Y powinien być w top3)
+- Scoring dimensions correlation z NIE (czy high `prep_variance_high` restauracje
+  mają wyższy NIE rate? czy `waiting_time` predicts odrzucenie?)
+- Kuriery chronically rejected (Adrian zawsze wybiera INNY nawet gdy Ziomek ranked top) — red flag
+
+**Deliverable:** `tools/learning_analyzer.py` (jednorazowy offline, stdlib only),
+raport `docs/LEARNING_REPORT_20260421.md` z recommendations dla scoring fine-tune.
+
+### Poziom 3 — Miesiąc 2 (koniec kwietnia / początek maja)
+
+**Cel:** Pre-auto-approve go/no-go decision. Baseline post-tuning (po poziomie 2
+fixes) + A/B test Ziomek vs current koordynator operation.
+
+**Metryki:**
+- Agreement rate > 85% per (kurier, restauracja) pair = auto-approve dozwolony
+  (pominięcie Telegram approval, direct Rutcom assign przez `gastro_assign.py`)
+- Fleet utilization delta (Ziomek vs baseline)
+- SLA violation count (powinno być ≤ baseline)
+- Kurier satisfaction (odczuli że "system lepiej rozdziela")
+
+**Deliverable:** Shadow → Semi-auto → Full-auto rollout plan per (kurier, restauracja).

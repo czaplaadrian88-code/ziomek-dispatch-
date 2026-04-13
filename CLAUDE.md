@@ -1,4 +1,4 @@
-# ZIOMEK V3.4 — MASTER BRIEF (dla Claude Code, 13.04.2026)
+# ZIOMEK V3.5 — MASTER BRIEF (dla Claude Code, 14.04.2026)
 
 **Ten plik czytasz JAKO PIERWSZE na początku każdej sesji.**
 
@@ -25,37 +25,48 @@ Adrian Czapla, NadajeSz Białystok (ekspansja Warszawa Q3 2026), 30 kurierów, 5
 - Sezonowość luty→marzec: -30% w 2026 vs -10% naturalna (anomalia)
 - Spadek pochodzi z 64 pozostałych restauracji, nie Big 4
 
-## ⚠️ KRYTYCZNE: Plan Krok 0-4 (zaktualizowany 13.04 po review)
+## ✅ Stan po Fazie 1 (DONE 13-14.04.2026)
 
-**NIE startujemy Fazy 1 bez Kroku 0-3.**
+**Wszystkie Kroki 0-4 DONE.** Shadow dispatcher live, pierwsze propozycje Telegram dostarczone 13.04 23:05.
 
-### Krok 0 — Security TIER 0 (~90 min, BLOCKING)
+### Krok 0 — Security TIER 0 ✅ DONE (P0.5b `0f574c1`)
+5 fixów per `docs/SECURITY_FIXES_TIER0.md`: HARD EXCLUSIONS (settings.json deny rules), state_machine retry+LOCK_SH, geocoding atomic_write_json, panel_client `_open_with_relogin`, .gitignore audit.
 
-5 fixów → commit jako P0.5b. Spec w `docs/SECURITY_FIXES_TIER0.md`:
+### Krok 1 — CC acceleration ✅ DONE
+Allow-list + deny rules w `~/.claude/settings.json`, tmux 2 okna (claude + logs), `morning_brief.sh` + `evening_wrap.sh`.
 
-1. **HARD EXCLUSIONS dla allow-list CC** (5 min) — `.secrets/**`, `.ssh/**`, `.env`, `.pem`, `.key`
-2. **Retry FileNotFoundError w state_machine._read_state()** (15 min) — fcntl LOCK_SH + 3 retry exponential backoff
-3. **Atomic write + lock dla geocoding cache** (30 min) — refactor do atomic_write_json
-4. **Re-login w panel_client przy 401/419** (30 min) — wrapper z retry
-5. **.gitignore audit** (5 min) — `*.bak-*`, `.secrets/`, `.env`, `/root/backups/`, `/tmp/`
+### Krok 2 — Decyzja architektoniczna Fazy 1 ✅ DONE (D19)
+Greedy insertion O(N) jako MVP + brute-force dla bag≤3 (`dd73048`). Spec `docs/FAZA_1_DECYZJA_ARCH.md`.
 
-### Krok 1 — CC acceleration (~30 min)
+### Krok 3 — Git remote backup ✅ DONE
+GitHub `czaplaadrian88-code/ziomek-dispatch-`, SSH key ed25519 deploy key, push 22 commitów, cron hourly push `/root/backups/git_push.log`.
 
-Allow-list w UI z exclusions, 2 okna tmux (main + logs), sed-only-read, morning_brief.sh + evening_wrap.sh.
+### Krok 4 — Faza 1 ✅ DONE
+5 modułów core (`dd73048`) + F1.2-F1.6 iteracje:
+- **F1.1** core: `route_simulator_v2` + `feasibility_v2` + `dispatch_pipeline` + `shadow_dispatcher` + `telegram_approver`
+- **F1.2** `courier_names.json` lookup (K207→Marek, K289→Grzegorz W fix)
+- **F1.3** [PROPOZYCJA] enrichment — imiona + km + ETA pickup + delivery_address
+- **F1.4a** `/status` komenda Telegram — stan systemu on-demand
+- **F1.4b** daily_briefing.py (morning/evening) — odroczone F1.6
+- **F1.4c** courier_ranking.py (top N SLA) — odroczone F1.6
+- **F1.5** GPS PWA server — `https://gps.nadajesz.pl` + Let's Encrypt + nginx reverse proxy + PIN auth 4-cyfra
+- **F1.6** `/status` 3-w-1 (bieżący + dziś + wczoraj + top 3 kurierów) + wyłączenie auto-briefing/ranking crons
 
-### Krok 2 — Decyzja architektoniczna Fazy 1 (~1-2h, BLOCKING)
+### 6 serwisów produkcyjnych live
+| Serwis | Cel |
+|---|---|
+| `dispatch-panel-watcher` | 20s poll panelu Rutcom |
+| `dispatch-sla-tracker` | 10s SLA + delivery_time_minutes |
+| `dispatch-shadow` | Shadow dispatcher — propozycje → Telegram |
+| `dispatch-telegram` | Telegram approver + `/status` command |
+| `dispatch-gps` | PWA GPS receiver (port 8766) |
+| `nginx` | Reverse proxy 443 → 8766 + HTTP→HTTPS redirect |
 
-**Greedy insertion O(N) jako MVP**, brute-force fallback dla bag ≤ 3, OR-Tools w Fazie 9.
-
-Spec w `docs/FAZA_1_DECYZJA_ARCH.md`.
-
-### Krok 3 — Git remote backup (~30 min, BLOCKING)
-
-GitHub/GitLab private repo + SSH key + push 10 commitów + cron co godzinę.
-
-### Krok 4 — Faza 1 (po 0-3)
-
-route_simulator_v2 (greedy) + feasibility_v2 + dispatch_pipeline + shadow_dispatcher + telegram_approver.
+### Kluczowe insighty Fazy 1
+- **D19 greedy hybrid** działa — 76-78ms latency per decyzja (w peak), 30 kurierów × 5 orders/min = OK
+- **`learning_log.jsonl` zbiera od 13.04 23:05** — pierwsza akcja: NIE dla #465834 (Grill Kebab, kurier 207). Agreement rate potrzebuje >100 propozycji dla meaningful metrics (min. tydzień shadow operation).
+- **F1.2 courier_names.json** — bug `kurier_piny.json` (PIN-y jako klucze, nie courier_id) był root cause "K207" zamiast "Marek". Fix: odwrócenie `kurier_ids.json` → `{courier_id: name}`.
+- **F1.5 GPS coverage** — legacy Traccar writer (`/root/gps_server.py` @reboot) nadal pisze `gps_positions.json` z imieniem jako key. PWA pisze osobny `gps_positions_pwa.json` z courier_id — `courier_resolver._load_gps_positions()` merge z PWA primary. **Fresh GPS <5min: 2/82** kurierów (peak migration w weekend po SMS/QR dystrybucji).
 
 ## Runtime i infrastruktura
 
@@ -145,9 +156,21 @@ route_simulator_v2 (greedy) + feasibility_v2 + dispatch_pipeline + shadow_dispat
 - dispatch-shadow.service — 🆕 Faza 1 (Krok 4)
 - dispatch-telegram-approver.service — 🆕 Faza 1 (Krok 4)
 
-## Git history (10 commitów, target 11+ po P0.5b)
+## Git history (22 commitów — Faza 0 + Faza 1)
 
 ```
+842f961 F1.6: /status 3-w-1 + wyłączenie cron briefing/ranking
+7af8ce1 F1.5: GPS PWA server z PIN + HTTPS via nginx + Let's Encrypt
+535047c F1.4c: courier ranking dzienny 23:30
+3afeae4 F1.4b followup: docs/CRON_SCHEDULE.md — infrastructure as code
+23bfa7d F1.4b: daily briefing morning+evening Telegram (CRON_TZ=Warsaw)
+2649ac7 F1.4a: /status komenda Telegram — stan systemu na żądanie
+f7ff9eb F1.3: Enrichment formatu propozycji — km, ETA, adres, imiona
+4b7d1b4 F1.2: courier_names.json lookup — K207 → Marek, K289 → Grzegorz W
+2df098e F1.1 followup: TECH_DEBT notes po pierwszej propozycji Telegram
+dd73048 F1.1: Faza 1 core modules (route_sim_v2+feasibility_v2+pipeline+shadow+approver)
+0f574c1 P0.5b: Security TIER 0 hotfix (4 code fixes + .gitignore + spec note)
+154fb08 docs: V3.4 update + add SECURITY_FIXES_TIER0 + FAZA_1_DECYZJA_ARCH
 0c80dee docs: update CLAUDE.md to V3.3 + add docs/CLAUDE_WORKFLOW.md
 7a60276 P0.8: Final cleanup + meta integration + FAZA 0 DONE
 57a5d34 P0.7: gap_fill_restaurant_meta.py + restaurant_meta.json (68 rest)
@@ -160,10 +183,8 @@ d3ee6aa P0.3: courier position priority fix + DRY parse
 602b476 Initial commit
 ```
 
-**Następny commit (13.04 rano):** P0.5b hotfix — 5 security fixes TIER 0.
-
-Repo: /root/.openclaw/workspace/scripts/dispatch_v2/ (NIE wyżej).
-**Remote:** TBD w Kroku 3 (jutro).
+Repo: `/root/.openclaw/workspace/scripts/dispatch_v2/` (NIE wyżej).
+**Remote:** `git@github.com:czaplaadrian88-code/ziomek-dispatch-.git` (deploy key, push co godzinę przez cron).
 
 ## restaurant_meta.json struktura (P0.7)
 
@@ -370,32 +391,79 @@ TAK {first} / INNY / KOORD / SKIP
 
 ## Plan tygodni 1-4
 
-**Tydzień 1 (13-19.04):** Dzień 1 = Krok 0+1+2+3 (~4h). Dzień 2-3 = Krok 4 Faza 1. Dzień 4-5 = monitoring.
+**Tydzień 1 (13-19.04):** ✅ DONE 13-14.04 — Krok 0 (P0.5b TIER 0) + Krok 1 (CC acc) + Krok 2 (D19) + Krok 3 (git remote GitHub) + Krok 4 (F1.1-F1.6 Faza 1 live). 6 serwisów produkcyjnych aktywnych. Shadow dispatcher + GPS PWA deployed.
 
-**Tydzień 2 (20-26.04):** Auto-approve, TIER 1 fixes (telegram security #1, rate limit #2, OSRM boundary #4), API skeleton.
+**Tydzień 2 (20-26.04):**
+- **Learning analyzer** — `/learning poziom 2` (21.04): analiza `learning_log.jsonl` po 7 dniach shadow, agreement rate per kurier+restauracja, false-positive detection, scoring fine-tune
+- **Auto-approve** — gdy agreement rate >85% dla danej kombinacji (kurier×restauracja) przez N propozycji → Ziomek przypisuje bez zapytania Adriana (R26)
+- **Telegram security #1** (TIER 1) — rate limit Bot API, webhook secret, allowed_users whitelist
+- **Rate limit #2** (TIER 1) — nginx burst=10 dla `/gps` (obecnie 5), może istnieje DoS concern
+- **OSRM boundary #4** (TIER 1) — circuit breaker threshold calibration po realnym outage
+- **Restimo API skeleton** — FastAPI endpoint `/v1/dispatch` (aggregator integration) — nowy kanał przychodów
 
-**Tydzień 3 (27.04-3.05):** Hardening, Faza 2 ratings, 40 spotkań sales.
+**Tydzień 3 (27.04-3.05):**
+- Hardening (circuit breakers per moduł, supervision tree)
+- Faza 2 ratings (gwiazdki kurierów w UI, public transparency)
+- 40 spotkań sales partnerów restauracji (target: 10 nowych)
 
-**Tydzień 4 (4-10.05):** ROI boosters (R23 pricing, R17/19/21 monitoring, R6 natężenie), 40 spotkań.
+**Tydzień 4 (4-10.05):**
+- ROI boosters: R23 dynamic pricing (surge), R17/19/21 restaurant monitoring (late/cancel rate alerts), R6 natężenie auto-tune
+- 40 spotkań sales + pierwszy signed Restimo contract
+
+**Odsunięte poza tydzień 4:** POS integration (R31 Symplex Bistro — 4 Big Partner'zy), Faza 2 MKT ratings, Faza 6 scheduler predictions.
 
 ## Diagnostyka
 
-```bash
-systemctl is-active dispatch-panel-watcher dispatch-sla-tracker dispatch-shadow
-tail -20 /root/.openclaw/workspace/scripts/logs/shadow.log
+**Quick check:** wyślij `/status` do `@NadajeszBot` — pełny dump 3-w-1
+(serwisy + dziś + wczoraj + top 3 kurierów). Po F1.6 to **primary** channel.
 
-# Event bus
+**Manual CLI (morning_brief.sh, /root/):**
+
+```bash
+# 1. Wszystkie 6 serwisów (było 3, dodane shadow+telegram+gps+nginx)
+systemctl is-active dispatch-panel-watcher dispatch-sla-tracker \
+                    dispatch-shadow dispatch-telegram dispatch-gps nginx
+
+# 2. Tail all active logs (20 ostatnich per)
+tail -20 /root/.openclaw/workspace/scripts/logs/watcher.log
+tail -20 /root/.openclaw/workspace/scripts/logs/sla_tracker.log
+tail -20 /root/.openclaw/workspace/scripts/logs/shadow_dispatcher.log
+tail -20 /root/.openclaw/workspace/scripts/logs/telegram_approver.log
+tail -20 /root/.openclaw/workspace/scripts/logs/gps_server.log
+
+# 3. State stats
+python3 -c "
+import sys; sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+from dispatch_v2 import state_machine
+print(state_machine.stats())
+"
+
+# 4. Event bus + learning log
 python3 -c "
 import sys; sys.path.insert(0, '/root/.openclaw/workspace/scripts')
 from dispatch_v2 import event_bus
 print(event_bus.stats())
 "
+wc -l /root/.openclaw/workspace/dispatch_state/learning_log.jsonl
 
-# OSRM metrics
+# 5. OSRM metrics
 grep 'OSRM hourly' /root/.openclaw/workspace/scripts/logs/watcher.log | tail -5
 
-# Git
+# 6. GPS coverage
+python3 -c "
+import sys; sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+from dispatch_v2 import courier_resolver
+gps = courier_resolver._load_gps_positions()
+print(f'GPS entries: {len(gps)}')
+"
+
+# 7. Git
 cd /root/.openclaw/workspace/scripts/dispatch_v2 && git log --oneline | head -10
+tail -3 /root/backups/git_push.log
+
+# 8. Manual briefing / ranking (cron wyłączony 14.04)
+cd /root/.openclaw/workspace/scripts && TZ=Europe/Warsaw python3 -m dispatch_v2.daily_briefing evening --dry-run
+cd /root/.openclaw/workspace/scripts && TZ=Europe/Warsaw python3 -m dispatch_v2.courier_ranking --dry-run
 ```
 
 ## Kontakt awaryjny
