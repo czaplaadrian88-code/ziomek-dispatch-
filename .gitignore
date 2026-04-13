@@ -1,9 +1,38 @@
+# Backups
 *.bak-*
 *.bak
+*.bak.*
+
+# Secrets (HARD EXCLUSION dla CC + git)
+.secrets/
+.env
+.env.*
+*.pem
+*.key
+*.secret
+credentials*
+
+# Server backups / archive
+/root/backups/
+/root/archive/
+
+# Temp
+/tmp/
+*.tmp
+.tmp_*
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
-.tmp_*
-*.swp
+*.pyd
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
 .vscode/
 .idea/
+*.swp

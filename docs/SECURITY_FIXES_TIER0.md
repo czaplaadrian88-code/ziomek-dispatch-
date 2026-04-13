@@ -233,6 +233,8 @@ class PanelClient:
 ### Commit ref
 `fix per DeepSeek reliability #3.1 + Gemini #4.1`
 
+**IMPLEMENTATION NOTE 13.04.2026:** Spec zakładała `requests.Session`, realny kod używa `urllib` + `opener` pattern. Zaadaptowane jako Opcja A: module-level `_open_with_relogin` wrapper, podmiana TYLKO w `fetch_order_details` (realny punkt awarii), `fetch_panel_html` zachowane bez zmian (ma własny redirect-based re-login w pętli `for attempt in range(2)` z `force=True`), `login()` bez wrappera (uniknięcie nieskończonej rekursji).
+
 ---
 
 ## Fix #5 — .gitignore audit + cleanup (5 min)

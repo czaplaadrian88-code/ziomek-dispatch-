@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -80,16 +81,33 @@ def _atomic_write(path: Path, data: dict):
 
 
 def _read_state() -> dict:
-    """Czyta state (bez locka - tylko read). Zwraca {} jesli nie istnieje."""
+    """Czyta state z shared lock + retry (P0.5b Fix #2).
+
+    Problem: watcher 20s + sla_tracker 10s odczytują concurrent. Podczas atomic
+    rename pojawia sie okno gdzie plik chwilowo nie istnieje LUB jest partial.
+    Fix: 3 retry z exponential backoff (50/100/200 ms) + fcntl.LOCK_SH.
+
+    Zwraca {} jesli plik nie istnieje po 3 retries (nie traci state silently —
+    loguje warning). JSONDecodeError → zwraca {} + error log.
+    """
     path = Path(_state_path())
-    if not path.exists():
-        return {}
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
-        _log.error(f"JSONDecodeError w {path}: {e}. Zwracam pusty state.")
-        return {}
+    for attempt in range(3):
+        try:
+            with open(path) as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                try:
+                    return json.load(f)
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except FileNotFoundError:
+            if attempt == 2:
+                _log.warning(f"_read_state: {path} not found after 3 retries")
+                return {}
+            time.sleep(0.05 * (2 ** attempt))  # 50ms, 100ms, 200ms
+        except json.JSONDecodeError as e:
+            _log.error(f"JSONDecodeError w {path}: {e}. Zwracam pusty state.")
+            return {}
+    return {}
 
 
 def get_all() -> dict:

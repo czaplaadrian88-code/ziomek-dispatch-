@@ -12,8 +12,11 @@ API:
 - geocode_restaurant(name, address) -> (lat, lon) lub None
 - cache_stats() -> {size, hits, misses}
 """
+import fcntl
 import json
+import os
 import re
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -59,10 +62,32 @@ def _load_cache(path: Path) -> dict:
 
 
 def _save_cache(path: Path, data: dict):
+    """Atomic write z LOCK_EX (P0.5b Fix #3).
+
+    mkstemp w tym samym katalogu (atomic rename dziala tylko na tym samym fs),
+    unique suffix (nie race z innym writer), LOCK_EX, fsync, rename.
+    Cleanup temp jesli exception.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-    tmp.replace(path)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=f".{path.name}.tmp-",
+        suffix=".json",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        raise
 
 
 def _normalize(address: str, hint_city: str = "Białystok") -> str:

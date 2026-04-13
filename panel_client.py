@@ -244,6 +244,29 @@ def parse_panel_html(html: str) -> dict:
     }
 
 
+def _open_with_relogin(req: urllib.request.Request, timeout: float = 10):
+    """urllib opener z automatycznym re-login przy HTTP 401/419 (P0.5b Fix #4).
+
+    Max 1 retry. NIE uzywane w login() samym (uniknięcie rekursji) — tylko
+    w wrapperach zewnętrznych (fetch_order_details). fetch_panel_html ma
+    własny redirect-based re-login przez force=True w for attempt loop.
+    """
+    for attempt in range(2):
+        opener = _session["opener"]
+        if opener is None:
+            login()
+            opener = _session["opener"]
+        try:
+            return opener.open(req, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 419) and attempt == 0:
+                _log.warning(f"panel HTTP {e.code} → re-login + retry")
+                login(force=True)
+                continue
+            raise
+    raise RuntimeError("_open_with_relogin: unreachable")
+
+
 def fetch_order_details(zid: str, csrf: Optional[str] = None) -> Optional[dict]:
     """POST edit-zamowienie. Zwraca surowy dict 'zlecenie' lub None."""
     if csrf is None:
@@ -262,7 +285,7 @@ def fetch_order_details(zid: str, csrf: Optional[str] = None) -> Optional[dict]:
                 "Referer": f"{BASE_URL}/admin2017/new/orders/zlecenia",
             },
         )
-        raw = opener.open(req, timeout=10).read().decode("utf-8", errors="replace")
+        raw = _open_with_relogin(req, timeout=10).read().decode("utf-8", errors="replace")
         return json.loads(raw).get("zlecenie")
     except urllib.error.HTTPError as he:
         _log.warning(f"fetch_order_details({zid}): HTTP {he.code}")
