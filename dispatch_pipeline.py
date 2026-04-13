@@ -16,7 +16,8 @@ from typing import List, Dict, Optional, Tuple, Any
 from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2
 from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2 import scoring
-from dispatch_v2.common import parse_panel_timestamp, WARSAW
+from dispatch_v2.common import parse_panel_timestamp, WARSAW, HAVERSINE_ROAD_FACTOR_BIALYSTOK, get_fallback_speed_kmh
+from dispatch_v2.osrm_client import haversine
 
 
 EARLY_BIRD_THRESHOLD_MIN = 60
@@ -45,6 +46,7 @@ class PipelineResult:
     candidates: List[Candidate]
     pickup_ready_at: Optional[datetime]
     restaurant: Optional[str]
+    delivery_address: Optional[str] = None
 
 
 def get_pickup_ready_at(
@@ -116,6 +118,7 @@ def assess_order(
 
     order_id = str(order_event.get("order_id") or "")
     restaurant = order_event.get("restaurant")
+    delivery_address = order_event.get("delivery_address")
     pickup_coords = tuple(order_event.get("pickup_coords") or (0.0, 0.0))
     delivery_coords = tuple(order_event.get("delivery_coords") or (0.0, 0.0))
 
@@ -135,6 +138,7 @@ def assess_order(
                 candidates=[],
                 pickup_ready_at=None,
                 restaurant=restaurant,
+                delivery_address=delivery_address,
             )
 
     pickup_ready_at = get_pickup_ready_at(restaurant, pickup_at, now, restaurant_meta)
@@ -146,6 +150,9 @@ def assess_order(
         status="assigned",
         pickup_ready_at=pickup_ready_at,
     )
+
+    # Traffic-aware fallback speed dla estymat ETA (zgodne z P0.5 common.py)
+    fleet_speed_kmh = get_fallback_speed_kmh(now)
 
     candidates: List[Candidate] = []
     for cid, cs in fleet_snapshot.items():
@@ -173,6 +180,19 @@ def assess_order(
             oldest_in_bag_min=oldest,
         )
 
+        # F1.3 enrichment: km + ETA do pickup (haversine * road_factor, traffic speed)
+        km_to_pickup = haversine(tuple(courier_pos), pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+        travel_min = (km_to_pickup / fleet_speed_kmh) * 60.0 if fleet_speed_kmh > 0 else 0.0
+        eta_pickup_utc = now + timedelta(minutes=travel_min)
+
+        enriched_metrics = {
+            **metrics,
+            "score": score_result,
+            "km_to_pickup": round(km_to_pickup, 2),
+            "travel_min": round(travel_min, 1),
+            "eta_pickup_utc": eta_pickup_utc.isoformat(),
+        }
+
         candidates.append(Candidate(
             courier_id=str(cid),
             name=getattr(cs, "name", None),
@@ -180,7 +200,7 @@ def assess_order(
             feasibility_verdict=verdict,
             feasibility_reason=reason,
             plan=plan,
-            metrics={**metrics, "score": score_result},
+            metrics=enriched_metrics,
         ))
 
     # Feasible (MAYBE) → rank by score
@@ -197,6 +217,7 @@ def assess_order(
             candidates=top,
             pickup_ready_at=pickup_ready_at,
             restaurant=restaurant,
+            delivery_address=delivery_address,
         )
 
     # R28 best_effort: NO candidates that still produced a plan (SLA-only rejections)
@@ -213,6 +234,7 @@ def assess_order(
             candidates=with_plan[:TOP_N_CANDIDATES],
             pickup_ready_at=pickup_ready_at,
             restaurant=restaurant,
+            delivery_address=delivery_address,
         )
 
     # R29 fallback: nothing landed — alert Adrian
@@ -224,4 +246,5 @@ def assess_order(
         candidates=candidates,
         pickup_ready_at=pickup_ready_at,
         restaurant=restaurant,
+        delivery_address=delivery_address,
     )

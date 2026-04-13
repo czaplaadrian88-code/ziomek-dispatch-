@@ -84,32 +84,71 @@ def tg_request(token: str, method: str, payload: Optional[dict] = None, timeout:
 
 # ---- formatting ----
 
+COURIER_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
+_courier_names_cache: Optional[Dict[str, str]] = None
+
+
+def _load_courier_names() -> Dict[str, str]:
+    """Lazy load + cache courier_names.json (F1.2).
+
+    Shadow pipeline już populuje cs.name w dispatch_pipeline (z courier_resolver),
+    ale tutaj mamy fallback gdy decision.best.name=None/brak.
+    """
+    global _courier_names_cache
+    if _courier_names_cache is not None:
+        return _courier_names_cache
+    try:
+        with open(COURIER_NAMES_PATH) as f:
+            _courier_names_cache = json.load(f)
+    except Exception as e:
+        _log.warning(f"courier_names load fail: {e}")
+        _courier_names_cache = {}
+    return _courier_names_cache
+
+
 def name_lookup(courier_id: Optional[str], existing_name: Optional[str]) -> str:
-    # TODO: load courier_names.json once built from panel history
     if existing_name:
         return existing_name
-    return f"K{courier_id}" if courier_id else "?"
+    if courier_id:
+        names = _load_courier_names()
+        cached = names.get(str(courier_id))
+        if cached:
+            return cached
+        return f"K{courier_id}"
+    return "?"
 
 
 def format_proposal(decision: dict) -> str:
-    """Compact [PROPOZYCJA] per CLAUDE.md V3.4.
-
-    Fields not yet in shadow_decisions.jsonl (time/addr/km/eta/bag/trasa/prep)
-    marked as "—" until serializer enrichment (TODO).
-    """
+    """Compact [PROPOZYCJA] enriched z F1.3 (km + ETA + delivery_address)."""
     oid = decision.get("order_id", "?")
     rest = decision.get("restaurant") or "?"
+    delivery = decision.get("delivery_address") or "—"
     best = decision.get("best") or {}
     alts = decision.get("alternatives") or []
     best_effort = best.get("best_effort", False)
 
     courier = name_lookup(best.get("courier_id"), best.get("name"))
     score = best.get("score", 0)
+    km = best.get("km_to_pickup")
+    eta = best.get("eta_pickup_hhmm")
+
+    # Main line: "Marek (0.87) — 2.1 km, ETA 19:38"
+    main_bits = [f"{courier} ({score:.2f})"]
+    if km is not None:
+        main_bits.append(f"{km:.1f} km")
+    if eta:
+        main_bits.append(f"ETA {eta}")
+    main_line = " — ".join([main_bits[0], ", ".join(main_bits[1:])]) if len(main_bits) > 1 else main_bits[0]
 
     alt_strs = []
     for a in alts[:3]:
         an = name_lookup(a.get("courier_id"), a.get("name"))
-        alt_strs.append(f"{an} ({a.get('score',0):.0f})")
+        a_score = a.get("score", 0)
+        a_km = a.get("km_to_pickup")
+        if a_km is not None:
+            alt_strs.append(f"{an} ({a_score:.2f}, {a_km:.1f}km)")
+        else:
+            alt_strs.append(f"{an} ({a_score:.2f})")
     alt_line = " | ".join(alt_strs) if alt_strs else "—"
 
     banner = "⚠️ " if best_effort else ""
@@ -117,9 +156,9 @@ def format_proposal(decision: dict) -> str:
 
     lines = [
         f"{header_tag} #{oid}",
-        f"{rest}  →  —",
+        f"{rest}  →  {delivery}",
         "",
-        f"🎯 {banner}{courier} ({score:.0f})",
+        f"🎯 {banner}{main_line}",
         f"🥈 {alt_line}",
         "",
         f"✓ {decision.get('reason','')}",

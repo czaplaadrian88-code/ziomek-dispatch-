@@ -57,8 +57,23 @@ def _load_restaurant_meta(path: str) -> Optional[dict]:
         return None
 
 
+def _eta_hhmm_warsaw(iso_utc: Optional[str]) -> Optional[str]:
+    """ISO UTC → 'HH:MM' Warsaw local (F1.3)."""
+    if not iso_utc:
+        return None
+    try:
+        from dispatch_v2.common import WARSAW
+        dt = datetime.fromisoformat(iso_utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(WARSAW).strftime("%H:%M")
+    except Exception:
+        return None
+
+
 def _serialize_candidate(c) -> dict:
     plan = c.plan
+    m = c.metrics or {}
     return {
         "courier_id": c.courier_id,
         "name": c.name,
@@ -66,6 +81,9 @@ def _serialize_candidate(c) -> dict:
         "feasibility": c.feasibility_verdict,
         "reason": c.feasibility_reason,
         "best_effort": c.best_effort,
+        "km_to_pickup": m.get("km_to_pickup"),
+        "travel_min": m.get("travel_min"),
+        "eta_pickup_hhmm": _eta_hhmm_warsaw(m.get("eta_pickup_utc")),
         "plan": None if plan is None else {
             "sequence": plan.sequence,
             "total_duration_min": plan.total_duration_min,
@@ -78,11 +96,13 @@ def _serialize_candidate(c) -> dict:
 
 def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) -> dict:
     best = result.best
+    best_m = (best.metrics if best is not None else {}) or {}
     return {
         "ts": now_iso(),
         "event_id": event_id,
         "order_id": result.order_id,
         "restaurant": result.restaurant,
+        "delivery_address": result.delivery_address,
         "verdict": result.verdict,
         "reason": result.reason,
         "best": None if best is None else {
@@ -90,6 +110,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "name": best.name,
             "score": best.score,
             "best_effort": best.best_effort,
+            "km_to_pickup": best_m.get("km_to_pickup"),
+            "travel_min": best_m.get("travel_min"),
+            "eta_pickup_hhmm": _eta_hhmm_warsaw(best_m.get("eta_pickup_utc")),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]
@@ -119,6 +142,7 @@ def process_event(
     order_event = {
         "order_id": event.get("order_id"),
         "restaurant": payload.get("restaurant"),
+        "delivery_address": payload.get("delivery_address"),
         "pickup_coords": payload.get("pickup_coords"),
         "delivery_coords": payload.get("delivery_coords"),
         "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
