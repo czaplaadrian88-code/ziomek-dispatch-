@@ -26,14 +26,30 @@ CRON_TZ=Europe/Warsaw
 # Co godzinę o :00 pushnij master na origin (ziomek-dispatch-)
 0 * * * * cd /root/.openclaw/workspace/scripts/dispatch_v2 && git push origin master >> /root/backups/git_push.log 2>&1
 
-# --- DAILY BRIEFING (F1.4b, Ziomek → Telegram) ---
-# Morning 09:00 codziennie — wczorajsze stats + systemy
-0 9 * * * cd /root/.openclaw/workspace/scripts && TZ=Europe/Warsaw python3 -m dispatch_v2.daily_briefing morning >> /root/backups/briefing.log 2>&1
-# Evening 23:00 Mon-Thu + Sun — dziś stats + agreement + problemy
-0 23 * * 0-4 cd /root/.openclaw/workspace/scripts && TZ=Europe/Warsaw python3 -m dispatch_v2.daily_briefing evening >> /root/backups/briefing.log 2>&1
-# Evening 23:59 Fri-Sat — dłuższa operacja (piątek + sobota)
-59 23 * * 5,6 cd /root/.openclaw/workspace/scripts && TZ=Europe/Warsaw python3 -m dispatch_v2.daily_briefing evening >> /root/backups/briefing.log 2>&1
+# --- DAILY BRIEFING (F1.4b) — WYŁĄCZONE 14.04 (F1.6) ---
+# Adrian preference: on-demand przez Telegram /status zamiast auto push.
+# Skrypty zostają w repo jako manual option:
+#   cd /root/.openclaw/workspace/scripts && TZ=Europe/Warsaw python3 -m dispatch_v2.daily_briefing morning
+#   cd /root/.openclaw/workspace/scripts && TZ=Europe/Warsaw python3 -m dispatch_v2.daily_briefing evening
+
+# --- COURIER RANKING (F1.4c) — WYŁĄCZONE 14.04 (F1.6) ---
+# Zintegrowane w /status (sekcja "Top 3 wczoraj").
+# Manual run:
+#   cd /root/.openclaw/workspace/scripts && TZ=Europe/Warsaw python3 -m dispatch_v2.courier_ranking
 ```
+
+## On-demand powiadomienia (F1.6 14.04)
+
+Zamiast automatycznych Telegram pushów, **jedyne powiadomienie** to komenda
+`/status` w `@NadajeszBot` (F1.4a). Format 3-w-1:
+
+1. **Stan systemu** — serwisy (watcher/tracker/shadow/telegram) + ordery state
+2. **Dziś** — delivered + propozycje + agreement rate
+3. **Wczoraj** — delivered + propozycje + agreement + **top 3 kurierów** z rankingu
+   (SLA% + gwiazdki, z `courier_ranking.compute_ranking`)
+
+Uprawniony tylko `admin_id` z `config.json[telegram][admin_id]` (silent ignore
+dla innych user_id).
 
 ## Dni tygodnia (Linux cron, 0-7)
 
@@ -100,6 +116,7 @@ cd /root/.openclaw/workspace/scripts && python3 -m dispatch_v2.daily_briefing ev
 | 13.04.2026 | F1.4b iteration | Update godzin: 08/22 → 09 + 23/23:59 weekend split |
 | 13.04.2026 | F1.4c (535047c) | Dodany courier_ranking 23:30 daily |
 | 13.04.2026 | F1.5 | `/etc/cron.d/certbot-renew` usunięty jako broken, renewal idzie przez `certbot.timer` systemd + pre/post/renew hooks w `/etc/letsencrypt/renewal/gps.nadajesz.pl.conf` |
+| 14.04.2026 | F1.6 | Wyłączone 4 cron entries (morning/evening briefing + courier_ranking). Dane przeniesione do `/status` command w Telegram (3-w-1 on-demand). Kod zostaje jako manual option. |
 
 ## Open TECH_DEBT
 

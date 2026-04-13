@@ -336,11 +336,20 @@ async def updates_poller(state: dict) -> None:
 
 # ---- message handlers (F1.4a /status) ----
 
+SLA_LOG_PATH = "/root/.openclaw/workspace/scripts/logs/sla_log.jsonl"
+
+
 def _today_warsaw_start_utc() -> datetime:
     """Start dnia (00:00 Warsaw) w UTC."""
     now_warsaw = datetime.now(WARSAW)
     start_warsaw = now_warsaw.replace(hour=0, minute=0, second=0, microsecond=0)
     return start_warsaw.astimezone(timezone.utc)
+
+
+def _yesterday_warsaw_range_utc():
+    """Wczoraj 00:00 → dzis 00:00 Warsaw, w UTC (F1.6)."""
+    today_start = _today_warsaw_start_utc()
+    return today_start - timedelta(days=1), today_start
 
 
 def _count_delivered_today(start_utc: datetime) -> int:
@@ -378,6 +387,52 @@ def _count_learning_today(path: str, start_utc: datetime) -> Counter:
     except FileNotFoundError:
         pass
     return counts
+
+
+def _count_learning_in_range(path: str, start_utc: datetime, end_utc: datetime) -> Counter:
+    """Zlicz action w learning_log.jsonl w zakresie [start_utc, end_utc) (F1.6)."""
+    counts: Counter = Counter()
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                    ts_str = r.get("ts", "")
+                    if not ts_str:
+                        continue
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    if start_utc <= ts < end_utc:
+                        counts[r.get("action", "?")] += 1
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    return counts
+
+
+def _sla_records_in_range(path: str, start_utc: datetime, end_utc: datetime) -> list:
+    """Zwraca listę sla_log records z logged_at w zakresie (F1.6)."""
+    records = []
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                    ts_str = r.get("logged_at", "")
+                    if not ts_str:
+                        continue
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    if start_utc <= ts < end_utc:
+                        records.append(r)
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    return records
 
 
 def _systemd_status() -> Dict[str, bool]:
@@ -458,6 +513,42 @@ def format_status() -> str:
     lines.append(f"• Agreement: {tak}/{total_proposals} = {agreement_rate:.1f}%")
     if timeout > 0:
         lines.append(f"• Timeouts: {timeout}")
+
+    # === WCZORAJ (F1.6 — zastępuje auto-briefing) ===
+    yest_start, yest_end = _yesterday_warsaw_range_utc()
+    yest_sla = _sla_records_in_range(SLA_LOG_PATH, yest_start, yest_end)
+    yest_delivered = len(yest_sla)
+    yest_lc = _count_learning_in_range(LEARNING_LOG_PATH, yest_start, yest_end)
+    y_tak = yest_lc.get("TAK", 0)
+    y_total = sum(v for k, v in yest_lc.items() if k in ("TAK", "NIE", "INNY", "KOORD", "TIMEOUT"))
+    y_rate = (100 * y_tak / y_total) if y_total > 0 else 0.0
+
+    lines.append("")
+    lines.append("Wczoraj:")
+    lines.append(f"• Delivered: {yest_delivered}")
+    lines.append(f"• Propozycje: {y_total}")
+    lines.append(f"• Agreement: {y_tak}/{y_total} = {y_rate:.1f}%")
+
+    # Top 3 kurierów wczoraj (lazy import — unika circular z courier_ranking)
+    if yest_delivered > 0:
+        try:
+            from dispatch_v2 import courier_ranking
+            ranking = courier_ranking.compute_ranking(yest_sla)
+            names = courier_ranking._load_courier_names()
+            if ranking:
+                lines.append("")
+                lines.append("Top 3 wczoraj:")
+                for i, r in enumerate(ranking[:3], start=1):
+                    cname = names.get(r["courier_id"]) or f"K{r['courier_id']}"
+                    lines.append(
+                        f"{i}. {cname} — {r['deliveries']} dostaw | "
+                        f"SLA {r['sla_pct']:.0f}% {courier_ranking._stars(r['sla_pct'])}"
+                    )
+        except Exception as e:
+            _log.warning(f"ranking fail: {e}")
+            lines.append("")
+            lines.append("Top 3 wczoraj: (ranking error)")
+
     return "\n".join(lines)
 
 
