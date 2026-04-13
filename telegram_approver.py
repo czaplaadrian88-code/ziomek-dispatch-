@@ -25,12 +25,13 @@ import signal
 import subprocess
 import sys
 import urllib.request
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from dispatch_v2.common import load_config, now_iso, setup_logger
+from dispatch_v2.common import WARSAW, load_config, now_iso, parse_panel_timestamp, setup_logger
 
 
 POLL_SHADOW_SEC = 3
@@ -320,16 +321,168 @@ async def updates_poller(state: dict) -> None:
         for upd in r.get("result", []):
             offset = upd["update_id"] + 1
             cb = upd.get("callback_query")
-            if not cb:
-                continue
-            data = cb.get("data", "")
-            if ":" not in data:
-                continue
-            action, oid = data.split(":", 1)
+            msg = upd.get("message")
             try:
-                await handle_callback(state, action, oid, cb)
+                if cb:
+                    data = cb.get("data", "")
+                    if ":" in data:
+                        action, oid = data.split(":", 1)
+                        await handle_callback(state, action, oid, cb)
+                elif msg:
+                    await handle_message(state, msg)
             except Exception as e:
-                _log.error(f"callback err: {e}")
+                _log.error(f"update err: {e}")
+
+
+# ---- message handlers (F1.4a /status) ----
+
+def _today_warsaw_start_utc() -> datetime:
+    """Start dnia (00:00 Warsaw) w UTC."""
+    now_warsaw = datetime.now(WARSAW)
+    start_warsaw = now_warsaw.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start_warsaw.astimezone(timezone.utc)
+
+
+def _count_delivered_today(start_utc: datetime) -> int:
+    """State orders delivered od początku dnia Warsaw."""
+    from dispatch_v2 import state_machine
+    count = 0
+    for oid, o in state_machine.get_all().items():
+        if o.get("status") != "delivered":
+            continue
+        d = o.get("delivered_at") or o.get("czas_doreczenia")
+        dt = parse_panel_timestamp(d) if d else None
+        if dt is not None and dt >= start_utc:
+            count += 1
+    return count
+
+
+def _count_learning_today(path: str, start_utc: datetime) -> Counter:
+    """Zlicz action w learning_log.jsonl od start_utc (Warsaw 00:00)."""
+    counts: Counter = Counter()
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                    ts_str = r.get("ts", "")
+                    if not ts_str:
+                        continue
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    if ts >= start_utc:
+                        counts[r.get("action", "?")] += 1
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    return counts
+
+
+def _systemd_status() -> Dict[str, bool]:
+    services = [
+        "dispatch-panel-watcher",
+        "dispatch-sla-tracker",
+        "dispatch-shadow",
+        "dispatch-telegram",
+    ]
+    result: Dict[str, bool] = {}
+    for svc in services:
+        try:
+            r = subprocess.run(
+                ["systemctl", "is-active", svc],
+                capture_output=True, text=True, timeout=5,
+            )
+            result[svc] = (r.stdout.strip() == "active")
+        except Exception:
+            result[svc] = False
+    return result
+
+
+def format_status() -> str:
+    """Build /status message body (F1.4a)."""
+    from dispatch_v2 import state_machine
+
+    now_warsaw = datetime.now(WARSAW)
+    today_start_utc = _today_warsaw_start_utc()
+
+    try:
+        stats = state_machine.stats()
+    except Exception:
+        all_o = state_machine.get_all()
+        c = Counter(o.get("status", "?") for o in all_o.values())
+        stats = {"total": len(all_o), "by_status": dict(c), "active_per_courier": {}}
+
+    by_status = stats.get("by_status", {}) or {}
+    active_per_courier = stats.get("active_per_courier", {}) or {}
+
+    svcs = _systemd_status()
+    svc_names = [
+        ("dispatch-panel-watcher", "watcher"),
+        ("dispatch-sla-tracker",   "tracker"),
+        ("dispatch-shadow",        "shadow"),
+        ("dispatch-telegram",      "telegram"),
+    ]
+    svc_lines = [f"{'✅' if svcs.get(full) else '❌'} {short}" for full, short in svc_names]
+
+    delivered_today = _count_delivered_today(today_start_utc)
+    lc = _count_learning_today(LEARNING_LOG_PATH, today_start_utc)
+    tak = lc.get("TAK", 0)
+    nie = lc.get("NIE", 0)
+    inny = lc.get("INNY", 0)
+    koord = lc.get("KOORD", 0)
+    timeout = lc.get("TIMEOUT", 0)
+    total_proposals = tak + nie + inny + koord + timeout
+    agreement_rate = (100 * tak / total_proposals) if total_proposals > 0 else 0.0
+
+    active_couriers = len([v for v in active_per_courier.values() if v])
+
+    lines = [
+        f"🟢 Ziomek status ({now_warsaw.strftime('%H:%M')})",
+        "",
+        "Serwisy:",
+    ]
+    lines.extend(svc_lines)
+    lines.append("")
+    lines.append("Ordery (state):")
+    for key in ("assigned", "picked_up", "planned", "delivered"):
+        val = by_status.get(key, 0)
+        lines.append(f"• {key}: {val}")
+    lines.append("")
+    lines.append(f"Fleet aktywny: {active_couriers}")
+    lines.append("")
+    lines.append("Dziś:")
+    lines.append(f"• Delivered: {delivered_today}")
+    lines.append(f"• Propozycje: {total_proposals}")
+    lines.append(f"• Agreement: {tak}/{total_proposals} = {agreement_rate:.1f}%")
+    if timeout > 0:
+        lines.append(f"• Timeouts: {timeout}")
+    return "\n".join(lines)
+
+
+async def handle_message(state: dict, msg: dict) -> None:
+    """Handle text messages. Currently obsługuje tylko /status dla admin_id."""
+    from_id = str((msg.get("from") or {}).get("id", ""))
+    text = (msg.get("text") or "").strip()
+    if not text.startswith("/"):
+        return
+    cmd = text.split()[0].lower()
+
+    if cmd == "/status":
+        if from_id != str(state["admin_id"]):
+            _log.warning(f"/status from unauthorized user_id={from_id}")
+            return
+        try:
+            body = await asyncio.to_thread(format_status)
+        except Exception as e:
+            _log.exception("format_status failed")
+            body = f"❌ status error: {type(e).__name__}: {e}"
+        await asyncio.to_thread(
+            tg_request, state["token"], "sendMessage",
+            {"chat_id": state["admin_id"], "text": body},
+        )
+        _log.info(f"/status responded to admin={from_id}")
 
 
 async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
