@@ -22,7 +22,9 @@ _log = setup_logger("courier_resolver", "/root/.openclaw/workspace/scripts/logs/
 
 KURIER_PINY_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny.json"
 COURIER_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
+KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
 GPS_POSITIONS_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions.json"
+GPS_POSITIONS_PWA_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions_pwa.json"
 GPS_FRESHNESS_MIN = 5  # GPS nowszy niz 5 min = aktualny
 TRACCAR_URL = os.environ.get("TRACCAR_URL", "http://localhost:8082")
 TRACCAR_USER = os.environ.get("TRACCAR_USER", "")
@@ -85,15 +87,56 @@ def _load_courier_names() -> Dict:
 
 
 def _load_gps_positions() -> Dict:
-    """gps_positions.json - cache z Traccar watchera.
-    
-    UWAGA: klucze to IMIONA (np. "Bartek O."), nie courier_id.
-    Na dzisiaj (11.04) ignorujemy (nie ma tabeli lookup imie->id),
-    bo dzisiejsze dane i tak maja >3h latency. Fallback last-click dziala bez GPS.
-    TODO: tabela lookup imie->id albo migracja Traccar watchera na courier_id.
+    """Merge GPS positions — PWA primary, legacy Traccar fallback (F1.5).
+
+    Returns: {courier_id_str: {lat, lon, accuracy, timestamp, source, name?}}
+
+    Źródła:
+    - gps_positions_pwa.json: {courier_id: {...}} — PWA server (F1.5, fresh)
+    - gps_positions.json: {name: {...}} — legacy Traccar (imiona jako key)
+
+    Merge strategy:
+    1. Load PWA — klucze już są courier_id (direct)
+    2. Load legacy — mapuj name → courier_id via kurier_ids.json
+    3. PWA wygrywa przy konflikcie (newer data, clean format)
     """
-    # Na dzis zwracamy pusty dict - gps fallback nieuzywany
-    return {}
+    merged: Dict = {}
+
+    # 1. PWA primary (courier_id keys)
+    try:
+        with open(GPS_POSITIONS_PWA_PATH) as f:
+            pwa = json.load(f)
+        for cid, rec in pwa.items():
+            merged[str(cid)] = rec
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        _log.warning(f"_load_gps_positions PWA fail: {e}")
+
+    # 2. Legacy fallback (name keys → courier_id via kurier_ids)
+    try:
+        with open(KURIER_IDS_PATH) as f:
+            name_to_id = json.load(f)
+    except Exception:
+        name_to_id = {}
+
+    try:
+        with open(GPS_POSITIONS_PATH) as f:
+            legacy = json.load(f)
+        for name, rec in legacy.items():
+            cid = name_to_id.get(name)
+            if cid is None:
+                continue
+            cid_str = str(cid)
+            if cid_str in merged:
+                continue  # PWA primary wins
+            merged[cid_str] = rec
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        _log.warning(f"_load_gps_positions legacy fail: {e}")
+
+    return merged
 
 
 def _latest_order_by_event(orders: List[Dict], event_field: str) -> Optional[Dict]:

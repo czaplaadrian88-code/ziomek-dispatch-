@@ -1,0 +1,25 @@
+[Unit]
+Description=Ziomek GPS PWA Server (F1.5)
+After=network.target
+Documentation=https://github.com/czaplaadrian88-code/ziomek-dispatch-
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m dispatch_v2.gps_server
+Restart=always
+RestartSec=5
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/gps_server.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/gps_server.log
+
+# Security hardening (production later — needs HTTPS + nginx reverse proxy)
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/root/.openclaw/workspace/dispatch_state /root/.openclaw/workspace/scripts/logs
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -98,6 +98,8 @@ cd /root/.openclaw/workspace/scripts && python3 -m dispatch_v2.daily_briefing ev
 | 12.04.2026 | P0.5 (15493ea) | Pierwszy cron: hourly git push (F0 backup) |
 | 13.04.2026 | F1.4b (23bfa7d) | Dodane briefing morning+evening + CRON_TZ=Warsaw |
 | 13.04.2026 | F1.4b iteration | Update godzin: 08/22 → 09 + 23/23:59 weekend split |
+| 13.04.2026 | F1.4c (535047c) | Dodany courier_ranking 23:30 daily |
+| 13.04.2026 | F1.5 | `/etc/cron.d/certbot-renew` usunięty jako broken, renewal idzie przez `certbot.timer` systemd + pre/post/renew hooks w `/etc/letsencrypt/renewal/gps.nadajesz.pl.conf` |
 
 ## Open TECH_DEBT
 

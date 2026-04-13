@@ -1,0 +1,25 @@
+limit_req_zone $binary_remote_addr zone=gps_limit:10m rate=10r/m;
+
+server {
+    listen 80;
+    server_name gps.nadajesz.pl;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name gps.nadajesz.pl;
+
+    ssl_certificate /etc/letsencrypt/live/gps.nadajesz.pl/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/gps.nadajesz.pl/privkey.pem;
+
+    location /gps {
+        limit_req zone=gps_limit burst=5 nodelay;
+        proxy_pass http://localhost:8766;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location / {
+        proxy_pass http://localhost:8766;
+    }
+}
