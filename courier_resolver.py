@@ -274,7 +274,44 @@ def build_fleet_snapshot(
 
 
 def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[CourierState]:
-    """Zwraca tylko kurierow ktorych mozna scorowac (maja pozycje)."""
+    """Zwraca tylko kurierow ktorych mozna scorowac (maja pozycje i sa na zmianie)."""
+    import sys as _sys
+    _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+    try:
+        from schedule_utils import load_schedule, is_on_shift, match_courier
+        schedule = load_schedule()
+    except Exception as _e:
+        _log.warning(f"schedule load failed: {_e} — skip filtrowania")
+        schedule = {}
+        match_courier = None
+        is_on_shift = None
+    try:
+        from dispatch_v2 import manual_overrides
+        excluded = set(manual_overrides.get_excluded())
+    except Exception as _e:
+        _log.warning(f"manual_overrides load failed: {_e}")
+        excluded = set()
     if fleet is None:
         fleet = build_fleet_snapshot()
-    return [cs for cs in fleet.values() if cs.pos is not None]
+    result = []
+    for cs in fleet.values():
+        if cs.pos is None:
+            continue
+        if cs.name and cs.name in excluded:
+            _log.debug(f"skip {cs.name} ({cs.courier_id}): manual override")
+            continue
+        if schedule and cs.name:
+            full_name = match_courier(cs.name, schedule)
+            if full_name is None:
+                _log.debug(f"skip {cs.name} ({cs.courier_id}): brak w grafiku")
+                continue
+            entry = schedule.get(full_name)
+            if entry is None:
+                _log.debug(f"skip {cs.name} ({cs.courier_id}): nie pracuje dziś")
+                continue
+            on_shift, reason = is_on_shift(cs.name, schedule)
+            if not on_shift:
+                _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason}")
+                continue
+        result.append(cs)
+    return result

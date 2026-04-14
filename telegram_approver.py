@@ -553,27 +553,40 @@ def format_status() -> str:
 
 
 async def handle_message(state: dict, msg: dict) -> None:
-    """Handle text messages. Currently obsługuje tylko /status dla admin_id."""
+    """Handle text messages: /status + free-text manual courier overrides (admin only)."""
     from_id = str((msg.get("from") or {}).get("id", ""))
     text = (msg.get("text") or "").strip()
-    if not text.startswith("/"):
+    if not text:
         return
-    cmd = text.split()[0].lower()
+    if from_id != str(state["admin_id"]):
+        _log.warning(f"message from unauthorized user_id={from_id}")
+        return
 
-    if cmd == "/status":
-        if from_id != str(state["admin_id"]):
-            _log.warning(f"/status from unauthorized user_id={from_id}")
-            return
-        try:
-            body = await asyncio.to_thread(format_status)
-        except Exception as e:
-            _log.exception("format_status failed")
-            body = f"❌ status error: {type(e).__name__}: {e}"
-        await asyncio.to_thread(
-            tg_request, state["token"], "sendMessage",
-            {"chat_id": state["admin_id"], "text": body},
-        )
-        _log.info(f"/status responded to admin={from_id}")
+    if text.startswith("/"):
+        cmd = text.split()[0].lower()
+        if cmd == "/status":
+            try:
+                body = await asyncio.to_thread(format_status)
+            except Exception as e:
+                _log.exception("format_status failed")
+                body = f"❌ status error: {type(e).__name__}: {e}"
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {"chat_id": state["admin_id"], "text": body},
+            )
+            _log.info(f"/status responded to admin={from_id}")
+        return
+
+    # Free-text → manual courier overrides
+    from dispatch_v2 import manual_overrides
+    action, response = await asyncio.to_thread(manual_overrides.parse_command, text)
+    if not response:
+        return
+    await asyncio.to_thread(
+        tg_request, state["token"], "sendMessage",
+        {"chat_id": state["admin_id"], "text": response},
+    )
+    _log.info(f"override action={action} text={text!r}")
 
 
 async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
@@ -645,22 +658,20 @@ async def watchdog(state: dict) -> None:
                 expired.append(oid)
         for oid in expired:
             entry = state["pending"][oid]
-            _log.warning(f"TIMEOUT oid={oid} → auto-KOORD")
-            ok, msg = await asyncio.to_thread(run_gastro_assign, oid, None, 0, True)
+            _log.warning(f"TIMEOUT oid={oid} → brak odpowiedzi, zlecenie pozostaje w puli")
             await asyncio.to_thread(
                 tg_request, state["token"], "sendMessage",
                 {
                     "chat_id": state["admin_id"],
-                    "text": f"⏰ Timeout #{oid} (5 min) → auto-KOORD "
-                            f"({'ok' if ok else 'fail: ' + msg[:60]})",
+                    "text": f"⏰ Timeout #{oid} (5 min) → brak decyzji, zlecenie w puli",
                 },
             )
             append_learning(state["learning_log_path"], {
                 "ts": now_iso(),
                 "order_id": oid,
-                "action": "TIMEOUT_KOORD",
-                "ok": ok,
-                "feedback": msg[:200],
+                "action": "TIMEOUT_SKIP",
+                "ok": True,
+                "feedback": "brak decyzji w czasie — zlecenie pozostaje w puli",
                 "decision": entry["decision_record"],
             })
             state["pending"].pop(oid, None)

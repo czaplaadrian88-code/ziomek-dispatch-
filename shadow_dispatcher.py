@@ -18,13 +18,14 @@ import signal
 import sys
 import time
 import traceback
+from dispatch_v2.geocoding import geocode
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from dispatch_v2 import event_bus
 from dispatch_v2.common import load_config, now_iso, setup_logger
-from dispatch_v2.courier_resolver import build_fleet_snapshot
+from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_fleet
 from dispatch_v2.dispatch_pipeline import assess_order, PipelineResult
 
 
@@ -158,7 +159,7 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
     if not events:
         return stats
 
-    fleet = build_fleet_snapshot()
+    fleet = {cs.courier_id: cs for cs in dispatchable_fleet()}
 
     for ev in events:
         eid = ev["event_id"]
@@ -166,12 +167,31 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
         t0 = time.time()
         try:
             payload = ev.get("payload") or {}
-            # Skip orders without coords — data quality / geocode fail
-            if not payload.get("pickup_coords") or not payload.get("delivery_coords"):
-                _log.warning(f"skip {eid}: missing coords (order={oid})")
-                event_bus.mark_processed(eid)
-                stats["skipped"] += 1
-                continue
+            # Geocode missing coords on-the-fly
+            if not payload.get("pickup_coords"):
+                addr = payload.get("pickup_address", "")
+                coords = geocode(addr) if addr else None
+                if coords:
+                    payload["pickup_coords"] = list(coords)
+                    ev["payload"] = payload
+                    _log.info(f"geocoded pickup {oid}: {addr} -> {coords}")
+                else:
+                    _log.warning(f"skip {eid}: missing pickup_coords (order={oid})")
+                    event_bus.mark_processed(eid)
+                    stats["skipped"] += 1
+                    continue
+            if not payload.get("delivery_coords"):
+                addr = payload.get("delivery_address", "")
+                coords = geocode(addr) if addr else None
+                if coords:
+                    payload["delivery_coords"] = list(coords)
+                    ev["payload"] = payload
+                    _log.info(f"geocoded delivery {oid}: {addr} -> {coords}")
+                else:
+                    _log.warning(f"skip {eid}: missing delivery_coords (order={oid})")
+                    event_bus.mark_processed(eid)
+                    stats["skipped"] += 1
+                    continue
 
             result = process_event(ev, fleet, meta)
             latency_ms = (time.time() - t0) * 1000.0
