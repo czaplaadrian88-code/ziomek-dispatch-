@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import List, Tuple, Dict, Optional
 
 from dispatch_v2 import osrm_client
+from dispatch_v2.common import HAVERSINE_ROAD_FACTOR_BIALYSTOK
 from dispatch_v2.route_simulator_v2 import (
     OrderSim,
     RoutePlanV2,
@@ -22,10 +23,68 @@ from dispatch_v2.route_simulator_v2 import (
 )
 
 
+# Legacy static cap — zastąpiony przez R3_ABSOLUTE_CAP, zostawione dla kompatybilności.
 MAX_BAG_SIZE = 6
 MAX_PICKUP_REACH_KM = 15.0
 SHIFT_END_BUFFER_MIN = 20
 DEFAULT_SLA_MINUTES = 35
+
+# ===== BARTEK GOLD STANDARD thresholds (see docs/BARTEK_GOLD_STANDARD.md) =====
+# R1: max delivery spread in bag (p90 of Bartek clean sample, n=47 bundles).
+R1_MAX_DELIV_SPREAD_KM = 8.0
+# R3: absolute bag cap — Bartek never runs bag > 5 in 231-order clean sample.
+R3_ABSOLUTE_CAP = 5
+# R3: dynamic cap by spread. Stricter = fewer stops allowed at higher spread.
+R3_DYNAMIC_MAX = [(5.0, 5), (8.0, 4), (float("inf"), 3)]
+# R5: mixed-restaurant pickup spread — p100 Bartek = 1.79 km.
+R5_MAX_MIXED_PICKUP_SPREAD_KM = 1.8
+
+
+def _road_km(a, b) -> float:
+    """Haversine * Białystok road factor."""
+    return osrm_client.haversine(a, b) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+
+
+def _valid(coord) -> bool:
+    return bool(coord) and coord != (0.0, 0.0) and coord[0] != 0.0
+
+
+def _max_deliv_spread_km(bag, new_delivery) -> float:
+    """Max pair-wise road km across all bag deliveries + new delivery."""
+    coords = [b.delivery_coords for b in bag if _valid(b.delivery_coords)]
+    if _valid(new_delivery):
+        coords.append(new_delivery)
+    if len(coords) < 2:
+        return 0.0
+    best = 0.0
+    for i in range(len(coords)):
+        for j in range(i + 1, len(coords)):
+            d = _road_km(coords[i], coords[j])
+            if d > best:
+                best = d
+    return best
+
+
+def _dynamic_bag_cap(spread_km: float) -> int:
+    for threshold, cap in R3_DYNAMIC_MAX:
+        if spread_km <= threshold:
+            return cap
+    return R3_ABSOLUTE_CAP
+
+
+def _max_pickup_spread_from_bag(bag, new_pickup) -> float:
+    """Max road km between new pickup and any bag pickup (skipping sentinels)."""
+    if not _valid(new_pickup):
+        return 0.0
+    best = 0.0
+    for b in bag:
+        bp = b.pickup_coords
+        if not _valid(bp):
+            continue
+        d = _road_km(bp, new_pickup)
+        if d > best:
+            best = d
+    return best
 
 
 def check_feasibility_v2(
@@ -46,8 +105,43 @@ def check_feasibility_v2(
 
     # === FAST FILTERS ===
 
-    if len(bag) >= MAX_BAG_SIZE:
-        return ("NO", f"bag_full ({len(bag)}/{MAX_BAG_SIZE})", metrics, None)
+    # R3 absolute cap — Bartek Gold Standard: bag_after ≤ 5 always.
+    bag_after = len(bag) + 1
+    if bag_after > R3_ABSOLUTE_CAP:
+        return ("NO", f"R3_bag_cap ({bag_after}>{R3_ABSOLUTE_CAP})", metrics, None)
+
+    # R1 spread outlier + R3 dynamic cap (require delivery coords on both sides).
+    if bag and _valid(new_order.delivery_coords):
+        spread_km = _max_deliv_spread_km(bag, new_order.delivery_coords)
+        metrics["deliv_spread_km"] = round(spread_km, 2)
+        if spread_km > R1_MAX_DELIV_SPREAD_KM:
+            return (
+                "NO",
+                f"R1_spread_outlier ({spread_km:.1f}km>{R1_MAX_DELIV_SPREAD_KM:.1f})",
+                metrics,
+                None,
+            )
+        dyn_cap = _dynamic_bag_cap(spread_km)
+        metrics["dynamic_bag_cap"] = dyn_cap
+        if bag_after > dyn_cap:
+            return (
+                "NO",
+                f"R3_dynamic_bag (spread={spread_km:.1f}km, cap={dyn_cap}, after={bag_after})",
+                metrics,
+                None,
+            )
+
+    # R5 mixed-restaurant pickup spread — same restaurant → spread=0 (no fire).
+    if bag and _valid(new_order.pickup_coords):
+        pickup_spread_km = _max_pickup_spread_from_bag(bag, new_order.pickup_coords)
+        metrics["pickup_spread_km"] = round(pickup_spread_km, 2)
+        if pickup_spread_km > R5_MAX_MIXED_PICKUP_SPREAD_KM:
+            return (
+                "NO",
+                f"R5_mixed_rest_pickup ({pickup_spread_km:.1f}km>{R5_MAX_MIXED_PICKUP_SPREAD_KM:.1f})",
+                metrics,
+                None,
+            )
 
     pickup_dist_km = osrm_client.haversine(courier_pos, new_order.pickup_coords)
     metrics["pickup_dist_km"] = round(pickup_dist_km, 2)

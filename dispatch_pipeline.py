@@ -293,12 +293,29 @@ def assess_order(
             travel_min = drive_min
             eta_pickup_utc = drive_arrival_utc
 
-        # Bundle bonus — sumowanie L1 + L2 + L3.
-        # L1 = +25 (same restaurant), L2 = max(0, 20 - dist*10), L3 = max(0, 15 - dev*6).
+        # Bundle bonus — sumowanie L1 + L2 + R4 (Bartek Gold Standard).
+        # L1 = +25 (same restaurant), L2 = max(0, 20 - dist*10).
+        # R4 (zastępuje L3): tier-based free-stop curve × weight 1.5.
+        #   dev ≤ 0.5 km  → raw 100      (full free stop)
+        #   0.5 < dev ≤ 1.5 → raw 50*(1.5-d)/1.0 linear
+        #   1.5 < dev ≤ 2.5 → raw 20*(2.5-d)/1.0 linear
+        #   > 2.5 km       → raw 0
         bonus_l1 = 25.0 if bundle_level1 else 0.0
         bonus_l2 = max(0.0, 20.0 - bundle_level2_dist * 10.0) if bundle_level2_dist is not None else 0.0
-        bonus_l3 = max(0.0, 15.0 - bundle_level3_dev * 6.0) if bundle_level3_dev is not None else 0.0
-        bundle_bonus = bonus_l1 + bonus_l2 + bonus_l3
+        if bundle_level3_dev is None:
+            bonus_r4_raw = 0.0
+        else:
+            d = bundle_level3_dev
+            if d <= 0.5:
+                bonus_r4_raw = 100.0
+            elif d <= 1.5:
+                bonus_r4_raw = 50.0 * (1.5 - d)
+            elif d <= 2.5:
+                bonus_r4_raw = 20.0 * (2.5 - d)
+            else:
+                bonus_r4_raw = 0.0
+        bonus_r4 = bonus_r4_raw * 1.5  # R4 weight per Bartek Gold Standard
+        bundle_bonus = bonus_l1 + bonus_l2 + bonus_r4
 
         # Availability bonus: kiedy kurier będzie wolny po obecnym bagu (BEZ nowego ordera).
         # Liczone z plan.predicted_delivered_at[last_bag_oid_in_seq] (Opcja B).
@@ -342,6 +359,8 @@ def assess_order(
             "bundle_level2_dist": bundle_level2_dist,
             "bundle_level3": bundle_level3,
             "bundle_level3_dev": bundle_level3_dev,
+            "bonus_r4_raw": round(bonus_r4_raw, 2),
+            "bonus_r4": round(bonus_r4, 2),
             "bundle_bonus": round(bundle_bonus, 2),
             "availability_bonus": round(availability_bonus, 2),
             "free_at_min": round(free_at_min, 1),
@@ -406,9 +425,12 @@ def assess_order(
                     f"odbiór za {prep_remaining_min:.0f} min)"
                 )
 
-    # Feasible (MAYBE) → rank by score
+    # Feasible (MAYBE) → rank by score.
+    # R2 Bartek Gold Standard tie-breaker: przy równym score, preferuj
+    # kandydata o niższej corridor deviation (bundle_level3_dev).
+    # Brak dev (pusty bag / solo) → 999 (sortuje się na koniec przy tie).
     feasible = [c for c in candidates if c.feasibility_verdict == "MAYBE"]
-    feasible.sort(key=lambda c: c.score, reverse=True)
+    feasible.sort(key=lambda c: (-c.score, c.metrics.get("bundle_level3_dev") if c.metrics.get("bundle_level3_dev") is not None else 999.0))
 
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]
