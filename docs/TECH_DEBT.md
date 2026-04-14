@@ -632,3 +632,25 @@ fixes) + A/B test Ziomek vs current koordynator operation.
 - Kurier satisfaction (odczuli że "system lepiej rozdziela")
 
 **Deliverable:** Shadow → Semi-auto → Full-auto rollout plan per (kurier, restauracja).
+
+## Znane problemy do naprawy (stan 14.04.2026 wieczór)
+
+### PILNE
+- [ ] Bartek O. GPS nieaktywny od 6 dni — brak świeżej pozycji, pozycja syntetyczna
+- [ ] Timeout dla zleceń przypisanych przez koordynatora (silent fix zrobiony ale monitoring brakuje)
+- [ ] Kurierzy bez GPS — travel_min niedokładny, deklaracje mogą być błędne
+
+### DO ZROBIENIA (tydzień 2-3)
+- [ ] Learning analyzer — po 200+ decyzjach (cel 21.04)
+- [ ] Auto-approve score >0.90 (eliminuje 60-70% kliknięć)
+- [ ] Telegram security — weryfikacja chat_id członków grupy
+- [ ] Rate limiting panel_watcher — backoff przy błędach HTTP
+- [ ] getUpdates crash guard — sys.exit(1) po N failach (systemd restartuje)
+- [ ] Restimo API skeleton — FastAPI + OAuth2
+- [ ] prep_variance monitoring — alerty gdy restauracja spóźnia się >10 min
+- [ ] Rutcom kontakt — GPS kurierów przez panel API
+
+### ARCHITEKTURA (Faza 2+)
+- [ ] cs.heading / kierunek jazdy kuriera (wymaga GPS history)
+- [ ] OR-Tools VRPTW (Faza 9)
+- [ ] Wielomiastowość Warszawa (miesiąc 5+)
