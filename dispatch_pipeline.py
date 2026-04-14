@@ -205,6 +205,8 @@ def assess_order(
             "travel_min": round(travel_min, 1),
             "eta_pickup_utc": eta_pickup_utc.isoformat(),
             "eta_source": eta_source,
+            "pos_source": getattr(cs, "pos_source", None),
+            "shift_start_min": getattr(cs, "shift_start_min", None),
         }
 
         candidates.append(Candidate(
@@ -216,6 +218,40 @@ def assess_order(
             plan=plan,
             metrics=enriched_metrics,
         ))
+
+    # F1.7 no_gps fallback: kurier z syntetycznym pos (centrum) dostaje
+    # neutralne km/ETA. km_to_pickup = średnia floty (tylko z realnych pos),
+    # travel_min = max(15, prep_remaining_min). Score liczony z centrum został,
+    # bo i tak jest blisko mediany floty — nie faworyzuje, nie wyklucza.
+    real_kms = [
+        c.metrics.get("km_to_pickup")
+        for c in candidates
+        if c.metrics.get("pos_source") not in ("no_gps", None)
+        and c.metrics.get("km_to_pickup") is not None
+    ]
+    fleet_avg_km = (sum(real_kms) / len(real_kms)) if real_kms else 5.0
+    prep_remaining_min = 0.0
+    if pickup_ready_at is not None:
+        ready_utc = pickup_ready_at if pickup_ready_at.tzinfo else pickup_ready_at.replace(tzinfo=timezone.utc)
+        prep_remaining_min = max(0.0, (ready_utc.astimezone(timezone.utc) - now).total_seconds() / 60.0)
+    no_gps_travel_min = max(15.0, prep_remaining_min)
+    no_gps_eta_utc = now + timedelta(minutes=no_gps_travel_min)
+
+    for c in candidates:
+        ps = c.metrics.get("pos_source")
+        if ps == "no_gps":
+            c.metrics["km_to_pickup"] = round(fleet_avg_km, 2)
+            c.metrics["travel_min"] = round(no_gps_travel_min, 1)
+            c.metrics["eta_pickup_utc"] = no_gps_eta_utc.isoformat()
+            c.metrics["eta_source"] = "no_gps_fallback"
+        elif ps == "pre_shift":
+            # Kurier zaczyna zmianę za N min — travel_min = N (czas oczekiwania).
+            # Bez km (nieznane gdzie będzie). eta_pickup = start zmiany.
+            shift_min = c.metrics.get("shift_start_min") or 0.0
+            c.metrics["km_to_pickup"] = None
+            c.metrics["travel_min"] = round(float(shift_min), 1)
+            c.metrics["eta_pickup_utc"] = (now + timedelta(minutes=shift_min)).isoformat()
+            c.metrics["eta_source"] = "pre_shift"
 
     # Feasible (MAYBE) → rank by score
     feasible = [c for c in candidates if c.feasibility_verdict == "MAYBE"]

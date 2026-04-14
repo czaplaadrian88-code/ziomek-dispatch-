@@ -206,9 +206,18 @@ def _bruteforce_plan(
     if new_pickup_idx is not None:
         to_place.append(new_pickup_idx)
 
+    # Lock first stop: gdy kurier wiezie jedzenie (bag niepusty), pierwszy
+    # node MUSI być dostarczeniem czegoś z baga — żadnych zawrotów do nowej
+    # restauracji z jedzeniem w torbie. Bag items są w simulatorze traktowane
+    # jako już picked_up (nie mają pickup nodes).
+    bag_set = set(bag_delivery_idxs)
+    lock_first = bool(bag_set)
+
     best: Optional[RoutePlanV2] = None
     best_key = (10 ** 9, float("inf"))
     for perm in permutations(to_place):
+        if lock_first and perm[0] not in bag_set:
+            continue
         if new_pickup_idx is not None:
             pi = perm.index(new_pickup_idx)
             di = perm.index(new_delivery_idx)
@@ -238,12 +247,17 @@ def _greedy_plan(
         current = nxt
 
     # Step 2: try every (pickup_pos, delivery_pos) insertion for new_order.
+    # Lock first stop: jeśli bag niepusty, nowy pickup NIE może być przed pierwszą
+    # bagową dostawą (kurier wiezie jedzenie → najpierw dostarcz).
+    lock_first = len(seq_base) > 0
     best: Optional[RoutePlanV2] = None
     best_key = (10 ** 9, float("inf"))
     n = len(seq_base)
     for d_pos in range(n + 1):
         pickup_positions = [None] if new_pickup_idx is None else list(range(0, d_pos + 1))
         for p_pos in pickup_positions:
+            if lock_first and p_pos == 0:
+                continue
             candidate = list(seq_base)
             candidate.insert(d_pos, new_delivery_idx)
             if p_pos is not None:

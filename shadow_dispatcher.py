@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from dispatch_v2 import event_bus
+from dispatch_v2 import event_bus, state_machine
 from dispatch_v2.common import load_config, now_iso, setup_logger
 from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_fleet
 from dispatch_v2.dispatch_pipeline import assess_order, PipelineResult
@@ -114,6 +114,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "km_to_pickup": best_m.get("km_to_pickup"),
             "travel_min": best_m.get("travel_min"),
             "eta_pickup_hhmm": _eta_hhmm_warsaw(best_m.get("eta_pickup_utc")),
+            "pos_source": best_m.get("pos_source"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]
@@ -161,10 +162,22 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
 
     fleet = {cs.courier_id: cs for cs in dispatchable_fleet()}
 
+    state_all = state_machine.get_all()
+    TERMINAL = ("delivered", "cancelled", "returned_to_pool", "picked_up")
+
     for ev in events:
         eid = ev["event_id"]
         oid = ev.get("order_id")
         t0 = time.time()
+        # Race-condition guard: order mógł zostać anulowany / dostarczony / już
+        # przypisany między emit NEW_ORDER a teraz. Jeśli state_machine zna
+        # aktualny stan i jest terminalny — skip bez tworzenia propozycji.
+        cur = state_all.get(str(oid)) if oid is not None else None
+        if cur and cur.get("status") in TERMINAL:
+            _log.info(f"SKIP {oid}: status={cur.get('status')} (race guard)")
+            event_bus.mark_processed(eid)
+            stats["skipped"] += 1
+            continue
         try:
             payload = ev.get("payload") or {}
             # Geocode missing coords on-the-fly

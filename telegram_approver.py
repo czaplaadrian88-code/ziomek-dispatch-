@@ -119,8 +119,67 @@ def name_lookup(courier_id: Optional[str], existing_name: Optional[str]) -> str:
     return "?"
 
 
+def _to_warsaw_hhmm(dt_utc: datetime) -> str:
+    return dt_utc.astimezone(WARSAW).strftime("%H:%M")
+
+
+def _pickup_ready_warsaw(decision: dict, now_utc: datetime) -> Tuple[Optional[str], Optional[float]]:
+    """Z pickup_ready_at → (HH:MM Warsaw, minuty od now). None gdy brak."""
+    iso = decision.get("pickup_ready_at")
+    if not iso:
+        return None, None
+    try:
+        ready = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except Exception:
+        return None, None
+    if ready.tzinfo is None:
+        ready = ready.replace(tzinfo=timezone.utc)
+    delta_min = (ready - now_utc).total_seconds() / 60.0
+    return _to_warsaw_hhmm(ready), delta_min
+
+
+def _candidate_line(c: dict, now_utc: datetime, prep_remaining_min: float) -> str:
+    """Linia top-N. 3 warianty per pos_source:
+    - normalny:  '{name} ({score}) — {km} km, ETA {hhmm} → deklarujemy {hhmm}'
+    - no_gps:    '{name} ({score}) — brak GPS, czas: 15 min → deklarujemy {hhmm}'
+    - pre_shift: '{name} ({score}) — start {hhmm} → deklarujemy {hhmm}'
+    """
+    name = name_lookup(c.get("courier_id"), c.get("name"))
+    score = c.get("score", 0)
+    km = c.get("km_to_pickup")
+    eta = c.get("eta_pickup_hhmm")
+    travel_min = c.get("travel_min")
+    pos_source = c.get("pos_source")
+    no_gps = pos_source == "no_gps"
+    pre_shift = pos_source == "pre_shift"
+
+    # Czas deklarowany: max(eta, prep) → round_up_to_5min → HH:MM Warsaw
+    eta_t = round_up_to_5min(travel_min)
+    prep_t = round_up_to_5min(prep_remaining_min)
+    dekl_min = max(eta_t, prep_t)
+    dekl_hhmm = _to_warsaw_hhmm(now_utc + timedelta(minutes=dekl_min))
+
+    bits = [f"{name} ({score:.2f})"]
+    if pre_shift:
+        # eta_pickup_hhmm == start zmiany (pipeline ustawił eta = now + shift_start_min)
+        bits.append(f"start {eta}" if eta else "pre-shift")
+    elif no_gps:
+        tm_int = int(round(travel_min)) if travel_min is not None else None
+        bits.append(f"brak GPS, czas: {tm_int} min" if tm_int is not None else "brak GPS")
+    else:
+        sub = []
+        if km is not None:
+            sub.append(f"{km:.1f} km")
+        if eta:
+            sub.append(f"ETA {eta}")
+        if sub:
+            bits.append(", ".join(sub))
+    head = " — ".join(bits)
+    return f"{head} → deklarujemy {dekl_hhmm}"
+
+
 def format_proposal(decision: dict) -> str:
-    """Compact [PROPOZYCJA] enriched z F1.3 (km + ETA + delivery_address)."""
+    """[PROPOZYCJA] z top3 + pickup_ready + czas deklarowany per kandydat."""
     oid = decision.get("order_id", "?")
     rest = decision.get("restaurant") or "?"
     delivery = decision.get("delivery_address") or "—"
@@ -128,44 +187,37 @@ def format_proposal(decision: dict) -> str:
     alts = decision.get("alternatives") or []
     best_effort = best.get("best_effort", False)
 
-    courier = name_lookup(best.get("courier_id"), best.get("name"))
-    score = best.get("score", 0)
-    km = best.get("km_to_pickup")
-    eta = best.get("eta_pickup_hhmm")
+    now_utc = datetime.now(timezone.utc)
+    pickup_hhmm, pickup_in_min = _pickup_ready_warsaw(decision, now_utc)
+    prep_remaining = max(0.0, pickup_in_min) if pickup_in_min is not None else 0.0
 
-    # Main line: "Marek (0.87) — 2.1 km, ETA 19:38"
-    main_bits = [f"{courier} ({score:.2f})"]
-    if km is not None:
-        main_bits.append(f"{km:.1f} km")
-    if eta:
-        main_bits.append(f"ETA {eta}")
-    main_line = " — ".join([main_bits[0], ", ".join(main_bits[1:])]) if len(main_bits) > 1 else main_bits[0]
-
-    alt_strs = []
-    for a in alts[:3]:
-        an = name_lookup(a.get("courier_id"), a.get("name"))
-        a_score = a.get("score", 0)
-        a_km = a.get("km_to_pickup")
-        if a_km is not None:
-            alt_strs.append(f"{an} ({a_score:.2f}, {a_km:.1f}km)")
-        else:
-            alt_strs.append(f"{an} ({a_score:.2f})")
-    alt_line = " | ".join(alt_strs) if alt_strs else "—"
-
-    banner = "⚠️ " if best_effort else ""
     header_tag = "[PROPOZYCJA best_effort]" if best_effort else "[PROPOZYCJA]"
+    banner = "⚠️ " if best_effort else ""
 
     lines = [
         f"{header_tag} #{oid}",
-        f"{rest}  →  {delivery}",
-        "",
-        f"🎯 {banner}{main_line}",
-        f"🥈 {alt_line}",
-        "",
-        f"✓ {decision.get('reason','')}",
-        "",
-        "TAK / NIE / INNY / KOORD",
+        f"{rest} → {delivery}",
     ]
+    if pickup_hhmm is not None:
+        if pickup_in_min is not None and pickup_in_min >= 0:
+            lines.append(f"🕐 Odbiór: {pickup_hhmm} (za {int(round(pickup_in_min))} min)")
+        else:
+            lines.append(f"🕐 Odbiór: {pickup_hhmm} (gotowe)")
+    lines.append("")
+
+    medals = ["🎯", "🥈", "🥉"]
+    top3 = [best] + list(alts[:2])
+    for i, c in enumerate(top3):
+        if not c:
+            continue
+        marker = medals[i] if i < len(medals) else "•"
+        prefix = f"{marker} {banner}" if i == 0 else f"{marker} "
+        lines.append(prefix + _candidate_line(c, now_utc, prep_remaining))
+
+    lines.append("")
+    lines.append(f"✓ {decision.get('reason','')}")
+    lines.append("")
+    lines.append("TAK / NIE / INNY / KOORD")
     return "\n".join(lines)
 
 
@@ -701,8 +753,33 @@ async def watchdog(state: dict) -> None:
                 continue
             if now >= exp:
                 expired.append(oid)
+        # Snapshot state raz na wszystkie expired, żeby uniknąć N×get_all
+        state_all = {}
+        if expired:
+            try:
+                from dispatch_v2 import state_machine
+                state_all = state_machine.get_all()
+            except Exception as _e:
+                _log.warning(f"watchdog state_machine load fail: {_e}")
         for oid in expired:
             entry = state["pending"][oid]
+            cur = state_all.get(str(oid)) or {}
+            cur_status = cur.get("status")
+            # BUG1 fix: jeśli zlecenie zostało już ręcznie obsłużone (assigned/picked_up/
+            # delivered/cancelled), nie spamuj timeoutem — cicho usuń z pending.
+            if cur_status and cur_status != "new":
+                _log.info(f"TIMEOUT silent oid={oid}: status={cur_status} (już obsłużone)")
+                append_learning(state["learning_log_path"], {
+                    "ts": now_iso(),
+                    "order_id": oid,
+                    "action": "TIMEOUT_SUPERSEDED",
+                    "ok": True,
+                    "feedback": f"order już {cur_status} — silent skip",
+                    "decision": entry["decision_record"],
+                })
+                state["pending"].pop(oid, None)
+                save_pending(state["pending_path"], state["pending"])
+                continue
             _log.warning(f"TIMEOUT oid={oid} → brak odpowiedzi, zlecenie pozostaje w puli")
             await asyncio.to_thread(
                 tg_request, state["token"], "sendMessage",

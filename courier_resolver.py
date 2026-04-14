@@ -26,6 +26,28 @@ KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
 GPS_POSITIONS_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions.json"
 GPS_POSITIONS_PWA_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions_pwa.json"
 GPS_FRESHNESS_MIN = 5  # GPS nowszy niz 5 min = aktualny
+
+# Synthetic pos dla kuriera bez GPS i bez historii zleceń (no_gps fallback).
+# Nie wykluczamy go z dispatchu; dispatch_pipeline normalizuje km_to_pickup
+# do średniej floty, a travel_min do max(prep, 15 min).
+BIALYSTOK_CENTER = (53.1325, 23.1688)
+
+# Pre-shift: kurier którego zmiana zaczyna się w ciągu N min może już dostać
+# propozycję — czas deklarowany uwzględnia jego shift_start.
+PRE_SHIFT_WINDOW_MIN = 50
+
+# Priorytet źródeł pozycji — niższe = lepsze. Używane do dedupliacji
+# kurierów występujących pod kilkoma courier_id (legacy + panel).
+POS_SOURCE_PRIORITY = {
+    "gps": 0,
+    "last_picked_up_delivery": 1,
+    "last_assigned_pickup": 2,
+    "last_delivered": 3,
+    "no_gps": 4,
+    "pre_shift": 5,
+    "none": 6,
+    None: 6,
+}
 TRACCAR_URL = os.environ.get("TRACCAR_URL", "http://localhost:8082")
 TRACCAR_USER = os.environ.get("TRACCAR_USER", "")
 TRACCAR_PASS = os.environ.get("TRACCAR_PASS", "")
@@ -39,6 +61,7 @@ class CourierState:
     pos_age_min: Optional[float] = None              # sekund/60 od pomiaru
     bag: List[Dict] = field(default_factory=list)    # ordery w bagu (jako dict z state)
     shift_end: Optional[datetime] = None             # koniec zmiany (None = nieznane)
+    shift_start_min: Optional[float] = None          # minuty od now do startu zmiany (pre_shift)
     name: Optional[str] = None                       # czytelna nazwa z kurier_piny
 
     def to_dict(self):
@@ -266,15 +289,56 @@ def build_fleet_snapshot(
             fleet[kid] = cs
             continue
 
-        # 4. None — skip w dispatchu (brak danych pozycji)
-        cs.pos_source = "none"
+        # 4. no_gps fallback: kurier wolny, brak GPS i brak historii.
+        #    Dajemy syntetyczną pozycję = centrum miasta. Dispatch_pipeline
+        #    nadpisze km_to_pickup średnią floty i travel_min = max(prep, 15).
+        cs.pos = BIALYSTOK_CENTER
+        cs.pos_source = "no_gps"
         fleet[kid] = cs
+
+    # Dedup: gdy 2+ courier_id mają to samo imię (np. legacy 4657 + panel 123
+    # dla "Bartek O."), zostaje wpis z lepszym pos_source.
+    by_name: Dict[str, str] = {}
+    for kid in list(fleet.keys()):
+        cs = fleet[kid]
+        if not cs.name:
+            continue
+        existing_kid = by_name.get(cs.name)
+        if existing_kid is None:
+            by_name[cs.name] = kid
+            continue
+        existing = fleet[existing_kid]
+        cur_p = POS_SOURCE_PRIORITY.get(cs.pos_source, 99)
+        ex_p = POS_SOURCE_PRIORITY.get(existing.pos_source, 99)
+        if cur_p < ex_p:
+            del fleet[existing_kid]
+            by_name[cs.name] = kid
+        else:
+            del fleet[kid]
 
     return fleet
 
 
+def _mins_to_shift_start(entry: Optional[dict]) -> Optional[float]:
+    """Z entry grafiku → minuty od now (Warsaw) do startu zmiany.
+    Dodatnie = jeszcze nie zaczął, ujemne = już po. None = brak danych."""
+    start_str = (entry or {}).get("start")
+    if not start_str or ":" not in start_str:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        WAW = ZoneInfo("Europe/Warsaw")
+        now_w = datetime.now(WAW)
+        h, m = start_str.split(":")
+        start_dt = now_w.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+        return (start_dt - now_w).total_seconds() / 60.0
+    except Exception:
+        return None
+
+
 def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[CourierState]:
-    """Zwraca tylko kurierow ktorych mozna scorowac (maja pozycje i sa na zmianie)."""
+    """Zwraca tylko kurierow ktorych mozna scorowac (maja pozycje i sa na zmianie
+    LUB zaczynają zmianę w ciągu PRE_SHIFT_WINDOW_MIN minut)."""
     import sys as _sys
     _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
     try:
@@ -311,7 +375,16 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                 continue
             on_shift, reason = is_on_shift(cs.name, schedule)
             if not on_shift:
-                _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason}")
-                continue
+                # Pre-shift window: kurier zaczyna w ciągu PRE_SHIFT_WINDOW_MIN
+                # → dopuszczamy z synthetic pos i znacznikiem pre_shift.
+                mins = _mins_to_shift_start(entry)
+                if mins is not None and 0 < mins <= PRE_SHIFT_WINDOW_MIN:
+                    cs.pos_source = "pre_shift"
+                    cs.pos = BIALYSTOK_CENTER
+                    cs.shift_start_min = mins
+                    _log.debug(f"pre_shift {cs.name} ({cs.courier_id}): za {mins:.0f} min")
+                else:
+                    _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason}")
+                    continue
         result.append(cs)
     return result
