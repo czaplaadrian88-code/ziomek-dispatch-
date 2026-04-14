@@ -18,6 +18,38 @@ from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2 import scoring
 from dispatch_v2.common import parse_panel_timestamp, WARSAW, HAVERSINE_ROAD_FACTOR_BIALYSTOK, get_fallback_speed_kmh
 from dispatch_v2.osrm_client import haversine
+import math
+
+
+def _point_to_segment_km(p, a, b) -> float:
+    """Najkrótsza odległość punktu p od odcinka [a, b] w km.
+    Equirectangular projection — wystarczająca dla skali Białegostoku (<30 km)."""
+    lat0 = (a[0] + b[0] + p[0]) / 3.0
+    coslat = math.cos(math.radians(lat0))
+    def to_xy(pt):
+        return (pt[1] * coslat * 111.32, pt[0] * 111.32)
+    ax, ay = to_xy(a)
+    bx, by = to_xy(b)
+    px, py = to_xy(p)
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    proj_x = ax + t * dx
+    proj_y = ay + t * dy
+    return ((px - proj_x) ** 2 + (py - proj_y) ** 2) ** 0.5
+
+
+def _min_dist_to_route_km(point, courier_pos, bag_dropoffs) -> Optional[float]:
+    """Min dystans od punktu do polyline kurier→bag_dropoff_1→bag_dropoff_2...
+    None gdy bag pusty lub brak coords."""
+    if not bag_dropoffs:
+        return None
+    nodes = [courier_pos] + [d for d in bag_dropoffs if d]
+    if len(nodes) < 2:
+        return None
+    return min(_point_to_segment_km(point, nodes[i], nodes[i+1]) for i in range(len(nodes)-1))
 
 
 EARLY_BIRD_THRESHOLD_MIN = 60
@@ -155,6 +187,8 @@ def assess_order(
     fleet_speed_kmh = get_fallback_speed_kmh(now)
 
     candidates: List[Candidate] = []
+    new_rest_norm = (restaurant or "").strip().lower()
+
     for cid, cs in fleet_snapshot.items():
         courier_pos = getattr(cs, "pos", None)
         if courier_pos is None:
@@ -162,12 +196,60 @@ def assess_order(
         bag_raw = getattr(cs, "bag", []) or []
         bag_sim = [_bag_dict_to_ordersim(b) for b in bag_raw]
 
+        # POZIOM 1 same-restaurant: dowolna pozycja w bagu z tej samej
+        # restauracji co nowy order → kurier i tak tam jedzie.
+        bundle_level1 = None
+        if new_rest_norm:
+            for b in bag_raw:
+                br = (b.get("restaurant") or "").strip().lower()
+                if br and br == new_rest_norm:
+                    bundle_level1 = b.get("restaurant")
+                    break
+
+        # POZIOM 2 nearby pickup (<1.5 km): nowa restauracja blisko którejś
+        # restauracji już w bagu. Skip jeśli L1 (level1 = pickup_dist=0).
+        # Skip jeśli new pickup_coords == (0, 0) sentinel.
+        bundle_level2 = None
+        bundle_level2_dist = None
+        if (bundle_level1 is None
+                and pickup_coords != (0.0, 0.0)
+                and pickup_coords[0] != 0.0):
+            for b in bag_raw:
+                bag_pc = b.get("pickup_coords")
+                if not bag_pc:
+                    continue
+                try:
+                    dist = haversine(tuple(bag_pc), pickup_coords)
+                except Exception:
+                    continue
+                if dist < 1.5:
+                    bundle_level2 = b.get("restaurant")
+                    bundle_level2_dist = round(dist, 2)
+                    break
+
+        # POZIOM 3 corridor delivery (<2.0 km): nowa dostawa leży w korytarzu
+        # trasy kurier → bag deliveries. Niezależny od L1/L2.
+        bundle_level3 = False
+        bundle_level3_dev = None
+        if (delivery_coords != (0.0, 0.0)
+                and delivery_coords[0] != 0.0):
+            bag_drops = [b.get("delivery_coords") for b in bag_raw if b.get("delivery_coords")]
+            dev = _min_dist_to_route_km(delivery_coords, tuple(courier_pos), bag_drops)
+            if dev is not None and dev < 2.0:
+                bundle_level3 = True
+                bundle_level3_dev = round(dev, 2)
+
+        # SLA 45 min dla bundli (per dane historyczne 86%/95% w 35/45 min).
+        # Solo (pusty bag) zostaje 35 min — nie poluzowujemy sytuacji bez bundlingu.
+        sla_minutes = 45 if bag_sim else 35
+
         verdict, reason, metrics, plan = check_feasibility_v2(
             courier_pos=tuple(courier_pos),
             bag=bag_sim,
             new_order=new_order,
             shift_end=getattr(cs, "shift_end", None),
             now=now,
+            sla_minutes=sla_minutes,
         )
 
         bag_drop_coords = [b.delivery_coords for b in bag_sim]
@@ -198,6 +280,14 @@ def assess_order(
             travel_min = (km_to_pickup_haversine / fleet_speed_kmh) * 60.0 if fleet_speed_kmh > 0 else 0.0
             eta_pickup_utc = now + timedelta(minutes=travel_min)
 
+        # Bundle bonus — sumowanie L1 + L2 + L3.
+        # L1 = +25 (same restaurant), L2 = max(0, 20 - dist*10), L3 = max(0, 15 - dev*6).
+        bonus_l1 = 25.0 if bundle_level1 else 0.0
+        bonus_l2 = max(0.0, 20.0 - bundle_level2_dist * 10.0) if bundle_level2_dist is not None else 0.0
+        bonus_l3 = max(0.0, 15.0 - bundle_level3_dev * 6.0) if bundle_level3_dev is not None else 0.0
+        bundle_bonus = bonus_l1 + bonus_l2 + bonus_l3
+        final_score = score_result["total"] + bundle_bonus
+
         enriched_metrics = {
             **metrics,
             "score": score_result,
@@ -207,12 +297,19 @@ def assess_order(
             "eta_source": eta_source,
             "pos_source": getattr(cs, "pos_source", None),
             "shift_start_min": getattr(cs, "shift_start_min", None),
+            "bundle_level1": bundle_level1,
+            "bundle_level2": bundle_level2,
+            "bundle_level2_dist": bundle_level2_dist,
+            "bundle_level3": bundle_level3,
+            "bundle_level3_dev": bundle_level3_dev,
+            "bundle_bonus": round(bundle_bonus, 2),
+            "sla_minutes_used": sla_minutes,
         }
 
         candidates.append(Candidate(
             courier_id=str(cid),
             name=getattr(cs, "name", None),
-            score=score_result["total"],
+            score=final_score,
             feasibility_verdict=verdict,
             feasibility_reason=reason,
             plan=plan,

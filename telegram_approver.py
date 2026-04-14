@@ -175,7 +175,21 @@ def _candidate_line(c: dict, now_utc: datetime, prep_remaining_min: float) -> st
         if sub:
             bits.append(", ".join(sub))
     head = " — ".join(bits)
-    return f"{head} → deklarujemy {dekl_hhmm}"
+    line = f"{head} → deklarujemy {dekl_hhmm}"
+    tags = []
+    if c.get("bundle_level1"):
+        tags.append(f"🔗 same: {c['bundle_level1']}")
+    elif c.get("bundle_level2"):
+        d2 = c.get("bundle_level2_dist")
+        d2_str = f" ({d2:.1f}km)" if d2 is not None else ""
+        tags.append(f"🔗 blisko: {c['bundle_level2']}{d2_str}")
+    if c.get("bundle_level3"):
+        d3 = c.get("bundle_level3_dev")
+        d3_str = f" ({d3:.1f}km)" if d3 is not None else ""
+        tags.append(f"🔗 po drodze{d3_str}")
+    if tags:
+        line += "  " + "  ".join(tags)
+    return line
 
 
 def format_proposal(decision: dict) -> str:

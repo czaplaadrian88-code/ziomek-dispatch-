@@ -85,6 +85,13 @@ def _serialize_candidate(c) -> dict:
         "km_to_pickup": m.get("km_to_pickup"),
         "travel_min": m.get("travel_min"),
         "eta_pickup_hhmm": _eta_hhmm_warsaw(m.get("eta_pickup_utc")),
+        "pos_source": m.get("pos_source"),
+        "bundle_level1": m.get("bundle_level1"),
+        "bundle_level2": m.get("bundle_level2"),
+        "bundle_level2_dist": m.get("bundle_level2_dist"),
+        "bundle_level3": m.get("bundle_level3"),
+        "bundle_level3_dev": m.get("bundle_level3_dev"),
+        "bundle_bonus": m.get("bundle_bonus"),
         "plan": None if plan is None else {
             "sequence": plan.sequence,
             "total_duration_min": plan.total_duration_min,
@@ -115,6 +122,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "travel_min": best_m.get("travel_min"),
             "eta_pickup_hhmm": _eta_hhmm_warsaw(best_m.get("eta_pickup_utc")),
             "pos_source": best_m.get("pos_source"),
+            "bundle_level1": best_m.get("bundle_level1"),
+            "bundle_level2": best_m.get("bundle_level2"),
+            "bundle_level2_dist": best_m.get("bundle_level2_dist"),
+            "bundle_level3": best_m.get("bundle_level3"),
+            "bundle_level3_dev": best_m.get("bundle_level3_dev"),
+            "bundle_bonus": best_m.get("bundle_bonus"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]
