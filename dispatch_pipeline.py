@@ -267,12 +267,15 @@ def assess_order(
             oldest_in_bag_min=oldest,
         )
 
-        # F1.7 fix: ETA do pickup uwzględnia bag (czas dokończenia obecnych zleceń).
-        # Plan istnieje gdy feasibility nie odrzuciło fast-filterem — bierzemy
-        # plan.pickup_at[order_id] (czas startu pickupu = arrive + waiting).
-        # Fallback haversine tylko gdy plan=None (bag_full/pickup_too_far/shift_ending)
-        # lub new_order już picked_up (brak pickup_at).
+        # F1.7 fix: travel_min = plan-based (uwzględnia bag + waiting na pickup_ready),
+        # używane przez compute_assign_time. Display ETA jest osobne (drive_min).
         km_to_pickup_haversine = haversine(tuple(courier_pos), pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+
+        # drive_min: czysty czas jazdy z pozycji kuriera → restauracja (haversine).
+        # Per-candidate distinct (różne dystansy = różne ETA display).
+        drive_min = (km_to_pickup_haversine / fleet_speed_kmh) * 60.0 if fleet_speed_kmh > 0 else 0.0
+        drive_arrival_utc = now + timedelta(minutes=drive_min)
+
         eta_source = "haversine"
         if plan is not None and order_id in (plan.pickup_at or {}):
             arrive_pickup_utc = plan.pickup_at[order_id] - timedelta(minutes=DWELL_PICKUP_MIN)
@@ -282,8 +285,8 @@ def assess_order(
             eta_pickup_utc = arrive_pickup_utc
             eta_source = "plan"
         else:
-            travel_min = (km_to_pickup_haversine / fleet_speed_kmh) * 60.0 if fleet_speed_kmh > 0 else 0.0
-            eta_pickup_utc = now + timedelta(minutes=travel_min)
+            travel_min = drive_min
+            eta_pickup_utc = drive_arrival_utc
 
         # Bundle bonus — sumowanie L1 + L2 + L3.
         # L1 = +25 (same restaurant), L2 = max(0, 20 - dist*10), L3 = max(0, 15 - dev*6).
@@ -323,7 +326,9 @@ def assess_order(
             "score": score_result,
             "km_to_pickup": round(km_to_pickup_haversine, 2),
             "travel_min": round(travel_min, 1),
+            "drive_min": round(drive_min, 1),
             "eta_pickup_utc": eta_pickup_utc.isoformat(),
+            "eta_drive_utc": drive_arrival_utc.isoformat(),
             "eta_source": eta_source,
             "pos_source": getattr(cs, "pos_source", None),
             "shift_start_min": getattr(cs, "shift_start_min", None),
@@ -371,15 +376,20 @@ def assess_order(
         if ps == "no_gps":
             c.metrics["km_to_pickup"] = round(fleet_avg_km, 2)
             c.metrics["travel_min"] = round(no_gps_travel_min, 1)
+            c.metrics["drive_min"] = round(no_gps_travel_min, 1)
             c.metrics["eta_pickup_utc"] = no_gps_eta_utc.isoformat()
+            c.metrics["eta_drive_utc"] = no_gps_eta_utc.isoformat()
             c.metrics["eta_source"] = "no_gps_fallback"
         elif ps == "pre_shift":
             # Kurier zaczyna zmianę za N min — travel_min = N (czas oczekiwania).
             # Bez km (nieznane gdzie będzie). eta_pickup = start zmiany.
             shift_min = c.metrics.get("shift_start_min") or 0.0
+            shift_eta = (now + timedelta(minutes=shift_min)).isoformat()
             c.metrics["km_to_pickup"] = None
             c.metrics["travel_min"] = round(float(shift_min), 1)
-            c.metrics["eta_pickup_utc"] = (now + timedelta(minutes=shift_min)).isoformat()
+            c.metrics["drive_min"] = round(float(shift_min), 1)
+            c.metrics["eta_pickup_utc"] = shift_eta
+            c.metrics["eta_drive_utc"] = shift_eta
             c.metrics["eta_source"] = "pre_shift"
 
     # Feasible (MAYBE) → rank by score

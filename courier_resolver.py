@@ -43,6 +43,7 @@ POS_SOURCE_PRIORITY = {
     "last_picked_up_delivery": 1,
     "last_assigned_pickup": 2,
     "last_delivered": 3,
+    "last_picked_up_recent": 3,  # tier z last_delivered (świeże <30 min)
     "no_gps": 4,
     "pre_shift": 5,
     "none": 6,
@@ -281,11 +282,42 @@ def build_fleet_snapshot(
                 fleet[kid] = cs
                 continue
 
-        # 3. Last delivered — TYLKO gdy bag pusty lub aktywny bag bez coords
-        last_del = _latest_order_by_event(orders, "delivered_at")
-        if last_del and last_del.get("delivery_coords"):
-            cs.pos = tuple(last_del["delivery_coords"])
-            cs.pos_source = "last_delivered"
+        # 3. Recent activity (delivered_at lub picked_up_at < 30 min temu).
+        #    Wymagamy ŚWIEŻEGO eventu — stary delivered (np. sprzed 6 dni jak
+        #    Bartek bez aktualnego GPS) NIE jest dobrym estymatem pozycji.
+        RECENT_MAX_MIN = 30
+        best_age = float("inf")
+        best_pos = None
+        best_source = None
+        for o in orders:
+            delivery_c = o.get("delivery_coords")
+            if not delivery_c:
+                continue
+            for ts_key, source_label in [
+                ("delivered_at", "last_delivered"),
+                ("picked_up_at", "last_picked_up_recent"),
+            ]:
+                ts_str = o.get(ts_key)
+                if not ts_str:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age = (now_utc - ts).total_seconds() / 60.0
+                if age < 0 or age >= RECENT_MAX_MIN:
+                    continue
+                if age < best_age:
+                    best_age = age
+                    best_pos = tuple(delivery_c)
+                    best_source = source_label
+
+        if best_pos is not None:
+            cs.pos = best_pos
+            cs.pos_source = best_source
+            cs.pos_age_min = best_age
             fleet[kid] = cs
             continue
 
