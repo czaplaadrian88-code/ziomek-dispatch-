@@ -313,12 +313,35 @@ def _prep_minutes_remaining(decision: dict) -> Optional[float]:
 
 
 def compute_assign_time(decision: dict) -> int:
-    """time_param = max(round_up(eta_kuriera), round_up(prep_jedzenia)).
-    Kurier nie spóźni się, restauracja zdąży."""
+    """time_param dla gastro_assign w MOMENCIE kliknięcia TAK.
+
+    F1.8 fix: zamiast statycznego best.travel_min (zapisanego przy propozycji),
+    używamy best.target_pickup_at (absolutny moment przyjazdu kuriera) i liczymy
+    świeżą różnicę względem now. Opóźnione kliknięcia TAK automatycznie zmniejszają
+    time_param bez przesuwania target time.
+
+    Fallback: gdy brak target_pickup_at → decision.pickup_ready_at → ostatecznie 5.
+    """
+    import math
     best = decision.get("best") or {}
-    eta_t = round_up_to_5min(best.get("travel_min"))
-    prep_t = round_up_to_5min(_prep_minutes_remaining(decision))
-    return max(eta_t, prep_t)
+    target_iso = best.get("target_pickup_at") or decision.get("pickup_ready_at")
+    if not target_iso:
+        return 5
+    try:
+        target = datetime.fromisoformat(target_iso.replace("Z", "+00:00"))
+    except Exception:
+        return 5
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=timezone.utc)
+    delta_min = (target - datetime.now(timezone.utc)).total_seconds() / 60.0
+    if delta_min <= 0:
+        return 5
+    t = int(math.ceil(delta_min / 5.0) * 5)
+    if t < 5:
+        t = 5
+    if t > 60:
+        t = 60
+    return t
 
 
 def run_gastro_assign(

@@ -103,8 +103,33 @@ def _serialize_candidate(c) -> dict:
 
 
 def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) -> dict:
+    from datetime import datetime, timezone
     best = result.best
     best_m = (best.metrics if best is not None else {}) or {}
+
+    # F1.8 fix: target_pickup_at = absolutny moment kiedy kurier ma być w restauracji.
+    # Liczone JEDEN raz przy tworzeniu propozycji, używane w handle_callback przy TAK
+    # do świeżego (target - now) → time_param. Dzięki temu opóźnione kliknięcia TAK
+    # automatycznie zmniejszają deklarowany time bez przesuwania target time.
+    target_pickup_at_iso = None
+    if best is not None:
+        eta_iso = best_m.get("eta_pickup_utc")
+        try:
+            eta_dt = datetime.fromisoformat(eta_iso.replace("Z", "+00:00")) if eta_iso else None
+        except Exception:
+            eta_dt = None
+        if eta_dt is not None and eta_dt.tzinfo is None:
+            eta_dt = eta_dt.replace(tzinfo=timezone.utc)
+        ready_dt = result.pickup_ready_at
+        if ready_dt is not None and ready_dt.tzinfo is None:
+            ready_dt = ready_dt.replace(tzinfo=timezone.utc)
+        if eta_dt is not None and ready_dt is not None:
+            target_dt = max(eta_dt, ready_dt)
+        else:
+            target_dt = eta_dt or ready_dt
+        if target_dt is not None:
+            target_pickup_at_iso = target_dt.isoformat()
+
     return {
         "ts": now_iso(),
         "event_id": event_id,
@@ -121,6 +146,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "km_to_pickup": best_m.get("km_to_pickup"),
             "travel_min": best_m.get("travel_min"),
             "eta_pickup_hhmm": _eta_hhmm_warsaw(best_m.get("eta_pickup_utc")),
+            "target_pickup_at": target_pickup_at_iso,
             "pos_source": best_m.get("pos_source"),
             "bundle_level1": best_m.get("bundle_level1"),
             "bundle_level2": best_m.get("bundle_level2"),
