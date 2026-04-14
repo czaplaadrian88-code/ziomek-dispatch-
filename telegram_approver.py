@@ -215,6 +215,46 @@ def append_learning(path: str, record: dict) -> None:
 
 # ---- gastro_assign subprocess ----
 
+def round_up_to_5min(eta_minutes: Optional[float]) -> int:
+    """ETA kuriera (min from now) → time_param dla gastro_assign.
+    Zaokrąglenie w górę do 5, min 5, max 60. None → 5."""
+    import math
+    if eta_minutes is None:
+        return 5
+    try:
+        m = float(eta_minutes)
+    except (TypeError, ValueError):
+        return 5
+    t = int(math.ceil(m / 5.0) * 5)
+    if t < 5:
+        t = 5
+    if t > 60:
+        t = 60
+    return t
+
+
+def _prep_minutes_remaining(decision: dict) -> Optional[float]:
+    """Z decision record → minuty od teraz do pickup_ready_at (gotowość jedzenia)."""
+    iso = decision.get("pickup_ready_at")
+    if not iso:
+        return None
+    try:
+        ready = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    delta = (ready - datetime.now(timezone.utc)).total_seconds() / 60.0
+    return max(0.0, delta)
+
+
+def compute_assign_time(decision: dict) -> int:
+    """time_param = max(round_up(eta_kuriera), round_up(prep_jedzenia)).
+    Kurier nie spóźni się, restauracja zdąży."""
+    best = decision.get("best") or {}
+    eta_t = round_up_to_5min(best.get("travel_min"))
+    prep_t = round_up_to_5min(_prep_minutes_remaining(decision))
+    return max(eta_t, prep_t)
+
+
 def run_gastro_assign(
     order_id: str,
     kurier_name: Optional[str],
@@ -553,13 +593,17 @@ def format_status() -> str:
 
 
 async def handle_message(state: dict, msg: dict) -> None:
-    """Handle text messages: /status + free-text manual courier overrides (admin only)."""
+    """Handle text messages: /status + free-text manual courier overrides.
+
+    Autoryzacja po chat.id (grupa) — każdy member grupy może pisać.
+    """
+    chat_id = str(((msg.get("chat") or {}).get("id") or ""))
     from_id = str((msg.get("from") or {}).get("id", ""))
     text = (msg.get("text") or "").strip()
     if not text:
         return
-    if from_id != str(state["admin_id"]):
-        _log.warning(f"message from unauthorized user_id={from_id}")
+    if chat_id != str(state["admin_id"]):
+        _log.warning(f"message from unauthorized chat_id={chat_id} user={from_id}")
         return
 
     if text.startswith("/"):
@@ -605,8 +649,9 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
 
     ok = False
     if action == "TAK":
-        ok, msg = await asyncio.to_thread(run_gastro_assign, oid, courier_name, 0, False)
-        feedback = f"✅ {courier_name}" if ok else f"❌ assign: {msg[:80]}"
+        time_min = compute_assign_time(rec)
+        ok, msg = await asyncio.to_thread(run_gastro_assign, oid, courier_name, time_min, False)
+        feedback = f"✅ {courier_name} ({time_min}m)" if ok else f"❌ assign: {msg[:80]}"
     elif action == "NIE":
         ok, feedback = True, "⏭ pozostaje w puli"
     elif action == "INNY":

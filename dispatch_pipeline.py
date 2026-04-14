@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple, Any
 
-from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2
+from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2, DWELL_PICKUP_MIN
 from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2 import scoring
 from dispatch_v2.common import parse_panel_timestamp, WARSAW, HAVERSINE_ROAD_FACTOR_BIALYSTOK, get_fallback_speed_kmh
@@ -180,17 +180,31 @@ def assess_order(
             oldest_in_bag_min=oldest,
         )
 
-        # F1.3 enrichment: km + ETA do pickup (haversine * road_factor, traffic speed)
-        km_to_pickup = haversine(tuple(courier_pos), pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
-        travel_min = (km_to_pickup / fleet_speed_kmh) * 60.0 if fleet_speed_kmh > 0 else 0.0
-        eta_pickup_utc = now + timedelta(minutes=travel_min)
+        # F1.7 fix: ETA do pickup uwzględnia bag (czas dokończenia obecnych zleceń).
+        # Plan istnieje gdy feasibility nie odrzuciło fast-filterem — bierzemy
+        # plan.pickup_at[order_id] (czas startu pickupu = arrive + waiting).
+        # Fallback haversine tylko gdy plan=None (bag_full/pickup_too_far/shift_ending)
+        # lub new_order już picked_up (brak pickup_at).
+        km_to_pickup_haversine = haversine(tuple(courier_pos), pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+        eta_source = "haversine"
+        if plan is not None and order_id in (plan.pickup_at or {}):
+            arrive_pickup_utc = plan.pickup_at[order_id] - timedelta(minutes=DWELL_PICKUP_MIN)
+            if arrive_pickup_utc.tzinfo is None:
+                arrive_pickup_utc = arrive_pickup_utc.replace(tzinfo=timezone.utc)
+            travel_min = max(0.0, (arrive_pickup_utc - now).total_seconds() / 60.0)
+            eta_pickup_utc = arrive_pickup_utc
+            eta_source = "plan"
+        else:
+            travel_min = (km_to_pickup_haversine / fleet_speed_kmh) * 60.0 if fleet_speed_kmh > 0 else 0.0
+            eta_pickup_utc = now + timedelta(minutes=travel_min)
 
         enriched_metrics = {
             **metrics,
             "score": score_result,
-            "km_to_pickup": round(km_to_pickup, 2),
+            "km_to_pickup": round(km_to_pickup_haversine, 2),
             "travel_min": round(travel_min, 1),
             "eta_pickup_utc": eta_pickup_utc.isoformat(),
+            "eta_source": eta_source,
         }
 
         candidates.append(Candidate(
