@@ -445,15 +445,33 @@ async def proposal_sender(state: dict) -> None:
 
 async def updates_poller(state: dict) -> None:
     offset = 0
+    fail_count = 0
+    MAX_FAILS = 10
     while not _shutdown:
-        r = await asyncio.to_thread(
-            tg_request, state["token"], "getUpdates",
-            {"offset": offset, "timeout": 30}, 35,
-        )
-        if not r.get("ok"):
-            _log.warning(f"getUpdates fail: {r.get('error') or r.get('description')}")
-            await asyncio.sleep(5)
+        try:
+            r = await asyncio.to_thread(
+                tg_request, state["token"], "getUpdates",
+                {"offset": offset, "timeout": 30}, 35,
+            )
+        except Exception as e:
+            fail_count += 1
+            backoff = min(5 * fail_count, 60)
+            _log.error(f"getUpdates exception ({fail_count}/{MAX_FAILS}): {e}, backoff {backoff}s")
+            if fail_count >= MAX_FAILS:
+                _log.critical(f"getUpdates: {MAX_FAILS} consecutive fails — sys.exit(1)")
+                sys.exit(1)
+            await asyncio.sleep(backoff)
             continue
+        if not r.get("ok"):
+            fail_count += 1
+            backoff = min(5 * fail_count, 60)
+            _log.warning(f"getUpdates fail ({fail_count}/{MAX_FAILS}): {r.get('error') or r.get('description')}, backoff {backoff}s")
+            if fail_count >= MAX_FAILS:
+                _log.critical(f"getUpdates: {MAX_FAILS} consecutive fails — sys.exit(1)")
+                sys.exit(1)
+            await asyncio.sleep(backoff)
+            continue
+        fail_count = 0
         for upd in r.get("result", []):
             offset = upd["update_id"] + 1
             cb = upd.get("callback_query")
@@ -717,6 +735,73 @@ async def handle_message(state: dict, msg: dict) -> None:
             _log.info(f"/status responded to admin={from_id}")
         return
 
+    # NLP assistant — wolny tekst (F2.2)
+    text_lower = text.lower().strip()
+
+    if any(w in text_lower for w in ["pomoc", "help", "komendy", "co umiesz"]):
+        help_body = (
+            "🤖 Ziomek rozumie:\n"
+            "• 'Mykyta nie pracuje' — wyklucza kuriera do końca dnia\n"
+            "• 'Mykyta wrócił' — przywraca kuriera\n"
+            "• 'reset' — czyści wszystkie wykluczenia\n"
+            "• 'kto pracuje' — lista kurierów na zmianie\n"
+            "• 'ile zleceń' — statystyki dnia\n"
+            "• /status — pełny raport serwisów"
+        )
+        await asyncio.to_thread(
+            tg_request, state["token"], "sendMessage",
+            {"chat_id": state["admin_id"], "text": help_body},
+        )
+        return
+
+    if any(w in text_lower for w in ["kto pracuje", "kto jest", "flota", "kurierzy", "ilu kurierów"]):
+        schedule_path = "/root/.openclaw/workspace/dispatch_state/schedule_today.json"
+        try:
+            with open(schedule_path) as _f:
+                sched = json.loads(_f.read())
+            if isinstance(sched, dict):
+                active = [n for n, v in sched.items() if (v or {}).get("on_shift")]
+            elif isinstance(sched, list):
+                active = [e.get("name", "?") for e in sched if e.get("on_shift")]
+            else:
+                active = []
+            if active:
+                body = f"👥 Na zmianie ({len(active)}):\n" + "\n".join(f"• {n}" for n in sorted(active)[:20])
+            else:
+                body = "👥 Brak kurierów na zmianie wg grafiku (lub grafik pusty)"
+        except FileNotFoundError:
+            body = "👥 Grafik nie załadowany (schedule_today.json brak)"
+        except Exception as e:
+            body = f"👥 Błąd odczytu grafiku: {e}"
+        await asyncio.to_thread(
+            tg_request, state["token"], "sendMessage",
+            {"chat_id": state["admin_id"], "text": body},
+        )
+        return
+
+    if any(w in text_lower for w in ["ile zleceń", "ile dziś", "ordery", "statystyki", "ile orderów"]):
+        state_path = "/root/.openclaw/workspace/dispatch_state/state.json"
+        try:
+            with open(state_path) as _f:
+                st = json.loads(_f.read())
+            stats = st.get("session_stats") or st.get("stats") or {}
+            delivered = stats.get("delivered_today", "?")
+            proposals = stats.get("proposals_today", "?")
+            agreement = stats.get("agreement_today")
+            body = f"📊 Dziś: {delivered} dostaw, {proposals} propozycji Ziomka"
+            if agreement is not None:
+                body += f", agreement {agreement}"
+        except Exception as e:
+            body = f"📊 Błąd odczytu state.json: {e}"
+        await asyncio.to_thread(
+            tg_request, state["token"], "sendMessage",
+            {"chat_id": state["admin_id"], "text": body},
+        )
+        return
+
+    # Nieznana wiadomość — loguj from_id (zbieramy user_id Bartka)
+    _log.info(f"unhandled msg from={from_id} text={text[:80]!r}")
+
     # Free-text → manual courier overrides
     from dispatch_v2 import manual_overrides
     action, response = await asyncio.to_thread(manual_overrides.parse_command, text)
@@ -730,6 +815,22 @@ async def handle_message(state: dict, msg: dict) -> None:
 
 
 async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
+    # Security: weryfikacja chat_id + logowanie from_id (F2.2)
+    cb_chat_id = str(((cb.get("message") or {}).get("chat") or {}).get("id", ""))
+    cb_from_id = str((cb.get("from") or {}).get("id", ""))
+    cb_from_name = (cb.get("from") or {}).get("first_name", "?")
+    if cb_chat_id != str(state["admin_id"]):
+        _log.warning(
+            f"SECURITY: callback from unauthorized chat={cb_chat_id} "
+            f"user={cb_from_id}({cb_from_name}) action={action} oid={oid}"
+        )
+        await asyncio.to_thread(
+            tg_request, state["token"], "answerCallbackQuery",
+            {"callback_query_id": cb["id"], "text": "⛔ unauthorized"},
+        )
+        return
+    _log.info(f"callback action={action} oid={oid} from={cb_from_name}(id={cb_from_id})")
+
     entry = state["pending"].get(oid)
     token = state["token"]
     if entry is None:

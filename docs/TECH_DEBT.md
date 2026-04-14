@@ -654,3 +654,34 @@ fixes) + A/B test Ziomek vs current koordynator operation.
 - [ ] cs.heading / kierunek jazdy kuriera (wymaga GPS history)
 - [ ] OR-Tools VRPTW (Faza 9)
 - [ ] Wielomiastowość Warszawa (miesiąc 5+)
+
+## 2026-04-14 — Sesja wieczorna (F2.2)
+
+### Crash guard (telegram_approver.py)
+- fail_count licznik + exponential backoff (5s×N, cap 60s)
+- sys.exit(1) po 10 consecutive failach → systemd auto-restart
+- try/except wokół całego tg_request call
+
+### Learning Analyzer (learning_analyzer.py)
+- 7 sekcji + [8] silent agreement via events.db
+- Wynik: 21.3% agreement rate — NIEMIARODAJNY (dane z okresu timing debug)
+- Jutro re-run na czystych danych → decyzja scoring recalibration vs auto-approve
+- session_stats keys: proposed/accepted/rejected/alerts/delays/czasowki (nie delivered_today)
+- Kurier 9279 (Michał K.) — potencjalnie over-nominated, wymaga weryfikacji
+
+### Telegram security (F2.2)
+- handle_callback: dodany chat_id filter (cb.message.chat.id == admin_id)
+- Nieautoryzowane callbacki: answerCallbackQuery "unauthorized" + warning log
+- from_id logowany przy każdym callbacku → zbieramy user_id Bartka automatycznie
+
+### NLP assistant (F2.2)
+- "pomoc/help" → statyczny tekst z komendami
+- "kto pracuje" → czyta schedule_today.json z dysku per-request
+- "ile zleceń" → czyta session_stats z state.json (zwraca ? — brak daily counter)
+- unhandled msg → log z from_id (zbieramy user_id Bartka)
+
+### TODO następna sesja
+- [ ] Whitelist user_id: po pierwszym TAK Bartka → from_id w logu → dodać do whitelisty
+- [ ] Re-run learning_analyzer rano na czystych danych
+- [ ] "ile zleceń" → sensowne dane gdy będzie daily counter w events.db
+- [ ] /tmp/gastro_stop → osobny task: check w shadow_dispatcher przed każdą propozycją
