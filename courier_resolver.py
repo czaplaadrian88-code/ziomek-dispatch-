@@ -368,6 +368,27 @@ def _mins_to_shift_start(entry: Optional[dict]) -> Optional[float]:
         return None
 
 
+def _shift_end_dt(entry: Optional[dict]) -> Optional[datetime]:
+    """Z entry grafiku → datetime końca zmiany (Warsaw aware)."""
+    end_str = (entry or {}).get("end")
+    if not end_str or ":" not in end_str:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        WAW = ZoneInfo("Europe/Warsaw")
+        now_w = datetime.now(WAW)
+        if end_str == "24:00":
+            base = now_w.replace(hour=0, minute=0, second=0, microsecond=0)
+            return base + timedelta(days=1)
+        h, m = end_str.split(":")
+        end_dt = now_w.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+        # Jeśli zmiana skończyła się "wczoraj" (np. now=01:00, end=23:00), nadal
+        # interpretujemy jako today (przeszłość — feasibility wykluczy)
+        return end_dt
+    except Exception:
+        return None
+
+
 def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[CourierState]:
     """Zwraca tylko kurierow ktorych mozna scorowac (maja pozycje i sa na zmianie
     LUB zaczynają zmianę w ciągu PRE_SHIFT_WINDOW_MIN minut)."""
@@ -406,6 +427,8 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                 _log.debug(f"skip {cs.name} ({cs.courier_id}): nie pracuje dziś")
                 continue
             on_shift, reason = is_on_shift(cs.name, schedule)
+            # Set shift_end z grafiku (potrzebne do feasibility shift_end check)
+            cs.shift_end = _shift_end_dt(entry)
             if not on_shift:
                 # Pre-shift window: kurier zaczyna w ciągu PRE_SHIFT_WINDOW_MIN
                 # → dopuszczamy z synthetic pos i znacznikiem pre_shift.

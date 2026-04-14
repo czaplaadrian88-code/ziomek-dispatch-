@@ -87,28 +87,19 @@ def get_pickup_ready_at(
     now: datetime,
     meta: Optional[dict],
 ) -> Optional[datetime]:
-    """Effective pickup-ready time per CLAUDE.md V3.4 (P0.7 restaurant_meta)."""
+    """Effective pickup-ready time = panel-declared pickup_at (czysto, bez bufora).
+
+    F1.8g: usunięty historyczny bufor prep_variance_min (D16). Display w
+    propozycji Telegram pokazywał czas powiększony o medianę spóźnień restauracji,
+    co Adrian odbierał jako bug. restaurant_meta.prep_variance_min nadal
+    dostępne dla alertów/monitoringu (R17/R19), ale NIE doliczane do pickup_ready_at.
+    """
     if pickup_at is None:
         return None
     if pickup_at.tzinfo is None:
         pickup_at = pickup_at.replace(tzinfo=WARSAW)
     pickup_utc = pickup_at.astimezone(timezone.utc)
-
-    pv = DEFAULT_FLEET_PREP_VARIANCE_MIN
-    if meta is not None:
-        fleet_median = meta.get("fleet_medians", {}).get(
-            "fleet_prep_variance_median", DEFAULT_FLEET_PREP_VARIANCE_MIN
-        )
-        pv = fleet_median
-        r = (meta.get("restaurants") or {}).get(restaurant_name or "")
-        if r is not None:
-            if r.get("flags", {}).get("low_confidence", False):
-                pv = r.get("prep_variance_fallback_min", fleet_median)
-            else:
-                pv = (r.get("prep_variance_min") or {}).get("median", fleet_median)
-
-    ready = pickup_utc + timedelta(minutes=pv)
-    return max(now, ready)
+    return max(now, pickup_utc)
 
 
 def _bag_dict_to_ordersim(d: dict) -> OrderSim:
@@ -256,6 +247,20 @@ def assess_order(
             now=now,
             sla_minutes=sla_minutes,
         )
+
+        # F1.8f hard guard: kurier którego zmiana kończy się PRZED pickup_ready_at
+        # nie może wziąć tego zlecenia (nawet jeśli SHIFT_END_BUFFER_MIN przeszło).
+        cs_shift_end = getattr(cs, "shift_end", None)
+        if cs_shift_end is not None and pickup_ready_at is not None:
+            if cs_shift_end.tzinfo is None:
+                cs_shift_end_utc = cs_shift_end.replace(tzinfo=timezone.utc)
+            else:
+                cs_shift_end_utc = cs_shift_end.astimezone(timezone.utc)
+            if pickup_ready_at > cs_shift_end_utc:
+                verdict = "NO"
+                end_hhmm = cs_shift_end.strftime("%H:%M") if hasattr(cs_shift_end, "strftime") else "?"
+                reason = f"shift_end_before_pickup (zmiana do {end_hhmm}, odbiór później)"
+                plan = None
 
         bag_drop_coords = [b.delivery_coords for b in bag_sim]
         oldest = _oldest_in_bag_min(bag_sim, now)
