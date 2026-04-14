@@ -383,14 +383,23 @@ def assess_order(
         elif ps == "pre_shift":
             # Kurier zaczyna zmianę za N min — travel_min = N (czas oczekiwania).
             # Bez km (nieznane gdzie będzie). eta_pickup = start zmiany.
-            shift_min = c.metrics.get("shift_start_min") or 0.0
+            shift_min = float(c.metrics.get("shift_start_min") or 0.0)
             shift_eta = (now + timedelta(minutes=shift_min)).isoformat()
             c.metrics["km_to_pickup"] = None
-            c.metrics["travel_min"] = round(float(shift_min), 1)
-            c.metrics["drive_min"] = round(float(shift_min), 1)
+            c.metrics["travel_min"] = round(shift_min, 1)
+            c.metrics["drive_min"] = round(shift_min, 1)
             c.metrics["eta_pickup_utc"] = shift_eta
             c.metrics["eta_drive_utc"] = shift_eta
             c.metrics["eta_source"] = "pre_shift"
+            # F1.8e: hard exclude jeśli pre_shift kurier nie zdąży na pickup_ready.
+            # Bez tego scoring promuje go pomimo niedostępności (np. odbiór za 26
+            # min, kurier startuje za 46 min → nie zdąży).
+            if shift_min > prep_remaining_min + 0.01:
+                c.feasibility_verdict = "NO"
+                c.feasibility_reason = (
+                    f"pre_shift_too_late (start za {shift_min:.0f} min, "
+                    f"odbiór za {prep_remaining_min:.0f} min)"
+                )
 
     # Feasible (MAYBE) → rank by score
     feasible = [c for c in candidates if c.feasibility_verdict == "MAYBE"]
