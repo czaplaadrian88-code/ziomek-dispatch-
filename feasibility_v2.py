@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import List, Tuple, Dict, Optional
 
 from dispatch_v2 import osrm_client
-from dispatch_v2.common import HAVERSINE_ROAD_FACTOR_BIALYSTOK
+from dispatch_v2.common import HAVERSINE_ROAD_FACTOR_BIALYSTOK, MAX_BAG_SANITY_CAP
 from dispatch_v2.route_simulator_v2 import (
     OrderSim,
     RoutePlanV2,
@@ -23,8 +23,11 @@ from dispatch_v2.route_simulator_v2 import (
 )
 
 
-# Legacy static cap — zastąpiony przez R3_ABSOLUTE_CAP, zostawione dla kompatybilności.
-MAX_BAG_SIZE = 6
+# Hard cap per D3 MAX_BAG_SANITY_CAP (=8). F1.9b: R3 dynamic cap został
+# zsoftowany po shadow-data 14.04 (za ostry, blokował Bartka na spread 7 km).
+# Absolute hard block = sanity cap. R3 spread/dyn_cap nadal liczone jako
+# telemetria w metrics, ale nie rejectują.
+MAX_BAG_SIZE = MAX_BAG_SANITY_CAP
 MAX_PICKUP_REACH_KM = 15.0
 SHIFT_END_BUFFER_MIN = 20
 DEFAULT_SLA_MINUTES = 35
@@ -32,9 +35,8 @@ DEFAULT_SLA_MINUTES = 35
 # ===== BARTEK GOLD STANDARD thresholds (see docs/BARTEK_GOLD_STANDARD.md) =====
 # R1: max delivery spread in bag (p90 of Bartek clean sample, n=47 bundles).
 R1_MAX_DELIV_SPREAD_KM = 8.0
-# R3: absolute bag cap — Bartek never runs bag > 5 in 231-order clean sample.
-R3_ABSOLUTE_CAP = 5
-# R3: dynamic cap by spread. Stricter = fewer stops allowed at higher spread.
+# R3: dynamic cap — computed for telemetry only (F1.9b: no longer a hard block).
+# Kept in metrics so we can observe what R3 WOULD have rejected.
 R3_DYNAMIC_MAX = [(5.0, 5), (8.0, 4), (float("inf"), 3)]
 # R5: mixed-restaurant pickup spread — p100 Bartek = 1.79 km.
 R5_MAX_MIXED_PICKUP_SPREAD_KM = 1.8
@@ -105,28 +107,23 @@ def check_feasibility_v2(
 
     # === FAST FILTERS ===
 
-    # R3 absolute cap — Bartek Gold Standard: bag_after ≤ 5 always.
+    # D3 sanity cap (MAX_BAG_SIZE = MAX_BAG_SANITY_CAP = 8). R3 absolute cap
+    # usunięty w F1.9b po shadow data — blokował Bartka na legit bundlach.
     bag_after = len(bag) + 1
-    if bag_after > R3_ABSOLUTE_CAP:
-        return ("NO", f"R3_bag_cap ({bag_after}>{R3_ABSOLUTE_CAP})", metrics, None)
+    if len(bag) >= MAX_BAG_SIZE:
+        return ("NO", f"bag_full ({len(bag)}/{MAX_BAG_SIZE})", metrics, None)
 
-    # R1 spread outlier + R3 dynamic cap (require delivery coords on both sides).
+    # R1 spread outlier (hard block). R3 dynamic cap zsoftowany — liczymy
+    # metryki do telemetrii (learning_log) ale NIE rejectujemy.
     if bag and _valid(new_order.delivery_coords):
         spread_km = _max_deliv_spread_km(bag, new_order.delivery_coords)
         metrics["deliv_spread_km"] = round(spread_km, 2)
+        metrics["dynamic_bag_cap"] = _dynamic_bag_cap(spread_km)
+        metrics["r3_soft_would_block"] = bag_after > metrics["dynamic_bag_cap"]
         if spread_km > R1_MAX_DELIV_SPREAD_KM:
             return (
                 "NO",
                 f"R1_spread_outlier ({spread_km:.1f}km>{R1_MAX_DELIV_SPREAD_KM:.1f})",
-                metrics,
-                None,
-            )
-        dyn_cap = _dynamic_bag_cap(spread_km)
-        metrics["dynamic_bag_cap"] = dyn_cap
-        if bag_after > dyn_cap:
-            return (
-                "NO",
-                f"R3_dynamic_bag (spread={spread_km:.1f}km, cap={dyn_cap}, after={bag_after})",
                 metrics,
                 None,
             )

@@ -147,8 +147,11 @@ def _candidate_line(c: dict, now_utc: datetime, prep_remaining_min: float) -> st
     name = name_lookup(c.get("courier_id"), c.get("name"))
     score = c.get("score", 0)
     km = c.get("km_to_pickup")
-    # ETA display = drive arrival (per-candidate distinct), nie pickup_with_wait
-    eta = c.get("eta_drive_hhmm") or c.get("eta_pickup_hhmm")
+    # F1.9b fix: ETA display = plan-based (eta_pickup_hhmm). Uwzględnia
+    # dostarczenie aktualnego baga PRZED nowym pickupem. drive_hhmm (pure drive
+    # z pos kuriera) był mylący dla bundling case — np. Bartek stojący przy
+    # aktualnej restauracji pokazywał ETA "za 0.1 min" zamiast "po bagu".
+    eta = c.get("eta_pickup_hhmm") or c.get("eta_drive_hhmm")
     travel_min = c.get("travel_min")
     pos_source = c.get("pos_source")
     no_gps = pos_source == "no_gps"
