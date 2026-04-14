@@ -196,25 +196,30 @@ def assess_order(
         bag_raw = getattr(cs, "bag", []) or []
         bag_sim = [_bag_dict_to_ordersim(b) for b in bag_raw]
 
-        # POZIOM 1 same-restaurant: dowolna pozycja w bagu z tej samej
-        # restauracji co nowy order → kurier i tak tam jedzie.
+        # POZIOM 1 same-restaurant: order w bagu ze statusem "assigned" (kurier
+        # jeszcze JEDZIE do pickupu) z tej samej restauracji co nowy order.
+        # Picked_up SKIP: kurier już odjechał od restauracji, nie wraca po więcej.
         bundle_level1 = None
         if new_rest_norm:
             for b in bag_raw:
+                if b.get("status") != "assigned":
+                    continue
                 br = (b.get("restaurant") or "").strip().lower()
                 if br and br == new_rest_norm:
                     bundle_level1 = b.get("restaurant")
                     break
 
-        # POZIOM 2 nearby pickup (<1.5 km): nowa restauracja blisko którejś
-        # restauracji już w bagu. Skip jeśli L1 (level1 = pickup_dist=0).
-        # Skip jeśli new pickup_coords == (0, 0) sentinel.
+        # POZIOM 2 nearby pickup (<1.5 km): tylko w restauracjach gdzie kurier
+        # jeszcze ma jechać po pickup (status="assigned"). Skip jeśli L1 lub
+        # pickup_coords sentinel (0, 0).
         bundle_level2 = None
         bundle_level2_dist = None
         if (bundle_level1 is None
                 and pickup_coords != (0.0, 0.0)
                 and pickup_coords[0] != 0.0):
             for b in bag_raw:
+                if b.get("status") != "assigned":
+                    continue
                 bag_pc = b.get("pickup_coords")
                 if not bag_pc:
                     continue
@@ -286,7 +291,32 @@ def assess_order(
         bonus_l2 = max(0.0, 20.0 - bundle_level2_dist * 10.0) if bundle_level2_dist is not None else 0.0
         bonus_l3 = max(0.0, 15.0 - bundle_level3_dev * 6.0) if bundle_level3_dev is not None else 0.0
         bundle_bonus = bonus_l1 + bonus_l2 + bonus_l3
-        final_score = score_result["total"] + bundle_bonus
+
+        # Availability bonus: kiedy kurier będzie wolny po obecnym bagu (BEZ nowego ordera).
+        # Liczone z plan.predicted_delivered_at[last_bag_oid_in_seq] (Opcja B).
+        # Bag pusty → free_at_min=0 → bonus +10 (już wolny).
+        free_at_min = 0.0
+        if bag_sim and plan is not None and plan.predicted_delivered_at:
+            bag_oids_set = {o.order_id for o in bag_sim}
+            bag_in_seq = [oid for oid in (plan.sequence or []) if oid in bag_oids_set]
+            if bag_in_seq:
+                last_bag_oid = bag_in_seq[-1]
+                free_at_dt = plan.predicted_delivered_at.get(last_bag_oid)
+                if free_at_dt is not None:
+                    if free_at_dt.tzinfo is None:
+                        free_at_dt = free_at_dt.replace(tzinfo=timezone.utc)
+                    free_at_min = max(0.0, (free_at_dt - now).total_seconds() / 60.0)
+
+        if free_at_min <= 0:
+            availability_bonus = 10.0
+        elif free_at_min < 15:
+            availability_bonus = 8.0
+        elif free_at_min < 30:
+            availability_bonus = 5.0
+        else:
+            availability_bonus = 0.0
+
+        final_score = score_result["total"] + bundle_bonus + availability_bonus
 
         enriched_metrics = {
             **metrics,
@@ -303,6 +333,8 @@ def assess_order(
             "bundle_level3": bundle_level3,
             "bundle_level3_dev": bundle_level3_dev,
             "bundle_bonus": round(bundle_bonus, 2),
+            "availability_bonus": round(availability_bonus, 2),
+            "free_at_min": round(free_at_min, 1),
             "sla_minutes_used": sla_minutes,
         }
 

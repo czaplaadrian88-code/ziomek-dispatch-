@@ -92,6 +92,8 @@ def _serialize_candidate(c) -> dict:
         "bundle_level3": m.get("bundle_level3"),
         "bundle_level3_dev": m.get("bundle_level3_dev"),
         "bundle_bonus": m.get("bundle_bonus"),
+        "availability_bonus": m.get("availability_bonus"),
+        "free_at_min": m.get("free_at_min"),
         "plan": None if plan is None else {
             "sequence": plan.sequence,
             "total_duration_min": plan.total_duration_min,
@@ -154,6 +156,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "bundle_level3": best_m.get("bundle_level3"),
             "bundle_level3_dev": best_m.get("bundle_level3_dev"),
             "bundle_bonus": best_m.get("bundle_bonus"),
+            "availability_bonus": best_m.get("availability_bonus"),
+            "free_at_min": best_m.get("free_at_min"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

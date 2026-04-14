@@ -177,6 +177,16 @@ def _candidate_line(c: dict, now_utc: datetime, prep_remaining_min: float) -> st
     head = " — ".join(bits)
     line = f"{head} → deklarujemy {dekl_hhmm}"
     tags = []
+    # Availability tag (free/wkrótce wolny)
+    free_at = c.get("free_at_min")
+    if free_at is not None:
+        if free_at <= 0:
+            tags.append("🟢 wolny")
+        elif free_at < 15:
+            tags.append(f"🟡 za {int(round(free_at))} min")
+        elif free_at < 30:
+            tags.append(f"🟠 za {int(round(free_at))} min")
+    # Bundle tags
     if c.get("bundle_level1"):
         tags.append(f"🔗 same: {c['bundle_level1']}")
     elif c.get("bundle_level2"):
@@ -313,30 +323,23 @@ def _prep_minutes_remaining(decision: dict) -> Optional[float]:
 
 
 def compute_assign_time(decision: dict) -> int:
-    """time_param dla gastro_assign w MOMENCIE kliknięcia TAK.
+    """time_param = ceil(max(eta_kuriera, prep_jedzenia) / 5) * 5, clamp [5, 60].
 
-    F1.8 fix: zamiast statycznego best.travel_min (zapisanego przy propozycji),
-    używamy best.target_pickup_at (absolutny moment przyjazdu kuriera) i liczymy
-    świeżą różnicę względem now. Opóźnione kliknięcia TAK automatycznie zmniejszają
-    time_param bez przesuwania target time.
-
-    Fallback: gdy brak target_pickup_at → decision.pickup_ready_at → ostatecznie 5.
+    eta z best.travel_min (statyczne z propozycji), prep liczone świeżo
+    z pickup_ready_at vs now. round(..., 4) tnie FP noise.
     """
     import math
     best = decision.get("best") or {}
-    target_iso = best.get("target_pickup_at") or decision.get("pickup_ready_at")
-    if not target_iso:
-        return 5
+    eta_min = best.get("travel_min") or 0.0
     try:
-        target = datetime.fromisoformat(target_iso.replace("Z", "+00:00"))
-    except Exception:
+        eta_min = float(eta_min)
+    except (TypeError, ValueError):
+        eta_min = 0.0
+    prep_min = _prep_minutes_remaining(decision) or 0.0
+    needed_min = round(max(eta_min, prep_min), 4)
+    if needed_min <= 0:
         return 5
-    if target.tzinfo is None:
-        target = target.replace(tzinfo=timezone.utc)
-    delta_min = (target - datetime.now(timezone.utc)).total_seconds() / 60.0
-    if delta_min <= 0:
-        return 5
-    t = int(math.ceil(delta_min / 5.0) * 5)
+    t = int(math.ceil(needed_min / 5.0) * 5)
     if t < 5:
         t = 5
     if t > 60:
