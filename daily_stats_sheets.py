@@ -449,7 +449,7 @@ def apply_block_borders(ws, header_row: int, has_month_label: bool, logger):
     }
     ws.spreadsheet.batch_update(body)
     logger.info(
-        f"borders: rows {first_row_1}..{last_row_1-1} "
+        f"borders: rows {first_row_1}..{last_row_1} "
         f"(has_month_label={has_month_label})"
     )
 
