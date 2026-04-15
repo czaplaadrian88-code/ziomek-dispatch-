@@ -408,6 +408,83 @@ def test_B11_courier_picked_up_reconcile_preserves_bag_time_alerted():
             os.unlink(test_path + ".lock")
 
 
+def test_B12_R9_wait_no_gps_courier_regression_guard():
+    """
+    REGRESSION GUARD — F2.1b step 4.1 fix.
+
+    Bug historia: #466290 Chicago Pizza @ 2026-04-15T19:16:45 UTC, kurier
+    5506 Patryk pos_source='no_gps' dostał bonus_r9_wait_pen=-101.76
+    (final_score=-0.53 zamiast ~98). Root cause: R9 wait używał drive_min
+    z linii 285 która dla no_gps kurierów jest computed z synthetic
+    courier_pos (BIALYSTOK_CENTER fallback), dając sztucznie niski
+    drive_min (~2-3 min). Realny fallback drive_min dla no_gps jest
+    nadpisywany dopiero w post-loop (linia 458) jako max(15, prep_remaining),
+    ale w tym momencie final_score już zamrożony z bad wait_pred.
+
+    Fix step 4.1: effective_drive_min pre-normalized w R9 wait block:
+      pos_source=='no_gps'    → max(15, (pickup_ready_at - now)/60)
+      pos_source=='pre_shift' → shift_start_min
+      inne                    → drive_min (unchanged dla GPS)
+
+    Test 2-warstwowy:
+      (a) STRUCTURAL — inspect source czy fix jest w dispatch_pipeline
+      (b) FORMULA — manual compute dla scenariusza #466290 bug recreation
+
+    Regex w layer (a) dopuszcza cleanup refactor rename
+    (effective_drive_min | real_drive_min | gps_aware_drive_min | adjusted_drive_min).
+    """
+    import re
+    from dispatch_v2 import dispatch_pipeline
+    import inspect
+    src = inspect.getsource(dispatch_pipeline)
+
+    # Layer (a): structural check — fix musi być w source
+    drive_var_re = re.compile(
+        r"effective_drive_min|real_drive_min|gps_aware_drive_min|adjusted_drive_min"
+    )
+    assert drive_var_re.search(src), (
+        "REGRESSION: dispatch_pipeline NIE ma effective_drive_min computation "
+        "(ani aliasu real_/gps_aware_/adjusted_). Bug #466290 może się powtórzyć "
+        "— no_gps courierzy dostają nierealne R9 wait penalty. "
+        "Patrz step 4.1 commit + TECH_DEBT."
+    )
+    assert '"no_gps"' in src, (
+        "REGRESSION: pos_source=='no_gps' handling missing in dispatch_pipeline."
+    )
+    # effective_drive_min (lub alias) musi być DEFINED przed wait_pred_min usage
+    eff_match = drive_var_re.search(src)
+    eff_idx = eff_match.start() if eff_match else -1
+    wait_idx = src.find("wait_pred_min = max")
+    assert eff_idx > 0 and wait_idx > eff_idx, (
+        "REGRESSION: effective_drive_min must be defined BEFORE wait_pred_min. "
+        "Jeśli test fail, sprawdź że R9 wait block w dispatch_pipeline używa "
+        "effective_drive_min (nie raw drive_min) dla computation."
+    )
+
+    # Layer (b): formula-level #466290 scenario
+    # now=19:16:45, pickup_ready_at=19:41:27 → tkur_from_now=24.7 min
+    now = datetime(2026, 4, 15, 19, 16, 45, tzinfo=timezone.utc)
+    pickup_ready_at = now + timedelta(minutes=24.7)
+    tkur_from_now_min = (pickup_ready_at - now).total_seconds() / 60.0
+    # no_gps pattern: effective = max(15, prep_remaining_min)
+    effective_drive_min = max(15.0, tkur_from_now_min)  # = 24.7
+    wait_pred_min = max(0.0, tkur_from_now_min - effective_drive_min)  # = 0
+    assert wait_pred_min < 0.01, (
+        f"formula regression: expected ~0 got {wait_pred_min:.2f}. "
+        f"no_gps scenario #466290 gdzie tkur=drive_fallback should give wait=0."
+    )
+    # Penalty z formuła R9 wait
+    if wait_pred_min > C.RESTAURANT_WAIT_SOFT_MIN:
+        bonus_r9_wait_pen = -(wait_pred_min - C.RESTAURANT_WAIT_SOFT_MIN) * C.RESTAURANT_WAIT_PENALTY_PER_MIN
+    else:
+        bonus_r9_wait_pen = 0.0
+    assert bonus_r9_wait_pen == 0.0, (
+        f"Expected 0.0 wait penalty for no_gps scenario, got {bonus_r9_wait_pen}. "
+        f"Historical bug #466290 had -101.76 — sign of leakage of linia 285 "
+        f"drive_min into wait_pred computation for no_gps couriers."
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════
 # SEKCJA C — INTEGRATION bundling patterns (Bartek 6503 orders context)
 # ═══════════════════════════════════════════════════════════════════

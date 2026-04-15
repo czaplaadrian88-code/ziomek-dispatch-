@@ -372,13 +372,31 @@ def assess_order(
         bonus_r9_stopover = -len(bag_sim) * C.STOPOVER_SCORE_PER_STOP
 
         # R9 wait — penalty za przewidywane oczekiwanie pod restauracją > 5 min.
-        # Wait = max(0, T_KUR_from_now - drive_min_to_restaurant).
-        # drive_min policzony wyżej (linia 281 haversine × road_factor / fleet_speed).
-        # Zero OSRM duplicates.
+        # Wait = max(0, T_KUR_from_now - effective_drive_min).
+        #
+        # F2.1b step 4.1 fix: dla no_gps/pre_shift courierów drive_min z linii 285
+        # jest liczony z SYNTHETIC courier_pos (fallback do BIALYSTOK_CENTER lub
+        # last-known), co dla restauracji w centrum daje sztucznie niski drive_min
+        # (~2-3 min) → wait_pred zawyżony → nierealny penalty.
+        # Historyczny bug: order #466290 Chicago Pizza @ 2026-04-15T19:16:45 UTC,
+        # Patryk 5506 (no_gps), bonus_r9_wait_pen = -101.76.
+        #
+        # Fix: effective_drive_min replikuje post-loop normalization (linie 453-469):
+        #   no_gps     → max(15, prep_remaining_min)   (zgodne z linią 450)
+        #   pre_shift  → shift_start_min                (zgodne z linią 465)
+        #   inne       → drive_min                       (bez zmian dla GPS)
         bonus_r9_wait_pen = 0.0
         if pickup_ready_at is not None:
+            _pos_src = getattr(cs, "pos_source", None)
+            if _pos_src == "no_gps":
+                _prep_rem = max(0.0, (pickup_ready_at - now).total_seconds() / 60.0)
+                effective_drive_min = max(15.0, _prep_rem)
+            elif _pos_src == "pre_shift":
+                effective_drive_min = float(getattr(cs, "shift_start_min", 0) or 0)
+            else:
+                effective_drive_min = drive_min
             tkur_from_now_min = (pickup_ready_at - now).total_seconds() / 60.0
-            wait_pred_min = max(0.0, tkur_from_now_min - drive_min)
+            wait_pred_min = max(0.0, tkur_from_now_min - effective_drive_min)
             if wait_pred_min > C.RESTAURANT_WAIT_SOFT_MIN:
                 bonus_r9_wait_pen = -(wait_pred_min - C.RESTAURANT_WAIT_SOFT_MIN) * C.RESTAURANT_WAIT_PENALTY_PER_MIN
 
