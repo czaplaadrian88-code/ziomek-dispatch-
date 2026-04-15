@@ -745,3 +745,53 @@ R6 `_check_bag_time_alerts` robi `(now_utc - picked_dt)` gdzie `now_utc = dateti
 - `_parse_aware_utc()` jest **workaround, nie fix** — koszt utrzymania dwóch parserów z rozbudowanym docstringiem wyjaśniającym różnicę. Przy każdym cleanup refactorze "remove duplicate parser" kusi żeby usunąć jeden z nich.
 
 **Scope:** F2.1c lub krok #8. Workaround działa w F2.1b krok 6.1.
+
+---
+
+## F2.1b DONE — resolved / in-progress / backlog (2026-04-15)
+
+Sprint F2.1b Decision Engine 3.0 — **10 kroków** (step 0-7 committed + step 8 in-progress), **9 tagów** rollback, 3 dni pracy 13-15.04.
+
+### ✅ Resolved (verified)
+
+| Item | Commit | Verified by |
+|---|---|---|
+| enriched_metrics flat append (bonus_l1/l2 + R6/R8/R9 placeholders) | `b7c5592` step 0 | Test F10 smoke + prod observation order #466122 bonus_l1=25.0 @ 2026-04-15 11:16:59 UTC |
+| `telegram_utils.send_admin_alert` minimalistyczny wrapper | `54bfc46` step 1 | Manual test `send_admin_alert('[test F2.1b step 1] telegram_utils OK')` → Telegram ok=True delivered |
+| `common.py` F2.1 extensions (R6-R9 + auto_approve placeholders) | `6acef7a` step 2 | Test F7/F8/F9 constants + smoke 5 modułów all_imports_OK |
+| `feasibility_v2` R6 BAG_TIME hard + R7 longhaul peak (R8 deferred) | `c185559` step 3 | Test A1-A6 regression + B1-B6 unit R6/R7 + A3 R3 soft-only invariant |
+| `dispatch_pipeline` penalties R6_soft + R9_stopover + R9_wait | `c370b77` step 4 | Test F4/F5/F6 formuły matematyczne + shadow_dispatcher schema prop step 0 |
+| `state_machine.bag_time_alerted` flag (5/6 handlers race-safe) | `2fbba6c` step 5 | Test B11 race condition guard (CRITICAL, regression blocker dla future refactorów) + dry-run 4 transitions |
+| `sla_tracker._check_bag_time_alerts` R6 pre-warning hook | `2859462` step 6 | Dry-run monkey-patch state + fake send (1 alert, flag set, gate works) |
+| `sla_tracker._parse_aware_utc` naive Warsaw hotfix | `a4f9c5d` step 6.1 | Test B7-B10 parse 4 formats + prod observation order #466154 alerted=True @ 12:56:04 UTC restart |
+| Test suite 38 testów (A/B/C/D/E/F) | `b722b86` step 7 | Runner `38 passed, 0 failed`, exit code 0, zero debug iteracji |
+
+**FAZA A deployment:** `dispatch-sla-tracker` restart 2026-04-15 12:56:04 UTC, R6 pre-warning LIVE, zero `TypeError` w logach, 1 empirical alert delivered.
+
+### ⏳ In-progress (step 8 w trakcie)
+
+- [ ] FAZA B: `dispatch-shadow` restart → R6 hard + R7 + penalties w runtime
+- [ ] Post-restart observation 30 min: reject rate per reguła, score distribution drift, 3× services active
+- [ ] Final commit + tag `pre-F2.1b-complete`
+
+### 📋 F2.1c backlog (odroczone z F2.1b)
+
+- [ ] **R8 pickup_span czasowy** — wymaga T_KUR propagation w `_bag_dict_to_ordersim` + weryfikacji że panel_watcher zachowuje `pickup_at_warsaw` per-order w bag list kuriera. Placeholdery `common.py` + shadow_decisions `bonus_r8_soft_pen=null` już gotowe.
+- [ ] **`_parse()` unified fix + test regresyjny SLA path** — aktualnie workaround `_parse_aware_utc` dla R6, legacy `_parse` dla SLA `delivery_time_minutes`. Pełny fix wymaga retestu 1000 COURIER_DELIVERED na przed/po compare `dmin`. Patrz sekcja "F2.1b step 6 — `_parse()` naive→UTC" wyżej.
+- [ ] **`AUTO_APPROVE_ENABLED` flip** — blocker: learning_log zdominowany przez `TIMEOUT_SUPERSEDED` (242/249 wpisów w pre-F21b oknie 38h). Wymaga refactor watchdog timeout logic + 200+ walidowanych decyzji + silent_agreement analyzer porównujący actual panel kurier vs proposed.
+- [ ] **`ANOMALY_DETECTION_ENABLED` flip** (A1 `restaurant_prep_variance` + A2 `courier_recent_delay`) — wymaga implementacji `context.*` metod bazujących na `restaurant_meta.json` + `shadow_decisions.jsonl`.
+- [ ] **`learning_analyzer.compute_agreement_per_bonus_layer()`** — teraz że bonus_l1/l2/r4 są w shadow_decisions.jsonl (step 0), można kalibrować L1=25 tuning per real data po 2-3 dniach akumulacji. Pre-F21b raport sekcja 3 była "niemożliwa" — od step 0 staje się możliwa.
+- [ ] **Cascaded R6 alerts (30/35/40 min eskalacja)** — obecnie one-shot per order. Jeśli dane pokażą że alerty 30 min są ignorowane do 40+ min, rozważyć cascaded. Flag off default.
+- [ ] **`bag_time_alerted` jednorazowa migracja** — aktualnie lazy przez `.get(..., False)`. Stare picked_up ordery (9 w prodzie @ step 8 pre-flight) mają `alerted=MISSING`. Stopniowa naturalna migracja przez kolejne update eventy — no script needed.
+- [ ] **Full end-to-end `dispatch_pipeline.assess_order` smoke test** — wymaga >5 mocków (CourierState, fleet_snapshot, restaurant_meta, osrm, events). Defer do F2.2 gdy dodamy pytest fixture infrastructure. Obecny smoke F10 testuje feasibility+simulate+plan integration, pokrywa 80% stack bez assess_order.
+
+### 🎯 F2.1b sprint metrics
+
+- **9 kroków committed** (step 0/1/2/3/4/5/6/6.1/7) + **step 8 in-progress** (docs + FAZA B + final)
+- **9 tagów rollback** (`pre-F2.1b-step0/1/2/3/4/5/6/6-1/7` = 9 tags pre-step-8)
+- **1 hotfix w trakcie deploymentu** (step 6.1 `_parse_aware_utc`, CONFIRMED in prod przez reality check FAZA A restart — wszystkie 9/9 picked_up orderów miało naive Warsaw timestamps)
+- **38 testów** unit/integration, **38/38 PASS** pierwszy run, zero debug iteracji
+- **1 regression guard test B11** (race condition, krytyczny dla przyszłych refactorów `state_machine`)
+- **2 empirical prod milestones** (`bonus_l1=25.0` @ #466122 + R6 alert @ #466154)
+- **~1100 linii** kodu/testów/docs dodanych
+- **Zero rollback**, **zero downtime serwisów** przez cały sprint

@@ -581,3 +581,52 @@ Geocoding:    Nominatim/OpenStreetMap
 Sheets SA:    ziomek@gen-lang-client-0704473813.iam.gserviceaccount.com
 Sheets ID:    1Z5kSGUB0Tfl1TiUs5ho-ecMYJVz0-VuUctoq781OSK8
 ```
+
+---
+
+## 2026-04-15 UPDATE — F2.1b Decision Engine 3.0 deployed
+
+Wersja doc zachowana jako V3.6 (nie V3.7) bo zmiana dotyczy warstwy reguł feasibility/scoring, nie architektury systemu — master doc pozostaje aktualny, reguły biznesowe rozszerzone o R6-R9 (patrz `docs/BARTEK_GOLD_STANDARD.md` sekcja "F2.1 Extensions").
+
+### Sprint F2.1b — 10 kroków (13-15.04.2026)
+
+- **Step 0:** enriched_metrics flat append (observability baseline dla L1/L2/R4/R6/R8/R9)
+- **Step 1:** `telegram_utils.send_admin_alert` (R6 alert channel, minimalistyczny wrapper)
+- **Step 2:** `common.py` F2.1 extensions (kalibracja 35/30/30 z empirycznego p95=35.6 prod)
+- **Step 3:** `feasibility_v2` R6 BAG_TIME hard + R7 longhaul peak [R8 deferred F2.1c]
+- **Step 4:** `dispatch_pipeline` penalties R6_soft + R9_stopover + R9_wait
+- **Step 5:** `state_machine.bag_time_alerted` flag (5/6 handlers, COURIER_PICKED_UP race-safe)
+- **Step 6:** `sla_tracker._check_bag_time_alerts` hook + courier_names cache
+- **Step 6.1:** `_parse_aware_utc` hotfix (CONFIRMED prod: wszystkie `picked_up_at` są naive Warsaw, nie aware UTC)
+- **Step 7:** test suite 38/38 PASS (A=regression, B=unit+race, C=bundle, D=edge, E=anti-pattern, F=sanity+smoke)
+- **Step 8:** FAZA A restart sla-tracker → FAZA B restart dispatch-shadow → docs → final commit
+
+### Deployment timeline
+
+- **FAZA A:** 2026-04-15 12:56:04 UTC — `dispatch-sla-tracker` restart, **R6 pre-warning LIVE**
+- **FAZA B:** 2026-04-15 [TIMESTAMP_TBD] UTC — `dispatch-shadow` restart, **R6 hard + R7 + penalties live w runtime**
+
+### Empirical milestones (observability step 0 live)
+
+- **`bonus_l1=25.0` first production** — order #466122 Rany Julek, kurier 400 Adrian R, 2026-04-15 11:16:59 UTC. Pierwszy same-resto bundle z pełnym enriched_metrics breakdown zalogowany do shadow_decisions.jsonl.
+- **R6 pre-warning first alert** — order #466154 `bag_time=43.1 min`, `alerted=True` (sla_tracker FAZA A live detected).
+
+### Runtime state po F2.1b [post-FAZA B]
+
+- **`feasibility_v2`:** R1-R5 (F1.9) + **R6 hard 35** + **R7 peak 14-17 Warsaw** + R3/R7 telemetry metrics
+- **`dispatch_pipeline`:** L1/L2/R4 bonuses (F1.9) + **R6_soft penalty (30-35)** + **R9_stopover differential** + **R9_wait > 5min** + `bonus_penalty_sum` aggregate
+- **`state_machine`:** `bag_time_alerted` flag z race-safe reset (5 z 6 handlerów, `COURIER_PICKED_UP` celowo nie resetuje)
+- **`sla_tracker`:** R6 pre-warning scan co 10s + `_parse_aware_utc` dla naive Warsaw timestamps (legacy `_parse` nietknięty dla SLA check)
+- **`shadow_decisions.jsonl`:** schema extended o `bonus_l1/l2/r4/r6_soft_pen/r9_stopover/r9_wait_pen/penalty_sum` + R6/R7 metrics telemetry
+
+### Feature flags F2.1c TODO
+
+- `AUTO_APPROVE_ENABLED=False` (blokada do 200+ walidowanych decyzji + silent_agreement analyzer)
+- `ANOMALY_DETECTION_ENABLED=False` (blokada do `context.restaurant_prep_variance()` + `context.courier_recent_delay()` impl)
+- R8 `PICKUP_SPAN_*` constants w miejscu ale unused (DEFERRED do F2.1c T_KUR propagation)
+
+### Related docs
+
+- `docs/BARTEK_GOLD_STANDARD.md` — F2.1 Extensions R6-R9 pełna spec + kalibracja empiryczna
+- `docs/TECH_DEBT.md` — F2.1b resolved (verified_by table) + F2.1c backlog (8 items)
+- `tests/test_decision_engine_f21.py` — 38 testów regression/unit/integration, plain Python (zero pytest)

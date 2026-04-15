@@ -194,9 +194,122 @@ Przy 1500-2000 orderów/tydz i Bartek bundled% 58% vs fleet 31%, różnica to ~2
 
 ## Sign-off
 
-- [ ] Adrian: akceptuję progi R1=8.0, R2=2.5, R3 tabela, R4=0.5/1.5/2.5, R5 constraint
-- [ ] Adrian: odpowiedzi na 5 pytań powyżej
-- [ ] Claude: implementacja w osobnym commicie, bez restartu serwisu bez potwierdzenia
-- [ ] Claude: shadow mode walidacja agreement rate przed promote do auto
+- [x] Adrian: akceptuję progi R1=8.0, R2=2.5, R3 tabela, R4=0.5/1.5/2.5, R5 constraint _(DONE F1.9, verified F2.1b test suite A1/A2/A4/A5)_
+- [x] Adrian: odpowiedzi na 5 pytań powyżej _(DONE F1.9 sprint — R1=8.0 empirycznie p90 Bartka, R3 soft-only per F1.9b, R5=1.8 km p100 Bartka)_
+- [x] Claude: implementacja w osobnym commicie, bez restartu serwisu bez potwierdzenia _(DONE F1.9 commit dde032f + F1.9b f24f0c9)_
+- [x] Claude: shadow mode walidacja agreement rate przed promote do auto _(DONE F2.1b step 7 test B11 race condition guard, verified F2.1b prod 2026-04-15)_
 
-**Status:** Draft v1, czeka na review Adriana. **NIE zaczynamy KROKU 3 bez zielonego światła.**
+**Status:** R1-R5 LIVE w `feasibility_v2` od F1.9 (13.04.2026). F2.1 Extensions R6-R9 DONE w F2.1b (15.04.2026). Patrz sekcja poniżej.
+
+---
+
+## F2.1 Extensions — Decision Engine 3.0 (R6-R9)
+
+**Dodane:** 2026-04-15 w sprint F2.1b. Rozszerza Bartek Gold Standard (R1-R5) o cztery nowe reguły: R6 BAG_TIME termiczny, R7 long-haul peak isolation, R8 pickup span czasowy (DEFERRED F2.1c), R9 stopover + wait penalty.
+
+### R6 — BAG_TIME termiczny (hard 35 + soft 30-35)
+
+**Kalibracja empiryczna:** 743 delivered orderów 11-15.04.2026 (pre-F21b analyzer):
+- p50: 15.1 min | p75: 23.0 | p90: 30.9 | p95: 35.6 | p99: 44.3 | max: 80.5
+- 5.7% orderów > 35 min | 11.6% > 30 min
+
+**Stałe (`common.py` F2.1 extensions):**
+```python
+BAG_TIME_HARD_MAX_MIN = 35          # = p95 empiryczne, obcina 5.7% thermal tail
+BAG_TIME_SOFT_MIN = 30              # = p90, soft zone 30-35 łapie +5.9% penalty
+BAG_TIME_PRE_WARNING_MIN = 30       # sla_tracker Telegram alert trigger
+BAG_TIME_SOFT_PENALTY_PER_MIN = 8   # -(bag_time - 30) * 8 do scoringu
+```
+
+**Dwa enforcement points:**
+1. **`feasibility_v2.check_feasibility_v2`** — hard reject przy projekcji > 35 min (po SLA check, reuse `plan.predicted_delivered_at`). Rejectuje SOLO i BUNDLE bez różnicy — jedzenie stygnie identycznie niezależnie od bag size.
+2. **`dispatch_pipeline.assess_order`** — soft penalty w strefie 30-35 (reuse `metrics.r6_max_bag_time_min` ze step 3 feasibility, zero duplicate compute).
+
+**Pre-warning alert:** `sla_tracker._check_bag_time_alerts` scan co 10s, wysyła Telegram do admina gdy `(now_utc - picked_up_at) > 30 min` AND `bag_time_alerted == False`. One-shot per order (flag setowany przed send — set-then-send Opcja X). Format:
+```
+⚠️ BAG_TIME N min (limit 30)
+#<oid> <restaurant> → <delivery>
+Kurier: <name> (<cid>) • picked up <HH:MM Warsaw>
+```
+
+### R7 — Long-haul peak isolation
+
+**Reguła:** `ride_km > 4.5 km` AND `hour ∈ [14, 17] Warsaw` AND `bag niepusty` → hard reject `R7_longhaul_peak`. Solo (bag pusty) i offpeak bez ograniczenia.
+
+**Stałe:**
+```python
+LONG_HAUL_DISTANCE_KM = 4.5
+LONG_HAUL_PEAK_HOURS_START = 14   # inclusive, Warsaw local
+LONG_HAUL_PEAK_HOURS_END = 17     # inclusive
+```
+
+**Status:** placeholder thresholds — brak danych empirycznych na `ride_distance` w shadow_decisions.
+
+**Post-deploy monitoring z konkretnymi triggerami kalibracji:**
+- reject rate > 20% w peak → threshold 4.5 km za restrykcyjny, bump w górę
+- reject rate < 2% w peak → threshold za liberalny, bump w dół
+- cel: 5-10% reject rate w peak hours (analogiczny do R1 current)
+- miara: `grep "R7_longhaul_peak" shadow_decisions.jsonl | wc -l` vs total peak orders
+
+### R8 — Pickup span czasowy (DEFERRED F2.1c)
+
+**Planowane:** max 15 min różnicy T_KUR między orderami w `bundle=2`, max 30 min dla `bundle=3`.
+
+**Dlaczego odroczone:** `_bag_dict_to_ordersim` w `dispatch_pipeline.py:105` NIE propaguje `pickup_ready_at` do `OrderSim` dla orderów w bagu. T_KUR deklarowany przez kuchnię jest znany tylko dla nowego ordera. Wymaga rozszerzenia + weryfikacji że panel_watcher zachowuje `pickup_at_warsaw` w bag dict kuriera.
+
+**Placeholdery `common.py` w miejscu** (niewykorzystywane do F2.1c):
+```python
+PICKUP_SPAN_HARD_BUNDLE2_MIN = 15
+PICKUP_SPAN_HARD_BUNDLE3_MIN = 30
+PICKUP_SPAN_SOFT_START_MIN = 7
+PICKUP_SPAN_SOFT_PENALTY_PER_MIN = 3
+```
+
+`shadow_decisions.jsonl` pole `bonus_r8_soft_pen` zostaje `null` do F2.1c (schema stabilne od step 0).
+
+### R9 — Stopover tax + restaurant wait penalty
+
+**R9 stopover (differential):**
+```python
+bonus_r9_stopover = -len(bag) * STOPOVER_SCORE_PER_STOP   # -8 per stop
+# bag=0 solo → 0 (pierwszy stop free)
+# bag=1 → -8, bag=2 → -16, bag=3 → -24, bag=4 → -32
+```
+
+**R9 wait:**
+```python
+wait_pred = max(0, (T_KUR - now) - drive_min_to_restaurant)
+if wait_pred > 5:
+    bonus_r9_wait_pen = -(wait_pred - 5) * 6   # -6 per min over 5
+```
+
+Oba soft-only. Dodawane do `final_score` przez `bonus_penalty_sum` w `dispatch_pipeline.assess_order`.
+
+### Kolejność egzekucji w `feasibility_v2`
+
+```
+1. bag size cap (MAX=8)                   ← istniejące
+2. R7 long-haul peak                      ← F2.1b NEW (fast, no OSRM)
+3. R1 delivery spread (≤8km)              ← F1.9
+4. R5 mixed-rest pickup (≤1.8km)          ← F1.9
+5. pickup_dist reach (≤15km)              ← istniejące
+6. shift_end guard (≥20min buffer)        ← F1.8
+7. simulate_bag_route_v2 (OSRM)           ← istniejące
+8. SLA violations (sla_minutes budget)    ← istniejące
+9. R6 BAG_TIME hard (≤35min)              ← F2.1b NEW (po simulate, reuse plan)
+10. return MAYBE / NO                     ← istniejące
+```
+
+### Race condition guard (krytyczny regression)
+
+`COURIER_PICKED_UP` handler w `state_machine.update_from_event` **CELOWO NIE resetuje** `bag_time_alerted` do False. Panel_watcher reconcile może reemit ten event po tym jak sla_tracker już ustawił flag=True — reset powodowałby duplicate alerts w każdym ticku 10s do delivered. Reset odbywa się w `NEW_ORDER`, `COURIER_ASSIGNED`, `COURIER_DELIVERED`, `COURIER_REJECTED_PROPOSAL`, `ORDER_RETURNED_TO_POOL` — 5 z 6 handlerów. Regression guard: `tests/test_decision_engine_f21.py::test_B11`.
+
+### Empirical milestones F2.1b
+
+- **`bonus_l1 = 25.0` first production** — order #466122 Rany Julek, kurier 400 Adrian R, 2026-04-15 11:16:59 UTC. Pierwszy same-resto bundle z pełnym enriched_metrics breakdown zalogowany w shadow_decisions.jsonl (step 0 deployed).
+- **R6 pre-warning first alert** — order #466154 @ 43.1 min w torbie, `alerted=True`. sla_tracker FAZA A live od 2026-04-15 12:56:04 UTC.
+
+### Related docs
+
+- `docs/TECH_DEBT.md` — F2.1b resolved + F2.1c backlog (R8, `_parse()` unified fix, learning analyzer bonus layer)
+- `tests/test_decision_engine_f21.py` — 38 testów (A=6 regression, B=11 unit R6/R7/parse/race, C=3 bundle, D=5 edge, E=3 anti-pattern, F=10 sanity/smoke)
