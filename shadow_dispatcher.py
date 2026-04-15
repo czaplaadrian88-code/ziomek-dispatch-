@@ -103,7 +103,17 @@ def _serialize_candidate(c) -> dict:
         "deliv_spread_km": m.get("deliv_spread_km"),
         "pickup_spread_km": m.get("pickup_spread_km"),
         "dynamic_bag_cap": m.get("dynamic_bag_cap"),
-        # F2.1b placeholders — wypełnione gdy R6-R9 wejdą do scoring.
+        # F2.1b step 3 metrics (feasibility_v2 R6/R7 telemetry)
+        "r6_max_bag_time_min": m.get("r6_max_bag_time_min"),
+        "r6_worst_oid": m.get("r6_worst_oid"),
+        "r6_is_solo": m.get("r6_is_solo"),
+        "r6_bag_size": m.get("r6_bag_size"),
+        "r7_ride_km": m.get("r7_ride_km"),
+        "r7_warsaw_hour": m.get("r7_warsaw_hour"),
+        "r7_in_peak": m.get("r7_in_peak"),
+        "r7_is_longhaul": m.get("r7_is_longhaul"),
+        "r7_bag_size": m.get("r7_bag_size"),
+        # F2.1b step 4 scoring penalties (R8 stays None — deferred F2.1c)
         "bonus_r6_soft_pen": m.get("bonus_r6_soft_pen"),
         "bonus_r8_soft_pen": m.get("bonus_r8_soft_pen"),
         "bonus_r9_stopover": m.get("bonus_r9_stopover"),
@@ -184,7 +194,17 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "deliv_spread_km": best_m.get("deliv_spread_km"),
             "pickup_spread_km": best_m.get("pickup_spread_km"),
             "dynamic_bag_cap": best_m.get("dynamic_bag_cap"),
-            # F2.1b placeholders — wypełnione gdy R6-R9 wejdą do scoring.
+            # F2.1b step 3 metrics (feasibility_v2 R6/R7 telemetry)
+            "r6_max_bag_time_min": best_m.get("r6_max_bag_time_min"),
+            "r6_worst_oid": best_m.get("r6_worst_oid"),
+            "r6_is_solo": best_m.get("r6_is_solo"),
+            "r6_bag_size": best_m.get("r6_bag_size"),
+            "r7_ride_km": best_m.get("r7_ride_km"),
+            "r7_warsaw_hour": best_m.get("r7_warsaw_hour"),
+            "r7_in_peak": best_m.get("r7_in_peak"),
+            "r7_is_longhaul": best_m.get("r7_is_longhaul"),
+            "r7_bag_size": best_m.get("r7_bag_size"),
+            # F2.1b step 4 scoring penalties (R8 stays None — deferred F2.1c)
             "bonus_r6_soft_pen": best_m.get("bonus_r6_soft_pen"),
             "bonus_r8_soft_pen": best_m.get("bonus_r8_soft_pen"),
             "bonus_r9_stopover": best_m.get("bonus_r9_stopover"),
