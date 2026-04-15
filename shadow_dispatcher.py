@@ -108,6 +108,7 @@ def _serialize_candidate(c) -> dict:
         "bonus_r8_soft_pen": m.get("bonus_r8_soft_pen"),
         "bonus_r9_stopover": m.get("bonus_r9_stopover"),
         "bonus_r9_wait_pen": m.get("bonus_r9_wait_pen"),
+        "bonus_penalty_sum": m.get("bonus_penalty_sum"),
         "plan": None if plan is None else {
             "sequence": plan.sequence,
             "total_duration_min": plan.total_duration_min,
@@ -188,6 +189,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "bonus_r8_soft_pen": best_m.get("bonus_r8_soft_pen"),
             "bonus_r9_stopover": best_m.get("bonus_r9_stopover"),
             "bonus_r9_wait_pen": best_m.get("bonus_r9_wait_pen"),
+            "bonus_penalty_sum": best_m.get("bonus_penalty_sum"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

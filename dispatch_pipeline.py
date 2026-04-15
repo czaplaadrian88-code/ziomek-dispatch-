@@ -9,6 +9,7 @@ Verdicts:
     SKIP    — no candidate with any plan (fleet empty / all fast-filter rejections).
               R29 says never hang; SKIP always alerts Adrian.
 """
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple, Any
@@ -16,9 +17,12 @@ from typing import List, Dict, Optional, Tuple, Any
 from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2, DWELL_PICKUP_MIN
 from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2 import scoring
+from dispatch_v2 import common as C
 from dispatch_v2.common import parse_panel_timestamp, WARSAW, HAVERSINE_ROAD_FACTOR_BIALYSTOK, get_fallback_speed_kmh
 from dispatch_v2.osrm_client import haversine
 import math
+
+log = logging.getLogger(__name__)
 
 
 def _point_to_segment_km(p, a, b) -> float:
@@ -341,7 +345,47 @@ def assess_order(
         else:
             availability_bonus = 0.0
 
-        final_score = score_result["total"] + bundle_bonus + availability_bonus
+        # F2.1b penalties — R6 soft BAG_TIME + R9 stopover + R9 wait.
+        # R8 soft pozostaje None (placeholder do F2.1c — brak T_KUR propagation).
+        # Wszystkie penalties ≤ 0 (ujemne albo zero), dodawane do final_score.
+
+        # R6 soft: zone 30-35 min BAG_TIME. Hard cap 35 min jest w feasibility_v2
+        # (F2.1b step 3), tu widzimy tylko przypadki 30-35 min które przeszły hard.
+        # Reuse metrics.r6_max_bag_time_min (step 3) — zero duplicate computation.
+        bonus_r6_soft_pen: Optional[float] = None
+        if plan is not None:
+            r6_max_bag_time = metrics.get("r6_max_bag_time_min")
+            if r6_max_bag_time is None:
+                log.warning(
+                    f"R6 soft skip: metrics.r6_max_bag_time_min missing "
+                    f"despite plan!=None (expected after krok #6 restart)"
+                )
+                r6_max_bag_time = 0.0
+            if r6_max_bag_time > C.BAG_TIME_SOFT_MIN:
+                bonus_r6_soft_pen = -(r6_max_bag_time - C.BAG_TIME_SOFT_MIN) * C.BAG_TIME_SOFT_PENALTY_PER_MIN
+            else:
+                bonus_r6_soft_pen = 0.0
+
+        # R9 stopover — differential tax (bag=0 → 0, bag=1 → -8, bag=2 → -16, ...).
+        # Rationale: scoring porównuje kandydatów względem kosztu DODANIA stopu,
+        # nie absolutnego. Zgodny z op.1 "podatek przystankowy".
+        bonus_r9_stopover = -len(bag_sim) * C.STOPOVER_SCORE_PER_STOP
+
+        # R9 wait — penalty za przewidywane oczekiwanie pod restauracją > 5 min.
+        # Wait = max(0, T_KUR_from_now - drive_min_to_restaurant).
+        # drive_min policzony wyżej (linia 281 haversine × road_factor / fleet_speed).
+        # Zero OSRM duplicates.
+        bonus_r9_wait_pen = 0.0
+        if pickup_ready_at is not None:
+            tkur_from_now_min = (pickup_ready_at - now).total_seconds() / 60.0
+            wait_pred_min = max(0.0, tkur_from_now_min - drive_min)
+            if wait_pred_min > C.RESTAURANT_WAIT_SOFT_MIN:
+                bonus_r9_wait_pen = -(wait_pred_min - C.RESTAURANT_WAIT_SOFT_MIN) * C.RESTAURANT_WAIT_PENALTY_PER_MIN
+
+        # Suma penalties (R6 None → 0). R8 placeholder None — nie wliczany.
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r9_stopover + bonus_r9_wait_pen
+
+        final_score = score_result["total"] + bundle_bonus + availability_bonus + bonus_penalty_sum
 
         enriched_metrics = {
             **metrics,
@@ -367,11 +411,15 @@ def assess_order(
             "availability_bonus": round(availability_bonus, 2),
             "free_at_min": round(free_at_min, 1),
             "sla_minutes_used": sla_minutes,
-            # F2.1b placeholders — wypełnione gdy R6-R9 wejdą do scoring.
-            "bonus_r6_soft_pen": None,
+            # F2.1b penalties (step 4). R8 None do F2.1c (T_KUR propagation).
+            "bonus_r6_soft_pen": (
+                round(bonus_r6_soft_pen, 2)
+                if bonus_r6_soft_pen is not None else None
+            ),
             "bonus_r8_soft_pen": None,
-            "bonus_r9_stopover": None,
-            "bonus_r9_wait_pen": None,
+            "bonus_r9_stopover": round(bonus_r9_stopover, 2),
+            "bonus_r9_wait_pen": round(bonus_r9_wait_pen, 2),
+            "bonus_penalty_sum": round(bonus_penalty_sum, 2),
         }
 
         candidates.append(Candidate(
