@@ -190,6 +190,7 @@ def update_from_event(event: dict) -> Optional[dict]:
             "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
             "prep_minutes": payload.get("prep_minutes"),
             "order_type": payload.get("order_type"),
+            "bag_time_alerted": False,  # F2.1b step 5: R6 pre-warning gate init
         }, event="NEW_ORDER")
 
     if etype == "COURIER_ASSIGNED":
@@ -199,9 +200,15 @@ def update_from_event(event: dict) -> Optional[dict]:
             "courier_id": event.get("courier_id"),
             "assigned_at": now_iso(),
             "proposed_delivery_time": payload.get("proposed_time"),
+            "bag_time_alerted": False,  # F2.1b step 5: reset on new assignment / reassignment
         }, event="COURIER_ASSIGNED")
 
     if etype == "COURIER_PICKED_UP":
+        # F2.1b step 5: CELOWO NIE resetujemy bag_time_alerted tutaj.
+        # Panel_watcher może reemit COURIER_PICKED_UP przez reconcile retry po
+        # tym jak sla_tracker już ustawił flag=True. Reset w tym handlerze
+        # spowodowałby duplicate alerty (flag→False, następny tick→kolejny alert).
+        # Reset jest w ASSIGNED/DELIVERED/REJECTED/RETURNED — bezpieczne punkty.
         picked = payload.get("timestamp", now_iso())
         # expected_delivery_by = picked + 35 min (SLA)
         try:
@@ -245,6 +252,7 @@ def update_from_event(event: dict) -> Optional[dict]:
             "final_location": payload.get("final_location"),
             "delivery_address": deliv_addr,
             "delivery_coords": deliv_coords,
+            "bag_time_alerted": False,  # F2.1b step 5: housekeeping reset at end-of-life
         }, event="COURIER_DELIVERED")
 
     if etype == "ORDER_RETURNED_TO_POOL":
@@ -253,6 +261,7 @@ def update_from_event(event: dict) -> Optional[dict]:
             "commitment_level": "planned",
             "courier_id": None,
             "return_reason": payload.get("reason"),
+            "bag_time_alerted": False,  # F2.1b step 5: reset — next courier starts clean
         }, event="ORDER_RETURNED_TO_POOL")
 
     if etype == "COURIER_REJECTED_PROPOSAL":
@@ -263,6 +272,7 @@ def update_from_event(event: dict) -> Optional[dict]:
             "courier_id": None,
             "last_rejected_by": event.get("courier_id"),
             "rejection_reason": payload.get("reason"),
+            "bag_time_alerted": False,  # F2.1b step 5: reset on rejection — next courier starts clean
         }, event="COURIER_REJECTED_PROPOSAL")
 
     # Pozostale eventy nie zmieniaja stanu zlecen
