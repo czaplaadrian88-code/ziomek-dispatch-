@@ -692,26 +692,56 @@ fixes) + A/B test Ziomek vs current koordynator operation.
 
 **Lokalizacja:** `sla_tracker.py:_parse()` linie ~26-35
 **Odkryte:** 2026-04-15 podczas discovery kroku #6 (R6 BAG_TIME pre-warning)
+**CONFIRMED w produkcji:** 2026-04-15 ~12:27 UTC (FAZA A restart sla_tracker po commit step 6)
+**Workaround wdrożony:** 2026-04-15 ~12:50 UTC (krok 6.1: dedykowany `_parse_aware_utc()`)
 
-**Bug:** naive ISO timestamp `"YYYY-MM-DD HH:MM:SS"` dostaje `replace(tzinfo=timezone.utc)`, ale panel Rutcom emituje naive timestamps w Warsaw TZ, nie UTC.
+**Bug:** `_parse()` dla naive ISO stringów `"YYYY-MM-DD HH:MM:SS"` (format emitowany przez panel Rutcom w Warsaw TZ) wywołuje `datetime.fromisoformat(...)` które sukcesuje i zwraca **naive datetime bez tzinfo**. Fallback `strptime.replace(tzinfo=timezone.utc)` **nigdy nie jest dotykany** — fromisoformat sukcesuje pierwszy. Fallback path zakłada UTC (błędne dla Warsaw), ale kod i tak tam nie dociera. Naive ścieżka nie jest "rzadka", jest **główna**.
 
-**Efekt:** `bag_time_min` może być przesunięty o offset Warsaw-UTC (+2h CEST / +1h CET). W praktyce: istniejący SLA violations check żyje z tym bugiem od miesięcy (prawdopodobnie większość timestampów w streamie ma explicit `Z` suffix, naive ścieżka rzadko aktywna). **R6 krok #6 świadomie dziedziczy ten sam bug przez reuse `_parse()`** — zachowanie error-consistent z istniejącym SLA check zamiast rozsynchronizowania w jednym pliku.
+**Stan produkcji (zweryfikowany 15.04.2026 FAZA A):** wszystkie `picked_up_at` w `orders_state.json` są naive Warsaw stringami `"YYYY-MM-DD HH:MM:SS"`. Zero explicit TZ suffix. 9/9 picked_up orderów w prodzie dało crash przy `(now_utc - picked_dt)`. Mój wcześniejszy draft założył "naive rzadko aktywna" — błędne, **reality jest odwrotna**.
 
-**Fix plan (F2.1c lub krok #8 quick win):**
-1. Zweryfikować w orders_state.json sample timestampów picked_up_at:
-   ```python
+**Dlaczego SLA check działa mimo bugu — coincidence, nie intencja:**
+
+```python
+# sla_tracker.py:57-61 (oryginalny kod process(COURIER_DELIVERED))
+p, d = _parse(picked_ts), _parse(delivered_ts)
+if p and d:
+    dmin = round((d - p).total_seconds() / 60, 1)
+    sla_ok = dmin <= 35
+```
+
+**OBIE** daty są parsowane tym samym `_parse()` → **obie naive** (bez tzinfo). `(d - p)` na dwóch naive zwraca **poprawny timedelta** — różnica nie zależy od tzinfo gdy obie w tej samej (niezdefiniowanej) strefie. `dmin` numerycznie correct, `sla_ok` działa. **Szczęśliwa koincydencja**: naive-vs-naive = correct, aware-vs-naive = TypeError.
+
+R6 `_check_bag_time_alerts` robi `(now_utc - picked_dt)` gdzie `now_utc = datetime.now(timezone.utc)` (**aware**) vs `picked_dt` (naive) → `TypeError: can't subtract offset-naive and offset-aware datetimes` per każdy picked_up order.
+
+**Workaround w step 6.1:** dedykowany `_parse_aware_utc()` tylko dla R6 path. Naive traktuje jako Warsaw-local, konwertuje do UTC, zawsze zwraca aware UTC. `_parse()` nietknięty — SLA check zachowuje bit-for-bit legacy zachowanie. Osobny tag `pre-F2.1b-step6-1` dla rollback.
+
+**Pełny fix plan (F2.1c lub krok #8):**
+
+1. **Analiza SLA ścieżki (sanity check):** grep w `sla_log.jsonl` na brakujące/ujemne `delivery_time_minutes`:
+   ```bash
    python3 -c "
    import json
-   s = json.load(open('/root/.openclaw/workspace/dispatch_state/orders_state.json'))
-   naive = [(k, o.get('picked_up_at')) for k, o in s.items()
-            if o.get('picked_up_at') and 'T' not in str(o.get('picked_up_at'))]
-   print(f'naive count: {len(naive)}')
-   for k, v in naive[:10]: print(' ', k, v)
+   n_total = n_none = n_negative = n_outlier = 0
+   for line in open('/root/.openclaw/workspace/scripts/logs/sla_log.jsonl'):
+       r = json.loads(line); n_total += 1
+       d = r.get('delivery_time_minutes')
+       if d is None: n_none += 1
+       elif d < 0: n_negative += 1
+       elif d > 120: n_outlier += 1
+   print(f'total={n_total} none={n_none} negative={n_negative} >120min={n_outlier}')
    "
    ```
-2. Jeśli naive występuje → `_parse()` musi użyć `ZoneInfo('Europe/Warsaw')` dla naive
-3. Jeśli wszystko ma `Z`/`+offset` → fix kosmetyczny, zero impact
+   Jeśli n_negative == 0 i n_outlier rozsądne → naive-vs-naive jest zawsze correct, bug w _parse() jest martwy dla SLA path.
 
-**Scope:** F2.1c lub krok #8. Nie teraz, nie blokuje F2.1b.
+2. **Jednolity parser:** wymienić `_parse()` na wariant `_parse_aware_utc()`. Retest SLA check — weryfikacja że `dmin` nie zmienia wartości dla historycznych rekordów (różnica powinna być 0.0 min bo obie strony używają tej samej TZ offset, który po konwersji do UTC kasuje się w odejmowaniu).
 
-**Notka:** po weryfikacji że fix jest nontrivialny — czy istniejący SLA `dmin` w kroku #1 `process(COURIER_DELIVERED)` też korzysta z tego bugu? Tak. `sla_ok = dmin <= 35` może być systematycznie off. Warto sprawdzić jak często `_parse(naive)` faktycznie się wywołuje w prodzie vs `_parse(ISO)`.
+3. **Test regresyjny:** odtworzenie 1000 `COURIER_DELIVERED` z prawdziwymi timestampami z `events.db`, compare `dmin` przed/po fix. Zero tolerancji różnic > 0.1 min.
+
+4. **Deprecate `_parse()`:** usuwamy po sukcesie retestu. Zostawiamy tylko `_parse_aware_utc()` przemianowane na `_parse()`.
+
+**Risk jeśli nie naprawimy (motivacja priority):**
+- Każda przyszła reguła sla_tracker porównująca timestamp vs `now_utc` będzie crashować tą samą ścieżką (R8 hard? R9 monitoring? restaurant_violation notifier?) — już dziedziczylibyśmy ten koszt w F2.1c bez workaround.
+- Future developer piszący nowy check **reuse `_parse()`** na bazie "skoro SLA check go używa i działa" → duplicate tego samego bugu, kolejny hotfix.
+- `_parse_aware_utc()` jest **workaround, nie fix** — koszt utrzymania dwóch parserów z rozbudowanym docstringiem wyjaśniającym różnicę. Przy każdym cleanup refactorze "remove duplicate parser" kusi żeby usunąć jeden z nich.
+
+**Scope:** F2.1c lub krok #8. Workaround działa w F2.1b krok 6.1.

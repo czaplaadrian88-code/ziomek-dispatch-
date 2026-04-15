@@ -51,6 +51,57 @@ def _parse(s):
             return None
 
 
+def _parse_aware_utc(s):
+    """Parser zwracający ZAWSZE aware datetime w UTC (lub None).
+
+    Różnica vs _parse():
+      _parse()         — legacy parser używany przez SLA check ścieżkę
+                         (process(COURIER_DELIVERED)). Dla naive stringów
+                         `fromisoformat` sukces zwraca NAIVE datetime (bez tzinfo).
+                         SLA check działa z tym "niechcący poprawnie" bo robi
+                         `(d - p)` gdzie OBIE daty są naive — timedelta jest
+                         numerycznie correct, ale oba są w tej samej (nieznanej)
+                         tzinfo=None strefie.
+      _parse_aware_utc() — NOWY parser dla R6 krok #6.1. Naive string traktuje
+                         jako Warsaw-local (bo panel Rutcom emituje naive Warsaw)
+                         i konwertuje do UTC. Zawsze zwraca aware UTC datetime.
+
+    Dlaczego dwa parsery:
+      R6 `_check_bag_time_alerts` porównuje `now_utc` (aware UTC z datetime.now)
+      z `picked_up_at` z state. Mieszanka aware vs naive → TypeError. SLA check
+      ma **obie** naive więc nie crashuje. Nie możemy zastąpić _parse() przez
+      _parse_aware_utc() bez pełnej weryfikacji SLA path — istniejące
+      delivery_time_minutes liczone z (d - p) gdzie oba są naive Warsaw dają
+      POPRAWNY wynik numerycznie (różnica nie zależy od tzinfo gdy oba są w
+      tej samej strefie). Zmiana _parse → aware Warsaw → aware UTC zmienia
+      typ, co wymaga retestu SLA logowania + downstream consumerów sla_log.jsonl.
+
+    Pre-existing bug:
+      _parse() fallback `strptime.replace(tzinfo=timezone.utc)` ZAKŁADA że naive
+      jest UTC — to jest błędne, panel wysyła naive Warsaw. W praktyce ścieżka
+      strptime nie jest dotykana (fromisoformat sukces dla naive), więc bug
+      jest uśpiony. Udokumentowany w docs/TECH_DEBT.md sekcja "F2.1b step 6 —
+      sla_tracker._parse() naive→UTC timestamp bug". Fix → F2.1c lub krok #8
+      z pełnym retestem SLA delivery_time_minutes.
+
+    Returns:
+        datetime with tzinfo=timezone.utc, albo None dla corrupt/empty input.
+    """
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        try:
+            dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        from zoneinfo import ZoneInfo
+        dt = dt.replace(tzinfo=ZoneInfo("Europe/Warsaw"))
+    return dt.astimezone(timezone.utc)
+
+
 def process(evt):
     etype = evt["event_type"]
     oid = evt.get("order_id")
@@ -143,7 +194,7 @@ def _check_bag_time_alerts(now_utc: datetime) -> None:
                 _log.warning(f"R6 skip {oid}: picked_up_at missing")
                 continue
 
-            picked_dt = _parse(picked_ts)
+            picked_dt = _parse_aware_utc(picked_ts)
             if picked_dt is None:
                 _log.warning(f"R6 skip {oid}: picked_up_at unparseable: {picked_ts!r}")
                 continue
