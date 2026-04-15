@@ -685,3 +685,33 @@ fixes) + A/B test Ziomek vs current koordynator operation.
 - [ ] Re-run learning_analyzer rano na czystych danych
 - [ ] "ile zleceń" → sensowne dane gdy będzie daily counter w events.db
 - [ ] /tmp/gastro_stop → osobny task: check w shadow_dispatcher przed każdą propozycją
+
+---
+
+## F2.1b step 6 — sla_tracker._parse() naive→UTC timestamp bug
+
+**Lokalizacja:** `sla_tracker.py:_parse()` linie ~26-35
+**Odkryte:** 2026-04-15 podczas discovery kroku #6 (R6 BAG_TIME pre-warning)
+
+**Bug:** naive ISO timestamp `"YYYY-MM-DD HH:MM:SS"` dostaje `replace(tzinfo=timezone.utc)`, ale panel Rutcom emituje naive timestamps w Warsaw TZ, nie UTC.
+
+**Efekt:** `bag_time_min` może być przesunięty o offset Warsaw-UTC (+2h CEST / +1h CET). W praktyce: istniejący SLA violations check żyje z tym bugiem od miesięcy (prawdopodobnie większość timestampów w streamie ma explicit `Z` suffix, naive ścieżka rzadko aktywna). **R6 krok #6 świadomie dziedziczy ten sam bug przez reuse `_parse()`** — zachowanie error-consistent z istniejącym SLA check zamiast rozsynchronizowania w jednym pliku.
+
+**Fix plan (F2.1c lub krok #8 quick win):**
+1. Zweryfikować w orders_state.json sample timestampów picked_up_at:
+   ```python
+   python3 -c "
+   import json
+   s = json.load(open('/root/.openclaw/workspace/dispatch_state/orders_state.json'))
+   naive = [(k, o.get('picked_up_at')) for k, o in s.items()
+            if o.get('picked_up_at') and 'T' not in str(o.get('picked_up_at'))]
+   print(f'naive count: {len(naive)}')
+   for k, v in naive[:10]: print(' ', k, v)
+   "
+   ```
+2. Jeśli naive występuje → `_parse()` musi użyć `ZoneInfo('Europe/Warsaw')` dla naive
+3. Jeśli wszystko ma `Z`/`+offset` → fix kosmetyczny, zero impact
+
+**Scope:** F2.1c lub krok #8. Nie teraz, nie blokuje F2.1b.
+
+**Notka:** po weryfikacji że fix jest nontrivialny — czy istniejący SLA `dmin` w kroku #1 `process(COURIER_DELIVERED)` też korzysta z tego bugu? Tak. `sla_ok = dmin <= 35` może być systematycznie off. Warto sprawdzić jak często `_parse(naive)` faktycznie się wywołuje w prodzie vs `_parse(ISO)`.
