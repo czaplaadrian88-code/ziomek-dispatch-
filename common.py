@@ -180,3 +180,61 @@ def get_fallback_speed_kmh(dt_utc: datetime) -> float:
     """Zwraca prędkość fallback [km/h] dla danego momentu."""
     bucket = get_time_bucket(dt_utc)
     return FALLBACK_BASE_SPEEDS_KMH[bucket]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# F2.1 Decision Engine 3.0 — EXTENSIONS to Bartek Gold Standard
+# Dodane 2026-04-15. R1-R5 (F1.9) pozostają bez zmian.
+# R6-R9 to nowe reguły — hard rejects + soft penalties.
+# ═══════════════════════════════════════════════════════════════════
+
+# ─── R6 (H1): BAG_TIME termiczny — czas od T_KUR (gotowość w kuchni) do T_DOR ───
+# Kalibracja empiryczna z 743 delivered orderów (11-15.04.2026):
+# p50=15.1, p75=23.0, p90=30.9, p95=35.6, p99=44.3, max=80.5 min.
+# 35 min = p95 → hard cap obcina ogon 5.7% bez wpływu na mediana/p75.
+# 30 min = p90 → soft zone 30-35 łapie dodatkowe 5.9% orderów penalty.
+BAG_TIME_HARD_MAX_MIN = 35
+BAG_TIME_SOFT_MIN = 30
+BAG_TIME_PRE_WARNING_MIN = 30    # sla_tracker alert Telegramu (krok #6)
+BAG_TIME_SOFT_PENALTY_PER_MIN = 8
+
+# ─── R7 (H4): Long-haul isolation w peak hours ───
+# Placeholder — brak danych empirycznych na ride_distance w shadow_decisions.
+# Post-deploy monitoring: jeśli R7 trigger rate > 20% w peak 14-17, próg za niski.
+LONG_HAUL_DISTANCE_KM = 4.5
+LONG_HAUL_PEAK_HOURS_START = 14   # inclusive
+LONG_HAUL_PEAK_HOURS_END = 17     # inclusive
+
+# ─── R8 (S2): Pickup span czasowy (uzupełnia R5 przestrzenny 1.8km) ───
+# Placeholder — shadow_decisions nie loguje T_KUR per zlecenie w bagu.
+# Kalibracja post-deploy po 5-7 dniach obserwacji reject rate.
+PICKUP_SPAN_HARD_BUNDLE2_MIN = 15
+PICKUP_SPAN_HARD_BUNDLE3_MIN = 30
+PICKUP_SPAN_SOFT_START_MIN = 7
+PICKUP_SPAN_SOFT_PENALTY_PER_MIN = 3
+
+# ─── R9 (S1 + S3): Stopover tax + restaurant wait penalty ───
+# Soft-only (scoring penalties), zero hard reject.
+STOPOVER_PENALTY_MIN = 4          # realny overhead parkowanie + domofon
+STOPOVER_SCORE_PER_STOP = 8       # 4 min × 2 pts/min
+RESTAURANT_WAIT_SOFT_MIN = 5      # tolerancja czekania pod restauracją
+RESTAURANT_WAIT_PENALTY_PER_MIN = 6
+
+# ─── Auto-approve (feature-flagged, betonowo OFF do F2.1c) ───
+# AUTO_APPROVE_MIN_GAP — minimalna przewaga score best vs second_best_feasible
+# wymagana do auto-approve. Placeholder 10, kalibracja w F2.1c
+# po 2-3 tyg danych (n_shadow ≥ 1500 dla stabilnej dystrybucji gap).
+# Gdy tylko 1 feasible kandydat → gap = inf (auto-approve OK).
+# Score distribution z 578 shadow: p90=106.7, p95=111.9, p99=135.3.
+# Threshold 130 ≈ p98-p99 — top ~1-2% decyzji, conservative.
+AUTO_APPROVE_THRESHOLD = 130
+AUTO_APPROVE_MIN_GAP = 10
+AUTO_APPROVE_ENABLED = False
+
+# ─── A1/A2: Anomaly detection (flag off, implementacja w F2.1c) ───
+# Wymaga implementacji context.restaurant_prep_variance() i
+# context.courier_recent_delay() na bazie restaurant_meta.json / shadow_decisions.jsonl.
+RESTAURANT_PREP_VARIANCE_HARD_MIN = 15
+COURIER_RECENT_DELAY_HARD_MIN = 10
+COURIER_CIRCUIT_BREAK_PENALTY = 25
+ANOMALY_DETECTION_ENABLED = False
