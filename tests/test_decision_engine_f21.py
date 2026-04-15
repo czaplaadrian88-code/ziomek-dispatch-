@@ -408,6 +408,141 @@ def test_B11_courier_picked_up_reconcile_preserves_bag_time_alerted():
             os.unlink(test_path + ".lock")
 
 
+def test_B13_R9_wait_no_gps_integration():
+    """
+    INTEGRATION test — F2.1b step 4.1 fix empirical reproduction.
+
+    Rozszerzenie B12 (structural + formula) — B13 woła REAL dispatch_pipeline.assess_order
+    z fabricated fleet_snapshot zawierającym dwóch kurierów (no_gps + gps), order elastic
+    z pickup_ready_at 25 min naprzód. Weryfikuje end-to-end pipeline:
+      1. assess_order przechodzi bez crash
+      2. no_gps kurier dostaje bonus_r9_wait_pen == 0 (step 4.1 fix fires)
+      3. GPS kurier dostaje bonus_r9_wait_pen z else branch (raw drive_min OK)
+      4. Post-loop drive_min normalization (linia 458) — drive_min ~ prep_remaining
+
+    Bug milestone: order #466290 Chicago Pizza @ 2026-04-15T19:16:45 UTC,
+    Patryk 5506 no_gps, bonus_r9_wait_pen=-101.76 (final_score -0.53).
+    Fix step 4.1 commit b4844aa, rollback tag pre-F2.1b-step4-1.
+
+    Jeśli B13 fail:
+      1. Sprawdź step 4.1 w runtime: grep effective_drive_min dispatch_pipeline.py
+      2. Rollback: git reset --hard pre-F2.1b-step4-1 + systemctl restart dispatch-shadow
+      3. Diagnose: compare no_gps bonus_r9_wait_pen z #466290 historycznym (-101.76)
+
+    Test dopełnia B12 formula-level testowaniem pełnego pipeline — zamyka
+    empirical gap gdy evening volume prodowy zbyt niski dla naturalnej weryfikacji.
+    """
+    from types import SimpleNamespace
+    from dispatch_v2.dispatch_pipeline import assess_order
+
+    # Non-peak (12:00 Warsaw = 10:00 UTC) żeby R7 longhaul nie interferowało
+    now = datetime(2026, 4, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+    # Order elastic: pickup +25 min, drop 1.5km NE
+    order_event = {
+        "order_id": "B13_TEST",
+        "restaurant": "Test Restaurant B13",
+        "delivery_address": "Test delivery B13",
+        "pickup_coords": [53.133, 23.169],
+        "delivery_coords": [53.145, 23.185],
+        "pickup_at_warsaw": "2026-04-15T12:25:00+02:00",  # +25 min od now
+        "pickup_time_minutes": None,
+    }
+
+    # Fleet: 2 couriers, empty bag, shift 4h remaining
+    shift_end = now + timedelta(hours=4)
+    fleet_snapshot = {
+        "no_gps_c": SimpleNamespace(
+            courier_id="no_gps_c",
+            name="Test NoGPS",
+            pos=BIALYSTOK_CENTER,  # synthetic centrum (co robi courier_resolver dla no_gps)
+            pos_source="no_gps",
+            pos_age_min=None,
+            shift_end=shift_end,
+            shift_start_min=0,
+            bag=[],
+        ),
+        "gps_c": SimpleNamespace(
+            courier_id="gps_c",
+            name="Test GPS",
+            pos=(53.130, 23.165),  # ~500m SW od pickup
+            pos_source="gps",
+            pos_age_min=2.0,
+            shift_end=shift_end,
+            shift_start_min=0,
+            bag=[],
+        ),
+    }
+
+    # Real pipeline call
+    result = assess_order(order_event, fleet_snapshot, restaurant_meta=None, now=now)
+    candidates_by_cid = {c.courier_id: c for c in result.candidates}
+
+    # ─── SANITY ASSERTS (detect broken setup before business assertions) ───
+    assert result is not None, "assess_order zwrócił None — setup broken"
+    assert len(result.candidates) == 2, (
+        f"Expected 2 candidates, got {len(result.candidates)}. "
+        f"Setup broken — pickup_ready_at=None (parse fail)?"
+    )
+    assert "no_gps_c" in candidates_by_cid and "gps_c" in candidates_by_cid, (
+        f"Missing candidate in dict. Got: {list(candidates_by_cid.keys())}. "
+        f"Check fleet_snapshot setup."
+    )
+
+    no_gps_cand = candidates_by_cid["no_gps_c"]
+    gps_cand = candidates_by_cid["gps_c"]
+
+    assert no_gps_cand.metrics.get("bonus_r9_wait_pen") is not None, (
+        f"no_gps bonus_r9_wait_pen is None — R9 wait block didn't execute.\n"
+        f"Prawdopodobna przyczyna: pickup_ready_at = None "
+        f"(parse_panel_timestamp fail dla ISO format).\n"
+        f"Sprawdź: parse_panel_timestamp('2026-04-15T12:25:00+02:00') w common.py.\n"
+        f"Jeśli parse fail — zmień test na datetime object bezpośrednio zamiast string."
+    )
+
+    # ─── BUSINESS ASSERT 1: no_gps wait_pen == 0 (CRITICAL — step 4.1 fix) ───
+    no_gps_wp = no_gps_cand.metrics.get("bonus_r9_wait_pen")
+    assert no_gps_wp == 0 or no_gps_wp == 0.0, (
+        f"REGRESSION: no_gps courier bonus_r9_wait_pen == {no_gps_wp}, expected 0.\n"
+        f"Historical bug #466290 miał -101.76 przez synthetic BIALYSTOK_CENTER → "
+        f"drive_min z linii 285 był ~2-3 min zamiast realistic max(15, prep_remaining) "
+        f"fallback. Fix step 4.1 (commit b4844aa) dodał effective_drive_min branch.\n"
+        f"Jeśli ten test fail:\n"
+        f"  1. Sprawdź step 4.1 w runtime: grep effective_drive_min dispatch_pipeline.py\n"
+        f"  2. Rollback: git reset --hard pre-F2.1b-step4-1 && systemctl restart dispatch-shadow\n"
+        f"  3. Diagnose: compare buggy output z #466290 @ 2026-04-15T19:16:45 UTC"
+    )
+
+    # ─── BUSINESS ASSERT 2: GPS branch nie zepsuty (else branch raw drive_min) ───
+    gps_wp = gps_cand.metrics.get("bonus_r9_wait_pen")
+    assert gps_wp is not None, (
+        f"GPS courier bonus_r9_wait_pen is None — else branch not triggered."
+    )
+    assert gps_wp <= 0, f"GPS wait_pen should be ≤0 (penalty or zero), got {gps_wp}"
+
+    # ─── POLISH: post-loop drive_min normalization validation ───
+    no_gps_drive = no_gps_cand.metrics["drive_min"]
+    assert 20 <= no_gps_drive <= 30, (
+        f"no_gps drive_min = {no_gps_drive}, expected ~25 (prep_remaining). "
+        f"Post-loop normalization (linia 458) broken."
+    )
+
+    # ─── SCHEMA ASSERT 3: all 13 F2.1b fields present ───
+    required = [
+        "r6_max_bag_time_min", "r6_is_solo", "r6_bag_size",
+        "r7_ride_km", "r7_in_peak", "r7_is_longhaul",
+        "bonus_r6_soft_pen", "bonus_r9_stopover",
+        "bonus_r9_wait_pen", "bonus_penalty_sum",
+    ]
+    for k in required:
+        assert k in no_gps_cand.metrics, f"no_gps metrics missing {k}"
+        assert k in gps_cand.metrics, f"gps metrics missing {k}"
+
+    # R7 not in peak (12:00 Warsaw < 14:00 peak start)
+    assert no_gps_cand.metrics["r7_in_peak"] is False
+    assert gps_cand.metrics["r7_in_peak"] is False
+
+
 def test_B12_R9_wait_no_gps_courier_regression_guard():
     """
     REGRESSION GUARD — F2.1b step 4.1 fix.

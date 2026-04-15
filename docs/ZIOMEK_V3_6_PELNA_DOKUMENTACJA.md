@@ -603,8 +603,21 @@ Wersja doc zachowana jako V3.6 (nie V3.7) bo zmiana dotyczy warstwy reguł feasi
 
 ### Deployment timeline
 
-- **FAZA A:** 2026-04-15 12:56:04 UTC — `dispatch-sla-tracker` restart, **R6 pre-warning LIVE**
-- **FAZA B:** 2026-04-15 [TIMESTAMP_TBD] UTC — `dispatch-shadow` restart, **R6 hard + R7 + penalties live w runtime**
+- **FAZA A:** 2026-04-15 12:56:04 UTC — `dispatch-sla-tracker` restart, **R6 pre-warning LIVE** (step 6.1 `_parse_aware_utc` hotfix post FAZA A initial)
+
+**FAZA B deployment history** (3 restart waves, stopniowy rollout wykrył 3 retroactive hotfixe):
+
+- **Initial restart (partial schema 4/13 fields)**: 2026-04-15 18:34:24 UTC
+  - dispatch-shadow PID 1269384 start, step 4 penalties w runtime (bonus_penalty_sum present)
+  - Step 3 R6/R7 telemetry metrics missing w shadow_decisions.jsonl (serializer whitelist gap)
+- **Step 3.1 hotfix restart (serializer +9 R6/R7 keys)**: 2026-04-15 19:13:34 UTC
+  - dispatch-shadow PID 1272109 start, schema 13/13 complete
+  - Bug #466290 Chicago Pizza @ 19:16:45 UTC ujawnił R9 wait anomalia dla no_gps Patryk 5506 (-101.76)
+- **Step 4.1 hotfix restart (R9 wait effective_drive_min dla no_gps/pre_shift)**: 2026-04-15 20:19:55 UTC
+  - dispatch-shadow PID 1277022 start, **FAZA B COMPLETE** runtime state
+  - effective_drive_min replikuje post-loop normalization linia 450/465 dla synthetic pos
+
+**FAZA B COMPLETE:** 2026-04-15 20:19:55 UTC (step 4.1 = final runtime state, R6 hard + R7 longhaul peak + scoring penalties R6_soft/R9_stopover/R9_wait live w dispatch-shadow)
 
 ### Empirical milestones (observability step 0 live)
 
