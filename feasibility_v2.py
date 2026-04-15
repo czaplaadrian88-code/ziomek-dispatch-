@@ -10,17 +10,25 @@ Returns:
     verdict ∈ {"MAYBE", "NO"}
     plan = RoutePlanV2 or None (None only when rejected by a fast filter)
 """
+import logging
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import List, Tuple, Dict, Optional
 
 from dispatch_v2 import osrm_client
-from dispatch_v2.common import HAVERSINE_ROAD_FACTOR_BIALYSTOK, MAX_BAG_SANITY_CAP
+from dispatch_v2 import common as C
+from dispatch_v2.common import (
+    HAVERSINE_ROAD_FACTOR_BIALYSTOK,
+    MAX_BAG_SANITY_CAP,
+    WARSAW,
+)
 from dispatch_v2.route_simulator_v2 import (
     OrderSim,
     RoutePlanV2,
     simulate_bag_route_v2,
 )
+
+log = logging.getLogger(__name__)
 
 
 # Hard cap per D3 MAX_BAG_SANITY_CAP (=8). F1.9b: R3 dynamic cap został
@@ -113,6 +121,31 @@ def check_feasibility_v2(
     if len(bag) >= MAX_BAG_SIZE:
         return ("NO", f"bag_full ({len(bag)}/{MAX_BAG_SIZE})", metrics, None)
 
+    # R7 (F2.1b) — long-haul isolation w peak hours.
+    # Długa trasa (>4.5 km) NIE MOŻE być bundlowana w peak (14-17 Warsaw).
+    # Solo (bag pusty) zawsze OK — R7 dotyczy tylko bundli.
+    # Telemetry liczone ZAWSZE (nawet solo), reject warunkowy (bag+longhaul+peak).
+    if _valid(new_order.pickup_coords) and _valid(new_order.delivery_coords):
+        r7_ride_km = _road_km(new_order.pickup_coords, new_order.delivery_coords)
+        r7_warsaw_hour = now.astimezone(WARSAW).hour
+        r7_in_peak = (
+            C.LONG_HAUL_PEAK_HOURS_START
+            <= r7_warsaw_hour
+            <= C.LONG_HAUL_PEAK_HOURS_END
+        )
+        metrics["r7_ride_km"] = round(r7_ride_km, 2)
+        metrics["r7_warsaw_hour"] = r7_warsaw_hour
+        metrics["r7_in_peak"] = r7_in_peak
+        metrics["r7_is_longhaul"] = r7_ride_km > C.LONG_HAUL_DISTANCE_KM
+        metrics["r7_bag_size"] = len(bag)
+        if bag and r7_ride_km > C.LONG_HAUL_DISTANCE_KM and r7_in_peak:
+            return (
+                "NO",
+                f"R7_longhaul_peak ({r7_ride_km:.1f}km>{C.LONG_HAUL_DISTANCE_KM:.1f}, hour={r7_warsaw_hour})",
+                metrics,
+                None,
+            )
+
     # R1 spread outlier (hard block). R3 dynamic cap zsoftowany — liczymy
     # metryki do telemetrii (learning_log) ale NIE rejectujemy.
     if bag and _valid(new_order.delivery_coords):
@@ -195,6 +228,43 @@ def check_feasibility_v2(
         return (
             "NO",
             f"sla_violation ({worst['order_id']} +{worst['elapsed_min']}min, over by {worst['over_sla_by_min']})",
+            metrics,
+            plan,
+        )
+
+    # R6 (F2.1b) — BAG_TIME termiczny hard cap (C.BAG_TIME_HARD_MAX_MIN = 35 min).
+    # SLA check wyżej używa sla_minutes (35 solo / 45 bundla — Bartek Gold).
+    # R6 jest STRICTER dla bundli: chroni termicznie bez względu na SLA budżet.
+    # Działa też solo (Opcja A): jedzenie stygnie identycznie niezależnie od bag size.
+    # Reużywa plan.predicted_delivered_at + plan.pickup_at z istniejącego simulate.
+    r6_max_bag_time = 0.0
+    r6_worst_oid: Optional[str] = None
+    for o in list(bag) + [new_order]:
+        pred = plan.predicted_delivered_at.get(o.order_id)
+        if pred is None:
+            log.warning(f"R6 skip: brak predicted_delivered_at dla {o.order_id}")
+            continue
+        if o.order_id in plan.pickup_at:
+            pu = plan.pickup_at[o.order_id]
+        elif o.picked_up_at is not None:
+            pu = o.picked_up_at
+            if pu.tzinfo is None:
+                pu = pu.replace(tzinfo=timezone.utc)
+            pu = pu.astimezone(timezone.utc)
+        else:
+            pu = now
+        bag_time_min = (pred - pu).total_seconds() / 60.0
+        if bag_time_min > r6_max_bag_time:
+            r6_max_bag_time = bag_time_min
+            r6_worst_oid = o.order_id
+    metrics["r6_max_bag_time_min"] = round(r6_max_bag_time, 1)
+    metrics["r6_worst_oid"] = r6_worst_oid
+    metrics["r6_is_solo"] = len(bag) == 0
+    metrics["r6_bag_size"] = len(bag)
+    if r6_max_bag_time > C.BAG_TIME_HARD_MAX_MIN:
+        return (
+            "NO",
+            f"R6_bag_time_exceeded ({r6_worst_oid} {r6_max_bag_time:.1f}min>{C.BAG_TIME_HARD_MAX_MIN})",
             metrics,
             plan,
         )
