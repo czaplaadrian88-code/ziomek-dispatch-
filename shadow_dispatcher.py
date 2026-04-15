@@ -93,6 +93,8 @@ def _serialize_candidate(c) -> dict:
         "bundle_level2_dist": m.get("bundle_level2_dist"),
         "bundle_level3": m.get("bundle_level3"),
         "bundle_level3_dev": m.get("bundle_level3_dev"),
+        "bonus_l1": m.get("bonus_l1"),
+        "bonus_l2": m.get("bonus_l2"),
         "bonus_r4_raw": m.get("bonus_r4_raw"),
         "bonus_r4": m.get("bonus_r4"),
         "bundle_bonus": m.get("bundle_bonus"),
@@ -101,6 +103,11 @@ def _serialize_candidate(c) -> dict:
         "deliv_spread_km": m.get("deliv_spread_km"),
         "pickup_spread_km": m.get("pickup_spread_km"),
         "dynamic_bag_cap": m.get("dynamic_bag_cap"),
+        # F2.1b placeholders — wypełnione gdy R6-R9 wejdą do scoring.
+        "bonus_r6_soft_pen": m.get("bonus_r6_soft_pen"),
+        "bonus_r8_soft_pen": m.get("bonus_r8_soft_pen"),
+        "bonus_r9_stopover": m.get("bonus_r9_stopover"),
+        "bonus_r9_wait_pen": m.get("bonus_r9_wait_pen"),
         "plan": None if plan is None else {
             "sequence": plan.sequence,
             "total_duration_min": plan.total_duration_min,
@@ -166,6 +173,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "bundle_level2_dist": best_m.get("bundle_level2_dist"),
             "bundle_level3": best_m.get("bundle_level3"),
             "bundle_level3_dev": best_m.get("bundle_level3_dev"),
+            "bonus_l1": best_m.get("bonus_l1"),
+            "bonus_l2": best_m.get("bonus_l2"),
             "bonus_r4_raw": best_m.get("bonus_r4_raw"),
             "bonus_r4": best_m.get("bonus_r4"),
             "bundle_bonus": best_m.get("bundle_bonus"),
@@ -174,6 +183,11 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "deliv_spread_km": best_m.get("deliv_spread_km"),
             "pickup_spread_km": best_m.get("pickup_spread_km"),
             "dynamic_bag_cap": best_m.get("dynamic_bag_cap"),
+            # F2.1b placeholders — wypełnione gdy R6-R9 wejdą do scoring.
+            "bonus_r6_soft_pen": best_m.get("bonus_r6_soft_pen"),
+            "bonus_r8_soft_pen": best_m.get("bonus_r8_soft_pen"),
+            "bonus_r9_stopover": best_m.get("bonus_r9_stopover"),
+            "bonus_r9_wait_pen": best_m.get("bonus_r9_wait_pen"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

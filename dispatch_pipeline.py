@@ -359,12 +359,19 @@ def assess_order(
             "bundle_level2_dist": bundle_level2_dist,
             "bundle_level3": bundle_level3,
             "bundle_level3_dev": bundle_level3_dev,
+            "bonus_l1": round(bonus_l1, 2),
+            "bonus_l2": round(bonus_l2, 2),
             "bonus_r4_raw": round(bonus_r4_raw, 2),
             "bonus_r4": round(bonus_r4, 2),
             "bundle_bonus": round(bundle_bonus, 2),
             "availability_bonus": round(availability_bonus, 2),
             "free_at_min": round(free_at_min, 1),
             "sla_minutes_used": sla_minutes,
+            # F2.1b placeholders — wypełnione gdy R6-R9 wejdą do scoring.
+            "bonus_r6_soft_pen": None,
+            "bonus_r8_soft_pen": None,
+            "bonus_r9_stopover": None,
+            "bonus_r9_wait_pen": None,
         }
 
         candidates.append(Candidate(
