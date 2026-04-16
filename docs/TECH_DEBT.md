@@ -940,3 +940,26 @@ Sprint F2.2 (po zebraniu danych z R5=2.5 + reassignment fix).
 - _parse() primary path naive fix z retestem SLA
 - learning_analyzer per_bonus_layer (wymaga 50+ TAK/NIE)
 - AUTO_APPROVE flip
+
+## F2.1c sesja 6 — 2026-04-16
+
+### DONE
+- HOTFIX R8 (243c892): wyklucz picked_up z pra_list — historyczny T_KUR zawyżał pickup_span 80-128min → false rejects
+- SOLO fallback (ca4e8c3): R29 SKIP→PROPOSE solo (pusty bag, ignoruje R1/R5/R8) + KOORD gdy zero solo candidates
+  Zero SKIP od teraz — zawsze PROPOSE lub KOORD
+- Wave routing v2 (94dfba0): post_wave bonus 15/8 dla mid-wave kurierów
+- R5 1.8→2.5km (fb847b3)
+- panel_watcher reassignment detection (aabb5d3)
+
+### MONITORING
+- shadow_decisions.jsonl: solo_fallback=True records — ile solo propozycji?
+- wave_bonus > 0 records — czy wave routing działa?
+- KOORD (no_solo_candidates) — ile absolutnych fallbacków?
+
+### REMAINING → F2.2
+- Solo fallback scoring: teraz używa prostego (100 - dist*10) — wymaga pełnego score pipeline
+- Wave routing kalibracja POST_WAVE_FREE_MAX_MIN=15
+- _parse() primary path naive fix z retestem SLA
+- learning_analyzer per_bonus_layer (wymaga 50+ TAK/NIE)
+- AUTO_APPROVE flip
+- GPSLogger onboarding 7 kurierów
