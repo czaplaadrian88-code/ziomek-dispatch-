@@ -776,7 +776,7 @@ Sprint F2.1b Decision Engine 3.0 — **10 kroków** (step 0-7 committed + step 8
 
 ### 📋 F2.1c backlog (odroczone z F2.1b)
 
-- [ ] **R8 pickup_span czasowy** — wymaga T_KUR propagation w `_bag_dict_to_ordersim` + weryfikacji że panel_watcher zachowuje `pickup_at_warsaw` per-order w bag list kuriera. Placeholdery `common.py` + shadow_decisions `bonus_r8_soft_pen=null` już gotowe.
+- [x] **R8 pickup_span czasowy** — ✅ DONE F2.1c step 1 (16.04.2026). T_KUR propagation w `_bag_dict_to_ordersim` + hard cap 15/30 min (bundle=2/3) + soft penalty 7-15 min (-3/min). Tag: `pre-f21c-r8-complete`. Observability retroactive F2.1c step 2 (analogicznie do F2.1b step 3.1 serializer gap): `r8_pickup_span_min` dodany do shadow_dispatcher `_serialize_candidate` + inline best block.
 - [ ] **`_parse()` unified fix + test regresyjny SLA path** — aktualnie workaround `_parse_aware_utc` dla R6, legacy `_parse` dla SLA `delivery_time_minutes`. Pełny fix wymaga retestu 1000 COURIER_DELIVERED na przed/po compare `dmin`. Patrz sekcja "F2.1b step 6 — `_parse()` naive→UTC" wyżej.
 - [ ] **`AUTO_APPROVE_ENABLED` flip** — blocker: learning_log zdominowany przez `TIMEOUT_SUPERSEDED` (242/249 wpisów w pre-F21b oknie 38h). Wymaga refactor watchdog timeout logic + 200+ walidowanych decyzji + silent_agreement analyzer porównujący actual panel kurier vs proposed.
 - [ ] **`ANOMALY_DETECTION_ENABLED` flip** (A1 `restaurant_prep_variance` + A2 `courier_recent_delay`) — wymaga implementacji `context.*` metod bazujących na `restaurant_meta.json` + `shadow_decisions.jsonl`.
@@ -818,3 +818,31 @@ Sprint F2.1b Decision Engine 3.0 — **10 kroków** (step 0-7 committed + step 8
 ### KNOWN
 - pickup_at_warsaw None dla orderów bez deklarowanego czasu → r8_pickup_span_min=None (graceful)
 - R8 soft penalty kalibracja (PICKUP_SPAN_SOFT_START_MIN=7, PENALTY=3/min) — do weryfikacji empirycznej F2.2
+
+### F2.1c step 2 — R8 observability retroactive ✅ (16.04.2026)
+
+**Tag:** `pre-f21c-step2-complete`
+
+**Problem:** Analogicznie do F2.1b step 3.1 serializer gap. Po deploy F2.1c step 1 (R8 logic), audit wykrył że `shadow_dispatcher._serialize_candidate` (L106-121) + inline best serialization (L197-212) mają `bonus_r8_soft_pen` ale brakuje surowej metryki `r8_pickup_span_min`. Bez niej niemożliwy empirical monitoring ile spanów widzi system + learning_analyzer dostaje niepełne dane dla R8 calibration.
+
+**Fix:**
+- `shadow_dispatcher.py` L115 (miejsce A, _serialize_candidate): dodano `"r8_pickup_span_min": m.get("r8_pickup_span_min")` między R7 metrics a penalties
+- `shadow_dispatcher.py` L207 (miejsce B, inline best): identycznie z `best_m`
+- Komentarze inline updated
+
+**Docs sync (DEFERRED F2.1c → DONE):**
+- `ZIOMEK_V3_7_INSTRUKCJA.md` L174 (heading) + L359 (F2.1c priorytet #1)
+- `BARTEK_GOLD_STANDARD.md` L208 (tabela) + L254 (detail section)
+
+**Verification:**
+- `grep -n "DEFERRED F2.1c" docs/` → 0 matches (wszystko DONE)
+- `grep -n "r8_pickup_span_min" shadow_dispatcher.py` → 2 matches (A + B)
+- Post-restart dispatch-shadow: fresh PROPOSE records zawierają `r8_pickup_span_min`
+
+**Lesson (pattern dla F2.2+):** każda nowa metryka w `dispatch_pipeline` albo `feasibility_v2` wymaga checklist downstream consumers:
+1. Czy `shadow_dispatcher._serialize_candidate` ma klucz? (miejsce A)
+2. Czy inline best serialization ma klucz? (miejsce B)
+3. Czy `learning_analyzer` czyta nowy klucz? (F2.1c scope)
+4. Czy test suite pokrywa end-to-end path?
+
+Bez tej checklist pattern powtarza się: F2.1b step 3.1 (9 kluczy R6/R7) → F2.1c step 2 (1 klucz R8).

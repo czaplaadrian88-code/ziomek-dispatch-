@@ -205,7 +205,7 @@ Przy 1500-2000 orderów/tydz i Bartek bundled% 58% vs fleet 31%, różnica to ~2
 
 ## F2.1 Extensions — Decision Engine 3.0 (R6-R9)
 
-**Dodane:** 2026-04-15 w sprint F2.1b. Rozszerza Bartek Gold Standard (R1-R5) o cztery nowe reguły: R6 BAG_TIME termiczny, R7 long-haul peak isolation, R8 pickup span czasowy (DEFERRED F2.1c), R9 stopover + wait penalty.
+**Dodane:** 2026-04-15 w sprint F2.1b. Rozszerza Bartek Gold Standard (R1-R5) o cztery nowe reguły: R6 BAG_TIME termiczny, R7 long-haul peak isolation, R8 pickup span czasowy (DONE F2.1c 16.04.2026), R9 stopover + wait penalty.
 
 ### R6 — BAG_TIME termiczny (hard 35 + soft 30-35)
 
@@ -251,7 +251,7 @@ LONG_HAUL_PEAK_HOURS_END = 17     # inclusive
 - cel: 5-10% reject rate w peak hours (analogiczny do R1 current)
 - miara: `grep "R7_longhaul_peak" shadow_decisions.jsonl | wc -l` vs total peak orders
 
-### R8 — Pickup span czasowy (DEFERRED F2.1c)
+### R8 — Pickup span czasowy (DONE F2.1c, 16.04.2026)
 
 **Planowane:** max 15 min różnicy T_KUR między orderami w `bundle=2`, max 30 min dla `bundle=3`.
 

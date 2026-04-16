@@ -113,7 +113,9 @@ def _serialize_candidate(c) -> dict:
         "r7_in_peak": m.get("r7_in_peak"),
         "r7_is_longhaul": m.get("r7_is_longhaul"),
         "r7_bag_size": m.get("r7_bag_size"),
-        # F2.1b step 4 scoring penalties (R8 stays None — deferred F2.1c)
+        # F2.1c step 1 R8 pickup_span metric (raw span w minutach)
+        "r8_pickup_span_min": m.get("r8_pickup_span_min"),
+        # F2.1b step 4 scoring penalties + F2.1c R8 soft penalty
         "bonus_r6_soft_pen": m.get("bonus_r6_soft_pen"),
         "bonus_r8_soft_pen": m.get("bonus_r8_soft_pen"),
         "bonus_r9_stopover": m.get("bonus_r9_stopover"),
@@ -204,7 +206,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r7_in_peak": best_m.get("r7_in_peak"),
             "r7_is_longhaul": best_m.get("r7_is_longhaul"),
             "r7_bag_size": best_m.get("r7_bag_size"),
-            # F2.1b step 4 scoring penalties (R8 stays None — deferred F2.1c)
+            # F2.1c step 1 R8 pickup_span metric (raw span w minutach)
+            "r8_pickup_span_min": best_m.get("r8_pickup_span_min"),
+            # F2.1b step 4 scoring penalties + F2.1c R8 soft penalty
             "bonus_r6_soft_pen": best_m.get("bonus_r6_soft_pen"),
             "bonus_r8_soft_pen": best_m.get("bonus_r8_soft_pen"),
             "bonus_r9_stopover": best_m.get("bonus_r9_stopover"),
