@@ -871,3 +871,21 @@ Bez tej checklist pattern powtarza się: F2.1b step 3.1 (9 kluczy R6/R7) → F2.
 ### NEXT ACTION
 - GPSLogger onboarding: 1 kurier jako pilot (Gabriel lub najbardziej aktywny z 7)
 - Zbieraj TAK/NIE aktywnie przez tydzień (cel: 50+ decisions)
+
+## F2.1c sesja 3 — 2026-04-16
+
+### DONE
+- panel_watcher reassignment detection (commit aabb5d3)
+  - Bug: `was_assigned and is_assigned_now` nie był obsługiwany → stary courier_id w state
+  - Fix: elif blok z budżetem MAX_REASSIGN_PER_CYCLE=5 fetchów/cykl
+  - Emituje COURIER_ASSIGNED z source=panel_reassign
+  - Root cause: bag_size=0 dla kuriera z 2 orderami → "wolny" label błędny
+
+### MONITORING
+- journalctl -u dispatch-panel-watcher | grep REASSIGNED
+- Pierwsze REASSIGNED logi potwierdzą fix w akcji
+
+### REMAINING F2.1c → F2.2
+- _parse() primary path (fromisoformat naive→naive) — pełny fix z retestem SLA
+- learning_analyzer per_bonus_layer — wymaga 50+ human TAK/NIE
+- AUTO_APPROVE flip — wymaga per_bonus_layer
