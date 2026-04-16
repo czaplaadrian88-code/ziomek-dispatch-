@@ -108,6 +108,7 @@ def get_pickup_ready_at(
 
 def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     picked = parse_panel_timestamp(d.get("picked_up_at"))
+    pra = parse_panel_timestamp(d.get("pickup_at_warsaw"))  # F2.1c R8 T_KUR
     status = d.get("status", "assigned")
     pickup_c = d.get("pickup_coords") or (0.0, 0.0)
     deliv_c = d.get("delivery_coords") or (0.0, 0.0)
@@ -117,6 +118,7 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
         delivery_coords=tuple(deliv_c),
         picked_up_at=picked,
         status="picked_up" if status == "picked_up" else "assigned",
+        pickup_ready_at=pra,  # F2.1c R8 T_KUR propagation
     )
 
 
@@ -400,8 +402,13 @@ def assess_order(
             if wait_pred_min > C.RESTAURANT_WAIT_SOFT_MIN:
                 bonus_r9_wait_pen = -(wait_pred_min - C.RESTAURANT_WAIT_SOFT_MIN) * C.RESTAURANT_WAIT_PENALTY_PER_MIN
 
-        # Suma penalties (R6 None → 0). R8 placeholder None — nie wliczany.
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r9_stopover + bonus_r9_wait_pen
+        # Suma penalties (R6 None → 0). R8 F2.1c — wyliczany z r8_pickup_span_min.
+        _r8_span = metrics.get("r8_pickup_span_min") or 0
+        bonus_r8_soft_pen = (
+            -(_r8_span - C.PICKUP_SPAN_SOFT_START_MIN) * C.PICKUP_SPAN_SOFT_PENALTY_PER_MIN
+            if _r8_span > C.PICKUP_SPAN_SOFT_START_MIN else 0.0
+        )
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen
 
         final_score = score_result["total"] + bundle_bonus + availability_bonus + bonus_penalty_sum
 
@@ -434,7 +441,7 @@ def assess_order(
                 round(bonus_r6_soft_pen, 2)
                 if bonus_r6_soft_pen is not None else None
             ),
-            "bonus_r8_soft_pen": None,
+            "bonus_r8_soft_pen": round(bonus_r8_soft_pen, 2),
             "bonus_r9_stopover": round(bonus_r9_stopover, 2),
             "bonus_r9_wait_pen": round(bonus_r9_wait_pen, 2),
             "bonus_penalty_sum": round(bonus_penalty_sum, 2),

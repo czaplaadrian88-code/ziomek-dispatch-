@@ -947,6 +947,79 @@ def test_F10_smoke_feasibility_plan_metrics_integration():
 # RUNNER
 # ═══════════════════════════════════════════════════════════════════
 
+
+# ── R8 pickup_span tests (F2.1c) ─────────────────────────────────────────────
+
+def test_r8_hard_bundle2_reject():
+    """Bundle=2, span=20min > 15min hard cap → reject R8."""
+    now = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
+    t_base = datetime(2026, 4, 16, 12, 10, 0, tzinfo=timezone.utc)
+    t_late = datetime(2026, 4, 16, 12, 30, 0, tzinfo=timezone.utc)  # +20 min
+    bag_order = mk_order("111", pickup_ready_at=t_base)
+    new_order = mk_order("222", pickup_ready_at=t_late)
+    verdict, reason, metrics, _ = check_feasibility_v2(
+        courier_pos=(53.13, 23.16),
+        bag=[bag_order],
+        new_order=new_order,
+        now=now,
+    )
+    assert verdict == "NO", f"Oczekiwano NO, got {verdict}"
+    assert "R8_pickup_span" in reason, f"Oczekiwano R8 w reason, got: {reason}"
+    assert metrics.get("r8_pickup_span_min") == 20.0
+    return "OK"
+
+def test_r8_hard_bundle2_pass():
+    """Bundle=2, span=10min < 15min → pass R8."""
+    now = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
+    t_base = datetime(2026, 4, 16, 12, 10, 0, tzinfo=timezone.utc)
+    t_close = datetime(2026, 4, 16, 12, 20, 0, tzinfo=timezone.utc)  # +10 min
+    bag_order = mk_order("111", pickup_ready_at=t_base)
+    new_order = mk_order("222", pickup_ready_at=t_close)
+    verdict, reason, metrics, _ = check_feasibility_v2(
+        courier_pos=(53.13, 23.16),
+        bag=[bag_order],
+        new_order=new_order,
+        now=now,
+    )
+    assert "R8_pickup_span" not in reason, f"R8 nie powinno blokować, got: {reason}"
+    assert metrics.get("r8_pickup_span_min") == 10.0
+    return "OK"
+
+def test_r8_hard_bundle3_reject():
+    """Bundle=3, span=32min > 30min hard cap → reject R8."""
+    now = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
+    t1 = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
+    t2 = datetime(2026, 4, 16, 12, 15, 0, tzinfo=timezone.utc)
+    t3 = datetime(2026, 4, 16, 12, 32, 0, tzinfo=timezone.utc)  # span=32 min
+    bag = [mk_order("111", pickup_ready_at=t1), mk_order("222", pickup_ready_at=t2)]
+    new_order = mk_order("333", pickup_ready_at=t3)
+    verdict, reason, metrics, _ = check_feasibility_v2(
+        courier_pos=(53.13, 23.16),
+        bag=bag,
+        new_order=new_order,
+        now=now,
+    )
+    assert verdict == "NO", f"Oczekiwano NO, got {verdict}"
+    assert "R8_pickup_span" in reason, f"Oczekiwano R8 w reason, got: {reason}"
+    assert metrics.get("r8_pickup_span_min") == 32.0
+    return "OK"
+
+def test_r8_graceful_none():
+    """Brak pickup_ready_at → R8 pomijane, nie crash, metrics=None."""
+    now = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
+    bag_order = mk_order("111", pickup_ready_at=None)
+    new_order = mk_order("222", pickup_ready_at=None)
+    verdict, reason, metrics, _ = check_feasibility_v2(
+        courier_pos=(53.13, 23.16),
+        bag=[bag_order],
+        new_order=new_order,
+        now=now,
+    )
+    assert "R8_pickup_span" not in reason, f"R8 nie powinno blokować, got: {reason}"
+    assert metrics.get("r8_pickup_span_min") is None
+    return "OK"
+
+
 def _collect_tests():
     return sorted(
         [(name, fn) for name, fn in globals().items()

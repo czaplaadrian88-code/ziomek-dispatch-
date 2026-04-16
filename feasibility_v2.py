@@ -173,6 +173,29 @@ def check_feasibility_v2(
                 None,
             )
 
+    # R8 (F2.1c) — pickup_span hard cap (T_KUR spread w bagu).
+    if bag:
+        bag_size_after = len(bag) + 1
+        pra_list = [b.pickup_ready_at for b in bag if b.pickup_ready_at is not None]
+        if new_order.pickup_ready_at is not None:
+            pra_list.append(new_order.pickup_ready_at)
+        if len(pra_list) >= 2:
+            span_min = (max(pra_list) - min(pra_list)).total_seconds() / 60.0
+            metrics["r8_pickup_span_min"] = round(span_min, 1)
+            hard_cap = (
+                C.PICKUP_SPAN_HARD_BUNDLE3_MIN if bag_size_after >= 3
+                else C.PICKUP_SPAN_HARD_BUNDLE2_MIN
+            )
+            if span_min > hard_cap:
+                return (
+                    "NO",
+                    f"R8_pickup_span ({span_min:.1f}min>{hard_cap}min, bundle={bag_size_after})",
+                    metrics,
+                    None,
+                )
+        else:
+            metrics["r8_pickup_span_min"] = None  # graceful degradation
+
     pickup_dist_km = osrm_client.haversine(courier_pos, new_order.pickup_coords)
     metrics["pickup_dist_km"] = round(pickup_dist_km, 2)
     if pickup_dist_km > MAX_PICKUP_REACH_KM:
