@@ -1063,3 +1063,34 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# ── _parse() regression test (F2.1c step 3) ──────────────────────────────────
+
+def test_parse_naive_is_naive_documented_techdebt():
+    """_parse() fromisoformat naive string → zwraca naive datetime (znany techdebt F2.2).
+    SLA path działa poprawnie bo (delivered - picked) obie naive Warsaw → delta OK.
+    Pełny fix (naive→aware Warsaw→UTC) zaplanowany F2.2 z retestem SLA delivery_time_minutes.
+    """
+    from dispatch_v2.sla_tracker import _parse
+    result = _parse("2026-04-16 12:00:00")
+    assert result is not None, "_parse() zwróciło None"
+    # TECHDEBT: naive string zwraca naive datetime — dokumentujemy, nie fixujemy tu
+    assert result.tzinfo is None, "Oczekiwano naive (techdebt F2.2), fromisoformat nie konwertuje TZ"
+    assert result.hour == 12, f"Oczekiwano 12 (as-is), got {result.hour}"
+    return "OK"
+
+def test_parse_iso_aware_passthrough():
+    """_parse() fromisoformat path: aware string przechodzi bez zmian."""
+    from dispatch_v2.sla_tracker import _parse
+    result = _parse("2026-04-16T12:00:00+02:00")
+    assert result is not None
+    assert result.tzinfo is not None
+    return "OK"
+
+def test_parse_none_empty():
+    """_parse() zwraca None dla None/empty."""
+    from dispatch_v2.sla_tracker import _parse
+    assert _parse(None) is None
+    assert _parse("") is None
+    return "OK"

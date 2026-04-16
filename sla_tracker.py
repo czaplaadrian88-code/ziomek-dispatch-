@@ -40,15 +40,17 @@ def _handler(signum, frame):
 
 
 def _parse(s):
+    """Legacy parser — SLA path. Aware strings zwracają aware, naive zwracają naive.
+    TECHDEBT (F2.2): naive Warsaw string z fromisoformat zwraca naive datetime.
+    SLA (d-p) działa poprawnie bo obie strony naive w tej samej strefie.
+    Pełny fix primary path → F2.2 z retestem SLA delivery_time_minutes.
+    """
     if not s:
         return None
     try:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except Exception:
-        try:
-            return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        except Exception:
-            return None
+        return None
 
 
 def _parse_aware_utc(s):
