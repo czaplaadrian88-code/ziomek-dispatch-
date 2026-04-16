@@ -1009,3 +1009,17 @@ System nie milczy — zawsze PROPOSE lub KOORD do Telegram.
 - _parse() primary path naive fix z retestem SLA
 - GPSLogger onboarding 7 kurierów
 - ANOMALY_DETECTION_ENABLED
+
+## HOTFIX zombie orders — 2026-04-16 ~15:00
+
+### BUG
+MAX_RECONCILE_PER_CYCLE=10 nie nadążał przy szczycie → 42 zombie assigned orders
+→ Bartek bag=12, Adrian Cit bag=9 → false R1/R5/R8 rejects → monopol Szymona P
+
+### FIX
+- Force reconcile: 42 zombie → status=delivered
+- MAX_RECONCILE_PER_CYCLE: 10 → 25
+
+### F2.2 REQUIRED
+- Reconcile budżet powinien być dynamiczny (proporcjonalny do active orders)
+- Lub: osobny fast-reconcile loop dla orderów >60 min bez statusu change
