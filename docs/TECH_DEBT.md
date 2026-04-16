@@ -846,3 +846,28 @@ Sprint F2.1b Decision Engine 3.0 — **10 kroków** (step 0-7 committed + step 8
 4. Czy test suite pokrywa end-to-end path?
 
 Bez tej checklist pattern powtarza się: F2.1b step 3.1 (9 kluczy R6/R7) → F2.1c step 2 (1 klucz R8).
+
+## F2.1c sesja 2 — 2026-04-16
+
+### DONE
+- Step 3: _parse() dead code (strptime fallback) usunięty
+- _parse() docstring: techdebt primary path (naive→naive) udokumentowany → F2.2
+- 3 regression testy: test_parse_naive_is_naive_documented_techdebt, iso_aware_passthrough, none_empty
+- 47 testów PASS, commit daad541, tag pre-F2.1c-step3-complete
+- dispatch-sla-tracker restarted, active
+
+### LEARNING ANALYZER AUDIT (discovery C)
+- 420 rekordów (2.5 dnia), n=10 human decisions (TAK:8, NIE:2)
+- NIE semantyka: "pozostaje w puli" — nie "scoring zły", tylko "czekam na lepszą opcję"
+- 84% silent override = normalne przy braku GPS + koordynator też estymuje pozycję
+- AUTO_APPROVE: score≥98 precision=100% ale n=2 NIE → za mało. Wróć za tydzień przy 50+ TAK/NIE
+- per_bonus_layer: odsuń do F2.2 (n=10 human decisions bez wartości statystycznej)
+
+### REMAINING F2.1c → de facto F2.2
+- _parse() primary path (fromisoformat naive→naive) — pełny fix z retestem SLA delivery_time_minutes
+- learning_analyzer per_bonus_layer — wymaga 50+ human TAK/NIE
+- AUTO_APPROVE flip — wymaga per_bonus_layer
+
+### NEXT ACTION
+- GPSLogger onboarding: 1 kurier jako pilot (Gabriel lub najbardziej aktywny z 7)
+- Zbieraj TAK/NIE aktywnie przez tydzień (cel: 50+ decisions)
