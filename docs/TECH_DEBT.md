@@ -963,3 +963,26 @@ Sprint F2.2 (po zebraniu danych z R5=2.5 + reassignment fix).
 - learning_analyzer per_bonus_layer (wymaga 50+ TAK/NIE)
 - AUTO_APPROVE flip
 - GPSLogger onboarding 7 kurierów
+
+## F2.1c sesja 7 — 2026-04-16
+
+### DONE
+- best_effort verdict KOORD→PROPOSE (cea00e0) — Telegram widzi best_effort propozycje
+- SOLO fallback (ca4e8c3) — zero SKIP, zawsze PROPOSE lub KOORD
+- HOTFIX R8 (243c892) — wyklucz picked_up z pra_list
+- Wave routing v2 (94dfba0)
+- R5 1.8→2.5km (fb847b3)
+- panel_watcher reassignment (aabb5d3)
+
+### STAN F2.1c — KOMPLETNY
+Wszystkie zaplanowane sprinty F2.1c zrealizowane + 4 hotfixy produkcyjne.
+System nie milczy — zawsze PROPOSE lub KOORD do Telegram.
+
+### REMAINING → F2.2
+- best_effort w Telegram: oznaczyć flagą w wiadomości (wizualnie odróżnić od normalnej propozycji)
+- Solo fallback scoring: teraz prosty (100 - dist*10) → pełny score pipeline
+- Wave routing kalibracja POST_WAVE_FREE_MAX_MIN=15
+- _parse() primary path naive fix z retestem SLA
+- learning_analyzer per_bonus_layer (wymaga 50+ TAK/NIE)
+- AUTO_APPROVE flip
+- GPSLogger onboarding 7 kurierów
