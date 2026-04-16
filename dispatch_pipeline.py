@@ -270,21 +270,40 @@ def assess_order(
 
         bag_drop_coords = [b.delivery_coords for b in bag_sim]
         oldest = _oldest_in_bag_min(bag_sim, now)
+
+        # Fix 2: last_wave_pos — efektywna pozycja startowa do liczenia dystansu
+        # do NOWEGO pickupu. Po dostarczeniu bagu kurier będzie w delivery_coords
+        # ostatniego orderu z plan.sequence. Używane TYLKO dla km_to_pickup i
+        # S_dystans (scoring.road_km). R4/R9 route-deviation i R9 wait zostają
+        # z oryginalnym courier_pos (liczą trasę bagu, nie nowego punktu startu).
+        # Kurier bez baga → effective_start_pos == courier_pos (no-op).
+        effective_start_pos = tuple(courier_pos)
+        if bag_sim and plan is not None and plan.sequence:
+            _bag_by_oid = {o.order_id: o for o in bag_sim}
+            _bag_in_seq = [oid for oid in plan.sequence if oid in _bag_by_oid]
+            if _bag_in_seq:
+                effective_start_pos = tuple(_bag_by_oid[_bag_in_seq[-1]].delivery_coords)
+
+        # F1.7 fix: travel_min = plan-based (uwzględnia bag + waiting na pickup_ready),
+        # używane przez compute_assign_time. Display ETA jest osobne (drive_min).
+        # Fix 2: km_to_pickup liczone od effective_start_pos (end-of-wave dla bag).
+        km_to_pickup_haversine = haversine(effective_start_pos, pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+
+        # scoring.score_candidate: road_km przekazujemy jawnie (S_dystans użyje
+        # effective_start_pos → pickup), a bearing (S_kierunek) nadal z courier_pos.
         score_result = scoring.score_candidate(
             courier_pos=tuple(courier_pos),
             restaurant_pos=pickup_coords,
             bag_drop_coords=bag_drop_coords or None,
             bag_size=len(bag_sim),
             oldest_in_bag_min=oldest,
+            road_km=km_to_pickup_haversine,
         )
 
-        # F1.7 fix: travel_min = plan-based (uwzględnia bag + waiting na pickup_ready),
-        # używane przez compute_assign_time. Display ETA jest osobne (drive_min).
-        km_to_pickup_haversine = haversine(tuple(courier_pos), pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
-
-        # drive_min: czysty czas jazdy z pozycji kuriera → restauracja (haversine).
-        # Per-candidate distinct (różne dystansy = różne ETA display).
-        drive_min = (km_to_pickup_haversine / fleet_speed_kmh) * 60.0 if fleet_speed_kmh > 0 else 0.0
+        # drive_min: pure drive od COURIER_POS (nie effective_start_pos) do restauracji.
+        # R9 wait invariant + eta_drive display — trzyma oryginalną semantykę.
+        _drive_km_from_courier = haversine(tuple(courier_pos), pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+        drive_min = (_drive_km_from_courier / fleet_speed_kmh) * 60.0 if fleet_speed_kmh > 0 else 0.0
         drive_arrival_utc = now + timedelta(minutes=drive_min)
 
         eta_source = "haversine"
@@ -323,29 +342,49 @@ def assess_order(
         bonus_r4 = bonus_r4_raw * 1.5  # R4 weight per Bartek Gold Standard
         bundle_bonus = bonus_l1 + bonus_l2 + bonus_r4
 
-        # Availability bonus: kiedy kurier będzie wolny po obecnym bagu (BEZ nowego ordera).
-        # Liczone z plan.predicted_delivered_at[last_bag_oid_in_seq] (Opcja B).
-        # Bag pusty → free_at_min=0 → bonus +10 (już wolny).
+        # Timing gap bonus: dopasowanie free_at (kurier wolny) do pickup_ready
+        # (jedzenie gotowe). Zastępuje availability_bonus.
+        #   gap = free_at_min - time_to_pickup_ready
+        #   |gap| ≤  5  → +25  (idealne dopasowanie)
+        #   |gap| ≤ 10  → +15  (dobre)
+        #   |gap| ≤ 15  → +5   (akceptowalne)
+        #   gap  >  15  → -3/min za każdą minutę >15 (kurier się spóźni)
+        #   gap  < -15  → -2/min za każdą minutę <-15 (restauracja czeka)
+        # pickup_ready_at=None → time_to_pickup_ready = travel_min (zakładamy
+        # gotowość gdy kurier dotrze) → gap neutralny.
+        # Bag pusty → free_at_min = 0 (już wolny).
         free_at_min = 0.0
+        free_at_dt: Optional[datetime] = None
         if bag_sim and plan is not None and plan.predicted_delivered_at:
             bag_oids_set = {o.order_id for o in bag_sim}
             bag_in_seq = [oid for oid in (plan.sequence or []) if oid in bag_oids_set]
             if bag_in_seq:
                 last_bag_oid = bag_in_seq[-1]
-                free_at_dt = plan.predicted_delivered_at.get(last_bag_oid)
-                if free_at_dt is not None:
-                    if free_at_dt.tzinfo is None:
-                        free_at_dt = free_at_dt.replace(tzinfo=timezone.utc)
-                    free_at_min = max(0.0, (free_at_dt - now).total_seconds() / 60.0)
+                _free_at_dt = plan.predicted_delivered_at.get(last_bag_oid)
+                if _free_at_dt is not None:
+                    if _free_at_dt.tzinfo is None:
+                        _free_at_dt = _free_at_dt.replace(tzinfo=timezone.utc)
+                    free_at_dt = _free_at_dt
+                    free_at_min = max(0.0, (_free_at_dt - now).total_seconds() / 60.0)
 
-        if free_at_min <= 0:
-            availability_bonus = 10.0
-        elif free_at_min < 15:
-            availability_bonus = 8.0
-        elif free_at_min < 30:
-            availability_bonus = 5.0
+        if pickup_ready_at is not None:
+            _pra_utc = pickup_ready_at if pickup_ready_at.tzinfo else pickup_ready_at.replace(tzinfo=timezone.utc)
+            time_to_pickup_ready = max(0.0, (_pra_utc - now).total_seconds() / 60.0)
         else:
-            availability_bonus = 0.0
+            time_to_pickup_ready = travel_min
+
+        gap_min = free_at_min - time_to_pickup_ready
+        _abs_gap = abs(gap_min)
+        if _abs_gap <= 5:
+            timing_gap_bonus = 25.0
+        elif _abs_gap <= 10:
+            timing_gap_bonus = 15.0
+        elif _abs_gap <= 15:
+            timing_gap_bonus = 5.0
+        elif gap_min > 15:
+            timing_gap_bonus = -3.0 * (gap_min - 15)
+        else:  # gap_min < -15
+            timing_gap_bonus = -2.0 * (-gap_min - 15)
 
         # F2.1b penalties — R6 soft BAG_TIME + R9 stopover + R9 wait.
         # R8 soft pozostaje None (placeholder do F2.1c — brak T_KUR propagation).
@@ -450,7 +489,7 @@ def assess_order(
             pos_source_effective = "post_wave"
             wave_bonus = C.POST_WAVE_BONUS_SLOW
 
-        final_score = score_result["total"] + bundle_bonus + availability_bonus + wave_bonus + bonus_penalty_sum
+        final_score = score_result["total"] + bundle_bonus + timing_gap_bonus + wave_bonus + bonus_penalty_sum
 
         enriched_metrics = {
             **metrics,
@@ -473,7 +512,10 @@ def assess_order(
             "bonus_r4_raw": round(bonus_r4_raw, 2),
             "bonus_r4": round(bonus_r4, 2),
             "bundle_bonus": round(bundle_bonus, 2),
-            "availability_bonus": round(availability_bonus, 2),
+            "timing_gap_bonus": round(timing_gap_bonus, 2),
+            "timing_gap_min": round(gap_min, 1),
+            "time_to_pickup_ready_min": round(time_to_pickup_ready, 1),
+            "free_at_utc": free_at_dt.isoformat() if free_at_dt is not None else None,
             "wave_bonus": round(wave_bonus, 2),
             "pos_source": pos_source_effective,
             "free_at_min": round(free_at_min, 1),
