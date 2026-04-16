@@ -795,3 +795,26 @@ Sprint F2.1b Decision Engine 3.0 — **10 kroków** (step 0-7 committed + step 8
 - **2 empirical prod milestones** (`bonus_l1=25.0` @ #466122 + R6 alert @ #466154)
 - **~1100 linii** kodu/testów/docs dodanych
 - **Zero rollback**, **zero downtime serwisów** przez cały sprint
+
+## F2.1c — 2026-04-16
+
+### DONE
+- R8 pickup_span T_KUR propagation (dispatch_pipeline.py: _bag_dict_to_ordersim)
+- R8 hard cap feasibility_v2.py: 15 min bundle=2, 30 min bundle=3
+- R8 soft penalty wliczone do bonus_penalty_sum i final_score
+- 4 testy R8 (test_r8_hard_bundle2_reject/pass, test_r8_hard_bundle3_reject, test_r8_graceful_none)
+- 44/44 testów PASS, zero regresji
+- commit fa4920d, tag pre-f21c-r8-complete
+
+### REMAINING F2.1c
+- #1: _parse() unified fix + regression test SLA path (techdebt z F2.1b step 6.1)
+- #2: learning_analyzer.compute_agreement_per_bonus_layer() (wymaga 200+ decyzji ~3-5 dni)
+- #3: AUTO_APPROVE_ENABLED flip (wymaga learning_analyzer)
+
+### MONITORING
+- r8_pickup_span_min, bonus_r8_soft_pen w shadow_decisions.jsonl od lunchu 11:00 Warsaw
+- Weryfikacja po 14:00 Warsaw: ile R8 rejectów, rozkład span_min
+
+### KNOWN
+- pickup_at_warsaw None dla orderów bez deklarowanego czasu → r8_pickup_span_min=None (graceful)
+- R8 soft penalty kalibracja (PICKUP_SPAN_SOFT_START_MIN=7, PENALTY=3/min) — do weryfikacji empirycznej F2.2

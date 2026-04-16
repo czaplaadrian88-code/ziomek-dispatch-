@@ -436,7 +436,7 @@ def assess_order(
             "availability_bonus": round(availability_bonus, 2),
             "free_at_min": round(free_at_min, 1),
             "sla_minutes_used": sla_minutes,
-            # F2.1b penalties (step 4). R8 None do F2.1c (T_KUR propagation).
+            # F2.1b/F2.1c penalties. R8 aktywne od F2.1c (T_KUR propagation step 1-4).
             "bonus_r6_soft_pen": (
                 round(bonus_r6_soft_pen, 2)
                 if bonus_r6_soft_pen is not None else None
