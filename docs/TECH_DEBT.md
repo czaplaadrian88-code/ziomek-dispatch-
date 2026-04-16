@@ -1023,3 +1023,30 @@ MAX_RECONCILE_PER_CYCLE=10 nie nadążał przy szczycie → 42 zombie assigned o
 ### F2.2 REQUIRED
 - Reconcile budżet powinien być dynamiczny (proporcjonalny do active orders)
 - Lub: osobny fast-reconcile loop dla orderów >60 min bez statusu change
+
+## F2.1c sesja 8 — 2026-04-16 ~16:00
+
+### DONE
+- R7 wyłączony (ccba0de): LONG_HAUL=99km — 4.5km odrzucało 8/10 kurierów dla normalnych dostaw Białystok
+- Zombie orders hotfix: MAX_RECONCILE 10→25 + force reconcile 42 zombie orders
+- Root cause monopolu Szymona P znaleziony i naprawiony
+
+### R7 HISTORIA
+R7 (longhaul peak isolation) miało sens koncepcyjnie ale próg 4.5km był absurdalny dla Białystoku.
+Kurier może robić 4 dowozy na tej samej ulicy na drugim końcu miasta.
+Przywrócić tylko jeśli dane pokażą realny problem z długimi trasami w szczycie — i tylko z empirycznym progiem.
+
+### ZOMBIE ORDERS — LEKCJA
+Force reconcile po samym wieku (>90 min) bez weryfikacji panelu = zbyt agresywne.
+F2.2: reconcile musi fetch_order_details z panelu przed oznaczeniem jako delivered.
+Dynamiczny budżet reconcile (proporcjonalny do active orders).
+
+### STAN SYSTEMU 16:00
+- R1/R5/R8 aktywne (R5=2.5km, R8=15/30min)
+- R7 wyłączony
+- R6 aktywny (35 min hard cap)
+- R9 aktywny (stopover/wait)
+- Wave routing aktywny (post_wave bonus 15/8)
+- SOLO fallback aktywny (zero SKIP)
+- best_effort → PROPOSE (Telegram zawsze widzi)
+- Reply feedback aktywny (REPLY_OVERRIDE)
