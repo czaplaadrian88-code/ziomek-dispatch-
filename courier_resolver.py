@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from dispatch_v2.common import setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC
+from dispatch_v2.common import setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, RYNEK_KOSCUSZKI
 from dispatch_v2 import state_machine
 
 _log = setup_logger("courier_resolver", "/root/.openclaw/workspace/scripts/logs/courier_resolver.log")
@@ -254,6 +254,17 @@ def build_fleet_snapshot(
         #    assigned -> pickup_coords (kurier jedzie odebrac)
         #    Iteracja malejaco: jesli najnowszy broken -> probuj kolejny
         active_bag_orders = [o for o in orders if o.get("status") in ("picked_up", "assigned")]
+
+        # 2b. POST_WAVE: brak GPS + wszystkie ordery picked_up (zero assigned)
+        #     Kurier jest w trakcie dostawy fali — zaraz wraca do centrum.
+        #     Pozycja referencyjna = Rynek Kościuszki (centrum Białystoku).
+        if active_bag_orders and all(
+            o.get("status") == "picked_up" for o in active_bag_orders
+        ):
+            cs.pos = RYNEK_KOSCUSZKI
+            cs.pos_source = "post_wave"
+            fleet[kid] = cs
+            continue
         if active_bag_orders:
             sorted_bag = sorted(active_bag_orders, key=_bag_sort_key, reverse=True)
             resolved = False

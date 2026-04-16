@@ -410,7 +410,15 @@ def assess_order(
         )
         bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen
 
-        final_score = score_result["total"] + bundle_bonus + availability_bonus + bonus_penalty_sum
+        # Wave bonus (F2.1c): post_wave kurier zaraz wraca do centrum
+        wave_bonus = 0.0
+        if getattr(cs, "pos_source", None) == "post_wave":
+            if free_at_min <= 20:
+                wave_bonus = C.POST_WAVE_BONUS_FAST
+            elif free_at_min <= 30:
+                wave_bonus = C.POST_WAVE_BONUS_SLOW
+
+        final_score = score_result["total"] + bundle_bonus + availability_bonus + wave_bonus + bonus_penalty_sum
 
         enriched_metrics = {
             **metrics,
@@ -434,6 +442,7 @@ def assess_order(
             "bonus_r4": round(bonus_r4, 2),
             "bundle_bonus": round(bundle_bonus, 2),
             "availability_bonus": round(availability_bonus, 2),
+            "wave_bonus": round(wave_bonus, 2),
             "free_at_min": round(free_at_min, 1),
             "sla_minutes_used": sla_minutes,
             # F2.1b/F2.1c penalties. R8 aktywne od F2.1c (T_KUR propagation step 1-4).

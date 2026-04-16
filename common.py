@@ -220,6 +220,13 @@ STOPOVER_SCORE_PER_STOP = 8       # 4 min × 2 pts/min
 RESTAURANT_WAIT_SOFT_MIN = 5      # tolerancja czekania pod restauracją
 RESTAURANT_WAIT_PENALTY_PER_MIN = 6
 
+# === WAVE ROUTING (F2.1c) ===
+# Rynek Kościuszki — punkt referencyjny powrotu kuriera po fali dostawczej
+RYNEK_KOSCUSZKI = (53.1324, 23.1489)
+POST_WAVE_RETURN_BUFFER_MIN = 5   # bufor min po ostatniej dostawie → kurier na Rynku
+POST_WAVE_BONUS_FAST = 15.0       # free_at_min ≤ 20 min
+POST_WAVE_BONUS_SLOW = 8.0        # free_at_min ≤ 30 min
+
 # ─── Auto-approve (feature-flagged, betonowo OFF do F2.1c) ───
 # AUTO_APPROVE_MIN_GAP — minimalna przewaga score best vs second_best_feasible
 # wymagana do auto-approve. Placeholder 10, kalibracja w F2.1c
