@@ -259,11 +259,42 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _log.warning(f"fetch for assigned {zid}: {e}")
                 stats["errors"] += 1
 
+        # Reassignment: kurier zmieniony na already-assigned order (F2.1c)
+        elif was_assigned and is_assigned_now and reassign_checked < MAX_REASSIGN_PER_CYCLE:
+            state_courier = state_order.get("courier_id", "")
+            try:
+                raw = fetch_order_details(zid, csrf)
+                stats["fetched_details"] += 1
+                reassign_checked += 1
+                panel_courier = str(raw.get("id_kurier") or "") if raw else ""
+                if panel_courier and panel_courier != state_courier and raw.get("id_kurier") != KOORDYNATOR_ID:
+                    ev = emit(
+                        "COURIER_ASSIGNED",
+                        order_id=zid,
+                        courier_id=panel_courier,
+                        payload={"source": "panel_reassign"},
+                        event_id=f"{zid}_COURIER_ASSIGNED_{panel_courier}_reassign",
+                    )
+                    if ev:
+                        stats["assigned"] += 1
+                        update_from_event({
+                            "event_type": "COURIER_ASSIGNED",
+                            "order_id": zid,
+                            "courier_id": panel_courier,
+                            "payload": {"source": "panel_reassign"},
+                        })
+                        _log.info(f"REASSIGNED {zid} {state_courier} -> {panel_courier}")
+            except Exception as e:
+                _log.warning(f"fetch for reassign {zid}: {e}")
+                stats["errors"] += 1
+
     # ================== RECONCILE STATUS ==================
     # Dla orderow ktore state widzi jako assigned/picked_up, a panel widzi jako closed
     # (bez data-idkurier w bloku HTML = status 7/8/9) - fetch details i emit event.
     # Budzet 10 fetchow na cykl (10 * 200ms = 2s) zeby nie wysycic panelu.
     closed = parsed.get("closed_ids", set())
+    MAX_REASSIGN_PER_CYCLE = 5
+    reassign_checked = 0
     MAX_RECONCILE_PER_CYCLE = 10
     reconciled = 0
     for zid, sorder in list(current_state.items()):
