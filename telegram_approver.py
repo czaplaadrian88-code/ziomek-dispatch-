@@ -799,6 +799,76 @@ async def handle_message(state: dict, msg: dict) -> None:
         )
         return
 
+    # REPLY FEEDBACK (F2.1c): Adrian odpowiada na propozycję Ziomka
+    # Format: "Gabriel 40" / "Michał 20min" / "Bartek 14:30" / "Bartek"
+    reply_to = msg.get("reply_to_message") or {}
+    reply_msg_id = reply_to.get("message_id")
+    if reply_msg_id:
+        matched_oid = None
+        matched_rec = None
+        for p_oid, p_rec in list(state["pending"].items()):
+            if p_rec.get("message_id") == reply_msg_id:
+                matched_oid = p_oid
+                matched_rec = p_rec
+                break
+        if matched_oid and matched_rec:
+            import re as _re
+            time_min = None
+            courier_text = text.strip()
+            # Format HH:MM
+            t_match = _re.search(r"(\d{1,2}):(\d{2})", courier_text)
+            if t_match:
+                now_w = datetime.now(WARSAW)
+                h, m = int(t_match.group(1)), int(t_match.group(2))
+                target = now_w.replace(hour=h, minute=m, second=0, microsecond=0)
+                time_min = max(1, int((target - now_w).total_seconds() / 60))
+                courier_text = courier_text[:t_match.start()].strip()
+            # Format Xmin lub X min
+            if time_min is None:
+                m_match = _re.search(r"(\d+)\s*min", courier_text, _re.IGNORECASE)
+                if m_match:
+                    time_min = int(m_match.group(1))
+                    courier_text = courier_text[:m_match.start()].strip()
+            # Sama liczba na końcu: "Gabriel 40"
+            if time_min is None:
+                n_match = _re.search(r"\s+(\d+)$", courier_text)
+                if n_match:
+                    time_min = int(n_match.group(1))
+                    courier_text = courier_text[:n_match.start()].strip()
+            # Default: samo imię = 15 min
+            if time_min is None:
+                time_min = 15
+            courier_name = courier_text.strip() or None
+            try:
+                ok, assign_msg = await asyncio.to_thread(
+                    run_gastro_assign, matched_oid, courier_name, time_min, False
+                )
+                confirm = (
+                    f"✅ Przypisano {courier_name or '?'} za {time_min} min (#{matched_oid})"
+                    if ok else
+                    f"⚠️ Błąd przypisania {courier_name} #{matched_oid}: {assign_msg[:60]}"
+                )
+            except Exception as e:
+                confirm = f"❌ Błąd: {e}"
+                ok = False
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {"chat_id": state["admin_id"], "text": confirm},
+            )
+            dr = matched_rec.get("decision_record") or {}
+            append_learning(state["learning_log_path"], {
+                "ts": now_iso(),
+                "order_id": matched_oid,
+                "action": "REPLY_OVERRIDE",
+                "ok": ok,
+                "feedback": f"reply: {text[:80]}",
+                "decision": dr,
+            })
+            state["pending"].pop(matched_oid, None)
+            save_pending(state["pending_path"], state["pending"])
+            _log.info(f"REPLY_OVERRIDE oid={matched_oid} courier={courier_name} time={time_min} ok={ok}")
+            return
+
     # Nieznana wiadomość — loguj from_id (zbieramy user_id Bartka)
     _log.info(f"unhandled msg from={from_id} text={text[:80]!r}")
 
