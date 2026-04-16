@@ -47,7 +47,7 @@ R1_MAX_DELIV_SPREAD_KM = 8.0
 # Kept in metrics so we can observe what R3 WOULD have rejected.
 R3_DYNAMIC_MAX = [(5.0, 5), (8.0, 4), (float("inf"), 3)]
 # R5: mixed-restaurant pickup spread — p100 Bartek = 1.79 km.
-R5_MAX_MIXED_PICKUP_SPREAD_KM = 1.8
+R5_MAX_MIXED_PICKUP_SPREAD_KM = 2.5  # F2.1c: poluzowane z 1.8 (p100 Bartek) → 2.5 (akceptowalny mixed pickup spread)
 
 
 def _road_km(a, b) -> float:
