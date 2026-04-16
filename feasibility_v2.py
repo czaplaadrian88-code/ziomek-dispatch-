@@ -154,24 +154,18 @@ def check_feasibility_v2(
         metrics["dynamic_bag_cap"] = _dynamic_bag_cap(spread_km)
         metrics["r3_soft_would_block"] = bag_after > metrics["dynamic_bag_cap"]
         if spread_km > R1_MAX_DELIV_SPREAD_KM:
-            return (
-                "NO",
-                f"R1_spread_outlier ({spread_km:.1f}km>{R1_MAX_DELIV_SPREAD_KM:.1f})",
-                metrics,
-                None,
-            )
+            metrics["r1_violation_km"] = round(spread_km - R1_MAX_DELIV_SPREAD_KM, 2)
+        else:
+            metrics["r1_violation_km"] = 0.0
 
     # R5 mixed-restaurant pickup spread — same restaurant → spread=0 (no fire).
     if bag and _valid(new_order.pickup_coords):
         pickup_spread_km = _max_pickup_spread_from_bag(bag, new_order.pickup_coords)
         metrics["pickup_spread_km"] = round(pickup_spread_km, 2)
         if pickup_spread_km > R5_MAX_MIXED_PICKUP_SPREAD_KM:
-            return (
-                "NO",
-                f"R5_mixed_rest_pickup ({pickup_spread_km:.1f}km>{R5_MAX_MIXED_PICKUP_SPREAD_KM:.1f})",
-                metrics,
-                None,
-            )
+            metrics["r5_violation_km"] = round(pickup_spread_km - R5_MAX_MIXED_PICKUP_SPREAD_KM, 2)
+        else:
+            metrics["r5_violation_km"] = 0.0
 
     # R8 (F2.1c) — pickup_span hard cap (T_KUR spread w bagu).
     if bag:
@@ -187,12 +181,9 @@ def check_feasibility_v2(
                 else C.PICKUP_SPAN_HARD_BUNDLE2_MIN
             )
             if span_min > hard_cap:
-                return (
-                    "NO",
-                    f"R8_pickup_span ({span_min:.1f}min>{hard_cap}min, bundle={bag_size_after})",
-                    metrics,
-                    None,
-                )
+                metrics["r8_violation_min"] = round(span_min - hard_cap, 2)
+            else:
+                metrics["r8_violation_min"] = 0.0
         else:
             metrics["r8_pickup_span_min"] = None  # graceful degradation
 

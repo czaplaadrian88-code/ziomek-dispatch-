@@ -402,13 +402,34 @@ def assess_order(
             if wait_pred_min > C.RESTAURANT_WAIT_SOFT_MIN:
                 bonus_r9_wait_pen = -(wait_pred_min - C.RESTAURANT_WAIT_SOFT_MIN) * C.RESTAURANT_WAIT_PENALTY_PER_MIN
 
-        # Suma penalties (R6 None → 0). R8 F2.1c — wyliczany z r8_pickup_span_min.
+        # Wczytaj rule_weights (adaptive penalties R1/R5/R8)
+        try:
+            import json as _json
+            _rw_path = "/root/.openclaw/workspace/dispatch_state/rule_weights.json"
+            with open(_rw_path) as _f:
+                _rw = _json.load(_f)
+        except Exception:
+            _rw = {}
+
+        # R1 soft penalty (delivery spread violation)
+        _r1_viol = metrics.get("r1_violation_km") or 0.0
+        bonus_r1_soft_pen = _r1_viol * _rw.get("R1_spread_per_km", -8.0) if _r1_viol > 0 else 0.0
+
+        # R5 soft penalty (mixed pickup spread violation)
+        _r5_viol = metrics.get("r5_violation_km") or 0.0
+        bonus_r5_soft_pen = _r5_viol * _rw.get("R5_pickup_per_km", -6.0) if _r5_viol > 0 else 0.0
+
+        # R8 soft penalty (pickup span — oryginalna + violation)
         _r8_span = metrics.get("r8_pickup_span_min") or 0
         bonus_r8_soft_pen = (
             -(_r8_span - C.PICKUP_SPAN_SOFT_START_MIN) * C.PICKUP_SPAN_SOFT_PENALTY_PER_MIN
             if _r8_span > C.PICKUP_SPAN_SOFT_START_MIN else 0.0
         )
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen
+        _r8_viol = metrics.get("r8_violation_min") or 0.0
+        bonus_r8_soft_pen += _r8_viol * _rw.get("R8_span_per_min", -1.5) if _r8_viol > 0 else 0.0
+
+        # Suma penalties
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen
 
         # Post-wave override (F2.1c): brak GPS + wszystkie picked_up + kończy ≤15 min
         # Kurier zaraz wraca do centrum → bonus scoring
@@ -462,7 +483,12 @@ def assess_order(
                 round(bonus_r6_soft_pen, 2)
                 if bonus_r6_soft_pen is not None else None
             ),
+            "bonus_r1_soft_pen": round(bonus_r1_soft_pen, 2),
+            "bonus_r5_soft_pen": round(bonus_r5_soft_pen, 2),
             "bonus_r8_soft_pen": round(bonus_r8_soft_pen, 2),
+            "r1_violation_km": metrics.get("r1_violation_km", 0.0),
+            "r5_violation_km": metrics.get("r5_violation_km", 0.0),
+            "r8_violation_min": metrics.get("r8_violation_min", 0.0),
             "bonus_r9_stopover": round(bonus_r9_stopover, 2),
             "bonus_r9_wait_pen": round(bonus_r9_wait_pen, 2),
             "bonus_penalty_sum": round(bonus_penalty_sum, 2),

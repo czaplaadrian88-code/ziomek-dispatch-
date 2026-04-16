@@ -124,8 +124,9 @@ def test_A2_R1_delivery_spread_over_8km_reject():
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.132, 23.168), bag=[o1], new_order=o2, now=_fixed_now_offpeak()
     )
-    assert verdict == "NO"
-    assert "R1_spread_outlier" in reason
+    # F2.2: R1 soft — nie blokuje, ale SLA/route może odrzucić niezależnie
+    assert "R1_spread_outlier" not in reason, f"R1 nie powinno hard-reject: {reason}"
+    assert metrics.get("r1_violation_km", 0) > 0
     assert metrics["deliv_spread_km"] > 8.0
 
 
@@ -165,8 +166,8 @@ def test_A5_R5_pickup_spread_over_1_8km_reject():
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=_fixed_now_offpeak()
     )
-    assert verdict == "NO"
-    assert "R5_mixed_rest_pickup" in reason
+    assert verdict == "MAYBE"  # F2.2: R5 soft penalty (nie hard reject)
+    assert metrics.get("r5_violation_km", 0) > 0
 
 
 def test_A6_bag_size_cap_8_hard_reject():
@@ -748,8 +749,8 @@ def test_E1_cross_town_delivery_spread_reject():
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=_fixed_now_offpeak()
     )
-    assert verdict == "NO"
-    assert "R1_spread_outlier" in reason
+    assert "R1_spread_outlier" not in reason  # F2.2: R1 soft
+    assert metrics.get("r1_violation_km", 0) > 0
 
 
 def test_E2_mixed_pickups_4km_spread_reject():
@@ -759,8 +760,8 @@ def test_E2_mixed_pickups_4km_spread_reject():
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=_fixed_now_offpeak()
     )
-    assert verdict == "NO"
-    assert "R5_mixed_rest_pickup" in reason
+    assert "R5_mixed_rest_pickup" not in reason  # F2.2: R5 soft
+    assert metrics.get("r5_violation_km", 0) > 0
 
 
 def test_E3_long_haul_bundle_peak_rejected():
@@ -802,9 +803,9 @@ def test_E3_long_haul_bundle_peak_rejected():
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=_fixed_now_peak()
     )
-    assert verdict == "NO"
-    assert ("R7" in reason) or ("R1" in reason), \
-        f"Expected R7 or R1 reject (see E3 docstring), got: {reason}"
+    # F2.2: R7 disabled + R1 soft → nie ma hard reject od tych reguł
+    assert "R7_longhaul_peak" not in reason, f"R7 disabled: {reason}"
+    assert "R1_spread_outlier" not in reason, f"R1 soft: {reason}"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -963,8 +964,8 @@ def test_r8_hard_bundle2_reject():
         new_order=new_order,
         now=now,
     )
-    assert verdict == "NO", f"Oczekiwano NO, got {verdict}"
-    assert "R8_pickup_span" in reason, f"Oczekiwano R8 w reason, got: {reason}"
+    assert verdict == "MAYBE", f"Oczekiwano MAYBE (soft), got {verdict}"  # F2.2
+    assert metrics.get("r8_violation_min", 0) > 0, "Oczekiwano r8_violation_min > 0"
     assert metrics.get("r8_pickup_span_min") == 20.0
     return "OK"
 
@@ -999,8 +1000,8 @@ def test_r8_hard_bundle3_reject():
         new_order=new_order,
         now=now,
     )
-    assert verdict == "NO", f"Oczekiwano NO, got {verdict}"
-    assert "R8_pickup_span" in reason, f"Oczekiwano R8 w reason, got: {reason}"
+    assert verdict == "MAYBE", f"Oczekiwano MAYBE (soft), got {verdict}"  # F2.2
+    assert metrics.get("r8_violation_min", 0) > 0, "Oczekiwano r8_violation_min > 0"
     assert metrics.get("r8_pickup_span_min") == 32.0
     return "OK"
 
