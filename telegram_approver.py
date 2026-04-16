@@ -249,19 +249,40 @@ def format_proposal(decision: dict) -> str:
     return "\n".join(lines)
 
 
-def build_keyboard(order_id: str) -> dict:
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "✅ TAK", "callback_data": f"TAK:{order_id}"},
-                {"text": "❌ NIE", "callback_data": f"NIE:{order_id}"},
-            ],
-            [
-                {"text": "🔄 INNY", "callback_data": f"INNY:{order_id}"},
-                {"text": "👤 KOORD", "callback_data": f"KOORD:{order_id}"},
-            ],
-        ],
-    }
+def build_keyboard(order_id: str, candidates: Optional[list] = None) -> dict:
+    """Inline keyboard z przyciskami per-kandydat (F2.4).
+
+    Rząd 1: do 3 przycisków ✅ {Imię} {tmin}min — callback ASSIGN:{oid}:{cid}:{tmin}.
+        tmin = round(travel_min) + 2, clamp [5, 60] (zgodnie z gastro_assign).
+        Pusty jeśli candidates is None/[] lub brak valid courier_id.
+    Rząd 2: INNY + KOORD. NIE usunięte — brak decyzji = auto-timeout (5 min).
+    """
+    rows = []
+    row1 = []
+    for c in (candidates or [])[:3]:
+        if not c:
+            continue
+        cid = str(c.get("courier_id") or "")
+        if not cid:
+            continue
+        name = name_lookup(cid, c.get("name"))
+        tm_raw = c.get("travel_min") or 0.0
+        try:
+            tm_raw = float(tm_raw)
+        except (TypeError, ValueError):
+            tm_raw = 0.0
+        time_min = max(5, min(60, int(round(tm_raw)) + 2))
+        row1.append({
+            "text": f"✅ {name} {time_min}min",
+            "callback_data": f"ASSIGN:{order_id}:{cid}:{time_min}",
+        })
+    if row1:
+        rows.append(row1)
+    rows.append([
+        {"text": "🔄 INNY", "callback_data": f"INNY:{order_id}"},
+        {"text": "👤 KOORD", "callback_data": f"KOORD:{order_id}"},
+    ])
+    return {"inline_keyboard": rows}
 
 
 # ---- pending state ----
@@ -324,6 +345,69 @@ def _prep_minutes_remaining(decision: dict) -> Optional[float]:
         return None
     delta = (ready - datetime.now(timezone.utc)).total_seconds() / 60.0
     return max(0.0, delta)
+
+
+def _parse_courier_time(text: str, allow_name_only: bool = False) -> Optional[tuple]:
+    """Parse free-text "Imię [HH:MM | Xmin | N]" → (courier_name, time_min).
+
+    Returns None jeśli tekst nie wygląda jak komenda assign:
+      - brak imienia
+      - (gdy not allow_name_only) brak czasu — samo imię nie wystarczy
+      - czas poza zakresem [1, 60] (poza możliwościami gastro_assign)
+
+    Używane w dwóch kontekstach:
+      - REPLY do propozycji (allow_name_only=True): domyślnie 15 min gdy sam Imię
+      - Free-text bez Reply (allow_name_only=False): wymagaj explicite czasu
+        żeby uniknąć false-positive (typowa wiadomość "Dzień dobry" nie trafi).
+    """
+    import re as _re
+    if not text or not text.strip():
+        return None
+    s = text.strip()
+    time_min = None
+    courier_text = s
+    time_source = None  # "hhmm" | "xmin" | "trailing" | "default"
+
+    # HH:MM → minuty do tej godziny (Warsaw). Eksplicit → NIE podlega guard [1,60]
+    # (np. "Bartek 14:30" przy 12:00 = 150 min — legit).
+    t_match = _re.search(r"(\d{1,2}):(\d{2})", courier_text)
+    if t_match:
+        now_w = datetime.now(WARSAW)
+        h, m = int(t_match.group(1)), int(t_match.group(2))
+        target = now_w.replace(hour=h, minute=m, second=0, microsecond=0)
+        time_min = max(1, int((target - now_w).total_seconds() / 60))
+        courier_text = courier_text[:t_match.start()].strip()
+        time_source = "hhmm"
+
+    # Xmin / X min — eksplicit "min" suffix
+    if time_min is None:
+        m_match = _re.search(r"(\d+)\s*min", courier_text, _re.IGNORECASE)
+        if m_match:
+            time_min = int(m_match.group(1))
+            courier_text = courier_text[:m_match.start()].strip()
+            time_source = "xmin"
+
+    # Trailing number: "Gabriel 40" — ambiguous, wymaga guard
+    if time_min is None:
+        n_match = _re.search(r"\s+(\d+)$", courier_text)
+        if n_match:
+            time_min = int(n_match.group(1))
+            courier_text = courier_text[:n_match.start()].strip()
+            time_source = "trailing"
+
+    courier_name = courier_text.strip() or None
+    if not courier_name:
+        return None
+    if time_min is None:
+        if not allow_name_only:
+            return None
+        time_min = 15  # default dla REPLY context
+        time_source = "default"
+    # Guard anti-false-positive: tylko dla trailing/xmin/default (ambiguous inputs).
+    # HH:MM nie ograniczamy — user explicit podał godzinę (trust the human).
+    if time_source != "hhmm" and (time_min < 1 or time_min > 60):
+        return None
+    return (courier_name, time_min)
 
 
 def compute_assign_time(decision: dict) -> int:
@@ -419,7 +503,8 @@ async def proposal_sender(state: dict) -> None:
         if not oid or oid in state["pending"]:
             continue
         text = format_proposal(rec)
-        kbd = build_keyboard(oid)
+        top_candidates = [rec.get("best")] + list((rec.get("alternatives") or []))[:2]
+        kbd = build_keyboard(oid, candidates=top_candidates)
         r = await asyncio.to_thread(
             tg_request, state["token"], "sendMessage",
             {
@@ -812,33 +897,13 @@ async def handle_message(state: dict, msg: dict) -> None:
                 matched_rec = p_rec
                 break
         if matched_oid and matched_rec:
-            import re as _re
-            time_min = None
-            courier_text = text.strip()
-            # Format HH:MM
-            t_match = _re.search(r"(\d{1,2}):(\d{2})", courier_text)
-            if t_match:
-                now_w = datetime.now(WARSAW)
-                h, m = int(t_match.group(1)), int(t_match.group(2))
-                target = now_w.replace(hour=h, minute=m, second=0, microsecond=0)
-                time_min = max(1, int((target - now_w).total_seconds() / 60))
-                courier_text = courier_text[:t_match.start()].strip()
-            # Format Xmin lub X min
-            if time_min is None:
-                m_match = _re.search(r"(\d+)\s*min", courier_text, _re.IGNORECASE)
-                if m_match:
-                    time_min = int(m_match.group(1))
-                    courier_text = courier_text[:m_match.start()].strip()
-            # Sama liczba na końcu: "Gabriel 40"
-            if time_min is None:
-                n_match = _re.search(r"\s+(\d+)$", courier_text)
-                if n_match:
-                    time_min = int(n_match.group(1))
-                    courier_text = courier_text[:n_match.start()].strip()
-            # Default: samo imię = 15 min
-            if time_min is None:
-                time_min = 15
-            courier_name = courier_text.strip() or None
+            # REPLY context: samo imię OK (domyślnie 15 min).
+            parsed = _parse_courier_time(text, allow_name_only=True)
+            if parsed is None:
+                # Nie wygląda jak "Imię [czas]" — ignoruj Reply (nie spamuj gastro_assign)
+                _log.info(f"REPLY_OVERRIDE skip oid={matched_oid}: text unparseable {text[:60]!r}")
+                return
+            courier_name, time_min = parsed
             try:
                 ok, assign_msg = await asyncio.to_thread(
                     run_gastro_assign, matched_oid, courier_name, time_min, False
@@ -869,6 +934,54 @@ async def handle_message(state: dict, msg: dict) -> None:
             _log.info(f"REPLY_OVERRIDE oid={matched_oid} courier={courier_name} time={time_min} ok={ok}")
             return
 
+    # Free-text bez Reply → najnowszy pending proposal (F2.4 Task #6).
+    # Gdy wiadomość nie jest Reply i nie pasuje do komendy — spróbuj sparsować
+    # jako "Imię [czas]" i przypisz do najnowszego pending (max sent_at).
+    # allow_name_only=False: wymaga explicite czasu żeby uniknąć false-positive
+    # (typowe wiadomości bez cyfr ignorowane).
+    parsed = _parse_courier_time(text, allow_name_only=False)
+    if parsed is not None and state["pending"]:
+        courier_name, time_min = parsed
+        # Wybierz najnowszy pending (max sent_at). Format ISO8601 → leksykograficzne
+        # porównanie OK (stała strefa, padding).
+        latest_oid = max(
+            state["pending"].keys(),
+            key=lambda k: state["pending"][k].get("sent_at", ""),
+        )
+        latest_rec = state["pending"][latest_oid]
+        try:
+            ok, assign_msg = await asyncio.to_thread(
+                run_gastro_assign, latest_oid, courier_name, time_min, False
+            )
+            confirm = (
+                f"✅ Przypisano {courier_name} za {time_min} min (#{latest_oid} — najnowszy pending)"
+                if ok else
+                f"⚠️ Błąd przypisania {courier_name} #{latest_oid}: {assign_msg[:60]}"
+            )
+        except Exception as e:
+            confirm = f"❌ Błąd: {e}"
+            ok = False
+        await asyncio.to_thread(
+            tg_request, state["token"], "sendMessage",
+            {"chat_id": state["admin_id"], "text": confirm},
+        )
+        dr = latest_rec.get("decision_record") or {}
+        append_learning(state["learning_log_path"], {
+            "ts": now_iso(),
+            "order_id": latest_oid,
+            "action": "REPLY_OVERRIDE",
+            "ok": ok,
+            "feedback": f"free_text(latest): {text[:80]}",
+            "decision": dr,
+        })
+        state["pending"].pop(latest_oid, None)
+        save_pending(state["pending_path"], state["pending"])
+        _log.info(
+            f"REPLY_OVERRIDE (free-text) oid={latest_oid} courier={courier_name} "
+            f"time={time_min} ok={ok}"
+        )
+        return
+
     # Nieznana wiadomość — loguj from_id (zbieramy user_id Bartka)
     _log.info(f"unhandled msg from={from_id} text={text[:80]!r}")
 
@@ -885,6 +998,24 @@ async def handle_message(state: dict, msg: dict) -> None:
 
 
 async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
+    # ASSIGN callback format: "ASSIGN:{oid}:{courier_id}:{time_min}" → po split(":",1)
+    # w updates_poller zmienna `oid` zawiera "466700:207:15". Rozdzielamy na części
+    # PRZED state["pending"].get(oid), żeby lookup używał bare order_id.
+    assign_cid: Optional[str] = None
+    assign_time_min: Optional[int] = None
+    if action == "ASSIGN":
+        parts = oid.split(":")
+        if len(parts) == 3:
+            oid = parts[0]
+            assign_cid = parts[1]
+            try:
+                assign_time_min = int(parts[2])
+            except (TypeError, ValueError):
+                assign_time_min = None
+        else:
+            # malformed — keep oid as-is, will fall to "unknown" branch
+            pass
+
     # Security: weryfikacja chat_id + logowanie from_id (F2.2)
     cb_chat_id = str(((cb.get("message") or {}).get("chat") or {}).get("id", ""))
     cb_from_id = str((cb.get("from") or {}).get("id", ""))
@@ -915,10 +1046,32 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
     courier_name = name_lookup(best.get("courier_id"), best.get("name"))
 
     ok = False
+    action_for_log = action  # dla learning_log (ASSIGN → ASSIGN_DIRECT)
     if action == "TAK":
         time_min = compute_assign_time(rec)
         ok, msg = await asyncio.to_thread(run_gastro_assign, oid, courier_name, time_min, False)
         feedback = f"✅ {courier_name} ({time_min}m)" if ok else f"❌ assign: {msg[:80]}"
+    elif action == "ASSIGN":
+        # Per-candidate przycisk (F2.4). Lookup name z best+alternatives.
+        if assign_cid is None or assign_time_min is None:
+            ok, feedback = False, "❌ malformed ASSIGN callback"
+        else:
+            alts = rec.get("alternatives") or []
+            all_cands = [best] + list(alts)
+            match = next(
+                (c for c in all_cands if c and str(c.get("courier_id")) == str(assign_cid)),
+                None,
+            )
+            match_name = match.get("name") if match else None
+            assign_name = name_lookup(assign_cid, match_name)
+            ok, msg = await asyncio.to_thread(
+                run_gastro_assign, oid, assign_name, assign_time_min, False
+            )
+            feedback = (
+                f"✅ {assign_name} ({assign_time_min}m)"
+                if ok else f"❌ assign: {msg[:80]}"
+            )
+            action_for_log = "ASSIGN_DIRECT"
     elif action == "NIE":
         ok, feedback = True, "⏭ pozostaje w puli"
     elif action == "INNY":
@@ -944,17 +1097,22 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
         },
     )
 
-    append_learning(state["learning_log_path"], {
+    log_rec = {
         "ts": now_iso(),
         "order_id": oid,
-        "action": action,
+        "action": action_for_log,
         "ok": ok,
         "feedback": feedback,
         "decision": rec,
-    })
+    }
+    if action == "ASSIGN" and assign_cid is not None:
+        log_rec["chosen_courier_id"] = str(assign_cid)
+        log_rec["assign_time_min"] = assign_time_min
+        log_rec["proposed_courier_id"] = str((best or {}).get("courier_id") or "")
+    append_learning(state["learning_log_path"], log_rec)
     state["pending"].pop(oid, None)
     save_pending(state["pending_path"], state["pending"])
-    _log.info(f"CB {action} oid={oid} → {feedback}")
+    _log.info(f"CB {action_for_log} oid={oid} → {feedback}")
 
 
 async def watchdog(state: dict) -> None:
