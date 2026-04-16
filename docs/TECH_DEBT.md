@@ -912,3 +912,31 @@ Sprint F2.2 (po zebraniu danych z R5=2.5 + reassignment fix).
 - _parse() primary path naive fix z retestem SLA
 - learning_analyzer per_bonus_layer (wymaga 50+ TAK/NIE)
 - AUTO_APPROVE flip
+
+## F2.1c sesja 5 — 2026-04-16
+
+### DONE
+- Wave routing v2 (94dfba0): post_wave detection w dispatch_pipeline
+  - Warunek: all_picked_up + pos_source != gps + free_at_min <= 15 → wave_bonus=15
+  - Warunek: all_picked_up + pos_source != gps + free_at_min <= 30 → wave_bonus=8
+  - Stałe: RYNEK_KOSCUSZKI=(53.1324,23.1489), POST_WAVE_FREE_MAX_MIN=15
+  - Logika w pipeline (nie resolver) — ma dostęp do free_at_min
+  - 44/44 testy PASS
+- R5 pickup spread 1.8→2.5km (fb847b3) — 27% więcej bundle candidates
+- panel_watcher reassignment detection (aabb5d3)
+- Insight z analizy Bartka O (49 orderów, 24 fale, 10.04.2026):
+  Kurier nakłada fale — ma kolejną gotową zanim skończy poprzednią.
+  Ciągłe 4/4, gapy między falami 8-28 min (lub ujemne = overlap).
+  Punkt powrotu = Rynek Kościuszki (centrum Białystoku).
+
+### MONITORING wave routing
+- shadow_decisions.jsonl: wave_bonus > 0 records po lunchu
+- Czy post_wave kurierzy dostają więcej propozycji?
+- False positives: kurier daleko od centrum ale dostaje Rynek → monitoruj
+
+### REMAINING → F2.2
+- Wave routing kalibracja (POST_WAVE_FREE_MAX_MIN=15 empiryczny — może wymagać korekty)
+- SOLO fallback gdy no_candidates (zamiast SKIP → KOORD z best solo option)
+- _parse() primary path naive fix z retestem SLA
+- learning_analyzer per_bonus_layer (wymaga 50+ TAK/NIE)
+- AUTO_APPROVE flip
