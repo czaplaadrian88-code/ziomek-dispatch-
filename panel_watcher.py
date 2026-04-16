@@ -295,7 +295,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     closed = parsed.get("closed_ids", set())
     MAX_REASSIGN_PER_CYCLE = 5
     reassign_checked = 0
-    MAX_RECONCILE_PER_CYCLE = 10
+    MAX_RECONCILE_PER_CYCLE = 25  # F2.1c: zwiększone z 10 (zombie backlog)
     reconciled = 0
     for zid, sorder in list(current_state.items()):
         if reconciled >= MAX_RECONCILE_PER_CYCLE:
