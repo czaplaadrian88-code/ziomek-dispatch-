@@ -74,6 +74,68 @@ def _signal_handler(signum, frame):
     _running = False
 
 
+# ---- PANEL_OVERRIDE detection (F2.3) ----
+# Gdy panel przypisuje kuriera do orderu który był w pending_proposals (Ziomek
+# wysłał propozycję), ale wybrany panel_courier_id ≠ proposed_courier_id →
+# rejestrujemy jako PANEL_OVERRIDE (sygnał "koordynator ma inne zdanie").
+_PENDING_PROPOSALS_PATH = "/root/.openclaw/workspace/dispatch_state/pending_proposals.json"
+_LEARNING_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl"
+
+
+def _check_panel_override(order_id: str, panel_courier_id: str, source: str) -> None:
+    """Jeśli order_id był w pending_proposals i kurier panelu różny od propozycji
+    Ziomka — zapisz PANEL_OVERRIDE do learning_log.jsonl.
+
+    source: 'panel_initial' | 'panel_diff' | 'panel_reassign' (telemetria).
+    Wywoływane TYLKO gdy emit COURIER_ASSIGNED faktycznie wyemitowało event
+    (non-duplicate) — per-cycle idempotent. Żadne błędy I/O nie propagują do
+    callera (panel_watcher zdrowie ma priorytet nad telemetrią).
+    """
+    import json
+    try:
+        with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
+            pending = json.load(f)
+    except FileNotFoundError:
+        return
+    except Exception as e:
+        _log.warning(f"PANEL_OVERRIDE read pending fail: {e}")
+        return
+
+    rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
+    if not rec:
+        return
+
+    dr = rec.get("decision_record") or {}
+    best = dr.get("best") or {}
+    proposed_courier_id = str(best.get("courier_id") or "")
+    proposed_score = best.get("score")
+
+    if not proposed_courier_id or proposed_courier_id == str(panel_courier_id):
+        return
+
+    override_rec = {
+        "ts": now_iso(),
+        "order_id": str(order_id),
+        "action": "PANEL_OVERRIDE",
+        "proposed_courier_id": proposed_courier_id,
+        "proposed_score": proposed_score,
+        "actual_courier_id": str(panel_courier_id),
+        "panel_source": source,
+        "decision": dr,
+    }
+    try:
+        with open(_LEARNING_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(override_rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        _log.warning(f"PANEL_OVERRIDE write learning_log fail oid={order_id}: {e}")
+        return
+
+    _log.info(
+        f"PANEL_OVERRIDE oid={order_id} proposed={proposed_courier_id} "
+        f"(score={proposed_score}) actual={panel_courier_id} src={source}"
+    )
+
+
 def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     """Porownuje stan panel vs orders_state, emituje eventy.
     Zwraca statystyki tego cyklu."""
@@ -181,6 +243,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "courier_id": courier_id,
                     "payload": {"source": "panel_initial"},
                 })
+                _check_panel_override(zid, courier_id, "panel_initial")
 
     # 2. ZMIANY: ID znane w state, sprawdz czy cos sie zmienilo
     for zid, state_order in list(current_state.items()):
@@ -255,6 +318,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             "payload": {"source": "panel_diff"},
                         })
                         _log.info(f"ASSIGNED {zid} -> {courier_id}")
+                        _check_panel_override(zid, courier_id, "panel_diff")
             except Exception as e:
                 _log.warning(f"fetch for assigned {zid}: {e}")
                 stats["errors"] += 1
@@ -284,6 +348,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             "payload": {"source": "panel_reassign"},
                         })
                         _log.info(f"REASSIGNED {zid} {state_courier} -> {panel_courier}")
+                        _check_panel_override(zid, panel_courier, "panel_reassign")
             except Exception as e:
                 _log.warning(f"fetch for reassign {zid}: {e}")
                 stats["errors"] += 1
