@@ -410,13 +410,24 @@ def assess_order(
         )
         bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen
 
-        # Wave bonus (F2.1c): post_wave kurier zaraz wraca do centrum
+        # Post-wave override (F2.1c): brak GPS + wszystkie picked_up + kończy ≤15 min
+        # Kurier zaraz wraca do centrum → bonus scoring
+        pos_source_effective = getattr(cs, "pos_source", "no_gps")
+        all_picked_up = (
+            len(bag_sim) > 0 and
+            all(getattr(o, "status", "") == "picked_up" for o in bag_sim)
+        )
         wave_bonus = 0.0
-        if getattr(cs, "pos_source", None) == "post_wave":
-            if free_at_min <= 20:
-                wave_bonus = C.POST_WAVE_BONUS_FAST
-            elif free_at_min <= 30:
-                wave_bonus = C.POST_WAVE_BONUS_SLOW
+        if (all_picked_up and
+                pos_source_effective != "gps" and
+                free_at_min <= C.POST_WAVE_FREE_MAX_MIN):
+            pos_source_effective = "post_wave"
+            wave_bonus = C.POST_WAVE_BONUS_FAST
+        elif (all_picked_up and
+                pos_source_effective != "gps" and
+                free_at_min <= 30):
+            pos_source_effective = "post_wave"
+            wave_bonus = C.POST_WAVE_BONUS_SLOW
 
         final_score = score_result["total"] + bundle_bonus + availability_bonus + wave_bonus + bonus_penalty_sum
 
@@ -443,6 +454,7 @@ def assess_order(
             "bundle_bonus": round(bundle_bonus, 2),
             "availability_bonus": round(availability_bonus, 2),
             "wave_bonus": round(wave_bonus, 2),
+            "pos_source": pos_source_effective,
             "free_at_min": round(free_at_min, 1),
             "sla_minutes_used": sla_minutes,
             # F2.1b/F2.1c penalties. R8 aktywne od F2.1c (T_KUR propagation step 1-4).

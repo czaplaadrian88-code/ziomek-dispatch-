@@ -224,6 +224,7 @@ RESTAURANT_WAIT_PENALTY_PER_MIN = 6
 # Rynek Kościuszki — punkt referencyjny powrotu kuriera po fali dostawczej
 RYNEK_KOSCUSZKI = (53.1324, 23.1489)
 POST_WAVE_RETURN_BUFFER_MIN = 5   # bufor min po ostatniej dostawie → kurier na Rynku
+POST_WAVE_FREE_MAX_MIN = 15       # max free_at_min dla post_wave fast bonus
 POST_WAVE_BONUS_FAST = 15.0       # free_at_min ≤ 20 min
 POST_WAVE_BONUS_SLOW = 8.0        # free_at_min ≤ 30 min
 
