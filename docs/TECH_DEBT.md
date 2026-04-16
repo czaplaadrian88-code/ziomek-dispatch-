@@ -889,3 +889,26 @@ Bez tej checklist pattern powtarza się: F2.1b step 3.1 (9 kluczy R6/R7) → F2.
 - _parse() primary path (fromisoformat naive→naive) — pełny fix z retestem SLA
 - learning_analyzer per_bonus_layer — wymaga 50+ human TAK/NIE
 - AUTO_APPROVE flip — wymaga per_bonus_layer
+
+## F2.1c sesja 4 — 2026-04-16
+
+### DONE
+- panel_watcher reassignment detection (aabb5d3) — COURIER_ASSIGNED source=panel_reassign
+- R5 pickup spread 1.8→2.5km (fb847b3) — odblokuje 27% marginalnych bundli
+- 47 testów PASS, zero regresji
+
+### F2.2 FEATURE: Wave Routing (ZAPISANE)
+Kurier robi 3-4 dowozy w pierwszej fali (jeden kierunek), po czym wraca do centrum po kolejną falę.
+Ostatni punkt fali + nowy order "po drodze do centrum" = realny koszt niższy niż bag_size/spread sugeruje.
+Ziomek tego nie widzi — liczy tylko statyczny spread i bag_size.
+Przykład: Mateusz O (466343) — Rukola Kaczorowska → Elewatorska 27a to 19 min z ostatniego punktu,
+po drodze do centrum. Ziomek dał SKIP (R1/R5), koordynator przydzielił ręcznie do przepełnionego kuriera.
+Fix wymaga: wykrywanie kierunku powrotu kuriera po ostatnim picked_up → bonus za ordery na trasie powrotu.
+Sprint F2.2 (po zebraniu danych z R5=2.5 + reassignment fix).
+
+### REMAINING → F2.2
+- Wave routing bonus (kierunek powrotu kuriera)
+- SOLO fallback gdy no_candidates (zamiast SKIP → KOORD)
+- _parse() primary path naive fix z retestem SLA
+- learning_analyzer per_bonus_layer (wymaga 50+ TAK/NIE)
+- AUTO_APPROVE flip
