@@ -563,11 +563,56 @@ def assess_order(
             delivery_address=delivery_address,
         )
 
-    # R29 fallback: nothing landed — alert Adrian
+    # R29 SOLO fallback: zamiast SKIP — spróbuj przydzielić SOLO (pusty bag, ignoruje R1/R5/R8)
+    solo_best = None
+    solo_best_score = -999
+    for cid, cs in fleet_snapshot.items():
+        courier_pos = getattr(cs, "pos", None)
+        if courier_pos is None:
+            continue
+        try:
+            sv, sr, sm, sp = check_feasibility_v2(
+                courier_pos=tuple(courier_pos),
+                bag=[],  # pusty bag = solo
+                new_order=new_order,
+                now=now,
+                sla_minutes=35,
+            )
+            if sv in ("YES", "MAYBE") and sp is not None:
+                sc = sm.get("pickup_dist_km", 999)
+                # Prostszy scoring: bliższy = lepszy
+                solo_score = 100 - sc * 10
+                if solo_score > solo_best_score:
+                    solo_best_score = solo_score
+                    solo_best = Candidate(
+                        courier_id=cid,
+                        name=getattr(cs, "name", cid),
+                        score=round(solo_score, 2),
+                        feasibility_verdict=sv,
+                        feasibility_reason=f"solo_fallback ({sr})",
+                        plan=sp,
+                        metrics={**sm, "solo_fallback": True, "pos_source": getattr(cs, "pos_source", "no_gps")},
+                    )
+        except Exception:
+            pass
+
+    if solo_best is not None:
+        return PipelineResult(
+            order_id=order_id,
+            verdict="PROPOSE",
+            reason=f"solo_fallback (R1/R5/R8 ignored, fleet_n={len(candidates)})",
+            best=solo_best,
+            candidates=candidates,
+            pickup_ready_at=pickup_ready_at,
+            restaurant=restaurant,
+            delivery_address=delivery_address,
+        )
+
+    # R29 absolutny fallback: nikt nie przechodzi nawet solo — KOORD
     return PipelineResult(
         order_id=order_id,
-        verdict="SKIP",
-        reason=f"no_candidates (fleet_n={len(candidates)}) — ALERT ADRIAN",
+        verdict="KOORD",
+        reason=f"no_solo_candidates (fleet_n={len(candidates)}) — wszyscy odrzuceni nawet solo",
         best=None,
         candidates=candidates,
         pickup_ready_at=pickup_ready_at,
