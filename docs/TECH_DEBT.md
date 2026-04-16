@@ -1050,3 +1050,20 @@ Dynamiczny budżet reconcile (proporcjonalny do active orders).
 - SOLO fallback aktywny (zero SKIP)
 - best_effort → PROPOSE (Telegram zawsze widzi)
 - Reply feedback aktywny (REPLY_OVERRIDE)
+
+## F2.2 sesja 1 — 2026-04-16 ~16:30
+
+### DONE — R1/R5/R8 hard→soft (c917bf8)
+- feasibility_v2.py: R1/R5/R8 nie blokują — zbierają r1_violation_km, r5_violation_km, r8_violation_min
+- dispatch_pipeline.py: penalties z rule_weights.json (R1=-8/km, R5=-6/km, R8=-1.5/min)
+- rule_weights.json: plik konfiguracyjny kar — fundament pod auto-kalibrację
+- Wynik: 10/10 MAYBE zamiast 7/10 (marginalny overshoot nie blokuje)
+- Jedyne twarde reguły: R6 (35 min SLA contractual) + bag_full + pickup_too_far + shift_ending
+
+### ADAPTIVE WEIGHTS — F2.2 backlog
+learning_analyzer.compute_agreement_per_bonus_layer() porówna:
+- Które violations były przy kurierach których Adrian wybierał (TAK)
+- Które violations były przy kurierach których Adrian odrzucał (NIE/REPLY_OVERRIDE)
+- Jeśli Adrian często wybiera mimo R1 violation → zmniejsz R1_spread_per_km
+- Jeśli Adrian rzadko wybiera z R5 violation → zwiększ R5_pickup_per_km
+Wymaga: 50+ TAK/NIE z violations w shadow_decisions (kilka dni produkcji)
