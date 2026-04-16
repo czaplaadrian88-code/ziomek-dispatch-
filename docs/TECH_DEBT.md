@@ -1067,3 +1067,70 @@ learning_analyzer.compute_agreement_per_bonus_layer() porówna:
 - Jeśli Adrian często wybiera mimo R1 violation → zmniejsz R1_spread_per_km
 - Jeśli Adrian rzadko wybiera z R5 violation → zwiększ R5_pickup_per_km
 Wymaga: 50+ TAK/NIE z violations w shadow_decisions (kilka dni produkcji)
+
+## F2.2 sesja 2 — 2026-04-16 ~20:00
+
+### DONE — Fix 1 timing_gap_bonus (7f6e26e)
+- dispatch_pipeline.py L345-387: `availability_bonus` (+10/+8/+5/0) zastąpiony przez `timing_gap_bonus`
+- Wzór: `gap = free_at_min - time_to_pickup_ready`
+  - `|gap| ≤  5` → +25  (idealne dopasowanie)
+  - `|gap| ≤ 10` → +15  (dobre)
+  - `|gap| ≤ 15` → +5   (akceptowalne)
+  - `gap  >  15` → -3/min (kurier się spóźni)
+  - `gap  < -15` → -2/min (restauracja czeka)
+- `pickup_ready_at=None` → fallback `time_to_pickup_ready = travel_min` (neutral gap)
+- Nowe metryki w decision_record: `timing_gap_bonus`, `timing_gap_min`, `time_to_pickup_ready_min`, `free_at_utc`
+- Rationale: Mateusz (free_at=25, pickup=20, gap=+5) dostaje +25 zamiast starej kary (brak bonusu bo free_at>=30). Szymon daleko (gap=-29) dostaje -28 zamiast neutralne +5.
+- Smoke test: tests/smoke_timing_gap_and_wave_pos.py — 5 bucketów × 2 kierunki + fallback
+
+### DONE — Fix 2 last_wave_pos (7f6e26e)
+- dispatch_pipeline.py L280-285: `effective_start_pos` = delivery_coords ostatniego orderu z `plan.sequence` (bag case) lub `courier_pos` (solo)
+- `km_to_pickup_haversine` liczone od effective_start_pos (display + scoring.road_km)
+- `scoring.score_candidate` otrzymuje `road_km` jawnie → S_dystans używa effective pos; `courier_pos` nadal dla bearing (S_kierunek)
+- `drive_min` OSOBNO obliczony od courier_pos (R9 wait invariant zachowany, eta_drive_hhmm spójne z pozycją kuriera)
+- Rationale: kurier kończący bag blisko nowej restauracji nie jest karany w S_dystans za "daleko od aktualnej pozycji"
+- **Side-effect**: scoring.road_km używa HAVERSINE_ROAD_FACTOR_BIALYSTOK=1.37 zamiast wewnętrznego 1.3 — minor 5% wyższy road_km w S_dystans. Akceptowalne (1.37 jest skalibrowane P0.5).
+
+### DONE — Task #4 PANEL_OVERRIDE detection (78703dd)
+- panel_watcher.py: nowa funkcja `_check_panel_override(order_id, panel_courier_id, source)` wywoływana po każdym udanym emit COURIER_ASSIGNED (3 miejsca: panel_initial L183, panel_diff L257, panel_reassign L287)
+- Mechanizm: jeśli order_id jest w `pending_proposals.json` i panel przypisał innego kuriera niż Ziomek proponował → wpis `PANEL_OVERRIDE` do learning_log z polami: `order_id`, `proposed_courier_id`, `proposed_score`, `actual_courier_id`, `panel_source`, pełny `decision_record`
+- Idempotentny przez emit gate (`if assigned_event:` / `if ev:`) — duplicate emit = no duplicate log
+- Bezpieczeństwo: błędy I/O (missing pending, write fail) non-fatal — panel_watcher health ma priorytet nad telemetrią
+- Smoke test: tests/smoke_panel_override.py — 6 scenariuszy (same/different/missing oid/missing file/empty proposed/source labels)
+
+### DONE — Task #5 per-courier buttons (58f2dfa)
+- telegram_approver.py `build_keyboard(order_id, candidates=None)`:
+  - Rząd 1: do 3 przycisków "✅ {Imię} {tmin}min" per kandydat z Top 3
+  - callback_data `ASSIGN:{oid}:{courier_id}:{time_min}`, gdzie `tmin = round(travel_min) + 2` clampowane [5, 60]
+  - Rząd 2: `INNY` + `KOORD` (bez `NIE` — zastąpione auto-timeout 5 min z watchdog)
+- `proposal_sender` przekazuje `[rec.best] + rec.alternatives[:2]` jako candidates
+- `handle_callback`: case `ASSIGN` re-parsuje `oid_raw` z split(":",1), lookup courier_name w `best + alternatives`, wywołuje `run_gastro_assign`, loguje `action="ASSIGN_DIRECT"` + extra fields (`chosen_courier_id`, `assign_time_min`, `proposed_courier_id`)
+
+### DONE — Task #6 free-text REPLY_OVERRIDE (58f2dfa)
+- Nowy helper `_parse_courier_time(text, allow_name_only)` — ekstrakt parsera REPLY (formaty: HH:MM, Xmin, trailing N, samo imię)
+- Refactor: istniejący REPLY_OVERRIDE block używa helpera z `allow_name_only=True`
+- Nowy branch w `handle_message`: jeśli NIE `reply_to_message` + parser sukces + `pending` niepuste → assign do najnowszego (`max sent_at`), log `action=REPLY_OVERRIDE`, `feedback="free_text(latest): ..."`
+- Guard anti-false-positive: czas w [1, 60] dla numeric/Xmin/default (np. "kurier 207" → None). HH:MM wyłączone z guardu (eksplicit, trust human — "Bartek 14:30" przy 12:00 = 150 min OK)
+- Smoke test: tests/smoke_telegram_buttons_freetext.py — 31 asercji (12 buttons + 19 parser)
+
+### NOWE SYGNAŁY W LEARNING_LOG (do learning_analyzer po 7 dniach)
+- `PANEL_OVERRIDE` — koordynator wybrał innego kuriera niż proposed (panel_initial/panel_diff/panel_reassign)
+- `ASSIGN_DIRECT` — klik per-kandydat (różny od best → odchylenie od score ranking)
+- `REPLY_OVERRIDE` — reply lub free-text do pending (latest match)
+- Docelowo: `compute_agreement_per_bonus_layer` powinien uwzględniać te trzy sygnały osobno (PANEL_OVERRIDE = zmiana myśli koordynatora po kliku; ASSIGN_DIRECT = preferencja alternate; REPLY_OVERRIDE = manual override bez klika)
+
+### F2.2 sesja 2 BACKLOG / TO-WATCH
+- Weryfikacja PANEL_OVERRIDE na pierwszych pending→panel cycle (obecnie pending=0, oczekujemy na naturalny flow)
+- Weryfikacja timing_gap_bonus na prawdziwych kandydatach — po pierwszym PROPOSE w jsonl powinno być `timing_gap_bonus`/`timing_gap_min` w rekordzie zamiast `availability_bonus`
+- Verify ASSIGN button flow end-to-end (klik → gastro_assign → PANEL_OVERRIDE by NOT trigger bo to nasz klik)
+- **Potencjalny race**: jeśli Adrian kliknie ASSIGN w Telegram → gastro_assign do panelu → panel_watcher emit COURIER_ASSIGNED → `_check_panel_override` czyta pending (ale pending już popped przez handle_callback przed gastro call? — zweryfikować kolejność)
+- learning_analyzer musi obsłużyć nowe `action` wartości (ASSIGN_DIRECT, PANEL_OVERRIDE) — dziś liczy tylko TAK/NIE/INNY/KOORD/TIMEOUT/REPLY_OVERRIDE
+
+### ROLLBACK (jeśli problem)
+Commity F2.2 sesja 2:
+- `7f6e26e` Fix 1+2 (dispatch_pipeline + shadow_dispatcher) → restart dispatch-shadow
+- `78703dd` PANEL_OVERRIDE (panel_watcher) → restart dispatch-panel-watcher
+- `58f2dfa` buttons + free-text (telegram_approver) → restart dispatch-telegram
+
+Backup .bak pliki: `*.bak-20260416-191035`, `*.bak-20260416-200813`, `*.bak-task5-6-20260416-201659`
+Rollback: `git revert <hash>` + restart serwisu. Każdy commit jeden serwis = małe blast radius.
