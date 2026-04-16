@@ -176,7 +176,7 @@ def check_feasibility_v2(
     # R8 (F2.1c) — pickup_span hard cap (T_KUR spread w bagu).
     if bag:
         bag_size_after = len(bag) + 1
-        pra_list = [b.pickup_ready_at for b in bag if b.pickup_ready_at is not None]
+        pra_list = [b.pickup_ready_at for b in bag if b.pickup_ready_at is not None and b.status != "picked_up"]  # F2.1c hotfix: picked_up już odebrany, historyczny T_KUR nie liczy się do span
         if new_order.pickup_ready_at is not None:
             pra_list.append(new_order.pickup_ready_at)
         if len(pra_list) >= 2:
