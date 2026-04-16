@@ -986,3 +986,26 @@ System nie milczy — zawsze PROPOSE lub KOORD do Telegram.
 - learning_analyzer per_bonus_layer (wymaga 50+ TAK/NIE)
 - AUTO_APPROVE flip
 - GPSLogger onboarding 7 kurierów
+
+## F2.1c FINAŁ — 2026-04-16
+
+### WSZYSTKIE COMMITY F2.1c
+- fa4920d: R8 T_KUR propagation + hard cap + soft penalty + 44 testy
+- 80c6863: R8 observability shadow_dispatcher
+- daad541: _parse() dead code + regression testy (47 PASS)
+- aabb5d3: panel_watcher reassignment detection
+- fb847b3: R5 1.8→2.5km
+- 94dfba0: Wave routing post_wave bonus 15/8
+- 243c892: HOTFIX R8 wyklucz picked_up z pra_list
+- ca4e8c3: SOLO fallback zero SKIP
+- cea00e0: best_effort KOORD→PROPOSE
+- 29320f1: Reply feedback REPLY_OVERRIDE learning_log
+
+### F2.2 BACKLOG
+- learning_analyzer per_bonus_layer (wymaga 50+ TAK/NIE)
+- AUTO_APPROVE flip
+- Wave routing kalibracja POST_WAVE_FREE_MAX_MIN=15
+- Solo fallback scoring (pełny pipeline zamiast 100-dist*10)
+- _parse() primary path naive fix z retestem SLA
+- GPSLogger onboarding 7 kurierów
+- ANOMALY_DETECTION_ENABLED
