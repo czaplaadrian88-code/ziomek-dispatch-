@@ -547,6 +547,7 @@ def assess_order(
         )
 
     # R28 best_effort: NO candidates that still produced a plan (SLA-only rejections)
+    # F2.1c: verdict PROPOSE (nie KOORD) — Telegram musi to zobaczyć, Adrian decyduje
     with_plan = [c for c in candidates if c.plan is not None]
     with_plan.sort(key=lambda c: (c.plan.sla_violations, c.plan.total_duration_min))
     if with_plan:
@@ -554,7 +555,7 @@ def assess_order(
         best.best_effort = True
         return PipelineResult(
             order_id=order_id,
-            verdict="KOORD",
+            verdict="PROPOSE",
             reason=f"best_effort (0 feasible, best_violations={best.plan.sla_violations})",
             best=best,
             candidates=with_plan[:TOP_N_CANDIDATES],
