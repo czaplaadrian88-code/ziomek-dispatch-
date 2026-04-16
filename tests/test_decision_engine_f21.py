@@ -185,26 +185,26 @@ def test_A6_bag_size_cap_8_hard_reject():
 # ═══════════════════════════════════════════════════════════════════
 
 def test_B1_R7_longhaul_peak_bundle_reject():
-    """R7: ride >4.5km + peak 14-17 Warsaw + bag niepusty → NO."""
+    """R7 DISABLED (F2.1c): threshold=99km → longhaul nie odrzuca. Test dokumentuje zachowanie."""
     o1 = mk_order(id=1, drop=(53.145, 23.185))
     new = mk_order(id=2, pickup=(53.132, 23.168), drop=(53.132, 23.320))  # ~10km E
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=_fixed_now_peak()
     )
-    assert verdict == "NO"
-    assert "R7_longhaul_peak" in reason
-    assert metrics["r7_ride_km"] > C.LONG_HAUL_DISTANCE_KM
+    # R7 disabled: nie odrzuca nawet przy long-haul + peak + bundle
+    assert "R7_longhaul_peak" not in reason
+    assert metrics["r7_ride_km"] > 4.5  # nadal mierzy dystans
     assert metrics["r7_in_peak"] is True
 
 
 def test_B2_R7_longhaul_peak_solo_accept():
-    """R7: long-haul + peak + bag pusty → NIE R7 (solo allowed)."""
+    """R7 DISABLED (F2.1c): solo + peak — r7_is_longhaul=False bo threshold=99km."""
     new = mk_order(id=1, pickup=(53.132, 23.168), drop=(53.132, 23.320))
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.132, 23.168), bag=[], new_order=new, now=_fixed_now_peak()
     )
     assert "R7_longhaul_peak" not in reason
-    assert metrics["r7_is_longhaul"] is True
+    assert metrics["r7_is_longhaul"] is False  # 10km < 99km threshold
     assert metrics["r7_in_peak"] is True
 
 
@@ -907,8 +907,8 @@ def test_F7_bag_time_constants_from_empirical_p95():
 
 
 def test_F8_R7_longhaul_constants():
-    """R7: 4.5 km threshold, peak 14-17 Warsaw."""
-    assert C.LONG_HAUL_DISTANCE_KM == 4.5
+    """R7 DISABLED (F2.1c): threshold=99km (effectively off), peak 14-17 Warsaw."""
+    assert C.LONG_HAUL_DISTANCE_KM == 99.0
     assert C.LONG_HAUL_PEAK_HOURS_START == 14
     assert C.LONG_HAUL_PEAK_HOURS_END == 17
 

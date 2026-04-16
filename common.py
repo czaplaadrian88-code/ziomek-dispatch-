@@ -201,7 +201,7 @@ BAG_TIME_SOFT_PENALTY_PER_MIN = 8
 # ─── R7 (H4): Long-haul isolation w peak hours ───
 # Placeholder — brak danych empirycznych na ride_distance w shadow_decisions.
 # Post-deploy monitoring: jeśli R7 trigger rate > 20% w peak 14-17, próg za niski.
-LONG_HAUL_DISTANCE_KM = 4.5
+LONG_HAUL_DISTANCE_KM = 99.0  # F2.1c: R7 wyłączone — 4.5km było za agresywne dla Białystoku
 LONG_HAUL_PEAK_HOURS_START = 14   # inclusive
 LONG_HAUL_PEAK_HOURS_END = 17     # inclusive
 
