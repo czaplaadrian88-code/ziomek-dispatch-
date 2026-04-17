@@ -1134,3 +1134,52 @@ Commity F2.2 sesja 2:
 
 Backup .bak pliki: `*.bak-20260416-191035`, `*.bak-20260416-200813`, `*.bak-task5-6-20260416-201659`
 Rollback: `git revert <hash>` + restart serwisu. Każdy commit jeden serwis = małe blast radius.
+
+## Courier App + Panel Admin (2026-04-16)
+
+### Co zbudowane
+- Backend courier-api (FastAPI, SQLite, port 8767) — Sprint 0 DONE
+- Android APK (Kotlin, Compose, FGS, Room) — Sprint 1 DONE
+- Panel admin z live mapą (HTMX, Leaflet, SSE) — Sprint 4 DONE
+- Nginx routing: /api/*, /panel, /apk/
+
+### Pliki
+- Backend: /root/.openclaw/workspace/scripts/courier_api/ (main.py, auth.py, gps_writer.py, db.py, config.py, routes/admin.py, templates/)
+- Android: /root/courier-app/
+- APK: /var/www/html/apk/courier.apk
+- Systemd: courier-api.service (enabled)
+- Nginx: /etc/nginx/sites-available/gps-nadajesz (backupy: .bak-20260416-*, /root/*.bak-sprint4)
+
+### TODO — Sprint 2 (hardening)
+- [ ] OnboardingScreen: guided permission flow (FINE→BACKGROUND→NOTIFICATIONS→BATTERY)
+- [ ] OemHelper: Xiaomi autostart dialog + Huawei/Oppo detection
+- [ ] Low battery alert (<15%) w notyfikacji FGS
+- [ ] Upload jitter po reconnect (Random 5-30s)
+- [ ] Room FIFO purge trigger (>50k rows)
+- [ ] Debug: "wysłano 0 pkt" — zbadać dlaczego upload coroutine nie wysyła (może problem z tokenem lub Base URL)
+
+### TODO — Sprint 3 (rollout)
+- [ ] Inwentaryzacja 17 telefonów (marka/model/Android)
+- [ ] PDF instrukcja instalacji + Xiaomi setup
+- [ ] Pilot: 2 kurierzy (Gabriel + Grzegorz), 3 dni obserwacji
+- [ ] Firebase App Distribution setup
+
+### TODO — Panel admin rozszerzenia
+- [ ] CRUD kurierów + set/reset PIN
+- [ ] Mapa kurierów dostępna z appki (WebView /api/map)
+- [ ] Daily report (godziny online per kurier)
+- [ ] Geofence alert (kurier poza Białystok bounding box)
+
+### Znane problemy
+- "wysłano 0 pkt" na Redmi Note 14 5G — GPS zbiera (24s temu), ale upload nie wysyła. Do zbadania: logi courier-api, token validity, Base URL w ApiClient
+- Hasło panelu admin hardcoded w config.py (ADMIN_PASS="nadajesz2026") — zmienić na produkcji
+- PIN rate limit działa per courier_id ale brak globalnego throttle
+- Brak git repo dla courier_api (zainicjować + push do github)
+
+### Architektura (nie zmieniać bez przemyślenia)
+- Upload GPS: coroutine w FGS (delay 30s), NIE WorkManager (min 15 min limit)
+- WorkManager: TYLKO watchdog co 15 min (restart FGS)
+- BootReceiver: NIE startuje FGS bezpośrednio (Android 14 restriction), ustawia flag → watchdog
+- Auto-logout: 90 min bez aktywności (inline w verify_token), NIE cron/APScheduler
+- GPS interval: 20s ruch / 30s wolno / 40s stoi + minDistance 50m
+- Dual-write: SQLite gps_history + gps_positions_pwa.json (Ziomek kompatybilność)
