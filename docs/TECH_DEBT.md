@@ -17,11 +17,19 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 ### 🔥 Aktywne — F2.2 Sprint C blockers
 
-- **[HIGH]** `reorder_nn` TSP refactor (chronological pickup + geographic loop) → Sprint C1. Additive return type (`per_order_delivery_times_dict`).
+- ✅ **[DONE 2026-04-18]** `telegram_approver` TIMEOUT_SUPERSEDED fix → commit `4d984ca`, tag `f22-prep-p1-live`. Learning_log teraz emit timeout_outcome field.
+- ✅ **[DONE 2026-04-18]** `reorder_nn` (a.k.a. `simulate_bag_route_v2`) additive refactor → commit `ce7628e`, tag `f22-c1-live`. RoutePlanV2.per_order_delivery_times field (Optional, None=fail-closed).
+- ✅ **[DONE 2026-04-18]** Feature flags infrastructure w `common.py` (6 F2.2 Sprint C flags) → commit `1d2ffdb`. USE_PER_ORDER_GATE/ENABLE_C2_SHADOW_LOG/etc., all default False except shadow logging.
+- ✅ **[DONE 2026-04-18]** C2 per-order 35min gate + shadow logger → commit `eadf25f`, tag `f22-c2-shadow-live`. check_per_order_35min_rule + c2_shadow_log.jsonl (expected empty until C3).
+- ✅ **[DONE 2026-04-18]** C4 speed_tier_tracker standalone script → commit `8e9dcbe`, tag `f22-c4-tracker-committed`. courier_speed_tiers.json populated (manual run).
+- ✅ **[DONE 2026-04-18 SKELETON]** C5 wave_scoring module + same_restaurant_boost → commit `222be21`, tag `f22-c5-skeleton-committed`. 4 features pozostają jako stubs (food_court/pair_affinity/stretch_bonus/context_peak).
+
+- **[HIGH — next]** C4 systemd timer setup (dispatch-speed-tier.timer nightly 03:00) → requires OS-level write, osobna sesja z permission.
+- **[HIGH — next]** Review c2_shadow_log.jsonl po 24-48h → decision flip USE_PER_ORDER_GATE=True (expected: empty, so flip safe).
+- **[HIGH]** C3 R1/R5/R6/R7/R8 hard→soft penalties → Sprint C3. DEPRECATE_LEGACY_HARD_GATES flag.
+- **[HIGH]** C5 iterative dev (features b/c/d/e): food_court_boost, pair_affinity, stretch_bonus, context_peak. Requires C4 cron active (speed_tier_loading) and fresh learning_log data (post-P1 days 1-2).
 - **[HIGH]** `dispatch_pipeline.assess_order` signature change (`pending_queue`, `demand_context` params) → Sprint C7 BREAKING. 40 existing tests need update.
-- **[HIGH]** `telegram_approver` TIMEOUT_SUPERSEDED fix → F2.2-prep P1 PRZED Sprint C5 (d)(e). Blokuje stretch_bonus calibration.
 - **[MED]** `state_machine.commitment_levels` semi-dead (near_delivery trigger) → F2.2 Sprint C6 rewake dla mid-trip pickup (4908 OVERLAP cases jako training dataset).
-- **[MED]** Feature flags infrastructure w `common.py` (5 nowych flags C2/C3/C5/C6/C7) → pre-requirement dla Sprint C steps.
 
 ### 🔀 Parallel workstreams (F2.2-parallel, NOT Sprint C)
 

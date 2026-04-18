@@ -1,6 +1,30 @@
-# ZIOMEK V3.9 — MASTER BRIEF (dla Claude Code, 18.04.2026)
+# ZIOMEK V3.10 — MASTER BRIEF (dla Claude Code, 18.04.2026 wieczór)
 
 **Ten plik czytasz JAKO PIERWSZE na początku każdej sesji.**
+
+## V3.10 (2026-04-18 wieczór) — 6 LIVE WINS od rana
+Po zamknięciu F2.2 audit jeszcze tego samego dnia wdrożono:
+1. **P1 TIMEOUT_SUPERSEDED split** — `4d984ca` / tag `f22-prep-p1-live`.
+   Learning_log teraz emit timeout_outcome + timeout_outcome_detail field
+   (AWAITING_ASSIGNMENT 54.6% / OVERRIDDEN_BY_LATER 45.2% / ORDER_CANCELLED 0.2%).
+   Unblokuje Sprint C5 (d)/(e) stretch_bonus calibration.
+2. **C1 per_order_delivery_times** — `ce7628e` / tag `f22-c1-live`.
+   RoutePlanV2 dataclass additive field, None default = fail-closed dla C2 gate.
+3. **Geocoding 8/12 H_E_pending** — 98 total restaurant_coords entries.
+   SCOPED coverage 95.38% → **97.94% (+2.56pp)**. 4 pending (Eatally HIGH + 3 inne)
+   dla osobnej sesji z panel_client.address_id lookup.
+4. **C2 per-order 35min gate (shadow)** — `eadf25f` / tag `f22-c2-shadow-live`.
+   Feature flag USE_PER_ORDER_GATE default False; shadow log empty expected
+   (current SLA check już enforcuje 35min, C2 meaningful po C3 deprecation).
+5. **C4 speed_tier_tracker** — `8e9dcbe` / tag `f22-c4-tracker-committed`.
+   Standalone script, manual run = dispatch_state/courier_speed_tiers.json
+   (30-day window: 6 FAST, 14 NORMAL, 4 SAFE, 12 INSUFFICIENT). Nightly cron
+   deferred (requires systemd timer edit).
+6. **C5 skeleton + same_restaurant_boost** — `222be21` / tag `f22-c5-skeleton-committed`.
+   wave_scoring.py module z compute_same_restaurant_boost (quick-win per sekcja 3.3
+   bag_size=0 = 50.2% TIER_A). Flag ENABLE_WAVE_SCORING=False, zero integration yet.
+
+Tests aggregate: **82/82 PASS** (P1 7/7 + C1 5/5 + C2 8/8 + C4 9/9 + C5 9/9 + F21 baseline 44/44).
 
 ## V3.9 (2026-04-18) — Post-F2.2-audit
 - 7 raportów F2.2 w workspace/docs/ (RECON, MERGE_REPORT, SECTION_3_1..3_5, SECTION_4_ARCHITECTURE_SPEC, HANDOVER)
