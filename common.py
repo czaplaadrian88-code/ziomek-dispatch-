@@ -264,7 +264,12 @@ USE_PER_ORDER_GATE = False
 # Zero impact na current flow — observational logging only.
 ENABLE_C2_SHADOW_LOG = True
 
-# Future flags (C3-C7), default False at deploy:
+# C4: speed_tier_tracker.py produces courier_speed_tiers.json (nightly).
+# Flag controls whether downstream consumers (C5 wave_scoring) read the file.
+# Currently False → C5 not yet integrated. Tracker can run standalone for data collection.
+ENABLE_SPEED_TIER_LOADING = False
+
+# Future flags (C3, C5-C7), default False at deploy:
 DEPRECATE_LEGACY_HARD_GATES = False  # C3: R1/R5/R6/R7/R8 → soft penalties
 ENABLE_WAVE_SCORING = False           # C5: wave_scoring.py module
 ENABLE_MID_TRIP_PICKUP = False        # C6: state_machine rewake for overlap
