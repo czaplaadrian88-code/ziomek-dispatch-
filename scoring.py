@@ -9,7 +9,7 @@ Wyjscie: {total, components, reasoning, metrics}
 import math
 from typing import List, Optional, Tuple
 from dispatch_v2.geometry import haversine_km, bearing_deg, angle_between, bag_centroid
-from dispatch_v2.common import MAX_BAG_TSP_BRUTEFORCE
+from dispatch_v2.common import DEPRECATE_LEGACY_HARD_GATES, MAX_BAG_TSP_BRUTEFORCE
 
 W_DYSTANS  = 0.30
 W_OBCIAZENIE = 0.25
@@ -53,6 +53,7 @@ def score_candidate(
     bag_size: int = 0,
     oldest_in_bag_min: Optional[float] = None,
     road_km: Optional[float] = None,
+    r6_soft_penalty: float = 0.0,
 ) -> dict:
     # Dystans - preferujemy road_km (z OSRM) jesli dostepne, inaczej haversine * 1.3
     if road_km is None:
@@ -73,6 +74,14 @@ def score_candidate(
     sc = s_czas(oldest_in_bag_min)
 
     total = sd * W_DYSTANS + so * W_OBCIAZENIE + sk * W_KIERUNEK + sc * W_CZAS
+
+    # F2.2 C3 narrow (2026-04-18): R6 soft zone 30-35 min penalty, gated by flag.
+    # Flag False → param ignored, zero behavior change (default).
+    # Flag True → penalty (negative value from feasibility metrics) subtracts from total.
+    r6_penalty_applied = 0.0
+    if DEPRECATE_LEGACY_HARD_GATES and r6_soft_penalty != 0.0:
+        total += r6_soft_penalty
+        r6_penalty_applied = r6_soft_penalty
 
     reasoning = (
         f"dist={road_km:.1f}km→{sd:.0f} | bag={bag_size}/{MAX_BAG_TSP_BRUTEFORCE}→{so:.0f} | "
@@ -95,6 +104,7 @@ def score_candidate(
             "bag_size": bag_size,
             "angle_deg": round(angle, 1) if angle is not None else None,
             "oldest_in_bag_min": round(oldest_in_bag_min, 1) if oldest_in_bag_min is not None else None,
+            "r6_soft_penalty_applied": round(r6_penalty_applied, 2),
         },
         "reasoning": reasoning,
     }

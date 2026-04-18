@@ -204,6 +204,8 @@ def check_feasibility_v2(
     # Długa trasa (>4.5 km) NIE MOŻE być bundlowana w peak (14-17 Warsaw).
     # Solo (bag pusty) zawsze OK — R7 dotyczy tylko bundli.
     # Telemetry liczone ZAWSZE (nawet solo), reject warunkowy (bag+longhaul+peak).
+    # TODO C3 deferred (2026-04-18): refactor to soft penalty if LONG_HAUL_DISTANCE_KM
+    # threshold lowered from 99km. Currently dormant rule, no production impact.
     if _valid(new_order.pickup_coords) and _valid(new_order.delivery_coords):
         r7_ride_km = _road_km(new_order.pickup_coords, new_order.delivery_coords)
         r7_warsaw_hour = now.astimezone(WARSAW).hour
@@ -354,6 +356,15 @@ def check_feasibility_v2(
     metrics["r6_worst_oid"] = r6_worst_oid
     metrics["r6_is_solo"] = len(bag) == 0
     metrics["r6_bag_size"] = len(bag)
+    # F2.2 C3 narrow (2026-04-18): R6 soft warning zone (30, 35] — metric-only.
+    # Hard zone >35 permanent (below) — defense in depth vs C2 per-order gate.
+    # Metric always logged; scoring.py uses it only when DEPRECATE_LEGACY_HARD_GATES=True.
+    if 30.0 < r6_max_bag_time <= C.BAG_TIME_HARD_MAX_MIN:
+        metrics["r6_soft_penalty"] = round(-3.0 * (r6_max_bag_time - 30.0), 2)
+        metrics["r6_soft_zone_active"] = True
+    else:
+        metrics["r6_soft_penalty"] = 0.0
+        metrics["r6_soft_zone_active"] = False
     if r6_max_bag_time > C.BAG_TIME_HARD_MAX_MIN:
         return (
             "NO",
