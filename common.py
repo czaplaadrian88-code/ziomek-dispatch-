@@ -246,3 +246,26 @@ RESTAURANT_PREP_VARIANCE_HARD_MIN = 15
 COURIER_RECENT_DELAY_HARD_MIN = 10
 COURIER_CIRCUIT_BREAK_PENALTY = 25
 ANOMALY_DETECTION_ENABLED = False
+
+# ============================================================
+# F2.2 Sprint C Feature Flags (2026-04-18)
+# Per F2.2_SECTION_4_ARCHITECTURE_SPEC sekcja 6 (Rollback Plan).
+# All default False at deploy. Production flip sequential C2 → C3 → C5 → C6 → C7.
+# Rollback: set flag False + restart (trivial).
+# ============================================================
+
+# C2: per-order delivery_time <= 35 min hard gate
+# Currently False → existing hard gates (R6 BAG_TIME_HARD_MAX etc.) remain primary.
+# When True → check_per_order_35min_rule rejects bundle if any order predicted > 35 min.
+USE_PER_ORDER_GATE = False
+
+# C2 shadow mode: log diff between current vs new-gate behavior even when flag False.
+# Provides data for flip decision ("ile bundli C2 would reject gdyby flag=True").
+# Zero impact na current flow — observational logging only.
+ENABLE_C2_SHADOW_LOG = True
+
+# Future flags (C3-C7), default False at deploy:
+DEPRECATE_LEGACY_HARD_GATES = False  # C3: R1/R5/R6/R7/R8 → soft penalties
+ENABLE_WAVE_SCORING = False           # C5: wave_scoring.py module
+ENABLE_MID_TRIP_PICKUP = False        # C6: state_machine rewake for overlap
+ENABLE_PENDING_QUEUE_VIEW = False     # C7: dispatch_pipeline signature change
