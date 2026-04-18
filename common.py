@@ -272,5 +272,11 @@ ENABLE_SPEED_TIER_LOADING = False
 # Future flags (C3, C5-C7), default False at deploy:
 DEPRECATE_LEGACY_HARD_GATES = False  # C3: R1/R5/R6/R7/R8 → soft penalties
 ENABLE_WAVE_SCORING = False           # C5: wave_scoring.py module
+
+# C5 shadow mode: observational diff logging regardless of ENABLE_WAVE_SCORING.
+# When True, wave_scoring computes adjustment and emits C5_SHADOW_DIFF event
+# to dispatch_state/c5_shadow_log.jsonl when adjustment magnitude > threshold.
+ENABLE_C5_SHADOW_LOG = True
+
 ENABLE_MID_TRIP_PICKUP = False        # C6: state_machine rewake for overlap
 ENABLE_PENDING_QUEUE_VIEW = False     # C7: dispatch_pipeline signature change
