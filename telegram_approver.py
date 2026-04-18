@@ -347,18 +347,26 @@ def _prep_minutes_remaining(decision: dict) -> Optional[float]:
     return max(0.0, delta)
 
 
-def _parse_courier_time(text: str, allow_name_only: bool = False) -> Optional[tuple]:
-    """Parse free-text "Imię [HH:MM | Xmin | N]" → (courier_name, time_min).
+def _parse_courier_time(
+    text: str,
+    allow_name_only: bool = False,
+    known_names: Optional[list] = None,
+) -> Optional[tuple]:
+    """Parse free-text "Imię [HH:MM | Xmin | N]" → (courier_name, time_min_or_None).
 
-    Returns None jeśli tekst nie wygląda jak komenda assign:
-      - brak imienia
-      - (gdy not allow_name_only) brak czasu — samo imię nie wystarczy
-      - czas poza zakresem [1, 60] (poza możliwościami gastro_assign)
+    time_min_or_None == None sygnalizuje: brak jawnego czasu w tekście.
+    Caller liczy default (np. compute_assign_time(decision) z pickup_ready_at+ETA).
 
-    Używane w dwóch kontekstach:
-      - REPLY do propozycji (allow_name_only=True): domyślnie 15 min gdy sam Imię
-      - Free-text bez Reply (allow_name_only=False): wymagaj explicite czasu
-        żeby uniknąć false-positive (typowa wiadomość "Dzień dobry" nie trafi).
+    Dopasowanie courier_name:
+      1. known_names prefix-match (case-insensitive, normalizacja trailing punct)
+         — zwraca kanoniczną nazwę ("Bartek O" → "Bartek O.", "Grzegorz W" → "Grzegorz W")
+      2. fallback first-word (gdy brak known_names lub brak matcha)
+
+    Zwraca None gdy:
+      - tekst pusty / brak imienia
+      - brak czasu AND brak matcha w known_names AND not allow_name_only
+        (anty-false-positive dla "Dzień dobry" w free-text bez kandydatów)
+      - trailing/xmin time poza [1, 60]
     """
     import re as _re
     if not text or not text.strip():
@@ -366,7 +374,7 @@ def _parse_courier_time(text: str, allow_name_only: bool = False) -> Optional[tu
     s = text.strip()
     time_min = None
     courier_text = s
-    time_source = None  # "hhmm" | "xmin" | "trailing" | "default"
+    time_source = None  # "hhmm" | "xmin" | "trailing" | None
 
     # HH:MM → minuty do tej godziny (Warsaw). Eksplicit → NIE podlega guard [1,60]
     # (np. "Bartek 14:30" przy 12:00 = 150 min — legit).
@@ -395,19 +403,65 @@ def _parse_courier_time(text: str, allow_name_only: bool = False) -> Optional[tu
             courier_text = courier_text[:n_match.start()].strip()
             time_source = "trailing"
 
-    courier_name = courier_text.strip() or None
+    # Guard anti-false-positive dla ambiguous time (trailing/xmin).
+    # HH:MM explicit → bez ograniczeń (trust the human, np. "Bartek 14:30" przy 12:00 = 150).
+    if time_source in ("trailing", "xmin") and (time_min < 1 or time_min > 60):
+        return None
+
+    courier_text = courier_text.strip()
+    if not courier_text:
+        return None
+
+    # 1) known_names prefix-match. Normalizacja: lowercase + strip trailing . , ; :
+    courier_name = None
+    matched_known = False
+    if known_names:
+        def _norm(x: str) -> str:
+            return x.strip().rstrip(".,;:").lower()
+        text_norm = _norm(courier_text)
+        # sort desc po długości normalized — "Grzegorz W" przed "Grzegorz", "Bartek O." przed "Bartek"
+        cands = sorted(
+            [n for n in known_names if n and n.strip()],
+            key=lambda n: len(_norm(n)),
+            reverse=True,
+        )
+        for c in cands:
+            c_norm = _norm(c)
+            if not c_norm:
+                continue
+            if text_norm == c_norm or text_norm.startswith(c_norm + " "):
+                courier_name = c.strip()  # kanoniczna nazwa z listy
+                matched_known = True
+                break
+
+    # 2) Fallback: pierwsze słowo (gdy brak known_names lub brak matcha)
     if not courier_name:
-        return None
-    if time_min is None:
-        if not allow_name_only:
+        first_word = courier_text.split()[0] if courier_text.split() else None
+        if not first_word:
             return None
-        time_min = 15  # default dla REPLY context
-        time_source = "default"
-    # Guard anti-false-positive: tylko dla trailing/xmin/default (ambiguous inputs).
-    # HH:MM nie ograniczamy — user explicit podał godzinę (trust the human).
-    if time_source != "hhmm" and (time_min < 1 or time_min > 60):
+        courier_name = first_word
+
+    # Jeśli brak czasu i ani allow_name_only ani matched_known → reject (anty-false-positive)
+    if time_min is None and not (allow_name_only or matched_known):
         return None
+
     return (courier_name, time_min)
+
+
+def _known_names_from_decision(dr: dict) -> list:
+    """Zbierz imiona kandydatów z decision_record: best.name + alternatives[].name."""
+    if not isinstance(dr, dict):
+        return []
+    names = []
+    best = dr.get("best") or {}
+    n = best.get("name") or best.get("courier_name")
+    if n:
+        names.append(n)
+    for a in (dr.get("alternatives") or []):
+        n = (a or {}).get("name") or (a or {}).get("courier_name")
+        if n:
+            names.append(n)
+    return names
 
 
 def compute_assign_time(decision: dict) -> int:
@@ -897,13 +951,17 @@ async def handle_message(state: dict, msg: dict) -> None:
                 matched_rec = p_rec
                 break
         if matched_oid and matched_rec:
-            # REPLY context: samo imię OK (domyślnie 15 min).
-            parsed = _parse_courier_time(text, allow_name_only=True)
+            # REPLY context: samo imię OK (default z compute_assign_time gdy brak czasu).
+            dr_matched = matched_rec.get("decision_record") or {}
+            known = _known_names_from_decision(dr_matched)
+            parsed = _parse_courier_time(text, allow_name_only=True, known_names=known)
             if parsed is None:
                 # Nie wygląda jak "Imię [czas]" — ignoruj Reply (nie spamuj gastro_assign)
                 _log.info(f"REPLY_OVERRIDE skip oid={matched_oid}: text unparseable {text[:60]!r}")
                 return
             courier_name, time_min = parsed
+            if time_min is None:
+                time_min = compute_assign_time(dr_matched)
             try:
                 ok, assign_msg = await asyncio.to_thread(
                     run_gastro_assign, matched_oid, courier_name, time_min, False
@@ -937,18 +995,23 @@ async def handle_message(state: dict, msg: dict) -> None:
     # Free-text bez Reply → najnowszy pending proposal (F2.4 Task #6).
     # Gdy wiadomość nie jest Reply i nie pasuje do komendy — spróbuj sparsować
     # jako "Imię [czas]" i przypisz do najnowszego pending (max sent_at).
-    # allow_name_only=False: wymaga explicite czasu żeby uniknąć false-positive
-    # (typowe wiadomości bez cyfr ignorowane).
-    parsed = _parse_courier_time(text, allow_name_only=False)
-    if parsed is not None and state["pending"]:
-        courier_name, time_min = parsed
-        # Wybierz najnowszy pending (max sent_at). Format ISO8601 → leksykograficzne
-        # porównanie OK (stała strefa, padding).
+    # allow_name_only=False + known_names z latest_rec: samo imię OK gdy matchuje
+    # kandydata; fallback first-word wymaga czasu (anty-false-positive).
+    if state["pending"]:
         latest_oid = max(
             state["pending"].keys(),
             key=lambda k: state["pending"][k].get("sent_at", ""),
         )
         latest_rec = state["pending"][latest_oid]
+        dr_latest = latest_rec.get("decision_record") or {}
+        known = _known_names_from_decision(dr_latest)
+        parsed = _parse_courier_time(text, allow_name_only=False, known_names=known)
+    else:
+        parsed = None
+    if parsed is not None and state["pending"]:
+        courier_name, time_min = parsed
+        if time_min is None:
+            time_min = compute_assign_time(dr_latest)
         try:
             ok, assign_msg = await asyncio.to_thread(
                 run_gastro_assign, latest_oid, courier_name, time_min, False
@@ -1115,6 +1178,35 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
     _log.info(f"CB {action_for_log} oid={oid} → {feedback}")
 
 
+def _classify_timeout_outcome(cur_status: Optional[str]) -> str:
+    """Map state_machine cur_status to learning_log timeout_outcome bucket.
+
+    F2.2-prep P1 (2026-04-18): discriminate TIMEOUT_SUPERSEDED events for
+    downstream analyzers. Keeps umbrella action label for backward-compat.
+
+    Buckets:
+    - AWAITING_ASSIGNMENT: order planned (never-assigned OR returned-to-pool).
+      Empirycznie 54.6% z 874 historical TIMEOUT_SUPERSEDED events. Sprint C5
+      może later split via events.db join (never-assigned vs returned-to-pool).
+    - OVERRIDDEN_BY_LATER: order past proposal (assigned/picked_up/delivered).
+      Legitimate user/koord decision override.
+    - ORDER_CANCELLED: order dropped — different semantics than override.
+    - EXPIRED_NO_USER_INPUT: defensive, cur_status=new edge case
+      (watchdog filters != "new", rarely hit here).
+    - UNKNOWN_STATE: defensive, logs warning when state_machine evolves
+      beyond classifier awareness.
+    """
+    if cur_status == "planned":
+        return "AWAITING_ASSIGNMENT"
+    if cur_status in ("assigned", "picked_up", "delivered"):
+        return "OVERRIDDEN_BY_LATER"
+    if cur_status == "cancelled":
+        return "ORDER_CANCELLED"
+    if cur_status == "new":
+        return "EXPIRED_NO_USER_INPUT"
+    return "UNKNOWN_STATE"
+
+
 async def watchdog(state: dict) -> None:
     while not _shutdown:
         now = datetime.now(timezone.utc)
@@ -1142,10 +1234,15 @@ async def watchdog(state: dict) -> None:
             # delivered/cancelled), nie spamuj timeoutem — cicho usuń z pending.
             if cur_status and cur_status != "new":
                 _log.info(f"TIMEOUT silent oid={oid}: status={cur_status} (już obsłużone)")
+                timeout_outcome = _classify_timeout_outcome(cur_status)
+                if timeout_outcome == "UNKNOWN_STATE":
+                    _log.warning(f"TIMEOUT_SUPERSEDED unknown cur_status={cur_status!r} oid={oid}")
                 append_learning(state["learning_log_path"], {
                     "ts": now_iso(),
                     "order_id": oid,
                     "action": "TIMEOUT_SUPERSEDED",
+                    "timeout_outcome": timeout_outcome,
+                    "timeout_outcome_detail": cur_status or "unknown",
                     "ok": True,
                     "feedback": f"order już {cur_status} — silent skip",
                     "decision": entry["decision_record"],
