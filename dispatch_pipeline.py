@@ -139,11 +139,36 @@ def assess_order(
     fleet_snapshot: Dict[str, Any],
     restaurant_meta: Optional[dict] = None,
     now: Optional[datetime] = None,
+    *,
+    # F2.2 C7 skeleton (2026-04-18): additive kwargs for wave_scoring/commitment wire-up.
+    # Existing 2 callers (shadow_dispatcher, test_decision_engine_f21) pass positional
+    # args only → these kwargs stay None, zero behavior change.
+    # When ENABLE_PENDING_QUEUE_VIEW=True AND kwargs=None → auto-fetch providers.
+    pending_queue: Optional[list] = None,
+    demand_context: Optional[dict] = None,
 ) -> PipelineResult:
     if now is None:
         now = datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
+
+    # F2.2 C7: Auto-fetch providers when flag enabled and caller passed None
+    from dispatch_v2.common import ENABLE_PENDING_QUEUE_VIEW
+    if ENABLE_PENDING_QUEUE_VIEW:
+        if pending_queue is None:
+            try:
+                from dispatch_v2.pending_queue_provider import get_pending_queue
+                pending_queue = get_pending_queue()
+            except Exception:
+                pending_queue = []
+        if demand_context is None:
+            try:
+                from dispatch_v2.pending_queue_provider import compute_demand_context
+                demand_context = compute_demand_context(now)
+            except Exception:
+                demand_context = {}
+    # pending_queue and demand_context are available for downstream wave_scoring
+    # wire-up in future C7 iteration. Current flow below unchanged.
 
     order_id = str(order_event.get("order_id") or "")
     restaurant = order_event.get("restaurant")
