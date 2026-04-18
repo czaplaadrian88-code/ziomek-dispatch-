@@ -1,6 +1,44 @@
-# ZIOMEK V3.10 — MASTER BRIEF (dla Claude Code, 18.04.2026 wieczór)
+# ZIOMEK V3.11 — MASTER BRIEF (dla Claude Code, 18.04.2026 późny wieczór)
 
 **Ten plik czytasz JAKO PIERWSZE na początku każdej sesji.**
+
+## V3.11 (2026-04-18 evening) — Sprint C SKELETON COMPLETE (11 LIVE WINS)
+
+Cały Sprint C P1 + C1-C7 skomitowany i zdeployowany w shadow mode jednego dnia.
+**Wszystkie feature flags default False = ZERO production impact.**
+Jutro: review shadow logs + sequential flag flips.
+
+| Sprint | Status | Commit | Tag | Flag |
+|---|---|---|---|---|
+| P1 prep (TIMEOUT_SUPERSEDED) | **LIVE** | `4d984ca` | `f22-prep-p1-live` | n/a — logging only |
+| C1 reorder_nn (per_order_times) | **LIVE** | `ce7628e` | `f22-c1-live` | n/a — additive field |
+| C2 per-order 35min gate | **shadow LIVE** | `eadf25f` | `f22-c2-shadow-live` | `USE_PER_ORDER_GATE=False` |
+| C3 R6 soft zone 30-35 | **shadow LIVE** | `cc16755` | `f22-c3-narrow-shadow-live` | `DEPRECATE_LEGACY_HARD_GATES=False` |
+| C4 speed_tier_tracker | **skeleton + manual** | `8e9dcbe` | `f22-c4-tracker-committed` | `ENABLE_SPEED_TIER_LOADING=False` |
+| C5 wave_scoring (6 features) | **full shadow LIVE** | `4fac50e` | `f22-c5-full-shadow-live` | `ENABLE_WAVE_SCORING=False`, `ENABLE_C5_SHADOW_LOG=True` |
+| C6 commitment_emitter | **skeleton** | `17dae8d` | `f22-c6-skeleton-committed` | `ENABLE_MID_TRIP_PICKUP=False` |
+| C7 dispatch_pipeline kwargs | **shadow LIVE** | `e0dc06e` | `f22-c7-skeleton-live` | `ENABLE_PENDING_QUEUE_VIEW=False` |
+
+Tests: **137/137 PASS** (P1 7 + C1 5 + C2 8 + C3 9 + C4 9 + C5 33 + C6 12 + C7 10 + F21 baseline 44).
+
+Service restarts today: `dispatch-shadow` x5, `dispatch-panel-watcher` x1, `dispatch-telegram` x1. Zero errors, zero cascade failures.
+
+### Feature flags w `common.py` (wszystkie default False przy deploy)
+- `USE_PER_ORDER_GATE` (C2)
+- `ENABLE_C2_SHADOW_LOG` (default **True** — observational)
+- `DEPRECATE_LEGACY_HARD_GATES` (C3 + C5 scoring integration)
+- `ENABLE_SPEED_TIER_LOADING` (C4, consumer for wave_scoring stretch zone)
+- `ENABLE_WAVE_SCORING` (C5)
+- `ENABLE_C5_SHADOW_LOG` (default **True** — observational)
+- `ENABLE_MID_TRIP_PICKUP` (C6)
+- `ENABLE_PENDING_QUEUE_VIEW` (C7)
+
+### Tomorrow's priorities (per F2.2_SPRINT_C_HANDOVER_2026-04-19.md)
+1. Review `dispatch_state/c2_shadow_log.jsonl` + `c5_shadow_log.jsonl` po 24h
+2. Sequential flag flips w kolejności: C2 → C3 → C4 cron → C5 → C6 → C7
+3. Geocoding 4 pending (Eatally HIGH) — osobna sesja z panel_client
+4. C4 systemd timer setup (`/etc/systemd/system/speed-tier-tracker.timer`)
+5. Dev iterations C5 calibration z real ground truth (po P1 data mature)
 
 ## V3.10 (2026-04-18 wieczór) — 6 LIVE WINS od rana
 Po zamknięciu F2.2 audit jeszcze tego samego dnia wdrożono:

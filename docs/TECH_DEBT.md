@@ -24,12 +24,17 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 - ✅ **[DONE 2026-04-18]** C4 speed_tier_tracker standalone script → commit `8e9dcbe`, tag `f22-c4-tracker-committed`. courier_speed_tiers.json populated (manual run).
 - ✅ **[DONE 2026-04-18 SKELETON]** C5 wave_scoring module + same_restaurant_boost → commit `222be21`, tag `f22-c5-skeleton-committed`. 4 features pozostają jako stubs (food_court/pair_affinity/stretch_bonus/context_peak).
 
-- **[HIGH — next]** C4 systemd timer setup (dispatch-speed-tier.timer nightly 03:00) → requires OS-level write, osobna sesja z permission.
-- **[HIGH — next]** Review c2_shadow_log.jsonl po 24-48h → decision flip USE_PER_ORDER_GATE=True (expected: empty, so flip safe).
-- **[HIGH]** C3 R1/R5/R6/R7/R8 hard→soft penalties → Sprint C3. DEPRECATE_LEGACY_HARD_GATES flag.
-- **[HIGH]** C5 iterative dev (features b/c/d/e): food_court_boost, pair_affinity, stretch_bonus, context_peak. Requires C4 cron active (speed_tier_loading) and fresh learning_log data (post-P1 days 1-2).
-- **[HIGH]** `dispatch_pipeline.assess_order` signature change (`pending_queue`, `demand_context` params) → Sprint C7 BREAKING. 40 existing tests need update.
-- **[MED]** `state_machine.commitment_levels` semi-dead (near_delivery trigger) → F2.2 Sprint C6 rewake dla mid-trip pickup (4908 OVERLAP cases jako training dataset).
+- ✅ **[DONE 2026-04-18]** C3 R6 soft zone 30-35 + scoring.py integration → commit `cc16755`, tag `f22-c3-narrow-shadow-live`. R1/R5/R8 already soft (metric-only), R7 dormant (TODO deferred).
+- ✅ **[DONE 2026-04-18]** C5 full wave_scoring 6 features → commit `4fac50e`, tag `f22-c5-full-shadow-live`. food_court + pair_affinity + stretch_bonus + wave_continuation + context_peak + same_restaurant.
+- ✅ **[DONE 2026-04-18 skeleton]** C6 commitment_emitter → commit `17dae8d`, tag `f22-c6-skeleton-committed`. Integration deferred.
+- ✅ **[DONE 2026-04-18]** C7 dispatch_pipeline.assess_order kwarg extension + pending_queue_provider → commit `e0dc06e`, tag `f22-c7-skeleton-live`. Backward-compat verified (f21 44/44 unchanged).
+
+- **[HIGH — next session]** Review `c2_shadow_log.jsonl` + `c5_shadow_log.jsonl` po 24-48h. Sequential flag flips w kolejności C2 → C3 → C4 → C5 → C6 → C7 after shadow validation.
+- **[HIGH — next session]** C4 systemd timer setup (dispatch-speed-tier.timer nightly 03:00). Requires OS-level write, osobna sesja.
+- **[HIGH — parallel]** Geocoding 4 pending (Restauracja Eatally HIGH vol=60, Chilli Chicken, Oregano Pizza, Atmosfera) — panel_client.address_id join approach.
+- **[MED]** Dev iterations C5 calibration: review shadow log diffs, tune weights (SAME_RESTAURANT_BOOST, FOOD_COURT_BOOST, etc.) based on empirical distributions.
+- **[LOW]** R7 long-haul refactor to soft — dormant rule (LONG_HAUL_DISTANCE_KM=99), TODO comment in place.
+- **[LOW]** R8 pickup_span — DEFERRED per F2.1c, TODO if reactivated.
 
 ### 🔀 Parallel workstreams (F2.2-parallel, NOT Sprint C)
 
