@@ -1,601 +1,444 @@
-# ZIOMEK V3.11 — MASTER BRIEF (dla Claude Code, 18.04.2026 późny wieczór)
+# CLAUDE.md — Ziomek Dispatcher (V3.11 Post-Sprint-C-skeleton)
 
-**Ten plik czytasz JAKO PIERWSZE na początku każdej sesji.**
+## Changelog
 
-## V3.11 (2026-04-18 evening) — Sprint C SKELETON COMPLETE (11 LIVE WINS)
+### V3.11 (2026-04-18 wieczór) — Sprint C skeleton COMPLETE
+- **11 live wins w jednej sesji** (P1 + C1 + audit docs + C2 + C3 + C4 + C5 + C6 + C7 + geocoding 8/12 + Telegram transparency MVP)
+- **137/137 testów PASS** (44 f21 baseline + 93 nowych F2.2 sprint C)
+- Wszystkie feature flags F2.2 default False (current behavior preserved)
+- Tag finalny: `f22-sprint-c-skeleton-complete`
+- 12+ rollback tags per sprint
+- **Telegram Transparency MVP LIVE** — propozycje pokazują ordered route sequence
 
-Cały Sprint C P1 + C1-C7 skomitowany i zdeployowany w shadow mode jednego dnia.
-**Wszystkie feature flags default False = ZERO production impact.**
-Jutro: review shadow logs + sequential flag flips.
+### V3.10 (2026-04-18 popołudnie) — Sprint C day 1 closing
+- 3 live wins: P1 TIMEOUT_SUPERSEDED, C1 per_order_delivery_times, geocoding 8/12
+- Audit docs V3.9 committed
+- 2 skeleton placeholders: C2, C4, C5 (1 of 6 features)
 
-| Sprint | Status | Commit | Tag | Flag |
-|---|---|---|---|---|
-| P1 prep (TIMEOUT_SUPERSEDED) | **LIVE** | `4d984ca` | `f22-prep-p1-live` | n/a — logging only |
-| C1 reorder_nn (per_order_times) | **LIVE** | `ce7628e` | `f22-c1-live` | n/a — additive field |
-| C2 per-order 35min gate | **shadow LIVE** | `eadf25f` | `f22-c2-shadow-live` | `USE_PER_ORDER_GATE=False` |
-| C3 R6 soft zone 30-35 | **shadow LIVE** | `cc16755` | `f22-c3-narrow-shadow-live` | `DEPRECATE_LEGACY_HARD_GATES=False` |
-| C4 speed_tier_tracker | **skeleton + manual** | `8e9dcbe` | `f22-c4-tracker-committed` | `ENABLE_SPEED_TIER_LOADING=False` |
-| C5 wave_scoring (6 features) | **full shadow LIVE** | `4fac50e` | `f22-c5-full-shadow-live` | `ENABLE_WAVE_SCORING=False`, `ENABLE_C5_SHADOW_LOG=True` |
-| C6 commitment_emitter | **skeleton** | `17dae8d` | `f22-c6-skeleton-committed` | `ENABLE_MID_TRIP_PICKUP=False` |
-| C7 dispatch_pipeline kwargs | **shadow LIVE** | `e0dc06e` | `f22-c7-skeleton-live` | `ENABLE_PENDING_QUEUE_VIEW=False` |
+### V3.9 (2026-04-18 rano) — Post-F2.2-audit
+- 7 raportów F2.2 w workspace/docs/
+- 46,119 rows merged dataset (SCOPED 95.38% coverage, później 97.94% po geocoding)
+- Architecture Spec dla Sprint C ready
+- 108 kPLN/rok business case confirmed
+- BAG_TIME_HARD_MAX=35 DEPRECATED (replaced by per-order 35min rule)
+- SINGLETON p90 speed tier standardized
 
-Tests: **137/137 PASS** (P1 7 + C1 5 + C2 8 + C3 9 + C4 9 + C5 33 + C6 12 + C7 10 + F21 baseline 44).
+### V3.8 (17.04.2026)
+- F2.1d COD Weekly LIVE (Auto COD Transport w Wynagrodzenia Gastro)
+- Courier App (Nadajesz.pl) LIVE — Kotlin+Compose, FastAPI backend :8767
+- Panel admin GPS: https://gps.nadajesz.pl/panel
 
-Service restarts today: `dispatch-shadow` x5, `dispatch-panel-watcher` x1, `dispatch-telegram` x1. Zero errors, zero cascade failures.
+### V3.7 (16.04.2026)
+- F2.1b Decision Engine 3.0 COMPLETE (R1-R9 rules)
+- 40 testów bazowych, FAZA A+B live
 
-### Feature flags w `common.py` (wszystkie default False przy deploy)
-- `USE_PER_ORDER_GATE` (C2)
-- `ENABLE_C2_SHADOW_LOG` (default **True** — observational)
-- `DEPRECATE_LEGACY_HARD_GATES` (C3 + C5 scoring integration)
-- `ENABLE_SPEED_TIER_LOADING` (C4, consumer for wave_scoring stretch zone)
-- `ENABLE_WAVE_SCORING` (C5)
-- `ENABLE_C5_SHADOW_LOG` (default **True** — observational)
-- `ENABLE_MID_TRIP_PICKUP` (C6)
-- `ENABLE_PENDING_QUEUE_VIEW` (C7)
+---
 
-### Tomorrow's priorities (per F2.2_SPRINT_C_HANDOVER_2026-04-19.md)
-1. Review `dispatch_state/c2_shadow_log.jsonl` + `c5_shadow_log.jsonl` po 24h
-2. Sequential flag flips w kolejności: C2 → C3 → C4 cron → C5 → C6 → C7
-3. Geocoding 4 pending (Eatally HIGH) — osobna sesja z panel_client
-4. C4 systemd timer setup (`/etc/systemd/system/speed-tier-tracker.timer`)
-5. Dev iterations C5 calibration z real ground truth (po P1 data mature)
+## Stan systemu na 2026-04-18 (V3.11 post-Sprint-C-skeleton)
 
-## V3.10 (2026-04-18 wieczór) — 6 LIVE WINS od rana
-Po zamknięciu F2.2 audit jeszcze tego samego dnia wdrożono:
-1. **P1 TIMEOUT_SUPERSEDED split** — `4d984ca` / tag `f22-prep-p1-live`.
-   Learning_log teraz emit timeout_outcome + timeout_outcome_detail field
-   (AWAITING_ASSIGNMENT 54.6% / OVERRIDDEN_BY_LATER 45.2% / ORDER_CANCELLED 0.2%).
-   Unblokuje Sprint C5 (d)/(e) stretch_bonus calibration.
-2. **C1 per_order_delivery_times** — `ce7628e` / tag `f22-c1-live`.
-   RoutePlanV2 dataclass additive field, None default = fail-closed dla C2 gate.
-3. **Geocoding 8/12 H_E_pending** — 98 total restaurant_coords entries.
-   SCOPED coverage 95.38% → **97.94% (+2.56pp)**. 4 pending (Eatally HIGH + 3 inne)
-   dla osobnej sesji z panel_client.address_id lookup.
-4. **C2 per-order 35min gate (shadow)** — `eadf25f` / tag `f22-c2-shadow-live`.
-   Feature flag USE_PER_ORDER_GATE default False; shadow log empty expected
-   (current SLA check już enforcuje 35min, C2 meaningful po C3 deprecation).
-5. **C4 speed_tier_tracker** — `8e9dcbe` / tag `f22-c4-tracker-committed`.
-   Standalone script, manual run = dispatch_state/courier_speed_tiers.json
-   (30-day window: 6 FAST, 14 NORMAL, 4 SAFE, 12 INSUFFICIENT). Nightly cron
-   deferred (requires systemd timer edit).
-6. **C5 skeleton + same_restaurant_boost** — `222be21` / tag `f22-c5-skeleton-committed`.
-   wave_scoring.py module z compute_same_restaurant_boost (quick-win per sekcja 3.3
-   bag_size=0 = 50.2% TIER_A). Flag ENABLE_WAVE_SCORING=False, zero integration yet.
+### 6 serwisów dispatch live (active)
+- `dispatch-panel-watcher.service`
+- `dispatch-sla-tracker.service`
+- `dispatch-shadow.service`
+- `dispatch-telegram.service`
+- `dispatch-gps.service` (legacy PWA :8766, dying)
+- `nginx.service`
 
-Tests aggregate: **82/82 PASS** (P1 7/7 + C1 5/5 + C2 8/8 + C4 9/9 + C5 9/9 + F21 baseline 44/44).
+Plus:
+- `courier-api.service` (FastAPI :8767) — courier app backend
+- `dispatch-cod-weekly.timer` — F2.1d weekly cron
 
-## V3.9 (2026-04-18) — Post-F2.2-audit
-- 7 raportów F2.2 w workspace/docs/ (RECON, MERGE_REPORT, SECTION_3_1..3_5, SECTION_4_ARCHITECTURE_SPEC, HANDOVER)
-- 46 119 rows merged dataset (SCOPED 95.38% coverage, primary_gate w dataset_meta)
-- Architecture Spec ready dla Sprint C1-C7 (implementation explicitly w osobnych sesjach)
-- 108 kPLN/rok TIER_A business case confirmed (sekcja 3.3)
-- BAG_TIME_HARD_MAX=35 marked DEPRECATED (replaced by per-order 35min rule w F2.2 target)
-- Speed tier definition: SINGLETON p90 (empirical finding 3.1; 9 FAST, 38 NORMAL, 29 SAFE, 103 INSUFFICIENT)
+### Decision Engine 3.0 (F2.1b) LIVE — baseline rules R1-R9
 
-**Zmiana vs V3.3:** dodane wyniki red-team review (Gemini 3.1 PRO + DeepSeek-V3) — security TIER 0, decyzja architektoniczna Fazy 1, plan Krok 0-4.
+Reguły bazowe (Bartek Gold Standard):
+- **R1** delivery spread ≤ 8km
+- **R2-R4** corridor 2.5km, dynamic bag cap, free stop +100
+- **R5** pickup spread ≤ 1.8km
+- **R6** BAG_TIME hard ≤ 35 min + soft zone 30-35 (`BAG_TIME_HARD_MAX=35`, kalibracja z p95=35.6)
+- **R7** long-haul peak isolation (>4.5km, 14-17 Warsaw)
+- **R8** pickup_span czasowy — DEFERRED F2.1c (wymaga T_KUR propagation)
+- **R9** stopover -8/stop + wait penalty (-6/min over 5)
 
-## Kontekst biznesowy (pamięć operacyjna)
+### F2.2 AUDIT — Architecture Spec ready
 
-Adrian Czapla, NadajeSz Białystok (ekspansja Warszawa Q3 2026), 30 kurierów, 55 restauracji, 1500-2000 orderów/tydzień, revenue transport 35-45k PLN/tydz + GMV cash 70-90k PLN/tydz. Roczna skala 1.87M PLN transport, 3.6M PLN GMV.
+**Primary reference:** `workspace/docs/F2.2_SECTION_4_ARCHITECTURE_SPEC_2026-04-18.md`
 
-**Faza 0 DONE 12.04.2026** — 8/8 patches, **10 commitów** (z V3.3 docs update).
+**Kluczowe findings empiryczne:**
+- OVERLAP 4908 cases (mid-trip pickup dataset dla C6)
+- Speed tier FAST: 9 kurierów (SINGLETON p90 metric)
+- Strong transitions: 220 pairs (restaurant_pair_affinity source)
+- Weak transitions: 180 pairs
+- Food-court zero-distance: 16 pairs
+- TIER_A missed same-restaurant: 2187/rok = **108 kPLN/rok** (sekcja 3.3)
+- PEAK regime: 11 cells (Sunday 13-19h dominant)
 
-### Kluczowa informacja biznesowa
+**Architektura docelowa:**
+- Single hard gate: per-order delivery_time ≤ 35 min
+- R1/R5/R6/R7/R8 hard → soft penalties
+- Stretch bonus asymmetric per speed tier (FAST/NORMAL/SAFE)
+- Context-aware weights (NORMAL vs PEAK, 11-cell lookup)
+- Feature flags rollout, sequential C1→C7
+- Rollback trivial: flag False + restart
 
-**Big 4 jeden właściciel** — Chicago Pizza, Grill Kebab, Raj, Sweet Fit & Eat:
-- Start: maj 2025
-- Marzec 2026: 1489 orderów (Chicago 387, Grill 654, Raj 325, Sweet 123)
-- Przychód marzec 2026: 31,623 zł transport + 74,324 zł GMV cash
-- **~20-22% wolumenu Nadajesz od jednego decision-makera** = concentration risk
-- Wszystkie 4 używają Symplex Bistro (POS)
+### F2.2 Sprint C skeleton COMPLETE (shadow mode)
 
-**Analiza spadku marzec 2026:**
-- YoY marzec 2026 lepszy niż 2025 w 5/7 dni tygodnia (+11% ogólnie)
-- Poniedziałki -17% YoY
-- Sezonowość luty→marzec: -30% w 2026 vs -10% naturalna (anomalia)
-- Spadek pochodzi z 64 pozostałych restauracji, nie Big 4
+**Wszystkie flagi default False = current behavior preserved.**
 
-## ✅ Stan po Fazie 1 (DONE 13-14.04.2026)
+#### Sprint C commits + tags
 
-**Wszystkie Kroki 0-4 DONE.** Shadow dispatcher live, pierwsze propozycje Telegram dostarczone 13.04 23:05.
+| Sprint | Commit | Tag | Status |
+|---|---|---|---|
+| P1 TIMEOUT_SUPERSEDED | 4d984ca | f22-prep-p1-live | LIVE (clean logging) |
+| C1 per_order_delivery_times | ce7628e | f22-c1-live | LIVE |
+| Audit docs V3.9 | 500fce4 | f22-audit-docs-committed | LIVE |
+| C2 per-order 35min gate | eadf25f | f22-c2-shadow-live | SHADOW |
+| C4 speed_tier_tracker | 8e9dcbe | f22-c4-tracker-committed | MANUAL RUN OK |
+| C5 skeleton (1 of 6) | 222be21 | f22-c5-skeleton-committed | DEPRECATED by C5 full |
+| V3.10 day1 docs | 11ae5c3 | f22-sprint-c-day1-docs | — |
+| C3 R6 narrow soft zone | cc16755 | f22-c3-narrow-shadow-live | SHADOW |
+| C5 FULL 6 features | 4fac50e | f22-c5-full-shadow-live | SHADOW |
+| C6 commitment_emitter | — | f22-c6-skeleton-committed | SKELETON |
+| C7 dispatch_pipeline integration | e0dc06e | f22-c7-skeleton-live | SKELETON |
+| Telegram transparency MVP | — | f22-transparency-mvp-live | LIVE |
+| **Sprint C skeleton complete** | — | **f22-sprint-c-skeleton-complete** | — |
 
-### Krok 0 — Security TIER 0 ✅ DONE (P0.5b `0f574c1`)
-5 fixów per `docs/SECURITY_FIXES_TIER0.md`: HARD EXCLUSIONS (settings.json deny rules), state_machine retry+LOCK_SH, geocoding atomic_write_json, panel_client `_open_with_relogin`, .gitignore audit.
+#### Feature flags stan docelowy (`common.py`)
 
-### Krok 1 — CC acceleration ✅ DONE
-Allow-list + deny rules w `~/.claude/settings.json`, tmux 2 okna (claude + logs), `morning_brief.sh` + `evening_wrap.sh`.
-
-### Krok 2 — Decyzja architektoniczna Fazy 1 ✅ DONE (D19)
-Greedy insertion O(N) jako MVP + brute-force dla bag≤3 (`dd73048`). Spec `docs/FAZA_1_DECYZJA_ARCH.md`.
-
-### Krok 3 — Git remote backup ✅ DONE
-GitHub `czaplaadrian88-code/ziomek-dispatch-`, SSH key ed25519 deploy key, push 22 commitów, cron hourly push `/root/backups/git_push.log`.
-
-### Krok 4 — Faza 1 ✅ DONE
-5 modułów core (`dd73048`) + F1.2-F1.6 iteracje:
-- **F1.1** core: `route_simulator_v2` + `feasibility_v2` + `dispatch_pipeline` + `shadow_dispatcher` + `telegram_approver`
-- **F1.2** `courier_names.json` lookup (K207→Marek, K289→Grzegorz W fix)
-- **F1.3** [PROPOZYCJA] enrichment — imiona + km + ETA pickup + delivery_address
-- **F1.4a** `/status` komenda Telegram — stan systemu on-demand
-- **F1.4b** daily_briefing.py (morning/evening) — odroczone F1.6
-- **F1.4c** courier_ranking.py (top N SLA) — odroczone F1.6
-- **F1.5** GPS PWA server — `https://gps.nadajesz.pl` + Let's Encrypt + nginx reverse proxy + PIN auth 4-cyfra
-- **F1.6** `/status` 3-w-1 (bieżący + dziś + wczoraj + top 3 kurierów) + wyłączenie auto-briefing/ranking crons
-
-### 6 serwisów produkcyjnych live
-| Serwis | Cel |
-|---|---|
-| `dispatch-panel-watcher` | 20s poll panelu Rutcom |
-| `dispatch-sla-tracker` | 10s SLA + delivery_time_minutes |
-| `dispatch-shadow` | Shadow dispatcher — propozycje → Telegram |
-| `dispatch-telegram` | Telegram approver + `/status` command |
-| `dispatch-gps` | PWA GPS receiver (port 8766) |
-| `nginx` | Reverse proxy 443 → 8766 + HTTP→HTTPS redirect |
-
-### Kluczowe insighty Fazy 1
-- **D19 greedy hybrid** działa — 76-78ms latency per decyzja (w peak), 30 kurierów × 5 orders/min = OK
-- **`learning_log.jsonl` zbiera od 13.04 23:05** — pierwsza akcja: NIE dla #465834 (Grill Kebab, kurier 207). Agreement rate potrzebuje >100 propozycji dla meaningful metrics (min. tydzień shadow operation).
-- **F1.2 courier_names.json** — bug `kurier_piny.json` (PIN-y jako klucze, nie courier_id) był root cause "K207" zamiast "Marek". Fix: odwrócenie `kurier_ids.json` → `{courier_id: name}`.
-- **F1.5 GPS coverage** — legacy Traccar writer (`/root/gps_server.py` @reboot) nadal pisze `gps_positions.json` z imieniem jako key. PWA pisze osobny `gps_positions_pwa.json` z courier_id — `courier_resolver._load_gps_positions()` merge z PWA primary. **Fresh GPS <5min: 2/82** kurierów (peak migration w weekend po SMS/QR dystrybucji).
-
-## ✅ F2.2 Audit Complete (2026-04-18) — implementation ready
-
-**Primary reference**: `workspace/docs/F2.2_SECTION_4_ARCHITECTURE_SPEC_2026-04-18.md`
-
-### Kluczowe findings
-- **OVERLAP 4 908 cases** (mid-trip pickup dataset dla Sprint C6)
-- **Speed tier FAST: 9 kurierów** (singleton p90 metric; Bartek=23, Mateusz=25, Gabriel=28 borderline)
-- **Strong transitions: 220 pairs** (restaurant_pair_affinity lookup ready)
-- **TIER_A missed: 2 187 events = 108 kPLN/rok** (sekcja 3.3, quick win: 50% trivially captured by same_restaurant auto-attach)
-- **PEAK regime: 11 cells, Sunday 13-19h dominant** (2.18x miss rate PEAK vs NORMAL)
-- **Stretch waste top-10: 449 PLN/day ~164 kPLN/rok** (sekcja 3.1)
-
-### Architektura docelowa F2.2 (Sprint C implementation)
-- Single hard gate: per-order delivery_time ≤ 35 min (replacing R6 BAG_TIME_HARD_MAX)
-- R1/R5/R6/R7/R8 hard → soft penalties w scoring.py
-- Stretch bonus asymmetric per tier (FAST/NORMAL/SAFE zones)
-- Context-aware weights (NORMAL vs PEAK regime, 11-cell lookup)
-- Feature flags rollout, sequential C1→C2→C4→C5→C6→C7
-- Rollback: default False flags, trivial
-
-### F2.2 dokumenty (wszystkie w workspace/docs/)
-- `F2.2_RECON_2026-04-18.md` — stan systemu, hipotezy H2-H11
-- `F2.2_MERGE_REPORT_2026-04-18.md` — dataset baseline 46 119 rows
-- `F2.2_SECTION_3_1_WAVE_CHAINS_2026-04-18.md` — wave chains, singleton tier, OVERLAP dataset
-- `F2.2_SECTION_3_2_TRANSITIONS_2026-04-18.md` — 220 strong pairs, same-restaurant, food-court effect
-- `F2.2_SECTION_3_3_MISSED_BUNDLING_2026-04-18.md` — **business case 108 kPLN/rok**
-- `F2.2_SECTION_3_5_PEAK_REGIMES_2026-04-18.md` — 11 PEAK cells, context weights
-- `F2.2_SECTION_4_ARCHITECTURE_SPEC_2026-04-18.md` — **PRIMARY design doc dla Sprint C**
-- `F2.2_HANDOVER_2026-04-18.md` — Q&A dla Adriana (kiedy wraca za tydzień)
-
-### Parallel workstreams (NOT Sprint C)
-- **P1** F2.2-prep: fix TIMEOUT_SUPERSEDED w telegram_approver (blokuje Sprint C5 d/e)
-- **P2** Geocoding 12 H_E_pending restauracji (memory: `project_f22_geocoding_queue.md`) — prod write, explicit green light
-- **P3** PWA resurrection (weeks, not blocking F2.2 core)
-
-## Runtime i infrastruktura
-
-| Element | Wartość |
-|---|---|
-| Serwer | Hetzner CPX22, Ubuntu 24.04 |
-| IP | 178.104.104.138 |
-| Timezone serwera | UTC |
-| Docker | openclaw-openclaw-gateway-1 (OpenClaw 2026.3.27) |
-| Model AI | openai/gpt-5.4-mini primary, DeepSeek fallback |
-| Panel | gastro.nadajesz.pl/admin2017/new/orders/zlecenia |
-| Telegram dispatch | @NadajeszBot |
-| Telegram sterowanie | @GastroBot |
-| Telegram admin ID | 8765130486 |
-| Claude Code | v2.1.104, Opus 4.6 1M, Claude Max, tmux 'backup' |
-
-## Struktura plików
-
-### Kod produkcyjny: /root/.openclaw/workspace/scripts/dispatch_v2/
-
-| Plik | Status | Rola |
-|---|---|---|
-| common.py | ✅ P0.1+P0.3+P0.5 | config + WARSAW + parse_panel_timestamp + FALLBACK_BASE_SPEEDS_KMH + HAVERSINE_ROAD_FACTOR_BIALYSTOK + get_time_bucket |
-| event_bus.py | ✅ | SQLite idempotent |
-| state_machine.py | ✅ → 🔧 P0.5b retry | 6 commitment levels, delivery_coords w NEW_ORDER upsert |
-| panel_client.py | ✅ → 🔧 P0.5b re-login | login HTTP Laravel |
-| panel_watcher.py | ✅ P0.4 | inline geocoding delivery_address |
-| sla_tracker.py | ✅ | 10s konsumer SLA |
-| osrm_client.py | ✅ P0.5 | route/table z fallbackiem, circuit breaker |
-| geocoding.py | ✅ P0.4 → 🔧 P0.5b atomic write | Google + cache, timeout parametryzowany |
-| scoring.py | ✅ P0.1 | 4 komponenty, linear decay |
-| courier_resolver.py | ✅ P0.3 | priority fix aktywny bag > last_delivered |
-| route_simulator.py v1 | 🗑️ | Do przepisania v2 (greedy w Fazie 1) |
-| feasibility.py v1 | 🗑️ | Do przepisania v2 |
-
-### Nowe moduły Fazy 1 (Krok 4):
-- route_simulator_v2.py (~300 linii) — **greedy insertion + brute-force fallback bag ≤ 3** + prep_variance
-- feasibility_v2.py (~200 linii) — R1/R3/R8/R20/R27/D8
-- dispatch_pipeline.py (~250 linii) — scoring + R28 + R29
-- shadow_dispatcher.py (~350 linii) — systemd runner
-- telegram_approver.py (~250 linii) — Telegram listen + learning_log
-
-### State: /root/.openclaw/workspace/dispatch_state/
-
-| Plik | Zawartość |
-|---|---|
-| orders_state.json | Stan orderów |
-| events.db | Event bus SQLite |
-| geocode_cache.json | Google cache (90% hit, 294 entries) — 🔧 P0.5b atomic |
-| restaurant_coords.json | 53 restauracje |
-| restaurant_meta.json | **68 restauracji, 113 KB** z P0.7 |
-| shadow_decisions.jsonl | 🆕 Faza 1 |
-| learning_log.jsonl | 🆕 Faza 1 |
-| impasse_log.jsonl | 🆕 Faza 1 |
-
-### Offline tools (POZA git repo): /root/.openclaw/workspace/scripts/tools/
-- calibrate_road_factor.py (P0.5 baseline)
-- gap_fill_restaurant_meta.py (P0.7, 595 linii, regen meta)
-
-### Docs: /root/.openclaw/workspace/scripts/dispatch_v2/docs/
-- (na poziomie wyżej: CLAUDE.md — TEN plik, master brief)
-- CLAUDE_WORKFLOW.md — agent behavior spec (V3.4)
-- TECH_DEBT.md — backlog + bug notes per patch
-- FAZA_0_SPRINT.md — historia 8 patchów
-- SYSTEM_FLOW.md — end-to-end flow
-- DEMAND_ANALYSIS.md — 121k dowozów, hipotezy Fazy 6
-- SKILL.md — szczegóły operatora
-- 🆕 SECURITY_FIXES_TIER0.md — spec 5 fixów + checklist (Krok 0)
-- 🆕 FAZA_1_DECYZJA_ARCH.md — greedy vs brute-force vs OR-Tools (Krok 2)
-
-### Backups: /root/backups/
-- dispatch_v2_POST_FAZA_0_20260412-194750.tar.gz (450K)
-- dispatch_state_POST_FAZA_0_20260412-194750.tar.gz (301K)
-- tools_POST_FAZA_0_20260412-194750.tar.gz (26K)
-
-### Archive: /root/archive/p07_source/
-- 9 CSV zestawienie_panel 52-60 + 1 merged (32 MB, ~24007 delivered orderów)
-
-### Sekrety (HARD EXCLUSION dla CC): /root/.openclaw/workspace/.secrets/
-- panel.env, gmaps.env, traccar.env
-
-**CC NIGDY nie czyta tej ścieżki. Nigdy nie wkleja zawartości tych plików w odpowiedziach.**
-
-### Systemd
-- dispatch-panel-watcher.service — 20s ACTIVE ✅
-- dispatch-sla-tracker.service — 10s ACTIVE ✅
-- dispatch-shadow.service — 🆕 Faza 1 (Krok 4)
-- dispatch-telegram-approver.service — 🆕 Faza 1 (Krok 4)
-
-## Git history (22 commitów — Faza 0 + Faza 1)
-
-```
-842f961 F1.6: /status 3-w-1 + wyłączenie cron briefing/ranking
-7af8ce1 F1.5: GPS PWA server z PIN + HTTPS via nginx + Let's Encrypt
-535047c F1.4c: courier ranking dzienny 23:30
-3afeae4 F1.4b followup: docs/CRON_SCHEDULE.md — infrastructure as code
-23bfa7d F1.4b: daily briefing morning+evening Telegram (CRON_TZ=Warsaw)
-2649ac7 F1.4a: /status komenda Telegram — stan systemu na żądanie
-f7ff9eb F1.3: Enrichment formatu propozycji — km, ETA, adres, imiona
-4b7d1b4 F1.2: courier_names.json lookup — K207 → Marek, K289 → Grzegorz W
-2df098e F1.1 followup: TECH_DEBT notes po pierwszej propozycji Telegram
-dd73048 F1.1: Faza 1 core modules (route_sim_v2+feasibility_v2+pipeline+shadow+approver)
-0f574c1 P0.5b: Security TIER 0 hotfix (4 code fixes + .gitignore + spec note)
-154fb08 docs: V3.4 update + add SECURITY_FIXES_TIER0 + FAZA_1_DECYZJA_ARCH
-0c80dee docs: update CLAUDE.md to V3.3 + add docs/CLAUDE_WORKFLOW.md
-7a60276 P0.8: Final cleanup + meta integration + FAZA 0 DONE
-57a5d34 P0.7: gap_fill_restaurant_meta.py + restaurant_meta.json (68 rest)
-bfd1dfc docs: add DEMAND_ANALYSIS.md
-12285ef P0.6: RECON panel API (prep_ready_at nie istnieje)
-15493ea P0.5: OSRM haversine fallback + circuit breaker
-214fe17 P0.4: delivery_coords enrichment via geocoding
-d3ee6aa P0.3: courier position priority fix + DRY parse
-6d99416 docs: add Git workflow to CLAUDE.md
-602b476 Initial commit
-```
-
-Repo: `/root/.openclaw/workspace/scripts/dispatch_v2/` (NIE wyżej).
-**Remote:** `git@github.com:czaplaadrian88-code/ziomek-dispatch-.git` (deploy key, push co godzinę przez cron).
-
-## restaurant_meta.json struktura (P0.7)
-
-```
-{
-  "restaurants": {
-    "<nazwa>": {
-      "sample_n", "first_order", "last_order", "active", "volume_pct",
-      "prep_variance_min": {median, p75, p90, mean, stddev, min, max},
-      "waiting_time_sec": {median, p75, p90, mean, max, median_non_zero, ...},
-      "extension_min": {median, p75, p90, mean, never_extended_pct, ...},
-      "flags": {low_confidence, chronically_late, prep_variance_high, 
-                unreliable, critical},
-      "courier_sample": [top5],
-      "delivery_addresses_sample": [top5],
-      "last_updated": <iso>,
-      "prep_variance_fallback_min", "waiting_time_fallback_sec",
-      "extension_fallback_min"
-    }
-  },
-  "fleet_medians": {
-    "fleet_prep_variance_median": 13.0,
-    "fleet_waiting_time_median_sec": 0,
-    "fleet_extension_median_min": 7.0,
-    "source_restaurants_n": 57
-  },
-  "metadata": {
-    "total_delivered_orders": 23607, "unique_restaurants": 68, ...
-  }
-}
-```
-
-**Integracja w Fazie 1 route_simulator_v2:**
 ```python
-def get_pickup_ready_at(restaurant_name, czas_odbioru_timestamp, now):
-    r = meta["restaurants"].get(restaurant_name)
-    if r is None:
-        pv = meta["fleet_medians"]["fleet_prep_variance_median"]  # 13
-    elif r["flags"]["low_confidence"]:
-        pv = r["prep_variance_fallback_min"]  # fleet fallback
-    else:
-        pv = r["prep_variance_min"]["median"]
-    
-    pickup_ready = czas_odbioru_timestamp + timedelta(minutes=pv)
-    return max(now, pickup_ready)
+# F2.2 Sprint C flags (all default False = current behavior preserved)
+USE_PER_ORDER_GATE = False           # C2 — hard per-order 35min
+ENABLE_C2_SHADOW_LOG = True          # C2 — observational diff logging (ON)
+DEPRECATE_LEGACY_HARD_GATES = False  # C3 — R6 narrow soft zone
+ENABLE_SPEED_TIER_LOADING = False    # C4 — courier tier read from JSON
+ENABLE_WAVE_SCORING = False          # C5 — 6-feature adaptive scoring
+ENABLE_C5_SHADOW_LOG = True          # C5 — observational diff logging (ON)
+ENABLE_MID_TRIP_PICKUP = False       # C6 — commitment emit at state transitions
+ENABLE_PENDING_QUEUE_VIEW = False    # C7 — pending_queue + demand_context params
+
+# Telegram transparency (LIVE od 18.04.2026)
+ENABLE_TRANSPARENCY_ROUTE = True     # MVP — ordered route sequence w proposal
+ENABLE_TRANSPARENCY_SCORING = False  # OPCJA A full — DEFERRED do jutra
 ```
 
-## Decyzje architektoniczne D1-D19
+#### Shadow log files (observational data)
 
-**D1** — Effective pickup time dla SLA. Od efektywnego odbioru, nie od now.
+Obserwacyjne logi aktywne od restart dispatch-shadow.service 2026-04-18:
+- `/root/.openclaw/workspace/dispatch_state/c2_shadow_log.jsonl` — diff events (C2 vs current SLA)
+- `/root/.openclaw/workspace/dispatch_state/c5_shadow_log.jsonl` — wave_scoring diffs (|adjustment| ≥ 1.0)
+- `/root/.openclaw/workspace/dispatch_state/learning_log.jsonl` — P1 clean timeout_outcome bucket
 
-**D2** — PDP-TSP z constraint pickup-before-delivery. ALE w Fazie 1 zaczynamy od greedy (D19), brute-force fallback bag ≤ 3.
+### F2.2 Sprint C file structure
 
-**D3** — Dynamic MAX_BAG_SIZE. MAX_BAG_TSP_BRUTEFORCE=5, MAX_BAG_SANITY_CAP=8.
+Nowe pliki w `scripts/dispatch_v2/`:
+- `wave_scoring.py` — 6 features (same_restaurant, food_court, pair_affinity, stretch_bonus, wave_continuation, context_peak_multiplier)
+- `speed_tier_tracker.py` — standalone nightly script (stdlib only)
+- `commitment_emitter.py` — 6 commitment levels C6 skeleton
+- `pending_queue_provider.py` — C7 helper (get_pending_queue, compute_demand_context)
 
-**D4** — oldest_in_bag_min = 0 dla assigned. SLA od picked_up.
+Zmodyfikowane:
+- `common.py` — feature flags + constants
+- `feasibility_v2.py` — C2 per-order gate + C3 narrow soft zone
+- `scoring.py` — C3 soft penalties + C5 wave adjustment integration
+- `dispatch_pipeline.py` — C7 kwarg-only signature extension
+- `route_simulator_v2.py` — C1 per_order_delivery_times
+- `telegram_approver.py` — P1 5-bucket timeout + MVP transparency route
 
-**D5** — JEDNOLITE SLA 35 min do października 2026.
+### Telegram Transparency MVP (LIVE)
 
-**D6** — Oceny 4 wymiary + consistency. Tier A/B/C/D z modyfikatorami (1.05/1.00/0.92/0.75).
+**Flaga:** `ENABLE_TRANSPARENCY_ROUTE=True` w common.py
 
-**D7** — Grupa Telegram z Ziomkiem.
+**Co robi:** Każda propozycja Telegram pokazuje ordered route sequence kurier powinien zrobić:
 
-**D8** — BEZ WAITU. Kurier zawsze w ruchu.
-
-**D9** — Continuous routing. Sliding window 15 min.
-
-**D10** — PDP-TSP point-in-time → migracja do VRPTW OR-Tools w Fazie 9.
-
-**D11** — Dyspozycje → Grafik. Środa 20:00 → Piątek 12:00 → 18:00 → 20:00 → Sobota 09:00.
-
-**D12** — Overbooking policy. Nadmiar: tier A/B peak.
-
-**D13** — Premium SLA odroczone do X.2026.
-
-**D14** — Faza 0 przed Fazą 1. DONE 12.04.
-
-**D15** — Shadow Mode = Ziomek imituje koordynatora.
-
-**D16** — Filozofia kontraktu + ochrona kuriera. Bufor prep_variance.
-
-**D17** — OSRM fallback 4-warstwowy (P0.5).
-
-**D18** — delivery_coords od NEW_ORDER (P0.4).
-
-**🆕 D19** — Greedy insertion w Fazie 1 (decyzja po Gemini review). route_simulator_v2 zaczyna od greedy O(N), brute-force tylko dla bag ≤ 3, OR-Tools migracja w Fazie 9. Powód: brute-force bag=5 × 30 kurierów × 5 orderów/min = 18000 obliczeń/min, GIL nie wytrzyma. Spec w `docs/FAZA_1_DECYZJA_ARCH.md`.
-
-## 29 Reguł biznesowych (potwierdzone na 2000+ dowozach)
-
-### Dispatching (R1-R10)
-1. Outlier 3 km → odrzuć. -61% violations.
-2. Closest-first lexicographic (SLA_violations, total_duration).
-3. Dynamic MAX_BAG_SIZE (D3).
-4. Free stop detector <500m → zero-cost.
-5. On-route bundling (UVP). Detour <1.5 km.
-6. Load-based alert. active_orders/active_couriers >3.0 przez >10 min.
-7. Golden hour 18:30-20:00. 1 kurier rezerwa, load max 2.5.
-8. Peripheral SLA 45 min. Wasilków/Nowodworce + sugestia +5 PLN.
-9. Data quality filter. Delivery >90 min → data_error.
-10. Winter mode. Gru-lut: weekend multiplier 1.4x, MAX_BAG -1.
-
-### Kurierzy (R11-R15)
-11. MST per kurier. Bartek 3.2 t/h, Mateusz O 3.6.
-12. Tier D blacklist peak. SLA <75% przez 5+ dni → off-peak only.
-13. Consistency score. 100 - stddev(daily_sla).
-14. Ramp-up godzina 1. Pierwsza godzina: max bag 2.
-15. Weekly courier report. Niedziela 20:00.
-
-### Restauracje (R16-R22)
-16. Critical partner >5% wolumenu → osobny monitoring.
-17. Per-restaurant SLA baseline. Spadek >5pp w 7 dni → alert.
-18. Meta gap-filling (P0.7 DONE). 68/68.
-19. Cancellation monitoring >5% rolling 7 days → alert.
-20. Per-restaurant bag cap. Kumar's/Mama Thai/Baanko/Eatally → max 2.
-21. Seasonal degradation >10pp vs baseline → alert.
-22. Restaurant onboarding similarity. 14-day adaptive.
-
-### Finansowe (R23-R26)
-23. Dynamic pricing dalekie >15 km → +5 PLN. +14k/rok.
-24. Per-restaurant revenue report. Cotygodniowo.
-25. Fleet utilization target >85%.
-26. Weekly ROI Adrian. Poniedziałek 08:00 Telegram.
-
-### Z sesji 12.04 (R27-R29)
-27. Pickup window ±5 min. Detour >5 min wait → NO.
-28. Wave continuity preference. Deadhead scoring z fazą cyklu.
-29. Best-effort + alert. Nigdy wiszący order.
-
-## Format Telegram [PROPOZYCJA] (compact, 600 chars)
-
-**Happy-path:**
+Przykład przed MVP:
 ```
-[#{order_id}] {time} → {addr}
-{rest}, dekl. {dekl} (ready ~{ready})
-
-🎯 {courier} ({score}) — {km} km, ETA {eta}, bag {b1}→{b2}
-   trasa: {geo_trasa} ✓
-
-🥈 {alt1} ({s1}) | {alt2} ({s2}) | {alt3} ({s3})
-
-✓ R1 R3 R8 R20 R27 D8 | {rest}: prep {p}min, critical={c}
-
-TAK / NIE / INNY / KOORD
+🎯 Bartek O. | ETA 3 min
+3 ordery w bundle
+[1. Tak] [2. Inny]
 ```
 
-**Best-effort (R29):**
+Przykład po MVP:
 ```
-[#{order_id}] ⚠️ {time} → {addr}
-{rest}, dekl. {dekl} (+{viol} min SLA violation)
+🎯 Bartek O. | ETA 3 min
 
-🎯 {courier} ({score} best_effort)
-   bag {b1}→{b2}, trasa: {trasa}
+📦 3 ordery w bundle:
+  1. Rukola → Lipowa 23
+  2. Bar Eljot → Legionowa 12
+  3. Miejska Miska → Zachodnia 8
 
-🥈 {alt1} (+{m} min, bag {b}) | {alt2} ({reason})
+🗺️ Kolejność: Rukola → Bar Eljot → Miejska Miska 
+            → Lipowa → Legionowa → Zachodnia
 
-❌ {fail1} | {fail2}
-💡 {rest} {non_critical?}, -5 OK | KOORD?
-
-TAK {first} / INNY / KOORD / SKIP
-```
-
-**Auto (Faza 8):**
-```
-[AUTO #{id}] {courier} @ {eta} → {rest}/{addr} ({score}) ✓
+[1. Tak] [2. Inny]
 ```
 
-## ZAWSZE / NIGDY (z security)
+**Dane:** `RoutePlanV2.sequence` (po C1 dostępne). Format: `restaurant1 → restaurant2 → ... → drop1 → drop2 → drop3`.
 
-### ZAWSZE
-- CLAUDE.md + CLAUDE_WORKFLOW.md czytane na start sesji (przez sed-only-read)
-- cp .bak-$(date +%Y%m%d-%H%M%S) przed patchem prod
-- py_compile → import check → test → restart (3-etapowa walidacja)
-- Atomic writes temp → fsync → rename
-- Warsaw TZ: `from zoneinfo import ZoneInfo; WARSAW = ZoneInfo("Europe/Warsaw")`
-- R9 data quality filter przed scoringu
-- TECH_DEBT.md update na koniec sesji
-- Po TAK Adriana w Telegram → Ziomek loguje się i przypisuje (D15)
-- route()/table() zwracają dict/list — obsługuj osrm_fallback flag
-- tmux dla długich sesji
-- **Batch z explicite STOP po 5-8 krokach** (ponad 8 = CC traci kontekst)
-- **W commit messages referencjuj Gemini/DeepSeek review** ("fix per DeepSeek #1.1")
-- **Sed do odczytu, Python heredoc + str.replace + assert do edycji**
+**OPCJA A pełna (DEFERRED do jutra):** dodanie scoring breakdown (baza + wave adjustment + soft penalties) — wymaga integracji z `scoring.py` wave/soft outputs. Flaga `ENABLE_TRANSPARENCY_SCORING=False` na teraz.
 
-### NIGDY
-- Nie łam prod bez cp .bak-* + py_compile + testy
-- Nie restartuj systemd bez py_compile + import check + Adrian zgody
-- Nie reintroduce chromedp — Python HTTP
-- Nie każ kurierowi czekać (D8)
-- Nie licz SLA od now dla assigned (D1)
-- Nie jq (brak w systemie)
-- Nie tools.telegram / tools.exec.approval w openclaw.json (crash)
-- Nie hardcoduj MAX_BAG_SIZE (D3)
-- Nie zawieszaj orderów (R29 best-effort)
-- Nie implementuj premium SLA dzisiaj (D13)
-- Nie zaniżaj ETA "bo się spóźniają" (D16: bufor)
-- Nie używaj traffic.traffic_multiplier dla OSRM fallback (D17)
-- Nie zaczynaj Fazy 2+ przed 14 dni stabilnego Ziomka
-- Nie rozpraszaj się POS integration — to po Krokach 0-4 + stabilizacja
-- **Nie czytaj /root/.openclaw/workspace/.secrets/, /root/.ssh/, *.env, *.pem, *.key** (HARD EXCLUSION)
-- **Nie wklejaj zawartości plików .env/.secrets/ w odpowiedziach** nawet jeśli przypadkiem otworzysz
-- **Nie używaj sed do edycji** (tylko odczyt)
-- **Nie startuj Krok 4 (Faza 1) przed Krokami 0-3**
-- **Nie pchaj autonomous mode bez CI/CD** (Gemini: zbyt niebezpieczne)
+---
 
-### F2.2 implementation sessions (Sprint C)
-- **Full patch workflow obowiązkowy** per każda zmiana: cp .bak → edit → py_compile → import check → tests → commit → restart tylko za ACK Adriana
-- **Rollback plan mandatory** dla każdego C1-C7 kroku (dokumentacja + feature flag default False)
-- **Feature flags default False** przy deploy; production flip dopiero po shadow validation
-- **Shadow mode ≥ 5 dni** przed production flip dla C5/C6/C7
-- **Per sesja czytaj `workspace/docs/F2.2_SECTION_4_ARCHITECTURE_SPEC_2026-04-18.md` jako pierwszy**
-- **Referuj findings section 3.1-3.5 w commit messages** ("implements C5(a) per sekcja 3.3 bag_size=0 quick win")
+## Zasady współpracy (HARD) — V3.11 edition
 
-## Plan tygodni 1-4
+### Podstawowe (bez zmian)
+- **"Pytaj nie zgaduj"** — każde zgadywanie = 10-30 min debug
+- Stopniowy rollout, nie big-bang. Shadow mode przed production.
+- **Per krok .py:** draft → ACK → `cp .bak` → edit → `py_compile` → import check → test → commit
+- **NIE restartuj systemd** bez py_compile + import check + mojej zgody
+- Granular git tags jako rollback points (schemat: `f22-{sprint}-{step}-{status}`)
+- NIE używaj `jq`, `sed` tylko do odczytu, heredoks tylko przy `str_replace`
+- Warsaw TZ: `ZoneInfo("Europe/Warsaw")` jako `WARSAW`
+- Atomic writes: temp → fsync → rename
 
-**Tydzień 1 (13-19.04):** ✅ DONE 13-14.04 — Krok 0 (P0.5b TIER 0) + Krok 1 (CC acc) + Krok 2 (D19) + Krok 3 (git remote GitHub) + Krok 4 (F1.1-F1.6 Faza 1 live). 6 serwisów produkcyjnych aktywnych. Shadow dispatcher + GPS PWA deployed.
+### F2.2 implementation sessions (NOWE od V3.9)
+- **Full patch workflow obowiązkowy** per każda zmiana kodu
+- **Rollback plan** w każdej sesji = requirement, nie opcja
+- **Feature flags default False** przy deploy
+- **Shadow mode ≥5 dni** przed production flip dla C5/C6/C7 decyzyjnych
+- **Per sesja:** czytaj `docs/F2.2_SECTION_4_ARCHITECTURE_SPEC` pierwszy
+- **Downstream consumer checklist** dla każdej nowej metryki:
+  - shadow_dispatcher `_serialize_candidate` (location A)
+  - inline best serialization (location B)
+  - learning_analyzer readers
+  - test suite
 
-**Tydzień 2 (20-26.04):**
-- **Learning analyzer** (DEFERRED — requires F2.2-prep P1 fix). Original plan: `/learning poziom 2` (21.04), analiza `learning_log.jsonl` po 7 dniach shadow, agreement rate per kurier+restauracja, false-positive detection, scoring fine-tune. **Status 2026-04-18**: `learning_log.jsonl` 94% TIMEOUT_SUPERSEDED (broken ground truth), analyzer bez sensu przed P1 fix w telegram_approver. **Analyzer complements F2.2, nie replaces** — wraca do planu po P1 fix.
-- **Auto-approve** (DEFERRED — depends on F2.2-prep P1 fix). Concept (R26: agreement rate >85% → Ziomek przypisuje bez Adrian ACK) **NIE zastąpiony przez F2.2**, ale zablokowany bo learning_log ground truth broken. Po P1 fix + F2.2 Sprint C (lepszy scoring → wyższe confidence) auto-approve można włączyć z niższym threshold niż pierwotnie planowane (np. 75% zamiast 85%).
-- **Telegram security #1** (TIER 1) — rate limit Bot API, webhook secret, allowed_users whitelist
-- **Rate limit #2** (TIER 1) — nginx burst=10 dla `/gps` (obecnie 5), może istnieje DoS concern
-- **OSRM boundary #4** (TIER 1) — circuit breaker threshold calibration po realnym outage
-- **Restimo API skeleton** — FastAPI endpoint `/v1/dispatch` (aggregator integration) — nowy kanał przychodów
+### Autonomic mode dla CC (NOWE od V3.10)
+CC może pracować autonomicznie jeśli otrzyma explicit autonomic mode prompt. Eskalacja **TYLKO** w 4 przypadkach:
+1. Write poza zadeklarowany scope
+2. Contradiction w wytycznych (pokazać konkret)
+3. Fundamental assertion FAIL po 2 próbach safe recovery
+4. >30 min bez progresu w jednej fazie
 
-**Tydzień 3 (27.04-3.05):**
-- Hardening (circuit breakers per moduł, supervision tree)
-- Faza 2 ratings (gwiazdki kurierów w UI, public transparency)
-- 40 spotkań sales partnerów restauracji (target: 10 nowych)
+Progress updates co 5-10 min. STOPy tylko na commit/restart ACK.
 
-**Tydzień 4 (4-10.05):**
-- ROI boosters: R23 dynamic pricing (surge), R17/19/21 restaurant monitoring (late/cancel rate alerts), R6 natężenie auto-tune
-- 40 spotkań sales + pierwszy signed Restimo contract
+### Critical new rule: downstream serializer checklist
+Każda nowa metryka w `dispatch_pipeline` lub `feasibility_v2` wymaga sprawdzenia:
+- [ ] `shadow_dispatcher._serialize_candidate` — location A
+- [ ] inline best serialization — location B
+- [ ] `learning_analyzer` readers
+- [ ] test coverage
 
-**Odsunięte poza tydzień 4:** POS integration (R31 Symplex Bistro — 4 Big Partner'zy), Faza 2 MKT ratings, Faza 6 scheduler predictions.
+**Uczucie że "serializer jest już zrobiony"** = kodyfikuj checklist. Z F2.1b/c wynika że serializery miss ~2-3× per sprint.
 
-## Diagnostyka
+---
 
-**Quick check:** wyślij `/status` do `@NadajeszBot` — pełny dump 3-w-1
-(serwisy + dziś + wczoraj + top 3 kurierów). Po F1.6 to **primary** channel.
+## NIGDY
 
-**Manual CLI (morning_brief.sh, /root/):**
+- Nie łam produkcji bez `cp .bak` + py_compile + testy
+- Nie dodawaj `prep_variance` do `pickup_ready_at` (wyłączone F1.8g)
+- Nie proponuj kuriera z `picked_up` jako bundle candidate (L1/L2)
+- Nie używaj identycznego ETA dla wszystkich kandydatów
+- Nie używaj GPS pozycji >60 min jako realnej
+- **NIE restartuj `dispatch-telegram.service` bez explicit ACK** — bezpośrednio wysyła propozycje do bota. Jeden restart bug → koordynator ręcznie przypisuje do rana
+- Nie używaj `urllib.request.install_opener` z nowym CookieJar w `get_last_panel_position` (invaliduje main session → HTTP 419)
+- `edit-zamowienie` calls sekwencyjnie, nie ThreadPoolExecutor (CookieJar thread-safety)
 
-```bash
-# 1. Wszystkie 6 serwisów (było 3, dodane shadow+telegram+gps+nginx)
-systemctl is-active dispatch-panel-watcher dispatch-sla-tracker \
-                    dispatch-shadow dispatch-telegram dispatch-gps nginx
+## ZAWSZE
 
-# 2. Tail all active logs (20 ostatnich per)
-tail -20 /root/.openclaw/workspace/scripts/logs/watcher.log
-tail -20 /root/.openclaw/workspace/scripts/logs/sla_tracker.log
-tail -20 /root/.openclaw/workspace/scripts/logs/shadow_dispatcher.log
-tail -20 /root/.openclaw/workspace/scripts/logs/telegram_approver.log
-tail -20 /root/.openclaw/workspace/scripts/logs/gps_server.log
+- Warsaw TZ via `ZoneInfo("Europe/Warsaw")` jako `WARSAW`
+- Atomic writes: temp → fsync → rename
+- Update `TECH_DEBT.md` na koniec sesji
+- Batch z STOP po 5-8 krokach
+- Feature flag dla każdej nowej decyzyjnej zmiany
+- Downstream consumer checklist dla nowych metryk
+- `cp outputs do docs/wave_audit_outputs/<data>/` (wytyczna #21)
+- Downstream queries use SCOPED filter unless per-courier metric (wytyczna #23)
 
-# 3. State stats
-python3 -c "
-import sys; sys.path.insert(0, '/root/.openclaw/workspace/scripts')
-from dispatch_v2 import state_machine
-print(state_machine.stats())
-"
+---
 
-# 4. Event bus + learning log
-python3 -c "
-import sys; sys.path.insert(0, '/root/.openclaw/workspace/scripts')
-from dispatch_v2 import event_bus
-print(event_bus.stats())
-"
-wc -l /root/.openclaw/workspace/dispatch_state/learning_log.jsonl
+## Reference files dla sesji F2.2 Sprint C
 
-# 5. OSRM metrics
-grep 'OSRM hourly' /root/.openclaw/workspace/scripts/logs/watcher.log | tail -5
+### Primary design & data (workspace/docs/)
+- `F2.2_SECTION_4_ARCHITECTURE_SPEC_2026-04-18.md` — **PRIMARY design doc**
+- `F2.2_MERGE_REPORT_2026-04-18.md` — dataset 46119 rows baseline
+- `F2.2_SECTION_3_1_WAVE_CHAINS_2026-04-18.md` — singleton p90 speed tier finding
+- `F2.2_SECTION_3_2_TRANSITIONS_2026-04-18.md` — 220 strong + 180 weak pairs
+- `F2.2_SECTION_3_3_MISSED_BUNDLING_2026-04-18.md` — **108 kPLN/rok business case**
+- `F2.2_SECTION_3_5_PEAK_REGIMES_2026-04-18.md` — 11-cell Sunday dominant
 
-# 6. GPS coverage
-python3 -c "
-import sys; sys.path.insert(0, '/root/.openclaw/workspace/scripts')
-from dispatch_v2 import courier_resolver
-gps = courier_resolver._load_gps_positions()
-print(f'GPS entries: {len(gps)}')
-"
+### Handover + session resumes
+- `F2.2_HANDOVER_2026-04-19.md` — **jutrzejsza sesja Q&A**
+- `F2.2_SPRINT_C_HANDOVER_2026-04-19.md` — sprint C day1 detailed Q&A
+- `project_memory/project_f22_sprint_c_complete_2026-04-18.md` — resume prompt
 
-# 7. Git
-cd /root/.openclaw/workspace/scripts/dispatch_v2 && git log --oneline | head -10
-tail -3 /root/backups/git_push.log
+### Raw data (workspace/docs/wave_audit_outputs/2026-04-18/)
+- `wave_audit_dataset_merged_2026-04-18.db` — SQLite 46119 rows
+- `wave_audit_transitions_2026-04-18.csv` — 220+180 pairs
+- `wave_audit_peak_regimes_2026-04-18.csv` — 11 cells
+- `wave_audit_missing_canonicals_2026-04-18.csv` — geocoding queue
+- 20+ more data artifacts
 
-# 8. Manual briefing / ranking (cron wyłączony 14.04)
-cd /root/.openclaw/workspace/scripts && TZ=Europe/Warsaw python3 -m dispatch_v2.daily_briefing evening --dry-run
-cd /root/.openclaw/workspace/scripts && TZ=Europe/Warsaw python3 -m dispatch_v2.courier_ranking --dry-run
-```
+---
 
-## Kontakt awaryjny
+## JUTRZEJSZY SESJA (2026-04-19) priorytety
 
-Adrian Telegram: 8765130486 — pisz gdy:
-- Production down (dispatch-* services fail)
-- Ziomek absurd proposal
-- Data quality alarm
-- Critical partner SLA -10pp w 3 dni
-- Fleet utilization <60% przez >4h
-- Agreement rate <60% przez 3 dni
-- OSRM fallback rate >10% przez >15 min
+### Sesja 1 (1.5-2h) — Shadow review + flag flips
+1. **Review shadow logs (15 min):**
+   - `c2_shadow_log.jsonl` (24h data) — ile diffs vs current SLA (oczekiwane: ~0 per insight)
+   - `c5_shadow_log.jsonl` — jakie adjustments meaningful
+2. **Telegram Transparency Opcja A pełna (45-60 min):**
+   - Dodaj scoring breakdown do propozycji (base + wave_adjustment breakdown + soft penalties)
+   - Flaga `ENABLE_TRANSPARENCY_SCORING=True`
+   - Testy + restart dispatch-telegram (z explicit ACK!)
+3. **Speed_tier_tracker manual run (10 min):**
+   - `python3 scripts/dispatch_v2/speed_tier_tracker.py`
+   - Weryfikacja: Bartek/Mateusz/Gabriel = FAST zgodnie z 3.3
+4. **Flag flip #1 (15 min):**
+   - `USE_PER_ORDER_GATE=True` (po C2 review OK)
+   - Restart dispatch-shadow, monitor 20 min
+5. **Commit tag + docs update**
 
-## Pytaj nie zgaduj
+### Sekwencja flag flipów (następne dni)
+1. `USE_PER_ORDER_GATE=True` — **jutro po review**
+2. `DEPRECATE_LEGACY_HARD_GATES=True` — dzień +1 po obserwacji C2
+3. `ENABLE_SPEED_TIER_LOADING=True` — **po cron setup** (systemd timer)
+4. `ENABLE_WAVE_SCORING=True` — po 5+ dni shadow walidacji C5
+5. `ENABLE_MID_TRIP_PICKUP=True` — po wave_scoring stable (+ integracja C6 z state_machine)
+6. `ENABLE_PENDING_QUEUE_VIEW=True` — jako ostatni
 
-- Struktury → `cat` / `python3 -c "import json; print(...)"`
-- Sygnatury → `grep -n "def" plik.py`
-- Czy istnieje → `find / -name "x*" 2>/dev/null | head`
-- Stan → `systemctl` / tail logi
-- Intencja Adriana → ZAPYTAJ
+### Co jeszcze jutro i w tygodniu
+- 4 pending geocodes (Eatally HIGH vol=60, Chilli Chicken 48, Oregano Pizza 22, Atmosfera 7) — osobna sesja z `panel_client.address_id` join (wymaga context panel HTML)
+- Speed_tier_tracker cron setup (systemd timer, 03:00 Warsaw = 02:00 UTC)
+- C5 calibration na bazie 5-7 dni shadow data
+- C6 state_machine integration (obecnie tylko skeleton, commitment levels nie emit w real-time)
 
-**Koszt zapytania: 5s. Koszt zgadnięcia źle: 10-30 min debug.**
+---
+
+## Parallel workstreams (nie blokują F2.2 core)
+
+### GPS / Courier App
+- Courier App (Kotlin+Compose, FastAPI :8767) aktywny — zastąpił PWA
+- Legacy PWA (port 8766) zombifikowany — 2/30 kurierów
+- Pozostałe 7 kurierów bez GPS (Gabriel, Grzegorz, Dariusz M, Szymon P, Adrian R, Mateusz O, Łukasz B) — onboarding do Courier App
+- GPSLogger Traccar fallback — tylko jeśli app nie działa
+
+### Business items
+- Restimo API (quote-then-order decision pending)
+- Warsaw expansion (miesiąc+5 after F2.2 live)
+- R16/R17 restaurant violation alerts + `restaurant_violations.jsonl` event logging
+- R27 declared-time compliance enforcement
+- Full contrastive fit wag po 2 tyg clean ground truth
+
+---
+
+## Kontakty & infrastructure
+
+### Serwer
+- **IP:** 178.104.104.138 (Hetzner CPX22, Ubuntu 24.04, UTC)
+- **Panel gastro:** gastro.nadajesz.pl (Laravel, CSRF tokens)
+- **Panel admin GPS:** https://gps.nadajesz.pl/panel (admin/nadajesz2026), HTMX+Tailwind+Leaflet+SSE 5s
+
+### Bots
+- **@NadajeszBot** — proposals
+- **@GastroBot / NadajeszControlBot** — stop/start control (port 8443 HTTPS)
+- **Adrian Telegram ID:** 8765130486
+- **Grupa ziomka:** -5149910559
+
+### Ports
+- 8443 HTTPS — NadajeszControlBot
+- 8765 — legacy Traccar (fallback)
+- 8766 — PWA gps_server (dead)
+- 8767 — courier-api (active FastAPI)
+- Nginx routing: /panel→:8767, /api/*→:8767, /gps→:8766 (legacy PWA), /apk/→static APK
+
+### Runtime & services
+- **AI runtime:** OpenClaw 2026.3.27 in Docker, model openai/gpt-5.4-mini (DeepSeek fallback)
+- **Stop flag:** `/tmp/gastro_stop`
+- **Exec approvals:** `openclaw approvals set` CLI (nie openclaw.json)
+
+### APIs
+- **Mapping:** Google Maps Distance Matrix API (active)
+- **Geocoding:** Nominatim / OpenStreetMap (Google Geocoding API denied)
+- **Schedule:** Google Sheets (Spreadsheet ID: `1Z5kSGUB0Tfl1TiUs5ho-ecMYJVz0-VuUctoq781OSK8`, gid `533254920`); fetch 06:00 i 08:00 daily
+- **Courier App:**
+  - APK https://gps.nadajesz.pl/apk/courier.apk
+  - package `pl.nadajesz.courier`
+  - Kotlin+Compose, Room 50k buffer
+  - Upload coroutine 30s (NIE WorkManager)
+  - Adaptive GPS 20/30/40s+50m
+  - Watchdog WM 15min, BootReceiver→flag
+  - Backend SQLite WAL, dual-write `gps_positions_pwa.json`
+  - Auth: PIN `kurier_piny.json`, UUID token, 90min auto-logout
+
+---
+
+## Panel API reference (NadajeSz-specific)
+
+### Order detail endpoint
+- **POST** `/admin2017/new/orders/edit-zamowienie`
+- Body: `_token + id_zlecenie`
+- Returns: `{"zlecenie":{...}}`
+
+### Order status mapping (`id_status_zamowienia`)
+- 2 = nowe/nieprzypisane
+- 3 = dojazd
+- 4 = oczekiwanie pod restauracją
+- 5 = odebrane
+- 6 = opóźnienie
+- 7 = doręczone
+- 8 = nieodebrano (anulowane przez kuriera)
+- 9 = anulowane
+
+Panel watcher ignores statuses 7, 8, 9.
+
+### Timestamp fields
+- **`czas_odbioru_timestamp`** — Warsaw time (Europe/Warsaw, NOT UTC) — actual pickup time
+- **`created_at`** — UTC (suffix Z)
+- **`czas_odbioru`** — int prep minutes; **<60 = elastyk** (coordinator declares via 5-60 min dropdown); **≥60 = czasówka** (hard restaurant declaration, held in Koordynator id_kurier=26)
+- **`czas_kuriera`** (top-level, HH:MM) — declared courier arrival at restaurant
+- `dzien_odbioru` — pickup timestamp
+- `czas_doreczenia` — delivery timestamp
+
+### Key params
+- **`time`** param w `/admin2017/new/orders/przypisz-zamowienie`: integer minutes from now (nie timestamp nie HH:MM)
+- **`--keep-time`** flag musi re-fetch original `czas_odbioru` z `edit-zamowienie` i resend integer (sending `0` clears UI)
+
+### Address extraction
+- Restaurant address: `address.street`
+- Restaurant name: `box_zam_name` from HTML
+
+### Virtual courier
+- `id_kurier=26` "Koordynator" = holding bucket dla scheduled orders (czasówka)
+
+---
+
+## Key learnings accumulated (V3.8 → V3.11)
+
+### Infrastructure
+- **Never restart systemd without `py_compile` and import check first**
+- `jq` nie zainstalowany na serwerze — JSON manipulation musi być Python
+- `urllib` CookieJar nie thread-safe — `edit-zamowienie` sekwencyjnie
+- `get_last_panel_position` nigdy nie wolno wołać `urllib.request.install_opener` z nowym CookieJar (invaliduje main session → HTTP 419)
+- Geocoding uses Nominatim/OpenStreetMap (Google denied; tylko Distance Matrix active)
+- Subprocess calls z `gastro_scoring.py` muszą używać host path `/root/` nie Docker path `/home/node/`
+
+### F2.2 Sprint C specific (NOWE)
+- **Every new metric w dispatch_pipeline/feasibility_v2 needs downstream consumer checklist**:
+  1. shadow_dispatcher `_serialize_candidate` (location A)
+  2. inline best serialization (location B)
+  3. learning_analyzer readers
+  4. test suite
+- **Feature flags default False przy deploy** = zero production impact przy shadow mode
+- **Rollout gap 24-48h między flag flips** = ryzyko cascade fail jest realne, observability jest critical
+- **Import chain analysis przed restart** — 2026-04-18 okazało się że tylko 1 service wymaga restart zamiast 3
+
+### Process
+- **"Pytaj nie zgaduj"** — pytaj gdy niejasne, zamiast zgadywać
+- **Autonomic mode dopuszczalny** dla CC gdy jawnie zadeklarowany, z 4 explicit escalation triggers
+- Granular git tags jako rollback points (`f22-{sprint}-{step}-{status}`)
+- Per sesja minimum 3 `.bak` backups dla `rollback_plan`
+- Warsaw TZ zawsze via `ZoneInfo("Europe/Warsaw")`
+- Atomic writes via temp/fsync/rename
+
+---
+
+## Previous F2.1c priorities (DEPRECATED — superseded by F2.2 Sprint C)
+
+Plan F2.1c z V3.7 (R8 pickup_span, learning_analyzer, AUTO_APPROVE flip, `_parse()` unified) — **DEFERRED**. 
+
+Status 2026-04-18:
+- **R8 pickup_span** — DEFERRED w V3.9, tylko jeśli reactivated (TODO comment w feasibility_v2.py)
+- **Learning analyzer** — DEFERRED (requires F2.2-prep P1 fix, teraz done → może być re-enabled w tygodniu); complements F2.2, nie replaces
+- **Auto-approve (R26)** — DEFERRED (depends on F2.2-prep P1 fix + shadow data dla accurate agreement rate). Concept NIE zastąpiony przez F2.2 — auto-approve to workflow automation (Ziomek → panel bez Adrian ACK), F2.2 to decision quality (co Ziomek proponuje). Po F2.2 live → niższy threshold (75% zamiast 85%) możliwy bo scoring lepszy.
+- **`_parse()` unified fix + SLA regression test** — DEFERRED
+
+Resume plan dla każdego z powyższych w TECH_DEBT.md.
