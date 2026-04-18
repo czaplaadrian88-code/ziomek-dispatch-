@@ -47,6 +47,9 @@ class RoutePlanV2:
     strategy: str                             # "bruteforce" | "greedy"
     sla_violations: int
     osrm_fallback_used: bool
+    # F2.2 C1 (2026-04-18): per-order elapsed pickup→drop in minutes.
+    # None = incomplete computation → C2 gate MUST fail-closed (reject).
+    per_order_delivery_times: Optional[Dict[str, float]] = None
 
 
 def simulate_bag_route_v2(
@@ -174,6 +177,37 @@ def _count_sla_violations(
     return v
 
 
+def _compute_per_order_delivery_minutes(
+    delivered_at: Dict[str, datetime],
+    pickup_at: Dict[str, datetime],
+    bag: List[OrderSim],
+    new_order: OrderSim,
+    now: datetime,
+) -> Optional[Dict[str, float]]:
+    """Per-order elapsed pickup→drop in minutes (F2.2 C1).
+
+    Iterates bag + new_order (matches _count_sla_violations scope). Pickup reference
+    resolution order: pickup_at dict (this plan) → o.picked_up_at (prior) → now (last resort).
+    Returns None if any order lacks delivered_at (fail-closed for C2 hard gate).
+    """
+    result: Dict[str, float] = {}
+    for o in list(bag) + [new_order]:
+        pred = delivered_at.get(o.order_id)
+        if pred is None:
+            return None
+        if o.order_id in pickup_at:
+            pu = pickup_at[o.order_id]
+        elif o.picked_up_at is not None:
+            pu = o.picked_up_at
+            if pu.tzinfo is None:
+                pu = pu.replace(tzinfo=timezone.utc)
+            pu = pu.astimezone(timezone.utc)
+        else:
+            pu = now
+        result[o.order_id] = round((pred - pu).total_seconds() / 60.0, 2)
+    return result
+
+
 def _plan_from_sequence(
     seq: List[int],
     nodes: List[dict],
@@ -185,6 +219,7 @@ def _plan_from_sequence(
 ) -> RoutePlanV2:
     total, delivered_at, pickup_at = _simulate_sequence(nodes, leg_min, seq, now)
     violations = _count_sla_violations(delivered_at, pickup_at, bag, new_order, now, sla_minutes)
+    per_order_times = _compute_per_order_delivery_minutes(delivered_at, pickup_at, bag, new_order, now)
     delivery_order = [nodes[i]["order_id"] for i in seq if nodes[i]["kind"] == "delivery"]
     return RoutePlanV2(
         sequence=delivery_order,
@@ -194,6 +229,7 @@ def _plan_from_sequence(
         strategy="",
         sla_violations=violations,
         osrm_fallback_used=False,
+        per_order_delivery_times=per_order_times,
     )
 
 
