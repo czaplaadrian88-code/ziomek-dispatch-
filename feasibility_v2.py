@@ -10,6 +10,7 @@ Returns:
     verdict ∈ {"MAYBE", "NO"}
     plan = RoutePlanV2 or None (None only when rejected by a fast filter)
 """
+import json
 import logging
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -18,8 +19,10 @@ from typing import List, Tuple, Dict, Optional
 from dispatch_v2 import osrm_client
 from dispatch_v2 import common as C
 from dispatch_v2.common import (
+    ENABLE_C2_SHADOW_LOG,
     HAVERSINE_ROAD_FACTOR_BIALYSTOK,
     MAX_BAG_SANITY_CAP,
+    USE_PER_ORDER_GATE,
     WARSAW,
 )
 from dispatch_v2.route_simulator_v2 import (
@@ -29,6 +32,9 @@ from dispatch_v2.route_simulator_v2 import (
 )
 
 log = logging.getLogger(__name__)
+
+C2_PER_ORDER_THRESHOLD_MIN = 35.0
+C2_SHADOW_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/c2_shadow_log.jsonl"
 
 
 # Hard cap per D3 MAX_BAG_SANITY_CAP (=8). F1.9b: R3 dynamic cap został
@@ -95,6 +101,79 @@ def _max_pickup_spread_from_bag(bag, new_pickup) -> float:
         if d > best:
             best = d
     return best
+
+
+def check_per_order_35min_rule(
+    plan: RoutePlanV2,
+    threshold_min: float = C2_PER_ORDER_THRESHOLD_MIN,
+) -> Tuple[bool, Dict]:
+    """F2.2 C2: Per-order delivery time hard gate.
+
+    Uses plan.per_order_delivery_times (populated by C1). Fail-closed on None.
+
+    Returns:
+        (passes, details) where passes=True if all orders <= threshold.
+        details = {'violations': [(oid, elapsed), ...], 'max_elapsed', 'total_orders',
+                   'per_order_data_available': bool}
+    """
+    details = {
+        "violations": [],
+        "max_elapsed": 0.0,
+        "total_orders": 0,
+        "per_order_data_available": False,
+    }
+    if plan.per_order_delivery_times is None:
+        return (False, details)
+    details["per_order_data_available"] = True
+    details["total_orders"] = len(plan.per_order_delivery_times)
+    for oid, elapsed in plan.per_order_delivery_times.items():
+        if elapsed > details["max_elapsed"]:
+            details["max_elapsed"] = round(float(elapsed), 2)
+        if elapsed > threshold_min:
+            details["violations"].append((oid, round(float(elapsed), 2)))
+    passes = len(details["violations"]) == 0
+    return (passes, details)
+
+
+def _emit_c2_shadow_diff_event(
+    current_verdict: str,
+    c2_passes: bool,
+    c2_details: Dict,
+    plan: RoutePlanV2,
+    metrics: Dict,
+    new_order_id: str,
+    bag_size_before: int,
+) -> None:
+    """Append C2_SHADOW_DIFF event to dispatch_state/c2_shadow_log.jsonl.
+
+    Only called when current verdict (with existing gates) differs from C2+existing combo.
+    Zero impact on dispatch flow — log-only.
+    """
+    new_verdict = current_verdict if c2_passes else "NO"
+    event = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event_type": "C2_SHADOW_DIFF",
+        "current_verdict": current_verdict,
+        "new_verdict_if_c2_enabled": new_verdict,
+        "c2_would_reject": not c2_passes,
+        "per_order_data_available": c2_details["per_order_data_available"],
+        "max_elapsed_min": c2_details["max_elapsed"],
+        "total_orders": c2_details["total_orders"],
+        "violations": c2_details["violations"],
+        "per_order_delivery_times": dict(plan.per_order_delivery_times) if plan.per_order_delivery_times else None,
+        "sequence": plan.sequence,
+        "total_duration_min": plan.total_duration_min,
+        "strategy": plan.strategy,
+        "new_order_id": new_order_id,
+        "bag_size_before": bag_size_before,
+        "r6_max_bag_time_min": metrics.get("r6_max_bag_time_min"),
+    }
+    try:
+        with open(C2_SHADOW_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+            f.flush()
+    except Exception as e:
+        log.warning(f"C2 shadow log write failed: {e}")
 
 
 def check_feasibility_v2(
@@ -279,6 +358,36 @@ def check_feasibility_v2(
         return (
             "NO",
             f"R6_bag_time_exceeded ({r6_worst_oid} {r6_max_bag_time:.1f}min>{C.BAG_TIME_HARD_MAX_MIN})",
+            metrics,
+            plan,
+        )
+
+    # F2.2 C2 — per-order 35min hard gate (shadow mode by default).
+    # Current verdict at this point is MAYBE (survived all other gates).
+    # check_per_order_35min_rule uses plan.per_order_delivery_times (C1 field).
+    c2_passes, c2_details = check_per_order_35min_rule(plan)
+    metrics["c2_passes"] = c2_passes
+    metrics["c2_max_elapsed_min"] = c2_details["max_elapsed"]
+    metrics["c2_violations_count"] = len(c2_details["violations"])
+    metrics["c2_per_order_data_available"] = c2_details["per_order_data_available"]
+
+    if ENABLE_C2_SHADOW_LOG and not c2_passes:
+        _emit_c2_shadow_diff_event(
+            current_verdict="MAYBE",
+            c2_passes=c2_passes,
+            c2_details=c2_details,
+            plan=plan,
+            metrics=metrics,
+            new_order_id=new_order.order_id,
+            bag_size_before=metrics.get("bag_size_before", 0),
+        )
+
+    if USE_PER_ORDER_GATE and not c2_passes:
+        worst_oid, worst_elapsed = max(c2_details["violations"], key=lambda v: v[1]) \
+            if c2_details["violations"] else ("?", c2_details["max_elapsed"])
+        return (
+            "NO",
+            f"C2_per_order_35min_exceeded ({worst_oid} {worst_elapsed:.1f}min>{C2_PER_ORDER_THRESHOLD_MIN})",
             metrics,
             plan,
         )
