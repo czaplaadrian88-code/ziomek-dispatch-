@@ -2,6 +2,46 @@
 
 Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego priorytetu. Sprzątanie na koniec dnia.
 
+---
+
+## F2.2 Audit Resolution — 2026-04-18
+
+### ✅ Zamknięte przez F2.2 audit
+
+- **F2.1b/c wave_bonus hard-coded w pipeline** → zaadresowane w F2.2 design (`workspace/docs/F2.2_SECTION_4_ARCHITECTURE_SPEC_2026-04-18.md`): `wave_scoring.py` jako separate module z feature flag `ENABLE_WAVE_SCORING`.
+- **R7 long-haul 14-17 sztywne godziny** → zastąpione w F2.2 context-aware (11-cell PEAK lookup, Sun 13-19h dominant, per sekcja 3.5 `F2.2_SECTION_3_5_PEAK_REGIMES_2026-04-18.md`).
+- **BAG_TIME_HARD_MAX=35 total** → DEPRECATED, replaced by per-order 35min rule (Adrian decyzja produktowa + sekcja 3.1 empirical).
+- **learning_log ground truth broken (94% TIMEOUT_SUPERSEDED)** → zaplanowany F2.2-prep sprint P1 (blokuje Sprint C5 d/e).
+- **Canonical coords incomplete (FULL 80.82%)** → SCOPED gate adopted (95.38%, `primary_gate` w `dataset_meta` po fix C3 z 2026-04-18).
+- **Speed tier definition ambiguous (all-order vs singleton)** → SINGLETON p90 standardized (spec UPDATE A, empirical sekcja 3.3: 9 FAST vs 3 all-orders).
+
+### 🔥 Aktywne — F2.2 Sprint C blockers
+
+- **[HIGH]** `reorder_nn` TSP refactor (chronological pickup + geographic loop) → Sprint C1. Additive return type (`per_order_delivery_times_dict`).
+- **[HIGH]** `dispatch_pipeline.assess_order` signature change (`pending_queue`, `demand_context` params) → Sprint C7 BREAKING. 40 existing tests need update.
+- **[HIGH]** `telegram_approver` TIMEOUT_SUPERSEDED fix → F2.2-prep P1 PRZED Sprint C5 (d)(e). Blokuje stretch_bonus calibration.
+- **[MED]** `state_machine.commitment_levels` semi-dead (near_delivery trigger) → F2.2 Sprint C6 rewake dla mid-trip pickup (4908 OVERLAP cases jako training dataset).
+- **[MED]** Feature flags infrastructure w `common.py` (5 nowych flags C2/C3/C5/C6/C7) → pre-requirement dla Sprint C steps.
+
+### 🔀 Parallel workstreams (F2.2-parallel, NOT Sprint C)
+
+- **[MED]** PWA rollout dead → resurrection osobny projekt; F2.2 working GPS-optional (canonical coords + haversine fallback 74.5% OVERLAP coverage).
+- **[MED]** Geocoding 12 H_E_pending restauracji (address_id known, coords=None w canonical v2): Pan Schabowy, Hacienda Pizza, Farina, Restauracja Eatally, Chilli Chicken, Kurra, Bar Express, Oregano Pizza, Atmosfera, Szklanki Talerze, Bar Słoneczny, Ziemniaczek → memory `project_f22_geocoding_queue.md`. Plus 5 `no_address_id` restauracji (Bar Eljot, Trattoria Angelino Pasta Wino, Nadajesz.pl, Piri Piri, MakeMyDay) wymagają osobnego workflow — address_id mapping FIRST, potem geocoding. Prod write (`dispatch_state/restaurant_coords.json`) → explicit green light.
+- **[LOW]** 7 kurierów bez GPS (Gabriel, Grzegorz, Dariusz M, Szymon P, Adrian R, Mateusz O, Łukasz B) → rozwiązuje się przez PWA resurrection.
+- **[LOW]** `bad_rows CSV 128 MB` (merge_extended_dataset.py output dla 30 rows przez binary corruption `zestawienie_panel (52)/(55).csv`) → dodać `truncate parse_error_reason[:500]` w merge script.
+- **[LOW]** `subprocess /root vs /home/node path` w gastro_scoring.py — znany, zaadresowane memo.
+- **[LOW]** `urllib CookieJar thread-safety` w panel_client — obejście sekwencyjne edit-zamowienie.
+
+### 📋 Planowane (post-F2.2)
+
+- **[FUTURE]** R16/R17 restaurant violation alerts + jsonl logging.
+- **[FUTURE]** R27 declared-time compliance enforcement.
+- **[FUTURE]** Warsaw expansion (miesiąc+5 po F2.2 live).
+- **[FUTURE]** Full contrastive fit wag po 2 tygodniach clean ground truth (post-P1 fix).
+- **[FUTURE]** `reorder_nn` TSP proper rewrite (post-C1 additive refactor → pełny rewrite, quality boost).
+
+---
+
 ## P0 — BLOKERY SHADOW DISPATCHER
 
 - [ ] **sla_tracker nie konsumuje eventów** — delivered: 0 mimo 97 COURIER_DELIVERED w event_bus. Diagnoza: cursor/mark_processed, może inny path do events.db, może błąd w event_type filtrze.
@@ -12,7 +52,7 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 - [ ] **Dead code _diff_and_emit** — sekcja "zniknął z HTML" linie ~172-215, nigdy nie strzela bo panel trzyma wszystko. Usunąć po potwierdzeniu że reconcile stabilny (kilka dni).
 - [ ] **kurier_piny.json niekompletny** — brakuje "Grzegorz" (bez W), panel go ma w operacji. Ręczne uzupełnienie albo auto-sync z panelu przez parser courier_packs.
-- [ ] **MAX_BAG_SIZE=4 za mało** — Gabriel dziś 5/4 (dwie fale). Podnieść do 6 lub zmienić feasibility żeby nie odrzucał na bag_size >= max, tylko scoring dał 0 pkt.
+- [ ] **MAX_BAG_SIZE=4 za mało** — Gabriel dziś 5/4 (dwie fale). Podnieść do 6 lub zmienić feasibility żeby nie odrzucał na bag_size >= max, tylko scoring dał 0 pkt. *(SUPERSEDED by F2.2 audit — see section above: F2.2 używa `MAX_BAG_SANITY_CAP=8` jako hard limit; bag_size logic scoring-based per Architecture Spec sekcja 2.2)*
 - [ ] **orders_state.json — brak klucza wrapującego `orders`** — state top-level dict zamiast `{orders: {}, metadata: {}}`. Refactor wymaga migracji pliku.
 
 ## P2 — NICE TO HAVE

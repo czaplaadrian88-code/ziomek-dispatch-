@@ -1,6 +1,14 @@
-# ZIOMEK V3.5 — MASTER BRIEF (dla Claude Code, 14.04.2026)
+# ZIOMEK V3.9 — MASTER BRIEF (dla Claude Code, 18.04.2026)
 
 **Ten plik czytasz JAKO PIERWSZE na początku każdej sesji.**
+
+## V3.9 (2026-04-18) — Post-F2.2-audit
+- 7 raportów F2.2 w workspace/docs/ (RECON, MERGE_REPORT, SECTION_3_1..3_5, SECTION_4_ARCHITECTURE_SPEC, HANDOVER)
+- 46 119 rows merged dataset (SCOPED 95.38% coverage, primary_gate w dataset_meta)
+- Architecture Spec ready dla Sprint C1-C7 (implementation explicitly w osobnych sesjach)
+- 108 kPLN/rok TIER_A business case confirmed (sekcja 3.3)
+- BAG_TIME_HARD_MAX=35 marked DEPRECATED (replaced by per-order 35min rule w F2.2 target)
+- Speed tier definition: SINGLETON p90 (empirical finding 3.1; 9 FAST, 38 NORMAL, 29 SAFE, 103 INSUFFICIENT)
 
 **Zmiana vs V3.3:** dodane wyniki red-team review (Gemini 3.1 PRO + DeepSeek-V3) — security TIER 0, decyzja architektoniczna Fazy 1, plan Krok 0-4.
 
@@ -67,6 +75,41 @@ GitHub `czaplaadrian88-code/ziomek-dispatch-`, SSH key ed25519 deploy key, push 
 - **`learning_log.jsonl` zbiera od 13.04 23:05** — pierwsza akcja: NIE dla #465834 (Grill Kebab, kurier 207). Agreement rate potrzebuje >100 propozycji dla meaningful metrics (min. tydzień shadow operation).
 - **F1.2 courier_names.json** — bug `kurier_piny.json` (PIN-y jako klucze, nie courier_id) był root cause "K207" zamiast "Marek". Fix: odwrócenie `kurier_ids.json` → `{courier_id: name}`.
 - **F1.5 GPS coverage** — legacy Traccar writer (`/root/gps_server.py` @reboot) nadal pisze `gps_positions.json` z imieniem jako key. PWA pisze osobny `gps_positions_pwa.json` z courier_id — `courier_resolver._load_gps_positions()` merge z PWA primary. **Fresh GPS <5min: 2/82** kurierów (peak migration w weekend po SMS/QR dystrybucji).
+
+## ✅ F2.2 Audit Complete (2026-04-18) — implementation ready
+
+**Primary reference**: `workspace/docs/F2.2_SECTION_4_ARCHITECTURE_SPEC_2026-04-18.md`
+
+### Kluczowe findings
+- **OVERLAP 4 908 cases** (mid-trip pickup dataset dla Sprint C6)
+- **Speed tier FAST: 9 kurierów** (singleton p90 metric; Bartek=23, Mateusz=25, Gabriel=28 borderline)
+- **Strong transitions: 220 pairs** (restaurant_pair_affinity lookup ready)
+- **TIER_A missed: 2 187 events = 108 kPLN/rok** (sekcja 3.3, quick win: 50% trivially captured by same_restaurant auto-attach)
+- **PEAK regime: 11 cells, Sunday 13-19h dominant** (2.18x miss rate PEAK vs NORMAL)
+- **Stretch waste top-10: 449 PLN/day ~164 kPLN/rok** (sekcja 3.1)
+
+### Architektura docelowa F2.2 (Sprint C implementation)
+- Single hard gate: per-order delivery_time ≤ 35 min (replacing R6 BAG_TIME_HARD_MAX)
+- R1/R5/R6/R7/R8 hard → soft penalties w scoring.py
+- Stretch bonus asymmetric per tier (FAST/NORMAL/SAFE zones)
+- Context-aware weights (NORMAL vs PEAK regime, 11-cell lookup)
+- Feature flags rollout, sequential C1→C2→C4→C5→C6→C7
+- Rollback: default False flags, trivial
+
+### F2.2 dokumenty (wszystkie w workspace/docs/)
+- `F2.2_RECON_2026-04-18.md` — stan systemu, hipotezy H2-H11
+- `F2.2_MERGE_REPORT_2026-04-18.md` — dataset baseline 46 119 rows
+- `F2.2_SECTION_3_1_WAVE_CHAINS_2026-04-18.md` — wave chains, singleton tier, OVERLAP dataset
+- `F2.2_SECTION_3_2_TRANSITIONS_2026-04-18.md` — 220 strong pairs, same-restaurant, food-court effect
+- `F2.2_SECTION_3_3_MISSED_BUNDLING_2026-04-18.md` — **business case 108 kPLN/rok**
+- `F2.2_SECTION_3_5_PEAK_REGIMES_2026-04-18.md` — 11 PEAK cells, context weights
+- `F2.2_SECTION_4_ARCHITECTURE_SPEC_2026-04-18.md` — **PRIMARY design doc dla Sprint C**
+- `F2.2_HANDOVER_2026-04-18.md` — Q&A dla Adriana (kiedy wraca za tydzień)
+
+### Parallel workstreams (NOT Sprint C)
+- **P1** F2.2-prep: fix TIMEOUT_SUPERSEDED w telegram_approver (blokuje Sprint C5 d/e)
+- **P2** Geocoding 12 H_E_pending restauracji (memory: `project_f22_geocoding_queue.md`) — prod write, explicit green light
+- **P3** PWA resurrection (weeks, not blocking F2.2 core)
 
 ## Runtime i infrastruktura
 
@@ -389,13 +432,21 @@ TAK {first} / INNY / KOORD / SKIP
 - **Nie startuj Krok 4 (Faza 1) przed Krokami 0-3**
 - **Nie pchaj autonomous mode bez CI/CD** (Gemini: zbyt niebezpieczne)
 
+### F2.2 implementation sessions (Sprint C)
+- **Full patch workflow obowiązkowy** per każda zmiana: cp .bak → edit → py_compile → import check → tests → commit → restart tylko za ACK Adriana
+- **Rollback plan mandatory** dla każdego C1-C7 kroku (dokumentacja + feature flag default False)
+- **Feature flags default False** przy deploy; production flip dopiero po shadow validation
+- **Shadow mode ≥ 5 dni** przed production flip dla C5/C6/C7
+- **Per sesja czytaj `workspace/docs/F2.2_SECTION_4_ARCHITECTURE_SPEC_2026-04-18.md` jako pierwszy**
+- **Referuj findings section 3.1-3.5 w commit messages** ("implements C5(a) per sekcja 3.3 bag_size=0 quick win")
+
 ## Plan tygodni 1-4
 
 **Tydzień 1 (13-19.04):** ✅ DONE 13-14.04 — Krok 0 (P0.5b TIER 0) + Krok 1 (CC acc) + Krok 2 (D19) + Krok 3 (git remote GitHub) + Krok 4 (F1.1-F1.6 Faza 1 live). 6 serwisów produkcyjnych aktywnych. Shadow dispatcher + GPS PWA deployed.
 
 **Tydzień 2 (20-26.04):**
-- **Learning analyzer** — `/learning poziom 2` (21.04): analiza `learning_log.jsonl` po 7 dniach shadow, agreement rate per kurier+restauracja, false-positive detection, scoring fine-tune
-- **Auto-approve** — gdy agreement rate >85% dla danej kombinacji (kurier×restauracja) przez N propozycji → Ziomek przypisuje bez zapytania Adriana (R26)
+- **Learning analyzer** (DEFERRED — requires F2.2-prep P1 fix). Original plan: `/learning poziom 2` (21.04), analiza `learning_log.jsonl` po 7 dniach shadow, agreement rate per kurier+restauracja, false-positive detection, scoring fine-tune. **Status 2026-04-18**: `learning_log.jsonl` 94% TIMEOUT_SUPERSEDED (broken ground truth), analyzer bez sensu przed P1 fix w telegram_approver. **Analyzer complements F2.2, nie replaces** — wraca do planu po P1 fix.
+- **Auto-approve** (DEFERRED — depends on F2.2-prep P1 fix). Concept (R26: agreement rate >85% → Ziomek przypisuje bez Adrian ACK) **NIE zastąpiony przez F2.2**, ale zablokowany bo learning_log ground truth broken. Po P1 fix + F2.2 Sprint C (lepszy scoring → wyższe confidence) auto-approve można włączyć z niższym threshold niż pierwotnie planowane (np. 75% zamiast 85%).
 - **Telegram security #1** (TIER 1) — rate limit Bot API, webhook secret, allowed_users whitelist
 - **Rate limit #2** (TIER 1) — nginx burst=10 dla `/gps` (obecnie 5), może istnieje DoS concern
 - **OSRM boundary #4** (TIER 1) — circuit breaker threshold calibration po realnym outage
