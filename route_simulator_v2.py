@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from itertools import permutations
 
 from dispatch_v2 import osrm_client
-from dispatch_v2.common import ENABLE_DROP_TIME_CONSTRAINT
+from dispatch_v2.common import ENABLE_DROP_TIME_CONSTRAINT, ENABLE_PICKED_UP_DROP_FLOOR
 
 
 DWELL_PICKUP_MIN = 2.0
@@ -147,20 +147,46 @@ def _simulate_sequence(
             # nie odebrał z restauracji) predicted drop NIE MOŻE być przed
             # pickup_ready_at + DWELL_PICKUP_MIN (fizycznie niemożliwe).
             # Flag ENABLE_DROP_TIME_CONSTRAINT=False → legacy zachowanie (no-op).
-            if ENABLE_DROP_TIME_CONSTRAINT:
-                ref = node["ref"]
-                if ref is not None:
-                    ref_status = getattr(ref, "status", "assigned")
-                    ref_pra = getattr(ref, "pickup_ready_at", None)
-                    if ref_status != "picked_up" and ref_pra is not None:
-                        if ref_pra.tzinfo is None:
-                            ref_pra = ref_pra.replace(tzinfo=timezone.utc)
-                        ref_pra_utc = ref_pra.astimezone(timezone.utc)
-                        # Minimalny realny drop = pickup_ready + pickup dwell
-                        # (drive from restaurant to drop nie znany tu, ale >=0).
-                        min_drop_possible = ref_pra_utc + timedelta(minutes=DWELL_PICKUP_MIN)
-                        if t < min_drop_possible:
-                            t = min_drop_possible
+            ref = node["ref"]
+            ref_status = getattr(ref, "status", "assigned") if ref is not None else "assigned"
+            if ENABLE_DROP_TIME_CONSTRAINT and ref is not None:
+                ref_pra = getattr(ref, "pickup_ready_at", None)
+                if ref_status != "picked_up" and ref_pra is not None:
+                    if ref_pra.tzinfo is None:
+                        ref_pra = ref_pra.replace(tzinfo=timezone.utc)
+                    ref_pra_utc = ref_pra.astimezone(timezone.utc)
+                    # Minimalny realny drop = pickup_ready + pickup dwell
+                    # (drive from restaurant to drop nie znany tu, ale >=0).
+                    min_drop_possible = ref_pra_utc + timedelta(minutes=DWELL_PICKUP_MIN)
+                    if t < min_drop_possible:
+                        t = min_drop_possible
+            # V3.19a: symetryczny floor dla picked_up — kurier już odebrał z
+            # restauracji, więc minimalny realny drop = picked_up_at +
+            # osrm_drive(pickup→drop) + DWELL_DROPOFF_MIN. Adresuje R1:
+            # courier_resolver ustawia synthetic pos = drop_coords dla picked_up
+            # bag, więc leg_min(courier, drop) ≈ 0 → t ≈ now bez floora.
+            if ENABLE_PICKED_UP_DROP_FLOOR and ref is not None and ref_status == "picked_up":
+                ref_picked = getattr(ref, "picked_up_at", None)
+                ref_pickup = getattr(ref, "pickup_coords", None)
+                ref_drop = getattr(ref, "delivery_coords", None)
+                if (
+                    ref_picked is not None
+                    and ref_pickup and ref_drop
+                    and tuple(ref_pickup) != (0.0, 0.0)
+                    and tuple(ref_drop) != (0.0, 0.0)
+                ):
+                    if ref_picked.tzinfo is None:
+                        ref_picked = ref_picked.replace(tzinfo=timezone.utc)
+                    ref_picked_utc = ref_picked.astimezone(timezone.utc)
+                    osrm_result = osrm_client.route(tuple(ref_pickup), tuple(ref_drop))
+                    drive_s = (osrm_result or {}).get("duration_s") or 0
+                    floor_t = (
+                        ref_picked_utc
+                        + timedelta(seconds=drive_s)
+                        + timedelta(minutes=DWELL_DROPOFF_MIN)
+                    )
+                    if t < floor_t:
+                        t = floor_t
             t = t + timedelta(minutes=DWELL_DROPOFF_MIN)
             delivered_at[node["order_id"]] = t
         current = idx

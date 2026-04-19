@@ -388,6 +388,18 @@ ENABLE_FLEET_OVERLOAD_PENALTY = _os.environ.get("ENABLE_FLEET_OVERLOAD_PENALTY",
 ENABLE_PANEL_IS_FREE_AUTHORITATIVE = _os.environ.get("ENABLE_PANEL_IS_FREE_AUTHORITATIVE", "1") == "1"
 ENABLE_BUNDLE_VALUE_SCORING = _os.environ.get("ENABLE_BUNDLE_VALUE_SCORING", "0") == "1"
 
+# ============================================================
+# V3.19a picked_up drop floor (2026-04-19)
+# Symetryczne rozszerzenie V3.18 ENABLE_DROP_TIME_CONSTRAINT na case gdy
+# order.status == "picked_up". Adresuje R1 (29.1% propozycji post-V3.18):
+# courier_resolver ustawia cs.pos = order.delivery_coords dla picked_up bag
+# ("last_picked_up_delivery") → _simulate_sequence liczy leg_min ≈ 0 →
+# predicted_drop ≈ now+1s → free_at_min ≈ 1 (structurally absurd).
+# Floor: predicted_drop >= picked_up_at + osrm(pickup→drop) + DWELL_DROPOFF_MIN.
+# True (default) = apply floor. env: ENABLE_PICKED_UP_DROP_FLOOR=0.
+# ============================================================
+ENABLE_PICKED_UP_DROP_FLOOR = _os.environ.get("ENABLE_PICKED_UP_DROP_FLOOR", "1") == "1"
+
 # Overload threshold: bag > fleet_avg + this → score penalty
 try:
     OVERLOAD_THRESHOLD_BAGS = int(_os.environ.get("OVERLOAD_THRESHOLD_BAGS", "2"))
