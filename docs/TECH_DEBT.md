@@ -4,6 +4,65 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 ---
 
+## Telegram per-stop timeline — 2026-04-19 (V3.17)
+
+### ✅ FIX COMMITTED (tag `f22-telegram-timeline-live-V3.17` pending Etap C)
+
+Problem: propozycje w Telegramie pokazywały bag route w formacie 2-line
+"pickups | drops" który był niechronologiczny — Adrian nie widział
+HH:MM per stop ani kolejności pickup↔drop w trakcie trasy. Dane istniały
+w `RoutePlanV2` (C1 live, `predicted_delivered_at` + `pickup_at` +
+`per_order_delivery_times`) ale shadow_dispatcher nie serializował ich
+do plan dict przekazywanego dalej.
+
+| Step | Commit | Tag | Zakres |
+|---|---|---|---|
+| A | `1f3a739` | `v317a-serializer-extended` | shadow_dispatcher.py — propagacja 3 pól do plan dict w obu serializerach (A+B). Helper `_serialize_dt_map`. 6 testów PASS. |
+| B.1 | `4ba28a6` | `v317b-flag-committed` | common.py — flag `ENABLE_TIMELINE_FORMAT=True` (default) + env kill-switch `ENABLE_TIMELINE_FORMAT=0` |
+| B.2 | `aafc189` | `v317b-formatter-committed` | telegram_approver.py — `_build_timeline_section()` + `_iso_to_warsaw_hhmm()` + gate w `_route_section()` z fallback na stary format |
+| B.3 | `bfe1fac` | `v317b-tests-committed` | test_telegram_timeline_v317.py — 8 golden-output tests PASS |
+
+**Mechanizm**: Formatter buduje chronologiczny timeline z merge(pickup_at,
+predicted_delivered_at) sortowanego po ISO UTC. Per event: Warsaw HH:MM +
+emoji (🍕 pickup / 📍 drop dla bag, 👉 + [NOWY] prefix dla nowego ordera)
++ name/address. Bag orders z `status=picked_up` nie mają pickup event
+(kurier już odebrał) → pokazuje się tylko drop dla nich.
+
+**Regression**: 259/259 baseline clean (44 decision_engine_f21 + 201
+sprint C legacy + 6 V3.17a + 8 V3.17b). 4 pre-existing RUN-ERRORs
+unchanged (cod_weekly, feasibility_integration, reconcile_dry_run,
+scoring_scenarios).
+
+**Live verify Etap A** (#467232 Goodboy @ 16:15:13 UTC, pre-telegram restart):
+Plan dict ma wszystkie 3 nowe pola. Rendered timeline (dry-run local):
+
+```
+📦 3 ordery w bagu → trasa z nowym zleceniem:
+18:18 📍 drop Słonimska 24/16
+18:25 📍 drop Wiejska 68/12
+18:31 👉 pickup [NOWY] Goodboy
+18:38 👉 drop [NOWY] Czysta 18/5
+18:48 📍 drop Komisji Edukacji Narodowej 38b/55
+```
+
+### 🔴 Deferred
+
+1. **`pickup_address` w timeline** — obecny format pokazuje tylko restaurant
+   name dla pickupów (bez adresu). Aby dodać adresy: extend bag_context
+   w dispatch_pipeline.py z `pickup_address` + PipelineResult + assess_order
+   propagation + shadow_dispatcher top-level. Multi-file refactor (zero
+   regresji ale blast radius > V3.17 scope). Osobna sesja.
+2. **Scoring breakdown transparency (Commit C)** — `📊 95 = baza 70 + wave +17 + bundle +8`
+   nadal pending z V3.11.1. Wymaga propagacji 4 nowych pól z `scoring.py` +
+   `wave_scoring.py` przez 2 serializery.
+3. **Pre-existing V3.15 items** (nadal aktywne): local `current_state`
+   snapshot nie updatowany po emit normal assigned → sporadyczne duplikaty
+   packs+normal w learning_log.
+4. **Pre-existing V3.13 items**: panel_watcher proactive reconcile,
+   PIN 9279 leak w courier_names.json, no_gps tie-break degeneracja.
+
+---
+
 ## Proposal selection / no_gps demote fix — 2026-04-19 (V3.16)
 
 ### ✅ FIX COMMITTED (tag `f22-proposal-selection-fix-live-V3.16`)
