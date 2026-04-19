@@ -1,6 +1,14 @@
-# CLAUDE.md — Ziomek Dispatcher (V3.11 Post-Sprint-C-skeleton)
+# CLAUDE.md — Ziomek Dispatcher (V3.11.1 Transparency OPCJA A LIVE)
 
 ## Changelog
+
+### V3.11.1 (2026-04-19 rano) — Telegram Transparency OPCJA A LIVE
+- **Korekta:** MVP z V3.11 (`ENABLE_TRANSPARENCY_ROUTE` tag `f22-transparency-mvp-live`) był DOCS-ONLY — flag nigdy nie istniała w `common.py`, `plan.sequence` nigdy nie trafił do `format_proposal`. Faktyczny LIVE dzisiaj.
+- **Commit A** (`165fd38`, tag `f22-transparency-l2label-committed`): L2 label fix `🔗 blisko: X (0.95km)` → `🔗 po odbiorze z X → +0.95km` + 3 flagi (`ENABLE_TRANSPARENCY_ROUTE/REASON/SCORING`, all default True)
+- **Commit B** (`1b87e79`, tag `f22-transparency-route-reason-committed`): reason line (`💡 najbliższy + fala z Eljot + wolny za 3min`) + route section (pickupy then drops wg `plan.sequence`) + downstream serializer checklist compliant (bag_context w obu lokacjach: `_serialize_candidate` + inline best)
+- **Commit C DEFERRED:** scoring breakdown (`📊 95 = baza 70 + wave +17 + bundle +8`) wymaga propagacji per-component scoring z `scoring.py` + `wave_scoring.py` + 2 downstream serializers. Osobna sesja.
+- 6 new unit tests PASS + 61 existing tests PASS (F21 44, C7 10, telegram-timeout 7). Zero regressions.
+- Restarty: dispatch-shadow + dispatch-telegram, oba czyste, zero errors w 60s monitoring.
 
 ### V3.11 (2026-04-18 wieczór) — Sprint C skeleton COMPLETE
 - **11 live wins w jednej sesji** (P1 + C1 + audit docs + C2 + C3 + C4 + C5 + C6 + C7 + geocoding 8/12 + Telegram transparency MVP)
@@ -143,37 +151,51 @@ Zmodyfikowane:
 - `route_simulator_v2.py` — C1 per_order_delivery_times
 - `telegram_approver.py` — P1 5-bucket timeout + MVP transparency route
 
-### Telegram Transparency MVP (LIVE)
+### Telegram Transparency OPCJA A (LIVE 2026-04-19)
 
-**Flaga:** `ENABLE_TRANSPARENCY_ROUTE=True` w common.py
+**Flagi w `common.py`** (all default True — od razu aktywne po restart):
+- `ENABLE_TRANSPARENCY_ROUTE = True` — route section (pickupy then drops)
+- `ENABLE_TRANSPARENCY_REASON = True` — natural-language reason line
+- `ENABLE_TRANSPARENCY_SCORING = True` — score breakdown (C DEFERRED, flag aktywuje się po wdrożeniu scoring.py propagation)
 
-**Co robi:** Każda propozycja Telegram pokazuje ordered route sequence kurier powinien zrobić:
+**Historia:** MVP z V3.11 (tag `f22-transparency-mvp-live`) był DOCS-ONLY — flaga nigdy nie trafiła do kodu. Commit A+B z 2026-04-19 faktycznie wdraża.
 
-Przykład przed MVP:
+**Problem biznesowy Adriana (2026-04-19):** Dotychczasowy label `🔗 blisko: Bar Eljot (0.95km)` był mylący — w naturalnym języku sugeruje że kurier odbiera z Bar Eljota, podczas gdy faktycznie znaczy że kurier ma już w bagu order z Bar Eljota i dokleja się do tej fali. Info o bliskości do restauracji z którą kurier NIE odbiera razem jest mylące. Plus Adrian chce wyjaśnienie logiki (CZEMU ten kurier) + poznać trasę.
+
+**Aktualny format propozycji (Commit A + B LIVE):**
 ```
-🎯 Bartek O. | ETA 3 min
-3 ordery w bundle
-[1. Tak] [2. Inny]
+[PROPOZYCJA] #100
+Rukola → Lipowa 23
+🕐 Odbiór: 09:25 (gotowe)
+
+🎯 Bartek O. (95.28) — 0.8 km, ETA 08:15 → deklarujemy 09:30  🟡 za 3 min  🔗 po odbiorze z Bar Eljot → +0.95km
+   💡 najbliższy + fala z Bar Eljot + wolny za 3 min
+🥈 Mateusz (87.00) — 2.5 km, ETA 08:18 → deklarujemy 09:30  🟢 wolny
+   💡 wolny
+
+📦 3 ordery w bagu:
+🗺️ Kolejność:
+   🍕 Rukola → Bar Eljot → Miejska Miska
+   📍 Lipowa 23 → Legionowa 12 → Zachodnia 8
+
+✓ feasible=23 best=Bartek
+TAK / NIE / INNY / KOORD
 ```
 
-Przykład po MVP:
-```
-🎯 Bartek O. | ETA 3 min
+**Pliki zmodyfikowane:**
+- `dispatch_pipeline.py` — `bag_context` (order_id→restaurant/address mapping) w `enriched_metrics`
+- `shadow_dispatcher.py` — `_serialize_candidate` (loc A) + inline best w `_serialize_result` (loc B) propagują `plan` + `bag_context`
+- `telegram_approver.py` — `_reason_line()` + `_route_section()` + integracja w `format_proposal()`
 
-📦 3 ordery w bundle:
-  1. Rukola → Lipowa 23
-  2. Bar Eljot → Legionowa 12
-  3. Miejska Miska → Zachodnia 8
+**Route section logic:** N=1 (solo) → skip. N≥2 → pickupy (deduped w kolejności sequence) + drops (wg sequence).
 
-🗺️ Kolejność: Rukola → Bar Eljot → Miejska Miska 
-            → Lipowa → Legionowa → Zachodnia
+**Reason line logic:** "najbliższy" gdy km_to_pickup ≤ min innych, "fala z X" z bundle_level1/2, "po drodze" z L3, "wolny [za N min]" z free_at_min.
 
-[1. Tak] [2. Inny]
-```
-
-**Dane:** `RoutePlanV2.sequence` (po C1 dostępne). Format: `restaurant1 → restaurant2 → ... → drop1 → drop2 → drop3`.
-
-**OPCJA A pełna (DEFERRED do jutra):** dodanie scoring breakdown (baza + wave adjustment + soft penalties) — wymaga integracji z `scoring.py` wave/soft outputs. Flaga `ENABLE_TRANSPARENCY_SCORING=False` na teraz.
+**Commit C DEFERRED:** Scoring breakdown `📊 95 = baza 70 + wave +17 + bundle +8` wymaga:
+1. `scoring.py` propaguje 4 nowe pola do candidate dict: `base_score`, `wave_adjustment`, `bundle_bonus`, `soft_penalty`
+2. Downstream serializer checklist dla obu lokacji (A: `_serialize_candidate`, B: inline best w `_serialize_result`)
+3. `_score_summary_line()` w `telegram_approver.py`
+4. Nowy unit test `test_scoring_breakdown_invariant` (sum ≈ total ±0.5)
 
 ---
 

@@ -28,7 +28,9 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 - ✅ **[DONE 2026-04-18]** C5 full wave_scoring 6 features → commit `4fac50e`, tag `f22-c5-full-shadow-live`. food_court + pair_affinity + stretch_bonus + wave_continuation + context_peak + same_restaurant.
 - ✅ **[DONE 2026-04-18 skeleton]** C6 commitment_emitter → commit `17dae8d`, tag `f22-c6-skeleton-committed`. Integration deferred.
 - ✅ **[DONE 2026-04-18]** C7 dispatch_pipeline.assess_order kwarg extension + pending_queue_provider → commit `e0dc06e`, tag `f22-c7-skeleton-live`. Backward-compat verified (f21 44/44 unchanged).
-- ✅ **[DONE 2026-04-18]** Telegram Transparency MVP — ordered route sequence w propozycji (`ENABLE_TRANSPARENCY_ROUTE=True`, tag `f22-transparency-mvp-live`). Format: `Rukola → Bar Eljot → Miejska Miska → Lipowa → Legionowa → Zachodnia`. OPCJA A pełna (scoring breakdown) DEFERRED do 2026-04-19.
+- ⚠️ **[CORRECTED 2026-04-19]** Telegram Transparency MVP z V3.11 (tag `f22-transparency-mvp-live`) był **DOCS-ONLY** — flagi nigdy nie trafiły do `common.py`, `plan.sequence` nigdy nie był propagowany do `format_proposal`. Faktyczne wdrożenie niżej (Commit A + B 2026-04-19).
+- ✅ **[DONE 2026-04-19]** Telegram Transparency OPCJA A Commit A — L2 label fix `🔗 blisko: X (0.95km)` → `🔗 po odbiorze z X → +0.95km` + 3 flagi w `common.py` (`ENABLE_TRANSPARENCY_ROUTE/REASON/SCORING`, default True). Commit `165fd38`, tag `f22-transparency-l2label-committed`. Adresuje Adrian feedback że "blisko X" mylące.
+- ✅ **[DONE 2026-04-19]** Telegram Transparency OPCJA A Commit B — `_reason_line()` natural-language wyjaśnienie + `_route_section()` ordered pickupy/drops. Propagacja `plan` + `bag_context` w `dispatch_pipeline.py` (enriched_metrics) + `shadow_dispatcher.py` (downstream serializer checklist: loc A `_serialize_candidate` + loc B inline best). Commit `1b87e79`, tag `f22-transparency-route-reason-committed`. LIVE po restart dispatch-shadow + dispatch-telegram. 6 new unit tests + 61 existing (F21 44, C7 10, telegram-timeout 7) PASS, zero regressions.
 
 ### ⏭️ Sequential flag flip sequence (2026-04-19 onwards)
 
@@ -36,7 +38,7 @@ Kolejność zgodnie z `F2.2_HANDOVER_2026-04-19.md` Q3, każdy flip wymaga 24-48
 
 1. **[HIGH]** `USE_PER_ORDER_GATE=True` — po review c2_shadow_log (expected ~0 diffs). Restart `dispatch-shadow`. Low risk (duplikuje current SLA).
 2. **[HIGH]** `DEPRECATE_LEGACY_HARD_GATES=True` — dzień +1 po USE_PER_ORDER_GATE stable. R6 narrow soft zone (30-35) activates. Medium risk (ranking może się zmienić).
-3. **[HIGH]** `ENABLE_TRANSPARENCY_SCORING=True` — Telegram Transparency OPCJA A (scoring breakdown). Restart `dispatch-telegram` **z explicit ACK**.
+3. **[HIGH]** Telegram Transparency **Commit C** (scoring breakdown `📊 95 = baza 70 + wave +17 + bundle +8`). Wymaga: (1) propagacja `base_score` + `wave_adjustment` + `bundle_bonus` + `soft_penalty` w `scoring.py`, (2) downstream serializer checklist obu lokacji (loc A `_serialize_candidate` + loc B inline best w `_serialize_result`), (3) `_score_summary_line()` w `telegram_approver.py`, (4) unit test `test_scoring_breakdown_invariant`. Flaga `ENABLE_TRANSPARENCY_SCORING=True` już w `common.py` (aktywuje się gdy propagation gotowa). Restart dispatch-shadow + dispatch-telegram **z explicit ACK**.
 4. **[MED]** `ENABLE_SPEED_TIER_LOADING=True` — po C4 cron setup (systemd timer `dispatch-speed-tier.timer` 03:00 Warsaw). Observational until ENABLE_WAVE_SCORING.
 5. **[MED]** `ENABLE_WAVE_SCORING=True` — **HIGH RISK**, wymaga 5-7 dni shadow walidacji C5. Decision review wag per feature.
 6. **[MED]** `ENABLE_MID_TRIP_PICKUP=True` — po wave_scoring stable. **Blocker**: C6 state_machine integration (obecnie tylko skeleton).
