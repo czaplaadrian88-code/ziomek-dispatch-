@@ -355,6 +355,13 @@ def normalize_order(
     adres_rest = addr_obj.get("street", "")
     rest_name = rest_name_hint or addr_obj.get("name") or "?"
 
+    # Miasto klienta z lokalizacja.name (FK id_location_to).
+    # Panel trzyma miasto odrębnie od pola `street` — koordynator wpisuje ulicę,
+    # miasto wybierane z dropdown `lokalizacja`. Bez tego geocoder defaultowałby
+    # do Białystok i cachował Kleosin/Ignatki/Wasilków pod złymi coords (bug 2026-04-19).
+    loc_obj = raw.get("lokalizacja") or {}
+    delivery_city = (loc_obj.get("name") or "").strip() or None
+
     id_kurier = raw.get("id_kurier")
     is_koordynator = id_kurier == KOORDYNATOR_ID
 
@@ -377,6 +384,8 @@ def normalize_order(
         "pickup_address": adres_rest,
         "address_id": addr_obj.get("id"),
         "delivery_address": adres_dostawa,
+        "delivery_city": delivery_city,
+        "id_location_to": raw.get("id_location_to"),
         "pickup_at_warsaw": pickup_at.isoformat() if pickup_at else None,
         "pickup_at_epoch": pickup_at.timestamp() if pickup_at else None,
         "minutes_to_pickup": round(minutes_to_pickup, 1) if minutes_to_pickup is not None else None,
