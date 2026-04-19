@@ -72,6 +72,23 @@ def _eta_hhmm_warsaw(iso_utc: Optional[str]) -> Optional[str]:
         return None
 
 
+def _serialize_dt_map(m):
+    """V3.17: {oid: datetime} → {oid: ISO UTC str}. Empty/None → None (compact)."""
+    if not m:
+        return None
+    out = {}
+    for k, v in m.items():
+        if v is None:
+            continue
+        try:
+            if v.tzinfo is None:
+                v = v.replace(tzinfo=timezone.utc)
+            out[k] = v.isoformat()
+        except Exception:
+            continue
+    return out or None
+
+
 def _serialize_candidate(c) -> dict:
     plan = c.plan
     m = c.metrics or {}
@@ -130,6 +147,13 @@ def _serialize_candidate(c) -> dict:
             "strategy": plan.strategy,
             "sla_violations": plan.sla_violations,
             "osrm_fallback_used": plan.osrm_fallback_used,
+            # V3.17 (2026-04-19): per-stop timeline propagation for telegram formatter.
+            "per_order_delivery_times": (
+                dict(plan.per_order_delivery_times)
+                if plan.per_order_delivery_times else None
+            ),
+            "predicted_delivered_at": _serialize_dt_map(plan.predicted_delivered_at),
+            "pickup_at": _serialize_dt_map(plan.pickup_at),
         },
         # Transparency OPCJA A (2026-04-19): bag snapshot for route section mapping
         "bag_context": m.get("bag_context"),
@@ -229,6 +253,13 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
                 "strategy": best.plan.strategy,
                 "sla_violations": best.plan.sla_violations,
                 "osrm_fallback_used": best.plan.osrm_fallback_used,
+                # V3.17 (2026-04-19): per-stop timeline propagation for telegram formatter.
+                "per_order_delivery_times": (
+                    dict(best.plan.per_order_delivery_times)
+                    if best.plan.per_order_delivery_times else None
+                ),
+                "predicted_delivered_at": _serialize_dt_map(best.plan.predicted_delivered_at),
+                "pickup_at": _serialize_dt_map(best.plan.pickup_at),
             },
             "bag_context": best_m.get("bag_context"),
         },
