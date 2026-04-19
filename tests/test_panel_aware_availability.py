@@ -22,7 +22,14 @@ from dispatch_v2 import common, courier_resolver  # noqa: E402
 
 
 def _mock_state(orders):
-    """Build a state_machine.get_all() return dict from list of (oid, cid, status) tuples."""
+    """Build a state_machine.get_all() return dict from list of (oid, cid, status) tuples.
+
+    Używamy `now - 10min` jako assigned_at żeby fixture był "fresh" względem
+    V3.14 TTL filter (BAG_STALE_THRESHOLD_MIN=90). Hardcoded 12:00 wyglądał
+    jak 2h temu → TTL odrzucał.
+    """
+    from datetime import datetime, timezone, timedelta
+    fresh_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
     return {
         oid: {
             "courier_id": cid,
@@ -30,7 +37,8 @@ def _mock_state(orders):
             "order_id": oid,
             "delivery_coords": [53.13, 23.17],
             "pickup_coords": [53.14, 23.16],
-            "assigned_at": "2026-04-19T12:00:00+00:00",
+            "assigned_at": fresh_ts,
+            "updated_at": fresh_ts,
         }
         for oid, cid, status in orders
     }

@@ -183,6 +183,69 @@ def _bag_sort_key(o: dict) -> tuple:
     return (is_picked, ts_dt)
 
 
+def _bag_not_stale(order: Dict, now_utc: datetime) -> bool:
+    """TTL check na active_bag entries (V3.14 bag integrity fix).
+
+    Zwraca False jeśli order prawdopodobnie został już delivered w panelu,
+    ale panel_watcher reconcile jeszcze nie dogonił (lag 15-90 min przez
+    MAX_RECONCILE_PER_CYCLE=25/tick + FIFO closed_ids queue).
+
+    Reguły:
+    - Czasówka z `pickup_at_warsaw` w przyszłości → zachowaj (legitymnie assigned
+      przed pickupem, brak lag issue)
+    - status=assigned + updated_at/assigned_at > BAG_STALE_THRESHOLD_MIN ago
+      → STALE (filter out)
+    - status=picked_up + picked_up_at > BAG_STALE_THRESHOLD_MIN ago
+      → STALE (prawdopodobnie delivered)
+    - Brak timestampu lub parse fail → defensywnie zachowaj (lepiej false positive
+      niż zgubić legitymny bag entry)
+    """
+    try:
+        from dispatch_v2.common import (
+            BAG_STALE_THRESHOLD_MIN as _threshold,
+            STRICT_BAG_RECONCILIATION as _strict,
+        )
+    except Exception:
+        return True  # import fail = defensywnie zachowaj
+    if not _strict:
+        return True  # legacy mode — bez TTL
+
+    status = order.get("status")
+
+    # Czasówka: pickup_at w przyszłości → legitymnie assigned (nie stale)
+    pu_str = order.get("pickup_at_warsaw")
+    if pu_str:
+        try:
+            pu_dt = datetime.fromisoformat(pu_str)
+            if pu_dt.tzinfo is None:
+                from zoneinfo import ZoneInfo
+                pu_dt = pu_dt.replace(tzinfo=ZoneInfo("Europe/Warsaw"))
+            if pu_dt > now_utc:
+                return True  # still waiting for pickup, not stale
+        except Exception:
+            pass
+
+    # Timestamp wyboru per status
+    if status == "assigned":
+        ts_str = order.get("updated_at") or order.get("assigned_at")
+    elif status == "picked_up":
+        ts_str = order.get("picked_up_at") or order.get("updated_at")
+    else:
+        return True  # non-active statuses upstream filtered
+
+    if not ts_str:
+        return True  # brak timestampu = defensywnie zachowaj
+
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_min = (now_utc - ts).total_seconds() / 60.0
+        return age_min < _threshold
+    except Exception:
+        return True  # parse fail = defensywnie zachowaj
+
+
 def build_fleet_snapshot(
     include_koordynator: bool = False,
 ) -> Dict[str, CourierState]:
@@ -237,7 +300,14 @@ def build_fleet_snapshot(
 
     for kid in all_kids:
         orders = per_courier.get(kid, [])
-        active_bag = [o for o in orders if o.get("status") in ("assigned", "picked_up")]
+        # TTL filter (V3.14): wyklucza orderly assigned >BAG_STALE_THRESHOLD_MIN
+        # bez picked_up — panel_watcher reconcile lag do 90 min, pipeline nie
+        # może ufać bezwzględnie orders_state.status=assigned dla starych entries.
+        active_bag = [
+            o for o in orders
+            if o.get("status") in ("assigned", "picked_up")
+            and _bag_not_stale(o, now_utc)
+        ]
 
         cs = CourierState(courier_id=kid)
         cs.bag = active_bag
