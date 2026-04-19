@@ -371,3 +371,29 @@ except (ValueError, TypeError):
 # False = legacy behavior. env: ENABLE_NO_GPS_EMPTY_DEMOTE=0.
 # ============================================================
 ENABLE_NO_GPS_EMPTY_DEMOTE = _os.environ.get("ENABLE_NO_GPS_EMPTY_DEMOTE", "1") == "1"
+
+# ============================================================
+# V3.18 unified bag reality check flags (2026-04-19)
+# Master switch dla CourierBagState + FleetContext projection.
+# Adresuje 3 klasy bugów poprzez pojedynczą spójną reprezentację stanu bagu:
+#   Bug 1 (drop<pickup) — route_simulator respektuje pickup time per bag order
+#   Bug 2 (overload)    — scoring penalty gdy bag > fleet_avg + threshold
+#   Bug 3 (false wolny) — telegram czyta CourierBagState.is_free (single source)
+# Bug 4 (empty no_gps top-1) reserved do osobnej sesji z plan-replay audit.
+# Kill-switch: ENABLE_UNIFIED_BAG_STATE=0 ENV disable wszystkich 4 na raz.
+# ============================================================
+ENABLE_UNIFIED_BAG_STATE = _os.environ.get("ENABLE_UNIFIED_BAG_STATE", "1") == "1"
+ENABLE_DROP_TIME_CONSTRAINT = _os.environ.get("ENABLE_DROP_TIME_CONSTRAINT", "1") == "1"
+ENABLE_FLEET_OVERLOAD_PENALTY = _os.environ.get("ENABLE_FLEET_OVERLOAD_PENALTY", "1") == "1"
+ENABLE_PANEL_IS_FREE_AUTHORITATIVE = _os.environ.get("ENABLE_PANEL_IS_FREE_AUTHORITATIVE", "1") == "1"
+ENABLE_BUNDLE_VALUE_SCORING = _os.environ.get("ENABLE_BUNDLE_VALUE_SCORING", "0") == "1"
+
+# Overload threshold: bag > fleet_avg + this → score penalty
+try:
+    OVERLOAD_THRESHOLD_BAGS = int(_os.environ.get("OVERLOAD_THRESHOLD_BAGS", "2"))
+except (ValueError, TypeError):
+    OVERLOAD_THRESHOLD_BAGS = 2
+try:
+    OVERLOAD_PENALTY = float(_os.environ.get("OVERLOAD_PENALTY", "-20.0"))
+except (ValueError, TypeError):
+    OVERLOAD_PENALTY = -20.0
