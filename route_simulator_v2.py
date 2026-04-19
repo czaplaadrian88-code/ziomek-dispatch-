@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from itertools import permutations
 
 from dispatch_v2 import osrm_client
+from dispatch_v2.common import ENABLE_DROP_TIME_CONSTRAINT
 
 
 DWELL_PICKUP_MIN = 2.0
@@ -142,6 +143,24 @@ def _simulate_sequence(
             t = t + timedelta(minutes=DWELL_PICKUP_MIN)
             pickup_at[node["order_id"]] = t
         elif node["kind"] == "delivery":
+            # V3.18 Bug 1: dla bag itemów z status != "picked_up" (kurier jeszcze
+            # nie odebrał z restauracji) predicted drop NIE MOŻE być przed
+            # pickup_ready_at + DWELL_PICKUP_MIN (fizycznie niemożliwe).
+            # Flag ENABLE_DROP_TIME_CONSTRAINT=False → legacy zachowanie (no-op).
+            if ENABLE_DROP_TIME_CONSTRAINT:
+                ref = node["ref"]
+                if ref is not None:
+                    ref_status = getattr(ref, "status", "assigned")
+                    ref_pra = getattr(ref, "pickup_ready_at", None)
+                    if ref_status != "picked_up" and ref_pra is not None:
+                        if ref_pra.tzinfo is None:
+                            ref_pra = ref_pra.replace(tzinfo=timezone.utc)
+                        ref_pra_utc = ref_pra.astimezone(timezone.utc)
+                        # Minimalny realny drop = pickup_ready + pickup dwell
+                        # (drive from restaurant to drop nie znany tu, ale >=0).
+                        min_drop_possible = ref_pra_utc + timedelta(minutes=DWELL_PICKUP_MIN)
+                        if t < min_drop_possible:
+                            t = min_drop_possible
             t = t + timedelta(minutes=DWELL_DROPOFF_MIN)
             delivered_at[node["order_id"]] = t
         current = idx
