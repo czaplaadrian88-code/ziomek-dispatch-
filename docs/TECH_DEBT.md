@@ -4,6 +4,53 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 ---
 
+## V3.19c extensions — 2026-04-19 (master tag `f22-v319c-all-subs-implemented`)
+
+### ✅ LIVE (sub A + sub B)
+
+**Sub A — COURIER_PICKED_UP stop update + GC helper** (commit `2ac7d65`, tag `v319c-sub-a-implemented`):
+- `plan_manager.mark_picked_up(cid, oid, picked_up_at)` — prune pickup stop + flip `status_at_plan_time→picked_up` dla dropoff. Version bump.
+- `plan_manager.gc_invalidated(older_than_hours=24)` — usuwa invalidated plans starsze niż N godzin. **NIE auto-scheduled** w tej sesji; utility do manual/future cron.
+- `panel_watcher._update_plan_on_picked_up` hook po emit COURIER_PICKED_UP reconcile (L754). ENABLE_SAVED_PLANS guard. Triple defensive (no-op gdy plan absent/invalidated/flag off).
+
+**Sub B — Read integration shadow-log** (commit `5fe0e3d`, tag `v319c-sub-b-implemented`):
+- `plan_manager.log_read_shadow_diff(cid, fresh_sequence, active_bag_oids, extra)` — porównuje BAG ordering saved vs fresh, appenduje JSONL do `dispatch_state/v319c_read_shadow_log.jsonl`.
+- `dispatch_pipeline.assess_order` hook po `check_feasibility_v2` (L406). Triple early-exit: `plan is not None AND plan.sequence AND bag_sim`. Peak cost 90-240ms/min (<0.5% wall time).
+- Flags: `ENABLE_SAVED_PLANS_READ_SHADOW=True` default (shadow log active), `ENABLE_SAVED_PLANS_READ=False` (production read → V3.19d flip post N dni shadow review).
+- Shadow log schema: `{ts, cid, has_saved_plan, saved_plan_version, saved_bag_sequence, fresh_bag_sequence, match, active_bag_oids, extra.new_order_id}`. **ZERO PII** — tylko integer IDs.
+
+### 💤 DEAD CODE (sub C + sub D — wymagają timer deploy)
+
+**Sub C — plan_recheck consistency checker** (commit `6eab38b`, tag `v319c-sub-c-implemented`):
+- `plan_recheck.py` standalone module. Verifies invariants: każdy stop.order_id istnieje w orders_state, brak terminal status, plan age < MAX_PLAN_AGE_MIN (120).
+- Opt-in `AUTO_INVALIDATE_STALE=1` env → plan_manager.invalidate_plan dla terminal findings.
+- **NIE auto-scheduled.** systemd unit + timer file w `dispatch_v2/systemd/` ale NIE w `/etc/systemd/system/`. Manual invocation: `cd scripts && python3 -m dispatch_v2.plan_recheck`.
+
+**Sub D — GPS drift detection** (commit `5e8315f`, tag `v319c-sub-d-implemented`):
+- Extends `plan_recheck.py` z `_gps_drift_check` — haversine distance gps_positions_pwa vs plan.start_pos.
+- Threshold 500m, GPS freshness 5min. Placeholder (0,0) start_pos → skip.
+- Flag `ENABLE_GPS_DRIFT_INVALIDATION=False` default. Flag ON + drift → `plan_manager.mark_stale(cid, "GPS_DRIFT")`.
+- **Dead code** dopóki sub C timer nie enabled (sub D żyje w _check_plan w plan_recheck.run_recheck).
+
+### DEFERRED do V3.19d (next session po N dni shadow data)
+
+1. **Install systemd timer** dla `dispatch-plan-recheck` → sub C + sub D wchodzą live.
+2. **Review shadow log** (`v319c_read_shadow_log.jsonl`) → jeśli `match=True` >80% → flip `ENABLE_SAVED_PLANS_READ=True`.
+3. **Read integration full** — dispatch_pipeline uses saved plan as base + `insert_stop_optimal(new_order)` zamiast fresh TSP.
+4. **GPS_DRIFT flip** — `ENABLE_GPS_DRIFT_INVALIDATION=True` po obserwacji drift rate.
+
+### Shadow log rotation
+
+`v319c_read_shadow_log.jsonl` jest append-only, **BRAK auto-rotation**. Manual cleanup co ~2 tygodnie:
+```bash
+tail -10000 dispatch_state/v319c_read_shadow_log.jsonl > /tmp/rot
+mv /tmp/rot dispatch_state/v319c_read_shadow_log.jsonl
+```
+
+Pre-existing test failures (4 × niezwiązane z V3.19): `test_cod_weekly` gspread import, `test_feasibility_integration` 4/5, `test_reconcile_dry_run` 5/6, `test_scoring_scenarios` NameError.
+
+---
+
 ## V3.19 picked_up floor + saved plans — 2026-04-19
 
 ### ✅ LIVE (master tag `f22-route-sim-saved-plans-V3.19`)
