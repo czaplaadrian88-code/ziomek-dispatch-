@@ -44,12 +44,94 @@ RECHECK_LOG_PATH = Path(
 ORDERS_STATE_PATH = Path(
     "/root/.openclaw/workspace/dispatch_state/orders_state.json"
 )
+GPS_PWA_PATH = Path(
+    "/root/.openclaw/workspace/dispatch_state/gps_positions_pwa.json"
+)
 
 AUTO_INVALIDATE_STALE = os.environ.get("AUTO_INVALIDATE_STALE", "0") == "1"
+
+# V3.19c sub D: GPS drift check.
+# True → gdy kurier GPS > GPS_DRIFT_THRESHOLD_M od plan.start_pos i flag
+# ENABLE_GPS_DRIFT_INVALIDATION → plan_manager.mark_stale(cid, "GPS_DRIFT").
+# Default OFF — shadow observation tylko.
+ENABLE_GPS_DRIFT_INVALIDATION = os.environ.get(
+    "ENABLE_GPS_DRIFT_INVALIDATION", "0"
+) == "1"
+GPS_DRIFT_THRESHOLD_M = int(os.environ.get("GPS_DRIFT_THRESHOLD_M", "500"))
+GPS_DRIFT_FRESHNESS_MIN = int(os.environ.get("GPS_DRIFT_FRESHNESS_MIN", "5"))
 
 MAX_PLAN_AGE_MIN = int(os.environ.get("MAX_PLAN_AGE_MIN", "120"))
 
 TERMINAL_STATUSES = frozenset({"delivered", "cancelled", "returned_to_pool"})
+
+
+def _haversine_m(p1: tuple, p2: tuple) -> float:
+    """Distance in meters between 2 (lat, lng) pairs."""
+    import math
+    lat1, lng1 = p1
+    lat2, lng2 = p2
+    R = 6371008.8
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlmb / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+def _load_gps_positions() -> Dict[str, Any]:
+    if not GPS_PWA_PATH.exists():
+        return {}
+    try:
+        with open(GPS_PWA_PATH) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception as e:
+        _log.warning(f"gps_positions load fail: {e}")
+        return {}
+
+
+def _gps_drift_check(cid: str, plan: Dict[str, Any],
+                     gps_positions: Dict[str, Any],
+                     now: datetime) -> Optional[Dict[str, Any]]:
+    """Return finding dict {drift_m, age_min, gps_pos, start_pos} if GPS fresh
+    AND drift > threshold, else None.
+    """
+    gps = gps_positions.get(cid)
+    if not gps:
+        return None
+    try:
+        ts_str = gps.get("timestamp")
+        if not ts_str:
+            return None
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_min = (now - ts).total_seconds() / 60.0
+    except Exception:
+        return None
+    if age_min < 0 or age_min > GPS_DRIFT_FRESHNESS_MIN:
+        return None  # stale GPS not used for drift detection
+    gps_lat = gps.get("lat")
+    gps_lon = gps.get("lon")
+    if gps_lat is None or gps_lon is None:
+        return None
+    sp = plan.get("start_pos") or {}
+    sp_lat = sp.get("lat")
+    sp_lng = sp.get("lng")
+    if sp_lat is None or sp_lng is None:
+        return None
+    # Placeholder start_pos (0,0) — saved from V3.19b hook without coords
+    if (sp_lat, sp_lng) == (0.0, 0.0):
+        return None
+    drift = _haversine_m((gps_lat, gps_lon), (sp_lat, sp_lng))
+    if drift <= GPS_DRIFT_THRESHOLD_M:
+        return None
+    return {
+        "drift_m": round(drift, 1),
+        "gps_age_min": round(age_min, 1),
+        "gps_pos": [gps_lat, gps_lon],
+        "start_pos": [sp_lat, sp_lng],
+    }
 
 
 def _load_orders_state() -> Dict[str, Any]:
@@ -79,6 +161,7 @@ def _log_recheck_entry(entry: Dict[str, Any]) -> None:
 
 def _check_plan(cid: str, plan: Dict[str, Any],
                 orders_state: Dict[str, Any],
+                gps_positions: Dict[str, Any],
                 now: datetime) -> Dict[str, Any]:
     """Return structured finding dict. issues list is empty when plan healthy."""
     issues: List[str] = []
@@ -120,6 +203,11 @@ def _check_plan(cid: str, plan: Dict[str, Any],
     except Exception:
         pass
 
+    # V3.19c sub D: GPS drift check
+    gps_drift = _gps_drift_check(cid, plan, gps_positions, now)
+    if gps_drift:
+        issues.append(f"gps_drift:{gps_drift['drift_m']}m")
+
     return {
         "ts": now.isoformat(),
         "cid": cid,
@@ -128,6 +216,7 @@ def _check_plan(cid: str, plan: Dict[str, Any],
         "stops_count": len(stops),
         "missing_orders": missing,
         "terminal_orders": [{"oid": o, "status": s} for o, s in terminal],
+        "gps_drift": gps_drift,
         "issues": issues,
         "auto_invalidate_reason": auto_invalidate_reason,
     }
@@ -148,13 +237,17 @@ def run_recheck() -> Dict[str, Any]:
         "auto_invalidated": 0,
     }
 
+    gps_positions = _load_gps_positions()
+    summary["gps_drift_detected"] = 0
+    summary["gps_drift_invalidated"] = 0
+
     findings: List[Dict[str, Any]] = []
     for cid, plan in plans.items():
         summary["total_plans"] += 1
         if plan.get("invalidated_at") is not None:
             continue
         summary["active_plans"] += 1
-        finding = _check_plan(cid, plan, orders_state, now)
+        finding = _check_plan(cid, plan, orders_state, gps_positions, now)
         if finding["issues"]:
             summary["with_issues"] += 1
             findings.append(finding)
@@ -165,6 +258,14 @@ def run_recheck() -> Dict[str, Any]:
                 _log.info(
                     f"AUTO_INVALIDATE cid={cid} reason={finding['auto_invalidate_reason']}"
                 )
+            if finding.get("gps_drift"):
+                summary["gps_drift_detected"] += 1
+                if ENABLE_GPS_DRIFT_INVALIDATION:
+                    plan_manager.mark_stale(cid, "GPS_DRIFT")
+                    summary["gps_drift_invalidated"] += 1
+                    _log.info(
+                        f"GPS_DRIFT_INVALIDATE cid={cid} drift={finding['gps_drift']['drift_m']}m"
+                    )
         else:
             summary["healthy"] += 1
 
