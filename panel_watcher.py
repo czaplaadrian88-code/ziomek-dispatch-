@@ -356,6 +356,117 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _log.warning(f"fetch for reassign {zid}: {e}")
                 stats["errors"] += 1
 
+    # ================== PANEL_PACKS FALLBACK (V3.15) ==================
+    # parse_panel_html zwraca courier_packs {nick: [order_ids]} — ground
+    # truth z HTML panelu (każdy tick). Do V3.14 dead data. V3.15: fallback
+    # trigger gdy orders_state.cid != panel_packs mapping → wymuś fetch +
+    # emit COURIER_ASSIGNED. Rozwiązuje lag 15-90s dla świeżych assignments
+    # (bug #467164 Michał Li: bag=0 w pipeline mimo 4 orderów w panelu).
+    try:
+        from dispatch_v2.common import (
+            ENABLE_PANEL_PACKS_FALLBACK as _packs_flag,
+            PACKS_FALLBACK_MAX_PER_CYCLE as _packs_budget,
+        )
+    except Exception:
+        _packs_flag, _packs_budget = True, 10
+
+    if _packs_flag:
+        packs = parsed.get("courier_packs") or {}
+        if packs:
+            # Lazy load kurier_ids.json reverse {name: cid} z ambiguity detection
+            try:
+                import json as _json
+                with open("/root/.openclaw/workspace/dispatch_state/kurier_ids.json") as _f:
+                    _kurier_ids = _json.load(_f)
+                _name_to_cid = {}
+                _ambiguous_names = set()
+                for _nm, _cid in _kurier_ids.items():
+                    _nm_key = _nm.strip()
+                    if _nm_key in _name_to_cid and _name_to_cid[_nm_key] != str(_cid):
+                        _ambiguous_names.add(_nm_key)
+                    _name_to_cid[_nm_key] = str(_cid)
+            except Exception as _e:
+                _log.warning(f"packs fallback: kurier_ids load fail: {_e}")
+                _name_to_cid = {}
+                _ambiguous_names = set()
+
+            _packs_checked = 0
+            _packs_catchup = 0
+            for _nick, _oids in packs.items():
+                if _packs_checked >= _packs_budget:
+                    break
+                _nick_key = (_nick or "").strip()
+                if not _nick_key or not _oids:
+                    continue
+                if _nick_key in _ambiguous_names:
+                    _log.warning(f"packs fallback: skip ambiguous nick {_nick_key!r}")
+                    continue
+                _target_cid = _name_to_cid.get(_nick_key)
+                if not _target_cid:
+                    # Nick spoza kurier_ids.json (np. PIN-only courier w Courier App) — skip
+                    continue
+                for _oid in _oids:
+                    if _packs_checked >= _packs_budget:
+                        break
+                    _oid_str = str(_oid)
+                    _sorder = current_state.get(_oid_str) or {}
+                    _state_cid = str(_sorder.get("courier_id") or "")
+                    if _state_cid == _target_cid:
+                        continue  # already in sync
+                    _state_status = _sorder.get("status")
+                    if _state_status in ("delivered", "returned_to_pool", "cancelled"):
+                        continue  # terminal — nie wzbogacaj V3.14-filtered
+                    # Mismatch — fetch_details do weryfikacji raw id_kurier
+                    try:
+                        _raw = fetch_order_details(_oid_str, csrf)
+                        stats["fetched_details"] += 1
+                        _packs_checked += 1
+                    except Exception as _fe:
+                        _log.warning(f"packs fallback fetch({_oid_str}): {_fe}")
+                        stats["errors"] += 1
+                        continue
+                    if not _raw:
+                        continue
+                    _panel_cid = str(_raw.get("id_kurier") or "")
+                    _sid = _raw.get("id_status_zamowienia")
+                    if _sid in IGNORED_STATUSES:
+                        continue
+                    if not _panel_cid or _panel_cid == str(KOORDYNATOR_ID):
+                        continue
+                    if _panel_cid != _target_cid:
+                        _log.warning(
+                            f"packs fallback: nick={_nick_key!r} map→{_target_cid} "
+                            f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
+                        )
+                        _target_cid = _panel_cid
+                    _ev = emit(
+                        "COURIER_ASSIGNED",
+                        order_id=_oid_str,
+                        courier_id=_target_cid,
+                        payload={
+                            "source": "packs_fallback",
+                            "previous_cid": _state_cid or None,
+                            "nick": _nick_key,
+                        },
+                        event_id=f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_packs",
+                    )
+                    if _ev:
+                        stats["assigned"] += 1
+                        _packs_catchup += 1
+                        update_from_event({
+                            "event_type": "COURIER_ASSIGNED",
+                            "order_id": _oid_str,
+                            "courier_id": _target_cid,
+                            "payload": {"source": "packs_fallback"},
+                        })
+                        _log.info(
+                            f"PACKS_CATCHUP {_oid_str} → cid={_target_cid} nick={_nick_key!r} "
+                            f"(was cid={_state_cid or 'None'})"
+                        )
+            if _packs_catchup:
+                stats["packs_catchup"] = _packs_catchup
+    # ================== END PANEL_PACKS FALLBACK ==================
+
     # ================== RECONCILE STATUS ==================
     # Dla orderow ktore state widzi jako assigned/picked_up, a panel widzi jako closed
     # (bez data-idkurier w bloku HTML = status 7/8/9) - fetch details i emit event.
