@@ -1,6 +1,20 @@
-# CLAUDE.md — Ziomek Dispatcher (V3.15 Panel packs fallback)
+# CLAUDE.md — Ziomek Dispatcher (V3.16 Proposal selection demote)
 
 ## Changelog
+
+### V3.16 (2026-04-19 wieczór) — no_gps empty bag proposal selection demotion
+- **Bug #467189** Rukola → Magazynowa 5/4 @ 15:10:07 UTC: BEST=Mateusz O (cid=413, no_gps, bag=0, score=+53.31), koordynator override → Bartek O. (cid=123). PANEL_OVERRIDE rate **19.6%** (18/92 propozycji last 1h45min). Proposed=413 Mateusz O 7× (avg score +64.8) — wszystkie no_gps empty.
+- **Root cause**: `scoring.py` asymmetria — empty bag dostaje baseline ~82 punktów (s_obciazenie=100 × 0.25 + s_kierunek=100 × 0.25 + s_czas=100 × 0.20 = 70 bez penalty). Bag-kurierzy tracą -100 do -300 przez r8_soft_pen + r9_wait_pen + r9_stopover. **Pipeline nie karze no_gps fallback** (synthetic BIALYSTOK_CENTER + max(15, prep) travel).
+- **Fix** (4 commits + 4 tagów, master `f22-proposal-selection-fix-live-V3.16`):
+  - `ee61264` common — flag `ENABLE_NO_GPS_EMPTY_DEMOTE=True` + env override
+  - `28442b9` dispatch_pipeline — inline demote logic po feasible.sort, przed final pick
+  - `b4d2866` refactor — extract do module-level `_demote_blind_empty()` + `_is_blind_empty_cand()` + `_is_informed_cand()` (testowalne)
+  - `83ffdcc` tests — `test_proposal_selection_v316.py` 25/25 PASS (12 sections)
+- **Mechanizm**: jeśli top-1 feasible ma `pos_source in {no_gps,pre_shift,none}` AND `r6_bag_size==0` AND istnieje informed alt → reorder: informed first (stable), other middle, blind+empty last. Guard "all blind": jeśli wszyscy blind+empty → zostaw (empty shift edge).
+- **Zero zmian w scoring.py / feasibility_v2.py / wave_scoring.py** — post-scoring layer, ortogonalny do Sprint C.
+- **Interakcja V3.12-V3.15**: zero konfliktu. V3.15 packs_fallback + V3.16 demote się wzajemnie wzmacniają — V3.15 szybciej aktualizuje bag (Mateusz O przestaje być blind+empty), V3.16 demotuje gdy **naprawdę** jest blind+empty.
+- **Regresja**: 245/245 baseline clean (137 legacy + 16 city + 26 availability + 25 bag + 16 V3.15 + 25 V3.16).
+- **Deferred**: (a) Bartek O. nie w top-4 alt dla #467189 — feasibility R4/R5 odrzuciła mimo fresh bag=3 — secondary fix osobno. (b) H3 bundle "po drodze" score balance — r9_wait_pen dominuje bundle_bonus, koordynator manually override. Osobna sesja. (c) PANEL_OVERRIDE event logging w learning_log jako structured metric.
 
 ### V3.15 (2026-04-19 wieczór) — Missing-new-assignment lag fix (panel_packs fallback)
 - **Bug 16:30 Warsaw**: propozycja #467164 pokazała Michała Li (cid=508, GPS aktywny) jako "🟢 wolny" mimo 4 orderów w bagu w panelu. Orders_state miał `cid=None` dla nich (467129/131/155).

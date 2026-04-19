@@ -4,6 +4,33 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 ---
 
+## Proposal selection / no_gps demote fix — 2026-04-19 (V3.16)
+
+### ✅ FIX COMMITTED (tag `f22-proposal-selection-fix-live-V3.16`)
+
+Bug #467189 @ 15:10:07 UTC: Mateusz O (cid=413, no_gps, bag=0, score=+53.31) BEST, koordynator override → Bartek O. (cid=123). **PANEL_OVERRIDE rate 19.6%** (18/92 propozycji last 1h45min), proposed=413 Mateusz O dominuje (7× w tym oknie, avg score +64.8).
+
+Root cause: scoring.py strukturalna asymmetria — empty bag dostaje baseline ~82 punktów (3/4 komponentów = 100), bag-kurierzy tracą -100 do -300 przez r8_soft_pen + r9_wait_pen + r9_stopover. no_gps fallback (synthetic BIALYSTOK_CENTER + max(15, prep) travel) nie karany.
+
+| Step | Commit | Tag | Zakres |
+|---|---|---|---|
+| 1 | `ee61264` | `fix-propsel-flag-committed` | common.py — flag `ENABLE_NO_GPS_EMPTY_DEMOTE=True` + env override |
+| 2 | `28442b9` | `fix-propsel-demote-committed` | dispatch_pipeline.py — inline demote logic |
+| 2b | `b4d2866` | `fix-propsel-refactor-committed` | refactor — extract do module-level `_demote_blind_empty()` + helpers |
+| 3 | `83ffdcc` | `fix-propsel-tests-committed` | tests/test_proposal_selection_v316.py — 25/25 PASS |
+
+**Mechanizm**: post-scoring demotion. Jeśli top-1 blind+empty AND istnieje informed alt → reorder: informed first (stable), other middle, blind+empty last. Guard "all blind" (empty shift).
+
+**Regression**: 245/245 baseline clean (137 legacy + 16 city + 26 avail + 25 bag + 16 V3.15 + 25 V3.16). Zero konfliktu z V3.12-V3.15.
+
+### 🔴 Deferred (secondary)
+
+1. **Bartek O. not in top-4 alt #467189** mimo fresh bag=3 (14:59:15-17 assignments) — feasibility R4/R5 odrzuciła. Koordynator jednak uznał Bartka za najlepszego. Secondary bug w feasibility tight-bag-cap dla legit high-activity kurierów.
+2. **H3 bundle "po drodze" score balance** — Michał Rom/Li ALT miały bl3=True bl3_dev=0.71/1.57km ale r9_wait_pen=-114 dominuje bundle_bonus=+65. Scoring nie balansuje reward/penalty dla bundling. Wymaga zmian scoring.py / wave_scoring.py → STOP + ACK trigger.
+3. **PANEL_OVERRIDE structured logging** — obecnie tylko dispatch.log text. Add do learning_log.jsonl jako structured event (schema: order_id, proposed_cid, actual_cid, delta_seconds, source).
+
+---
+
 ## Missing-new-assignment / panel_packs fallback fix — 2026-04-19 (V3.15)
 
 ### ✅ FIX COMMITTED (tag `f22-panel-packs-fallback-live-V3.15`)
