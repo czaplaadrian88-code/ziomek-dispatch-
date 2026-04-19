@@ -184,6 +184,7 @@ def check_feasibility_v2(
     now: Optional[datetime] = None,
     pickup_ready_at: Optional[datetime] = None,
     sla_minutes: int = DEFAULT_SLA_MINUTES,
+    base_sequence: Optional[List[str]] = None,  # V3.19d passthrough
 ) -> Tuple[str, str, Dict, Optional[RoutePlanV2]]:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -288,6 +289,7 @@ def check_feasibility_v2(
 
     plan = simulate_bag_route_v2(
         courier_pos, bag, new_order, now=now, sla_minutes=sla_minutes,
+        base_sequence=base_sequence,
     )
 
     metrics["sequence"] = plan.sequence

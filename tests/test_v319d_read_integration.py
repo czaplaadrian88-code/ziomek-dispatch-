@@ -210,10 +210,47 @@ check("sticky plan has predicted_delivered_at for all 3 orders (X,Y,N)",
       all(oid in plan_sticky.predicted_delivered_at for oid in ("X", "Y", "N")))
 
 # ============================================================
+print("=== V3.19d: feasibility_v2 passthrough ===")
+# ============================================================
+
+from dispatch_v2 import feasibility_v2
+
+# Test 11 — check_feasibility_v2 signature includes base_sequence
+import inspect
+sig = inspect.signature(feasibility_v2.check_feasibility_v2)
+check("feasibility_v2.check_feasibility_v2 has base_sequence kwarg",
+      "base_sequence" in sig.parameters)
+
+# Test 12 — passthrough: base_sequence propagated do simulator
+_reset()
+_set({
+    (posA, drop_x): 6.0, (posA, drop_y): 8.0,
+    (drop_x, drop_y): 4.0, (drop_y, drop_x): 4.0,
+    (drop_x, pickup_new): 5.0, (drop_y, pickup_new): 6.0,
+    (pickup_new, drop_new): 3.0,
+    (drop_x, drop_new): 4.0, (drop_y, drop_new): 4.0,
+})
+bag_for_f = [
+    OrderSim("X", (0.0, 0.0), drop_x, picked_up_at=_now() - timedelta(minutes=20), status="picked_up"),
+    OrderSim("Y", (0.0, 0.0), drop_y, picked_up_at=_now() - timedelta(minutes=25), status="picked_up"),
+]
+_, _, _, plan_f = feasibility_v2.check_feasibility_v2(
+    courier_pos=posA, bag=bag_for_f, new_order=new_order, now=_now(),
+    base_sequence=["Y", "X"],
+)
+if plan_f is not None:
+    y_f = plan_f.sequence.index("Y") if "Y" in plan_f.sequence else -1
+    x_f = plan_f.sequence.index("X") if "X" in plan_f.sequence else -1
+    check("feasibility_v2 base_sequence=[Y,X] → plan respects order",
+          y_f >= 0 and x_f >= 0 and y_f < x_f and plan_f.strategy == "sticky")
+else:
+    check("feasibility_v2 base_sequence passthrough — plan not None", False)
+
+# ============================================================
 total = passed + failed
 print()
 print("=" * 60)
-print(f"V3.19d READ INTEGRATION (Commit A simulator): {passed}/{total} PASS")
+print(f"V3.19d READ INTEGRATION: {passed}/{total} PASS")
 print("=" * 60)
 
 if failed:

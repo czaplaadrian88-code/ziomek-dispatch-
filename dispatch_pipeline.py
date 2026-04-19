@@ -377,6 +377,28 @@ def assess_order(
         # Solo (pusty bag) zostaje 35 min — nie poluzowujemy sytuacji bez bundlingu.
         sla_minutes = 45 if bag_sim else 35
 
+        # V3.19d: read integration — extract base_sequence z saved plan dla
+        # bag ordering. Triple guard: flag True + bag non-empty + saved match.
+        # Mismatch / exception → base_sequence=None (fresh TSP fallback).
+        _base_sequence = None
+        if bag_sim:
+            try:
+                from dispatch_v2.common import ENABLE_SAVED_PLANS_READ
+                if ENABLE_SAVED_PLANS_READ:
+                    from dispatch_v2 import plan_manager as _pm_read
+                    _bag_oids = {str(o.order_id) for o in bag_sim}
+                    _saved = _pm_read.load_plan(str(cid), active_bag_oids=_bag_oids)
+                    if _saved is not None:
+                        _seq = [
+                            str(s["order_id"]) for s in _saved.get("stops", [])
+                            if s.get("type") == "dropoff"
+                            and str(s.get("order_id")) in _bag_oids
+                        ]
+                        if set(_seq) == _bag_oids and len(_seq) == len(_bag_oids):
+                            _base_sequence = _seq
+            except Exception:
+                _base_sequence = None
+
         verdict, reason, metrics, plan = check_feasibility_v2(
             courier_pos=tuple(courier_pos),
             bag=bag_sim,
@@ -384,6 +406,7 @@ def assess_order(
             shift_end=getattr(cs, "shift_end", None),
             now=now,
             sla_minutes=sla_minutes,
+            base_sequence=_base_sequence,
         )
 
         # F1.8f hard guard: kurier którego zmiana kończy się PRZED pickup_ready_at
