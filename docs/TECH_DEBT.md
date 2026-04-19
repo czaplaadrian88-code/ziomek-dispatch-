@@ -4,6 +4,63 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 ---
 
+## V3.19d + V3.20 — 2026-04-19 (master tag `f22-v319-v320-complete`)
+
+### ✅ LIVE V3.19d read integration
+
+**Commit A** `0ec9a32` (`v319d-simulator-extended`) — `simulate_bag_route_v2` dostaje `base_sequence: Optional[List[str]]` kwarg. Gdy podane, nowa pure func `_sticky_sequence_plan` iteruje tylko pozycje insertion new_order z bag dropoffs lockowanymi w `base_sequence` kolejności. Mismatch oids/len → fresh TSP fallback. Strategy tag "sticky".
+
+**Commit B** `2e33a40` (`v319d-pipeline-hook-implemented`) — `feasibility_v2.check_feasibility_v2` kwarg passthrough. `dispatch_pipeline.assess_order` extract `base_sequence` z `plan_manager.load_plan(cid, active_bag_oids=bag_oids)` gdy flag True + bag non-empty + saved matches. Triple guard + exception fallback.
+
+**Commit C** `e93d727` (`v319d-flag-flipped`) — `ENABLE_SAVED_PLANS_READ=True` default. Env kill-switch =0.
+
+Deploy: 2026-04-19 22:26:59 UTC restart dispatch-shadow. 10 min clean.
+
+### ✅ LIVE V3.20 R2 ghost detection
+
+**Commit** `97335e3` (`v320-packs-ghost-implemented`) — new section w `panel_watcher._diff_and_emit` po V3.15 packs_fallback. Reverse logic V3.15: dla active orderów z cid set, reverse nick z kurier_ids.json, check `packs[nick]`. Order w state ale NIE w packs[nick] + nick IS w packs → ghost candidate. fetch_details potwierdza status=7 → emit `COURIER_DELIVERED` z source="packs_ghost_detect" + V3.19b advance_plan hook.
+
+**Flag:** `ENABLE_V320_PACKS_GHOST_DETECT=True` default. Env kill-switch =0.
+
+**Guards (7):** flag, age guard (`GHOST_DETECT_AGE_MIN=5min`), budget (`GHOST_DETECT_MAX_PER_CYCLE=5`), koordynator skip, ambiguous nick skip, nick-not-in-packs skip, status≠7 skip.
+
+**Pivot od oryginalnego planu:** user proposed `czas_doreczenia` filter w bag_state, ale pole nie jest w orders_state (fetch_details parses ale state_machine nie propaguje). Pivot zaakceptowany — pełny stack propagation zbędny, packs reverse lookup daje zero-lag detection bez inwazji do state_machine/bag_state.
+
+Deploy: 2026-04-19 22:46:51 UTC restart dispatch-panel-watcher. 10 min clean.
+
+### Tests total V3.19d + V3.20
+
+- V3.19d: 14 new asserts (12 simulator + 2 pipeline passthrough)
+- V3.20: 11 new asserts (ghost detect flow + guards)
+- Baseline preserved: 30 V3.18 + 44 decision_engine + reszta pre-V3.19
+
+### Rollback paths
+
+- **Full:** `git reset --hard f22-v319c-all-subs-implemented` + restart shadow+panel-watcher
+- **V3.20 only:** `ENABLE_V320_PACKS_GHOST_DETECT=0` env + restart panel-watcher
+- **V3.19d only:** `ENABLE_SAVED_PLANS_READ=0` env + restart shadow
+- **V3.19c sub C/D timer:** `systemctl disable --now dispatch-plan-recheck.timer`
+
+### Flag state matrix (live post V3.20)
+
+| Flag | Default | Status |
+|---|---|---|
+| `ENABLE_PICKED_UP_DROP_FLOOR` | True | V3.19a live |
+| `ENABLE_SAVED_PLANS` | True | V3.19b hooks + V3.19c sub A live |
+| `ENABLE_SAVED_PLANS_READ_SHADOW` | True | V3.19c sub B shadow log live |
+| `ENABLE_SAVED_PLANS_READ` | True | V3.19d read integration live |
+| `ENABLE_V320_PACKS_GHOST_DETECT` | True | V3.20 ghost detect live |
+| `AUTO_INVALIDATE_STALE` | False | obserwacja only (plan_recheck) |
+| `ENABLE_GPS_DRIFT_INVALIDATION` | False | obserwacja only (plan_recheck) |
+
+### Services + timers
+
+- `dispatch-shadow`: active (21:45 → 22:26 → flip restart)
+- `dispatch-panel-watcher`: active (22:46 → V3.20 restart)
+- `dispatch-plan-recheck.timer`: active (enabled 22:03), OnUnitActiveSec=5min
+
+---
+
 ## V3.19c extensions — 2026-04-19 (master tag `f22-v319c-all-subs-implemented`)
 
 ### ✅ LIVE (sub A + sub B)
