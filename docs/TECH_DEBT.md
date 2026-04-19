@@ -4,6 +4,32 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 ---
 
+## City-aware geocoding fix — 2026-04-19
+
+### ✅ FIX COMMITTED (tag `f22-city-aware-geocoding-live`)
+
+Bug produkcyjny 2026-04-19 ~10:53: #466975 Chicago Pizza→Kleosin fałszywie zbundlowane z #466978 Retrospekcja→Białystok jako "po drodze 0.3km", realny dystans 5.33km. Root cause: `geocoding.py` miał `hint_city='Białystok'` hardcoded + `panel_client.normalize_order` nie parsowało miasta klienta (pole w panelu: `lokalizacja.name`).
+
+| Step | Commit | Tag | Zakres |
+|---|---|---|---|
+| 1 | `9fe0980` | `fix-city-panel-client-committed` | `normalize_order` zwraca `delivery_city` (lokalizacja.name) + `pickup_city` + `id_location_to` |
+| 2 | `af01fcc` | `fix-city-flag-committed` | `CITY_AWARE_GEOCODING=True` flag w common.py (kill-switch) |
+| 3 | `5d9754c` | `fix-city-geocoding-committed` | `geocode(addr, city=None)` — city explicit; fail-loud gdy None + flag True; legacy Białystok fallback gdy flag False; cache key "street, city" schema (backward compat) |
+| 4 | `c28daa6` | `fix-city-callers-committed` | Propagacja: `panel_watcher` (ev_payload niesie pickup/delivery_city) → `shadow_dispatcher` → `state_machine` (COURIER_DELIVERED) |
+| 5 | `b63c27e` | `fix-city-tests-committed` | `tests/test_city_aware_geocoding.py` — 16/16 PASS, fixture #466975/466978 |
+
+**Regression:** 137/137 baseline clean tests bez zmian (4 pre-existing failures nietknięte).
+
+**Shadow delta** (`/tmp/city_fix_shadow_delta_2026-04-19.md`): 49 orders w state mają podejrzane coords (non-Bial city w adresie, coords w szerokiej bbox), 8 cache entries ewidentnie corrupt (out-of-bbox >50km).
+
+### 🟡 PENDING — restart + cache invalidation (WYMAGA ACK)
+
+1. **Restart `dispatch-panel-watcher` + `dispatch-shadow`** — fix wchodzi do runtime tylko po restart. `dispatch-telegram` NIE wymaga (nie woła geocode).
+2. **Cache invalidation 8 corrupt entries** — skrypt `tools/invalidate_city_bugged_geocodes.py` (`--execute` do faktycznego usunięcia, backup atomic pre-delete).
+3. **Monitoring 24h po restart** — grep log po `"brak city (CITY_AWARE_GEOCODING=True → None)"` — jeśli > 10/dzień znaczy panel dla jakiejś kategorii nie ma `lokalizacja.name` → flag flip False + diagnoza.
+
+---
+
 ## F2.2 Audit Resolution — 2026-04-18
 
 ### ✅ Zamknięte przez F2.2 audit

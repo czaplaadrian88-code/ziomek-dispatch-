@@ -1,6 +1,19 @@
-# CLAUDE.md — Ziomek Dispatcher (V3.11.1 Transparency OPCJA A LIVE)
+# CLAUDE.md — Ziomek Dispatcher (V3.12 City-Aware Geocoding Fix)
 
 ## Changelog
+
+### V3.12 (2026-04-19 południe) — City-Aware Geocoding Fix
+- **Bug produkcyjny** (~10:53 Warsaw): #466975 Chicago Pizza→Kleosin fałszywie zbundlowane z #466978 Retrospekcja→Białystok jako "po drodze 0.3km" — realny dystans 5.33km. Michał Rom dostał top score 125.79 przez fałszywy `bundle_level2_dist=1.15km` od błędnie zgeokodowanego klienta Chicago Pizza.
+- **Root cause 3-warstwowy**: (1) `panel_client.normalize_order` nie parsował miasta klienta (pole w panelu: `lokalizacja.name`, FK przez `id_location_to`), (2) `geocoding.geocode(addr, hint_city='Białystok')` hardcoded default, (3) `_normalize` dokleił `, białystok` do cache key → klient Kleosin cache'owany pod `"kraszewskiego 10a, białystok"` z coords Białegostoku.
+- **Fix** (5 commitów + 6 tagów, master `f22-city-aware-geocoding-live`):
+  - `9fe0980` panel_client — `delivery_city` + `pickup_city` + `id_location_to` z raw
+  - `af01fcc` common — flag `CITY_AWARE_GEOCODING=True` (kill-switch default=True)
+  - `5d9754c` geocoding — signature `geocode(addr, city=None)`, fail-loud gdy None+flag, legacy fallback gdy flag False (backward compat: stare cache keys `"street, białystok"` działają)
+  - `c28daa6` callers — propagacja przez panel_watcher → shadow_dispatcher → state_machine; ev_payload NEW_ORDER niesie pickup/delivery_city
+  - `b63c27e` tests — `test_city_aware_geocoding.py` 16/16 PASS (fixture #466975/466978, Warszawa-ready multi-city)
+- **Regresja**: 137/137 baseline clean tests nienaruszone (4 pre-existing failures niezmienione).
+- **Shadow delta** (`/tmp/city_fix_shadow_delta_2026-04-19.md`): 49 orders w state podejrzane, 8 cache entries corrupt (out-of-bbox).
+- **Pending do LIVE**: restart `dispatch-panel-watcher` + `dispatch-shadow` (wymaga ACK). `dispatch-telegram` NIE wymaga (nie woła geocode). Cache invalidation 8 entries przez `tools/invalidate_city_bugged_geocodes.py --execute`.
 
 ### V3.11.1 (2026-04-19 rano) — Telegram Transparency OPCJA A LIVE
 - **Korekta:** MVP z V3.11 (`ENABLE_TRANSPARENCY_ROUTE` tag `f22-transparency-mvp-live`) był DOCS-ONLY — flag nigdy nie istniała w `common.py`, `plan.sequence` nigdy nie trafił do `format_proposal`. Faktyczny LIVE dzisiaj.
