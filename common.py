@@ -429,6 +429,32 @@ ENABLE_SAVED_PLANS_READ_SHADOW = _os.environ.get(
 # Triple guard w caller (flag+bag+match). Env kill-switch =0 = no-op fresh TSP.
 ENABLE_SAVED_PLANS_READ = _os.environ.get("ENABLE_SAVED_PLANS_READ", "1") == "1"
 
+# ============================================================
+# V3.20 — R2 ghost detection via panel_packs reverse lookup (2026-04-19)
+# Rozszerzenie V3.15 packs_fallback: V3.15 wykrywa MISSING COURIER_ASSIGNED,
+# V3.20 wykrywa MISSING COURIER_DELIVERED. orders_state.status=picked_up/assigned
+# ale oid NIE w packs[nick] z tego samego panel tick → kurier go oddał/delivered.
+# fetch_details potwierdza status=7 zanim emit COURIER_DELIVERED.
+# Adresuje R2 (12.7% propozycji) ghost delivered orders z 6min panel_watcher lag.
+# True (default) = ghost detect live; False = legacy (ghost widoczny 6min).
+# env: ENABLE_V320_PACKS_GHOST_DETECT=0.
+# Guards:
+#  - GHOST_DETECT_AGE_MIN: minimalny wiek assignment żeby uniknąć race
+#    z świeżym COURIER_ASSIGNED przed pierwszym HTML parse.
+#  - GHOST_DETECT_MAX_PER_CYCLE: cap fetch_details calls per tick.
+# ============================================================
+ENABLE_V320_PACKS_GHOST_DETECT = _os.environ.get(
+    "ENABLE_V320_PACKS_GHOST_DETECT", "1") == "1"
+try:
+    GHOST_DETECT_AGE_MIN = int(_os.environ.get("GHOST_DETECT_AGE_MIN", "5"))
+except (ValueError, TypeError):
+    GHOST_DETECT_AGE_MIN = 5
+try:
+    GHOST_DETECT_MAX_PER_CYCLE = int(
+        _os.environ.get("GHOST_DETECT_MAX_PER_CYCLE", "5"))
+except (ValueError, TypeError):
+    GHOST_DETECT_MAX_PER_CYCLE = 5
+
 # Overload threshold: bag > fleet_avg + this → score penalty
 try:
     OVERLOAD_THRESHOLD_BAGS = int(_os.environ.get("OVERLOAD_THRESHOLD_BAGS", "2"))

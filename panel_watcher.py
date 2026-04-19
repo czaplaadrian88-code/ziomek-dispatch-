@@ -23,6 +23,7 @@ Uzywanie:
 import signal
 import sys
 import time
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from dispatch_v2.common import flag, load_config, now_iso, setup_logger
@@ -627,6 +628,140 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             if _packs_catchup:
                 stats["packs_catchup"] = _packs_catchup
     # ================== END PANEL_PACKS FALLBACK ==================
+
+    # ================== V3.20 PACKS GHOST DETECT ==================
+    # Odwrotność V3.15: oid w orders_state z cid+status=active, ale nick
+    # tego kuriera jest w packs i oid NIE w packs[nick] → order zniknął z
+    # kuriera bag w panelu (delivered/returned). fetch_details potwierdza
+    # status=7 zanim emit COURIER_DELIVERED. Rozwiązuje 6min reconcile lag.
+    try:
+        from dispatch_v2.common import (
+            ENABLE_V320_PACKS_GHOST_DETECT as _ghost_flag,
+            GHOST_DETECT_AGE_MIN as _ghost_age_min,
+            GHOST_DETECT_MAX_PER_CYCLE as _ghost_budget,
+        )
+    except Exception:
+        _ghost_flag, _ghost_age_min, _ghost_budget = True, 5, 5
+
+    if _ghost_flag:
+        packs_gd = parsed.get("courier_packs") or {}
+        if packs_gd:
+            # Reverse {cid: nick} dla lookup; reuse ambiguity detect z V3.15
+            try:
+                import json as _json_gd
+                with open("/root/.openclaw/workspace/dispatch_state/kurier_ids.json") as _f_gd:
+                    _kids_gd = _json_gd.load(_f_gd)
+                _cid_to_nick = {}
+                _name_counts = {}
+                for _nm, _cid in _kids_gd.items():
+                    _nm_key = (_nm or "").strip()
+                    if not _nm_key:
+                        continue
+                    _name_counts[_nm_key] = _name_counts.get(_nm_key, 0) + 1
+                    _cid_to_nick[str(_cid)] = _nm_key
+                _ambiguous_gd = {n for n, c in _name_counts.items() if c > 1}
+            except Exception as _e_gd:
+                _log.warning(f"V3.20 ghost detect: kurier_ids load fail: {_e_gd}")
+                _cid_to_nick = {}
+                _ambiguous_gd = set()
+
+            # Sety orderów per-nick dla O(1) membership check
+            _packs_oids_by_nick = {
+                (n or "").strip(): {str(x) for x in (v or [])}
+                for n, v in packs_gd.items()
+            }
+
+            _ghost_checked = 0
+            _ghost_confirmed = 0
+            _now_utc_gd = datetime.fromisoformat(now_iso().replace("Z", "+00:00"))
+            if _now_utc_gd.tzinfo is None:
+                from datetime import timezone as _tz_gd
+                _now_utc_gd = _now_utc_gd.replace(tzinfo=_tz_gd.utc)
+
+            for _oid, _sorder in list(current_state.items()):
+                if _ghost_checked >= _ghost_budget:
+                    break
+                _state_status = _sorder.get("status")
+                if _state_status not in ("assigned", "picked_up"):
+                    continue
+                _state_cid = str(_sorder.get("courier_id") or "")
+                if not _state_cid or _state_cid == str(KOORDYNATOR_ID):
+                    continue
+                # age guard — avoid race z freshly-assigned
+                _assigned_at_raw = _sorder.get("assigned_at") or _sorder.get("updated_at")
+                if _assigned_at_raw:
+                    try:
+                        _assigned_dt = datetime.fromisoformat(
+                            str(_assigned_at_raw).replace("Z", "+00:00"))
+                        if _assigned_dt.tzinfo is None:
+                            from datetime import timezone as _tz_gd2
+                            _assigned_dt = _assigned_dt.replace(tzinfo=_tz_gd2.utc)
+                        _age_min = (_now_utc_gd - _assigned_dt).total_seconds() / 60.0
+                        if _age_min < _ghost_age_min:
+                            continue
+                    except Exception:
+                        pass  # defensive — if parse fail, proceed (conservative)
+                _nick_gd = _cid_to_nick.get(_state_cid)
+                if not _nick_gd or _nick_gd in _ambiguous_gd:
+                    continue  # unknown cid or ambiguous nick
+                _nick_packs = _packs_oids_by_nick.get(_nick_gd)
+                if _nick_packs is None:
+                    continue  # kurier off-shift / brak w panelu — nie ghost
+                if str(_oid) in _nick_packs:
+                    continue  # order wciąż widoczny w bag panelu — NOT ghost
+                # Kandydat na ghost: state says active, packs says gone
+                try:
+                    _raw_gd = fetch_order_details(str(_oid), csrf)
+                    stats["fetched_details"] += 1
+                    _ghost_checked += 1
+                except Exception as _fe_gd:
+                    _log.warning(f"V3.20 ghost fetch({_oid}): {_fe_gd}")
+                    stats["errors"] += 1
+                    continue
+                if not _raw_gd:
+                    continue
+                _sid_gd = _raw_gd.get("id_status_zamowienia")
+                if _sid_gd != 7:
+                    continue  # not delivered — maybe returned/cancelled, let reconcile handle
+                _deliv_addr_gd = parsed.get("delivery_addresses", {}).get(str(_oid)) \
+                    or _sorder.get("delivery_address")
+                _ev_gd = emit(
+                    "COURIER_DELIVERED",
+                    order_id=str(_oid),
+                    courier_id=_state_cid,
+                    payload={
+                        "timestamp": _raw_gd.get("czas_doreczenia") or now_iso(),
+                        "final_location": _deliv_addr_gd,
+                        "delivery_address": _deliv_addr_gd,
+                        "source": "packs_ghost_detect",
+                    },
+                    event_id=f"{_oid}_COURIER_DELIVERED_packs_ghost",
+                )
+                if _ev_gd:
+                    stats["delivered"] += 1
+                    _ghost_confirmed += 1
+                    update_from_event({
+                        "event_type": "COURIER_DELIVERED",
+                        "order_id": str(_oid),
+                        "courier_id": _state_cid,
+                        "payload": {
+                            "timestamp": _raw_gd.get("czas_doreczenia"),
+                            "final_location": _deliv_addr_gd,
+                            "delivery_address": _deliv_addr_gd,
+                        },
+                    })
+                    _log.info(
+                        f"V3.20 PACKS_GHOST oid={_oid} cid={_state_cid} "
+                        f"nick={_nick_gd!r} (zniknął z packs, panel status=7)"
+                    )
+                    _advance_plan_on_deliver(
+                        _state_cid, str(_oid),
+                        _raw_gd.get("czas_doreczenia"),
+                        _sorder.get("delivery_coords"),
+                    )
+            if _ghost_confirmed:
+                stats["packs_ghost_detect"] = _ghost_confirmed
+    # ================== END V3.20 PACKS GHOST DETECT ==================
 
     # ================== RECONCILE STATUS ==================
     # Dla orderow ktore state widzi jako assigned/picked_up, a panel widzi jako closed
