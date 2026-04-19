@@ -559,6 +559,17 @@ def assess_order(
             "bonus_r9_stopover": round(bonus_r9_stopover, 2),
             "bonus_r9_wait_pen": round(bonus_r9_wait_pen, 2),
             "bonus_penalty_sum": round(bonus_penalty_sum, 2),
+            # Transparency OPCJA A (2026-04-19): order_id → (restaurant, delivery_address)
+            # mapping dla route section w telegram_approver. Per-courier bag snapshot.
+            "bag_context": [
+                {
+                    "order_id": str(b.get("order_id") or ""),
+                    "restaurant": b.get("restaurant"),
+                    "delivery_address": b.get("delivery_address"),
+                }
+                for b in bag_raw
+                if b.get("order_id")
+            ],
         }
 
         candidates.append(Candidate(

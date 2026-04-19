@@ -31,7 +31,15 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from dispatch_v2.common import WARSAW, load_config, now_iso, parse_panel_timestamp, setup_logger
+from dispatch_v2.common import (
+    ENABLE_TRANSPARENCY_REASON,
+    ENABLE_TRANSPARENCY_ROUTE,
+    WARSAW,
+    load_config,
+    now_iso,
+    parse_panel_timestamp,
+    setup_logger,
+)
 
 
 POLL_SHADOW_SEC = 3
@@ -208,6 +216,83 @@ def _candidate_line(c: dict, now_utc: datetime, prep_remaining_min: float) -> st
     return line
 
 
+def _reason_line(c: dict, all_candidates: list) -> str:
+    """Transparency OPCJA A: natural-language wyjaśnienie CZEMU ten kurier.
+
+    Zwraca pusty string jeśli brak meaningful info lub flaga wyłączona.
+    Format: '   💡 najbliższy + fala z Eljot + wolny za 3min'
+    """
+    if not ENABLE_TRANSPARENCY_REASON or not c:
+        return ""
+    reasons: list = []
+    km = c.get("km_to_pickup")
+    others_km = [
+        x.get("km_to_pickup") for x in all_candidates
+        if x and x is not c and x.get("km_to_pickup") is not None
+    ]
+    if km is not None and others_km and km <= min(others_km):
+        reasons.append("najbliższy")
+    if c.get("bundle_level1"):
+        reasons.append(f"fala z {c['bundle_level1']}")
+    elif c.get("bundle_level2"):
+        reasons.append(f"fala z {c['bundle_level2']}")
+    elif c.get("bundle_level3"):
+        reasons.append("po drodze")
+    free = c.get("free_at_min")
+    if free is not None:
+        if free <= 0:
+            reasons.append("wolny")
+        elif free < 15:
+            reasons.append(f"wolny za {int(round(free))} min")
+    if not reasons:
+        return ""
+    return "   💡 " + " + ".join(reasons)
+
+
+def _route_section(decision: dict, best: dict) -> str:
+    """Transparency OPCJA A: route section — pickupy then drops w kolejności plan.sequence.
+
+    Zwraca pusty string dla solo orderów (sequence ≤ 1), flagi wyłączonej, lub braku mapping.
+    Format:
+        📦 N ordery w bagu:
+        🗺️ Kolejność:
+           🍕 {pickup1} → {pickup2} → ...
+           📍 {drop1} → {drop2} → ...
+    """
+    if not ENABLE_TRANSPARENCY_ROUTE or not best:
+        return ""
+    plan = best.get("plan") or {}
+    sequence = plan.get("sequence") or []
+    if len(sequence) <= 1:
+        return ""
+    cur_oid = str(decision.get("order_id") or "")
+    mapping: dict = {
+        cur_oid: (decision.get("restaurant"), decision.get("delivery_address")),
+    }
+    for b in (best.get("bag_context") or []):
+        boid = str(b.get("order_id") or "")
+        if boid:
+            mapping[boid] = (b.get("restaurant"), b.get("delivery_address"))
+    pickups: list = []
+    drops: list = []
+    for oid in sequence:
+        soid = str(oid)
+        rest, drop = mapping.get(soid, (None, None))
+        if rest and rest not in pickups:
+            pickups.append(rest)
+        if drop:
+            drops.append(drop)
+    if not pickups or not drops:
+        return ""
+    n = len(sequence)
+    return (
+        f"📦 {n} ordery w bagu:\n"
+        f"🗺️ Kolejność:\n"
+        f"   🍕 " + " → ".join(pickups) + "\n"
+        f"   📍 " + " → ".join(drops)
+    )
+
+
 def format_proposal(decision: dict) -> str:
     """[PROPOZYCJA] z top3 + pickup_ready + czas deklarowany per kandydat."""
     oid = decision.get("order_id", "?")
@@ -237,12 +322,21 @@ def format_proposal(decision: dict) -> str:
 
     medals = ["🎯", "🥈", "🥉"]
     top3 = [best] + list(alts[:2])
+    top3_nonempty = [c for c in top3 if c]
     for i, c in enumerate(top3):
         if not c:
             continue
         marker = medals[i] if i < len(medals) else "•"
         prefix = f"{marker} {banner}" if i == 0 else f"{marker} "
         lines.append(prefix + _candidate_line(c, now_utc, prep_remaining))
+        reason = _reason_line(c, top3_nonempty)
+        if reason:
+            lines.append(reason)
+
+    route = _route_section(decision, best)
+    if route:
+        lines.append("")
+        lines.append(route)
 
     lines.append("")
     lines.append(f"✓ {decision.get('reason','')}")

@@ -131,6 +131,8 @@ def _serialize_candidate(c) -> dict:
             "sla_violations": plan.sla_violations,
             "osrm_fallback_used": plan.osrm_fallback_used,
         },
+        # Transparency OPCJA A (2026-04-19): bag snapshot for route section mapping
+        "bag_context": m.get("bag_context"),
     }
 
 
@@ -220,6 +222,15 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "bonus_r9_stopover": best_m.get("bonus_r9_stopover"),
             "bonus_r9_wait_pen": best_m.get("bonus_r9_wait_pen"),
             "bonus_penalty_sum": best_m.get("bonus_penalty_sum"),
+            # Transparency OPCJA A (2026-04-19): plan + bag_context for Telegram route section
+            "plan": None if (best is None or best.plan is None) else {
+                "sequence": best.plan.sequence,
+                "total_duration_min": best.plan.total_duration_min,
+                "strategy": best.plan.strategy,
+                "sla_violations": best.plan.sla_violations,
+                "osrm_fallback_used": best.plan.osrm_fallback_used,
+            },
+            "bag_context": best_m.get("bag_context"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]
