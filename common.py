@@ -411,6 +411,22 @@ ENABLE_PICKED_UP_DROP_FLOOR = _os.environ.get("ENABLE_PICKED_UP_DROP_FLOOR", "1"
 # ============================================================
 ENABLE_SAVED_PLANS = _os.environ.get("ENABLE_SAVED_PLANS", "1") == "1"
 
+# ============================================================
+# V3.19c sub B — read integration shadow-log (2026-04-19)
+# Obserwacyjne: dispatch_pipeline po każdym feasibility_v2 plan-compute loguje
+# diff między fresh TSP sequence vs saved_plan sequence (dla bag orderów).
+# Read integration sam w sobie (use saved jako base) → V3.19d flip po N dni
+# shadow. Tutaj tylko observation log do /dispatch_state/v319c_read_shadow_log.jsonl.
+# True (default) = log shadow diffs. False = no write.
+# env: ENABLE_SAVED_PLANS_READ_SHADOW=0.
+# ============================================================
+ENABLE_SAVED_PLANS_READ_SHADOW = _os.environ.get(
+    "ENABLE_SAVED_PLANS_READ_SHADOW", "1") == "1"
+
+# Read integration production flag (actual use of saved plan in scoring).
+# DEFAULT OFF — wymagane N dni shadow log review + explicit flip.
+ENABLE_SAVED_PLANS_READ = _os.environ.get("ENABLE_SAVED_PLANS_READ", "0") == "1"
+
 # Overload threshold: bag > fleet_avg + this → score penalty
 try:
     OVERLOAD_THRESHOLD_BAGS = int(_os.environ.get("OVERLOAD_THRESHOLD_BAGS", "2"))

@@ -302,6 +302,70 @@ def mark_picked_up(courier_id: str, order_id: str,
         _write_raw(plans)
 
 
+SHADOW_LOG_PATH = Path("/root/.openclaw/workspace/dispatch_state/v319c_read_shadow_log.jsonl")
+
+
+def log_read_shadow_diff(
+    courier_id: str,
+    fresh_sequence: List[str],
+    active_bag_oids: set,
+    *,
+    now: Optional[datetime] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """V3.19c sub B: observational diff log. Loads saved plan for courier,
+    compares BAG ordering in fresh_sequence vs saved plan, appends one JSONL
+    line. No-op gdy flag off / brak saved / brak active bag.
+
+    Cicho skip na błędy (read-only observation, nie wpływa na flow).
+    """
+    try:
+        from dispatch_v2.common import ENABLE_SAVED_PLANS_READ_SHADOW
+        if not ENABLE_SAVED_PLANS_READ_SHADOW:
+            return
+    except Exception:
+        return
+    cid = str(courier_id)
+    if not cid or not active_bag_oids:
+        return
+    try:
+        with _locked(exclusive=False):
+            plans = _read_raw()
+        saved = plans.get(cid)
+        has_saved = saved is not None and saved.get("invalidated_at") is None
+        if has_saved:
+            saved_bag_order = [
+                s["order_id"]
+                for s in saved.get("stops", [])
+                if s.get("type") == "dropoff"
+                and str(s.get("order_id")) in active_bag_oids
+            ]
+        else:
+            saved_bag_order = []
+        fresh_bag_order = [
+            str(oid) for oid in (fresh_sequence or [])
+            if str(oid) in active_bag_oids
+        ]
+        match = saved_bag_order == fresh_bag_order
+        entry = {
+            "ts": (now or datetime.now(timezone.utc)).isoformat(),
+            "cid": cid,
+            "has_saved_plan": has_saved,
+            "saved_plan_version": (saved or {}).get("plan_version") if has_saved else None,
+            "saved_bag_sequence": saved_bag_order,
+            "fresh_bag_sequence": fresh_bag_order,
+            "match": match,
+            "active_bag_oids": sorted(list(active_bag_oids)),
+        }
+        if extra:
+            entry["extra"] = extra
+        SHADOW_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(SHADOW_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        _log.warning(f"log_read_shadow_diff fail cid={cid}: {e}")
+
+
 def gc_invalidated(older_than_hours: float = 24.0) -> int:
     """V3.19c sub A: garbage-collect invalidated plans older than threshold.
     Returns count removed. Manual / cron hook — no auto-schedule.

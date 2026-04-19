@@ -400,6 +400,23 @@ def assess_order(
                 reason = f"shift_end_before_pickup (zmiana do {end_hhmm}, odbiór później)"
                 plan = None
 
+        # V3.19c sub B: observational read-shadow diff log. Zero wpływu na
+        # scoring path — tylko zapisuje różnicę saved vs fresh plan sequence
+        # dla orderów w bagu. Flag ENABLE_SAVED_PLANS_READ_SHADOW default True.
+        if plan is not None and plan.sequence and bag_sim:
+            try:
+                from dispatch_v2 import plan_manager as _pm_shadow
+                _active_bag = {str(o.order_id) for o in bag_sim}
+                _pm_shadow.log_read_shadow_diff(
+                    courier_id=str(cid),
+                    fresh_sequence=list(plan.sequence),
+                    active_bag_oids=_active_bag,
+                    now=now,
+                    extra={"new_order_id": str(new_order.order_id)},
+                )
+            except Exception:
+                pass  # shadow log never breaks hot path
+
         bag_drop_coords = [b.delivery_coords for b in bag_sim]
         oldest = _oldest_in_bag_min(bag_sim, now)
 
