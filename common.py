@@ -299,3 +299,15 @@ ENABLE_TRANSPARENCY_SCORING = True     # Score decomposition (baza + wave + bund
 # False = legacy kill-switch (fallback do Białystok default) — rollback on regression.
 # ============================================================
 CITY_AWARE_GEOCODING = True
+
+# ============================================================
+# Strict courier ID space flag (2026-04-19)
+# Bugfix: build_fleet_snapshot dodawał keys z kurier_piny.json (4-digit PIN-y)
+# jako osobnych kurierów obok prawdziwych courier_id z kurier_ids.json.
+# Duplikaty (np. Michał Ro jako cid=518 AND cid=5333-PIN) → phantom z pustym
+# bagiem → no_gps fallback → fałszywa propozycja "wolnego" kuriera.
+# True (default) = PIN służy TYLKO jako name-lookup fallback, nie źródło cid.
+# False = legacy kill-switch (PIN jako cid). env override: STRICT_COURIER_ID_SPACE=0.
+# ============================================================
+import os as _os
+STRICT_COURIER_ID_SPACE = _os.environ.get("STRICT_COURIER_ID_SPACE", "1") == "1"
