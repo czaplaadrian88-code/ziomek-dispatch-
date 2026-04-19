@@ -291,6 +291,15 @@ ENABLE_TRANSPARENCY_ROUTE = True       # Route section (pickupy then drops) w pr
 ENABLE_TRANSPARENCY_REASON = True      # Natural-language reason line (czemu ten kurier)
 ENABLE_TRANSPARENCY_SCORING = True     # Score decomposition (baza + wave + bundle)
 
+# V3.17 (2026-04-19): per-stop timeline w Telegram proposal.
+# Replaces "pickups | drops" 2-line format with chronologically sorted events:
+#   HH:MM {emoji} {action} {restaurant|address}
+# New order highlighted via 👉 emoji + [NOWY] prefix.
+# Fallback: plan.pickup_at + predicted_delivered_at empty → old format.
+# Env kill-switch: ENABLE_TIMELINE_FORMAT=0 → revert to old format without restart.
+import os as _os_v317
+ENABLE_TIMELINE_FORMAT = _os_v317.environ.get("ENABLE_TIMELINE_FORMAT", "1") == "1"
+
 # ============================================================
 # City-aware geocoding flag (2026-04-19)
 # Bugfix: wcześniej geocoder hardcodował hint_city='Białystok' i cachował
