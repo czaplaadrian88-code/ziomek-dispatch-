@@ -1,6 +1,18 @@
-# CLAUDE.md — Ziomek Dispatcher (V3.12 City-Aware Geocoding Fix)
+# CLAUDE.md — Ziomek Dispatcher (V3.13 STRICT_COURIER_ID_SPACE fix)
 
 ## Changelog
+
+### V3.13 (2026-04-19 wieczór) — Availability / PIN-space bug fix
+- **Bug produkcyjny 14:00-14:08**: 8 propozycji #467070-#467077 pokazały identyczną trójkę "wolnych" kandydatów (Michał Ro cid=5333-PIN, Aleksander G, Gabriel J) mimo że panel pokazywał każdego z 2-3 orderami w bagach.
+- **Root cause**: `courier_resolver.build_fleet_snapshot:214` zawierał `piny.keys()` w `all_kids` — PIN-y 4-cyfrowe z `kurier_piny.json` (Courier App logins) dodawane jako osobni kurierzy obok prawdziwych `courier_id` z `kurier_ids.json`. Michał Ro istniał jako cid=518 (prawdziwy, z bagiem) i cid=5333 (PIN, pusty → no_gps). Telegram propozycje wysyłały `chosen_courier_id=5333` (fałszywy ID), koordynator musiał ręcznie przypisywać pod 518.
+- **Shadow impact**: 46% propozycji w ostatnich 4h miało PHANTOM PIN jako best, 61% w 24h, 48% all-time (1140 decisions). Top phantom PINs: Szymon P 107×, Andrei K 100×, Mateusz O 84×, Michał Ro 57×.
+- **Fix** (3 commits + 4 tagów, master `f22-strict-bag-awareness-live`):
+  - `1678d1f` common — flag `STRICT_COURIER_ID_SPACE=True` (default) + env override `STRICT_COURIER_ID_SPACE=0`
+  - `32be76a` courier_resolver — exclude `piny.keys()` z `all_kids` gdy flag True; PIN pozostaje name-lookup fallback (L227-231)
+  - `9b3e27f` tests — `test_panel_aware_availability.py` 26/26 PASS (fixture #467070-#467077, mock-based)
+- **Regresja**: 153/153 baseline clean tests bez zmian (137 legacy + 16 city). Plus 26/26 nowych. Pre-existing failures (gspread, NameError itd.) niezmienione.
+- **Pending LIVE**: restart `dispatch-panel-watcher` + `dispatch-shadow` (wymaga ACK). `dispatch-telegram` NIE wymaga (nie woła build_fleet_snapshot).
+- **Secondary issues deferred**: (a) panel_watcher lag przy burst-assign (wymaga event webhook refactor), (b) no_gps tie-break degeneracja (BIALYSTOK_CENTER = identyczny km_to_pickup dla wszystkich), (c) PIN 9279 (Michał K.) leaked w courier_names.json.
 
 ### V3.12 (2026-04-19 południe) — City-Aware Geocoding Fix
 - **Bug produkcyjny** (~10:53 Warsaw): #466975 Chicago Pizza→Kleosin fałszywie zbundlowane z #466978 Retrospekcja→Białystok jako "po drodze 0.3km" — realny dystans 5.33km. Michał Rom dostał top score 125.79 przez fałszywy `bundle_level2_dist=1.15km` od błędnie zgeokodowanego klienta Chicago Pizza.

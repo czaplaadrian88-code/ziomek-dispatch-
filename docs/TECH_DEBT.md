@@ -4,6 +4,40 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 ---
 
+## Availability / PIN-space bug fix — 2026-04-19 (V3.13)
+
+### ✅ FIX COMMITTED (tag `f22-strict-bag-awareness-live`)
+
+Bug produkcyjny 2026-04-19 14:00-14:08: 8 propozycji #467070-#467077 pokazały identyczną trójkę "wolnych" kandydatów (Michał Ro cid=5333-PIN, Aleksander G, Gabriel J) mimo że panel pokazywał każdego z 2-3 orderami w bagach. Root cause: `courier_resolver.build_fleet_snapshot:214` dodawał keys z `kurier_piny.json` (4-digit PIN-y z Courier App) jako osobnych kurierów → fleet duplikaty → phantom PIN z pustym bagiem → no_gps fallback → fałszywa propozycja "wolnego" kuriera.
+
+**Shadow delta impact** (`/tmp/availability_fix_shadow_delta_2026-04-19.md`):
+- Last 4h: **46.0%** propozycji miały phantom PIN jako best
+- Last 24h: **61.3%** propozycji miały phantom PIN jako best
+- All-time (1140 decisions): **47.9%** z phantom PIN as best
+- Top phantom PINs historycznie: Szymon P 107×, Andrei K 100×, Mateusz O 84×, Michał Ro 57×, Mateusz Bro 48×
+
+| Step | Commit | Tag | Zakres |
+|---|---|---|---|
+| 1 | `1678d1f` | `fix-availability-flag-committed` | `common.py` — flag `STRICT_COURIER_ID_SPACE=True` + env override `STRICT_COURIER_ID_SPACE=0` |
+| 2 | `32be76a` | `fix-availability-id-space-committed` | `courier_resolver.py:214` — exclude `piny.keys()` z `all_kids` gdy flag True; defensive warning gdy PIN leaks do names/orders_state |
+| 3 | `9b3e27f` | `fix-availability-tests-committed` | `tests/test_panel_aware_availability.py` — 26/26 PASS, fixture #467070-#467077, mock-based |
+
+**Regression**: 153/153 baseline clean tests bez zmian (137 legacy + 16 city). Plus 26/26 nowych.
+
+### 🟡 PENDING — restart (WYMAGA ACK)
+
+1. **Restart `dispatch-panel-watcher` + `dispatch-shadow`** — fix w runtime tylko po restart. `dispatch-telegram` NIE wymaga (nie woła build_fleet_snapshot).
+2. **Monitoring 24h** — grep log po `"PIN leaked into courier_id space"` — jeśli > 1/dzień to osobny bug (orders_state.json zapisuje PIN jako courier_id, wymaga głębszego debugu).
+3. **Szacowany efekt po restart**: przeniesienie ~50% propozycji z phantom PIN na prawdziwe cid → koordynator może assignować przez panel API bez ręcznego fallback.
+
+### 🔴 Deferred (secondary issues NIE objęte tym fixem)
+
+1. **Panel_watcher lag** (data freshness): gdy koordynator burst-assignuje 10+ orderów w panelu, pipeline może nie nadążyć w pojedynczym 20s tick. Wymaga architectural refactor (event webhook vs polling). Osobna sesja.
+2. **No_gps tie-break degeneracja**: wszyscy no_gps kurierzy dostają BIALYSTOK_CENTER → identyczny km_to_pickup → tie. Tiebreak po cid hash (arbitrary). Deterministic tiebreak (last_delivered_at, alphabetical) osobną sesją.
+3. **PIN 9279 leaked w names**: warning_log wykrył że cid=9279 (Michał K.) jest zarówno w piny jak i names → źródło osobne (courier_names.json corrupted). Audit osobny.
+
+---
+
 ## City-aware geocoding fix — 2026-04-19
 
 ### ✅ FIX COMMITTED (tag `f22-city-aware-geocoding-live`)
