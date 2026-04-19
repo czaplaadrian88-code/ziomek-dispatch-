@@ -1,6 +1,21 @@
-# CLAUDE.md — Ziomek Dispatcher (V3.14 Bag integrity TTL fix)
+# CLAUDE.md — Ziomek Dispatcher (V3.15 Panel packs fallback)
 
 ## Changelog
+
+### V3.15 (2026-04-19 wieczór) — Missing-new-assignment lag fix (panel_packs fallback)
+- **Bug 16:30 Warsaw**: propozycja #467164 pokazała Michała Li (cid=508, GPS aktywny) jako "🟢 wolny" mimo 4 orderów w bagu w panelu. Orders_state miał `cid=None` dla nich (467129/131/155).
+- **Root cause**: `panel_client.parse_panel_html` zwraca `courier_packs {nick:[oid]}` — ground truth z HTML każdego ticku. Było to **dead data** — nigdzie niekonsumowane. `panel_watcher.reconcile` miał lag 15-90s dla emit `COURIER_ASSIGNED` w burst scenarios.
+- **Scale (last 4h pre-fix)**: 15.8% propozycji z missing w any candidate, 5.7% w best. Per-courier: Gabriel 65.8%, Gabriel J 47.9%, Adrian R 42.6%. 219 missing events / 4h. 9/10 top couriers dotknięci.
+- **Pre-req fix**: pre-existing `reassign_checked` UnboundLocalError od 2026-04-16 (7897 wystąpień) blokował cały `_diff_and_emit` co tick — naprawione przez przeniesienie init przed pętlę (commit `8343169`). Bez tego V3.15 packs fallback się nie uruchamiał.
+- **Fix V3.15** (4 commits + 4 tagów, master `f22-panel-packs-fallback-live-V3.15`):
+  - `42675f5` common — flag `ENABLE_PANEL_PACKS_FALLBACK=True` (default) + `PACKS_FALLBACK_MAX_PER_CYCLE=10`
+  - `9b8cd72` panel_watcher — consumer section po reassignment, mismatch state.cid vs packs → fetch_details + emit COURIER_ASSIGNED (source=packs_fallback); guards na terminal/IGNORED_STATUSES/koordynator; ambiguous nick skip+warn
+  - `6ce5730` tests — `test_assignment_lag_fix.py` 16/16 PASS (13 sections, fixture #467164 Michał Li)
+  - `8343169` pre-req reassign_checked UnboundLocal fix
+- **Interakcja V3.12/V3.13/V3.14**: zero konfliktów. V3.13 używa `kurier_ids.json` (real cid, nie PIN). V3.14 stale filter nadpisywany przez świeży COURIER_ASSIGNED z packs (updated_at=now → `_bag_not_stale`=True).
+- **Regresja**: 220/220 baseline clean tests (137 legacy + 16 city + 26 availability + 25 bag + 16 V3.15).
+- **Live post-deploy (14:58:50 UTC)**: 13 PACKS_CATCHUP events w 5 min, 7 różnych kurierów (Bartek O., Aleksander G 4×, Michał Li, Adrian R, Sylwia L, Gabriel, Grzegorz). **Zero reassign_checked errors** od fixa (przed tym był co każdy tick).
+- **Deferred**: (a) local `current_state` snapshot nie updatowany po emit normal assigned w sekcji 2 → sporadyczne duplikaty emit (normal + packs) dla tego samego ordera w jednym tick. Idempotent z perspektywy stanu, ale zanieczyszcza learning_log — drobiazg, osobny commit.
 
 ### V3.14 (2026-04-19 późny wieczór) — Bag integrity / stale cache fix
 - **Bug 15:17 Warsaw**: propozycja #467117 Baanko pokazała Michała Rom z 3-order bagiem (Arsenal Panteon, Trzy Po Trzy, Paradiso) — wszystkie delivered w panelu 1-3h wcześniej. Real panel bag = {467099 Mama Thai, 467108 Raj}.

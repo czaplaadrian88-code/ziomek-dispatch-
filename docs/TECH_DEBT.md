@@ -4,6 +4,38 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 ---
 
+## Missing-new-assignment / panel_packs fallback fix — 2026-04-19 (V3.15)
+
+### ✅ FIX COMMITTED (tag `f22-panel-packs-fallback-live-V3.15`)
+
+Bug 16:30 Warsaw: Michał Li (cid=508, GPS aktywny) propozycja #467164 pokazała "🟢 wolny" mimo 4 orderów w bagu w panelu. Pipeline orders_state miał `cid=None` dla orderów (467129/131/155). Root cause: `panel_client.parse_panel_html` zwraca `courier_packs {nick:[oid]}` jako ground truth, ale było to **dead data** — żaden konsument. `panel_watcher.reconcile` miał lag 15-90s dla emit COURIER_ASSIGNED w burst scenarios.
+
+**Shadow impact (last 4h pre-fix):**
+- 15.8% propozycji z missing w any candidate (**5.7% w best**)
+- 219 missing events / 4h
+- Per-courier: Gabriel **65.8%**, Gabriel J 47.9%, Adrian R 42.6%, Sylwia L 37.5%
+- 9/10 top couriers z missing events
+
+| Step | Commit | Tag | Zakres |
+|---|---|---|---|
+| 1 | `42675f5` | `fix-assignlag-flag-committed` | common.py — flag `ENABLE_PANEL_PACKS_FALLBACK=True` + `PACKS_FALLBACK_MAX_PER_CYCLE=10` + env overrides |
+| 2 | `9b8cd72` | `fix-assignlag-consumer-committed` | panel_watcher.py — consumer section po reassignment; resolve nick→cid z kurier_ids.json; ambiguity skip; raw override; budget rate-limit |
+| 3 | `6ce5730` | `fix-assignlag-tests-committed` | test_assignment_lag_fix.py — 16/16 PASS (13 sections) |
+| 4 (pre-req) | `8343169` | `fix-assignlag-reassign-prereq-committed` | panel_watcher.py — reassign_checked UnboundLocalError fix (init przed pętlą); było pre-existing bug od 2026-04-16, 7897 wystąpień |
+
+**Regression**: 220/220 baseline clean (137 legacy + 16 city + 26 availability + 25 bag + 16 V3.15). Zero konfliktu V3.12/V3.13/V3.14.
+
+**Live post-deploy 14:58:50 UTC**: 13 PACKS_CATCHUP events w 5 min, 7 różnych kurierów. Zero `reassign_checked` errors od fixa (pre-fix: co każdy tick).
+
+### 🟡 Deferred follow-ups
+
+1. **Local `current_state` snapshot nie updatowany** po emit COURIER_ASSIGNED w sekcji 2 — sporadyczne duplikaty emit (normal diff + packs) dla tego samego ordera w jednym tick. Idempotent z perspektywy state, ale zanieczyszcza learning_log. Trywialny follow-up (update local dict inline).
+2. **Panel_watcher proactive reconcile** (V3.14 deferred) — wymaga event webhook zamiast polling. Osobna sesja.
+3. **PIN 9279 Michał K.** (V3.13 deferred) — leaked do courier_names.json. Warning fire co tick.
+4. **No_gps tie-break degeneracja** (V3.13 deferred) — BIALYSTOK_CENTER identyczny km_to_pickup dla wszystkich no_gps.
+
+---
+
 ## Bag integrity / stale cache fix — 2026-04-19 (V3.14)
 
 ### ✅ FIX COMMITTED (tag `f22-bag-integrity-live`)
