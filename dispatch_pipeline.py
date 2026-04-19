@@ -20,6 +20,8 @@ from dispatch_v2 import scoring
 from dispatch_v2 import common as C
 from dispatch_v2.common import parse_panel_timestamp, WARSAW, HAVERSINE_ROAD_FACTOR_BIALYSTOK, get_fallback_speed_kmh
 from dispatch_v2.osrm_client import haversine
+from dispatch_v2.bag_state import build_courier_bag_state, CourierBagState
+from dispatch_v2.fleet_context import build_fleet_context, FleetContext
 import math
 
 log = logging.getLogger(__name__)
@@ -155,6 +157,52 @@ def get_pickup_ready_at(
     return max(now, pickup_utc)
 
 
+def _bag_dict_to_order_in_bag_raw(d: dict) -> dict:
+    """V3.18: bag dict → orders_raw entry dla build_courier_bag_state.
+
+    Translate string status ('assigned'/'picked_up') na int (3/5).
+    Panel raw ma czas_odbioru_timestamp → pickup_time (Warsaw).
+    """
+    str_status = d.get("status", "assigned")
+    int_status = 5 if str_status == "picked_up" else 3
+    pickup_t = parse_panel_timestamp(d.get("pickup_at_warsaw")) or parse_panel_timestamp(d.get("czas_odbioru_timestamp"))
+    added = parse_panel_timestamp(d.get("assigned_at")) or parse_panel_timestamp(d.get("created_at"))
+    return {
+        "order_id": str(d.get("order_id") or d.get("id") or ""),
+        "restaurant_address": d.get("restaurant") or d.get("restaurant_address", ""),
+        "restaurant_coords": tuple(d["pickup_coords"]) if d.get("pickup_coords") else None,
+        "drop_address": d.get("delivery_address", ""),
+        "drop_coords": tuple(d["delivery_coords"]) if d.get("delivery_coords") else None,
+        "pickup_time": pickup_t,
+        "predicted_drop_time": None,  # computed later by route_simulator
+        "status": int_status,
+        "added_at": added,
+    }
+
+
+def _build_fleet_context_from_snapshot(
+    fleet_snapshot: Dict[str, Any],
+    now: datetime,
+) -> FleetContext:
+    """V3.18: build FleetContext z fleet_snapshot dla Bug 2 (overload penalty).
+
+    Per courier: minimal CourierBagState (tylko bag_size + pos_source matter).
+    """
+    bag_states = []
+    for cid, cs in fleet_snapshot.items():
+        bag_raw = getattr(cs, "bag", []) or []
+        orders_raw = [_bag_dict_to_order_in_bag_raw(b) for b in bag_raw]
+        bag_states.append(build_courier_bag_state(
+            courier_id=str(cid),
+            nick=getattr(cs, "name", "?") or "?",
+            pos_source=getattr(cs, "pos_source", "?") or "?",
+            position=getattr(cs, "pos", None),
+            orders_raw=orders_raw,
+            now=now,
+        ))
+    return build_fleet_context(bag_states, now=now)
+
+
 def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     picked = parse_panel_timestamp(d.get("picked_up_at"))
     pra = parse_panel_timestamp(d.get("pickup_at_warsaw"))  # F2.1c R8 T_KUR
@@ -259,6 +307,16 @@ def assess_order(
 
     candidates: List[Candidate] = []
     new_rest_norm = (restaurant or "").strip().lower()
+
+    # V3.18 (2026-04-19): FleetContext once per event dla scoring overload penalty.
+    # Flag ENABLE_UNIFIED_BAG_STATE=False → fleet_context=None, scoring ignoruje kwarg.
+    fleet_context: Optional[FleetContext] = None
+    if C.ENABLE_UNIFIED_BAG_STATE:
+        try:
+            fleet_context = _build_fleet_context_from_snapshot(fleet_snapshot, now.astimezone(WARSAW))
+        except Exception as e:
+            log.warning(f"V3.18 fleet_context build failed ({e}), falling back to None")
+            fleet_context = None
 
     for cid, cs in fleet_snapshot.items():
         courier_pos = getattr(cs, "pos", None)
@@ -372,6 +430,7 @@ def assess_order(
             bag_size=len(bag_sim),
             oldest_in_bag_min=oldest,
             road_km=km_to_pickup_haversine,
+            fleet_context=fleet_context,
         )
 
         # drive_min: pure drive od COURIER_POS (nie effective_start_pos) do restauracji.

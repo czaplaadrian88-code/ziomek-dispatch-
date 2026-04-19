@@ -9,7 +9,10 @@ Wyjscie: {total, components, reasoning, metrics}
 import math
 from typing import List, Optional, Tuple
 from dispatch_v2.geometry import haversine_km, bearing_deg, angle_between, bag_centroid
-from dispatch_v2.common import DEPRECATE_LEGACY_HARD_GATES, ENABLE_WAVE_SCORING, MAX_BAG_TSP_BRUTEFORCE
+from dispatch_v2.common import (
+    DEPRECATE_LEGACY_HARD_GATES, ENABLE_WAVE_SCORING, MAX_BAG_TSP_BRUTEFORCE,
+    ENABLE_FLEET_OVERLOAD_PENALTY, OVERLOAD_THRESHOLD_BAGS, OVERLOAD_PENALTY,
+)
 
 W_DYSTANS  = 0.30
 W_OBCIAZENIE = 0.25
@@ -55,6 +58,7 @@ def score_candidate(
     road_km: Optional[float] = None,
     r6_soft_penalty: float = 0.0,
     wave_adjustment: float = 0.0,
+    fleet_context=None,  # V3.18: FleetContext | None (duck-typed, unused when flag off)
 ) -> dict:
     # Dystans - preferujemy road_km (z OSRM) jesli dostepne, inaczej haversine * 1.3
     if road_km is None:
@@ -92,6 +96,20 @@ def score_candidate(
         total += wave_adjustment
         wave_adjustment_applied = wave_adjustment
 
+    # V3.18 Bug 2: fleet overload penalty. Gdy courier bag_size > fleet_avg + threshold,
+    # scoring dostaje penalty (np. -20). Zapobiega sytuacji gdy courier z 5/4 bagiem
+    # (over-limit) dostaje top-1 score mimo że inni kurierzy z bag=2/3 są dostępni.
+    # Flag False OR fleet_context None → zero wpływu.
+    overload_penalty_applied = 0.0
+    if ENABLE_FLEET_OVERLOAD_PENALTY and fleet_context is not None:
+        try:
+            delta = fleet_context.overload_delta(bag_size)
+            if delta > OVERLOAD_THRESHOLD_BAGS:
+                total += OVERLOAD_PENALTY
+                overload_penalty_applied = OVERLOAD_PENALTY
+        except Exception:
+            pass  # unknown fleet_context shape → skip defensive
+
     reasoning = (
         f"dist={road_km:.1f}km→{sd:.0f} | bag={bag_size}/{MAX_BAG_TSP_BRUTEFORCE}→{so:.0f} | "
         f"ang={angle if angle is None else round(angle,0)}→{sk:.0f} | "
@@ -115,6 +133,7 @@ def score_candidate(
             "oldest_in_bag_min": round(oldest_in_bag_min, 1) if oldest_in_bag_min is not None else None,
             "r6_soft_penalty_applied": round(r6_penalty_applied, 2),
             "wave_adjustment_applied": round(wave_adjustment_applied, 2),
+            "overload_penalty_applied": round(overload_penalty_applied, 2),
         },
         "reasoning": reasoning,
     }
