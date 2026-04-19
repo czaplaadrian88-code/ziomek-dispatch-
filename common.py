@@ -328,3 +328,22 @@ try:
     BAG_STALE_THRESHOLD_MIN = int(_os.environ.get("BAG_STALE_THRESHOLD_MIN", "90"))
 except (ValueError, TypeError):
     BAG_STALE_THRESHOLD_MIN = 90
+
+# ============================================================
+# Panel packs fallback flag (2026-04-19 V3.15)
+# Bugfix: panel_client.parse_panel_html zwraca courier_packs {nick:[oid]}
+# jako ground-truth mapping z panelu HTML (każdy tick, 20s). Było to
+# DEAD DATA (zwracane ale nigdzie nie konsumowane). panel_watcher.reconcile
+# ma lag 15-90s+ dla emit COURIER_ASSIGNED w burst scenarios — pipeline
+# widzi kurierów z aktywnymi bagami jako wolnych (propozycja #467164
+# Michał Li @ 14:30 UTC: bag=0 w pipeline mimo 4 orderów w panelu).
+# True (default) = panel_watcher konsumuje courier_packs jako fallback
+# trigger fetch_details + emit COURIER_ASSIGNED dla missing assignments.
+# False = legacy (courier_packs dead data). env: ENABLE_PANEL_PACKS_FALLBACK=0.
+# PACKS_FALLBACK_MAX_PER_CYCLE tunable żeby nie przeciążyć panel API.
+# ============================================================
+ENABLE_PANEL_PACKS_FALLBACK = _os.environ.get("ENABLE_PANEL_PACKS_FALLBACK", "1") == "1"
+try:
+    PACKS_FALLBACK_MAX_PER_CYCLE = int(_os.environ.get("PACKS_FALLBACK_MAX_PER_CYCLE", "10"))
+except (ValueError, TypeError):
+    PACKS_FALLBACK_MAX_PER_CYCLE = 10
