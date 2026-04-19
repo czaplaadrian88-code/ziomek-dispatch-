@@ -1,0 +1,14 @@
+[Unit]
+Description=Ziomek V3.19c Plan Recheck — consistency check courier_plans vs orders_state
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/usr/bin/python3 -m dispatch_v2.plan_recheck
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/plan_recheck.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/plan_recheck.log
+
+[Install]
+WantedBy=multi-user.target
