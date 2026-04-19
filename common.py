@@ -290,3 +290,12 @@ ENABLE_PENDING_QUEUE_VIEW = False     # C7: dispatch_pipeline signature change
 ENABLE_TRANSPARENCY_ROUTE = True       # Route section (pickupy then drops) w propozycji
 ENABLE_TRANSPARENCY_REASON = True      # Natural-language reason line (czemu ten kurier)
 ENABLE_TRANSPARENCY_SCORING = True     # Score decomposition (baza + wave + bundle)
+
+# ============================================================
+# City-aware geocoding flag (2026-04-19)
+# Bugfix: wcześniej geocoder hardcodował hint_city='Białystok' i cachował
+# adresy Kleosin/Ignatki/Wasilków pod fałszywymi coords Białegostoku.
+# True (default) = geocoder wymaga city explicit, fail loud gdy brak.
+# False = legacy kill-switch (fallback do Białystok default) — rollback on regression.
+# ============================================================
+CITY_AWARE_GEOCODING = True
