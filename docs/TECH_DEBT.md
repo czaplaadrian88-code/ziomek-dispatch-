@@ -4,6 +4,42 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 ---
 
+## Bag integrity / stale cache fix — 2026-04-19 (V3.14)
+
+### ✅ FIX COMMITTED (tag `f22-bag-integrity-live`)
+
+Bug produkcyjny 15:17 Warsaw: propozycja #467117 Baanko pokazała Michałowi Rom 3-order bag (Arsenal Panteon, Trzy Po Trzy, Paradiso) — wszystkie delivered w panelu 1-3h wcześniej. Real panel bag = {467099 Mama Thai, 467108 Raj}. Root cause: `panel_watcher.reconcile` ma lag 15-90 min (`MAX_RECONCILE_PER_CYCLE=25/tick × 20s` + FIFO closed_ids queue). Pipeline ufał `orders_state.status=assigned` bezwzględnie — bez TTL guard.
+
+**Shadow delta impact** (`/tmp/bag_integrity_fix_shadow_delta_2026-04-19.md`):
+- Last 4h: **36.3%** propozycji miały phantom w BEST bag_context, **83.7%** w jakimkolwiek kandydacie
+- 613 phantom entries w 4h (bag size inflation)
+- Top phantom: #467009 Chicago Pizza 52×, #467055 Baanko 39×, #467057 Rany Julek 39×
+- Top couriers z phantom: Gabriel 160×, Dariusz M 102×, Sylwia L 80×
+
+| Step | Commit | Tag | Zakres |
+|---|---|---|---|
+| 1 | `e3065fd` | `fix-baginteg-flag-committed` | `common.py` — flag `STRICT_BAG_RECONCILIATION=True` + `BAG_STALE_THRESHOLD_MIN=90` + env overrides |
+| 2 | `487ba9c` | `fix-baginteg-ttl-committed` | `courier_resolver.py` — `_bag_not_stale()` helper + filter w `build_fleet_snapshot:218`; V3.13 test fixture updated |
+| 3 | `d3d3409` | `fix-baginteg-tests-committed` | `tests/test_bag_contents_integrity.py` — 25/25 PASS (12 sections, fixture #467117) |
+
+**Regression**: 204/204 baseline clean (137 legacy + 16 city + 26 availability + 25 bag). V3.13 panel_aware test fixture `_mock_state` zmieniony z hardcoded `assigned_at=12:00` → `now-10min` żeby orders były "fresh" pod V3.14 TTL (bez tej zmiany 7/26 testów V3.13 failowało). Zero konfliktu z V3.13 courier_resolver (L211-234) — fix V3.14 na L218 (różne linie, ortogonalne).
+
+**Live post-deploy verification:**
+- Michał Rom bag 3→1 po TTL (tylko 467099 Mama Thai świeży, 467070 Paradiso z 12:09 UTC wykluczony jako stale 100+ min)
+- Fleet total bag 44→27 = **17 phantom orderów filtered** across roster
+
+### 🟡 PENDING — restart (WYMAGA ACK)
+
+1. **Restart `dispatch-panel-watcher` + `dispatch-shadow`** — fix w runtime tylko po restart. `dispatch-telegram` NIE wymaga (nie woła build_fleet_snapshot).
+2. **Monitoring 24h** — sprawdź czy `BAG_STALE_THRESHOLD_MIN=90` nie odrzuca legitymnych długich bagów. Jeśli tak, podkręć env `BAG_STALE_THRESHOLD_MIN=120` lub rollback flag.
+
+### 🔴 Deferred (secondary)
+
+1. **Panel_watcher proactive reconcile** — zamiast TTL na pipeline side, przyśpieszyć panel_watcher żeby lag <5 min. Wymaga architectural refactor (priority queue, większy budget, albo event webhook). Osobna sesja.
+2. **Orphan order detection** — w obecnej sesji secondary finding: 467070 Paradiso wciąż `status=assigned` w state 3h po — panel_watcher nigdy go nie zreconciliował (wypadł z `closed_ids` zanim został załapany). TTL filter to chwilowo pokrywa ale nie rozwiązuje source. Deferred.
+
+---
+
 ## Availability / PIN-space bug fix — 2026-04-19 (V3.13)
 
 ### ✅ FIX COMMITTED (tag `f22-strict-bag-awareness-live`)

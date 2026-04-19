@@ -1,6 +1,20 @@
-# CLAUDE.md — Ziomek Dispatcher (V3.13 STRICT_COURIER_ID_SPACE fix)
+# CLAUDE.md — Ziomek Dispatcher (V3.14 Bag integrity TTL fix)
 
 ## Changelog
+
+### V3.14 (2026-04-19 późny wieczór) — Bag integrity / stale cache fix
+- **Bug 15:17 Warsaw**: propozycja #467117 Baanko pokazała Michała Rom z 3-order bagiem (Arsenal Panteon, Trzy Po Trzy, Paradiso) — wszystkie delivered w panelu 1-3h wcześniej. Real panel bag = {467099 Mama Thai, 467108 Raj}.
+- **Root cause**: `panel_watcher.reconcile` ma lag 15-90 min (`MAX_RECONCILE_PER_CYCLE=25/tick × 20s` + FIFO closed_ids). Pipeline ufał `orders_state.status=assigned` bez TTL guard.
+- **Shadow impact**: 36.3% propozycji last-4h miały phantom w BEST bag_context, 83.7% w jakimkolwiek kandydacie. 613 phantom entries / 4h. Top: #467009 Chicago Pizza 52×, Gabriel cid=179 z 160× phantom entries.
+- **Fix** (3 commits + 4 tagów, master `f22-bag-integrity-live`):
+  - `e3065fd` common — flag `STRICT_BAG_RECONCILIATION=True` (default) + `BAG_STALE_THRESHOLD_MIN=90` + env overrides
+  - `487ba9c` courier_resolver — `_bag_not_stale()` helper + filter w `build_fleet_snapshot:218`; V3.13 test fixture `_mock_state` patched (assigned_at=now-10min) bo stary hardcoded 12:00 nie przechodził TTL
+  - `d3d3409` tests — `test_bag_contents_integrity.py` 25/25 PASS (12 sections)
+- **Reguła TTL**: `status=assigned + updated_at >90 min + brak picked_up_at → STALE` (wykluczony z bag). `status=picked_up + picked_up_at >90 min bez delivered` również stale. Czasówka z `pickup_at_warsaw` w przyszłości zachowana (legitymnie assigned). Brak timestamp → defensywnie zachowany.
+- **Regresja**: 204/204 baseline (137 legacy + 16 city + 26 availability + 25 bag). Zero konfliktu z V3.13 (L211-234) bo V3.14 na L218 — ortogonalne.
+- **Live post-deploy**: Michał Rom bag 3→1 (Paradiso 467070 z 12:09 UTC wykluczony jako stale 100+ min). Fleet total 44→27 (17 phantoms filtered).
+- **Pending LIVE**: restart `dispatch-panel-watcher` + `dispatch-shadow` (ACK). `dispatch-telegram` nie wymaga.
+- **Deferred**: (a) panel_watcher proactive reconcile (event webhook / priority queue), (b) orphan order 467070 Paradiso wciąż assigned w state 3h po — TTL chwilowo pokrywa ale source osobno.
 
 ### V3.13 (2026-04-19 wieczór) — Availability / PIN-space bug fix
 - **Bug produkcyjny 14:00-14:08**: 8 propozycji #467070-#467077 pokazały identyczną trójkę "wolnych" kandydatów (Michał Ro cid=5333-PIN, Aleksander G, Gabriel J) mimo że panel pokazywał każdego z 2-3 orderami w bagach.
