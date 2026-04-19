@@ -249,6 +249,12 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _check_panel_override(zid, courier_id, "panel_initial")
 
     # 2. ZMIANY: ID znane w state, sprawdz czy cos sie zmienilo
+    # V3.15 pre-req fix: reassign_checked/MAX_REASSIGN_PER_CYCLE musi być
+    # zainicjalizowane PRZED pętlą (używane w L330-335). Wcześniej init był
+    # po pętli (L364-365) → UnboundLocalError przy każdym tick → całe
+    # _diff_and_emit failowało, blokując m.in. V3.15 packs fallback.
+    MAX_REASSIGN_PER_CYCLE = 5
+    reassign_checked = 0
     for zid, state_order in list(current_state.items()):
         # Pomijamy terminalne (delivered, cancelled) - nie obserwujemy ich dalej
         if state_order.get("status") in ("delivered", "returned_to_pool", "cancelled"):
@@ -472,8 +478,8 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     # (bez data-idkurier w bloku HTML = status 7/8/9) - fetch details i emit event.
     # Budzet 10 fetchow na cykl (10 * 200ms = 2s) zeby nie wysycic panelu.
     closed = parsed.get("closed_ids", set())
-    MAX_REASSIGN_PER_CYCLE = 5
-    reassign_checked = 0
+    # MAX_REASSIGN_PER_CYCLE i reassign_checked przeniesione na początek
+    # pętli (V3.15 pre-req). Dead code usunięty tutaj.
     MAX_RECONCILE_PER_CYCLE = 25  # F2.1c: zwiększone z 10 (zombie backlog)
     reconciled = 0
     for zid, sorder in list(current_state.items()):
