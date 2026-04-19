@@ -354,6 +354,7 @@ def normalize_order(
     addr_obj = raw.get("address") or {}
     adres_rest = addr_obj.get("street", "")
     rest_name = rest_name_hint or addr_obj.get("name") or "?"
+    pickup_city = (addr_obj.get("city") or "").strip() or None
 
     # Miasto klienta z lokalizacja.name (FK id_location_to).
     # Panel trzyma miasto odrębnie od pola `street` — koordynator wpisuje ulicę,
@@ -382,6 +383,7 @@ def normalize_order(
         "order_type": order_type,
         "restaurant": rest_name,
         "pickup_address": adres_rest,
+        "pickup_city": pickup_city,
         "address_id": addr_obj.get("id"),
         "delivery_address": adres_dostawa,
         "delivery_city": delivery_city,

@@ -236,11 +236,12 @@ def update_from_event(event: dict) -> Optional[dict]:
 
     if etype == "COURIER_DELIVERED":
         deliv_addr = payload.get("delivery_address") or payload.get("final_location")
+        deliv_city = payload.get("delivery_city")
         deliv_coords = None
         if deliv_addr:
             try:
                 from dispatch_v2.geocoding import geocode
-                r = geocode(deliv_addr)
+                r = geocode(deliv_addr, city=deliv_city)
                 if r:
                     deliv_coords = [round(float(r[0]), 6), round(float(r[1]), 6)]
             except Exception as _e:

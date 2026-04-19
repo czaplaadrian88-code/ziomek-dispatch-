@@ -187,16 +187,19 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
 
         # Geocode delivery address (cache hit ~90% = 0ms, miss = Google API max 2s)
         _del_addr = norm.get("delivery_address")
+        _del_city = norm.get("delivery_city")
         _dcoords = None
         if _del_addr:
-            _dcoords = geocode(_del_addr, timeout=2.0)
+            _dcoords = geocode(_del_addr, city=_del_city, timeout=2.0)
             if _dcoords is None:
-                _log.warning(f"NEW_ORDER {zid}: geocode fail for '{_del_addr}'")
+                _log.warning(f"NEW_ORDER {zid}: geocode fail for '{_del_addr}' city={_del_city!r}")
 
         ev_payload = {
             "restaurant": norm["restaurant"],
             "pickup_address": norm["pickup_address"],
+            "pickup_city": norm.get("pickup_city"),
             "delivery_address": norm["delivery_address"],
+            "delivery_city": _del_city,
             "pickup_at_warsaw": norm["pickup_at_warsaw"],
             "prep_minutes": norm["prep_minutes"],
             "order_type": norm["order_type"],

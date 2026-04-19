@@ -296,28 +296,30 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             continue
         try:
             payload = ev.get("payload") or {}
-            # Geocode missing coords on-the-fly
+            # Geocode missing coords on-the-fly (city z payloadu — NEW_ORDER event)
             if not payload.get("pickup_coords"):
                 addr = payload.get("pickup_address", "")
-                coords = geocode(addr) if addr else None
+                p_city = payload.get("pickup_city")
+                coords = geocode(addr, city=p_city) if addr else None
                 if coords:
                     payload["pickup_coords"] = list(coords)
                     ev["payload"] = payload
-                    _log.info(f"geocoded pickup {oid}: {addr} -> {coords}")
+                    _log.info(f"geocoded pickup {oid}: {addr} / city={p_city} -> {coords}")
                 else:
-                    _log.warning(f"skip {eid}: missing pickup_coords (order={oid})")
+                    _log.warning(f"skip {eid}: missing pickup_coords (order={oid} city={p_city!r})")
                     event_bus.mark_processed(eid)
                     stats["skipped"] += 1
                     continue
             if not payload.get("delivery_coords"):
                 addr = payload.get("delivery_address", "")
-                coords = geocode(addr) if addr else None
+                d_city = payload.get("delivery_city")
+                coords = geocode(addr, city=d_city) if addr else None
                 if coords:
                     payload["delivery_coords"] = list(coords)
                     ev["payload"] = payload
-                    _log.info(f"geocoded delivery {oid}: {addr} -> {coords}")
+                    _log.info(f"geocoded delivery {oid}: {addr} / city={d_city} -> {coords}")
                 else:
-                    _log.warning(f"skip {eid}: missing delivery_coords (order={oid})")
+                    _log.warning(f"skip {eid}: missing delivery_coords (order={oid} city={d_city!r})")
                     event_bus.mark_processed(eid)
                     stats["skipped"] += 1
                     continue
