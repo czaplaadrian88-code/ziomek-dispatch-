@@ -59,8 +59,15 @@ def simulate_bag_route_v2(
     new_order: OrderSim,
     now: Optional[datetime] = None,
     sla_minutes: int = 35,
+    base_sequence: Optional[List[str]] = None,
 ) -> RoutePlanV2:
-    """Hybrid simulator. Never returns None (osrm_client has fallback)."""
+    """Hybrid simulator. Never returns None (osrm_client has fallback).
+
+    V3.19d: gdy `base_sequence` podane (lista bag order_ids w preferowanej
+    kolejności) — bag dropoffs są lockowane w tej kolejności; simulator
+    iteruje tylko pozycje insertion new_order zamiast pełnego TSP. Jeśli
+    base_sequence jest mismatched z bag → fallback do fresh TSP.
+    """
     if now is None:
         now = datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -95,9 +102,27 @@ def simulate_bag_route_v2(
         dur_s = cell.get("duration_s") or 0
         return dur_s / 60.0
 
+    # V3.19d: sticky sequence path — bag order locked by saved plan.
+    # Validation: set(base_sequence) == {bag order_ids}. Mismatch → fallback.
+    use_sticky = False
+    sticky_bag_idxs: Optional[List[int]] = None
+    if base_sequence is not None and bag:
+        bag_oid_to_idx = {o.order_id: bag_delivery_idxs[i] for i, o in enumerate(bag)}
+        if set(base_sequence) == set(bag_oid_to_idx.keys()) \
+                and len(base_sequence) == len(bag_oid_to_idx):
+            sticky_bag_idxs = [bag_oid_to_idx[oid] for oid in base_sequence]
+            use_sticky = True
+
     bag_after_add = len(bag) + 1
 
-    if bag_after_add <= BRUTEFORCE_MAX_BAG_AFTER:
+    if use_sticky:
+        plan = _sticky_sequence_plan(
+            nodes, leg_min, sticky_bag_idxs,
+            new_pickup_idx, new_delivery_idx,
+            new_order, bag, now, sla_minutes,
+        )
+        plan.strategy = "sticky"
+    elif bag_after_add <= BRUTEFORCE_MAX_BAG_AFTER:
         plan = _bruteforce_plan(
             nodes, leg_min, bag_delivery_idxs,
             new_pickup_idx, new_delivery_idx,
@@ -114,6 +139,40 @@ def simulate_bag_route_v2(
 
     plan.osrm_fallback_used = fallback_used
     return plan
+
+
+def _sticky_sequence_plan(
+    nodes, leg_min, sticky_bag_idxs,
+    new_pickup_idx, new_delivery_idx,
+    new_order, bag, now, sla_minutes,
+) -> RoutePlanV2:
+    """V3.19d: bag dropoffs lockowane w `sticky_bag_idxs` kolejności.
+    Iteruje tylko pozycje insertion new_order. lock_first: gdy bag niepusty,
+    pickup/dropoff new_order NIE może być na pozycji 0 (kurier z jedzeniem
+    w bagu nie zawraca do nowej restauracji).
+    """
+    lock_first = bool(sticky_bag_idxs)
+    best: Optional[RoutePlanV2] = None
+    best_key = (10 ** 9, float("inf"))
+    n = len(sticky_bag_idxs)
+
+    for d_pos in range(n + 1):
+        pickup_positions = [None] if new_pickup_idx is None else list(range(0, d_pos + 1))
+        for p_pos in pickup_positions:
+            if lock_first and p_pos == 0:
+                continue
+            if lock_first and p_pos is None and d_pos == 0:
+                continue
+            candidate = list(sticky_bag_idxs)
+            candidate.insert(d_pos, new_delivery_idx)
+            if p_pos is not None:
+                candidate.insert(p_pos, new_pickup_idx)
+            plan = _plan_from_sequence(candidate, nodes, leg_min, new_order, bag, now, sla_minutes)
+            key = (plan.sla_violations, plan.total_duration_min)
+            if key < best_key:
+                best = plan
+                best_key = key
+    return best
 
 
 # ---- internals ----
