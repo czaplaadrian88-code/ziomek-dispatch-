@@ -423,9 +423,11 @@ ENABLE_SAVED_PLANS = _os.environ.get("ENABLE_SAVED_PLANS", "1") == "1"
 ENABLE_SAVED_PLANS_READ_SHADOW = _os.environ.get(
     "ENABLE_SAVED_PLANS_READ_SHADOW", "1") == "1"
 
-# Read integration production flag (actual use of saved plan in scoring).
-# DEFAULT OFF — wymagane N dni shadow log review + explicit flip.
-ENABLE_SAVED_PLANS_READ = _os.environ.get("ENABLE_SAVED_PLANS_READ", "0") == "1"
+# V3.19d (2026-04-19): read integration — flipped to True after impl Commits A+B.
+# dispatch_pipeline.assess_order extract bag base_sequence z plan_manager.load_plan
+# i przekazuje do simulate_bag_route_v2 jako base_sequence → sticky sequence path.
+# Triple guard w caller (flag+bag+match). Env kill-switch =0 = no-op fresh TSP.
+ENABLE_SAVED_PLANS_READ = _os.environ.get("ENABLE_SAVED_PLANS_READ", "1") == "1"
 
 # Overload threshold: bag > fleet_avg + this → score penalty
 try:
