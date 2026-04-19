@@ -637,6 +637,51 @@ def assess_order(
     feasible = [c for c in candidates if c.feasibility_verdict == "MAYBE"]
     feasible.sort(key=lambda c: (-c.score, c.metrics.get("bundle_level3_dev") if c.metrics.get("bundle_level3_dev") is not None else 999.0))
 
+    # V3.16: no_gps + empty bag demotion.
+    # scoring.py nagradza empty bag (s_obciazenie=100) bez penalty dla
+    # pos_source=no_gps (synthetic BIALYSTOK_CENTER). Kurierzy z aktywnymi
+    # bagami dostają r8_soft_pen + r9_wait_pen = -100 do -300, co daje
+    # no_gps+empty sztuczną dominację (bug #467189 Mateusz O score=+53
+    # vs Gabriel bag=3 score=-96). PANEL_OVERRIDE rate 19.6% → koordynator
+    # konsekwentnie wybiera kurierów z bagami (bundling).
+    # Fix: jeśli top-1 jest blind+empty AND istnieje informed alt, demote
+    # blind+empty na koniec listy (zachowaj w alt list, nie exclude).
+    # Guard "all blind": jeśli wszyscy są blind+empty → zostaw bez zmian.
+    try:
+        _demote_flag = bool(getattr(C, "ENABLE_NO_GPS_EMPTY_DEMOTE", True))
+    except Exception:
+        _demote_flag = True
+    if _demote_flag and feasible:
+        _blind_sources = ("no_gps", "pre_shift", "none")
+        _informed_sources = ("gps", "last_assigned_pickup",
+                             "last_picked_up_delivery", "last_picked_up_recent",
+                             "last_delivered", "post_wave")
+
+        def _is_blind_empty(c):
+            ps = c.metrics.get("pos_source")
+            bsize = c.metrics.get("r6_bag_size", 0) or 0
+            return ps in _blind_sources and bsize == 0
+
+        def _is_informed(c):
+            return c.metrics.get("pos_source") in _informed_sources
+
+        if _is_blind_empty(feasible[0]):
+            informed = [c for c in feasible if _is_informed(c)]
+            if informed:
+                original_top_cid = feasible[0].courier_id
+                # Stable reorder: informed first (zachowują względny porządek),
+                # potem ci którzy nie są informed ale nie są blind+empty,
+                # potem blind+empty na koniec.
+                other = [c for c in feasible
+                         if not _is_informed(c) and not _is_blind_empty(c)]
+                blind_empty = [c for c in feasible if _is_blind_empty(c)]
+                feasible = informed + other + blind_empty
+                log.info(
+                    f"NO_GPS_DEMOTE order={order_id}: top cid={original_top_cid} "
+                    f"(no_gps+empty) demoted; informed_alts={len(informed)}; "
+                    f"new_top_cid={feasible[0].courier_id}"
+                )
+
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]
         return PipelineResult(
