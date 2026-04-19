@@ -195,8 +195,10 @@ def _candidate_line(c: dict, now_utc: datetime, prep_remaining_min: float) -> st
         tags.append(f"🔗 same: {c['bundle_level1']}")
     elif c.get("bundle_level2"):
         d2 = c.get("bundle_level2_dist")
-        d2_str = f" ({d2:.1f}km)" if d2 is not None else ""
-        tags.append(f"🔗 blisko: {c['bundle_level2']}{d2_str}")
+        if d2 is not None:
+            tags.append(f"🔗 po odbiorze z {c['bundle_level2']} → +{d2:.2f}km")
+        else:
+            tags.append(f"🔗 po odbiorze z {c['bundle_level2']}")
     if c.get("bundle_level3"):
         d3 = c.get("bundle_level3_dev")
         d3_str = f" ({d3:.1f}km)" if d3 is not None else ""

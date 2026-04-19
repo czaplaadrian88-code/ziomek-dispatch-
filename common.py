@@ -280,3 +280,13 @@ ENABLE_C5_SHADOW_LOG = True
 
 ENABLE_MID_TRIP_PICKUP = False        # C6: state_machine rewake for overlap
 ENABLE_PENDING_QUEUE_VIEW = False     # C7: dispatch_pipeline signature change
+
+# ============================================================
+# Telegram Transparency OPCJA A flags (2026-04-19)
+# Redesign propozycji — Adrian chce rozumieć CZEMU ten kurier i
+# JAKĄ TRASĘ wykona. L2 label "blisko: X" był mylący (sugeruje
+# że kurier odbiera z X, a to bundling do istniejącej fali).
+# ============================================================
+ENABLE_TRANSPARENCY_ROUTE = True       # Route section (pickupy then drops) w propozycji
+ENABLE_TRANSPARENCY_REASON = True      # Natural-language reason line (czemu ten kurier)
+ENABLE_TRANSPARENCY_SCORING = True     # Score decomposition (baza + wave + bundle)
