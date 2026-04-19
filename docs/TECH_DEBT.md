@@ -28,8 +28,23 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 - ✅ **[DONE 2026-04-18]** C5 full wave_scoring 6 features → commit `4fac50e`, tag `f22-c5-full-shadow-live`. food_court + pair_affinity + stretch_bonus + wave_continuation + context_peak + same_restaurant.
 - ✅ **[DONE 2026-04-18 skeleton]** C6 commitment_emitter → commit `17dae8d`, tag `f22-c6-skeleton-committed`. Integration deferred.
 - ✅ **[DONE 2026-04-18]** C7 dispatch_pipeline.assess_order kwarg extension + pending_queue_provider → commit `e0dc06e`, tag `f22-c7-skeleton-live`. Backward-compat verified (f21 44/44 unchanged).
+- ✅ **[DONE 2026-04-18]** Telegram Transparency MVP — ordered route sequence w propozycji (`ENABLE_TRANSPARENCY_ROUTE=True`, tag `f22-transparency-mvp-live`). Format: `Rukola → Bar Eljot → Miejska Miska → Lipowa → Legionowa → Zachodnia`. OPCJA A pełna (scoring breakdown) DEFERRED do 2026-04-19.
 
-- **[HIGH — next session]** Review `c2_shadow_log.jsonl` + `c5_shadow_log.jsonl` po 24-48h. Sequential flag flips w kolejności C2 → C3 → C4 → C5 → C6 → C7 after shadow validation.
+### ⏭️ Sequential flag flip sequence (2026-04-19 onwards)
+
+Kolejność zgodnie z `F2.2_HANDOVER_2026-04-19.md` Q3, każdy flip wymaga 24-48h shadow observation przed następnym:
+
+1. **[HIGH]** `USE_PER_ORDER_GATE=True` — po review c2_shadow_log (expected ~0 diffs). Restart `dispatch-shadow`. Low risk (duplikuje current SLA).
+2. **[HIGH]** `DEPRECATE_LEGACY_HARD_GATES=True` — dzień +1 po USE_PER_ORDER_GATE stable. R6 narrow soft zone (30-35) activates. Medium risk (ranking może się zmienić).
+3. **[HIGH]** `ENABLE_TRANSPARENCY_SCORING=True` — Telegram Transparency OPCJA A (scoring breakdown). Restart `dispatch-telegram` **z explicit ACK**.
+4. **[MED]** `ENABLE_SPEED_TIER_LOADING=True` — po C4 cron setup (systemd timer `dispatch-speed-tier.timer` 03:00 Warsaw). Observational until ENABLE_WAVE_SCORING.
+5. **[MED]** `ENABLE_WAVE_SCORING=True` — **HIGH RISK**, wymaga 5-7 dni shadow walidacji C5. Decision review wag per feature.
+6. **[MED]** `ENABLE_MID_TRIP_PICKUP=True` — po wave_scoring stable. **Blocker**: C6 state_machine integration (obecnie tylko skeleton).
+7. **[MED]** `ENABLE_PENDING_QUEUE_VIEW=True` — ostatni w sekwencji. Integruje pending_queue_provider w dispatch flow.
+
+### 🔥 Aktywne — parallel workstreams (niezależne od flag flipów)
+
+- **[HIGH — next session]** Review `c2_shadow_log.jsonl` + `c5_shadow_log.jsonl` po 24-48h. Prerequisite dla flag flipów #1-2.
 - **[HIGH — next session]** C4 systemd timer setup (dispatch-speed-tier.timer nightly 03:00). Requires OS-level write, osobna sesja.
 - **[HIGH — parallel]** Geocoding 4 pending (Restauracja Eatally HIGH vol=60, Chilli Chicken, Oregano Pizza, Atmosfera) — panel_client.address_id join approach.
 - **[MED]** Dev iterations C5 calibration: review shadow log diffs, tune weights (SAME_RESTAURANT_BOOST, FOOD_COURT_BOOST, etc.) based on empirical distributions.
@@ -52,6 +67,9 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 - **[FUTURE]** Warsaw expansion (miesiąc+5 po F2.2 live).
 - **[FUTURE]** Full contrastive fit wag po 2 tygodniach clean ground truth (post-P1 fix).
 - **[FUTURE]** `reorder_nn` TSP proper rewrite (post-C1 additive refactor → pełny rewrite, quality boost).
+- **[FUTURE]** Auto-approve (R26) re-enable — post-F2.2 stable, niższy threshold 75% zamiast 85% (scoring lepszy po wave_scoring live). Concept NIE zastąpiony przez F2.2: auto-approve to workflow automation, F2.2 to decision quality.
+- **[FUTURE]** Learning analyzer re-enable — complements F2.2, 2 tyg clean logs requirement (post-P1 fix już done → można re-enable w tygodniu po F2.2 stable).
+- **[FUTURE]** C6 state_machine integration — wire `emit_commitment` hooks w state transitions. Blocker dla `ENABLE_MID_TRIP_PICKUP=True`.
 
 ---
 
