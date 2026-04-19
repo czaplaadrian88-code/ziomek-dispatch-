@@ -4,6 +4,45 @@ Prowadzony na bieżąco. Wszystko co wymaga naprawy ale nie blokuje bieżącego 
 
 ---
 
+## V3.19 picked_up floor + saved plans — 2026-04-19
+
+### ✅ LIVE (master tag `f22-route-sim-saved-plans-V3.19`)
+
+**V3.19a route_simulator picked_up drop floor (R1 fix)** — commit `cfd2518` tag `v319a-implemented`. Symetryczne rozszerzenie V3.18 ENABLE_DROP_TIME_CONSTRAINT dla `ref.status == "picked_up"`. Floor: `picked_up_at + osrm(pickup→drop) + DWELL_DROPOFF_MIN`. Adresuje R1 29.1% propozycji gdzie synthetic `cs.pos = drop_coords` dawał `predicted_drop ≈ now+1s`. Flag `ENABLE_PICKED_UP_DROP_FLOOR=True` default, env kill-switch =0. 15/15 tests PASS.
+
+**V3.19b plan_manager persistence (write-only)** — commits `b22218d` (core) + `ce93a2d` (hooks). Nowy moduł `plan_manager.py`: load/save/invalidate/advance/remove_stops/insert_stop_optimal/mark_stale. Storage `dispatch_state/courier_plans.json`, fcntl LOCK_EX/SH, atomic temp→fsync→os.replace, CAS via expected_version. Hooki w `panel_watcher`: 4 × COURIER_ASSIGNED → save_plan, 2 × COURIER_DELIVERED → advance_plan, 1 × ORDER_RETURNED_TO_POOL → remove_stops. Flag `ENABLE_SAVED_PLANS=True`. 40/40 tests PASS (28 core + 12 hooks).
+
+**Deploy:** V3.19a 20:18:12 UTC (shadow+panel-watcher), V3.19b 20:39:17 UTC (panel-watcher). Gate 2 verify PASS z caveat (niski ruch niedzielny — 0 live samples w 43min uptime, 0 errors, services stable). Rzeczywista walidacja na traffic jutro/w tygodniu.
+
+### DEFERRED do V3.19c (osobna sesja ~3-4h)
+
+1. **Read integration w scoring path (sub 3.2 z oryginalnego planu)** — `dispatch_pipeline.assess_order` odczytuje `plan_manager.load_plan` + `insert_stop_optimal` zamiast fresh TSP. Flag `ENABLE_SAVED_PLANS_READ` osobna od write — pozwala szerokie shadow period.
+2. **Periodic recheck** — systemd timer 3-5 min, re-compute z fresh GPS; sequence delta >threshold → `COURIER_PLAN_REVISED`.
+3. **GPS_DRIFT invalidation hook** — w `courier_api` :8767 GPS update + porównanie z `plan.start_pos`; delta >500m → `mark_stale`.
+4. **COURIER_PICKED_UP stop update** — update `status_at_plan_time` w saved plan po emit pickup event. Low priority.
+5. **Shift-end GC** — codzienny cron `plan_manager.gc_invalidated(older_than_hours=24)`.
+
+### DEFERRED do V3.20 (osobna sesja ~4-6h)
+
+**R2 ghost detection (12.7% post-V3.18):** `czas_doreczenia != null` filter w `bag_state`, panel_watcher proactive ghost detection via `courier_packs` diff. V3.19a floor już strukturalnie naprawia ETA dla ghosta (`picked_up_at + drive + DWELL` zamiast `now+1s`), ale source bug zostaje. Shadow mode ≥3 dni przed flip.
+
+### DEFERRED do post-V3.19c/V3.20 stable
+
+Sprint C flag flips (pending since V3.11): `ENABLE_WAVE_SCORING`, `ENABLE_BUNDLE_VALUE_SCORING`, `DEPRECATE_LEGACY_HARD_GATES`, `ENABLE_MID_TRIP_PICKUP`, `ENABLE_PENDING_QUEUE_VIEW`. Wszystkie default False do czasu kalibracji na 5-7 dni learning_log.
+
+### Rollback paths
+
+- **Full:** `git reset --hard f22-bag-reality-check-live-V3.18` + `systemctl restart dispatch-shadow dispatch-panel-watcher`
+- **V3.19a only:** `ENABLE_PICKED_UP_DROP_FLOOR=0` + restart shadow+panel-watcher
+- **V3.19b only:** `ENABLE_SAVED_PLANS=0` + restart panel-watcher (+ opcjonalnie `rm courier_plans.json`)
+- **`.bak_v319*` preserved 24h** w `scripts/dispatch_v2/` — cleanup poniedziałek po stable uptime
+
+### Artifacts
+
+Session docs: `/tmp/v319_revision.md`, `/tmp/v319_audit.md`, `/tmp/v319_plan.md`, `/tmp/v319_plan_full.md`, `/tmp/v319_schema.json`, `/tmp/v319_state.json`, `/tmp/v319_bak_cleanup_list.txt`, `/tmp/v319a_verify.md`, `/tmp/v319_followup_roadmap.md`.
+
+---
+
 ## Telegram per-stop timeline — 2026-04-19 (V3.17)
 
 ### ✅ FIX COMMITTED (tag `f22-telegram-timeline-live-V3.17` pending Etap C)
