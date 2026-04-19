@@ -347,3 +347,18 @@ try:
     PACKS_FALLBACK_MAX_PER_CYCLE = int(_os.environ.get("PACKS_FALLBACK_MAX_PER_CYCLE", "10"))
 except (ValueError, TypeError):
     PACKS_FALLBACK_MAX_PER_CYCLE = 10
+
+# ============================================================
+# No-GPS empty bag demotion flag (2026-04-19 V3.16)
+# Bugfix: Mateusz O (cid=413, no_gps, bag=0) często jest BEST w pipeline
+# (score ~53, bez żadnych penalty), podczas gdy bag-kurierzy z aktywnym
+# bagiem dostają -100 do -300 przez r8_soft_pen + r9_wait_pen + r9_stopover.
+# Koordynator override'uje 19.6% (18/92 propozycji w 1h45min) — konsekwentnie
+# wybierając kurierów z aktywnymi bagami (po drodze / bundling).
+# scoring.py nie ma penalty dla pos_source=no_gps → synthetic BIALYSTOK_CENTER
+# + max(15,prep) travel dają no_gps kurierowi baseline ~80 punktów.
+# True (default) = demote no_gps+empty poniżej GPS/bag kandydatów (post-scoring,
+# przed final pick). Guard: jeśli wszyscy są no_gps empty → nie demote.
+# False = legacy behavior. env: ENABLE_NO_GPS_EMPTY_DEMOTE=0.
+# ============================================================
+ENABLE_NO_GPS_EMPTY_DEMOTE = _os.environ.get("ENABLE_NO_GPS_EMPTY_DEMOTE", "1") == "1"
