@@ -210,8 +210,30 @@ def build_fleet_snapshot(
 
     fleet: Dict[str, CourierState] = {}
 
-    # Dla kazdego kuriera w names/pinach LUB majacego ordery
-    all_kids = set(per_courier.keys()) | set(names.keys()) | set(str(k) for k in piny.keys())
+    # Source of courier_id: orders_state + courier_names.json (właściwy cid z panelu).
+    # Pin space (kurier_piny.json) NIE jest źródłem cid — PIN to 4-cyfrowy kod
+    # logowania w Courier App, NIE courier_id z panel API. Wcześniej dodawanie
+    # piny.keys() tworzyło phantom kurierów (np. Michał Ro cid=5333-PIN obok
+    # cid=518-real) z pustym bagiem → fałszywa propozycja "wolnego" kuriera
+    # (bug 2026-04-19 14:00-14:08, propozycje #467070-#467077).
+    # PIN pozostaje name-lookup fallback (L227-231).
+    try:
+        from dispatch_v2.common import STRICT_COURIER_ID_SPACE as _strict_cid
+    except Exception:
+        _strict_cid = True
+    if _strict_cid:
+        all_kids = set(per_courier.keys()) | set(names.keys())
+        # Defense-in-depth: jeśli PIN pojawia się w per_courier lub names
+        # → orders_state/names_file skażone (bug gdzie indziej).
+        _pin_strs = {str(k) for k in piny.keys()}
+        _phantom = _pin_strs & all_kids
+        if _phantom:
+            _log.warning(
+                f"PIN leaked into courier_id space: {_phantom} "
+                f"(check orders_state.json and courier_names.json)"
+            )
+    else:
+        all_kids = set(per_courier.keys()) | set(names.keys()) | set(str(k) for k in piny.keys())
 
     for kid in all_kids:
         orders = per_courier.get(kid, [])
