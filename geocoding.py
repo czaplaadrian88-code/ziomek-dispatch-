@@ -1,15 +1,17 @@
 """Geocoding - Google primary + OSRM nearest fallback + persistent cache.
 
 Architektura:
-- Cache na dysku: geocode_cache.json (klucz = znormalizowany adres)
+- Cache na dysku: geocode_cache.json (klucz = znormalizowany adres + miasto)
 - Cache zyje wiecznie: adresy fizyczne nie zmieniaja lat/lon
 - Google primary: jakosc 95%+
 - OSRM nearest fallback: gdy Google timeout/limit/error
 - Osobny cache dla restauracji (rzadziej sie zmienia, wieksza precyzja)
 
 API:
-- geocode(address, hint_city='Białystok') -> (lat, lon) lub None
-- geocode_restaurant(name, address) -> (lat, lon) lub None
+- geocode(address, city=None) -> (lat, lon) lub None
+  CITY_AWARE_GEOCODING=True (default) → city wymagany, fail loud bez niego.
+  False (legacy kill-switch) → fallback do "Białystok".
+- geocode_restaurant(name, address, city=None) -> (lat, lon) lub None
 - cache_stats() -> {size, hits, misses}
 """
 import fcntl
@@ -90,15 +92,22 @@ def _save_cache(path: Path, data: dict):
         raise
 
 
-def _normalize(address: str, hint_city: str = "Białystok") -> str:
-    """Znormalizuj adres do klucza cache - lowercase, no extra spaces, usun lok/m/pietro."""
+def _normalize(address: str, city: str) -> str:
+    """Znormalizuj adres do klucza cache - lowercase, no extra spaces, usun lok/m/pietro.
+
+    Key format: "<street>, <city>". city wymagany — callerzy `geocode()`
+    rozwiązują to (city z panelu lub legacy "Białystok" gdy flag False).
+    Stare entries z kluczem "street, białystok" pozostają kompatybilne —
+    `geocode(addr, city="Białystok")` trafia w nie bez miss.
+    """
     s = address.strip().lower()
     s = re.sub(r"\s+", " ", s)
     s = re.sub(r"\b(lok|lokal|m|mieszkanie|pietro|piętro)\.?\s*\w+", "", s)
     s = re.sub(r"/[^\s]+", "", s)  # wszystko po pierwszym / (numery lokali)
     s = s.strip(" ,/")
-    if hint_city.lower() not in s:
-        s = f"{s}, {hint_city.lower()}"
+    c = (city or "").strip().lower()
+    if c and c not in s:
+        s = f"{s}, {c}"
     return s
 
 
@@ -140,8 +149,25 @@ def _osrm_fallback(address: str) -> Optional[tuple]:
     return None
 
 
-def geocode(address: str, hint_city: str = "Białystok", timeout: float = 5.0) -> Optional[tuple]:
+def _effective_city(city: Optional[str], context: str) -> Optional[str]:
+    """Resolve city per flag. Zwraca effective_city lub None gdy fail-loud mode."""
+    if city and city.strip():
+        return city.strip()
+    try:
+        from dispatch_v2.common import CITY_AWARE_GEOCODING as _flag
+    except Exception:
+        _flag = True  # safe default — flag not importable = assume strict
+    if _flag:
+        _log.warning(f"{context}: brak city (CITY_AWARE_GEOCODING=True → None)")
+        return None
+    return "Białystok"  # legacy kill-switch
+
+
+def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> Optional[tuple]:
     """Google primary + cache. Zwraca (lat, lon) lub None.
+
+    city: miasto klienta (z panel_client.delivery_city). Wymagany gdy
+    CITY_AWARE_GEOCODING=True (default). Gdy flag False → fallback do "Białystok".
 
     timeout: max czas oczekiwania na Google API (cache hit = 0ms, nie dotyczy).
     Watcher uzywa timeout=2.0 (ochrona przed burst freeze).
@@ -149,7 +175,12 @@ def geocode(address: str, hint_city: str = "Białystok", timeout: float = 5.0) -
     if not address or not address.strip():
         return None
 
-    key = _normalize(address, hint_city)
+    effective_city = _effective_city(city, f"geocode({address!r})")
+    if not effective_city:
+        _stats["failures"] += 1
+        return None
+
+    key = _normalize(address, effective_city)
 
     with _lock:
         cache = _load_cache(CACHE_PATH)
@@ -160,8 +191,8 @@ def geocode(address: str, hint_city: str = "Białystok", timeout: float = 5.0) -
 
     _stats["misses"] += 1
 
-    # Google primary
-    result = _google_geocode(f"{address}, {hint_city}, Polska", timeout=timeout)
+    # Google primary — explicit city w query
+    result = _google_geocode(f"{address}, {effective_city}, Polska", timeout=timeout)
     if result is None:
         result = _osrm_fallback(address)
 
@@ -176,16 +207,22 @@ def geocode(address: str, hint_city: str = "Białystok", timeout: float = 5.0) -
             "lon": result[1],
             "source": "google",
             "original": address,
+            "city": effective_city,
             "cached_at": time.time(),
         }
         _save_cache(CACHE_PATH, cache)
 
-    _log.info(f"Geocoded: {address} -> {result}")
+    _log.info(f"Geocoded: {address} / city={effective_city} -> {result}")
     return result
 
 
-def geocode_restaurant(name: str, address: str = "") -> Optional[tuple]:
-    """Osobny cache dla restauracji - nazwa jest kluczem."""
+def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None) -> Optional[tuple]:
+    """Osobny cache dla restauracji - nazwa jest kluczem.
+
+    city: z `raw["address"]["city"]` (pole adresu restauracji). Wymagany gdy
+    CITY_AWARE_GEOCODING=True. Bez niego geocoder miałby ryzyko źle rozwiązać
+    ambiguous restaurant names (Warszawa-ready).
+    """
     if not name:
         return None
     key = name.strip().lower()
@@ -197,7 +234,12 @@ def geocode_restaurant(name: str, address: str = "") -> Optional[tuple]:
             return (cache[key]["lat"], cache[key]["lon"])
 
     _stats["misses"] += 1
-    query = f"{name}, {address}, Białystok" if address else f"{name}, Białystok, Polska"
+
+    effective_city = _effective_city(city, f"geocode_restaurant({name!r})")
+    if not effective_city:
+        return None
+
+    query = f"{name}, {address}, {effective_city}" if address else f"{name}, {effective_city}, Polska"
     result = _google_geocode(query)
     if result is None:
         return None
@@ -209,11 +251,12 @@ def geocode_restaurant(name: str, address: str = "") -> Optional[tuple]:
             "lon": result[1],
             "name": name,
             "address": address,
+            "city": effective_city,
             "cached_at": time.time(),
         }
         _save_cache(RESTAURANT_CACHE_PATH, cache)
 
-    _log.info(f"Geocoded restaurant: {name} -> {result}")
+    _log.info(f"Geocoded restaurant: {name} / city={effective_city} -> {result}")
     return result
 
 
