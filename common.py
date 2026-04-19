@@ -311,3 +311,20 @@ CITY_AWARE_GEOCODING = True
 # ============================================================
 import os as _os
 STRICT_COURIER_ID_SPACE = _os.environ.get("STRICT_COURIER_ID_SPACE", "1") == "1"
+
+# ============================================================
+# Strict bag reconciliation flag (2026-04-19 V3.14)
+# Bugfix: panel_watcher ma lag 15-90 min w detect delivered orders
+# (MAX_RECONCILE_PER_CYCLE=25/tick + FIFO closed_ids queue). W tym oknie
+# pipeline ufa orders_state.json ze status=assigned dla orderów już delivered
+# w panelu → scoring z phantom bagiem (propozycja #467117 @ 13:26:28 miała
+# bag_context={467015,467053,467070}, wszystkie delivered 15-30 min po).
+# True (default) = active_bag filter z TTL — assigned >90min bez picked_up
+# wykluczony z bagu. False = legacy bez TTL. env: STRICT_BAG_RECONCILIATION=0.
+# BAG_STALE_THRESHOLD_MIN tunable (env: BAG_STALE_THRESHOLD_MIN=60 etc.).
+# ============================================================
+STRICT_BAG_RECONCILIATION = _os.environ.get("STRICT_BAG_RECONCILIATION", "1") == "1"
+try:
+    BAG_STALE_THRESHOLD_MIN = int(_os.environ.get("BAG_STALE_THRESHOLD_MIN", "90"))
+except (ValueError, TypeError):
+    BAG_STALE_THRESHOLD_MIN = 90
