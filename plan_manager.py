@@ -268,6 +268,67 @@ def mark_stale(courier_id: str, reason: str = "GPS_DRIFT") -> None:
     invalidate_plan(courier_id, reason)
 
 
+def mark_picked_up(courier_id: str, order_id: str,
+                   picked_up_at: Optional[str] = None) -> None:
+    """V3.19c sub A: update stop.status_at_plan_time to 'picked_up' for this
+    order. Prune pickup stop (definitionally done). No-op if plan absent/
+    invalidated or order_id not in plan.stops.
+    """
+    cid = str(courier_id)
+    oid = str(order_id)
+    with _locked(exclusive=True):
+        plans = _read_raw()
+        plan = plans.get(cid)
+        if plan is None or plan.get("invalidated_at") is not None:
+            return
+        changed = False
+        new_stops = []
+        for s in plan.get("stops", []):
+            if s.get("order_id") == oid:
+                if s.get("type") == "pickup":
+                    # pickup happened → prune
+                    changed = True
+                    continue
+                if s.get("status_at_plan_time") != "picked_up":
+                    s = dict(s)
+                    s["status_at_plan_time"] = "picked_up"
+                    changed = True
+            new_stops.append(s)
+        if not changed:
+            return
+        plan["stops"] = new_stops
+        plan["plan_version"] = plan.get("plan_version", 0) + 1
+        plan["last_modified_at"] = _now_iso()
+        _write_raw(plans)
+
+
+def gc_invalidated(older_than_hours: float = 24.0) -> int:
+    """V3.19c sub A: garbage-collect invalidated plans older than threshold.
+    Returns count removed. Manual / cron hook — no auto-schedule.
+    """
+    cutoff_ts = datetime.now(timezone.utc).timestamp() - (older_than_hours * 3600)
+    removed = 0
+    with _locked(exclusive=True):
+        plans = _read_raw()
+        to_del = []
+        for cid, p in plans.items():
+            inv = p.get("invalidated_at")
+            if not inv:
+                continue
+            try:
+                inv_ts = datetime.fromisoformat(inv.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                continue
+            if inv_ts < cutoff_ts:
+                to_del.append(cid)
+        for cid in to_del:
+            del plans[cid]
+            removed += 1
+        if removed:
+            _write_raw(plans)
+    return removed
+
+
 def insert_stop_optimal(
     plan: Dict[str, Any],
     new_order_stops: List[Dict[str, Any]],

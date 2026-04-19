@@ -261,6 +261,26 @@ def _remove_stops_on_return(courier_id: str, order_id: str) -> None:
         _log.warning(f"V3.19b remove_stops fail cid={courier_id} oid={order_id}: {e}")
 
 
+def _update_plan_on_picked_up(courier_id: str, order_id: str,
+                              picked_up_at: Optional[str] = None) -> None:
+    """V3.19c sub A: po emit COURIER_PICKED_UP sukces. Update
+    stop.status_at_plan_time + prune pickup stop (jeśli był).
+    """
+    try:
+        from dispatch_v2.common import ENABLE_SAVED_PLANS
+        if not ENABLE_SAVED_PLANS:
+            return
+    except Exception:
+        return
+    if not courier_id:
+        return
+    try:
+        from dispatch_v2 import plan_manager
+        plan_manager.mark_picked_up(str(courier_id), str(order_id), picked_up_at)
+    except Exception as e:
+        _log.warning(f"V3.19c mark_picked_up fail cid={courier_id} oid={order_id}: {e}")
+
+
 def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     """Porownuje stan panel vs orders_state, emituje eventy.
     Zwraca statystyki tego cyklu."""
@@ -751,6 +771,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     },
                 })
                 _log.info(f"PICKED_UP {zid} (reconcile) kurier={kid} at {dzien_odbioru}")
+                _update_plan_on_picked_up(kid, zid, dzien_odbioru)
     # ================== END PICKED_UP RECONCILE ==================
 
     return stats
