@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from dispatch_v2.common import (
+    ENABLE_TIMELINE_FORMAT,
     ENABLE_TRANSPARENCY_REASON,
     ENABLE_TRANSPARENCY_ROUTE,
     WARSAW,
@@ -249,11 +250,100 @@ def _reason_line(c: dict, all_candidates: list) -> str:
     return "   💡 " + " + ".join(reasons)
 
 
+def _iso_to_warsaw_hhmm(iso_utc):
+    """V3.17: ISO UTC → Warsaw HH:MM, None on failure (used by timeline formatter)."""
+    if not iso_utc:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso_utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(WARSAW).strftime("%H:%M")
+    except Exception:
+        return None
+
+
+def _build_timeline_section(decision: dict, best: dict) -> str:
+    """V3.17: per-stop chronological timeline z plan.pickup_at + predicted_delivered_at.
+
+    Wymaga etapu A (shadow_dispatcher propagacja). Format:
+        📦 N ordery w bagu → trasa z nowym zleceniem:
+        HH:MM 🍕 pickup {restaurant}
+        HH:MM 📍 drop {delivery_address}
+        ...
+        HH:MM 👉 pickup [NOWY] {restaurant}
+        HH:MM 👉 drop [NOWY] {delivery_address}
+
+    Zwraca "" gdy: flag off, brak plan, plan.pickup_at+predicted_delivered_at oba puste,
+    sequence ≤ 1 (solo). Fallback: caller używa _route_section() starego.
+    """
+    plan = (best or {}).get("plan") or {}
+    pickup_at = plan.get("pickup_at") or {}
+    delivered_at = plan.get("predicted_delivered_at") or {}
+    sequence = plan.get("sequence") or []
+    if not pickup_at and not delivered_at:
+        return ""
+    if len(sequence) <= 1 and len(delivered_at) <= 1:
+        return ""
+
+    cur_oid = str(decision.get("order_id") or "")
+    mapping = {
+        cur_oid: (decision.get("restaurant"), decision.get("delivery_address")),
+    }
+    for b in (best.get("bag_context") or []):
+        boid = str(b.get("order_id") or "")
+        if boid:
+            mapping[boid] = (b.get("restaurant"), b.get("delivery_address"))
+
+    events = []
+    for oid, iso in pickup_at.items():
+        hhmm = _iso_to_warsaw_hhmm(iso)
+        if hhmm is None:
+            continue
+        events.append((iso, hhmm, "pickup", str(oid)))
+    for oid, iso in delivered_at.items():
+        hhmm = _iso_to_warsaw_hhmm(iso)
+        if hhmm is None:
+            continue
+        events.append((iso, hhmm, "drop", str(oid)))
+    if not events:
+        return ""
+    # Stable sort by ISO (lexicographic == chronological for same-TZ ISO 8601).
+    # Tie-break: pickup before drop of same oid (rare; different legs differ).
+    events.sort(key=lambda e: (e[0], 0 if e[2] == "pickup" else 1))
+
+    lines = []
+    n_bag = len([x for x in mapping.keys() if x and x != cur_oid])
+    if n_bag > 0:
+        header = f"📦 {n_bag} ordery w bagu → trasa z nowym zleceniem:"
+    else:
+        header = f"📦 trasa dla nowego zlecenia:"
+    lines.append(header)
+    for _iso, hhmm, etype, oid in events:
+        rest, drop_addr = mapping.get(oid, (None, None))
+        is_new = (oid == cur_oid)
+        if etype == "pickup":
+            emoji = "👉" if is_new else "🍕"
+            name = rest or "?"
+            prefix_tag = "[NOWY] " if is_new else ""
+            lines.append(f"{hhmm} {emoji} pickup {prefix_tag}{name}")
+        else:
+            emoji = "👉" if is_new else "📍"
+            addr = drop_addr or "?"
+            prefix_tag = "[NOWY] " if is_new else ""
+            lines.append(f"{hhmm} {emoji} drop {prefix_tag}{addr}")
+    return "\n".join(lines)
+
+
 def _route_section(decision: dict, best: dict) -> str:
     """Transparency OPCJA A: route section — pickupy then drops w kolejności plan.sequence.
 
+    V3.17: gdy ENABLE_TIMELINE_FORMAT=True AND timeline data dostępne →
+    delegate do `_build_timeline_section()`. Fallback do starego formatu
+    (pickups|drops) gdy timeline zwraca "" (brak danych / solo order / flag off).
+
     Zwraca pusty string dla solo orderów (sequence ≤ 1), flagi wyłączonej, lub braku mapping.
-    Format:
+    Format legacy (flag off / fallback):
         📦 N ordery w bagu:
         🗺️ Kolejność:
            🍕 {pickup1} → {pickup2} → ...
@@ -261,6 +351,10 @@ def _route_section(decision: dict, best: dict) -> str:
     """
     if not ENABLE_TRANSPARENCY_ROUTE or not best:
         return ""
+    if ENABLE_TIMELINE_FORMAT:
+        timeline = _build_timeline_section(decision, best)
+        if timeline:
+            return timeline
     plan = best.get("plan") or {}
     sequence = plan.get("sequence") or []
     if len(sequence) <= 1:
