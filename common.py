@@ -400,6 +400,17 @@ ENABLE_BUNDLE_VALUE_SCORING = _os.environ.get("ENABLE_BUNDLE_VALUE_SCORING", "0"
 # ============================================================
 ENABLE_PICKED_UP_DROP_FLOOR = _os.environ.get("ENABLE_PICKED_UP_DROP_FLOOR", "1") == "1"
 
+# ============================================================
+# V3.19b saved plans persistence (2026-04-19)
+# plan_manager.py persists per-courier TSP plan w courier_plans.json po każdym
+# COURIER_ASSIGNED. Advance/remove_stops na DELIVERED/RETURNED_TO_POOL.
+# Read integration w scoring path → V3.19c (risk-deferred). Zero wpływu na
+# ścieżkę scoring tej sesji — persistence to sidecar + fundament V3.19c.
+# True (default) = panel_watcher konsumuje plan_manager save/advance/remove.
+# False = legacy (plan_manager dead code). env: ENABLE_SAVED_PLANS=0.
+# ============================================================
+ENABLE_SAVED_PLANS = _os.environ.get("ENABLE_SAVED_PLANS", "1") == "1"
+
 # Overload threshold: bag > fleet_avg + this → score penalty
 try:
     OVERLOAD_THRESHOLD_BAGS = int(_os.environ.get("OVERLOAD_THRESHOLD_BAGS", "2"))

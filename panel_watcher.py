@@ -136,6 +136,131 @@ def _check_panel_override(order_id: str, panel_courier_id: str, source: str) -> 
     )
 
 
+def _save_plan_on_assign(order_id: str, courier_id: str) -> None:
+    """V3.19b: zapisz plan z pending_proposals po emit COURIER_ASSIGNED.
+
+    Odczytuje pending_proposals[oid].decision_record.best.plan i mapuje na
+    plan_manager schema. Skip cicho gdy: flag off, pending brak, best courier
+    ≠ assigned courier (PANEL_OVERRIDE — kurier koordynatora, nie nasz), brak
+    plan.sequence. Żadne błędy nie propagują do callera.
+    """
+    try:
+        from dispatch_v2.common import ENABLE_SAVED_PLANS
+        if not ENABLE_SAVED_PLANS:
+            return
+    except Exception:
+        return
+    try:
+        import json
+        with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
+            pending = json.load(f)
+    except (FileNotFoundError, Exception):
+        return
+    rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
+    if not rec:
+        return
+    dr = rec.get("decision_record") or {}
+    best = dr.get("best") or {}
+    proposed_cid = str(best.get("courier_id") or "")
+    if not proposed_cid or proposed_cid != str(courier_id):
+        return  # PANEL_OVERRIDE — plan kuriera A, koordynator przypisał B
+    plan = best.get("plan") or {}
+    sequence = plan.get("sequence") or []
+    if not sequence:
+        return
+    predicted = plan.get("predicted_delivered_at") or {}
+    pickup_at = plan.get("pickup_at") or {}
+    bag_ctx = {str(b.get("order_id")): b for b in (best.get("bag_context") or [])}
+    # start_pos z best.pos_source; lat/lng niestety nie w decision_record,
+    # użyj fallback (courier_resolver się dopisze przy next propose).
+    start_pos = {
+        "lat": 0.0, "lng": 0.0,
+        "source": best.get("pos_source") or "unknown",
+        "source_ts": rec.get("ts"),
+    }
+    stops = []
+    for oid in sequence:
+        oid_s = str(oid)
+        # pickup first (jeśli w pickup_at — oznacza że nowy order miał pickup w planie)
+        if oid_s in pickup_at:
+            stops.append({
+                "order_id": oid_s,
+                "type": "pickup",
+                "coords": {"lat": 0.0, "lng": 0.0},
+                "scheduled_at": None,
+                "predicted_at": pickup_at[oid_s],
+                "dwell_min": 2.0,
+                "status_at_plan_time": "assigned",
+            })
+        pred = predicted.get(oid_s)
+        stops.append({
+            "order_id": oid_s,
+            "type": "dropoff",
+            "coords": {"lat": 0.0, "lng": 0.0},
+            "scheduled_at": None,
+            "predicted_at": pred,
+            "dwell_min": 1.0,
+            "status_at_plan_time": "picked_up" if oid_s in bag_ctx else "assigned",
+        })
+    body = {
+        "start_pos": start_pos,
+        "start_ts": dr.get("ts") or now_iso(),
+        "stops": stops,
+        "optimization_method": plan.get("strategy") or "bruteforce",
+    }
+    try:
+        from dispatch_v2 import plan_manager
+        plan_manager.save_plan(str(courier_id), body)
+        _log.info(f"V3.19b plan saved cid={courier_id} oid={order_id} stops={len(stops)}")
+    except Exception as e:
+        _log.warning(f"V3.19b save_plan fail cid={courier_id} oid={order_id}: {e}")
+
+
+def _advance_plan_on_deliver(courier_id: str, order_id: str,
+                             delivered_at_raw: Optional[str],
+                             delivery_coords: Optional[list]) -> None:
+    """V3.19b: advance plan po emit COURIER_DELIVERED sukces."""
+    try:
+        from dispatch_v2.common import ENABLE_SAVED_PLANS
+        if not ENABLE_SAVED_PLANS:
+            return
+    except Exception:
+        return
+    if not courier_id:
+        return
+    try:
+        from dispatch_v2 import plan_manager
+        coords_tuple = None
+        if delivery_coords and isinstance(delivery_coords, (list, tuple)) \
+                and len(delivery_coords) == 2:
+            coords_tuple = (float(delivery_coords[0]), float(delivery_coords[1]))
+        plan_manager.advance_plan(
+            str(courier_id),
+            str(order_id),
+            delivered_at_raw or now_iso(),
+            coords_tuple,
+        )
+    except Exception as e:
+        _log.warning(f"V3.19b advance_plan fail cid={courier_id} oid={order_id}: {e}")
+
+
+def _remove_stops_on_return(courier_id: str, order_id: str) -> None:
+    """V3.19b: remove_stops po emit ORDER_RETURNED_TO_POOL sukces."""
+    try:
+        from dispatch_v2.common import ENABLE_SAVED_PLANS
+        if not ENABLE_SAVED_PLANS:
+            return
+    except Exception:
+        return
+    if not courier_id:
+        return
+    try:
+        from dispatch_v2 import plan_manager
+        plan_manager.remove_stops(str(courier_id), str(order_id))
+    except Exception as e:
+        _log.warning(f"V3.19b remove_stops fail cid={courier_id} oid={order_id}: {e}")
+
+
 def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     """Porownuje stan panel vs orders_state, emituje eventy.
     Zwraca statystyki tego cyklu."""
@@ -247,6 +372,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "payload": {"source": "panel_initial"},
                 })
                 _check_panel_override(zid, courier_id, "panel_initial")
+                _save_plan_on_assign(zid, courier_id)
 
     # 2. ZMIANY: ID znane w state, sprawdz czy cos sie zmienilo
     # V3.15 pre-req fix: reassign_checked/MAX_REASSIGN_PER_CYCLE musi być
@@ -283,13 +409,19 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         )
                         if ev:
                             stats["delivered"] += 1
+                            _adv_cid = str(raw.get("id_kurier") or "")
                             update_from_event({
                                 "event_type": "COURIER_DELIVERED",
                                 "order_id": zid,
-                                "courier_id": str(raw.get("id_kurier") or ""),
+                                "courier_id": _adv_cid,
                                 "payload": {"timestamp": raw.get("czas_doreczenia")},
                             })
                             _log.info(f"DELIVERED {zid}")
+                            _advance_plan_on_deliver(
+                                _adv_cid, zid,
+                                raw.get("czas_doreczenia"),
+                                state_order.get("delivery_coords"),
+                            )
                     elif status_id in (8, 9):
                         # Cancelled / nieodebrano
                         upsert_order(zid, {"status": "cancelled"}, event="PANEL_CANCELLED")
@@ -328,6 +460,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         })
                         _log.info(f"ASSIGNED {zid} -> {courier_id}")
                         _check_panel_override(zid, courier_id, "panel_diff")
+                        _save_plan_on_assign(zid, courier_id)
             except Exception as e:
                 _log.warning(f"fetch for assigned {zid}: {e}")
                 stats["errors"] += 1
@@ -358,6 +491,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         })
                         _log.info(f"REASSIGNED {zid} {state_courier} -> {panel_courier}")
                         _check_panel_override(zid, panel_courier, "panel_reassign")
+                        _save_plan_on_assign(zid, panel_courier)
             except Exception as e:
                 _log.warning(f"fetch for reassign {zid}: {e}")
                 stats["errors"] += 1
@@ -469,6 +603,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             f"PACKS_CATCHUP {_oid_str} → cid={_target_cid} nick={_nick_key!r} "
                             f"(was cid={_state_cid or 'None'})"
                         )
+                        _save_plan_on_assign(_oid_str, _target_cid)
             if _packs_catchup:
                 stats["packs_catchup"] = _packs_catchup
     # ================== END PANEL_PACKS FALLBACK ==================
@@ -528,6 +663,11 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     },
                 })
                 _log.info(f"DELIVERED {zid} (reconcile) kurier={kid}")
+                _advance_plan_on_deliver(
+                    kid, zid,
+                    raw.get("czas_doreczenia"),
+                    sorder.get("delivery_coords"),
+                )
         elif sid in (8, 9):
             reason = "undelivered" if sid == 8 else "cancelled"
             ev = emit(
@@ -543,6 +683,10 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "payload": {"reason": reason},
                 })
                 _log.info(f"{reason.upper()} {zid} (reconcile)")
+                _remove_stops_on_return(
+                    str(sorder.get("courier_id") or ""),
+                    zid,
+                )
     # ================== END RECONCILE ==================
 
     # ================== PICKED_UP RECONCILE ==================
