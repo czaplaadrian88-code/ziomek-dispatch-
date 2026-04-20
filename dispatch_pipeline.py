@@ -664,6 +664,24 @@ def assess_order(
 
         final_score = score_result["total"] + bundle_bonus + timing_gap_bonus + wave_bonus + bonus_penalty_sum
 
+        # V3.19e Opcja B — R1' observability only, zero behavior change.
+        # Dla propozycji z synthetic pos=last_assigned_pickup (kurier w drodze
+        # do restauracji X) loguj hypothetical metric: czy floor drive_min >=
+        # pickup_ready_delta_min by zmienił scoring? Raw pos_source (przed
+        # post_wave override L654-663), bo post_wave zaciera sygnał.
+        _pos_raw = getattr(cs, "pos_source", None)
+        v319e_r1_prime_hypothetical = None
+        if _pos_raw == "last_assigned_pickup":
+            _drive_m = round(drive_min, 1)
+            _ready_delta = round(time_to_pickup_ready, 1) if time_to_pickup_ready is not None else 0.0
+            v319e_r1_prime_hypothetical = {
+                "pos_source_raw": _pos_raw,
+                "drive_min": _drive_m,
+                "pickup_ready_delta_min": _ready_delta,
+                "would_trigger_floor": _drive_m < _ready_delta,
+                "hypothetical_min_eta_min": max(_drive_m, _ready_delta),
+            }
+
         enriched_metrics = {
             **metrics,
             "score": score_result,
@@ -718,6 +736,9 @@ def assess_order(
                 for b in bag_raw
                 if b.get("order_id")
             ],
+            # V3.19e Opcja B: R1' observability (None gdy pos!=last_assigned_pickup).
+            # Post 5 dni shadow: jeśli would_trigger_floor rate >5% → V3.19f floor impl.
+            "v319e_r1_prime_hypothetical": v319e_r1_prime_hypothetical,
         }
 
         candidates.append(Candidate(
