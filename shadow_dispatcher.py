@@ -157,6 +157,10 @@ def _serialize_candidate(c) -> dict:
         },
         # Transparency OPCJA A (2026-04-19): bag snapshot for route section mapping
         "bag_context": m.get("bag_context"),
+        # V3.19e Opcja B R1' observability (2026-04-20): None gdy pos != last_assigned_pickup.
+        # Pole dodane do enriched_metrics w dispatch_pipeline, MUSI być propagowane
+        # przez serializer żeby trafiło do learning_log. (Serializer gap V3.19e step 4.)
+        "v319e_r1_prime_hypothetical": m.get("v319e_r1_prime_hypothetical"),
     }
 
 
@@ -262,6 +266,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
                 "pickup_at": _serialize_dt_map(best.plan.pickup_at),
             },
             "bag_context": best_m.get("bag_context"),
+            # V3.19e Opcja B R1' observability (2026-04-20) — patrz _serialize_candidate.
+            "v319e_r1_prime_hypothetical": best_m.get("v319e_r1_prime_hypothetical"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]
