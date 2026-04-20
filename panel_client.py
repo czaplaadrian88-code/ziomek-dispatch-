@@ -26,7 +26,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time as _time, timedelta
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -286,7 +286,30 @@ def fetch_order_details(zid: str, csrf: Optional[str] = None) -> Optional[dict]:
             },
         )
         raw = _open_with_relogin(req, timeout=10).read().decode("utf-8", errors="replace")
-        return json.loads(raw).get("zlecenie")
+        _parsed = json.loads(raw)
+        _zlecenie = _parsed.get("zlecenie")
+        if isinstance(_zlecenie, dict):
+            # V3.19f FIX Finding #1 (2026-04-20): poprzednia wersja zwracała
+            # wyłącznie raw.get("zlecenie"), wywalając top-level klucze. Panel
+            # trzyma czas_kuriera (HH:MM declared courier arrival) na poziomie
+            # response sibling do "zlecenie". Invisible data loss od V1 pipeline.
+            # Fix: merge wszystkich top-level kluczy (oprócz "zlecenie") do
+            # returned dict, żeby downstream normalize_order miał dostęp.
+            # TECH_DEBT rule (2026-04-20): parse wrapper layer loguje unhandled
+            # top-level keys — invisible data loss kosztowniejszy niż verbose log.
+            _known_top = {"zlecenie"}
+            _handled = {"czas_kuriera"}  # explicitly propagate
+            for _k, _v in _parsed.items():
+                if _k in _known_top:
+                    continue
+                if _k in _handled:
+                    _zlecenie[_k] = _v
+                else:
+                    _log.debug(
+                        f"fetch_order_details({zid}): unhandled top-level key "
+                        f"'{_k}' (type={type(_v).__name__})"
+                    )
+        return _zlecenie
     except urllib.error.HTTPError as he:
         _log.warning(f"fetch_order_details({zid}): HTTP {he.code}")
         return None
@@ -303,6 +326,53 @@ def _parse_warsaw_naive(s: Optional[str]) -> Optional[datetime]:
         return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=WARSAW_TZ)
     except Exception:
         return None
+
+
+def _czas_kuriera_to_datetime(
+    hhmm: Optional[str],
+    pickup_at_warsaw: Optional[datetime],
+    now_warsaw: Optional[datetime] = None,
+) -> Optional[datetime]:
+    """V3.19f: panel HH:MM → Warsaw-aware datetime.
+
+    Panel zwraca czas_kuriera jako string HH:MM (np. "17:10"). Aby
+    zamienić na pełen datetime, bierze date-component z pickup_at_warsaw
+    (primary anchor), fallback today Warsaw.
+
+    6h wraparound guard:
+      - candidate.delta_hours(anchor) < -6 → wraparound forward (+1 dzień)
+        np. HH:MM="00:15" + pickup=23:45 poprzedniego dnia → następny dzień
+      - candidate.delta_hours(anchor) > +6 → wraparound backward (-1 dzień)
+        np. HH:MM="23:45" + pickup=00:15 następnego dnia → poprzedni dzień
+
+    Returns Warsaw-aware datetime, albo None gdy parse fail / out-of-range.
+    """
+    if not hhmm or not isinstance(hhmm, str) or ":" not in hhmm:
+        return None
+    try:
+        _parts = hhmm.strip().split(":")
+        h = int(_parts[0])
+        m = int(_parts[1])
+    except (ValueError, TypeError, IndexError):
+        return None
+    if not (0 <= h < 24 and 0 <= m < 60):
+        return None
+
+    anchor = pickup_at_warsaw or now_warsaw or datetime.now(WARSAW_TZ)
+    if anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=WARSAW_TZ)
+    else:
+        anchor = anchor.astimezone(WARSAW_TZ)
+
+    candidate = datetime.combine(
+        anchor.date(), _time(h, m), tzinfo=WARSAW_TZ
+    )
+    delta_hours = (candidate - anchor).total_seconds() / 3600.0
+    if delta_hours < -6:
+        candidate = candidate + timedelta(days=1)
+    elif delta_hours > 6:
+        candidate = candidate - timedelta(days=1)
+    return candidate
 
 
 def _parse_utc(s: Optional[str]) -> Optional[datetime]:
@@ -337,6 +407,16 @@ def normalize_order(
     pickup_at = _parse_warsaw_naive(raw.get("czas_odbioru_timestamp"))
     created_at_utc = _parse_utc(raw.get("created_at"))
     decision_deadline = _parse_warsaw_naive(raw.get("czas_na_decyzje_timestamp"))
+
+    # V3.19f: czas_kuriera (top-level HH:MM) → pełny Warsaw datetime.
+    # Panel trzyma declared courier arrival time jako "17:10" string.
+    # Anchor date z pickup_at (primary), fallback today Warsaw.
+    # Zachowaj raw HH:MM (czas_kuriera_hhmm) dla debug/audit + sanity
+    # check przy persist (state_machine weryfikuje strftime==raw).
+    czas_kuriera_raw = raw.get("czas_kuriera")
+    czas_kuriera_dt = _czas_kuriera_to_datetime(
+        czas_kuriera_raw, pickup_at, datetime.now(WARSAW_TZ)
+    )
 
     try:
         prep_minutes = int(raw.get("czas_odbioru") or 0)
@@ -392,6 +472,10 @@ def normalize_order(
         "pickup_at_epoch": pickup_at.timestamp() if pickup_at else None,
         "minutes_to_pickup": round(minutes_to_pickup, 1) if minutes_to_pickup is not None else None,
         "prep_minutes": prep_minutes,
+        # V3.19f: czas_kuriera — dwa pola (raw HH:MM + ISO Warsaw).
+        # Consumer (dispatch_pipeline) pod flagą ENABLE_CZAS_KURIERA_PROPAGATION.
+        "czas_kuriera_hhmm": czas_kuriera_raw if isinstance(czas_kuriera_raw, str) else None,
+        "czas_kuriera_warsaw": czas_kuriera_dt.isoformat() if czas_kuriera_dt else None,
         "created_at_utc": created_at_utc.isoformat() if created_at_utc else None,
         "age_minutes": round(age_minutes, 1) if age_minutes is not None else None,
         "decision_deadline": decision_deadline.isoformat() if decision_deadline else None,

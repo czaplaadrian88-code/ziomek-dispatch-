@@ -17,6 +17,36 @@ grep -rn --include=\*.py --exclude=common.py --exclude=\*.bak\* <FLAG_NAME> .
 ```
 Jeśli grep zwraca tylko `tests/` albo pusto → dodaj `_PLANNED` suffix.
 
+### Parse wrapper layer: log unhandled top-level keys
+Parse wrappery (panel_client, gps_client, etc.) które projektują PODZBIÓR pól
+z API response MUSZĄ logować unhandled top-level keys (debug level wystarczy).
+Invisible data loss jest kosztowniejszy niż verbose log — precedens: Finding #1
+V3.19f (`panel_client.fetch_order_details:289` zwracał `raw.get("zlecenie")` i
+wywalał top-level `czas_kuriera` przez całą historię pipeline, blokując
+czas_kuriera propagation do decision-making).
+
+Wzorzec (panel_client.fetch_order_details po V3.19f):
+```python
+_known_top = {"zlecenie"}        # expected, handled elsewhere
+_handled = {"czas_kuriera"}       # explicitly propagated
+for k, v in parsed.items():
+    if k in _known_top: continue
+    if k in _handled: zlecenie[k] = v
+    else: _log.debug(f"unhandled top-level key '{k}'")
+```
+
+### Deferred tickets
+
+#### V3.19g — przedłużenia czas_kuriera trigger plan invalidation (deferred)
+Gdy panel zmienia `czas_kuriera` po COURIER_ASSIGNED (np. coordinator "+15min"
+button), courier_plans.json saved plan dla danego cid może mieć stale predicted
+times. V3.19f zapisuje update przy kolejnym COURIER_ASSIGNED emit, ale plan nie
+jest invalidated reactively. Full handling wymaga analizy:
+- V3.19b plan_manager write hooks (invalidate_plan gdy pickup_ready zmienione?)
+- V3.19d sticky sequence race conditions (re-run simulator gdy pickup_ready shift)
+- Koszt implementacji 3-4h + regression risk na V3.19b/d stack.
+**Priority:** low. Podnieść gdy V3.19f stable 2 tyg + metric pokazuje potrzebę.
+
 ## 2026-04-20 — pre-peak sesja
 
 ### P0 — GPS BACKGROUND TRACKING BROKEN (priorytet najwyższy)
