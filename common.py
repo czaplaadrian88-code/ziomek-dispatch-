@@ -485,3 +485,24 @@ try:
     OVERLOAD_PENALTY = float(_os.environ.get("OVERLOAD_PENALTY", "-20.0"))
 except (ValueError, TypeError):
     OVERLOAD_PENALTY = -20.0
+
+# ============================================================
+# V3.19f — czas_kuriera propagation (2026-04-20)
+# ============================================================
+# Panel HTML kolumna "Kurier czas" (raw top-level czas_kuriera, HH:MM)
+# deklaruje commitment pickup time kuriera. Przed V3.19f panel_client
+# odrzucał to pole (fetch_order_details zwracał tylko raw.zlecenie).
+# Pipeline używał pickup_at_warsaw (=created+prep) jako surogatu — różnice
+# 20-30 min dla czasówek z "przedłużeniem" (panel +15min button).
+#
+# V3.19f Step 2+3: parse + persist ZAWSZE (niezależnie od flagi) — dane
+# w orders_state.czas_kuriera_warsaw + czas_kuriera_hhmm dla shadow
+# observability. Pipeline consumer pod flagą (dark launch pattern).
+#
+# Default False → parse+persist aktywne, dispatch używa pickup_at_warsaw
+# jak pre-V3.19f. Flip na True po ≥5 dniach stable shadow + walidacji
+# offline że czas_kuriera_warsaw dane są sensowne.
+# Env kill-switch: ENABLE_CZAS_KURIERA_PROPAGATION=1.
+# ============================================================
+ENABLE_CZAS_KURIERA_PROPAGATION = _os.environ.get(
+    "ENABLE_CZAS_KURIERA_PROPAGATION", "0") == "1"

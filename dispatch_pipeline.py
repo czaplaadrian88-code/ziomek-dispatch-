@@ -18,7 +18,13 @@ from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2, DWELL_PICKUP_M
 from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2 import scoring
 from dispatch_v2 import common as C
-from dispatch_v2.common import parse_panel_timestamp, WARSAW, HAVERSINE_ROAD_FACTOR_BIALYSTOK, get_fallback_speed_kmh
+from dispatch_v2.common import (
+    parse_panel_timestamp,
+    WARSAW,
+    HAVERSINE_ROAD_FACTOR_BIALYSTOK,
+    get_fallback_speed_kmh,
+    ENABLE_CZAS_KURIERA_PROPAGATION,
+)
 from dispatch_v2.osrm_client import haversine
 from dispatch_v2.bag_state import build_courier_bag_state, CourierBagState
 from dispatch_v2.fleet_context import build_fleet_context, FleetContext
@@ -165,7 +171,16 @@ def _bag_dict_to_order_in_bag_raw(d: dict) -> dict:
     """
     str_status = d.get("status", "assigned")
     int_status = 5 if str_status == "picked_up" else 3
-    pickup_t = parse_panel_timestamp(d.get("pickup_at_warsaw")) or parse_panel_timestamp(d.get("czas_odbioru_timestamp"))
+    # V3.19f: czas_kuriera_warsaw first-choice pod flagą (panel commitment HH:MM
+    # declared arrival). Fallback chain: pickup_at_warsaw → czas_odbioru_timestamp.
+    pickup_t = None
+    if ENABLE_CZAS_KURIERA_PROPAGATION:
+        pickup_t = parse_panel_timestamp(d.get("czas_kuriera_warsaw"))
+    if pickup_t is None:
+        pickup_t = (
+            parse_panel_timestamp(d.get("pickup_at_warsaw"))
+            or parse_panel_timestamp(d.get("czas_odbioru_timestamp"))
+        )
     added = parse_panel_timestamp(d.get("assigned_at")) or parse_panel_timestamp(d.get("created_at"))
     return {
         "order_id": str(d.get("order_id") or d.get("id") or ""),
@@ -205,7 +220,13 @@ def _build_fleet_context_from_snapshot(
 
 def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     picked = parse_panel_timestamp(d.get("picked_up_at"))
-    pra = parse_panel_timestamp(d.get("pickup_at_warsaw"))  # F2.1c R8 T_KUR
+    # V3.19f: czas_kuriera_warsaw first-choice dla pickup_ready_at (F2.1c R8 T_KUR).
+    # Fallback do pickup_at_warsaw (pre-V3.19f behavior) gdy flaga False albo brak.
+    pra = None
+    if ENABLE_CZAS_KURIERA_PROPAGATION:
+        pra = parse_panel_timestamp(d.get("czas_kuriera_warsaw"))
+    if pra is None:
+        pra = parse_panel_timestamp(d.get("pickup_at_warsaw"))
     status = d.get("status", "assigned")
     pickup_c = d.get("pickup_coords") or (0.0, 0.0)
     deliv_c = d.get("delivery_coords") or (0.0, 0.0)
@@ -273,8 +294,24 @@ def assess_order(
     pickup_coords = tuple(order_event.get("pickup_coords") or (0.0, 0.0))
     delivery_coords = tuple(order_event.get("delivery_coords") or (0.0, 0.0))
 
-    pickup_at_raw = order_event.get("pickup_at_warsaw") or order_event.get("pickup_at")
+    # V3.19f: czas_kuriera_warsaw first-choice pod flagą (panel HH:MM commitment).
+    # Fallback do pickup_at_warsaw (pre-V3.19f behavior) gdy flaga False albo brak.
+    pickup_at_raw = None
+    _ck_used = False
+    if ENABLE_CZAS_KURIERA_PROPAGATION:
+        _ck_warsaw = order_event.get("czas_kuriera_warsaw")
+        if _ck_warsaw:
+            pickup_at_raw = _ck_warsaw
+            _ck_used = True
+    if pickup_at_raw is None:
+        pickup_at_raw = order_event.get("pickup_at_warsaw") or order_event.get("pickup_at")
     pickup_at = parse_panel_timestamp(pickup_at_raw) if pickup_at_raw else None
+    if _ck_used and pickup_at is not None:
+        log.debug(
+            f"V3.19f: pickup_ready_at=czas_kuriera={pickup_at_raw} "
+            f"(vs pickup_at_warsaw={order_event.get('pickup_at_warsaw')}) "
+            f"oid={order_id}"
+        )
 
     # Early bird → KOORD
     if pickup_at is not None:
@@ -739,6 +776,11 @@ def assess_order(
             # V3.19e Opcja B: R1' observability (None gdy pos!=last_assigned_pickup).
             # Post 5 dni shadow: jeśli would_trigger_floor rate >5% → V3.19f floor impl.
             "v319e_r1_prime_hypothetical": v319e_r1_prime_hypothetical,
+            # V3.19f: czas_kuriera 2-field passthrough z order_event do enriched_metrics.
+            # Shadow serializer (Step 5) propaguje do shadow_decisions.jsonl dla offline
+            # diagnostyki rozjazdu HH:MM vs ISO (sanity check w state layer).
+            "czas_kuriera_warsaw": order_event.get("czas_kuriera_warsaw"),
+            "czas_kuriera_hhmm": order_event.get("czas_kuriera_hhmm"),
         }
 
         candidates.append(Candidate(
