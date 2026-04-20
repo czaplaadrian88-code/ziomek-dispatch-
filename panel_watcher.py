@@ -354,6 +354,10 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             "address_id": _aid_str,
             "pickup_coords": list(_pcoords) if _pcoords else None,
             "delivery_coords": list(_dcoords) if _dcoords else None,
+            # V3.19f: czas_kuriera 2-field propagation (Step 5 emit layer).
+            # Parse+persist zawsze (niezależnie od flagi). Pipeline consume pod flagą.
+            "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
+            "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
         }
 
         # Deterministyczny event_id: {order_id}_NEW_ORDER_first_seen (bez timestamp - raz na zycie)
@@ -377,11 +381,18 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         # Jesli nowe i juz przypisane do kuriera od razu - emit ASSIGNED
         if norm["id_kurier"] and not norm["is_koordynator"]:
             courier_id = str(norm["id_kurier"])
+            # V3.19f: initial-assign payload z czas_kuriera (norm świeży).
+            _assigned_payload = {
+                "assigned_at": now_iso(),
+                "source": "panel_initial",
+                "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
+                "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
+            }
             assigned_event = emit(
                 "COURIER_ASSIGNED",
                 order_id=zid,
                 courier_id=courier_id,
-                payload={"assigned_at": now_iso(), "source": "panel_initial"},
+                payload=_assigned_payload,
                 event_id=f"{zid}_COURIER_ASSIGNED_{courier_id}_initial",
             )
             if assigned_event:
@@ -390,7 +401,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "event_type": "COURIER_ASSIGNED",
                     "order_id": zid,
                     "courier_id": courier_id,
-                    "payload": {"source": "panel_initial"},
+                    "payload": _assigned_payload,
                 })
                 _check_panel_override(zid, courier_id, "panel_initial")
                 _save_plan_on_assign(zid, courier_id)

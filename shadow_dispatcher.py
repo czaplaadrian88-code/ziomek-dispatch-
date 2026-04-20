@@ -161,6 +161,10 @@ def _serialize_candidate(c) -> dict:
         # Pole dodane do enriched_metrics w dispatch_pipeline, MUSI być propagowane
         # przez serializer żeby trafiło do learning_log. (Serializer gap V3.19e step 4.)
         "v319e_r1_prime_hypothetical": m.get("v319e_r1_prime_hypothetical"),
+        # V3.19f: czas_kuriera 2-pole — ISO Warsaw + raw HH:MM. Serializujemy OBA
+        # dla offline diagnostyki rozjazdu (sanity check w state_machine).
+        "czas_kuriera_warsaw": m.get("czas_kuriera_warsaw"),
+        "czas_kuriera_hhmm": m.get("czas_kuriera_hhmm"),
     }
 
 
@@ -268,6 +272,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "bag_context": best_m.get("bag_context"),
             # V3.19e Opcja B R1' observability (2026-04-20) — patrz _serialize_candidate.
             "v319e_r1_prime_hypothetical": best_m.get("v319e_r1_prime_hypothetical"),
+            # V3.19f: czas_kuriera OBA pola (ISO + raw HH:MM) — patrz _serialize_candidate.
+            "czas_kuriera_warsaw": best_m.get("czas_kuriera_warsaw"),
+            "czas_kuriera_hhmm": best_m.get("czas_kuriera_hhmm"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]
@@ -302,6 +309,10 @@ def process_event(
         "delivery_coords": payload.get("delivery_coords"),
         "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
         "pickup_time_minutes": payload.get("pickup_time_minutes"),
+        # V3.19f: czas_kuriera passthrough z payload do order_event dla
+        # dispatch_pipeline consumer (pod flagą ENABLE_CZAS_KURIERA_PROPAGATION).
+        "czas_kuriera_warsaw": payload.get("czas_kuriera_warsaw"),
+        "czas_kuriera_hhmm": payload.get("czas_kuriera_hhmm"),
     }
     return assess_order(order_event, fleet, meta, now=now)
 
