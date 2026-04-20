@@ -17,8 +17,69 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import load_config, now_iso, setup_logger
+
+
+class CorruptedTimestampError(ValueError):
+    """V3.19f: HH:MM string nie zgadza się z ISO datetime po parse.
+
+    Wykrywane przez _verify_czas_kuriera_consistency:
+      assert warsaw_dt.strftime("%H:%M") == raw_hhmm
+    Jeśli False → log ERROR + skip persist + raise ten wyjątek.
+
+    Sygnał korupcji parsera (panel_client._czas_kuriera_to_datetime edge
+    case, malformed input, albo downstream corruption). Lepiej fail-fast
+    niż tichy persist bzdury do orders_state.
+    """
+    pass
+
+
+def _verify_czas_kuriera_consistency(
+    warsaw_iso: Optional[str],
+    raw_hhmm: Optional[str],
+    oid: str,
+) -> bool:
+    """V3.19f sanity: ISO strftime('%H:%M') MUSI == raw HH:MM.
+
+    Zwraca True gdy consistency OK albo oba pola None (no-op).
+    Zwraca False + log ERROR gdy mismatch — caller powinien skip persist
+    i raise CorruptedTimestampError.
+
+    Edge cases:
+    - oba None → True (nic do weryfikacji)
+    - tylko jedno None → False (partial data, zły sygnał)
+    - ISO parse fail → False (corrupted)
+    - wraparound OK: strftime('%H:%M') daje tę samą godzinę niezależnie
+      od zmienionej daty (+1/-1 day), więc sanity check is stabilny pod
+      6h wraparound guard z V3.19f parse layer.
+    """
+    if warsaw_iso is None and raw_hhmm is None:
+        return True
+    if warsaw_iso is None or raw_hhmm is None:
+        _log.error(
+            f"CZAS_KURIERA partial data for oid={oid}: "
+            f"warsaw_iso={warsaw_iso!r} hhmm={raw_hhmm!r}"
+        )
+        return False
+    try:
+        dt = datetime.fromisoformat(warsaw_iso)
+    except (ValueError, TypeError) as e:
+        _log.error(
+            f"CZAS_KURIERA ISO parse fail for oid={oid}: "
+            f"warsaw_iso={warsaw_iso!r} err={e}"
+        )
+        return False
+    expected = dt.strftime("%H:%M")
+    if expected != raw_hhmm:
+        _log.error(
+            f"CZAS_KURIERA MISMATCH for oid={oid}: "
+            f"ISO→HH:MM={expected!r} != raw_hhmm={raw_hhmm!r} "
+            f"(warsaw_iso={warsaw_iso})"
+        )
+        return False
+    return True
 
 # Zamkniete statusy zlecenia
 ORDER_STATUSES = {
@@ -176,6 +237,34 @@ def update_from_event(event: dict) -> Optional[dict]:
         return None
 
     if etype == "NEW_ORDER":
+        # V3.19f: sanity check czas_kuriera consistency przed persist.
+        ck_iso = payload.get("czas_kuriera_warsaw")
+        ck_hhmm = payload.get("czas_kuriera_hhmm")
+        if not _verify_czas_kuriera_consistency(ck_iso, ck_hhmm, oid):
+            # Skip persist czas_kuriera fields; log ERROR w helper; raise signal.
+            # Inne pola persistowane bez zmian (order dalej trafia do state).
+            ck_iso = None
+            ck_hhmm = None
+            _result = upsert_order(oid, {
+                "status": "planned",
+                "commitment_level": "planned",
+                "restaurant": payload.get("restaurant"),
+                "pickup_address": payload.get("pickup_address"),
+                "delivery_address": payload.get("delivery_address"),
+                "pickup_time_minutes": payload.get("pickup_time_minutes"),
+                "first_seen": payload.get("first_seen", now_iso()),
+                "address_id": payload.get("address_id"),
+                "pickup_coords": payload.get("pickup_coords"),
+                "delivery_coords": payload.get("delivery_coords"),
+                "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
+                "prep_minutes": payload.get("prep_minutes"),
+                "order_type": payload.get("order_type"),
+                "bag_time_alerted": False,
+            }, event="NEW_ORDER")
+            raise CorruptedTimestampError(
+                f"NEW_ORDER {oid}: czas_kuriera sanity fail, "
+                f"persisted bez czas_kuriera fields"
+            )
         return upsert_order(oid, {
             "status": "planned",
             "commitment_level": "planned",
@@ -190,18 +279,39 @@ def update_from_event(event: dict) -> Optional[dict]:
             "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
             "prep_minutes": payload.get("prep_minutes"),
             "order_type": payload.get("order_type"),
+            # V3.19f: czas_kuriera 2-field persist (ISO Warsaw + raw HH:MM).
+            "czas_kuriera_warsaw": ck_iso,
+            "czas_kuriera_hhmm": ck_hhmm,
             "bag_time_alerted": False,  # F2.1b step 5: R6 pre-warning gate init
         }, event="NEW_ORDER")
 
     if etype == "COURIER_ASSIGNED":
-        return upsert_order(oid, {
+        # V3.19f: update czas_kuriera przy re-assignment (panel "+15min" button
+        # może zmienić commitment). Sanity check przed update.
+        ck_iso = payload.get("czas_kuriera_warsaw")
+        ck_hhmm = payload.get("czas_kuriera_hhmm")
+        merged = {
             "status": "assigned",
             "commitment_level": "assigned",
             "courier_id": event.get("courier_id"),
             "assigned_at": now_iso(),
             "proposed_delivery_time": payload.get("proposed_time"),
             "bag_time_alerted": False,  # F2.1b step 5: reset on new assignment / reassignment
-        }, event="COURIER_ASSIGNED")
+        }
+        if ck_iso is not None or ck_hhmm is not None:
+            if _verify_czas_kuriera_consistency(ck_iso, ck_hhmm, oid):
+                merged["czas_kuriera_warsaw"] = ck_iso
+                merged["czas_kuriera_hhmm"] = ck_hhmm
+                _result = upsert_order(oid, merged, event="COURIER_ASSIGNED")
+                return _result
+            else:
+                # Skip persist czas_kuriera; log ERROR done; raise after upsert.
+                _result = upsert_order(oid, merged, event="COURIER_ASSIGNED")
+                raise CorruptedTimestampError(
+                    f"COURIER_ASSIGNED {oid}: czas_kuriera sanity fail, "
+                    f"persisted bez czas_kuriera update"
+                )
+        return upsert_order(oid, merged, event="COURIER_ASSIGNED")
 
     if etype == "COURIER_PICKED_UP":
         # F2.1b step 5: CELOWO NIE resetujemy bag_time_alerted tutaj.
