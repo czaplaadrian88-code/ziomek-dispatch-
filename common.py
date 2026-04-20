@@ -474,7 +474,7 @@ except (ValueError, TypeError):
 # Env kill-switch: ENABLE_V319E_PRE_PICKUP_BAG=1.
 # ============================================================
 ENABLE_V319E_PRE_PICKUP_BAG = _os.environ.get(
-    "ENABLE_V319E_PRE_PICKUP_BAG", "0") == "1"
+    "ENABLE_V319E_PRE_PICKUP_BAG", "1") == "1"
 
 # Overload threshold: bag > fleet_avg + this → score penalty
 try:
@@ -505,4 +505,4 @@ except (ValueError, TypeError):
 # Env kill-switch: ENABLE_CZAS_KURIERA_PROPAGATION=1.
 # ============================================================
 ENABLE_CZAS_KURIERA_PROPAGATION = _os.environ.get(
-    "ENABLE_CZAS_KURIERA_PROPAGATION", "0") == "1"
+    "ENABLE_CZAS_KURIERA_PROPAGATION", "1") == "1"
