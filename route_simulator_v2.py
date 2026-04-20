@@ -21,7 +21,11 @@ from dataclasses import dataclass
 from itertools import permutations
 
 from dispatch_v2 import osrm_client
-from dispatch_v2.common import ENABLE_DROP_TIME_CONSTRAINT, ENABLE_PICKED_UP_DROP_FLOOR
+from dispatch_v2.common import (
+    ENABLE_DROP_TIME_CONSTRAINT,
+    ENABLE_PICKED_UP_DROP_FLOOR,
+    ENABLE_V319E_PRE_PICKUP_BAG,
+)
 
 
 DWELL_PICKUP_MIN = 2.0
@@ -75,10 +79,19 @@ def simulate_bag_route_v2(
 
     need_pickup = new_order.status != "picked_up"
 
-    # Build node list: [courier, *bag_deliveries, (new_pickup?), new_delivery]
+    # Build node list: [courier, *bag_nodes, (new_pickup?), new_delivery]
+    # V3.19e: dla bag items z status!="picked_up" (pickup jeszcze nie nastąpił),
+    # simulator dodaje pickup-node przed delivery-node. Gated przez flagę.
     nodes: List[dict] = [{"kind": "courier", "coords": courier_pos, "order_id": None, "ref": None}]
     bag_delivery_idxs: List[int] = []
+    bag_pickup_idxs_by_oid: Dict[str, int] = {}  # V3.19e: {oid: pickup_node_idx} only dla pending bag items
     for o in bag:
+        if ENABLE_V319E_PRE_PICKUP_BAG and getattr(o, "status", "picked_up") != "picked_up":
+            nodes.append({
+                "kind": "pickup", "coords": o.pickup_coords,
+                "order_id": o.order_id, "ref": o,
+            })
+            bag_pickup_idxs_by_oid[o.order_id] = len(nodes) - 1
         nodes.append({"kind": "delivery", "coords": o.delivery_coords, "order_id": o.order_id, "ref": o})
         bag_delivery_idxs.append(len(nodes) - 1)
 
@@ -104,9 +117,13 @@ def simulate_bag_route_v2(
 
     # V3.19d: sticky sequence path — bag order locked by saved plan.
     # Validation: set(base_sequence) == {bag order_ids}. Mismatch → fallback.
+    # V3.19e: fallback do fresh TSP gdy bag ma pending items (pickup nodes
+    # wymagają permutacji — nie można lock'ować sekwencji dropów bez
+    # uwzględnienia pickup-positions).
     use_sticky = False
     sticky_bag_idxs: Optional[List[int]] = None
-    if base_sequence is not None and bag:
+    has_pending_bag = bool(bag_pickup_idxs_by_oid)
+    if base_sequence is not None and bag and not has_pending_bag:
         bag_oid_to_idx = {o.order_id: bag_delivery_idxs[i] for i, o in enumerate(bag)}
         if set(base_sequence) == set(bag_oid_to_idx.keys()) \
                 and len(base_sequence) == len(bag_oid_to_idx):
@@ -125,6 +142,7 @@ def simulate_bag_route_v2(
     elif bag_after_add <= BRUTEFORCE_MAX_BAG_AFTER:
         plan = _bruteforce_plan(
             nodes, leg_min, bag_delivery_idxs,
+            bag_pickup_idxs_by_oid,
             new_pickup_idx, new_delivery_idx,
             new_order, bag, now, sla_minutes,
         )
@@ -132,6 +150,7 @@ def simulate_bag_route_v2(
     else:
         plan = _greedy_plan(
             nodes, leg_min, bag_delivery_idxs,
+            bag_pickup_idxs_by_oid,
             new_pickup_idx, new_delivery_idx,
             new_order, bag, now, sla_minutes,
         )
@@ -339,30 +358,50 @@ def _plan_from_sequence(
 
 def _bruteforce_plan(
     nodes, leg_min, bag_delivery_idxs,
+    bag_pickup_idxs_by_oid,
     new_pickup_idx, new_delivery_idx,
     new_order, bag, now, sla_minutes,
 ) -> RoutePlanV2:
+    # V3.19e: to_place uwzględnia pickup-nodes dla pending bag items.
     to_place: List[int] = list(bag_delivery_idxs) + [new_delivery_idx]
     if new_pickup_idx is not None:
         to_place.append(new_pickup_idx)
+    to_place.extend(bag_pickup_idxs_by_oid.values())
 
-    # Lock first stop: gdy kurier wiezie jedzenie (bag niepusty), pierwszy
-    # node MUSI być dostarczeniem czegoś z baga — żadnych zawrotów do nowej
-    # restauracji z jedzeniem w torbie. Bag items są w simulatorze traktowane
-    # jako już picked_up (nie mają pickup nodes).
-    bag_set = set(bag_delivery_idxs)
-    lock_first = bool(bag_set)
+    # Mapping delivery_idx → pickup_idx dla ordinances z pickup-before-delivery:
+    #  - pending bag items (V3.19e): (pickup_idx, delivery_idx) par z bag_pickup_idxs_by_oid
+    #  - new_order jeśli need_pickup: (new_pickup_idx, new_delivery_idx)
+    delivery_to_pickup: Dict[int, int] = {}
+    for d_idx in bag_delivery_idxs:
+        oid = nodes[d_idx]["order_id"]
+        if oid in bag_pickup_idxs_by_oid:
+            delivery_to_pickup[d_idx] = bag_pickup_idxs_by_oid[oid]
+    if new_pickup_idx is not None:
+        delivery_to_pickup[new_delivery_idx] = new_pickup_idx
+
+    # Lock first stop: gdy kurier wiezie jedzenie (picked_up drops w bagu),
+    # pierwszy node MUSI być dostarczeniem picked_up item — żadnych zawrotów
+    # do nowej restauracji z jedzeniem w torbie. V3.19e: pending bag drops
+    # NIE liczą się jako "jedzenie w torbie" (kurier go jeszcze nie ma).
+    picked_up_drop_set = {
+        d_idx for d_idx in bag_delivery_idxs
+        if nodes[d_idx]["order_id"] not in bag_pickup_idxs_by_oid
+    }
+    lock_first = bool(picked_up_drop_set)
 
     best: Optional[RoutePlanV2] = None
     best_key = (10 ** 9, float("inf"))
     for perm in permutations(to_place):
-        if lock_first and perm[0] not in bag_set:
+        if lock_first and perm[0] not in picked_up_drop_set:
             continue
-        if new_pickup_idx is not None:
-            pi = perm.index(new_pickup_idx)
-            di = perm.index(new_delivery_idx)
-            if pi > di:
-                continue
+        # Pickup-before-delivery dla każdej pary (new_order + pending bag items)
+        valid = True
+        for d_idx, p_idx in delivery_to_pickup.items():
+            if perm.index(p_idx) > perm.index(d_idx):
+                valid = False
+                break
+        if not valid:
+            continue
         plan = _plan_from_sequence(list(perm), nodes, leg_min, new_order, bag, now, sla_minutes)
         key = (plan.sla_violations, plan.total_duration_min)
         if key < best_key:
@@ -373,12 +412,25 @@ def _bruteforce_plan(
 
 def _greedy_plan(
     nodes, leg_min, bag_delivery_idxs,
+    bag_pickup_idxs_by_oid,
     new_pickup_idx, new_delivery_idx,
     new_order, bag, now, sla_minutes,
 ) -> RoutePlanV2:
-    # Step 1: nearest-neighbor ordering of existing bag starting from courier.
+    # V3.19e: rozdziel picked_up (already-picked) od pending (pickup needed).
+    picked_up_deliv = [
+        i for i in bag_delivery_idxs
+        if nodes[i]["order_id"] not in bag_pickup_idxs_by_oid
+    ]
+    pending_pairs = [
+        (bag_pickup_idxs_by_oid[nodes[i]["order_id"]], i)
+        for i in bag_delivery_idxs
+        if nodes[i]["order_id"] in bag_pickup_idxs_by_oid
+    ]  # [(pickup_idx, delivery_idx), ...]
+
+    # Step 1: NN ordering przez picked_up deliveries z courier pos.
+    # Pending items insertowane w Step 1.5 razem z pickup-nodami.
     seq_base: List[int] = []
-    remaining = list(bag_delivery_idxs)
+    remaining = list(picked_up_deliv)
     current = 0
     while remaining:
         nxt = min(remaining, key=lambda idx: leg_min(current, idx))
@@ -386,9 +438,41 @@ def _greedy_plan(
         remaining.remove(nxt)
         current = nxt
 
+    # lock_first_picked: jeśli bag ma picked_up items, pierwszy node musi być
+    # drop jednego z nich (courier wiezie jedzenie).
+    lock_first_picked = bool(picked_up_deliv)
+
+    # Step 1.5 (V3.19e): dla każdej pending pary (pickup, delivery), znajdź
+    # best (p_pos, d_pos) insertion z constraintem p_pos ≤ d_pos. Commit po
+    # znalezieniu optimum, iteruj dalej. Greedy per-item (nie globalnie optimal,
+    # ale O(k*N^2) zamiast bruteforce).
+    for p_idx, d_idx in pending_pairs:
+        n = len(seq_base)
+        best_insertion: Optional[tuple] = None
+        best_ins_key = (10 ** 9, float("inf"))
+        for d_pos in range(n + 1):
+            for p_pos in range(d_pos + 1):
+                if lock_first_picked and p_pos == 0:
+                    continue
+                candidate = list(seq_base)
+                # insert d first, then p (position p ≤ d → d's final idx nie shift)
+                candidate.insert(d_pos, d_idx)
+                candidate.insert(p_pos, p_idx)
+                plan = _plan_from_sequence(
+                    candidate, nodes, leg_min, new_order, bag, now, sla_minutes
+                )
+                key = (plan.sla_violations, plan.total_duration_min)
+                if key < best_ins_key:
+                    best_ins_key = key
+                    best_insertion = (p_pos, d_pos)
+        if best_insertion is not None:
+            p_pos, d_pos = best_insertion
+            seq_base.insert(d_pos, d_idx)
+            seq_base.insert(p_pos, p_idx)
+
     # Step 2: try every (pickup_pos, delivery_pos) insertion for new_order.
-    # Lock first stop: jeśli bag niepusty, nowy pickup NIE może być przed pierwszą
-    # bagową dostawą (kurier wiezie jedzenie → najpierw dostarcz).
+    # Lock first stop: jeśli bag niepusty (picked_up albo po inserowanych
+    # pending), nowy pickup NIE może być przed pierwszą dostawą.
     lock_first = len(seq_base) > 0
     best: Optional[RoutePlanV2] = None
     best_key = (10 ** 9, float("inf"))

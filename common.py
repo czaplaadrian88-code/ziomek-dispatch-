@@ -457,6 +457,25 @@ try:
 except (ValueError, TypeError):
     GHOST_DETECT_MAX_PER_CYCLE = 5
 
+# ============================================================
+# V3.19e — pre-pickup bag semantics (2026-04-20)
+# ============================================================
+# Bag items z status="assigned" (pickup jeszcze nie nastąpił, kurier w drodze
+# do restauracji lub czeka pod nią) były traktowane przez route_simulator_v2
+# jako już picked_up → tylko drop-node. Efekt: fantazja plan-u dla wave #2
+# assigned orderów (pickup_at brak w planie, fantasy predicted_delivered_at).
+#
+# V3.19e: dla bag items z status="assigned", simulator dodaje pickup-node
+# przed delivery-node. Pickup-before-delivery jako hard constraint (analog
+# new_order need_pickup).
+#
+# Default False → observational shadow mode. Flip na True po ≥5 dniach
+# stable shadow + weryfikacji match rate + PANEL_OVERRIDE trend maleje.
+# Env kill-switch: ENABLE_V319E_PRE_PICKUP_BAG=1.
+# ============================================================
+ENABLE_V319E_PRE_PICKUP_BAG = _os.environ.get(
+    "ENABLE_V319E_PRE_PICKUP_BAG", "0") == "1"
+
 # Overload threshold: bag > fleet_avg + this → score penalty
 try:
     OVERLOAD_THRESHOLD_BAGS = int(_os.environ.get("OVERLOAD_THRESHOLD_BAGS", "2"))
