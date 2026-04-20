@@ -47,6 +47,19 @@ jest invalidated reactively. Full handling wymaga analizy:
 - Koszt implementacji 3-4h + regression risk na V3.19b/d stack.
 **Priority:** low. Podnieść gdy V3.19f stable 2 tyg + metric pokazuje potrzebę.
 
+### V3.19ef systemd timeout fix LIVE (2026-04-20)
+Precedens: V3.19e restart 2026-04-20 17:17 UTC → panel-watcher SIGKILL bo
+default TimeoutStopSec=15s za krótki (fetch_order_details HTTP timeouts +
+cookie jar cleanup wymagają dłużej przy graceful SIGTERM).
+
+Fix (daemon-reload only, zero service restart):
+- `/etc/systemd/system/dispatch-panel-watcher.service`: TimeoutStopSec=15 → 120s.
+- `/etc/systemd/system/dispatch-shadow.service`: explicit TimeoutStopSec=60s
+  (było default 90s; graceful SIGTERM handler shadow loop ze sleep 5s wystarczy
+  mniej niż default).
+- Backup: `/etc/systemd/system/dispatch-*.service.bak-pre-v319ef-timeout`.
+- Nowe timeouty zadziałają przy następnym naturalnym restarcie.
+
 ## 2026-04-20 — pre-peak sesja
 
 ### P0 — GPS BACKGROUND TRACKING BROKEN (priorytet najwyższy)
