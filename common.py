@@ -566,3 +566,179 @@ def bug4_soft_penalty(violation):
     if violation == 3:
         return -120.0
     return -9999.0
+
+
+# ============================================================
+# V3.19h BUG-1 — SR bundle × drop_proximity_factor (2026-04-21)
+# ============================================================
+# Gold tier pattern: SR (same-restaurant) bundle TYLKO gdy drops blisko siebie.
+# Standard tier bierze SR ślepo (Kacper S avg drop_spread 10km). Fix: mnożnik
+# na existing bonus_l1 (same-rest bundle bonus) × drop_proximity_factor.
+#
+# Drop zone = osiedle Białegostoku (28 official z info.bialystok.pl) albo
+# outside-city zone (Choroszcz/Wasilków/Kleosin/Ignatki).
+# Adjacency ground truth z ACK właściciela 2026-04-21.
+#
+# Factor:
+#   1.0 gdy obydwa drops w tej samej strefie
+#   0.5 gdy w sąsiadujących strefach (adjacency map)
+#   0.0 gdy odległe albo Unknown (defensive)
+#
+# Default False — shadow observational.
+# Env kill-switch: ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR=1
+# ============================================================
+from dispatch_v2.districts_data import (
+    BIALYSTOK_DISTRICTS,
+    BIALYSTOK_OUTSIDE_CITY_ZONES,
+)
+
+# Final adjacency per ACK właściciela 2026-04-21 (post-review).
+BIALYSTOK_DISTRICT_ADJACENCY = {
+    # Śródmieście
+    'Centrum':        {'Przydworcowe', 'Piaski', 'Bojary', 'Mickiewicza',
+                       'Piasta II', 'Sienkiewicza', 'Dojlidy'},
+    'Bojary':         {'Centrum', 'Piasta I', 'Piasta II', 'Sienkiewicza',
+                       'Mickiewicza', 'Skorupy'},
+    'Piaski':         {'Centrum', 'Mickiewicza', 'Przydworcowe'},
+    'Mickiewicza':    {'Centrum', 'Dojlidy', 'Kawaleryjskie', 'Piaski',
+                       'Piasta II', 'Skorupy', 'Bojary', 'Dojlidy Górne'},
+    'Sienkiewicza':   {'Wygoda', 'Bojary', 'Centrum', 'Białostoczek',
+                       'Wasilków', 'Jaroszówka'},
+    # E/SE Dojlidy kierunek
+    'Dojlidy':        {'Skorupy', 'Mickiewicza', 'Dojlidy Górne', 'Centrum'},
+    'Dojlidy Górne':  {'Dojlidy', 'Mickiewicza'},
+    'Skorupy':        {'Dojlidy', 'Mickiewicza', 'Piasta I', 'Piasta II', 'Bojary'},
+    'Piasta I':       {'Bojary', 'Piasta II', 'Skorupy', 'Wygoda', 'Jaroszówka'},
+    'Piasta II':      {'Bojary', 'Mickiewicza', 'Centrum', 'Piasta I', 'Skorupy',
+                       'Wygoda', 'Jaroszówka'},
+    # S/SW Kawaleryjskie kierunek
+    'Kawaleryjskie':  {'Nowe Miasto', 'Mickiewicza', 'Bema',
+                       'Kleosin', 'Ignatki-osiedle'},
+    'Nowe Miasto':    {'Kawaleryjskie', 'Bema', 'Kleosin', 'Ignatki-osiedle'},
+    'Przydworcowe':   {'Centrum', 'Bema', 'Piaski'},
+    'Bema':           {'Przydworcowe', 'Kawaleryjskie', 'Nowe Miasto',
+                       'Starosielce', 'Leśna Dolina', 'Zielone Wzgórza',
+                       'Słoneczny Stok'},
+    # N/NE Jaroszówka/Wygoda/Białostoczek
+    'Wygoda':         {'Jaroszówka', 'Sienkiewicza', 'Piasta I', 'Piasta II'},
+    'Jaroszówka':     {'Wygoda', 'Wasilków', 'Sienkiewicza',
+                       'Piasta I', 'Piasta II'},
+    'Białostoczek':   {'Sienkiewicza', 'Antoniuk', 'Zawady',
+                       'Dziesięciny I', 'Dziesięciny II'},
+    # N/NW Antoniuk/Bacieczki cluster
+    'Antoniuk':       {'Młodych', 'Bacieczki', 'Wysoki Stoczek',
+                       'Białostoczek', 'Leśna Dolina', 'Zielone Wzgórza'},
+    'Młodych':        {'Antoniuk', 'Słoneczny Stok', 'Wysoki Stoczek',
+                       'Leśna Dolina', 'Bacieczki', 'Zielone Wzgórza'},
+    'Bacieczki':      {'Zawady', 'Antoniuk', 'Leśna Dolina', 'Wysoki Stoczek',
+                       'Choroszcz', 'Młodych', 'Zielone Wzgórza', 'Słoneczny Stok'},
+    'Wysoki Stoczek': {'Antoniuk', 'Młodych', 'Bacieczki',
+                       'Dziesięciny I', 'Dziesięciny II', 'Zawady'},
+    'Zawady':         {'Bacieczki', 'Białostoczek', 'Wysoki Stoczek',
+                       'Dziesięciny I', 'Dziesięciny II'},
+    'Dziesięciny I':  {'Dziesięciny II', 'Białostoczek', 'Wysoki Stoczek', 'Zawady'},
+    'Dziesięciny II': {'Dziesięciny I', 'Białostoczek', 'Wysoki Stoczek', 'Zawady'},
+    # W Starosielce/Zielone Wzgórza cluster
+    'Starosielce':    {'Zielone Wzgórza', 'Leśna Dolina', 'Słoneczny Stok', 'Bema'},
+    'Leśna Dolina':   {'Starosielce', 'Bacieczki', 'Słoneczny Stok',
+                       'Młodych', 'Antoniuk', 'Zielone Wzgórza', 'Bema'},
+    'Słoneczny Stok': {'Leśna Dolina', 'Młodych', 'Starosielce',
+                       'Zielone Wzgórza', 'Bacieczki', 'Bema'},
+    'Zielone Wzgórza': {'Starosielce', 'Leśna Dolina', 'Bacieczki',
+                        'Słoneczny Stok', 'Młodych', 'Antoniuk', 'Bema'},
+    # Outside-city operational zones
+    'Choroszcz':        {'Bacieczki'},
+    'Wasilków':         {'Jaroszówka', 'Sienkiewicza'},
+    'Kleosin':          {'Ignatki-osiedle', 'Nowe Miasto', 'Kawaleryjskie'},
+    'Ignatki-osiedle':  {'Kleosin', 'Nowe Miasto', 'Kawaleryjskie'},
+}
+
+ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR = _os.environ.get(
+    "ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR", "0") == "1"
+
+
+def drop_zone_from_address(addr, city=None):
+    """V3.19h BUG-1: address + city → district name.
+
+    Outside-city wykrywane z `city` field (miejscowość_docelowa z CSV).
+    Białystok: match po ulicy w BIALYSTOK_DISTRICTS (prefix/substring match).
+    Fallback: 'Unknown' gdy brak confident match.
+    """
+    if city and isinstance(city, str):
+        city_norm = city.strip()
+        city_lc = city_norm.lower()
+        if city_norm and city_lc != 'białystok':
+            # Outside-city — detect explicit zones
+            for zone in BIALYSTOK_OUTSIDE_CITY_ZONES:
+                if zone.lower() in city_lc:
+                    return zone
+            return 'Unknown'  # inna nieznana miejscowość
+    # Białystok (or empty city) — match po ulicy
+    if not addr or not isinstance(addr, str):
+        return 'Unknown'
+    addr_lc = addr.lower().strip()
+    # Strip leading "ul." / "al." / "pl." prefix
+    for prefix in ('ul. ', 'al. ', 'aleja ', 'plac ', 'pl. '):
+        if addr_lc.startswith(prefix):
+            addr_lc = addr_lc[len(prefix):]
+            break
+    # Token-based matching: districts mają street jako "imię nazwisko" albo
+    # "nazwisko" (np. "waszyngtona jerzego", "sienkiewicza henryka", "lipowa").
+    # Dataset adresy mają "nazwisko number" albo "ulica number" (np. "Waszyngtona 24",
+    # "Sienkiewicza 12", "Lipowa 14/13"). Strategia:
+    #  1. Exact prefix match (street matches pełna fraza albo prefix).
+    #  2. Token prefix: pierwszy token z street (np. "waszyngtona") jako prefix dla addr.
+    #  3. Substring match jako fallback.
+    # Dodatkowo: longer street match wygrywa (preferred specificity, np.
+    # "branickiego jana klemensa" wygrywa nad "branickich" dla "Branickiego J.K. 5").
+    addr_first_token = addr_lc.split(None, 1)[0] if addr_lc else ''
+
+    best_match_zone = None
+    best_match_len = 0
+
+    for zone_name, zone_data in BIALYSTOK_DISTRICTS.items():
+        streets = zone_data['streets']
+        for street in streets:
+            slen = len(street)
+            if slen < 3:
+                continue
+            # 1) Exact or prefix match (full street w adresie)
+            matched = False
+            if addr_lc == street:
+                matched = True
+            elif addr_lc.startswith(street + ' ') or addr_lc.startswith(street + ','):
+                matched = True
+            # 2) Token-prefix: district street zaczyna się od addr_first_token
+            #    (np. street "waszyngtona jerzego", addr token "waszyngtona")
+            elif addr_first_token and street.startswith(addr_first_token + ' '):
+                # Only accept gdy addr_first_token jest sensowny (≥4 znaki)
+                if len(addr_first_token) >= 4:
+                    matched = True
+            # 3) Substring match (defensive, zeby np. ul. długa z dodatkami łapała)
+            elif slen >= 6 and street in addr_lc:
+                matched = True
+
+            if matched and slen > best_match_len:
+                best_match_zone = zone_name
+                best_match_len = slen
+
+    return best_match_zone if best_match_zone else 'Unknown'
+
+
+def drop_proximity_factor(zone1, zone2):
+    """V3.19h BUG-1: factor (0.0/0.5/1.0) między 2 zones.
+
+      1.0 — same zone (drops w tym samym osiedlu)
+      0.5 — adjacent zones (sąsiadujące per ACK właściciela)
+      0.0 — distant albo Unknown (defensive)
+    """
+    if not zone1 or not zone2:
+        return 0.0
+    if zone1 == 'Unknown' or zone2 == 'Unknown':
+        return 0.0
+    if zone1 == zone2:
+        return 1.0
+    neighbors = BIALYSTOK_DISTRICT_ADJACENCY.get(zone1, set())
+    if zone2 in neighbors:
+        return 0.5
+    return 0.0

@@ -169,6 +169,9 @@ def _serialize_candidate(c) -> dict:
         "v319h_bug4_tier_cap_used": m.get("v319h_bug4_tier_cap_used"),
         "v319h_bug4_cap_violation": m.get("v319h_bug4_cap_violation"),
         "bonus_bug4_cap_soft": m.get("bonus_bug4_cap_soft"),
+        # V3.19h BUG-1: SR bundle × drop_proximity_factor.
+        "v319h_bug1_drop_proximity_factor": m.get("v319h_bug1_drop_proximity_factor"),
+        "v319h_bug1_sr_bundle_adjusted": m.get("v319h_bug1_sr_bundle_adjusted"),
     }
 
 
@@ -283,6 +286,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "v319h_bug4_tier_cap_used": best_m.get("v319h_bug4_tier_cap_used"),
             "v319h_bug4_cap_violation": best_m.get("v319h_bug4_cap_violation"),
             "bonus_bug4_cap_soft": best_m.get("bonus_bug4_cap_soft"),
+            # V3.19h BUG-1: SR bundle × drop_proximity_factor — patrz _serialize_candidate.
+            "v319h_bug1_drop_proximity_factor": best_m.get("v319h_bug1_drop_proximity_factor"),
+            "v319h_bug1_sr_bundle_adjusted": best_m.get("v319h_bug1_sr_bundle_adjusted"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

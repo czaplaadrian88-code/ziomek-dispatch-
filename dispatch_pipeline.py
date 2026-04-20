@@ -536,6 +536,44 @@ def assess_order(
         #   1.5 < dev ≤ 2.5 → raw 20*(2.5-d)/1.0 linear
         #   > 2.5 km       → raw 0
         bonus_l1 = 25.0 if bundle_level1 else 0.0
+        # V3.19h BUG-1: drop_proximity_factor mnożnik na bonus_l1.
+        # Gold tier pattern: SR bundle TYLKO gdy dropy blisko. Std bierze SR ślepo
+        # (Kacper S avg drop_spread 10km dla SR bundles — anti-pattern).
+        # Factor:
+        #   1.0 — dropy w tej samej strefie (osiedlu)
+        #   0.5 — adjacent strefach (sąsiadujące per ACK właściciela)
+        #   0.0 — odległe albo Unknown (defensive)
+        # min per-pair factor użyty (konserwatywnie najgorsza para).
+        v319h_bug1_drop_proximity_factor = 1.0
+        v319h_bug1_sr_bundle_adjusted = bonus_l1
+        if C.ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR and bundle_level1:
+            # Zbierz dropy: new_order + wszystkie bag items z SR match
+            _new_zone = C.drop_zone_from_address(
+                order_event.get('delivery_address'),
+                order_event.get('delivery_city'),
+            )
+            _zones = [_new_zone]
+            for _b in bag_raw:
+                if _b.get('status') != 'assigned':
+                    continue
+                if (_b.get('restaurant') or '').strip().lower() != new_rest_norm:
+                    continue
+                _bz = C.drop_zone_from_address(
+                    _b.get('delivery_address'), _b.get('delivery_city')
+                )
+                _zones.append(_bz)
+            # min factor across pairs (konserwatywnie)
+            if len(_zones) >= 2:
+                _factor_min = 1.0
+                for _i in range(len(_zones)):
+                    for _j in range(_i + 1, len(_zones)):
+                        _f = C.drop_proximity_factor(_zones[_i], _zones[_j])
+                        if _f < _factor_min:
+                            _factor_min = _f
+                v319h_bug1_drop_proximity_factor = _factor_min
+            # Zastosuj mnożnik
+            bonus_l1 = bonus_l1 * v319h_bug1_drop_proximity_factor
+            v319h_bug1_sr_bundle_adjusted = bonus_l1
         bonus_l2 = max(0.0, 20.0 - bundle_level2_dist * 10.0) if bundle_level2_dist is not None else 0.0
         if bundle_level3_dev is None:
             bonus_r4_raw = 0.0
@@ -805,6 +843,11 @@ def assess_order(
             "v319h_bug4_tier_cap_used": bug4_tier_cap_used,
             "v319h_bug4_cap_violation": bug4_cap_violation,
             "bonus_bug4_cap_soft": round(bonus_bug4_cap_soft, 2),
+            # V3.19h BUG-1: SR bundle × drop_proximity_factor.
+            # factor (1.0 same zone / 0.5 adjacent / 0.0 distant/Unknown).
+            # sr_bundle_adjusted = bonus_l1 po mnożnik (oryginalny bonus_l1 w enriched).
+            "v319h_bug1_drop_proximity_factor": v319h_bug1_drop_proximity_factor,
+            "v319h_bug1_sr_bundle_adjusted": round(v319h_bug1_sr_bundle_adjusted, 2),
         }
 
         candidates.append(Candidate(
