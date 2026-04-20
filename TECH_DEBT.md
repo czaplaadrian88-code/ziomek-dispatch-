@@ -47,6 +47,35 @@ jest invalidated reactively. Full handling wymaga analizy:
 - Koszt implementacji 3-4h + regression risk na V3.19b/d stack.
 **Priority:** low. Podnieść gdy V3.19f stable 2 tyg + metric pokazuje potrzebę.
 
+### V3.19e + V3.19f LIVE w shadow mode flag=True (2026-04-20 20:08 UTC)
+- `ENABLE_V319E_PRE_PICKUP_BAG=True` default (commit 4676b8c + tag v319ef-shadow-flip-live)
+- `ENABLE_CZAS_KURIERA_PROPAGATION=True` default (same commit)
+- Dispatch-shadow + panel-watcher PID post-flip: 2015775 / 2015777
+- Dispatch-telegram NIE restartowany (off-air, koordynacja ręczna)
+- Pierwsza real propozycja post-flip: oid=467526 @ 20:12:07, wszystkie 3 nowe
+  klucze (v319e_r1_prime_hypothetical + czas_kuriera_warsaw + czas_kuriera_hhmm)
+  OBECNE w serialized best. Zero errors.
+- Real traffic side-by-side NIE UKOŃCZONE (low volume post-peak). Planowane
+  jutro lunch peak 11-14 Warsaw per `/tmp/v319ef_v319g_jutro_handover.md`.
+
+### V3.19g BAG cap discovery DONE (2026-04-20)
+- 6-mo dataset `/root/v319g_dataset/*.csv`, 44,315 → 40,790 normalized rows, 42 couriers.
+- Gold tier identified: Bartek O. / Mateusz O / Krystian / Gabriel (OPW_p90≥4).
+- Raport: `/tmp/v319g_bag_cap_discovery.md` (301 linii).
+- Preview: `/tmp/v319g_courier_tiers_preview.json` (37 eligible).
+- **Design + impl PENDING** — jutrzejsza sesja (po side-by-side V3.19e/f).
+
+### Outstanding tickets post-dzień-dzisiejszy
+- **APK GPS** (MEDIUM, user: "na razie działa, nie ruszamy"). AndroidManifest ma
+  defensive fixes, 4/8 kurierów działa; 4/8 bez GPS. Deferred — nie blokuje V3.19e/f.
+- **Silent flags** — 1 renamed do `_PLANNED` (2026-04-20), pozostałe 3 OK
+  (`ENABLE_TRANSPARENCY_SCORING`, `ENABLE_BUNDLE_VALUE_SCORING`, `ENABLE_PANEL_IS_FREE_AUTHORITATIVE`).
+- **639 delivered bez delivery_coords** (30% historical). Fix: geocoding retry
+  w state_machine + backfill script. Priority: low.
+- **46 delivered bez delivered_at** — data integrity, fallback to updated_at
+  na readerach. Priority: low.
+- **V3.21 wave_scoring flip** — blocked na V3.19e/f production stable + BAG cap tiering.
+
 ### V3.19ef systemd timeout fix LIVE (2026-04-20)
 Precedens: V3.19e restart 2026-04-20 17:17 UTC → panel-watcher SIGKILL bo
 default TimeoutStopSec=15s za krótki (fetch_order_details HTTP timeouts +
