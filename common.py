@@ -506,3 +506,63 @@ except (ValueError, TypeError):
 # ============================================================
 ENABLE_CZAS_KURIERA_PROPAGATION = _os.environ.get(
     "ENABLE_CZAS_KURIERA_PROPAGATION", "1") == "1"
+
+# ============================================================
+# V3.19h BUG-4 — tier × pora bag cap matrix (2026-04-20)
+# ============================================================
+# Ground truth od właściciela: tier-specific orders-per-wave caps zależne
+# od pory (peak/normal/off_peak). Obecny code używa stałego BAG_TIME_HARD_MAX
+# + bag_size bez tier awareness. V3.19g dataset 40k waves 6-mo potwierdził
+# matrix (10/12 cells match actual p90).
+#
+# SOFT penalty (nie hard reject) — progressive scaling:
+#   1 order over cap → -20
+#   2 orders over cap → -60 (3x)
+#   3 orders over cap → -120 (6x)
+#   ≥4 orders over cap → -9999 (effective hard reject przez penalty size)
+#
+# Per-cid override (Gabriel cap=4) loaded z courier_tiers.json.
+# HARD BAG_TIME > 35 min (R6) pozostaje — to jest SINGLE hard constraint.
+# ============================================================
+BUG4_TIER_CAP_MATRIX = {
+    'gold':  {'off_peak': 4, 'normal': 4, 'peak': 6},
+    'std+':  {'off_peak': 3, 'normal': 4, 'peak': 5},
+    'std':   {'off_peak': 2, 'normal': 3, 'peak': 4},
+    'slow':  {'off_peak': 2, 'normal': 2, 'peak': 3},
+}
+
+ENABLE_V319H_BUG4_TIER_CAP_MATRIX = _os.environ.get(
+    "ENABLE_V319H_BUG4_TIER_CAP_MATRIX", "0") == "1"
+
+
+def bug4_pora_now(now_utc):
+    """V3.19h: Warsaw-TZ peak detection. Returns 'peak'|'normal'|'off_peak'."""
+    from datetime import timezone as _tz
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=_tz.utc)
+    w = now_utc.astimezone(WARSAW)
+    h = w.hour
+    if 11 <= h < 14 or 17 <= h < 20:
+        return 'peak'
+    if h < 10 or h >= 22:
+        return 'off_peak'
+    return 'normal'
+
+
+def bug4_soft_penalty(violation):
+    """V3.19h: progressive scaling per Q1 owner 2026-04-20.
+      violation 0 → 0
+      violation 1 → -20
+      violation 2 → -60 (x3)
+      violation 3 → -120 (x6)
+      violation ≥4 → -9999 (effective hard reject)
+    """
+    if violation is None or violation <= 0:
+        return 0.0
+    if violation == 1:
+        return -20.0
+    if violation == 2:
+        return -60.0
+    if violation == 3:
+        return -120.0
+    return -9999.0

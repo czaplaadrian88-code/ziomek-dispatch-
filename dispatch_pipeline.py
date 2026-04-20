@@ -677,8 +677,26 @@ def assess_order(
         _r8_viol = metrics.get("r8_violation_min") or 0.0
         bonus_r8_soft_pen += _r8_viol * _rw.get("R8_span_per_min", -1.5) if _r8_viol > 0 else 0.0
 
-        # Suma penalties
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen
+        # V3.19h BUG-4: tier × pora bag cap soft penalty (progressive scaling).
+        # Orthogonal do R6 hard bag_time. Flag gated (default False).
+        bug4_tier_cap_used = None
+        bug4_cap_violation = None
+        bonus_bug4_cap_soft = 0.0
+        if C.ENABLE_V319H_BUG4_TIER_CAP_MATRIX:
+            _tier = getattr(cs, "tier_bag", None) or "std"
+            _cap_override = getattr(cs, "tier_cap_override", None)
+            _pora = C.bug4_pora_now(now)
+            if isinstance(_cap_override, dict) and _pora in _cap_override:
+                _cap = _cap_override[_pora]
+            else:
+                _cap = C.BUG4_TIER_CAP_MATRIX.get(_tier, C.BUG4_TIER_CAP_MATRIX["std"])[_pora]
+            _bag_after = len(bag_sim) + 1
+            bug4_cap_violation = max(0, _bag_after - _cap)
+            bug4_tier_cap_used = f"{_tier}/{_pora}/{_cap}"
+            bonus_bug4_cap_soft = C.bug4_soft_penalty(bug4_cap_violation)
+
+        # Suma penalties (BUG-4 soft penalty dodany do puli)
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft
 
         # Post-wave override (F2.1c): brak GPS + wszystkie picked_up + kończy ≤15 min
         # Kurier zaraz wraca do centrum → bonus scoring
@@ -781,6 +799,12 @@ def assess_order(
             # diagnostyki rozjazdu HH:MM vs ISO (sanity check w state layer).
             "czas_kuriera_warsaw": order_event.get("czas_kuriera_warsaw"),
             "czas_kuriera_hhmm": order_event.get("czas_kuriera_hhmm"),
+            # V3.19h BUG-4: tier × pora cap soft penalty tracking.
+            # tier_cap_used = "tier/pora/cap" string. violation = bag_after - cap (int).
+            # bonus_bug4_cap_soft = progressive penalty applied do bonus_penalty_sum.
+            "v319h_bug4_tier_cap_used": bug4_tier_cap_used,
+            "v319h_bug4_cap_violation": bug4_cap_violation,
+            "bonus_bug4_cap_soft": round(bonus_bug4_cap_soft, 2),
         }
 
         candidates.append(Candidate(

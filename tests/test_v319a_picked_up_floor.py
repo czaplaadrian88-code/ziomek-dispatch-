@@ -74,6 +74,13 @@ def _restore_flags():
     cm.ENABLE_DROP_TIME_CONSTRAINT = True
     rsv.ENABLE_PICKED_UP_DROP_FLOOR = True
     rsv.ENABLE_DROP_TIME_CONSTRAINT = True
+    # V3.19h fix 2026-04-21: V3.19a tests zostały napisane pre-V3.19e deploy,
+    # kiedy bag items zawsze traktowane jako already picked_up (brak pickup-node).
+    # Post V3.19e flag flip, bag items z status="assigned" dostają pickup-node,
+    # co zmienia timing calculations w teście #6. Scoped override — test V3.19a
+    # testuje tylko V3.19a floor, nie V3.19e integration.
+    cm.ENABLE_V319E_PRE_PICKUP_BAG = False
+    rsv.ENABLE_V319E_PRE_PICKUP_BAG = False
 
 
 passed = 0

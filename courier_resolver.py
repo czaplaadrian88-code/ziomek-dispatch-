@@ -64,6 +64,9 @@ class CourierState:
     shift_end: Optional[datetime] = None             # koniec zmiany (None = nieznane)
     shift_start_min: Optional[float] = None          # minuty od now do startu zmiany (pre_shift)
     name: Optional[str] = None                       # czytelna nazwa z kurier_piny
+    # V3.19h BUG-4: tier info z courier_tiers.json (None gdy cid nieznany).
+    tier_bag: Optional[str] = None                   # gold | std+ | std | slow
+    tier_cap_override: Optional[Dict] = None         # per-pora override np. Gabriel {peak:4, ...}
 
     def to_dict(self):
         return {
@@ -74,7 +77,38 @@ class CourierState:
             "bag_size": len(self.bag),
             "bag_oids": [o.get("order_id") or o.get("id") for o in self.bag],
             "name": self.name,
+            "tier_bag": self.tier_bag,
         }
+
+
+# V3.19h BUG-4: cached loader dla courier_tiers.json z mtime invalidation.
+_COURIER_TIERS_CACHE: Optional[Dict] = None
+_COURIER_TIERS_MTIME: Optional[float] = None
+COURIER_TIERS_PATH = "/root/.openclaw/workspace/dispatch_state/courier_tiers.json"
+
+
+def _load_courier_tiers() -> Dict:
+    """V3.19h: load courier_tiers.json z cache + mtime invalidation.
+    Returns {} gdy plik nie istnieje (tier='std' default dla wszystkich).
+    """
+    global _COURIER_TIERS_CACHE, _COURIER_TIERS_MTIME
+    import os
+    try:
+        mt = os.path.getmtime(COURIER_TIERS_PATH)
+    except (FileNotFoundError, OSError):
+        _COURIER_TIERS_CACHE = {}
+        _COURIER_TIERS_MTIME = None
+        return _COURIER_TIERS_CACHE
+    if _COURIER_TIERS_CACHE is None or mt != _COURIER_TIERS_MTIME:
+        try:
+            with open(COURIER_TIERS_PATH) as f:
+                _COURIER_TIERS_CACHE = json.load(f)
+            _COURIER_TIERS_MTIME = mt
+        except (json.JSONDecodeError, OSError) as e:
+            _log.warning(f"_load_courier_tiers fail: {e}")
+            _COURIER_TIERS_CACHE = {}
+            _COURIER_TIERS_MTIME = None
+    return _COURIER_TIERS_CACHE
 
 
 def _load_kurier_piny() -> Dict:
@@ -311,6 +345,13 @@ def build_fleet_snapshot(
 
         cs = CourierState(courier_id=kid)
         cs.bag = active_bag
+        # V3.19h BUG-4: attach tier info z courier_tiers.json (consumed by feasibility_v2).
+        _tiers = _load_courier_tiers()
+        _tinfo = _tiers.get(kid) if isinstance(_tiers, dict) else None
+        if isinstance(_tinfo, dict):
+            _bag_info = _tinfo.get("bag") or {}
+            cs.tier_bag = _bag_info.get("tier")
+            cs.tier_cap_override = _bag_info.get("cap_override")
         # Name lookup: courier_names.json (primary, correct ID space) → kurier_piny (legacy fallback)
         name = names.get(kid)
         if name is None and kid.isdigit():
