@@ -76,6 +76,26 @@ jest invalidated reactively. Full handling wymaga analizy:
   na readerach. Priority: low.
 - **V3.21 wave_scoring flip** — blocked na V3.19e/f production stable + BAG cap tiering.
 
+### V3.19h bonus stack boundary monitoring (2026-04-21)
+Max positive bonus stack realistic scenario po V3.19h impl:
+- bonus_l1 (L1 same-rest) = 25 (max przy BUG-1 factor=1.0)
+- bonus_l2 (L2 nearby pickup) = 20 max
+- bonus_bug2_continuation (BUG-2) = 30 max
+- timing_gap_bonus = 25 max
+- **Total = 100 — boundary OK na dziś.**
+
+R4 standalone = 150 (Bartek Gold weight 1.5 × raw 100 max) — pre-existing,
+nie w V3.19h scope. Może dominować scoring gdy bundle_level3 TIER_A.
+
+**Monitoring:** przy kolejnych dodatkach bonus (BUG-3 directional, V3.21
+wave_scoring features, V3.22 BUNDLE_VALUE_SCORING) revisit cap. Może
+trzeba:
+- Podnieść cap do 150 (+50 headroom)
+- Wprowadzić scaling / capping mechanizm (np. max positive sum = const)
+
+Monitor post-flip: grep realnych score distributions w shadow_decisions.jsonl
+co tydzień. Gdy median > 80 albo p99 > 150 → signal rosnącego bonus bloat.
+
 ### V3.19ef systemd timeout fix LIVE (2026-04-20)
 Precedens: V3.19e restart 2026-04-20 17:17 UTC → panel-watcher SIGKILL bo
 default TimeoutStopSec=15s za krótki (fetch_order_details HTTP timeouts +
