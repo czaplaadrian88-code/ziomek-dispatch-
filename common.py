@@ -742,3 +742,50 @@ def drop_proximity_factor(zone1, zone2):
     if zone2 in neighbors:
         return 0.5
     return 0.0
+
+
+# ============================================================
+# V3.19h BUG-2 — wave continuation bonus (2026-04-21)
+# ============================================================
+# Gold tier pattern (confirmed V3.19h): interleave 33% within-wave vs Std 20.5%.
+# Gold kurierzy pickupują wave #2 PRZED ukończeniem wave #1 (interleave
+# pickup after drop). Bartek z bag=5 planuje falę #2 zanim skończy falę #1.
+#
+# Scoring bonus gdy nowy order pickup_at pasuje do projected free_at
+# (last bag drop predicted_at):
+#   gap_min = (pickup_new - free_at_dt).total_seconds() / 60
+#   gap < 0    → +30 (anticipation, Bartek pattern)
+#   0 ≤ gap ≤ 10 → linear decay 30 → 0
+#   gap > 10 min → 0 (normal cadence, nie wave continuation)
+#
+# Source of truth dla free_at_dt: plan.predicted_delivered_at[last_bag_oid]
+# (spójny dla sticky V3.19d / V3.19e pre_pickup_bag / fresh TSP — potwierdzone
+# w grep survey Step 4.1).
+#
+# Default False — shadow observational.
+# Env kill-switch: ENABLE_V319H_BUG2_WAVE_CONTINUATION=1
+# ============================================================
+BUG2_WAVE_CONTINUATION_BONUS = 30.0
+BUG2_INTERLEAVE_GATE_MIN = 10.0
+
+ENABLE_V319H_BUG2_WAVE_CONTINUATION = _os.environ.get(
+    "ENABLE_V319H_BUG2_WAVE_CONTINUATION", "0") == "1"
+
+
+def bug2_wave_continuation_bonus(gap_min):
+    """V3.19h BUG-2: compute bonus from interleave gap_min.
+
+    gap_min: float (pickup_new - free_at_dt) w minutach. None → 0.
+      < 0 → full bonus (anticipation — pickup przed last drop)
+      0-10 inclusive → linear decay (0 → 30, 10 → 0)
+      > 10 → 0
+    """
+    if gap_min is None:
+        return 0.0
+    if gap_min < 0:
+        return BUG2_WAVE_CONTINUATION_BONUS
+    if gap_min <= BUG2_INTERLEAVE_GATE_MIN:
+        return BUG2_WAVE_CONTINUATION_BONUS * (
+            1.0 - gap_min / BUG2_INTERLEAVE_GATE_MIN
+        )
+    return 0.0

@@ -172,6 +172,9 @@ def _serialize_candidate(c) -> dict:
         # V3.19h BUG-1: SR bundle × drop_proximity_factor.
         "v319h_bug1_drop_proximity_factor": m.get("v319h_bug1_drop_proximity_factor"),
         "v319h_bug1_sr_bundle_adjusted": m.get("v319h_bug1_sr_bundle_adjusted"),
+        # V3.19h BUG-2: wave continuation bonus tracking.
+        "v319h_bug2_interleave_gap_min": m.get("v319h_bug2_interleave_gap_min"),
+        "v319h_bug2_continuation_bonus": m.get("v319h_bug2_continuation_bonus"),
     }
 
 
@@ -289,6 +292,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             # V3.19h BUG-1: SR bundle × drop_proximity_factor — patrz _serialize_candidate.
             "v319h_bug1_drop_proximity_factor": best_m.get("v319h_bug1_drop_proximity_factor"),
             "v319h_bug1_sr_bundle_adjusted": best_m.get("v319h_bug1_sr_bundle_adjusted"),
+            # V3.19h BUG-2: wave continuation — patrz _serialize_candidate.
+            "v319h_bug2_interleave_gap_min": best_m.get("v319h_bug2_interleave_gap_min"),
+            "v319h_bug2_continuation_bonus": best_m.get("v319h_bug2_continuation_bonus"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

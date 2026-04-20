@@ -589,6 +589,8 @@ def assess_order(
                 bonus_r4_raw = 0.0
         bonus_r4 = bonus_r4_raw * 1.5  # R4 weight per Bartek Gold Standard
         bundle_bonus = bonus_l1 + bonus_l2 + bonus_r4
+        # V3.19h BUG-2 wave continuation bonus dodany do final_score niżej
+        # (wymaga free_at_dt computed after bag sim — order-of-execution).
 
         # Timing gap bonus: dopasowanie free_at (kurier wolny) do pickup_ready
         # (jedzenie gotowe). Zastępuje availability_bonus.
@@ -715,6 +717,26 @@ def assess_order(
         _r8_viol = metrics.get("r8_violation_min") or 0.0
         bonus_r8_soft_pen += _r8_viol * _rw.get("R8_span_per_min", -1.5) if _r8_viol > 0 else 0.0
 
+        # V3.19h BUG-2: wave continuation bonus.
+        # Gold tier pattern: interleave pickup wave #2 przed ukończeniem wave #1.
+        # Bonus gdy pickup_new pasuje do projected free_at (last bag drop).
+        # Source of truth dla free_at_dt: plan.predicted_delivered_at[last_bag_oid]
+        # (spójny sticky V3.19d / V3.19e pre_pickup / fresh TSP).
+        # pickup_at: V3.19f first-choice czas_kuriera_warsaw → pickup_at_warsaw.
+        bug2_interleave_gap_min = None
+        bonus_bug2_continuation = 0.0
+        if C.ENABLE_V319H_BUG2_WAVE_CONTINUATION:
+            if free_at_dt is not None and pickup_at is not None:
+                _pu_utc = pickup_at if pickup_at.tzinfo else pickup_at.replace(tzinfo=WARSAW)
+                _pu_utc = _pu_utc.astimezone(timezone.utc)
+                _fa_utc = free_at_dt if free_at_dt.tzinfo else free_at_dt.replace(tzinfo=timezone.utc)
+                _gap_sec = (_pu_utc - _fa_utc).total_seconds()
+                bug2_interleave_gap_min = round(_gap_sec / 60.0, 2)
+                bonus_bug2_continuation = C.bug2_wave_continuation_bonus(
+                    bug2_interleave_gap_min
+                )
+            # edge: bag empty albo pickup_at=None → gap=None, bonus=0 (default)
+
         # V3.19h BUG-4: tier × pora bag cap soft penalty (progressive scaling).
         # Orthogonal do R6 hard bag_time. Flag gated (default False).
         bug4_tier_cap_used = None
@@ -735,6 +757,9 @@ def assess_order(
 
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft
+        # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
+        # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
+        # Integracja z final_score — patrz niżej.
 
         # Post-wave override (F2.1c): brak GPS + wszystkie picked_up + kończy ≤15 min
         # Kurier zaraz wraca do centrum → bonus scoring
@@ -755,7 +780,7 @@ def assess_order(
             pos_source_effective = "post_wave"
             wave_bonus = C.POST_WAVE_BONUS_SLOW
 
-        final_score = score_result["total"] + bundle_bonus + timing_gap_bonus + wave_bonus + bonus_penalty_sum
+        final_score = score_result["total"] + bundle_bonus + timing_gap_bonus + wave_bonus + bonus_penalty_sum + bonus_bug2_continuation
 
         # V3.19e Opcja B — R1' observability only, zero behavior change.
         # Dla propozycji z synthetic pos=last_assigned_pickup (kurier w drodze
@@ -848,6 +873,11 @@ def assess_order(
             # sr_bundle_adjusted = bonus_l1 po mnożnik (oryginalny bonus_l1 w enriched).
             "v319h_bug1_drop_proximity_factor": v319h_bug1_drop_proximity_factor,
             "v319h_bug1_sr_bundle_adjusted": round(v319h_bug1_sr_bundle_adjusted, 2),
+            # V3.19h BUG-2: wave continuation bonus tracking.
+            # gap_min = pickup_new - free_at_dt (minutes). None gdy edge (no bag/pickup).
+            # continuation_bonus = helper bug2_wave_continuation_bonus(gap_min).
+            "v319h_bug2_interleave_gap_min": bug2_interleave_gap_min,
+            "v319h_bug2_continuation_bonus": round(bonus_bug2_continuation, 2),
         }
 
         candidates.append(Candidate(
