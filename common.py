@@ -265,9 +265,11 @@ USE_PER_ORDER_GATE = False
 ENABLE_C2_SHADOW_LOG = True
 
 # C4: speed_tier_tracker.py produces courier_speed_tiers.json (nightly).
-# Flag controls whether downstream consumers (C5 wave_scoring) read the file.
-# Currently False → C5 not yet integrated. Tracker can run standalone for data collection.
-ENABLE_SPEED_TIER_LOADING = False
+# _PLANNED suffix marks flag bez zaimplementowanego konsumenta w prod.
+# Consumer w courier_resolver.build_fleet_snapshot (arch spec 3.3 CourierState.speed_tier)
+# nie istnieje — flip tej flagi na True NIE ma efektu bez implementacji.
+# Rename 2026-04-20 V3.19e pre-work: TECH_DEBT rule "flag bez konsumenta = _PLANNED suffix".
+ENABLE_SPEED_TIER_LOADING_PLANNED = False
 
 # Future flags (C3, C5-C7), default False at deploy:
 DEPRECATE_LEGACY_HARD_GATES = False  # C3: R1/R5/R6/R7/R8 → soft penalties

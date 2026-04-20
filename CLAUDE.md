@@ -292,7 +292,7 @@ Reguły bazowe (Bartek Gold Standard):
 USE_PER_ORDER_GATE = False           # C2
 ENABLE_C2_SHADOW_LOG = True          # C2 shadow ON
 DEPRECATE_LEGACY_HARD_GATES = False  # C3
-ENABLE_SPEED_TIER_LOADING = False    # C4
+ENABLE_SPEED_TIER_LOADING_PLANNED = False  # C4 — PLANNED (brak consumera)
 ENABLE_WAVE_SCORING = False          # C5 — V3.21 candidate
 ENABLE_C5_SHADOW_LOG = True          # C5 shadow ON
 ENABLE_MID_TRIP_PICKUP = False       # C6

@@ -1,5 +1,21 @@
 # TECH DEBT — Ziomek
 
+## General rules (wpisane 2026-04-20)
+
+### Flag bez konsumenta = `_PLANNED` suffix
+Jeśli w `common.py` dodajesz feature flag ale consumer (kod który flagę czyta
+w gałęzi decyzyjnej) nie istnieje jeszcze w prod — nazwa flagi MUSI kończyć się
+na `_PLANNED`. Zapobiega footgun'om w roadmapie (flip flagi bez efektu bo brak
+consumera). Przykład: `ENABLE_SPEED_TIER_LOADING_PLANNED` (2026-04-20: consumer
+w `courier_resolver.build_fleet_snapshot` nie jest zaimplementowany, rename per
+V3.19e pre-work).
+
+Weryfikacja przy każdym dodawaniu flagi:
+```bash
+cd /root/.openclaw/workspace/scripts/dispatch_v2
+grep -rn --include=\*.py --exclude=common.py --exclude=\*.bak\* <FLAG_NAME> .
+```
+Jeśli grep zwraca tylko `tests/` albo pusto → dodaj `_PLANNED` suffix.
 
 ## 2026-04-20 — pre-peak sesja
 
