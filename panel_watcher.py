@@ -1044,7 +1044,11 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             if not raw_ck:
                 continue
             try:
-                from dispatch_v2.panel_client import normalize_order
+                # V3.19g1 hotfix: uses GLOBAL normalize_order (line 35).
+                # Previously had `from dispatch_v2.panel_client import normalize_order`
+                # here → Python marked normalize_order as LOCAL for whole _diff_and_emit
+                # function, shadowing global used earlier (line 423) → UnboundLocalError
+                # on every tick → 25-min crash loop 2026-04-21.
                 norm_ck = normalize_order(raw_ck) or {}
             except Exception as e:
                 _log.debug(f"v319g1 normalize fail zid={zid}: {e}")
