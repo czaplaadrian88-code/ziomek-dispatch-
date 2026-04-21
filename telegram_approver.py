@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from dispatch_v2.common import (
+    ENABLE_TELEGRAM_FREETEXT_ASSIGN,
     ENABLE_TIMELINE_FORMAT,
     ENABLE_TRANSPARENCY_REASON,
     ENABLE_TRANSPARENCY_ROUTE,
@@ -1152,6 +1153,26 @@ async def handle_message(state: dict, msg: dict) -> None:
             courier_name, time_min = parsed
             if time_min is None:
                 time_min = compute_assign_time(dr_matched)
+            if not ENABLE_TELEGRAM_FREETEXT_ASSIGN:
+                # Adrian 2026-04-21: free-text no longer triggers real assign.
+                # Log as OPERATOR_COMMENT (operator commentary = ground truth
+                # for diagnosis), reply confirming receipt, exit without pop
+                # (pending stays for watchdog auto-KOORD 5-min timeout).
+                append_learning(state["learning_log_path"], {
+                    "ts": now_iso(),
+                    "order_id": matched_oid,
+                    "action": "OPERATOR_COMMENT",
+                    "ok": True,
+                    "feedback": f"reply: {text}",
+                    "decision": matched_rec.get("decision_record") or {},
+                })
+                await asyncio.to_thread(
+                    tg_request, state["token"], "sendMessage",
+                    {"chat_id": state["admin_id"],
+                     "text": f"📝 Komentarz zapisany (#{matched_oid}): {text[:100]}"},
+                )
+                _log.info(f"OPERATOR_COMMENT (reply) oid={matched_oid} text={text[:80]!r}")
+                return
             try:
                 ok, assign_msg = await asyncio.to_thread(
                     run_gastro_assign, matched_oid, courier_name, time_min, False
@@ -1202,6 +1223,23 @@ async def handle_message(state: dict, msg: dict) -> None:
         courier_name, time_min = parsed
         if time_min is None:
             time_min = compute_assign_time(dr_latest)
+        if not ENABLE_TELEGRAM_FREETEXT_ASSIGN:
+            # Adrian 2026-04-21: free-text no longer triggers real assign.
+            append_learning(state["learning_log_path"], {
+                "ts": now_iso(),
+                "order_id": latest_oid,
+                "action": "OPERATOR_COMMENT",
+                "ok": True,
+                "feedback": f"free_text(latest): {text}",
+                "decision": latest_rec.get("decision_record") or {},
+            })
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {"chat_id": state["admin_id"],
+                 "text": f"📝 Komentarz zapisany (#{latest_oid}): {text[:100]}"},
+            )
+            _log.info(f"OPERATOR_COMMENT (free-text) oid={latest_oid} text={text[:80]!r}")
+            return
         try:
             ok, assign_msg = await asyncio.to_thread(
                 run_gastro_assign, latest_oid, courier_name, time_min, False

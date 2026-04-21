@@ -784,6 +784,20 @@ ENABLE_V319G_CK_DETECTION = _os.environ.get(
 V319G_CK_DELTA_THRESHOLD_MIN = 3.0
 
 
+# ============================================================
+# Telegram free-text assign control — Adrian 2026-04-21 disabled per
+# lunch-peak incident: Bartek commentary "K414 będzie wolny za 14min,
+# ale później..." was parsed as assign command → gastro_assign error
+# "Nie znaleziono kuriera K414". Free-text remains LOGGED as learning
+# signal (action=OPERATOR_COMMENT), but no real assign call triggered.
+# Inline buttons (ASSIGN / INNY / KOORD callbacks) unaffected.
+# Default False per Adrian — flip to True to restore old behavior.
+# Env kill-switch: ENABLE_TELEGRAM_FREETEXT_ASSIGN=1
+# ============================================================
+ENABLE_TELEGRAM_FREETEXT_ASSIGN = _os.environ.get(
+    "ENABLE_TELEGRAM_FREETEXT_ASSIGN", "0") == "1"
+
+
 def bug2_wave_continuation_bonus(gap_min):
     """V3.19h BUG-2: compute bonus from interleave gap_min.
 
