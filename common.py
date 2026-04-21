@@ -532,7 +532,7 @@ BUG4_TIER_CAP_MATRIX = {
 }
 
 ENABLE_V319H_BUG4_TIER_CAP_MATRIX = _os.environ.get(
-    "ENABLE_V319H_BUG4_TIER_CAP_MATRIX", "0") == "1"
+    "ENABLE_V319H_BUG4_TIER_CAP_MATRIX", "1") == "1"
 
 
 def bug4_pora_now(now_utc):
@@ -654,7 +654,7 @@ BIALYSTOK_DISTRICT_ADJACENCY = {
 }
 
 ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR = _os.environ.get(
-    "ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR", "0") == "1"
+    "ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR", "1") == "1"
 
 
 def drop_zone_from_address(addr, city=None):
@@ -769,7 +769,7 @@ BUG2_WAVE_CONTINUATION_BONUS = 30.0
 BUG2_INTERLEAVE_GATE_MIN = 10.0
 
 ENABLE_V319H_BUG2_WAVE_CONTINUATION = _os.environ.get(
-    "ENABLE_V319H_BUG2_WAVE_CONTINUATION", "0") == "1"
+    "ENABLE_V319H_BUG2_WAVE_CONTINUATION", "1") == "1"
 
 
 # ============================================================
@@ -780,7 +780,7 @@ ENABLE_V319H_BUG2_WAVE_CONTINUATION = _os.environ.get(
 # Env kill-switch: ENABLE_V319G_CK_DETECTION=1
 # ============================================================
 ENABLE_V319G_CK_DETECTION = _os.environ.get(
-    "ENABLE_V319G_CK_DETECTION", "0") == "1"
+    "ENABLE_V319G_CK_DETECTION", "1") == "1"
 V319G_CK_DELTA_THRESHOLD_MIN = 3.0
 
 
