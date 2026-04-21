@@ -76,6 +76,48 @@ jest invalidated reactively. Full handling wymaga analizy:
   na readerach. Priority: low.
 - **V3.21 wave_scoring flip** — blocked na V3.19e/f production stable + BAG cap tiering.
 
+### V3.19h 3 bugi shadow LIVE (2026-04-20 23:53 UTC, flags False)
+
+3 MVP implementations w shadow mode z `dispatch-shadow` restart
+(panel-watcher nietknięty od 2026-04-20 17:17, dispatch-telegram
+nietknięty od 2026-04-19 16:19).
+
+| Bug | Commit | Tag | Flag default | Tests |
+|---|---|---|---|---|
+| BUG-4 tier×pora cap matrix | 4d1b609 | v319h-bug4-tier-cap-matrix-impl | ENABLE_V319H_BUG4_TIER_CAP_MATRIX=False | 49 (30+19) |
+| BUG-1 SR × drop_proximity_factor | 5fe81fe | v319h-bug1-drop-proximity-impl | ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR=False | 50 (32+18) |
+| BUG-2 wave continuation bonus | a65bfb3 | v319h-bug2-wave-continuation-impl | ENABLE_V319H_BUG2_WAVE_CONTINUATION=False | 23 |
+
+**Shadow deploy tag:** v319h-3bugs-shadow-deploy (smoke test green 2026-04-20 23:58 UTC).
+
+**Zero behavior change przy deploy** — wszystkie 3 flagi False default.
+Flip planowany na jutrzejszy lunch peak side-by-side 11-14 Warsaw 2026-04-21.
+
+**7 nowych pól serializowanych:**
+- BUG-4: `v319h_bug4_tier_cap_used`, `v319h_bug4_cap_violation`, `bonus_bug4_cap_soft`
+- BUG-1: `v319h_bug1_drop_proximity_factor`, `v319h_bug1_sr_bundle_adjusted`
+- BUG-2: `v319h_bug2_interleave_gap_min`, `v319h_bug2_continuation_bonus`
+
+**Generated artifacts:**
+- `dispatch_state/courier_tiers.json` (43 couriers, Gabriel cap_override per ACK)
+- `dispatch_v2/districts_data.py` (28 osiedli Białegostoku + 4 outside-city)
+- `dispatch_v2/build_v319h_courier_tiers.py` (one-off tier regenerator)
+
+**Regression baseline:** 644 asserts PASS w 39 plikach (522 pre-V3.19h + 122 new).
+
+### V3.19h deferred tickets
+
+- **BUG-3 directional efficiency** — NOT_CONFIRMED z haversine proxy. Re-verify
+  za ~2 tygodnie z real GPS tracks (OSRM route replay per wave).
+- **4 kurierów 0% GPS** (Kacper Sa 502, Adrian Cit 457, Szymon P 515, Gabriel Je 517)
+  — MEDIUM priority, właściciel "działa na razie". Deep-dive APK session later.
+- **639 delivered bez delivery_coords** — 30% backfill target. Low priority.
+- **V3.19g przedłużenia czas_kuriera invalidation** — blocked na V3.19h stable.
+- **V3.21 wave_scoring flip** — blocked na V3.19h production stable + real GPS.
+- **Panel-watcher SIGKILL fix** — timeout `TimeoutStopSec=120s` zastosowany
+  (ba8792e), waiting natural restart aby apply (panel-watcher uptime 3h+
+  od 2026-04-20 20:08:54, celowo zachowany clean).
+
 ### V3.19h bonus stack boundary monitoring (2026-04-21)
 Max positive bonus stack realistic scenario po V3.19h impl:
 - bonus_l1 (L1 same-rest) = 25 (max przy BUG-1 factor=1.0)
