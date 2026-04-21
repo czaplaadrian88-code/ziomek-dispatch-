@@ -313,6 +313,34 @@ def update_from_event(event: dict) -> Optional[dict]:
                 )
         return upsert_order(oid, merged, event="COURIER_ASSIGNED")
 
+    if etype == "CZAS_KURIERA_UPDATED":
+        # V3.19g1: panel_watcher detected czas_kuriera change (|Δt| ≥ 3min)
+        # for already-assigned order. Update ck fields ONLY, preserve status,
+        # courier_id, commitment_level, etc. Sanity check via V3.19f helper.
+        new_ck_iso = payload.get("new_ck_iso")
+        new_ck_hhmm = payload.get("new_ck_hhmm")
+        if not _verify_czas_kuriera_consistency(new_ck_iso, new_ck_hhmm, oid):
+            _log.error(
+                f"CZAS_KURIERA_UPDATED {oid}: sanity fail "
+                f"(iso={new_ck_iso!r} hhmm={new_ck_hhmm!r}), skipping persist"
+            )
+            return None
+        existing = get_order(oid)
+        if existing is None:
+            _log.warning(f"CZAS_KURIERA_UPDATED for unknown oid={oid}, skipping")
+            return None
+        prev_count = int(existing.get("v319g_ck_change_count") or 0)
+        update_fields = {
+            "czas_kuriera_warsaw": new_ck_iso,
+            "czas_kuriera_hhmm": new_ck_hhmm,
+            "v319g_ck_change_count": prev_count + 1,
+        }
+        _log.info(
+            f"V3.19g1 oid={oid} ck {payload.get('old_ck_hhmm')} → {new_ck_hhmm} "
+            f"Δ={payload.get('delta_min'):+.1f}min src={payload.get('source')}"
+        )
+        return upsert_order(oid, update_fields, event="CZAS_KURIERA_UPDATED")
+
     if etype == "COURIER_PICKED_UP":
         # F2.1b step 5: CELOWO NIE resetujemy bag_time_alerted tutaj.
         # Panel_watcher może reemit COURIER_PICKED_UP przez reconcile retry po

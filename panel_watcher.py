@@ -282,6 +282,106 @@ def _update_plan_on_picked_up(courier_id: str, order_id: str,
         _log.warning(f"V3.19c mark_picked_up fail cid={courier_id} oid={order_id}: {e}")
 
 
+def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
+                      oid: str) -> Optional[dict]:
+    """V3.19g1: detect czas_kuriera change for already-assigned order.
+
+    Returns None (no-op) when:
+      - no change, below threshold, first acceptance (null→val), val→null revert
+    Returns event dict ({event_type, order_id, courier_id, payload}) when
+    |Δt| >= V319G_CK_DELTA_THRESHOLD_MIN (default 3 min).
+
+    Caller should pass event dict to state_machine.update_from_event.
+    """
+    from dispatch_v2.common import V319G_CK_DELTA_THRESHOLD_MIN
+
+    old_state = old_state or {}
+    fresh_response = fresh_response or {}
+
+    old_ck_iso = old_state.get("czas_kuriera_warsaw")
+    old_ck_hhmm = old_state.get("czas_kuriera_hhmm")
+    new_ck_iso = fresh_response.get("czas_kuriera_warsaw")
+    new_ck_hhmm = fresh_response.get("czas_kuriera_hhmm") or fresh_response.get("czas_kuriera")
+
+    # null→null
+    if not old_ck_iso and not new_ck_iso:
+        return None
+    # null→value (first acceptance — handled by NEW_ORDER/COURIER_ASSIGNED)
+    if not old_ck_iso and new_ck_iso:
+        return None
+    # value→null (panel revert — warn, skip)
+    if old_ck_iso and not new_ck_iso:
+        _log.warning(f"v319g1 oid={oid} ck_change_to_null old={old_ck_hhmm}")
+        return None
+
+    # value→value — compute signed delta
+    try:
+        old_dt = datetime.fromisoformat(old_ck_iso)
+        new_dt = datetime.fromisoformat(new_ck_iso)
+    except (ValueError, TypeError) as e:
+        _log.warning(f"v319g1 oid={oid} ck iso parse fail: {e}")
+        return None
+
+    delta_min = (new_dt - old_dt).total_seconds() / 60.0
+    if abs(delta_min) < V319G_CK_DELTA_THRESHOLD_MIN:
+        return None  # noise floor
+
+    payload = {
+        "oid": oid,
+        "courier_id": old_state.get("courier_id"),
+        "old_ck_iso": old_ck_iso,
+        "old_ck_hhmm": old_ck_hhmm,
+        "new_ck_iso": new_ck_iso,
+        "new_ck_hhmm": new_ck_hhmm,
+        "delta_min": round(delta_min, 2),
+        "source": "panel_re_check",
+    }
+    return {
+        "event_type": "CZAS_KURIERA_UPDATED",
+        "order_id": oid,
+        "courier_id": old_state.get("courier_id"),
+        "payload": payload,
+    }
+
+
+def _compute_kid_diagnostic(state_order: dict, fresh_order: dict) -> dict:
+    """V3.19g1 diagnostic: kid_state / kid_panel / kid_mismatch.
+
+    Case 2 observability only (no event emitted — Case 2 full detection
+    deferred per V3.19g1 design sec K). Used to diagnose HTML-lag scenarios
+    where panel API shows id_kurier!=state.courier_id.
+    """
+    state_order = state_order or {}
+    fresh_order = fresh_order or {}
+
+    def _coerce_int(v):
+        if v is None or v == "":
+            return None
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return None
+
+    kid_state = _coerce_int(state_order.get("courier_id"))
+    kid_panel = _coerce_int(fresh_order.get("id_kurier"))
+
+    # mismatch: state ≠ panel (both sides present). Flags both directions:
+    #  - state=400, panel=26   → HTML lag (panel stale, state fresh)
+    #  - state=26,  panel=400  → state lag (state stale, panel fresh via API)
+    # null on either side → no mismatch (no data to compare).
+    if kid_state is None or kid_panel is None:
+        mismatch = False
+    else:
+        mismatch = (kid_state != kid_panel)
+
+    return {
+        "v319g_kid_state": kid_state,
+        "v319g_kid_panel": kid_panel,
+        "v319g_kid_mismatch": mismatch,
+        "_event": None,  # diagnostic only — Case 2 emission deferred
+    }
+
+
 def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     """Porownuje stan panel vs orders_state, emituje eventy.
     Zwraca statystyki tego cyklu."""
@@ -919,6 +1019,59 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _log.info(f"PICKED_UP {zid} (reconcile) kurier={kid} at {dzien_odbioru}")
                 _update_plan_on_picked_up(kid, zid, dzien_odbioru)
     # ================== END PICKED_UP RECONCILE ==================
+
+    # ================== V3.19g1 czas_kuriera DETECTION ==================
+    # Detect czas_kuriera changes for already-assigned orders. Emits
+    # CZAS_KURIERA_UPDATED events so state_machine re-persists fresh ck and
+    # subsequent scoring reads fresh pickup_ready_at via bag_raw rebuild.
+    # Flag-gated — no cost when False.
+    try:
+        from dispatch_v2.common import ENABLE_V319G_CK_DETECTION
+    except Exception:
+        ENABLE_V319G_CK_DETECTION = False
+    if ENABLE_V319G_CK_DETECTION:
+        for zid, state_order in list(current_state.items()):
+            if state_order.get("status") not in ("assigned", "picked_up"):
+                continue
+            if zid not in html_order_ids:
+                continue  # terminal or vanished — skip
+            try:
+                raw_ck = fetch_order_details(zid, csrf)
+                stats["fetched_details"] = stats.get("fetched_details", 0) + 1
+            except Exception as e:
+                _log.debug(f"v319g1 fetch fail zid={zid}: {e}")
+                continue
+            if not raw_ck:
+                continue
+            try:
+                from dispatch_v2.panel_client import normalize_order
+                norm_ck = normalize_order(raw_ck) or {}
+            except Exception as e:
+                _log.debug(f"v319g1 normalize fail zid={zid}: {e}")
+                continue
+            fresh_snippet = {
+                "czas_kuriera_warsaw": norm_ck.get("czas_kuriera_warsaw"),
+                "czas_kuriera_hhmm": norm_ck.get("czas_kuriera_hhmm"),
+                "id_kurier": raw_ck.get("id_kurier"),
+            }
+            evt = _diff_czas_kuriera(state_order, fresh_snippet, oid=zid)
+            if evt is None:
+                continue
+            # Emit through event_bus (analog do COURIER_ASSIGNED emission)
+            emit(
+                "CZAS_KURIERA_UPDATED",
+                order_id=zid,
+                courier_id=str(state_order.get("courier_id") or ""),
+                payload=evt["payload"],
+                event_id=f"{zid}_CZAS_KURIERA_UPDATED_{int(evt['payload'].get('delta_min',0)*10)}",
+            )
+            update_from_event(evt)
+            _log.info(
+                f"V3.19g1 oid={zid} ck "
+                f"{evt['payload'].get('old_ck_hhmm')}→{evt['payload'].get('new_ck_hhmm')} "
+                f"Δ={evt['payload'].get('delta_min'):+.1f}min"
+            )
+    # ================== END V3.19g1 ==================
 
     return stats
 

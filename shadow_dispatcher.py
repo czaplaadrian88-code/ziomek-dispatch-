@@ -175,6 +175,15 @@ def _serialize_candidate(c) -> dict:
         # V3.19h BUG-2: wave continuation bonus tracking.
         "v319h_bug2_interleave_gap_min": m.get("v319h_bug2_interleave_gap_min"),
         "v319h_bug2_continuation_bonus": m.get("v319h_bug2_continuation_bonus"),
+        # V3.19g1: czas_kuriera change detection + kid diagnostic (LOCATION A).
+        "v319g_ck_changed": m.get("v319g_ck_changed"),
+        "v319g_ck_old": m.get("v319g_ck_old"),
+        "v319g_ck_new": m.get("v319g_ck_new"),
+        "v319g_ck_delta_min": m.get("v319g_ck_delta_min"),
+        "v319g_ck_change_count": m.get("v319g_ck_change_count"),
+        "v319g_kid_state": m.get("v319g_kid_state"),
+        "v319g_kid_panel": m.get("v319g_kid_panel"),
+        "v319g_kid_mismatch": m.get("v319g_kid_mismatch"),
     }
 
 
@@ -295,6 +304,15 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             # V3.19h BUG-2: wave continuation — patrz _serialize_candidate.
             "v319h_bug2_interleave_gap_min": best_m.get("v319h_bug2_interleave_gap_min"),
             "v319h_bug2_continuation_bonus": best_m.get("v319h_bug2_continuation_bonus"),
+            # V3.19g1: czas_kuriera change detection + kid diagnostic (LOCATION B).
+            "v319g_ck_changed": best_m.get("v319g_ck_changed"),
+            "v319g_ck_old": best_m.get("v319g_ck_old"),
+            "v319g_ck_new": best_m.get("v319g_ck_new"),
+            "v319g_ck_delta_min": best_m.get("v319g_ck_delta_min"),
+            "v319g_ck_change_count": best_m.get("v319g_ck_change_count"),
+            "v319g_kid_state": best_m.get("v319g_kid_state"),
+            "v319g_kid_panel": best_m.get("v319g_kid_panel"),
+            "v319g_kid_mismatch": best_m.get("v319g_kid_mismatch"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

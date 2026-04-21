@@ -772,6 +772,18 @@ ENABLE_V319H_BUG2_WAVE_CONTINUATION = _os.environ.get(
     "ENABLE_V319H_BUG2_WAVE_CONTINUATION", "0") == "1"
 
 
+# ============================================================
+# V3.19g1 — czas_kuriera change detection via panel_watcher.
+# Detects |Δt| ≥ 3 min in czas_kuriera_warsaw for already-assigned
+# orders; emits CZAS_KURIERA_UPDATED event to state_machine.
+# Default False — shadow observational.
+# Env kill-switch: ENABLE_V319G_CK_DETECTION=1
+# ============================================================
+ENABLE_V319G_CK_DETECTION = _os.environ.get(
+    "ENABLE_V319G_CK_DETECTION", "0") == "1"
+V319G_CK_DELTA_THRESHOLD_MIN = 3.0
+
+
 def bug2_wave_continuation_bonus(gap_min):
     """V3.19h BUG-2: compute bonus from interleave gap_min.
 
