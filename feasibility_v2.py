@@ -279,8 +279,12 @@ def check_feasibility_v2(
             shift_end = shift_end.replace(tzinfo=timezone.utc)
         remaining_min = (shift_end - now).total_seconds() / 60.0
         metrics["shift_remaining_min"] = round(remaining_min, 1)
-        if remaining_min < SHIFT_END_BUFFER_MIN:
-            return ("NO", f"shift_ending ({remaining_min:.1f} min left)", metrics, None)
+        # V3.24-A: legacy SHIFT_END_BUFFER_MIN=20 check skipowany gdy flag ON
+        # (zastąpiony dokładniejszym post-simulate planned_dropoff > shift_end+5 check,
+        # patrz niżej tuż po R6). Flag OFF → legacy behavior.
+        if not C.ENABLE_V324A_SCHEDULE_INTEGRATION:
+            if remaining_min < SHIFT_END_BUFFER_MIN:
+                return ("NO", f"shift_ending ({remaining_min:.1f} min left)", metrics, None)
 
     # === SLA SIMULATION ===
 
@@ -374,6 +378,27 @@ def check_feasibility_v2(
             metrics,
             plan,
         )
+
+    # V3.24-A: hard reject gdy planned dropoff nowego ordera > shift_end +
+    # V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN (default 5 min). Precyzyjniejsze
+    # niż legacy SHIFT_END_BUFFER_MIN=20 (który zbyt gruby — odrzucał kurierów
+    # którzy zdążyliby solo order 3-min przed shift_end).
+    if C.ENABLE_V324A_SCHEDULE_INTEGRATION and shift_end is not None:
+        pred_new = plan.predicted_delivered_at.get(new_order.order_id)
+        if pred_new is not None:
+            if pred_new.tzinfo is None:
+                pred_new = pred_new.replace(tzinfo=timezone.utc)
+            excess_min = (pred_new - shift_end).total_seconds() / 60.0
+            metrics["v324a_planned_dropoff_iso"] = pred_new.isoformat()
+            metrics["v324a_dropoff_excess_min"] = round(excess_min, 2)
+            if excess_min > C.V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN:
+                return (
+                    "NO",
+                    f"v324a_dropoff_after_shift (dropoff {pred_new.strftime('%H:%M')} "
+                    f"vs shift_end {shift_end.strftime('%H:%M')}, excess +{excess_min:.1f}min)",
+                    metrics,
+                    plan,
+                )
 
     # F2.2 C2 — per-order 35min hard gate (shadow mode by default).
     # Current verdict at this point is MAYBE (survived all other gates).

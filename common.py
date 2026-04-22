@@ -815,3 +815,122 @@ def bug2_wave_continuation_bonus(gap_min):
             1.0 - gap_min / BUG2_INTERLEAVE_GATE_MIN
         )
     return 0.0
+
+
+# ============================================================
+# V3.24 SCHEDULE INTEGRATION (2026-04-22) — Adrian decision
+#
+# Ziomek respektuje grafik kurierów + hard cutoff na early morning
+# emit. Dwie części:
+#   A) extension-based penalty — kara za pickup delay kuriera vs
+#      restaurant-requested pickup time (+ hard reject > 60 min)
+#   B) czasówka progressive emit scheduler — ordery z
+#      czas_odbioru ≥ 60 min trzymane w id_kurier=26 (Koordynator)
+#      do minutes_to_pickup ≤ 60 min, potem gradient selectivity
+#      60→50→40 (ideal/good/force-assign).
+#
+# Pre-shift kurier wchodzi do pool bez time-gate (stary
+# PRE_SHIFT_WINDOW_MIN=50 removed w B3) — gate replaced przez
+# dropoff-after-shift hard reject + extension penalty.
+#
+# Defaults False; flip post B7 tests + shadow validation.
+# Env kill-switches:
+#   ENABLE_V324A_SCHEDULE_INTEGRATION=0|1
+#   ENABLE_V324B_CZASOWKA_SCHEDULER=0|1
+# ============================================================
+
+# Ziomek nie emituje propozycji przed 9:10 Warsaw (operation window)
+OPERATION_EMIT_NOT_BEFORE_HOUR_WARSAW = 9
+OPERATION_EMIT_NOT_BEFORE_MIN_WARSAW = 10
+
+# V3.24-A: planowany pickup pre-shift kuriera clamp do shift_start
+V324_PICKUP_CLAMP_TO_SHIFT_START = True
+
+# V3.24-A: tolerancja dropoff po shift_end (minuty) — hard reject if exceeded
+V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN = 5
+
+# V3.24-A: extension > X min = hard reject (kurier przesuwa pickup za bardzo)
+V324_HARD_REJECT_EXTENSION_OVER_MIN = 60
+
+# V3.24-A: gradient penalty; pair = (threshold_min_inclusive, penalty_pts)
+# Pozytywna extension = kurier opóźnia restaurację vs requested pickup.
+V324_EXTENSION_PENALTY_TIERS = [
+    (5, 0),         # 0-5 min: ideal match, no penalty
+    (15, -10),      # 5-15 min: small delay
+    (30, -50),      # 15-30 min: moderate
+    (45, -100),     # 30-45 min: significant
+    (60, -200),     # 45-60 min: large (edge przed hard reject)
+]
+
+# V3.24-B: start eval czasówki gdy minutes_to_pickup ≤ X
+V324B_CZASOWKA_EVAL_START_MIN = 60
+
+# V3.24-B: min interval między re-score tego samego order (timer tick = 1min,
+# per-order re-score gated do ≥ 5 min od ostatniej eval)
+V324B_CZASOWKA_EVAL_INTERVAL_MIN = 5
+
+# V3.24-B: force assign top candidate gdy minutes_to_pickup ≤ X
+V324B_CZASOWKA_FORCE_ASSIGN_MIN = 40
+
+# V3.24-B: "idealny match" thresholds (60 ≥ minutes > 50 window)
+V324B_CZASOWKA_IDEAL_KM_MAX = 1.0
+V324B_CZASOWKA_IDEAL_DROP_PROX_MIN = 0.5
+
+# V3.24-B: "dobry match" thresholds (50 ≥ minutes > 40 window)
+V324B_CZASOWKA_GOOD_KM_MAX = 2.0
+V324B_CZASOWKA_GOOD_DROP_PROX_MIN = 0.5
+
+# Feature flags — default False (pre-deploy observational)
+ENABLE_V324A_SCHEDULE_INTEGRATION = _os.environ.get(
+    "ENABLE_V324A_SCHEDULE_INTEGRATION", "0") == "1"
+ENABLE_V324B_CZASOWKA_SCHEDULER = _os.environ.get(
+    "ENABLE_V324B_CZASOWKA_SCHEDULER", "0") == "1"
+
+
+def extension_penalty(planned_pickup_at, restaurant_requested_at):
+    """V3.24-A: penalty za delay pickup kuriera vs restaurant-requested time.
+
+    Args:
+        planned_pickup_at: datetime — max(naive_eta, shift_start) dla kuriera
+        restaurant_requested_at: datetime — czas_odbioru_timestamp (Warsaw TZ
+            per CLAUDE.md). Dla czasówki = hard declaration, dla elastyk =
+            created_at + czas_odbioru minut.
+
+    Oba argumenty muszą być w tym samym TZ (oba aware lub oba naive Warsaw).
+    TZ mismatch wywali się na subtraction — explicit TypeError preferowane
+    nad silent wrong result.
+
+    Returns:
+        0 → extension ≤ 5 min (ideal match) LUB extension ≤ 0 (kurier
+            wcześniej niż restauracja — R-NO-WASTE territory, handled
+            przez V3.19j BUG-2 continuation bonus, nie V3.24)
+        -10/-50/-100/-200 → gradient per V324_EXTENSION_PENALTY_TIERS
+        None → hard reject signal (extension > 60 min), caller musi
+            odrzucić kandydata (feasibility layer)
+    """
+    if planned_pickup_at is None or restaurant_requested_at is None:
+        return 0  # incomplete data — conservative, no penalty, no reject
+    # TZ fail-fast: naive datetime subtraction across zones daje silent wrong result.
+    # Preferujemy explicit TypeError nad cichy bug.
+    if planned_pickup_at.tzinfo is None:
+        raise TypeError(
+            "extension_penalty: planned_pickup_at must be tz-aware "
+            "(got naive datetime)"
+        )
+    if restaurant_requested_at.tzinfo is None:
+        raise TypeError(
+            "extension_penalty: restaurant_requested_at must be tz-aware "
+            "(got naive datetime)"
+        )
+    extension_min = (
+        planned_pickup_at - restaurant_requested_at
+    ).total_seconds() / 60.0
+    if extension_min <= 0:
+        return 0
+    if extension_min > V324_HARD_REJECT_EXTENSION_OVER_MIN:
+        return None
+    for threshold_min, penalty in V324_EXTENSION_PENALTY_TIERS:
+        if extension_min <= threshold_min:
+            return penalty
+    # Defensive fallback: should be unreachable (last tier = 60 min = hard reject border)
+    return V324_EXTENSION_PENALTY_TIERS[-1][1]

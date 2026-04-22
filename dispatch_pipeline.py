@@ -780,7 +780,26 @@ def assess_order(
             pos_source_effective = "post_wave"
             wave_bonus = C.POST_WAVE_BONUS_SLOW
 
-        final_score = score_result["total"] + bundle_bonus + timing_gap_bonus + wave_bonus + bonus_penalty_sum + bonus_bug2_continuation
+        # V3.24-A: extension penalty + hard reject gdy extension > 60 min.
+        # extension = eta_pickup_utc - pickup_ready_at (restaurant requested).
+        # Dla pre_shift kurier eta_pickup_utc = shift_start (clamp aktywny w post-loop
+        # override L920+); dla in-shift naive_eta. extension_penalty() w common.py:
+        #   None → hard reject (> 60 min)
+        #   0 / -10 / -50 / -100 / -200 → gradient.
+        v324a_extension_min = None
+        v324a_extension_penalty = 0
+        v324a_extension_hard_reject = False
+        if C.ENABLE_V324A_SCHEDULE_INTEGRATION and pickup_ready_at is not None:
+            _pra_v324 = pickup_ready_at if pickup_ready_at.tzinfo else pickup_ready_at.replace(tzinfo=timezone.utc)
+            _eta_v324 = eta_pickup_utc if eta_pickup_utc.tzinfo else eta_pickup_utc.replace(tzinfo=timezone.utc)
+            v324a_extension_min = (_eta_v324 - _pra_v324).total_seconds() / 60.0
+            _pen_v324 = C.extension_penalty(_eta_v324, _pra_v324)
+            if _pen_v324 is None:
+                v324a_extension_hard_reject = True
+            else:
+                v324a_extension_penalty = _pen_v324
+
+        final_score = score_result["total"] + bundle_bonus + timing_gap_bonus + wave_bonus + bonus_penalty_sum + bonus_bug2_continuation + v324a_extension_penalty
 
         # V3.19e Opcja B — R1' observability only, zero behavior change.
         # Dla propozycji z synthetic pos=last_assigned_pickup (kurier w drodze
@@ -811,6 +830,9 @@ def assess_order(
             "eta_source": eta_source,
             "pos_source": getattr(cs, "pos_source", None),
             "shift_start_min": getattr(cs, "shift_start_min", None),
+            # V3.24-A: default False (in-shift kurier — naive_eta > shift_start zawsze).
+            # Post-loop override ustawia True dla pos_source=pre_shift (linie ~925).
+            "v324a_pickup_clamped_to_shift_start": False,
             "bundle_level1": bundle_level1,
             "bundle_level2": bundle_level2,
             "bundle_level2_dist": bundle_level2_dist,
@@ -878,7 +900,16 @@ def assess_order(
             # continuation_bonus = helper bug2_wave_continuation_bonus(gap_min).
             "v319h_bug2_interleave_gap_min": bug2_interleave_gap_min,
             "v319h_bug2_continuation_bonus": round(bonus_bug2_continuation, 2),
+            # V3.24-A extension metrics
+            "v324a_extension_min": round(v324a_extension_min, 2) if v324a_extension_min is not None else None,
+            "v324a_extension_penalty": v324a_extension_penalty,
         }
+
+        # V3.24-A: hard reject gdy extension_penalty() returned None (>60 min).
+        # Override verdict na NO tylko jeśli obecny MAYBE (nie przebijaj wcześniejszego NO).
+        if v324a_extension_hard_reject and verdict == "MAYBE":
+            verdict = "NO"
+            reason = f"v324a_extension_too_large ({v324a_extension_min:.1f}min > {C.V324_HARD_REJECT_EXTENSION_OVER_MIN})"
 
         candidates.append(Candidate(
             courier_id=str(cid),
@@ -928,15 +959,23 @@ def assess_order(
             c.metrics["eta_pickup_utc"] = shift_eta
             c.metrics["eta_drive_utc"] = shift_eta
             c.metrics["eta_source"] = "pre_shift"
-            # F1.8e: hard exclude jeśli pre_shift kurier nie zdąży na pickup_ready.
-            # Bez tego scoring promuje go pomimo niedostępności (np. odbiór za 26
-            # min, kurier startuje za 46 min → nie zdąży).
-            if shift_min > prep_remaining_min + 0.01:
-                c.feasibility_verdict = "NO"
-                c.feasibility_reason = (
-                    f"pre_shift_too_late (start za {shift_min:.0f} min, "
-                    f"odbiór za {prep_remaining_min:.0f} min)"
-                )
+            # V3.24-A: eta_pickup_utc dla pre_shift = shift_start (clamp aktywny).
+            c.metrics["v324a_pickup_clamped_to_shift_start"] = True
+            if C.ENABLE_V324A_SCHEDULE_INTEGRATION:
+                # V3.24-A zastępuje legacy F1.8e hard reject gradient extension_penalty
+                # (applied w scoring layer B5). Hard reject tylko gdy extension > 60 min
+                # — delegowane do feasibility layer B5. Tu pozostawiamy MAYBE.
+                pass
+            else:
+                # Legacy F1.8e: hard exclude jeśli pre_shift kurier nie zdąży na pickup_ready.
+                # Bez tego scoring promuje go pomimo niedostępności (np. odbiór za 26
+                # min, kurier startuje za 46 min → nie zdąży).
+                if shift_min > prep_remaining_min + 0.01:
+                    c.feasibility_verdict = "NO"
+                    c.feasibility_reason = (
+                        f"pre_shift_too_late (start za {shift_min:.0f} min, "
+                        f"odbiór za {prep_remaining_min:.0f} min)"
+                    )
 
     # Feasible (MAYBE) → rank by score.
     # R2 Bartek Gold Standard tie-breaker: przy równym score, preferuj

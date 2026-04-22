@@ -184,6 +184,14 @@ def _serialize_candidate(c) -> dict:
         "v319g_kid_state": m.get("v319g_kid_state"),
         "v319g_kid_panel": m.get("v319g_kid_panel"),
         "v319g_kid_mismatch": m.get("v319g_kid_mismatch"),
+        # V3.24-A: schedule integration (extension penalty + pre_shift clamp +
+        # post-shift dropoff check). 5 fields — flaga ENABLE_V324A_* gateuje
+        # wartości None gdy off. Serializowane zawsze (LOCATION A).
+        "v324a_extension_min": m.get("v324a_extension_min"),
+        "v324a_extension_penalty": m.get("v324a_extension_penalty"),
+        "v324a_pickup_clamped_to_shift_start": m.get("v324a_pickup_clamped_to_shift_start"),
+        "v324a_planned_dropoff_iso": m.get("v324a_planned_dropoff_iso"),
+        "v324a_dropoff_excess_min": m.get("v324a_dropoff_excess_min"),
     }
 
 
@@ -313,6 +321,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "v319g_kid_state": best_m.get("v319g_kid_state"),
             "v319g_kid_panel": best_m.get("v319g_kid_panel"),
             "v319g_kid_mismatch": best_m.get("v319g_kid_mismatch"),
+            # V3.24-A: schedule integration (LOCATION B) — patrz _serialize_candidate.
+            "v324a_extension_min": best_m.get("v324a_extension_min"),
+            "v324a_extension_penalty": best_m.get("v324a_extension_penalty"),
+            "v324a_pickup_clamped_to_shift_start": best_m.get("v324a_pickup_clamped_to_shift_start"),
+            "v324a_planned_dropoff_iso": best_m.get("v324a_planned_dropoff_iso"),
+            "v324a_dropoff_excess_min": best_m.get("v324a_dropoff_excess_min"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

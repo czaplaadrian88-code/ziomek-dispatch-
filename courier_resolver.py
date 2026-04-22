@@ -563,16 +563,29 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
             # Set shift_end z grafiku (potrzebne do feasibility shift_end check)
             cs.shift_end = _shift_end_dt(entry)
             if not on_shift:
-                # Pre-shift window: kurier zaczyna w ciągu PRE_SHIFT_WINDOW_MIN
-                # → dopuszczamy z synthetic pos i znacznikiem pre_shift.
+                # Pre-shift: kurier z dzisiejszą zmianą — dopuszczamy z synthetic
+                # pos. V3.24-A: brak 50min gate (extension_penalty + dropoff
+                # hard reject w feasibility layer zapewniają sensowne scoring).
+                # Legacy (flag=False): zachowane PRE_SHIFT_WINDOW_MIN=50 gate.
                 mins = _mins_to_shift_start(entry)
-                if mins is not None and 0 < mins <= PRE_SHIFT_WINDOW_MIN:
-                    cs.pos_source = "pre_shift"
-                    cs.pos = BIALYSTOK_CENTER
-                    cs.shift_start_min = mins
-                    _log.debug(f"pre_shift {cs.name} ({cs.courier_id}): za {mins:.0f} min")
+                from dispatch_v2 import common as C_SCHED
+                if C_SCHED.ENABLE_V324A_SCHEDULE_INTEGRATION:
+                    if mins is not None and mins > 0:
+                        cs.pos_source = "pre_shift"
+                        cs.pos = BIALYSTOK_CENTER
+                        cs.shift_start_min = mins
+                        _log.debug(f"pre_shift v324a {cs.name} ({cs.courier_id}): za {mins:.0f} min")
+                    else:
+                        _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason}")
+                        continue
                 else:
-                    _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason}")
-                    continue
+                    if mins is not None and 0 < mins <= PRE_SHIFT_WINDOW_MIN:
+                        cs.pos_source = "pre_shift"
+                        cs.pos = BIALYSTOK_CENTER
+                        cs.shift_start_min = mins
+                        _log.debug(f"pre_shift {cs.name} ({cs.courier_id}): za {mins:.0f} min")
+                    else:
+                        _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason}")
+                        continue
         result.append(cs)
     return result
