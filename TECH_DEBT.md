@@ -76,7 +76,26 @@ jest invalidated reactively. Full handling wymaga analizy:
   na readerach. Priority: low.
 - **V3.21 wave_scoring flip** — blocked na V3.19e/f production stable + BAG cap tiering.
 
-### V3.19h 3 bugi shadow LIVE (2026-04-20 23:53 UTC, flags False)
+### V3.19h 3 flags LIVE (2026-04-20 23:53 shadow → 2026-04-21 flip)
+
+**Status update 2026-04-21:** 3 flags (BUG-1/2/4) flipped to True default
+(commit 08de9fa). Live od 2026-04-20 22:30 UTC.
+
+**Audit completed 2026-04-21** (replay-based on 6-mo CSV, 44k orders):
+- **Stage 1** (~19:20 UTC): name resolution fix + feasibility gate fix
+  (/tmp/v319h_audit/*.bak-pre-s1). Match top-1=4.79%, top-5=18.96%.
+- **Stage 2 EXTREME** (~20:30 UTC per Adrian ACK): R4 bundle + R1/R5/R8
+  adaptive + V3.19f pickup ladder. TSP/V3.19e SKIP (świadoma decyzja —
+  TSP w audit historycznym = artificial scenario, prod V3.19d plans nie
+  są w dataset).
+- Dashboard: `/tmp/v319h_audit/dashboard.html` (exploratory Q&A tool)
+- Exec summary: `/tmp/v319h_audit/EXEC_SUMMARY.md`
+- **Decyzja produkcyjna:** HOLD V3.19h live. Replay fidelity bias
+  (cold-start bag=0 candidates dominate bez pełnej TSP integracji)
+  uniemożliwia produkcyjny go/no-go signal z tego audytu. Kolejny
+  audit z live `shadow_decisions.jsonl` danymi sugerowany w 2 tyg.
+
+### V3.19h shadow deploy (historical)
 
 3 MVP implementations w shadow mode z `dispatch-shadow` restart
 (panel-watcher nietknięty od 2026-04-20 17:17, dispatch-telegram
@@ -104,6 +123,380 @@ Flip planowany na jutrzejszy lunch peak side-by-side 11-14 Warsaw 2026-04-21.
 - `dispatch_v2/build_v319h_courier_tiers.py` (one-off tier regenerator)
 
 **Regression baseline:** 644 asserts PASS w 39 plikach (522 pre-V3.19h + 122 new).
+
+### Session closures 2026-04-21
+
+- **Albert Dec mapping:** PIN 8770 → cid=414 (kurier_piny.json updated,
+  confirmed w shadow dispatcher SHADOW PROPOSE best=414 multiple events
+  14:41-17:52 UTC). Courier-api auth logs empty 12h (APK possibly
+  offline, not blocking).
+- **Parser free-text disabled:** `ENABLE_TELEGRAM_FREETEXT_ASSIGN=0`
+  default (commit 82b96f7). OPERATOR_COMMENT logging code present
+  (`telegram_approver.py` × 5 occurrences). 0 entries w
+  `learning_log.jsonl` since flip — Bartek nie pisał free-text w 12h,
+  parser fix NOT_TESTED w realnych warunkach (brak event, nie fail).
+- **V3.19g1 hotfix:** live (commit 16cf921 — removed local import of
+  normalize_order in _diff_and_emit, unblocks shadow log).
+- **Lekcje sesja:**
+  - Python local import shadow globals (feedback_python_local_import_shadow.md)
+  - CC overnight audit pivot do reduced-fidelity acceptable z honest caveats
+  - CSV-based replay dla 6-mo ≠ production-grade audit (brak
+    live shadow_decisions, TSP plans, courier_plans.json snapshots)
+
+## 2026-04-22 — V3.19h live data analysis (C2/C3 validation)
+
+Post-peak validation sesja. 26h live data (21.04 08:55 → 22.04 15:01 UTC).
+Dane źródłowe: `scripts/logs/shadow_decisions.jsonl` (N=272 post-flip PROPOSE
+effective) + `dispatch_state/learning_log.jsonl` (N=446 entries, 262
+semi-strict outcomes). Methodology semi-strict (TIMEOUT_SUPERSEDED rozwiązany
+przez orders_state proposed-vs-actual). Raporty:
+- `/tmp/v319h_c2_clean_rates_2026-04-22.md` (clean rates + per-bug isolation)
+- `/tmp/v319h_c3_quick_findings_2026-04-22.md` (over-promote + neg score + BUG-4 sub)
+
+### ✅ V3.19h LIVE 21-22.04 → NIE rollback
+
+Override rate post-flip **81.30%** (213/262) vs baseline-mixed (14-20.04)
+**89.19%** (883/990). **+8pp improvement**, nie regresja.
+
+Absolute 81% > target <25% jest **strukturalne** — workflow coordinator
+bypassuje Telegram (TAK explicit=0, ASSIGN_DIRECT=2, w >95% cases silent
+panel assign przed SLA timeout). Target <25% nieosiągalny via V3.19h alone;
+wymaga osobnej inicjatywy (operator UX tool albo re-definicja metryki).
+
+**Decyzja:** V3.19h flags stay True (BUG-1/2/4 default=True). Sample
+n=259 effective. Zero modyfikacji produkcji z C2/C3 wniosków.
+
+### 🟡 V3.19j-BUG2-MAGNITUDE — PRIORITY #1 (confirmatory signal)
+
+C2 per-bug isolation: **BUG-2 fired (N=197) override rate 82.7% vs not_fired
+(N=65) 76.9% → Δ +5.8pp**. Binary +30 bonus za szeroko rozdany — gradient
+tabela per Adrian Q&A 22.04 (już w spec wyżej w tym pliku).
+
+**Działania (bez zmian z poprzedniej definicji ticketu):**
+- Implementacja `bug2_wave_continuation_bonus(gap_min)` gradient table
+- Audit re-run z nowym bonus, expected BUG-2 fires drop 13% → 5-8%
+- Top R4 klastry score breakdown rebalanced
+- **WALIDACJA Z BARTKIEM przed implementation**
+
+**Est:** 4-6h. **Blocking:** brak. **Status:** top priority post-V3.24.
+
+### 🟡 V3.19j-BUG4-MAGNITUDE — NEW MEDIUM
+
+C3-Q3 sub-isolation schema correction (cap_violation = **int** 0/1/2, nie bool):
+**cap_violation > 0 (N=20) override rate 90.0% vs cap_violation == 0 (N=228)
+83.3% → Δ +6.7pp**. V3.19h **correctly identifies overload** ale
+`bonus_bug4_cap_soft` penalty magnitude niewystarczający — kurier z violation
+dalej wygrywa scoring.
+
+Tier×pora distribution (shadow, N=247 non-cold):
+- `std/peak/4`: 107 (43%)
+- `std/normal/3`: 85 (34%)
+- `std+/peak/5` + `std+/normal/4`: 31 (13%)
+- `gold/*`: 10 (4%) ← tylko 2 `gold/peak/6`
+- `std/peak/3` + `std/off_peak/2`: 16
+
+**Propozycja:** gradient penalty based on cap_violation count:
+- violation=1: `-30` pkt (obecny range ~<-20)
+- violation=2: `-50` pkt
+- violation≥3: `-80` pkt (hard signal)
+
+**Est:** 3-4h (function change w common + tests + audit re-run).
+**Blocking:** brak; sekwencyjnie po V3.19j-BUG2-MAGNITUDE.
+
+### 🟡 V3.19k-SCORE-FLOOR — NEW MEDIUM
+
+C3-Q2 finding: **80/274 = 29.2% propozycji post-flip z score < 0** (threshold
+acceptable noise = 5%). Top 5 worst scores:
+
+| # | oid | score | proposed | actual | pos_source |
+|---|---|---|---|---|---|
+| 1 | 467795 | -446.46 | 515 Szymon P | 414 | **pre_shift** |
+| 2 | 467747 | -411.70 | 414 Albert Dec | 393 | last_assigned_pickup |
+| 3 | 467725 | -311.48 | 470 Piotr Zaw | 370 | last_assigned_pickup |
+| 4 | 467724 | -302.78 | 470 Piotr Zaw | 470 (match) | last_assigned_pickup |
+| 5 | 467539 | -292.35 | 457 Adrian Cit | 457 (match) | last_picked_up_delivery |
+
+Case #1 `pos_source=pre_shift + score -446` duplikuje V3.24-SCHEDULE
+uzasadnienie. Cases #4/#5 match actual==proposed mimo score -300 → coordinator
+musiał zaakceptować (solo viable albo no alt).
+
+**Propozycja:** hard floor `score < -150` trigger KOORD albo dodatkowy warning
+line w Telegram. Precedent: V3.16 `_demote_blind_empty` inline post-scoring layer.
+
+**Decision pending:** 7-dniowy backtest historical shadow_decisions na
+expected behavior change przed hard block commit.
+
+**Est:** 2-3h backtest + 2-3h implementation. **Blocking:** brak.
+
+### 🟡 V3.19l-TIER-PROMOTE-INVESTIGATION — NEW LOW
+
+C3-Q1 finding: top 10 proposed couriers per-oid dedup (N=274):
+
+| cid | name | n_prop | % all | match_rate |
+|---|---|---|---|---|
+| 414 | Albert Dec | 55 | 20.1% | 18.2% |
+| 470 | Piotr Zaw | 36 | 13.1% | 27.8% |
+| 400 | Adrian R | 35 | 12.8% | 20.0% |
+| 514 | Tomasz Ch | 31 | 11.3% | 19.4% |
+| 393 | Michał K. | 23 | 8.4% | 30.4% |
+
+Top 5 = **65.7%** wszystkich propozycji. **Zero Goldów w top 5** (Bartek O.
+cid=123, Mateusz O cid=413, Krystian, Gabriel). Mateusz O #10 z 3.6%
+udziałem. Match rates top 5: 18-30% — żaden top courier >30% match.
+
+**Hipoteza:** scoring underweight Gold tier albo BUG-4 tier×pora cap
+matrix za silnie ogranicza Goldów (std/peak/4 vs gold/peak/6 — delta cap=2 ale
+bonus_bug4_cap_soft pref dla std). Analogicznie feasibility może pref
+informed-pos candidates (last_picked_up_delivery vs gold z post_wave).
+
+**Zakres (discovery):** 
+- Per-tier match_rate audit w window post-flip
+- BUG-4 cap_used distribution per tier
+- Score distribution per tier (raw + penalty)
+
+**Est:** 2-3h discovery. **Blocking:** brak. **NIE blokuje V3.24.**
+
+### 🔴 V3.24-SCHEDULE-INTEGRATION — PRIORITY #1 BLOCKING
+
+Podwójne uzasadnienie z C3:
+- **Q1:** Albert Dec 414 = **20.1%** wszystkich propozycji (55/274), match 18.2%
+- **Q2 case #1:** oid=467795 score=-446 pos_source=**pre_shift** (kurier
+  przed zmianą, scoring syntetyczny cold-start bez walidacji grafiku)
+
+Existing ticket wyżej w tym pliku (sekcja "V3.24-SCHEDULE") pokrywa problem.
+Est 1.5-2 dni. **Start jutro.**
+
+**UWAGA operacyjna:** po deploy V3.24 zdjąć Albert blacklist z
+`manual_overrides.json` w tym samym kroku. Backup już istnieje:
+`manual_overrides.json.bak-pre-albert-2026-04-22`.
+
+---
+
+## 2026-04-22 — session closure (audit V3.19h Q&A + live peak)
+
+> **Ground truth dla wszystkich poniższych ticketów:**
+> `/root/.openclaw/workspace/docs/REGULY_BIZNESOWE_2026-04-22.md`
+>
+> Formalne reguły biznesowe Ziomka (HARD + SOFT gradient + hierarchia
+> priorytetów). Każdy V3.19j/V3.24+ ticket MUSI je respektować. Zmiana
+> scoringu/feasibility bez zgodności z regułami = rework.
+>
+> **Pełen session handover (feature flags, git tags, audit metrics,
+> Telegram log, open items):**
+> `/root/.openclaw/workspace/docs/SESSION_CLOSE_2026-04-22.md`
+>
+> Read BEFORE touching any ticket — zawiera context co było zrobione
+> kiedy + dlaczego oraz prerequisites dla next session (post-peak
+> cleanup checklist + Bartek validation pending).
+
+### V3.24-SCHEDULE — Schedule Integration (PILNY, HIGH priority)
+
+**Problem (discovered 22.04 10:59):**
+Ziomek proponuje kurierów poza ich godzinami pracy. Case live #467723 —
+Albert Dec (K414) zaproponowany jako feasible kandydat o 10:59 mimo że
+Albert pracuje od 12:00.
+
+**Root cause:**
+`courier_resolver.dispatchable_fleet` MA schedule check (uses
+`schedule_today.json` + `PRE_SHIFT_WINDOW_MIN=50`), ale window 50min
+to za szeroko. Albert przy shift_start=12:00 jest pre_shift-allowed
+już od 11:10. Shadow @ 11:53 Warsaw: `PROPOSE best=414` = legit per
+code ale niepożądane z Adrian perspective. Scoring/feasibility nie
+re-sprawdza grafiku przed inclusion — polega tylko na fleet roster.
+
+**Akcje:**
+1. **Quick patch (deployed 22.04 ~13:00 UTC):** `manual_overrides.json`
+   excluded list += "Albert Dec". `dispatchable_fleet:550-551` hard
+   skip. Zero restart (manual_overrides.get_excluded re-loads per call).
+   Backup: `manual_overrides.json.bak-pre-albert-2026-04-22`. Remove
+   after 12:00 Warsaw (manual or Adrian via Telegram bot command).
+2. **Properly V3.24:** Shorten `PRE_SHIFT_WINDOW_MIN` default → 15-20 min,
+   OR make per-courier configurable. Sheets fetch już jest
+   (schedule gid 533254920 w Spreadsheet `1Z5kSGUB0Tfl1TiUs5ho-ecMYJVz0-VuUctoq781OSK8`,
+   load 06:00 i 08:00). Integracja feasibility: kurier feasible tylko
+   w aktualnej zmianie (hard gate), gradient tolerance dla
+   pre_shift <15 min z penalty.
+3. **Cold-start tolerance refactor:** kurier 0-15 min do start =
+   kandydat z -5 penalty; 15-30 min = z -15 penalty; >30 min = skip.
+
+**Estimated effort:** 1.5-2 dni (window tuning + per-courier config +
+feasibility integration + tests).
+
+**Blocking:** brak — niezależny od V3.19j.
+
+---
+
+### V3.19j-BUG2-MAGNITUDE — BUG-2 magnitude tuning (HIGH priority)
+
+**Problem (discovered 22.04 Q&A audytu):**
+`common.bug2_wave_continuation_bonus(gap_min)` daje +30 binary dla
+każdego `gap<0`, niezależnie od magnitude. Ekstremalny overlap
+(gap=-44min, kurier dowozi przez 44 min po pickup ready) dostaje ten
+sam bonus co mały overlap (gap=-7min, realistic interleave).
+
+**Adrian rule (z Q&A):**
+- gap 0 do -5min = ideal (pełen +30)
+- gap -5 do -15min = bardzo dobry (+25)
+- gap -15 do -30min = OK (+15)
+- gap -30 do -45min = możliwe ale słabsze (+5)
+- gap -45 do -60min = unikamy (-10)
+- gap < -60min = bad (-30)
+
+**UWAGA:** gradient, nie threshold. Próg NIE eliminuje kandydata —
+tylko zmniejsza/odwraca bonus. Adrian: "im mniejszy waste tym lepszy,
+ALE może być nawet 40 min jeśli najlepszy kandydat".
+
+**Implementacja:**
+```python
+def bug2_wave_continuation_bonus(gap_min: float) -> float:
+    if gap_min >= 0:
+        return 0.0  # waste, nie anticipation
+    abs_gap = abs(gap_min)
+    if abs_gap <= 5:   return 30.0
+    elif abs_gap <= 15: return 25.0
+    elif abs_gap <= 30: return 15.0
+    elif abs_gap <= 45: return 5.0
+    elif abs_gap <= 60: return -10.0
+    else:               return -30.0
+```
+
+**Validation:** re-run audit z nowym bonus, expect:
+- BUG-2 fires drop from 13% (v5 post-feasibility-fix) → ~5-8%
+- Top R4 klastry score breakdown rebalanced (extreme overlap kandydaci
+  spadają w ranking)
+- Match top-1 boost +1-2pp expected
+
+**Estimated effort:** 4-6h (function change + tests + audit re-run + validation).
+
+---
+
+### V3.19j-DISTANCE-WEIGHT — Reweight road→restaurant penalty (MEDIUM priority)
+
+**Problem (discovered 22.04 Q&A case #423809):**
+W decyzjach gdzie 2+ kandydatów ma akceptowalny BUG-2 overlap
+(`|gap|<15min`), Ziomek systematically chooses far candidate z marginal
+timing improvement nad close candidate z adequate timing.
+
+**Example:** Adrian Ba (1.96km, gap=-8min) TOTAL=148.64. Mateusz Bro
+(5.16km, gap=-4min) TOTAL=209.59. Mateusz wygrał głównie przez
+timing_gap +25 vs +15 (10pkt różnicy), ale road 5.16km vs 1.96km
+nie miało wystarczającej penalty.
+
+**Adrian rule (priorytet decyzyjny):**
+1. **Najpierw:** kurier nie może DUŻO przedłużać czasu dla restauracji
+   (BUG-2 magnitude)
+2. **Potem:** bliskość do restauracji (road→restaurant)
+3. **Potem:** R4 corridor (drop "po drodze")
+
+**Implementacja:** nonlinear road_to_restaurant_penalty:
+- 0-1km: 0
+- 1-2km: -2 pkt/km
+- 2-4km: -5 pkt/km
+- 4-6km: -10 pkt/km
+- 6+ km: -15 pkt/km
+
+Apply jako tie-breaker po BUG-2 magnitude check.
+
+**Validation:** re-run audit, expect decisions w "all-OK timing" zone
+shift to closer candidates.
+
+**Estimated effort:** 3-4h.
+
+---
+
+### V3.19i — Operator interface refactor (MEDIUM priority, deferred)
+
+**Problem:** Ziomek ma 3 interfejsy odpowiedzi: zielony (zatwierdź) /
+INNY / KOORD. Free-text "jakub ol ma po drodze" → "❓ Nie rozumiem."
+Operator komentarze nie są przyswajalne podczas live peak.
+
+**Akcje:**
+1. Reaction handler 👍/👎 (message_reaction allowed_updates).
+2. Re-design parsera: `/assign K414`, `/koord`, `/swap K414 K207`,
+   `/skip`, `/stop`, `/koment <text>` komendy.
+3. Multi-operator support (Adrian + Bartek concurrent).
+4. **Dodano 22.04:** Pre-canned reasons — przy klik NIE/KOORD pojawia
+   się dropdown ("za daleko" / "extreme overlap" / "kurier nie pracuje"
+   / "inny lepszy").
+
+**Estimated effort:** 1-2 dni.
+
+---
+
+### V3.23 — Czasówki proposal mode (HIGH priority, spec ready)
+
+Spec gotowy w `/mnt/user-data/outputs/V3.23_CZASOWKI_SPEC.md` (485 L) —
+wymaga deploy do `/root/.openclaw/workspace/docs/V3.23_CZASOWKI_SPEC_2026-04-21.md`
++ git tag `v323-spec-v1`.
+
+Implementation **blocked na V3.24** (Schedule Integration) — bez
+grafiku Ziomek nie wie kto jest dostępny dla czasówki.
+
+---
+
+### Dashboard v5.1 bugs (LOW priority, audit-only, zamknięte 22.04)
+
+Discovered w Q&A audytu 22.04, **wszystkie naprawione w dashboard v5.1**:
+
+- **Z2-A ACTUAL dup w alternatives** — dashboard mkCandCard dodaje
+  "SAME PERSON as Alt #X" w ACTUAL panel + "SAME PERSON as ACTUAL
+  panel above" w alt card gdy ⭐.
+- **Z2-B Outcome threshold mismatch** — thresholds per spec sekcja 5.2:
+  GOOD ≤5, OK 5-15, BAD 15-30, CRITICAL >30 OR cancelled. Było
+  GOOD≤20 (my optimistic interpretation for urban travel). Re-classify
+  + 43,397 counterfactual est_outcome labels auto-updated.
+- **Z2-C Scoring TOTAL display mismatch** — dashboard ukrywał
+  `r9_stopover`, `r9_wait_pen`, `R1/R5/R8 soft`, `base_total`
+  breakdown, `bonus_l2`. Manual trace #424327: TOTAL math CORRECT w
+  data; tylko display incomplete. Fix: `mkCandCard` teraz renderuje
+  WSZYSTKIE non-zero components.
+
+Zero prod impact — tylko `/tmp/v319h_audit/` dashboard rendering.
+
+---
+
+### Albert Dec assignment (DONE 21-22.04)
+
+**Status:** ✅ deployed.
+
+- PIN 8770 w kurier_piny.json + kurier_ids.json (commit
+  `courier-albert-dec-pin-deployed-21apr`).
+- Tier "std" w courier_tiers.json (added 22.04 ~09:00 UTC,
+  cap_override peak=3 conservative for new courier).
+- GPS opcjonalne (cold_start pos jeśli brak).
+- Live verified 22.04 11:53 Warsaw: K414 pojawił się w shadow
+  propozycji (best=414).
+
+**Open issue:** schedule respect — Albert proposed pomimo godzin pracy
+12:00+. Quick patch blacklist via `manual_overrides.excluded`
+(deployed 22.04 ~13:00 UTC). Properly w **V3.24-SCHEDULE**.
+
+---
+
+### Lekcje techniczne dodane 22.04
+
+**Lekcja #10 — Adrian rule changes mid-Q&A.** W Q&A audytu Adrian
+zmienił interpretację swojej własnej reguły 3 razy w 30 min
+(Mateusz/Marek/Adrian Ba po kolei preferowany). **Reguła:** Q&A na
+complex business cases nie da spójnego signal w 1 sesji. Wymaga 2-3
+iteracji (Adrian + Bartek razem) zanim reguła się stabilizuje. Active
+learning loop NIE jest one-shot — ongoing process miesięcy.
+
+**Lekcja #11 — Replay reconstruction has fundamental limits.** Roster
+bias (3-day → ±3h fix), gap interpretation (BUG-2 binary signal),
+missing scoring components (dashboard render bug) — żaden nie jest
+"fundamental bug Ziomka", wszystko **artefakty replay
+reconstruction**. **Reguła:** backtest ≠ production validation. Audit
+jako research tool dla pattern discovery. Verdict produkcyjny =
+live data only.
+
+**Lekcja #12 — Adrian's domain knowledge > statistical inference.**
+Audyt v5 sugerował "BUG-2 dinner_peak Grill Kebab/Rany Julek to top
+kontrowersyjne klastry." Adrian w 30 sekund: "Albert pracuje od 12,
+to bug." CC nie miał tego signal. **Adrian operational knowledge >>
+historical analysis.** **Reguła:** live operational decisions Adriana
+> każdy backtest verdict. Ziomek active learning = Adrian (+ Bartek)
+decisions in production, nie historical Q&A.
 
 ### V3.19h deferred tickets
 
