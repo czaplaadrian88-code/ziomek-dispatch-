@@ -880,9 +880,10 @@ V324B_CZASOWKA_IDEAL_DROP_PROX_MIN = 0.5
 V324B_CZASOWKA_GOOD_KM_MAX = 2.0
 V324B_CZASOWKA_GOOD_DROP_PROX_MIN = 0.5
 
-# Feature flags — default False (pre-deploy observational)
+# Feature flags — V3.24-A flipped True 2026-04-22 B14b (post dinner peak).
+# V3.24-B nadal False (flip w B14c after A observation OK).
 ENABLE_V324A_SCHEDULE_INTEGRATION = _os.environ.get(
-    "ENABLE_V324A_SCHEDULE_INTEGRATION", "0") == "1"
+    "ENABLE_V324A_SCHEDULE_INTEGRATION", "1") == "1"
 ENABLE_V324B_CZASOWKA_SCHEDULER = _os.environ.get(
     "ENABLE_V324B_CZASOWKA_SCHEDULER", "0") == "1"
 
