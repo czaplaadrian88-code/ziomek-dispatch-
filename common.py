@@ -910,7 +910,7 @@ V325_DROPOFF_AFTER_SHIFT_HARD_MIN = 5
 # w terenie → penalize unless objectively significantly better (advantage > 50).
 # Default False — flip po shadow ~30 min observation + Adrian ACK.
 ENABLE_V325_NEW_COURIER_CAP = _os.environ.get(
-    "ENABLE_V325_NEW_COURIER_CAP", "0") == "1"
+    "ENABLE_V325_NEW_COURIER_CAP", "1") == "1"
 # Bag cap: nowy + bag >= V325_NEW_COURIER_BAG_HARD_SKIP_AT → HARD SKIP (efektywny -inf score)
 V325_NEW_COURIER_BAG_HARD_SKIP_AT = 2
 # Gradient bins (advantage = candidate.score - max(non-new alt scores))
