@@ -977,7 +977,7 @@ V326_FLEET_LOAD_PENALTY = 15.0
 # Mechanism: classify_trajectory(last_drop_district, new_pickup_district) →
 # relation → bonus/penalty.
 ENABLE_V326_MULTISTOP_TRAJECTORY = _os.environ.get(
-    "ENABLE_V326_MULTISTOP_TRAJECTORY", "0") == "1"
+    "ENABLE_V326_MULTISTOP_TRAJECTORY", "1") == "1"
 V326_R06_BONUS_SAME       = 40.0   # same district
 V326_R06_BONUS_SIMILAR    = 15.0   # adjacency hit
 V326_R06_PENALTY_SIDEWAYS = -10.0  # cross-quadrant, nie opposite
