@@ -130,18 +130,34 @@ def _load_kurier_piny() -> Dict:
 def _load_courier_names() -> Dict:
     """courier_names.json = {courier_id_str: name} (P0.5b F1.1 fix).
 
-    Zbudowany z odwrócenia kurier_ids.json. Primary source dla name lookup
-    w build_fleet_snapshot. Bez tego Telegram propozycje pokazują raw K<id>
-    zamiast imienia.
+    V3.25 (STEP A.2): MERGE inverse(kurier_ids.json) lower-priority +
+    courier_names.json higher-priority. Defensywny fallback gdy
+    courier_names jest stale wobec kurier_ids (np. Albert Dec cid=414
+    dodany 21.04 do kurier_ids ale nie do courier_names → cs.name=None
+    → silent bypass schedule check H1).
+
+    Conflict policy: courier_names.json wins (assumed manually curated).
     """
+    merged: Dict[str, str] = {}
+    try:
+        with open(KURIER_IDS_PATH) as f:
+            ids = json.load(f)
+        for name, cid in ids.items():
+            cid_str = str(cid)
+            if cid_str not in merged:
+                merged[cid_str] = name
+    except Exception as e:
+        _log.warning(f"_load_courier_names: kurier_ids fallback fail: {e}")
     try:
         with open(COURIER_NAMES_PATH) as f:
-            return json.load(f)
+            names = json.load(f)
+        for cid_str, name in names.items():
+            merged[cid_str] = name
     except FileNotFoundError:
-        return {}
+        pass
     except Exception as e:
-        _log.warning(f"_load_courier_names fail: {e}")
-        return {}
+        _log.warning(f"_load_courier_names: courier_names fail: {e}")
+    return merged
 
 
 def _load_gps_positions() -> Dict:

@@ -96,24 +96,39 @@ def tg_request(token: str, method: str, payload: Optional[dict] = None, timeout:
 # ---- formatting ----
 
 COURIER_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
+KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"  # V3.25 inverse fallback
 _courier_names_cache: Optional[Dict[str, str]] = None
 
 
 def _load_courier_names() -> Dict[str, str]:
     """Lazy load + cache courier_names.json (F1.2).
 
-    Shadow pipeline już populuje cs.name w dispatch_pipeline (z courier_resolver),
-    ale tutaj mamy fallback gdy decision.best.name=None/brak.
+    V3.25 (STEP A.2): MERGE inverse(kurier_ids.json) lower-priority +
+    courier_names.json higher-priority. Cache invalidated only przy restart
+    procesu (telegram_approver żyje długo — fresh kurier_ids changes wymagają
+    restart, akceptowalne dla rzadkich onboarding events).
     """
     global _courier_names_cache
     if _courier_names_cache is not None:
         return _courier_names_cache
+    merged: Dict[str, str] = {}
+    try:
+        with open(KURIER_IDS_PATH) as f:
+            ids = json.load(f)
+        for name, cid in ids.items():
+            cid_str = str(cid)
+            if cid_str not in merged:
+                merged[cid_str] = name
+    except Exception as e:
+        _log.warning(f"_load_courier_names: kurier_ids fallback fail: {e}")
     try:
         with open(COURIER_NAMES_PATH) as f:
-            _courier_names_cache = json.load(f)
+            names = json.load(f)
+        for cid_str, name in names.items():
+            merged[cid_str] = name
     except Exception as e:
         _log.warning(f"courier_names load fail: {e}")
-        _courier_names_cache = {}
+    _courier_names_cache = merged
     return _courier_names_cache
 
 

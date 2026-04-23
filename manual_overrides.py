@@ -13,6 +13,7 @@ from typing import List, Optional, Tuple
 
 OVERRIDES_PATH = "/root/.openclaw/workspace/dispatch_state/manual_overrides.json"
 COURIER_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
+KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"  # V3.25 inverse fallback
 
 EXCLUDE_KEYWORDS = ("nie pracuje", "wyklucz", "choruje", "nie ma")
 INCLUDE_KEYWORDS = ("wrócił", "wrocil", "wróciła", "wrocila", "pracuje", "jest", "dodaj")
@@ -49,12 +50,27 @@ def get_excluded() -> List[str]:
 
 
 def _load_names() -> List[str]:
+    """V3.25 (STEP A.2): MERGE inverse(kurier_ids) + courier_names. courier_names wins.
+    Returns deduplicated list of name strings."""
+    merged: dict = {}
+    try:
+        with open(KURIER_IDS_PATH) as f:
+            ids = json.load(f)
+        for name, cid in ids.items():
+            cid_str = str(cid)
+            if cid_str not in merged:
+                merged[cid_str] = name
+    except Exception:
+        pass
     try:
         with open(COURIER_NAMES_PATH) as f:
             d = json.load(f)
-        return [v for v in d.values() if v]
+        for cid_str, name in d.items():
+            merged[cid_str] = name
     except Exception:
-        return []
+        pass
+    # Dedupe values (różne cid mogą mieć tę samą nazwę po V3.25 alias-pair)
+    return sorted({v for v in merged.values() if v})
 
 
 def _norm(s: str) -> str:

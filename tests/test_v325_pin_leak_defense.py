@@ -110,8 +110,8 @@ def main():
     import json
     with open("/root/.openclaw/workspace/dispatch_state/courier_names.json") as f:
         prod_names = json.load(f)
-    expect("courier_names.json ma 44 entries", len(prod_names) == 44,
-           f"actual={len(prod_names)}")
+    expect("courier_names.json ma >=44 entries (44 hotfix base, +1 po STEP A Szymon Sa cid=522)",
+           len(prod_names) >= 44, f"actual={len(prod_names)}")
     expect("courier_names.json NIE zawiera 9279", "9279" not in prod_names,
            f"keys with 9279: {[k for k in prod_names if '9279' in k]}")
     expect("courier_names.json zawiera 393 (real Michał K.)",

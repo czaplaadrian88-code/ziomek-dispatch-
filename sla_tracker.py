@@ -22,15 +22,28 @@ _running = True
 _stats = {"pickup": 0, "delivered": 0, "violations": 0, "r6_alerts": 0}
 LOG_PATH = Path("/root/.openclaw/workspace/scripts/logs/sla_log.jsonl")
 COURIER_NAMES_PATH = Path("/root/.openclaw/workspace/dispatch_state/courier_names.json")
+KURIER_IDS_PATH = Path("/root/.openclaw/workspace/dispatch_state/kurier_ids.json")  # V3.25 inverse fallback
 _courier_names: Dict[str, str] = {}
 
 
 def _load_courier_names() -> Dict[str, str]:
+    """V3.25 (STEP A.2): MERGE inverse(kurier_ids) + courier_names. courier_names wins."""
+    merged: Dict[str, str] = {}
     try:
-        return json.loads(COURIER_NAMES_PATH.read_text())
+        ids = json.loads(KURIER_IDS_PATH.read_text())
+        for name, cid in ids.items():
+            cid_str = str(cid)
+            if cid_str not in merged:
+                merged[cid_str] = name
+    except Exception as e:
+        _log.warning(f"_load_courier_names: kurier_ids fallback fail: {e}")
+    try:
+        names = json.loads(COURIER_NAMES_PATH.read_text())
+        for cid_str, name in names.items():
+            merged[cid_str] = name
     except Exception as e:
         _log.warning(f"courier_names load fail: {e}")
-        return {}
+    return merged
 
 
 def _handler(signum, frame):
