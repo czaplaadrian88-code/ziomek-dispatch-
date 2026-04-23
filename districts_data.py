@@ -1273,6 +1273,92 @@ BIALYSTOK_DISTRICTS = {
 }
 
 # Lista outside-city zones wykrywanych przez miejscowość field w CSV/state.
+# V3.26 STEP 5 (R-06): dodane Olmonty + Izabelin (Adrian ACK 23.04 — both SE
+# podbiałostockie wsie, real deliveries widoczne w geocode_cache+orders_state).
 BIALYSTOK_OUTSIDE_CITY_ZONES = frozenset({
     'Choroszcz', 'Wasilków', 'Kleosin', 'Ignatki-osiedle',
+    'Olmonty', 'Izabelin',
 })
+
+
+# ============================================================
+# V3.26 STEP 5 (R-06 MULTI-STOP-TRAJECTORY)
+# ============================================================
+# Quadrant assignment per district — 6 buckets (N/E/SE/SW/W/CENTER).
+# Adrian ACK 2026-04-23 23:30: Wasilków→E, S rozbite na SE/SW, NEW Olmonty/Izabelin SE.
+# CENTER buckets non-opposite to anything (zawsze SIMILAR via adjacency lub SIDEWAYS).
+QUADRANT_BY_DISTRICT = {
+    # NORTH
+    'Antoniuk': 'N', 'Bacieczki': 'N', 'Białostoczek': 'N',
+    'Dziesięciny I': 'N', 'Dziesięciny II': 'N',
+    'Wysoki Stoczek': 'N', 'Zawady': 'N',
+    'Choroszcz': 'N', 'Młodych': 'N',
+    # EAST (Adrian: Wasilków → E, NIE N)
+    'Bojary': 'E', 'Jaroszówka': 'E', 'Sienkiewicza': 'E',
+    'Wygoda': 'E', 'Skorupy': 'E',
+    'Wasilków': 'E',
+    # SOUTH-EAST (Adrian rozbicie S 23.04: Dojlidy*, Olmonty, Izabelin)
+    'Dojlidy': 'SE', 'Dojlidy Górne': 'SE',
+    'Olmonty': 'SE', 'Izabelin': 'SE',
+    # SOUTH-WEST (Adrian rozbicie S 23.04: Bema, Nowe Miasto, Ignatki, Kleosin, Kawaleryjskie)
+    'Bema': 'SW', 'Nowe Miasto': 'SW',
+    'Ignatki-osiedle': 'SW', 'Kleosin': 'SW', 'Kawaleryjskie': 'SW',
+    # WEST
+    'Leśna Dolina': 'W', 'Słoneczny Stok': 'W',
+    'Starosielce': 'W', 'Zielone Wzgórza': 'W',
+    # CENTER (always neutral — never OPPOSITE)
+    'Centrum': 'CENTER', 'Mickiewicza': 'CENTER',
+    'Piaski': 'CENTER', 'Piasta I': 'CENTER',
+    'Piasta II': 'CENTER', 'Przydworcowe': 'CENTER',
+}
+
+# OPPOSITE pairs (set of frozensets) — explicit dla deterministic classification.
+# N ↔ SE / SW (kurier z północy → drop na południu = krzyż miasta)
+# E ↔ W (klasyczne wschód-zachód)
+# Inne pary cross-quadrant = SIDEWAYS (one-step over).
+_OPPOSITE_QUADRANT_PAIRS = frozenset({
+    frozenset({'N', 'SE'}),
+    frozenset({'N', 'SW'}),
+    frozenset({'E', 'W'}),
+})
+
+
+def classify_trajectory(drop_district, pickup_district, adjacency_map):
+    """V3.26 R-06 trajectory classifier.
+
+    Args:
+        drop_district: name z BIALYSTOK_DISTRICTS / BIALYSTOK_OUTSIDE_CITY_ZONES
+                       lub 'Unknown'/None.
+        pickup_district: same.
+        adjacency_map: BIALYSTOK_DISTRICT_ADJACENCY (z common.py).
+
+    Returns:
+        (relation, detail) tuple gdzie relation ∈
+        {'SAME', 'SIMILAR', 'SIDEWAYS', 'OPPOSITE', 'UNKNOWN'}.
+        detail = string opisujący rationale ('Unknown drop' / 'adj' / 'opp N↔SE' etc.)
+    """
+    if not drop_district or drop_district == 'Unknown':
+        return ('UNKNOWN', 'Unknown drop district')
+    if not pickup_district or pickup_district == 'Unknown':
+        return ('UNKNOWN', 'Unknown pickup district')
+    # SAME = identical
+    if drop_district == pickup_district:
+        return ('SAME', f'same district: {drop_district}')
+    # SIMILAR = adjacency map hit (oba kierunki — symmetry)
+    drop_adj = adjacency_map.get(drop_district, set())
+    pickup_adj = adjacency_map.get(pickup_district, set())
+    if pickup_district in drop_adj or drop_district in pickup_adj:
+        return ('SIMILAR', f'adjacent: {drop_district}↔{pickup_district}')
+    # CENTER touch — never OPPOSITE (zawsze "by drodze")
+    drop_q = QUADRANT_BY_DISTRICT.get(drop_district)
+    pickup_q = QUADRANT_BY_DISTRICT.get(pickup_district)
+    if drop_q is None or pickup_q is None:
+        # Outside quadrant map → UNKNOWN classification (defensive)
+        return ('UNKNOWN', f'unmapped quadrant: drop={drop_district} pickup={pickup_district}')
+    if drop_q == 'CENTER' or pickup_q == 'CENTER':
+        return ('SIDEWAYS', f'center-touch: {drop_q}↔{pickup_q} (no adjacency)')
+    # OPPOSITE explicit pairs
+    if frozenset({drop_q, pickup_q}) in _OPPOSITE_QUADRANT_PAIRS:
+        return ('OPPOSITE', f'opposite: {drop_q}↔{pickup_q}')
+    # Default = SIDEWAYS (cross-quadrant, ale nie opposite)
+    return ('SIDEWAYS', f'sideways: {drop_q}↔{pickup_q}')

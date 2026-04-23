@@ -971,6 +971,18 @@ V326_FLEET_LOAD_THRESHOLD = 1.0
 V326_FLEET_LOAD_BONUS = 15.0
 V326_FLEET_LOAD_PENALTY = 15.0
 
+# V3.26 STEP 5 (R-06 MULTI-STOP-TRAJECTORY) — district-based trajectory bonus.
+# Adrian Q&A 22.04 case Kacper Sa multi-drop: scoring nie liczył czy nowy
+# pickup PODĄŻA z trajektorii ostatniego dropu.
+# Mechanism: classify_trajectory(last_drop_district, new_pickup_district) →
+# relation → bonus/penalty.
+ENABLE_V326_MULTISTOP_TRAJECTORY = _os.environ.get(
+    "ENABLE_V326_MULTISTOP_TRAJECTORY", "0") == "1"
+V326_R06_BONUS_SAME       = 40.0   # same district
+V326_R06_BONUS_SIMILAR    = 15.0   # adjacency hit
+V326_R06_PENALTY_SIDEWAYS = -10.0  # cross-quadrant, nie opposite
+V326_R06_PENALTY_OPPOSITE = -40.0  # N↔SE/SW lub E↔W
+
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):
     """V3.24-A: penalty za delay pickup kuriera vs restaurant-requested time.

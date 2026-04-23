@@ -194,6 +194,13 @@ def _serialize_candidate(c) -> dict:
         "v324a_dropoff_excess_min": m.get("v324a_dropoff_excess_min"),
         # V3.26 STEP 1 (R-11): transparency rationale (LOCATION A — alts).
         "v326_rationale": m.get("v326_rationale"),
+        # V3.26 STEP 5 (R-06): multi-stop trajectory (LOCATION A — alts).
+        "v326_r06_relation": m.get("v326_r06_relation"),
+        "v326_r06_bonus": m.get("v326_r06_bonus"),
+        "v326_r06_drop_district": m.get("v326_r06_drop_district"),
+        "v326_r06_pickup_district": m.get("v326_r06_pickup_district"),
+        "v326_r06_detail": m.get("v326_r06_detail"),
+        "v326_r06_skip_reason": m.get("v326_r06_skip_reason"),
     }
 
 
@@ -331,6 +338,13 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "v324a_dropoff_excess_min": best_m.get("v324a_dropoff_excess_min"),
             # V3.26 STEP 1 (R-11): transparency rationale (LOCATION B — best).
             "v326_rationale": best_m.get("v326_rationale"),
+            # V3.26 STEP 5 (R-06): multi-stop trajectory (LOCATION B — best).
+            "v326_r06_relation": best_m.get("v326_r06_relation"),
+            "v326_r06_bonus": best_m.get("v326_r06_bonus"),
+            "v326_r06_drop_district": best_m.get("v326_r06_drop_district"),
+            "v326_r06_pickup_district": best_m.get("v326_r06_pickup_district"),
+            "v326_r06_detail": best_m.get("v326_r06_detail"),
+            "v326_r06_skip_reason": best_m.get("v326_r06_skip_reason"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

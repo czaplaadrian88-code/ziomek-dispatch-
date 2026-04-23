@@ -53,6 +53,134 @@ def _is_informed_cand(c) -> bool:
     return ps in INFORMED_POS_SOURCES
 
 
+# V3.26 STEP 5 (R-06): cache restaurant_name → district lookup at module load.
+# 98 entries w restaurant_coords.json — load once, build NAME → STREET map.
+_V326_RESTAURANT_DISTRICT_CACHE = None
+
+
+def _v326_load_restaurant_district_map():
+    """Build NAME → district map z restaurant_coords.json + drop_zone_from_address.
+    Cached after first call. Returns dict {company_name_lower: district_name}."""
+    global _V326_RESTAURANT_DISTRICT_CACHE
+    if _V326_RESTAURANT_DISTRICT_CACHE is not None:
+        return _V326_RESTAURANT_DISTRICT_CACHE
+    out = {}
+    try:
+        import json as _json
+        from dispatch_v2.common import drop_zone_from_address as _dza
+        with open("/root/.openclaw/workspace/dispatch_state/restaurant_coords.json") as _f:
+            data = _json.load(_f)
+        for _, entry in data.items():
+            name = (entry.get("company") or "").strip()
+            street = (entry.get("street") or "").strip()
+            city = (entry.get("city") or "Białystok").strip()
+            if not name:
+                continue
+            district = _dza(street, city) if street else "Unknown"
+            out[name.lower()] = district
+    except Exception as e:
+        log.warning(f"V326_RESTAURANT_DISTRICT_CACHE build fail: {e}")
+    _V326_RESTAURANT_DISTRICT_CACHE = out
+    log.info(f"V326_RESTAURANT_DISTRICT_CACHE built: {len(out)} entries")
+    return out
+
+
+def _v326_resolve_pickup_district(restaurant_name):
+    """Resolve restaurant name → district name. Fallback 'Unknown'."""
+    if not restaurant_name:
+        return "Unknown"
+    cache = _v326_load_restaurant_district_map()
+    return cache.get(str(restaurant_name).strip().lower(), "Unknown")
+
+
+def _v326_multistop_trajectory(feasible: list, new_order, order_id=None) -> list:
+    """V3.26 STEP 5 (R-06 MULTI-STOP-TRAJECTORY).
+
+    Per candidate z bag_size >= 1 i pos_source != 'no_gps':
+    - Find last_drop_district z bag_context (use delivery_address)
+    - Find new_pickup_district via restaurant lookup
+    - Classify trajectory → bonus/penalty per V326_R06_* constants
+    - Skip cand without bag, no_gps pos, brak coords/addresses → no adjustment
+
+    Re-sorts feasible po score desc.
+    """
+    try:
+        flag = bool(getattr(C, "ENABLE_V326_MULTISTOP_TRAJECTORY", False))
+    except Exception:
+        flag = False
+    if not flag or not feasible:
+        return feasible
+    from dispatch_v2.common import (
+        BIALYSTOK_DISTRICT_ADJACENCY,
+        drop_zone_from_address,
+    )
+    from dispatch_v2.districts_data import classify_trajectory
+
+    # Resolve new_pickup_district once (same dla wszystkich candidates)
+    new_restaurant = getattr(new_order, "restaurant", None)
+    if new_restaurant is None:
+        new_restaurant = (new_order.__dict__.get("restaurant") if hasattr(new_order, "__dict__") else None)
+    new_pickup_district = _v326_resolve_pickup_district(new_restaurant)
+
+    bonus_map = {
+        'SAME': float(getattr(C, "V326_R06_BONUS_SAME", 40.0)),
+        'SIMILAR': float(getattr(C, "V326_R06_BONUS_SIMILAR", 15.0)),
+        'SIDEWAYS': float(getattr(C, "V326_R06_PENALTY_SIDEWAYS", -10.0)),
+        'OPPOSITE': float(getattr(C, "V326_R06_PENALTY_OPPOSITE", -40.0)),
+        'UNKNOWN': 0.0,
+    }
+
+    for cand in feasible:
+        m = getattr(cand, "metrics", {}) or {}
+        bag_size = m.get("bag_size_before") or 0
+        pos_source = m.get("pos_source")
+        # SKIP path (per Adrian R-06 spec):
+        # - bag < 2 (R-06 multi-stop fires tylko gdy chain effect, bag=1 nie ma "ostatniego" dropu)
+        # - pos_source=no_gps (synthetic pos, brak realnej trajektorii)
+        if bag_size < 2 or pos_source == "no_gps":
+            m["v326_r06_relation"] = None
+            m["v326_r06_bonus"] = 0.0
+            m["v326_r06_skip_reason"] = (
+                f"bag={bag_size}<2" if bag_size < 2 else "no_gps"
+            )
+            continue
+        # Find last_drop_district from bag_context
+        bc = m.get("bag_context") or []
+        if not bc:
+            m["v326_r06_relation"] = None
+            m["v326_r06_bonus"] = 0.0
+            m["v326_r06_skip_reason"] = "no_bag_context"
+            continue
+        # Heuristic: last entry w bag_context (najnowszy assignment).
+        # TODO V3.27: użyj plan.predicted_delivered_at dla precyzyjnego "last".
+        last_drop_addr = bc[-1].get("delivery_address") if bc else None
+        last_drop_district = drop_zone_from_address(last_drop_addr, "Białystok")
+        relation, detail = classify_trajectory(
+            last_drop_district, new_pickup_district, BIALYSTOK_DISTRICT_ADJACENCY
+        )
+        bonus = bonus_map.get(relation, 0.0)
+        cand.score = cand.score + bonus
+        m["v326_r06_relation"] = relation
+        m["v326_r06_bonus"] = bonus
+        m["v326_r06_drop_district"] = last_drop_district
+        m["v326_r06_pickup_district"] = new_pickup_district
+        m["v326_r06_detail"] = detail
+        if bonus != 0.0:
+            log.info(
+                f"V326_R06 order={order_id} cid={cand.courier_id} "
+                f"{relation} ({detail}) → {bonus:+.0f}"
+            )
+    feasible.sort(
+        key=lambda c: (
+            -c.score,
+            c.metrics.get("bundle_level3_dev")
+            if c.metrics.get("bundle_level3_dev") is not None
+            else 999.0,
+        )
+    )
+    return feasible
+
+
 def _v326_fleet_load_balance(feasible: list, candidates: list, order_id=None) -> list:
     """V3.26 STEP 4 (R-10 FLEET-LOAD-BALANCE).
 
@@ -1322,6 +1450,9 @@ def assess_order(
 
     # V3.26 STEP 4 (R-10): fleet load balance adjustment (flag-gated, default False).
     feasible = _v326_fleet_load_balance(feasible, candidates, order_id)
+
+    # V3.26 STEP 5 (R-06): multi-stop trajectory district-based (flag-gated, default False).
+    feasible = _v326_multistop_trajectory(feasible, new_order, order_id)
 
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]
