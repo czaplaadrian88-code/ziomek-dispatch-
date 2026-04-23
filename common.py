@@ -892,7 +892,7 @@ ENABLE_V324B_CZASOWKA_SCHEDULER = _os.environ.get(
 # lub pickup poza shift window → HARD REJECT (vs V3.24-A soft penalty).
 # Default False — flip po shadow ~30 min observation + Adrian ACK.
 ENABLE_V325_SCHEDULE_HARDENING = _os.environ.get(
-    "ENABLE_V325_SCHEDULE_HARDENING", "0") == "1"
+    "ENABLE_V325_SCHEDULE_HARDENING", "1") == "1"
 # Pre-shift hard reject: pickup_ready < shift_start - V325_PRE_SHIFT_HARD_REJECT_MIN
 # → kurier zbyt wcześnie do realnego startu. 30 min default.
 V325_PRE_SHIFT_HARD_REJECT_MIN = 30
