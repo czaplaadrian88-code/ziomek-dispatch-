@@ -936,7 +936,7 @@ V326_RATIONALE_CLEAR_WIN_THRESHOLD = 50.0
 # heurystyka + V3.26 backtest 24.04 sanity. Multiplier > 1.0 = wolniejszy,
 # < 1.0 = szybszy. Score adjustment = (1.0 - multiplier) * SCORE_FACTOR.
 ENABLE_V326_SPEED_MULTIPLIER = _os.environ.get(
-    "ENABLE_V326_SPEED_MULTIPLIER", "0") == "1"
+    "ENABLE_V326_SPEED_MULTIPLIER", "1") == "1"
 V326_SPEED_MULTIPLIER_MAP = {
     'gold':  0.889,  # backtest 8,108 deliveries (Mateusz O, Bartek O, Gabriel)
     'std+':  1.056,  # backtest 4,837 (Jakub OL, Adrian R) — distance bias suspected
