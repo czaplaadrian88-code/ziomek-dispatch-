@@ -904,6 +904,22 @@ V325_PRE_SHIFT_SOFT_PENALTY = -20
 # zachowuje to ale flag-gated osobno dla rollout independence).
 V325_DROPOFF_AFTER_SHIFT_HARD_MIN = 5
 
+# V3.25 STEP C (R-04 NEW-COURIER-CAP gradient) — post-scoring penalty layer
+# dla kurierów z tier_label='new' (Szymon Sa cid=522, Grzegorz Rogowski cid=500).
+# Adrian's heurystyka: nowi mają +30% delivery time uncertainty + brak orientacji
+# w terenie → penalize unless objectively significantly better (advantage > 50).
+# Default False — flip po shadow ~30 min observation + Adrian ACK.
+ENABLE_V325_NEW_COURIER_CAP = _os.environ.get(
+    "ENABLE_V325_NEW_COURIER_CAP", "0") == "1"
+# Bag cap: nowy + bag >= V325_NEW_COURIER_BAG_HARD_SKIP_AT → HARD SKIP (efektywny -inf score)
+V325_NEW_COURIER_BAG_HARD_SKIP_AT = 2
+# Gradient bins (advantage = candidate.score - max(non-new alt scores))
+V325_NEW_COURIER_PENALTY_HIGH_ADVANTAGE = -10  # advantage >= 50 (objectively much better)
+V325_NEW_COURIER_PENALTY_MED_ADVANTAGE = -30   # advantage 20-50
+V325_NEW_COURIER_PENALTY_LOW_ADVANTAGE = -50   # advantage < 20 (default discount)
+V325_NEW_COURIER_HIGH_ADV_THRESHOLD = 50.0
+V325_NEW_COURIER_MED_ADV_THRESHOLD = 20.0
+
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):
     """V3.24-A: penalty za delay pickup kuriera vs restaurant-requested time.

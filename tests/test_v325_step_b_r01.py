@@ -52,11 +52,15 @@ def main():
             print(f"  ❌ {label}  {detail}")
             results["fail"] += 1
 
-    # ---------- TEST 1: flag default False — PRE-CHECK NIE fires ----------
-    print("\n=== test 1: flag default False (no PRE-CHECK) ===")
+    # ---------- TEST 1: flag explicitly disabled via env — PRE-CHECK NIE fires ----------
+    # NOTE: post-STEP B flag flip (2026-04-23 22:22), default common is True.
+    # Force False via env override dla regression coverage legacy path.
+    print("\n=== test 1: flag forced False via env (legacy path) ===")
+    import os
+    os.environ["ENABLE_V325_SCHEDULE_HARDENING"] = "0"
     importlib.reload(common)
     importlib.reload(feasibility_v2)
-    expect("ENABLE_V325_SCHEDULE_HARDENING default False",
+    expect("ENABLE_V325_SCHEDULE_HARDENING False (env override)",
            common.ENABLE_V325_SCHEDULE_HARDENING is False)
 
     order = _mk_order()

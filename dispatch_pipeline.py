@@ -53,6 +53,89 @@ def _is_informed_cand(c) -> bool:
     return ps in INFORMED_POS_SOURCES
 
 
+def _v325_new_courier_penalty(feasible: list, order_id=None) -> list:
+    """V3.25 STEP C (R-04 NEW-COURIER-CAP gradient).
+
+    Post-scoring penalty layer dla kurierów z tier_label='new'. Mimicked po
+    _demote_blind_empty pattern (V3.16) — read-modify candidate.score, re-sort.
+
+    Logic per candidate gdzie metrics.cs_tier_label == 'new':
+    - bag_size_before >= 2 → HARD SKIP (effective -inf score, sort to end)
+    - else: compute advantage = candidate.score - max(non-new alt scores)
+      - advantage >= 50 → penalty -10 (objectively significantly better)
+      - advantage 20-50 → penalty -30
+      - advantage < 20 → penalty -50 (default discount)
+
+    Visual flag dodawany w metrics.v325_new_courier_flag dla telegram_approver
+    LOCATION A + B render: "🆕 NOWY KURIER — advantage +X".
+    """
+    try:
+        flag = bool(getattr(C, "ENABLE_V325_NEW_COURIER_CAP", False))
+    except Exception:
+        flag = False
+    if not flag or not feasible:
+        return feasible
+
+    # Compute max non-new score (for advantage calc)
+    non_new_scores = [
+        c.score for c in feasible
+        if (c.metrics.get("cs_tier_label") if hasattr(c, "metrics") and c.metrics else None) != "new"
+    ]
+    max_non_new = max(non_new_scores) if non_new_scores else None
+
+    NEG_INF = -1e9
+    for cand in feasible:
+        m = getattr(cand, "metrics", {}) or {}
+        if m.get("cs_tier_label") != "new":
+            continue
+        bag_before = m.get("bag_size_before", 0) or 0
+        if bag_before >= C.V325_NEW_COURIER_BAG_HARD_SKIP_AT:
+            cand.score = NEG_INF
+            m["v325_new_courier_penalty"] = NEG_INF
+            m["v325_new_courier_flag"] = (
+                f"🆕 NOWY KURIER — HARD SKIP (bag={bag_before} >= {C.V325_NEW_COURIER_BAG_HARD_SKIP_AT})"
+            )
+            log.info(
+                f"V325_NEW_COURIER_HARD_SKIP order={order_id} cid={cand.courier_id} "
+                f"bag={bag_before}"
+            )
+            continue
+        if max_non_new is None:
+            # Wszyscy są 'new' — fallback: standard discount, no advantage signal
+            penalty = C.V325_NEW_COURIER_PENALTY_LOW_ADVANTAGE
+            advantage = None
+        else:
+            advantage = cand.score - max_non_new
+            if advantage >= C.V325_NEW_COURIER_HIGH_ADV_THRESHOLD:
+                penalty = C.V325_NEW_COURIER_PENALTY_HIGH_ADVANTAGE
+            elif advantage >= C.V325_NEW_COURIER_MED_ADV_THRESHOLD:
+                penalty = C.V325_NEW_COURIER_PENALTY_MED_ADVANTAGE
+            else:
+                penalty = C.V325_NEW_COURIER_PENALTY_LOW_ADVANTAGE
+        cand.score = cand.score + penalty
+        m["v325_new_courier_penalty"] = penalty
+        m["v325_new_courier_advantage"] = (
+            round(advantage, 2) if advantage is not None else None
+        )
+        adv_str = f"advantage +{advantage:.1f}" if advantage is not None else "all-new"
+        m["v325_new_courier_flag"] = f"🆕 NOWY KURIER — {adv_str}, penalty {penalty}"
+        log.info(
+            f"V325_NEW_COURIER order={order_id} cid={cand.courier_id} "
+            f"adv={advantage} penalty={penalty} new_score={cand.score:.2f}"
+        )
+
+    # Re-sort feasible po score (descending) + tie-break corridor deviation
+    feasible.sort(
+        key=lambda c: (
+            -c.score,
+            c.metrics.get("bundle_level3_dev")
+            if c.metrics.get("bundle_level3_dev") is not None
+            else 999.0,
+        )
+    )
+    return feasible
+
+
 def _demote_blind_empty(feasible: list, order_id=None) -> list:
     """V3.16 demotion: jeśli top-1 jest blind+empty AND istnieje informed alt,
     reorder — informed first (stable), other middle, blind+empty last.
@@ -907,6 +990,12 @@ def assess_order(
             # V3.24-A extension metrics
             "v324a_extension_min": round(v324a_extension_min, 2) if v324a_extension_min is not None else None,
             "v324a_extension_penalty": v324a_extension_penalty,
+            # V3.25 STEP C: tier propagation dla R-04 NEW-COURIER-CAP gradient.
+            # cs_tier_label = 'new' dla świeżo dodanych (Szymon Sa, Grzegorz R).
+            # cs_tier_bag = bag.tier (gold|std+|std|slow|new) dla cross-ref.
+            # Penalty applied post-scoring w _v325_new_courier_penalty.
+            "cs_tier_label": getattr(cs, "tier_label", None),
+            "cs_tier_bag": getattr(cs, "tier_bag", None),
         }
 
         # V3.24-A: hard reject gdy extension_penalty() returned None (>60 min).
@@ -990,6 +1079,9 @@ def assess_order(
 
     # V3.16: no_gps + empty bag demotion (patrz _demote_blind_empty).
     feasible = _demote_blind_empty(feasible, order_id)
+
+    # V3.25 STEP C (R-04): NEW-COURIER-CAP gradient (flag-gated, default False).
+    feasible = _v325_new_courier_penalty(feasible, order_id)
 
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]

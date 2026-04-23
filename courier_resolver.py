@@ -66,8 +66,9 @@ class CourierState:
     shift_start_min: Optional[float] = None          # minuty od now do startu zmiany (pre_shift)
     name: Optional[str] = None                       # czytelna nazwa z kurier_piny
     # V3.19h BUG-4: tier info z courier_tiers.json (None gdy cid nieznany).
-    tier_bag: Optional[str] = None                   # gold | std+ | std | slow
+    tier_bag: Optional[str] = None                   # gold | std+ | std | slow | new (V3.25)
     tier_cap_override: Optional[Dict] = None         # per-pora override np. Gabriel {peak:4, ...}
+    tier_label: Optional[str] = None                 # V3.25: 'new' dla nowych kurierów (R-04 NEW-COURIER-CAP)
 
     def to_dict(self):
         return {
@@ -371,6 +372,7 @@ def build_fleet_snapshot(
             _bag_info = _tinfo.get("bag") or {}
             cs.tier_bag = _bag_info.get("tier")
             cs.tier_cap_override = _bag_info.get("cap_override")
+            cs.tier_label = _tinfo.get("tier_label")  # V3.25: 'new' dla R-04
         # Name lookup: courier_names.json (primary, correct ID space) → kurier_piny (legacy fallback)
         name = names.get(kid)
         if name is None and kid.isdigit():
