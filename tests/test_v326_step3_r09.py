@@ -47,11 +47,11 @@ def main():
     importlib.reload(common)
     threshold = common.V326_WAVE_VETO_KM_THRESHOLD  # 3.0
 
-    # --- T1: flag default False ---
-    print("\n=== T1: flag default False ===")
-    os.environ.pop("ENABLE_V326_WAVE_GEOMETRIC_VETO", None)
+    # --- T1: flag forced False (post-V3.26 flag flip default True) ---
+    print("\n=== T1: flag forced False via env (legacy) ===")
+    os.environ["ENABLE_V326_WAVE_GEOMETRIC_VETO"] = "0"
     importlib.reload(common)
-    expect("ENABLE_V326_WAVE_GEOMETRIC_VETO default False",
+    expect("ENABLE_V326_WAVE_GEOMETRIC_VETO False (env override)",
            common.ENABLE_V326_WAVE_GEOMETRIC_VETO is False)
     bonus, vetoed = _veto_logic(30.0, 5.0, threshold, common.ENABLE_V326_WAVE_GEOMETRIC_VETO)
     expect("flag=False → bonus zachowane, no veto", bonus == 30.0 and not vetoed)

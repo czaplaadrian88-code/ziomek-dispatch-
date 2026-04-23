@@ -43,12 +43,13 @@ def main():
             print(f"  ❌ {label}  {detail}")
             results["fail"] += 1
 
-    # ---------- T1: default off ----------
-    print("\n=== T1: flag default False ===")
-    os.environ.pop("ENABLE_V326_SPEED_MULTIPLIER", None)
+    # ---------- T1: flag forced False (post-V3.26 flag flip default True) ----------
+    print("\n=== T1: flag forced False via env (legacy) ===")
+    os.environ["ENABLE_V326_SPEED_MULTIPLIER"] = "0"
     importlib.reload(common)
     importlib.reload(dispatch_pipeline)
-    expect("default False", common.ENABLE_V326_SPEED_MULTIPLIER is False)
+    expect("ENABLE_V326_SPEED_MULTIPLIER False (env override)",
+           common.ENABLE_V326_SPEED_MULTIPLIER is False)
     feasible = [_MockCandidate('123', 'Bartek O.', 100.0, 'gold')]
     out = dispatch_pipeline._v326_speed_multiplier_adjust(feasible, "t1")
     expect("flag=False → score unchanged", out[0].score == 100.0,

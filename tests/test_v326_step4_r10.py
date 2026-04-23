@@ -39,12 +39,13 @@ def main():
             print(f"  ❌ {label}  {detail}")
             results["fail"] += 1
 
-    # ---------- T1: default off ----------
-    print("\n=== T1: flag default False ===")
-    os.environ.pop("ENABLE_V326_FLEET_LOAD_BALANCE", None)
+    # ---------- T1: flag forced False (post-V3.26 flag flip default True) ----------
+    print("\n=== T1: flag forced False via env (legacy) ===")
+    os.environ["ENABLE_V326_FLEET_LOAD_BALANCE"] = "0"
     importlib.reload(common)
     importlib.reload(dispatch_pipeline)
-    expect("default False", common.ENABLE_V326_FLEET_LOAD_BALANCE is False)
+    expect("ENABLE_V326_FLEET_LOAD_BALANCE False (env override)",
+           common.ENABLE_V326_FLEET_LOAD_BALANCE is False)
     feasible = [_MockCandidate('123', 'X', 100.0, bag_size_before=0)]
     candidates = [_MockCandidate('123', 'X', 100.0, bag_size_before=0),
                   _MockCandidate('124', 'Y', 50.0, bag_size_before=5)]
