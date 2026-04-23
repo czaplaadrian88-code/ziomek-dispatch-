@@ -96,11 +96,55 @@ def _find_courier(text: str, names: List[str]) -> Optional[str]:
 
 
 def parse_command(text: str) -> Tuple[str, str]:
-    """Zwraca (action, response). action ∈ {exclude, include, reset, unknown, noop}."""
+    """Zwraca (action, response). action ∈ {exclude, include, reset, unknown, noop}.
+
+    V3.25 STEP D (R-03 core): dodane slash commands /stop i /wraca jako
+    pierwsza warstwa parsing przed legacy keyword detection. Re-używa
+    istniejącego flow excluded list (manual_overrides.json) — żaden nowy
+    state file nie potrzebny, żaden nowy bot/timer. Live activation wymaga
+    restart dispatch-telegram (Adrian ACK).
+    """
     raw = (text or "").strip()
     if not raw:
         return "noop", ""
     low = raw.lower()
+
+    # V3.25 STEP D: explicit slash commands /stop + /wraca (R-03 core).
+    # Format: "/stop <imię>" / "/wraca <imię>". Imię matchowane fuzzy
+    # przez _find_courier (substring + first-word fallback) z names list.
+    if low.startswith("/stop"):
+        rest = raw[len("/stop"):].strip()
+        if not rest:
+            return "unknown", "❓ Użycie: /stop <imię kuriera> (np. /stop bartek)"
+        names = _load_names()
+        courier = _find_courier(rest, names)
+        if courier is None:
+            return "unknown", f"❓ Nie znalazłem kuriera dla '{rest}'"
+        data = load()
+        excluded = data.get("excluded", [])
+        if courier not in excluded:
+            excluded.append(courier)
+            data["excluded"] = excluded
+            save(data)
+        return "exclude", f"🛑 {courier} STOP — wykluczony do końca dnia"
+    if low.startswith("/wraca") or low.startswith("/wrocil"):
+        # /wraca <imię>
+        parts = raw.split(maxsplit=1)
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        if not rest:
+            return "unknown", "❓ Użycie: /wraca <imię kuriera> (np. /wraca bartek)"
+        names = _load_names()
+        courier = _find_courier(rest, names)
+        if courier is None:
+            return "unknown", f"❓ Nie znalazłem kuriera dla '{rest}'"
+        data = load()
+        excluded = data.get("excluded", [])
+        if courier in excluded:
+            excluded.remove(courier)
+            data["excluded"] = excluded
+            save(data)
+        return "include", f"✅ {courier} wrócił do flow"
+
     if low in ("reset", "reset overrides"):
         data = load()
         data["excluded"] = []
