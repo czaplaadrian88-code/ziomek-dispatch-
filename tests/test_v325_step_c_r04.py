@@ -44,12 +44,15 @@ def main():
             print(f"  ❌ {label}  {detail}")
             results["fail"] += 1
 
+    # NOTE: post-STEP C flag flip (2026-04-23 22:28), default common.py = True.
+    # Force False via env override dla regression coverage legacy path.
+    os.environ["ENABLE_V325_NEW_COURIER_CAP"] = "0"
     importlib.reload(common)
     importlib.reload(dispatch_pipeline)
 
-    # ---------- T1: flag default False → no change ----------
-    print("\n=== T1: flag default False (no penalty) ===")
-    expect("ENABLE_V325_NEW_COURIER_CAP default False",
+    # ---------- T1: flag forced False via env → no change ----------
+    print("\n=== T1: flag forced False via env (legacy path) ===")
+    expect("ENABLE_V325_NEW_COURIER_CAP False (env override)",
            common.ENABLE_V325_NEW_COURIER_CAP is False)
     feasible = [
         _MockCandidate("522", 100.0, tier_label='new'),
