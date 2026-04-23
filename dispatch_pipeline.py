@@ -53,6 +53,85 @@ def _is_informed_cand(c) -> bool:
     return ps in INFORMED_POS_SOURCES
 
 
+def _v326_build_rationale(best: "Candidate", feasible: list) -> dict:
+    """V3.26 STEP 1 (R-11 TRANSPARENCY-RATIONALE).
+
+    Build decision rationale dla BEST candidate:
+    - top_3_factors: top 3 by |contribution| z mapy known scoring components.
+    - dominant_factor: name z najwyższą |contribution|.
+    - advantage_vs_next: best.score - second-best.score.
+    - close_call: True gdy advantage < V326_RATIONALE_CLOSE_CALL_THRESHOLD.
+    - clear_winner: True gdy advantage > V326_RATIONALE_CLEAR_WIN_THRESHOLD.
+    - dlaczego: PL natural-language string dla telegram render.
+
+    Flag-gated; gdy off — zwraca None.
+    """
+    try:
+        flag = bool(getattr(C, "ENABLE_V326_TRANSPARENCY_RATIONALE", False))
+    except Exception:
+        flag = False
+    if not flag or not best:
+        return None
+    bm = (best.metrics or {}) if hasattr(best, "metrics") else {}
+    # Factor map: (PL label, value, signed contribution)
+    # Bonuses are positive contributions, penalties negative.
+    factors = [
+        ("bliskość", bm.get("km_to_pickup"), -float(bm.get("km_to_pickup") or 0) * 5),  # ~5pts/km penalty
+        ("fala", None, float(bm.get("bundle_bonus") or 0)),
+        ("trajektoria", None, float(bm.get("v319h_bug2_continuation_bonus") or 0)),
+        ("timing", None, float(bm.get("timing_gap_bonus") or 0)),
+        ("post-wave", None, float(bm.get("wave_bonus") or 0) if "wave_bonus" in bm else 0),
+        ("kara_R6", None, float(bm.get("bonus_r6_soft_pen") or 0)),
+        ("kara_R8", None, float(bm.get("bonus_r8_soft_pen") or 0)),
+        ("kara_R9_stop", None, float(bm.get("bonus_r9_stopover") or 0)),
+        ("kara_R9_wait", None, float(bm.get("bonus_r9_wait_pen") or 0)),
+        ("kara_BUG4_cap", None, float(bm.get("bonus_bug4_cap_soft") or 0)),
+        ("ext_kara", None, float(bm.get("v324a_extension_penalty") or 0)),
+        ("V3.25_pre_shift", None, float(bm.get("v325_pre_shift_soft_penalty") or 0)),
+        ("V3.25_new", None, float(bm.get("v325_new_courier_penalty") or 0)),
+    ]
+    # Filter out zero contributions, sort by |contribution| desc
+    nonzero = [(label, value, contrib) for (label, value, contrib) in factors if abs(contrib) > 0.01]
+    nonzero.sort(key=lambda t: -abs(t[2]))
+    top_3 = nonzero[:3]
+    # advantage vs next
+    others = [c for c in feasible if c is not best]
+    advantage = None
+    next_name = None
+    if others:
+        next_best = max(others, key=lambda c: c.score)
+        advantage = best.score - next_best.score
+        next_name = next_best.name or f"K{next_best.courier_id}"
+    # close call / clear winner flags
+    close_call = (advantage is not None and abs(advantage) < C.V326_RATIONALE_CLOSE_CALL_THRESHOLD)
+    clear_winner = (advantage is not None and advantage > C.V326_RATIONALE_CLEAR_WIN_THRESHOLD)
+    # PL natural language string
+    if top_3:
+        parts = []
+        for label, value, contrib in top_3:
+            sign = "+" if contrib >= 0 else ""
+            parts.append(f"{label} {sign}{contrib:.0f}")
+        dlaczego = ", ".join(parts)
+    else:
+        dlaczego = "brak wyróżniających czynników (default scoring)"
+    if advantage is not None:
+        sign = "+" if advantage >= 0 else ""
+        dlaczego += f" · przewaga {sign}{advantage:.0f} vs {next_name}"
+    if close_call:
+        dlaczego += " ⚠ close call (2 kandydatów blisko siebie)"
+    elif clear_winner:
+        dlaczego += " · clear winner"
+    return {
+        "top_3_factors": [{"name": l, "value": v, "contribution": c} for l, v, c in top_3],
+        "dominant_factor": top_3[0][0] if top_3 else None,
+        "advantage_vs_next": round(advantage, 2) if advantage is not None else None,
+        "next_best_name": next_name,
+        "close_call": close_call,
+        "clear_winner": clear_winner,
+        "dlaczego": dlaczego,
+    }
+
+
 def _v325_new_courier_penalty(feasible: list, order_id=None) -> list:
     """V3.25 STEP C (R-04 NEW-COURIER-CAP gradient).
 
@@ -1085,6 +1164,12 @@ def assess_order(
 
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]
+        # V3.26 STEP 1 (R-11): build rationale dla BEST candidate (flag-gated).
+        # Inject do best.metrics["v326_rationale"] żeby shadow_dispatcher
+        # serializer + telegram_approver formatter mogli renderować.
+        _rationale = _v326_build_rationale(top[0], feasible)
+        if _rationale and hasattr(top[0], "metrics") and isinstance(top[0].metrics, dict):
+            top[0].metrics["v326_rationale"] = _rationale
         return PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",

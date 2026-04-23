@@ -920,6 +920,17 @@ V325_NEW_COURIER_PENALTY_LOW_ADVANTAGE = -50   # advantage < 20 (default discoun
 V325_NEW_COURIER_HIGH_ADV_THRESHOLD = 50.0
 V325_NEW_COURIER_MED_ADV_THRESHOLD = 20.0
 
+# V3.26 STEP 1 (R-11 TRANSPARENCY-RATIONALE) — decision rationale dla każdej
+# propozycji: top 3 factors + advantage vs next-best. Visible w Telegram
+# proposal text + serialized in shadow_decisions/learning_log dla audit.
+ENABLE_V326_TRANSPARENCY_RATIONALE = _os.environ.get(
+    "ENABLE_V326_TRANSPARENCY_RATIONALE", "0") == "1"
+# Threshold poniżej którego "close call" warning fires (BEST i 2nd-best
+# blisko siebie, Adrian może chcieć zweryfikować ręcznie).
+V326_RATIONALE_CLOSE_CALL_THRESHOLD = 5.0
+# Threshold powyżej którego "clear winner" wskazany (BEST znacząco lepszy).
+V326_RATIONALE_CLEAR_WIN_THRESHOLD = 50.0
+
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):
     """V3.24-A: penalty za delay pickup kuriera vs restaurant-requested time.

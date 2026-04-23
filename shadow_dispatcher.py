@@ -192,6 +192,8 @@ def _serialize_candidate(c) -> dict:
         "v324a_pickup_clamped_to_shift_start": m.get("v324a_pickup_clamped_to_shift_start"),
         "v324a_planned_dropoff_iso": m.get("v324a_planned_dropoff_iso"),
         "v324a_dropoff_excess_min": m.get("v324a_dropoff_excess_min"),
+        # V3.26 STEP 1 (R-11): transparency rationale (LOCATION A — alts).
+        "v326_rationale": m.get("v326_rationale"),
     }
 
 
@@ -327,6 +329,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "v324a_pickup_clamped_to_shift_start": best_m.get("v324a_pickup_clamped_to_shift_start"),
             "v324a_planned_dropoff_iso": best_m.get("v324a_planned_dropoff_iso"),
             "v324a_dropoff_excess_min": best_m.get("v324a_dropoff_excess_min"),
+            # V3.26 STEP 1 (R-11): transparency rationale (LOCATION B — best).
+            "v326_rationale": best_m.get("v326_rationale"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

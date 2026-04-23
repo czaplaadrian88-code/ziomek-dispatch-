@@ -261,6 +261,18 @@ def _reason_line(c: dict, all_candidates: list) -> str:
             reasons.append("wolny")
         elif free < 15:
             reasons.append(f"wolny za {int(round(free))} min")
+    # V3.26 STEP 1 (R-11): rationale enrichment — gdy flag ON i metrics
+    # zawiera v326_rationale (post-scoring builder), append top-3 factors.
+    try:
+        from dispatch_v2 import common as _C326
+        if getattr(_C326, "ENABLE_V326_TRANSPARENCY_RATIONALE", False):
+            rat = c.get("v326_rationale") or {}
+            dlaczego_pl = rat.get("dlaczego")
+            if dlaczego_pl:
+                # Replace simple reasons-list z full rationale (richer info).
+                return f"   💡 {dlaczego_pl}"
+    except Exception:
+        pass  # rationale must never break legacy reason path
     if not reasons:
         return ""
     return "   💡 " + " + ".join(reasons)
