@@ -53,6 +53,67 @@ def _is_informed_cand(c) -> bool:
     return ps in INFORMED_POS_SOURCES
 
 
+def _v326_fleet_load_balance(feasible: list, candidates: list, order_id=None) -> list:
+    """V3.26 STEP 4 (R-10 FLEET-LOAD-BALANCE).
+
+    Compute fleet_bag_avg z metrics.bag_size_before across all candidates
+    (feasible + infeasible — broader than just feasible dla representative
+    fleet load picture). Apply per-candidate score adjustment:
+    - delta = cand.bag_size - fleet_bag_avg
+    - delta < -V326_FLEET_LOAD_THRESHOLD → bonus (underloaded, daj mu)
+    - delta > +V326_FLEET_LOAD_THRESHOLD → penalty (overloaded, daj innym)
+    - else → no adjustment
+
+    Empty fleet (no bag data) → fallback no adjustment + WARNING log.
+    Re-sorts feasible po score desc.
+    """
+    try:
+        flag = bool(getattr(C, "ENABLE_V326_FLEET_LOAD_BALANCE", False))
+    except Exception:
+        flag = False
+    if not flag or not feasible:
+        return feasible
+    threshold = float(getattr(C, "V326_FLEET_LOAD_THRESHOLD", 1.0))
+    bonus = float(getattr(C, "V326_FLEET_LOAD_BONUS", 15.0))
+    penalty = float(getattr(C, "V326_FLEET_LOAD_PENALTY", 15.0))
+    bag_sizes = []
+    for c in (candidates or feasible):
+        m = getattr(c, "metrics", {}) or {}
+        bs = m.get("bag_size_before")
+        if isinstance(bs, (int, float)):
+            bag_sizes.append(int(bs))
+    if not bag_sizes:
+        log.warning(
+            f"V326_FLEET_LOAD order={order_id} brak bag_size data — fallback no adjustment"
+        )
+        return feasible
+    fleet_bag_avg = sum(bag_sizes) / len(bag_sizes)
+    for cand in feasible:
+        m = getattr(cand, "metrics", {}) or {}
+        cb = m.get("bag_size_before") or 0
+        delta = cb - fleet_bag_avg
+        if delta < -threshold:
+            adj = bonus
+        elif delta > threshold:
+            adj = -penalty
+        else:
+            adj = 0.0
+        if adj != 0.0:
+            cand.score = cand.score + adj
+        m["v326_fleet_bag_avg"] = round(fleet_bag_avg, 2)
+        m["v326_fleet_load_delta"] = round(delta, 2)
+        m["v326_fleet_load_adjustment"] = round(adj, 2)
+    feasible.sort(
+        key=lambda c: (
+            -c.score,
+            c.metrics.get("bundle_level3_dev")
+            if c.metrics.get("bundle_level3_dev") is not None
+            else 999.0,
+        )
+    )
+    return feasible
+
+
 def _v326_speed_multiplier_adjust(feasible: list, order_id=None) -> list:
     """V3.26 STEP 2 (R-05 SPEED-MULTIPLIER).
 
@@ -1258,6 +1319,9 @@ def assess_order(
 
     # V3.26 STEP 2 (R-05): speed multiplier adjustment (flag-gated, default False).
     feasible = _v326_speed_multiplier_adjust(feasible, order_id)
+
+    # V3.26 STEP 4 (R-10): fleet load balance adjustment (flag-gated, default False).
+    feasible = _v326_fleet_load_balance(feasible, candidates, order_id)
 
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]

@@ -958,6 +958,19 @@ ENABLE_V326_WAVE_GEOMETRIC_VETO = _os.environ.get(
 # zveto'wany. 3.0 km = ~5 min ride w Bialymstoku — krzyżowanie ½ miasta.
 V326_WAVE_VETO_KM_THRESHOLD = 3.0
 
+# V3.26 STEP 4 (R-10 FLEET-LOAD-BALANCE) — score adjustment dla równomiernego
+# rozkładu obciążenia floty. Adrian Q&A: nie chcemy 1 kurier z 5 bagami gdy
+# inni mają 0-1. Penalty dla overloaded, bonus dla underloaded.
+ENABLE_V326_FLEET_LOAD_BALANCE = _os.environ.get(
+    "ENABLE_V326_FLEET_LOAD_BALANCE", "0") == "1"
+# Delta from fleet avg → adjustment:
+#   delta < -1.0 → bonus +V326_FLEET_LOAD_BONUS (low load courier)
+#   delta > +1.0 → penalty -V326_FLEET_LOAD_PENALTY (overloaded courier)
+#   -1.0 <= delta <= +1.0 → no adjustment (around mean)
+V326_FLEET_LOAD_THRESHOLD = 1.0
+V326_FLEET_LOAD_BONUS = 15.0
+V326_FLEET_LOAD_PENALTY = 15.0
+
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):
     """V3.24-A: penalty za delay pickup kuriera vs restaurant-requested time.
