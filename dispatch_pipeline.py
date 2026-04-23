@@ -441,7 +441,9 @@ def assess_order(
             bag=bag_sim,
             new_order=new_order,
             shift_end=getattr(cs, "shift_end", None),
+            shift_start=getattr(cs, "shift_start", None),  # V3.25 STEP B (R-01)
             now=now,
+            pickup_ready_at=pickup_ready_at,
             sla_minutes=sla_minutes,
             base_sequence=_base_sequence,
         )
@@ -756,7 +758,9 @@ def assess_order(
             bonus_bug4_cap_soft = C.bug4_soft_penalty(bug4_cap_violation)
 
         # Suma penalties (BUG-4 soft penalty dodany do puli)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft
+        # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
+        bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.

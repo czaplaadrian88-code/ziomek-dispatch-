@@ -181,6 +181,7 @@ def check_feasibility_v2(
     bag: List[OrderSim],
     new_order: OrderSim,
     shift_end: Optional[datetime] = None,
+    shift_start: Optional[datetime] = None,  # V3.25 STEP B (R-01 PRE-CHECK)
     now: Optional[datetime] = None,
     pickup_ready_at: Optional[datetime] = None,
     sla_minutes: int = DEFAULT_SLA_MINUTES,
@@ -273,6 +274,56 @@ def check_feasibility_v2(
     metrics["pickup_dist_km"] = round(pickup_dist_km, 2)
     if pickup_dist_km > MAX_PICKUP_REACH_KM:
         return ("NO", f"pickup_too_far ({pickup_dist_km:.1f} km)", metrics, None)
+
+    # V3.25 STEP B (R-01 SCHEDULE-HARDENING) — unconditional PRE-CHECK przed
+    # scoring path. Fail-CLOSED: brak shift_end → HARD REJECT (NO_ACTIVE_SHIFT)
+    # zamiast silent bypass H1 (pre-V3.25). Pickup vs shift window:
+    #   pickup > shift_end → HARD REJECT PICKUP_POST_SHIFT
+    #   pickup < shift_start - 30 min → HARD REJECT PRE_SHIFT_TOO_EARLY
+    #   pickup ∈ [shift_start - 30, shift_start) → soft penalty -20 (warm-up)
+    # Dropoff hard-reject zachowane w V3.24-A line ~386 (post-simulate).
+    if C.ENABLE_V325_SCHEDULE_HARDENING:
+        pickup_ref = pickup_ready_at if pickup_ready_at is not None else now
+        if pickup_ref.tzinfo is None:
+            pickup_ref = pickup_ref.replace(tzinfo=timezone.utc)
+        # Gate 1: brak shift_end → courier nie ma active shift mapping
+        if shift_end is None:
+            metrics["v325_reject_reason"] = "NO_ACTIVE_SHIFT"
+            return ("NO", "v325_NO_ACTIVE_SHIFT (cs.shift_end=None — brak schedule mapping)", metrics, None)
+        # Normalize shift_end TZ
+        _shift_end = shift_end.replace(tzinfo=timezone.utc) if shift_end.tzinfo is None else shift_end
+        # Gate 2: pickup post-shift hard reject
+        if pickup_ref > _shift_end:
+            excess = (pickup_ref - _shift_end).total_seconds() / 60.0
+            metrics["v325_pickup_post_shift_excess_min"] = round(excess, 2)
+            metrics["v325_reject_reason"] = "PICKUP_POST_SHIFT"
+            return (
+                "NO",
+                f"v325_PICKUP_POST_SHIFT (pickup {pickup_ref.strftime('%H:%M')} "
+                f"vs shift_end {_shift_end.strftime('%H:%M')}, excess +{excess:.1f}min)",
+                metrics, None,
+            )
+        # Gate 3: pre-shift hard reject + soft penalty zone
+        if shift_start is not None:
+            _shift_start = shift_start.replace(tzinfo=timezone.utc) if shift_start.tzinfo is None else shift_start
+            too_early_min = (_shift_start - pickup_ref).total_seconds() / 60.0
+            if too_early_min > C.V325_PRE_SHIFT_HARD_REJECT_MIN:
+                metrics["v325_pre_shift_too_early_min"] = round(too_early_min, 2)
+                metrics["v325_reject_reason"] = "PRE_SHIFT_TOO_EARLY"
+                return (
+                    "NO",
+                    f"v325_PRE_SHIFT_TOO_EARLY (pickup {pickup_ref.strftime('%H:%M')} "
+                    f"vs shift_start {_shift_start.strftime('%H:%M')}, before by {too_early_min:.1f}min)",
+                    metrics, None,
+                )
+            if 0 < too_early_min <= C.V325_PRE_SHIFT_HARD_REJECT_MIN:
+                # Pre-shift warm-up zone — soft penalty (kurier może zacząć ale otrzyma penalty w scoring).
+                metrics["v325_pre_shift_soft_penalty_min"] = round(too_early_min, 2)
+                metrics["v325_pre_shift_soft_penalty"] = C.V325_PRE_SHIFT_SOFT_PENALTY
+            else:
+                metrics["v325_pre_shift_soft_penalty"] = 0
+        # Gate 4: dropoff hard reject post-simulate (V3.25 explicit, mirrors V3.24-A
+        # but flag-gated osobno) — patrz blok niżej dot. v325_dropoff_after_shift_check.
 
     if shift_end is not None:
         if shift_end.tzinfo is None:

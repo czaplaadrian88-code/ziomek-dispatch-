@@ -887,6 +887,23 @@ ENABLE_V324A_SCHEDULE_INTEGRATION = _os.environ.get(
 ENABLE_V324B_CZASOWKA_SCHEDULER = _os.environ.get(
     "ENABLE_V324B_CZASOWKA_SCHEDULER", "1") == "1"
 
+# V3.25 STEP B (R-01 SCHEDULE-HARDENING) — unconditional PRE-CHECK w
+# feasibility_v2 przed scoring path. Fail-CLOSED policy: cs.shift_end=None
+# lub pickup poza shift window → HARD REJECT (vs V3.24-A soft penalty).
+# Default False — flip po shadow ~30 min observation + Adrian ACK.
+ENABLE_V325_SCHEDULE_HARDENING = _os.environ.get(
+    "ENABLE_V325_SCHEDULE_HARDENING", "0") == "1"
+# Pre-shift hard reject: pickup_ready < shift_start - V325_PRE_SHIFT_HARD_REJECT_MIN
+# → kurier zbyt wcześnie do realnego startu. 30 min default.
+V325_PRE_SHIFT_HARD_REJECT_MIN = 30
+# Pre-shift soft penalty: pickup_ready ∈ [shift_start - 30, shift_start)
+# → soft penalty -20 (gradient zone, kurier "warm-up" minutes).
+V325_PRE_SHIFT_SOFT_PENALTY = -20
+# Dropoff hard reject: planned_dropoff > shift_end + 5 min
+# (parallel do V3.24-A V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN, V3.25
+# zachowuje to ale flag-gated osobno dla rollout independence).
+V325_DROPOFF_AFTER_SHIFT_HARD_MIN = 5
+
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):
     """V3.24-A: penalty za delay pickup kuriera vs restaurant-requested time.

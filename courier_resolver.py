@@ -62,6 +62,7 @@ class CourierState:
     pos_age_min: Optional[float] = None              # sekund/60 od pomiaru
     bag: List[Dict] = field(default_factory=list)    # ordery w bagu (jako dict z state)
     shift_end: Optional[datetime] = None             # koniec zmiany (None = nieznane)
+    shift_start: Optional[datetime] = None           # V3.25: początek zmiany (Warsaw aware) dla R-01 PRE-CHECK
     shift_start_min: Optional[float] = None          # minuty od now do startu zmiany (pre_shift)
     name: Optional[str] = None                       # czytelna nazwa z kurier_piny
     # V3.19h BUG-4: tier info z courier_tiers.json (None gdy cid nieznany).
@@ -519,6 +520,23 @@ def _mins_to_shift_start(entry: Optional[dict]) -> Optional[float]:
         return None
 
 
+def _shift_start_dt(entry: Optional[dict]) -> Optional[datetime]:
+    """V3.25: z entry grafiku → datetime startu zmiany (Warsaw aware).
+    Mirror _shift_end_dt — używane w dispatchable_fleet do set cs.shift_start
+    dla V3.25 R-01 SCHEDULE-HARDENING PRE-CHECK."""
+    start_str = (entry or {}).get("start")
+    if not start_str or ":" not in start_str:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        WAW = ZoneInfo("Europe/Warsaw")
+        now_w = datetime.now(WAW)
+        h, m = start_str.split(":")
+        return now_w.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+    except Exception:
+        return None
+
+
 def _shift_end_dt(entry: Optional[dict]) -> Optional[datetime]:
     """Z entry grafiku → datetime końca zmiany (Warsaw aware)."""
     end_str = (entry or {}).get("end")
@@ -578,8 +596,10 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                 _log.debug(f"skip {cs.name} ({cs.courier_id}): nie pracuje dziś")
                 continue
             on_shift, reason = is_on_shift(cs.name, schedule)
-            # Set shift_end z grafiku (potrzebne do feasibility shift_end check)
+            # Set shift_end + shift_start z grafiku (V3.25 R-01 R-NO-WASTE PRE-CHECK
+            # potrzebuje obu — dropoff vs end, pickup vs start).
             cs.shift_end = _shift_end_dt(entry)
+            cs.shift_start = _shift_start_dt(entry)
             if not on_shift:
                 # Pre-shift: kurier z dzisiejszą zmianą — dopuszczamy z synthetic
                 # pos. V3.24-A: brak 50min gate (extension_penalty + dropoff
