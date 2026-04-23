@@ -2,8 +2,10 @@
 """daily_stats_sheets.py — dzienny zapis statystyk do Google Sheets.
 
 Źródło:
-  - liczba zleceń: state_machine.get_all() filtrowane po first_seen
-    w strefie Warsaw, wszystkie statusy
+  - liczba zleceń: state_machine.get_all() filtrowane do status=delivered
+    (match panel Rutcom "Ilość zleceń" 1:1). Zlecenia utworzone poza
+    oknem 9-23 Warsaw bucketowane do skrajnej godziny (h<9 → h=9,
+    h>23 → h=23), więc sum-of-hours = panel total. V3.27 fix 2026-04-23.
   - kolumna Ziomek: shadow_decisions.jsonl — unikalne courier_id z
     feasibility=MAYBE w propozycjach w danej godzinie
 
@@ -101,6 +103,11 @@ def count_orders_by_hour(target_day: date) -> dict:
     items = orders.items() if isinstance(orders, dict) else enumerate(orders)
     counts = Counter()
     for _, o in items:
+        # V3.27 filter: tylko delivered (panel "Ilość zleceń" = delivered).
+        # Bez tego filtra wliczaliśmy cancelled (status 8/9) + planned
+        # stuck → 17.04 +2, 22.04 +1 vs panel.
+        if (o.get("status") or "").lower() != "delivered":
+            continue
         fs = o.get("first_seen") or o.get("created_at")
         if not fs:
             continue
@@ -113,9 +120,14 @@ def count_orders_by_hour(target_day: date) -> dict:
         local = dt.astimezone(WARSAW)
         if local.date() != target_day:
             continue
+        # V3.27 edge bucket: zlecenia poza oknem 9-23 → skrajna godzina.
+        # Zachowuje layout sheet 9-23 i daje sum-of-hours = panel total.
         h = local.hour
-        if HOUR_START <= h <= HOUR_END:
-            counts[h] += 1
+        if h < HOUR_START:
+            h = HOUR_START
+        elif h > HOUR_END:
+            h = HOUR_END
+        counts[h] += 1
     return {h: counts.get(h, 0) for h in range(HOUR_START, HOUR_END + 1)}
 
 
@@ -460,6 +472,8 @@ def main():
     ap = argparse.ArgumentParser(description="Daily dispatch stats → Google Sheets")
     ap.add_argument("--dry-run", action="store_true", help="No writes, log only")
     ap.add_argument("--date", help="Override target date YYYY-MM-DD (Warsaw)")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="Force rewrite even if column already populated (V3.27 backfill)")
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -517,8 +531,11 @@ def main():
         apply_block_borders(ws, header_row, has_month, log)
 
     if not created and column_already_populated(all_values, header_row, weekday_idx):
-        log.info(f"{DAYS_SHORT[weekday_idx]} column already populated → skip (idempotent)")
-        return
+        if args.overwrite:
+            log.info(f"{DAYS_SHORT[weekday_idx]} column populated — --overwrite, rewriting")
+        else:
+            log.info(f"{DAYS_SHORT[weekday_idx]} column already populated → skip (idempotent)")
+            return
 
     write_day_triple(ws, header_row, weekday_idx, counts, pools, args.dry_run, log)
 
