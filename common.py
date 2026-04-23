@@ -962,7 +962,7 @@ V326_WAVE_VETO_KM_THRESHOLD = 3.0
 # rozkładu obciążenia floty. Adrian Q&A: nie chcemy 1 kurier z 5 bagami gdy
 # inni mają 0-1. Penalty dla overloaded, bonus dla underloaded.
 ENABLE_V326_FLEET_LOAD_BALANCE = _os.environ.get(
-    "ENABLE_V326_FLEET_LOAD_BALANCE", "0") == "1"
+    "ENABLE_V326_FLEET_LOAD_BALANCE", "1") == "1"
 # Delta from fleet avg → adjustment:
 #   delta < -1.0 → bonus +V326_FLEET_LOAD_BONUS (low load courier)
 #   delta > +1.0 → penalty -V326_FLEET_LOAD_PENALTY (overloaded courier)
