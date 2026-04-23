@@ -1,5 +1,18 @@
 # CLAUDE.md — Dispatch V2 instruction for Claude Code sessions
-# Update: 2026-04-20 (post-V3.19+V3.20)
+# Update: 2026-04-20 (post-V3.19+V3.20) — 22.04 session close references added
+
+## Latest session handover (READ FIRST)
+
+Przy starcie nowej sesji **przeczytaj w kolejności**:
+
+1. **`workspace/docs/SESSION_CLOSE_2026-04-22.md`** — pełen snapshot stanu: feature flags, git tags, audit metrics, open tickets, Telegram log. **Single source of truth dla "co było zrobione kiedy".**
+2. **`workspace/docs/REGULY_BIZNESOWE_2026-04-22.md`** — ground truth dla scoringu/feasibility (HARD + SOFT gradient reguły).
+3. **Ten plik (CLAUDE.md)** — setup, rollback, procedures, pull-requests rules.
+4. **TECH_DEBT.md** — open tickets V3.19j, V3.24, V3.19i, V3.23, dashboard bugs.
+
+Sesja close 22.04 zawiera: audit V3.19h complete (44k records, top-5 44.22%),
+V3.24-SCHEDULE discovered as pilny blocker (Albert Dec pre-shift hotfix via
+`manual_overrides`), V3.19j tickets ready dla Bartek validation.
 
 ## Quick context
 
@@ -171,6 +184,70 @@ Session > 5h warnings:
 If user asks "did you do X?" and you're not 100% sure → grep or cat
 to verify BEFORE answering. Memory drift over long sessions is real.
 
+## Q&A Lessons Learned (22.04.2026)
+
+Po sesji Q&A 22.04 Adrian+Claude wyekstrahowali następujące meta-lessons
+które CC MUSI przestrzegać w przyszłych sesjach.
+
+### LESSON-QA-8: Cognitive drift w długich sesjach
+
+Po 4h sesji Claude popełnił 3 błędy w Case #12 (czasówka vs elastyk,
+hold-up description, wpływ innego ordera). Adrian musiał korygować.
+
+**Zasada dla CC:**
+- Po 4h sesji: obligatory STOP + re-grep kluczowych faktów z CLAUDE.md + TECH_DEBT.md
+- Po 6h sesji: STOP + propose session close
+- Dalsze Q&A: max 3 cases per batch, między batches re-verify context
+- RSS >1.2GB → automatic checkpoint + alert user
+
+### LESSON-QA-9: Operational awareness > scoring quality
+
+Naprawa systemu informacyjnego (Ziomek wie co się dzieje operacyjnie) ma
+WYŻSZY priorytet niż tuning algorytmu scoring. User experience =
+psychological trust. Scoring -0.05 RMSE nic nie da jeśli Ziomek nie wie
+że kurier został zwolniony.
+
+**Zasada dla CC:**
+- Priorytetyzuj reguły "widzenia rzeczywistości" (R-03 Telegram parser,
+  R-02 courier sync) przed "lepsze liczenie" (R-05 speed multiplier,
+  R-09 wave veto)
+- Przed implementacją scoring tuning: potwierdź że Ziomek ma full
+  visibility operational state
+
+### LESSON-QA-10: Rule gradient nie threshold
+
+Case #4 pokazał że binary rule "nowy=skip" zawodzi gdy nowy ma obiektywną
+przewagę +63 points. Gradient z 3 buckets (high/medium/low advantage)
+działa lepiej.
+
+**Zasada dla CC:**
+- Nowa reguła scoring/feasibility: domyślnie gradient (3-5 buckets),
+  nie binary threshold
+- Binary dozwolony tylko dla HARD rejects (safety, collision, post-shift)
+- Przy gradient: documentuj 3+ buckets z przykładami gdy każdy fires
+
+### LESSON-QA-11: Mapping CID concrete wymaga Adrian verify
+
+CC Faza A zmapował cid=522 na "Grzegorz Rogowski" — błąd, to **Szymon
+Sadowski**. Q&A ujawnił.
+
+**Zasada dla CC:**
+- Przed committem dowolnego cid→nazwa mapping: STOP + ask Adrian
+- Audyty CC są good-enough dla patterns/statistical, ale concrete
+  bindings (cid↔name, shift↔courier, restaurant↔dedicated_courier)
+  wymagają Adrian confirm
+
+### LESSON-QA-12: Screenshoty paneli + mapy = game-changer Q&A
+
+Adrian dostarczył screenshots rutcom panelu dla Jakub OL/Michał K./Szymon Sa
++ mapy Google 5-stop route Case #8. To odblokowało insight R-06
+MULTI-STOP-TRAJECTORY.
+
+**Zasada dla CC:**
+- Przy pattern analysis: jeśli tylko text log → request screenshot/map
+  from Adrian
+- Multi-stop decisions nie można zaudytować bez wizualizacji trajectory
+
 ---
 
 # Changelog (V3.16 → V3.7, preserved for historical reference)
@@ -271,6 +348,27 @@ Reguły bazowe (Bartek Gold Standard):
 - **R7** long-haul peak isolation (>4.5km, 14-17 Warsaw)
 - **R8** pickup_span czasowy — DEFERRED F2.1c
 - **R9** stopover -8/stop + wait penalty (-6/min over 5)
+
+---
+
+# Business rules reference (GROUND TRUTH dla scoringu/feasibility)
+
+**Primary business rules doc:** `workspace/docs/REGULY_BIZNESOWE_2026-04-22.md`
+
+Formalne reguły biznesowe Ziomka spisane po sesji 22.04.2026 (Q&A audytu V3.19h
++ live peak observations). **Każda zmiana scoringu/feasibility/feature flagi
+musi respektować te reguły.** W szczególności:
+
+- **R-DECLARED-TIME** (HARD) — `czas_kuriera ≥ czas_odbioru_timestamp` zawsze
+- **R-35MIN-MAX** (HARD) — max 35 min delivery od pickup (R6 gate)
+- **R-NO-WASTE** (SOFT gradient) — BUG-2 magnitude per tabela (V3.19j-BUG2-MAGNITUDE)
+- **R-PRIORYTETÓW-DECYZYJNYCH** — hierarchia: waste → bliskość → R4 → tier → bag
+- **R-FLEET-LEVEL** — optymalizuj flotę, nie pojedynczy order
+- **R-SCHEDULE-AWARE** (implicit 22.04, formalize w V3.24) — Ziomek sprawdza grafik
+
+Encoding checklist (dla każdej reguły): kod + tests + shadow_dispatcher
+serializer (LOCATION A+B) + learning_analyzer readers + dashboard rendering.
+Brak któregokolwiek = niewidoczny bug.
 
 ---
 

@@ -143,6 +143,116 @@ Flip planowany na jutrzejszy lunch peak side-by-side 11-14 Warsaw 2026-04-21.
   - CSV-based replay dla 6-mo ≠ production-grade audit (brak
     live shadow_decisions, TSP plans, courier_plans.json snapshots)
 
+## V3.25 Sprint — 4 CRITICAL (23.04.2026, ~7h)
+
+Z Q&A session 22.04. Pełen plik reguł (gdy Adrian upload):
+`/tmp/v324_qa_rules_extracted_2026-04-22.md`.
+
+### R-01 SCHEDULE-HARDENING (2h) — CRITICAL
+
+V3.24-A niedeterminizm: cid bez mapping pass-through, dropoff >
+shift_end+5min soft, pickup post-shift czasem przechodzi.
+
+**Fix:** unconditional PRE-CHECK w `feasibility_v2.py`:
+- cid not in kurier_ids.json → HARD REJECT
+- No active shift → HARD REJECT
+- Pickup < shift_start - 30min → HARD REJECT (PRE_SHIFT_BEYOND_TOLERANCE)
+- Dropoff > shift_end + 5min → HARD REJECT (DROPOFF_POST_SHIFT)
+- Pickup > shift_end → HARD REJECT (PICKUP_POST_SHIFT)
+
+**Flag:** `ENABLE_V325_SCHEDULE_HARDENING=False` → shadow 30min → flip.
+
+**Rollback:** flag False + restart dispatch-shadow.
+
+### R-02 COURIER-SYNC + DISTRICTS-SCRAPE (2.5h) — CRITICAL
+
+**Courier sync (3 nowi):**
+- cid=522 = **Szymon Sadowski** (potwierdzony Q&A — NIE Grzegorz Rogowski
+  jak CC Faza A błędnie zmapował, lesson QA-11)
+- Kuba Olchowik (cid TBD — panel scrape)
+- Grzegorz Rogowski (cid TBD — panel scrape)
+
+**Tier changes:**
+- Kuba OL (370) → Standard+ (z Standard)
+- Krystian (61) → inactive=True (permanent OFF)
+
+**Districts:** scrape http://www.info.bialystok.pl/osiedla/N/obiekt.php
+N=1..28, diff z `districts_data.py`, update jeśli diff.
+
+**Files affected:** kurier_ids.json, kurier_piny.json, courier_tiers.json,
+schedule_utils.PANEL_TO_SCHEDULE, districts_data.py
+
+**Rollback:** git revert + restart dispatch-shadow.
+
+### R-03 TELEGRAM-OPS-PARSER (2h) — CRITICAL
+
+**New file:** `telegram_ops_parser.py` + `/etc/systemd/system/dispatch-telegram-ops.{service,timer}`
+(1 min tick).
+
+**Komendy na grupie -5149910559:**
+- `/zwolnij <cid>` — permanent exclude (manual_overrides_excluded.json)
+- `/zostaje <cid> <hh:mm>` — dynamic shift extension (manual_overrides_extended.json)
+- `/wraca <cid>` — zdjęcie blacklist/pauzy
+- `/pauza <cid> <min>` — temporary pause (manual_overrides_paused.json)
+
+**Auth:** only AUTHORIZED_OPS = [Adrian_telegram_id, Bartek_telegram_id]
+
+**Integration:** `feasibility_v2.py` reads 3 override files PRE schedule check.
+
+**Albert Dec migration:** wywal `COURIER_414_BLACKLIST_UNTIL` z quick patch,
+zastąp wpisem w manual_overrides_excluded.json.
+
+**Rollback:** `systemctl disable --now dispatch-telegram-ops.timer` +
+git revert.
+
+### R-04 NEW-COURIER-CAP gradient (0.5h) — CRITICAL
+
+**Fix:** gradient penalty w `scoring.py` post-base-score:
+- tier != "new" → 0
+- bag_size >= 2 → -9999 (HARD SKIP)
+- advantage >= 50 → -10
+- advantage 20-50 → -30
+- advantage < 20 → -50
+
+**Flag:** `ENABLE_V325_NEW_COURIER_CAP=False` → shadow → flip.
+
+**Rollback:** flag False.
+
+---
+
+## V3.26 Backlog — 7 HIGH (28-31.04, ~28h)
+
+- R-05 SPEED-MULTIPLIER (6-10h, backtest 40k dataset)
+- R-06 MULTI-STOP-TRAJECTORY (4-6h)
+- R-07 PICKUP-COLLISION-CHECK (3-4h)
+- R-08 PICKUP-EXTENSION-NEGOTIATION (5-6h, + Adrian tolerance table)
+- R-09 WAVE-CONTINUATION-GEOMETRIC-VETO (2h)
+- R-10 FLEET-LOAD-BALANCING (3h)
+- R-11 TRANSPARENCY-DECISION-RATIONALE (4h)
+
+## V3.27+ Backlog — 7 MEDIUM (maj)
+
+R-12 restaurant-holding-detection, R-13 dedicated-courier,
+R-14 natural-wave-continuation, R-15 match-source-attribution,
+R-16 recent-delivery-decrement, R-17 tier-dynamic-assignment,
+R-18 districts-complete-sync
+
+## LOW Backlog (po Q4)
+
+R-19 late-evening-simple-mode, R-20 post-wave-pos-downgrade,
+R-21 extended-shift-awareness
+
+---
+
+## Success metrics V3.25 → V3.26 → V3.27
+
+- Baseline post V3.19h: PANEL_OVERRIDE 81%
+- **Post V3.25 cel:** <60% (4/10 Q&A cases resolved)
+- **Post V3.26 cel:** <16% (8/10 Q&A cases resolved)
+- **Post V3.27 cel:** <10% + wysoki trust
+
+---
+
 ## 2026-04-22 — V3.19h live data analysis (C2/C3 validation)
 
 Post-peak validation sesja. 26h live data (21.04 08:55 → 22.04 15:01 UTC).
