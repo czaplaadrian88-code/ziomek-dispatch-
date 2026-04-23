@@ -53,6 +53,59 @@ def _is_informed_cand(c) -> bool:
     return ps in INFORMED_POS_SOURCES
 
 
+def _v326_speed_multiplier_adjust(feasible: list, order_id=None) -> list:
+    """V3.26 STEP 2 (R-05 SPEED-MULTIPLIER).
+
+    Apply tier-based speed adjustment do score:
+      adjustment = (1.0 - multiplier) * SCORE_FACTOR
+    Faster tier (multi<1.0) → positive boost, slower tier (multi>1.0) → penalty.
+
+    Reads cs_tier_bag (z courier_tiers.json bag.tier) z metrics.
+    Multiplier map per V326_SPEED_MULTIPLIER_MAP (backtest empirical).
+    Unknown tier → fallback std (multi 1.0, no change) + WARNING log.
+
+    NIE zmienia feasibility metrics (eta_pickup, drive_min). Tylko score.
+    Re-sorts feasible po score desc na koniec.
+    """
+    try:
+        flag = bool(getattr(C, "ENABLE_V326_SPEED_MULTIPLIER", False))
+    except Exception:
+        flag = False
+    if not flag or not feasible:
+        return feasible
+    mult_map = getattr(C, "V326_SPEED_MULTIPLIER_MAP", {})
+    factor = float(getattr(C, "V326_SPEED_SCORE_FACTOR", 50.0))
+    for cand in feasible:
+        m = getattr(cand, "metrics", {}) or {}
+        tier = m.get("cs_tier_bag")
+        if tier is None or tier not in mult_map:
+            tier_used = "std"
+            mult = 1.0
+            if tier is not None:
+                log.warning(
+                    f"V326_SPEED_MULT order={order_id} cid={cand.courier_id} "
+                    f"unknown tier={tier!r}, fallback std (multi=1.0)"
+                )
+        else:
+            tier_used = tier
+            mult = float(mult_map[tier])
+        adjustment = (1.0 - mult) * factor
+        cand.score = cand.score + adjustment
+        m["v326_speed_tier_used"] = tier_used
+        m["v326_speed_multiplier"] = mult
+        m["v326_speed_score_adjustment"] = round(adjustment, 2)
+    # Re-sort feasible by score desc (tie-break corridor dev — pattern z _v325)
+    feasible.sort(
+        key=lambda c: (
+            -c.score,
+            c.metrics.get("bundle_level3_dev")
+            if c.metrics.get("bundle_level3_dev") is not None
+            else 999.0,
+        )
+    )
+    return feasible
+
+
 def _v326_build_rationale(best: "Candidate", feasible: list) -> dict:
     """V3.26 STEP 1 (R-11 TRANSPARENCY-RATIONALE).
 
@@ -1161,6 +1214,9 @@ def assess_order(
 
     # V3.25 STEP C (R-04): NEW-COURIER-CAP gradient (flag-gated, default False).
     feasible = _v325_new_courier_penalty(feasible, order_id)
+
+    # V3.26 STEP 2 (R-05): speed multiplier adjustment (flag-gated, default False).
+    feasible = _v326_speed_multiplier_adjust(feasible, order_id)
 
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]

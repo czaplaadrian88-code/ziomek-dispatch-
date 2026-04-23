@@ -931,6 +931,23 @@ V326_RATIONALE_CLOSE_CALL_THRESHOLD = 5.0
 # Threshold powyżej którego "clear winner" wskazany (BEST znacząco lepszy).
 V326_RATIONALE_CLEAR_WIN_THRESHOLD = 50.0
 
+# V3.26 STEP 2 (R-05 SPEED-MULTIPLIER) — backtest empirical (40,790 deliveries
+# Nov2025-Apr2026, n=22,482 std baseline median=18min). Adrian Q&A 22.04
+# heurystyka + V3.26 backtest 24.04 sanity. Multiplier > 1.0 = wolniejszy,
+# < 1.0 = szybszy. Score adjustment = (1.0 - multiplier) * SCORE_FACTOR.
+ENABLE_V326_SPEED_MULTIPLIER = _os.environ.get(
+    "ENABLE_V326_SPEED_MULTIPLIER", "0") == "1"
+V326_SPEED_MULTIPLIER_MAP = {
+    'gold':  0.889,  # backtest 8,108 deliveries (Mateusz O, Bartek O, Gabriel)
+    'std+':  1.056,  # backtest 4,837 (Jakub OL, Adrian R) — distance bias suspected
+    'std':   1.000,  # baseline (always 1.0)
+    'slow':  1.111,  # backtest 1,895 (Łukasz B, Michał Li, Artsem Km)
+    'new':   1.300,  # policy default — n=739 empirical insufficient (Adrian Q&A "duuużo czasu")
+}
+# Score adjustment = (1.0 - multi) * SCORE_FACTOR.
+# gold (0.889) → +5.55 score boost, slow (1.111) → -5.55 penalty, new (1.30) → -15.
+V326_SPEED_SCORE_FACTOR = 50.0
+
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):
     """V3.24-A: penalty za delay pickup kuriera vs restaurant-requested time.

@@ -45,12 +45,12 @@ def main():
             print(f"  ❌ {label}  {detail}")
             results["fail"] += 1
 
-    # ---------- T1: flag default False ----------
-    print("\n=== T1: flag default False → rationale=None ===")
-    os.environ.pop("ENABLE_V326_TRANSPARENCY_RATIONALE", None)
+    # ---------- T1: flag forced False (post-V3.26 STEP 1 default flipped True) ----------
+    print("\n=== T1: flag forced False via env (legacy) ===")
+    os.environ["ENABLE_V326_TRANSPARENCY_RATIONALE"] = "0"
     importlib.reload(common)
     importlib.reload(dispatch_pipeline)
-    expect("ENABLE_V326_TRANSPARENCY_RATIONALE default False",
+    expect("ENABLE_V326_TRANSPARENCY_RATIONALE False (env override)",
            common.ENABLE_V326_TRANSPARENCY_RATIONALE is False)
     best = _MockCandidate('123', 'Bartek O.', 100.0, {'bundle_bonus': 30})
     r = dispatch_pipeline._v326_build_rationale(best, [best])
