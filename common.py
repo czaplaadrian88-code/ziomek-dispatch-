@@ -948,6 +948,16 @@ V326_SPEED_MULTIPLIER_MAP = {
 # gold (0.889) → +5.55 score boost, slow (1.111) → -5.55 penalty, new (1.30) → -15.
 V326_SPEED_SCORE_FACTOR = 50.0
 
+# V3.26 STEP 3 (R-09 WAVE-GEOMETRIC-VETO) — refinement V3.19h BUG-2.
+# Bug case (Adrian Q&A 22.04 Kacper Sa): wave_continuation +30 fire'uje gdy
+# gap OK (free_at 5min after pickup wave#2) ALE drops rozrzucone na 2 końce
+# miasta (>5km haversine). Veto bonus jeśli geographical incoherence.
+ENABLE_V326_WAVE_GEOMETRIC_VETO = _os.environ.get(
+    "ENABLE_V326_WAVE_GEOMETRIC_VETO", "0") == "1"
+# Threshold km od last_drop do new_pickup powyżej którego BUG-2 bonus zostaje
+# zveto'wany. 3.0 km = ~5 min ride w Bialymstoku — krzyżowanie ½ miasta.
+V326_WAVE_VETO_KM_THRESHOLD = 3.0
+
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):
     """V3.24-A: penalty za delay pickup kuriera vs restaurant-requested time.

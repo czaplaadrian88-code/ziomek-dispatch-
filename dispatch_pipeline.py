@@ -954,6 +954,41 @@ def assess_order(
                 )
             # edge: bag empty albo pickup_at=None → gap=None, bonus=0 (default)
 
+        # V3.26 STEP 3 (R-09 WAVE-GEOMETRIC-VETO): refinement BUG-2.
+        # Veto bonus gdy geometryczna incoherence: km(last_drop → new_pickup) > threshold.
+        # Bug case Adrian Q&A 22.04 Kacper Sa: gap OK ale drops na 2 końcach miasta.
+        v326_wave_veto = False
+        v326_wave_geometric_km = None
+        if (C.ENABLE_V326_WAVE_GEOMETRIC_VETO and bonus_bug2_continuation > 0
+                and plan is not None and bag_raw):
+            try:
+                pda = plan.predicted_delivered_at or {}
+                bag_oids_set = {str(b.get("order_id")) for b in bag_raw if b.get("order_id")}
+                bag_pda = [(oid, ts) for oid, ts in pda.items() if str(oid) in bag_oids_set]
+                if bag_pda:
+                    _last_oid = max(bag_pda, key=lambda x: x[1])[0]
+                    _last_drop = None
+                    for _b in bag_raw:
+                        if str(_b.get("order_id")) == str(_last_oid):
+                            _last_drop = _b.get("delivery_coords")
+                            break
+                    _new_pickup = getattr(new_order, "pickup_coords", None)
+                    if _last_drop and _new_pickup:
+                        v326_wave_geometric_km = osrm_client.haversine(
+                            tuple(_last_drop), tuple(_new_pickup)
+                        )
+                        if v326_wave_geometric_km > C.V326_WAVE_VETO_KM_THRESHOLD:
+                            v326_wave_veto = True
+                            log.info(
+                                f"V326_WAVE_VETO order={order_id} cid={cid} "
+                                f"km_from_last_drop={v326_wave_geometric_km:.2f} > "
+                                f"{C.V326_WAVE_VETO_KM_THRESHOLD} — bonus "
+                                f"+{bonus_bug2_continuation:.1f} VETOED"
+                            )
+                            bonus_bug2_continuation = 0.0
+            except Exception as _ve:
+                log.warning(f"V326_WAVE_VETO compute fail order={order_id} cid={cid}: {_ve}")
+
         # V3.19h BUG-4: tier × pora bag cap soft penalty (progressive scaling).
         # Orthogonal do R6 hard bag_time. Flag gated (default False).
         bug4_tier_cap_used = None
@@ -1119,6 +1154,12 @@ def assess_order(
             # continuation_bonus = helper bug2_wave_continuation_bonus(gap_min).
             "v319h_bug2_interleave_gap_min": bug2_interleave_gap_min,
             "v319h_bug2_continuation_bonus": round(bonus_bug2_continuation, 2),
+            # V3.26 STEP 3 (R-09): wave geometric veto tracking.
+            "v326_wave_veto": v326_wave_veto,
+            "v326_wave_geometric_km": (
+                round(v326_wave_geometric_km, 2)
+                if v326_wave_geometric_km is not None else None
+            ),
             # V3.24-A extension metrics
             "v324a_extension_min": round(v324a_extension_min, 2) if v324a_extension_min is not None else None,
             "v324a_extension_penalty": v324a_extension_penalty,
