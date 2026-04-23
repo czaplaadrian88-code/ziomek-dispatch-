@@ -318,19 +318,21 @@ def build_fleet_snapshot(
         from dispatch_v2.common import STRICT_COURIER_ID_SPACE as _strict_cid
     except Exception:
         _strict_cid = True
+    _pin_strs = {str(k) for k in piny.keys()}
     if _strict_cid:
-        all_kids = set(per_courier.keys()) | set(names.keys())
-        # Defense-in-depth: jeśli PIN pojawia się w per_courier lub names
-        # → orders_state/names_file skażone (bug gdzie indziej).
-        _pin_strs = {str(k) for k in piny.keys()}
-        _phantom = _pin_strs & all_kids
+        raw_kids = set(per_courier.keys()) | set(names.keys())
+        # V3.25 hotfix: aktywnie wyklucz PIN-y z cid space (np. 9279 zaleakowany
+        # do courier_names.json 14.04 manualną edycją). V3.13 STRICT zablokował
+        # tylko piny.keys() w all_kids — names.keys() przepuszczał phantom dalej.
+        _phantom = _pin_strs & raw_kids
         if _phantom:
             _log.warning(
-                f"PIN leaked into courier_id space: {_phantom} "
+                f"PIN leaked into courier_id space: {_phantom} — FILTERED OUT "
                 f"(check orders_state.json and courier_names.json)"
             )
+        all_kids = raw_kids - _pin_strs
     else:
-        all_kids = set(per_courier.keys()) | set(names.keys()) | set(str(k) for k in piny.keys())
+        all_kids = set(per_courier.keys()) | set(names.keys()) | _pin_strs
 
     for kid in all_kids:
         orders = per_courier.get(kid, [])
