@@ -1090,6 +1090,12 @@ V326_R07_OSRM_TIMEOUT_MS = 500           # Adrian ACK — fallback haversine je�
 ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER = _os.environ.get(
     "ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER", "0") == "1"
 
+# Daily Accounting module (V3.25): codzienne rozliczenie kurierów do arkusza
+# Controlling / 'Obliczenia' tab. Osobny od dispatch engine, zero coupling na
+# scoring/feasibility. Flag=False: main.py exits(0) przy starcie; dry-run path
+# pisze JSON do /tmp zamiast Sheets. Flip=True po ACK dry-run weryfikacji 23.04.
+ENABLE_DAILY_ACCOUNTING = False
+
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):
     """V3.24-A: penalty za delay pickup kuriera vs restaurant-requested time.
