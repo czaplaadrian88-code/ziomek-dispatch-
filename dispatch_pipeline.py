@@ -60,7 +60,9 @@ _V326_RESTAURANT_DISTRICT_CACHE = None
 
 def _v326_load_restaurant_district_map():
     """Build NAME → district map z restaurant_coords.json + drop_zone_from_address.
-    Cached after first call. Returns dict {company_name_lower: district_name}."""
+    V3.26 R-06 Adrian corrections: overrides layer (restaurant_district_overrides.json)
+    applied LAST — highest priority. Cached after first call.
+    Returns dict {company_name_lower: district_name}."""
     global _V326_RESTAURANT_DISTRICT_CACHE
     if _V326_RESTAURANT_DISTRICT_CACHE is not None:
         return _V326_RESTAURANT_DISTRICT_CACHE
@@ -80,6 +82,25 @@ def _v326_load_restaurant_district_map():
             out[name.lower()] = district
     except Exception as e:
         log.warning(f"V326_RESTAURANT_DISTRICT_CACHE build fail: {e}")
+    # V3.26 R-06 Adrian ground truth overrides (commit post-R07-shadow).
+    # File format: {restaurant_name: district_name} + "_meta" block.
+    try:
+        import json as _json2
+        with open("/root/.openclaw/workspace/dispatch_state/restaurant_district_overrides.json") as _fo:
+            overrides = _json2.load(_fo)
+        _applied = 0
+        for k, v in overrides.items():
+            if k.startswith("_"):  # skip _meta
+                continue
+            if not isinstance(k, str) or not isinstance(v, str):
+                continue
+            out[k.lower()] = v
+            _applied += 1
+        log.info(f"V326_RESTAURANT_DISTRICT overrides applied: {_applied} entries")
+    except FileNotFoundError:
+        pass  # no overrides file — OK
+    except Exception as e2:
+        log.warning(f"V326_RESTAURANT_DISTRICT overrides load fail: {e2}")
     _V326_RESTAURANT_DISTRICT_CACHE = out
     log.info(f"V326_RESTAURANT_DISTRICT_CACHE built: {len(out)} entries")
     return out
