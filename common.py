@@ -182,6 +182,50 @@ def get_fallback_speed_kmh(dt_utc: datetime) -> float:
     return FALLBACK_BASE_SPEEDS_KMH[bucket]
 
 
+# === V3.26 BUG-3 STEP 1 — OSRM TRAFFIC MULTIPLIER (Adrian's table) ===
+# Self-hosted OSRM Docker (:5001) returns FREE-FLOW road durations (zero
+# traffic data). Białystok delivery shadow shows OSRM under-estimates by
+# 20-60% during weekday rush. Adrian operator gut + empirical bucket SHAPE
+# (anchor-A method, n=42,494 deliveries Nov2025-Apr2026) -> ship Adrian's
+# conservative table. Recalibrate next session with clean
+# (osrm_raw_min, actual_delivered_min) pairs from 24h shadow data.
+# Convention: bucket = [hour_lo, hour_hi) — lower inclusive, upper exclusive.
+V326_OSRM_TRAFFIC_TABLE = {
+    "weekday": [   # MON-FRI (weekday()==0..4)
+        (0, 6, 1.0),
+        (6, 8, 1.0),
+        (8, 10, 1.1),
+        (10, 12, 1.1),
+        (12, 13, 1.2),
+        (13, 15, 1.3),
+        (15, 17, 1.6),   # peak Białystok
+        (17, 19, 1.2),
+        (19, 21, 1.1),
+        (21, 24, 1.0),
+    ],
+    "weekend": 1.0,  # SAT-SUN all day
+}
+
+
+def get_traffic_multiplier(dt_utc: datetime) -> float:
+    """Zwraca traffic multiplier dla aware UTC datetime (Warsaw local).
+
+    Convention: bucket = [hour_lo, hour_hi) — lower inclusive, upper exclusive.
+    e.g. 17:00 sharp -> 1.2 (z 17-19), nie 1.6 (z 15-17).
+    Raises TypeError jesli dt_utc nie ma tzinfo (fail fast, parytet z get_time_bucket).
+    """
+    if dt_utc.tzinfo is None:
+        raise TypeError("get_traffic_multiplier requires aware datetime (got naive)")
+    local = dt_utc.astimezone(WARSAW)
+    if local.weekday() >= 5:  # SAT/SUN
+        return V326_OSRM_TRAFFIC_TABLE["weekend"]
+    h = local.hour
+    for lo, hi, mult in V326_OSRM_TRAFFIC_TABLE["weekday"]:
+        if lo <= h < hi:
+            return mult
+    return 1.0  # safety net (np. h=24 nie powinno wystapic)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # F2.1 Decision Engine 3.0 — EXTENSIONS to Bartek Gold Standard
 # Dodane 2026-04-15. R1-R5 (F1.9) pozostają bez zmian.
@@ -1035,6 +1079,16 @@ V326_R07_NO_GPS_BUFFER_MIN = 5           # Case 4 no_gps_late buffer (Adrian ACK
 V326_R07_DEFAULT_PREP_MIN = 30           # fallback gdy scheduled=None
 V326_R07_HAVERSINE_ROAD_MULT = 2.5       # empirical median 2.461 z 195 orders sample (2026-04-24 08:25)
 V326_R07_OSRM_TIMEOUT_MS = 500           # Adrian ACK — fallback haversine jeśli OSRM > 500ms
+
+# V3.26 STEP BUG-3 (R-OSRM-TRAFFIC) — post-OSRM traffic multiplier.
+# Self-hosted OSRM (:5001) is free-flow only; Adrian's table (V326_OSRM_TRAFFIC_TABLE
+# defined ~line 192) approximates Białystok rush corrections. Default False —
+# 24h shadow obs first, Adrian flips True after recalibration with clean
+# osrm_raw vs actual data. Flag=False: identical to current behavior, raw OSRM
+# passthrough, zero downstream contract change. Stats logged hourly only when
+# flag=True (no-op when False).
+ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER = _os.environ.get(
+    "ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER", "0") == "1"
 
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):

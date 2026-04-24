@@ -23,9 +23,11 @@ from typing import Optional
 from datetime import datetime, timezone
 
 from dispatch_v2.common import (
+    ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER,
     HAVERSINE_ROAD_FACTOR_BIALYSTOK,
     get_fallback_speed_kmh,
     get_time_bucket,
+    get_traffic_multiplier,
     setup_logger,
 )
 
@@ -48,6 +50,10 @@ _osrm_stats: dict = {
     "calls_total": 0,
     "calls_fallback": 0,
     "circuit_opens": 0,
+    # V3.26 BUG-3 STEP 1 — traffic multiplier hourly stats (no-op when flag=False)
+    "traffic_mult_sum": 0.0,
+    "traffic_mult_calls": 0,
+    "traffic_mult_buckets": {},  # {"1.00": count, "1.10": count, ...}
     "hour_start": time.time(),
 }
 
@@ -78,10 +84,53 @@ def _maybe_log_stats():
             f"fallback={_osrm_stats['calls_fallback']} "
             f"circuit_opens={_osrm_stats['circuit_opens']}"
         )
+        if ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER and _osrm_stats["traffic_mult_calls"] > 0:
+            avg = _osrm_stats["traffic_mult_sum"] / _osrm_stats["traffic_mult_calls"]
+            buckets = dict(sorted(_osrm_stats["traffic_mult_buckets"].items()))
+            _log.info(
+                f"OSRM traffic-mult hourly: calls={_osrm_stats['traffic_mult_calls']} "
+                f"avg_mult={avg:.3f} buckets={buckets}"
+            )
         _osrm_stats["calls_total"] = 0
         _osrm_stats["calls_fallback"] = 0
         _osrm_stats["circuit_opens"] = 0
+        _osrm_stats["traffic_mult_sum"] = 0.0
+        _osrm_stats["traffic_mult_calls"] = 0
+        _osrm_stats["traffic_mult_buckets"] = {}
         _osrm_stats["hour_start"] = time.time()
+
+
+def _apply_traffic_multiplier(result: dict, now_utc: datetime) -> dict:
+    """V3.26 BUG-3 STEP 1 — apply OSRM traffic multiplier post-cache/post-OSRM.
+
+    - Flag=False: return result unchanged (zero contract change for callers).
+    - Flag=True: multiply duration_s/duration_min in-place; preserve raw under
+      osrm_raw_duration_s / osrm_raw_duration_min; record traffic_multiplier.
+    Stats: increments hourly counters only when flag=True.
+    Idempotency: detects existing osrm_raw_duration_s and re-multiplies from raw
+      (so cached results are safe across hours).
+    """
+    if not ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER:
+        return result
+    if not result:
+        return result
+    mult = get_traffic_multiplier(now_utc)
+    raw_s = result.get("osrm_raw_duration_s", result.get("duration_s"))
+    if raw_s is None:
+        return result
+    adjusted_s = raw_s * mult
+    result["osrm_raw_duration_s"] = raw_s
+    result["osrm_raw_duration_min"] = round(raw_s / 60, 1)
+    result["traffic_multiplier"] = mult
+    result["duration_s"] = round(adjusted_s, 1)
+    result["duration_min"] = round(adjusted_s / 60, 1)
+    _osrm_stats["traffic_mult_sum"] += mult
+    _osrm_stats["traffic_mult_calls"] += 1
+    key = f"{mult:.2f}"
+    _osrm_stats["traffic_mult_buckets"][key] = (
+        _osrm_stats["traffic_mult_buckets"].get(key, 0) + 1
+    )
+    return result
 
 
 def _haversine_fallback(from_ll: tuple, to_ll: tuple, now_utc: datetime) -> dict:
@@ -140,13 +189,19 @@ def _cache_set(from_ll: tuple, to_ll: tuple, result: dict):
 
 
 def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
-    """Route od from_ll do to_ll. Zawsze zwraca dict (OSRM lub fallback, nigdy None)."""
+    """Route od from_ll do to_ll. Zawsze zwraca dict (OSRM lub fallback, nigdy None).
+
+    V3.26 BUG-3 STEP 1: traffic multiplier applied at every return path
+    (post-cache, post-OSRM, post-fallback). Cache stores RAW values; multiplier
+    is applied to a COPY after lookup so cached entries are time-bucket
+    independent.
+    """
     now = datetime.now(timezone.utc)
 
     if use_cache:
         cached = _cache_get(from_ll, to_ll)
         if cached is not None:
-            return cached
+            return _apply_traffic_multiplier(dict(cached), now)
 
     # Cache miss — realny HTTP call (lub fallback)
     _osrm_stats["calls_total"] += 1
@@ -155,7 +210,7 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
     # Circuit breaker — skip HTTP jeśli OSRM padł
     if _osrm_is_circuit_open():
         _osrm_stats["calls_fallback"] += 1
-        return _haversine_fallback(from_ll, to_ll, now)
+        return _apply_traffic_multiplier(_haversine_fallback(from_ll, to_ll, now), now)
 
     # OSRM: lon,lat;lon,lat
     coords = f"{from_ll[1]},{from_ll[0]};{to_ll[1]},{to_ll[0]}"
@@ -166,7 +221,7 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
         if data.get("code") != "Ok" or not data.get("routes"):
             _osrm_record_failure()
             _osrm_stats["calls_fallback"] += 1
-            return _haversine_fallback(from_ll, to_ll, now)
+            return _apply_traffic_multiplier(_haversine_fallback(from_ll, to_ll, now), now)
         route0 = data["routes"][0]
         result = {
             "duration_s": route0["duration"],
@@ -177,17 +232,21 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
         }
         _osrm_record_success()
         if use_cache:
-            _cache_set(from_ll, to_ll, result)
-        return result
+            _cache_set(from_ll, to_ll, result)  # store RAW (pre-multiplier)
+        return _apply_traffic_multiplier(dict(result), now)
     except Exception as e:
         _log.warning(f"OSRM route fail: {e}")
         _osrm_record_failure()
         _osrm_stats["calls_fallback"] += 1
-        return _haversine_fallback(from_ll, to_ll, now)
+        return _apply_traffic_multiplier(_haversine_fallback(from_ll, to_ll, now), now)
 
 
 def table(origins: list, destinations: list) -> list:
-    """Macierz czasów. Zawsze zwraca matrix (OSRM lub fallback, nigdy None)."""
+    """Macierz czasów. Zawsze zwraca matrix (OSRM lub fallback, nigdy None).
+
+    V3.26 BUG-3 STEP 1: traffic multiplier applied per cell, single `now`
+    for the whole matrix call (consistent bucket).
+    """
     now = datetime.now(timezone.utc)
 
     if not origins or not destinations:
@@ -221,13 +280,14 @@ def table(origins: list, destinations: list) -> list:
             matrix_row = []
             for j, dur in enumerate(row):
                 dist = distances[i][j] if i < len(distances) and j < len(distances[i]) else 0
-                matrix_row.append({
+                cell = {
                     "duration_s": dur,
                     "duration_min": round(dur / 60, 1) if dur else None,
                     "distance_m": dist,
                     "distance_km": round(dist / 1000, 2) if dist else 0,
                     "osrm_fallback": False,
-                })
+                }
+                matrix_row.append(_apply_traffic_multiplier(cell, now))
             matrix.append(matrix_row)
         _osrm_record_success()
         return matrix
@@ -239,12 +299,16 @@ def table(origins: list, destinations: list) -> list:
 
 
 def _table_fallback(origins: list, destinations: list, now_utc: datetime) -> list:
-    """Fallback matrix: haversine * road_factor per cell."""
+    """Fallback matrix: haversine * road_factor per cell.
+
+    V3.26 BUG-3 STEP 1: each cell goes through _apply_traffic_multiplier so
+    fallback path is consistent with main OSRM path.
+    """
     matrix = []
     for o in origins:
         row = []
         for d in destinations:
-            row.append(_haversine_fallback(o, d, now_utc))
+            row.append(_apply_traffic_multiplier(_haversine_fallback(o, d, now_utc), now_utc))
         matrix.append(row)
     return matrix
 
