@@ -99,7 +99,12 @@ phantom PIN leak — NIE rippować bez re-run test).
 **Priority:** low. Podnieść tylko przy większym refactoringu telegram
 parser albo gdy nowy kurier dostanie kropkę w panelu Adriana.
 
-#### V326-R09-NAMEERROR — osrm_client not defined, R-09 wave veto DEAD in prod (CRITICAL)
+#### V326-R09-NAMEERROR — osrm_client not defined, R-09 wave veto DEAD in prod (CRITICAL) → **FIXED 2026-04-25**
+**STATUS:** FIXED in commit `a70a914` + tag `v326-hotfix-r09-nameerror-2026-04-25`
+(sprint 2026-04-25 late-night). Wariant A zastosowany — L1239 `osrm_client.haversine(`
+→ `haversine(` (spójne z L818/969/985). Deployment pending dispatch-shadow restart
+Block 4 tego samego sprintu.
+
 `dispatch_pipeline.py:1239` używa `osrm_client.haversine(...)` ale module-level
 import na linii 28 to TYLKO `from dispatch_v2.osrm_client import haversine`
 (sama funkcja, nie moduł). `osrm_client` na L1239 = undefined → NameError
@@ -217,6 +222,111 @@ wrapper + unit test.
 
 **Priority:** MEDIUM — ryzyko silent breakage dla 2 kurierów. Scope: ~45 min
 audit + optional fix. Powiązane z V3.25-DOT-VERIFY-SMOKE.
+
+#### V326-C1-SOLO-FALLBACK — shift_start/shift_end missing w solo_fallback call (CRITICAL) → **FIXED 2026-04-25**
+**STATUS:** FIXED in commit `bb74bfe` + tag `v326-hotfix-c1-solo-fallback-2026-04-25`
+(sprint 2026-04-25 late-night). Deployment pending dispatch-shadow restart Block 4.
+
+**Bug:** `dispatch_pipeline.py:1599-1605` solo_fallback wywoływał `check_feasibility_v2`
+**bez** `shift_start=`/`shift_end=` kwargs. Z `ENABLE_V325_SCHEDULE_HARDENING=True`
+(live od 23.04) funkcja hardening path (feasibility_v2.py:302) zwraca
+`NO + v325_NO_ACTIVE_SHIFT (cs.shift_end=None — brak schedule mapping)` dla
+KAŻDEGO candidate w fallback → `solo_best=None` → KOORD override na każde
+fallback call. Efektywnie 100% fallback → manual assign.
+
+**Fix:** dodano 2 linie (L1603-1604):
+```python
+shift_end=getattr(cs, "shift_end", None),
+shift_start=getattr(cs, "shift_start", None),
+```
+Wzorzec identyczny z main call site L910-911. `cs` już w scope (pętla L1594).
+
+**Test:** `tests/test_c1_solo_fallback_shift_params.py` — AST guard który parsuje
+dispatch_pipeline.py i asserts że wszystkie call sites `check_feasibility_v2`
+mają oba kwargi. Regression guard dla przyszłych refactorów. PASS.
+
+**Live verify post-restart Block 4:**
+- journalctl -u dispatch-shadow grep `NO_ACTIVE_SHIFT` — rate powinien spaść
+  (przed: każdy fallback, po: tylko candidates z real brakiem schedule mapping)
+- journalctl -u dispatch-shadow grep `solo_fallback` — fires przy real need,
+  solo_best assigned zamiast None
+
+**Scope discovery:** Bug znaleziony cross-review 2026-04-25 (Gemini 3.5 Pro +
+Deepseek arbiter). Nie był w TECH_DEBT pre-sprintu — nowy finding B#C1.
+
+**Blast radius:** dispatch-shadow (primary). Brak interakcji z telegram/panel-watcher.
+
+#### V326-C2-TZ-DEFENSIVE-CLEANUP — LOW (not firing, verified 2026-04-25)
+**Klasa:** LOW (code quality, NOT active bug).
+
+**Scope:** ~40 wystąpień `replace(tzinfo=timezone.utc)` w 14 plikach (grep full
+`dispatch_v2/*.py` 2026-04-25). Największe clusters:
+- `dispatch_pipeline.py` 10 miejsc
+- `feasibility_v2.py` 8 miejsc (w tym :304/:318/:340 flaggowane przez cross-review
+  arbiter jako CRITICAL)
+- `route_simulator_v2.py` 6, `telegram_approver.py` 6, `shadow_dispatcher.py` 4,
+  `chain_eta.py` 4, inne po 1-2
+
+**Bug fires ONLY dla Warsaw local naive** (`czas_odbioru_timestamp`, `czas_kuriera`,
+`shift_end`). Dla UTC naive (`datetime.utcnow()` / parsed ISO UTC bez Z tag)
+→ `replace(tzinfo=timezone.utc)` jest CORRECT.
+
+**Verification 2026-04-25 STEP 3A (sprint):**
+- `courier_resolver.py:_shift_end_dt` (L542-558) buduje z `datetime.now(WAW)` +
+  `.replace(hour=..., minute=...)` — `.replace(hour=...)` NIE niszczy tzinfo.
+  Zwracany `shift_end` jest **AWARE Warsaw** na każdej path.
+- Identycznie `_shift_start_dt` (L525-539).
+- Defensive code w `feasibility_v2.py:304/318/340` + `dispatch_pipeline.py:924`
+  `shift_end.replace(tzinfo=timezone.utc) if shift_end.tzinfo is None else shift_end`
+  — branch `is None` NIGDY nie fire live → używa `else shift_end` as-is Warsaw
+  aware → Python auto-converts przy porównaniu z UTC → porównania poprawne.
+- **Bug NIE fires na prod.** Defensive code redundantny ale KOREKT.
+
+**Cross-review context:** Gemini 3.5 Pro + Deepseek arbiter oznaczyli C2 jako
+CRITICAL z confidence HIGH, ale arbiter sam napisał "verification wymaga
+courier_resolver.py którego nie udostępniono". Sprint prompt traktował jako
+CRITICAL bez respect tego zastrzeżenia. **Sytuacja opisana w Lekcji #19.**
+
+**Rekomendacja:** per-plik audit w V3.28+ sprint (nie hotfix). Fix wzorzec:
+```python
+if var.tzinfo is None:
+    _var = var.replace(tzinfo=C.WARSAW).astimezone(timezone.utc)
+else:
+    _var = var.astimezone(timezone.utc)
+```
+Per-miejsce analysis WYMAGANA (które `var` to Warsaw naive vs UTC naive) —
+blind replace-all zniszczy paths gdzie UTC-tagging był correct.
+
+**Priority:** LOW. Zero operational impact (bug nie fires). Cleanup opportunity
+przy większym refactoringu TZ handling.
+
+#### V326-SLA-TRACKER-TZ-PICKED-DT — MEDIUM (real bug, service stopped)
+**Klasa:** MEDIUM (service degraded, R6 bag_time alerts off od 24.04 20:36 UTC).
+
+**Plik:** `sla_tracker.py:95` (docstring confirms bug istnieje) + `:177`
+`picked_dt = picked_dt.replace(tzinfo=timezone.utc)`. `picked_dt` pochodzi
+z panelu (Warsaw local naive, `czas_odbioru_timestamp`) → tagging UTC =
++2h offset w CEST. Prawdopodobne źródło `"can't subtract offset-naive and
+offset-aware datetimes"` crashu (service stopped 20:36 UTC 24.04).
+
+**NOT FIXED 2026-04-25 sprint** — explicit Adrian D2(a) decision:
+- Wymaga decyzji biznesowej: czy R6 bag_time alerts w ogóle potrzebne
+  (5 dni bez alertu, nikt nie zauważył = sygnał że feature może być do kill)
+- Restart service po 24h+ stopped = nieprzewidywalne side effects
+- Adrian = zmęczony, decyzja wymaga świeżego mózgu
+- `picked_dt` fix ≠ complete sla-tracker fix — trzeba sprawdzić czy są inne
+  anti-patterny (grep całego sla_tracker.py przed commit resources)
+
+**Scope osobnej sesji:**
+1. Decision: fix OR kill feature?
+2. Jeśli fix: grep całego sla_tracker.py dla innych Warsaw-naive paths
+3. Fix + unit test (naive→Warsaw→UTC conversion)
+4. Restart dispatch-sla-tracker.service
+5. 24h shadow verify (R6 alerts fire sensibly, no new crash errors)
+
+**Priority:** MEDIUM (service degraded ale no operational impact — panel
+coverage manual przez Adriana/koordynatorów). Kill-or-fix decision owned
+by Adrian.
 
 #### V3.19g — przedłużenia czas_kuriera trigger plan invalidation (deferred)
 Gdy panel zmienia `czas_kuriera` po COURIER_ASSIGNED (np. coordinator "+15min"
@@ -788,6 +898,33 @@ to bug." CC nie miał tego signal. **Adrian operational knowledge >>
 historical analysis.** **Reguła:** live operational decisions Adriana
 > każdy backtest verdict. Ziomek active learning = Adrian (+ Bartek)
 decisions in production, nie historical Q&A.
+
+**Lekcja #19 — Audit findings z "verify" flag = hipotezy, nie bugi.**
+Cross-review arbiter z 2026-04-25 (Gemini 3.5 Pro + Deepseek) oznaczył
+C2 TZ handling jako CRITICAL na równi z C1. Arbiter wyraźnie napisał
+"verification wymaga pliku `courier_resolver.py` którego nie
+udostępniono" — ale w sprint prompcie zastrzeżenie zostało zignorowane
+i C2 traktowany na równi z C1 jako CRITICAL fix do natychmiastowego
+deployu (~45 min scope).
+
+STEP 3A verification (live code grep `_shift_end_dt`/`_shift_start_dt`)
+ujawniła że loader ZAWSZE zwraca aware Warsaw datetime (`datetime.now(WAW)`
++ `.replace(hour=...)` zachowuje tzinfo). Defensive code
+w `feasibility_v2.py:304/318/340` branch `is None` nigdy nie fire →
+bug NOT FIRES live. CC escape hatch (sytuacja A "finding niepasujący
+do wzorca") uratowała ~45 min wasted work + dodatkowe scope creep risk
+(~40+ matchów w 14 plikach gdyby rozszerzać blindly).
+
+**Reguła:** Przed committem resources do "CRITICAL" fix z audit findings,
+MUSI być STEP 3A verification (live data grep / shell introspection /
+journal pattern match) że bug faktycznie fires w produkcji. Confidence
+arbitra + confidence audytu ≠ verification. Arbiter "verify" flag ZAWSZE
+honorowany jako HARD STOP przed committem resources. Sprint prompt pisząc
+"CRITICAL" bez weryfikacji = premature commitment.
+
+**Aplikacja:** każdy audit-sourced bug w TECH_DEBT musi mieć pole
+`STEP 3A status: VERIFIED_FIRES / VERIFIED_NOT_FIRES / UNVERIFIED`.
+UNVERIFIED = medium/low do re-verification sprint, nie hotfix.
 
 ### V3.19h deferred tickets
 
