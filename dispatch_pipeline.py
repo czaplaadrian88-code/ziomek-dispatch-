@@ -1600,6 +1600,8 @@ def assess_order(
                 courier_pos=tuple(courier_pos),
                 bag=[],  # pusty bag = solo
                 new_order=new_order,
+                shift_end=getattr(cs, "shift_end", None),
+                shift_start=getattr(cs, "shift_start", None),
                 now=now,
                 sla_minutes=35,
             )
