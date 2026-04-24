@@ -37,6 +37,59 @@ for k, v in parsed.items():
 
 ### Deferred tickets
 
+#### V3.25-SLA-TRACKER-TZ — naive/aware datetime subtraction error co 10s (pre-existing)
+Dyskowiony podczas V3.25 Daily Accounting smoke 2026-04-24: `dispatch-sla-tracker`
+loguje **co 10s** error:
+```
+[ERROR] sla_tracker: loop: can't subtract offset-naive and offset-aware datetimes
+```
+Od co najmniej 20:00 UTC 2026-04-24, pewnie dużo dłużej (widoczne od momentu
+pre-restart check). NIE spowodowane Daily Accounting flipem — mój restart
+sla-tracker (przy dot-removal invalidation) tylko zachował ten error (pre-existing).
+**Priority:** medium — SLA tracker sam cykluje, R6 alerts mogą być silent ruinowane.
+Wymaga grep `_parse` vs `_parse_aware_utc` w `sla_tracker.py` + fix mixed TZ arithmetic.
+
+#### V3.25-SLA-TRACKER-UNIT-DRIFT — unit file on-disk różni się od załadowanego (pre-existing)
+`systemctl status dispatch-sla-tracker` pokazuje warning:
+```
+Warning: The unit file, source configuration file or drop-ins of
+dispatch-sla-tracker.service changed on disk. Run 'systemctl daemon-reload'.
+```
+Ktoś edytował `/etc/systemd/system/dispatch-sla-tracker.service` bez daemon-reload.
+Nie wiem kto ani kiedy. **Priority:** low — systemd nie re-read do restart.
+Akcja: `diff` live ExecStart vs on-disk plik + decyzja czy apply lub revert.
+
+#### V3.25-DOTS-CLEANUP — 45 hardcoded dotted refs w 13 plikach (deferred, low priority)
+Po flipie Daily Accounting (2026-04-24) usunęliśmy kropki z `kurier_ids.json` i
+`kurier_piny.json`: `"Bartek O."` → `"Bartek O"`, `"Michał K."` → `"Michał K"`
+(source of truth: grafik Adriana). W kodzie projektu pozostało **45 hardcoded
+dotted references w 13 plikach** (głównie test fixtures + 3 live runtime
+miejsca: `telegram_approver.py:161` prompt, `build_v319h_courier_tiers.py:29-30`
+komentarz, `courier_resolver.py:486` komentarz).
+
+**Runtime impact = 0**: `telegram_approver._norm()` ma `rstrip(".,;:")` w
+prefix-match → user input `"Bartek O."` normalized do `"bartek o"` → match
+z fresh JSON `"Bartek O"` bez kropki. Parser funkcjonalnie OK.
+
+**Pełna lista** przy czyszczeniu: `grep -rn --include='*.py' -E '(Bartek O\.|Michał K\.)' /root/.openclaw/workspace/scripts/dispatch_v2/ | grep -v .bak`
+daje 45 hitów w:
+- `tests/test_v325_pin_leak_defense.py` (11) — regression defense fixture
+- `tests/test_v326_hotfix_parser.py` (8)
+- `tests/smoke_telegram_buttons_freetext.py` (5)
+- `tests/test_v325_step_d_r03.py` (4)
+- `tests/test_v326_step1_r11.py` (3)
+- `telegram_approver.py` (3) — prompt + sort comment
+- `tests/test_v325_step_a_r02.py`, `test_speed_tier_tracker.py`,
+  `test_panel_aware_availability.py` (2 each)
+- `build_v319h_courier_tiers.py` (2), `tests/test_v326_step2_r05.py`,
+  `test_v325_step_c_r04.py`, `courier_resolver.py` (1 each)
+
+**Koszt:** ~1-2h selective edit (test fixtures najbardziej ryzykowne —
+`test_v325_pin_leak_defense` definiuje hermetic scenario z kropką dla
+phantom PIN leak — NIE rippować bez re-run test).
+**Priority:** low. Podnieść tylko przy większym refactoringu telegram
+parser albo gdy nowy kurier dostanie kropkę w panelu Adriana.
+
 #### V3.19g — przedłużenia czas_kuriera trigger plan invalidation (deferred)
 Gdy panel zmienia `czas_kuriera` po COURIER_ASSIGNED (np. coordinator "+15min"
 button), courier_plans.json saved plan dla danego cid może mieć stale predicted

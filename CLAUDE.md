@@ -1,5 +1,5 @@
 # CLAUDE.md — Dispatch V2 instruction for Claude Code sessions
-# Update: 2026-04-20 (post-V3.19+V3.20) — 22.04 session close references added
+# Update: 2026-04-24 (V3.25 Daily Accounting LIVE + V3.26 OSRM traffic shadow)
 
 ## Latest session handover (READ FIRST)
 
@@ -23,9 +23,13 @@ Repo: github.com/czaplaadrian88-code/ziomek-dispatch-
 **Working directory (zawsze cd):**
 `/root/.openclaw/workspace/scripts/dispatch_v2/`
 
-## Live stack (2026-04-20)
+## Live stack (2026-04-24)
 
-**Deployed tags:** v319a/b/c (A+B+C+D)/d + v320 + master f22-v319-v320-complete @ 466a716
+**Deployed tags (latest):**
+- `v325-daily-accounting-flag-on` @ f969862 — Daily Accounting LIVE (2026-04-24)
+- `v326-bug3-step1-traffic-multipliers` @ 28aaf25 — OSRM traffic shadow (flag=False)
+- `v326-hotfix-parser-bugs-2026-04-24` @ a93d1c4
+- Baseline: `f22-v319-v320-complete` @ 466a716
 
 **Feature flags (common.py):**
 ```python
@@ -47,26 +51,39 @@ ENABLE_SAVED_PLANS_READ = True
 
 # V3.20 ghost detection
 ENABLE_V320_PACKS_GHOST_DETECT = True
+
+# V3.25 Daily Accounting (2026-04-24 LIVE)
+ENABLE_DAILY_ACCOUNTING = True
+
+# V3.26 OSRM traffic (shadow, flag=False)
+ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER = False  # env-overridable
 ```
 
 **Services:**
 ```bash
-# Active:
+# Active long-running:
 dispatch-shadow
 dispatch-panel-watcher
 dispatch-telegram         # DO NOT RESTART without explicit user ACK
 dispatch-sla-tracker
 dispatch-gps
-dispatch-plan-recheck.timer  # NEW (V3.19c, every 5min)
+
+# Timers:
+dispatch-plan-recheck.timer         # V3.19c, every 5min
+dispatch-daily-accounting.timer     # V3.25, Tue..Fri+Mon 06:00 Warsaw
+dispatch-cod-weekly.timer           # F2.1d, Mon 08:00 Warsaw
+dispatch-czasowka.timer
 
 # Dispatch-state files:
 /root/.openclaw/workspace/dispatch_state/
 ├── courier_plans.json          # V3.19b saved plans (atomic writes)
 ├── v319c_read_shadow_log.jsonl # V3.19c shadow diff log
-└── plan_recheck_log.jsonl      # V3.19c timer output
+├── plan_recheck_log.jsonl      # V3.19c timer output
+├── kurier_ids.json             # canonical aliases (no dots since 2026-04-24)
+└── kurier_piny.json            # PIN→alias (no dots since 2026-04-24)
 ```
 
-## Core files (V3.19/V3.20 key locations)
+## Core files (V3.19/V3.20/V3.25 key locations)
 
 - `common.py` — feature flags + constants (Bartek gold standard)
 - `route_simulator_v2.py` — V3.19a floor + V3.19d base_plan extension
@@ -77,6 +94,11 @@ dispatch-plan-recheck.timer  # NEW (V3.19c, every 5min)
 - `bag_state.py` — core bag filter
 - `state_machine.py` — upsert orders_state
 - `telegram_approver.py` — DO NOT MODIFY without explicit ACK
+- `daily_accounting/` — V3.25 isolated module (Obliczenia tab writer). Entry:
+  `python3 -m dispatch_v2.daily_accounting.main [--dry-run] [--target-date]`.
+  Runs via `/root/.openclaw/venvs/sheets/bin/python3` (gspread). Tests:
+  `python3 -m dispatch_v2.daily_accounting.tests.run_all` (21 tests, custom
+  runner — pytest nieinstalowany w env).
 
 ## Rollback cheat sheet
 
@@ -96,6 +118,8 @@ Edit common.py, set flag=False, restart odpowiedni service:
 - V3.19c sub A+B → `ENABLE_SAVED_PLANS=False` + restart panel-watcher+shadow
 - V3.19a floor → `ENABLE_PICKED_UP_DROP_FLOOR=False` + restart shadow
   (NIE rekomendowane — baseline safety)
+- V3.25 Daily Accounting → `ENABLE_DAILY_ACCOUNTING=False` + `systemctl disable --now dispatch-daily-accounting.timer`.
+  Service oneshot, fresh proces per run — zero restart needed poza timer disable.
 
 ## Hard constraints for any session
 
