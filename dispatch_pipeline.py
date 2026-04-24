@@ -1236,7 +1236,7 @@ def assess_order(
                             break
                     _new_pickup = getattr(new_order, "pickup_coords", None)
                     if _last_drop and _new_pickup:
-                        v326_wave_geometric_km = osrm_client.haversine(
+                        v326_wave_geometric_km = haversine(
                             tuple(_last_drop), tuple(_new_pickup)
                         )
                         if v326_wave_geometric_km > C.V326_WAVE_VETO_KM_THRESHOLD:
