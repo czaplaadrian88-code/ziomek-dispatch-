@@ -161,8 +161,10 @@ def test_parse_time_formats():
 
 def test_parse_name_only():
     print("\n[T#6 Case 2] samo imię vs allow_name_only:")
+    # Bez known_names: fallback first-word + allow_name_only=True → (name, None)
+    # (None sygnalizuje: caller liczy default z compute_assign_time(dr))
     r1 = ta._parse_courier_time("Bartek", allow_name_only=True)
-    check(r1 == ("Bartek", 15), f"allow_name_only=True: samo 'Bartek' → ('Bartek', 15) (got {r1})")
+    check(r1 == ("Bartek", None), f"allow_name_only=True: samo 'Bartek' → ('Bartek', None) (got {r1})")
 
     r2 = ta._parse_courier_time("Bartek", allow_name_only=False)
     check(r2 is None, f"allow_name_only=False: samo 'Bartek' → None (got {r2})")
@@ -173,10 +175,38 @@ def test_parse_empty_or_noise():
     for text in ["", "   ", "Dzień dobry", "halo co tam"]:
         r = ta._parse_courier_time(text, allow_name_only=False)
         check(r is None, f"{text!r} → None (got {r})")
-    # "Dzień dobry" z allow_name_only=True → defaults to ("Dzień dobry", 15) — to jest by design
+    # "Dzień dobry" z allow_name_only=True (bez known_names) → fallback first-word, time=None
     r = ta._parse_courier_time("Dzień dobry", allow_name_only=True)
-    check(r == ("Dzień dobry", 15),
-          f"'Dzień dobry' allow_name=True → ('Dzień dobry', 15) [by design — wymagany Reply context]")
+    check(r == ("Dzień", None),
+          f"'Dzień dobry' allow_name=True → ('Dzień', None) [fallback first-word, time z compute_assign_time]")
+
+
+def test_parse_known_names():
+    """Known_names prefix-match (F2.4 bugfix): 'Bartek O 35' → 'Bartek O.' (nie 'Bartek')."""
+    print("\n[T#6 Case 6] known_names prefix-match — wieloczłonowe nazwiska:")
+    known = ["Bartek O.", "Grzegorz W", "Grzegorz", "Gabriel", "Andrei K", "Michał K."]
+    cases = [
+        ("Bartek O 35", ("Bartek O.", 35)),
+        ("Grzegorz W 25", ("Grzegorz W", 25)),
+        ("Grzegorz 20", ("Grzegorz", 20)),
+        ("Gabriel 20", ("Gabriel", 20)),
+        ("Andrei K 15min", ("Andrei K", 15)),
+        ("Michał K 30", ("Michał K.", 30)),
+    ]
+    for text, expected in cases:
+        r = ta._parse_courier_time(text, allow_name_only=False, known_names=known)
+        check(r == expected, f"{text!r} → {expected} (got {r})")
+
+    # Known_name bez czasu → (canonical, None) BEZ allow_name_only (match wystarcza)
+    r = ta._parse_courier_time("Gabriel", allow_name_only=False, known_names=known)
+    check(r == ("Gabriel", None), f"'Gabriel' (known match) → ('Gabriel', None) (got {r})")
+
+    r = ta._parse_courier_time("Bartek O", allow_name_only=False, known_names=known)
+    check(r == ("Bartek O.", None), f"'Bartek O' (known match) → ('Bartek O.', None) (got {r})")
+
+    # Nie-match w known + brak czasu → None (anti-false-positive)
+    r = ta._parse_courier_time("Dzień dobry", allow_name_only=False, known_names=known)
+    check(r is None, f"'Dzień dobry' (no known match, no time) → None (got {r})")
 
 
 def test_parse_time_out_of_range():
@@ -225,6 +255,7 @@ def main():
     test_parse_empty_or_noise()
     test_parse_time_out_of_range()
     test_parse_hhmm_future()
+    test_parse_known_names()
 
     print("\n=== WYNIK ===")
     if FAILURES:
