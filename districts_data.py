@@ -762,6 +762,8 @@ BIALYSTOK_DISTRICTS = {
     'Nowe Miasto': {
         'streets': frozenset({
             'cementowa',
+            'czesława miłosza',     # V3.26 R-06 completion: Galeria Biała area (Adrian ACK)
+            'miłosza',              # V3.26 R-06 completion: short variant
             'dubois stanisława',
             'ekologiczna',
             'handlowa',

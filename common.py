@@ -677,8 +677,13 @@ def drop_zone_from_address(addr, city=None):
     if not addr or not isinstance(addr, str):
         return 'Unknown'
     addr_lc = addr.lower().strip()
-    # Strip leading "ul." / "al." / "pl." prefix
-    for prefix in ('ul. ', 'al. ', 'aleja ', 'plac ', 'pl. '):
+    # Strip leading prefix (ul./al./pl./gen./św./ks./ulica/aleja).
+    # V3.26 R-06 completion: extended list dla Polish name convention variants.
+    for prefix in (
+        'ul. ', 'ulica ', 'al. ', 'aleja ', 'plac ', 'pl. ',
+        'gen. ', 'generała ', 'św. ', 'świętej ', 'świętego ',
+        'ks. ', 'księdza ', 'prof. ', 'dr. ',
+    ):
         if addr_lc.startswith(prefix):
             addr_lc = addr_lc[len(prefix):]
             break
@@ -692,6 +697,19 @@ def drop_zone_from_address(addr, city=None):
     # Dodatkowo: longer street match wygrywa (preferred specificity, np.
     # "branickiego jana klemensa" wygrywa nad "branickich" dla "Branickiego J.K. 5").
     addr_first_token = addr_lc.split(None, 1)[0] if addr_lc else ''
+
+    # V3.26 R-06 completion: extract meaningful content tokens (alphabetic or hyphenated
+    # Polish names, len >=3, NIE zawierające cyfr). Used for bidirectional multi-token match.
+    def _is_content_token(t):
+        # Remove trailing punctuation
+        t = t.rstrip(',.')
+        if len(t) < 3:
+            return False
+        # Must be alpha or hyphenated (no digits)
+        if any(c.isdigit() for c in t):
+            return False
+        return True
+    addr_content_tokens = [t.rstrip(',.') for t in addr_lc.split() if _is_content_token(t)][:3]
 
     best_match_zone = None
     best_match_len = 0
@@ -717,6 +735,27 @@ def drop_zone_from_address(addr, city=None):
             # 3) Substring match (defensive, zeby np. ul. długa z dodatkami łapała)
             elif slen >= 6 and street in addr_lc:
                 matched = True
+
+            # 4) V3.26 R-06 completion: BIDIRECTIONAL multi-token match (FALLBACK).
+            # Applied AFTER (1)/(2)/(3) — catches Polish name order inversion:
+            # streets store "Nazwisko Imię" ("sienkiewicza henryka") but addresses
+            # often "Imię Nazwisko" ("henryka sienkiewicza 5").
+            # Rules:
+            #   - addr has 1 content token: match gdy token ∈ street_tokens AND len ≥ 5
+            #     (Kaczorowskiego alone → 'prezydenta ryszarda kaczorowskiego')
+            #   - addr has ≥2 content tokens: FIRST TWO both must be in street_tokens
+            #     (Marii Skłodowskiej-Curie → 'skłodowskiej-curie marii' — both match;
+            #      'marii' alone NOT matches 'św. maksymiliana marii kolbego' w innym district)
+            if not matched and len(addr_content_tokens) >= 1:
+                _street_tokens = set(street.split())
+                if len(addr_content_tokens) == 1:
+                    tk = addr_content_tokens[0]
+                    if len(tk) >= 5 and tk in _street_tokens:
+                        matched = True
+                else:
+                    t0, t1 = addr_content_tokens[0], addr_content_tokens[1]
+                    if t0 in _street_tokens and t1 in _street_tokens:
+                        matched = True
 
             if matched and slen > best_match_len:
                 best_match_zone = zone_name
