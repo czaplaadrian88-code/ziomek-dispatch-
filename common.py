@@ -1094,7 +1094,7 @@ ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER = _os.environ.get(
 # Controlling / 'Obliczenia' tab. Osobny od dispatch engine, zero coupling na
 # scoring/feasibility. Flag=False: main.py exits(0) przy starcie; dry-run path
 # pisze JSON do /tmp zamiast Sheets. Flip=True po ACK dry-run weryfikacji 23.04.
-ENABLE_DAILY_ACCOUNTING = False
+ENABLE_DAILY_ACCOUNTING = True
 
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):
