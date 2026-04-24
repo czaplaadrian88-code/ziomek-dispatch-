@@ -467,14 +467,35 @@ def format_proposal(decision: dict) -> str:
     return "\n".join(lines)
 
 
-def build_keyboard(order_id: str, candidates: Optional[list] = None) -> dict:
+def build_keyboard(
+    order_id: str,
+    candidates: Optional[list] = None,
+    pickup_ready_at: Optional[str] = None,  # V3.26 hotfix: align z compute_assign_time
+) -> dict:
     """Inline keyboard z przyciskami per-kandydat (F2.4).
 
     Rząd 1: do 3 przycisków ✅ {Imię} {tmin}min — callback ASSIGN:{oid}:{cid}:{tmin}.
-        tmin = round(travel_min) + 2, clamp [5, 60] (zgodnie z gastro_assign).
+        V3.26 hotfix 2026-04-24: tmin = ceil(max(travel_min, prep_min) / 5) * 5,
+        clamp [5, 60]. ALIGNED z compute_assign_time logic. Previously used
+        travel_min only → button label mismatch z text (np. oid=468163:
+        label "5min" vs text "deklarujemy 09:17 ~20 min").
         Pusty jeśli candidates is None/[] lub brak valid courier_id.
     Rząd 2: INNY + KOORD. NIE usunięte — brak decyzji = auto-timeout (5 min).
     """
+    import math as _math
+    # V3.26 hotfix: compute prep_min (pickup_ready - now) dla label sync z assign logic
+    prep_min = 0.0
+    if pickup_ready_at:
+        try:
+            if isinstance(pickup_ready_at, str):
+                ready = datetime.fromisoformat(pickup_ready_at.replace("Z", "+00:00"))
+            else:
+                ready = pickup_ready_at
+            if ready.tzinfo is None:
+                ready = ready.replace(tzinfo=timezone.utc)
+            prep_min = max(0.0, (ready - datetime.now(timezone.utc)).total_seconds() / 60.0)
+        except Exception:
+            prep_min = 0.0
     rows = []
     row1 = []
     for c in (candidates or [])[:3]:
@@ -489,7 +510,9 @@ def build_keyboard(order_id: str, candidates: Optional[list] = None) -> dict:
             tm_raw = float(tm_raw)
         except (TypeError, ValueError):
             tm_raw = 0.0
-        time_min = max(5, min(60, int(round(tm_raw)) + 2))
+        # V3.26 hotfix formula (aligned compute_assign_time):
+        needed = max(tm_raw, prep_min)
+        time_min = max(5, min(60, int(_math.ceil(needed / 5.0) * 5)))
         row1.append({
             "text": f"✅ {name} {time_min}min",
             "callback_data": f"ASSIGN:{order_id}:{cid}:{time_min}",
@@ -776,7 +799,8 @@ async def proposal_sender(state: dict) -> None:
             continue
         text = format_proposal(rec)
         top_candidates = [rec.get("best")] + list((rec.get("alternatives") or []))[:2]
-        kbd = build_keyboard(oid, candidates=top_candidates)
+        kbd = build_keyboard(oid, candidates=top_candidates,
+                              pickup_ready_at=rec.get("pickup_ready_at"))  # V3.26 hotfix
         r = await asyncio.to_thread(
             tg_request, state["token"], "sendMessage",
             {
