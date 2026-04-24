@@ -201,6 +201,14 @@ def _serialize_candidate(c) -> dict:
         "v326_r06_pickup_district": m.get("v326_r06_pickup_district"),
         "v326_r06_detail": m.get("v326_r06_detail"),
         "v326_r06_skip_reason": m.get("v326_r06_skip_reason"),
+        # V3.26 STEP 6 (R-07 v2): chain-ETA engine (LOCATION A — alts). Shadow ALWAYS.
+        "r07_chain_eta_min": m.get("r07_chain_eta_min"),
+        "r07_starting_point": m.get("r07_starting_point"),
+        "r07_chain_details": m.get("r07_chain_details"),
+        "r07_delta_vs_naive_min": m.get("r07_delta_vs_naive_min"),
+        "r07_chain_truncated_count": m.get("r07_chain_truncated_count"),
+        "r07_chain_warnings": m.get("r07_chain_warnings"),
+        "r07_compute_latency_ms": m.get("r07_compute_latency_ms"),
     }
 
 
@@ -345,6 +353,14 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "v326_r06_pickup_district": best_m.get("v326_r06_pickup_district"),
             "v326_r06_detail": best_m.get("v326_r06_detail"),
             "v326_r06_skip_reason": best_m.get("v326_r06_skip_reason"),
+            # V3.26 STEP 6 (R-07 v2): chain-ETA engine (LOCATION B — best). Shadow ALWAYS.
+            "r07_chain_eta_min": best_m.get("r07_chain_eta_min"),
+            "r07_starting_point": best_m.get("r07_starting_point"),
+            "r07_chain_details": best_m.get("r07_chain_details"),
+            "r07_delta_vs_naive_min": best_m.get("r07_delta_vs_naive_min"),
+            "r07_chain_truncated_count": best_m.get("r07_chain_truncated_count"),
+            "r07_chain_warnings": best_m.get("r07_chain_warnings"),
+            "r07_compute_latency_ms": best_m.get("r07_compute_latency_ms"),
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

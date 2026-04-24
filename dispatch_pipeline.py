@@ -840,6 +840,48 @@ def assess_order(
             except Exception:
                 _base_sequence = None
 
+        # V3.26 STEP 6 (R-07 v2): compute chain_eta BEFORE feasibility — R-01 MANDATORY
+        # integration gdy flag True (chain_eta = pickup_ref source of truth).
+        # Zawsze compute (shadow), flag-gated use dla decision path.
+        r07_chain_result = None
+        r07_chain_eta_utc = None
+        _r07_latency_ms = None
+        try:
+            from dispatch_v2.chain_eta import compute_chain_eta as _cce
+            from dispatch_v2.osrm_client import route as _osrm_route, haversine as _hav
+            def _drive_min_fn(a, b):
+                try:
+                    r = _osrm_route(a, b)
+                    return float(r.get("duration_min") or 0) if r else None
+                except Exception:
+                    return None
+            _speed_mult = 1.0
+            try:
+                if C.ENABLE_V326_SPEED_MULTIPLIER:
+                    _tb = getattr(cs, "tier_bag", None) or "std"
+                    _speed_mult = float(C.V326_SPEED_MULTIPLIER_MAP.get(_tb, 1.0))
+            except Exception:
+                pass
+            import time as _time
+            _r07_t0 = _time.perf_counter()
+            r07_chain_result = _cce(
+                courier_pos=getattr(cs, "pos", None),
+                pos_source=getattr(cs, "pos_source", None),
+                pos_age_min=getattr(cs, "pos_age_min", None),
+                bag_orders=bag_sim,
+                proposal_pickup_coords=tuple(pickup_coords),
+                proposal_scheduled_utc=pickup_ready_at,
+                now_utc=now,
+                osrm_drive_min=_drive_min_fn,
+                haversine_km=_hav,
+                speed_multiplier=_speed_mult,
+            )
+            _r07_latency_ms = (_time.perf_counter() - _r07_t0) * 1000.0
+            if r07_chain_result is not None:
+                r07_chain_eta_utc = r07_chain_result.effective_eta_utc
+        except Exception as _r07_e:
+            log.warning(f"R-07 chain_eta compute fail: {type(_r07_e).__name__}: {_r07_e}")
+
         verdict, reason, metrics, plan = check_feasibility_v2(
             courier_pos=tuple(courier_pos),
             bag=bag_sim,
@@ -850,6 +892,7 @@ def assess_order(
             pickup_ready_at=pickup_ready_at,
             sla_minutes=sla_minutes,
             base_sequence=_base_sequence,
+            r07_chain_eta_utc=r07_chain_eta_utc,  # V3.26 STEP 6 R-07 MANDATORY when flag=True
         )
 
         # F1.8f hard guard: kurier którego zmiana kończy się PRZED pickup_ready_at
@@ -933,6 +976,15 @@ def assess_order(
         else:
             travel_min = drive_min
             eta_pickup_utc = drive_arrival_utc
+
+        # V3.26 STEP 6 (R-07 v2 CHAIN-ETA) — flag-gated override eta_pickup_utc.
+        # Chain_eta already computed przed feasibility (line ~845). Tu tylko override
+        # decision path gdy flag=True.
+        if C.ENABLE_V326_R07_CHAIN_ETA and r07_chain_result is not None:
+            eta_pickup_utc = r07_chain_eta_utc
+            drive_min = r07_chain_result.total_chain_min
+            travel_min = r07_chain_result.total_chain_min
+            eta_source = "r07_chain_eta"
 
         # Bundle bonus — sumowanie L1 + L2 + R4 (Bartek Gold Standard).
         # L1 = +25 (same restaurant), L2 = max(0, 20 - dist*10).
@@ -1358,6 +1410,30 @@ def assess_order(
             # Penalty applied post-scoring w _v325_new_courier_penalty.
             "cs_tier_label": getattr(cs, "tier_label", None),
             "cs_tier_bag": getattr(cs, "tier_bag", None),
+            # V3.26 STEP 6 (R-07 v2 chain-ETA) — ALWAYS recorded (shadow), flag-gated decision.
+            "r07_chain_eta_min": (
+                round(r07_chain_result.total_chain_min, 2)
+                if r07_chain_result is not None else None
+            ),
+            "r07_starting_point": (
+                r07_chain_result.starting_point if r07_chain_result is not None else "error"
+            ),
+            "r07_chain_details": (
+                r07_chain_result.chain_details if r07_chain_result is not None else None
+            ),
+            "r07_delta_vs_naive_min": (
+                round(r07_chain_result.delta_vs_naive_min, 2)
+                if r07_chain_result is not None else None
+            ),
+            "r07_chain_truncated_count": (
+                r07_chain_result.truncated_count if r07_chain_result is not None else 0
+            ),
+            "r07_chain_warnings": (
+                (r07_chain_result.warnings or [])[:5] if r07_chain_result is not None else []
+            ),
+            "r07_compute_latency_ms": (
+                round(_r07_latency_ms, 2) if _r07_latency_ms is not None else None
+            ),
         }
 
         # V3.24-A: hard reject gdy extension_penalty() returned None (>60 min).

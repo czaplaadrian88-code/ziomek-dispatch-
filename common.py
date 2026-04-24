@@ -983,6 +983,20 @@ V326_R06_BONUS_SIMILAR    = 15.0   # adjacency hit
 V326_R06_PENALTY_SIDEWAYS = -10.0  # cross-quadrant, nie opposite
 V326_R06_PENALTY_OPPOSITE = -40.0  # N↔SE/SW lub E↔W
 
+# V3.26 STEP 6 (R-07 v2 CHAIN-ETA ENGINE) — Adrian Q&A 2026-04-24.
+# Fundamental change: ETA kandydatów liczy chain walk przez unpicked orders
+# w bagu z max(arrival, scheduled) propagacją. Flag-gated use, shadow
+# metrics ALWAYS recorded (r07_chain_eta_min, r07_starting_point, etc).
+# Replace root cause: synthetic pos (last_assigned_pickup) traktowany jako real.
+ENABLE_V326_R07_CHAIN_ETA = _os.environ.get(
+    "ENABLE_V326_R07_CHAIN_ETA", "0") == "1"
+V326_R07_FRESH_GPS_MAX_AGE_MIN = 2      # GPS fresh threshold (Adrian ACK)
+V326_R07_PICKUP_DURATION_MIN = 2         # MVP constant (Adrian ACK); V3.27 per-restaurant
+V326_R07_NO_GPS_BUFFER_MIN = 5           # Case 4 no_gps_late buffer (Adrian ACK)
+V326_R07_DEFAULT_PREP_MIN = 30           # fallback gdy scheduled=None
+V326_R07_HAVERSINE_ROAD_MULT = 2.5       # empirical median 2.461 z 195 orders sample (2026-04-24 08:25)
+V326_R07_OSRM_TIMEOUT_MS = 500           # Adrian ACK — fallback haversine jeśli OSRM > 500ms
+
 
 def extension_penalty(planned_pickup_at, restaurant_requested_at):
     """V3.24-A: penalty za delay pickup kuriera vs restaurant-requested time.

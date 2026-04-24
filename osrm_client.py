@@ -30,7 +30,7 @@ from dispatch_v2.common import (
 )
 
 OSRM_BASE = "http://localhost:5001"
-CACHE_TTL_SECONDS = 15 * 60  # 15 minut
+CACHE_TTL_SECONDS = 60 * 60  # V3.26 R-07: 15→60min (Adrian ACK — Białystok skończony zestaw routes, 99% hit po 1h warm-up)
 CACHE_MAX_SIZE = 5000
 
 _log = setup_logger("osrm_client", "/root/.openclaw/workspace/scripts/logs/dispatch.log")

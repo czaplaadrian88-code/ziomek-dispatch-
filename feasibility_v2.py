@@ -186,6 +186,7 @@ def check_feasibility_v2(
     pickup_ready_at: Optional[datetime] = None,
     sla_minutes: int = DEFAULT_SLA_MINUTES,
     base_sequence: Optional[List[str]] = None,  # V3.19d passthrough
+    r07_chain_eta_utc: Optional[datetime] = None,  # V3.26 STEP 6 (R-07 v2) — chain_eta source of truth dla R-01 MANDATORY
 ) -> Tuple[str, str, Dict, Optional[RoutePlanV2]]:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -283,7 +284,16 @@ def check_feasibility_v2(
     #   pickup ∈ [shift_start - 30, shift_start) → soft penalty -20 (warm-up)
     # Dropoff hard-reject zachowane w V3.24-A line ~386 (post-simulate).
     if C.ENABLE_V325_SCHEDULE_HARDENING:
-        pickup_ref = pickup_ready_at if pickup_ready_at is not None else now
+        # V3.26 STEP 6 (R-07 v2) MANDATORY integration gdy flag True (Adrian ACK #5):
+        # chain_eta jest source of truth dla R-01 schedule check. Konsystencja
+        # priorytet — bez chain_eta R-01 używa pickup_ready_at (kurier arrive time
+        # INNY niż restaurant ready time).
+        if C.ENABLE_V326_R07_CHAIN_ETA and r07_chain_eta_utc is not None:
+            pickup_ref = r07_chain_eta_utc
+            metrics["v325_pickup_ref_source"] = "r07_chain_eta"
+        else:
+            pickup_ref = pickup_ready_at if pickup_ready_at is not None else now
+            metrics["v325_pickup_ref_source"] = "pickup_ready_at"
         if pickup_ref.tzinfo is None:
             pickup_ref = pickup_ref.replace(tzinfo=timezone.utc)
         # Gate 1: brak shift_end → courier nie ma active shift mapping
