@@ -31,6 +31,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from dispatch_v2 import manual_overrides  # V3.26 hotfix: top-level import
+                                          # (memory: V3.19g1 crash z `from X import Y` w funkcji)
 from dispatch_v2.common import (
     ENABLE_TELEGRAM_FREETEXT_ASSIGN,
     ENABLE_TIMELINE_FORMAT,
@@ -142,6 +144,23 @@ def name_lookup(courier_id: Optional[str], existing_name: Optional[str]) -> str:
             return cached
         return f"K{courier_id}"
     return "?"
+
+
+def _v326_help_text() -> str:
+    """V3.26 hotfix CHANGE 4: pomoc dla operatora Telegram."""
+    return (
+        "🤖 Komendy Ziomka:\n"
+        "\n"
+        "▪️ /stop <imię>  lub  '<imię> nie pracuje'\n"
+        "    — wyklucza kuriera do końca dnia\n"
+        "▪️ /wraca <imię>  lub  '<imię> wraca'\n"
+        "    — przywraca kuriera\n"
+        "▪️ /status — pełny raport serwisów\n"
+        "▪️ reset — czyści wszystkie wykluczenia\n"
+        "\n"
+        "Jako <imię> używaj formy z panelu (np. Adrian Cit, Bartek O., Mateusz O).\n"
+        "Każdy confirmation pokazuje cid kuriera — sprawdzaj zgodność."
+    )
 
 
 def _to_warsaw_hhmm(dt_utc: datetime) -> str:
@@ -1101,6 +1120,24 @@ async def handle_message(state: dict, msg: dict) -> None:
         _log.warning(f"message from unauthorized chat_id={chat_id} user={from_id}")
         return
 
+    # V3.26 hotfix BUG 1: exclude/include keyword pre-check PRZED free-text proposal
+    # flow. Bez tego "adrian cit nie pracuje" trafia do prefix-match i staje się
+    # OPERATOR_COMMENT zamiast wykluczyć kuriera. Patrz /tmp/v326_panel_nick_exclusion_bug.
+    text_lower_pre = text.lower()
+    _v326_kw_hit = (
+        any(kw in text_lower_pre for kw in manual_overrides.EXCLUDE_KEYWORDS)
+        or any(kw in text_lower_pre for kw in manual_overrides.INCLUDE_KEYWORDS)
+    )
+    if _v326_kw_hit:
+        action, response = await asyncio.to_thread(manual_overrides.parse_command, text)
+        if response:
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {"chat_id": state["admin_id"], "text": response},
+            )
+        _log.info(f"v326_kw_pre_check action={action} text={text!r}")
+        return
+
     if text.startswith("/"):
         cmd = text.split()[0].lower()
         if cmd == "/status":
@@ -1114,6 +1151,24 @@ async def handle_message(state: dict, msg: dict) -> None:
                 {"chat_id": state["admin_id"], "text": body},
             )
             _log.info(f"/status responded to admin={from_id}")
+            return
+        if cmd in ("/help", "/pomoc"):
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {"chat_id": state["admin_id"], "text": _v326_help_text()},
+            )
+            _log.info(f"/help responded to admin={from_id}")
+            return
+        # /stop /wraca /wrocil → manual_overrides (handled by parse_command)
+        if cmd in ("/stop", "/wraca", "/wrocil"):
+            action, response = await asyncio.to_thread(manual_overrides.parse_command, text)
+            if response:
+                await asyncio.to_thread(
+                    tg_request, state["token"], "sendMessage",
+                    {"chat_id": state["admin_id"], "text": response},
+                )
+            _log.info(f"slash override action={action} text={text!r}")
+            return
         return
 
     # NLP assistant — wolny tekst (F2.2)
@@ -1327,8 +1382,7 @@ async def handle_message(state: dict, msg: dict) -> None:
     # Nieznana wiadomość — loguj from_id (zbieramy user_id Bartka)
     _log.info(f"unhandled msg from={from_id} text={text[:80]!r}")
 
-    # Free-text → manual courier overrides
-    from dispatch_v2 import manual_overrides
+    # Free-text → manual courier overrides (fallthrough po keyword pre-check)
     action, response = await asyncio.to_thread(manual_overrides.parse_command, text)
     if not response:
         return
