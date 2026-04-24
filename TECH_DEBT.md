@@ -49,6 +49,15 @@ sla-tracker (przy dot-removal invalidation) tylko zachował ten error (pre-exist
 **Priority:** medium — SLA tracker sam cykluje, R6 alerts mogą być silent ruinowane.
 Wymaga grep `_parse` vs `_parse_aware_utc` w `sla_tracker.py` + fix mixed TZ arithmetic.
 
+**STATUS UPDATE 2026-04-24 20:36 UTC:** service **STOPPED** (`systemctl stop
+dispatch-sla-tracker`) per Adrian D2(a) decision (session marathon 25.04 evening).
+Rationale: error co 10s = ~8640/dobę noise; R6 alerts partial functionality
+nie warte log pollution + cognitive overhead przy debug. Stopped do fix next
+session (30-45 min scope: diagnose `_parse` vs `_parse_aware_utc`, mixed TZ
+arithmetic). Impact stopped service: R6 bag_time alerts (>30min threshold)
+NIE fire — acceptable 24h bo operational coverage przez panel + Adrian visual
+monitoring. Priority escalated: medium → **HIGH** (LIVE capability missing).
+
 #### V3.25-SLA-TRACKER-UNIT-DRIFT — unit file on-disk różni się od załadowanego (pre-existing)
 `systemctl status dispatch-sla-tracker` pokazuje warning:
 ```
@@ -89,6 +98,125 @@ daje 45 hitów w:
 phantom PIN leak — NIE rippować bez re-run test).
 **Priority:** low. Podnieść tylko przy większym refactoringu telegram
 parser albo gdy nowy kurier dostanie kropkę w panelu Adriana.
+
+#### V326-R09-NAMEERROR — osrm_client not defined, R-09 wave veto DEAD in prod (CRITICAL)
+`dispatch_pipeline.py:1239` używa `osrm_client.haversine(...)` ale module-level
+import na linii 28 to TYLKO `from dispatch_v2.osrm_client import haversine`
+(sama funkcja, nie moduł). `osrm_client` na L1239 = undefined → NameError
+łapany przez except → `log.warning("V326_WAVE_VETO compute fail …")` na L1252.
+
+**Impact:** R-09 WAVE-GEOMETRIC-VETO (flag True od 2026-04-23 21:12 UTC, commit
+b2ccbd0) **NIGDY nie fire'uje** — każda próba compute crashes. Wave continuation
+bonus BUG-2 (`bonus_bug2_continuation` +30pts) nie jest vetowany nawet w
+geometrii SIDEWAYS/OPPOSITE > 3.0km. Cały feature effectively DEAD w shadow+prod.
+
+**Scale:**
+- First journal error: **2026-04-24 08:38:59 UTC** (earliest in current journal,
+  journal rotated — bug istnieje od R-09 flag flip 2026-04-23 21:12:16 UTC)
+- Since shadow restart 2026-04-24 12:26:02 UTC: **864 errors w 7h 25min**
+- Rate: **~117/h ≈ 2800/dobę** przy normalnym load, peak może 3000+
+
+**Hypothesis cross-module coupling z BUG3-STEP1 DISPROVEN:** BUG3 deploy
+2026-04-24 12:25:50 UTC (commit 28aaf25), ale bug zaobserwowany 3h 46min
+wcześniej (08:38:59). Oba bugi niezależne.
+
+**Fix (trivial, ~5 min):** Line 1239 — zamień `osrm_client.haversine(` na
+`haversine(` (już zaimportowana na L28). Albo dodaj `import dispatch_v2.osrm_client as osrm_client`
+na L28 i zostaw 1239 jak jest. Drugie safer bo nie zmienia więcej nic, ale
+pierwsze bardziej consistent z resztą pliku (L872 import w function body też
+importuje function-level: `haversine as _hav`).
+
+**Regression risk po fix:** R-09 zacznie REALNIE vetować wave_continuation
+bonus w shadow → shadow decisions zmienią się w ~5% proposals (wstępna
+estymacja — tam gdzie wave_continuation bonus był +30 a km_from_last_drop >3).
+Flag ENABLE_V326_WAVE_GEOMETRIC_VETO=True → shadow selection może się zmienić
+natychmiast. **Proponuję pre-fix:** (a) flip flag False + fix code + observe
+shadow nowe decisions 24h → (b) flip True po confirmation że veto działa jak
+intended. Albo surgical: fix + monitor pierwsze 100 proposals po restart dla
+R-09 fire rate.
+
+**Priority:** HIGH — R-09 była designed jako critical veto path (prevent
+koordynator complaints), obecnie 0% efektywność. Fix scope ~30 min (edit +
+test + deploy shadow → monitor → flip).
+
+**Test:** `pytest tests/test_v326_step3_r09.py -v` (ma fixture używającą
+`common.V326_WAVE_VETO_KM_THRESHOLD`). Upewnij się że test mock'uje
+haversine lub używa real function call.
+
+**Blast radius:** dispatch-shadow (primary) + żaden other service (R-09 lives
+w dispatch_pipeline). Restart: `systemctl restart dispatch-shadow` (ACK Adrian).
+
+#### V3.26-SMOKE-TEST-T5-REGRESSION — 5 failures w smoke_telegram_buttons_freetext
+Po Run 2026-04-24 ~20:30 UTC `python3 tests/smoke_telegram_buttons_freetext.py`:
+- **5/~40 FAIL** (T#5 "max 3 przyciski" + ASSIGN callback format)
+- **9/9 PASS** w T#6 `test_parse_known_names` (broader coverage, unrelated)
+
+Fail cases:
+```
+t1='✅ Marek 10min'          (T#5 Case 1 — button label prefix check)
+t2='✅ Grzegorz 20min'       (T#5 Case 1)
+cb1=ASSIGN:466700:207:10     (T#5 Case 7 — callback format)
+cb2=ASSIGN:466700:289:20     (T#5 Case 7)
+valid cand → ASSIGN:X:207:12 (T#5 Case 6 — valid cand)
+```
+
+Hipoteza robocza: regression od commit **2271810** `v326-hotfix-button-label-2026-04-24`
+(button label formula alignment z compute_assign_time, max(travel, prep)).
+Test expected stale format, prod zmieniony po hotfix.
+
+**Alternatywa:** callback format mogł się zmienić w a93d1c4 (v326 parser hotfix
+`(cid=N)` format) — check git log -p dla test scenarios.
+
+**Priority:** medium — prod działa (hotfix LIVE), tylko test out of sync.
+Fix: diff prod `_format_assign_label` + `_build_callback_data` vs test
+expected, update test fixtures. ~30 min. Blocks: commit test backfill
+`smoke_telegram_buttons_freetext.py` diff z `test_parse_known_names` (9 cases
+PASS ale commit blocked bo overall FAIL). Odłożone do jutra 2026-04-25.
+
+**Test backfill dyskusja:** mój diff `test_parse_known_names` jest SAFE
+(oczywiście PASS), commit blocked tylko pre-existing FAIL w innych testach.
+Opcja: commit test backfill + osobny ticket T#5 fix. Opcja lepsza: fix T#5
++ commit cały clean file naraz. Wybrać jutro.
+
+#### V3.25-DOT-VERIFY-SMOKE — empirical dot-normalization end-to-end (pending 25.04 evening)
+Post-V3.25 dot removal z kurier_ids.json + kurier_piny.json (tylko "Bartek O.",
+"Michał K." → dotless). Parser normalization via `rstrip(".,;:")` teoretycznie
+handles user input z kropką, ale NIE zweryfikowane empirically.
+
+**Test plan (2026-04-25 evening):**
+1. Adrian → @NadajeszBot: "bartek o nie pracuje" — expected: exclude Bartek O.
+   (cid=123), confirm `(cid=123)`.
+2. Adrian → @NadajeszBot: "bartek o. nie pracuje" (Z KROPKĄ) — expected: exclude
+   SAME Bartek O. (cid=123), normalized match.
+3. Adrian → @NadajeszBot: "michał k pauza" — expected: pause Michał K. (cid=393).
+4. Adrian → @NadajeszBot: "michał k. pauza" (Z KROPKĄ) — expected: pause SAME
+   Michał K. (cid=393).
+
+**Dependency:** dispatch-telegram.service restart (natural redeploy albo
+Adrian ACK po fix innego ticketu). Do restart parser ma stale cache z pre-dot
+removal (courier_names dict loaded at startup), ale rstrip powinien fire
+nawet ze stale cache bo normalization przed lookup.
+
+**If FAIL:** rollback `cp kurier_ids.json.bak-pre-dot-removal-2026-04-24
+kurier_ids.json` + piny + naprawić parser edge case. Reversal scope: git revert
+5 commits Daily Accounting bundle.
+
+**Priority:** HIGH (pre-condition for any future courier name change).
+Scope: 10 min live test + 15 min rollback jeśli FAIL.
+
+#### V3.26-PANEL-PARSER-DOT-AUDIT — verify parse_panel_html normalizes courier names
+Panel NadajeSz wysyła kurier names w HTML (kolumna "Kurier" w ticket view).
+Jeśli panel wyświetla "Bartek O." z kropką, `panel_client.parse_panel_html`
+musi match na `kurier_ids.json` keys ("Bartek O" bez kropki). Jeśli match
+jest exact-string, bez rstrip normalization — panel_watcher nie będzie
+emit COURIER_ASSIGNED dla Bartek O./Michał K. until panel UI zmieni format.
+
+**Akcja:** grep `parse_panel_html` + callers, verify normalization layer
+(strip/rstrip/lower przed dict lookup). Jeśli exact match → dodać normalize
+wrapper + unit test.
+
+**Priority:** MEDIUM — ryzyko silent breakage dla 2 kurierów. Scope: ~45 min
+audit + optional fix. Powiązane z V3.25-DOT-VERIFY-SMOKE.
 
 #### V3.19g — przedłużenia czas_kuriera trigger plan invalidation (deferred)
 Gdy panel zmienia `czas_kuriera` po COURIER_ASSIGNED (np. coordinator "+15min"
