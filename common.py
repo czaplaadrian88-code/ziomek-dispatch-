@@ -187,8 +187,21 @@ def get_fallback_speed_kmh(dt_utc: datetime) -> float:
 # traffic data). Białystok delivery shadow shows OSRM under-estimates by
 # 20-60% during weekday rush. Adrian operator gut + empirical bucket SHAPE
 # (anchor-A method, n=42,494 deliveries Nov2025-Apr2026) -> ship Adrian's
-# conservative table. Recalibrate next session with clean
-# (osrm_raw_min, actual_delivered_min) pairs from 24h shadow data.
+# conservative table.
+#
+# 2026-04-25 EMPIRICAL VALIDATION (Wariant B reconstruction, n=767 samples,
+# 14-day window 04-11→04-25, events.log + orders_state + OSRM batch):
+# After 5min delivery_overhead adjustment (parking+walk+ring+handover),
+# 6/9 buckets z n>=50 PASS Adrian's table ±15%:
+#   wd_13-15 adj=1.20 vs 1.30 (-7.5%) KEEP
+#   wd_15-17 adj=1.41 vs 1.60 (-11.6%) KEEP
+#   wd_17-19 adj=1.03 vs 1.20 (-14.2%) KEEP
+#   wd_19-21 adj=1.11 vs 1.10 (+0.8%) KEEP
+#   wd_21-24 adj=0.98 vs 1.00 (-2.2%) KEEP
+#   weekend  adj=1.02 vs 1.00 (+1.6%) KEEP
+# 3 buckets INSUFFICIENT (n<50): wd_08-10/wd_10-12/wd_12-13 — extrapolation OK.
+# Report: /tmp/v326_osrm_empirical_aggregation_2026-04-25.md
+#
 # Convention: bucket = [hour_lo, hour_hi) — lower inclusive, upper exclusive.
 V326_OSRM_TRAFFIC_TABLE = {
     "weekday": [   # MON-FRI (weekday()==0..4)
