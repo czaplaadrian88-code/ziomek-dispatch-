@@ -1112,6 +1112,15 @@ PO_DRODZE_MAX_INTERVENING = 0
 ENABLE_V326_PO_DRODZE_STRICT = _os.environ.get(
     "ENABLE_V326_PO_DRODZE_STRICT", "1") == "1"
 
+# V3.26 Fix 6 (2026-04-25 sobota) — OR-Tools TSP solver replaces bruteforce/greedy.
+# Adrian's strategic decision (Opcja 1 czysty OR-Tools): industry-standard
+# constraint programming dla wszystkich bag sizes. Time-bounded search 200ms.
+# Eliminates greedy zigzag pattern dla bag>3 (#468404 case study).
+# Default False — shadow validation period przed flip True.
+ENABLE_V326_OR_TOOLS_TSP = _os.environ.get(
+    "ENABLE_V326_OR_TOOLS_TSP", "0") == "1"
+V326_OR_TOOLS_TIME_LIMIT_MS = 200  # Adrian's spec — per kandydat search budget
+
 # V3.26 STEP 6 (R-07 v2 CHAIN-ETA ENGINE) — Adrian Q&A 2026-04-24.
 # Fundamental change: ETA kandydatów liczy chain walk przez unpicked orders
 # w bagu z max(arrival, scheduled) propagacją. Flag-gated use, shadow

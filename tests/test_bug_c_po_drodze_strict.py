@@ -33,10 +33,11 @@ def test_thresholds_defined():
     assert common.PO_DRODZE_MAX_INTERVENING == 0
 
 
-def test_flag_default_false():
-    """Default flag False = legacy behavior."""
+def test_flag_default_value_post_flip():
+    """Flag flipped True 2026-04-25 (commit 291b5a3, post Adrian's #468461 feedback).
+    Pre-flip był False; post-flip True. Test reflects current state."""
     assert hasattr(common, "ENABLE_V326_PO_DRODZE_STRICT")
-    assert common.ENABLE_V326_PO_DRODZE_STRICT is False
+    assert common.ENABLE_V326_PO_DRODZE_STRICT is True
 
 
 def test_strict_block_present_in_pipeline():
@@ -77,8 +78,8 @@ def test_strict_clears_bundle_level3_on_fail():
 if __name__ == "__main__":
     test_thresholds_defined()
     print("test_thresholds_defined: PASS")
-    test_flag_default_false()
-    print("test_flag_default_false: PASS")
+    test_flag_default_value_post_flip()
+    print("test_flag_default_value_post_flip: PASS")
     test_strict_block_present_in_pipeline()
     print("test_strict_block_present_in_pipeline: PASS")
     test_dist_threshold_uses_constant()

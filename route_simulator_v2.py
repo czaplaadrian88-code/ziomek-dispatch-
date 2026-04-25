@@ -26,6 +26,9 @@ from dispatch_v2.common import (
     ENABLE_PICKED_UP_DROP_FLOOR,
     ENABLE_V319E_PRE_PICKUP_BAG,
 )
+import logging as _logging
+
+_log = _logging.getLogger("route_simulator_v2")
 
 
 DWELL_PICKUP_MIN = 2.0
@@ -132,6 +135,17 @@ def simulate_bag_route_v2(
 
     bag_after_add = len(bag) + 1
 
+    # V3.26 Fix 6 (2026-04-25): OR-Tools TSP solver za flagą ENABLE_V326_OR_TOOLS_TSP.
+    # Replaces bruteforce + greedy z industry-standard constraint solver.
+    # Time-bounded 200ms per kandydat. Fallback do greedy gdy solver INFEASIBLE
+    # (rare — np. tight time windows).
+    use_ortools = False
+    try:
+        from dispatch_v2.common import ENABLE_V326_OR_TOOLS_TSP as _ot_flag
+        use_ortools = bool(_ot_flag)
+    except Exception:
+        use_ortools = False
+
     if use_sticky:
         plan = _sticky_sequence_plan(
             nodes, leg_min, sticky_bag_idxs,
@@ -139,6 +153,28 @@ def simulate_bag_route_v2(
             new_order, bag, now, sla_minutes,
         )
         plan.strategy = "sticky"
+    elif use_ortools:
+        plan = _ortools_plan(
+            nodes, leg_min, bag_delivery_idxs,
+            bag_pickup_idxs_by_oid,
+            new_pickup_idx, new_delivery_idx,
+            new_order, bag, now, sla_minutes,
+        )
+        if plan is None:
+            # OR-Tools fallback: gdy INFEASIBLE → greedy safety net
+            _log.warning(
+                f"OR-Tools INFEASIBLE for bag_size={len(bag)}, "
+                f"falling back to greedy"
+            )
+            plan = _greedy_plan(
+                nodes, leg_min, bag_delivery_idxs,
+                bag_pickup_idxs_by_oid,
+                new_pickup_idx, new_delivery_idx,
+                new_order, bag, now, sla_minutes,
+            )
+            plan.strategy = "greedy_fallback"
+        else:
+            plan.strategy = "ortools"
     elif bag_after_add <= BRUTEFORCE_MAX_BAG_AFTER:
         plan = _bruteforce_plan(
             nodes, leg_min, bag_delivery_idxs,
@@ -493,3 +529,79 @@ def _greedy_plan(
                 best = plan
                 best_key = key
     return best
+
+
+def _ortools_plan(
+    nodes, leg_min, bag_delivery_idxs,
+    bag_pickup_idxs_by_oid,
+    new_pickup_idx, new_delivery_idx,
+    new_order, bag, now, sla_minutes,
+) -> Optional[RoutePlanV2]:
+    """V3.26 Fix 6: OR-Tools TSP solver dla pickup-and-delivery problem.
+
+    Replaces bruteforce + greedy z industry-standard constraint solver.
+    Time-bounded 200ms (configurable). Returns None gdy solver INFEASIBLE —
+    caller falls back do greedy (route_simulator_v2.simulate_bag_route_v2).
+
+    Pickup-drop pairs:
+    - Pending bag items: (bag_pickup_idx, bag_delivery_idx) per oid
+    - New order: (new_pickup_idx, new_delivery_idx) gdy need_pickup
+    - Already-picked bag drops: NIE pair (just final visits, no precedence)
+    """
+    from dispatch_v2 import tsp_solver
+    from dispatch_v2.common import V326_OR_TOOLS_TIME_LIMIT_MS as _ot_ms
+
+    N = len(nodes)
+    if N <= 1:
+        return None
+
+    # Build time matrix z leg_min callable (drive_min between nodes)
+    time_matrix: List[List[float]] = [[0.0] * N for _ in range(N)]
+    for i in range(N):
+        for j in range(N):
+            if i == j:
+                continue
+            try:
+                time_matrix[i][j] = max(0.0, float(leg_min(i, j)))
+            except Exception:
+                time_matrix[i][j] = 9999.0
+    # Distance matrix proxy = time matrix (solver minimizes; same units fine).
+    distance_matrix = time_matrix
+
+    # Build pickup-drop pairs
+    pickup_drop_pairs: List[Tuple[int, int]] = []
+    for d_idx in bag_delivery_idxs:
+        oid = nodes[d_idx]["order_id"]
+        if oid in bag_pickup_idxs_by_oid:
+            p_idx = bag_pickup_idxs_by_oid[oid]
+            pickup_drop_pairs.append((p_idx, d_idx))
+    if new_pickup_idx is not None:
+        pickup_drop_pairs.append((new_pickup_idx, new_delivery_idx))
+
+    # Solve (MVP: no time windows — pickup_ready_at handled by _simulate_sequence
+    # post-conversion; OR-Tools time windows can cause INFEASIBLE w restrictive
+    # cases; defer dla future tuning).
+    solution = tsp_solver.solve_tsp_with_constraints(
+        num_stops=N,
+        pickup_drop_pairs=pickup_drop_pairs,
+        distance_matrix_km=distance_matrix,
+        time_matrix_min=time_matrix,
+        time_windows=None,
+        max_route_min=120.0,
+        time_limit_ms=int(_ot_ms),
+    )
+
+    if solution is None or not solution.sequence:
+        if solution is not None:
+            _log.warning(
+                f"OR-Tools no sequence: status={solution.solver_status} "
+                f"elapsed={solution.elapsed_ms}ms warnings={solution.warnings}"
+            )
+        return None
+
+    # Convert sequence → RoutePlanV2 via _plan_from_sequence (re-uses standard
+    # _simulate_sequence z DWELL stops + pickup_ready_at wait + SLA violations).
+    plan = _plan_from_sequence(
+        solution.sequence, nodes, leg_min, new_order, bag, now, sla_minutes
+    )
+    return plan
