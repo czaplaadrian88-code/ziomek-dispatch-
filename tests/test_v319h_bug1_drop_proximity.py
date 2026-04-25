@@ -114,8 +114,8 @@ print("\n=== V3.19h BUG-1: flag gate + constants ===")
 # ============================================================
 
 next_i = i_start + len(pf_cases)
-check(f"{next_i}. flag default False",
-      C.ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR is False)
+check(f"{next_i}. flag default True (LIVE od V3.19h 2026-04-21)",
+      C.ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR is True)
 check(f"{next_i + 1}. 28 official districts loaded",
       len(C.BIALYSTOK_DISTRICTS) == 28)
 check(f"{next_i + 2}. adjacency ma 32 entries (28 official + 4 outside)",
