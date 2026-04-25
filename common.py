@@ -1109,7 +1109,7 @@ V326_R07_OSRM_TIMEOUT_MS = 500           # Adrian ACK — fallback haversine je�
 # passthrough, zero downstream contract change. Stats logged hourly only when
 # flag=True (no-op when False).
 ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER = _os.environ.get(
-    "ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER", "0") == "1"
+    "ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER", "1") == "1"
 
 # Daily Accounting module (V3.25): codzienne rozliczenie kurierów do arkusza
 # Controlling / 'Obliczenia' tab. Osobny od dispatch engine, zero coupling na
