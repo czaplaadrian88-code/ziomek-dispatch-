@@ -85,15 +85,20 @@ def test_haversine_fallback_traffic_applied_when_flag_true():
 
 
 def test_haversine_fallback_weekend_mult_1_no_change():
-    """Flag=True weekend → mult=1.0 → ETA identical to flag=False."""
-    # Saturday 25.04.2026 10:00 UTC = 12:00 CEST (weekend → mult=1.0)
-    dt = datetime(2026, 4, 25, 10, 0, 0, tzinfo=timezone.utc)
+    """Flag=True weekend off-peak → mult=1.0 → ETA identical to flag=False.
+
+    V3.27 Bug X update: sobota 12-21 ma teraz mult>1.0 (peak buckets).
+    Test używa sobota 06:00 UTC = 08:00 CEST = 00-12 bucket → still 1.0.
+    Niedziela też cała doba 1.0 (alternative test path).
+    """
+    # Saturday 25.04.2026 06:00 UTC = 08:00 CEST (weekend off-peak → mult=1.0)
+    dt = datetime(2026, 4, 25, 6, 0, 0, tzinfo=timezone.utc)
     res_off = _make_call(dt, False)
     res_on = _make_call(dt, True)
     delta_seconds = abs((res_on.effective_eta_utc - res_off.effective_eta_utc).total_seconds())
-    # Weekend mult = 1.0 → identical
+    # Weekend off-peak mult = 1.0 → identical
     assert delta_seconds < 1.0, (
-        f"weekend mult=1.0 should give identical ETA; delta={delta_seconds}s"
+        f"weekend off-peak mult=1.0 should give identical ETA; delta={delta_seconds}s"
     )
 
 

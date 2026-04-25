@@ -216,12 +216,29 @@ V326_OSRM_TRAFFIC_TABLE = {
         (19, 21, 1.1),
         (21, 24, 1.0),
     ],
-    "weekend": 1.0,  # SAT-SUN all day
+    # V3.27 Bug X fix (2026-04-25 wieczór): split weekend → saturday/sunday.
+    # Pre-fix: weekend=1.0 flat całą dobę → matrix=raw OSRM free-flow w sobotni
+    # peak 16-21 → 30-50% pod-estymata timing (#468508/#468509 reproduction).
+    # Adrian's decyzja: sobota peak 12-21 conservative (max 1.2), niedziela płaska 1.0.
+    # Memory user: "Pn-Pt 11-14 + 17-20, sobota 16-21 (długi peak), niedziela TBD".
+    "saturday": [   # SAT (weekday()==5)
+        (0, 12, 1.0),
+        (12, 15, 1.1),
+        (15, 17, 1.2),
+        (17, 21, 1.2),
+        (21, 24, 1.0),
+    ],
+    "sunday": [     # SUN (weekday()==6) — drogi puste, zero peak weekend
+        (0, 24, 1.0),
+    ],
 }
 
 
 def get_traffic_multiplier(dt_utc: datetime) -> float:
     """Zwraca traffic multiplier dla aware UTC datetime (Warsaw local).
+
+    V3.27 Bug X fix: jednolite traktowanie weekday/saturday/sunday — list-based
+    buckets per dzień. Sobota peak 12-21 (max 1.2), niedziela płaska 1.0.
 
     Convention: bucket = [hour_lo, hour_hi) — lower inclusive, upper exclusive.
     e.g. 17:00 sharp -> 1.2 (z 17-19), nie 1.6 (z 15-17).
@@ -230,10 +247,15 @@ def get_traffic_multiplier(dt_utc: datetime) -> float:
     if dt_utc.tzinfo is None:
         raise TypeError("get_traffic_multiplier requires aware datetime (got naive)")
     local = dt_utc.astimezone(WARSAW)
-    if local.weekday() >= 5:  # SAT/SUN
-        return V326_OSRM_TRAFFIC_TABLE["weekend"]
+    wd = local.weekday()
+    if wd <= 4:
+        table = V326_OSRM_TRAFFIC_TABLE["weekday"]
+    elif wd == 5:
+        table = V326_OSRM_TRAFFIC_TABLE["saturday"]
+    else:
+        table = V326_OSRM_TRAFFIC_TABLE["sunday"]
     h = local.hour
-    for lo, hi, mult in V326_OSRM_TRAFFIC_TABLE["weekday"]:
+    for lo, hi, mult in table:
         if lo <= h < hi:
             return mult
     return 1.0  # safety net (np. h=24 nie powinno wystapic)

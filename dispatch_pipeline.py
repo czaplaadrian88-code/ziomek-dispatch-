@@ -1119,8 +1119,26 @@ def assess_order(
 
         # drive_min: pure drive od COURIER_POS (nie effective_start_pos) do restauracji.
         # R9 wait invariant + eta_drive display — trzyma oryginalną semantykę.
-        _drive_km_from_courier = haversine(tuple(courier_pos), pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
-        drive_min = (_drive_km_from_courier / fleet_speed_kmh) * 60.0 if fleet_speed_kmh > 0 else 0.0
+        # V3.27 Bug X fix: OSRM-first (z traffic_mult applied via osrm_client._apply_traffic_multiplier)
+        # zamiast haversine/fleet_speed_kmh fallback. Single source of truth dla ETA.
+        # Fallback do haversine × road_factor / fleet_speed × traffic_mult tylko przy
+        # hard exception (osrm_client samo handluje circuit-breaker → haversine fallback).
+        try:
+            from dispatch_v2 import osrm_client as _osrm_v327
+            _osrm_drive_res = _osrm_v327.route(tuple(courier_pos), pickup_coords)
+            drive_min = float(_osrm_drive_res.get("duration_min") or 0.0)
+            _drive_km_from_courier = float(_osrm_drive_res.get("distance_km") or 0.0)
+        except Exception as _v327_e:
+            log.warning(
+                f"V3.27 drive_min OSRM exception, fallback to haversine + traffic_mult: "
+                f"{type(_v327_e).__name__}: {_v327_e}"
+            )
+            _drive_km_from_courier = haversine(tuple(courier_pos), pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+            drive_min = (_drive_km_from_courier / fleet_speed_kmh) * 60.0 if fleet_speed_kmh > 0 else 0.0
+            try:
+                drive_min *= float(C.get_traffic_multiplier(now))
+            except Exception:
+                pass  # safety — fleet_speed_kmh fallback bez mult
         drive_arrival_utc = now + timedelta(minutes=drive_min)
 
         eta_source = "haversine"
