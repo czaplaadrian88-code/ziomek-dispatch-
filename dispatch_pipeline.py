@@ -856,6 +856,42 @@ def assess_order(
                 bundle_level3 = True
                 bundle_level3_dev = round(dev, 2)
 
+        # V3.27 Bug Z fix (2026-04-25 wieczór): compute min drop_proximity_factor
+        # across (new_drop + bag_drops) dla SOFT penalty (Q5) + Z-OWN-1 corridor
+        # mult (Q5a). Gated by ENABLE_V327_BUG_FIXES_BUNDLE.
+        # 'Unknown' zone treated as 0.0 (defensive — coverage gap akceptowany per Q4).
+        # Empty bag (len < 1) → score_mult=1.0, corridor_mult=1.0 (no-op).
+        v327_min_drop_factor = None
+        v327_bundle_score_mult = 1.0
+        v327_drop_zones_audit = None
+        if C.ENABLE_V327_BUG_FIXES_BUNDLE and bag_raw:
+            try:
+                _v327_new_zone = C.drop_zone_from_address(
+                    delivery_address,
+                    order_event.get('delivery_city'),
+                )
+                _v327_bag_zones = [
+                    C.drop_zone_from_address(
+                        _b.get('delivery_address'),
+                        _b.get('delivery_city'),
+                    )
+                    for _b in bag_raw
+                ]
+                _v327_all_zones = [_v327_new_zone] + _v327_bag_zones
+                v327_min_drop_factor = C.min_drop_proximity_factor(_v327_all_zones)
+                if v327_min_drop_factor is not None:
+                    v327_bundle_score_mult = C.bundle_score_multiplier(v327_min_drop_factor)
+                v327_drop_zones_audit = {
+                    "new_zone": _v327_new_zone,
+                    "bag_zones": _v327_bag_zones,
+                    "min_factor": v327_min_drop_factor,
+                    "score_mult": v327_bundle_score_mult,
+                }
+            except Exception as _v327_z_e:
+                log.warning(
+                    f"V3.27 Bug Z compute fail: {type(_v327_z_e).__name__}: {_v327_z_e}"
+                )
+
         # SLA 45 min dla bundli (per dane historyczne 86%/95% w 35/45 min).
         # Solo (pusty bag) zostaje 35 min — nie poluzowujemy sytuacji bez bundlingu.
         sla_minutes = 45 if bag_sim else 35
@@ -1222,6 +1258,14 @@ def assess_order(
             else:
                 bonus_r4_raw = 0.0
         bonus_r4 = bonus_r4_raw * 1.5  # R4 weight per Bartek Gold Standard
+        # V3.27 Bug Z Z-OWN-1 (Q5a): corridor bonus *= min(drop_proximity_factor)
+        # across drops. Cross-quadrant bag → factor=0.0 → bonus_r4=0 (zeroed razem
+        # z Q5 bundle penalty). Same-quadrant → 1.0 (unchanged). Adjacent → 0.5×.
+        # Gated by flag (v327_min_drop_factor=None gdy flag=False lub empty bag).
+        v327_corridor_mult_applied = 1.0
+        if v327_min_drop_factor is not None:
+            v327_corridor_mult_applied = float(v327_min_drop_factor)
+            bonus_r4 = bonus_r4 * v327_corridor_mult_applied
         bundle_bonus = bonus_l1 + bonus_l2 + bonus_r4
         # V3.19h BUG-2 wave continuation bonus dodany do final_score niżej
         # (wymaga free_at_dt computed after bag sim — order-of-execution).
@@ -1472,6 +1516,15 @@ def assess_order(
 
         final_score = score_result["total"] + bundle_bonus + timing_gap_bonus + wave_bonus + bonus_penalty_sum + bonus_bug2_continuation + v324a_extension_penalty
 
+        # V3.27 Bug Z Q5: SOFT bundle score multiplier dla cross-quadrant bag.
+        # 0.0 (cross-quadrant) → score *= 0.1
+        # 0.5 (adjacent) → score *= 0.7
+        # 1.0 (same quadrant) → score *= 1.0 (unchanged)
+        # Gated by flag (v327_bundle_score_mult=1.0 gdy flag=False lub empty bag).
+        v327_score_pre_mult = final_score
+        if v327_bundle_score_mult != 1.0:
+            final_score = final_score * v327_bundle_score_mult
+
         # V3.19e Opcja B — R1' observability only, zero behavior change.
         # Dla propozycji z synthetic pos=last_assigned_pickup (kurier w drodze
         # do restauracji X) loguj hypothetical metric: czy floor drive_min >=
@@ -1517,6 +1570,12 @@ def assess_order(
             "bonus_r4_raw": round(bonus_r4_raw, 2),
             "bonus_r4": round(bonus_r4, 2),
             "bundle_bonus": round(bundle_bonus, 2),
+            # V3.27 Bug Z metrics (observability)
+            "v327_min_drop_factor": v327_min_drop_factor,
+            "v327_bundle_score_mult": round(v327_bundle_score_mult, 3) if v327_bundle_score_mult != 1.0 else 1.0,
+            "v327_corridor_mult_applied": round(v327_corridor_mult_applied, 3),
+            "v327_score_pre_mult": round(v327_score_pre_mult, 2) if v327_bundle_score_mult != 1.0 else None,
+            "v327_drop_zones_audit": v327_drop_zones_audit,
             "timing_gap_bonus": round(timing_gap_bonus, 2),
             "timing_gap_min": round(gap_min, 1),
             "time_to_pickup_ready_min": round(time_to_pickup_ready, 1),

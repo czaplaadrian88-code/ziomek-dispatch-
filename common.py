@@ -1153,6 +1153,89 @@ ENABLE_V326_SAME_RESTAURANT_GROUPING = _os.environ.get(
     "ENABLE_V326_SAME_RESTAURANT_GROUPING", "0") == "1"
 V326_GROUPING_TIME_TOLERANCE_MIN = 5.0  # ±5 min czas_kuriera tolerance
 
+# ============================================================
+# V3.27 Bug Z fix (2026-04-25 wieczór) — bundle cross-quadrant SOFT penalty
+# ============================================================
+# Bug Z: bundle_level3 corridor logic + drop_proximity_factor scope tylko level1.
+# Cross-restaurant bundle (level2/level3) NIE ma quadrant check → cross-quadrant
+# bag (np. Bełzy N + Filipowicza SE) traktowany jako "po drodze" mimo 9 km zigzag.
+#
+# Reproduction: #468509 Chicago Pizza → Artyleryjska, bag Gabriel J z drop
+# Bełzy(N) + Filipowicza(Kleosin SE), bundle_level3=True dev=0.21.
+#
+# Q5 SOFT mnożnik dla SCORE (NIE hard reject):
+#   factor=0.0 (cross-quadrant) → score *= 0.1
+#   factor=0.5 (adjacent) → score *= 0.7
+#   factor=1.0 (same quadrant) → score *= 1.0
+#
+# Q5a Z-OWN-1 corridor mult: bonus_r4 (po drodze corridor bonus) *= min_factor
+#   factor=0.0 → bonus_r4 = 0 (corridor bonus zeroed razem z bundle penalty)
+#   factor=0.5 → bonus_r4 *= 0.5
+#   factor=1.0 → bonus_r4 unchanged
+#
+# 'Unknown' zone treatment (Z2): traktuj jako 0.0 (defensive — coverage gap
+# w BIALYSTOK_DISTRICTS streets dla wielu adresów: Bełzy, Czarnogórska,
+# Skłodowskiej etc. Per Q4 NIE extend coverage w V3.27, defer V3.28 ticket).
+#
+# Default False — shadow validation. Flip True dopiero po Adrian ACK Krok 3.
+# ============================================================
+ENABLE_V327_BUG_FIXES_BUNDLE = _os.environ.get(
+    "ENABLE_V327_BUG_FIXES_BUNDLE", "0") == "1"
+V327_BUNDLE_CROSS_QUADRANT_SCORE_MULT = 0.1   # factor=0.0 → score *= 0.1
+V327_BUNDLE_ADJACENT_SCORE_MULT = 0.7         # factor=0.5 → score *= 0.7
+V327_BUNDLE_SAME_QUADRANT_SCORE_MULT = 1.0    # factor=1.0 → unchanged
+
+
+def bundle_score_multiplier(min_factor):
+    """V3.27 Bug Z Q5: map min(drop_proximity_factor) → score multiplier.
+
+    factor=0.0 → 0.1 (cross-quadrant SOFT penalty)
+    factor=0.5 → 0.7 (adjacent SOFT penalty)
+    factor=1.0 → 1.0 (same quadrant — no penalty)
+    intermediate (np. 0.7 jeśli kiedyś dodamy) → linear interpolacja.
+    """
+    if min_factor is None:
+        return V327_BUNDLE_SAME_QUADRANT_SCORE_MULT  # defensive default
+    if min_factor <= 0.0:
+        return V327_BUNDLE_CROSS_QUADRANT_SCORE_MULT
+    if min_factor >= 1.0:
+        return V327_BUNDLE_SAME_QUADRANT_SCORE_MULT
+    # 0.5 → 0.7 ; intermediate values (linear)
+    if min_factor <= 0.5:
+        # 0.0..0.5 → 0.1..0.7 linear
+        return V327_BUNDLE_CROSS_QUADRANT_SCORE_MULT + (
+            (V327_BUNDLE_ADJACENT_SCORE_MULT - V327_BUNDLE_CROSS_QUADRANT_SCORE_MULT)
+            * (min_factor / 0.5)
+        )
+    # 0.5..1.0 → 0.7..1.0 linear
+    return V327_BUNDLE_ADJACENT_SCORE_MULT + (
+        (V327_BUNDLE_SAME_QUADRANT_SCORE_MULT - V327_BUNDLE_ADJACENT_SCORE_MULT)
+        * ((min_factor - 0.5) / 0.5)
+    )
+
+
+def min_drop_proximity_factor(zones):
+    """V3.27 Bug Z helper: min pairwise drop_proximity_factor across zone list.
+
+    Args:
+        zones: list of zone names (str) — może zawierać 'Unknown'.
+
+    Returns:
+        min factor across all unique pairs. None gdy len(zones) < 2.
+        'Unknown' traktowany jako 0.0 per Z2 defensive.
+    """
+    if not zones or len(zones) < 2:
+        return None
+    n = len(zones)
+    min_f = 1.0
+    for i in range(n):
+        for j in range(i + 1, n):
+            f = drop_proximity_factor(zones[i], zones[j])
+            if f < min_f:
+                min_f = f
+    return min_f
+
+
 # V3.26 STEP 6 (R-07 v2 CHAIN-ETA ENGINE) — Adrian Q&A 2026-04-24.
 # Fundamental change: ETA kandydatów liczy chain walk przez unpicked orders
 # w bagu z max(arrival, scheduled) propagacją. Flag-gated use, shadow
