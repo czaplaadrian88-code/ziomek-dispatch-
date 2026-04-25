@@ -31,6 +31,12 @@ EVENT_TYPES = {
     "PANEL_UNREACHABLE",
     "HEARTBEAT_STALL",
     "SHIFT_END_APPROACHING",
+    # V3.19g1 incomplete deployment fix (Bug B sprint 2026-04-25):
+    # panel_watcher detected czas_kuriera changes (panel "+15min" button) and
+    # emitted this event, ale brakowało w allowlist → event_bus.py:76 raises
+    # ValueError → state_machine NIE dostaje update → orders_state stale czas_kuriera.
+    # state_machine.py:316 ma już handler. Dodanie do allowlist completes V3.19g1.
+    "CZAS_KURIERA_UPDATED",
 }
 
 _log = setup_logger("event_bus", "/root/.openclaw/workspace/scripts/logs/events.log")
