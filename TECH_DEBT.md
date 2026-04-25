@@ -1,5 +1,11 @@
 # TECH DEBT — Ziomek
 
+**V3.27 closed, V3.28 backlog**
+- Last sprint: V3.27 (25.04 wieczór, 10 tags, 4 fixy LIVE — Bug X+Y+Z + latency Phase 1)
+- Latest tag: `v327-sprint-complete-stable-2026-04-25`
+- Pending: Hetzner upgrade CPX22→CPX32 niedziela 26.04 (Adrian's task)
+- Next sprint: V3.28 (post-Hetzner stable)
+
 # ═══════════════════════════════════════════════════════════════════
 # SPRINT V3.27 25.04.2026 STATUS (close ~19:00 Warsaw)
 # ═══════════════════════════════════════════════════════════════════
@@ -68,42 +74,100 @@
 - ✅ **Fix 6** OR-Tools TSP solver — flag flipped True 17:39 UTC (`v327-flag-flip-final`); Phase 1 shortcut bag>=2 only (`aa029bb`)
 - ✅ **Fix 7** Same-restaurant grouping — flag flipped True 17:39 UTC
 
-## 🚨 OPEN — V3.28 tickets (planned)
+## 🚨 OPEN — V3.28 backlog (sorted by priority)
 
-### V3.28-INFRA-HETZNER-UPGRADE (Adrian's task)
+### V3.28-INFRA-HETZNER-UPGRADE-CPX32 [HIGH, niedziela 26.04]
 
-- Hetzner CPX22 (2 vCPU/4GB) → CPX31 (4 vCPU/8GB). Cost +6EUR/mies. Downtime ~1-2 min VM resize.
-- Window: niedziela rano off-peak (peak Pn-Pt 11-14+17-20, sobota 16-21)
-- Expected: parallel scaling 2x→4x, p95 ~250-300ms (vs current ~624ms outlier)
-- Future-proofing: Warsaw expansion ready
+- **Owner**: Adrian (niedziela rano 8-10 Warsaw, off-peak window)
+- **Effort**: 30-45 min (snapshot + rescale + verify)
+- **Cost**: +6 EUR/mies (CPX22 €7.99 → CPX32 €13.99)
+- **Why CPX32 (NIE CPX31)**:
+  - CPX31 deprecated (Hetzner discontinued)
+  - CPX32 newer AMD EPYC Genoa, niższa cena per vCPU
+  - 4 vCPU, 8 GB RAM, 160 GB SSD
+- **Procedure**:
+  1. Snapshot pre-upgrade (Hetzner Cloud Console)
+  2. Rescale CPX22 → CPX32 (panel)
+  3. Verify: `nproc=4`, `free=8GB`, all systemd services active
+  4. Latency benchmark first 5 proposals — expected p95 ~250-300ms
+- **Expected improvements**:
+  - Parallel efficiency 13.4% → ~25-30%
+  - p95 latency ~624ms → ~250-300ms
+  - Warsaw expansion ready
 
-### V3.28-DISTRICTS-LONG-TAIL
+### V3.28-R04-GRADUATION-SCHEMA [HIGH, 3-4h]
 
-- 638 streets unique observed beyond top-100 coverage
-- Defer based on shadow log usage post-flip (per-street usage frequency)
-- Effort: ~3h (auto-mapping z Nominatim + Adrian verify high-traffic)
+- Adrian mandate od 24.04 + Lekcja #27 strategic principle (jakość + skalowanie)
+- Multi-gate metrics-based promotion (NIE hardcoded 30 days dla wszystkich kurierów)
+- **Gates**: `new → standard_trial → standard → standard_plus → gold`
+  - **Gate 1** (new → standard_trial): >=15 deliveries + >=5 dni + median time <=35 min
+  - **Gate 2** (standard_trial → standard): >=100 deliveries + >=20 dni + override_rate <25%
+  - **Gates 3-4**: MANUAL Adrian/Bartek ACK
+- **Implementation**:
+  - Nightly job `dispatch-tier-review.timer` 3:00 Warsaw
+  - Reads completed_deliveries per cid, days_active, override_rate
+  - Telegram alert "Kurier X gotowy na promotion"
+  - Adrian ACK → apply tier change w `courier_tiers.json`
 
-### V3.28-ALEJA-PARSER-FRAGMENT
+### V3.28-DISTRICTS-LONG-TAIL [MEDIUM, 2-3h]
+
+- 638 streets observed in shadow log post-V3.27 coverage extension (top-100 = 97/100)
+- Identify top 200 by frequency, mass-map z Nominatim + Adrian ACK batch
+- Expected coverage 97/100 → 99+/100 top traffic
+- Effort: ~3h (auto-mapping + Adrian verify high-traffic)
+
+### V3.28-PRE-CANNED-REASON-CODES [MEDIUM, 2-3h]
+
+- Telegram dropdown UI dla Daily Q&A reason codes
+- 7 reason codes:
+  1. `WAVE_CONTINUATION_MISSED`
+  2. `TRAJECTORY_MISMATCH`
+  3. `SCHEDULE_OVERRIDE`
+  4. `PICKUP_COLLISION`
+  5. `DRIVER_QUALITY_MISMATCH`
+  6. `FLEET_BALANCE_OFF`
+  7. `OTHER`
+
+### V3.28-FEASIBILITY-C3-V325-FIXTURE [MEDIUM, 1-2h]
+
+- 4 pre-existing test fails `test_feasibility_c3.py` (`v325_NO_ACTIVE_SHIFT` test fixture)
+- Same root cause jak `test_decision_engine_f21` (V3.25 schedule hardening fixture issue)
+
+### V3.28-ALEJA-PARSER-FRAGMENT [LOW, 30 min]
 
 - drop_address parser zwraca "Aleja"/"aleja" jako standalone street name dla "Aleja Jana Pawła II"
 - 19+ events/30d w 2 wariantach (parser artifact, NIE ulica per se)
 - Fix: parser regex enhanced multi-token preserved
-- Effort: 30 min
 
-### V3.28-SUPRASLSKA-OUTSIDE-CITY
+### V3.28-SUPRASLSKA-OUTSIDE-CITY [LOW, 1h]
 
 - Supraślska street głównie w Wasilkowie (per Nominatim)
-- Defer outside-city stream handling — needs separate flow (city='Wasilków' input)
+- Outside-city stream handling — needs separate flow (city='Wasilków' input)
 
-### V3.28-FEASIBILITY-C3-V325-FIXTURE
+### V3.28-HELP-HANDLER-FIX [LOW, 15 min]
 
-- 4 pre-existing test fails `test_feasibility_c3.py` (`v325_NO_ACTIVE_SHIFT` test fixture)
-- Same root cause jak `test_decision_engine_f21` (V3.25 schedule hardening fixture issue)
-- Effort: 1-2h
+- Telegram /help command nie odpowiada (od V3.26)
+- Trywialny fix routing handler
 
-### V3.28-BUG-Y-PER-SEGMENT-MULTIPLIERS (optional)
+### V3.28-SLA-TRACKER-DECISION [LOW, 30 min]
+
+- sla-tracker service stopped 24.04
+- Decision: fix vs kill (Adrian's call — czy wciąż wartościowy)
+
+### V3.28-PICKUP-COORDS-MISMATCH [LOW, 1-2h]
+
+- 12.4km gap restaurant_coords cache vs pipeline (V326)
+- Defer non-firing edge case
+
+### V3.28-C2-TZ-DEFENSIVE-CLEANUP [LOW, 1-2h]
+
+- 40+ files non-firing ale code quality (TZ defensive boilerplate)
+- Cleanup gdy refactor okazja
+
+### V3.28-BUG-Y-PER-SEGMENT-MULTIPLIERS [LOW conditional, 1h obs]
 
 - Tie-breaker resolved arbitrary tie-break, ale per-segment traffic mult byłby fundamental fix
+- **Conditional: SKIP jeśli post-Hetzner p95 <300ms** (tie-breaker enough)
 - OR-Tools meta-heuristic może też różnicować — observation post-flip
 
 ## 🧪 TEST GAP (Lekcja #24 — RESOLVED in V3.27)

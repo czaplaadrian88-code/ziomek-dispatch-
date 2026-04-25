@@ -5,24 +5,49 @@
 # STATE 25.04.2026 wieczór (V3.27 sprint complete, Phase 1 verified)
 # ═══════════════════════════════════════════════════════════════════
 
-## Latest deploy
+## Current state (post-sprint V3.27 25.04 wieczór)
 
-- **Sprint V3.27 zakończony ~19:00 Warsaw** (Bug X+Y+Z + latency parallel + districts coverage + Phase 1 latency fix)
-- 9 commits + 9 V3.27 tags chronologically (zob. niżej)
-- Phase 1 verification: 4/5 proposals <500ms target (mediana ~375ms, p95 ~624ms)
-- Hetzner CPX22→CPX31 hardware upgrade DEFERRED Adrian's task (niedziela rano off-peak window)
-- Tag closing: `v327-sprint-complete-stable-2026-04-25`
+**6 flag LIVE** (od 17:39 UTC 25.04 + Phase 1 18:46 UTC):
 
-## Active flags V3.27 LIVE (post Phase 1 deploy)
+```
+ENABLE_V326_ANCHOR_BASED_SCORING = True
+ENABLE_V326_PO_DRODZE_STRICT = True
+ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER = True
+ENABLE_V326_OR_TOOLS_TSP = True
+ENABLE_V326_SAME_RESTAURANT_GROUPING = True
+ENABLE_V327_BUG_FIXES_BUNDLE = True
+```
 
-- `ENABLE_V326_ANCHOR_BASED_SCORING=True` (V3.26 Bug A complete + Bug D)
-- `ENABLE_V326_PO_DRODZE_STRICT=True` (V3.26 Bug C)
-- `ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER=True` (V3.26 Block 4E + V3.27 weekend buckety LIVE)
-- `ENABLE_V326_OR_TOOLS_TSP=True` (V3.27 flip post Phase 1)
-- `ENABLE_V326_SAME_RESTAURANT_GROUPING=True` (V3.27 flip post Phase 1)
-- `ENABLE_V327_BUG_FIXES_BUNDLE=True` (Bug Y tie-breaker + Bug Z penalty + Z-OWN-1 corridor)
-- `ENABLE_V325_SCHEDULE_HARDENING=True`
-- `ENABLE_V326_R07_CHAIN_ETA=False` (skreślony — plan already chain-aware)
+Plus `ENABLE_V325_SCHEDULE_HARDENING=True` (V3.25 baseline). `ENABLE_V326_R07_CHAIN_ETA=False` (skreślony — plan already chain-aware).
+
+### Konfiguracja
+
+```
+V326_OR_TOOLS_TIME_LIMIT_MS = 200
+V327_MIN_OR_TOOLS_BAG_AFTER = 2  # Phase 1 — bag<2 → greedy fast path
+V326_OSRM_TRAFFIC_TABLE: weekday + saturday + sunday list buckety
+V327_STREET_ALIASES: 11 entries (Skłodowskiej/Bełzy/Filipowicza variants)
+```
+
+### Strategy split (per V3.27 Phase 1)
+
+- **bag=0/1** → greedy / bruteforce (legacy fast path) — bag_after_add < 2
+- **bag>=2** → ortools (OR-Tools z time_limit=200ms + Bug Y tie-breaker + GROUPING)
+
+### Latency (Phase 1 verification 5 proposals 18:49-18:59 UTC)
+
+- p50 ~**375ms** (post-Phase-1, pre-Hetzner)
+- p95 ~**624ms** (1 outlier bag>=2 case)
+- **80% proposals <500ms target** (4/5)
+- vs pre-Phase-1: p50 -140ms (-27%), %hit 46%→80%
+- Expected post-Hetzner-CPX32: p50 ~150-200ms, p95 ~250-300ms
+
+### Hetzner status
+
+- **Current**: CPX22 (2 vCPU, 4 GB RAM, AMD EPYC Genoa)
+- **Pending upgrade**: CPX32 (4 vCPU, 8 GB RAM, AMD EPYC Genoa newer) niedziela rano 26.04
+- **Cost**: +6 EUR/mies (CPX22 €7.99 → CPX32 €13.99)
+- CPX31 deprecated (Hetzner discontinued — CPX32 nowsza, niższa cena per vCPU)
 
 ## V3.27 fundamental changes (no flag, baked-in)
 
@@ -36,7 +61,7 @@
 - 11 V3.27 street aliases dict (`V327_STREET_ALIASES`) + 7 NEW district streets (Bełzy/Skłodowskiej/Filipowicza+aliases/Sudecka/Bitwy Białostockiej/Depowa)
 - `_v327_normalize_street_for_matching()` — alias canonicalization w `drop_zone_from_address`
 
-## V3.27 sprint tags (chronologically, newest at bottom)
+## Latest tags (V3.27 sprint chronologicznie)
 
 1. `v327-fix-bug-x-traffic-mult-2026-04-25` (`0c4d92e`) — weekend buckety + drive_min OSRM
 2. `v327-fix-bug-z-bundle-soft-penalty-2026-04-25` (`369d46f`) — cross-quadrant penalty + corridor mult
@@ -47,6 +72,13 @@
 7. `v327-hotfix-filipowicza-mapping-2026-04-25` (`6161c40`) — Adrian local: Dojlidy → Nowe Miasto
 8. `v327-flag-flip-final-2026-04-25` (`8525364`) — flip 3 flagi True
 9. `v327-phase1-latency-fix-2026-04-25` (`aa029bb`) — skip OR-Tools bag<=1 + warm-up imports
+10. **`v327-sprint-complete-stable-2026-04-25`** (`7591f0a`) — docs + sprint close
+
+## Bug X/Y/Z status (post-flip)
+
+- **Bug X** (timing under): confirmed working — weekend traffic mult ×1.2 sobota peak applied via osrm_client. Niedziela ×1.0 verify pending peak observation niedziela 17-20.
+- **Bug Y** (suboptimal sequence): tie-breaker fires gdy bag>=2 ties (|total_diff|<2min, shortest first drop wins). Mental sim #468508 verified Skłodowskiej-first wins. Real bag>=2 cases TBD large sample post-Hetzner.
+- **Bug Z** (cross-quadrant bundle): SOFT penalty (×0.1 cross / ×0.7 adjacent / ×1.0 same) + corridor mult fire dla bag z cross-quadrant drops. Helper tests verified 15/15. Real cross-quadrant cases TBD post-flip dłuższy monitoring.
 
 ## OPEN ITEMS (post V3.27)
 
