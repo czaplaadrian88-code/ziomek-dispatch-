@@ -1,0 +1,23 @@
+[Unit]
+Description=Dispatch v2 - Panel Watcher (NadajeSz)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+Environment="PYTHONPATH=/root/.openclaw/workspace/scripts"
+ExecStart=/usr/bin/python3 -m dispatch_v2.panel_watcher
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/watcher.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/watcher.log
+KillSignal=SIGTERM
+# V3.19ef (2026-04-20): podniesione z 15s → 120s. Precedens V3.19e restart
+# 17:17 UTC — panel-watcher SIGKILL bo graceful shutdown przekroczył 15s
+# (fetch_order_details HTTP timeouts, cookie jar cleanup).
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

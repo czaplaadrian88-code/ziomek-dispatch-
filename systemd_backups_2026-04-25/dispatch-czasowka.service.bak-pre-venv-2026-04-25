@@ -1,0 +1,17 @@
+[Unit]
+Description=Ziomek V3.24-B Czasówka Emit Scheduler
+After=network.target dispatch-shadow.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+Environment="PYTHONPATH=/root/.openclaw/workspace/scripts"
+EnvironmentFile=/root/.openclaw/workspace/.secrets/telegram.env
+ExecStart=/usr/bin/python3 -m dispatch_v2.czasowka_scheduler
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/czasowka.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/czasowka.log
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

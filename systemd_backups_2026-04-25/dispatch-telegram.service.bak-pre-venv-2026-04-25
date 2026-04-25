@@ -1,0 +1,15 @@
+[Unit]
+Description=Ziomek Telegram Approver
+After=network.target dispatch-shadow.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+EnvironmentFile=/root/.openclaw/workspace/.secrets/telegram.env
+ExecStart=/usr/bin/python3 -m dispatch_v2.telegram_approver
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Ziomek Shadow Dispatcher
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/usr/bin/python3 -m dispatch_v2.shadow_dispatcher
+Restart=on-failure
+RestartSec=10
+# V3.19ef (2026-04-20): explicit 60s (default 90s) — shadow dispatcher ma
+# graceful SIGTERM handler (loop z sleep 5s) + zapisuje stats przed exit.
+# 60s wystarczy dla czystego shutdown bez SIGKILL.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

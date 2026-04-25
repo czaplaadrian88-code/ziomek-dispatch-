@@ -1,0 +1,15 @@
+[Unit]
+Description=Dispatch v2 - SLA Tracker
+After=dispatch-panel-watcher.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+Environment="PYTHONPATH=/root/.openclaw/workspace/scripts"
+ExecStart=/usr/bin/python3 -m dispatch_v2.sla_tracker
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
