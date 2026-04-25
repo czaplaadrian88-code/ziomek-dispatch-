@@ -1,46 +1,76 @@
 # CLAUDE.md — Dispatch V2 instruction for Claude Code sessions
-# Update: 2026-04-25 wieczór (sprint anomaly fixes + rollback)
+# Update: 2026-04-25 wieczór (V3.27 sprint complete + Phase 1 latency fix)
 
 # ═══════════════════════════════════════════════════════════════════
-# STATE 25.04.2026 wieczór (Big-Bang sprint + rollback)
+# STATE 25.04.2026 wieczór (V3.27 sprint complete, Phase 1 verified)
 # ═══════════════════════════════════════════════════════════════════
 
 ## Latest deploy
 
-- Sprint 25.04 zakończony 16:30 Warsaw (post-rollback)
-- 2 flagi LIVE (post rollback): ANCHOR_BASED_SCORING + PO_DRODZE_STRICT
-- 2 flagi rolled-back (kod commit'd, gotowy do re-flip): OR_TOOLS_TSP + SAME_RESTAURANT_GROUPING
-- venv migration LIVE
-- Tag closing: `v326-anomaly-sprint-2026-04-25-close` (c5be0c5)
-- Tag rollback: `v326-rollback-or-tools-grouping-2026-04-25` (db0096a)
+- **Sprint V3.27 zakończony ~19:00 Warsaw** (Bug X+Y+Z + latency parallel + districts coverage + Phase 1 latency fix)
+- 9 commits + 9 V3.27 tags chronologically (zob. niżej)
+- Phase 1 verification: 4/5 proposals <500ms target (mediana ~375ms, p95 ~624ms)
+- Hetzner CPX22→CPX31 hardware upgrade DEFERRED Adrian's task (niedziela rano off-peak window)
+- Tag closing: `v327-sprint-complete-stable-2026-04-25`
 
-## Active flags (post rollback 16:30 Warsaw)
+## Active flags V3.27 LIVE (post Phase 1 deploy)
 
-- `ENABLE_V326_ANCHOR_BASED_SCORING=True` (Bug A complete + Bug D)
-- `ENABLE_V326_PO_DRODZE_STRICT=True` (Bug C)
-- `ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER=True` (Block 4E flip 08:12)
+- `ENABLE_V326_ANCHOR_BASED_SCORING=True` (V3.26 Bug A complete + Bug D)
+- `ENABLE_V326_PO_DRODZE_STRICT=True` (V3.26 Bug C)
+- `ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER=True` (V3.26 Block 4E + V3.27 weekend buckety LIVE)
+- `ENABLE_V326_OR_TOOLS_TSP=True` (V3.27 flip post Phase 1)
+- `ENABLE_V326_SAME_RESTAURANT_GROUPING=True` (V3.27 flip post Phase 1)
+- `ENABLE_V327_BUG_FIXES_BUNDLE=True` (Bug Y tie-breaker + Bug Z penalty + Z-OWN-1 corridor)
 - `ENABLE_V325_SCHEDULE_HARDENING=True`
-- `ENABLE_V326_R07_CHAIN_ETA=False` (skreślony definitywnie — plan already chain-aware)
+- `ENABLE_V326_R07_CHAIN_ETA=False` (skreślony — plan already chain-aware)
 
-## Rolled-back flags (kod commit'd, re-flip po fix Bug X+Y+latency)
+## V3.27 fundamental changes (no flag, baked-in)
 
-- `ENABLE_V326_OR_TOOLS_TSP=False` (Fix 6 `tsp_solver.py` commit'd)
-- `ENABLE_V326_SAME_RESTAURANT_GROUPING=False` (Fix 7 `same_restaurant_grouper.py` commit'd)
+- `V326_OSRM_TRAFFIC_TABLE` split sat/sun (Bug X — sobota peak 12-21 ×1.2)
+- `dispatch_pipeline.py:1119` drive_min OSRM-first (Bug X secondary path)
+- `route_simulator_v2.py` ThreadPoolExecutor parallel + nested closure `_v327_eval_courier`
+- `osrm_client.py` `threading.RLock _module_lock` (concurrent cache safety)
+- `V326_OR_TOOLS_TIME_LIMIT_MS = 200` RESTORED (post parallel)
+- `V327_MIN_OR_TOOLS_BAG_AFTER = 2` (Phase 1A+G shortcut: bag<=1 → bruteforce fast path)
+- `shadow_dispatcher.py` ortools warm-up at startup (Phase 1F — saves 153.5ms cold first-thread)
+- 11 V3.27 street aliases dict (`V327_STREET_ALIASES`) + 7 NEW district streets (Bełzy/Skłodowskiej/Filipowicza+aliases/Sudecka/Bitwy Białostockiej/Depowa)
+- `_v327_normalize_street_for_matching()` — alias canonicalization w `drop_zone_from_address`
 
-## Active by default (no flag, fundamental changes)
+## V3.27 sprint tags (chronologically, newest at bottom)
 
-- `DIST_DECAY_KM=5` (Bug A scoring decay recalibration; was 3.0 — saturated)
-- Rationale display recalibration (`-km*5` → `(s_dystans-100) * W_DYSTANS`)
-- `event_bus.EVENT_TYPES` allows `CZAS_KURIERA_UPDATED` (Bug B V3.19g1 completion)
-- `chain_eta` haversine fallback × `traffic_mult` (B#M3)
-- `_apply_traffic_multiplier` always-records shadow fields (Block 4D)
-- venv migration: `/root/.openclaw/venvs/dispatch/bin/python` (7 systemd units)
+1. `v327-fix-bug-x-traffic-mult-2026-04-25` (`0c4d92e`) — weekend buckety + drive_min OSRM
+2. `v327-fix-bug-z-bundle-soft-penalty-2026-04-25` (`369d46f`) — cross-quadrant penalty + corridor mult
+3. `v327-fix-latency-parallel-2026-04-25` (`46051d6`) — ThreadPoolExecutor + RLock + time_limit=200
+4. `v327-implementation-complete-2026-04-25` (`3457a5f`) — pre-existing test fix
+5. `v327-fix-bug-y-tie-breaker-shortest-first-2026-04-25` (`8c8b427`) — Q8 Opcja 3 tie-breaker
+6. `v327-fix-districts-coverage-2026-04-25` (`70b7c04`) — 3 priority + 4 best-effort + aliases
+7. `v327-hotfix-filipowicza-mapping-2026-04-25` (`6161c40`) — Adrian local: Dojlidy → Nowe Miasto
+8. `v327-flag-flip-final-2026-04-25` (`8525364`) — flip 3 flagi True
+9. `v327-phase1-latency-fix-2026-04-25` (`aa029bb`) — skip OR-Tools bag<=1 + warm-up imports
 
-## OPEN BUGS (do diagnozy w nowym chacie 25.04 wieczór)
+## OPEN ITEMS (post V3.27)
 
-- **Bug X**: TSP timing 60% under (#468508 Czarnogórska→Skłodowska 11min plan vs Google 27min). Hipoteza: matrix bez `traffic_multiplier`.
-- **Bug Y**: TSP zigzag bez time-aware optimization (depends on X).
-- **Latency 2s**: 200ms × 10 candidates sequential = 2000ms. Target parallel <500ms.
+### V3.28 tickets (planned)
+
+- **V3.28-INFRA-HETZNER-UPGRADE**: CPX22 (2 vCPU/4GB) → CPX31 (4 vCPU/8GB) — Adrian's task, off-peak window. Expected p95 250-300ms (parallel scaling 2x→4x). Cost +6EUR/mies. Future-proofing dla Warsaw expansion.
+- **V3.28-DISTRICTS-LONG-TAIL**: 638 streets unique observed (long-tail post top-100 coverage 97%). Defer based on shadow log usage post-flip.
+- **V3.28-ALEJA-PARSER-FRAGMENT**: drop_address parser zwraca "Aleja"/"aleja" jako standalone street name dla "Aleja Jana Pawła II" — fragment artifact. 19+ events/30d w 2 wariantach.
+- **V3.28-SUPRASLSKA-OUTSIDE-CITY**: ulica w Wasilkowie, defer outside-city stream handling.
+- **V3.28-FEASIBILITY-C3-V325-FIXTURE**: 4 pre-existing test fails (`v325_NO_ACTIVE_SHIFT` context) — fixture cleanup.
+
+## DEFER (niedziela 26.04+ Adrian decision)
+
+- Hetzner upgrade scheduling (Adrian Cloud Console action)
+- Daily Q&A Wave 1 review (zaległe od 24.04)
+- Peak monitoring sobota tomorrow lunch (Pn-Pt 11-14)
+- Plik wiedzy #5 V3.27 sprint history
+
+## ANULOWANE (do odwołania, V3.26)
+
+- ❌ R-07 CHAIN-ETA flip (chain_eta pesymistyczny vs plan)
+- ❌ R-08 PICKUP-EXTENSION-NEGOTIATION
+- ❌ R-12 RESTAURANT-HOLDING
+- ❌ R-04 hardcoded 30-days graduation (replaced multi-gate schema)
 
 ## DEFER (niedziela 26.04+)
 
@@ -67,7 +97,7 @@
 > Wolt Drive, full autonomy). Nigdy pragmatic shortcuts typu
 > --break-system-packages, hardcoded values dla speed."
 
-## Test gap (Lekcja #24 NEW)
+## Test gap (Lekcja #24)
 
 `test_latency_under_300ms_p95` testował 1× TSP call, dał false confidence że
 performance OK. Per-proposal cycle robi 10× TSP call sequential = 2000ms.
@@ -75,18 +105,54 @@ performance OK. Per-proposal cycle robi 10× TSP call sequential = 2000ms.
 **Reguła:** performance tests MUSZĄ symulować full lifecycle (per-proposal 10
 candidates), NIE per-component.
 
-**TODO:** add `test_proposal_lifecycle_under_500ms_p95`.
+**V3.27 ADDED:** `test_v327_proposal_lifecycle_latency_slow.py` (2 tests, full
+lifecycle p95 + race conditions).
 
-## Key files (sprint 25.04)
+## Lekcja #25 (V3.27 NEW): mental simulation może być naivny
 
-- `/root/.openclaw/venvs/dispatch/` — dedykowany venv
-- `/root/.openclaw/venvs/dispatch/requirements.txt` — pinned deps (ortools 9.15.6755)
-- `/tmp/v326_sprint_25_04_endofsprint_report.md` — Faza 5 raport
-- `/tmp/v326_handover_2026-04-25_evening.md` — handover dla nowego chatu
-- `dispatch_v2/tsp_solver.py` — Fix 6 OR-Tools (flag OFF)
-- `dispatch_v2/same_restaurant_grouper.py` — Fix 7 grouping (flag OFF)
-- `dispatch_v2/insertion_anchor.py` — Bug A helper (flag True LIVE)
-- `dispatch_v2/systemd_backups_2026-04-25/` — pre-venv unit backupy
+Hipoteza Bug Y "Bug X self-resolves": traffic_multiplier global value preserves
+ratio between permutations → tied permutations remain tied. Mental simulation
+verified to z code paths podczas Krok 2.2 (NIE w shadow). Adrian's Q8 YAGNI
+prevented proactive tie-breaker; faktycznie NIE self-resolved → osobny fix.
+
+**Reguła:** mental simulation hipotezy musi być VERIFY przed implementacją —
+checking solver/algorithm mechanics nie tylko intuition.
+
+## Lekcja #26 (V3.27 NEW): domain knowledge > LLM/API confidence
+
+Filipowicza mapping: Nominatim API → Dojlidy (HIGH confidence). Adrian local
+knowledge → Nowe Miasto. Adrian wins.
+
+**Reguła:** Adrian's local knowledge zawsze trumps external API confidence
+(zob. Lekcja #5 + #19). Concrete bindings (cid↔name, street↔district)
+require Adrian confirm.
+
+## Lekcja #27 (V3.27 NEW): hardware oversubscription dla parallel
+
+ThreadPoolExecutor 10 workers × 200ms OR-Tools time_limit / 2 vCPU = 4-5x
+oversubscription → parallel efficiency 13.4% (close to physical 2-core limit).
+Software fixes (skip OR-Tools bag<2) reduce work, ale fundamentally bottleneck
+to hardware.
+
+**Reguła:** parallel scaling target wymaga vCPU >= worker count / 4 (lub
+problem-specific solver call rate). CPX22 niewystarczające dla 10 OR-Tools
+workers; CPX31+ rekomendowane Warsaw expansion.
+
+## Key files (V3.27 sprint)
+
+- `/root/.openclaw/venvs/dispatch/` — dedykowany venv (ortools 9.15.6755)
+- `/tmp/v327_diagnose_2026-04-25.md` — Krok 1 diagnoza Bug X+Y+Z + latency
+- `/tmp/v327_implementation_2026-04-25.md` — Krok 2-4 implementation summary
+- `/tmp/v327_latency_diagnosis_2026-04-25.md` — D1-D5 latency root cause
+- `/tmp/v327_top100_streets_used.txt` — top traffic streets analysis
+- `dispatch_v2/tsp_solver.py` — Fix 6 OR-Tools (flag True LIVE)
+- `dispatch_v2/same_restaurant_grouper.py` — Fix 7 grouping (flag True LIVE)
+- `dispatch_v2/route_simulator_v2.py` — Phase 1 shortcut + Bug Y tie-breaker
+- `dispatch_v2/dispatch_pipeline.py` — drive_min OSRM-first + Bug Z penalty + parallel
+- `dispatch_v2/osrm_client.py` — RLock module-wide
+- `dispatch_v2/common.py` — V326_OSRM_TRAFFIC_TABLE sat/sun + V3.27 helpers + flag
+- `dispatch_v2/districts_data.py` — 7 NEW streets (V3.27 inline comments)
+- `dispatch_v2/shadow_dispatcher.py` — ortools warm-up at startup
 
 ## Continuation w nowym chacie Claude
 

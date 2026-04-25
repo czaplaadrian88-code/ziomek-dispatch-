@@ -1,10 +1,51 @@
 # TECH DEBT — Ziomek
 
 # ═══════════════════════════════════════════════════════════════════
-# SPRINT 25.04.2026 STATUS (post-rollback 16:30 Warsaw)
+# SPRINT V3.27 25.04.2026 STATUS (close ~19:00 Warsaw)
 # ═══════════════════════════════════════════════════════════════════
 
-## ✅ RESOLVED 2026-04-25
+## ✅ RESOLVED 2026-04-25 wieczór (V3.27 sprint)
+
+### Bug X — TSP timing under-estimation 30-50%
+- ✅ Root cause: V326_OSRM_TRAFFIC_TABLE["weekend"]=1.0 flat całą dobę. Sobota peak 16-21 → matrix=raw OSRM free-flow.
+- ✅ Fix: split weekend → saturday/sunday list buckety. Sobota peak 12-21 max ×1.2, niedziela płaska. (commit `0c4d92e`, tag `v327-fix-bug-x-traffic-mult-2026-04-25`)
+- ✅ Secondary path drive_min OSRM-first (zamiast haversine/fleet_speed_kmh fallback)
+
+### Bug Y — TSP picks suboptimal sequence  
+- ✅ Mental simulation verified: traffic_mult global value preserves ratio → tied permutations remain tied
+- ✅ Fix: shortest first drop tie-breaker (Q8 Opcja 3) — gdy |total_diff|<2min ties → secondary sort by first_drop_arrival_min ASC. (commit `8c8b427`, tag `v327-fix-bug-y-tie-breaker-shortest-first-2026-04-25`)
+- ✅ #468508 mental sim verified: Skłodowskiej-first wygrywa post-tie-breaker (3min vs 13min first drop)
+
+### Bug Z — Cross-quadrant bundle SOFT penalty + corridor mult
+- ✅ Hipoteza Z2 verified: drop_proximity_factor LIVE TYLKO bundle_level1 (same restaurant), cross-restaurant level3 brak quadrant check
+- ✅ Z-OWN-1 corridor: bundle_level3 `_min_dist_to_route_km` rysuje wielki corridor cross-quadrant bag drops → false positive "po drodze"
+- ✅ Fix Q5: SOFT mult final_score *= 0.1 (cross) / 0.7 (adj) / 1.0 (same)
+- ✅ Fix Q5a: bonus_r4 *= min(drop_proximity_factor) — corridor zeroed dla cross-quadrant bag
+- (commit `369d46f`, tag `v327-fix-bug-z-bundle-soft-penalty-2026-04-25`)
+
+### Districts coverage expansion (V3.27 Bug Z follow-up)
+- ✅ Top 100 streets coverage: 90/100 → 97/100
+- ✅ 3 priority mappings (Nominatim HIGH verified):
+  - Władysława Bełzy → Białostoczek
+  - Marii Skłodowskiej-Curie → Piaski (removed duplicate w Centrum)
+  - Feliksa Filipowicza → **Nowe Miasto** (Adrian local knowledge override Nominatim Dojlidy)
+- ✅ 4 best-effort streets: Sudecka→Skorupy, Bitwy Białostockiej→Białostoczek, Depowa→Bema (cap 7/50)
+- ✅ V327_STREET_ALIASES dict (11 entries) + `_v327_normalize_street_for_matching()` helper
+- ✅ City-aware geocoding preserved (Filipowicza+Kleosin → Kleosin)
+- (commits `70b7c04` + `6161c40`, tags `v327-fix-districts-coverage` + `v327-hotfix-filipowicza-mapping`)
+
+### Latency parallel + Phase 1 optimization
+- ✅ ThreadPoolExecutor parallel ThreadPoolExecutor wrapping fleet eval loop, OSRM RLock cache thread-safety, V326_OR_TOOLS_TIME_LIMIT_MS RESTORED 50→200ms (commit `46051d6`, tag `v327-fix-latency-parallel-2026-04-25`)
+- ✅ Phase 1 fixes (Adrian Option B post root cause diagnosis):
+  - Skip OR-Tools dla bag<=1 (V327_MIN_OR_TOOLS_BAG_AFTER=2) — bruteforce fast path 1-24 perms <5ms
+  - Ortools warm-up at startup (saves 153.5ms cold first-thread)
+  - (commit `aa029bb`, tag `v327-phase1-latency-fix-2026-04-25`)
+- ✅ Phase 1 verification: 4/5 proposals <500ms target. p50 ~375ms (vs pre-Phase1 ~515ms = -140ms / -27%). p95 ~624ms (1 outlier bag>=2 case).
+
+### Other V3.27 wins
+- ✅ Pre-existing test_v319h_bug1_drop_proximity #27 fix (flag default mismatch, V3.19h LIVE od 21.04)
+
+## ✅ RESOLVED 2026-04-25 (V3.26 sprint)
 
 - ✅ **Bug A** km_to_pickup chronological last_drop → anchor-based incremental (commit `3b93bf3`, LIVE flag True)
 - ✅ **Bug A** scoring decay martwy kod (3km saturate 0) → decay 5 (commit `c1020ef`, LIVE no-flag)
@@ -22,22 +63,58 @@
 - ✅ **B#M3** chain_eta haversine fallback × traffic_mult (commit `14f5efa`)
 - ✅ **Block 4D** _apply_traffic_multiplier always-record shadow fields (commit `a3eb391`)
 
-## 🔄 COMMIT'D ALE FLAG ROLLBACK (re-flip po fix Bug X+Y+latency)
+## ✅ ZAMKNIĘTE V3.27 (Fix 6 + Fix 7 re-flipped LIVE post Phase 1)
 
-- 🔄 **Fix 6** TSP greedy bag>3 zigzags → OR-Tools constraint solver (commit `0902728`, flag rolled back)
-- 🔄 **Fix 7** Same-restaurant 2 osobne pickupy → intelligent grouping (commit `dd642ea`, flag rolled back)
+- ✅ **Fix 6** OR-Tools TSP solver — flag flipped True 17:39 UTC (`v327-flag-flip-final`); Phase 1 shortcut bag>=2 only (`aa029bb`)
+- ✅ **Fix 7** Same-restaurant grouping — flag flipped True 17:39 UTC
 
-## 🚨 OPEN — DIAGNOZA W NOWYM CHACIE 25.04 wieczór
+## 🚨 OPEN — V3.28 tickets (planned)
 
-- 🚨 **Bug X**: TSP `distance_matrix` używa OSRM raw bez `get_traffic_multiplier()` (60% timing under-estimation w peakach). Case study: #468508 Paradiso 11min plan vs Google 27min.
-- 🚨 **Bug Y**: TSP zigzag bez time-aware geographic optimization (depends on X resolution). Case study: #468509 Chicago Pizza Gabriel J bag=2.
-- 🚨 **Latency**: 2046/1932ms per proposal pre-tune, 561-679ms post-tune (200ms × 10 candidates sequential = 2000ms cumulative). Target parallel <500ms.
+### V3.28-INFRA-HETZNER-UPGRADE (Adrian's task)
 
-## 🧪 TEST GAP (Lekcja #24)
+- Hetzner CPX22 (2 vCPU/4GB) → CPX31 (4 vCPU/8GB). Cost +6EUR/mies. Downtime ~1-2 min VM resize.
+- Window: niedziela rano off-peak (peak Pn-Pt 11-14+17-20, sobota 16-21)
+- Expected: parallel scaling 2x→4x, p95 ~250-300ms (vs current ~624ms outlier)
+- Future-proofing: Warsaw expansion ready
 
-- 🧪 `test_latency_under_300ms_p95` testuje 1× TSP call, NIE full 10× lifecycle
-- 🧪 TODO: add `test_proposal_lifecycle_under_500ms_p95` (per-proposal scenario z 10 candidates)
-- 🧪 Pre-flip empirical validation pierwszego production proposal — verify w pierwszych 5 min
+### V3.28-DISTRICTS-LONG-TAIL
+
+- 638 streets unique observed beyond top-100 coverage
+- Defer based on shadow log usage post-flip (per-street usage frequency)
+- Effort: ~3h (auto-mapping z Nominatim + Adrian verify high-traffic)
+
+### V3.28-ALEJA-PARSER-FRAGMENT
+
+- drop_address parser zwraca "Aleja"/"aleja" jako standalone street name dla "Aleja Jana Pawła II"
+- 19+ events/30d w 2 wariantach (parser artifact, NIE ulica per se)
+- Fix: parser regex enhanced multi-token preserved
+- Effort: 30 min
+
+### V3.28-SUPRASLSKA-OUTSIDE-CITY
+
+- Supraślska street głównie w Wasilkowie (per Nominatim)
+- Defer outside-city stream handling — needs separate flow (city='Wasilków' input)
+
+### V3.28-FEASIBILITY-C3-V325-FIXTURE
+
+- 4 pre-existing test fails `test_feasibility_c3.py` (`v325_NO_ACTIVE_SHIFT` test fixture)
+- Same root cause jak `test_decision_engine_f21` (V3.25 schedule hardening fixture issue)
+- Effort: 1-2h
+
+### V3.28-BUG-Y-PER-SEGMENT-MULTIPLIERS (optional)
+
+- Tie-breaker resolved arbitrary tie-break, ale per-segment traffic mult byłby fundamental fix
+- OR-Tools meta-heuristic może też różnicować — observation post-flip
+
+## 🧪 TEST GAP (Lekcja #24 — RESOLVED in V3.27)
+
+- ✅ `test_v327_proposal_lifecycle_latency_slow.py` (2 tests) — full lifecycle p95 + race conditions
+
+## 📚 LEKCJE V3.27 (added)
+
+- **#25** Mental simulation może być naivny (traffic_mult global value preserves ratio — Bug Y NIE self-resolves)
+- **#26** Domain knowledge > LLM/API confidence (Filipowicza Adrian override Nominatim)
+- **#27** Hardware oversubscription dla parallel (CPX22 niewystarczająca dla 10-worker OR-Tools)
 
 ## ⏳ OPEN — NIEDZIELA 26.04+
 
