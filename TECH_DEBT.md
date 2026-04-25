@@ -1,5 +1,67 @@
 # TECH DEBT — Ziomek
 
+# ═══════════════════════════════════════════════════════════════════
+# SPRINT 25.04.2026 STATUS (post-rollback 16:30 Warsaw)
+# ═══════════════════════════════════════════════════════════════════
+
+## ✅ RESOLVED 2026-04-25
+
+- ✅ **Bug A** km_to_pickup chronological last_drop → anchor-based incremental (commit `3b93bf3`, LIVE flag True)
+- ✅ **Bug A** scoring decay martwy kod (3km saturate 0) → decay 5 (commit `c1020ef`, LIVE no-flag)
+- ✅ **Bug A** rationale display "-km*5" mylące → real s_dystans contribution (LIVE)
+- ✅ **Bug B** event_bus CZAS_KURIERA_UPDATED rejected by allowlist → added (commit `615b60e`, LIVE)
+- ✅ **Bug C** "po drodze" geographic-only → time + intervening + direction strict (commit `34ff770`, LIVE flag True)
+- ✅ **Bug D** "po odbiorze z X" first geographic match → anchor pre-insertion (commit `b17bd36`, LIVE flag True)
+- ✅ **V3.19g1** incomplete deployment (event_bus allowlist) — Bug B fix
+- ✅ **R-09** NameError haversine (~960 errors/dobę pre-fix) — commit `a70a914` night sprint 24/25.04
+- ✅ **C1** Solo Fallback dead od V3.25 — commit `bb74bfe` night sprint
+- ✅ **ortools** dependency installation Ubuntu 24.04 — venv migration commit `d20ff90`
+- ✅ **Block 4** OSRM Traffic Multipliers FLIP LIVE 08:12 (commit `6813059`)
+- ✅ **H1** serializer auto-prop v325/v326 keys (commit `7dee94a`)
+- ✅ **H2** R-06 trajectory bag=1 fix (commit `74e9f80`, shadow flag)
+- ✅ **B#M3** chain_eta haversine fallback × traffic_mult (commit `14f5efa`)
+- ✅ **Block 4D** _apply_traffic_multiplier always-record shadow fields (commit `a3eb391`)
+
+## 🔄 COMMIT'D ALE FLAG ROLLBACK (re-flip po fix Bug X+Y+latency)
+
+- 🔄 **Fix 6** TSP greedy bag>3 zigzags → OR-Tools constraint solver (commit `0902728`, flag rolled back)
+- 🔄 **Fix 7** Same-restaurant 2 osobne pickupy → intelligent grouping (commit `dd642ea`, flag rolled back)
+
+## 🚨 OPEN — DIAGNOZA W NOWYM CHACIE 25.04 wieczór
+
+- 🚨 **Bug X**: TSP `distance_matrix` używa OSRM raw bez `get_traffic_multiplier()` (60% timing under-estimation w peakach). Case study: #468508 Paradiso 11min plan vs Google 27min.
+- 🚨 **Bug Y**: TSP zigzag bez time-aware geographic optimization (depends on X resolution). Case study: #468509 Chicago Pizza Gabriel J bag=2.
+- 🚨 **Latency**: 2046/1932ms per proposal pre-tune, 561-679ms post-tune (200ms × 10 candidates sequential = 2000ms cumulative). Target parallel <500ms.
+
+## 🧪 TEST GAP (Lekcja #24)
+
+- 🧪 `test_latency_under_300ms_p95` testuje 1× TSP call, NIE full 10× lifecycle
+- 🧪 TODO: add `test_proposal_lifecycle_under_500ms_p95` (per-proposal scenario z 10 candidates)
+- 🧪 Pre-flip empirical validation pierwszego production proposal — verify w pierwszych 5 min
+
+## ⏳ OPEN — NIEDZIELA 26.04+
+
+- ⏳ Bug F weekend mult ×1.0 → empirical bump (post-peak data 25.04)
+- ⏳ R-04 Graduation Schema implementation (3-4h, multi-gate metrics)
+- ⏳ Pre-canned reason codes Telegram dropdown (2-3h)
+- ⏳ Daily Q&A Wave 1 review zaległe od 24.04 (Adrian solo, ~30-45 min)
+- ⏳ /help handler fix (15 min)
+- ⏳ sla-tracker decision (fix vs kill — service stopped 24.04)
+- ⏳ V326-PICKUP-COORDS-MISMATCH (12.4km gap restaurant_coords cache vs pipeline)
+- ⏳ V326-C2-TZ-DEFENSIVE-CLEANUP (40+ files non-firing ale code quality)
+- ⏳ dispatch-telegram restart (natural redeploy — Telegram label "X km do {anchor}" + zaktualizowany format manifestuje dopiero po restart)
+
+## ❌ ANULOWANE
+
+- ❌ R-07 CHAIN-ETA flip (Adrian decision: plan IS already chain-aware via route_simulator, chain_eta pesymistyczny)
+- ❌ R-08 PICKUP-EXTENSION-NEGOTIATION (Adrian: same rules dla wszystkich restauracji)
+- ❌ R-12 RESTAURANT-HOLDING (Adrian: bez sensu)
+- ❌ R-04 hardcoded 30-days graduation (replaced multi-gate metrics schema)
+
+# ═══════════════════════════════════════════════════════════════════
+# (legacy content od 2026-04-20 kontynuacja poniżej)
+# ═══════════════════════════════════════════════════════════════════
+
 ## General rules (wpisane 2026-04-20)
 
 ### Flag bez konsumenta = `_PLANNED` suffix

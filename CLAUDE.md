@@ -1,5 +1,104 @@
 # CLAUDE.md — Dispatch V2 instruction for Claude Code sessions
-# Update: 2026-04-24 (V3.25 Daily Accounting LIVE + V3.26 OSRM traffic shadow)
+# Update: 2026-04-25 wieczór (sprint anomaly fixes + rollback)
+
+# ═══════════════════════════════════════════════════════════════════
+# STATE 25.04.2026 wieczór (Big-Bang sprint + rollback)
+# ═══════════════════════════════════════════════════════════════════
+
+## Latest deploy
+
+- Sprint 25.04 zakończony 16:30 Warsaw (post-rollback)
+- 2 flagi LIVE (post rollback): ANCHOR_BASED_SCORING + PO_DRODZE_STRICT
+- 2 flagi rolled-back (kod commit'd, gotowy do re-flip): OR_TOOLS_TSP + SAME_RESTAURANT_GROUPING
+- venv migration LIVE
+- Tag closing: `v326-anomaly-sprint-2026-04-25-close` (c5be0c5)
+- Tag rollback: `v326-rollback-or-tools-grouping-2026-04-25` (db0096a)
+
+## Active flags (post rollback 16:30 Warsaw)
+
+- `ENABLE_V326_ANCHOR_BASED_SCORING=True` (Bug A complete + Bug D)
+- `ENABLE_V326_PO_DRODZE_STRICT=True` (Bug C)
+- `ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER=True` (Block 4E flip 08:12)
+- `ENABLE_V325_SCHEDULE_HARDENING=True`
+- `ENABLE_V326_R07_CHAIN_ETA=False` (skreślony definitywnie — plan already chain-aware)
+
+## Rolled-back flags (kod commit'd, re-flip po fix Bug X+Y+latency)
+
+- `ENABLE_V326_OR_TOOLS_TSP=False` (Fix 6 `tsp_solver.py` commit'd)
+- `ENABLE_V326_SAME_RESTAURANT_GROUPING=False` (Fix 7 `same_restaurant_grouper.py` commit'd)
+
+## Active by default (no flag, fundamental changes)
+
+- `DIST_DECAY_KM=5` (Bug A scoring decay recalibration; was 3.0 — saturated)
+- Rationale display recalibration (`-km*5` → `(s_dystans-100) * W_DYSTANS`)
+- `event_bus.EVENT_TYPES` allows `CZAS_KURIERA_UPDATED` (Bug B V3.19g1 completion)
+- `chain_eta` haversine fallback × `traffic_mult` (B#M3)
+- `_apply_traffic_multiplier` always-records shadow fields (Block 4D)
+- venv migration: `/root/.openclaw/venvs/dispatch/bin/python` (7 systemd units)
+
+## OPEN BUGS (do diagnozy w nowym chacie 25.04 wieczór)
+
+- **Bug X**: TSP timing 60% under (#468508 Czarnogórska→Skłodowska 11min plan vs Google 27min). Hipoteza: matrix bez `traffic_multiplier`.
+- **Bug Y**: TSP zigzag bez time-aware optimization (depends on X).
+- **Latency 2s**: 200ms × 10 candidates sequential = 2000ms. Target parallel <500ms.
+
+## DEFER (niedziela 26.04+)
+
+- Bug F weekend mult bump (empirical post-peak)
+- Daily Q&A Wave 1 review (zaległe od 24.04)
+- R-04 Graduation Schema implementation
+- Pre-canned reason codes
+- /help handler fix
+- sla-tracker fix vs kill decision
+- V326-PICKUP-COORDS-MISMATCH (12.4km cache gap)
+- V326-C2-TZ-DEFENSIVE-CLEANUP (40+ files)
+
+## ANULOWANE (do odwołania)
+
+- ❌ R-07 CHAIN-ETA flip (chain_eta pesymistyczny vs plan)
+- ❌ R-08 PICKUP-EXTENSION-NEGOTIATION
+- ❌ R-12 RESTAURANT-HOLDING
+- ❌ R-04 hardcoded 30-days graduation (replaced multi-gate schema)
+
+## Adrian's strategic principle (memory 25.04)
+
+> "Przy decyzjach architektonicznych ZAWSZE wybieram rozwiązanie najlepsze
+> jakościowo i pod skalowanie na duży system w przyszłości (Warsaw, Restimo,
+> Wolt Drive, full autonomy). Nigdy pragmatic shortcuts typu
+> --break-system-packages, hardcoded values dla speed."
+
+## Test gap (Lekcja #24 NEW)
+
+`test_latency_under_300ms_p95` testował 1× TSP call, dał false confidence że
+performance OK. Per-proposal cycle robi 10× TSP call sequential = 2000ms.
+
+**Reguła:** performance tests MUSZĄ symulować full lifecycle (per-proposal 10
+candidates), NIE per-component.
+
+**TODO:** add `test_proposal_lifecycle_under_500ms_p95`.
+
+## Key files (sprint 25.04)
+
+- `/root/.openclaw/venvs/dispatch/` — dedykowany venv
+- `/root/.openclaw/venvs/dispatch/requirements.txt` — pinned deps (ortools 9.15.6755)
+- `/tmp/v326_sprint_25_04_endofsprint_report.md` — Faza 5 raport
+- `/tmp/v326_handover_2026-04-25_evening.md` — handover dla nowego chatu
+- `dispatch_v2/tsp_solver.py` — Fix 6 OR-Tools (flag OFF)
+- `dispatch_v2/same_restaurant_grouper.py` — Fix 7 grouping (flag OFF)
+- `dispatch_v2/insertion_anchor.py` — Bug A helper (flag True LIVE)
+- `dispatch_v2/systemd_backups_2026-04-25/` — pre-venv unit backupy
+
+## Continuation w nowym chacie Claude
+
+Adrian zakończył obecny chat 25.04 16:30 z powodu LLM accumulated errors.
+Nowy Claude w wieczorem dostanie:
+- Plik wiedzy #4 v2 (sprint history 25.04 + rollback)
+- Updated instrukcja projektu (post-rollback)
+- Handover prompt z planem Bug X+Y+latency diagnosis
+
+# ═══════════════════════════════════════════════════════════════════
+# (legacy 24.04 content kontynuacja poniżej)
+# ═══════════════════════════════════════════════════════════════════
 
 ## Latest session handover (READ FIRST)
 
