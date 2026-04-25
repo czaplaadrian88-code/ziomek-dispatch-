@@ -1217,7 +1217,7 @@ ENABLE_V326_PO_DRODZE_STRICT = _os.environ.get(
 # Eliminates greedy zigzag pattern dla bag>3 (#468404 case study).
 # Default False — shadow validation period przed flip True.
 ENABLE_V326_OR_TOOLS_TSP = _os.environ.get(
-    "ENABLE_V326_OR_TOOLS_TSP", "0") == "1"
+    "ENABLE_V326_OR_TOOLS_TSP", "1") == "1"  # V3.27 flip 2026-04-25 wieczór: re-enabled post Bug X+Y+Z+latency fixes
 V326_OR_TOOLS_TIME_LIMIT_MS = 200  # V3.27 (2026-04-25 wieczór): RESTORED 50→200ms post parallel ThreadPoolExecutor implementation. 10 workers × 200ms = ~250-400ms wall (vs sequential 2000ms). Adrian's spec 6.5 budget. Strategic: jakość bag>=4 zamiast skróconych 50ms.
 
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
@@ -1227,7 +1227,7 @@ V326_OR_TOOLS_TIME_LIMIT_MS = 200  # V3.27 (2026-04-25 wieczór): RESTORED 50→
 # orders (np. 2 ordery Mama Thai obie centrum gotowe w tym samym oknie).
 # Default False — shadow validation period przed flip True.
 ENABLE_V326_SAME_RESTAURANT_GROUPING = _os.environ.get(
-    "ENABLE_V326_SAME_RESTAURANT_GROUPING", "0") == "1"
+    "ENABLE_V326_SAME_RESTAURANT_GROUPING", "1") == "1"  # V3.27 flip 2026-04-25 wieczór: re-enabled post Bug X+Y+Z+latency fixes
 V326_GROUPING_TIME_TOLERANCE_MIN = 5.0  # ±5 min czas_kuriera tolerance
 
 # ============================================================
@@ -1257,7 +1257,7 @@ V326_GROUPING_TIME_TOLERANCE_MIN = 5.0  # ±5 min czas_kuriera tolerance
 # Default False — shadow validation. Flip True dopiero po Adrian ACK Krok 3.
 # ============================================================
 ENABLE_V327_BUG_FIXES_BUNDLE = _os.environ.get(
-    "ENABLE_V327_BUG_FIXES_BUNDLE", "0") == "1"
+    "ENABLE_V327_BUG_FIXES_BUNDLE", "1") == "1"  # V3.27 flip 2026-04-25 wieczór: Bug Y tie-breaker + Bug Z bundle penalty + Z-OWN-1 corridor LIVE
 V327_BUNDLE_CROSS_QUADRANT_SCORE_MULT = 0.1   # factor=0.0 → score *= 0.1
 V327_BUNDLE_ADJACENT_SCORE_MULT = 0.7         # factor=0.5 → score *= 0.7
 V327_BUNDLE_SAME_QUADRANT_SCORE_MULT = 1.0    # factor=1.0 → unchanged
