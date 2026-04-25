@@ -89,10 +89,28 @@ def _serialize_dt_map(m):
     return out or None
 
 
+# H1 (2026-04-25): auto-propagation of prefixed metrics keys.
+# Pipeline regularly adds nowe v325_/v326_ keys do `metrics` ale serializer
+# trzymał hardcoded explicit list — 14+ kluczy droppowane do learning_log
+# (cross-review B#H1). Loop po prefixach zapewnia że *_reject_reason,
+# *_speed_*, *_fleet_*, etc. trafia do logu bez ręcznego dodawania pole-po-polu.
+_AUTO_PROP_PREFIXES = ("v325_", "v326_", "v319_", "r07_", "bonus_", "rule_")
+
+
+def _propagate_prefixed_metrics(base: dict, metrics) -> None:
+    if not metrics:
+        return
+    for k, v in metrics.items():
+        if k in base:
+            continue
+        if any(k.startswith(p) for p in _AUTO_PROP_PREFIXES):
+            base[k] = v
+
+
 def _serialize_candidate(c) -> dict:
     plan = c.plan
     m = c.metrics or {}
-    return {
+    out = {
         "courier_id": c.courier_id,
         "name": c.name,
         "score": c.score,
@@ -210,6 +228,8 @@ def _serialize_candidate(c) -> dict:
         "r07_chain_warnings": m.get("r07_chain_warnings"),
         "r07_compute_latency_ms": m.get("r07_compute_latency_ms"),
     }
+    _propagate_prefixed_metrics(out, m)
+    return out
 
 
 def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) -> dict:
@@ -240,7 +260,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         if target_dt is not None:
             target_pickup_at_iso = target_dt.isoformat()
 
-    return {
+    out = {
         "ts": now_iso(),
         "event_id": event_id,
         "order_id": result.order_id,
@@ -371,6 +391,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         ),
         "latency_ms": round(latency_ms, 1),
     }
+    if out["best"] is not None:
+        _propagate_prefixed_metrics(out["best"], best_m)
+    return out
 
 
 def _append_decision(path: str, record: dict) -> None:
