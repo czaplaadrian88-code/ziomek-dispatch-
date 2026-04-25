@@ -14,6 +14,7 @@ OSRM API ma odwrotnie (lon, lat) - zamiana wewnatrz klienta.
 """
 import json
 import math
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -38,6 +39,11 @@ CACHE_MAX_SIZE = 5000
 _log = setup_logger("osrm_client", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
 _route_cache: dict = {}  # {(from_key, to_key): (timestamp, result)}
 
+# V3.27 latency parallel (2026-04-25): RLock dla thread-safe access do module-level
+# state (cache, circuit breaker counters, hourly stats). RLock (reentrant) — bo
+# `_apply_traffic_multiplier` może być wywołany wewnątrz `route()` lock holder.
+_module_lock = threading.RLock()
+
 # === CIRCUIT BREAKER (P0.5) ===
 CIRCUIT_BREAKER_THRESHOLD = 3
 CIRCUIT_BREAKER_COOLDOWN_S = 60
@@ -59,34 +65,39 @@ _osrm_stats: dict = {
 
 
 def _osrm_is_circuit_open() -> bool:
-    return time.time() < _osrm_circuit_open_until
+    # V3.27: read under RLock (consistent view z _osrm_record_failure writers).
+    with _module_lock:
+        return time.time() < _osrm_circuit_open_until
 
 
 def _osrm_record_failure():
     global _osrm_failures, _osrm_circuit_open_until
-    _osrm_failures += 1
-    if _osrm_failures >= CIRCUIT_BREAKER_THRESHOLD:
-        _osrm_circuit_open_until = time.time() + CIRCUIT_BREAKER_COOLDOWN_S
-        _osrm_stats["circuit_opens"] += 1
-        _log.warning(f"OSRM circuit OPEN after {_osrm_failures} failures, cooldown {CIRCUIT_BREAKER_COOLDOWN_S}s")
+    with _module_lock:
+        _osrm_failures += 1
+        if _osrm_failures >= CIRCUIT_BREAKER_THRESHOLD:
+            _osrm_circuit_open_until = time.time() + CIRCUIT_BREAKER_COOLDOWN_S
+            _osrm_stats["circuit_opens"] += 1
+            _log.warning(f"OSRM circuit OPEN after {_osrm_failures} failures, cooldown {CIRCUIT_BREAKER_COOLDOWN_S}s")
 
 
 def _osrm_record_success():
     global _osrm_failures
-    _osrm_failures = 0
+    with _module_lock:
+        _osrm_failures = 0
 
 
 def _maybe_log_stats():
-    elapsed = time.time() - _osrm_stats["hour_start"]
-    if elapsed >= 3600:
+    # V3.27 latency parallel: dict mutation + read pod RLock dla concurrent safety.
+    with _module_lock:
+        elapsed = time.time() - _osrm_stats["hour_start"]
+        if elapsed < 3600:
+            return
         _log.info(
             f"OSRM hourly: total={_osrm_stats['calls_total']} "
             f"fallback={_osrm_stats['calls_fallback']} "
             f"circuit_opens={_osrm_stats['circuit_opens']}"
         )
         # Block 4D 2026-04-25: log traffic-mult stats always (shadow + live).
-        # Shadow mode (flag=False) zapisuje co BY zastosowano — continuous
-        # validation drift over time without behavior change.
         if _osrm_stats["traffic_mult_calls"] > 0:
             avg = _osrm_stats["traffic_mult_sum"] / _osrm_stats["traffic_mult_calls"]
             buckets = dict(sorted(_osrm_stats["traffic_mult_buckets"].items()))
@@ -132,12 +143,14 @@ def _apply_traffic_multiplier(result: dict, now_utc: datetime) -> dict:
     # Always record shadow fields (Block 4D instrumentation 2026-04-25)
     result["osrm_raw_duration_s"] = raw_s
     result["osrm_raw_duration_min"] = round(raw_s / 60, 1)
-    _osrm_stats["traffic_mult_sum"] += mult
-    _osrm_stats["traffic_mult_calls"] += 1
-    key = f"{mult:.2f}"
-    _osrm_stats["traffic_mult_buckets"][key] = (
-        _osrm_stats["traffic_mult_buckets"].get(key, 0) + 1
-    )
+    # V3.27 latency parallel: stats updates pod RLock (concurrent dict mutation safety).
+    with _module_lock:
+        _osrm_stats["traffic_mult_sum"] += mult
+        _osrm_stats["traffic_mult_calls"] += 1
+        key = f"{mult:.2f}"
+        _osrm_stats["traffic_mult_buckets"][key] = (
+            _osrm_stats["traffic_mult_buckets"].get(key, 0) + 1
+        )
 
     if not ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER:
         # SHADOW mode: record-only, NO mutation of duration_s/min
@@ -188,23 +201,27 @@ def _cache_key(ll: tuple) -> str:
 
 
 def _cache_get(from_ll: tuple, to_ll: tuple) -> Optional[dict]:
+    # V3.27 latency parallel: cache read+expire-delete pod RLock.
     key = (_cache_key(from_ll), _cache_key(to_ll))
-    if key in _route_cache:
-        ts, result = _route_cache[key]
-        if time.time() - ts < CACHE_TTL_SECONDS:
-            return result
-        del _route_cache[key]
+    with _module_lock:
+        if key in _route_cache:
+            ts, result = _route_cache[key]
+            if time.time() - ts < CACHE_TTL_SECONDS:
+                return result
+            del _route_cache[key]
     return None
 
 
 def _cache_set(from_ll: tuple, to_ll: tuple, result: dict):
-    if len(_route_cache) >= CACHE_MAX_SIZE:
-        # Usun najstarsze 10%
-        oldest = sorted(_route_cache.items(), key=lambda x: x[1][0])[: CACHE_MAX_SIZE // 10]
-        for k, _ in oldest:
-            del _route_cache[k]
+    # V3.27 latency parallel: cache eviction+set pod RLock dla concurrent safety.
     key = (_cache_key(from_ll), _cache_key(to_ll))
-    _route_cache[key] = (time.time(), result)
+    with _module_lock:
+        if len(_route_cache) >= CACHE_MAX_SIZE:
+            # Usun najstarsze 10%
+            oldest = sorted(_route_cache.items(), key=lambda x: x[1][0])[: CACHE_MAX_SIZE // 10]
+            for k, _ in oldest:
+                del _route_cache[k]
+        _route_cache[key] = (time.time(), result)
 
 
 def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
@@ -223,12 +240,15 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
             return _apply_traffic_multiplier(dict(cached), now)
 
     # Cache miss — realny HTTP call (lub fallback)
-    _osrm_stats["calls_total"] += 1
+    # V3.27 latency parallel: stats inkrement pod RLock.
+    with _module_lock:
+        _osrm_stats["calls_total"] += 1
     _maybe_log_stats()
 
     # Circuit breaker — skip HTTP jeśli OSRM padł
     if _osrm_is_circuit_open():
-        _osrm_stats["calls_fallback"] += 1
+        with _module_lock:
+            _osrm_stats["calls_fallback"] += 1
         return _apply_traffic_multiplier(_haversine_fallback(from_ll, to_ll, now), now)
 
     # OSRM: lon,lat;lon,lat
@@ -239,7 +259,8 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
             data = json.loads(r.read().decode())
         if data.get("code") != "Ok" or not data.get("routes"):
             _osrm_record_failure()
-            _osrm_stats["calls_fallback"] += 1
+            with _module_lock:
+                _osrm_stats["calls_fallback"] += 1
             return _apply_traffic_multiplier(_haversine_fallback(from_ll, to_ll, now), now)
         route0 = data["routes"][0]
         result = {
@@ -256,7 +277,8 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
     except Exception as e:
         _log.warning(f"OSRM route fail: {e}")
         _osrm_record_failure()
-        _osrm_stats["calls_fallback"] += 1
+        with _module_lock:
+            _osrm_stats["calls_fallback"] += 1
         return _apply_traffic_multiplier(_haversine_fallback(from_ll, to_ll, now), now)
 
 
@@ -272,12 +294,15 @@ def table(origins: list, destinations: list) -> list:
         return []
 
     # Cache miss — realny HTTP call (table nie ma cache)
-    _osrm_stats["calls_total"] += 1
+    # V3.27 latency parallel: stats inkrement pod RLock.
+    with _module_lock:
+        _osrm_stats["calls_total"] += 1
     _maybe_log_stats()
 
     # Circuit breaker
     if _osrm_is_circuit_open():
-        _osrm_stats["calls_fallback"] += 1
+        with _module_lock:
+            _osrm_stats["calls_fallback"] += 1
         return _table_fallback(origins, destinations, now)
 
     all_points = origins + destinations
@@ -290,7 +315,8 @@ def table(origins: list, destinations: list) -> list:
             data = json.loads(r.read().decode())
         if data.get("code") != "Ok":
             _osrm_record_failure()
-            _osrm_stats["calls_fallback"] += 1
+            with _module_lock:
+                _osrm_stats["calls_fallback"] += 1
             return _table_fallback(origins, destinations, now)
         durations = data.get("durations") or []
         distances = data.get("distances") or [[0] * len(destinations) for _ in range(len(origins))]
@@ -313,7 +339,8 @@ def table(origins: list, destinations: list) -> list:
     except Exception as e:
         _log.warning(f"OSRM table fail: {e}")
         _osrm_record_failure()
-        _osrm_stats["calls_fallback"] += 1
+        with _module_lock:
+            _osrm_stats["calls_fallback"] += 1
         return _table_fallback(origins, destinations, now)
 
 

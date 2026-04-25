@@ -799,10 +799,20 @@ def assess_order(
             log.warning(f"V3.18 fleet_context build failed ({e}), falling back to None")
             fleet_context = None
 
-    for cid, cs in fleet_snapshot.items():
+    # V3.27 latency parallel (2026-04-25 wieczór): per-courier eval extracted do
+    # nested function `_v327_eval_courier` z dostępem do enclosing scope (closure
+    # captures now, order_event, fleet_speed_kmh, fleet_context, etc. without
+    # explicit param passing). ThreadPoolExecutor.map ewaluuje 10 candidates parallel.
+    # Thread-safety:
+    #   - OR-Tools per-call `RoutingModel` lokalny (zero shared state) — verified
+    #   - OSRM cache pod RLock w osrm_client._module_lock — verified V3.27
+    #   - urllib HTTP per-call socket (no shared CookieJar dispatch-side) — safe
+    #   - Python logging built-in lock — safe
+    # Wall time goal: 250-400ms (vs sequential 500-2000ms, baseline 100-150ms pre-flip).
+    def _v327_eval_courier(cid, cs):
         courier_pos = getattr(cs, "pos", None)
         if courier_pos is None:
-            continue
+            return None
         bag_raw = getattr(cs, "bag", []) or []
         bag_sim = [_bag_dict_to_ordersim(b) for b in bag_raw]
 
@@ -1680,7 +1690,7 @@ def assess_order(
             verdict = "NO"
             reason = f"v324a_extension_too_large ({v324a_extension_min:.1f}min > {C.V324_HARD_REJECT_EXTENSION_OVER_MIN})"
 
-        candidates.append(Candidate(
+        return Candidate(
             courier_id=str(cid),
             name=getattr(cs, "name", None),
             score=final_score,
@@ -1688,7 +1698,24 @@ def assess_order(
             feasibility_reason=reason,
             plan=plan,
             metrics=enriched_metrics,
-        ))
+        )
+    # ── end _v327_eval_courier ──
+
+    # V3.27 latency parallel: ThreadPoolExecutor map. 10 workers (lub mniej gdy
+    # fleet < 10). Lambda unpacks (cid, cs) tuple z fleet_snapshot.items().
+    # Single-courier fallback do sequential dla edge case (np. fleet=1).
+    from concurrent.futures import ThreadPoolExecutor as _V327_TPE
+    _v327_max_workers = max(1, min(10, len(fleet_snapshot)))
+    if _v327_max_workers > 1:
+        with _V327_TPE(max_workers=_v327_max_workers, thread_name_prefix="dispatch_v327") as _v327_pool:
+            for _v327_c in _v327_pool.map(lambda kv: _v327_eval_courier(kv[0], kv[1]), list(fleet_snapshot.items())):
+                if _v327_c is not None:
+                    candidates.append(_v327_c)
+    else:
+        for _v327_cid, _v327_cs in fleet_snapshot.items():
+            _v327_c = _v327_eval_courier(_v327_cid, _v327_cs)
+            if _v327_c is not None:
+                candidates.append(_v327_c)
 
     # F1.7 no_gps fallback: kurier z syntetycznym pos (centrum) dostaje
     # neutralne km/ETA. km_to_pickup = średnia floty (tylko z realnych pos),
