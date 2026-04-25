@@ -217,7 +217,15 @@ def _candidate_line(c: dict, now_utc: datetime, prep_remaining_min: float) -> st
     else:
         sub = []
         if km is not None:
-            sub.append(f"{km:.1f} km")
+            # V3.26 Bug A complete (2026-04-25): clarify km semantyka — distance jest
+            # liczony od insertion anchor (chronologicznie poprzedni stop w bagu),
+            # NIE direct od courier_pos. Z anchor restaurant name pokaż "X km do {Y}"
+            # dla operator clarity (vs mylące "X km" sugerujące drive-to-drop).
+            anchor_rest = c.get("v326_anchor_restaurant")
+            if anchor_rest:
+                sub.append(f"{km:.1f} km do {anchor_rest}")
+            else:
+                sub.append(f"{km:.1f} km")
         if eta:
             sub.append(f"ETA {eta}")
         if sub:

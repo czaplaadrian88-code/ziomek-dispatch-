@@ -342,8 +342,23 @@ def _v326_build_rationale(best: "Candidate", feasible: list) -> dict:
     bm = (best.metrics or {}) if hasattr(best, "metrics") else {}
     # Factor map: (PL label, value, signed contribution)
     # Bonuses are positive contributions, penalties negative.
+    # V3.26 Bug A complete (2026-04-25): bliskość rationale używa actual scoring
+    # contribution loss vs ideal (km=0). Pre-fix `-km*5` heuristic mylił operatorów
+    # — pokazywało "-79.5 pts" dla 15.91 km gdy real impact na ranking ~1.5 pts
+    # (po W_DYSTANS=0.30 weight). Now: signed_contribution = (s_dystans(km) - 100) * W_DYSTANS.
+    # km=0 → 0 (ideal, no penalty), km=15 → -28.5 (real cost vs ideal).
+    import math as _math
+    _km_for_rationale = float(bm.get("km_to_pickup") or 0)
+    _decay = float(getattr(C, "_dummy_unused", 5.0))  # mirror scoring.DIST_DECAY_KM (NIE import bo cycle risk)
+    try:
+        from dispatch_v2.scoring import DIST_DECAY_KM as _decay, W_DYSTANS as _wd
+    except Exception:
+        _decay = 5.0
+        _wd = 0.30
+    _s_dystans = 100.0 * _math.exp(-_km_for_rationale / _decay) if _km_for_rationale > 0 else 100.0
+    _bliskosc_contribution = (_s_dystans - 100.0) * _wd  # negative penalty vs ideal
     factors = [
-        ("bliskość", bm.get("km_to_pickup"), -float(bm.get("km_to_pickup") or 0) * 5),  # ~5pts/km penalty
+        ("bliskość", bm.get("km_to_pickup"), _bliskosc_contribution),  # actual scoring loss vs km=0
         ("fala", None, float(bm.get("bundle_bonus") or 0)),
         ("trajektoria", None, float(bm.get("v319h_bug2_continuation_bonus") or 0)),
         ("timing", None, float(bm.get("timing_gap_bonus") or 0)),
@@ -960,8 +975,28 @@ def assess_order(
         # S_dystans (scoring.road_km). R4/R9 route-deviation i R9 wait zostają
         # z oryginalnym courier_pos (liczą trasę bagu, nie nowego punktu startu).
         # Kurier bez baga → effective_start_pos == courier_pos (no-op).
+        #
+        # V3.26 Bug A complete (2026-04-25): flag-gated insertion anchor.
+        # Z ENABLE_V326_ANCHOR_BASED_SCORING=True: effective_start_pos =
+        # chronologically previous stop in plan PRZED new pickup (anchor).
+        # Bez flag: legacy chronological-last-drop (semantycznie mylące dla
+        # mid-chain insertion — kurier rzeczywiście jest przy anchor location,
+        # NIE na end-of-bag location).
         effective_start_pos = tuple(courier_pos)
-        if bag_sim and plan is not None and plan.sequence:
+        v326_anchor_restaurant = None
+        v326_anchor_used = False
+        if getattr(C, "ENABLE_V326_ANCHOR_BASED_SCORING", False) and bag_sim and plan is not None:
+            from dispatch_v2.insertion_anchor import compute_insertion_anchor as _cia
+            try:
+                _anchor = _cia(plan, str(order_id), bag_sim)
+            except Exception:
+                _anchor = None
+            if _anchor is not None:
+                effective_start_pos = _anchor.location
+                v326_anchor_restaurant = _anchor.restaurant_name
+                v326_anchor_used = True
+        if not v326_anchor_used and bag_sim and plan is not None and plan.sequence:
+            # Legacy fallback: chronological last drop in sequence
             _bag_by_oid = {o.order_id: o for o in bag_sim}
             _bag_in_seq = [oid for oid in plan.sequence if oid in _bag_by_oid]
             if _bag_in_seq:
@@ -1343,6 +1378,9 @@ def assess_order(
             **metrics,
             "score": score_result,
             "km_to_pickup": round(km_to_pickup_haversine, 2),
+            # V3.26 Bug A complete: anchor restaurant for Telegram label clarification.
+            "v326_anchor_restaurant": v326_anchor_restaurant,
+            "v326_anchor_used": v326_anchor_used,
             "travel_min": round(travel_min, 1),
             "drive_min": round(drive_min, 1),
             "eta_pickup_utc": eta_pickup_utc.isoformat(),

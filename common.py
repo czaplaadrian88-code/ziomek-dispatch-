@@ -1087,6 +1087,15 @@ V326_R06_PENALTY_OPPOSITE = -40.0  # N↔SE/SW lub E↔W
 ENABLE_V326_R06_BAG1_FIX = _os.environ.get(
     "ENABLE_V326_R06_BAG1_FIX", "0") == "1"
 
+# V3.26 Bug A complete (2026-04-25 sobota) — anchor-based distance scoring.
+# Replace chronological-last-drop effective_start_pos z chronologically-previous
+# stop w plan (insertion anchor). Distance kuriera do new pickup liczone od
+# anchor location, NIE od fictional far end-of-bag stop. Plus rationale display
+# recalibration (actual contribution zamiast misleading -km*5 heuristic) +
+# Telegram label "X km do {anchor_restaurant}". Default False — shadow path.
+ENABLE_V326_ANCHOR_BASED_SCORING = _os.environ.get(
+    "ENABLE_V326_ANCHOR_BASED_SCORING", "0") == "1"
+
 # V3.26 STEP 6 (R-07 v2 CHAIN-ETA ENGINE) — Adrian Q&A 2026-04-24.
 # Fundamental change: ETA kandydatów liczy chain walk przez unpicked orders
 # w bagu z max(arrival, scheduled) propagacją. Flag-gated use, shadow
