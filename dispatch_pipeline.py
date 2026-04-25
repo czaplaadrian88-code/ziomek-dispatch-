@@ -985,6 +985,7 @@ def assess_order(
         effective_start_pos = tuple(courier_pos)
         v326_anchor_restaurant = None
         v326_anchor_used = False
+        v326_anchor_obj = None  # Bug D fix: keep full anchor object for bundle_level2 override
         if getattr(C, "ENABLE_V326_ANCHOR_BASED_SCORING", False) and bag_sim and plan is not None:
             from dispatch_v2.insertion_anchor import compute_insertion_anchor as _cia
             try:
@@ -995,6 +996,29 @@ def assess_order(
                 effective_start_pos = _anchor.location
                 v326_anchor_restaurant = _anchor.restaurant_name
                 v326_anchor_used = True
+                v326_anchor_obj = _anchor
+
+                # V3.26 Bug D fix (2026-04-25): anchor-based "po odbiorze z X"
+                # override legacy bundle_level2 (first geographic match w bag_raw
+                # iteration order). Anchor = chronologically previous stop w plan;
+                # gdy is_pickup AND <1.5km od new pickup → X = anchor.restaurant_name.
+                # Inaczej (anchor is drop OR far): clear bundle_level2 (NIE pokazujemy
+                # mylącego "po odbiorze" gdy nie ma chronological pickup before new).
+                if _anchor.is_pickup:
+                    try:
+                        _l2_anchor_dist = haversine(_anchor.location, pickup_coords)
+                    except Exception:
+                        _l2_anchor_dist = None
+                    if _l2_anchor_dist is not None and _l2_anchor_dist < 1.5:
+                        bundle_level2 = _anchor.restaurant_name
+                        bundle_level2_dist = round(_l2_anchor_dist, 2)
+                    else:
+                        bundle_level2 = None
+                        bundle_level2_dist = None
+                else:
+                    # Anchor is drop → no clear "po odbiorze" semantyka
+                    bundle_level2 = None
+                    bundle_level2_dist = None
         if not v326_anchor_used and bag_sim and plan is not None and plan.sequence:
             # Legacy fallback: chronological last drop in sequence
             _bag_by_oid = {o.order_id: o for o in bag_sim}
