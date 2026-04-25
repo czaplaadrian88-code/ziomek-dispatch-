@@ -84,11 +84,15 @@ def _maybe_log_stats():
             f"fallback={_osrm_stats['calls_fallback']} "
             f"circuit_opens={_osrm_stats['circuit_opens']}"
         )
-        if ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER and _osrm_stats["traffic_mult_calls"] > 0:
+        # Block 4D 2026-04-25: log traffic-mult stats always (shadow + live).
+        # Shadow mode (flag=False) zapisuje co BY zastosowano — continuous
+        # validation drift over time without behavior change.
+        if _osrm_stats["traffic_mult_calls"] > 0:
             avg = _osrm_stats["traffic_mult_sum"] / _osrm_stats["traffic_mult_calls"]
             buckets = dict(sorted(_osrm_stats["traffic_mult_buckets"].items()))
+            mode = "live" if ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER else "shadow"
             _log.info(
-                f"OSRM traffic-mult hourly: calls={_osrm_stats['traffic_mult_calls']} "
+                f"OSRM traffic-mult hourly ({mode}): calls={_osrm_stats['traffic_mult_calls']} "
                 f"avg_mult={avg:.3f} buckets={buckets}"
             )
         _osrm_stats["calls_total"] = 0
@@ -101,35 +105,50 @@ def _maybe_log_stats():
 
 
 def _apply_traffic_multiplier(result: dict, now_utc: datetime) -> dict:
-    """V3.26 BUG-3 STEP 1 — apply OSRM traffic multiplier post-cache/post-OSRM.
+    """V3.26 BUG-3 STEP 1 + Block 4D 2026-04-25 instrumentation.
 
-    - Flag=False: return result unchanged (zero contract change for callers).
-    - Flag=True: multiply duration_s/duration_min in-place; preserve raw under
-      osrm_raw_duration_s / osrm_raw_duration_min; record traffic_multiplier.
-    Stats: increments hourly counters only when flag=True.
+    Flag=False (SHADOW): records co BY zastosowano, BEZ mutation duration_s/min.
+      - osrm_raw_duration_s/min: copy of duration_s
+      - traffic_multiplier_shadow: mult that WOULD be applied (read-only)
+      - duration_s/min: NIE zmienione (caller widzi raw OSRM)
+      - hourly stats: incremented (continuous validation drift)
+    Flag=True (LIVE): multiply duration_s/min in-place + record fields.
+      - osrm_raw_duration_s/min: preserved raw
+      - traffic_multiplier: applied mult
+      - duration_s/min: multiplied
+      - hourly stats: incremented
+
     Idempotency: detects existing osrm_raw_duration_s and re-multiplies from raw
       (so cached results are safe across hours).
+    Stats inkrementowane ZAWSZE (shadow + live) → continuous drift validation.
     """
-    if not ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER:
-        return result
     if not result:
         return result
-    mult = get_traffic_multiplier(now_utc)
     raw_s = result.get("osrm_raw_duration_s", result.get("duration_s"))
     if raw_s is None:
         return result
-    adjusted_s = raw_s * mult
+    mult = get_traffic_multiplier(now_utc)
+
+    # Always record shadow fields (Block 4D instrumentation 2026-04-25)
     result["osrm_raw_duration_s"] = raw_s
     result["osrm_raw_duration_min"] = round(raw_s / 60, 1)
-    result["traffic_multiplier"] = mult
-    result["duration_s"] = round(adjusted_s, 1)
-    result["duration_min"] = round(adjusted_s / 60, 1)
     _osrm_stats["traffic_mult_sum"] += mult
     _osrm_stats["traffic_mult_calls"] += 1
     key = f"{mult:.2f}"
     _osrm_stats["traffic_mult_buckets"][key] = (
         _osrm_stats["traffic_mult_buckets"].get(key, 0) + 1
     )
+
+    if not ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER:
+        # SHADOW mode: record-only, NO mutation of duration_s/min
+        result["traffic_multiplier_shadow"] = mult
+        return result
+
+    # LIVE mode: actually multiply
+    adjusted_s = raw_s * mult
+    result["traffic_multiplier"] = mult
+    result["duration_s"] = round(adjusted_s, 1)
+    result["duration_min"] = round(adjusted_s / 60, 1)
     return result
 
 

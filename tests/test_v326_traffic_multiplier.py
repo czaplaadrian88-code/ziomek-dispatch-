@@ -135,18 +135,26 @@ def _reset_state():
     osrm_client._osrm_failures = 0
 
 
-def test_route_flag_false_identity():
-    """flag=False: duration_s == raw OSRM, no raw fields added, no contract change."""
+def test_route_flag_false_shadow_records_no_mutation():
+    """Block 4D 2026-04-25: flag=False (shadow) records osrm_raw_* +
+    traffic_multiplier_shadow + stats, ALE duration_s/min NIE zmienione.
+    Continuous validation drift bez behavior change w produkcji."""
     _reset_state()
-    # Force flag False at runtime (overrides env)
     with mock.patch.object(osrm_client, "ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER", False):
         with _patch_urlopen_returning(_osrm_route_payload(duration_s=600)):
             r = osrm_client.route((53.13, 23.16), (53.10, 23.20), use_cache=False)
-    assert r["duration_s"] == 600, f"flag=False duration_s should be raw 600, got {r['duration_s']}"
-    assert "osrm_raw_duration_s" not in r, "flag=False must NOT inject osrm_raw_duration_s"
-    assert "traffic_multiplier" not in r, "flag=False must NOT inject traffic_multiplier"
-    assert osrm_client._osrm_stats["traffic_mult_calls"] == 0, "flag=False: zero traffic stats incremented"
-    print("PASS test_route_flag_false_identity")
+    # Duration_s NIE zmienione (no mutation w shadow)
+    assert r["duration_s"] == 600, f"flag=False duration_s NIE zmienione (raw 600); got {r['duration_s']}"
+    # Shadow fields recorded (Block 4D instrumentation)
+    assert r.get("osrm_raw_duration_s") == 600, "osrm_raw_duration_s must be recorded in shadow"
+    assert "traffic_multiplier_shadow" in r, "traffic_multiplier_shadow must be recorded in shadow"
+    # Live key NIE w shadow result
+    assert "traffic_multiplier" not in r, "flag=False MUST NOT inject 'traffic_multiplier' (live key)"
+    # Stats inkrementowane ZAWSZE (drift validation regardless of flag)
+    assert osrm_client._osrm_stats["traffic_mult_calls"] == 1, (
+        "Block 4D: stats inkrementowane w shadow (continuous validation)"
+    )
+    print("PASS test_route_flag_false_shadow_records_no_mutation")
 
 
 def test_route_flag_true_applies_and_preserves_raw():
@@ -224,7 +232,7 @@ if __name__ == "__main__":
         test_helper_boundary_lower_inclusive,
         test_helper_boundary_upper_exclusive,
         test_helper_naive_raises,
-        test_route_flag_false_identity,
+        test_route_flag_false_shadow_records_no_mutation,
         test_route_flag_true_applies_and_preserves_raw,
         test_route_cache_idempotency_across_hours,
     ]
