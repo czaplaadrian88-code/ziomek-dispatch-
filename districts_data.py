@@ -92,6 +92,7 @@ BIALYSTOK_DISTRICTS = {
         'streets': frozenset({
             'bydgoska',
             'celownicza',
+            'depowa',  # V3.27 Bug Z coverage HIGH (Nominatim 53.1219,23.1284 → Bema)
             'gen. józefa bema',
             'kanonierska',
             'kopernika mikołaja',
@@ -112,6 +113,7 @@ BIALYSTOK_DISTRICTS = {
             '1-szej armii wojska polskiego',
             'białostoczek',
             'bielska',
+            'bitwy białostockiej',  # V3.27 Bug Z coverage HIGH (Nominatim 53.1486,23.1615 → Białostoczek)
             'brzeska',
             'buska',
             'gen. władysława andersa',
@@ -138,6 +140,7 @@ BIALYSTOK_DISTRICTS = {
             'suwalska',
             'tysiąclecia państwa polskiego',
             'wileńska',
+            'władysława bełzy',  # V3.27 Bug Z coverage HIGH (Nominatim 53.1526,23.1566 → Białostoczek)
             'wołkowyska',
             'zagumienna',
             'łańcucka',
@@ -246,7 +249,10 @@ BIALYSTOK_DISTRICTS = {
             'północna',
             'sienkiewicza henryka',
             'sienny rynek',
-            'skłodowskiej-curie marii',
+            # 'skłodowskiej-curie marii' — V3.27 Bug Z coverage moved to Piaski only
+            # (Nominatim 53.1289,23.1586 → "Osiedle Skłodowskiej, Piaski"). Centrum
+            # entry removed dla first-match resolver consistency (Centrum nie ma
+            # entry → Piaski wygrywa).
             'spółdzielcza',
             'suraska',
             'tadeusza kielanowskiego',
@@ -271,6 +277,7 @@ BIALYSTOK_DISTRICTS = {
             'ciołkowskiego konstantego',
             'dojlidy fabryczne',
             'dojnowska',
+            'feliksa filipowicza',  # V3.27 Bug Z coverage HIGH (Nominatim 53.0984,23.1338 → Dojlidy)
             'jaskółcza',
             'jelenia',
             'karpińskiego franciszka',
@@ -962,6 +969,7 @@ BIALYSTOK_DISTRICTS = {
             'sobolewska',
             'sowlańska',
             'stawowa',
+            'sudecka',  # V3.27 Bug Z coverage HIGH (Nominatim 53.1283,23.1971 → Skorupy)
             'turystyczna',
             'wakacyjna',
             'warmińska',

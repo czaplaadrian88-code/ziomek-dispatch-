@@ -736,12 +736,85 @@ ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR = _os.environ.get(
     "ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR", "1") == "1"
 
 
+# V3.27 Bug Z Step D (2026-04-25 wieczór): street name aliases (canonicalization).
+# Real-world adresy mają różne formy tej samej ulicy:
+#   "M. Curie-Skłodowskiej", "Marii Curie-Skłodowskiej", "Skłodowskiej",
+#   "Curie-Skłodowskiej" — wszystkie → canonical "skłodowskiej-curie marii"
+# (canonical form matches BIALYSTOK_DISTRICTS street keys).
+# Aliases applied AFTER prefix stripping (ul./al./gen.) + lower-cased.
+# Format: {input_lc (street_part_only, no number) → canonical_lc}.
+# Extend incrementally w V3.28 ticket per discovery z shadow log.
+V327_STREET_ALIASES = {
+    # Marii Skłodowskiej-Curie variants
+    "skłodowskiej": "skłodowskiej-curie marii",
+    "skłodowskiej-curie": "skłodowskiej-curie marii",
+    "curie-skłodowskiej": "skłodowskiej-curie marii",
+    "marii curie-skłodowskiej": "skłodowskiej-curie marii",
+    "marii skłodowskiej-curie": "skłodowskiej-curie marii",
+    "m. skłodowskiej-curie": "skłodowskiej-curie marii",
+    "m. curie-skłodowskiej": "skłodowskiej-curie marii",
+    # Władysława Bełzy variants
+    "bełzy": "władysława bełzy",
+    "wł. bełzy": "władysława bełzy",
+    "władysława bełzy": "władysława bełzy",  # identity (gdy already canonical)
+    # Feliksa Filipowicza variants (Białystok-side; Kleosin handled przez city-aware)
+    "filipowicza": "feliksa filipowicza",
+    "f. filipowicza": "feliksa filipowicza",
+    "feliksa filipowicza": "feliksa filipowicza",  # identity
+}
+
+
+def _v327_normalize_street_for_matching(addr_lc):
+    """V3.27 Bug Z Step D: apply street aliases pre-matching.
+
+    Args:
+        addr_lc: lowercased address (post prefix-strip), may include number suffix
+                 (e.g. "skłodowskiej 13/15", "m. curie-skłodowskiej 5").
+
+    Returns:
+        addr_lc z canonical street name jeśli match w V327_STREET_ALIASES,
+        else addr_lc unchanged.
+
+    Logic:
+        1. Identify pure street part (everything before first digit-led token).
+        2. Strip trailing whitespace/punctuation z pure street.
+        3. Lookup w V327_STREET_ALIASES → canonical.
+        4. Concat canonical + numeric suffix.
+    """
+    if not addr_lc:
+        return addr_lc
+    # Find first digit position
+    digit_idx = None
+    for i, ch in enumerate(addr_lc):
+        if ch.isdigit():
+            digit_idx = i
+            break
+    if digit_idx is None:
+        addr_pure = addr_lc.strip().rstrip(",.")
+        suffix = ""
+    else:
+        # Find last whitespace before digit
+        space_before_digit = addr_lc.rfind(" ", 0, digit_idx)
+        if space_before_digit < 0:
+            addr_pure = addr_lc[:digit_idx].strip().rstrip(",.")
+            suffix = addr_lc[digit_idx:]
+        else:
+            addr_pure = addr_lc[:space_before_digit].strip().rstrip(",.")
+            suffix = addr_lc[space_before_digit:]
+    if addr_pure in V327_STREET_ALIASES:
+        canonical = V327_STREET_ALIASES[addr_pure]
+        return canonical + suffix
+    return addr_lc
+
+
 def drop_zone_from_address(addr, city=None):
     """V3.19h BUG-1: address + city → district name.
 
     Outside-city wykrywane z `city` field (miejscowość_docelowa z CSV).
     Białystok: match po ulicy w BIALYSTOK_DISTRICTS (prefix/substring match).
     Fallback: 'Unknown' gdy brak confident match.
+
+    V3.27 Bug Z Step D: street aliases applied post prefix-strip.
     """
     if city and isinstance(city, str):
         city_norm = city.strip()
@@ -766,6 +839,10 @@ def drop_zone_from_address(addr, city=None):
         if addr_lc.startswith(prefix):
             addr_lc = addr_lc[len(prefix):]
             break
+    # V3.27 Bug Z Step D: apply street aliases post prefix-strip.
+    # Real-world variants ("M. Curie-Skłodowskiej", "Skłodowskiej") → canonical
+    # ("skłodowskiej-curie marii") matching BIALYSTOK_DISTRICTS street keys.
+    addr_lc = _v327_normalize_street_for_matching(addr_lc)
     # Token-based matching: districts mają street jako "imię nazwisko" albo
     # "nazwisko" (np. "waszyngtona jerzego", "sienkiewicza henryka", "lipowa").
     # Dataset adresy mają "nazwisko number" albo "ulica number" (np. "Waszyngtona 24",
