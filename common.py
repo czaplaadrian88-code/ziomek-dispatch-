@@ -1119,7 +1119,7 @@ ENABLE_V326_PO_DRODZE_STRICT = _os.environ.get(
 # Default False — shadow validation period przed flip True.
 ENABLE_V326_OR_TOOLS_TSP = _os.environ.get(
     "ENABLE_V326_OR_TOOLS_TSP", "1") == "1"
-V326_OR_TOOLS_TIME_LIMIT_MS = 200  # Adrian's spec — per kandydat search budget
+V326_OR_TOOLS_TIME_LIMIT_MS = 50  # 2026-04-25 sobota post-flip rollback: 200ms × 10 candidates = 2000ms total per proposal (regression). 50ms × 10 = 500ms target. Adrian's spec 6.5 zakładał parallel execution (NIE implementowane). Sequential per kandydat → niższe budget per call.
 
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
 # Adrian's specification: grupujemy ordery z tej samej restauracji TYLKO gdy
