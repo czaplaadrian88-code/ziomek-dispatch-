@@ -1096,6 +1096,22 @@ ENABLE_V326_R06_BAG1_FIX = _os.environ.get(
 ENABLE_V326_ANCHOR_BASED_SCORING = _os.environ.get(
     "ENABLE_V326_ANCHOR_BASED_SCORING", "0") == "1"
 
+# V3.26 Bug C strict mode (2026-04-25 sobota) — "po drodze" semantyka.
+# Pre-fix: dispatch_pipeline.py:850 bundle_level3 fires gdy dev<2.0km (geometric
+# only). Adrian's case #468404: Maison 1.02 km od Sweet Fit fires "po drodze"
+# ALE pickup Maison @ 10:04 vs pickup Sweet Fit @ 10:37 = 33 min apart, 2 intervening
+# stops (drop Łąkowa, pickup Doner) → mylące UX.
+# Strict mode dodaje:
+# - Time proximity: bag_pickup_ready_at w ±PO_DRODZE_TIME_DIFF_MIN od new pickup_ready
+# - Intervening stops (gdy plan + anchor available): count stops między anchor i
+#   new pickup w plan.events <= PO_DRODZE_MAX_INTERVENING
+# Default flag False — zero behavior change. Adrian flips po shadow validation.
+PO_DRODZE_DIST_KM = 2.0
+PO_DRODZE_TIME_DIFF_MIN = 10
+PO_DRODZE_MAX_INTERVENING = 0
+ENABLE_V326_PO_DRODZE_STRICT = _os.environ.get(
+    "ENABLE_V326_PO_DRODZE_STRICT", "0") == "1"
+
 # V3.26 STEP 6 (R-07 v2 CHAIN-ETA ENGINE) — Adrian Q&A 2026-04-24.
 # Fundamental change: ETA kandydatów liczy chain walk przez unpicked orders
 # w bagu z max(arrival, scheduled) propagacją. Flag-gated use, shadow

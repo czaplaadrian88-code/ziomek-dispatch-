@@ -850,7 +850,9 @@ def assess_order(
                 and delivery_coords[0] != 0.0):
             bag_drops = [b.get("delivery_coords") for b in bag_raw if b.get("delivery_coords")]
             dev = _min_dist_to_route_km(delivery_coords, tuple(courier_pos), bag_drops)
-            if dev is not None and dev < 2.0:
+            # V3.26 Bug C (2026-04-25): configurable threshold (was hardcoded 2.0).
+            _po_drodze_dist_km = float(getattr(C, "PO_DRODZE_DIST_KM", 2.0))
+            if dev is not None and dev < _po_drodze_dist_km:
                 bundle_level3 = True
                 bundle_level3_dev = round(dev, 2)
 
@@ -1030,6 +1032,78 @@ def assess_order(
         # używane przez compute_assign_time. Display ETA jest osobne (drive_min).
         # Fix 2: km_to_pickup liczone od effective_start_pos (end-of-wave dla bag).
         km_to_pickup_haversine = haversine(effective_start_pos, pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+
+        # V3.26 Bug C strict mode (2026-04-25): "po drodze" semantyka.
+        # Pre-fix bundle_level3 fires na pure geometric (dev<2km) — Adrian's
+        # case #468404 Maison 1.02km od Sweet Fit fires "po drodze" mimo że
+        # pickup Maison @ 10:04 vs new pickup @ 10:37 = 33 min apart, 2 intervening
+        # stops (drop Łąkowa, pickup Doner) → mylące UX.
+        # Strict checks (gdy ENABLE_V326_PO_DRODZE_STRICT=True i bundle_level3 fired):
+        # 1. Time proximity: |new_pickup_ready_at - bag_pickup_ready_at| <= TIME_DIFF (10 min)
+        # 2. Intervening stops: count events między anchor i new pickup w plan.events
+        #    <= MAX_INTERVENING (0)
+        # Fail któregoś check → bundle_level3 cleared.
+        if bundle_level3 and getattr(C, "ENABLE_V326_PO_DRODZE_STRICT", False):
+            _time_diff_max = float(getattr(C, "PO_DRODZE_TIME_DIFF_MIN", 10))
+            _max_intervening = int(getattr(C, "PO_DRODZE_MAX_INTERVENING", 0))
+
+            # Time proximity: dowolny bag pickup w ±_time_diff_max?
+            _time_proximate = False
+            if pickup_ready_at is not None and bag_sim:
+                _new_pra = pickup_ready_at
+                if _new_pra.tzinfo is None:
+                    _new_pra = _new_pra.replace(tzinfo=timezone.utc)
+                for _b in bag_sim:
+                    _bp = getattr(_b, 'pickup_ready_at', None)
+                    if _bp is None:
+                        continue
+                    if _bp.tzinfo is None:
+                        _bp = _bp.replace(tzinfo=timezone.utc)
+                    _delta_min = abs((_bp - _new_pra).total_seconds()) / 60.0
+                    if _delta_min <= _time_diff_max:
+                        _time_proximate = True
+                        break
+
+            # Intervening stops count (gdy plan + anchor available)
+            _intervening_count = None
+            if v326_anchor_obj is not None and plan is not None:
+                _events_for_count = []
+                _pa = plan.pickup_at or {}
+                _da = plan.predicted_delivered_at or {}
+                for _oid, _ts in _pa.items():
+                    if isinstance(_ts, str):
+                        try:
+                            _ts = datetime.fromisoformat(_ts.replace('Z', '+00:00'))
+                        except Exception:
+                            continue
+                    if _ts.tzinfo is None:
+                        _ts = _ts.replace(tzinfo=timezone.utc)
+                    _events_for_count.append((_ts, 'pickup', str(_oid)))
+                for _oid, _ts in _da.items():
+                    if isinstance(_ts, str):
+                        try:
+                            _ts = datetime.fromisoformat(_ts.replace('Z', '+00:00'))
+                        except Exception:
+                            continue
+                    if _ts.tzinfo is None:
+                        _ts = _ts.replace(tzinfo=timezone.utc)
+                    _events_for_count.append((_ts, 'drop', str(_oid)))
+                _events_for_count.sort(key=lambda e: (e[0], 0 if e[1] == 'pickup' else 1))
+                _new_idx = next((i for i, e in enumerate(_events_for_count)
+                                 if e[2] == str(order_id) and e[1] == 'pickup'), None)
+                _anchor_kind = 'pickup' if v326_anchor_obj.is_pickup else 'drop'
+                _anchor_idx = next((i for i, e in enumerate(_events_for_count)
+                                    if e[2] == v326_anchor_obj.order_id and e[1] == _anchor_kind), None)
+                if _new_idx is not None and _anchor_idx is not None and _new_idx > _anchor_idx:
+                    _intervening_count = _new_idx - _anchor_idx - 1
+
+            # Decide: clear bundle_level3 jeśli któryś check fail
+            _strict_fail = (not _time_proximate) or (
+                _intervening_count is not None and _intervening_count > _max_intervening
+            )
+            if _strict_fail:
+                bundle_level3 = False
+                bundle_level3_dev = None
 
         # scoring.score_candidate: road_km przekazujemy jawnie (S_dystans użyje
         # effective_start_pos → pickup), a bearing (S_kierunek) nadal z courier_pos.
