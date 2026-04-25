@@ -19,7 +19,10 @@ W_OBCIAZENIE = 0.25
 W_KIERUNEK = 0.25
 W_CZAS     = 0.20
 
-DIST_DECAY_KM = 3.0           # exp(-d/3): 0km=100, 3km=37, 6km=13
+DIST_DECAY_KM = 5.0           # Bialystok (was 3, recalibrated 2026-04-25): exp(-d/5): 0km=100, 5km=37, 10km=14, 15km=5
+# Future per-city scaling: DIST_DECAY_BY_CITY = {"bialystok": 5, "warsaw": 12, ...}
+# Adrian's reasoning: exp utrzymuje gradient → algorytm zawsze rozróżnia kandydatów
+# (10km vs 15km), liniowy by traktował oba jako "zero" dla typowych dystansów Białystoku.
 TIME_PENALTY_START_MIN = 30   # do 30 min w bagu = 0 kary
 TIME_PENALTY_FULL_MIN = 35    # 35 min w bagu = 100 kary
 
