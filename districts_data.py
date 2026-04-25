@@ -277,7 +277,8 @@ BIALYSTOK_DISTRICTS = {
             'ciołkowskiego konstantego',
             'dojlidy fabryczne',
             'dojnowska',
-            'feliksa filipowicza',  # V3.27 Bug Z coverage HIGH (Nominatim 53.0984,23.1338 → Dojlidy)
+            # 'feliksa filipowicza' — V3.27 hotfix 2026-04-25: moved to Nowe Miasto
+            # per Adrian local knowledge (Lekcja #5+#19: domain knowledge > Nominatim API).
             'jaskółcza',
             'jelenia',
             'karpińskiego franciszka',
@@ -773,6 +774,7 @@ BIALYSTOK_DISTRICTS = {
             'miłosza',              # V3.26 R-06 completion: short variant
             'dubois stanisława',
             'ekologiczna',
+            'feliksa filipowicza',  # V3.27 hotfix 2026-04-25: Adrian local knowledge override Nominatim (Dojlidy → Nowe Miasto)
             'handlowa',
             'hurtowa',
             'ignacego j. paderewskiego',

@@ -53,8 +53,14 @@ def test_priority_skłodowskiej_curie_to_piaski():
             f"{addr!r} expected Piaski, got {zone}"
 
 
-def test_priority_filipowicza_białystok_to_dojlidy():
-    """Feliksa Filipowicza Białystok → Dojlidy (Nominatim 53.0984,23.1338 HIGH).
+def test_priority_filipowicza_białystok_to_nowe_miasto():
+    """Feliksa Filipowicza Białystok → Nowe Miasto.
+
+    V3.27 hotfix 2026-04-25: Adrian local knowledge override Nominatim API
+    (Lekcja #5+#19: domain knowledge > LLM/API confidence).
+    Pre-hotfix CC mapped Dojlidy (Nominatim HIGH 53.0984,23.1338).
+    Post-hotfix Adrian's correction: Nowe Miasto (SW quadrant).
+
     Distinct from Kleosin Filipowicza (handled by city-aware geocoding).
     """
     cases = [
@@ -65,8 +71,19 @@ def test_priority_filipowicza_białystok_to_dojlidy():
     ]
     for addr in cases:
         zone = C.drop_zone_from_address(addr, "Białystok")
-        assert zone == "Dojlidy", \
-            f"{addr!r} (Białystok) expected Dojlidy, got {zone}"
+        assert zone == "Nowe Miasto", \
+            f"{addr!r} (Białystok) expected Nowe Miasto, got {zone}"
+
+
+def test_priority_filipowicza_quadrant_sw():
+    """V3.27 hotfix: Feliksa Filipowicza → Nowe Miasto → SW quadrant.
+    Verifies R-06 trajectory classifier sees correct quadrant.
+    """
+    from dispatch_v2.districts_data import QUADRANT_BY_DISTRICT
+    zone = C.drop_zone_from_address("Feliksa Filipowicza 5", "Białystok")
+    assert zone == "Nowe Miasto"
+    assert QUADRANT_BY_DISTRICT.get(zone) == "SW", \
+        f"Filipowicza quadrant: expected SW, got {QUADRANT_BY_DISTRICT.get(zone)}"
 
 
 def test_kleosin_filipowicza_preserved():
@@ -201,8 +218,10 @@ if __name__ == "__main__":
     print("test_priority_belzy_to_bialostoczek: PASS")
     test_priority_skłodowskiej_curie_to_piaski()
     print("test_priority_skłodowskiej_curie_to_piaski: PASS")
-    test_priority_filipowicza_białystok_to_dojlidy()
-    print("test_priority_filipowicza_białystok_to_dojlidy: PASS")
+    test_priority_filipowicza_białystok_to_nowe_miasto()
+    print("test_priority_filipowicza_białystok_to_nowe_miasto: PASS")
+    test_priority_filipowicza_quadrant_sw()
+    print("test_priority_filipowicza_quadrant_sw: PASS")
     test_kleosin_filipowicza_preserved()
     print("test_kleosin_filipowicza_preserved: PASS")
     test_normalizer_basic()
