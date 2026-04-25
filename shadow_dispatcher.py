@@ -513,6 +513,23 @@ def run() -> int:
         f"log={shadow_log_path} meta_n={len((meta or {}).get('restaurants', {}))}"
     )
 
+    # V3.27 Phase 1F (2026-04-25 wieczór): warm-up ortools import na startup.
+    # D2 verified pierwszy thread cold import 153.5ms — eliminujemy z ścieżki
+    # critical pierwszego proposal po restart. Idempotent, no-op gdy already
+    # imported. Try/except defensive — jeśli ortools absent (test env), skip
+    # bez fail (run-time imports w tsp_solver wciąż handle).
+    try:
+        _wu_t0 = time.perf_counter()
+        from ortools.constraint_solver import pywrapcp as _wu_pywrapcp  # noqa: F401
+        from ortools.constraint_solver import routing_enums_pb2 as _wu_enums  # noqa: F401
+        _wu_ms = (time.perf_counter() - _wu_t0) * 1000.0
+        _log.info(f"V3.27 ortools warm-up complete: {_wu_ms:.1f}ms")
+    except Exception as _wu_e:
+        _log.warning(
+            f"V3.27 ortools warm-up skipped ({type(_wu_e).__name__}: {_wu_e}) — "
+            f"runtime import w tsp_solver still active"
+        )
+
     totals = {"processed": 0, "failed": 0, "skipped": 0}
     last_heartbeat = time.time()
 

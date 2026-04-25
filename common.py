@@ -1220,6 +1220,17 @@ ENABLE_V326_OR_TOOLS_TSP = _os.environ.get(
     "ENABLE_V326_OR_TOOLS_TSP", "1") == "1"  # V3.27 flip 2026-04-25 wieczór: re-enabled post Bug X+Y+Z+latency fixes
 V326_OR_TOOLS_TIME_LIMIT_MS = 200  # V3.27 (2026-04-25 wieczór): RESTORED 50→200ms post parallel ThreadPoolExecutor implementation. 10 workers × 200ms = ~250-400ms wall (vs sequential 2000ms). Adrian's spec 6.5 budget. Strategic: jakość bag>=4 zamiast skróconych 50ms.
 
+# V3.27 Phase 1A+G (Adrian Option B 2026-04-25 wieczór): skip OR-Tools dla
+# trivial cases (bag<=1, bag_after_add<=2). OR-Tools time_limit=200ms hits
+# ceiling EVERY call (D2 verified solve=200-232ms regardless of N). Dla N=3-4
+# (bag=0/1) bruteforce z 1-24 permutacjami rozwiązuje natychmiast (<5ms).
+# OR-Tools wartościowe TYLKO dla bag>=2 (5-6 nodes, 120-720 permutacji)
+# gdzie meta-heuristic GUIDED_LOCAL_SEARCH eksploruje przestrzeń lepiej
+# niż naive bruteforce.
+# Threshold: bag_after_add >= 2 (bag>=1 + new=1 → OR-Tools; bag=0 → bruteforce).
+# Empirically expected -150 to -300ms p95 wall time (D2 ground truth #468613).
+V327_MIN_OR_TOOLS_BAG_AFTER = 2  # bag>=1 → OR-Tools; bag=0 → bruteforce fast path
+
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
 # Adrian's specification: grupujemy ordery z tej samej restauracji TYLKO gdy
 # czas_kuriera ±5 min AND drop quadrants compatible (same lub adjacent w

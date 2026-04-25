@@ -119,7 +119,7 @@ def test_per_order_times_backward_compat_existing_fields():
     assert isinstance(plan.pickup_at, dict)
     assert isinstance(plan.total_duration_min, (int, float))
     assert plan.total_duration_min > 0
-    assert plan.strategy in ('bruteforce', 'greedy')
+    assert plan.strategy in ('bruteforce', 'greedy', 'ortools', 'sticky', 'greedy_fallback')  # V3.27: extended dla OR-Tools LIVE
     assert isinstance(plan.sla_violations, int)
     assert isinstance(plan.osrm_fallback_used, bool)
     # New C1 field

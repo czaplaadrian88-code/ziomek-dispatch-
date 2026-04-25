@@ -300,10 +300,17 @@ def simulate_bag_route_v2(
     # Replaces bruteforce + greedy z industry-standard constraint solver.
     # Time-bounded 200ms per kandydat. Fallback do greedy gdy solver INFEASIBLE
     # (rare — np. tight time windows).
+    #
+    # V3.27 Phase 1A+G (2026-04-25 wieczór): skip OR-Tools dla trivial cases
+    # (bag_after_add < V327_MIN_OR_TOOLS_BAG_AFTER). OR-Tools hits time_limit
+    # ceiling 200ms regardless of problem size — bruteforce z 1-24 perms instant.
     use_ortools = False
     try:
-        from dispatch_v2.common import ENABLE_V326_OR_TOOLS_TSP as _ot_flag
-        use_ortools = bool(_ot_flag)
+        from dispatch_v2.common import (
+            ENABLE_V326_OR_TOOLS_TSP as _ot_flag,
+            V327_MIN_OR_TOOLS_BAG_AFTER as _v327_min_ot,
+        )
+        use_ortools = bool(_ot_flag) and bag_after_add >= int(_v327_min_ot)
     except Exception:
         use_ortools = False
 
