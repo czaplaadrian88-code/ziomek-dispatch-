@@ -85,18 +85,110 @@ def simulate_bag_route_v2(
     # Build node list: [courier, *bag_nodes, (new_pickup?), new_delivery]
     # V3.19e: dla bag items z status!="picked_up" (pickup jeszcze nie nastąpił),
     # simulator dodaje pickup-node przed delivery-node. Gated przez flagę.
+    #
+    # V3.26 Fix 7 (2026-04-25): same-restaurant grouping pre-pass. Gdy flag
+    # ENABLE_V326_SAME_RESTAURANT_GROUPING=True, multiple pending bag pickups z
+    # tej samej restauracji compatible (czas ±5min + drop quadrants) merge'ują
+    # do super-pickup node z attribute group_oids (list). _simulate_sequence
+    # zapisze pickup_at[oid] dla każdego oid z grupy przy single visit.
     nodes: List[dict] = [{"kind": "courier", "coords": courier_pos, "order_id": None, "ref": None}]
     bag_delivery_idxs: List[int] = []
     bag_pickup_idxs_by_oid: Dict[str, int] = {}  # V3.19e: {oid: pickup_node_idx} only dla pending bag items
-    for o in bag:
-        if ENABLE_V319E_PRE_PICKUP_BAG and getattr(o, "status", "picked_up") != "picked_up":
-            nodes.append({
-                "kind": "pickup", "coords": o.pickup_coords,
-                "order_id": o.order_id, "ref": o,
-            })
-            bag_pickup_idxs_by_oid[o.order_id] = len(nodes) - 1
-        nodes.append({"kind": "delivery", "coords": o.delivery_coords, "order_id": o.order_id, "ref": o})
-        bag_delivery_idxs.append(len(nodes) - 1)
+
+    # Fix 7 grouping decision
+    _use_grouping = False
+    _grouped_pending_pickups: Dict[Tuple[str, ...], List] = {}  # {group_oids_tuple: [orders]}
+    try:
+        from dispatch_v2 import common as _C7
+        if getattr(_C7, "ENABLE_V326_SAME_RESTAURANT_GROUPING", False):
+            from dispatch_v2.same_restaurant_grouper import (
+                group_orders_by_restaurant,
+                GroupedOrders,
+            )
+            pending_bag = [
+                o for o in bag
+                if ENABLE_V319E_PRE_PICKUP_BAG and getattr(o, "status", "picked_up") != "picked_up"
+            ]
+            if len(pending_bag) >= 2:
+                groups = group_orders_by_restaurant(
+                    pending_bag,
+                    _C7.drop_zone_from_address,
+                    _C7.BIALYSTOK_DISTRICT_ADJACENCY,
+                    time_tolerance_min=float(getattr(_C7, "V326_GROUPING_TIME_TOLERANCE_MIN", 5.0)),
+                )
+                # Map order_id → group key (tuple of oids)
+                _group_oid_map: Dict[str, Tuple[str, ...]] = {}
+                for g in groups:
+                    if isinstance(g, GroupedOrders) and len(g.orders) >= 2:
+                        oids = tuple(getattr(o, "order_id", "") for o in g.orders)
+                        _grouped_pending_pickups[oids] = g.orders
+                        for oid in oids:
+                            _group_oid_map[oid] = oids
+                _use_grouping = bool(_grouped_pending_pickups)
+                if _use_grouping:
+                    # Build super-pickup nodes per group + individual pickup nodes for ungrouped
+                    _emitted_groups: set = set()
+                    for o in bag:
+                        if not (ENABLE_V319E_PRE_PICKUP_BAG and
+                                getattr(o, "status", "picked_up") != "picked_up"):
+                            # picked_up bag — only delivery node (legacy)
+                            nodes.append({
+                                "kind": "delivery", "coords": o.delivery_coords,
+                                "order_id": o.order_id, "ref": o,
+                            })
+                            bag_delivery_idxs.append(len(nodes) - 1)
+                            continue
+                        oid = o.order_id
+                        if oid in _group_oid_map:
+                            grp_key = _group_oid_map[oid]
+                            if grp_key not in _emitted_groups:
+                                # Emit super-pickup once per group
+                                grp_orders = _grouped_pending_pickups[grp_key]
+                                seed = grp_orders[0]
+                                nodes.append({
+                                    "kind": "pickup",
+                                    "coords": seed.pickup_coords,
+                                    "order_id": None,  # super-pickup — no single oid
+                                    "ref": seed,
+                                    "group_oids": list(grp_key),  # Fix 7 marker
+                                })
+                                super_pickup_idx = len(nodes) - 1
+                                for grp_oid in grp_key:
+                                    bag_pickup_idxs_by_oid[grp_oid] = super_pickup_idx
+                                _emitted_groups.add(grp_key)
+                            # delivery node per oid (always individual)
+                            nodes.append({
+                                "kind": "delivery", "coords": o.delivery_coords,
+                                "order_id": o.order_id, "ref": o,
+                            })
+                            bag_delivery_idxs.append(len(nodes) - 1)
+                        else:
+                            # Singleton pending — legacy nodes (1 pickup + 1 delivery)
+                            nodes.append({
+                                "kind": "pickup", "coords": o.pickup_coords,
+                                "order_id": o.order_id, "ref": o,
+                            })
+                            bag_pickup_idxs_by_oid[o.order_id] = len(nodes) - 1
+                            nodes.append({
+                                "kind": "delivery", "coords": o.delivery_coords,
+                                "order_id": o.order_id, "ref": o,
+                            })
+                            bag_delivery_idxs.append(len(nodes) - 1)
+    except Exception as _e7:
+        _log.warning(f"Fix 7 grouping disabled (exception): {type(_e7).__name__}: {_e7}")
+        _use_grouping = False
+
+    if not _use_grouping:
+        # Legacy nodes building (zero behavior change vs pre-Fix 7)
+        for o in bag:
+            if ENABLE_V319E_PRE_PICKUP_BAG and getattr(o, "status", "picked_up") != "picked_up":
+                nodes.append({
+                    "kind": "pickup", "coords": o.pickup_coords,
+                    "order_id": o.order_id, "ref": o,
+                })
+                bag_pickup_idxs_by_oid[o.order_id] = len(nodes) - 1
+            nodes.append({"kind": "delivery", "coords": o.delivery_coords, "order_id": o.order_id, "ref": o})
+            bag_delivery_idxs.append(len(nodes) - 1)
 
     new_pickup_idx: Optional[int] = None
     if need_pickup:
@@ -255,7 +347,15 @@ def _simulate_sequence(
                 if t < ready_utc:
                     t = ready_utc  # wait at restaurant (prep_variance)
             t = t + timedelta(minutes=DWELL_PICKUP_MIN)
-            pickup_at[node["order_id"]] = t
+            # V3.26 Fix 7: super-pickup z group_oids zapisuje pickup_at dla
+            # WSZYSTKICH oidów w grupie przy single visit (kurier zabiera all
+            # orders na raz z restauracji). Single DWELL_PICKUP_MIN dla całej grupy.
+            group_oids = node.get("group_oids")
+            if group_oids:
+                for grp_oid in group_oids:
+                    pickup_at[grp_oid] = t
+            else:
+                pickup_at[node["order_id"]] = t
         elif node["kind"] == "delivery":
             # V3.18 Bug 1: dla bag itemów z status != "picked_up" (kurier jeszcze
             # nie odebrał z restauracji) predicted drop NIE MOŻE być przed
