@@ -1118,7 +1118,7 @@ ENABLE_V326_PO_DRODZE_STRICT = _os.environ.get(
 # Eliminates greedy zigzag pattern dla bag>3 (#468404 case study).
 # Default False — shadow validation period przed flip True.
 ENABLE_V326_OR_TOOLS_TSP = _os.environ.get(
-    "ENABLE_V326_OR_TOOLS_TSP", "1") == "1"
+    "ENABLE_V326_OR_TOOLS_TSP", "0") == "1"
 V326_OR_TOOLS_TIME_LIMIT_MS = 50  # 2026-04-25 sobota post-flip rollback: 200ms × 10 candidates = 2000ms total per proposal (regression). 50ms × 10 = 500ms target. Adrian's spec 6.5 zakładał parallel execution (NIE implementowane). Sequential per kandydat → niższe budget per call.
 
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
@@ -1128,7 +1128,7 @@ V326_OR_TOOLS_TIME_LIMIT_MS = 50  # 2026-04-25 sobota post-flip rollback: 200ms 
 # orders (np. 2 ordery Mama Thai obie centrum gotowe w tym samym oknie).
 # Default False — shadow validation period przed flip True.
 ENABLE_V326_SAME_RESTAURANT_GROUPING = _os.environ.get(
-    "ENABLE_V326_SAME_RESTAURANT_GROUPING", "1") == "1"
+    "ENABLE_V326_SAME_RESTAURANT_GROUPING", "0") == "1"
 V326_GROUPING_TIME_TOLERANCE_MIN = 5.0  # ±5 min czas_kuriera tolerance
 
 # V3.26 STEP 6 (R-07 v2 CHAIN-ETA ENGINE) — Adrian Q&A 2026-04-24.
