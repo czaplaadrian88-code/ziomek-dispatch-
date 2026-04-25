@@ -58,15 +58,11 @@ arithmetic). Impact stopped service: R6 bag_time alerts (>30min threshold)
 NIE fire — acceptable 24h bo operational coverage przez panel + Adrian visual
 monitoring. Priority escalated: medium → **HIGH** (LIVE capability missing).
 
-#### V3.25-SLA-TRACKER-UNIT-DRIFT — unit file on-disk różni się od załadowanego (pre-existing)
-`systemctl status dispatch-sla-tracker` pokazuje warning:
-```
-Warning: The unit file, source configuration file or drop-ins of
-dispatch-sla-tracker.service changed on disk. Run 'systemctl daemon-reload'.
-```
-Ktoś edytował `/etc/systemd/system/dispatch-sla-tracker.service` bez daemon-reload.
-Nie wiem kto ani kiedy. **Priority:** low — systemd nie re-read do restart.
-Akcja: `diff` live ExecStart vs on-disk plik + decyzja czy apply lub revert.
+#### V3.25-SLA-TRACKER-UNIT-DRIFT — unit file on-disk różni się od załadowanego → **RESOLVED 2026-04-25**
+**STATUS RESOLVED 2026-04-25 sprint Block 3B:** `systemctl daemon-reload`
+wykonany 09:11 Warsaw — unit drift warning zniknął, brak restartów żadnego
+service. Sprawdzenie post-reload: dispatch-sla-tracker `Warning:` cleared.
+Service wciąż inactive (D2(a) decision), drift naprawiony bezboleśnie.
 
 #### V3.25-DOTS-CLEANUP — 45 hardcoded dotted refs w 13 plikach (deferred, low priority)
 Po flipie Daily Accounting (2026-04-24) usunęliśmy kropki z `kurier_ids.json` i
@@ -255,6 +251,79 @@ mają oba kwargi. Regression guard dla przyszłych refactorów. PASS.
 Deepseek arbiter). Nie był w TECH_DEBT pre-sprintu — nowy finding B#C1.
 
 **Blast radius:** dispatch-shadow (primary). Brak interakcji z telegram/panel-watcher.
+
+#### V326-H1-SERIALIZER-DROPS — 14+ kluczy v325/v326 droppowane do learning_log → **FIXED 2026-04-25**
+**STATUS:** FIXED in commit `7dee94a` + tag `v326-fix-h1-serializer-2026-04-25`
+(sprint 2026-04-25 sobota Block 1). Deployed dispatch-shadow restart 07:14 UTC.
+
+**Bug:** `shadow_dispatcher._serialize_candidate` (LOCATION A — alts) +
+`_serialize_result.best` (LOCATION B — best) trzymały **hardcoded explicit
+key list** dla output dict. Pipeline regularnie dodaje nowe v325_/v326_ keys
+do `cand.metrics` (np. v325_reject_reason w feasibility_v2:301, v326_speed_*
+w dispatch_pipeline:304-306, v326_fleet_* w :252-254), ale serializer nigdy
+ich nie propagował. Cross-review B#H1.
+
+**Lista zgubionych kluczy (14):** v325_pickup_ref_source, v325_reject_reason,
+v325_pickup_post_shift_excess_min, v325_pre_shift_soft_penalty,
+v325_pre_shift_too_early_min, v325_new_courier_penalty,
+v325_new_courier_advantage, v325_new_courier_flag, v326_fleet_bag_avg,
+v326_fleet_load_delta, v326_fleet_load_adjustment, v326_speed_tier_used,
+v326_speed_multiplier, v326_speed_score_adjustment.
+
+**Fix (~30 lines):** helper `_propagate_prefixed_metrics(base, metrics)` w
+shadow_dispatcher.py iteruje po `metrics.items()` i dodaje keys z prefiksami
+`("v325_", "v326_", "v319_", "r07_", "bonus_", "rule_")` które NIE są
+already w `base`. Wywoływany w obu locations po dict literal.
+
+**Existing explicit fields TAKE PRECEDENCE** — auto-prop pomija `if k in base`,
+nie nadpisuje hardcoded values.
+
+**Test:** `tests/test_h1_serializer_propagation.py` 4/4 PASS — propagation,
+unknown prefix not propagated, explicit field precedence, None metrics handled.
+
+**Live verify post-restart:** confirmed dispatch-shadow restart 07:14 UTC
+healthy (0 errors, 0 V326_WAVE_VETO compute fail, memory 13.5M). Empirical
+v325/v326 keys propagation pending pierwszy NEW_ORDER event (Saturday morning
+low traffic — last decision 24.04 21:28). Unit test confirms logic;
+post-deploy entry expected w shadow_decisions.jsonl po pierwszej decision.
+
+**Blast radius:** dispatch-shadow (primary). Zero decision change — wyłącznie
+obserwowalność (learning_log entries dostają więcej kluczy).
+
+#### V326-H2-R06-BAG1-FIX — R-06 trajectory blocked dla bag=1 → **FIXED 2026-04-25 (shadow)**
+**STATUS:** FIXED (shadow) in commit `74e9f80` + tag
+`v326-fix-h2-r06-bag1-shadow-2026-04-25` (sprint 2026-04-25 sobota Block 2).
+**Flag default False — flip pending 24h shadow obs.**
+
+**Bug:** `dispatch_pipeline.py:158` (post-fix line 164) hardcoded
+`if bag_size < 2 or pos_source == "no_gps":` w `_v326_multistop_trajectory`.
+Komentarz "R-06 multi-stop fires tylko gdy chain effect, bag=1 nie ma
+'ostatniego' dropu" był **semantycznie błędny** — bag=1 MA last drop, tylko
+bag=0 nie ma. Cross-review A#2.1.
+
+**Impact:** 30-50% candidates z bag=1 NIGDY nie dostają R-06 trajectory bonus.
+Single-bag couriers near restaurant z chain-trajectory potential wykluczeni
+od bonus optimization.
+
+**Fix (flag-gated):** dodano `ENABLE_V326_R06_BAG1_FIX` w common.py
+(default False). Threshold `_r06_min_bag = 1 if FLAG else 2`,
+`if bag_size < _r06_min_bag:` zamiast `< 2`. Default behavior IDENTYCZNE
+pre-fix (bag<2 skip) → zero shadow disruption do flipu.
+
+**Plan Adriana proponował semantyczny variant (`<=2` z threshold=0/2)** który
+zmieniłby behavior dla bag=2 (`2<=2` → skip vs original `2<2` → pass).
+Refactored na `<` z `_r06_min_bag=1/2` żeby zachować pre-fix semantykę dla
+bag>=2. Udokumentowane w commit message.
+
+**Live verify post-restart:** confirmed shadow restart 07:14 UTC healthy.
+Flag False default, behavior identyczne pre-fix. **Action required jutro:**
+flip flag True po 24h shadow obs (oczekiwany +30-50% R-06 fire rate dla bag=1).
+
+**Test:** brak nowego dedykowanego testu (flag False = identical behavior,
+runtime AST guard tracking unchanged). H1 + C1 regression PASS post-edit.
+
+**Blast radius:** dispatch-shadow (primary) gdy flag=True. Default=False:
+zero impact.
 
 #### V326-C2-TZ-DEFENSIVE-CLEANUP — LOW (not firing, verified 2026-04-25)
 **Klasa:** LOW (code quality, NOT active bug).
