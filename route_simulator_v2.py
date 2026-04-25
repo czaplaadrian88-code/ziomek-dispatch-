@@ -35,6 +35,75 @@ DWELL_PICKUP_MIN = 2.0
 DWELL_DROPOFF_MIN = 1.0
 BRUTEFORCE_MAX_BAG_AFTER = 3  # per D19
 
+# V3.27 Bug Y tie-breaker (2026-04-25 wieczór): gdy 2+ permutacje mają
+# |total_duration_diff| < 2 min od leader, secondary sort by first_drop arrival
+# time ASC. Adrian's reasoning: "lepiej żeby jedno zamówienie jechało 3min,
+# drugie 15min, niż jedno 13min, drugie 20min".
+# Mental simulation #468508: post-X traffic_mult global ratio preserved (NIE
+# rozdziela tied permutations). Tie-breaker rozdziela arbitrary tie-break.
+V327_TIE_BREAKER_THRESHOLD_MIN = 2.0
+
+
+def _first_drop_arrival_min(plan: "RoutePlanV2", now: datetime) -> float:
+    """V3.27 Bug Y helper: time-from-now (min) do PIERWSZEGO drop w sekwencji.
+
+    plan.sequence to delivery_order (only deliveries, w order). Pierwszy = sequence[0].
+    Returns inf gdy plan ma brak sequence lub brak predicted_delivered_at[first].
+    """
+    if not plan or not plan.sequence or not plan.predicted_delivered_at:
+        return float("inf")
+    first_oid = plan.sequence[0]
+    first_arrival = plan.predicted_delivered_at.get(first_oid)
+    if first_arrival is None:
+        return float("inf")
+    if first_arrival.tzinfo is None:
+        first_arrival = first_arrival.replace(tzinfo=timezone.utc)
+    return (first_arrival - now).total_seconds() / 60.0
+
+
+def _select_best_with_tie_breaker(
+    plans: List["RoutePlanV2"],
+    now: datetime,
+    threshold_min: float = V327_TIE_BREAKER_THRESHOLD_MIN,
+) -> Optional["RoutePlanV2"]:
+    """V3.27 Bug Y: select best plan z tie-breaker.
+
+    1. Sort by primary key (sla_violations, total_duration_min) ASC
+    2. Identify ties: plans with same sla_violations AND
+       |total_duration_min - leader| < threshold_min
+    3. If ≥2 ties AND ENABLE_V327_BUG_FIXES_BUNDLE flag True:
+       secondary sort by first_drop_arrival_min ASC, return first
+    4. Else return leader (legacy behavior).
+    """
+    if not plans:
+        return None
+    # Primary sort
+    plans_sorted = sorted(
+        plans,
+        key=lambda p: (p.sla_violations, p.total_duration_min),
+    )
+    leader = plans_sorted[0]
+
+    # Tie-breaker gated by flag (preserves baseline behavior gdy flag=False)
+    try:
+        from dispatch_v2.common import ENABLE_V327_BUG_FIXES_BUNDLE as _v327_flag
+    except Exception:
+        _v327_flag = False
+    if not _v327_flag:
+        return leader
+
+    ties = [
+        p for p in plans_sorted
+        if p.sla_violations == leader.sla_violations
+        and abs(p.total_duration_min - leader.total_duration_min) < threshold_min
+    ]
+    if len(ties) < 2:
+        return leader
+
+    # V3.27 tie-breaker: shortest first drop arrival ASC
+    ties.sort(key=lambda p: _first_drop_arrival_min(p, now))
+    return ties[0]
+
 
 @dataclass
 class OrderSim:
@@ -299,10 +368,10 @@ def _sticky_sequence_plan(
     w bagu nie zawraca do nowej restauracji).
     """
     lock_first = bool(sticky_bag_idxs)
-    best: Optional[RoutePlanV2] = None
-    best_key = (10 ** 9, float("inf"))
     n = len(sticky_bag_idxs)
 
+    # V3.27 Bug Y tie-breaker: collect all valid sticky insertions, post-process.
+    all_sticky_plans: List[RoutePlanV2] = []
     for d_pos in range(n + 1):
         pickup_positions = [None] if new_pickup_idx is None else list(range(0, d_pos + 1))
         for p_pos in pickup_positions:
@@ -315,11 +384,8 @@ def _sticky_sequence_plan(
             if p_pos is not None:
                 candidate.insert(p_pos, new_pickup_idx)
             plan = _plan_from_sequence(candidate, nodes, leg_min, new_order, bag, now, sla_minutes)
-            key = (plan.sla_violations, plan.total_duration_min)
-            if key < best_key:
-                best = plan
-                best_key = key
-    return best
+            all_sticky_plans.append(plan)
+    return _select_best_with_tie_breaker(all_sticky_plans, now)
 
 
 # ---- internals ----
@@ -525,8 +591,8 @@ def _bruteforce_plan(
     }
     lock_first = bool(picked_up_drop_set)
 
-    best: Optional[RoutePlanV2] = None
-    best_key = (10 ** 9, float("inf"))
+    # V3.27 Bug Y tie-breaker: collect all valid plans, post-process selection.
+    all_valid_plans: List[RoutePlanV2] = []
     for perm in permutations(to_place):
         if lock_first and perm[0] not in picked_up_drop_set:
             continue
@@ -539,11 +605,8 @@ def _bruteforce_plan(
         if not valid:
             continue
         plan = _plan_from_sequence(list(perm), nodes, leg_min, new_order, bag, now, sla_minutes)
-        key = (plan.sla_violations, plan.total_duration_min)
-        if key < best_key:
-            best = plan
-            best_key = key
-    return best
+        all_valid_plans.append(plan)
+    return _select_best_with_tie_breaker(all_valid_plans, now)
 
 
 def _greedy_plan(
@@ -610,9 +673,9 @@ def _greedy_plan(
     # Lock first stop: jeśli bag niepusty (picked_up albo po inserowanych
     # pending), nowy pickup NIE może być przed pierwszą dostawą.
     lock_first = len(seq_base) > 0
-    best: Optional[RoutePlanV2] = None
-    best_key = (10 ** 9, float("inf"))
     n = len(seq_base)
+    # V3.27 Bug Y tie-breaker: collect all valid Step-2 insertions, post-process.
+    all_step2_plans: List[RoutePlanV2] = []
     for d_pos in range(n + 1):
         pickup_positions = [None] if new_pickup_idx is None else list(range(0, d_pos + 1))
         for p_pos in pickup_positions:
@@ -624,11 +687,8 @@ def _greedy_plan(
                 # p_pos ≤ d_pos → pickup lands before delivery after insertion
                 candidate.insert(p_pos, new_pickup_idx)
             plan = _plan_from_sequence(candidate, nodes, leg_min, new_order, bag, now, sla_minutes)
-            key = (plan.sla_violations, plan.total_duration_min)
-            if key < best_key:
-                best = plan
-                best_key = key
-    return best
+            all_step2_plans.append(plan)
+    return _select_best_with_tie_breaker(all_step2_plans, now)
 
 
 def _ortools_plan(
