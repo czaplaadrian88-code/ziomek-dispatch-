@@ -156,13 +156,17 @@ def _v326_multistop_trajectory(feasible: list, new_order, order_id=None) -> list
         bag_size = m.get("bag_size_before") or 0
         pos_source = m.get("pos_source")
         # SKIP path (per Adrian R-06 spec):
-        # - bag < 2 (R-06 multi-stop fires tylko gdy chain effect, bag=1 nie ma "ostatniego" dropu)
+        # - bag < min_bag: bag=0 nie ma "ostatniego" dropu (bag=1 MA — fix
+        #   V326-H2 flag-gated: min 2→1 gdy ENABLE_V326_R06_BAG1_FIX True;
+        #   default zostaje "<2" identycznie jak pre-fix dla bag=2 PASS)
         # - pos_source=no_gps (synthetic pos, brak realnej trajektorii)
-        if bag_size < 2 or pos_source == "no_gps":
+        _r06_min_bag = 1 if getattr(C, "ENABLE_V326_R06_BAG1_FIX", False) else 2
+        if bag_size < _r06_min_bag or pos_source == "no_gps":
             m["v326_r06_relation"] = None
             m["v326_r06_bonus"] = 0.0
             m["v326_r06_skip_reason"] = (
-                f"bag={bag_size}<2" if bag_size < 2 else "no_gps"
+                f"bag={bag_size}<{_r06_min_bag}"
+                if bag_size < _r06_min_bag else "no_gps"
             )
             continue
         # Find last_drop_district from bag_context

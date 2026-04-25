@@ -1066,6 +1066,14 @@ V326_R06_BONUS_SIMILAR    = 15.0   # adjacency hit
 V326_R06_PENALTY_SIDEWAYS = -10.0  # cross-quadrant, nie opposite
 V326_R06_PENALTY_OPPOSITE = -40.0  # N↔SE/SW lub E↔W
 
+# V3.26 STEP H2 (2026-04-25) — R-06 bag1 fix flag-gated.
+# Cross-review A#2.1: hardcoded `if bag_size < 2` blokował R-06 trajectory dla
+# 30-50% candidates z bag=1. Komentarz "bag=1 nie ma 'ostatniego' dropu" błędny:
+# bag=1 MA last drop — to bag=0 nie ma. Flag default False (shadow): threshold
+# pozostaje 2 dla obs window. Po flip: threshold 0 → bag>=1 wchodzi w R-06.
+ENABLE_V326_R06_BAG1_FIX = _os.environ.get(
+    "ENABLE_V326_R06_BAG1_FIX", "0") == "1"
+
 # V3.26 STEP 6 (R-07 v2 CHAIN-ETA ENGINE) — Adrian Q&A 2026-04-24.
 # Fundamental change: ETA kandydatów liczy chain walk przez unpicked orders
 # w bagu z max(arrival, scheduled) propagacją. Flag-gated use, shadow
