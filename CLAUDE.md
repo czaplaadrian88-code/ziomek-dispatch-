@@ -1,11 +1,247 @@
-# CLAUDE.md — Dispatch V2 instruction for Claude Code sessions
-# Update: 2026-04-25 wieczór (V3.27 sprint complete + Phase 1 latency fix)
+# CLAUDE.md — V3.27 LIVE state (post-sprint 25.04 wieczór, pre-Hetzner-upgrade)
+
+**Data:** 26.04.2026 rano
+**Sprint poprzedni:** V3.27 zamknięty stable 25.04 wieczór, sprint-complete-stable tag `7591f0a`
+**Pending:** Hetzner upgrade CPX22→CPX32 niedziela rano (Adrian's task)
+
+---
+
+## Stan flag (LIVE od 17:39 UTC 25.04)
+
+```python
+# common.py — feature flags state
+ENABLE_V326_ANCHOR_BASED_SCORING = True       # V3.26 dzień
+ENABLE_V326_PO_DRODZE_STRICT = True           # V3.26 dzień
+ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER = True    # Block 4 OSRM (25.04 08:12 UTC)
+ENABLE_V326_OR_TOOLS_TSP = True               # V3.27 wieczór re-flip (17:39 UTC 25.04)
+ENABLE_V326_SAME_RESTAURANT_GROUPING = True   # V3.27 wieczór re-flip (17:39 UTC 25.04)
+ENABLE_V327_BUG_FIXES_BUNDLE = True           # V3.27 NEW (Bug Y tie-breaker + Bug Z + corridor mult)
+
+# Konfiguracja
+V326_OR_TOOLS_TIME_LIMIT_MS = 200             # RESTORED via parallel ThreadPoolExecutor
+V327_MIN_OR_TOOLS_BAG_AFTER = 2               # Phase 1 — skip OR-Tools dla bag<2 (greedy fast path)
+```
+
+**Rollback procedure** (gdy regresja peak):
+```bash
+# Set ENABLE_V326_OR_TOOLS_TSP=False (1 flaga = full rollback do legacy)
+sudo systemctl restart dispatch-shadow.service
+# 5 minut do safe state; reszta flag (V327, GROUPING, ANCHOR, etc.) zostają True
+```
+
+---
+
+## Active code (no flag, baked-in)
+
+### V3.26 stack (dzień 25.04)
+- Bug A decay 5 (DIST_DECAY_KM)
+- Bug A rationale recalibration
+- Bug B event_bus EVENT_TYPES (CZAS_KURIERA_UPDATED propaguje)
+- Bug C "po drodze" strict (time + intervening checks)
+- Bug D anchor-based "po odbiorze z X"
+- venv `/root/.openclaw/venvs/dispatch/`
+
+### V3.27 stack (wieczór 25.04)
+- **Bug X:** weekend traffic mult buckety (24-bucket sat/sun split)
+  - Sobota: 00-12 ×1.0, 12-15 ×1.1, 15-21 ×1.2, 21-24 ×1.0
+  - Niedziela: ×1.0 cały dzień
+- **Bug X drive_min:** OSRM-first zamiast fleet_speed_kmh fallback
+- **Latency:** parallel ThreadPoolExecutor + OSRM cache RLock + imports warm-up startup
+- **Districts coverage extension:** 97/100 top streets mapped + 11 aliases
+- **Filipowicza hotfix:** Nowe Miasto SW (Adrian local override z Nominatim Dojlidy)
+- **Phase 1 latency shortcut:** skip OR-Tools dla bag<2 (greedy fast path)
+
+### Verified ground truth (D1-D5 diagnostic 25.04 wieczór)
+- Hardware: 2 vCPU AMD EPYC Genoa, 4 GB RAM, swap 920Mi used
+- OR-Tools solve hituje 200ms ceiling EVERY call (87% TSP TOTAL)
+- Parallel efficiency 13.4% (close to 2 vCPU theoretical max ~50%)
+- OSRM raw NIE jest bottleneck (p50 11ms, p95 26ms)
+- Hetzner CPX22 = primary constraint dla parallel scaling
+
+---
+
+## Latency status
+
+| Metric | Pre-V3.27 | Post-V3.27 (current) | Post-Hetzner-CPX32 (expected) |
+|---|---|---|---|
+| p50 | ~515ms | ~375ms (-27%) | ~150-200ms |
+| p95 | ~673ms | ~624ms (1 outlier) | ~250-300ms |
+| %hit <500ms | 46% | 80% | ~95%+ |
+| Parallel efficiency | 13.4% | 13.4% | ~25-30% |
+
+---
+
+## Sprint V3.27 tagi chronologicznie
+
+```
+1.  v327-fix-bug-x-traffic-mult-2026-04-25 (0c4d92e)        — weekend buckety + drive_min OSRM
+2.  v327-fix-bug-z-bundle-soft-penalty-2026-04-25 (369d46f) — cross-quadrant penalty + corridor mult
+3.  v327-fix-latency-parallel-2026-04-25 (46051d6)          — ThreadPoolExecutor + RLock
+4.  v327-implementation-complete-2026-04-25 (3457a5f)        — pre-existing test fix
+5.  v327-fix-bug-y-tie-breaker-shortest-first-2026-04-25 (8c8b427) — shortest first drop tie-breaker
+6.  v327-fix-districts-coverage-2026-04-25 (70b7c04)         — priority 3 + best-effort 4 + 11 aliases
+7.  v327-hotfix-filipowicza-mapping-2026-04-25 (6161c40)     — Adrian local override
+8.  v327-flag-flip-final-2026-04-25 (8525364)                — flip 3 flagi True
+9.  v327-phase1-latency-fix-2026-04-25 (aa029bb)             — skip OR-Tools bag<2 + warm-up
+10. v327-sprint-complete-stable-2026-04-25 (7591f0a)         — docs + sprint close
+```
+
+---
+
+## Tests state
+
+- **V3.27 NEW tests:** 60/60 PASS (7 traffic + 4 drive_min + 15 bug_z + 2 latency_slow + 13 tie-breaker + 13 districts + 6 normalizer)
+- **Updated tests:** 12/12 PASS (V326 traffic + BM3 chain_eta + route_simulator_c1)
+- **Regression krytyczne:** ~25 test files all PASS
+- **Slow suite:** test_proposal_lifecycle_under_500ms_p95 PASS (mock OSRM, real validation in shadow)
+- **Pre-existing fails (NIE V3.27 regresja):**
+  - test_feasibility_c3 (v325 fixture issue, defer V3.28-FEASIBILITY-C3-V325-FIXTURE)
+  - test_decision_engine_f21 (defer)
+
+```bash
+# Run pełen suite
+cd /root/.openclaw/workspace/scripts/dispatch_v2/
+/root/.openclaw/venvs/dispatch/bin/python -m pytest
+
+# Run slow suite (full lifecycle latency)
+/root/.openclaw/venvs/dispatch/bin/python -m pytest -m slow
+
+# Skip pre-existing fails
+/root/.openclaw/venvs/dispatch/bin/python -m pytest --ignore=tests/test_feasibility_c3.py --ignore=tests/test_decision_engine_f21.py
+```
+
+---
+
+## Bug X/Y/Z status post-flip
+
+- **Bug X (timing under-estimation):** confirmed working — weekend traffic mult ×1.2 sobota peak applied via osrm_client (Phase 1 verification post 18:46 UTC 25.04). Niedziela ×1.0 verify pending peak observation.
+- **Bug Y (suboptimal sequence):** tie-breaker fires gdy bag≥2 ties (|diff|<2min). Mental simulation #468508 verified Skłodowskiej-first wins. **Real bag≥2 cases TBD large sample post-Hetzner.**
+- **Bug Z (cross-quadrant bundle):** SOFT penalty (×0.1 cross / ×0.7 adjacent / ×1.0 same) + corridor mult fire dla bag z cross-quadrant drops. Helper tests passed. **Real cross-quadrant cases TBD post-flip dłuższy monitoring.**
+
+---
+
+## Strategy split (V327_MIN_OR_TOOLS_BAG_AFTER=2)
+
+```
+bag=0 candidates (kurier pusty + nowy pickup+drop)  → strategy=greedy (legacy fast path)
+bag=1 candidates (1 order w bagu + nowy)            → strategy=greedy
+bag>=2 candidates (>=2 orders w bagu + nowy)        → strategy=ortools (OR-Tools + Bug Y tie-breaker)
+```
+
+**Reasoning:** OR-Tools value dla bag>=2 (sequence optimization, Bug Y tie-breaker fires here). Bag<2 = trywialny PDP (no sequence to optimize), legacy szybsze.
+
+---
+
+## Daily Q&A infrastructure
+
+**Path:** `/root/.openclaw/workspace/q_and_a/`
+**Status:** Wave 1 ZALEGŁY od 24.04. Adrian's task niedziela wieczór 26.04.
+
+```bash
+cd /root/.openclaw/workspace/q_and_a/
+./new_day.sh 2026-04-26
+nano 2026-04-26.md  # 5 cases + meta + summary
+```
+
+**7 reason codes:**
+- WAVE_CONTINUATION_MISSED
+- TRAJECTORY_MISMATCH
+- SCHEDULE_OVERRIDE
+- PICKUP_COLLISION
+- DRIVER_QUALITY_MISMATCH
+- FLEET_BALANCE_OFF
+- OTHER
+
+---
+
+## Hetzner upgrade pending (V3.28-INFRA-HETZNER-UPGRADE)
+
+**Priority:** HIGH (Adrian niedziela rano 8-10 Warsaw)
+**Effort:** 30-45 min (snapshot + rescale + verify)
+**Cost:** +6 EUR/mies (CPX22 €7.99 → CPX32 €13.99)
+
+**Why CPX32 nie CPX31:**
+- CPX31 deprecated (Hetzner discontinued)
+- CPX32 = newer AMD EPYC Genoa, niższa cena
+- Same specs (4 vCPU, 8 GB RAM, 160 GB SSD) jak CPX31
+
+**Procedure:**
+```bash
+# 1. Snapshot pre-upgrade (Hetzner Cloud Console)
+# 2. Rescale CPX22 → CPX32 (panel Hetzner)
+# 3. Verify post-upgrade
+nproc                                                  # expect 4
+free -h                                                 # expect 8 GB
+systemctl status dispatch-shadow.service                # active
+systemctl status panel-watcher.service                  # active
+systemctl status courier-api.service                    # active
+systemctl status dispatch-telegram.service              # active
+systemctl status dispatch-czasowka.service              # active
+systemctl status dispatch-cod-weekly.timer              # active
+systemctl status dispatch-daily-accounting.timer        # active
+systemctl status dispatch-plan-recheck.service          # active
+systemctl status dispatch-sla-tracker.service           # active (or kill decision V3.28)
+
+# 4. Latency benchmark first 5 proposals
+journalctl -u dispatch-shadow.service --since "5 minutes ago" | grep latency_ms
+
+# Expected: p95 ~250-300ms (vs current ~624ms)
+```
+
+---
+
+## V3.28 backlog (TECH_DEBT.md)
+
+| Item | Effort | Priority | Notes |
+|---|---|---|---|
+| **HETZNER-UPGRADE-CPX32** | 30-45 min | HIGH | Adrian niedziela rano |
+| **R-04 GRADUATION-SCHEMA** | 3-4h | HIGH | Adrian mandate 24.04, multi-gate metrics |
+| DISTRICTS-LONG-TAIL | 2-3h | MEDIUM | 638 streets shadow log analysis |
+| PRE-CANNED-REASON-CODES | 2-3h | MEDIUM | Telegram dropdown UI |
+| FEASIBILITY-C3-V325-FIXTURE | 1-2h | MEDIUM | Pre-existing test cleanup |
+| ALEJA-PARSER-FRAGMENT | 30 min | LOW | Regex enhancement |
+| SUPRASLSKA-OUTSIDE-CITY | 1h | LOW | Outside-city flow |
+| /help handler fix | 15 min | LOW | Currently broken |
+| sla-tracker decision | 30 min | LOW | Fix vs kill |
+| V326-PICKUP-COORDS-MISMATCH | 1-2h | LOW | 12.4km cache gap |
+| V326-C2-TZ-DEFENSIVE-CLEANUP | 1-2h | LOW | 40+ files |
+| BUG-Y-PER-SEGMENT-MULTIPLIERS | 1h obs | LOW | Conditional post-Hetzner |
+
+---
+
+## Recommendations dla nowej sesji CC
+
+### Pre-flight checks
+1. Read /root/.openclaw/workspace/scripts/dispatch_v2/CLAUDE.md (this file)
+2. Read TECH_DEBT.md
+3. Read latest /tmp/v327_*.md handover files
+4. Confirm flag state: `grep "ENABLE_V327\|ENABLE_V326_OR_TOOLS\|V327_MIN" common.py`
+5. Confirm git tags: `git tag | grep v327 | sort -V`
+6. Confirm service health: `systemctl status dispatch-shadow.service`
+7. Confirm Hetzner upgrade status: `nproc` (2 = pre-upgrade, 4 = post-upgrade)
+
+### Hard rules
+- Pytaj nie zgaduj — zgadywanie = 10-30 min debug
+- Per-krok workflow: draft → ACK → .bak → edit → py_compile → import → test → commit → tag → continue
+- NIE restartuj systemd bez py_compile + import check + Adrian ACK
+- NIE jq, sed read-only, NIE heredoc z cudzysłowami
+- NIE restartuj dispatch-telegram bez EXPLICIT ACK
+- venv path: /root/.openclaw/venvs/dispatch/bin/python
+- Performance tests = full lifecycle (10×), nie unit (Lekcja #24)
+- Hardware diagnostyka (CPU/RAM/I/O) przed final fix decision (Lekcja #27)
+- Cognitive desync (Lekcja #25): czekaj na prompt z Claude Chat, nie reaguj na "1"/"a"/"b" odpowiedzi Adriana
+
+---
+
+**Ostatnia aktualizacja:** 26.04.2026 rano (post-sprint V3.27 25.04 wieczór, Hetzner upgrade pending).
+
+---
 
 # ═══════════════════════════════════════════════════════════════════
-# STATE 25.04.2026 wieczór (V3.27 sprint complete, Phase 1 verified)
+# (legacy V3.27 working notes — pre-sprint-close, kept for audit trail)
 # ═══════════════════════════════════════════════════════════════════
 
-## Current state (post-sprint V3.27 25.04 wieczór)
+## Current state (post-sprint V3.27 25.04 wieczór, working draft)
 
 **6 flag LIVE** (od 17:39 UTC 25.04 + Phase 1 18:46 UTC):
 
