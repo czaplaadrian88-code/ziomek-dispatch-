@@ -97,7 +97,18 @@ def compute_chain_eta(
             warnings.append(f"OSRM error {type(e).__name__}, fallback haversine")
         try:
             hv = haversine_km(from_ll, to_ll)
-            return float(hv) * hav_mult * speed_multiplier
+            base_min = float(hv) * hav_mult * speed_multiplier
+            # B#M3 fix (2026-04-25): apply traffic multiplier consistent z OSRM
+            # happy path. OSRM route() przechodzi przez _apply_traffic_multiplier
+            # gdy ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER=True (osrm_client.py:117).
+            # Haversine fallback wcześniej tego nie robił → underestymacja w peak
+            # (15-17 z mult 1.6 = -37.5% drive_min). Flag-gated, parytet z OSRM.
+            try:
+                if getattr(C, "ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER", False):
+                    base_min *= float(C.get_traffic_multiplier(now_utc))
+            except Exception:
+                pass  # safety net — chain_eta nigdy nie crash na multiplier failure
+            return base_min
         except Exception as e2:
             warnings.append(f"haversine fallback failed: {type(e2).__name__}")
             return 0.0
