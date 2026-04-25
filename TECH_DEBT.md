@@ -290,6 +290,73 @@ post-deploy entry expected w shadow_decisions.jsonl po pierwszej decision.
 **Blast radius:** dispatch-shadow (primary). Zero decision change — wyłącznie
 obserwowalność (learning_log entries dostają więcej kluczy).
 
+#### V326-BUG-A-ANCHOR-SCORING — km_to_pickup chronological-last-drop misleading → **FIXED 2026-04-25 (LIVE flip 14:20)**
+**STATUS:** FIXED in commits `c1020ef` (decay 3→5) + `3b93bf3` (7-component complete) +
+`291b5a3` (flag flip True). Tag `v326-fix-bug-a-anchor-complete-2026-04-25`.
+**Bug:** `dispatch_pipeline.py:973` `km_to_pickup_haversine = haversine(plan.sequence[-1].drop, new_pickup) * 1.37`
+— chronological last drop ≠ insertion anchor. Adrian's #468404 case: km_to_pickup=15.91km z Plac
+Brodowicza (Choroszcz, far) NIE z Doner Kebab (anchor). Plus rationale display `-km*5` heuristic
+mylił operatorów (-79 dla 15.91km) gdy real impact ~0.15pt.
+**Fix:** 7 components — insertion_anchor.py NEW module + dispatch_pipeline.py distance source +
+DIST_DECAY_KM 3→5 + rationale (s_dystans actual contribution loss vs ideal) + Telegram label
+"X km do {anchor_restaurant}" + flag-gated + tests (8 unit tests insertion_anchor + 6 dist_decay).
+**LIVE post-flip 14:20:** anchor_used=True 4/5 fresh proposals, bliskosc rationale -19.95 dla km≈4.3.
+
+#### V326-BUG-B-EVENT-BUS-EVENT-TYPES — V3.19g1 incomplete deployment → **FIXED 2026-04-25 (LIVE)**
+**STATUS:** FIXED in commit `615b60e`. Tag `v326-fix-bug-b-event-bus-2026-04-25`.
+**Bug:** `event_bus.py:21` EVENT_TYPES set NIE zawierał "CZAS_KURIERA_UPDATED". panel_watcher
+emituje event (V3.19g1), state_machine ma handler (line 316), ALE event_bus.py:76 raises
+ValueError "Nieznany event_type" → state_machine NIGDY dostał update → orders_state stale czas_kuriera.
+**Evidence pre-fix:** watcher.log 2026-04-24 11:49+ 10× consecutive errors.
+**Fix:** 1-line addition do EVENT_TYPES set. Trivial.
+**LIVE post-restart 13:20:** zero "Nieznany event_type" errors.
+
+#### V326-BUG-C-PO-DRODZE-STRICT — geometric-only check, missing time + intervening → **FIXED 2026-04-25 (LIVE flip 14:20)**
+**STATUS:** FIXED in commit `34ff770` + flip `291b5a3`. Tag `v326-fix-bug-c-po-drodze-strict-2026-04-25`.
+**Bug:** `dispatch_pipeline.py:850` `bundle_level3 = dev<2.0km` (geometric only). Adrian #468461
+case: Maison 1.02km od Sweet Fit fires "po drodze" mimo 33min apart + 2 intervening stops.
+**Fix:** flag-gated strict mode dodaje time proximity (±10min) + intervening_stops_count=0 (gdy
+plan + anchor available). Configurable thresholds w common.py: PO_DRODZE_DIST_KM,
+PO_DRODZE_TIME_DIFF_MIN, PO_DRODZE_MAX_INTERVENING.
+
+#### V326-BUG-D-PO-ODBIORZE-ANCHOR — first geographic match → anchor-based → **FIXED 2026-04-25 (LIVE flip 14:20)**
+**STATUS:** FIXED in commit `b17bd36` + flip `291b5a3`. Tag `v326-fix-bug-d-anchor-2026-04-25`.
+**Bug:** `dispatch_pipeline.py:824` bundle_level2 iteruje po bag_raw, pierwszy geographic match.
+NON-deterministic. Adrian #468404: "po odbiorze z Maison +1.02km" mylące bo Maison to chronologically
+3rd pickup w plan, NIE poprzedni.
+**Fix:** anchor-based via insertion_anchor module (Bug A reuse). Flag-gated.
+**LIVE:** insertion_idx=0 cases → bundle_level2 cleared (zachowuje "no message" UX).
+
+#### V326-VENV-DISPATCH-SETUP — dedicated venv dla dispatch_v2 + ortools → **DONE 2026-04-25**
+**STATUS:** DONE in commit `d20ff90`. Tag `v326-venv-dispatch-setup-2026-04-25`.
+Adrian's strategic decision (Opcja B): long-term clean dependency isolation zamiast
+`--break-system-packages` debt. Created `/root/.openclaw/venvs/dispatch/` Python 3.12.3 + ortools
+9.15.6755 + numpy/pandas/protobuf etc. Migrated 7 systemd units (dispatch-shadow, panel-watcher,
+telegram, czasowka, gps, plan-recheck, sla-tracker) z `/usr/bin/python3` na venv interpreter.
+Backupy unit files w `systemd_backups_2026-04-25/`. Pinned versions w `requirements-dispatch-venv.txt`.
+**LIVE:** restart 13:20 confirms venv loaded, 7/7 dispatch_v2 modules import OK.
+
+#### V326-FIX-6-OR-TOOLS-TSP — replace bruteforce + greedy z OR-Tools → **FIXED 2026-04-25 (LIVE flip 14:20, latency tune 14:44)**
+**STATUS:** FIXED in commits `0902728` (module + integration) + `fb11fcc` (flag flip) +
+`5623d39` (latency tune 200→50ms). Tags `v326-fix-tsp-or-tools-2026-04-25`,
+`v326-fix-or-tools-latency-regression-2026-04-25`.
+**Bug:** greedy zigzag pattern dla bag>3 (Adrian #468404: 3 zigzags centrum↔Antoniuk).
+**Fix:** NEW tsp_solver.py module z OR-Tools constraint programming. Pickup-and-delivery problem
+z time-bounded 50ms search per kandydat. Fallback do greedy gdy INFEASIBLE. Strategy field "ortools".
+**Latency observation:** post-flip 200ms × 10 candidates = 2000ms regression. Tune 50ms → ~580ms p95
+acceptable. Sequential per-candidate (parallel execution defer dla future optimization).
+
+#### V326-FIX-7-SAME-RESTAURANT-GROUPING — pre-pass przed TSP → **FIXED 2026-04-25 (LIVE flip 14:20)**
+**STATUS:** FIXED in commits `dd642ea` + flip `fb11fcc`. Tag
+`v326-fix-same-restaurant-grouping-2026-04-25`.
+**Bug:** 2 ordery same restaurant (np. Doner Kebab 468401+468402) z compatible czas/quadrant
+nie były groupowane przed TSP → 2 osobne pickup runs (zigzag). Adrian's #468404 NIE jest grupowany
+(24min apart + distant) — confirms NIE false positive grouping.
+**Fix:** NEW same_restaurant_grouper.py (~190 lines) z group_orders_by_restaurant + greedy partial
+grouping dla 3+ orders. Integration w simulate_bag_route_v2 (super-pickup nodes z group_oids
+attribute). _simulate_sequence super-pickup zapisuje pickup_at[oid] dla wszystkich w grupie z
+single DWELL_PICKUP_MIN.
+
 #### V326-H2-R06-BAG1-FIX — R-06 trajectory blocked dla bag=1 → **FIXED 2026-04-25 (shadow)**
 **STATUS:** FIXED (shadow) in commit `74e9f80` + tag
 `v326-fix-h2-r06-bag1-shadow-2026-04-25` (sprint 2026-04-25 sobota Block 2).
