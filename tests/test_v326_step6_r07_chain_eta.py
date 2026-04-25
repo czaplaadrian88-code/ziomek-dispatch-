@@ -7,6 +7,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -249,16 +250,22 @@ def main():
            r.starting_point != "gps", f"got {r.starting_point}")
 
     # --- T11: OSRM timeout (returns None) → haversine × mult ---
-    print("\n=== T11 OSRM timeout → haversine × 2.5 fallback ===")
+    # Note: B#M3 fix (2026-04-25) added flag-gated traffic_multiplier do
+    # haversine fallback. T11 historic invariant `2km × 2.5 = 5min` mock'uje
+    # ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER=False żeby zachować pre-BM3 contract.
+    # Separate test (test_bm3_chain_eta_haversine_traffic.py) sprawdza
+    # flag=True path z traffic mult applied.
+    print("\n=== T11 OSRM timeout → haversine × 2.5 fallback (flag=False) ===")
     def osrm_none(a, b): return None
     hav11 = _mk_hav({(POS_GPS, MAMA_PU): 2.0})  # 2 km haversine
-    r = chain_eta.compute_chain_eta(
-        courier_pos=POS_GPS, pos_source="gps", pos_age_min=1,
-        bag_orders=[],
-        proposal_pickup_coords=MAMA_PU,
-        proposal_scheduled_utc=now + timedelta(minutes=1),
-        now_utc=now, osrm_drive_min=osrm_none, haversine_km=hav11,
-    )
+    with mock.patch.object(common, "ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER", False):
+        r = chain_eta.compute_chain_eta(
+            courier_pos=POS_GPS, pos_source="gps", pos_age_min=1,
+            bag_orders=[],
+            proposal_pickup_coords=MAMA_PU,
+            proposal_scheduled_utc=now + timedelta(minutes=1),
+            now_utc=now, osrm_drive_min=osrm_none, haversine_km=hav11,
+        )
     # Fallback: 2 km × 2.5 = 5 min → max(now+5, now+1) = now+5
     expect("T11 fallback haversine used",
            r.effective_eta_utc == now + timedelta(minutes=5),
