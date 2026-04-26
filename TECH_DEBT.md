@@ -178,14 +178,38 @@
 - Effort: 1-2h (tworzy `osrm-compose.yml` lub dorzuca do `/root/openclaw/docker-compose.yml`, dodaje monitoring)
 - Conditional: post V3.27.1 sesja 1 + 2 stable
 
-### V3.28-EVENT-BUS-CONSUMER-STUCK [MEDIUM diagnostic, 2-4h]
+### V3.28-EVENT-BUS-CONSUMER-STUCK [MEDIUM, 2-4h diagnose+fix] — ESCALATED 2026-04-26 sesja 1 Krok 7
 
-- `event_bus.processed` counter stuck od ~14:01:32 2026-04-26 (od OSRM downtime)
-- pending rośnie monotonicznie ~2/min, processed flat
-- shadow_dispatcher MAIN LOOP działa normalnie (proposals OK), ale event_bus consumer thread wygląda dead
-- Kandydaci do diagnozy: plan_manager / sticky TSP / packs ghost reverse consumer
-- Workaround: defer (nie blokuje proposals); prawdopodobnie restart dispatch-shadow naprawi
-- Effort: 2-4h (diagnose root cause, fix lub document acceptable behavior)
+- Empirical observation 2026-04-26 sesja 1 Krok 7 post-restart shadow PID 19450:
+  consumer PRZERABIA 1 event (processed counter 6664 → 6665), potem znów się zacina.
+- Hipoteza initial "SQLite-persisted bug, restart NIE pomaga" OBALONA via heartbeat
+  data 16:00→16:06 (Lekcja #5 + #19: empirical hypothesis revision):
+  ```
+  16:00:28: pending:8852 / processed:6664   ← post-restart (immediately)
+  16:01:29: pending:8856 / processed:6665   ← +1 (consumer ALIVE first cycle!)
+  16:02:29: pending:8857 / processed:6665   ← stuck znowu
+  16:03→16:06: stuck na 6665 (5 min flat)
+  ```
+- To NIE SQLite-persisted bug — to **intermittent consumer thread crash/deadlock
+  po pierwszym cycle**.
+- pending rośnie ~1/min, w 24h ≈ 1500+ stuck. Main loop proposals NIE blokowane
+  (proposes działają OK), ale event_bus consumer wymaga kolejnego restart żeby
+  obsłużyć następny event.
+- Możliwe przyczyny do diagnozy:
+  1. Consumer thread crash po wyjątku (no auto-restart, no supervision)
+  2. SQLite write lock contention (consumer reader vs main writer)
+  3. Race condition: process event, fail, no retry, zaciska
+  4. Worker thread death + brak supervisor pattern
+- Rekomendowana diagnostyka:
+  - stderr logging w consumer thread (capture exceptions silently swallowed)
+  - thread heartbeat counter (osobny od `totals.processed` żeby distinguish
+    main loop alive vs consumer alive)
+  - SQLite lock metrics (`pragma busy_timeout`, busy retries)
+- Tymczasowa mitigacja: brak (main loop działa OK, proposals nie blokowane).
+  Workaround conditionally: dispatch-shadow restart 1×/dzień jako band-aid
+  (każdy restart procesuje 1 event). NIE rekomendowane na dłużej.
+- Effort: 2-4h thread debug + fix
+- Conditional: V3.28 EARLY tygodnia (priority MEDIUM po empirical findings)
 
 ### V3.28-CLEANUP-BAK-FILES [LOW, 30 min]
 
@@ -242,6 +266,22 @@
 - Pre-existing pre-V3.27.1, verified identical via git stash 2026-04-26
 - Effort: 15-30 min (small scope)
 - Conditional: V3.28+
+
+### V3.28-VENV-REQUIREMENTS-OUTSIDE-REPO [LOW, 30-60 min]
+
+- `/root/.openclaw/venvs/dispatch/requirements.txt` poza dispatch_v2 git repo
+  (`fatal: ... is outside repository at .../dispatch_v2`)
+- V3.27.1 sesja 1 Krok 1.5 dodał pytest+pytest-mock+pytest-asyncio do venv jako
+  side-effect, ale plik nie version-controlled
+- Następny rebuild venv zapomni te dependencies → custom test runner pattern
+  pozostanie wymuszony albo manual install repeat
+- Adrian decision options dla V3.28+:
+  (a) Move venv requirements do `dispatch_v2/requirements-venv.txt` (tracked
+      w głównym repo)
+  (b) Setup separate `/root/.openclaw/venvs` git repo z requirements
+  (c) Document w CLAUDE.md "post-venv-rebuild manual install pytest+mock+asyncio"
+- Effort: 30-60 min (depending na opcję)
+- Conditional: V3.28+ infra cleanup sprint
 
 ## 🧪 TEST GAP (Lekcja #24 — RESOLVED in V3.27)
 
