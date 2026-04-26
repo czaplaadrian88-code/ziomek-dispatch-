@@ -1239,7 +1239,7 @@ V327_MIN_OR_TOOLS_BAG_AFTER = 2  # bag>=1 → OR-Tools; bag=0 → bruteforce fas
 # patologie i daje solverowi przestrzeń. Wait penalty (ENABLE_V327_WAIT_PENALTY,
 # osobny flag) działa SOFT w środku okna; time window działa HARD na +60.
 ENABLE_V327_TSP_TIME_WINDOWS = _os.environ.get(
-    "ENABLE_V327_TSP_TIME_WINDOWS", "0") == "1"  # default False — flip jutro post lunch peak
+    "ENABLE_V327_TSP_TIME_WINDOWS", "1") == "1"  # V3.27.1 sesja 2 atomic flip 2026-04-26 ~19:00 Warsaw
 V327_PICKUP_TIME_WINDOW_CLOSE_MIN = 60.0  # +60min od pickup_ready_at hard close
 V327_DROP_TIME_WINDOW_MAX_MIN = 120.0  # delivery/courier nodes: luźne okno (effectively no constraint)
 
@@ -1250,7 +1250,7 @@ V327_DROP_TIME_WINDOW_MAX_MIN = 120.0  # delivery/courier nodes: luźne okno (ef
 # per pickup w plan.sequence — sumarycznie do score kandydata. Quadratic
 # dyskredytuje sequence z duzym wait, push solver ku tighter scheduling.
 ENABLE_V327_WAIT_PENALTY = _os.environ.get(
-    "ENABLE_V327_WAIT_PENALTY", "0") == "1"  # default False — flip jutro post lunch peak
+    "ENABLE_V327_WAIT_PENALTY", "1") == "1"  # V3.27.1 sesja 2 atomic flip 2026-04-26 ~19:00 Warsaw
 V327_WAIT_PENALTY_TABLE = [
     (20.0, 0.0),       # sweet spot
     (25.0, -10.0),
@@ -1271,7 +1271,7 @@ V327_WAIT_PENALTY_HARD_FALLBACK = -1000.0  # safety net dla wait > 60min (poza t
 # single threshold — hard limits systemically block top performers (Bartek peak bag=8-11)".
 # Parallel fetchy via ThreadPoolExecutor(max_workers=len(fetch_oids)) — bez ceiling.
 ENABLE_V327_PRE_PROPOSAL_RECHECK = _os.environ.get(
-    "ENABLE_V327_PRE_PROPOSAL_RECHECK", "0") == "1"  # default False — flip atomic z TSP+Wait
+    "ENABLE_V327_PRE_PROPOSAL_RECHECK", "1") == "1"  # V3.27.1 sesja 2 atomic flip 2026-04-26 ~19:00 Warsaw
 V327_PRE_PROPOSAL_RECHECK_AGE_MIN = 10.0  # skip jeśli order assigned <10 min ago (świeży)
 V327_PRE_PROPOSAL_RECHECK_CACHE_TTL_SEC = 300.0  # skip jeśli last recheck <5 min ago
 V327_PRE_PROPOSAL_RECHECK_FETCH_TIMEOUT_SEC = 2.0  # 2s budget per fetch (vs default 10s)
