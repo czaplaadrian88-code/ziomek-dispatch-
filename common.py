@@ -1262,6 +1262,23 @@ V327_WAIT_PENALTY_TABLE = [
 ]
 V327_WAIT_PENALTY_HARD_FALLBACK = -1000.0  # safety net dla wait > 60min (poza tabelą)
 
+# V3.27.1 sesja 2 — Pre-proposal czas_kuriera recheck (Mechanizm 3 hybrydowy).
+# Per Adrian sesja 2 spec: dla bagu kandydata kuriera, PRZED scoring force fetch
+# fresh czas_kuriera z panel jeśli (assignment age >10 min AND last recheck >5 min).
+# In-memory cache `_v327_pre_recheck_last_seen` w dispatch_pipeline (Blocker 1 Opcja C
+# — clean separation, zero schema migration).
+# ZERO max bag limit per Plik wiedzy #1: "BAG caps zawsze per-courier policy, never
+# single threshold — hard limits systemically block top performers (Bartek peak bag=8-11)".
+# Parallel fetchy via ThreadPoolExecutor(max_workers=len(fetch_oids)) — bez ceiling.
+ENABLE_V327_PRE_PROPOSAL_RECHECK = _os.environ.get(
+    "ENABLE_V327_PRE_PROPOSAL_RECHECK", "0") == "1"  # default False — flip atomic z TSP+Wait
+V327_PRE_PROPOSAL_RECHECK_AGE_MIN = 10.0  # skip jeśli order assigned <10 min ago (świeży)
+V327_PRE_PROPOSAL_RECHECK_CACHE_TTL_SEC = 300.0  # skip jeśli last recheck <5 min ago
+V327_PRE_PROPOSAL_RECHECK_FETCH_TIMEOUT_SEC = 2.0  # 2s budget per fetch (vs default 10s)
+V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_AGE_SEC = 3600.0  # TTL 1h dla in-memory cache eviction
+V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_EVERY = 100  # trigger eviction co 100 calls
+V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_MAX_SIZE = 1000  # OR jeśli cache size > 1000
+
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
 # Adrian's specification: grupujemy ordery z tej samej restauracji TYLKO gdy
 # czas_kuriera ±5 min AND drop quadrants compatible (same lub adjacent w

@@ -18,6 +18,7 @@ from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2, DWELL_PICKUP_M
 from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2 import scoring
 from dispatch_v2 import common as C
+from dispatch_v2 import panel_client  # V3.27.1 sesja 2: pre-proposal recheck (Blocker 2 Opcja A)
 from dispatch_v2.common import (
     parse_panel_timestamp,
     WARSAW,
@@ -29,8 +30,217 @@ from dispatch_v2.osrm_client import haversine
 from dispatch_v2.bag_state import build_courier_bag_state, CourierBagState
 from dispatch_v2.fleet_context import build_fleet_context, FleetContext
 import math
+import threading  # V3.27.1 sesja 2: in-memory cache lock dla pre-proposal recheck
 
 log = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# V3.27.1 sesja 2 — Pre-proposal czas_kuriera recheck (Mechanizm 3 hybrydowy)
+# ═══════════════════════════════════════════════════════════════════
+# Module-level singleton in-memory cache (Blocker 1 Opcja C — clean separation,
+# zero schema migration). Cache survives across dispatch calls, evicted by TTL
+# co N calls lub max size (whichever first).
+# Thread-safe via Lock dla parallel candidates w ThreadPoolExecutor.
+_v327_pre_recheck_last_seen: Dict[str, datetime] = {}
+_v327_pre_recheck_lock = threading.Lock()
+_v327_pre_recheck_call_counter = 0
+
+
+def _v327_evict_old_pre_recheck_entries(now: datetime) -> int:
+    """V3.27.1 sesja 2: TTL-based eviction (default 1h).
+
+    Trigger conditions:
+    - Co N calls (V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_EVERY)
+    - OR cache size > max (V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_MAX_SIZE)
+
+    Returns count of evicted entries.
+    """
+    cutoff = now - timedelta(seconds=C.V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_AGE_SEC)
+    with _v327_pre_recheck_lock:
+        keys_to_remove = [k for k, v in _v327_pre_recheck_last_seen.items() if v < cutoff]
+        for k in keys_to_remove:
+            del _v327_pre_recheck_last_seen[k]
+    return len(keys_to_remove)
+
+
+def _v327_safe_fetch_czas_kuriera(oid: str, timeout: float = None) -> Optional[str]:
+    """V3.27.1 sesja 2: defensive fetch z panel z timeout.
+
+    Returns fresh czas_kuriera_warsaw ISO string lub None gdy fail/missing.
+    Zero exceptions raised — log WARN i return None.
+    """
+    if timeout is None:
+        timeout = C.V327_PRE_PROPOSAL_RECHECK_FETCH_TIMEOUT_SEC
+    try:
+        fresh = panel_client.fetch_order_details(oid, timeout=int(timeout))
+        if fresh is None:
+            return None
+        # Panel returns "czas_kuriera" (HH:MM) and downstream normalizes do *_warsaw.
+        # Caller (helper main) compares to existing state value.
+        return fresh.get("czas_kuriera_warsaw") or fresh.get("czas_kuriera")
+    except Exception as e:
+        log.warning(f"V3.27.1 _v327_safe_fetch_czas_kuriera oid={oid} fail: {e}")
+        return None
+
+
+def _v327_compute_delta_min(old_iso: Optional[str], new_iso: Optional[str]) -> Optional[float]:
+    """Compute delta minutes z 2 ISO timestamps. None gdy old/new missing lub parse fail."""
+    if not old_iso or not new_iso:
+        return None
+    try:
+        old_dt = datetime.fromisoformat(old_iso)
+        new_dt = datetime.fromisoformat(new_iso)
+        return round((new_dt - old_dt).total_seconds() / 60.0, 2)
+    except Exception:
+        return None
+
+
+def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
+                                   old_ck: Optional[str], new_ck: str,
+                                   now: datetime) -> None:
+    """V3.27.1 sesja 2: emit synth CZAS_KURIERA_UPDATED event z source=pre_proposal_recheck.
+
+    Side-effect: event_bus.emit + state_machine.update_from_event w background.
+    Event_id deterministyczny: {oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{epoch_ms} —
+    unique per emit, dedup-safe (legitimate 2× zmiana w minucie = 2 events).
+    """
+    from dispatch_v2.event_bus import emit as _eb_emit
+    from dispatch_v2.state_machine import update_from_event as _sm_apply
+
+    delta_min = _v327_compute_delta_min(old_ck, new_ck)
+    timestamp_ms = int(now.timestamp() * 1000)
+    event_id = f"{oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{timestamp_ms}"
+
+    payload = {
+        "oid": oid,
+        "courier_id": courier_id,
+        "old_ck_iso": old_ck,
+        "old_ck_hhmm": None,  # tylko ISO znamy z fresh fetch
+        "new_ck_iso": new_ck,
+        "new_ck_hhmm": None,
+        "delta_min": delta_min,
+        "source": "pre_proposal_recheck",
+    }
+    event = {
+        "event_type": "CZAS_KURIERA_UPDATED",
+        "order_id": oid,
+        "courier_id": courier_id,
+        "payload": payload,
+    }
+    try:
+        _eb_emit("CZAS_KURIERA_UPDATED",
+                 order_id=oid, courier_id=courier_id or "",
+                 payload=payload, event_id=event_id)
+        _sm_apply(event)
+        delta_str = f"Δ={delta_min:+.1f}min" if delta_min is not None else "Δ=null"
+        log.info(f"V3.27.1 pre_proposal_recheck oid={oid} {old_ck or 'null'}→{new_ck} {delta_str}")
+    except Exception as e:
+        log.warning(f"V3.27.1 _v327_emit_pre_recheck_event oid={oid} fail: {e}")
+
+
+def get_fresh_czas_kuriera_for_bag(bag_orders: List[OrderSim],
+                                     now: datetime) -> Dict[str, Optional[str]]:
+    """V3.27.1 sesja 2: Pre-proposal czas_kuriera recheck dla orders w bagu kandydata.
+
+    Mechanizm 3 hybrydowy (Adrian sesja 2 spec):
+    - SKIP fetch dla orders z assigned_at <10 min temu (świeże, panel-watcher caught up)
+    - SKIP fetch dla orders z last_recheck <5 min temu (in-memory cache)
+    - FORCE fetch w przeciwnym wypadku, parallel via ThreadPoolExecutor
+    - ZERO max bag limit (Bartek peak bag=8-11 expected, Plik wiedzy #1)
+    - Defensive fallback do cached state value przy fetch failure
+    - Emit synth CZAS_KURIERA_UPDATED z source=pre_proposal_recheck przy detected change
+
+    Args:
+        bag_orders: lista OrderSim w bagu kandydata kuriera
+        now: timezone-aware datetime
+
+    Returns:
+        Dict[oid, czas_kuriera_warsaw_iso] — fresh OR cached values per oid.
+        Caller MOŻE override bag_orders[i].czas_kuriera_warsaw values dla downstream
+        scoring/TSP gdy fresh != cached.
+    """
+    global _v327_pre_recheck_call_counter
+
+    if not C.ENABLE_V327_PRE_PROPOSAL_RECHECK:
+        # Flag-gated short-circuit — return cached state values
+        return {o.order_id: getattr(o, "czas_kuriera_warsaw", None) for o in bag_orders}
+
+    # Counter increment + eviction trigger
+    _v327_pre_recheck_call_counter += 1
+    cache_size = len(_v327_pre_recheck_last_seen)
+    if (_v327_pre_recheck_call_counter % C.V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_EVERY == 0
+            or cache_size > C.V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_MAX_SIZE):
+        evicted = _v327_evict_old_pre_recheck_entries(now)
+        if evicted > 0:
+            log.debug(f"V3.27.1 pre_recheck cache evicted {evicted} entries (size now={len(_v327_pre_recheck_last_seen)})")
+
+    # Build per-oid decision (skip vs fetch)
+    results: Dict[str, Optional[str]] = {}
+    fetch_oids: List[str] = []
+    bag_by_oid = {o.order_id: o for o in bag_orders}
+
+    for o in bag_orders:
+        oid = o.order_id
+        cached_ck = getattr(o, "czas_kuriera_warsaw", None)
+        results[oid] = cached_ck  # default: cached (overwritten if fetch happens)
+
+        # Skip 1: świeży assignment (<10 min)
+        assigned_at_iso = getattr(o, "assigned_at", None)
+        if assigned_at_iso:
+            try:
+                assigned_at = datetime.fromisoformat(str(assigned_at_iso))
+                age_min = (now - assigned_at).total_seconds() / 60.0
+                if age_min < C.V327_PRE_PROPOSAL_RECHECK_AGE_MIN:
+                    continue  # too fresh, skip fetch
+            except Exception:
+                pass  # parse fail → continue do cache check
+
+        # Skip 2: świeży recheck cache (<5 min)
+        with _v327_pre_recheck_lock:
+            last_recheck = _v327_pre_recheck_last_seen.get(oid)
+        if last_recheck is not None:
+            cache_age_sec = (now - last_recheck).total_seconds()
+            if cache_age_sec < C.V327_PRE_PROPOSAL_RECHECK_CACHE_TTL_SEC:
+                continue  # cache still fresh, skip fetch
+
+        # Force fetch
+        fetch_oids.append(oid)
+
+    # Parallel fetchy bez max ceiling (ZERO bag limit per Adrian)
+    if fetch_oids:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=len(fetch_oids),
+                                  thread_name_prefix="v327_recheck") as executor:
+            future_to_oid = {
+                executor.submit(_v327_safe_fetch_czas_kuriera, oid): oid
+                for oid in fetch_oids
+            }
+            for future in as_completed(future_to_oid):
+                oid = future_to_oid[future]
+                try:
+                    fresh_ck = future.result()
+                except Exception as e:
+                    log.warning(f"V3.27.1 pre_recheck future oid={oid} exc: {e}")
+                    fresh_ck = None
+
+                # Update cache timestamp regardless of result (avoid retry storms)
+                with _v327_pre_recheck_lock:
+                    _v327_pre_recheck_last_seen[oid] = now
+
+                if fresh_ck is None:
+                    continue  # defensive: zostaje cached value w results
+
+                # Compare z cached value
+                bag_o = bag_by_oid.get(oid)
+                cached_ck = getattr(bag_o, "czas_kuriera_warsaw", None) if bag_o else None
+                if fresh_ck != cached_ck:
+                    # Detected change — emit synth event + update results
+                    courier_id = str(getattr(bag_o, "courier_id", "") or "") if bag_o else ""
+                    _v327_emit_pre_recheck_event(oid, courier_id, cached_ck, fresh_ck, now)
+                    results[oid] = fresh_ck
+
+    return results
 
 
 BLIND_POS_SOURCES = ("no_gps", "pre_shift", "none")
@@ -674,7 +884,7 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     status = d.get("status", "assigned")
     pickup_c = d.get("pickup_coords") or (0.0, 0.0)
     deliv_c = d.get("delivery_coords") or (0.0, 0.0)
-    return OrderSim(
+    sim = OrderSim(
         order_id=str(d.get("order_id") or d.get("id") or ""),
         pickup_coords=tuple(pickup_c),
         delivery_coords=tuple(deliv_c),
@@ -682,6 +892,13 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
         status="picked_up" if status == "picked_up" else "assigned",
         pickup_ready_at=pra,  # F2.1c R8 T_KUR propagation
     )
+    # V3.27.1 sesja 2: dynamic attrs dla pre-proposal recheck helper.
+    # OrderSim dataclass NIE ma tych pól w declaration, ale Python pozwala
+    # dodać atrybuty per-instance. Helper czyta z getattr() z None fallback.
+    sim.czas_kuriera_warsaw = d.get("czas_kuriera_warsaw")
+    sim.assigned_at = d.get("assigned_at")
+    sim.courier_id = d.get("courier_id")
+    return sim
 
 
 def _oldest_in_bag_min(bag: List[OrderSim], now: datetime) -> Optional[float]:
@@ -815,6 +1032,24 @@ def assess_order(
             return None
         bag_raw = getattr(cs, "bag", []) or []
         bag_sim = [_bag_dict_to_ordersim(b) for b in bag_raw]
+
+        # V3.27.1 sesja 2: Pre-proposal czas_kuriera recheck dla bagu kandydata.
+        # Flag-gated (default False). Mechanizm 3 hybrydowy: 10min age + 5min cache,
+        # ZERO max bag limit (Bartek peak bag=8-11 expected). Parallel fetchy via
+        # ThreadPoolExecutor, defensive fallback do cached state przy fail.
+        # Side-effect: emit synth CZAS_KURIERA_UPDATED z source=pre_proposal_recheck.
+        if bag_sim and C.ENABLE_V327_PRE_PROPOSAL_RECHECK:
+            try:
+                _fresh_ck_dict = get_fresh_czas_kuriera_for_bag(bag_sim, now)
+                # Override OrderSim.czas_kuriera_warsaw dla orders gdzie fresh != cached.
+                # Downstream scoring/TSP/feasibility używa updated values w tym candidate run.
+                for _bo in bag_sim:
+                    _fresh = _fresh_ck_dict.get(_bo.order_id)
+                    if _fresh is not None and _fresh != getattr(_bo, "czas_kuriera_warsaw", None):
+                        _bo.czas_kuriera_warsaw = _fresh
+            except Exception as _e:
+                log.warning(f"V3.27.1 pre_recheck oid_new={getattr(order, 'order_id', '?')} cid={cid} fail: {_e}")
+                # Defensive: continue z cached bag_sim values (zero behavior change)
 
         # POZIOM 1 same-restaurant: order w bagu ze statusem "assigned" (kurier
         # jeszcze JEDZIE do pickupu) z tej samej restauracji co nowy order.

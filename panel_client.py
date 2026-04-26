@@ -267,8 +267,13 @@ def _open_with_relogin(req: urllib.request.Request, timeout: float = 10):
     raise RuntimeError("_open_with_relogin: unreachable")
 
 
-def fetch_order_details(zid: str, csrf: Optional[str] = None) -> Optional[dict]:
-    """POST edit-zamowienie. Zwraca surowy dict 'zlecenie' lub None."""
+def fetch_order_details(zid: str, csrf: Optional[str] = None, timeout: int = 10) -> Optional[dict]:
+    """POST edit-zamowienie. Zwraca surowy dict 'zlecenie' lub None.
+
+    V3.27.1 sesja 2 (2026-04-26): dodano `timeout` parametr (default 10 backward compat).
+    Pre-proposal recheck używa timeout=2 żeby nie blokować dispatch pipeline (Blocker 3
+    Opcja A). Caller może override per-use-case — np. 5s dla quick health checks.
+    """
     if csrf is None:
         _, csrf, _ = login()
     opener = _session["opener"]
@@ -285,7 +290,7 @@ def fetch_order_details(zid: str, csrf: Optional[str] = None) -> Optional[dict]:
                 "Referer": f"{BASE_URL}/admin2017/new/orders/zlecenia",
             },
         )
-        raw = _open_with_relogin(req, timeout=10).read().decode("utf-8", errors="replace")
+        raw = _open_with_relogin(req, timeout=timeout).read().decode("utf-8", errors="replace")
         _parsed = json.loads(raw)
         _zlecenie = _parsed.get("zlecenie")
         if isinstance(_zlecenie, dict):
