@@ -1231,6 +1231,37 @@ V326_OR_TOOLS_TIME_LIMIT_MS = 200  # V3.27 (2026-04-25 wieczór): RESTORED 50→
 # Empirically expected -150 to -300ms p95 wall time (D2 ground truth #468613).
 V327_MIN_OR_TOOLS_BAG_AFTER = 2  # bag>=1 → OR-Tools; bag=0 → bruteforce fast path
 
+# V3.27.1 BUG-2 — TSP time windows (sprint sesja 1, 2026-04-26).
+# Pre-V3.27.1 _ortools_plan przekazywał time_windows=None — TSP minimalizował
+# czysty distance ignorując pickup_ready_at, sequencer dawał patologie typu
+# 53min wait (case #468733 Chicago Pizza). Adrian's spec: +35min hard close
+# zbyt restrictive (częste INFEASIBLE → fallback do bug), +60min blokuje
+# patologie i daje solverowi przestrzeń. Wait penalty (ENABLE_V327_WAIT_PENALTY,
+# osobny flag) działa SOFT w środku okna; time window działa HARD na +60.
+ENABLE_V327_TSP_TIME_WINDOWS = _os.environ.get(
+    "ENABLE_V327_TSP_TIME_WINDOWS", "0") == "1"  # default False — flip jutro post lunch peak
+V327_PICKUP_TIME_WINDOW_CLOSE_MIN = 60.0  # +60min od pickup_ready_at hard close
+V327_DROP_TIME_WINDOW_MAX_MIN = 120.0  # delivery/courier nodes: luźne okno (effectively no constraint)
+
+# V3.27.1 Wait penalty — Adrian's quadratic table (sprint sesja 1, 2026-04-26).
+# W środku okna time_window (60min hard close) działa SOFT scoring penalty
+# rosnący quadratically. Decyzja Adriana: sweet spot ≤20 min, +10 pkt/5min do 30,
+# +20 do 35, +60 do 40, +100 do 50, +300 do 60 (extrapolacja). Zaplikowane
+# per pickup w plan.sequence — sumarycznie do score kandydata. Quadratic
+# dyskredytuje sequence z duzym wait, push solver ku tighter scheduling.
+ENABLE_V327_WAIT_PENALTY = _os.environ.get(
+    "ENABLE_V327_WAIT_PENALTY", "0") == "1"  # default False — flip jutro post lunch peak
+V327_WAIT_PENALTY_TABLE = [
+    (20.0, 0.0),       # sweet spot
+    (25.0, -10.0),
+    (30.0, -30.0),
+    (35.0, -90.0),
+    (40.0, -150.0),
+    (50.0, -400.0),    # ekstrapolacja
+    (60.0, -700.0),    # near hard limit (time_window close +60min)
+]
+V327_WAIT_PENALTY_HARD_FALLBACK = -1000.0  # safety net dla wait > 60min (poza tabelą)
+
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
 # Adrian's specification: grupujemy ordery z tej samej restauracji TYLKO gdy
 # czas_kuriera ±5 min AND drop quadrants compatible (same lub adjacent w

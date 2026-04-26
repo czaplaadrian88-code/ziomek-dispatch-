@@ -1364,7 +1364,11 @@ def assess_order(
         #   no_gps     → max(15, prep_remaining_min)   (zgodne z linią 450)
         #   pre_shift  → shift_start_min                (zgodne z linią 465)
         #   inne       → drive_min                       (bez zmian dla GPS)
-        bonus_r9_wait_pen = 0.0
+        # Legacy R9 wait penalty (linear, single new-pickup) — ZAWSZE compute,
+        # niezależnie od flag, dla shadow log A/B comparison V3.27.1 vs legacy.
+        # Lekcja #11: Replay/audit ≠ production validation; side-by-side w shadow
+        # przed flip = najlepsze pre-flip validation.
+        bonus_r9_wait_pen_legacy = 0.0
         if pickup_ready_at is not None:
             _pos_src = getattr(cs, "pos_source", None)
             if _pos_src == "no_gps":
@@ -1377,7 +1381,52 @@ def assess_order(
             tkur_from_now_min = (pickup_ready_at - now).total_seconds() / 60.0
             wait_pred_min = max(0.0, tkur_from_now_min - effective_drive_min)
             if wait_pred_min > C.RESTAURANT_WAIT_SOFT_MIN:
-                bonus_r9_wait_pen = -(wait_pred_min - C.RESTAURANT_WAIT_SOFT_MIN) * C.RESTAURANT_WAIT_PENALTY_PER_MIN
+                bonus_r9_wait_pen_legacy = -(wait_pred_min - C.RESTAURANT_WAIT_SOFT_MIN) * C.RESTAURANT_WAIT_PENALTY_PER_MIN
+
+        # V3.27.1 Wait penalty (Adrian's quadratic table) — flag-gated.
+        # SUMMED per pickup w plan.sequence (new pickup + bag pickups not-yet-picked-up).
+        # Helper compute_wait_penalty(wait_min) z scoring.py — linear interpolacja
+        # między punktami tabeli, hard fallback -1000 dla wait > 60min.
+        # Computed osobno (additive z legacy w serializacji), score używa v327 gdy
+        # flag=True, legacy gdy False. Legacy ZAWSZE w serialize dla A/B compare.
+        bonus_r9_wait_pen_v327 = 0.0
+        if getattr(C, "ENABLE_V327_WAIT_PENALTY", False) and plan is not None:
+            from datetime import datetime as _dt327
+            from dispatch_v2.scoring import compute_wait_penalty as _v327_wp
+            _new_oid = getattr(new_order, "order_id", None)
+            _bag_by_oid_v327 = {b.order_id: b for b in bag_sim} if bag_sim else {}
+            _plan_pickup_at = getattr(plan, "pickup_at", None) or {}
+            _plan_seq = getattr(plan, "sequence", None) or []
+            _v327_wait_pen_sum = 0.0
+            for _oid in _plan_seq:
+                _str_oid = str(_oid)
+                # Find ready_at: new_order or bag order (skip already-picked-up)
+                _order_ready = None
+                if _str_oid == str(_new_oid):
+                    _order_ready = pickup_ready_at
+                elif _str_oid in _bag_by_oid_v327:
+                    _bo = _bag_by_oid_v327[_str_oid]
+                    if getattr(_bo, "picked_up_at", None) is None:
+                        _order_ready = getattr(_bo, "pickup_ready_at", None)
+                if _order_ready is None:
+                    continue
+                _pat_iso = _plan_pickup_at.get(_str_oid)
+                if not _pat_iso:
+                    continue
+                try:
+                    _pat_dt = _dt327.fromisoformat(str(_pat_iso))
+                    _wait_min = max(0.0, (_pat_dt - _order_ready).total_seconds() / 60.0)
+                    _v327_wait_pen_sum += _v327_wp(_wait_min)
+                except Exception:
+                    continue
+            bonus_r9_wait_pen_v327 = _v327_wait_pen_sum
+
+        # Score używa v327 gdy flag=True, legacy gdy False. Mutex (nie additive
+        # do score), ale OBA serializowane w shadow log dla A/B comparison.
+        if getattr(C, "ENABLE_V327_WAIT_PENALTY", False):
+            bonus_r9_wait_pen = bonus_r9_wait_pen_v327
+        else:
+            bonus_r9_wait_pen = bonus_r9_wait_pen_legacy
 
         # Wczytaj rule_weights (adaptive penalties R1/R5/R8)
         try:
@@ -1607,6 +1656,9 @@ def assess_order(
             "r8_violation_min": metrics.get("r8_violation_min", 0.0),
             "bonus_r9_stopover": round(bonus_r9_stopover, 2),
             "bonus_r9_wait_pen": round(bonus_r9_wait_pen, 2),
+            # V3.27.1: A/B comparison fields (legacy = always computed; v327 = 0 gdy flag=False)
+            "bonus_r9_wait_pen_legacy": round(bonus_r9_wait_pen_legacy, 2),
+            "bonus_r9_wait_pen_v327": round(bonus_r9_wait_pen_v327, 2),
             "bonus_penalty_sum": round(bonus_penalty_sum, 2),
             # Transparency OPCJA A (2026-04-19): order_id → (restaurant, delivery_address)
             # mapping dla route section w telegram_approver. Per-courier bag snapshot.

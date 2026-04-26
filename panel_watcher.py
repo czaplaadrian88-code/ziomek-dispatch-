@@ -306,9 +306,27 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
     # null→null
     if not old_ck_iso and not new_ck_iso:
         return None
-    # null→value (first acceptance — handled by NEW_ORDER/COURIER_ASSIGNED)
+    # V3.27.1 BUG-1: null→value (first acceptance) — emit synth event z source=first_acceptance.
+    # Pre-V3.27.1 zwracało None tutaj — efekt: 100% (47/47) assigned/picked_up orderów
+    # miało czas_kuriera_warsaw=None w orders_state.json. delta_min=None (brak baseline).
     if not old_ck_iso and new_ck_iso:
-        return None
+        payload = {
+            "oid": oid,
+            "courier_id": old_state.get("courier_id"),
+            "old_ck_iso": None,
+            "old_ck_hhmm": None,
+            "new_ck_iso": new_ck_iso,
+            "new_ck_hhmm": new_ck_hhmm,
+            "delta_min": None,
+            "source": "first_acceptance",
+        }
+        return {
+            "event_type": "CZAS_KURIERA_UPDATED",
+            "order_id": oid,
+            "courier_id": old_state.get("courier_id"),
+            "payload": payload,
+            "event_id_suffix": "_FIRST_ACK",
+        }
     # value→null (panel revert — warn, skip)
     if old_ck_iso and not new_ck_iso:
         _log.warning(f"v319g1 oid={oid} ck_change_to_null old={old_ck_hhmm}")
@@ -1061,19 +1079,27 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             evt = _diff_czas_kuriera(state_order, fresh_snippet, oid=zid)
             if evt is None:
                 continue
-            # Emit through event_bus (analog do COURIER_ASSIGNED emission)
+            # V3.27.1 BUG-1: event_id suffix dispatch — first_acceptance używa _FIRST_ACK
+            # dla łatwego grep, value→value zachowuje delta-based suffix.
+            suffix = evt.get("event_id_suffix")
+            if suffix:
+                event_id_str = f"{zid}_CZAS_KURIERA_UPDATED{suffix}"
+            else:
+                event_id_str = f"{zid}_CZAS_KURIERA_UPDATED_{int(evt['payload'].get('delta_min',0)*10)}"
             emit(
                 "CZAS_KURIERA_UPDATED",
                 order_id=zid,
                 courier_id=str(state_order.get("courier_id") or ""),
                 payload=evt["payload"],
-                event_id=f"{zid}_CZAS_KURIERA_UPDATED_{int(evt['payload'].get('delta_min',0)*10)}",
+                event_id=event_id_str,
             )
             update_from_event(evt)
+            delta_val = evt["payload"].get("delta_min")
+            delta_str = f"Δ={delta_val:+.1f}min" if delta_val is not None else "Δ=null(first_ack)"
             _log.info(
                 f"V3.19g1 oid={zid} ck "
                 f"{evt['payload'].get('old_ck_hhmm')}→{evt['payload'].get('new_ck_hhmm')} "
-                f"Δ={evt['payload'].get('delta_min'):+.1f}min"
+                f"{delta_str}"
             )
     # ================== END V3.19g1 ==================
 

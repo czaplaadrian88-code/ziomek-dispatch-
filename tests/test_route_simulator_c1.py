@@ -145,6 +145,142 @@ def test_compute_helper_returns_none_when_delivered_missing():
     return True
 
 
+# ============================================================
+# V3.27.1 BUG-2: TSP time windows tests
+# ============================================================
+
+def _build_v327_test_scenario(now, flag_enabled, captured_calls=None,
+                               infeasible_first_call=False):
+    """Helper: setup _ortools_plan call z mock tsp_solver capturing kwargs.
+
+    Returns (captured_kwargs_list, plan_or_none).
+    """
+    from dispatch_v2 import common, route_simulator_v2 as rs2, tsp_solver
+    _setup_mock()
+
+    # Override flag dla testu
+    orig_flag = common.ENABLE_V327_TSP_TIME_WINDOWS
+    common.ENABLE_V327_TSP_TIME_WINDOWS = flag_enabled
+
+    # Mock tsp_solver.solve_tsp_with_constraints — capture kwargs
+    if captured_calls is None:
+        captured_calls = []
+
+    class _StubSolution:
+        def __init__(self, sequence):
+            self.sequence = sequence
+            self.solver_status = "OK"
+            self.elapsed_ms = 1.0
+            self.warnings = []
+
+    call_count = [0]
+    def _mock_solver(**kwargs):
+        captured_calls.append(dict(kwargs))
+        call_count[0] += 1
+        # First call infeasible (if requested), second call returns valid sequence
+        if infeasible_first_call and call_count[0] == 1:
+            return None
+        # Build valid sequence: [0=courier, 1=pickup, 2=drop]
+        n = kwargs.get("num_stops", 3)
+        return _StubSolution(list(range(n)))
+
+    orig_solver = tsp_solver.solve_tsp_with_constraints
+    tsp_solver.solve_tsp_with_constraints = _mock_solver
+
+    try:
+        # Build minimal bag scenario: 1 bag order + 1 new order (bag_after_add=2)
+        from dispatch_v2.route_simulator_v2 import OrderSim, _ortools_plan
+        bag_order = OrderSim(
+            order_id="B0",
+            pickup_coords=(53.10, 23.10),
+            delivery_coords=(53.20, 23.20),
+            picked_up_at=None,
+            pickup_ready_at=now + timedelta(minutes=5),
+            status="assigned",
+        )
+        new_order = OrderSim(
+            order_id="N1",
+            pickup_coords=(53.15, 23.15),
+            delivery_coords=(53.25, 23.25),
+            picked_up_at=None,
+            pickup_ready_at=now + timedelta(minutes=15),
+            status="new",
+        )
+        bag = [bag_order]
+
+        # Build nodes manually w pattern z route_simulator_v2:
+        # [0=courier, 1=bag_pickup, 2=bag_delivery, 3=new_pickup, 4=new_delivery]
+        nodes = [
+            {"kind": "courier", "coords": (53.0, 23.0), "order_id": None, "ref": None},
+            {"kind": "pickup", "coords": bag_order.pickup_coords, "order_id": "B0", "ref": bag_order},
+            {"kind": "delivery", "coords": bag_order.delivery_coords, "order_id": "B0", "ref": bag_order},
+            {"kind": "pickup", "coords": new_order.pickup_coords, "order_id": "N1", "ref": new_order},
+            {"kind": "delivery", "coords": new_order.delivery_coords, "order_id": "N1", "ref": new_order},
+        ]
+        leg_min = lambda i, j: 5.0  # constant 5 min between any pair
+        plan = _ortools_plan(
+            nodes, leg_min,
+            bag_delivery_idxs=[2, 4],
+            bag_pickup_idxs_by_oid={"B0": 1, "N1": 3},
+            new_pickup_idx=3, new_delivery_idx=4,
+            new_order=new_order, bag=bag, now=now, sla_minutes=35.0,
+        )
+    finally:
+        tsp_solver.solve_tsp_with_constraints = orig_solver
+        common.ENABLE_V327_TSP_TIME_WINDOWS = orig_flag
+
+    return captured_calls, plan
+
+
+def test_v327_time_windows_disabled_baseline():
+    """V3.27.1 BUG-2: gdy flag=False, time_windows=None passed do solver
+    (zachowuje pre-V3.27.1 behavior, zero regression baseline)."""
+    now = datetime(2026, 4, 26, 14, 0, tzinfo=timezone.utc)
+    calls, _ = _build_v327_test_scenario(now, flag_enabled=False)
+    assert len(calls) == 1, f"expected 1 solver call, got {len(calls)}"
+    assert calls[0]["time_windows"] is None, \
+        f"flag=False MUST pass time_windows=None, got {calls[0]['time_windows']}"
+
+
+def test_v327_time_windows_enabled_passes_pickup_constraints():
+    """V3.27.1 BUG-2: gdy flag=True, time_windows is list with proper
+    pickup constraints (open=ready-now, close=open+60min) per pickup node."""
+    now = datetime(2026, 4, 26, 14, 0, tzinfo=timezone.utc)
+    calls, _ = _build_v327_test_scenario(now, flag_enabled=True)
+    assert len(calls) == 1, f"expected 1 solver call (no fallback), got {len(calls)}"
+    tw = calls[0]["time_windows"]
+    assert isinstance(tw, list), f"flag=True MUST pass time_windows=list, got {type(tw)}"
+    assert len(tw) == 5, f"expected 5 windows (5 nodes), got {len(tw)}"
+    # node 0 = courier → loose (0, 120)
+    assert tw[0] == (0.0, 120.0), f"courier window {tw[0]} != (0.0, 120.0)"
+    # node 1 = bag_pickup ready=+5min → open=5.0, close=65.0
+    assert abs(tw[1][0] - 5.0) < 0.1, f"bag_pickup open {tw[1][0]} != 5.0"
+    assert abs(tw[1][1] - 65.0) < 0.1, f"bag_pickup close {tw[1][1]} != 65.0"
+    # node 2 = bag_delivery → loose (0, 120)
+    assert tw[2] == (0.0, 120.0), f"bag_delivery window {tw[2]} != (0.0, 120.0)"
+    # node 3 = new_pickup ready=+15min → open=15.0, close=75.0
+    assert abs(tw[3][0] - 15.0) < 0.1, f"new_pickup open {tw[3][0]} != 15.0"
+    assert abs(tw[3][1] - 75.0) < 0.1, f"new_pickup close {tw[3][1]} != 75.0"
+    # node 4 = new_delivery → loose (0, 120)
+    assert tw[4] == (0.0, 120.0), f"new_delivery window {tw[4]} != (0.0, 120.0)"
+
+
+def test_v327_time_windows_infeasible_fallback_retries_no_constraints():
+    """V3.27.1 BUG-2 fallback: gdy solver returns None pierwszym razem (z time
+    windows), retry bez constraints dla baseline-safety. Solver MUSI być
+    wywołany 2× — drugi raz z time_windows=None."""
+    now = datetime(2026, 4, 26, 14, 0, tzinfo=timezone.utc)
+    calls, plan = _build_v327_test_scenario(now, flag_enabled=True,
+                                              infeasible_first_call=True)
+    assert len(calls) == 2, f"expected 2 solver calls (fallback), got {len(calls)}"
+    # First call z time_windows (list)
+    assert isinstance(calls[0]["time_windows"], list), \
+        f"first call MUST have time_windows=list, got {calls[0]['time_windows']}"
+    # Second call z time_windows=None (fallback)
+    assert calls[1]["time_windows"] is None, \
+        f"fallback call MUST have time_windows=None, got {calls[1]['time_windows']}"
+
+
 def main():
     tests = [
         ('per_order_times_populated_for_normal_bag', test_per_order_times_populated_for_normal_bag),
@@ -152,6 +288,9 @@ def main():
         ('per_order_times_all_orders_covered', test_per_order_times_all_orders_covered),
         ('per_order_times_backward_compat_existing_fields', test_per_order_times_backward_compat_existing_fields),
         ('compute_helper_returns_none_when_delivered_missing', test_compute_helper_returns_none_when_delivered_missing),
+        ('v327_time_windows_disabled_baseline', test_v327_time_windows_disabled_baseline),
+        ('v327_time_windows_enabled_passes_pickup_constraints', test_v327_time_windows_enabled_passes_pickup_constraints),
+        ('v327_time_windows_infeasible_fallback_retries_no_constraints', test_v327_time_windows_infeasible_fallback_retries_no_constraints),
     ]
     print('=' * 60)
     print('F2.2 C1: per_order_delivery_times field + helper tests')

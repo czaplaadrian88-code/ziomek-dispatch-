@@ -153,15 +153,29 @@ def t4_negative_delta_emits_event():
     check("4. negative Δ=-7min (shortening) → emit event", ok, detail=f"got={out}")
 
 
-# Test 5
-def t5_first_acceptance_no_event():
+# Test 5 — V3.27.1 BUG-1: first acceptance (null→value) NOW emits event z source=first_acceptance
+def t5_first_acceptance_emits_event():
     diff = _import_diff_helper()
     out = diff(
         _state(None, None),
         _fresh("10:33", "2026-04-21T10:33:00+02:00"),
         oid="467533",
     )
-    check("5. first acceptance (old=null, new=10:33) → no event", out is None)
+    payload = (out or {}).get("payload", {}) if isinstance(out, dict) else {}
+    ok = (
+        isinstance(out, dict)
+        and out.get("event_type") == "CZAS_KURIERA_UPDATED"
+        and out.get("order_id") == "467533"
+        and out.get("event_id_suffix") == "_FIRST_ACK"
+        and payload.get("source") == "first_acceptance"
+        and payload.get("delta_min") is None
+        and payload.get("old_ck_iso") is None
+        and payload.get("old_ck_hhmm") is None
+        and payload.get("new_ck_iso") == "2026-04-21T10:33:00+02:00"
+        and payload.get("new_ck_hhmm") == "10:33"
+    )
+    check("5. V3.27.1 first acceptance (old=null, new=10:33) → emit z source=first_acceptance, delta=None, _FIRST_ACK suffix", ok,
+          detail=f"got={out}")
 
 
 # Test 6
@@ -179,7 +193,7 @@ run("t1", t1_no_change_no_event)
 run("t2", t2_below_threshold_no_event)
 run("t3", t3_above_threshold_emits_event)
 run("t4", t4_negative_delta_emits_event)
-run("t5", t5_first_acceptance_no_event)
+run("t5", t5_first_acceptance_emits_event)
 run("t6", t6_null_after_value_warn_skip)
 
 
@@ -297,6 +311,68 @@ def t8_panel_to_state_flow():
 
 
 run("t8", t8_panel_to_state_flow)
+
+
+# Test 5b — V3.27.1 BUG-1: pełny lifecycle null→value (Lekcja #24)
+def t5b_first_acceptance_full_lifecycle():
+    """Lekcja #24 full lifecycle: panel returns null → state ma None →
+    panel returns "10:33" → diff emit → update_from_event → state ma "10:33"."""
+    from dispatch_v2 import panel_watcher, state_machine
+    with _TmpState() as _tmp:
+        # Tick 1: order seeded BEZ czas_kuriera (status=2 nowe, brak akceptacji)
+        state_machine.upsert_order("467900", {
+            "status": "new",
+            "courier_id": None,
+            "czas_kuriera_warsaw": None,
+            "czas_kuriera_hhmm": None,
+        }, event="NEW_ORDER")
+        diff = getattr(panel_watcher, "_diff_czas_kuriera", None)
+        assert diff is not None
+        # Tick 1 panel response: czas_kuriera nadal null (kurier nie zaakceptował)
+        old_state_t1 = state_machine.get_order("467900")
+        fresh_t1 = {
+            "czas_kuriera": None,
+            "czas_kuriera_warsaw": None,
+            "czas_kuriera_hhmm": None,
+        }
+        evt_t1 = diff(old_state_t1, fresh_t1, oid="467900")
+        check("5b.1 tick null→null → no event", evt_t1 is None)
+
+        # Tick 2 panel response: kurier zaakceptował, ck = "10:33"
+        old_state_t2 = state_machine.get_order("467900")
+        # state_machine może zwracać czas_kuriera_warsaw=None lub brak klucza —
+        # diff musi handle obie wersje. Sprawdźmy że jest None nadal.
+        check("5b.2 state still ma czas_kuriera_warsaw=None pre-tick2",
+              not (old_state_t2 or {}).get("czas_kuriera_warsaw"))
+
+        fresh_t2 = {
+            "czas_kuriera": "10:33",
+            "czas_kuriera_warsaw": "2026-04-21T10:33:00+02:00",
+            "czas_kuriera_hhmm": "10:33",
+        }
+        evt_t2 = diff(old_state_t2, fresh_t2, oid="467900")
+        ok_evt = (
+            isinstance(evt_t2, dict)
+            and evt_t2.get("event_type") == "CZAS_KURIERA_UPDATED"
+            and evt_t2.get("event_id_suffix") == "_FIRST_ACK"
+            and (evt_t2.get("payload") or {}).get("source") == "first_acceptance"
+            and (evt_t2.get("payload") or {}).get("delta_min") is None
+        )
+        check("5b.3 tick null→value emit z source=first_acceptance + _FIRST_ACK", ok_evt,
+              detail=f"got={evt_t2}")
+
+        # Tick 2 follow-up: state_machine.update_from_event aplikuje
+        state_machine.update_from_event(evt_t2)
+        got = state_machine.get_order("467900") or {}
+        ok_state = (
+            got.get("czas_kuriera_warsaw") == "2026-04-21T10:33:00+02:00"
+            and got.get("czas_kuriera_hhmm") == "10:33"
+        )
+        check("5b.4 state_machine post-update has fresh ck", ok_state,
+              detail=f"got={got}")
+
+
+run("t5b", t5b_first_acceptance_full_lifecycle)
 
 
 # ============================================================

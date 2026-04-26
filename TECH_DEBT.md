@@ -170,6 +170,79 @@
 - **Conditional: SKIP jeśli post-Hetzner p95 <300ms** (tie-breaker enough)
 - OR-Tools meta-heuristic może też różnicować — observation post-flip
 
+### V3.28-OSRM-COMPOSE [HIGH, escalated 2026-04-26]
+
+- OSRM `osrm-server` container obecnie standalone (`docker run` ad-hoc), NIE w żadnym compose file
+- Po V3.27.1 sesja 1 OSRM fix (Docker `unless-stopped`), persistent ale brak reproducible IaC
+- **Escalated**: `docker logs --since` ma bug po `docker start` exited container — observability gap
+- Effort: 1-2h (tworzy `osrm-compose.yml` lub dorzuca do `/root/openclaw/docker-compose.yml`, dodaje monitoring)
+- Conditional: post V3.27.1 sesja 1 + 2 stable
+
+### V3.28-EVENT-BUS-CONSUMER-STUCK [MEDIUM diagnostic, 2-4h]
+
+- `event_bus.processed` counter stuck od ~14:01:32 2026-04-26 (od OSRM downtime)
+- pending rośnie monotonicznie ~2/min, processed flat
+- shadow_dispatcher MAIN LOOP działa normalnie (proposals OK), ale event_bus consumer thread wygląda dead
+- Kandydaci do diagnozy: plan_manager / sticky TSP / packs ghost reverse consumer
+- Workaround: defer (nie blokuje proposals); prawdopodobnie restart dispatch-shadow naprawi
+- Effort: 2-4h (diagnose root cause, fix lub document acceptable behavior)
+
+### V3.28-CLEANUP-BAK-FILES [LOW, 30 min]
+
+- 15+ `.bak_v319*` / `.bak_v320` / `.bak_v3271*` / `.bak_v317b` files w `dispatch_v2/`
+- Pre-existing debris z sprintów V3.17-V3.27.1
+- Effort: 30 min audit + git rm (zachować recent .bak ~7 dni)
+- Conditional: po V3.27.1 stable 2 tygodnie
+
+### V3.28-MIGRATE-TESTS-PYTEST [LOW, 2-4h]
+
+- 20+ test files używają standalone script pattern (`sys.exit(0 if failed+errors==0 else 1)` w module body bez `if __name__ == "__main__":` guard)
+- Pytest collection crash przy import (V3.27.1 sesja 1 dodał pytest do venv ale nie konwertował testów)
+- Effort: 2-4h (per-file refactor: dodać `if __name__:` guard, ewentualnie konwertować na `def test_*` pytest-style)
+- Conditional: rozważyć przed V4.0
+
+### V3.28-CLEANUP-LEGACY-WAIT-PEN [LOW, 30 min]
+
+- V3.27.1 sesja 1 zachowała legacy `bonus_r9_wait_pen_legacy` calculation w dispatch_pipeline dla A/B comparison shadow log
+- Po V3.27.1 stable 2 tygodnie + ENABLE_V327_WAIT_PENALTY=True validated → cleanup legacy block
+- Effort: 30 min (remove `_legacy` block + serialization fields, update tests)
+- Conditional: V3.27.1 + 14 dni stable
+
+### V3.28-BUG2-INTEGRATION-TEST [LOW, 30 min]
+
+- V3.27.1 sesja 1 testy weryfikują że time_windows constraint passed do solvera (mock)
+- BRAKUJE: integration test z realnym OR-Tools solve (bez mock) który asserts że bag scenario z pickup_ready_at 14:25/14:30/14:43+new 14:30 → solver output sequence NIE ma Chicago Pizza (ready 14:30) na 4-tej pozycji
+- Effort: ~30 min (sesja 2 jutro pre-flip — Adrian's mental log)
+- Conditional: sesja 2 V3.27.1
+
+### V3.28-TEST-V319A-PICKED-UP-FLOOR-EDGE [LOW, 30-60 min]
+
+- `test_v319a_picked_up_floor.py` 13/15 PASS (2 FAIL: real GPS drive-based ETA delta edge case)
+- Pre-existing pre-V3.27.1, verified identical via git stash 2026-04-26
+- Effort: 30-60 min diagnoza + fix
+- Conditional: V3.28+ po stable V3.27.1 flip
+
+### V3.28-TEST-V319D-BASE-SEQUENCE-EDGE [LOW, 30-60 min]
+
+- `test_v319d_read_integration.py` 12/14 PASS (2 FAIL: base_sequence passthrough scenario — feasibility_v2 plan not None)
+- Pre-existing pre-V3.27.1, verified identical via git stash 2026-04-26
+- Effort: 30-60 min
+- Conditional: V3.28+
+
+### V3.28-TEST-V319H-BUG2-EDGE [LOW, 15-30 min]
+
+- `test_v319h_bug2_wave_continuation.py` 22/23 PASS (1 FAIL: wave assertion edge case)
+- Pre-existing pre-V3.27.1, verified identical via git stash 2026-04-26
+- Effort: 15-30 min (small scope)
+- Conditional: V3.28+
+
+### V3.28-TEST-V319H-BUG4-FLAG-DEFAULT [LOW, 15-30 min]
+
+- `test_v319h_bug4_tier_cap_matrix.py` 29/30 PASS (1 FAIL: BUG-4 flag default check)
+- Pre-existing pre-V3.27.1, verified identical via git stash 2026-04-26
+- Effort: 15-30 min (small scope)
+- Conditional: V3.28+
+
 ## 🧪 TEST GAP (Lekcja #24 — RESOLVED in V3.27)
 
 - ✅ `test_v327_proposal_lifecycle_latency_slow.py` (2 tests) — full lifecycle p95 + race conditions

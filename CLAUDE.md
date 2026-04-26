@@ -94,9 +94,11 @@ sudo systemctl restart dispatch-shadow.service
 - **Updated tests:** 12/12 PASS (V326 traffic + BM3 chain_eta + route_simulator_c1)
 - **Regression krytyczne:** ~25 test files all PASS
 - **Slow suite:** test_proposal_lifecycle_under_500ms_p95 PASS (mock OSRM, real validation in shadow)
-- **Pre-existing fails (NIE V3.27 regresja):**
+- **Pre-existing fails (NIE V3.27/V3.27.1 regresja):**
   - test_feasibility_c3 (v325 fixture issue, defer V3.28-FEASIBILITY-C3-V325-FIXTURE)
   - test_decision_engine_f21 (defer)
+  - **V3.27.1 sesja 1 verified (2026-04-26):** full list 10 pre-existing FAIL w sekcji
+    "Known issues / pre-existing failures" niżej (verified identical pre/post via git stash).
 
 ```bash
 # Run pełen suite
@@ -568,13 +570,31 @@ Edit common.py, set flag=False, restart odpowiedni service:
 
 ## Known issues / pre-existing failures
 
-Pre-existing test failures (NOT regression, documented since V3.18):
-- `test_cod_weekly` — 2 fails (gspread import error)
-- `test_feasibility_integration` — 1 fail
-- `test_reconcile_dry_run` — 1 fail
-- `test_scoring_scenarios` — NameError (legacy test)
+Last full regression: V3.27.1 sesja 1 (2026-04-26): **69 PASS / 10 FAIL**
+(all pre-existing, sprint-touched files ZERO FAIL). Sprint-touched 5 files:
+test_v319g1_ck_detection (16/16), test_route_simulator_c1 (8/8),
+test_scoring_v3271_wait_penalty (9/9), test_bug_b_czas_kuriera_event (3/3),
+test_shadow_serializer_v317 (6/6). Total sprint tests = 42/42 PASS.
 
-Total PASS: 433 (excluding 4 pre-existing).
+Pre-existing test failures (NOT regression). Verified identical pre/post via
+`git stash` 2026-04-26.
+
+Documented since V3.18:
+- `test_cod_weekly` — 2 fails (gspread import error w env)
+- `test_feasibility_integration` — 1 fail (4/5 PASS, bag_tsp_perf_cap edge)
+- `test_reconcile_dry_run` — 1 fail (round-robin kolejność, 4/5 PASS)
+- `test_scoring_scenarios` — NameError (legacy test)
+- `test_feasibility_c3` — v325 fixture issue (defer V3.28-FEASIBILITY-C3-V325-FIXTURE)
+- `test_decision_engine_f21` — v325_NO_ACTIVE_SHIFT (defer)
+
+Documented V3.27.1 sesja 1 (verified pre-existing, NOT V3.27.1 regresja):
+- `test_v319a_picked_up_floor` — 13/15 PASS (2 FAIL: real GPS drive-based ETA delta edge)
+- `test_v319d_read_integration` — 12/14 PASS (2 FAIL: base_sequence passthrough scenario)
+- `test_v319h_bug2_wave_continuation` — 22/23 PASS (1 FAIL: wave assertion edge case)
+- `test_v319h_bug4_tier_cap_matrix` — 29/30 PASS (1 FAIL: BUG-4 flag default check)
+
+Total: 10 pre-existing FAIL across 79 test files. See TECH_DEBT.md V3.28 backlog
+for cleanup tickets.
 
 ## Open roadmap (post-V3.20)
 

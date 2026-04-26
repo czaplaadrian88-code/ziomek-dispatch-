@@ -745,18 +745,61 @@ def _ortools_plan(
     if new_pickup_idx is not None:
         pickup_drop_pairs.append((new_pickup_idx, new_delivery_idx))
 
-    # Solve (MVP: no time windows — pickup_ready_at handled by _simulate_sequence
-    # post-conversion; OR-Tools time windows can cause INFEASIBLE w restrictive
-    # cases; defer dla future tuning).
+    # V3.27.1 BUG-2: time windows constraint dla TSP (flag-gated, default False).
+    # Pickup nodes: open=max(0, ready-now), close=open+60min hard. Delivery/courier:
+    # luźne okno (max 120min — effective no constraint). Pre-V3.27.1 przekazywaliśmy
+    # time_windows=None co sprawiało że TSP minimalizował czysty distance ignorując
+    # pickup_ready (case #468733 Chicago Pizza: 53min wait zaakceptowane przez
+    # solver bo był najkrótszy distance-min). _simulate_sequence post-conversion
+    # ADD wait time ale NIE reorderuje sekwencji — solver MUSI dostać constraint.
+    from dispatch_v2 import common as _common
+    time_windows = None
+    if _common.ENABLE_V327_TSP_TIME_WINDOWS and now is not None:
+        time_windows = []
+        for idx in range(N):
+            node = nodes[idx]
+            if node.get("kind") == "pickup":
+                ref = node.get("ref")
+                ready = getattr(ref, "pickup_ready_at", None) if ref is not None else None
+                if ready is not None:
+                    try:
+                        open_min = max(0.0, (ready - now).total_seconds() / 60.0)
+                        close_min = open_min + _common.V327_PICKUP_TIME_WINDOW_CLOSE_MIN
+                        time_windows.append((open_min, close_min))
+                    except Exception:
+                        time_windows.append((0.0, _common.V327_DROP_TIME_WINDOW_MAX_MIN))
+                else:
+                    time_windows.append((0.0, _common.V327_DROP_TIME_WINDOW_MAX_MIN))
+            else:
+                time_windows.append((0.0, _common.V327_DROP_TIME_WINDOW_MAX_MIN))
+
     solution = tsp_solver.solve_tsp_with_constraints(
         num_stops=N,
         pickup_drop_pairs=pickup_drop_pairs,
         distance_matrix_km=distance_matrix,
         time_matrix_min=time_matrix,
-        time_windows=None,
+        time_windows=time_windows,
         max_route_min=120.0,
         time_limit_ms=int(_ot_ms),
     )
+
+    # V3.27.1 BUG-2 fallback: gdy INFEASIBLE z time windows, retry bez constraints
+    # (ochrona przed regresją vs. baseline; flag flip nigdy nie powinien zwiększyć
+    # liczby orderów które fail completely — gorsza sekwencja > brak proposal).
+    if (solution is None or not getattr(solution, "sequence", None)) and time_windows is not None:
+        _log.warning(
+            f"V3.27.1 OR-Tools INFEASIBLE z time windows "
+            f"(N={N}, pairs={len(pickup_drop_pairs)}), retry bez constraints"
+        )
+        solution = tsp_solver.solve_tsp_with_constraints(
+            num_stops=N,
+            pickup_drop_pairs=pickup_drop_pairs,
+            distance_matrix_km=distance_matrix,
+            time_matrix_min=time_matrix,
+            time_windows=None,
+            max_route_min=120.0,
+            time_limit_ms=int(_ot_ms),
+        )
 
     if solution is None or not solution.sequence:
         if solution is not None:

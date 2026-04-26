@@ -335,9 +335,11 @@ def update_from_event(event: dict) -> Optional[dict]:
             "czas_kuriera_hhmm": new_ck_hhmm,
             "v319g_ck_change_count": prev_count + 1,
         }
+        _delta = payload.get("delta_min")
+        _delta_str = f"Δ={_delta:+.1f}min" if _delta is not None else "Δ=null(first_ack)"
         _log.info(
             f"V3.19g1 oid={oid} ck {payload.get('old_ck_hhmm')} → {new_ck_hhmm} "
-            f"Δ={payload.get('delta_min'):+.1f}min src={payload.get('source')}"
+            f"{_delta_str} src={payload.get('source')}"
         )
         return upsert_order(oid, update_fields, event="CZAS_KURIERA_UPDATED")
 

@@ -52,6 +52,47 @@ def time_penalty(oldest_in_bag_min: Optional[float]) -> float:
 def s_czas(oldest_in_bag_min: Optional[float]) -> float:
     return max(0.0, 100.0 - time_penalty(oldest_in_bag_min))
 
+
+def compute_wait_penalty(wait_min: float) -> float:
+    """V3.27.1 Wait penalty (Adrian's quadratic table) — sprint sesja 1, 2026-04-26.
+
+    Linear interpolacja między punktami tabeli `V327_WAIT_PENALTY_TABLE`. Sweet
+    spot wait_min ≤ 20 → penalty=0. Powyżej tabeli (>60min) → hard fallback
+    -1000. Flag-gated: gdy `ENABLE_V327_WAIT_PENALTY=False`, helper zwraca 0
+    (zachowuje pre-V3.27.1 baseline).
+
+    Args:
+        wait_min: czas oczekiwania kuriera pod restauracją w minutach
+            (max(0, effective_pickup_time - pickup_ready_at)). Mniejsze niż 0
+            traktowane jako 0 (no-op edge).
+
+    Returns:
+        Float penalty ≤ 0. Sumarycznie dodawane per pickup w plan.sequence
+        do score kandydata przez dispatch_pipeline (post-TSP, post-scoring layer).
+    """
+    from dispatch_v2 import common as _common
+    if not _common.ENABLE_V327_WAIT_PENALTY:
+        return 0.0
+    if wait_min is None or wait_min <= 0:
+        return 0.0
+
+    table = _common.V327_WAIT_PENALTY_TABLE
+    # Below first table entry → sweet spot, zero penalty
+    if wait_min <= table[0][0]:
+        return 0.0
+    # Powyżej OSTATNIEGO entry (>60min) → hard fallback safety net.
+    # wait_min == 60 trafia do interpolation loop i otrzymuje exact table value -700.
+    if wait_min > table[-1][0]:
+        return float(_common.V327_WAIT_PENALTY_HARD_FALLBACK)
+    # Linear interpolacja między najbliższymi punktami
+    for i in range(len(table) - 1):
+        x1, y1 = table[i]
+        x2, y2 = table[i + 1]
+        if x1 <= wait_min <= x2:
+            ratio = (wait_min - x1) / (x2 - x1)
+            return y1 + ratio * (y2 - y1)
+    return 0.0  # defensive fallthrough
+
 def score_candidate(
     courier_pos: Tuple[float, float],
     restaurant_pos: Tuple[float, float],

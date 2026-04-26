@@ -158,6 +158,9 @@ def _serialize_candidate(c) -> dict:
         "bonus_r8_soft_pen": m.get("bonus_r8_soft_pen"),
         "bonus_r9_stopover": m.get("bonus_r9_stopover"),
         "bonus_r9_wait_pen": m.get("bonus_r9_wait_pen"),
+        # V3.27.1 A/B comparison (LOCATION A — alts): legacy zawsze, v327 = 0 gdy flag=False
+        "bonus_r9_wait_pen_legacy": m.get("bonus_r9_wait_pen_legacy"),
+        "bonus_r9_wait_pen_v327": m.get("bonus_r9_wait_pen_v327"),
         "bonus_penalty_sum": m.get("bonus_penalty_sum"),
         "plan": None if plan is None else {
             "sequence": plan.sequence,
@@ -317,6 +320,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "bonus_r8_soft_pen": best_m.get("bonus_r8_soft_pen"),
             "bonus_r9_stopover": best_m.get("bonus_r9_stopover"),
             "bonus_r9_wait_pen": best_m.get("bonus_r9_wait_pen"),
+            # V3.27.1 A/B comparison (LOCATION B — best): legacy zawsze, v327 = 0 gdy flag=False
+            "bonus_r9_wait_pen_legacy": best_m.get("bonus_r9_wait_pen_legacy"),
+            "bonus_r9_wait_pen_v327": best_m.get("bonus_r9_wait_pen_v327"),
             "bonus_penalty_sum": best_m.get("bonus_penalty_sum"),
             # Transparency OPCJA A (2026-04-19): plan + bag_context for Telegram route section
             "plan": None if (best is None or best.plan is None) else {
