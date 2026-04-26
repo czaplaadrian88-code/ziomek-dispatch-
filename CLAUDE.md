@@ -9,17 +9,25 @@
 ## Stan flag (LIVE od 17:39 UTC 25.04)
 
 ```python
-# common.py — feature flags state
+# common.py — feature flags state (post-V3.27.1 sesja 2 ROLLBACK 2026-04-26)
 ENABLE_V326_ANCHOR_BASED_SCORING = True       # V3.26 dzień
 ENABLE_V326_PO_DRODZE_STRICT = True           # V3.26 dzień
 ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER = True    # Block 4 OSRM (25.04 08:12 UTC)
 ENABLE_V326_OR_TOOLS_TSP = True               # V3.27 wieczór re-flip (17:39 UTC 25.04)
 ENABLE_V326_SAME_RESTAURANT_GROUPING = True   # V3.27 wieczór re-flip (17:39 UTC 25.04)
 ENABLE_V327_BUG_FIXES_BUNDLE = True           # V3.27 NEW (Bug Y tie-breaker + Bug Z + corridor mult)
+# V3.27.1 sesja 2 — kod loaded, flagi False (post-rollback Bug 1 19:10 UTC)
+ENABLE_V327_TSP_TIME_WINDOWS = False          # re-flip dziś wieczór sesja 3 (post Bug 1 fix)
+ENABLE_V327_WAIT_PENALTY = False              # re-flip dziś wieczór sesja 3
+ENABLE_V327_PRE_PROPOSAL_RECHECK = False      # re-flip dziś wieczór sesja 3 (po fix _v327_safe_fetch)
 
 # Konfiguracja
 V326_OR_TOOLS_TIME_LIMIT_MS = 200             # RESTORED via parallel ThreadPoolExecutor
 V327_MIN_OR_TOOLS_BAG_AFTER = 2               # Phase 1 — skip OR-Tools dla bag<2 (greedy fast path)
+V327_PICKUP_TIME_WINDOW_CLOSE_MIN = 60.0      # V3.27.1 sesja 1 — TSP time window pickup_ready+60min
+V327_WAIT_PENALTY_TABLE = [...7 entries...]   # V3.27.1 sesja 1 — quadratic 20+/25/30/35/40/50/60
+V327_PRE_PROPOSAL_RECHECK_AGE_MIN = 10.0      # V3.27.1 sesja 2 — skip if assigned <10 min
+V327_PRE_PROPOSAL_RECHECK_CACHE_TTL_SEC = 300 # V3.27.1 sesja 2 — skip if cache <5 min
 ```
 
 **Rollback procedure** (gdy regresja peak):
@@ -570,11 +578,18 @@ Edit common.py, set flag=False, restart odpowiedni service:
 
 ## Known issues / pre-existing failures
 
-Last full regression: V3.27.1 sesja 1 (2026-04-26): **69 PASS / 10 FAIL**
-(all pre-existing, sprint-touched files ZERO FAIL). Sprint-touched 5 files:
+Last full regression: V3.27.1 sesja 2 (2026-04-26 ~17:00 UTC): **70 PASS / 10 FAIL**
+(all pre-existing, sprint-touched files ZERO FAIL). Sprint-touched 6 files:
 test_v319g1_ck_detection (16/16), test_route_simulator_c1 (8/8),
 test_scoring_v3271_wait_penalty (9/9), test_bug_b_czas_kuriera_event (3/3),
-test_shadow_serializer_v317 (6/6). Total sprint tests = 42/42 PASS.
+test_shadow_serializer_v317 (6/6), test_v3271_pre_proposal_recheck (9/9).
+Total sprint tests = 51/51 PASS.
+
+**V3.27.1 sesja 2 atomic flip ROLLBACK 2026-04-26 ~19:10 UTC** — Bug 1 helper
+schema mismatch w `_v327_safe_fetch_czas_kuriera` (panel API zwraca raw HH:MM,
+helper potrzebuje `panel_client.normalize_order(raw)` żeby dostać ISO). Sesja 3
+DZIŚ wieczór: fix Bug 1 + V3.27.2 Stop overhead 2 min/pickup + 2 min/drop
++ atomic re-flip 4 flag.
 
 Pre-existing test failures (NOT regression). Verified identical pre/post via
 `git stash` 2026-04-26.

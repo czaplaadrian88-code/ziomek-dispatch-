@@ -283,6 +283,57 @@
 - Effort: 30-60 min (depending na opcję)
 - Conditional: V3.28+ infra cleanup sprint
 
+### #17 — V3.27.1 sesja 3 BUG-1-FIX [CRITICAL, ~30-60 min, FIX TONIGHT]
+
+- **Bug 1 root cause (zdiagnozowane Krok 5 ROLLBACK 2026-04-26 19:10 UTC)**:
+  `_v327_safe_fetch_czas_kuriera` w dispatch_pipeline.py używa
+  `fresh.get("czas_kuriera_warsaw") or fresh.get("czas_kuriera")` na surowym
+  `panel_client.fetch_order_details()` response.
+- **Reality**: panel API zwraca raw `'zlecenie'` z `czas_kuriera="19:14"`
+  (HH:MM string), klucz `czas_kuriera_warsaw` (ISO) NIE istnieje w raw —
+  jest computed downstream przez `panel_client.normalize_order(raw)` (merge
+  daty + HH:MM + TZ Warsaw).
+- **Effect post-flip**: helper zwracał HH:MM jako "ISO", payload `new_ck_iso="19:14"`,
+  `_verify_czas_kuriera_consistency` sanity FAIL → 5+ ERROR linii w state_machine
+  + każdy emit `skipping persist`. Plus latency 6949ms (vs baseline 730ms).
+- **Fix**: w `_v327_safe_fetch_czas_kuriera`:
+  ```python
+  fresh = panel_client.fetch_order_details(oid, timeout=int(timeout))
+  if fresh is None: return None
+  norm = panel_client.normalize_order(fresh)  # ← KEY FIX
+  return norm.get("czas_kuriera_warsaw") if norm else None
+  ```
+- Plus: `_v327_emit_pre_recheck_event` MUSI wypełnić **oba** pola payload —
+  `new_ck_iso` (ISO) AND `new_ck_hhmm` (HH:MM) — bo state_machine sanity
+  wymaga obu.
+- **Test gap (Lekcja #28 — NEW)**: 9 unit testów PASS bo mock fixture zwracał
+  fake klucz `{"czas_kuriera_warsaw": "<ISO>"}` którego real API NIE ma.
+  Integration test z REAL `panel_client.normalize_order(raw)` flow wymagany
+  przed re-flip.
+- Effort: ~30-60 min implementacja + integration test + smoke test (real panel)
+- Conditional: V3.27.1 sesja 3 DZIŚ wieczór ~21:00-22:00 Warsaw
+
+### #18 — V3.27.2 STOP-OVERHEAD [NEW, 1h, FIX TONIGHT z sesja 3]
+
+- **Adrian decision 2026-04-26 wieczór**: każdy pickup/drop = 2 min real
+  overhead nieuwzględniony w current ETA estymacji.
+- **Implikacja**: bag z 6 stops (3 pickup + 3 drop) = +12 min real vs ETA
+  predykcja → systematic under-estimation, błędne SLA decisions.
+- **Fix**: dodać do `common.py`:
+  ```python
+  ENABLE_V327_STOP_OVERHEAD = _os.environ.get("ENABLE_V327_STOP_OVERHEAD", "0") == "1"
+  V327_PICKUP_OVERHEAD_MIN = 2.0
+  V327_DROP_OVERHEAD_MIN = 2.0
+  ```
+- Wpięcie w `_simulate_sequence` (route_simulator_v2.py) per stop dodać
+  overhead do `total_duration_min` + `predicted_delivered_at` + `pickup_at`.
+- Tests: 5 cases (disabled baseline, enabled solo bag=1, bag=3, bag=6 Bartek
+  peak, edge case empty plan).
+- Atomic flip RAZEM z 3 flagami V3.27.1 sesji 2 (= **4 flag total**) po
+  Bug 1 fix wieczór.
+- Effort: ~1h implementacja + 5 testów + integration verify
+- Conditional: V3.27.2 sesja 3 DZIŚ wieczór ~22:00-23:00 Warsaw
+
 ## 🧪 TEST GAP (Lekcja #24 — RESOLVED in V3.27)
 
 - ✅ `test_v327_proposal_lifecycle_latency_slow.py` (2 tests) — full lifecycle p95 + race conditions
@@ -292,6 +343,18 @@
 - **#25** Mental simulation może być naivny (traffic_mult global value preserves ratio — Bug Y NIE self-resolves)
 - **#26** Domain knowledge > LLM/API confidence (Filipowicza Adrian override Nominatim)
 - **#27** Hardware oversubscription dla parallel (CPX22 niewystarczająca dla 10-worker OR-Tools)
+- **#28** Mock tests passed ale integration FAIL (V3.27.1 sesja 2 Bug 1):
+  9 unit testów `test_v3271_pre_proposal_recheck.py` użyło mock fixture
+  `{"czas_kuriera_warsaw": "<ISO>"}` z **wymyślonym kluczem** którego real
+  `panel_client.fetch_order_details` raw response NIE zwraca. False
+  confidence — atomic flag flip → IMMEDIATE rollback (latency 6949ms +
+  state_machine sanity FAIL). **Reguła**: integration tests z real API
+  flow (lub realistic fixture matching production schema) wymagane dla
+  helper'ów wywołujących external API. Atomic separation kod load (Krok 3)
+  vs flag flip (Krok 4-5) **uratowała sprint** — czysta detekcja root cause,
+  fast rollback path bez utraty innych komponentów (BUG-2, Wait penalty,
+  A/B schema). Reguła Adrian's Plik wiedzy #18 ("Empirical validation >
+  unit test") + Lekcja #24 (full lifecycle test) potwierdzona empirically.
 
 ## ⏳ OPEN — NIEDZIELA 26.04+
 
