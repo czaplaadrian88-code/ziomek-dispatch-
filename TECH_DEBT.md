@@ -267,6 +267,32 @@
 - Effort: 15-30 min (small scope)
 - Conditional: V3.28+
 
+### #19 — V3.27.1 sesja 4 PRE-WARM-LOGIN [HIGH, 5 min, FIX JUTRO 9:00]
+
+- **Discovered sesja 3 Krok 6.5+ diagnose**: panel_client login refresh 22-min
+  cykl (CSRF expiry) blokuje proposal latency 6-7s przy każdym refresh.
+  Pre-V3.27.1 panel_client używany async w panel_watcher (off path). V3.27.1
+  pre-proposal-recheck używa sync w dispatch_pipeline → propaguje login latency.
+- **Empirical 1h post-flip**: 3/6 outliers (50% niedzielne low traffic, n=6),
+  100% korelacja z 3 login refresh events. Math projection lunch peak: 50-100
+  proposals/h × 3 logins/h = **3-6% outliers** (acceptable).
+- **Fix**: w `shadow_dispatcher.py` startup po imports + ortools warm-up, dodać:
+  ```python
+  panel_client.login(force=True)  # eliminate first-proposal cold login penalty
+  ```
+- Effort: 5 min implementation + 1 test
+- Conditional: V3.27.1 sesja 4 jutro 27.04 9:00-9:30, przed lunch peak validation
+
+### #20 — V3.28 BACKGROUND-LOGIN-REFRESH-THREAD [HIGH, 30-60 min, strategic V3.28]
+
+- **Strategic fix**: async thread refresh CSRF co 18 min (przed expiry) →
+  zero blocking proposal latency ever
+- **Why**: pre-warm login (#19) eliminates only first-proposal-cold-login.
+  Co 22 min nadal jeden proposal trafi login refresh. W Warsaw expansion +
+  high-volume peak (300+ proposals/h) 3% rate = ~10 outliers/h = visible p95.
+- Effort: 30-60 min implementation + tests
+- Conditional: V3.28 post sesja 4 verify że #19 alone nie wystarcza
+
 ### V3.28-VENV-REQUIREMENTS-OUTSIDE-REPO [LOW, 30-60 min]
 
 - `/root/.openclaw/venvs/dispatch/requirements.txt` poza dispatch_v2 git repo
@@ -283,7 +309,7 @@
 - Effort: 30-60 min (depending na opcję)
 - Conditional: V3.28+ infra cleanup sprint
 
-### #17 — V3.27.1 sesja 3 BUG-1-FIX [CRITICAL, ~30-60 min, FIX TONIGHT]
+### #17 — V3.27.1 sesja 3 BUG-1-FIX [✅ RESOLVED 2026-04-26 sesja 3 commit 8e75827]
 
 - **Bug 1 root cause (zdiagnozowane Krok 5 ROLLBACK 2026-04-26 19:10 UTC)**:
   `_v327_safe_fetch_czas_kuriera` w dispatch_pipeline.py używa
@@ -296,6 +322,10 @@
 - **Effect post-flip**: helper zwracał HH:MM jako "ISO", payload `new_ck_iso="19:14"`,
   `_verify_czas_kuriera_consistency` sanity FAIL → 5+ ERROR linii w state_machine
   + każdy emit `skipping persist`. Plus latency 6949ms (vs baseline 730ms).
+- **✅ RESOLVED sesja 3 commit `8e75827`**: helper return Tuple (iso, hhmm) +
+  `panel_client.normalize_order(fresh)` po fetch + emit z OBIEMA polami.
+  10/10 testów PASS z REAL panel schema (Lekcja #28). Zero state_machine sanity
+  errors w 1h post-flip (vs sesja 2 5+ ERROR/restart).
 - **Fix**: w `_v327_safe_fetch_czas_kuriera`:
   ```python
   fresh = panel_client.fetch_order_details(oid, timeout=int(timeout))
@@ -313,9 +343,20 @@
 - Effort: ~30-60 min implementacja + integration test + smoke test (real panel)
 - Conditional: V3.27.1 sesja 3 DZIŚ wieczór ~21:00-22:00 Warsaw
 
-### #18 — V3.27.2 STOP-OVERHEAD [NEW, 1h, FIX TONIGHT z sesja 3]
+### #18 — V3.27.2 STOP-OVERHEAD [✅ RESOLVED REVISED — DWELL bump direct, sesja 3 commit 8e75827]
 
-- **Adrian decision 2026-04-26 wieczór**: każdy pickup/drop = 2 min real
+- **Sesja 3 schema discovery**: `route_simulator_v2.py:34-35` already miało
+  `DWELL_PICKUP_MIN=2.0` + `DWELL_DROPOFF_MIN=1.0` hardcoded — Adrian initially
+  nie wiedział. Revised decision: bump bezpośrednio (NIE flag-gated overhead),
+  to jest correction wartości od dawna w kodzie.
+- **✅ RESOLVED**: `DWELL_PICKUP_MIN: 2.0 → 3.0`, `DWELL_DROPOFF_MIN: 1.0 → 3.0`
+  per Adrian's domain knowledge kurier+koordynator. Net effect: bag 6 stops
+  (3p+3d) = +9 min real ETA. NIE flag-gated. 8/8 sprint-touched testy PASS bez
+  zmian w asserts.
+
+### #18-OBSOLETE — Original V3.27.2 STOP-OVERHEAD plan (PRE-DISCOVERY)
+
+- **Adrian initial decision 2026-04-26 wieczór**: każdy pickup/drop = 2 min real
   overhead nieuwzględniony w current ETA estymacji.
 - **Implikacja**: bag z 6 stops (3 pickup + 3 drop) = +12 min real vs ETA
   predykcja → systematic under-estimation, błędne SLA decisions.
@@ -343,6 +384,18 @@
 - **#25** Mental simulation może być naivny (traffic_mult global value preserves ratio — Bug Y NIE self-resolves)
 - **#26** Domain knowledge > LLM/API confidence (Filipowicza Adrian override Nominatim)
 - **#27** Hardware oversubscription dla parallel (CPX22 niewystarczająca dla 10-worker OR-Tools)
+- **#29** (V3.27.1 sesja 3 NEW) Sync calls w hot path mogą ujawnić latency
+  niewidoczną off-path. Pre-V3.27.1 `panel_client.login()` refresh (~6s co
+  22 min) był niewidoczny w proposal latency bo używany async w panel_watcher.
+  V3.27.1 pre-proposal-recheck wprowadziła go synchronously w dispatch_pipeline
+  → exposed architectural overhead (50% outliers w 1h niedzielne low traffic,
+  100% korelacja z login refresh events). **NIE V3.27.1 algorithmic bug, NIE
+  Bug 1 fix issue** (Bug 1 fix verified zero state_machine errors). **Reguła**:
+  każda new sync call do external service w hot path wymaga audit istniejącego
+  service'u behavior (login refresh, connection pool, timeout, retry, periodic
+  blocking operations). Fix path: pre-warm at startup (#19 sesja 4) + background
+  refresh thread (#20 V3.28).
+
 - **#28** Mock tests passed ale integration FAIL (V3.27.1 sesja 2 Bug 1):
   9 unit testów `test_v3271_pre_proposal_recheck.py` użyło mock fixture
   `{"czas_kuriera_warsaw": "<ISO>"}` z **wymyślonym kluczem** którego real

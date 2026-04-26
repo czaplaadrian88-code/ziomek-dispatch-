@@ -9,17 +9,17 @@
 ## Stan flag (LIVE od 17:39 UTC 25.04)
 
 ```python
-# common.py — feature flags state (post-V3.27.1 sesja 2 ROLLBACK 2026-04-26)
+# common.py — feature flags state (V3.27.1 + V3.27.2 PRODUCTION LIVE 2026-04-26 21:08 Warsaw)
 ENABLE_V326_ANCHOR_BASED_SCORING = True       # V3.26 dzień
 ENABLE_V326_PO_DRODZE_STRICT = True           # V3.26 dzień
 ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER = True    # Block 4 OSRM (25.04 08:12 UTC)
 ENABLE_V326_OR_TOOLS_TSP = True               # V3.27 wieczór re-flip (17:39 UTC 25.04)
 ENABLE_V326_SAME_RESTAURANT_GROUPING = True   # V3.27 wieczór re-flip (17:39 UTC 25.04)
 ENABLE_V327_BUG_FIXES_BUNDLE = True           # V3.27 NEW (Bug Y tie-breaker + Bug Z + corridor mult)
-# V3.27.1 sesja 2 — kod loaded, flagi False (post-rollback Bug 1 19:10 UTC)
-ENABLE_V327_TSP_TIME_WINDOWS = False          # re-flip dziś wieczór sesja 3 (post Bug 1 fix)
-ENABLE_V327_WAIT_PENALTY = False              # re-flip dziś wieczór sesja 3
-ENABLE_V327_PRE_PROPOSAL_RECHECK = False      # re-flip dziś wieczór sesja 3 (po fix _v327_safe_fetch)
+# V3.27.1 sesja 3 atomic flip 2026-04-26 ~21:08 Warsaw (post Bug 1 fix)
+ENABLE_V327_TSP_TIME_WINDOWS = True           # 60min hard close, INFEASIBLE fallback wbudowany
+ENABLE_V327_WAIT_PENALTY = True               # quadratic 20+/25/30/35/40/50/60, additive A/B w shadow log
+ENABLE_V327_PRE_PROPOSAL_RECHECK = True       # Bug 1 fix: tuple return + normalize_order(raw)
 
 # Konfiguracja
 V326_OR_TOOLS_TIME_LIMIT_MS = 200             # RESTORED via parallel ThreadPoolExecutor
@@ -28,6 +28,12 @@ V327_PICKUP_TIME_WINDOW_CLOSE_MIN = 60.0      # V3.27.1 sesja 1 — TSP time win
 V327_WAIT_PENALTY_TABLE = [...7 entries...]   # V3.27.1 sesja 1 — quadratic 20+/25/30/35/40/50/60
 V327_PRE_PROPOSAL_RECHECK_AGE_MIN = 10.0      # V3.27.1 sesja 2 — skip if assigned <10 min
 V327_PRE_PROPOSAL_RECHECK_CACHE_TTL_SEC = 300 # V3.27.1 sesja 2 — skip if cache <5 min
+V327_PRE_PROPOSAL_RECHECK_FETCH_TIMEOUT_SEC = 2.0  # V3.27.1 sesja 2 — Bug 1 fix uses normalize_order
+
+# V3.27.2 — DWELL bump (Adrian domain knowledge sesja 3, NIE flag-gated)
+DWELL_PICKUP_MIN = 3.0   # was 2.0, route_simulator_v2.py
+DWELL_DROPOFF_MIN = 3.0  # was 1.0
+# Net effect: bag 6 stops (3p+3d) = +9 min real ETA
 ```
 
 **Rollback procedure** (gdy regresja peak):
@@ -578,18 +584,24 @@ Edit common.py, set flag=False, restart odpowiedni service:
 
 ## Known issues / pre-existing failures
 
-Last full regression: V3.27.1 sesja 2 (2026-04-26 ~17:00 UTC): **70 PASS / 10 FAIL**
+Last full regression: V3.27.1 sesja 3 (2026-04-26 ~21:00 UTC): **70 PASS / 10 FAIL**
 (all pre-existing, sprint-touched files ZERO FAIL). Sprint-touched 6 files:
 test_v319g1_ck_detection (16/16), test_route_simulator_c1 (8/8),
 test_scoring_v3271_wait_penalty (9/9), test_bug_b_czas_kuriera_event (3/3),
-test_shadow_serializer_v317 (6/6), test_v3271_pre_proposal_recheck (9/9).
-Total sprint tests = 51/51 PASS.
+test_shadow_serializer_v317 (6/6), test_v3271_pre_proposal_recheck (10/10 — sesja 3 +1 edge case).
 
-**V3.27.1 sesja 2 atomic flip ROLLBACK 2026-04-26 ~19:10 UTC** — Bug 1 helper
-schema mismatch w `_v327_safe_fetch_czas_kuriera` (panel API zwraca raw HH:MM,
-helper potrzebuje `panel_client.normalize_order(raw)` żeby dostać ISO). Sesja 3
-DZIŚ wieczór: fix Bug 1 + V3.27.2 Stop overhead 2 min/pickup + 2 min/drop
-+ atomic re-flip 4 flag.
+**V3.27.1 + V3.27.2 PRODUCTION STABLE LIVE od 2026-04-26 ~21:08 Warsaw**:
+- 9 LIVE flagi (6 V3.26 baseline + 3 V3.27.1 sesja 3 atomic flip)
+- DWELL_PICKUP_MIN=3.0 (was 2.0), DWELL_DROPOFF_MIN=3.0 (was 1.0) — V3.27.2 Adrian domain knowledge
+- Bug 1 fix POTWIERDZONY (zero state_machine sanity errors w 1h post-flip vs sesja 2 5+ ERROR/restart)
+- Tag `v3271-production-stable-2026-04-26-night`
+
+**YELLOW observation (architectural, NIE V3.27.1 algorithmic)**: panel_client
+login refresh ~22 min cykl (CSRF expiry) → 6-7s blocking call. Pre-V3.27.1 used
+async w panel_watcher (off path). V3.27.1 pre-proposal recheck używa synchronously
+w dispatch_pipeline → propaguje do proposal latency. 50% outliers rate w niedzielne
+low traffic (n=6), expected 3-6% w peak. Fix sesja 4 jutro: pre-warm login at startup.
+V3.28 strategic: background login refresh thread.
 
 Pre-existing test failures (NOT regression). Verified identical pre/post via
 `git stash` 2026-04-26.
