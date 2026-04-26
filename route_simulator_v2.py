@@ -31,8 +31,8 @@ import logging as _logging
 _log = _logging.getLogger("route_simulator_v2")
 
 
-DWELL_PICKUP_MIN = 2.0
-DWELL_DROPOFF_MIN = 1.0
+DWELL_PICKUP_MIN = 3.0   # was 2.0, V3.27.2 Adrian decision sesja 3 26.04 — domain knowledge kurier+koordynator
+DWELL_DROPOFF_MIN = 3.0  # was 1.0, V3.27.2 Adrian decision sesja 3 26.04 — domain knowledge kurier+koordynator
 BRUTEFORCE_MAX_BAG_AFTER = 3  # per D19
 
 # V3.27 Bug Y tie-breaker (2026-04-25 wieczór): gdy 2+ permutacje mają

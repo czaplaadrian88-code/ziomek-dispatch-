@@ -1,4 +1,4 @@
-"""V3.27.1 sesja 2 — Pre-proposal czas_kuriera recheck tests.
+"""V3.27.1 sesja 2 + sesja 3 fix Bug 1 — Pre-proposal czas_kuriera recheck tests.
 
 Mechanizm 3 hybrydowy (Adrian sesja 2 spec):
 - SKIP fetch dla świeżych assignments (<10 min)
@@ -6,20 +6,30 @@ Mechanizm 3 hybrydowy (Adrian sesja 2 spec):
 - FORCE fetch + parallel ThreadPoolExecutor + emit synth event przy zmianie
 - ZERO max bag limit (Bartek peak bag=8-11 expected)
 
-Standalone executable. Tests:
+V3.27.1 sesja 3 fix Bug 1 — Lekcja #28 zaaplikowana:
+- Mock raw response z REAL panel API schema (id, status_id, czas_kuriera HH:MM,
+  czas_odbioru_timestamp anchor)
+- Helper wywołuje REAL panel_client.normalize_order — łapie schema mismatch BEFORE
+  deploy
+- Edge case: status_id=7 (delivered) → normalize returns None → helper returns
+  (None, None) → caller skip emit, zachowuje cached state value
+
+Tests (10 cases):
 1. test_recheck_disabled_baseline — flag=False → return cached, no fetch
 2. test_recheck_skip_fresh_assignment — assigned <10 min → skip
 3. test_recheck_skip_fresh_cache — last recheck <5 min → skip
-4. test_recheck_force_fetch_old — age>10 + cache>5 → fetch + emit synth event
+4. test_recheck_force_fetch_old_emits_event — force fetch + emit z REAL schema
 5. test_recheck_parallel_no_bag_limit — bag=10 → 10 parallel fetchy
 6. test_recheck_fetch_failure_defensive — fetch raises → fallback cached, log WARN
 7. test_recheck_cache_eviction — entries >1h evicted, fresh preserved
-8. test_recheck_timeout_2s — verify timeout=2.0 passed do panel_client
+8. test_recheck_timeout_2s — verify timeout=2 passed do panel_client
 9. test_recheck_no_change_no_emit — fresh == cached → no synth event
+10. test_recheck_normalize_returns_none_skip_emit — NEW V3.27.1 sesja 3:
+    status=7 (delivered) → normalize None → helper (None, None) → skip emit
 """
 import sys
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 sys.path.insert(0, '/root/.openclaw/workspace/scripts')
 
@@ -39,7 +49,6 @@ def _make_order_sim(oid, assigned_min_ago=20, ck_warsaw="2026-04-26T17:00:00+02:
         pickup_ready_at=None,
     )
     if assigned_min_ago is not None:
-        # ISO timestamp z naive datetime (matches state_machine now_iso())
         assigned_at_dt = datetime.now(timezone.utc) - timedelta(minutes=assigned_min_ago)
         sim.assigned_at = assigned_at_dt.isoformat()
     else:
@@ -47,6 +56,21 @@ def _make_order_sim(oid, assigned_min_ago=20, ck_warsaw="2026-04-26T17:00:00+02:
     sim.czas_kuriera_warsaw = ck_warsaw
     sim.courier_id = courier_id
     return sim
+
+
+def _make_real_raw_response(oid, czas_kuriera_hhmm="17:30",
+                              status_id=3, czas_odbioru_timestamp="2026-04-26 16:30:00"):
+    """V3.27.1 sesja 3: REAL panel API schema (NIE fake `czas_kuriera_warsaw` klucz).
+
+    Lekcja #28: real raw response używa `czas_kuriera` (HH:MM string).
+    `czas_kuriera_warsaw` ISO jest computed downstream przez normalize_order.
+    """
+    return {
+        "id": oid,
+        "id_status_zamowienia": status_id,
+        "czas_kuriera": czas_kuriera_hhmm,
+        "czas_odbioru_timestamp": czas_odbioru_timestamp,
+    }
 
 
 def _reset_state():
@@ -85,8 +109,7 @@ def test_recheck_skip_fresh_assignment():
     """Order assigned <10 min temu → skip fetch, return cached."""
     _reset_state()
     _set_flag(True)
-    # Order 5 min temu (< AGE_MIN=10)
-    bag = [_make_order_sim("1002", assigned_min_ago=5)]
+    bag = [_make_order_sim("1002", assigned_min_ago=5)]  # < AGE_MIN=10
     now = datetime.now(timezone.utc)
 
     fetch_count = [0]
@@ -104,9 +127,8 @@ def test_recheck_skip_fresh_cache():
     """Order recheck <5 min temu w in-memory cache → skip fetch."""
     _reset_state()
     _set_flag(True)
-    bag = [_make_order_sim("1003", assigned_min_ago=20)]  # old enough
+    bag = [_make_order_sim("1003", assigned_min_ago=20)]
     now = datetime.now(timezone.utc)
-    # Pre-populate cache: last recheck 1 min temu (< CACHE_TTL=5 min)
     dispatch_pipeline._v327_pre_recheck_last_seen["1003"] = now - timedelta(minutes=1)
 
     fetch_count = [0]
@@ -120,17 +142,25 @@ def test_recheck_skip_fresh_cache():
 
 
 def test_recheck_force_fetch_old_emits_event():
-    """Age>10 + cache>5 → force fetch. Fresh != cached → emit synth event z source=pre_proposal_recheck."""
+    """V3.27.1 sesja 3 fix Bug 1: REAL schema flow.
+
+    Mock fetch_order_details boundary z REAL raw response (czas_kuriera HH:MM).
+    Helper wywołuje REAL normalize_order → ISO Warsaw + HH:MM (oba pola).
+    Emit synth event z source=pre_proposal_recheck + new_ck_hhmm populated.
+    """
     _reset_state()
     _set_flag(True)
+    # Cached value rożny od fresh fetch — wymusza emit
     bag = [_make_order_sim("1004", assigned_min_ago=20, ck_warsaw="2026-04-26T17:00:00+02:00")]
     now = datetime.now(timezone.utc)
+
+    # REAL raw response (panel schema): czas_kuriera HH:MM, NIE fake ISO
+    raw = _make_real_raw_response("1004", czas_kuriera_hhmm="17:30")
 
     fetch_count = [0]
     def _spy_fetch(oid, timeout=10):
         fetch_count[0] += 1
-        # Simulate fresh value DIFFERENT od cached
-        return {"czas_kuriera_warsaw": "2026-04-26T17:30:00+02:00"}
+        return raw
 
     emit_calls = []
     def _spy_emit(*args, **kwargs):
@@ -139,15 +169,24 @@ def test_recheck_force_fetch_old_emits_event():
     def _spy_apply(event):
         apply_calls.append(event)
 
+    # MOCK panel HTTP boundary (fetch_order_details), ale REAL normalize_order
     with patch.object(panel_client, "fetch_order_details", side_effect=_spy_fetch), \
          patch("dispatch_v2.event_bus.emit", side_effect=_spy_emit), \
          patch("dispatch_v2.state_machine.update_from_event", side_effect=_spy_apply):
         result = dispatch_pipeline.get_fresh_czas_kuriera_for_bag(bag, now)
 
     assert fetch_count[0] == 1, f"old order MUST fetch, got {fetch_count[0]}"
-    assert result["1004"] == "2026-04-26T17:30:00+02:00", f"fresh value MUST be returned, got {result}"
+    # Result: ISO Warsaw computed by normalize_order
+    assert result["1004"] == "2026-04-26T17:30:00+02:00", \
+        f"fresh ISO MUST be returned (computed via normalize), got {result}"
     assert len(emit_calls) == 1, f"MUST emit 1 synth event, got {len(emit_calls)}"
-    assert emit_calls[0]["payload"]["source"] == "pre_proposal_recheck"
+    payload = emit_calls[0]["payload"]
+    assert payload["source"] == "pre_proposal_recheck"
+    # KEY FIX V3.27.1 sesja 3: oba pola w payload
+    assert payload["new_ck_iso"] == "2026-04-26T17:30:00+02:00", \
+        f"payload MUST have ISO new_ck_iso, got {payload.get('new_ck_iso')}"
+    assert payload["new_ck_hhmm"] == "17:30", \
+        f"payload MUST have HH:MM new_ck_hhmm (state_machine sanity), got {payload.get('new_ck_hhmm')}"
     assert "_PRE_RECHECK_" in emit_calls[0]["event_id"]
     assert len(apply_calls) == 1, "MUST call state_machine.update_from_event"
 
@@ -156,13 +195,13 @@ def test_recheck_parallel_no_bag_limit():
     """Bag=10 → 10 parallel fetchy via ThreadPoolExecutor (NO max ceiling, Bartek peak)."""
     _reset_state()
     _set_flag(True)
-    bag = [_make_order_sim(f"200{i}", assigned_min_ago=20) for i in range(10)]  # 10 orders
+    bag = [_make_order_sim(f"200{i}", assigned_min_ago=20) for i in range(10)]
     now = datetime.now(timezone.utc)
 
     fetch_count = [0]
     def _spy_fetch(oid, timeout=10):
         fetch_count[0] += 1
-        return None  # no change
+        return None  # fetch fail → helper returns (None, None) → skip emit
     with patch.object(panel_client, "fetch_order_details", side_effect=_spy_fetch):
         result = dispatch_pipeline.get_fresh_czas_kuriera_for_bag(bag, now)
 
@@ -190,7 +229,6 @@ def test_recheck_cache_eviction():
     _reset_state()
     _set_flag(True)
     now = datetime.now(timezone.utc)
-    # Pre-populate: 1 stary entry (2h temu) + 1 fresh (1 min temu)
     dispatch_pipeline._v327_pre_recheck_last_seen["old_oid"] = now - timedelta(hours=2)
     dispatch_pipeline._v327_pre_recheck_last_seen["fresh_oid"] = now - timedelta(minutes=1)
 
@@ -221,15 +259,22 @@ def test_recheck_timeout_2s():
 
 
 def test_recheck_no_change_no_emit():
-    """Fresh == cached → no synth event (avoid spam)."""
+    """V3.27.1 sesja 3 fix: Fresh ISO == cached ISO → no synth event (avoid spam).
+
+    Cached "2026-04-26T17:00:00+02:00" + fresh raw czas_kuriera="17:00"
+    + czas_odbioru_timestamp anchor "2026-04-26 16:30:00" → normalize zwraca
+    "2026-04-26T17:00:00+02:00" identyczne → no emit.
+    """
     _reset_state()
     _set_flag(True)
     bag = [_make_order_sim("5001", assigned_min_ago=20, ck_warsaw="2026-04-26T17:00:00+02:00")]
     now = datetime.now(timezone.utc)
 
+    # REAL raw z czas_kuriera="17:00" — normalize compute ISO identyczne z cached
+    raw = _make_real_raw_response("5001", czas_kuriera_hhmm="17:00")
+
     def _spy_fetch(oid, timeout=10):
-        # Same value as cached
-        return {"czas_kuriera_warsaw": "2026-04-26T17:00:00+02:00"}
+        return raw
 
     emit_calls = []
     def _spy_emit(*args, **kwargs):
@@ -244,6 +289,40 @@ def test_recheck_no_change_no_emit():
     assert result["5001"] == "2026-04-26T17:00:00+02:00"
 
 
+def test_recheck_normalize_returns_none_skip_emit():
+    """V3.27.1 sesja 3 NEW edge case: status_id=7 (delivered) → normalize None →
+    helper (None, None) → caller skip emit, zachowuje cached state value.
+
+    Lekcja #28 satisfied: integration test catches schema-level edge case
+    (IGNORED_STATUSES filter w normalize_order) BEFORE deploy.
+    """
+    _reset_state()
+    _set_flag(True)
+    bag = [_make_order_sim("6001", assigned_min_ago=20, ck_warsaw="cached_iso")]
+    now = datetime.now(timezone.utc)
+
+    # Order delivered w trakcie cycle (status=7 → IGNORED_STATUSES)
+    raw_delivered = _make_real_raw_response("6001", czas_kuriera_hhmm="17:30", status_id=7)
+
+    def _spy_fetch(oid, timeout=10):
+        return raw_delivered
+
+    emit_calls = []
+    def _spy_emit(*args, **kwargs):
+        emit_calls.append(kwargs)
+
+    with patch.object(panel_client, "fetch_order_details", side_effect=_spy_fetch), \
+         patch("dispatch_v2.event_bus.emit", side_effect=_spy_emit), \
+         patch("dispatch_v2.state_machine.update_from_event"):
+        result = dispatch_pipeline.get_fresh_czas_kuriera_for_bag(bag, now)
+
+    # normalize_order zwraca None dla status_id=7 → helper (None, None) → skip emit
+    assert len(emit_calls) == 0, \
+        f"status delivered MUST skip emit (normalize None), got {len(emit_calls)} emits"
+    assert result["6001"] == "cached_iso", \
+        f"defensive: zachowuje cached value gdy normalize None, got {result}"
+
+
 def main():
     _orig_flag = common.ENABLE_V327_PRE_PROPOSAL_RECHECK
     tests = [
@@ -256,9 +335,10 @@ def main():
         ('recheck_cache_eviction', test_recheck_cache_eviction),
         ('recheck_timeout_2s', test_recheck_timeout_2s),
         ('recheck_no_change_no_emit', test_recheck_no_change_no_emit),
+        ('recheck_normalize_returns_none_skip_emit', test_recheck_normalize_returns_none_skip_emit),
     ]
     print('=' * 60)
-    print('V3.27.1 sesja 2 — Pre-proposal recheck tests')
+    print('V3.27.1 sesja 2 + sesja 3 fix Bug 1 — Pre-proposal recheck tests')
     print('=' * 60)
     passed = 0
     failed = []

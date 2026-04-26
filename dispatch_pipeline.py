@@ -64,24 +64,38 @@ def _v327_evict_old_pre_recheck_entries(now: datetime) -> int:
     return len(keys_to_remove)
 
 
-def _v327_safe_fetch_czas_kuriera(oid: str, timeout: float = None) -> Optional[str]:
-    """V3.27.1 sesja 2: defensive fetch z panel z timeout.
+def _v327_safe_fetch_czas_kuriera(oid: str, timeout: float = None) -> Tuple[Optional[str], Optional[str]]:
+    """V3.27.1 sesja 3 fix Bug 1 — schema-correct via panel_client.normalize_order.
 
-    Returns fresh czas_kuriera_warsaw ISO string lub None gdy fail/missing.
-    Zero exceptions raised — log WARN i return None.
+    Pre-fix (sesja 2 broken): zwracało raw HH:MM gdy `czas_kuriera_warsaw` klucz
+    nie istniał w surowym response. State_machine sanity check FAIL bo hhmm=None.
+
+    Post-fix: call `normalize_order(raw)` żeby dostać OBA pola (ISO Warsaw + HH:MM).
+
+    Returns (czas_kuriera_warsaw_iso, czas_kuriera_hhmm) tuple. (None, None) gdy:
+    - Fetch fail (timeout, connection, exception)
+    - normalize_order returns None (status_id ∈ {7,8,9} delivered/cancelled/declined
+      — order zmienił status w trakcie cycle, skip emit)
+    - Order ma czas_kuriera missing/invalid (norm fields = None, propagate up)
+
+    Caller (get_fresh_czas_kuriera_for_bag) skip emit gdy iso=None (zachowuje cached).
     """
     if timeout is None:
         timeout = C.V327_PRE_PROPOSAL_RECHECK_FETCH_TIMEOUT_SEC
     try:
         fresh = panel_client.fetch_order_details(oid, timeout=int(timeout))
         if fresh is None:
-            return None
-        # Panel returns "czas_kuriera" (HH:MM) and downstream normalizes do *_warsaw.
-        # Caller (helper main) compares to existing state value.
-        return fresh.get("czas_kuriera_warsaw") or fresh.get("czas_kuriera")
+            return (None, None)
+        # KEY FIX V3.27.1 sesja 3: normalize_order konwertuje raw HH:MM → ISO Warsaw
+        # plus filtruje IGNORED_STATUSES (7=delivered, 8=cancelled, 9=declined).
+        norm = panel_client.normalize_order(fresh)
+        if norm is None:
+            # Status ignored = order delivered/cancelled w trakcie cycle, skip
+            return (None, None)
+        return (norm.get("czas_kuriera_warsaw"), norm.get("czas_kuriera_hhmm"))
     except Exception as e:
         log.warning(f"V3.27.1 _v327_safe_fetch_czas_kuriera oid={oid} fail: {e}")
-        return None
+        return (None, None)
 
 
 def _v327_compute_delta_min(old_iso: Optional[str], new_iso: Optional[str]) -> Optional[float]:
@@ -97,28 +111,34 @@ def _v327_compute_delta_min(old_iso: Optional[str], new_iso: Optional[str]) -> O
 
 
 def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
-                                   old_ck: Optional[str], new_ck: str,
+                                   old_ck_iso: Optional[str], new_ck_iso: str,
+                                   new_ck_hhmm: Optional[str],
                                    now: datetime) -> None:
-    """V3.27.1 sesja 2: emit synth CZAS_KURIERA_UPDATED event z source=pre_proposal_recheck.
+    """V3.27.1 sesja 3 fix Bug 1 — emit synth CZAS_KURIERA_UPDATED z OBIEMA polami.
+
+    Pre-fix (sesja 2): payload `new_ck_hhmm=None` → state_machine sanity FAIL
+    (`_verify_czas_kuriera_consistency` wymaga że strftime(parsed_iso, "%H:%M")==hhmm).
+
+    Post-fix: caller (get_fresh_czas_kuriera_for_bag) przekazuje hhmm z
+    `_v327_safe_fetch_czas_kuriera` tuple — sanity check OK.
 
     Side-effect: event_bus.emit + state_machine.update_from_event w background.
-    Event_id deterministyczny: {oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{epoch_ms} —
-    unique per emit, dedup-safe (legitimate 2× zmiana w minucie = 2 events).
+    Event_id: {oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{epoch_ms} — unique per emit.
     """
     from dispatch_v2.event_bus import emit as _eb_emit
     from dispatch_v2.state_machine import update_from_event as _sm_apply
 
-    delta_min = _v327_compute_delta_min(old_ck, new_ck)
+    delta_min = _v327_compute_delta_min(old_ck_iso, new_ck_iso)
     timestamp_ms = int(now.timestamp() * 1000)
     event_id = f"{oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{timestamp_ms}"
 
     payload = {
         "oid": oid,
         "courier_id": courier_id,
-        "old_ck_iso": old_ck,
-        "old_ck_hhmm": None,  # tylko ISO znamy z fresh fetch
-        "new_ck_iso": new_ck,
-        "new_ck_hhmm": None,
+        "old_ck_iso": old_ck_iso,
+        "old_ck_hhmm": None,  # cached state — tylko ISO znamy
+        "new_ck_iso": new_ck_iso,
+        "new_ck_hhmm": new_ck_hhmm,  # V3.27.1 sesja 3 fix: OBA pola dla state_machine sanity
         "delta_min": delta_min,
         "source": "pre_proposal_recheck",
     }
@@ -134,7 +154,7 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
                  payload=payload, event_id=event_id)
         _sm_apply(event)
         delta_str = f"Δ={delta_min:+.1f}min" if delta_min is not None else "Δ=null"
-        log.info(f"V3.27.1 pre_proposal_recheck oid={oid} {old_ck or 'null'}→{new_ck} {delta_str}")
+        log.info(f"V3.27.1 pre_proposal_recheck oid={oid} {old_ck_iso or 'null'}→{new_ck_iso} ({new_ck_hhmm}) {delta_str}")
     except Exception as e:
         log.warning(f"V3.27.1 _v327_emit_pre_recheck_event oid={oid} fail: {e}")
 
@@ -219,26 +239,30 @@ def get_fresh_czas_kuriera_for_bag(bag_orders: List[OrderSim],
             for future in as_completed(future_to_oid):
                 oid = future_to_oid[future]
                 try:
-                    fresh_ck = future.result()
+                    # V3.27.1 sesja 3 fix Bug 1: helper teraz returns Tuple (iso, hhmm)
+                    fresh_iso, fresh_hhmm = future.result()
                 except Exception as e:
                     log.warning(f"V3.27.1 pre_recheck future oid={oid} exc: {e}")
-                    fresh_ck = None
+                    fresh_iso, fresh_hhmm = (None, None)
 
                 # Update cache timestamp regardless of result (avoid retry storms)
                 with _v327_pre_recheck_lock:
                     _v327_pre_recheck_last_seen[oid] = now
 
-                if fresh_ck is None:
-                    continue  # defensive: zostaje cached value w results
+                if fresh_iso is None:
+                    # Defensive: helper zwrócił (None, None) — fetch fail lub
+                    # status delivered/cancelled (normalize_order None) — skip emit.
+                    continue
 
                 # Compare z cached value
                 bag_o = bag_by_oid.get(oid)
                 cached_ck = getattr(bag_o, "czas_kuriera_warsaw", None) if bag_o else None
-                if fresh_ck != cached_ck:
-                    # Detected change — emit synth event + update results
+                if fresh_iso != cached_ck:
+                    # Detected change — emit synth event z OBIEMA polami (iso + hhmm)
                     courier_id = str(getattr(bag_o, "courier_id", "") or "") if bag_o else ""
-                    _v327_emit_pre_recheck_event(oid, courier_id, cached_ck, fresh_ck, now)
-                    results[oid] = fresh_ck
+                    _v327_emit_pre_recheck_event(oid, courier_id, cached_ck,
+                                                   fresh_iso, fresh_hhmm, now)
+                    results[oid] = fresh_iso
 
     return results
 
