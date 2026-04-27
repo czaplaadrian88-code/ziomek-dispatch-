@@ -1,8 +1,89 @@
-# CLAUDE.md — V3.27 LIVE state (post-sprint 25.04 wieczór, pre-Hetzner-upgrade)
+# CLAUDE.md — V3.27.3 + V3.27.4 LIVE state (post-sprint 27.04 wieczór)
 
-**Data:** 26.04.2026 rano
-**Sprint poprzedni:** V3.27 zamknięty stable 25.04 wieczór, sprint-complete-stable tag `7591f0a`
-**Pending:** Hetzner upgrade CPX22→CPX32 niedziela rano (Adrian's task)
+**Data:** 27.04.2026 wieczór ~22:00 Warsaw (sprint close)
+**Sprint poprzedni:** V3.27.3 + V3.27.4 zamknięty stable, tag `v3273-sprint-complete-2026-04-27`
+**Pending:** Hetzner upgrade CPX22→CPX32 (Adrian's task, off-peak)
+
+---
+
+## V3.27.3 + V3.27.4 sprint complete — 27.04.2026 wieczór
+
+5 changes LIVE chronologically:
+1. `v3271-sesja4-prewarm-stable` (12:50 Warsaw) — pre-warm login startup, 87% latency reduction
+2. `v3273-dwell-rollback-2026-04-27` (b157b32) — DWELL_PICKUP_MIN i DWELL_DROPOFF_MIN 3.0 → 2.0
+3. `v3273-task-b-wait-kuriera-2026-04-27` (9d313dd) + `v3273-task-b-flag-flip-stable` (e48e5bc) — wait_courier penalty bag>=1, flag True
+4. `v3274-frozen-pickup-window-2026-04-27` (fc7b69e) — TSP window R27 ±5 dla committed czas_kuriera
+5. `v3273-taskg-mnozniki-2026-04-27` (b1fe6af) — 5 weekday buckets adjusted (Adrian's domain)
+6. `v3273-observability-fix` (89050aa) — _AUTO_PROP_PREFIXES adds v3273_ + v3274_
+
+Diagnozy zakończone (raporty w /tmp/):
+- TASK 1 #468945 Andrei (TSP cost = distance only, V327 wait penalty wrong anchor)
+- TASK F #469014 Pani Pierożek 17:09 (H2 CONFIRMED — TSP ignored czas_kuriera 16:55)
+- TASK G combined dataset 2,681 datapoints (weekday tabela post-bias-adjust matches; Adrian's manual values applied)
+
+Cancelled:
+- Sunday traffic mult bump (Adrian: artefakt multi-leg, nie real traffic)
+- TSP cost function lateness term (V3.28 backlog post-Hetzner)
+
+Glossary changes (terms wycofane — preferowane polskie):
+- "breach czas_kuriera" → "naruszenie zadeklarowanego czas_kuriera"
+- "pickup lateness" → "TSP planuje pickup poza R27 ±5 dla frozen orderów"
+- "frozen czas_kuriera" = `czas_kuriera_warsaw is not None` (committed po first_acceptance lub manual panel update)
+
+---
+
+## Stan flag (LIVE od 27.04.2026 ~20:00 Warsaw — V3.27.3 + V3.27.4)
+
+```python
+# common.py — feature flags V3.27.3 + V3.27.4 PRODUCTION LIVE 2026-04-27 ~20:15 Warsaw
+ENABLE_V326_ANCHOR_BASED_SCORING = True       # V3.26 dzień
+ENABLE_V326_PO_DRODZE_STRICT = True           # V3.26 dzień
+ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER = True    # Block 4 OSRM
+ENABLE_V326_OR_TOOLS_TSP = True               # V3.27 wieczór re-flip
+ENABLE_V326_SAME_RESTAURANT_GROUPING = True   # V3.27 wieczór re-flip
+ENABLE_V327_BUG_FIXES_BUNDLE = True           # V3.27 (Bug Y tie-breaker + Bug Z + corridor mult)
+ENABLE_V327_TSP_TIME_WINDOWS = True           # 60min hard close (V3.27.1 sesja 3)
+ENABLE_V327_WAIT_PENALTY = True               # quadratic 20+/25/30/35/40/50/60 (V3.27.1 sesja 3)
+ENABLE_V327_PRE_PROPOSAL_RECHECK = True       # Bug 1 fix: tuple return (V3.27.1 sesja 3)
+# V3.27.3 (atomic flip 27.04 wieczór ~20:00 Warsaw)
+ENABLE_V3273_WAIT_COURIER_PENALTY = True      # NEW: courier idle pre-pickup penalty bag>=1
+# V3.27.4 (default True per Adrian — safety zasada)
+ENABLE_V3274_FROZEN_PICKUP_WINDOW = True      # NEW: R27 ±5 hard window dla committed czas_kuriera
+
+# V3.27.3 wait_courier penalty constants
+V3273_WAIT_COURIER_THRESHOLD_MIN = 5.0        # sweet spot ≤5 min
+V3273_WAIT_COURIER_FIRST_STEP_PENALTY = -10.0 # at wait=6 (first min above)
+V3273_WAIT_COURIER_PER_MIN_PENALTY = -5.0     # +5 penalty per min above 6
+V3273_WAIT_COURIER_HARD_REJECT_MIN = 20.0     # wait >20 → HARD REJECT (verdict NO)
+
+# V3.27.4 frozen pickup window
+V3274_FROZEN_PICKUP_WINDOW_MIN = 5.0          # ±5 min od czas_kuriera dla committed orderów
+
+# V3.27.2 → V3.27.3 DWELL rollback (27.04 wieczór, baked-in NIE flag)
+DWELL_PICKUP_MIN = 2.0   # V3.27.3 rollback (was 3.0 V3.27.2; pre-V3.27.2 was 2.0)
+DWELL_DROPOFF_MIN = 2.0  # V3.27.3 rollback (was 3.0 V3.27.2; pre-V3.27.2 was 1.0)
+# Net effect: bag 6 stops (3p+3d) = -6 min real ETA vs V3.27.2
+
+# V3.27.3 TASK G — weekday traffic mult update (5 buckets, Adrian's domain knowledge)
+V326_OSRM_TRAFFIC_TABLE["weekday"]:
+  13-14: 1.3 → 1.2; 14-15: 1.3 → 1.2; 15-16: 1.6 → 1.5;
+  16-17: 1.6 → 1.3 (largest); 20-21: 1.1 → 1.0
+# Sat/Sun unchanged (Adrian: sunday peak observed = artefakt multi-leg)
+
+# Konfiguracja unchanged
+V326_OR_TOOLS_TIME_LIMIT_MS = 200
+V327_MIN_OR_TOOLS_BAG_AFTER = 2
+V327_PICKUP_TIME_WINDOW_CLOSE_MIN = 60.0      # used dla NEW orders (czas_kuriera nieustalony)
+V327_WAIT_PENALTY_TABLE = [...7 entries...]
+```
+
+**Rollback per task** (post-V3.27.3 sprint):
+```bash
+# V3.27.4 rollback (frozen window): ENABLE_V3274_FROZEN_PICKUP_WINDOW=False env + restart
+# V3.27.3 TASK B rollback: ENABLE_V3273_WAIT_COURIER_PENALTY=False env + restart
+# Task 2 DWELL rollback: git revert b157b32 + restart
+# TASK G mnożniki rollback: git revert b1fe6af + restart
+```
 
 ---
 

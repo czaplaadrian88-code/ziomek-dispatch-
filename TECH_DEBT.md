@@ -1,10 +1,84 @@
 # TECH DEBT — Ziomek
 
-**V3.27 closed, V3.28 backlog**
-- Last sprint: V3.27 (25.04 wieczór, 10 tags, 4 fixy LIVE — Bug X+Y+Z + latency Phase 1)
-- Latest tag: `v327-sprint-complete-stable-2026-04-25`
-- Pending: Hetzner upgrade CPX22→CPX32 niedziela 26.04 (Adrian's task)
+**V3.27.3 + V3.27.4 closed 27.04 wieczór, V3.28 backlog**
+- Last sprint: V3.27.3 + V3.27.4 (27.04 wieczór, 8 tags, 5 changes LIVE)
+- Latest tag: `v3273-sprint-complete-2026-04-27`
+- Pending: Hetzner upgrade CPX22→CPX32 (Adrian's task, off-peak)
 - Next sprint: V3.28 (post-Hetzner stable)
+
+# ═══════════════════════════════════════════════════════════════════
+# SPRINT V3.27.3 + V3.27.4 27.04.2026 STATUS (close ~22:00 Warsaw)
+# ═══════════════════════════════════════════════════════════════════
+
+## ✅ RESOLVED 2026-04-27 wieczór (V3.27.3 + V3.27.4 sprint)
+
+### V3.27.3 Task 2 — DWELL rollback 3.0 → 2.0
+- ✅ Root cause: V3.27.2 DWELL bump (2.0/1.0 → 3.0/3.0) over-estimated stop
+  time → ETA inflation, displaceujące dobrych kandydatów (Adrian's domain obs).
+- ✅ Fix: rollback do symmetric 2.0/2.0 baked-in. Net effect bag 6 stops -6 min.
+- ✅ Commit `b157b32`, tag `v3273-dwell-rollback-2026-04-27`.
+
+### V3.27.3 TASK B — Wait courier penalty bag>=1 (TASK 1 hypothesis B fix)
+- ✅ Root cause (TASK 1 raport diagnozy #468945 Andrei): V327 wait penalty
+  używał `pickup_at - ready_at` anchor (= restaurant wait, ~DWELL constant)
+  zamiast `max(0, ready - arrival_at)` (courier idle wait).
+- ✅ Fix: nowy `compute_wait_courier_penalty(wait_min, bag_size)` helper
+  z linear gradient -10 first step, -5/min powyżej, hard reject >20.
+- ✅ Conditional: bag_size >= 1 (kurier z dowóz w aucie, jedzenie stygnie).
+- ✅ Internal API: `RoutePlanV2.arrival_at` field added, `_simulate_sequence`
+  return signature extended.
+- ✅ Commit `9d313dd` + flag flip `e48e5bc`, tag `v3273-task-b-flag-flip-stable`.
+- ✅ LIVE: Andrei #469089 bag=1 → -21.88 penalty (Ramen Base, max 6.49min).
+
+### V3.27.4 — Frozen czas_kuriera TSP time window R27 ±5
+- ✅ Root cause (TASK F deep dive #469014 Pani Pierożek 17:09): TSP cost =
+  czysta dystans, time windows hard close +60min pozwalał TSP planować pickup
+  gdziekolwiek w `[czas_kuriera, czas_kuriera+60]`. Dla orderów z committed
+  czas_kuriera (po first_acceptance) = naruszenie nietykalności.
+- ✅ Fix: dla orderów z `czas_kuriera_warsaw != None` → time window
+  `[czas_kuriera - 5, czas_kuriera + 5]` hard. Status quo dla NEW orderów.
+- ✅ Detection: simple `getattr(order, czas_kuriera_warsaw, None) is not None`.
+- ✅ Edge case: window_open < 0 → clamp na 0.
+- ✅ Flag default True per Adrian (safety zasada egzekwowana natychmiast).
+- ✅ Commit `fc7b69e`, tag `v3274-frozen-pickup-window-2026-04-27`.
+
+### V3.27.3 TASK G — Weekday traffic multipliers update (Adrian's domain)
+- ✅ Combined dataset analysis (TASK G raport, n=2,681) pokazał systemic bias
+  ~1.7× w observed_mult (DWELL underestimate + OSRM Białystok underspeed +
+  multi-leg contamination). Bias-adjusted weekday matches current 9/12 buckets.
+- ✅ Adrian's manual values applied to 5 buckets:
+  13-14: 1.3 → 1.2; 14-15: 1.3 → 1.2; 15-16: 1.6 → 1.5;
+  16-17: 1.6 → 1.3 (largest); 20-21: 1.1 → 1.0.
+- ✅ Sat/Sun unchanged (Adrian: artefakt multi-leg, nie real traffic).
+- ✅ Commit `b1fe6af`, tag `v3273-taskg-mnozniki-2026-04-27`.
+
+### V3.27.3 Observability fix (post TASK B flag flip detected)
+- ✅ Detected gap: `shadow_dispatcher._AUTO_PROP_PREFIXES` whitelist NIE miał
+  `v3273_` ani `v3274_` → 5 V3.27.3 fields NIE propagated.
+- ✅ Fix: 1-line edit, dodać `v3273_` + `v3274_` do prefixes tuple.
+- ✅ Verified post-restart: 6/6 V3.27.3 fields w shadow log #469089.
+- ✅ Commit `89050aa`, tag `v3273-observability-fix`.
+
+## V3.28 BACKLOG ADDITIONS (post V3.27.3 sprint)
+
+### Real-time traffic API integration
+- Adrian's strategiczne pytanie 27.04 wieczór: czy 3 alternatywy?
+  1. Google Distance Matrix API (paid, real-time accurate, accuracy znana)
+  2. OSRM + paid traffic feed (mid-cost, kontrola self-host)
+  3. Crowd-source GPS-based traffic (free, własne GPS data, wymaga modeling)
+- Decision deferred do post-V3.27.4 lunch peak validation 28.04.
+
+### Methodology improvements per TASK G raport
+- DWELL true measurement (instrument courier app dla actual handover times)
+- Single-leg filter dla historical (panel state at pickup, NIE heuristic overlap)
+- OSRM Białystok calibration (controlled test routes z known speeds)
+- Geocode coverage extension (89% rows lost na address lookup, dodać outskirts)
+- Pre-requisites pełnej traffic mult recalibration
+
+### V3.28 future: TSP cost function lateness term
+- Path 2 z TASK F raport recommended fix paths
+- 4-6h impl, complex (OR-Tools cost callback z time slack penalty)
+- Defer post-Hetzner upgrade (CPX22 already saturated)
 
 # ═══════════════════════════════════════════════════════════════════
 # SPRINT V3.27 25.04.2026 STATUS (close ~19:00 Warsaw)

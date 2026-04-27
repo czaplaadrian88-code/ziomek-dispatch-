@@ -104,3 +104,60 @@ Pełne lessons history w `TECH_DEBT.md` sekcji "📚 LEKCJE V3.27 (added)":
 
 LESSONS.md = curated subset (krytyczne lekcje sesji), TECH_DEBT.md = full history
 z context tickets/bug refs.
+
+---
+
+## Lekcja #30 (V3.27.3 sprint 27.04 wieczór)
+
+**Recurring user decisions = explicit "CO JUŻ USTALONE" handoff section**
+
+### Problem
+
+Sesja 27.04 V3.27.3 ujawniła że recurring decisions nie były internalizowane
+przez chat session. Konkretne case'y:
+
+1. **Sweet-spot ambiguity:** "5 min sweet spot dla wait kuriera" (TASK B) vs
+   "20 min sweet spot dla przedłużenia restauracji" (V327 wait penalty).
+   Adrian musiał powtórzyć tę decyzję 4+ razy zanim została poprawnie
+   utrwalona w specyfikacji TASK B.
+
+2. **Glossary drift:** Terminy "breach" i "lateness" wszedłszy do CC słownictwa
+   wprowadzały zamieszanie semantyczne. Adrian preferuje polskie terminy:
+   "naruszenie zadeklarowanego czas_kuriera" zamiast "breach", "TSP planuje
+   pickup poza R27 ±5" zamiast "lateness".
+
+3. **Frozen vs new order distinction:** Adrian's zasada "czas_kuriera po
+   przypisaniu = nietykalny" musiała być wyciśnięta z prompt-u 3 razy zanim
+   została pełnie zoperacjonalizowana w V3.27.4.
+
+### Konsekwencje
+
+- Dłuższy session time (każda powtórka = 5-10 min back-and-forth)
+- Adrian zmęczenie (sesja 14h+ tego dnia)
+- Ryzyko bug-introduction gdyby jakaś decyzja została źle zinterpretowana
+
+### Reguła
+
+1. **Każdy nowy CC prompt zaczyna sekcją "CO JUŻ USTALONE"** z explicit listą
+   decyzji + glossary terminów + timestamps.
+
+2. **Plik wiedzy session-handoff** dostaje stałą sekcję "GLOSSARY V3.27.3+"
+   i "KEY DECISIONS" z timestamps i context.
+
+3. **Adrian preferencje terminologii:**
+   - Polskie terminy nad angielskimi (gdzie sensowne semantycznie)
+   - Explicit nad shortcuts ("zadeklarowany czas_kuriera" nie "ck", "naruszenie
+     R27 ±5" nie "breach")
+   - Zasady wymieniane explicitly nad assumed (np. "czas_kuriera po przypisaniu
+     = nietykalny" jako wymagane wstęp do każdego TSP-related task)
+
+4. **Pre-implementation verify per Lekcja #5/#19/#26:** każda decyzja Adrian'a
+   confirmed explicitly w prompt PRZED implementacją (np. "Q1: flag default
+   True czy False? Q2: detection logic Adrian's simple pattern OK?").
+
+### Identical pattern do
+
+- **Lekcja #5/#19/#26** (Pytaj nie zgaduj — pre-implementation grep + verify)
+- **Lekcja #11** (Adrian decision matrix wymaga explicit pytań)
+- **Lekcja #20** (Strategic principle — quality + scaling > shortcuts also
+  applies do communication patterns)
