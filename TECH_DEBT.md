@@ -3,8 +3,10 @@
 **V3.27.3 + V3.27.4 closed 27.04 wieczór, V3.28 backlog**
 - Last sprint: V3.27.3 + V3.27.4 (27.04 wieczór, 8 tags, 5 changes LIVE)
 - Latest tag: `v3273-sprint-complete-2026-04-27`
-- Pending: Hetzner upgrade CPX22→CPX32 (Adrian's task, off-peak)
-- Next sprint: V3.28 (post-Hetzner stable)
+- ~~Pending~~ ✅ **EXECUTED 27.04 wieczór**: Hetzner upgrade CPX22→CPX32
+  (Adrian's task, off-peak post sprint close ~20:30 Warsaw). Verify: `nproc=4`,
+  `free -h: 7.6Gi` (was 2 vCPU + 4 GB).
+- Next sprint: V3.28 (post-Hetzner stable, lunch peak validation 28.04 12-14)
 
 # ═══════════════════════════════════════════════════════════════════
 # SPRINT V3.27.3 + V3.27.4 27.04.2026 STATUS (close ~22:00 Warsaw)
@@ -357,15 +359,21 @@
 - Effort: 5 min implementation + 1 test
 - Conditional: V3.27.1 sesja 4 jutro 27.04 9:00-9:30, przed lunch peak validation
 
-### #20 — V3.28 BACKGROUND-LOGIN-REFRESH-THREAD [HIGH, 30-60 min, strategic V3.28]
+### #20 — V3.28 BACKGROUND-LOGIN-REFRESH-THREAD [DEFERRED post-Hetzner CPX32]
 
-- **Strategic fix**: async thread refresh CSRF co 18 min (przed expiry) →
+- **Status update 27.04 wieczór**: DEFERRED — post-Hetzner CPX32 alone gives
+  headroom (4 vCPU + 7.6 GB vs prior 2 vCPU + 4 GB). Pre-warm login (#19) +
+  CPX32 latency parallelism = sufficient bez background refresh thread.
+- **Strategic fix (oryginal spec)**: async thread refresh CSRF co 18 min (przed expiry) →
   zero blocking proposal latency ever
-- **Why**: pre-warm login (#19) eliminates only first-proposal-cold-login.
-  Co 22 min nadal jeden proposal trafi login refresh. W Warsaw expansion +
-  high-volume peak (300+ proposals/h) 3% rate = ~10 outliers/h = visible p95.
-- Effort: 30-60 min implementation + tests
-- Conditional: V3.28 post sesja 4 verify że #19 alone nie wystarcza
+- **Why DEFERRED**: pre-warm login (#19) eliminates first-proposal-cold-login.
+  Co 22 min jeden proposal nadal trafi login refresh. ALE: CPX32 4-vCPU
+  parallelism + 2x throughput cap = single 5-7s outlier per cycle nie blocks
+  dispatch (parallel candidates evaluations). Lunch peak 28.04 da empirical
+  signal czy outliers visible w p95.
+- Effort: 30-60 min implementation + tests (jeśli reaktywowane)
+- Conditional reaktywacja: V3.28 jeśli post-CPX32 lunch peak nadal >5% p95
+  outliers blocking proposals.
 
 ### V3.28-VENV-REQUIREMENTS-OUTSIDE-REPO [LOW, 30-60 min]
 
