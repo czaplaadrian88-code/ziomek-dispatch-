@@ -536,6 +536,27 @@ def run() -> int:
             f"runtime import w tsp_solver still active"
         )
 
+    # V3.27.1 sesja 4 (2026-04-27): pre-warm panel_client login na startup.
+    # Lekcja #29: pre_proposal_recheck (V3.27.1 sesja 3) używa panel_client.fetch_order_details
+    # synchronicznie w dispatch_pipeline → CSRF login refresh (~6-7s blocking)
+    # propagates do proposal latency. Pre-warm eliminates first-proposal cold
+    # login penalty. Login refresh co 22 min nadal trafi proposal (oczekiwane
+    # 3-6% rate w peak — V3.28 background refresh thread to pełen fix).
+    # Defensive try/except — jeśli panel unreachable, skip bez fail (proposal
+    # path lazy fetch handle).
+    try:
+        from dispatch_v2 import panel_client as _wu_panel
+        _wu_login_t0 = time.perf_counter()
+        _wu_panel.login(force=True)
+        _wu_login_ms = (time.perf_counter() - _wu_login_t0) * 1000.0
+        _log.info(f"V3.27.1 sesja 4 panel_client pre-warm login complete: {_wu_login_ms:.1f}ms")
+    except Exception as _wu_login_e:
+        _log.warning(
+            f"V3.27.1 sesja 4 panel_client pre-warm login skipped "
+            f"({type(_wu_login_e).__name__}: {_wu_login_e}) — "
+            f"first-proposal lazy login still active"
+        )
+
     totals = {"processed": 0, "failed": 0, "skipped": 0}
     last_heartbeat = time.time()
 
