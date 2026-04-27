@@ -1279,6 +1279,30 @@ V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_AGE_SEC = 3600.0  # TTL 1h dla in-memory c
 V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_EVERY = 100  # trigger eviction co 100 calls
 V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_MAX_SIZE = 1000  # OR jeśli cache size > 1000
 
+# ============================================================
+# V3.27.3 Wait kuriera penalty (2026-04-27) — kara za idle pod restauracją
+# ============================================================
+# Hypothesis B + C fix z Task 1 diagnozy #468945. V327 wait_pen używa
+# `plan.pickup_at - pickup_ready_at` = ile RESTAURACJA czeka na kuriera (= 0
+# dla early arrival po max+dwell logic). NIE wykrywa kuriera idle przed
+# restauracją (bag bundling case). Andrei #468945: chain arrival 12:32, ready
+# 12:44:57 → real wait kuriera 12.6 min, system widział 0 (sweet-spot ≤20).
+#
+# Mechanizm V3.27.3:
+#   wait_courier_min[oid] = max(0, pickup_ready_at - plan.arrival_at[oid])
+#   gdzie plan.arrival_at = chain-aware drive arrival PRZED wait + dwell.
+# Linear gradient -10 dla 6 min, -5 per dodatkową minutę aż do 20 min.
+# >20 min = HARD REJECT (infeasibility signal).
+# Conditional: bag_size_at_insertion >= 1 (kurier ma dowóz w aucie, jedzenie
+# stygnie podczas idle). bag=0 skip — kurier wolny i tak czeka na zlecenie.
+# Default False — shadow validation period przed flip True.
+ENABLE_V3273_WAIT_COURIER_PENALTY = _os.environ.get(
+    "ENABLE_V3273_WAIT_COURIER_PENALTY", "0") == "1"  # default False
+V3273_WAIT_COURIER_THRESHOLD_MIN = 5.0   # sweet spot ≤5 min (Adrian R27 ±5 margin)
+V3273_WAIT_COURIER_FIRST_STEP_PENALTY = -10.0  # at wait=6 (first min above threshold)
+V3273_WAIT_COURIER_PER_MIN_PENALTY = -5.0      # +5 penalty per min above wait=6
+V3273_WAIT_COURIER_HARD_REJECT_MIN = 20.0      # wait >20 → HARD REJECT (infeasible)
+
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
 # Adrian's specification: grupujemy ordery z tej samej restauracji TYLKO gdy
 # czas_kuriera ±5 min AND drop quadrants compatible (same lub adjacent w

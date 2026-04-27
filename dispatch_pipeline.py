@@ -591,6 +591,14 @@ def _v326_build_rationale(best: "Candidate", feasible: list) -> dict:
         _wd = 0.30
     _s_dystans = 100.0 * _math.exp(-_km_for_rationale / _decay) if _km_for_rationale > 0 else 100.0
     _bliskosc_contribution = (_s_dystans - 100.0) * _wd  # negative penalty vs ideal
+    # V3.27.3: kara_wait_kuriera factor z custom value (wait_min + restaurant)
+    # dla rich rendering w dlaczego ("kara_wait_kuriera -X (czeka Y min pod {rest})").
+    _v3273_wait_value = None
+    if bm.get("v3273_wait_courier_max_min") and float(bm.get("v3273_wait_courier_max_min") or 0) > 0:
+        _v3273_wait_value = {
+            "wait_min": float(bm.get("v3273_wait_courier_max_min") or 0),
+            "restaurant": bm.get("v3273_wait_courier_max_restaurant") or "?",
+        }
     factors = [
         ("bliskość", bm.get("km_to_pickup"), _bliskosc_contribution),  # actual scoring loss vs km=0
         ("fala", None, float(bm.get("bundle_bonus") or 0)),
@@ -601,6 +609,7 @@ def _v326_build_rationale(best: "Candidate", feasible: list) -> dict:
         ("kara_R8", None, float(bm.get("bonus_r8_soft_pen") or 0)),
         ("kara_R9_stop", None, float(bm.get("bonus_r9_stopover") or 0)),
         ("kara_R9_wait", None, float(bm.get("bonus_r9_wait_pen") or 0)),
+        ("kara_wait_kuriera", _v3273_wait_value, float(bm.get("bonus_v3273_wait_courier") or 0)),
         ("kara_BUG4_cap", None, float(bm.get("bonus_bug4_cap_soft") or 0)),
         ("ext_kara", None, float(bm.get("v324a_extension_penalty") or 0)),
         ("V3.25_pre_shift", None, float(bm.get("v325_pre_shift_soft_penalty") or 0)),
@@ -626,7 +635,13 @@ def _v326_build_rationale(best: "Candidate", feasible: list) -> dict:
         parts = []
         for label, value, contrib in top_3:
             sign = "+" if contrib >= 0 else ""
-            parts.append(f"{label} {sign}{contrib:.0f}")
+            # V3.27.3: kara_wait_kuriera ma rich format "(czeka Y min pod {rest})"
+            if label == "kara_wait_kuriera" and isinstance(value, dict):
+                _w = value.get("wait_min", 0)
+                _r = value.get("restaurant", "?")
+                parts.append(f"{label} {sign}{contrib:.0f} (czeka {_w:.0f}min pod {_r})")
+            else:
+                parts.append(f"{label} {sign}{contrib:.0f}")
         dlaczego = ", ".join(parts)
     else:
         dlaczego = "brak wyróżniających czynników (default scoring)"
@@ -1687,6 +1702,73 @@ def assess_order(
         else:
             bonus_r9_wait_pen = bonus_r9_wait_pen_legacy
 
+        # V3.27.3 Wait kuriera penalty (Task 1 hypothesis B+C fix, 2026-04-27).
+        # Mierzy idle kuriera pod restauracją (max(0, ready - chain_arrival)),
+        # vs V327 mierzy restaurant wait (pickup_at - ready). Conditional
+        # bag_size>=1 (jedzenie w aucie stygnie). HARD REJECT >20 min.
+        # Per-pickup w plan.sequence; uses plan.arrival_at (V3.27.3 NEW field).
+        bonus_v3273_wait_courier = 0.0
+        v3273_wait_courier_max_min = 0.0
+        v3273_wait_courier_max_oid = None
+        v3273_wait_courier_max_restaurant = None
+        v3273_wait_courier_hard_reject = False
+        v3273_wait_courier_per_pickup = []
+        if getattr(C, "ENABLE_V3273_WAIT_COURIER_PENALTY", False) and plan is not None:
+            from datetime import datetime as _dt3273
+            from dispatch_v2.scoring import compute_wait_courier_penalty as _v3273_wcp
+            _new_oid_273 = getattr(new_order, "order_id", None)
+            _bag_by_oid_273 = {b.order_id: b for b in bag_sim} if bag_sim else {}
+            _plan_arrival_273 = getattr(plan, "arrival_at", None) or {}
+            _plan_seq_273 = getattr(plan, "sequence", None) or []
+            _bag_size_at_insertion_273 = len(bag_sim) if bag_sim else 0
+            for _oid_273 in _plan_seq_273:
+                _str_oid_273 = str(_oid_273)
+                _order_ready_273 = None
+                if _str_oid_273 == str(_new_oid_273):
+                    _order_ready_273 = pickup_ready_at
+                elif _str_oid_273 in _bag_by_oid_273:
+                    _bo_273 = _bag_by_oid_273[_str_oid_273]
+                    if getattr(_bo_273, "picked_up_at", None) is None:
+                        _order_ready_273 = getattr(_bo_273, "pickup_ready_at", None)
+                if _order_ready_273 is None:
+                    continue
+                _arr_273 = _plan_arrival_273.get(_str_oid_273)
+                if _arr_273 is None:
+                    continue
+                try:
+                    if isinstance(_arr_273, str):
+                        _arr_dt_273 = _dt3273.fromisoformat(_arr_273)
+                    else:
+                        _arr_dt_273 = _arr_273
+                    if _arr_dt_273.tzinfo is None:
+                        _arr_dt_273 = _arr_dt_273.replace(tzinfo=timezone.utc)
+                    _ready_273 = _order_ready_273
+                    if _ready_273.tzinfo is None:
+                        _ready_273 = _ready_273.replace(tzinfo=timezone.utc)
+                    _wait_273 = max(0.0, (_ready_273 - _arr_dt_273).total_seconds() / 60.0)
+                    _pen_273, _reject_273 = _v3273_wcp(_wait_273, _bag_size_at_insertion_273)
+                    v3273_wait_courier_per_pickup.append({
+                        "oid": _str_oid_273,
+                        "wait_min": round(_wait_273, 2),
+                        "penalty": round(_pen_273, 2),
+                        "hard_reject": _reject_273,
+                    })
+                    if _reject_273:
+                        v3273_wait_courier_hard_reject = True
+                    bonus_v3273_wait_courier += _pen_273
+                    if _wait_273 > v3273_wait_courier_max_min:
+                        v3273_wait_courier_max_min = _wait_273
+                        v3273_wait_courier_max_oid = _str_oid_273
+                        if _str_oid_273 == str(_new_oid_273):
+                            v3273_wait_courier_max_restaurant = restaurant_name
+                        else:
+                            for _b_273 in bag_raw:
+                                if str(_b_273.get("order_id") or "") == _str_oid_273:
+                                    v3273_wait_courier_max_restaurant = _b_273.get("restaurant")
+                                    break
+                except Exception:
+                    continue
+
         # Wczytaj rule_weights (adaptive penalties R1/R5/R8)
         try:
             import json as _json
@@ -1789,7 +1871,7 @@ def assess_order(
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
         bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.
@@ -1918,6 +2000,12 @@ def assess_order(
             # V3.27.1: A/B comparison fields (legacy = always computed; v327 = 0 gdy flag=False)
             "bonus_r9_wait_pen_legacy": round(bonus_r9_wait_pen_legacy, 2),
             "bonus_r9_wait_pen_v327": round(bonus_r9_wait_pen_v327, 2),
+            "bonus_v3273_wait_courier": round(bonus_v3273_wait_courier, 2),
+            "v3273_wait_courier_max_min": round(v3273_wait_courier_max_min, 2),
+            "v3273_wait_courier_max_restaurant": v3273_wait_courier_max_restaurant,
+            "v3273_wait_courier_max_oid": v3273_wait_courier_max_oid,
+            "v3273_wait_courier_hard_reject": v3273_wait_courier_hard_reject,
+            "v3273_wait_courier_per_pickup": v3273_wait_courier_per_pickup,
             "bonus_penalty_sum": round(bonus_penalty_sum, 2),
             # Transparency OPCJA A (2026-04-19): order_id → (restaurant, delivery_address)
             # mapping dla route section w telegram_approver. Per-courier bag snapshot.
@@ -2000,6 +2088,13 @@ def assess_order(
         if v324a_extension_hard_reject and verdict == "MAYBE":
             verdict = "NO"
             reason = f"v324a_extension_too_large ({v324a_extension_min:.1f}min > {C.V324_HARD_REJECT_EXTENSION_OVER_MIN})"
+
+        # V3.27.3 hard reject: kurier idle >20 min pod restauracją (bag>=1).
+        # Same pattern jak v324a — override MAYBE → NO, nie przebijamy wcześniejszego NO.
+        if v3273_wait_courier_hard_reject and verdict == "MAYBE":
+            verdict = "NO"
+            _rest_273 = v3273_wait_courier_max_restaurant or "?"
+            reason = f"v3273_wait_courier_hard_reject ({v3273_wait_courier_max_min:.1f}min > {C.V3273_WAIT_COURIER_HARD_REJECT_MIN} pod {_rest_273})"
 
         return Candidate(
             courier_id=str(cid),

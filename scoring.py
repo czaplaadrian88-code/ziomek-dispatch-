@@ -93,6 +93,60 @@ def compute_wait_penalty(wait_min: float) -> float:
             return y1 + ratio * (y2 - y1)
     return 0.0  # defensive fallthrough
 
+
+def compute_wait_courier_penalty(
+    wait_min: float,
+    bag_size_at_insertion: int,
+) -> Tuple[float, bool]:
+    """V3.27.3 Wait kuriera penalty (2026-04-27).
+
+    Penalty za czekanie kuriera pod restauracją po chain-aware arrival.
+    `wait_min = max(0, pickup_ready_at - plan.arrival_at[oid])` (kurier idle
+    przed restauracja, NIE plan.pickup_at - ready_at).
+
+    Conditional firing: bag_size_at_insertion >= 1 (kurier ma już dowóz w aucie,
+    jedzenie stygnie podczas idle). bag=0 skip — kurier wolny i tak czeka na
+    zlecenie, lepiej mu cokolwiek dać.
+
+    Linear gradient table:
+      ≤5 min sweet spot   → 0
+      6 min               → -10  (first step)
+      7-20 min            → -10 + (wait_min - 6) * -5  (-5/min above 6)
+      >20 min             → HARD REJECT (return penalty=0, reject=True)
+
+    Args:
+        wait_min: czas idle kuriera pod restauracją (min)
+        bag_size_at_insertion: liczba orderów w bagu PRZED nowym insert
+            (= len(bag) before adding new_order)
+
+    Returns:
+        Tuple (penalty, hard_reject):
+        - penalty (float): score adjustment, ≤ 0
+        - hard_reject (bool): True gdy candidate powinien być infeasible
+
+    Flag-gated: gdy ENABLE_V3273_WAIT_COURIER_PENALTY=False zwraca (0.0, False).
+    """
+    from dispatch_v2 import common as _common
+    if not _common.ENABLE_V3273_WAIT_COURIER_PENALTY:
+        return (0.0, False)
+    if bag_size_at_insertion < 1:
+        return (0.0, False)
+    if wait_min is None or wait_min <= _common.V3273_WAIT_COURIER_THRESHOLD_MIN:
+        return (0.0, False)
+    if wait_min > _common.V3273_WAIT_COURIER_HARD_REJECT_MIN:
+        return (0.0, True)
+    # Wait min in (5, 20]: linear gradient
+    # Formula: penalty = first_step + (wait_min - 6) * per_min_step
+    # wait=6: -10; wait=7: -15; wait=8: -20; ... wait=20: -80
+    extra_min_above_6 = max(0.0, wait_min - 6.0)
+    penalty = _common.V3273_WAIT_COURIER_FIRST_STEP_PENALTY + extra_min_above_6 * _common.V3273_WAIT_COURIER_PER_MIN_PENALTY
+    # For wait_min in (5, 6) interpolate from 0 to -10 linearly
+    if wait_min < 6.0:
+        ratio = (wait_min - _common.V3273_WAIT_COURIER_THRESHOLD_MIN) / (6.0 - _common.V3273_WAIT_COURIER_THRESHOLD_MIN)
+        penalty = ratio * _common.V3273_WAIT_COURIER_FIRST_STEP_PENALTY
+    return (penalty, False)
+
+
 def score_candidate(
     courier_pos: Tuple[float, float],
     restaurant_pos: Tuple[float, float],

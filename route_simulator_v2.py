@@ -17,7 +17,7 @@ Pure function, zero state.
 """
 from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Dict, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import permutations
 
 from dispatch_v2 import osrm_client
@@ -127,6 +127,11 @@ class RoutePlanV2:
     # F2.2 C1 (2026-04-18): per-order elapsed pickup→drop in minutes.
     # None = incomplete computation → C2 gate MUST fail-closed (reject).
     per_order_delivery_times: Optional[Dict[str, float]] = None
+    # V3.27.3 (2026-04-27): chain-aware arrival timestamp at pickup restaurant
+    # PRZED wait jump (max with ready_at) i PRZED DWELL_PICKUP_MIN. Ground truth
+    # raw drive arrival time. Used by wait_courier penalty (max(0, ready - arrival)).
+    # Empty dict default — backward compat dla test fixtures z keyword args.
+    arrival_at: Dict[str, datetime] = field(default_factory=dict)
 
 
 def simulate_bag_route_v2(
@@ -402,16 +407,24 @@ def _simulate_sequence(
     leg_min,
     seq: List[int],
     now: datetime,
-) -> Tuple[float, Dict[str, datetime], Dict[str, datetime]]:
-    """Walk nodes in order. Returns (total_min, delivered_at, pickup_at)."""
+) -> Tuple[float, Dict[str, datetime], Dict[str, datetime], Dict[str, datetime]]:
+    """Walk nodes in order. Returns (total_min, delivered_at, pickup_at, arrival_at).
+
+    V3.27.3 (2026-04-27): arrival_at[oid] = raw drive arrival timestamp at pickup
+    restaurant PRZED wait jump (max with ready_at) i PRZED DWELL_PICKUP_MIN.
+    Used by wait_courier penalty: wait_min = max(0, ready_at - arrival_at).
+    """
     current = 0  # courier
     t = now
     delivered_at: Dict[str, datetime] = {}
     pickup_at: Dict[str, datetime] = {}
+    arrival_at: Dict[str, datetime] = {}
     for idx in seq:
         t = t + timedelta(minutes=leg_min(current, idx))
         node = nodes[idx]
         if node["kind"] == "pickup":
+            # V3.27.3: capture raw drive arrival PRZED wait + dwell
+            arrival_t = t
             ready = getattr(node["ref"], "pickup_ready_at", None)
             if ready is not None:
                 if ready.tzinfo is None:
@@ -427,8 +440,10 @@ def _simulate_sequence(
             if group_oids:
                 for grp_oid in group_oids:
                     pickup_at[grp_oid] = t
+                    arrival_at[grp_oid] = arrival_t
             else:
                 pickup_at[node["order_id"]] = t
+                arrival_at[node["order_id"]] = arrival_t
         elif node["kind"] == "delivery":
             # V3.18 Bug 1: dla bag itemów z status != "picked_up" (kurier jeszcze
             # nie odebrał z restauracji) predicted drop NIE MOŻE być przed
@@ -478,7 +493,7 @@ def _simulate_sequence(
             delivered_at[node["order_id"]] = t
         current = idx
     total_min = (t - now).total_seconds() / 60.0
-    return total_min, delivered_at, pickup_at
+    return total_min, delivered_at, pickup_at, arrival_at
 
 
 def _count_sla_violations(
@@ -549,7 +564,7 @@ def _plan_from_sequence(
     now: datetime,
     sla_minutes: int,
 ) -> RoutePlanV2:
-    total, delivered_at, pickup_at = _simulate_sequence(nodes, leg_min, seq, now)
+    total, delivered_at, pickup_at, arrival_at = _simulate_sequence(nodes, leg_min, seq, now)
     violations = _count_sla_violations(delivered_at, pickup_at, bag, new_order, now, sla_minutes)
     per_order_times = _compute_per_order_delivery_minutes(delivered_at, pickup_at, bag, new_order, now)
     delivery_order = [nodes[i]["order_id"] for i in seq if nodes[i]["kind"] == "delivery"]
@@ -562,6 +577,7 @@ def _plan_from_sequence(
         sla_violations=violations,
         osrm_fallback_used=False,
         per_order_delivery_times=per_order_times,
+        arrival_at=arrival_at,
     )
 
 
