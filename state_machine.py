@@ -288,11 +288,33 @@ def update_from_event(event: dict) -> Optional[dict]:
     if etype == "COURIER_ASSIGNED":
         # V3.19f: update czas_kuriera przy re-assignment (panel "+15min" button
         # może zmienić commitment). Sanity check przed update.
+        # V3.27.5 Path B (2026-04-27): preserve terminal status (picked_up,
+        # delivered) na subsequent COURIER_ASSIGNED. Pre-fix: panel_diff
+        # COURIER_ASSIGNED post-PICKED_UP nadpisywał status="picked_up" → "assigned",
+        # tworząc inconsistency (status=assigned + picked_up_at SET) — TASK H
+        # diagnoza 2026-04-27 wykryła 13.4% rate (185/1384 picked-up orders 7d).
+        # Race condition: PICKED_UP (reconcile) + COURIER_ASSIGNED (panel_diff)
+        # fire same panel_watcher cycle, ASSIGNED ~12-18s later → status revert.
         ck_iso = payload.get("czas_kuriera_warsaw")
         ck_hhmm = payload.get("czas_kuriera_hhmm")
+        # V3.27.5 Path B: check current status — preserve terminal states
+        prev = get_order(oid) or {}
+        prev_status = prev.get("status")
+        if prev_status in ("picked_up", "delivered"):
+            # Order już terminal — preserve status. Update tylko legitimate
+            # re-assignment fields (courier_id, czas_kuriera) jeśli zmienione.
+            new_status = prev_status
+            _log.warning(
+                f"COURIER_ASSIGNED {oid} ignored status revert: "
+                f"prev_status={prev_status}, source={event.get('source','?')}, "
+                f"courier_id_new={event.get('courier_id')} courier_id_old={prev.get('courier_id')} "
+                f"(V3.27.5 Path B preserve terminal)"
+            )
+        else:
+            new_status = "assigned"
         merged = {
-            "status": "assigned",
-            "commitment_level": "assigned",
+            "status": new_status,
+            "commitment_level": new_status if new_status in ("picked_up", "delivered") else "assigned",
             "courier_id": event.get("courier_id"),
             "assigned_at": now_iso(),
             "proposed_delivery_time": payload.get("proposed_time"),
