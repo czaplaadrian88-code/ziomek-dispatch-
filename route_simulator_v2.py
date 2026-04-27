@@ -780,8 +780,22 @@ def _ortools_plan(
                 if ready is not None:
                     try:
                         open_min = max(0.0, (ready - now).total_seconds() / 60.0)
-                        close_min = open_min + _common.V327_PICKUP_TIME_WINDOW_CLOSE_MIN
-                        time_windows.append((open_min, close_min))
+                        # V3.27.4 (2026-04-27 wieczór): frozen czas_kuriera detection.
+                        # Order ma committed czas_kuriera (first_acceptance lub manual
+                        # panel update) → R27 ±5 hard window zamiast 60-min.
+                        # Per Adrian zasada: "czas_kuriera po przypisaniu = nietykalny".
+                        czas_kuriera_committed = (
+                            _common.ENABLE_V3274_FROZEN_PICKUP_WINDOW
+                            and ref is not None
+                            and getattr(ref, "czas_kuriera_warsaw", None) is not None
+                        )
+                        if czas_kuriera_committed:
+                            window_open = max(0.0, open_min - _common.V3274_FROZEN_PICKUP_WINDOW_MIN)
+                            window_close = open_min + _common.V3274_FROZEN_PICKUP_WINDOW_MIN
+                            time_windows.append((window_open, window_close))
+                        else:
+                            close_min = open_min + _common.V327_PICKUP_TIME_WINDOW_CLOSE_MIN
+                            time_windows.append((open_min, close_min))
                     except Exception:
                         time_windows.append((0.0, _common.V327_DROP_TIME_WINDOW_MAX_MIN))
                 else:

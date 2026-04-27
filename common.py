@@ -1303,6 +1303,31 @@ V3273_WAIT_COURIER_FIRST_STEP_PENALTY = -10.0  # at wait=6 (first min above thre
 V3273_WAIT_COURIER_PER_MIN_PENALTY = -5.0      # +5 penalty per min above wait=6
 V3273_WAIT_COURIER_HARD_REJECT_MIN = 20.0      # wait >20 → HARD REJECT (infeasible)
 
+# ============================================================
+# V3.27.4 Frozen czas_kuriera TSP time window (2026-04-27 wieczór)
+# ============================================================
+# Naprawia #469014 root cause (TASK F H2): TSP cost = czysta dystans ignorował
+# czas_kuriera 16:55 dla Pani Pierożek, planował pickup 17:09 (chain math) bo
+# 60-min hard close window pozwalał TSP planować pickup gdziekolwiek w
+# [czas_kuriera, czas_kuriera+60].
+#
+# Mechanizm V3.27.4: dla orderów z committed czas_kuriera (czas_kuriera_warsaw
+# != None), TSP time window = [czas_kuriera - 5, czas_kuriera + 5] hard.
+# Per Adrian zasada: "czas_kuriera po przypisaniu = nietykalny" (R27 ±5
+# margin). Detection logic Adrian's simple pattern: getattr(order,
+# czas_kuriera_warsaw, None) is not None — niezależny od pochodzenia
+# (first_acceptance lub manual panel change).
+#
+# Edge case: window_open < 0 (czas_kuriera blisko decision_ts) → clamp na 0
+# (Ziomek może planować pickup od now do ck+5).
+#
+# Risk: minimal. Restricts TSP do permutacji respektujących R27 ±5 dla
+# frozen orderów. Jeśli żadna permutacja feasible → kandydat infeasible
+# (lepiej szukać innego kuriera niż naruszyć zadeklarowane czas_kuriera).
+ENABLE_V3274_FROZEN_PICKUP_WINDOW = _os.environ.get(
+    "ENABLE_V3274_FROZEN_PICKUP_WINDOW", "1") == "1"  # default True per Adrian — safety zasada
+V3274_FROZEN_PICKUP_WINDOW_MIN = 5.0  # ±5 min od czas_kuriera dla committed orderów
+
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
 # Adrian's specification: grupujemy ordery z tej samej restauracji TYLKO gdy
 # czas_kuriera ±5 min AND drop quadrants compatible (same lub adjacent w
