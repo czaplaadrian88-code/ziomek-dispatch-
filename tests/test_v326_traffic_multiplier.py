@@ -35,7 +35,12 @@ def _utc_for_warsaw(year, month, day, hour, minute=0, second=0):
 # ─── Helper tests ──────────────────────────────────────────────────
 
 def test_helper_weekday_buckets():
-    """Each Adrian table weekday row maps to expected multiplier."""
+    """Each Adrian table weekday row maps to expected multiplier.
+
+    V3.27.3 TASK G update 2026-04-27: 5 buckets adjusted (Adrian's domain
+    knowledge): 13-14 i 14-15 → 1.2 (was 1.3); 15-16 → 1.5 (was 1.6);
+    16-17 → 1.3 (was 1.6, largest delta); 20-21 → 1.0 (was 1.1).
+    """
     # 2026-04-20 is a Monday (weekday()==0)
     cases = [
         (5, 1.0),    # 00-06
@@ -43,10 +48,13 @@ def test_helper_weekday_buckets():
         (9, 1.1),    # 08-10
         (11, 1.1),   # 10-12
         (12, 1.2),   # 12-13
-        (14, 1.3),   # 13-15
-        (16, 1.6),   # 15-17 peak
+        (13, 1.2),   # 13-14 (was 1.3) — TASK G
+        (14, 1.2),   # 14-15 (was 1.3) — TASK G
+        (15, 1.5),   # 15-16 (was 1.6) — TASK G
+        (16, 1.3),   # 16-17 (was 1.6, largest delta) — TASK G
         (18, 1.2),   # 17-19
-        (20, 1.1),   # 19-21
+        (19, 1.1),   # 19-20
+        (20, 1.0),   # 20-21 (was 1.1) — TASK G
         (22, 1.0),   # 21-24
     ]
     for h, expected in cases:
@@ -86,9 +94,13 @@ def test_helper_boundary_lower_inclusive():
 
 
 def test_helper_boundary_upper_exclusive():
-    """16:59:59 → 1.6 (still in 15-17)."""
+    """V3.27.3 TASK G: 16:59:59 → 1.3 (still in 16-17, was 15-17 peak 1.6).
+
+    Sprawdzanie boundary upper-exclusive: 16:59:59 mieści się w buckecie
+    [16, 17) o wartości 1.3 (Adrian's largest correction post-TASK G).
+    """
     ts = _utc_for_warsaw(2026, 4, 20, 16, 59, 59)
-    assert common.get_traffic_multiplier(ts) == 1.6
+    assert common.get_traffic_multiplier(ts) == 1.3
     print("PASS test_helper_boundary_upper_exclusive")
 
 
@@ -167,10 +179,14 @@ def test_route_flag_false_shadow_records_no_mutation():
 
 
 def test_route_flag_true_applies_and_preserves_raw():
-    """flag=True at peak hour: duration_s = 600 × 1.6 = 960; raw preserved."""
+    """V3.27.3 TASK G: flag=True at peak hour 15:00: duration_s = 600 × 1.5 = 900; raw preserved.
+
+    Updated post-TASK G: peak Mon 16:00 = 1.3 (was 1.6). Test używa Mon 15:00
+    = 1.5 (was 1.6) jako representative peak hour.
+    """
     _reset_state()
     # Mock now_utc inside osrm_client.route via patching datetime.datetime.now
-    peak_utc = _utc_for_warsaw(2026, 4, 20, 16, 0)  # Mon 16:00 → mult 1.6
+    peak_utc = _utc_for_warsaw(2026, 4, 20, 15, 0)  # Mon 15:00 → mult 1.5 (TASK G)
 
     fake_dt = mock.MagicMock(wraps=datetime)
     fake_dt.now = mock.MagicMock(return_value=peak_utc)
@@ -179,10 +195,10 @@ def test_route_flag_true_applies_and_preserves_raw():
          mock.patch.object(osrm_client, "datetime", fake_dt), \
          _patch_urlopen_returning(_osrm_route_payload(duration_s=600)):
         r = osrm_client.route((53.13, 23.16), (53.10, 23.20), use_cache=False)
-    assert r["traffic_multiplier"] == 1.6, f"expected mult 1.6, got {r.get('traffic_multiplier')}"
+    assert r["traffic_multiplier"] == 1.5, f"expected mult 1.5, got {r.get('traffic_multiplier')}"
     assert r["osrm_raw_duration_s"] == 600, f"raw should be 600, got {r['osrm_raw_duration_s']}"
-    assert r["duration_s"] == 960.0, f"adjusted should be 960, got {r['duration_s']}"
-    assert r["duration_min"] == 16.0, f"adjusted min should be 16.0, got {r['duration_min']}"
+    assert r["duration_s"] == 900.0, f"adjusted should be 900, got {r['duration_s']}"
+    assert r["duration_min"] == 15.0, f"adjusted min should be 15.0, got {r['duration_min']}"
     assert r["osrm_raw_duration_min"] == 10.0, f"raw min should be 10.0, got {r['osrm_raw_duration_min']}"
     assert osrm_client._osrm_stats["traffic_mult_calls"] == 1
     print("PASS test_route_flag_true_applies_and_preserves_raw")
@@ -215,19 +231,20 @@ def test_route_cache_idempotency_across_hours():
         f"cache must hold RAW 600, got {cached_dict.get('duration_s')}"
     )
 
-    # Second call at PEAK (mult=1.6): should adjust from RAW 600 → 960 (NOT 600×1.0×1.6 either way; correct = 960)
-    peak_utc = _utc_for_warsaw(2026, 4, 20, 16, 0)
+    # V3.27.3 TASK G update: Second call at PEAK Mon 15:00 (mult=1.5, was 1.6):
+    # should adjust from RAW 600 → 900 (NOT 600×1.0×1.5 either way; correct = 900)
+    peak_utc = _utc_for_warsaw(2026, 4, 20, 15, 0)
     fake_dt_peak = mock.MagicMock(wraps=datetime)
     fake_dt_peak.now = mock.MagicMock(return_value=peak_utc)
 
     with mock.patch.object(osrm_client, "ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER", True), \
          mock.patch.object(osrm_client, "datetime", fake_dt_peak):
         r2 = osrm_client.route((53.13, 23.16), (53.10, 23.20), use_cache=True)
-    assert r2["traffic_multiplier"] == 1.6, f"peak: expected mult 1.6, got {r2['traffic_multiplier']}"
+    assert r2["traffic_multiplier"] == 1.5, f"peak: expected mult 1.5, got {r2['traffic_multiplier']}"
     assert r2["osrm_raw_duration_s"] == 600, f"raw still 600, got {r2['osrm_raw_duration_s']}"
-    assert r2["duration_s"] == 960.0, (
-        f"peak from cache: 600 × 1.6 = 960, got {r2['duration_s']} "
-        f"(double-mult bug would give 600×1.6×1.6=1536)"
+    assert r2["duration_s"] == 900.0, (
+        f"peak from cache: 600 × 1.5 = 900, got {r2['duration_s']} "
+        f"(double-mult bug would give 600×1.5×1.5=1350)"
     )
     print("PASS test_route_cache_idempotency_across_hours")
 

@@ -29,7 +29,8 @@ def _wsa(year, month, day, hh, mm=0):
 
 
 def test_weekday_buckets_unchanged():
-    """V3.27 weekday table NIE zmienione — backward compat."""
+    """V3.27.3 TASK G update 2026-04-27: 5 buckets adjusted (Adrian's domain
+    knowledge). Test name historical, weryfikuje POST-TASK G values."""
     # Wednesday = 22 kwietnia 2026 (weekday 2)
     cases = [
         (5, 1.0),    # 0-6
@@ -37,10 +38,13 @@ def test_weekday_buckets_unchanged():
         (9, 1.1),    # 8-10
         (11, 1.1),   # 10-12
         (12, 1.2),   # 12-13
-        (14, 1.3),   # 13-15
-        (16, 1.6),   # 15-17 peak
+        (13, 1.2),   # 13-14 (TASK G: was 1.3)
+        (14, 1.2),   # 14-15 (TASK G: was 1.3)
+        (15, 1.5),   # 15-16 (TASK G: was 1.6)
+        (16, 1.3),   # 16-17 (TASK G: was 1.6, largest delta)
         (18, 1.2),   # 17-19
-        (20, 1.1),   # 19-21
+        (19, 1.1),   # 19-20
+        (20, 1.0),   # 20-21 (TASK G: was 1.1)
         (22, 1.0),   # 21-24
     ]
     for h, expected in cases:
