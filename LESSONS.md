@@ -161,3 +161,63 @@ przez chat session. Konkretne case'y:
 - **Lekcja #11** (Adrian decision matrix wymaga explicit pytań)
 - **Lekcja #20** (Strategic principle — quality + scaling > shortcuts also
   applies do communication patterns)
+
+---
+
+## Lekcja #31 (V3.27.5 sprint 27.04 wieczór late)
+
+**Chain of bugs: state machine handler + downstream consumer = double-fix wymagana**
+
+### Problem
+
+TASK H diagnoza #469099 (2026-04-27 wieczór) ujawniła **chain of bugs** — żadne pojedyncze
+miejsce nie było w pełni odpowiedzialne, dwa współpracujące błędy tworzyły bug:
+
+1. **State_machine bug:** `COURIER_ASSIGNED` handler unconditionally setting
+   `status="assigned"` bez guard dla terminal states. Panel_diff post-PICKED_UP
+   (race ~12-18s) nadpisywał status="picked_up" → "assigned", picked_up_at preserved.
+
+2. **Downstream consumer bug:** `_bag_dict_to_ordersim` używał TYLKO field
+   `status` jako primary signal picked_up vs not, ignorując picked_up_at SET.
+   Przy state inconsistency (post-revert), simulator misclassyfikował picked-up
+   jako assigned → pickup-node added do TSP graph.
+
+3. **Cascade konsekwencja:** TSP frozen window (V3.27.4) correctly fired
+   constraint (0,5) dla bogus pickup-node, INFEASIBLE → fallback bez constraints
+   → plan z pickup_at dla picked-up orderów.
+
+Bug rate: **13.4%** (185/1384 picked-up orders w 7 dni). Systematic, NIE edge case.
+
+### Konsekwencje
+
+- Plan trasy zawiera pickupy dla picked-up orderów godzinę temu (operator
+  confusion + R6 SLA violation false positive).
+- TSP fallback mask root cause — wygląda jak working solver ale plan jest bogus.
+- Lunch peak validation under risk dopóki fix nie applied.
+
+### Reguła
+
+**Defense-in-depth across layer boundaries:**
+
+1. **Każdy state machine handler nadpisujący status MUSI guard terminal states**
+   (`picked_up`, `delivered`, `cancelled`). Pattern: `prev = get_order(oid)`,
+   `if prev.status in TERMINAL: preserve`.
+
+2. **Każdy downstream consumer MUSI prefer canonical signal nad derived**:
+   - `picked_up_at != None` jest canonical (monotonic, terminal)
+   - `status` jest derived (mutable, race-prone)
+   - Use `is_picked_up = (status == "picked_up") OR (picked_up_at is not None)`
+
+3. **PRE-FIX VERIFY OBLIGATORY** dla bug fixów:
+   - Q1: Wszystkie consumers field X — czy fix at boundary protects all?
+   - Q2: Wszystkie writers field X — czy są inne miejsca z tym pattern?
+   - Q3: Counter-pattern (places already using correct signal)
+   - Q4: Cycle frequency (timing/race characteristics)
+   - Q5: **Historical bug rate** (count similar cases w 7-30 dni). >10% = systematyczny.
+
+### Identical pattern do
+
+- **Lekcja #1** (Invisible data loss — silent state mutation)
+- **Lekcja #28** (Mock tests passed but integration FAIL — race conditions
+  visible only w real shadow log replay)
+- **Lekcja #30** (Recurring user decisions = explicit handoff)

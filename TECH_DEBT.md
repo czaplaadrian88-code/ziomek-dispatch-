@@ -1,8 +1,68 @@
 # TECH DEBT — Ziomek
 
-**V3.27.3 + V3.27.4 closed 27.04 wieczór, V3.28 backlog**
-- Last sprint: V3.27.3 + V3.27.4 (27.04 wieczór, 8 tags, 5 changes LIVE)
-- Latest tag: `v3273-sprint-complete-2026-04-27`
+**V3.27.5 closed 27.04 wieczór late (hotfix TASK H), V3.28 backlog**
+- Last sprint: V3.27.5 (27.04 wieczór late, 3 tags, 2 fixes LIVE — Path A + Path B)
+- Latest tag: `v3275-sprint-stable-2026-04-27`
+
+# ═══════════════════════════════════════════════════════════════════
+# SPRINT V3.27.5 27.04.2026 STATUS (close ~22:00 Warsaw — hotfix TASK H)
+# ═══════════════════════════════════════════════════════════════════
+
+## ✅ RESOLVED 2026-04-27 wieczór late (V3.27.5 hotfix sprint)
+
+### V3.27.5 Path B — state_machine COURIER_ASSIGNED preserve terminal states
+- ✅ Root cause (TASK H diagnoza #469099 wieczór): COURIER_ASSIGNED handler
+  unconditionally setting status="assigned" → panel_diff post-PICKED_UP nadpisywał
+  status="picked_up" → "assigned" w race ~12-18s.
+- ✅ Bug rate: 13.4% (185/1384 picked-up orders w 7 dni) — systematyczny.
+- ✅ Fix (`state_machine.py:288-330`): get_order(oid) before merge, if prev_status
+  in (picked_up, delivered) preserve, log WARNING. courier_id i czas_kuriera
+  fields nadal updateowane (legitimate re-assignment).
+- ✅ Commit `1cdd195`, tag `v3275-path-b-state-preserve-terminal-2026-04-27`.
+- ✅ Tests: 4/4 PASS (3 unit + 1 integration #469087 events.db replay).
+
+### V3.27.5 Path A — _bag_dict_to_ordersim defense-in-depth
+- ✅ Root cause level 2: simulator interface używał tylko status field.
+- ✅ Fix (`dispatch_pipeline.py:923-933`): is_picked_up = (status=="picked_up")
+  OR (picked_up_at is not None). picked_up_at jest canonical signal.
+- ✅ Replikuje existing best practice w feasibility_v2.py + sla_tracker.py.
+- ✅ Commit `d07629f`, tag `v3275-path-a-defense-in-depth-2026-04-27`.
+- ✅ Tests: 5/5 PASS (4 unit + 1 integration #469087).
+
+### V3.27.5 PRE-FIX VERIFY (TASK H KROK 1) — Q1-Q5 findings
+- ✅ Q1: Path A scope minimal but complete (all simulator-level consumers
+  protected via OrderSim boundary).
+- ✅ Q2: Path B target jedyny critical handler (COURIER_ASSIGNED).
+  NEW_ORDER theoretical concern → V3.28 backlog.
+- ✅ Q3: counter-pattern confirmed (feasibility_v2 + sla_tracker already
+  use picked_up_at preferred).
+- ✅ Q4: panel_watcher cycle race condition characterized.
+- ✅ Q5: bug rate 13.4% systematyczny (>10% threshold).
+
+## V3.28 BACKLOG additions z V3.27.5 PRE-FIX VERIFY
+
+### courier_resolver.py:232-233 status field bug (different concern)
+- Pattern similar do TASK H bug ale w courier_resolver `is_picked = ... status==picked_up`
+- Different concern: courier position determination, NIE bag pickup-node
+- Effort 30 min (defensive fix similar do Path A pattern)
+- Priority: MEDIUM (NIE blocker dla TASK H, ale defense-in-depth pożyteczne)
+
+### NEW_ORDER preserve terminal handler (defensive)
+- state_machine NEW_ORDER theoretically mógłby nadpisać picked_up jeśli re-emit
+- Rare per panel_watcher idempotency — never observed
+- Effort 30 min (mirror Path B pattern dla NEW_ORDER)
+- Priority: LOW (defensive, not blocking)
+
+### COURIER_UN_PICKED event type
+- Edge case: jeśli Adrian INTENTIONALLY un-picks order w panelu, current Path B
+  blockuje status revert ze wszystkimi paneldif COURIER_ASSIGNED.
+- Solution: explicit `COURIER_UN_PICKED` event type dla legitimate un-pick flow
+- Effort 1-2h (event emit z panel_watcher + handler w state_machine)
+- Priority: LOW (rare scenario, current Path B WARNING log captures audit trail)
+
+# ═══════════════════════════════════════════════════════════════════
+# SPRINT V3.27.3 + V3.27.4 27.04.2026 STATUS (close ~22:00 Warsaw)
+# ═══════════════════════════════════════════════════════════════════
 - ~~Pending~~ ✅ **EXECUTED 27.04 wieczór**: Hetzner upgrade CPX22→CPX32
   (Adrian's task, off-peak post sprint close ~20:30 Warsaw). Verify: `nproc=4`,
   `free -h: 7.6Gi` (was 2 vCPU + 4 GB).

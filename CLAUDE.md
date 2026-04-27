@@ -1,6 +1,39 @@
-# CLAUDE.md — V3.27.3 + V3.27.4 LIVE state (post-sprint 27.04 wieczór)
+# CLAUDE.md — V3.27.5 LIVE state (post-sprint 27.04 wieczór late)
 
-**Data:** 27.04.2026 wieczór ~22:00 Warsaw (sprint close)
+**Data:** 27.04.2026 wieczór ~22:00 Warsaw (V3.27.5 hotfix sprint close)
+**Latest tag:** `v3275-sprint-stable-2026-04-27`
+**Pending:** lunch peak validation 28.04 12-14 (V3.27.5 stress test) +
+Hetzner CPX22→CPX32 upgrade EXECUTED 27.04 wieczór ✓
+
+---
+
+## V3.27.5 hotfix sprint — 27.04.2026 wieczór late (TASK H fix)
+
+**Bug:** Plan trasy zawierał pickupy dla picked-up orderów (#469099 case).
+Bug rate 13.4% (185/1384 picked-up orders w 7 dni) — systematyczny.
+
+**Root cause chain:**
+1. state_machine COURIER_ASSIGNED nadpisywał status="picked_up" → "assigned"
+   (panel_diff post-PICKED_UP, ~14s race)
+2. _bag_dict_to_ordersim używał tylko status field (NIE picked_up_at) →
+   misclassyfikował picked-up jako assigned
+3. TSP frozen window infeasibility → fallback bez constraints → bogus plan
+
+**Fixes (defense-in-depth, 2 commits):**
+- **Path B** (`v3275-path-b-state-preserve-terminal-2026-04-27`, `1cdd195`):
+  state_machine.py:288-330 preserve terminal status (picked_up, delivered)
+  on COURIER_ASSIGNED. WARNING log dla audit trail.
+- **Path A** (`v3275-path-a-defense-in-depth-2026-04-27`, `d07629f`):
+  dispatch_pipeline.py:923-933 use `picked_up_at != None` as canonical signal.
+
+**Tests:** 9/9 (4 Path B + 5 Path A) + regression 31/31 PASS.
+**Restart:** 19:41:03 UTC (pre-warm 5562ms, ortools 51ms, 0 errors).
+**Currently inconsistent orders:** 0 (clean state post-deploy).
+
+---
+
+## V3.27.3 + V3.27.4 sprint complete — 27.04.2026 wieczór
+
 **Sprint poprzedni:** V3.27.3 + V3.27.4 zamknięty stable, tag `v3273-sprint-complete-2026-04-27`
 **Pending:** Hetzner upgrade CPX22→CPX32 (Adrian's task, off-peak)
 
