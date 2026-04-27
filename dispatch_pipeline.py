@@ -923,12 +923,19 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     status = d.get("status", "assigned")
     pickup_c = d.get("pickup_coords") or (0.0, 0.0)
     deliv_c = d.get("delivery_coords") or (0.0, 0.0)
+    # V3.27.5 Path A (2026-04-27): defense-in-depth dla state inconsistency.
+    # Pre-fix: status field jedyny signal picked_up. Path B fixes state_machine
+    # COURIER_ASSIGNED handler (preserve terminal status), ale picked_up_at
+    # canonical signal — działa NAWET jeśli future state_machine bug pojawi się
+    # downstream. Per TASK H Q3: feasibility_v2 + sla_tracker już używają
+    # picked_up_at preferred — Path A replikuje best practice.
+    is_picked_up = (status == "picked_up") or (picked is not None)
     sim = OrderSim(
         order_id=str(d.get("order_id") or d.get("id") or ""),
         pickup_coords=tuple(pickup_c),
         delivery_coords=tuple(deliv_c),
         picked_up_at=picked,
-        status="picked_up" if status == "picked_up" else "assigned",
+        status="picked_up" if is_picked_up else "assigned",
         pickup_ready_at=pra,  # F2.1c R8 T_KUR propagation
     )
     # V3.27.1 sesja 2: dynamic attrs dla pre-proposal recheck helper.
