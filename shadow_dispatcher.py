@@ -94,7 +94,7 @@ def _serialize_dt_map(m):
 # trzymał hardcoded explicit list — 14+ kluczy droppowane do learning_log
 # (cross-review B#H1). Loop po prefixach zapewnia że *_reject_reason,
 # *_speed_*, *_fleet_*, etc. trafia do logu bez ręcznego dodawania pole-po-polu.
-_AUTO_PROP_PREFIXES = ("v325_", "v326_", "v319_", "r07_", "bonus_", "rule_")
+_AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "bonus_", "rule_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
