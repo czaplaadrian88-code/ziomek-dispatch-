@@ -366,23 +366,6 @@ def simulate_bag_route_v2(
         plan.strategy = "greedy"
 
     plan.osrm_fallback_used = fallback_used
-    # V3274_PROBE_STRATEGY 2026-04-28: log strategy ZAWSZE gdy bag ma frozen ck
-    # order (V3.27.4 case). Pozwala odróżnić path: ortools (window applied) vs
-    # sticky/bruteforce/greedy/greedy_fallback (window NIE applied → potencjalna
-    # luka). Remove post-validation.
-    try:
-        _frozen_oids = [
-            getattr(o, "order_id", "?") for o in bag
-            if getattr(o, "czas_kuriera_warsaw", None) is not None
-        ]
-        if _frozen_oids:
-            _log.warning(
-                f"V3274_PROBE_STRATEGY strategy={getattr(plan, 'strategy', '?')} "
-                f"frozen_ck_bag_oids={_frozen_oids} bag_size={len(bag)} "
-                f"new_oid={getattr(new_order, 'order_id', '?')}"
-            )
-    except Exception as _ee:
-        _log.warning(f"V3274_PROBE_STRATEGY exc: {type(_ee).__name__}: {_ee}")
     return plan
 
 
@@ -801,11 +784,10 @@ def _ortools_plan(
                         # Order ma committed czas_kuriera (first_acceptance lub manual
                         # panel update) → R27 ±5 hard window zamiast 60-min.
                         # Per Adrian zasada: "czas_kuriera po przypisaniu = nietykalny".
-                        _ck_raw = getattr(ref, "czas_kuriera_warsaw", None) if ref is not None else None
                         czas_kuriera_committed = (
                             _common.ENABLE_V3274_FROZEN_PICKUP_WINDOW
                             and ref is not None
-                            and _ck_raw is not None
+                            and getattr(ref, "czas_kuriera_warsaw", None) is not None
                         )
                         if czas_kuriera_committed:
                             window_open = max(0.0, open_min - _common.V3274_FROZEN_PICKUP_WINDOW_MIN)
@@ -814,18 +796,6 @@ def _ortools_plan(
                         else:
                             close_min = open_min + _common.V327_PICKUP_TIME_WINDOW_CLOSE_MIN
                             time_windows.append((open_min, close_min))
-                        # V3274_PROBE 2026-04-28: empirical signal czy detection fires
-                        # dla bag pickup nodes z frozen ck. Filter na _ck_raw not None
-                        # (new_order pickup nigdy nie ma ck → nie loguj).
-                        # Remove post-validation (Path C decision).
-                        if _ck_raw is not None:
-                            _wo, _wc = time_windows[-1]
-                            _log.warning(
-                                f"V3274_PROBE_PRE oid={getattr(ref, 'order_id', '?')} "
-                                f"ck_type={type(_ck_raw).__name__} ck={repr(_ck_raw)[:50]} "
-                                f"ready={ready} now={now} open_min={open_min:.2f} "
-                                f"window=[{_wo:.2f},{_wc:.2f}] committed={czas_kuriera_committed}"
-                            )
                     except Exception:
                         time_windows.append((0.0, _common.V327_DROP_TIME_WINDOW_MAX_MIN))
                 else:
@@ -874,40 +844,4 @@ def _ortools_plan(
     plan = _plan_from_sequence(
         solution.sequence, nodes, leg_min, new_order, bag, now, sla_minutes
     )
-    # V3274_PROBE_POST 2026-04-28: post-TSP empirical — dla każdego pickup-node
-    # w sequence porównaj walked t (z pickup_at) vs window close_min. Jeśli
-    # frozen ck pickup violates window → dowód że TSP zaakceptował violation
-    # zamiast INFEASIBLE retry. Loguj solver_status + strategy hint.
-    # Remove post-validation (Path C decision).
-    try:
-        if time_windows is not None and plan is not None:
-            for node_idx, node in enumerate(nodes):
-                if node.get("kind") != "pickup":
-                    continue
-                tw = time_windows[node_idx] if node_idx < len(time_windows) else None
-                if tw is None:
-                    continue
-                _wo, _wc = tw
-                _ref = node.get("ref")
-                _ck = getattr(_ref, "czas_kuriera_warsaw", None) if _ref is not None else None
-                # Loguj tylko bag pickup z ck (V3.27.4 cases)
-                if _ck is None:
-                    continue
-                _oid = getattr(_ref, "order_id", node.get("order_id", "?"))
-                _pa = plan.pickup_at.get(_oid) if hasattr(plan, "pickup_at") else None
-                if _pa is not None:
-                    if _pa.tzinfo is None:
-                        _pa_utc = _pa.replace(tzinfo=timezone.utc)
-                    else:
-                        _pa_utc = _pa.astimezone(timezone.utc)
-                    walked_min = (_pa_utc - now).total_seconds() / 60.0
-                    violated = walked_min > _wc + 0.5  # 0.5 min tolerance
-                    _log.warning(
-                        f"V3274_PROBE_POST oid={_oid} window=[{_wo:.2f},{_wc:.2f}] "
-                        f"walked_min={walked_min:.2f} violated={violated} "
-                        f"solver_status={solution.solver_status} elapsed={solution.elapsed_ms}ms "
-                        f"strategy=ortools"
-                    )
-    except Exception as _ee:
-        _log.warning(f"V3274_PROBE_POST exc: {type(_ee).__name__}: {_ee}")
     return plan
