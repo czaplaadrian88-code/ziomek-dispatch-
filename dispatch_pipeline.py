@@ -1086,13 +1086,35 @@ def assess_order(
         # Side-effect: emit synth CZAS_KURIERA_UPDATED z source=pre_proposal_recheck.
         if bag_sim and C.ENABLE_V327_PRE_PROPOSAL_RECHECK:
             try:
+                # V3274_PROBE_PRE_MUTATION 2026-04-28: capture type + repr przed override
+                _probe_pre = [
+                    (getattr(_bo, "order_id", "?"),
+                     type(getattr(_bo, "czas_kuriera_warsaw", None)).__name__,
+                     repr(getattr(_bo, "czas_kuriera_warsaw", None))[:50])
+                    for _bo in bag_sim
+                ]
                 _fresh_ck_dict = get_fresh_czas_kuriera_for_bag(bag_sim, now)
                 # Override OrderSim.czas_kuriera_warsaw dla orders gdzie fresh != cached.
                 # Downstream scoring/TSP/feasibility używa updated values w tym candidate run.
+                _mutated_oids = []
                 for _bo in bag_sim:
                     _fresh = _fresh_ck_dict.get(_bo.order_id)
                     if _fresh is not None and _fresh != getattr(_bo, "czas_kuriera_warsaw", None):
                         _bo.czas_kuriera_warsaw = _fresh
+                        _mutated_oids.append(_bo.order_id)
+                # V3274_PROBE_POST_MUTATION 2026-04-28: log PRE/POST type + repr
+                # tylko gdy bag ma orders z czas_kuriera (V3.27.4 cases) — minimum noise.
+                if _probe_pre and any(t != "NoneType" for _, t, _ in _probe_pre):
+                    _probe_post = [
+                        (getattr(_bo, "order_id", "?"),
+                         type(getattr(_bo, "czas_kuriera_warsaw", None)).__name__,
+                         repr(getattr(_bo, "czas_kuriera_warsaw", None))[:50])
+                        for _bo in bag_sim
+                    ]
+                    log.warning(
+                        f"V3274_PROBE_MUTATION cid={cid} new_oid={getattr(order, 'order_id', '?')} "
+                        f"PRE={_probe_pre} POST={_probe_post} mutated={_mutated_oids}"
+                    )
             except Exception as _e:
                 log.warning(f"V3.27.1 pre_recheck oid_new={getattr(order, 'order_id', '?')} cid={cid} fail: {_e}")
                 # Defensive: continue z cached bag_sim values (zero behavior change)
