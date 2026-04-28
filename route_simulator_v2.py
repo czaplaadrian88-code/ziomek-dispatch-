@@ -347,7 +347,11 @@ def simulate_bag_route_v2(
             )
             plan.strategy = "greedy_fallback"
         else:
-            plan.strategy = "ortools"
+            # V3.27.6 FIX 2c (2026-04-28): _ortools_plan może pre-set strategy
+            # do "ortools_rejected_v3274" gdy frozen ck violation detected.
+            # Respect pre-set value, NIE override (Adrian's eyeball signal).
+            if not plan.strategy:
+                plan.strategy = "ortools"
     elif bag_after_add <= BRUTEFORCE_MAX_BAG_AFTER:
         plan = _bruteforce_plan(
             nodes, leg_min, bag_delivery_idxs,
@@ -778,16 +782,29 @@ def _ortools_plan(
                 ref = node.get("ref")
                 ready = getattr(ref, "pickup_ready_at", None) if ref is not None else None
                 if ready is not None:
+                    # V3.27.6 (2026-04-28): capture ck_raw + parsed_dt PRZED try
+                    # block, żeby loud warning w except miał pełen kontekst.
+                    _ck_raw = getattr(ref, "czas_kuriera_warsaw", None) if ref is not None else None
+                    _ck_oid = getattr(ref, "order_id", "?") if ref is not None else "?"
+                    _ck_parse_err = None
                     try:
                         open_min = max(0.0, (ready - now).total_seconds() / 60.0)
                         # V3.27.4 (2026-04-27 wieczór): frozen czas_kuriera detection.
                         # Order ma committed czas_kuriera (first_acceptance lub manual
                         # panel update) → R27 ±5 hard window zamiast 60-min.
                         # Per Adrian zasada: "czas_kuriera po przypisaniu = nietykalny".
+                        # V3.27.6 FIX 1 Path C (2026-04-28): explicit string-form
+                        # rejection. Pre-fix sprawdzał tylko `is not None` —
+                        # padający na "None"/"null"/"" string formy. Pattern z
+                        # V3.27.5 Path A (canonical signal robustness).
+                        ck_present = (
+                            _ck_raw is not None
+                            and str(_ck_raw).strip() not in ("", "None", "null", "NULL", "None\n")
+                        )
                         czas_kuriera_committed = (
                             _common.ENABLE_V3274_FROZEN_PICKUP_WINDOW
                             and ref is not None
-                            and getattr(ref, "czas_kuriera_warsaw", None) is not None
+                            and ck_present
                         )
                         if czas_kuriera_committed:
                             window_open = max(0.0, open_min - _common.V3274_FROZEN_PICKUP_WINDOW_MIN)
@@ -796,8 +813,19 @@ def _ortools_plan(
                         else:
                             close_min = open_min + _common.V327_PICKUP_TIME_WINDOW_CLOSE_MIN
                             time_windows.append((open_min, close_min))
-                    except Exception:
-                        time_windows.append((0.0, _common.V327_DROP_TIME_WINDOW_MAX_MIN))
+                    except Exception as _tw_exc:
+                        # V3.27.6 FIX 2a (2026-04-28): replace silent except.
+                        # Loguj oid, ck_raw value, ck type, parse error repr,
+                        # fallback window applied. Daje empirical signal H2 (type/
+                        # format mutation) bez osobnego probe sprintu.
+                        _fb = (0.0, _common.V327_DROP_TIME_WINDOW_MAX_MIN)
+                        time_windows.append(_fb)
+                        _log.warning(
+                            f"V3274_TIMEWINDOW_FALLBACK oid={_ck_oid} "
+                            f"ck_type={type(_ck_raw).__name__} ck_repr={repr(_ck_raw)[:80]} "
+                            f"ready={ready!r} now={now!r} except={type(_tw_exc).__name__}: "
+                            f"{repr(_tw_exc)[:120]} fallback_window={_fb}"
+                        )
                 else:
                     time_windows.append((0.0, _common.V327_DROP_TIME_WINDOW_MAX_MIN))
             else:
@@ -844,4 +872,73 @@ def _ortools_plan(
     plan = _plan_from_sequence(
         solution.sequence, nodes, leg_min, new_order, bag, now, sla_minutes
     )
+
+    # V3.27.6 FIX 2b (2026-04-28): post-solve assertion dla frozen ck pickups.
+    # Diagnoses runtime divergence vs synthetic: czy plan.pickup_at[oid] dla
+    # frozen ck order respektuje [ck-5, ck+5] window. Dwustopniowy log:
+    #   - TOLERANCE: walked ∈ (close, close+0.5] → warning, NIE reject
+    #   - VIOLATION: walked > close+0.5 → warning + reject + greedy fallback
+    # Reject path zwraca strategy="ortools_rejected_v3274" (osobny enum dla
+    # eyeball Adrian + events.db category, NIE myli z standard greedy_fallback).
+    try:
+        if time_windows is not None and plan is not None and hasattr(plan, "pickup_at"):
+            _violations = []
+            _tolerances = []
+            for node_idx, node in enumerate(nodes):
+                if node.get("kind") != "pickup":
+                    continue
+                if node_idx >= len(time_windows):
+                    continue
+                tw = time_windows[node_idx]
+                if tw is None:
+                    continue
+                _wo, _wc = tw
+                _ref = node.get("ref")
+                _ck = getattr(_ref, "czas_kuriera_warsaw", None) if _ref is not None else None
+                # Tylko frozen ck nodes (V3.27.4 case) — nie sprawdzaj new_order
+                # 60-min path bo to inny scope.
+                if _ck is None:
+                    continue
+                _oid = getattr(_ref, "order_id", node.get("order_id", "?"))
+                _pa = plan.pickup_at.get(_oid) if plan.pickup_at else None
+                if _pa is None:
+                    continue
+                if _pa.tzinfo is None:
+                    _pa_utc = _pa.replace(tzinfo=timezone.utc)
+                else:
+                    _pa_utc = _pa.astimezone(timezone.utc)
+                walked_min = (_pa_utc - now).total_seconds() / 60.0
+                if walked_min > _wc + 0.5:
+                    _violations.append((_oid, walked_min, _wc))
+                elif walked_min > _wc:
+                    _tolerances.append((_oid, walked_min, _wc))
+            for _oid, _w, _c in _tolerances:
+                _log.warning(
+                    f"V3274_OR_TOOLS_TOLERANCE oid={_oid} walked_min={_w:.2f} "
+                    f"close_min={_c:.2f} delta=+{_w - _c:.2f}min "
+                    f"(within 0.5min, NIE reject) solver_status={solution.solver_status}"
+                )
+            if _violations:
+                _log.warning(
+                    f"V3274_OR_TOOLS_VIOLATION reject violations={_violations} "
+                    f"solver_status={solution.solver_status} elapsed={solution.elapsed_ms}ms "
+                    f"falling back to greedy"
+                )
+                # Reject ortools plan, run greedy as fallback. Strategy field
+                # explicitly set tutaj — caller w simulate_bag_route_v2 musi
+                # respektować (NIE override do "ortools").
+                _greedy = _greedy_plan(
+                    nodes, leg_min, bag_delivery_idxs,
+                    bag_pickup_idxs_by_oid,
+                    new_pickup_idx, new_delivery_idx,
+                    new_order, bag, now, sla_minutes,
+                )
+                _greedy.strategy = "ortools_rejected_v3274"
+                return _greedy
+    except Exception as _v_exc:
+        _log.warning(
+            f"V3274_OR_TOOLS_VIOLATION_CHECK exc={type(_v_exc).__name__}: "
+            f"{repr(_v_exc)[:120]}"
+        )
+
     return plan
