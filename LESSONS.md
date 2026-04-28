@@ -221,3 +221,138 @@ Bug rate: **13.4%** (185/1384 picked-up orders w 7 dni). Systematic, NIE edge ca
 - **Lekcja #28** (Mock tests passed but integration FAIL — race conditions
   visible only w real shadow log replay)
 - **Lekcja #30** (Recurring user decisions = explicit handoff)
+
+---
+
+## Lekcja #32: Silent except = invisible bug (V3.27.6, 2026-04-28)
+
+### Co się stało
+
+V3.27.4 frozen window violations (2/22 propozycji 9.1% applicable rate, #469099 +65min, #469150 +26.7min). Hipoteza H1 (czas_kuriera_warsaw NIE propaguje) REJECTED via izolowany repro — `dispatch_pipeline.py:949` poprawnie set'uje atrybut. Synthetic V3.27.4 fires correctly. Production NIE fires. ZERO INFEASIBLE retries logged.
+
+Investigation `route_simulator_v2.py:781-800` ujawniło **silent `except Exception:`** w time_windows construction:
+```python
+try:
+    open_min = max(0.0, (ready - now).total_seconds() / 60.0)
+    ...
+    if czas_kuriera_committed:
+        time_windows.append((window_open, window_close))  # frozen 5-min
+    else:
+        time_windows.append((open_min, close_min))         # 60-min
+except Exception:
+    time_windows.append((0.0, V327_DROP_TIME_WINDOW_MAX_MIN))  # silent fallback (0, 120)
+```
+
+Każda exception w try block → fallback (0, 120) min effectively no constraint → V3.27.4 frozen window NIE applied dla tego pickup → TSP plan poza window without warning.
+
+### Dlaczego to zła praktyka
+
+- **Invisible silent failure** — fallback applied, NIE log entry, NIE error
+- **Empirical evidence destroyed** — debugging niemożliwy bez instrumentacji
+- **Defense-in-depth illusion** — code "wygląda jak ma fallback" ale fallback maskuje root cause
+- **Hipothesis chase** — Adrian's H4 (slack relaxation) byłby reakcją na hipotezę bez evidence; rzeczywisty mechanizm prawdopodobnie był silent except
+
+### Reguła
+
+**Każdy `except Exception:` w hot path MUSI logować context** (oid, type, repr, exception type+repr). Pattern V3.27.6 FIX 2a:
+
+```python
+try:
+    ...
+except Exception as _exc:
+    fallback = (0.0, MAX_MIN)
+    time_windows.append(fallback)
+    _log.warning(
+        f"V3274_TIMEWINDOW_FALLBACK oid={_oid} ck_type={type(_ck).__name__} "
+        f"ck_repr={repr(_ck)[:80]} ready={ready!r} now={now!r} "
+        f"except={type(_exc).__name__}: {repr(_exc)[:120]} fallback_window={fallback}"
+    )
+```
+
+**Effort = 5 min, value = empirical signal w produkcji bez osobnego probe sprintu.**
+
+### Identical pattern do
+
+- **Lekcja #1** (Invisible data loss — silent state mutation)
+- **Lekcja #28** (Mock tests passed but integration FAIL)
+
+---
+
+## Lekcja #33: Empirical-first design — pushback nad hipothesis-first (V3.27.6, 2026-04-28)
+
+### Co się stało
+
+Adrian zaproponował V3.27.6 sprint: FIX 1 Path C robust detection + FIX 2 hard cumul constraint w tsp_solver. Hard cumul motywowany hipothezą H4 (slack 12000 pozwala OR-Tools "ExpandTime" obejść SetRange).
+
+CC pre-implementation investigation `tsp_solver.py` ujawniło 3 fundamental assumption mismatches:
+
+1. **`tsp_solver.solve_tsp_with_constraints` jest pure function bez OrderSim/decision_ts** — `node_to_order_map` z Adrian's plan NIE EXISTS w solver scope
+2. **`time_dimension.CumulVar.SetRange(open, close)` (linia 153-156) IS already the hard cumul constraint** — V3.27.4 already używa tego mechanizmu via `time_windows` arg
+3. **Slack semantyka OR-Tools**: `slack` w `AddDimension` to MAX WAIT na node, NIE bypasses CumulVar bounds. H4 hipoteza traci wagę po code review
+
+CC zadał Q1+Q2+Q3 STOP-and-ask. Adrian acceptował pushback i zmienił scope:
+- FIX 2 zamiast hard cumul → diagnostic logging (FIX 2a) + post-solve assertion (FIX 2b)
+- "Empirical first — silent except w :799 to konkretny kod-fakt który widzisz, hard cumul był reakcją na hipotezę bez evidence"
+
+Result: 1 sprint zamiast 2 (probe sprint jutro skipped), faster verdict (lunch peak 29.04 zamiast 30.04+), no scope creep.
+
+### Reguła
+
+**Pre-implementation investigation OBLIGATORY** dla architectural changes. Sequencja:
+
+1. Read kod TARGET pliku (np. tsp_solver.py) PRZED implementacją
+2. Verify każda assumption Adrian's plan'u: variable existence, scope, signature, semantyka API
+3. Jeśli ANY uncertainty/mismatch → **STOP, ask, NIE zgaduj** (Adrian's explicit rule + Lekcja #5/#19/#26)
+4. Pushback nad hipothesis fix gdy:
+   - Konkretny code-fact znaleziony (silent except, type mismatch, race condition)
+   - Hipoteza bez instrumentation evidence (mental simulation only)
+   - Synthetic repro NIE potwierdza hipotezy (V3.27.4 fires correctly w synthetic)
+
+### Pattern dla future sprints
+
+- **PRE-IMPLEMENTATION INVESTIGATION** = osobny krok przed code, dokumentowany w sprint plan
+- **STOP-and-ask Q1+Q2+Q3** gdy uncertainty — Adrian's rule, NIE zgaduj
+- **Empirical-first design** = preferuj fix dla observed code-fact nad fix dla hipothesis
+- **Diagnostic instrumentation** = często lepszy ROI niż defensive duplicate mechanism
+
+### Identical pattern do
+
+- **Lekcja #25** (Mental simulation może być naivny — verify w shadow nie tylko intuition)
+- **Lekcja #26** (Domain knowledge > LLM/API confidence — Adrian's local knowledge wins)
+- **Lekcja #30** (Recurring user decisions = explicit handoff)
+
+---
+
+## Lekcja #34: Restart-in-peak hard rule WYJĄTEK gdy Ziomek bezużyteczny (V3.27.6, 2026-04-28)
+
+### Co się stało
+
+V3.27.4 frozen window violations LIVE w produkcji (2 cases confirmed, possibly more silent). Adrian's standard rule: NIE restart dispatch-shadow w peak window (Pn-Pt 11-14, 17-20 Warsaw, sobota 16-21).
+
+Rano 28.04 V3.27.4 probe instrumentation deploy → regresja (60 sec damage window, 2 propozycje stracone) — restart-in-peak risk materialized.
+
+V3.27.6 sprint deploy timing decision:
+- **Standard rule**: defer do post-peak 20:00+
+- **Adrian's override**: peak NIE blokuje, "Ziomek z bugiem = bezużyteczny", restart-in-peak rule WYJĄTEK
+- **Justification**: continuing bug (silent V3.27.4 violations) > restart cost (~5-10s downtime, 1-2 propozycje window)
+
+Decision matrix:
+- Bug severity: 9.1% applicable rate → moderate, ale Ziomek's value proposition broken (Adrian's eyeball NIE może verify czas_kuriera respekt)
+- Restart cost: 5-10s downtime, ~1-2 propozycje per restart
+- Risk regression: zmniejszony post-rano-incident (E2E smoke przez assess_order, static lint scope check, 57/57 tests)
+
+### Reguła
+
+**Restart-in-peak hard rule** standard MA wyjątek gdy:
+
+1. **Ziomek z bugiem = bezużyteczny** (np. propozycje silent invalid → Adrian musi double-check każdą manualnie)
+2. **Continuing bug > restart cost** quantitative (bug rate × peak duration > restart downtime × propozycje rate)
+3. **Pre-deploy verification thorough** post-incident (E2E smoke, static lint, test coverage)
+
+Wyjątek **wymaga explicit Adrian override** ("eksplicite peak NIE blokuje"). NIE auto-decydować.
+
+### Identical pattern do
+
+- **Lekcja #29** (Sync calls hot path = architectural exposure — fix priority bo blokuje hot path)
+- **Lekcja #31** (Defense-in-depth across layers — multiple fix points lepiej niż jeden)
+

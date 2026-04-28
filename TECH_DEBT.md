@@ -1,8 +1,146 @@
 # TECH DEBT — Ziomek
 
-**V3.27.5 closed 27.04 wieczór late (hotfix TASK H), V3.28 backlog**
-- Last sprint: V3.27.5 (27.04 wieczór late, 3 tags, 2 fixes LIVE — Path A + Path B)
-- Latest tag: `v3275-sprint-stable-2026-04-27`
+**V3.27.6 closed 28.04 wieczór (Path C robust + diagnostic assertion), V3.28 backlog**
+- Last sprint: V3.27.6 (28.04 wieczór, 1 commit + 1 tag, FIX 1 + FIX 2 LIVE — Path C + diagnostic logging)
+- Latest tag: `v3276-path-c-and-diagnostic-assertion-2026-04-28`
+- Latest commit: `bf06749`
+- Predecessor: V3.27.5 (27.04 wieczór late, 3 tags, 2 fixes LIVE — Path A + Path B)
+
+# ═══════════════════════════════════════════════════════════════════
+# SPRINT V3.27.6 28.04.2026 STATUS (close ~21:05 Warsaw)
+# ═══════════════════════════════════════════════════════════════════
+
+## ✅ RESOLVED 2026-04-28 wieczór (V3.27.6 sprint)
+
+### V3.27.6 FIX 1 — Path C robust detection
+- ✅ Root cause: V3.27.4 detection sprawdzała tylko `getattr() is not None`,
+  padając na string-form False positives ("None"/"null"/""/etc).
+- ✅ Fix (`route_simulator_v2.py:786-805`): + `str(ck_raw).strip() not in
+  ("","None","null","NULL","None\n")` predicate. Pattern z V3.27.5 Path A.
+- ✅ Tests: 3/3 PASS (predicate isolation + ISO valid).
+
+### V3.27.6 FIX 2a — Loud warning replace silent except
+- ✅ Root cause: `route_simulator_v2.py:799` silent `except Exception:` w
+  time_windows construction → fallback (0, 120) min effectively no constraint
+  → V3.27.4 frozen window NIE applied dla pickup → TSP plan poza window
+  WITHOUT warning. Empirical evidence destroyed.
+- ✅ Fix: `V3274_TIMEWINDOW_FALLBACK` warning z oid, ck_type, ck_repr, ready,
+  now, exception type+repr, fallback window applied.
+- ✅ Cel: empirical signal H2 (type/format mutation hipoteza) bez probe sprintu.
+
+### V3.27.6 FIX 2b — Post-solve assertion dla frozen ck pickups
+- ✅ Po `_plan_from_sequence` iteruje pickup nodes z frozen ck, computes
+  `walked_min = (plan.pickup_at[oid] - now).seconds/60`.
+- ✅ Dwustopniowy log:
+  - TOLERANCE: walked ∈ (close, close+0.5] → `V3274_OR_TOOLS_TOLERANCE`
+    warning, NIE reject
+  - VIOLATION: walked > close+0.5 → `V3274_OR_TOOLS_VIOLATION` reject +
+    `_greedy_plan` fallback + `strategy="ortools_rejected_v3274"`
+- ✅ Defensive try/except wrap → ZERO crash dla edge cases.
+
+### V3.27.6 FIX 2c — Caller strategy preservation
+- ✅ `simulate_bag_route_v2:336-352`: `if not plan.strategy: plan.strategy =
+  "ortools"` — guard żeby NIE override pre-set "ortools_rejected_v3274".
+
+### V3.27.6 deploy
+- ✅ Commit `bf06749`, tag `v3276-path-c-and-diagnostic-assertion-2026-04-28`.
+- ✅ Tests: 8/8 V3.27.6 PASS + 49/49 sprint-touched regression PASS (57/57 total).
+- ✅ Smoke E2E przez `assess_order`: 46 fleet, verdict=KOORD, ZERO NameError
+  (rano's getattr scope bug pattern verified eliminated).
+- ✅ Restart 18:57:43 UTC, ortools warm-up 53.5ms, pre-warm login 4542ms.
+- ✅ 5-min smoke: 0 ERROR, 0 NameError, 1 propozycja (post-peak Warsaw 21:00).
+- ⏳ Empirical verdict H2 vs H4 PENDING lunch peak 29.04 12-14 observation.
+
+### V3.27.6 lessons learned (LESSONS.md #32-#34)
+- **#32**: Silent except = invisible bug. `except Exception:` w hot path MUSI
+  logować context (oid, type, repr, exception type+repr).
+- **#33**: Empirical-first design. Pre-implementation investigation OBLIGATORY,
+  STOP-and-ask gdy uncertainty. Pushback nad hipothesis fix gdy konkretny
+  code-fact znaleziony.
+- **#34**: Restart-in-peak hard rule WYJĄTEK gdy Ziomek z bugiem bezużyteczny.
+  Wymaga explicit Adrian override.
+
+# ═══════════════════════════════════════════════════════════════════
+# V3.27.6 RANO INCIDENT (verify lesson learned, NIE rollback target)
+# ═══════════════════════════════════════════════════════════════════
+
+## ⚠️ V3.27.4 probe instrumentation REVERTED (10fc280 → cbba8ac)
+
+- Rano 28.04 deploy: V3.27.4 probe (commit 10fc280) wyzwolił NameError w
+  hot path (`getattr(order, 'order_id', '?')` w success-path probe;
+  `order` NIE w scope `_v327_eval_courier`, closure ma `order_event`).
+- Damage: 60 sec window, 2 propozycje failed (#469223, #469224).
+- Root cause: skopiowałem pre-existing buggy line z istniejącego except handler.
+- Smoke synthetic NIE catch (wywołał `simulate_bag_route_v2` direct,
+  omijał `_v327_eval_courier`).
+- Reverted via `git revert HEAD --no-edit` (commit cbba8ac).
+- Tag `v3274-probe-instrumentation-2026-04-28` zostaje na buggy commit
+  jako historical reference.
+- V3.27.6 sprint zastąpił probe instrumentation diagnostic logging FIX 2a/2b.
+
+# ═══════════════════════════════════════════════════════════════════
+# V3.28 BACKLOG (post-V3.27.6 update)
+# ═══════════════════════════════════════════════════════════════════
+
+## High priority
+
+### TECH_DEBT #20 — Background login refresh thread (planned 29.04 8:00-9:30)
+- **Trigger**: 5/100 (5%) p95 outliers ~5000ms zbiega się z `panel_client login
+  (age=1200s)` co 20min — login refresh blokuje hot path.
+- **Per Adrian's reguła**: ">5% p95 outliers blocking → reaktywuj TECH_DEBT #20".
+- **Plan implementacji** (45-55 min):
+  - `panel_client.py`: add `start_bg_refresh()` daemon thread, calls
+    `login(force=True)` every 900s (15min, before 20min expiry).
+  - Hot path uses cached session — never blocks.
+  - Defensive: jeśli bg thread crashuje (last_login_at age >25min) → fallback
+    inline login (current path) = zero regression.
+  - Wywołanie: shadow_dispatcher.py + panel_watcher.py main start.
+- **Smoke**: watch log "panel_bg_refresh" tick + verify p95 drop.
+- **Effort**: ~30 min code + 15 min smoke. Pre-lunch-peak deploy ~10:30 Warsaw 29.04.
+
+### Pre-existing bug `dispatch_pipeline.py:1097` (closure scope)
+- **Found**: V3.27.6 sprint diagnosis (28.04 rano incident).
+- **Bug**: `log.warning(f"V3.27.1 pre_recheck oid_new={getattr(order,
+  'order_id', '?')} cid={cid} fail: {_e}")` — variable `order` NIE w scope
+  `_v327_eval_courier` (closure ma `order_event`).
+- **Fires**: rzadko (tylko gdy try block raise w pre_proposal_recheck path),
+  ale silent NameError jeśli ktoś dotknie kod.
+- **Fix**: `getattr(order_event, 'order_id', '?')`.
+- **Effort**: 15 min (1-line fix + smoke). Defer do V3.28 cleanup batch.
+
+## Medium priority
+
+### Comment Learning Path 1 fix (deferred since 27.04)
+- **Background**: telegram_approver.py:1262-1266 reply parser-skip silent.
+- **Fix**: replace `return` po parse=None z `append_learning(OPERATOR_COMMENT,
+  feedback="reply_freeform: {text}", decision: matched_rec.decision_record)`.
+- **Effort**: 30 min. Pending Adrian decision (yes/no/defer post-lunch-peak 29.04).
+- **Workaround zero code**: free-text BEZ reply (write new message) → trafia
+  w `free_text(latest)` path co JUŻ DZIAŁA.
+
+### Real-time Traffic API decision (V3.28 research)
+- 6 opcji: Google Distance Matrix, Mapbox, **TomTom (~260 zł/mies, REKOMENDOWANE
+  per cost/quality)**, HERE Routing, OSRM+paid traffic feed, Crowd-source GPS.
+- **Defer**: post-lunch-peak validation 29.04 — czy V3.27.3 TASK G manual
+  mnożniki wystarczające.
+
+## Low priority (defensive)
+
+### V3.27.4 probe post-validation cleanup
+- **Trigger**: po lunch peak 29.04, gdy verdict H2/H4 ustalony.
+- **Action**: jeśli `V3274_TIMEWINDOW_FALLBACK` nigdy nie fires w 7-day sample,
+  remove logging path (Path C predicate fix wystarczy). Jeśli fires regularnie,
+  zachować jako permanent observability.
+- **Effort**: 15-30 min cleanup decision.
+
+### V3.28 items z V3.27.5 sprint TASK H Q1-Q2 (preserved)
+- `courier_resolver.py:232` status field bug (different concern, similar pattern)
+- NEW_ORDER preserve terminal handler (defensive, rare re-emit)
+- `COURIER_UN_PICKED` event type (legitimate un-pick scenario)
+
+### R-04 Graduation Schema (Adrian mandate od 24.04)
+- Multi-gate metrics-based jak Bartek graduacja vs hardcoded 30 days.
+- **Effort**: 3-4h.
 
 # ═══════════════════════════════════════════════════════════════════
 # SPRINT V3.27.5 27.04.2026 STATUS (close ~22:00 Warsaw — hotfix TASK H)

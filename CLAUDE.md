@@ -1,7 +1,47 @@
-# CLAUDE.md — V3.27.5 LIVE state (post-sprint 27.04 wieczór late)
+# CLAUDE.md — V3.27.6 LIVE state (post-sprint 28.04 wieczór)
 
-**Data:** 27.04.2026 wieczór ~22:00 Warsaw (V3.27.5 hotfix sprint close)
-**Latest tag:** `v3275-sprint-stable-2026-04-27`
+**Data:** 28.04.2026 ~21:05 Warsaw (V3.27.6 Path C + diagnostic assertion close)
+**Latest tag:** `v3276-path-c-and-diagnostic-assertion-2026-04-28`
+**Latest commit:** `bf06749`
+**HANDOFF FILE:** `/tmp/v3276_session_handoff_2026-04-29_morning.md` (READ FIRST jutro)
+**Pending:** lunch peak validation 29.04 12-14 (V3.27.6 empirical verdict H2 vs H4) + TECH_DEBT #20 background login refresh sprint 29.04 8:00-9:30
+
+---
+
+## V3.27.6 sprint summary — 28.04.2026 wieczór
+
+**Context:** 2/22 propozycji od V3.27.4 deploy (9.1% applicable rate) violated frozen window [ck-5, ck+5] dla bag pickup orderów (#469099 +65min, #469150 +26.7min). H1 (NIE propaguje czas_kuriera_warsaw) REJECTED via izolowany repro. Rzeczywisty mechanizm undiagnosed.
+
+**Empirical-first design** (Lekcja #33): CC's pre-implementation investigation `tsp_solver.py` ujawniło że Adrian's H4 hipoteza (slack relaxation) traci wagę post code review — `CumulVar.SetRange` IS already hard cumul mechanism. Adrian acceptował pushback, FIX 2 zmienił scope: hard cumul → diagnostic logging (FIX 2a) + post-solve assertion (FIX 2b).
+
+**4 fixes LIVE w jednym deployu:**
+
+- **FIX 1 Path C robust detection** (`route_simulator_v2.py:786-805`): + `str(ck_raw).strip() not in ("","None","null","NULL","None\n")` predicate. Reject string-form False positives.
+- **FIX 2a Loud warning replace silent except** (`route_simulator_v2.py:799`): `V3274_TIMEWINDOW_FALLBACK` warning z full context (oid, ck_type, ck_repr, ready, now, exception type+repr, fallback). Empirical signal H2 bez probe sprintu.
+- **FIX 2b Post-solve assertion** (`_ortools_plan` ~line 875-942): TOLERANCE (0.5 min) + VIOLATION (>0.5) dwustopniowy log. Reject path: `_greedy_plan` + `strategy="ortools_rejected_v3274"`.
+- **FIX 2c Caller strategy preservation** (`simulate_bag_route_v2:336-352`): `if not plan.strategy` guard.
+
+**Tests:** 8/8 V3.27.6 + 49/49 sprint-touched regression PASS (57/57 total).
+**Smoke E2E:** assess_order through `_v327_eval_courier` — verdict=KOORD, ZERO NameError (rano's pattern eliminated).
+**Restart:** 18:57:43 UTC, ortools warm-up 53.5ms, pre-warm login 4542ms, 5-min smoke 0 ERROR.
+**Empirical verdict:** PENDING lunch peak 29.04 observation.
+
+**Lessons #32-#34 utrwalone w LESSONS.md:**
+- **#32**: Silent except = invisible bug. `except Exception:` w hot path MUSI logować context.
+- **#33**: Empirical-first design. Pre-implementation investigation OBLIGATORY, STOP-and-ask gdy uncertainty.
+- **#34**: Restart-in-peak hard rule WYJĄTEK gdy Ziomek z bugiem bezużyteczny (Adrian explicit override).
+
+---
+
+## V3.27.6 RANO INCIDENT (28.04 ~17:09 Warsaw, REVERTED)
+
+V3.27.4 probe instrumentation deploy → NameError (`getattr(order, 'order_id', '?')` — variable `order` NIE w scope `_v327_eval_courier`, closure ma `order_event`). 60 sec damage window, 2 propozycje failed (#469223, #469224). Smoke synthetic NIE catch bo wywołał `simulate_bag_route_v2()` direct. **Reverted via `git revert HEAD --no-edit` (commit cbba8ac).** Tag `v3274-probe-instrumentation-2026-04-28` zostaje na buggy commit jako historical reference. V3.27.6 zastąpił probe diagnostic logging FIX 2a/2b.
+
+---
+
+## V3.27.5 sprint summary — 27.04.2026 wieczór late (PRESERVED)
+
+**Latest tag (pre-V3.27.6):** `v3275-sprint-stable-2026-04-27`
 **Pending:** lunch peak validation 28.04 12-14 (V3.27.5 stress test) +
 Hetzner CPX22→CPX32 upgrade EXECUTED 27.04 wieczór ✓
 
