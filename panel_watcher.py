@@ -1161,6 +1161,14 @@ def run():
         sys.exit(1)
     _log.info(f"Health OK: {h.get('stats')}")
 
+    # V3.27.7 TECH_DEBT #20: spawn bg refresh thread post health check
+    try:
+        from dispatch_v2 import panel_client as _pc
+        _pc.start_bg_refresh()
+        _log.info("V3.27.7 panel_bg_refresh thread started post health check")
+    except Exception as _bg_e:
+        _log.warning(f"V3.27.7 panel_bg_refresh start failed: {type(_bg_e).__name__}: {_bg_e}")
+
     cycle = 0
     last_log_summary = time.time()
     totals = {"new": 0, "assigned": 0, "picked_up": 0, "delivered": 0, "ignored": 0, "errors": 0}

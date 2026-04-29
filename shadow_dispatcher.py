@@ -550,6 +550,9 @@ def run() -> int:
         _wu_panel.login(force=True)
         _wu_login_ms = (time.perf_counter() - _wu_login_t0) * 1000.0
         _log.info(f"V3.27.1 sesja 4 panel_client pre-warm login complete: {_wu_login_ms:.1f}ms")
+        # V3.27.7 TECH_DEBT #20: spawn bg refresh thread post pre-warm
+        _wu_panel.start_bg_refresh()
+        _log.info("V3.27.7 panel_bg_refresh thread started post pre-warm")
     except Exception as _wu_login_e:
         _log.warning(
             f"V3.27.1 sesja 4 panel_client pre-warm login skipped "

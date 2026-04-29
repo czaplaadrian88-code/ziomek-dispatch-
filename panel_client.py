@@ -61,6 +61,43 @@ _session = {
     "last_ok": False,
 }
 
+# V3.27.7 TECH_DEBT #20: background login refresh thread.
+# Eliminates ~22min CSRF expiry blocking call (~6-7s) z hot path.
+# Pre-V3.27.7 latency p95 ~6465ms, 11.2% outliers >5000ms (login refresh).
+import os as _os
+ENABLE_PANEL_BG_REFRESH = _os.environ.get("ENABLE_PANEL_BG_REFRESH", "1") != "0"
+PANEL_BG_REFRESH_INTERVAL_SEC = 900   # 15 min (cache TTL=1200s, 5min buffer)
+PANEL_BG_REFRESH_STALE_THRESHOLD_SEC = 1500  # 25 min watchdog (defensive)
+
+_bg_refresh_thread = None
+_bg_refresh_started = False
+
+
+def _bg_refresh_loop():
+    while True:
+        try:
+            time.sleep(PANEL_BG_REFRESH_INTERVAL_SEC)
+            login(force=True)
+            _log.info("panel_bg_refresh tick OK")
+        except Exception as e:
+            _log.warning(f"panel_bg_refresh tick fail: {type(e).__name__}: {e}")
+
+
+def start_bg_refresh():
+    """Idempotent. Spawn daemon thread refreshing login co 15min."""
+    global _bg_refresh_thread, _bg_refresh_started
+    if _bg_refresh_started:
+        return
+    if not ENABLE_PANEL_BG_REFRESH:
+        _log.info("panel_bg_refresh disabled (env)")
+        return
+    _bg_refresh_thread = threading.Thread(
+        target=_bg_refresh_loop, name="panel_bg_refresh", daemon=True
+    )
+    _bg_refresh_thread.start()
+    _bg_refresh_started = True
+    _log.info(f"panel_bg_refresh started (interval={PANEL_BG_REFRESH_INTERVAL_SEC}s)")
+
 
 def _creds() -> dict:
     if not PANEL_ENV.exists():
@@ -85,8 +122,17 @@ def login(force: bool = False) -> tuple:
         now = time.time()
         age = now - _session["last_login_at"]
         if not force and _session["last_ok"] and _session["opener"] and age < 1200:
-            _log.debug("login: cached")
-            return _session["opener"], _session["csrf"], None
+            # V3.27.7 defensive watchdog: jeśli bg thread crash → age może wzrastać
+            # mimo cached True. Threshold 25min (>20min cache TTL + buffer) → fall
+            # through do fresh login (zero regression vs pre-V3.27.7 inline path).
+            if age > PANEL_BG_REFRESH_STALE_THRESHOLD_SEC:
+                _log.warning(
+                    f"panel_bg_refresh stale (age={age:.0f}s > {PANEL_BG_REFRESH_STALE_THRESHOLD_SEC}s), "
+                    f"forcing inline login fallback"
+                )
+            else:
+                _log.debug("login: cached")
+                return _session["opener"], _session["csrf"], None
 
         _log.info(f"login: fresh (age={age:.0f}s, force={force})")
         env = _creds()
