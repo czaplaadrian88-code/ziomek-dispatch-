@@ -39,11 +39,28 @@ from dispatch_v2.common import (
     ENABLE_TRANSPARENCY_REASON,
     ENABLE_TRANSPARENCY_ROUTE,
     WARSAW,
+    drop_zone_from_address,
     load_config,
     now_iso,
     parse_panel_timestamp,
     setup_logger,
 )
+
+
+# V3.19i (2026-04-30): structured override reason codes dla Telegram callback
+# buttons. Każdy odpowiada jednej z hipotez Bartka FILOZ + diagnostic patterns.
+# Logged jako action='TG_REASON' w learning_log.jsonl. Forward-compat: V3.19j
+# planuje dorzucić TG_TIMING (osobny prefix INNY_CZAS:) — nie kolidują.
+TG_REASON_CODES = {
+    "wrong_direction": "zły kierunek",
+    "better_bundle": "lepszy bundle",
+    "bag_overload": "za duży bag",
+    "better_eta": "lepszy ETA",
+    "wrong_shift_tier": "zły shift/tier",
+    "dropzone_mismatch": "drop-zone mismatch",
+    "wave_anticipation": "wave anticipation",
+    "other": "inny powód",
+}
 
 
 POLL_SHADOW_SEC = 3
@@ -390,56 +407,95 @@ def _build_timeline_section(decision: dict, best: dict) -> str:
     return "\n".join(lines)
 
 
+def _district_safe(addr: Optional[str], city: Optional[str] = None) -> str:
+    """V3.19i: safe district extraction. Returns '?' + log warning na exception
+    (Lekcja #32 — no silent except).
+    """
+    if not addr:
+        return "?"
+    try:
+        d = drop_zone_from_address(addr, city)
+        if not d or d == "Unknown":
+            return "?"
+        return d
+    except Exception as e:
+        _log.warning(
+            f"district extract failed addr={addr!r} city={city!r}: "
+            f"{type(e).__name__}: {e}"
+        )
+        return "?"
+
+
 def _route_section(decision: dict, best: dict) -> str:
-    """Transparency OPCJA A: route section — pickupy then drops w kolejności plan.sequence.
+    """V3.19i (2026-04-30): always-on TRASA + STRATEGY + POOL section.
 
-    V3.17: gdy ENABLE_TIMELINE_FORMAT=True AND timeline data dostępne →
-    delegate do `_build_timeline_section()`. Fallback do starego formatu
-    (pickups|drops) gdy timeline zwraca "" (brak danych / solo order / flag off).
+    Zawsze emituje (przedtem skip dla solo). Format:
+        📍 TRASA:
+          Pickup: {restaurant} ({pickup_district})
+          Drop:   {address} ({drop_district})
 
-    Zwraca pusty string dla solo orderów (sequence ≤ 1), flagi wyłączonej, lub braku mapping.
-    Format legacy (flag off / fallback):
-        📦 N ordery w bagu:
-        🗺️ Kolejność:
-           🍕 {pickup1} → {pickup2} → ...
-           📍 {drop1} → {drop2} → ...
+        📦 BAG CONTEXT (N active):
+          1. {rest} → {drop_district} (drop ETA: {min} min)
+          [...]
+
+        ⚙️ STRATEGY: {strategy} | pool: {total} (feasible: {feasible})
+
+    BAG CONTEXT block omitted gdy bag pusty.
+    Districts: '?' fallback gdy extractor failuje (z log warning).
+
+    V3.17: timeline format pre-empts gdy ENABLE_TIMELINE_FORMAT i dane dostępne
+    (zachowane dla backward compat w bag-bundle paths).
     """
     if not ENABLE_TRANSPARENCY_ROUTE or not best:
         return ""
-    if ENABLE_TIMELINE_FORMAT:
+
+    pickup_addr = decision.get("restaurant") or "?"
+    drop_addr = decision.get("delivery_address") or "?"
+    pickup_d = _district_safe(pickup_addr)
+    drop_d = _district_safe(drop_addr)
+
+    lines = [
+        "📍 TRASA:",
+        f"  Pickup: {pickup_addr} ({pickup_d})",
+        f"  Drop:   {drop_addr} ({drop_d})",
+    ]
+
+    bag_context = best.get("bag_context") or []
+    if bag_context:
+        lines.append("")
+        lines.append(f"📦 BAG CONTEXT ({len(bag_context)} active):")
+        for i, b in enumerate(bag_context, start=1):
+            try:
+                b_rest = b.get("restaurant") or "?"
+                b_drop_d = _district_safe(b.get("delivery_address"))
+                eta_min = b.get("eta_drive_min") or b.get("drop_eta_min")
+                eta_str = f" (drop ETA: {int(round(float(eta_min)))} min)" if eta_min is not None else ""
+                lines.append(f"  {i}. {b_rest} → {b_drop_d}{eta_str}")
+            except Exception as e:
+                _log.warning(
+                    f"bag_context render failed entry={b!r}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                lines.append(f"  {i}. (render error)")
+
+    plan = best.get("plan") or {}
+    strategy = plan.get("strategy") or "?"
+    pool_total = decision.get("pool_total_count")
+    pool_feasible = decision.get("pool_feasible_count")
+    if pool_total is not None and pool_feasible is not None:
+        pool_str = f"pool: {pool_total} (feasible: {pool_feasible})"
+    else:
+        pool_str = "pool: ?"
+    lines.append("")
+    lines.append(f"⚙️ STRATEGY: {strategy} | {pool_str}")
+
+    if ENABLE_TIMELINE_FORMAT and len(plan.get("sequence") or []) > 1:
         timeline = _build_timeline_section(decision, best)
         if timeline:
-            return timeline
-    plan = best.get("plan") or {}
-    sequence = plan.get("sequence") or []
-    if len(sequence) <= 1:
-        return ""
-    cur_oid = str(decision.get("order_id") or "")
-    mapping: dict = {
-        cur_oid: (decision.get("restaurant"), decision.get("delivery_address")),
-    }
-    for b in (best.get("bag_context") or []):
-        boid = str(b.get("order_id") or "")
-        if boid:
-            mapping[boid] = (b.get("restaurant"), b.get("delivery_address"))
-    pickups: list = []
-    drops: list = []
-    for oid in sequence:
-        soid = str(oid)
-        rest, drop = mapping.get(soid, (None, None))
-        if rest and rest not in pickups:
-            pickups.append(rest)
-        if drop:
-            drops.append(drop)
-    if not pickups or not drops:
-        return ""
-    n = len(sequence)
-    return (
-        f"📦 {n} ordery w bagu:\n"
-        f"🗺️ Kolejność:\n"
-        f"   🍕 " + " → ".join(pickups) + "\n"
-        f"   📍 " + " → ".join(drops)
-    )
+            lines.append("")
+            lines.append(timeline)
+
+    return "\n".join(lines)
 
 
 def format_proposal(decision: dict) -> str:
@@ -490,7 +546,7 @@ def format_proposal(decision: dict) -> str:
     lines.append("")
     lines.append(f"✓ {decision.get('reason','')}")
     lines.append("")
-    lines.append("TAK / NIE / INNY / KOORD")
+    lines.append("TAK / INNY (powód) / KOORD")
     return "\n".join(lines)
 
 
@@ -546,8 +602,21 @@ def build_keyboard(
         })
     if row1:
         rows.append(row1)
+    # V3.19i (2026-04-30): 8 structured reason buttons replacing single INNY.
+    # Layout: 4 rows × 2 columns. Callback `INNY:{reason_code}:{order_id}`
+    # (uppercase, ext. ASSIGN/KOORD precedent). Backward-compat: legacy
+    # 2-segment INNY:{order_id} parsed jako reason_code='legacy_inny'.
+    # Char limit Telegram 64: longest "INNY:wave_anticipation:469587" = 29 OK.
+    reason_items = list(TG_REASON_CODES.items())
+    for i in range(0, len(reason_items), 2):
+        kb_row = []
+        for code, label in reason_items[i : i + 2]:
+            kb_row.append({
+                "text": f"❌ INNY: {label}",
+                "callback_data": f"INNY:{code}:{order_id}",
+            })
+        rows.append(kb_row)
     rows.append([
-        {"text": "🔄 INNY", "callback_data": f"INNY:{order_id}"},
         {"text": "👤 KOORD", "callback_data": f"KOORD:{order_id}"},
     ])
     return {"inline_keyboard": rows}
@@ -1438,6 +1507,35 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
             # malformed — keep oid as-is, will fall to "unknown" branch
             pass
 
+    # V3.19i (2026-04-30): INNY callback format "INNY:{reason_code}:{order_id}"
+    # → po split(":",1) zmienna `oid` zawiera "{reason_code}:{order_id}".
+    # Backward-compat: legacy 2-segment "INNY:{order_id}" → reason_code='legacy_inny'.
+    inny_reason_code: str = ""
+    if action == "INNY":
+        parts = oid.split(":")
+        if len(parts) == 2:
+            inny_reason_code = parts[0]
+            oid = parts[1]
+            if (
+                inny_reason_code not in TG_REASON_CODES
+                and inny_reason_code != "legacy_inny"
+            ):
+                _log.warning(
+                    f"unknown INNY reason_code={inny_reason_code!r} oid={oid} "
+                    f"— treating as 'other'"
+                )
+                inny_reason_code = "other"
+        elif len(parts) == 1:
+            # legacy callback (pre-V3.19i) — 1 segment after top-level split
+            inny_reason_code = "legacy_inny"
+            _log.info(f"legacy INNY callback oid={oid} (no reason_code)")
+        else:
+            _log.warning(
+                f"malformed INNY callback raw='INNY:{oid}' — treating as 'other'"
+            )
+            inny_reason_code = "other"
+            oid = parts[-1]  # best-effort: trailing segment as oid
+
     # Security: weryfikacja chat_id + logowanie from_id (F2.2)
     cb_chat_id = str(((cb.get("message") or {}).get("chat") or {}).get("id", ""))
     cb_from_id = str((cb.get("from") or {}).get("id", ""))
@@ -1497,8 +1595,12 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
     elif action == "NIE":
         ok, feedback = True, "⏭ pozostaje w puli"
     elif action == "INNY":
-        # MVP: just ack — full flow (follow-up message with kurier_id) is TODO
-        ok, feedback = True, "🔄 INNY (MVP: wpisz ręcznie w panel lub wyślij ponownie)"
+        # V3.19i (2026-04-30): structured reason capture. Chosen-courier
+        # follow-up DEFERRED do V3.19j. Adrian after click: panel-first
+        # workflow continues, panel_watcher detect-uje finalny PANEL_OVERRIDE.
+        reason_label = TG_REASON_CODES.get(inny_reason_code, inny_reason_code)
+        ok = True
+        feedback = f"🔄 INNY ({reason_label}) — zapisane, wybierz w panelu"
     elif action == "KOORD":
         ok, msg = await asyncio.to_thread(run_gastro_assign, oid, None, 0, True)
         feedback = "👤 KOORD" if ok else f"❌ koord: {msg[:80]}"
@@ -1531,7 +1633,34 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
         log_rec["chosen_courier_id"] = str(assign_cid)
         log_rec["assign_time_min"] = assign_time_min
         log_rec["proposed_courier_id"] = str((best or {}).get("courier_id") or "")
+    # V3.19i (2026-04-30): include reason_code w INNY entries (action=INNY w
+    # log_rec). Dodatkowy TG_REASON entry emit-owany po umbrella INNY entry —
+    # downstream analyzery (Sprint 2) mogą filter po action='TG_REASON' bez
+    # touching legacy INNY entries.
+    if action == "INNY":
+        log_rec["reason_code"] = inny_reason_code
+        log_rec["proposed_courier_id"] = str((best or {}).get("courier_id") or "")
     append_learning(state["learning_log_path"], log_rec)
+    if action == "INNY":
+        try:
+            tg_reason_rec = {
+                "ts": now_iso(),
+                "order_id": oid,
+                "action": "TG_REASON",
+                "reason_code": inny_reason_code,
+                "operator": cb_from_name,
+                "operator_id": cb_from_id,
+                "proposed_courier_id": str((best or {}).get("courier_id") or ""),
+                "proposed_courier_name": (best or {}).get("name"),
+                "proposed_score": (best or {}).get("score"),
+                "decision": rec,
+            }
+            append_learning(state["learning_log_path"], tg_reason_rec)
+        except Exception as e:
+            _log.warning(
+                f"TG_REASON emit failed oid={oid} reason={inny_reason_code!r}: "
+                f"{type(e).__name__}: {e}"
+            )
     state["pending"].pop(oid, None)
     save_pending(state["pending_path"], state["pending"])
     _log.info(f"CB {action_for_log} oid={oid} → {feedback}")
