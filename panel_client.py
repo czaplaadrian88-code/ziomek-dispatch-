@@ -65,7 +65,7 @@ _session = {
 # Eliminates ~22min CSRF expiry blocking call (~6-7s) z hot path.
 # Pre-V3.27.7 latency p95 ~6465ms, 11.2% outliers >5000ms (login refresh).
 import os as _os
-ENABLE_PANEL_BG_REFRESH = _os.environ.get("ENABLE_PANEL_BG_REFRESH", "1") != "0"
+ENABLE_PANEL_BG_REFRESH = _os.environ.get("ENABLE_PANEL_BG_REFRESH", "0") != "0"
 PANEL_BG_REFRESH_INTERVAL_SEC = 900   # 15 min (cache TTL=1200s, 5min buffer)
 PANEL_BG_REFRESH_STALE_THRESHOLD_SEC = 1500  # 25 min watchdog (defensive)
 
