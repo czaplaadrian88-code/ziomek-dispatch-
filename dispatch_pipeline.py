@@ -807,7 +807,10 @@ def _min_dist_to_route_km(point, courier_pos, bag_dropoffs) -> Optional[float]:
 
 
 EARLY_BIRD_THRESHOLD_MIN = 60
-TOP_N_CANDIDATES = 5
+# Sprint-1 2026-04-30 (logging extension): bumped 5→16 to capture full feasible
+# pool dla counterfactual analysis (PANEL_OVERRIDE pairwise). Faza 2 baseline
+# pool mean=10.24, max=17 — top-15 alternatives + best=16 covers ~100% pool.
+TOP_N_CANDIDATES = 16
 DEFAULT_FLEET_PREP_VARIANCE_MIN = 13.0
 
 
@@ -833,6 +836,12 @@ class PipelineResult:
     pickup_ready_at: Optional[datetime]
     restaurant: Optional[str]
     delivery_address: Optional[str] = None
+    # Sprint-1 2026-04-30 (logging extension): pool size scalars dla counterfactual
+    # analysis. pool_total_count = liczba kandydatów PRZED feasibility cut (cała
+    # rozważana pula), pool_feasible_count = liczba MAYBE post-feasibility.
+    # Domyślnie 0 (early_bird path nie wchodzi w feasibility loop).
+    pool_total_count: int = 0
+    pool_feasible_count: int = 0
 
 
 def get_pickup_ready_at(
@@ -2225,6 +2234,8 @@ def assess_order(
             pickup_ready_at=pickup_ready_at,
             restaurant=restaurant,
             delivery_address=delivery_address,
+            pool_total_count=len(candidates),
+            pool_feasible_count=len(feasible),
         )
 
     # R28 best_effort: NO candidates that still produced a plan (SLA-only rejections)
@@ -2243,6 +2254,8 @@ def assess_order(
             pickup_ready_at=pickup_ready_at,
             restaurant=restaurant,
             delivery_address=delivery_address,
+            pool_total_count=len(candidates),
+            pool_feasible_count=0,
         )
 
     # R29 SOLO fallback: zamiast SKIP — spróbuj przydzielić SOLO (pusty bag, ignoruje R1/R5/R8)
@@ -2290,6 +2303,8 @@ def assess_order(
             pickup_ready_at=pickup_ready_at,
             restaurant=restaurant,
             delivery_address=delivery_address,
+            pool_total_count=len(candidates),
+            pool_feasible_count=0,
         )
 
     # R29 absolutny fallback: nikt nie przechodzi nawet solo — KOORD
@@ -2302,4 +2317,6 @@ def assess_order(
         pickup_ready_at=pickup_ready_at,
         restaurant=restaurant,
         delivery_address=delivery_address,
+        pool_total_count=len(candidates),
+        pool_feasible_count=0,
     )

@@ -396,6 +396,13 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             if result.pickup_ready_at else None
         ),
         "latency_ms": round(latency_ms, 1),
+        # Sprint-1 2026-04-30 (logging extension): pool size scalars dla
+        # counterfactual pairwise analysis. pool_total = pre-feasibility,
+        # pool_feasible = post-feasibility (MAYBE) candidates count.
+        # Defensive getattr — fallback do None gdy starsza struktura
+        # PipelineResult bez tych pól (dla replay zaszłych eventów).
+        "pool_total_count": getattr(result, "pool_total_count", None),
+        "pool_feasible_count": getattr(result, "pool_feasible_count", None),
     }
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)
