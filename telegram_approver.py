@@ -1261,8 +1261,26 @@ async def handle_message(state: dict, msg: dict) -> None:
             known = _known_names_from_decision(dr_matched)
             parsed = _parse_courier_time(text, allow_name_only=True, known_names=known)
             if parsed is None:
-                # Nie wygląda jak "Imię [czas]" — ignoruj Reply (nie spamuj gastro_assign)
-                _log.info(f"REPLY_OVERRIDE skip oid={matched_oid}: text unparseable {text[:60]!r}")
+                # Comment Learning Path 1 (TECH_DEBT.md L113, fix 2026-04-30):
+                # operator napisał free-form reply (np. "klient odwołał",
+                # "wave drop", "deszcz lecial") — capture jako OPERATOR_COMMENT
+                # do learning_log zamiast silent drop. Identyczna semantyka jak
+                # ENABLE_TELEGRAM_FREETEXT_ASSIGN=False branch niżej (no assign,
+                # pending stays for watchdog 5-min auto-KOORD).
+                append_learning(state["learning_log_path"], {
+                    "ts": now_iso(),
+                    "order_id": matched_oid,
+                    "action": "OPERATOR_COMMENT",
+                    "ok": True,
+                    "feedback": f"reply_freeform: {text}",
+                    "decision": matched_rec.get("decision_record") or {},
+                })
+                await asyncio.to_thread(
+                    tg_request, state["token"], "sendMessage",
+                    {"chat_id": state["admin_id"],
+                     "text": f"📝 Komentarz zapisany (#{matched_oid}): {text[:100]}"},
+                )
+                _log.info(f"OPERATOR_COMMENT (reply_freeform) oid={matched_oid} text={text[:80]!r}")
                 return
             courier_name, time_min = parsed
             if time_min is None:
