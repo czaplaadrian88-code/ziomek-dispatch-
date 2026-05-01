@@ -33,21 +33,21 @@ log = logging.getLogger(__name__)
 WARSAW = ZoneInfo("Europe/Warsaw")
 
 # Default paths (configurable via __init__)
-MODEL_PATH = "/root/.openclaw/workspace/scripts/ml_data_prep/models/v1.0/lgbm_ranker.txt"
-ENCODERS_PATH = "/root/.openclaw/workspace/scripts/ml_data_prep/models/v1.0/encoders.pkl"
-FEATURE_COLUMNS_PATH = "/root/.openclaw/workspace/scripts/ml_data_prep/models/v1.0/feature_columns.json"
+# V3.28 Faza 5.1 hot-swap (01.05.2026): v1.0 → v1.1.
+# v1.1 trained BEZ 7 reconstruction-only features (level_A_count, level_B_count,
+# level_C_excluded_count, exclude_virtual/historical/not_active/low_day).
+# Identical metrics (NDCG@5=0.852, pa=88.45%) — zero accuracy regression.
+# Eliminuje gap training-vs-inference dla Faza 6 production deployment.
+MODEL_PATH = "/root/.openclaw/workspace/scripts/ml_data_prep/models/v1.1/lgbm_ranker.txt"
+ENCODERS_PATH = "/root/.openclaw/workspace/scripts/ml_data_prep/models/v1.1/encoders.pkl"
+FEATURE_COLUMNS_PATH = "/root/.openclaw/workspace/scripts/ml_data_prep/models/v1.1/feature_columns.json"
+MODEL_VERSION = "1.1"
 TIERS_PATH = "/root/.openclaw/workspace/dispatch_state/courier_tiers.json"
 
-# Group A: reconstruction-only features (Faza 1 specific, NIE w live dispatch)
-GROUP_A_DEFAULTS = {
-    "level_A_count": 0,
-    "level_B_count": 0,
-    "level_C_excluded_count": 0,
-    "exclude_virtual": 0,
-    "exclude_historical": 0,
-    "exclude_not_active": 0,
-    "exclude_low_day": 0,
-}
+# Group A: reconstruction-only features (Faza 1 specific, NIE w live dispatch).
+# v1.1: empty dict — features removed from training data, not needed at inference.
+# v1.0 had 7 reconstruction defaults; v1.1 trained without them, zero accuracy delta.
+GROUP_A_DEFAULTS: Dict[str, int] = {}
 
 # Latency caps (configurable via env / common.py)
 LATENCY_SOFT_CAP_MS = float(os.environ.get("LGBM_SHADOW_LATENCY_SOFT_CAP_MS", "200"))
@@ -65,7 +65,8 @@ class ShadowResult:
     winner_score: Optional[float]
     ranking: List[Dict[str, Any]] = field(default_factory=list)  # top 5
     agreement_with_primary: Optional[bool] = None  # filled by caller
-    reconstruction_features_defaulted: bool = True  # always True for v1.0
+    reconstruction_features_defaulted: bool = False  # v1.0=True (7 defaults), v1.1=False (features removed)
+    model_version: str = "1.1"  # bumped 01.05.2026 hot-swap z v1.0
     evaluation_ts: str = ""
     latency_ms: float = 0.0
     feature_compute_ms: float = 0.0
