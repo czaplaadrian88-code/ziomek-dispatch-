@@ -196,6 +196,10 @@ def _serialize_candidate(c) -> dict:
         # V3.19h BUG-2: wave continuation bonus tracking.
         "v319h_bug2_interleave_gap_min": m.get("v319h_bug2_interleave_gap_min"),
         "v319h_bug2_continuation_bonus": m.get("v319h_bug2_continuation_bonus"),
+        # V3.28 FIX_C: bundle deliv_spread cap (LOCATION A).
+        "fix_c_applied": m.get("fix_c_applied"),
+        "fix_c_deliv_spread_km": m.get("fix_c_deliv_spread_km"),
+        "fix_c_cap_km": m.get("fix_c_cap_km"),
         # V3.19g1: czas_kuriera change detection + kid diagnostic (LOCATION A).
         "v319g_ck_changed": m.get("v319g_ck_changed"),
         "v319g_ck_old": m.get("v319g_ck_old"),
@@ -355,6 +359,10 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             # V3.19h BUG-2: wave continuation — patrz _serialize_candidate.
             "v319h_bug2_interleave_gap_min": best_m.get("v319h_bug2_interleave_gap_min"),
             "v319h_bug2_continuation_bonus": best_m.get("v319h_bug2_continuation_bonus"),
+            # V3.28 FIX_C: bundle deliv_spread cap (LOCATION B).
+            "fix_c_applied": best_m.get("fix_c_applied"),
+            "fix_c_deliv_spread_km": best_m.get("fix_c_deliv_spread_km"),
+            "fix_c_cap_km": best_m.get("fix_c_cap_km"),
             # V3.19g1: czas_kuriera change detection + kid diagnostic (LOCATION B).
             "v319g_ck_changed": best_m.get("v319g_ck_changed"),
             "v319g_ck_old": best_m.get("v319g_ck_old"),

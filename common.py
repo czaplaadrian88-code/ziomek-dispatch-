@@ -1198,6 +1198,21 @@ V326_R06_PENALTY_OPPOSITE = -40.0  # N↔SE/SW lub E↔W
 ENABLE_V326_R06_BAG1_FIX = _os.environ.get(
     "ENABLE_V326_R06_BAG1_FIX", "0") == "1"
 
+# V3.28 FIX_C (2026-05-01) — Bundle deliv_spread hard cap (FILOZ-3 peak-safe gate).
+# Bug #469834: cross-restaurant bundle (Raj + Grill Kebab pickup 10m apart) z drops
+# w przeciwnych częściach miasta (Wasilkowska NE Bojary + Magazynowa S Nowe Miasto,
+# 8.49km road). Andrei K wygrał (score 6.80) przez bonus_l2 (+20) + bug2_continuation
+# (+30), Kuba OL przegrał (2.38). Bundle scoring obecnie liczy tylko pickup_spread,
+# IGNORUJE deliv_spread dla cross-restaurant bundles. Bug Z (V3.27) penalizuje tylko
+# bonus_r4 corridor, NIE bonus_l2/continuation. Gate zeruje obie nagrody gdy bag>=1
+# i deliv_spread > cap. bonus_l1 SR pozostaje (osobny mechanizm, drop_proximity_factor
+# SR-only). Threshold 8.0 km na podstawie analizy 958 bundles since 2026-04-23:
+# >=8km bucket = 18.1% propozycji, większość PANEL_OVERRIDE. Default OFF.
+ENABLE_BUNDLE_DELIV_SPREAD_CAP = _os.environ.get(
+    "ENABLE_BUNDLE_DELIV_SPREAD_CAP", "0") == "1"
+BUNDLE_MAX_DELIV_SPREAD_KM = float(_os.environ.get(
+    "BUNDLE_MAX_DELIV_SPREAD_KM", "8.0"))
+
 # V3.26 Bug A complete (2026-04-25 sobota) — anchor-based distance scoring.
 # Replace chronological-last-drop effective_start_pos z chronologically-previous
 # stop w plan (insertion anchor). Distance kuriera do new pickup liczone od

@@ -1866,6 +1866,32 @@ def assess_order(
             except Exception as _ve:
                 log.warning(f"V326_WAVE_VETO compute fail order={order_id} cid={cid}: {_ve}")
 
+        # V3.28 FIX_C: Bundle deliv_spread hard cap (FILOZ-3 peak-safe gate).
+        # Cross-restaurant bundle scoring (bonus_l2 cross-pickup proximity + bug2
+        # continuation) currently NIE patrzy na deliv_spread. Drops w przeciwnych
+        # częściach miasta dostają full bonus pomimo trasy chaotic (#469834).
+        # Gate zeruje bonus_l2 + bonus_bug2_continuation gdy bag>=1 i deliv_spread
+        # przekracza cap. bonus_l1 SR pozostaje (osobny mechanizm, drop_proximity
+        # SR-only już guarded). Default OFF (env ENABLE_BUNDLE_DELIV_SPREAD_CAP=1).
+        fix_c_applied = False
+        fix_c_deliv_spread_km = metrics.get("deliv_spread_km")
+        if (C.ENABLE_BUNDLE_DELIV_SPREAD_CAP
+                and len(bag_raw) >= 1
+                and fix_c_deliv_spread_km is not None
+                and fix_c_deliv_spread_km > C.BUNDLE_MAX_DELIV_SPREAD_KM):
+            if bonus_l2 != 0.0 or bonus_bug2_continuation != 0.0:
+                log.info(
+                    f"FIX_C bundle_cap order={order_id} cid={cid} "
+                    f"deliv_spread={fix_c_deliv_spread_km:.2f}km > "
+                    f"cap={C.BUNDLE_MAX_DELIV_SPREAD_KM}km → "
+                    f"zero bonus_l2={bonus_l2:.1f} continuation={bonus_bug2_continuation:.1f}"
+                )
+                fix_c_applied = True
+            bonus_l2 = 0.0
+            bonus_bug2_continuation = 0.0
+            # Recompute bundle_bonus po zero bonus_l2 (bonus_l1, bonus_r4 unchanged).
+            bundle_bonus = bonus_l1 + bonus_l2 + bonus_r4
+
         # V3.19h BUG-4: tier × pora bag cap soft penalty (progressive scaling).
         # Orthogonal do R6 hard bag_time. Flag gated (default False).
         bug4_tier_cap_used = None
@@ -2058,6 +2084,15 @@ def assess_order(
             # continuation_bonus = helper bug2_wave_continuation_bonus(gap_min).
             "v319h_bug2_interleave_gap_min": bug2_interleave_gap_min,
             "v319h_bug2_continuation_bonus": round(bonus_bug2_continuation, 2),
+            # V3.28 FIX_C: bundle deliv_spread cap observability.
+            # fix_c_applied=True gdy gate zerował bonus_l2/continuation (i któryś był >0).
+            # fix_c_deliv_spread_km = max pair-wise drops road km z feasibility.
+            "fix_c_applied": fix_c_applied,
+            "fix_c_deliv_spread_km": (
+                round(fix_c_deliv_spread_km, 2)
+                if fix_c_deliv_spread_km is not None else None
+            ),
+            "fix_c_cap_km": float(C.BUNDLE_MAX_DELIV_SPREAD_KM),
             # V3.26 STEP 3 (R-09): wave geometric veto tracking.
             "v326_wave_veto": v326_wave_veto,
             "v326_wave_geometric_km": (
