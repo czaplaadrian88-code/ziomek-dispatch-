@@ -258,6 +258,8 @@ def _serialize_candidate(c) -> dict:
         "fix_c_cap_km": m.get("fix_c_cap_km"),
         # V3.28 R-04 v2.0: tier suggestion (LOCATION A) — Phase 1 SHADOW only.
         "r04": _r04_field_for_cid(str(m.get("courier_id") or "")),
+        # V3.28 Faza 6 LGBM shadow (LOCATION A) — parallel BC ranker prediction.
+        "lgbm_shadow": m.get("lgbm_shadow"),
         # V3.19g1: czas_kuriera change detection + kid diagnostic (LOCATION A).
         "v319g_ck_changed": m.get("v319g_ck_changed"),
         "v319g_ck_old": m.get("v319g_ck_old"),
@@ -423,6 +425,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "fix_c_cap_km": best_m.get("fix_c_cap_km"),
             # V3.28 R-04 v2.0: tier suggestion (LOCATION B) — Phase 1 SHADOW only.
             "r04": _r04_field_for_cid(str(best_m.get("courier_id") or "")),
+            # V3.28 Faza 6 LGBM shadow (LOCATION B) — best courier z metrics.
+            "lgbm_shadow": best_m.get("lgbm_shadow"),
             # V3.19g1: czas_kuriera change detection + kid diagnostic (LOCATION B).
             "v319g_ck_changed": best_m.get("v319g_ck_changed"),
             "v319g_ck_old": best_m.get("v319g_ck_old"),

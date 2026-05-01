@@ -1222,6 +1222,17 @@ BUNDLE_MAX_DELIV_SPREAD_KM = float(_os.environ.get(
 ENABLE_R04_SHADOW = _os.environ.get("ENABLE_R04_SHADOW", "1") == "1"
 ENABLE_R04_ENFORCE = _os.environ.get("ENABLE_R04_ENFORCE", "0") == "1"
 
+# V3.28 Faza 6 — LGBM Pairwise Ranker shadow inference (2026-05-01).
+# Pure Behavioral Cloning model trained na 399K pairs CSV history (Faza 5 v1.0).
+# Phase 1 SHADOW: parallel computation, log do decision_record. ZERO behavior change.
+# Architecture: feasibility_v2 hard rules pre-filter → LGBM ranks feasible candidates.
+# Default OFF — flip ON jutro post-restart obs window.
+# Hard latency cap 500ms (fallback "latency_timeout"), soft 200ms (warning log).
+ENABLE_LGBM_SHADOW = _os.environ.get("ENABLE_LGBM_SHADOW", "0") == "1"
+ENABLE_LGBM_PRIMARY = _os.environ.get("ENABLE_LGBM_PRIMARY", "0") == "1"  # Faza 7+ flip
+LGBM_SHADOW_LATENCY_HARD_CAP_MS = float(_os.environ.get("LGBM_SHADOW_LATENCY_HARD_CAP_MS", "500"))
+LGBM_SHADOW_LATENCY_SOFT_CAP_MS = float(_os.environ.get("LGBM_SHADOW_LATENCY_SOFT_CAP_MS", "200"))
+
 # V3.26 Bug A complete (2026-04-25 sobota) — anchor-based distance scoring.
 # Replace chronological-last-drop effective_start_pos z chronologically-previous
 # stop w plan (insertion anchor). Distance kuriera do new pickup liczone od

@@ -2260,6 +2260,38 @@ def assess_order(
         _rationale = _v326_build_rationale(top[0], feasible)
         if _rationale and hasattr(top[0], "metrics") and isinstance(top[0].metrics, dict):
             top[0].metrics["v326_rationale"] = _rationale
+
+        # V3.28 Faza 6 — LGBM shadow inference (parallel, ZERO behavior change).
+        # Pure BC model trained na 399K pairs CSV history (Faza 5 v1.0). Result
+        # attached to top[0].metrics["lgbm_shadow"] for shadow_dispatcher LOCATION B
+        # serialization. NIGDY nie raise — defense-in-depth fallback w ml_inference.
+        if getattr(C, "ENABLE_LGBM_SHADOW", False):
+            try:
+                from dispatch_v2.ml_inference import get_lgbm_inferer
+                _inferer = get_lgbm_inferer()
+                _decision_ctx = {
+                    "decision_ts": now,
+                    "order_id": order_id,
+                    "pickup_lat": pickup_coords[0] if pickup_coords and pickup_coords != (0.0, 0.0) else None,
+                    "pickup_lon": pickup_coords[1] if pickup_coords and pickup_coords != (0.0, 0.0) else None,
+                    "pickup_district": None,  # Optional: derive z pickup_coords via district_lookup
+                    "drop_district": None,
+                }
+                _shadow_result = _inferer.predict_for_decision(_decision_ctx, feasible)
+                # Compute agreement (winner_cid == primary best courier_id)
+                _shadow_result.agreement_with_primary = (
+                    str(_shadow_result.winner_cid) == str(top[0].courier_id)
+                    if _shadow_result.winner_cid else None
+                )
+                if hasattr(top[0], "metrics") and isinstance(top[0].metrics, dict):
+                    top[0].metrics["lgbm_shadow"] = _shadow_result.to_dict()
+            except Exception as _lgbm_e:
+                log.error(f"LGBM shadow unexpected fail order={order_id}: {_lgbm_e}", exc_info=True)
+                if hasattr(top[0], "metrics") and isinstance(top[0].metrics, dict):
+                    top[0].metrics["lgbm_shadow"] = {
+                        "enabled": False,
+                        "fallback_reason": "exception_in_pipeline",
+                    }
         return PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",
