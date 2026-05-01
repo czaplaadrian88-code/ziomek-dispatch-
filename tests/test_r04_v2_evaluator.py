@@ -62,7 +62,7 @@ class TestR04V2Evaluator(unittest.TestCase):
         self.assertFalse(s.insufficient_data)
 
     def test_B_mateusz_o_gold_part_time(self):
-        """Mateusz O (deliv=46): part-time Gold, peak_deliv<50 → ALE Gold preserved (not insufficient bo deliv>=40)."""
+        """Mateusz O (deliv=46): part-time Gold, gold_candidate=True post Adrian relax (deliv>=40)."""
         m = _make_metrics(
             cid="413", name="Mateusz O",
             peak_deliveries_30d=46, peak_active_days_30d=7,
@@ -74,12 +74,12 @@ class TestR04V2Evaluator(unittest.TestCase):
         self.assertEqual(s.suggested_tier, "gold")
         self.assertTrue(s.tier_match)
         self.assertFalse(s.insufficient_data)
-        # gold_candidate FALSE bo deliv=46 < 80 (Adrian threshold spec)
-        self.assertFalse(s.gold_candidate,
-                         "Per spec gold_candidate.peak_deliveries threshold=80, Mateusz part-time fails")
+        # gold_candidate TRUE post-relax (deliv=46>=40, tg_neg=0<=8 — Adrian ground truth)
+        self.assertTrue(s.gold_candidate,
+                        "Adrian ground truth: Mateusz O part-time = gold_candidate=True")
 
-    def test_C_gabriel_gold_borderline(self):
-        """Gabriel (tg_neg=6 > 3): gold preserved, gold_candidate=False (tg_neg fails threshold)."""
+    def test_C_gabriel_gold(self):
+        """Gabriel (tg_neg=6): gold preserved, gold_candidate=True post Adrian relax (tg_neg<=8)."""
         m = _make_metrics(
             cid="179", name="Gabriel",
             peak_deliveries_30d=116, peak_active_days_30d=11,
@@ -90,8 +90,8 @@ class TestR04V2Evaluator(unittest.TestCase):
         s = evaluate_courier_tier("179", "Gabriel", m, "gold", self.schema)
         self.assertEqual(s.suggested_tier, "gold")
         self.assertTrue(s.tier_match)
-        self.assertFalse(s.gold_candidate,
-                         "tg_neg=6 > 3 threshold → gold_candidate=False")
+        self.assertTrue(s.gold_candidate,
+                        "Adrian ground truth: tg_neg=6 <= 8 threshold → gold_candidate=True")
 
     def test_D_adrian_r_std_plus_maintained(self):
         """Adrian R (med=17.0, p25=9.7, deliv=120): std+ stays std+."""
