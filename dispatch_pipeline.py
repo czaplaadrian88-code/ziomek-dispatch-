@@ -32,7 +32,12 @@ from dispatch_v2.fleet_context import build_fleet_context, FleetContext
 import math
 import threading  # V3.27.1 sesja 2: in-memory cache lock dla pre-proposal recheck
 
-log = logging.getLogger(__name__)
+# T1 (2026-05-01): bare getLogger zostawiał dispatch_pipeline INFO logs bez handlers
+# (effective level WARNING z root inheritance) → FIX_C bundle_cap, V326_R06,
+# V326_WAVE_VETO, LGBM shadow INFO logs były dropped. Match canonical pattern z innych
+# modułów dispatch_v2 (geocoding, osrm_client, panel_client, panel_watcher,
+# state_machine — wszystkie używają setup_logger → dispatch.log).
+log = C.setup_logger("dispatch_pipeline", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
 
 
 # ═══════════════════════════════════════════════════════════════════
