@@ -46,6 +46,62 @@ def _sigterm_handler(signum, frame):
     _shutdown = True
 
 
+# V3.28 R-04 v2.0: lazy mtime cache dla tier_suggestions.json (5-min TTL).
+# Phase 1 SHADOW: serializes r04 fields to decision_record bez behavior change.
+_R04_TIER_SUGGESTIONS_PATH = "/root/.openclaw/workspace/dispatch_state/tier_suggestions.json"
+_R04_CACHE: Dict[str, object] = {"mtime": 0.0, "checked_at": 0.0, "data": {}}
+_R04_CACHE_TTL_SEC = 300
+
+
+def _load_r04_suggestions() -> Dict[str, dict]:
+    """Lazy-load tier_suggestions.json z mtime + TTL cache. Fail-open na missing/parse error."""
+    try:
+        from dispatch_v2 import common as C
+        if not getattr(C, "ENABLE_R04_SHADOW", False):
+            return {}
+    except Exception:
+        return {}
+    now_ts = time.time()
+    try:
+        if now_ts - _R04_CACHE["checked_at"] < _R04_CACHE_TTL_SEC:
+            return _R04_CACHE["data"]
+        st = os.stat(_R04_TIER_SUGGESTIONS_PATH)
+        _R04_CACHE["checked_at"] = now_ts
+        if st.st_mtime == _R04_CACHE["mtime"]:
+            return _R04_CACHE["data"]
+        with open(_R04_TIER_SUGGESTIONS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Strip _meta key — keep cid → suggestion dict
+        data = {k: v for k, v in data.items() if k != "_meta"}
+        _R04_CACHE["mtime"] = st.st_mtime
+        _R04_CACHE["data"] = data
+        return data
+    except FileNotFoundError:
+        _R04_CACHE["data"] = {}
+        return {}
+    except Exception as e:
+        _log.warning(f"_load_r04_suggestions fail: {e}")
+        return _R04_CACHE.get("data", {})
+
+
+def _r04_field_for_cid(cid: Optional[str]) -> Optional[dict]:
+    """Returns compact r04 field dla decision_record. None gdy brak suggestion albo flag OFF."""
+    if not cid:
+        return None
+    s = _load_r04_suggestions().get(str(cid))
+    if not s:
+        return None
+    return {
+        "current_tier": s.get("current_tier"),
+        "suggested_tier": s.get("suggested_tier"),
+        "tier_match": s.get("tier_match"),
+        "gold_candidate": s.get("gold_candidate"),
+        "insufficient_data": s.get("insufficient_data"),
+        "evaluated_at": s.get("evaluated_at"),
+        "schema_version": s.get("schema_version"),
+    }
+
+
 def _load_restaurant_meta(path: str) -> Optional[dict]:
     try:
         with open(path) as f:
@@ -200,6 +256,8 @@ def _serialize_candidate(c) -> dict:
         "fix_c_applied": m.get("fix_c_applied"),
         "fix_c_deliv_spread_km": m.get("fix_c_deliv_spread_km"),
         "fix_c_cap_km": m.get("fix_c_cap_km"),
+        # V3.28 R-04 v2.0: tier suggestion (LOCATION A) — Phase 1 SHADOW only.
+        "r04": _r04_field_for_cid(str(m.get("courier_id") or "")),
         # V3.19g1: czas_kuriera change detection + kid diagnostic (LOCATION A).
         "v319g_ck_changed": m.get("v319g_ck_changed"),
         "v319g_ck_old": m.get("v319g_ck_old"),
@@ -363,6 +421,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "fix_c_applied": best_m.get("fix_c_applied"),
             "fix_c_deliv_spread_km": best_m.get("fix_c_deliv_spread_km"),
             "fix_c_cap_km": best_m.get("fix_c_cap_km"),
+            # V3.28 R-04 v2.0: tier suggestion (LOCATION B) — Phase 1 SHADOW only.
+            "r04": _r04_field_for_cid(str(best_m.get("courier_id") or "")),
             # V3.19g1: czas_kuriera change detection + kid diagnostic (LOCATION B).
             "v319g_ck_changed": best_m.get("v319g_ck_changed"),
             "v319g_ck_old": best_m.get("v319g_ck_old"),

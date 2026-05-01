@@ -1213,6 +1213,15 @@ ENABLE_BUNDLE_DELIV_SPREAD_CAP = _os.environ.get(
 BUNDLE_MAX_DELIV_SPREAD_KM = float(_os.environ.get(
     "BUNDLE_MAX_DELIV_SPREAD_KM", "8.0"))
 
+# V3.28 R-04 v2.0 GRADUATION SCHEMA (2026-05-01) — peak-quality based tier suggestions.
+# Phase 1 SHADOW: r04_evaluator generates tier_suggestions.json (cron 03:00 daily,
+# manual trigger Phase 1). shadow_dispatcher attaches r04 field do decision_record
+# (current_tier, suggested_tier, tier_match, gold_candidate). ZERO scoring impact —
+# courier_tiers.json nadal source of truth. Phase 2 ENFORCE pending Adrian ACK
+# post obs window (auto-update tiers w cooldown 7d, gold remains manual-only).
+ENABLE_R04_SHADOW = _os.environ.get("ENABLE_R04_SHADOW", "1") == "1"
+ENABLE_R04_ENFORCE = _os.environ.get("ENABLE_R04_ENFORCE", "0") == "1"
+
 # V3.26 Bug A complete (2026-04-25 sobota) — anchor-based distance scoring.
 # Replace chronological-last-drop effective_start_pos z chronologically-previous
 # stop w plan (insertion anchor). Distance kuriera do new pickup liczone od
