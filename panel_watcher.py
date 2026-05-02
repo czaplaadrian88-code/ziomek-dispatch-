@@ -24,10 +24,13 @@ import signal
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from dispatch_v2.common import flag, load_config, now_iso, setup_logger
 from dispatch_v2.event_bus import emit
+from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
+from dispatch_v2.parser_health_layer3 import install_layer3, record_tick_full
+from dispatch_v2.parser_health_endpoint import start_health_endpoint
 from dispatch_v2.panel_client import (
     fetch_panel_html,
     parse_panel_html,
@@ -1106,16 +1109,21 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     return stats
 
 
-def tick(cycle_num: int) -> dict:
-    """Jeden cykl watchera. Zwraca statystyki."""
+def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
+    """Jeden cykl watchera. Zwraca (statystyki, parsed_dict_or_None).
+
+    V3.28 Layer 2+3: parsed zachowane dla parser_health.record_tick_full().
+    """
     global _fail_count, _last_panel_unreachable_emit
 
     cycle_stats = {"cycle": cycle_num, "at": now_iso()}
+    cycle_parsed: Optional[dict] = None
 
     try:
         html = fetch_panel_html()
         parsed = parse_panel_html(html)
         cycle_stats["orders_in_panel"] = len(parsed["order_ids"])
+        cycle_parsed = parsed
 
         # Udany fetch - reset fail counter
         if _fail_count > 0:
@@ -1142,7 +1150,7 @@ def tick(cycle_num: int) -> dict:
             )
             _last_panel_unreachable_emit = time.time()
 
-    return cycle_stats
+    return cycle_stats, cycle_parsed
 
 
 def run():
@@ -1160,6 +1168,29 @@ def run():
         _log.critical(f"HEALTH FAIL: {h}")
         sys.exit(1)
     _log.info(f"Health OK: {h.get('stats')}")
+
+    # V3.28 PARSER-RESILIENCE Layer 2+3: lazy-init parser health monitor.
+    # Default enabled (ENABLE_PARSER_HEALTH_MONITOR=1).
+    # NIE crash panel_watcher gdy init fail — defense-in-depth.
+    try:
+        _parser_health = get_parser_health_monitor()
+        try:
+            install_layer3(_parser_health)
+            _log.info("V3.28 Layer 3 cross-validation installed")
+        except Exception as _l3e:
+            _log.warning(f"V3.28 Layer 3 install failed (non-blocking): {_l3e}")
+        _log.info(f"V3.28 parser_health monitor active (enabled={_parser_health.enabled})")
+    except Exception as _ph_e:
+        _log.warning(f"V3.28 parser_health init failed (non-blocking): {_ph_e}")
+        _parser_health = None
+
+    # V3.28 Layer 4: spawn health endpoint daemon thread (default ON).
+    try:
+        endpoint_started = start_health_endpoint()
+        if endpoint_started:
+            _log.info("V3.28 Layer 4 health endpoint started (http://127.0.0.1:8888/health/parser)")
+    except Exception as _he_e:
+        _log.warning(f"V3.28 Layer 4 health endpoint start failed (non-blocking): {_he_e}")
 
     # V3.27.7 TECH_DEBT #20: spawn bg refresh thread post health check
     try:
@@ -1183,12 +1214,21 @@ def run():
             continue
 
         t0 = time.time()
-        stats = tick(cycle)
+        stats, parsed = tick(cycle)
         elapsed = time.time() - t0
 
         # Zbieramy totals
         for k in totals:
             totals[k] += stats.get(k, 0)
+
+        # V3.28 Layer 2+3: parser anomaly detection per tick.
+        # record_tick_full łączy Layer 2 (quantity-based) + Layer 3 (set-based cross-validation).
+        # NIGDY raise — wewnątrz wrapped try/except, NIE crash panel_watcher.
+        if _parser_health is not None:
+            try:
+                record_tick_full(_parser_health, stats, parsed)
+            except Exception as _ph_re:
+                _log.warning(f"V3.28 parser_health.record_tick fail (non-blocking): {_ph_re}")
 
         # Summary co 60s
         if time.time() - last_log_summary >= 60:

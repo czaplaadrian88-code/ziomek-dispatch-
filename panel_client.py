@@ -69,6 +69,16 @@ ENABLE_PANEL_BG_REFRESH = _os.environ.get("ENABLE_PANEL_BG_REFRESH", "0") != "0"
 PANEL_BG_REFRESH_INTERVAL_SEC = 900   # 15 min (cache TTL=1200s, 5min buffer)
 PANEL_BG_REFRESH_STALE_THRESHOLD_SEC = 1500  # 25 min watchdog (defensive)
 
+# V3.28 PARSER-RESILIENCE Layer 1: universal-ID parser flag.
+# Default OFF (shadow phase): both v1+v2 run, diff logged. After 24h shadow + Adrian ACK,
+# flip to "1" → primary v2, v1 regex deprecated.
+# Rationale: v1 regex hardcoded `46\d{4}` na linii 223, missed wszystkie 47XXXX
+# orders po counter rollover 2026-05-01 ~20:00 Warsaw. Incident bare 16h+.
+USE_V2_PARSER = _os.environ.get("USE_V2_PARSER", "0") == "1"
+# Shadow comparison flag: gdy USE_V2_PARSER=0, ENABLE_V2_SHADOW_COMPARE=1 odpala
+# parser_compare_v1_v2 i loguje diff. Default ON dla 24h shadow phase.
+ENABLE_V2_SHADOW_COMPARE = _os.environ.get("ENABLE_V2_SHADOW_COMPARE", "1") == "1"
+
 _bg_refresh_thread = None
 _bg_refresh_started = False
 
@@ -211,8 +221,11 @@ def fetch_panel_html() -> str:
     raise RuntimeError("fetch_panel wyczerpane proby")
 
 
-def parse_panel_html(html: str) -> dict:
-    """Parse struktury panelu z HTML.
+def _parse_panel_html_v1_legacy(html: str) -> dict:
+    """Parse struktury panelu z HTML — V1 legacy regex (BUGGED: hardcoded `46\\d{4}` prefix).
+
+    DEPRECATED przy USE_V2_PARSER=1. Preserved dla rollback safety + shadow comparison.
+
     Zwraca dict z:
         order_ids, assigned_ids, unassigned_ids,
         rest_names, courier_packs, courier_load,
@@ -288,6 +301,46 @@ def parse_panel_html(html: str) -> dict:
         "pickup_addresses": pickup_addresses,
         "delivery_addresses": delivery_addresses,
     }
+
+
+def parse_panel_html(html: str) -> dict:
+    """V3.28 dispatcher: USE_V2_PARSER flag selects v1 (legacy regex) or v2 (universal-ID).
+
+    Shadow mode (USE_V2_PARSER=0 + ENABLE_V2_SHADOW_COMPARE=1):
+      - Run v1 as primary, v2 as shadow
+      - Log WARNING gdy delta order_ids > 5%
+      - Returns v1 result (zero behavior change)
+
+    Primary mode (USE_V2_PARSER=1):
+      - Run v2 as primary, v1 NIE wywoływane
+      - Returns v2 result
+    """
+    if USE_V2_PARSER:
+        try:
+            from dispatch_v2.panel_html_parser import parse_panel_html_v2
+            return parse_panel_html_v2(html)
+        except Exception as e:
+            _log.error(f"v2_parser primary fail, fallback to v1 legacy: {e}", exc_info=True)
+            return _parse_panel_html_v1_legacy(html)
+
+    v1_result = _parse_panel_html_v1_legacy(html)
+    if ENABLE_V2_SHADOW_COMPARE:
+        try:
+            from dispatch_v2.panel_html_parser import parse_panel_html_v2
+            v2_result = parse_panel_html_v2(html)
+            n1 = len(v1_result.get("order_ids", []))
+            n2 = len(v2_result.get("order_ids", []))
+            if max(n1, n2) >= 5:
+                delta_pct = abs(n2 - n1) / max(n1, 1) * 100
+                if delta_pct > 5.0:
+                    only_in_v2 = sorted(set(v2_result["order_ids"]) - set(v1_result["order_ids"]))[:10]
+                    _log.warning(
+                        f"V2_SHADOW_DELTA {delta_pct:.1f}%: "
+                        f"v1={n1} v2={n2} only_in_v2_sample={only_in_v2}"
+                    )
+        except Exception as e:
+            _log.warning(f"v2_shadow_compare fail (non-blocking): {e}")
+    return v1_result
 
 
 def _open_with_relogin(req: urllib.request.Request, timeout: float = 10):
