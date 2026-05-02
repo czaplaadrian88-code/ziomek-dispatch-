@@ -2290,6 +2290,22 @@ def assess_order(
                 )
                 if hasattr(top[0], "metrics") and isinstance(top[0].metrics, dict):
                     top[0].metrics["lgbm_shadow"] = _shadow_result.to_dict()
+                # V3.28-TICKET2: explicit LGBM_SHADOW log line dla validation gate pipeline.
+                # Format grep-friendly: oid + winners + agreement + fallback + latency + pool_size.
+                try:
+                    _lgbm_winner = _shadow_result.winner_cid
+                    _current_winner = str(top[0].courier_id) if top else None
+                    _agreement = (str(_lgbm_winner) == _current_winner) if (_lgbm_winner and _current_winner) else None
+                    log.info(
+                        f"LGBM_SHADOW oid={order_id} "
+                        f"winner_lgbm={_lgbm_winner} winner_current={_current_winner} "
+                        f"agreement={_agreement} fallback={_shadow_result.fallback_reason or 'NONE'} "
+                        f"latency_ms={_shadow_result.latency_ms} "
+                        f"pool_size={_shadow_result.n_candidates_scored} "
+                        f"model_version={_shadow_result.model_version}"
+                    )
+                except Exception as _log_e:
+                    log.warning(f"LGBM_SHADOW log line emit fail (non-blocking) order={order_id}: {_log_e}")
             except Exception as _lgbm_e:
                 log.error(f"LGBM shadow unexpected fail order={order_id}: {_lgbm_e}", exc_info=True)
                 if hasattr(top[0], "metrics") and isinstance(top[0].metrics, dict):
@@ -2297,6 +2313,10 @@ def assess_order(
                         "enabled": False,
                         "fallback_reason": "exception_in_pipeline",
                     }
+                log.info(
+                    f"LGBM_SHADOW oid={order_id} winner_lgbm=None winner_current={top[0].courier_id if top else None} "
+                    f"agreement=None fallback=exception_in_pipeline latency_ms=0.0 pool_size=0 model_version=unknown"
+                )
         return PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",

@@ -415,6 +415,47 @@ def test_19_motion_aware_02may_rollover_pattern(fresh_monitor, mock_telegram):
     )
 
 
+def test_21_motion_below_threshold_no_alert(fresh_monitor, mock_telegram):
+    """V3.28-TICKET1: motion=1+1+1=3 < 4 threshold → NO alert (false positive eliminated).
+
+    Reproduces 02.05 wieczór scenario: panel quiet ale slabe motion (1 new, 1 delivered, 1 assigned change)
+    fired false positive pre-TICKET1. Post-TICKET1: motion_total=3 < threshold=4 → suppress.
+    """
+    for c in range(1, 6):
+        # Slabe motion: 1 new + 1 delivered (in 5 cycles only 1+1=2, plus assigned 1 change)
+        if c == 1:
+            cycle_stats = {"cycle": c, "orders_in_panel": 350, "new": 1, "delivered": 0}
+            parsed = {"assigned_ids": set(["A"])}
+        elif c == 3:
+            cycle_stats = {"cycle": c, "orders_in_panel": 350, "delivered": 1}
+            parsed = {"assigned_ids": set(["A", "B"])}  # 1 change
+        else:
+            cycle_stats = {"cycle": c, "orders_in_panel": 350}
+            parsed = {"assigned_ids": set(["A", "B"])}
+        fresh_monitor.record_tick(cycle_stats, parsed)
+    # motion_total = 1 (new) + 1 (delivered) + 1 (assigned variance 1→2) = 3 < 4 threshold
+    assert not any("PARSER_STUCK" in a for a in mock_telegram), (
+        f"Slabe motion (sum=3 < threshold=4) should NOT alert. Got: {mock_telegram}"
+    )
+
+
+def test_22_motion_strong_above_threshold_alert(fresh_monitor, mock_telegram):
+    """V3.28-TICKET1: motion=10 (assigned 5→15) >> 4 threshold → ALERT (real 02.05 stronger pattern).
+
+    Real 02.05 incident magnitude: PACKS_CATCHUP fires dla many 47XXXX assigned, motion >> threshold.
+    """
+    for c in range(1, 6):
+        cycle_stats = {"cycle": c, "orders_in_panel": 350}
+        # assigned grows 5→15 (10 orderów dodanych do assigned_ids w 5 cyklach)
+        assigned_set = set([str(470000 + i) for i in range((c - 1) * 2 + 5)])  # 5, 7, 9, 11, 13
+        parsed = {"assigned_ids": assigned_set}
+        fresh_monitor.record_tick(cycle_stats, parsed)
+    # motion_total = 0 + 0 + (13-5)=8 = 8 >= 4 threshold → alert
+    assert any("PARSER_STUCK" in a for a in mock_telegram), (
+        f"Strong motion (assigned variance 8 > threshold 4) MUST alert. Got: {mock_telegram}"
+    )
+
+
 def test_20_motion_aware_legacy_mode_disabled(ph, fresh_monitor, mock_telegram, monkeypatch):
     """Legacy fallback: ENABLE_PARSER_STUCK_MOTION_AWARE=0 → original behavior (alert na każdy stuck).
 

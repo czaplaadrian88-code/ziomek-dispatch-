@@ -62,11 +62,17 @@ DEBOUNCE_SECONDS = float(os.environ.get("PARSER_HEALTH_DEBOUNCE_SEC", "1800"))  
 _ENABLED_DEFAULT = os.environ.get("ENABLE_PARSER_HEALTH_MONITOR", "1") == "1"
 
 # V3.28-LAYER2-MOTION-AWARE (02.05.2026 fix): adaptive STUCK detection.
-# Default ON — suppress PARSER_STUCK gdy panel quiet (no motion: delivered=0, assigned variance=0).
-# Fire alert tylko gdy panel ma ruch (delivered>0 OR assigned variance>0) ALE order_ids count stuck
+# Default ON — suppress PARSER_STUCK gdy panel quiet (motion sum poniżej threshold).
+# Fire alert tylko gdy motion_total >= PARSER_STUCK_MOTION_THRESHOLD ALE order_ids count stuck
 # = real bug pattern (np. 02.05 rollover incident: PACKS_CATCHUP fires dla 47XXXX, order_ids broken).
-# Set =0 dla rollback do legacy behavior (alert na każdy stuck, false positives).
+# Set ENABLE_*=0 dla rollback do legacy behavior (alert na każdy stuck, false positives).
 ENABLE_PARSER_STUCK_MOTION_AWARE = os.environ.get("ENABLE_PARSER_STUCK_MOTION_AWARE", "1") == "1"
+
+# V3.28-TICKET1-MOTION-THRESHOLD-TUNING (02.05.2026 wieczór):
+# Motion sum threshold: sum_new + sum_delivered + assigned_variance >= N → alert.
+# Default 4 (eliminates noise z 1+1+1=3 false positives, preserves 02.05 incident detection).
+# Set =0 dla legacy >0 behavior (any motion fires).
+PARSER_STUCK_MOTION_THRESHOLD = int(os.environ.get("PARSER_STUCK_MOTION_THRESHOLD", "4"))
 
 
 class ParserHealthMonitor:
@@ -259,7 +265,10 @@ class ParserHealthMonitor:
                     sum_delivered = sum(int(c.get("n_delivered", 0) or 0) for c in recent)
                     assigned_values = [int(c.get("n_assigned", 0) or 0) for c in recent]
                     assigned_motion = (max(assigned_values) - min(assigned_values)) if assigned_values else 0
-                    panel_has_motion = (sum_new > 0) or (sum_delivered > 0) or (assigned_motion > 0)
+                    # V3.28-TICKET1: motion sum threshold zamiast "any motion".
+                    # Eliminuje false positives ze słabego motion (1+1+1=3 < 4 default).
+                    motion_total = sum_new + sum_delivered + assigned_motion
+                    panel_has_motion = motion_total >= PARSER_STUCK_MOTION_THRESHOLD
                 except Exception as _me:
                     log.warning(f"motion-aware compute fail (non-blocking, fallback legacy): {_me}")
                     panel_has_motion = True  # Fallback: assume motion → alert (legacy behavior)
@@ -289,7 +298,9 @@ class ParserHealthMonitor:
                         ),
                         "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
                                     "motion_new": sum_new, "motion_delivered": sum_delivered,
-                                    "motion_assigned_variance": assigned_motion, "motion_aware": True},
+                                    "motion_assigned_variance": assigned_motion,
+                                    "motion_total": motion_total, "motion_threshold": PARSER_STUCK_MOTION_THRESHOLD,
+                                    "motion_aware": True},
                     })
                 # else: natural plateau (panel quiet, no motion) → NO alert (suppress false positive)
 
