@@ -584,6 +584,37 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
     return stats
 
 
+# V3.28 Fix 3 (incident 03.05.2026): worker liveness thresholds.
+# Module-level dla testowalności + env override.
+import os as _os_v328
+V328_WORKER_STUCK_AGE_SEC = int(_os_v328.environ.get("V328_WORKER_STUCK_AGE_SEC", "300"))
+V328_WORKER_STUCK_PENDING_THRESHOLD = int(_os_v328.environ.get("V328_WORKER_STUCK_PENDING_THRESHOLD", "100"))
+
+
+def _v328_compute_heartbeat_state(last_processed_ts: float, now: float, pending: int) -> dict:
+    """V3.28 Fix 3 helper: pure function compute heartbeat liveness state.
+
+    Multi-signal stuck detection (Lekcja #66): age>threshold AND pending>threshold.
+    Quiet period (low pending, no orders to process) → NOT stuck (worker idle).
+
+    Returns dict z 3 polami:
+    - age_sec: seconds od last successful process_event
+    - worker_alive: True jeśli age < V328_WORKER_STUCK_AGE_SEC
+    - is_stuck: True jeśli age > threshold AND pending > threshold (alert trigger)
+    """
+    age_sec = max(0.0, now - last_processed_ts)
+    worker_alive = age_sec < V328_WORKER_STUCK_AGE_SEC
+    is_stuck = (
+        age_sec > V328_WORKER_STUCK_AGE_SEC
+        and pending > V328_WORKER_STUCK_PENDING_THRESHOLD
+    )
+    return {
+        "age_sec": age_sec,
+        "worker_alive": worker_alive,
+        "is_stuck": is_stuck,
+    }
+
+
 def run() -> int:
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
@@ -641,21 +672,44 @@ def run() -> int:
 
     totals = {"processed": 0, "failed": 0, "skipped": 0}
     last_heartbeat = time.time()
+    # V3.28 Fix 3 (incident 03.05.2026): worker liveness tracking.
+    # Pre-fix: HEARTBEAT loguje processed=N stagnate (NIE distinguish "worker
+    # alive" vs "worker stuck"). Production incident 02.05 23:03 → 03.05 ~10:00:
+    # processed=10675 → 10675 przez 10+ godzin (event_bus pending rosło 14025 →
+    # 14052 ale processed nie ruszał). Detection failure.
+    # Post-fix: track last_processed_ts, emit age_sec + worker_alive boolean,
+    # log.critical V328_WORKER_STUCK gdy age>300s AND pending>100 (multi-signal
+    # per Lekcja #66 — quiet period z low pending NIE jest stuck).
+    last_processed_ts = time.time()
 
     while not _shutdown:
         try:
             tick_stats = _tick(shadow_log_path, meta)
             for k, v in tick_stats.items():
                 totals[k] += v
+            # V3.28 Fix 3: update last_processed_ts gdy tick miał >=1 successful processing
+            if tick_stats.get("processed", 0) > 0:
+                last_processed_ts = time.time()
         except Exception as e:
             _log.error(f"tick loop error: {e}\n{traceback.format_exc()}")
 
         if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_SEC:
             eb = event_bus.stats()
+            # V3.28 Fix 3: truthful HEARTBEAT z worker liveness signal
+            hb_state = _v328_compute_heartbeat_state(last_processed_ts, time.time(), eb['pending'])
             _log.info(
                 f"HEARTBEAT totals={totals} "
-                f"event_bus=pending:{eb['pending']}/processed:{eb['processed']}/failed:{eb['failed']}"
+                f"event_bus=pending:{eb['pending']}/processed:{eb['processed']}/failed:{eb['failed']} "
+                f"last_processed_age_sec={hb_state['age_sec']:.0f} "
+                f"worker_alive={hb_state['worker_alive']}"
             )
+            # V3.28 Fix 3: worker stuck alert (multi-signal — quiet period NOT alert)
+            if hb_state['is_stuck']:
+                _log.critical(
+                    f"V328_WORKER_STUCK age={hb_state['age_sec']:.0f}s pending={eb['pending']} "
+                    f"threshold_age={V328_WORKER_STUCK_AGE_SEC}s "
+                    f"threshold_pending={V328_WORKER_STUCK_PENDING_THRESHOLD}"
+                )
             last_heartbeat = time.time()
 
         # Sleep in short slices so shutdown signal is responsive

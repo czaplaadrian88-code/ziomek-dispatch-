@@ -53,6 +53,163 @@ _server_instance: Optional[HTTPServer] = None
 _lock = threading.Lock()
 
 
+# V3.28 Fix 5 (incident 03.05.2026, Lekcja #67): downstream pipeline cross-check.
+# Pre-flight 9:55 raportował GREEN (parser healthy) mimo że pipeline silent 12h.
+# Health endpoint extends z 4 cross-check signals + computed downstream_status.
+EVENTS_DB_PATH = "/root/.openclaw/workspace/dispatch_state/events.db"
+DISPATCH_LOG_PATH = "/root/.openclaw/workspace/scripts/logs/dispatch.log"
+
+V328_DOWNSTREAM_PIPELINE_SILENT_AGE_SEC = int(
+    os.environ.get("V328_DOWNSTREAM_PIPELINE_SILENT_AGE_SEC", "1800")
+)
+V328_DOWNSTREAM_FAILED_1H_THRESHOLD = int(
+    os.environ.get("V328_DOWNSTREAM_FAILED_1H_THRESHOLD", "5")
+)
+V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC = int(
+    os.environ.get("V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC", "600")
+)
+
+
+def _v328_query_events_stats(events_db_path: str = EVENTS_DB_PATH) -> Dict[str, Any]:
+    """V3.28 Fix 5 helper: query events.db dla downstream cross-check signals.
+
+    Read-only sqlite query. Defensive — return zero defaults gdy DB unavailable.
+
+    Returns dict z polami:
+    - last_proposal_sent_age_sec: Optional[float] — seconds od ostatniego
+      PROPOSAL_SENT (None gdy NIGDY nie było)
+    - events_failed_last_1h_count: int — failed events w ostatniej godzinie
+    - new_orders_last_1h_count: int — NEW_ORDER events w ostatniej godzinie
+      (used dla cross-check "pipeline silent despite work")
+    """
+    import sqlite3
+    result = {
+        "last_proposal_sent_age_sec": None,
+        "events_failed_last_1h_count": 0,
+        "new_orders_last_1h_count": 0,
+    }
+    try:
+        conn = sqlite3.connect(f"file:{events_db_path}?mode=ro", uri=True, timeout=2.0)
+        cur = conn.cursor()
+        # last PROPOSAL_SENT — NIE gwarantuje events.db ma ten event_type w schema
+        # z normalizacją statusu. Fallback do `processed_at` z najnowszej processed.
+        cur.execute(
+            "SELECT MAX(processed_at) FROM events WHERE event_type='PROPOSAL_SENT' AND status='processed'"
+        )
+        row = cur.fetchone()
+        last_propose_iso = row[0] if row else None
+        if last_propose_iso:
+            try:
+                last_dt = datetime.fromisoformat(str(last_propose_iso).replace("Z", "+00:00"))
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                age_sec = (datetime.now(timezone.utc) - last_dt).total_seconds()
+                result["last_proposal_sent_age_sec"] = max(0.0, age_sec)
+            except Exception as e:
+                log.debug(f"health endpoint: parse last_propose_iso fail: {e}")
+        # failed last 1h — default windowing przez created_at (recent)
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM events
+            WHERE status='failed'
+              AND datetime(created_at) > datetime('now', '-1 hour')
+            """
+        )
+        row = cur.fetchone()
+        result["events_failed_last_1h_count"] = int(row[0]) if row else 0
+        # new orders last 1h
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM events
+            WHERE event_type='NEW_ORDER'
+              AND datetime(created_at) > datetime('now', '-1 hour')
+            """
+        )
+        row = cur.fetchone()
+        result["new_orders_last_1h_count"] = int(row[0]) if row else 0
+        conn.close()
+    except Exception as e:
+        log.debug(f"health endpoint: events.db query fail: {e}")
+    return result
+
+
+def _v328_parse_worker_age_from_log(log_path: str = DISPATCH_LOG_PATH) -> Optional[float]:
+    """V3.28 Fix 5 helper: parse last HEARTBEAT z dispatch.log dla worker_processed_age.
+
+    Read tail of log file (last 200 lines) i find last HEARTBEAT line z polem
+    `last_processed_age_sec=K` (Fix 3 format). Returns float or None.
+    """
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["tail", "-n", "200", log_path],
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+        ).decode("utf-8", errors="ignore")
+        # Search backwards dla najnowszego HEARTBEAT z last_processed_age_sec
+        import re
+        matches = re.findall(r"last_processed_age_sec=([0-9.]+)", out)
+        if matches:
+            return float(matches[-1])
+    except Exception as e:
+        log.debug(f"health endpoint: parse worker_age fail: {e}")
+    return None
+
+
+def _v328_compute_downstream_status(
+    last_proposal_age_sec: Optional[float],
+    events_failed_1h: int,
+    new_orders_1h: int,
+    worker_age_sec: Optional[float],
+) -> Dict[str, Any]:
+    """V3.28 Fix 5 helper: compute downstream_status + reason z cross-check signals.
+
+    Lekcja #67: pre-flight diagnostic MUST cross-check primary output produced
+    RIGHT NOW, NIE tylko parser metadata.
+
+    Priority order (critical first):
+    1. PIPELINE_SILENT_DESPITE_WORK (critical) — last_proposal_age > 30min AND new_orders > 0
+    2. WORKER_STUCK (critical) — worker_age > worker_slow * 2 (twice slow threshold)
+    3. EVENTS_FAILED_HIGH (degraded) — events_failed_1h > threshold (5)
+    4. WORKER_SLOW (degraded) — worker_age > slow threshold
+    5. ok (no anomaly)
+
+    Returns dict z 'downstream_status' (ok|degraded|critical) + 'downstream_reason'.
+    """
+    # Critical priority — pipeline silent despite work
+    if (
+        last_proposal_age_sec is not None
+        and last_proposal_age_sec > V328_DOWNSTREAM_PIPELINE_SILENT_AGE_SEC
+        and new_orders_1h > 0
+    ):
+        return {
+            "downstream_status": "critical",
+            "downstream_reason": "pipeline_silent_despite_work",
+        }
+    # Critical — worker hard stuck (twice slow threshold)
+    if worker_age_sec is not None and worker_age_sec > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2:
+        return {
+            "downstream_status": "critical",
+            "downstream_reason": "worker_stuck",
+        }
+    # Degraded — elevated failures
+    if events_failed_1h > V328_DOWNSTREAM_FAILED_1H_THRESHOLD:
+        return {
+            "downstream_status": "degraded",
+            "downstream_reason": "elevated_failure_rate",
+        }
+    # Degraded — worker slow
+    if worker_age_sec is not None and worker_age_sec > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC:
+        return {
+            "downstream_status": "degraded",
+            "downstream_reason": "worker_slow",
+        }
+    return {
+        "downstream_status": "ok",
+        "downstream_reason": None,
+    }
+
+
 class _HealthHandler(BaseHTTPRequestHandler):
     """Quiet, defensive handler. NIE log każdy request (zero spam)."""
 
@@ -114,8 +271,22 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if os.environ.get("ENABLE_V2_SHADOW_COMPARE", "1") == "1" and parser_version == "v1":
             parser_version = "v1+v2_shadow"
 
+        # V3.28 Fix 5 (incident 03.05.2026, Lekcja #67): downstream cross-check.
+        # Pre-flight diagnostic 9:55 dał false GREEN bo health endpoint widział
+        # parser zdrowy, ALE pipeline silent 12h (CP Solver crash). Lekcja #67:
+        # "system MUST cross-check primary output produced RIGHT NOW, NIE tylko
+        # parser metadata".
+        events_stats = _v328_query_events_stats()
+        worker_age_sec = _v328_parse_worker_age_from_log()
+        downstream = _v328_compute_downstream_status(
+            last_proposal_age_sec=events_stats.get("last_proposal_sent_age_sec"),
+            events_failed_1h=events_stats.get("events_failed_last_1h_count", 0),
+            new_orders_1h=events_stats.get("new_orders_last_1h_count", 0),
+            worker_age_sec=worker_age_sec,
+        )
+
         snapshot = {
-            "endpoint_version": "1",
+            "endpoint_version": "2",  # V3.28 Fix 5 — bump dla downstream fields
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "status": base_snap.get("status", "unknown"),
             "last_fetch_ts": base_snap.get("last_tick_ts"),
@@ -130,6 +301,13 @@ class _HealthHandler(BaseHTTPRequestHandler):
             "init_count": base_snap.get("init_count", 0),
             "error_count": base_snap.get("error_count", 0),
             "thresholds": base_snap.get("thresholds", {}),
+            # V3.28 Fix 5 downstream cross-check fields
+            "last_proposal_sent_age_sec": events_stats.get("last_proposal_sent_age_sec"),
+            "events_failed_last_1h_count": events_stats.get("events_failed_last_1h_count", 0),
+            "new_orders_last_1h_count": events_stats.get("new_orders_last_1h_count", 0),
+            "worker_processed_age_sec": worker_age_sec,
+            "downstream_status": downstream["downstream_status"],
+            "downstream_reason": downstream["downstream_reason"],
         }
         return snapshot
 
