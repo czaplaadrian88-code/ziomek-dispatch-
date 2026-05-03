@@ -40,6 +40,19 @@ ALERT_GROUP_CHAT_ID_FALLBACK = -5149910559
 MAX_STATE_AGE_HOURS = 2
 KOORDYNATOR_CID = "26"
 
+# V3.28 Fix 8 (incident 03.05.2026): czasówki visibility bug fix + 3 safety mechanisms.
+# Pre-fix: czasowka_scheduler ZAWSZE widział 0 czasówek bo line 441 użyła
+# `state_machine.get_all().get("orders", {})` ALE state_machine zwraca FLAT dict.
+# Module live od 22.04 (V3.24-B deploy) — silent dead code 12+ dni.
+#
+# Fix 8.A: bug fix (1-line) — usunąć .get("orders", {}) wrapper
+# Fix 8.B: dryrun mode dla Telegram (default ON — first deploy = NIE wysyłaj real alerts)
+# Fix 8.C: retroactive filter — skip stale orders_state legacy entries (cutoff = N hours)
+# Fix 8.D: per-tick rate limit emit/koord (Bartek MUSI mieć window do review pierwszych)
+DRYRUN_MODE = os.environ.get("CZASOWKA_TELEGRAM_DRYRUN", "1") == "1"  # SAFE default ON
+RETROACTIVE_HOURS = int(os.environ.get("CZASOWKA_RETROACTIVE_HOURS", "2"))
+MAX_EMIT_PER_TICK = int(os.environ.get("CZASOWKA_MAX_EMIT_PER_TICK", "3"))
+
 
 def _resolve_alert_chat_id() -> int:
     try:
@@ -438,12 +451,50 @@ def main() -> int:
     if cleaned:
         _log.info(f"cleaned {cleaned} stale state entries")
 
-    all_orders_state = state_machine.get_all().get("orders", {})
-    czasowki = {oid: osrec for oid, osrec in all_orders_state.items()
+    # V3.28 Fix 8.A (incident 03.05.2026): bug fix — state_machine.get_all() returns
+    # FLAT dict {order_id: dict}, NIE wrapped {"orders": {...}}. Pre-fix .get("orders", {})
+    # zwracało {} ZAWSZE → 0 czasówek processed od V3.24-B deploy 22.04.
+    all_orders_state = state_machine.get_all()
+
+    # V3.28 Fix 8.C: retroactive filter — skip stale legacy orders_state entries.
+    # Cutoff default 2h (CZASOWKA_RETROACTIVE_HOURS env override). Prevents trigger
+    # scheduler na orders_state legacy entries (delivered/cancelled, ale state stale).
+    # Ground truth timestamp: first_seen (UTC ISO), fallback updated_at, skip jeśli oba None.
+    cutoff = now_utc - timedelta(hours=RETROACTIVE_HOURS)
+    filtered_orders_state = {}
+    parse_errors = 0
+    for oid, osrec in all_orders_state.items():
+        ts_str = osrec.get("first_seen") or osrec.get("updated_at")
+        if not ts_str:
+            continue  # skip legacy orders bez timestamp
+        try:
+            ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts > cutoff:
+                filtered_orders_state[oid] = osrec
+        except Exception as e:
+            parse_errors += 1
+            if parse_errors <= 3:  # log first 3, suppress rest
+                _log.warning(f"V328_CZASOWKA_FILTER_PARSE_ERR oid={oid} ts={ts_str!r} err={e}")
+            continue
+
+    _log.info(
+        f"V328_CZASOWKA_FILTER total_state={len(all_orders_state)} "
+        f"after_cutoff={len(filtered_orders_state)} cutoff_h={RETROACTIVE_HOURS} "
+        f"parse_errors={parse_errors}"
+    )
+
+    czasowki = {oid: osrec for oid, osrec in filtered_orders_state.items()
                 if _is_czasowka(osrec)}
     _log.info(f"tick: {len(czasowki)} czasówek w orders_state (now {now_utc.isoformat()})")
 
     stats = {"eval": 0, "skip_interval": 0, "emit": 0, "force": 0, "koord": 0, "wait": 0, "dont_emit": 0, "skip": 0}
+
+    # V3.28 Fix 8.D: per-tick rate limit emit/koord. Bartek MUSI mieć window do
+    # review pierwszych przejmowanych czasówek (Lekcja Bartek validation gate).
+    emit_count = 0
+    emit_pending_oids = []
 
     for oid, osrec in czasowki.items():
         info = state["orders"].get(oid)
@@ -451,6 +502,8 @@ def main() -> int:
             stats["skip_interval"] += 1
             continue
 
+        # Rate limit guard PRZED eval (NIE marnować eval gdy nie wyemujemy)
+        # Eval still runs dla state tracking, ale emit/koord skip
         result = eval_czasowka(oid, osrec, now_utc)
         stats["eval"] += 1
         stats[result["decision"].lower().replace("force_assign", "force").replace("dont_emit", "dont_emit")] = \
@@ -478,13 +531,38 @@ def main() -> int:
             "eval_count": prev_count + 1,
         })
 
-        # B11 emit paths
+        # B11 emit paths z V3.28 Fix 8.B (dryrun) + Fix 8.D (rate limit)
+        is_emit_decision = result["decision"] in ("EMIT", "FORCE_ASSIGN", "KOORD")
+        if is_emit_decision and emit_count >= MAX_EMIT_PER_TICK:
+            emit_pending_oids.append(oid)
+            continue
+
         if result["decision"] in ("EMIT", "FORCE_ASSIGN"):
-            # Shadow_dispatcher konsumuje event z unique event_id suffix.
-            _emit_to_event_bus(oid, osrec, result, prev_count + 1)
+            if DRYRUN_MODE:
+                best_cid = result["best"].courier_id if result["best"] else None
+                _log.info(
+                    f"V328_CZASOWKA_DRYRUN would_emit oid={oid} verdict={result['decision']} "
+                    f"courier={best_cid} reason={result['reason']!r}"
+                )
+            else:
+                # Shadow_dispatcher konsumuje event z unique event_id suffix.
+                _emit_to_event_bus(oid, osrec, result, prev_count + 1)
+            emit_count += 1
         elif result["decision"] == "KOORD":
-            # Alert do grupy ziomka (Adrian + Bartek).
-            _send_koord_alert(oid, osrec, result)
+            if DRYRUN_MODE:
+                _log.info(
+                    f"V328_CZASOWKA_DRYRUN would_koord_alert oid={oid} reason={result['reason']!r}"
+                )
+            else:
+                # Alert do grupy ziomka (Adrian + Bartek).
+                _send_koord_alert(oid, osrec, result)
+            emit_count += 1
+
+    if emit_pending_oids:
+        _log.info(
+            f"V328_CZASOWKA_TICK_LIMIT max_per_tick={MAX_EMIT_PER_TICK} "
+            f"deferred={len(emit_pending_oids)} oids={emit_pending_oids[:5]}"
+        )
 
     _save_state(state)
     _log.info(f"tick done: {stats}")
