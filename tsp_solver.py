@@ -141,7 +141,17 @@ def solve_tsp_with_constraints(
     time_dimension = routing.GetDimensionOrDie("Time")
 
     # Time windows (jeśli supplied)
+    # V3.28 Fix 2 (incident 03.05.2026): SetRange domain validation.
+    # CumulVar domain = AddDimension capacity = int(max_route_min * TIME_SCALE).
+    # SetRange poza domain → OR-Tools raise "Exception: CP Solver fail"
+    # (incident 470208/209/210 — synthetic Test 2 reproducer 100% match).
+    # Walidacja extension:
+    #   2.A: NaN/Inf → skip stop's window
+    #   2.B: scaled_open > capacity_max → skip (empty intersection w domain)
+    #   2.C: scaled_close > capacity_max → clamp do capacity_max (zachowaj feasible upper bound)
     if time_windows is not None:
+        import math as _math
+        capacity_max = int(max_route_min * TIME_SCALE)
         for stop_idx in range(num_stops):
             tw = time_windows[stop_idx]
             if tw is None:
@@ -149,11 +159,29 @@ def solve_tsp_with_constraints(
             open_min, close_min = tw
             if open_min < 0 or close_min < open_min:
                 continue
+            # Fix 2.A: NaN/Inf guard (np. ready - now z TZ mismatch może produkować Inf)
+            if (
+                _math.isnan(open_min) or _math.isnan(close_min)
+                or _math.isinf(open_min) or _math.isinf(close_min)
+            ):
+                log.warning(
+                    f"V328_TSP_SETRANGE_NAN_INF stop={stop_idx} "
+                    f"tw=({open_min}, {close_min}) — skip window"
+                )
+                continue
+            scaled_open = int(open_min * TIME_SCALE)
+            scaled_close = int(close_min * TIME_SCALE)
+            # Fix 2.B: open poza domain capacity → empty intersection → skip
+            if scaled_open > capacity_max:
+                log.warning(
+                    f"V328_TSP_SETRANGE_OPEN_OOD stop={stop_idx} "
+                    f"open={open_min:.1f}min > max_route_min={max_route_min}min — skip window"
+                )
+                continue
+            # Fix 2.C: close clamped do capacity_max (zachowaj feasible upper bound)
+            scaled_close = min(scaled_close, capacity_max)
             index = manager.NodeToIndex(stop_idx)
-            time_dimension.CumulVar(index).SetRange(
-                int(open_min * TIME_SCALE),
-                int(close_min * TIME_SCALE),
-            )
+            time_dimension.CumulVar(index).SetRange(scaled_open, scaled_close)
 
     # Pickup-and-delivery constraints
     for pickup_idx, drop_idx in pickup_drop_pairs:
