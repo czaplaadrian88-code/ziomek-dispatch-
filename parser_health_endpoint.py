@@ -71,43 +71,27 @@ V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC = int(
 
 
 def _v328_query_events_stats(events_db_path: str = EVENTS_DB_PATH) -> Dict[str, Any]:
-    """V3.28 Fix 5 helper: query events.db dla downstream cross-check signals.
+    """V3.28 Fix 5b (incident 03.05.2026): query events.db dla failed_1h + new_orders_1h.
 
-    Read-only sqlite query. Defensive — return zero defaults gdy DB unavailable.
+    Pre-Fix-5b: try query PROPOSAL_SENT (event_type NIE ISTNIEJE w events.db,
+    zawsze None). Top event_types empirically: COURIER_ASSIGNED, COURIER_DELIVERED,
+    NEW_ORDER, COURIER_PICKED_UP, CZAS_KURIERA_UPDATED — NO PROPOSAL_SENT.
+    Post-Fix-5b: PROPOSAL_SENT moved to separate function reading journalctl
+    dispatch-telegram (osobny source).
 
-    Returns dict z polami:
-    - last_proposal_sent_age_sec: Optional[float] — seconds od ostatniego
-      PROPOSAL_SENT (None gdy NIGDY nie było)
-    - events_failed_last_1h_count: int — failed events w ostatniej godzinie
-    - new_orders_last_1h_count: int — NEW_ORDER events w ostatniej godzinie
-      (used dla cross-check "pipeline silent despite work")
+    Returns dict:
+    - events_failed_last_1h_count: int
+    - new_orders_last_1h_count: int (cross-check signal)
     """
     import sqlite3
     result = {
-        "last_proposal_sent_age_sec": None,
         "events_failed_last_1h_count": 0,
         "new_orders_last_1h_count": 0,
     }
     try:
         conn = sqlite3.connect(f"file:{events_db_path}?mode=ro", uri=True, timeout=2.0)
         cur = conn.cursor()
-        # last PROPOSAL_SENT — NIE gwarantuje events.db ma ten event_type w schema
-        # z normalizacją statusu. Fallback do `processed_at` z najnowszej processed.
-        cur.execute(
-            "SELECT MAX(processed_at) FROM events WHERE event_type='PROPOSAL_SENT' AND status='processed'"
-        )
-        row = cur.fetchone()
-        last_propose_iso = row[0] if row else None
-        if last_propose_iso:
-            try:
-                last_dt = datetime.fromisoformat(str(last_propose_iso).replace("Z", "+00:00"))
-                if last_dt.tzinfo is None:
-                    last_dt = last_dt.replace(tzinfo=timezone.utc)
-                age_sec = (datetime.now(timezone.utc) - last_dt).total_seconds()
-                result["last_proposal_sent_age_sec"] = max(0.0, age_sec)
-            except Exception as e:
-                log.debug(f"health endpoint: parse last_propose_iso fail: {e}")
-        # failed last 1h — default windowing przez created_at (recent)
+        # failed last 1h
         cur.execute(
             """
             SELECT COUNT(*) FROM events
@@ -117,7 +101,7 @@ def _v328_query_events_stats(events_db_path: str = EVENTS_DB_PATH) -> Dict[str, 
         )
         row = cur.fetchone()
         result["events_failed_last_1h_count"] = int(row[0]) if row else 0
-        # new orders last 1h
+        # new orders last 1h (cross-check signal)
         cur.execute(
             """
             SELECT COUNT(*) FROM events
@@ -133,26 +117,74 @@ def _v328_query_events_stats(events_db_path: str = EVENTS_DB_PATH) -> Dict[str, 
     return result
 
 
-def _v328_parse_worker_age_from_log(log_path: str = DISPATCH_LOG_PATH) -> Optional[float]:
-    """V3.28 Fix 5 helper: parse last HEARTBEAT z dispatch.log dla worker_processed_age.
+def _v328_parse_last_propose_age_from_journal() -> Optional[float]:
+    """V3.28 Fix 5b (incident 03.05.2026): last propose age via journalctl dispatch-telegram.
 
-    Read tail of log file (last 200 lines) i find last HEARTBEAT line z polem
-    `last_processed_age_sec=K` (Fix 3 format). Returns float or None.
+    Pre-Fix-5b: SQL on events.db PROPOSAL_SENT zawsze None (event_type NIE ISTNIEJE).
+    Post-Fix-5b: parse journalctl dispatch-telegram dla `SENT oid=` linii.
+    Format: 'May 03 16:24:12 Ziomek python[N]: 2026-05-03 16:24:12 [INFO]
+            telegram_approver: SENT oid=X msg=Y'
+
+    Returns float age_sec lub None gdy żadnych SENT w 2h window.
     """
     try:
         import subprocess
-        out = subprocess.check_output(
-            ["tail", "-n", "200", log_path],
-            stderr=subprocess.DEVNULL,
-            timeout=2.0,
-        ).decode("utf-8", errors="ignore")
-        # Search backwards dla najnowszego HEARTBEAT z last_processed_age_sec
+        result = subprocess.run(
+            ["journalctl", "-u", "dispatch-telegram", "--since", "2 hours ago",
+             "--no-pager", "-q"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        if result.returncode != 0:
+            return None
         import re
-        matches = re.findall(r"last_processed_age_sec=([0-9.]+)", out)
-        if matches:
-            return float(matches[-1])
+        ts_pattern = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*SENT oid=")
+        last_ts = None
+        for line in result.stdout.splitlines():
+            m = ts_pattern.search(line)
+            if m:
+                last_ts = m.group(1)  # last match = most recent
+        if last_ts:
+            last_dt = datetime.fromisoformat(last_ts).replace(tzinfo=timezone.utc)
+            age_sec = (datetime.now(timezone.utc) - last_dt).total_seconds()
+            return max(0.0, age_sec)
     except Exception as e:
-        log.debug(f"health endpoint: parse worker_age fail: {e}")
+        log.debug(f"health endpoint: parse last_propose via journalctl fail: {e}")
+    return None
+
+
+def _v328_parse_worker_age_from_log(_unused_path: str = "") -> Optional[float]:
+    """V3.28 Fix 5b (incident 03.05.2026): worker_age via journalctl dispatch-shadow.
+
+    Pre-Fix-5b: parsed dispatch.log (= panel_watcher log file) → null bo
+    HEARTBEAT shadow_dispatcher idzie do journalctl, NIE do dispatch.log.
+    Post-Fix-5b: subprocess journalctl --since 5 minutes ago dispatch-shadow
+    → grep HEARTBEAT → regex last_processed_age_sec=K.
+
+    Empirically verified TRACK 2-A research: extracted ages [15.0, 30.0, 40.0]
+    z subprocess output. Defensive None fallback preserved.
+
+    Args:
+        _unused_path: legacy parameter, ignored (was DISPATCH_LOG_PATH).
+    """
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["journalctl", "-u", "dispatch-shadow", "--since", "5 minutes ago",
+             "--no-pager", "-q"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        if result.returncode != 0:
+            return None
+        import re
+        matches = re.findall(r"last_processed_age_sec=([0-9.]+)", result.stdout)
+        if matches:
+            return float(matches[-1])  # last = najnowszy HEARTBEAT
+    except Exception as e:
+        log.debug(f"health endpoint: parse worker_age via journalctl fail: {e}")
     return None
 
 
@@ -278,8 +310,10 @@ class _HealthHandler(BaseHTTPRequestHandler):
         # parser metadata".
         events_stats = _v328_query_events_stats()
         worker_age_sec = _v328_parse_worker_age_from_log()
+        # V3.28 Fix 5b: last_proposal_age z osobnego źródła (journalctl dispatch-telegram)
+        last_proposal_age_sec = _v328_parse_last_propose_age_from_journal()
         downstream = _v328_compute_downstream_status(
-            last_proposal_age_sec=events_stats.get("last_proposal_sent_age_sec"),
+            last_proposal_age_sec=last_proposal_age_sec,
             events_failed_1h=events_stats.get("events_failed_last_1h_count", 0),
             new_orders_1h=events_stats.get("new_orders_last_1h_count", 0),
             worker_age_sec=worker_age_sec,
@@ -301,11 +335,11 @@ class _HealthHandler(BaseHTTPRequestHandler):
             "init_count": base_snap.get("init_count", 0),
             "error_count": base_snap.get("error_count", 0),
             "thresholds": base_snap.get("thresholds", {}),
-            # V3.28 Fix 5 downstream cross-check fields
-            "last_proposal_sent_age_sec": events_stats.get("last_proposal_sent_age_sec"),
+            # V3.28 Fix 5 downstream cross-check fields (post Fix 5b: source switched)
+            "last_proposal_sent_age_sec": last_proposal_age_sec,  # Fix 5b: journalctl dispatch-telegram
             "events_failed_last_1h_count": events_stats.get("events_failed_last_1h_count", 0),
             "new_orders_last_1h_count": events_stats.get("new_orders_last_1h_count", 0),
-            "worker_processed_age_sec": worker_age_sec,
+            "worker_processed_age_sec": worker_age_sec,  # Fix 5b: journalctl dispatch-shadow
             "downstream_status": downstream["downstream_status"],
             "downstream_reason": downstream["downstream_reason"],
         }

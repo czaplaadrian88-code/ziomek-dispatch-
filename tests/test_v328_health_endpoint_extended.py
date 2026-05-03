@@ -161,18 +161,34 @@ def test_query_events_stats_synthetic_db():
     result = phe._v328_query_events_stats(events_db_path=db_path)
     assert result["new_orders_last_1h_count"] == 5
     assert result["events_failed_last_1h_count"] == 2
-    assert result["last_proposal_sent_age_sec"] is not None
-    assert 1700 < result["last_proposal_sent_age_sec"] < 1900
+    # Fix 5b: last_proposal_sent_age_sec moved to separate function
+    # (_v328_parse_last_propose_age_from_journal). NOT in events_stats anymore.
+    assert "last_proposal_sent_age_sec" not in result
 
     Path(db_path).unlink()
 
 
 def test_query_events_stats_missing_db_safe():
-    """DB nie istnieje → return zero defaults (defensive)."""
+    """DB nie istnieje → return zero defaults (defensive). Fix 5b: no PROPOSAL_SENT key."""
     result = phe._v328_query_events_stats(events_db_path="/nonexistent/path.db")
-    assert result["last_proposal_sent_age_sec"] is None
+    assert "last_proposal_sent_age_sec" not in result  # Fix 5b removal
     assert result["events_failed_last_1h_count"] == 0
     assert result["new_orders_last_1h_count"] == 0
+
+
+def test_parse_worker_age_from_journalctl_smoke():
+    """V3.28 Fix 5b: worker_age via subprocess journalctl. Live smoke (real system)."""
+    # Live system test — subprocess journalctl dispatch-shadow
+    age = phe._v328_parse_worker_age_from_log()
+    # Either None (gdy żaden HEARTBEAT w 5min) OR float >= 0
+    assert age is None or (isinstance(age, float) and age >= 0)
+
+
+def test_parse_last_propose_age_from_journal_smoke():
+    """V3.28 Fix 5b: last_propose age via subprocess journalctl dispatch-telegram. Live smoke."""
+    age = phe._v328_parse_last_propose_age_from_journal()
+    # Either None (gdy żaden SENT w 2h) OR float >= 0
+    assert age is None or (isinstance(age, float) and age >= 0)
 
 
 def test_thresholds_module_level_constants():
