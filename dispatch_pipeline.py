@@ -2166,18 +2166,54 @@ def assess_order(
     # V3.27 latency parallel: ThreadPoolExecutor map. 10 workers (lub mniej gdy
     # fleet < 10). Lambda unpacks (cid, cs) tuple z fleet_snapshot.items().
     # Single-courier fallback do sequential dla edge case (np. fleet=1).
+    #
+    # V3.28 Fix 1 (incident 03.05.2026): per-courier defense-in-depth.
+    # Pre-fix: pool.map raise propagates → assess_order raise → event status=failed
+    # → ZERO propose dla całego order. Jeden zły kurier blokował wszystkich
+    # (production 470208/209/210 — Lekcja #66 amplifier). Post-fix: try/except
+    # per courier, failed kurier logged + skipped, pozostali evaluated.
+    _v328_failed_couriers: List[str] = []  # cid list dla telemetrii post-pool
+
+    def _v328_eval_safe(kv):
+        """Wrap _v327_eval_courier z try/except — single courier crash NIE blokuje pool."""
+        cid, cs = kv
+        try:
+            return ('ok', cid, _v327_eval_courier(cid, cs))
+        except Exception as _e:
+            log.error(
+                f"V328_CP_SOLVER_FAIL_PER_COURIER cid={cid} order={order_id} "
+                f"exc={type(_e).__name__}: {str(_e)[:200]}",
+                exc_info=True,
+            )
+            return ('fail', cid, _e)
+
     from concurrent.futures import ThreadPoolExecutor as _V327_TPE
     _v327_max_workers = max(1, min(10, len(fleet_snapshot)))
     if _v327_max_workers > 1:
         with _V327_TPE(max_workers=_v327_max_workers, thread_name_prefix="dispatch_v327") as _v327_pool:
-            for _v327_c in _v327_pool.map(lambda kv: _v327_eval_courier(kv[0], kv[1]), list(fleet_snapshot.items())):
-                if _v327_c is not None:
-                    candidates.append(_v327_c)
+            for _tag, _cid, _result in _v327_pool.map(_v328_eval_safe, list(fleet_snapshot.items())):
+                if _tag == 'fail':
+                    _v328_failed_couriers.append(str(_cid))
+                    continue
+                if _result is not None:
+                    candidates.append(_result)
     else:
         for _v327_cid, _v327_cs in fleet_snapshot.items():
-            _v327_c = _v327_eval_courier(_v327_cid, _v327_cs)
-            if _v327_c is not None:
-                candidates.append(_v327_c)
+            _tag, _cid, _result = _v328_eval_safe((_v327_cid, _v327_cs))
+            if _tag == 'fail':
+                _v328_failed_couriers.append(str(_cid))
+                continue
+            if _result is not None:
+                candidates.append(_result)
+
+    # V3.28 Fix 1 telemetria post-pool fail rate (warning gdy >=1 fail, dla audit trail)
+    if _v328_failed_couriers:
+        _v328_fail_ratio = len(_v328_failed_couriers) / max(1, len(fleet_snapshot))
+        log.warning(
+            f"V328_POOL_PARTIAL_FAIL order={order_id} "
+            f"failed={len(_v328_failed_couriers)}/{len(fleet_snapshot)} "
+            f"({_v328_fail_ratio:.0%}) failed_cids={_v328_failed_couriers[:10]}"
+        )
 
     # F1.7 no_gps fallback: kurier z syntetycznym pos (centrum) dostaje
     # neutralne km/ETA. km_to_pickup = średnia floty (tylko z realnych pos),
