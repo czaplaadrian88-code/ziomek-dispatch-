@@ -59,6 +59,107 @@ _lock = threading.Lock()
 EVENTS_DB_PATH = "/root/.openclaw/workspace/dispatch_state/events.db"
 DISPATCH_LOG_PATH = "/root/.openclaw/workspace/scripts/logs/dispatch.log"
 
+# V3.28 Fix 5c (Sprint Z 03.05.2026): auto Telegram alert dla downstream critical/degraded.
+# Lekcja #67 closing loop: pre-flight diagnostic ma truthful multi-signal (Fix 5+5b) ALE
+# Adrian dowiaduje się o critical TYLKO ręcznie via curl. Fix 5c = proactive Telegram push
+# z cooldown gating (NIE spam — Lekcja #65 adaptive thresholds).
+ALERT_STATE_PATH = "/tmp/health_alert_state.json"
+ALERT_COOLDOWN_CRITICAL_MIN = int(os.environ.get("ALERT_COOLDOWN_CRITICAL_MIN", "30"))
+ALERT_COOLDOWN_DEGRADED_MIN = int(os.environ.get("ALERT_COOLDOWN_DEGRADED_MIN", "60"))
+HEALTH_ALERT_GROUP_CHAT_ID = -5149910559  # Grupa ziomka
+
+
+def _v328_load_alert_state() -> Dict[str, Any]:
+    """V3.28 Fix 5c: load last alert timestamps z atomic state file."""
+    try:
+        with open(ALERT_STATE_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {"last_critical_ts": None, "last_degraded_ts": None}
+
+
+def _v328_save_alert_state(state: Dict[str, Any]) -> None:
+    """V3.28 Fix 5c: atomic temp+rename write."""
+    tmp = ALERT_STATE_PATH + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, ALERT_STATE_PATH)
+    except Exception as e:
+        log.warning(f"V328_HEALTH_ALERT_STATE_SAVE_FAIL: {e}")
+
+
+def _v328_should_alert(downstream_status: str, state: Dict[str, Any], now_ts: float) -> bool:
+    """V3.28 Fix 5c: cooldown-aware alert decision.
+
+    - critical → cooldown 30 min default (env ALERT_COOLDOWN_CRITICAL_MIN)
+    - degraded → cooldown 60 min default (env ALERT_COOLDOWN_DEGRADED_MIN)
+    - ok → never alert
+    - DISABLE_HEALTH_AUTO_ALERT=1 → never alert (rollback flag)
+    """
+    if downstream_status == "ok":
+        return False
+    if os.environ.get("DISABLE_HEALTH_AUTO_ALERT", "0") == "1":
+        return False
+    if downstream_status == "critical":
+        last_ts = state.get("last_critical_ts")
+        cooldown_min = ALERT_COOLDOWN_CRITICAL_MIN
+    elif downstream_status == "degraded":
+        last_ts = state.get("last_degraded_ts")
+        cooldown_min = ALERT_COOLDOWN_DEGRADED_MIN
+    else:
+        return False
+    if last_ts is None:
+        return True
+    elapsed_min = (now_ts - float(last_ts)) / 60.0
+    return elapsed_min >= cooldown_min
+
+
+def _v328_send_health_alert(downstream_status: str, downstream_reason: Optional[str]) -> bool:
+    """V3.28 Fix 5c: send Telegram alert via subprocess curl Telegram API.
+
+    Test mode (HEALTH_ALERT_TEST_MODE=1): log "would_send" only, NIE real send.
+    Returns True jeśli sent (lub test logged), False jeśli error.
+    """
+    icon = "\U0001F534" if downstream_status == "critical" else "\U0001F7E1"
+    msg = (
+        f"{icon} ZIOMEK HEALTH {downstream_status.upper()}: {downstream_reason or '?'}\n"
+        f"Adrian sprawdz: curl http://localhost:8888/health/parser"
+    )
+    if os.environ.get("HEALTH_ALERT_TEST_MODE", "0") == "1":
+        log.info(f"V328_HEALTH_ALERT_TEST would_send status={downstream_status} msg_preview={msg[:120]!r}")
+        return True
+    try:
+        import subprocess
+        token_file = "/root/.openclaw/workspace/.secrets/telegram.env"
+        token = None
+        if os.path.exists(token_file):
+            with open(token_file) as f:
+                for line in f:
+                    if line.strip().startswith("TELEGRAM_BOT_TOKEN="):
+                        token = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+        if not token:
+            log.warning("V328_HEALTH_ALERT_NO_TOKEN — skip send")
+            return False
+        result = subprocess.run(
+            [
+                "curl", "-s", "-X", "POST",
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                "-d", f"chat_id={HEALTH_ALERT_GROUP_CHAT_ID}",
+                "-d", f"text={msg}",
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and '"ok":true' in result.stdout:
+            log.info(f"V328_HEALTH_ALERT_SENT status={downstream_status} reason={downstream_reason!r}")
+            return True
+        log.warning(f"V328_HEALTH_ALERT_FAIL response={result.stdout[:200]}")
+        return False
+    except Exception as e:
+        log.warning(f"V328_HEALTH_ALERT_EXCEPTION: {e}")
+        return False
+
 V328_DOWNSTREAM_PIPELINE_SILENT_AGE_SEC = int(
     os.environ.get("V328_DOWNSTREAM_PIPELINE_SILENT_AGE_SEC", "1800")
 )
@@ -343,6 +444,28 @@ class _HealthHandler(BaseHTTPRequestHandler):
             "downstream_status": downstream["downstream_status"],
             "downstream_reason": downstream["downstream_reason"],
         }
+
+        # V3.28 Fix 5c (Sprint Z 03.05): auto Telegram alert na critical/degraded.
+        # Cooldown gated (Lekcja #65 adaptive 30/60 min). NIE blocking endpoint response —
+        # try/except defensive (alert fail NIE wpływa na health response).
+        try:
+            if downstream["downstream_status"] in ("critical", "degraded"):
+                state = _v328_load_alert_state()
+                now_ts = time.time()
+                if _v328_should_alert(downstream["downstream_status"], state, now_ts):
+                    sent = _v328_send_health_alert(
+                        downstream["downstream_status"],
+                        downstream["downstream_reason"],
+                    )
+                    if sent:
+                        if downstream["downstream_status"] == "critical":
+                            state["last_critical_ts"] = now_ts
+                        else:
+                            state["last_degraded_ts"] = now_ts
+                        _v328_save_alert_state(state)
+        except Exception as _v328_alert_e:
+            log.warning(f"V328_HEALTH_ALERT_HOOK_FAIL: {_v328_alert_e}")
+
         return snapshot
 
 
