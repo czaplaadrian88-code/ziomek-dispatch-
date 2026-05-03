@@ -506,6 +506,40 @@ def _v326_fleet_load_balance(feasible: list, candidates: list, order_id=None) ->
     return feasible
 
 
+def _v328_simple_heuristic_score(cid: str, cs: Any, order_event: dict) -> float:
+    """V3.28 Fix 6 (incident 03.05.2026): simple proximity + tier scoring fallback.
+
+    Used jako mass fail fallback gdy >=50% kurierów crash w _v327_pool
+    (OR-Tools mass fail). NIE używa OR-Tools więc nie crashuje na out-of-domain
+    time_windows. Pure heuristic, no constraints.
+
+    Returns float score (higher = better):
+    - Proximity: -dist_km * 10 (5km = -50 score)
+    - Tier bonus: gold +5, std+ +2, std 0 (default)
+    - No GPS / no pickup coords: -1000 penalty (fallback NIE wybierze takiego)
+
+    Args:
+        cid: Courier ID (str)
+        cs: FleetCourier object (cs.pos = (lat,lon), cs.tier_bag = 'gold'|'std+'|'std')
+        order_event: dict z 'pickup_coords' = (lat, lon)
+    """
+    try:
+        pickup_coords = order_event.get("pickup_coords") or (0.0, 0.0)
+        if not pickup_coords or pickup_coords[0] == 0.0:
+            return -1000.0
+        courier_pos = getattr(cs, "pos", None)
+        if not courier_pos or courier_pos[0] is None:
+            return -1000.0  # no GPS penalty
+        from dispatch_v2.osrm_client import haversine as _hav
+        dist_km = float(_hav(tuple(pickup_coords), tuple(courier_pos)))
+        proximity = -dist_km * 10.0
+        tier = getattr(cs, "tier_bag", None) or "std"
+        tier_bonus = {"gold": 5.0, "std+": 2.0, "std": 0.0}.get(str(tier), 0.0)
+        return proximity + tier_bonus
+    except Exception:
+        return -1000.0
+
+
 def _v326_speed_multiplier_adjust(feasible: list, order_id=None) -> list:
     """V3.26 STEP 2 (R-05 SPEED-MULTIPLIER).
 
@@ -2207,6 +2241,7 @@ def assess_order(
                 candidates.append(_result)
 
     # V3.28 Fix 1 telemetria post-pool fail rate (warning gdy >=1 fail, dla audit trail)
+    _v328_fail_ratio = 0.0
     if _v328_failed_couriers:
         _v328_fail_ratio = len(_v328_failed_couriers) / max(1, len(fleet_snapshot))
         log.warning(
@@ -2214,6 +2249,71 @@ def assess_order(
             f"failed={len(_v328_failed_couriers)}/{len(fleet_snapshot)} "
             f"({_v328_fail_ratio:.0%}) failed_cids={_v328_failed_couriers[:10]}"
         )
+
+    # V3.28 Fix 6 (incident 03.05.2026): mass fail fallback heuristic.
+    # Gdy >=V328_MASS_FAIL_RATIO_THRESHOLD (default 0.5) kurierów crash w pool →
+    # system w degraded state. Trigger simple proximity+tier heuristic na ALL
+    # couriers (heuristic NIE używa OR-Tools więc nie crashuje na out-of-domain).
+    # Inject fallback Candidate (verdict=MAYBE, plan=None, fallback_strategy
+    # marked) — downstream sort by score wybierze best (fallback vs partial OR-Tools).
+    if (
+        C.ENABLE_V328_MASS_FAIL_FALLBACK
+        and _v328_failed_couriers
+        and _v328_fail_ratio >= C.V328_MASS_FAIL_RATIO_THRESHOLD
+    ):
+        log.critical(
+            f"V328_OR_TOOLS_MASS_FAIL order={order_id} "
+            f"ratio={_v328_fail_ratio:.0%} ({len(_v328_failed_couriers)}/{len(fleet_snapshot)}) "
+            f"threshold={C.V328_MASS_FAIL_RATIO_THRESHOLD:.0%} → trigger heuristic fallback"
+        )
+        try:
+            _v328_heuristic_results = []
+            for _h_cid, _h_cs in fleet_snapshot.items():
+                try:
+                    _h_score = _v328_simple_heuristic_score(_h_cid, _h_cs, order_event)
+                    _v328_heuristic_results.append((_h_score, _h_cid, _h_cs))
+                except Exception as _h_e:
+                    log.warning(
+                        f"V328_HEURISTIC_FALLBACK_PER_CID_FAIL cid={_h_cid}: "
+                        f"{type(_h_e).__name__}: {str(_h_e)[:120]}"
+                    )
+            if _v328_heuristic_results:
+                _v328_heuristic_results.sort(reverse=True, key=lambda x: x[0])
+                _h_top_score, _h_top_cid, _h_top_cs = _v328_heuristic_results[0]
+                if _h_top_score > -1000.0:
+                    log.warning(
+                        f"V328_HEURISTIC_WINNER order={order_id} "
+                        f"cid={_h_top_cid} score={_h_top_score:.2f} "
+                        f"name={getattr(_h_top_cs, 'name', None)!r}"
+                    )
+                    _v328_fb_cand = Candidate(
+                        courier_id=str(_h_top_cid),
+                        name=getattr(_h_top_cs, "name", None),
+                        score=float(_h_top_score),
+                        feasibility_verdict="MAYBE",
+                        feasibility_reason="v328_heuristic_fallback_post_mass_fail",
+                        plan=None,  # no plan — heuristic skips OR-Tools
+                        metrics={
+                            "fallback_strategy": "v328_simple_heuristic_post_mass_fail",
+                            "fallback_score": float(_h_top_score),
+                            "mass_fail_ratio": _v328_fail_ratio,
+                            "mass_fail_count": len(_v328_failed_couriers),
+                            "fleet_size": len(fleet_snapshot),
+                            "pos_source": "heuristic_fallback",
+                        },
+                    )
+                    candidates.append(_v328_fb_cand)
+                else:
+                    log.warning(
+                        f"V328_HEURISTIC_NO_VIABLE_WINNER order={order_id} "
+                        f"top_score={_h_top_score:.2f} (all couriers no GPS or pickup coords zero)"
+                    )
+        except Exception as _v328_fb_outer_e:
+            log.error(
+                f"V328_HEURISTIC_FALLBACK_OUTER_FAIL order={order_id}: "
+                f"{type(_v328_fb_outer_e).__name__}: {_v328_fb_outer_e}",
+                exc_info=True,
+            )
 
     # F1.7 no_gps fallback: kurier z syntetycznym pos (centrum) dostaje
     # neutralne km/ETA. km_to_pickup = średnia floty (tylko z realnych pos),

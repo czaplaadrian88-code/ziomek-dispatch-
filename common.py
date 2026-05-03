@@ -478,6 +478,14 @@ ENABLE_NO_GPS_EMPTY_DEMOTE = _os.environ.get("ENABLE_NO_GPS_EMPTY_DEMOTE", "1") 
 ENABLE_UNIFIED_BAG_STATE = _os.environ.get("ENABLE_UNIFIED_BAG_STATE", "1") == "1"
 ENABLE_DROP_TIME_CONSTRAINT = _os.environ.get("ENABLE_DROP_TIME_CONSTRAINT", "1") == "1"
 ENABLE_FLEET_OVERLOAD_PENALTY = _os.environ.get("ENABLE_FLEET_OVERLOAD_PENALTY", "1") == "1"
+
+# V3.28 Fix 6 (incident 03.05.2026): mass fail fallback heuristic.
+# Gdy >=50% kurierów crash w _v327_pool (OR-Tools mass fail) → trigger
+# simple proximity+tier heuristic. NIE używa OR-Tools więc nie crashuje.
+# Default True (safety net). Env override: ENABLE_V328_MASS_FAIL_FALLBACK=0
+# disable (mass fail wraca do silent NO_PROPOSE).
+ENABLE_V328_MASS_FAIL_FALLBACK = _os.environ.get("ENABLE_V328_MASS_FAIL_FALLBACK", "1") == "1"
+V328_MASS_FAIL_RATIO_THRESHOLD = float(_os.environ.get("V328_MASS_FAIL_RATIO_THRESHOLD", "0.5"))
 ENABLE_PANEL_IS_FREE_AUTHORITATIVE = _os.environ.get("ENABLE_PANEL_IS_FREE_AUTHORITATIVE", "1") == "1"
 ENABLE_BUNDLE_VALUE_SCORING = _os.environ.get("ENABLE_BUNDLE_VALUE_SCORING", "0") == "1"
 
