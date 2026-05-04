@@ -576,9 +576,26 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                                 state_order.get("delivery_coords"),
                             )
                     elif status_id in (8, 9):
-                        # Cancelled / nieodebrano
-                        upsert_order(zid, {"status": "cancelled"}, event="PANEL_CANCELLED")
-                        _log.info(f"CANCELLED {zid} status={status_id}")
+                        # TASK 2 Część A (2026-05-04): mirror reconcile path L960.
+                        # Pre-fix: upsert_order(status='cancelled') aktualizował state
+                        # ale NIE emitował do events.db → akumulacja phantom orders.
+                        reason = "undelivered" if status_id == 8 else "cancelled"
+                        _adv_cid = str(raw.get("id_kurier") or "")
+                        ev = emit(
+                            "ORDER_RETURNED_TO_POOL",
+                            order_id=zid,
+                            courier_id=_adv_cid,
+                            payload={"reason": reason, "source": "panel_diff"},
+                            event_id=f"{zid}_ORDER_RETURNED_{reason}_panel_diff",
+                        )
+                        if ev:
+                            update_from_event({
+                                "event_type": "ORDER_RETURNED_TO_POOL",
+                                "order_id": zid,
+                                "courier_id": _adv_cid,
+                                "payload": {"reason": reason},
+                            })
+                            _log.info(f"{reason.upper()} {zid} status={status_id} (panel_diff)")
             except Exception as e:
                 _log.warning(f"details for disappeared {zid}: {e}")
                 stats["errors"] += 1

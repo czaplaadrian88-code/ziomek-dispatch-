@@ -457,13 +457,25 @@ def touch_check_cursor(order_id: str) -> bool:
 
 
 def delete_order(order_id: str) -> bool:
-    """Fizyczne usuniecie (tylko do testow lub purge)."""
+    """Fizyczne usuniecie (tylko do testow lub purge).
+
+    TASK 2 Część A (2026-05-04) Z3 safety guard: order MUSI mieć status terminal
+    (delivered/cancelled/returned_to_pool) PRZED delete. Inaczej events.db nie ma
+    closure event → phantom. Caller emituje terminal event najpierw, potem delete.
+    """
+    TERMINAL_STATUSES = ("delivered", "cancelled", "returned_to_pool")
     with _locked_write() as path:
         state = _read_state()
         if order_id in state:
+            current_status = state[order_id].get("status")
+            if current_status not in TERMINAL_STATUSES:
+                raise RuntimeError(
+                    f"delete_order({order_id}) refused: status={current_status!r} not terminal "
+                    f"(must be in {TERMINAL_STATUSES}). Emit terminal event first to avoid events.db phantom."
+                )
             del state[order_id]
             _atomic_write(path, state)
-            _log.info(f"delete {order_id}")
+            _log.info(f"delete {order_id} (status={current_status})")
             return True
         return False
 

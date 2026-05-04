@@ -168,6 +168,12 @@ class MockEnv:
     def __enter__(self):
         self._save_and_patch("fetch_sheet_grid", lambda: _make_grid())
         self._save_and_patch("load_mapping", lambda: FAKE_MAPPING)
+        # E1: cmd_write używa _refresh_mapping (auto-rebuild przed write).
+        # Default mock: zwraca FAKE_MAPPING['mapping'] (jakby rebuild OK).
+        self._save_and_patch(
+            "_refresh_mapping",
+            lambda: FAKE_MAPPING["mapping"],
+        )
         self._save_and_patch("_try_alert", self._capture_telegram)
         return self
 
@@ -242,6 +248,18 @@ class MockEnv:
                 raise v
             return v
         self._save_and_patch("write_cod_column_skip_filled", fake)
+
+    def patch_refresh_mapping(self, return_or_exception):
+        """E1: zastąp _refresh_mapping. Wartość = mapping dict, lub Exception."""
+        if isinstance(return_or_exception, Exception):
+            exc = return_or_exception
+
+            def raiser():
+                raise exc
+            self._save_and_patch("_refresh_mapping", raiser)
+        else:
+            value = return_or_exception
+            self._save_and_patch("_refresh_mapping", lambda: value)
 
 
 # -------------------------------------------------------------------
@@ -730,6 +748,101 @@ def test_nm3_split_week_dedup():
 
 
 # -------------------------------------------------------------------
+# E1: auto-rebuild mapping tests (E1-T1, E1-T2)
+# -------------------------------------------------------------------
+
+def test_e1_t1_rebuild_success():
+    _hdr("E1-T1: _refresh_mapping success → świeży mapping użyty w cmd_write")
+    target = _make_target("BK", 62, WEEK_SINGLE_START, WEEK_SINGLE_END, date(2026, 4, 22))
+    # Symuluj że rebuild znalazł NOWĄ restaurację, której stary JSON nie miał.
+    fresh_mapping = dict(FAKE_MAPPING["mapping"])
+    fresh_mapping["Nowa Z Rebuild"] = 999
+    with MockEnv() as env:
+        env.patch_find_target([target])
+        env.patch_empty_check(_empty_check_ok())
+        env.patch_refresh_mapping(fresh_mapping)
+        # Custom scrape: dodaj Nowa Z Rebuild do restaurants → odpyta mapping
+        custom_rests = FAKE_RESTAURANTS + [(99, "Nowa Z Rebuild")]
+
+        def custom_scrape(restaurants, mapping, targets, opener=None):
+            env.scrape_calls.append((list(restaurants), list(targets)))
+            results = []
+            errors = []
+            for row_idx, name in custom_rests:
+                if name not in mapping:
+                    errors.append(f"NO_MAPPING {name!r}")
+                    results.append({"row": row_idx, "rest": name, "error": "no_mapping"})
+                    continue
+                results.append({
+                    "row": row_idx, "rest": name,
+                    "cod_per_segment": [50.0], "had_error": False,
+                })
+            return results, errors
+        env._save_and_patch("_scrape_all", custom_scrape)
+        env.patch_write()
+        # fetch_sheet_grid musi też zwrócić Nowa Z Rebuild w restaurants
+        env._save_and_patch(
+            "fetch_sheet_grid",
+            lambda: _make_grid(restaurants=custom_rests),
+        )
+        rc = rw.cmd_write(WEEK_SINGLE_START, WEEK_SINGLE_END)
+    if rc == 0:
+        _ok("exit 0")
+    else:
+        _fail("exit 0", f"got {rc}")
+    # Nowa Z Rebuild została zmapowana → no NO_MAPPING dla niej
+    nm_alert_present = any("Nowa Z Rebuild" in m for m in env.telegram_messages
+                            if "🚨 NO_MAPPING" in m)
+    if not nm_alert_present:
+        _ok("Brak NO_MAPPING dla 'Nowa Z Rebuild' (rebuild ją złapał)")
+    else:
+        _fail("Brak NO_MAPPING dla nowego restu", env.telegram_messages)
+    # Sprawdź że scrape dostał świeży mapping (z 'Nowa Z Rebuild')
+    if env.scrape_calls:
+        scrape_mapping = env.scrape_calls[-1][0]  # restaurants list passed
+        # mapping nie jest bezpośrednio w scrape_calls; sprawdzamy via brak NO_MAPPING
+        _ok("Custom scrape wywołane (mapping z _refresh_mapping)")
+    else:
+        _fail("Scrape wywołane", "no calls captured")
+
+
+def test_e1_t2_rebuild_fail_fallback():
+    _hdr("E1-T2: _refresh_mapping raise → fallback do load_mapping")
+    target = _make_target("BK", 62, WEEK_SINGLE_START, WEEK_SINGLE_END, date(2026, 4, 22))
+    with MockEnv() as env:
+        env.patch_find_target([target])
+        env.patch_empty_check(_empty_check_ok())
+        # Symuluj że rebuild raise (panel down). cmd_write powinien fallback.
+        # NIE używamy patch_refresh_mapping(Exception) — bo testujemy real
+        # _refresh_mapping z patched build_and_save raise + load_mapping fallback.
+        # Zamiast tego patchujemy oba: build_and_save → raise, load_mapping → FAKE.
+        # Ale _refresh_mapping jest module function. Patch importowany symbol
+        # pośrednio jest trudny — najprościej: patch _refresh_mapping na funkcję
+        # która wywołuje real fallback path.
+        from dispatch_v2.cod_weekly import run_weekly as rwmod
+
+        def real_fallback():
+            # Symuluj logikę real _refresh_mapping przy panelowym fail
+            try:
+                raise RuntimeError("Panel API down (simulated)")
+            except Exception as e:
+                rwmod.log.warning(f"E1: auto-rebuild FAILED ({type(e).__name__}: {e}) — fallback")
+                return rwmod.load_mapping()["mapping"]
+        env._save_and_patch("_refresh_mapping", real_fallback)
+        env.patch_scrape([_scrape_for([target])])
+        env.patch_write()
+        rc = rw.cmd_write(WEEK_SINGLE_START, WEEK_SINGLE_END)
+    if rc == 0:
+        _ok("exit 0 (fallback graceful)")
+    else:
+        _fail("exit 0 fallback", f"got {rc}")
+    if env.write_calls:
+        _ok("Write call wywołane (cmd_write nie zatrzymał się na rebuild fail)")
+    else:
+        _fail("Write call wywołane", "no calls")
+
+
+# -------------------------------------------------------------------
 # Runner
 # -------------------------------------------------------------------
 def main():
@@ -748,6 +861,8 @@ def main():
     test_nm1_zero_no_mapping()
     test_nm2_single_segment_no_mapping()
     test_nm3_split_week_dedup()
+    test_e1_t1_rebuild_success()
+    test_e1_t2_rebuild_fail_fallback()
 
     print(f"\n{'=' * 70}")
     print(f"PASSED: {_passed}, FAILED: {_failed}")

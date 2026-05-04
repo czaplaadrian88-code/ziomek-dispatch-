@@ -41,6 +41,30 @@ def load_mapping() -> dict:
         return json.load(f)
 
 
+def _refresh_mapping() -> dict:
+    """E1 — auto-rebuild mapping JSON przed --write.
+
+    Zawsze próbuje świeżego scrape panel + sheet matchingu (eliminuje
+    silent NO_MAPPING gdy nowa restauracja w arkuszu, której obecny
+    JSON nie zna). Jeśli rebuild fail (panel down, sheet API timeout),
+    fallback do statycznego JSON — graceful degradation.
+
+    Returns: mapping dict (sheet_name → company_id | list[int]).
+    """
+    log.info("E1: auto-rebuilding mapping JSON...")
+    try:
+        from dispatch_v2.cod_weekly.restaurant_mapper import build_and_save
+        payload = build_and_save()
+        log.info(f"E1: mapping rebuilt — counts={payload['counts']}")
+        return payload["mapping"]
+    except Exception as e:
+        log.warning(
+            f"E1: auto-rebuild FAILED ({type(e).__name__}: {e}) — "
+            "fallback do statycznego JSON"
+        )
+        return load_mapping()["mapping"]
+
+
 def cmd_dry_run_sample(names: list, week_start, week_end) -> int:
     payload = load_mapping()
     mapping = payload["mapping"]
@@ -549,7 +573,10 @@ def cmd_write(week_start, week_end, opener=None) -> int:
             f"{t['segment_start']}..{t['segment_end']} (payday={t['payday']})"
         )
 
-    mapping = load_mapping()["mapping"]
+    # E1: auto-rebuild mapping przed scrape (eliminuje silent NO_MAPPING
+    # dla nowych restauracji, których stary JSON nie zna). Fallback na
+    # statyczny JSON gdy rebuild fail (panel down etc.).
+    mapping = _refresh_mapping()
 
     # Process per segment — never raises (każdy try/except wewnątrz)
     segment_results = []
