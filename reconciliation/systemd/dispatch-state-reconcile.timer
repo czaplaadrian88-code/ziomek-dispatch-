@@ -1,0 +1,12 @@
+[Unit]
+Description=Ziomek State Reconciliation — every 30 min (TASK 2 Część B 2026-05-04)
+
+[Timer]
+# 30-min interval; OnBootSec to avoid race with panel_watcher startup.
+OnBootSec=5min
+OnUnitActiveSec=30min
+AccuracySec=1min
+Unit=dispatch-state-reconcile.service
+
+[Install]
+WantedBy=timers.target
