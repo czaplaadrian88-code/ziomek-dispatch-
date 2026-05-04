@@ -559,6 +559,17 @@ def cmd_write(week_start, week_end, opener=None) -> int:
         )
         segment_results.append(seg)
 
+    # E4: separate alert dla NO_MAPPING (osobny od głównego raportu)
+    no_mapping_names = _extract_no_mapping_names(segment_results)
+    if no_mapping_names:
+        nm_alert = _build_no_mapping_alert(week_start, week_end, no_mapping_names)
+        log.warning(
+            f"NO_MAPPING separate alert: {len(no_mapping_names)} restauracji"
+        )
+        _try_alert(nm_alert)
+    else:
+        log.info("NO_MAPPING check: 0 brakujących mapping (E4)")
+
     # Aggregate report
     msg = _build_telegram_report_multi(week_start, week_end, segment_results)
     log.info("Sending Telegram report...")
@@ -580,6 +591,50 @@ def cmd_write(week_start, week_end, opener=None) -> int:
             f"PARTIAL: {n_ok}/{n_segments} segments OK — exit 0 z alert PARTIAL"
         )
     return 0
+
+
+def _extract_no_mapping_names(segments) -> list:
+    """Wyciągnij UNIKALNE nazwy restauracji z NO_MAPPING errors per segment.
+
+    Split-week duplikuje NO_MAPPING (raz per segment). Zwracamy sortowany
+    set jako listę.
+    """
+    names = set()
+    for seg in segments:
+        for err in seg.get("errors", []):
+            if not err.startswith("NO_MAPPING "):
+                continue
+            rest_part = err[len("NO_MAPPING "):].strip()
+            # errors generated as f"NO_MAPPING {name!r}" → 'name' (single quotes)
+            if len(rest_part) >= 2 and rest_part[0] == rest_part[-1] and rest_part[0] in "'\"":
+                rest_part = rest_part[1:-1]
+            names.add(rest_part)
+    return sorted(names)
+
+
+def _build_no_mapping_alert(week_start, week_end, names) -> str:
+    """E4 — osobny alert 🚨 dla NO_MAPPING (oprócz głównego raportu)."""
+    week_hdr = format_week_for_header(week_start, week_end)
+    lines = [
+        "[COD WEEKLY] 🚨 NO_MAPPING — restauracje pominięte",
+        "",
+        f"Tydzień: {week_hdr}",
+        f"Pominięte (zero zapisu COD): {len(names)}",
+        "",
+    ]
+    for n in names:
+        lines.append(f"  - {n}")
+    lines.extend([
+        "",
+        "Akcja: regeneruj mapping",
+        "  python3 -m dispatch_v2.cod_weekly.restaurant_mapper --build",
+        "",
+        "Po regeneracji uruchom ponownie:",
+        f"  python3 -m dispatch_v2.cod_weekly.run_weekly "
+        f"--week {week_start.isoformat()}:{week_end.isoformat()} --write",
+        "(skip-already-filled chroni przed duplikatami)",
+    ])
+    return "\n".join(lines)
 
 
 def _build_preflight_instruction(week_start, week_end, segments, payday_str, error) -> str:

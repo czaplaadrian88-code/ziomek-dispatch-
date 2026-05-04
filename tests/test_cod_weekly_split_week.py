@@ -54,9 +54,14 @@ WEEK_SPLIT_END = date(2026, 5, 3)
 
 FAKE_RESTAURANTS = [
     (3, "Arsenał Panteon"),
-    (4, "Bar Eljot"),  # NO_MAPPING test
     (5, "Toriko"),
     (6, "Mama Thai Bistro, Mama Thai Street i Miejska Miska"),
+]
+# NO_MAPPING test fixture (separate, used by NM1-NM3) — restaurants sheet
+# zawiera dodatkowo nazwy nieobecne w mapping
+FAKE_RESTAURANTS_WITH_MISSING = FAKE_RESTAURANTS + [
+    (7, "Bar Eljot"),  # not in mapping → NO_MAPPING
+    (8, "Nowa Restauracja XYZ"),  # not in mapping
 ]
 
 FAKE_MAPPING = {
@@ -404,12 +409,14 @@ def test_t5_scrape_errors_segment1():
     else:
         _fail("2 write calls", len(env.write_calls))
 
-    msg = env.telegram_messages[0] if env.telegram_messages else ""
-    # Sprawdzamy że error jest w sekcji per-segment "Błędy: 2" (NO_MAPPING + scrape_error)
-    if "Błędy: 2" in msg:
-        _ok("Telegram pokazuje Błędy: 2 dla seg 1")
+    # Po E4 hook może być więcej niż 1 telegram (gdy errors zawiera NO_MAPPING).
+    # T5 nie ma NO_MAPPING (brak Bar Eljot w fixturze) — tylko 1 message (main).
+    msg = env.telegram_messages[-1] if env.telegram_messages else ""
+    # T5 ma 1 scrape_error w seg1 (custom dodany), 0 w seg2
+    if "Błędy: 1" in msg:
+        _ok("Telegram pokazuje Błędy: 1 dla seg 1")
     else:
-        _fail("Telegram Błędy: 2 dla seg 1", msg)
+        _fail("Telegram Błędy: 1 dla seg 1", msg)
     if "SCRAPE_ERROR Toriko" in msg or "scrape_error" in msg.lower() or "ERRORS" in msg:
         _ok("Telegram zawiera referencję do scrape error")
     else:
@@ -596,6 +603,133 @@ def test_t12_total_fail():
 
 
 # -------------------------------------------------------------------
+# E4: NO_MAPPING separate alert tests (NM1-NM3)
+# -------------------------------------------------------------------
+
+def _scrape_for_with_missing(targets):
+    """Variant generujący NO_MAPPING errors (uses FAKE_RESTAURANTS_WITH_MISSING)."""
+    results = []
+    errors = []
+    for row_idx, name in FAKE_RESTAURANTS_WITH_MISSING:
+        if name not in FAKE_MAPPING["mapping"]:
+            errors.append(f"NO_MAPPING {name!r}")
+            results.append({"row": row_idx, "rest": name, "error": "no_mapping"})
+            continue
+        per_seg = []
+        for t in targets:
+            cod_map = _CODS.get(t["segment_start"], {})
+            per_seg.append(cod_map.get(name, 0.0))
+        results.append({
+            "row": row_idx, "rest": name,
+            "cod_per_segment": per_seg, "had_error": False,
+        })
+    return results, errors
+
+
+class MockEnvWithMissing(MockEnv):
+    """Override grid restaurants to include unmapped ones (NM tests)."""
+    def __enter__(self):
+        super().__enter__()
+        self._save_and_patch(
+            "fetch_sheet_grid",
+            lambda: _make_grid(restaurants=FAKE_RESTAURANTS_WITH_MISSING),
+        )
+        return self
+
+
+def test_nm1_zero_no_mapping():
+    _hdr("NM1: 0 NO_MAPPING (default fixture) → no separate E4 alert")
+    target = _make_target("BK", 62, WEEK_SINGLE_START, WEEK_SINGLE_END, date(2026, 4, 22))
+    with MockEnv() as env:
+        env.patch_find_target([target])
+        env.patch_empty_check(_empty_check_ok())
+        env.patch_scrape([_scrape_for([target])])
+        env.patch_write()
+        rc = rw.cmd_write(WEEK_SINGLE_START, WEEK_SINGLE_END)
+    if rc == 0:
+        _ok("exit 0")
+    else:
+        _fail("exit 0", f"got {rc}")
+    if len(env.telegram_messages) == 1:
+        _ok("1 telegram message (only main report — no E4 separate)")
+    else:
+        _fail("1 telegram message", f"got {len(env.telegram_messages)}: {env.telegram_messages}")
+    if env.telegram_messages and "🚨 NO_MAPPING" not in env.telegram_messages[0]:
+        _ok("Brak NO_MAPPING separate alert (correct dla 0 missing)")
+    else:
+        _fail("Brak NO_MAPPING alert", env.telegram_messages)
+
+
+def test_nm2_single_segment_no_mapping():
+    _hdr("NM2: 2 NO_MAPPING w single-segment → 1 separate alert + main report")
+    target = _make_target("BK", 62, WEEK_SINGLE_START, WEEK_SINGLE_END, date(2026, 4, 22))
+    with MockEnvWithMissing() as env:
+        env.patch_find_target([target])
+        env.patch_empty_check(_empty_check_ok())
+        env.patch_scrape([_scrape_for_with_missing([target])])
+        env.patch_write()
+        rc = rw.cmd_write(WEEK_SINGLE_START, WEEK_SINGLE_END)
+    if rc == 0:
+        _ok("exit 0")
+    else:
+        _fail("exit 0", f"got {rc}")
+    if len(env.telegram_messages) == 2:
+        _ok("2 telegram messages (E4 separate + main report)")
+    else:
+        _fail("2 telegram messages", f"got {len(env.telegram_messages)}")
+    # E4 alert powinien być PIERWSZY (wysłany przed main report)
+    nm_alert = env.telegram_messages[0] if env.telegram_messages else ""
+    if "🚨 NO_MAPPING" in nm_alert:
+        _ok("E4 alert pierwszy (🚨 NO_MAPPING)")
+    else:
+        _fail("E4 alert pierwszy", nm_alert)
+    if "Bar Eljot" in nm_alert and "Nowa Restauracja XYZ" in nm_alert:
+        _ok("E4 alert zawiera obie missing names")
+    else:
+        _fail("E4 alert obie names", nm_alert)
+    if "restaurant_mapper --build" in nm_alert:
+        _ok("E4 alert zawiera komendę --build")
+    else:
+        _fail("E4 alert komendę --build", nm_alert)
+    if "27.04-03.05" in nm_alert or "13-19.04" in nm_alert or "Tydzień:" in nm_alert:
+        _ok("E4 alert zawiera tydzień")
+    else:
+        _fail("E4 alert tydzień", nm_alert)
+
+
+def test_nm3_split_week_dedup():
+    _hdr("NM3: NO_MAPPING split-week (deduplikacja per-segment)")
+    seg1 = _make_target("BR", 69, date(2026, 4, 27), date(2026, 4, 30), date(2026, 5, 6))
+    seg2 = _make_target("BV", 73, date(2026, 5, 1), date(2026, 5, 3), date(2026, 5, 6))
+    with MockEnvWithMissing() as env:
+        env.patch_find_target([seg1, seg2])
+        env.patch_empty_check(_empty_check_ok(), _empty_check_ok())
+        env.patch_scrape([
+            _scrape_for_with_missing([seg1]),
+            _scrape_for_with_missing([seg2]),
+        ])
+        env.patch_write()
+        rc = rw.cmd_write(WEEK_SPLIT_START, WEEK_SPLIT_END)
+    if rc == 0:
+        _ok("exit 0")
+    else:
+        _fail("exit 0", f"got {rc}")
+    # Oba segmenty mają 2× NO_MAPPING każdy = 4 errors total. Po dedup → 2 unique names.
+    nm_alert = env.telegram_messages[0] if env.telegram_messages else ""
+    if "🚨 NO_MAPPING" in nm_alert and "Pominięte (zero zapisu COD): 2" in nm_alert:
+        _ok("E4 alert dedup → 2 unique names (mimo 4 raw errors)")
+    else:
+        _fail("E4 alert dedup count", nm_alert)
+    # Każdy z restauracji obecny TYLKO RAZ w alercie (set sortuje)
+    n_bar_eljot = nm_alert.count("Bar Eljot")
+    n_nowa = nm_alert.count("Nowa Restauracja XYZ")
+    if n_bar_eljot == 1 and n_nowa == 1:
+        _ok(f"Każda restauracja raz: Bar Eljot×{n_bar_eljot}, Nowa×{n_nowa}")
+    else:
+        _fail("Dedup: każda raz", f"Bar Eljot×{n_bar_eljot}, Nowa×{n_nowa}")
+
+
+# -------------------------------------------------------------------
 # Runner
 # -------------------------------------------------------------------
 def main():
@@ -611,6 +745,9 @@ def main():
     test_t10_idempotency_split()
     test_t11_telegram_aggregation()
     test_t12_total_fail()
+    test_nm1_zero_no_mapping()
+    test_nm2_single_segment_no_mapping()
+    test_nm3_split_week_dedup()
 
     print(f"\n{'=' * 70}")
     print(f"PASSED: {_passed}, FAILED: {_failed}")
