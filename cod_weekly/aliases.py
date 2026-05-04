@@ -8,7 +8,7 @@ ALIAS_MAP = {
     "500 stopni 500 stopni": "_500 stopni",   # duplikat w arkuszu
     "Trzy po trzy MIC": "Trzy Po Trzy Mickiewicza",
     "Trzy po trzy SIEN": "Trzy Po Trzy Sienkiewicza",
-    "Mama Thai Bistro i Miejska Miska": ["Mama Thai Bistro", "Miejska Miska"],  # MULTI: suma 2 company
+    "Mama Thai Bistro, Mama Thai Street i Miejska Miska": ["Mama Thai Bistro", "Street Mama Thai", "Miejska Miska"],  # MULTI: suma 3 company (jeden właściciel)
     "Good Boy": "Goodboy",                    # spacja vs bez spacji
 }
 
