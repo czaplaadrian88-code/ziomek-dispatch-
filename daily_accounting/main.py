@@ -105,9 +105,11 @@ def run(
         DATE_FMT,
         already_written,
         batch_write_rows,
+        build_batch_data,
         count_free_rows_after,
         fetch_grid,
         first_empty_row,
+        verify_writes,
     )
 
     run_date = target_date_override or today_warsaw()
@@ -211,13 +213,27 @@ def run(
 
     free_after = count_free_rows_after(ws, row_cursor - 1)
 
+    # Strip _meta before batch write (used in both dry-run preview and real write)
+    clean_rows = [{k: v for k, v in r.items() if k != "_meta"} for r in rows_to_write]
+
     # Dry-run branch
     if dry_run:
+        # DIFF C verification: pokaż jakie ranges by zbudował, żeby Adrian widział
+        # że prefiks 'Obliczenia'! jest na miejscu (nie domyślny pierwszy sheet).
+        sample_data = build_batch_data(ws, clean_rows)
+        log.info(
+            f"DRY-RUN build sample: would write {len(clean_rows)} rows, "
+            f"{len(sample_data)} cells; first 6 ranges:"
+        )
+        for d in sample_data[:6]:
+            log.info(f"  range={d['range']!r} value={d['values'][0][0]!r}")
+
         report = _build_dry_run_report(
             run_date, bucket, len(qualified), rows_to_write,
             skipped_duplicate + [{**u, "action": "SKIP_ZERO_ORDERS"} for u in unqualified] + scrape_errors,
             free_after,
         )
+        report["sample_ranges"] = [d["range"] for d in sample_data[:6]]
         out_path = Path(f"/tmp/daily_accounting_dryrun_{run_date.isoformat()}.json")
         with open(out_path, "w") as f:
             json.dump(report, f, ensure_ascii=False, indent=2, default=str)
@@ -231,26 +247,63 @@ def run(
 
     # Real write
     log.info(f"Writing {len(rows_to_write)} rows (real)")
-    # Strip _meta before batch write
-    clean_rows = [{k: v for k, v in r.items() if k != "_meta"} for r in rows_to_write]
     write_result = batch_write_rows(ws, clean_rows)
     log.info(f"Wrote: {write_result}")
+
+    # DIFF A: check API response — exit !=0 + alert na fail
+    if not write_result.get("api_success", False):
+        log.error(
+            f"WRITE FAIL: api_updated={write_result.get('api_total_updated_cells')} "
+            f"expected={write_result.get('api_expected_cells')}"
+        )
+        _try_alert(
+            f"❌ Ziomek Daily Accounting {run_date.isoformat()} WRITE FAIL\n"
+            f"Próba zapisu {len(rows_to_write)} wierszy za {target_c.strftime(DATE_FMT)}.\n"
+            f"API zaktualizowało {write_result.get('api_total_updated_cells')} "
+            f"z {write_result.get('api_expected_cells')} oczekiwanych komórek.\n"
+            f"Sprawdź arkusz + permissions service account."
+        )
+        return 1
+
+    # DIFF B: post-write read-back verify (defense-in-depth — łapie wrong-sheet
+    # routing nawet gdy API zwróci api_success=True).
+    if clean_rows:
+        verify_result = verify_writes(ws, clean_rows)
+        log.info(f"Verify: {verify_result['verified']}/{len(clean_rows)} rzędów zgodnych")
+        if verify_result["mismatches"]:
+            first = verify_result["mismatches"][0]
+            log.error(
+                f"VERIFY FAIL: {len(verify_result['mismatches'])} z {len(clean_rows)} "
+                f"rozjazdów. Pierwszy: row={first['row']} "
+                f"expected_A={first['expected_A']!r} actual_A={first['actual_A']!r} "
+                f"expected_C={first['expected_C']!r} actual_C={first['actual_C']!r}"
+            )
+            _try_alert(
+                f"⚠️ Ziomek Daily Accounting {run_date.isoformat()} VERIFY FAIL\n"
+                f"API zwróciło sukces ALE read-back znalazł "
+                f"{len(verify_result['mismatches'])} z {len(clean_rows)} rozjazdów.\n"
+                f"Pierwszy: row={first['row']}\n"
+                f"  expected: A={first['expected_A']!r} C={first['expected_C']!r}\n"
+                f"  actual:   A={first['actual_A']!r} C={first['actual_C']!r}\n"
+                f"Dane mogły trafić do złej zakładki — sprawdź pilnie."
+            )
+            return 1
 
     # Alert if low free rows
     if free_after < MIN_FREE_ROWS_ALERT:
         _try_alert(
             f"⚠️ Ziomek Daily Accounting\n"
-            f"Zapisano {len(rows_to_write)} wierszy za dzień "
+            f"Zapisano {write_result['written']} wierszy za dzień "
             f"{target_c.strftime(DATE_FMT)}.\n"
             f"Zostało tylko {free_after} wolnych wierszy poniżej w "
             f"Controlling/Obliczenia.\n"
             f"Dodaj puste wiersze (~200 na raz)."
         )
 
-    # Success report
+    # Success report (DIFF A: czytamy z write_result, nie len(rows_to_write))
     _try_alert(
         f"✅ Ziomek Daily Accounting {run_date.isoformat()}\n"
-        f"Zapisano: {len(rows_to_write)} wierszy za {target_c.strftime(DATE_FMT)}\n"
+        f"Zapisano: {write_result['written']} wierszy za {target_c.strftime(DATE_FMT)}\n"
         f"Pominięto (duplikaty): {len(skipped_duplicate)}\n"
         f"Pominięto (0 zleceń): {len(unqualified)}\n"
         f"Błędy scrape: {len(scrape_errors)}\n"

@@ -90,6 +90,28 @@ def count_free_rows_after(ws, last_filled: int, sample_limit: int = 500) -> int:
     return max(0, total_rows - last_filled)
 
 
+def build_batch_data(ws, rows: List[Dict]) -> List[Dict]:
+    """Zbuduj listę {'range': "'Obliczenia'!A123", 'values': [[val]]} per komórka.
+
+    Range MUSI mieć prefiks z nazwą zakładki — bez niego Google Sheets API używa
+    pierwszej zakładki w spreadsheecie (per docs: "If absent, the title of the
+    first sheet is used"), co spowodowało historyczny silent-misroute do 'Pobrania'
+    od 28.04.2026 (DIFF C 04.05.2026).
+    """
+    data = []
+    for r in rows:
+        row_idx = r["row"]
+        for col_letter in ("A", "B", "C", "F", "H", "P"):
+            val = r.get(col_letter)
+            if val is None:
+                continue
+            data.append({
+                "range": f"'{ws.title}'!{col_letter}{row_idx}",
+                "values": [[val]],
+            })
+    return data
+
+
 def batch_write_rows(
     ws,
     rows: List[Dict],
@@ -100,33 +122,71 @@ def batch_write_rows(
         rows: lista dict z kluczami 'row' (1-indexed), 'A', 'B', 'C', 'F', 'H', 'P'.
               Wartości numeryczne jako raw float → USER_ENTERED lokalizuje PL przecinek.
 
-    Returns: {'written': int, 'first_row': int, 'last_row': int}
+    Returns: {'written': int, 'first_row': int, 'last_row': int,
+              'api_success': bool, 'api_total_updated_cells': int,
+              'api_expected_cells': int}.
+    `written` = len(rows) tylko gdy api_total_updated_cells == api_expected_cells;
+    inaczej 0 (DIFF A — uczciwy raport).
     """
     if not rows:
-        return {"written": 0, "first_row": None, "last_row": None}
+        return {
+            "written": 0, "first_row": None, "last_row": None,
+            "api_success": True, "api_total_updated_cells": 0,
+            "api_expected_cells": 0,
+        }
 
     # Strategia: per-cell updates zebrane w batch_update. Każda komórka osobny range
     # bo piszemy kolumny nieciągłe (A, B, C, F, H, P — G/D/E pomijamy).
-    data = []
-    for r in rows:
-        row_idx = r["row"]
-        for col_letter in ("A", "B", "C", "F", "H", "P"):
-            val = r.get(col_letter)
-            if val is None:
-                continue
-            data.append({
-                "range": f"{col_letter}{row_idx}",
-                "values": [[val]],
-            })
+    data = build_batch_data(ws, rows)
+    expected_cells = len(data)
+    log.info(
+        f"batch_write: {len(rows)} rows, {expected_cells} cells, "
+        f"sheet={ws.title!r}, sample range={data[0]['range']!r}"
+    )
 
     # batch_update z value_input_option USER_ENTERED (Sheets lokalizuje liczby PL)
-    ws.spreadsheet.values_batch_update(body={
+    resp = ws.spreadsheet.values_batch_update(body={
         "valueInputOption": "USER_ENTERED",
         "data": data,
     })
 
+    total_updated = int(resp.get("totalUpdatedCells", 0))
+    api_success = (total_updated == expected_cells)
+
     return {
-        "written": len(rows),
+        "written": len(rows) if api_success else 0,
         "first_row": rows[0]["row"],
         "last_row": rows[-1]["row"],
+        "api_success": api_success,
+        "api_total_updated_cells": total_updated,
+        "api_expected_cells": expected_cells,
     }
+
+
+def verify_writes(ws, rows: List[Dict]) -> Dict:
+    """Re-fetch col A i C; weryfikuj że każdy expected row ma expected wartości
+    A (full_name) i C (target_date).
+
+    Defense-in-depth (DIFF B): nawet jeśli API zwróci api_success=True,
+    weryfikujemy fizyczną obecność danych w docelowej zakładce. Łapie cases
+    gdzie API zaakceptowało write ale fizycznie poszło nie tam (np. wrong
+    target sheet, jak DIFF C bug).
+
+    Returns: {'verified': N, 'mismatches': [...]}
+    """
+    col_a = ws.col_values(1)
+    col_c = ws.col_values(3)
+    mismatches = []
+    for r in rows:
+        i = r["row"] - 1  # 0-based
+        actual_a = (col_a[i] if i < len(col_a) else "").strip()
+        actual_c = (col_c[i] if i < len(col_c) else "").strip()
+        expected_a = (r.get("A") or "").strip()
+        expected_c = (r.get("C") or "").strip()
+        if actual_a != expected_a or actual_c != expected_c:
+            mismatches.append({
+                "row": r["row"],
+                "expected_A": expected_a, "actual_A": actual_a,
+                "expected_C": expected_c, "actual_C": actual_c,
+            })
+    return {"verified": len(rows) - len(mismatches), "mismatches": mismatches}
