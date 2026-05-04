@@ -17,6 +17,7 @@ from dispatch_v2.cod_weekly.config import MAPPING_PATH
 from dispatch_v2.cod_weekly.week_calculator import (
     format_week_for_header,
     get_previous_closed_week,
+    get_current_week_ending_sunday,
     parse_override,
 )
 from dispatch_v2.cod_weekly.panel_scraper import scrape_restaurant_cod
@@ -25,6 +26,8 @@ from dispatch_v2.cod_weekly.sheet_writer import (
     find_target_cod_columns,
     validate_column_empty_ratio,
     write_cod_column_skip_filled,
+    split_week_by_month,
+    compute_payday,
     NoTargetColumnError,
     AmbiguousTargetError,
 )
@@ -579,6 +582,131 @@ def cmd_write(week_start, week_end, opener=None) -> int:
     return 0
 
 
+def _build_preflight_instruction(week_start, week_end, segments, payday_str, error) -> str:
+    """Generuj human-friendly instrukcję dla Rafała na bazie typu błędu."""
+    n_expected = len(segments)
+    if n_expected == 1:
+        seg = segments[0]
+        s, e = seg["start"], seg["end"]
+        if s.month == e.month:
+            range_str = f"{s.day:02d}-{e.day:02d}.{e.month:02d}.{e.year}"
+        else:
+            range_str = f"{s.day:02d}.{s.month:02d}-{e.day:02d}.{e.month:02d}.{e.year}"
+        return (
+            "Akcja Rafał:\n"
+            "W arkuszu 'Wynagrodzenia Gastro' dodaj 4 kolumny po ostatnim "
+            "wypełnionym bloku:\n"
+            "  - Row 2 (od lewej): 'COD - Transport' / 'Korekty' / 'Wypłata' / 'Saldo do przen.'\n"
+            f"  - Row 1 pos+2 (3-cia kolumna nowego bloku): '{payday_str}'   ← payday\n"
+            f"  - Row 1 pos+3 (4-ta kolumna): '{range_str}'   ← zakres tygodnia\n"
+            "  - Row 1 pos+0/+1: dowolne (np. 'Tydzień N' / 'wypłata z dn.')"
+        )
+    # split-month
+    lines = [
+        "Akcja Rafał:",
+        "Tydzień krosuje miesiąc — wymagane DWA bloki w arkuszu "
+        "'Wynagrodzenia Gastro'.",
+        f"Oba bloki MUSZĄ mieć tę samą datę payday: {payday_str}",
+        "Różnić się muszą TYLKO zakresem dat (Row 1 pos+3):",
+        "",
+    ]
+    for i, seg in enumerate(segments, 1):
+        s, e = seg["start"], seg["end"]
+        if s.month == e.month:
+            range_str = f"{s.day:02d}-{e.day:02d}.{e.month:02d}.{e.year}"
+        else:
+            range_str = f"{s.day:02d}.{s.month:02d}-{e.day:02d}.{e.month:02d}.{e.year}"
+        lines.append(
+            f"  Blok {i}/{n_expected} (miesiąc {s.month:02d}): "
+            f"zakres '{range_str}', payday '{payday_str}'"
+        )
+    lines.extend([
+        "",
+        "Pozostałe komórki bloku (jak dotychczas):",
+        "  Row 2: 'COD - Transport' / 'Korekty' / 'Wypłata' / 'Saldo do przen.'",
+        "  Row 1 pos+0/+1: dowolne (np. 'Tydzień N' / 'wypłata z dn.')",
+    ])
+    return "\n".join(lines)
+
+
+def cmd_preflight(week_start, week_end) -> int:
+    """E5 — sprawdź czy arkusz ma kolumnę docelową bez scrape/write.
+
+    Zwraca exit 0 gdy OK (no telegram, log only).
+    Zwraca exit 1 gdy missing/ambiguous/sheet error (alert Telegram).
+
+    Cel: niedziela 23:00 cron alertuje Rafała przed pn 08:00 odpaleniem.
+    """
+    week_hdr = format_week_for_header(week_start, week_end)
+    log.info(f"=== PREFLIGHT MODE === tydzień {week_hdr}")
+    log.info("Fetching sheet grid...")
+    try:
+        grid = fetch_sheet_grid()
+    except Exception as e:
+        msg = (
+            f"[COD WEEKLY PREFLIGHT] ❌ Nie mogę otworzyć arkusza\n"
+            f"\nTydzień: {week_hdr}\nBłąd: {e!r}"
+            f"\n\nAkcja: sprawdzić service_account + dostęp do spreadsheet"
+        )
+        log.error(f"Sheet fetch error: {e!r}")
+        _try_alert(msg)
+        return 1
+
+    row1 = grid["row1"]
+    row2 = grid["row2"]
+    restaurants = grid["restaurants"]
+    log.info(
+        f"Sheet OK: row1={len(row1)}, row2={len(row2)}, "
+        f"restaurants={len(restaurants)}"
+    )
+
+    segments = split_week_by_month(week_start, week_end)
+    n_expected = len(segments)
+    payday = compute_payday(week_start, week_end)
+    payday_str = payday.strftime("%d-%m-%Y")
+
+    try:
+        targets = find_target_cod_columns(row1, row2, week_start, week_end)
+    except (NoTargetColumnError, AmbiguousTargetError, ValueError) as e:
+        instr = _build_preflight_instruction(
+            week_start, week_end, segments, payday_str, e,
+        )
+        msg = (
+            f"[COD WEEKLY PREFLIGHT] ⚠️ Brak kolumny — tydzień {week_hdr}\n"
+            f"\nTermin: jutro 08:00 Warsaw odpali się auto-rozliczenie."
+            f"\nOczekiwane segmenty: {n_expected}"
+            f"\nPayday: {payday_str}"
+            f"\nBłąd: {type(e).__name__}: {e}"
+            f"\n\n{instr}"
+            f"\n\nWeryfikacja po dodaniu:"
+            f"\n  python3 -m dispatch_v2.cod_weekly.run_weekly --preflight "
+            f"--week {week_start.isoformat()}:{week_end.isoformat()}"
+        )
+        log.error(f"PREFLIGHT FAIL: {type(e).__name__}: {e}")
+        _try_alert(msg)
+        return 1
+
+    log.info(f"PREFLIGHT OK: {len(targets)} target(s) found")
+    for t in targets:
+        log.info(
+            f"  ✅ {t['col_letter']}: {t['segment_start']}..{t['segment_end']} "
+            f"(payday={t['payday']})"
+        )
+    if len(targets) != n_expected:
+        # Sanity: find_target sukces ale liczba targetów inna niż expected.
+        # Nie powinno się zdarzyć (find_target sam by raise AmbiguousTargetError).
+        # Defensive log + alert.
+        msg = (
+            f"[COD WEEKLY PREFLIGHT] ⚠️ Anomalia — tydzień {week_hdr}\n"
+            f"Znaleziono {len(targets)} targets, oczekiwane {n_expected}.\n"
+            f"Skontaktuj się z administratorem (manualne sprawdzenie arkusza)."
+        )
+        log.warning(msg)
+        _try_alert(msg)
+        return 1
+    return 0
+
+
 def _try_alert(text: str) -> bool:
     """Wyślij Telegram, NIE throw na fail (żeby write był atomowy mimo Telegram down)."""
     try:
@@ -615,10 +743,21 @@ def main() -> int:
         help="REAL WRITE: scrape + batch write do Sheets (skip-already-filled) + Telegram raport. "
              "Split-week aware: ≥1 segment OK → exit 0 + alert PARTIAL.",
     )
+    ap.add_argument(
+        "--preflight",
+        action="store_true",
+        help="E5: sprawdź czy arkusz ma kolumnę docelową dla nadchodzącego "
+             "tygodnia (default = current week pn-niedz, override przez --week). "
+             "NO scrape, NO write. Alert Telegram tylko gdy missing.",
+    )
     args = ap.parse_args()
 
+    # --preflight default uses CURRENT week (kończący się dziś), nie previous closed.
+    # Inne komendy (--write, --dry-run-*) używają previous closed.
     if args.week:
         week_start, week_end = parse_override(args.week)
+    elif args.preflight:
+        week_start, week_end = get_current_week_ending_sunday()
     else:
         week_start, week_end = get_previous_closed_week()
     log.info(
@@ -626,6 +765,8 @@ def main() -> int:
         f"({format_week_for_header(week_start, week_end)})"
     )
 
+    if args.preflight:
+        return cmd_preflight(week_start, week_end)
     if args.dry_run_sample:
         names = [n for n in args.dry_run_sample.split(",")]
         return cmd_dry_run_sample(names, week_start, week_end)

@@ -19,6 +19,21 @@ def get_previous_closed_week(now: Optional[datetime] = None) -> Tuple[date, date
     return last_week_mon, last_week_sun
 
 
+def get_current_week_ending_sunday(now: Optional[datetime] = None) -> Tuple[date, date]:
+    """(pon, niedz) tygodnia BIEŻĄCEGO w Warsaw TZ — używane przez --preflight.
+
+    Inaczej niż get_previous_closed_week: zwraca tydzień, który zaraz będzie
+    rozliczony (cron preflight w niedzielę 23:00 chce sprawdzić arkusz
+    pod kątem nadchodzącego pn 08:00 odpalenia, a NIE poprzedniego tygodnia).
+    """
+    if now is None:
+        now = datetime.now(WARSAW)
+    today = now.date()
+    mon = today - timedelta(days=today.weekday())
+    sun = mon + timedelta(days=6)
+    return mon, sun
+
+
 def format_week_for_header(start: date, end: date) -> str:
     """'06-12.04.2026' gdy jeden miesiąc, inaczej '30.03-05.04.2026'."""
     if start.month == end.month:
