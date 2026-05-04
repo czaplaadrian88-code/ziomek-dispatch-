@@ -1,7 +1,10 @@
-"""Entry point F2.1d COD Weekly — manual runs + (przyszłość) cron.
+"""Entry point F2.1d COD Weekly — manual runs + cron timer.
 
-W tym commit: obsługa --dry-run-sample dla KROK 2 (subset 3 restauracji).
-Auto-detekcja kolumny + write do Sheets dopiero w KROK 3+4.
+Split-week support (2026-05-04): tygodnie krosujące miesiąc rozpisywane są
+na 2 segmenty (kwiecień + maj etc.). Każdy segment ma osobną kolumnę payday
+w arkuszu i jest przetwarzany niezależnie. Partial fail policy:
+  - ≥1 segment zapisany OK → exit 0 + alert PARTIAL
+  - 0 segmentów zapisanych → exit 1
 """
 import argparse
 import json
@@ -197,10 +200,14 @@ def cmd_dry_run_full(week_start, week_end) -> int:
     return 0
 
 
-def _scrape_all(restaurants, mapping, targets):
-    """Zwraca (results, errors). results[i] = {row, rest, cod_per_segment|error}."""
-    from dispatch_v2.cod_weekly.panel_scraper import scrape_restaurant_cod
-    opener, _, _ = login()
+def _scrape_all(restaurants, mapping, targets, opener=None):
+    """Zwraca (results, errors). results[i] = {row, rest, cod_per_segment|error}.
+
+    Argument `opener` opcjonalny — gdy None, wykonuje login() (zachowanie
+    domyślne dla cmd_write). Test może wstrzyknąć mock opener.
+    """
+    if opener is None:
+        opener, _, _ = login()
     results = []
     errors = []
     for row_idx, name in restaurants:
@@ -223,7 +230,103 @@ def _scrape_all(restaurants, mapping, targets):
     return results, errors
 
 
-def _build_telegram_report(week_start, week_end, target, write_result, results, errors, target_idx=0):
+def _process_segment(ws, target, restaurants, mapping, ti, n_total, opener=None):
+    """Process single target segment: empty check + scrape + write.
+
+    Returns dict {idx, target, status, reason, write_result, results, errors}.
+    Catches all exceptions w empty check / scrape / write — never raises.
+
+    `opener` opcjonalny dla testów (mock).
+    """
+    prefix = f"[seg {ti+1}/{n_total}] " if n_total > 1 else ""
+    log.info(f"{prefix}Target: {target['col_letter']} "
+             f"({target['segment_start']}..{target['segment_end']})")
+
+    row_indices = [r[0] for r in restaurants]
+
+    # Empty check (per segment)
+    try:
+        empty_check = validate_column_empty_ratio(
+            ws, target["col_letter"], row_indices, threshold=0.8,
+        )
+    except Exception as e:
+        log.error(f"{prefix}Empty check exception: {e!r}")
+        return {
+            "idx": ti, "target": target, "status": "failed",
+            "reason": f"empty_check_exception: {e!r}",
+            "write_result": None, "results": [], "errors": [],
+        }
+    if not empty_check["ok"]:
+        log.error(f"{prefix}Empty check FAIL: {empty_check}")
+        return {
+            "idx": ti, "target": target, "status": "failed",
+            "reason": (
+                f"empty_check_fail: ratio={empty_check['ratio']:.0%} "
+                f"(filled_sample={empty_check['filled_sample']})"
+            ),
+            "write_result": None, "results": [], "errors": [],
+        }
+    log.info(
+        f"{prefix}Empty check: {empty_check['empty_count']}/{empty_check['total']} "
+        f"pustych ({empty_check['ratio']:.0%})"
+    )
+
+    # Scrape (per segment)
+    try:
+        results, errors = _scrape_all(restaurants, mapping, [target], opener=opener)
+    except Exception as e:
+        log.error(f"{prefix}Scrape exception: {e!r}")
+        return {
+            "idx": ti, "target": target, "status": "failed",
+            "reason": f"scrape_exception: {e!r}",
+            "write_result": None, "results": [], "errors": [],
+        }
+    n_ok = len([r for r in results
+                if "cod_per_segment" in r and None not in r["cod_per_segment"]])
+    log.info(f"{prefix}Scraped: {n_ok} OK, {len(errors)} errors")
+
+    # Build row_to_value for this segment
+    row_to_value = {}
+    for r in results:
+        if "cod_per_segment" in r and r["cod_per_segment"] and r["cod_per_segment"][0] is not None:
+            row_to_value[r["row"]] = r["cod_per_segment"][0]
+
+    # Write (per segment)
+    try:
+        log.info(
+            f"{prefix}Writing {len(row_to_value)} values to "
+            f"{target['col_letter']} (skip-already-filled)..."
+        )
+        write_result = write_cod_column_skip_filled(
+            ws, target["col_letter"], row_to_value, dry_run=False,
+        )
+        log.info(
+            f"{prefix}Written: {len(write_result['written_rows'])}, "
+            f"Skipped: {len(write_result['skipped_filled'])}"
+        )
+        for sf in write_result["skipped_filled"]:
+            log.info(f"{prefix}  row={sf['row']}: existing={sf['existing']!r}")
+    except Exception as e:
+        log.error(f"{prefix}Write exception: {e!r}")
+        return {
+            "idx": ti, "target": target, "status": "failed",
+            "reason": f"write_exception: {e!r}",
+            "write_result": None, "results": results, "errors": errors,
+        }
+
+    return {
+        "idx": ti, "target": target, "status": "ok",
+        "reason": None, "write_result": write_result,
+        "results": results, "errors": errors,
+    }
+
+
+def _build_telegram_report_single(week_start, week_end, segment) -> str:
+    """Backward-compat raport dla single-segment (NIE split-week)."""
+    target = segment["target"]
+    write_result = segment["write_result"]
+    results = segment["results"]
+    errors = segment["errors"]
     week_hdr = _fmt_week(week_start, week_end)
     written_n = len(write_result["written_rows"])
     skipped_n = len(write_result["skipped_filled"])
@@ -234,17 +337,19 @@ def _build_telegram_report(week_start, week_end, target, write_result, results, 
         row_idx = sf["row"]
         rest_name = next((r["rest"] for r in results if r["row"] == row_idx), f"row{row_idx}")
         skipped_names.append(rest_name)
-    cods = [r["cod_per_segment"][target_idx] for r in results
-            if "cod_per_segment" in r and r["cod_per_segment"][target_idx] is not None]
+    cods = [r["cod_per_segment"][0] for r in results
+            if "cod_per_segment" in r and r["cod_per_segment"][0] is not None]
     sum_plus = sum(c for c in cods if c > 0)
     sum_minus = sum(c for c in cods if c < 0)
     sum_net = sum(cods)
-    pairs = [(r["rest"], r["cod_per_segment"][target_idx]) for r in results
-             if "cod_per_segment" in r and r["cod_per_segment"][target_idx] is not None]
+    pairs = [(r["rest"], r["cod_per_segment"][0]) for r in results
+             if "cod_per_segment" in r and r["cod_per_segment"][0] is not None]
     skipped_set = {sf["row"] for sf in write_result["skipped_filled"]}
-    def mark(name, row):
-        return " (skip)" if row in skipped_set else ""
     row_by_name = {r["rest"]: r["row"] for r in results}
+
+    def mark(name):
+        return " (skip)" if row_by_name.get(name, 0) in skipped_set else ""
+
     top_plus = sorted([p for p in pairs if p[1] > 0], key=lambda x: -x[1])[:5]
     top_minus = sorted([p for p in pairs if p[1] < 0], key=lambda x: x[1])[:5]
     lines = [
@@ -261,11 +366,11 @@ def _build_telegram_report(week_start, week_end, target, write_result, results, 
         "TOP 5 plus:",
     ]
     for i, (n, c) in enumerate(top_plus, 1):
-        lines.append(f"  {i}. {n}: {c:+.2f}{mark(n, row_by_name.get(n, 0))}")
+        lines.append(f"  {i}. {n}: {c:+.2f}{mark(n)}")
     lines.append("")
     lines.append("TOP 5 minus:")
     for i, (n, c) in enumerate(top_minus, 1):
-        lines.append(f"  {i}. {n}: {c:+.2f}{mark(n, row_by_name.get(n, 0))}")
+        lines.append(f"  {i}. {n}: {c:+.2f}{mark(n)}")
     if errors:
         lines.append("")
         lines.append(f"ERRORS ({error_n}):")
@@ -274,8 +379,148 @@ def _build_telegram_report(week_start, week_end, target, write_result, results, 
     return "\n".join(lines)
 
 
-def cmd_write(week_start, week_end) -> int:
-    """Real write pipeline — scrape + batch write do Sheets + Telegram raport."""
+def _fmt_seg_range(target) -> str:
+    """'27-30.04.2026' albo '01-03.05.2026' — zakres segmentu czytelny."""
+    s = target["segment_start"]
+    e = target["segment_end"]
+    if s.month == e.month and s.year == e.year:
+        return f"{s.day:02d}-{e.day:02d}.{e.month:02d}.{e.year}"
+    return f"{s.day:02d}.{s.month:02d}-{e.day:02d}.{e.month:02d}.{e.year}"
+
+
+def _build_telegram_report_multi(week_start, week_end, segments) -> str:
+    """Multi-segment raport (split-week + partial-fail aware)."""
+    week_hdr = _fmt_week(week_start, week_end)
+    n_total = len(segments)
+    n_ok = sum(1 for s in segments if s["status"] == "ok")
+
+    if n_total == 1 and n_ok == 1:
+        return _build_telegram_report_single(week_start, week_end, segments[0])
+
+    if n_total == 1 and n_ok == 0:
+        seg = segments[0]
+        return (
+            f"[COD WEEKLY] ❌ FAILED — tydzień {week_hdr}\n"
+            f"\nKolumna: {seg['target']['col_letter']}"
+            f"\nPowód: {seg['reason']}"
+            f"\nAkcja: zweryfikować arkusz, ręcznie:"
+            f"\n  --week {week_start.isoformat()}:{week_end.isoformat()} --write"
+        )
+
+    is_partial = 0 < n_ok < n_total
+    is_total_fail = n_ok == 0
+
+    if is_total_fail:
+        title = f"[COD WEEKLY] ❌ FAILED — tydzień {week_hdr}"
+    elif is_partial:
+        title = f"[COD WEEKLY] ⚠️ PARTIAL — tydzień {week_hdr}"
+    else:
+        title = (
+            f"[COD WEEKLY] Wpisano dla tygodnia {week_hdr}\n"
+            f"Tryb: split-month ({n_total} segmenty)"
+        )
+    lines = [title, ""]
+
+    # Per-segment summary
+    for seg in segments:
+        ti = seg["idx"]
+        target = seg["target"]
+        seg_range = _fmt_seg_range(target)
+        seg_hdr = (
+            f"═══ Segment {ti+1}/{n_total}: {seg_range} → kolumna "
+            f"{target['col_letter']} ═══"
+        )
+        lines.append(seg_hdr)
+        if seg["status"] == "ok":
+            wr = seg["write_result"]
+            results = seg["results"]
+            errors = seg["errors"]
+            written = len(wr["written_rows"])
+            skipped = len(wr["skipped_filled"])
+            cods = [r["cod_per_segment"][0] for r in results
+                    if "cod_per_segment" in r and r["cod_per_segment"][0] is not None]
+            seg_sum = sum(cods)
+            lines.append("✅ OK")
+            lines.append(
+                f"Wpisano: {written}/{len(results)} wierszy | "
+                f"Skip: {skipped} | Błędy: {len(errors)}"
+            )
+            lines.append(f"Suma segmentu: {seg_sum:+.2f} zł")
+        else:
+            lines.append("❌ FAILED")
+            lines.append(f"Powód: {seg['reason']}")
+            if is_partial:
+                lines.append(
+                    "Akcja: zweryfikować arkusz; po fixie odpalić ręcznie:"
+                )
+                lines.append(
+                    f"  --week {week_start.isoformat()}:{week_end.isoformat()} --write"
+                )
+        lines.append("")
+
+    # Aggregate (gdy ≥1 segment OK)
+    if n_ok > 0:
+        per_rest = {}
+        all_errors = []
+        for seg in segments:
+            if seg["status"] != "ok":
+                continue
+            for r in seg["results"]:
+                if "cod_per_segment" in r and r["cod_per_segment"] \
+                        and r["cod_per_segment"][0] is not None:
+                    per_rest[r["rest"]] = per_rest.get(r["rest"], 0.0) + r["cod_per_segment"][0]
+            all_errors.extend(seg["errors"])
+        sum_plus = sum(c for c in per_rest.values() if c > 0)
+        sum_minus = sum(c for c in per_rest.values() if c < 0)
+        sum_net = sum_plus + sum_minus
+
+        lines.append(f"═══ Tydzień łącznie ({n_ok}/{n_total} segmentów) ═══")
+        lines.append(f"Suma COD (+): +{sum_plus:.2f} zł")
+        lines.append(f"Suma COD (-): {sum_minus:.2f} zł")
+        lines.append(f"Suma netto:   {sum_net:+.2f} zł")
+        lines.append("")
+        plus_top = sorted(
+            [(r, c) for r, c in per_rest.items() if c > 0],
+            key=lambda x: -x[1],
+        )[:5]
+        minus_top = sorted(
+            [(r, c) for r, c in per_rest.items() if c < 0],
+            key=lambda x: x[1],
+        )[:5]
+        suffix = "  (oba segmenty zsumowane)" if n_ok > 1 else ""
+        lines.append(f"TOP 5 plus:{suffix}")
+        for i, (n, c) in enumerate(plus_top, 1):
+            lines.append(f"  {i}. {n}: {c:+.2f}")
+        lines.append("")
+        lines.append(f"TOP 5 minus:{suffix}")
+        for i, (n, c) in enumerate(minus_top, 1):
+            lines.append(f"  {i}. {n}: {c:+.2f}")
+        if all_errors:
+            lines.append("")
+            lines.append(f"ERRORS ({len(all_errors)}):")
+            for e in all_errors[:5]:
+                lines.append(f"  {e[:100]}")
+
+    if is_partial:
+        lines.append("")
+        lines.append(
+            f"Stan: {n_ok}/{n_total} segmentów zapisanych. "
+            f"Niepełne rozliczenie."
+        )
+        lines.append("Zapisane segmenty NIE są cofane — tylko failed wymaga interwencji.")
+
+    return "\n".join(lines)
+
+
+def cmd_write(week_start, week_end, opener=None) -> int:
+    """Real write pipeline — scrape + batch write do Sheets + Telegram raport.
+
+    Split-week aware: pętla per segment, partial-fail tolerant.
+    Exit 0 gdy ≥1 segment OK (alert PARTIAL gdy nie wszystkie).
+    Exit 1 gdy wszystkie segmenty failed lub target column fail.
+
+    `opener` opcjonalny dla testów (mock); produkcyjnie None → login() w _scrape_all.
+    """
     log.info("=== REAL WRITE MODE ===")
     log.info("Fetching sheet grid...")
     grid = fetch_sheet_grid()
@@ -287,43 +532,32 @@ def cmd_write(week_start, week_end) -> int:
 
     try:
         targets = find_target_cod_columns(row1, row2, week_start, week_end)
-    except (NoTargetColumnError, AmbiguousTargetError) as e:
+    except (NoTargetColumnError, AmbiguousTargetError, ValueError) as e:
         log.error(f"TARGET COLUMN FAIL: {e}")
         _try_alert(f"[COD WEEKLY ALERT] Target column fail: {e}")
         return 1
-    if len(targets) > 1:
-        log.error(f"cmd_write: split week ({len(targets)} targets) — use separate write per segment")
-        _try_alert(f"[COD WEEKLY ALERT] Split week not supported yet in --write ({len(targets)} targets)")
-        return 1
-    target = targets[0]
-    log.info(f"Target: {target['col_letter']} ({target['segment_start']}..{target['segment_end']})")
 
-    row_indices = [r[0] for r in restaurants]
-    empty_check = validate_column_empty_ratio(ws, target["col_letter"], row_indices, threshold=0.8)
-    if not empty_check["ok"]:
-        log.error(f"Empty check FAIL: {empty_check}")
-        _try_alert(f"[COD WEEKLY ALERT] Empty check FAIL dla {target['col_letter']}: {empty_check['ratio']:.0%} pustych (threshold 80%)")
-        return 1
-    log.info(f"Empty check: {empty_check['empty_count']}/{empty_check['total']} pustych ({empty_check['ratio']:.0%})")
+    n_segments = len(targets)
+    if n_segments > 1:
+        log.info(f"Split-month detected: {n_segments} segments")
+    for t in targets:
+        log.info(
+            f"  Target {t['col_letter']}: "
+            f"{t['segment_start']}..{t['segment_end']} (payday={t['payday']})"
+        )
 
     mapping = load_mapping()["mapping"]
-    results, errors = _scrape_all(restaurants, mapping, targets)
-    log.info(f"Scraped: {len([r for r in results if 'cod_per_segment' in r and None not in r['cod_per_segment']])} OK, {len(errors)} errors")
 
-    # Build row_to_value (single target — B2 scenario)
-    row_to_value = {}
-    for r in results:
-        if "cod_per_segment" in r and r["cod_per_segment"] and r["cod_per_segment"][0] is not None:
-            row_to_value[r["row"]] = r["cod_per_segment"][0]
+    # Process per segment — never raises (każdy try/except wewnątrz)
+    segment_results = []
+    for ti, target in enumerate(targets):
+        seg = _process_segment(
+            ws, target, restaurants, mapping, ti, n_segments, opener=opener,
+        )
+        segment_results.append(seg)
 
-    log.info(f"Writing {len(row_to_value)} values to {target['col_letter']} (skip-already-filled)...")
-    write_result = write_cod_column_skip_filled(ws, target["col_letter"], row_to_value, dry_run=False)
-    log.info(f"  Written: {len(write_result['written_rows'])}")
-    log.info(f"  Skipped (user input): {len(write_result['skipped_filled'])}")
-    for sf in write_result["skipped_filled"]:
-        log.info(f"    row={sf['row']}: existing={sf['existing']!r}")
-
-    msg = _build_telegram_report(week_start, week_end, target, write_result, results, errors, target_idx=0)
+    # Aggregate report
+    msg = _build_telegram_report_multi(week_start, week_end, segment_results)
     log.info("Sending Telegram report...")
     print()
     print("=== TELEGRAM MESSAGE ===")
@@ -332,6 +566,16 @@ def cmd_write(week_start, week_end) -> int:
     print()
     tg_ok = _try_alert(msg)
     log.info(f"Telegram: {'sent' if tg_ok else 'FAIL'}")
+
+    # Exit code: 0 if any segment OK, 1 if all failed
+    n_ok = sum(1 for s in segment_results if s["status"] == "ok")
+    if n_ok == 0:
+        log.error(f"ALL {n_segments} SEGMENTS FAILED — exit 1")
+        return 1
+    if n_ok < n_segments:
+        log.warning(
+            f"PARTIAL: {n_ok}/{n_segments} segments OK — exit 0 z alert PARTIAL"
+        )
     return 0
 
 
@@ -368,7 +612,8 @@ def main() -> int:
     ap.add_argument(
         "--write",
         action="store_true",
-        help="REAL WRITE: scrape + batch write do Sheets (skip-already-filled) + Telegram raport.",
+        help="REAL WRITE: scrape + batch write do Sheets (skip-already-filled) + Telegram raport. "
+             "Split-week aware: ≥1 segment OK → exit 0 + alert PARTIAL.",
     )
     args = ap.parse_args()
 
