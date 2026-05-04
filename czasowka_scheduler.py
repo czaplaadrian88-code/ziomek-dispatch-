@@ -188,7 +188,45 @@ def eval_czasowka(order_id: str, order_state: dict, now_utc: datetime) -> dict:
 
     decision ∈ {DONT_EMIT, WAIT, EMIT, FORCE_ASSIGN, KOORD, SKIP}
     SKIP = no pickup_at_warsaw (dane niekompletne, bez klasyfikacji).
+
+    TASK 3 (2026-05-04): wraps _eval_czasowka_impl + observability log call.
     """
+    result = _eval_czasowka_impl(order_id, order_state, now_utc)
+    # Defensive observability hook — NIGDY raise (flag-gated, isolated)
+    try:
+        from dispatch_v2.observability.candidate_logger import get_logger, serialize_candidate
+        logger = get_logger()
+        if logger._flag_check():
+            cands_full = []
+            if result.get("best") is not None:
+                cands_full.append(serialize_candidate(result["best"]))
+            for c in result.get("alternatives") or []:
+                cands_full.append(serialize_candidate(c))
+            best = result.get("best")
+            logger.log_evaluation(
+                source="czasowka_scheduler",
+                order_id=order_id,
+                context={
+                    "trigger_min_before": result.get("minutes_to_pickup"),
+                    "match_quality": result.get("match_quality"),
+                    "now_utc": now_utc.isoformat(),
+                },
+                candidates_evaluated=cands_full,
+                decision={
+                    "verdict": result.get("decision"),
+                    "reason": result.get("reason"),
+                    "best_candidate_cid": (getattr(best, "courier_id", None) if best else None),
+                    "best_score": (getattr(best, "score", None) if best else None),
+                    "decision_threshold": "v324b_proactive",
+                },
+            )
+    except Exception:
+        pass  # Defensive — observability NIGDY nie crashes dispatch flow
+    return result
+
+
+def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> dict:
+    """Internal implementation. Use eval_czasowka() (wrapper) for caller-facing API."""
     now_warsaw = now_utc.astimezone(WARSAW)
     if _early_morning_blocked(now_warsaw):
         return {

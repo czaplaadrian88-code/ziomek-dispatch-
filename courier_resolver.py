@@ -562,7 +562,11 @@ def _shift_end_dt(entry: Optional[dict]) -> Optional[datetime]:
 
 def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[CourierState]:
     """Zwraca tylko kurierow ktorych mozna scorowac (maja pozycje i sa na zmianie
-    LUB zaczynają zmianę w ciągu PRE_SHIFT_WINDOW_MIN minut)."""
+    LUB zaczynają zmianę w ciągu PRE_SHIFT_WINDOW_MIN minut).
+
+    TASK 3 (2026-05-04): collects fleet filter decisions dla observability layer.
+    Flag-gated: OBSERVABILITY_FLEET_FILTER_LOGGING (default false, zero overhead).
+    """
     import sys as _sys
     _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
     try:
@@ -582,20 +586,32 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
     if fleet is None:
         fleet = build_fleet_snapshot()
     result = []
+    # TASK 3: collect rejected dla observability logger (zero overhead gdy flag false)
+    _rejected_for_log = []
+    _passed_for_log = []
     for cs in fleet.values():
         if cs.pos is None:
+            _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
+                                      "reason": "no_position", "pos_source": cs.pos_source})
             continue
         if cs.name and cs.name in excluded:
             _log.debug(f"skip {cs.name} ({cs.courier_id}): manual override")
+            _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
+                                      "reason": "manual_override"})
             continue
         if schedule and cs.name:
             full_name = match_courier(cs.name, schedule)
             if full_name is None:
                 _log.debug(f"skip {cs.name} ({cs.courier_id}): brak w grafiku")
+                _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
+                                          "reason": "schedule_no_match"})
                 continue
             entry = schedule.get(full_name)
             if entry is None:
                 _log.debug(f"skip {cs.name} ({cs.courier_id}): nie pracuje dziś")
+                _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
+                                          "reason": "not_working_today",
+                                          "schedule_name": full_name})
                 continue
             on_shift, reason = is_on_shift(cs.name, schedule)
             # Set shift_end + shift_start z grafiku (V3.25 R-01 R-NO-WASTE PRE-CHECK
@@ -617,6 +633,8 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                         _log.debug(f"pre_shift v324a {cs.name} ({cs.courier_id}): za {mins:.0f} min")
                     else:
                         _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason}")
+                        _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
+                                                  "reason": f"off_shift: {reason}"})
                         continue
                 else:
                     if mins is not None and 0 < mins <= PRE_SHIFT_WINDOW_MIN:
@@ -626,6 +644,23 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                         _log.debug(f"pre_shift {cs.name} ({cs.courier_id}): za {mins:.0f} min")
                     else:
                         _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason}")
+                        _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
+                                                  "reason": f"pre_shift_window_miss: {reason}"})
                         continue
         result.append(cs)
+        _passed_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
+                                "pos_source": cs.pos_source})
+
+    # TASK 3 observability hook — NIGDY raise (flag-gated, isolated try/except)
+    try:
+        from dispatch_v2.observability.candidate_logger import get_logger
+        get_logger().log_fleet_filter(
+            source="courier_resolver.dispatchable_fleet",
+            passed=_passed_for_log,
+            rejected=_rejected_for_log,
+            context={"fleet_total": len(fleet)},
+        )
+    except Exception:
+        pass
+
     return result

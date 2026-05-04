@@ -294,18 +294,25 @@ def _v328_compute_downstream_status(
     events_failed_1h: int,
     new_orders_1h: int,
     worker_age_sec: Optional[float],
+    reconciliation_status: Optional[str] = None,  # TASK 3 bonus 2026-05-04
+    reconciliation_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     """V3.28 Fix 5 helper: compute downstream_status + reason z cross-check signals.
 
     Lekcja #67: pre-flight diagnostic MUST cross-check primary output produced
     RIGHT NOW, NIE tylko parser metadata.
 
+    TASK 3 (2026-05-04): reconciliation_status integration — phantom/ghost
+    detection feeds Fix 5c alert pipeline (single Telegram source, shared cooldown).
+
     Priority order (critical first):
     1. PIPELINE_SILENT_DESPITE_WORK (critical) — last_proposal_age > 30min AND new_orders > 0
     2. WORKER_STUCK (critical) — worker_age > worker_slow * 2 (twice slow threshold)
-    3. EVENTS_FAILED_HIGH (degraded) — events_failed_1h > threshold (5)
-    4. WORKER_SLOW (degraded) — worker_age > slow threshold
-    5. ok (no anomaly)
+    3. RECONCILIATION_CRITICAL (critical) — hard_cap_hit OR ghosts detected
+    4. EVENTS_FAILED_HIGH (degraded) — events_failed_1h > threshold (5)
+    5. WORKER_SLOW (degraded) — worker_age > slow threshold
+    6. RECONCILIATION_DEGRADED (degraded) — manual_alerts elevated
+    7. ok (no anomaly)
 
     Returns dict z 'downstream_status' (ok|degraded|critical) + 'downstream_reason'.
     """
@@ -325,6 +332,12 @@ def _v328_compute_downstream_status(
             "downstream_status": "critical",
             "downstream_reason": "worker_stuck",
         }
+    # TASK 3 bonus — reconciliation critical (phantom hard_cap or ghost)
+    if reconciliation_status == "critical":
+        return {
+            "downstream_status": "critical",
+            "downstream_reason": f"reconciliation_critical: {reconciliation_reason or 'see /health/reconcile'}",
+        }
     # Degraded — elevated failures
     if events_failed_1h > V328_DOWNSTREAM_FAILED_1H_THRESHOLD:
         return {
@@ -336,6 +349,12 @@ def _v328_compute_downstream_status(
         return {
             "downstream_status": "degraded",
             "downstream_reason": "worker_slow",
+        }
+    # TASK 3 bonus — reconciliation degraded
+    if reconciliation_status == "degraded":
+        return {
+            "downstream_status": "degraded",
+            "downstream_reason": f"reconciliation_degraded: {reconciliation_reason or 'see /health/reconcile'}",
         }
     return {
         "downstream_status": "ok",
@@ -368,12 +387,26 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 payload = self._build_health_snapshot()
                 http_status = 200 if payload.get("status") in ("healthy", "degraded") else 503
                 self._send_json(http_status, payload)
+            elif self.path == "/health/reconcile":
+                # TASK 3 bonus (2026-05-04): reconciliation health snapshot.
+                # Defensive: NIGDY crash endpoint przez błąd reconciliation moduł.
+                try:
+                    from dispatch_v2.reconciliation.health_endpoint import get_reconciliation_health
+                    payload = get_reconciliation_health()
+                    http_status = 200 if payload.get("status") in ("ok", "degraded") else 503
+                except Exception as e:
+                    payload = {"status": "error", "reason": f"reconciliation_unavailable: {type(e).__name__}: {e}",
+                               "endpoint_version": "1"}
+                    http_status = 503
+                self._send_json(http_status, payload)
             elif self.path == "/health":
                 # Top-level health alias (simpler curl-able)
-                payload = {"status": "ok", "endpoint": "/health/parser", "uptime_seconds": int(time.time() - _started_at)}
+                payload = {"status": "ok", "endpoints": ["/health/parser", "/health/reconcile"],
+                           "uptime_seconds": int(time.time() - _started_at)}
                 self._send_json(200, payload)
             else:
-                self._send_json(404, {"error": "not_found", "available": ["/health/parser", "/health"]})
+                self._send_json(404, {"error": "not_found",
+                                      "available": ["/health/parser", "/health/reconcile", "/health"]})
         except Exception as e:
             log.warning(f"_HealthHandler.do_GET fail (non-blocking): {e}")
             try:
@@ -413,11 +446,28 @@ class _HealthHandler(BaseHTTPRequestHandler):
         worker_age_sec = _v328_parse_worker_age_from_log()
         # V3.28 Fix 5b: last_proposal_age z osobnego źródła (journalctl dispatch-telegram)
         last_proposal_age_sec = _v328_parse_last_propose_age_from_journal()
+        # TASK 3 bonus (2026-05-04): reconciliation status feeds downstream cross-check.
+        # Defensive: NIGDY raise — reconciliation absent → status=None (skipped w priority).
+        recon_status: Optional[str] = None
+        recon_reason: Optional[str] = None
+        try:
+            from dispatch_v2.reconciliation.health_endpoint import get_reconciliation_health
+            rh = get_reconciliation_health()
+            recon_status = rh.get("status")
+            d24 = rh.get("discrepancies_24h", {})
+            if recon_status == "critical":
+                recon_reason = f"hard_cap_hits={d24.get('hard_cap_hits', 0)}"
+            elif recon_status == "degraded":
+                recon_reason = f"ghosts={d24.get('ghosts', 0)} alerts={d24.get('manual_alerts', 0)}"
+        except Exception as _re:
+            log.debug(f"reconciliation status unavailable (non-blocking): {_re}")
         downstream = _v328_compute_downstream_status(
             last_proposal_age_sec=last_proposal_age_sec,
             events_failed_1h=events_stats.get("events_failed_last_1h_count", 0),
             new_orders_1h=events_stats.get("new_orders_last_1h_count", 0),
             worker_age_sec=worker_age_sec,
+            reconciliation_status=recon_status,
+            reconciliation_reason=recon_reason,
         )
 
         snapshot = {

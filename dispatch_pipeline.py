@@ -1013,6 +1013,58 @@ def assess_order(
     restaurant_meta: Optional[dict] = None,
     now: Optional[datetime] = None,
     *,
+    pending_queue: Optional[list] = None,
+    demand_context: Optional[dict] = None,
+) -> PipelineResult:
+    """Public assess_order wrapper — calls _assess_order_impl + observability hook.
+
+    TASK 3 (2026-05-04): per-candidate logging gdy OBSERVABILITY_PER_CANDIDATE_ENABLED.
+    Defensive: hook NIGDY raises (try/except). Zero overhead gdy flag false.
+    """
+    result = _assess_order_impl(
+        order_event, fleet_snapshot, restaurant_meta, now,
+        pending_queue=pending_queue, demand_context=demand_context,
+    )
+    try:
+        from dispatch_v2.observability.candidate_logger import get_logger, serialize_candidate
+        logger = get_logger()
+        if logger._flag_check():
+            cands_full = []
+            if result.best is not None:
+                cands_full.append(serialize_candidate(result.best))
+            for c in (result.candidates or []):
+                if result.best is not None and c is result.best:
+                    continue
+                cands_full.append(serialize_candidate(c))
+            logger.log_evaluation(
+                source="dispatch_pipeline.assess_order",
+                order_id=str(result.order_id),
+                context={
+                    "restaurant": result.restaurant,
+                    "delivery_address": result.delivery_address,
+                    "pool_total_count": result.pool_total_count,
+                    "pool_feasible_count": result.pool_feasible_count,
+                },
+                candidates_evaluated=cands_full,
+                decision={
+                    "verdict": result.verdict,
+                    "reason": result.reason,
+                    "best_candidate_cid": (getattr(result.best, "courier_id", None) if result.best else None),
+                    "best_score": (getattr(result.best, "score", None) if result.best else None),
+                },
+                fleet_size_total=len(fleet_snapshot),
+            )
+    except Exception:
+        pass  # Defensive — observability NIGDY nie crashes assess flow
+    return result
+
+
+def _assess_order_impl(
+    order_event: dict,
+    fleet_snapshot: Dict[str, Any],
+    restaurant_meta: Optional[dict] = None,
+    now: Optional[datetime] = None,
+    *,
     # F2.2 C7 skeleton (2026-04-18): additive kwargs for wave_scoring/commitment wire-up.
     # Existing 2 callers (shadow_dispatcher, test_decision_engine_f21) pass positional
     # args only → these kwargs stay None, zero behavior change.
