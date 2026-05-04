@@ -1,0 +1,10 @@
+[Unit]
+Description=Ziomek Shift Notifications timer (every 1 min)
+
+[Timer]
+OnCalendar=*:0/1
+Persistent=false
+Unit=dispatch-shift-notify.service
+
+[Install]
+WantedBy=timers.target

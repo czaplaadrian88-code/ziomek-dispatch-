@@ -1,0 +1,14 @@
+[Unit]
+Description=Ziomek Shift Notifications worker (TASK B 2026-05-04)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.shift_notifications
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/shift_notifications.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/shift_notifications.log
+
+[Install]
+WantedBy=multi-user.target
