@@ -21,6 +21,7 @@ State:
 import asyncio
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -40,11 +41,19 @@ from dispatch_v2.common import (
     ENABLE_TRANSPARENCY_ROUTE,
     WARSAW,
     drop_zone_from_address,
+    flag,
     load_config,
     now_iso,
     parse_panel_timestamp,
     setup_logger,
 )
+
+
+# TASK B SHIFT NOTIFICATIONS (2026-05-04) — manual /koniec command.
+# Authorized user IDs allowed to terminate extended shifts. TODO: add Bartek's
+# user_id when received. Adrian = 8765130486.
+KONIEC_AUTHORIZED_USER_IDS = [8765130486]
+KONIEC_RE = re.compile(r"^/koniec\s+(\d+)\s*$")
 
 
 # V3.19i (2026-04-30): structured override reason codes dla Telegram callback
@@ -1217,6 +1226,18 @@ async def handle_message(state: dict, msg: dict) -> None:
 
     if text.startswith("/"):
         cmd = text.split()[0].lower()
+        # TASK B (2026-05-04) /koniec [cid] — manual extended shift termination.
+        # Flag MANUAL_KONIEC_COMMAND_ENABLED (default False) → silent early exit.
+        if cmd == "/koniec":
+            reply = await asyncio.to_thread(
+                _handle_koniec_command, state, msg, text,
+            )
+            if reply is not None:
+                await asyncio.to_thread(
+                    tg_request, state["token"], "sendMessage",
+                    {"chat_id": state["admin_id"], "text": reply},
+                )
+            return
         if cmd == "/status":
             try:
                 body = await asyncio.to_thread(format_status)
@@ -1488,6 +1509,349 @@ async def handle_message(state: dict, msg: dict) -> None:
     _log.info(f"override action={action} text={text!r}")
 
 
+# ---- TASK B SHIFT NOTIFICATIONS callback handlers (2026-05-04) ----
+#
+# SHIFT_* callbacks bypass state["pending"] (proposal flow) — używają osobnego
+# state file (shift_notifications confirmations.json). Sister module
+# `dispatch_v2.shift_notifications` owns the worker; this file owns the
+# Telegram-side handlers + templates.
+#
+# Naming convention: _handle_shift_*_callback są SYNC (wywoływane via
+# asyncio.to_thread z handle_callback, żeby uniknąć blocking event loop
+# podczas locked file write). Lazy imports defense-in-depth: jeśli sister
+# module jeszcze niezbudowany, telegram_approver nadal startuje (pure import
+# at module load time would crash whole bot).
+
+
+def _shift_callback_answer(state: dict, cb: dict, text: str) -> None:
+    """Helper — sync answerCallbackQuery z text feedback."""
+    try:
+        tg_request(
+            state["token"], "answerCallbackQuery",
+            {"callback_query_id": cb["id"], "text": text},
+        )
+    except Exception as e:
+        _log.warning(f"shift_callback answer failed: {type(e).__name__}: {e}")
+
+
+def _shift_today_iso() -> str:
+    """Warsaw today w formacie YYYY-MM-DD."""
+    return datetime.now(WARSAW).strftime("%Y-%m-%d")
+
+
+def _shift_extract_name_from_key(bucket: dict, rec: dict) -> str:
+    """Bucket keys: '{date}:{full_name}'. Find key matching rec by identity."""
+    if not isinstance(bucket, dict):
+        return "?"
+    for key, val in bucket.items():
+        if val is rec:
+            if isinstance(key, str) and ":" in key:
+                return key.split(":", 1)[1]
+            return "?"
+    return "?"
+
+
+def _shift_format_scheduled_time(rec: dict) -> str:
+    """Extract scheduled HH:MM dla alert messages.
+
+    Worker zapisuje 'scheduled' jako ISO datetime; fallback na 'scheduled_time'
+    HH:MM gdyby format zmienił się.
+    """
+    sched = rec.get("scheduled_time")
+    if isinstance(sched, str) and sched:
+        return sched
+    sched_iso = rec.get("scheduled")
+    if isinstance(sched_iso, str) and sched_iso:
+        try:
+            return datetime.fromisoformat(sched_iso).strftime("%H:%M")
+        except Exception:
+            return sched_iso
+    return "?"
+
+
+def _handle_shift_start_callback(state: dict, action: str, cid: str, cb: dict) -> None:
+    """SHIFT_START_OK / SHIFT_START_NO — kurier potwierdza/odmawia start zmiany.
+
+    Format callback: "SHIFT_START_OK:{cid}" lub "SHIFT_START_NO:{cid}".
+    State: confirmations["start_notified"][today_iso][cid] -> rec.
+    Idempotent: jeśli decision już ustawione, drugi click → "już zapisane".
+    SHIFT_START_NO: dodatkowo wysyła alert do Bartka (admin chat fallback).
+    """
+    if not flag("SHIFT_NOTIFY_ENABLED", default=False):
+        _shift_callback_answer(state, cb, "wyłączone")
+        return
+    try:
+        from dispatch_v2.shift_notifications.state import (
+            locked_write_confirmations,
+            find_record_for_cid,
+            append_learning_log,
+        )
+        from dispatch_v2.telegram import templates
+    except Exception as e:
+        _log.error(
+            f"shift_start_callback import failed cid={cid} action={action}: "
+            f"{type(e).__name__}: {e}"
+        )
+        _shift_callback_answer(state, cb, "❌ shift module unavailable")
+        return
+
+    today_iso = _shift_today_iso()
+    feedback = "✅ ok"
+    no_show_payload: Optional[Tuple[str, str]] = None  # (name, scheduled_time)
+    try:
+        with locked_write_confirmations() as conf:
+            start_bucket = conf.setdefault("start_notified", {})
+            rec = find_record_for_cid(start_bucket, today_iso, cid)
+            if rec is None:
+                feedback = f"⚠ Nie znaleziono cid={cid}"
+            elif rec.get("decision") is not None:
+                feedback = "ℹ już zapisane"
+            else:
+                if action == "SHIFT_START_OK":
+                    rec["decision"] = True
+                    rec["confirmed_for_shift"] = True
+                    rec["confirmed_at"] = datetime.now(WARSAW).isoformat()
+                    feedback = "✅ Potwierdzone"
+                else:  # SHIFT_START_NO
+                    rec["decision"] = False
+                    rec["confirmed_for_shift"] = False
+                    rec["declined_at"] = datetime.now(WARSAW).isoformat()
+                    feedback = "❌ Odnotowane (Bartek powiadomiony)"
+                    no_show_payload = (
+                        _shift_extract_name_from_key(start_bucket, rec)
+                        or f"cid={cid}",
+                        _shift_format_scheduled_time(rec),
+                    )
+                try:
+                    append_learning_log({
+                        "event": "SHIFT_START_RESPONSE",
+                        "cid": cid,
+                        "action": action,
+                        "ts": datetime.now(WARSAW).isoformat(),
+                    })
+                except Exception as e:
+                    _log.warning(
+                        f"append_learning_log failed cid={cid}: {type(e).__name__}: {e}"
+                    )
+    except Exception as e:
+        _log.error(
+            f"shift_start_callback state write failed cid={cid}: "
+            f"{type(e).__name__}: {e}"
+        )
+        feedback = "❌ state write error"
+
+    _shift_callback_answer(state, cb, feedback)
+
+    if no_show_payload is not None:
+        name, sched = no_show_payload
+        try:
+            from dispatch_v2.shift_notifications.telegram_send import (
+                tg_send_text_with_keyboard,
+            )
+            alert_text = templates.format_alert_courier_no_show(name, sched)
+            tg_send_text_with_keyboard(
+                chat_id=str(state["admin_id"]),
+                text=alert_text,
+                keyboard=None,
+            )
+        except Exception as e:
+            _log.error(
+                f"no_show alert send failed cid={cid}: {type(e).__name__}: {e}"
+            )
+
+    _log.info(f"SHIFT_START callback action={action} cid={cid} → {feedback}")
+
+
+def _handle_shift_reminder_callback(state: dict, action: str, cid: str, cb: dict) -> None:
+    """SHIFT_REMINDER_OK / SHIFT_REMINDER_NO — reminder po brak odpowiedzi."""
+    if not flag("SHIFT_NOTIFY_ENABLED", default=False):
+        _shift_callback_answer(state, cb, "wyłączone")
+        return
+    try:
+        from dispatch_v2.shift_notifications.state import (
+            locked_write_confirmations,
+            find_record_for_cid,
+            append_learning_log,
+        )
+    except Exception as e:
+        _log.error(
+            f"shift_reminder_callback import failed cid={cid}: "
+            f"{type(e).__name__}: {e}"
+        )
+        _shift_callback_answer(state, cb, "❌ shift module unavailable")
+        return
+
+    today_iso = _shift_today_iso()
+    feedback = "✅ ok"
+    try:
+        with locked_write_confirmations() as conf:
+            bucket = conf.setdefault("start_notified", {})
+            rec = find_record_for_cid(bucket, today_iso, cid)
+            if rec is None:
+                feedback = f"⚠ Nie znaleziono cid={cid}"
+            elif rec.get("decision") is not None:
+                feedback = "ℹ już zapisane"
+            else:
+                if action == "SHIFT_REMINDER_OK":
+                    rec["decision"] = True
+                    rec["confirmed_for_shift"] = True
+                    rec["confirmed_at"] = datetime.now(WARSAW).isoformat()
+                    rec["confirmed_via_reminder"] = True
+                    feedback = "✅ Potwierdzone"
+                else:
+                    rec["decision"] = False
+                    rec["confirmed_for_shift"] = False
+                    rec["declined_at"] = datetime.now(WARSAW).isoformat()
+                    feedback = "❌ Odnotowane"
+                try:
+                    append_learning_log({
+                        "event": "SHIFT_REMINDER_RESPONSE",
+                        "cid": cid,
+                        "action": action,
+                        "ts": datetime.now(WARSAW).isoformat(),
+                    })
+                except Exception as e:
+                    _log.warning(f"append_learning_log failed cid={cid}: {e}")
+    except Exception as e:
+        _log.error(
+            f"shift_reminder_callback state write failed cid={cid}: "
+            f"{type(e).__name__}: {e}"
+        )
+        feedback = "❌ state write error"
+
+    _shift_callback_answer(state, cb, feedback)
+    _log.info(f"SHIFT_REMINDER callback action={action} cid={cid} → {feedback}")
+
+
+def _handle_shift_end_callback(state: dict, action: str, cid: str, cb: dict) -> None:
+    """SHIFT_END_OK / SHIFT_END_EXT — kurier kończy zmianę albo zostaje (extends).
+
+    SHIFT_END_EXT: zmiana extended do północy dnia bieżącego, NO follow-up
+    question (per spec). /koniec [cid] command (manual) używa do późniejszego
+    flip extended → ended.
+    """
+    if not flag("SHIFT_NOTIFY_ENABLED", default=False):
+        _shift_callback_answer(state, cb, "wyłączone")
+        return
+    try:
+        from dispatch_v2.shift_notifications.state import (
+            locked_write_confirmations,
+            find_record_for_cid,
+            append_learning_log,
+        )
+    except Exception as e:
+        _log.error(
+            f"shift_end_callback import failed cid={cid}: {type(e).__name__}: {e}"
+        )
+        _shift_callback_answer(state, cb, "❌ shift module unavailable")
+        return
+
+    today_iso = _shift_today_iso()
+    feedback = "✅ ok"
+    try:
+        with locked_write_confirmations() as conf:
+            bucket = conf.setdefault("end_notified", {})
+            rec = find_record_for_cid(bucket, today_iso, cid)
+            if rec is None:
+                feedback = f"⚠ Nie znaleziono cid={cid}"
+            elif rec.get("decision") is not None:
+                feedback = "ℹ już zapisane"
+            else:
+                now_w = datetime.now(WARSAW)
+                if action == "SHIFT_END_OK":
+                    rec["decision"] = True
+                    rec["shift_ending_confirmed"] = True
+                    rec["ended_at"] = now_w.isoformat()
+                    feedback = "✅ Koniec zmiany potwierdzony"
+                else:  # SHIFT_END_EXT
+                    rec["decision"] = True
+                    rec["shift_extended"] = True
+                    rec["extended_until"] = today_iso + "T23:59:00"
+                    rec["extended_at"] = now_w.isoformat()
+                    feedback = "✅ Zmiana przedłużona (do północy)"
+                try:
+                    append_learning_log({
+                        "event": "SHIFT_END_RESPONSE",
+                        "cid": cid,
+                        "action": action,
+                        "ts": now_w.isoformat(),
+                    })
+                except Exception as e:
+                    _log.warning(f"append_learning_log failed cid={cid}: {e}")
+    except Exception as e:
+        _log.error(
+            f"shift_end_callback state write failed cid={cid}: "
+            f"{type(e).__name__}: {e}"
+        )
+        feedback = "❌ state write error"
+
+    _shift_callback_answer(state, cb, feedback)
+    _log.info(f"SHIFT_END callback action={action} cid={cid} → {feedback}")
+
+
+def _handle_koniec_command(state: dict, msg: dict, text: str) -> Optional[str]:
+    """TASK B (2026-05-04) /koniec [cid] manual termination of extended shift.
+
+    Flag-gated (MANUAL_KONIEC_COMMAND_ENABLED, default False — silent early
+    exit). Only KONIEC_AUTHORIZED_USER_IDS can issue. Authorizes via from.id
+    NIE chat_id (chat is whole admin group; restrict to specific operators).
+
+    Returns reply text (string) if command was handled (caller should send),
+    or None if command did not apply / silently rejected.
+    """
+    if not flag("MANUAL_KONIEC_COMMAND_ENABLED", default=False):
+        return None
+    m = KONIEC_RE.match(text.strip())
+    if not m:
+        return None
+    sender_id = (msg.get("from") or {}).get("id")
+    if sender_id not in KONIEC_AUTHORIZED_USER_IDS:
+        _log.warning(f"/koniec unauthorized sender_id={sender_id}")
+        return None  # silent reject
+    cid = m.group(1)
+    try:
+        from dispatch_v2.shift_notifications.state import (
+            locked_write_confirmations,
+            find_record_for_cid,
+            append_learning_log,
+        )
+    except Exception as e:
+        _log.error(f"/koniec import failed cid={cid}: {type(e).__name__}: {e}")
+        return f"❌ shift module unavailable cid={cid}"
+
+    today_iso = _shift_today_iso()
+    reply = f"⚠ Nie znaleziono cid={cid} w end_notified dziś"
+    try:
+        with locked_write_confirmations() as conf:
+            bucket = conf.setdefault("end_notified", {})
+            rec = find_record_for_cid(bucket, today_iso, cid)
+            if rec is None:
+                reply = f"⚠ Nie znaleziono cid={cid} w end_notified dziś"
+            elif not rec.get("shift_extended"):
+                reply = f"⚠ cid={cid} nie ma shift_extended=true — /koniec niepotrzebny"
+            else:
+                now_w = datetime.now(WARSAW)
+                rec["shift_ending_confirmed"] = True
+                rec["shift_extended"] = False
+                rec["terminated_via_koniec_at"] = now_w.isoformat()
+                rec["terminated_by"] = str(sender_id)
+                try:
+                    append_learning_log({
+                        "event": "SHIFT_KONIEC_MANUAL",
+                        "cid": cid,
+                        "ts": rec["terminated_via_koniec_at"],
+                        "operator_id": str(sender_id),
+                    })
+                except Exception as e:
+                    _log.warning(f"/koniec append_learning_log failed cid={cid}: {e}")
+                reply = f"✅ cid={cid} koniec ustawiony"
+    except Exception as e:
+        _log.error(f"/koniec state write failed cid={cid}: {type(e).__name__}: {e}")
+        reply = f"❌ state write error cid={cid}"
+    _log.info(f"/koniec cid={cid} sender={sender_id} → {reply}")
+    return reply
+
+
 async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
     # ASSIGN callback format: "ASSIGN:{oid}:{courier_id}:{time_min}" → po split(":",1)
     # w updates_poller zmienna `oid` zawiera "466700:207:15". Rozdzielamy na części
@@ -1551,6 +1915,25 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
         )
         return
     _log.info(f"callback action={action} oid={oid} from={cb_from_name}(id={cb_from_id})")
+
+    # TASK B SHIFT NOTIFICATIONS (2026-05-04): SHIFT_* callbacks NIE używają
+    # state["pending"] (osobny state file: shift_notifications confirmations).
+    # Short-circuit przed pending lookup, fork do dedicated handlers.
+    if action in ("SHIFT_START_OK", "SHIFT_START_NO"):
+        await asyncio.to_thread(
+            _handle_shift_start_callback, state, action, oid, cb,
+        )
+        return
+    if action in ("SHIFT_REMINDER_OK", "SHIFT_REMINDER_NO"):
+        await asyncio.to_thread(
+            _handle_shift_reminder_callback, state, action, oid, cb,
+        )
+        return
+    if action in ("SHIFT_END_OK", "SHIFT_END_EXT"):
+        await asyncio.to_thread(
+            _handle_shift_end_callback, state, action, oid, cb,
+        )
+        return
 
     entry = state["pending"].get(oid)
     token = state["token"]
