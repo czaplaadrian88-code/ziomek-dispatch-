@@ -499,6 +499,31 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             })
             _log.info(f"NEW {zid} {norm['order_type']} {norm['restaurant']} pickup={norm['pickup_at_warsaw']}")
 
+            # TASK 4 (2026-05-04): Auto-KOORD on NEW_ORDER dla czasówek.
+            # Defensive: try/except, NIGDY crash panel_watcher. Flag-gated default False.
+            try:
+                from dispatch_v2 import auto_koord, common as _C
+                if _C.flag("AUTO_KOORD_ON_NEW_ORDER_ENABLED", default=False):
+                    decision, reason = auto_koord.needs_auto_koord(raw, flag_enabled=True)
+                    if decision:
+                        _log.info(f"AUTO_KOORD trigger oid={zid} reason={reason}")
+                        ak_result = auto_koord.perform_auto_koord(
+                            order_id=zid,
+                            fetch_details_fn=lambda z: fetch_order_details(z, csrf),
+                        )
+                        auto_koord.emit_event_log(zid, norm, ak_result)
+                        if _C.flag("AUTO_KOORD_TELEGRAM_INFO_ENABLED", default=False):
+                            msg = auto_koord.make_telegram_info_message(norm, ak_result)
+                            auto_koord.send_telegram_info(msg)
+                        if ak_result.get("success") or ak_result.get("skipped"):
+                            stats["auto_koord_handled"] = stats.get("auto_koord_handled", 0) + 1
+                        else:
+                            stats["auto_koord_failed"] = stats.get("auto_koord_failed", 0) + 1
+                    else:
+                        _log.debug(f"AUTO_KOORD skip oid={zid} reason={reason}")
+            except Exception as _ake:
+                _log.warning(f"AUTO_KOORD hook fail oid={zid} (non-blocking): {type(_ake).__name__}: {_ake}")
+
         # Jesli nowe i juz przypisane do kuriera od razu - emit ASSIGNED
         if norm["id_kurier"] and not norm["is_koordynator"]:
             courier_id = str(norm["id_kurier"])
