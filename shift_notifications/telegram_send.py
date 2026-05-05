@@ -11,8 +11,10 @@ Token resolution order: env TELEGRAM_BOT_TOKEN, env BOT_TOKEN,
 /root/.openclaw/workspace/.secrets/telegram.env (TELEGRAM_BOT_TOKEN=...).
 Mirrors auto_koord.send_telegram_info pattern.
 
-Chat id resolution: explicit arg, env TELEGRAM_CHAT_ID, env
-AUTO_KOORD_TG_CHAT_ID, fallback 8765130486 (Adrian).
+Chat id resolution: explicit arg → env TELEGRAM_CHAT_ID → env
+AUTO_KOORD_TG_CHAT_ID → flags.json SHIFT_NOTIFY_TARGET_CHAT_ID
+(Issue #1 routing fix 2026-05-05 — Z3 konsystencja z czasówkami) →
+ADRIAN_CHAT_ID_FALLBACK 8765130486 (backward compat).
 """
 from __future__ import annotations
 
@@ -45,6 +47,30 @@ def _resolve_token() -> Optional[str]:
     return None
 
 
+def _resolve_shift_notify_target_chat() -> int:
+    """Resolve SHIFT notification target chat (Issue #1 fix 2026-05-05).
+
+    Priority:
+      1. flags.json SHIFT_NOTIFY_TARGET_CHAT_ID (preferred — grupa ziomka
+         -5149910559, Z3 konsystencja z czasówkami)
+      2. ADRIAN_CHAT_ID_FALLBACK (backward compat — 8765130486 DM Adriana)
+
+    Hot-reload: load_flags() re-reads flags.json on mtime change → flag flip
+    has natychmiastowy efekt bez restart dispatch-telegram service.
+    """
+    try:
+        from dispatch_v2.common import load_flags
+        cfg = load_flags() or {}
+        target = cfg.get("SHIFT_NOTIFY_TARGET_CHAT_ID")
+        if isinstance(target, int) and target != 0:
+            return target
+    except Exception as e:
+        _log.warning(
+            f"_resolve_shift_notify_target_chat fallback: {type(e).__name__}: {e}"
+        )
+    return ADRIAN_CHAT_ID_FALLBACK
+
+
 def _resolve_chat_id(explicit: Optional[int]) -> Optional[int]:
     if explicit is not None:
         return int(explicit)
@@ -54,7 +80,10 @@ def _resolve_chat_id(explicit: Optional[int]) -> Optional[int]:
             return int(raw)
         except (ValueError, TypeError):
             _log.warning(f"_resolve_chat_id: invalid env value {raw!r}")
-    return ADRIAN_CHAT_ID_FALLBACK
+    # Issue #1 (2026-05-05): single source of truth — flag-based resolver
+    # zamiast hardcoded ADRIAN_CHAT_ID_FALLBACK. Worker callers nie muszą
+    # nic zmieniać, hot-reload via load_flags().
+    return _resolve_shift_notify_target_chat()
 
 
 def tg_send_text_with_keyboard(
