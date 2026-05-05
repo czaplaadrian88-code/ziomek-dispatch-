@@ -68,6 +68,22 @@ def t(name, fn):
 # init a enter inny test mógł zmienić module-level constants. See Lekcja #71.
 
 
+def _flags_override_load_flags(**kwargs):
+    """Patch telegram_approver.load_flags() do return given dict for test scope.
+    Used by no-show alert tests (TB-1) — `_resolve_bartek_alert_target` reads
+    via load_flags() (raw int read), NIE flag()."""
+    class _LF:
+        def __init__(self, vals):
+            self.vals = vals
+            self.orig = telegram_approver.load_flags
+        def __enter__(self):
+            telegram_approver.load_flags = lambda: dict(self.vals)
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            telegram_approver.load_flags = self.orig
+    return _LF(kwargs)
+
+
 class _FlagOverride:
     """Patch telegram_approver.flag(name, default) for test scope."""
     def __init__(self, **kwargs):
@@ -286,7 +302,13 @@ t("callback_router_shift_start_ok_writes_confirmed",
 
 def test_callback_router_shift_start_no_triggers_alert_to_bartek():
     today_iso = telegram_approver._shift_today_iso()
-    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), _TGCapture() as tg, _TGSendCapture() as tgsend:
+    # TB-1 (2026-05-05): override load_flags() do default values żeby test
+    # nie czytał live flags.json (gdzie BARTEK_USER_ID może być populated).
+    # Bez override: helper _resolve_bartek_alert_target route do Bartek DM
+    # po Adrian's flag flip.
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), \
+         _flags_override_load_flags(COORDINATOR_DM_ROUTING_ENABLED=False, BARTEK_USER_ID=None), \
+         _TGCapture() as tg, _TGSendCapture() as tgsend:
         _seed_record(today_iso, "Mykyta K.", "999", scheduled="2026-05-04T14:00:00+02:00")
         st = _make_state(admin_id="123456")
         cb = _make_cb("SHIFT_START_NO", "999")
@@ -442,19 +464,7 @@ t("koniec_disabled_when_flag_false", test_koniec_disabled_when_flag_false)
 # ============================================================
 # TB-1 (2026-05-05): Bartek DM routing for no-show alerts (4 tests)
 # ============================================================
-
-def _flags_override_load_flags(**kwargs):
-    """Patch telegram_approver.load_flags() do return given dict for test scope."""
-    class _LF:
-        def __init__(self, vals):
-            self.vals = vals
-            self.orig = telegram_approver.load_flags
-        def __enter__(self):
-            telegram_approver.load_flags = lambda: dict(self.vals)
-            return self
-        def __exit__(self, exc_type, exc, tb):
-            telegram_approver.load_flags = self.orig
-    return _LF(kwargs)
+# (helper _flags_override_load_flags moved up — used by test 10 too)
 
 
 def test_no_show_alert_routes_to_bartek_when_enabled_and_user_set():

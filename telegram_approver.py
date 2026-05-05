@@ -50,10 +50,15 @@ from dispatch_v2.common import (
 )
 
 
-# TASK B SHIFT NOTIFICATIONS (2026-05-04) — manual /koniec command.
-# Authorized user IDs allowed to terminate extended shifts. TODO: add Bartek's
-# user_id when received. Adrian = 8765130486.
-KONIEC_AUTHORIZED_USER_IDS = [8765130486]
+# TASK B SHIFT NOTIFICATIONS — manual /koniec + /poprawa commands + SHIFT_*
+# DM callback auth (gate expand fix 2026-05-05). Authorized user IDs allowed to:
+#   - Issue /koniec + /poprawa text commands (handle_message)
+#   - Klikać SHIFT_* callback buttons z prywatnego DM (security gate expand)
+#   - W przyszłości CZAS_TAK/NIE/CZEKAJ z TASK A (gdy czasówki trafią do DM)
+# Adrian = 8765130486; Bartek = 8753482870 (added 2026-05-05 06:43 UTC, post /start).
+# NOTE: code change wymaga restartu dispatch-telegram (Python module-level constant).
+# Bundled z TASK A restart cycle. Hot-reload alerts działa już via flags.json.
+KONIEC_AUTHORIZED_USER_IDS = [8765130486, 8753482870]
 KONIEC_RE = re.compile(r"^/koniec\s+(\d+)\s*$")
 # TB-3 (2026-05-05): /poprawa [cid] mirror /koniec — odwołanie "Nie przyjdzie"
 # gdy kurier mimo wszystko przyszedł. Reuses KONIEC_AUTHORIZED_USER_IDS auth.
@@ -2082,6 +2087,20 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
         await asyncio.to_thread(
             _handle_shift_end_callback, state, action, oid, cb,
         )
+        return
+
+    # TASK A CZASÓWKI PROACTIVE (2026-05-05): CZAS_* callbacks NIE używają
+    # state["pending"] (osobny state file: czasowka_proposals_state.json).
+    # Short-circuit przed pending lookup, fork do dedicated handlers.
+    # raw oid z router = "{oid}:{cid}:{trigger_min}" — split w handlerze.
+    if action in ("CZAS_TAK", "CZAS_NIE", "CZAS_CZEKAJ"):
+        from dispatch_v2.czasowka_proactive import handlers as czas_handlers
+        handler_map = {
+            "CZAS_TAK": czas_handlers.handle_czas_tak,
+            "CZAS_NIE": czas_handlers.handle_czas_nie,
+            "CZAS_CZEKAJ": czas_handlers.handle_czas_czekaj,
+        }
+        await asyncio.to_thread(handler_map[action], state, action, oid, cb)
         return
 
     entry = state["pending"].get(oid)

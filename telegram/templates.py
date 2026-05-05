@@ -14,7 +14,7 @@ NOTE: pure functions — no I/O, no globals. Safe to import anywhere.
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional, Tuple
 
 
 def format_shift_start_individual(courier: str, scheduled_time: str) -> str:
@@ -64,4 +64,101 @@ def format_alert_courier_no_show(courier: str, scheduled_time: str) -> str:
         f"{courier}\n"
         f"Zmiana miała być: {scheduled_time}\n"
         "Bartku — zorganizuj zastępstwo."
+    )
+
+
+# ============================================================
+# TASK A CZASOWKA PROACTIVE — proposal templates (2026-05-05)
+# ============================================================
+#
+# 4 templates dla T-50 / T-40 / no-candidate / T-0 alert. Pure formatters,
+# no I/O, no globals. Reuse mobile-readable style B.5: ~30 chars/line, single
+# emoji marker, polski operational language. T-50 = 3 buttons (Tak/Nie/Czekaj),
+# T-40 = 2 buttons (Tak/Nie — last chance, no Czekaj).
+#
+# callback_data format: "CZAS_{ACTION}:{oid}:{cid}:{trigger_min}"
+# - ACTION ∈ {TAK, NIE, CZEKAJ}
+# - oid = order_id (panel zlecenie id)
+# - cid = courier_id (proposed candidate)
+# - trigger_min ∈ {50, 40} (oryginalne okno, NIE re-eval offset)
+
+
+def format_czasowka_proposal(
+    oid: str,
+    restaurant: str,
+    pickup_hhmm: str,
+    candidate_name: str,
+    candidate_cid: str,
+    score: float,
+    trigger_min: int,
+) -> Tuple[str, list]:
+    """T-50 czasówka proposal — 3-button (Tak/Nie/Czekaj).
+
+    Returns (text, inline_keyboard) for tg_send_text_with_keyboard.
+    """
+    text = (
+        f"🕐 Czasówka T-{trigger_min} #{oid}\n"
+        f"{restaurant} → odbiór {pickup_hhmm}\n"
+        f"Kandydat: {candidate_name} (score {score:.0f})\n"
+        f"Przypisać teraz?"
+    )
+    kb = [[
+        {"text": "✅ Tak", "callback_data": f"CZAS_TAK:{oid}:{candidate_cid}:{trigger_min}"},
+        {"text": "❌ Nie", "callback_data": f"CZAS_NIE:{oid}:{candidate_cid}:{trigger_min}"},
+        {"text": "⏳ Czekaj", "callback_data": f"CZAS_CZEKAJ:{oid}:{candidate_cid}:{trigger_min}"},
+    ]]
+    return text, kb
+
+
+def format_czasowka_last_chance(
+    oid: str,
+    restaurant: str,
+    pickup_hhmm: str,
+    candidate_name: str,
+    candidate_cid: str,
+    score: float,
+) -> Tuple[str, list]:
+    """T-40 LAST CHANCE — 2-button (no Czekaj — to ostatnia szansa).
+
+    Returns (text, inline_keyboard).
+    """
+    text = (
+        f"⚠ Czasówka T-40 LAST CHANCE #{oid}\n"
+        f"{restaurant} → odbiór {pickup_hhmm}\n"
+        f"Kandydat: {candidate_name} (score {score:.0f})\n"
+        f"Decyzja teraz lub manual w panelu."
+    )
+    kb = [[
+        {"text": "✅ Tak", "callback_data": f"CZAS_TAK:{oid}:{candidate_cid}:40"},
+        {"text": "❌ Nie", "callback_data": f"CZAS_NIE:{oid}:{candidate_cid}:40"},
+    ]]
+    return text, kb
+
+
+def format_czasowka_no_candidate(
+    oid: str,
+    restaurant: str,
+    pickup_hhmm: str,
+    trigger_min: int,
+    next_check_ts: Optional[str] = None,
+) -> str:
+    """Info-only — brak kandydata MAYBE w oknie T-50/T-40."""
+    nxt = f"\nNastępna ocena: {next_check_ts}" if next_check_ts else ""
+    return (
+        f"⏰ Czasówka T-{trigger_min} #{oid}\n"
+        f"{restaurant} → odbiór {pickup_hhmm}\n"
+        f"Brak kandydata (manual dispatch)." + nxt
+    )
+
+
+def format_czasowka_alert_unassigned(
+    oid: str,
+    restaurant: str,
+    pickup_hhmm: str,
+) -> str:
+    """T-0 critical info-only — czasówka nadal u Koordynatora w momencie odbioru."""
+    return (
+        f"🚨 Czasówka #{oid} NIEPRZYPISANA @ T-0\n"
+        f"{restaurant} → odbiór {pickup_hhmm}\n"
+        f"Wymaga natychmiastowego manual dispatch."
     )

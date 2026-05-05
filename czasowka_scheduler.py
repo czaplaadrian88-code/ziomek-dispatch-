@@ -544,6 +544,23 @@ def main() -> int:
         # Eval still runs dla state tracking, ale emit/koord skip
         result = eval_czasowka(oid, osrec, now_utc)
         stats["eval"] += 1
+
+        # TASK A (2026-05-05): proactive T-50/T-40 trigger detection.
+        # Flag-gated CZASOWKA_PROACTIVE_ENABLED — gdy False = no-op, legacy emit działa.
+        # Hook runs AFTER eval_czasowka (uses result.best/alternatives) and BEFORE
+        # state persist (line 552). Defensive: NIGDY raise w main loop.
+        try:
+            from dispatch_v2.czasowka_proactive.evaluator import maybe_fire_trigger
+            maybe_fire_trigger(
+                oid, osrec, result.get("minutes_to_pickup"), result, now_utc,
+            )
+        except ImportError:
+            pass  # Module not yet deployed — no-op
+        except Exception as _ta_e:
+            _log.warning(
+                f"czasowka_proactive trigger error oid={oid}: "
+                f"{type(_ta_e).__name__}: {_ta_e}"
+            )
         stats[result["decision"].lower().replace("force_assign", "force").replace("dont_emit", "dont_emit")] = \
             stats.get(result["decision"].lower().replace("force_assign", "force").replace("dont_emit", "dont_emit"), 0) + 1
 
