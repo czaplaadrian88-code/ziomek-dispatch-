@@ -43,6 +43,7 @@ from dispatch_v2.common import (
     drop_zone_from_address,
     flag,
     load_config,
+    load_flags,
     now_iso,
     parse_panel_timestamp,
     setup_logger,
@@ -54,6 +55,9 @@ from dispatch_v2.common import (
 # user_id when received. Adrian = 8765130486.
 KONIEC_AUTHORIZED_USER_IDS = [8765130486]
 KONIEC_RE = re.compile(r"^/koniec\s+(\d+)\s*$")
+# TB-3 (2026-05-05): /poprawa [cid] mirror /koniec — odwołanie "Nie przyjdzie"
+# gdy kurier mimo wszystko przyszedł. Reuses KONIEC_AUTHORIZED_USER_IDS auth.
+POPRAWA_RE = re.compile(r"^/poprawa\s+(\d+)\s*$")
 
 
 # V3.19i (2026-04-30): structured override reason codes dla Telegram callback
@@ -1238,6 +1242,18 @@ async def handle_message(state: dict, msg: dict) -> None:
                     {"chat_id": state["admin_id"], "text": reply},
                 )
             return
+        # TB-3 (2026-05-05) /poprawa [cid] mirror /koniec — odwołaj "Nie przyjdzie".
+        # Flag MANUAL_POPRAWA_COMMAND_ENABLED (default False) → silent early exit.
+        if cmd == "/poprawa":
+            reply = await asyncio.to_thread(
+                _handle_poprawa_command, state, msg, text,
+            )
+            if reply is not None:
+                await asyncio.to_thread(
+                    tg_request, state["token"], "sendMessage",
+                    {"chat_id": state["admin_id"], "text": reply},
+                )
+            return
         if cmd == "/status":
             try:
                 body = await asyncio.to_thread(format_status)
@@ -1649,11 +1665,23 @@ def _handle_shift_start_callback(state: dict, action: str, cid: str, cb: dict) -
                 tg_send_text_with_keyboard,
             )
             alert_text = templates.format_alert_courier_no_show(name, sched)
-            tg_send_text_with_keyboard(
-                chat_id=str(state["admin_id"]),
-                text=alert_text,
-                keyboard=None,
+            target_chat, route_label = _resolve_bartek_alert_target(state)
+            # TB-1 fix (2026-05-05): signature corrected — text positional,
+            # inline_keyboard=[] (info-only), chat_id kw. Pre-fix call używał
+            # nieistniejących nazw chat_id=/text=/keyboard= co dawało TypeError
+            # swallowed przez except (alert nigdy nie wysłany).
+            ok = tg_send_text_with_keyboard(alert_text, [], chat_id=target_chat)
+            _log.info(
+                f"no_show alert cid={cid} route={route_label} "
+                f"target={target_chat} ok={ok}"
             )
+            if not ok and route_label == "bartek_dm":
+                # Auto-fallback to group on DM failure (Bartek blocked bot etc.)
+                fallback_chat = int(state["admin_id"])
+                tg_send_text_with_keyboard(alert_text, [], chat_id=fallback_chat)
+                _log.warning(
+                    f"no_show alert DM failed cid={cid}, fell back to group {fallback_chat}"
+                )
         except Exception as e:
             _log.error(
                 f"no_show alert send failed cid={cid}: {type(e).__name__}: {e}"
@@ -1789,6 +1817,28 @@ def _handle_shift_end_callback(state: dict, action: str, cid: str, cb: dict) -> 
     _log.info(f"SHIFT_END callback action={action} cid={cid} → {feedback}")
 
 
+def _resolve_bartek_alert_target(state: dict) -> Tuple[int, str]:
+    """TB-1 (2026-05-05): resolve target chat for SHIFT no-show alert.
+
+    Returns (chat_id, route_label) where route_label ∈ {'bartek_dm','group_fallback'}.
+
+    Routing logic:
+      - flag COORDINATOR_DM_ROUTING_ENABLED=True AND BARTEK_USER_ID is positive int
+        → DM Bartka (alert direct, bypass dispatch noise)
+      - else → group fallback state['admin_id']
+
+    BARTEK_USER_ID provided post-Bartek-/start (Adrian extracts from journalctl,
+    sets flags.json key). Until then config NULL → fallback group, no behavior
+    change vs pre-TB-1.
+    """
+    cfg = load_flags() or {}
+    enabled = bool(cfg.get("COORDINATOR_DM_ROUTING_ENABLED", False))
+    bartek_id = cfg.get("BARTEK_USER_ID")
+    if enabled and isinstance(bartek_id, int) and bartek_id > 0:
+        return bartek_id, "bartek_dm"
+    return int(state["admin_id"]), "group_fallback"
+
+
 def _handle_koniec_command(state: dict, msg: dict, text: str) -> Optional[str]:
     """TASK B (2026-05-04) /koniec [cid] manual termination of extended shift.
 
@@ -1849,6 +1899,95 @@ def _handle_koniec_command(state: dict, msg: dict, text: str) -> Optional[str]:
         _log.error(f"/koniec state write failed cid={cid}: {type(e).__name__}: {e}")
         reply = f"❌ state write error cid={cid}"
     _log.info(f"/koniec cid={cid} sender={sender_id} → {reply}")
+    return reply
+
+
+def _handle_poprawa_command(state: dict, msg: dict, text: str) -> Optional[str]:
+    """TB-3 (2026-05-05) /poprawa [cid] — odwołaj 'Nie przyjdzie' status.
+
+    Mirror /koniec: flag-gated (MANUAL_POPRAWA_COMMAND_ENABLED, default False).
+    Authorization via from.id ∈ KONIEC_AUTHORIZED_USER_IDS (same group as /koniec).
+
+    Use case: kurier kliknął "Nie przyjdzie" w T-60 START callback (lub
+    unconfirmed_default flipped na T-0), ale mimo wszystko przyszedł — koordynator
+    musi to odwołać żeby Ziomek mógł go używać w propozycjach.
+
+    Mutation w start_notified bucket:
+      - decision: False → True
+      - confirmed_for_shift: False → True
+      - unconfirmed_default: → False (clear if was set)
+      - reverted_via_poprawa_at: now_iso (Warsaw)
+      - reverted_by: sender_id
+
+    Idempotent: jeśli już True → "ℹ już potwierdzony" (no mutation).
+    Format invalid → silent (mirror /koniec).
+    Returns reply text or None (silent rejected).
+    """
+    if not flag("MANUAL_POPRAWA_COMMAND_ENABLED", default=False):
+        return None
+    m = POPRAWA_RE.match(text.strip())
+    if not m:
+        return None
+    sender_id = (msg.get("from") or {}).get("id")
+    if sender_id not in KONIEC_AUTHORIZED_USER_IDS:
+        _log.warning(f"/poprawa unauthorized sender_id={sender_id}")
+        return None  # silent reject
+    cid = m.group(1)
+    try:
+        from dispatch_v2.shift_notifications.state import (
+            locked_write_confirmations,
+            find_record_for_cid,
+            append_learning_log,
+        )
+    except Exception as e:
+        _log.error(f"/poprawa import failed cid={cid}: {type(e).__name__}: {e}")
+        return f"❌ shift module unavailable cid={cid}"
+
+    today_iso = _shift_today_iso()
+    reply = f"⚠ Nie znaleziono cid={cid} w start_notified dziś"
+    try:
+        with locked_write_confirmations() as conf:
+            bucket = conf.setdefault("start_notified", {})
+            rec = find_record_for_cid(bucket, today_iso, cid)
+            if rec is None:
+                reply = f"⚠ Nie znaleziono cid={cid} w start_notified dziś"
+            else:
+                full_name = _shift_extract_name_from_key(bucket, rec) or f"cid={cid}"
+                if rec.get("decision") is True and rec.get("confirmed_for_shift") is True:
+                    reply = f"ℹ {full_name} ({cid}): już potwierdzony, /poprawa niepotrzebny"
+                elif rec.get("decision") is not False:
+                    # decision=None (undecided) — /poprawa nie pasuje (use TAK button)
+                    reply = (
+                        f"⚠ {full_name} ({cid}): nie ma 'Nie przyjdzie' "
+                        f"— /poprawa niepotrzebny"
+                    )
+                else:
+                    now_w = datetime.now(WARSAW)
+                    rec["decision"] = True
+                    rec["confirmed_for_shift"] = True
+                    rec["unconfirmed_default"] = False
+                    rec["reverted_via_poprawa_at"] = now_w.isoformat()
+                    rec["reverted_by"] = str(sender_id)
+                    try:
+                        append_learning_log({
+                            "event": "SHIFT_NOTIFICATION",
+                            "decision": "MANUAL_POPRAWA",
+                            "cid": cid,
+                            "ts": rec["reverted_via_poprawa_at"],
+                            "operator_id": str(sender_id),
+                        })
+                    except Exception as e:
+                        _log.warning(
+                            f"/poprawa append_learning_log failed cid={cid}: {e}"
+                        )
+                    reply = (
+                        f'✅ {full_name} ({cid}): status zmieniony z "Nie przyjdzie" '
+                        f'na "Potwierdzony". Ziomek może go używać w propozycjach.'
+                    )
+    except Exception as e:
+        _log.error(f"/poprawa state write failed cid={cid}: {type(e).__name__}: {e}")
+        reply = f"❌ state write error cid={cid}"
+    _log.info(f"/poprawa cid={cid} sender={sender_id} → {reply}")
     return reply
 
 

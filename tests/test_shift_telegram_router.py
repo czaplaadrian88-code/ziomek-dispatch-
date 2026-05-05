@@ -140,17 +140,31 @@ class _TGCapture:
 
 
 # Stub the shift_notifications.telegram_send.tg_send_text_with_keyboard
+# TB-1 (2026-05-05): signature aligned z prod (text positional, inline_keyboard
+# positional, chat_id kw). Optional `return_value` controls send success result;
+# `fail_first_n` makes the first N calls return False (DM failure simulation).
 class _TGSendCapture:
-    def __init__(self):
+    def __init__(self, return_value=True, fail_first_n=0):
         self.calls = []
+        self.return_value = return_value
+        self.fail_first_n = fail_first_n
         from dispatch_v2.shift_notifications import telegram_send as ts
         self.module = ts
         self.orig = ts.tg_send_text_with_keyboard
 
     def __enter__(self):
-        def fake(chat_id, text, keyboard=None):
-            self.calls.append({"chat_id": chat_id, "text": text, "keyboard": keyboard})
-            return True
+        capture = self
+
+        def fake(text, inline_keyboard, chat_id=None):
+            capture.calls.append({
+                "chat_id": chat_id,
+                "text": text,
+                "inline_keyboard": inline_keyboard,
+            })
+            if len(capture.calls) <= capture.fail_first_n:
+                return False
+            return capture.return_value
+
         self.module.tg_send_text_with_keyboard = fake
         return self
 
@@ -287,7 +301,10 @@ def test_callback_router_shift_start_no_triggers_alert_to_bartek():
         alert = tgsend.calls[0]
         assert "Mykyta K." in alert["text"], f"alert missing courier name: {alert}"
         assert "Bartku" in alert["text"], f"alert missing 'Bartku' addressee: {alert}"
-        assert alert["chat_id"] == "123456", f"alert should go to admin chat, got {alert}"
+        # TB-1 (2026-05-05): chat_id is int after _resolve_bartek_alert_target
+        # group_fallback returns int(state["admin_id"]).
+        assert alert["chat_id"] == 123456, f"alert should go to admin chat, got {alert}"
+        assert alert["inline_keyboard"] == [], f"info-only alert no buttons, got {alert}"
 t("callback_router_shift_start_no_triggers_alert_to_bartek",
   test_callback_router_shift_start_no_triggers_alert_to_bartek)
 
@@ -420,6 +437,210 @@ def test_koniec_disabled_when_flag_false():
         rec = shift_state.find_record_for_cid(result["end_notified"], today_iso, "555")
         assert rec["shift_extended"] is True, f"state should be unchanged, got {rec}"
 t("koniec_disabled_when_flag_false", test_koniec_disabled_when_flag_false)
+
+
+# ============================================================
+# TB-1 (2026-05-05): Bartek DM routing for no-show alerts (4 tests)
+# ============================================================
+
+def _flags_override_load_flags(**kwargs):
+    """Patch telegram_approver.load_flags() do return given dict for test scope."""
+    class _LF:
+        def __init__(self, vals):
+            self.vals = vals
+            self.orig = telegram_approver.load_flags
+        def __enter__(self):
+            telegram_approver.load_flags = lambda: dict(self.vals)
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            telegram_approver.load_flags = self.orig
+    return _LF(kwargs)
+
+
+def test_no_show_alert_routes_to_bartek_when_enabled_and_user_set():
+    """TB-1: COORDINATOR_DM_ROUTING_ENABLED=True + BARTEK_USER_ID=999 →
+    alert idzie do Bartek DM, NIE grupy admin_id."""
+    today_iso = telegram_approver._shift_today_iso()
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), \
+         _flags_override_load_flags(COORDINATOR_DM_ROUTING_ENABLED=True, BARTEK_USER_ID=999), \
+         _TGCapture(), _TGSendCapture() as tgsend:
+        _seed_record(today_iso, "Mykyta K.", "999", scheduled="2026-05-04T14:00:00+02:00")
+        st = _make_state(admin_id="123456")
+        cb = _make_cb("SHIFT_START_NO", "999")
+        asyncio.run(telegram_approver.handle_callback(st, "SHIFT_START_NO", "999", cb))
+        assert len(tgsend.calls) == 1, f"expected 1 alert send, got {tgsend.calls}"
+        assert tgsend.calls[0]["chat_id"] == 999, \
+            f"alert should go to Bartek DM (999), got {tgsend.calls[0]}"
+
+
+t("no_show_alert_routes_to_bartek_when_enabled_and_user_set",
+  test_no_show_alert_routes_to_bartek_when_enabled_and_user_set)
+
+
+def test_no_show_alert_falls_back_to_group_when_user_id_missing():
+    """TB-1: flag True ale BARTEK_USER_ID=None → fallback group admin_id."""
+    today_iso = telegram_approver._shift_today_iso()
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), \
+         _flags_override_load_flags(COORDINATOR_DM_ROUTING_ENABLED=True, BARTEK_USER_ID=None), \
+         _TGCapture(), _TGSendCapture() as tgsend:
+        _seed_record(today_iso, "Mykyta K.", "999", scheduled="2026-05-04T14:00:00+02:00")
+        st = _make_state(admin_id="123456")
+        cb = _make_cb("SHIFT_START_NO", "999")
+        asyncio.run(telegram_approver.handle_callback(st, "SHIFT_START_NO", "999", cb))
+        assert len(tgsend.calls) == 1, f"expected 1 alert send, got {tgsend.calls}"
+        assert tgsend.calls[0]["chat_id"] == 123456, \
+            f"alert should fallback to group {tgsend.calls[0]}"
+
+
+t("no_show_alert_falls_back_to_group_when_user_id_missing",
+  test_no_show_alert_falls_back_to_group_when_user_id_missing)
+
+
+def test_no_show_alert_falls_back_to_group_when_flag_disabled():
+    """TB-1: flag False (default) + BARTEK_USER_ID=999 → group fallback."""
+    today_iso = telegram_approver._shift_today_iso()
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), \
+         _flags_override_load_flags(COORDINATOR_DM_ROUTING_ENABLED=False, BARTEK_USER_ID=999), \
+         _TGCapture(), _TGSendCapture() as tgsend:
+        _seed_record(today_iso, "Mykyta K.", "999", scheduled="2026-05-04T14:00:00+02:00")
+        st = _make_state(admin_id="123456")
+        cb = _make_cb("SHIFT_START_NO", "999")
+        asyncio.run(telegram_approver.handle_callback(st, "SHIFT_START_NO", "999", cb))
+        assert tgsend.calls[0]["chat_id"] == 123456, \
+            f"flag disabled = group fallback, got {tgsend.calls[0]}"
+
+
+t("no_show_alert_falls_back_to_group_when_flag_disabled",
+  test_no_show_alert_falls_back_to_group_when_flag_disabled)
+
+
+def test_no_show_alert_dm_failure_triggers_group_fallback():
+    """TB-1: DM send returns False (Bartek blocked bot) → auto-fallback do grupy.
+    Verify dwa calls: pierwszy do DM (fail), drugi do grupy (success)."""
+    today_iso = telegram_approver._shift_today_iso()
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), \
+         _flags_override_load_flags(COORDINATOR_DM_ROUTING_ENABLED=True, BARTEK_USER_ID=999), \
+         _TGCapture(), _TGSendCapture(fail_first_n=1) as tgsend:
+        _seed_record(today_iso, "Mykyta K.", "999", scheduled="2026-05-04T14:00:00+02:00")
+        st = _make_state(admin_id="123456")
+        cb = _make_cb("SHIFT_START_NO", "999")
+        asyncio.run(telegram_approver.handle_callback(st, "SHIFT_START_NO", "999", cb))
+        assert len(tgsend.calls) == 2, \
+            f"expected 2 sends (DM fail + group fallback), got {tgsend.calls}"
+        assert tgsend.calls[0]["chat_id"] == 999, "first send to Bartek DM"
+        assert tgsend.calls[1]["chat_id"] == 123456, "second send to group fallback"
+
+
+t("no_show_alert_dm_failure_triggers_group_fallback",
+  test_no_show_alert_dm_failure_triggers_group_fallback)
+
+
+# ============================================================
+# TB-3 (2026-05-05): /poprawa [cid] command (6 tests)
+# ============================================================
+
+def test_poprawa_valid_cid_was_declined():
+    """TB-3: kurier kliknął NIE (decision=False) → /poprawa odwołuje, decision=True."""
+    today_iso = telegram_approver._shift_today_iso()
+    with isolated_shift_state(), _FlagOverride(MANUAL_POPRAWA_COMMAND_ENABLED=True):
+        _seed_record(today_iso, "Bartek O.", "123",
+                     scheduled="2026-05-05T09:00:00+02:00",
+                     decision=False, confirmed_for_shift=False)
+        msg = {"from": {"id": 8765130486}, "text": "/poprawa 123"}
+        reply = telegram_approver._handle_poprawa_command(_make_state(), msg, "/poprawa 123")
+        assert reply is not None and "✅" in reply and "Potwierdzony" in reply, \
+            f"expected ✅ + Potwierdzony, got {reply!r}"
+        rec = shift_state.find_record_for_cid(_read_state()["start_notified"], today_iso, "123")
+        assert rec["decision"] is True
+        assert rec["confirmed_for_shift"] is True
+        assert rec["unconfirmed_default"] is False
+        assert rec.get("reverted_via_poprawa_at") is not None
+        assert rec.get("reverted_by") == "8765130486"
+
+
+t("poprawa_valid_cid_was_declined", test_poprawa_valid_cid_was_declined)
+
+
+def test_poprawa_valid_cid_already_confirmed_idempotent():
+    """TB-3: kurier już potwierdził (decision=True) → /poprawa no-op + ℹ message."""
+    today_iso = telegram_approver._shift_today_iso()
+    with isolated_shift_state(), _FlagOverride(MANUAL_POPRAWA_COMMAND_ENABLED=True):
+        _seed_record(today_iso, "Bartek O.", "123",
+                     scheduled="2026-05-05T09:00:00+02:00",
+                     decision=True, confirmed_for_shift=True)
+        msg = {"from": {"id": 8765130486}, "text": "/poprawa 123"}
+        reply = telegram_approver._handle_poprawa_command(_make_state(), msg, "/poprawa 123")
+        assert reply is not None and "ℹ" in reply and "już potwierdzony" in reply, \
+            f"expected ℹ already confirmed, got {reply!r}"
+        rec = shift_state.find_record_for_cid(_read_state()["start_notified"], today_iso, "123")
+        assert rec["decision"] is True
+        assert rec.get("reverted_via_poprawa_at") is None, "no mutation expected"
+
+
+t("poprawa_valid_cid_already_confirmed_idempotent",
+  test_poprawa_valid_cid_already_confirmed_idempotent)
+
+
+def test_poprawa_invalid_cid_not_in_today_schedule():
+    """TB-3: cid spoza dzisiejszego start_notified → ⚠ Nie znaleziono."""
+    today_iso = telegram_approver._shift_today_iso()
+    with isolated_shift_state(), _FlagOverride(MANUAL_POPRAWA_COMMAND_ENABLED=True):
+        # No _seed_record — empty bucket
+        msg = {"from": {"id": 8765130486}, "text": "/poprawa 99999"}
+        reply = telegram_approver._handle_poprawa_command(_make_state(), msg, "/poprawa 99999")
+        assert reply is not None and "⚠" in reply and "Nie znaleziono" in reply, \
+            f"expected ⚠ not found, got {reply!r}"
+
+
+t("poprawa_invalid_cid_not_in_today_schedule",
+  test_poprawa_invalid_cid_not_in_today_schedule)
+
+
+def test_poprawa_courier_undecided_no_op():
+    """TB-3: decision=None (kurier nie odpowiedział TAK/NIE) → /poprawa nie pasuje."""
+    today_iso = telegram_approver._shift_today_iso()
+    with isolated_shift_state(), _FlagOverride(MANUAL_POPRAWA_COMMAND_ENABLED=True):
+        _seed_record(today_iso, "Bartek O.", "123",
+                     scheduled="2026-05-05T09:00:00+02:00",
+                     decision=None, confirmed_for_shift=None)
+        msg = {"from": {"id": 8765130486}, "text": "/poprawa 123"}
+        reply = telegram_approver._handle_poprawa_command(_make_state(), msg, "/poprawa 123")
+        assert reply is not None and "⚠" in reply and "nie ma 'Nie przyjdzie'" in reply, \
+            f"expected ⚠ undecided, got {reply!r}"
+        rec = shift_state.find_record_for_cid(_read_state()["start_notified"], today_iso, "123")
+        assert rec["decision"] is None, "no mutation expected"
+
+
+t("poprawa_courier_undecided_no_op", test_poprawa_courier_undecided_no_op)
+
+
+def test_poprawa_disabled_when_flag_false():
+    """TB-3: flag False (default) → silent return None bez sprawdzania state."""
+    with isolated_shift_state(), _FlagOverride(MANUAL_POPRAWA_COMMAND_ENABLED=False):
+        msg = {"from": {"id": 8765130486}, "text": "/poprawa 123"}
+        reply = telegram_approver._handle_poprawa_command(_make_state(), msg, "/poprawa 123")
+        assert reply is None, f"flag disabled → silent, got {reply!r}"
+
+
+t("poprawa_disabled_when_flag_false", test_poprawa_disabled_when_flag_false)
+
+
+def test_poprawa_unauthorized_user_silently_ignored():
+    """TB-3: sender_id ∉ KONIEC_AUTHORIZED_USER_IDS → silent reject (mirror /koniec)."""
+    today_iso = telegram_approver._shift_today_iso()
+    with isolated_shift_state(), _FlagOverride(MANUAL_POPRAWA_COMMAND_ENABLED=True):
+        _seed_record(today_iso, "Bartek O.", "123",
+                     scheduled="2026-05-05T09:00:00+02:00",
+                     decision=False, confirmed_for_shift=False)
+        msg = {"from": {"id": 11111}, "text": "/poprawa 123"}  # NOT 8765130486
+        reply = telegram_approver._handle_poprawa_command(_make_state(), msg, "/poprawa 123")
+        assert reply is None, f"unauthorized → silent None, got {reply!r}"
+        rec = shift_state.find_record_for_cid(_read_state()["start_notified"], today_iso, "123")
+        assert rec["decision"] is False, "no mutation expected"
+
+
+t("poprawa_unauthorized_user_silently_ignored",
+  test_poprawa_unauthorized_user_silently_ignored)
 
 
 # ============================================================
