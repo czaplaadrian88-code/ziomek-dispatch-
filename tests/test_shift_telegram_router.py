@@ -24,18 +24,20 @@ Coverage (14 obligatory):
 Custom-runner pattern (matches tests/test_auto_koord.py — no pytest dep).
 """
 import sys
+from pathlib import Path
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # for _shift_test_helpers
 
 import asyncio
 import json
 import os
 import tempfile
 import threading
-from pathlib import Path
 
 from dispatch_v2 import telegram_approver
 from dispatch_v2.telegram import templates
 from dispatch_v2.shift_notifications import state as shift_state
+from _shift_test_helpers import isolated_shift_state
 
 
 passed, failed = 0, 0
@@ -59,33 +61,11 @@ def t(name, fn):
 
 # ---------------- helpers ----------------
 
-class _StateOverride:
-    """Context manager: redirect shift_state.STATE_FILE + LEARNING_LOG to tmp.
-
-    Usage:
-        with _StateOverride() as ov:
-            ...  # ov.tmpdir / ov.state_file accessible
-    """
-    def __init__(self):
-        self.tmpdir = None
-        self.state_file_orig = shift_state.STATE_FILE
-        self.learning_log_orig = shift_state.LEARNING_LOG
-
-    def __enter__(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="shift_test_")
-        shift_state.STATE_FILE = Path(self.tmpdir) / "shift_confirmations.json"
-        shift_state.LEARNING_LOG = Path(self.tmpdir) / "learning_log.jsonl"
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        shift_state.STATE_FILE = self.state_file_orig
-        shift_state.LEARNING_LOG = self.learning_log_orig
-        # best-effort cleanup
-        try:
-            import shutil
-            shutil.rmtree(self.tmpdir, ignore_errors=True)
-        except Exception:
-            pass
+# TB-2 unification (2026-05-05): _StateOverride class wycofany,
+# zastąpiony przez `isolated_shift_state()` context manager z
+# tests/_shift_test_helpers.py (shared z test_shift_notifications.py).
+# Pre-fix bug: orig path był zapisywany w __init__ (NIE __enter__) — między
+# init a enter inny test mógł zmienić module-level constants. See Lekcja #71.
 
 
 class _FlagOverride:
@@ -223,7 +203,7 @@ t("template_alert_no_show_mentions_bartek", test_template_alert_no_show_mentions
 
 def test_callback_router_existing_assign_unchanged():
     """ASSIGN:469087:413:15 must still flow through old path (state['pending'] lookup → 'Unknown' if missing)."""
-    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=False), _TGCapture() as tg:
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=False), _TGCapture() as tg:
         st = _make_state()
         cb = _make_cb("ASSIGN", "469087:413:15")
         # Run via top-level dispatcher action="ASSIGN", oid="469087:413:15"
@@ -239,7 +219,7 @@ t("callback_router_existing_assign_unchanged", test_callback_router_existing_ass
 
 def test_callback_router_existing_inny_unchanged():
     """INNY:wrong_direction:469087 must flow through legacy INNY parsing."""
-    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=False), _TGCapture() as tg:
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=False), _TGCapture() as tg:
         st = _make_state()
         cb = _make_cb("INNY", "wrong_direction:469087")
         asyncio.run(telegram_approver.handle_callback(st, "INNY", "wrong_direction:469087", cb))
@@ -253,7 +233,7 @@ t("callback_router_existing_inny_unchanged", test_callback_router_existing_inny_
 
 def test_callback_router_existing_koord_unchanged():
     """KOORD:469087 must flow through legacy KOORD path."""
-    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=False), _TGCapture() as tg:
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=False), _TGCapture() as tg:
         st = _make_state()
         cb = _make_cb("KOORD", "469087")
         asyncio.run(telegram_approver.handle_callback(st, "KOORD", "469087", cb))
@@ -270,7 +250,7 @@ t("callback_router_existing_koord_unchanged", test_callback_router_existing_koor
 
 def test_callback_router_shift_start_ok_writes_confirmed():
     today_iso = telegram_approver._shift_today_iso()
-    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), _TGCapture() as tg, _TGSendCapture() as tgsend:
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), _TGCapture() as tg, _TGSendCapture() as tgsend:
         _seed_record(today_iso, "Mateusz O.", "413", scheduled="2026-05-04T14:00:00+02:00")
         st = _make_state()
         cb = _make_cb("SHIFT_START_OK", "413")
@@ -292,7 +272,7 @@ t("callback_router_shift_start_ok_writes_confirmed",
 
 def test_callback_router_shift_start_no_triggers_alert_to_bartek():
     today_iso = telegram_approver._shift_today_iso()
-    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), _TGCapture() as tg, _TGSendCapture() as tgsend:
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), _TGCapture() as tg, _TGSendCapture() as tgsend:
         _seed_record(today_iso, "Mykyta K.", "999", scheduled="2026-05-04T14:00:00+02:00")
         st = _make_state(admin_id="123456")
         cb = _make_cb("SHIFT_START_NO", "999")
@@ -320,7 +300,7 @@ def test_callback_router_shift_taskb_authorized_via_dm():
     klikał TAK → security gate odrzucał '⛔ unauthorized', handler nigdy
     nie executed, decision=null zostawał."""
     today_iso = telegram_approver._shift_today_iso()
-    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), _TGCapture() as tg, _TGSendCapture():
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), _TGCapture() as tg, _TGSendCapture():
         _seed_record(today_iso, "Bartek O.", "123",
                      scheduled="2026-05-05T09:00:00+02:00")
         # state["admin_id"] = grupa NadajeSz (NIE Adrian DM)
@@ -356,7 +336,7 @@ t("callback_router_shift_taskb_authorized_via_dm",
 def test_callback_router_simultaneous_clicks_idempotent():
     """Two threads clicking SHIFT_START_OK — first wins, second sees 'już zapisane'."""
     today_iso = telegram_approver._shift_today_iso()
-    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), _TGCapture() as tg, _TGSendCapture():
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), _TGCapture() as tg, _TGSendCapture():
         _seed_record(today_iso, "Pavlo S.", "777")
         st = _make_state()
         # Click 1
@@ -385,7 +365,7 @@ t("callback_router_simultaneous_clicks_idempotent",
 
 def test_koniec_authorized_user_extends_to_ended():
     today_iso = telegram_approver._shift_today_iso()
-    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True,
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True,
                                           MANUAL_KONIEC_COMMAND_ENABLED=True):
         _seed_record(today_iso, "Adrian R.", "555",
                      bucket="end_notified", shift_extended=True,
@@ -408,7 +388,7 @@ t("koniec_authorized_user_extends_to_ended", test_koniec_authorized_user_extends
 
 def test_koniec_unauthorized_user_silently_ignored():
     today_iso = telegram_approver._shift_today_iso()
-    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True,
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True,
                                           MANUAL_KONIEC_COMMAND_ENABLED=True):
         _seed_record(today_iso, "Adrian R.", "555",
                      bucket="end_notified", shift_extended=True)
@@ -427,7 +407,7 @@ t("koniec_unauthorized_user_silently_ignored", test_koniec_unauthorized_user_sil
 
 def test_koniec_disabled_when_flag_false():
     today_iso = telegram_approver._shift_today_iso()
-    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True,
+    with isolated_shift_state(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True,
                                           MANUAL_KONIEC_COMMAND_ENABLED=False):
         _seed_record(today_iso, "Adrian R.", "555",
                      bucket="end_notified", shift_extended=True)

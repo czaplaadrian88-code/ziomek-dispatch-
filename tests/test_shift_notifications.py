@@ -14,11 +14,13 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # for _shift_test_helpers
 
 from dispatch_v2.shift_notifications import grouping as grouping_mod
 from dispatch_v2.shift_notifications import state as state_mod
 from dispatch_v2.shift_notifications import worker as worker_mod
 from dispatch_v2.shift_notifications.grouping import Candidate, bucket_by_slot
+from _shift_test_helpers import isolated_shift_state
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 passed, failed = 0, 0
@@ -43,31 +45,10 @@ def t(name, fn):
 # --------- Helpers --------------------------------------------------------
 
 
-class _StateIsolator:
-    """Context manager: redirects state_mod.STATE_FILE + LEARNING_LOG to tmpdir."""
-
-    def __init__(self):
-        self.tmpdir = None
-        self.orig_state = None
-        self.orig_log = None
-
-    def __enter__(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="shift_notify_test_")
-        self.orig_state = state_mod.STATE_FILE
-        self.orig_log = state_mod.LEARNING_LOG
-        state_mod.STATE_FILE = Path(self.tmpdir) / "shift_confirmations.json"
-        state_mod.LEARNING_LOG = Path(self.tmpdir) / "learning_log.jsonl"
-        return self
-
-    def __exit__(self, *exc):
-        state_mod.STATE_FILE = self.orig_state
-        state_mod.LEARNING_LOG = self.orig_log
-        # best-effort cleanup
-        import shutil
-        try:
-            shutil.rmtree(self.tmpdir)
-        except Exception:
-            pass
+# TB-2 unification (2026-05-05): _StateIsolator class wycofany,
+# zastąpiony przez `isolated_shift_state()` context manager z
+# tests/_shift_test_helpers.py (shared z test_shift_telegram_router.py).
+# See Lekcja #71.
 
 
 def _cand(name, cid, dt):
@@ -137,7 +118,7 @@ t("grouping_empty_input", test_grouping_empty_input)
 
 
 def test_state_atomic_write_then_read_roundtrip():
-    with _StateIsolator():
+    with isolated_shift_state():
         with state_mod.locked_write_confirmations() as st:
             st["start_notified"]["2026-05-05:Bartek Ołdziej"] = {
                 "cid": "123", "scheduled": "2026-05-05T09:00:00+02:00",
@@ -155,7 +136,7 @@ t("state_atomic_write_then_read_roundtrip", test_state_atomic_write_then_read_ro
 
 
 def test_state_lock_concurrent_threads_serialize():
-    with _StateIsolator():
+    with isolated_shift_state():
         N = 50
 
         def worker(thread_id):
@@ -180,7 +161,7 @@ t("state_lock_concurrent_threads_serialize", test_state_lock_concurrent_threads_
 
 
 def test_state_corrupt_file_returns_empty():
-    with _StateIsolator():
+    with isolated_shift_state():
         state_mod.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(state_mod.STATE_FILE, "w") as f:
             f.write("{ this is not json !!!")
@@ -213,7 +194,7 @@ t("state_find_record_for_cid_filters_by_today", test_state_find_record_for_cid_f
 
 
 def test_state_append_learning_log_appends():
-    with _StateIsolator():
+    with isolated_shift_state():
         state_mod.append_learning_log({"event": "TEST_A", "x": 1})
         state_mod.append_learning_log({"event": "TEST_B", "y": 2})
         with open(state_mod.LEARNING_LOG) as f:
@@ -282,7 +263,7 @@ def _install_worker_stubs(monkey_flags=None, schedule=None, send_calls=None):
 
 
 def test_worker_master_flag_off_no_op():
-    with _StateIsolator():
+    with isolated_shift_state():
         sched_called = {"v": False}
 
         def tracking_load_schedule():
@@ -307,7 +288,7 @@ t("worker_master_flag_off_no_op", test_worker_master_flag_off_no_op)
 
 
 def test_worker_t60_start_window_inclusive():
-    with _StateIsolator():
+    with isolated_shift_state():
         # We pin 'now' via injecting datetime via schedule timing instead of patching:
         # build a schedule where Adrian starts T-60 (mid-window IN), Bartek starts T-67 (OUT).
         # Use mid-window (60 min) to avoid edge flicker from sub-second drift between
@@ -352,7 +333,7 @@ t("worker_t60_start_window_inclusive", test_worker_t60_start_window_inclusive)
 
 
 def test_worker_t60_start_idempotent():
-    with _StateIsolator():
+    with isolated_shift_state():
         now = datetime.now(WARSAW).replace(second=0, microsecond=0)
         in_dt = now + timedelta(minutes=60)
         if in_dt.date() != now.date():
@@ -389,7 +370,7 @@ t("worker_t60_start_idempotent", test_worker_t60_start_idempotent)
 
 
 def test_worker_t60_start_unmapped_cid_logs_and_skips():
-    with _StateIsolator():
+    with isolated_shift_state():
         now = datetime.now(WARSAW).replace(second=0, microsecond=0)
         in_dt = now + timedelta(minutes=60)
         if in_dt.date() != now.date():
@@ -428,7 +409,7 @@ t("worker_t60_start_unmapped_cid_logs_and_skips", test_worker_t60_start_unmapped
 
 
 def test_worker_t30_reminder_only_for_undecided():
-    with _StateIsolator():
+    with isolated_shift_state():
         now = datetime.now(WARSAW).replace(second=0, microsecond=0)
         # Two couriers: both at T-30 from now. One has decision=True (no reminder),
         # the other decision=None (reminder).
@@ -484,7 +465,7 @@ t("worker_t30_reminder_only_for_undecided", test_worker_t30_reminder_only_for_un
 
 
 def test_worker_unconfirmed_default_at_t0():
-    with _StateIsolator():
+    with isolated_shift_state():
         now = datetime.now(WARSAW).replace(second=0, microsecond=0)
         # scheduled in past (5 min ago), decision still None
         past_dt = now - timedelta(minutes=5)
@@ -518,7 +499,7 @@ t("worker_unconfirmed_default_at_t0", test_worker_unconfirmed_default_at_t0)
 
 
 def test_worker_t60_end_window_and_individual_only():
-    with _StateIsolator():
+    with isolated_shift_state():
         now = datetime.now(WARSAW).replace(second=0, microsecond=0)
         end_dt = now + timedelta(minutes=60)
         if end_dt.date() != now.date():
