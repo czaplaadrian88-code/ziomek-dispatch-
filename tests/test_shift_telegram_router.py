@@ -312,6 +312,47 @@ t("callback_router_shift_start_no_triggers_alert_to_bartek",
   test_callback_router_shift_start_no_triggers_alert_to_bartek)
 
 
+def test_callback_router_shift_taskb_authorized_via_dm():
+    """TASK B Phase 2 fix (2026-05-05): SHIFT_* callback z prywatnego DM
+    Adriana (chat_id=user_id, NIE state['admin_id'] grupy) musi być
+    authorized via KONIEC_AUTHORIZED_USER_IDS whitelist. Bug pre-fix:
+    worker wysyłał T-60 START do ADRIAN_CHAT_ID_FALLBACK (DM), Adrian
+    klikał TAK → security gate odrzucał '⛔ unauthorized', handler nigdy
+    nie executed, decision=null zostawał."""
+    today_iso = telegram_approver._shift_today_iso()
+    with _StateOverride(), _FlagOverride(SHIFT_NOTIFY_ENABLED=True), _TGCapture() as tg, _TGSendCapture():
+        _seed_record(today_iso, "Bartek O.", "123",
+                     scheduled="2026-05-05T09:00:00+02:00")
+        # state["admin_id"] = grupa NadajeSz (NIE Adrian DM)
+        st = _make_state(admin_id="-5149910559")
+        # callback przychodzi z prywatnego DM Adriana (chat.id = user_id 8765130486)
+        cb = {
+            "id": "test_cb_id_dm",
+            "data": "SHIFT_START_OK:123",
+            "from": {"id": 8765130486, "first_name": "Adrian"},
+            "message": {"chat": {"id": 8765130486}, "message_id": 999},
+        }
+        # Sanity: 8765130486 musi być w KONIEC_AUTHORIZED_USER_IDS
+        assert 8765130486 in telegram_approver.KONIEC_AUTHORIZED_USER_IDS
+        asyncio.run(telegram_approver.handle_callback(st, "SHIFT_START_OK", "123", cb))
+        # Handler MUSI execute mimo że chat != admin_id (DM-via-whitelist auth)
+        result = _read_state()
+        rec = shift_state.find_record_for_cid(result["start_notified"], today_iso, "123")
+        assert rec is not None, f"record missing — handler nie executed: {result}"
+        assert rec["decision"] is True, f"decision powinno być True post-handler, got {rec}"
+        assert rec["confirmed_for_shift"] is True, f"confirmed_for_shift True expected, got {rec}"
+        # answerCallbackQuery feedback NIE może być '⛔ unauthorized'
+        feedback_calls = [c for c in tg.calls if c["method"] == "answerCallbackQuery"]
+        assert len(feedback_calls) >= 1, f"expected answerCallbackQuery, got {tg.calls}"
+        for c in feedback_calls:
+            text = (c.get("payload") or {}).get("text", "")
+            assert "unauthorized" not in text.lower(), \
+                f"DM callback z authorized user_id NIE powinno być unauthorized: {c}"
+t("callback_router_shift_taskb_authorized_via_dm",
+  test_callback_router_shift_taskb_authorized_via_dm)
+
+
+
 def test_callback_router_simultaneous_clicks_idempotent():
     """Two threads clicking SHIFT_START_OK — first wins, second sees 'już zapisane'."""
     today_iso = telegram_approver._shift_today_iso()

@@ -1901,10 +1901,20 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
             oid = parts[-1]  # best-effort: trailing segment as oid
 
     # Security: weryfikacja chat_id + logowanie from_id (F2.2)
+    # TASK B Phase 2 fix (2026-05-05): SHIFT_* callbacks mogą iść z DM
+    # (worker target = ADRIAN_CHAT_ID_FALLBACK, NIE state["admin_id"] grupy).
+    # Legacy ASSIGN/INNY/KOORD bez zmian — zawsze grupa.
     cb_chat_id = str(((cb.get("message") or {}).get("chat") or {}).get("id", ""))
     cb_from_id = str((cb.get("from") or {}).get("id", ""))
     cb_from_name = (cb.get("from") or {}).get("first_name", "?")
-    if cb_chat_id != str(state["admin_id"]):
+    _SHIFT_TASKB_PREFIXES = ("SHIFT_START_", "SHIFT_END_", "SHIFT_REMINDER_")
+    is_taskb_action = action.startswith(_SHIFT_TASKB_PREFIXES)
+    cb_user_id_int = int(cb_from_id) if cb_from_id.isdigit() else None
+    is_authorized = (
+        cb_chat_id == str(state["admin_id"])
+        or (is_taskb_action and cb_user_id_int in KONIEC_AUTHORIZED_USER_IDS)
+    )
+    if not is_authorized:
         _log.warning(
             f"SECURITY: callback from unauthorized chat={cb_chat_id} "
             f"user={cb_from_id}({cb_from_name}) action={action} oid={oid}"
