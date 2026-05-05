@@ -1,10 +1,85 @@
-# CLAUDE.md — V3.27.6 LIVE state (post-sprint 28.04 wieczór)
+# CLAUDE.md — TASK B SHIFT NOTIFICATIONS Phase 0+1 LIVE (post-sprint 04.05 wieczór)
 
-**Data:** 28.04.2026 ~21:05 Warsaw (V3.27.6 Path C + diagnostic assertion close)
-**Latest tag:** `v3276-path-c-and-diagnostic-assertion-2026-04-28`
-**Latest commit:** `bf06749`
-**HANDOFF FILE:** `/tmp/v3276_session_handoff_2026-04-29_morning.md` (READ FIRST jutro)
-**Pending:** lunch peak validation 29.04 12-14 (V3.27.6 empirical verdict H2 vs H4) + TECH_DEBT #20 background login refresh sprint 29.04 8:00-9:30
+**Data:** 04.05.2026 ~22:45 UTC (Phase 1 deploy close, jutro 06:00 UTC pierwsze REAL T-60 STARTs)
+**Latest tags:** `task-b-phase0-complete-2026-05-04` (master milestone) + `task-b-shift-notifications-worker-2026-05-04` + `task-b-telegram-router-extension-2026-05-04`
+**Latest commits:** `5be1085` (telegram router) + `27f8a2e` (worker module)
+**Project memory:** `project_task_b_shift_notifications_2026-05-04.md` (READ FIRST jutro)
+**Pending:** Bartek user_id dla `KONIEC_AUTHORIZED_USER_IDS`, tech-debt test-isolation pattern (test 7 corrupt residual)
+
+---
+
+## TASK B SHIFT NOTIFICATIONS — sprint summary 04.05.2026 wieczór
+
+**Context:** Pre-condition dla Faza 7-AUTO-PROXIMITY (Tydzień 2-3). Adrian wymaga aby Ziomek zanim ruszy autonomously dispatch'ować, najpierw wiedział kto pracuje. Shift notifications dają T-60 START + T-30 REMINDER + T-60 END + `/koniec` cmd jako mechanism do gathering `confirmed_for_shift` flagi per kurier per dzień.
+
+**Sprint chronologia (~4h, 21:46 → 22:45 UTC):**
+
+| Faza | Czas | Działania |
+|---|---|---|
+| ACK GATE 1 | 21:46-22:10 | Pre-flight diagnostic (services 7/7, reconciliation worker, schedule cache T3 hot-refresh confirmed NIE regression); GHOST 469087 manual cleanup (state.picked_up→delivered, atomic write z fcntl, history append `MANUAL_GHOST_CLEANUP_2026-05-04`); reconciliation post-cleanup `ghosts_total: 0`; tests baseline 934 PASS / 20 pre-existing FAIL — 0 nowych regresji od TASK 1-4 sprint |
+| ACK GATE 2 | 22:10-22:18 | 2 agenty równolegle: Plan agent (5 components B.1-B.5 design + 30 testów + 8 edge cases + 6-fazowy deploy plan + 5 risks) + tests baseline runner (29 custom-runner files identified, 105 total tests) |
+| Phase 0 | 22:18-22:30 | 2 agenty implementation równolegle (rozłączne pliki: Agent A `shift_notifications/` worker module + Agent B `telegram/` + `telegram_approver.py` extension); 2 commits + 3 tags w master; flags.json patch 7 keys defaults FALSE; systemd installed disabled+inactive |
+| Phase 1 | 22:30-22:45 | 2 agenty deploy równolegle: Agent A restart `dispatch-telegram` (PID 510478→1338608 @ 22:33:29 UTC, time-to-ready <1s, 14/14 router + 13/13 auto_koord regression PASS); Agent B flip 5 flag TRUE + enable+start `dispatch-shift-notify.timer` (10/10 ticks success @ 22:35-22:44 UTC, NRestarts=0, CPU/tick ~206ms) |
+
+**5 components LIVE:**
+- **B.1 T-60 START** (cron 1-min, batch ≥3 w 10-min slot)
+- **B.2 T-30 REMINDER** (no-decision couriers, always individual)
+- **B.3 T-60 END** ([Kończy]/[Zostaje dłużej], hard cutoff dispatch)
+- **B.4 `/koniec [cid]`** cmd (manual cutoff dla shift_extended)
+- **B.5 templates.py** (5 pure functions, mobile-readable)
+
+**Tests:** 30 nowe (16 worker + 14 router) + 25 regression bezpośredni (13 auto_koord + 12 reconciliation) + 934 baseline pytest (20 pre-existing FAIL, 0 nowe).
+
+**Architectural decisions:**
+- TEST_MODE skipped wieczorem — zero ryzyka realnego send (żaden shift nie pasuje T-60 oknu wieczorem)
+- Worker reads flags fresh per tick (oneshot systemd, fresh process per minute) — flag flip = natychmiastowy efekt bez restart
+- Schedule consumed via `load_schedule()` (T3 hot-refresh 10-min TTL, fail-open, NIE bypass)
+- Templates lazy import w worker.py z `_Stub` fallback (rollout-window crash-safe)
+- Idempotency w callback handlers: `decision != None` gate via fcntl.LOCK_EX (Edge-4 race-safe)
+
+**Stan flag (LIVE od 04.05.2026 ~22:34 UTC w `/scripts/flags.json`):**
+
+```json
+{
+  "SHIFT_NOTIFY_ENABLED": true,
+  "SHIFT_NOTIFY_T60_START_ENABLED": true,
+  "SHIFT_NOTIFY_T30_REMINDER_ENABLED": true,
+  "SHIFT_NOTIFY_T60_END_ENABLED": true,
+  "MANUAL_KONIEC_COMMAND_ENABLED": true,
+  "SHIFT_BATCH_WINDOW_MIN": 10,
+  "SHIFT_BATCH_MIN_COURIERS": 3
+}
+```
+
+**Services LIVE:**
+- `dispatch-telegram.service` — restart 22:33:29 UTC z TASK B router extension; ASSIGN/INNY/KOORD legacy paths untouched
+- `dispatch-shift-notify.timer` — enabled+active (1-min interval); worker tickuje no-op overnight
+
+**Pierwszy REAL fire:** jutro **06:00 UTC = 08:00 lokalnie** dla shifts 09:00 lokalnie (Michał Karpiuk + Dawid Krajewski) — pewnie 2 individual messages (poniżej batch threshold ≥3).
+
+**Rollback (per-flag, surgical, no restart wymagany):**
+
+```bash
+# Quick: flip SHIFT_NOTIFY_ENABLED=false w flags.json — worker auto-detect next tick
+python3 -c "import json; p='/root/.openclaw/workspace/scripts/flags.json'; d=json.load(open(p)); d['SHIFT_NOTIFY_ENABLED']=False; json.dump(d, open(p,'w'), indent=2, ensure_ascii=False)"
+
+# Full: disable timer + restore flags backup + restart telegram (z explicit ACK)
+sudo systemctl disable --now dispatch-shift-notify.timer
+cp /root/.openclaw/workspace/scripts/flags.json.bak-pre-task-b-2026-05-04 /root/.openclaw/workspace/scripts/flags.json
+sudo systemctl restart dispatch-telegram.service  # WYMAGA Adrian ACK
+```
+
+**Backup files (24h retention):**
+- `dispatch_v2/telegram_approver.py.bak-pre-task-b-2026-05-04`
+- `flags.json.bak-pre-task-b-2026-05-04`
+- `dispatch_state/orders_state.json.bak-pre-ghost-469087-cleanup-2026-05-04`
+
+---
+
+## V3.27.6 sprint summary — 28.04.2026 wieczór (PRESERVED)
+
+**Latest tag (pre-TASK B):** `v3276-path-c-and-diagnostic-assertion-2026-04-28`
+**HANDOFF FILE (28.04):** `/tmp/v3276_session_handoff_2026-04-29_morning.md`
 
 ---
 

@@ -1888,3 +1888,40 @@ Fix (daemon-reload only, zero service restart):
   - Jeśli spike się powtórzy (>50 MiB/h w normalnej pracy) -> deep dive (Node heapdump, profiling)
 - Threshold operacyjny: 1.5 GiB = restart przed peakiem
 - Restart procedure: cd /root/openclaw && docker compose restart openclaw-gateway
+
+## 2026-05-04 wieczór — TASK B SHIFT NOTIFICATIONS Phase 0+1 LIVE
+
+### TB-1 — Bartek user_id dla `KONIEC_AUTHORIZED_USER_IDS`
+- Plik: `dispatch_v2/telegram_approver.py` (~stała `KONIEC_AUTHORIZED_USER_IDS = [8765130486]`)
+- Obecnie hardcoded tylko Adrian (8765130486); TODO comment w kodzie
+- Bez Bartka koordynator NIE może użyć `/koniec [cid]` do zamykania extended shifts (kurier zostaje w trybie shift_extended=true do północy)
+- **Fix:** Adrian dostarcza Bartka Telegram user_id → ja edytuję stałą + restart `dispatch-telegram` (z explicit ACK Adriana per CLAUDE.md hard rule)
+- Estymacja: 5 min edit + restart
+- Priorytet: **MEDIUM** — działa bez Bartka, ale incomplete UX dla coordinator
+
+### TB-2 — Test isolation: testy używają real STATE_FILE zamiast tempfile
+- Plik: `dispatch_v2/tests/test_shift_notifications.py` (test 7 `test_state_corrupt_file_returns_empty`)
+- Test zapisuje garbage do **prod** path `/root/.openclaw/workspace/dispatch_state/shift_confirmations.json` żeby zwerifikować fallback do `{}`
+- Skutek 04.05 wieczór: po teście prod state file pozostał corrupt; worker self-heal'ował przy pierwszym tick (defense-in-depth zadziałało) — zero impact prod, ale defekt testów
+- **Lekcja kandydat #71:** Testy które touchują plikowy state MUSZĄ używać `tempfile.mkdtemp()` + monkey-patch path constant. Reuse pattern z `test_v319c_sub_c.py:21` (`pr.ORDERS_STATE_PATH = _TMPDIR / "orders_state.json"`)
+- **Fix:** refactor test 7 + audit pozostałych 15 testów w `test_shift_notifications.py` na używanie temp path
+- Estymacja: 30-45 min (refactor + verify 16/16 still pass)
+- Priorytet: **LOW** — defense-in-depth w worker.py + state.py absorpcji corrupt; fix dla cleanliness/repeatability
+
+### TB-3 — Edge-2 recovery `/poprawa [cid]` cmd
+- Scenariusz: kurier dostał ❌ "Nie przyjdzie" w T-60 START callback (decision=False, confirmed_for_shift=False), ale faktycznie pojawił się na zmianie
+- Obecnie brak UI do recovery — trzeba manualnie edit `shift_confirmations.json` (ryzyko race z worker)
+- **Fix:** dodać `/poprawa [cid]` cmd do `telegram_approver.py` (mirror struktury `/koniec`):
+  - Auth check `KONIEC_AUTHORIZED_USER_IDS` (Adrian + Bartek)
+  - Pod fcntl.LOCK_EX: znajdź rec dla today_iso+cid w `start_notified`, set `decision=True`, `confirmed_for_shift=True`, append history `MANUAL_RECOVERY`
+  - Reply "✅ cid=X przywrócony"
+- Estymacja: 1h (edit + 3 testy + regression auto_koord/router)
+- Priorytet: **LOW** — rare path; w razie potrzeby przed Phase 7 ML primary flip
+
+### TB-4 — Overnight shifts handling
+- Worker.py i `parse_shift_dt` obecnie zakłada `end > start` w jednym dniu
+- Grafik Białystok 04.05 NIE ma overnight shifts (najpóźniejszy 23:00, najwcześniejszy 09:00) — feature defer'owany
+- Jeśli kiedyś pojawi się shift 23:00-07:00 → worker miss T-60 END (próbuje 06:00 same day, ale shift_end real to 07:00 next day)
+- **Fix:** dodać `if end_dt <= start_dt: end_dt += timedelta(days=1)` w worker `run_t60_end` candidate builder + worker check `now < 08:00` musi czytać yesterday's schedule entries
+- Estymacja: 1h (edit + 2 nowe testy edge-6)
+- Priorytet: **DEFER** — implementuj gdy pierwszy overnight shift pojawi się w grafiku
