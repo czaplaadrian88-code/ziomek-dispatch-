@@ -1108,6 +1108,17 @@ ENABLE_V324B_CZASOWKA_SCHEDULER = _os.environ.get(
 CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES = _os.environ.get(
     "CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", "0") == "1"
 
+# Faza 7-AUTO-PROXIMITY (2026-05-06, post-pivot 03.05 rule-based autonomy).
+# Spec: eod_drafts/2026-05-06/faza_7_auto_proximity_design_spec.md
+#
+# AUTO_PROXIMITY_POST_SHIFT_5MIN: Adrian decyzja A1 — kurier 5+ min po shift_start
+# z pos=None (brak GPS) → synthetic position (BIALYSTOK_CENTER) + pos_source
+# "post_shift_start_synthetic". Pozwala AUTO klasyfikatorowi rozważyć kuriera
+# który operacyjnie pracuje ale ma offline GPS. Default False — shadow tydzień
+# włącza calibration mode.
+ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN = _os.environ.get(
+    "ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN", "0") == "1"
+
 
 def get_flag_czasowka_proactive_use_all_candidates() -> bool:
     return flag("CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", default=False)

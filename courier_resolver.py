@@ -560,12 +560,59 @@ def _shift_end_dt(entry: Optional[dict]) -> Optional[datetime]:
         return None
 
 
+def _post_shift_start_synthetic_eligible(
+    cs: CourierState,
+    now_utc: datetime,
+    schedule: dict,
+    match_courier_fn,
+    shift_start_dt_fn,
+    is_on_shift_fn,
+    min_minutes: float = 5.0,
+) -> bool:
+    """Adrian decyzja 2026-05-06 (Faza 7-AUTO-PROXIMITY): kurier 5+ min po
+    shift_start z brakiem GPS → synthetic position assumption ("już jest pod
+    restauracją"). Pure check — caller mutuje cs.pos/pos_source jeśli True.
+
+    Warunki:
+    - cs.pos is None (brak GPS / fallback)
+    - cs.name w grafiku, on_shift=True
+    - now_utc >= shift_start + min_minutes
+    """
+    if cs.pos is not None:
+        return False
+    if not (schedule and cs.name and match_courier_fn and is_on_shift_fn):
+        return False
+    full_name = match_courier_fn(cs.name, schedule)
+    if not full_name:
+        return False
+    entry = schedule.get(full_name)
+    if not entry:
+        return False
+    on_shift, _reason = is_on_shift_fn(cs.name, schedule)
+    if not on_shift:
+        return False
+    shift_start = shift_start_dt_fn(entry)
+    if shift_start is None:
+        return False
+    if shift_start.tzinfo is None:
+        shift_start = shift_start.replace(tzinfo=timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    mins_since = (now_utc - shift_start).total_seconds() / 60.0
+    return mins_since >= min_minutes
+
+
 def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[CourierState]:
     """Zwraca tylko kurierow ktorych mozna scorowac (maja pozycje i sa na zmianie
     LUB zaczynają zmianę w ciągu PRE_SHIFT_WINDOW_MIN minut).
 
     TASK 3 (2026-05-04): collects fleet filter decisions dla observability layer.
     Flag-gated: OBSERVABILITY_FLEET_FILTER_LOGGING (default false, zero overhead).
+
+    Faza 7-AUTO-PROXIMITY (2026-05-06): post-shift-start synthetic position
+    enrichment — kurier 5+ min po shift_start z pos=None traktowany jako
+    "pod restauracją" (BIALYSTOK_CENTER fallback). Flag-gated:
+    ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN (default False).
     """
     import sys as _sys
     _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
@@ -585,11 +632,28 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         excluded = set()
     if fleet is None:
         fleet = build_fleet_snapshot()
+    # Faza 7 flag — read once per dispatchable_fleet() call (no per-courier cost).
+    try:
+        from dispatch_v2 import common as _C7
+        _post_shift_5min_enabled = bool(getattr(_C7, "ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN", False))
+    except Exception:
+        _post_shift_5min_enabled = False
+    _now_utc_fleet = datetime.now(timezone.utc)
     result = []
     # TASK 3: collect rejected dla observability logger (zero overhead gdy flag false)
     _rejected_for_log = []
     _passed_for_log = []
     for cs in fleet.values():
+        # Faza 7-AUTO-PROXIMITY: post-shift-start synthetic pos (Adrian decyzja 2026-05-06).
+        # Mutuje cs PRZED no-position check, żeby kurier 5+ min po starcie z brakiem
+        # GPS NIE był wyrzucony jako "no_position".
+        if _post_shift_5min_enabled and cs.pos is None and is_on_shift is not None:
+            if _post_shift_start_synthetic_eligible(
+                cs, _now_utc_fleet, schedule, match_courier, _shift_start_dt, is_on_shift
+            ):
+                cs.pos = BIALYSTOK_CENTER
+                cs.pos_source = "post_shift_start_synthetic"
+                _log.debug(f"post_shift_5min synthetic {cs.name} ({cs.courier_id})")
         if cs.pos is None:
             _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                       "reason": "no_position", "pos_source": cs.pos_source})

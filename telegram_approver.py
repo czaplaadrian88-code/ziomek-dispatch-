@@ -517,7 +517,13 @@ def _route_section(decision: dict, best: dict) -> str:
 
 
 def format_proposal(decision: dict) -> str:
-    """[PROPOZYCJA] z top3 + pickup_ready + czas deklarowany per kandydat."""
+    """[PROPOZYCJA] z top3 + pickup_ready + czas deklarowany per kandydat.
+
+    Faza 7-AUTO-PROXIMITY shadow (2026-05-06): jeśli decision.auto_route == "AUTO",
+    dodaj header line "🤖 PEWIEN — auto-przypisałbym {kurier} (margin +X)" przed
+    standard body. Adrian decyzja: chce widoczność classifier verdykt w Telegramie
+    przez tydzień shadow przed ewentualnym flagowaniem w prod.
+    """
     oid = decision.get("order_id", "?")
     rest = decision.get("restaurant") or "?"
     delivery = decision.get("delivery_address") or "—"
@@ -532,10 +538,26 @@ def format_proposal(decision: dict) -> str:
     header_tag = "[PROPOZYCJA best_effort]" if best_effort else "[PROPOZYCJA]"
     banner = "⚠️ " if best_effort else ""
 
+    # Faza 7-AUTO-PROXIMITY: shadow header line (visible during shadow week — Adrian decyzja).
+    # Pomijamy gdy auto_route != "AUTO" (ACK/ALERT default flow). Backward-compat:
+    # brak pola w decision → skip (legacy proposals nie pokazują linijki).
+    auto_route = (decision.get("auto_route") or "").upper()
+    auto_route_context = decision.get("auto_route_context") or {}
+    pewien_line: Optional[str] = None
+    if auto_route == "AUTO":
+        margin = auto_route_context.get("auto_route_score_margin")
+        tier_best = auto_route_context.get("auto_route_tier_best")
+        kurier = best.get("name") or best.get("courier_id") or "?"
+        margin_part = f" (margin +{margin:.1f})" if isinstance(margin, (int, float)) else ""
+        tier_part = f" [{tier_best}]" if tier_best else ""
+        pewien_line = f"🤖 PEWIEN — auto-przypisałbym {kurier}{tier_part}{margin_part}"
+
     lines = [
         f"{header_tag} #{oid}",
         f"{rest} → {delivery}",
     ]
+    if pewien_line is not None:
+        lines.append(pewien_line)
     if pickup_hhmm is not None:
         if pickup_in_min is not None and pickup_in_min >= 0:
             lines.append(f"🕐 Odbiór: {pickup_hhmm} (za {int(round(pickup_in_min))} min)")

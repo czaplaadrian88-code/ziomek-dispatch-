@@ -335,6 +335,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         "delivery_address": result.delivery_address,
         "verdict": result.verdict,
         "reason": result.reason,
+        # Faza 7-AUTO-PROXIMITY (2026-05-06) — auto-route classification + telemetry.
+        # Caller (dispatch_pipeline) populated auto_route per spec
+        # eod_drafts/2026-05-06/faza_7_auto_proximity_design_spec.md sekcja 3.3.
+        "auto_route": getattr(result, "auto_route", "ACK"),
+        "auto_route_reason": getattr(result, "auto_route_reason", ""),
+        "auto_route_context": getattr(result, "auto_route_context", {}) or {},
         "best": None if best is None else {
             "courier_id": best.courier_id,
             "name": best.name,

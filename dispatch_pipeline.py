@@ -887,6 +887,57 @@ class PipelineResult:
     # Domyślnie 0 (early_bird path nie wchodzi w feasibility loop).
     pool_total_count: int = 0
     pool_feasible_count: int = 0
+    # Faza 7-AUTO-PROXIMITY (2026-05-06): auto-route classification dla post-PROPOSE
+    # routing. Domyślnie "ACK" — backward compat: KOORD/SKIP nie odpalają classifier.
+    # Spec: eod_drafts/2026-05-06/faza_7_auto_proximity_design_spec.md
+    auto_route: str = "ACK"
+    auto_route_reason: str = ""
+    # Classifier telemetry snapshot — populated by _classify_and_set_auto_route.
+    # Zawiera: pool_feasible, score_margin, tier_best, pos_source_best, czasowka, etc.
+    # Read-only consumption w shadow_dispatcher serialize.
+    auto_route_context: Optional[Dict[str, Any]] = field(default_factory=dict)
+
+
+def _classify_and_set_auto_route(
+    result: "PipelineResult",
+    fleet_snapshot: Optional[Dict[str, Any]],
+    order_event: Optional[Dict[str, Any]],
+    now: Optional[datetime] = None,
+) -> None:
+    """Faza 7-AUTO-PROXIMITY: populate result.auto_route + auto_route_reason.
+
+    Defensive: NIGDY raise — fallback do ACK przy any exception. Czyta flagi z
+    flags.json (hot-reload). Pure side-effect (mutates result).
+    """
+    try:
+        from dispatch_v2.auto_proximity_classifier import (
+            classify_auto_route, build_context_for_logging,
+        )
+        flags = C.load_flags()
+        route, reason = classify_auto_route(
+            result=result,
+            fleet_snapshot=fleet_snapshot,
+            now=now,
+            flags=flags,
+            order_event=order_event,
+        )
+        result.auto_route = route
+        result.auto_route_reason = reason
+        result.auto_route_context = build_context_for_logging(
+            result=result,
+            fleet_snapshot=fleet_snapshot,
+            flags=flags,
+            order_event=order_event,
+        )
+    except Exception as _e:
+        # Defense-in-depth: classifier exception NIE powinien zatrzymać dispatch.
+        result.auto_route = "ACK"
+        result.auto_route_reason = f"classifier_exception:{type(_e).__name__}"
+        result.auto_route_context = {}
+        try:
+            log.warning(f"auto_proximity classifier exception order={getattr(result, 'order_id', '?')}: {_e}")
+        except Exception:
+            pass
 
 
 def get_pickup_ready_at(
@@ -2511,7 +2562,7 @@ def _assess_order_impl(
                     f"LGBM_SHADOW oid={order_id} winner_lgbm=None winner_current={top[0].courier_id if top else None} "
                     f"agreement=None fallback=exception_in_pipeline latency_ms=0.0 pool_size=0 model_version=unknown"
                 )
-        return PipelineResult(
+        _result_pf = PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",
             reason=f"feasible={len(feasible)} best={top[0].courier_id}",
@@ -2523,6 +2574,8 @@ def _assess_order_impl(
             pool_total_count=len(candidates),
             pool_feasible_count=len(feasible),
         )
+        _classify_and_set_auto_route(_result_pf, fleet_snapshot, order_event, now=now)
+        return _result_pf
 
     # R28 best_effort: NO candidates that still produced a plan (SLA-only rejections)
     # F2.1c: verdict PROPOSE (nie KOORD) — Telegram musi to zobaczyć, Adrian decyduje
@@ -2531,7 +2584,7 @@ def _assess_order_impl(
     if with_plan:
         best = with_plan[0]
         best.best_effort = True
-        return PipelineResult(
+        _result_be = PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",
             reason=f"best_effort (0 feasible, best_violations={best.plan.sla_violations})",
@@ -2543,6 +2596,8 @@ def _assess_order_impl(
             pool_total_count=len(candidates),
             pool_feasible_count=0,
         )
+        _classify_and_set_auto_route(_result_be, fleet_snapshot, order_event, now=now)
+        return _result_be
 
     # R29 SOLO fallback: zamiast SKIP — spróbuj przydzielić SOLO (pusty bag, ignoruje R1/R5/R8)
     solo_best = None
@@ -2580,7 +2635,7 @@ def _assess_order_impl(
             pass
 
     if solo_best is not None:
-        return PipelineResult(
+        _result_solo = PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",
             reason=f"solo_fallback (R1/R5/R8 ignored, fleet_n={len(candidates)})",
@@ -2592,6 +2647,8 @@ def _assess_order_impl(
             pool_total_count=len(candidates),
             pool_feasible_count=0,
         )
+        _classify_and_set_auto_route(_result_solo, fleet_snapshot, order_event, now=now)
+        return _result_solo
 
     # R29 absolutny fallback: nikt nie przechodzi nawet solo — KOORD
     return PipelineResult(
