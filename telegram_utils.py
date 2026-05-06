@@ -10,6 +10,7 @@ NIE dotyka daily_briefing / courier_ranking — ich własne _send_telegram
 zostają jak są (drobna duplikacja boilerplate bez priorytetu refactor).
 """
 import logging
+import os
 
 from dispatch_v2 import telegram_approver
 from dispatch_v2.common import load_config
@@ -25,6 +26,13 @@ def send_admin_alert(text: str) -> bool:
     Returns True tylko gdy Telegram API zwrócił ok=True. Każdy fail point
     (brak tokena, brak admin_id, HTTP fail) logowany przez logger modułu.
     """
+    # Z2 fix 2026-05-07 (Lekcja #75): refuse to send during pytest test execution.
+    # PYTEST_CURRENT_TEST jest auto-ustawiany przez pytest per test, w produkcji nigdy.
+    # Layer 1 defense-in-depth dla testów które forget to mock telegram (06.05 spam).
+    # Opt-out dla testu wprost weryfikującego send: ALLOW_TELEGRAM_IN_TEST=1.
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("ALLOW_TELEGRAM_IN_TEST"):
+        log.warning(f"send_admin_alert blocked (pytest context, set ALLOW_TELEGRAM_IN_TEST=1 to override): {text[:80]!r}")
+        return True
     env = telegram_approver._load_env(_TELEGRAM_ENV_PATH)
     token = env.get("TELEGRAM_BOT_TOKEN", "")
     if not token:
