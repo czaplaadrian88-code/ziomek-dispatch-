@@ -128,14 +128,20 @@ def _filter_candidates(
     Filters: feasibility_verdict == MAYBE, courier_id NOT in excluded_cids,
              score >= threshold. Stable ordering (best-first if MAYBE,
              then alternatives in input order).
+
+    F3 (2026-05-06): if flag CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES is True,
+    use eval_result['all_candidates_for_proactive'] as primary source.
     """
-    cands: List[Any] = []
-    best = eval_result.get("best") if isinstance(eval_result, dict) else None
-    if best is not None:
-        cands.append(best)
-    alts = eval_result.get("alternatives") if isinstance(eval_result, dict) else None
-    if alts:
-        cands.extend(alts)
+    if flag("CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", default=False):
+        cands = eval_result.get("all_candidates_for_proactive", [])
+    else:
+        cands: List[Any] = []
+        best = eval_result.get("best") if isinstance(eval_result, dict) else None
+        if best is not None:
+            cands.append(best)
+        alts = eval_result.get("alternatives") if isinstance(eval_result, dict) else None
+        if alts:
+            cands.extend(alts)
 
     out = []
     for c in cands:

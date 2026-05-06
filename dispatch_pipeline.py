@@ -30,6 +30,7 @@ from dispatch_v2.osrm_client import haversine
 from dispatch_v2.bag_state import build_courier_bag_state, CourierBagState
 from dispatch_v2.fleet_context import build_fleet_context, FleetContext
 import math
+import os
 import threading  # V3.27.1 sesja 2: in-memory cache lock dla pre-proposal recheck
 
 # T1 (2026-05-01): bare getLogger zostawiał dispatch_pipeline INFO logs bez handlers
@@ -50,6 +51,10 @@ log = C.setup_logger("dispatch_pipeline", "/root/.openclaw/workspace/scripts/log
 _v327_pre_recheck_last_seen: Dict[str, datetime] = {}
 _v327_pre_recheck_lock = threading.Lock()
 _v327_pre_recheck_call_counter = 0
+
+# V3.29: DEFAULT_CITY z env (multi-tenant)
+DEFAULT_CITY = os.environ.get('ZIOMEK_DEFAULT_CITY', 'Białystok')
+log.info(f"V326_DEFAULT_CITY: {DEFAULT_CITY}")
 
 
 def _v327_evict_old_pre_recheck_entries(now: datetime) -> int:
@@ -314,7 +319,7 @@ def _v326_load_restaurant_district_map():
         for _, entry in data.items():
             name = (entry.get("company") or "").strip()
             street = (entry.get("street") or "").strip()
-            city = (entry.get("city") or "Białystok").strip()
+            city = (entry.get("city") or DEFAULT_CITY).strip()
             if not name:
                 continue
             district = _dza(street, city) if street else "Unknown"
@@ -418,7 +423,7 @@ def _v326_multistop_trajectory(feasible: list, new_order, order_id=None) -> list
         # Heuristic: last entry w bag_context (najnowszy assignment).
         # TODO V3.27: użyj plan.predicted_delivered_at dla precyzyjnego "last".
         last_drop_addr = bc[-1].get("delivery_address") if bc else None
-        last_drop_district = drop_zone_from_address(last_drop_addr, "Białystok")
+        last_drop_district = drop_zone_from_address(last_drop_addr, DEFAULT_CITY)
         relation, detail = classify_trajectory(
             last_drop_district, new_pickup_district, BIALYSTOK_DISTRICT_ADJACENCY
         )
@@ -1194,7 +1199,7 @@ def _assess_order_impl(
                     if _fresh is not None and _fresh != getattr(_bo, "czas_kuriera_warsaw", None):
                         _bo.czas_kuriera_warsaw = _fresh
             except Exception as _e:
-                log.warning(f"V3.27.1 pre_recheck oid_new={getattr(order, 'order_id', '?')} cid={cid} fail: {_e}")
+                log.warning(f"V3.27.1 pre_recheck oid_new={new_order.order_id} cid={cid} fail: {_e}")
                 # Defensive: continue z cached bag_sim values (zero behavior change)
 
         # POZIOM 1 same-restaurant: order w bagu ze statusem "assigned" (kurier
@@ -1867,7 +1872,7 @@ def _assess_order_impl(
                         v3273_wait_courier_max_min = _wait_273
                         v3273_wait_courier_max_oid = _str_oid_273
                         if _str_oid_273 == str(_new_oid_273):
-                            v3273_wait_courier_max_restaurant = restaurant_name
+                            v3273_wait_courier_max_restaurant = restaurant
                         else:
                             for _b_273 in bag_raw:
                                 if str(_b_273.get("order_id") or "") == _str_oid_273:

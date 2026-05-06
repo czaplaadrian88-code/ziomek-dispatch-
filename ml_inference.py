@@ -28,6 +28,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from dispatch_v2.common import ENABLE_LGBM_METRICS_READ
+
 log = logging.getLogger(__name__)
 
 WARSAW = ZoneInfo("Europe/Warsaw")
@@ -108,6 +110,54 @@ class LGBMShadowInferer:
             log.error(f"LGBMShadowInferer init fail: {e}", exc_info=True)
             self._loaded = False
 
+    # ── F4 helpers ──────────────────────────────────────────────────────────
+    def _get_candidate_attr(self, c, attr_name: str, default):
+        """Read field z metrics dict przez explicit mapping (Candidate dataclass nie ma fields)."""
+        METRICS_MAP = {
+            'bag_size': 'bag_size_before',
+            'pos_source': 'pos_source',
+            'level': 'cs_tier_label',
+            'tier_bag': 'cs_tier_bag',
+        }
+        metrics_key = METRICS_MAP.get(attr_name)
+        if metrics_key and hasattr(c, 'metrics') and isinstance(c.metrics, dict):
+            val = c.metrics.get(metrics_key)
+            if val is not None:
+                return val
+        return getattr(c, attr_name, default)
+
+    @staticmethod
+    def _derive_bag_fields(c):
+        """Returns dict {bag_drops_pending, bag_pickup_pending, bag_n_distinct_districts, bag_has_distant_drop}
+        from c.metrics['bag_context'] list. Defaults 0/False gdy brak."""
+        bc = c.metrics.get('bag_context', []) if hasattr(c, 'metrics') and isinstance(c.metrics, dict) else []
+        if not isinstance(bc, list):
+            bc = []
+        bag_drops_pending = sum(
+            1 for b in bc
+            if isinstance(b, dict) and b.get('delivered_at') is None and b.get('picked_up_at') is not None
+        )
+        bag_pickup_pending = sum(
+            1 for b in bc
+            if isinstance(b, dict) and b.get('picked_up_at') is None
+        )
+        districts = set()
+        has_distant = False
+        for b in bc:
+            if not isinstance(b, dict):
+                continue
+            d = b.get('drop_district') or b.get('district')
+            if d:
+                districts.add(d)
+            if b.get('has_distant_drop'):
+                has_distant = True
+        return {
+            'bag_drops_pending': bag_drops_pending,
+            'bag_pickup_pending': bag_pickup_pending,
+            'bag_n_distinct_districts': len(districts),
+            'bag_has_distant_drop': has_distant,
+        }
+
     def _load(self, model_path: str, encoders_path: str, feature_columns_path: str, tiers_path: str) -> None:
         """Load model + encoders + columns + tier mapping."""
         import lightgbm as lgb
@@ -167,9 +217,14 @@ class LGBMShadowInferer:
 
         try:
             # Detect fallback condition: all candidates bag=0 (single-order pool)
-            all_bag_zero = all(
-                (getattr(c, "bag_size", 0) or 0) == 0 for c in candidates
-            )
+            if ENABLE_LGBM_METRICS_READ:
+                all_bag_zero = all(
+                    (self._get_candidate_attr(c, "bag_size", 0) or 0) == 0 for c in candidates
+                )
+            else:
+                all_bag_zero = all(
+                    (getattr(c, "bag_size", 0) or 0) == 0 for c in candidates
+                )
             if all_bag_zero:
                 result.fallback_reason = "all_bag_zero"
                 self._fallback_count["all_bag_zero"] += 1
@@ -277,7 +332,11 @@ class LGBMShadowInferer:
             c_lon = getattr(c, "last_pos_lon", None) or _from_pos(getattr(c, "pos", None), 1)
             dist_road, osrm_used = self._compute_road_km(c_lat, c_lon, pickup_lat, pickup_lon)
             dist_hav = _haversine_km(c_lat, c_lon, pickup_lat, pickup_lon) * 1.42 if c_lat is not None and pickup_lat is not None else float("nan")
-            tier = self._name_to_tier.get(getattr(c, "name", None) or getattr(c, "courier_name", None)) or "unknown"
+            if ENABLE_LGBM_METRICS_READ:
+                name = self._get_candidate_attr(c, "name", None) or self._get_candidate_attr(c, "courier_name", None)
+            else:
+                name = getattr(c, "name", None) or getattr(c, "courier_name", None)
+            tier = self._name_to_tier.get(name) or "unknown"
             tier_counts[tier] += 1
             pool_rows.append({
                 "_lat": c_lat, "_lon": c_lon,
@@ -321,15 +380,27 @@ class LGBMShadowInferer:
             pr = pool_rows[i]
             c_lat = pr["_lat"]
             c_lon = pr["_lon"]
-            bag_size = int(getattr(c, "bag_size", 0) or 0)
+            if ENABLE_LGBM_METRICS_READ:
+                bag_size = int(self._get_candidate_attr(c, "bag_size", 0) or 0)
+                derived = self._derive_bag_fields(c)
+                bag_drops_pending = derived['bag_drops_pending']
+                bag_pickup_pending = derived['bag_pickup_pending']
+                bag_n_distinct_districts = derived['bag_n_distinct_districts']
+                bag_has_distant_drop = derived['bag_has_distant_drop']
+            else:
+                bag_size = int(getattr(c, "bag_size", 0) or 0)
+                bag_drops_pending = int(getattr(c, "bag_drops_pending", 0) or 0)
+                bag_pickup_pending = int(getattr(c, "bag_pickup_pending", 0) or 0)
+                bag_n_distinct_districts = int(getattr(c, "bag_n_distinct_districts", 0) or 0)
+                bag_has_distant_drop = bool(getattr(c, "bag_has_distant_drop", False))
             idle_min = getattr(c, "idle_min", None)
             district = self._district_lookup.lookup(c_lat, c_lon) if self._district_lookup else "Unknown"
             row = {
                 # Per-candidate base
                 "level": getattr(c, "level", None) or _level_from_metrics(c),
                 "bag_size": bag_size,
-                "bag_drops_pending": int(getattr(c, "bag_drops_pending", 0) or 0),
-                "bag_pickup_pending": int(getattr(c, "bag_pickup_pending", 0) or 0),
+                "bag_drops_pending": bag_drops_pending,
+                "bag_pickup_pending": bag_pickup_pending,
                 "idle_min": idle_min if idle_min is not None else -1.0,
                 "last_pos_lat": c_lat if c_lat is not None else 0.0,
                 "last_pos_lon": c_lon if c_lon is not None else 0.0,
@@ -348,8 +419,8 @@ class LGBMShadowInferer:
                 "idle_min_capped": int(min(idle_min, 30)) if idle_min is not None else -1,
                 "idle_category": _idle_category(idle_min),
                 # Bag districts proxy
-                "bag_n_distinct_districts": int(getattr(c, "bag_n_distinct_districts", 0) or 0),
-                "bag_has_distant_drop": bool(getattr(c, "bag_has_distant_drop", False)),
+                "bag_n_distinct_districts": bag_n_distinct_districts,
+                "bag_has_distant_drop": bag_has_distant_drop,
                 # Rank
                 "rank_by_dist": rank_map.get(i, len(candidates) + 1),
                 # Decision context

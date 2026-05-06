@@ -1102,6 +1102,16 @@ ENABLE_V324A_SCHEDULE_INTEGRATION = _os.environ.get(
 ENABLE_V324B_CZASOWKA_SCHEDULER = _os.environ.get(
     "ENABLE_V324B_CZASOWKA_SCHEDULER", "1") == "1"
 
+# F3 (2026-05-06): czasowka_scheduler WAIT branch structural data loss fix.
+# When True, czasowka_proactive.evaluator._filter_candidates uses
+# eval_result['all_candidates_for_proactive'] instead of best+alternatives.
+CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES = _os.environ.get(
+    "CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", "0") == "1"
+
+
+def get_flag_czasowka_proactive_use_all_candidates() -> bool:
+    return flag("CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", default=False)
+
 # V3.25 STEP B (R-01 SCHEDULE-HARDENING) — unconditional PRE-CHECK w
 # feasibility_v2 przed scoring path. Fail-CLOSED policy: cs.shift_end=None
 # lub pickup poza shift window → HARD REJECT (vs V3.24-A soft penalty).
@@ -1240,6 +1250,12 @@ ENABLE_LGBM_SHADOW = _os.environ.get("ENABLE_LGBM_SHADOW", "0") == "1"
 ENABLE_LGBM_PRIMARY = _os.environ.get("ENABLE_LGBM_PRIMARY", "0") == "1"  # Faza 7+ flip
 LGBM_SHADOW_LATENCY_HARD_CAP_MS = float(_os.environ.get("LGBM_SHADOW_LATENCY_HARD_CAP_MS", "500"))
 LGBM_SHADOW_LATENCY_SOFT_CAP_MS = float(_os.environ.get("LGBM_SHADOW_LATENCY_SOFT_CAP_MS", "200"))
+
+# F4 — LGBM Candidate signature mismatch fix (Opt 3 hack, NIE Opt 1).
+# When True, ml_inference reads bag_size etc. from c.metrics dict instead of
+# getattr(c, ...) which always returns default 0 for dispatch_pipeline.Candidate.
+# Default False — legacy getattr behavior (preserve fallback path).
+ENABLE_LGBM_METRICS_READ = _os.environ.get("ENABLE_LGBM_METRICS_READ", "0") == "1"
 
 # V3.26 Bug A complete (2026-04-25 sobota) — anchor-based distance scoring.
 # Replace chronological-last-drop effective_start_pos z chronologically-previous
