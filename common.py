@@ -1251,6 +1251,12 @@ ENABLE_LGBM_PRIMARY = _os.environ.get("ENABLE_LGBM_PRIMARY", "0") == "1"  # Faza
 LGBM_SHADOW_LATENCY_HARD_CAP_MS = float(_os.environ.get("LGBM_SHADOW_LATENCY_HARD_CAP_MS", "500"))
 LGBM_SHADOW_LATENCY_SOFT_CAP_MS = float(_os.environ.get("LGBM_SHADOW_LATENCY_SOFT_CAP_MS", "200"))
 
+# F4 — LGBM Candidate signature mismatch fix (Opt 3 hack, NIE Opt 1).
+# When True, ml_inference reads bag_size etc. from c.metrics dict instead of
+# getattr(c, ...) which always returns default 0 for dispatch_pipeline.Candidate.
+# Default False — legacy getattr behavior (preserve fallback path).
+ENABLE_LGBM_METRICS_READ = _os.environ.get("ENABLE_LGBM_METRICS_READ", "0") == "1"
+
 # V3.26 Bug A complete (2026-04-25 sobota) — anchor-based distance scoring.
 # Replace chronological-last-drop effective_start_pos z chronologically-previous
 # stop w plan (insertion anchor). Distance kuriera do new pickup liczone od

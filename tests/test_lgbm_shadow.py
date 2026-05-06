@@ -19,6 +19,7 @@ from dispatch_v2.ml_inference import (
     ShadowResult,
     GROUP_A_DEFAULTS,
 )
+from dispatch_v2.common import ENABLE_LGBM_METRICS_READ
 
 
 @dataclass
@@ -34,6 +35,7 @@ class MockCand:
     orders_today_before_T0: int = 5
     bag_n_distinct_districts: int = 0
     bag_has_distant_drop: bool = False
+    metrics: dict = None
 
 
 def _make_ctx(**kw):
@@ -160,6 +162,59 @@ class TestLGBMShadowInference(unittest.TestCase):
         self.assertEqual(GROUP_A_DEFAULTS["level_A_count"], 0)
         self.assertEqual(GROUP_A_DEFAULTS["exclude_virtual"], 0)
 
+    # ── F4 tests ──────────────────────────────────────────────────────────
+    def test_I_get_candidate_attr_reads_from_metrics(self):
+        """_get_candidate_attr reads bag_size from metrics dict."""
+        cand = MockCand("123", "Bartek O.", 53.1017, 23.2344, bag_size=0,
+                        metrics={"bag_size_before": 3})
+        val = self.inferer._get_candidate_attr(cand, "bag_size", 0)
+        self.assertEqual(val, 3)
+
+    def test_J_get_candidate_attr_fallback_when_no_metrics(self):
+        """_get_candidate_attr falls back to getattr when metrics missing."""
+        cand = MockCand("123", "Bartek O.", 53.1017, 23.2344, bag_size=2)
+        val = self.inferer._get_candidate_attr(cand, "bag_size", 0)
+        self.assertEqual(val, 2)
+
+    def test_K_derive_bag_fields_counts(self):
+        """_derive_bag_fields correctly counts pending drops/pickups."""
+        cand = MockCand("123", "Bartek O.", 53.1017, 23.2344,
+                        metrics={
+                            "bag_context": [
+                                {"picked_up_at": "2026-05-01T12:00:00", "delivered_at": None},
+                                {"picked_up_at": None, "delivered_at": None},
+                                {"picked_up_at": "2026-05-01T12:05:00", "delivered_at": "2026-05-01T12:15:00"},
+                            ]
+                        })
+        derived = LGBMShadowInferer._derive_bag_fields(cand)
+        self.assertEqual(derived["bag_drops_pending"], 1)  # first entry: picked_up, not delivered
+        self.assertEqual(derived["bag_pickup_pending"], 1)  # second entry: not picked_up
+
+    def test_L_all_bag_zero_with_real_metrics(self):
+        """all_bag_zero=False when metrics show bag_size_before>=1."""
+        cands = [
+            MockCand("123", "Bartek O.", 53.1017, 23.2344,
+                     metrics={"bag_size_before": 2}),
+            MockCand("400", "Adrian R", 53.1255, 23.1508,
+                     metrics={"bag_size_before": 1}),
+        ]
+        # We need to test the internal logic; we can call predict_for_decision
+        # with ENABLE_LGBM_METRICS_READ=True (simulate by patching)
+        with patch("dispatch_v2.ml_inference.ENABLE_LGBM_METRICS_READ", True):
+            result = self.inferer.predict_for_decision(_make_ctx(), cands)
+        self.assertIsNone(result.fallback_reason)  # not all_bag_zero
+
+    def test_M_flag_off_legacy_path(self):
+        """When ENABLE_LGBM_METRICS_READ=False, getattr fallback still works."""
+        cands = [
+            MockCand("123", "Bartek O.", 53.1017, 23.2344, bag_size=0,
+                     metrics={"bag_size_before": 3}),
+        ]
+        with patch("dispatch_v2.ml_inference.ENABLE_LGBM_METRICS_READ", False):
+            result = self.inferer.predict_for_decision(_make_ctx(), cands)
+        # With flag False, bag_size from getattr is 0 → all_bag_zero=True
+        self.assertEqual(result.fallback_reason, "all_bag_zero")
+
 
 class TestShadowResultSerialization(unittest.TestCase):
     def test_to_dict_has_all_fields(self):
@@ -176,6 +231,94 @@ class TestShadowResultSerialization(unittest.TestCase):
                     "evaluation_ts", "latency_ms", "feature_compute_ms", "inference_ms",
                     "n_candidates_scored"]:
             self.assertIn(key, d)
+
+
+class TestF4MetricsRead(unittest.TestCase):
+    """F4 — Candidate.metrics-based read (Opt 3 hack) z flag-gated rollout."""
+
+    def _make_candidate(self, bag_size_before=None, bag_context=None, name="Test"):
+        class C:
+            pass
+        c = C()
+        c.name = name
+        c.metrics = {}
+        if bag_size_before is not None:
+            c.metrics["bag_size_before"] = bag_size_before
+        if bag_context is not None:
+            c.metrics["bag_context"] = bag_context
+        return c
+
+    def _make_inferer(self):
+        from dispatch_v2.ml_inference import LGBMShadowInferer
+        inf = LGBMShadowInferer.__new__(LGBMShadowInferer)
+        return inf
+
+    def test_get_candidate_attr_reads_from_metrics(self):
+        inf = self._make_inferer()
+        c = self._make_candidate(bag_size_before=3)
+        self.assertEqual(inf._get_candidate_attr(c, "bag_size", 0), 3)
+
+    def test_get_candidate_attr_fallback_no_metrics(self):
+        inf = self._make_inferer()
+        class C:
+            pass
+        c = C()
+        # No metrics dict
+        self.assertEqual(inf._get_candidate_attr(c, "bag_size", 99), 99)
+
+    def test_derive_bag_fields_counts(self):
+        inf = self._make_inferer()
+        bc = [
+            {"picked_up_at": "2026-05-06T10:00:00", "delivered_at": None,
+             "drop_district": "Centrum"},
+            {"picked_up_at": None, "delivered_at": None,
+             "drop_district": "Bojary"},
+            {"picked_up_at": "2026-05-06T10:05:00", "delivered_at": None,
+             "drop_district": "Centrum", "has_distant_drop": True},
+        ]
+        c = self._make_candidate(bag_context=bc)
+        d = inf._derive_bag_fields(c)
+        self.assertEqual(d["bag_drops_pending"], 2)  # picked_up but not delivered
+        self.assertEqual(d["bag_pickup_pending"], 1)  # not yet picked
+        self.assertEqual(d["bag_n_distinct_districts"], 2)  # Centrum + Bojary
+        self.assertTrue(d["bag_has_distant_drop"])
+
+    def test_all_bag_zero_with_metrics_flag_on(self):
+        # Dynamic flag flip via env + subprocess (clean import)
+        import os, sys, subprocess, textwrap
+        probe = textwrap.dedent("""
+            import sys
+            sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+            from dispatch_v2.ml_inference import LGBMShadowInferer
+            from dispatch_v2.common import ENABLE_LGBM_METRICS_READ as F
+            inf = LGBMShadowInferer.__new__(LGBMShadowInferer)
+            class C: pass
+            c = C(); c.name = 'X'; c.metrics = {'bag_size_before': 2}
+            print('flag=', F)
+            print('val=', inf._get_candidate_attr(c, 'bag_size', 0))
+        """)
+        env = os.environ.copy()
+        env["ENABLE_LGBM_METRICS_READ"] = "1"
+        r = subprocess.run([sys.executable, "-c", probe], env=env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("flag= True", r.stdout)
+        self.assertIn("val= 2", r.stdout)
+
+    def test_flag_off_legacy_path(self):
+        # Default env (no override) → flag False → legacy getattr
+        import os, sys, subprocess
+        probe = (
+            "import sys; sys.path.insert(0, '/root/.openclaw/workspace/scripts'); "
+            "from dispatch_v2.common import ENABLE_LGBM_METRICS_READ; "
+            "print('flag=', ENABLE_LGBM_METRICS_READ)"
+        )
+        env = os.environ.copy()
+        env.pop("ENABLE_LGBM_METRICS_READ", None)
+        r = subprocess.run([sys.executable, "-c", probe], env=env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("flag= False", r.stdout)
 
 
 if __name__ == "__main__":
