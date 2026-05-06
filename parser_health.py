@@ -128,6 +128,11 @@ class ParserHealthMonitor:
             cycles = data.get("cycles") or []
             for entry in cycles[-ROLLING_WINDOW:]:
                 if isinstance(entry, dict):
+                    # Z2 fix 2026-05-07: rehydrate order_ids list → frozenset
+                    raw_ids = entry.get("order_ids")
+                    if isinstance(raw_ids, list):
+                        entry = dict(entry)
+                        entry["order_ids"] = frozenset(raw_ids)
                     self._cycles.append(entry)
             last_alert = data.get("last_alert_at") or {}
             if isinstance(last_alert, dict):
@@ -144,11 +149,19 @@ class ParserHealthMonitor:
             return
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            # Z2 fix 2026-05-07: konwertuj frozenset(order_ids) → list dla JSON.
+            # _load przekonwertuje z powrotem (lista → frozenset).
+            cycles_serializable = []
+            for entry in self._cycles:
+                e = dict(entry)
+                if isinstance(e.get("order_ids"), frozenset):
+                    e["order_ids"] = sorted(e["order_ids"])
+                cycles_serializable.append(e)
             data = {
                 "version": "1",
                 "saved_at": datetime.now(timezone.utc).isoformat(),
                 "init_count": self._init_count,
-                "cycles": list(self._cycles),
+                "cycles": cycles_serializable,
                 "last_alert_at": dict(self._last_alert_at),
             }
             tmp = self.state_path.with_suffix(".tmp")
@@ -201,6 +214,15 @@ class ParserHealthMonitor:
                 n_assigned = len(parsed["assigned_ids"])
             except (TypeError, AttributeError):
                 pass
+        # Z2 fix 2026-05-07: store order_ids set for set-comparison detection
+        order_ids_set = None
+        if parsed is not None:
+            try:
+                raw_ids = parsed.get("order_ids")
+                if raw_ids is not None:
+                    order_ids_set = frozenset(raw_ids)
+            except (TypeError, AttributeError):
+                pass
         return {
             "ts": datetime.now(timezone.utc).isoformat(),
             "cycle": int(cycle_stats.get("cycle", 0) or 0),
@@ -209,6 +231,7 @@ class ParserHealthMonitor:
             "n_new": int(cycle_stats.get("new", 0) or 0),
             "n_delivered": int(cycle_stats.get("delivered", 0) or 0),
             "had_error": bool(cycle_stats.get("error")),
+            "order_ids": order_ids_set,
         }
 
     # ---- Anomaly detection ----
@@ -259,6 +282,20 @@ class ParserHealthMonitor:
             recent = list(self._cycles)[-STUCK_COUNT_TOLERANCE:]
             recent_orders = [c.get("orders_in_panel", 0) for c in recent]
             if all(v == recent_orders[0] for v in recent_orders) and recent_orders[0] > 0:
+                # Z2 fix 2026-05-07: set-comparison eliminates rotation false positives
+                # Extract order_ids sets from recent cycles
+                order_ids_sets = [c.get("order_ids") for c in recent]
+                # Determine if all sets are non-None and identical
+                set_stuck = False
+                if all(s is not None for s in order_ids_sets):
+                    # All cycles have order_ids stored (post-fix entries)
+                    if len(order_ids_sets) >= 2:
+                        first_set = order_ids_sets[0]
+                        set_stuck = all(s == first_set for s in order_ids_sets)
+                else:
+                    # Mixed or legacy entries (pre-fix) → fallback to legacy motion-only check
+                    set_stuck = None  # indicates fallback needed
+
                 # Compute motion signals (defense-in-depth: if metrics missing → fallback legacy behavior)
                 try:
                     sum_new = sum(int(c.get("n_new", 0) or 0) for c in recent)
@@ -273,36 +310,75 @@ class ParserHealthMonitor:
                     log.warning(f"motion-aware compute fail (non-blocking, fallback legacy): {_me}")
                     panel_has_motion = True  # Fallback: assume motion → alert (legacy behavior)
 
-                if not ENABLE_PARSER_STUCK_MOTION_AWARE:
-                    # Legacy behavior: alert na każdy stuck (false positives możliwe dla off-peak plateau)
-                    alerts.append({
-                        "type": "PARSER_STUCK",
-                        "severity": "warning",
-                        "message": (
-                            f"Parser monitor: orders_in_panel = {recent_orders[0]} stałe przez "
-                            f"{STUCK_COUNT_TOLERANCE} cycle. (legacy mode, motion-aware OFF)"
-                        ),
-                        "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
-                                    "motion_aware": False},
-                    })
-                elif panel_has_motion:
-                    # Motion-aware: panel ma ruch (delivered/new/assigned changing) ALE count stuck = real bug
-                    alerts.append({
-                        "type": "PARSER_STUCK",
-                        "severity": "warning",
-                        "message": (
-                            f"Parser monitor: orders_in_panel = {recent_orders[0]} stałe przez "
-                            f"{STUCK_COUNT_TOLERANCE} cycle ALE panel ma motion "
-                            f"(new={sum_new}, delivered={sum_delivered}, assigned_var={assigned_motion}). "
-                            f"Real bug pattern: 02.05 incident (PACKS_CATCHUP dla 47XXXX, order_ids parser miss)."
-                        ),
-                        "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
-                                    "motion_new": sum_new, "motion_delivered": sum_delivered,
-                                    "motion_assigned_variance": assigned_motion,
-                                    "motion_total": motion_total, "motion_threshold": PARSER_STUCK_MOTION_THRESHOLD,
-                                    "motion_aware": True},
-                    })
-                # else: natural plateau (panel quiet, no motion) → NO alert (suppress false positive)
+                # Z2 fix: if set_stuck is False (sets differ) → suppress alert even if motion>=threshold
+                if set_stuck is False:
+                    # Natural rotation underneath, count coincidence → no alert
+                    pass
+                elif set_stuck is True:
+                    # Real parser miss confirmed: order_ids identical across cycles
+                    if not ENABLE_PARSER_STUCK_MOTION_AWARE:
+                        # Legacy behavior: alert na każdy stuck (false positives możliwe dla off-peak plateau)
+                        alerts.append({
+                            "type": "PARSER_STUCK",
+                            "severity": "warning",
+                            "message": (
+                                f"Parser monitor: orders_in_panel = {recent_orders[0]} stałe przez "
+                                f"{STUCK_COUNT_TOLERANCE} cycle. (legacy mode, motion-aware OFF)"
+                            ),
+                            "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
+                                        "motion_aware": False},
+                        })
+                    elif panel_has_motion:
+                        # Motion-aware: panel ma ruch (delivered/new/assigned changing) ALE count stuck = real bug
+                        alerts.append({
+                            "type": "PARSER_STUCK",
+                            "severity": "warning",
+                            "message": (
+                                f"Parser monitor: orders_in_panel = {recent_orders[0]} stałe przez "
+                                f"{STUCK_COUNT_TOLERANCE} cycle ALE panel ma motion "
+                                f"(new={sum_new}, delivered={sum_delivered}, assigned_var={assigned_motion}). "
+                                f"order_ids set IDENTYCZNY przez {STUCK_COUNT_TOLERANCE} cycle "
+                                f"(real parser miss confirmed)."
+                            ),
+                            "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
+                                        "motion_new": sum_new, "motion_delivered": sum_delivered,
+                                        "motion_assigned_variance": assigned_motion,
+                                        "motion_total": motion_total, "motion_threshold": PARSER_STUCK_MOTION_THRESHOLD,
+                                        "motion_aware": True, "set_stuck": True},
+                        })
+                    # else: natural plateau (panel quiet, no motion) → NO alert (suppress false positive)
+                else:
+                    # set_stuck is None (fallback to legacy motion-only check)
+                    if not ENABLE_PARSER_STUCK_MOTION_AWARE:
+                        # Legacy behavior: alert na każdy stuck (false positives możliwe dla off-peak plateau)
+                        alerts.append({
+                            "type": "PARSER_STUCK",
+                            "severity": "warning",
+                            "message": (
+                                f"Parser monitor: orders_in_panel = {recent_orders[0]} stałe przez "
+                                f"{STUCK_COUNT_TOLERANCE} cycle. (legacy mode, motion-aware OFF)"
+                            ),
+                            "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
+                                        "motion_aware": False},
+                        })
+                    elif panel_has_motion:
+                        # Motion-aware: panel ma ruch (delivered/new/assigned changing) ALE count stuck = real bug
+                        alerts.append({
+                            "type": "PARSER_STUCK",
+                            "severity": "warning",
+                            "message": (
+                                f"Parser monitor: orders_in_panel = {recent_orders[0]} stałe przez "
+                                f"{STUCK_COUNT_TOLERANCE} cycle ALE panel ma motion "
+                                f"(new={sum_new}, delivered={sum_delivered}, assigned_var={assigned_motion}). "
+                                f"Real bug pattern: 02.05 incident (PACKS_CATCHUP dla 47XXXX, order_ids parser miss)."
+                            ),
+                            "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
+                                        "motion_new": sum_new, "motion_delivered": sum_delivered,
+                                        "motion_assigned_variance": assigned_motion,
+                                        "motion_total": motion_total, "motion_threshold": PARSER_STUCK_MOTION_THRESHOLD,
+                                        "motion_aware": True},
+                        })
+                    # else: natural plateau (panel quiet, no motion) → NO alert (suppress false positive)
 
         # CHECK 4: assigned vs order asymmetry (informational; Layer 3 zrobi pełną cross-validation)
         # Gdy assigned_ids zawiera więcej niż order_ids → parser miss order side

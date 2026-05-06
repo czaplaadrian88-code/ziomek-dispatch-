@@ -1,0 +1,197 @@
+"""Z2 fix 2026-05-07 — PARSER_STUCK set-comparison detection tests.
+
+Coverage:
+- _build_entry stores order_ids as frozenset
+- set_stuck=True (sets identical 5 cycle) + motion → REAL alert fires
+- set_stuck=False (sets differ — rotation underneath) + motion → SUPPRESS
+- set_stuck=None (legacy fallback, missing order_ids) + motion → legacy behavior
+- order_ids absent in parsed → entry order_ids=None (no crash)
+"""
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from dispatch_v2 import parser_health  # noqa: E402
+
+
+def _make_monitor(tmpdir: str):
+    """Fresh monitor z tmp state. Reset module-level globals."""
+    state_path = Path(tmpdir) / "ph.json"
+    parser_health._monitor = None
+    monitor = parser_health.ParserHealthMonitor(state_path=state_path, enabled=True)
+    return monitor
+
+
+def _record_with_set(monitor, cycle: int, count: int, order_ids: list, n_new=0, n_delivered=0, n_assigned=0):
+    """Helper: record_tick z parsed.order_ids."""
+    cycle_stats = {
+        "cycle": cycle,
+        "orders_in_panel": count,
+        "new": n_new,
+        "delivered": n_delivered,
+        "ignored": 0,
+        "errors": 0,
+    }
+    parsed = {"order_ids": order_ids, "assigned_ids": ["x"] * n_assigned}
+    return monitor.record_tick(cycle_stats, parsed)
+
+
+# ─── Test 1: _build_entry stores frozenset(order_ids) ──────────────────
+def test_build_entry_stores_order_ids_as_frozenset():
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        cycle_stats = {"cycle": 1, "orders_in_panel": 3, "new": 0, "delivered": 0}
+        parsed = {"order_ids": ["100", "101", "102"], "assigned_ids": []}
+        entry = m._build_entry(cycle_stats, parsed)
+        assert "order_ids" in entry
+        assert entry["order_ids"] == frozenset(["100", "101", "102"])
+        assert isinstance(entry["order_ids"], frozenset)
+
+
+# ─── Test 2: parsed=None → order_ids=None ───────────────────────────────
+def test_build_entry_no_parsed():
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        cycle_stats = {"cycle": 1, "orders_in_panel": 3, "new": 0, "delivered": 0}
+        entry = m._build_entry(cycle_stats, None)
+        assert entry["order_ids"] is None
+
+
+# ─── Test 3: parsed bez order_ids → order_ids=None (no crash) ──────────
+def test_build_entry_parsed_without_order_ids():
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        cycle_stats = {"cycle": 1, "orders_in_panel": 3, "new": 0, "delivered": 0}
+        parsed = {"assigned_ids": []}  # missing order_ids key
+        entry = m._build_entry(cycle_stats, parsed)
+        assert entry["order_ids"] is None
+
+
+# ─── Test 4: set_stuck=True + motion → REAL miss alert fires ───────────
+def test_alert_fires_when_set_identical_with_motion():
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        # 5 cykli z IDENTYCZNYM order_ids set, ale motion (new+delivered) >= threshold
+        # Symulujemy real parser miss: panel mówi że są deliveries i nowe, ale order_ids stuck.
+        ids = ["100", "101", "102", "103", "104"]
+        for i in range(5):
+            alerts = _record_with_set(
+                m, cycle=i, count=5, order_ids=ids,
+                n_new=1, n_delivered=1, n_assigned=2 + (i % 2),  # assigned varies
+            )
+        # Last cycle: motion sum = 1+1+(2-2)=2 NIE wystarczy threshold=4
+        # Zwiększyć motion aby przekroczyć
+        for i in range(5, 10):
+            alerts = _record_with_set(
+                m, cycle=i, count=5, order_ids=ids,
+                n_new=2, n_delivered=2, n_assigned=2 + (i % 3),
+            )
+        # Ostatni alert powinien być PARSER_STUCK z set_stuck=True
+        parser_stuck = [a for a in alerts if a["type"] == "PARSER_STUCK"]
+        assert len(parser_stuck) == 1, f"oczekiwany 1 alert PARSER_STUCK, got {len(parser_stuck)}"
+        assert parser_stuck[0]["context"].get("set_stuck") is True
+        assert "real parser miss confirmed" in parser_stuck[0]["message"].lower()
+
+
+# ─── Test 5: set_stuck=False (rotation) + motion → SUPPRESS alert ──────
+def test_no_alert_when_sets_differ_natural_rotation():
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        # 5 cykli z TAKĄ SAMĄ wartością count=5 ale RÓŻNYM zbiorem (rotation)
+        # cycle 0: {100..104}, cycle 1: {101..105}, etc. — count stały, zbiory różne
+        for i in range(10):
+            ids = [str(100 + i + j) for j in range(5)]  # rolling window
+            alerts = _record_with_set(
+                m, cycle=i, count=5, order_ids=ids,
+                n_new=1, n_delivered=1, n_assigned=3,  # motion>=4 if assigned varies
+            )
+        # 5 last cycles: count=5 stuck, motion>=4, ALE sets differ → SUPPRESS
+        parser_stuck = [a for a in alerts if a["type"] == "PARSER_STUCK"]
+        assert len(parser_stuck) == 0, (
+            f"NIE oczekiwany alert (rotation underneath), got {len(parser_stuck)}: "
+            f"{[a['message'] for a in parser_stuck]}"
+        )
+
+
+# ─── Test 6: set_stuck=None + LOW motion sum (5 cykli) → NO alert ──────
+def test_legacy_entries_low_motion_no_alert():
+    """Sanity: legacy fallback + niska motion (sum 5 cykli < threshold) → NO alert."""
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        # 5 cykli z motion=0 per cycle (sum=0). parsed=None → set_stuck=None fallback.
+        for i in range(5):
+            cycle_stats = {
+                "cycle": i, "orders_in_panel": 5,
+                "new": 0, "delivered": 0, "ignored": 0, "errors": 0,
+            }
+            alerts = m.record_tick(cycle_stats, None)
+        parser_stuck = [a for a in alerts if a["type"] == "PARSER_STUCK"]
+        assert len(parser_stuck) == 0, f"sum motion=0 NIE powinien alert (got {len(parser_stuck)})"
+
+
+# ─── Test 7: legacy entries + high motion → fallback alert fires ───────
+def test_legacy_entries_high_motion_fires_legacy_alert():
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        # 5 cykli pre-fix (parsed bez order_ids ALE assigned_ids dostarczone)
+        for i in range(5):
+            cycle_stats = {
+                "cycle": i, "orders_in_panel": 5,
+                "new": 2, "delivered": 2, "ignored": 0, "errors": 0,
+            }
+            parsed = {"assigned_ids": ["x"] * (3 if i % 2 == 0 else 5)}  # varies 3/5/3/5/3
+            alerts = m.record_tick(cycle_stats, parsed)
+        # motion = 2+2+(5-3)=6 >=4 + set_stuck=None (parsed bez order_ids) → fallback fires
+        parser_stuck = [a for a in alerts if a["type"] == "PARSER_STUCK"]
+        assert len(parser_stuck) == 1, (
+            f"Fallback motion-only powinien fire alert (motion=6 >=4), got {len(parser_stuck)}"
+        )
+        # Message powinien być w legacy format (bez "set IDENTYCZNY")
+        assert "real parser miss confirmed" not in parser_stuck[0]["message"].lower()
+
+
+# ─── Test 8: set_stuck=True ALE motion=0 → NO alert (panel quiet) ──────
+def test_no_alert_set_stuck_no_motion():
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        ids = ["100", "101", "102"]
+        for i in range(10):
+            alerts = _record_with_set(
+                m, cycle=i, count=3, order_ids=ids,
+                n_new=0, n_delivered=0, n_assigned=2,  # zero motion
+            )
+        # set_stuck=True, ale motion=0 < threshold=4 → NO alert (panel quiet, off-peak)
+        parser_stuck = [a for a in alerts if a["type"] == "PARSER_STUCK"]
+        assert len(parser_stuck) == 0, "panel quiet (motion=0) NIE powinien fire alert"
+
+
+# ─── Runner ─────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    tests = [
+        ("build_entry_stores_order_ids_as_frozenset", test_build_entry_stores_order_ids_as_frozenset),
+        ("build_entry_no_parsed", test_build_entry_no_parsed),
+        ("build_entry_parsed_without_order_ids", test_build_entry_parsed_without_order_ids),
+        ("alert_fires_when_set_identical_with_motion", test_alert_fires_when_set_identical_with_motion),
+        ("no_alert_when_sets_differ_natural_rotation", test_no_alert_when_sets_differ_natural_rotation),
+        ("legacy_entries_low_motion_no_alert", test_legacy_entries_low_motion_no_alert),
+        ("legacy_entries_high_motion_fires_legacy_alert", test_legacy_entries_high_motion_fires_legacy_alert),
+        ("no_alert_set_stuck_no_motion", test_no_alert_set_stuck_no_motion),
+    ]
+    passed = 0
+    failed = 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"PASS  {name}")
+            passed += 1
+        except AssertionError as e:
+            print(f"FAIL  {name}: {e}")
+            failed += 1
+        except Exception as e:
+            print(f"ERROR {name}: {type(e).__name__}: {e}")
+            failed += 1
+    print(f"\n{'=' * 50}\nResult: {passed}/{len(tests)} PASS, {failed} FAIL")
+    sys.exit(0 if failed == 0 else 1)
