@@ -1102,6 +1102,16 @@ ENABLE_V324A_SCHEDULE_INTEGRATION = _os.environ.get(
 ENABLE_V324B_CZASOWKA_SCHEDULER = _os.environ.get(
     "ENABLE_V324B_CZASOWKA_SCHEDULER", "1") == "1"
 
+# F3 (2026-05-06): czasowka_scheduler WAIT branch structural data loss fix.
+# When True, czasowka_proactive.evaluator._filter_candidates uses
+# eval_result['all_candidates_for_proactive'] instead of best+alternatives.
+CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES = _os.environ.get(
+    "CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", "0") == "1"
+
+
+def get_flag_czasowka_proactive_use_all_candidates() -> bool:
+    return flag("CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", default=False)
+
 # V3.25 STEP B (R-01 SCHEDULE-HARDENING) — unconditional PRE-CHECK w
 # feasibility_v2 przed scoring path. Fail-CLOSED policy: cs.shift_end=None
 # lub pickup poza shift window → HARD REJECT (vs V3.24-A soft penalty).

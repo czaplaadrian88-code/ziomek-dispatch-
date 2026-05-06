@@ -44,6 +44,7 @@ from datetime import datetime, timedelta, timezone
 from dispatch_v2.czasowka_proactive import state as cp_state
 from dispatch_v2.czasowka_proactive import evaluator as cp_eval
 from dispatch_v2.czasowka_proactive import observability as cp_obs
+from dispatch_v2 import czasowka_scheduler as cs
 
 
 passed, failed = 0, 0
@@ -450,6 +451,131 @@ def test_triggers_min_extension_via_flag_no_code_change():
 
 t("triggers_min_extension_via_flag_no_code_change",
   test_triggers_min_extension_via_flag_no_code_change)
+
+
+# ============================================================
+# F3 tests — WAIT branch structural data loss fix
+# ============================================================
+
+def test_wait_branch_returns_all_candidates():
+    """Verify that WAIT branch in czasowka_scheduler._eval_czasowka_impl
+    includes 'all_candidates_for_proactive' with >=1 entry when
+    result.candidates has entries."""
+    # We'll call the internal function with a mock assess_order result
+    # that has candidates but no MAYBE best.
+    from dispatch_v2.dispatch_pipeline import PipelineResult
+    from dispatch_v2.dispatch_pipeline import Candidate as PipeCandidate
+
+    class FakeCand:
+        def __init__(self, cid, name, score, feasibility_verdict="MAYBE"):
+            self.courier_id = str(cid)
+            self.name = name
+            self.score = score
+            self.feasibility_verdict = feasibility_verdict
+            self.feasibility_reason = ""
+            self.metrics = {}
+
+    # Build a PipelineResult with candidates but best=None (no MAYBE)
+    cands = [FakeCand("413", "Mateusz O", 78.4, "MAYBE"),
+             FakeCand("502", "Kacper Sa", 75.0, "MAYBE")]
+    # We need to simulate assess_order returning a PipelineResult
+    # with .candidates and .best = None
+    # We'll create a minimal PipelineResult
+    # PipelineResult real schema (dispatch_pipeline.py:869-883):
+    # order_id, verdict, reason, best, candidates, pickup_ready_at, restaurant
+    pr = PipelineResult(
+        order_id="470999",
+        verdict="WAIT",
+        reason="test",
+        best=None,
+        candidates=cands,
+        pickup_ready_at=None,
+        restaurant=None,
+    )
+    # Patch assess_order to return pr
+    import dispatch_v2.czasowka_scheduler as cs_mod
+    orig_assess = cs_mod.assess_order
+    cs_mod.assess_order = lambda *a, **kw: pr
+    try:
+        # Call _eval_czasowka_impl with a fake order_state
+        order_state = {
+            "pickup_at_warsaw": "2026-05-06T12:00:00",
+            "prep_minutes": 60,
+            "courier_id": "26",
+            "restaurant": "Test",
+            "delivery_address": "Mickiewicza 1",
+            "delivery_city": "Białystok",
+        }
+        now = datetime(2026, 5, 6, 10, 0, 0, tzinfo=timezone.utc)
+        result = cs_mod._eval_czasowka_impl("470999", order_state, now)
+        assert "all_candidates_for_proactive" in result, \
+            f"missing key in {result}"
+        assert len(result["all_candidates_for_proactive"]) >= 1, \
+            f"expected >=1, got {len(result['all_candidates_for_proactive'])}"
+    finally:
+        cs_mod.assess_order = orig_assess
+
+
+t("wait_branch_returns_all_candidates", test_wait_branch_returns_all_candidates)
+
+
+def test_proactive_uses_all_candidates_when_flag_on():
+    """flag=True → _filter_candidates uses all_candidates_for_proactive."""
+    flags = _flags_full_on()
+    flags["CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES"] = True
+    with isolated_env(flags) as env:
+        cand = _FakeCandidate("413", "Mateusz O", 78.4)
+        # Build eval_result with all_candidates_for_proactive but empty best/alternatives
+        result = {
+            "best": None,
+            "alternatives": [],
+            "all_candidates_for_proactive": [cand],
+            "decision": "WAIT",
+            "reason": "test",
+            "minutes_to_pickup": 50.0,
+            "match_quality": "none",
+        }
+        fired = cp_eval.maybe_fire_trigger(
+            "470800", _make_osrec(), 50.0, result, _now(),
+        )
+        assert fired == 50, f"expected 50, got {fired}"
+        assert len(env["tg_calls"]) == 1, f"expected 1 send, got {len(env['tg_calls'])}"
+        st = cp_state.read_proposals_state()
+        rec = st["orders"]["470800"]
+        assert rec["triggers_fired"]["50"]["proposed_cid"] == "413"
+
+
+t("proactive_uses_all_candidates_when_flag_on",
+  test_proactive_uses_all_candidates_when_flag_on)
+
+
+def test_proactive_legacy_when_flag_off():
+    """flag=False → _filter_candidates uses best+alternatives (legacy)."""
+    flags = _flags_full_on()
+    flags["CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES"] = False
+    with isolated_env(flags) as env:
+        cand = _FakeCandidate("413", "Mateusz O", 78.4)
+        # all_candidates_for_proactive present but flag off → should be ignored
+        result = {
+            "best": cand,
+            "alternatives": [],
+            "all_candidates_for_proactive": [],
+            "decision": "WAIT",
+            "reason": "test",
+            "minutes_to_pickup": 50.0,
+            "match_quality": "none",
+        }
+        fired = cp_eval.maybe_fire_trigger(
+            "470801", _make_osrec(), 50.0, result, _now(),
+        )
+        assert fired == 50, f"expected 50, got {fired}"
+        assert len(env["tg_calls"]) == 1, f"expected 1 send, got {len(env['tg_calls'])}"
+        st = cp_state.read_proposals_state()
+        rec = st["orders"]["470801"]
+        assert rec["triggers_fired"]["50"]["proposed_cid"] == "413"
+
+
+t("proactive_legacy_when_flag_off", test_proactive_legacy_when_flag_off)
 
 
 # ============================================================

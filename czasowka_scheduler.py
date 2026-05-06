@@ -236,6 +236,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "match_quality": None,
             "best": None,
             "alternatives": [],
+            "all_candidates_for_proactive": [],
         }
 
     mins = _minutes_to_pickup(order_state, now_utc)
@@ -247,6 +248,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "match_quality": None,
             "best": None,
             "alternatives": [],
+            "all_candidates_for_proactive": [],
         }
 
     if mins > C.V324B_CZASOWKA_EVAL_START_MIN:
@@ -257,6 +259,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "match_quality": None,
             "best": None,
             "alternatives": [],
+            "all_candidates_for_proactive": [],
         }
 
     # Build order_event dict w format którego oczekuje assess_order (mirror panel_watcher emit).
@@ -296,6 +299,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
                 "match_quality": match_q,
                 "best": best,
                 "alternatives": result.candidates[1:] if result.candidates else [],
+                "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
             }
         return {
             "decision": "KOORD",
@@ -304,6 +308,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "match_quality": "none",
             "best": best,
             "alternatives": result.candidates[1:] if result.candidates else [],
+            "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
         }
 
     # 40 < mins ≤ 60 window
@@ -315,6 +320,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "match_quality": "none",
             "best": None,
             "alternatives": [],
+            "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
         }
 
     # 50 < mins ≤ 60 → EMIT only on ideal
@@ -327,6 +333,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
                 "match_quality": match_q,
                 "best": best,
                 "alternatives": result.candidates[1:],
+                "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
             }
         return {
             "decision": "WAIT",
@@ -335,6 +342,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "match_quality": match_q,
             "best": best,
             "alternatives": result.candidates[1:],
+            "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
         }
 
     # 40 < mins ≤ 50 → EMIT on ideal OR good
@@ -346,6 +354,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "match_quality": match_q,
             "best": best,
             "alternatives": result.candidates[1:],
+            "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
         }
     return {
         "decision": "WAIT",
@@ -354,6 +363,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
         "match_quality": match_q,
         "best": best,
         "alternatives": result.candidates[1:],
+        "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
     }
 
 
