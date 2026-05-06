@@ -104,6 +104,20 @@ TG_REASON_CODES = {
     "other": "inny powód",
 }
 
+# Backlog #12 (2026-05-07): Faza 7-AUTO-PROXIMITY agreement metric.
+# Inline buttons "to powinno być AUTO/ACK/ALERT" przy każdej shadow decyzji.
+# Adrian klika niezależnie od głównej akcji (ASSIGN/INNY/KOORD) — log only,
+# NIE finalizuje proposala (brak editMessage). Daje signal "czy Adrian by tak
+# zrobił" jako agreement_rate vs distribution metric.
+# Logged jako action='F7AGREE' w learning_log.jsonl (kolumna decision z buttonu,
+# shadow_route z decision_record.auto_route). Compute agreement = match/total.
+# Flag-gated: FAZA7_AGREEMENT_BUTTONS_ENABLED w flags.json (default False).
+F7_AGREE_LABELS = {
+    "AUTO": "🤖 AUTO",
+    "ACK": "✋ ACK",
+    "ALERT": "🚨 ALERT",
+}
+
 
 POLL_SHADOW_SEC = 3
 PROPOSAL_TIMEOUT_SEC = 300  # 5 min → auto-KOORD
@@ -618,6 +632,7 @@ def build_keyboard(
     order_id: str,
     candidates: Optional[list] = None,
     pickup_ready_at: Optional[str] = None,  # V3.26 hotfix: align z compute_assign_time
+    decision: Optional[dict] = None,  # Backlog #12: dla F7AGREE buttons (auto_route field)
 ) -> dict:
     """Inline keyboard z przyciskami per-kandydat (F2.4).
 
@@ -683,6 +698,23 @@ def build_keyboard(
     rows.append([
         {"text": "👤 KOORD", "callback_data": f"KOORD:{order_id}"},
     ])
+
+    # Backlog #12 (2026-05-07): Faza 7 agreement buttons — extra row "AUTO/ACK/ALERT".
+    # Tylko gdy flag enabled AND decision ma auto_route (Faza 7 LIVE shadow).
+    # Adrian klika niezależnie od głównej akcji — log only, NIE finalizuje propozycji.
+    if (
+        decision is not None
+        and decision.get("auto_route")  # Faza 7 LIVE = field present
+        and flag("FAZA7_AGREEMENT_BUTTONS_ENABLED", default=False)
+    ):
+        f7_row = []
+        for code, label in F7_AGREE_LABELS.items():
+            f7_row.append({
+                "text": label,
+                "callback_data": f"F7AGREE:{code}:{order_id}",
+            })
+        rows.append(f7_row)
+
     return {"inline_keyboard": rows}
 
 
@@ -960,7 +992,8 @@ async def proposal_sender(state: dict) -> None:
         text = format_proposal(rec)
         top_candidates = [rec.get("best")] + list((rec.get("alternatives") or []))[:2]
         kbd = build_keyboard(oid, candidates=top_candidates,
-                              pickup_ready_at=rec.get("pickup_ready_at"))  # V3.26 hotfix
+                              pickup_ready_at=rec.get("pickup_ready_at"),  # V3.26 hotfix
+                              decision=rec)  # Backlog #12: dla F7AGREE buttons
         r = await asyncio.to_thread(
             tg_request, state["token"], "sendMessage",
             {
@@ -1636,6 +1669,65 @@ def _shift_format_scheduled_time(rec: dict) -> str:
     return "?"
 
 
+def _handle_f7agree_callback(state: dict, raw_payload: str, cb: dict) -> None:
+    """Backlog #12 (2026-05-07): Faza 7-AUTO-PROXIMITY agreement metric.
+
+    Callback format: F7AGREE:{decision}:{order_id} → po top-level split(":",1)
+    raw_payload = "{decision}:{order_id}".
+
+    Behavior: log-only side metric. Adrian wskazuje "to powinno być AUTO/ACK/ALERT"
+    niezależnie od głównej akcji ASSIGN/INNY/KOORD. Brak editMessage — keyboard
+    pozostaje, Adrian może kliknąć inne buttony.
+
+    Logged jako action='F7AGREE' w learning_log.jsonl z polami:
+      - human_route: AUTO/ACK/ALERT (z buttonu)
+      - shadow_route: AUTO/ACK/ALERT (z decision_record.auto_route)
+      - match: human_route == shadow_route
+      - auto_route_context: classifier metadata (margin, tier, reason)
+
+    Defense-in-depth: gdy pending entry expired (timeout 5 min) → log z shadow_route=None
+    i toast "log only (proposal expired)". NIE crash.
+    """
+    parts = (raw_payload or "").split(":", 1)
+    token = state["token"]
+    if len(parts) != 2 or parts[0] not in F7_AGREE_LABELS:
+        tg_request(token, "answerCallbackQuery",
+                   {"callback_query_id": cb["id"], "text": "❓ malformed F7AGREE"})
+        return
+    human_route, oid = parts[0], parts[1]
+    cb_user_id = str((cb.get("from") or {}).get("id", ""))
+
+    # Lookup decision_record dla shadow_route. Może być None gdy pending expired.
+    entry = state["pending"].get(oid)
+    rec = (entry or {}).get("decision_record") or {}
+    shadow_route = (rec.get("auto_route") or "").upper() or None
+    auto_route_context = rec.get("auto_route_context") or {}
+    match = (shadow_route == human_route) if shadow_route else None
+
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "action": "F7AGREE",
+        "order_id": oid,
+        "human_route": human_route,
+        "shadow_route": shadow_route,
+        "match": match,
+        "auto_route_context": auto_route_context,
+        "from_id": cb_user_id,
+    }
+    try:
+        append_learning(state["learning_log_path"], record)
+    except Exception as e:
+        _log.warning(f"F7AGREE append_learning fail (non-blocking): {e}")
+
+    if shadow_route:
+        match_emoji = "✅" if match else "↔"
+        toast = f"{match_emoji} log: {human_route} (system: {shadow_route})"
+    else:
+        toast = f"📝 log: {human_route} (proposal expired)"
+    tg_request(token, "answerCallbackQuery",
+               {"callback_query_id": cb["id"], "text": toast})
+
+
 def _handle_shift_start_callback(state: dict, action: str, cid: str, cb: dict) -> None:
     """SHIFT_START_OK / SHIFT_START_NO — kurier potwierdza/odmawia start zmiany.
 
@@ -2147,6 +2239,14 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
             "CZAS_CZEKAJ": czas_handlers.handle_czas_czekaj,
         }
         await asyncio.to_thread(handler_map[action], state, action, oid, cb)
+        return
+
+    # Backlog #12 (2026-05-07): Faza 7 agreement metric buttons.
+    # Callback format: F7AGREE:{AUTO|ACK|ALERT}:{order_id}.
+    # Po split(":",1) `oid` zawiera "{decision}:{order_id}". Log only, NIE finalizuje
+    # propozycji (brak editMessage). Adrian może kliknąć ASSIGN/INNY/KOORD niezależnie.
+    if action == "F7AGREE":
+        await asyncio.to_thread(_handle_f7agree_callback, state, oid, cb)
         return
 
     entry = state["pending"].get(oid)
