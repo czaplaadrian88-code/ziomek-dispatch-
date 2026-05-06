@@ -153,6 +153,41 @@ def test_legacy_entries_high_motion_fires_legacy_alert():
         assert "real parser miss confirmed" not in parser_stuck[0]["message"].lower()
 
 
+# ─── Test 8b: REAL INCIDENT REPLAY — 02.05 pattern (zero delivered + PACKS_CATCHUP) ──
+def test_alert_fires_real_incident_pattern_zero_delivered():
+    """False-negative regression guard.
+
+    Scenariusz 02.05.2026: parser stuck przez >12h, n_delivered=0 cały czas
+    (deliveries NIE parsowane), motion przychodzi z PACKS_CATCHUP (assigned
+    rośnie 47XXX) + n_new>0. Bez tego testu fix set-comparison mógłby tłumić
+    real bug gdy delivered counter jest broken.
+
+    Assert PARSER_STUCK fires z set_stuck=True przy n_delivered=0.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        ids = ["470100", "470101", "470102", "470103"]  # broken parser, identyczne
+        # 5 cykli STUCK_COUNT_TOLERANCE: order_ids identyczny, delivered=0,
+        # n_new + assigned_variance dostarcza motion >= threshold=4
+        for i in range(5):
+            alerts = _record_with_set(
+                m, cycle=i, count=4, order_ids=ids,
+                n_new=1, n_delivered=0,         # PARSER MISS deliveries
+                n_assigned=3 + (i % 3),         # PACKS_CATCHUP variance: 3,4,5,3,4 → max-min=2
+            )
+        # motion_total = sum_new(5) + sum_delivered(0) + assigned_var(2) = 7 >= 4
+        parser_stuck = [a for a in alerts if a["type"] == "PARSER_STUCK"]
+        assert len(parser_stuck) == 1, (
+            f"REAL INCIDENT pattern (zero delivered + PACKS_CATCHUP motion) MUSI "
+            f"odpalić alert, got {len(parser_stuck)}"
+        )
+        ctx = parser_stuck[0]["context"]
+        assert ctx.get("set_stuck") is True, "set_stuck powinien być True (order_ids identyczny)"
+        assert ctx.get("motion_delivered") == 0, "delivered=0 (parser miss)"
+        assert ctx.get("motion_total") >= 4, f"motion_total {ctx.get('motion_total')} < threshold"
+        assert "real parser miss confirmed" in parser_stuck[0]["message"].lower()
+
+
 # ─── Test 8: set_stuck=True ALE motion=0 → NO alert (panel quiet) ──────
 def test_no_alert_set_stuck_no_motion():
     with tempfile.TemporaryDirectory() as td:
@@ -178,6 +213,7 @@ if __name__ == "__main__":
         ("no_alert_when_sets_differ_natural_rotation", test_no_alert_when_sets_differ_natural_rotation),
         ("legacy_entries_low_motion_no_alert", test_legacy_entries_low_motion_no_alert),
         ("legacy_entries_high_motion_fires_legacy_alert", test_legacy_entries_high_motion_fires_legacy_alert),
+        ("alert_fires_real_incident_pattern_zero_delivered", test_alert_fires_real_incident_pattern_zero_delivered),
         ("no_alert_set_stuck_no_motion", test_no_alert_set_stuck_no_motion),
     ]
     passed = 0
