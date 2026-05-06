@@ -282,7 +282,11 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
         "czas_kuriera_hhmm": order_state.get("czas_kuriera_hhmm"),
     }
 
-    fleet_snapshot = courier_resolver.build_fleet_snapshot()
+    # Fix 2026-05-06: użyj dispatchable_fleet() (jak shadow_dispatcher:521) — wzbogaca
+    # CourierState o shift_end z grafiku V3.24-A. Raw build_fleet_snapshot() zostawia
+    # shift_end=None → feasibility_v2:300 hard-rejectuje wszystkich z v325_NO_ACTIVE_SHIFT
+    # → "BRAK KANDYDATÓW" alert dla każdej czasówki (incident #471036 14:24 UTC).
+    fleet_snapshot = {cs.courier_id: cs for cs in courier_resolver.dispatchable_fleet()}
     result = assess_order(order_event, fleet_snapshot, now=now_utc)
 
     best = result.best
