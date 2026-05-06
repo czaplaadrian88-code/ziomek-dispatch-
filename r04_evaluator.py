@@ -127,12 +127,16 @@ def compute_courier_metrics(
 
     m = CourierMetrics(cid=cid, name=name)
 
-    # Pull all events for this courier in window from events.db
+    # Pull all events for this courier in window from events.db.
+    # Opcja C (2026-05-07): r04 używa tylko COURIER_PICKED_UP + COURIER_DELIVERED
+    # (queue typy w events table). Explicit filter — clarity + perf
+    # (skip audit typów które po Etap 5 migration są w audit_log nie events).
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.execute(
             "SELECT order_id, event_type, created_at FROM events "
             "WHERE courier_id=? AND created_at>=? "
+            "AND event_type IN ('COURIER_PICKED_UP', 'COURIER_DELIVERED') "
             "ORDER BY order_id, created_at",
             (cid, cutoff),
         )
