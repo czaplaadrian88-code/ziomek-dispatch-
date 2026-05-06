@@ -695,18 +695,27 @@ def run() -> int:
 
         if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_SEC:
             eb = event_bus.stats()
+            # Opcja C (2026-05-07): WORKER_STUCK alert mierzy TYLKO queue typy.
+            # Pre-fix: eb['pending'] = global count (queue + audit_log dual-write
+            # legacy 11800+ pending z status='pending' nigdy nie konsumowanych) →
+            # alert false-positive zawsze. Post-fix: pending_queue (NEW_ORDER +
+            # COURIER_PICKED_UP + COURIER_DELIVERED + ...) = real worker backlog.
+            pending_queue = event_bus.get_pending_count(
+                event_types=list(event_bus.QUEUE_EVENT_TYPES)
+            )
             # V3.28 Fix 3: truthful HEARTBEAT z worker liveness signal
-            hb_state = _v328_compute_heartbeat_state(last_processed_ts, time.time(), eb['pending'])
+            hb_state = _v328_compute_heartbeat_state(last_processed_ts, time.time(), pending_queue)
             _log.info(
                 f"HEARTBEAT totals={totals} "
-                f"event_bus=pending:{eb['pending']}/processed:{eb['processed']}/failed:{eb['failed']} "
+                f"event_bus=pending:{eb['pending']}(queue:{pending_queue})"
+                f"/processed:{eb['processed']}/failed:{eb['failed']} "
                 f"last_processed_age_sec={hb_state['age_sec']:.0f} "
                 f"worker_alive={hb_state['worker_alive']}"
             )
             # V3.28 Fix 3: worker stuck alert (multi-signal — quiet period NOT alert)
             if hb_state['is_stuck']:
                 _log.critical(
-                    f"V328_WORKER_STUCK age={hb_state['age_sec']:.0f}s pending={eb['pending']} "
+                    f"V328_WORKER_STUCK age={hb_state['age_sec']:.0f}s pending_queue={pending_queue} "
                     f"threshold_age={V328_WORKER_STUCK_AGE_SEC}s "
                     f"threshold_pending={V328_WORKER_STUCK_PENDING_THRESHOLD}"
                 )

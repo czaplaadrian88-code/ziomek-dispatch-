@@ -39,6 +39,23 @@ EVENT_TYPES = {
     "CZAS_KURIERA_UPDATED",
 }
 
+# Opcja C (2026-05-07): rozdzielenie ról events.db (queue vs audit log).
+# AUDIT_EVENT_TYPES — typy zapisywane do osobnej tabeli audit_log (append-only,
+# retention 90d). Stan persistowany przez state_machine.update_from_event
+# wywoływany inline z call site (dual-write pattern). NIKT nie konsumuje queue-style.
+# Czytelnicy: learning_analyzer, parser_health_endpoint, r04_evaluator,
+# sprint2_analysis (queries WHERE event_type=...).
+AUDIT_EVENT_TYPES = {
+    "COURIER_ASSIGNED",
+    "CZAS_KURIERA_UPDATED",
+    "PANEL_UNREACHABLE",
+    "ORDER_RETURNED_TO_POOL",
+}
+
+# QUEUE_EVENT_TYPES — typy z lifecycle pending → processed w tabeli events.
+# Konsumenci: shadow_dispatcher (NEW_ORDER) + sla_tracker (PICKED_UP, DELIVERED).
+QUEUE_EVENT_TYPES = EVENT_TYPES - AUDIT_EVENT_TYPES
+
 _log = setup_logger("event_bus", "/root/.openclaw/workspace/scripts/logs/events.log")
 
 
@@ -217,3 +234,115 @@ def cleanup(retention_hours: int = 48) -> int:
         deleted2 = cur.rowcount
         _log.info(f"cleanup: usunieto {deleted1} processed_events, {deleted2} events")
         return deleted1 + deleted2
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Opcja C (2026-05-07): audit_log table — append-only, retention 90d.
+# Rozdziela role events.db: queue (pending→processed) vs audit log (append-only).
+# Dual-write call sites (panel_watcher, dispatch_pipeline) używają emit_audit()
+# zamiast emit() dla typów w AUDIT_EVENT_TYPES.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _init_audit_log_table() -> None:
+    """Idempotentna inicjalizacja tabeli audit_log + indeksów. CREATE IF NOT EXISTS."""
+    with _conn() as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS audit_log (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                order_id TEXT,
+                courier_id TEXT,
+                payload TEXT,
+                created_at TEXT NOT NULL
+            )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_type ON audit_log(event_type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_order ON audit_log(order_id)")
+
+
+def emit_audit(
+    event_type: str,
+    order_id: Optional[str] = None,
+    courier_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+    event_id: Optional[str] = None,
+) -> Optional[str]:
+    """Zapisuje event audit-only do tabeli audit_log (append-only).
+
+    Idempotent przez INSERT OR IGNORE na PRIMARY KEY event_id.
+    Dla typów z AUDIT_EVENT_TYPES (COURIER_ASSIGNED, CZAS_KURIERA_UPDATED,
+    PANEL_UNREACHABLE, ORDER_RETURNED_TO_POOL).
+
+    Stan persistowany przez state_machine.update_from_event wywoływany inline
+    z call site — ta funkcja jest TYLKO audit history. Brak status/processed_at.
+
+    Zwraca event_id przy zapisie, None przy idempotent skip (duplikat).
+    """
+    if event_type not in AUDIT_EVENT_TYPES:
+        raise ValueError(
+            f"emit_audit: event_type '{event_type}' nie jest audit type. "
+            f"Dozwolone: {AUDIT_EVENT_TYPES}. Użyj emit() dla queue typów."
+        )
+
+    if event_id is None:
+        event_id = make_event_id(event_type, order_id)
+
+    payload_json = json.dumps(payload or {}, ensure_ascii=False)
+    created_at = now_iso()
+
+    with _conn() as conn:
+        try:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO audit_log
+                   (event_id, event_type, order_id, courier_id, payload, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (event_id, event_type, order_id, courier_id, payload_json, created_at),
+            )
+            if cur.rowcount == 0:
+                _log.debug(f"AUDIT DUP: {event_id}")
+                return None
+            _log.info(f"AUDIT {event_type} order={order_id} courier={courier_id} id={event_id}")
+            return event_id
+        except Exception as e:
+            _log.error(f"emit_audit() error: {e}")
+            raise
+
+
+def cleanup_audit_log(retention_days: int = 90) -> int:
+    """Czysci audit_log starsze niz retention_days. Zwraca liczbe usunietych."""
+    with _conn() as conn:
+        cur = conn.execute(
+            """DELETE FROM audit_log WHERE created_at < datetime('now', ?)""",
+            (f"-{retention_days} days",),
+        )
+        deleted = cur.rowcount
+        _log.info(f"cleanup_audit_log: usunieto {deleted} audit_log entries (retention={retention_days}d)")
+        return deleted
+
+
+def get_pending_count(event_types: Optional[list] = None) -> int:
+    """Zwraca liczbę pending events w tabeli events.
+    Opcjonalnie filtruje po event_types (np. tylko queue typy dla WORKER_STUCK alert)."""
+    with _conn() as conn:
+        if event_types:
+            placeholders = ",".join("?" * len(event_types))
+            cur = conn.execute(
+                f"""SELECT COUNT(*) as cnt FROM events
+                    WHERE status = 'pending' AND event_type IN ({placeholders})""",
+                tuple(event_types),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT COUNT(*) as cnt FROM events WHERE status = 'pending'"
+            )
+        return cur.fetchone()["cnt"]
+
+
+# Module init: ensure audit_log table exists. Idempotent.
+try:
+    _init_audit_log_table()
+except Exception as _init_e:
+    _log.error(f"_init_audit_log_table() startup error: {_init_e}")
+    raise
