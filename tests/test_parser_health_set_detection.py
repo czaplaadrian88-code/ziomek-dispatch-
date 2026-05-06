@@ -213,6 +213,127 @@ def test_no_alert_set_stuck_no_motion():
         assert len(parser_stuck) == 0, "panel quiet (motion=0) NIE powinien fire alert"
 
 
+# ─── Z2 fix #2 (2026-05-07): active_ids = order_ids - closed_ids ──────────
+# Panel zwraca all-today's IDs w JS embedded `id: X` przez cały dzień.
+# closed_ids (status 7/8/9) reprezentuje terminalne. active = order_ids - closed_ids
+# = rzeczywiste live orders. Layer 2 STUCK + DELTA przełączone na active_*.
+# Eliminuje false positives gdzie order_ids count plateauje wieczorem (panel design).
+
+
+def _record_with_active(monitor, cycle: int, order_ids: list, closed_ids: list,
+                         n_new=0, n_delivered=0, n_assigned=0):
+    """Helper: record_tick z parsed.order_ids + parsed.closed_ids."""
+    cycle_stats = {
+        "cycle": cycle,
+        "orders_in_panel": len(order_ids),
+        "new": n_new,
+        "delivered": n_delivered,
+        "ignored": 0,
+        "errors": 0,
+    }
+    parsed = {
+        "order_ids": order_ids,
+        "closed_ids": closed_ids,
+        "assigned_ids": ["x"] * n_assigned,
+    }
+    return monitor.record_tick(cycle_stats, parsed)
+
+
+# ─── Test 9: late-evening panel design — order_ids stuck, active shrinks → NO alert ──
+def test_no_alert_late_evening_panel_keeps_delivered_in_order_ids():
+    """Real-world scenario 06.05.2026 wieczór: ostatnie zlecenie wpadło, panel
+    pokazuje 5 IDów przez kolejne cykle, ale po każdym delivery jeden ID
+    przechodzi do closed_ids. order_ids count stuck na 5, active shrinks 5→4→3→2→1.
+    Pre-fix: alert pali 17/dzień. Post-fix: zero alertów.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        all_ids = ["500", "501", "502", "503", "504"]
+        # 5 cykli: ten sam order_ids set (panel keeps), closed_ids rośnie sequentially
+        for i in range(5):
+            closed = all_ids[:i + 1]  # cycle 0: [500], cycle 1: [500,501], ...
+            alerts = _record_with_active(
+                m, cycle=i, order_ids=all_ids, closed_ids=closed,
+                n_new=0, n_delivered=1, n_assigned=2,  # delivery motion każdy cykl
+            )
+        # Pre-fix: order_ids stuck 5 cycle + motion → alert fires (false positive).
+        # Post-fix: active spada 4→3→2→1→0 → set_stuck=False → no alert.
+        parser_stuck = [a for a in alerts if a["type"] == "PARSER_STUCK"]
+        assert len(parser_stuck) == 0, (
+            f"late-evening panel (closed_ids grows) NIE powinien fire stuck alert, "
+            f"got {len(parser_stuck)}: {[a['message'] for a in parser_stuck]}"
+        )
+
+
+# ─── Test 10: real parser miss — active_ids identical mimo motion → ALERT ──
+def test_alert_fires_active_set_stuck_real_miss():
+    """Real parser miss scenario: active_ids set identical przez 5 cykli + motion.
+    Każdy cykl: order_ids = closed_ids + same 4 active IDs (parser miss live orders).
+    motion sum spełnia threshold. Set IDENTYCZNY → alert pali.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        active_ids = ["600", "601", "602", "603"]  # 4 live, parser miss
+        for i in range(5):
+            # Każdy cykl: te same 4 active + rosnący closed (delivery motion)
+            closed = [f"7{i:02d}{j}" for j in range(2)]  # 2 nowe closed per cycle
+            order_ids = active_ids + closed
+            alerts = _record_with_active(
+                m, cycle=i, order_ids=order_ids, closed_ids=closed,
+                n_new=1, n_delivered=2, n_assigned=3,  # motion: 1+2+0 = 3 + assigned_var
+            )
+        parser_stuck = [a for a in alerts if a["type"] == "PARSER_STUCK"]
+        assert len(parser_stuck) == 1, (
+            f"Real parser miss (active stuck + motion) MUSI fire alert, got {len(parser_stuck)}"
+        )
+        ctx = parser_stuck[0]["context"]
+        assert ctx.get("set_stuck") is True
+        assert ctx.get("stuck_value") == 4, f"active_orders=4 expected, got {ctx.get('stuck_value')}"
+
+
+# ─── Test 11: DELTA_SPIKE używa active_orders, nie orders_in_panel ─────────
+def test_delta_spike_uses_active_not_order_ids():
+    """22:01 UTC scenario: panel daily rollover usuwa delivered z order_ids.
+    Pre-fix: orders_in_panel 462→228 (-50%) → alert pali (false positive,
+    bo to natural rollover). Post-fix: active był już niski przed rollover
+    (większość delivered), więc delta na active jest mała → no alert.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        # 5 cykli pre-rollover: order_ids=200 (180 closed + 20 active)
+        for i in range(5):
+            order_ids = [str(j) for j in range(200)]
+            closed = [str(j) for j in range(180)]  # 180 delivered, 20 active
+            _record_with_active(m, cycle=i, order_ids=order_ids, closed_ids=closed)
+        # Cycle 6: panel rollover → order_ids=20 (just active), closed=[]
+        # active orders steady at 20 — żadnej delty.
+        alerts = _record_with_active(
+            m, cycle=6, order_ids=[str(j) for j in range(180, 200)], closed_ids=[],
+        )
+        parser_delta = [a for a in alerts if a["type"] == "PARSER_DELTA_SPIKE"]
+        assert len(parser_delta) == 0, (
+            f"daily rollover (closed_ids cleanup) NIE powinien fire delta alert "
+            f"gdy active_orders steady, got {parser_delta}"
+        )
+
+
+# ─── Test 12: brak closed_ids w parsed → fallback do order_ids (backward compat) ──
+def test_active_falls_back_to_order_ids_when_no_closed():
+    """Defense-in-depth: gdy parser nie dostarczył closed_ids (legacy / shadow path),
+    active = order_ids (zachowanie identyczne jak pre-fix). Zero behavior change
+    dla testów które nie deklarują closed_ids w parsed dict.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        cycle_stats = {"cycle": 1, "orders_in_panel": 3, "new": 0, "delivered": 0}
+        parsed = {"order_ids": ["100", "101", "102"], "assigned_ids": []}  # NO closed_ids
+        entry = m._build_entry(cycle_stats, parsed)
+        assert entry["order_ids"] == frozenset(["100", "101", "102"])
+        assert entry["active_ids"] == frozenset(["100", "101", "102"]), \
+            "active fallback do order_ids gdy brak closed_ids"
+        assert entry["active_orders"] == 3
+
+
 # ─── Runner ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     tests = [
@@ -225,6 +346,10 @@ if __name__ == "__main__":
         ("legacy_entries_high_motion_fires_legacy_alert", test_legacy_entries_high_motion_fires_legacy_alert),
         ("alert_fires_real_incident_pattern_zero_delivered", test_alert_fires_real_incident_pattern_zero_delivered),
         ("no_alert_set_stuck_no_motion", test_no_alert_set_stuck_no_motion),
+        ("no_alert_late_evening_panel_keeps_delivered_in_order_ids", test_no_alert_late_evening_panel_keeps_delivered_in_order_ids),
+        ("alert_fires_active_set_stuck_real_miss", test_alert_fires_active_set_stuck_real_miss),
+        ("delta_spike_uses_active_not_order_ids", test_delta_spike_uses_active_not_order_ids),
+        ("active_falls_back_to_order_ids_when_no_closed", test_active_falls_back_to_order_ids_when_no_closed),
     ]
     passed = 0
     failed = 0

@@ -128,11 +128,14 @@ class ParserHealthMonitor:
             cycles = data.get("cycles") or []
             for entry in cycles[-ROLLING_WINDOW:]:
                 if isinstance(entry, dict):
-                    # Z2 fix 2026-05-07: rehydrate order_ids list → frozenset
+                    # Z2 fix 2026-05-07: rehydrate order_ids/active_ids list → frozenset
+                    entry = dict(entry)
                     raw_ids = entry.get("order_ids")
                     if isinstance(raw_ids, list):
-                        entry = dict(entry)
                         entry["order_ids"] = frozenset(raw_ids)
+                    raw_active = entry.get("active_ids")
+                    if isinstance(raw_active, list):
+                        entry["active_ids"] = frozenset(raw_active)
                     self._cycles.append(entry)
             last_alert = data.get("last_alert_at") or {}
             if isinstance(last_alert, dict):
@@ -156,6 +159,8 @@ class ParserHealthMonitor:
                 e = dict(entry)
                 if isinstance(e.get("order_ids"), frozenset):
                     e["order_ids"] = sorted(e["order_ids"])
+                if isinstance(e.get("active_ids"), frozenset):
+                    e["active_ids"] = sorted(e["active_ids"])
                 cycles_serializable.append(e)
             data = {
                 "version": "1",
@@ -215,31 +220,62 @@ class ParserHealthMonitor:
             except (TypeError, AttributeError):
                 pass
         # Z2 fix 2026-05-07: store order_ids set for set-comparison detection
+        # Z2 fix 2026-05-07 #2: also compute active_ids = order_ids - closed_ids.
+        # Panel zwraca all-today's IDs w JS embedded `id: X` (cały dzień, niezależnie
+        # od status terminalnego). closed_ids (z DOM markera "data-idkurier" missing)
+        # = status 7/8/9. Active set faktycznie spada z każdym delivery → eliminuje
+        # late-evening false positives gdzie order_ids count plateauje (panel design,
+        # nie parser bug). Layer 2 STUCK + DELTA przełączone na active_*.
         order_ids_set = None
+        active_ids_set = None
+        n_active = n_orders  # safe fallback gdy parsed=None / brak closed_ids
         if parsed is not None:
             try:
                 raw_ids = parsed.get("order_ids")
                 if raw_ids is not None:
                     order_ids_set = frozenset(raw_ids)
+                    closed = parsed.get("closed_ids")
+                    if closed is not None:
+                        try:
+                            active_ids_set = order_ids_set - frozenset(closed)
+                        except (TypeError, AttributeError):
+                            active_ids_set = order_ids_set
+                    else:
+                        # parser nie dostarczył closed_ids (legacy / shadow path) →
+                        # active = order_ids (zachowanie backward-compat z poprzednim algo)
+                        active_ids_set = order_ids_set
+                    n_active = len(active_ids_set)
             except (TypeError, AttributeError):
                 pass
         return {
             "ts": datetime.now(timezone.utc).isoformat(),
             "cycle": int(cycle_stats.get("cycle", 0) or 0),
             "orders_in_panel": n_orders,
+            "active_orders": n_active,
             "n_assigned": n_assigned,
             "n_new": int(cycle_stats.get("new", 0) or 0),
             "n_delivered": int(cycle_stats.get("delivered", 0) or 0),
             "had_error": bool(cycle_stats.get("error")),
             "order_ids": order_ids_set,
+            "active_ids": active_ids_set,
         }
 
     # ---- Anomaly detection ----
 
     def _check_anomalies(self, current: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """4 checks. Returns list of alert dicts (empty if healthy)."""
+        """4 checks. Returns list of alert dicts (empty if healthy).
+
+        Z2 fix 2026-05-07 #2: CHECK 2 (DELTA) i CHECK 3 (STUCK) przełączone z
+        order_ids/orders_in_panel na active_ids/active_orders. Panel zwraca
+        all-today's IDs w JS embedded — order_ids count plateauje wieczorem
+        bez parser bug. active = order_ids - closed_ids odzwierciedla rzeczywiste
+        live orders (spadają z każdym delivery). CHECK 1 (ZERO_OUTPUT) zostaje
+        na orders_in_panel — interesuje nas sygnał "parser literalnie pusty"
+        niezależnie od stanu zamówień.
+        """
         alerts: List[Dict[str, Any]] = []
         n_orders = current.get("orders_in_panel", 0)
+        n_active = current.get("active_orders", n_orders)  # fallback gdy legacy entry
         n_assigned = current.get("n_assigned", 0)
 
         # CHECK 1: zero output tolerance (orders_in_panel == 0 przez ≥N cycles)
@@ -255,43 +291,45 @@ class ParserHealthMonitor:
                 "context": {"recent_zero_count": recent_zero, "window_size": len(self._cycles)},
             })
 
-        # CHECK 2: delta_pct vs prev (median 5 cycles)
-        prev_orders = [c.get("orders_in_panel", 0) for c in list(self._cycles)[:-1][-5:]]
-        prev_orders = [x for x in prev_orders if x > 0]
-        if prev_orders and n_orders > 0:
-            prev_median = sorted(prev_orders)[len(prev_orders) // 2]
+        # CHECK 2: delta_pct vs prev (median 5 cycles) — na ACTIVE orders
+        prev_active = [c.get("active_orders", c.get("orders_in_panel", 0)) for c in list(self._cycles)[:-1][-5:]]
+        prev_active = [x for x in prev_active if x > 0]
+        if prev_active and n_active > 0:
+            prev_median = sorted(prev_active)[len(prev_active) // 2]
             if prev_median > 0:
-                delta_pct = (n_orders - prev_median) / prev_median * 100
+                delta_pct = (n_active - prev_median) / prev_median * 100
                 if delta_pct < DELTA_PCT_LOWER or delta_pct > DELTA_PCT_UPPER:
                     alerts.append({
                         "type": "PARSER_DELTA_SPIKE",
                         "severity": "warning",
                         "message": (
                             f"Parser monitor: delta {delta_pct:+.1f}% vs prev_median={prev_median} "
-                            f"(curr={n_orders}). Threshold [{DELTA_PCT_LOWER}, {DELTA_PCT_UPPER}]%."
+                            f"(curr={n_active}, active orders). Threshold [{DELTA_PCT_LOWER}, {DELTA_PCT_UPPER}]%."
                         ),
-                        "context": {"current": n_orders, "prev_median": prev_median, "delta_pct": delta_pct},
+                        "context": {"current": n_active, "prev_median": prev_median, "delta_pct": delta_pct, "metric": "active_orders"},
                     })
 
-        # CHECK 3: stuck variance (count stałe przez ≥STUCK_COUNT_TOLERANCE cycles)
+        # CHECK 3: stuck variance (count stałe przez ≥STUCK_COUNT_TOLERANCE cycles) — na ACTIVE
         # V3.28-LAYER2-MOTION-AWARE (02.05.2026 fix):
         # Distinguish "panel quiet" (no fluctuation, expected stable count, NO alert)
-        # vs "panel has motion" (delivered/new>0 OR assigned variance>0 BUT order_ids stuck = real bug).
-        # 02.05 incident pattern: PACKS_CATCHUP fires dla 47XXXX (assigned grows), order_ids broken (stuck).
+        # vs "panel has motion" (delivered/new>0 OR assigned variance>0 BUT active stuck = real bug).
+        # 02.05 incident pattern: PACKS_CATCHUP fires dla 47XXXX (assigned grows), active broken (stuck).
+        # Z2 fix 2026-05-07 #2: porównanie na active_ids/active_orders (eliminuje
+        # late-evening false positives gdzie order_ids plateauje przez panel design).
         if len(self._cycles) >= STUCK_COUNT_TOLERANCE:
             recent = list(self._cycles)[-STUCK_COUNT_TOLERANCE:]
-            recent_orders = [c.get("orders_in_panel", 0) for c in recent]
-            if all(v == recent_orders[0] for v in recent_orders) and recent_orders[0] > 0:
+            recent_active = [c.get("active_orders", c.get("orders_in_panel", 0)) for c in recent]
+            if all(v == recent_active[0] for v in recent_active) and recent_active[0] > 0:
                 # Z2 fix 2026-05-07: set-comparison eliminates rotation false positives
-                # Extract order_ids sets from recent cycles
-                order_ids_sets = [c.get("order_ids") for c in recent]
+                # Use active_ids (post-fix #2) z fallback do order_ids (legacy entries)
+                active_sets = [c.get("active_ids", c.get("order_ids")) for c in recent]
                 # Determine if all sets are non-None and identical
                 set_stuck = False
-                if all(s is not None for s in order_ids_sets):
-                    # All cycles have order_ids stored (post-fix entries)
-                    if len(order_ids_sets) >= 2:
-                        first_set = order_ids_sets[0]
-                        set_stuck = all(s == first_set for s in order_ids_sets)
+                if all(s is not None for s in active_sets):
+                    # All cycles have set stored (post-fix entries)
+                    if len(active_sets) >= 2:
+                        first_set = active_sets[0]
+                        set_stuck = all(s == first_set for s in active_sets)
                 else:
                     # Mixed or legacy entries (pre-fix) → fallback to legacy motion-only check
                     set_stuck = None  # indicates fallback needed
@@ -322,10 +360,10 @@ class ParserHealthMonitor:
                             "type": "PARSER_STUCK",
                             "severity": "warning",
                             "message": (
-                                f"Parser monitor: orders_in_panel = {recent_orders[0]} stałe przez "
+                                f"Parser monitor: active_orders = {recent_active[0]} stałe przez "
                                 f"{STUCK_COUNT_TOLERANCE} cycle. (legacy mode, motion-aware OFF)"
                             ),
-                            "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
+                            "context": {"stuck_value": recent_active[0], "stuck_count": STUCK_COUNT_TOLERANCE,
                                         "motion_aware": False},
                         })
                     elif panel_has_motion:
@@ -334,13 +372,13 @@ class ParserHealthMonitor:
                             "type": "PARSER_STUCK",
                             "severity": "warning",
                             "message": (
-                                f"Parser monitor: orders_in_panel = {recent_orders[0]} stałe przez "
+                                f"Parser monitor: active_orders = {recent_active[0]} stałe przez "
                                 f"{STUCK_COUNT_TOLERANCE} cycle ALE panel ma motion "
                                 f"(new={sum_new}, delivered={sum_delivered}, assigned_var={assigned_motion}). "
-                                f"order_ids set IDENTYCZNY przez {STUCK_COUNT_TOLERANCE} cycle "
-                                f"(real parser miss confirmed)."
+                                f"active_ids set IDENTYCZNY przez {STUCK_COUNT_TOLERANCE} cycle "
+                                f"(real parser miss confirmed — live orders frozen)."
                             ),
-                            "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
+                            "context": {"stuck_value": recent_active[0], "stuck_count": STUCK_COUNT_TOLERANCE,
                                         "motion_new": sum_new, "motion_delivered": sum_delivered,
                                         "motion_assigned_variance": assigned_motion,
                                         "motion_total": motion_total, "motion_threshold": PARSER_STUCK_MOTION_THRESHOLD,
@@ -355,10 +393,10 @@ class ParserHealthMonitor:
                             "type": "PARSER_STUCK",
                             "severity": "warning",
                             "message": (
-                                f"Parser monitor: orders_in_panel = {recent_orders[0]} stałe przez "
+                                f"Parser monitor: active_orders = {recent_active[0]} stałe przez "
                                 f"{STUCK_COUNT_TOLERANCE} cycle. (legacy mode, motion-aware OFF)"
                             ),
-                            "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
+                            "context": {"stuck_value": recent_active[0], "stuck_count": STUCK_COUNT_TOLERANCE,
                                         "motion_aware": False},
                         })
                     elif panel_has_motion:
@@ -367,12 +405,12 @@ class ParserHealthMonitor:
                             "type": "PARSER_STUCK",
                             "severity": "warning",
                             "message": (
-                                f"Parser monitor: orders_in_panel = {recent_orders[0]} stałe przez "
+                                f"Parser monitor: active_orders = {recent_active[0]} stałe przez "
                                 f"{STUCK_COUNT_TOLERANCE} cycle ALE panel ma motion "
                                 f"(new={sum_new}, delivered={sum_delivered}, assigned_var={assigned_motion}). "
                                 f"Real bug pattern: 02.05 incident (PACKS_CATCHUP dla 47XXXX, order_ids parser miss)."
                             ),
-                            "context": {"stuck_value": recent_orders[0], "stuck_count": STUCK_COUNT_TOLERANCE,
+                            "context": {"stuck_value": recent_active[0], "stuck_count": STUCK_COUNT_TOLERANCE,
                                         "motion_new": sum_new, "motion_delivered": sum_delivered,
                                         "motion_assigned_variance": assigned_motion,
                                         "motion_total": motion_total, "motion_threshold": PARSER_STUCK_MOTION_THRESHOLD,
