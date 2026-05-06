@@ -40,7 +40,52 @@ Zawiera:
 ---
 
 **Owner:** Adrian Czapla <ac@nadajesz.pl>
-**Last update CLAUDE.md:** 06.05.2026 (Faza 7 Etap 0 LIVE shadow + czasówki fleet fix)
+**Last update CLAUDE.md:** 07.05.2026 noc (parser_health structural fix — active_ids = order_ids - closed_ids)
+
+---
+
+# CLAUDE.md — parser_health structural fix (post-sprint 07.05 noc)
+
+**Data:** 07.05.2026 ~01:11 Warsaw (= 06.05 23:11 UTC)
+**Latest tags:**
+- `parser-health-snapshot-active-2026-05-07` (commit `bbb36fa`) — get_health_snapshot consistency
+- `parser-health-active-ids-2026-05-07` (commit `579f282`) — Layer 2 STUCK + DELTA → active_ids
+- `telegram-utils-pytest-guard-2026-05-07` (commit `3ce489e`) — L1 prod + L2 conftest defense
+- `parser-health-test-tg-mock-2026-05-07` (commit `ea5df8b`) — L3 per-file fixture
+
+**Restart history dziś:**
+- 23:01:44 UTC (#1 active_ids deploy) — clean, 13s downtime
+- 23:09:57 UTC (#2 endpoint consistency) — clean, 13s downtime
+
+**Live state post-restart-2:** `:8888/health/parser` → `status=healthy, anomaly_detected=false, anomaly_reason=null`. cycle 10 entry: `orders_in_panel=228 active_orders=0` (panel ma 228 IDs wszystkie terminalne post-rollover).
+
+**Co zrobione (root cause + 3-warstwowa obrona):**
+- **Diagnoza:** Adrian alerty PARSER_STUCK 06.05 23:30 Warsaw → 75% leak z testów (commit `03a4bdf` brak mock_telegram fixture) + 25% real production (panel daily rollover 22:00 UTC).
+- **Root cause spamu 17/dzień od 02.05:** `panel_html_parser.py:87` regex `r"id:\s*(\d{5,7})"` łapie all-today's IDs niezależnie od `id_status`. order_ids count plateauje wieczorem post ostatnie zlecenie. Layer 2 STUCK pisany na fałszywym założeniu "count = active orders". Sprint 07.05 set-comparison "calibration" (`9a5a38a`) nie naprawił bo set też plateauje (te same IDs codziennie).
+- **Strukturalny fix:** `active_ids = order_ids - closed_ids` (closed_ids dostarczany przez parser via DOM marker `data-idkurier` missing). CHECK 2 (DELTA) + CHECK 3 (STUCK) + `get_health_snapshot` używają active_*. CHECK 1 ZERO_OUTPUT zostaje na orders_in_panel.
+- **Telegram leak fix 3-warstwowo:** L1 production `telegram_utils.send_admin_alert` sprawdza `PYTEST_CURRENT_TEST` env (auto-set przez pytest, w prod nigdy), opt-out `ALLOW_TELEGRAM_IN_TEST=1`. L2 `tests/conftest.py` autouse monkeypatch (belt-and-suspenders). L3 per-file `_block_real_telegram` fixture w `test_parser_health_set_detection.py`. Audit: 119 plików testów, ZERO conftest.py przed fixem, 7 prod modułów importuje send_admin_alert.
+
+**Tests:** 13/13 PASS set_detection (9 baseline + 4 nowe: late-evening panel keeps delivered, real miss active stuck + motion, delta uses active not order_ids, fallback gdy brak closed_ids) + 22/22 Layer3 regression.
+
+**Lekcje + feedback rules:**
+- **#76 NEW** (`lessons.md`): anomaly detection input semantics — verify steady-state behavior + replay 24h real data przed deploy. "Calibration" tuning thresholds gdy root cause = wrong input semantics = anti-pattern.
+- **#75 rozszerzona**: 3-warstwowa obrona Telegram leak z testów (L1 prod env + L2 conftest + L3 per-file).
+- **Feedback rule** "Root cause depth obligatory — never patch surface" (Adrian explicit 07.05 noc): "Twoja praca ma być najwyższej jakości, a system później niezawodny."
+
+**Branch:** `sprint-07-05-event-bus-opcja-c` 17 commits ahead `master@10c754d`. Master merge gate 10.05.
+
+**Rollback (cały parser_health structural fix):**
+```bash
+cd /root/.openclaw/workspace/scripts/dispatch_v2
+git revert bbb36fa 579f282 3ce489e ea5df8b --no-edit
+sudo systemctl restart dispatch-panel-watcher
+```
+
+**Backup files (24h retention):**
+- `parser_health.py.bak-pre-active-ids-2026-05-07`
+- `tests/test_parser_health_set_detection.py.bak-pre-active-ids-2026-05-07`
+- `tests/test_parser_health_set_detection.py.bak-pre-tg-mock-2026-05-07`
+- `telegram_utils.py.bak-pre-pytest-guard-2026-05-07`
 
 ---
 
