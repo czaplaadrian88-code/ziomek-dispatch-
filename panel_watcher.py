@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
 from dispatch_v2.common import flag, load_config, now_iso, setup_logger
-from dispatch_v2.event_bus import emit
+from dispatch_v2.event_bus import emit, emit_audit
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
 from dispatch_v2.parser_health_layer3 import install_layer3, record_tick_full
 from dispatch_v2.parser_health_endpoint import start_health_endpoint
@@ -534,7 +534,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
                 "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
             }
-            assigned_event = emit(
+            assigned_event = emit_audit(
                 "COURIER_ASSIGNED",
                 order_id=zid,
                 courier_id=courier_id,
@@ -606,7 +606,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         # ale NIE emitował do events.db → akumulacja phantom orders.
                         reason = "undelivered" if status_id == 8 else "cancelled"
                         _adv_cid = str(raw.get("id_kurier") or "")
-                        ev = emit(
+                        ev = emit_audit(
                             "ORDER_RETURNED_TO_POOL",
                             order_id=zid,
                             courier_id=_adv_cid,
@@ -638,7 +638,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 stats["fetched_details"] += 1
                 if raw and raw.get("id_kurier") and raw["id_kurier"] != KOORDYNATOR_ID:
                     courier_id = str(raw["id_kurier"])
-                    ev = emit(
+                    ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=zid,
                         courier_id=courier_id,
@@ -669,7 +669,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 reassign_checked += 1
                 panel_courier = str(raw.get("id_kurier") or "") if raw else ""
                 if panel_courier and panel_courier != state_courier and raw.get("id_kurier") != KOORDYNATOR_ID:
-                    ev = emit(
+                    ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=zid,
                         courier_id=panel_courier,
@@ -774,7 +774,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
                         )
                         _target_cid = _panel_cid
-                    _ev = emit(
+                    _ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=_oid_str,
                         courier_id=_target_cid,
@@ -999,7 +999,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 )
         elif sid in (8, 9):
             reason = "undelivered" if sid == 8 else "cancelled"
-            ev = emit(
+            ev = emit_audit(
                 "ORDER_RETURNED_TO_POOL",
                 order_id=zid,
                 payload={"reason": reason, "source": "reconcile"},
@@ -1131,7 +1131,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 event_id_str = f"{zid}_CZAS_KURIERA_UPDATED{suffix}"
             else:
                 event_id_str = f"{zid}_CZAS_KURIERA_UPDATED_{int(evt['payload'].get('delta_min',0)*10)}"
-            emit(
+            emit_audit(
                 "CZAS_KURIERA_UPDATED",
                 order_id=zid,
                 courier_id=str(state_order.get("courier_id") or ""),
@@ -1185,7 +1185,7 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
 
         # Po 3 failach emit PANEL_UNREACHABLE (throttled: max 1/min)
         if _fail_count >= 3 and time.time() - _last_panel_unreachable_emit > 60:
-            emit(
+            emit_audit(
                 "PANEL_UNREACHABLE",
                 payload={"fail_count": _fail_count, "last_error": str(e)},
                 event_id=f"PANEL_UNREACHABLE_{int(time.time() / 60)}",

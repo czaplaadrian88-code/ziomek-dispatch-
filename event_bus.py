@@ -244,8 +244,16 @@ def cleanup(retention_hours: int = 48) -> int:
 # ─────────────────────────────────────────────────────────────────────────
 
 
+_audit_log_initialized = False
+
+
 def _init_audit_log_table() -> None:
-    """Idempotentna inicjalizacja tabeli audit_log + indeksów. CREATE IF NOT EXISTS."""
+    """Idempotentna inicjalizacja tabeli audit_log + indeksów. CREATE IF NOT EXISTS.
+
+    Wywoływane lazy (przy pierwszym emit_audit/cleanup_audit_log/get_pending_count)
+    żeby nie crashować module load w test env gdzie _db_path() może nie być dostępny.
+    """
+    global _audit_log_initialized
     with _conn() as conn:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS audit_log (
@@ -260,6 +268,13 @@ def _init_audit_log_table() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_type ON audit_log(event_type)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_order ON audit_log(order_id)")
+    _audit_log_initialized = True
+
+
+def _ensure_audit_log_initialized() -> None:
+    """Lazy init guard. Wywoływany przed każdą operacją na audit_log."""
+    if not _audit_log_initialized:
+        _init_audit_log_table()
 
 
 def emit_audit(
@@ -289,6 +304,7 @@ def emit_audit(
     if event_id is None:
         event_id = make_event_id(event_type, order_id)
 
+    _ensure_audit_log_initialized()
     payload_json = json.dumps(payload or {}, ensure_ascii=False)
     created_at = now_iso()
 
@@ -312,6 +328,7 @@ def emit_audit(
 
 def cleanup_audit_log(retention_days: int = 90) -> int:
     """Czysci audit_log starsze niz retention_days. Zwraca liczbe usunietych."""
+    _ensure_audit_log_initialized()
     with _conn() as conn:
         cur = conn.execute(
             """DELETE FROM audit_log WHERE created_at < datetime('now', ?)""",
@@ -340,9 +357,6 @@ def get_pending_count(event_types: Optional[list] = None) -> int:
         return cur.fetchone()["cnt"]
 
 
-# Module init: ensure audit_log table exists. Idempotent.
-try:
-    _init_audit_log_table()
-except Exception as _init_e:
-    _log.error(f"_init_audit_log_table() startup error: {_init_e}")
-    raise
+# Lazy init: _init_audit_log_table() wywoływane przy pierwszym emit_audit /
+# cleanup_audit_log via _ensure_audit_log_initialized(). NIE robimy module-load
+# init bo test env może nie mieć dostępu do _db_path() / load_config()['paths'].

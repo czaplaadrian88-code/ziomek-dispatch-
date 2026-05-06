@@ -136,6 +136,7 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
     Event_id: {oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{epoch_ms} — unique per emit.
     """
     from dispatch_v2.event_bus import emit as _eb_emit
+    from dispatch_v2.event_bus import emit_audit as _eb_emit_audit
     from dispatch_v2.state_machine import update_from_event as _sm_apply
 
     delta_min = _v327_compute_delta_min(old_ck_iso, new_ck_iso)
@@ -159,7 +160,7 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
         "payload": payload,
     }
     try:
-        _eb_emit("CZAS_KURIERA_UPDATED",
+        _eb_emit_audit("CZAS_KURIERA_UPDATED",
                  order_id=oid, courier_id=courier_id or "",
                  payload=payload, event_id=event_id)
         _sm_apply(event)
