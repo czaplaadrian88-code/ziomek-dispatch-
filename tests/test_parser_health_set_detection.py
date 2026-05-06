@@ -12,9 +12,19 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dispatch_v2 import parser_health  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _block_real_telegram(monkeypatch):
+    # Z2 fix 2026-05-07: prevent real send_admin_alert calls during tests.
+    # Mirrors mock_telegram fixture w test_parser_health_layer3.py.
+    from dispatch_v2 import telegram_utils
+    monkeypatch.setattr(telegram_utils, "send_admin_alert", lambda text: True)
 
 
 def _make_monitor(tmpdir: str):
