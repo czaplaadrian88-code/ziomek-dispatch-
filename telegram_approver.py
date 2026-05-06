@@ -56,9 +56,33 @@ from dispatch_v2.common import (
 #   - Klikać SHIFT_* callback buttons z prywatnego DM (security gate expand)
 #   - W przyszłości CZAS_TAK/NIE/CZEKAJ z TASK A (gdy czasówki trafią do DM)
 # Adrian = 8765130486; Bartek = 8753482870 (added 2026-05-05 06:43 UTC, post /start).
-# NOTE: code change wymaga restartu dispatch-telegram (Python module-level constant).
-# Bundled z TASK A restart cycle. Hot-reload alerts działa już via flags.json.
-KONIEC_AUTHORIZED_USER_IDS = [8765130486, 8753482870]
+#
+# Backlog #8 (2026-05-07): hot-reload via flags.json. Runtime checks używają
+# `_authorized_user_ids()` — kolejne user_id Adrian dodaje przez edit `flags.json`
+# bez restart dispatch-telegram (jeden restart dziś = ostatni). Module-level alias
+# `KONIEC_AUTHORIZED_USER_IDS` zostaje dla backward compat unit tests.
+_KONIEC_AUTHORIZED_USER_IDS_DEFAULT = [8765130486, 8753482870]
+
+
+def _authorized_user_ids() -> list[int]:
+    """Hot-reload list authorized user_ids dla /koniec /poprawa /shift_* DM commands.
+
+    Fallback do `_KONIEC_AUTHORIZED_USER_IDS_DEFAULT` gdy flags.json brak klucza,
+    typu nie list-of-int, lub IO error — bezpiecznie zachowuje obecny stan.
+    """
+    try:
+        flags = load_flags() or {}
+        ids = flags.get("KONIEC_AUTHORIZED_USER_IDS")
+        if isinstance(ids, list) and ids and all(isinstance(x, int) for x in ids):
+            return ids
+    except Exception:
+        pass
+    return _KONIEC_AUTHORIZED_USER_IDS_DEFAULT
+
+
+# Backward-compat module-level alias — używany przez unit tests (pre-#8 referencje).
+# Snapshot przy import; runtime checks używają `_authorized_user_ids()` dla hot-reload.
+KONIEC_AUTHORIZED_USER_IDS = _authorized_user_ids()
 KONIEC_RE = re.compile(r"^/koniec\s+(\d+)\s*$")
 # TB-3 (2026-05-05): /poprawa [cid] mirror /koniec — odwołanie "Nie przyjdzie"
 # gdy kurier mimo wszystko przyszedł. Reuses KONIEC_AUTHORIZED_USER_IDS auth.
@@ -1882,7 +1906,7 @@ def _handle_koniec_command(state: dict, msg: dict, text: str) -> Optional[str]:
     if not m:
         return None
     sender_id = (msg.get("from") or {}).get("id")
-    if sender_id not in KONIEC_AUTHORIZED_USER_IDS:
+    if sender_id not in _authorized_user_ids():
         _log.warning(f"/koniec unauthorized sender_id={sender_id}")
         return None  # silent reject
     cid = m.group(1)
@@ -1956,7 +1980,7 @@ def _handle_poprawa_command(state: dict, msg: dict, text: str) -> Optional[str]:
     if not m:
         return None
     sender_id = (msg.get("from") or {}).get("id")
-    if sender_id not in KONIEC_AUTHORIZED_USER_IDS:
+    if sender_id not in _authorized_user_ids():
         _log.warning(f"/poprawa unauthorized sender_id={sender_id}")
         return None  # silent reject
     cid = m.group(1)
@@ -2078,7 +2102,7 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
     cb_user_id_int = int(cb_from_id) if cb_from_id.isdigit() else None
     is_authorized = (
         cb_chat_id == str(state["admin_id"])
-        or (is_taskb_action and cb_user_id_int in KONIEC_AUTHORIZED_USER_IDS)
+        or (is_taskb_action and cb_user_id_int in _authorized_user_ids())
     )
     if not is_authorized:
         _log.warning(
