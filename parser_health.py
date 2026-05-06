@@ -482,13 +482,17 @@ class ParserHealthMonitor:
                 if not cycles_list:
                     return {"status": "unknown", "reason": "no_cycles_recorded", "cycles": 0}
                 last = cycles_list[-1]
+                # Z2 fix 2026-05-07 #2: STUCK check używa active_orders dla spójności
+                # z alerting path (_check_anomalies). ZERO_OUTPUT zostaje na orders_in_panel
+                # (sygnał "parser literalnie pusty", niezależny od stanu zamówień).
                 recent_orders = [c.get("orders_in_panel", 0) for c in cycles_list]
+                recent_active = [c.get("active_orders", c.get("orders_in_panel", 0)) for c in cycles_list]
                 anomalies_recent = []
                 # Check CHECK 1+3 dla aktualnego status (NIE retrigger cooldown)
                 recent_zero = sum(1 for v in recent_orders if v == 0)
-                stuck = (len(recent_orders) >= STUCK_COUNT_TOLERANCE
-                         and all(v == recent_orders[-1] for v in recent_orders[-STUCK_COUNT_TOLERANCE:])
-                         and recent_orders[-1] > 0)
+                stuck = (len(recent_active) >= STUCK_COUNT_TOLERANCE
+                         and all(v == recent_active[-1] for v in recent_active[-STUCK_COUNT_TOLERANCE:])
+                         and recent_active[-1] > 0)
                 if recent_zero >= ZERO_ORDERS_TOLERANCE_CYCLES:
                     anomalies_recent.append("PARSER_ZERO_OUTPUT")
                 if stuck:
@@ -501,7 +505,9 @@ class ParserHealthMonitor:
                     "cycles_recorded": len(cycles_list),
                     "last_tick_ts": last.get("ts"),
                     "last_orders_in_panel": last.get("orders_in_panel"),
+                    "last_active_orders": last.get("active_orders", last.get("orders_in_panel")),
                     "recent_orders_window": recent_orders,
+                    "recent_active_window": recent_active,
                     "anomalies_active": anomalies_recent,
                     "init_count": self._init_count,
                     "error_count": self._error_count,
