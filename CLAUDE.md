@@ -40,8 +40,134 @@ Zawiera:
 ---
 
 **Owner:** Adrian Czapla <ac@nadajesz.pl>
-**Last update CLAUDE.md:** 04.05.2026
-EOF
+**Last update CLAUDE.md:** 06.05.2026 (Faza 7 Etap 0 LIVE shadow + czasówki fleet fix)
+
+---
+
+# CLAUDE.md — Faza 7-AUTO-PROXIMITY Etap 0 LIVE shadow + czasówki fleet fix (post-sprint 06.05 wieczór)
+
+**Data:** 06.05.2026 ~20:30 UTC
+**Latest tags:**
+- `faza-7-auto-proximity-shadow-impl-2026-05-06` (commit `14b4e70`) — Faza 7 classifier shadow LIVE
+- `czasowka-fleet-shift-end-fix-2026-05-06` (commit `69223b3`) — czasowka_scheduler dispatchable_fleet fix
+
+**Project memory (READ FIRST jutro):** `sprint_2026-05-06_evening_close.md` + `/tmp/architectural_audit/SESSION_HANDOFF_2026-05-07_morning.md`
+
+**Pending:**
+- **Lunch peak verify 07.05 11-14 lokalnie (09-12 UTC)** — czasówki kandydaci > 0, Faza 7 distribution AUTO/ACK/ALERT
+- Bartek user_id dla `KONIEC_AUTHORIZED_USER_IDS` (TASK B tech debt z 04.05)
+- Track C `replay_failed.py` same dispatchable_fleet bug (off-line tool, low priority)
+- Faza 7 Etap 1 calibration ~13.05 (post 7-day shadow obs)
+- Master merge gate 10.05 dla branch `sprint-07-05-event-bus-opcja-c`
+
+---
+
+## SPRINT 06.05 WIECZÓR — co zrobione
+
+### Sprint A — Czasówki fleet fix (Track A)
+
+**Incident #471036 14:24 UTC** Karczma Maciejówka — "BRAK KANDYDATÓW" (3 aktywni kurierzy odrzuceni `v325_NO_ACTIVE_SHIFT`).
+
+**Root cause:** `czasowka_scheduler.py:285` używał raw `build_fleet_snapshot()` (zostawia `shift_end=None`) zamiast `dispatchable_fleet()` (wzbogaca o `shift_end` z V3.24-A grafiku) — `feasibility_v2:300` Fail-CLOSED hard-rejects wszystkich.
+
+**Fix:** 1-line mirror `shadow_dispatcher:521` pattern. Test `tests/test_czasowka_dispatchable_fleet_fix.py` 3/3 PASS, causal verified (revert→2/3 FAIL, restore→3/3 PASS). Regression 71/71 czasówka. Deploy: oneshot timer auto-pickup w 1-min tick.
+
+**Audit consumers raw `build_fleet_snapshot()`:**
+- `czasowka_scheduler.py:285` — BUG (fix LIVE)
+- `courier_resolver.py:587` — OK (wewnątrz `dispatchable_fleet()` self-enrichment)
+- `replay_failed.py:132` — same bug, off-line debug (Track C deferred)
+- `shadow_dispatcher.py` docstring — comment tylko, prod używa `dispatchable_fleet()` (linia 521)
+
+### Sprint B — T-60 trigger w flags.json
+
+`CZASOWKA_TRIGGERS_MIN: [50, 40] → [60, 50, 40]` + `CZASOWKA_T60_ENABLED: true`. Per-trigger flag pattern w `evaluator.py:277` `f"CZASOWKA_T{trigger_min}_ENABLED"` — T60 łapie automatycznie. Hot-reload, zero restart.
+
+### Sprint C — Faza 7-AUTO-PROXIMITY Etap 0 LIVE shadow
+
+**Spec:** `eod_drafts/2026-05-06/faza_7_auto_proximity_design_spec.md`
+
+**8 plików +1185 LOC insertions, 27 nowych testów:**
+- NEW `auto_proximity_classifier.py` — pure function `classify_auto_route(...) → (route, reason)`. T1/T2/T3 thresholds. 6 conditions. 11 edge cases. Deterministic, no I/O.
+- `common.py` — `ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN` flag (env-overridable, default OFF)
+- `courier_resolver.py` — `_post_shift_start_synthetic_eligible()` helper (Adrian decyzja A1: GPS off + 5min po shift_start → BIALYSTOK_CENTER)
+- `dispatch_pipeline.py` — `PipelineResult.auto_route` ('ACK' default) + `auto_route_reason` + `auto_route_context` dict + `_classify_and_set_auto_route` helper z defense-in-depth (classifier exception → fallback ACK + warning log)
+- `shadow_dispatcher.py` — `_serialize_result` emit auto_route fields top-level
+- `telegram_approver.py` — `format_proposal` linijka "🤖 PEWIEN — auto-przypisałbym {kurier} [{tier}] (margin +X)" gdy `decision.auto_route='AUTO'`
+- `flags.json` — `AUTO_PROXIMITY_ENABLED=false`, `SHADOW_ONLY=true`, `THRESHOLD=T1`, `PARSER_DEGRADED=false`
+
+**Adrian decyzje 2026-05-06:**
+- A1: GPS off OK + 5min po shift_start synthetic position
+- B-A: `gastro stop`/`gastro start` Telegram cmd wyłącza tylko AUTO (deferred Etap 2)
+- C-Y: czasówki KOORD T-60/T-50/T-40 = osobny track (Sprint A+B z dziś)
+- ANULUJ uprawnienia: Adrian + Bartek (deferred Etap 2)
+- Czasówki ZAWSZE → ACK w T1
+- ALERT ZAWSZE human gate
+
+**Threshold table T1 (placeholder, calibration after shadow week):**
+- min_pool_feasible=2, min_score_margin=15.0, tiers=(gold, std+), min_score=50.0, strict_gps=False
+
+**Tests:** 21/21 classifier unit + 6/6 integration + 71/71 czasówka regression + 13/13 schedule = **111/111 PASS**.
+
+**Deploy 06.05:**
+- 20:24:38 UTC stop dispatch-shadow + dispatch-panel-watcher
+- 20:24:50 UTC start oba (clean, ortools 125ms, panel_client login OK 4913ms)
+- 20:25:57 UTC end-to-end smoke z LIVE fleet (Szymon P) → ACK z `shift_end_edge_<=15min` correctly detected
+- 20:27:16 UTC restart dispatch-telegram (Adrian explicit ACK)
+
+### Stan flag (LIVE od 06.05.2026 ~20:25 UTC w `flags.json`)
+
+```json
+{
+  "AUTO_PROXIMITY_ENABLED": false,
+  "AUTO_PROXIMITY_SHADOW_ONLY": true,
+  "AUTO_PROXIMITY_THRESHOLD": "T1",
+  "PARSER_DEGRADED": false,
+  "CZASOWKA_TRIGGERS_MIN": [60, 50, 40],
+  "CZASOWKA_T60_ENABLED": true,
+  "CZASOWKA_T50_ENABLED": true,
+  "CZASOWKA_T40_ENABLED": true,
+  "CZASOWKA_PROACTIVE_ENABLED": true,
+  "CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES": true,
+  "CZASOWKA_T0_ALERT_ENABLED": false
+}
+```
+
+### Rollback procedury
+
+**Czasówki fleet fix soft (5s):**
+```bash
+cp /root/.openclaw/workspace/scripts/dispatch_v2/czasowka_scheduler.py.bak-pre-fleet-fix-2026-05-06 /root/.openclaw/workspace/scripts/dispatch_v2/czasowka_scheduler.py
+# next 1-min tick automatycznie revert
+```
+
+**Faza 7 Etap 0 soft (5s, hot-reload, NIE wykonuje classifier):**
+```bash
+python3 -c "import json,os,tempfile; p='/root/.openclaw/workspace/scripts/flags.json'; d=json.load(open(p)); d['AUTO_PROXIMITY_SHADOW_ONLY']=False; fd,t=tempfile.mkstemp(dir=os.path.dirname(p)); open(fd,'w').write(json.dumps(d,indent=2,ensure_ascii=False)); os.replace(t,p)"
+```
+
+**Faza 7 hard (revert kod):**
+```bash
+cd /root/.openclaw/workspace/scripts/dispatch_v2
+git revert 14b4e70 --no-edit
+sudo systemctl restart dispatch-shadow dispatch-panel-watcher
+# dispatch-telegram WYMAGA Adrian ACK
+```
+
+### Backup files (24h retention)
+
+- `czasowka_scheduler.py.bak-pre-fleet-fix-2026-05-06`
+- `flags.json.bak-pre-t60-2026-05-06`
+- `flags.json.bak-pre-faza-7-shadow-2026-05-06`
+
+### Lekcje candidate
+
+- **#80**: Audit consumers całościowo przy zmianie API (`czasowka_scheduler` używał innego entry-pointa do floty niż reszta pipeline → bug niewidoczny od V3.24-A 22.04)
+- **#81**: Aider mock strategy — mockuj boundary modułu, nie testowaną funkcję samą
+- **#82**: Aider misnie path z `--message` zawierającym apostrofy
+- **#83**: Defense-in-depth wrapper helper z try/except w hot path (classifier wywoływany w `assess_order` → wrapper fallback ACK + warning log)
+- **#84**: Empirical reality vs design intencja (cid=26 w state_dump = 0 ZAWSZE bo transient — bug widoczny tylko przez incident alert)
+
+---
 
 # CLAUDE.md — TASK B SHIFT NOTIFICATIONS Phase 0+1 LIVE (post-sprint 04.05 wieczór)
 
