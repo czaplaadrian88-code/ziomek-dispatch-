@@ -115,15 +115,25 @@ def _load_kurier_ids() -> Dict[str, str]:
 
 
 def resolve_cid(full_name: str, kurier_ids: Optional[Dict[str, str]] = None) -> Optional[str]:
-    """Map schedule full_name → courier_id.
+    """Map schedule full_name → courier_id (score-based v2 — Tech debt #14, 2026-05-07).
 
-    Schedule keys are full names ('Bartek Ołdziej'). kurier_ids.json keys are
-    panel display names ('Bartek O', 'Michał K'). Strategy:
-      1. exact match
-      2. case-insensitive 'first_word + first_letter_of_last_word' match
-         e.g. 'Bartek Ołdziej' → key 'Bartek O'
-      3. case-insensitive prefix on first 2 tokens
-    Returns None if no match.
+    Schedule keys are full names ('Adrian Citko'). kurier_ids.json keys are
+    panel display names ('Adrian Cit', 'Adrian R', 'Adrian'). Pre-#14 algo
+    używał fixed-length prefixów (last[:1], last[:2]) → fallback na first-name
+    unique match → bug: 'Adrian Citko' resolwowane na cid=21 (Adrian Czapla)
+    zamiast 457 (Adrian Cit). Lekcja #78 problem.
+
+    v2 strategy:
+      1. Exact match (case-sensitive) → return cid
+      2. Case-insensitive exact → return cid
+      3. Score-based fallback: dla każdego alias z tym samym first-name compute
+         similarity score:
+           - alias = bare first-name (e.g. "Adrian"): score = 1
+           - alias z surname:
+             * schedule s_last starts with alias a_last → score = len(a_last) * 10
+             * alias a_last starts with s_last (rare) → score = len(s_last) * 5
+             * else → 0
+         Pick highest score. Tie → ambiguous (return None). All-zero → None.
     """
     if not full_name:
         return None
@@ -132,30 +142,83 @@ def resolve_cid(full_name: str, kurier_ids: Optional[Dict[str, str]] = None) -> 
     if not kurier_ids:
         return None
 
+    # 1. Exact match (case-sensitive)
     if full_name in kurier_ids:
         return kurier_ids[full_name]
 
+    # 2. Case-insensitive exact match
+    fn_lc = full_name.lower()
+    for key, cid in kurier_ids.items():
+        if key.lower() == fn_lc:
+            return cid
+
+    # 3. Score-based fallback
     parts = full_name.strip().split()
     if not parts:
         return None
-    first = parts[0]
-    last = parts[-1] if len(parts) > 1 else ""
-    cand = f"{first} {last[:1]}".strip() if last else first
-    cand_lc = cand.lower()
-    cand2_lc = f"{first} {last[:2]}".lower() if last else first.lower()
+    first_lc = parts[0].lower()
+    s_last_lc = parts[-1].lower() if len(parts) > 1 else ""
 
-    for key, cid in kurier_ids.items():
-        kl = key.lower()
-        if kl == cand_lc:
-            return cid
-        if last and kl == cand2_lc:
-            return cid
-    # Fallback: first-name-only unique match (avoid ambiguity)
-    first_lc = first.lower()
-    matches = [cid for k, cid in kurier_ids.items() if k.lower() == first_lc]
-    if len(matches) == 1:
-        return matches[0]
-    return None
+    scored: List[Tuple[int, str, str]] = []  # (score, cid, alias_key)
+    for alias, cid in kurier_ids.items():
+        atokens = alias.strip().split()
+        if not atokens:
+            continue
+        if atokens[0].lower() != first_lc:
+            continue
+        if len(atokens) == 1:
+            score = 1  # bare first-name alias (e.g. "Adrian")
+        else:
+            a_last_lc = atokens[-1].lower()
+            if not s_last_lc:
+                score = 0  # schedule has only first; alias has more → mismatch
+            elif s_last_lc.startswith(a_last_lc):
+                score = len(a_last_lc) * 10
+            elif a_last_lc.startswith(s_last_lc):
+                score = len(s_last_lc) * 5
+            else:
+                score = 0
+        if score > 0:
+            scored.append((score, cid, alias))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda x: -x[0])
+    best_score, best_cid, best_alias = scored[0]
+    if len(scored) > 1 and scored[1][0] == best_score:
+        # Tie → ambiguous. Log + return None (caller emits UNMAPPED_COURIER alert).
+        try:
+            state_mod.append_learning_log({
+                "event": "RESOLVE_CID_AMBIGUOUS_TIE",
+                "full_name": full_name,
+                "tied_aliases": [a for _, _, a in scored if _ == best_score],
+                "tied_score": best_score,
+            })
+        except Exception:
+            pass  # never fail resolve_cid on log error
+        return None
+
+    # Score-based winner picked. Log if >1 same-first-name candidate (audit calibration).
+    if len(scored) > 1 or any(
+        a.split() and a.split()[0].lower() == first_lc
+        for a in kurier_ids.keys() if a != best_alias
+    ):
+        try:
+            state_mod.append_learning_log({
+                "event": "RESOLVE_CID_AMBIGUOUS_RESOLVED",
+                "full_name": full_name,
+                "winner_alias": best_alias,
+                "winner_score": best_score,
+                "winner_cid": best_cid,
+                "alternatives": [
+                    {"alias": a, "score": s, "cid": c}
+                    for s, c, a in scored[1:]
+                ],
+            })
+        except Exception:
+            pass
+    return best_cid
 
 
 def _parse_shift_dt(date_today: date, hhmm: str, *, end: bool = False) -> Optional[datetime]:
