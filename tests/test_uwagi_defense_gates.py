@@ -172,6 +172,75 @@ def test_assess_order_normal_flow_with_fallback_coords():
     assert result.verdict in ("KOORD", "SKIP", "PROPOSE")
 
 
+# ─────────────────────────────────────────────
+# Firmowe konto KOORD alert suppression (3 tests)
+# ─────────────────────────────────────────────
+
+def test_send_koord_alert_suppressed_for_firmowe_konto():
+    """address_id=161 + flag False → tg_request NIE wywołane, log info zamiast send."""
+    from unittest.mock import patch
+    from dispatch_v2 import czasowka_scheduler
+    from dispatch_v2 import common as C
+
+    order_state = {
+        "address_id": "161",
+        "uwagi": "Odbiór: Drtusz, Wyszyńskiego 2/75",
+        "pickup_at_warsaw": "2026-05-07T11:00:00+02:00",
+    }
+    result = {"reason": "no_pickup_geocode", "minutes_to_pickup": 36, "best": None, "alternatives": []}
+
+    with patch.object(C, "flag", side_effect=lambda name, default=False: False if name == "ENABLE_FIRMOWE_KONTO_KOORD_ALERTS" else default), \
+         patch.object(czasowka_scheduler, "tg_request") as mock_tg, \
+         patch.object(czasowka_scheduler, "_resolve_bot_token", return_value="dummy"), \
+         patch.object(czasowka_scheduler, "_resolve_alert_chat_id", return_value=-123):
+        czasowka_scheduler._send_koord_alert("471173", order_state, result)
+    assert mock_tg.call_count == 0, "tg_request must NOT be called when firmowe + flag False"
+
+
+def test_send_koord_alert_fires_for_non_firmowe():
+    """Regular restaurant (address_id != 161) → tg_request wywołane normalnie."""
+    from unittest.mock import patch, MagicMock
+    from dispatch_v2 import czasowka_scheduler
+
+    order_state = {
+        "address_id": "200",  # regular restaurant
+        "restaurant": "Pizzeria",
+        "pickup_at_warsaw": "2026-05-07T11:00:00+02:00",
+    }
+    result = {"reason": "≤40min + zero MAYBE", "minutes_to_pickup": 36, "best": None, "alternatives": []}
+
+    mock_response = MagicMock()
+    mock_response.get = lambda k, d=None: True if k == "ok" else d
+    with patch.object(czasowka_scheduler, "tg_request", return_value=mock_response) as mock_tg, \
+         patch.object(czasowka_scheduler, "_resolve_bot_token", return_value="dummy"), \
+         patch.object(czasowka_scheduler, "_resolve_alert_chat_id", return_value=-123):
+        czasowka_scheduler._send_koord_alert("999", order_state, result)
+    assert mock_tg.call_count == 1, "tg_request must be called for non-firmowe"
+
+
+def test_send_koord_alert_fires_for_firmowe_when_flag_true():
+    """Override flag True → firmowe alerts re-enabled (escape hatch)."""
+    from unittest.mock import patch, MagicMock
+    from dispatch_v2 import czasowka_scheduler
+    from dispatch_v2 import common as C
+
+    order_state = {
+        "address_id": "161",
+        "uwagi": "Odbiór: Drtusz, Wyszyńskiego 2/75",
+        "pickup_at_warsaw": "2026-05-07T11:00:00+02:00",
+    }
+    result = {"reason": "no_pickup_geocode", "minutes_to_pickup": 36, "best": None, "alternatives": []}
+
+    mock_response = MagicMock()
+    mock_response.get = lambda k, d=None: True if k == "ok" else d
+    with patch.object(C, "flag", side_effect=lambda name, default=False: True if name == "ENABLE_FIRMOWE_KONTO_KOORD_ALERTS" else default), \
+         patch.object(czasowka_scheduler, "tg_request", return_value=mock_response) as mock_tg, \
+         patch.object(czasowka_scheduler, "_resolve_bot_token", return_value="dummy"), \
+         patch.object(czasowka_scheduler, "_resolve_alert_chat_id", return_value=-123):
+        czasowka_scheduler._send_koord_alert("471173", order_state, result)
+    assert mock_tg.call_count == 1, "tg_request must be called when firmowe + flag True"
+
+
 def test_koord_alert_no_pickup_geocode_truncates_long_uwagi():
     long_uwagi = "Odbiór: " + ("X" * 500)  # 500+ chars
     order_state = {

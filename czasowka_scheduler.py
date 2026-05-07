@@ -498,6 +498,23 @@ def _format_koord_alert(oid: str, order_state: dict, result: dict) -> str:
 
 
 def _send_koord_alert(oid: str, order_state: dict, result: dict) -> None:
+    # Adrian decision 2026-05-07: czasówki z firmowego konta Nadajesz.pl
+    # (address_id=161) NIE wysyłają KOORD alertów do grupy. Adrian sam zarządza
+    # firmowymi przez panel — alert byłby noise. Hot-reload via flags.json:
+    # ENABLE_FIRMOWE_KONTO_KOORD_ALERTS=true odwraca (default false = suppress).
+    _aid = order_state.get("address_id")
+    try:
+        _aid_int = int(_aid) if _aid is not None else None
+    except (TypeError, ValueError):
+        _aid_int = None
+    _is_firmowe = _aid_int is not None and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS
+    if _is_firmowe and not C.flag("ENABLE_FIRMOWE_KONTO_KOORD_ALERTS", False):
+        _log.info(
+            f"KOORD alert SUPPRESSED oid={oid} address_id={_aid} "
+            f"(firmowe konto, flag ENABLE_FIRMOWE_KONTO_KOORD_ALERTS=false). "
+            f"reason={result.get('reason')}"
+        )
+        return
     token = _resolve_bot_token()
     if not token:
         _log.warning(f"KOORD alert SKIPPED (TELEGRAM_BOT_TOKEN empty) oid={oid}")
