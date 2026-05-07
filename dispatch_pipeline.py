@@ -1206,9 +1206,21 @@ def _assess_order_impl(
             f"oid={order_id}"
         )
 
+    # Fix 2026-05-07: early_bird threshold patrzy na RAW pickup_at_warsaw (deklaracja
+    # restauracji), NIE extended czas_kuriera_warsaw. Bug strukturalny od V3.19f deploy:
+    # czasowka_scheduler liczy mtp z raw, assess_order early_bird patrzył na extended →
+    # czasówki przedłużone Ziomkiem o 20-30min były KOORD'owane jako pool=0 mimo że
+    # czasowka_scheduler był w T-40 trigger window. Eliminuje 49% KOORD czasówek
+    # (`zero MAYBE` 19× / 39 całych w 5-day eval_log obs).
+    pickup_at_for_early_bird_raw = order_event.get("pickup_at_warsaw") or order_event.get("pickup_at")
+    pickup_at_for_early_bird = (
+        parse_panel_timestamp(pickup_at_for_early_bird_raw)
+        if pickup_at_for_early_bird_raw else pickup_at
+    )
+
     # Early bird → KOORD
-    if pickup_at is not None:
-        pu = pickup_at if pickup_at.tzinfo else pickup_at.replace(tzinfo=WARSAW)
+    if pickup_at_for_early_bird is not None:
+        pu = pickup_at_for_early_bird if pickup_at_for_early_bird.tzinfo else pickup_at_for_early_bird.replace(tzinfo=WARSAW)
         minutes_ahead = (pu.astimezone(timezone.utc) - now).total_seconds() / 60.0
         if minutes_ahead >= EARLY_BIRD_THRESHOLD_MIN:
             return PipelineResult(

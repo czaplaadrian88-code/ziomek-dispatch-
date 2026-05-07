@@ -262,21 +262,42 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "all_candidates_for_proactive": [],
         }
 
-    # Defense gate (L2): brak pickup_coords = order bez geokodacji (np. firmowe
-    # konto Nadajesz.pl gdzie parser uwag nie wyciągnął adresu — P3 edge).
-    # Fail fast z czytelnym KOORD alertem zamiast lecieć w feasibility loop
-    # i serwować "BRAK KANDYDATÓW + pickup_too_far 6285km" (myli operatora).
+    # Defense gate (L2): brak pickup_coords = order bez geokodacji.
+    # Fix 2026-05-07: dla firmowych Nadajesz.pl (address_id ∈ FIRMOWE_KONTO_ADDRESS_IDS)
+    # użyj FIRMOWE_KONTO_FALLBACK_COORDS mirror panel_watcher (sprint #4 firmowe konto).
+    # Konsumer audit gap: panel_watcher wpisywał fallback od 07.05 morning #4 deploy
+    # ale czasowka_scheduler czyta orders_state direct gdzie legacy state pre-deploy
+    # ma pickup_coords=None → 51% wszystkich KOORD (20×/39 w 5-day eval_log obs)
+    # generowane przez 2 firmowe oid'y (#471172/#471173) re-evaluowane wielokrotnie.
+    # Lekcja #80 (consumer audit przy boundary changes).
     _pc = order_state.get("pickup_coords")
-    if _pc is None or _pc == [0.0, 0.0] or _pc == (0.0, 0.0):
-        return {
-            "decision": "KOORD",
-            "reason": "no_pickup_geocode",
-            "minutes_to_pickup": mins,
-            "match_quality": "none",
-            "best": None,
-            "alternatives": [],
-            "all_candidates_for_proactive": [],
-        }
+    _is_no_geocode = _pc is None or _pc == [0.0, 0.0] or _pc == (0.0, 0.0)
+    if _is_no_geocode:
+        _aid_raw = order_state.get("address_id")
+        try:
+            _aid_int = int(_aid_raw) if _aid_raw is not None else None
+        except (TypeError, ValueError):
+            _aid_int = None
+        if _aid_int is not None and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS:
+            # Firmowe Nadajesz.pl — fallback coords zamiast KOORD/no_pickup_geocode.
+            # Mutate local order_state copy NIE persist (state machine source-of-truth).
+            order_state = dict(order_state)
+            order_state["pickup_coords"] = list(C.FIRMOWE_KONTO_FALLBACK_COORDS)
+            _log.info(
+                f"V328_CZASOWKA_FIRMOWE_FALLBACK oid={order_id} "
+                f"address_id={_aid_int} pickup_coords=fallback "
+                f"({C.FIRMOWE_KONTO_FALLBACK_COORDS}) — KOORD/no_pickup_geocode bypass"
+            )
+        else:
+            return {
+                "decision": "KOORD",
+                "reason": "no_pickup_geocode",
+                "minutes_to_pickup": mins,
+                "match_quality": "none",
+                "best": None,
+                "alternatives": [],
+                "all_candidates_for_proactive": [],
+            }
 
     # Build order_event dict w format którego oczekuje assess_order (mirror panel_watcher emit).
     order_event = {
