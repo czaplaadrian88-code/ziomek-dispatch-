@@ -203,3 +203,33 @@ def test_add_new_courier_partial_fail_rollback(tmp_path, monkeypatch):
     assert tiers_after == tiers
     full_after = json.loads(full_path.read_text())
     assert full_after == full
+
+
+# ---------- _is_garbage_name (worker.py filter) ----------
+
+from dispatch_v2.shift_notifications.worker import _is_garbage_name
+
+
+@pytest.mark.parametrize("name", [
+    "Adrian Citko",
+    "Marcin Bystrowski",
+    "Dawid Kr",
+    "Patryk",
+    "Łukasz Więcko",
+    "Aku pada",  # short edge case — false-negative ale entry=None i tak skip
+])
+def test_garbage_name_accepts_real_names(name):
+    assert _is_garbage_name(name) is False
+
+
+@pytest.mark.parametrize("name", [
+    "Opony, odpisac na maila carefleetu",                              # przecinek
+    "lozysko czy cos, zatkany spryskiwacz, sprawdzic klocki",          # przecinek + lower
+    "słychać lozysko czy cos, konczy sie sprzeglo",                    # lower + przecinek
+    "zapala sie check i kontrola trakcji",                              # lower
+    "to jest na pewno nie kurier tylko jakas notatka",                  # >4 slow + lower
+    "",                                                                  # empty
+    "   ",                                                               # whitespace only
+])
+def test_garbage_name_rejects_comments(name):
+    assert _is_garbage_name(name) is True

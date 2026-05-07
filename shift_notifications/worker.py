@@ -174,6 +174,29 @@ def _parse_shift_dt(date_today: date, hhmm: str, *, end: bool = False) -> Option
         return None
 
 
+def _is_garbage_name(name: str) -> bool:
+    """Heurystyka: 'name' z grafiku to komentarz/notatka, nie imie kuriera.
+
+    Filtruje:
+    - przecinek (Opony, odpisac na maila carefleetu)
+    - >4 slow (lozysko czy cos, zatkany spryskiwacz, sprawdzic klocki)
+    - pierwsza litera mala (slychac lozysko, zapala sie check)
+
+    NIE wykryje krotkich z duza pierwsza litera typu 'Aku pada' (akceptowalny
+    false-negative; w grafiku takie wpisy zwykle maja entry=None i tak skip'ne).
+    """
+    if not name or not name.strip():
+        return True
+    s = name.strip()
+    if "," in s:
+        return True
+    if len(s.split()) > 4:
+        return True
+    if s[0].islower():
+        return True
+    return False
+
+
 def _build_candidates_starting(
     schedule: Dict[str, Any],
     now: datetime,
@@ -189,6 +212,8 @@ def _build_candidates_starting(
     out: List[Candidate] = []
     seen_keys = set()
     for full_name, entry in (schedule or {}).items():
+        if _is_garbage_name(full_name):
+            continue
         if not entry or not isinstance(entry, dict):
             continue
         start_str = entry.get("start")
@@ -248,6 +273,8 @@ def _build_candidates_ending(
     out: List[Candidate] = []
     seen_keys = set()
     for full_name, entry in (schedule or {}).items():
+        if _is_garbage_name(full_name):
+            continue
         if not entry or not isinstance(entry, dict):
             continue
         end_str = entry.get("end")
@@ -395,6 +422,8 @@ def run_b2_reminder(
     sent = 0
     notified_at = now.isoformat()
     for full_name, entry in (schedule or {}).items():
+        if _is_garbage_name(full_name):
+            continue
         if not entry or not isinstance(entry, dict):
             continue
         start_str = entry.get("start")
