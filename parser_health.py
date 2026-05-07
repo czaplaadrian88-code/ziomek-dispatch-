@@ -42,8 +42,24 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 log = logging.getLogger(__name__)
+
+# Morning calibration constants (companion fix dla 07.05 false positives:
+# 08:37 ZERO 3/10, 08:42 ZERO 6/10, 09:11 DELTA +100% przy 1→2). Pre-09:00
+# Warsaw panel ma naturalne plateau po nightly rollover; 1→2 transition
+# absolutnym jest noise nie regression signal.
+try:
+    from dispatch_v2.common import (
+        PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW,
+        PARSER_HEALTH_STUCK_MIN_BASELINE,
+        PARSER_HEALTH_DELTA_MIN_ABS_DIFF,
+    )
+except ImportError:
+    PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW = 9
+    PARSER_HEALTH_STUCK_MIN_BASELINE = 3
+    PARSER_HEALTH_DELTA_MIN_ABS_DIFF = 3
 
 
 STATE_PATH = Path("/root/.openclaw/workspace/dispatch_state/parser_health.json")
@@ -279,8 +295,14 @@ class ParserHealthMonitor:
         n_assigned = current.get("n_assigned", 0)
 
         # CHECK 1: zero output tolerance (orders_in_panel == 0 przez ≥N cycles)
+        # Morning calibration: pre-09:00 Warsaw panel ma naturalne plateau
+        # po nightly rollover (parser zwraca 0 bo brak nowych orderów).
+        # Suppress alert pre-09:00; po 09:00 normal logic.
+        warsaw_hour = datetime.now(ZoneInfo("Europe/Warsaw")).hour
         recent_zero = sum(1 for c in self._cycles if c.get("orders_in_panel", 0) == 0)
-        if recent_zero >= ZERO_ORDERS_TOLERANCE_CYCLES and len(self._cycles) >= ZERO_ORDERS_TOLERANCE_CYCLES:
+        if (recent_zero >= ZERO_ORDERS_TOLERANCE_CYCLES
+                and len(self._cycles) >= ZERO_ORDERS_TOLERANCE_CYCLES
+                and warsaw_hour >= PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW):
             alerts.append({
                 "type": "PARSER_ZERO_OUTPUT",
                 "severity": "critical",
@@ -303,7 +325,12 @@ class ParserHealthMonitor:
             prev_median = sorted(prev_active)[len(prev_active) // 2]
             if prev_median > 0:
                 delta_pct = (n_active - prev_median) / prev_median * 100
-                if delta_pct < DELTA_PCT_LOWER or delta_pct > DELTA_PCT_UPPER:
+                # Morning calibration: 1→2 = +100% but absolute diff = 1, noise.
+                # Wymagamy zarówno delta_pct out-of-range AND |abs_diff| >= guard
+                # żeby filtrować low-volume transitions.
+                abs_diff = abs(n_active - prev_median)
+                if (delta_pct < DELTA_PCT_LOWER or delta_pct > DELTA_PCT_UPPER) \
+                        and abs_diff >= PARSER_HEALTH_DELTA_MIN_ABS_DIFF:
                     alerts.append({
                         "type": "PARSER_DELTA_SPIKE",
                         "severity": "warning",
