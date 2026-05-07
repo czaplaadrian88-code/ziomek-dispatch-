@@ -1363,7 +1363,11 @@ async def handle_message(state: dict, msg: dict) -> None:
             if reply:
                 await asyncio.to_thread(
                     tg_request, state["token"], "sendMessage",
-                    {"chat_id": state["admin_id"], "text": reply},
+                    {
+                        "chat_id": msg["chat"]["id"],
+                        "text": reply,
+                        "reply_to_message_id": msg["message_id"],
+                    },
                 )
             return
 
