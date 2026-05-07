@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from dispatch_v2 import event_bus, state_machine
+from dispatch_v2 import common as C, event_bus, state_machine
 from dispatch_v2.common import load_config, now_iso, setup_logger
 from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_fleet
 from dispatch_v2.dispatch_pipeline import assess_order, PipelineResult
@@ -575,11 +575,39 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             result = process_event(ev, fleet, meta)
             latency_ms = (time.time() - t0) * 1000.0
             record = _serialize_result(result, eid, latency_ms)
+
+            # Adrian decision 2026-05-07: suppress Telegram proposals for firmowe
+            # konto Nadajesz.pl (address_id=161). Adrian zarządza firmowymi przez
+            # panel — Telegram noise. Pre-write filter w shadow (eliminuje noise
+            # w shadow_decisions.jsonl + telegram_approver consumer naturalnie
+            # filtruje verdict=PROPOSE only). Zero telegram restart needed.
+            # Hot-reload: ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=true odwraca.
+            _aid = (ev.get("payload") or {}).get("address_id")
+            try:
+                _aid_int = int(_aid) if _aid is not None else None
+            except (TypeError, ValueError):
+                _aid_int = None
+            record["address_id"] = _aid  # audit trail in shadow log
+            if (record.get("verdict") == "PROPOSE"
+                    and _aid_int is not None
+                    and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS
+                    and not C.flag("ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS", False)):
+                _log.info(
+                    f"SHADOW {oid} firmowe-konto aid={_aid}: PROPOSE suppressed "
+                    f"(flag ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=false). "
+                    f"verdict→SUPPRESSED_FIRMOWE_KONTO"
+                )
+                record["verdict"] = "SUPPRESSED_FIRMOWE_KONTO"
+                record["reason"] = (
+                    (record.get("reason") or "PROPOSE")
+                    + " | telegram_suppressed_firmowe_konto"
+                )
+
             _append_decision(shadow_log_path, record)
             event_bus.mark_processed(eid)
             stats["processed"] += 1
             _log.info(
-                f"SHADOW {oid} → {result.verdict} "
+                f"SHADOW {oid} → {record.get('verdict', result.verdict)} "
                 f"best={record['best']['courier_id'] if record['best'] else None} "
                 f"latency={record['latency_ms']}ms"
             )
