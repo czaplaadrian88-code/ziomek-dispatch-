@@ -233,6 +233,11 @@ def _v326_help_text() -> str:
         "    — wyklucza kuriera do końca dnia\n"
         "▪️ /wraca <imię>  lub  '<imię> wraca'\n"
         "    — przywraca kuriera\n"
+        "▪️ /pin <imię|cid>  lub  'pin <imię>'\n"
+        "    — PIN kuriera do logowania w aplikacji\n"
+        "▪️ /instrukcja_gps [imię]  lub  'instrukcja gps [imię]'\n"
+        "    — pełna instrukcja instalacji aplikacji + ustawienia Android\n"
+        "▪️ /dopisz <cid> <full_name> — atomic add nowego kuriera\n"
         "▪️ /status — pełny raport serwisów\n"
         "▪️ reset — czyści wszystkie wykluczenia\n"
         "\n"
@@ -1797,10 +1802,78 @@ async def handle_message(state: dict, msg: dict) -> None:
                 )
             _log.info(f"slash override action={action} text={text!r}")
             return
+
+        if cmd == "/pin":
+            reply = await asyncio.to_thread(_handle_pin_command, text)
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {
+                    "chat_id": msg["chat"]["id"],
+                    "text": reply,
+                    "reply_to_message_id": msg["message_id"],
+                },
+            )
+            _log.info(f"/pin from={from_id} text={text!r}")
+            return
+
+        if cmd in ("/instrukcja_gps", "/gps", "/instrukcja"):
+            reply = await asyncio.to_thread(_handle_gps_instruction_command, text)
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {
+                    "chat_id": msg["chat"]["id"],
+                    "text": reply,
+                    "reply_to_message_id": msg["message_id"],
+                    "disable_web_page_preview": True,
+                },
+            )
+            _log.info(f"/instrukcja_gps from={from_id} text={text!r}")
+            return
         return
 
     # NLP assistant — wolny tekst (F2.2)
     text_lower = text.lower().strip()
+
+    # Naturalny fallback dla /pin i /instrukcja_gps (07.05.2026, sprint #5).
+    # Strict guards anty-false-positive: max 4 słów, pierwsze musi być "pin"
+    # lub "instrukcja". Slash form (/pin, /instrukcja_gps) handled w branch above.
+    _words = text_lower.split()
+    if 1 <= len(_words) <= 4:
+        if _words[0] == "pin" and len(_words) >= 2:
+            query = " ".join(text.split()[1:])
+            reply = await asyncio.to_thread(_handle_pin_command, f"/pin {query}")
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {
+                    "chat_id": msg["chat"]["id"],
+                    "text": reply,
+                    "reply_to_message_id": msg["message_id"],
+                },
+            )
+            _log.info(f"natural pin from={from_id} text={text!r}")
+            return
+        if (
+            len(_words) >= 2
+            and _words[0] in ("instrukcja", "instrukcje")
+            and _words[1] in ("gps", "gpsa", "gpsu")
+        ):
+            tail_words = text.split()[2:]
+            tail = " ".join(tail_words)
+            reply = await asyncio.to_thread(
+                _handle_gps_instruction_command,
+                f"/instrukcja_gps {tail}".strip(),
+            )
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {
+                    "chat_id": msg["chat"]["id"],
+                    "text": reply,
+                    "reply_to_message_id": msg["message_id"],
+                    "disable_web_page_preview": True,
+                },
+            )
+            _log.info(f"natural instrukcja_gps from={from_id} text={text!r}")
+            return
 
     if any(w in text_lower for w in ["pomoc", "help", "komendy", "co umiesz"]):
         help_body = (
@@ -1810,6 +1883,8 @@ async def handle_message(state: dict, msg: dict) -> None:
             "• 'reset' — czyści wszystkie wykluczenia\n"
             "• 'kto pracuje' — lista kurierów na zmianie\n"
             "• 'ile zleceń' — statystyki dnia\n"
+            "• /pin <imię|cid> — PIN kuriera (też 'pin Marcin')\n"
+            "• /instrukcja_gps [imię] — pełna instrukcja onboardingu Android\n"
             "• /status — pełny raport serwisów"
         )
         await asyncio.to_thread(
@@ -2502,6 +2577,52 @@ def _handle_new_courier_callback(state: dict, payload: str, cb: dict) -> None:
         _shift_callback_answer(state, cb, "Uzyj /dopisz <cid> <full_name>")
     else:
         _shift_callback_answer(state, cb, f"❌ unknown NEWCOURIER sub: {sub_action}")
+
+
+def _handle_pin_command(text: str) -> str:
+    """/pin <imie|cid> — zwroc PIN kuriera + cid + nazwe canonical.
+
+    Best-effort, no auth gate (grupa ziomka i tak whitelisted po chat_id).
+    Per Lekcja #79 — PIN broadcast w grupie (4 czlonkowie) jest akceptowalnym
+    audit-trail compromise.
+    """
+    from dispatch_v2 import courier_info as _ci
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        return (
+            "❌ Użycie: /pin <imię> lub /pin <cid>\n"
+            "Przykład: /pin Marcin   |   /pin 393"
+        )
+    query = parts[1].strip()
+    name, cid, pin, ambig = _ci.resolve_courier_query(query)
+    if ambig:
+        return _ci.format_ambiguous_response(query, ambig)
+    if name is None or cid is None:
+        return _ci.format_not_found_response(query)
+    return _ci.format_pin_response(name, cid, pin)
+
+
+def _handle_gps_instruction_command(text: str) -> str:
+    """/instrukcja_gps [imie|cid] — pelna instrukcja onboardingu Android GPS.
+
+    Bez argumentu → template ogolny do skopiowania.
+    Z argumentem → spersonalizowana wersja z imieniem + PIN-em
+    (gotowa do forwardu kurierowi).
+    """
+    from dispatch_v2 import courier_info as _ci
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        return _ci.format_gps_instruction(name=None, pin=None)
+    query = parts[1].strip()
+    name, cid, pin, ambig = _ci.resolve_courier_query(query)
+    if ambig:
+        return _ci.format_ambiguous_response(query, ambig)
+    if name is None:
+        return (
+            f"❌ Nie znaleziono kuriera '{query}' — wysyłam template ogólny:\n\n"
+            + _ci.format_gps_instruction(name=None, pin=None)
+        )
+    return _ci.format_gps_instruction(name=name, pin=pin)
 
 
 def _handle_dopisz_command(state: dict, msg: dict, text: str) -> Optional[str]:
