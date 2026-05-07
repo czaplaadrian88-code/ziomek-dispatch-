@@ -191,7 +191,14 @@ def _check_bag_time_alerts(now_utc: datetime) -> None:
 
     Per-order try/except — jeden bad order nie ubija całego skanu.
     Set-then-send (Opcja X): duplicate-safe, Telegram fail logowany bez retry.
+
+    Adrian decision 2026-05-07: flag `ENABLE_BAG_TIME_ALERTS` (default False)
+    suppress Telegram send. Scan dalej iteruje + flag bag_time_alerted=True
+    persisted (audit + R6 hard reject downstream w feasibility nadal działa) —
+    tylko Telegram noise wyłączony. Hot-reload via flags.json.
     """
+    if not C.flag("ENABLE_BAG_TIME_ALERTS", False):
+        return  # alerts disabled per Adrian decision; scan no-op
     try:
         picked_up_orders = get_by_status("picked_up")
     except Exception as e:
@@ -266,9 +273,11 @@ def run():
     # F2.1b step 6: load courier_names cache once on start (zero IO per tick).
     global _courier_names
     _courier_names = _load_courier_names()
+    _bag_alerts_state = "ENABLED" if C.flag("ENABLE_BAG_TIME_ALERTS", False) else "SUPPRESSED"
     _log.info(
-        f"R6 bag_time alerts enabled — courier_names loaded: {len(_courier_names)}, "
-        f"threshold={C.BAG_TIME_PRE_WARNING_MIN}min"
+        f"R6 bag_time alerts {_bag_alerts_state} — courier_names loaded: "
+        f"{len(_courier_names)}, threshold={C.BAG_TIME_PRE_WARNING_MIN}min "
+        f"(flag ENABLE_BAG_TIME_ALERTS hot-reload via flags.json)"
     )
 
     SLA_EVENT_TYPES = ["COURIER_PICKED_UP", "COURIER_DELIVERED"]

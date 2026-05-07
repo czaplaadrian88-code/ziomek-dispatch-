@@ -1634,3 +1634,12 @@ UWAGI_PARSER_COMPANY_STOPLIST = frozenset({
 PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW = 9   # nie alert pre-09:00 Warsaw
 PARSER_HEALTH_STUCK_MIN_BASELINE = 3       # min active orders dla STUCK
 PARSER_HEALTH_DELTA_MIN_ABS_DIFF = 3       # min |curr-prev| dla DELTA
+
+# R6 BAG_TIME pre-warning Telegram alert (sla_tracker._check_bag_time_alerts).
+# Adrian decision 2026-05-07: domyślnie OFF — alert "Kurier wiezie zamówienie
+# już >30 min" był noisem (Adrian sam monitoruje przez panel). Hot-reload via
+# flags.json: ENABLE_BAG_TIME_ALERTS=true odwraca. Scan no-op gdy False.
+# R6 hard reject downstream w feasibility_v2 (BAG_TIME_HARD_MAX_MIN=35) NIE
+# dotknięty — algorytm dispatch dalej respektuje termiczny cap.
+ENABLE_BAG_TIME_ALERTS = _os.environ.get(
+    "ENABLE_BAG_TIME_ALERTS", "0") == "1"
