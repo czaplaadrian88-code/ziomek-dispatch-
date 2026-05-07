@@ -288,6 +288,139 @@ with _TmpState() as t:
     check("15b. Legacy record nadal readable",
           o.get("restaurant") == "Legacy")
 
+# ============================================================
+print("\n=== Tech debt #19a/b/c: audit + SLA fields persist ===")
+# ============================================================
+
+# Test 16 (#19a) — NEW_ORDER z decision_deadline → state ma pole
+with _TmpState():
+    update_from_event({
+        "event_type": "NEW_ORDER",
+        "order_id": "1900",
+        "payload": {
+            "restaurant": "R",
+            "pickup_at_warsaw": "2026-05-07T15:00:00+02:00",
+            "decision_deadline": "2026-05-07T14:55:00+02:00",
+        },
+    })
+    o = get_order("1900")
+    check("16. (#19a) NEW_ORDER persist decision_deadline",
+          o.get("decision_deadline") == "2026-05-07T14:55:00+02:00")
+
+# Test 17 (#19a) — NEW_ORDER bez decision_deadline → None
+with _TmpState():
+    update_from_event({
+        "event_type": "NEW_ORDER",
+        "order_id": "1901",
+        "payload": {"restaurant": "R"},
+    })
+    o = get_order("1901")
+    check("17. (#19a) NEW_ORDER bez decision_deadline → None",
+          o.get("decision_deadline") is None)
+
+# Test 18 (#19b) — NEW_ORDER z zmiana_czasu_odbioru=True
+with _TmpState():
+    update_from_event({
+        "event_type": "NEW_ORDER",
+        "order_id": "1910",
+        "payload": {
+            "restaurant": "R",
+            "zmiana_czasu_odbioru": True,
+        },
+    })
+    o = get_order("1910")
+    check("18. (#19b) NEW_ORDER persist zmiana_czasu_odbioru=True",
+          o.get("zmiana_czasu_odbioru") is True)
+
+# Test 19 (#19b) — NEW_ORDER z zmiana_czasu_odbioru=False (panel default)
+with _TmpState():
+    update_from_event({
+        "event_type": "NEW_ORDER",
+        "order_id": "1911",
+        "payload": {
+            "restaurant": "R",
+            "zmiana_czasu_odbioru": False,
+        },
+    })
+    o = get_order("1911")
+    check("19. (#19b) NEW_ORDER persist zmiana_czasu_odbioru=False",
+          o.get("zmiana_czasu_odbioru") is False)
+
+# Test 20 (#19c) — NEW_ORDER z created_at_utc → state ma anchor
+with _TmpState():
+    update_from_event({
+        "event_type": "NEW_ORDER",
+        "order_id": "1920",
+        "payload": {
+            "restaurant": "R",
+            "created_at_utc": "2026-05-07T12:34:56+00:00",
+        },
+    })
+    o = get_order("1920")
+    check("20. (#19c) NEW_ORDER persist created_at_utc",
+          o.get("created_at_utc") == "2026-05-07T12:34:56+00:00")
+
+# Test 21 (#19a/b/c) — wszystkie 3 pola razem (full payload)
+with _TmpState():
+    update_from_event({
+        "event_type": "NEW_ORDER",
+        "order_id": "1930",
+        "payload": {
+            "restaurant": "R",
+            "pickup_at_warsaw": "2026-05-07T15:00:00+02:00",
+            "decision_deadline": "2026-05-07T14:55:00+02:00",
+            "zmiana_czasu_odbioru": True,
+            "created_at_utc": "2026-05-07T12:34:56+00:00",
+        },
+    })
+    o = get_order("1930")
+    check("21. (#19abc) NEW_ORDER persist all 3 fields together",
+          o.get("decision_deadline") == "2026-05-07T14:55:00+02:00"
+          and o.get("zmiana_czasu_odbioru") is True
+          and o.get("created_at_utc") == "2026-05-07T12:34:56+00:00")
+
+# Test 22 (#19abc) — sanity-fail skip path też persistuje 3 pola
+with _TmpState():
+    try:
+        update_from_event({
+            "event_type": "NEW_ORDER",
+            "order_id": "1940",
+            "payload": {
+                "restaurant": "R",
+                "decision_deadline": "2026-05-07T14:55:00+02:00",
+                "zmiana_czasu_odbioru": True,
+                "created_at_utc": "2026-05-07T12:34:56+00:00",
+                "czas_kuriera_warsaw": "2026-05-07T15:10:00+02:00",
+                "czas_kuriera_hhmm": "15:20",  # MISMATCH → skip path
+            },
+        })
+        check("22. (#19abc) sanity-fail skip path raise", False,
+              detail="no exception raised")
+    except CorruptedTimestampError:
+        o = get_order("1940")
+        check("22. (#19abc) sanity-fail path persists 3 fields + raises",
+              o.get("decision_deadline") == "2026-05-07T14:55:00+02:00"
+              and o.get("zmiana_czasu_odbioru") is True
+              and o.get("created_at_utc") == "2026-05-07T12:34:56+00:00"
+              and o.get("czas_kuriera_warsaw") is None)
+
+# Test 23 (#19c backward-compat) — legacy record bez 3 pól nadal readable
+with _TmpState() as t:
+    with open(t.path, "w") as f:
+        json.dump({
+            "1950": {
+                "order_id": "1950",
+                "status": "assigned",
+                "restaurant": "Legacy",
+                # brak decision_deadline / zmiana_czasu_odbioru / created_at_utc
+            }
+        }, f)
+    o = get_order("1950")
+    check("23. (#19abc) Legacy record bez 3 pól → None każde",
+          o.get("decision_deadline") is None
+          and o.get("zmiana_czasu_odbioru") is None
+          and o.get("created_at_utc") is None)
+
 print("\n" + "=" * 60)
 print(f"V3.19f STATE: {passed}/{passed + failed} PASS"
       if failed == 0 else

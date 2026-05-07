@@ -554,6 +554,13 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             # Audit trail dla firmowego konto path (zwykle None).
             "uwagi": norm.get("uwagi"),
             "uwagi_pickup_parsed": _uwagi_pickup_parsed,
+            # Tech debt #19a/b/c (2026-05-07) — fields tracone od V3.x:
+            # - decision_deadline: SLA visibility (panel deadline na decyzję koord)
+            # - zmiana_czasu_odbioru: audit flag czy panel zmienił pickup time
+            # - created_at_utc: single anchor dla downstream age_minutes consumers
+            "decision_deadline": norm.get("decision_deadline"),
+            "zmiana_czasu_odbioru": norm.get("zmiana_czasu_odbioru"),
+            "created_at_utc": norm.get("created_at_utc"),
         }
 
         # Deterministyczny event_id: {order_id}_NEW_ORDER_first_seen (bez timestamp - raz na zycie)

@@ -260,6 +260,10 @@ def update_from_event(event: dict) -> Optional[dict]:
                 "prep_minutes": payload.get("prep_minutes"),
                 "order_type": payload.get("order_type"),
                 "bag_time_alerted": False,
+                # Tech debt #19a/b/c (2026-05-07) — audit + SLA fields:
+                "decision_deadline": payload.get("decision_deadline"),
+                "zmiana_czasu_odbioru": payload.get("zmiana_czasu_odbioru"),
+                "created_at_utc": payload.get("created_at_utc"),
             }, event="NEW_ORDER")
             raise CorruptedTimestampError(
                 f"NEW_ORDER {oid}: czas_kuriera sanity fail, "
@@ -285,6 +289,12 @@ def update_from_event(event: dict) -> Optional[dict]:
             "czas_kuriera_warsaw": ck_iso,
             "czas_kuriera_hhmm": ck_hhmm,
             "bag_time_alerted": False,  # F2.1b step 5: R6 pre-warning gate init
+            # Tech debt #19a/b/c (2026-05-07) — audit + SLA fields:
+            # decision_deadline (czas_na_decyzje), zmiana_czasu_odbioru (panel
+            # zmienił pickup time flag), created_at_utc (single age anchor).
+            "decision_deadline": payload.get("decision_deadline"),
+            "zmiana_czasu_odbioru": payload.get("zmiana_czasu_odbioru"),
+            "created_at_utc": payload.get("created_at_utc"),
         }, event="NEW_ORDER")
 
     if etype == "COURIER_ASSIGNED":
