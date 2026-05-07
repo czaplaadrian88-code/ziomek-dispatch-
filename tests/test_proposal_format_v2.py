@@ -141,15 +141,25 @@ def test_v2_best_effort_banner():
     assert "🟡 Środek 40%" in out, "conf line musi pozostać po bannerze"
 
 
-def test_v2_gps_markers_all_5():
-    """5 wariants pos_source mapping."""
+def test_v2_gps_markers_full_live_distribution():
+    """Pełna live pos_source distribution (8 unique values w shadow_decisions.jsonl
+    audit 2026-05-07 hotfix post #471182). Operational PL labels."""
+    # 3 z mockup (Adrian spec)
     assert ta._gps_marker_v2("gps") == "📍GPS"
     assert ta._gps_marker_v2(None) == "📍GPS"  # default live GPS
     assert ta._gps_marker_v2("no_gps") == "❌brak GPS"
-    assert ta._gps_marker_v2("last_pickup") == "📍last-pickup"
-    assert ta._gps_marker_v2("last-pickup") == "📍last-pickup"  # alias
     assert ta._gps_marker_v2("pre_shift") == "🆔pre-shift"
-    assert ta._gps_marker_v2("synthetic_BIALYSTOK_CENTER") == "❔?"  # fallback
+    # 5 dodatkowych z live data (hotfix 2026-05-07)
+    assert ta._gps_marker_v2("last_assigned_pickup") == "📍przy restauracji"
+    assert ta._gps_marker_v2("last_picked_up_delivery") == "📍w trasie"
+    assert ta._gps_marker_v2("last_picked_up_recent") == "📍w trasie"
+    assert ta._gps_marker_v2("last_delivered") == "📍po dostawie"
+    assert ta._gps_marker_v2("post_wave") == "📍po fali"
+    # Legacy alias z mockup spec
+    assert ta._gps_marker_v2("last_pickup") == "📍last-pickup"
+    assert ta._gps_marker_v2("last-pickup") == "📍last-pickup"
+    # Unknown → fallback
+    assert ta._gps_marker_v2("synthetic_BIALYSTOK_CENTER") == "❔?"
 
 
 def test_v2_bag_emoji_buckets():
@@ -162,35 +172,41 @@ def test_v2_bag_emoji_buckets():
 
 
 def test_v2_reason_composer_paths():
-    """4 ścieżki composer + v326_rationale priority."""
-    # Path A: v326_rationale priority (over heuristic)
-    best_rat = {"courier_id": "470", "r6_bag_size": 0, "free_at_min": 0.0,
-                "travel_min": 15.0, "v326_rationale": {"dlaczego": "RATIONALE OVERRIDE"}}
-    out_rat = ta._reason_text_v2(best=best_rat, alts=[], restaurant="Kumar's",
-                                  pickup_in_min=15.0, top1_eta_min=15.0)
-    assert out_rat == "RATIONALE OVERRIDE", f"rationale priority broken: {out_rat!r}"
-
-    # Path B: free + ETA == pickup_ready → "dokładnie na gotowe danie"
-    best_b = {"r6_bag_size": 0, "free_at_min": 0.0}
-    out_b = ta._reason_text_v2(best=best_b, alts=[], restaurant="Kumar's",
+    """3 ścieżki rule-based composer + v326_rationale ZIGNOROWANY (hotfix
+    2026-05-07 post #471182: rationale zwracał scoring breakdown 'bliskość/
+    timing/przewaga' co łamie regułę feedback_rules.md 'operational logic,
+    NIE scoring')."""
+    # Path A: free + ETA == pickup_ready → "dokładnie na gotowe danie"
+    best_a = {"r6_bag_size": 0, "free_at_min": 0.0}
+    out_a = ta._reason_text_v2(best=best_a, alts=[], restaurant="Kumar's",
                                 pickup_in_min=15.0, top1_eta_min=15.0)
-    assert "Wolny od ręki" in out_b and "dokładnie na gotowe danie z Kumar's" in out_b, out_b
+    assert "Wolny od ręki" in out_a and "dokładnie na gotowe danie z Kumar's" in out_a, out_a
 
-    # Path C: bag>0 → "Z N dowoz... w torbie"
-    best_c = {"r6_bag_size": 2, "free_at_min": 5.0}
-    out_c = ta._reason_text_v2(best=best_c, alts=[], restaurant="Kumar's",
+    # Path B: bag>0 → "Z N dowoz... w torbie"
+    best_b = {"r6_bag_size": 2, "free_at_min": 5.0}
+    out_b = ta._reason_text_v2(best=best_b, alts=[], restaurant="Kumar's",
                                 pickup_in_min=15.0, top1_eta_min=22.0)
-    assert "Z 2 dowozami w torbie" in out_c and "dotrze za 7 min" in out_c, out_c
+    assert "Z 2 dowozami w torbie" in out_b and "dotrze za 7 min" in out_b, out_b
 
-    # Path D: contrast vs alt z bag>0 i delay >=10 min
-    best_d = {"r6_bag_size": 0, "free_at_min": 0.0}
+    # Path C: contrast vs alt z bag>0 i delay >=10 min
+    best_c = {"r6_bag_size": 0, "free_at_min": 0.0}
     alt_slow = {"courier_id": "515", "name": "Szymon P", "r6_bag_size": 1,
                 "travel_min": 35.0}
-    out_d = ta._reason_text_v2(best=best_d, alts=[alt_slow], restaurant="Kumar's",
+    out_c = ta._reason_text_v2(best=best_c, alts=[alt_slow], restaurant="Kumar's",
                                 pickup_in_min=15.0, top1_eta_min=15.0)
-    assert "Wolny od ręki" in out_d
-    assert "Szymon P ma już 1 dowóz w torbie" in out_d, out_d
-    assert "spóźni się 20 min" in out_d, out_d
+    assert "Wolny od ręki" in out_c
+    assert "Szymon P ma już 1 dowóz w torbie" in out_c, out_c
+    assert "spóźni się 20 min" in out_c, out_c
+
+    # Path D (REGRESSION GUARD): v326_rationale.dlaczego MUSI być ignored
+    # (poprzednio Priorytet 1, hotfix usunął — łamie regułę "Zero słów: score").
+    best_rat = {"courier_id": "470", "r6_bag_size": 0, "free_at_min": 0.0,
+                "v326_rationale": {"dlaczego": "bliskość -11, timing +5, przewaga +122"}}
+    out_rat = ta._reason_text_v2(best=best_rat, alts=[], restaurant="Kumar's",
+                                  pickup_in_min=15.0, top1_eta_min=15.0)
+    assert "bliskość" not in out_rat, f"v326_rationale leaked do reason: {out_rat!r}"
+    assert "przewaga" not in out_rat, f"scoring breakdown leaked: {out_rat!r}"
+    assert "Wolny od ręki" in out_rat, "rule-based template powinno działać mimo rationale"
 
 
 def test_v2_keyboard_2x2_grid_strict_4_buttons():
@@ -282,7 +298,7 @@ def main():
         ('v2_body_happy_path', test_v2_body_happy_path),
         ('v2_conf_bucket_auto_ack_alert', test_v2_conf_bucket_auto_ack_alert),
         ('v2_best_effort_banner', test_v2_best_effort_banner),
-        ('v2_gps_markers_all_5', test_v2_gps_markers_all_5),
+        ('v2_gps_markers_full_live_distribution', test_v2_gps_markers_full_live_distribution),
         ('v2_bag_emoji_buckets', test_v2_bag_emoji_buckets),
         ('v2_reason_composer_paths', test_v2_reason_composer_paths),
         ('v2_keyboard_2x2_grid_strict_4_buttons',
