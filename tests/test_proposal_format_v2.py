@@ -109,7 +109,11 @@ def test_v2_body_happy_path():
     assert "← WYBRANY" not in cand_lines[2]
     assert "🗺 Trasa:" in out
     assert "— start" in out
-    assert "(odbiór)" in out
+    # Wave-aware route post-2026-05-07 extension+route sprint:
+    # bez plan.pickup_at + predicted_delivered_at → fallback layout
+    # z explicit "odbiór: ..." prefix + #oid + "← TA" marker.
+    assert "odbiór: Restauracja Kumar's" in out
+    assert "(#471167 ← TA)" in out
 
 
 def test_v2_conf_bucket_auto_ack_alert():
@@ -291,6 +295,116 @@ def test_v2_flag_on_uses_v2_path():
     assert "TAK / INNY (powód) / KOORD" not in out
 
 
+# ----- 2026-05-07 extension+route sprint: pickup (+N min) + wave-aware trasa -----
+
+def test_v2_pickup_extension_delta_emitted():
+    """⏱️ Odbiór HH:MM (+N min) gdy Ziomek przedłużył deklarację restauracji.
+
+    delta = pickup_ready_at − pickup_at_warsaw. Emit gdy >0, skip gdy 0/None.
+    """
+    from datetime import datetime, timezone, timedelta
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    raw = base + timedelta(minutes=15)  # restaurant declared
+    extended = base + timedelta(minutes=23)  # Ziomek przedłużył o 8 min
+    d = _mk_decision()
+    d["pickup_ready_at"] = extended.isoformat()
+    d["pickup_at_warsaw"] = raw.isoformat()
+    out = ta._format_proposal_v2(d)
+    assert "(+8 min)" in out, f"oczekiwane '(+8 min)' w pickup line: {out[:200]!r}"
+
+    # Zero delta → bez nawiasu
+    d2 = _mk_decision()
+    d2["pickup_ready_at"] = raw.isoformat()
+    d2["pickup_at_warsaw"] = raw.isoformat()
+    out2 = ta._format_proposal_v2(d2)
+    assert "(+" not in out2, f"delta=0 nie powinno emitować nawiasu: {out2[:200]!r}"
+
+    # Brak pickup_at_warsaw → bez nawiasu (legacy decisions pre-sprint)
+    d3 = _mk_decision()
+    d3["pickup_ready_at"] = extended.isoformat()
+    # pickup_at_warsaw NIE w decision
+    out3 = ta._format_proposal_v2(d3)
+    assert "(+" not in out3
+
+
+def test_v2_route_iterates_plan_sequence_chronological():
+    """Trasa = chronologiczne stopy z best.plan.pickup_at + predicted_delivered_at.
+
+    Bag z 2 innymi orderami + obecna propozycja = 6 stopów (3 pickup + 3 drop)
+    posortowanych po czasie. Każdy stop "← TA" tylko dla decision.order_id.
+    """
+    from datetime import datetime, timezone, timedelta
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    d = _mk_decision()
+    d["best"]["bag_context"] = [
+        {"order_id": "471180", "restaurant": "Pizzeria Roma", "delivery_address": "Lipowa 5"},
+        {"order_id": "471181", "restaurant": "Sushi Kim", "delivery_address": "Mickiewicza 12"},
+    ]
+    d["best"]["plan"] = {
+        "pickup_at": {
+            "471180": (base + timedelta(minutes=5)).isoformat(),
+            "471181": (base + timedelta(minutes=10)).isoformat(),
+            "471167": (base + timedelta(minutes=15)).isoformat(),
+        },
+        "predicted_delivered_at": {
+            "471180": (base + timedelta(minutes=20)).isoformat(),
+            "471167": (base + timedelta(minutes=30)).isoformat(),
+            "471181": (base + timedelta(minutes=40)).isoformat(),
+        },
+    }
+    out = ta._format_proposal_v2(d)
+    lines = out.split("\n")
+    route_lines = [ln for ln in lines if ln.startswith("• ")]
+    # 1 start + 6 stopów (3 pickup + 3 drop)
+    assert len(route_lines) == 7, f"oczekiwane 7 linii (start + 6 stopów), got {len(route_lines)}: {route_lines}"
+    # Sortowanie chronologiczne: pickup 471180 → pickup 471181 → pickup 471167 (← TA)
+    # → drop 471180 → drop 471167 (← TA) → drop 471181
+    assert "odbiór: Pizzeria Roma (#471180)" in route_lines[1]
+    assert "odbiór: Sushi Kim (#471181)" in route_lines[2]
+    assert "odbiór: Restauracja Kumar's (#471167 ← TA)" in route_lines[3]
+    assert "dostawa: Lipowa 5 (#471180)" in route_lines[4]
+    assert "dostawa: Rzemieślnicza 40/44 (#471167 ← TA)" in route_lines[5]
+    assert "dostawa: Mickiewicza 12 (#471181)" in route_lines[6]
+    # ← TA tylko dla decision.order_id (#471167)
+    ta_marks = [ln for ln in route_lines if "← TA" in ln]
+    assert len(ta_marks) == 2, f"← TA powinno być dokładnie 2× (pickup+drop dla #471167): {ta_marks}"
+
+
+def test_v2_route_fallback_when_no_plan_data():
+    """Brak plan.pickup_at + predicted_delivered_at → fallback klasyczny 3-line
+    (start + odbiór + dostawa) — zachowany dla solo orderów bez TSP planu.
+    """
+    d = _mk_decision()
+    # bez best.plan
+    out = ta._format_proposal_v2(d)
+    lines = out.split("\n")
+    route_lines = [ln for ln in lines if ln.startswith("• ")]
+    # start + odbiór (drop bez predicted ETA → pominięty zgodnie z _drop_eta_hhmm_v2 None)
+    assert any("— start (" in ln for ln in route_lines), f"brak start line: {route_lines}"
+    assert any("odbiór: Restauracja Kumar's (#471167 ← TA)" in ln for ln in route_lines), \
+        f"fallback brak odbiór line z #oid + ← TA: {route_lines}"
+
+
+def test_v2_pickup_extension_delta_helper_unit():
+    """_pickup_extension_delta_min — pure unit test."""
+    from datetime import datetime, timezone, timedelta
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    raw = base
+    extended = base + timedelta(minutes=12)
+    # Both present + delta>0 → 12
+    d1 = {"pickup_ready_at": extended.isoformat(), "pickup_at_warsaw": raw.isoformat()}
+    assert ta._pickup_extension_delta_min(d1) == 12
+    # delta == 0 → 0 (caller decides skip)
+    d2 = {"pickup_ready_at": raw.isoformat(), "pickup_at_warsaw": raw.isoformat()}
+    assert ta._pickup_extension_delta_min(d2) == 0
+    # Brak pickup_at_warsaw → None
+    d3 = {"pickup_ready_at": extended.isoformat()}
+    assert ta._pickup_extension_delta_min(d3) is None
+    # Invalid ISO → None
+    d4 = {"pickup_ready_at": "not-iso", "pickup_at_warsaw": raw.isoformat()}
+    assert ta._pickup_extension_delta_min(d4) is None
+
+
 # ----- runner -----
 
 def main():
@@ -307,6 +421,11 @@ def main():
          test_v2_keyboard_grid_with_2_candidates),
         ('v2_flag_off_returns_legacy_format', test_v2_flag_off_returns_legacy_format),
         ('v2_flag_on_uses_v2_path', test_v2_flag_on_uses_v2_path),
+        ('v2_pickup_extension_delta_emitted', test_v2_pickup_extension_delta_emitted),
+        ('v2_route_iterates_plan_sequence_chronological',
+         test_v2_route_iterates_plan_sequence_chronological),
+        ('v2_route_fallback_when_no_plan_data', test_v2_route_fallback_when_no_plan_data),
+        ('v2_pickup_extension_delta_helper_unit', test_v2_pickup_extension_delta_helper_unit),
     ]
     print('=' * 60)
     print('Mockup v2 — operator-friendly Telegram propozycja redesign')

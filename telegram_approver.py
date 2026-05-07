@@ -656,6 +656,121 @@ def _candidate_line_v2(idx: int, c: dict, is_winner: bool) -> str:
     return f"{idx}. {name} K-{cid} · {gps} · ETA {eta} · {bag_emoji} {bag_n}{suffix}"
 
 
+def _pickup_extension_delta_min(decision: dict) -> Optional[int]:
+    """Delta minut o ile Ziomek przedłużył deklarację restauracji.
+
+    delta = pickup_ready_at (effective) − pickup_at_warsaw (raw restaurant declared)
+
+    Source pickup_ready_at: pipeline value (post-extension if czas_kuriera set,
+    else raw fallback). Source pickup_at_warsaw: payload raw, propagated by
+    shadow_dispatcher._tick (commit pre-extension-route 2026-05-07).
+
+    Returns None gdy któreś brak / parse fail. Returns int(round(...)) gdy oba.
+    Caller pokazuje "(+N min)" tylko gdy delta > 0.
+    """
+    ready_iso = decision.get("pickup_ready_at")
+    raw_iso = decision.get("pickup_at_warsaw")
+    if not ready_iso or not raw_iso:
+        return None
+    try:
+        ready = datetime.fromisoformat(str(ready_iso).replace("Z", "+00:00"))
+        raw = datetime.fromisoformat(str(raw_iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if ready.tzinfo is None:
+        ready = ready.replace(tzinfo=timezone.utc)
+    if raw.tzinfo is None:
+        raw = raw.replace(tzinfo=timezone.utc)
+    return int(round((ready - raw).total_seconds() / 60.0))
+
+
+def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
+    """Wave-aware chronological trasa dla wybranego kuriera.
+
+    Iteruje wszystkie stopy z best.plan.pickup_at + best.plan.predicted_delivered_at,
+    sortuje po czasie. Każdy stop = "• HH:MM — odbiór|dostawa: {addr} (#{oid}{ ← TA})".
+
+    Adres source per oid:
+      - decision.order_id → decision.restaurant / decision.delivery_address
+      - inne oid (bag) → bag_context lookup po order_id
+
+    Stop obecnej propozycji (decision.order_id) oznaczony "← TA" — od razu widać
+    gdzie nowy order wpada w istniejącą trasę kuriera.
+
+    Fallback: gdy plan.pickup_at + predicted_delivered_at oba puste/None →
+    klasyczny 3-line layout (start/odbiór/dostawa) zachowany dla solo orderów
+    bez plan-data (legacy behavior).
+    """
+    now_hhmm = _to_warsaw_hhmm(now_utc)
+    pos_marker = _gps_marker_v2((best or {}).get("pos_source"))
+    cur_oid = str(decision.get("order_id") or "")
+    cur_rest = decision.get("restaurant") or "?"
+    cur_drop = decision.get("delivery_address") or "—"
+
+    plan = (best or {}).get("plan") or {}
+    pickup_at = plan.get("pickup_at") or {}
+    delivered_at = plan.get("predicted_delivered_at") or {}
+
+    # Build per-oid address map: bag_context (other orders) + current decision
+    bag_ctx = (best or {}).get("bag_context") or []
+    addr_map = {}  # oid → (restaurant, delivery_address)
+    for it in bag_ctx:
+        _oid = str(it.get("order_id") or "")
+        if _oid:
+            addr_map[_oid] = (
+                it.get("restaurant") or "?",
+                it.get("delivery_address") or it.get("drop_address") or "—",
+            )
+    addr_map[cur_oid] = (cur_rest, cur_drop)
+
+    # Collect stops: list[(dt_utc, kind, oid, addr)]
+    stops = []
+    for oid, iso in pickup_at.items():
+        if not iso:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        rest, _ = addr_map.get(str(oid), ("?", "—"))
+        stops.append((dt, "odbiór", str(oid), rest))
+    for oid, iso in delivered_at.items():
+        if not iso:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        _, addr = addr_map.get(str(oid), ("?", "—"))
+        stops.append((dt, "dostawa", str(oid), addr))
+
+    if not stops:
+        # Fallback do klasycznego 3-line layout (zachowuje legacy behavior dla
+        # decyzji bez plan.pickup_at + predicted_delivered_at — np. solo orders
+        # gdzie pipeline nie wystawił TSP planu).
+        pickup_hhmm, pickup_in_min = _pickup_ready_warsaw(decision, now_utc)
+        drop_eta_hhmm = _drop_eta_hhmm_v2(decision, best, pickup_in_min, now_utc)
+        out = ["🗺 Trasa:", f"• {now_hhmm} — start ({pos_marker})"]
+        if pickup_hhmm is not None:
+            out.append(f"• {pickup_hhmm} — odbiór: {cur_rest} (#{cur_oid} ← TA)")
+        if drop_eta_hhmm is not None:
+            out.append(f"• {drop_eta_hhmm} — dostawa: {cur_drop} (#{cur_oid} ← TA)")
+        return out
+
+    stops.sort(key=lambda x: x[0])
+
+    out = ["🗺 Trasa:", f"• {now_hhmm} — start ({pos_marker})"]
+    for dt, kind, oid, addr in stops:
+        hhmm = dt.astimezone(WARSAW).strftime("%H:%M")
+        ta_marker = " ← TA" if oid == cur_oid else ""
+        out.append(f"• {hhmm} — {kind}: {addr} (#{oid}{ta_marker})")
+    return out
+
+
 def _drop_eta_hhmm_v2(
     decision: dict, best: dict, pickup_in_min: Optional[float], now_utc: datetime
 ) -> Optional[str]:
@@ -821,7 +936,11 @@ def _format_proposal_v2(decision: dict) -> str:
         f"🚖 {best_name} (K-{best_cid}) → {rest} → {delivery} ({drop_district})",
     ]
     if pickup_hhmm is not None:
-        lines.append(f"⏱️ Odbiór: {pickup_hhmm}")
+        ext_delta = _pickup_extension_delta_min(decision)
+        if ext_delta is not None and ext_delta > 0:
+            lines.append(f"⏱️ Odbiór: {pickup_hhmm} (+{ext_delta} min)")
+        else:
+            lines.append(f"⏱️ Odbiór: {pickup_hhmm}")
     lines.append("")
     lines.append(_conf_line_v2(decision))
     lines.append("")
@@ -851,14 +970,7 @@ def _format_proposal_v2(decision: dict) -> str:
         lines.append(f"💡 {reason_text}")
         lines.append("")
 
-    drop_eta_hhmm = _drop_eta_hhmm_v2(decision, best, pickup_in_min, now_utc)
-    now_hhmm = _to_warsaw_hhmm(now_utc)
-    lines.append("🗺 Trasa:")
-    lines.append(f"• {now_hhmm} — start")
-    if pickup_hhmm is not None:
-        lines.append(f"• {pickup_hhmm} — {rest} (odbiór)")
-    if drop_eta_hhmm is not None:
-        lines.append(f"• {drop_eta_hhmm} — {delivery} (dostawa)")
+    lines.extend(_route_lines_v2(decision, best, now_utc))
 
     return "\n".join(lines)
 

@@ -575,6 +575,10 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             result = process_event(ev, fleet, meta)
             latency_ms = (time.time() - t0) * 1000.0
             record = _serialize_result(result, eid, latency_ms)
+            # Propagate raw restaurant pickup time (pre-extension) — telegram_approver
+            # liczy `pickup_extension_min = pickup_ready_at - pickup_at_warsaw` aby
+            # pokazać "(+N min)" gdy Ziomek przedłużył deklarację restauracji.
+            record["pickup_at_warsaw"] = payload.get("pickup_at_warsaw")
 
             # Adrian decision 2026-05-07: suppress Telegram proposals for firmowe
             # konto Nadajesz.pl (address_id=161). Adrian zarządza firmowymi przez
