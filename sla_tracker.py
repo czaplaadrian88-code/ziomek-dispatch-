@@ -230,9 +230,14 @@ def _check_bag_time_alerts(now_utc: datetime) -> None:
             picked_hhmm = _format_picked_up_hhmm(picked_dt)
 
             msg = (
-                f"⚠️ BAG_TIME {bag_time_min:.0f} min (limit {C.BAG_TIME_PRE_WARNING_MIN})\n"
+                f"⚠️ Kurier wiezie zamówienie już {bag_time_min:.0f} minut "
+                f"(próg ostrzeżenia {C.BAG_TIME_PRE_WARNING_MIN} — niedługo "
+                f"przekroczy max 35)\n"
                 f"#{oid} {restaurant} → {delivery}\n"
-                f"Kurier: {cname} ({cid}) • picked up {picked_hhmm}"
+                f"Kurier: {cname} ({cid}), odebrał o {picked_hhmm}\n\n"
+                f"Co robię: nic automatycznie — to ostrzeżenie żebyś monitorował. "
+                f"Jeśli przekroczy 35 min → R6 odrzuci propozycje dla tego kuriera "
+                f"dopóki nie dostarczy."
             )
             ok = send_admin_alert(msg)
             _stats["r6_alerts"] += 1
