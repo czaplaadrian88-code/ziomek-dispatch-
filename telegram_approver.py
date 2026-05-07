@@ -39,6 +39,7 @@ from dispatch_v2.common import (
     ENABLE_TIMELINE_FORMAT,
     ENABLE_TRANSPARENCY_REASON,
     ENABLE_TRANSPARENCY_ROUTE,
+    FIRMOWE_KONTO_ADDRESS_IDS,
     WARSAW,
     drop_zone_from_address,
     flag,
@@ -594,15 +595,31 @@ def _conf_line_v2(decision: dict) -> str:
 
 
 def _gps_marker_v2(pos_source: Optional[str]) -> str:
-    """GPS source marker dla candidate line (mockup v2 spec)."""
-    if pos_source == "no_gps":
-        return "❌brak GPS"
-    if pos_source in ("last_pickup", "last-pickup"):
-        return "📍last-pickup"
-    if pos_source == "pre_shift":
-        return "🆔pre-shift"
+    """Pos_source marker dla candidate line — operational PL labels.
+
+    Mapping pokrywa wszystkie 8 pos_source values w live shadow_decisions.jsonl
+    (audit 2026-05-07 hotfix post #471182): gps / no_gps / pre_shift /
+    last_assigned_pickup / last_picked_up_delivery / last_picked_up_recent /
+    last_delivered / post_wave. Operacyjny styl PL (Adrian preference: krótko,
+    co kurier robi) zamiast technicznych aliasów źródła pozycji.
+    """
     if pos_source in (None, "", "gps"):
         return "📍GPS"
+    if pos_source == "no_gps":
+        return "❌brak GPS"
+    if pos_source == "pre_shift":
+        return "🆔pre-shift"
+    if pos_source == "last_assigned_pickup":
+        return "📍przy restauracji"
+    if pos_source in ("last_picked_up_delivery", "last_picked_up_recent"):
+        return "📍w trasie"
+    if pos_source == "last_delivered":
+        return "📍po dostawie"
+    if pos_source == "post_wave":
+        return "📍po fali"
+    if pos_source in ("last_pickup", "last-pickup"):
+        # Legacy alias (mockup v2 spec użył tej formy) — zachowane dla bw-compat
+        return "📍last-pickup"
     return "❔?"
 
 
@@ -676,20 +693,21 @@ def _reason_text_v2(
     pickup_in_min: Optional[float],
     top1_eta_min: Optional[float],
 ) -> str:
-    """Mockup v2 💡 reason composer.
+    """Mockup v2 💡 reason composer — operational logic, NIE scoring.
 
-    Priorytet 1: best.v326_rationale.dlaczego (V3.26 STEP 1 enrichment) — używa 1:1.
-    Priorytet 2: rule-based template z mockup style:
+    Hotfix 2026-05-07 post #471182: usunięty Priorytet 1 = v326_rationale
+    (zwracał scoring breakdown "bliskość -11, timing +5, przewaga +122 vs X"
+    co łamie regułę feedback_rules.md "Uzasadnienie wyboru — operational
+    logic, NIE scoring. Zero słów: score, kara, feasible, scoring, ranking,
+    pool"). Rule-based template ZAWSZE primary, bez fallback do rationale.
+
+    Rule-based template (mockup style):
       - free + ETA == pickup_ready → 'Wolny od ręki, dojedzie dokładnie na gotowe danie z {rest}'
       - free + ETA > pickup_ready → 'Wolny od ręki, dojedzie {extra} min po gotowym daniu z {rest}'
       - bag>0 → 'Z {n} dowozem/dowozami w torbie, dotrze za {extra} min'
-    Plus contrast vs najbliższy alt z bag>0 i delay >10 min vs top1.
+    Plus contrast vs najbliższy alt z bag>0 i delay >=10 min vs top1.
+    Empty string gdy żaden case nie pasuje (caller pomija 💡 linię).
     """
-    rat = (best or {}).get("v326_rationale") or {}
-    dlaczego = rat.get("dlaczego")
-    if dlaczego:
-        return str(dlaczego)
-
     if not best:
         return ""
 
@@ -1366,6 +1384,27 @@ async def proposal_sender(state: dict) -> None:
             continue
         oid = str(rec.get("order_id") or "")
         if not oid or oid in state["pending"]:
+            continue
+        # Defense layer (Adrian decision 2026-05-07): firmowe konto Nadajesz.pl
+        # (address_id=161) NIE wysyła propozycji do Telegram. Shadow side filter
+        # zazwyczaj catch'uje wcześniej (verdict→SUPPRESSED_FIRMOWE_KONTO przed
+        # shadow log write), ale ta warstwa jako belt-and-suspenders dla:
+        # (a) edge cases gdy ktoś wpisze rec ze verdict=PROPOSE inną drogą,
+        # (b) okres przejściowy przed shadow restart,
+        # (c) future regression w shadow filter logic.
+        # Hot-reload via flags.json — ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=true odwraca.
+        _aid_raw = rec.get("address_id")
+        try:
+            _aid_int = int(_aid_raw) if _aid_raw is not None else None
+        except (TypeError, ValueError):
+            _aid_int = None
+        if (_aid_int is not None
+                and _aid_int in FIRMOWE_KONTO_ADDRESS_IDS
+                and not flag("ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS", False)):
+            _log.info(
+                f"PROPOSAL SUPPRESSED oid={oid} address_id={_aid_raw} "
+                f"(firmowe konto, flag ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=false)"
+            )
             continue
         text = format_proposal(rec)
         top_candidates = [rec.get("best")] + list((rec.get("alternatives") or []))[:2]
