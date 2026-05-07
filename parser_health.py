@@ -545,15 +545,37 @@ class ParserHealthMonitor:
                 recent_orders = [c.get("orders_in_panel", 0) for c in cycles_list]
                 recent_active = [c.get("active_orders", c.get("orders_in_panel", 0)) for c in cycles_list]
                 anomalies_recent = []
-                # Check CHECK 1+3 dla aktualnego status (NIE retrigger cooldown)
+                # Z2 fix 2026-05-07 #16: snapshot replicates alert-path suppressions
+                # (motion-aware STUCK + hour-of-day ZERO) żeby endpoint był spójny
+                # z faktycznymi alertami wysyłanymi do operatora.
+                warsaw_hour = datetime.now(ZoneInfo("Europe/Warsaw")).hour
+                # CHECK 1 ZERO: suppress pre-PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW Warsaw
+                # (naturalny plateau panelu po nightly rollover, parser zwraca 0 bo brak
+                # nowych orderów — sygnał noise dla operatora).
                 recent_zero = sum(1 for v in recent_orders if v == 0)
+                if (recent_zero >= ZERO_ORDERS_TOLERANCE_CYCLES
+                        and warsaw_hour >= PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW):
+                    anomalies_recent.append("PARSER_ZERO_OUTPUT")
+                # CHECK 3 STUCK: suppress gdy panel quiet (motion_total < threshold) —
+                # mirror motion-aware logic z _check_anomalies. Defense-in-depth try/except
+                # — fallback "fire" jeśli motion compute crashes (legacy behavior).
                 stuck = (len(recent_active) >= STUCK_COUNT_TOLERANCE
                          and all(v == recent_active[-1] for v in recent_active[-STUCK_COUNT_TOLERANCE:])
                          and recent_active[-1] > 0)
-                if recent_zero >= ZERO_ORDERS_TOLERANCE_CYCLES:
-                    anomalies_recent.append("PARSER_ZERO_OUTPUT")
                 if stuck:
-                    anomalies_recent.append("PARSER_STUCK")
+                    recent = cycles_list[-STUCK_COUNT_TOLERANCE:]
+                    try:
+                        sum_new = sum(int(c.get("n_new", 0) or 0) for c in recent)
+                        sum_delivered = sum(int(c.get("n_delivered", 0) or 0) for c in recent)
+                        assigned_values = [int(c.get("n_assigned", 0) or 0) for c in recent]
+                        assigned_motion = (max(assigned_values) - min(assigned_values)) if assigned_values else 0
+                        motion_total = sum_new + sum_delivered + assigned_motion
+                    except Exception as _me:
+                        log.warning(f"snapshot motion compute fail (non-blocking, fallback fire): {_me}")
+                        motion_total = PARSER_STUCK_MOTION_THRESHOLD  # fallback: fire alert
+                    if (not ENABLE_PARSER_STUCK_MOTION_AWARE
+                            or motion_total >= PARSER_STUCK_MOTION_THRESHOLD):
+                        anomalies_recent.append("PARSER_STUCK")
                 status = "critical" if "PARSER_ZERO_OUTPUT" in anomalies_recent else (
                     "degraded" if anomalies_recent else "healthy"
                 )

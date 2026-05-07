@@ -339,6 +339,74 @@ def test_active_falls_back_to_order_ids_when_no_closed():
         assert entry["active_orders"] == 3
 
 
+# ─── Z2 fix #16 (2026-05-07): snapshot endpoint mirror motion-aware + hour-of-day ──
+
+def test_snapshot_suppress_stuck_when_motion_below_threshold():
+    """Snapshot endpoint: STUCK suppressed gdy motion_total < threshold (panel quiet)."""
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        # 5 cycles z identical active_ids (4 IDs) ALE motion_total=2 < threshold=4
+        # (sum_new=1 + sum_delivered=1 + assigned_motion=0 = 2)
+        ids = ["100", "101", "102", "103"]
+        for i in range(5):
+            cycle_stats = {
+                "cycle": i, "orders_in_panel": 4,
+                "new": 0 if i > 0 else 1,
+                "delivered": 0 if i > 0 else 1,
+                "ignored": 0, "errors": 0,
+            }
+            parsed = {"order_ids": ids, "assigned_ids": ["x"] * 5}  # assigned stable=5
+            m.record_tick(cycle_stats, parsed)
+        snap = m.get_health_snapshot()
+        assert snap["status"] == "healthy", f"motion={2} < threshold=4 → snapshot suppressed STUCK, got status={snap['status']}"
+        assert "PARSER_STUCK" not in snap["anomalies_active"], \
+            f"motion-aware suppression should remove STUCK from snapshot, got {snap['anomalies_active']}"
+
+
+def test_snapshot_reports_stuck_when_motion_above_threshold():
+    """Snapshot endpoint: STUCK fires gdy motion_total >= threshold (real bug pattern)."""
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        # 5 cycles z identical active_ids ALE motion (5 new orders + assigned_var → motion>=5)
+        ids = ["100", "101", "102", "103"]
+        for i in range(5):
+            cycle_stats = {
+                "cycle": i, "orders_in_panel": 4,
+                "new": 1, "delivered": 0, "ignored": 0, "errors": 0,
+            }
+            parsed = {"order_ids": ids, "assigned_ids": ["x"] * (3 + (i % 3))}
+            m.record_tick(cycle_stats, parsed)
+        snap = m.get_health_snapshot()
+        assert snap["status"] == "degraded", \
+            f"motion>=threshold + active stuck → snapshot reports STUCK, got status={snap['status']}"
+        assert "PARSER_STUCK" in snap["anomalies_active"], \
+            f"snapshot should report PARSER_STUCK z motion-confirmed real miss, got {snap['anomalies_active']}"
+
+
+def test_snapshot_suppress_zero_output_pre_09_warsaw(monkeypatch):
+    """Snapshot endpoint: ZERO_OUTPUT suppressed pre-09:00 Warsaw (naturalny plateau po nightly rollover)."""
+    from datetime import datetime, timezone
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        # 4 cycles z orders_in_panel=0 (panel pusty/timeoutuje) — recent_zero=4 >= 3
+        for i in range(4):
+            cycle_stats = {"cycle": i, "orders_in_panel": 0, "new": 0, "delivered": 0,
+                           "ignored": 0, "errors": 0}
+            m.record_tick(cycle_stats, parsed=None)
+        # Mock datetime.now żeby snapshot widział warsaw_hour=8 (pre-09)
+        class _FakeDT:
+            @staticmethod
+            def now(tz=None):
+                # 08:30 Warsaw = 06:30 UTC
+                return datetime(2026, 5, 7, 6, 30, 0, tzinfo=timezone.utc).astimezone(tz)
+        monkeypatch.setattr(parser_health, "datetime", _FakeDT)
+        snap = m.get_health_snapshot()
+        assert snap["status"] == "healthy", \
+            f"warsaw_hour=8 < min_hour=9 → snapshot suppressed ZERO_OUTPUT, got status={snap['status']}"
+        assert "PARSER_ZERO_OUTPUT" not in snap["anomalies_active"], \
+            f"hour-of-day suppression should remove ZERO_OUTPUT pre-09, got {snap['anomalies_active']}"
+
+
 # ─── Runner ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     tests = [
@@ -355,6 +423,10 @@ if __name__ == "__main__":
         ("alert_fires_active_set_stuck_real_miss", test_alert_fires_active_set_stuck_real_miss),
         ("delta_spike_uses_active_not_order_ids", test_delta_spike_uses_active_not_order_ids),
         ("active_falls_back_to_order_ids_when_no_closed", test_active_falls_back_to_order_ids_when_no_closed),
+        ("snapshot_suppress_stuck_when_motion_below_threshold", test_snapshot_suppress_stuck_when_motion_below_threshold),
+        ("snapshot_reports_stuck_when_motion_above_threshold", test_snapshot_reports_stuck_when_motion_above_threshold),
+        # NB: test_snapshot_suppress_zero_output_pre_09_warsaw wymaga pytest monkeypatch fixture,
+        # pominięto w custom runnerze (uruchamiany via pytest).
     ]
     passed = 0
     failed = 0
