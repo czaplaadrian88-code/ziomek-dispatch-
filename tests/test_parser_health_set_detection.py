@@ -103,7 +103,8 @@ def test_alert_fires_when_set_identical_with_motion():
         parser_stuck = [a for a in alerts if a["type"] == "PARSER_STUCK"]
         assert len(parser_stuck) == 1, f"oczekiwany 1 alert PARSER_STUCK, got {len(parser_stuck)}"
         assert parser_stuck[0]["context"].get("set_stuck") is True
-        assert "real parser miss confirmed" in parser_stuck[0]["message"].lower()
+        # 2026-05-07: message przepisany na PL ("Panel zamrożony — realny bug parsera")
+        assert "panel zamrożony" in parser_stuck[0]["message"].lower()
 
 
 # ─── Test 5: set_stuck=False (rotation) + motion → SUPPRESS alert ──────
@@ -159,8 +160,10 @@ def test_legacy_entries_high_motion_fires_legacy_alert():
         assert len(parser_stuck) == 1, (
             f"Fallback motion-only powinien fire alert (motion=6 >=4), got {len(parser_stuck)}"
         )
-        # Message powinien być w legacy format (bez "set IDENTYCZNY")
-        assert "real parser miss confirmed" not in parser_stuck[0]["message"].lower()
+        # 2026-05-07: message PL — fallback path zawiera "incydent 02.05" zamiast "nie panel design"
+        # (rozróżnia od set_stuck=True confirmed-miss variantu).
+        assert "panel zamrożony" in parser_stuck[0]["message"].lower()
+        assert "nie panel design" not in parser_stuck[0]["message"].lower()
 
 
 # ─── Test 8b: REAL INCIDENT REPLAY — 02.05 pattern (zero delivered + PACKS_CATCHUP) ──
@@ -195,7 +198,9 @@ def test_alert_fires_real_incident_pattern_zero_delivered():
         assert ctx.get("set_stuck") is True, "set_stuck powinien być True (order_ids identyczny)"
         assert ctx.get("motion_delivered") == 0, "delivered=0 (parser miss)"
         assert ctx.get("motion_total") >= 4, f"motion_total {ctx.get('motion_total')} < threshold"
-        assert "real parser miss confirmed" in parser_stuck[0]["message"].lower()
+        # 2026-05-07: message PL — set_stuck=True confirmed variant
+        assert "panel zamrożony" in parser_stuck[0]["message"].lower()
+        assert "nie panel design" in parser_stuck[0]["message"].lower()
 
 
 # ─── Test 8: set_stuck=True ALE motion=0 → NO alert (panel quiet) ──────

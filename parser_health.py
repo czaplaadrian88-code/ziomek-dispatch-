@@ -285,8 +285,13 @@ class ParserHealthMonitor:
                 "type": "PARSER_ZERO_OUTPUT",
                 "severity": "critical",
                 "message": (
-                    f"Parser monitor: orders_in_panel=0 przez {recent_zero} z ostatnich "
-                    f"{len(self._cycles)} cycli. Possible parser regression lub panel down."
+                    f"🚨 Panel pusty — Ziomek nie widzi zamówień\n"
+                    f"W {recent_zero} z ostatnich {len(self._cycles)} sprawdzeń panel.nadajesz.pl "
+                    f"zwracał 0 zamówień. Najczęściej znaczy że panel chwilowo padł "
+                    f"(timeout sieci) albo parser się zaciął.\n\n"
+                    f"Co robię: monitoruję dalej — alert powtórzy się jak nie wróci. "
+                    f"Jeśli zobaczysz to 3+ razy z rzędu → restart:\n"
+                    f"sudo systemctl restart dispatch-panel-watcher"
                 ),
                 "context": {"recent_zero_count": recent_zero, "window_size": len(self._cycles)},
             })
@@ -303,8 +308,11 @@ class ParserHealthMonitor:
                         "type": "PARSER_DELTA_SPIKE",
                         "severity": "warning",
                         "message": (
-                            f"Parser monitor: delta {delta_pct:+.1f}% vs prev_median={prev_median} "
-                            f"(curr={n_active}, active orders). Threshold [{DELTA_PCT_LOWER}, {DELTA_PCT_UPPER}]%."
+                            f"⚠️ Skok aktywnych zamówień: {prev_median} → {n_active} ({delta_pct:+.0f}%)\n"
+                            f"Liczba zamówień w obróbce nagle wzrosła ponad próg. "
+                            f"Może to start dnia, nagły wzrost ruchu, albo (rzadko) glitch parsera.\n\n"
+                            f"Co robię: dispatchuję dalej normalnie, obserwuję trend. "
+                            f"Akcja niepotrzebna chyba że widzisz coś dziwnego w panelu."
                         ),
                         "context": {"current": n_active, "prev_median": prev_median, "delta_pct": delta_pct, "metric": "active_orders"},
                     })
@@ -360,8 +368,13 @@ class ParserHealthMonitor:
                             "type": "PARSER_STUCK",
                             "severity": "warning",
                             "message": (
-                                f"Parser monitor: active_orders = {recent_active[0]} stałe przez "
-                                f"{STUCK_COUNT_TOLERANCE} cycle. (legacy mode, motion-aware OFF)"
+                                f"⚠️ Panel zamrożony — ten sam zestaw aktywnych zamówień "
+                                f"{STUCK_COUNT_TOLERANCE} razy z rzędu\n"
+                                f"Panel zwraca {recent_active[0]} aktywnych zamówień przez "
+                                f"{STUCK_COUNT_TOLERANCE} cykli (motion-aware OFF, więc nie weryfikuję ruchu w mieście "
+                                f"— false positive możliwy w cichej godzinie).\n\n"
+                                f"Co robię: alertuję, monitoruję. Jeśli się utrzyma w peak → restart:\n"
+                                f"sudo systemctl restart dispatch-panel-watcher"
                             ),
                             "context": {"stuck_value": recent_active[0], "stuck_count": STUCK_COUNT_TOLERANCE,
                                         "motion_aware": False},
@@ -372,11 +385,15 @@ class ParserHealthMonitor:
                             "type": "PARSER_STUCK",
                             "severity": "warning",
                             "message": (
-                                f"Parser monitor: active_orders = {recent_active[0]} stałe przez "
-                                f"{STUCK_COUNT_TOLERANCE} cycle ALE panel ma motion "
-                                f"(new={sum_new}, delivered={sum_delivered}, assigned_var={assigned_motion}). "
-                                f"active_ids set IDENTYCZNY przez {STUCK_COUNT_TOLERANCE} cycle "
-                                f"(real parser miss confirmed — live orders frozen)."
+                                f"🚨 Panel zamrożony — ten sam zestaw aktywnych zamówień "
+                                f"{STUCK_COUNT_TOLERANCE} razy z rzędu\n"
+                                f"Panel zwraca dokładnie te same {recent_active[0]} aktywnych zamówień "
+                                f"przez {STUCK_COUNT_TOLERANCE} minut, mimo że w mieście jest ruch "
+                                f"({sum_new} nowe, {sum_delivered} dostarczone, {assigned_motion} przypisane). "
+                                f"To wygląda na realny bug parsera — nie panel design.\n\n"
+                                f"Co robię: alertuję i czekam jeszcze 1 cykl. "
+                                f"Jeśli się utrzyma → restart:\n"
+                                f"sudo systemctl restart dispatch-panel-watcher"
                             ),
                             "context": {"stuck_value": recent_active[0], "stuck_count": STUCK_COUNT_TOLERANCE,
                                         "motion_new": sum_new, "motion_delivered": sum_delivered,
@@ -393,8 +410,13 @@ class ParserHealthMonitor:
                             "type": "PARSER_STUCK",
                             "severity": "warning",
                             "message": (
-                                f"Parser monitor: active_orders = {recent_active[0]} stałe przez "
-                                f"{STUCK_COUNT_TOLERANCE} cycle. (legacy mode, motion-aware OFF)"
+                                f"⚠️ Panel zamrożony — ten sam zestaw aktywnych zamówień "
+                                f"{STUCK_COUNT_TOLERANCE} razy z rzędu\n"
+                                f"Panel zwraca {recent_active[0]} aktywnych zamówień przez "
+                                f"{STUCK_COUNT_TOLERANCE} cykli (motion-aware OFF, więc nie weryfikuję ruchu w mieście "
+                                f"— false positive możliwy w cichej godzinie).\n\n"
+                                f"Co robię: alertuję, monitoruję. Jeśli się utrzyma w peak → restart:\n"
+                                f"sudo systemctl restart dispatch-panel-watcher"
                             ),
                             "context": {"stuck_value": recent_active[0], "stuck_count": STUCK_COUNT_TOLERANCE,
                                         "motion_aware": False},
@@ -405,10 +427,15 @@ class ParserHealthMonitor:
                             "type": "PARSER_STUCK",
                             "severity": "warning",
                             "message": (
-                                f"Parser monitor: active_orders = {recent_active[0]} stałe przez "
-                                f"{STUCK_COUNT_TOLERANCE} cycle ALE panel ma motion "
-                                f"(new={sum_new}, delivered={sum_delivered}, assigned_var={assigned_motion}). "
-                                f"Real bug pattern: 02.05 incident (PACKS_CATCHUP dla 47XXXX, order_ids parser miss)."
+                                f"🚨 Panel zamrożony — ten sam zestaw aktywnych zamówień "
+                                f"{STUCK_COUNT_TOLERANCE} razy z rzędu\n"
+                                f"Panel zwraca {recent_active[0]} aktywnych zamówień przez "
+                                f"{STUCK_COUNT_TOLERANCE} minut, mimo że w mieście jest ruch "
+                                f"({sum_new} nowe, {sum_delivered} dostarczone, {assigned_motion} przypisane). "
+                                f"To wygląda na realny bug parsera — pattern z incydentu 02.05.\n\n"
+                                f"Co robię: alertuję i czekam jeszcze 1 cykl. "
+                                f"Jeśli się utrzyma → restart:\n"
+                                f"sudo systemctl restart dispatch-panel-watcher"
                             ),
                             "context": {"stuck_value": recent_active[0], "stuck_count": STUCK_COUNT_TOLERANCE,
                                         "motion_new": sum_new, "motion_delivered": sum_delivered,
@@ -426,9 +453,12 @@ class ParserHealthMonitor:
                 "type": "PARSER_ASYMMETRY",
                 "severity": "warning",
                 "message": (
-                    f"Parser monitor: assigned_ids ({n_assigned}) - order_ids ({n_orders}) = "
-                    f"{diff}, przekracza threshold {ASSIGNED_MINUS_ORDERS_MAX}. "
-                    f"Possible: order_ids parser miss."
+                    f"⚠️ Niespójność: kurierzy mają {diff} zamówień których parser już nie widzi w panelu\n"
+                    f"Stan bagów ({n_assigned} przypisanych) wyprzedza listę z panelu ({n_orders}). "
+                    f"Zwykle to znaczy że panel zdążył usunąć dostarczone, a stan u Ziomka "
+                    f"nie zdążył się jeszcze zaktualizować — wyrównuje się w 1-2 cykle.\n\n"
+                    f"Co robię: nic — to obserwacyjny alert. Sprawdzę czy się wyrównało po peak. "
+                    f"Jeśli utrzyma się 30+ min → daj znać, zrobię ręczny reconcile."
                 ),
                 "context": {"n_assigned": n_assigned, "n_orders": n_orders, "diff": diff},
             })
@@ -460,11 +490,11 @@ class ParserHealthMonitor:
                 log.warning(f"[ANOMALY {alert_type}] {msg}")
 
             # Telegram alert
+            # 2026-05-07: msg zawiera już kompletny content (tytuł z emoji + treść + akcja).
+            # Type techniczny zostaje w log.error/warning powyżej dla parsability.
             try:
                 from dispatch_v2.telegram_utils import send_admin_alert
-                emoji = "🚨" if severity == "critical" else "⚠️"
-                tg_text = f"{emoji} V3.28 PARSER {alert_type}\n{msg}"
-                ok = send_admin_alert(tg_text)
+                ok = send_admin_alert(msg)
                 if not ok:
                     log.warning(f"ParserHealthMonitor: send_admin_alert returned False dla {alert_type}")
             except Exception as e:
