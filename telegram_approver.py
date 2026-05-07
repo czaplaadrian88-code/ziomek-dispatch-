@@ -102,6 +102,10 @@ TG_REASON_CODES = {
     "dropzone_mismatch": "drop-zone mismatch",
     "wave_anticipation": "wave anticipation",
     "other": "inny powód",
+    # Mockup v2 [⏰ +10 min] button (2026-05-07): operator postpones decision
+    # 10 min, koordynator manual reassign w międzyczasie. Faktyczne auto-replan
+    # = osobny sprint (wymaga refactoringu pending queue + cron sweeper).
+    "postpone_10min": "przesuń o 10 min",
 }
 
 # Backlog #12 (2026-05-07): Faza 7-AUTO-PROXIMITY agreement metric.
@@ -554,14 +558,358 @@ def _route_section(decision: dict, best: dict) -> str:
     return "\n".join(lines)
 
 
+# =============================================================================
+# Mockup v2 (2026-05-07) — operator-friendly Telegram propozycja redesign
+# =============================================================================
+# Flag-gated via flags.json `PROPOSAL_FORMAT_V2` (default False, hot-reload).
+# Format zaakceptowany przez Adriana 1:1 wg mockup #471167. Zachowuje legacy
+# format_proposal() jako fallback gdy flag OFF (zero ryzyka regresji).
+# =============================================================================
+
+def _conf_line_v2(decision: dict) -> str:
+    """Confidence bucket line z decision.auto_route + best_effort banner.
+
+    Mapping (Adrian spec lock 2026-05-07):
+        AUTO  → '🟢 Top 30% pewności — w trybie auto poszłoby samo.'
+        ACK   → '🟡 Środek 40% — potrzebny szybki check.'
+        ALERT → '🔴 Bottom 30% — wymaga decyzji.'
+        None/legacy → ACK (default fallback dla legacy decisions bez Faza 7 field)
+
+    best_effort=True → prepend '⚠️ Best effort — brak feasible kandydata.\n'.
+    """
+    auto_route = (decision.get("auto_route") or "").upper()
+    best = decision.get("best") or {}
+    best_effort = best.get("best_effort", False)
+
+    if auto_route == "AUTO":
+        line = "🟢 Top 30% pewności — w trybie auto poszłoby samo."
+    elif auto_route == "ALERT":
+        line = "🔴 Bottom 30% — wymaga decyzji."
+    else:
+        line = "🟡 Środek 40% — potrzebny szybki check."
+
+    if best_effort:
+        return "⚠️ Best effort — brak feasible kandydata.\n" + line
+    return line
+
+
+def _gps_marker_v2(pos_source: Optional[str]) -> str:
+    """GPS source marker dla candidate line (mockup v2 spec)."""
+    if pos_source == "no_gps":
+        return "❌brak GPS"
+    if pos_source in ("last_pickup", "last-pickup"):
+        return "📍last-pickup"
+    if pos_source == "pre_shift":
+        return "🆔pre-shift"
+    if pos_source in (None, "", "gps"):
+        return "📍GPS"
+    return "❔?"
+
+
+def _bag_emoji_v2(bag_n: int) -> str:
+    """Bag count → emoji bucket (mockup v2 spec)."""
+    if bag_n <= 0:
+        return "🟢"
+    if bag_n == 1:
+        return "🟡"
+    return "🔴"
+
+
+def _candidate_line_v2(idx: int, c: dict, is_winner: bool) -> str:
+    """Mockup v2 candidate row.
+
+    Format: '{idx}. {name} K-{cid} · {gps} · ETA {hhmm} · {bag_emoji} {bag_n}{ ← WYBRANY?}'
+    """
+    cid = str(c.get("courier_id") or "?")
+    name = name_lookup(c.get("courier_id"), c.get("name"))
+    gps = _gps_marker_v2(c.get("pos_source"))
+    eta = c.get("eta_pickup_hhmm") or c.get("eta_drive_hhmm") or "—"
+    bag_n = c.get("r6_bag_size") or c.get("bag_size_before") or 0
+    try:
+        bag_n = int(bag_n)
+    except (TypeError, ValueError):
+        bag_n = 0
+    bag_emoji = _bag_emoji_v2(bag_n)
+    suffix = " ← WYBRANY" if is_winner else ""
+    return f"{idx}. {name} K-{cid} · {gps} · ETA {eta} · {bag_emoji} {bag_n}{suffix}"
+
+
+def _drop_eta_hhmm_v2(
+    decision: dict, best: dict, pickup_in_min: Optional[float], now_utc: datetime
+) -> Optional[str]:
+    """Drop ETA HH:MM Warsaw. Priorytet:
+    1. best.plan.predicted_delivered_at[order_id] — bag-aware plan-based ETA.
+    2. fallback: pickup_ready + best.plan.drop_eta_min (lub eta_drive_min).
+    3. None gdy brak danych (caller pominie linię trasy dostawy).
+    """
+    plan = (best or {}).get("plan") or {}
+    oid = str(decision.get("order_id") or "")
+    pred = plan.get("predicted_delivered_at") or {}
+    iso = pred.get(oid)
+    if iso:
+        hhmm = _iso_to_warsaw_hhmm(iso)
+        if hhmm:
+            return hhmm
+    drop_eta_min = (
+        best.get("drop_eta_min")
+        or plan.get("drop_eta_min")
+        or best.get("eta_drive_min_to_drop")
+    )
+    if drop_eta_min is None:
+        return None
+    if pickup_in_min is None:
+        return None
+    try:
+        total_min = float(pickup_in_min) + float(drop_eta_min)
+    except (TypeError, ValueError):
+        return None
+    if total_min < 0:
+        total_min = 0.0
+    delivery_dt = now_utc + timedelta(minutes=total_min)
+    return delivery_dt.astimezone(WARSAW).strftime("%H:%M")
+
+
+def _reason_text_v2(
+    best: dict,
+    alts: list,
+    restaurant: str,
+    pickup_in_min: Optional[float],
+    top1_eta_min: Optional[float],
+) -> str:
+    """Mockup v2 💡 reason composer.
+
+    Priorytet 1: best.v326_rationale.dlaczego (V3.26 STEP 1 enrichment) — używa 1:1.
+    Priorytet 2: rule-based template z mockup style:
+      - free + ETA == pickup_ready → 'Wolny od ręki, dojedzie dokładnie na gotowe danie z {rest}'
+      - free + ETA > pickup_ready → 'Wolny od ręki, dojedzie {extra} min po gotowym daniu z {rest}'
+      - bag>0 → 'Z {n} dowozem/dowozami w torbie, dotrze za {extra} min'
+    Plus contrast vs najbliższy alt z bag>0 i delay >10 min vs top1.
+    """
+    rat = (best or {}).get("v326_rationale") or {}
+    dlaczego = rat.get("dlaczego")
+    if dlaczego:
+        return str(dlaczego)
+
+    if not best:
+        return ""
+
+    bag_n = best.get("r6_bag_size") or best.get("bag_size_before") or 0
+    try:
+        bag_n = int(bag_n)
+    except (TypeError, ValueError):
+        bag_n = 0
+    free_at = best.get("free_at_min")
+    parts = []
+
+    if bag_n == 0 and (free_at is not None and free_at <= 0):
+        if (
+            top1_eta_min is not None
+            and pickup_in_min is not None
+            and abs(top1_eta_min - pickup_in_min) < 1.0
+        ):
+            parts.append(f"Wolny od ręki, dojedzie dokładnie na gotowe danie z {restaurant}")
+        elif top1_eta_min is not None and pickup_in_min is not None and top1_eta_min > pickup_in_min:
+            extra = int(round(top1_eta_min - pickup_in_min))
+            parts.append(
+                f"Wolny od ręki, dojedzie {extra} min po gotowym daniu z {restaurant}"
+            )
+        else:
+            parts.append(f"Wolny od ręki dla {restaurant}")
+    elif bag_n > 0:
+        word = "dowozem" if bag_n == 1 else "dowozami"
+        if top1_eta_min is not None and pickup_in_min is not None:
+            extra = max(0, int(round(top1_eta_min - pickup_in_min)))
+            parts.append(f"Z {bag_n} {word} w torbie, dotrze za {extra} min")
+        else:
+            parts.append(f"Z {bag_n} {word} w torbie")
+
+    # Contrast vs najbliższy alt z bag>0 i meaningful delay
+    contrast_alt = None
+    contrast_alt_extra = 0
+    for a in alts[:2]:
+        if not a:
+            continue
+        a_bag = a.get("r6_bag_size") or a.get("bag_size_before") or 0
+        try:
+            a_bag = int(a_bag)
+        except (TypeError, ValueError):
+            a_bag = 0
+        a_travel = a.get("travel_min")
+        if a_bag >= 1 and a_travel is not None and top1_eta_min is not None:
+            try:
+                delay = float(a_travel) - float(top1_eta_min)
+            except (TypeError, ValueError):
+                continue
+            if delay >= 10:
+                contrast_alt = a
+                contrast_alt_extra = int(round(delay))
+                break
+
+    if contrast_alt is not None:
+        a_bag = contrast_alt.get("r6_bag_size") or contrast_alt.get("bag_size_before") or 0
+        try:
+            a_bag = int(a_bag)
+        except (TypeError, ValueError):
+            a_bag = 0
+        a_word = "dowóz" if a_bag == 1 else "dowozy"
+        a_name = name_lookup(contrast_alt.get("courier_id"), contrast_alt.get("name"))
+        parts.append(
+            f"{a_name} ma już {a_bag} {a_word} w torbie i spóźni się {contrast_alt_extra} min"
+        )
+
+    return "; ".join(parts)
+
+
+def _format_proposal_v2(decision: dict) -> str:
+    """Mockup v2 layout (zaakceptowany 2026-05-07 przez Adriana 1:1).
+
+    Layout (vs legacy format_proposal):
+        🚖 {best_name} (K-{cid}) → {restaurant} → {drop_addr} ({drop_district})
+        ⏱️ Odbiór: {pickup_hhmm}
+
+        {conf_line}                                   ← Top 30/40/30% bucket
+
+        👥 Kandydaci:
+        1. {name} K-{cid} · {gps} · ETA {hhmm} · {bag_emoji} {n} ← WYBRANY
+        2. ...
+        3. ...
+
+        💡 {reason_text}                              ← composer/rationale
+
+        🗺 Trasa:
+        • {now_hhmm} — start
+        • {pickup_hhmm} — {restaurant} (odbiór)
+        • {drop_eta_hhmm} — {drop_addr} (dostawa)
+    """
+    oid = decision.get("order_id", "?")
+    rest = decision.get("restaurant") or "?"
+    delivery = decision.get("delivery_address") or "—"
+    best = decision.get("best") or {}
+    alts = decision.get("alternatives") or []
+
+    now_utc = datetime.now(timezone.utc)
+    pickup_hhmm, pickup_in_min = _pickup_ready_warsaw(decision, now_utc)
+
+    best_name = name_lookup(best.get("courier_id"), best.get("name")) if best else "?"
+    best_cid = str(best.get("courier_id") or "?") if best else "?"
+    drop_district = _district_safe(delivery)
+
+    lines = [
+        f"🚖 {best_name} (K-{best_cid}) → {rest} → {delivery} ({drop_district})",
+    ]
+    if pickup_hhmm is not None:
+        lines.append(f"⏱️ Odbiór: {pickup_hhmm}")
+    lines.append("")
+    lines.append(_conf_line_v2(decision))
+    lines.append("")
+
+    lines.append("👥 Kandydaci:")
+    top3 = [best] + list(alts[:2])
+    top3_nonempty = [c for c in top3 if c]
+    for i, c in enumerate(top3, start=1):
+        if not c:
+            continue
+        lines.append(_candidate_line_v2(i, c, is_winner=(i == 1)))
+    lines.append("")
+
+    top1_travel = best.get("travel_min") if best else None
+    try:
+        top1_travel = float(top1_travel) if top1_travel is not None else None
+    except (TypeError, ValueError):
+        top1_travel = None
+    reason_text = _reason_text_v2(
+        best=best,
+        alts=alts,
+        restaurant=rest,
+        pickup_in_min=pickup_in_min,
+        top1_eta_min=top1_travel,
+    )
+    if reason_text:
+        lines.append(f"💡 {reason_text}")
+        lines.append("")
+
+    drop_eta_hhmm = _drop_eta_hhmm_v2(decision, best, pickup_in_min, now_utc)
+    now_hhmm = _to_warsaw_hhmm(now_utc)
+    lines.append("🗺 Trasa:")
+    lines.append(f"• {now_hhmm} — start")
+    if pickup_hhmm is not None:
+        lines.append(f"• {pickup_hhmm} — {rest} (odbiór)")
+    if drop_eta_hhmm is not None:
+        lines.append(f"• {drop_eta_hhmm} — {delivery} (dostawa)")
+
+    return "\n".join(lines)
+
+
+def _build_keyboard_v2_top_row(
+    order_id: str,
+    candidates: Optional[list],
+    pickup_ready_at: Optional[str] = None,
+) -> list:
+    """Mockup v2 top row: [✅ Akceptuj] [🥈 Weź #2] [🥉 Weź #3] [⏰ +10 min].
+
+    Callbacks:
+      - Akceptuj/Weź #2/Weź #3 → ASSIGN:{oid}:{cid}:{tmin} (compat z legacy router)
+      - +10 min                → INNY:postpone_10min:{oid} (reuse INNY router)
+
+    Skip pusty button gdy mniej niż 3 candidates. Postpone zawsze obecny.
+    Tmin formula identyczna z legacy build_keyboard (V3.26 hotfix sync z compute_assign_time).
+    """
+    import math as _math
+
+    prep_min = 0.0
+    if pickup_ready_at:
+        try:
+            if isinstance(pickup_ready_at, str):
+                ready = datetime.fromisoformat(pickup_ready_at.replace("Z", "+00:00"))
+            else:
+                ready = pickup_ready_at
+            if ready.tzinfo is None:
+                ready = ready.replace(tzinfo=timezone.utc)
+            prep_min = max(0.0, (ready - datetime.now(timezone.utc)).total_seconds() / 60.0)
+        except Exception:
+            prep_min = 0.0
+
+    labels = ["✅ Akceptuj", "🥈 Weź #2", "🥉 Weź #3"]
+    row = []
+    for idx, c in enumerate((candidates or [])[:3]):
+        if not c:
+            continue
+        cid = str(c.get("courier_id") or "")
+        if not cid:
+            continue
+        tm_raw = c.get("travel_min") or 0.0
+        try:
+            tm_raw = float(tm_raw)
+        except (TypeError, ValueError):
+            tm_raw = 0.0
+        needed = max(tm_raw, prep_min)
+        time_min = max(5, min(60, int(_math.ceil(needed / 5.0) * 5)))
+        row.append({
+            "text": labels[idx],
+            "callback_data": f"ASSIGN:{order_id}:{cid}:{time_min}",
+        })
+    row.append({
+        "text": "⏰ +10 min",
+        "callback_data": f"INNY:postpone_10min:{order_id}",
+    })
+    return row
+
+
 def format_proposal(decision: dict) -> str:
     """[PROPOZYCJA] z top3 + pickup_ready + czas deklarowany per kandydat.
+
+    Mockup v2 dispatcher (2026-05-07): jeśli flag PROPOSAL_FORMAT_V2 ON →
+    delegate do _format_proposal_v2 (operator-friendly redesign 1:1 z mockup
+    #471167). Default OFF = legacy format zachowany (zero regresji).
 
     Faza 7-AUTO-PROXIMITY shadow (2026-05-06): jeśli decision.auto_route == "AUTO",
     dodaj header line "🤖 PEWIEN — auto-przypisałbym {kurier} (margin +X)" przed
     standard body. Adrian decyzja: chce widoczność classifier verdykt w Telegramie
     przez tydzień shadow przed ewentualnym flagowaniem w prod.
     """
+    if flag("PROPOSAL_FORMAT_V2", default=False):
+        return _format_proposal_v2(decision)
+
     oid = decision.get("order_id", "?")
     rest = decision.get("restaurant") or "?"
     delivery = decision.get("delivery_address") or "—"
@@ -659,26 +1007,34 @@ def build_keyboard(
         except Exception:
             prep_min = 0.0
     rows = []
+    # Mockup v2 (2026-05-07): top row = [✅ Akceptuj] [🥈 Weź #2] [🥉 Weź #3] [⏰ +10 min].
+    # Dispatcher zachowuje INNY 8-grid + KOORD pod spodem jako safety net (Adrian
+    # explicit decyzja "KOORD zostaw safety net" — operator może zawsze klikać
+    # standardowe override buttons niezależnie od mockup top row).
+    use_v2_top_row = flag("PROPOSAL_FORMAT_V2", default=False)
     row1 = []
-    for c in (candidates or [])[:3]:
-        if not c:
-            continue
-        cid = str(c.get("courier_id") or "")
-        if not cid:
-            continue
-        name = name_lookup(cid, c.get("name"))
-        tm_raw = c.get("travel_min") or 0.0
-        try:
-            tm_raw = float(tm_raw)
-        except (TypeError, ValueError):
-            tm_raw = 0.0
-        # V3.26 hotfix formula (aligned compute_assign_time):
-        needed = max(tm_raw, prep_min)
-        time_min = max(5, min(60, int(_math.ceil(needed / 5.0) * 5)))
-        row1.append({
-            "text": f"✅ {name} {time_min}min",
-            "callback_data": f"ASSIGN:{order_id}:{cid}:{time_min}",
-        })
+    if use_v2_top_row:
+        row1 = _build_keyboard_v2_top_row(order_id, candidates, pickup_ready_at)
+    else:
+        for c in (candidates or [])[:3]:
+            if not c:
+                continue
+            cid = str(c.get("courier_id") or "")
+            if not cid:
+                continue
+            name = name_lookup(cid, c.get("name"))
+            tm_raw = c.get("travel_min") or 0.0
+            try:
+                tm_raw = float(tm_raw)
+            except (TypeError, ValueError):
+                tm_raw = 0.0
+            # V3.26 hotfix formula (aligned compute_assign_time):
+            needed = max(tm_raw, prep_min)
+            time_min = max(5, min(60, int(_math.ceil(needed / 5.0) * 5)))
+            row1.append({
+                "text": f"✅ {name} {time_min}min",
+                "callback_data": f"ASSIGN:{order_id}:{cid}:{time_min}",
+            })
     if row1:
         rows.append(row1)
     # V3.19i (2026-04-30): 8 structured reason buttons replacing single INNY.
