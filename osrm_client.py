@@ -184,7 +184,18 @@ def _haversine_fallback(from_ll: tuple, to_ll: tuple, now_utc: datetime) -> dict
 
 
 def haversine(ll1: tuple, ll2: tuple) -> float:
-    """Odleglosc w km. ll = (lat, lon)."""
+    """Odleglosc w km. ll = (lat, lon).
+
+    Fail-loud na None / sentinel (0,0): pre-fix te wartości dawały silent
+    ~6285km (dystans Białystok→(0,0)) co maskowało brak geokodacji jako
+    pickup_too_far. Lekcja #32: silent except = invisible bug.
+    """
+    if ll1 is None or ll2 is None:
+        _log.error("haversine None coords: ll1=%r ll2=%r", ll1, ll2)
+        raise ValueError(f"haversine: None coords (ll1={ll1!r}, ll2={ll2!r})")
+    if ll1 == (0.0, 0.0) or ll2 == (0.0, 0.0):
+        _log.error("haversine sentinel (0,0): ll1=%r ll2=%r", ll1, ll2)
+        raise ValueError(f"haversine: sentinel (0,0) (ll1={ll1!r}, ll2={ll2!r})")
     lat1, lon1 = ll1
     lat2, lon2 = ll2
     R = 6371.0

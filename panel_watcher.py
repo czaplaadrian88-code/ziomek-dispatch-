@@ -26,11 +26,19 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
-from dispatch_v2.common import flag, load_config, now_iso, setup_logger
+from dispatch_v2.common import (
+    FIRMOWE_KONTO_ADDRESS_IDS,
+    FIRMOWE_KONTO_FALLBACK_COORDS,
+    flag,
+    load_config,
+    now_iso,
+    setup_logger,
+)
 from dispatch_v2.event_bus import emit, emit_audit
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
 from dispatch_v2.parser_health_layer3 import install_layer3, record_tick_full
 from dispatch_v2.parser_health_endpoint import start_health_endpoint
+from dispatch_v2.uwagi_address_parser import parse_pickup_from_uwagi
 from dispatch_v2.panel_client import (
     fetch_panel_html,
     parse_panel_html,
@@ -452,6 +460,70 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         _aid_str = str(_aid) if _aid is not None else None
         _pcoords = _COORDS.get(_aid_str) if _aid_str else None
 
+        # Firmowe konto path: address_id ∈ FIRMOWE_KONTO_ADDRESS_IDS znaczy
+        # adres pickup'u jest w polu uwagi (free-text), nie w panel address.
+        # Parser PRIMARY: parsuj uwagi → geocode → real coords (Mickiewicza 50,
+        # Wyszyńskiego 2/75, etc.). FALLBACK: gdy parser zwróci None (P3 edge)
+        # ALBO geocode fail → użyj FIRMOWE_KONTO_FALLBACK_COORDS (centrala
+        # Nadajesz.pl, Adrian decision 2026-05-07). Defense gate L2 w
+        # dispatch_pipeline + L4 czasowka_scheduler obsługują gdy nawet fallback
+        # coords nie zostały wpisane (np. inne firmowe konta bez fallback config).
+        _uwagi_pickup_parsed = None
+        _pickup_address_override = None
+        _restaurant_override = None
+        _is_firmowe_konto = (
+            _aid is not None
+            and int(_aid) in FIRMOWE_KONTO_ADDRESS_IDS
+        )
+        if (_pcoords is None
+                and _is_firmowe_konto
+                and flag("ENABLE_UWAGI_ADDRESS_PARSER", True)):
+            _uwagi_text = norm.get("uwagi")
+            _parsed = parse_pickup_from_uwagi(_uwagi_text)
+            if _parsed is not None:
+                _pickup_address_override = f"{_parsed.street} {_parsed.number}"
+                _pcoords = geocode(_pickup_address_override, city="Białystok", timeout=2.0)
+                if _pcoords is None:
+                    _log.warning(
+                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser "
+                        f"OK ({_pickup_address_override!r} conf={_parsed.confidence}) "
+                        f"ALE geocode fail — fallback do FIRMOWE_KONTO_FALLBACK_COORDS"
+                    )
+                    _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
+                else:
+                    _log.info(
+                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: uwagi-parser "
+                        f"resolved pickup {_pickup_address_override!r} conf={_parsed.confidence} "
+                        f"→ coords={_pcoords}"
+                    )
+                if _parsed.company:
+                    _restaurant_override = _parsed.company
+                _uwagi_pickup_parsed = {
+                    "street": _parsed.street,
+                    "number": _parsed.number,
+                    "company": _parsed.company,
+                    "confidence": _parsed.confidence,
+                    "raw_pickup_line": _parsed.raw_pickup_line,
+                }
+            else:
+                # P3 edge: parser nie wyciągnął adresu (np. uwagi=company-only
+                # "MALI WOJOWNICY"). Fallback do hardcoded coords centrali —
+                # kurier dostaje real feasibility loop zamiast manual KOORD.
+                _log.info(
+                    f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
+                    f"None (P3 edge), fallback do FIRMOWE_KONTO_FALLBACK_COORDS. "
+                    f"Uwagi: {_uwagi_text!r}"
+                )
+                _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
+                _uwagi_pickup_parsed = {
+                    "street": None,
+                    "number": None,
+                    "company": None,
+                    "confidence": 0.0,
+                    "raw_pickup_line": _uwagi_text or "",
+                    "fallback_coords_used": True,
+                }
+
         # Geocode delivery address (cache hit ~90% = 0ms, miss = Google API max 2s)
         _del_addr = norm.get("delivery_address")
         _del_city = norm.get("delivery_city")
@@ -462,8 +534,8 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _log.warning(f"NEW_ORDER {zid}: geocode fail for '{_del_addr}' city={_del_city!r}")
 
         ev_payload = {
-            "restaurant": norm["restaurant"],
-            "pickup_address": norm["pickup_address"],
+            "restaurant": _restaurant_override or norm["restaurant"],
+            "pickup_address": _pickup_address_override or norm["pickup_address"],
             "pickup_city": norm.get("pickup_city"),
             "delivery_address": norm["delivery_address"],
             "delivery_city": _del_city,
@@ -479,6 +551,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             # Parse+persist zawsze (niezależnie od flagi). Pipeline consume pod flagą.
             "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
             "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
+            # Audit trail dla firmowego konto path (zwykle None).
+            "uwagi": norm.get("uwagi"),
+            "uwagi_pickup_parsed": _uwagi_pickup_parsed,
         }
 
         # Deterministyczny event_id: {order_id}_NEW_ORDER_first_seen (bez timestamp - raz na zycie)

@@ -262,6 +262,22 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "all_candidates_for_proactive": [],
         }
 
+    # Defense gate (L2): brak pickup_coords = order bez geokodacji (np. firmowe
+    # konto Nadajesz.pl gdzie parser uwag nie wyciągnął adresu — P3 edge).
+    # Fail fast z czytelnym KOORD alertem zamiast lecieć w feasibility loop
+    # i serwować "BRAK KANDYDATÓW + pickup_too_far 6285km" (myli operatora).
+    _pc = order_state.get("pickup_coords")
+    if _pc is None or _pc == [0.0, 0.0] or _pc == (0.0, 0.0):
+        return {
+            "decision": "KOORD",
+            "reason": "no_pickup_geocode",
+            "minutes_to_pickup": mins,
+            "match_quality": "none",
+            "best": None,
+            "alternatives": [],
+            "all_candidates_for_proactive": [],
+        }
+
     # Build order_event dict w format którego oczekuje assess_order (mirror panel_watcher emit).
     order_event = {
         "order_id": order_id,
@@ -280,6 +296,8 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
         "delivery_coords": order_state.get("delivery_coords"),
         "czas_kuriera_warsaw": order_state.get("czas_kuriera_warsaw"),
         "czas_kuriera_hhmm": order_state.get("czas_kuriera_hhmm"),
+        "uwagi": order_state.get("uwagi"),
+        "uwagi_pickup_parsed": order_state.get("uwagi_pickup_parsed"),
     }
 
     # Fix 2026-05-06: użyj dispatchable_fleet() (jak shadow_dispatcher:521) — wzbogaca
@@ -420,7 +438,12 @@ def _emit_to_event_bus(oid: str, order_state: dict, result: dict, eval_count: in
 
 
 def _format_koord_alert(oid: str, order_state: dict, result: dict) -> str:
-    """Alert text per Adrian spec (multi-line z Top 3 odrzuconych)."""
+    """Alert text per Adrian spec (multi-line z Top 3 odrzuconych).
+
+    Special-case `no_pickup_geocode`: dedicated alert "BEZ GEOKODACJI" zamiast
+    standardowego "BRAK KANDYDATÓW" — operator widzi root cause natychmiast
+    (firmowe konto Nadajesz.pl gdzie parser uwag nie wyciągnął adresu).
+    """
     mins = result.get("minutes_to_pickup")
     pickup_ts = order_state.get("pickup_at_warsaw") or "?"
     try:
@@ -429,6 +452,21 @@ def _format_koord_alert(oid: str, order_state: dict, result: dict) -> str:
         ).astimezone(WARSAW).strftime("%H:%M")
     except Exception:
         pickup_hhmm = str(pickup_ts)
+
+    if result.get("reason") == "no_pickup_geocode":
+        uwagi = (order_state.get("uwagi") or "").strip()
+        uwagi_short = uwagi[:300] + ("…" if len(uwagi) > 300 else "")
+        addr_id = order_state.get("address_id")
+        return "\n".join([
+            "🚨 ORDER BEZ GEOKODACJI (firmowe konto)",
+            f"Order: {oid}",
+            f"Konto firmowe: address_id={addr_id} (najczęściej Nadajesz.pl)",
+            f"Czas odbioru: {pickup_hhmm}",
+            f"Minut do pickupu: {int(mins) if mins is not None else '?'}",
+            "Powód: parser uwag nie wyciągnął adresu pickup",
+            f"Uwagi: {uwagi_short or '(puste)'}",
+            "Akcja: ręczne przypisanie KOORD lub uzupełnij adres restauracji w panelu.",
+        ])
 
     lines = [
         "🚨 BRAK KANDYDATÓW (czasówka)",

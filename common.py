@@ -1581,3 +1581,56 @@ def extension_penalty(planned_pickup_at, restaurant_requested_at):
             return penalty
     # Defensive fallback: should be unreachable (last tier = 60 min = hard reject border)
     return V324_EXTENSION_PENALTY_TIERS[-1][1]
+
+
+# ════════════════════════════════════════════════════════════════════
+# FIRMOWE KONTO UWAGI PARSER (2026-05-07 sprint)
+# ────────────────────────────────────────────────────────────────────
+# Konta firmowe (np. Nadajesz.pl id=161) zlecają zamówienia bez adresu
+# restauracji w panel address fields — adres pickup'u jest w polu
+# "uwagi" (free-text). Parser wyciąga ulicę+numer, geokoduje, wpisuje
+# pickup_coords. Defense-in-depth: gate w dispatch_pipeline blokuje
+# feasibility loop gdy pickup_coords=None (czytelny operator alert).
+#
+# Konfiguracja per-tenant ready (Restimo / Wolt Drive future):
+# - FIRMOWE_KONTO_ADDRESS_IDS — lista address_id firmowych kont
+# - ENABLE_UWAGI_ADDRESS_PARSER flag default True env-overridable
+#
+# Empirical fixture base: tests/fixtures/uwagi_firmowe.jsonl (25 sampli)
+# Patterns: P1 STRUCTURED ~84%, P2 NARRATIVE ~12%, P3 COMPANY-ONLY ~8%
+# (P3 = defense gate manual KOORD, brak adresu w uwagach).
+
+FIRMOWE_KONTO_ADDRESS_IDS = frozenset({161})  # Nadajesz.pl firmowe konto
+
+# Last-resort fallback coords gdy parser uwag zawiedzie (P3 edge / malformed
+# uwagi / geocode fail). Source: Adrian decision 2026-05-07 — DMS
+# 53°07'56.0"N 23°10'06.4"E (~centrala/baza Nadajesz.pl, Białystok centrum).
+# Architecture per Adrian wybór: parser PRIMARY → real geocode (Mickiewicza 50,
+# Wyszyńskiego 2/75, etc.); fallback do tej lokalizacji gdy parser zwraca None
+# albo geocode fail. Eliminuje BRAK KANDYDATÓW dla firmowych orderów (nawet P3
+# edge dostaje real candidates pool zamiast operator KOORD manual).
+FIRMOWE_KONTO_FALLBACK_COORDS = (53.13222, 23.16844)
+
+ENABLE_UWAGI_ADDRESS_PARSER = _os.environ.get(
+    "ENABLE_UWAGI_ADDRESS_PARSER", "1") == "1"
+
+# Stop-list nazw firm/instytucji które wyglądają jak street ale nim nie są.
+# Plausibility check secondary do "musi być cyfra w numerze". Lista
+# rozszerzalna — patrz tests/fixtures/uwagi_firmowe.jsonl.
+UWAGI_PARSER_COMPANY_STOPLIST = frozenset({
+    'mali wojownicy', 'dzielne zuchy', 'drtusz', 'dentomax',
+    'orthdruk', 'epaki', 'sempai', '7kick', '7 kick', 'magazyn flm',
+    'street sport', 'matka polka hybrydowa', 'kanro ltd', 'pam bis',
+    'apteka pod lwem', 'firma kinga', 'lakor', 'sprzęt agd',
+    'studio galeria tattoo studio', 'nzoz dentos', 'puh red-bud',
+    'jaglanka', 'jacek okułowicz', 'biegły rzeczoznawca',
+    'redakcja niwa', 'garmond press', 'poczta polska', 'ziemkowska clinic',
+    'firma ewtex', 'galeria', 'red chilli kebab', 'drapieżnik',
+    '3giga', 'mali wojownicy', 'stomatologia zyta',
+})
+
+# Defense gate: parser_health morning calibration (companion fix dla
+# false-positives 07.05 08:37/08:42 ZERO + 09:11 DELTA +100% przy 1→2).
+PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW = 9   # nie alert pre-09:00 Warsaw
+PARSER_HEALTH_STUCK_MIN_BASELINE = 3       # min active orders dla STUCK
+PARSER_HEALTH_DELTA_MIN_ABS_DIFF = 3       # min |curr-prev| dla DELTA

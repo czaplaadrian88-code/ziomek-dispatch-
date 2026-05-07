@@ -279,6 +279,8 @@ def update_from_event(event: dict) -> Optional[dict]:
             "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
             "prep_minutes": payload.get("prep_minutes"),
             "order_type": payload.get("order_type"),
+            "uwagi": payload.get("uwagi"),
+            "uwagi_pickup_parsed": payload.get("uwagi_pickup_parsed"),
             # V3.19f: czas_kuriera 2-field persist (ISO Warsaw + raw HH:MM).
             "czas_kuriera_warsaw": ck_iso,
             "czas_kuriera_hhmm": ck_hhmm,

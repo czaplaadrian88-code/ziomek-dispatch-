@@ -1155,7 +1155,36 @@ def _assess_order_impl(
     order_id = str(order_event.get("order_id") or "")
     restaurant = order_event.get("restaurant")
     delivery_address = order_event.get("delivery_address")
-    pickup_coords = tuple(order_event.get("pickup_coords") or (0.0, 0.0))
+
+    # Defense gate (L2): brak pickup_coords = order bez geokodacji.
+    # Pre-fix scenariusz: panel_watcher dla firmowego konta (address_id=161)
+    # zostawiał pickup_coords=None → tuple() fallback (0,0) → haversine sentinel
+    # 6285km → wszyscy kurierzy pickup_too_far → BRAK KANDYDATÓW. Post-fix:
+    # parser uwag (L1) wypełnia coords gdy uwagi mają adres; gdy NIE (P3 edge,
+    # parser regression, malformed uwagi) — fail-loud SKIP zamiast śmieciowy
+    # feasibility loop. czasowka_scheduler emit'uje dedicated Telegram alert
+    # PRZED tym wywołaniem (visible operator).
+    _raw_pickup_coords = order_event.get("pickup_coords")
+    if _raw_pickup_coords is None or _raw_pickup_coords == [0.0, 0.0] or _raw_pickup_coords == (0.0, 0.0):
+        log.warning(
+            f"assess_order SKIP {order_id} aid={order_event.get('address_id')!r}: "
+            f"pickup_coords missing — defense gate (no geocode); "
+            f"uwagi_parsed={order_event.get('uwagi_pickup_parsed')!r}"
+        )
+        return PipelineResult(
+            order_id=order_id,
+            verdict="SKIP",
+            reason="no_pickup_geocode",
+            best=None,
+            candidates=[],
+            pickup_ready_at=None,
+            restaurant=restaurant,
+            delivery_address=delivery_address,
+            pool_total_count=0,
+            pool_feasible_count=0,
+        )
+
+    pickup_coords = tuple(_raw_pickup_coords)
     delivery_coords = tuple(order_event.get("delivery_coords") or (0.0, 0.0))
 
     # V3.19f: czas_kuriera_warsaw first-choice pod flagą (panel HH:MM commitment).
