@@ -219,12 +219,13 @@ class _FlagsStub:
         return dict(self.kw)
 
 
-def _install_worker_stubs(monkey_flags=None, schedule=None, send_calls=None):
+def _install_worker_stubs(monkey_flags=None, schedule=None, send_calls=None, ignored_names=None):
     """Install module-level stubs and return a teardown callable."""
     orig_flags = worker_mod.load_flags
     orig_sched = worker_mod.load_schedule
     orig_send = worker_mod.tg_send_text_with_keyboard
     orig_kids = worker_mod._load_kurier_ids
+    orig_ignored = worker_mod._load_ignored_names
 
     if monkey_flags is None:
         monkey_flags = {"SHIFT_NOTIFY_ENABLED": False}
@@ -250,11 +251,14 @@ def _install_worker_stubs(monkey_flags=None, schedule=None, send_calls=None):
     }
     worker_mod._load_kurier_ids = lambda: {k: v for k, v in fake_kids.items() if v is not None}
 
+    worker_mod._load_ignored_names = lambda: set(ignored_names or [])
+
     def teardown():
         worker_mod.load_flags = orig_flags
         worker_mod.load_schedule = orig_sched
         worker_mod.tg_send_text_with_keyboard = orig_send
         worker_mod._load_kurier_ids = orig_kids
+        worker_mod._load_ignored_names = orig_ignored
 
     return teardown, captured
 
@@ -548,8 +552,121 @@ t("worker_t60_end_window_and_individual_only", test_worker_t60_end_window_and_in
 # --------- Summary --------------------------------------------------------
 
 
-print("=" * 70)
-print(f"PASSED: {passed}/{passed+failed}")
-print(f"FAILED: {failed}/{passed+failed}")
-print("=" * 70)
-sys.exit(0 if failed == 0 else 1)
+# --------- 17. Worker: ignored name skipped at T-60 -----------------------
+
+
+def test_worker_ignored_name_skipped_at_t60():
+    with isolated_shift_state():
+        now = datetime.now(WARSAW).replace(second=0, microsecond=0)
+        in_dt = now + timedelta(minutes=60)
+        if in_dt.date() != now.date():
+            return
+        schedule = {
+            "Daniel Malicki": {"start": in_dt.strftime("%H:%M"), "end": "20:00"},
+            "Adrian Citko": {"start": in_dt.strftime("%H:%M"), "end": "20:00"},
+        }
+        send_calls = []
+        teardown, _ = _install_worker_stubs(
+            monkey_flags={
+                "SHIFT_NOTIFY_ENABLED": True,
+                "SHIFT_NOTIFY_T60_START_ENABLED": True,
+                "SHIFT_NOTIFY_T30_REMINDER_ENABLED": False,
+                "SHIFT_NOTIFY_T60_END_ENABLED": False,
+                "SHIFT_BATCH_WINDOW_MIN": 10,
+                "SHIFT_BATCH_MIN_COURIERS": 3,
+            },
+            schedule=schedule,
+            send_calls=send_calls,
+            ignored_names={"Daniel Malicki"},
+        )
+        try:
+            rc = worker_mod.main()
+            assert rc == 0
+            joined = " | ".join(c["text"] for c in send_calls)
+            assert "Daniel Malicki" not in joined, f"Daniel should be skipped, sends={joined}"
+            assert "Adrian Citko" in joined, f"Adrian should be notified, sends={joined}"
+        finally:
+            teardown()
+t("worker_ignored_name_skipped_at_t60", test_worker_ignored_name_skipped_at_t60)
+
+
+# --------- 18. Worker: ignored name logged idempotent ---------------------
+
+
+def test_worker_ignored_name_logged_idempotent():
+    with isolated_shift_state():
+        now = datetime.now(WARSAW).replace(second=0, microsecond=0)
+        in_dt = now + timedelta(minutes=60)
+        if in_dt.date() != now.date():
+            return
+        schedule = {
+            "Daniel Malicki": {"start": in_dt.strftime("%H:%M"), "end": "20:00"},
+        }
+        send_calls = []
+        teardown, _ = _install_worker_stubs(
+            monkey_flags={
+                "SHIFT_NOTIFY_ENABLED": True,
+                "SHIFT_NOTIFY_T60_START_ENABLED": True,
+                "SHIFT_NOTIFY_T30_REMINDER_ENABLED": False,
+                "SHIFT_NOTIFY_T60_END_ENABLED": False,
+                "SHIFT_BATCH_WINDOW_MIN": 10,
+                "SHIFT_BATCH_MIN_COURIERS": 3,
+            },
+            schedule=schedule,
+            send_calls=send_calls,
+            ignored_names={"Daniel Malicki"},
+        )
+        try:
+            worker_mod.main()
+            worker_mod.main()  # second tick same minute
+            with open(state_mod.LEARNING_LOG) as f:
+                lines = [ln for ln in f.read().splitlines() if ln.strip()]
+            events = [json.loads(ln) for ln in lines]
+            ignored_events = [
+                e for e in events
+                if e.get("event") == "SHIFT_IGNORED" and e.get("full_name") == "Daniel Malicki"
+            ]
+            assert len(ignored_events) == 1, (
+                f"expected exactly 1 SHIFT_IGNORED event, got {len(ignored_events)}: {ignored_events}"
+            )
+        finally:
+            teardown()
+t("worker_ignored_name_logged_idempotent", test_worker_ignored_name_logged_idempotent)
+
+
+# --------- 19. Worker: ignored names file missing fail-open ---------------
+
+
+def test_worker_ignored_names_file_missing_fail_open():
+    with isolated_shift_state():
+        now = datetime.now(WARSAW).replace(second=0, microsecond=0)
+        in_dt = now + timedelta(minutes=60)
+        if in_dt.date() != now.date():
+            return
+        schedule = {
+            "Adrian Citko": {"start": in_dt.strftime("%H:%M"), "end": "20:00"},
+        }
+        send_calls = []
+        teardown, _ = _install_worker_stubs(
+            monkey_flags={
+                "SHIFT_NOTIFY_ENABLED": True,
+                "SHIFT_NOTIFY_T60_START_ENABLED": True,
+                "SHIFT_NOTIFY_T30_REMINDER_ENABLED": False,
+                "SHIFT_NOTIFY_T60_END_ENABLED": False,
+                "SHIFT_BATCH_WINDOW_MIN": 10,
+                "SHIFT_BATCH_MIN_COURIERS": 3,
+            },
+            schedule=schedule,
+            send_calls=send_calls,
+            # ignored_names not passed → defaults to empty set
+        )
+        try:
+            rc = worker_mod.main()
+            assert rc == 0
+            joined = " | ".join(c["text"] for c in send_calls)
+            assert "Adrian Citko" in joined, f"Adrian should be notified, sends={joined}"
+        finally:
+            teardown()
+t("worker_ignored_names_file_missing_fail_open", test_worker_ignored_names_file_missing_fail_open)
+
+

@@ -197,6 +197,26 @@ def _is_garbage_name(name: str) -> bool:
     return False
 
 
+IGNORED_NAMES_PATH = '/root/.openclaw/workspace/dispatch_state/shift_ignored_names.json'
+
+
+def _load_ignored_names() -> set:
+    """Returns set of full_names z shift_ignored_names.json (permanent inactive).
+    Empty set on FileNotFoundError (fail-open) lub corrupt JSON (logged).
+    File schema: {"names": ["Daniel Malicki", ...], "comment": "..."}
+    """
+    try:
+        with open(IGNORED_NAMES_PATH) as f:
+            data = json.load(f)
+        names = data.get('names') if isinstance(data, dict) else data
+        return {str(n) for n in (names or [])}
+    except FileNotFoundError:
+        return set()
+    except Exception as e:
+        _log.warning(f'_load_ignored_names fail: {type(e).__name__}: {e}')
+        return set()
+
+
 def _build_candidates_starting(
     schedule: Dict[str, Any],
     now: datetime,
@@ -207,12 +227,24 @@ def _build_candidates_starting(
     today_iso: str,
     *,
     skip_already: bool = True,
+    ignored_names: set = frozenset(),
 ) -> List[Candidate]:
     """Couriers whose scheduled START is in [now+low_min, now+high_min]."""
     out: List[Candidate] = []
     seen_keys = set()
     for full_name, entry in (schedule or {}).items():
         if _is_garbage_name(full_name):
+            continue
+        if full_name in ignored_names:
+            today_logged = state.setdefault('shift_ignored_logged', {}).setdefault(today_iso, [])
+            if full_name not in today_logged:
+                state_mod.append_learning_log({
+                    'event': 'SHIFT_IGNORED',
+                    'full_name': full_name,
+                    'reason': 'permanent_inactive_skiplist',
+                })
+                today_logged.append(full_name)
+                state_mod.save_state(state)
             continue
         if not entry or not isinstance(entry, dict):
             continue
@@ -268,12 +300,25 @@ def _build_candidates_ending(
     kurier_ids: Dict[str, str],
     state: dict,
     today_iso: str,
+    *,
+    ignored_names: set = frozenset(),
 ) -> List[Candidate]:
     """Couriers whose scheduled END is in [now+low_min, now+high_min]."""
     out: List[Candidate] = []
     seen_keys = set()
     for full_name, entry in (schedule or {}).items():
         if _is_garbage_name(full_name):
+            continue
+        if full_name in ignored_names:
+            today_logged = state.setdefault('shift_ignored_logged', {}).setdefault(today_iso, [])
+            if full_name not in today_logged:
+                state_mod.append_learning_log({
+                    'event': 'SHIFT_IGNORED',
+                    'full_name': full_name,
+                    'reason': 'permanent_inactive_skiplist',
+                })
+                today_logged.append(full_name)
+                state_mod.save_state(state)
             continue
         if not entry or not isinstance(entry, dict):
             continue
@@ -359,11 +404,14 @@ def run_b1_start(
     batch_window_min: int,
     batch_min_couriers: int,
     templates,
+    *,
+    ignored_names: set = frozenset(),
 ) -> int:
     """B.1 — T-60 START. Returns count of notifications sent."""
     cands = _build_candidates_starting(
         schedule, now, T60_WINDOW_LOW_MIN, T60_WINDOW_HIGH_MIN,
         kurier_ids, state, today_iso,
+        ignored_names=ignored_names,
     )
     if not cands:
         return 0
@@ -417,12 +465,27 @@ def run_b2_reminder(
     kurier_ids: Dict[str, str],
     today_iso: str,
     templates,
+    *,
+    ignored_names: Optional[set] = None,
 ) -> int:
     """B.2 — T-30 REMINDER for couriers with decision=None."""
+    if ignored_names is None:
+        ignored_names = set()
     sent = 0
     notified_at = now.isoformat()
     for full_name, entry in (schedule or {}).items():
         if _is_garbage_name(full_name):
+            continue
+        if full_name in ignored_names:
+            today_logged = state.setdefault('shift_ignored_logged', {}).setdefault(today_iso, [])
+            if full_name not in today_logged:
+                state_mod.append_learning_log({
+                    'event': 'SHIFT_IGNORED',
+                    'full_name': full_name,
+                    'reason': 'permanent_inactive_skiplist',
+                })
+                today_logged.append(full_name)
+                state_mod.save_state(state)
             continue
         if not entry or not isinstance(entry, dict):
             continue
@@ -463,11 +526,14 @@ def run_b3_end(
     kurier_ids: Dict[str, str],
     today_iso: str,
     templates,
+    *,
+    ignored_names: set = frozenset(),
 ) -> int:
     """B.3 — T-60 END. Always individual (per spec) even if multiple couriers in same slot."""
     cands = _build_candidates_ending(
         schedule, now, T60_WINDOW_LOW_MIN, T60_WINDOW_HIGH_MIN,
         kurier_ids, state, today_iso,
+        ignored_names=ignored_names,
     )
     if not cands:
         return 0
@@ -555,6 +621,7 @@ def main() -> int:
         return 0
 
     kurier_ids = _load_kurier_ids()
+    ignored_names = _load_ignored_names()
     templates = _import_templates()
 
     batch_window_min = int(flags.get("SHIFT_BATCH_WINDOW_MIN", 10))
@@ -568,11 +635,14 @@ def main() -> int:
     with state_mod.locked_write_confirmations() as state:
         if sub_b1:
             sent_b1 = run_b1_start(schedule, now, state, kurier_ids, today_iso,
-                                   batch_window_min, batch_min_couriers, templates)
+                                   batch_window_min, batch_min_couriers, templates,
+                                   ignored_names=ignored_names)
         if sub_b2:
-            sent_b2 = run_b2_reminder(schedule, now, state, kurier_ids, today_iso, templates)
+            sent_b2 = run_b2_reminder(schedule, now, state, kurier_ids, today_iso, templates,
+                                      ignored_names=ignored_names)
         if sub_b3:
-            sent_b3 = run_b3_end(schedule, now, state, kurier_ids, today_iso, templates)
+            sent_b3 = run_b3_end(schedule, now, state, kurier_ids, today_iso, templates,
+                                 ignored_names=ignored_names)
         flips = apply_unconfirmed_default(state, now, today_iso)
 
     _log.info(
