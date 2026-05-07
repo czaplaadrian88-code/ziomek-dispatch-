@@ -193,9 +193,10 @@ def test_v2_reason_composer_paths():
     assert "spóźni się 20 min" in out_d, out_d
 
 
-def test_v2_keyboard_top_row_4_buttons_plus_safety_net():
-    """v2 flag ON → top row 4 buttony (Akceptuj/Weź#2/Weź#3/+10min) +
-    INNY 8-grid + KOORD safety net pod spodem."""
+def test_v2_keyboard_2x2_grid_strict_4_buttons():
+    """Mockup v2 strict 4-button only (Adrian post visual check 2026-05-07:
+    'Tylko cztery przyciski, resztę usuń' — 2×2 grid mobile-friendly,
+    NO safety net INNY/KOORD pod spodem)."""
     candidates = [
         {"courier_id": "470", "name": "Piotr Zaw", "travel_min": 15.0},
         {"courier_id": "370", "name": "Jakub OL", "travel_min": 16.0},
@@ -204,26 +205,48 @@ def test_v2_keyboard_top_row_4_buttons_plus_safety_net():
     with _FlagPatch(True):
         kb = ta.build_keyboard("471167", candidates=candidates, pickup_ready_at=None)
     rows = kb["inline_keyboard"]
-    # Row 1 = mockup v2 top row (4 buttons)
-    assert len(rows[0]) == 4, f"top row ma {len(rows[0])} buttonów, oczekiwano 4"
-    labels = [b["text"] for b in rows[0]]
-    assert labels[0] == "✅ Akceptuj"
-    assert labels[1] == "🥈 Weź #2"
-    assert labels[2] == "🥉 Weź #3"
-    assert labels[3] == "⏰ +10 min"
-    # Callback compat: Akceptuj→ASSIGN, +10min→INNY:postpone_10min
-    cbs = [b["callback_data"] for b in rows[0]]
-    assert cbs[0].startswith("ASSIGN:471167:470:")
-    assert cbs[1].startswith("ASSIGN:471167:370:")
-    assert cbs[2].startswith("ASSIGN:471167:515:")
-    assert cbs[3] == "INNY:postpone_10min:471167"
-    # Safety net obecny: INNY 8-grid (4 rows × 2) + KOORD row
+    # 2×2 grid: 2 rows × 2 buttons each
+    assert len(rows) == 2, f"2×2 grid: 2 rows, got {len(rows)}"
+    assert len(rows[0]) == 2, f"row1 powinien mieć 2 buttony, got {len(rows[0])}"
+    assert len(rows[1]) == 2, f"row2 powinien mieć 2 buttony, got {len(rows[1])}"
+    # Layout 1:1 z mockup
+    assert rows[0][0]["text"] == "✅ Akceptuj"
+    assert rows[0][1]["text"] == "🥈 Weź #2"
+    assert rows[1][0]["text"] == "🥉 Weź #3"
+    assert rows[1][1]["text"] == "⏰ +10 min"
+    # Callbacks: ASSIGN compat + INNY:postpone_10min
+    assert rows[0][0]["callback_data"].startswith("ASSIGN:471167:470:")
+    assert rows[0][1]["callback_data"].startswith("ASSIGN:471167:370:")
+    assert rows[1][0]["callback_data"].startswith("ASSIGN:471167:515:")
+    assert rows[1][1]["callback_data"] == "INNY:postpone_10min:471167"
+    # Strict — ZERO safety net rows
+    total_buttons = sum(len(r) for r in rows)
+    assert total_buttons == 4, f"strict 4-button only, got {total_buttons}"
     flat_callbacks = [b["callback_data"] for row in rows for b in row]
-    assert any(cb.startswith("KOORD:471167") for cb in flat_callbacks), \
-        "KOORD safety net brak — Adrian explicit zostawić"
+    assert not any(cb.startswith("KOORD:") for cb in flat_callbacks), \
+        "KOORD safety net obecny — usunięty po visual check"
     inny_count = sum(1 for cb in flat_callbacks
                      if cb.startswith("INNY:") and not cb.startswith("INNY:postpone_10min"))
-    assert inny_count == 8, f"oczekiwane 8 INNY reason buttons (safety net), got {inny_count}"
+    assert inny_count == 0, f"INNY safety net obecny ({inny_count} buttonów) — usunięty"
+
+
+def test_v2_keyboard_grid_with_2_candidates():
+    """Edge case: tylko 2 kandydatów (np. ALERT pool=2). Layout zachowuje
+    [⏰ +10 min] w prawym-dolnym — slot 🥉 nie ma kandydata, postpone fallback."""
+    candidates = [
+        {"courier_id": "470", "name": "Piotr Zaw", "travel_min": 15.0},
+        {"courier_id": "370", "name": "Jakub OL", "travel_min": 16.0},
+    ]
+    with _FlagPatch(True):
+        kb = ta.build_keyboard("471167", candidates=candidates, pickup_ready_at=None)
+    rows = kb["inline_keyboard"]
+    # row1 = [Akceptuj, Weź #2], row2 = [⏰ +10 min] (single button — slot 🥉 pominięty)
+    flat = [b["text"] for row in rows for b in row]
+    assert "✅ Akceptuj" in flat
+    assert "🥈 Weź #2" in flat
+    assert "🥉 Weź #3" not in flat
+    assert "⏰ +10 min" in flat
+    assert sum(len(r) for r in rows) == 3
 
 
 def test_v2_flag_off_returns_legacy_format():
@@ -262,8 +285,10 @@ def main():
         ('v2_gps_markers_all_5', test_v2_gps_markers_all_5),
         ('v2_bag_emoji_buckets', test_v2_bag_emoji_buckets),
         ('v2_reason_composer_paths', test_v2_reason_composer_paths),
-        ('v2_keyboard_top_row_4_buttons_plus_safety_net',
-         test_v2_keyboard_top_row_4_buttons_plus_safety_net),
+        ('v2_keyboard_2x2_grid_strict_4_buttons',
+         test_v2_keyboard_2x2_grid_strict_4_buttons),
+        ('v2_keyboard_grid_with_2_candidates',
+         test_v2_keyboard_grid_with_2_candidates),
         ('v2_flag_off_returns_legacy_format', test_v2_flag_off_returns_legacy_format),
         ('v2_flag_on_uses_v2_path', test_v2_flag_on_uses_v2_path),
     ]

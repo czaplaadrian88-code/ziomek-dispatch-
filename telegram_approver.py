@@ -840,19 +840,32 @@ def _format_proposal_v2(decision: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_keyboard_v2_top_row(
+def _build_keyboard_v2_grid(
     order_id: str,
     candidates: Optional[list],
     pickup_ready_at: Optional[str] = None,
 ) -> list:
-    """Mockup v2 top row: [✅ Akceptuj] [🥈 Weź #2] [🥉 Weź #3] [⏰ +10 min].
+    """Mockup v2 keyboard — 2×2 grid mobile-friendly (Adrian feedback 2026-05-07
+    post visual check: większy tap target dla kciuka, tylko 4 buttony, BEZ safety net).
+
+    Layout:
+        [✅ Akceptuj]   [🥈 Weź #2]
+        [🥉 Weź #3]    [⏰ +10 min]
+
+    Returns list[list[dict]] — 2 rows × 2 buttons (NIE single row × 4).
+    Caller bezpośrednio wstawia do inline_keyboard, NO safety net append.
 
     Callbacks:
       - Akceptuj/Weź #2/Weź #3 → ASSIGN:{oid}:{cid}:{tmin} (compat z legacy router)
       - +10 min                → INNY:postpone_10min:{oid} (reuse INNY router)
 
-    Skip pusty button gdy mniej niż 3 candidates. Postpone zawsze obecny.
-    Tmin formula identyczna z legacy build_keyboard (V3.26 hotfix sync z compute_assign_time).
+    Skip pusty button-slot gdy mniej niż 3 candidates (vacuum slot zostaje pusty
+    visualnie — slot zachowany strukturalnie żeby +10 min zostało prawym-dolnym).
+    Postpone zawsze obecny w prawym-dolnym rogu (idempotent fallback gdy wszyscy
+    kandydaci błędni).
+
+    Tmin formula identyczna z legacy build_keyboard (V3.26 hotfix sync z
+    compute_assign_time): tmin = ceil(max(travel_min, prep_min)/5)*5, clamp [5,60].
     """
     import math as _math
 
@@ -870,7 +883,7 @@ def _build_keyboard_v2_top_row(
             prep_min = 0.0
 
     labels = ["✅ Akceptuj", "🥈 Weź #2", "🥉 Weź #3"]
-    row = []
+    cand_buttons = []
     for idx, c in enumerate((candidates or [])[:3]):
         if not c:
             continue
@@ -884,15 +897,21 @@ def _build_keyboard_v2_top_row(
             tm_raw = 0.0
         needed = max(tm_raw, prep_min)
         time_min = max(5, min(60, int(_math.ceil(needed / 5.0) * 5)))
-        row.append({
+        cand_buttons.append({
             "text": labels[idx],
             "callback_data": f"ASSIGN:{order_id}:{cid}:{time_min}",
         })
-    row.append({
+
+    postpone_btn = {
         "text": "⏰ +10 min",
         "callback_data": f"INNY:postpone_10min:{order_id}",
-    })
-    return row
+    }
+
+    # 2×2 grid layout. Pad cand_buttons up to 3 slots (jeśli mniej niż 3
+    # kandydatów, slot zostaje pominięty — ale postpone zawsze prawy-dolny).
+    row1 = cand_buttons[:2]
+    row2 = cand_buttons[2:3] + [postpone_btn]
+    return [row1, row2] if row1 else [row2]
 
 
 def format_proposal(decision: dict) -> str:
@@ -1007,34 +1026,37 @@ def build_keyboard(
         except Exception:
             prep_min = 0.0
     rows = []
-    # Mockup v2 (2026-05-07): top row = [✅ Akceptuj] [🥈 Weź #2] [🥉 Weź #3] [⏰ +10 min].
-    # Dispatcher zachowuje INNY 8-grid + KOORD pod spodem jako safety net (Adrian
-    # explicit decyzja "KOORD zostaw safety net" — operator może zawsze klikać
-    # standardowe override buttons niezależnie od mockup top row).
-    use_v2_top_row = flag("PROPOSAL_FORMAT_V2", default=False)
+    # Mockup v2 (2026-05-07): 2×2 grid mobile-friendly = TYLKO 4 buttony, brak
+    # safety net. Adrian feedback post visual check: "Tylko cztery przyciski,
+    # resztę usuń." Layout:
+    #     [✅ Akceptuj]   [🥈 Weź #2]
+    #     [🥉 Weź #3]    [⏰ +10 min]
+    # Early return — NIE doklejamy INNY 8-grid + KOORD (poprzedni "safety net"
+    # plan został rejected po visual check; mockup 1:1 = strict 4-button).
+    if flag("PROPOSAL_FORMAT_V2", default=False):
+        v2_rows = _build_keyboard_v2_grid(order_id, candidates, pickup_ready_at)
+        return {"inline_keyboard": v2_rows}
+
     row1 = []
-    if use_v2_top_row:
-        row1 = _build_keyboard_v2_top_row(order_id, candidates, pickup_ready_at)
-    else:
-        for c in (candidates or [])[:3]:
-            if not c:
-                continue
-            cid = str(c.get("courier_id") or "")
-            if not cid:
-                continue
-            name = name_lookup(cid, c.get("name"))
-            tm_raw = c.get("travel_min") or 0.0
-            try:
-                tm_raw = float(tm_raw)
-            except (TypeError, ValueError):
-                tm_raw = 0.0
-            # V3.26 hotfix formula (aligned compute_assign_time):
-            needed = max(tm_raw, prep_min)
-            time_min = max(5, min(60, int(_math.ceil(needed / 5.0) * 5)))
-            row1.append({
-                "text": f"✅ {name} {time_min}min",
-                "callback_data": f"ASSIGN:{order_id}:{cid}:{time_min}",
-            })
+    for c in (candidates or [])[:3]:
+        if not c:
+            continue
+        cid = str(c.get("courier_id") or "")
+        if not cid:
+            continue
+        name = name_lookup(cid, c.get("name"))
+        tm_raw = c.get("travel_min") or 0.0
+        try:
+            tm_raw = float(tm_raw)
+        except (TypeError, ValueError):
+            tm_raw = 0.0
+        # V3.26 hotfix formula (aligned compute_assign_time):
+        needed = max(tm_raw, prep_min)
+        time_min = max(5, min(60, int(_math.ceil(needed / 5.0) * 5)))
+        row1.append({
+            "text": f"✅ {name} {time_min}min",
+            "callback_data": f"ASSIGN:{order_id}:{cid}:{time_min}",
+        })
     if row1:
         rows.append(row1)
     # V3.19i (2026-04-30): 8 structured reason buttons replacing single INNY.
