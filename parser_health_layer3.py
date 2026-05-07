@@ -271,9 +271,13 @@ def cross_validate_parsed_dict(self, parsed: Optional[Dict[str, Any]]) -> List[D
                 "type": "PARSER_SET_ASSIGNED_ORPHAN",
                 "severity": severity,
                 "message": (
-                    f"Parser asymmetry: assigned_ids contains {sorted(assigned_orphan)[:5]} "
-                    f"(total {len(assigned_orphan)}) NOT in order_ids∪historical. "
-                    f"Possible: order_ids parser miss (incident 02.05 pattern)."
+                    f"🚨 Kurierzy mają w bagach {len(assigned_orphan)} zamówień "
+                    f"których parser nigdy nie widział\n"
+                    f"ID typu {sorted(assigned_orphan)[:5]} są przypisane do bagów, "
+                    f"ale nie pojawiły się ani na liście aktywnych ani w historii. "
+                    f"To pattern incydentu 02.05 — parser nie łapie nowych zamówień.\n\n"
+                    f"Co robię: alertuję. Jeśli liczba rośnie w czasie → restart:\n"
+                    f"sudo systemctl restart dispatch-panel-watcher"
                 ),
                 "context": {
                     "orphan_count": len(assigned_orphan),
@@ -297,9 +301,13 @@ def cross_validate_parsed_dict(self, parsed: Optional[Dict[str, Any]]) -> List[D
                     "type": "PARSER_SET_PACKS_LEAK",
                     "severity": severity,
                     "message": (
-                        f"Parser asymmetry: courier_packs contain {sorted(packs_leak)[:5]} "
-                        f"(total {len(packs_leak)}) NOT in assigned_ids. "
-                        f"Possible: assigned_ids parser miss."
+                        f"⚠️ {len(packs_leak)} zamówień \"wycieka\" — panel u kuriera je pokazuje, "
+                        f"ale parser zgubił przypisanie\n"
+                        f"ID {sorted(packs_leak)[:5]} są widoczne w bagu kuriera w panelu, "
+                        f"ale parser nie zarejestrował przypisania. "
+                        f"Zwykle łapane przez fallback PACKS_CATCHUP w 1-2 cykle.\n\n"
+                        f"Co robię: monitoruję — fallback powinien dogonić. "
+                        f"Jeśli się powtarza co cykl → restart watchera."
                     ),
                     "context": {
                         "leak_count": len(packs_leak),
@@ -319,9 +327,12 @@ def cross_validate_parsed_dict(self, parsed: Optional[Dict[str, Any]]) -> List[D
                 "type": "PARSER_SET_REST_ORPHAN",
                 "severity": severity,
                 "message": (
-                    f"Parser asymmetry: rest_names mapped to {sorted(rest_orphan)[:5]} "
-                    f"(total {len(rest_orphan)}) NOT in order_ids∪assigned_ids. "
-                    f"Possible: order/assigned ids parser miss."
+                    f"⚠️ Restauracja jest zmapowana do {len(rest_orphan)} zamówień "
+                    f"(np. {sorted(rest_orphan)[:3]}) których parser nie widzi "
+                    f"ani w panelu, ani u kurierów\n"
+                    f"Najczęściej znaczy że parser zgubił zarówno listę aktywnych "
+                    f"jak i przypisanie.\n\n"
+                    f"Co robię: alertuję. Jeśli się powtarza w 2-3 cyklach → restart watchera."
                 ),
                 "context": {
                     "orphan_count": len(rest_orphan),
@@ -342,9 +353,12 @@ def cross_validate_parsed_dict(self, parsed: Optional[Dict[str, Any]]) -> List[D
                     "type": "PARSER_SET_CLOSED_ORPHAN",
                     "severity": severity,
                     "message": (
-                        f"Parser corruption: closed_ids contains {sorted(closed_orphan)[:5]} "
-                        f"(total {len(closed_orphan)}) NOT in historical_known_ids. "
-                        f"Possible: state cache loss lub regression."
+                        f"⚠️ Panel pokazuje {len(closed_orphan)} dostarczone zamówienia "
+                        f"których nie ma w naszej historii (np. {sorted(closed_orphan)[:3]})\n"
+                        f"Albo cache stanu się zgubił, albo to świeży deploy bez warm-up. "
+                        f"Zwykle samo wyrównuje się po dniu pełnej obserwacji.\n\n"
+                        f"Co robię: nic — informacyjny alert. Jeśli widzisz to po pełnym "
+                        f"dniu uptime → daj znać, sprawdzę cache integrity."
                     ),
                     "context": {
                         "orphan_count": len(closed_orphan),
@@ -389,11 +403,11 @@ def _maybe_send_alert_v3(self, alert: Dict[str, Any]) -> None:
             log.warning(f"[ANOMALY {alert_type}] {msg}")
 
         # Telegram
+        # 2026-05-07: msg zawiera już kompletny content (tytuł z emoji + treść + akcja).
+        # Type techniczny zostaje w log.error/warning powyżej dla parsability.
         try:
             from dispatch_v2.telegram_utils import send_admin_alert
-            emoji = "🚨" if severity == "critical" else "⚠️"
-            tg_text = f"{emoji} V3.28 PARSER {alert_type}\n{msg}"
-            ok = send_admin_alert(tg_text)
+            ok = send_admin_alert(msg)
             if not ok:
                 log.warning(f"ParserHealthMonitor: send_admin_alert returned False dla {alert_type}")
         except Exception as e:
