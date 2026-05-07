@@ -212,6 +212,23 @@ def _build_candidates_starting(
                 "full_name": full_name,
                 "scheduled": shift_dt.isoformat(),
             })
+            # ETAP B: alert do Adriana z idempotencja per dzien
+            today_alerts = state.setdefault("unmapped_alerts", {}).setdefault(today_iso, [])
+            if full_name not in today_alerts:
+                try:
+                    from urllib.parse import quote
+                    b64 = quote(full_name, safe="")
+                    text = (
+                        f"\U0001F195 Nowy kurier? Grafik ma '{full_name}' ale brak w kurier_ids.json.\n"
+                        f"Aby dopisac: odpowiedz `/dopisz <cid> {full_name}` (np. `/dopisz 525 {full_name}`).\n"
+                        f"PIN wygeneruje sie automatycznie."
+                    )
+                    keyboard = [[{"text": "❌ Pomin dzisiaj", "callback_data": f"NEWCOURIER:skip:{b64}"}]]
+                    tg_send_text_with_keyboard(text, keyboard)
+                    today_alerts.append(full_name)
+                    state_mod.save_state(state)
+                except Exception as e:
+                    _log.warning(f"unmapped_courier_alert send fail: {type(e).__name__}: {e}")
             continue
         seen_keys.add(key)
         out.append(Candidate(full_name=full_name, cid=cid, shift_dt=shift_dt))

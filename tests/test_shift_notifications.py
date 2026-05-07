@@ -392,8 +392,14 @@ def test_worker_t60_start_unmapped_cid_logs_and_skips():
             send_calls=send_calls,
         )
         try:
+            # ETAP B (2026-05-07): unmapped cid wysyla NEWCOURIER alert + log + idempotency per dzien
             worker_mod.main()
-            assert len(send_calls) == 0, f"should NOT send for unmapped cid, got {send_calls}"
+            assert len(send_calls) == 1, f"expected 1 alert send, got {len(send_calls)}: {send_calls}"
+            cb_data = send_calls[0]["keyboard"][0][0]["callback_data"]
+            assert cb_data.startswith("NEWCOURIER:skip:"), f"unexpected callback_data: {cb_data}"
+            # Re-run: idempotency — drugi tick dla tej samej osoby tego samego dnia NIE dosyla
+            worker_mod.main()
+            assert len(send_calls) == 1, f"idempotency violated, got {len(send_calls)}: {send_calls}"
             # Verify learning_log event
             with open(state_mod.LEARNING_LOG) as f:
                 lines = [ln for ln in f.read().splitlines() if ln.strip()]
@@ -402,7 +408,7 @@ def test_worker_t60_start_unmapped_cid_logs_and_skips():
                 f"expected UNMAPPED_COURIER_T60 event, got {events}"
         finally:
             teardown()
-t("worker_t60_start_unmapped_cid_logs_and_skips", test_worker_t60_start_unmapped_cid_logs_and_skips)
+t("worker_t60_start_unmapped_cid_alerts_and_idempotent", test_worker_t60_start_unmapped_cid_logs_and_skips)
 
 
 # --------- 14. Worker: T-30 reminder only undecided -----------------------

@@ -1358,6 +1358,15 @@ async def handle_message(state: dict, msg: dict) -> None:
             _log.info(f"/help responded to admin={from_id}")
             return
         # /stop /wraca /wrocil → manual_overrides (handled by parse_command)
+        if text.startswith("/dopisz "):
+            reply = _handle_dopisz_command(state, msg, text)
+            if reply:
+                await asyncio.to_thread(
+                    tg_request, state["token"], "sendMessage",
+                    {"chat_id": state["admin_id"], "text": reply},
+                )
+            return
+
         if cmd in ("/stop", "/wraca", "/wrocil"):
             action, response = await asyncio.to_thread(manual_overrides.parse_command, text)
             if response:
@@ -2045,6 +2054,64 @@ def _handle_koniec_command(state: dict, msg: dict, text: str) -> Optional[str]:
     return reply
 
 
+def _handle_new_courier_callback(state: dict, payload: str, cb: dict) -> None:
+    """NEWCOURIER callback — skip or add (add not used yet, handled via /dopisz)."""
+    from urllib.parse import unquote
+    parts = payload.split(":", 1)
+    if len(parts) != 2:
+        _shift_callback_answer(state, cb, "❌ malformed NEWCOURIER")
+        return
+    sub_action, b64 = parts
+    full_name = unquote(b64)
+    if sub_action == "skip":
+        _shift_callback_answer(state, cb, f"OK pominieto {full_name} dzisiaj")
+        # Remove keyboard from original message
+        try:
+            tg_request(
+                state["token"], "editMessageReplyMarkup",
+                {
+                    "chat_id": state["admin_id"],
+                    "message_id": cb["message"]["message_id"],
+                    "reply_markup": {"inline_keyboard": []},
+                },
+            )
+        except Exception:
+            pass
+    elif sub_action == "add":
+        _shift_callback_answer(state, cb, "Uzyj /dopisz <cid> <full_name>")
+    else:
+        _shift_callback_answer(state, cb, f"❌ unknown NEWCOURIER sub: {sub_action}")
+
+
+def _handle_dopisz_command(state: dict, msg: dict, text: str) -> Optional[str]:
+    """/dopisz <cid> <full_name> — atomic add new courier to roster."""
+    user_id = (msg.get("from") or {}).get("id")
+    if user_id not in _authorized_user_ids():
+        return "❌ unauthorized"
+    parts = text.strip().split(maxsplit=2)
+    if len(parts) < 3:
+        return "❌ uzycie: /dopisz <cid> <full_name>"
+    _, cid_str, full_name = parts
+    if not cid_str.isdigit():
+        return f"❌ cid musi byc liczba, dostalem: {cid_str}"
+    cid = int(cid_str)
+    if cid < 100 or cid > 9999:
+        return f"❌ cid {cid} poza zakresem 100..9999"
+    try:
+        from dispatch_v2.courier_admin import add_new_courier
+        result = add_new_courier(cid, full_name)
+    except ValueError as e:
+        return f"❌ {e}"
+    except Exception as e:
+        return f"❌ blad: {type(e).__name__}: {e}"
+    return (
+        f"✅ Dopisany {result['full_name']} (cid {result['cid']})\n"
+        f"Alias: {result['alias']}\n"
+        f"PIN: `{result['pin']}` — przeslij temu kurierowi.\n"
+        f"Zaktualizowane pliki: kurier_ids, kurier_full_names, kurier_piny, courier_tiers."
+    )
+
+
 def _handle_poprawa_command(state: dict, msg: dict, text: str) -> Optional[str]:
     """TB-3 (2026-05-05) /poprawa [cid] — odwołaj 'Nie przyjdzie' status.
 
@@ -2207,6 +2274,11 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
         )
         return
     _log.info(f"callback action={action} oid={oid} from={cb_from_name}(id={cb_from_id})")
+
+    # NEWCOURIER callback (ETAP B)
+    if action == "NEWCOURIER":
+        await asyncio.to_thread(_handle_new_courier_callback, state, oid, cb)
+        return
 
     # TASK B SHIFT NOTIFICATIONS (2026-05-04): SHIFT_* callbacks NIE używają
     # state["pending"] (osobny state file: shift_notifications confirmations).

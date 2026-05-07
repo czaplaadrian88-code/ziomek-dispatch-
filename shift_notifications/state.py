@@ -34,7 +34,7 @@ _log = setup_logger("shift_notifications.state", LOG_DIR + "shift_notifications.
 
 
 def _empty_state() -> dict:
-    return {"start_notified": {}, "end_notified": {}}
+    return {"start_notified": {}, "end_notified": {}, "unmapped_alerts": {}}
 
 
 def _atomic_write(path: Path, data: dict) -> None:
@@ -76,6 +76,7 @@ def _read_raw() -> dict:
             # Normalize — ensure both top-level keys exist
             data.setdefault("start_notified", {})
             data.setdefault("end_notified", {})
+            data.setdefault("unmapped_alerts", {})
             return data
         except FileNotFoundError:
             if attempt == 2:
@@ -108,6 +109,7 @@ def locked_write_confirmations() -> Iterator[dict]:
                 data = _empty_state()
             data.setdefault("start_notified", {})
             data.setdefault("end_notified", {})
+            data.setdefault("unmapped_alerts", {})
         except FileNotFoundError:
             data = _empty_state()
         except json.JSONDecodeError as e:
@@ -125,7 +127,7 @@ def locked_write_confirmations() -> Iterator[dict]:
 
 
 def read_confirmations() -> dict:
-    """Read with LOCK_SH + 3-retry backoff. Returns {'start_notified':{},'end_notified':{}}
+    """Read with LOCK_SH + 3-retry backoff. Returns {'start_notified':{},'end_notified':{},'unmapped_alerts':{}}
     on missing/corrupt. Never raises."""
     return _read_raw()
 
@@ -151,6 +153,11 @@ def find_record_for_cid(records: dict, today_iso: str, cid: str) -> Optional[dic
         if str(rec_cid) == cid_str:
             return val
     return None
+
+
+def save_state(state: dict) -> None:
+    """Atomically persist the full state dict (used by worker for unmapped_alerts)."""
+    _atomic_write(STATE_FILE, state)
 
 
 def append_learning_log(event: dict) -> None:
