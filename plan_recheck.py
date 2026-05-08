@@ -66,8 +66,16 @@ TERMINAL_STATUSES = frozenset({"delivered", "cancelled", "returned_to_pool"})
 
 
 def _haversine_m(p1: tuple, p2: tuple) -> float:
-    """Distance in meters between 2 (lat, lng) pairs."""
+    """Distance in meters between 2 (lat, lng) pairs.
+
+    Fail-loud guards (Lekcja #81 cross-codebase fail-loud sentinel):
+    None / (0,0) → ValueError zamiast silent ~6285km drift fałszywy invalidate.
+    """
     import math
+    if p1 is None or p2 is None:
+        raise ValueError(f"_haversine_m: None coords (p1={p1!r}, p2={p2!r})")
+    if tuple(p1) == (0.0, 0.0) or tuple(p2) == (0.0, 0.0):
+        raise ValueError(f"_haversine_m: sentinel (0,0) (p1={p1!r}, p2={p2!r})")
     lat1, lng1 = p1
     lat2, lng2 = p2
     R = 6371008.8

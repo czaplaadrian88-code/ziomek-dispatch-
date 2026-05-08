@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from dispatch_v2.dispatch_pipeline import assess_order
 from dispatch_v2.osrm_client import haversine
 from dispatch_v2.czasowka_scheduler import _format_koord_alert
+from dispatch_v2.geometry import haversine_km
+from dispatch_v2.plan_recheck import _haversine_m
 
 
 # ─────────────────────────────────────────────
@@ -44,6 +46,66 @@ def test_haversine_valid_returns_positive():
     d = haversine((53.13, 23.16), (53.14, 23.18))
     assert d > 0
     assert d < 5  # < 5km dla bliskich punktów
+
+
+# ─────────────────────────────────────────────
+# MP-#7 Sprint A: geometry.haversine_km guards (5 tests, Lekcja #81 cross-codebase)
+# ─────────────────────────────────────────────
+
+def test_geometry_haversine_km_none_a_raises():
+    with pytest.raises(ValueError, match="None coords"):
+        haversine_km(None, (53.13, 23.16))
+
+
+def test_geometry_haversine_km_none_b_raises():
+    with pytest.raises(ValueError, match="None coords"):
+        haversine_km((53.13, 23.16), None)
+
+
+def test_geometry_haversine_km_sentinel_a_raises():
+    with pytest.raises(ValueError, match="sentinel.*0,0"):
+        haversine_km((0.0, 0.0), (53.13, 23.16))
+
+
+def test_geometry_haversine_km_sentinel_b_raises():
+    with pytest.raises(ValueError, match="sentinel.*0,0"):
+        haversine_km((53.13, 23.16), (0.0, 0.0))
+
+
+def test_geometry_haversine_km_valid_returns_positive():
+    d = haversine_km((53.13, 23.16), (53.14, 23.18))
+    assert d > 0
+    assert d < 5
+
+
+# ─────────────────────────────────────────────
+# MP-#7 Sprint B: plan_recheck._haversine_m guards (5 tests)
+# ─────────────────────────────────────────────
+
+def test_plan_recheck_haversine_m_none_p1_raises():
+    with pytest.raises(ValueError, match="None coords"):
+        _haversine_m(None, (53.13, 23.16))
+
+
+def test_plan_recheck_haversine_m_none_p2_raises():
+    with pytest.raises(ValueError, match="None coords"):
+        _haversine_m((53.13, 23.16), None)
+
+
+def test_plan_recheck_haversine_m_sentinel_p1_raises():
+    with pytest.raises(ValueError, match="sentinel.*0,0"):
+        _haversine_m((0.0, 0.0), (53.13, 23.16))
+
+
+def test_plan_recheck_haversine_m_sentinel_p2_raises():
+    with pytest.raises(ValueError, match="sentinel.*0,0"):
+        _haversine_m((53.13, 23.16), (0.0, 0.0))
+
+
+def test_plan_recheck_haversine_m_valid_returns_meters():
+    d = _haversine_m((53.13, 23.16), (53.14, 23.18))
+    assert d > 0
+    assert d < 5000  # < 5km
 
 
 # ─────────────────────────────────────────────
