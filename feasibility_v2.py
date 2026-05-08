@@ -85,7 +85,7 @@ def _dynamic_bag_cap(spread_km: float) -> int:
     for threshold, cap in R3_DYNAMIC_MAX:
         if spread_km <= threshold:
             return cap
-    return R3_ABSOLUTE_CAP
+    return R3_DYNAMIC_MAX[-1][1]
 
 
 def _max_pickup_spread_from_bag(bag, new_pickup) -> float:
