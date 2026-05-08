@@ -172,9 +172,11 @@ def _check_panel_override(order_id: str, panel_courier_id: str, source: str) -> 
         "panel_source": source,
         "decision": dr,
     }
+    # MP-#11 (2026-05-08): atomic JSONL append via core helper. Eliminuje race
+    # między panel_watcher i telegram_approver pisanie do TEGO SAMEGO learning_log.
     try:
-        with open(_LEARNING_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(override_rec, ensure_ascii=False) + "\n")
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(_LEARNING_LOG_PATH, override_rec)
     except Exception as e:
         _log.warning(f"PANEL_OVERRIDE write learning_log fail oid={order_id}: {e}")
         return

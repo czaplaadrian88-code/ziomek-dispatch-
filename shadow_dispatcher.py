@@ -494,9 +494,15 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
 
 
 def _append_decision(path: str, record: dict) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    """MP-#11 (2026-05-08): atomic JSONL append via core helper.
+
+    Wcześniej `with open(path, 'a')` bez lock — race przy konkurencyjnych
+    write'ach z innych procesów. shadow_decisions.jsonl jest single-writer
+    (tylko shadow_dispatcher) ale pattern unifikowany cross-codebase
+    (eliminuje cargo-cult `open('a')` przy kolejnym dodaniu writer'a).
+    """
+    from dispatch_v2.core.jsonl_appender import append_jsonl
+    append_jsonl(path, record)
 
 
 def process_event(

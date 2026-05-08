@@ -1358,9 +1358,16 @@ def save_pending(path: str, pending: dict) -> None:
 
 
 def append_learning(path: str, record: dict) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    """MP-#11 (2026-05-08): atomic JSONL append via core helper.
+
+    Eliminuje race window dla konkurencyjnych write'ów do learning_log.jsonl
+    (telegram_approver + panel_watcher PANEL_OVERRIDE). POSIX O_APPEND atomic
+    dla writes ≤PIPE_BUF (4096B), shadow F7AGREE record rzadko ale długie
+    rationale string + bag_context array może > 4KB → flock LOCK_EX gwarantuje
+    serialization niezależnie od długości. ~6 callsites w pliku korzystają.
+    """
+    from dispatch_v2.core.jsonl_appender import append_jsonl
+    append_jsonl(path, record)
 
 
 # ---- gastro_assign subprocess ----
