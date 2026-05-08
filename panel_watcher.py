@@ -62,19 +62,56 @@ _log = setup_logger("panel_watcher", "/root/.openclaw/workspace/scripts/logs/dis
 _running = True
 _fail_count = 0
 _last_panel_unreachable_emit = 0.0
-# Lookup address_id -> coords, zaladowany raz przy starcie (hot-reload w razie potrzeby przez restart)
+# Lookup address_id -> coords. MP-#12 (2026-05-08): mtime-based hot-reload co 15s
+# eliminuje konieczność restart'u panel_watcher gdy restaurant_coords.json zmieniony
+# (np. nowy add_id mapping od Adriana). META top-5 quick win, STATE_OWNERSHIP F3+F8.
 _COORDS_PATH = "/root/.openclaw/workspace/dispatch_state/restaurant_coords.json"
 _COORDS = {}
+_COORDS_MTIME = 0.0
+_COORDS_LAST_CHECK_TS = 0.0
+_COORDS_CHECK_INTERVAL_S = 15.0
+
+
 def _load_coords():
-    global _COORDS
+    global _COORDS, _COORDS_MTIME
     try:
         import json
+        import os
+        mtime = os.path.getmtime(_COORDS_PATH)
         with open(_COORDS_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         _COORDS = {str(k): (v["lat"], v["lng"]) for k, v in data.items() if "lat" in v and "lng" in v}
+        _COORDS_MTIME = mtime
     except Exception as e:
         _log.warning(f"_load_coords fail: {e}")
         _COORDS = {}
+        _COORDS_MTIME = 0.0
+
+
+def _maybe_reload_coords():
+    """MP-#12: mtime check co _COORDS_CHECK_INTERVAL_S. Reload gdy plik zmieniony."""
+    global _COORDS_LAST_CHECK_TS
+    now = time.time()
+    if now - _COORDS_LAST_CHECK_TS < _COORDS_CHECK_INTERVAL_S:
+        return False
+    _COORDS_LAST_CHECK_TS = now
+    try:
+        import os
+        mtime = os.path.getmtime(_COORDS_PATH)
+    except Exception as e:
+        _log.warning(f"_maybe_reload_coords stat fail: {e}")
+        return False
+    if mtime > _COORDS_MTIME:
+        prev_count = len(_COORDS)
+        _load_coords()
+        _log.info(
+            f"_COORDS hot-reload: mtime {_COORDS_MTIME:.0f} → {mtime:.0f}, "
+            f"entries {prev_count} → {len(_COORDS)} (MP-#12)"
+        )
+        return True
+    return False
+
+
 _load_coords()
 
 _ignored_ids = set()  # ID znanych jako status 7/8/9 — nie fetchuj ponownie
@@ -1338,6 +1375,7 @@ def run():
             continue
 
         t0 = time.time()
+        _maybe_reload_coords()
         stats, parsed = tick(cycle)
         elapsed = time.time() - t0
 
