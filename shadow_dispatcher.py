@@ -341,6 +341,15 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         "auto_route": getattr(result, "auto_route", "ACK"),
         "auto_route_reason": getattr(result, "auto_route_reason", ""),
         "auto_route_context": getattr(result, "auto_route_context", {}) or {},
+        # MP-#13 (2026-05-08): L3 caller propagation. degraded_osrm True gdy
+        # osrm_client.is_degraded() przy entry do assess_order. Telegram_approver
+        # format_proposal może hint'ować "⚠ OSRM degraded" gdy True. Snapshots
+        # cache_age + degraded_since_ts dla post-mortem.
+        "decision_meta": {
+            "degraded_osrm": bool(getattr(result, "degraded_osrm", False)),
+            "osrm_cache_age_s": getattr(result, "osrm_cache_age_s", None),
+            "osrm_degraded_since_ts": getattr(result, "osrm_degraded_since_ts", None),
+        },
         "best": None if best is None else {
             "courier_id": best.courier_id,
             "name": best.name,

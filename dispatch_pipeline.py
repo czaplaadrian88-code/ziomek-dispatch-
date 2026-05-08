@@ -896,6 +896,14 @@ class PipelineResult:
     # Zawiera: pool_feasible, score_margin, tier_best, pos_source_best, czasowka, etc.
     # Read-only consumption w shadow_dispatcher serialize.
     auto_route_context: Optional[Dict[str, Any]] = field(default_factory=dict)
+    # MP-#13 (2026-05-08): L3 caller propagation. True gdy osrm_client.is_degraded()
+    # przy entry do assess_order — caller (telegram_approver) może hint'ować "⚠
+    # degraded mode" w propozycji. Defaults False (healthy). Read-only consumption
+    # w shadow_dispatcher._serialize_result top-level field + decision_meta dict.
+    degraded_osrm: bool = False
+    # Snapshot diagnostic counters at assess_order time. Defaults to None (no degradation).
+    osrm_cache_age_s: Optional[float] = None
+    osrm_degraded_since_ts: Optional[float] = None
 
 
 def _classify_and_set_auto_route(
@@ -1082,6 +1090,16 @@ def assess_order(
         order_event, fleet_snapshot, restaurant_meta, now,
         pending_queue=pending_queue, demand_context=demand_context,
     )
+    # MP-#13 (2026-05-08): L3 — snapshot OSRM degraded state at assess time.
+    # Caller (shadow_dispatcher serializer + telegram_approver format_proposal) reads.
+    # Defensive: NIGDY raise (osrm_client import-fail unlikely ale fallback safe).
+    try:
+        from dispatch_v2 import osrm_client as _oc
+        result.degraded_osrm = bool(_oc.is_degraded())
+        result.osrm_cache_age_s = _oc.cache_age_s()
+        result.osrm_degraded_since_ts = _oc.degraded_since_ts()
+    except Exception:
+        pass  # MP-#13 defense-in-depth — leave defaults False/None
     try:
         from dispatch_v2.observability.candidate_logger import get_logger, serialize_candidate
         logger = get_logger()

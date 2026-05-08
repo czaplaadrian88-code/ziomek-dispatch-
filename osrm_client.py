@@ -51,6 +51,19 @@ CIRCUIT_BREAKER_COOLDOWN_S = 60
 _osrm_failures: int = 0
 _osrm_circuit_open_until: float = 0.0  # time.time() epoch
 
+# === MP-#13 (2026-05-08): 3-warstwowy degraded mode (master plan TOP-15) ===
+# Layer 1: cache age + degraded_since tracking — proxy dla "czy OSRM działa w tej chwili".
+# Layer 2: alert entry/exit Telegram (send_admin_alert) at degraded transition.
+# Layer 3: caller propagation — dispatch_pipeline.assess_order → PipelineResult.degraded_osrm.
+#
+# Differs od circuit_breaker: circuit_open_until ma cooldown ping-pong (re-opens po
+# 60s jeśli kolejny call fail). degraded_since reflektuje continuous degradation period.
+# Reset na pierwszy success po dowolnym fail/circuit cycle.
+_osrm_last_success_ts: Optional[float] = None  # epoch ostatniego successfull HTTP call
+_osrm_degraded_since: Optional[float] = None  # epoch entry into degraded state (None = healthy)
+_osrm_degraded_alert_sent: bool = False  # dedup: jeden alert per degraded period (entry)
+_osrm_recovery_alert_sent: bool = False  # dedup: jeden alert per recovery (NIE re-alert na flapping)
+
 # === HOURLY METRICS (P0.5) ===
 _osrm_stats: dict = {
     "calls_total": 0,
@@ -71,19 +84,93 @@ def _osrm_is_circuit_open() -> bool:
 
 
 def _osrm_record_failure():
-    global _osrm_failures, _osrm_circuit_open_until
+    global _osrm_failures, _osrm_circuit_open_until, _osrm_degraded_since, _osrm_degraded_alert_sent, _osrm_recovery_alert_sent
+    fire_entry_alert = False
     with _module_lock:
         _osrm_failures += 1
         if _osrm_failures >= CIRCUIT_BREAKER_THRESHOLD:
             _osrm_circuit_open_until = time.time() + CIRCUIT_BREAKER_COOLDOWN_S
             _osrm_stats["circuit_opens"] += 1
             _log.warning(f"OSRM circuit OPEN after {_osrm_failures} failures, cooldown {CIRCUIT_BREAKER_COOLDOWN_S}s")
+            # MP-#13 L1: enter degraded state on first circuit open; preserve initial entry ts
+            if _osrm_degraded_since is None:
+                _osrm_degraded_since = time.time()
+                # MP-#13 L2: alert entry — once per continuous degraded period (dedup)
+                if not _osrm_degraded_alert_sent:
+                    fire_entry_alert = True
+                    _osrm_degraded_alert_sent = True
+                    _osrm_recovery_alert_sent = False  # arm recovery alert
+    # Send alert outside lock (avoid blocking other callers on Telegram HTTP)
+    if fire_entry_alert:
+        _mp13_send_alert_safe(
+            f"⚠ OSRM degraded — circuit OPEN po {CIRCUIT_BREAKER_THRESHOLD} kolejnych failurach. "
+            f"Fallback haversine × road_factor + bucket-speed (~20% mniej precyzyjny routing). "
+            f"Auto-recovery przy pierwszym successful HTTP call (cooldown {CIRCUIT_BREAKER_COOLDOWN_S}s)."
+        )
 
 
 def _osrm_record_success():
-    global _osrm_failures
+    global _osrm_failures, _osrm_last_success_ts, _osrm_degraded_since, _osrm_degraded_alert_sent, _osrm_recovery_alert_sent
+    fire_recovery_alert = False
+    degraded_duration_s = 0.0
     with _module_lock:
         _osrm_failures = 0
+        _osrm_last_success_ts = time.time()
+        # MP-#13 L1: exit degraded state on first success
+        if _osrm_degraded_since is not None:
+            degraded_duration_s = time.time() - _osrm_degraded_since
+            _osrm_degraded_since = None
+            _osrm_degraded_alert_sent = False  # arm next entry alert
+            # MP-#13 L2: alert recovery — once per recovery (dedup against flapping)
+            if not _osrm_recovery_alert_sent:
+                fire_recovery_alert = True
+                _osrm_recovery_alert_sent = True
+    if fire_recovery_alert:
+        _mp13_send_alert_safe(
+            f"✅ OSRM recovery — z powrotem healthy mode po {int(degraded_duration_s)}s degraded. "
+            f"Routing precision restored."
+        )
+
+
+def _mp13_send_alert_safe(msg: str) -> None:
+    """MP-#13 L2: send Telegram alert defense-in-depth.
+
+    Telegram unreachable / module not loaded / network fail → log warning ale
+    NIE raise (osrm_client jest hot path, alert failure NIE może crashnąć route()).
+    """
+    try:
+        from dispatch_v2 import telegram_utils
+        telegram_utils.send_admin_alert(msg)
+    except Exception as e:
+        _log.warning(f"MP-#13 L2 alert send fail ({type(e).__name__}: {e}): {msg!r}")
+
+
+def is_degraded() -> bool:
+    """MP-#13 L1+L3: czy OSRM jest aktualnie w degraded mode (continuous period)?
+
+    Returns True jeśli degraded_since wszedł w stan i NIE było jeszcze success.
+    Caller (dispatch_pipeline.assess_order) propaguje do PipelineResult.degraded_osrm.
+
+    Differs from `_osrm_is_circuit_open()` które reflectuje 60s cooldown ping-pong.
+    Tu zwracamy True jeśli AKTUALNIE jesteśmy w degraded period (od ostatniego entry
+    do następnego success).
+    """
+    with _module_lock:
+        return _osrm_degraded_since is not None
+
+
+def degraded_since_ts() -> Optional[float]:
+    """MP-#13 L1: epoch when current degraded period started, None if healthy."""
+    with _module_lock:
+        return _osrm_degraded_since
+
+
+def cache_age_s() -> Optional[float]:
+    """MP-#13 L1: seconds since last successful OSRM HTTP call. None if never."""
+    with _module_lock:
+        if _osrm_last_success_ts is None:
+            return None
+        return time.time() - _osrm_last_success_ts
 
 
 def _maybe_log_stats():
