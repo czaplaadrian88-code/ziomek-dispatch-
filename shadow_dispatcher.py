@@ -579,6 +579,29 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             # liczy `pickup_extension_min = pickup_ready_at - pickup_at_warsaw` aby
             # pokazać "(+N min)" gdy Ziomek przedłużył deklarację restauracji.
             record["pickup_at_warsaw"] = payload.get("pickup_at_warsaw")
+            # Etap 1 pickup-label (2026-05-08): order_created_at = moment złożenia
+            # zamówienia (panel created_at, UTC). Telegram pokazuje "(N min od
+            # złożenia)" w linii Odbiór. Fallback w telegram_approver gdy None.
+            record["order_created_at"] = payload.get("created_at_utc")
+            # Compute mins_since_creation (best ETA pickup vs created_at) raz tutaj
+            # gdy oba są dostępne — telegram tylko renderuje, brak parsing TZ tam.
+            try:
+                _best = record.get("best") or {}
+                _created_iso = record.get("order_created_at")
+                _eta_iso = (result.best.metrics.get("eta_pickup_utc")
+                            if result.best is not None else None)
+                if _created_iso and _eta_iso:
+                    from datetime import datetime as _dt, timezone as _tz
+                    _c = _dt.fromisoformat(_created_iso.replace("Z", "+00:00"))
+                    _e = _dt.fromisoformat(_eta_iso.replace("Z", "+00:00"))
+                    if _c.tzinfo is None: _c = _c.replace(tzinfo=_tz.utc)
+                    if _e.tzinfo is None: _e = _e.replace(tzinfo=_tz.utc)
+                    _delta = (_e - _c).total_seconds() / 60.0
+                    if _delta < 0: _delta = 0.0
+                    _best["mins_since_creation"] = int(round(_delta))
+                    record["best"] = _best
+            except Exception as _ex:
+                _log.debug(f"mins_since_creation compute failed: {_ex}")
 
             # Adrian decision 2026-05-07: suppress Telegram proposals for firmowe
             # konto Nadajesz.pl (address_id=161). Adrian zarządza firmowymi przez

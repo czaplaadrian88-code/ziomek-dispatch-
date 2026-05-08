@@ -405,6 +405,46 @@ def test_v2_pickup_extension_delta_helper_unit():
     assert ta._pickup_extension_delta_min(d4) is None
 
 
+# ----- Etap 1 pickup-label tests (2026-05-08) -----
+
+def test_v2_pickup_label_with_mins_since_creation():
+    """Happy path: best.eta_pickup_hhmm + best.mins_since_creation present →
+    linia "⏱️ Odbiór: {hhmm} ({N} min od złożenia)" zamiast pickup_ready_at."""
+    d = _mk_decision(best_eta_pickup_hhmm="11:00")
+    d["best"]["mins_since_creation"] = 40
+    out = ta._format_proposal_v2(d)
+    assert "⏱️ Odbiór: 11:00 (40 min od złożenia)" in out, \
+        f"missing new label format: {out}"
+    # NIE używamy pickup_ready_at HH:MM (powinien być now+15min, NIE 11:00)
+    # i NIE używamy "+N min" extension fallback
+    lines = [ln for ln in out.split("\n") if ln.startswith("⏱️")]
+    assert len(lines) == 1
+    assert "min od złożenia" in lines[0]
+
+
+def test_v2_pickup_label_fallback_no_mins_since_creation():
+    """Gdy best.eta_pickup_hhmm jest ale brak mins_since_creation (legacy
+    pre-shadow-fix decision lub failed compute) → fallback do pickup_ready_at
+    + opcjonalna extension delta."""
+    d = _mk_decision(best_eta_pickup_hhmm="11:00")
+    # brak mins_since_creation w best
+    out = ta._format_proposal_v2(d)
+    # pickup_ready_at = now+15min HH:MM (NIE 11:00); fallback path
+    assert "min od złożenia" not in out, "should use fallback when no mins_since_creation"
+    assert "⏱️ Odbiór:" in out
+
+
+def test_v2_pickup_label_fallback_no_best_eta():
+    """Gdy brak best.eta_pickup_hhmm (rare: brak GPS+brak shift) → fallback do
+    pickup_ready_at (pełny legacy path), nawet jeśli mins_since_creation ustawione."""
+    d = _mk_decision(best_eta_pickup_hhmm=None)
+    d["best"]["mins_since_creation"] = 40  # nawet z mins, bez eta_hhmm fallback
+    out = ta._format_proposal_v2(d)
+    assert "min od złożenia" not in out, \
+        "without best.eta_pickup_hhmm must NOT show new format"
+    assert "⏱️ Odbiór:" in out
+
+
 # ----- runner -----
 
 def main():
@@ -426,6 +466,12 @@ def main():
          test_v2_route_iterates_plan_sequence_chronological),
         ('v2_route_fallback_when_no_plan_data', test_v2_route_fallback_when_no_plan_data),
         ('v2_pickup_extension_delta_helper_unit', test_v2_pickup_extension_delta_helper_unit),
+        ('v2_pickup_label_with_mins_since_creation',
+         test_v2_pickup_label_with_mins_since_creation),
+        ('v2_pickup_label_fallback_no_mins_since_creation',
+         test_v2_pickup_label_fallback_no_mins_since_creation),
+        ('v2_pickup_label_fallback_no_best_eta',
+         test_v2_pickup_label_fallback_no_best_eta),
     ]
     print('=' * 60)
     print('Mockup v2 — operator-friendly Telegram propozycja redesign')

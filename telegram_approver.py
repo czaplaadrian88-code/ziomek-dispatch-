@@ -926,7 +926,16 @@ def _format_proposal_v2(decision: dict) -> str:
     alts = decision.get("alternatives") or []
 
     now_utc = datetime.now(timezone.utc)
-    pickup_hhmm, pickup_in_min = _pickup_ready_warsaw(decision, now_utc)
+    pickup_ready_hhmm, pickup_in_min = _pickup_ready_warsaw(decision, now_utc)
+
+    # Etap 1 pickup-label (2026-05-08): linia "Odbiór" pokazuje faktyczny czas
+    # dotarcia best kandydata (best.eta_pickup_hhmm), nie pickup_ready_at
+    # (gotowość restauracji). Nawias = minuty od złożenia zamówienia. Fallback
+    # do pickup_ready_at + (+N min) extension delta gdy brak best/eta_pickup
+    # albo brak created_at (legacy events).
+    best_pickup_hhmm = best.get("eta_pickup_hhmm") if best else None
+    mins_since_creation = best.get("mins_since_creation") if best else None
+    display_hhmm = best_pickup_hhmm or pickup_ready_hhmm
 
     best_name = name_lookup(best.get("courier_id"), best.get("name")) if best else "?"
     best_cid = str(best.get("courier_id") or "?") if best else "?"
@@ -935,12 +944,15 @@ def _format_proposal_v2(decision: dict) -> str:
     lines = [
         f"🚖 {best_name} (K-{best_cid}) → {rest} → {delivery} ({drop_district})",
     ]
-    if pickup_hhmm is not None:
-        ext_delta = _pickup_extension_delta_min(decision)
-        if ext_delta is not None and ext_delta > 0:
-            lines.append(f"⏱️ Odbiór: {pickup_hhmm} (+{ext_delta} min)")
+    if display_hhmm is not None:
+        if best_pickup_hhmm is not None and mins_since_creation is not None:
+            lines.append(f"⏱️ Odbiór: {display_hhmm} ({int(mins_since_creation)} min od złożenia)")
         else:
-            lines.append(f"⏱️ Odbiór: {pickup_hhmm}")
+            ext_delta = _pickup_extension_delta_min(decision)
+            if ext_delta is not None and ext_delta > 0:
+                lines.append(f"⏱️ Odbiór: {display_hhmm} (+{ext_delta} min)")
+            else:
+                lines.append(f"⏱️ Odbiór: {display_hhmm}")
     lines.append("")
     lines.append(_conf_line_v2(decision))
     lines.append("")
