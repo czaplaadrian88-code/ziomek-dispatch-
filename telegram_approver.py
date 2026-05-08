@@ -70,14 +70,26 @@ def _authorized_user_ids() -> list[int]:
 
     Fallback do `_KONIEC_AUTHORIZED_USER_IDS_DEFAULT` gdy flags.json brak klucza,
     typu nie list-of-int, lub IO error — bezpiecznie zachowuje obecny stan.
+
+    MP-#10 (2026-05-08): silent-killer fix per Lekcja #32 — flags.json corrupt
+    mid-runtime nie może spowodować niezauważonego revert do hardcoded default.
+    Log warning + dedup once-per-process dla nie-spammowania (dedup attribute na
+    funkcji). Auth boundary — fallback bezpieczny (default list 2 osoby), ale
+    operator MUSI wiedzieć że hot-reload nie działa.
     """
     try:
         flags = load_flags() or {}
         ids = flags.get("KONIEC_AUTHORIZED_USER_IDS")
         if isinstance(ids, list) and ids and all(isinstance(x, int) for x in ids):
             return ids
-    except Exception:
-        pass
+    except Exception as e:
+        if not getattr(_authorized_user_ids, "_warned", False):
+            _log.warning(
+                f"_authorized_user_ids: flags.json read fail ({type(e).__name__}: {e}), "
+                f"fallback do _KONIEC_AUTHORIZED_USER_IDS_DEFAULT={_KONIEC_AUTHORIZED_USER_IDS_DEFAULT}. "
+                f"Hot-reload (Backlog #8) nie zadziała do czasu naprawy flags.json."
+            )
+            _authorized_user_ids._warned = True
     return _KONIEC_AUTHORIZED_USER_IDS_DEFAULT
 
 
@@ -251,18 +263,65 @@ def _to_warsaw_hhmm(dt_utc: datetime) -> str:
 
 
 def _pickup_ready_warsaw(decision: dict, now_utc: datetime) -> Tuple[Optional[str], Optional[float]]:
-    """Z pickup_ready_at → (HH:MM Warsaw, minuty od now). None gdy brak."""
+    """Z pickup_ready_at → (HH:MM Warsaw, minuty od now). None gdy brak.
+
+    MP-#10 (2026-05-08): malformed `pickup_ready_at` ISO string (np. panel daje
+    pusty string, "0", "null" zamiast None, lub timestamp bez tz info odrzucony
+    przez fromisoformat) skutkuje brakującą linią "Odbiór" w propozycji. Log
+    warning z oid + iso value żeby operator widział co panel przesyła.
+    """
     iso = decision.get("pickup_ready_at")
     if not iso:
         return None, None
     try:
         ready = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except Exception:
+    except Exception as e:
+        oid = decision.get("order_id") or decision.get("oid") or "?"
+        _log.warning(
+            f"_pickup_ready_warsaw: oid={oid} ISO parse fail "
+            f"iso={iso!r} ({type(e).__name__}: {e}) → return (None, None)"
+        )
         return None, None
     if ready.tzinfo is None:
         ready = ready.replace(tzinfo=timezone.utc)
     delta_min = (ready - now_utc).total_seconds() / 60.0
     return _to_warsaw_hhmm(ready), delta_min
+
+
+def _parse_pickup_ready_prep_min(pickup_ready_at, *, oid: Optional[str] = None) -> float:
+    """Parse pickup_ready_at (str ISO lub datetime) → prep_min (od now do ready).
+
+    Zwraca 0.0 gdy: brak pickup_ready_at, malformed string, naive datetime z błędem.
+    Używane przez build_keyboard / _build_keyboard_v2_grid dla button label tmin
+    formula `max(travel_min, prep_min) → ceil/5 → clamp [5,60]`.
+
+    MP-#10 (2026-05-08): unified silent-killer fix dla obu callsites. Wcześniej
+    fallback prep_min=0.0 maskował malformed shadow_dispatcher serializacji
+    (np. dt.isoformat() vs str → button "5min" zamiast realnego prep). Teraz log
+    warning z oid + raw value żeby ujawnić upstream bug. Dedup po (cls, str)
+    cap=50 entries dla peak resilience (nie spamuje przy regression burst).
+    """
+    if not pickup_ready_at:
+        return 0.0
+    try:
+        if isinstance(pickup_ready_at, str):
+            ready = datetime.fromisoformat(pickup_ready_at.replace("Z", "+00:00"))
+        else:
+            ready = pickup_ready_at
+        if ready.tzinfo is None:
+            ready = ready.replace(tzinfo=timezone.utc)
+        return max(0.0, (ready - datetime.now(timezone.utc)).total_seconds() / 60.0)
+    except Exception as e:
+        seen = getattr(_parse_pickup_ready_prep_min, "_warned", set())
+        key = (type(e).__name__, str(pickup_ready_at)[:40])
+        if key not in seen and len(seen) < 50:
+            _log.warning(
+                f"_parse_pickup_ready_prep_min: oid={oid or '?'} parse fail "
+                f"raw={pickup_ready_at!r} ({type(e).__name__}: {e}) → fallback 0.0"
+            )
+            seen.add(key)
+            _parse_pickup_ready_prep_min._warned = seen
+        return 0.0
 
 
 def _candidate_line(c: dict, now_utc: datetime, prep_remaining_min: float) -> str:
@@ -373,6 +432,9 @@ def _reason_line(c: dict, all_candidates: list) -> str:
             reasons.append(f"wolny za {int(round(free))} min")
     # V3.26 STEP 1 (R-11): rationale enrichment — gdy flag ON i metrics
     # zawiera v326_rationale (post-scoring builder), append top-3 factors.
+    # MP-#10 (2026-05-08): defense-in-depth nie wolno krashnąć propozycji ALE
+    # cisza maskuje malformed v326_rationale (LGBM training drift early signal).
+    # Log warning once-per-process per error type (dedup na exception class).
     try:
         from dispatch_v2 import common as _C326
         if getattr(_C326, "ENABLE_V326_TRANSPARENCY_RATIONALE", False):
@@ -381,15 +443,29 @@ def _reason_line(c: dict, all_candidates: list) -> str:
             if dlaczego_pl:
                 # Replace simple reasons-list z full rationale (richer info).
                 return f"   💡 {dlaczego_pl}"
-    except Exception:
-        pass  # rationale must never break legacy reason path
+    except Exception as e:
+        seen = getattr(_reason_line, "_warned_classes", set())
+        cls = type(e).__name__
+        if cls not in seen:
+            _log.warning(
+                f"_reason_line: rationale path fail ({cls}: {e}), "
+                f"fallback do legacy reasons-list. cid={c.get('courier_id')}"
+            )
+            seen.add(cls)
+            _reason_line._warned_classes = seen
     if not reasons:
         return ""
     return "   💡 " + " + ".join(reasons)
 
 
 def _iso_to_warsaw_hhmm(iso_utc):
-    """V3.17: ISO UTC → Warsaw HH:MM, None on failure (used by timeline formatter)."""
+    """V3.17: ISO UTC → Warsaw HH:MM, None on failure (used by timeline formatter).
+
+    MP-#10 (2026-05-08): timeline section drops linijki gdy plan zawiera malformed
+    timestamp (np. shadow_dispatcher serializer regression). API stable (None on
+    fail), ale dedup-warn żeby ujawnić cichy bug w plan.pickup_at /
+    predicted_delivered_at JSON shape.
+    """
     if not iso_utc:
         return None
     try:
@@ -397,7 +473,14 @@ def _iso_to_warsaw_hhmm(iso_utc):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(WARSAW).strftime("%H:%M")
-    except Exception:
+    except Exception as e:
+        seen = getattr(_iso_to_warsaw_hhmm, "_warned_isos", set())
+        # dedup po (cls, iso) żeby nie spammować ale złapać każdy unikalny bad input
+        key = (type(e).__name__, str(iso_utc)[:40])
+        if key not in seen and len(seen) < 50:
+            _log.warning(f"_iso_to_warsaw_hhmm: parse fail iso={iso_utc!r} ({type(e).__name__}: {e})")
+            seen.add(key)
+            _iso_to_warsaw_hhmm._warned_isos = seen
         return None
 
 
@@ -1029,18 +1112,8 @@ def _build_keyboard_v2_grid(
     """
     import math as _math
 
-    prep_min = 0.0
-    if pickup_ready_at:
-        try:
-            if isinstance(pickup_ready_at, str):
-                ready = datetime.fromisoformat(pickup_ready_at.replace("Z", "+00:00"))
-            else:
-                ready = pickup_ready_at
-            if ready.tzinfo is None:
-                ready = ready.replace(tzinfo=timezone.utc)
-            prep_min = max(0.0, (ready - datetime.now(timezone.utc)).total_seconds() / 60.0)
-        except Exception:
-            prep_min = 0.0
+    # MP-#10: shared helper z log warning na malformed input (eliminuje silent killer).
+    prep_min = _parse_pickup_ready_prep_min(pickup_ready_at, oid=order_id)
 
     labels = ["✅ Akceptuj", "🥈 Weź #2", "🥉 Weź #3"]
     cand_buttons = []
@@ -1173,18 +1246,8 @@ def build_keyboard(
     """
     import math as _math
     # V3.26 hotfix: compute prep_min (pickup_ready - now) dla label sync z assign logic
-    prep_min = 0.0
-    if pickup_ready_at:
-        try:
-            if isinstance(pickup_ready_at, str):
-                ready = datetime.fromisoformat(pickup_ready_at.replace("Z", "+00:00"))
-            else:
-                ready = pickup_ready_at
-            if ready.tzinfo is None:
-                ready = ready.replace(tzinfo=timezone.utc)
-            prep_min = max(0.0, (ready - datetime.now(timezone.utc)).total_seconds() / 60.0)
-        except Exception:
-            prep_min = 0.0
+    # MP-#10: shared helper z log warning na malformed input (eliminuje silent killer).
+    prep_min = _parse_pickup_ready_prep_min(pickup_ready_at, oid=order_id)
     rows = []
     # Mockup v2 (2026-05-07): 2×2 grid mobile-friendly = TYLKO 4 buttony, brak
     # safety net. Adrian feedback post visual check: "Tylko cztery przyciski,
@@ -1321,13 +1384,28 @@ def round_up_to_5min(eta_minutes: Optional[float]) -> int:
 
 
 def _prep_minutes_remaining(decision: dict) -> Optional[float]:
-    """Z decision record → minuty od teraz do pickup_ready_at (gotowość jedzenia)."""
+    """Z decision record → minuty od teraz do pickup_ready_at (gotowość jedzenia).
+
+    MP-#10 (2026-05-08): malformed ISO → None propagowany do format_proposal,
+    który używa as fallback dla candidate line "deklarujemy" calc. Cisza =
+    inconsistent UI gdy panel daje malformed timestamp. Log warn z oid + iso.
+    """
     iso = decision.get("pickup_ready_at")
     if not iso:
         return None
     try:
         ready = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except Exception:
+    except Exception as e:
+        oid = decision.get("order_id") or decision.get("oid") or "?"
+        seen = getattr(_prep_minutes_remaining, "_warned", set())
+        key = (type(e).__name__, str(iso)[:40])
+        if key not in seen and len(seen) < 50:
+            _log.warning(
+                f"_prep_minutes_remaining: oid={oid} parse fail "
+                f"iso={iso!r} ({type(e).__name__}: {e}) → return None"
+            )
+            seen.add(key)
+            _prep_minutes_remaining._warned = seen
         return None
     delta = (ready - datetime.now(timezone.utc)).total_seconds() / 60.0
     return max(0.0, delta)
@@ -1738,6 +1816,18 @@ def _sla_records_in_range(path: str, start_utc: datetime, end_utc: datetime) -> 
 
 
 def _systemd_status() -> Dict[str, bool]:
+    """/status raport — sprawdza is-active 4 long-running serwisów.
+
+    MP-#10 (2026-05-08): wcześniej `except Exception: result[svc]=False` maskował
+    distinct failure modes. Operator widział "❌ shadow" bez wiedzy CZY:
+      - subprocess.TimeoutExpired (systemd zhang) → realny problem
+      - FileNotFoundError (systemctl missing) → infra broken
+      - PermissionError (sandbox) → config error
+      - real "inactive" → service stop
+
+    Każdy distinct case loguje warning z service name + cause. Status pozostaje
+    False (operator widzi serwis jako problem), ale logi tłumaczą why dla post-mortem.
+    """
     services = [
         "dispatch-panel-watcher",
         "dispatch-sla-tracker",
@@ -1752,7 +1842,17 @@ def _systemd_status() -> Dict[str, bool]:
                 capture_output=True, text=True, timeout=5,
             )
             result[svc] = (r.stdout.strip() == "active")
-        except Exception:
+        except subprocess.TimeoutExpired:
+            _log.warning(f"_systemd_status: {svc} is-active TIMEOUT 5s (systemd zhang?)")
+            result[svc] = False
+        except FileNotFoundError as e:
+            _log.warning(f"_systemd_status: {svc} systemctl binary missing ({e})")
+            result[svc] = False
+        except PermissionError as e:
+            _log.warning(f"_systemd_status: {svc} permission denied ({e})")
+            result[svc] = False
+        except Exception as e:
+            _log.warning(f"_systemd_status: {svc} unexpected {type(e).__name__}: {e}")
             result[svc] = False
     return result
 
@@ -1766,7 +1866,15 @@ def format_status() -> str:
 
     try:
         stats = state_machine.stats()
-    except Exception:
+    except Exception as e:
+        # MP-#10 (2026-05-08): fallback do manual Counter było silent — gdy
+        # state_machine.stats() crashuje (np. internal helper regression),
+        # /status pokazywał wynik ale operator nie wiedział że primary path
+        # broken. Log warning z exception type/repr żeby flagować w post-mortem.
+        _log.warning(
+            f"format_status: state_machine.stats() fail ({type(e).__name__}: {e}) "
+            f"→ fallback do manual Counter"
+        )
         all_o = state_machine.get_all()
         c = Counter(o.get("status", "?") for o in all_o.values())
         stats = {"total": len(all_o), "by_status": dict(c), "active_per_courier": {}}
@@ -2723,8 +2831,17 @@ def _handle_new_courier_callback(state: dict, payload: str, cb: dict) -> None:
                     "reply_markup": {"inline_keyboard": []},
                 },
             )
-        except Exception:
-            pass
+        except Exception as e:
+            # MP-#10 (2026-05-08): keyboard-clear fail było silent — buttony
+            # zostały na message, kolejne kliki SKIP przez admin przepuszczane
+            # do kolejki bez audit trail. Log error z full_name + msg_id żeby
+            # operator widział lost audit (i mógł manually edycjnąć keyboard).
+            msg_id = (cb.get("message") or {}).get("message_id", "?")
+            _log.error(
+                f"_handle_new_courier_callback skip: editMessageReplyMarkup fail "
+                f"full_name={full_name!r} msg_id={msg_id} ({type(e).__name__}: {e}). "
+                f"Keyboard NIE wyczyszczony — kolejne SKIP klikane będą jako noop."
+            )
     elif sub_action == "add":
         _shift_callback_answer(state, cb, "Uzyj /dopisz <cid> <full_name>")
     else:
@@ -3224,6 +3341,24 @@ async def watchdog(state: dict) -> None:
 
 # ---- main ----
 
+async def _shutdown_drain(state: dict) -> None:
+    """MP-#10 (2026-05-08): final flush pending state przed exit. Idempotent.
+
+    Eliminuje race window 50µs między state mutation (proposal_sender mutuje
+    `state['pending']` po sendMessage) a save_pending (atomic write na disk).
+    Bez drain SIGTERM mid-mutation = restart load_pending() zwraca state sprzed
+    mutation → user klika ASSIGN → KeyError w handle_callback. Per audit
+    TELEGRAM_APPROVER §2 P×I=8 (META audit twierdził 20, fact-checked do 8).
+
+    Lekcja #32 — log success+fail context, NIGDY silent.
+    """
+    try:
+        save_pending(state["pending_path"], state["pending"])
+        _log.info(f"shutdown drain: pending={len(state['pending'])} flushed")
+    except Exception as e:
+        _log.error(f"shutdown drain FAIL ({type(e).__name__}: {e})")
+
+
 async def main_async() -> None:
     cfg = load_config()
     env = _load_env(TELEGRAM_ENV_PATH)
@@ -3251,12 +3386,17 @@ async def main_async() -> None:
         f"pending={len(state['pending'])} token={'SET' if token and token != 'PLACEHOLDER' else 'MISSING'}"
     )
 
-    await asyncio.gather(
-        shadow_tailer(state),
-        proposal_sender(state),
-        updates_poller(state),
-        watchdog(state),
-    )
+    # MP-#10: try/finally drain — gathered tasks mogą rzucić CancelledError przy
+    # SIGTERM; finally MUSI fire żeby zapisać pending przed exit.
+    try:
+        await asyncio.gather(
+            shadow_tailer(state),
+            proposal_sender(state),
+            updates_poller(state),
+            watchdog(state),
+        )
+    finally:
+        await _shutdown_drain(state)
 
 
 def _sigterm(signum, frame):
