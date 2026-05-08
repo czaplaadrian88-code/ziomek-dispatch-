@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -658,6 +659,139 @@ def apply_unconfirmed_default(state: dict, now: datetime, today_iso: str) -> int
 # ----- main tick ----------------------------------------------------------
 
 
+# === MP-#15 (2026-05-08): Schedule staleness + daily backup ===
+
+_MP15_STALE_THRESHOLD_SEC = 30 * 60  # 30 min per master plan TOP-15 #15
+_MP15_ALERT_DEDUP_SEC = 30 * 60  # one alert per 30min (no spam)
+_MP15_STATE_PATH = "/root/.openclaw/workspace/dispatch_state/mp15_schedule_staleness.json"
+
+
+def _mp15_load_state() -> dict:
+    """Load MP-#15 alert dedup state. Fail-open na empty dict."""
+    try:
+        with open(_MP15_STATE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        _log.warning(f"MP-#15 state load fail: {e} — fresh state")
+        return {}
+
+
+def _mp15_save_state(state: dict) -> None:
+    """Atomic write MP-#15 alert state. Fail-loud (warning) na I/O error."""
+    try:
+        from dispatch_v2.core.jsonl_appender import _append_bytes  # reuse atomic primitive
+        # Direct atomic write json (NIE append) — overwrite
+        import tempfile
+        target = Path(_MP15_STATE_PATH)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".mp15_state_", suffix=".tmp", dir=str(target.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, target)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+            raise
+    except Exception as e:
+        _log.warning(f"MP-#15 state save fail: {type(e).__name__}: {e}")
+
+
+def _mp15_check_schedule_staleness(now, today_iso: str) -> None:
+    """MP-#15 (2026-05-08): alert gdy schedule_age > 30min. Dedup max 1×/30min.
+
+    Czasówka rozróżnia:
+      - schedule >30min stale → STALE_SCHEDULE_AGE alert (HIGH severity per OPS R6)
+      - dispatch nadal działa (load_schedule fail-open per Lekcja #31)
+      - alert mówi operatorowi "Sheets API rate-limit / network issue, possibly
+        nowi kurierzy nie widoczni do następnego refresh"
+
+    Defensive: NIGDY raise (worker krytyczny). Logged warnings na exception.
+    """
+    try:
+        # Lazy import — tests mogą monkey-patch w schedule_utils
+        try:
+            from schedule_utils import schedule_age_sec
+        except ImportError:
+            return  # script-only environment
+
+        age = schedule_age_sec()
+        if age is None:
+            # File missing — bigger problem niż stale, separate alert path future
+            return
+        if age <= _MP15_STALE_THRESHOLD_SEC:
+            return
+
+        # Stale → check dedup
+        mp15_state = _mp15_load_state()
+        last_alert = float(mp15_state.get("last_stale_alert_ts", 0))
+        if time.time() - last_alert < _MP15_ALERT_DEDUP_SEC:
+            return
+
+        age_min = int(age / 60)
+        msg = (
+            f"⚠ STALE_SCHEDULE_AGE — grafik {age_min} min nie był odświeżany "
+            f"(threshold: 30 min). Sheet API rate-limit lub network issue. "
+            f"Dispatch nadal działa (fail-open) ALE nowi kurierzy mogą nie być "
+            f"widoczni do następnego refresh. Sprawdź `journalctl -u dispatch-shift-notify` "
+            f"+ Google Sheets dostępność."
+        )
+        try:
+            from dispatch_v2 import telegram_utils
+            telegram_utils.send_admin_alert(msg)
+        except Exception as e:
+            _log.warning(f"MP-#15 alert Telegram send fail: {type(e).__name__}: {e}")
+            # Continue — log alert nawet jak Telegram unreachable
+            _log.error(f"MP-#15 STALE_SCHEDULE_AGE: schedule age {age_min}min > 30min threshold (alert NOT sent — Telegram down)")
+            return
+
+        # Update dedup state
+        mp15_state["last_stale_alert_ts"] = time.time()
+        mp15_state["last_stale_age_min"] = age_min
+        mp15_state["last_stale_at"] = now.isoformat()
+        _mp15_save_state(mp15_state)
+        _log.warning(f"MP-#15 STALE_SCHEDULE_AGE alerted: {age_min}min stale, dedup armed for 30min")
+    except Exception as e:
+        _log.warning(f"MP-#15 staleness check unexpected fail: {type(e).__name__}: {e}")
+
+
+def _mp15_maybe_write_daily_backup(now, today_iso: str) -> None:
+    """MP-#15 (2026-05-08): write schedule_today_backup.json once per day.
+
+    Idempotent w obrębie dnia (state field `last_backup_date_iso`). Worker tickuje
+    co minutę, więc pierwszy tick po 06:00 Warsaw zapisze (gdy SCHEDULE_FILE
+    fresh post-fetch). Defensive: failure logged ale NIE blokuje workera.
+    """
+    try:
+        mp15_state = _mp15_load_state()
+        if mp15_state.get("last_backup_date_iso") == today_iso:
+            return  # already backed up today
+
+        # Trigger only after 06:00 Warsaw (SCHEDULE_FILE refresh window)
+        if now.hour < 6:
+            return
+
+        try:
+            from schedule_utils import write_schedule_today_backup
+        except ImportError:
+            return
+
+        ok = write_schedule_today_backup()
+        if ok:
+            mp15_state["last_backup_date_iso"] = today_iso
+            mp15_state["last_backup_at"] = now.isoformat()
+            _mp15_save_state(mp15_state)
+            _log.info(f"MP-#15 daily backup written for {today_iso}")
+    except Exception as e:
+        _log.warning(f"MP-#15 daily backup unexpected fail: {type(e).__name__}: {e}")
+
+
 def main() -> int:
     """Single tick. Returns 0 on success, non-zero on hard error."""
     try:
@@ -672,6 +806,12 @@ def main() -> int:
 
     now = datetime.now(WARSAW)
     today_iso = now.date().isoformat()
+
+    # MP-#15 (2026-05-08): STALE_SCHEDULE_AGE alert + daily backup snapshot.
+    # Wykonywane PRZED load_schedule() żeby alert odpalił nawet gdy schedule
+    # nieaktualny ALE worker tickuje (Sheets API rate-limit, network issue).
+    _mp15_check_schedule_staleness(now, today_iso)
+    _mp15_maybe_write_daily_backup(now, today_iso)
 
     # Load schedule via module-level binding (test monkey-patchable)
     try:

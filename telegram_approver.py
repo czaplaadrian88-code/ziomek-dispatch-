@@ -1864,8 +1864,138 @@ def _systemd_status() -> Dict[str, bool]:
     return result
 
 
+def _mp15_get_schedule_age_min() -> Optional[float]:
+    """MP-#15 (2026-05-08): schedule_age dla /status linii.
+
+    Returns None gdy schedule_utils nie dostępne lub file missing. Defensive —
+    /status nigdy nie crashnie z powodu MP-#15.
+    """
+    try:
+        from schedule_utils import schedule_age_sec
+        age = schedule_age_sec()
+        if age is None:
+            return None
+        return age / 60.0
+    except Exception as e:
+        _log.warning(f"_mp15_get_schedule_age_min fail: {type(e).__name__}: {e}")
+        return None
+
+
+def _mp15_get_last_3_proposals() -> list[str]:
+    """MP-#15 (2026-05-08): last 3 propozycje z learning_log dla /status.
+
+    Każda linia format: "  • #oid → cid=X (Yacc good) ✓ accepted" lub
+    "  • #oid → KOORD early_bird ⚠️" zależnie od action.
+
+    Skip rare actions (TG_REASON, F7AGREE, /koniec, etc.) — pokazuje tylko
+    proposals lifecycle (TAK/NIE/INNY/KOORD/TIMEOUT).
+
+    Returns list of formatted lines, max 3.
+    """
+    try:
+        target_actions = {"TAK", "NIE", "INNY", "KOORD", "TIMEOUT", "TIMEOUT_SUPERSEDED"}
+        # Read learning_log tail efficiently — last ~50 lines should contain ≥3 proposals
+        path = Path(LEARNING_LOG_PATH)
+        if not path.exists():
+            return []
+        # Read tail with a reasonable byte cap to avoid loading huge files
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            read_size = min(size, 100_000)  # 100KB tail covers many entries
+            f.seek(size - read_size)
+            tail = f.read().decode("utf-8", errors="ignore")
+
+        lines_raw = tail.splitlines()
+        records: list[dict] = []
+        for ln in reversed(lines_raw):  # newest first
+            try:
+                rec = json.loads(ln)
+            except Exception:
+                continue
+            action = rec.get("action") or rec.get("decision")
+            if action not in target_actions:
+                continue
+            records.append(rec)
+            if len(records) >= 3:
+                break
+
+        out_lines = []
+        for r in records:
+            oid = r.get("order_id") or r.get("oid") or "?"
+            action = r.get("action") or r.get("decision") or "?"
+            cid = r.get("courier_id") or r.get("cid") or r.get("actual_courier_id")
+            tmin = r.get("time_min") or r.get("tmin")
+            # Format icon per action
+            if action == "TAK":
+                icon = "✓ accepted"
+                cid_label = f"cid={cid}" if cid else "cid=?"
+                tmin_label = f" ({int(tmin)} min good)" if tmin else ""
+                out_lines.append(f"  • #{oid} → {cid_label}{tmin_label} {icon}")
+            elif action == "KOORD":
+                out_lines.append(f"  • #{oid} → KOORD ⚠️")
+            elif action in ("INNY",):
+                reason = r.get("reason_code") or r.get("reason") or "manual"
+                out_lines.append(f"  • #{oid} → INNY ({reason}) ❌")
+            elif action == "NIE":
+                out_lines.append(f"  • #{oid} → NIE ❌")
+            elif action == "TIMEOUT":
+                out_lines.append(f"  • #{oid} → TIMEOUT (auto-KOORD) ⏱️")
+            elif action == "TIMEOUT_SUPERSEDED":
+                out_lines.append(f"  • #{oid} → TIMEOUT_SUPERSEDED 🔄")
+            else:
+                out_lines.append(f"  • #{oid} → {action}")
+        return out_lines
+    except Exception as e:
+        _log.warning(f"_mp15_get_last_3_proposals fail: {type(e).__name__}: {e}")
+        return []
+
+
+def _mp15_get_last_proposal_age_sec() -> Optional[float]:
+    """MP-#15 (2026-05-08): wiek najnowszej shadow propozycji (proxy "shadow alive").
+
+    Każdy shadow_decisions record może być >10KB (auto_route_context +
+    alternatives + bag_context). Read tail 100KB (covers ~5-10 records) i skip
+    leading partial line jeśli nie zaczyna się od `{`.
+    """
+    try:
+        path = Path("/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl")
+        if not path.exists():
+            return None
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            read_size = min(size, 100_000)
+            f.seek(size - read_size)
+            tail = f.read().decode("utf-8", errors="ignore")
+        lines = tail.splitlines()
+        # Skip first line jeśli partial (read window start mid-record)
+        if lines and not lines[0].startswith("{"):
+            lines = lines[1:]
+        # Parse newest record (last complete line z trailing newline)
+        for ln in reversed(lines):
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                rec = json.loads(ln)
+                ts = rec.get("ts")
+                if not ts:
+                    continue
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return (datetime.now(timezone.utc) - dt).total_seconds()
+            except Exception:
+                continue
+        return None
+    except Exception as e:
+        _log.warning(f"_mp15_get_last_proposal_age_sec fail: {type(e).__name__}: {e}")
+        return None
+
+
 def format_status() -> str:
-    """Build /status message body (F1.4a)."""
+    """Build /status message body (F1.4a + MP-#15 enhancements per OPS §8.1)."""
     from dispatch_v2 import state_machine
 
     now_warsaw = datetime.now(WARSAW)
@@ -1965,6 +2095,38 @@ def format_status() -> str:
             _log.warning(f"ranking fail: {e}")
             lines.append("")
             lines.append("Top 3 wczoraj: (ranking error)")
+
+    # === MP-#15 (2026-05-08): operational health snapshot per OPS §8.1 ===
+    # Schedule freshness, last_proposal_age (shadow alive), last 3 proposals.
+    # Defensive: każda sekcja własny try/except — częściowy data lepszy niż zero.
+    try:
+        sched_age_min = _mp15_get_schedule_age_min()
+        last_prop_age_sec = _mp15_get_last_proposal_age_sec()
+        last_3 = _mp15_get_last_3_proposals()
+
+        lines.append("")
+        lines.append("Operational health:")
+        if sched_age_min is not None:
+            icon = "✓" if sched_age_min <= 30 else ("⚠️" if sched_age_min <= 60 else "❌")
+            lines.append(f"{icon} schedule: {sched_age_min:.1f} min temu")
+        else:
+            lines.append("❌ schedule: file missing")
+        if last_prop_age_sec is not None:
+            if last_prop_age_sec < 60:
+                lines.append(f"✓ shadow: last propozycja {int(last_prop_age_sec)}s temu")
+            elif last_prop_age_sec < 600:
+                lines.append(f"✓ shadow: last propozycja {int(last_prop_age_sec/60)}min temu")
+            else:
+                lines.append(f"⚠️ shadow: last propozycja {int(last_prop_age_sec/60)}min temu (cisza)")
+        else:
+            lines.append("⚠️ shadow: brak danych")
+
+        if last_3:
+            lines.append("")
+            lines.append("Last 3 propozycje:")
+            lines.extend(last_3)
+    except Exception as e:
+        _log.warning(f"MP-#15 /status enhancement fail: {type(e).__name__}: {e}")
 
     return "\n".join(lines)
 
