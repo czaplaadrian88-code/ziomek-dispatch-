@@ -12,10 +12,25 @@ import json
 import sqlite3
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import load_config, now_iso, setup_logger
+
+# MP-#5 (2026-05-08): retry transient SQLite locks + peak-aware cleanup.
+# Background: emit() w hot path (panel_watcher, state_machine, telegram_approver
+# via dispatch_pipeline) — pojedynczy SQLite lock burst (concurrent writer)
+# drop'ował event. Retry 3x z exp backoff = transient resilience. Cleanup w peak
+# (lunch 11-14 / dinner 17-20 Warsaw) skip — DELETE blocks readers shadow_dispatcher.
+_RETRY_BACKOFF_MS = (100, 500, 2000)  # 3 attempts after first try
+_PEAK_WINDOWS_WARSAW = (
+    (11, 14),  # lunch peak
+    (17, 20),  # dinner peak
+)
+_WARSAW_TZ = ZoneInfo("Europe/Warsaw")
+
 
 # Zamkniety katalog typow eventow
 EVENT_TYPES = {
@@ -59,6 +74,43 @@ QUEUE_EVENT_TYPES = EVENT_TYPES - AUDIT_EVENT_TYPES
 _log = setup_logger("event_bus", "/root/.openclaw/workspace/scripts/logs/events.log")
 
 
+def _is_peak_window(now: Optional[datetime] = None) -> bool:
+    """True if current Warsaw time within peak windows (lunch 11-14, dinner 17-20)."""
+    if now is None:
+        now = datetime.now(_WARSAW_TZ)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=_WARSAW_TZ)
+    h = now.hour
+    return any(start <= h < end for start, end in _PEAK_WINDOWS_WARSAW)
+
+
+def _retry_on_locked(fn: Callable, *args, **kwargs):
+    """Wywołuje fn z retry na sqlite3.OperationalError 'database is locked'.
+
+    Inne wyjątki propagują natychmiast. Backoff [100, 500, 2000]ms (3 dodatkowe
+    próby po pierwszej). Cel: transient WAL contention przy concurrent writer.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(len(_RETRY_BACKOFF_MS) + 1):
+        try:
+            return fn(*args, **kwargs)
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "locked" not in msg and "busy" not in msg:
+                raise
+            last_exc = e
+            if attempt < len(_RETRY_BACKOFF_MS):
+                delay_ms = _RETRY_BACKOFF_MS[attempt]
+                _log.warning(
+                    f"event_bus: SQLite locked, retry {attempt+1}/{len(_RETRY_BACKOFF_MS)} "
+                    f"after {delay_ms}ms ({e})"
+                )
+                time.sleep(delay_ms / 1000.0)
+            else:
+                _log.error(f"event_bus: SQLite locked, retry exhausted: {e}")
+    raise last_exc  # type: ignore[misc]
+
+
 def _db_path() -> str:
     return load_config()["paths"]["events_db"]
 
@@ -84,31 +136,18 @@ def make_event_id(event_type: str, order_id: Optional[str], timestamp_ms: Option
     return f"{oid}_{event_type}_{timestamp_ms}"
 
 
-def emit(
+def _emit_inner(
     event_type: str,
-    order_id: Optional[str] = None,
-    courier_id: Optional[str] = None,
-    payload: Optional[dict] = None,
-    event_id: Optional[str] = None,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload_json: str,
+    created_at: str,
+    event_id: str,
 ) -> Optional[str]:
-    """Emituje event. Zwraca event_id lub None jesli duplikat.
-
-    Jesli event_id nie podany -> generowany deterministycznie.
-    Jesli event_id juz istnieje w bazie -> ZWRACA None (idempotent skip).
-    """
-    if event_type not in EVENT_TYPES:
-        raise ValueError(f"Nieznany event_type: {event_type}. Dozwolone: {EVENT_TYPES}")
-
-    if event_id is None:
-        event_id = make_event_id(event_type, order_id)
-
-    payload_json = json.dumps(payload or {}, ensure_ascii=False)
-    created_at = now_iso()
-
+    """Inner emit z transaction body. Wrapped przez emit() w _retry_on_locked."""
     with _conn() as conn:
         try:
             conn.execute("BEGIN IMMEDIATE;")
-            # Sprawdz processed (dedup historyczny)
             cur = conn.execute(
                 "SELECT 1 FROM processed_events WHERE event_id = ?",
                 (event_id,),
@@ -118,7 +157,6 @@ def emit(
                 _log.debug(f"DUP (processed): {event_id}")
                 return None
 
-            # Wstaw (jesli juz w events -> INSERT OR IGNORE)
             cur = conn.execute(
                 """INSERT OR IGNORE INTO events
                    (event_id, event_type, order_id, courier_id, payload, created_at, status)
@@ -133,10 +171,41 @@ def emit(
             conn.execute("COMMIT;")
             _log.info(f"EMIT {event_type} order={order_id} courier={courier_id} id={event_id}")
             return event_id
+        except sqlite3.OperationalError:
+            conn.execute("ROLLBACK;")
+            raise
         except Exception as e:
             conn.execute("ROLLBACK;")
             _log.error(f"emit() error: {e}")
             raise
+
+
+def emit(
+    event_type: str,
+    order_id: Optional[str] = None,
+    courier_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+    event_id: Optional[str] = None,
+) -> Optional[str]:
+    """Emituje event. Zwraca event_id lub None jesli duplikat.
+
+    Jesli event_id nie podany -> generowany deterministycznie.
+    Jesli event_id juz istnieje w bazie -> ZWRACA None (idempotent skip).
+
+    MP-#5: Transient SQLite lock errors retry'owane (3x exp backoff).
+    """
+    if event_type not in EVENT_TYPES:
+        raise ValueError(f"Nieznany event_type: {event_type}. Dozwolone: {EVENT_TYPES}")
+
+    if event_id is None:
+        event_id = make_event_id(event_type, order_id)
+
+    payload_json = json.dumps(payload or {}, ensure_ascii=False)
+    created_at = now_iso()
+
+    return _retry_on_locked(
+        _emit_inner, event_type, order_id, courier_id, payload_json, created_at, event_id,
+    )
 
 
 def get_pending(limit: int = 100, event_types: Optional[list] = None) -> list:
@@ -213,9 +282,16 @@ def stats() -> dict:
 
 
 def cleanup(retention_hours: int = 48) -> int:
-    """Czysci stare processed events. Zwraca liczbe usunietych."""
-    cutoff_seconds = retention_hours * 3600
-    cutoff_iso = now_iso()  # uzywamy current time - retention w SQL
+    """Czysci stare processed events. Zwraca liczbe usunietych.
+
+    MP-#5: Skip podczas peak window (lunch 11-14 / dinner 17-20 Warsaw) — DELETE
+    blokuje shadow_dispatcher reads, co negatywnie wpływa na latency propozycji.
+    Cleanup uruchamia się przez dispatch-event-bus-cleanup.timer (co godzinę);
+    pominięty tick = +1h retention, brak korupcji.
+    """
+    if _is_peak_window():
+        _log.info("cleanup: skip — peak window (Warsaw lunch/dinner)")
+        return 0
 
     with _conn() as conn:
         # SQLite: usun processed_events starsze niz cutoff
@@ -277,6 +353,35 @@ def _ensure_audit_log_initialized() -> None:
         _init_audit_log_table()
 
 
+def _emit_audit_inner(
+    event_type: str,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload_json: str,
+    created_at: str,
+    event_id: str,
+) -> Optional[str]:
+    """Inner emit_audit. Wrapped przez emit_audit() w _retry_on_locked."""
+    with _conn() as conn:
+        try:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO audit_log
+                   (event_id, event_type, order_id, courier_id, payload, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (event_id, event_type, order_id, courier_id, payload_json, created_at),
+            )
+            if cur.rowcount == 0:
+                _log.debug(f"AUDIT DUP: {event_id}")
+                return None
+            _log.info(f"AUDIT {event_type} order={order_id} courier={courier_id} id={event_id}")
+            return event_id
+        except sqlite3.OperationalError:
+            raise
+        except Exception as e:
+            _log.error(f"emit_audit() error: {e}")
+            raise
+
+
 def emit_audit(
     event_type: str,
     order_id: Optional[str] = None,
@@ -293,6 +398,8 @@ def emit_audit(
     Stan persistowany przez state_machine.update_from_event wywoływany inline
     z call site — ta funkcja jest TYLKO audit history. Brak status/processed_at.
 
+    MP-#5: Transient SQLite lock errors retry'owane (3x exp backoff).
+
     Zwraca event_id przy zapisie, None przy idempotent skip (duplikat).
     """
     if event_type not in AUDIT_EVENT_TYPES:
@@ -308,26 +415,20 @@ def emit_audit(
     payload_json = json.dumps(payload or {}, ensure_ascii=False)
     created_at = now_iso()
 
-    with _conn() as conn:
-        try:
-            cur = conn.execute(
-                """INSERT OR IGNORE INTO audit_log
-                   (event_id, event_type, order_id, courier_id, payload, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (event_id, event_type, order_id, courier_id, payload_json, created_at),
-            )
-            if cur.rowcount == 0:
-                _log.debug(f"AUDIT DUP: {event_id}")
-                return None
-            _log.info(f"AUDIT {event_type} order={order_id} courier={courier_id} id={event_id}")
-            return event_id
-        except Exception as e:
-            _log.error(f"emit_audit() error: {e}")
-            raise
+    return _retry_on_locked(
+        _emit_audit_inner, event_type, order_id, courier_id, payload_json, created_at, event_id,
+    )
 
 
 def cleanup_audit_log(retention_days: int = 90) -> int:
-    """Czysci audit_log starsze niz retention_days. Zwraca liczbe usunietych."""
+    """Czysci audit_log starsze niz retention_days. Zwraca liczbe usunietych.
+
+    MP-#5: Skip podczas peak window (Warsaw lunch/dinner) — DELETE blokuje readers.
+    """
+    if _is_peak_window():
+        _log.info("cleanup_audit_log: skip — peak window (Warsaw lunch/dinner)")
+        return 0
+
     _ensure_audit_log_initialized()
     with _conn() as conn:
         cur = conn.execute(
