@@ -3444,6 +3444,121 @@ def _classify_timeout_outcome(cur_status: Optional[str]) -> str:
     return "UNKNOWN_STATE"
 
 
+async def _process_expired_pending(
+    state: dict, oid: str, entry: dict, now: datetime, state_all: dict
+) -> str:
+    """Per-entry expired-handling shared między watchdog() a A2 startup scan.
+
+    Returns: "SUPERSEDED" (status != "new" w state_machine — silent skip) lub
+    "TIMEOUT" (real brak decyzji — Telegram alert + learning_log + remove).
+    Idempotent: caller usuwa entry z `state["pending"]` po dispatch'u.
+
+    A2 (audit STATE_OWNERSHIP F9 2026-05-08): wyciągnięte z watchdog() pętli
+    żeby _startup_scan_pending_expired mógł reuse'ować tę samą logikę bez
+    duplikacji (Lekcja #99).
+    """
+    cur = state_all.get(str(oid)) or {}
+    cur_status = cur.get("status")
+    # BUG1 fix: jeśli zlecenie zostało już ręcznie obsłużone (assigned/picked_up/
+    # delivered/cancelled), nie spamuj timeoutem — cicho usuń z pending.
+    if cur_status and cur_status != "new":
+        _log.info(f"TIMEOUT silent oid={oid}: status={cur_status} (już obsłużone)")
+        timeout_outcome = _classify_timeout_outcome(cur_status)
+        if timeout_outcome == "UNKNOWN_STATE":
+            _log.warning(f"TIMEOUT_SUPERSEDED unknown cur_status={cur_status!r} oid={oid}")
+        append_learning(state["learning_log_path"], {
+            "ts": now_iso(),
+            "order_id": oid,
+            "action": "TIMEOUT_SUPERSEDED",
+            "timeout_outcome": timeout_outcome,
+            "timeout_outcome_detail": cur_status or "unknown",
+            "ok": True,
+            "feedback": f"order już {cur_status} — silent skip",
+            "decision": entry["decision_record"],
+        })
+        state["pending"].pop(oid, None)
+        save_pending(state["pending_path"], state["pending"])
+        return "SUPERSEDED"
+    _log.warning(f"TIMEOUT oid={oid} → brak odpowiedzi, zlecenie pozostaje w puli")
+    await asyncio.to_thread(
+        tg_request, state["token"], "sendMessage",
+        {
+            "chat_id": state["admin_id"],
+            "text": f"⏰ Timeout #{oid} (5 min) → brak decyzji, zlecenie w puli",
+        },
+    )
+    append_learning(state["learning_log_path"], {
+        "ts": now_iso(),
+        "order_id": oid,
+        "action": "TIMEOUT_SKIP",
+        "ok": True,
+        "feedback": "brak decyzji w czasie — zlecenie pozostaje w puli",
+        "decision": entry["decision_record"],
+    })
+    state["pending"].pop(oid, None)
+    save_pending(state["pending_path"], state["pending"])
+    return "TIMEOUT"
+
+
+async def _startup_scan_pending_expired(state: dict) -> dict:
+    """A2 (audit STATE_OWNERSHIP F9 2026-05-08): force-process pending sieroty
+    z `expires_at` w przeszłości NATYCHMIAST przy starcie, PRZED launch
+    workers. Eliminuje window operatorskiej confusion gdy crash/restart
+    zostawił expired pending — bez tego scanu czeka do pierwszego watchdog
+    cycle (sleep=10s).
+
+    Returns dict summary {total, expired, processed, superseded, timeout}.
+    Defense-in-depth: state_machine load fail → empty state_all (treats all
+    expired jako TIMEOUT path, real brak decyzji).
+    """
+    now = datetime.now(timezone.utc)
+    expired = []
+    for oid, entry in list(state["pending"].items()):
+        try:
+            exp = datetime.fromisoformat(entry["expires_at"])
+        except Exception as _e:
+            _log.warning(f"startup scan parse expires_at fail oid={oid}: {_e}")
+            continue
+        if now >= exp:
+            expired.append(oid)
+    summary = {
+        "total": len(state["pending"]),
+        "expired": len(expired),
+        "processed": 0,
+        "superseded": 0,
+        "timeout": 0,
+    }
+    if not expired:
+        _log.info(f"startup pending scan: total={summary['total']} expired=0")
+        return summary
+    state_all = {}
+    try:
+        from dispatch_v2 import state_machine
+        state_all = state_machine.get_all()
+    except Exception as _e:
+        _log.warning(f"startup scan state_machine load fail: {_e}")
+    for oid in expired:
+        entry = state["pending"].get(oid)
+        if not entry:
+            continue
+        try:
+            action = await _process_expired_pending(state, oid, entry, now, state_all)
+        except Exception as _e:
+            _log.error(f"startup scan _process_expired_pending fail oid={oid}: {_e}")
+            continue
+        summary["processed"] += 1
+        if action == "SUPERSEDED":
+            summary["superseded"] += 1
+        elif action == "TIMEOUT":
+            summary["timeout"] += 1
+    _log.info(
+        f"startup pending scan: total={summary['total']} "
+        f"expired={summary['expired']} processed={summary['processed']} "
+        f"superseded={summary['superseded']} timeout={summary['timeout']}"
+    )
+    return summary
+
+
 async def watchdog(state: dict) -> None:
     while not _shutdown:
         now = datetime.now(timezone.utc)
@@ -3465,46 +3580,7 @@ async def watchdog(state: dict) -> None:
                 _log.warning(f"watchdog state_machine load fail: {_e}")
         for oid in expired:
             entry = state["pending"][oid]
-            cur = state_all.get(str(oid)) or {}
-            cur_status = cur.get("status")
-            # BUG1 fix: jeśli zlecenie zostało już ręcznie obsłużone (assigned/picked_up/
-            # delivered/cancelled), nie spamuj timeoutem — cicho usuń z pending.
-            if cur_status and cur_status != "new":
-                _log.info(f"TIMEOUT silent oid={oid}: status={cur_status} (już obsłużone)")
-                timeout_outcome = _classify_timeout_outcome(cur_status)
-                if timeout_outcome == "UNKNOWN_STATE":
-                    _log.warning(f"TIMEOUT_SUPERSEDED unknown cur_status={cur_status!r} oid={oid}")
-                append_learning(state["learning_log_path"], {
-                    "ts": now_iso(),
-                    "order_id": oid,
-                    "action": "TIMEOUT_SUPERSEDED",
-                    "timeout_outcome": timeout_outcome,
-                    "timeout_outcome_detail": cur_status or "unknown",
-                    "ok": True,
-                    "feedback": f"order już {cur_status} — silent skip",
-                    "decision": entry["decision_record"],
-                })
-                state["pending"].pop(oid, None)
-                save_pending(state["pending_path"], state["pending"])
-                continue
-            _log.warning(f"TIMEOUT oid={oid} → brak odpowiedzi, zlecenie pozostaje w puli")
-            await asyncio.to_thread(
-                tg_request, state["token"], "sendMessage",
-                {
-                    "chat_id": state["admin_id"],
-                    "text": f"⏰ Timeout #{oid} (5 min) → brak decyzji, zlecenie w puli",
-                },
-            )
-            append_learning(state["learning_log_path"], {
-                "ts": now_iso(),
-                "order_id": oid,
-                "action": "TIMEOUT_SKIP",
-                "ok": True,
-                "feedback": "brak decyzji w czasie — zlecenie pozostaje w puli",
-                "decision": entry["decision_record"],
-            })
-            state["pending"].pop(oid, None)
-            save_pending(state["pending_path"], state["pending"])
+            await _process_expired_pending(state, oid, entry, now, state_all)
         await asyncio.sleep(10)
 
 
@@ -3554,6 +3630,14 @@ async def main_async() -> None:
         f"telegram_approver START admin={admin_id} "
         f"pending={len(state['pending'])} token={'SET' if token and token != 'PLACEHOLDER' else 'MISSING'}"
     )
+
+    # A2 (audit STATE_OWNERSHIP F9): force-process expired sieroty PRZED gather.
+    # Eliminuje window gdy crash/restart zostawił pending z expires_at w
+    # przeszłości — bez tego scanu czeka do pierwszego watchdog cycle (10s).
+    try:
+        await _startup_scan_pending_expired(state)
+    except Exception as _e:
+        _log.error(f"startup scan FAIL ({type(_e).__name__}: {_e}) — kontynuuję normalny start")
 
     # MP-#10: try/finally drain — gathered tasks mogą rzucić CancelledError przy
     # SIGTERM; finally MUSI fire żeby zapisać pending przed exit.
