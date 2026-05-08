@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from dispatch_v2.common import setup_logger
+from dispatch_v2.geocoding_audit import log_geocode as _audit_log
 from dispatch_v2.osrm_client import nearest as osrm_nearest
 
 GMAPS_ENV = Path("/root/.openclaw/workspace/.secrets/gmaps.env")
@@ -175,9 +176,12 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
     if not address or not address.strip():
         return None
 
+    t_start = time.perf_counter()
     effective_city = _effective_city(city, f"geocode({address!r})")
     if not effective_city:
         _stats["failures"] += 1
+        _audit_log("address", address, city, None, None, "none",
+                   (time.perf_counter() - t_start) * 1000.0, error="no_city")
         return None
 
     key = _normalize(address, effective_city)
@@ -187,17 +191,24 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
         if key in cache:
             _stats["hits"] += 1
             entry = cache[key]
+            _audit_log("address", address, effective_city, entry["lat"], entry["lon"],
+                       "cache", (time.perf_counter() - t_start) * 1000.0)
             return (entry["lat"], entry["lon"])
 
     _stats["misses"] += 1
 
     # Google primary — explicit city w query
     result = _google_geocode(f"{address}, {effective_city}, Polska", timeout=timeout)
+    source = "google" if result is not None else None
     if result is None:
         result = _osrm_fallback(address)
+        if result is not None:
+            source = "osrm"
 
     if result is None:
         _stats["failures"] += 1
+        _audit_log("address", address, effective_city, None, None, "none",
+                   (time.perf_counter() - t_start) * 1000.0, error="google_and_osrm_failed")
         return None
 
     with _lock:
@@ -205,14 +216,16 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
         cache[key] = {
             "lat": result[0],
             "lon": result[1],
-            "source": "google",
+            "source": source,
             "original": address,
             "city": effective_city,
             "cached_at": time.time(),
         }
         _save_cache(CACHE_PATH, cache)
 
-    _log.info(f"Geocoded: {address} / city={effective_city} -> {result}")
+    _audit_log("address", address, effective_city, result[0], result[1],
+               source, (time.perf_counter() - t_start) * 1000.0)
+    _log.info(f"Geocoded: {address} / city={effective_city} -> {result} ({source})")
     return result
 
 
@@ -226,22 +239,30 @@ def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None)
     if not name:
         return None
     key = name.strip().lower()
+    t_start = time.perf_counter()
 
     with _lock:
         cache = _load_cache(RESTAURANT_CACHE_PATH)
         if key in cache:
             _stats["hits"] += 1
-            return (cache[key]["lat"], cache[key]["lon"])
+            entry = cache[key]
+            _audit_log("restaurant", name, entry.get("city"), entry["lat"], entry["lon"],
+                       "cache", (time.perf_counter() - t_start) * 1000.0)
+            return (entry["lat"], entry["lon"])
 
     _stats["misses"] += 1
 
     effective_city = _effective_city(city, f"geocode_restaurant({name!r})")
     if not effective_city:
+        _audit_log("restaurant", name, city, None, None, "none",
+                   (time.perf_counter() - t_start) * 1000.0, error="no_city")
         return None
 
     query = f"{name}, {address}, {effective_city}" if address else f"{name}, {effective_city}, Polska"
     result = _google_geocode(query)
     if result is None:
+        _audit_log("restaurant", name, effective_city, None, None, "none",
+                   (time.perf_counter() - t_start) * 1000.0, error="google_failed")
         return None
 
     with _lock:
@@ -256,6 +277,8 @@ def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None)
         }
         _save_cache(RESTAURANT_CACHE_PATH, cache)
 
+    _audit_log("restaurant", name, effective_city, result[0], result[1],
+               "google", (time.perf_counter() - t_start) * 1000.0)
     _log.info(f"Geocoded restaurant: {name} / city={effective_city} -> {result}")
     return result
 
