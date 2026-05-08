@@ -3,6 +3,7 @@
 Wywołuje:
 - event_bus.cleanup(retention_hours=48) — usuwa processed events + processed_events
 - event_bus.cleanup_audit_log(retention_days=90) — usuwa stare audit_log entries
+- event_bus.cleanup_broadcast(retention_days=7) — usuwa stare broadcast events (A4 follow-up)
 
 Run via systemd dispatch-event-bus-cleanup.timer (daily 04:00 UTC, off-peak).
 
@@ -42,6 +43,15 @@ def _dry_run_events() -> dict:
         return {"processed_events": pe, "events_processed": ev}
 
 
+def _dry_run_broadcast() -> int:
+    """Liczy broadcast events > 7d, bez DELETE."""
+    with event_bus._conn() as conn:
+        cur = conn.execute(
+            "SELECT COUNT(*) as cnt FROM events WHERE status='broadcast' AND created_at < datetime('now', '-7 days')"
+        )
+        return cur.fetchone()["cnt"]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Daily event_bus retention runner")
     parser.add_argument("--dry-run", action="store_true", help="log counts without DELETE")
@@ -53,17 +63,20 @@ def main() -> int:
     if args.dry_run:
         ev = _dry_run_events()
         au = _dry_run_audit()
+        bc = _dry_run_broadcast()
         _log.info(
             f"DRY_RUN would_delete: processed_events={ev['processed_events']} "
-            f"events_processed={ev['events_processed']} audit_log={au}"
+            f"events_processed={ev['events_processed']} audit_log={au} broadcast={bc}"
         )
         return 0
 
     try:
         deleted_queue = event_bus.cleanup(retention_hours=48)
         deleted_audit = event_bus.cleanup_audit_log(retention_days=90)
+        deleted_broadcast = event_bus.cleanup_broadcast(retention_days=7)
         _log.info(
-            f"DAILY_CLEANUP_DONE queue={deleted_queue} audit_log={deleted_audit}"
+            f"DAILY_CLEANUP_DONE queue={deleted_queue} audit_log={deleted_audit} "
+            f"broadcast={deleted_broadcast}"
         )
         return 0
     except Exception as e:

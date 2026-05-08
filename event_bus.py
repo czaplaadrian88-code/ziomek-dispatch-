@@ -452,6 +452,35 @@ def cleanup_audit_log(retention_days: int = 90) -> int:
         return deleted
 
 
+def cleanup_broadcast(retention_days: int = 7) -> int:
+    """Czysci broadcast events (status='broadcast') starsze niz retention_days.
+
+    A4 follow-up (2026-05-08): broadcast events nie są konsumowane przez
+    cleanup() (filtruje po status='processed') ani cleanup_audit_log() (osobna
+    tabela). Subscribers konsumują przez cursor (NIE zmieniają status), więc
+    bez tego GC events table puchnie liniowo z liczbą broadcast emit.
+
+    Default 7d retention: dłużej niż jakikolwiek realistyczny subscriber gap
+    (consumer offline >7d to incydent), krócej niż audit_log 90d (broadcast NIE
+    służy audit — od tego jest audit_log dla typów w AUDIT_EVENT_TYPES).
+
+    MP-#5: Skip podczas peak window (Warsaw lunch/dinner) — DELETE blokuje readers.
+    """
+    if _is_peak_window():
+        _log.info("cleanup_broadcast: skip — peak window (Warsaw lunch/dinner)")
+        return 0
+
+    with _conn() as conn:
+        cur = conn.execute(
+            """DELETE FROM events
+               WHERE status = 'broadcast' AND created_at < datetime('now', ?)""",
+            (f"-{retention_days} days",),
+        )
+        deleted = cur.rowcount
+        _log.info(f"cleanup_broadcast: usunieto {deleted} broadcast events (retention={retention_days}d)")
+        return deleted
+
+
 def get_pending_count(event_types: Optional[list] = None) -> int:
     """Zwraca liczbę pending events w tabeli events.
     Opcjonalnie filtruje po event_types (np. tylko queue typy dla WORKER_STUCK alert)."""
