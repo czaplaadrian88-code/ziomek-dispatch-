@@ -1194,6 +1194,21 @@ def build_keyboard(
     # Early return — NIE doklejamy INNY 8-grid + KOORD (poprzedni "safety net"
     # plan został rejected po visual check; mockup 1:1 = strict 4-button).
     if flag("PROPOSAL_FORMAT_V2", default=False):
+        # Tech-debt #21 (2026-05-08): F7AGREE row jest pomijany w V2 grid (strict
+        # 4-button mockup design, Adrian rejected safety net rows). Gdy oba flags
+        # ON jednocześnie, ostrzegamy raz per proces — F7AGREE metric NIE zbiera
+        # się gdy V2 LIVE. Backlog #12 calibration window wymaga albo flip
+        # PROPOSAL_FORMAT_V2=false na shadow week, albo ETL z shadow_decisions.jsonl.
+        if (
+            flag("FAZA7_AGREEMENT_BUTTONS_ENABLED", default=False)
+            and not getattr(build_keyboard, "_f7agree_v2_warned", False)
+        ):
+            _log.warning(
+                "F7AGREE_BUTTONS_ENABLED=True ignored — PROPOSAL_FORMAT_V2 ON "
+                "(mockup v2 strict 4-button, tech-debt #21). Aby zbierać "
+                "agreement metric: flip PROPOSAL_FORMAT_V2=false na shadow week."
+            )
+            build_keyboard._f7agree_v2_warned = True
         v2_rows = _build_keyboard_v2_grid(order_id, candidates, pickup_ready_at)
         return {"inline_keyboard": v2_rows}
 
