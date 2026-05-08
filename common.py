@@ -403,6 +403,23 @@ ENABLE_TIMELINE_FORMAT = _os_v317.environ.get("ENABLE_TIMELINE_FORMAT", "1") == 
 CITY_AWARE_GEOCODING = True
 
 # ============================================================
+# A3 — Geocode cache TTL + drift detection (audit STATE_OWNERSHIP F6 2026-05-07)
+# Cache (geocode_cache.json + restaurant_coords.json) ma `cached_at` od 2026-04
+# ALE TTL nigdy nie był enforce'owany — entries żyją wiecznie. Po remoncie ulicy
+# / zmianie numeracji / reorganizacji dzielnicy stale coords pozostają w cache
+# bez sygnału. Plus combo z MP-#13 OSRM degraded mode: stale geocode + cache hit
+# = silent stale propozycja.
+# ENABLE_GEOCODE_CACHE_TTL=True (default) → entries >30d trigger re-geocode.
+# ENABLE_GEOCODE_CACHE_DRIFT_ALERT=False (default OFF, opt-in) → gdy re-geocode
+# zwraca coords różniące się o >200m od cache, log WARN (Telegram alert opt-in
+# w przyszłości via flags.json runtime check).
+# ============================================================
+GEOCODE_CACHE_TTL_DAYS = float(os.environ.get("GEOCODE_CACHE_TTL_DAYS", "30"))
+GEOCODE_CACHE_DRIFT_ALERT_M = float(os.environ.get("GEOCODE_CACHE_DRIFT_ALERT_M", "200"))
+ENABLE_GEOCODE_CACHE_TTL = os.environ.get("ENABLE_GEOCODE_CACHE_TTL", "1") == "1"
+ENABLE_GEOCODE_CACHE_DRIFT_ALERT = os.environ.get("ENABLE_GEOCODE_CACHE_DRIFT_ALERT", "0") == "1"
+
+# ============================================================
 # Strict courier ID space flag (2026-04-19)
 # Bugfix: build_fleet_snapshot dodawał keys z kurier_piny.json (4-digit PIN-y)
 # jako osobnych kurierów obok prawdziwych courier_id z kurier_ids.json.

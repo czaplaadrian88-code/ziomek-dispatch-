@@ -93,6 +93,85 @@ def _save_cache(path: Path, data: dict):
         raise
 
 
+# ---------------------------------------------------------------------------
+# A3 (audit STATE_OWNERSHIP F6 2026-05-07): cache TTL + drift detection helpers
+# ---------------------------------------------------------------------------
+
+
+def _ttl_config() -> tuple:
+    """Lazy-load TTL flags z common.py. Returns (enabled, ttl_sec, drift_alert, drift_m).
+
+    Defensywne: import fail → defaults (TTL ON 30d, drift alert OFF, 200m).
+    """
+    try:
+        from dispatch_v2.common import (
+            ENABLE_GEOCODE_CACHE_TTL as _ttl_on,
+            GEOCODE_CACHE_TTL_DAYS as _ttl_days,
+            ENABLE_GEOCODE_CACHE_DRIFT_ALERT as _drift_on,
+            GEOCODE_CACHE_DRIFT_ALERT_M as _drift_m,
+        )
+        return (bool(_ttl_on), float(_ttl_days) * 86400.0, bool(_drift_on), float(_drift_m))
+    except Exception:
+        return (True, 30.0 * 86400.0, False, 200.0)
+
+
+def _is_cache_entry_fresh(entry: dict, ttl_sec: float) -> bool:
+    """Returns True jeśli entry jest świeży (NIE invalidate). Defensywnie:
+    missing/corrupt `cached_at` → True (legacy entries protected — nie wymuszamy
+    re-geocode masowego po deployu)."""
+    cached_at = entry.get("cached_at")
+    if not isinstance(cached_at, (int, float)):
+        return True
+    age_sec = time.time() - float(cached_at)
+    if age_sec < 0:
+        return True  # clock skew → defensive
+    return age_sec < ttl_sec
+
+
+def _drift_meters(old_lat: float, old_lon: float, new_lat: float, new_lon: float) -> float:
+    """Haversine distance w metrach między cache i nowym geocode result.
+    Lokalna implementacja (no circular import dispatch_v2.geometry → osrm_client → ...).
+    """
+    import math
+    R = 6371000.0  # earth radius m
+    lat1, lat2 = math.radians(old_lat), math.radians(new_lat)
+    dlat = lat2 - lat1
+    dlon = math.radians(new_lon - old_lon)
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+def cache_gc_stale(path: Path, ttl_sec: Optional[float] = None) -> dict:
+    """A3: bulk GC offline cleanup. Returns {scanned, removed, kept_legacy}.
+
+    `kept_legacy` = entries bez `cached_at` (defensive — nie usuwamy bez sygnału).
+    Atomic save via _save_cache (LOCK_EX + tempfile + rename).
+    """
+    if ttl_sec is None:
+        _, ttl_sec, _, _ = _ttl_config()
+    with _lock:
+        cache = _load_cache(path)
+        scanned = len(cache)
+        removed = 0
+        kept_legacy = 0
+        now = time.time()
+        keys_to_del = []
+        for key, entry in cache.items():
+            cached_at = entry.get("cached_at")
+            if not isinstance(cached_at, (int, float)):
+                kept_legacy += 1
+                continue
+            if (now - float(cached_at)) >= ttl_sec:
+                keys_to_del.append(key)
+        for key in keys_to_del:
+            del cache[key]
+            removed += 1
+        if removed > 0:
+            _save_cache(path, cache)
+    _log.info(f"cache_gc_stale path={path.name} scanned={scanned} removed={removed} kept_legacy={kept_legacy}")
+    return {"scanned": scanned, "removed": removed, "kept_legacy": kept_legacy}
+
+
 def _normalize(address: str, city: str) -> str:
     """Znormalizuj adres do klucza cache - lowercase, no extra spaces, usun lok/m/pietro.
 
@@ -186,14 +265,24 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
 
     key = _normalize(address, effective_city)
 
+    # A3: TTL check + drift alert prep (przed cache hit decision)
+    ttl_on, ttl_sec, _drift_on, _drift_m = _ttl_config()
+    stale_old_coords = None  # populated jeśli cache hit ALE stale
+
     with _lock:
         cache = _load_cache(CACHE_PATH)
         if key in cache:
-            _stats["hits"] += 1
             entry = cache[key]
-            _audit_log("address", address, effective_city, entry["lat"], entry["lon"],
-                       "cache", (time.perf_counter() - t_start) * 1000.0)
-            return (entry["lat"], entry["lon"])
+            if not ttl_on or _is_cache_entry_fresh(entry, ttl_sec):
+                _stats["hits"] += 1
+                _audit_log("address", address, effective_city, entry["lat"], entry["lon"],
+                           "cache", (time.perf_counter() - t_start) * 1000.0)
+                return (entry["lat"], entry["lon"])
+            # Stale: zachowaj old coords dla drift alert post re-geocode
+            stale_old_coords = (entry["lat"], entry["lon"])
+            _stats.setdefault("stale_invalidated", 0)
+            _stats["stale_invalidated"] += 1
+            _log.info(f"cache TTL invalidate key={key!r} age_d={((time.time() - entry.get('cached_at', 0)) / 86400.0):.1f}")
 
     _stats["misses"] += 1
 
@@ -223,6 +312,20 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
         }
         _save_cache(CACHE_PATH, cache)
 
+    # A3: drift alert gdy stale entry był re-geocoded i nowe coords różnią się
+    # >threshold od cache. Opt-in flag (default OFF) — log WARN ujawnia
+    # geographic instability (remont ulicy, zmiana numeracji, geocoder accuracy).
+    if stale_old_coords is not None and _drift_on:
+        drift_m = _drift_meters(stale_old_coords[0], stale_old_coords[1], result[0], result[1])
+        if drift_m >= _drift_m:
+            _log.warning(
+                f"GEOCODE_DRIFT_ALERT key={key!r} drift={drift_m:.0f}m "
+                f"old=({stale_old_coords[0]:.6f},{stale_old_coords[1]:.6f}) "
+                f"new=({result[0]:.6f},{result[1]:.6f}) source={source}"
+            )
+            _stats.setdefault("drift_alerts", 0)
+            _stats["drift_alerts"] += 1
+
     _audit_log("address", address, effective_city, result[0], result[1],
                source, (time.perf_counter() - t_start) * 1000.0)
     _log.info(f"Geocoded: {address} / city={effective_city} -> {result} ({source})")
@@ -241,14 +344,23 @@ def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None)
     key = name.strip().lower()
     t_start = time.perf_counter()
 
+    # A3: TTL check + drift alert prep dla restaurant cache
+    ttl_on, ttl_sec, _drift_on, _drift_m = _ttl_config()
+    stale_old_coords = None
+
     with _lock:
         cache = _load_cache(RESTAURANT_CACHE_PATH)
         if key in cache:
-            _stats["hits"] += 1
             entry = cache[key]
-            _audit_log("restaurant", name, entry.get("city"), entry["lat"], entry["lon"],
-                       "cache", (time.perf_counter() - t_start) * 1000.0)
-            return (entry["lat"], entry["lon"])
+            if not ttl_on or _is_cache_entry_fresh(entry, ttl_sec):
+                _stats["hits"] += 1
+                _audit_log("restaurant", name, entry.get("city"), entry["lat"], entry["lon"],
+                           "cache", (time.perf_counter() - t_start) * 1000.0)
+                return (entry["lat"], entry["lon"])
+            stale_old_coords = (entry["lat"], entry["lon"])
+            _stats.setdefault("stale_invalidated", 0)
+            _stats["stale_invalidated"] += 1
+            _log.info(f"restaurant cache TTL invalidate key={key!r}")
 
     _stats["misses"] += 1
 
@@ -276,6 +388,19 @@ def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None)
             "cached_at": time.time(),
         }
         _save_cache(RESTAURANT_CACHE_PATH, cache)
+
+    # A3: drift alert dla restaurant cache (zmiana lokalizacji restauracji =
+    # rzadkie ale silent jeśli się zdarzy)
+    if stale_old_coords is not None and _drift_on:
+        drift_m = _drift_meters(stale_old_coords[0], stale_old_coords[1], result[0], result[1])
+        if drift_m >= _drift_m:
+            _log.warning(
+                f"GEOCODE_DRIFT_ALERT (restaurant) name={name!r} drift={drift_m:.0f}m "
+                f"old=({stale_old_coords[0]:.6f},{stale_old_coords[1]:.6f}) "
+                f"new=({result[0]:.6f},{result[1]:.6f})"
+            )
+            _stats.setdefault("drift_alerts", 0)
+            _stats["drift_alerts"] += 1
 
     _audit_log("restaurant", name, effective_city, result[0], result[1],
                "google", (time.perf_counter() - t_start) * 1000.0)
