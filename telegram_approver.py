@@ -712,10 +712,10 @@ def _gps_marker_v2(pos_source: Optional[str]) -> str:
 
 
 def _bag_emoji_v2(bag_n: int) -> str:
-    """Bag count → emoji bucket (mockup v2 spec)."""
-    if bag_n <= 0:
+    """Bag count → emoji bucket (Adrian 2026-05-08): 0-1=🟢, 2-3=🟡, 4+=🔴."""
+    if bag_n <= 1:
         return "🟢"
-    if bag_n == 1:
+    if bag_n <= 3:
         return "🟡"
     return "🔴"
 
@@ -771,7 +771,8 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
     """Wave-aware chronological trasa dla wybranego kuriera.
 
     Iteruje wszystkie stopy z best.plan.pickup_at + best.plan.predicted_delivered_at,
-    sortuje po czasie. Każdy stop = "• HH:MM — odbiór|dostawa: {addr} (#{oid}{ ← TA})".
+    sortuje po czasie. Każdy stop = "🍕|📍 HH:MM — {addr}{ ← TA?}" (🍕 odbiór, 📍 dostawa).
+    Start line: "🚖 HH:MM — start ({pos_marker})".
 
     Adres source per oid:
       - decision.order_id → decision.restaurant / decision.delivery_address
@@ -850,20 +851,21 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
         # gdzie pipeline nie wystawił TSP planu).
         pickup_hhmm, pickup_in_min = _pickup_ready_warsaw(decision, now_utc)
         drop_eta_hhmm = _drop_eta_hhmm_v2(decision, best, pickup_in_min, now_utc)
-        out = ["🗺 Trasa:", f"• {now_hhmm} — start ({pos_marker})"]
+        out = ["🗺 Trasa:", f"🚖 {now_hhmm} — start ({pos_marker})"]
         if pickup_hhmm is not None:
-            out.append(f"• {pickup_hhmm} — odbiór: {cur_rest} (#{cur_oid} ← TA)")
+            out.append(f"🍕 {pickup_hhmm} — {cur_rest} ← TA")
         if drop_eta_hhmm is not None:
-            out.append(f"• {drop_eta_hhmm} — dostawa: {cur_drop} (#{cur_oid} ← TA)")
+            out.append(f"📍 {drop_eta_hhmm} — {cur_drop} ← TA")
         return out
 
     stops.sort(key=lambda x: x[0])
 
-    out = ["🗺 Trasa:", f"• {now_hhmm} — start ({pos_marker})"]
+    out = ["🗺 Trasa:", f"🚖 {now_hhmm} — start ({pos_marker})"]
     for dt, kind, oid, addr in stops:
         hhmm = dt.astimezone(WARSAW).strftime("%H:%M")
+        icon = "🍕" if kind == "odbiór" else "📍"
         ta_marker = " ← TA" if oid == cur_oid else ""
-        out.append(f"• {hhmm} — {kind}: {addr} (#{oid}{ta_marker})")
+        out.append(f"{icon} {hhmm} — {addr}{ta_marker}")
     return out
 
 

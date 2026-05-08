@@ -109,11 +109,9 @@ def test_v2_body_happy_path():
     assert "← WYBRANY" not in cand_lines[2]
     assert "🗺 Trasa:" in out
     assert "— start" in out
-    # Wave-aware route post-2026-05-07 extension+route sprint:
-    # bez plan.pickup_at + predicted_delivered_at → fallback layout
-    # z explicit "odbiór: ..." prefix + #oid + "← TA" marker.
-    assert "odbiór: Restauracja Kumar's" in out
-    assert "(#471167 ← TA)" in out
+    # Route emoji redesign 2026-05-08: 🍕 odbiór / 📍 dostawa, no #oid, ← TA preserved.
+    assert "🍕" in out and "Restauracja Kumar's ← TA" in out
+    assert "#471167" not in out
 
 
 def test_v2_conf_bucket_auto_ack_alert():
@@ -167,10 +165,12 @@ def test_v2_gps_markers_full_live_distribution():
 
 
 def test_v2_bag_emoji_buckets():
-    """Bag count → emoji bucket (0=🟢, 1=🟡, 2+=🔴)."""
+    """Bag count → emoji bucket (Adrian 2026-05-08): 0-1=🟢, 2-3=🟡, 4+=🔴."""
     assert ta._bag_emoji_v2(0) == "🟢"
-    assert ta._bag_emoji_v2(1) == "🟡"
-    assert ta._bag_emoji_v2(2) == "🔴"
+    assert ta._bag_emoji_v2(1) == "🟢"
+    assert ta._bag_emoji_v2(2) == "🟡"
+    assert ta._bag_emoji_v2(3) == "🟡"
+    assert ta._bag_emoji_v2(4) == "🔴"
     assert ta._bag_emoji_v2(5) == "🔴"
     assert ta._bag_emoji_v2(-1) == "🟢"  # defensive
 
@@ -354,20 +354,27 @@ def test_v2_route_iterates_plan_sequence_chronological():
     }
     out = ta._format_proposal_v2(d)
     lines = out.split("\n")
-    route_lines = [ln for ln in lines if ln.startswith("• ")]
+    # Route lines after redesign 2026-05-08: start (🚖) + stops (🍕 odbiór / 📍 dostawa).
+    # Filter only lines AFTER "🗺 Trasa:" marker żeby pominąć header (też zaczyna się 🚖).
+    trasa_idx = next(i for i, ln in enumerate(lines) if ln.startswith("🗺 Trasa:"))
+    route_lines = [ln for ln in lines[trasa_idx + 1:] if ln.startswith(("🚖 ", "🍕 ", "📍 "))]
     # 1 start + 6 stopów (3 pickup + 3 drop)
     assert len(route_lines) == 7, f"oczekiwane 7 linii (start + 6 stopów), got {len(route_lines)}: {route_lines}"
     # Sortowanie chronologiczne: pickup 471180 → pickup 471181 → pickup 471167 (← TA)
     # → drop 471180 → drop 471167 (← TA) → drop 471181
-    assert "odbiór: Pizzeria Roma (#471180)" in route_lines[1]
-    assert "odbiór: Sushi Kim (#471181)" in route_lines[2]
-    assert "odbiór: Restauracja Kumar's (#471167 ← TA)" in route_lines[3]
-    assert "dostawa: Lipowa 5 (#471180)" in route_lines[4]
-    assert "dostawa: Rzemieślnicza 40/44 (#471167 ← TA)" in route_lines[5]
-    assert "dostawa: Mickiewicza 12 (#471181)" in route_lines[6]
-    # ← TA tylko dla decision.order_id (#471167)
+    assert route_lines[0].startswith("🚖 ") and "— start" in route_lines[0]
+    assert route_lines[1].startswith("🍕 ") and "Pizzeria Roma" in route_lines[1] and "← TA" not in route_lines[1]
+    assert route_lines[2].startswith("🍕 ") and "Sushi Kim" in route_lines[2] and "← TA" not in route_lines[2]
+    assert route_lines[3].startswith("🍕 ") and "Restauracja Kumar's ← TA" in route_lines[3]
+    assert route_lines[4].startswith("📍 ") and "Lipowa 5" in route_lines[4] and "← TA" not in route_lines[4]
+    assert route_lines[5].startswith("📍 ") and "Rzemieślnicza 40/44 ← TA" in route_lines[5]
+    assert route_lines[6].startswith("📍 ") and "Mickiewicza 12" in route_lines[6] and "← TA" not in route_lines[6]
+    # ← TA tylko dla decision.order_id (#471167) — zachowane mimo usunięcia #oid
     ta_marks = [ln for ln in route_lines if "← TA" in ln]
-    assert len(ta_marks) == 2, f"← TA powinno być dokładnie 2× (pickup+drop dla #471167): {ta_marks}"
+    assert len(ta_marks) == 2, f"← TA powinno być dokładnie 2× (pickup+drop dla 471167): {ta_marks}"
+    # Order numbers usunięte z route lines per Adrian 2026-05-08
+    for ln in route_lines:
+        assert "#" not in ln, f"order number nie powinien występować w route line: {ln!r}"
 
 
 def test_v2_route_fallback_when_no_plan_data():
@@ -378,11 +385,13 @@ def test_v2_route_fallback_when_no_plan_data():
     # bez best.plan
     out = ta._format_proposal_v2(d)
     lines = out.split("\n")
-    route_lines = [ln for ln in lines if ln.startswith("• ")]
+    trasa_idx = next(i for i, ln in enumerate(lines) if ln.startswith("🗺 Trasa:"))
+    route_lines = [ln for ln in lines[trasa_idx + 1:] if ln.startswith(("🚖 ", "🍕 ", "📍 "))]
     # start + odbiór (drop bez predicted ETA → pominięty zgodnie z _drop_eta_hhmm_v2 None)
-    assert any("— start (" in ln for ln in route_lines), f"brak start line: {route_lines}"
-    assert any("odbiór: Restauracja Kumar's (#471167 ← TA)" in ln for ln in route_lines), \
-        f"fallback brak odbiór line z #oid + ← TA: {route_lines}"
+    assert any(ln.startswith("🚖 ") and "— start (" in ln for ln in route_lines), f"brak start line: {route_lines}"
+    assert any(ln.startswith("🍕 ") and "Restauracja Kumar's ← TA" in ln for ln in route_lines), \
+        f"fallback brak odbiór line z 🍕 + ← TA: {route_lines}"
+    assert all("#" not in ln for ln in route_lines), f"#oid nie powinien występować: {route_lines}"
 
 
 def test_v2_pickup_extension_delta_helper_unit():
