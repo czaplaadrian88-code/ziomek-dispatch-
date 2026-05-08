@@ -14,7 +14,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import load_config, now_iso, setup_logger
@@ -52,6 +52,18 @@ EVENT_TYPES = {
     # ValueError → state_machine NIE dostaje update → orders_state stale czas_kuriera.
     # state_machine.py:316 ma już handler. Dodanie do allowlist completes V3.19g1.
     "CZAS_KURIERA_UPDATED",
+    # A4 (audit META RC2 2026-05-07): CONFIG_RELOAD broadcast event dla
+    # cache invalidation cross-process. Każdy long-running service polling'uje
+    # via poll_broadcast() + invalidate per-process caches gdy scope match.
+    # Zamyka Decyzja #4 Redis "post-Postgres lub never" (events.db wystarczy).
+    "CONFIG_RELOAD",
+}
+
+# A4: broadcast events nie są queue (no consumer mark_processed) ani audit
+# (nie historical only). Status='broadcast' w events table → invisible dla
+# get_pending(NEW_ORDER) etc. Subscribery używają poll_broadcast() z cursor.
+BROADCAST_EVENT_TYPES = {
+    "CONFIG_RELOAD",
 }
 
 # Opcja C (2026-05-07): rozdzielenie ról events.db (queue vs audit log).
@@ -69,7 +81,7 @@ AUDIT_EVENT_TYPES = {
 
 # QUEUE_EVENT_TYPES — typy z lifecycle pending → processed w tabeli events.
 # Konsumenci: shadow_dispatcher (NEW_ORDER) + sla_tracker (PICKED_UP, DELIVERED).
-QUEUE_EVENT_TYPES = EVENT_TYPES - AUDIT_EVENT_TYPES
+QUEUE_EVENT_TYPES = EVENT_TYPES - AUDIT_EVENT_TYPES - BROADCAST_EVENT_TYPES
 
 _log = setup_logger("event_bus", "/root/.openclaw/workspace/scripts/logs/events.log")
 
@@ -461,3 +473,131 @@ def get_pending_count(event_types: Optional[list] = None) -> int:
 # Lazy init: _init_audit_log_table() wywoływane przy pierwszym emit_audit /
 # cleanup_audit_log via _ensure_audit_log_initialized(). NIE robimy module-load
 # init bo test env może nie mieć dostępu do _db_path() / load_config()['paths'].
+
+
+# ===========================================================================
+# A4 (audit META RC2 2026-05-07) — CONFIG_RELOAD broadcast pub/sub
+# ===========================================================================
+
+
+def make_broadcast_event_id(scope: str) -> str:
+    """Collision-immune event_id dla broadcast events.
+
+    Pattern: CONFIG_RELOAD_<scope>_<ns>_<hex>
+    ns = time.time_ns() (nanoseconds since epoch, monotonic enough)
+    hex = 8-char random suffix dla cross-process collision safety
+    """
+    import secrets
+    return f"CONFIG_RELOAD_{scope}_{time.time_ns()}_{secrets.token_hex(4)}"
+
+
+def _emit_broadcast_inner(
+    event_type: str,
+    scope: str,
+    payload_json: str,
+    created_at: str,
+    event_id: str,
+) -> Optional[str]:
+    """Inner emit dla broadcast events. status='broadcast' (NIE pending) — invisible
+    dla queue consumers (get_pending). Wrapped przez emit_config_reload."""
+    with _conn() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO events
+                   (event_id, event_type, order_id, courier_id, payload, created_at, status)
+                   VALUES (?, ?, NULL, NULL, ?, ?, 'broadcast')""",
+                (event_id, event_type, payload_json, created_at),
+            )
+            if cur.rowcount == 0:
+                conn.execute("COMMIT;")
+                _log.debug(f"DUP broadcast: {event_id}")
+                return None
+            conn.execute("COMMIT;")
+            _log.info(f"BROADCAST {event_type} scope={scope} id={event_id}")
+            return event_id
+        except sqlite3.OperationalError:
+            conn.execute("ROLLBACK;")
+            raise
+        except Exception as e:
+            conn.execute("ROLLBACK;")
+            _log.error(f"emit_broadcast() error: {e}")
+            raise
+
+
+def emit_config_reload(scope: str, payload: Optional[dict] = None) -> Optional[str]:
+    """Broadcast CONFIG_RELOAD event do wszystkich subscriberów.
+
+    scope: identifier co się zmieniło (np. 'flags', 'courier_tiers', 'kurier_ids').
+    payload: dict z details (np. {"name": "FLAG_X", "value": True}) — subscriber
+             może użyć do targeted invalidation albo zignorować i zrobić full reload.
+
+    Returns event_id (or None gdy SQLite locked exhausted retry).
+    Defensywne: emit fail NIE crashuje callera (logowane, return None).
+
+    Używa status='broadcast' w events table — invisible dla get_pending/queue
+    consumers. Subscriber używa poll_broadcast() z per-process cursor.
+    """
+    payload_dict = dict(payload or {})
+    payload_dict.setdefault("scope", scope)
+    payload_json = json.dumps(payload_dict, ensure_ascii=False)
+    created_at = now_iso()
+    event_id = make_broadcast_event_id(scope)
+    try:
+        return _retry_on_locked(
+            _emit_broadcast_inner, "CONFIG_RELOAD", scope, payload_json, created_at, event_id,
+        )
+    except Exception as e:
+        _log.error(f"emit_config_reload(scope={scope}) FAIL ({type(e).__name__}: {e})")
+        return None
+
+
+def poll_broadcast(
+    event_types: List[str],
+    since_event_id: Optional[str] = None,
+    limit: int = 100,
+) -> List[dict]:
+    """Subscriber poll dla broadcast events.
+
+    event_types: lista typów do filter (musi być subset BROADCAST_EVENT_TYPES).
+    since_event_id: cursor — zwracane TYLKO eventy z event_id > since (lex order).
+                    None → returns all broadcast events od początku (use cap dla limit).
+    limit: max events zwróconych w jednym poll.
+
+    Returns lista dictów {event_id, event_type, payload, created_at}.
+    Subscriber persistuje max(event_id) jako new cursor.
+    """
+    bad = [t for t in event_types if t not in BROADCAST_EVENT_TYPES]
+    if bad:
+        raise ValueError(f"poll_broadcast: event_types {bad} not in BROADCAST_EVENT_TYPES={BROADCAST_EVENT_TYPES}")
+    placeholders = ",".join("?" * len(event_types))
+    with _conn() as conn:
+        if since_event_id:
+            cur = conn.execute(
+                f"""SELECT event_id, event_type, payload, created_at
+                    FROM events
+                    WHERE status = 'broadcast'
+                      AND event_type IN ({placeholders})
+                      AND event_id > ?
+                    ORDER BY event_id ASC LIMIT ?""",
+                tuple(event_types) + (since_event_id, limit),
+            )
+        else:
+            cur = conn.execute(
+                f"""SELECT event_id, event_type, payload, created_at
+                    FROM events
+                    WHERE status = 'broadcast'
+                      AND event_type IN ({placeholders})
+                    ORDER BY event_id ASC LIMIT ?""",
+                tuple(event_types) + (limit,),
+            )
+        return [
+            {
+                "event_id": row["event_id"],
+                "event_type": row["event_type"],
+                "payload": json.loads(row["payload"]) if row["payload"] else {},
+                "created_at": row["created_at"],
+            }
+            for row in cur.fetchall()
+        ]
+

@@ -34,6 +34,25 @@ from dispatch_v2.core.flags_io import (
 )
 
 
+def _broadcast_flags_reload(name: str, action: str, value=None) -> None:
+    """A4 (audit META RC2): emit CONFIG_RELOAD scope='flags' po mutacji.
+
+    Defensive: emit fail NIE blokuje CLI exit (reload pozostaje opcjonalny —
+    flags.json mtime hot-reload nadal działa via common.flag()). Logowane gdy
+    fail żeby debug był możliwy. Best-effort signal dla future per-process
+    cache invalidation (courier_tiers, etc.) gdy podobne broadcast dodane.
+    """
+    try:
+        from dispatch_v2 import event_bus
+        payload = {"name": name, "action": action}
+        if value is not None and action == "set":
+            payload["value"] = value
+        event_bus.emit_config_reload(scope="flags", payload=payload)
+    except Exception as _e:
+        # NIE re-raise — CLI musi exit OK gdy mutation się powiodło
+        sys.stderr.write(f"# warning: emit_config_reload FAIL ({type(_e).__name__}: {_e})\n")
+
+
 def _parse_value(raw: str):
     """Parse CLI value as JSON; fallback to bare string."""
     try:
@@ -45,6 +64,7 @@ def _parse_value(raw: str):
 def cmd_set(args: argparse.Namespace) -> int:
     value = _parse_value(args.value)
     flags = update_flag(args.name, value)
+    _broadcast_flags_reload(args.name, "set", flags[args.name])
     print(json.dumps(
         {"ok": True, "name": args.name, "value": flags[args.name]},
         ensure_ascii=False,
@@ -56,6 +76,8 @@ def cmd_del(args: argparse.Namespace) -> int:
     flags_pre = load_flags()
     existed = args.name in flags_pre
     delete_flag(args.name)
+    if existed:
+        _broadcast_flags_reload(args.name, "del")
     print(json.dumps(
         {"ok": True, "name": args.name, "existed": existed},
         ensure_ascii=False,

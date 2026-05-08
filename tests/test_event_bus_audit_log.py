@@ -60,17 +60,25 @@ def _restore_db(monkeypatch_target_dict: dict, db_path: str):
     Path(db_path + "-shm").unlink(missing_ok=True)
 
 
-# ─── Test 1: AUDIT/QUEUE sets disjoint + cover EVENT_TYPES ──────────────
+# ─── Test 1: AUDIT/QUEUE/BROADCAST sets disjoint + cover EVENT_TYPES ────
 def test_audit_queue_sets_disjoint_and_complete():
-    overlap = event_bus.AUDIT_EVENT_TYPES & event_bus.QUEUE_EVENT_TYPES
-    assert overlap == set(), f"AUDIT and QUEUE overlap: {overlap}"
-    union = event_bus.AUDIT_EVENT_TYPES | event_bus.QUEUE_EVENT_TYPES
+    """A4 (2026-05-08): teraz 3 sets — AUDIT, QUEUE, BROADCAST — disjoint
+    + union == EVENT_TYPES."""
+    audit = event_bus.AUDIT_EVENT_TYPES
+    queue = event_bus.QUEUE_EVENT_TYPES
+    broadcast = event_bus.BROADCAST_EVENT_TYPES
+    assert audit & queue == set(), f"AUDIT and QUEUE overlap: {audit & queue}"
+    assert audit & broadcast == set(), f"AUDIT and BROADCAST overlap: {audit & broadcast}"
+    assert queue & broadcast == set(), f"QUEUE and BROADCAST overlap: {queue & broadcast}"
+    union = audit | queue | broadcast
     assert union == event_bus.EVENT_TYPES, f"Union != EVENT_TYPES: missing {event_bus.EVENT_TYPES - union}"
     # Sanity: 4 audit types
-    assert event_bus.AUDIT_EVENT_TYPES == {
+    assert audit == {
         "COURIER_ASSIGNED", "CZAS_KURIERA_UPDATED",
         "PANEL_UNREACHABLE", "ORDER_RETURNED_TO_POOL",
     }
+    # Sanity: A4 broadcast types
+    assert broadcast == {"CONFIG_RELOAD"}
 
 
 # ─── Test 2: audit_log schema has NO status column ──────────────────────
