@@ -445,6 +445,37 @@ def test_v2_pickup_label_fallback_no_best_eta():
     assert "⏱️ Odbiór:" in out
 
 
+# ----- ETAP 2 route start clamp tests (2026-05-08) -----
+
+def test_v2_route_start_uses_effective_start_at():
+    """V3.28 ETAP 2: best.effective_start_at = shift_start (UTC ISO) → trasa
+    "start" line pokazuje shift_start Warsaw zamiast real now."""
+    d = _mk_decision()
+    # 09:00 UTC = 11:00 Warsaw (CEST)
+    d["best"]["effective_start_at"] = "2026-05-08T09:00:00+00:00"
+    d["best"]["pos_source"] = "pre_shift"
+    out = ta._format_proposal_v2(d)
+    # Trasa MUSI mieć "11:00 — start" (shift_start), NIE now_hhmm
+    route_section = out.split("🗺 Trasa:")[1] if "🗺 Trasa:" in out else ""
+    assert "11:00 — start" in route_section, \
+        f"trasa start ≠ 11:00 (effective_start_at): {route_section[:200]}"
+
+
+def test_v2_route_start_falls_back_to_now():
+    """Gdy brak best.effective_start_at (gps kurier, post-shift, legacy) →
+    trasa "start" line używa now_hhmm (backward compat)."""
+    d = _mk_decision()
+    # No effective_start_at field
+    out = ta._format_proposal_v2(d)
+    route_section = out.split("🗺 Trasa:")[1] if "🗺 Trasa:" in out else ""
+    assert "— start" in route_section
+    # NIE pokazuje 11:00 (bo brak effective_start_at) — używa now_hhmm dynamicznie
+    # Konkretna wartość zależna od now() at runtime, więc wystarczy że jakiś hh:mm jest
+    import re
+    assert re.search(r"\d{2}:\d{2} — start", route_section), \
+        f"start line nie ma HH:MM: {route_section[:200]}"
+
+
 # ----- runner -----
 
 def main():
@@ -472,6 +503,10 @@ def main():
          test_v2_pickup_label_fallback_no_mins_since_creation),
         ('v2_pickup_label_fallback_no_best_eta',
          test_v2_pickup_label_fallback_no_best_eta),
+        ('v2_route_start_uses_effective_start_at',
+         test_v2_route_start_uses_effective_start_at),
+        ('v2_route_start_falls_back_to_now',
+         test_v2_route_start_falls_back_to_now),
     ]
     print('=' * 60)
     print('Mockup v2 — operator-friendly Telegram propozycja redesign')

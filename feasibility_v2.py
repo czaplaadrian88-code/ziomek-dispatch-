@@ -187,6 +187,7 @@ def check_feasibility_v2(
     sla_minutes: int = DEFAULT_SLA_MINUTES,
     base_sequence: Optional[List[str]] = None,  # V3.19d passthrough
     r07_chain_eta_utc: Optional[datetime] = None,  # V3.26 STEP 6 (R-07 v2) — chain_eta source of truth dla R-01 MANDATORY
+    pos_source: Optional[str] = None,  # V3.28 ETAP 2 — pre_shift departure clamp gate
 ) -> Tuple[str, str, Dict, Optional[RoutePlanV2]]:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -352,9 +353,22 @@ def check_feasibility_v2(
     if pickup_ready_at is not None and new_order.pickup_ready_at is None:
         new_order = replace(new_order, pickup_ready_at=pickup_ready_at)
 
+    # V3.28 ETAP 2 (2026-05-08): pre_shift departure clamp. Pre_shift/no_gps
+    # kurier z shift_start > now → simulate dostaje earliest_departure=shift_start.
+    # Plan timestamps shift'owane od shift_start (eliminuje fikcyjny "kurier
+    # startuje teraz" dla kuriera który jeszcze nie pracuje). Flag-gated.
+    earliest_departure = None
+    if (getattr(C, "ENABLE_PRE_SHIFT_DEPARTURE_CLAMP", False)
+            and shift_start is not None
+            and pos_source in ("pre_shift", "no_gps")
+            and shift_start > now):
+        earliest_departure = shift_start
+        metrics["earliest_departure_utc"] = earliest_departure.isoformat()
+        metrics["pre_shift_clamp_applied"] = True
+
     plan = simulate_bag_route_v2(
         courier_pos, bag, new_order, now=now, sla_minutes=sla_minutes,
-        base_sequence=base_sequence,
+        base_sequence=base_sequence, earliest_departure=earliest_departure,
     )
 
     metrics["sequence"] = plan.sequence

@@ -702,6 +702,19 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
     bez plan-data (legacy behavior).
     """
     now_hhmm = _to_warsaw_hhmm(now_utc)
+    # V3.28 ETAP 2 (2026-05-08): pre_shift kurier ma effective_start_at = shift_start
+    # (clamp w feasibility/route_simulator). "Start" line trasy pokazuje shift_start
+    # zamiast real now — eliminuje fikcyjny "10:31 — start" gdy kurier zaczyna 11:00.
+    # Fallback do now gdy brak pola (legacy, post-shift, gps kurier).
+    start_iso = (best or {}).get("effective_start_at")
+    if start_iso:
+        try:
+            _sd = datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
+            if _sd.tzinfo is None:
+                _sd = _sd.replace(tzinfo=timezone.utc)
+            now_hhmm = _to_warsaw_hhmm(_sd)
+        except Exception:
+            pass
     pos_marker = _gps_marker_v2((best or {}).get("pos_source"))
     cur_oid = str(decision.get("order_id") or "")
     cur_rest = decision.get("restaurant") or "?"

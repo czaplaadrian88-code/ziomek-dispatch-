@@ -1140,6 +1140,16 @@ V325_PRE_SHIFT_SOFT_PENALTY = -20
 # zachowuje to ale flag-gated osobno dla rollout independence).
 V325_DROPOFF_AFTER_SHIFT_HARD_MIN = 5
 
+# V3.28 ETAP 2 (2026-05-08) — pre_shift departure clamp.
+# Gdy True: dla kandydata z pos_source in {"pre_shift", "no_gps"} i
+# shift_start > now, simulate_bag_route_v2 dostaje earliest_departure=shift_start
+# zamiast bazować plan na real now. Skutek: plan timestamps (pickup_at,
+# predicted_delivered_at) liczone od shift_start → telegram trasa pokazuje
+# realny "11:00 start, 11:05 odbiór" zamiast fikcyjnego "10:31 start" dla
+# kuriera który jeszcze nie pracuje. Default False — flip po shadow obs.
+ENABLE_PRE_SHIFT_DEPARTURE_CLAMP = _os.environ.get(
+    "ENABLE_PRE_SHIFT_DEPARTURE_CLAMP", "0") == "1"
+
 # V3.25 STEP C (R-04 NEW-COURIER-CAP gradient) — post-scoring penalty layer
 # dla kurierów z tier_label='new' (Szymon Sa cid=522, Grzegorz Rogowski cid=500).
 # Adrian's heurystyka: nowi mają +30% delivery time uncertainty + brak orientacji

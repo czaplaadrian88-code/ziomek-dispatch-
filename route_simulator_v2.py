@@ -141,6 +141,7 @@ def simulate_bag_route_v2(
     now: Optional[datetime] = None,
     sla_minutes: int = 35,
     base_sequence: Optional[List[str]] = None,
+    earliest_departure: Optional[datetime] = None,
 ) -> RoutePlanV2:
     """Hybrid simulator. Never returns None (osrm_client has fallback).
 
@@ -148,11 +149,23 @@ def simulate_bag_route_v2(
     kolejności) — bag dropoffs są lockowane w tej kolejności; simulator
     iteruje tylko pozycje insertion new_order zamiast pełnego TSP. Jeśli
     base_sequence jest mismatched z bag → fallback do fresh TSP.
+
+    V3.28 ETAP 2 (2026-05-08): earliest_departure wymusza start planu od
+    późniejszego momentu (np. shift_start dla pre_shift kuriera). Gdy
+    earliest_departure > now, downstream timestamps (pickup_at, delivered_at)
+    bazują na earliest_departure zamiast real now — eliminuje fikcyjny plan
+    "kurier startuje teraz" dla kuriera który zaczyna shift za N min.
+    Flag-gated w feasibility caller (ENABLE_PRE_SHIFT_DEPARTURE_CLAMP).
     """
     if now is None:
         now = datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
+    if earliest_departure is not None:
+        if earliest_departure.tzinfo is None:
+            earliest_departure = earliest_departure.replace(tzinfo=timezone.utc)
+        if earliest_departure > now:
+            now = earliest_departure
 
     need_pickup = new_order.status != "picked_up"
 
