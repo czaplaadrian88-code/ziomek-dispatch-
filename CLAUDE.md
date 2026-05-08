@@ -36,11 +36,125 @@ Zawiera:
 - State: `/root/.openclaw/workspace/dispatch_state/`
 - Logs: `/root/.openclaw/workspace/scripts/logs/`
 - Health: `http://localhost:8888/health/parser`
+- **Audyt architektoniczny:** `dispatch_v2/AUDIT_2026-05-07/` — pełna analiza architektury z 07.05.2026 wieczór: mapa systemu (16 services + 12 timers + lifecycle ordera), top 20 ryzyk priorytetyzowanych P×I, lista 10 najbardziej krytycznych plików (god objects, fan-in, except count), 10 modułów do deep audit (Tier A/B/C), oceny: maintainability 5/10, scalability 3/10, production 6/10. Quick wins P0-P2 + appendix konkretnych anti-patterns z `plik:linia`. Cross-ref: TECH_DEBT.md, MEMORY/lessons.md #32/#80/#81/#82. Re-audit cadence: pre-Faza 7 100% flip / pre-multi-tenant Warsaw.
 
 ---
 
 **Owner:** Adrian Czapla <ac@nadajesz.pl>
-**Last update CLAUDE.md:** 07.05.2026 noc (parser_health structural fix — active_ids = order_ids - closed_ids)
+**Last update CLAUDE.md:** 07.05.2026 ~11:18 Warsaw (firmowe Nadajesz.pl uwagi parser + fallback coords + 6-warstwowa defense + R6 BAG_TIME suppress, post-sprint 07.05 morning #4)
+
+---
+
+# CLAUDE.md — Nadajesz.pl firmowe konto + alert suppress sprint (post-sprint 07.05 morning #4)
+
+**Data:** 07.05.2026 08:41-09:18 UTC (= 10:41-11:18 Warsaw, **deploy w peaku** per Adrian explicit override)
+**Latest tags chronologicznie:**
+- `nadajesz-firmowe-uwagi-parser-fallback-2026-05-07` (commit `e6c0895`) — parser uwag + fallback coords + 5-layer defense
+- `firmowe-konto-koord-suppress-2026-05-07` (commit `e47a529`) — czasówka KOORD alert off dla firmowych
+- `firmowe-konto-shadow-suppress-2026-05-07` (commit `442cda9`) — shadow PROPOSE off dla firmowych
+- `firmowe-konto-telegram-defense-2026-05-07` (commit `bc9b3ca`) — telegram_approver belt-and-suspenders defense
+- `bag-time-alerts-suppress-2026-05-07` (commit `5419080`) — R6 BAG_TIME >30min Telegram off
+
+**Branch:** `sprint-07-05-event-bus-opcja-c` ahead `master@10c754d` o **+22 commits**.
+
+## Co zrobione
+
+### Root cause: firmowe konto Nadajesz.pl (address_id=161)
+Klient korporacyjny zlecał przez konto firmowe panel z adresem pickup w polu `uwagi` (free-text), pipeline zostawiał `pickup_coords=None` → `osrm_client.haversine` sentinel ~6285km → wszyscy `pickup_too_far` HARD REJECT → "BRAK KANDYDATÓW" dla każdego firmowego (~3-5/dzień).
+
+### 6-warstwowa defense-in-depth
+| Warstwa | Plik | Mechanizm |
+|---|---|---|
+| L0 | `panel_watcher.py` | Parser uwag → real geocode (Mickiewicza 50, Wyszyńskiego 2/75) lub fallback coords gdy parser fail |
+| L1 | `dispatch_pipeline.py` | Defense gate `assess_order` SKIP/no_pickup_geocode na None coords |
+| L2 | `czasowka_scheduler.py` | KOORD alert suppress dla firmowych (flag) |
+| L3 | `shadow_dispatcher.py` | Verdict PROPOSE → SUPPRESSED_FIRMOWE_KONTO przed shadow log write |
+| L4 | `telegram_approver.py` | proposal_sender continue (skip sendMessage) — belt-and-suspenders |
+| L5 | `osrm_client.py` | Fail-loud haversine na None / (0,0) cross-codebase (Lekcja #32 + #81) |
+| L6 | `sla_tracker.py` | R6 BAG_TIME >30min alert suppressed (orthogonal — Adrian zarządza przez panel) |
+
+### Adrian fallback decision (mid-sprint pivot)
+`FIRMOWE_KONTO_FALLBACK_COORDS = (53.13222, 23.16844)` [DMS 53°07'56.0"N 23°10'06.4"E centrala Nadajesz.pl]. Architecture: parser PRIMARY → real geocode; FALLBACK gdy parser None (P3 edge "MALI WOJOWNICY"-only) ALBO geocode fail. **Eliminuje BRAK KANDYDATÓW dla 100% firmowych** — zawsze coords (real or fallback) → real feasibility pool.
+
+### Tests
+- 53 unit parser (production fixtures replay 25/25 + 28 named tests)
+- 18 defense gates (haversine fail-loud + dispatch_pipeline gate + KOORD alert formatter + fallback coords + suppression layers)
+- 21/21 classifier + 13/13 parser_health regression
+- Total: **111/111 critical regression PASS** post-sprint
+
+### Empirical fixture base
+`tests/fixtures/uwagi_firmowe.jsonl` — 25 sampli z 30 dni production (Lekcja #82 empirical-first parsing). Patterns: P1 STRUCTURED 84% / P2 NARRATIVE 12% / P3 COMPANY-ONLY 8%.
+
+## Stan flag (LIVE od 2026-05-07)
+
+`flags.json` (hot-reload, runtime check via `C.flag(name, default)`):
+```json
+{
+  "ENABLE_UWAGI_ADDRESS_PARSER": true,
+  "ENABLE_FIRMOWE_KONTO_KOORD_ALERTS": false,
+  "ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS": false,
+  "ENABLE_BAG_TIME_ALERTS": false
+}
+```
+
+Konstanty `common.py` env-overridable:
+- `FIRMOWE_KONTO_ADDRESS_IDS = frozenset({161})` (Nadajesz.pl firmowe konto, per-tenant ready)
+- `FIRMOWE_KONTO_FALLBACK_COORDS = (53.13222, 23.16844)`
+- `UWAGI_PARSER_COMPANY_STOPLIST = frozenset({...})` (33 entries — Mali Wojownicy, Drtusz, etc.)
+- `ENABLE_UWAGI_ADDRESS_PARSER` (env → "1"=True default)
+- `ENABLE_BAG_TIME_ALERTS` (env → "0"=False default)
+- `PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW=9` / `PARSER_HEALTH_STUCK_MIN_BASELINE=3` / `PARSER_HEALTH_DELTA_MIN_ABS_DIFF=3`
+
+## Restarty dziś (peak override per Adrian explicit ACK)
+
+| Czas (UTC) | Service | Downtime | Status |
+|---|---|---|---|
+| 08:41:23 | dispatch-shadow #1 | ~6s | clean, ortools warm-up 148ms |
+| 08:43:46 | dispatch-panel-watcher | ~5s | Health OK 241 orders, Layer 4 endpoint LIVE |
+| 08:59:07 | dispatch-shadow #2 | ~7s | clean, 53s pre-peak buffer |
+| 09:09:44 | dispatch-telegram | ~6s | **pending=3 callback handlers preserved** (peak override per "napraw to" + AskUserQuestion ACK) |
+| 09:16:31 + 09:18:01 | dispatch-sla-tracker ×2 | ~3s each | Type=simple daemon, non-critical |
+
+Zero downstream errors w log post-restarts. Peak 11:00-14:00 Warsaw aktywny (Lekcja #34 wyjątek peak hard rule).
+
+## Rollback procedury
+
+**Per-flag (hot-reload, ~5s, no restart):**
+```bash
+python3 -c "import json,os,tempfile; p='/root/.openclaw/workspace/scripts/flags.json'; d=json.load(open(p)); d['<FLAG_NAME>']=<bool>; fd,t=tempfile.mkstemp(dir=os.path.dirname(p)); open(fd,'w').write(json.dumps(d,indent=2,ensure_ascii=False)); os.replace(t,p)"
+```
+
+Flag map → expected effect:
+- `ENABLE_UWAGI_ADDRESS_PARSER=false` — parser path off, defense gate L1 fires na None coords (firmowe znów BRAK KANDYDATÓW manual KOORD)
+- `ENABLE_FIRMOWE_KONTO_KOORD_ALERTS=true` — czasówka KOORD alerty firmowe ON znów
+- `ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=true` — shadow + telegram defense bypass, firmowe PROPOSE wraca do Telegrama
+- `ENABLE_BAG_TIME_ALERTS=true` — sla_tracker R6 alerty >30min ON znów (wymaga sla-tracker restart żeby code refresh — UWAGA: oba dni po flip True nadrabia burst alerty starsze ordery)
+
+**Full git revert sprintu firmowe (5 commits):**
+```bash
+cd /root/.openclaw/workspace/scripts/dispatch_v2
+git revert e6c0895 e47a529 442cda9 bc9b3ca 5419080 --no-edit
+sudo systemctl restart dispatch-shadow dispatch-panel-watcher dispatch-sla-tracker
+# dispatch-telegram WYMAGA Adrian explicit ACK
+```
+
+**Backups (24h retention):**
+- `.bak-pre-uwagi-parser-2026-05-07` (9 plików: common, czasowka, dispatch_pipeline, geocoding, osrm, panel_watcher, parser_health, state_machine, flags)
+- `.bak-pre-firmowe-suppress-2026-05-07` (1 plik: telegram_approver)
+- `.bak-pre-bag-time-suppress-2026-05-07` (1 plik: sla_tracker)
+
+## Pending decyzje
+
+- **Live verification firmowy order post-deploy** — wait, kod zwalidowany pre-deploy + smoke E2E 8/8 PASS
+- **Master merge gate 10.05** — branch ahead +22 commits, gate aktywny
+- **TECH_DEBT future:** `firmowe_konto_company_addresses.json` static map dla P3 edge (Mali Wojownicy → real adres) | `geocoding_log.jsonl` audit trail (LGBM training reproducibility)
+
+## Lekcje NEW (sprint #4)
+
+- **#80** — tracone pole `uwagi` between layers (panel_client parsował, state_machine drop'ował). Audit consumers gdy nowy field dodany do source-of-truth boundary
+- **#81** — fail-loud sentinel cross-codebase (haversine None/(0,0) → ValueError, eliminuje silent 6285km bug)
+- **#82** — empirical fixture-first parsing (25 production samples PRZED regex implementation, Lekcja #33 rozszerzona)
+- **#83** — architectural decision late-binding (Adrian fallback coords mid-sprint pivot bez code rewrite — constant w common.py + env override)
 
 ---
 
