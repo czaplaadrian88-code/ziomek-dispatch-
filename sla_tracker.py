@@ -13,6 +13,8 @@ from typing import Dict
 
 from dispatch_v2 import common as C
 from dispatch_v2.common import now_iso, setup_logger
+from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
+from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.event_bus import get_pending, mark_processed
 from dispatch_v2.state_machine import get_order, upsert_order, get_by_status
 from dispatch_v2.telegram_utils import send_admin_alert
@@ -280,6 +282,24 @@ def run():
         f"(flag ENABLE_BAG_TIME_ALERTS hot-reload via flags.json)"
     )
 
+    # A4.1 (2026-05-09): BroadcastSubscriber dla CONFIG_RELOAD events.
+    _broadcast_sub = None
+    try:
+        _broadcast_sub = BroadcastSubscriber(
+            consumer_id="sla_tracker",
+            state_path=Path(
+                "/root/.openclaw/workspace/dispatch_state/event_subscribers/sla_tracker.json"
+            ),
+        )
+        _log.info("A4.1 BroadcastSubscriber init OK consumer=sla_tracker")
+    except Exception as _bs_e:
+        _log.warning(
+            f"A4.1 BroadcastSubscriber init fail "
+            f"({type(_bs_e).__name__}: {_bs_e}) — broadcast disabled"
+        )
+    last_broadcast_poll = 0.0
+    BROADCAST_POLL_INTERVAL_S = 30.0
+
     SLA_EVENT_TYPES = ["COURIER_PICKED_UP", "COURIER_DELIVERED"]
     while _running:
         try:
@@ -294,6 +314,19 @@ def run():
             _check_bag_time_alerts(datetime.now(timezone.utc))
         except Exception as e:
             _log.error(f"R6 scan wrapper fail: {e}")
+
+        # A4.1: poll CONFIG_RELOAD broadcast events co 30s rate-limited.
+        if _broadcast_sub is not None and time.time() - last_broadcast_poll >= BROADCAST_POLL_INTERVAL_S:
+            try:
+                _new_events = _broadcast_sub.poll(["CONFIG_RELOAD"], limit=50)
+                if _new_events:
+                    dispatch_config_reload(_new_events, "sla_tracker")
+            except Exception as _bp_e:
+                _log.warning(
+                    f"A4.1 broadcast poll fail "
+                    f"({type(_bp_e).__name__}: {_bp_e}) — skip, retry next interval"
+                )
+            last_broadcast_poll = time.time()
 
         if time.time() - last_summary > 300:
             _log.info(f"SUMMARY: {_stats}")

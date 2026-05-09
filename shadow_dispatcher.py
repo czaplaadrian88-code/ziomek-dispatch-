@@ -25,6 +25,8 @@ from typing import Dict, List, Optional
 
 from dispatch_v2 import common as C, event_bus, state_machine
 from dispatch_v2.common import load_config, now_iso, setup_logger
+from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
+from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_fleet
 from dispatch_v2.dispatch_pipeline import assess_order, PipelineResult
 
@@ -766,8 +768,28 @@ def run() -> int:
             f"first-proposal lazy login still active"
         )
 
+    # A4.1 (2026-05-09): BroadcastSubscriber dla CONFIG_RELOAD events.
+    # Defense-in-depth: init fail NIE crash worker (subscriber=None →
+    # poll skip w tick).
+    _broadcast_sub: Optional[BroadcastSubscriber] = None
+    try:
+        _broadcast_sub = BroadcastSubscriber(
+            consumer_id="shadow_dispatcher",
+            state_path=Path(
+                "/root/.openclaw/workspace/dispatch_state/event_subscribers/shadow.json"
+            ),
+        )
+        _log.info("A4.1 BroadcastSubscriber init OK consumer=shadow_dispatcher")
+    except Exception as _bs_e:
+        _log.warning(
+            f"A4.1 BroadcastSubscriber init fail "
+            f"({type(_bs_e).__name__}: {_bs_e}) — broadcast disabled"
+        )
+
     totals = {"processed": 0, "failed": 0, "skipped": 0}
     last_heartbeat = time.time()
+    last_broadcast_poll = 0.0
+    BROADCAST_POLL_INTERVAL_S = 30.0  # poll co 30s rate-limited
     # V3.28 Fix 3 (incident 03.05.2026): worker liveness tracking.
     # Pre-fix: HEARTBEAT loguje processed=N stagnate (NIE distinguish "worker
     # alive" vs "worker stuck"). Production incident 02.05 23:03 → 03.05 ~10:00:
@@ -788,6 +810,20 @@ def run() -> int:
                 last_processed_ts = time.time()
         except Exception as e:
             _log.error(f"tick loop error: {e}\n{traceback.format_exc()}")
+
+        # A4.1: poll CONFIG_RELOAD broadcast events co 30s rate-limited.
+        # Defense-in-depth try/except — poll/handler fail NIE blocks tick.
+        if _broadcast_sub is not None and time.time() - last_broadcast_poll >= BROADCAST_POLL_INTERVAL_S:
+            try:
+                _new_events = _broadcast_sub.poll(["CONFIG_RELOAD"], limit=50)
+                if _new_events:
+                    dispatch_config_reload(_new_events, "shadow_dispatcher")
+            except Exception as _bp_e:
+                _log.warning(
+                    f"A4.1 broadcast poll fail "
+                    f"({type(_bp_e).__name__}: {_bp_e}) — skip, retry next interval"
+                )
+            last_broadcast_poll = time.time()
 
         if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_SEC:
             eb = event_bus.stats()

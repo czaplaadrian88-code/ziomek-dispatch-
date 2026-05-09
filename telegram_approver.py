@@ -34,6 +34,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from dispatch_v2 import manual_overrides  # V3.26 hotfix: top-level import
                                           # (memory: V3.19g1 crash z `from X import Y` w funkcji)
+from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
+from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.common import (
     ENABLE_TELEGRAM_FREETEXT_ASSIGN,
     ENABLE_TIMELINE_FORMAT,
@@ -3691,6 +3693,41 @@ async def _startup_scan_pending_expired(state: dict) -> dict:
     return summary
 
 
+async def config_reload_poller(state: dict) -> None:
+    """A4.1 (2026-05-09): poll CONFIG_RELOAD broadcast events co 30s.
+
+    Defense-in-depth: subscriber init fail → coroutine returns (no spam).
+    Per-poll exception → log warning + sleep + retry next interval.
+    Idempotent: events processed via cursor, drugi poll skip already-seen.
+    """
+    try:
+        sub = BroadcastSubscriber(
+            consumer_id="telegram_approver",
+            state_path=Path(
+                "/root/.openclaw/workspace/dispatch_state/event_subscribers/telegram_approver.json"
+            ),
+        )
+        _log.info("A4.1 BroadcastSubscriber init OK consumer=telegram_approver")
+    except Exception as _bs_e:
+        _log.warning(
+            f"A4.1 BroadcastSubscriber init fail "
+            f"({type(_bs_e).__name__}: {_bs_e}) — broadcast disabled"
+        )
+        return
+
+    while not _shutdown:
+        try:
+            new_events = sub.poll(["CONFIG_RELOAD"], limit=50)
+            if new_events:
+                dispatch_config_reload(new_events, "telegram_approver")
+        except Exception as _bp_e:
+            _log.warning(
+                f"A4.1 broadcast poll fail "
+                f"({type(_bp_e).__name__}: {_bp_e}) — skip, retry next interval"
+            )
+        await asyncio.sleep(30)
+
+
 async def watchdog(state: dict) -> None:
     while not _shutdown:
         now = datetime.now(timezone.utc)
@@ -3779,6 +3816,7 @@ async def main_async() -> None:
             proposal_sender(state),
             updates_poller(state),
             watchdog(state),
+            config_reload_poller(state),  # A4.1
         )
     finally:
         await _shutdown_drain(state)

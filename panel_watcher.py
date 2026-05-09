@@ -34,6 +34,8 @@ from dispatch_v2.common import (
     now_iso,
     setup_logger,
 )
+from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
+from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.event_bus import emit, emit_audit
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
 from dispatch_v2.parser_health_layer3 import install_layer3, record_tick_full
@@ -1493,8 +1495,27 @@ def run():
     except Exception as _bg_e:
         _log.warning(f"V3.27.7 panel_bg_refresh start failed: {type(_bg_e).__name__}: {_bg_e}")
 
+    # A4.1 (2026-05-09): BroadcastSubscriber dla CONFIG_RELOAD events.
+    _broadcast_sub = None
+    try:
+        from pathlib import Path as _Path
+        _broadcast_sub = BroadcastSubscriber(
+            consumer_id="panel_watcher",
+            state_path=_Path(
+                "/root/.openclaw/workspace/dispatch_state/event_subscribers/panel_watcher.json"
+            ),
+        )
+        _log.info("A4.1 BroadcastSubscriber init OK consumer=panel_watcher")
+    except Exception as _bs_e:
+        _log.warning(
+            f"A4.1 BroadcastSubscriber init fail "
+            f"({type(_bs_e).__name__}: {_bs_e}) — broadcast disabled"
+        )
+
     cycle = 0
     last_log_summary = time.time()
+    last_broadcast_poll = 0.0
+    BROADCAST_POLL_INTERVAL_S = 30.0
     totals = {"new": 0, "assigned": 0, "picked_up": 0, "delivered": 0, "ignored": 0, "errors": 0}
 
     while _running:
@@ -1536,6 +1557,20 @@ def run():
         # Detail log tylko gdy cos sie wydarzylo
         if any(stats.get(k, 0) > 0 for k in ("new", "assigned", "picked_up", "delivered")):
             _log.info(f"TICK {cycle}: {stats}")
+
+        # A4.1: poll CONFIG_RELOAD broadcast events co 30s rate-limited.
+        # Belt-and-suspenders obok _COORDS mtime hot-reload (MP-#12).
+        if _broadcast_sub is not None and time.time() - last_broadcast_poll >= BROADCAST_POLL_INTERVAL_S:
+            try:
+                _new_events = _broadcast_sub.poll(["CONFIG_RELOAD"], limit=50)
+                if _new_events:
+                    dispatch_config_reload(_new_events, "panel_watcher")
+            except Exception as _bp_e:
+                _log.warning(
+                    f"A4.1 broadcast poll fail "
+                    f"({type(_bp_e).__name__}: {_bp_e}) — skip, retry next interval"
+                )
+            last_broadcast_poll = time.time()
 
         # Sleep do nastepnego cyklu
         sleep_for = max(0.5, interval - elapsed)
