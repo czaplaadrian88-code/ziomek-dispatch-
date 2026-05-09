@@ -99,14 +99,20 @@ def auto_resync_phantoms(
             })
             continue
 
-        # Build deterministic event_id — phantom_resync namespace
-        event_id = f"{oid}_{inferred}_phantom_resync"
+        # F10 (2026-05-09): canonical event_id dla COURIER_DELIVERED
+        # eliminuje duplicate audit_log entries vs panel/packs_ghost/reconcile.
+        # ORDER_RETURNED_TO_POOL zostaje phantom_resync namespace (osobny path).
+        if inferred == "COURIER_DELIVERED":
+            event_id = f"{oid}_COURIER_DELIVERED_canonical"
+        else:
+            event_id = f"{oid}_{inferred}_phantom_resync"
 
         # Build payload
         if inferred == "COURIER_DELIVERED":
             payload = {
                 "timestamp": d.get("last_event_ts"),  # use last known event ts as proxy
                 "source": "reconciliation_inferred",
+                "deliv_source": "reconciliation_inferred",
                 "phantom_age_h": d.get("last_event_age_h"),
                 "inferred_reason": reason,
             }

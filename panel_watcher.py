@@ -704,7 +704,8 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 if raw:
                     status_id = raw.get("id_status_zamowienia")
                     if status_id == 7:
-                        # Doreczone
+                        # Doreczone (F10 2026-05-09: canonical event_id eliminuje
+                        # duplicate audit_log entries vs ghost_detect/reconcile path).
                         ev = emit(
                             "COURIER_DELIVERED",
                             order_id=zid,
@@ -712,8 +713,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             payload={
                                 "timestamp": raw.get("czas_doreczenia") or now_iso(),
                                 "final_location": state_order.get("delivery_address"),
+                                "deliv_source": "panel",
                             },
-                            event_id=f"{zid}_COURIER_DELIVERED_panel",
+                            event_id=f"{zid}_COURIER_DELIVERED_canonical",
                         )
                         if ev:
                             stats["delivered"] += 1
@@ -1038,8 +1040,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         "final_location": _deliv_addr_gd,
                         "delivery_address": _deliv_addr_gd,
                         "source": "packs_ghost_detect",
+                        "deliv_source": "packs_ghost_detect",
                     },
-                    event_id=f"{_oid}_COURIER_DELIVERED_packs_ghost",
+                    event_id=f"{_oid}_COURIER_DELIVERED_canonical",
                 )
                 if _ev_gd:
                     stats["delivered"] += 1
@@ -1106,8 +1109,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "final_location": deliv_addr,
                     "delivery_address": deliv_addr,
                     "source": "reconcile",
+                    "deliv_source": "reconcile",
                 },
-                event_id=f"{zid}_COURIER_DELIVERED_reconcile",
+                event_id=f"{zid}_COURIER_DELIVERED_canonical",
             )
             if ev:
                 stats["delivered"] += 1
