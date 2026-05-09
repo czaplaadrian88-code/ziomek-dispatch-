@@ -57,16 +57,19 @@ def test_timeline_3bag_plus_new():
         },
     }
     out = ta._build_timeline_section(decision, decision["best"])
+    # V3.28 (2026-05-09): tilde `~HH:MM` dla "eta" source (computed, not committed).
+    # Fixture nie ma czas_kuriera_warsaw w bag_context → wszystkie pickupy "eta",
+    # dropy zawsze "eta" (no commit dla delivery). Visual signal: ~ = guess.
     expected_lines = [
         "📦 3 ordery w bagu → trasa z nowym zleceniem:",
-        "17:22 🍕 pickup Chinatown Bistro",
-        "17:31 📍 drop Plażowa 7/20",
-        "17:38 🍕 pickup Bar Eljot",
-        "17:45 📍 drop Upalna 34/11A",
-        "17:52 🍕 pickup Chicago Pizza",
-        "18:01 📍 drop Waszyngtona 38/49",
-        "18:10 👉 pickup [NOWY] Rukola Sienkiewicza",
-        "18:18 👉 drop [NOWY] Świętojańska 42c",
+        "~17:22 🍕 pickup Chinatown Bistro",
+        "~17:31 📍 drop Plażowa 7/20",
+        "~17:38 🍕 pickup Bar Eljot",
+        "~17:45 📍 drop Upalna 34/11A",
+        "~17:52 🍕 pickup Chicago Pizza",
+        "~18:01 📍 drop Waszyngtona 38/49",
+        "~18:10 👉 pickup [NOWY] Rukola Sienkiewicza",
+        "~18:18 👉 drop [NOWY] Świętojańska 42c",
     ]
     actual = out.split("\n")
     assert actual == expected_lines, f"lines mismatch:\nGOT:\n{out}\n\nEXPECTED:\n" + "\n".join(expected_lines)

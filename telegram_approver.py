@@ -484,6 +484,75 @@ def _iso_to_warsaw_hhmm(iso_utc):
         return None
 
 
+def _resolve_pickup_at(
+    oid: str,
+    plan_pickup_at: dict,
+    bag_context_map: dict,
+    decision: dict,
+):
+    """V3.28 (2026-05-09) — resolve pickup time per oid z source priority:
+
+    Priority chain (gdy ENABLE_V3274_RENDER_PICKUP_COMMIT_PRIORITY=True):
+      1. czas_kuriera_warsaw z bag_context (committed bag-order, hard commit)
+      2. czas_kuriera_warsaw z decision (current order if committed, edge: re-propose)
+      3. plan.pickup_at[oid] (computed ETA fallback — new orders, pre-acceptance,
+         OR ortools_rejected_v3274 greedy fallback path)
+      4. None (skip stop, brak danych)
+
+    Returns:
+        (datetime|None, source_str) where source_str ∈ {"commit", "eta", "none"}.
+
+    Bug context (FAZA 0 audit 2026-05-09): plan.pickup_at z greedy fallback
+    po V3.27.4 reject pokazuje computed ETA chain ignorujący czas_kuriera commit.
+    Render telegram_approver iteruje plan.pickup_at jako jedyne źródło →
+    kurier widzi nieprawdziwą trasę. Order 471744: panel commit 13:05 vs
+    render 13:17 (+12 min divergence, 24% propozycji magnitude 10-20 min).
+
+    Helper enables truth-honest render: "🍕 13:05 — Grill Kebab" gdy commit,
+    "🍕 ~13:17 — Grill Kebab" gdy ETA. Tilde marker minimal visual disruption.
+    """
+    try:
+        from dispatch_v2 import common as _common
+        priority_on = getattr(_common, "ENABLE_V3274_RENDER_PICKUP_COMMIT_PRIORITY", True)
+    except Exception:
+        priority_on = True
+
+    def _parse(iso):
+        if not iso:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            return None
+
+    if priority_on:
+        # 1. bag_context commit
+        bag_entry = bag_context_map.get(str(oid)) or {}
+        ck_iso = bag_entry.get("czas_kuriera_warsaw")
+        ck_dt = _parse(ck_iso)
+        if ck_dt is not None:
+            return ck_dt, "commit"
+
+        # 2. decision commit (current order if committed)
+        if str(oid) == str(decision.get("order_id") or ""):
+            cur_ck = decision.get("czas_kuriera_warsaw")
+            ck_dt = _parse(cur_ck)
+            if ck_dt is not None:
+                return ck_dt, "commit"
+
+    # 3. plan.pickup_at ETA fallback
+    plan_iso = (plan_pickup_at or {}).get(str(oid)) or (plan_pickup_at or {}).get(oid)
+    plan_dt = _parse(plan_iso)
+    if plan_dt is not None:
+        return plan_dt, "eta"
+
+    # 4. None
+    return None, "none"
+
+
 def _build_timeline_section(decision: dict, best: dict) -> str:
     """V3.17: per-stop chronological timeline z plan.pickup_at + predicted_delivered_at.
 
@@ -511,22 +580,42 @@ def _build_timeline_section(decision: dict, best: dict) -> str:
     mapping = {
         cur_oid: (decision.get("restaurant"), decision.get("delivery_address")),
     }
+    # V3.28 (2026-05-09): bag_context_map keep raw entries (z czas_kuriera_warsaw).
+    bag_context_map = {}
     for b in (best.get("bag_context") or []):
         boid = str(b.get("order_id") or "")
         if boid:
             mapping[boid] = (b.get("restaurant"), b.get("delivery_address"))
+            bag_context_map[boid] = b
 
-    events = []
-    for oid, iso in pickup_at.items():
-        hhmm = _iso_to_warsaw_hhmm(iso)
-        if hhmm is None:
+    # V3.28: pickup oid set = union(plan.pickup_at, bag_context z ck, decision z ck).
+    pickup_oid_set = set()
+    for k in (pickup_at or {}).keys():
+        pickup_oid_set.add(str(k))
+    for _oid, _entry in bag_context_map.items():
+        if _entry.get("czas_kuriera_warsaw"):
+            pickup_oid_set.add(str(_oid))
+    if decision.get("czas_kuriera_warsaw"):
+        pickup_oid_set.add(cur_oid)
+
+    events = []  # (sort_key_iso, hhmm, etype, oid, source)
+    for oid in pickup_oid_set:
+        dt, source = _resolve_pickup_at(oid, pickup_at, bag_context_map, decision)
+        if dt is None:
             continue
-        events.append((iso, hhmm, "pickup", str(oid)))
+        hhmm = dt.astimezone(WARSAW).strftime("%H:%M")
+        # Sort key = ISO UTC (zachowana stable lexicographic order)
+        try:
+            sort_iso = dt.astimezone(timezone.utc).isoformat()
+        except Exception:
+            sort_iso = dt.isoformat()
+        events.append((sort_iso, hhmm, "pickup", oid, source))
     for oid, iso in delivered_at.items():
         hhmm = _iso_to_warsaw_hhmm(iso)
         if hhmm is None:
             continue
-        events.append((iso, hhmm, "drop", str(oid)))
+        # Drops zawsze "eta" source (no commit semantyka dla delivery).
+        events.append((iso, hhmm, "drop", str(oid), "eta"))
     if not events:
         return ""
     # Stable sort by ISO (lexicographic == chronological for same-TZ ISO 8601).
@@ -540,19 +629,21 @@ def _build_timeline_section(decision: dict, best: dict) -> str:
     else:
         header = f"📦 trasa dla nowego zlecenia:"
     lines.append(header)
-    for _iso, hhmm, etype, oid in events:
+    for _iso, hhmm, etype, oid, source in events:
         rest, drop_addr = mapping.get(oid, (None, None))
         is_new = (oid == cur_oid)
+        # V3.28: tilde prefix dla "eta" source (computed, not committed).
+        time_str = f"~{hhmm}" if source == "eta" else hhmm
         if etype == "pickup":
             emoji = "👉" if is_new else "🍕"
             name = rest or "?"
             prefix_tag = "[NOWY] " if is_new else ""
-            lines.append(f"{hhmm} {emoji} pickup {prefix_tag}{name}")
+            lines.append(f"{time_str} {emoji} pickup {prefix_tag}{name}")
         else:
             emoji = "👉" if is_new else "📍"
             addr = drop_addr or "?"
             prefix_tag = "[NOWY] " if is_new else ""
-            lines.append(f"{hhmm} {emoji} drop {prefix_tag}{addr}")
+            lines.append(f"{time_str} {emoji} drop {prefix_tag}{addr}")
     return "\n".join(lines)
 
 
@@ -808,9 +899,12 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
     pickup_at = plan.get("pickup_at") or {}
     delivered_at = plan.get("predicted_delivered_at") or {}
 
-    # Build per-oid address map: bag_context (other orders) + current decision
+    # Build per-oid address map + bag_context dict (raw entries dla _resolve_pickup_at).
+    # V3.28 (2026-05-09): bag_context_map keep raw entries (z czas_kuriera_warsaw)
+    # — _resolve_pickup_at preferuje commit dla rendered pickup time.
     bag_ctx = (best or {}).get("bag_context") or []
     addr_map = {}  # oid → (restaurant, delivery_address)
+    bag_context_map = {}  # oid → raw bag_context dict
     for it in bag_ctx:
         _oid = str(it.get("order_id") or "")
         if _oid:
@@ -818,21 +912,53 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
                 it.get("restaurant") or "?",
                 it.get("delivery_address") or it.get("drop_address") or "—",
             )
+            bag_context_map[_oid] = it
     addr_map[cur_oid] = (cur_rest, cur_drop)
 
-    # Collect stops: list[(dt_utc, kind, oid, addr)]
+    # V3.28 (2026-05-09): pickup oid set = union(plan.pickup_at, bag_context z ck,
+    # current decision z ck). Pozwala wrenderować commit-only pickups (np. gdy
+    # plan.pickup_at brakujący dla bag-order ale czas_kuriera w bag_context).
+    pickup_oid_set = set()
+    for k in (pickup_at or {}).keys():
+        pickup_oid_set.add(str(k))
+    for _oid, _entry in bag_context_map.items():
+        if _entry.get("czas_kuriera_warsaw"):
+            pickup_oid_set.add(str(_oid))
+    if decision.get("czas_kuriera_warsaw"):
+        pickup_oid_set.add(cur_oid)
+
+    # Collect stops: list[(dt_utc, kind, oid, addr, source)]
     stops = []
-    for oid, iso in pickup_at.items():
-        if not iso:
-            continue
-        try:
-            dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-        except (TypeError, ValueError):
+    for oid in pickup_oid_set:
+        dt, source = _resolve_pickup_at(oid, pickup_at, bag_context_map, decision)
+        if dt is None:
             continue
         rest, _ = addr_map.get(str(oid), ("?", "—"))
-        stops.append((dt, "odbiór", str(oid), rest))
+        stops.append((dt, "odbiór", str(oid), rest, source))
+
+        # V3.28 divergence warning: gdy commit i plan eta oba present z |diff| > threshold,
+        # log empirical signal że plan.pickup_at ETA rozjeżdża się z hard commit.
+        # Surface bug pre-fix (V3.27.4 mass-reject greedy fallback) — w runtime, nie offline replay.
+        try:
+            from dispatch_v2 import common as _common
+            warn_threshold = getattr(_common, "V3274_RENDER_DIVERGENCE_WARN_MIN", 5.0)
+            if source == "commit":
+                plan_iso = (pickup_at or {}).get(str(oid)) or (pickup_at or {}).get(oid)
+                if plan_iso:
+                    plan_dt_for_check = datetime.fromisoformat(str(plan_iso).replace("Z", "+00:00"))
+                    if plan_dt_for_check.tzinfo is None:
+                        plan_dt_for_check = plan_dt_for_check.replace(tzinfo=timezone.utc)
+                    diff_min = abs((plan_dt_for_check - dt).total_seconds() / 60.0)
+                    if diff_min > warn_threshold:
+                        _strategy = (best or {}).get("plan", {}).get("strategy", "?")
+                        _log.warning(
+                            f"V3274_RENDER_DIVERGENCE oid={oid} commit={dt.isoformat()} "
+                            f"plan_eta={plan_iso} diff={diff_min:.1f}min strategy={_strategy} "
+                            f"render_source=commit (plan_eta hidden by commit-priority)"
+                        )
+        except Exception:
+            pass  # warning best-effort, never break render
+
     for oid, iso in delivered_at.items():
         if not iso:
             continue
@@ -843,7 +969,8 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
         except (TypeError, ValueError):
             continue
         _, addr = addr_map.get(str(oid), ("?", "—"))
-        stops.append((dt, "dostawa", str(oid), addr))
+        # Drops zawsze "eta" source (brak hard commit dla delivery, tylko predicted).
+        stops.append((dt, "dostawa", str(oid), addr, "eta"))
 
     if not stops:
         # Fallback do klasycznego 3-line layout (zachowuje legacy behavior dla
@@ -861,11 +988,14 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
     stops.sort(key=lambda x: x[0])
 
     out = ["🗺 Trasa:", f"🚖 {now_hhmm} — start ({pos_marker})"]
-    for dt, kind, oid, addr in stops:
+    for dt, kind, oid, addr, source in stops:
         hhmm = dt.astimezone(WARSAW).strftime("%H:%M")
         icon = "🍕" if kind == "odbiór" else "📍"
         ta_marker = " ← TA" if oid == cur_oid else ""
-        out.append(f"{icon} {hhmm} — {addr}{ta_marker}")
+        # V3.28: tilde prefix dla "eta" source (computed, not committed).
+        # Plain HH:MM dla "commit" source (hard contract czas_kuriera).
+        time_str = f"~{hhmm}" if source == "eta" else hhmm
+        out.append(f"{icon} {time_str} — {addr}{ta_marker}")
     return out
 
 
