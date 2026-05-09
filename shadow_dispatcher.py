@@ -37,6 +37,20 @@ _log = setup_logger(
     "shadow_dispatcher",
     "/root/.openclaw/workspace/scripts/logs/shadow.log",
 )
+# V3.28 (2026-05-09) — observability gap fix (FAZA 0 finding):
+# route_simulator_v2 logger nie miał handlera w shadow_dispatcher process,
+# więc V3274_OR_TOOLS_VIOLATION + V3274_TIMEWINDOW_FALLBACK + V3274_RENDER_DIVERGENCE
+# warnings z shadow path były lost (nie propagowane do file). Czasówka path
+# je łapał (handler na czasowka_scheduler logger), shadow path NIE.
+# Fix: explicit setup dla route_simulator_v2 logger w shadow_dispatcher entry point.
+_route_simulator_log = setup_logger(
+    "route_simulator_v2",
+    "/root/.openclaw/workspace/scripts/logs/route_simulator.log",
+)
+_telegram_approver_log = setup_logger(
+    "telegram_approver",
+    "/root/.openclaw/workspace/scripts/logs/telegram_approver.log",
+)
 _shutdown = False
 
 
