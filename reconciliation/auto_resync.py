@@ -28,11 +28,23 @@ def auto_resync_phantoms(
     age_threshold_hours: float = 4.0,
     hard_cap_per_run: int = 5,
     dry_run: bool = False,
+    dynamic_scaling: bool = True,
+    hard_cap_max: int = 20,
+    backlog_alert_threshold: int = 50,
 ) -> Dict[str, Any]:
     """Resync phantoms (events.db terminal events) z safety gates.
 
     dry_run: jeśli True, NIC NIE emituje — tylko zwraca co BY zrobione.
              Used dla pierwszego deploy (AUTO_RESYNC_ENABLED=false alert-only).
+
+    F14 (2026-05-09): dynamic scaling — gdy backlog (eligible_for_auto count)
+    przekracza hard_cap_per_run, scale UP do min(hard_cap_max, backlog_size)
+    zamiast all-or-nothing safety stop. Stary all-or-nothing behavior generuje
+    incident-day backlog growth bez drain (Lekcja #100, evening #9 incident
+    08.05 panel-watcher restart 28 phantoms cleanup 5/run × 6 runs).
+
+    backlog_alert_threshold: gdy eligible >= threshold → counts.backlog_high_alert
+    True, worker emit Telegram alert "BACKLOG HIGH: N phantoms wait drain".
 
     Returns aggregate stats + per-order action records (dla reconcile_log).
     """
@@ -41,9 +53,14 @@ def auto_resync_phantoms(
         "ghosts_total": 0,
         "auto_resyncs": 0,
         "alerts_only_young": 0,    # phantom <4h, manual review needed
-        "alerts_only_hard_cap": 0,  # eligible >cap → safety stop
+        "alerts_only_hard_cap": 0,  # eligible >hard_cap_max → safety stop
         "skipped_ghost": 0,         # ghost — never auto-resync
         "hard_cap_hit": False,
+        # F14: dynamic scaling telemetry
+        "hard_cap_actual": hard_cap_per_run,  # effective cap dla tego runu
+        "hard_cap_dynamic_applied": False,    # True jeśli scaled up
+        "backlog_high_alert": False,          # True gdy eligible >= threshold
+        "backlog_size": 0,                    # eligible_for_auto count
         "dry_run": dry_run,
     }
     actions: List[Dict[str, Any]] = []
@@ -73,15 +90,31 @@ def auto_resync_phantoms(
             continue
         eligible_for_auto.append(d)
 
-    # Hard cap defense — prevent auto-massacre on bigger bug
-    if len(eligible_for_auto) > hard_cap_per_run:
+    # F14: backlog telemetry + dynamic scaling decision
+    backlog_size = len(eligible_for_auto)
+    counts["backlog_size"] = backlog_size
+    if backlog_size >= backlog_alert_threshold:
+        counts["backlog_high_alert"] = True
+
+    # F14: dynamic scaling — scale cap up gdy backlog > default cap
+    # ale nie ponad hard_cap_max safety ceiling. Powyżej hard_cap_max →
+    # all-or-nothing safety stop (legacy behavior dla extreme cases).
+    effective_cap = hard_cap_per_run
+    if dynamic_scaling and backlog_size > hard_cap_per_run:
+        effective_cap = min(hard_cap_max, backlog_size)
+        if effective_cap > hard_cap_per_run:
+            counts["hard_cap_dynamic_applied"] = True
+    counts["hard_cap_actual"] = effective_cap
+
+    # Hard cap defense — prevent auto-massacre na extreme bug (>hard_cap_max)
+    if backlog_size > effective_cap:
         counts["hard_cap_hit"] = True
         for d in eligible_for_auto:
             actions.append({
                 **d,
                 "action": "alert_only_hard_cap_exceeded",
             })
-        counts["alerts_only_hard_cap"] = len(eligible_for_auto)
+        counts["alerts_only_hard_cap"] = backlog_size
         return {"counts": counts, "actions": actions}
 
     # Second pass: emit terminal events for eligible phantoms

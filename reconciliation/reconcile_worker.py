@@ -54,6 +54,12 @@ FLAG_DEFAULTS = {
     "RECONCILIATION_HARD_CAP_PER_RUN": 5,
     "RECONCILIATION_TELEGRAM_ALERT_ENABLED": False,
     "RECONCILIATION_LOOKBACK_DAYS": 30,
+    # F14 (2026-05-09): dynamic scaling — scale up cap gdy backlog > default,
+    # ale ≤ HARD_CAP_MAX. Powyżej HARD_CAP_MAX → all-or-nothing safety stop
+    # (legacy). BACKLOG_ALERT_THRESHOLD → Telegram alert "high backlog".
+    "RECONCILIATION_DYNAMIC_SCALING": True,
+    "RECONCILIATION_HARD_CAP_MAX": 20,
+    "RECONCILIATION_BACKLOG_ALERT_THRESHOLD": 50,
 }
 
 _log = setup_logger("reconciliation", LOG_FILE)
@@ -101,8 +107,22 @@ def _format_alert(counts: Dict[str, Any], actions: list) -> str:
     """Compact alert message (mobile-friendly)."""
     lines = ["🔄 Reconciliation alert"]
     if counts.get("hard_cap_hit"):
-        lines.append(f"⚠️ HARD_CAP_HIT — {counts.get('phantoms_total')} phantoms, cap exceeded")
+        lines.append(
+            f"⚠️ HARD_CAP_HIT — {counts.get('backlog_size', counts.get('phantoms_total', 0))} "
+            f"phantoms, cap_max={counts.get('hard_cap_actual', '?')} exceeded"
+        )
         lines.append("Manual review wymagany. Auto-resync STOPPED.")
+    elif counts.get("backlog_high_alert"):
+        # F14: backlog high but within scaled cap → drained but warn
+        lines.append(
+            f"⚠️ BACKLOG_HIGH — {counts.get('backlog_size', 0)} eligible phantoms "
+            f"(threshold≥{counts.get('backlog_alert_threshold', 50)})"
+        )
+        lines.append(
+            f"resynced={counts.get('auto_resyncs', 0)} "
+            f"cap_actual={counts.get('hard_cap_actual', '?')} "
+            f"(dynamic={counts.get('hard_cap_dynamic_applied', False)})"
+        )
     else:
         lines.append(
             f"phantoms={counts.get('phantoms_total', 0)} "
@@ -110,6 +130,11 @@ def _format_alert(counts: Dict[str, Any], actions: list) -> str:
             f"resynced={counts.get('auto_resyncs', 0)} "
             f"alerts={counts.get('alerts_only_young', 0)}"
         )
+        if counts.get("hard_cap_dynamic_applied"):
+            lines.append(
+                f"ℹ F14 dynamic scale: backlog={counts.get('backlog_size', 0)} "
+                f"cap_default→{counts.get('hard_cap_actual', '?')}"
+            )
     # Sample non-resync actions
     interesting = [a for a in actions if a.get("action", "").startswith("alert_only") or a.get("classification") == "GHOST"]
     if interesting:
@@ -174,6 +199,19 @@ def run(
         "RECONCILIATION_TELEGRAM_ALERT_ENABLED",
         default=FLAG_DEFAULTS["RECONCILIATION_TELEGRAM_ALERT_ENABLED"],
     )
+    # F14 (2026-05-09): dynamic scaling flags
+    dynamic_scaling = flag(
+        "RECONCILIATION_DYNAMIC_SCALING",
+        default=FLAG_DEFAULTS["RECONCILIATION_DYNAMIC_SCALING"],
+    )
+    hard_cap_max = flag(
+        "RECONCILIATION_HARD_CAP_MAX",
+        default=FLAG_DEFAULTS["RECONCILIATION_HARD_CAP_MAX"],
+    )
+    backlog_alert_threshold = flag(
+        "RECONCILIATION_BACKLOG_ALERT_THRESHOLD",
+        default=FLAG_DEFAULTS["RECONCILIATION_BACKLOG_ALERT_THRESHOLD"],
+    )
 
     # Effective dry_run: CLI flag OR auto disabled
     effective_dry = dry_run or (not auto_enabled)
@@ -201,7 +239,12 @@ def run(
         age_threshold_hours=age_threshold_h,
         hard_cap_per_run=hard_cap,
         dry_run=effective_dry,
+        dynamic_scaling=dynamic_scaling,
+        hard_cap_max=hard_cap_max,
+        backlog_alert_threshold=backlog_alert_threshold,
     )
+    # F14: propagate threshold to counts dla _format_alert
+    result["counts"]["backlog_alert_threshold"] = backlog_alert_threshold
 
     # 3. Log
     records = reconcile_log.build_records(
@@ -217,16 +260,21 @@ def run(
     _log.info(
         f"END run_id={run_id} phantoms={counts['phantoms_total']} "
         f"ghosts={counts['ghosts_total']} resynced={counts['auto_resyncs']} "
-        f"alerts={total_alerts} hard_cap_hit={counts['hard_cap_hit']}"
+        f"alerts={total_alerts} hard_cap_hit={counts['hard_cap_hit']} "
+        f"backlog={counts.get('backlog_size', 0)} "
+        f"cap_actual={counts.get('hard_cap_actual', hard_cap)} "
+        f"dynamic_applied={counts.get('hard_cap_dynamic_applied', False)} "
+        f"backlog_high={counts.get('backlog_high_alert', False)}"
     )
 
-    # 4. Telegram alert (gated, conditional)
+    # 4. Telegram alert (gated, conditional). F14: backlog_high_alert dorzucony.
     should_alert = (
         tg_alert_enabled
         and (
             counts["hard_cap_hit"]
             or total_alerts >= 5
             or counts["ghosts_total"] > 0
+            or counts.get("backlog_high_alert", False)
         )
     )
     if should_alert:
@@ -237,7 +285,7 @@ def run(
     status = "ok"
     if counts["hard_cap_hit"]:
         status = "critical"
-    elif counts["ghosts_total"] > 0 or total_alerts > 0:
+    elif counts["ghosts_total"] > 0 or total_alerts > 0 or counts.get("backlog_high_alert", False):
         status = "alert"
 
     return {

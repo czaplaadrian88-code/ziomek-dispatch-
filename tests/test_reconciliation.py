@@ -222,9 +222,11 @@ def test_auto_resync_hard_cap_5():
     def fake_emit(**kw): emitted.append(kw); return kw.get("event_id")
     def fake_update(_): return None
 
+    # F14 (2026-05-09): hard_cap_max=5 forces effective cap=5, 6 > 5 → safety stop.
+    # Default dynamic_scaling=True ALE hard_cap_max=5 wymusza legacy semantics.
     result = auto_resync.auto_resync_phantoms(
         discrepancies, fake_emit, fake_update,
-        age_threshold_hours=4.0, hard_cap_per_run=5,
+        age_threshold_hours=4.0, hard_cap_per_run=5, hard_cap_max=5,
     )
     assert result["counts"]["hard_cap_hit"] is True
     assert result["counts"]["auto_resyncs"] == 0
