@@ -62,6 +62,13 @@ _log = setup_logger("panel_watcher", "/root/.openclaw/workspace/scripts/logs/dis
 _running = True
 _fail_count = 0
 _last_panel_unreachable_emit = 0.0
+# tech-debt #24: cold-start packs scan one-shot post-restart. Eliminuje
+# MISSING_FROM_STATE phantoms gdy panel-watcher restart in-peak drops
+# COURIER_ASSIGNED dla orderów mid-way ASSIGN→PICKUP (post-restart diff
+# emit COURIER_PICKED_UP direct bez prior ASSIGNED). Scan iteruje
+# parsed["courier_packs"] i emit COURIER_ASSIGNED dla każdego oid bez
+# entry w orders_state lub z empty cid. Bypasses V3.15 budget (one-shot).
+_cold_start_done = False
 # Lookup address_id -> coords. MP-#12 (2026-05-08): mtime-based hot-reload co 15s
 # eliminuje konieczność restart'u panel_watcher gdy restaurant_coords.json zmieniony
 # (np. nowy add_id mapping od Adriana). META top-5 quick win, STATE_OWNERSHIP F3+F8.
@@ -1272,12 +1279,116 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     return stats
 
 
+def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
+    """tech-debt #24: one-shot scan post-restart żeby naprawić missing
+    COURIER_ASSIGNED dla orderów mid-way ASSIGN→PICKUP w restart window.
+
+    Iteruje parsed["courier_packs"][nick] → oids. Dla każdego oid bez
+    entry w orders_state (state_cid=="") emit COURIER_ASSIGNED z
+    source="cold_start_scan". Bypass V3.15 budget (one-shot, expected
+    5-30 mismatches po panel-watcher restart in-peak).
+
+    Idempotent: emit_audit z deterministic event_id, drugi call no-op.
+    Defense-in-depth: kurier_ids load fail → skip (warn), per-oid
+    fetch fail → skip+counter, ambiguous nick → skip+warn.
+    """
+    stats = {"cold_start_scanned": 0, "cold_start_emitted": 0, "cold_start_errors": 0}
+    packs = parsed.get("courier_packs") or {}
+    if not packs:
+        return stats
+
+    try:
+        import json as _json
+        with open("/root/.openclaw/workspace/dispatch_state/kurier_ids.json") as _f:
+            _kurier_ids = _json.load(_f)
+        _name_to_cid = {}
+        _ambiguous_names = set()
+        for _nm, _cid in _kurier_ids.items():
+            _nm_key = _nm.strip()
+            if _nm_key in _name_to_cid and _name_to_cid[_nm_key] != str(_cid):
+                _ambiguous_names.add(_nm_key)
+            _name_to_cid[_nm_key] = str(_cid)
+    except Exception as _e:
+        _log.warning(f"cold_start_scan: kurier_ids load fail: {_e}")
+        return stats
+
+    current_state = state_get_all()
+
+    for _nick, _oids in packs.items():
+        _nick_key = (_nick or "").strip()
+        if not _nick_key or not _oids:
+            continue
+        if _nick_key in _ambiguous_names:
+            _log.warning(f"cold_start_scan: skip ambiguous nick {_nick_key!r}")
+            continue
+        _target_cid = _name_to_cid.get(_nick_key)
+        if not _target_cid:
+            continue
+        for _oid in _oids:
+            _oid_str = str(_oid)
+            _sorder = current_state.get(_oid_str) or {}
+            _state_cid = str(_sorder.get("courier_id") or "")
+            # Cold-start fires ONLY gdy state nie ma cid (missing entry
+            # lub courier_id=None). Jeśli state ma cid (nawet stary)
+            # → V3.15 packs_fallback handle mismatch w normalnym diff.
+            if _state_cid:
+                continue
+            _state_status = _sorder.get("status")
+            if _state_status in ("delivered", "returned_to_pool", "cancelled"):
+                continue
+            try:
+                _raw = fetch_order_details(_oid_str, csrf)
+                stats["cold_start_scanned"] += 1
+            except Exception as _fe:
+                _log.warning(f"cold_start_scan fetch({_oid_str}): {_fe}")
+                stats["cold_start_errors"] += 1
+                continue
+            if not _raw:
+                continue
+            _panel_cid = str(_raw.get("id_kurier") or "")
+            _sid = _raw.get("id_status_zamowienia")
+            if _sid in IGNORED_STATUSES:
+                continue
+            if not _panel_cid or _panel_cid == str(KOORDYNATOR_ID):
+                continue
+            if _panel_cid != _target_cid:
+                _log.warning(
+                    f"cold_start_scan: nick={_nick_key!r} map→{_target_cid} "
+                    f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
+                )
+                _target_cid = _panel_cid
+            _ev = emit_audit(
+                "COURIER_ASSIGNED",
+                order_id=_oid_str,
+                courier_id=_target_cid,
+                payload={
+                    "source": "cold_start_scan",
+                    "nick": _nick_key,
+                },
+                event_id=f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_coldstart",
+            )
+            if _ev:
+                update_from_event({
+                    "event_type": "COURIER_ASSIGNED",
+                    "order_id": _oid_str,
+                    "courier_id": _target_cid,
+                    "payload": {"source": "cold_start_scan"},
+                })
+                stats["cold_start_emitted"] += 1
+                _log.info(
+                    f"COLD_START_CATCHUP {_oid_str} → cid={_target_cid} "
+                    f"nick={_nick_key!r} sid={_sid}"
+                )
+                _save_plan_on_assign(_oid_str, _target_cid)
+    return stats
+
+
 def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
     """Jeden cykl watchera. Zwraca (statystyki, parsed_dict_or_None).
 
     V3.28 Layer 2+3: parsed zachowane dla parser_health.record_tick_full().
     """
-    global _fail_count, _last_panel_unreachable_emit
+    global _fail_count, _last_panel_unreachable_emit, _cold_start_done
 
     cycle_stats = {"cycle": cycle_num, "at": now_iso()}
     cycle_parsed: Optional[dict] = None
@@ -1295,6 +1406,25 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
 
         from dispatch_v2.panel_client import _session
         csrf = _session.get("csrf") or ""
+
+        # tech-debt #24: cold-start packs scan one-shot post-restart.
+        # Wykonaj PRZED _diff_and_emit żeby state_get_all() w diff
+        # widział COURIER_ASSIGNED emitowane przez scan (uniknij race
+        # gdy diff emit COURIER_PICKED_UP bez prior ASSIGNED → reconcile
+        # phantom MISSING_FROM_STATE 4h+ później).
+        if not _cold_start_done:
+            try:
+                cs_stats = _post_restart_cold_start_scan(parsed, csrf)
+                cycle_stats.update(cs_stats)
+                _log.info(
+                    f"COLD_START_SCAN done cycle={cycle_num}: "
+                    f"scanned={cs_stats.get('cold_start_scanned', 0)} "
+                    f"emitted={cs_stats.get('cold_start_emitted', 0)} "
+                    f"errors={cs_stats.get('cold_start_errors', 0)}"
+                )
+            except Exception as _cs_e:
+                _log.warning(f"cold_start_scan fail (non-blocking): {_cs_e}")
+            _cold_start_done = True
 
         diff_stats = _diff_and_emit(parsed, csrf)
         cycle_stats.update(diff_stats)
