@@ -2264,6 +2264,12 @@ def _assess_order_impl(
                     "order_id": str(b.get("order_id") or ""),
                     "restaurant": b.get("restaurant"),
                     "delivery_address": b.get("delivery_address"),
+                    # V3.28 (2026-05-09) — czas_kuriera per bag-order propagowany do
+                    # bag_context payload, żeby telegram_approver render mógł
+                    # preferować commit zamiast computed ETA z plan.pickup_at.
+                    # Backward compat: nowe pola optional, downstream ignore gdy None.
+                    "czas_kuriera_warsaw": b.get("czas_kuriera_warsaw"),
+                    "czas_kuriera_hhmm": b.get("czas_kuriera_hhmm"),
                 }
                 for b in bag_raw
                 if b.get("order_id")

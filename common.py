@@ -1437,6 +1437,18 @@ ENABLE_V3274_FROZEN_PICKUP_WINDOW = _os.environ.get(
     "ENABLE_V3274_FROZEN_PICKUP_WINDOW", "1") == "1"  # default True per Adrian — safety zasada
 V3274_FROZEN_PICKUP_WINDOW_MIN = 5.0  # ±5 min od czas_kuriera dla committed orderów
 
+# V3.28 (2026-05-09) — render-side commit priority dla Telegram trasa.
+# Bug context (FAZA 0 audit): plan.pickup_at z greedy fallback po V3.27.4 reject
+# pokazuje computed ETA chain ignorujący czas_kuriera commit. Render telegram_approver
+# iteruje plan.pickup_at jako jedyne źródło → kurier widzi nieprawdziwą trasę
+# (np. order 471744: panel commit 13:05 vs render 13:17 = +12 min divergence).
+# Fix: render preferuje czas_kuriera_warsaw z bag_context dla committed bag-orders,
+# fallback do plan.pickup_at gdy commit None (new orders, pre-acceptance).
+# Visual: tilde marker `~HH:MM` dla source="eta", plain HH:MM dla source="commit".
+ENABLE_V3274_RENDER_PICKUP_COMMIT_PRIORITY = _os.environ.get(
+    "ENABLE_V3274_RENDER_PICKUP_COMMIT_PRIORITY", "1") == "1"  # default True
+V3274_RENDER_DIVERGENCE_WARN_MIN = 5.0  # warn gdy |plan_eta - commit| > 5 min
+
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
 # Adrian's specification: grupujemy ordery z tej samej restauracji TYLKO gdy
 # czas_kuriera ±5 min AND drop quadrants compatible (same lub adjacent w
