@@ -218,6 +218,9 @@ def _serialize_candidate(c) -> dict:
         "r6_worst_oid": m.get("r6_worst_oid"),
         "r6_is_solo": m.get("r6_is_solo"),
         "r6_bag_size": m.get("r6_bag_size"),
+        # V3.28 ANCHOR FIX 2026-05-10 — per-order thermal violations (anchor=ready_at)
+        "r6_per_order_violations": m.get("r6_per_order_violations"),
+        "r6_picked_up_violations": m.get("r6_picked_up_violations"),
         "r7_ride_km": m.get("r7_ride_km"),
         "r7_warsaw_hour": m.get("r7_warsaw_hour"),
         "r7_in_peak": m.get("r7_in_peak"),
@@ -403,6 +406,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r6_worst_oid": best_m.get("r6_worst_oid"),
             "r6_is_solo": best_m.get("r6_is_solo"),
             "r6_bag_size": best_m.get("r6_bag_size"),
+            # V3.28 ANCHOR FIX 2026-05-10 — per-order thermal violations (anchor=ready_at)
+            "r6_per_order_violations": best_m.get("r6_per_order_violations"),
+            "r6_picked_up_violations": best_m.get("r6_picked_up_violations"),
             # V3.28 ETAP 2: effective_start_at = shift_start gdy pre_shift clamp
             # odpalił, inaczej None. Telegram _route_lines_v2 użyje go zamiast
             # real now dla "start" line w trasie. pre_shift_clamp_applied flag
