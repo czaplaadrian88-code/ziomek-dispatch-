@@ -877,12 +877,16 @@ def _ortools_plan(
     # minimalizuje augmented cost ale time dimension cumul zostaje drive-only.
     # Default flag OFF (env override) — empirical calibration.
     cost_matrix: List[List[float]] = [row[:] for row in time_matrix]
+    _p3d1_idle_estimate_total = 0.0  # sum wait_estimate (min) — observability
+    _p3d1_n_edges_augmented = 0
+    _p3d1_active = False
     try:
         if (
             getattr(_common, "ENABLE_V328_P3D1_IDLE_COST", False)
             and time_windows is not None
             and now is not None
         ):
+            _p3d1_active = True
             _idle_w = float(getattr(_common, "V328_P3D1_IDLE_WEIGHT", 1.0))
             for j in range(N):
                 node_j = nodes[j]
@@ -904,12 +908,27 @@ def _ortools_plan(
                     # defensive guard przeciw absurdnym ready_min wartościom.
                     wait_estimate = min(wait_estimate, 60.0)
                     cost_matrix[i][j] += wait_estimate * _idle_w
+                    _p3d1_idle_estimate_total += wait_estimate
+                    _p3d1_n_edges_augmented += 1
     except Exception as _idle_e:
         _log.warning(
             f"V328_P3D1_IDLE_COST_FAIL fallback to time_matrix N={N}: "
             f"{type(_idle_e).__name__}: {str(_idle_e)[:120]}"
         )
         cost_matrix = [row[:] for row in time_matrix]  # re-copy clean
+        _p3d1_idle_estimate_total = 0.0
+        _p3d1_n_edges_augmented = 0
+        _p3d1_active = False
+    # V3.28-P3-D1 observability — empirical signal dla weight calibration.
+    # Grep pattern: `V328_P3D1_COST oid=`. Emit only gdy active & non-zero (signal).
+    if _p3d1_active and _p3d1_n_edges_augmented > 0:
+        _new_oid = getattr(new_order, "order_id", "?")
+        _log.info(
+            f"V328_P3D1_COST oid={_new_oid} N={N} "
+            f"idle_estimate_min={_p3d1_idle_estimate_total:.1f} "
+            f"n_edges_augmented={_p3d1_n_edges_augmented} "
+            f"bag_size={len(bag)} weight={_idle_w}"
+        )
 
     solution = tsp_solver.solve_tsp_with_constraints(
         num_stops=N,
