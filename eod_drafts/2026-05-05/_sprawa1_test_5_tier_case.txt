@@ -1,0 +1,12 @@
+# Test 5: tier case insensitivity (mix STANDARD / Std / std / Standard)
+# Expected: 9 valid, 0 skipped (all normalize via HUMAN_TO_INTERNAL_TIER lower())
+
+Kuba Olchowik 600 STANDARD
+Marcin Bystrowski 601 Std
+Gabriel Ostapczuk 602 NEW
+Szymon Bawerna 603 standard
+Daniel Malicki 604 SLOW
+Mykyta Kumeiko 426 Standard
+Szymon Sadowski 522 New
+Grzegorz Rogowski 500 new
+Filip Prończuk 354 STD

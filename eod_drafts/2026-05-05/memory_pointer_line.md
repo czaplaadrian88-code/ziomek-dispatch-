@@ -1,0 +1,1 @@
+- [TASK B Phase 2 + TASK A + Issue #1 LIVE 2026-05-05](project_sprint_05_05.md) — 5 deploys + 8 tagów + 114 tests; branch `sprint-05-05-tb-phase2-task-a`; flag flip seq 10:35-11:00 UTC; geocoding RC PROVEN defer Sr/Pt

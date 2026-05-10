@@ -1,0 +1,30 @@
+=== TAK=0 MYSTERY ===
+Window: last 48h (2026-04-28 16:05:49 → 2026-04-30 16:05:49 Warsaw)
+Total proposes (entries with decision): 693
+
+Outcome distribution:
+  TAK: 0
+  NIE: 0
+  INNY: 11
+  KOORD: 0
+  TG_REASON: 1
+  PANEL_OVERRIDE: 287
+  TIMEOUT_SUPERSEDED: 384
+  ASSIGN_DIRECT: 9
+  TIMEOUT_SKIP: 0
+  REPLY_OVERRIDE: 0
+  OPERATOR_COMMENT: 1
+
+Telegram-click rate (TAK/NIE/INNY/KOORD/TG_REASON): 1.7%  (TAK=0)
+Median time propose → panel_change: 302.9 s  (n=671)
+% panel_change <30s after propose: 2.4%  (16/671)
+% TIMEOUT_SUPERSEDED with assign <60s: 0.0%  (0/384)
+% PROPOSE with panel-change <60s: 16.6%
+
+DIAGNOSIS scores (relative weights):
+  A) Adrian doesn't see Telegram (1 - TG-click rate): 98.3
+  B) Race condition (panel <30s):                     2.4
+  C) Fast assign panel-first (<60s of TIMEOUT_SUPER): 0.0
+  D) Genuine ignore (TIMEOUT_SKIP share):             0.0
+
+Verdict: TELEGRAM IGNORED IN PEAK — operator workload too high for TG approval

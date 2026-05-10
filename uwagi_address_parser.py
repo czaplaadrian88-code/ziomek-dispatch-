@@ -1,280 +1,212 @@
-"""Parse pickup street + number out of corporate-account uwagi free-text.
-
-Used for panel address_id=161 (Nadajesz.pl) where the actual pickup address is
-embedded in uwagi rather than panel address fields. Pure / deterministic.
-"""
-
-from __future__ import annotations
-
 import re
+import unicodedata
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
+
+# Regex patterns compiled at module level for speed
+# Pattern to extract pickup line from uwagi text
+# Pickup line starts after "Odbiór" or "Odbierasz" keyword, ends at
+# "\r\n" + "Dostawa:" / "Doręczenie" / "doręczenie" or end of string
+_PICKUP_LINE_PATTERN = re.compile(
+    r'(?:Odbiór|Odbierasz)\s*[:\-]?\s*(.*?)(?:\r?\n\s*(?:Dostawa:|Doręczenie|doręczenie)|$)',
+    re.DOTALL | re.IGNORECASE
+)
+
+# Time prefix patterns to strip from beginning of pickup line
+_TIME_PREFIX_PATTERN = re.compile(
+    r'^(?:\d{1,2}:\d{2}(?::\d{2})?\s*[:\-]?\s*'  # HH:MM or HH:MM:SS
+    r'|\d{1,2}:\d{2}-\d{1,2}:\d{2}\s*[:\-]?\s*'  # HH:MM-HH:MM
+    r'|\d{1,2}-\d{1,2}\s*[:\-]?\s*'               # HH-HH
+    r'|do\s+\d{1,2}:\d{2}\s*[:\-]?\s*)'           # do HH:MM
+)
+
+# Narrative connectors to strip after time prefix
+_NARRATIVE_PREFIX_PATTERN = re.compile(
+    r'^(?:z\s+|ze\s+|ze\s+sklepu\s+|przesyłki\s+z\s+|walizki\s+z\s+adresu\s+)',
+    re.IGNORECASE
+)
+
+# P1 strict pattern for street+number in a token
+_P1_STREET_NUMBER_PATTERN = re.compile(
+    r'^\s*(?:ul\.\s*|al\.\s*)?'
+    r'([A-ZŁŚĆŹŻ][A-Za-złśćźżóęąńĄĘĆŁŃŚŻŹÓ\.\-\s]{2,40}?)'
+    r'\s+(\d+[A-Za-z]?(?:/\d+|/lok\.\s*\d+|\s+Lokal\s+\d+)?)\s*$'
+)
+
+# P2 narrative fallback pattern
+_P2_NARRATIVE_PATTERN = re.compile(
+    r'(?:ul\.\s*|al\.\s*)?'
+    r'([A-ZŁŚĆŹŻa-złśćźżóęąńĄĘĆŁŃŚŻŹÓ\.\-]+(?:\s+[A-ZŁŚĆŹŻa-złśćźżóęąńĄĘĆŁŃŚŻŹÓ\.\-]+){0,3})'
+    r'\s+(\d+[A-Za-z]?(?:/\d+)?)'
+)
+
+# Stop-list for company names (will be imported lazily)
+# We'll define a default minimal set; actual stop-list from common module
+_DEFAULT_STOPLIST = frozenset({
+    "drtusz", "dzielne zuchy", "mali wojownicy", "matka polka hybrydowa",
+    "7 kick", "drapieżnik", "kick", "zuchy", "wojownicy", "polka",
+    "hybrydowa",
+})
 
 
 @dataclass(frozen=True)
 class ParsedPickup:
-    street: str
-    number: str
-    company: Optional[str]
-    raw_pickup_line: str
-    confidence: float
+    street: str           # canonical: "Wyszyńskiego" or "Gen. Stanisława Maczka"
+    number: str           # canonical: "2/75" or "43C" or "3 Lokal 1"
+    company: Optional[str]    # if extractable, e.g. "Drtusz"
+    raw_pickup_line: str  # for audit trail
+    confidence: float     # 0.0-1.0
 
 
-# Locate keyword "Odbior" / "Odbierasz" (case-insensitive, polish chars).
-_RE_ODBIOR_KEYWORD = re.compile(r"(?i)(odbi[oó]r|odbierasz)")
-
-# Tail terminators that close pickup line (newline + delivery keyword).
-_RE_TAIL_NEWLINE_DOSTAWA = re.compile(r"(?i)\r?\n\s*(dostawa|dor[eę]czenie)")
-
-# Same-line narrative terminator (", doreczenie ..." or ", dostawa ...").
-_RE_TAIL_INLINE = re.compile(r"(?i),\s*(dor[eę]czenie|dostawa)\b")
-
-# Time prefixes (try in order: longest/most-specific first).
-_RE_TIME_PREFIXES: Tuple[re.Pattern, ...] = (
-    re.compile(r"^do\s+\d{1,2}:\d{2}\s*[:,]\s*"),
-    re.compile(r"^do\s+\d{1,2}:\d{2}\s+"),
-    re.compile(r"^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*:\s*"),
-    re.compile(r"^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s+"),
-    re.compile(r"^\d{1,2}\s*-\s*\d{1,2}\s*:\s*"),
-    re.compile(r"^\d{1,2}\s*-\s*\d{1,2}\s+"),
-    re.compile(r"^\d{1,2}:\d{2}\s*:\s*"),
-    re.compile(r"^\d{1,2}:\d{2}\s+"),
-)
-
-# Narrative connectors stripped from the front of pickup body.
-_RE_NARRATIVE_CONNECTORS: Tuple[re.Pattern, ...] = (
-    re.compile(r"(?i)^walizki\s+z\s+adresu\s+"),
-    re.compile(r"(?i)^przesy[lł]ki\s+z\s+"),
-    re.compile(r"(?i)^ze\s+sklepu\s+"),
-    re.compile(r"(?i)^ze\s+"),
-    re.compile(r"(?i)^z\s+"),
-    re.compile(r"(?i)^do\s+"),
-)
-
-# Allowed alphabetic chars (Latin + extended ranges incl. Polish diacritics).
-_LETTER_CLASS = r"A-Za-zÀ-ɏͰ-ϿЀ-ӿ"
-_UPPER_LETTER_CLASS = r"A-ZÀ-ÞĀ-ɏͰ-ϿЀ-ӿ"
-
-# P1 STRUCTURED: tight street + number per comma-token.
-# Allows: "Mickiewicza 50", "Wyszynskiego 2/75", "Kijowska 7/lok.1",
-# "Boruty 17", "Gen. Gustawa Orlicz-Dreszera 3 Lokal 1", "Wierzbowa 2/u12",
-# "Mickiewicza 43C", "Mieszka I 1/51".
-_RE_P1_STREET_NUMBER = re.compile(
-    r"^(?:ul\.\s*|al\.\s*)?"
-    r"(?P<street>[" + _UPPER_LETTER_CLASS + r"][" + _LETTER_CLASS + r"\.\-]*"
-    r"(?:\s+[" + _LETTER_CLASS + r"\.\-]+){0,4}?)"
-    r"\s+"
-    r"(?P<num>\d+[A-Za-z]?(?:/\d+|/lok\.?\s*\d+|/u\d+|\s+Lokal\s+\d+)?)"
-    r"\s*$"
-)
-
-# P2 NARRATIVE: looser scan inside whole pickup line.
-_RE_P2_STREET_NUMBER = re.compile(
-    r"(?:ul\.\s*|al\.\s*)?"
-    r"(?P<street>[" + _LETTER_CLASS + r"\.\-]+"
-    r"(?:\s+[" + _LETTER_CLASS + r"\.\-]+){0,3})"
-    r"\s+"
-    r"(?P<num>\d+[A-Za-z]?(?:/\d+)?)"
-)
-
-# Capitalized-words company candidate (no digits).
-_RE_COMPANY_CANDIDATE = re.compile(
-    r"^[" + _LETTER_CLASS + r"][" + _LETTER_CLASS + r"\s\.\-]*$"
-)
-
-# Used to test "must contain at least one alphabetic char".
-_RE_HAS_LETTER = re.compile(r"[" + _LETTER_CLASS + r"]")
-
-# Strip ul./al./gen. prefix (case-insensitive) for plausibility alpha-count.
-_RE_STRIP_PREFIXES = re.compile(r"(?i)^(?:ul\.|al\.|gen\.)\s*")
-
-# Strip ul./al. prefix (case-insensitive) for canonicalization.
-_RE_CANONICAL_STRIP = re.compile(r"(?i)^(?:ul\.|al\.)\s*")
+def _normalize(text: str) -> str:
+    """Normalize unicode characters (NFKD) and strip."""
+    return unicodedata.normalize('NFKD', text).strip()
 
 
-def _load_stoplist() -> frozenset:
-    # Lazy import so tests can monkeypatch dispatch_v2.common.
-    try:
-        from dispatch_v2.common import UWAGI_PARSER_COMPANY_STOPLIST
-    except ImportError:
-        import os
-        import sys
-        sys.path.insert(
-            0,
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        )
-        from dispatch_v2.common import UWAGI_PARSER_COMPANY_STOPLIST
-    return UWAGI_PARSER_COMPANY_STOPLIST
-
-
-def _extract_pickup_line(text: str) -> Optional[str]:
-    # Locate first Odbior / Odbierasz keyword.
-    m = _RE_ODBIOR_KEYWORD.search(text)
-    if not m:
-        return None
-    body = text[m.end():]
-
-    # Cut at newline + Dostawa / Doreczenie.
-    cut1 = _RE_TAIL_NEWLINE_DOSTAWA.search(body)
-    end_idx = cut1.start() if cut1 else len(body)
-
-    # Cut at same-line narrative terminator earlier than newline cut.
-    cut2 = _RE_TAIL_INLINE.search(body, 0, end_idx)
-    if cut2:
-        end_idx = cut2.start()
-
-    line = body[:end_idx]
-
-    # Strip leading separators (colon, space, tab).
-    line = line.lstrip(": \t")
-
-    # Strip leading time prefix (try each variant in priority order).
-    for pat in _RE_TIME_PREFIXES:
-        m2 = pat.match(line)
-        if m2:
-            line = line[m2.end():]
+def _is_plausible_street(street: str, stoplist: frozenset) -> bool:
+    """Check plausibility of a street candidate."""
+    if not street:
+        return False
+    # Must contain at least one letter (not purely numeric)
+    if not any(c.isalpha() for c in street):
+        return False
+    # Normalize for stoplist check
+    norm = _normalize(street).lower()
+    if norm in stoplist:
+        return False
+    # Strip common prefixes for length check
+    stripped = norm
+    for prefix in ("ul. ", "al. ", "gen. "):
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix):]
             break
-
-    # Strip leading narrative connector (one round; they don't chain).
-    for pat in _RE_NARRATIVE_CONNECTORS:
-        m3 = pat.match(line)
-        if m3:
-            line = line[m3.end():]
-            break
-
-    return line.strip()
-
-
-def _has_digit(s: str) -> bool:
-    return any(ch.isdigit() for ch in s)
-
-
-def _plausible(street: str, number: str, stoplist: frozenset) -> bool:
-    if not number or not _has_digit(number):
-        return False
-    if street.casefold().strip() in stoplist:
-        return False
-    stripped = _RE_STRIP_PREFIXES.sub("", street)
-    alpha_count = len(_RE_HAS_LETTER.findall(stripped))
-    if alpha_count < 3:
-        return False
-    if not _RE_HAS_LETTER.search(street):
+    if len(stripped) < 3:
         return False
     return True
 
 
 def _canonicalize_street(street: str) -> str:
-    s = _RE_CANONICAL_STRIP.sub("", street).strip()
-    # Title-case ONLY if entirely uppercase (preserve mixed case like
-    # "Wyszynskiego" or "Gen. Gustawa Orlicz-Dreszera").
-    if s and s == s.upper():
-        s = " ".join(tok.capitalize() if tok else tok for tok in s.split(" "))
+    """Apply canonicalization rules."""
+    s = street.strip()
+    # Strip "ul. " or "al. " prefix (preserve "Gen. ")
+    if s.lower().startswith("ul. "):
+        s = s[4:]
+    elif s.lower().startswith("al. "):
+        s = s[4:]
+    # Title-case if all-uppercase (preserve mixed case)
+    if s.isupper():
+        s = s.title()
     return s
 
 
-def _is_company_candidate(token: str, stoplist: frozenset) -> bool:
-    t = token.strip().rstrip(".").strip()
-    if not t:
-        return False
-    if _has_digit(t):
-        return False
-    if not _RE_COMPANY_CANDIDATE.match(t):
-        return False
-    if t.casefold() in stoplist:
-        return False
-    return True
+def _extract_pickup_line(text: str) -> Optional[str]:
+    """Extract the pickup line from uwagi text."""
+    m = _PICKUP_LINE_PATTERN.search(text)
+    if not m:
+        return None
+    line = m.group(1).strip()
+    if not line:
+        return None
+    # Strip time prefix
+    line = _TIME_PREFIX_PATTERN.sub('', line).strip()
+    # Strip narrative connectors
+    line = _NARRATIVE_PREFIX_PATTERN.sub('', line).strip()
+    return line
 
 
-def _looks_like_stoplisted(token: str, stoplist: frozenset) -> bool:
-    t = token.strip().rstrip(".").strip().casefold()
-    if t in stoplist:
-        return True
-    # Multi-token compound — strip trailing digit-suffix and re-check.
-    no_trailing_num = re.sub(r"\s+\d+\S*\s*$", "", t).strip()
-    if no_trailing_num and no_trailing_num in stoplist:
-        return True
-    # Token may carry trailing narrative ("Matka Polka Hybrydowa. dopytaj...")
-    # — check if any stoplist entry is a word-boundary prefix of token.
-    for entry in stoplist:
-        if not entry:
+def _try_p1(pickup_line: str, stoplist: frozenset) -> Optional[ParsedPickup]:
+    """Try strict P1 extraction."""
+    tokens = [t.strip() for t in pickup_line.split(',')]
+    street = None
+    number = None
+    company = None
+    for token in tokens:
+        if not token:
             continue
-        if t.startswith(entry):
-            tail = t[len(entry):]
-            if not tail or tail[0] in (" ", ".", ",", "\t"):
-                return True
-    return False
+        m = _P1_STREET_NUMBER_PATTERN.match(token)
+        if m:
+            cand_street = m.group(1).strip()
+            cand_number = m.group(2).strip()
+            if _is_plausible_street(cand_street, stoplist):
+                street = cand_street
+                number = cand_number
+                continue
+        # Not a street+number token -> potential company
+        # Only consider if it's a single word or short phrase
+        if company is None:
+            # Simple heuristic: if token is not too long and not a number
+            if len(token) < 50 and not token.replace(' ', '').isdigit():
+                company = token
+    if street is not None and number is not None:
+        confidence = 1.0 if company is not None else 0.8
+        return ParsedPickup(
+            street=_canonicalize_street(street),
+            number=number,
+            company=company,
+            raw_pickup_line=pickup_line,
+            confidence=confidence,
+        )
+    return None
+
+
+def _try_p2(pickup_line: str, stoplist: frozenset) -> Optional[ParsedPickup]:
+    """Try P2 narrative fallback."""
+    m = _P2_NARRATIVE_PATTERN.search(pickup_line)
+    if not m:
+        return None
+    cand_street = m.group(1).strip()
+    cand_number = m.group(2).strip()
+    if not _is_plausible_street(cand_street, stoplist):
+        return None
+    return ParsedPickup(
+        street=_canonicalize_street(cand_street),
+        number=cand_number,
+        company=None,
+        raw_pickup_line=pickup_line,
+        confidence=0.5,
+    )
 
 
 def parse_pickup_from_uwagi(text: Optional[str]) -> Optional[ParsedPickup]:
-    """Pure function. Deterministic. No I/O. Returns None when not parseable."""
-    if text is None or not isinstance(text, str) or not text.strip():
+    """
+    Pure function. No I/O. Deterministic.
+
+    Returns ParsedPickup or None.
+
+    None when:
+    - text is None / empty / whitespace
+    - no pickup line extractable
+    - pickup line contains only company name (P3 edge — defense gate path)
+    - extracted street fails plausibility (no digit, in stop-list, etc)
+
+    Confidence:
+    - 1.0: P1 structured, time prefix + clear "STREET NUM, COMPANY"
+    - 0.8: P1 structured without company OR ambiguous order
+    - 0.5: P2 narrative regex extraction
+    - 0.0: fail (returns None)
+    """
+    if not text or not text.strip():
         return None
 
-    stoplist = _load_stoplist()
+    # Lazy import stoplist to allow test override
+    try:
+        from dispatch_v2.common import UWAGI_PARSER_COMPANY_STOPLIST
+        stoplist = UWAGI_PARSER_COMPANY_STOPLIST
+    except ImportError:
+        stoplist = _DEFAULT_STOPLIST
 
     pickup_line = _extract_pickup_line(text)
-    if pickup_line is None or not pickup_line.strip():
+    if not pickup_line:
         return None
 
-    raw_pickup_line = pickup_line
+    # Try P1 first
+    result = _try_p1(pickup_line, stoplist)
+    if result is not None:
+        return result
 
-    # Step 2 — P1 STRUCTURED extraction.
-    tokens = [t.strip() for t in pickup_line.split(",") if t.strip()]
-    street_candidates: List[Tuple[str, str]] = []
-    company_candidates: List[str] = []
-    stoplisted_tokens: List[str] = []
-    other_tokens: List[str] = []
-
-    for tok in tokens:
-        tok_clean = tok.rstrip(". ").strip()
-        m = _RE_P1_STREET_NUMBER.match(tok_clean)
-        if m:
-            street_raw = m.group("street").strip()
-            num_raw = m.group("num").strip()
-            if _plausible(street_raw, num_raw, stoplist):
-                street_candidates.append((street_raw, num_raw))
-                continue
-        if _looks_like_stoplisted(tok_clean, stoplist):
-            stoplisted_tokens.append(tok_clean)
-            continue
-        if _is_company_candidate(tok_clean, stoplist):
-            company_candidates.append(tok_clean)
-            continue
-        other_tokens.append(tok_clean)
-
-    if street_candidates:
-        street_raw, num_raw = street_candidates[0]
-        street = _canonicalize_street(street_raw)
-        company = company_candidates[0] if company_candidates else None
-        only_one_street = len(street_candidates) == 1
-        # 1.0 when exactly one street + (real company candidate found OR
-        # no noise tokens). Stoplisted tokens don't count as "company
-        # candidates" — they're filtered noise but still present.
-        clean_other = len(other_tokens) == 0
-        if only_one_street and (company is not None or clean_other):
-            confidence = 1.0
-        else:
-            confidence = 0.8
-        return ParsedPickup(
-            street=street,
-            number=num_raw,
-            company=company,
-            raw_pickup_line=raw_pickup_line,
-            confidence=confidence,
-        )
-
-    # Step 3 — P2 NARRATIVE fallback.
-    for m in _RE_P2_STREET_NUMBER.finditer(pickup_line):
-        street_raw = m.group("street").strip()
-        num_raw = m.group("num").strip()
-        if _plausible(street_raw, num_raw, stoplist):
-            street = _canonicalize_street(street_raw)
-            return ParsedPickup(
-                street=street,
-                number=num_raw,
-                company=None,
-                raw_pickup_line=raw_pickup_line,
-                confidence=0.5,
-            )
+    # Try P2
+    result = _try_p2(pickup_line, stoplist)
+    if result is not None:
+        return result
 
     return None

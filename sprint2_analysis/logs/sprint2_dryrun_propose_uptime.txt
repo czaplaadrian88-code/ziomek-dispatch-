@@ -1,0 +1,40 @@
+=== PROPOSE FLOW UPTIME ===
+Window: 2026-04-30 06:00:00 → 2026-04-30 16:06:33 Warsaw
+Total propose entries today: 107
+
+Per-hour count today vs baseline (last 7d avg):
+  07h: today=  0 | baseline_avg=  0.1 ⚠ <50% baseline
+  08h: today=  0 | baseline_avg=  0.4 ⚠ <50% baseline
+  09h: today=  3 | baseline_avg=  1.0
+  10h: today=  6 | baseline_avg=  6.3
+  11h: today= 16 | baseline_avg= 18.9 [PEAK]
+  12h: today= 19 | baseline_avg= 29.3 [PEAK]
+  13h: today=  0 | baseline_avg= 34.0 [PEAK] ⚠ <50% baseline
+  14h: today= 26 | baseline_avg= 40.3
+  15h: today= 29 | baseline_avg= 32.4
+  16h: today=  8 | baseline_avg= 31.6 ⚠ <50% baseline
+  17h: today=  0 | baseline_avg= 34.7 [PEAK] ⚠ <50% baseline
+  18h: today=  0 | baseline_avg= 38.7 [PEAK] ⚠ <50% baseline
+  19h: today=  0 | baseline_avg= 32.6 [PEAK] ⚠ <50% baseline
+  20h: today=  0 | baseline_avg= 23.4 ⚠ <50% baseline
+  21h: today=  0 | baseline_avg= 16.3 ⚠ <50% baseline
+  22h: today=  0 | baseline_avg=  2.0 ⚠ <50% baseline
+  23h: today=  0 | baseline_avg=  0.3 ⚠ <50% baseline
+
+Stoppage windows detected (gap > 5 min): 10
+  2026-04-30 09:28:31 → 2026-04-30 09:48:27: 19.9 min
+  2026-04-30 09:50:52 → 2026-04-30 10:33:45: 42.9 min
+  2026-04-30 10:44:12 → 2026-04-30 11:07:59: 23.8 min
+  2026-04-30 11:19:02 → 2026-04-30 11:25:41: 6.6 min [PEAK]
+  2026-04-30 11:27:22 → 2026-04-30 11:33:42: 6.3 min [PEAK]
+  2026-04-30 11:34:33 → 2026-04-30 11:39:43: 5.2 min [PEAK]
+  2026-04-30 11:39:43 → 2026-04-30 12:14:11: 34.5 min [PEAK]
+  2026-04-30 12:18:48 → 2026-04-30 12:30:29: 11.7 min [PEAK]
+  2026-04-30 12:32:39 → 2026-04-30 14:44:43: 132.1 min [PEAK]
+  2026-04-30 14:49:40 → 2026-04-30 15:51:24: 61.7 min
+
+Total stoppage min today: 344.7
+Peak hours stoppage min: 196.4 (109.1% of peak window)
+Today's uptime: 13.2%
+
+VERDICT: C) Uptime issue (uptime <70%): focus na propose flow stability

@@ -1,0 +1,11 @@
+{"_comment": "PoC stub trips dla HERE vs OSRM delta measurement. Białystok known endpoints + approximate district coords. 10 par × 1 hour-bucket = 10 calls per pełen run. Phase 0.1 (post-PoC): replace tym sampling z sla_log.jsonl 200 par real production trips. Coords primary z osrm_client.health_check + dispatch_v2/common.py FIRMOWE_KONTO_FALLBACK_COORDS, reszta approximate (zaakceptowane do PoC stub, NIE do Phase 2 production).", "_format": "Każda dalsza linia = JSON {oid, from_ll, to_ll, hour_warsaw, label}"}
+{"oid": "stub-01", "from_ll": [53.1325, 23.1688], "to_ll": [53.1158, 23.1611], "hour_warsaw": 13, "label": "Rukola→Akademicka shoulder"}
+{"oid": "stub-02", "from_ll": [53.1325, 23.1688], "to_ll": [53.1380, 23.1810], "hour_warsaw": 15, "label": "Rukola→Mickiewicza_Bojary peak"}
+{"oid": "stub-03", "from_ll": [53.1325, 23.1688], "to_ll": [53.1080, 23.1450], "hour_warsaw": 16, "label": "Rukola→Magazynowa_Skorupy peak"}
+{"oid": "stub-04", "from_ll": [53.1158, 23.1611], "to_ll": [53.1180, 23.2050], "hour_warsaw": 17, "label": "Akademicka→Wygoda_E peak (cross-quadrant)"}
+{"oid": "stub-05", "from_ll": [53.13222, 23.16844], "to_ll": [53.1450, 23.1500], "hour_warsaw": 14, "label": "Centrala→Nowe_Miasto_NW shoulder"}
+{"oid": "stub-06", "from_ll": [53.13222, 23.16844], "to_ll": [53.1500, 23.1450], "hour_warsaw": 18, "label": "Centrala→Antoniuk_NW shoulder"}
+{"oid": "stub-07", "from_ll": [53.1380, 23.1810], "to_ll": [53.1100, 23.2100], "hour_warsaw": 19, "label": "Bojary→Wygoda_SE shoulder (longest)"}
+{"oid": "stub-08", "from_ll": [53.1158, 23.1611], "to_ll": [53.1325, 23.1688], "hour_warsaw": 20, "label": "Akademicka→Rukola offpeak (reverse stub-01)"}
+{"oid": "stub-09", "from_ll": [53.1325, 23.1688], "to_ll": [53.1300, 23.1500], "hour_warsaw": 12, "label": "Rukola→Lipowa shoulder"}
+{"oid": "stub-10", "from_ll": [53.13222, 23.16844], "to_ll": [53.1158, 23.1611], "hour_warsaw": 22, "label": "Centrala→Akademicka offpeak"}

@@ -1,0 +1,23 @@
+[2026-05-05 13:07:42 UTC] CZASOWKA OBSERVABILITY SNAPSHOT
+===============================================================
+[1] czasowka_proposals_state.json
+    (file does not exist yet — 0 orders)
+
+[2] candidate_decisions_<today>.jsonl  (source=czasowka_proactive)
+    55 czasowka_proactive entries today
+    [2026-05-05T07:07:55.521154+00:00] oid=470030 T-50 verdict=NO_CANDIDATE n_cands=0 best=(none)
+    [2026-05-05T07:07:55.524759+00:00] oid=470040 T-50 verdict=PROPOSED n_cands=2 best=cid=413 score=80.0
+    [2026-05-05T07:07:55.528205+00:00] oid=470040 T-40 verdict=PROPOSED n_cands=1 best=cid=502 score=75.0
+    [2026-05-05T07:07:55.530536+00:00] oid=470050 T-0 verdict=ALERT_T0 n_cands=0 best=(none)
+    [2026-05-05T07:07:55.533502+00:00] oid=470070 T-70 verdict=PROPOSED n_cands=1 best=cid=413 score=78.4
+
+[3] learning_log.jsonl tail (last 100 lines, events=['CZASOWKA_DECISION', 'CZASOWKA_PROPOSAL', 'CZASOWKA_TRIGGER_FIRE', 'FLAG_FLIP_TASK_A'])
+    no matching events in tail window
+
+[journal] dispatch-czasowka.service  (last 5 minutes ago)
+    0 ERROR/WARN
+
+[journal] dispatch-telegram.service  (last 5 minutes ago)
+    0 ERROR/WARN
+
+===============================================================
