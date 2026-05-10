@@ -1,0 +1,10 @@
+=== SANITY CHECKS ===
+  ✅ learning_log present (mtime 0.2 min ago)
+  ✅ events.db readable — 21489 events rows
+  ✅ Sprint 1 logging (pool_total_count) present in 96 entries since 11:05
+  ✅ PANEL_OVERRIDE count = 28 — YELLOW (target ≥30)
+  ✅ Time window: 2026-04-30 11:05:00 → 2026-04-30 16:05:02
+  ✅ Disk free: 8145 MB
+  ✅ learning_log not locked
+
+STATUS: YELLOW — 1 warning(s); run with caveats

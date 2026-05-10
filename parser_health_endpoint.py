@@ -362,6 +362,172 @@ def _v328_compute_downstream_status(
     }
 
 
+# MP-#14 (2026-05-08): /health/all aggregator endpoint.
+# worst-status-wins z 6 sygnałów: parser, downstream, reconciliation, cron timers,
+# shadow worker, events pipeline. Source: OBSERVABILITY B.4, OPS R7+R10.
+_MP14_STATUS_PRIORITY = {
+    "ok": 0,
+    "healthy": 0,
+    "active": 0,
+    "unknown": 0,
+    "stale": 2,
+    "failed": 3,
+    "degraded": 3,
+    "error": 3,
+    "critical": 4,
+}
+
+
+def _mp14_worst_status(statuses) -> str:
+    """worst-status-wins: critical > degraded > ok. Maps stale/failed/error → degraded."""
+    levels = [_MP14_STATUS_PRIORITY.get(s, 0) for s in statuses if s]
+    if not levels:
+        return "ok"
+    worst = max(levels)
+    if worst >= 4:
+        return "critical"
+    if worst >= 2:
+        return "degraded"
+    return "ok"
+
+
+def _mp14_load_cron_summary() -> Dict[str, Any]:
+    """Aggregate cron_health.json units → component summary.
+
+    Defense-in-depth: NIGDY raise — cron_health.json missing → status=unknown.
+    """
+    try:
+        from dispatch_v2.observability.cron_health import load_health, is_stale
+    except Exception as e:
+        return {"status": "unknown", "reason": f"cron_health_module_unavailable: {type(e).__name__}",
+                "stale_units": [], "failed_units": [], "units_count": 0}
+    try:
+        data = load_health()
+        units = data.get("units", {})
+        stale_list = []
+        failed_list = []
+        for unit_name, entry in units.items():
+            unit_status = entry.get("status", "unknown")
+            if entry.get("type") != "long_running" and is_stale(unit_name):
+                stale_list.append(unit_name)
+            if unit_status == "failed" or entry.get("consecutive_failures", 0) >= 3:
+                failed_list.append(unit_name)
+        if failed_list:
+            agg_status = "degraded"
+            reason = f"failed_units={failed_list[:3]}"
+        elif stale_list:
+            agg_status = "degraded"
+            reason = f"stale_units={stale_list[:3]}"
+        else:
+            agg_status = "ok"
+            reason = None
+        return {
+            "status": agg_status,
+            "reason": reason,
+            "stale_units": stale_list,
+            "failed_units": failed_list,
+            "units_count": len(units),
+        }
+    except Exception as e:
+        return {"status": "unknown", "reason": f"cron_health_load_fail: {type(e).__name__}: {e}",
+                "stale_units": [], "failed_units": [], "units_count": 0}
+
+
+def _mp14_build_all_snapshot(parser_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Compose /health/all aggregator snapshot.
+
+    Args:
+        parser_snapshot: existing /health/parser response (passed from caller dla code reuse)
+
+    Returns aggregator z components + overall_status (worst-status-wins).
+    """
+    # Component 1: parser (z passed snapshot, NIE re-fetch)
+    parser_status = parser_snapshot.get("status", "unknown")
+    parser_anomaly = parser_snapshot.get("anomaly_reason")
+    parser_comp = {
+        "status": parser_status if parser_status in _MP14_STATUS_PRIORITY else "unknown",
+        "reason": parser_anomaly if parser_anomaly else None,
+    }
+
+    # Component 2: downstream pipeline (from existing field)
+    downstream_comp = {
+        "status": parser_snapshot.get("downstream_status", "ok"),
+        "reason": parser_snapshot.get("downstream_reason"),
+    }
+
+    # Component 3: reconciliation (defensive)
+    recon_comp = {"status": "unknown", "reason": "reconciliation_skipped"}
+    try:
+        from dispatch_v2.reconciliation.health_endpoint import get_reconciliation_health
+        rh = get_reconciliation_health()
+        recon_comp = {
+            "status": rh.get("status", "unknown"),
+            "reason": rh.get("reason"),
+        }
+    except Exception as e:
+        recon_comp = {"status": "unknown", "reason": f"reconciliation_unavailable: {type(e).__name__}"}
+
+    # Component 4: cron timers (MP-#4 cron_health.json)
+    cron_comp = _mp14_load_cron_summary()
+
+    # Component 5: shadow worker
+    worker_age = parser_snapshot.get("worker_processed_age_sec")
+    if worker_age is None:
+        shadow_comp = {"status": "unknown", "reason": "no_heartbeat_in_5min", "age_sec": None}
+    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2:
+        shadow_comp = {"status": "critical", "reason": "worker_stuck", "age_sec": worker_age}
+    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC:
+        shadow_comp = {"status": "degraded", "reason": "worker_slow", "age_sec": worker_age}
+    else:
+        shadow_comp = {"status": "ok", "reason": None, "age_sec": worker_age}
+
+    # Component 6: events pipeline (telegram queue + new orders flow)
+    failed_1h = parser_snapshot.get("events_failed_last_1h_count", 0)
+    new_orders_1h = parser_snapshot.get("new_orders_last_1h_count", 0)
+    last_propose_age = parser_snapshot.get("last_proposal_sent_age_sec")
+    if failed_1h > V328_DOWNSTREAM_FAILED_1H_THRESHOLD:
+        events_comp = {"status": "degraded", "reason": "elevated_failure_rate"}
+    elif (last_propose_age is not None and
+          last_propose_age > V328_DOWNSTREAM_PIPELINE_SILENT_AGE_SEC and
+          new_orders_1h > 0):
+        events_comp = {"status": "critical", "reason": "pipeline_silent_despite_work"}
+    else:
+        events_comp = {"status": "ok", "reason": None}
+    events_comp.update({
+        "failed_1h": failed_1h,
+        "new_orders_1h": new_orders_1h,
+        "last_propose_age_sec": last_propose_age,
+    })
+
+    components = {
+        "parser": parser_comp,
+        "downstream": downstream_comp,
+        "reconciliation": recon_comp,
+        "cron_timers": cron_comp,
+        "shadow_worker": shadow_comp,
+        "events_pipeline": events_comp,
+    }
+
+    overall = _mp14_worst_status([c["status"] for c in components.values()])
+    overall_reason = None
+    if overall != "ok":
+        worst_components = [
+            f"{name}={c['status']}({c.get('reason') or '?'})"
+            for name, c in components.items()
+            if _MP14_STATUS_PRIORITY.get(c["status"], 0) >= 2
+        ]
+        overall_reason = "; ".join(worst_components[:3]) if worst_components else None
+
+    return {
+        "endpoint_version": "1",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "overall_status": overall,
+        "overall_reason": overall_reason,
+        "components": components,
+        "uptime_seconds": int(time.time() - _started_at),
+    }
+
+
 class _HealthHandler(BaseHTTPRequestHandler):
     """Quiet, defensive handler. NIE log każdy request (zero spam)."""
 
@@ -399,14 +565,30 @@ class _HealthHandler(BaseHTTPRequestHandler):
                                "endpoint_version": "1"}
                     http_status = 503
                 self._send_json(http_status, payload)
+            elif self.path == "/health/all":
+                # MP-#14 (2026-05-08): aggregator z worst-status-wins logic.
+                # Reuse parser snapshot dla code-share + jednolitego data source.
+                try:
+                    parser_snap = self._build_health_snapshot()
+                    payload = _mp14_build_all_snapshot(parser_snap)
+                    overall = payload.get("overall_status")
+                    http_status = 200 if overall in ("ok", "degraded") else 503
+                except Exception as e:
+                    payload = {"endpoint_version": "1", "overall_status": "error",
+                               "overall_reason": f"aggregator_fail: {type(e).__name__}: {e}",
+                               "components": {}}
+                    http_status = 500
+                self._send_json(http_status, payload)
             elif self.path == "/health":
                 # Top-level health alias (simpler curl-able)
-                payload = {"status": "ok", "endpoints": ["/health/parser", "/health/reconcile"],
+                payload = {"status": "ok",
+                           "endpoints": ["/health/parser", "/health/reconcile", "/health/all"],
                            "uptime_seconds": int(time.time() - _started_at)}
                 self._send_json(200, payload)
             else:
                 self._send_json(404, {"error": "not_found",
-                                      "available": ["/health/parser", "/health/reconcile", "/health"]})
+                                      "available": ["/health/parser", "/health/reconcile",
+                                                    "/health/all", "/health"]})
         except Exception as e:
             log.warning(f"_HealthHandler.do_GET fail (non-blocking): {e}")
             try:

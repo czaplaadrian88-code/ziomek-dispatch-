@@ -23,8 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from dispatch_v2 import event_bus, state_machine
+from dispatch_v2 import common as C, event_bus, state_machine
 from dispatch_v2.common import load_config, now_iso, setup_logger
+from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
+from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_fleet
 from dispatch_v2.dispatch_pipeline import assess_order, PipelineResult
 
@@ -36,6 +38,20 @@ POLL_BATCH_SIZE = 50
 _log = setup_logger(
     "shadow_dispatcher",
     "/root/.openclaw/workspace/scripts/logs/shadow.log",
+)
+# V3.28 (2026-05-09) — observability gap fix (FAZA 0 finding):
+# route_simulator_v2 logger nie miał handlera w shadow_dispatcher process,
+# więc V3274_OR_TOOLS_VIOLATION + V3274_TIMEWINDOW_FALLBACK + V3274_RENDER_DIVERGENCE
+# warnings z shadow path były lost (nie propagowane do file). Czasówka path
+# je łapał (handler na czasowka_scheduler logger), shadow path NIE.
+# Fix: explicit setup dla route_simulator_v2 logger w shadow_dispatcher entry point.
+_route_simulator_log = setup_logger(
+    "route_simulator_v2",
+    "/root/.openclaw/workspace/scripts/logs/route_simulator.log",
+)
+_telegram_approver_log = setup_logger(
+    "telegram_approver",
+    "/root/.openclaw/workspace/scripts/logs/telegram_approver.log",
 )
 _shutdown = False
 
@@ -335,6 +351,21 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         "delivery_address": result.delivery_address,
         "verdict": result.verdict,
         "reason": result.reason,
+        # Faza 7-AUTO-PROXIMITY (2026-05-06) — auto-route classification + telemetry.
+        # Caller (dispatch_pipeline) populated auto_route per spec
+        # eod_drafts/2026-05-06/faza_7_auto_proximity_design_spec.md sekcja 3.3.
+        "auto_route": getattr(result, "auto_route", "ACK"),
+        "auto_route_reason": getattr(result, "auto_route_reason", ""),
+        "auto_route_context": getattr(result, "auto_route_context", {}) or {},
+        # MP-#13 (2026-05-08): L3 caller propagation. degraded_osrm True gdy
+        # osrm_client.is_degraded() przy entry do assess_order. Telegram_approver
+        # format_proposal może hint'ować "⚠ OSRM degraded" gdy True. Snapshots
+        # cache_age + degraded_since_ts dla post-mortem.
+        "decision_meta": {
+            "degraded_osrm": bool(getattr(result, "degraded_osrm", False)),
+            "osrm_cache_age_s": getattr(result, "osrm_cache_age_s", None),
+            "osrm_degraded_since_ts": getattr(result, "osrm_degraded_since_ts", None),
+        },
         "best": None if best is None else {
             "courier_id": best.courier_id,
             "name": best.name,
@@ -372,6 +403,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r6_worst_oid": best_m.get("r6_worst_oid"),
             "r6_is_solo": best_m.get("r6_is_solo"),
             "r6_bag_size": best_m.get("r6_bag_size"),
+            # V3.28 ETAP 2: effective_start_at = shift_start gdy pre_shift clamp
+            # odpalił, inaczej None. Telegram _route_lines_v2 użyje go zamiast
+            # real now dla "start" line w trasie. pre_shift_clamp_applied flag
+            # dla shadow log audit + downstream consumers.
+            "effective_start_at": best_m.get("earliest_departure_utc"),
+            "pre_shift_clamp_applied": bool(best_m.get("pre_shift_clamp_applied")),
             "r7_ride_km": best_m.get("r7_ride_km"),
             "r7_warsaw_hour": best_m.get("r7_warsaw_hour"),
             "r7_in_peak": best_m.get("r7_in_peak"),
@@ -482,9 +519,15 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
 
 
 def _append_decision(path: str, record: dict) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    """MP-#11 (2026-05-08): atomic JSONL append via core helper.
+
+    Wcześniej `with open(path, 'a')` bez lock — race przy konkurencyjnych
+    write'ach z innych procesów. shadow_decisions.jsonl jest single-writer
+    (tylko shadow_dispatcher) ale pattern unifikowany cross-codebase
+    (eliminuje cargo-cult `open('a')` przy kolejnym dodaniu writer'a).
+    """
+    from dispatch_v2.core.jsonl_appender import append_jsonl
+    append_jsonl(path, record)
 
 
 def process_event(
@@ -569,11 +612,66 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             result = process_event(ev, fleet, meta)
             latency_ms = (time.time() - t0) * 1000.0
             record = _serialize_result(result, eid, latency_ms)
+            # Propagate raw restaurant pickup time (pre-extension) — telegram_approver
+            # liczy `pickup_extension_min = pickup_ready_at - pickup_at_warsaw` aby
+            # pokazać "(+N min)" gdy Ziomek przedłużył deklarację restauracji.
+            record["pickup_at_warsaw"] = payload.get("pickup_at_warsaw")
+            # Etap 1 pickup-label (2026-05-08): order_created_at = moment złożenia
+            # zamówienia (panel created_at, UTC). Telegram pokazuje "(N min od
+            # złożenia)" w linii Odbiór. Fallback w telegram_approver gdy None.
+            record["order_created_at"] = payload.get("created_at_utc")
+            # Compute mins_since_creation (best ETA pickup vs created_at) raz tutaj
+            # gdy oba są dostępne — telegram tylko renderuje, brak parsing TZ tam.
+            try:
+                _best = record.get("best") or {}
+                _created_iso = record.get("order_created_at")
+                _eta_iso = (result.best.metrics.get("eta_pickup_utc")
+                            if result.best is not None else None)
+                if _created_iso and _eta_iso:
+                    from datetime import datetime as _dt, timezone as _tz
+                    _c = _dt.fromisoformat(_created_iso.replace("Z", "+00:00"))
+                    _e = _dt.fromisoformat(_eta_iso.replace("Z", "+00:00"))
+                    if _c.tzinfo is None: _c = _c.replace(tzinfo=_tz.utc)
+                    if _e.tzinfo is None: _e = _e.replace(tzinfo=_tz.utc)
+                    _delta = (_e - _c).total_seconds() / 60.0
+                    if _delta < 0: _delta = 0.0
+                    _best["mins_since_creation"] = int(round(_delta))
+                    record["best"] = _best
+            except Exception as _ex:
+                _log.debug(f"mins_since_creation compute failed: {_ex}")
+
+            # Adrian decision 2026-05-07: suppress Telegram proposals for firmowe
+            # konto Nadajesz.pl (address_id=161). Adrian zarządza firmowymi przez
+            # panel — Telegram noise. Pre-write filter w shadow (eliminuje noise
+            # w shadow_decisions.jsonl + telegram_approver consumer naturalnie
+            # filtruje verdict=PROPOSE only). Zero telegram restart needed.
+            # Hot-reload: ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=true odwraca.
+            _aid = (ev.get("payload") or {}).get("address_id")
+            try:
+                _aid_int = int(_aid) if _aid is not None else None
+            except (TypeError, ValueError):
+                _aid_int = None
+            record["address_id"] = _aid  # audit trail in shadow log
+            if (record.get("verdict") == "PROPOSE"
+                    and _aid_int is not None
+                    and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS
+                    and not C.flag("ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS", False)):
+                _log.info(
+                    f"SHADOW {oid} firmowe-konto aid={_aid}: PROPOSE suppressed "
+                    f"(flag ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=false). "
+                    f"verdict→SUPPRESSED_FIRMOWE_KONTO"
+                )
+                record["verdict"] = "SUPPRESSED_FIRMOWE_KONTO"
+                record["reason"] = (
+                    (record.get("reason") or "PROPOSE")
+                    + " | telegram_suppressed_firmowe_konto"
+                )
+
             _append_decision(shadow_log_path, record)
             event_bus.mark_processed(eid)
             stats["processed"] += 1
             _log.info(
-                f"SHADOW {oid} → {result.verdict} "
+                f"SHADOW {oid} → {record.get('verdict', result.verdict)} "
                 f"best={record['best']['courier_id'] if record['best'] else None} "
                 f"latency={record['latency_ms']}ms"
             )
@@ -670,8 +768,28 @@ def run() -> int:
             f"first-proposal lazy login still active"
         )
 
+    # A4.1 (2026-05-09): BroadcastSubscriber dla CONFIG_RELOAD events.
+    # Defense-in-depth: init fail NIE crash worker (subscriber=None →
+    # poll skip w tick).
+    _broadcast_sub: Optional[BroadcastSubscriber] = None
+    try:
+        _broadcast_sub = BroadcastSubscriber(
+            consumer_id="shadow_dispatcher",
+            state_path=Path(
+                "/root/.openclaw/workspace/dispatch_state/event_subscribers/shadow.json"
+            ),
+        )
+        _log.info("A4.1 BroadcastSubscriber init OK consumer=shadow_dispatcher")
+    except Exception as _bs_e:
+        _log.warning(
+            f"A4.1 BroadcastSubscriber init fail "
+            f"({type(_bs_e).__name__}: {_bs_e}) — broadcast disabled"
+        )
+
     totals = {"processed": 0, "failed": 0, "skipped": 0}
     last_heartbeat = time.time()
+    last_broadcast_poll = 0.0
+    BROADCAST_POLL_INTERVAL_S = 30.0  # poll co 30s rate-limited
     # V3.28 Fix 3 (incident 03.05.2026): worker liveness tracking.
     # Pre-fix: HEARTBEAT loguje processed=N stagnate (NIE distinguish "worker
     # alive" vs "worker stuck"). Production incident 02.05 23:03 → 03.05 ~10:00:
@@ -693,20 +811,43 @@ def run() -> int:
         except Exception as e:
             _log.error(f"tick loop error: {e}\n{traceback.format_exc()}")
 
+        # A4.1: poll CONFIG_RELOAD broadcast events co 30s rate-limited.
+        # Defense-in-depth try/except — poll/handler fail NIE blocks tick.
+        if _broadcast_sub is not None and time.time() - last_broadcast_poll >= BROADCAST_POLL_INTERVAL_S:
+            try:
+                _new_events = _broadcast_sub.poll(["CONFIG_RELOAD"], limit=50)
+                if _new_events:
+                    dispatch_config_reload(_new_events, "shadow_dispatcher")
+            except Exception as _bp_e:
+                _log.warning(
+                    f"A4.1 broadcast poll fail "
+                    f"({type(_bp_e).__name__}: {_bp_e}) — skip, retry next interval"
+                )
+            last_broadcast_poll = time.time()
+
         if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_SEC:
             eb = event_bus.stats()
+            # Opcja C (2026-05-07): WORKER_STUCK alert mierzy TYLKO queue typy.
+            # Pre-fix: eb['pending'] = global count (queue + audit_log dual-write
+            # legacy 11800+ pending z status='pending' nigdy nie konsumowanych) →
+            # alert false-positive zawsze. Post-fix: pending_queue (NEW_ORDER +
+            # COURIER_PICKED_UP + COURIER_DELIVERED + ...) = real worker backlog.
+            pending_queue = event_bus.get_pending_count(
+                event_types=list(event_bus.QUEUE_EVENT_TYPES)
+            )
             # V3.28 Fix 3: truthful HEARTBEAT z worker liveness signal
-            hb_state = _v328_compute_heartbeat_state(last_processed_ts, time.time(), eb['pending'])
+            hb_state = _v328_compute_heartbeat_state(last_processed_ts, time.time(), pending_queue)
             _log.info(
                 f"HEARTBEAT totals={totals} "
-                f"event_bus=pending:{eb['pending']}/processed:{eb['processed']}/failed:{eb['failed']} "
+                f"event_bus=pending:{eb['pending']}(queue:{pending_queue})"
+                f"/processed:{eb['processed']}/failed:{eb['failed']} "
                 f"last_processed_age_sec={hb_state['age_sec']:.0f} "
                 f"worker_alive={hb_state['worker_alive']}"
             )
             # V3.28 Fix 3: worker stuck alert (multi-signal — quiet period NOT alert)
             if hb_state['is_stuck']:
                 _log.critical(
-                    f"V328_WORKER_STUCK age={hb_state['age_sec']:.0f}s pending={eb['pending']} "
+                    f"V328_WORKER_STUCK age={hb_state['age_sec']:.0f}s pending_queue={pending_queue} "
                     f"threshold_age={V328_WORKER_STUCK_AGE_SEC}s "
                     f"threshold_pending={V328_WORKER_STUCK_PENDING_THRESHOLD}"
                 )

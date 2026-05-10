@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -115,15 +116,25 @@ def _load_kurier_ids() -> Dict[str, str]:
 
 
 def resolve_cid(full_name: str, kurier_ids: Optional[Dict[str, str]] = None) -> Optional[str]:
-    """Map schedule full_name → courier_id.
+    """Map schedule full_name → courier_id (score-based v2 — Tech debt #14, 2026-05-07).
 
-    Schedule keys are full names ('Bartek Ołdziej'). kurier_ids.json keys are
-    panel display names ('Bartek O', 'Michał K'). Strategy:
-      1. exact match
-      2. case-insensitive 'first_word + first_letter_of_last_word' match
-         e.g. 'Bartek Ołdziej' → key 'Bartek O'
-      3. case-insensitive prefix on first 2 tokens
-    Returns None if no match.
+    Schedule keys are full names ('Adrian Citko'). kurier_ids.json keys are
+    panel display names ('Adrian Cit', 'Adrian R', 'Adrian'). Pre-#14 algo
+    używał fixed-length prefixów (last[:1], last[:2]) → fallback na first-name
+    unique match → bug: 'Adrian Citko' resolwowane na cid=21 (Adrian Czapla)
+    zamiast 457 (Adrian Cit). Lekcja #78 problem.
+
+    v2 strategy:
+      1. Exact match (case-sensitive) → return cid
+      2. Case-insensitive exact → return cid
+      3. Score-based fallback: dla każdego alias z tym samym first-name compute
+         similarity score:
+           - alias = bare first-name (e.g. "Adrian"): score = 1
+           - alias z surname:
+             * schedule s_last starts with alias a_last → score = len(a_last) * 10
+             * alias a_last starts with s_last (rare) → score = len(s_last) * 5
+             * else → 0
+         Pick highest score. Tie → ambiguous (return None). All-zero → None.
     """
     if not full_name:
         return None
@@ -132,30 +143,83 @@ def resolve_cid(full_name: str, kurier_ids: Optional[Dict[str, str]] = None) -> 
     if not kurier_ids:
         return None
 
+    # 1. Exact match (case-sensitive)
     if full_name in kurier_ids:
         return kurier_ids[full_name]
 
+    # 2. Case-insensitive exact match
+    fn_lc = full_name.lower()
+    for key, cid in kurier_ids.items():
+        if key.lower() == fn_lc:
+            return cid
+
+    # 3. Score-based fallback
     parts = full_name.strip().split()
     if not parts:
         return None
-    first = parts[0]
-    last = parts[-1] if len(parts) > 1 else ""
-    cand = f"{first} {last[:1]}".strip() if last else first
-    cand_lc = cand.lower()
-    cand2_lc = f"{first} {last[:2]}".lower() if last else first.lower()
+    first_lc = parts[0].lower()
+    s_last_lc = parts[-1].lower() if len(parts) > 1 else ""
 
-    for key, cid in kurier_ids.items():
-        kl = key.lower()
-        if kl == cand_lc:
-            return cid
-        if last and kl == cand2_lc:
-            return cid
-    # Fallback: first-name-only unique match (avoid ambiguity)
-    first_lc = first.lower()
-    matches = [cid for k, cid in kurier_ids.items() if k.lower() == first_lc]
-    if len(matches) == 1:
-        return matches[0]
-    return None
+    scored: List[Tuple[int, str, str]] = []  # (score, cid, alias_key)
+    for alias, cid in kurier_ids.items():
+        atokens = alias.strip().split()
+        if not atokens:
+            continue
+        if atokens[0].lower() != first_lc:
+            continue
+        if len(atokens) == 1:
+            score = 1  # bare first-name alias (e.g. "Adrian")
+        else:
+            a_last_lc = atokens[-1].lower()
+            if not s_last_lc:
+                score = 0  # schedule has only first; alias has more → mismatch
+            elif s_last_lc.startswith(a_last_lc):
+                score = len(a_last_lc) * 10
+            elif a_last_lc.startswith(s_last_lc):
+                score = len(s_last_lc) * 5
+            else:
+                score = 0
+        if score > 0:
+            scored.append((score, cid, alias))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda x: -x[0])
+    best_score, best_cid, best_alias = scored[0]
+    if len(scored) > 1 and scored[1][0] == best_score:
+        # Tie → ambiguous. Log + return None (caller emits UNMAPPED_COURIER alert).
+        try:
+            state_mod.append_learning_log({
+                "event": "RESOLVE_CID_AMBIGUOUS_TIE",
+                "full_name": full_name,
+                "tied_aliases": [a for _, _, a in scored if _ == best_score],
+                "tied_score": best_score,
+            })
+        except Exception:
+            pass  # never fail resolve_cid on log error
+        return None
+
+    # Score-based winner picked. Log if >1 same-first-name candidate (audit calibration).
+    if len(scored) > 1 or any(
+        a.split() and a.split()[0].lower() == first_lc
+        for a in kurier_ids.keys() if a != best_alias
+    ):
+        try:
+            state_mod.append_learning_log({
+                "event": "RESOLVE_CID_AMBIGUOUS_RESOLVED",
+                "full_name": full_name,
+                "winner_alias": best_alias,
+                "winner_score": best_score,
+                "winner_cid": best_cid,
+                "alternatives": [
+                    {"alias": a, "score": s, "cid": c}
+                    for s, c, a in scored[1:]
+                ],
+            })
+        except Exception:
+            pass
+    return best_cid
 
 
 def _parse_shift_dt(date_today: date, hhmm: str, *, end: bool = False) -> Optional[datetime]:
@@ -174,6 +238,49 @@ def _parse_shift_dt(date_today: date, hhmm: str, *, end: bool = False) -> Option
         return None
 
 
+def _is_garbage_name(name: str) -> bool:
+    """Heurystyka: 'name' z grafiku to komentarz/notatka, nie imie kuriera.
+
+    Filtruje:
+    - przecinek (Opony, odpisac na maila carefleetu)
+    - >4 slow (lozysko czy cos, zatkany spryskiwacz, sprawdzic klocki)
+    - pierwsza litera mala (slychac lozysko, zapala sie check)
+
+    NIE wykryje krotkich z duza pierwsza litera typu 'Aku pada' (akceptowalny
+    false-negative; w grafiku takie wpisy zwykle maja entry=None i tak skip'ne).
+    """
+    if not name or not name.strip():
+        return True
+    s = name.strip()
+    if "," in s:
+        return True
+    if len(s.split()) > 4:
+        return True
+    if s[0].islower():
+        return True
+    return False
+
+
+IGNORED_NAMES_PATH = '/root/.openclaw/workspace/dispatch_state/shift_ignored_names.json'
+
+
+def _load_ignored_names() -> set:
+    """Returns set of full_names z shift_ignored_names.json (permanent inactive).
+    Empty set on FileNotFoundError (fail-open) lub corrupt JSON (logged).
+    File schema: {"names": ["Daniel Malicki", ...], "comment": "..."}
+    """
+    try:
+        with open(IGNORED_NAMES_PATH) as f:
+            data = json.load(f)
+        names = data.get('names') if isinstance(data, dict) else data
+        return {str(n) for n in (names or [])}
+    except FileNotFoundError:
+        return set()
+    except Exception as e:
+        _log.warning(f'_load_ignored_names fail: {type(e).__name__}: {e}')
+        return set()
+
+
 def _build_candidates_starting(
     schedule: Dict[str, Any],
     now: datetime,
@@ -184,11 +291,25 @@ def _build_candidates_starting(
     today_iso: str,
     *,
     skip_already: bool = True,
+    ignored_names: set = frozenset(),
 ) -> List[Candidate]:
     """Couriers whose scheduled START is in [now+low_min, now+high_min]."""
     out: List[Candidate] = []
     seen_keys = set()
     for full_name, entry in (schedule or {}).items():
+        if _is_garbage_name(full_name):
+            continue
+        if full_name in ignored_names:
+            today_logged = state.setdefault('shift_ignored_logged', {}).setdefault(today_iso, [])
+            if full_name not in today_logged:
+                state_mod.append_learning_log({
+                    'event': 'SHIFT_IGNORED',
+                    'full_name': full_name,
+                    'reason': 'permanent_inactive_skiplist',
+                })
+                today_logged.append(full_name)
+                state_mod.save_state(state)
+            continue
         if not entry or not isinstance(entry, dict):
             continue
         start_str = entry.get("start")
@@ -212,6 +333,23 @@ def _build_candidates_starting(
                 "full_name": full_name,
                 "scheduled": shift_dt.isoformat(),
             })
+            # ETAP B: alert do Adriana z idempotencja per dzien
+            today_alerts = state.setdefault("unmapped_alerts", {}).setdefault(today_iso, [])
+            if full_name not in today_alerts:
+                try:
+                    from urllib.parse import quote
+                    b64 = quote(full_name, safe="")
+                    text = (
+                        f"\U0001F195 Nowy kurier? Grafik ma '{full_name}' ale brak w kurier_ids.json.\n"
+                        f"Aby dopisac: odpowiedz `/dopisz <cid> {full_name}` (np. `/dopisz 525 {full_name}`).\n"
+                        f"PIN wygeneruje sie automatycznie."
+                    )
+                    keyboard = [[{"text": "❌ Pomin dzisiaj", "callback_data": f"NEWCOURIER:skip:{b64}"}]]
+                    tg_send_text_with_keyboard(text, keyboard)
+                    today_alerts.append(full_name)
+                    state_mod.save_state(state)
+                except Exception as e:
+                    _log.warning(f"unmapped_courier_alert send fail: {type(e).__name__}: {e}")
             continue
         seen_keys.add(key)
         out.append(Candidate(full_name=full_name, cid=cid, shift_dt=shift_dt))
@@ -226,11 +364,26 @@ def _build_candidates_ending(
     kurier_ids: Dict[str, str],
     state: dict,
     today_iso: str,
+    *,
+    ignored_names: set = frozenset(),
 ) -> List[Candidate]:
     """Couriers whose scheduled END is in [now+low_min, now+high_min]."""
     out: List[Candidate] = []
     seen_keys = set()
     for full_name, entry in (schedule or {}).items():
+        if _is_garbage_name(full_name):
+            continue
+        if full_name in ignored_names:
+            today_logged = state.setdefault('shift_ignored_logged', {}).setdefault(today_iso, [])
+            if full_name not in today_logged:
+                state_mod.append_learning_log({
+                    'event': 'SHIFT_IGNORED',
+                    'full_name': full_name,
+                    'reason': 'permanent_inactive_skiplist',
+                })
+                today_logged.append(full_name)
+                state_mod.save_state(state)
+            continue
         if not entry or not isinstance(entry, dict):
             continue
         end_str = entry.get("end")
@@ -315,11 +468,14 @@ def run_b1_start(
     batch_window_min: int,
     batch_min_couriers: int,
     templates,
+    *,
+    ignored_names: set = frozenset(),
 ) -> int:
     """B.1 — T-60 START. Returns count of notifications sent."""
     cands = _build_candidates_starting(
         schedule, now, T60_WINDOW_LOW_MIN, T60_WINDOW_HIGH_MIN,
         kurier_ids, state, today_iso,
+        ignored_names=ignored_names,
     )
     if not cands:
         return 0
@@ -373,11 +529,28 @@ def run_b2_reminder(
     kurier_ids: Dict[str, str],
     today_iso: str,
     templates,
+    *,
+    ignored_names: Optional[set] = None,
 ) -> int:
     """B.2 — T-30 REMINDER for couriers with decision=None."""
+    if ignored_names is None:
+        ignored_names = set()
     sent = 0
     notified_at = now.isoformat()
     for full_name, entry in (schedule or {}).items():
+        if _is_garbage_name(full_name):
+            continue
+        if full_name in ignored_names:
+            today_logged = state.setdefault('shift_ignored_logged', {}).setdefault(today_iso, [])
+            if full_name not in today_logged:
+                state_mod.append_learning_log({
+                    'event': 'SHIFT_IGNORED',
+                    'full_name': full_name,
+                    'reason': 'permanent_inactive_skiplist',
+                })
+                today_logged.append(full_name)
+                state_mod.save_state(state)
+            continue
         if not entry or not isinstance(entry, dict):
             continue
         start_str = entry.get("start")
@@ -417,11 +590,14 @@ def run_b3_end(
     kurier_ids: Dict[str, str],
     today_iso: str,
     templates,
+    *,
+    ignored_names: set = frozenset(),
 ) -> int:
     """B.3 — T-60 END. Always individual (per spec) even if multiple couriers in same slot."""
     cands = _build_candidates_ending(
         schedule, now, T60_WINDOW_LOW_MIN, T60_WINDOW_HIGH_MIN,
         kurier_ids, state, today_iso,
+        ignored_names=ignored_names,
     )
     if not cands:
         return 0
@@ -483,6 +659,139 @@ def apply_unconfirmed_default(state: dict, now: datetime, today_iso: str) -> int
 # ----- main tick ----------------------------------------------------------
 
 
+# === MP-#15 (2026-05-08): Schedule staleness + daily backup ===
+
+_MP15_STALE_THRESHOLD_SEC = 30 * 60  # 30 min per master plan TOP-15 #15
+_MP15_ALERT_DEDUP_SEC = 30 * 60  # one alert per 30min (no spam)
+_MP15_STATE_PATH = "/root/.openclaw/workspace/dispatch_state/mp15_schedule_staleness.json"
+
+
+def _mp15_load_state() -> dict:
+    """Load MP-#15 alert dedup state. Fail-open na empty dict."""
+    try:
+        with open(_MP15_STATE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        _log.warning(f"MP-#15 state load fail: {e} — fresh state")
+        return {}
+
+
+def _mp15_save_state(state: dict) -> None:
+    """Atomic write MP-#15 alert state. Fail-loud (warning) na I/O error."""
+    try:
+        from dispatch_v2.core.jsonl_appender import _append_bytes  # reuse atomic primitive
+        # Direct atomic write json (NIE append) — overwrite
+        import tempfile
+        target = Path(_MP15_STATE_PATH)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".mp15_state_", suffix=".tmp", dir=str(target.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, target)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+            raise
+    except Exception as e:
+        _log.warning(f"MP-#15 state save fail: {type(e).__name__}: {e}")
+
+
+def _mp15_check_schedule_staleness(now, today_iso: str) -> None:
+    """MP-#15 (2026-05-08): alert gdy schedule_age > 30min. Dedup max 1×/30min.
+
+    Czasówka rozróżnia:
+      - schedule >30min stale → STALE_SCHEDULE_AGE alert (HIGH severity per OPS R6)
+      - dispatch nadal działa (load_schedule fail-open per Lekcja #31)
+      - alert mówi operatorowi "Sheets API rate-limit / network issue, possibly
+        nowi kurierzy nie widoczni do następnego refresh"
+
+    Defensive: NIGDY raise (worker krytyczny). Logged warnings na exception.
+    """
+    try:
+        # Lazy import — tests mogą monkey-patch w schedule_utils
+        try:
+            from schedule_utils import schedule_age_sec
+        except ImportError:
+            return  # script-only environment
+
+        age = schedule_age_sec()
+        if age is None:
+            # File missing — bigger problem niż stale, separate alert path future
+            return
+        if age <= _MP15_STALE_THRESHOLD_SEC:
+            return
+
+        # Stale → check dedup
+        mp15_state = _mp15_load_state()
+        last_alert = float(mp15_state.get("last_stale_alert_ts", 0))
+        if time.time() - last_alert < _MP15_ALERT_DEDUP_SEC:
+            return
+
+        age_min = int(age / 60)
+        msg = (
+            f"⚠ STALE_SCHEDULE_AGE — grafik {age_min} min nie był odświeżany "
+            f"(threshold: 30 min). Sheet API rate-limit lub network issue. "
+            f"Dispatch nadal działa (fail-open) ALE nowi kurierzy mogą nie być "
+            f"widoczni do następnego refresh. Sprawdź `journalctl -u dispatch-shift-notify` "
+            f"+ Google Sheets dostępność."
+        )
+        try:
+            from dispatch_v2 import telegram_utils
+            telegram_utils.send_admin_alert(msg)
+        except Exception as e:
+            _log.warning(f"MP-#15 alert Telegram send fail: {type(e).__name__}: {e}")
+            # Continue — log alert nawet jak Telegram unreachable
+            _log.error(f"MP-#15 STALE_SCHEDULE_AGE: schedule age {age_min}min > 30min threshold (alert NOT sent — Telegram down)")
+            return
+
+        # Update dedup state
+        mp15_state["last_stale_alert_ts"] = time.time()
+        mp15_state["last_stale_age_min"] = age_min
+        mp15_state["last_stale_at"] = now.isoformat()
+        _mp15_save_state(mp15_state)
+        _log.warning(f"MP-#15 STALE_SCHEDULE_AGE alerted: {age_min}min stale, dedup armed for 30min")
+    except Exception as e:
+        _log.warning(f"MP-#15 staleness check unexpected fail: {type(e).__name__}: {e}")
+
+
+def _mp15_maybe_write_daily_backup(now, today_iso: str) -> None:
+    """MP-#15 (2026-05-08): write schedule_today_backup.json once per day.
+
+    Idempotent w obrębie dnia (state field `last_backup_date_iso`). Worker tickuje
+    co minutę, więc pierwszy tick po 06:00 Warsaw zapisze (gdy SCHEDULE_FILE
+    fresh post-fetch). Defensive: failure logged ale NIE blokuje workera.
+    """
+    try:
+        mp15_state = _mp15_load_state()
+        if mp15_state.get("last_backup_date_iso") == today_iso:
+            return  # already backed up today
+
+        # Trigger only after 06:00 Warsaw (SCHEDULE_FILE refresh window)
+        if now.hour < 6:
+            return
+
+        try:
+            from schedule_utils import write_schedule_today_backup
+        except ImportError:
+            return
+
+        ok = write_schedule_today_backup()
+        if ok:
+            mp15_state["last_backup_date_iso"] = today_iso
+            mp15_state["last_backup_at"] = now.isoformat()
+            _mp15_save_state(mp15_state)
+            _log.info(f"MP-#15 daily backup written for {today_iso}")
+    except Exception as e:
+        _log.warning(f"MP-#15 daily backup unexpected fail: {type(e).__name__}: {e}")
+
+
 def main() -> int:
     """Single tick. Returns 0 on success, non-zero on hard error."""
     try:
@@ -498,6 +807,12 @@ def main() -> int:
     now = datetime.now(WARSAW)
     today_iso = now.date().isoformat()
 
+    # MP-#15 (2026-05-08): STALE_SCHEDULE_AGE alert + daily backup snapshot.
+    # Wykonywane PRZED load_schedule() żeby alert odpalił nawet gdy schedule
+    # nieaktualny ALE worker tickuje (Sheets API rate-limit, network issue).
+    _mp15_check_schedule_staleness(now, today_iso)
+    _mp15_maybe_write_daily_backup(now, today_iso)
+
     # Load schedule via module-level binding (test monkey-patchable)
     try:
         schedule = load_schedule()
@@ -509,6 +824,7 @@ def main() -> int:
         return 0
 
     kurier_ids = _load_kurier_ids()
+    ignored_names = _load_ignored_names()
     templates = _import_templates()
 
     batch_window_min = int(flags.get("SHIFT_BATCH_WINDOW_MIN", 10))
@@ -522,11 +838,14 @@ def main() -> int:
     with state_mod.locked_write_confirmations() as state:
         if sub_b1:
             sent_b1 = run_b1_start(schedule, now, state, kurier_ids, today_iso,
-                                   batch_window_min, batch_min_couriers, templates)
+                                   batch_window_min, batch_min_couriers, templates,
+                                   ignored_names=ignored_names)
         if sub_b2:
-            sent_b2 = run_b2_reminder(schedule, now, state, kurier_ids, today_iso, templates)
+            sent_b2 = run_b2_reminder(schedule, now, state, kurier_ids, today_iso, templates,
+                                      ignored_names=ignored_names)
         if sub_b3:
-            sent_b3 = run_b3_end(schedule, now, state, kurier_ids, today_iso, templates)
+            sent_b3 = run_b3_end(schedule, now, state, kurier_ids, today_iso, templates,
+                                 ignored_names=ignored_names)
         flips = apply_unconfirmed_default(state, now, today_iso)
 
     _log.info(

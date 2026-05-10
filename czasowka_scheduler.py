@@ -262,6 +262,43 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "all_candidates_for_proactive": [],
         }
 
+    # Defense gate (L2): brak pickup_coords = order bez geokodacji.
+    # Fix 2026-05-07: dla firmowych Nadajesz.pl (address_id ∈ FIRMOWE_KONTO_ADDRESS_IDS)
+    # użyj FIRMOWE_KONTO_FALLBACK_COORDS mirror panel_watcher (sprint #4 firmowe konto).
+    # Konsumer audit gap: panel_watcher wpisywał fallback od 07.05 morning #4 deploy
+    # ale czasowka_scheduler czyta orders_state direct gdzie legacy state pre-deploy
+    # ma pickup_coords=None → 51% wszystkich KOORD (20×/39 w 5-day eval_log obs)
+    # generowane przez 2 firmowe oid'y (#471172/#471173) re-evaluowane wielokrotnie.
+    # Lekcja #80 (consumer audit przy boundary changes).
+    _pc = order_state.get("pickup_coords")
+    _is_no_geocode = _pc is None or _pc == [0.0, 0.0] or _pc == (0.0, 0.0)
+    if _is_no_geocode:
+        _aid_raw = order_state.get("address_id")
+        try:
+            _aid_int = int(_aid_raw) if _aid_raw is not None else None
+        except (TypeError, ValueError):
+            _aid_int = None
+        if _aid_int is not None and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS:
+            # Firmowe Nadajesz.pl — fallback coords zamiast KOORD/no_pickup_geocode.
+            # Mutate local order_state copy NIE persist (state machine source-of-truth).
+            order_state = dict(order_state)
+            order_state["pickup_coords"] = list(C.FIRMOWE_KONTO_FALLBACK_COORDS)
+            _log.info(
+                f"V328_CZASOWKA_FIRMOWE_FALLBACK oid={order_id} "
+                f"address_id={_aid_int} pickup_coords=fallback "
+                f"({C.FIRMOWE_KONTO_FALLBACK_COORDS}) — KOORD/no_pickup_geocode bypass"
+            )
+        else:
+            return {
+                "decision": "KOORD",
+                "reason": "no_pickup_geocode",
+                "minutes_to_pickup": mins,
+                "match_quality": "none",
+                "best": None,
+                "alternatives": [],
+                "all_candidates_for_proactive": [],
+            }
+
     # Build order_event dict w format którego oczekuje assess_order (mirror panel_watcher emit).
     order_event = {
         "order_id": order_id,
@@ -280,9 +317,15 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
         "delivery_coords": order_state.get("delivery_coords"),
         "czas_kuriera_warsaw": order_state.get("czas_kuriera_warsaw"),
         "czas_kuriera_hhmm": order_state.get("czas_kuriera_hhmm"),
+        "uwagi": order_state.get("uwagi"),
+        "uwagi_pickup_parsed": order_state.get("uwagi_pickup_parsed"),
     }
 
-    fleet_snapshot = courier_resolver.build_fleet_snapshot()
+    # Fix 2026-05-06: użyj dispatchable_fleet() (jak shadow_dispatcher:521) — wzbogaca
+    # CourierState o shift_end z grafiku V3.24-A. Raw build_fleet_snapshot() zostawia
+    # shift_end=None → feasibility_v2:300 hard-rejectuje wszystkich z v325_NO_ACTIVE_SHIFT
+    # → "BRAK KANDYDATÓW" alert dla każdej czasówki (incident #471036 14:24 UTC).
+    fleet_snapshot = {cs.courier_id: cs for cs in courier_resolver.dispatchable_fleet()}
     result = assess_order(order_event, fleet_snapshot, now=now_utc)
 
     best = result.best
@@ -416,7 +459,12 @@ def _emit_to_event_bus(oid: str, order_state: dict, result: dict, eval_count: in
 
 
 def _format_koord_alert(oid: str, order_state: dict, result: dict) -> str:
-    """Alert text per Adrian spec (multi-line z Top 3 odrzuconych)."""
+    """Alert text per Adrian spec (multi-line z Top 3 odrzuconych).
+
+    Special-case `no_pickup_geocode`: dedicated alert "BEZ GEOKODACJI" zamiast
+    standardowego "BRAK KANDYDATÓW" — operator widzi root cause natychmiast
+    (firmowe konto Nadajesz.pl gdzie parser uwag nie wyciągnął adresu).
+    """
     mins = result.get("minutes_to_pickup")
     pickup_ts = order_state.get("pickup_at_warsaw") or "?"
     try:
@@ -425,6 +473,21 @@ def _format_koord_alert(oid: str, order_state: dict, result: dict) -> str:
         ).astimezone(WARSAW).strftime("%H:%M")
     except Exception:
         pickup_hhmm = str(pickup_ts)
+
+    if result.get("reason") == "no_pickup_geocode":
+        uwagi = (order_state.get("uwagi") or "").strip()
+        uwagi_short = uwagi[:300] + ("…" if len(uwagi) > 300 else "")
+        addr_id = order_state.get("address_id")
+        return "\n".join([
+            "🚨 ORDER BEZ GEOKODACJI (firmowe konto)",
+            f"Order: {oid}",
+            f"Konto firmowe: address_id={addr_id} (najczęściej Nadajesz.pl)",
+            f"Czas odbioru: {pickup_hhmm}",
+            f"Minut do pickupu: {int(mins) if mins is not None else '?'}",
+            "Powód: parser uwag nie wyciągnął adresu pickup",
+            f"Uwagi: {uwagi_short or '(puste)'}",
+            "Akcja: ręczne przypisanie KOORD lub uzupełnij adres restauracji w panelu.",
+        ])
 
     lines = [
         "🚨 BRAK KANDYDATÓW (czasówka)",
@@ -456,6 +519,23 @@ def _format_koord_alert(oid: str, order_state: dict, result: dict) -> str:
 
 
 def _send_koord_alert(oid: str, order_state: dict, result: dict) -> None:
+    # Adrian decision 2026-05-07: czasówki z firmowego konta Nadajesz.pl
+    # (address_id=161) NIE wysyłają KOORD alertów do grupy. Adrian sam zarządza
+    # firmowymi przez panel — alert byłby noise. Hot-reload via flags.json:
+    # ENABLE_FIRMOWE_KONTO_KOORD_ALERTS=true odwraca (default false = suppress).
+    _aid = order_state.get("address_id")
+    try:
+        _aid_int = int(_aid) if _aid is not None else None
+    except (TypeError, ValueError):
+        _aid_int = None
+    _is_firmowe = _aid_int is not None and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS
+    if _is_firmowe and not C.flag("ENABLE_FIRMOWE_KONTO_KOORD_ALERTS", False):
+        _log.info(
+            f"KOORD alert SUPPRESSED oid={oid} address_id={_aid} "
+            f"(firmowe konto, flag ENABLE_FIRMOWE_KONTO_KOORD_ALERTS=false). "
+            f"reason={result.get('reason')}"
+        )
+        return
     token = _resolve_bot_token()
     if not token:
         _log.warning(f"KOORD alert SKIPPED (TELEGRAM_BOT_TOKEN empty) oid={oid}")

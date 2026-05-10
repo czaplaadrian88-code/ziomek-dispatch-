@@ -1,0 +1,7053 @@
+{
+ "sat_coords": {
+  "Porosły": {
+   "lat": 53.144888,
+   "lon": 23.052918,
+   "n_samples": 18,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "jesiennych liści 119",
+    "usługowa 8",
+    "szumiących traw 1  22"
+   ]
+  },
+  "Grabówka": {
+   "lat": 53.130325,
+   "lon": 23.26109,
+   "n_samples": 13,
+   "n_outliers_dropped": 2,
+   "sample_addrs": [
+    "jodłowa 35",
+    "praska 11",
+    "białostocka 72 e"
+   ]
+  },
+  "Nowodworce": {
+   "lat": 53.177063,
+   "lon": 23.232198,
+   "n_samples": 5,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "supraślska 27",
+    "supraślska 54",
+    "spacerowa 21a"
+   ]
+  },
+  "Zaścianki": {
+   "lat": 53.126998,
+   "lon": 23.230369,
+   "n_samples": 9,
+   "n_outliers_dropped": 2,
+   "sample_addrs": [
+    "afrykańska 5",
+    "słoneczna 2",
+    "juliana tuwima 1"
+   ]
+  },
+  "Klepacze": {
+   "lat": 53.113233,
+   "lon": 23.07571,
+   "n_samples": 7,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "górna 11",
+    "równoległa 7",
+    "niewodnicka 35"
+   ]
+  },
+  "Sobolewo": {
+   "lat": 53.12126,
+   "lon": 23.267693,
+   "n_samples": 4,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "rybacka 78c",
+    "tygrysia 12a",
+    "lisia 28"
+   ]
+  },
+  "Krupniki": {
+   "lat": 53.124247,
+   "lon": 23.062347,
+   "n_samples": 5,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "rubinowa 17",
+    "jarzębinowa 8",
+    "16"
+   ]
+  },
+  "Księżyno": {
+   "lat": 53.082089,
+   "lon": 23.097204,
+   "n_samples": 4,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "wincentego witosa 13l",
+    "niewodnicka 23",
+    "wiewiórcza 7"
+   ]
+  },
+  "Horodniany": {
+   "lat": null,
+   "lon": null,
+   "n_samples": 0,
+   "n_outliers_dropped": 0,
+   "sample_addrs": []
+  },
+  "Ignatki": {
+   "lat": 53.072886,
+   "lon": 23.111103,
+   "n_samples": 3,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "pogodna 13",
+    "zacisze 14a",
+    "kręta 22"
+   ]
+  },
+  "Sowlany": {
+   "lat": 53.144913,
+   "lon": 23.242529,
+   "n_samples": 3,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "świętego  38",
+    "przemysłowa 5",
+    "pułkowa 1"
+   ]
+  },
+  "Turośń Kościelna": {
+   "lat": 53.015593,
+   "lon": 23.051244,
+   "n_samples": 2,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "lipowa 65b",
+    "białostocka 30c"
+   ]
+  },
+  "Łyski": {
+   "lat": 53.154959,
+   "lon": 23.039069,
+   "n_samples": 2,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "owocowa 37",
+    "warszawska 68"
+   ]
+  },
+  "Stanisławowo": {
+   "lat": null,
+   "lon": null,
+   "n_samples": 0,
+   "n_outliers_dropped": 0,
+   "sample_addrs": []
+  },
+  "Śródlesie": {
+   "lat": 53.08358,
+   "lon": 23.131281,
+   "n_samples": 2,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "dębowa 13",
+    "świerkowa 1"
+   ]
+  },
+  "Supraśl": {
+   "lat": 53.210519,
+   "lon": 23.332124,
+   "n_samples": 1,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "kodeksu supraskiego 2"
+   ]
+  },
+  "Choroszcz": {
+   "lat": 53.149754,
+   "lon": 22.983434,
+   "n_samples": 10,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "żółtki 76",
+    "powstania styczniowego 8",
+    "zastawie i 28"
+   ]
+  },
+  "Wasilków": {
+   "lat": 53.18272,
+   "lon": 23.186365,
+   "n_samples": 17,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "białostocka 104c  19",
+    "sportowa 23b",
+    "czysta 23"
+   ]
+  },
+  "Kleosin": {
+   "lat": 53.103205,
+   "lon": 23.118269,
+   "n_samples": 10,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "tarasiuka 20a",
+    "kraszewskiego 8",
+    "kraszewskiego 10a"
+   ]
+  },
+  "Ignatki-osiedle": {
+   "lat": 53.088524,
+   "lon": 23.117877,
+   "n_samples": 8,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "jodłowa 8a  19",
+    "jodlowa 3a",
+    "jodłowa 6b"
+   ]
+  },
+  "Olmonty": {
+   "lat": 53.081007,
+   "lon": 23.165988,
+   "n_samples": 1,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "wesoła 7"
+   ]
+  },
+  "Izabelin": {
+   "lat": null,
+   "lon": null,
+   "n_samples": 0,
+   "n_outliers_dropped": 0,
+   "sample_addrs": []
+  },
+  "Niewodnica Kościelna": {
+   "lat": 53.076051,
+   "lon": 23.054871,
+   "n_samples": 2,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "dąbrowskiego 4",
+    "bukowina 16"
+   ]
+  },
+  "Niewodnica Korycka": {
+   "lat": 53.071738,
+   "lon": 23.074915,
+   "n_samples": 2,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "kosciuszki 23",
+    "pogodna 16"
+   ]
+  },
+  "Porosły Kolonia": {
+   "lat": 53.151362,
+   "lon": 23.048056,
+   "n_samples": 2,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "kolonia porosły 55",
+    "owocowa 44b"
+   ]
+  },
+  "Brończany": {
+   "lat": 53.049865,
+   "lon": 23.115017,
+   "n_samples": 1,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "bronczany 1"
+   ]
+  },
+  "Fasty": {
+   "lat": 53.169938,
+   "lon": 23.059584,
+   "n_samples": 2,
+   "n_outliers_dropped": 0,
+   "sample_addrs": [
+    "rolna 23",
+    "białostocka 67"
+   ]
+  }
+ },
+ "district_coords": {
+  "Antoniuk": {
+   "lat": 53.139802,
+   "lon": 23.132333,
+   "n_samples": 161,
+   "n_outliers_dropped": 1
+  },
+  "Bacieczki": {
+   "lat": 53.152302,
+   "lon": 23.086521,
+   "n_samples": 84,
+   "n_outliers_dropped": 0
+  },
+  "Bema": {
+   "lat": 53.119675,
+   "lon": 23.140644,
+   "n_samples": 96,
+   "n_outliers_dropped": 0
+  },
+  "Białostoczek": {
+   "lat": 53.14783,
+   "lon": 23.152863,
+   "n_samples": 101,
+   "n_outliers_dropped": 0
+  },
+  "Bojary": {
+   "lat": 53.135313,
+   "lon": 23.174315,
+   "n_samples": 191,
+   "n_outliers_dropped": 1
+  },
+  "Centrum": {
+   "lat": 53.133495,
+   "lon": 23.1552,
+   "n_samples": 178,
+   "n_outliers_dropped": 0
+  },
+  "Dojlidy": {
+   "lat": 53.113655,
+   "lon": 23.194211,
+   "n_samples": 75,
+   "n_outliers_dropped": 0
+  },
+  "Dojlidy Górne": {
+   "lat": 53.093516,
+   "lon": 23.223336,
+   "n_samples": 39,
+   "n_outliers_dropped": 0
+  },
+  "Dziesięciny I": {
+   "lat": 53.153069,
+   "lon": 23.124575,
+   "n_samples": 80,
+   "n_outliers_dropped": 0
+  },
+  "Dziesięciny II": {
+   "lat": 53.151601,
+   "lon": 23.117471,
+   "n_samples": 27,
+   "n_outliers_dropped": 0
+  },
+  "Jaroszówka": {
+   "lat": 53.160739,
+   "lon": 23.197606,
+   "n_samples": 71,
+   "n_outliers_dropped": 0
+  },
+  "Kawaleryjskie": {
+   "lat": 53.111127,
+   "lon": 23.138679,
+   "n_samples": 109,
+   "n_outliers_dropped": 0
+  },
+  "Leśna Dolina": {
+   "lat": 53.130115,
+   "lon": 23.090777,
+   "n_samples": 67,
+   "n_outliers_dropped": 0
+  },
+  "Mickiewicza": {
+   "lat": 53.120747,
+   "lon": 23.169147,
+   "n_samples": 87,
+   "n_outliers_dropped": 0
+  },
+  "Młodych": {
+   "lat": 53.134171,
+   "lon": 23.122438,
+   "n_samples": 32,
+   "n_outliers_dropped": 0
+  },
+  "Nowe Miasto": {
+   "lat": 53.112018,
+   "lon": 23.126052,
+   "n_samples": 69,
+   "n_outliers_dropped": 0
+  },
+  "Piaski": {
+   "lat": 53.125087,
+   "lon": 23.15708,
+   "n_samples": 50,
+   "n_outliers_dropped": 0
+  },
+  "Piasta I": {
+   "lat": 53.131334,
+   "lon": 23.191557,
+   "n_samples": 43,
+   "n_outliers_dropped": 0
+  },
+  "Piasta II": {
+   "lat": null,
+   "lon": null,
+   "n_samples": 0
+  },
+  "Przydworcowe": {
+   "lat": 53.130245,
+   "lon": 23.141737,
+   "n_samples": 55,
+   "n_outliers_dropped": 0
+  },
+  "Sienkiewicza": {
+   "lat": 53.140011,
+   "lon": 23.164851,
+   "n_samples": 58,
+   "n_outliers_dropped": 0
+  },
+  "Skorupy": {
+   "lat": 53.125152,
+   "lon": 23.198578,
+   "n_samples": 64,
+   "n_outliers_dropped": 0
+  },
+  "Starosielce": {
+   "lat": 53.123745,
+   "lon": 23.087069,
+   "n_samples": 60,
+   "n_outliers_dropped": 0
+  },
+  "Słoneczny Stok": {
+   "lat": 53.129229,
+   "lon": 23.103211,
+   "n_samples": 50,
+   "n_outliers_dropped": 0
+  },
+  "Wygoda": {
+   "lat": 53.145839,
+   "lon": 23.195705,
+   "n_samples": 62,
+   "n_outliers_dropped": 0
+  },
+  "Wysoki Stoczek": {
+   "lat": 53.145091,
+   "lon": 23.110008,
+   "n_samples": 74,
+   "n_outliers_dropped": 0
+  },
+  "Zawady": {
+   "lat": 53.166303,
+   "lon": 23.111025,
+   "n_samples": 32,
+   "n_outliers_dropped": 0
+  },
+  "Zielone Wzgórza": {
+   "lat": 53.121019,
+   "lon": 23.100343,
+   "n_samples": 41,
+   "n_outliers_dropped": 0
+  }
+ },
+ "sat_dist_pairs": [
+  {
+   "sat": "Brończany",
+   "district": "Nowe Miasto",
+   "distance_km": 6.95,
+   "quadrant": "SW",
+   "sat_n": 1,
+   "d_n": 69
+  },
+  {
+   "sat": "Brończany",
+   "district": "Kawaleryjskie",
+   "distance_km": 6.99,
+   "quadrant": "SW",
+   "sat_n": 1,
+   "d_n": 109
+  },
+  {
+   "sat": "Brończany",
+   "district": "Bema",
+   "distance_km": 7.95,
+   "quadrant": "SW",
+   "sat_n": 1,
+   "d_n": 96
+  },
+  {
+   "sat": "Brończany",
+   "district": "Zielone Wzgórza",
+   "distance_km": 7.97,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 41
+  },
+  {
+   "sat": "Brończany",
+   "district": "Starosielce",
+   "distance_km": 8.42,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 60
+  },
+  {
+   "sat": "Brończany",
+   "district": "Mickiewicza",
+   "distance_km": 8.67,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 87
+  },
+  {
+   "sat": "Brończany",
+   "district": "Dojlidy Górne",
+   "distance_km": 8.71,
+   "quadrant": "SE",
+   "sat_n": 1,
+   "d_n": 39
+  },
+  {
+   "sat": "Brończany",
+   "district": "Piaski",
+   "distance_km": 8.82,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 50
+  },
+  {
+   "sat": "Brończany",
+   "district": "Dojlidy",
+   "distance_km": 8.85,
+   "quadrant": "SE",
+   "sat_n": 1,
+   "d_n": 75
+  },
+  {
+   "sat": "Brończany",
+   "district": "Słoneczny Stok",
+   "distance_km": 8.86,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 50
+  },
+  {
+   "sat": "Brończany",
+   "district": "Leśna Dolina",
+   "distance_km": 9.07,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 67
+  },
+  {
+   "sat": "Brończany",
+   "district": "Przydworcowe",
+   "distance_km": 9.11,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 55
+  },
+  {
+   "sat": "Brończany",
+   "district": "Młodych",
+   "distance_km": 9.39,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 32
+  },
+  {
+   "sat": "Brończany",
+   "district": "Centrum",
+   "distance_km": 9.68,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 178
+  },
+  {
+   "sat": "Brończany",
+   "district": "Skorupy",
+   "distance_km": 10.06,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 64
+  },
+  {
+   "sat": "Brończany",
+   "district": "Antoniuk",
+   "distance_km": 10.07,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 161
+  },
+  {
+   "sat": "Brończany",
+   "district": "Bojary",
+   "distance_km": 10.29,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 191
+  },
+  {
+   "sat": "Brończany",
+   "district": "Piasta I",
+   "distance_km": 10.4,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 43
+  },
+  {
+   "sat": "Brończany",
+   "district": "Sienkiewicza",
+   "distance_km": 10.56,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 58
+  },
+  {
+   "sat": "Brończany",
+   "district": "Wysoki Stoczek",
+   "distance_km": 10.59,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 74
+  },
+  {
+   "sat": "Brończany",
+   "district": "Białostoczek",
+   "distance_km": 11.18,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 101
+  },
+  {
+   "sat": "Brończany",
+   "district": "Dziesięciny II",
+   "distance_km": 11.31,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 27
+  },
+  {
+   "sat": "Brończany",
+   "district": "Dziesięciny I",
+   "distance_km": 11.49,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 80
+  },
+  {
+   "sat": "Brończany",
+   "district": "Bacieczki",
+   "distance_km": 11.55,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 84
+  },
+  {
+   "sat": "Brończany",
+   "district": "Wygoda",
+   "distance_km": 11.95,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 62
+  },
+  {
+   "sat": "Brończany",
+   "district": "Zawady",
+   "distance_km": 12.95,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 32
+  },
+  {
+   "sat": "Brończany",
+   "district": "Jaroszówka",
+   "distance_km": 13.51,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 71
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Bacieczki",
+   "distance_km": 6.88,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 84
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Leśna Dolina",
+   "distance_km": 7.49,
+   "quadrant": "W",
+   "sat_n": 10,
+   "d_n": 67
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Starosielce",
+   "distance_km": 7.49,
+   "quadrant": "W",
+   "sat_n": 10,
+   "d_n": 60
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Słoneczny Stok",
+   "distance_km": 8.31,
+   "quadrant": "W",
+   "sat_n": 10,
+   "d_n": 50
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Zielone Wzgórza",
+   "distance_km": 8.43,
+   "quadrant": "W",
+   "sat_n": 10,
+   "d_n": 41
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Wysoki Stoczek",
+   "distance_km": 8.46,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 74
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Zawady",
+   "distance_km": 8.7,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 32
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Dziesięciny II",
+   "distance_km": 8.94,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 27
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Dziesięciny I",
+   "distance_km": 9.42,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 80
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Młodych",
+   "distance_km": 9.43,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 32
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Antoniuk",
+   "distance_km": 9.99,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 161
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Nowe Miasto",
+   "distance_km": 10.4,
+   "quadrant": "SW",
+   "sat_n": 10,
+   "d_n": 69
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Przydworcowe",
+   "distance_km": 10.78,
+   "quadrant": "CENTER",
+   "sat_n": 10,
+   "d_n": 55
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Bema",
+   "distance_km": 11.01,
+   "quadrant": "SW",
+   "sat_n": 10,
+   "d_n": 96
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Kawaleryjskie",
+   "distance_km": 11.21,
+   "quadrant": "SW",
+   "sat_n": 10,
+   "d_n": 109
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Białostoczek",
+   "distance_km": 11.3,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 101
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Centrum",
+   "distance_km": 11.6,
+   "quadrant": "CENTER",
+   "sat_n": 10,
+   "d_n": 178
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Piaski",
+   "distance_km": 11.9,
+   "quadrant": "CENTER",
+   "sat_n": 10,
+   "d_n": 50
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Sienkiewicza",
+   "distance_km": 12.15,
+   "quadrant": "E",
+   "sat_n": 10,
+   "d_n": 58
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Mickiewicza",
+   "distance_km": 12.8,
+   "quadrant": "CENTER",
+   "sat_n": 10,
+   "d_n": 87
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Bojary",
+   "distance_km": 12.83,
+   "quadrant": "E",
+   "sat_n": 10,
+   "d_n": 191
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Piasta I",
+   "distance_km": 14.03,
+   "quadrant": "CENTER",
+   "sat_n": 10,
+   "d_n": 43
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Wygoda",
+   "distance_km": 14.16,
+   "quadrant": "E",
+   "sat_n": 10,
+   "d_n": 62
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Jaroszówka",
+   "distance_km": 14.33,
+   "quadrant": "E",
+   "sat_n": 10,
+   "d_n": 71
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Skorupy",
+   "distance_km": 14.61,
+   "quadrant": "E",
+   "sat_n": 10,
+   "d_n": 64
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Dojlidy",
+   "distance_km": 14.62,
+   "quadrant": "SE",
+   "sat_n": 10,
+   "d_n": 75
+  },
+  {
+   "sat": "Choroszcz",
+   "district": "Dojlidy Górne",
+   "distance_km": 17.19,
+   "quadrant": "SE",
+   "sat_n": 10,
+   "d_n": 39
+  },
+  {
+   "sat": "Fasty",
+   "district": "Bacieczki",
+   "distance_km": 2.66,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 84
+  },
+  {
+   "sat": "Fasty",
+   "district": "Zawady",
+   "distance_km": 3.45,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Fasty",
+   "district": "Wysoki Stoczek",
+   "distance_km": 4.35,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 74
+  },
+  {
+   "sat": "Fasty",
+   "district": "Dziesięciny II",
+   "distance_km": 4.36,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 27
+  },
+  {
+   "sat": "Fasty",
+   "district": "Dziesięciny I",
+   "distance_km": 4.72,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 80
+  },
+  {
+   "sat": "Fasty",
+   "district": "Leśna Dolina",
+   "distance_km": 4.89,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 67
+  },
+  {
+   "sat": "Fasty",
+   "district": "Słoneczny Stok",
+   "distance_km": 5.38,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Fasty",
+   "district": "Starosielce",
+   "distance_km": 5.45,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 60
+  },
+  {
+   "sat": "Fasty",
+   "district": "Młodych",
+   "distance_km": 5.78,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Fasty",
+   "district": "Antoniuk",
+   "distance_km": 5.9,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 161
+  },
+  {
+   "sat": "Fasty",
+   "district": "Zielone Wzgórza",
+   "distance_km": 6.08,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 41
+  },
+  {
+   "sat": "Fasty",
+   "district": "Białostoczek",
+   "distance_km": 6.69,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 101
+  },
+  {
+   "sat": "Fasty",
+   "district": "Przydworcowe",
+   "distance_km": 7.04,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 55
+  },
+  {
+   "sat": "Fasty",
+   "district": "Centrum",
+   "distance_km": 7.55,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 178
+  },
+  {
+   "sat": "Fasty",
+   "district": "Sienkiewicza",
+   "distance_km": 7.77,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 58
+  },
+  {
+   "sat": "Fasty",
+   "district": "Bema",
+   "distance_km": 7.78,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 96
+  },
+  {
+   "sat": "Fasty",
+   "district": "Nowe Miasto",
+   "distance_km": 7.82,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 69
+  },
+  {
+   "sat": "Fasty",
+   "district": "Piaski",
+   "distance_km": 8.19,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Fasty",
+   "district": "Kawaleryjskie",
+   "distance_km": 8.4,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 109
+  },
+  {
+   "sat": "Fasty",
+   "district": "Bojary",
+   "distance_km": 8.56,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 191
+  },
+  {
+   "sat": "Fasty",
+   "district": "Mickiewicza",
+   "distance_km": 9.13,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 87
+  },
+  {
+   "sat": "Fasty",
+   "district": "Jaroszówka",
+   "distance_km": 9.26,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 71
+  },
+  {
+   "sat": "Fasty",
+   "district": "Wygoda",
+   "distance_km": 9.46,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 62
+  },
+  {
+   "sat": "Fasty",
+   "district": "Piasta I",
+   "distance_km": 9.79,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 43
+  },
+  {
+   "sat": "Fasty",
+   "district": "Skorupy",
+   "distance_km": 10.52,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 64
+  },
+  {
+   "sat": "Fasty",
+   "district": "Dojlidy",
+   "distance_km": 10.95,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 75
+  },
+  {
+   "sat": "Fasty",
+   "district": "Dojlidy Górne",
+   "distance_km": 13.84,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 39
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Skorupy",
+   "distance_km": 4.21,
+   "quadrant": "E",
+   "sat_n": 13,
+   "d_n": 64
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Piasta I",
+   "distance_km": 4.64,
+   "quadrant": "CENTER",
+   "sat_n": 13,
+   "d_n": 43
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Wygoda",
+   "distance_km": 4.69,
+   "quadrant": "E",
+   "sat_n": 13,
+   "d_n": 62
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Dojlidy Górne",
+   "distance_km": 4.81,
+   "quadrant": "SE",
+   "sat_n": 13,
+   "d_n": 39
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Dojlidy",
+   "distance_km": 4.83,
+   "quadrant": "SE",
+   "sat_n": 13,
+   "d_n": 75
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Jaroszówka",
+   "distance_km": 5.42,
+   "quadrant": "E",
+   "sat_n": 13,
+   "d_n": 71
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Bojary",
+   "distance_km": 5.82,
+   "quadrant": "E",
+   "sat_n": 13,
+   "d_n": 191
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Mickiewicza",
+   "distance_km": 6.23,
+   "quadrant": "CENTER",
+   "sat_n": 13,
+   "d_n": 87
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Sienkiewicza",
+   "distance_km": 6.51,
+   "quadrant": "E",
+   "sat_n": 13,
+   "d_n": 58
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Piaski",
+   "distance_km": 6.96,
+   "quadrant": "CENTER",
+   "sat_n": 13,
+   "d_n": 50
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Centrum",
+   "distance_km": 7.07,
+   "quadrant": "CENTER",
+   "sat_n": 13,
+   "d_n": 178
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Białostoczek",
+   "distance_km": 7.48,
+   "quadrant": "N",
+   "sat_n": 13,
+   "d_n": 101
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Przydworcowe",
+   "distance_km": 7.96,
+   "quadrant": "CENTER",
+   "sat_n": 13,
+   "d_n": 55
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Bema",
+   "distance_km": 8.12,
+   "quadrant": "SW",
+   "sat_n": 13,
+   "d_n": 96
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Kawaleryjskie",
+   "distance_km": 8.44,
+   "quadrant": "SW",
+   "sat_n": 13,
+   "d_n": 109
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Antoniuk",
+   "distance_km": 8.65,
+   "quadrant": "N",
+   "sat_n": 13,
+   "d_n": 161
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Nowe Miasto",
+   "distance_km": 9.24,
+   "quadrant": "SW",
+   "sat_n": 13,
+   "d_n": 69
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Młodych",
+   "distance_km": 9.26,
+   "quadrant": "N",
+   "sat_n": 13,
+   "d_n": 32
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Dziesięciny I",
+   "distance_km": 9.45,
+   "quadrant": "N",
+   "sat_n": 13,
+   "d_n": 80
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Dziesięciny II",
+   "distance_km": 9.87,
+   "quadrant": "N",
+   "sat_n": 13,
+   "d_n": 27
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Wysoki Stoczek",
+   "distance_km": 10.21,
+   "quadrant": "N",
+   "sat_n": 13,
+   "d_n": 74
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Słoneczny Stok",
+   "distance_km": 10.53,
+   "quadrant": "W",
+   "sat_n": 13,
+   "d_n": 50
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Zawady",
+   "distance_km": 10.78,
+   "quadrant": "N",
+   "sat_n": 13,
+   "d_n": 32
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Zielone Wzgórza",
+   "distance_km": 10.78,
+   "quadrant": "W",
+   "sat_n": 13,
+   "d_n": 41
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Leśna Dolina",
+   "distance_km": 11.36,
+   "quadrant": "W",
+   "sat_n": 13,
+   "d_n": 67
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Starosielce",
+   "distance_km": 11.63,
+   "quadrant": "W",
+   "sat_n": 13,
+   "d_n": 60
+  },
+  {
+   "sat": "Grabówka",
+   "district": "Bacieczki",
+   "distance_km": 11.9,
+   "quadrant": "N",
+   "sat_n": 13,
+   "d_n": 84
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Nowe Miasto",
+   "distance_km": 4.46,
+   "quadrant": "SW",
+   "sat_n": 3,
+   "d_n": 69
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Kawaleryjskie",
+   "distance_km": 4.63,
+   "quadrant": "SW",
+   "sat_n": 3,
+   "d_n": 109
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Zielone Wzgórza",
+   "distance_km": 5.4,
+   "quadrant": "W",
+   "sat_n": 3,
+   "d_n": 41
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Bema",
+   "distance_km": 5.56,
+   "quadrant": "SW",
+   "sat_n": 3,
+   "d_n": 96
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Starosielce",
+   "distance_km": 5.88,
+   "quadrant": "W",
+   "sat_n": 3,
+   "d_n": 60
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Słoneczny Stok",
+   "distance_km": 6.29,
+   "quadrant": "W",
+   "sat_n": 3,
+   "d_n": 50
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Leśna Dolina",
+   "distance_km": 6.51,
+   "quadrant": "W",
+   "sat_n": 3,
+   "d_n": 67
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Piaski",
+   "distance_km": 6.57,
+   "quadrant": "CENTER",
+   "sat_n": 3,
+   "d_n": 50
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Mickiewicza",
+   "distance_km": 6.58,
+   "quadrant": "CENTER",
+   "sat_n": 3,
+   "d_n": 87
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Przydworcowe",
+   "distance_km": 6.7,
+   "quadrant": "CENTER",
+   "sat_n": 3,
+   "d_n": 55
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Młodych",
+   "distance_km": 6.86,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 32
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Dojlidy",
+   "distance_km": 7.17,
+   "quadrant": "SE",
+   "sat_n": 3,
+   "d_n": 75
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Centrum",
+   "distance_km": 7.35,
+   "quadrant": "CENTER",
+   "sat_n": 3,
+   "d_n": 178
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Antoniuk",
+   "distance_km": 7.57,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 161
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Dojlidy Górne",
+   "distance_km": 7.84,
+   "quadrant": "SE",
+   "sat_n": 3,
+   "d_n": 39
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Wysoki Stoczek",
+   "distance_km": 8.03,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 74
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Bojary",
+   "distance_km": 8.12,
+   "quadrant": "E",
+   "sat_n": 3,
+   "d_n": 191
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Skorupy",
+   "distance_km": 8.24,
+   "quadrant": "E",
+   "sat_n": 3,
+   "d_n": 64
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Sienkiewicza",
+   "distance_km": 8.28,
+   "quadrant": "E",
+   "sat_n": 3,
+   "d_n": 58
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Piasta I",
+   "distance_km": 8.43,
+   "quadrant": "CENTER",
+   "sat_n": 3,
+   "d_n": 43
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Dziesięciny II",
+   "distance_km": 8.76,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 27
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Białostoczek",
+   "distance_km": 8.79,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 101
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Dziesięciny I",
+   "distance_km": 8.96,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 80
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Bacieczki",
+   "distance_km": 8.98,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 84
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Wygoda",
+   "distance_km": 9.88,
+   "quadrant": "E",
+   "sat_n": 3,
+   "d_n": 62
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Zawady",
+   "distance_km": 10.39,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 32
+  },
+  {
+   "sat": "Ignatki",
+   "district": "Jaroszówka",
+   "distance_km": 11.35,
+   "quadrant": "E",
+   "sat_n": 3,
+   "d_n": 71
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Nowe Miasto",
+   "distance_km": 2.67,
+   "quadrant": "SW",
+   "sat_n": 8,
+   "d_n": 69
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Kawaleryjskie",
+   "distance_km": 2.87,
+   "quadrant": "SW",
+   "sat_n": 8,
+   "d_n": 109
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Bema",
+   "distance_km": 3.78,
+   "quadrant": "SW",
+   "sat_n": 8,
+   "d_n": 96
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Zielone Wzgórza",
+   "distance_km": 3.8,
+   "quadrant": "W",
+   "sat_n": 8,
+   "d_n": 41
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Starosielce",
+   "distance_km": 4.42,
+   "quadrant": "W",
+   "sat_n": 8,
+   "d_n": 60
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Słoneczny Stok",
+   "distance_km": 4.63,
+   "quadrant": "W",
+   "sat_n": 8,
+   "d_n": 50
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Piaski",
+   "distance_km": 4.84,
+   "quadrant": "CENTER",
+   "sat_n": 8,
+   "d_n": 50
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Przydworcowe",
+   "distance_km": 4.9,
+   "quadrant": "CENTER",
+   "sat_n": 8,
+   "d_n": 55
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Mickiewicza",
+   "distance_km": 4.96,
+   "quadrant": "CENTER",
+   "sat_n": 8,
+   "d_n": 87
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Leśna Dolina",
+   "distance_km": 4.97,
+   "quadrant": "W",
+   "sat_n": 8,
+   "d_n": 67
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Młodych",
+   "distance_km": 5.08,
+   "quadrant": "N",
+   "sat_n": 8,
+   "d_n": 32
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Centrum",
+   "distance_km": 5.59,
+   "quadrant": "CENTER",
+   "sat_n": 8,
+   "d_n": 178
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Antoniuk",
+   "distance_km": 5.78,
+   "quadrant": "N",
+   "sat_n": 8,
+   "d_n": 161
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Dojlidy",
+   "distance_km": 5.81,
+   "quadrant": "SE",
+   "sat_n": 8,
+   "d_n": 75
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Wysoki Stoczek",
+   "distance_km": 6.31,
+   "quadrant": "N",
+   "sat_n": 8,
+   "d_n": 74
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Bojary",
+   "distance_km": 6.42,
+   "quadrant": "E",
+   "sat_n": 8,
+   "d_n": 191
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Sienkiewicza",
+   "distance_km": 6.53,
+   "quadrant": "E",
+   "sat_n": 8,
+   "d_n": 58
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Skorupy",
+   "distance_km": 6.75,
+   "quadrant": "E",
+   "sat_n": 8,
+   "d_n": 64
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Piasta I",
+   "distance_km": 6.84,
+   "quadrant": "CENTER",
+   "sat_n": 8,
+   "d_n": 43
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Białostoczek",
+   "distance_km": 7.0,
+   "quadrant": "N",
+   "sat_n": 8,
+   "d_n": 101
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Dziesięciny II",
+   "distance_km": 7.01,
+   "quadrant": "N",
+   "sat_n": 8,
+   "d_n": 27
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Dojlidy Górne",
+   "distance_km": 7.06,
+   "quadrant": "SE",
+   "sat_n": 8,
+   "d_n": 39
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Dziesięciny I",
+   "distance_km": 7.19,
+   "quadrant": "N",
+   "sat_n": 8,
+   "d_n": 80
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Bacieczki",
+   "distance_km": 7.39,
+   "quadrant": "N",
+   "sat_n": 8,
+   "d_n": 84
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Wygoda",
+   "distance_km": 8.22,
+   "quadrant": "E",
+   "sat_n": 8,
+   "d_n": 62
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Zawady",
+   "distance_km": 8.66,
+   "quadrant": "N",
+   "sat_n": 8,
+   "d_n": 32
+  },
+  {
+   "sat": "Ignatki-osiedle",
+   "district": "Jaroszówka",
+   "distance_km": 9.63,
+   "quadrant": "E",
+   "sat_n": 8,
+   "d_n": 71
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Nowe Miasto",
+   "distance_km": 1.11,
+   "quadrant": "SW",
+   "sat_n": 10,
+   "d_n": 69
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Kawaleryjskie",
+   "distance_km": 1.62,
+   "quadrant": "SW",
+   "sat_n": 10,
+   "d_n": 109
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Zielone Wzgórza",
+   "distance_km": 2.31,
+   "quadrant": "W",
+   "sat_n": 10,
+   "d_n": 41
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Bema",
+   "distance_km": 2.36,
+   "quadrant": "SW",
+   "sat_n": 10,
+   "d_n": 96
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Słoneczny Stok",
+   "distance_km": 3.06,
+   "quadrant": "W",
+   "sat_n": 10,
+   "d_n": 50
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Starosielce",
+   "distance_km": 3.09,
+   "quadrant": "W",
+   "sat_n": 10,
+   "d_n": 60
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Przydworcowe",
+   "distance_km": 3.39,
+   "quadrant": "CENTER",
+   "sat_n": 10,
+   "d_n": 55
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Młodych",
+   "distance_km": 3.45,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 32
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Leśna Dolina",
+   "distance_km": 3.51,
+   "quadrant": "W",
+   "sat_n": 10,
+   "d_n": 67
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Piaski",
+   "distance_km": 3.55,
+   "quadrant": "CENTER",
+   "sat_n": 10,
+   "d_n": 50
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Mickiewicza",
+   "distance_km": 3.92,
+   "quadrant": "CENTER",
+   "sat_n": 10,
+   "d_n": 87
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Centrum",
+   "distance_km": 4.17,
+   "quadrant": "CENTER",
+   "sat_n": 10,
+   "d_n": 178
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Antoniuk",
+   "distance_km": 4.18,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 161
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Wysoki Stoczek",
+   "distance_km": 4.69,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 74
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Sienkiewicza",
+   "distance_km": 5.14,
+   "quadrant": "E",
+   "sat_n": 10,
+   "d_n": 58
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Bojary",
+   "distance_km": 5.17,
+   "quadrant": "E",
+   "sat_n": 10,
+   "d_n": 191
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Dojlidy",
+   "distance_km": 5.2,
+   "quadrant": "SE",
+   "sat_n": 10,
+   "d_n": 75
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Dziesięciny II",
+   "distance_km": 5.38,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 27
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Białostoczek",
+   "distance_km": 5.47,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 101
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Dziesięciny I",
+   "distance_km": 5.56,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 80
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Piasta I",
+   "distance_km": 5.81,
+   "quadrant": "CENTER",
+   "sat_n": 10,
+   "d_n": 43
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Bacieczki",
+   "distance_km": 5.86,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 84
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Skorupy",
+   "distance_km": 5.89,
+   "quadrant": "E",
+   "sat_n": 10,
+   "d_n": 64
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Wygoda",
+   "distance_km": 7.01,
+   "quadrant": "E",
+   "sat_n": 10,
+   "d_n": 62
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Zawady",
+   "distance_km": 7.03,
+   "quadrant": "N",
+   "sat_n": 10,
+   "d_n": 32
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Dojlidy Górne",
+   "distance_km": 7.1,
+   "quadrant": "SE",
+   "sat_n": 10,
+   "d_n": 39
+  },
+  {
+   "sat": "Kleosin",
+   "district": "Jaroszówka",
+   "distance_km": 8.3,
+   "quadrant": "E",
+   "sat_n": 10,
+   "d_n": 71
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Starosielce",
+   "distance_km": 1.39,
+   "quadrant": "W",
+   "sat_n": 7,
+   "d_n": 60
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Zielone Wzgórza",
+   "distance_km": 1.86,
+   "quadrant": "W",
+   "sat_n": 7,
+   "d_n": 41
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Leśna Dolina",
+   "distance_km": 2.13,
+   "quadrant": "W",
+   "sat_n": 7,
+   "d_n": 67
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Słoneczny Stok",
+   "distance_km": 2.56,
+   "quadrant": "W",
+   "sat_n": 7,
+   "d_n": 50
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Nowe Miasto",
+   "distance_km": 3.36,
+   "quadrant": "SW",
+   "sat_n": 7,
+   "d_n": 69
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Młodych",
+   "distance_km": 3.89,
+   "quadrant": "N",
+   "sat_n": 7,
+   "d_n": 32
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Kawaleryjskie",
+   "distance_km": 4.21,
+   "quadrant": "SW",
+   "sat_n": 7,
+   "d_n": 109
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Wysoki Stoczek",
+   "distance_km": 4.22,
+   "quadrant": "N",
+   "sat_n": 7,
+   "d_n": 74
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Bema",
+   "distance_km": 4.39,
+   "quadrant": "SW",
+   "sat_n": 7,
+   "d_n": 96
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Bacieczki",
+   "distance_km": 4.4,
+   "quadrant": "N",
+   "sat_n": 7,
+   "d_n": 84
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Przydworcowe",
+   "distance_km": 4.79,
+   "quadrant": "CENTER",
+   "sat_n": 7,
+   "d_n": 55
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Antoniuk",
+   "distance_km": 4.8,
+   "quadrant": "N",
+   "sat_n": 7,
+   "d_n": 161
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Dziesięciny II",
+   "distance_km": 5.1,
+   "quadrant": "N",
+   "sat_n": 7,
+   "d_n": 27
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Dziesięciny I",
+   "distance_km": 5.5,
+   "quadrant": "N",
+   "sat_n": 7,
+   "d_n": 80
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Piaski",
+   "distance_km": 5.59,
+   "quadrant": "CENTER",
+   "sat_n": 7,
+   "d_n": 50
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Centrum",
+   "distance_km": 5.76,
+   "quadrant": "CENTER",
+   "sat_n": 7,
+   "d_n": 178
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Mickiewicza",
+   "distance_km": 6.29,
+   "quadrant": "CENTER",
+   "sat_n": 7,
+   "d_n": 87
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Zawady",
+   "distance_km": 6.35,
+   "quadrant": "N",
+   "sat_n": 7,
+   "d_n": 32
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Białostoczek",
+   "distance_km": 6.43,
+   "quadrant": "N",
+   "sat_n": 7,
+   "d_n": 101
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Sienkiewicza",
+   "distance_km": 6.65,
+   "quadrant": "E",
+   "sat_n": 7,
+   "d_n": 58
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Bojary",
+   "distance_km": 7.02,
+   "quadrant": "E",
+   "sat_n": 7,
+   "d_n": 191
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Dojlidy",
+   "distance_km": 7.91,
+   "quadrant": "SE",
+   "sat_n": 7,
+   "d_n": 75
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Piasta I",
+   "distance_km": 7.99,
+   "quadrant": "CENTER",
+   "sat_n": 7,
+   "d_n": 43
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Skorupy",
+   "distance_km": 8.31,
+   "quadrant": "E",
+   "sat_n": 7,
+   "d_n": 64
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Wygoda",
+   "distance_km": 8.79,
+   "quadrant": "E",
+   "sat_n": 7,
+   "d_n": 62
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Jaroszówka",
+   "distance_km": 9.7,
+   "quadrant": "E",
+   "sat_n": 7,
+   "d_n": 71
+  },
+  {
+   "sat": "Klepacze",
+   "district": "Dojlidy Górne",
+   "distance_km": 10.1,
+   "quadrant": "SE",
+   "sat_n": 7,
+   "d_n": 39
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Starosielce",
+   "distance_km": 1.65,
+   "quadrant": "W",
+   "sat_n": 5,
+   "d_n": 60
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Leśna Dolina",
+   "distance_km": 2.01,
+   "quadrant": "W",
+   "sat_n": 5,
+   "d_n": 67
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Zielone Wzgórza",
+   "distance_km": 2.56,
+   "quadrant": "W",
+   "sat_n": 5,
+   "d_n": 41
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Słoneczny Stok",
+   "distance_km": 2.78,
+   "quadrant": "W",
+   "sat_n": 5,
+   "d_n": 50
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Bacieczki",
+   "distance_km": 3.51,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 84
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Wysoki Stoczek",
+   "distance_km": 3.93,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 74
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Młodych",
+   "distance_km": 4.16,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 32
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Nowe Miasto",
+   "distance_km": 4.46,
+   "quadrant": "SW",
+   "sat_n": 5,
+   "d_n": 69
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Dziesięciny II",
+   "distance_km": 4.77,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 27
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Antoniuk",
+   "distance_km": 4.98,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 161
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Dziesięciny I",
+   "distance_km": 5.24,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 80
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Bema",
+   "distance_km": 5.25,
+   "quadrant": "SW",
+   "sat_n": 5,
+   "d_n": 96
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Kawaleryjskie",
+   "distance_km": 5.3,
+   "quadrant": "SW",
+   "sat_n": 5,
+   "d_n": 109
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Przydworcowe",
+   "distance_km": 5.34,
+   "quadrant": "CENTER",
+   "sat_n": 5,
+   "d_n": 55
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Zawady",
+   "distance_km": 5.69,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 32
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Centrum",
+   "distance_km": 6.28,
+   "quadrant": "CENTER",
+   "sat_n": 5,
+   "d_n": 178
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Piaski",
+   "distance_km": 6.32,
+   "quadrant": "CENTER",
+   "sat_n": 5,
+   "d_n": 50
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Białostoczek",
+   "distance_km": 6.58,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 101
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Sienkiewicza",
+   "distance_km": 7.06,
+   "quadrant": "E",
+   "sat_n": 5,
+   "d_n": 58
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Mickiewicza",
+   "distance_km": 7.14,
+   "quadrant": "CENTER",
+   "sat_n": 5,
+   "d_n": 87
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Bojary",
+   "distance_km": 7.57,
+   "quadrant": "E",
+   "sat_n": 5,
+   "d_n": 191
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Piasta I",
+   "distance_km": 8.66,
+   "quadrant": "CENTER",
+   "sat_n": 5,
+   "d_n": 43
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Dojlidy",
+   "distance_km": 8.88,
+   "quadrant": "SE",
+   "sat_n": 5,
+   "d_n": 75
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Skorupy",
+   "distance_km": 9.09,
+   "quadrant": "E",
+   "sat_n": 5,
+   "d_n": 64
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Wygoda",
+   "distance_km": 9.21,
+   "quadrant": "E",
+   "sat_n": 5,
+   "d_n": 62
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Jaroszówka",
+   "distance_km": 9.89,
+   "quadrant": "E",
+   "sat_n": 5,
+   "d_n": 71
+  },
+  {
+   "sat": "Krupniki",
+   "district": "Dojlidy Górne",
+   "distance_km": 11.28,
+   "quadrant": "SE",
+   "sat_n": 5,
+   "d_n": 39
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Nowe Miasto",
+   "distance_km": 3.85,
+   "quadrant": "SW",
+   "sat_n": 4,
+   "d_n": 69
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Kawaleryjskie",
+   "distance_km": 4.25,
+   "quadrant": "SW",
+   "sat_n": 4,
+   "d_n": 109
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Zielone Wzgórza",
+   "distance_km": 4.33,
+   "quadrant": "W",
+   "sat_n": 4,
+   "d_n": 41
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Starosielce",
+   "distance_km": 4.68,
+   "quadrant": "W",
+   "sat_n": 4,
+   "d_n": 60
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Bema",
+   "distance_km": 5.09,
+   "quadrant": "SW",
+   "sat_n": 4,
+   "d_n": 96
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Słoneczny Stok",
+   "distance_km": 5.26,
+   "quadrant": "W",
+   "sat_n": 4,
+   "d_n": 50
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Leśna Dolina",
+   "distance_km": 5.36,
+   "quadrant": "W",
+   "sat_n": 4,
+   "d_n": 67
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Młodych",
+   "distance_km": 6.03,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 32
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Przydworcowe",
+   "distance_km": 6.12,
+   "quadrant": "CENTER",
+   "sat_n": 4,
+   "d_n": 55
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Piaski",
+   "distance_km": 6.23,
+   "quadrant": "CENTER",
+   "sat_n": 4,
+   "d_n": 50
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Mickiewicza",
+   "distance_km": 6.45,
+   "quadrant": "CENTER",
+   "sat_n": 4,
+   "d_n": 87
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Antoniuk",
+   "distance_km": 6.83,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 161
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Centrum",
+   "distance_km": 6.9,
+   "quadrant": "CENTER",
+   "sat_n": 4,
+   "d_n": 178
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Wysoki Stoczek",
+   "distance_km": 7.06,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 74
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Dojlidy",
+   "distance_km": 7.37,
+   "quadrant": "SE",
+   "sat_n": 4,
+   "d_n": 75
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Bacieczki",
+   "distance_km": 7.84,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 84
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Bojary",
+   "distance_km": 7.84,
+   "quadrant": "E",
+   "sat_n": 4,
+   "d_n": 191
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Dziesięciny II",
+   "distance_km": 7.85,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 27
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Sienkiewicza",
+   "distance_km": 7.87,
+   "quadrant": "E",
+   "sat_n": 4,
+   "d_n": 58
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Dziesięciny I",
+   "distance_km": 8.1,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 80
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Białostoczek",
+   "distance_km": 8.2,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 101
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Skorupy",
+   "distance_km": 8.29,
+   "quadrant": "E",
+   "sat_n": 4,
+   "d_n": 64
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Piasta I",
+   "distance_km": 8.35,
+   "quadrant": "CENTER",
+   "sat_n": 4,
+   "d_n": 43
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Dojlidy Górne",
+   "distance_km": 8.52,
+   "quadrant": "SE",
+   "sat_n": 4,
+   "d_n": 39
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Zawady",
+   "distance_km": 9.41,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 32
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Wygoda",
+   "distance_km": 9.67,
+   "quadrant": "E",
+   "sat_n": 4,
+   "d_n": 62
+  },
+  {
+   "sat": "Księżyno",
+   "district": "Jaroszówka",
+   "distance_km": 11.02,
+   "quadrant": "E",
+   "sat_n": 4,
+   "d_n": 71
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Nowe Miasto",
+   "distance_km": 5.63,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 69
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Zielone Wzgórza",
+   "distance_km": 5.74,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 41
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Starosielce",
+   "distance_km": 5.84,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 60
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Kawaleryjskie",
+   "distance_km": 6.11,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 109
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Leśna Dolina",
+   "distance_km": 6.58,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 67
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Słoneczny Stok",
+   "distance_km": 6.67,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Bema",
+   "distance_km": 6.9,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 96
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Młodych",
+   "distance_km": 7.63,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Przydworcowe",
+   "distance_km": 7.89,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 55
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Piaski",
+   "distance_km": 8.08,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Mickiewicza",
+   "distance_km": 8.32,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 87
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Antoniuk",
+   "distance_km": 8.48,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 161
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Wysoki Stoczek",
+   "distance_km": 8.49,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 74
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Centrum",
+   "distance_km": 8.71,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 178
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Bacieczki",
+   "distance_km": 8.99,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 84
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Dojlidy",
+   "distance_km": 9.23,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 75
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Dziesięciny II",
+   "distance_km": 9.32,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 27
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Dziesięciny I",
+   "distance_km": 9.63,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 80
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Sienkiewicza",
+   "distance_km": 9.68,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 58
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Bojary",
+   "distance_km": 9.7,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 191
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Białostoczek",
+   "distance_km": 9.93,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 101
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Skorupy",
+   "distance_km": 10.17,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 64
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Dojlidy Górne",
+   "distance_km": 10.2,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 39
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Piasta I",
+   "distance_km": 10.23,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 43
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Zawady",
+   "distance_km": 10.79,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Wygoda",
+   "distance_km": 11.53,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 62
+  },
+  {
+   "sat": "Niewodnica Korycka",
+   "district": "Jaroszówka",
+   "distance_km": 12.84,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 71
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Starosielce",
+   "distance_km": 5.72,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 60
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Zielone Wzgórza",
+   "distance_km": 5.85,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 41
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Nowe Miasto",
+   "distance_km": 6.21,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 69
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Leśna Dolina",
+   "distance_km": 6.47,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 67
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Słoneczny Stok",
+   "distance_km": 6.74,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Kawaleryjskie",
+   "distance_km": 6.82,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 109
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Bema",
+   "distance_km": 7.51,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 96
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Młodych",
+   "distance_km": 7.88,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Przydworcowe",
+   "distance_km": 8.36,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 55
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Wysoki Stoczek",
+   "distance_km": 8.51,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 74
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Piaski",
+   "distance_km": 8.73,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Bacieczki",
+   "distance_km": 8.74,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 84
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Antoniuk",
+   "distance_km": 8.77,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 161
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Mickiewicza",
+   "distance_km": 9.11,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 87
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Centrum",
+   "distance_km": 9.26,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 178
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Dziesięciny II",
+   "distance_km": 9.38,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 27
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Dziesięciny I",
+   "distance_km": 9.75,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 80
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Dojlidy",
+   "distance_km": 10.2,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 75
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Sienkiewicza",
+   "distance_km": 10.22,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 58
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Białostoczek",
+   "distance_km": 10.32,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 101
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Bojary",
+   "distance_km": 10.34,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 191
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Zawady",
+   "distance_km": 10.71,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Piasta I",
+   "distance_km": 11.0,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 43
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Skorupy",
+   "distance_km": 11.04,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 64
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Dojlidy Górne",
+   "distance_km": 11.42,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 39
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Wygoda",
+   "distance_km": 12.19,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 62
+  },
+  {
+   "sat": "Niewodnica Kościelna",
+   "district": "Jaroszówka",
+   "distance_km": 13.39,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 71
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Jaroszówka",
+   "distance_km": 2.93,
+   "quadrant": "E",
+   "sat_n": 5,
+   "d_n": 71
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Wygoda",
+   "distance_km": 4.24,
+   "quadrant": "E",
+   "sat_n": 5,
+   "d_n": 62
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Piasta I",
+   "distance_km": 5.76,
+   "quadrant": "CENTER",
+   "sat_n": 5,
+   "d_n": 43
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Bojary",
+   "distance_km": 6.04,
+   "quadrant": "E",
+   "sat_n": 5,
+   "d_n": 191
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Sienkiewicza",
+   "distance_km": 6.09,
+   "quadrant": "E",
+   "sat_n": 5,
+   "d_n": 58
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Skorupy",
+   "distance_km": 6.19,
+   "quadrant": "E",
+   "sat_n": 5,
+   "d_n": 64
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Białostoczek",
+   "distance_km": 6.21,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 101
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Centrum",
+   "distance_km": 7.06,
+   "quadrant": "CENTER",
+   "sat_n": 5,
+   "d_n": 178
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Dojlidy",
+   "distance_km": 7.49,
+   "quadrant": "SE",
+   "sat_n": 5,
+   "d_n": 75
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Mickiewicza",
+   "distance_km": 7.54,
+   "quadrant": "CENTER",
+   "sat_n": 5,
+   "d_n": 87
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Dziesięciny I",
+   "distance_km": 7.65,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 80
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Piaski",
+   "distance_km": 7.65,
+   "quadrant": "CENTER",
+   "sat_n": 5,
+   "d_n": 50
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Antoniuk",
+   "distance_km": 7.84,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 161
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Przydworcowe",
+   "distance_km": 7.97,
+   "quadrant": "CENTER",
+   "sat_n": 5,
+   "d_n": 55
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Dziesięciny II",
+   "distance_km": 8.16,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 27
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Zawady",
+   "distance_km": 8.16,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 32
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Młodych",
+   "distance_km": 8.74,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 32
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Bema",
+   "distance_km": 8.83,
+   "quadrant": "SW",
+   "sat_n": 5,
+   "d_n": 96
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Wysoki Stoczek",
+   "distance_km": 8.89,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 74
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Dojlidy Górne",
+   "distance_km": 9.31,
+   "quadrant": "SE",
+   "sat_n": 5,
+   "d_n": 39
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Kawaleryjskie",
+   "distance_km": 9.63,
+   "quadrant": "SW",
+   "sat_n": 5,
+   "d_n": 109
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Bacieczki",
+   "distance_km": 10.09,
+   "quadrant": "N",
+   "sat_n": 5,
+   "d_n": 84
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Słoneczny Stok",
+   "distance_km": 10.11,
+   "quadrant": "W",
+   "sat_n": 5,
+   "d_n": 50
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Nowe Miasto",
+   "distance_km": 10.12,
+   "quadrant": "SW",
+   "sat_n": 5,
+   "d_n": 69
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Leśna Dolina",
+   "distance_km": 10.78,
+   "quadrant": "W",
+   "sat_n": 5,
+   "d_n": 67
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Zielone Wzgórza",
+   "distance_km": 10.78,
+   "quadrant": "W",
+   "sat_n": 5,
+   "d_n": 41
+  },
+  {
+   "sat": "Nowodworce",
+   "district": "Starosielce",
+   "distance_km": 11.35,
+   "quadrant": "W",
+   "sat_n": 5,
+   "d_n": 60
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Kawaleryjskie",
+   "distance_km": 3.81,
+   "quadrant": "SW",
+   "sat_n": 1,
+   "d_n": 109
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Dojlidy Górne",
+   "distance_km": 4.07,
+   "quadrant": "SE",
+   "sat_n": 1,
+   "d_n": 39
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Dojlidy",
+   "distance_km": 4.09,
+   "quadrant": "SE",
+   "sat_n": 1,
+   "d_n": 75
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Nowe Miasto",
+   "distance_km": 4.36,
+   "quadrant": "SW",
+   "sat_n": 1,
+   "d_n": 69
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Mickiewicza",
+   "distance_km": 4.42,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 87
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Bema",
+   "distance_km": 4.62,
+   "quadrant": "SW",
+   "sat_n": 1,
+   "d_n": 96
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Piaski",
+   "distance_km": 4.94,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 50
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Skorupy",
+   "distance_km": 5.37,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 64
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Przydworcowe",
+   "distance_km": 5.71,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 55
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Piasta I",
+   "distance_km": 5.85,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 43
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Centrum",
+   "distance_km": 5.88,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 178
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Bojary",
+   "distance_km": 6.06,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 191
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Zielone Wzgórza",
+   "distance_km": 6.25,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 41
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Sienkiewicza",
+   "distance_km": 6.56,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 58
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Młodych",
+   "distance_km": 6.59,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 32
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Słoneczny Stok",
+   "distance_km": 6.81,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 50
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Antoniuk",
+   "distance_km": 6.91,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 161
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Starosielce",
+   "distance_km": 7.1,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 60
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Leśna Dolina",
+   "distance_km": 7.42,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 67
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Białostoczek",
+   "distance_km": 7.48,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 101
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Wygoda",
+   "distance_km": 7.48,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 62
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Wysoki Stoczek",
+   "distance_km": 8.05,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 74
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Dziesięciny I",
+   "distance_km": 8.48,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 80
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Dziesięciny II",
+   "distance_km": 8.49,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 27
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Jaroszówka",
+   "distance_km": 9.11,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 71
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Bacieczki",
+   "distance_km": 9.54,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 84
+  },
+  {
+   "sat": "Olmonty",
+   "district": "Zawady",
+   "distance_km": 10.17,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 32
+  },
+  {
+   "sat": "Porosły",
+   "district": "Bacieczki",
+   "distance_km": 2.39,
+   "quadrant": "N",
+   "sat_n": 18,
+   "d_n": 84
+  },
+  {
+   "sat": "Porosły",
+   "district": "Leśna Dolina",
+   "distance_km": 3.01,
+   "quadrant": "W",
+   "sat_n": 18,
+   "d_n": 67
+  },
+  {
+   "sat": "Porosły",
+   "district": "Starosielce",
+   "distance_km": 3.27,
+   "quadrant": "W",
+   "sat_n": 18,
+   "d_n": 60
+  },
+  {
+   "sat": "Porosły",
+   "district": "Słoneczny Stok",
+   "distance_km": 3.78,
+   "quadrant": "W",
+   "sat_n": 18,
+   "d_n": 50
+  },
+  {
+   "sat": "Porosły",
+   "district": "Wysoki Stoczek",
+   "distance_km": 3.81,
+   "quadrant": "N",
+   "sat_n": 18,
+   "d_n": 74
+  },
+  {
+   "sat": "Porosły",
+   "district": "Zielone Wzgórza",
+   "distance_km": 4.13,
+   "quadrant": "W",
+   "sat_n": 18,
+   "d_n": 41
+  },
+  {
+   "sat": "Porosły",
+   "district": "Dziesięciny II",
+   "distance_km": 4.37,
+   "quadrant": "N",
+   "sat_n": 18,
+   "d_n": 27
+  },
+  {
+   "sat": "Porosły",
+   "district": "Zawady",
+   "distance_km": 4.55,
+   "quadrant": "N",
+   "sat_n": 18,
+   "d_n": 32
+  },
+  {
+   "sat": "Porosły",
+   "district": "Młodych",
+   "distance_km": 4.79,
+   "quadrant": "N",
+   "sat_n": 18,
+   "d_n": 32
+  },
+  {
+   "sat": "Porosły",
+   "district": "Dziesięciny I",
+   "distance_km": 4.86,
+   "quadrant": "N",
+   "sat_n": 18,
+   "d_n": 80
+  },
+  {
+   "sat": "Porosły",
+   "district": "Antoniuk",
+   "distance_km": 5.33,
+   "quadrant": "N",
+   "sat_n": 18,
+   "d_n": 161
+  },
+  {
+   "sat": "Porosły",
+   "district": "Nowe Miasto",
+   "distance_km": 6.1,
+   "quadrant": "SW",
+   "sat_n": 18,
+   "d_n": 69
+  },
+  {
+   "sat": "Porosły",
+   "district": "Przydworcowe",
+   "distance_km": 6.14,
+   "quadrant": "CENTER",
+   "sat_n": 18,
+   "d_n": 55
+  },
+  {
+   "sat": "Porosły",
+   "district": "Bema",
+   "distance_km": 6.49,
+   "quadrant": "SW",
+   "sat_n": 18,
+   "d_n": 96
+  },
+  {
+   "sat": "Porosły",
+   "district": "Białostoczek",
+   "distance_km": 6.67,
+   "quadrant": "N",
+   "sat_n": 18,
+   "d_n": 101
+  },
+  {
+   "sat": "Porosły",
+   "district": "Kawaleryjskie",
+   "distance_km": 6.84,
+   "quadrant": "SW",
+   "sat_n": 18,
+   "d_n": 109
+  },
+  {
+   "sat": "Porosły",
+   "district": "Centrum",
+   "distance_km": 6.94,
+   "quadrant": "CENTER",
+   "sat_n": 18,
+   "d_n": 178
+  },
+  {
+   "sat": "Porosły",
+   "district": "Piaski",
+   "distance_km": 7.29,
+   "quadrant": "CENTER",
+   "sat_n": 18,
+   "d_n": 50
+  },
+  {
+   "sat": "Porosły",
+   "district": "Sienkiewicza",
+   "distance_km": 7.49,
+   "quadrant": "E",
+   "sat_n": 18,
+   "d_n": 58
+  },
+  {
+   "sat": "Porosły",
+   "district": "Bojary",
+   "distance_km": 8.17,
+   "quadrant": "E",
+   "sat_n": 18,
+   "d_n": 191
+  },
+  {
+   "sat": "Porosły",
+   "district": "Mickiewicza",
+   "distance_km": 8.21,
+   "quadrant": "CENTER",
+   "sat_n": 18,
+   "d_n": 87
+  },
+  {
+   "sat": "Porosły",
+   "district": "Piasta I",
+   "distance_km": 9.37,
+   "quadrant": "CENTER",
+   "sat_n": 18,
+   "d_n": 43
+  },
+  {
+   "sat": "Porosły",
+   "district": "Wygoda",
+   "distance_km": 9.52,
+   "quadrant": "E",
+   "sat_n": 18,
+   "d_n": 62
+  },
+  {
+   "sat": "Porosły",
+   "district": "Jaroszówka",
+   "distance_km": 9.81,
+   "quadrant": "E",
+   "sat_n": 18,
+   "d_n": 71
+  },
+  {
+   "sat": "Porosły",
+   "district": "Skorupy",
+   "distance_km": 9.96,
+   "quadrant": "E",
+   "sat_n": 18,
+   "d_n": 64
+  },
+  {
+   "sat": "Porosły",
+   "district": "Dojlidy",
+   "distance_km": 10.05,
+   "quadrant": "SE",
+   "sat_n": 18,
+   "d_n": 75
+  },
+  {
+   "sat": "Porosły",
+   "district": "Dojlidy Górne",
+   "distance_km": 12.73,
+   "quadrant": "SE",
+   "sat_n": 18,
+   "d_n": 39
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Bacieczki",
+   "distance_km": 2.57,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 84
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Leśna Dolina",
+   "distance_km": 3.7,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 67
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Starosielce",
+   "distance_km": 4.03,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 60
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Wysoki Stoczek",
+   "distance_km": 4.19,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 74
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Słoneczny Stok",
+   "distance_km": 4.43,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Zawady",
+   "distance_km": 4.52,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Dziesięciny II",
+   "distance_km": 4.63,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 27
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Zielone Wzgórza",
+   "distance_km": 4.85,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 41
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Dziesięciny I",
+   "distance_km": 5.11,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 80
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Młodych",
+   "distance_km": 5.32,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Antoniuk",
+   "distance_km": 5.77,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 161
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Przydworcowe",
+   "distance_km": 6.68,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 55
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Nowe Miasto",
+   "distance_km": 6.8,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 69
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Białostoczek",
+   "distance_km": 7.0,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 101
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Bema",
+   "distance_km": 7.11,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 96
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Centrum",
+   "distance_km": 7.42,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 178
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Kawaleryjskie",
+   "distance_km": 7.52,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 109
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Piaski",
+   "distance_km": 7.84,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Sienkiewicza",
+   "distance_km": 7.89,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 58
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Bojary",
+   "distance_km": 8.61,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 191
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Mickiewicza",
+   "distance_km": 8.77,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 87
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Piasta I",
+   "distance_km": 9.83,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 43
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Wygoda",
+   "distance_km": 9.87,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 62
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Jaroszówka",
+   "distance_km": 10.03,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 71
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Skorupy",
+   "distance_km": 10.45,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 64
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Dojlidy",
+   "distance_km": 10.61,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 75
+  },
+  {
+   "sat": "Porosły Kolonia",
+   "district": "Dojlidy Górne",
+   "distance_km": 13.35,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 39
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Dojlidy Górne",
+   "distance_km": 4.28,
+   "quadrant": "SE",
+   "sat_n": 4,
+   "d_n": 39
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Skorupy",
+   "distance_km": 4.63,
+   "quadrant": "E",
+   "sat_n": 4,
+   "d_n": 64
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Dojlidy",
+   "distance_km": 4.98,
+   "quadrant": "SE",
+   "sat_n": 4,
+   "d_n": 75
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Piasta I",
+   "distance_km": 5.2,
+   "quadrant": "CENTER",
+   "sat_n": 4,
+   "d_n": 43
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Wygoda",
+   "distance_km": 5.53,
+   "quadrant": "E",
+   "sat_n": 4,
+   "d_n": 62
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Jaroszówka",
+   "distance_km": 6.41,
+   "quadrant": "E",
+   "sat_n": 4,
+   "d_n": 71
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Bojary",
+   "distance_km": 6.42,
+   "quadrant": "E",
+   "sat_n": 4,
+   "d_n": 191
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Mickiewicza",
+   "distance_km": 6.58,
+   "quadrant": "CENTER",
+   "sat_n": 4,
+   "d_n": 87
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Sienkiewicza",
+   "distance_km": 7.17,
+   "quadrant": "E",
+   "sat_n": 4,
+   "d_n": 58
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Piaski",
+   "distance_km": 7.39,
+   "quadrant": "CENTER",
+   "sat_n": 4,
+   "d_n": 50
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Centrum",
+   "distance_km": 7.63,
+   "quadrant": "CENTER",
+   "sat_n": 4,
+   "d_n": 178
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Białostoczek",
+   "distance_km": 8.21,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 101
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Przydworcowe",
+   "distance_km": 8.46,
+   "quadrant": "CENTER",
+   "sat_n": 4,
+   "d_n": 55
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Bema",
+   "distance_km": 8.48,
+   "quadrant": "SW",
+   "sat_n": 4,
+   "d_n": 96
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Kawaleryjskie",
+   "distance_km": 8.68,
+   "quadrant": "SW",
+   "sat_n": 4,
+   "d_n": 109
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Antoniuk",
+   "distance_km": 9.26,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 161
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Nowe Miasto",
+   "distance_km": 9.51,
+   "quadrant": "SW",
+   "sat_n": 4,
+   "d_n": 69
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Młodych",
+   "distance_km": 9.8,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 32
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Dziesięciny I",
+   "distance_km": 10.18,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 80
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Dziesięciny II",
+   "distance_km": 10.57,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 27
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Wysoki Stoczek",
+   "distance_km": 10.85,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 74
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Słoneczny Stok",
+   "distance_km": 11.01,
+   "quadrant": "W",
+   "sat_n": 4,
+   "d_n": 50
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Zielone Wzgórza",
+   "distance_km": 11.17,
+   "quadrant": "W",
+   "sat_n": 4,
+   "d_n": 41
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Zawady",
+   "distance_km": 11.59,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 32
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Leśna Dolina",
+   "distance_km": 11.85,
+   "quadrant": "W",
+   "sat_n": 4,
+   "d_n": 67
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Starosielce",
+   "distance_km": 12.06,
+   "quadrant": "W",
+   "sat_n": 4,
+   "d_n": 60
+  },
+  {
+   "sat": "Sobolewo",
+   "district": "Bacieczki",
+   "distance_km": 12.57,
+   "quadrant": "N",
+   "sat_n": 4,
+   "d_n": 84
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Wygoda",
+   "distance_km": 3.12,
+   "quadrant": "E",
+   "sat_n": 3,
+   "d_n": 62
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Jaroszówka",
+   "distance_km": 3.47,
+   "quadrant": "E",
+   "sat_n": 3,
+   "d_n": 71
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Skorupy",
+   "distance_km": 3.66,
+   "quadrant": "E",
+   "sat_n": 3,
+   "d_n": 64
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Piasta I",
+   "distance_km": 3.72,
+   "quadrant": "CENTER",
+   "sat_n": 3,
+   "d_n": 43
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Bojary",
+   "distance_km": 4.67,
+   "quadrant": "E",
+   "sat_n": 3,
+   "d_n": 191
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Dojlidy",
+   "distance_km": 4.74,
+   "quadrant": "SE",
+   "sat_n": 3,
+   "d_n": 75
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Sienkiewicza",
+   "distance_km": 5.21,
+   "quadrant": "E",
+   "sat_n": 3,
+   "d_n": 58
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Mickiewicza",
+   "distance_km": 5.58,
+   "quadrant": "CENTER",
+   "sat_n": 3,
+   "d_n": 87
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Dojlidy Górne",
+   "distance_km": 5.86,
+   "quadrant": "SE",
+   "sat_n": 3,
+   "d_n": 39
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Centrum",
+   "distance_km": 5.96,
+   "quadrant": "CENTER",
+   "sat_n": 3,
+   "d_n": 178
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Białostoczek",
+   "distance_km": 5.99,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 101
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Piaski",
+   "distance_km": 6.11,
+   "quadrant": "CENTER",
+   "sat_n": 3,
+   "d_n": 50
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Przydworcowe",
+   "distance_km": 6.92,
+   "quadrant": "CENTER",
+   "sat_n": 3,
+   "d_n": 55
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Bema",
+   "distance_km": 7.35,
+   "quadrant": "SW",
+   "sat_n": 3,
+   "d_n": 96
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Antoniuk",
+   "distance_km": 7.37,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 161
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Kawaleryjskie",
+   "distance_km": 7.88,
+   "quadrant": "SW",
+   "sat_n": 3,
+   "d_n": 109
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Dziesięciny I",
+   "distance_km": 7.92,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 80
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Młodych",
+   "distance_km": 8.1,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 32
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Dziesięciny II",
+   "distance_km": 8.37,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 27
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Nowe Miasto",
+   "distance_km": 8.59,
+   "quadrant": "SW",
+   "sat_n": 3,
+   "d_n": 69
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Wysoki Stoczek",
+   "distance_km": 8.84,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 74
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Zawady",
+   "distance_km": 9.09,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 32
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Słoneczny Stok",
+   "distance_km": 9.46,
+   "quadrant": "W",
+   "sat_n": 3,
+   "d_n": 50
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Zielone Wzgórza",
+   "distance_km": 9.85,
+   "quadrant": "W",
+   "sat_n": 3,
+   "d_n": 41
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Leśna Dolina",
+   "distance_km": 10.26,
+   "quadrant": "W",
+   "sat_n": 3,
+   "d_n": 67
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Bacieczki",
+   "distance_km": 10.44,
+   "quadrant": "N",
+   "sat_n": 3,
+   "d_n": 84
+  },
+  {
+   "sat": "Sowlany",
+   "district": "Starosielce",
+   "distance_km": 10.63,
+   "quadrant": "W",
+   "sat_n": 3,
+   "d_n": 60
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Jaroszówka",
+   "distance_km": 10.53,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 71
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Wygoda",
+   "distance_km": 11.59,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 62
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Piasta I",
+   "distance_km": 12.86,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 43
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Skorupy",
+   "distance_km": 13.01,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 64
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Bojary",
+   "distance_km": 13.44,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 191
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Sienkiewicza",
+   "distance_km": 13.63,
+   "quadrant": "E",
+   "sat_n": 1,
+   "d_n": 58
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Białostoczek",
+   "distance_km": 13.83,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 101
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Dojlidy",
+   "distance_km": 14.16,
+   "quadrant": "SE",
+   "sat_n": 1,
+   "d_n": 75
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Centrum",
+   "distance_km": 14.57,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 178
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Mickiewicza",
+   "distance_km": 14.75,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 87
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Dojlidy Górne",
+   "distance_km": 14.9,
+   "quadrant": "SE",
+   "sat_n": 1,
+   "d_n": 39
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Piaski",
+   "distance_km": 15.05,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 50
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Dziesięciny I",
+   "distance_km": 15.23,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 80
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Antoniuk",
+   "distance_km": 15.46,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 161
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Przydworcowe",
+   "distance_km": 15.51,
+   "quadrant": "CENTER",
+   "sat_n": 1,
+   "d_n": 55
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Zawady",
+   "distance_km": 15.53,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 32
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Dziesięciny II",
+   "distance_km": 15.73,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 27
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Bema",
+   "distance_km": 16.28,
+   "quadrant": "SW",
+   "sat_n": 1,
+   "d_n": 96
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Młodych",
+   "distance_km": 16.35,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 32
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Wysoki Stoczek",
+   "distance_km": 16.49,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 74
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Kawaleryjskie",
+   "distance_km": 16.98,
+   "quadrant": "SW",
+   "sat_n": 1,
+   "d_n": 109
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Nowe Miasto",
+   "distance_km": 17.57,
+   "quadrant": "SW",
+   "sat_n": 1,
+   "d_n": 69
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Bacieczki",
+   "distance_km": 17.6,
+   "quadrant": "N",
+   "sat_n": 1,
+   "d_n": 84
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Słoneczny Stok",
+   "distance_km": 17.73,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 50
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Zielone Wzgórza",
+   "distance_km": 18.38,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 41
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Leśna Dolina",
+   "distance_km": 18.4,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 67
+  },
+  {
+   "sat": "Supraśl",
+   "district": "Starosielce",
+   "distance_km": 18.97,
+   "quadrant": "W",
+   "sat_n": 1,
+   "d_n": 60
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Nowe Miasto",
+   "distance_km": 11.83,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 69
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Kawaleryjskie",
+   "distance_km": 12.12,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 109
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Zielone Wzgórza",
+   "distance_km": 12.17,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 41
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Starosielce",
+   "distance_km": 12.26,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 60
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Leśna Dolina",
+   "distance_km": 13.01,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 67
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Bema",
+   "distance_km": 13.02,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 96
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Słoneczny Stok",
+   "distance_km": 13.1,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Młodych",
+   "distance_km": 14.02,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Piaski",
+   "distance_km": 14.08,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Mickiewicza",
+   "distance_km": 14.1,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 87
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Przydworcowe",
+   "distance_km": 14.11,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 55
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Dojlidy Górne",
+   "distance_km": 14.4,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 39
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Dojlidy",
+   "distance_km": 14.5,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 75
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Antoniuk",
+   "distance_km": 14.84,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 161
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Centrum",
+   "distance_km": 14.84,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 178
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Wysoki Stoczek",
+   "distance_km": 14.92,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 74
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Bacieczki",
+   "distance_km": 15.38,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 84
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Bojary",
+   "distance_km": 15.65,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 191
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Skorupy",
+   "distance_km": 15.66,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 64
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Dziesięciny II",
+   "distance_km": 15.76,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 27
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Sienkiewicza",
+   "distance_km": 15.78,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 58
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Piasta I",
+   "distance_km": 15.92,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 43
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Dziesięciny I",
+   "distance_km": 16.05,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 80
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Białostoczek",
+   "distance_km": 16.2,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 101
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Zawady",
+   "distance_km": 17.23,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Wygoda",
+   "distance_km": 17.4,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 62
+  },
+  {
+   "sat": "Turośń Kościelna",
+   "district": "Jaroszówka",
+   "distance_km": 18.87,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 71
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Jaroszówka",
+   "distance_km": 2.56,
+   "quadrant": "E",
+   "sat_n": 17,
+   "d_n": 71
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Wygoda",
+   "distance_km": 4.15,
+   "quadrant": "E",
+   "sat_n": 17,
+   "d_n": 62
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Białostoczek",
+   "distance_km": 4.48,
+   "quadrant": "N",
+   "sat_n": 17,
+   "d_n": 101
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Sienkiewicza",
+   "distance_km": 4.96,
+   "quadrant": "E",
+   "sat_n": 17,
+   "d_n": 58
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Dziesięciny I",
+   "distance_km": 5.28,
+   "quadrant": "N",
+   "sat_n": 17,
+   "d_n": 80
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Bojary",
+   "distance_km": 5.33,
+   "quadrant": "E",
+   "sat_n": 17,
+   "d_n": 191
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Zawady",
+   "distance_km": 5.34,
+   "quadrant": "N",
+   "sat_n": 17,
+   "d_n": 32
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Piasta I",
+   "distance_km": 5.72,
+   "quadrant": "CENTER",
+   "sat_n": 17,
+   "d_n": 43
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Dziesięciny II",
+   "distance_km": 5.75,
+   "quadrant": "N",
+   "sat_n": 17,
+   "d_n": 27
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Centrum",
+   "distance_km": 5.85,
+   "quadrant": "CENTER",
+   "sat_n": 17,
+   "d_n": 178
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Antoniuk",
+   "distance_km": 5.98,
+   "quadrant": "N",
+   "sat_n": 17,
+   "d_n": 161
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Skorupy",
+   "distance_km": 6.45,
+   "quadrant": "E",
+   "sat_n": 17,
+   "d_n": 64
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Przydworcowe",
+   "distance_km": 6.55,
+   "quadrant": "CENTER",
+   "sat_n": 17,
+   "d_n": 55
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Wysoki Stoczek",
+   "distance_km": 6.59,
+   "quadrant": "N",
+   "sat_n": 17,
+   "d_n": 74
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Piaski",
+   "distance_km": 6.7,
+   "quadrant": "CENTER",
+   "sat_n": 17,
+   "d_n": 50
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Młodych",
+   "distance_km": 6.88,
+   "quadrant": "N",
+   "sat_n": 17,
+   "d_n": 32
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Mickiewicza",
+   "distance_km": 6.99,
+   "quadrant": "CENTER",
+   "sat_n": 17,
+   "d_n": 87
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Bacieczki",
+   "distance_km": 7.47,
+   "quadrant": "N",
+   "sat_n": 17,
+   "d_n": 84
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Bema",
+   "distance_km": 7.64,
+   "quadrant": "SW",
+   "sat_n": 17,
+   "d_n": 96
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Dojlidy",
+   "distance_km": 7.7,
+   "quadrant": "SE",
+   "sat_n": 17,
+   "d_n": 75
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Słoneczny Stok",
+   "distance_km": 8.13,
+   "quadrant": "W",
+   "sat_n": 17,
+   "d_n": 50
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Kawaleryjskie",
+   "distance_km": 8.57,
+   "quadrant": "SW",
+   "sat_n": 17,
+   "d_n": 109
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Leśna Dolina",
+   "distance_km": 8.65,
+   "quadrant": "W",
+   "sat_n": 17,
+   "d_n": 67
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Nowe Miasto",
+   "distance_km": 8.83,
+   "quadrant": "SW",
+   "sat_n": 17,
+   "d_n": 69
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Zielone Wzgórza",
+   "distance_km": 8.94,
+   "quadrant": "W",
+   "sat_n": 17,
+   "d_n": 41
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Starosielce",
+   "distance_km": 9.32,
+   "quadrant": "W",
+   "sat_n": 17,
+   "d_n": 60
+  },
+  {
+   "sat": "Wasilków",
+   "district": "Dojlidy Górne",
+   "distance_km": 10.22,
+   "quadrant": "SE",
+   "sat_n": 17,
+   "d_n": 39
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Skorupy",
+   "distance_km": 2.13,
+   "quadrant": "E",
+   "sat_n": 9,
+   "d_n": 64
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Piasta I",
+   "distance_km": 2.63,
+   "quadrant": "CENTER",
+   "sat_n": 9,
+   "d_n": 43
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Dojlidy",
+   "distance_km": 2.83,
+   "quadrant": "SE",
+   "sat_n": 9,
+   "d_n": 75
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Wygoda",
+   "distance_km": 3.12,
+   "quadrant": "E",
+   "sat_n": 9,
+   "d_n": 62
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Dojlidy Górne",
+   "distance_km": 3.75,
+   "quadrant": "SE",
+   "sat_n": 9,
+   "d_n": 39
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Bojary",
+   "distance_km": 3.85,
+   "quadrant": "E",
+   "sat_n": 9,
+   "d_n": 191
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Mickiewicza",
+   "distance_km": 4.14,
+   "quadrant": "CENTER",
+   "sat_n": 9,
+   "d_n": 87
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Jaroszówka",
+   "distance_km": 4.34,
+   "quadrant": "E",
+   "sat_n": 9,
+   "d_n": 71
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Sienkiewicza",
+   "distance_km": 4.6,
+   "quadrant": "E",
+   "sat_n": 9,
+   "d_n": 58
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Piaski",
+   "distance_km": 4.89,
+   "quadrant": "CENTER",
+   "sat_n": 9,
+   "d_n": 50
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Centrum",
+   "distance_km": 5.07,
+   "quadrant": "CENTER",
+   "sat_n": 9,
+   "d_n": 178
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Białostoczek",
+   "distance_km": 5.67,
+   "quadrant": "N",
+   "sat_n": 9,
+   "d_n": 101
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Przydworcowe",
+   "distance_km": 5.92,
+   "quadrant": "CENTER",
+   "sat_n": 9,
+   "d_n": 55
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Bema",
+   "distance_km": 6.04,
+   "quadrant": "SW",
+   "sat_n": 9,
+   "d_n": 96
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Kawaleryjskie",
+   "distance_km": 6.37,
+   "quadrant": "SW",
+   "sat_n": 9,
+   "d_n": 109
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Antoniuk",
+   "distance_km": 6.69,
+   "quadrant": "N",
+   "sat_n": 9,
+   "d_n": 161
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Nowe Miasto",
+   "distance_km": 7.16,
+   "quadrant": "SW",
+   "sat_n": 9,
+   "d_n": 69
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Młodych",
+   "distance_km": 7.24,
+   "quadrant": "N",
+   "sat_n": 9,
+   "d_n": 32
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Dziesięciny I",
+   "distance_km": 7.63,
+   "quadrant": "N",
+   "sat_n": 9,
+   "d_n": 80
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Dziesięciny II",
+   "distance_km": 8.01,
+   "quadrant": "N",
+   "sat_n": 9,
+   "d_n": 27
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Wysoki Stoczek",
+   "distance_km": 8.28,
+   "quadrant": "N",
+   "sat_n": 9,
+   "d_n": 74
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Słoneczny Stok",
+   "distance_km": 8.49,
+   "quadrant": "W",
+   "sat_n": 9,
+   "d_n": 50
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Zielone Wzgórza",
+   "distance_km": 8.7,
+   "quadrant": "W",
+   "sat_n": 9,
+   "d_n": 41
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Zawady",
+   "distance_km": 9.08,
+   "quadrant": "N",
+   "sat_n": 9,
+   "d_n": 32
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Leśna Dolina",
+   "distance_km": 9.32,
+   "quadrant": "W",
+   "sat_n": 9,
+   "d_n": 67
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Starosielce",
+   "distance_km": 9.57,
+   "quadrant": "W",
+   "sat_n": 9,
+   "d_n": 60
+  },
+  {
+   "sat": "Zaścianki",
+   "district": "Bacieczki",
+   "distance_km": 10.0,
+   "quadrant": "N",
+   "sat_n": 9,
+   "d_n": 84
+  },
+  {
+   "sat": "Łyski",
+   "district": "Bacieczki",
+   "distance_km": 3.18,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 84
+  },
+  {
+   "sat": "Łyski",
+   "district": "Leśna Dolina",
+   "distance_km": 4.42,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 67
+  },
+  {
+   "sat": "Łyski",
+   "district": "Starosielce",
+   "distance_km": 4.72,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 60
+  },
+  {
+   "sat": "Łyski",
+   "district": "Wysoki Stoczek",
+   "distance_km": 4.86,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 74
+  },
+  {
+   "sat": "Łyski",
+   "district": "Zawady",
+   "distance_km": 4.96,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Łyski",
+   "district": "Słoneczny Stok",
+   "distance_km": 5.15,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Łyski",
+   "district": "Dziesięciny II",
+   "distance_km": 5.24,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 27
+  },
+  {
+   "sat": "Łyski",
+   "district": "Zielone Wzgórza",
+   "distance_km": 5.56,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 41
+  },
+  {
+   "sat": "Łyski",
+   "district": "Dziesięciny I",
+   "distance_km": 5.71,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 80
+  },
+  {
+   "sat": "Łyski",
+   "district": "Młodych",
+   "distance_km": 6.02,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Łyski",
+   "district": "Antoniuk",
+   "distance_km": 6.44,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 161
+  },
+  {
+   "sat": "Łyski",
+   "district": "Przydworcowe",
+   "distance_km": 7.38,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 55
+  },
+  {
+   "sat": "Łyski",
+   "district": "Nowe Miasto",
+   "distance_km": 7.51,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 69
+  },
+  {
+   "sat": "Łyski",
+   "district": "Białostoczek",
+   "distance_km": 7.63,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 101
+  },
+  {
+   "sat": "Łyski",
+   "district": "Bema",
+   "distance_km": 7.83,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 96
+  },
+  {
+   "sat": "Łyski",
+   "district": "Centrum",
+   "distance_km": 8.1,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 178
+  },
+  {
+   "sat": "Łyski",
+   "district": "Kawaleryjskie",
+   "distance_km": 8.24,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 109
+  },
+  {
+   "sat": "Łyski",
+   "district": "Piaski",
+   "distance_km": 8.54,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Łyski",
+   "district": "Sienkiewicza",
+   "distance_km": 8.55,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 58
+  },
+  {
+   "sat": "Łyski",
+   "district": "Bojary",
+   "distance_km": 9.28,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 191
+  },
+  {
+   "sat": "Łyski",
+   "district": "Mickiewicza",
+   "distance_km": 9.47,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 87
+  },
+  {
+   "sat": "Łyski",
+   "district": "Wygoda",
+   "distance_km": 10.49,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 62
+  },
+  {
+   "sat": "Łyski",
+   "district": "Piasta I",
+   "distance_km": 10.5,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 43
+  },
+  {
+   "sat": "Łyski",
+   "district": "Jaroszówka",
+   "distance_km": 10.59,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 71
+  },
+  {
+   "sat": "Łyski",
+   "district": "Skorupy",
+   "distance_km": 11.14,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 64
+  },
+  {
+   "sat": "Łyski",
+   "district": "Dojlidy",
+   "distance_km": 11.32,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 75
+  },
+  {
+   "sat": "Łyski",
+   "district": "Dojlidy Górne",
+   "distance_km": 14.07,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 39
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Kawaleryjskie",
+   "distance_km": 3.1,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 109
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Nowe Miasto",
+   "distance_km": 3.18,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 69
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Bema",
+   "distance_km": 4.06,
+   "quadrant": "SW",
+   "sat_n": 2,
+   "d_n": 96
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Zielone Wzgórza",
+   "distance_km": 4.65,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 41
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Mickiewicza",
+   "distance_km": 4.84,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 87
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Piaski",
+   "distance_km": 4.93,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Przydworcowe",
+   "distance_km": 5.24,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 55
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Starosielce",
+   "distance_km": 5.35,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 60
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Dojlidy",
+   "distance_km": 5.37,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 75
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Słoneczny Stok",
+   "distance_km": 5.41,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 50
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Młodych",
+   "distance_km": 5.66,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Centrum",
+   "distance_km": 5.78,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 178
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Leśna Dolina",
+   "distance_km": 5.84,
+   "quadrant": "W",
+   "sat_n": 2,
+   "d_n": 67
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Antoniuk",
+   "distance_km": 6.25,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 161
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Dojlidy Górne",
+   "distance_km": 6.25,
+   "quadrant": "SE",
+   "sat_n": 2,
+   "d_n": 39
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Bojary",
+   "distance_km": 6.43,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 191
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Skorupy",
+   "distance_km": 6.45,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 64
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Piasta I",
+   "distance_km": 6.66,
+   "quadrant": "CENTER",
+   "sat_n": 2,
+   "d_n": 43
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Sienkiewicza",
+   "distance_km": 6.66,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 58
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Wysoki Stoczek",
+   "distance_km": 6.99,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 74
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Białostoczek",
+   "distance_km": 7.29,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 101
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Dziesięciny II",
+   "distance_km": 7.62,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 27
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Dziesięciny I",
+   "distance_km": 7.74,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 80
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Wygoda",
+   "distance_km": 8.15,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 62
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Bacieczki",
+   "distance_km": 8.2,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 84
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Zawady",
+   "distance_km": 9.3,
+   "quadrant": "N",
+   "sat_n": 2,
+   "d_n": 32
+  },
+  {
+   "sat": "Śródlesie",
+   "district": "Jaroszówka",
+   "distance_km": 9.65,
+   "quadrant": "E",
+   "sat_n": 2,
+   "d_n": 71
+  }
+ ],
+ "inter_sat_pairs": [
+  {
+   "a": "Łyski",
+   "b": "Porosły Kolonia",
+   "distance_km": 0.72
+  },
+  {
+   "a": "Porosły",
+   "b": "Porosły Kolonia",
+   "distance_km": 0.79
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Ignatki-osiedle",
+   "distance_km": 1.05
+  },
+  {
+   "a": "Grabówka",
+   "b": "Sobolewo",
+   "distance_km": 1.1
+  },
+  {
+   "a": "Księżyno",
+   "b": "Ignatki",
+   "distance_km": 1.38
+  },
+  {
+   "a": "Niewodnica Kościelna",
+   "b": "Niewodnica Korycka",
+   "distance_km": 1.42
+  },
+  {
+   "a": "Porosły",
+   "b": "Łyski",
+   "distance_km": 1.45
+  },
+  {
+   "a": "Klepacze",
+   "b": "Krupniki",
+   "distance_km": 1.51
+  },
+  {
+   "a": "Księżyno",
+   "b": "Ignatki-osiedle",
+   "distance_km": 1.56
+  },
+  {
+   "a": "Kleosin",
+   "b": "Ignatki-osiedle",
+   "distance_km": 1.63
+  },
+  {
+   "a": "Ignatki",
+   "b": "Śródlesie",
+   "distance_km": 1.8
+  },
+  {
+   "a": "Ignatki",
+   "b": "Ignatki-osiedle",
+   "distance_km": 1.8
+  },
+  {
+   "a": "Księżyno",
+   "b": "Niewodnica Korycka",
+   "distance_km": 1.88
+  },
+  {
+   "a": "Grabówka",
+   "b": "Sowlany",
+   "distance_km": 2.04
+  },
+  {
+   "a": "Grabówka",
+   "b": "Zaścianki",
+   "distance_km": 2.08
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Sowlany",
+   "distance_km": 2.15
+  },
+  {
+   "a": "Łyski",
+   "b": "Fasty",
+   "distance_km": 2.16
+  },
+  {
+   "a": "Porosły Kolonia",
+   "b": "Fasty",
+   "distance_km": 2.2
+  },
+  {
+   "a": "Księżyno",
+   "b": "Śródlesie",
+   "distance_km": 2.28
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Olmonty",
+   "distance_km": 2.34
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Kleosin",
+   "distance_km": 2.35
+  },
+  {
+   "a": "Porosły",
+   "b": "Krupniki",
+   "distance_km": 2.38
+  },
+  {
+   "a": "Ignatki",
+   "b": "Niewodnica Korycka",
+   "distance_km": 2.42
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Sobolewo",
+   "distance_km": 2.57
+  },
+  {
+   "a": "Ignatki",
+   "b": "Brończany",
+   "distance_km": 2.57
+  },
+  {
+   "a": "Księżyno",
+   "b": "Kleosin",
+   "distance_km": 2.74
+  },
+  {
+   "a": "Porosły",
+   "b": "Fasty",
+   "distance_km": 2.82
+  },
+  {
+   "a": "Księżyno",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 2.91
+  },
+  {
+   "a": "Klepacze",
+   "b": "Kleosin",
+   "distance_km": 3.05
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Wasilków",
+   "distance_km": 3.12
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Sowlany",
+   "distance_km": 3.12
+  },
+  {
+   "a": "Krupniki",
+   "b": "Porosły Kolonia",
+   "distance_km": 3.16
+  },
+  {
+   "a": "Ignatki-osiedle",
+   "b": "Olmonty",
+   "distance_km": 3.32
+  },
+  {
+   "a": "Ignatki",
+   "b": "Kleosin",
+   "distance_km": 3.41
+  },
+  {
+   "a": "Ignatki-osiedle",
+   "b": "Niewodnica Korycka",
+   "distance_km": 3.42
+  },
+  {
+   "a": "Niewodnica Korycka",
+   "b": "Brończany",
+   "distance_km": 3.62
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Sowlany",
+   "distance_km": 3.64
+  },
+  {
+   "a": "Klepacze",
+   "b": "Księżyno",
+   "distance_km": 3.75
+  },
+  {
+   "a": "Krupniki",
+   "b": "Łyski",
+   "distance_km": 3.75
+  },
+  {
+   "a": "Łyski",
+   "b": "Choroszcz",
+   "distance_km": 3.75
+  },
+  {
+   "a": "Ignatki",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 3.77
+  },
+  {
+   "a": "Księżyno",
+   "b": "Brończany",
+   "distance_km": 3.78
+  },
+  {
+   "a": "Ignatki",
+   "b": "Olmonty",
+   "distance_km": 3.78
+  },
+  {
+   "a": "Porosły",
+   "b": "Klepacze",
+   "distance_km": 3.83
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Brończany",
+   "distance_km": 3.9
+  },
+  {
+   "a": "Klepacze",
+   "b": "Ignatki-osiedle",
+   "distance_km": 3.93
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Niewodnica Korycka",
+   "distance_km": 3.99
+  },
+  {
+   "a": "Kleosin",
+   "b": "Olmonty",
+   "distance_km": 4.03
+  },
+  {
+   "a": "Ignatki-osiedle",
+   "b": "Brończany",
+   "distance_km": 4.3
+  },
+  {
+   "a": "Choroszcz",
+   "b": "Porosły Kolonia",
+   "distance_km": 4.31
+  },
+  {
+   "a": "Klepacze",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 4.36
+  },
+  {
+   "a": "Krupniki",
+   "b": "Kleosin",
+   "distance_km": 4.41
+  },
+  {
+   "a": "Ignatki-osiedle",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 4.43
+  },
+  {
+   "a": "Kleosin",
+   "b": "Niewodnica Korycka",
+   "distance_km": 4.54
+  },
+  {
+   "a": "Księżyno",
+   "b": "Olmonty",
+   "distance_km": 4.6
+  },
+  {
+   "a": "Klepacze",
+   "b": "Niewodnica Korycka",
+   "distance_km": 4.61
+  },
+  {
+   "a": "Klepacze",
+   "b": "Porosły Kolonia",
+   "distance_km": 4.62
+  },
+  {
+   "a": "Porosły",
+   "b": "Choroszcz",
+   "distance_km": 4.67
+  },
+  {
+   "a": "Olmonty",
+   "b": "Brończany",
+   "distance_km": 4.86
+  },
+  {
+   "a": "Klepacze",
+   "b": "Śródlesie",
+   "distance_km": 4.96
+  },
+  {
+   "a": "Niewodnica Kościelna",
+   "b": "Brończany",
+   "distance_km": 4.96
+  },
+  {
+   "a": "Klepacze",
+   "b": "Ignatki",
+   "distance_km": 5.07
+  },
+  {
+   "a": "Krupniki",
+   "b": "Fasty",
+   "distance_km": 5.08
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 5.17
+  },
+  {
+   "a": "Kleosin",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 5.2
+  },
+  {
+   "a": "Krupniki",
+   "b": "Księżyno",
+   "distance_km": 5.23
+  },
+  {
+   "a": "Klepacze",
+   "b": "Łyski",
+   "distance_km": 5.24
+  },
+  {
+   "a": "Krupniki",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 5.38
+  },
+  {
+   "a": "Krupniki",
+   "b": "Ignatki-osiedle",
+   "distance_km": 5.43
+  },
+  {
+   "a": "Grabówka",
+   "b": "Nowodworce",
+   "distance_km": 5.54
+  },
+  {
+   "a": "Choroszcz",
+   "b": "Fasty",
+   "distance_km": 5.55
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Zaścianki",
+   "distance_km": 5.57
+  },
+  {
+   "a": "Sowlany",
+   "b": "Wasilków",
+   "distance_km": 5.63
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Brończany",
+   "distance_km": 5.72
+  },
+  {
+   "a": "Krupniki",
+   "b": "Niewodnica Korycka",
+   "distance_km": 5.9
+  },
+  {
+   "a": "Kleosin",
+   "b": "Brończany",
+   "distance_km": 5.94
+  },
+  {
+   "a": "Krupniki",
+   "b": "Choroszcz",
+   "distance_km": 5.98
+  },
+  {
+   "a": "Olmonty",
+   "b": "Niewodnica Korycka",
+   "distance_km": 6.17
+  },
+  {
+   "a": "Porosły",
+   "b": "Kleosin",
+   "distance_km": 6.36
+  },
+  {
+   "a": "Klepacze",
+   "b": "Fasty",
+   "distance_km": 6.4
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Niewodnica Korycka",
+   "distance_km": 6.44
+  },
+  {
+   "a": "Krupniki",
+   "b": "Śródlesie",
+   "distance_km": 6.45
+  },
+  {
+   "a": "Krupniki",
+   "b": "Ignatki",
+   "distance_km": 6.57
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Sobolewo",
+   "distance_km": 6.64
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Olmonty",
+   "distance_km": 6.68
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 6.73
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Wasilków",
+   "distance_km": 6.86
+  },
+  {
+   "a": "Klepacze",
+   "b": "Olmonty",
+   "distance_km": 7.01
+  },
+  {
+   "a": "Kleosin",
+   "b": "Porosły Kolonia",
+   "distance_km": 7.11
+  },
+  {
+   "a": "Klepacze",
+   "b": "Choroszcz",
+   "distance_km": 7.37
+  },
+  {
+   "a": "Olmonty",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 7.44
+  },
+  {
+   "a": "Klepacze",
+   "b": "Brończany",
+   "distance_km": 7.52
+  },
+  {
+   "a": "Ignatki",
+   "b": "Turośń Kościelna",
+   "distance_km": 7.52
+  },
+  {
+   "a": "Porosły",
+   "b": "Księżyno",
+   "distance_km": 7.58
+  },
+  {
+   "a": "Porosły",
+   "b": "Ignatki-osiedle",
+   "distance_km": 7.62
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Supraśl",
+   "distance_km": 7.63
+  },
+  {
+   "a": "Porosły",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 7.66
+  },
+  {
+   "a": "Grabówka",
+   "b": "Wasilków",
+   "distance_km": 7.67
+  },
+  {
+   "a": "Łyski",
+   "b": "Kleosin",
+   "distance_km": 7.81
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Kleosin",
+   "distance_km": 7.94
+  },
+  {
+   "a": "Księżyno",
+   "b": "Turośń Kościelna",
+   "distance_km": 8.01
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Olmonty",
+   "distance_km": 8.13
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Śródlesie",
+   "distance_km": 8.19
+  },
+  {
+   "a": "Porosły",
+   "b": "Niewodnica Korycka",
+   "distance_km": 8.27
+  },
+  {
+   "a": "Księżyno",
+   "b": "Porosły Kolonia",
+   "distance_km": 8.37
+  },
+  {
+   "a": "Grabówka",
+   "b": "Olmonty",
+   "distance_km": 8.39
+  },
+  {
+   "a": "Kleosin",
+   "b": "Fasty",
+   "distance_km": 8.39
+  },
+  {
+   "a": "Niewodnica Kościelna",
+   "b": "Porosły Kolonia",
+   "distance_km": 8.39
+  },
+  {
+   "a": "Ignatki-osiedle",
+   "b": "Porosły Kolonia",
+   "distance_km": 8.4
+  },
+  {
+   "a": "Krupniki",
+   "b": "Olmonty",
+   "distance_km": 8.43
+  },
+  {
+   "a": "Wasilków",
+   "b": "Fasty",
+   "distance_km": 8.57
+  },
+  {
+   "a": "Porosły",
+   "b": "Śródlesie",
+   "distance_km": 8.59
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Ignatki-osiedle",
+   "distance_km": 8.64
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Wasilków",
+   "distance_km": 8.72
+  },
+  {
+   "a": "Sowlany",
+   "b": "Olmonty",
+   "distance_km": 8.75
+  },
+  {
+   "a": "Łyski",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 8.84
+  },
+  {
+   "a": "Porosły",
+   "b": "Ignatki",
+   "distance_km": 8.9
+  },
+  {
+   "a": "Księżyno",
+   "b": "Łyski",
+   "distance_km": 8.98
+  },
+  {
+   "a": "Krupniki",
+   "b": "Brończany",
+   "distance_km": 8.99
+  },
+  {
+   "a": "Niewodnica Korycka",
+   "b": "Porosły Kolonia",
+   "distance_km": 9.03
+  },
+  {
+   "a": "Łyski",
+   "b": "Ignatki-osiedle",
+   "distance_km": 9.07
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Ignatki-osiedle",
+   "distance_km": 9.25
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Śródlesie",
+   "distance_km": 9.26
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Porosły Kolonia",
+   "distance_km": 9.36
+  },
+  {
+   "a": "Sowlany",
+   "b": "Supraśl",
+   "distance_km": 9.43
+  },
+  {
+   "a": "Choroszcz",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 9.48
+  },
+  {
+   "a": "Sowlany",
+   "b": "Kleosin",
+   "distance_km": 9.5
+  },
+  {
+   "a": "Łyski",
+   "b": "Niewodnica Korycka",
+   "distance_km": 9.56
+  },
+  {
+   "a": "Ignatki",
+   "b": "Porosły Kolonia",
+   "distance_km": 9.69
+  },
+  {
+   "a": "Porosły",
+   "b": "Wasilków",
+   "distance_km": 9.84
+  },
+  {
+   "a": "Ignatki-osiedle",
+   "b": "Fasty",
+   "distance_km": 9.85
+  },
+  {
+   "a": "Wasilków",
+   "b": "Porosły Kolonia",
+   "distance_km": 9.86
+  },
+  {
+   "a": "Wasilków",
+   "b": "Kleosin",
+   "distance_km": 9.94
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Ignatki",
+   "distance_km": 9.98
+  },
+  {
+   "a": "Grabówka",
+   "b": "Kleosin",
+   "distance_km": 10.0
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Śródlesie",
+   "distance_km": 10.02
+  },
+  {
+   "a": "Łyski",
+   "b": "Śródlesie",
+   "distance_km": 10.04
+  },
+  {
+   "a": "Sowlany",
+   "b": "Śródlesie",
+   "distance_km": 10.08
+  },
+  {
+   "a": "Księżyno",
+   "b": "Fasty",
+   "distance_km": 10.09
+  },
+  {
+   "a": "Grabówka",
+   "b": "Śródlesie",
+   "distance_km": 10.1
+  },
+  {
+   "a": "Grabówka",
+   "b": "Supraśl",
+   "distance_km": 10.1
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Kleosin",
+   "distance_km": 10.17
+  },
+  {
+   "a": "Supraśl",
+   "b": "Wasilków",
+   "distance_km": 10.19
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Księżyno",
+   "distance_km": 10.2
+  },
+  {
+   "a": "Łyski",
+   "b": "Wasilków",
+   "distance_km": 10.29
+  },
+  {
+   "a": "Ignatki",
+   "b": "Łyski",
+   "distance_km": 10.32
+  },
+  {
+   "a": "Porosły",
+   "b": "Olmonty",
+   "distance_km": 10.36
+  },
+  {
+   "a": "Choroszcz",
+   "b": "Kleosin",
+   "distance_km": 10.38
+  },
+  {
+   "a": "Sowlany",
+   "b": "Ignatki-osiedle",
+   "distance_km": 10.42
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Klepacze",
+   "distance_km": 10.43
+  },
+  {
+   "a": "Niewodnica Kościelna",
+   "b": "Fasty",
+   "distance_km": 10.44
+  },
+  {
+   "a": "Krupniki",
+   "b": "Wasilków",
+   "distance_km": 10.52
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Olmonty",
+   "distance_km": 10.57
+  },
+  {
+   "a": "Choroszcz",
+   "b": "Niewodnica Korycka",
+   "distance_km": 10.61
+  },
+  {
+   "a": "Grabówka",
+   "b": "Ignatki-osiedle",
+   "distance_km": 10.63
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Ignatki-osiedle",
+   "distance_km": 10.64
+  },
+  {
+   "a": "Klepacze",
+   "b": "Wasilków",
+   "distance_km": 10.68
+  },
+  {
+   "a": "Księżyno",
+   "b": "Choroszcz",
+   "distance_km": 10.69
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Kleosin",
+   "distance_km": 10.72
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Fasty",
+   "distance_km": 10.73
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Supraśl",
+   "distance_km": 10.81
+  },
+  {
+   "a": "Niewodnica Korycka",
+   "b": "Fasty",
+   "distance_km": 10.97
+  },
+  {
+   "a": "Klepacze",
+   "b": "Turośń Kościelna",
+   "distance_km": 10.98
+  },
+  {
+   "a": "Olmonty",
+   "b": "Porosły Kolonia",
+   "distance_km": 11.1
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Kleosin",
+   "distance_km": 11.19
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Krupniki",
+   "distance_km": 11.22
+  },
+  {
+   "a": "Choroszcz",
+   "b": "Ignatki-osiedle",
+   "distance_km": 11.26
+  },
+  {
+   "a": "Ignatki",
+   "b": "Fasty",
+   "distance_km": 11.33
+  },
+  {
+   "a": "Porosły",
+   "b": "Brończany",
+   "distance_km": 11.35
+  },
+  {
+   "a": "Wasilków",
+   "b": "Olmonty",
+   "distance_km": 11.39
+  },
+  {
+   "a": "Wasilków",
+   "b": "Ignatki-osiedle",
+   "distance_km": 11.43
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Supraśl",
+   "distance_km": 11.5
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Fasty",
+   "distance_km": 11.53
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Brończany",
+   "distance_km": 11.53
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Olmonty",
+   "distance_km": 11.56
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Wasilków",
+   "distance_km": 11.62
+  },
+  {
+   "a": "Klepacze",
+   "b": "Sowlany",
+   "distance_km": 11.67
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Ignatki",
+   "distance_km": 11.76
+  },
+  {
+   "a": "Łyski",
+   "b": "Olmonty",
+   "distance_km": 11.81
+  },
+  {
+   "a": "Grabówka",
+   "b": "Ignatki",
+   "distance_km": 11.88
+  },
+  {
+   "a": "Ignatki",
+   "b": "Sowlany",
+   "distance_km": 11.88
+  },
+  {
+   "a": "Księżyno",
+   "b": "Sowlany",
+   "distance_km": 11.95
+  },
+  {
+   "a": "Porosły",
+   "b": "Zaścianki",
+   "distance_km": 12.0
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Niewodnica Korycka",
+   "distance_km": 12.06
+  },
+  {
+   "a": "Ignatki",
+   "b": "Choroszcz",
+   "distance_km": 12.07
+  },
+  {
+   "a": "Krupniki",
+   "b": "Turośń Kościelna",
+   "distance_km": 12.1
+  },
+  {
+   "a": "Porosły Kolonia",
+   "b": "Brończany",
+   "distance_km": 12.14
+  },
+  {
+   "a": "Olmonty",
+   "b": "Fasty",
+   "distance_km": 12.17
+  },
+  {
+   "a": "Grabówka",
+   "b": "Księżyno",
+   "distance_km": 12.18
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Księżyno",
+   "distance_km": 12.19
+  },
+  {
+   "a": "Krupniki",
+   "b": "Sowlany",
+   "distance_km": 12.24
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Choroszcz",
+   "distance_km": 12.31
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Fasty",
+   "distance_km": 12.35
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Śródlesie",
+   "distance_km": 12.38
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Ignatki-osiedle",
+   "distance_km": 12.45
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Porosły Kolonia",
+   "distance_km": 12.46
+  },
+  {
+   "a": "Porosły",
+   "b": "Nowodworce",
+   "distance_km": 12.48
+  },
+  {
+   "a": "Sowlany",
+   "b": "Fasty",
+   "distance_km": 12.51
+  },
+  {
+   "a": "Grabówka",
+   "b": "Klepacze",
+   "distance_km": 12.52
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Porosły Kolonia",
+   "distance_km": 12.6
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Klepacze",
+   "distance_km": 12.62
+  },
+  {
+   "a": "Porosły",
+   "b": "Sowlany",
+   "distance_km": 12.65
+  },
+  {
+   "a": "Księżyno",
+   "b": "Wasilków",
+   "distance_km": 12.67
+  },
+  {
+   "a": "Łyski",
+   "b": "Brończany",
+   "distance_km": 12.74
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Krupniki",
+   "distance_km": 12.76
+  },
+  {
+   "a": "Klepacze",
+   "b": "Sobolewo",
+   "distance_km": 12.84
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Brończany",
+   "distance_km": 12.92
+  },
+  {
+   "a": "Sowlany",
+   "b": "Porosły Kolonia",
+   "distance_km": 12.99
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 13.01
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Łyski",
+   "distance_km": 13.11
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Łyski",
+   "distance_km": 13.13
+  },
+  {
+   "a": "Ignatki",
+   "b": "Wasilków",
+   "distance_km": 13.21
+  },
+  {
+   "a": "Grabówka",
+   "b": "Brończany",
+   "distance_km": 13.24
+  },
+  {
+   "a": "Grabówka",
+   "b": "Krupniki",
+   "distance_km": 13.28
+  },
+  {
+   "a": "Sowlany",
+   "b": "Brończany",
+   "distance_km": 13.57
+  },
+  {
+   "a": "Sowlany",
+   "b": "Łyski",
+   "distance_km": 13.61
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Krupniki",
+   "distance_km": 13.71
+  },
+  {
+   "a": "Sowlany",
+   "b": "Niewodnica Korycka",
+   "distance_km": 13.83
+  },
+  {
+   "a": "Brończany",
+   "b": "Fasty",
+   "distance_km": 13.85
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Księżyno",
+   "distance_km": 13.88
+  },
+  {
+   "a": "Porosły",
+   "b": "Grabówka",
+   "distance_km": 13.98
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Niewodnica Korycka",
+   "distance_km": 14.0
+  },
+  {
+   "a": "Choroszcz",
+   "b": "Wasilków",
+   "distance_km": 14.02
+  },
+  {
+   "a": "Grabówka",
+   "b": "Niewodnica Korycka",
+   "distance_km": 14.03
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Ignatki",
+   "distance_km": 14.12
+  },
+  {
+   "a": "Grabówka",
+   "b": "Fasty",
+   "distance_km": 14.14
+  },
+  {
+   "a": "Choroszcz",
+   "b": "Brończany",
+   "distance_km": 14.16
+  },
+  {
+   "a": "Porosły",
+   "b": "Turośń Kościelna",
+   "distance_km": 14.38
+  },
+  {
+   "a": "Choroszcz",
+   "b": "Olmonty",
+   "distance_km": 14.38
+  },
+  {
+   "a": "Grabówka",
+   "b": "Porosły Kolonia",
+   "distance_km": 14.4
+  },
+  {
+   "a": "Wasilków",
+   "b": "Niewodnica Korycka",
+   "distance_km": 14.41
+  },
+  {
+   "a": "Porosły",
+   "b": "Sobolewo",
+   "distance_km": 14.57
+  },
+  {
+   "a": "Sowlany",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 14.68
+  },
+  {
+   "a": "Wasilków",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 14.75
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Fasty",
+   "distance_km": 14.9
+  },
+  {
+   "a": "Grabówka",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 15.03
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Porosły Kolonia",
+   "distance_km": 15.03
+  },
+  {
+   "a": "Grabówka",
+   "b": "Łyski",
+   "distance_km": 15.06
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 15.07
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Porosły Kolonia",
+   "distance_km": 15.1
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Łyski",
+   "distance_km": 15.52
+  },
+  {
+   "a": "Wasilków",
+   "b": "Brończany",
+   "distance_km": 15.52
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Choroszcz",
+   "distance_km": 15.59
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Łyski",
+   "distance_km": 15.7
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Niewodnica Korycka",
+   "distance_km": 15.73
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Brończany",
+   "distance_km": 16.16
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 16.31
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Choroszcz",
+   "distance_km": 16.66
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Choroszcz",
+   "distance_km": 16.86
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Fasty",
+   "distance_km": 17.17
+  },
+  {
+   "a": "Zaścianki",
+   "b": "Turośń Kościelna",
+   "distance_km": 17.22
+  },
+  {
+   "a": "Sowlany",
+   "b": "Choroszcz",
+   "distance_km": 17.29
+  },
+  {
+   "a": "Supraśl",
+   "b": "Olmonty",
+   "distance_km": 18.17
+  },
+  {
+   "a": "Supraśl",
+   "b": "Kleosin",
+   "distance_km": 18.59
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Turośń Kościelna",
+   "distance_km": 18.63
+  },
+  {
+   "a": "Grabówka",
+   "b": "Choroszcz",
+   "distance_km": 18.65
+  },
+  {
+   "a": "Supraśl",
+   "b": "Fasty",
+   "distance_km": 18.71
+  },
+  {
+   "a": "Grabówka",
+   "b": "Turośń Kościelna",
+   "distance_km": 18.95
+  },
+  {
+   "a": "Sobolewo",
+   "b": "Choroszcz",
+   "distance_km": 19.23
+  },
+  {
+   "a": "Sowlany",
+   "b": "Turośń Kościelna",
+   "distance_km": 19.24
+  },
+  {
+   "a": "Śródlesie",
+   "b": "Supraśl",
+   "distance_km": 19.46
+  },
+  {
+   "a": "Supraśl",
+   "b": "Ignatki-osiedle",
+   "distance_km": 19.7
+  },
+  {
+   "a": "Porosły",
+   "b": "Supraśl",
+   "distance_km": 19.99
+  },
+  {
+   "a": "Supraśl",
+   "b": "Porosły Kolonia",
+   "distance_km": 20.04
+  },
+  {
+   "a": "Klepacze",
+   "b": "Supraśl",
+   "distance_km": 20.23
+  },
+  {
+   "a": "Krupniki",
+   "b": "Supraśl",
+   "distance_km": 20.38
+  },
+  {
+   "a": "Łyski",
+   "b": "Supraśl",
+   "distance_km": 20.48
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Wasilków",
+   "distance_km": 20.66
+  },
+  {
+   "a": "Księżyno",
+   "b": "Supraśl",
+   "distance_km": 21.2
+  },
+  {
+   "a": "Ignatki",
+   "b": "Supraśl",
+   "distance_km": 21.25
+  },
+  {
+   "a": "Nowodworce",
+   "b": "Turośń Kościelna",
+   "distance_km": 21.64
+  },
+  {
+   "a": "Supraśl",
+   "b": "Brończany",
+   "distance_km": 23.0
+  },
+  {
+   "a": "Supraśl",
+   "b": "Niewodnica Korycka",
+   "distance_km": 23.08
+  },
+  {
+   "a": "Supraśl",
+   "b": "Niewodnica Kościelna",
+   "distance_km": 23.78
+  },
+  {
+   "a": "Supraśl",
+   "b": "Choroszcz",
+   "distance_km": 24.2
+  },
+  {
+   "a": "Turośń Kościelna",
+   "b": "Supraśl",
+   "distance_km": 28.66
+  }
+ ],
+ "satellites_input": [
+  "Porosły",
+  "Grabówka",
+  "Nowodworce",
+  "Zaścianki",
+  "Klepacze",
+  "Sobolewo",
+  "Krupniki",
+  "Księżyno",
+  "Horodniany",
+  "Ignatki",
+  "Sowlany",
+  "Turośń Kościelna",
+  "Łyski",
+  "Stanisławowo",
+  "Śródlesie",
+  "Supraśl",
+  "Choroszcz",
+  "Wasilków",
+  "Kleosin",
+  "Ignatki-osiedle",
+  "Olmonty",
+  "Izabelin",
+  "Niewodnica Kościelna",
+  "Niewodnica Korycka",
+  "Porosły Kolonia",
+  "Brończany",
+  "Fasty"
+ ],
+ "cache_total_entries": 4099,
+ "bialystok_pts_used": 2843,
+ "bialystok_unmatched": 785,
+ "existing_outside_city_zones": [
+  "Choroszcz",
+  "Ignatki-osiedle",
+  "Izabelin",
+  "Kleosin",
+  "Olmonty",
+  "Wasilków"
+ ]
+}

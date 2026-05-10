@@ -142,8 +142,11 @@ def run(
         if alias not in full_names:
             log.warning(f"cid={cid} alias={alias!r} brak w kurier_full_names.json — skip")
             _try_alert(
-                f"⚠️ Daily Accounting: pominięto cid={cid} alias='{alias}' "
-                f"(brak mapping w kurier_full_names.json)"
+                f"⚠️ Daily Accounting: pominąłem kuriera cid={cid} (alias '{alias}')\n"
+                f"Brakuje go w mapie pełnych nazw (kurier_full_names.json) — bez tego "
+                f"nie wiem do której linii w arkuszu wpisać.\n\n"
+                f"Co Ty masz zrobić: dopisz alias '{alias}' do `daily_accounting/"
+                f"kurier_full_names.json` i odpal ręcznie jeszcze raz."
             )
             scrape_errors.append({"cid": cid, "alias": alias, "error": "no_full_name_mapping"})
             continue
@@ -161,8 +164,12 @@ def run(
         except Exception as e:
             log.error(f"  cid={cid} {alias!r} scrape fail final: {e}")
             _try_alert(
-                f"⚠️ Daily Accounting: scrape fail cid={cid} alias='{alias}' "
-                f"({date_from}..{date_to}): {e}"
+                f"⚠️ Daily Accounting: nie udało się pobrać danych kuriera "
+                f"cid={cid} ('{alias}') za {date_from}..{date_to}\n"
+                f"Błąd: {e}\n\n"
+                f"Co robię: pominąłem tego kuriera, reszta leci dalej. "
+                f"Jeśli to się powtórzy następnego dnia → sprawdź czy panel "
+                f"nie zmienił API albo czy kurier nie został usunięty."
             )
             scrape_errors.append({"cid": cid, "alias": alias, "error": str(e)})
 
@@ -257,11 +264,20 @@ def run(
             f"expected={write_result.get('api_expected_cells')}"
         )
         _try_alert(
-            f"❌ Ziomek Daily Accounting {run_date.isoformat()} WRITE FAIL\n"
-            f"Próba zapisu {len(rows_to_write)} wierszy za {target_c.strftime(DATE_FMT)}.\n"
-            f"API zaktualizowało {write_result.get('api_total_updated_cells')} "
-            f"z {write_result.get('api_expected_cells')} oczekiwanych komórek.\n"
-            f"Sprawdź arkusz + permissions service account."
+            f"❌ Daily Accounting nie zapisał arkusza za "
+            f"{target_c.strftime(DATE_FMT)}\n"
+            f"Próbowałem zapisać {len(rows_to_write)} wierszy, ale Google Sheets "
+            f"API potwierdziło tylko {write_result.get('api_total_updated_cells')} "
+            f"z {write_result.get('api_expected_cells')}. To znaczy że albo arkusz "
+            f"Controlling/Obliczenia ma błędne uprawnienia, albo struktura kolumn "
+            f"się rozjechała.\n\n"
+            f"Co Ty masz zrobić:\n"
+            f"1) Otwórz arkusz Controlling → Obliczenia, sprawdź czy zakładka "
+            f"istnieje i wiersze za {target_c.strftime(DATE_FMT)} nie są zablokowane\n"
+            f"2) Sprawdź uprawnienia konta serwisowego (musi być Editor)\n"
+            f"3) Po fixie odpal ręcznie: "
+            f"`python3 -m dispatch_v2.daily_accounting.main "
+            f"--target-date {target_c.strftime('%Y-%m-%d')}`"
         )
         return 1
 
@@ -279,35 +295,42 @@ def run(
                 f"expected_C={first['expected_C']!r} actual_C={first['actual_C']!r}"
             )
             _try_alert(
-                f"⚠️ Ziomek Daily Accounting {run_date.isoformat()} VERIFY FAIL\n"
-                f"API zwróciło sukces ALE read-back znalazł "
-                f"{len(verify_result['mismatches'])} z {len(clean_rows)} rozjazdów.\n"
-                f"Pierwszy: row={first['row']}\n"
-                f"  expected: A={first['expected_A']!r} C={first['expected_C']!r}\n"
-                f"  actual:   A={first['actual_A']!r} C={first['actual_C']!r}\n"
-                f"Dane mogły trafić do złej zakładki — sprawdź pilnie."
+                f"⚠️ Daily Accounting: dane mogły trafić do złej zakładki "
+                f"({target_c.strftime(DATE_FMT)})\n"
+                f"Google Sheets API zwróciło sukces zapisu, ale gdy odczytałem "
+                f"wiersze z powrotem żeby zweryfikować — "
+                f"{len(verify_result['mismatches'])} z {len(clean_rows)} się nie "
+                f"zgadza.\n"
+                f"Pierwszy rozjazd: wiersz {first['row']}\n"
+                f"  Powinno być: A='{first['expected_A']}' C='{first['expected_C']}'\n"
+                f"  Faktycznie: A='{first['actual_A']}' C='{first['actual_C']}'\n\n"
+                f"Co Ty masz zrobić: pilnie sprawdź czy dane nie wpadły do innej "
+                f"zakładki (np. domyślnej zamiast Obliczenia). Jeśli tak → revert "
+                f"ręcznie i odpal jeszcze raz po fixie."
             )
             return 1
 
     # Alert if low free rows
     if free_after < MIN_FREE_ROWS_ALERT:
         _try_alert(
-            f"⚠️ Ziomek Daily Accounting\n"
-            f"Zapisano {write_result['written']} wierszy za dzień "
-            f"{target_c.strftime(DATE_FMT)}.\n"
-            f"Zostało tylko {free_after} wolnych wierszy poniżej w "
-            f"Controlling/Obliczenia.\n"
-            f"Dodaj puste wiersze (~200 na raz)."
+            f"⚠️ Daily Accounting: w arkuszu Controlling/Obliczenia "
+            f"kończy się miejsce\n"
+            f"Zapisałem {write_result['written']} wierszy za "
+            f"{target_c.strftime(DATE_FMT)}, ale poniżej zostało tylko "
+            f"{free_after} wolnych wierszy.\n\n"
+            f"Co Ty masz zrobić: dodaj ~200 pustych wierszy w arkuszu "
+            f"(zaznacz wiersz → Insert rows above × 200), żeby kolejne dni "
+            f"miały gdzie się zapisywać."
         )
 
     # Success report (DIFF A: czytamy z write_result, nie len(rows_to_write))
     _try_alert(
-        f"✅ Ziomek Daily Accounting {run_date.isoformat()}\n"
-        f"Zapisano: {write_result['written']} wierszy za {target_c.strftime(DATE_FMT)}\n"
-        f"Pominięto (duplikaty): {len(skipped_duplicate)}\n"
-        f"Pominięto (0 zleceń): {len(unqualified)}\n"
-        f"Błędy scrape: {len(scrape_errors)}\n"
-        f"Wolnych wierszy: {free_after}"
+        f"✅ Daily Accounting OK za {target_c.strftime(DATE_FMT)}\n"
+        f"Zapisano: {write_result['written']} wierszy\n"
+        f"Pominięto duplikaty: {len(skipped_duplicate)}\n"
+        f"Pominięto kurierów z 0 zleceń: {len(unqualified)}\n"
+        f"Błędy pobrania danych: {len(scrape_errors)}\n"
+        f"Wolnych wierszy w arkuszu: {free_after}"
     )
     return 0
 

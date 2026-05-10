@@ -403,6 +403,23 @@ ENABLE_TIMELINE_FORMAT = _os_v317.environ.get("ENABLE_TIMELINE_FORMAT", "1") == 
 CITY_AWARE_GEOCODING = True
 
 # ============================================================
+# A3 — Geocode cache TTL + drift detection (audit STATE_OWNERSHIP F6 2026-05-07)
+# Cache (geocode_cache.json + restaurant_coords.json) ma `cached_at` od 2026-04
+# ALE TTL nigdy nie był enforce'owany — entries żyją wiecznie. Po remoncie ulicy
+# / zmianie numeracji / reorganizacji dzielnicy stale coords pozostają w cache
+# bez sygnału. Plus combo z MP-#13 OSRM degraded mode: stale geocode + cache hit
+# = silent stale propozycja.
+# ENABLE_GEOCODE_CACHE_TTL=True (default) → entries >30d trigger re-geocode.
+# ENABLE_GEOCODE_CACHE_DRIFT_ALERT=False (default OFF, opt-in) → gdy re-geocode
+# zwraca coords różniące się o >200m od cache, log WARN (Telegram alert opt-in
+# w przyszłości via flags.json runtime check).
+# ============================================================
+GEOCODE_CACHE_TTL_DAYS = float(os.environ.get("GEOCODE_CACHE_TTL_DAYS", "30"))
+GEOCODE_CACHE_DRIFT_ALERT_M = float(os.environ.get("GEOCODE_CACHE_DRIFT_ALERT_M", "200"))
+ENABLE_GEOCODE_CACHE_TTL = os.environ.get("ENABLE_GEOCODE_CACHE_TTL", "1") == "1"
+ENABLE_GEOCODE_CACHE_DRIFT_ALERT = os.environ.get("ENABLE_GEOCODE_CACHE_DRIFT_ALERT", "0") == "1"
+
+# ============================================================
 # Strict courier ID space flag (2026-04-19)
 # Bugfix: build_fleet_snapshot dodawał keys z kurier_piny.json (4-digit PIN-y)
 # jako osobnych kurierów obok prawdziwych courier_id z kurier_ids.json.
@@ -1108,6 +1125,17 @@ ENABLE_V324B_CZASOWKA_SCHEDULER = _os.environ.get(
 CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES = _os.environ.get(
     "CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", "0") == "1"
 
+# Faza 7-AUTO-PROXIMITY (2026-05-06, post-pivot 03.05 rule-based autonomy).
+# Spec: eod_drafts/2026-05-06/faza_7_auto_proximity_design_spec.md
+#
+# AUTO_PROXIMITY_POST_SHIFT_5MIN: Adrian decyzja A1 — kurier 5+ min po shift_start
+# z pos=None (brak GPS) → synthetic position (BIALYSTOK_CENTER) + pos_source
+# "post_shift_start_synthetic". Pozwala AUTO klasyfikatorowi rozważyć kuriera
+# który operacyjnie pracuje ale ma offline GPS. Default False — shadow tydzień
+# włącza calibration mode.
+ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN = _os.environ.get(
+    "ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN", "0") == "1"
+
 
 def get_flag_czasowka_proactive_use_all_candidates() -> bool:
     return flag("CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", default=False)
@@ -1128,6 +1156,16 @@ V325_PRE_SHIFT_SOFT_PENALTY = -20
 # (parallel do V3.24-A V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN, V3.25
 # zachowuje to ale flag-gated osobno dla rollout independence).
 V325_DROPOFF_AFTER_SHIFT_HARD_MIN = 5
+
+# V3.28 ETAP 2 (2026-05-08) — pre_shift departure clamp.
+# Gdy True: dla kandydata z pos_source in {"pre_shift", "no_gps"} i
+# shift_start > now, simulate_bag_route_v2 dostaje earliest_departure=shift_start
+# zamiast bazować plan na real now. Skutek: plan timestamps (pickup_at,
+# predicted_delivered_at) liczone od shift_start → telegram trasa pokazuje
+# realny "11:00 start, 11:05 odbiór" zamiast fikcyjnego "10:31 start" dla
+# kuriera który jeszcze nie pracuje. Default False — flip po shadow obs.
+ENABLE_PRE_SHIFT_DEPARTURE_CLAMP = _os.environ.get(
+    "ENABLE_PRE_SHIFT_DEPARTURE_CLAMP", "0") == "1"
 
 # V3.25 STEP C (R-04 NEW-COURIER-CAP gradient) — post-scoring penalty layer
 # dla kurierów z tier_label='new' (Szymon Sa cid=522, Grzegorz Rogowski cid=500).
@@ -1399,6 +1437,18 @@ ENABLE_V3274_FROZEN_PICKUP_WINDOW = _os.environ.get(
     "ENABLE_V3274_FROZEN_PICKUP_WINDOW", "1") == "1"  # default True per Adrian — safety zasada
 V3274_FROZEN_PICKUP_WINDOW_MIN = 5.0  # ±5 min od czas_kuriera dla committed orderów
 
+# V3.28 (2026-05-09) — render-side commit priority dla Telegram trasa.
+# Bug context (FAZA 0 audit): plan.pickup_at z greedy fallback po V3.27.4 reject
+# pokazuje computed ETA chain ignorujący czas_kuriera commit. Render telegram_approver
+# iteruje plan.pickup_at jako jedyne źródło → kurier widzi nieprawdziwą trasę
+# (np. order 471744: panel commit 13:05 vs render 13:17 = +12 min divergence).
+# Fix: render preferuje czas_kuriera_warsaw z bag_context dla committed bag-orders,
+# fallback do plan.pickup_at gdy commit None (new orders, pre-acceptance).
+# Visual: tilde marker `~HH:MM` dla source="eta", plain HH:MM dla source="commit".
+ENABLE_V3274_RENDER_PICKUP_COMMIT_PRIORITY = _os.environ.get(
+    "ENABLE_V3274_RENDER_PICKUP_COMMIT_PRIORITY", "1") == "1"  # default True
+V3274_RENDER_DIVERGENCE_WARN_MIN = 5.0  # warn gdy |plan_eta - commit| > 5 min
+
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
 # Adrian's specification: grupujemy ordery z tej samej restauracji TYLKO gdy
 # czas_kuriera ±5 min AND drop quadrants compatible (same lub adjacent w
@@ -1570,3 +1620,65 @@ def extension_penalty(planned_pickup_at, restaurant_requested_at):
             return penalty
     # Defensive fallback: should be unreachable (last tier = 60 min = hard reject border)
     return V324_EXTENSION_PENALTY_TIERS[-1][1]
+
+
+# ════════════════════════════════════════════════════════════════════
+# FIRMOWE KONTO UWAGI PARSER (2026-05-07 sprint)
+# ────────────────────────────────────────────────────────────────────
+# Konta firmowe (np. Nadajesz.pl id=161) zlecają zamówienia bez adresu
+# restauracji w panel address fields — adres pickup'u jest w polu
+# "uwagi" (free-text). Parser wyciąga ulicę+numer, geokoduje, wpisuje
+# pickup_coords. Defense-in-depth: gate w dispatch_pipeline blokuje
+# feasibility loop gdy pickup_coords=None (czytelny operator alert).
+#
+# Konfiguracja per-tenant ready (Restimo / Wolt Drive future):
+# - FIRMOWE_KONTO_ADDRESS_IDS — lista address_id firmowych kont
+# - ENABLE_UWAGI_ADDRESS_PARSER flag default True env-overridable
+#
+# Empirical fixture base: tests/fixtures/uwagi_firmowe.jsonl (25 sampli)
+# Patterns: P1 STRUCTURED ~84%, P2 NARRATIVE ~12%, P3 COMPANY-ONLY ~8%
+# (P3 = defense gate manual KOORD, brak adresu w uwagach).
+
+FIRMOWE_KONTO_ADDRESS_IDS = frozenset({161})  # Nadajesz.pl firmowe konto
+
+# Last-resort fallback coords gdy parser uwag zawiedzie (P3 edge / malformed
+# uwagi / geocode fail). Source: Adrian decision 2026-05-07 — DMS
+# 53°07'56.0"N 23°10'06.4"E (~centrala/baza Nadajesz.pl, Białystok centrum).
+# Architecture per Adrian wybór: parser PRIMARY → real geocode (Mickiewicza 50,
+# Wyszyńskiego 2/75, etc.); fallback do tej lokalizacji gdy parser zwraca None
+# albo geocode fail. Eliminuje BRAK KANDYDATÓW dla firmowych orderów (nawet P3
+# edge dostaje real candidates pool zamiast operator KOORD manual).
+FIRMOWE_KONTO_FALLBACK_COORDS = (53.13222, 23.16844)
+
+ENABLE_UWAGI_ADDRESS_PARSER = _os.environ.get(
+    "ENABLE_UWAGI_ADDRESS_PARSER", "1") == "1"
+
+# Stop-list nazw firm/instytucji które wyglądają jak street ale nim nie są.
+# Plausibility check secondary do "musi być cyfra w numerze". Lista
+# rozszerzalna — patrz tests/fixtures/uwagi_firmowe.jsonl.
+UWAGI_PARSER_COMPANY_STOPLIST = frozenset({
+    'mali wojownicy', 'dzielne zuchy', 'drtusz', 'dentomax',
+    'orthdruk', 'epaki', 'sempai', '7kick', '7 kick', 'magazyn flm',
+    'street sport', 'matka polka hybrydowa', 'kanro ltd', 'pam bis',
+    'apteka pod lwem', 'firma kinga', 'lakor', 'sprzęt agd',
+    'studio galeria tattoo studio', 'nzoz dentos', 'puh red-bud',
+    'jaglanka', 'jacek okułowicz', 'biegły rzeczoznawca',
+    'redakcja niwa', 'garmond press', 'poczta polska', 'ziemkowska clinic',
+    'firma ewtex', 'galeria', 'red chilli kebab', 'drapieżnik',
+    '3giga', 'mali wojownicy', 'stomatologia zyta',
+})
+
+# Defense gate: parser_health morning calibration (companion fix dla
+# false-positives 07.05 08:37/08:42 ZERO + 09:11 DELTA +100% przy 1→2).
+PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW = 9   # nie alert pre-09:00 Warsaw
+PARSER_HEALTH_STUCK_MIN_BASELINE = 3       # min active orders dla STUCK
+PARSER_HEALTH_DELTA_MIN_ABS_DIFF = 3       # min |curr-prev| dla DELTA
+
+# R6 BAG_TIME pre-warning Telegram alert (sla_tracker._check_bag_time_alerts).
+# Adrian decision 2026-05-07: domyślnie OFF — alert "Kurier wiezie zamówienie
+# już >30 min" był noisem (Adrian sam monitoruje przez panel). Hot-reload via
+# flags.json: ENABLE_BAG_TIME_ALERTS=true odwraca. Scan no-op gdy False.
+# R6 hard reject downstream w feasibility_v2 (BAG_TIME_HARD_MAX_MIN=35) NIE
+# dotknięty — algorytm dispatch dalej respektuje termiczny cap.
+ENABLE_BAG_TIME_ALERTS = _os.environ.get(
+    "ENABLE_BAG_TIME_ALERTS", "0") == "1"

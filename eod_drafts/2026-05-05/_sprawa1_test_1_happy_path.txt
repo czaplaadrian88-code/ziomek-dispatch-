@@ -1,0 +1,15 @@
+# Test 1: happy path 9-line full response
+# Expected: 9 valid, 0 skipped
+
+# UNMAPPED (5)
+Kuba Olchowik 600 std
+Marcin Bystrowski 601 std
+Gabriel Ostapczuk 602 new
+Szymon Bawerna 603 std
+Daniel Malicki 604 slow
+
+# PARTIAL (4 — re-confirm)
+Mykyta Kumeiko 426 std
+Szymon Sadowski 522 new
+Grzegorz Rogowski 500 new
+Filip Prończuk 354 std

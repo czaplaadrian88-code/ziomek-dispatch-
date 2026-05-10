@@ -34,11 +34,14 @@ from typing import Any, Dict, Optional, Tuple
 
 from dispatch_v2 import manual_overrides  # V3.26 hotfix: top-level import
                                           # (memory: V3.19g1 crash z `from X import Y` w funkcji)
+from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
+from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.common import (
     ENABLE_TELEGRAM_FREETEXT_ASSIGN,
     ENABLE_TIMELINE_FORMAT,
     ENABLE_TRANSPARENCY_REASON,
     ENABLE_TRANSPARENCY_ROUTE,
+    FIRMOWE_KONTO_ADDRESS_IDS,
     WARSAW,
     drop_zone_from_address,
     flag,
@@ -56,9 +59,45 @@ from dispatch_v2.common import (
 #   - Klikać SHIFT_* callback buttons z prywatnego DM (security gate expand)
 #   - W przyszłości CZAS_TAK/NIE/CZEKAJ z TASK A (gdy czasówki trafią do DM)
 # Adrian = 8765130486; Bartek = 8753482870 (added 2026-05-05 06:43 UTC, post /start).
-# NOTE: code change wymaga restartu dispatch-telegram (Python module-level constant).
-# Bundled z TASK A restart cycle. Hot-reload alerts działa już via flags.json.
-KONIEC_AUTHORIZED_USER_IDS = [8765130486, 8753482870]
+#
+# Backlog #8 (2026-05-07): hot-reload via flags.json. Runtime checks używają
+# `_authorized_user_ids()` — kolejne user_id Adrian dodaje przez edit `flags.json`
+# bez restart dispatch-telegram (jeden restart dziś = ostatni). Module-level alias
+# `KONIEC_AUTHORIZED_USER_IDS` zostaje dla backward compat unit tests.
+_KONIEC_AUTHORIZED_USER_IDS_DEFAULT = [8765130486, 8753482870]
+
+
+def _authorized_user_ids() -> list[int]:
+    """Hot-reload list authorized user_ids dla /koniec /poprawa /shift_* DM commands.
+
+    Fallback do `_KONIEC_AUTHORIZED_USER_IDS_DEFAULT` gdy flags.json brak klucza,
+    typu nie list-of-int, lub IO error — bezpiecznie zachowuje obecny stan.
+
+    MP-#10 (2026-05-08): silent-killer fix per Lekcja #32 — flags.json corrupt
+    mid-runtime nie może spowodować niezauważonego revert do hardcoded default.
+    Log warning + dedup once-per-process dla nie-spammowania (dedup attribute na
+    funkcji). Auth boundary — fallback bezpieczny (default list 2 osoby), ale
+    operator MUSI wiedzieć że hot-reload nie działa.
+    """
+    try:
+        flags = load_flags() or {}
+        ids = flags.get("KONIEC_AUTHORIZED_USER_IDS")
+        if isinstance(ids, list) and ids and all(isinstance(x, int) for x in ids):
+            return ids
+    except Exception as e:
+        if not getattr(_authorized_user_ids, "_warned", False):
+            _log.warning(
+                f"_authorized_user_ids: flags.json read fail ({type(e).__name__}: {e}), "
+                f"fallback do _KONIEC_AUTHORIZED_USER_IDS_DEFAULT={_KONIEC_AUTHORIZED_USER_IDS_DEFAULT}. "
+                f"Hot-reload (Backlog #8) nie zadziała do czasu naprawy flags.json."
+            )
+            _authorized_user_ids._warned = True
+    return _KONIEC_AUTHORIZED_USER_IDS_DEFAULT
+
+
+# Backward-compat module-level alias — używany przez unit tests (pre-#8 referencje).
+# Snapshot przy import; runtime checks używają `_authorized_user_ids()` dla hot-reload.
+KONIEC_AUTHORIZED_USER_IDS = _authorized_user_ids()
 KONIEC_RE = re.compile(r"^/koniec\s+(\d+)\s*$")
 # TB-3 (2026-05-05): /poprawa [cid] mirror /koniec — odwołanie "Nie przyjdzie"
 # gdy kurier mimo wszystko przyszedł. Reuses KONIEC_AUTHORIZED_USER_IDS auth.
@@ -78,6 +117,24 @@ TG_REASON_CODES = {
     "dropzone_mismatch": "drop-zone mismatch",
     "wave_anticipation": "wave anticipation",
     "other": "inny powód",
+    # Mockup v2 [⏰ +10 min] button (2026-05-07): operator postpones decision
+    # 10 min, koordynator manual reassign w międzyczasie. Faktyczne auto-replan
+    # = osobny sprint (wymaga refactoringu pending queue + cron sweeper).
+    "postpone_10min": "przesuń o 10 min",
+}
+
+# Backlog #12 (2026-05-07): Faza 7-AUTO-PROXIMITY agreement metric.
+# Inline buttons "to powinno być AUTO/ACK/ALERT" przy każdej shadow decyzji.
+# Adrian klika niezależnie od głównej akcji (ASSIGN/INNY/KOORD) — log only,
+# NIE finalizuje proposala (brak editMessage). Daje signal "czy Adrian by tak
+# zrobił" jako agreement_rate vs distribution metric.
+# Logged jako action='F7AGREE' w learning_log.jsonl (kolumna decision z buttonu,
+# shadow_route z decision_record.auto_route). Compute agreement = match/total.
+# Flag-gated: FAZA7_AGREEMENT_BUTTONS_ENABLED w flags.json (default False).
+F7_AGREE_LABELS = {
+    "AUTO": "🤖 AUTO",
+    "ACK": "✋ ACK",
+    "ALERT": "🚨 ALERT",
 }
 
 
@@ -190,6 +247,11 @@ def _v326_help_text() -> str:
         "    — wyklucza kuriera do końca dnia\n"
         "▪️ /wraca <imię>  lub  '<imię> wraca'\n"
         "    — przywraca kuriera\n"
+        "▪️ /pin <imię|cid>  lub  'pin <imię>'\n"
+        "    — PIN kuriera do logowania w aplikacji\n"
+        "▪️ /instrukcja_gps [imię]  lub  'instrukcja gps [imię]'\n"
+        "    — pełna instrukcja instalacji aplikacji + ustawienia Android\n"
+        "▪️ /dopisz <cid> <full_name> — atomic add nowego kuriera\n"
         "▪️ /status — pełny raport serwisów\n"
         "▪️ reset — czyści wszystkie wykluczenia\n"
         "\n"
@@ -203,18 +265,65 @@ def _to_warsaw_hhmm(dt_utc: datetime) -> str:
 
 
 def _pickup_ready_warsaw(decision: dict, now_utc: datetime) -> Tuple[Optional[str], Optional[float]]:
-    """Z pickup_ready_at → (HH:MM Warsaw, minuty od now). None gdy brak."""
+    """Z pickup_ready_at → (HH:MM Warsaw, minuty od now). None gdy brak.
+
+    MP-#10 (2026-05-08): malformed `pickup_ready_at` ISO string (np. panel daje
+    pusty string, "0", "null" zamiast None, lub timestamp bez tz info odrzucony
+    przez fromisoformat) skutkuje brakującą linią "Odbiór" w propozycji. Log
+    warning z oid + iso value żeby operator widział co panel przesyła.
+    """
     iso = decision.get("pickup_ready_at")
     if not iso:
         return None, None
     try:
         ready = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except Exception:
+    except Exception as e:
+        oid = decision.get("order_id") or decision.get("oid") or "?"
+        _log.warning(
+            f"_pickup_ready_warsaw: oid={oid} ISO parse fail "
+            f"iso={iso!r} ({type(e).__name__}: {e}) → return (None, None)"
+        )
         return None, None
     if ready.tzinfo is None:
         ready = ready.replace(tzinfo=timezone.utc)
     delta_min = (ready - now_utc).total_seconds() / 60.0
     return _to_warsaw_hhmm(ready), delta_min
+
+
+def _parse_pickup_ready_prep_min(pickup_ready_at, *, oid: Optional[str] = None) -> float:
+    """Parse pickup_ready_at (str ISO lub datetime) → prep_min (od now do ready).
+
+    Zwraca 0.0 gdy: brak pickup_ready_at, malformed string, naive datetime z błędem.
+    Używane przez build_keyboard / _build_keyboard_v2_grid dla button label tmin
+    formula `max(travel_min, prep_min) → ceil/5 → clamp [5,60]`.
+
+    MP-#10 (2026-05-08): unified silent-killer fix dla obu callsites. Wcześniej
+    fallback prep_min=0.0 maskował malformed shadow_dispatcher serializacji
+    (np. dt.isoformat() vs str → button "5min" zamiast realnego prep). Teraz log
+    warning z oid + raw value żeby ujawnić upstream bug. Dedup po (cls, str)
+    cap=50 entries dla peak resilience (nie spamuje przy regression burst).
+    """
+    if not pickup_ready_at:
+        return 0.0
+    try:
+        if isinstance(pickup_ready_at, str):
+            ready = datetime.fromisoformat(pickup_ready_at.replace("Z", "+00:00"))
+        else:
+            ready = pickup_ready_at
+        if ready.tzinfo is None:
+            ready = ready.replace(tzinfo=timezone.utc)
+        return max(0.0, (ready - datetime.now(timezone.utc)).total_seconds() / 60.0)
+    except Exception as e:
+        seen = getattr(_parse_pickup_ready_prep_min, "_warned", set())
+        key = (type(e).__name__, str(pickup_ready_at)[:40])
+        if key not in seen and len(seen) < 50:
+            _log.warning(
+                f"_parse_pickup_ready_prep_min: oid={oid or '?'} parse fail "
+                f"raw={pickup_ready_at!r} ({type(e).__name__}: {e}) → fallback 0.0"
+            )
+            seen.add(key)
+            _parse_pickup_ready_prep_min._warned = seen
+        return 0.0
 
 
 def _candidate_line(c: dict, now_utc: datetime, prep_remaining_min: float) -> str:
@@ -325,6 +434,9 @@ def _reason_line(c: dict, all_candidates: list) -> str:
             reasons.append(f"wolny za {int(round(free))} min")
     # V3.26 STEP 1 (R-11): rationale enrichment — gdy flag ON i metrics
     # zawiera v326_rationale (post-scoring builder), append top-3 factors.
+    # MP-#10 (2026-05-08): defense-in-depth nie wolno krashnąć propozycji ALE
+    # cisza maskuje malformed v326_rationale (LGBM training drift early signal).
+    # Log warning once-per-process per error type (dedup na exception class).
     try:
         from dispatch_v2 import common as _C326
         if getattr(_C326, "ENABLE_V326_TRANSPARENCY_RATIONALE", False):
@@ -333,15 +445,29 @@ def _reason_line(c: dict, all_candidates: list) -> str:
             if dlaczego_pl:
                 # Replace simple reasons-list z full rationale (richer info).
                 return f"   💡 {dlaczego_pl}"
-    except Exception:
-        pass  # rationale must never break legacy reason path
+    except Exception as e:
+        seen = getattr(_reason_line, "_warned_classes", set())
+        cls = type(e).__name__
+        if cls not in seen:
+            _log.warning(
+                f"_reason_line: rationale path fail ({cls}: {e}), "
+                f"fallback do legacy reasons-list. cid={c.get('courier_id')}"
+            )
+            seen.add(cls)
+            _reason_line._warned_classes = seen
     if not reasons:
         return ""
     return "   💡 " + " + ".join(reasons)
 
 
 def _iso_to_warsaw_hhmm(iso_utc):
-    """V3.17: ISO UTC → Warsaw HH:MM, None on failure (used by timeline formatter)."""
+    """V3.17: ISO UTC → Warsaw HH:MM, None on failure (used by timeline formatter).
+
+    MP-#10 (2026-05-08): timeline section drops linijki gdy plan zawiera malformed
+    timestamp (np. shadow_dispatcher serializer regression). API stable (None on
+    fail), ale dedup-warn żeby ujawnić cichy bug w plan.pickup_at /
+    predicted_delivered_at JSON shape.
+    """
     if not iso_utc:
         return None
     try:
@@ -349,8 +475,84 @@ def _iso_to_warsaw_hhmm(iso_utc):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(WARSAW).strftime("%H:%M")
-    except Exception:
+    except Exception as e:
+        seen = getattr(_iso_to_warsaw_hhmm, "_warned_isos", set())
+        # dedup po (cls, iso) żeby nie spammować ale złapać każdy unikalny bad input
+        key = (type(e).__name__, str(iso_utc)[:40])
+        if key not in seen and len(seen) < 50:
+            _log.warning(f"_iso_to_warsaw_hhmm: parse fail iso={iso_utc!r} ({type(e).__name__}: {e})")
+            seen.add(key)
+            _iso_to_warsaw_hhmm._warned_isos = seen
         return None
+
+
+def _resolve_pickup_at(
+    oid: str,
+    plan_pickup_at: dict,
+    bag_context_map: dict,
+    decision: dict,
+):
+    """V3.28 (2026-05-09) — resolve pickup time per oid z source priority:
+
+    Priority chain (gdy ENABLE_V3274_RENDER_PICKUP_COMMIT_PRIORITY=True):
+      1. czas_kuriera_warsaw z bag_context (committed bag-order, hard commit)
+      2. czas_kuriera_warsaw z decision (current order if committed, edge: re-propose)
+      3. plan.pickup_at[oid] (computed ETA fallback — new orders, pre-acceptance,
+         OR ortools_rejected_v3274 greedy fallback path)
+      4. None (skip stop, brak danych)
+
+    Returns:
+        (datetime|None, source_str) where source_str ∈ {"commit", "eta", "none"}.
+
+    Bug context (FAZA 0 audit 2026-05-09): plan.pickup_at z greedy fallback
+    po V3.27.4 reject pokazuje computed ETA chain ignorujący czas_kuriera commit.
+    Render telegram_approver iteruje plan.pickup_at jako jedyne źródło →
+    kurier widzi nieprawdziwą trasę. Order 471744: panel commit 13:05 vs
+    render 13:17 (+12 min divergence, 24% propozycji magnitude 10-20 min).
+
+    Helper enables truth-honest render: "🍕 13:05 — Grill Kebab" gdy commit,
+    "🍕 ~13:17 — Grill Kebab" gdy ETA. Tilde marker minimal visual disruption.
+    """
+    try:
+        from dispatch_v2 import common as _common
+        priority_on = getattr(_common, "ENABLE_V3274_RENDER_PICKUP_COMMIT_PRIORITY", True)
+    except Exception:
+        priority_on = True
+
+    def _parse(iso):
+        if not iso:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            return None
+
+    if priority_on:
+        # 1. bag_context commit
+        bag_entry = bag_context_map.get(str(oid)) or {}
+        ck_iso = bag_entry.get("czas_kuriera_warsaw")
+        ck_dt = _parse(ck_iso)
+        if ck_dt is not None:
+            return ck_dt, "commit"
+
+        # 2. decision commit (current order if committed)
+        if str(oid) == str(decision.get("order_id") or ""):
+            cur_ck = decision.get("czas_kuriera_warsaw")
+            ck_dt = _parse(cur_ck)
+            if ck_dt is not None:
+                return ck_dt, "commit"
+
+    # 3. plan.pickup_at ETA fallback
+    plan_iso = (plan_pickup_at or {}).get(str(oid)) or (plan_pickup_at or {}).get(oid)
+    plan_dt = _parse(plan_iso)
+    if plan_dt is not None:
+        return plan_dt, "eta"
+
+    # 4. None
+    return None, "none"
 
 
 def _build_timeline_section(decision: dict, best: dict) -> str:
@@ -380,22 +582,42 @@ def _build_timeline_section(decision: dict, best: dict) -> str:
     mapping = {
         cur_oid: (decision.get("restaurant"), decision.get("delivery_address")),
     }
+    # V3.28 (2026-05-09): bag_context_map keep raw entries (z czas_kuriera_warsaw).
+    bag_context_map = {}
     for b in (best.get("bag_context") or []):
         boid = str(b.get("order_id") or "")
         if boid:
             mapping[boid] = (b.get("restaurant"), b.get("delivery_address"))
+            bag_context_map[boid] = b
 
-    events = []
-    for oid, iso in pickup_at.items():
-        hhmm = _iso_to_warsaw_hhmm(iso)
-        if hhmm is None:
+    # V3.28: pickup oid set = union(plan.pickup_at, bag_context z ck, decision z ck).
+    pickup_oid_set = set()
+    for k in (pickup_at or {}).keys():
+        pickup_oid_set.add(str(k))
+    for _oid, _entry in bag_context_map.items():
+        if _entry.get("czas_kuriera_warsaw"):
+            pickup_oid_set.add(str(_oid))
+    if decision.get("czas_kuriera_warsaw"):
+        pickup_oid_set.add(cur_oid)
+
+    events = []  # (sort_key_iso, hhmm, etype, oid, source)
+    for oid in pickup_oid_set:
+        dt, source = _resolve_pickup_at(oid, pickup_at, bag_context_map, decision)
+        if dt is None:
             continue
-        events.append((iso, hhmm, "pickup", str(oid)))
+        hhmm = dt.astimezone(WARSAW).strftime("%H:%M")
+        # Sort key = ISO UTC (zachowana stable lexicographic order)
+        try:
+            sort_iso = dt.astimezone(timezone.utc).isoformat()
+        except Exception:
+            sort_iso = dt.isoformat()
+        events.append((sort_iso, hhmm, "pickup", oid, source))
     for oid, iso in delivered_at.items():
         hhmm = _iso_to_warsaw_hhmm(iso)
         if hhmm is None:
             continue
-        events.append((iso, hhmm, "drop", str(oid)))
+        # Drops zawsze "eta" source (no commit semantyka dla delivery).
+        events.append((iso, hhmm, "drop", str(oid), "eta"))
     if not events:
         return ""
     # Stable sort by ISO (lexicographic == chronological for same-TZ ISO 8601).
@@ -409,19 +631,21 @@ def _build_timeline_section(decision: dict, best: dict) -> str:
     else:
         header = f"📦 trasa dla nowego zlecenia:"
     lines.append(header)
-    for _iso, hhmm, etype, oid in events:
+    for _iso, hhmm, etype, oid, source in events:
         rest, drop_addr = mapping.get(oid, (None, None))
         is_new = (oid == cur_oid)
+        # V3.28: tilde prefix dla "eta" source (computed, not committed).
+        time_str = f"~{hhmm}" if source == "eta" else hhmm
         if etype == "pickup":
             emoji = "👉" if is_new else "🍕"
             name = rest or "?"
             prefix_tag = "[NOWY] " if is_new else ""
-            lines.append(f"{hhmm} {emoji} pickup {prefix_tag}{name}")
+            lines.append(f"{time_str} {emoji} pickup {prefix_tag}{name}")
         else:
             emoji = "👉" if is_new else "📍"
             addr = drop_addr or "?"
             prefix_tag = "[NOWY] " if is_new else ""
-            lines.append(f"{hhmm} {emoji} drop {prefix_tag}{addr}")
+            lines.append(f"{time_str} {emoji} drop {prefix_tag}{addr}")
     return "\n".join(lines)
 
 
@@ -516,8 +740,562 @@ def _route_section(decision: dict, best: dict) -> str:
     return "\n".join(lines)
 
 
+# =============================================================================
+# Mockup v2 (2026-05-07) — operator-friendly Telegram propozycja redesign
+# =============================================================================
+# Flag-gated via flags.json `PROPOSAL_FORMAT_V2` (default False, hot-reload).
+# Format zaakceptowany przez Adriana 1:1 wg mockup #471167. Zachowuje legacy
+# format_proposal() jako fallback gdy flag OFF (zero ryzyka regresji).
+# =============================================================================
+
+def _conf_line_v2(decision: dict) -> str:
+    """Confidence bucket line z decision.auto_route + best_effort banner.
+
+    Mapping (Adrian spec lock 2026-05-07):
+        AUTO  → '🟢 Top 30% pewności — w trybie auto poszłoby samo.'
+        ACK   → '🟡 Środek 40% — potrzebny szybki check.'
+        ALERT → '🔴 Bottom 30% — wymaga decyzji.'
+        None/legacy → ACK (default fallback dla legacy decisions bez Faza 7 field)
+
+    best_effort=True → prepend '⚠️ Best effort — brak feasible kandydata.\n'.
+    """
+    auto_route = (decision.get("auto_route") or "").upper()
+    best = decision.get("best") or {}
+    best_effort = best.get("best_effort", False)
+
+    if auto_route == "AUTO":
+        line = "🟢 Top 30% pewności — w trybie auto poszłoby samo."
+    elif auto_route == "ALERT":
+        line = "🔴 Bottom 30% — wymaga decyzji."
+    else:
+        line = "🟡 Środek 40% — potrzebny szybki check."
+
+    if best_effort:
+        return "⚠️ Best effort — brak feasible kandydata.\n" + line
+    return line
+
+
+def _gps_marker_v2(pos_source: Optional[str]) -> str:
+    """Pos_source marker dla candidate line — operational PL labels.
+
+    Mapping pokrywa wszystkie 8 pos_source values w live shadow_decisions.jsonl
+    (audit 2026-05-07 hotfix post #471182): gps / no_gps / pre_shift /
+    last_assigned_pickup / last_picked_up_delivery / last_picked_up_recent /
+    last_delivered / post_wave. Operacyjny styl PL (Adrian preference: krótko,
+    co kurier robi) zamiast technicznych aliasów źródła pozycji.
+    """
+    if pos_source in (None, "", "gps"):
+        return "📍GPS"
+    if pos_source == "no_gps":
+        return "❌brak GPS"
+    if pos_source == "pre_shift":
+        return "🆔pre-shift"
+    if pos_source == "last_assigned_pickup":
+        return "📍przy restauracji"
+    if pos_source in ("last_picked_up_delivery", "last_picked_up_recent"):
+        return "📍w trasie"
+    if pos_source == "last_delivered":
+        return "📍po dostawie"
+    if pos_source == "post_wave":
+        return "📍po fali"
+    if pos_source in ("last_pickup", "last-pickup"):
+        # Legacy alias (mockup v2 spec użył tej formy) — zachowane dla bw-compat
+        return "📍last-pickup"
+    return "❔?"
+
+
+def _bag_emoji_v2(bag_n: int) -> str:
+    """Bag count → emoji bucket (Adrian 2026-05-08): 0-1=🟢, 2-3=🟡, 4+=🔴."""
+    if bag_n <= 1:
+        return "🟢"
+    if bag_n <= 3:
+        return "🟡"
+    return "🔴"
+
+
+def _candidate_line_v2(idx: int, c: dict, is_winner: bool) -> str:
+    """Mockup v2 candidate row.
+
+    Format: '{idx}. {name} K-{cid} · {gps} · ETA {hhmm} · {bag_emoji} {bag_n}{ ← WYBRANY?}'
+    """
+    cid = str(c.get("courier_id") or "?")
+    name = name_lookup(c.get("courier_id"), c.get("name"))
+    gps = _gps_marker_v2(c.get("pos_source"))
+    eta = c.get("eta_pickup_hhmm") or c.get("eta_drive_hhmm") or "—"
+    bag_n = c.get("r6_bag_size") or c.get("bag_size_before") or 0
+    try:
+        bag_n = int(bag_n)
+    except (TypeError, ValueError):
+        bag_n = 0
+    bag_emoji = _bag_emoji_v2(bag_n)
+    suffix = " ← WYBRANY" if is_winner else ""
+    return f"{idx}. {name} K-{cid} · {gps} · ETA {eta} · {bag_emoji} {bag_n}{suffix}"
+
+
+def _pickup_extension_delta_min(decision: dict) -> Optional[int]:
+    """Delta minut o ile Ziomek przedłużył deklarację restauracji.
+
+    delta = pickup_ready_at (effective) − pickup_at_warsaw (raw restaurant declared)
+
+    Source pickup_ready_at: pipeline value (post-extension if czas_kuriera set,
+    else raw fallback). Source pickup_at_warsaw: payload raw, propagated by
+    shadow_dispatcher._tick (commit pre-extension-route 2026-05-07).
+
+    Returns None gdy któreś brak / parse fail. Returns int(round(...)) gdy oba.
+    Caller pokazuje "(+N min)" tylko gdy delta > 0.
+    """
+    ready_iso = decision.get("pickup_ready_at")
+    raw_iso = decision.get("pickup_at_warsaw")
+    if not ready_iso or not raw_iso:
+        return None
+    try:
+        ready = datetime.fromisoformat(str(ready_iso).replace("Z", "+00:00"))
+        raw = datetime.fromisoformat(str(raw_iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if ready.tzinfo is None:
+        ready = ready.replace(tzinfo=timezone.utc)
+    if raw.tzinfo is None:
+        raw = raw.replace(tzinfo=timezone.utc)
+    return int(round((ready - raw).total_seconds() / 60.0))
+
+
+def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
+    """Wave-aware chronological trasa dla wybranego kuriera.
+
+    Iteruje wszystkie stopy z best.plan.pickup_at + best.plan.predicted_delivered_at,
+    sortuje po czasie. Każdy stop = "🍕|📍 HH:MM — {addr}{ ← TA?}" (🍕 odbiór, 📍 dostawa).
+    Start line: "🚖 HH:MM — start ({pos_marker})".
+
+    Adres source per oid:
+      - decision.order_id → decision.restaurant / decision.delivery_address
+      - inne oid (bag) → bag_context lookup po order_id
+
+    Stop obecnej propozycji (decision.order_id) oznaczony "← TA" — od razu widać
+    gdzie nowy order wpada w istniejącą trasę kuriera.
+
+    Fallback: gdy plan.pickup_at + predicted_delivered_at oba puste/None →
+    klasyczny 3-line layout (start/odbiór/dostawa) zachowany dla solo orderów
+    bez plan-data (legacy behavior).
+    """
+    now_hhmm = _to_warsaw_hhmm(now_utc)
+    # V3.28 ETAP 2 (2026-05-08): pre_shift kurier ma effective_start_at = shift_start
+    # (clamp w feasibility/route_simulator). "Start" line trasy pokazuje shift_start
+    # zamiast real now — eliminuje fikcyjny "10:31 — start" gdy kurier zaczyna 11:00.
+    # Fallback do now gdy brak pola (legacy, post-shift, gps kurier).
+    start_iso = (best or {}).get("effective_start_at")
+    if start_iso:
+        try:
+            _sd = datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
+            if _sd.tzinfo is None:
+                _sd = _sd.replace(tzinfo=timezone.utc)
+            now_hhmm = _to_warsaw_hhmm(_sd)
+        except Exception:
+            pass
+    pos_marker = _gps_marker_v2((best or {}).get("pos_source"))
+    cur_oid = str(decision.get("order_id") or "")
+    cur_rest = decision.get("restaurant") or "?"
+    cur_drop = decision.get("delivery_address") or "—"
+
+    plan = (best or {}).get("plan") or {}
+    pickup_at = plan.get("pickup_at") or {}
+    delivered_at = plan.get("predicted_delivered_at") or {}
+
+    # Build per-oid address map + bag_context dict (raw entries dla _resolve_pickup_at).
+    # V3.28 (2026-05-09): bag_context_map keep raw entries (z czas_kuriera_warsaw)
+    # — _resolve_pickup_at preferuje commit dla rendered pickup time.
+    bag_ctx = (best or {}).get("bag_context") or []
+    addr_map = {}  # oid → (restaurant, delivery_address)
+    bag_context_map = {}  # oid → raw bag_context dict
+    for it in bag_ctx:
+        _oid = str(it.get("order_id") or "")
+        if _oid:
+            addr_map[_oid] = (
+                it.get("restaurant") or "?",
+                it.get("delivery_address") or it.get("drop_address") or "—",
+            )
+            bag_context_map[_oid] = it
+    addr_map[cur_oid] = (cur_rest, cur_drop)
+
+    # V3.28 (2026-05-09): pickup oid set = union(plan.pickup_at, bag_context z ck,
+    # current decision z ck). Pozwala wrenderować commit-only pickups (np. gdy
+    # plan.pickup_at brakujący dla bag-order ale czas_kuriera w bag_context).
+    pickup_oid_set = set()
+    for k in (pickup_at or {}).keys():
+        pickup_oid_set.add(str(k))
+    for _oid, _entry in bag_context_map.items():
+        if _entry.get("czas_kuriera_warsaw"):
+            pickup_oid_set.add(str(_oid))
+    if decision.get("czas_kuriera_warsaw"):
+        pickup_oid_set.add(cur_oid)
+
+    # Collect stops: list[(dt_utc, kind, oid, addr, source)]
+    stops = []
+    for oid in pickup_oid_set:
+        dt, source = _resolve_pickup_at(oid, pickup_at, bag_context_map, decision)
+        if dt is None:
+            continue
+        rest, _ = addr_map.get(str(oid), ("?", "—"))
+        stops.append((dt, "odbiór", str(oid), rest, source))
+
+        # V3.28 divergence warning: gdy commit i plan eta oba present z |diff| > threshold,
+        # log empirical signal że plan.pickup_at ETA rozjeżdża się z hard commit.
+        # Surface bug pre-fix (V3.27.4 mass-reject greedy fallback) — w runtime, nie offline replay.
+        try:
+            from dispatch_v2 import common as _common
+            warn_threshold = getattr(_common, "V3274_RENDER_DIVERGENCE_WARN_MIN", 5.0)
+            if source == "commit":
+                plan_iso = (pickup_at or {}).get(str(oid)) or (pickup_at or {}).get(oid)
+                if plan_iso:
+                    plan_dt_for_check = datetime.fromisoformat(str(plan_iso).replace("Z", "+00:00"))
+                    if plan_dt_for_check.tzinfo is None:
+                        plan_dt_for_check = plan_dt_for_check.replace(tzinfo=timezone.utc)
+                    diff_min = abs((plan_dt_for_check - dt).total_seconds() / 60.0)
+                    if diff_min > warn_threshold:
+                        _strategy = (best or {}).get("plan", {}).get("strategy", "?")
+                        _log.warning(
+                            f"V3274_RENDER_DIVERGENCE oid={oid} commit={dt.isoformat()} "
+                            f"plan_eta={plan_iso} diff={diff_min:.1f}min strategy={_strategy} "
+                            f"render_source=commit (plan_eta hidden by commit-priority)"
+                        )
+        except Exception:
+            pass  # warning best-effort, never break render
+
+    for oid, iso in delivered_at.items():
+        if not iso:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        _, addr = addr_map.get(str(oid), ("?", "—"))
+        # Drops zawsze "eta" source (brak hard commit dla delivery, tylko predicted).
+        stops.append((dt, "dostawa", str(oid), addr, "eta"))
+
+    if not stops:
+        # Fallback do klasycznego 3-line layout (zachowuje legacy behavior dla
+        # decyzji bez plan.pickup_at + predicted_delivered_at — np. solo orders
+        # gdzie pipeline nie wystawił TSP planu).
+        pickup_hhmm, pickup_in_min = _pickup_ready_warsaw(decision, now_utc)
+        drop_eta_hhmm = _drop_eta_hhmm_v2(decision, best, pickup_in_min, now_utc)
+        out = ["🗺 Trasa:", f"🚖 {now_hhmm} — start ({pos_marker})"]
+        if pickup_hhmm is not None:
+            out.append(f"🍕 {pickup_hhmm} — {cur_rest} ← TA")
+        if drop_eta_hhmm is not None:
+            out.append(f"📍 {drop_eta_hhmm} — {cur_drop} ← TA")
+        return out
+
+    stops.sort(key=lambda x: x[0])
+
+    out = ["🗺 Trasa:", f"🚖 {now_hhmm} — start ({pos_marker})"]
+    for dt, kind, oid, addr, source in stops:
+        hhmm = dt.astimezone(WARSAW).strftime("%H:%M")
+        icon = "🍕" if kind == "odbiór" else "📍"
+        ta_marker = " ← TA" if oid == cur_oid else ""
+        # V3.28: tilde prefix dla "eta" source (computed, not committed).
+        # Plain HH:MM dla "commit" source (hard contract czas_kuriera).
+        time_str = f"~{hhmm}" if source == "eta" else hhmm
+        out.append(f"{icon} {time_str} — {addr}{ta_marker}")
+    return out
+
+
+def _drop_eta_hhmm_v2(
+    decision: dict, best: dict, pickup_in_min: Optional[float], now_utc: datetime
+) -> Optional[str]:
+    """Drop ETA HH:MM Warsaw. Priorytet:
+    1. best.plan.predicted_delivered_at[order_id] — bag-aware plan-based ETA.
+    2. fallback: pickup_ready + best.plan.drop_eta_min (lub eta_drive_min).
+    3. None gdy brak danych (caller pominie linię trasy dostawy).
+    """
+    plan = (best or {}).get("plan") or {}
+    oid = str(decision.get("order_id") or "")
+    pred = plan.get("predicted_delivered_at") or {}
+    iso = pred.get(oid)
+    if iso:
+        hhmm = _iso_to_warsaw_hhmm(iso)
+        if hhmm:
+            return hhmm
+    drop_eta_min = (
+        best.get("drop_eta_min")
+        or plan.get("drop_eta_min")
+        or best.get("eta_drive_min_to_drop")
+    )
+    if drop_eta_min is None:
+        return None
+    if pickup_in_min is None:
+        return None
+    try:
+        total_min = float(pickup_in_min) + float(drop_eta_min)
+    except (TypeError, ValueError):
+        return None
+    if total_min < 0:
+        total_min = 0.0
+    delivery_dt = now_utc + timedelta(minutes=total_min)
+    return delivery_dt.astimezone(WARSAW).strftime("%H:%M")
+
+
+def _reason_text_v2(
+    best: dict,
+    alts: list,
+    restaurant: str,
+    pickup_in_min: Optional[float],
+    top1_eta_min: Optional[float],
+) -> str:
+    """Mockup v2 💡 reason composer — operational logic, NIE scoring.
+
+    Hotfix 2026-05-07 post #471182: usunięty Priorytet 1 = v326_rationale
+    (zwracał scoring breakdown "bliskość -11, timing +5, przewaga +122 vs X"
+    co łamie regułę feedback_rules.md "Uzasadnienie wyboru — operational
+    logic, NIE scoring. Zero słów: score, kara, feasible, scoring, ranking,
+    pool"). Rule-based template ZAWSZE primary, bez fallback do rationale.
+
+    Rule-based template (mockup style):
+      - free + ETA == pickup_ready → 'Wolny od ręki, dojedzie dokładnie na gotowe danie z {rest}'
+      - free + ETA > pickup_ready → 'Wolny od ręki, dojedzie {extra} min po gotowym daniu z {rest}'
+      - bag>0 → 'Z {n} dowozem/dowozami w torbie, dotrze za {extra} min'
+    Plus contrast vs najbliższy alt z bag>0 i delay >=10 min vs top1.
+    Empty string gdy żaden case nie pasuje (caller pomija 💡 linię).
+    """
+    if not best:
+        return ""
+
+    bag_n = best.get("r6_bag_size") or best.get("bag_size_before") or 0
+    try:
+        bag_n = int(bag_n)
+    except (TypeError, ValueError):
+        bag_n = 0
+    free_at = best.get("free_at_min")
+    parts = []
+
+    if bag_n == 0 and (free_at is not None and free_at <= 0):
+        if (
+            top1_eta_min is not None
+            and pickup_in_min is not None
+            and abs(top1_eta_min - pickup_in_min) < 1.0
+        ):
+            parts.append(f"Wolny od ręki, dojedzie dokładnie na gotowe danie z {restaurant}")
+        elif top1_eta_min is not None and pickup_in_min is not None and top1_eta_min > pickup_in_min:
+            extra = int(round(top1_eta_min - pickup_in_min))
+            parts.append(
+                f"Wolny od ręki, dojedzie {extra} min po gotowym daniu z {restaurant}"
+            )
+        else:
+            parts.append(f"Wolny od ręki dla {restaurant}")
+    elif bag_n > 0:
+        word = "dowozem" if bag_n == 1 else "dowozami"
+        if top1_eta_min is not None and pickup_in_min is not None:
+            extra = max(0, int(round(top1_eta_min - pickup_in_min)))
+            parts.append(f"Z {bag_n} {word} w torbie, dotrze za {extra} min")
+        else:
+            parts.append(f"Z {bag_n} {word} w torbie")
+
+    # Contrast vs najbliższy alt z bag>0 i meaningful delay
+    contrast_alt = None
+    contrast_alt_extra = 0
+    for a in alts[:2]:
+        if not a:
+            continue
+        a_bag = a.get("r6_bag_size") or a.get("bag_size_before") or 0
+        try:
+            a_bag = int(a_bag)
+        except (TypeError, ValueError):
+            a_bag = 0
+        a_travel = a.get("travel_min")
+        if a_bag >= 1 and a_travel is not None and top1_eta_min is not None:
+            try:
+                delay = float(a_travel) - float(top1_eta_min)
+            except (TypeError, ValueError):
+                continue
+            if delay >= 10:
+                contrast_alt = a
+                contrast_alt_extra = int(round(delay))
+                break
+
+    if contrast_alt is not None:
+        a_bag = contrast_alt.get("r6_bag_size") or contrast_alt.get("bag_size_before") or 0
+        try:
+            a_bag = int(a_bag)
+        except (TypeError, ValueError):
+            a_bag = 0
+        a_word = "dowóz" if a_bag == 1 else "dowozy"
+        a_name = name_lookup(contrast_alt.get("courier_id"), contrast_alt.get("name"))
+        parts.append(
+            f"{a_name} ma już {a_bag} {a_word} w torbie i spóźni się {contrast_alt_extra} min"
+        )
+
+    return "; ".join(parts)
+
+
+def _format_proposal_v2(decision: dict) -> str:
+    """Mockup v2 layout (zaakceptowany 2026-05-07 przez Adriana 1:1).
+
+    Layout (vs legacy format_proposal):
+        🚖 {best_name} (K-{cid}) → {restaurant} → {drop_addr} ({drop_district})
+        ⏱️ Odbiór: {pickup_hhmm}
+
+        {conf_line}                                   ← Top 30/40/30% bucket
+
+        👥 Kandydaci:
+        1. {name} K-{cid} · {gps} · ETA {hhmm} · {bag_emoji} {n} ← WYBRANY
+        2. ...
+        3. ...
+
+        💡 {reason_text}                              ← composer/rationale
+
+        🗺 Trasa:
+        • {now_hhmm} — start
+        • {pickup_hhmm} — {restaurant} (odbiór)
+        • {drop_eta_hhmm} — {drop_addr} (dostawa)
+    """
+    oid = decision.get("order_id", "?")
+    rest = decision.get("restaurant") or "?"
+    delivery = decision.get("delivery_address") or "—"
+    best = decision.get("best") or {}
+    alts = decision.get("alternatives") or []
+
+    now_utc = datetime.now(timezone.utc)
+    pickup_ready_hhmm, pickup_in_min = _pickup_ready_warsaw(decision, now_utc)
+
+    # Etap 1 pickup-label (2026-05-08): linia "Odbiór" pokazuje faktyczny czas
+    # dotarcia best kandydata (best.eta_pickup_hhmm), nie pickup_ready_at
+    # (gotowość restauracji). Nawias = minuty od złożenia zamówienia. Fallback
+    # do pickup_ready_at + (+N min) extension delta gdy brak best/eta_pickup
+    # albo brak created_at (legacy events).
+    best_pickup_hhmm = best.get("eta_pickup_hhmm") if best else None
+    mins_since_creation = best.get("mins_since_creation") if best else None
+    display_hhmm = best_pickup_hhmm or pickup_ready_hhmm
+
+    best_name = name_lookup(best.get("courier_id"), best.get("name")) if best else "?"
+    best_cid = str(best.get("courier_id") or "?") if best else "?"
+    drop_district = _district_safe(delivery)
+
+    lines = [
+        f"🚖 {best_name} (K-{best_cid}) → {rest} → {delivery} ({drop_district})",
+    ]
+    if display_hhmm is not None:
+        if best_pickup_hhmm is not None and mins_since_creation is not None:
+            lines.append(f"⏱️ Odbiór: {display_hhmm} ({int(mins_since_creation)} min od złożenia)")
+        else:
+            ext_delta = _pickup_extension_delta_min(decision)
+            if ext_delta is not None and ext_delta > 0:
+                lines.append(f"⏱️ Odbiór: {display_hhmm} (+{ext_delta} min)")
+            else:
+                lines.append(f"⏱️ Odbiór: {display_hhmm}")
+    lines.append("")
+    lines.append(_conf_line_v2(decision))
+    lines.append("")
+
+    lines.append("👥 Kandydaci:")
+    top3 = [best] + list(alts[:2])
+    top3_nonempty = [c for c in top3 if c]
+    for i, c in enumerate(top3, start=1):
+        if not c:
+            continue
+        lines.append(_candidate_line_v2(i, c, is_winner=(i == 1)))
+    lines.append("")
+
+    top1_travel = best.get("travel_min") if best else None
+    try:
+        top1_travel = float(top1_travel) if top1_travel is not None else None
+    except (TypeError, ValueError):
+        top1_travel = None
+    reason_text = _reason_text_v2(
+        best=best,
+        alts=alts,
+        restaurant=rest,
+        pickup_in_min=pickup_in_min,
+        top1_eta_min=top1_travel,
+    )
+    if reason_text:
+        lines.append(f"💡 {reason_text}")
+        lines.append("")
+
+    lines.extend(_route_lines_v2(decision, best, now_utc))
+
+    return "\n".join(lines)
+
+
+def _build_keyboard_v2_grid(
+    order_id: str,
+    candidates: Optional[list],
+    pickup_ready_at: Optional[str] = None,
+) -> list:
+    """Mockup v2 keyboard — 2×2 grid mobile-friendly (Adrian feedback 2026-05-07
+    post visual check: większy tap target dla kciuka, tylko 4 buttony, BEZ safety net).
+
+    Layout:
+        [✅ Akceptuj]   [🥈 Weź #2]
+        [🥉 Weź #3]    [⏰ +10 min]
+
+    Returns list[list[dict]] — 2 rows × 2 buttons (NIE single row × 4).
+    Caller bezpośrednio wstawia do inline_keyboard, NO safety net append.
+
+    Callbacks:
+      - Akceptuj/Weź #2/Weź #3 → ASSIGN:{oid}:{cid}:{tmin} (compat z legacy router)
+      - +10 min                → INNY:postpone_10min:{oid} (reuse INNY router)
+
+    Skip pusty button-slot gdy mniej niż 3 candidates (vacuum slot zostaje pusty
+    visualnie — slot zachowany strukturalnie żeby +10 min zostało prawym-dolnym).
+    Postpone zawsze obecny w prawym-dolnym rogu (idempotent fallback gdy wszyscy
+    kandydaci błędni).
+
+    Tmin formula identyczna z legacy build_keyboard (V3.26 hotfix sync z
+    compute_assign_time): tmin = ceil(max(travel_min, prep_min)/5)*5, clamp [5,60].
+    """
+    import math as _math
+
+    # MP-#10: shared helper z log warning na malformed input (eliminuje silent killer).
+    prep_min = _parse_pickup_ready_prep_min(pickup_ready_at, oid=order_id)
+
+    labels = ["✅ Akceptuj", "🥈 Weź #2", "🥉 Weź #3"]
+    cand_buttons = []
+    for idx, c in enumerate((candidates or [])[:3]):
+        if not c:
+            continue
+        cid = str(c.get("courier_id") or "")
+        if not cid:
+            continue
+        tm_raw = c.get("travel_min") or 0.0
+        try:
+            tm_raw = float(tm_raw)
+        except (TypeError, ValueError):
+            tm_raw = 0.0
+        needed = max(tm_raw, prep_min)
+        time_min = max(5, min(60, int(_math.ceil(needed / 5.0) * 5)))
+        cand_buttons.append({
+            "text": labels[idx],
+            "callback_data": f"ASSIGN:{order_id}:{cid}:{time_min}",
+        })
+
+    postpone_btn = {
+        "text": "⏰ +10 min",
+        "callback_data": f"INNY:postpone_10min:{order_id}",
+    }
+
+    # 2×2 grid layout. Pad cand_buttons up to 3 slots (jeśli mniej niż 3
+    # kandydatów, slot zostaje pominięty — ale postpone zawsze prawy-dolny).
+    row1 = cand_buttons[:2]
+    row2 = cand_buttons[2:3] + [postpone_btn]
+    return [row1, row2] if row1 else [row2]
+
+
 def format_proposal(decision: dict) -> str:
-    """[PROPOZYCJA] z top3 + pickup_ready + czas deklarowany per kandydat."""
+    """[PROPOZYCJA] z top3 + pickup_ready + czas deklarowany per kandydat.
+
+    Mockup v2 dispatcher (2026-05-07): jeśli flag PROPOSAL_FORMAT_V2 ON →
+    delegate do _format_proposal_v2 (operator-friendly redesign 1:1 z mockup
+    #471167). Default OFF = legacy format zachowany (zero regresji).
+
+    Faza 7-AUTO-PROXIMITY shadow (2026-05-06): jeśli decision.auto_route == "AUTO",
+    dodaj header line "🤖 PEWIEN — auto-przypisałbym {kurier} (margin +X)" przed
+    standard body. Adrian decyzja: chce widoczność classifier verdykt w Telegramie
+    przez tydzień shadow przed ewentualnym flagowaniem w prod.
+    """
+    if flag("PROPOSAL_FORMAT_V2", default=False):
+        return _format_proposal_v2(decision)
+
     oid = decision.get("order_id", "?")
     rest = decision.get("restaurant") or "?"
     delivery = decision.get("delivery_address") or "—"
@@ -532,10 +1310,26 @@ def format_proposal(decision: dict) -> str:
     header_tag = "[PROPOZYCJA best_effort]" if best_effort else "[PROPOZYCJA]"
     banner = "⚠️ " if best_effort else ""
 
+    # Faza 7-AUTO-PROXIMITY: shadow header line (visible during shadow week — Adrian decyzja).
+    # Pomijamy gdy auto_route != "AUTO" (ACK/ALERT default flow). Backward-compat:
+    # brak pola w decision → skip (legacy proposals nie pokazują linijki).
+    auto_route = (decision.get("auto_route") or "").upper()
+    auto_route_context = decision.get("auto_route_context") or {}
+    pewien_line: Optional[str] = None
+    if auto_route == "AUTO":
+        margin = auto_route_context.get("auto_route_score_margin")
+        tier_best = auto_route_context.get("auto_route_tier_best")
+        kurier = best.get("name") or best.get("courier_id") or "?"
+        margin_part = f" (margin +{margin:.1f})" if isinstance(margin, (int, float)) else ""
+        tier_part = f" [{tier_best}]" if tier_best else ""
+        pewien_line = f"🤖 PEWIEN — auto-przypisałbym {kurier}{tier_part}{margin_part}"
+
     lines = [
         f"{header_tag} #{oid}",
         f"{rest} → {delivery}",
     ]
+    if pewien_line is not None:
+        lines.append(pewien_line)
     if pickup_hhmm is not None:
         if pickup_in_min is not None and pickup_in_min >= 0:
             lines.append(f"🕐 Odbiór: {pickup_hhmm} (za {int(round(pickup_in_min))} min)")
@@ -572,6 +1366,7 @@ def build_keyboard(
     order_id: str,
     candidates: Optional[list] = None,
     pickup_ready_at: Optional[str] = None,  # V3.26 hotfix: align z compute_assign_time
+    decision: Optional[dict] = None,  # Backlog #12: dla F7AGREE buttons (auto_route field)
 ) -> dict:
     """Inline keyboard z przyciskami per-kandydat (F2.4).
 
@@ -585,19 +1380,35 @@ def build_keyboard(
     """
     import math as _math
     # V3.26 hotfix: compute prep_min (pickup_ready - now) dla label sync z assign logic
-    prep_min = 0.0
-    if pickup_ready_at:
-        try:
-            if isinstance(pickup_ready_at, str):
-                ready = datetime.fromisoformat(pickup_ready_at.replace("Z", "+00:00"))
-            else:
-                ready = pickup_ready_at
-            if ready.tzinfo is None:
-                ready = ready.replace(tzinfo=timezone.utc)
-            prep_min = max(0.0, (ready - datetime.now(timezone.utc)).total_seconds() / 60.0)
-        except Exception:
-            prep_min = 0.0
+    # MP-#10: shared helper z log warning na malformed input (eliminuje silent killer).
+    prep_min = _parse_pickup_ready_prep_min(pickup_ready_at, oid=order_id)
     rows = []
+    # Mockup v2 (2026-05-07): 2×2 grid mobile-friendly = TYLKO 4 buttony, brak
+    # safety net. Adrian feedback post visual check: "Tylko cztery przyciski,
+    # resztę usuń." Layout:
+    #     [✅ Akceptuj]   [🥈 Weź #2]
+    #     [🥉 Weź #3]    [⏰ +10 min]
+    # Early return — NIE doklejamy INNY 8-grid + KOORD (poprzedni "safety net"
+    # plan został rejected po visual check; mockup 1:1 = strict 4-button).
+    if flag("PROPOSAL_FORMAT_V2", default=False):
+        # Tech-debt #21 (2026-05-08): F7AGREE row jest pomijany w V2 grid (strict
+        # 4-button mockup design, Adrian rejected safety net rows). Gdy oba flags
+        # ON jednocześnie, ostrzegamy raz per proces — F7AGREE metric NIE zbiera
+        # się gdy V2 LIVE. Backlog #12 calibration window wymaga albo flip
+        # PROPOSAL_FORMAT_V2=false na shadow week, albo ETL z shadow_decisions.jsonl.
+        if (
+            flag("FAZA7_AGREEMENT_BUTTONS_ENABLED", default=False)
+            and not getattr(build_keyboard, "_f7agree_v2_warned", False)
+        ):
+            _log.warning(
+                "F7AGREE_BUTTONS_ENABLED=True ignored — PROPOSAL_FORMAT_V2 ON "
+                "(mockup v2 strict 4-button, tech-debt #21). Aby zbierać "
+                "agreement metric: flip PROPOSAL_FORMAT_V2=false na shadow week."
+            )
+            build_keyboard._f7agree_v2_warned = True
+        v2_rows = _build_keyboard_v2_grid(order_id, candidates, pickup_ready_at)
+        return {"inline_keyboard": v2_rows}
+
     row1 = []
     for c in (candidates or [])[:3]:
         if not c:
@@ -637,6 +1448,23 @@ def build_keyboard(
     rows.append([
         {"text": "👤 KOORD", "callback_data": f"KOORD:{order_id}"},
     ])
+
+    # Backlog #12 (2026-05-07): Faza 7 agreement buttons — extra row "AUTO/ACK/ALERT".
+    # Tylko gdy flag enabled AND decision ma auto_route (Faza 7 LIVE shadow).
+    # Adrian klika niezależnie od głównej akcji — log only, NIE finalizuje propozycji.
+    if (
+        decision is not None
+        and decision.get("auto_route")  # Faza 7 LIVE = field present
+        and flag("FAZA7_AGREEMENT_BUTTONS_ENABLED", default=False)
+    ):
+        f7_row = []
+        for code, label in F7_AGREE_LABELS.items():
+            f7_row.append({
+                "text": label,
+                "callback_data": f"F7AGREE:{code}:{order_id}",
+            })
+        rows.append(f7_row)
+
     return {"inline_keyboard": rows}
 
 
@@ -664,9 +1492,16 @@ def save_pending(path: str, pending: dict) -> None:
 
 
 def append_learning(path: str, record: dict) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    """MP-#11 (2026-05-08): atomic JSONL append via core helper.
+
+    Eliminuje race window dla konkurencyjnych write'ów do learning_log.jsonl
+    (telegram_approver + panel_watcher PANEL_OVERRIDE). POSIX O_APPEND atomic
+    dla writes ≤PIPE_BUF (4096B), shadow F7AGREE record rzadko ale długie
+    rationale string + bag_context array może > 4KB → flock LOCK_EX gwarantuje
+    serialization niezależnie od długości. ~6 callsites w pliku korzystają.
+    """
+    from dispatch_v2.core.jsonl_appender import append_jsonl
+    append_jsonl(path, record)
 
 
 # ---- gastro_assign subprocess ----
@@ -690,13 +1525,28 @@ def round_up_to_5min(eta_minutes: Optional[float]) -> int:
 
 
 def _prep_minutes_remaining(decision: dict) -> Optional[float]:
-    """Z decision record → minuty od teraz do pickup_ready_at (gotowość jedzenia)."""
+    """Z decision record → minuty od teraz do pickup_ready_at (gotowość jedzenia).
+
+    MP-#10 (2026-05-08): malformed ISO → None propagowany do format_proposal,
+    który używa as fallback dla candidate line "deklarujemy" calc. Cisza =
+    inconsistent UI gdy panel daje malformed timestamp. Log warn z oid + iso.
+    """
     iso = decision.get("pickup_ready_at")
     if not iso:
         return None
     try:
         ready = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except Exception:
+    except Exception as e:
+        oid = decision.get("order_id") or decision.get("oid") or "?"
+        seen = getattr(_prep_minutes_remaining, "_warned", set())
+        key = (type(e).__name__, str(iso)[:40])
+        if key not in seen and len(seen) < 50:
+            _log.warning(
+                f"_prep_minutes_remaining: oid={oid} parse fail "
+                f"iso={iso!r} ({type(e).__name__}: {e}) → return None"
+            )
+            seen.add(key)
+            _prep_minutes_remaining._warned = seen
         return None
     delta = (ready - datetime.now(timezone.utc)).total_seconds() / 60.0
     return max(0.0, delta)
@@ -911,10 +1761,32 @@ async def proposal_sender(state: dict) -> None:
         oid = str(rec.get("order_id") or "")
         if not oid or oid in state["pending"]:
             continue
+        # Defense layer (Adrian decision 2026-05-07): firmowe konto Nadajesz.pl
+        # (address_id=161) NIE wysyła propozycji do Telegram. Shadow side filter
+        # zazwyczaj catch'uje wcześniej (verdict→SUPPRESSED_FIRMOWE_KONTO przed
+        # shadow log write), ale ta warstwa jako belt-and-suspenders dla:
+        # (a) edge cases gdy ktoś wpisze rec ze verdict=PROPOSE inną drogą,
+        # (b) okres przejściowy przed shadow restart,
+        # (c) future regression w shadow filter logic.
+        # Hot-reload via flags.json — ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=true odwraca.
+        _aid_raw = rec.get("address_id")
+        try:
+            _aid_int = int(_aid_raw) if _aid_raw is not None else None
+        except (TypeError, ValueError):
+            _aid_int = None
+        if (_aid_int is not None
+                and _aid_int in FIRMOWE_KONTO_ADDRESS_IDS
+                and not flag("ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS", False)):
+            _log.info(
+                f"PROPOSAL SUPPRESSED oid={oid} address_id={_aid_raw} "
+                f"(firmowe konto, flag ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=false)"
+            )
+            continue
         text = format_proposal(rec)
         top_candidates = [rec.get("best")] + list((rec.get("alternatives") or []))[:2]
         kbd = build_keyboard(oid, candidates=top_candidates,
-                              pickup_ready_at=rec.get("pickup_ready_at"))  # V3.26 hotfix
+                              pickup_ready_at=rec.get("pickup_ready_at"),  # V3.26 hotfix
+                              decision=rec)  # Backlog #12: dla F7AGREE buttons
         r = await asyncio.to_thread(
             tg_request, state["token"], "sendMessage",
             {
@@ -1085,6 +1957,18 @@ def _sla_records_in_range(path: str, start_utc: datetime, end_utc: datetime) -> 
 
 
 def _systemd_status() -> Dict[str, bool]:
+    """/status raport — sprawdza is-active 4 long-running serwisów.
+
+    MP-#10 (2026-05-08): wcześniej `except Exception: result[svc]=False` maskował
+    distinct failure modes. Operator widział "❌ shadow" bez wiedzy CZY:
+      - subprocess.TimeoutExpired (systemd zhang) → realny problem
+      - FileNotFoundError (systemctl missing) → infra broken
+      - PermissionError (sandbox) → config error
+      - real "inactive" → service stop
+
+    Każdy distinct case loguje warning z service name + cause. Status pozostaje
+    False (operator widzi serwis jako problem), ale logi tłumaczą why dla post-mortem.
+    """
     services = [
         "dispatch-panel-watcher",
         "dispatch-sla-tracker",
@@ -1099,13 +1983,153 @@ def _systemd_status() -> Dict[str, bool]:
                 capture_output=True, text=True, timeout=5,
             )
             result[svc] = (r.stdout.strip() == "active")
-        except Exception:
+        except subprocess.TimeoutExpired:
+            _log.warning(f"_systemd_status: {svc} is-active TIMEOUT 5s (systemd zhang?)")
+            result[svc] = False
+        except FileNotFoundError as e:
+            _log.warning(f"_systemd_status: {svc} systemctl binary missing ({e})")
+            result[svc] = False
+        except PermissionError as e:
+            _log.warning(f"_systemd_status: {svc} permission denied ({e})")
+            result[svc] = False
+        except Exception as e:
+            _log.warning(f"_systemd_status: {svc} unexpected {type(e).__name__}: {e}")
             result[svc] = False
     return result
 
 
+def _mp15_get_schedule_age_min() -> Optional[float]:
+    """MP-#15 (2026-05-08): schedule_age dla /status linii.
+
+    Returns None gdy schedule_utils nie dostępne lub file missing. Defensive —
+    /status nigdy nie crashnie z powodu MP-#15.
+    """
+    try:
+        from schedule_utils import schedule_age_sec
+        age = schedule_age_sec()
+        if age is None:
+            return None
+        return age / 60.0
+    except Exception as e:
+        _log.warning(f"_mp15_get_schedule_age_min fail: {type(e).__name__}: {e}")
+        return None
+
+
+def _mp15_get_last_3_proposals() -> list[str]:
+    """MP-#15 (2026-05-08): last 3 propozycje z learning_log dla /status.
+
+    Każda linia format: "  • #oid → cid=X (Yacc good) ✓ accepted" lub
+    "  • #oid → KOORD early_bird ⚠️" zależnie od action.
+
+    Skip rare actions (TG_REASON, F7AGREE, /koniec, etc.) — pokazuje tylko
+    proposals lifecycle (TAK/NIE/INNY/KOORD/TIMEOUT).
+
+    Returns list of formatted lines, max 3.
+    """
+    try:
+        target_actions = {"TAK", "NIE", "INNY", "KOORD", "TIMEOUT", "TIMEOUT_SUPERSEDED"}
+        # Read learning_log tail efficiently — last ~50 lines should contain ≥3 proposals
+        path = Path(LEARNING_LOG_PATH)
+        if not path.exists():
+            return []
+        # Read tail with a reasonable byte cap to avoid loading huge files
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            read_size = min(size, 100_000)  # 100KB tail covers many entries
+            f.seek(size - read_size)
+            tail = f.read().decode("utf-8", errors="ignore")
+
+        lines_raw = tail.splitlines()
+        records: list[dict] = []
+        for ln in reversed(lines_raw):  # newest first
+            try:
+                rec = json.loads(ln)
+            except Exception:
+                continue
+            action = rec.get("action") or rec.get("decision")
+            if action not in target_actions:
+                continue
+            records.append(rec)
+            if len(records) >= 3:
+                break
+
+        out_lines = []
+        for r in records:
+            oid = r.get("order_id") or r.get("oid") or "?"
+            action = r.get("action") or r.get("decision") or "?"
+            cid = r.get("courier_id") or r.get("cid") or r.get("actual_courier_id")
+            tmin = r.get("time_min") or r.get("tmin")
+            # Format icon per action
+            if action == "TAK":
+                icon = "✓ accepted"
+                cid_label = f"cid={cid}" if cid else "cid=?"
+                tmin_label = f" ({int(tmin)} min good)" if tmin else ""
+                out_lines.append(f"  • #{oid} → {cid_label}{tmin_label} {icon}")
+            elif action == "KOORD":
+                out_lines.append(f"  • #{oid} → KOORD ⚠️")
+            elif action in ("INNY",):
+                reason = r.get("reason_code") or r.get("reason") or "manual"
+                out_lines.append(f"  • #{oid} → INNY ({reason}) ❌")
+            elif action == "NIE":
+                out_lines.append(f"  • #{oid} → NIE ❌")
+            elif action == "TIMEOUT":
+                out_lines.append(f"  • #{oid} → TIMEOUT (auto-KOORD) ⏱️")
+            elif action == "TIMEOUT_SUPERSEDED":
+                out_lines.append(f"  • #{oid} → TIMEOUT_SUPERSEDED 🔄")
+            else:
+                out_lines.append(f"  • #{oid} → {action}")
+        return out_lines
+    except Exception as e:
+        _log.warning(f"_mp15_get_last_3_proposals fail: {type(e).__name__}: {e}")
+        return []
+
+
+def _mp15_get_last_proposal_age_sec() -> Optional[float]:
+    """MP-#15 (2026-05-08): wiek najnowszej shadow propozycji (proxy "shadow alive").
+
+    Każdy shadow_decisions record może być >10KB (auto_route_context +
+    alternatives + bag_context). Read tail 100KB (covers ~5-10 records) i skip
+    leading partial line jeśli nie zaczyna się od `{`.
+    """
+    try:
+        path = Path("/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl")
+        if not path.exists():
+            return None
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            read_size = min(size, 100_000)
+            f.seek(size - read_size)
+            tail = f.read().decode("utf-8", errors="ignore")
+        lines = tail.splitlines()
+        # Skip first line jeśli partial (read window start mid-record)
+        if lines and not lines[0].startswith("{"):
+            lines = lines[1:]
+        # Parse newest record (last complete line z trailing newline)
+        for ln in reversed(lines):
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                rec = json.loads(ln)
+                ts = rec.get("ts")
+                if not ts:
+                    continue
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return (datetime.now(timezone.utc) - dt).total_seconds()
+            except Exception:
+                continue
+        return None
+    except Exception as e:
+        _log.warning(f"_mp15_get_last_proposal_age_sec fail: {type(e).__name__}: {e}")
+        return None
+
+
 def format_status() -> str:
-    """Build /status message body (F1.4a)."""
+    """Build /status message body (F1.4a + MP-#15 enhancements per OPS §8.1)."""
     from dispatch_v2 import state_machine
 
     now_warsaw = datetime.now(WARSAW)
@@ -1113,7 +2137,15 @@ def format_status() -> str:
 
     try:
         stats = state_machine.stats()
-    except Exception:
+    except Exception as e:
+        # MP-#10 (2026-05-08): fallback do manual Counter było silent — gdy
+        # state_machine.stats() crashuje (np. internal helper regression),
+        # /status pokazywał wynik ale operator nie wiedział że primary path
+        # broken. Log warning z exception type/repr żeby flagować w post-mortem.
+        _log.warning(
+            f"format_status: state_machine.stats() fail ({type(e).__name__}: {e}) "
+            f"→ fallback do manual Counter"
+        )
         all_o = state_machine.get_all()
         c = Counter(o.get("status", "?") for o in all_o.values())
         stats = {"total": len(all_o), "by_status": dict(c), "active_per_courier": {}}
@@ -1198,6 +2230,38 @@ def format_status() -> str:
             lines.append("")
             lines.append("Top 3 wczoraj: (ranking error)")
 
+    # === MP-#15 (2026-05-08): operational health snapshot per OPS §8.1 ===
+    # Schedule freshness, last_proposal_age (shadow alive), last 3 proposals.
+    # Defensive: każda sekcja własny try/except — częściowy data lepszy niż zero.
+    try:
+        sched_age_min = _mp15_get_schedule_age_min()
+        last_prop_age_sec = _mp15_get_last_proposal_age_sec()
+        last_3 = _mp15_get_last_3_proposals()
+
+        lines.append("")
+        lines.append("Operational health:")
+        if sched_age_min is not None:
+            icon = "✓" if sched_age_min <= 30 else ("⚠️" if sched_age_min <= 60 else "❌")
+            lines.append(f"{icon} schedule: {sched_age_min:.1f} min temu")
+        else:
+            lines.append("❌ schedule: file missing")
+        if last_prop_age_sec is not None:
+            if last_prop_age_sec < 60:
+                lines.append(f"✓ shadow: last propozycja {int(last_prop_age_sec)}s temu")
+            elif last_prop_age_sec < 600:
+                lines.append(f"✓ shadow: last propozycja {int(last_prop_age_sec/60)}min temu")
+            else:
+                lines.append(f"⚠️ shadow: last propozycja {int(last_prop_age_sec/60)}min temu (cisza)")
+        else:
+            lines.append("⚠️ shadow: brak danych")
+
+        if last_3:
+            lines.append("")
+            lines.append("Last 3 propozycje:")
+            lines.extend(last_3)
+    except Exception as e:
+        _log.warning(f"MP-#15 /status enhancement fail: {type(e).__name__}: {e}")
+
     return "\n".join(lines)
 
 
@@ -1279,6 +2343,19 @@ async def handle_message(state: dict, msg: dict) -> None:
             _log.info(f"/help responded to admin={from_id}")
             return
         # /stop /wraca /wrocil → manual_overrides (handled by parse_command)
+        if text.startswith("/dopisz "):
+            reply = _handle_dopisz_command(state, msg, text)
+            if reply:
+                await asyncio.to_thread(
+                    tg_request, state["token"], "sendMessage",
+                    {
+                        "chat_id": msg["chat"]["id"],
+                        "text": reply,
+                        "reply_to_message_id": msg["message_id"],
+                    },
+                )
+            return
+
         if cmd in ("/stop", "/wraca", "/wrocil"):
             action, response = await asyncio.to_thread(manual_overrides.parse_command, text)
             if response:
@@ -1288,10 +2365,78 @@ async def handle_message(state: dict, msg: dict) -> None:
                 )
             _log.info(f"slash override action={action} text={text!r}")
             return
+
+        if cmd == "/pin":
+            reply = await asyncio.to_thread(_handle_pin_command, text)
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {
+                    "chat_id": msg["chat"]["id"],
+                    "text": reply,
+                    "reply_to_message_id": msg["message_id"],
+                },
+            )
+            _log.info(f"/pin from={from_id} text={text!r}")
+            return
+
+        if cmd in ("/instrukcja_gps", "/gps", "/instrukcja"):
+            reply = await asyncio.to_thread(_handle_gps_instruction_command, text)
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {
+                    "chat_id": msg["chat"]["id"],
+                    "text": reply,
+                    "reply_to_message_id": msg["message_id"],
+                    "disable_web_page_preview": True,
+                },
+            )
+            _log.info(f"/instrukcja_gps from={from_id} text={text!r}")
+            return
         return
 
     # NLP assistant — wolny tekst (F2.2)
     text_lower = text.lower().strip()
+
+    # Naturalny fallback dla /pin i /instrukcja_gps (07.05.2026, sprint #5).
+    # Strict guards anty-false-positive: max 4 słów, pierwsze musi być "pin"
+    # lub "instrukcja". Slash form (/pin, /instrukcja_gps) handled w branch above.
+    _words = text_lower.split()
+    if 1 <= len(_words) <= 4:
+        if _words[0] == "pin" and len(_words) >= 2:
+            query = " ".join(text.split()[1:])
+            reply = await asyncio.to_thread(_handle_pin_command, f"/pin {query}")
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {
+                    "chat_id": msg["chat"]["id"],
+                    "text": reply,
+                    "reply_to_message_id": msg["message_id"],
+                },
+            )
+            _log.info(f"natural pin from={from_id} text={text!r}")
+            return
+        if (
+            len(_words) >= 2
+            and _words[0] in ("instrukcja", "instrukcje")
+            and _words[1] in ("gps", "gpsa", "gpsu")
+        ):
+            tail_words = text.split()[2:]
+            tail = " ".join(tail_words)
+            reply = await asyncio.to_thread(
+                _handle_gps_instruction_command,
+                f"/instrukcja_gps {tail}".strip(),
+            )
+            await asyncio.to_thread(
+                tg_request, state["token"], "sendMessage",
+                {
+                    "chat_id": msg["chat"]["id"],
+                    "text": reply,
+                    "reply_to_message_id": msg["message_id"],
+                    "disable_web_page_preview": True,
+                },
+            )
+            _log.info(f"natural instrukcja_gps from={from_id} text={text!r}")
+            return
 
     if any(w in text_lower for w in ["pomoc", "help", "komendy", "co umiesz"]):
         help_body = (
@@ -1301,6 +2446,8 @@ async def handle_message(state: dict, msg: dict) -> None:
             "• 'reset' — czyści wszystkie wykluczenia\n"
             "• 'kto pracuje' — lista kurierów na zmianie\n"
             "• 'ile zleceń' — statystyki dnia\n"
+            "• /pin <imię|cid> — PIN kuriera (też 'pin Marcin')\n"
+            "• /instrukcja_gps [imię] — pełna instrukcja onboardingu Android\n"
             "• /status — pełny raport serwisów"
         )
         await asyncio.to_thread(
@@ -1590,6 +2737,65 @@ def _shift_format_scheduled_time(rec: dict) -> str:
     return "?"
 
 
+def _handle_f7agree_callback(state: dict, raw_payload: str, cb: dict) -> None:
+    """Backlog #12 (2026-05-07): Faza 7-AUTO-PROXIMITY agreement metric.
+
+    Callback format: F7AGREE:{decision}:{order_id} → po top-level split(":",1)
+    raw_payload = "{decision}:{order_id}".
+
+    Behavior: log-only side metric. Adrian wskazuje "to powinno być AUTO/ACK/ALERT"
+    niezależnie od głównej akcji ASSIGN/INNY/KOORD. Brak editMessage — keyboard
+    pozostaje, Adrian może kliknąć inne buttony.
+
+    Logged jako action='F7AGREE' w learning_log.jsonl z polami:
+      - human_route: AUTO/ACK/ALERT (z buttonu)
+      - shadow_route: AUTO/ACK/ALERT (z decision_record.auto_route)
+      - match: human_route == shadow_route
+      - auto_route_context: classifier metadata (margin, tier, reason)
+
+    Defense-in-depth: gdy pending entry expired (timeout 5 min) → log z shadow_route=None
+    i toast "log only (proposal expired)". NIE crash.
+    """
+    parts = (raw_payload or "").split(":", 1)
+    token = state["token"]
+    if len(parts) != 2 or parts[0] not in F7_AGREE_LABELS:
+        tg_request(token, "answerCallbackQuery",
+                   {"callback_query_id": cb["id"], "text": "❓ malformed F7AGREE"})
+        return
+    human_route, oid = parts[0], parts[1]
+    cb_user_id = str((cb.get("from") or {}).get("id", ""))
+
+    # Lookup decision_record dla shadow_route. Może być None gdy pending expired.
+    entry = state["pending"].get(oid)
+    rec = (entry or {}).get("decision_record") or {}
+    shadow_route = (rec.get("auto_route") or "").upper() or None
+    auto_route_context = rec.get("auto_route_context") or {}
+    match = (shadow_route == human_route) if shadow_route else None
+
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "action": "F7AGREE",
+        "order_id": oid,
+        "human_route": human_route,
+        "shadow_route": shadow_route,
+        "match": match,
+        "auto_route_context": auto_route_context,
+        "from_id": cb_user_id,
+    }
+    try:
+        append_learning(state["learning_log_path"], record)
+    except Exception as e:
+        _log.warning(f"F7AGREE append_learning fail (non-blocking): {e}")
+
+    if shadow_route:
+        match_emoji = "✅" if match else "↔"
+        toast = f"{match_emoji} log: {human_route} (system: {shadow_route})"
+    else:
+        toast = f"📝 log: {human_route} (proposal expired)"
+    tg_request(token, "answerCallbackQuery",
+               {"callback_query_id": cb["id"], "text": toast})
+
+
 def _handle_shift_start_callback(state: dict, action: str, cid: str, cb: dict) -> None:
     """SHIFT_START_OK / SHIFT_START_NO — kurier potwierdza/odmawia start zmiany.
 
@@ -1860,7 +3066,7 @@ def _handle_koniec_command(state: dict, msg: dict, text: str) -> Optional[str]:
     if not m:
         return None
     sender_id = (msg.get("from") or {}).get("id")
-    if sender_id not in KONIEC_AUTHORIZED_USER_IDS:
+    if sender_id not in _authorized_user_ids():
         _log.warning(f"/koniec unauthorized sender_id={sender_id}")
         return None  # silent reject
     cid = m.group(1)
@@ -1907,6 +3113,119 @@ def _handle_koniec_command(state: dict, msg: dict, text: str) -> Optional[str]:
     return reply
 
 
+def _handle_new_courier_callback(state: dict, payload: str, cb: dict) -> None:
+    """NEWCOURIER callback — skip or add (add not used yet, handled via /dopisz)."""
+    from urllib.parse import unquote
+    parts = payload.split(":", 1)
+    if len(parts) != 2:
+        _shift_callback_answer(state, cb, "❌ malformed NEWCOURIER")
+        return
+    sub_action, b64 = parts
+    full_name = unquote(b64)
+    if sub_action == "skip":
+        _shift_callback_answer(state, cb, f"OK pominieto {full_name} dzisiaj")
+        # Remove keyboard from original message
+        try:
+            tg_request(
+                state["token"], "editMessageReplyMarkup",
+                {
+                    "chat_id": state["admin_id"],
+                    "message_id": cb["message"]["message_id"],
+                    "reply_markup": {"inline_keyboard": []},
+                },
+            )
+        except Exception as e:
+            # MP-#10 (2026-05-08): keyboard-clear fail było silent — buttony
+            # zostały na message, kolejne kliki SKIP przez admin przepuszczane
+            # do kolejki bez audit trail. Log error z full_name + msg_id żeby
+            # operator widział lost audit (i mógł manually edycjnąć keyboard).
+            msg_id = (cb.get("message") or {}).get("message_id", "?")
+            _log.error(
+                f"_handle_new_courier_callback skip: editMessageReplyMarkup fail "
+                f"full_name={full_name!r} msg_id={msg_id} ({type(e).__name__}: {e}). "
+                f"Keyboard NIE wyczyszczony — kolejne SKIP klikane będą jako noop."
+            )
+    elif sub_action == "add":
+        _shift_callback_answer(state, cb, "Uzyj /dopisz <cid> <full_name>")
+    else:
+        _shift_callback_answer(state, cb, f"❌ unknown NEWCOURIER sub: {sub_action}")
+
+
+def _handle_pin_command(text: str) -> str:
+    """/pin <imie|cid> — zwroc PIN kuriera + cid + nazwe canonical.
+
+    Best-effort, no auth gate (grupa ziomka i tak whitelisted po chat_id).
+    Per Lekcja #79 — PIN broadcast w grupie (4 czlonkowie) jest akceptowalnym
+    audit-trail compromise.
+    """
+    from dispatch_v2 import courier_info as _ci
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        return (
+            "❌ Użycie: /pin <imię> lub /pin <cid>\n"
+            "Przykład: /pin Marcin   |   /pin 393"
+        )
+    query = parts[1].strip()
+    name, cid, pin, ambig = _ci.resolve_courier_query(query)
+    if ambig:
+        return _ci.format_ambiguous_response(query, ambig)
+    if name is None or cid is None:
+        return _ci.format_not_found_response(query)
+    return _ci.format_pin_response(name, cid, pin)
+
+
+def _handle_gps_instruction_command(text: str) -> str:
+    """/instrukcja_gps [imie|cid] — pelna instrukcja onboardingu Android GPS.
+
+    Bez argumentu → template ogolny do skopiowania.
+    Z argumentem → spersonalizowana wersja z imieniem + PIN-em
+    (gotowa do forwardu kurierowi).
+    """
+    from dispatch_v2 import courier_info as _ci
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        return _ci.format_gps_instruction(name=None, pin=None)
+    query = parts[1].strip()
+    name, cid, pin, ambig = _ci.resolve_courier_query(query)
+    if ambig:
+        return _ci.format_ambiguous_response(query, ambig)
+    if name is None:
+        return (
+            f"❌ Nie znaleziono kuriera '{query}' — wysyłam template ogólny:\n\n"
+            + _ci.format_gps_instruction(name=None, pin=None)
+        )
+    return _ci.format_gps_instruction(name=name, pin=pin)
+
+
+def _handle_dopisz_command(state: dict, msg: dict, text: str) -> Optional[str]:
+    """/dopisz <cid> <full_name> — atomic add new courier to roster."""
+    user_id = (msg.get("from") or {}).get("id")
+    if user_id not in _authorized_user_ids():
+        return "❌ unauthorized"
+    parts = text.strip().split(maxsplit=2)
+    if len(parts) < 3:
+        return "❌ uzycie: /dopisz <cid> <full_name>"
+    _, cid_str, full_name = parts
+    if not cid_str.isdigit():
+        return f"❌ cid musi byc liczba, dostalem: {cid_str}"
+    cid = int(cid_str)
+    if cid < 100 or cid > 9999:
+        return f"❌ cid {cid} poza zakresem 100..9999"
+    try:
+        from dispatch_v2.courier_admin import add_new_courier
+        result = add_new_courier(cid, full_name)
+    except ValueError as e:
+        return f"❌ {e}"
+    except Exception as e:
+        return f"❌ blad: {type(e).__name__}: {e}"
+    return (
+        f"✅ Dopisany {result['full_name']} (cid {result['cid']})\n"
+        f"Alias: {result['alias']}\n"
+        f"PIN: `{result['pin']}` — przeslij temu kurierowi.\n"
+        f"Zaktualizowane pliki: kurier_ids, kurier_full_names, kurier_piny, courier_tiers."
+    )
+
+
 def _handle_poprawa_command(state: dict, msg: dict, text: str) -> Optional[str]:
     """TB-3 (2026-05-05) /poprawa [cid] — odwołaj 'Nie przyjdzie' status.
 
@@ -1934,7 +3253,7 @@ def _handle_poprawa_command(state: dict, msg: dict, text: str) -> Optional[str]:
     if not m:
         return None
     sender_id = (msg.get("from") or {}).get("id")
-    if sender_id not in KONIEC_AUTHORIZED_USER_IDS:
+    if sender_id not in _authorized_user_ids():
         _log.warning(f"/poprawa unauthorized sender_id={sender_id}")
         return None  # silent reject
     cid = m.group(1)
@@ -2056,7 +3375,7 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
     cb_user_id_int = int(cb_from_id) if cb_from_id.isdigit() else None
     is_authorized = (
         cb_chat_id == str(state["admin_id"])
-        or (is_taskb_action and cb_user_id_int in KONIEC_AUTHORIZED_USER_IDS)
+        or (is_taskb_action and cb_user_id_int in _authorized_user_ids())
     )
     if not is_authorized:
         _log.warning(
@@ -2069,6 +3388,11 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
         )
         return
     _log.info(f"callback action={action} oid={oid} from={cb_from_name}(id={cb_from_id})")
+
+    # NEWCOURIER callback (ETAP B)
+    if action == "NEWCOURIER":
+        await asyncio.to_thread(_handle_new_courier_callback, state, oid, cb)
+        return
 
     # TASK B SHIFT NOTIFICATIONS (2026-05-04): SHIFT_* callbacks NIE używają
     # state["pending"] (osobny state file: shift_notifications confirmations).
@@ -2101,6 +3425,14 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
             "CZAS_CZEKAJ": czas_handlers.handle_czas_czekaj,
         }
         await asyncio.to_thread(handler_map[action], state, action, oid, cb)
+        return
+
+    # Backlog #12 (2026-05-07): Faza 7 agreement metric buttons.
+    # Callback format: F7AGREE:{AUTO|ACK|ALERT}:{order_id}.
+    # Po split(":",1) `oid` zawiera "{decision}:{order_id}". Log only, NIE finalizuje
+    # propozycji (brak editMessage). Adrian może kliknąć ASSIGN/INNY/KOORD niezależnie.
+    if action == "F7AGREE":
+        await asyncio.to_thread(_handle_f7agree_callback, state, oid, cb)
         return
 
     entry = state["pending"].get(oid)
@@ -2246,6 +3578,156 @@ def _classify_timeout_outcome(cur_status: Optional[str]) -> str:
     return "UNKNOWN_STATE"
 
 
+async def _process_expired_pending(
+    state: dict, oid: str, entry: dict, now: datetime, state_all: dict
+) -> str:
+    """Per-entry expired-handling shared między watchdog() a A2 startup scan.
+
+    Returns: "SUPERSEDED" (status != "new" w state_machine — silent skip) lub
+    "TIMEOUT" (real brak decyzji — Telegram alert + learning_log + remove).
+    Idempotent: caller usuwa entry z `state["pending"]` po dispatch'u.
+
+    A2 (audit STATE_OWNERSHIP F9 2026-05-08): wyciągnięte z watchdog() pętli
+    żeby _startup_scan_pending_expired mógł reuse'ować tę samą logikę bez
+    duplikacji (Lekcja #99).
+    """
+    cur = state_all.get(str(oid)) or {}
+    cur_status = cur.get("status")
+    # BUG1 fix: jeśli zlecenie zostało już ręcznie obsłużone (assigned/picked_up/
+    # delivered/cancelled), nie spamuj timeoutem — cicho usuń z pending.
+    if cur_status and cur_status != "new":
+        _log.info(f"TIMEOUT silent oid={oid}: status={cur_status} (już obsłużone)")
+        timeout_outcome = _classify_timeout_outcome(cur_status)
+        if timeout_outcome == "UNKNOWN_STATE":
+            _log.warning(f"TIMEOUT_SUPERSEDED unknown cur_status={cur_status!r} oid={oid}")
+        append_learning(state["learning_log_path"], {
+            "ts": now_iso(),
+            "order_id": oid,
+            "action": "TIMEOUT_SUPERSEDED",
+            "timeout_outcome": timeout_outcome,
+            "timeout_outcome_detail": cur_status or "unknown",
+            "ok": True,
+            "feedback": f"order już {cur_status} — silent skip",
+            "decision": entry["decision_record"],
+        })
+        state["pending"].pop(oid, None)
+        save_pending(state["pending_path"], state["pending"])
+        return "SUPERSEDED"
+    _log.warning(f"TIMEOUT oid={oid} → brak odpowiedzi, zlecenie pozostaje w puli")
+    await asyncio.to_thread(
+        tg_request, state["token"], "sendMessage",
+        {
+            "chat_id": state["admin_id"],
+            "text": f"⏰ Timeout #{oid} (5 min) → brak decyzji, zlecenie w puli",
+        },
+    )
+    append_learning(state["learning_log_path"], {
+        "ts": now_iso(),
+        "order_id": oid,
+        "action": "TIMEOUT_SKIP",
+        "ok": True,
+        "feedback": "brak decyzji w czasie — zlecenie pozostaje w puli",
+        "decision": entry["decision_record"],
+    })
+    state["pending"].pop(oid, None)
+    save_pending(state["pending_path"], state["pending"])
+    return "TIMEOUT"
+
+
+async def _startup_scan_pending_expired(state: dict) -> dict:
+    """A2 (audit STATE_OWNERSHIP F9 2026-05-08): force-process pending sieroty
+    z `expires_at` w przeszłości NATYCHMIAST przy starcie, PRZED launch
+    workers. Eliminuje window operatorskiej confusion gdy crash/restart
+    zostawił expired pending — bez tego scanu czeka do pierwszego watchdog
+    cycle (sleep=10s).
+
+    Returns dict summary {total, expired, processed, superseded, timeout}.
+    Defense-in-depth: state_machine load fail → empty state_all (treats all
+    expired jako TIMEOUT path, real brak decyzji).
+    """
+    now = datetime.now(timezone.utc)
+    expired = []
+    for oid, entry in list(state["pending"].items()):
+        try:
+            exp = datetime.fromisoformat(entry["expires_at"])
+        except Exception as _e:
+            _log.warning(f"startup scan parse expires_at fail oid={oid}: {_e}")
+            continue
+        if now >= exp:
+            expired.append(oid)
+    summary = {
+        "total": len(state["pending"]),
+        "expired": len(expired),
+        "processed": 0,
+        "superseded": 0,
+        "timeout": 0,
+    }
+    if not expired:
+        _log.info(f"startup pending scan: total={summary['total']} expired=0")
+        return summary
+    state_all = {}
+    try:
+        from dispatch_v2 import state_machine
+        state_all = state_machine.get_all()
+    except Exception as _e:
+        _log.warning(f"startup scan state_machine load fail: {_e}")
+    for oid in expired:
+        entry = state["pending"].get(oid)
+        if not entry:
+            continue
+        try:
+            action = await _process_expired_pending(state, oid, entry, now, state_all)
+        except Exception as _e:
+            _log.error(f"startup scan _process_expired_pending fail oid={oid}: {_e}")
+            continue
+        summary["processed"] += 1
+        if action == "SUPERSEDED":
+            summary["superseded"] += 1
+        elif action == "TIMEOUT":
+            summary["timeout"] += 1
+    _log.info(
+        f"startup pending scan: total={summary['total']} "
+        f"expired={summary['expired']} processed={summary['processed']} "
+        f"superseded={summary['superseded']} timeout={summary['timeout']}"
+    )
+    return summary
+
+
+async def config_reload_poller(state: dict) -> None:
+    """A4.1 (2026-05-09): poll CONFIG_RELOAD broadcast events co 30s.
+
+    Defense-in-depth: subscriber init fail → coroutine returns (no spam).
+    Per-poll exception → log warning + sleep + retry next interval.
+    Idempotent: events processed via cursor, drugi poll skip already-seen.
+    """
+    try:
+        sub = BroadcastSubscriber(
+            consumer_id="telegram_approver",
+            state_path=Path(
+                "/root/.openclaw/workspace/dispatch_state/event_subscribers/telegram_approver.json"
+            ),
+        )
+        _log.info("A4.1 BroadcastSubscriber init OK consumer=telegram_approver")
+    except Exception as _bs_e:
+        _log.warning(
+            f"A4.1 BroadcastSubscriber init fail "
+            f"({type(_bs_e).__name__}: {_bs_e}) — broadcast disabled"
+        )
+        return
+
+    while not _shutdown:
+        try:
+            new_events = sub.poll(["CONFIG_RELOAD"], limit=50)
+            if new_events:
+                dispatch_config_reload(new_events, "telegram_approver")
+        except Exception as _bp_e:
+            _log.warning(
+                f"A4.1 broadcast poll fail "
+                f"({type(_bp_e).__name__}: {_bp_e}) — skip, retry next interval"
+            )
+        await asyncio.sleep(30)
+
+
 async def watchdog(state: dict) -> None:
     while not _shutdown:
         now = datetime.now(timezone.utc)
@@ -2267,50 +3749,29 @@ async def watchdog(state: dict) -> None:
                 _log.warning(f"watchdog state_machine load fail: {_e}")
         for oid in expired:
             entry = state["pending"][oid]
-            cur = state_all.get(str(oid)) or {}
-            cur_status = cur.get("status")
-            # BUG1 fix: jeśli zlecenie zostało już ręcznie obsłużone (assigned/picked_up/
-            # delivered/cancelled), nie spamuj timeoutem — cicho usuń z pending.
-            if cur_status and cur_status != "new":
-                _log.info(f"TIMEOUT silent oid={oid}: status={cur_status} (już obsłużone)")
-                timeout_outcome = _classify_timeout_outcome(cur_status)
-                if timeout_outcome == "UNKNOWN_STATE":
-                    _log.warning(f"TIMEOUT_SUPERSEDED unknown cur_status={cur_status!r} oid={oid}")
-                append_learning(state["learning_log_path"], {
-                    "ts": now_iso(),
-                    "order_id": oid,
-                    "action": "TIMEOUT_SUPERSEDED",
-                    "timeout_outcome": timeout_outcome,
-                    "timeout_outcome_detail": cur_status or "unknown",
-                    "ok": True,
-                    "feedback": f"order już {cur_status} — silent skip",
-                    "decision": entry["decision_record"],
-                })
-                state["pending"].pop(oid, None)
-                save_pending(state["pending_path"], state["pending"])
-                continue
-            _log.warning(f"TIMEOUT oid={oid} → brak odpowiedzi, zlecenie pozostaje w puli")
-            await asyncio.to_thread(
-                tg_request, state["token"], "sendMessage",
-                {
-                    "chat_id": state["admin_id"],
-                    "text": f"⏰ Timeout #{oid} (5 min) → brak decyzji, zlecenie w puli",
-                },
-            )
-            append_learning(state["learning_log_path"], {
-                "ts": now_iso(),
-                "order_id": oid,
-                "action": "TIMEOUT_SKIP",
-                "ok": True,
-                "feedback": "brak decyzji w czasie — zlecenie pozostaje w puli",
-                "decision": entry["decision_record"],
-            })
-            state["pending"].pop(oid, None)
-            save_pending(state["pending_path"], state["pending"])
+            await _process_expired_pending(state, oid, entry, now, state_all)
         await asyncio.sleep(10)
 
 
 # ---- main ----
+
+async def _shutdown_drain(state: dict) -> None:
+    """MP-#10 (2026-05-08): final flush pending state przed exit. Idempotent.
+
+    Eliminuje race window 50µs między state mutation (proposal_sender mutuje
+    `state['pending']` po sendMessage) a save_pending (atomic write na disk).
+    Bez drain SIGTERM mid-mutation = restart load_pending() zwraca state sprzed
+    mutation → user klika ASSIGN → KeyError w handle_callback. Per audit
+    TELEGRAM_APPROVER §2 P×I=8 (META audit twierdził 20, fact-checked do 8).
+
+    Lekcja #32 — log success+fail context, NIGDY silent.
+    """
+    try:
+        save_pending(state["pending_path"], state["pending"])
+        _log.info(f"shutdown drain: pending={len(state['pending'])} flushed")
+    except Exception as e:
+        _log.error(f"shutdown drain FAIL ({type(e).__name__}: {e})")
+
 
 async def main_async() -> None:
     cfg = load_config()
@@ -2339,12 +3800,26 @@ async def main_async() -> None:
         f"pending={len(state['pending'])} token={'SET' if token and token != 'PLACEHOLDER' else 'MISSING'}"
     )
 
-    await asyncio.gather(
-        shadow_tailer(state),
-        proposal_sender(state),
-        updates_poller(state),
-        watchdog(state),
-    )
+    # A2 (audit STATE_OWNERSHIP F9): force-process expired sieroty PRZED gather.
+    # Eliminuje window gdy crash/restart zostawił pending z expires_at w
+    # przeszłości — bez tego scanu czeka do pierwszego watchdog cycle (10s).
+    try:
+        await _startup_scan_pending_expired(state)
+    except Exception as _e:
+        _log.error(f"startup scan FAIL ({type(_e).__name__}: {_e}) — kontynuuję normalny start")
+
+    # MP-#10: try/finally drain — gathered tasks mogą rzucić CancelledError przy
+    # SIGTERM; finally MUSI fire żeby zapisać pending przed exit.
+    try:
+        await asyncio.gather(
+            shadow_tailer(state),
+            proposal_sender(state),
+            updates_poller(state),
+            watchdog(state),
+            config_reload_poller(state),  # A4.1
+        )
+    finally:
+        await _shutdown_drain(state)
 
 
 def _sigterm(signum, frame):

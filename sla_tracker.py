@@ -13,6 +13,8 @@ from typing import Dict
 
 from dispatch_v2 import common as C
 from dispatch_v2.common import now_iso, setup_logger
+from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
+from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.event_bus import get_pending, mark_processed
 from dispatch_v2.state_machine import get_order, upsert_order, get_by_status
 from dispatch_v2.telegram_utils import send_admin_alert
@@ -191,7 +193,14 @@ def _check_bag_time_alerts(now_utc: datetime) -> None:
 
     Per-order try/except — jeden bad order nie ubija całego skanu.
     Set-then-send (Opcja X): duplicate-safe, Telegram fail logowany bez retry.
+
+    Adrian decision 2026-05-07: flag `ENABLE_BAG_TIME_ALERTS` (default False)
+    suppress Telegram send. Scan dalej iteruje + flag bag_time_alerted=True
+    persisted (audit + R6 hard reject downstream w feasibility nadal działa) —
+    tylko Telegram noise wyłączony. Hot-reload via flags.json.
     """
+    if not C.flag("ENABLE_BAG_TIME_ALERTS", False):
+        return  # alerts disabled per Adrian decision; scan no-op
     try:
         picked_up_orders = get_by_status("picked_up")
     except Exception as e:
@@ -230,9 +239,14 @@ def _check_bag_time_alerts(now_utc: datetime) -> None:
             picked_hhmm = _format_picked_up_hhmm(picked_dt)
 
             msg = (
-                f"⚠️ BAG_TIME {bag_time_min:.0f} min (limit {C.BAG_TIME_PRE_WARNING_MIN})\n"
+                f"⚠️ Kurier wiezie zamówienie już {bag_time_min:.0f} minut "
+                f"(próg ostrzeżenia {C.BAG_TIME_PRE_WARNING_MIN} — niedługo "
+                f"przekroczy max 35)\n"
                 f"#{oid} {restaurant} → {delivery}\n"
-                f"Kurier: {cname} ({cid}) • picked up {picked_hhmm}"
+                f"Kurier: {cname} ({cid}), odebrał o {picked_hhmm}\n\n"
+                f"Co robię: nic automatycznie — to ostrzeżenie żebyś monitorował. "
+                f"Jeśli przekroczy 35 min → R6 odrzuci propozycje dla tego kuriera "
+                f"dopóki nie dostarczy."
             )
             ok = send_admin_alert(msg)
             _stats["r6_alerts"] += 1
@@ -261,10 +275,30 @@ def run():
     # F2.1b step 6: load courier_names cache once on start (zero IO per tick).
     global _courier_names
     _courier_names = _load_courier_names()
+    _bag_alerts_state = "ENABLED" if C.flag("ENABLE_BAG_TIME_ALERTS", False) else "SUPPRESSED"
     _log.info(
-        f"R6 bag_time alerts enabled — courier_names loaded: {len(_courier_names)}, "
-        f"threshold={C.BAG_TIME_PRE_WARNING_MIN}min"
+        f"R6 bag_time alerts {_bag_alerts_state} — courier_names loaded: "
+        f"{len(_courier_names)}, threshold={C.BAG_TIME_PRE_WARNING_MIN}min "
+        f"(flag ENABLE_BAG_TIME_ALERTS hot-reload via flags.json)"
     )
+
+    # A4.1 (2026-05-09): BroadcastSubscriber dla CONFIG_RELOAD events.
+    _broadcast_sub = None
+    try:
+        _broadcast_sub = BroadcastSubscriber(
+            consumer_id="sla_tracker",
+            state_path=Path(
+                "/root/.openclaw/workspace/dispatch_state/event_subscribers/sla_tracker.json"
+            ),
+        )
+        _log.info("A4.1 BroadcastSubscriber init OK consumer=sla_tracker")
+    except Exception as _bs_e:
+        _log.warning(
+            f"A4.1 BroadcastSubscriber init fail "
+            f"({type(_bs_e).__name__}: {_bs_e}) — broadcast disabled"
+        )
+    last_broadcast_poll = 0.0
+    BROADCAST_POLL_INTERVAL_S = 30.0
 
     SLA_EVENT_TYPES = ["COURIER_PICKED_UP", "COURIER_DELIVERED"]
     while _running:
@@ -280,6 +314,19 @@ def run():
             _check_bag_time_alerts(datetime.now(timezone.utc))
         except Exception as e:
             _log.error(f"R6 scan wrapper fail: {e}")
+
+        # A4.1: poll CONFIG_RELOAD broadcast events co 30s rate-limited.
+        if _broadcast_sub is not None and time.time() - last_broadcast_poll >= BROADCAST_POLL_INTERVAL_S:
+            try:
+                _new_events = _broadcast_sub.poll(["CONFIG_RELOAD"], limit=50)
+                if _new_events:
+                    dispatch_config_reload(_new_events, "sla_tracker")
+            except Exception as _bp_e:
+                _log.warning(
+                    f"A4.1 broadcast poll fail "
+                    f"({type(_bp_e).__name__}: {_bp_e}) — skip, retry next interval"
+                )
+            last_broadcast_poll = time.time()
 
         if time.time() - last_summary > 300:
             _log.info(f"SUMMARY: {_stats}")

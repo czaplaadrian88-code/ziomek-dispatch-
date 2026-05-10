@@ -26,11 +26,21 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
-from dispatch_v2.common import flag, load_config, now_iso, setup_logger
-from dispatch_v2.event_bus import emit
+from dispatch_v2.common import (
+    FIRMOWE_KONTO_ADDRESS_IDS,
+    FIRMOWE_KONTO_FALLBACK_COORDS,
+    flag,
+    load_config,
+    now_iso,
+    setup_logger,
+)
+from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
+from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
+from dispatch_v2.event_bus import emit, emit_audit
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
 from dispatch_v2.parser_health_layer3 import install_layer3, record_tick_full
 from dispatch_v2.parser_health_endpoint import start_health_endpoint
+from dispatch_v2.uwagi_address_parser import parse_pickup_from_uwagi
 from dispatch_v2.panel_client import (
     fetch_panel_html,
     parse_panel_html,
@@ -54,19 +64,63 @@ _log = setup_logger("panel_watcher", "/root/.openclaw/workspace/scripts/logs/dis
 _running = True
 _fail_count = 0
 _last_panel_unreachable_emit = 0.0
-# Lookup address_id -> coords, zaladowany raz przy starcie (hot-reload w razie potrzeby przez restart)
+# tech-debt #24: cold-start packs scan one-shot post-restart. Eliminuje
+# MISSING_FROM_STATE phantoms gdy panel-watcher restart in-peak drops
+# COURIER_ASSIGNED dla orderów mid-way ASSIGN→PICKUP (post-restart diff
+# emit COURIER_PICKED_UP direct bez prior ASSIGNED). Scan iteruje
+# parsed["courier_packs"] i emit COURIER_ASSIGNED dla każdego oid bez
+# entry w orders_state lub z empty cid. Bypasses V3.15 budget (one-shot).
+_cold_start_done = False
+# Lookup address_id -> coords. MP-#12 (2026-05-08): mtime-based hot-reload co 15s
+# eliminuje konieczność restart'u panel_watcher gdy restaurant_coords.json zmieniony
+# (np. nowy add_id mapping od Adriana). META top-5 quick win, STATE_OWNERSHIP F3+F8.
 _COORDS_PATH = "/root/.openclaw/workspace/dispatch_state/restaurant_coords.json"
 _COORDS = {}
+_COORDS_MTIME = 0.0
+_COORDS_LAST_CHECK_TS = 0.0
+_COORDS_CHECK_INTERVAL_S = 15.0
+
+
 def _load_coords():
-    global _COORDS
+    global _COORDS, _COORDS_MTIME
     try:
         import json
+        import os
+        mtime = os.path.getmtime(_COORDS_PATH)
         with open(_COORDS_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         _COORDS = {str(k): (v["lat"], v["lng"]) for k, v in data.items() if "lat" in v and "lng" in v}
+        _COORDS_MTIME = mtime
     except Exception as e:
         _log.warning(f"_load_coords fail: {e}")
         _COORDS = {}
+        _COORDS_MTIME = 0.0
+
+
+def _maybe_reload_coords():
+    """MP-#12: mtime check co _COORDS_CHECK_INTERVAL_S. Reload gdy plik zmieniony."""
+    global _COORDS_LAST_CHECK_TS
+    now = time.time()
+    if now - _COORDS_LAST_CHECK_TS < _COORDS_CHECK_INTERVAL_S:
+        return False
+    _COORDS_LAST_CHECK_TS = now
+    try:
+        import os
+        mtime = os.path.getmtime(_COORDS_PATH)
+    except Exception as e:
+        _log.warning(f"_maybe_reload_coords stat fail: {e}")
+        return False
+    if mtime > _COORDS_MTIME:
+        prev_count = len(_COORDS)
+        _load_coords()
+        _log.info(
+            f"_COORDS hot-reload: mtime {_COORDS_MTIME:.0f} → {mtime:.0f}, "
+            f"entries {prev_count} → {len(_COORDS)} (MP-#12)"
+        )
+        return True
+    return False
+
+
 _load_coords()
 
 _ignored_ids = set()  # ID znanych jako status 7/8/9 — nie fetchuj ponownie
@@ -127,9 +181,11 @@ def _check_panel_override(order_id: str, panel_courier_id: str, source: str) -> 
         "panel_source": source,
         "decision": dr,
     }
+    # MP-#11 (2026-05-08): atomic JSONL append via core helper. Eliminuje race
+    # między panel_watcher i telegram_approver pisanie do TEGO SAMEGO learning_log.
     try:
-        with open(_LEARNING_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(override_rec, ensure_ascii=False) + "\n")
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(_LEARNING_LOG_PATH, override_rec)
     except Exception as e:
         _log.warning(f"PANEL_OVERRIDE write learning_log fail oid={order_id}: {e}")
         return
@@ -452,6 +508,70 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         _aid_str = str(_aid) if _aid is not None else None
         _pcoords = _COORDS.get(_aid_str) if _aid_str else None
 
+        # Firmowe konto path: address_id ∈ FIRMOWE_KONTO_ADDRESS_IDS znaczy
+        # adres pickup'u jest w polu uwagi (free-text), nie w panel address.
+        # Parser PRIMARY: parsuj uwagi → geocode → real coords (Mickiewicza 50,
+        # Wyszyńskiego 2/75, etc.). FALLBACK: gdy parser zwróci None (P3 edge)
+        # ALBO geocode fail → użyj FIRMOWE_KONTO_FALLBACK_COORDS (centrala
+        # Nadajesz.pl, Adrian decision 2026-05-07). Defense gate L2 w
+        # dispatch_pipeline + L4 czasowka_scheduler obsługują gdy nawet fallback
+        # coords nie zostały wpisane (np. inne firmowe konta bez fallback config).
+        _uwagi_pickup_parsed = None
+        _pickup_address_override = None
+        _restaurant_override = None
+        _is_firmowe_konto = (
+            _aid is not None
+            and int(_aid) in FIRMOWE_KONTO_ADDRESS_IDS
+        )
+        if (_pcoords is None
+                and _is_firmowe_konto
+                and flag("ENABLE_UWAGI_ADDRESS_PARSER", True)):
+            _uwagi_text = norm.get("uwagi")
+            _parsed = parse_pickup_from_uwagi(_uwagi_text)
+            if _parsed is not None:
+                _pickup_address_override = f"{_parsed.street} {_parsed.number}"
+                _pcoords = geocode(_pickup_address_override, city="Białystok", timeout=2.0)
+                if _pcoords is None:
+                    _log.warning(
+                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser "
+                        f"OK ({_pickup_address_override!r} conf={_parsed.confidence}) "
+                        f"ALE geocode fail — fallback do FIRMOWE_KONTO_FALLBACK_COORDS"
+                    )
+                    _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
+                else:
+                    _log.info(
+                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: uwagi-parser "
+                        f"resolved pickup {_pickup_address_override!r} conf={_parsed.confidence} "
+                        f"→ coords={_pcoords}"
+                    )
+                if _parsed.company:
+                    _restaurant_override = _parsed.company
+                _uwagi_pickup_parsed = {
+                    "street": _parsed.street,
+                    "number": _parsed.number,
+                    "company": _parsed.company,
+                    "confidence": _parsed.confidence,
+                    "raw_pickup_line": _parsed.raw_pickup_line,
+                }
+            else:
+                # P3 edge: parser nie wyciągnął adresu (np. uwagi=company-only
+                # "MALI WOJOWNICY"). Fallback do hardcoded coords centrali —
+                # kurier dostaje real feasibility loop zamiast manual KOORD.
+                _log.info(
+                    f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
+                    f"None (P3 edge), fallback do FIRMOWE_KONTO_FALLBACK_COORDS. "
+                    f"Uwagi: {_uwagi_text!r}"
+                )
+                _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
+                _uwagi_pickup_parsed = {
+                    "street": None,
+                    "number": None,
+                    "company": None,
+                    "confidence": 0.0,
+                    "raw_pickup_line": _uwagi_text or "",
+                    "fallback_coords_used": True,
+                }
+
         # Geocode delivery address (cache hit ~90% = 0ms, miss = Google API max 2s)
         _del_addr = norm.get("delivery_address")
         _del_city = norm.get("delivery_city")
@@ -462,8 +582,8 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _log.warning(f"NEW_ORDER {zid}: geocode fail for '{_del_addr}' city={_del_city!r}")
 
         ev_payload = {
-            "restaurant": norm["restaurant"],
-            "pickup_address": norm["pickup_address"],
+            "restaurant": _restaurant_override or norm["restaurant"],
+            "pickup_address": _pickup_address_override or norm["pickup_address"],
             "pickup_city": norm.get("pickup_city"),
             "delivery_address": norm["delivery_address"],
             "delivery_city": _del_city,
@@ -479,6 +599,16 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             # Parse+persist zawsze (niezależnie od flagi). Pipeline consume pod flagą.
             "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
             "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
+            # Audit trail dla firmowego konto path (zwykle None).
+            "uwagi": norm.get("uwagi"),
+            "uwagi_pickup_parsed": _uwagi_pickup_parsed,
+            # Tech debt #19a/b/c (2026-05-07) — fields tracone od V3.x:
+            # - decision_deadline: SLA visibility (panel deadline na decyzję koord)
+            # - zmiana_czasu_odbioru: audit flag czy panel zmienił pickup time
+            # - created_at_utc: single anchor dla downstream age_minutes consumers
+            "decision_deadline": norm.get("decision_deadline"),
+            "zmiana_czasu_odbioru": norm.get("zmiana_czasu_odbioru"),
+            "created_at_utc": norm.get("created_at_utc"),
         }
 
         # Deterministyczny event_id: {order_id}_NEW_ORDER_first_seen (bez timestamp - raz na zycie)
@@ -534,7 +664,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
                 "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
             }
-            assigned_event = emit(
+            assigned_event = emit_audit(
                 "COURIER_ASSIGNED",
                 order_id=zid,
                 courier_id=courier_id,
@@ -574,7 +704,8 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 if raw:
                     status_id = raw.get("id_status_zamowienia")
                     if status_id == 7:
-                        # Doreczone
+                        # Doreczone (F10 2026-05-09: canonical event_id eliminuje
+                        # duplicate audit_log entries vs ghost_detect/reconcile path).
                         ev = emit(
                             "COURIER_DELIVERED",
                             order_id=zid,
@@ -582,8 +713,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             payload={
                                 "timestamp": raw.get("czas_doreczenia") or now_iso(),
                                 "final_location": state_order.get("delivery_address"),
+                                "deliv_source": "panel",
                             },
-                            event_id=f"{zid}_COURIER_DELIVERED_panel",
+                            event_id=f"{zid}_COURIER_DELIVERED_canonical",
                         )
                         if ev:
                             stats["delivered"] += 1
@@ -606,7 +738,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         # ale NIE emitował do events.db → akumulacja phantom orders.
                         reason = "undelivered" if status_id == 8 else "cancelled"
                         _adv_cid = str(raw.get("id_kurier") or "")
-                        ev = emit(
+                        ev = emit_audit(
                             "ORDER_RETURNED_TO_POOL",
                             order_id=zid,
                             courier_id=_adv_cid,
@@ -638,7 +770,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 stats["fetched_details"] += 1
                 if raw and raw.get("id_kurier") and raw["id_kurier"] != KOORDYNATOR_ID:
                     courier_id = str(raw["id_kurier"])
-                    ev = emit(
+                    ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=zid,
                         courier_id=courier_id,
@@ -669,7 +801,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 reassign_checked += 1
                 panel_courier = str(raw.get("id_kurier") or "") if raw else ""
                 if panel_courier and panel_courier != state_courier and raw.get("id_kurier") != KOORDYNATOR_ID:
-                    ev = emit(
+                    ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=zid,
                         courier_id=panel_courier,
@@ -774,7 +906,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
                         )
                         _target_cid = _panel_cid
-                    _ev = emit(
+                    _ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=_oid_str,
                         courier_id=_target_cid,
@@ -908,8 +1040,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         "final_location": _deliv_addr_gd,
                         "delivery_address": _deliv_addr_gd,
                         "source": "packs_ghost_detect",
+                        "deliv_source": "packs_ghost_detect",
                     },
-                    event_id=f"{_oid}_COURIER_DELIVERED_packs_ghost",
+                    event_id=f"{_oid}_COURIER_DELIVERED_canonical",
                 )
                 if _ev_gd:
                     stats["delivered"] += 1
@@ -976,8 +1109,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "final_location": deliv_addr,
                     "delivery_address": deliv_addr,
                     "source": "reconcile",
+                    "deliv_source": "reconcile",
                 },
-                event_id=f"{zid}_COURIER_DELIVERED_reconcile",
+                event_id=f"{zid}_COURIER_DELIVERED_canonical",
             )
             if ev:
                 stats["delivered"] += 1
@@ -999,7 +1133,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 )
         elif sid in (8, 9):
             reason = "undelivered" if sid == 8 else "cancelled"
-            ev = emit(
+            ev = emit_audit(
                 "ORDER_RETURNED_TO_POOL",
                 order_id=zid,
                 payload={"reason": reason, "source": "reconcile"},
@@ -1131,7 +1265,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 event_id_str = f"{zid}_CZAS_KURIERA_UPDATED{suffix}"
             else:
                 event_id_str = f"{zid}_CZAS_KURIERA_UPDATED_{int(evt['payload'].get('delta_min',0)*10)}"
-            emit(
+            emit_audit(
                 "CZAS_KURIERA_UPDATED",
                 order_id=zid,
                 courier_id=str(state_order.get("courier_id") or ""),
@@ -1151,12 +1285,116 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     return stats
 
 
+def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
+    """tech-debt #24: one-shot scan post-restart żeby naprawić missing
+    COURIER_ASSIGNED dla orderów mid-way ASSIGN→PICKUP w restart window.
+
+    Iteruje parsed["courier_packs"][nick] → oids. Dla każdego oid bez
+    entry w orders_state (state_cid=="") emit COURIER_ASSIGNED z
+    source="cold_start_scan". Bypass V3.15 budget (one-shot, expected
+    5-30 mismatches po panel-watcher restart in-peak).
+
+    Idempotent: emit_audit z deterministic event_id, drugi call no-op.
+    Defense-in-depth: kurier_ids load fail → skip (warn), per-oid
+    fetch fail → skip+counter, ambiguous nick → skip+warn.
+    """
+    stats = {"cold_start_scanned": 0, "cold_start_emitted": 0, "cold_start_errors": 0}
+    packs = parsed.get("courier_packs") or {}
+    if not packs:
+        return stats
+
+    try:
+        import json as _json
+        with open("/root/.openclaw/workspace/dispatch_state/kurier_ids.json") as _f:
+            _kurier_ids = _json.load(_f)
+        _name_to_cid = {}
+        _ambiguous_names = set()
+        for _nm, _cid in _kurier_ids.items():
+            _nm_key = _nm.strip()
+            if _nm_key in _name_to_cid and _name_to_cid[_nm_key] != str(_cid):
+                _ambiguous_names.add(_nm_key)
+            _name_to_cid[_nm_key] = str(_cid)
+    except Exception as _e:
+        _log.warning(f"cold_start_scan: kurier_ids load fail: {_e}")
+        return stats
+
+    current_state = state_get_all()
+
+    for _nick, _oids in packs.items():
+        _nick_key = (_nick or "").strip()
+        if not _nick_key or not _oids:
+            continue
+        if _nick_key in _ambiguous_names:
+            _log.warning(f"cold_start_scan: skip ambiguous nick {_nick_key!r}")
+            continue
+        _target_cid = _name_to_cid.get(_nick_key)
+        if not _target_cid:
+            continue
+        for _oid in _oids:
+            _oid_str = str(_oid)
+            _sorder = current_state.get(_oid_str) or {}
+            _state_cid = str(_sorder.get("courier_id") or "")
+            # Cold-start fires ONLY gdy state nie ma cid (missing entry
+            # lub courier_id=None). Jeśli state ma cid (nawet stary)
+            # → V3.15 packs_fallback handle mismatch w normalnym diff.
+            if _state_cid:
+                continue
+            _state_status = _sorder.get("status")
+            if _state_status in ("delivered", "returned_to_pool", "cancelled"):
+                continue
+            try:
+                _raw = fetch_order_details(_oid_str, csrf)
+                stats["cold_start_scanned"] += 1
+            except Exception as _fe:
+                _log.warning(f"cold_start_scan fetch({_oid_str}): {_fe}")
+                stats["cold_start_errors"] += 1
+                continue
+            if not _raw:
+                continue
+            _panel_cid = str(_raw.get("id_kurier") or "")
+            _sid = _raw.get("id_status_zamowienia")
+            if _sid in IGNORED_STATUSES:
+                continue
+            if not _panel_cid or _panel_cid == str(KOORDYNATOR_ID):
+                continue
+            if _panel_cid != _target_cid:
+                _log.warning(
+                    f"cold_start_scan: nick={_nick_key!r} map→{_target_cid} "
+                    f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
+                )
+                _target_cid = _panel_cid
+            _ev = emit_audit(
+                "COURIER_ASSIGNED",
+                order_id=_oid_str,
+                courier_id=_target_cid,
+                payload={
+                    "source": "cold_start_scan",
+                    "nick": _nick_key,
+                },
+                event_id=f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_coldstart",
+            )
+            if _ev:
+                update_from_event({
+                    "event_type": "COURIER_ASSIGNED",
+                    "order_id": _oid_str,
+                    "courier_id": _target_cid,
+                    "payload": {"source": "cold_start_scan"},
+                })
+                stats["cold_start_emitted"] += 1
+                _log.info(
+                    f"COLD_START_CATCHUP {_oid_str} → cid={_target_cid} "
+                    f"nick={_nick_key!r} sid={_sid}"
+                )
+                _save_plan_on_assign(_oid_str, _target_cid)
+    return stats
+
+
 def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
     """Jeden cykl watchera. Zwraca (statystyki, parsed_dict_or_None).
 
     V3.28 Layer 2+3: parsed zachowane dla parser_health.record_tick_full().
     """
-    global _fail_count, _last_panel_unreachable_emit
+    global _fail_count, _last_panel_unreachable_emit, _cold_start_done
 
     cycle_stats = {"cycle": cycle_num, "at": now_iso()}
     cycle_parsed: Optional[dict] = None
@@ -1175,6 +1413,25 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
         from dispatch_v2.panel_client import _session
         csrf = _session.get("csrf") or ""
 
+        # tech-debt #24: cold-start packs scan one-shot post-restart.
+        # Wykonaj PRZED _diff_and_emit żeby state_get_all() w diff
+        # widział COURIER_ASSIGNED emitowane przez scan (uniknij race
+        # gdy diff emit COURIER_PICKED_UP bez prior ASSIGNED → reconcile
+        # phantom MISSING_FROM_STATE 4h+ później).
+        if not _cold_start_done:
+            try:
+                cs_stats = _post_restart_cold_start_scan(parsed, csrf)
+                cycle_stats.update(cs_stats)
+                _log.info(
+                    f"COLD_START_SCAN done cycle={cycle_num}: "
+                    f"scanned={cs_stats.get('cold_start_scanned', 0)} "
+                    f"emitted={cs_stats.get('cold_start_emitted', 0)} "
+                    f"errors={cs_stats.get('cold_start_errors', 0)}"
+                )
+            except Exception as _cs_e:
+                _log.warning(f"cold_start_scan fail (non-blocking): {_cs_e}")
+            _cold_start_done = True
+
         diff_stats = _diff_and_emit(parsed, csrf)
         cycle_stats.update(diff_stats)
 
@@ -1185,7 +1442,7 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
 
         # Po 3 failach emit PANEL_UNREACHABLE (throttled: max 1/min)
         if _fail_count >= 3 and time.time() - _last_panel_unreachable_emit > 60:
-            emit(
+            emit_audit(
                 "PANEL_UNREACHABLE",
                 payload={"fail_count": _fail_count, "last_error": str(e)},
                 event_id=f"PANEL_UNREACHABLE_{int(time.time() / 60)}",
@@ -1242,8 +1499,27 @@ def run():
     except Exception as _bg_e:
         _log.warning(f"V3.27.7 panel_bg_refresh start failed: {type(_bg_e).__name__}: {_bg_e}")
 
+    # A4.1 (2026-05-09): BroadcastSubscriber dla CONFIG_RELOAD events.
+    _broadcast_sub = None
+    try:
+        from pathlib import Path as _Path
+        _broadcast_sub = BroadcastSubscriber(
+            consumer_id="panel_watcher",
+            state_path=_Path(
+                "/root/.openclaw/workspace/dispatch_state/event_subscribers/panel_watcher.json"
+            ),
+        )
+        _log.info("A4.1 BroadcastSubscriber init OK consumer=panel_watcher")
+    except Exception as _bs_e:
+        _log.warning(
+            f"A4.1 BroadcastSubscriber init fail "
+            f"({type(_bs_e).__name__}: {_bs_e}) — broadcast disabled"
+        )
+
     cycle = 0
     last_log_summary = time.time()
+    last_broadcast_poll = 0.0
+    BROADCAST_POLL_INTERVAL_S = 30.0
     totals = {"new": 0, "assigned": 0, "picked_up": 0, "delivered": 0, "ignored": 0, "errors": 0}
 
     while _running:
@@ -1256,6 +1532,7 @@ def run():
             continue
 
         t0 = time.time()
+        _maybe_reload_coords()
         stats, parsed = tick(cycle)
         elapsed = time.time() - t0
 
@@ -1284,6 +1561,20 @@ def run():
         # Detail log tylko gdy cos sie wydarzylo
         if any(stats.get(k, 0) > 0 for k in ("new", "assigned", "picked_up", "delivered")):
             _log.info(f"TICK {cycle}: {stats}")
+
+        # A4.1: poll CONFIG_RELOAD broadcast events co 30s rate-limited.
+        # Belt-and-suspenders obok _COORDS mtime hot-reload (MP-#12).
+        if _broadcast_sub is not None and time.time() - last_broadcast_poll >= BROADCAST_POLL_INTERVAL_S:
+            try:
+                _new_events = _broadcast_sub.poll(["CONFIG_RELOAD"], limit=50)
+                if _new_events:
+                    dispatch_config_reload(_new_events, "panel_watcher")
+            except Exception as _bp_e:
+                _log.warning(
+                    f"A4.1 broadcast poll fail "
+                    f"({type(_bp_e).__name__}: {_bp_e}) — skip, retry next interval"
+                )
+            last_broadcast_poll = time.time()
 
         # Sleep do nastepnego cyklu
         sleep_for = max(0.5, interval - elapsed)

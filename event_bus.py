@@ -12,10 +12,25 @@ import json
 import sqlite3
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, List, Optional
+from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import load_config, now_iso, setup_logger
+
+# MP-#5 (2026-05-08): retry transient SQLite locks + peak-aware cleanup.
+# Background: emit() w hot path (panel_watcher, state_machine, telegram_approver
+# via dispatch_pipeline) — pojedynczy SQLite lock burst (concurrent writer)
+# drop'ował event. Retry 3x z exp backoff = transient resilience. Cleanup w peak
+# (lunch 11-14 / dinner 17-20 Warsaw) skip — DELETE blocks readers shadow_dispatcher.
+_RETRY_BACKOFF_MS = (100, 500, 2000)  # 3 attempts after first try
+_PEAK_WINDOWS_WARSAW = (
+    (11, 14),  # lunch peak
+    (17, 20),  # dinner peak
+)
+_WARSAW_TZ = ZoneInfo("Europe/Warsaw")
+
 
 # Zamkniety katalog typow eventow
 EVENT_TYPES = {
@@ -37,9 +52,75 @@ EVENT_TYPES = {
     # ValueError → state_machine NIE dostaje update → orders_state stale czas_kuriera.
     # state_machine.py:316 ma już handler. Dodanie do allowlist completes V3.19g1.
     "CZAS_KURIERA_UPDATED",
+    # A4 (audit META RC2 2026-05-07): CONFIG_RELOAD broadcast event dla
+    # cache invalidation cross-process. Każdy long-running service polling'uje
+    # via poll_broadcast() + invalidate per-process caches gdy scope match.
+    # Zamyka Decyzja #4 Redis "post-Postgres lub never" (events.db wystarczy).
+    "CONFIG_RELOAD",
 }
 
+# A4: broadcast events nie są queue (no consumer mark_processed) ani audit
+# (nie historical only). Status='broadcast' w events table → invisible dla
+# get_pending(NEW_ORDER) etc. Subscribery używają poll_broadcast() z cursor.
+BROADCAST_EVENT_TYPES = {
+    "CONFIG_RELOAD",
+}
+
+# Opcja C (2026-05-07): rozdzielenie ról events.db (queue vs audit log).
+# AUDIT_EVENT_TYPES — typy zapisywane do osobnej tabeli audit_log (append-only,
+# retention 90d). Stan persistowany przez state_machine.update_from_event
+# wywoływany inline z call site (dual-write pattern). NIKT nie konsumuje queue-style.
+# Czytelnicy: learning_analyzer, parser_health_endpoint, r04_evaluator,
+# sprint2_analysis (queries WHERE event_type=...).
+AUDIT_EVENT_TYPES = {
+    "COURIER_ASSIGNED",
+    "CZAS_KURIERA_UPDATED",
+    "PANEL_UNREACHABLE",
+    "ORDER_RETURNED_TO_POOL",
+}
+
+# QUEUE_EVENT_TYPES — typy z lifecycle pending → processed w tabeli events.
+# Konsumenci: shadow_dispatcher (NEW_ORDER) + sla_tracker (PICKED_UP, DELIVERED).
+QUEUE_EVENT_TYPES = EVENT_TYPES - AUDIT_EVENT_TYPES - BROADCAST_EVENT_TYPES
+
 _log = setup_logger("event_bus", "/root/.openclaw/workspace/scripts/logs/events.log")
+
+
+def _is_peak_window(now: Optional[datetime] = None) -> bool:
+    """True if current Warsaw time within peak windows (lunch 11-14, dinner 17-20)."""
+    if now is None:
+        now = datetime.now(_WARSAW_TZ)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=_WARSAW_TZ)
+    h = now.hour
+    return any(start <= h < end for start, end in _PEAK_WINDOWS_WARSAW)
+
+
+def _retry_on_locked(fn: Callable, *args, **kwargs):
+    """Wywołuje fn z retry na sqlite3.OperationalError 'database is locked'.
+
+    Inne wyjątki propagują natychmiast. Backoff [100, 500, 2000]ms (3 dodatkowe
+    próby po pierwszej). Cel: transient WAL contention przy concurrent writer.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(len(_RETRY_BACKOFF_MS) + 1):
+        try:
+            return fn(*args, **kwargs)
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "locked" not in msg and "busy" not in msg:
+                raise
+            last_exc = e
+            if attempt < len(_RETRY_BACKOFF_MS):
+                delay_ms = _RETRY_BACKOFF_MS[attempt]
+                _log.warning(
+                    f"event_bus: SQLite locked, retry {attempt+1}/{len(_RETRY_BACKOFF_MS)} "
+                    f"after {delay_ms}ms ({e})"
+                )
+                time.sleep(delay_ms / 1000.0)
+            else:
+                _log.error(f"event_bus: SQLite locked, retry exhausted: {e}")
+    raise last_exc  # type: ignore[misc]
 
 
 def _db_path() -> str:
@@ -67,31 +148,18 @@ def make_event_id(event_type: str, order_id: Optional[str], timestamp_ms: Option
     return f"{oid}_{event_type}_{timestamp_ms}"
 
 
-def emit(
+def _emit_inner(
     event_type: str,
-    order_id: Optional[str] = None,
-    courier_id: Optional[str] = None,
-    payload: Optional[dict] = None,
-    event_id: Optional[str] = None,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload_json: str,
+    created_at: str,
+    event_id: str,
 ) -> Optional[str]:
-    """Emituje event. Zwraca event_id lub None jesli duplikat.
-
-    Jesli event_id nie podany -> generowany deterministycznie.
-    Jesli event_id juz istnieje w bazie -> ZWRACA None (idempotent skip).
-    """
-    if event_type not in EVENT_TYPES:
-        raise ValueError(f"Nieznany event_type: {event_type}. Dozwolone: {EVENT_TYPES}")
-
-    if event_id is None:
-        event_id = make_event_id(event_type, order_id)
-
-    payload_json = json.dumps(payload or {}, ensure_ascii=False)
-    created_at = now_iso()
-
+    """Inner emit z transaction body. Wrapped przez emit() w _retry_on_locked."""
     with _conn() as conn:
         try:
             conn.execute("BEGIN IMMEDIATE;")
-            # Sprawdz processed (dedup historyczny)
             cur = conn.execute(
                 "SELECT 1 FROM processed_events WHERE event_id = ?",
                 (event_id,),
@@ -101,7 +169,6 @@ def emit(
                 _log.debug(f"DUP (processed): {event_id}")
                 return None
 
-            # Wstaw (jesli juz w events -> INSERT OR IGNORE)
             cur = conn.execute(
                 """INSERT OR IGNORE INTO events
                    (event_id, event_type, order_id, courier_id, payload, created_at, status)
@@ -116,10 +183,41 @@ def emit(
             conn.execute("COMMIT;")
             _log.info(f"EMIT {event_type} order={order_id} courier={courier_id} id={event_id}")
             return event_id
+        except sqlite3.OperationalError:
+            conn.execute("ROLLBACK;")
+            raise
         except Exception as e:
             conn.execute("ROLLBACK;")
             _log.error(f"emit() error: {e}")
             raise
+
+
+def emit(
+    event_type: str,
+    order_id: Optional[str] = None,
+    courier_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+    event_id: Optional[str] = None,
+) -> Optional[str]:
+    """Emituje event. Zwraca event_id lub None jesli duplikat.
+
+    Jesli event_id nie podany -> generowany deterministycznie.
+    Jesli event_id juz istnieje w bazie -> ZWRACA None (idempotent skip).
+
+    MP-#5: Transient SQLite lock errors retry'owane (3x exp backoff).
+    """
+    if event_type not in EVENT_TYPES:
+        raise ValueError(f"Nieznany event_type: {event_type}. Dozwolone: {EVENT_TYPES}")
+
+    if event_id is None:
+        event_id = make_event_id(event_type, order_id)
+
+    payload_json = json.dumps(payload or {}, ensure_ascii=False)
+    created_at = now_iso()
+
+    return _retry_on_locked(
+        _emit_inner, event_type, order_id, courier_id, payload_json, created_at, event_id,
+    )
 
 
 def get_pending(limit: int = 100, event_types: Optional[list] = None) -> list:
@@ -196,9 +294,16 @@ def stats() -> dict:
 
 
 def cleanup(retention_hours: int = 48) -> int:
-    """Czysci stare processed events. Zwraca liczbe usunietych."""
-    cutoff_seconds = retention_hours * 3600
-    cutoff_iso = now_iso()  # uzywamy current time - retention w SQL
+    """Czysci stare processed events. Zwraca liczbe usunietych.
+
+    MP-#5: Skip podczas peak window (lunch 11-14 / dinner 17-20 Warsaw) — DELETE
+    blokuje shadow_dispatcher reads, co negatywnie wpływa na latency propozycji.
+    Cleanup uruchamia się przez dispatch-event-bus-cleanup.timer (co godzinę);
+    pominięty tick = +1h retention, brak korupcji.
+    """
+    if _is_peak_window():
+        _log.info("cleanup: skip — peak window (Warsaw lunch/dinner)")
+        return 0
 
     with _conn() as conn:
         # SQLite: usun processed_events starsze niz cutoff
@@ -217,3 +322,311 @@ def cleanup(retention_hours: int = 48) -> int:
         deleted2 = cur.rowcount
         _log.info(f"cleanup: usunieto {deleted1} processed_events, {deleted2} events")
         return deleted1 + deleted2
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Opcja C (2026-05-07): audit_log table — append-only, retention 90d.
+# Rozdziela role events.db: queue (pending→processed) vs audit log (append-only).
+# Dual-write call sites (panel_watcher, dispatch_pipeline) używają emit_audit()
+# zamiast emit() dla typów w AUDIT_EVENT_TYPES.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+_audit_log_initialized = False
+
+
+def _init_audit_log_table() -> None:
+    """Idempotentna inicjalizacja tabeli audit_log + indeksów. CREATE IF NOT EXISTS.
+
+    Wywoływane lazy (przy pierwszym emit_audit/cleanup_audit_log/get_pending_count)
+    żeby nie crashować module load w test env gdzie _db_path() może nie być dostępny.
+    """
+    global _audit_log_initialized
+    with _conn() as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS audit_log (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                order_id TEXT,
+                courier_id TEXT,
+                payload TEXT,
+                created_at TEXT NOT NULL
+            )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_type ON audit_log(event_type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_order ON audit_log(order_id)")
+    _audit_log_initialized = True
+
+
+def _ensure_audit_log_initialized() -> None:
+    """Lazy init guard. Wywoływany przed każdą operacją na audit_log."""
+    if not _audit_log_initialized:
+        _init_audit_log_table()
+
+
+def _emit_audit_inner(
+    event_type: str,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload_json: str,
+    created_at: str,
+    event_id: str,
+) -> Optional[str]:
+    """Inner emit_audit. Wrapped przez emit_audit() w _retry_on_locked."""
+    with _conn() as conn:
+        try:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO audit_log
+                   (event_id, event_type, order_id, courier_id, payload, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (event_id, event_type, order_id, courier_id, payload_json, created_at),
+            )
+            if cur.rowcount == 0:
+                _log.debug(f"AUDIT DUP: {event_id}")
+                return None
+            _log.info(f"AUDIT {event_type} order={order_id} courier={courier_id} id={event_id}")
+            return event_id
+        except sqlite3.OperationalError:
+            raise
+        except Exception as e:
+            _log.error(f"emit_audit() error: {e}")
+            raise
+
+
+def emit_audit(
+    event_type: str,
+    order_id: Optional[str] = None,
+    courier_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+    event_id: Optional[str] = None,
+) -> Optional[str]:
+    """Zapisuje event audit-only do tabeli audit_log (append-only).
+
+    Idempotent przez INSERT OR IGNORE na PRIMARY KEY event_id.
+    Dla typów z AUDIT_EVENT_TYPES (COURIER_ASSIGNED, CZAS_KURIERA_UPDATED,
+    PANEL_UNREACHABLE, ORDER_RETURNED_TO_POOL).
+
+    Stan persistowany przez state_machine.update_from_event wywoływany inline
+    z call site — ta funkcja jest TYLKO audit history. Brak status/processed_at.
+
+    MP-#5: Transient SQLite lock errors retry'owane (3x exp backoff).
+
+    Zwraca event_id przy zapisie, None przy idempotent skip (duplikat).
+    """
+    if event_type not in AUDIT_EVENT_TYPES:
+        raise ValueError(
+            f"emit_audit: event_type '{event_type}' nie jest audit type. "
+            f"Dozwolone: {AUDIT_EVENT_TYPES}. Użyj emit() dla queue typów."
+        )
+
+    if event_id is None:
+        event_id = make_event_id(event_type, order_id)
+
+    _ensure_audit_log_initialized()
+    payload_json = json.dumps(payload or {}, ensure_ascii=False)
+    created_at = now_iso()
+
+    return _retry_on_locked(
+        _emit_audit_inner, event_type, order_id, courier_id, payload_json, created_at, event_id,
+    )
+
+
+def cleanup_audit_log(retention_days: int = 90) -> int:
+    """Czysci audit_log starsze niz retention_days. Zwraca liczbe usunietych.
+
+    MP-#5: Skip podczas peak window (Warsaw lunch/dinner) — DELETE blokuje readers.
+    """
+    if _is_peak_window():
+        _log.info("cleanup_audit_log: skip — peak window (Warsaw lunch/dinner)")
+        return 0
+
+    _ensure_audit_log_initialized()
+    with _conn() as conn:
+        cur = conn.execute(
+            """DELETE FROM audit_log WHERE created_at < datetime('now', ?)""",
+            (f"-{retention_days} days",),
+        )
+        deleted = cur.rowcount
+        _log.info(f"cleanup_audit_log: usunieto {deleted} audit_log entries (retention={retention_days}d)")
+        return deleted
+
+
+def cleanup_broadcast(retention_days: int = 7) -> int:
+    """Czysci broadcast events (status='broadcast') starsze niz retention_days.
+
+    A4 follow-up (2026-05-08): broadcast events nie są konsumowane przez
+    cleanup() (filtruje po status='processed') ani cleanup_audit_log() (osobna
+    tabela). Subscribers konsumują przez cursor (NIE zmieniają status), więc
+    bez tego GC events table puchnie liniowo z liczbą broadcast emit.
+
+    Default 7d retention: dłużej niż jakikolwiek realistyczny subscriber gap
+    (consumer offline >7d to incydent), krócej niż audit_log 90d (broadcast NIE
+    służy audit — od tego jest audit_log dla typów w AUDIT_EVENT_TYPES).
+
+    MP-#5: Skip podczas peak window (Warsaw lunch/dinner) — DELETE blokuje readers.
+    """
+    if _is_peak_window():
+        _log.info("cleanup_broadcast: skip — peak window (Warsaw lunch/dinner)")
+        return 0
+
+    with _conn() as conn:
+        cur = conn.execute(
+            """DELETE FROM events
+               WHERE status = 'broadcast' AND created_at < datetime('now', ?)""",
+            (f"-{retention_days} days",),
+        )
+        deleted = cur.rowcount
+        _log.info(f"cleanup_broadcast: usunieto {deleted} broadcast events (retention={retention_days}d)")
+        return deleted
+
+
+def get_pending_count(event_types: Optional[list] = None) -> int:
+    """Zwraca liczbę pending events w tabeli events.
+    Opcjonalnie filtruje po event_types (np. tylko queue typy dla WORKER_STUCK alert)."""
+    with _conn() as conn:
+        if event_types:
+            placeholders = ",".join("?" * len(event_types))
+            cur = conn.execute(
+                f"""SELECT COUNT(*) as cnt FROM events
+                    WHERE status = 'pending' AND event_type IN ({placeholders})""",
+                tuple(event_types),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT COUNT(*) as cnt FROM events WHERE status = 'pending'"
+            )
+        return cur.fetchone()["cnt"]
+
+
+# Lazy init: _init_audit_log_table() wywoływane przy pierwszym emit_audit /
+# cleanup_audit_log via _ensure_audit_log_initialized(). NIE robimy module-load
+# init bo test env może nie mieć dostępu do _db_path() / load_config()['paths'].
+
+
+# ===========================================================================
+# A4 (audit META RC2 2026-05-07) — CONFIG_RELOAD broadcast pub/sub
+# ===========================================================================
+
+
+def make_broadcast_event_id(scope: str) -> str:
+    """Collision-immune event_id dla broadcast events.
+
+    Pattern: CONFIG_RELOAD_<scope>_<ns>_<hex>
+    ns = time.time_ns() (nanoseconds since epoch, monotonic enough)
+    hex = 8-char random suffix dla cross-process collision safety
+    """
+    import secrets
+    return f"CONFIG_RELOAD_{scope}_{time.time_ns()}_{secrets.token_hex(4)}"
+
+
+def _emit_broadcast_inner(
+    event_type: str,
+    scope: str,
+    payload_json: str,
+    created_at: str,
+    event_id: str,
+) -> Optional[str]:
+    """Inner emit dla broadcast events. status='broadcast' (NIE pending) — invisible
+    dla queue consumers (get_pending). Wrapped przez emit_config_reload."""
+    with _conn() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO events
+                   (event_id, event_type, order_id, courier_id, payload, created_at, status)
+                   VALUES (?, ?, NULL, NULL, ?, ?, 'broadcast')""",
+                (event_id, event_type, payload_json, created_at),
+            )
+            if cur.rowcount == 0:
+                conn.execute("COMMIT;")
+                _log.debug(f"DUP broadcast: {event_id}")
+                return None
+            conn.execute("COMMIT;")
+            _log.info(f"BROADCAST {event_type} scope={scope} id={event_id}")
+            return event_id
+        except sqlite3.OperationalError:
+            conn.execute("ROLLBACK;")
+            raise
+        except Exception as e:
+            conn.execute("ROLLBACK;")
+            _log.error(f"emit_broadcast() error: {e}")
+            raise
+
+
+def emit_config_reload(scope: str, payload: Optional[dict] = None) -> Optional[str]:
+    """Broadcast CONFIG_RELOAD event do wszystkich subscriberów.
+
+    scope: identifier co się zmieniło (np. 'flags', 'courier_tiers', 'kurier_ids').
+    payload: dict z details (np. {"name": "FLAG_X", "value": True}) — subscriber
+             może użyć do targeted invalidation albo zignorować i zrobić full reload.
+
+    Returns event_id (or None gdy SQLite locked exhausted retry).
+    Defensywne: emit fail NIE crashuje callera (logowane, return None).
+
+    Używa status='broadcast' w events table — invisible dla get_pending/queue
+    consumers. Subscriber używa poll_broadcast() z per-process cursor.
+    """
+    payload_dict = dict(payload or {})
+    payload_dict.setdefault("scope", scope)
+    payload_json = json.dumps(payload_dict, ensure_ascii=False)
+    created_at = now_iso()
+    event_id = make_broadcast_event_id(scope)
+    try:
+        return _retry_on_locked(
+            _emit_broadcast_inner, "CONFIG_RELOAD", scope, payload_json, created_at, event_id,
+        )
+    except Exception as e:
+        _log.error(f"emit_config_reload(scope={scope}) FAIL ({type(e).__name__}: {e})")
+        return None
+
+
+def poll_broadcast(
+    event_types: List[str],
+    since_event_id: Optional[str] = None,
+    limit: int = 100,
+) -> List[dict]:
+    """Subscriber poll dla broadcast events.
+
+    event_types: lista typów do filter (musi być subset BROADCAST_EVENT_TYPES).
+    since_event_id: cursor — zwracane TYLKO eventy z event_id > since (lex order).
+                    None → returns all broadcast events od początku (use cap dla limit).
+    limit: max events zwróconych w jednym poll.
+
+    Returns lista dictów {event_id, event_type, payload, created_at}.
+    Subscriber persistuje max(event_id) jako new cursor.
+    """
+    bad = [t for t in event_types if t not in BROADCAST_EVENT_TYPES]
+    if bad:
+        raise ValueError(f"poll_broadcast: event_types {bad} not in BROADCAST_EVENT_TYPES={BROADCAST_EVENT_TYPES}")
+    placeholders = ",".join("?" * len(event_types))
+    with _conn() as conn:
+        if since_event_id:
+            cur = conn.execute(
+                f"""SELECT event_id, event_type, payload, created_at
+                    FROM events
+                    WHERE status = 'broadcast'
+                      AND event_type IN ({placeholders})
+                      AND event_id > ?
+                    ORDER BY event_id ASC LIMIT ?""",
+                tuple(event_types) + (since_event_id, limit),
+            )
+        else:
+            cur = conn.execute(
+                f"""SELECT event_id, event_type, payload, created_at
+                    FROM events
+                    WHERE status = 'broadcast'
+                      AND event_type IN ({placeholders})
+                    ORDER BY event_id ASC LIMIT ?""",
+                tuple(event_types) + (limit,),
+            )
+        return [
+            {
+                "event_id": row["event_id"],
+                "event_type": row["event_type"],
+                "payload": json.loads(row["payload"]) if row["payload"] else {},
+                "created_at": row["created_at"],
+            }
+            for row in cur.fetchall()
+        ]
+

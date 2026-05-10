@@ -1,0 +1,12 @@
+# Test 2: edge case — 1 line missing tier (too few tokens)
+# Expected: 8 valid, 1 skipped (Daniel Malicki — `604` last token)
+
+Kuba Olchowik 600 std
+Marcin Bystrowski 601 std
+Gabriel Ostapczuk 602 new
+Szymon Bawerna 603 std
+Daniel Malicki 604
+Mykyta Kumeiko 426 std
+Szymon Sadowski 522 new
+Grzegorz Rogowski 500 new
+Filip Prończuk 354 std

@@ -9,7 +9,15 @@ from typing import List, Optional, Tuple
 
 
 def haversine_km(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    """Odleglosc w kilometrach. Punkty = (lat, lon)."""
+    """Odleglosc w kilometrach. Punkty = (lat, lon).
+
+    Fail-loud guards (Lekcja #81 cross-codebase fail-loud sentinel):
+    None / (0,0) → ValueError zamiast silent ~6285km (Bialystok→(0,0)).
+    """
+    if a is None or b is None:
+        raise ValueError(f"haversine_km: None coords (a={a!r}, b={b!r})")
+    if tuple(a) == (0.0, 0.0) or tuple(b) == (0.0, 0.0):
+        raise ValueError(f"haversine_km: sentinel (0,0) (a={a!r}, b={b!r})")
     R = 6371.0
     lat1, lon1 = math.radians(a[0]), math.radians(a[1])
     lat2, lon2 = math.radians(b[0]), math.radians(b[1])

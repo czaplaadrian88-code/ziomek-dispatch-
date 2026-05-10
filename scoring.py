@@ -6,6 +6,7 @@ Wzor: S = S_dyst*0.30 + S_obc*0.25 + S_kier*0.25 + S_czas*0.20
 Wejscie: kandydat po feasibility MAYBE
 Wyjscie: {total, components, reasoning, metrics}
 """
+import logging
 import math
 from typing import List, Optional, Tuple
 from dispatch_v2.geometry import haversine_km, bearing_deg, angle_between, bag_centroid
@@ -13,6 +14,10 @@ from dispatch_v2.common import (
     DEPRECATE_LEGACY_HARD_GATES, ENABLE_WAVE_SCORING, MAX_BAG_TSP_BRUTEFORCE,
     ENABLE_FLEET_OVERLOAD_PENALTY, OVERLOAD_THRESHOLD_BAGS, OVERLOAD_PENALTY,
 )
+
+# A1 (audit ARCHITECTURE 2026-05-07): module logger dla silent killer fix
+# (fleet_context.overload_delta exception path) — Lekcja #32.
+_log = logging.getLogger("scoring")
 
 W_DYSTANS  = 0.30
 W_OBCIAZENIE = 0.25
@@ -205,8 +210,16 @@ def score_candidate(
             if delta > OVERLOAD_THRESHOLD_BAGS:
                 total += OVERLOAD_PENALTY
                 overload_penalty_applied = OVERLOAD_PENALTY
-        except Exception:
-            pass  # unknown fleet_context shape → skip defensive
+        except Exception as _e:
+            # A1: dawniej silent → score drift gdy fleet_context shape zmiana
+            # (Lekcja #32). Hot path → dedup-by-class once-per-process (cap=10
+            # bo schema-error nie powinno mieć dużo wariantów).
+            seen = getattr(score_candidate, "_warned_overload", set())
+            cls = type(_e).__name__
+            if cls not in seen and len(seen) < 10:
+                _log.warning(f"fleet_context.overload_delta fail ({cls}: {_e}) — skip overload penalty")
+                seen.add(cls)
+                score_candidate._warned_overload = seen
 
     reasoning = (
         f"dist={road_km:.1f}km→{sd:.0f} | bag={bag_size}/{MAX_BAG_TSP_BRUTEFORCE}→{so:.0f} | "

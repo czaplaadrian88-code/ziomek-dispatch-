@@ -136,6 +136,7 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
     Event_id: {oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{epoch_ms} — unique per emit.
     """
     from dispatch_v2.event_bus import emit as _eb_emit
+    from dispatch_v2.event_bus import emit_audit as _eb_emit_audit
     from dispatch_v2.state_machine import update_from_event as _sm_apply
 
     delta_min = _v327_compute_delta_min(old_ck_iso, new_ck_iso)
@@ -159,7 +160,7 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
         "payload": payload,
     }
     try:
-        _eb_emit("CZAS_KURIERA_UPDATED",
+        _eb_emit_audit("CZAS_KURIERA_UPDATED",
                  order_id=oid, courier_id=courier_id or "",
                  payload=payload, event_id=event_id)
         _sm_apply(event)
@@ -886,6 +887,65 @@ class PipelineResult:
     # Domyślnie 0 (early_bird path nie wchodzi w feasibility loop).
     pool_total_count: int = 0
     pool_feasible_count: int = 0
+    # Faza 7-AUTO-PROXIMITY (2026-05-06): auto-route classification dla post-PROPOSE
+    # routing. Domyślnie "ACK" — backward compat: KOORD/SKIP nie odpalają classifier.
+    # Spec: eod_drafts/2026-05-06/faza_7_auto_proximity_design_spec.md
+    auto_route: str = "ACK"
+    auto_route_reason: str = ""
+    # Classifier telemetry snapshot — populated by _classify_and_set_auto_route.
+    # Zawiera: pool_feasible, score_margin, tier_best, pos_source_best, czasowka, etc.
+    # Read-only consumption w shadow_dispatcher serialize.
+    auto_route_context: Optional[Dict[str, Any]] = field(default_factory=dict)
+    # MP-#13 (2026-05-08): L3 caller propagation. True gdy osrm_client.is_degraded()
+    # przy entry do assess_order — caller (telegram_approver) może hint'ować "⚠
+    # degraded mode" w propozycji. Defaults False (healthy). Read-only consumption
+    # w shadow_dispatcher._serialize_result top-level field + decision_meta dict.
+    degraded_osrm: bool = False
+    # Snapshot diagnostic counters at assess_order time. Defaults to None (no degradation).
+    osrm_cache_age_s: Optional[float] = None
+    osrm_degraded_since_ts: Optional[float] = None
+
+
+def _classify_and_set_auto_route(
+    result: "PipelineResult",
+    fleet_snapshot: Optional[Dict[str, Any]],
+    order_event: Optional[Dict[str, Any]],
+    now: Optional[datetime] = None,
+) -> None:
+    """Faza 7-AUTO-PROXIMITY: populate result.auto_route + auto_route_reason.
+
+    Defensive: NIGDY raise — fallback do ACK przy any exception. Czyta flagi z
+    flags.json (hot-reload). Pure side-effect (mutates result).
+    """
+    try:
+        from dispatch_v2.auto_proximity_classifier import (
+            classify_auto_route, build_context_for_logging,
+        )
+        flags = C.load_flags()
+        route, reason = classify_auto_route(
+            result=result,
+            fleet_snapshot=fleet_snapshot,
+            now=now,
+            flags=flags,
+            order_event=order_event,
+        )
+        result.auto_route = route
+        result.auto_route_reason = reason
+        result.auto_route_context = build_context_for_logging(
+            result=result,
+            fleet_snapshot=fleet_snapshot,
+            flags=flags,
+            order_event=order_event,
+        )
+    except Exception as _e:
+        # Defense-in-depth: classifier exception NIE powinien zatrzymać dispatch.
+        result.auto_route = "ACK"
+        result.auto_route_reason = f"classifier_exception:{type(_e).__name__}"
+        result.auto_route_context = {}
+        try:
+            log.warning(f"auto_proximity classifier exception order={getattr(result, 'order_id', '?')}: {_e}")
+        except Exception:
+            pass
 
 
 def get_pickup_ready_at(
@@ -1030,6 +1090,16 @@ def assess_order(
         order_event, fleet_snapshot, restaurant_meta, now,
         pending_queue=pending_queue, demand_context=demand_context,
     )
+    # MP-#13 (2026-05-08): L3 — snapshot OSRM degraded state at assess time.
+    # Caller (shadow_dispatcher serializer + telegram_approver format_proposal) reads.
+    # Defensive: NIGDY raise (osrm_client import-fail unlikely ale fallback safe).
+    try:
+        from dispatch_v2 import osrm_client as _oc
+        result.degraded_osrm = bool(_oc.is_degraded())
+        result.osrm_cache_age_s = _oc.cache_age_s()
+        result.osrm_degraded_since_ts = _oc.degraded_since_ts()
+    except Exception:
+        pass  # MP-#13 defense-in-depth — leave defaults False/None
     try:
         from dispatch_v2.observability.candidate_logger import get_logger, serialize_candidate
         logger = get_logger()
@@ -1103,7 +1173,36 @@ def _assess_order_impl(
     order_id = str(order_event.get("order_id") or "")
     restaurant = order_event.get("restaurant")
     delivery_address = order_event.get("delivery_address")
-    pickup_coords = tuple(order_event.get("pickup_coords") or (0.0, 0.0))
+
+    # Defense gate (L2): brak pickup_coords = order bez geokodacji.
+    # Pre-fix scenariusz: panel_watcher dla firmowego konta (address_id=161)
+    # zostawiał pickup_coords=None → tuple() fallback (0,0) → haversine sentinel
+    # 6285km → wszyscy kurierzy pickup_too_far → BRAK KANDYDATÓW. Post-fix:
+    # parser uwag (L1) wypełnia coords gdy uwagi mają adres; gdy NIE (P3 edge,
+    # parser regression, malformed uwagi) — fail-loud SKIP zamiast śmieciowy
+    # feasibility loop. czasowka_scheduler emit'uje dedicated Telegram alert
+    # PRZED tym wywołaniem (visible operator).
+    _raw_pickup_coords = order_event.get("pickup_coords")
+    if _raw_pickup_coords is None or _raw_pickup_coords == [0.0, 0.0] or _raw_pickup_coords == (0.0, 0.0):
+        log.warning(
+            f"assess_order SKIP {order_id} aid={order_event.get('address_id')!r}: "
+            f"pickup_coords missing — defense gate (no geocode); "
+            f"uwagi_parsed={order_event.get('uwagi_pickup_parsed')!r}"
+        )
+        return PipelineResult(
+            order_id=order_id,
+            verdict="SKIP",
+            reason="no_pickup_geocode",
+            best=None,
+            candidates=[],
+            pickup_ready_at=None,
+            restaurant=restaurant,
+            delivery_address=delivery_address,
+            pool_total_count=0,
+            pool_feasible_count=0,
+        )
+
+    pickup_coords = tuple(_raw_pickup_coords)
     delivery_coords = tuple(order_event.get("delivery_coords") or (0.0, 0.0))
 
     # V3.19f: czas_kuriera_warsaw first-choice pod flagą (panel HH:MM commitment).
@@ -1125,9 +1224,21 @@ def _assess_order_impl(
             f"oid={order_id}"
         )
 
+    # Fix 2026-05-07: early_bird threshold patrzy na RAW pickup_at_warsaw (deklaracja
+    # restauracji), NIE extended czas_kuriera_warsaw. Bug strukturalny od V3.19f deploy:
+    # czasowka_scheduler liczy mtp z raw, assess_order early_bird patrzył na extended →
+    # czasówki przedłużone Ziomkiem o 20-30min były KOORD'owane jako pool=0 mimo że
+    # czasowka_scheduler był w T-40 trigger window. Eliminuje 49% KOORD czasówek
+    # (`zero MAYBE` 19× / 39 całych w 5-day eval_log obs).
+    pickup_at_for_early_bird_raw = order_event.get("pickup_at_warsaw") or order_event.get("pickup_at")
+    pickup_at_for_early_bird = (
+        parse_panel_timestamp(pickup_at_for_early_bird_raw)
+        if pickup_at_for_early_bird_raw else pickup_at
+    )
+
     # Early bird → KOORD
-    if pickup_at is not None:
-        pu = pickup_at if pickup_at.tzinfo else pickup_at.replace(tzinfo=WARSAW)
+    if pickup_at_for_early_bird is not None:
+        pu = pickup_at_for_early_bird if pickup_at_for_early_bird.tzinfo else pickup_at_for_early_bird.replace(tzinfo=WARSAW)
         minutes_ahead = (pu.astimezone(timezone.utc) - now).total_seconds() / 60.0
         if minutes_ahead >= EARLY_BIRD_THRESHOLD_MIN:
             return PipelineResult(
@@ -1367,6 +1478,7 @@ def _assess_order_impl(
             sla_minutes=sla_minutes,
             base_sequence=_base_sequence,
             r07_chain_eta_utc=r07_chain_eta_utc,  # V3.26 STEP 6 R-07 MANDATORY when flag=True
+            pos_source=getattr(cs, "pos_source", None),  # V3.28 ETAP 2 — clamp gate
         )
 
         # F1.8f hard guard: kurier którego zmiana kończy się PRZED pickup_ready_at
@@ -2152,6 +2264,12 @@ def _assess_order_impl(
                     "order_id": str(b.get("order_id") or ""),
                     "restaurant": b.get("restaurant"),
                     "delivery_address": b.get("delivery_address"),
+                    # V3.28 (2026-05-09) — czas_kuriera per bag-order propagowany do
+                    # bag_context payload, żeby telegram_approver render mógł
+                    # preferować commit zamiast computed ETA z plan.pickup_at.
+                    # Backward compat: nowe pola optional, downstream ignore gdy None.
+                    "czas_kuriera_warsaw": b.get("czas_kuriera_warsaw"),
+                    "czas_kuriera_hhmm": b.get("czas_kuriera_hhmm"),
                 }
                 for b in bag_raw
                 if b.get("order_id")
@@ -2510,7 +2628,7 @@ def _assess_order_impl(
                     f"LGBM_SHADOW oid={order_id} winner_lgbm=None winner_current={top[0].courier_id if top else None} "
                     f"agreement=None fallback=exception_in_pipeline latency_ms=0.0 pool_size=0 model_version=unknown"
                 )
-        return PipelineResult(
+        _result_pf = PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",
             reason=f"feasible={len(feasible)} best={top[0].courier_id}",
@@ -2522,6 +2640,8 @@ def _assess_order_impl(
             pool_total_count=len(candidates),
             pool_feasible_count=len(feasible),
         )
+        _classify_and_set_auto_route(_result_pf, fleet_snapshot, order_event, now=now)
+        return _result_pf
 
     # R28 best_effort: NO candidates that still produced a plan (SLA-only rejections)
     # F2.1c: verdict PROPOSE (nie KOORD) — Telegram musi to zobaczyć, Adrian decyduje
@@ -2530,7 +2650,7 @@ def _assess_order_impl(
     if with_plan:
         best = with_plan[0]
         best.best_effort = True
-        return PipelineResult(
+        _result_be = PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",
             reason=f"best_effort (0 feasible, best_violations={best.plan.sla_violations})",
@@ -2542,6 +2662,8 @@ def _assess_order_impl(
             pool_total_count=len(candidates),
             pool_feasible_count=0,
         )
+        _classify_and_set_auto_route(_result_be, fleet_snapshot, order_event, now=now)
+        return _result_be
 
     # R29 SOLO fallback: zamiast SKIP — spróbuj przydzielić SOLO (pusty bag, ignoruje R1/R5/R8)
     solo_best = None
@@ -2559,6 +2681,7 @@ def _assess_order_impl(
                 shift_start=getattr(cs, "shift_start", None),
                 now=now,
                 sla_minutes=35,
+                pos_source=getattr(cs, "pos_source", None),  # V3.28 ETAP 2 — clamp gate
             )
             if sv in ("YES", "MAYBE") and sp is not None:
                 sc = sm.get("pickup_dist_km", 999)
@@ -2579,7 +2702,7 @@ def _assess_order_impl(
             pass
 
     if solo_best is not None:
-        return PipelineResult(
+        _result_solo = PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",
             reason=f"solo_fallback (R1/R5/R8 ignored, fleet_n={len(candidates)})",
@@ -2591,6 +2714,8 @@ def _assess_order_impl(
             pool_total_count=len(candidates),
             pool_feasible_count=0,
         )
+        _classify_and_set_auto_route(_result_solo, fleet_snapshot, order_event, now=now)
+        return _result_solo
 
     # R29 absolutny fallback: nikt nie przechodzi nawet solo — KOORD
     return PipelineResult(

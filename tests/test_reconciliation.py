@@ -198,7 +198,7 @@ def test_auto_resync_emits_correct_event():
     assert e["order_id"] == "R1"
     assert e["courier_id"] == "393"
     assert e["payload"]["source"] == "reconciliation_inferred"
-    assert e["event_id"] == "R1_COURIER_DELIVERED_phantom_resync"
+    assert e["event_id"] == "R1_COURIER_DELIVERED_canonical"  # F10 2026-05-09
 t("auto_resync_emits_correct_event", test_auto_resync_emits_correct_event)
 
 
@@ -222,9 +222,11 @@ def test_auto_resync_hard_cap_5():
     def fake_emit(**kw): emitted.append(kw); return kw.get("event_id")
     def fake_update(_): return None
 
+    # F14 (2026-05-09): hard_cap_max=5 forces effective cap=5, 6 > 5 → safety stop.
+    # Default dynamic_scaling=True ALE hard_cap_max=5 wymusza legacy semantics.
     result = auto_resync.auto_resync_phantoms(
         discrepancies, fake_emit, fake_update,
-        age_threshold_hours=4.0, hard_cap_per_run=5,
+        age_threshold_hours=4.0, hard_cap_per_run=5, hard_cap_max=5,
     )
     assert result["counts"]["hard_cap_hit"] is True
     assert result["counts"]["auto_resyncs"] == 0
@@ -328,7 +330,7 @@ def test_log_record_structure():
         "inferred_terminal_event": "COURIER_DELIVERED",
         "inferred_reason": "test",
         "action": "resynced",
-        "emitted_event_id": "L1_COURIER_DELIVERED_phantom_resync",
+        "emitted_event_id": "L1_COURIER_DELIVERED_canonical",  # F10 2026-05-09
     }]
     counts = {"phantoms_total": 1, "auto_resyncs": 1}
     records = reconcile_log.build_records(actions, run_id="test_run", counts=counts)

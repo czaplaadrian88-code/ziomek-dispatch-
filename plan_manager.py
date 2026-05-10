@@ -77,7 +77,10 @@ def _atomic_write(path: Path, data: Any) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp_name, path)
-    except Exception:
+    except Exception as _e:
+        # A1: log path PRZED re-raise żeby caller widział co fail'owało.
+        # Re-raise pattern OK (cleanup tmpfile + propagate do callera).
+        _log.error(f"atomic write fail path={path} ({type(_e).__name__}: {_e})")
         try:
             os.unlink(tmp_name)
         except FileNotFoundError:
@@ -381,7 +384,15 @@ def gc_invalidated(older_than_hours: float = 24.0) -> int:
                 continue
             try:
                 inv_ts = datetime.fromisoformat(inv.replace("Z", "+00:00")).timestamp()
-            except Exception:
+            except Exception as _e:
+                # A1: dawniej silent → bad invalidated_at zostawał na zawsze
+                # (GC nie usuwa). Dedup-by-class cap=50.
+                seen = getattr(gc_invalidated, "_warned_inv", set())
+                key = (type(_e).__name__, str(inv)[:40])
+                if key not in seen and len(seen) < 50:
+                    _log.warning(f"invalidated_at parse fail cid={cid} ({type(_e).__name__}: {_e}) input={inv!r}")
+                    seen.add(key)
+                    gc_invalidated._warned_inv = seen
                 continue
             if inv_ts < cutoff_ts:
                 to_del.append(cid)

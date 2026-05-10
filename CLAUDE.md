@@ -36,12 +36,297 @@ Zawiera:
 - State: `/root/.openclaw/workspace/dispatch_state/`
 - Logs: `/root/.openclaw/workspace/scripts/logs/`
 - Health: `http://localhost:8888/health/parser`
+- **Audyt architektoniczny:** `dispatch_v2/AUDIT_2026-05-07/` — pełna analiza architektury z 07.05.2026 wieczór: mapa systemu (16 services + 12 timers + lifecycle ordera), top 20 ryzyk priorytetyzowanych P×I, lista 10 najbardziej krytycznych plików (god objects, fan-in, except count), 10 modułów do deep audit (Tier A/B/C), oceny: maintainability 5/10, scalability 3/10, production 6/10. Quick wins P0-P2 + appendix konkretnych anti-patterns z `plik:linia`. Cross-ref: TECH_DEBT.md, MEMORY/lessons.md #32/#80/#81/#82. Re-audit cadence: pre-Faza 7 100% flip / pre-multi-tenant Warsaw.
 
 ---
 
 **Owner:** Adrian Czapla <ac@nadajesz.pl>
-**Last update CLAUDE.md:** 04.05.2026
-EOF
+**Last update CLAUDE.md:** 07.05.2026 ~11:18 Warsaw (firmowe Nadajesz.pl uwagi parser + fallback coords + 6-warstwowa defense + R6 BAG_TIME suppress, post-sprint 07.05 morning #4)
+
+---
+
+# CLAUDE.md — Nadajesz.pl firmowe konto + alert suppress sprint (post-sprint 07.05 morning #4)
+
+**Data:** 07.05.2026 08:41-09:18 UTC (= 10:41-11:18 Warsaw, **deploy w peaku** per Adrian explicit override)
+**Latest tags chronologicznie:**
+- `nadajesz-firmowe-uwagi-parser-fallback-2026-05-07` (commit `e6c0895`) — parser uwag + fallback coords + 5-layer defense
+- `firmowe-konto-koord-suppress-2026-05-07` (commit `e47a529`) — czasówka KOORD alert off dla firmowych
+- `firmowe-konto-shadow-suppress-2026-05-07` (commit `442cda9`) — shadow PROPOSE off dla firmowych
+- `firmowe-konto-telegram-defense-2026-05-07` (commit `bc9b3ca`) — telegram_approver belt-and-suspenders defense
+- `bag-time-alerts-suppress-2026-05-07` (commit `5419080`) — R6 BAG_TIME >30min Telegram off
+
+**Branch:** `sprint-07-05-event-bus-opcja-c` ahead `master@10c754d` o **+22 commits**.
+
+## Co zrobione
+
+### Root cause: firmowe konto Nadajesz.pl (address_id=161)
+Klient korporacyjny zlecał przez konto firmowe panel z adresem pickup w polu `uwagi` (free-text), pipeline zostawiał `pickup_coords=None` → `osrm_client.haversine` sentinel ~6285km → wszyscy `pickup_too_far` HARD REJECT → "BRAK KANDYDATÓW" dla każdego firmowego (~3-5/dzień).
+
+### 6-warstwowa defense-in-depth
+| Warstwa | Plik | Mechanizm |
+|---|---|---|
+| L0 | `panel_watcher.py` | Parser uwag → real geocode (Mickiewicza 50, Wyszyńskiego 2/75) lub fallback coords gdy parser fail |
+| L1 | `dispatch_pipeline.py` | Defense gate `assess_order` SKIP/no_pickup_geocode na None coords |
+| L2 | `czasowka_scheduler.py` | KOORD alert suppress dla firmowych (flag) |
+| L3 | `shadow_dispatcher.py` | Verdict PROPOSE → SUPPRESSED_FIRMOWE_KONTO przed shadow log write |
+| L4 | `telegram_approver.py` | proposal_sender continue (skip sendMessage) — belt-and-suspenders |
+| L5 | `osrm_client.py` | Fail-loud haversine na None / (0,0) cross-codebase (Lekcja #32 + #81) |
+| L6 | `sla_tracker.py` | R6 BAG_TIME >30min alert suppressed (orthogonal — Adrian zarządza przez panel) |
+
+### Adrian fallback decision (mid-sprint pivot)
+`FIRMOWE_KONTO_FALLBACK_COORDS = (53.13222, 23.16844)` [DMS 53°07'56.0"N 23°10'06.4"E centrala Nadajesz.pl]. Architecture: parser PRIMARY → real geocode; FALLBACK gdy parser None (P3 edge "MALI WOJOWNICY"-only) ALBO geocode fail. **Eliminuje BRAK KANDYDATÓW dla 100% firmowych** — zawsze coords (real or fallback) → real feasibility pool.
+
+### Tests
+- 53 unit parser (production fixtures replay 25/25 + 28 named tests)
+- 18 defense gates (haversine fail-loud + dispatch_pipeline gate + KOORD alert formatter + fallback coords + suppression layers)
+- 21/21 classifier + 13/13 parser_health regression
+- Total: **111/111 critical regression PASS** post-sprint
+
+### Empirical fixture base
+`tests/fixtures/uwagi_firmowe.jsonl` — 25 sampli z 30 dni production (Lekcja #82 empirical-first parsing). Patterns: P1 STRUCTURED 84% / P2 NARRATIVE 12% / P3 COMPANY-ONLY 8%.
+
+## Stan flag (LIVE od 2026-05-07)
+
+`flags.json` (hot-reload, runtime check via `C.flag(name, default)`):
+```json
+{
+  "ENABLE_UWAGI_ADDRESS_PARSER": true,
+  "ENABLE_FIRMOWE_KONTO_KOORD_ALERTS": false,
+  "ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS": false,
+  "ENABLE_BAG_TIME_ALERTS": false
+}
+```
+
+Konstanty `common.py` env-overridable:
+- `FIRMOWE_KONTO_ADDRESS_IDS = frozenset({161})` (Nadajesz.pl firmowe konto, per-tenant ready)
+- `FIRMOWE_KONTO_FALLBACK_COORDS = (53.13222, 23.16844)`
+- `UWAGI_PARSER_COMPANY_STOPLIST = frozenset({...})` (33 entries — Mali Wojownicy, Drtusz, etc.)
+- `ENABLE_UWAGI_ADDRESS_PARSER` (env → "1"=True default)
+- `ENABLE_BAG_TIME_ALERTS` (env → "0"=False default)
+- `PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW=9` / `PARSER_HEALTH_STUCK_MIN_BASELINE=3` / `PARSER_HEALTH_DELTA_MIN_ABS_DIFF=3`
+
+## Restarty dziś (peak override per Adrian explicit ACK)
+
+| Czas (UTC) | Service | Downtime | Status |
+|---|---|---|---|
+| 08:41:23 | dispatch-shadow #1 | ~6s | clean, ortools warm-up 148ms |
+| 08:43:46 | dispatch-panel-watcher | ~5s | Health OK 241 orders, Layer 4 endpoint LIVE |
+| 08:59:07 | dispatch-shadow #2 | ~7s | clean, 53s pre-peak buffer |
+| 09:09:44 | dispatch-telegram | ~6s | **pending=3 callback handlers preserved** (peak override per "napraw to" + AskUserQuestion ACK) |
+| 09:16:31 + 09:18:01 | dispatch-sla-tracker ×2 | ~3s each | Type=simple daemon, non-critical |
+
+Zero downstream errors w log post-restarts. Peak 11:00-14:00 Warsaw aktywny (Lekcja #34 wyjątek peak hard rule).
+
+## Rollback procedury
+
+**Per-flag (hot-reload, ~5s, no restart):**
+```bash
+python3 -c "import json,os,tempfile; p='/root/.openclaw/workspace/scripts/flags.json'; d=json.load(open(p)); d['<FLAG_NAME>']=<bool>; fd,t=tempfile.mkstemp(dir=os.path.dirname(p)); open(fd,'w').write(json.dumps(d,indent=2,ensure_ascii=False)); os.replace(t,p)"
+```
+
+Flag map → expected effect:
+- `ENABLE_UWAGI_ADDRESS_PARSER=false` — parser path off, defense gate L1 fires na None coords (firmowe znów BRAK KANDYDATÓW manual KOORD)
+- `ENABLE_FIRMOWE_KONTO_KOORD_ALERTS=true` — czasówka KOORD alerty firmowe ON znów
+- `ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=true` — shadow + telegram defense bypass, firmowe PROPOSE wraca do Telegrama
+- `ENABLE_BAG_TIME_ALERTS=true` — sla_tracker R6 alerty >30min ON znów (wymaga sla-tracker restart żeby code refresh — UWAGA: oba dni po flip True nadrabia burst alerty starsze ordery)
+
+**Full git revert sprintu firmowe (5 commits):**
+```bash
+cd /root/.openclaw/workspace/scripts/dispatch_v2
+git revert e6c0895 e47a529 442cda9 bc9b3ca 5419080 --no-edit
+sudo systemctl restart dispatch-shadow dispatch-panel-watcher dispatch-sla-tracker
+# dispatch-telegram WYMAGA Adrian explicit ACK
+```
+
+**Backups (24h retention):**
+- `.bak-pre-uwagi-parser-2026-05-07` (9 plików: common, czasowka, dispatch_pipeline, geocoding, osrm, panel_watcher, parser_health, state_machine, flags)
+- `.bak-pre-firmowe-suppress-2026-05-07` (1 plik: telegram_approver)
+- `.bak-pre-bag-time-suppress-2026-05-07` (1 plik: sla_tracker)
+
+## Pending decyzje
+
+- **Live verification firmowy order post-deploy** — wait, kod zwalidowany pre-deploy + smoke E2E 8/8 PASS
+- **Master merge gate 10.05** — branch ahead +22 commits, gate aktywny
+- **TECH_DEBT future:** `firmowe_konto_company_addresses.json` static map dla P3 edge (Mali Wojownicy → real adres) | `geocoding_log.jsonl` audit trail (LGBM training reproducibility)
+
+## Lekcje NEW (sprint #4)
+
+- **#80** — tracone pole `uwagi` between layers (panel_client parsował, state_machine drop'ował). Audit consumers gdy nowy field dodany do source-of-truth boundary
+- **#81** — fail-loud sentinel cross-codebase (haversine None/(0,0) → ValueError, eliminuje silent 6285km bug)
+- **#82** — empirical fixture-first parsing (25 production samples PRZED regex implementation, Lekcja #33 rozszerzona)
+- **#83** — architectural decision late-binding (Adrian fallback coords mid-sprint pivot bez code rewrite — constant w common.py + env override)
+
+---
+
+# CLAUDE.md — parser_health structural fix (post-sprint 07.05 noc)
+
+**Data:** 07.05.2026 ~01:11 Warsaw (= 06.05 23:11 UTC)
+**Latest tags:**
+- `parser-health-snapshot-active-2026-05-07` (commit `bbb36fa`) — get_health_snapshot consistency
+- `parser-health-active-ids-2026-05-07` (commit `579f282`) — Layer 2 STUCK + DELTA → active_ids
+- `telegram-utils-pytest-guard-2026-05-07` (commit `3ce489e`) — L1 prod + L2 conftest defense
+- `parser-health-test-tg-mock-2026-05-07` (commit `ea5df8b`) — L3 per-file fixture
+
+**Restart history dziś:**
+- 23:01:44 UTC (#1 active_ids deploy) — clean, 13s downtime
+- 23:09:57 UTC (#2 endpoint consistency) — clean, 13s downtime
+
+**Live state post-restart-2:** `:8888/health/parser` → `status=healthy, anomaly_detected=false, anomaly_reason=null`. cycle 10 entry: `orders_in_panel=228 active_orders=0` (panel ma 228 IDs wszystkie terminalne post-rollover).
+
+**Co zrobione (root cause + 3-warstwowa obrona):**
+- **Diagnoza:** Adrian alerty PARSER_STUCK 06.05 23:30 Warsaw → 75% leak z testów (commit `03a4bdf` brak mock_telegram fixture) + 25% real production (panel daily rollover 22:00 UTC).
+- **Root cause spamu 17/dzień od 02.05:** `panel_html_parser.py:87` regex `r"id:\s*(\d{5,7})"` łapie all-today's IDs niezależnie od `id_status`. order_ids count plateauje wieczorem post ostatnie zlecenie. Layer 2 STUCK pisany na fałszywym założeniu "count = active orders". Sprint 07.05 set-comparison "calibration" (`9a5a38a`) nie naprawił bo set też plateauje (te same IDs codziennie).
+- **Strukturalny fix:** `active_ids = order_ids - closed_ids` (closed_ids dostarczany przez parser via DOM marker `data-idkurier` missing). CHECK 2 (DELTA) + CHECK 3 (STUCK) + `get_health_snapshot` używają active_*. CHECK 1 ZERO_OUTPUT zostaje na orders_in_panel.
+- **Telegram leak fix 3-warstwowo:** L1 production `telegram_utils.send_admin_alert` sprawdza `PYTEST_CURRENT_TEST` env (auto-set przez pytest, w prod nigdy), opt-out `ALLOW_TELEGRAM_IN_TEST=1`. L2 `tests/conftest.py` autouse monkeypatch (belt-and-suspenders). L3 per-file `_block_real_telegram` fixture w `test_parser_health_set_detection.py`. Audit: 119 plików testów, ZERO conftest.py przed fixem, 7 prod modułów importuje send_admin_alert.
+
+**Tests:** 13/13 PASS set_detection (9 baseline + 4 nowe: late-evening panel keeps delivered, real miss active stuck + motion, delta uses active not order_ids, fallback gdy brak closed_ids) + 22/22 Layer3 regression.
+
+**Lekcje + feedback rules:**
+- **#76 NEW** (`lessons.md`): anomaly detection input semantics — verify steady-state behavior + replay 24h real data przed deploy. "Calibration" tuning thresholds gdy root cause = wrong input semantics = anti-pattern.
+- **#75 rozszerzona**: 3-warstwowa obrona Telegram leak z testów (L1 prod env + L2 conftest + L3 per-file).
+- **Feedback rule** "Root cause depth obligatory — never patch surface" (Adrian explicit 07.05 noc): "Twoja praca ma być najwyższej jakości, a system później niezawodny."
+
+**Branch:** `sprint-07-05-event-bus-opcja-c` 17 commits ahead `master@10c754d`. Master merge gate 10.05.
+
+**Rollback (cały parser_health structural fix):**
+```bash
+cd /root/.openclaw/workspace/scripts/dispatch_v2
+git revert bbb36fa 579f282 3ce489e ea5df8b --no-edit
+sudo systemctl restart dispatch-panel-watcher
+```
+
+**Backup files (24h retention):**
+- `parser_health.py.bak-pre-active-ids-2026-05-07`
+- `tests/test_parser_health_set_detection.py.bak-pre-active-ids-2026-05-07`
+- `tests/test_parser_health_set_detection.py.bak-pre-tg-mock-2026-05-07`
+- `telegram_utils.py.bak-pre-pytest-guard-2026-05-07`
+
+---
+
+# CLAUDE.md — Faza 7-AUTO-PROXIMITY Etap 0 LIVE shadow + czasówki fleet fix (post-sprint 06.05 wieczór)
+
+**Data:** 06.05.2026 ~20:30 UTC
+**Latest tags:**
+- `faza-7-auto-proximity-shadow-impl-2026-05-06` (commit `14b4e70`) — Faza 7 classifier shadow LIVE
+- `czasowka-fleet-shift-end-fix-2026-05-06` (commit `69223b3`) — czasowka_scheduler dispatchable_fleet fix
+
+**Project memory (READ FIRST jutro):** `sprint_2026-05-06_evening_close.md` + `/tmp/architectural_audit/SESSION_HANDOFF_2026-05-07_morning.md`
+
+**Pending:**
+- **Lunch peak verify 07.05 11-14 lokalnie (09-12 UTC)** — czasówki kandydaci > 0, Faza 7 distribution AUTO/ACK/ALERT
+- Bartek user_id dla `KONIEC_AUTHORIZED_USER_IDS` (TASK B tech debt z 04.05)
+- Track C `replay_failed.py` same dispatchable_fleet bug (off-line tool, low priority)
+- Faza 7 Etap 1 calibration ~13.05 (post 7-day shadow obs)
+- Master merge gate 10.05 dla branch `sprint-07-05-event-bus-opcja-c`
+
+---
+
+## SPRINT 06.05 WIECZÓR — co zrobione
+
+### Sprint A — Czasówki fleet fix (Track A)
+
+**Incident #471036 14:24 UTC** Karczma Maciejówka — "BRAK KANDYDATÓW" (3 aktywni kurierzy odrzuceni `v325_NO_ACTIVE_SHIFT`).
+
+**Root cause:** `czasowka_scheduler.py:285` używał raw `build_fleet_snapshot()` (zostawia `shift_end=None`) zamiast `dispatchable_fleet()` (wzbogaca o `shift_end` z V3.24-A grafiku) — `feasibility_v2:300` Fail-CLOSED hard-rejects wszystkich.
+
+**Fix:** 1-line mirror `shadow_dispatcher:521` pattern. Test `tests/test_czasowka_dispatchable_fleet_fix.py` 3/3 PASS, causal verified (revert→2/3 FAIL, restore→3/3 PASS). Regression 71/71 czasówka. Deploy: oneshot timer auto-pickup w 1-min tick.
+
+**Audit consumers raw `build_fleet_snapshot()`:**
+- `czasowka_scheduler.py:285` — BUG (fix LIVE)
+- `courier_resolver.py:587` — OK (wewnątrz `dispatchable_fleet()` self-enrichment)
+- `replay_failed.py:132` — same bug, off-line debug (Track C deferred)
+- `shadow_dispatcher.py` docstring — comment tylko, prod używa `dispatchable_fleet()` (linia 521)
+
+### Sprint B — T-60 trigger w flags.json
+
+`CZASOWKA_TRIGGERS_MIN: [50, 40] → [60, 50, 40]` + `CZASOWKA_T60_ENABLED: true`. Per-trigger flag pattern w `evaluator.py:277` `f"CZASOWKA_T{trigger_min}_ENABLED"` — T60 łapie automatycznie. Hot-reload, zero restart.
+
+### Sprint C — Faza 7-AUTO-PROXIMITY Etap 0 LIVE shadow
+
+**Spec:** `eod_drafts/2026-05-06/faza_7_auto_proximity_design_spec.md`
+
+**8 plików +1185 LOC insertions, 27 nowych testów:**
+- NEW `auto_proximity_classifier.py` — pure function `classify_auto_route(...) → (route, reason)`. T1/T2/T3 thresholds. 6 conditions. 11 edge cases. Deterministic, no I/O.
+- `common.py` — `ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN` flag (env-overridable, default OFF)
+- `courier_resolver.py` — `_post_shift_start_synthetic_eligible()` helper (Adrian decyzja A1: GPS off + 5min po shift_start → BIALYSTOK_CENTER)
+- `dispatch_pipeline.py` — `PipelineResult.auto_route` ('ACK' default) + `auto_route_reason` + `auto_route_context` dict + `_classify_and_set_auto_route` helper z defense-in-depth (classifier exception → fallback ACK + warning log)
+- `shadow_dispatcher.py` — `_serialize_result` emit auto_route fields top-level
+- `telegram_approver.py` — `format_proposal` linijka "🤖 PEWIEN — auto-przypisałbym {kurier} [{tier}] (margin +X)" gdy `decision.auto_route='AUTO'`
+- `flags.json` — `AUTO_PROXIMITY_ENABLED=false`, `SHADOW_ONLY=true`, `THRESHOLD=T1`, `PARSER_DEGRADED=false`
+
+**Adrian decyzje 2026-05-06:**
+- A1: GPS off OK + 5min po shift_start synthetic position
+- B-A: `gastro stop`/`gastro start` Telegram cmd wyłącza tylko AUTO (deferred Etap 2)
+- C-Y: czasówki KOORD T-60/T-50/T-40 = osobny track (Sprint A+B z dziś)
+- ANULUJ uprawnienia: Adrian + Bartek (deferred Etap 2)
+- Czasówki ZAWSZE → ACK w T1
+- ALERT ZAWSZE human gate
+
+**Threshold table T1 (placeholder, calibration after shadow week):**
+- min_pool_feasible=2, min_score_margin=15.0, tiers=(gold, std+), min_score=50.0, strict_gps=False
+
+**Tests:** 21/21 classifier unit + 6/6 integration + 71/71 czasówka regression + 13/13 schedule = **111/111 PASS**.
+
+**Deploy 06.05:**
+- 20:24:38 UTC stop dispatch-shadow + dispatch-panel-watcher
+- 20:24:50 UTC start oba (clean, ortools 125ms, panel_client login OK 4913ms)
+- 20:25:57 UTC end-to-end smoke z LIVE fleet (Szymon P) → ACK z `shift_end_edge_<=15min` correctly detected
+- 20:27:16 UTC restart dispatch-telegram (Adrian explicit ACK)
+
+### Stan flag (LIVE od 06.05.2026 ~20:25 UTC w `flags.json`)
+
+```json
+{
+  "AUTO_PROXIMITY_ENABLED": false,
+  "AUTO_PROXIMITY_SHADOW_ONLY": true,
+  "AUTO_PROXIMITY_THRESHOLD": "T1",
+  "PARSER_DEGRADED": false,
+  "CZASOWKA_TRIGGERS_MIN": [60, 50, 40],
+  "CZASOWKA_T60_ENABLED": true,
+  "CZASOWKA_T50_ENABLED": true,
+  "CZASOWKA_T40_ENABLED": true,
+  "CZASOWKA_PROACTIVE_ENABLED": true,
+  "CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES": true,
+  "CZASOWKA_T0_ALERT_ENABLED": false
+}
+```
+
+### Rollback procedury
+
+**Czasówki fleet fix soft (5s):**
+```bash
+cp /root/.openclaw/workspace/scripts/dispatch_v2/czasowka_scheduler.py.bak-pre-fleet-fix-2026-05-06 /root/.openclaw/workspace/scripts/dispatch_v2/czasowka_scheduler.py
+# next 1-min tick automatycznie revert
+```
+
+**Faza 7 Etap 0 soft (5s, hot-reload, NIE wykonuje classifier):**
+```bash
+python3 -c "import json,os,tempfile; p='/root/.openclaw/workspace/scripts/flags.json'; d=json.load(open(p)); d['AUTO_PROXIMITY_SHADOW_ONLY']=False; fd,t=tempfile.mkstemp(dir=os.path.dirname(p)); open(fd,'w').write(json.dumps(d,indent=2,ensure_ascii=False)); os.replace(t,p)"
+```
+
+**Faza 7 hard (revert kod):**
+```bash
+cd /root/.openclaw/workspace/scripts/dispatch_v2
+git revert 14b4e70 --no-edit
+sudo systemctl restart dispatch-shadow dispatch-panel-watcher
+# dispatch-telegram WYMAGA Adrian ACK
+```
+
+### Backup files (24h retention)
+
+- `czasowka_scheduler.py.bak-pre-fleet-fix-2026-05-06`
+- `flags.json.bak-pre-t60-2026-05-06`
+- `flags.json.bak-pre-faza-7-shadow-2026-05-06`
+
+### Lekcje candidate
+
+- **#80**: Audit consumers całościowo przy zmianie API (`czasowka_scheduler` używał innego entry-pointa do floty niż reszta pipeline → bug niewidoczny od V3.24-A 22.04)
+- **#81**: Aider mock strategy — mockuj boundary modułu, nie testowaną funkcję samą
+- **#82**: Aider misnie path z `--message` zawierającym apostrofy
+- **#83**: Defense-in-depth wrapper helper z try/except w hot path (classifier wywoływany w `assess_order` → wrapper fallback ACK + warning log)
+- **#84**: Empirical reality vs design intencja (cid=26 w state_dump = 0 ZAWSZE bo transient — bug widoczny tylko przez incident alert)
+
+---
 
 # CLAUDE.md — TASK B SHIFT NOTIFICATIONS Phase 0+1 LIVE (post-sprint 04.05 wieczór)
 

@@ -1,0 +1,12 @@
+# Test 3: edge case — duplicate cid (Kuba i Marcin oboje 600)
+# Expected: Kuba accepted, Marcin skipped (cid=600 duplicated within input)
+
+Kuba Olchowik 600 std
+Marcin Bystrowski 600 std
+Gabriel Ostapczuk 602 new
+Szymon Bawerna 603 std
+Daniel Malicki 604 slow
+Mykyta Kumeiko 426 std
+Szymon Sadowski 522 new
+Grzegorz Rogowski 500 new
+Filip Prończuk 354 std

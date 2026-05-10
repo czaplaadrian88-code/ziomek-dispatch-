@@ -455,8 +455,9 @@ def analyze_silent_agreement(entries: list[dict]) -> dict:
             continue
 
         try:
+            # Opcja C (2026-05-07): COURIER_ASSIGNED to audit type → audit_log table.
             row = conn.execute(
-                "SELECT courier_id FROM events "
+                "SELECT courier_id FROM audit_log "
                 "WHERE event_type='COURIER_ASSIGNED' AND order_id=? "
                 "ORDER BY created_at ASC LIMIT 1",
                 (str(oid),),

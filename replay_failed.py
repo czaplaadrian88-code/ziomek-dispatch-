@@ -127,9 +127,13 @@ def replay_event(row: Dict[str, Any], offline: bool = True) -> Dict[str, Any]:
         if "order_id" not in payload:
             payload["order_id"] = oid
 
-        # Build current fleet snapshot
-        from dispatch_v2.courier_resolver import build_fleet_snapshot
-        fleet = build_fleet_snapshot()
+        # Build current fleet snapshot.
+        # Fix 2026-05-07 (mirror czasowka_scheduler:289 + Sprint A 06.05 commit 69223b3):
+        # użyj dispatchable_fleet() — wzbogaca CourierState o shift_end z grafiku V3.24-A.
+        # Raw build_fleet_snapshot() zostawia shift_end=None → feasibility_v2:300 Fail-CLOSED
+        # hard-rejectuje wszystkich → debug tool kłamie pod post-mortem (artificial NO_CANDIDATE).
+        from dispatch_v2 import courier_resolver
+        fleet = {cs.courier_id: cs for cs in courier_resolver.dispatchable_fleet()}
 
         # Process via assess_order (current code path = post-fix)
         from dispatch_v2 import dispatch_pipeline

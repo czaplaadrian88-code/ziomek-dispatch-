@@ -219,12 +219,13 @@ class _FlagsStub:
         return dict(self.kw)
 
 
-def _install_worker_stubs(monkey_flags=None, schedule=None, send_calls=None):
+def _install_worker_stubs(monkey_flags=None, schedule=None, send_calls=None, ignored_names=None):
     """Install module-level stubs and return a teardown callable."""
     orig_flags = worker_mod.load_flags
     orig_sched = worker_mod.load_schedule
     orig_send = worker_mod.tg_send_text_with_keyboard
     orig_kids = worker_mod._load_kurier_ids
+    orig_ignored = worker_mod._load_ignored_names
 
     if monkey_flags is None:
         monkey_flags = {"SHIFT_NOTIFY_ENABLED": False}
@@ -250,11 +251,14 @@ def _install_worker_stubs(monkey_flags=None, schedule=None, send_calls=None):
     }
     worker_mod._load_kurier_ids = lambda: {k: v for k, v in fake_kids.items() if v is not None}
 
+    worker_mod._load_ignored_names = lambda: set(ignored_names or [])
+
     def teardown():
         worker_mod.load_flags = orig_flags
         worker_mod.load_schedule = orig_sched
         worker_mod.tg_send_text_with_keyboard = orig_send
         worker_mod._load_kurier_ids = orig_kids
+        worker_mod._load_ignored_names = orig_ignored
 
     return teardown, captured
 
@@ -392,8 +396,14 @@ def test_worker_t60_start_unmapped_cid_logs_and_skips():
             send_calls=send_calls,
         )
         try:
+            # ETAP B (2026-05-07): unmapped cid wysyla NEWCOURIER alert + log + idempotency per dzien
             worker_mod.main()
-            assert len(send_calls) == 0, f"should NOT send for unmapped cid, got {send_calls}"
+            assert len(send_calls) == 1, f"expected 1 alert send, got {len(send_calls)}: {send_calls}"
+            cb_data = send_calls[0]["keyboard"][0][0]["callback_data"]
+            assert cb_data.startswith("NEWCOURIER:skip:"), f"unexpected callback_data: {cb_data}"
+            # Re-run: idempotency — drugi tick dla tej samej osoby tego samego dnia NIE dosyla
+            worker_mod.main()
+            assert len(send_calls) == 1, f"idempotency violated, got {len(send_calls)}: {send_calls}"
             # Verify learning_log event
             with open(state_mod.LEARNING_LOG) as f:
                 lines = [ln for ln in f.read().splitlines() if ln.strip()]
@@ -402,7 +412,7 @@ def test_worker_t60_start_unmapped_cid_logs_and_skips():
                 f"expected UNMAPPED_COURIER_T60 event, got {events}"
         finally:
             teardown()
-t("worker_t60_start_unmapped_cid_logs_and_skips", test_worker_t60_start_unmapped_cid_logs_and_skips)
+t("worker_t60_start_unmapped_cid_alerts_and_idempotent", test_worker_t60_start_unmapped_cid_logs_and_skips)
 
 
 # --------- 14. Worker: T-30 reminder only undecided -----------------------
@@ -542,8 +552,121 @@ t("worker_t60_end_window_and_individual_only", test_worker_t60_end_window_and_in
 # --------- Summary --------------------------------------------------------
 
 
-print("=" * 70)
-print(f"PASSED: {passed}/{passed+failed}")
-print(f"FAILED: {failed}/{passed+failed}")
-print("=" * 70)
-sys.exit(0 if failed == 0 else 1)
+# --------- 17. Worker: ignored name skipped at T-60 -----------------------
+
+
+def test_worker_ignored_name_skipped_at_t60():
+    with isolated_shift_state():
+        now = datetime.now(WARSAW).replace(second=0, microsecond=0)
+        in_dt = now + timedelta(minutes=60)
+        if in_dt.date() != now.date():
+            return
+        schedule = {
+            "Daniel Malicki": {"start": in_dt.strftime("%H:%M"), "end": "20:00"},
+            "Adrian Citko": {"start": in_dt.strftime("%H:%M"), "end": "20:00"},
+        }
+        send_calls = []
+        teardown, _ = _install_worker_stubs(
+            monkey_flags={
+                "SHIFT_NOTIFY_ENABLED": True,
+                "SHIFT_NOTIFY_T60_START_ENABLED": True,
+                "SHIFT_NOTIFY_T30_REMINDER_ENABLED": False,
+                "SHIFT_NOTIFY_T60_END_ENABLED": False,
+                "SHIFT_BATCH_WINDOW_MIN": 10,
+                "SHIFT_BATCH_MIN_COURIERS": 3,
+            },
+            schedule=schedule,
+            send_calls=send_calls,
+            ignored_names={"Daniel Malicki"},
+        )
+        try:
+            rc = worker_mod.main()
+            assert rc == 0
+            joined = " | ".join(c["text"] for c in send_calls)
+            assert "Daniel Malicki" not in joined, f"Daniel should be skipped, sends={joined}"
+            assert "Adrian Citko" in joined, f"Adrian should be notified, sends={joined}"
+        finally:
+            teardown()
+t("worker_ignored_name_skipped_at_t60", test_worker_ignored_name_skipped_at_t60)
+
+
+# --------- 18. Worker: ignored name logged idempotent ---------------------
+
+
+def test_worker_ignored_name_logged_idempotent():
+    with isolated_shift_state():
+        now = datetime.now(WARSAW).replace(second=0, microsecond=0)
+        in_dt = now + timedelta(minutes=60)
+        if in_dt.date() != now.date():
+            return
+        schedule = {
+            "Daniel Malicki": {"start": in_dt.strftime("%H:%M"), "end": "20:00"},
+        }
+        send_calls = []
+        teardown, _ = _install_worker_stubs(
+            monkey_flags={
+                "SHIFT_NOTIFY_ENABLED": True,
+                "SHIFT_NOTIFY_T60_START_ENABLED": True,
+                "SHIFT_NOTIFY_T30_REMINDER_ENABLED": False,
+                "SHIFT_NOTIFY_T60_END_ENABLED": False,
+                "SHIFT_BATCH_WINDOW_MIN": 10,
+                "SHIFT_BATCH_MIN_COURIERS": 3,
+            },
+            schedule=schedule,
+            send_calls=send_calls,
+            ignored_names={"Daniel Malicki"},
+        )
+        try:
+            worker_mod.main()
+            worker_mod.main()  # second tick same minute
+            with open(state_mod.LEARNING_LOG) as f:
+                lines = [ln for ln in f.read().splitlines() if ln.strip()]
+            events = [json.loads(ln) for ln in lines]
+            ignored_events = [
+                e for e in events
+                if e.get("event") == "SHIFT_IGNORED" and e.get("full_name") == "Daniel Malicki"
+            ]
+            assert len(ignored_events) == 1, (
+                f"expected exactly 1 SHIFT_IGNORED event, got {len(ignored_events)}: {ignored_events}"
+            )
+        finally:
+            teardown()
+t("worker_ignored_name_logged_idempotent", test_worker_ignored_name_logged_idempotent)
+
+
+# --------- 19. Worker: ignored names file missing fail-open ---------------
+
+
+def test_worker_ignored_names_file_missing_fail_open():
+    with isolated_shift_state():
+        now = datetime.now(WARSAW).replace(second=0, microsecond=0)
+        in_dt = now + timedelta(minutes=60)
+        if in_dt.date() != now.date():
+            return
+        schedule = {
+            "Adrian Citko": {"start": in_dt.strftime("%H:%M"), "end": "20:00"},
+        }
+        send_calls = []
+        teardown, _ = _install_worker_stubs(
+            monkey_flags={
+                "SHIFT_NOTIFY_ENABLED": True,
+                "SHIFT_NOTIFY_T60_START_ENABLED": True,
+                "SHIFT_NOTIFY_T30_REMINDER_ENABLED": False,
+                "SHIFT_NOTIFY_T60_END_ENABLED": False,
+                "SHIFT_BATCH_WINDOW_MIN": 10,
+                "SHIFT_BATCH_MIN_COURIERS": 3,
+            },
+            schedule=schedule,
+            send_calls=send_calls,
+            # ignored_names not passed → defaults to empty set
+        )
+        try:
+            rc = worker_mod.main()
+            assert rc == 0
+            joined = " | ".join(c["text"] for c in send_calls)
+            assert "Adrian Citko" in joined, f"Adrian should be notified, sends={joined}"
+        finally:
+            teardown()
+t("worker_ignored_names_file_missing_fail_open", test_worker_ignored_names_file_missing_fail_open)
+
+

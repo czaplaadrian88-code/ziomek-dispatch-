@@ -190,11 +190,21 @@ def _load_gps_positions() -> Dict:
         _log.warning(f"_load_gps_positions PWA fail: {e}")
 
     # 2. Legacy fallback (name keys → courier_id via kurier_ids)
+    # A1 (audit ARCHITECTURE 2026-05-07): kurier_ids.json fail = silent → all
+    # name-keyed couriers fallback'ują do empty dict (mass dispatch failure).
+    # HIGH severity. Dedup once-per-process żeby nie spammować przy stałym
+    # corrupt/missing file (Lekcja #32, MP-#10 pattern).
     try:
         with open(KURIER_IDS_PATH) as f:
             name_to_id = json.load(f)
-    except Exception:
+    except Exception as _e:
         name_to_id = {}
+        if not getattr(_load_gps_positions, "_kurier_ids_warned", False):
+            _log.error(
+                f"kurier_ids.json load fail ({type(_e).__name__}: {_e}) — "
+                f"name-keyed fallback EMPTY, dispatch może gubić kurierów"
+            )
+            _load_gps_positions._kurier_ids_warned = True
 
     try:
         with open(GPS_POSITIONS_PATH) as f:
@@ -265,6 +275,7 @@ def _bag_not_stale(order: Dict, now_utc: datetime) -> bool:
     status = order.get("status")
 
     # Czasówka: pickup_at w przyszłości → legitymnie assigned (nie stale)
+    # A1: parse fail dawniej silent → log warn dedup-by-class cap=50 (Lekcja #32).
     pu_str = order.get("pickup_at_warsaw")
     if pu_str:
         try:
@@ -274,8 +285,13 @@ def _bag_not_stale(order: Dict, now_utc: datetime) -> bool:
                 pu_dt = pu_dt.replace(tzinfo=ZoneInfo("Europe/Warsaw"))
             if pu_dt > now_utc:
                 return True  # still waiting for pickup, not stale
-        except Exception:
-            pass
+        except Exception as _e:
+            seen = getattr(_bag_not_stale, "_warned_pu", set())
+            key = (type(_e).__name__, str(pu_str)[:40])
+            if key not in seen and len(seen) < 50:
+                _log.warning(f"pickup_at_warsaw parse fail ({type(_e).__name__}: {_e}) input={pu_str!r}")
+                seen.add(key)
+                _bag_not_stale._warned_pu = seen
 
     # Timestamp wyboru per status
     if status == "assigned":
@@ -392,8 +408,16 @@ def build_fleet_snapshot(
             gps_ts = gps_entry.get("timestamp")
             try:
                 gps_dt = datetime.fromisoformat(gps_ts.replace("Z", "+00:00")) if gps_ts else None
-            except Exception:
+            except Exception as _e:
                 gps_dt = None
+                # A1: GPS ts parse fail dawniej silent → kurier traktowany no_gps
+                # bez sygnału. Schema GPS sensor zmiana = mass false-no_gps.
+                seen = getattr(build_fleet_snapshot, "_warned_gps_ts", set())
+                key = (type(_e).__name__, str(gps_ts)[:40])
+                if key not in seen and len(seen) < 50:
+                    _log.warning(f"gps timestamp parse fail kid={kid} ({type(_e).__name__}: {_e}) input={gps_ts!r}")
+                    seen.add(key)
+                    build_fleet_snapshot._warned_gps_ts = seen
             if gps_dt:
                 age_min = (now_utc - gps_dt).total_seconds() / 60.0
                 if age_min < GPS_FRESHNESS_MIN:
@@ -456,7 +480,15 @@ def build_fleet_snapshot(
                     continue
                 try:
                     ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                except Exception:
+                except Exception as _e:
+                    # A1: order ts parse fail dawniej silent → bag aggregation
+                    # może gubić ordery (Lekcja #32 + #80 tracone pole pattern).
+                    seen = getattr(build_fleet_snapshot, "_warned_order_ts", set())
+                    key = (type(_e).__name__, ts_key, str(ts_str)[:40])
+                    if key not in seen and len(seen) < 50:
+                        _log.warning(f"order {ts_key} parse fail ({type(_e).__name__}: {_e}) input={ts_str!r}")
+                        seen.add(key)
+                        build_fleet_snapshot._warned_order_ts = seen
                     continue
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
@@ -560,12 +592,59 @@ def _shift_end_dt(entry: Optional[dict]) -> Optional[datetime]:
         return None
 
 
+def _post_shift_start_synthetic_eligible(
+    cs: CourierState,
+    now_utc: datetime,
+    schedule: dict,
+    match_courier_fn,
+    shift_start_dt_fn,
+    is_on_shift_fn,
+    min_minutes: float = 5.0,
+) -> bool:
+    """Adrian decyzja 2026-05-06 (Faza 7-AUTO-PROXIMITY): kurier 5+ min po
+    shift_start z brakiem GPS → synthetic position assumption ("już jest pod
+    restauracją"). Pure check — caller mutuje cs.pos/pos_source jeśli True.
+
+    Warunki:
+    - cs.pos is None (brak GPS / fallback)
+    - cs.name w grafiku, on_shift=True
+    - now_utc >= shift_start + min_minutes
+    """
+    if cs.pos is not None:
+        return False
+    if not (schedule and cs.name and match_courier_fn and is_on_shift_fn):
+        return False
+    full_name = match_courier_fn(cs.name, schedule)
+    if not full_name:
+        return False
+    entry = schedule.get(full_name)
+    if not entry:
+        return False
+    on_shift, _reason = is_on_shift_fn(cs.name, schedule)
+    if not on_shift:
+        return False
+    shift_start = shift_start_dt_fn(entry)
+    if shift_start is None:
+        return False
+    if shift_start.tzinfo is None:
+        shift_start = shift_start.replace(tzinfo=timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    mins_since = (now_utc - shift_start).total_seconds() / 60.0
+    return mins_since >= min_minutes
+
+
 def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[CourierState]:
     """Zwraca tylko kurierow ktorych mozna scorowac (maja pozycje i sa na zmianie
     LUB zaczynają zmianę w ciągu PRE_SHIFT_WINDOW_MIN minut).
 
     TASK 3 (2026-05-04): collects fleet filter decisions dla observability layer.
     Flag-gated: OBSERVABILITY_FLEET_FILTER_LOGGING (default false, zero overhead).
+
+    Faza 7-AUTO-PROXIMITY (2026-05-06): post-shift-start synthetic position
+    enrichment — kurier 5+ min po shift_start z pos=None traktowany jako
+    "pod restauracją" (BIALYSTOK_CENTER fallback). Flag-gated:
+    ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN (default False).
     """
     import sys as _sys
     _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
@@ -585,11 +664,28 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         excluded = set()
     if fleet is None:
         fleet = build_fleet_snapshot()
+    # Faza 7 flag — read once per dispatchable_fleet() call (no per-courier cost).
+    try:
+        from dispatch_v2 import common as _C7
+        _post_shift_5min_enabled = bool(getattr(_C7, "ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN", False))
+    except Exception:
+        _post_shift_5min_enabled = False
+    _now_utc_fleet = datetime.now(timezone.utc)
     result = []
     # TASK 3: collect rejected dla observability logger (zero overhead gdy flag false)
     _rejected_for_log = []
     _passed_for_log = []
     for cs in fleet.values():
+        # Faza 7-AUTO-PROXIMITY: post-shift-start synthetic pos (Adrian decyzja 2026-05-06).
+        # Mutuje cs PRZED no-position check, żeby kurier 5+ min po starcie z brakiem
+        # GPS NIE był wyrzucony jako "no_position".
+        if _post_shift_5min_enabled and cs.pos is None and is_on_shift is not None:
+            if _post_shift_start_synthetic_eligible(
+                cs, _now_utc_fleet, schedule, match_courier, _shift_start_dt, is_on_shift
+            ):
+                cs.pos = BIALYSTOK_CENTER
+                cs.pos_source = "post_shift_start_synthetic"
+                _log.debug(f"post_shift_5min synthetic {cs.name} ({cs.courier_id})")
         if cs.pos is None:
             _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                       "reason": "no_position", "pos_source": cs.pos_source})
@@ -652,6 +748,7 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                                 "pos_source": cs.pos_source})
 
     # TASK 3 observability hook — NIGDY raise (flag-gated, isolated try/except)
+    # A1: dawniej silent → audit trail lost cicho. Dedup-by-class.
     try:
         from dispatch_v2.observability.candidate_logger import get_logger
         get_logger().log_fleet_filter(
@@ -660,7 +757,12 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
             rejected=_rejected_for_log,
             context={"fleet_total": len(fleet)},
         )
-    except Exception:
-        pass
+    except Exception as _e:
+        seen = getattr(dispatchable_fleet, "_warned_audit", set())
+        cls = type(_e).__name__
+        if cls not in seen:
+            _log.warning(f"fleet_filter audit log fail ({cls}: {_e}) — audit trail lost")
+            seen.add(cls)
+            dispatchable_fleet._warned_audit = seen
 
     return result

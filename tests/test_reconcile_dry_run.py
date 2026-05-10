@@ -115,7 +115,7 @@ def test_delivered_7():
     assert ev["order_id"] == "T001"
     assert ev["courier_id"] == "111"
     assert ev["payload"]["delivery_address"] == "Dostawa 1 Białystok"
-    assert ev["event_id"] == "T001_COURIER_DELIVERED_reconcile"
+    assert ev["event_id"] == "T001_COURIER_DELIVERED_canonical"  # F10 2026-05-09
     assert len(updated) == 1 and updated[0]["event_type"] == "COURIER_DELIVERED"
     assert "T001" in fetched
 

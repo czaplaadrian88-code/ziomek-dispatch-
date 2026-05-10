@@ -98,16 +98,17 @@ def _maybe_alert(count: int) -> None:
     src_str = ", ".join(f"{k}={v}" for k, v in sorted(by_src.items()))
     warsaw_now = datetime.now(timezone.utc).astimezone().strftime("%H:%M Warsaw")
     text = (
-        "🚨 V3.28 ALERT: 419 STORM DETECTED\n"
-        f"Time: {warsaw_now}\n"
-        f"Errors: {count} w {WINDOW_SECONDS}s\n"
-        f"Sources: {src_str}\n"
+        f"🚨 Burza błędów sesji panelu — {count} razy w {WINDOW_SECONDS} sekund\n"
+        f"O {warsaw_now} services traciły sesję CSRF z panelem.\n"
+        f"Źródła: {src_str}.\n"
+        "Najczęstsza przyczyna: dwa równoległe procesy odświeżają tę samą sesję login (race) "
+        "albo nowo wdrożony moduł odpala własny background refresh.\n"
         "\n"
-        "Recommended action:\n"
-        "1) tail watcher.log + journalctl dla zaalarmowanych services\n"
-        "2) audit czy nowy importer panel_client spawnuje bg_refresh\n"
-        "3) systemctl restart dispatch-{service} jeśli session lost\n"
-        "4) ENABLE_PANEL_BG_REFRESH=0 mirror jeśli nowy service"
+        "Co Ty masz zrobić:\n"
+        "1) Sprawdź czy ostatnio coś zostało zdeployowane (git log --since=1h)\n"
+        "2) Jeśli jeden ze services straszy logi → restart go: "
+        "sudo systemctl restart dispatch-{shadow|panel-watcher}\n"
+        "3) Jak nowy moduł wprowadza bg_refresh → wyłącz: ENABLE_PANEL_BG_REFRESH=0"
     )
     _log.warning(f"ALERT 419 storm: count={count} src={src_str}")
     ok = send_admin_alert(text)

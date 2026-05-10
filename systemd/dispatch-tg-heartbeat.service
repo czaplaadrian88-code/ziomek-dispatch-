@@ -1,0 +1,26 @@
+[Unit]
+Description=Ziomek MP-#9 Telegram Heartbeat Watchdog (out-of-band SMS alert)
+Documentation=https://github.com/czaplaadrian88-code/ziomek-dispatch- (MP-#9 spec)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+EnvironmentFile=-/root/.openclaw/workspace/.env
+EnvironmentFile=-/root/.openclaw/workspace/.secrets/telegram.env
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tg_heartbeat
+StandardOutput=journal
+StandardError=journal
+
+# MP-#3 systemd resource limits compatible
+MemoryMax=64M
+CPUQuota=10%
+TasksMax=20
+
+# MP-#4 OnFailure framework hook (alert_onfailure handler)
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Install]
+WantedBy=multi-user.target
