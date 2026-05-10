@@ -100,6 +100,12 @@ class CourierState:
     # signal dla shadow_dispatcher score penalty (Adrian's 472242 Baanko case).
     panel_packs_oids_signal: List[str] = field(default_factory=list)
     panel_packs_cache_age_s: Optional[float] = None
+    # V3.28 P4 — coordinator role flag (Adrian doktryna 2026-05-10 wieczór).
+    # Bartek O. (cid=123) hybrid: peak jeździ, off-peak dispatchuje. Pipeline nie
+    # wie o tej roli → 100% propozycji do niego gdy bag=0+gold tier. Activation:
+    # auto na pierwszym COURIER_ASSIGNED dnia LUB manual TG `<nick> start/stop`.
+    is_coordinator: bool = False
+    coordinator_active: bool = False  # True = jeździ aktywnie dziś
 
     def to_dict(self):
         return {
@@ -564,6 +570,24 @@ def build_fleet_snapshot(
             by_name[cs.name] = kid
         else:
             del fleet[kid]
+
+    # V3.28 P4 — coordinator role + activation enrich (Adrian doktryna 2026-05-10).
+    # is_coordinator = czy ma rolę hybrydową (z courier_tiers.json `coordinator` flag).
+    # coordinator_active = czy dziś jeździ aktywnie (z coordinator_activations.json).
+    # Pipeline scoring: jeśli is_coordinator AND NOT coordinator_active → strong demote.
+    try:
+        from dispatch_v2 import coordinator_activations as _coord_act
+        _active_coord_cids = _coord_act.get_all_active()
+    except Exception as _e:
+        _log.warning(f"coordinator_activations load fail: {_e}")
+        _active_coord_cids = set()
+    _tiers = _load_courier_tiers()
+    if isinstance(_tiers, dict):
+        for kid, cs in fleet.items():
+            _tinfo = _tiers.get(kid)
+            if isinstance(_tinfo, dict) and _tinfo.get("coordinator") is True:
+                cs.is_coordinator = True
+                cs.coordinator_active = (kid in _active_coord_cids)
 
     # V3.28 P3 (B) — enrich panel_packs signal (Adrian doktryna 2026-05-10).
     # Read panel_packs_cache.json (per panel_watcher tick) i dla każdego cs:

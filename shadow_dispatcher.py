@@ -238,6 +238,10 @@ def _serialize_candidate(c) -> dict:
         "panel_packs_signal_size": m.get("panel_packs_signal_size"),
         "panel_packs_cache_age_s": m.get("panel_packs_cache_age_s"),
         "bonus_state_panel_mismatch": m.get("bonus_state_panel_mismatch"),
+        # V3.28 P4 — coordinator hybrid duty (Adrian doktryna 2026-05-10 wieczór)
+        "is_coordinator": m.get("is_coordinator"),
+        "coordinator_active": m.get("coordinator_active"),
+        "bonus_coordinator_idle": m.get("bonus_coordinator_idle"),
         "r7_ride_km": m.get("r7_ride_km"),
         "r7_warsaw_hour": m.get("r7_warsaw_hour"),
         "r7_in_peak": m.get("r7_in_peak"),
@@ -443,6 +447,10 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "panel_packs_signal_size": best_m.get("panel_packs_signal_size"),
             "panel_packs_cache_age_s": best_m.get("panel_packs_cache_age_s"),
             "bonus_state_panel_mismatch": best_m.get("bonus_state_panel_mismatch"),
+            # V3.28 P4 — coordinator hybrid duty (Adrian doktryna 2026-05-10 wieczór)
+            "is_coordinator": best_m.get("is_coordinator"),
+            "coordinator_active": best_m.get("coordinator_active"),
+            "bonus_coordinator_idle": best_m.get("bonus_coordinator_idle"),
             # V3.28 ETAP 2: effective_start_at = shift_start gdy pre_shift clamp
             # odpalił, inaczej None. Telegram _route_lines_v2 użyje go zamiast
             # real now dla "start" line w trasie. pre_shift_clamp_applied flag

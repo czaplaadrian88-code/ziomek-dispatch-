@@ -2438,6 +2438,55 @@ async def handle_message(state: dict, msg: dict) -> None:
             _log.info(f"natural instrukcja_gps from={from_id} text={text!r}")
             return
 
+    # V3.28 P4 (2026-05-10) — coordinator activation cmd: `<nick> start` / `<nick> stop`.
+    # Bartek O. (cid=123) hybrid duty — aktywuje siebie jako kuriera w peakach lub
+    # explicit stop gdy wraca do koord mode. Tylko kurierzy z `coordinator: true`
+    # w courier_tiers.json reagują (nikt poza Bartkiem dziś — false-positive guard).
+    if 2 <= len(_words) <= 6 and _words[-1] in ("start", "stop"):
+        try:
+            from dispatch_v2 import coordinator_activations as _coord_act
+            from dispatch_v2.courier_resolver import _load_courier_tiers
+            import json as _tjson
+            with open("/root/.openclaw/workspace/dispatch_state/kurier_ids.json") as _kf:
+                _kids = _tjson.load(_kf)
+            _name_to_cid = {k.strip().rstrip(".,;:").lower(): str(v) for k, v in _kids.items()}
+            _tiers = _load_courier_tiers() or {}
+            _action = _words[-1]
+            _nick_raw = " ".join(text.split()[:-1])
+            _nick_norm = _nick_raw.strip().rstrip(".,;:").lower()
+            _cid = _name_to_cid.get(_nick_norm)
+            if _cid:
+                _tinfo = _tiers.get(_cid)
+                if isinstance(_tinfo, dict) and _tinfo.get("coordinator") is True:
+                    _disp_name = _tinfo.get("name", _nick_raw)
+                    if _action == "start":
+                        _changed = _coord_act.activate(_cid, source=f"telegram_manual_{from_id}")
+                        _reply = (
+                            f"✅ {_disp_name} ACTIVE — Ziomek proponuje od teraz"
+                            if _changed else f"ℹ️ {_disp_name} już active"
+                        )
+                    else:
+                        _changed = _coord_act.deactivate(_cid, source=f"telegram_manual_{from_id}")
+                        _reply = (
+                            f"🛑 {_disp_name} STOP — koord mode (brak propozycji)"
+                            if _changed else f"ℹ️ {_disp_name} już inactive"
+                        )
+                    await asyncio.to_thread(
+                        tg_request, state["token"], "sendMessage",
+                        {
+                            "chat_id": msg["chat"]["id"],
+                            "text": _reply,
+                            "reply_to_message_id": msg["message_id"],
+                        },
+                    )
+                    _log.info(
+                        f"P4 coordinator manual cmd: action={_action} cid={_cid} "
+                        f"name={_disp_name!r} from={from_id} changed={_changed}"
+                    )
+                    return
+        except Exception as _e:
+            _log.warning(f"P4 coordinator cmd parse fail text={text!r}: {_e}")
+
     if any(w in text_lower for w in ["pomoc", "help", "komendy", "co umiesz"]):
         help_body = (
             "🤖 Ziomek rozumie:\n"

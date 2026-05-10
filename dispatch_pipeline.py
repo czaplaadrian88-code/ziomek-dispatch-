@@ -2061,6 +2061,17 @@ def _assess_order_impl(
             # Penalty -3/km nadmiar nad 4 km deadhead (najgorszy segment)
             bonus_inter_wave_deadhead = -3.0 * (_inter_wave_max - 4.0)
 
+        # V3.28 P4 — coordinator hybrid duty penalty (Adrian doktryna 2026-05-10 wieczór).
+        # Coordinator (Bartek O. cid=123) jeździ tylko aktywnie. Off-peak / brak fali
+        # = NIE jeździ. Pipeline default proponował go zawsze (gold tier +100).
+        # Activation: auto na pierwszym COURIER_ASSIGNED dnia (state_machine hook) LUB
+        # manual TG `<nick> start/stop`. Reset 06:00 daily.
+        bonus_coordinator_idle = 0.0
+        _is_coord = bool(getattr(cs, "is_coordinator", False))
+        _coord_active = bool(getattr(cs, "coordinator_active", False))
+        if _is_coord and not _coord_active:
+            bonus_coordinator_idle = -100.0  # Strong demote — koord nie jeździ aktywnie
+
         # V3.28 P3 (B) — state-vs-panel mismatch penalty (Adrian doktryna 2026-05-10).
         # Gdy panel widzi kuriera z bag (nick→[oids] w panel_packs_cache) ALE
         # orders_state ma jego bag pusty (cid=None lag) — silna kara, kurier
@@ -2193,7 +2204,7 @@ def _assess_order_impl(
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
         bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch + bonus_coordinator_idle
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.
@@ -2334,6 +2345,10 @@ def _assess_order_impl(
             "panel_packs_oids_signal": list(_panel_packs_signal[:8]),  # cap dla logu
             "panel_packs_cache_age_s": _panel_packs_age_s,
             "bonus_state_panel_mismatch": round(bonus_state_panel_mismatch, 2),
+            # V3.28 P4 — coordinator hybrid duty (Adrian doktryna 2026-05-10 wieczór)
+            "is_coordinator": _is_coord,
+            "coordinator_active": _coord_active,
+            "bonus_coordinator_idle": round(bonus_coordinator_idle, 2),
             "r8_violation_min": metrics.get("r8_violation_min", 0.0),
             "bonus_r9_stopover": round(bonus_r9_stopover, 2),
             "bonus_r9_wait_pen": round(bonus_r9_wait_pen, 2),

@@ -298,6 +298,27 @@ def update_from_event(event: dict) -> Optional[dict]:
         }, event="NEW_ORDER")
 
     if etype == "COURIER_ASSIGNED":
+        # V3.28 P4 — auto-activation koordynatora (Adrian doktryna 2026-05-10).
+        # Bartek O. (cid=123) ma flag `coordinator: true` w courier_tiers.json.
+        # Pierwsze COURIER_ASSIGNED dnia → activate (może już dziś jeździć).
+        # Późniejsze ASSIGNED zachowują state (idempotent).
+        try:
+            _ev_cid = str(event.get("courier_id") or "")
+            if _ev_cid:
+                from dispatch_v2.courier_resolver import _load_courier_tiers
+                from dispatch_v2 import coordinator_activations as _coord_act
+                _tiers = _load_courier_tiers()
+                _tinfo = _tiers.get(_ev_cid) if isinstance(_tiers, dict) else None
+                if isinstance(_tinfo, dict) and _tinfo.get("coordinator") is True:
+                    _changed = _coord_act.activate(_ev_cid, source=f"first_assignment_{oid}")
+                    if _changed:
+                        _log.info(
+                            f"P4 COORDINATOR_ACTIVATED cid={_ev_cid} ({_tinfo.get('name','?')}) "
+                            f"trigger=first_assignment oid={oid}"
+                        )
+        except Exception as _e:
+            _log.warning(f"P4 coordinator auto-activate fail oid={oid}: {_e}")
+
         # V3.19f: update czas_kuriera przy re-assignment (panel "+15min" button
         # może zmienić commitment). Sanity check przed update.
         # V3.27.5 Path B (2026-04-27): preserve terminal status (picked_up,
