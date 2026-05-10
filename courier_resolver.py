@@ -27,6 +27,32 @@ GPS_POSITIONS_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions.jso
 GPS_POSITIONS_PWA_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions_pwa.json"
 GPS_FRESHNESS_MIN = 5  # GPS nowszy niz 5 min = aktualny
 
+# V3.28 P3 (B) — panel_packs cache od panel_watcher (per-tick atomic write).
+# Source of truth dla "kto faktycznie wozi" niezależnie od orders_state.cid lag.
+PANEL_PACKS_CACHE_PATH = "/root/.openclaw/workspace/dispatch_state/panel_packs_cache.json"
+PANEL_PACKS_CACHE_MAX_AGE_S = 120.0  # >2 min = cache stale, nie używaj
+
+def _load_panel_packs_cache() -> Tuple[Optional[datetime], Dict[str, list], Optional[float]]:
+    """V3.28 P3 (B) — read panel_packs cache pisany przez panel_watcher.
+
+    Returns: (ts_utc, packs_dict {nick→[oid_str]}, age_seconds) or (None, {}, None)
+    gdy cache missing/corrupt/stale.
+    """
+    try:
+        with open(PANEL_PACKS_CACHE_PATH, "r", encoding="utf-8") as _f:
+            _data = json.load(_f)
+        _ts_str = _data.get("ts") or ""
+        if not _ts_str:
+            return (None, {}, None)
+        _ts = datetime.fromisoformat(_ts_str.replace("Z", "+00:00"))
+        if _ts.tzinfo is None:
+            _ts = _ts.replace(tzinfo=timezone.utc)
+        _age_s = (datetime.now(timezone.utc) - _ts).total_seconds()
+        return (_ts, _data.get("packs") or {}, _age_s)
+    except Exception:
+        return (None, {}, None)
+
+
 # Synthetic pos dla kuriera bez GPS i bez historii zleceń (no_gps fallback).
 # Nie wykluczamy go z dispatchu; dispatch_pipeline normalizuje km_to_pickup
 # do średniej floty, a travel_min do max(prep, 15 min).
@@ -69,6 +95,11 @@ class CourierState:
     tier_bag: Optional[str] = None                   # gold | std+ | std | slow | new (V3.25)
     tier_cap_override: Optional[Dict] = None         # per-pora override np. Gabriel {peak:4, ...}
     tier_label: Optional[str] = None                 # V3.25: 'new' dla nowych kurierów (R-04 NEW-COURIER-CAP)
+    # V3.28 P3 (B) — panel_packs ground-truth signal (Adrian doktryna 2026-05-10).
+    # Gdy panel widzi nick→[oids] ALE state.bag pusty (cid=None lag) — divergence
+    # signal dla shadow_dispatcher score penalty (Adrian's 472242 Baanko case).
+    panel_packs_oids_signal: List[str] = field(default_factory=list)
+    panel_packs_cache_age_s: Optional[float] = None
 
     def to_dict(self):
         return {
@@ -533,6 +564,37 @@ def build_fleet_snapshot(
             by_name[cs.name] = kid
         else:
             del fleet[kid]
+
+    # V3.28 P3 (B) — enrich panel_packs signal (Adrian doktryna 2026-05-10).
+    # Read panel_packs_cache.json (per panel_watcher tick) i dla każdego cs:
+    # jeśli cache fresh AND state.bag pusty AND panel widzi nick→[oids] → set
+    # panel_packs_oids_signal jako "kurier faktycznie wozi". Score penalty
+    # w dispatch_pipeline gdy state-vs-panel divergence (cid=None lag).
+    _pks_ts, _pks_packs, _pks_age = _load_panel_packs_cache()
+    if _pks_age is not None and _pks_age <= PANEL_PACKS_CACHE_MAX_AGE_S:
+        for kid, cs in fleet.items():
+            cs.panel_packs_cache_age_s = round(_pks_age, 1)
+            if not cs.name or len(cs.bag) > 0:
+                continue
+            # Spróbuj znaleźć nick w cache (case-insensitive trim)
+            _nick_norm = cs.name.strip()
+            _candidates = (
+                _pks_packs.get(_nick_norm)
+                or _pks_packs.get(_nick_norm.lower())
+                or []
+            )
+            if not _candidates:
+                # Fallback: case-insensitive linear search
+                for _pn, _po in _pks_packs.items():
+                    if isinstance(_pn, str) and _pn.strip().lower() == _nick_norm.lower():
+                        _candidates = _po
+                        break
+            if _candidates:
+                cs.panel_packs_oids_signal = [str(x) for x in _candidates]
+    else:
+        # Cache stale lub missing — wszystkie kuriery dostają age info dla C gate
+        for cs in fleet.values():
+            cs.panel_packs_cache_age_s = _pks_age
 
     return fleet
 

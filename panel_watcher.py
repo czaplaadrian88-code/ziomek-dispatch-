@@ -20,6 +20,8 @@ Uzywanie:
     # lub:
     python3 /root/.openclaw/workspace/scripts/dispatch_v2/panel_watcher.py
 """
+import json
+import os
 import signal
 import sys
 import time
@@ -1409,6 +1411,39 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
         if _fail_count > 0:
             _log.info(f"Panel recovered po {_fail_count} failach")
             _fail_count = 0
+
+        # V3.28 P3 (B) — atomic write panel_packs_cache.json dla shadow_dispatcher
+        # per-proposal lookup. Pozwala wykryć state-vs-panel divergence (state ma
+        # cid=None / bag=[], ale panel widzi nick→[oids] = kurier faktycznie wozi).
+        # Kontekst: 472242 Baanko 17:41 — Mateusz O proposed jako bag=0 mimo 7 queued
+        # w panelu (PACKS_CATCHUP lag 11s). Cache pozwala shadow_dispatcher zobaczyć
+        # ground truth panel niezależnie od panel_watcher tick rate.
+        try:
+            import tempfile as _tempfile
+            _packs_cache_data = {
+                "ts": now_iso(),
+                "packs": parsed.get("courier_packs") or {},
+                "tick": cycle_num,
+                "orders_in_panel": cycle_stats.get("orders_in_panel"),
+            }
+            _packs_cache_path = "/root/.openclaw/workspace/dispatch_state/panel_packs_cache.json"
+            _fd, _tmp = _tempfile.mkstemp(
+                prefix="panel_packs_cache.",
+                suffix=".tmp",
+                dir="/root/.openclaw/workspace/dispatch_state/",
+            )
+            try:
+                with os.fdopen(_fd, "w", encoding="utf-8") as _fh:
+                    json.dump(_packs_cache_data, _fh, ensure_ascii=False, separators=(",", ":"))
+                    _fh.flush()
+                    os.fsync(_fh.fileno())
+                os.replace(_tmp, _packs_cache_path)
+            except Exception:
+                try: os.unlink(_tmp)
+                except Exception: pass
+                raise
+        except Exception as _e:
+            _log.warning(f"panel_packs_cache write fail: {_e}")
 
         from dispatch_v2.panel_client import _session
         csrf = _session.get("csrf") or ""

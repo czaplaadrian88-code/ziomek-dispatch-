@@ -2061,6 +2061,27 @@ def _assess_order_impl(
             # Penalty -3/km nadmiar nad 4 km deadhead (najgorszy segment)
             bonus_inter_wave_deadhead = -3.0 * (_inter_wave_max - 4.0)
 
+        # V3.28 P3 (B) — state-vs-panel mismatch penalty (Adrian doktryna 2026-05-10).
+        # Gdy panel widzi kuriera z bag (nick→[oids] w panel_packs_cache) ALE
+        # orders_state ma jego bag pusty (cid=None lag) — silna kara, kurier
+        # faktycznie wozi mimo że pipeline myśli że jest wolny. Diagnoza 472242
+        # Baanko 17:41: Mateusz O bag=0 w state, mimo 7 queued w panelu (PACKS_CATCHUP
+        # lag 11s). Selektywna kara (tylko gdy konkretny dowód state-stale)
+        # vs uniwersalny penalty no_gps (Adrian rejected — czasem no_gps może być legit).
+        _panel_packs_signal = getattr(cs, "panel_packs_oids_signal", []) or []
+        _state_bag_size = len(_bag_dicts) if "_bag_dicts" in dir() else 0
+        _panel_packs_age_s = getattr(cs, "panel_packs_cache_age_s", None)
+        bonus_state_panel_mismatch = 0.0
+        if (
+            _panel_packs_age_s is not None
+            and _panel_packs_age_s <= 120.0
+            and len(_panel_packs_signal) > 0
+            and _state_bag_size == 0
+        ):
+            # Mocna kara — kurier ma realny bag, state stale. -50 per phantom oid
+            # (max -200 dla 4+ orderów = bardzo gorzej niż score=82 baseline).
+            bonus_state_panel_mismatch = -50.0 * min(len(_panel_packs_signal), 4)
+
         # R8 soft penalty (pickup span — oryginalna + violation)
         _r8_span = metrics.get("r8_pickup_span_min") or 0
         bonus_r8_soft_pen = (
@@ -2172,7 +2193,7 @@ def _assess_order_impl(
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
         bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.
@@ -2308,6 +2329,11 @@ def _assess_order_impl(
             "inter_wave_n_segments": metrics.get("inter_wave_n_segments"),
             "bonus_wave_clean": round(bonus_wave_clean, 2),
             "bonus_inter_wave_deadhead": round(bonus_inter_wave_deadhead, 2),
+            # V3.28 P3 (B) — state-vs-panel mismatch (Adrian doktryna 2026-05-10)
+            "panel_packs_signal_size": len(_panel_packs_signal),
+            "panel_packs_oids_signal": list(_panel_packs_signal[:8]),  # cap dla logu
+            "panel_packs_cache_age_s": _panel_packs_age_s,
+            "bonus_state_panel_mismatch": round(bonus_state_panel_mismatch, 2),
             "r8_violation_min": metrics.get("r8_violation_min", 0.0),
             "bonus_r9_stopover": round(bonus_r9_stopover, 2),
             "bonus_r9_wait_pen": round(bonus_r9_wait_pen, 2),
@@ -2692,6 +2718,44 @@ def _assess_order_impl(
                     f"LGBM_SHADOW oid={order_id} winner_lgbm=None winner_current={top[0].courier_id if top else None} "
                     f"agreement=None fallback=exception_in_pipeline latency_ms=0.0 pool_size=0 model_version=unknown"
                 )
+        # V3.28 P3 (C) — min latency gate KOORD escalate (Adrian doktryna 2026-05-10).
+        # Gdy panel_packs_cache jest stale (>60s) AND >=2 candidates mają state-vs-panel
+        # divergence (bag=0 w state ale signal>0 w panel) → state_likely_stale escalate
+        # do KOORD. Operator decyduje na podstawie panel-em zamiast nieaktualnego state.
+        # Filozofia: pojedyncze divergence = OK (B penalty wystarczy), masowe = signal że
+        # panel_watcher ma lag i pipeline nie powinien proponować bo wszyscy mogą być stale.
+        _stale_signal_count = 0
+        _max_packs_age = 0.0
+        for _c in feasible[:5]:
+            _csi = fleet_snapshot.get(_c.courier_id)
+            if _csi is None:
+                continue
+            _signal = getattr(_csi, "panel_packs_oids_signal", []) or []
+            _bag = getattr(_csi, "bag", []) or []
+            _age = getattr(_csi, "panel_packs_cache_age_s", None)
+            if _age is not None and _age > _max_packs_age:
+                _max_packs_age = _age
+            if len(_signal) > 0 and len(_bag) == 0:
+                _stale_signal_count += 1
+        if _max_packs_age > 60.0 and _stale_signal_count >= 2:
+            _result_stale = PipelineResult(
+                order_id=order_id,
+                verdict="KOORD",
+                reason=(
+                    f"state_likely_stale (panel_packs_age={_max_packs_age:.1f}s, "
+                    f"n_stale_signal={_stale_signal_count}; pool={len(feasible)})"
+                ),
+                best=top[0],
+                candidates=top,
+                pickup_ready_at=pickup_ready_at,
+                restaurant=restaurant,
+                delivery_address=delivery_address,
+                pool_total_count=len(candidates),
+                pool_feasible_count=len(feasible),
+            )
+            _classify_and_set_auto_route(_result_stale, fleet_snapshot, order_event, now=now)
+            return _result_stale
+
         # V3.28 ANCHOR FIX 2026-05-10 — Adrian doktryna: min_score_threshold dla PROPOSE.
         # Gdy best.score < MIN_PROPOSE_SCORE → KOORD zamiast PROPOSE (all_candidates_low_score).
         # Diagnoza 2026-05-10 472189: PROPOSE Andrei score=-50 + Mateusz Bro alt -1047 =

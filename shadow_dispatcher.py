@@ -234,6 +234,10 @@ def _serialize_candidate(c) -> dict:
         "inter_wave_n_segments": m.get("inter_wave_n_segments"),
         "bonus_wave_clean": m.get("bonus_wave_clean"),
         "bonus_inter_wave_deadhead": m.get("bonus_inter_wave_deadhead"),
+        # V3.28 P3 (B) — state-vs-panel mismatch (Adrian doktryna 2026-05-10)
+        "panel_packs_signal_size": m.get("panel_packs_signal_size"),
+        "panel_packs_cache_age_s": m.get("panel_packs_cache_age_s"),
+        "bonus_state_panel_mismatch": m.get("bonus_state_panel_mismatch"),
         "r7_ride_km": m.get("r7_ride_km"),
         "r7_warsaw_hour": m.get("r7_warsaw_hour"),
         "r7_in_peak": m.get("r7_in_peak"),
@@ -435,6 +439,10 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "inter_wave_n_segments": best_m.get("inter_wave_n_segments"),
             "bonus_wave_clean": best_m.get("bonus_wave_clean"),
             "bonus_inter_wave_deadhead": best_m.get("bonus_inter_wave_deadhead"),
+            # V3.28 P3 (B) — state-vs-panel mismatch (Adrian doktryna 2026-05-10)
+            "panel_packs_signal_size": best_m.get("panel_packs_signal_size"),
+            "panel_packs_cache_age_s": best_m.get("panel_packs_cache_age_s"),
+            "bonus_state_panel_mismatch": best_m.get("bonus_state_panel_mismatch"),
             # V3.28 ETAP 2: effective_start_at = shift_start gdy pre_shift clamp
             # odpalił, inaczej None. Telegram _route_lines_v2 użyje go zamiast
             # real now dla "start" line w trasie. pre_shift_clamp_applied flag
