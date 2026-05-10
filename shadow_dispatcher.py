@@ -227,6 +227,13 @@ def _serialize_candidate(c) -> dict:
         "r5_pickup_detour_per_order_km": m.get("r5_pickup_detour_per_order_km"),
         "bonus_r1_corridor": m.get("bonus_r1_corridor"),
         "bonus_r5_detour": m.get("bonus_r5_detour"),
+        # V3.28 P2 — wave detection (Adrian doktryna 2026-05-10)
+        "n_waves": m.get("n_waves"),
+        "inter_wave_deadhead_total_km": m.get("inter_wave_deadhead_total_km"),
+        "inter_wave_deadhead_max_km": m.get("inter_wave_deadhead_max_km"),
+        "inter_wave_n_segments": m.get("inter_wave_n_segments"),
+        "bonus_wave_clean": m.get("bonus_wave_clean"),
+        "bonus_inter_wave_deadhead": m.get("bonus_inter_wave_deadhead"),
         "r7_ride_km": m.get("r7_ride_km"),
         "r7_warsaw_hour": m.get("r7_warsaw_hour"),
         "r7_in_peak": m.get("r7_in_peak"),
@@ -421,6 +428,13 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r5_pickup_detour_per_order_km": best_m.get("r5_pickup_detour_per_order_km"),
             "bonus_r1_corridor": best_m.get("bonus_r1_corridor"),
             "bonus_r5_detour": best_m.get("bonus_r5_detour"),
+            # V3.28 P2 — wave detection (Adrian doktryna 2026-05-10)
+            "n_waves": best_m.get("n_waves"),
+            "inter_wave_deadhead_total_km": best_m.get("inter_wave_deadhead_total_km"),
+            "inter_wave_deadhead_max_km": best_m.get("inter_wave_deadhead_max_km"),
+            "inter_wave_n_segments": best_m.get("inter_wave_n_segments"),
+            "bonus_wave_clean": best_m.get("bonus_wave_clean"),
+            "bonus_inter_wave_deadhead": best_m.get("bonus_inter_wave_deadhead"),
             # V3.28 ETAP 2: effective_start_at = shift_start gdy pre_shift clamp
             # odpalił, inaczej None. Telegram _route_lines_v2 użyje go zamiast
             # real now dla "start" line w trasie. pre_shift_clamp_applied flag

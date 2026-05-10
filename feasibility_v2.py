@@ -103,6 +103,85 @@ def _max_pickup_spread_from_bag(bag, new_pickup) -> float:
     return best
 
 
+def _detect_waves(
+    bag, new_order, time_window_min: float = 12.0, space_threshold_km: float = 1.5
+) -> List[List[str]]:
+    """V3.28 P2 — wave detection (Adrian doktryna 2026-05-10).
+
+    Wave = grupa orderów z `pickup_ready_at` w jednym oknie czasowym (±time_window_min)
+    i pickup_coords w jednym korytarzu (≤space_threshold_km od poprzedniej w grupie).
+
+    Filozofia: kurier robi atomic burst pickup → atomic burst drop, potem opcjonalnie
+    kolejna fala. Bag z 1 falą = idealny ("linia/okrąg"). Bag z 2+ fal = OK jeśli
+    inter-wave deadhead jest sensowny.
+
+    Pomija picked_up bag orders (już mają punkt odbioru za sobą).
+
+    Returns: List[List[order_id]] — każda lista to fala. Empty bag → [].
+    """
+    candidates = []
+    for o in list(bag) + [new_order]:
+        if getattr(o, "status", "assigned") == "picked_up":
+            continue
+        if getattr(o, "pickup_ready_at", None) is None:
+            continue
+        if not _valid(o.pickup_coords):
+            continue
+        candidates.append(o)
+    if not candidates:
+        return []
+    candidates.sort(key=lambda o: o.pickup_ready_at)
+    waves: List[List[str]] = [[candidates[0].order_id]]
+    last = candidates[0]
+    for o in candidates[1:]:
+        dt = abs((o.pickup_ready_at - last.pickup_ready_at).total_seconds()) / 60.0
+        dx = _road_km(o.pickup_coords, last.pickup_coords)
+        if dt <= time_window_min and dx <= space_threshold_km:
+            waves[-1].append(o.order_id)
+        else:
+            waves.append([o.order_id])
+        last = o
+    return waves
+
+
+def _inter_wave_deadhead_km(waves: List[List[str]], all_orders) -> Tuple[float, float, int]:
+    """Sum/max deadhead km between waves (drop_last_Wn → pickup_first_Wn+1).
+
+    Approximation: gdy nie znamy faktycznego sequence dropów per fali, używamy
+    pickup_coords pierwszego ordera w każdej fali jako proxy dla "punktu zwrotu".
+
+    Returns: (total_deadhead_km, max_inter_wave_km, n_inter_wave_segments)
+    """
+    if len(waves) < 2:
+        return (0.0, 0.0, 0)
+    by_oid = {o.order_id: o for o in all_orders}
+    total = 0.0
+    mx = 0.0
+    segs = 0
+    for i in range(len(waves) - 1):
+        w_now = waves[i]
+        w_next = waves[i + 1]
+        # Last drop tej fali ≈ pickup ostatniego ordera (proxy — nie znamy faktycznego drop sequence tu)
+        end_oid = w_now[-1]
+        start_oid = w_next[0]
+        end_o = by_oid.get(end_oid)
+        start_o = by_oid.get(start_oid)
+        if end_o is None or start_o is None:
+            continue
+        # Lepszy proxy: deliv_coords ostatniego ordera w fali (gdzie kurier "wraca")
+        # vs pickup_coords pierwszego ordera następnej fali
+        end_pos = end_o.delivery_coords if _valid(end_o.delivery_coords) else end_o.pickup_coords
+        start_pos = start_o.pickup_coords
+        if not _valid(end_pos) or not _valid(start_pos):
+            continue
+        d = _road_km(end_pos, start_pos)
+        total += d
+        if d > mx:
+            mx = d
+        segs += 1
+    return (round(total, 2), round(mx, 2), segs)
+
+
 def check_per_order_35min_rule(
     plan: RoutePlanV2,
     threshold_min: float = C2_PER_ORDER_THRESHOLD_MIN,
@@ -312,6 +391,24 @@ def check_feasibility_v2(
                 metrics["r5_pickup_detour_per_order_km"] = round(
                     detour_total / len(pickups_open), 2
                 )
+
+    # V3.28 P2 — wave detection (Adrian doktryna 2026-05-10).
+    # Cluster orderów po pickup_ready_at + pickup_coords. Bag z 1 falą = idealny
+    # ("linia/okrąg"). Bag z 2+ fal = OK jeśli inter-wave deadhead sensowny.
+    # NIE refactoryzujemy TSP tutaj — eksponujemy tylko metrykę dla scoring.
+    waves = _detect_waves(bag, new_order)
+    metrics["n_waves"] = len(waves)
+    if len(waves) >= 2:
+        deadhead_total, deadhead_max, n_segs = _inter_wave_deadhead_km(
+            waves, list(bag) + [new_order]
+        )
+        metrics["inter_wave_deadhead_total_km"] = deadhead_total
+        metrics["inter_wave_deadhead_max_km"] = deadhead_max
+        metrics["inter_wave_n_segments"] = n_segs
+    else:
+        metrics["inter_wave_deadhead_total_km"] = 0.0
+        metrics["inter_wave_deadhead_max_km"] = 0.0
+        metrics["inter_wave_n_segments"] = 0
 
     # R8 (F2.1c) — pickup_span hard cap (T_KUR spread w bagu).
     if bag:

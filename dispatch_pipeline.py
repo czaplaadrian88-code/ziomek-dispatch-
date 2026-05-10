@@ -2046,6 +2046,21 @@ def _assess_order_impl(
             else:
                 bonus_r5_detour = -40.0
 
+        # V3.28 P2 — wave clean bonus + inter-wave deadhead penalty (Adrian doktryna 2026-05-10).
+        # Wave = burst pickupów (12 min + 1.5 km) → burst dropów. Bag z 1 falą = "linia"
+        # (Adrian's idealny model). 2+ fale = OK gdy deadhead między falami sensowny.
+        # Filozofia: nie blokujemy multi-wave bagów (peak day rescue), karzemy tylko
+        # nadmiarowy deadhead (>4 km) między falami.
+        _n_waves = metrics.get("n_waves") or 0
+        _inter_wave_max = metrics.get("inter_wave_deadhead_max_km") or 0.0
+        bonus_wave_clean = 0.0
+        bonus_inter_wave_deadhead = 0.0
+        if _n_waves == 1 and (len(_bag_dicts) >= 1 if "_bag_dicts" in dir() else True):
+            bonus_wave_clean = 10.0  # 1 fala = atomic burst, idealnie
+        elif _n_waves >= 2 and _inter_wave_max > 4.0:
+            # Penalty -3/km nadmiar nad 4 km deadhead (najgorszy segment)
+            bonus_inter_wave_deadhead = -3.0 * (_inter_wave_max - 4.0)
+
         # R8 soft penalty (pickup span — oryginalna + violation)
         _r8_span = metrics.get("r8_pickup_span_min") or 0
         bonus_r8_soft_pen = (
@@ -2157,7 +2172,7 @@ def _assess_order_impl(
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
         bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.
@@ -2286,6 +2301,13 @@ def _assess_order_impl(
             "r5_pickup_detour_per_order_km": metrics.get("r5_pickup_detour_per_order_km"),
             "bonus_r1_corridor": round(bonus_r1_corridor, 2),
             "bonus_r5_detour": round(bonus_r5_detour, 2),
+            # V3.28 P2 — wave detection (Adrian doktryna 2026-05-10)
+            "n_waves": metrics.get("n_waves"),
+            "inter_wave_deadhead_total_km": metrics.get("inter_wave_deadhead_total_km"),
+            "inter_wave_deadhead_max_km": metrics.get("inter_wave_deadhead_max_km"),
+            "inter_wave_n_segments": metrics.get("inter_wave_n_segments"),
+            "bonus_wave_clean": round(bonus_wave_clean, 2),
+            "bonus_inter_wave_deadhead": round(bonus_inter_wave_deadhead, 2),
             "r8_violation_min": metrics.get("r8_violation_min", 0.0),
             "bonus_r9_stopover": round(bonus_r9_stopover, 2),
             "bonus_r9_wait_pen": round(bonus_r9_wait_pen, 2),
