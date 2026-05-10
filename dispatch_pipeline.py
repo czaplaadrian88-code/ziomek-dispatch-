@@ -2628,6 +2628,31 @@ def _assess_order_impl(
                     f"LGBM_SHADOW oid={order_id} winner_lgbm=None winner_current={top[0].courier_id if top else None} "
                     f"agreement=None fallback=exception_in_pipeline latency_ms=0.0 pool_size=0 model_version=unknown"
                 )
+        # V3.28 ANCHOR FIX 2026-05-10 — Adrian doktryna: min_score_threshold dla PROPOSE.
+        # Gdy best.score < MIN_PROPOSE_SCORE → KOORD zamiast PROPOSE (all_candidates_low_score).
+        # Diagnoza 2026-05-10 472189: PROPOSE Andrei score=-50 + Mateusz Bro alt -1047 =
+        # both bad, operator i tak nadpisał (89% override rate). MIN_PROPOSE_SCORE=-100
+        # = tylko ekstremalnie złe (jak -1047) lecą do KOORD; lekko ujemne (peak rescue) zostają.
+        _best_score = getattr(top[0], "score", None)
+        if isinstance(_best_score, (int, float)) and _best_score < C.MIN_PROPOSE_SCORE:
+            _result_low = PipelineResult(
+                order_id=order_id,
+                verdict="KOORD",
+                reason=(
+                    f"all_candidates_low_score (best={top[0].courier_id} "
+                    f"score={_best_score:.1f}<{C.MIN_PROPOSE_SCORE:.0f}; "
+                    f"feasible={len(feasible)})"
+                ),
+                best=top[0],
+                candidates=top,
+                pickup_ready_at=pickup_ready_at,
+                restaurant=restaurant,
+                delivery_address=delivery_address,
+                pool_total_count=len(candidates),
+                pool_feasible_count=len(feasible),
+            )
+            _classify_and_set_auto_route(_result_low, fleet_snapshot, order_event, now=now)
+            return _result_low
         _result_pf = PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",

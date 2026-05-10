@@ -289,6 +289,14 @@ BAG_TIME_SOFT_MIN = 30
 BAG_TIME_PRE_WARNING_MIN = 30    # sla_tracker alert Telegramu (krok #6)
 BAG_TIME_SOFT_PENALTY_PER_MIN = 8
 
+# V3.28 ANCHOR FIX 2026-05-10 — Adrian doktryna: PROPOSE quality threshold.
+# Gdy best.score < MIN_PROPOSE_SCORE → verdict=KOORD reason=all_candidates_low_score.
+# Background: 2026-05-10 472189 PROPOSE Andrei score=-50 mimo Mateusz Bro alt -1047
+# (best of bad). Operator override 89% — system proponuje gdy realnie wszyscy źli.
+# Próg -100 = "tylko ekstremalne sub-optymalne (jak -1047) lecą do KOORD".
+# Lekko ujemne propozycje (peak day rescue) zostają PROPOSE.
+MIN_PROPOSE_SCORE = -100.0
+
 # ─── R7 (H4): Long-haul isolation w peak hours ───
 # Placeholder — brak danych empirycznych na ride_distance w shadow_decisions.
 # Post-deploy monitoring: jeśli R7 trigger rate > 20% w peak 14-17, próg za niski.

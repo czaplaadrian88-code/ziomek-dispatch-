@@ -408,48 +408,94 @@ def check_feasibility_v2(
             plan,
         )
 
-    # R6 (F2.1b) — BAG_TIME termiczny hard cap (C.BAG_TIME_HARD_MAX_MIN = 35 min).
-    # SLA check wyżej używa sla_minutes (35 solo / 45 bundla — Bartek Gold).
-    # R6 jest STRICTER dla bundli: chroni termicznie bez względu na SLA budżet.
-    # Działa też solo (Opcja A): jedzenie stygnie identycznie niezależnie od bag size.
-    # Reużywa plan.predicted_delivered_at + plan.pickup_at z istniejącego simulate.
+    # R6 (F2.1b + V3.28 ANCHOR FIX 2026-05-10) — BAG_TIME termiczny PER-ORDER hard cap.
+    #
+    # Doktryna Adriana 2026-05-10: 35 min jest JEDYNĄ twardą regułą, per-zlecenie.
+    # Anchor selection (Lekcja #84 thermal anchor):
+    #   - new_order: anchor = pickup_ready_at (real ready time z restauracji)
+    #   - bag order, NOT yet picked_up: anchor = pickup_ready_at (jedzenie czeka od ready)
+    #   - bag order, ALREADY picked_up: anchor = picked_up_at (real pickup), SOFT only
+    #     (kurier już wiezie — nie odrzucamy z bagu, fizycznie nie ma sensu cofać)
+    #
+    # Dlaczego nie plan.pickup_at (jak pre-V3.28): TSP może projektować pickup later
+    # niż ready_at (np. +37 min gdy kurier zajęty), maskując 70+ min real thermal.
+    # Diagnoza 2026-05-10 472189: r6_max_bag_time=34 min "pass" while real thermal 70 min.
     r6_max_bag_time = 0.0
     r6_worst_oid: Optional[str] = None
+    r6_per_order_violations: List[Tuple[str, float]] = []
+    r6_picked_up_violations: List[Tuple[str, float]] = []
     for o in list(bag) + [new_order]:
         pred = plan.predicted_delivered_at.get(o.order_id)
         if pred is None:
-            log.warning(f"R6 skip: brak predicted_delivered_at dla {o.order_id}")
+            # Lekcja #32 fail-loud: brak predicted = bug w simulator
+            log.warning(
+                f"R6 missing predicted_delivered_at oid={o.order_id} "
+                f"bag_size={len(bag)} new_oid={new_order.order_id} — conservative skip"
+            )
             continue
-        if o.order_id in plan.pickup_at:
-            pu = plan.pickup_at[o.order_id]
-        elif o.picked_up_at is not None:
+        if pred.tzinfo is None:
+            pred = pred.replace(tzinfo=timezone.utc)
+        is_new = o is new_order
+        is_picked = (not is_new) and (
+            getattr(o, "picked_up_at", None) is not None
+            or getattr(o, "status", None) == "picked_up"
+        )
+        # Anchor selection per-status
+        anchor: Optional[datetime] = None
+        anchor_src: str = "now"
+        if is_picked:
             pu = o.picked_up_at
-            if pu.tzinfo is None:
-                pu = pu.replace(tzinfo=timezone.utc)
-            pu = pu.astimezone(timezone.utc)
+            if pu is not None:
+                if pu.tzinfo is None:
+                    pu = pu.replace(tzinfo=timezone.utc)
+                anchor = pu.astimezone(timezone.utc)
+                anchor_src = "picked_up_at"
         else:
-            pu = now
-        bag_time_min = (pred - pu).total_seconds() / 60.0
+            pra = getattr(o, "pickup_ready_at", None)
+            if pra is not None:
+                if pra.tzinfo is None:
+                    pra = pra.replace(tzinfo=timezone.utc)
+                anchor = pra.astimezone(timezone.utc)
+                anchor_src = "pickup_ready_at"
+            elif o.order_id in plan.pickup_at:
+                pu = plan.pickup_at[o.order_id]
+                if pu.tzinfo is None:
+                    pu = pu.replace(tzinfo=timezone.utc)
+                anchor = pu.astimezone(timezone.utc)
+                anchor_src = "tsp_pickup_at"
+        if anchor is None:
+            anchor = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        bag_time_min = (pred - anchor).total_seconds() / 60.0
         if bag_time_min > r6_max_bag_time:
             r6_max_bag_time = bag_time_min
             r6_worst_oid = o.order_id
+        # Per-order violation tracking (split picked-up vs not)
+        if bag_time_min > C.BAG_TIME_HARD_MAX_MIN:
+            if is_picked:
+                r6_picked_up_violations.append((o.order_id, round(bag_time_min, 1)))
+            else:
+                r6_per_order_violations.append((o.order_id, round(bag_time_min, 1)))
     metrics["r6_max_bag_time_min"] = round(r6_max_bag_time, 1)
     metrics["r6_worst_oid"] = r6_worst_oid
     metrics["r6_is_solo"] = len(bag) == 0
     metrics["r6_bag_size"] = len(bag)
+    metrics["r6_per_order_violations"] = r6_per_order_violations
+    metrics["r6_picked_up_violations"] = r6_picked_up_violations
     # F2.2 C3 narrow (2026-04-18): R6 soft warning zone (30, 35] — metric-only.
-    # Hard zone >35 permanent (below) — defense in depth vs C2 per-order gate.
-    # Metric always logged; scoring.py uses it only when DEPRECATE_LEGACY_HARD_GATES=True.
     if 30.0 < r6_max_bag_time <= C.BAG_TIME_HARD_MAX_MIN:
         metrics["r6_soft_penalty"] = round(-3.0 * (r6_max_bag_time - 30.0), 2)
         metrics["r6_soft_zone_active"] = True
     else:
         metrics["r6_soft_penalty"] = 0.0
         metrics["r6_soft_zone_active"] = False
-    if r6_max_bag_time > C.BAG_TIME_HARD_MAX_MIN:
+    # V3.28 ANCHOR FIX: hard reject TYLKO za assigned-but-not-picked + new_order >35.
+    # Picked_up orders są tracked ale NIE rejected (kurier kończy w drodze).
+    if r6_per_order_violations:
+        worst_oid, worst_bt = max(r6_per_order_violations, key=lambda v: v[1])
         return (
             "NO",
-            f"R6_bag_time_exceeded ({r6_worst_oid} {r6_max_bag_time:.1f}min>{C.BAG_TIME_HARD_MAX_MIN})",
+            f"R6_per_order_>35min ({worst_oid} {worst_bt:.1f}min, "
+            f"thermal anchor=ready_at; n_violations={len(r6_per_order_violations)})",
             metrics,
             plan,
         )

@@ -548,10 +548,18 @@ def _compute_per_order_delivery_minutes(
     new_order: OrderSim,
     now: datetime,
 ) -> Optional[Dict[str, float]]:
-    """Per-order elapsed pickup→drop in minutes (F2.2 C1).
+    """Per-order elapsed thermal_anchor→drop in minutes (F2.2 C1 + V3.28 ANCHOR FIX).
 
-    Iterates bag + new_order (matches _count_sla_violations scope). Pickup reference
-    resolution order: pickup_at dict (this plan) → o.picked_up_at (prior) → now (last resort).
+    Doktryna Adriana 2026-05-10: thermal carry liczona od momentu gdy jedzenie
+    JEST GOTOWE w restauracji (pickup_ready_at) — nie od TSP-projected pickup.
+    TSP może planować pickup later (kurier zajęty), maskując 70+ min real thermal.
+
+    Anchor selection:
+      - new_order: pickup_ready_at (real ready time)
+      - bag order, NOT picked_up: pickup_ready_at (jedzenie czeka od ready)
+      - bag order, ALREADY picked_up: picked_up_at (real pickup, soft tracking)
+    Fallback: tsp pickup_at → now (last resort).
+
     Returns None if any order lacks delivered_at (fail-closed for C2 hard gate).
     """
     result: Dict[str, float] = {}
@@ -559,16 +567,34 @@ def _compute_per_order_delivery_minutes(
         pred = delivered_at.get(o.order_id)
         if pred is None:
             return None
-        if o.order_id in pickup_at:
-            pu = pickup_at[o.order_id]
-        elif o.picked_up_at is not None:
+        if pred.tzinfo is None:
+            pred = pred.replace(tzinfo=timezone.utc)
+        is_new = o is new_order
+        is_picked = (not is_new) and (
+            getattr(o, "picked_up_at", None) is not None
+            or getattr(o, "status", None) == "picked_up"
+        )
+        anchor: Optional[datetime] = None
+        if is_picked:
             pu = o.picked_up_at
-            if pu.tzinfo is None:
-                pu = pu.replace(tzinfo=timezone.utc)
-            pu = pu.astimezone(timezone.utc)
+            if pu is not None:
+                if pu.tzinfo is None:
+                    pu = pu.replace(tzinfo=timezone.utc)
+                anchor = pu.astimezone(timezone.utc)
         else:
-            pu = now
-        result[o.order_id] = round((pred - pu).total_seconds() / 60.0, 2)
+            pra = getattr(o, "pickup_ready_at", None)
+            if pra is not None:
+                if pra.tzinfo is None:
+                    pra = pra.replace(tzinfo=timezone.utc)
+                anchor = pra.astimezone(timezone.utc)
+            elif o.order_id in pickup_at:
+                pu = pickup_at[o.order_id]
+                if pu.tzinfo is None:
+                    pu = pu.replace(tzinfo=timezone.utc)
+                anchor = pu.astimezone(timezone.utc)
+        if anchor is None:
+            anchor = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        result[o.order_id] = round((pred - anchor).total_seconds() / 60.0, 2)
     return result
 
 
