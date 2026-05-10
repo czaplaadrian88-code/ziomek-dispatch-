@@ -572,23 +572,22 @@ def build_fleet_snapshot(
     # w dispatch_pipeline gdy state-vs-panel divergence (cid=None lag).
     _pks_ts, _pks_packs, _pks_age = _load_panel_packs_cache()
     if _pks_age is not None and _pks_age <= PANEL_PACKS_CACHE_MAX_AGE_S:
+        # Pre-build normalized lookup: panel używa "Bartek O," (z przecinkiem) podczas
+        # gdy kurier_ids ma "Bartek O" — `rstrip(".,;:")` jak telegram_approver._norm.
+        # Lekcja #78: defense-in-depth na nick normalization across systems.
+        _packs_normalized: Dict[str, list] = {}
+        for _pn, _po in _pks_packs.items():
+            if not isinstance(_pn, str):
+                continue
+            _key = _pn.strip().rstrip(".,;:").lower()
+            if _key:
+                _packs_normalized[_key] = _po
         for kid, cs in fleet.items():
             cs.panel_packs_cache_age_s = round(_pks_age, 1)
             if not cs.name or len(cs.bag) > 0:
                 continue
-            # Spróbuj znaleźć nick w cache (case-insensitive trim)
-            _nick_norm = cs.name.strip()
-            _candidates = (
-                _pks_packs.get(_nick_norm)
-                or _pks_packs.get(_nick_norm.lower())
-                or []
-            )
-            if not _candidates:
-                # Fallback: case-insensitive linear search
-                for _pn, _po in _pks_packs.items():
-                    if isinstance(_pn, str) and _pn.strip().lower() == _nick_norm.lower():
-                        _candidates = _po
-                        break
+            _nick_norm = cs.name.strip().rstrip(".,;:").lower()
+            _candidates = _packs_normalized.get(_nick_norm) or []
             if _candidates:
                 cs.panel_packs_oids_signal = [str(x) for x in _candidates]
     else:
