@@ -242,6 +242,37 @@ def check_feasibility_v2(
             metrics["r1_violation_km"] = round(spread_km - R1_MAX_DELIV_SPREAD_KM, 2)
         else:
             metrics["r1_violation_km"] = 0.0
+        # V3.28 P1 — R1 directionality (corridor cosine) — Adrian doktryna 2026-05-10.
+        # Spread w km nie wystarcza: 8 km drops w jednym kierunku (Nowe Miasto cluster) =
+        # OK trasa; 4 km drops w przeciwnych dzielnicach (Skorupy + Henrykowo) = bad.
+        # Mierzymy "kierunkowość" jako średnia cosine similarity wektorów courier→drop.
+        # avg_cos ≈ 1.0: wszystkie drops w tym samym kierunku (tight corridor)
+        # avg_cos ≈ 0.0: drops w prostopadłych kierunkach
+        # avg_cos ≈ -1.0: drops w przeciwnych kierunkach (opposite split)
+        if _valid(courier_pos):
+            drops_all: List[Tuple[float, float]] = []
+            for b in bag:
+                if _valid(b.delivery_coords):
+                    drops_all.append(b.delivery_coords)
+            drops_all.append(new_order.delivery_coords)
+            if len(drops_all) >= 2:
+                dirs: List[Tuple[float, float]] = []
+                for d in drops_all:
+                    vx = d[0] - courier_pos[0]
+                    vy = d[1] - courier_pos[1]
+                    n = (vx * vx + vy * vy) ** 0.5
+                    if n > 1e-9:
+                        dirs.append((vx / n, vy / n))
+                if len(dirs) >= 2:
+                    cos_sum = 0.0
+                    pairs = 0
+                    for i in range(len(dirs)):
+                        for j in range(i + 1, len(dirs)):
+                            cos_sum += dirs[i][0] * dirs[j][0] + dirs[i][1] * dirs[j][1]
+                            pairs += 1
+                    metrics["r1_avg_pairwise_cosine"] = round(
+                        cos_sum / pairs if pairs else 0.0, 3
+                    )
 
     # R5 mixed-restaurant pickup spread — same restaurant → spread=0 (no fire).
     if bag and _valid(new_order.pickup_coords):
@@ -251,6 +282,36 @@ def check_feasibility_v2(
             metrics["r5_violation_km"] = round(pickup_spread_km - R5_MAX_MIXED_PICKUP_SPREAD_KM, 2)
         else:
             metrics["r5_violation_km"] = 0.0
+        # V3.28 P1 — R5 pickup detour per order — Adrian doktryna 2026-05-10.
+        # Spread w km nie wystarcza: Wasilków pickup + Galeria Biała pickup → Iłłady drops
+        # = pickup spread 5km > 2.5km próg, ale Galeria Biała JEST PO DRODZE z courier do
+        # Wasilkowa, więc real detour ~0. Mierzymy "po drodze" jako:
+        # detour_total = nearest-neighbor route(courier→all_pickups) - solo_route(courier→first_pickup).
+        # Per-order detour = detour_total / n_pickups. <0.5 km = po drodze.
+        if _valid(courier_pos):
+            pickups_open: List[Tuple[float, float]] = []
+            for b in bag:
+                if _valid(b.pickup_coords) and getattr(b, "status", "assigned") != "picked_up":
+                    pickups_open.append(b.pickup_coords)
+            pickups_open.append(new_order.pickup_coords)
+            if len(pickups_open) >= 2:
+                # Solo baseline: courier → najbliższy pickup (greedy)
+                solo_first = min(pickups_open, key=lambda p: _road_km(courier_pos, p))
+                solo_km = _road_km(courier_pos, solo_first)
+                # Multi route: nearest-neighbor sequencing all pickups
+                remaining = list(pickups_open)
+                cur = courier_pos
+                multi_km = 0.0
+                while remaining:
+                    nxt = min(remaining, key=lambda p: _road_km(cur, p))
+                    multi_km += _road_km(cur, nxt)
+                    cur = nxt
+                    remaining.remove(nxt)
+                detour_total = max(0.0, multi_km - solo_km)
+                metrics["r5_pickup_detour_total_km"] = round(detour_total, 2)
+                metrics["r5_pickup_detour_per_order_km"] = round(
+                    detour_total / len(pickups_open), 2
+                )
 
     # R8 (F2.1c) — pickup_span hard cap (T_KUR spread w bagu).
     if bag:

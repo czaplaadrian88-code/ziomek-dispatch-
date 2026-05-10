@@ -2010,6 +2010,42 @@ def _assess_order_impl(
         _r5_viol = metrics.get("r5_violation_km") or 0.0
         bonus_r5_soft_pen = _r5_viol * _rw.get("R5_pickup_per_km", -6.0) if _r5_viol > 0 else 0.0
 
+        # V3.28 P1 — R1 directionality (corridor) bonus/penalty — Adrian doktryna 2026-05-10.
+        # avg_pairwise_cosine wektorów courier→drop:
+        #  >0.85 = tight corridor (wszystkie w jednym kierunku)
+        #   0..0.5 = neutralne / lekko rozbieżne
+        #  -0.5..0 = orthogonal (drops w bok)
+        #  <-0.5 = opposite (split bag w przeciwne strony) — to chcemy karać mocno
+        _r1_avg_cos = metrics.get("r1_avg_pairwise_cosine")
+        bonus_r1_corridor = 0.0
+        if _r1_avg_cos is not None:
+            if _r1_avg_cos > 0.85:
+                bonus_r1_corridor = +20.0
+            elif _r1_avg_cos > 0.5:
+                bonus_r1_corridor = +5.0
+            elif _r1_avg_cos > 0.0:
+                bonus_r1_corridor = 0.0
+            elif _r1_avg_cos > -0.5:
+                bonus_r1_corridor = -15.0
+            else:
+                bonus_r1_corridor = -40.0
+
+        # V3.28 P1 — R5 pickup detour per order — Adrian doktryna 2026-05-10.
+        # detour_per_pickup_km = ile dodatkowego km każdy pickup płaci za udział w bagu
+        # (vs solo pickup). Galeria Biała "po drodze" do Wasilkowa → ~0 detour → 0 penalty.
+        # Pickupy na przeciwnych końcach miasta → detour 5+ km → -40 penalty.
+        _r5_detour = metrics.get("r5_pickup_detour_per_order_km")
+        bonus_r5_detour = 0.0
+        if _r5_detour is not None:
+            if _r5_detour < 0.5:
+                bonus_r5_detour = 0.0
+            elif _r5_detour < 1.5:
+                bonus_r5_detour = -5.0
+            elif _r5_detour < 3.0:
+                bonus_r5_detour = -15.0
+            else:
+                bonus_r5_detour = -40.0
+
         # R8 soft penalty (pickup span — oryginalna + violation)
         _r8_span = metrics.get("r8_pickup_span_min") or 0
         bonus_r8_soft_pen = (
@@ -2121,7 +2157,7 @@ def _assess_order_impl(
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
         bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.
@@ -2244,6 +2280,12 @@ def _assess_order_impl(
             "bonus_r8_soft_pen": round(bonus_r8_soft_pen, 2),
             "r1_violation_km": metrics.get("r1_violation_km", 0.0),
             "r5_violation_km": metrics.get("r5_violation_km", 0.0),
+            # V3.28 P1 — R1 directionality + R5 pickup detour (Adrian doktryna 2026-05-10)
+            "r1_avg_pairwise_cosine": metrics.get("r1_avg_pairwise_cosine"),
+            "r5_pickup_detour_total_km": metrics.get("r5_pickup_detour_total_km"),
+            "r5_pickup_detour_per_order_km": metrics.get("r5_pickup_detour_per_order_km"),
+            "bonus_r1_corridor": round(bonus_r1_corridor, 2),
+            "bonus_r5_detour": round(bonus_r5_detour, 2),
             "r8_violation_min": metrics.get("r8_violation_min", 0.0),
             "bonus_r9_stopover": round(bonus_r9_stopover, 2),
             "bonus_r9_wait_pen": round(bonus_r9_wait_pen, 2),

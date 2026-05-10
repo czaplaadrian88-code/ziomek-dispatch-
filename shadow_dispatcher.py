@@ -221,6 +221,12 @@ def _serialize_candidate(c) -> dict:
         # V3.28 ANCHOR FIX 2026-05-10 — per-order thermal violations (anchor=ready_at)
         "r6_per_order_violations": m.get("r6_per_order_violations"),
         "r6_picked_up_violations": m.get("r6_picked_up_violations"),
+        # V3.28 P1 — R1 directionality + R5 pickup detour (Adrian doktryna 2026-05-10)
+        "r1_avg_pairwise_cosine": m.get("r1_avg_pairwise_cosine"),
+        "r5_pickup_detour_total_km": m.get("r5_pickup_detour_total_km"),
+        "r5_pickup_detour_per_order_km": m.get("r5_pickup_detour_per_order_km"),
+        "bonus_r1_corridor": m.get("bonus_r1_corridor"),
+        "bonus_r5_detour": m.get("bonus_r5_detour"),
         "r7_ride_km": m.get("r7_ride_km"),
         "r7_warsaw_hour": m.get("r7_warsaw_hour"),
         "r7_in_peak": m.get("r7_in_peak"),
@@ -409,6 +415,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             # V3.28 ANCHOR FIX 2026-05-10 — per-order thermal violations (anchor=ready_at)
             "r6_per_order_violations": best_m.get("r6_per_order_violations"),
             "r6_picked_up_violations": best_m.get("r6_picked_up_violations"),
+            # V3.28 P1 — R1 directionality + R5 pickup detour (Adrian doktryna 2026-05-10)
+            "r1_avg_pairwise_cosine": best_m.get("r1_avg_pairwise_cosine"),
+            "r5_pickup_detour_total_km": best_m.get("r5_pickup_detour_total_km"),
+            "r5_pickup_detour_per_order_km": best_m.get("r5_pickup_detour_per_order_km"),
+            "bonus_r1_corridor": best_m.get("bonus_r1_corridor"),
+            "bonus_r5_detour": best_m.get("bonus_r5_detour"),
             # V3.28 ETAP 2: effective_start_at = shift_start gdy pre_shift clamp
             # odpalił, inaczej None. Telegram _route_lines_v2 użyje go zamiast
             # real now dla "start" line w trasie. pre_shift_clamp_applied flag
