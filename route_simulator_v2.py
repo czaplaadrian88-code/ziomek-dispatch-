@@ -870,6 +870,47 @@ def _ortools_plan(
             else:
                 time_windows.append((0.0, _common.V327_DROP_TIME_WINDOW_MAX_MIN))
 
+    # V3.28-P3-D1 (2026-05-10 wieczór): build cost_matrix z idle-at-pickup penalty.
+    # Adrian doktryna "kurierzy wolą jeździć niż czekać" → augment edges leading
+    # do pickup nodes z early-arrival risk (drive[i→j] < ready_at[j] = wait).
+    # cost_matrix jest osobny od time_matrix (constraint dim cumul) — solver
+    # minimalizuje augmented cost ale time dimension cumul zostaje drive-only.
+    # Default flag OFF (env override) — empirical calibration.
+    cost_matrix: List[List[float]] = [row[:] for row in time_matrix]
+    try:
+        if (
+            getattr(_common, "ENABLE_V328_P3D1_IDLE_COST", False)
+            and time_windows is not None
+            and now is not None
+        ):
+            _idle_w = float(getattr(_common, "V328_P3D1_IDLE_WEIGHT", 1.0))
+            for j in range(N):
+                node_j = nodes[j]
+                if node_j.get("kind") != "pickup":
+                    continue
+                if j >= len(time_windows) or time_windows[j] is None:
+                    continue
+                ready_min, _close_min = time_windows[j]
+                if ready_min <= 0:
+                    continue  # ready_at past — kurier zawsze on-time / late
+                for i in range(N):
+                    if i == j:
+                        continue
+                    arrival_lb = time_matrix[i][j]
+                    if arrival_lb >= ready_min:
+                        continue  # no idle expected — kurier dojdzie po ready_at
+                    wait_estimate = ready_min - arrival_lb
+                    # Cap przy 60 min (= V327_PICKUP_TIME_WINDOW_CLOSE_MIN) —
+                    # defensive guard przeciw absurdnym ready_min wartościom.
+                    wait_estimate = min(wait_estimate, 60.0)
+                    cost_matrix[i][j] += wait_estimate * _idle_w
+    except Exception as _idle_e:
+        _log.warning(
+            f"V328_P3D1_IDLE_COST_FAIL fallback to time_matrix N={N}: "
+            f"{type(_idle_e).__name__}: {str(_idle_e)[:120]}"
+        )
+        cost_matrix = [row[:] for row in time_matrix]  # re-copy clean
+
     solution = tsp_solver.solve_tsp_with_constraints(
         num_stops=N,
         pickup_drop_pairs=pickup_drop_pairs,
@@ -878,6 +919,7 @@ def _ortools_plan(
         time_windows=time_windows,
         max_route_min=120.0,
         time_limit_ms=int(_ot_ms),
+        cost_matrix_min=cost_matrix,
     )
 
     # V3.27.1 BUG-2 fallback: gdy INFEASIBLE z time windows, retry bez constraints

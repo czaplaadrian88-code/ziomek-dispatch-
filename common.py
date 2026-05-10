@@ -1421,6 +1421,27 @@ V3273_WAIT_COURIER_PER_MIN_PENALTY = -5.0      # +5 penalty per min above wait=6
 V3273_WAIT_COURIER_HARD_REJECT_MIN = 20.0      # wait >20 → HARD REJECT (infeasible)
 
 # ============================================================
+# V3.28-P3-D1 Idle-as-cost — TSP solver objective augment (2026-05-10 wieczór)
+# ============================================================
+# Naprawia 472339 root cause: TSP solver objective = sum(drive_min) only.
+# Wait-at-pickup (kurier dotrze przed ready_at) NIE liczony w cost → solver
+# wybiera plan z 12 min wait zamiast plan 6 min drive + interleaved drop.
+# Adrian doktryna 2026-05-10 wieczór: "kurierzy wolą jeździć niż czekać, bo
+# wtedy szybciej dowiozą i restauracje będą zadowolone".
+#
+# Mechanizm: w _ortools_plan przed solve, build cost_matrix:
+#   cost_matrix[i][j] = time_matrix[i][j] + max(0, ready_at[j] - drive[i→j]) × W
+# dla pickup nodes z time_window_open > 0. time_matrix unchanged (constraint
+# dimension cumul). Solver minimalizuje augmented cost → preferuje sequences
+# gdzie wait minimalny, "drop-by-the-way" pomiędzy pickupami z ready_at gap.
+#
+# W=1.0 = "1 min wait kosztuje tyle ile 1 min drive" (neutral baseline).
+# Default flag OFF — empirical calibration via env override + 24h shadow obs.
+ENABLE_V328_P3D1_IDLE_COST = _os.environ.get(
+    "ENABLE_V328_P3D1_IDLE_COST", "0") == "1"  # V3.28 P3-D1 flag (default OFF)
+V328_P3D1_IDLE_WEIGHT = float(_os.environ.get("V328_P3D1_IDLE_WEIGHT", "1.0"))  # 1.0 = wait min cost = drive min cost
+
+# ============================================================
 # V3.27.4 Frozen czas_kuriera TSP time window (2026-04-27 wieczór)
 # ============================================================
 # Naprawia #469014 root cause (TASK F H2): TSP cost = czysta dystans ignorował

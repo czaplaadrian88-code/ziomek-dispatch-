@@ -45,6 +45,7 @@ def solve_tsp_with_constraints(
     fixed_first_drop: Optional[int] = None,
     max_route_min: float = 90.0,
     time_limit_ms: int = 200,
+    cost_matrix_min: Optional[List[List[float]]] = None,
 ) -> Optional[TspSolution]:
     """Solve PDP z OR-Tools.
 
@@ -97,6 +98,12 @@ def solve_tsp_with_constraints(
         return None
     if time_windows is not None and len(time_windows) != num_stops:
         return None
+    # V3.28-P3-D1: cost_matrix_min validation (jeśli podany)
+    if cost_matrix_min is not None and (
+        len(cost_matrix_min) != num_stops
+        or any(len(row) != num_stops for row in cost_matrix_min)
+    ):
+        return None
 
     # OR-Tools setup
     # Open route trick: add dummy end node z distance/time = 0 do wszystkich.
@@ -109,16 +116,27 @@ def solve_tsp_with_constraints(
     dist_ext.append([0] * NUM_NODES)
     time_ext = [list(row) + [0] for row in time_matrix_min]
     time_ext.append([0] * NUM_NODES)
+    # V3.28-P3-D1: cost_matrix override gdy podany (idle-aware cost). Fallback
+    # na distance_matrix_km (legacy). cost_ext jest osobny od time_ext żeby
+    # constraint dimension (cumul) zostało clean drive-only — augment tylko
+    # objective. Bez tego cumul bywa double-counted (matrix ma wait_estimate +
+    # SetRange podbija do ready_at).
+    if cost_matrix_min is not None:
+        cost_ext = [list(row) + [0] for row in cost_matrix_min]
+        cost_ext.append([0] * NUM_NODES)
+    else:
+        cost_ext = dist_ext
 
     manager = pywrapcp.RoutingIndexManager(NUM_NODES, 1, [0], [DUMMY_END])
     routing = pywrapcp.RoutingModel(manager)
 
-    # Distance callback (cost function — solver minimizes)
+    # Cost callback (objective — solver minimizes). V3.28-P3-D1: cost_ext
+    # może zawierać wait_at_pickup penalty per Adrian's "kurierzy wolą jeździć".
     SCALE = 1000  # OR-Tools wants int — multiply km by 1000 → m precision
     def dist_cb(from_index, to_index):
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
-        return int(dist_ext[from_node][to_node] * SCALE)
+        return int(cost_ext[from_node][to_node] * SCALE)
 
     transit_callback_index = routing.RegisterTransitCallback(dist_cb)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
