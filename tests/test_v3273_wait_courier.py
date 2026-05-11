@@ -46,8 +46,9 @@ def test_wait_0_min_zero_penalty():
     assert r is False
 
 
-def test_wait_5_min_sweet_spot():
-    p, r = compute_wait_courier_penalty(5.0, bag_size_at_insertion=1)
+def test_wait_3_min_sweet_spot():
+    """P3-D2 2026-05-11: threshold tightened 5→3 → sweet spot ≤3 min."""
+    p, r = compute_wait_courier_penalty(3.0, bag_size_at_insertion=1)
     assert p == 0.0
     assert r is False
 
@@ -83,14 +84,9 @@ def test_wait_15_min_minus_55():
     assert r is False
 
 
-def test_wait_20_min_minus_80():
-    p, r = compute_wait_courier_penalty(20.0, bag_size_at_insertion=1)
-    assert p == -80.0
-    assert r is False
-
-
-def test_wait_20_5_min_hard_reject():
-    p, r = compute_wait_courier_penalty(20.5, bag_size_at_insertion=1)
+def test_wait_15_1_min_hard_reject():
+    """P3-D2 2026-05-11: hard_reject tightened 20→15 → wait >15 = infeasible."""
+    p, r = compute_wait_courier_penalty(15.1, bag_size_at_insertion=1)
     assert p == 0.0
     assert r is True
 
@@ -108,9 +104,13 @@ def test_bag_0_skip_with_high_wait():
     assert r is False
 
 
-def test_interpolation_between_5_and_6():
-    """Linear ramp 0 → -10 dla wait_min in (5, 6)."""
-    p, r = compute_wait_courier_penalty(5.5, bag_size_at_insertion=1)
+def test_interpolation_between_3_and_6():
+    """P3-D2 2026-05-11: linear ramp 0 → -10 dla wait_min in (3, 6).
+
+    Formula: ratio = (wait - 3) / (6 - 3); penalty = ratio * -10.
+    wait=4.5 → ratio=0.5 → penalty=-5.0 (midpoint sweet-spot-to-step).
+    """
+    p, r = compute_wait_courier_penalty(4.5, bag_size_at_insertion=1)
     assert abs(p - -5.0) < 0.01
     assert r is False
 

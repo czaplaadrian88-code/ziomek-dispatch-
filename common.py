@@ -1415,10 +1415,10 @@ V327_PRE_PROPOSAL_RECHECK_CACHE_EVICT_MAX_SIZE = 1000  # OR jeśli cache size > 
 # Default False — shadow validation period przed flip True.
 ENABLE_V3273_WAIT_COURIER_PENALTY = _os.environ.get(
     "ENABLE_V3273_WAIT_COURIER_PENALTY", "1") == "1"  # V3.27.3 flag flip 2026-04-27 wieczór (Adrian ACK post-Task B shadow validation)
-V3273_WAIT_COURIER_THRESHOLD_MIN = 5.0   # sweet spot ≤5 min (Adrian R27 ±5 margin)
+V3273_WAIT_COURIER_THRESHOLD_MIN = 3.0   # P3-D2 2026-05-11: tighten 5→3 (Adrian doktryna "kurierzy wolą jeździć niż czekać")
 V3273_WAIT_COURIER_FIRST_STEP_PENALTY = -10.0  # at wait=6 (first min above threshold)
 V3273_WAIT_COURIER_PER_MIN_PENALTY = -5.0      # +5 penalty per min above wait=6
-V3273_WAIT_COURIER_HARD_REJECT_MIN = 20.0      # wait >20 → HARD REJECT (infeasible)
+V3273_WAIT_COURIER_HARD_REJECT_MIN = 15.0      # P3-D2 2026-05-11: tighten 20→15 (idle >15 min = unacceptable)
 
 # ============================================================
 # V3.28-P3-D1 Idle-as-cost — TSP solver objective augment (2026-05-10 wieczór)
