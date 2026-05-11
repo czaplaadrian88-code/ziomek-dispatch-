@@ -331,17 +331,35 @@ class ParserHealthMonitor:
                 abs_diff = abs(n_active - prev_median)
                 if (delta_pct < DELTA_PCT_LOWER or delta_pct > DELTA_PCT_UPPER) \
                         and abs_diff >= PARSER_HEALTH_DELTA_MIN_ABS_DIFF:
+                    if delta_pct > 0:
+                        direction_headline = f"⚠️ Wzrost aktywnych zamówień: {prev_median} → {n_active} ({delta_pct:+.0f}%)"
+                        direction_body = (
+                            "Liczba zamówień w obróbce nagle wzrosła ponad próg. "
+                            "Może to start dnia, nagły wzrost ruchu, albo (rzadko) glitch parsera."
+                        )
+                    else:
+                        direction_headline = f"⚠️ Spadek aktywnych zamówień: {prev_median} → {n_active} ({delta_pct:+.0f}%)"
+                        direction_body = (
+                            "Liczba zamówień w obróbce nagle spadła poniżej progu. "
+                            "Może to koniec peaku / rollover panelu, manualny KOORD flush, "
+                            "albo (rzadko) parser zgubił część aktywnych orderów."
+                        )
                     alerts.append({
                         "type": "PARSER_DELTA_SPIKE",
                         "severity": "warning",
                         "message": (
-                            f"⚠️ Skok aktywnych zamówień: {prev_median} → {n_active} ({delta_pct:+.0f}%)\n"
-                            f"Liczba zamówień w obróbce nagle wzrosła ponad próg. "
-                            f"Może to start dnia, nagły wzrost ruchu, albo (rzadko) glitch parsera.\n\n"
+                            f"{direction_headline}\n"
+                            f"{direction_body}\n\n"
                             f"Co robię: dispatchuję dalej normalnie, obserwuję trend. "
                             f"Akcja niepotrzebna chyba że widzisz coś dziwnego w panelu."
                         ),
-                        "context": {"current": n_active, "prev_median": prev_median, "delta_pct": delta_pct, "metric": "active_orders"},
+                        "context": {
+                            "current": n_active,
+                            "prev_median": prev_median,
+                            "delta_pct": delta_pct,
+                            "direction": "up" if delta_pct > 0 else "down",
+                            "metric": "active_orders",
+                        },
                     })
 
         # CHECK 3: stuck variance (count stałe przez ≥STUCK_COUNT_TOLERANCE cycles) — na ACTIVE

@@ -407,6 +407,48 @@ def test_snapshot_suppress_zero_output_pre_09_warsaw(monkeypatch):
             f"hour-of-day suppression should remove ZERO_OUTPUT pre-09, got {snap['anomalies_active']}"
 
 
+# ─── Delta direction-aware message (2026-05-11 #34 fix) ─────────────────
+
+def test_delta_spike_message_up_direction():
+    """+% delta → message mówi 'Wzrost', context.direction='up'.
+    Pre-fix: hardcoded 'Skok ... wzrosła' niezależnie od kierunku.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        # 5 cycles steady na 4 active → prev_median=4
+        for i in range(5):
+            _record_with_active(m, cycle=i, order_ids=["a", "b", "c", "d"], closed_ids=[])
+        # Cycle 6: skok 4→10 → delta=+150%, abs_diff=6 ≥ 3 → fires UP
+        ids = [str(j) for j in range(10)]
+        alerts = _record_with_active(m, cycle=6, order_ids=ids, closed_ids=[])
+        spikes = [a for a in alerts if a["type"] == "PARSER_DELTA_SPIKE"]
+        assert len(spikes) == 1, f"expected 1 UP spike, got {spikes}"
+        assert spikes[0]["context"]["direction"] == "up"
+        assert "Wzrost" in spikes[0]["message"]
+        assert "Spadek" not in spikes[0]["message"]
+
+
+def test_delta_spike_message_down_direction():
+    """-% delta → message mówi 'Spadek', context.direction='down'.
+    Real-world 2026-05-11 19:04: 7→4 (-43%) leciało jako 'Skok ... wzrosła'.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        m = _make_monitor(td)
+        # 5 cycles steady na 10 active → prev_median=10
+        for i in range(5):
+            ids = [str(j) for j in range(10)]
+            _record_with_active(m, cycle=i, order_ids=ids, closed_ids=[])
+        # Cycle 6: spadek 10→4 → delta=-60%, abs_diff=6 ≥ 3 → fires DOWN
+        alerts = _record_with_active(m, cycle=6, order_ids=["a", "b", "c", "d"], closed_ids=[])
+        spikes = [a for a in alerts if a["type"] == "PARSER_DELTA_SPIKE"]
+        assert len(spikes) == 1, f"expected 1 DOWN spike, got {spikes}"
+        assert spikes[0]["context"]["direction"] == "down"
+        assert "Spadek" in spikes[0]["message"]
+        assert "Wzrost" not in spikes[0]["message"]
+        assert "wzrosła" not in spikes[0]["message"], \
+            "DOWN delta NIE może mówić 'wzrosła ponad próg' (pre-fix bug)"
+
+
 # ─── Runner ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     tests = [
@@ -425,6 +467,8 @@ if __name__ == "__main__":
         ("active_falls_back_to_order_ids_when_no_closed", test_active_falls_back_to_order_ids_when_no_closed),
         ("snapshot_suppress_stuck_when_motion_below_threshold", test_snapshot_suppress_stuck_when_motion_below_threshold),
         ("snapshot_reports_stuck_when_motion_above_threshold", test_snapshot_reports_stuck_when_motion_above_threshold),
+        ("delta_spike_message_up_direction", test_delta_spike_message_up_direction),
+        ("delta_spike_message_down_direction", test_delta_spike_message_down_direction),
         # NB: test_snapshot_suppress_zero_output_pre_09_warsaw wymaga pytest monkeypatch fixture,
         # pominięto w custom runnerze (uruchamiany via pytest).
     ]
