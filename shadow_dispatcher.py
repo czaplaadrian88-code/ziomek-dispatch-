@@ -750,52 +750,119 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
 import os as _os_v328
 V328_WORKER_STUCK_AGE_SEC = int(_os_v328.environ.get("V328_WORKER_STUCK_AGE_SEC", "300"))
 V328_WORKER_STUCK_PENDING_THRESHOLD = int(_os_v328.environ.get("V328_WORKER_STUCK_PENDING_THRESHOLD", "100"))
+# V3.28 #35 (2026-05-11 wieczór): hysteresis + sustain + re-alert (long-term fix).
+# Incydent ~18:30 Warsaw: alert "STUCK age=310s pending=191" co ~10 min spam dla
+# Adriana. Root cause: pre-#35 latch resetował się gdy is_stuck=False (single
+# successful process_event flipuje age→0 → latch reset → re-fire 5-10 min później
+# gdy age znów przekroczy 300s, mimo że pending=191 wciąż wisi). Worker pod peak
+# load przetwarza wolno (1 event/N min), age oscyluje wokół threshold → spam.
+# Meta-class Lekcja #109/#110/#111 ("alert technically firing ALE doesn't
+# communicate truth"). Pre-#35 mieszał dwie różne klasy failure: WORKER_FROZEN
+# (process martwy) vs BACKLOG_OVERLOAD (worker żywy ale przeciążony). Recovery
+# semantics dla obu różne → trzeba hysteresis + sustain.
+V328_WORKER_STUCK_PENDING_LOW_WATER = int(
+    _os_v328.environ.get("V328_WORKER_STUCK_PENDING_LOW_WATER", "30")
+)  # Pending musi spaść <= low_water żeby reset latch (hysteresis exit). 30 << 100 daje materialny gap.
+V328_WORKER_STUCK_SUSTAIN_CYCLES = int(
+    _os_v328.environ.get("V328_WORKER_STUCK_SUSTAIN_CYCLES", "2")
+)  # N kolejnych heartbeatów (60s każdy) z is_stuck=True przed ENTER alert. Anti-flap.
+V328_WORKER_STUCK_REALERT_INTERVAL_SEC = int(
+    _os_v328.environ.get("V328_WORKER_STUCK_REALERT_INTERVAL_SEC", "1800")
+)  # SUSTAINED re-alert co N sekund podczas sustained stuck (default 30 min). Reminder że problem trwa.
 
 
-def _v328_compute_heartbeat_state(last_processed_ts: float, now: float, pending: int) -> dict:
-    """V3.28 Fix 3 helper: pure function compute heartbeat liveness state.
+def _v328_compute_heartbeat_state(
+    last_processed_ts: float,
+    now: float,
+    pending: int,
+    pending_low_water: int = None,
+) -> dict:
+    """V3.28 Fix 3 + #35 helper: pure function compute heartbeat liveness state.
 
     Multi-signal stuck detection (Lekcja #66): age>threshold AND pending>threshold.
     Quiet period (low pending, no orders to process) → NOT stuck (worker idle).
 
-    Returns dict z 3 polami:
+    V3.28 #35 (2026-05-11): added `is_recovered` (hysteresis exit condition) =
+    pending <= low_water. Recovery decoupled od is_stuck — pojedynczy process_event
+    flipuje age=0 (is_stuck=False) ALE pending=191 trzyma się wciąż wysoko → NIE
+    jest to recovery. Recovery musi widzieć drop kolejki, nie tylko 1 event.
+
+    Returns dict z 4 polami:
     - age_sec: seconds od last successful process_event
     - worker_alive: True jeśli age < V328_WORKER_STUCK_AGE_SEC
-    - is_stuck: True jeśli age > threshold AND pending > threshold (alert trigger)
+    - is_stuck: True jeśli age > threshold AND pending > threshold (alert candidate)
+    - is_recovered: True jeśli pending <= low_water (latch reset condition)
     """
+    if pending_low_water is None:
+        pending_low_water = V328_WORKER_STUCK_PENDING_LOW_WATER
     age_sec = max(0.0, now - last_processed_ts)
     worker_alive = age_sec < V328_WORKER_STUCK_AGE_SEC
     is_stuck = (
         age_sec > V328_WORKER_STUCK_AGE_SEC
         and pending > V328_WORKER_STUCK_PENDING_THRESHOLD
     )
+    is_recovered = pending <= pending_low_water
     return {
         "age_sec": age_sec,
         "worker_alive": worker_alive,
         "is_stuck": is_stuck,
+        "is_recovered": is_recovered,
     }
 
 
-def _v328_should_emit_stuck_alert(is_stuck: bool, alert_sent: bool) -> tuple:
-    """V3.28 #33 (2026-05-11): stuck alert state machine — Telegram dedup.
+def _v328_should_emit_stuck_alert(
+    is_stuck: bool,
+    is_recovered: bool,
+    alert_sent: bool,
+    high_water_streak: int,
+    last_alert_ts: float,
+    now: float,
+    sustain_cycles: int = None,
+    realert_interval_sec: float = None,
+) -> tuple:
+    """V3.28 #33+#35 (2026-05-11): stuck alert state machine z hysteresis + sustain.
 
-    Pre-#33 V328_WORKER_STUCK leciało TYLKO do log.critical (silent dla Adriana).
-    Audit 11.05 17:32 ujawnił 6 alerts dziś bez żadnej propagacji do Telegrama
-    → worker stuck ~17:48 niewidoczny, Adrian musiał manual koord.
+    Pre-#35 (Lekcja #112 root cause): single is_stuck=False flipował latch →
+    re-fire spam. Fix: dwie ortogonalne osie:
+      1. ENTER guard: sustain N kolejnych is_stuck=True cycles (anti-flap)
+      2. RECOVERY guard: latch reset TYLKO gdy is_recovered (pending<=low_water),
+         NIE na pojedyncze is_stuck=False (age dropped przez 1 event)
+      3. SUSTAINED reminder: re-alert co realert_interval_sec gdy stuck trwa
+         (operator visibility — problem nie znika)
 
-    Pure function — returns (emit_telegram, new_alert_sent) tuple:
-    - stuck + NOT alerted → emit, set sent=True (entry alert ONCE per stuck cycle)
-    - stuck + alerted → no emit (dedup heartbeat spam co 60s)
-    - NOT stuck + alerted → no emit, reset sent=False (recovery — re-arm)
-    - NOT stuck + NOT alerted → no-op (healthy)
+    Returns 5-tuple: (emit, kind, new_alert_sent, new_streak, new_last_alert_ts)
+      kind ∈ {'ENTER', 'SUSTAINED', 'RECOVERY', None}
 
-    Mirror MP-#13 OSRM L2 alert pattern (osrm_client._osrm_degraded_alert_sent).
+    Cztery transitions:
+    - ENTER: streak>=sustain AND not latched → emit ONCE, set latch, reset streak counter (kept for telemetry)
+    - SUSTAINED: latched AND is_stuck AND elapsed>=interval → re-emit, update ts
+    - RECOVERY: latched AND is_recovered (pending<=low_water) → emit recovery, reset latch+streak+ts
+    - NO-OP: wszystkie inne; streak inc gdy is_stuck else reset
+
+    Pure function — żadnego I/O ani globalnego stanu. Wszystkie wartości env-overrideable.
     """
-    if is_stuck and not alert_sent:
-        return (True, True)  # entry: emit + set
-    if not is_stuck and alert_sent:
-        return (False, False)  # recovery: reset flag (re-arm next cycle)
-    return (False, alert_sent)  # no transition
+    if sustain_cycles is None:
+        sustain_cycles = V328_WORKER_STUCK_SUSTAIN_CYCLES
+    if realert_interval_sec is None:
+        realert_interval_sec = V328_WORKER_STUCK_REALERT_INTERVAL_SEC
+
+    # Streak counter (consecutive is_stuck=True cycles); reset gdy is_stuck=False.
+    new_streak = high_water_streak + 1 if is_stuck else 0
+
+    # RECOVERY: latched + pending dropped poniżej low_water → recovery alert, reset all.
+    if alert_sent and is_recovered:
+        return (True, "RECOVERY", False, 0, 0.0)
+
+    # ENTER: streak >= sustain cycles AND latch nie set → entry alert.
+    if (not alert_sent) and new_streak >= sustain_cycles:
+        return (True, "ENTER", True, new_streak, now)
+
+    # SUSTAINED: latch set, wciąż stuck, re-alert interval upłynął → reminder.
+    if alert_sent and is_stuck and (now - last_alert_ts) >= realert_interval_sec:
+        return (True, "SUSTAINED", True, new_streak, now)
+
+    # No-op transitions (healthy / sub-sustain / dedup-within-interval / single-event-flap).
+    return (False, None, alert_sent, new_streak, last_alert_ts)
 
 
 def run() -> int:
@@ -885,10 +952,13 @@ def run() -> int:
     # per Lekcja #66 — quiet period z low pending NIE jest stuck).
     last_processed_ts = time.time()
     # V3.28 #33 (2026-05-11): Telegram alert dedup flag — ONE alert per continuous
-    # stuck period. Reset gdy worker recovers (is_stuck transitions False). Mirror
-    # MP-#13 OSRM L2 pattern (_osrm_degraded_alert_sent). Pre-#33 stuck był silent
-    # critical → audit 11.05 17:32 ujawnił 6 alerts dzień bez Telegram propagation.
+    # stuck period. Reset gdy worker recovers. Mirror MP-#13 OSRM L2 pattern.
+    # V3.28 #35 (2026-05-11 wieczór): pełen state machine z hysteresis +
+    # sustain + re-alert. Pre-#35 spam co ~10 min pod peak load (Lekcja #112).
     v328_stuck_alert_sent = False
+    v328_stuck_high_water_streak = 0  # consecutive is_stuck=True heartbeats (anti-flap counter)
+    v328_stuck_last_alert_ts = 0.0    # last ENTER/SUSTAINED emit ts (for re-alert throttle)
+    v328_stuck_first_alert_ts = 0.0   # ENTER ts (for SUSTAINED "stuck for X min" telemetry)
 
     while not _shutdown:
         try:
@@ -941,22 +1011,69 @@ def run() -> int:
                     f"threshold_age={V328_WORKER_STUCK_AGE_SEC}s "
                     f"threshold_pending={V328_WORKER_STUCK_PENDING_THRESHOLD}"
                 )
-            # V3.28 #33 (2026-05-11): Telegram alert propagation + dedup state machine.
-            # Pre-#33 V328_WORKER_STUCK leciał TYLKO do log.critical (silent dla Adriana).
-            # Audit 11.05 ujawnił 6 alerts dzień bez Telegram → worker stuck 17:48 niewidoczny.
-            emit_alert, v328_stuck_alert_sent = _v328_should_emit_stuck_alert(
-                hb_state['is_stuck'], v328_stuck_alert_sent
+            # V3.28 #33+#35 (2026-05-11): Telegram alert state machine z hysteresis.
+            # Pre-#33 silent critical only. Pre-#35 latch flap → spam co ~10 min pod
+            # peak load. #35 dodaje: ENTER (sustain N cycles), SUSTAINED (re-alert
+            # co 30 min), RECOVERY (pending<=low_water). Lekcja #112.
+            _v328_now = time.time()
+            (
+                emit_alert,
+                alert_kind,
+                v328_stuck_alert_sent,
+                v328_stuck_high_water_streak,
+                v328_stuck_last_alert_ts,
+            ) = _v328_should_emit_stuck_alert(
+                hb_state['is_stuck'],
+                hb_state['is_recovered'],
+                v328_stuck_alert_sent,
+                v328_stuck_high_water_streak,
+                v328_stuck_last_alert_ts,
+                _v328_now,
             )
+            # Track ENTER ts dla SUSTAINED "stuck for X min" telemetry; reset on RECOVERY.
+            if alert_kind == "ENTER":
+                v328_stuck_first_alert_ts = _v328_now
+            elif alert_kind == "RECOVERY":
+                _stuck_total_min = (_v328_now - v328_stuck_first_alert_ts) / 60.0 if v328_stuck_first_alert_ts else 0.0
+                v328_stuck_first_alert_ts = 0.0
             if emit_alert:
                 # Defensive try/except — Telegram unreachable NIE blokuje main loop (Lekcja #87).
                 try:
                     from dispatch_v2.telegram_utils import send_admin_alert as _v328_send_alert
-                    _v328_send_alert(
-                        f"🚨 Ziomek shadow worker STUCK\n"
-                        f"age={hb_state['age_sec']:.0f}s (threshold {V328_WORKER_STUCK_AGE_SEC}s)\n"
-                        f"pending_queue={pending_queue} (threshold {V328_WORKER_STUCK_PENDING_THRESHOLD})\n"
-                        f"Likely peak load — manual koord możliwie wymagany do recovery."
-                    )
+                    if alert_kind == "ENTER":
+                        _msg = (
+                            f"🚨 Ziomek shadow worker STUCK (ENTER)\n"
+                            f"age={hb_state['age_sec']:.0f}s (threshold {V328_WORKER_STUCK_AGE_SEC}s)\n"
+                            f"pending_queue={pending_queue} "
+                            f"(high={V328_WORKER_STUCK_PENDING_THRESHOLD}, "
+                            f"low_water={V328_WORKER_STUCK_PENDING_LOW_WATER})\n"
+                            f"sustain_cycles={v328_stuck_high_water_streak}/"
+                            f"{V328_WORKER_STUCK_SUSTAIN_CYCLES} → ENTER\n"
+                            f"Likely peak load — manual koord możliwie wymagany do recovery.\n"
+                            f"Next reminder za {V328_WORKER_STUCK_REALERT_INTERVAL_SEC//60} min "
+                            f"jeśli pending nie spadnie poniżej {V328_WORKER_STUCK_PENDING_LOW_WATER}."
+                        )
+                    elif alert_kind == "SUSTAINED":
+                        _elapsed_min = (
+                            (_v328_now - v328_stuck_first_alert_ts) / 60.0
+                            if v328_stuck_first_alert_ts else 0.0
+                        )
+                        _msg = (
+                            f"⚠️ Ziomek shadow worker WCIĄŻ STUCK (SUSTAINED, {_elapsed_min:.0f} min)\n"
+                            f"age={hb_state['age_sec']:.0f}s pending_queue={pending_queue} "
+                            f"(low_water={V328_WORKER_STUCK_PENDING_LOW_WATER})\n"
+                            f"Backlog nie spada — operator review konieczny.\n"
+                            f"Kolejny reminder za {V328_WORKER_STUCK_REALERT_INTERVAL_SEC//60} min."
+                        )
+                    elif alert_kind == "RECOVERY":
+                        _msg = (
+                            f"✅ Ziomek shadow worker RECOVERED\n"
+                            f"pending_queue={pending_queue} ≤ low_water={V328_WORKER_STUCK_PENDING_LOW_WATER}\n"
+                            f"Stuck cycle łącznie {_stuck_total_min:.0f} min. Worker latch reset, re-armed."
+                        )
+                    else:
+                        _msg = f"V328_WORKER_STUCK unknown kind={alert_kind}"
+                    _v328_send_alert(_msg)
                 except Exception as _v328_alert_e:
                     _log.error(
                         f"V328_WORKER_STUCK telegram alert fail "

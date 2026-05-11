@@ -1,113 +1,247 @@
-"""V3.28 #33 — Worker stuck Telegram alert propagation (2026-05-11).
+"""V3.28 #33 + #35 — Worker stuck Telegram alert state machine (2026-05-11).
 
-Audit 11.05 17:32 Warsaw ujawnił 6× V328_WORKER_STUCK CRITICAL log dziś, ALE
-zero Telegram propagation. Worker stuck ~17:48 niewidoczny dla Adriana → manual
-koord override required po fakcie. Pre-#33 only `_log.critical()` w heartbeat
-loop — silent killer pattern (Lekcja #87).
+History:
+- #33 (rano 11.05): dodał Telegram propagation + dedup latch (4 transitions).
+  Pre-#33 alert był tylko log.critical → silent dla Adriana.
+- #35 (wieczór 11.05): hysteresis + sustain + re-alert (Lekcja #112).
+  Pre-#35 latch resetował się na pojedyncze is_stuck=False (jeden processed
+  event flipuje age→0). Pod peak load pending=191 wisiało, worker przetwarzał
+  1 event co ~5-10 min → spam alert co ~10 min. Root cause: mieszał klasy
+  failure (WORKER_FROZEN vs BACKLOG_OVERLOAD) + recovery semantics niepoprawna.
 
-Sprint #33 dodaje:
-1. `_v328_should_emit_stuck_alert(is_stuck, alert_sent)` pure state machine helper
-2. Telegram `send_admin_alert` propagation w main loop (defensive try/except)
-3. Dedup ONCE per stuck cycle (mirror MP-#13 OSRM L2 pattern)
-4. Auto-reset flag gdy worker recovers (re-arm next stuck cycle)
+Sprint #35 state machine (5-tuple return: emit, kind, sent, streak, last_ts):
+1. ENTER — streak >= sustain_cycles (anti-flap)
+2. SUSTAINED — re-alert co realert_interval_sec (operator reminder)
+3. RECOVERY — pending <= low_water (hysteresis exit, NOT single is_stuck=False)
+4. NO-OP — wszystkie inne (healthy / sub-sustain / dedup window / single-event flap)
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from dispatch_v2.shadow_dispatcher import _v328_should_emit_stuck_alert
+from dispatch_v2.shadow_dispatcher import (
+    _v328_should_emit_stuck_alert,
+    _v328_compute_heartbeat_state,
+)
 
 
-# ---- Pure helper state machine (4 transitions) ----
-
-def test_entry_stuck_first_time_emits():
-    """Pierwszy heartbeat w stuck cycle → emit alert + set sent=True."""
-    emit, new_sent = _v328_should_emit_stuck_alert(is_stuck=True, alert_sent=False)
-    assert emit is True, "entry must emit"
-    assert new_sent is True, "flag must be set"
+# Convenience defaults (mirror module defaults; explicit to keep tests deterministic).
+SUSTAIN = 2
+REALERT_SEC = 1800.0
 
 
-def test_dedup_continued_stuck_no_emit():
-    """Kolejne heartbeats w tym samym stuck cycle → no emit (dedup spam co 60s)."""
-    emit, new_sent = _v328_should_emit_stuck_alert(is_stuck=True, alert_sent=True)
-    assert emit is False, "dedup must suppress"
-    assert new_sent is True, "flag stays set"
+def _call(is_stuck, is_recovered, sent, streak, last_ts, now=1000.0,
+          sustain=SUSTAIN, realert=REALERT_SEC):
+    return _v328_should_emit_stuck_alert(
+        is_stuck, is_recovered, sent, streak, last_ts, now,
+        sustain_cycles=sustain, realert_interval_sec=realert,
+    )
 
 
-def test_recovery_resets_flag_no_emit():
-    """Worker recovers (stuck=False) → flag reset, no emit (cichy reset)."""
-    emit, new_sent = _v328_should_emit_stuck_alert(is_stuck=False, alert_sent=True)
-    assert emit is False, "recovery must not emit"
-    assert new_sent is False, "flag must reset for re-arm"
+# ---- ENTER: sustain anti-flap guard ----
+
+def test_enter_requires_sustain_cycles():
+    """Pojedynczy is_stuck=True NIE wywołuje ENTER (anti-flap)."""
+    emit, kind, sent, streak, ts = _call(
+        is_stuck=True, is_recovered=False, sent=False, streak=0, last_ts=0.0,
+    )
+    assert emit is False, "1 cycle nie powinien fire (sustain=2)"
+    assert kind is None
+    assert sent is False, "latch nie set przed sustain"
+    assert streak == 1, "streak inc"
 
 
-def test_healthy_idle_no_op():
-    """Healthy (stuck=False, sent=False) → no-op, no emit, no state change."""
-    emit, new_sent = _v328_should_emit_stuck_alert(is_stuck=False, alert_sent=False)
+def test_enter_fires_at_sustain_threshold():
+    """Drugi consecutive is_stuck → ENTER alert emitted."""
+    emit, kind, sent, streak, ts = _call(
+        is_stuck=True, is_recovered=False, sent=False, streak=1, last_ts=0.0, now=1000.0,
+    )
+    assert emit is True, "streak hit sustain=2 → emit"
+    assert kind == "ENTER"
+    assert sent is True, "latch set"
+    assert streak == 2
+    assert ts == 1000.0, "last_alert_ts updated"
+
+
+def test_streak_resets_on_single_unstuck_cycle():
+    """is_stuck=False kasuje streak (flap protection)."""
+    emit, kind, sent, streak, ts = _call(
+        is_stuck=False, is_recovered=False, sent=False, streak=1, last_ts=0.0,
+    )
     assert emit is False
-    assert new_sent is False
+    assert streak == 0, "streak reset na flap"
 
 
-# ---- Full lifecycle integration (4 transitions w sequence) ----
+# ---- RECOVERY: hysteresis (low_water), NOT is_stuck=False ----
 
-def test_full_lifecycle_entry_dedup_recovery_re_entry():
-    """Symuluje full stuck cycle: healthy → stuck → dedup spam → recovery → re-arm."""
-    sent = False
-    emits = []
+def test_recovery_requires_low_water_not_is_stuck_false():
+    """Pojedynczy is_stuck=False (age dropped przez 1 event) ALE pending wciąż wysoki → NIE recovery."""
+    # Symulacja: worker processed 1 event (age=0 → is_stuck=False), ale pending=191 wciąż.
+    emit, kind, sent, streak, ts = _call(
+        is_stuck=False, is_recovered=False, sent=True, streak=5, last_ts=900.0,
+    )
+    assert emit is False, "single processed event ≠ recovery (Lekcja #112)"
+    assert kind is None
+    assert sent is True, "latch HOLD — backlog wciąż"
+    assert streak == 0
 
-    # Phase 1: healthy 3 heartbeats — no emits
-    for _ in range(3):
-        emit, sent = _v328_should_emit_stuck_alert(False, sent)
-        emits.append(emit)
-    assert emits == [False, False, False], f"healthy phase: {emits}"
-    assert sent is False
 
-    # Phase 2: stuck entry + 3 dedup heartbeats
-    emits = []
-    for is_stuck_val in [True, True, True, True]:
-        emit, sent = _v328_should_emit_stuck_alert(is_stuck_val, sent)
-        emits.append(emit)
-    assert emits == [True, False, False, False], f"entry+dedup: {emits}"
-    assert sent is True, "flag must be set during stuck"
+def test_recovery_fires_when_pending_drops_below_low_water():
+    """Pending spadło do low_water threshold → RECOVERY alert + latch reset."""
+    emit, kind, sent, streak, ts = _call(
+        is_stuck=False, is_recovered=True, sent=True, streak=15, last_ts=900.0,
+    )
+    assert emit is True
+    assert kind == "RECOVERY"
+    assert sent is False, "latch reset → re-arm"
+    assert streak == 0
+    assert ts == 0.0
 
-    # Phase 3: recovery + 2 healthy heartbeats
-    emits = []
-    for _ in range(3):
-        emit, sent = _v328_should_emit_stuck_alert(False, sent)
-        emits.append(emit)
-    assert emits == [False, False, False], f"recovery: {emits}"
-    assert sent is False, "flag must be reset for re-arm"
 
-    # Phase 4: NEW stuck cycle (re-arm proves correct) → emit again
-    emit, sent = _v328_should_emit_stuck_alert(True, sent)
-    assert emit is True, "re-arm: new stuck cycle must emit fresh alert"
+def test_recovery_no_emit_without_prior_alert():
+    """is_recovered=True ale latch nigdy nie set (nie było alertu) → no-op."""
+    emit, kind, sent, streak, ts = _call(
+        is_stuck=False, is_recovered=True, sent=False, streak=0, last_ts=0.0,
+    )
+    assert emit is False
+    assert kind is None
+
+
+# ---- SUSTAINED: re-alert reminder ----
+
+def test_sustained_reminder_after_interval():
+    """Latch set + still stuck + elapsed >= interval → SUSTAINED re-alert."""
+    emit, kind, sent, streak, ts = _call(
+        is_stuck=True, is_recovered=False, sent=True, streak=30, last_ts=0.0,
+        now=1800.0, realert=1800.0,
+    )
+    assert emit is True
+    assert kind == "SUSTAINED"
+    assert sent is True
+    assert ts == 1800.0, "last_ts updated dla next interval"
+
+
+def test_sustained_no_emit_within_interval():
+    """Latch set + still stuck ALE elapsed < interval → no emit (dedup)."""
+    emit, kind, sent, streak, ts = _call(
+        is_stuck=True, is_recovered=False, sent=True, streak=10, last_ts=1000.0,
+        now=1500.0, realert=1800.0,  # elapsed=500 < 1800
+    )
+    assert emit is False
+    assert kind is None
     assert sent is True
 
 
-# ---- Edge cases ----
+# ---- Regression test for Lekcja #112 spam scenario ----
 
-def test_flapping_stuck_unstuck_pattern():
-    """Synthetic flapping: stuck→not stuck→stuck→not stuck → 2 entry alerts max."""
+def test_lekcja_112_peak_overload_no_spam():
+    """Regression: peak overload scenario (pending=191) NIE generuje spam co 10 min.
+
+    Pre-#35 (buggy): worker processuje 1 event co ~5-10 min → age oscyluje
+    wokół 300s, latch flap-reset, alert co 10 min.
+
+    Post-#35: latch trzymany aż pending<=low_water. Pod sustained backlog
+    operator dostaje 1× ENTER + okresowe SUSTAINED reminders (nie spam).
+    """
     sent = False
-    emit_count = 0
-    for is_stuck_val in [True, False, True, False, True, False]:
-        emit, sent = _v328_should_emit_stuck_alert(is_stuck_val, sent)
+    streak = 0
+    last_ts = 0.0
+    emits = []
+    # Symulujemy 30 heartbeatów (30 min) z flapping age (worker processuje
+    # event co kilka cycles), pending wciąż wysoki (191 >> low_water=30).
+    is_stuck_pattern = [
+        True, True,           # cycles 1-2: streak hits sustain → ENTER
+        False, True,          # cycle 3: 1 event processed, age=0; cycle 4: age znów >300s
+        False, True, True,    # cycles 5-7
+        False, True,
+        False, True, True,
+        True, True, True, True, True, True, True, True, True,  # sustained stuck
+        True, True, True, True, True, True, True, True,
+    ]
+    now = 1000.0
+    REALERT = 1800.0
+    for i, is_s in enumerate(is_stuck_pattern):
+        emit, kind, sent, streak, last_ts = _call(
+            is_stuck=is_s,
+            is_recovered=False,
+            sent=sent, streak=streak, last_ts=last_ts,
+            now=now, realert=REALERT,
+        )
         if emit:
-            emit_count += 1
-    assert emit_count == 3, f"3 stuck entry transitions, got {emit_count} emits"
+            emits.append((i, kind, now))
+        now += 60.0  # heartbeat co 60s
+    # Pre-#35 emitowałby ~3-5× ENTER w 30 min. Post-#35: 1× ENTER + max 1× SUSTAINED.
+    kinds = [k for _, k, _ in emits]
+    assert kinds.count("ENTER") == 1, f"max 1× ENTER pod sustained backlog, dostałem {kinds}"
+    assert kinds.count("SUSTAINED") <= 1, f"max 1× SUSTAINED w 30 min (interval=1800s), dostałem {kinds}"
+    assert "RECOVERY" not in kinds, "recovery nie powinien firować bez is_recovered=True"
+
+
+def test_lekcja_112_recovery_after_backlog_clears():
+    """Recovery scenario: po sustained stuck, pending finally drops → RECOVERY emit."""
+    sent = True
+    streak = 20
+    last_ts = 1000.0
+    # Symulujemy: backlog spadł, pending=25 ≤ low_water=30.
+    emit, kind, sent, streak, last_ts = _call(
+        is_stuck=False, is_recovered=True, sent=sent, streak=streak, last_ts=last_ts,
+        now=2500.0,
+    )
+    assert emit is True
+    assert kind == "RECOVERY"
+    assert sent is False, "latch reset"
+    assert streak == 0
+
+
+# ---- _v328_compute_heartbeat_state new is_recovered field ----
+
+def test_heartbeat_state_is_recovered_low_water():
+    """pending<=low_water → is_recovered=True (hysteresis exit)."""
+    s = _v328_compute_heartbeat_state(
+        last_processed_ts=1000.0, now=1100.0, pending=20, pending_low_water=30,
+    )
+    assert s["is_recovered"] is True
+    assert s["is_stuck"] is False  # pending<threshold tak czy siak
+
+
+def test_heartbeat_state_is_recovered_above_low_water():
+    """pending>low_water → is_recovered=False (still in hysteresis zone)."""
+    s = _v328_compute_heartbeat_state(
+        last_processed_ts=1000.0, now=1400.0, pending=50, pending_low_water=30,
+    )
+    assert s["is_recovered"] is False
+    # age=400>300, pending=50<threshold(100) → is_stuck=False (AND gate)
+    assert s["is_stuck"] is False
+
+
+def test_heartbeat_state_is_stuck_peak_overload():
+    """Klasyczny peak overload: age=310s, pending=191 → is_stuck=True, is_recovered=False."""
+    s = _v328_compute_heartbeat_state(
+        last_processed_ts=1000.0, now=1310.0, pending=191, pending_low_water=30,
+    )
+    assert s["is_stuck"] is True
+    assert s["is_recovered"] is False
+    assert s["worker_alive"] is False  # age >= 300
 
 
 # ---- Custom-runner entry ----
 
 if __name__ == "__main__":
     tests = [
-        test_entry_stuck_first_time_emits,
-        test_dedup_continued_stuck_no_emit,
-        test_recovery_resets_flag_no_emit,
-        test_healthy_idle_no_op,
-        test_full_lifecycle_entry_dedup_recovery_re_entry,
-        test_flapping_stuck_unstuck_pattern,
+        test_enter_requires_sustain_cycles,
+        test_enter_fires_at_sustain_threshold,
+        test_streak_resets_on_single_unstuck_cycle,
+        test_recovery_requires_low_water_not_is_stuck_false,
+        test_recovery_fires_when_pending_drops_below_low_water,
+        test_recovery_no_emit_without_prior_alert,
+        test_sustained_reminder_after_interval,
+        test_sustained_no_emit_within_interval,
+        test_lekcja_112_peak_overload_no_spam,
+        test_lekcja_112_recovery_after_backlog_clears,
+        test_heartbeat_state_is_recovered_low_water,
+        test_heartbeat_state_is_recovered_above_low_water,
+        test_heartbeat_state_is_stuck_peak_overload,
     ]
     passed = failed = 0
     for t in tests:

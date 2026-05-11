@@ -100,14 +100,15 @@ def test_pending_boundary_exact_100_no_alert():
     assert state["is_stuck"] is False  # pending == 100, strict > needed
 
 
-def test_returns_dict_with_3_keys():
-    """Type guarantee: returns dict z exactly 3 keys."""
+def test_returns_dict_with_expected_keys():
+    """Type guarantee: returns dict z 4 keys (V3.28 #35 added is_recovered for hysteresis)."""
     state = sd._v328_compute_heartbeat_state(last_processed_ts=0.0, now=1.0, pending=0)
     assert isinstance(state, dict)
-    assert set(state.keys()) == {"age_sec", "worker_alive", "is_stuck"}
+    assert set(state.keys()) == {"age_sec", "worker_alive", "is_stuck", "is_recovered"}
     assert isinstance(state["age_sec"], float)
     assert isinstance(state["worker_alive"], bool)
     assert isinstance(state["is_stuck"], bool)
+    assert isinstance(state["is_recovered"], bool)
 
 
 def test_thresholds_are_module_level_constants():
