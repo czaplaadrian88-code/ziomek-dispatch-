@@ -4,8 +4,9 @@ R1 corridor cosine bonus:
 - avg_pairwise_cosine > 0.85 → +20 (tight corridor)
 - 0.5..0.85 → +5 (good direction)
 - 0..0.5 → 0 (neutral)
-- -0.5..0 → -15 (orthogonal)
+- -0.5..0 → -35 (orthogonal, P3-D5 2026-05-11 tighten z -15)
 - < -0.5 → -40 (opposite split)
+- P3-D5: negative bonus mnożony przez deliv_spread_km/8 (cap 2.0x) gdy spread >8km
 
 R5 pickup detour bonus:
 - detour_per_order_km < 0.5 → 0 (po drodze)

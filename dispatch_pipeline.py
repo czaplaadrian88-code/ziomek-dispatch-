@@ -2038,6 +2038,12 @@ def _assess_order_impl(
         #   0..0.5 = neutralne / lekko rozbieżne
         #  -0.5..0 = orthogonal (drops w bok)
         #  <-0.5 = opposite (split bag w przeciwne strony) — to chcemy karać mocno
+        #
+        # P3-D5 2026-05-11: bucket -0.5..0 tighten -15 → -35 (case 472338 Ogniomistrz
+        # cos=-0.326 deliv_spread=12.63km — wcześniej za łagodna penalty pozwalała
+        # przejść geometric anti-pattern). Plus deliv_spread_km multiplier dla wide
+        # drops (>8 km): linear scale 8→1.0x, 16+→2.0x. Tylko negative bucket — bonus
+        # pozostaje bez zmiany.
         _r1_avg_cos = metrics.get("r1_avg_pairwise_cosine")
         bonus_r1_corridor = 0.0
         if _r1_avg_cos is not None:
@@ -2048,9 +2054,19 @@ def _assess_order_impl(
             elif _r1_avg_cos > 0.0:
                 bonus_r1_corridor = 0.0
             elif _r1_avg_cos > -0.5:
-                bonus_r1_corridor = -15.0
+                bonus_r1_corridor = -35.0  # P3-D5 2026-05-11: tighten -15 → -35
             else:
                 bonus_r1_corridor = -40.0
+
+        # P3-D5 2026-05-11: deliv_spread mnożnik dla wide drops (negative bucket only).
+        # Case 472338 deliv_spread=12.63km → 1.578x mnożnik → -35 × 1.578 = -55.2.
+        # Bonus (positive) NIE multiplied — tight corridor reward niezależny od spread.
+        r1_corridor_spread_mult = 1.0
+        if bonus_r1_corridor < 0:
+            _r1_deliv_spread = metrics.get("deliv_spread_km")
+            if _r1_deliv_spread is not None and _r1_deliv_spread > 8.0:
+                r1_corridor_spread_mult = min(2.0, 1.0 + (_r1_deliv_spread - 8.0) * 0.125)
+                bonus_r1_corridor = bonus_r1_corridor * r1_corridor_spread_mult
 
         # V3.28 P1 — R5 pickup detour per order — Adrian doktryna 2026-05-10.
         # detour_per_pickup_km = ile dodatkowego km każdy pickup płaci za udział w bagu
@@ -2354,6 +2370,7 @@ def _assess_order_impl(
             "r5_pickup_detour_total_km": metrics.get("r5_pickup_detour_total_km"),
             "r5_pickup_detour_per_order_km": metrics.get("r5_pickup_detour_per_order_km"),
             "bonus_r1_corridor": round(bonus_r1_corridor, 2),
+            "r1_corridor_spread_mult": round(r1_corridor_spread_mult, 3),  # P3-D5 observability
             "bonus_r5_detour": round(bonus_r5_detour, 2),
             # V3.28 P2 — wave detection (Adrian doktryna 2026-05-10)
             "n_waves": metrics.get("n_waves"),
