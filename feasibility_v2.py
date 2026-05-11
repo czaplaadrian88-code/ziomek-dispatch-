@@ -658,6 +658,34 @@ def check_feasibility_v2(
             plan,
         )
 
+    # P3-D4 2026-05-11: picked_up R6 delta-based reject (Boboli 44 min case 10.05).
+    # Adrian doktryna NEW 10.05 wieczór: picked_up tracking-only za luźna — gdy
+    # nowy order CAUSES delay dla picked_up violation, reject. Heurystyka delta:
+    # new pickup happening BEFORE picked_up delivery = detour → carry time wzrasta.
+    # Jeśli new pickup po picked_up delivery, no impact (picked_up dostarczony pierwszy).
+    metrics["r6_picked_up_delta_reject"] = False
+    if r6_picked_up_violations:
+        new_pickup_at = plan.pickup_at.get(new_order.order_id)
+        if new_pickup_at is not None:
+            if new_pickup_at.tzinfo is None:
+                new_pickup_at = new_pickup_at.replace(tzinfo=timezone.utc)
+            for pu_oid, pu_bt in r6_picked_up_violations:
+                pu_pred = plan.predicted_delivered_at.get(pu_oid)
+                if pu_pred is None:
+                    continue
+                if pu_pred.tzinfo is None:
+                    pu_pred = pu_pred.replace(tzinfo=timezone.utc)
+                if pu_pred > new_pickup_at:
+                    # New pickup detour delays this picked_up delivery
+                    metrics["r6_picked_up_delta_reject"] = True
+                    return (
+                        "NO",
+                        f"R6_picked_up_delta_>35min ({pu_oid} {pu_bt:.1f}min; "
+                        f"new pickup delays carry, n_picked_up_v={len(r6_picked_up_violations)})",
+                        metrics,
+                        plan,
+                    )
+
     # V3.24-A: hard reject gdy planned dropoff nowego ordera > shift_end +
     # V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN (default 5 min). Precyzyjniejsze
     # niż legacy SHIFT_END_BUFFER_MIN=20 (który zbyt gruby — odrzucał kurierów
