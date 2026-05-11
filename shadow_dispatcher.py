@@ -776,6 +776,28 @@ def _v328_compute_heartbeat_state(last_processed_ts: float, now: float, pending:
     }
 
 
+def _v328_should_emit_stuck_alert(is_stuck: bool, alert_sent: bool) -> tuple:
+    """V3.28 #33 (2026-05-11): stuck alert state machine — Telegram dedup.
+
+    Pre-#33 V328_WORKER_STUCK leciało TYLKO do log.critical (silent dla Adriana).
+    Audit 11.05 17:32 ujawnił 6 alerts dziś bez żadnej propagacji do Telegrama
+    → worker stuck ~17:48 niewidoczny, Adrian musiał manual koord.
+
+    Pure function — returns (emit_telegram, new_alert_sent) tuple:
+    - stuck + NOT alerted → emit, set sent=True (entry alert ONCE per stuck cycle)
+    - stuck + alerted → no emit (dedup heartbeat spam co 60s)
+    - NOT stuck + alerted → no emit, reset sent=False (recovery — re-arm)
+    - NOT stuck + NOT alerted → no-op (healthy)
+
+    Mirror MP-#13 OSRM L2 alert pattern (osrm_client._osrm_degraded_alert_sent).
+    """
+    if is_stuck and not alert_sent:
+        return (True, True)  # entry: emit + set
+    if not is_stuck and alert_sent:
+        return (False, False)  # recovery: reset flag (re-arm next cycle)
+    return (False, alert_sent)  # no transition
+
+
 def run() -> int:
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
@@ -862,6 +884,11 @@ def run() -> int:
     # log.critical V328_WORKER_STUCK gdy age>300s AND pending>100 (multi-signal
     # per Lekcja #66 — quiet period z low pending NIE jest stuck).
     last_processed_ts = time.time()
+    # V3.28 #33 (2026-05-11): Telegram alert dedup flag — ONE alert per continuous
+    # stuck period. Reset gdy worker recovers (is_stuck transitions False). Mirror
+    # MP-#13 OSRM L2 pattern (_osrm_degraded_alert_sent). Pre-#33 stuck był silent
+    # critical → audit 11.05 17:32 ujawnił 6 alerts dzień bez Telegram propagation.
+    v328_stuck_alert_sent = False
 
     while not _shutdown:
         try:
@@ -914,6 +941,27 @@ def run() -> int:
                     f"threshold_age={V328_WORKER_STUCK_AGE_SEC}s "
                     f"threshold_pending={V328_WORKER_STUCK_PENDING_THRESHOLD}"
                 )
+            # V3.28 #33 (2026-05-11): Telegram alert propagation + dedup state machine.
+            # Pre-#33 V328_WORKER_STUCK leciał TYLKO do log.critical (silent dla Adriana).
+            # Audit 11.05 ujawnił 6 alerts dzień bez Telegram → worker stuck 17:48 niewidoczny.
+            emit_alert, v328_stuck_alert_sent = _v328_should_emit_stuck_alert(
+                hb_state['is_stuck'], v328_stuck_alert_sent
+            )
+            if emit_alert:
+                # Defensive try/except — Telegram unreachable NIE blokuje main loop (Lekcja #87).
+                try:
+                    from dispatch_v2.telegram_utils import send_admin_alert as _v328_send_alert
+                    _v328_send_alert(
+                        f"🚨 Ziomek shadow worker STUCK\n"
+                        f"age={hb_state['age_sec']:.0f}s (threshold {V328_WORKER_STUCK_AGE_SEC}s)\n"
+                        f"pending_queue={pending_queue} (threshold {V328_WORKER_STUCK_PENDING_THRESHOLD})\n"
+                        f"Likely peak load — manual koord możliwie wymagany do recovery."
+                    )
+                except Exception as _v328_alert_e:
+                    _log.error(
+                        f"V328_WORKER_STUCK telegram alert fail "
+                        f"({type(_v328_alert_e).__name__}: {_v328_alert_e}) — log only"
+                    )
             last_heartbeat = time.time()
 
         # Sleep in short slices so shutdown signal is responsive
