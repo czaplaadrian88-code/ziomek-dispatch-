@@ -227,6 +227,15 @@ def _serialize_candidate(c) -> dict:
         "r5_pickup_detour_per_order_km": m.get("r5_pickup_detour_per_order_km"),
         "bonus_r1_corridor": m.get("bonus_r1_corridor"),
         "bonus_r5_detour": m.get("bonus_r5_detour"),
+        # V3.28 P3-D4 (2026-05-11): R6 picked_up delta-based reject — heurystyka czy
+        # nowy order CAUSES carry time increase dla picked_up violation (Boboli 44 min
+        # case 10.05). True gdy reject path active. False default. Audit 11.05 ujawnił
+        # że bez serializer propagation 7-day FAZA 3 decision tree window blind.
+        "r6_picked_up_delta_reject": m.get("r6_picked_up_delta_reject"),
+        # V3.28 P3-D5 (2026-05-11): R1 corridor deliv_spread mnożnik (1.0 baseline,
+        # linear scale 8km→16+km cap 2.0x). Tylko negatywny bonus multiplied. Visibility
+        # dla future R1 calibration sprintów + LGBM feature engineering.
+        "r1_corridor_spread_mult": m.get("r1_corridor_spread_mult"),
         # V3.28 P2 — wave detection (Adrian doktryna 2026-05-10)
         "n_waves": m.get("n_waves"),
         "inter_wave_deadhead_total_km": m.get("inter_wave_deadhead_total_km"),
@@ -436,6 +445,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r5_pickup_detour_per_order_km": best_m.get("r5_pickup_detour_per_order_km"),
             "bonus_r1_corridor": best_m.get("bonus_r1_corridor"),
             "bonus_r5_detour": best_m.get("bonus_r5_detour"),
+            # V3.28 P3-D4 (2026-05-11): R6 picked_up delta reject (LOCATION B — best)
+            # Patrz _serialize_candidate dla detali; sprint #32 obs serializer fix.
+            "r6_picked_up_delta_reject": best_m.get("r6_picked_up_delta_reject"),
+            # V3.28 P3-D5 (2026-05-11): R1 corridor spread mult (LOCATION B — best)
+            # Patrz _serialize_candidate dla detali; sprint #32 obs serializer fix.
+            "r1_corridor_spread_mult": best_m.get("r1_corridor_spread_mult"),
             # V3.28 P2 — wave detection (Adrian doktryna 2026-05-10)
             "n_waves": best_m.get("n_waves"),
             "inter_wave_deadhead_total_km": best_m.get("inter_wave_deadhead_total_km"),
