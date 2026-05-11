@@ -2810,6 +2810,43 @@ def _assess_order_impl(
             _classify_and_set_auto_route(_result_stale, fleet_snapshot, order_event, now=now)
             return _result_stale
 
+        # P3-D6 path B 2026-05-11 — geometry-blind fallback KOORD escalation.
+        # Tech debt #29 + Lekcja #108: gdy V3.27.4 frozen window forsuje wszystkie
+        # kandydaci do `_greedy_plan` (strategy=ortools_rejected_v3274) AND wszyscy
+        # mają negative R1 corridor cosine (drops w przeciwnych kierunkach), greedy
+        # geometry-blind nie ma żadnej ścieżki do dobrej trasy. Eskaluj człowiekowi
+        # (Adrian) zamiast auto-proponować low-quality bundle.
+        # Case 472338 Ogniomistrz 10.05 archetype: zigzag plan przeszedł, Adrian
+        # panel override → cid=500.
+        if len(feasible) >= 2:
+            _all_greedy_fallback = all(
+                getattr(getattr(_c, "plan", None), "strategy", "") == "ortools_rejected_v3274"
+                for _c in feasible
+            )
+            _all_negative_cos = all(
+                (_c.metrics.get("r1_avg_pairwise_cosine") if _c.metrics else None) is not None
+                and _c.metrics.get("r1_avg_pairwise_cosine") < 0
+                for _c in feasible
+            )
+            if _all_greedy_fallback and _all_negative_cos:
+                _result_geo_blind = PipelineResult(
+                    order_id=order_id,
+                    verdict="KOORD",
+                    reason=(
+                        f"geometry_blind_fallback (all {len(feasible)} kandydaci "
+                        f"strategy=ortools_rejected_v3274 + cos<0; escalate)"
+                    ),
+                    best=top[0],
+                    candidates=top,
+                    pickup_ready_at=pickup_ready_at,
+                    restaurant=restaurant,
+                    delivery_address=delivery_address,
+                    pool_total_count=len(candidates),
+                    pool_feasible_count=len(feasible),
+                )
+                _classify_and_set_auto_route(_result_geo_blind, fleet_snapshot, order_event, now=now)
+                return _result_geo_blind
+
         # V3.28 ANCHOR FIX 2026-05-10 — Adrian doktryna: min_score_threshold dla PROPOSE.
         # Gdy best.score < MIN_PROPOSE_SCORE → KOORD zamiast PROPOSE (all_candidates_low_score).
         # Diagnoza 2026-05-10 472189: PROPOSE Andrei score=-50 + Mateusz Bro alt -1047 =
