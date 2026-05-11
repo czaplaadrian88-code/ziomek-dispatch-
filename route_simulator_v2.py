@@ -61,10 +61,56 @@ def _first_drop_arrival_min(plan: "RoutePlanV2", now: datetime) -> float:
     return (first_arrival - now).total_seconds() / 60.0
 
 
+def _plan_trajectory_smoothness(
+    plan: "RoutePlanV2",
+    courier_pos: Optional[Tuple[float, float]],
+    nodes_by_oid: Optional[Dict[str, dict]],
+) -> Optional[float]:
+    """P3-D6 2026-05-11: sequence-aware geometry tie-break helper.
+
+    Trajectory smoothness = średnia cosine similarity między KOLEJNYMI legami trasy.
+    Higher = straighter trajectory (less zigzag). Range [-1.0, 1.0].
+
+    -  +1.0: wszystkie kolejne legi w tym samym kierunku (straight line)
+    -   0.0: prostopadłe (90° turns)
+    -  -1.0: opposite (180° turns, max zigzag)
+
+    Wymaga ≥3 punktów (courier + ≥2 drops) żeby liczyć leg-to-leg cosine.
+    Returns None gdy compute niemożliwy (caller fallback do legacy logic).
+    """
+    if courier_pos is None or nodes_by_oid is None or not plan.sequence:
+        return None
+    points: List[Tuple[float, float]] = [courier_pos]
+    for oid in plan.sequence:
+        node = nodes_by_oid.get(oid)
+        if node is None:
+            continue
+        coords = node.get("coords")
+        if coords is None:
+            continue
+        points.append(coords)
+    if len(points) < 3:
+        return None
+    legs: List[Tuple[float, float]] = []
+    for i in range(len(points) - 1):
+        vx = points[i + 1][0] - points[i][0]
+        vy = points[i + 1][1] - points[i][1]
+        n = (vx * vx + vy * vy) ** 0.5
+        if n > 1e-9:
+            legs.append((vx / n, vy / n))
+    if len(legs) < 2:
+        return None
+    cos_sum = 0.0
+    for i in range(len(legs) - 1):
+        cos_sum += legs[i][0] * legs[i + 1][0] + legs[i][1] * legs[i + 1][1]
+    return cos_sum / (len(legs) - 1)
+
+
 def _select_best_with_tie_breaker(
     plans: List["RoutePlanV2"],
     now: datetime,
     threshold_min: float = V327_TIE_BREAKER_THRESHOLD_MIN,
+    nodes: Optional[List[dict]] = None,
 ) -> Optional["RoutePlanV2"]:
     """V3.27 Bug Y: select best plan z tie-breaker.
 
@@ -72,7 +118,9 @@ def _select_best_with_tie_breaker(
     2. Identify ties: plans with same sla_violations AND
        |total_duration_min - leader| < threshold_min
     3. If ≥2 ties AND ENABLE_V327_BUG_FIXES_BUNDLE flag True:
-       secondary sort by first_drop_arrival_min ASC, return first
+       3a. P3-D6 2026-05-11 NEW: secondary sort by trajectory_smoothness DESC
+           (higher = less zigzag); requires `nodes` param (courier at [0]).
+       3b. Tertiary fallback: first_drop_arrival_min ASC (legacy V3.27 Bug Y).
     4. Else return leader (legacy behavior).
     """
     if not plans:
@@ -100,7 +148,31 @@ def _select_best_with_tie_breaker(
     if len(ties) < 2:
         return leader
 
-    # V3.27 tie-breaker: shortest first drop arrival ASC
+    # P3-D6 2026-05-11: geometry-aware tie-break — when `nodes` passed,
+    # sort by trajectory smoothness DESC (higher = straighter trajectory).
+    # Tech debt #29 + Lekcja #108: greedy fallback geometry-blind led to case
+    # 472338 Ogniomistrz zigzag plan przejście. Sequence-aware metric (vs
+    # set-invariant pairwise cosine) discriminuje permutacje.
+    if nodes and len(nodes) >= 1 and nodes[0].get("kind") == "courier":
+        courier_pos = nodes[0].get("coords")
+        nodes_by_oid = {
+            n["order_id"]: n
+            for n in nodes
+            if n.get("kind") == "delivery" and n.get("order_id") is not None
+        }
+        smoothness_vals = [
+            (_plan_trajectory_smoothness(p, courier_pos, nodes_by_oid), p)
+            for p in ties
+        ]
+        # Filter ties że computed smoothness (not None) — sort tylko po nich
+        valid = [(s, p) for s, p in smoothness_vals if s is not None]
+        if len(valid) >= 2:
+            # Higher smoothness = better → DESC sort
+            valid.sort(key=lambda sp: (-sp[0], _first_drop_arrival_min(sp[1], now)))
+            return valid[0][1]
+        # Fallback do legacy gdy <2 valid (np. wszystkie sequence z 1 drop)
+
+    # V3.27 tie-breaker fallback: shortest first drop arrival ASC
     ties.sort(key=lambda p: _first_drop_arrival_min(p, now))
     return ties[0]
 
@@ -414,7 +486,7 @@ def _sticky_sequence_plan(
                 candidate.insert(p_pos, new_pickup_idx)
             plan = _plan_from_sequence(candidate, nodes, leg_min, new_order, bag, now, sla_minutes)
             all_sticky_plans.append(plan)
-    return _select_best_with_tie_breaker(all_sticky_plans, now)
+    return _select_best_with_tie_breaker(all_sticky_plans, now, nodes=nodes)
 
 
 # ---- internals ----
@@ -672,7 +744,7 @@ def _bruteforce_plan(
             continue
         plan = _plan_from_sequence(list(perm), nodes, leg_min, new_order, bag, now, sla_minutes)
         all_valid_plans.append(plan)
-    return _select_best_with_tie_breaker(all_valid_plans, now)
+    return _select_best_with_tie_breaker(all_valid_plans, now, nodes=nodes)
 
 
 def _greedy_plan(
@@ -754,7 +826,7 @@ def _greedy_plan(
                 candidate.insert(p_pos, new_pickup_idx)
             plan = _plan_from_sequence(candidate, nodes, leg_min, new_order, bag, now, sla_minutes)
             all_step2_plans.append(plan)
-    return _select_best_with_tie_breaker(all_step2_plans, now)
+    return _select_best_with_tie_breaker(all_step2_plans, now, nodes=nodes)
 
 
 def _ortools_plan(
