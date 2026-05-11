@@ -1597,6 +1597,13 @@ def _assess_order_impl(
         # F1.7 fix: travel_min = plan-based (uwzględnia bag + waiting na pickup_ready),
         # używane przez compute_assign_time. Display ETA jest osobne (drive_min).
         # Fix 2: km_to_pickup liczone od effective_start_pos (end-of-wave dla bag).
+        # V3.28 #28 ext (2026-05-11): sanitize effective_start_pos — pochodne pozycje
+        # z _anchor.location (linia 1564) lub bag tail delivery_coords (linia 1595)
+        # mogą być (0,0) gdy bag zawiera order z P0.4 data quality issue (delivery_coords
+        # missing) — courier_resolver loguje "courier X picked_up order Y bez delivery_coords".
+        # Bez sanitize → haversine raise → V328_CP_SOLVER_FAIL_PER_COURIER spam (residual 9/7h
+        # post #28 cz.1; cid=508/523 z bag=469087). Mirror _sanitize_courier_pos pattern.
+        effective_start_pos = _sanitize_courier_pos(effective_start_pos) or effective_start_pos
         km_to_pickup_haversine = haversine(effective_start_pos, pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
 
         # V3.26 Bug C strict mode (2026-04-25): "po drodze" semantyka.
