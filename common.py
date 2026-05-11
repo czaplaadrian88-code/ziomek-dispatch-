@@ -1442,6 +1442,18 @@ ENABLE_V328_P3D1_IDLE_COST = _os.environ.get(
 V328_P3D1_IDLE_WEIGHT = float(_os.environ.get("V328_P3D1_IDLE_WEIGHT", "1.0"))  # 1.0 = wait min cost = drive min cost
 
 # ============================================================
+# V3.28 FAZA 3 ścieżka A — time_matrix DWELL correction (2026-05-11)
+# ============================================================
+# OR-Tools time_matrix[i][j] = travel + DWELL_at_arriving_node. Aligns solver
+# semantyka z _simulate_sequence pickup_at storage convention (post-DWELL).
+# FAZA 0 audit (n=2767, 12 dni od V3.27.4 deploy) confirmed: bag>=2 reject
+# rate 34-100% explained by DWELL accumulation not seen by solver. Quantitative
+# model fits empirics w lockstep. Predicted post-fix: bag=2 34%→5-10%,
+# bag=3 58%→15-25%, bag=4 86%→30-40% (residual ścieżki B bag>=4 calibration).
+ENABLE_V328_TIME_MATRIX_DWELL = _os.environ.get(
+    "ENABLE_V328_TIME_MATRIX_DWELL", "1") == "1"  # default True post FAZA 0 evidence
+
+# ============================================================
 # V3.27.4 Frozen czas_kuriera TSP time window (2026-04-27 wieczór)
 # ============================================================
 # Naprawia #469014 root cause (TASK F H2): TSP cost = czysta dystans ignorował

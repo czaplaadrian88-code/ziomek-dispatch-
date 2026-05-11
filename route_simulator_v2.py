@@ -829,6 +829,23 @@ def _greedy_plan(
     return _select_best_with_tie_breaker(all_step2_plans, now, nodes=nodes)
 
 
+def _dwell_min_for_arriving(node: dict) -> float:
+    """V3.28 FAZA 3 ścieżka A 2026-05-11: DWELL component of time_matrix[i][j].
+
+    Service time consumed at arriving node (j). Used to align solver semantyka
+    z `_simulate_sequence` pickup_at storage convention (post-DWELL = "leaves
+    restaurant" / "after delivery handoff"). FAZA 0 audit (n=2767, 12 dni)
+    empirycznie confirmed: bag>=2 reject rate 34-100% explained by DWELL
+    accumulation not seen by solver. Symmetric DWELL_PICKUP_MIN = DWELL_DROPOFF_MIN.
+    """
+    kind = node.get("kind")
+    if kind == "pickup":
+        return DWELL_PICKUP_MIN
+    if kind == "delivery":
+        return DWELL_DROPOFF_MIN
+    return 0.0  # courier depot or unknown — no service time
+
+
 def _ortools_plan(
     nodes, leg_min, bag_delivery_idxs,
     bag_pickup_idxs_by_oid,
@@ -853,16 +870,28 @@ def _ortools_plan(
     if N <= 1:
         return None
 
-    # Build time matrix z leg_min callable (drive_min between nodes)
+    # Build time matrix z leg_min callable (drive_min between nodes).
+    # V3.28 FAZA 3 ścieżka A (2026-05-11): time_matrix[i][j] = travel + DWELL_at_j.
+    # Pre-fix: solver dostawał travel only, post-process dolicza DWELL → asymetria
+    # ~4N min ukrytego time per N stops. Window check post-solve assertion fail.
+    # Math (bag=N stops): 2*N pickups+drops × DWELL=2min = 4N min pre-fix unseen,
+    # now visible to solver → respects [ck-5, ck+5] frozen window correctly.
+    # FAZA 0 audit n=2767/12d confirmed quantitative model.
+    from dispatch_v2 import common as _common_faza3
+    _v328_faza3_dwell = getattr(_common_faza3, "ENABLE_V328_TIME_MATRIX_DWELL", False)
     time_matrix: List[List[float]] = [[0.0] * N for _ in range(N)]
     for i in range(N):
         for j in range(N):
             if i == j:
                 continue
             try:
-                time_matrix[i][j] = max(0.0, float(leg_min(i, j)))
+                travel = max(0.0, float(leg_min(i, j)))
             except Exception:
                 time_matrix[i][j] = 9999.0
+                continue
+            if _v328_faza3_dwell:
+                travel += _dwell_min_for_arriving(nodes[j])
+            time_matrix[i][j] = travel
     # Distance matrix proxy = time matrix (solver minimizes; same units fine).
     distance_matrix = time_matrix
 
