@@ -1419,9 +1419,11 @@ def _assess_order_impl(
                     f"V3.27 Bug Z compute fail: {type(_v327_z_e).__name__}: {_v327_z_e}"
                 )
 
-        # SLA 45 min dla bundli (per dane historyczne 86%/95% w 35/45 min).
-        # Solo (pusty bag) zostaje 35 min — nie poluzowujemy sytuacji bez bundlingu.
-        sla_minutes = 45 if bag_sim else 35
+        # P3-D3 2026-05-11: unify sla_minutes=35 (Adrian doktryna V3.28 P0 anchor
+        # 10.05: 35 min jest JEDYNĄ hard rule, per-zlecenie, anchor=pickup_ready_at).
+        # Pre-fix: 45 if bag_sim (F2.1c heurystyka 17.04) maskował thermal violations
+        # → best_effort z plan.sla_violations=0 dla 35-44 min carry (Bartek 187 min case).
+        sla_minutes = 35
 
         # V3.19d: read integration — extract base_sequence z saved plan dla
         # bag ordering. Triple guard: flag True + bag non-empty + saved match.
@@ -2833,15 +2835,50 @@ def _assess_order_impl(
 
     # R28 best_effort: NO candidates that still produced a plan (SLA-only rejections)
     # F2.1c: verdict PROPOSE (nie KOORD) — Telegram musi to zobaczyć, Adrian decyduje
+    #
+    # P3-D3 2026-05-11 (root cause 2): sort key primary = r6_per_order_violations count
+    # (V3.28 P0 anchor=pickup_ready_at), nie legacy plan.sla_violations (anchor=TSP
+    # pickup_at). Pre-fix: Jelenia 43 min carry przeszedł bo plan.sla_violations=0
+    # (TSP pickup misaligned z real ready_at).
+    def _r6_pov_count(c):
+        if not hasattr(c, "metrics") or not c.metrics:
+            return 99
+        pov = c.metrics.get("r6_per_order_violations")
+        return len(pov) if pov else 0
+
     with_plan = [c for c in candidates if c.plan is not None]
-    with_plan.sort(key=lambda c: (c.plan.sla_violations, c.plan.total_duration_min))
+    with_plan.sort(key=lambda c: (_r6_pov_count(c), c.plan.sla_violations, c.plan.total_duration_min))
     if with_plan:
         best = with_plan[0]
         best.best_effort = True
+        # P3-D3 2026-05-11 (root cause 3): MIN_PROPOSE_SCORE gate aligned z feasible
+        # branch (line ~2800). Pre-fix: best_effort skip gate → score=-390 carry
+        # przeszedł jako PROPOSE (Bartek O. 187/196 min case 10.05).
+        _be_best_score = getattr(best, "score", None)
+        if isinstance(_be_best_score, (int, float)) and _be_best_score < C.MIN_PROPOSE_SCORE:
+            _be_r6_count = _r6_pov_count(best)
+            _result_be_low = PipelineResult(
+                order_id=order_id,
+                verdict="KOORD",
+                reason=(
+                    f"best_effort_low_score (best={best.courier_id} "
+                    f"score={_be_best_score:.1f}<{C.MIN_PROPOSE_SCORE:.0f}; "
+                    f"r6_violations={_be_r6_count})"
+                ),
+                best=best,
+                candidates=with_plan[:TOP_N_CANDIDATES],
+                pickup_ready_at=pickup_ready_at,
+                restaurant=restaurant,
+                delivery_address=delivery_address,
+                pool_total_count=len(candidates),
+                pool_feasible_count=0,
+            )
+            _classify_and_set_auto_route(_result_be_low, fleet_snapshot, order_event, now=now)
+            return _result_be_low
         _result_be = PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",
-            reason=f"best_effort (0 feasible, best_violations={best.plan.sla_violations})",
+            reason=f"best_effort (0 feasible, r6_violations={_r6_pov_count(best)}, legacy_sla_v={best.plan.sla_violations})",
             best=best,
             candidates=with_plan[:TOP_N_CANDIDATES],
             pickup_ready_at=pickup_ready_at,
