@@ -57,6 +57,26 @@ DEFAULT_CITY = os.environ.get('ZIOMEK_DEFAULT_CITY', 'Białystok')
 log.info(f"V326_DEFAULT_CITY: {DEFAULT_CITY}")
 
 
+# V3.28 #28 (2026-05-11): defensive fallback dla (0,0) sentinel leak.
+# courier_resolver.dispatchable_fleet substituuje BIALYSTOK_CENTER dla no_gps,
+# ale (0,0) leakuje przez inne paths (stale GPS API read, missing init). Bez
+# guard'a haversine raise ValueError (Lekcja #81 fail-loud) → V328_CP_SOLVER_FAIL
+# spam (10.05 ~110/30min peak). Mirror Faza 7 Etap 0 wzorzec.
+_BIALYSTOK_CENTER_FALLBACK = (53.1325, 23.1688)
+
+
+def _sanitize_courier_pos(pos):
+    """Return BIALYSTOK_CENTER gdy pos to (0,0) sentinel, else pass-through."""
+    if pos is None:
+        return None
+    try:
+        if len(pos) >= 2 and float(pos[0]) == 0.0 and float(pos[1]) == 0.0:
+            return _BIALYSTOK_CENTER_FALLBACK
+    except (TypeError, ValueError):
+        return None
+    return pos
+
+
 def _v327_evict_old_pre_recheck_entries(now: datetime) -> int:
     """V3.27.1 sesja 2: TTL-based eviction (default 1h).
 
@@ -1289,7 +1309,7 @@ def _assess_order_impl(
     #   - Python logging built-in lock — safe
     # Wall time goal: 250-400ms (vs sequential 500-2000ms, baseline 100-150ms pre-flip).
     def _v327_eval_courier(cid, cs):
-        courier_pos = getattr(cs, "pos", None)
+        courier_pos = _sanitize_courier_pos(getattr(cs, "pos", None))
         if courier_pos is None:
             return None
         bag_raw = getattr(cs, "bag", []) or []
@@ -2837,7 +2857,7 @@ def _assess_order_impl(
     solo_best = None
     solo_best_score = -999
     for cid, cs in fleet_snapshot.items():
-        courier_pos = getattr(cs, "pos", None)
+        courier_pos = _sanitize_courier_pos(getattr(cs, "pos", None))
         if courier_pos is None:
             continue
         try:
