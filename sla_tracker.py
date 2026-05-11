@@ -15,7 +15,7 @@ from dispatch_v2 import common as C
 from dispatch_v2.common import now_iso, setup_logger
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
-from dispatch_v2.event_bus import get_pending, mark_processed
+from dispatch_v2.event_bus import get_pending, mark_processed, mark_failed
 from dispatch_v2.state_machine import get_order, upsert_order, get_by_status
 from dispatch_v2.telegram_utils import send_admin_alert
 
@@ -139,7 +139,18 @@ def process(evt):
         dmin = None
         sla_ok = None
         if picked_ts:
-            p, d = _parse(picked_ts), _parse(delivered_ts)
+            # V3.28 #36 (2026-05-11 wieczór): TZ-safe parse via _parse_aware_utc.
+            # Pre-#36 `_parse` (legacy) zwracał mixed aware/naive zależnie od
+            # input format (`fromisoformat` na "2026-05-11T12:34:55+00:00" → aware UTC,
+            # ale "2026-05-11 13:22:37" naive Warsaw → naive datetime). Subtrakcja
+            # mieszanych typów rzucała `TypeError: can't subtract offset-naive and
+            # offset-aware datetimes` → poison message blokujący całą kolejkę
+            # COURIER_PICKED_UP/DELIVERED (akumulacja 201 eventów do ~18:48 UTC dziś).
+            # `_parse_aware_utc` zawsze zwraca aware UTC (naive Warsaw → UTC convert)
+            # → subtrakcja numerycznie correct, zachowuje semantykę SLA. Tech debt
+            # docstring _parse_aware_utc:75-94 dokumentował ten fix jako odłożony
+            # do F2.2 retestu — przesunięty na #36 incident-driven.
+            p, d = _parse_aware_utc(picked_ts), _parse_aware_utc(delivered_ts)
             if p and d:
                 dmin = round((d - p).total_seconds() / 60, 1)
                 sla_ok = dmin <= 35
@@ -302,12 +313,35 @@ def run():
 
     SLA_EVENT_TYPES = ["COURIER_PICKED_UP", "COURIER_DELIVERED"]
     while _running:
+        # V3.28 #36 (2026-05-11): per-event isolation — pojedynczy poison message
+        # (TZ TypeError, malformed payload, etc.) NIE blokuje konsumpcji reszty
+        # kolejki. Pre-#36 jeden exception w `process(evt)` rzucał z forki przez
+        # outer try → break iteration → `mark_processed` nie wywoływany dla evt →
+        # następny tick ten sam evt head-of-queue → infinite poison loop, kolejka
+        # pucha (201 eventów akumulowanych dziś przed fixem). Per-event try/except
+        # + `mark_failed` na exception zachowuje audit trail + zwalnia kolejkę.
         try:
-            for evt in get_pending(limit=200, event_types=SLA_EVENT_TYPES):
-                if process(evt):
-                    mark_processed(evt["event_id"])
+            _pending = get_pending(limit=200, event_types=SLA_EVENT_TYPES)
         except Exception as e:
-            _log.error(f"loop: {e}")
+            _log.error(f"loop get_pending: {e}")
+            _pending = []
+        for evt in _pending:
+            _eid = evt.get("event_id")
+            try:
+                if process(evt):
+                    mark_processed(_eid)
+            except Exception as e:
+                import traceback as _tb
+                _log.error(
+                    f"poison_msg event_id={_eid} oid={evt.get('order_id')} "
+                    f"type={evt.get('event_type')}: {type(e).__name__}: {e}\n"
+                    f"{_tb.format_exc()}"
+                )
+                # mark_failed → wyjęte z get_pending, audit visibility zachowany.
+                try:
+                    mark_failed(_eid, f"{type(e).__name__}: {e}")
+                except Exception as _mf_e:
+                    _log.error(f"mark_failed fail event_id={_eid}: {_mf_e}")
 
         # F2.1b step 6: R6 BAG_TIME scan per tick (outer safety net).
         try:
