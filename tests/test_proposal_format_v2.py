@@ -298,8 +298,10 @@ def test_v2_flag_on_uses_v2_path():
 # ----- 2026-05-07 extension+route sprint: pickup (+N min) + wave-aware trasa -----
 
 def test_v2_pickup_extension_delta_emitted():
-    """⏱️ Odbiór HH:MM (+N min) gdy Ziomek przedłużył deklarację restauracji.
+    """⏱️ Odbiór HH:MM · +N min od deklaracji gdy Ziomek przedłużył deklarację.
 
+    Etap 2 (2026-05-13): format zmieniony z "(+N min)" → "+N min od deklaracji"
+    (explicit label, fallback path gdy brak ck i mins_since_creation).
     delta = pickup_ready_at − pickup_at_warsaw. Emit gdy >0, skip gdy 0/None.
     """
     from datetime import datetime, timezone, timedelta
@@ -310,21 +312,21 @@ def test_v2_pickup_extension_delta_emitted():
     d["pickup_ready_at"] = extended.isoformat()
     d["pickup_at_warsaw"] = raw.isoformat()
     out = ta._format_proposal_v2(d)
-    assert "(+8 min)" in out, f"oczekiwane '(+8 min)' w pickup line: {out[:200]!r}"
+    assert "+8 min od deklaracji" in out, f"oczekiwane '+8 min od deklaracji' w pickup line: {out[:200]!r}"
 
-    # Zero delta → bez nawiasu
+    # Zero delta → bez extension dopisku
     d2 = _mk_decision()
     d2["pickup_ready_at"] = raw.isoformat()
     d2["pickup_at_warsaw"] = raw.isoformat()
     out2 = ta._format_proposal_v2(d2)
-    assert "(+" not in out2, f"delta=0 nie powinno emitować nawiasu: {out2[:200]!r}"
+    assert "od deklaracji" not in out2, f"delta=0 nie powinno emitować dopisku: {out2[:200]!r}"
 
-    # Brak pickup_at_warsaw → bez nawiasu (legacy decisions pre-sprint)
+    # Brak pickup_at_warsaw → bez extension dopisku (legacy decisions pre-sprint)
     d3 = _mk_decision()
     d3["pickup_ready_at"] = extended.isoformat()
     # pickup_at_warsaw NIE w decision
     out3 = ta._format_proposal_v2(d3)
-    assert "(+" not in out3
+    assert "od deklaracji" not in out3
 
 
 def test_v2_route_iterates_plan_sequence_chronological():
@@ -418,14 +420,16 @@ def test_v2_pickup_extension_delta_helper_unit():
 
 def test_v2_pickup_label_with_mins_since_creation():
     """Happy path: best.eta_pickup_hhmm + best.mins_since_creation present →
-    linia "⏱️ Odbiór: {hhmm} ({N} min od złożenia)" zamiast pickup_ready_at."""
+    linia "⏱️ Odbiór: {hhmm} · {N} min od złożenia" zamiast pickup_ready_at.
+
+    Etap 2 (2026-05-13): format zmieniony z parens "(40 min)" → "· 40 min".
+    """
     d = _mk_decision(best_eta_pickup_hhmm="11:00")
     d["best"]["mins_since_creation"] = 40
     out = ta._format_proposal_v2(d)
-    assert "⏱️ Odbiór: 11:00 (40 min od złożenia)" in out, \
+    assert "⏱️ Odbiór: 11:00 · 40 min od złożenia" in out, \
         f"missing new label format: {out}"
     # NIE używamy pickup_ready_at HH:MM (powinien być now+15min, NIE 11:00)
-    # i NIE używamy "+N min" extension fallback
     lines = [ln for ln in out.split("\n") if ln.startswith("⏱️")]
     assert len(lines) == 1
     assert "min od złożenia" in lines[0]
@@ -444,14 +448,82 @@ def test_v2_pickup_label_fallback_no_mins_since_creation():
 
 
 def test_v2_pickup_label_fallback_no_best_eta():
-    """Gdy brak best.eta_pickup_hhmm (rare: brak GPS+brak shift) → fallback do
-    pickup_ready_at (pełny legacy path), nawet jeśli mins_since_creation ustawione."""
+    """Gdy brak best.eta_pickup_hhmm AND brak plan.pickup_at[oid] → display HHMM
+    z pickup_ready_at fallback. mins_since_creation pokazywane gdy dostępne
+    (Etap 2 2026-05-13: tail context decoupled od display source)."""
     d = _mk_decision(best_eta_pickup_hhmm=None)
-    d["best"]["mins_since_creation"] = 40  # nawet z mins, bez eta_hhmm fallback
+    d["best"]["mins_since_creation"] = 40
     out = ta._format_proposal_v2(d)
-    assert "min od złożenia" not in out, \
-        "without best.eta_pickup_hhmm must NOT show new format"
+    # display = pickup_ready_at HHMM (now+15min), NIE 11:00
+    assert "⏱️ Odbiór: 11:00" not in out, \
+        "no eta_pickup_hhmm and no plan → must NOT use 11:00 as display"
     assert "⏱️ Odbiór:" in out
+
+
+# ----- Etap 2 pickup-label tests (2026-05-13) — TSP actual + ck commit -----
+
+def test_v2_pickup_label_uses_tsp_actual_over_eta():
+    """Etap 2 (#472788 13.05): header pokazuje plan.pickup_at[oid] (TSP post-wait),
+    NIE eta_pickup_hhmm (drive arrival). Case: pre-shift synthetic start 12:00 ≠
+    TSP actual 12:16 → header MUSI pokazać 12:16, nie 12:00.
+
+    Adrian feedback: "wiadomość nieczytelna" — eta_pickup=12:00 + trasa=12:16 +
+    deklarowany=12:14 = 3 niespójne wartości. Fix: header = source-of-truth dla
+    momentu fizycznego odbioru jedzenia (post-wait TSP).
+    """
+    d = _mk_decision(best_eta_pickup_hhmm="12:00")
+    d["order_id"] = "472788"
+    d["best"]["plan"] = {
+        "pickup_at": {"472788": "2026-05-13T10:16:00+00:00"},  # 12:16 Warsaw CEST
+    }
+    out = ta._format_proposal_v2(d)
+    pickup_line = [ln for ln in out.split("\n") if ln.startswith("⏱️")][0]
+    assert "12:16" in pickup_line, \
+        f"header MUSI pokazać TSP actual 12:16: {pickup_line!r}"
+    assert "12:00" not in pickup_line, \
+        f"header NIE może pokazać drive arrival 12:00 gdy TSP dostępne: {pickup_line!r}"
+
+
+def test_v2_pickup_label_ck_delta_shown_when_diverge():
+    """Etap 2: gdy czas_kuriera_warsaw (ck commit) różny od display → dopisek
+    "· ck HH:MM (±delta min)". Adrian's request: "chce mieć obok informacje
+    12:15 (+0 min)" dla czytelności commit-vs-actual."""
+    d = _mk_decision(best_eta_pickup_hhmm="12:00")
+    d["order_id"] = "472788"
+    d["best"]["plan"] = {"pickup_at": {"472788": "2026-05-13T10:16:00+00:00"}}  # 12:16
+    d["czas_kuriera_warsaw"] = "2026-05-13T10:15:00+00:00"  # 12:15 Warsaw
+    out = ta._format_proposal_v2(d)
+    pickup_line = [ln for ln in out.split("\n") if ln.startswith("⏱️")][0]
+    assert "ck 12:15" in pickup_line, f"missing ck dopisek: {pickup_line!r}"
+    assert "+1 min" in pickup_line, f"missing ck delta: {pickup_line!r}"
+
+
+def test_v2_pickup_label_ck_match_shown_explicit():
+    """Etap 2: gdy ck == display → "· ck HH:MM (+0 min)" explicit, NIE skip.
+    Adrian's request: "0 min przedłużenia" widoczne explicit jako confirmation."""
+    d = _mk_decision(best_eta_pickup_hhmm="12:00")
+    d["order_id"] = "472788"
+    d["best"]["plan"] = {"pickup_at": {"472788": "2026-05-13T10:15:00+00:00"}}  # 12:15
+    d["czas_kuriera_warsaw"] = "2026-05-13T10:15:00+00:00"  # 12:15 (match)
+    out = ta._format_proposal_v2(d)
+    pickup_line = [ln for ln in out.split("\n") if ln.startswith("⏱️")][0]
+    assert "ck 12:15 (+0 min)" in pickup_line, \
+        f"missing explicit ck match (+0 min): {pickup_line!r}"
+
+
+def test_v2_pickup_label_no_ck_pre_acceptance():
+    """Etap 2: brak czas_kuriera_warsaw (pre first_acceptance) → BRAK ck dopisku.
+    Pokazuje TSP actual + mins_since_creation tylko (clean format)."""
+    d = _mk_decision(best_eta_pickup_hhmm="12:00")
+    d["order_id"] = "472788"
+    d["best"]["plan"] = {"pickup_at": {"472788": "2026-05-13T10:16:00+00:00"}}
+    d["best"]["mins_since_creation"] = 22
+    # NO czas_kuriera_warsaw
+    out = ta._format_proposal_v2(d)
+    pickup_line = [ln for ln in out.split("\n") if ln.startswith("⏱️")][0]
+    assert "ck " not in pickup_line, f"NIE może być ck gdy brak commit: {pickup_line!r}"
+    assert "12:16" in pickup_line
+    assert "22 min od złożenia" in pickup_line
 
 
 # ----- ETAP 2 route start clamp tests (2026-05-08) -----

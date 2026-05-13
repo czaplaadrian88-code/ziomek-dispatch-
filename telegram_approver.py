@@ -1158,14 +1158,42 @@ def _format_proposal_v2(decision: dict) -> str:
     now_utc = datetime.now(timezone.utc)
     pickup_ready_hhmm, pickup_in_min = _pickup_ready_warsaw(decision, now_utc)
 
-    # Etap 1 pickup-label (2026-05-08): linia "Odbiór" pokazuje faktyczny czas
-    # dotarcia best kandydata (best.eta_pickup_hhmm), nie pickup_ready_at
-    # (gotowość restauracji). Nawias = minuty od złożenia zamówienia. Fallback
-    # do pickup_ready_at + (+N min) extension delta gdy brak best/eta_pickup
-    # albo brak created_at (legacy events).
+    # Etap 2 pickup-label (2026-05-13): header pokazuje TSP-computed actual pickup_at
+    # (post-wait na prep_ready), NIE drive arrival eta_pickup_hhmm. Wcześniej (Etap 1
+    # 2026-05-08) header był eta_pickup_hhmm = moment dotarcia pod restaurację, ale
+    # pre-shift synthetic start (np. 12:00) ≠ prep_ready (12:14) ≠ ck commit (12:15)
+    # ≠ TSP actual pickup (12:16) → 4 niespójne wartości w renderze. Case #472788
+    # 13.05: Adrian "wiadomość nieczytelna; chce mieć obok informacje 12:15 (0min
+    # przedłużenia)". Fix: header = TSP actual pickup + dopisek "ck HH:MM (±delta)"
+    # gdy commit różny.
+    _plan = (best.get("plan") or {}) if best else {}
+    _cur_oid_str = str(oid) if oid else ""
+    cur_plan_pickup_iso = (_plan.get("pickup_at") or {}).get(_cur_oid_str) if _plan else None
+    actual_pickup_hhmm = None
+    if cur_plan_pickup_iso:
+        try:
+            _ad = datetime.fromisoformat(str(cur_plan_pickup_iso).replace("Z", "+00:00"))
+            if _ad.tzinfo is None:
+                _ad = _ad.replace(tzinfo=timezone.utc)
+            actual_pickup_hhmm = _to_warsaw_hhmm(_ad)
+        except (TypeError, ValueError):
+            actual_pickup_hhmm = None
+
+    ck_hhmm = None
+    ck_iso = decision.get("czas_kuriera_warsaw")
+    if ck_iso:
+        try:
+            _cd = datetime.fromisoformat(str(ck_iso).replace("Z", "+00:00"))
+            if _cd.tzinfo is None:
+                _cd = _cd.replace(tzinfo=timezone.utc)
+            ck_hhmm = _to_warsaw_hhmm(_cd)
+        except (TypeError, ValueError):
+            ck_hhmm = None
+
     best_pickup_hhmm = best.get("eta_pickup_hhmm") if best else None
     mins_since_creation = best.get("mins_since_creation") if best else None
-    display_hhmm = best_pickup_hhmm or pickup_ready_hhmm
+    # Precedence: TSP actual (post-wait) > drive arrival > pickup_ready
+    display_hhmm = actual_pickup_hhmm or best_pickup_hhmm or pickup_ready_hhmm
 
     best_name = name_lookup(best.get("courier_id"), best.get("name")) if best else "?"
     best_cid = str(best.get("courier_id") or "?") if best else "?"
@@ -1175,14 +1203,33 @@ def _format_proposal_v2(decision: dict) -> str:
         f"🚖 {best_name} (K-{best_cid}) → {rest} → {delivery} ({drop_district})",
     ]
     if display_hhmm is not None:
-        if best_pickup_hhmm is not None and mins_since_creation is not None:
-            lines.append(f"⏱️ Odbiór: {display_hhmm} ({int(mins_since_creation)} min od złożenia)")
-        else:
+        # Build context tail z explicit labels:
+        # - ck HH:MM (±delta) gdy commit różny od display
+        # - mins_since_creation gdy dostępne (Etap 1 backward compat)
+        # - extension delta (+N min) gdy brak ck/eta i delta>0 (legacy fallback)
+        ctx_parts = []
+        if ck_hhmm and ck_hhmm != display_hhmm:
+            try:
+                _disp_dt = datetime.strptime(display_hhmm, "%H:%M")
+                _ck_dt = datetime.strptime(ck_hhmm, "%H:%M")
+                _ck_delta = int(round((_disp_dt - _ck_dt).total_seconds() / 60.0))
+                _sign = "+" if _ck_delta >= 0 else ""
+                ctx_parts.append(f"ck {ck_hhmm} ({_sign}{_ck_delta} min)")
+            except (TypeError, ValueError):
+                ctx_parts.append(f"ck {ck_hhmm}")
+        elif ck_hhmm and ck_hhmm == display_hhmm:
+            ctx_parts.append(f"ck {ck_hhmm} (+0 min)")
+        if mins_since_creation is not None:
+            ctx_parts.append(f"{int(mins_since_creation)} min od złożenia")
+        if not ctx_parts:
+            # Legacy fallback: brak ck i mins → spróbuj extension delta
             ext_delta = _pickup_extension_delta_min(decision)
             if ext_delta is not None and ext_delta > 0:
-                lines.append(f"⏱️ Odbiór: {display_hhmm} (+{ext_delta} min)")
-            else:
-                lines.append(f"⏱️ Odbiór: {display_hhmm}")
+                ctx_parts.append(f"+{ext_delta} min od deklaracji")
+        if ctx_parts:
+            lines.append(f"⏱️ Odbiór: {display_hhmm} · " + " · ".join(ctx_parts))
+        else:
+            lines.append(f"⏱️ Odbiór: {display_hhmm}")
     lines.append("")
     lines.append(_conf_line_v2(decision))
     lines.append("")
