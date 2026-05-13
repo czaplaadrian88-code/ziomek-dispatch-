@@ -29,6 +29,14 @@ from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_fleet
 from dispatch_v2.dispatch_pipeline import assess_order, PipelineResult
+from dispatch_v2.monitoring.consumer_stuck_alert import (
+    StuckAlertConfig,
+    StuckAlertState,
+    append_evaluation_log,
+    compute_heartbeat,
+    evaluate_stuck_alert,
+    render_telegram_message,
+)
 
 
 POLL_INTERVAL_SEC = 5
@@ -770,6 +778,25 @@ V328_WORKER_STUCK_REALERT_INTERVAL_SEC = int(
     _os_v328.environ.get("V328_WORKER_STUCK_REALERT_INTERVAL_SEC", "1800")
 )  # SUSTAINED re-alert co N sekund podczas sustained stuck (default 30 min). Reminder że problem trwa.
 
+# Sprint #37 v2 (2026-05-13): per-consumer stuck alert config. event_types
+# filtered TYLKO `["NEW_ORDER"]` (consumer attribution per Lekcja #113) —
+# pre-#37 alert sygnał używał QUEUE_EVENT_TYPES (NEW_ORDER + COURIER_PICKED_UP
+# + COURIER_DELIVERED) → backlog sla_tracker'a (PICKED_UP+DELIVERED) firował
+# alert "shadow STUCK" mimo że shadow zdrowy (NEW_ORDER=0).
+# Env override: STUCK_ALERT_SHADOW_AGE_SEC, _PENDING_THRESHOLD, _PENDING_LOW_WATER,
+# _SUSTAIN_CYCLES, _REALERT_INTERVAL_SEC, _SHADOW_MODE_ONLY.
+_SHADOW_STUCK_CONFIG = StuckAlertConfig.from_env(
+    consumer_id="shadow",
+    consumer_display_name="Ziomek shadow worker",
+    event_types=frozenset(["NEW_ORDER"]),
+    age_threshold_sec=V328_WORKER_STUCK_AGE_SEC,
+    pending_threshold=V328_WORKER_STUCK_PENDING_THRESHOLD,
+    pending_low_water=V328_WORKER_STUCK_PENDING_LOW_WATER,
+    sustain_cycles=V328_WORKER_STUCK_SUSTAIN_CYCLES,
+    realert_interval_sec=V328_WORKER_STUCK_REALERT_INTERVAL_SEC,
+    shadow_mode_only=False,  # battle-tested via #33/#35 — emit Telegram by default
+)
+
 
 def _v328_compute_heartbeat_state(
     last_processed_ts: float,
@@ -951,14 +978,13 @@ def run() -> int:
     # log.critical V328_WORKER_STUCK gdy age>300s AND pending>100 (multi-signal
     # per Lekcja #66 — quiet period z low pending NIE jest stuck).
     last_processed_ts = time.time()
-    # V3.28 #33 (2026-05-11): Telegram alert dedup flag — ONE alert per continuous
-    # stuck period. Reset gdy worker recovers. Mirror MP-#13 OSRM L2 pattern.
-    # V3.28 #35 (2026-05-11 wieczór): pełen state machine z hysteresis +
-    # sustain + re-alert. Pre-#35 spam co ~10 min pod peak load (Lekcja #112).
-    v328_stuck_alert_sent = False
-    v328_stuck_high_water_streak = 0  # consecutive is_stuck=True heartbeats (anti-flap counter)
-    v328_stuck_last_alert_ts = 0.0    # last ENTER/SUSTAINED emit ts (for re-alert throttle)
-    v328_stuck_first_alert_ts = 0.0   # ENTER ts (for SUSTAINED "stuck for X min" telemetry)
+    # V3.28 #33+#35 + Sprint #37 v2 (2026-05-13): stuck alert state machine
+    # zrefaktorowany do `monitoring/consumer_stuck_alert.py` (reusable abstraction
+    # — sla_tracker dostanie własną instancję w Phase B). In-memory state,
+    # restart-clean (sustain_cycles=2 zapobiega false-positive natychmiast po
+    # restart). Legacy `_v328_*` thin wrappery zachowują contract dla 25 testów
+    # backward-compat (do delete po Sprint #37+1 stable 7d).
+    _shadow_stuck_state = StuckAlertState()
 
     while not _shutdown:
         try:
@@ -987,92 +1013,64 @@ def run() -> int:
 
         if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_SEC:
             eb = event_bus.stats()
-            # Opcja C (2026-05-07): WORKER_STUCK alert mierzy TYLKO queue typy.
-            # Pre-fix: eb['pending'] = global count (queue + audit_log dual-write
-            # legacy 11800+ pending z status='pending' nigdy nie konsumowanych) →
-            # alert false-positive zawsze. Post-fix: pending_queue (NEW_ORDER +
-            # COURIER_PICKED_UP + COURIER_DELIVERED + ...) = real worker backlog.
+            # Sprint #37 v2 (2026-05-13): pending filtered TYLKO `["NEW_ORDER"]`
+            # (event_types z _SHADOW_STUCK_CONFIG). Pre-#37 sumowało multi-consumer
+            # queue (NEW_ORDER+COURIER_PICKED_UP+COURIER_DELIVERED) → wrong attribution
+            # gdy sla_tracker miał backlog. Lekcja #113.
             pending_queue = event_bus.get_pending_count(
-                event_types=list(event_bus.QUEUE_EVENT_TYPES)
+                event_types=list(_SHADOW_STUCK_CONFIG.event_types)
             )
-            # V3.28 Fix 3: truthful HEARTBEAT z worker liveness signal
-            hb_state = _v328_compute_heartbeat_state(last_processed_ts, time.time(), pending_queue)
+            _v328_now = time.time()
+            _snapshot = compute_heartbeat(
+                last_processed_ts=last_processed_ts,
+                now=_v328_now,
+                pending=pending_queue,
+                config=_SHADOW_STUCK_CONFIG,
+            )
             _log.info(
                 f"HEARTBEAT totals={totals} "
-                f"event_bus=pending:{eb['pending']}(queue:{pending_queue})"
+                f"event_bus=pending:{eb['pending']}(NEW_ORDER:{pending_queue})"
                 f"/processed:{eb['processed']}/failed:{eb['failed']} "
-                f"last_processed_age_sec={hb_state['age_sec']:.0f} "
-                f"worker_alive={hb_state['worker_alive']}"
+                f"last_processed_age_sec={_snapshot.age_sec:.0f} "
+                f"worker_alive={_snapshot.worker_alive}"
             )
-            # V3.28 Fix 3: worker stuck alert (multi-signal — quiet period NOT alert)
-            if hb_state['is_stuck']:
+            if _snapshot.is_stuck:
                 _log.critical(
-                    f"V328_WORKER_STUCK age={hb_state['age_sec']:.0f}s pending_queue={pending_queue} "
-                    f"threshold_age={V328_WORKER_STUCK_AGE_SEC}s "
-                    f"threshold_pending={V328_WORKER_STUCK_PENDING_THRESHOLD}"
+                    f"V328_WORKER_STUCK age={_snapshot.age_sec:.0f}s "
+                    f"pending_NEW_ORDER={pending_queue} "
+                    f"threshold_age={_SHADOW_STUCK_CONFIG.age_threshold_sec}s "
+                    f"threshold_pending={_SHADOW_STUCK_CONFIG.pending_threshold}"
                 )
-            # V3.28 #33+#35 (2026-05-11): Telegram alert state machine z hysteresis.
-            # Pre-#33 silent critical only. Pre-#35 latch flap → spam co ~10 min pod
-            # peak load. #35 dodaje: ENTER (sustain N cycles), SUSTAINED (re-alert
-            # co 30 min), RECOVERY (pending<=low_water). Lekcja #112.
-            _v328_now = time.time()
-            (
-                emit_alert,
-                alert_kind,
-                v328_stuck_alert_sent,
-                v328_stuck_high_water_streak,
-                v328_stuck_last_alert_ts,
-            ) = _v328_should_emit_stuck_alert(
-                hb_state['is_stuck'],
-                hb_state['is_recovered'],
-                v328_stuck_alert_sent,
-                v328_stuck_high_water_streak,
-                v328_stuck_last_alert_ts,
-                _v328_now,
+            # Sprint #37 v2: pure state machine via consumer_stuck_alert helper.
+            _state_before = _shadow_stuck_state
+            _emit_alert, _alert_kind, _shadow_stuck_state = evaluate_stuck_alert(
+                state=_state_before,
+                snapshot=_snapshot,
+                now=_v328_now,
+                config=_SHADOW_STUCK_CONFIG,
             )
-            # Track ENTER ts dla SUSTAINED "stuck for X min" telemetry; reset on RECOVERY.
-            if alert_kind == "ENTER":
-                v328_stuck_first_alert_ts = _v328_now
-            elif alert_kind == "RECOVERY":
-                _stuck_total_min = (_v328_now - v328_stuck_first_alert_ts) / 60.0 if v328_stuck_first_alert_ts else 0.0
-                v328_stuck_first_alert_ts = 0.0
-            if emit_alert:
-                # Defensive try/except — Telegram unreachable NIE blokuje main loop (Lekcja #87).
+            # Audit trail per tick — odzysk historyczny + future calibration.
+            # Defensive (helper łapie własne exceptions).
+            append_evaluation_log(
+                snapshot=_snapshot,
+                state_before=_state_before,
+                state_after=_shadow_stuck_state,
+                emit=_emit_alert,
+                kind=_alert_kind,
+                config=_SHADOW_STUCK_CONFIG,
+                now=_v328_now,
+            )
+            if _emit_alert and not _SHADOW_STUCK_CONFIG.shadow_mode_only:
+                # Defensive try/except — Telegram unreachable NIE blokuje main loop (Lekcja #87/#110).
                 try:
                     from dispatch_v2.telegram_utils import send_admin_alert as _v328_send_alert
-                    if alert_kind == "ENTER":
-                        _msg = (
-                            f"🚨 Ziomek shadow worker STUCK (ENTER)\n"
-                            f"age={hb_state['age_sec']:.0f}s (threshold {V328_WORKER_STUCK_AGE_SEC}s)\n"
-                            f"pending_queue={pending_queue} "
-                            f"(high={V328_WORKER_STUCK_PENDING_THRESHOLD}, "
-                            f"low_water={V328_WORKER_STUCK_PENDING_LOW_WATER})\n"
-                            f"sustain_cycles={v328_stuck_high_water_streak}/"
-                            f"{V328_WORKER_STUCK_SUSTAIN_CYCLES} → ENTER\n"
-                            f"Likely peak load — manual koord możliwie wymagany do recovery.\n"
-                            f"Next reminder za {V328_WORKER_STUCK_REALERT_INTERVAL_SEC//60} min "
-                            f"jeśli pending nie spadnie poniżej {V328_WORKER_STUCK_PENDING_LOW_WATER}."
-                        )
-                    elif alert_kind == "SUSTAINED":
-                        _elapsed_min = (
-                            (_v328_now - v328_stuck_first_alert_ts) / 60.0
-                            if v328_stuck_first_alert_ts else 0.0
-                        )
-                        _msg = (
-                            f"⚠️ Ziomek shadow worker WCIĄŻ STUCK (SUSTAINED, {_elapsed_min:.0f} min)\n"
-                            f"age={hb_state['age_sec']:.0f}s pending_queue={pending_queue} "
-                            f"(low_water={V328_WORKER_STUCK_PENDING_LOW_WATER})\n"
-                            f"Backlog nie spada — operator review konieczny.\n"
-                            f"Kolejny reminder za {V328_WORKER_STUCK_REALERT_INTERVAL_SEC//60} min."
-                        )
-                    elif alert_kind == "RECOVERY":
-                        _msg = (
-                            f"✅ Ziomek shadow worker RECOVERED\n"
-                            f"pending_queue={pending_queue} ≤ low_water={V328_WORKER_STUCK_PENDING_LOW_WATER}\n"
-                            f"Stuck cycle łącznie {_stuck_total_min:.0f} min. Worker latch reset, re-armed."
-                        )
-                    else:
-                        _msg = f"V328_WORKER_STUCK unknown kind={alert_kind}"
+                    _msg = render_telegram_message(
+                        kind=_alert_kind,
+                        snapshot=_snapshot,
+                        state=_shadow_stuck_state,
+                        config=_SHADOW_STUCK_CONFIG,
+                        now=_v328_now,
+                    )
                     _v328_send_alert(_msg)
                 except Exception as _v328_alert_e:
                     _log.error(
