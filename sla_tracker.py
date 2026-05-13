@@ -15,13 +15,44 @@ from dispatch_v2 import common as C
 from dispatch_v2.common import now_iso, setup_logger
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
-from dispatch_v2.event_bus import get_pending, mark_processed, mark_failed
+from dispatch_v2.event_bus import get_pending, mark_processed, mark_failed, get_pending_count
+from dispatch_v2.monitoring.consumer_stuck_alert import (
+    StuckAlertConfig,
+    StuckAlertState,
+    append_evaluation_log,
+    compute_heartbeat,
+    evaluate_stuck_alert,
+    render_telegram_message,
+)
 from dispatch_v2.state_machine import get_order, upsert_order, get_by_status
 from dispatch_v2.telegram_utils import send_admin_alert
 
 _log = setup_logger("sla_tracker", "/root/.openclaw/workspace/scripts/logs/sla_tracker.log")
 _running = True
 _stats = {"pickup": 0, "delivered": 0, "violations": 0, "r6_alerts": 0}
+
+# Sprint #37 v2 Phase B (2026-05-13): per-consumer stuck alert dla sla_tracker.
+# Post-#36 (poison-msg fix) sla_tracker miał per-event isolation ALE brakowało
+# stuck alertu — 3-dniowy infinite loop 08-11.05 byłby NIEWIDOCZNY dla Adriana
+# bez empirycznego "naprawiaj" trigger'a. Brak alertu = silent killer (#87 ext).
+# Thresholds konserwatywne (SLA events ~30-60s rytm vs shadow 5-15s):
+#   age=600s, pending=50, low_water=15, sustain=2, realert=1800s.
+# shadow_mode_only=True na 7-day calibration window — eval+log JSONL bez
+# Telegrama. Po empirycznej walidacji thresholds → flip False via env:
+#   STUCK_ALERT_SLA_TRACKER_SHADOW_MODE_ONLY=false.
+_SLA_STUCK_CONFIG = StuckAlertConfig.from_env(
+    consumer_id="sla_tracker",
+    consumer_display_name="Ziomek SLA tracker",
+    event_types=frozenset(["COURIER_PICKED_UP", "COURIER_DELIVERED"]),
+    age_threshold_sec=600,
+    pending_threshold=50,
+    pending_low_water=15,
+    sustain_cycles=2,
+    realert_interval_sec=1800,
+    heartbeat_interval_sec=60,
+    shadow_mode_only=True,  # 7-day calibration window — flip env po obs
+)
+SLA_HEARTBEAT_INTERVAL_SEC = 60.0
 LOG_PATH = Path("/root/.openclaw/workspace/scripts/logs/sla_log.jsonl")
 COURIER_NAMES_PATH = Path("/root/.openclaw/workspace/dispatch_state/courier_names.json")
 KURIER_IDS_PATH = Path("/root/.openclaw/workspace/dispatch_state/kurier_ids.json")  # V3.25 inverse fallback
@@ -311,6 +342,23 @@ def run():
     last_broadcast_poll = 0.0
     BROADCAST_POLL_INTERVAL_S = 30.0
 
+    # Sprint #37 v2 Phase B: stuck alert state + last_processed_ts tracking.
+    # In-memory state, restart-clean (sustain_cycles=2 → false-positive immediate
+    # post-restart prawie niemożliwy). _last_processed_ts updateowany po każdym
+    # `mark_processed` (process(evt) zwrócił True).
+    _sla_last_processed_ts = time.time()
+    _sla_stuck_state = StuckAlertState()
+    _sla_last_heartbeat = time.time()
+    _log.info(
+        f"Sprint #37 v2 Phase B: stuck alert config "
+        f"consumer_id={_SLA_STUCK_CONFIG.consumer_id} "
+        f"event_types={sorted(_SLA_STUCK_CONFIG.event_types)} "
+        f"age_threshold={_SLA_STUCK_CONFIG.age_threshold_sec}s "
+        f"pending_threshold={_SLA_STUCK_CONFIG.pending_threshold} "
+        f"low_water={_SLA_STUCK_CONFIG.pending_low_water} "
+        f"shadow_mode_only={_SLA_STUCK_CONFIG.shadow_mode_only}"
+    )
+
     SLA_EVENT_TYPES = ["COURIER_PICKED_UP", "COURIER_DELIVERED"]
     while _running:
         # V3.28 #36 (2026-05-11): per-event isolation — pojedynczy poison message
@@ -330,6 +378,7 @@ def run():
             try:
                 if process(evt):
                     mark_processed(_eid)
+                    _sla_last_processed_ts = time.time()  # Sprint #37 v2: liveness signal
             except Exception as e:
                 import traceback as _tb
                 _log.error(
@@ -361,6 +410,75 @@ def run():
                     f"({type(_bp_e).__name__}: {_bp_e}) — skip, retry next interval"
                 )
             last_broadcast_poll = time.time()
+
+        # Sprint #37 v2 Phase B: heartbeat tick + stuck alert evaluate.
+        _sla_now = time.time()
+        if _sla_now - _sla_last_heartbeat >= SLA_HEARTBEAT_INTERVAL_SEC:
+            try:
+                _sla_pending = get_pending_count(event_types=list(_SLA_STUCK_CONFIG.event_types))
+            except Exception as _gpc_e:
+                _log.warning(f"get_pending_count fail (non-blocking): {_gpc_e}")
+                _sla_pending = 0
+            _sla_snapshot = compute_heartbeat(
+                last_processed_ts=_sla_last_processed_ts,
+                now=_sla_now,
+                pending=_sla_pending,
+                config=_SLA_STUCK_CONFIG,
+            )
+            _log.info(
+                f"HEARTBEAT stats={_stats} "
+                f"pending_SLA={_sla_pending} "
+                f"last_processed_age_sec={_sla_snapshot.age_sec:.0f} "
+                f"worker_alive={_sla_snapshot.worker_alive} "
+                f"is_stuck={_sla_snapshot.is_stuck} "
+                f"is_recovered={_sla_snapshot.is_recovered}"
+            )
+            if _sla_snapshot.is_stuck:
+                _log.critical(
+                    f"SLA_TRACKER_STUCK age={_sla_snapshot.age_sec:.0f}s "
+                    f"pending_SLA={_sla_pending} "
+                    f"threshold_age={_SLA_STUCK_CONFIG.age_threshold_sec}s "
+                    f"threshold_pending={_SLA_STUCK_CONFIG.pending_threshold}"
+                )
+            _state_before = _sla_stuck_state
+            _sla_emit, _sla_kind, _sla_stuck_state = evaluate_stuck_alert(
+                state=_state_before,
+                snapshot=_sla_snapshot,
+                now=_sla_now,
+                config=_SLA_STUCK_CONFIG,
+            )
+            append_evaluation_log(
+                snapshot=_sla_snapshot,
+                state_before=_state_before,
+                state_after=_sla_stuck_state,
+                emit=_sla_emit,
+                kind=_sla_kind,
+                config=_SLA_STUCK_CONFIG,
+                now=_sla_now,
+            )
+            # shadow_mode_only=True (calibration window) → log only, NIE Telegram.
+            # Defensive try/except dla render+send (Lekcja #87/#110).
+            if _sla_emit and not _SLA_STUCK_CONFIG.shadow_mode_only:
+                try:
+                    _msg = render_telegram_message(
+                        kind=_sla_kind,
+                        snapshot=_sla_snapshot,
+                        state=_sla_stuck_state,
+                        config=_SLA_STUCK_CONFIG,
+                        now=_sla_now,
+                    )
+                    send_admin_alert(_msg)
+                except Exception as _sa_e:
+                    _log.error(
+                        f"SLA_TRACKER_STUCK telegram alert fail "
+                        f"({type(_sa_e).__name__}: {_sa_e}) — log only"
+                    )
+            elif _sla_emit and _SLA_STUCK_CONFIG.shadow_mode_only:
+                _log.info(
+                    f"SLA_TRACKER_STUCK shadow_mode_only=True — emit suppressed "
+                    f"(kind={_sla_kind}, would-send: pending={_sla_pending})"
+                )
+            _sla_last_heartbeat = _sla_now
 
         if time.time() - last_summary > 300:
             _log.info(f"SUMMARY: {_stats}")
