@@ -79,6 +79,12 @@ AUDIT_EVENT_TYPES = {
     "ORDER_RETURNED_TO_POOL",
 }
 
+# Tech debt #39 (2026-05-13): queue types that are ALSO mirrored to audit_log
+# for 90‑day analytics retention.  The primary source for R‑04 evaluator is
+# audit_log (guaranteed 90d).  Events table still holds the queue lifecycle
+# (pending → processed) but is purged after 48h.
+AUDIT_MIRRORED_QUEUE_TYPES = frozenset({"COURIER_PICKED_UP", "COURIER_DELIVERED"})
+
 # QUEUE_EVENT_TYPES — typy z lifecycle pending → processed w tabeli events.
 # Konsumenci: shadow_dispatcher (NEW_ORDER) + sla_tracker (PICKED_UP, DELIVERED).
 QUEUE_EVENT_TYPES = EVENT_TYPES - AUDIT_EVENT_TYPES - BROADCAST_EVENT_TYPES
@@ -121,6 +127,34 @@ def _retry_on_locked(fn: Callable, *args, **kwargs):
             else:
                 _log.error(f"event_bus: SQLite locked, retry exhausted: {e}")
     raise last_exc  # type: ignore[misc]
+
+
+def _emit_audit_mirror(
+    event_id: str,
+    event_type: str,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload_json: str,
+    created_at: str,
+) -> None:
+    """Best‑effort mirror of a queue event into audit_log.
+
+    Must NEVER raise – queue write integrity > audit completeness.
+    """
+    try:
+        _ensure_audit_log_initialized()
+        with _conn() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO audit_log
+                   (event_id, event_type, order_id, courier_id, payload, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (event_id, event_type, order_id, courier_id, payload_json, created_at),
+            )
+    except Exception as exc:
+        _log.warning(
+            f"audit_mirror FAIL event_id={event_id} type={event_type}: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
 
 def _db_path() -> str:
@@ -182,7 +216,6 @@ def _emit_inner(
 
             conn.execute("COMMIT;")
             _log.info(f"EMIT {event_type} order={order_id} courier={courier_id} id={event_id}")
-            return event_id
         except sqlite3.OperationalError:
             conn.execute("ROLLBACK;")
             raise
@@ -190,6 +223,18 @@ def _emit_inner(
             conn.execute("ROLLBACK;")
             _log.error(f"emit() error: {e}")
             raise
+
+    # Tech debt #39: mirror queue types that need 90-day analytics retention.
+    # Called AFTER queue conn closes — own connection, isolated failure (best-effort).
+    if event_type in AUDIT_MIRRORED_QUEUE_TYPES:
+        try:
+            _emit_audit_mirror(
+                event_id, event_type, order_id, courier_id,
+                payload_json, created_at,
+            )
+        except Exception as e:
+            _log.warning(f"audit_mirror failed for {event_id}: {e}")
+    return event_id
 
 
 def emit(
@@ -205,6 +250,11 @@ def emit(
     Jesli event_id juz istnieje w bazie -> ZWRACA None (idempotent skip).
 
     MP-#5: Transient SQLite lock errors retry'owane (3x exp backoff).
+
+    Tech debt #39: COURIER_PICKED_UP and COURIER_DELIVERED are automatically
+    mirrored to audit_log (90‑day retention) for analytics consumers such as
+    the R‑04 evaluator.  The mirror is best‑effort and never blocks the queue
+    emit.
     """
     if event_type not in EVENT_TYPES:
         raise ValueError(f"Nieznany event_type: {event_type}. Dozwolone: {EVENT_TYPES}")
