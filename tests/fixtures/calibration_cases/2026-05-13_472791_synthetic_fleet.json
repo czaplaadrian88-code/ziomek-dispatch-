@@ -1,0 +1,188 @@
+{
+  "_meta": {
+    "purpose": "Synthetic fleet snapshot @ 2026-05-13T09:54:00Z (11:54 Warsaw CEST) reconstructed from handoff narrative — companion to `2026-05-13_472791_pani_pierozek_picked_up_loss.json` archive. Used by sprint Fix 2+3 (#38) replay validation. Restic option eliminated 2026-05-14 (cadence 01:30 UTC, no snapshot matches 11:54). See `eod_drafts/2026-05-14/scoring_rebalance_replay_prep.md` Opcja 2.",
+    "incident_ts_utc": "2026-05-13T09:54:01.328745+00:00",
+    "incident_oid": "472791",
+    "panel_override_actual_cid": "470",
+    "proposed_cid": "514",
+    "narrative_source": "sprint_timeline.md CURRENT HANDOFF 2026-05-13 22:40 + fixture archive cross-ref",
+    "fidelity": "approximate — coords/timestamps reconstructed, NOT bit-exact production state",
+    "intended_use": "Fix 2 (effective_start_pos worst-case max), Fix 3a (s_almost_free_bonus picked_up ≤5min ETA), Fix 3b (MIN_PROPOSE_SCORE -50 + S_bag_pending_pickup -8/pending) acceptance replay. Expected post-Fix: 470 Piotr > 514 Tomek."
+  },
+  "order_new": {
+    "order_id": "472791",
+    "restaurant": "Pani Pierożek",
+    "restaurant_coords": [53.135, 23.165],
+    "delivery_address": "Poleska 85A",
+    "delivery_coords": [53.124, 23.185],
+    "created_at_utc": "2026-05-13T09:53:39+00:00",
+    "pickup_ready_at_utc": "2026-05-13T10:23:39+00:00",
+    "address_id": "89",
+    "status": "new"
+  },
+  "fleet_snapshot": {
+    "ts_utc": "2026-05-13T09:54:00+00:00",
+    "pool_total_count": 12,
+    "couriers": [
+      {
+        "cid": "514",
+        "name": "Tomasz Ch",
+        "tier": "std",
+        "shift_start_warsaw": "2026-05-13T12:00:00+02:00",
+        "pos_source": "pre_shift",
+        "pos": [53.13222, 23.16844],
+        "gps_age_s": null,
+        "bag": [
+          {
+            "oid": "472788",
+            "status": "assigned",
+            "restaurant": "Sweet Fit & Eat",
+            "restaurant_coords": [53.137, 23.158],
+            "delivery_address": "Zachodnia 18B",
+            "delivery_coords": [53.127, 23.142],
+            "czas_kuriera_warsaw": "2026-05-13T12:15:00+02:00",
+            "pickup_ready_at_utc": "2026-05-13T10:17:00+00:00",
+            "picked_up_at": null
+          },
+          {
+            "oid": "472790",
+            "status": "assigned",
+            "restaurant": "Rany Julek",
+            "restaurant_coords": [53.138, 23.166],
+            "delivery_address": "Kardynała Stefana Wyszyńskiego 27/84",
+            "delivery_coords": [53.145, 23.165],
+            "czas_kuriera_warsaw": "2026-05-13T12:17:00+02:00",
+            "pickup_ready_at_utc": "2026-05-13T10:23:02+00:00",
+            "picked_up_at": null
+          }
+        ],
+        "expected_role": "proposed_overload"
+      },
+      {
+        "cid": "470",
+        "name": "Piotr Zaw",
+        "tier": "gold",
+        "shift_start_warsaw": "2026-05-13T11:00:00+02:00",
+        "pos_source": "gps_live",
+        "pos": [53.139, 23.152],
+        "gps_age_s": 18,
+        "bag": [
+          {
+            "oid": "472778",
+            "status": "picked_up",
+            "restaurant": "(unknown — picked_up @ 11:50)",
+            "restaurant_coords": [53.140, 23.150],
+            "delivery_address": "Wiosenna",
+            "delivery_coords": [53.142, 23.148],
+            "czas_kuriera_warsaw": "2026-05-13T11:50:00+02:00",
+            "pickup_ready_at_utc": "2026-05-13T09:48:00+00:00",
+            "picked_up_at": "2026-05-13T09:50:00+00:00",
+            "predicted_delivered_at_utc": "2026-05-13T09:58:00+00:00",
+            "eta_to_current_delivery_min": 4.0
+          }
+        ],
+        "expected_role": "almost_free_picked_up_winner_post_fix"
+      },
+      {
+        "cid": "stub_3",
+        "tier": "std",
+        "pos_source": "pre_shift",
+        "bag_size": 1,
+        "expected_role": "infeasible_filler_pool_total"
+      },
+      {
+        "cid": "stub_4",
+        "tier": "std",
+        "pos_source": "no_gps",
+        "bag_size": 0,
+        "expected_role": "blind_empty_demoted"
+      },
+      {
+        "cid": "stub_5",
+        "tier": "std+",
+        "pos_source": "pre_shift",
+        "bag_size": 2,
+        "expected_role": "feasibility_reject_bag_cap"
+      },
+      {
+        "cid": "stub_6",
+        "tier": "std",
+        "pos_source": "gps_stale",
+        "gps_age_s": 4200,
+        "bag_size": 0,
+        "expected_role": "stale_gps_reject"
+      },
+      {
+        "cid": "stub_7",
+        "tier": "std",
+        "pos_source": "no_active_shift",
+        "expected_role": "v325_reject"
+      },
+      {
+        "cid": "stub_8",
+        "tier": "std",
+        "pos_source": "pre_shift",
+        "bag_size": 0,
+        "expected_role": "too_far_pickup_reject"
+      },
+      {
+        "cid": "stub_9",
+        "tier": "std",
+        "pos_source": "post_shift_end",
+        "expected_role": "shift_end_edge_reject"
+      },
+      {
+        "cid": "stub_10",
+        "tier": "std",
+        "pos_source": "pre_shift",
+        "bag_size": 3,
+        "expected_role": "bag_overload_reject"
+      },
+      {
+        "cid": "stub_11",
+        "tier": "std",
+        "pos_source": "koordynator",
+        "expected_role": "koordynator_virtual_excluded"
+      },
+      {
+        "cid": "stub_12",
+        "tier": "std",
+        "pos_source": "no_gps",
+        "bag_size": 1,
+        "expected_role": "feasibility_reject_blind_bag"
+      }
+    ]
+  },
+  "expected_replay_outcomes": {
+    "pre_fix_baseline": {
+      "best_cid": "514",
+      "best_score_approx": -13.27,
+      "verdict": "PROPOSE",
+      "auto_route": "ALERT",
+      "comment": "Matches archive fixture (2026-05-13_472791_pani_pierozek_picked_up_loss.json)"
+    },
+    "post_fix2_only": {
+      "best_cid": "514",
+      "best_score_delta_approx": "-40 to -55",
+      "comment": "Fix 2 effective_start_pos=max(anchor=Rany Julek 1.5km, tail=Wyszyńskiego→Pani Pierożek ~6km) → km_to_pickup_haversine pushes Tomek score down ~ -50; Piotr STILL infeasible bez Fix 3a (picked_up + ETA 4min nie ma bonus)"
+    },
+    "post_fix2_fix3a_fix3b": {
+      "best_cid": "470",
+      "comment": "Fix 3a: Piotr eta_to_delivery=4min ≤ 5 → s_almost_free_bonus=+30 + effective_start_pos=Wiosenna (close to Pani Pierożek ~3km). Fix 3b: Tomek S_bag_pending_pickup = -16 (2 assigned pending). MIN_PROPOSE_SCORE -50 → Tomek -13 -50 (Fix2 tail) -16 (Fix3b) = -79 < -50 → KOORD. Piotr score ≈ baseline_almost_free + 30 → wins."
+    }
+  },
+  "acceptance_criteria": [
+    "best_cid == '470' (Piotr wins post-3-fix)",
+    "Tomek 514 score < MIN_PROPOSE_SCORE (-50) → verdict KOORD or alternative",
+    "Piotr 470 metrics include s_almost_free_bonus=+30 and effective_start_pos == Wiosenna delivery_coords",
+    "Tomek 514 metrics include s_bag_pending_pickup_penalty=-16 and km_to_pickup_tail >= km_to_pickup_anchor",
+    "Obs serializer LOCATION A+B emits new keys: km_to_pickup_tail, s_almost_free_bonus, s_bag_pending_pickup_penalty (Lekcja #109)"
+  ],
+  "limitations": [
+    "Stubs 3-12 są placeholder bez full feasibility payload — real production miało 12 evaluated couriers, archive serializer emitował tylko top-1 (alternatives=[])",
+    "Coords approximate ±200m (Białystok street-level), nie production-exact",
+    "OSRM travel_min values not pre-computed — replay harness MUSI wywołać osrm_client live lub mock",
+    "Piotr 472778 restaurant unknown (not in handoff narrative) — predicted_delivered_at=11:58 i delivery=Wiosenna jedyne load-bearing fakty",
+    "Bag pickup_ready_at_utc dla Tomek bag oparte na archive fixture czas_kuriera_warsaw - 5 min (V327_PICKUP_TIME_WINDOW_CLOSE_MIN convention) — może być off ±2min vs production"
+  ]
+}
