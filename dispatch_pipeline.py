@@ -2022,6 +2022,54 @@ def _assess_order_impl(
                 except Exception:
                     continue
 
+        # R-INTRA-RESTAURANT-GAP (HARD, 2026-05-14): max gap między dwoma
+        # kolejnymi pickupami tej samej restauracji w plan.pickup_at.
+        # Łapie scenariusz gdy wait_courier formuła ślepa (arrival_at[new]
+        # ≈ ready[new] dla mid-trip same-restaurant insert), a kurier
+        # realnie sterczy N min przy stoliku między pickup#1 a pickup#2.
+        intra_rest_gap_max_min = 0.0
+        intra_rest_gap_max_pair = None
+        intra_rest_gap_max_restaurant = None
+        intra_rest_gap_hard_reject = False
+        if getattr(C, "ENABLE_INTRA_RESTAURANT_GAP_LIMIT", False) and plan is not None:
+            from datetime import datetime as _dt_irg
+            _new_oid_irg = str(getattr(new_order, "order_id", "") or "")
+            _rest_by_oid_irg = {}
+            if _new_oid_irg:
+                _rest_by_oid_irg[_new_oid_irg] = restaurant
+            for _b_irg in bag_raw or []:
+                _boid = str(_b_irg.get("order_id") or "")
+                if _boid:
+                    _rest_by_oid_irg[_boid] = _b_irg.get("restaurant")
+            _plan_pickup_at_irg = getattr(plan, "pickup_at", None) or {}
+            _pickups_irg = []
+            for _oid_irg, _pat_raw in _plan_pickup_at_irg.items():
+                try:
+                    _pat_dt_irg = (
+                        _dt_irg.fromisoformat(str(_pat_raw))
+                        if isinstance(_pat_raw, str) else _pat_raw
+                    )
+                    if _pat_dt_irg.tzinfo is None:
+                        _pat_dt_irg = _pat_dt_irg.replace(tzinfo=timezone.utc)
+                    _pickups_irg.append((_pat_dt_irg, str(_oid_irg)))
+                except Exception:
+                    continue
+            _pickups_irg.sort(key=lambda x: x[0])
+            for _i_irg in range(len(_pickups_irg) - 1):
+                _t1, _o1 = _pickups_irg[_i_irg]
+                _t2, _o2 = _pickups_irg[_i_irg + 1]
+                _r1 = _rest_by_oid_irg.get(_o1)
+                _r2 = _rest_by_oid_irg.get(_o2)
+                if _r1 is None or _r2 is None or _r1 != _r2:
+                    continue
+                _gap_irg = (_t2 - _t1).total_seconds() / 60.0
+                if _gap_irg > intra_rest_gap_max_min:
+                    intra_rest_gap_max_min = _gap_irg
+                    intra_rest_gap_max_pair = (_o1, _o2)
+                    intra_rest_gap_max_restaurant = _r1
+                if _gap_irg > C.MAX_INTRA_RESTAURANT_GAP_MIN:
+                    intra_rest_gap_hard_reject = True
+
         # Wczytaj rule_weights (adaptive penalties R1/R5/R8)
         try:
             import json as _json
@@ -2407,6 +2455,11 @@ def _assess_order_impl(
             "v3273_wait_courier_max_oid": v3273_wait_courier_max_oid,
             "v3273_wait_courier_hard_reject": v3273_wait_courier_hard_reject,
             "v3273_wait_courier_per_pickup": v3273_wait_courier_per_pickup,
+            # R-INTRA-RESTAURANT-GAP (2026-05-14)
+            "intra_rest_gap_max_min": round(intra_rest_gap_max_min, 2),
+            "intra_rest_gap_max_pair": intra_rest_gap_max_pair,
+            "intra_rest_gap_max_restaurant": intra_rest_gap_max_restaurant,
+            "intra_rest_gap_hard_reject": intra_rest_gap_hard_reject,
             "bonus_penalty_sum": round(bonus_penalty_sum, 2),
             # Transparency OPCJA A (2026-04-19): order_id → (restaurant, delivery_address)
             # mapping dla route section w telegram_approver. Per-courier bag snapshot.
@@ -2511,6 +2564,13 @@ def _assess_order_impl(
             verdict = "NO"
             _rest_273 = v3273_wait_courier_max_restaurant or "?"
             reason = f"v3273_wait_courier_hard_reject ({v3273_wait_courier_max_min:.1f}min > {C.V3273_WAIT_COURIER_HARD_REJECT_MIN} pod {_rest_273})"
+
+        # R-INTRA-RESTAURANT-GAP hard reject (2026-05-14): same-restaurant
+        # pickup gap > MAX_INTRA_RESTAURANT_GAP_MIN. Override MAYBE → NO.
+        if intra_rest_gap_hard_reject and verdict == "MAYBE":
+            verdict = "NO"
+            _rest_irg = intra_rest_gap_max_restaurant or "?"
+            reason = f"intra_restaurant_gap_exceeded ({intra_rest_gap_max_min:.1f}min > {C.MAX_INTRA_RESTAURANT_GAP_MIN} pod {_rest_irg})"
 
         return Candidate(
             courier_id=str(cid),

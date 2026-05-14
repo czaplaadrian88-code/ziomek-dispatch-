@@ -1420,6 +1420,17 @@ V3273_WAIT_COURIER_FIRST_STEP_PENALTY = -10.0  # at wait=6 (first min above thre
 V3273_WAIT_COURIER_PER_MIN_PENALTY = -5.0      # +5 penalty per min above wait=6
 V3273_WAIT_COURIER_HARD_REJECT_MIN = 15.0      # P3-D2 2026-05-11: tighten 20→15 (idle >15 min = unacceptable)
 
+# R-INTRA-RESTAURANT-GAP (HARD, 2026-05-14): max gap między dwoma kolejnymi
+# pickupami w tej samej restauracji. Adrian doktryna: kurier nie będzie czekał
+# >5 min w tej samej restauracji żeby razem odebrać. Diagnoza propozycji
+# K-523 Marcin By Raj→Raj (gap 13 min, wait_courier formuła nie złapała bo
+# arrival_at[new]≈ready[new] dla mid-trip same-restaurant insert). Hard reject
+# verdict NO gdy gap > MAX_INTRA_RESTAURANT_GAP_MIN dla par (oid_i, oid_j)
+# z plan.pickup_at gdzie restaurant(oid_i) == restaurant(oid_j).
+ENABLE_INTRA_RESTAURANT_GAP_LIMIT = _os.environ.get(
+    "ENABLE_INTRA_RESTAURANT_GAP_LIMIT", "1") == "1"
+MAX_INTRA_RESTAURANT_GAP_MIN = 5.0
+
 # ============================================================
 # V3.28-P3-D1 Idle-as-cost — TSP solver objective augment (2026-05-10 wieczór)
 # ============================================================
