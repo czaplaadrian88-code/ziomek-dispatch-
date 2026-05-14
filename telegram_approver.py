@@ -3577,6 +3577,55 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
         # V3.19i (2026-04-30): structured reason capture. Chosen-courier
         # follow-up DEFERRED do V3.19j. Adrian after click: panel-first
         # workflow continues, panel_watcher detect-uje finalny PANEL_OVERRIDE.
+
+        # Tech-debt #20 (2026-05-14): POSTPONE auto-replan lifecycle
+        if inny_reason_code == 'postpone_10min':
+            try:
+                from dispatch_v2 import postpone_sweeper as _ps
+                from datetime import timedelta
+                postponed = _ps._load_json_safe(_ps.POSTPONED_PATH, {})
+                prev_count = (postponed.get(oid) or {}).get('postpone_count', 0)
+                minutes = 10
+                now_utc = datetime.now(timezone.utc)
+                new_entry = {
+                    'postponed_until': (now_utc + timedelta(minutes=minutes)).isoformat(),
+                    'postpone_count': prev_count + 1,
+                    'decision_record': rec,
+                    'original_message_id': entry['message_id'],
+                    'minutes': minutes,
+                    'ts': now_iso(),
+                }
+                postponed[oid] = new_entry
+                _ps._atomic_write_json(_ps.POSTPONED_PATH, postponed)
+                fb = f'⏰ przesunięte o {minutes} min (#{prev_count+1}/2)'
+                await asyncio.to_thread(
+                    tg_request, token, 'answerCallbackQuery',
+                    {'callback_query_id': cb['id'], 'text': fb},
+                )
+                log_rec = {
+                    'ts': now_iso(),
+                    'order_id': oid,
+                    'action': 'POSTPONE',
+                    'reason_code': 'postpone_10min',
+                    'postpone_count': prev_count + 1,
+                    'postponed_until': new_entry['postponed_until'],
+                    'ok': True,
+                }
+                append_learning(state['learning_log_path'], log_rec)
+                _log.info(f'POSTPONE_STORED oid={oid} count={prev_count+1} until={new_entry["postponed_until"]}')
+            except Exception as e:
+                _log.exception(f'POSTPONE_STORE_FAIL oid={oid}: {e}')
+                try:
+                    await asyncio.to_thread(
+                        tg_request, token, 'answerCallbackQuery',
+                        {'callback_query_id': cb['id'], 'text': '❌ postpone failed'},
+                    )
+                except Exception:
+                    pass
+            # Do NOT strip buttons (no editMessageReplyMarkup) — leave buttons live
+            # so operator can override; sweeper will re-emit when window expires.
+            return
+
         reason_label = TG_REASON_CODES.get(inny_reason_code, inny_reason_code)
         ok = True
         feedback = f"🔄 INNY ({reason_label}) — zapisane, wybierz w panelu"
