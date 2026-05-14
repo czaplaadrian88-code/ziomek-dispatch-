@@ -98,30 +98,65 @@ def color_for_count(n: int) -> dict:
 
 # ---------- data source: orders ----------
 
+def _resolve_pickup_intent_dt(o: dict) -> datetime | None:
+    """Return Warsaw datetime of pickup intent, or None if unresolvable.
+
+    Priority:
+      a) o.get('czas_kuriera_warsaw') — ISO string (with or without TZ).
+         If no TZ, assume Warsaw. Convert to Warsaw.
+      b) o.get('first_seen') or o.get('created_at') (UTC) + o.get('prep_minutes') int.
+         Convert to Warsaw, add timedelta(minutes=prep) if prep>0.
+      c) None.
+    """
+    # Priority a
+    czas_str = o.get('czas_kuriera_warsaw')
+    if czas_str:
+        try:
+            dt = datetime.fromisoformat(czas_str.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=WARSAW)
+            return dt.astimezone(WARSAW)
+        except Exception:
+            pass
+
+    # Priority b
+    fs = o.get('first_seen') or o.get('created_at')
+    if fs:
+        try:
+            dt = datetime.fromisoformat(fs.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            prep = o.get('prep_minutes')
+            if isinstance(prep, (int, float)) and prep > 0:
+                dt += timedelta(minutes=int(prep))
+            return dt.astimezone(WARSAW)
+        except Exception:
+            pass
+
+    return None
+
+
 def count_orders_by_hour(target_day: date) -> dict:
+    """Count delivered orders per hour of pickup intent (czas_kuriera priority,
+    fallback created_at + prep_minutes). Bucket = hour of intended pickup
+    (Warsaw time). Edge clamp: h<9→9, h>23→23.
+
+    V3.27 fix 2026-04-23.
+    # 2026-05-14 fix: bucket teraz po pickup intent, nie creation time.
+    Adrian directive — odpowiada na pytanie kiedy restauracja CHCE odbioru.
+    """
     orders = state_machine.get_all()
     items = orders.items() if isinstance(orders, dict) else enumerate(orders)
     counts = Counter()
     for _, o in items:
-        # V3.27 filter: tylko delivered (panel "Ilość zleceń" = delivered).
-        # Bez tego filtra wliczaliśmy cancelled (status 8/9) + planned
-        # stuck → 17.04 +2, 22.04 +1 vs panel.
         if (o.get("status") or "").lower() != "delivered":
             continue
-        fs = o.get("first_seen") or o.get("created_at")
-        if not fs:
+        dt = _resolve_pickup_intent_dt(o)
+        if dt is None:
             continue
-        try:
-            dt = datetime.fromisoformat(fs.replace("Z", "+00:00"))
-        except Exception:
-            continue
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
         local = dt.astimezone(WARSAW)
         if local.date() != target_day:
             continue
-        # V3.27 edge bucket: zlecenia poza oknem 9-23 → skrajna godzina.
-        # Zachowuje layout sheet 9-23 i daje sum-of-hours = panel total.
         h = local.hour
         if h < HOUR_START:
             h = HOUR_START
@@ -530,35 +565,54 @@ def main():
                 pass
         apply_block_borders(ws, header_row, has_month, log)
 
+    skip_write = False
     if not created and column_already_populated(all_values, header_row, weekday_idx):
         if args.overwrite:
             log.info(f"{DAYS_SHORT[weekday_idx]} column populated — --overwrite, rewriting")
         else:
             log.info(f"{DAYS_SHORT[weekday_idx]} column already populated → skip (idempotent)")
-            return
+            skip_write = True
 
-    write_day_triple(ws, header_row, weekday_idx, counts, pools, args.dry_run, log)
+    if not skip_write:
+        write_day_triple(ws, header_row, weekday_idx, counts, pools, args.dry_run, log)
 
     # Refresh in-memory view to include what we just wrote so recompute works
-    if not args.dry_run:
-        all_values = ws.get_all_values()
-    else:
-        first_hour_row = header_row + 1
-        c_off = day_col_offset(weekday_idx)
-        while len(all_values) < first_hour_row + (HOUR_END - HOUR_START):
-            all_values.append([""] * BLOCK_WIDTH)
-        for i, h in enumerate(range(HOUR_START, HOUR_END + 1)):
-            ri = first_hour_row - 1 + i
-            while len(all_values[ri]) < BLOCK_WIDTH:
-                all_values[ri].append("")
-            n = counts[h]
-            div3 = math.ceil(n / 3) if n > 0 else 0
-            zi = ziomek_recommendation(n, pools.get(h, set()))
-            all_values[ri][c_off] = str(n)
-            all_values[ri][c_off + 1] = str(div3)
-            all_values[ri][c_off + 2] = str(zi)
+    if not skip_write:
+        if not args.dry_run:
+            all_values = ws.get_all_values()
+        else:
+            first_hour_row = header_row + 1
+            c_off = day_col_offset(weekday_idx)
+            while len(all_values) < first_hour_row + (HOUR_END - HOUR_START):
+                all_values.append([""] * BLOCK_WIDTH)
+            for i, h in enumerate(range(HOUR_START, HOUR_END + 1)):
+                ri = first_hour_row - 1 + i
+                while len(all_values[ri]) < BLOCK_WIDTH:
+                    all_values[ri].append("")
+                n = counts[h]
+                div3 = math.ceil(n / 3) if n > 0 else 0
+                zi = ziomek_recommendation(n, pools.get(h, set()))
+                all_values[ri][c_off] = str(n)
+                all_values[ri][c_off + 1] = str(div3)
+                all_values[ri][c_off + 2] = str(zi)
 
-    recompute_week_averages(ws, header_row, all_values, args.dry_run, log)
+        recompute_week_averages(ws, header_row, all_values, args.dry_run, log)
+
+    # 2026-05-14: pre-create next week block jeśli jeszcze nie istnieje.
+    # Adrian directive — chce widzieć pusty szkielet tygodnia z wyprzedzeniem.
+    next_monday = monday + timedelta(days=7)
+    nw_header_row, _, nw_created = upsert_block(ws, next_monday, log, args.dry_run)
+    if nw_created and not args.dry_run:
+        nw_has_month = False
+        if nw_header_row >= 2:
+            try:
+                cell_a = ws.cell(nw_header_row - 1, 1).value or ""
+                nw_has_month = cell_a.strip() in set(MONTHS_PL[1:])
+            except Exception:
+                pass
+        apply_block_borders(ws, nw_header_row, nw_has_month, log)
+        log.info(f"pre-created next-week block for {next_monday.isoformat()}")
+
     log.info("done")
 
 
