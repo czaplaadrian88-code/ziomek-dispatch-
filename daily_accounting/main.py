@@ -199,13 +199,13 @@ def run(
                 "H_computed": rec["H_computed"],
             })
             continue
-        car = find_car(emp, col_a, col_b)
+        # B (samochód firmowy/prywatny) + F (płatność kartą) — stop-write 2026-05-14
+        # per Adrian: tylko ogólne pobrania (H) + liczba zleceń (P). find_car skipped
+        # żeby brak wpisu kol. B dla nowego kuriera nie strzelał błędem.
         rows_to_write.append({
             "row": row_cursor,
             "A": emp,
-            "B": car,
             "C": target_c.strftime(DATE_FMT),
-            "F": rec["suma_platnosci_karta"],
             "H": rec["H_computed"],
             "P": rec["ilosc_zlecen"],
             "_meta": {

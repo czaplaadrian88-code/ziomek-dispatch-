@@ -101,7 +101,9 @@ def build_batch_data(ws, rows: List[Dict]) -> List[Dict]:
     data = []
     for r in rows:
         row_idx = r["row"]
-        for col_letter in ("A", "B", "C", "F", "H", "P"):
+        # B (samochód firmowy/prywatny) i F (płatność kartą) — stop-write 2026-05-14
+        # per Adrian: liczymy tylko ogólne pobrania (kolumna H) + liczba zleceń (P).
+        for col_letter in ("A", "C", "H", "P"):
             val = r.get(col_letter)
             if val is None:
                 continue
