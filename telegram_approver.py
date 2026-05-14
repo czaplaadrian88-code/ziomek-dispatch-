@@ -1268,6 +1268,7 @@ def _build_keyboard_v2_grid(
     order_id: str,
     candidates: Optional[list],
     pickup_ready_at: Optional[str] = None,
+    decision: Optional[dict] = None,
 ) -> list:
     """Mockup v2 keyboard — 2×2 grid mobile-friendly (Adrian feedback 2026-05-07
     post visual check: większy tap target dla kciuka, tylko 4 buttony, BEZ safety net).
@@ -1275,6 +1276,12 @@ def _build_keyboard_v2_grid(
     Layout:
         [✅ Akceptuj]   [🥈 Weź #2]
         [🥉 Weź #3]    [⏰ +10 min]
+        [🤖 AUTO]  [✋ ACK]  [🚨 ALERT]   ← optional F7AGREE row (tech-debt #21
+                                            resolution 2026-05-14): mockup v2
+                                            strict 4-button preserved (dispatcher
+                                            decision), F7AGREE jest meta-rating
+                                            classifier verdykt — ortogonalny do
+                                            głównej decyzji, log-only.
 
     Returns list[list[dict]] — 2 rows × 2 buttons (NIE single row × 4).
     Caller bezpośrednio wstawia do inline_keyboard, NO safety net append.
@@ -1325,7 +1332,27 @@ def _build_keyboard_v2_grid(
     # kandydatów, slot zostaje pominięty — ale postpone zawsze prawy-dolny).
     row1 = cand_buttons[:2]
     row2 = cand_buttons[2:3] + [postpone_btn]
-    return [row1, row2] if row1 else [row2]
+    rows = [row1, row2] if row1 else [row2]
+
+    # Tech-debt #21 resolution (2026-05-14): F7AGREE row appended SEPARATELY
+    # gdy decision ma auto_route (Faza 7 LIVE) AND flag ON. Mockup v2 strict
+    # 4-button mainline decision preserved — F7AGREE jest meta-rating
+    # classifier verdykt, log-only (NIE finalizuje propozycji), ortogonalny.
+    # Adrian może klikać niezależnie (F7AGREE) lub całkiem zignorować row.
+    if (
+        decision is not None
+        and decision.get("auto_route")
+        and flag("FAZA7_AGREEMENT_BUTTONS_ENABLED", default=False)
+    ):
+        f7_row = []
+        for code, label in F7_AGREE_LABELS.items():
+            f7_row.append({
+                "text": label,
+                "callback_data": f"F7AGREE:{code}:{order_id}",
+            })
+        rows.append(f7_row)
+
+    return rows
 
 
 def format_proposal(decision: dict) -> str:
@@ -1438,22 +1465,15 @@ def build_keyboard(
     # Early return — NIE doklejamy INNY 8-grid + KOORD (poprzedni "safety net"
     # plan został rejected po visual check; mockup 1:1 = strict 4-button).
     if flag("PROPOSAL_FORMAT_V2", default=False):
-        # Tech-debt #21 (2026-05-08): F7AGREE row jest pomijany w V2 grid (strict
-        # 4-button mockup design, Adrian rejected safety net rows). Gdy oba flags
-        # ON jednocześnie, ostrzegamy raz per proces — F7AGREE metric NIE zbiera
-        # się gdy V2 LIVE. Backlog #12 calibration window wymaga albo flip
-        # PROPOSAL_FORMAT_V2=false na shadow week, albo ETL z shadow_decisions.jsonl.
-        if (
-            flag("FAZA7_AGREEMENT_BUTTONS_ENABLED", default=False)
-            and not getattr(build_keyboard, "_f7agree_v2_warned", False)
-        ):
-            _log.warning(
-                "F7AGREE_BUTTONS_ENABLED=True ignored — PROPOSAL_FORMAT_V2 ON "
-                "(mockup v2 strict 4-button, tech-debt #21). Aby zbierać "
-                "agreement metric: flip PROPOSAL_FORMAT_V2=false na shadow week."
-            )
-            build_keyboard._f7agree_v2_warned = True
-        v2_rows = _build_keyboard_v2_grid(order_id, candidates, pickup_ready_at)
+        # Tech-debt #21 RESOLVED (2026-05-14): F7AGREE row appended w
+        # _build_keyboard_v2_grid gdy decision ma auto_route AND flag ON.
+        # Mockup v2 strict 4-button preserved dla dispatcher decision; F7AGREE
+        # = meta-rating classifier verdykt (ortogonalny, log-only). Adrian
+        # explicit rationale: 4-button "trzaśnięcie kciukiem" dla głównej
+        # akcji, F7AGREE jest osobnym kontekstem (czy Ziomek miał rację).
+        v2_rows = _build_keyboard_v2_grid(
+            order_id, candidates, pickup_ready_at, decision=decision,
+        )
         return {"inline_keyboard": v2_rows}
 
     row1 = []

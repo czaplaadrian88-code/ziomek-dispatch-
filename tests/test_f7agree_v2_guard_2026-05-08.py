@@ -1,7 +1,11 @@
-"""Tech debt #21 — F7AGREE row vs PROPOSAL_FORMAT_V2 collision guard.
+"""Tech debt #21 RESOLVED 2026-05-14 — F7AGREE row + PROPOSAL_FORMAT_V2 cohabitation.
 
-Custom-runner. Verify że gdy oba flags ON: V2 grid renderowany, F7AGREE
-pomijany, log warning emit'owany once-per-process.
+Custom-runner. Verify że gdy oba flags ON: V2 grid renderowany Z F7AGREE row
+appended (mockup v2 strict 4-button preserved dla dispatcher decision, F7AGREE
+jest meta-rating classifier verdykt — ortogonalny, log-only).
+
+Pre-resolve (2026-05-08 → 2026-05-14): F7AGREE pomijany, warning emit'owany.
+Post-resolve: F7AGREE row appended, zero warning.
 """
 import logging
 import sys
@@ -40,45 +44,47 @@ class TestF7AgreeV2Guard(unittest.TestCase):
                     if "F7AGREE_BUTTONS_ENABLED" in str(c)]
         self.assertEqual(len(f7_calls), 0, "no F7AGREE warning gdy F7AGREE OFF")
 
-    def test_v2_and_f7agree_both_on_warns_once(self):
+    def test_v2_and_f7agree_both_on_appends_f7agree_row_no_warning(self):
+        """Post-#21-resolve (2026-05-14): F7AGREE row appended, zero warning."""
         with mock.patch.object(TA, "flag", side_effect=self._flag_side_effect(both_on=True)):
             with mock.patch.object(TA._log, "warning") as mock_warn:
-                kbd1 = TA.build_keyboard(
-                    order_id="471111", candidates=[], pickup_ready_at=None,
-                    decision={"auto_route": "AUTO"}
+                kbd = TA.build_keyboard(
+                    order_id="471111", candidates=[],
+                    pickup_ready_at=None,
+                    decision={"auto_route": "AUTO"},
                 )
-                kbd2 = TA.build_keyboard(
-                    order_id="471112", candidates=[], pickup_ready_at=None,
-                    decision={"auto_route": "AUTO"}
-                )
-                kbd3 = TA.build_keyboard(
-                    order_id="471113", candidates=[], pickup_ready_at=None,
-                    decision={"auto_route": "AUTO"}
-                )
-        self.assertIn("inline_keyboard", kbd1)
-        self.assertIn("inline_keyboard", kbd2)
+        self.assertIn("inline_keyboard", kbd)
         f7_calls = [c for c in mock_warn.call_args_list
                     if "F7AGREE_BUTTONS_ENABLED" in str(c)]
-        self.assertEqual(len(f7_calls), 1, "warning once-per-process (3 calls → 1 warn)")
-        msg = str(f7_calls[0])
-        self.assertIn("PROPOSAL_FORMAT_V2", msg)
-        self.assertIn("tech-debt #21", msg)
-
-    def test_v2_grid_no_f7agree_row_in_keyboard(self):
-        with mock.patch.object(TA, "flag", side_effect=self._flag_side_effect(both_on=True)):
-            with mock.patch.object(TA, "_build_keyboard_v2_grid", return_value=[
-                [{"text": "✅ Akceptuj", "callback_data": "ASSIGN:1:2:5"}]
-            ]):
-                kbd = TA.build_keyboard(
-                    order_id="471222", candidates=[], pickup_ready_at=None,
-                    decision={"auto_route": "AUTO"}
-                )
+        self.assertEqual(len(f7_calls), 0,
+                         "no warning post-#21-resolve — F7AGREE row appended cleanly")
         all_callbacks = []
         for row in kbd["inline_keyboard"]:
             for btn in row:
                 all_callbacks.append(btn.get("callback_data", ""))
         f7_callbacks = [cb for cb in all_callbacks if cb.startswith("F7AGREE")]
-        self.assertEqual(len(f7_callbacks), 0, "F7AGREE buttons NIE renderowane w V2 grid")
+        self.assertEqual(len(f7_callbacks), 3,
+                         "F7AGREE row z 3 buttonami (AUTO/ACK/ALERT) appended")
+
+    def test_v2_grid_f7agree_only_when_auto_route_set(self):
+        """F7AGREE row pomijany gdy decision.auto_route brak (NIE Faza 7)."""
+        with mock.patch.object(TA, "flag", side_effect=self._flag_side_effect(both_on=True)):
+            kbd_no_auto = TA.build_keyboard(
+                order_id="471222", candidates=[], pickup_ready_at=None,
+                decision={},  # brak auto_route
+            )
+            kbd_none = TA.build_keyboard(
+                order_id="471223", candidates=[], pickup_ready_at=None,
+                decision=None,
+            )
+        for kbd, label in [(kbd_no_auto, "decision={}"), (kbd_none, "decision=None")]:
+            all_callbacks = []
+            for row in kbd["inline_keyboard"]:
+                for btn in row:
+                    all_callbacks.append(btn.get("callback_data", ""))
+            f7_callbacks = [cb for cb in all_callbacks if cb.startswith("F7AGREE")]
+            self.assertEqual(len(f7_callbacks), 0,
+                             f"F7AGREE pomijany gdy {label}")
 
 
 if __name__ == "__main__":
