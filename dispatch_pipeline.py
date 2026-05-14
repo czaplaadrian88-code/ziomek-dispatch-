@@ -2967,7 +2967,15 @@ def _assess_order_impl(
         pov = c.metrics.get("r6_per_order_violations")
         return len(pov) if pov else 0
 
-    with_plan = [c for c in candidates if c.plan is not None]
+    # R-INTRA-RESTAURANT-GAP filter (2026-05-14, Opcja A): eliminuje kandydatów
+    # z hard_reject z best_effort poolu. Bez tego best_effort PROPOSE wybierał
+    # cid z gap 26 min Chicago Pizza (case 473251 19:35 UTC) bo MAYBE→NO override
+    # w _v327_eval_courier nie zmieniał verdict gdy poprzedni był już NO. Po
+    # filtrze: jeśli all candidates intra-gap-violating → spadamy do R29 SOLO
+    # fallback (pusty bag, naturalnie eliminuje pair).
+    def _intra_gap_reject(c):
+        return bool((c.metrics or {}).get("intra_rest_gap_hard_reject"))
+    with_plan = [c for c in candidates if c.plan is not None and not _intra_gap_reject(c)]
     with_plan.sort(key=lambda c: (_r6_pov_count(c), c.plan.sla_violations, c.plan.total_duration_min))
     if with_plan:
         best = with_plan[0]

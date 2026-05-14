@@ -142,3 +142,32 @@ def test_reason_format_in_pipeline_consume():
     assert "intra_restaurant_gap_exceeded" in src
     assert "MAX_INTRA_RESTAURANT_GAP_MIN" in src
     assert "intra_rest_gap_hard_reject" in src
+
+
+def test_best_effort_filter_excludes_intra_gap_reject():
+    """Opcja A (2026-05-14 21:19): best_effort path MUSI filtrować candidates
+    z intra_rest_gap_hard_reject=True PRZED sort/select. Repro case 473251
+    Chicago Pizza 26.45 min — pre-fix BEST był wybrany przez best_effort mimo
+    hard_reject flag (bo MAYBE→NO override nie zadziałał gdy verdict już NO).
+    """
+    src = open("/root/.openclaw/workspace/scripts/dispatch_v2/dispatch_pipeline.py").read()
+    # Filter helper present
+    assert "_intra_gap_reject" in src, "best_effort filter helper missing"
+    # Filter applied to with_plan list comprehension
+    assert "not _intra_gap_reject(c)" in src, "best_effort filter not applied to with_plan"
+    # Comment explains rationale (case 473251)
+    assert "473251" in src or "Opcja A" in src, "best_effort filter rationale comment missing"
+
+
+def test_best_effort_filter_helper_logic():
+    """Helper _intra_gap_reject zwraca True gdy metrics.intra_rest_gap_hard_reject=True."""
+    class _Mock:
+        def __init__(self, metrics):
+            self.metrics = metrics
+    # Replicate helper inline (same logic as pipeline)
+    def _intra_gap_reject(c):
+        return bool((c.metrics or {}).get("intra_rest_gap_hard_reject"))
+    assert _intra_gap_reject(_Mock({"intra_rest_gap_hard_reject": True})) is True
+    assert _intra_gap_reject(_Mock({"intra_rest_gap_hard_reject": False})) is False
+    assert _intra_gap_reject(_Mock({})) is False
+    assert _intra_gap_reject(_Mock(None)) is False
