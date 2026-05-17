@@ -1505,6 +1505,11 @@ MAX_INTRA_RESTAURANT_GAP_MIN = 5.0
 # Default flag OFF — empirical calibration via env override + 24h shadow obs.
 ENABLE_V328_P3D1_IDLE_COST = _os.environ.get(
     "ENABLE_V328_P3D1_IDLE_COST", "0") == "1"  # V3.28 P3-D1 flag (default OFF)
+
+# Sprint OBJ F0.3 (2026-05-17): replay-capture wejść solvera do offline
+# harnessu (zestaw masowy / regresja). Default OFF — włączane env na czas sprintu.
+ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(
+    "ENABLE_OBJ_REPLAY_CAPTURE", "0") == "1"
 V328_P3D1_IDLE_WEIGHT = float(_os.environ.get("V328_P3D1_IDLE_WEIGHT", "1.0"))  # 1.0 = wait min cost = drive min cost
 
 # ============================================================

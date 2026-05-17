@@ -550,6 +550,24 @@ def check_feasibility_v2(
     metrics["osrm_fallback_used"] = plan.osrm_fallback_used
     metrics["sla_violations_count"] = plan.sla_violations
 
+    # Sprint OBJ F0.3 (2026-05-17): metryki jakości planu (route_metrics) →
+    # shadow_decisions (prefix objm_, whitelist serializera) + replay-capture
+    # wejść solvera dla offline harnessu. Defense-in-depth (Lekcja #83):
+    # instrumentacja NIGDY nie może przerwać feasibility — oba bloki try/except.
+    try:
+        from dispatch_v2.route_metrics import compute_plan_metrics as _cpm
+        for _mk, _mv in _cpm(plan, _dwell_pickup).items():
+            metrics[f"objm_{_mk}"] = _mv
+    except Exception as _objm_e:
+        log.warning(f"OBJ_METRICS_FAIL {type(_objm_e).__name__}: {_objm_e}")
+    try:
+        from dispatch_v2 import obj_replay_capture as _orc
+        _orc.capture(courier_pos, bag, new_order, now, _dwell_pickup,
+                     _dwell_dropoff, courier_tier,
+                     getattr(new_order, "order_id", None))
+    except Exception as _orc_e:
+        log.warning(f"OBJ_REPLAY_CAPTURE_HOOK_FAIL {type(_orc_e).__name__}: {_orc_e}")
+
     if plan.sla_violations > 0:
         violations_detail = []
         for o in list(bag) + [new_order]:

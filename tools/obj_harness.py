@@ -284,18 +284,85 @@ FAITHFUL_CASES: List[Case] = [
 ]
 
 
+# ─── zestaw MASOWY — replay z capture loga (obj_replay_capture) ──────
+
+def _ordersim_from_capture(d: dict) -> OrderSim:
+    """Dict z capture jsonl → OrderSim (coords już zapisane — zero geocodingu)."""
+    sim = OrderSim(
+        order_id=d.get("order_id"),
+        pickup_coords=tuple(d.get("pickup_coords") or (0.0, 0.0)),
+        delivery_coords=tuple(d.get("delivery_coords") or (0.0, 0.0)),
+        picked_up_at=_dt(d.get("picked_up_at")),
+        status=d.get("status") or "assigned",
+        pickup_ready_at=_dt(d.get("pickup_ready_at")),
+    )
+    sim.czas_kuriera_warsaw = d.get("czas_kuriera_warsaw")
+    return sim
+
+
+def run_capture_record(rec: dict) -> dict:
+    """Replay jednego rekordu z obj_replay_capture.jsonl (100% wierność)."""
+    out = {"case_id": rec.get("order_id"), "label": "capture",
+           "now_utc": rec.get("now")}
+    try:
+        bag = [_ordersim_from_capture(o) for o in rec.get("bag", [])]
+        new_order = _ordersim_from_capture(rec["new_order"])
+        dwell_p = rec.get("dwell_pickup")
+        plan = simulate_bag_route_v2(
+            tuple(rec.get("courier_pos") or ()), bag, new_order,
+            now=_dt(rec.get("now")),
+            dwell_pickup=dwell_p, dwell_dropoff=rec.get("dwell_dropoff"),
+        )
+        out.update({
+            "strategy": plan.strategy,
+            "sequence": plan.sequence,
+            "sla_violations": plan.sla_violations,
+            "metrics": compute_plan_metrics(plan, dwell_p),
+        })
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
+def load_capture(path: str, limit: int = 0) -> List[dict]:
+    """Wczytaj rekordy z capture jsonl (limit>0 → ostatnie N)."""
+    recs: List[dict] = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    recs.append(json.loads(line))
+                except Exception:
+                    continue
+    return recs[-limit:] if limit > 0 else recs
+
+
 def main():
     ap = argparse.ArgumentParser(description="obj_harness — replay sprint OBJ")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("run", help="uruchom zestaw wierny, raport JSON")
+    r = sub.add_parser("run", help="uruchom zestaw wierny lub masowy, raport JSON")
     r.add_argument("--out", default="/tmp/obj_report.json")
+    r.add_argument("--capture", default=None,
+                   help="zamiast zestawu wiernego — replay z capture jsonl")
+    r.add_argument("--limit", type=int, default=0,
+                   help="capture: tylko ostatnie N rekordów (0=wszystkie)")
     d = sub.add_parser("diff", help="porównaj dwa raporty")
     d.add_argument("--a", required=True)
     d.add_argument("--b", required=True)
     args = ap.parse_args()
 
     if args.cmd == "run":
-        report = run_all(FAITHFUL_CASES)
+        if args.capture:
+            recs = load_capture(args.capture, args.limit)
+            report = {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "source": args.capture,
+                "n_cases": len(recs),
+                "cases": [run_capture_record(r) for r in recs],
+            }
+        else:
+            report = run_all(FAITHFUL_CASES)
         with open(args.out, "w") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
         for c in report["cases"]:
