@@ -31,7 +31,7 @@ import logging as _logging
 _log = _logging.getLogger("route_simulator_v2")
 
 
-DWELL_PICKUP_MIN = 3.5   # 2026-05-17 kalibracja: GPS tier-1 dwell pod restauracją med 3.6-3.8 min (n=13-39). Było 2.0 (V3.27.3).
+DWELL_PICKUP_MIN = 1.0   # E1 2026-05-17: postój pod restauracją = czysta obsługa (chwyć torbę). Czekanie na jedzenie liczy pickup_ready_at osobno. Fallback gdy węzeł niestemplowany — produkcja używa C.dwell_for_tier.
 DWELL_DROPOFF_MIN = 3.5  # 2026-05-17 kalibracja: GPS tier-1 dwell u klienta med 3.4-4.25 min (n=15-46). Było 2.0 (V3.27.3).
 BRUTEFORCE_MAX_BAG_AFTER = 3  # per D19
 
@@ -964,8 +964,18 @@ def _ortools_plan(
                             and ck_present
                         )
                         if czas_kuriera_committed:
+                            # E3 sprint 2026-05-17: frozen czas_kuriera = KOTWICA
+                            # restauracyjna, nie sztywny box ±5. Dolna granica
+                            # (open-5) trzyma pickup ~przy zadeklarowanym czasie
+                            # (kurier nie odbiera przed gotowością). GÓRNA granica
+                            # LUŹNA — reachability (kurier nie zdąży w ±5) NIE może
+                            # wywołać INFEASIBLE. Pre-E3 box ±5 kasował całą
+                            # optymalizację OR-Tools (diagnoza order 474266: 7.5k
+                            # INFEASIBLE/dzień → greedy ślepy). Kotwica USTAWIA
+                            # trasę, nie ją kasuje; realny zegar liczy
+                            # _simulate_sequence post-solve.
                             window_open = max(0.0, open_min - _common.V3274_FROZEN_PICKUP_WINDOW_MIN)
-                            window_close = open_min + _common.V3274_FROZEN_PICKUP_WINDOW_MIN
+                            window_close = _common.V327_DROP_TIME_WINDOW_MAX_MIN
                             time_windows.append((window_open, window_close))
                         else:
                             close_min = open_min + _common.V327_PICKUP_TIME_WINDOW_CLOSE_MIN
@@ -1137,22 +1147,21 @@ def _ortools_plan(
                     f"(within 0.5min, NIE reject) solver_status={solution.solver_status}"
                 )
             if _violations:
+                # E2 sprint 2026-05-17: NIE odrzucamy planu OR-Tools do greedy.
+                # Pre-E2 ta ścieżka kasowała optymalizację OR-Tools przy KAŻDYM
+                # przekroczeniu okna frozen i wracała do geometrycznie ślepego
+                # greedy (lock_first przypinał odebrany order na #1). Diagnoza
+                # order 474266: 9.2k V3274-reject/dzień, 2233 propozycji/dzień na
+                # ortools_rejected_v3274 — OR-Tools de facto wyłączony na flocie.
+                # Okno frozen ma USTAWIAĆ trasę, nie ją kasować. Odchył logujemy
+                # dla observability; plan OR-Tools zostaje (caller nada strategy
+                # "ortools"). Realny zegar + SLA liczy _simulate_sequence.
                 _log.warning(
-                    f"V3274_OR_TOOLS_VIOLATION reject violations={_violations} "
-                    f"solver_status={solution.solver_status} elapsed={solution.elapsed_ms}ms "
-                    f"falling back to greedy"
+                    f"V3274_OR_TOOLS_VIOLATION overshoot (E2: plan OR-Tools "
+                    f"zostaje, NIE reject) violations={_violations} "
+                    f"solver_status={solution.solver_status} "
+                    f"elapsed={solution.elapsed_ms}ms"
                 )
-                # Reject ortools plan, run greedy as fallback. Strategy field
-                # explicitly set tutaj — caller w simulate_bag_route_v2 musi
-                # respektować (NIE override do "ortools").
-                _greedy = _greedy_plan(
-                    nodes, leg_min, bag_delivery_idxs,
-                    bag_pickup_idxs_by_oid,
-                    new_pickup_idx, new_delivery_idx,
-                    new_order, bag, now, sla_minutes,
-                )
-                _greedy.strategy = "ortools_rejected_v3274"
-                return _greedy
     except Exception as _v_exc:
         _log.warning(
             f"V3274_OR_TOOLS_VIOLATION_CHECK exc={type(_v_exc).__name__}: "

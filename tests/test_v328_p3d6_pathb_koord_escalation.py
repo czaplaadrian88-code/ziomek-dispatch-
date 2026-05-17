@@ -2,7 +2,8 @@
 
 Tech debt #29 path B + Lekcja #108. Pre-filter w dispatch_pipeline po feasible
 list construction:
-- Gdy len(feasible) >= 2 AND wszystkie plan.strategy=='ortools_rejected_v3274'
+- Gdy len(feasible) >= 2 AND wszystkie plan.strategy=='greedy_fallback'
+  (E2 sprint 2026-05-17: było 'ortools_rejected_v3274' — ścieżka wycofana)
   AND wszyscy mają r1_avg_pairwise_cosine < 0 → verdict=KOORD.
 - Cross-cutting concern: route_simulator (P3-D6 path A tie-break) działa
   per-plan-permutation, path B działa per-candidate-pool — orthogonal.
@@ -26,12 +27,13 @@ def test_pathb_gate_predicate_present():
     assert "_all_negative_cos" in src
 
 
-def test_pathb_strategy_check_ortools_rejected_v3274():
-    """Source regression: strategy comparison value matches greedy fallback marker."""
+def test_pathb_strategy_check_greedy_fallback():
+    """Source regression: strategy comparison value matches greedy fallback marker.
+    E2 sprint 2026-05-17: enum przepięty z ortools_rejected_v3274 → greedy_fallback."""
     from dispatch_v2 import dispatch_pipeline
     src = inspect.getsource(dispatch_pipeline)
-    # The strategy string used dla greedy fallback w route_simulator (linia ~1036)
-    assert 'strategy", "") == "ortools_rejected_v3274"' in src
+    # The strategy string used dla greedy fallback w route_simulator
+    assert 'strategy", "") == "greedy_fallback"' in src
 
 
 def test_pathb_cos_negative_check():

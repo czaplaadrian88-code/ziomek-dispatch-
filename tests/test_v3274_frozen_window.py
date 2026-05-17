@@ -2,8 +2,11 @@
 
 4 unit + 1 integration #469014 + 8/8 sanity sweep regression (separate file).
 
-Per Adrian zasada: czas_kuriera po przypisaniu = nietykalny → TSP time window
-[czas_kuriera - 5, czas_kuriera + 5] hard dla orderów z committed czas_kuriera.
+E3 sprint 2026-05-17: frozen czas_kuriera = KOTWICA restauracyjna, nie box ±5.
+Okno = [czas_kuriera - 5, V327_DROP_TIME_WINDOW_MAX_MIN] — dolna granica trzyma
+pickup ~przy zadeklarowanym czasie (nie odbiera przed gotowością), górna LUŹNA
+żeby reachability (kurier nie zdąży w ±5) NIE wywoływała INFEASIBLE i nie
+kasowała optymalizacji OR-Tools (diagnoza order 474266).
 """
 import sys
 from datetime import datetime, timedelta, timezone
@@ -33,8 +36,9 @@ def _compute_pickup_time_window(ref, now, common_module):
             and getattr(ref, "czas_kuriera_warsaw", None) is not None
         )
         if czas_kuriera_committed:
+            # E3 2026-05-17: kotwica — dolna granica (open-5), górna LUŹNA.
             window_open = max(0.0, open_min - common_module.V3274_FROZEN_PICKUP_WINDOW_MIN)
-            window_close = open_min + common_module.V3274_FROZEN_PICKUP_WINDOW_MIN
+            window_close = common_module.V327_DROP_TIME_WINDOW_MAX_MIN
             return (window_open, window_close)
         else:
             close_min = open_min + common_module.V327_PICKUP_TIME_WINDOW_CLOSE_MIN
@@ -46,7 +50,8 @@ def _compute_pickup_time_window(ref, now, common_module):
 # ─── Unit tests ───────────────────────────────────────────────
 
 def test_frozen_window_committed_true():
-    """ck=16:55, now=16:30 → window (20.0, 30.0) min od now (R27 ±5 = ±5 min)."""
+    """E3: ck=16:55, now=16:30 → kotwica (20.0, V327_DROP_TIME_WINDOW_MAX_MIN).
+    Dolna granica 20 = open(25)-5; górna luźna (reachability nie blokuje)."""
     now = datetime(2026, 4, 27, 14, 30, tzinfo=timezone.utc)  # 16:30 Warsaw
     ck = datetime(2026, 4, 27, 14, 55, tzinfo=timezone.utc)   # 16:55 Warsaw
     sim = OrderSim(
@@ -57,7 +62,8 @@ def test_frozen_window_committed_true():
     )
     sim.czas_kuriera_warsaw = ck.isoformat()  # marks as frozen
     open_close = _compute_pickup_time_window(sim, now, C)
-    assert open_close == (20.0, 30.0), f"Expected (20.0, 30.0), got {open_close}"
+    assert open_close == (20.0, C.V327_DROP_TIME_WINDOW_MAX_MIN), \
+        f"Expected (20.0, {C.V327_DROP_TIME_WINDOW_MAX_MIN}), got {open_close}"
 
 
 def test_frozen_window_committed_false():
@@ -77,7 +83,8 @@ def test_frozen_window_committed_false():
 
 
 def test_frozen_window_clamp_negative_open():
-    """ck=16:33, now=16:30 → open_raw=3, window_open=max(0, 3-5)=0 (clamp)."""
+    """ck=16:33, now=16:30 → open_raw=3, window_open=max(0, 3-5)=0 (clamp).
+    E3: górna granica luźna = V327_DROP_TIME_WINDOW_MAX_MIN."""
     now = datetime(2026, 4, 27, 14, 30, tzinfo=timezone.utc)
     ck = datetime(2026, 4, 27, 14, 33, tzinfo=timezone.utc)
     sim = OrderSim(
@@ -88,9 +95,9 @@ def test_frozen_window_clamp_negative_open():
     )
     sim.czas_kuriera_warsaw = ck.isoformat()
     open_close = _compute_pickup_time_window(sim, now, C)
-    # open_raw = 3.0, clamp window_open = max(0, 3-5) = 0.0
-    # close = 3.0 + 5.0 = 8.0
-    assert open_close == (0.0, 8.0), f"Expected (0.0, 8.0), got {open_close}"
+    # open_raw = 3.0, clamp window_open = max(0, 3-5) = 0.0; close = luźna
+    assert open_close == (0.0, C.V327_DROP_TIME_WINDOW_MAX_MIN), \
+        f"Expected (0.0, {C.V327_DROP_TIME_WINDOW_MAX_MIN}), got {open_close}"
 
 
 def test_frozen_window_no_ready_at():
@@ -110,18 +117,16 @@ def test_frozen_window_no_ready_at():
 # ─── Integration test #469014 ground truth ────────────────────
 
 def test_integration_469014_pani_pierozek_frozen_window():
-    """#469014 reproduces TASK F scenario:
+    """#469014 TASK F scenario — E3 zachowanie (sprint 2026-05-17):
     - Pani Pierożek (469008) committed czas_kuriera=16:55
     - Rany Julek (469014) candidate, decision_ts=16:33:22
 
-    With V3.27.4 enabled:
-    - PP time window [16:50, 17:00] = [16.6, 26.6] min od decision_ts
-    - Plan_pickup PP @ 17:09 = 36.1 min from decision NIE feasible
-    - TSP musi wybrać alternative permutację respektującą [16:50, 17:00]
-      LUB candidate infeasible.
-
-    Test verifies time_window calculation is correct (full TSP solve
-    requires real OSRM matrices — verification w shadow log po deploy).
+    E3: frozen ck = kotwica. Okno = [open-5, V327_DROP_TIME_WINDOW_MAX_MIN]:
+    - dolna granica ~16.63 min trzyma pickup ~przy zadeklarowanym 16:55
+      (kurier nie odbiera przed gotowością restauracji)
+    - górna granica LUŹNA — pickup wypadający 17:09 (36.1 min) MIEŚCI się w
+      oknie; kotwica USTAWIA trasę, nie kasuje optymalizacji. Pre-E3 box ±5
+      odrzucał ten plan → greedy ślepy (diagnoza 474266).
     """
     decision_ts = datetime(2026, 4, 27, 14, 33, 22, tzinfo=timezone.utc)
     pp_ck = datetime(2026, 4, 27, 14, 55, 0, tzinfo=timezone.utc)  # 16:55 Warsaw
@@ -139,17 +144,18 @@ def test_integration_469014_pani_pierozek_frozen_window():
     # Time window calc
     open_close = _compute_pickup_time_window(pp, decision_ts, C)
     # open_raw = (14:55 - 14:33:22) / 60 = 21.6333 min
-    # window_open = max(0, 21.63 - 5) = 16.63
-    # window_close = 21.63 + 5 = 26.63
+    # window_open = max(0, 21.63 - 5) = 16.63 (kotwica dolna)
+    # window_close = V327_DROP_TIME_WINDOW_MAX_MIN (luźna)
     assert abs(open_close[0] - 16.633) < 0.1, f"Expected ~16.63, got {open_close[0]}"
-    assert abs(open_close[1] - 26.633) < 0.1, f"Expected ~26.63, got {open_close[1]}"
+    assert open_close[1] == C.V327_DROP_TIME_WINDOW_MAX_MIN, \
+        f"Expected luźna górna {C.V327_DROP_TIME_WINDOW_MAX_MIN}, got {open_close[1]}"
 
-    # Counterfactual: 17:09 pickup time = 36.1 min od decision → NIE w window
+    # E3: 17:09 pickup (36.1 min od decyzji) MIEŚCI się teraz w oknie kotwicy
+    # — plan OR-Tools NIE jest odrzucany (pre-E3 box ±5 by go skasował).
     plan_pickup_at_17_09 = datetime(2026, 4, 27, 15, 9, 27, tzinfo=timezone.utc)
     pickup_min_from_decision = (plan_pickup_at_17_09 - decision_ts).total_seconds() / 60.0
-    assert pickup_min_from_decision > open_close[1], \
-        f"Real plan pickup {pickup_min_from_decision} should EXCEED window close {open_close[1]}"
-    # Math check: 36.10 > 26.63 ✓ → TSP rejected this permutation under V3.27.4
+    assert open_close[0] <= pickup_min_from_decision <= open_close[1], \
+        f"Pickup {pickup_min_from_decision:.1f} powinien mieścić się w kotwicy {open_close}"
 
 
 def test_integration_469014_new_order_status_quo():

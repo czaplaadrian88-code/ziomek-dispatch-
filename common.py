@@ -1219,13 +1219,17 @@ V326_SPEED_MULTIPLIER_MAP = {
 # gold (0.889) → +5.55 score boost, slow (1.111) → -5.55 penalty, new (1.30) → -15.
 V326_SPEED_SCORE_FACTOR = 50.0
 
-# Tier-aware DWELL (2026-05-17, wartości Adrian domain expert). Postój kuriera:
-# pickup pod restauracją + handoff u klienta. Szybszy tier = krótszy postój.
-# Symetryczne pickup=dropoff. Klucze = tier_bag (jak V326_SPEED_MULTIPLIER_MAP).
-# Nieznany/None tier → DWELL_DEFAULT_MIN. Pętla ucząca (eta_calibration_log.jsonl)
-# dopreciezuje wartości per tier — Sprint 4 auto-rekalibracji.
-DWELL_DEFAULT_MIN = 3.5  # fallback; == route_simulator_v2.DWELL_PICKUP/DROPOFF_MIN
-DWELL_BY_TIER = {
+# Tier-aware DWELL (2026-05-17). Postój kuriera = OBSŁUGA stopu.
+# E1 sprint 2026-05-17 (Adrian): postój pod restauracją to czysta obsługa
+# (chwyć torbę) ~1 min — NIE czekanie na jedzenie (to liczy pickup_ready_at
+# osobno). Stąd pickup = flat DWELL_PICKUP_FLAT_MIN dla WSZYSTKICH tierów.
+# Dropoff (handoff u klienta) zostaje tier-aware: szybszy tier = krótszy postój.
+# Klucze DWELL_BY_TIER = tier_bag (jak V326_SPEED_MULTIPLIER_MAP); wartości =
+# DROPOFF min. Nieznany/None tier → DWELL_DEFAULT_MIN dropoff fallback. Pętla
+# ucząca (eta_calibration_log.jsonl) dopreciezuje dropoff per tier.
+DWELL_PICKUP_FLAT_MIN = 1.0  # E1 2026-05-17 — postój pod restauracją (obsługa)
+DWELL_DEFAULT_MIN = 3.5  # dropoff fallback dla nieznanego tieru
+DWELL_BY_TIER = {  # wartości = DROPOFF (handoff u klienta) per tier
     'gold': 2.5,
     'std+': 3.0,
     'std':  3.5,
@@ -1237,10 +1241,12 @@ DWELL_BY_TIER = {
 def dwell_for_tier(tier):
     """Zwraca (dwell_pickup_min, dwell_dropoff_min) dla tieru kuriera (tier_bag).
 
-    Symetryczne pickup=dropoff. Nieznany/None tier → DWELL_DEFAULT_MIN fallback.
+    E1 2026-05-17: pickup = flat DWELL_PICKUP_FLAT_MIN (czysta obsługa pod
+    restauracją; czekanie na jedzenie liczy pickup_ready_at osobno). Dropoff =
+    tier-aware. Nieznany/None tier → DWELL_DEFAULT_MIN dropoff fallback.
     """
     d = DWELL_BY_TIER.get(tier, DWELL_DEFAULT_MIN)
-    return (d, d)
+    return (DWELL_PICKUP_FLAT_MIN, d)
 
 
 # Tier-aware czas JAZDY (Sprint 3, 2026-05-17). Mnożnik tempa kuriera na nogach

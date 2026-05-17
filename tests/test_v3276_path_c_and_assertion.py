@@ -155,11 +155,10 @@ def test_fix_2b_no_violation_when_no_frozen_ck():
 
 
 def test_fix_2b_strategy_ortools_rejected_v3274_emitted_on_violation(caplog):
-    """Hard-craft bag z frozen ck, geographic+timing forcing violation
-    (drive >> window) — verify post-solve assertion fires + strategy preserved.
-
-    Setup: bag z frozen ck w PAST (already past = window [0, 5] od now), ALE
-    courier daleko + plan musi visit other stops first → walked_min > 5 + 0.5.
+    """Hard-craft bag z frozen ck, courier daleko — pre-E2 ten setup dawał
+    strategy="ortools_rejected_v3274". E2/E3 sprint 2026-05-17: plan OR-Tools
+    NIE jest już odrzucany do greedy; weryfikujemy że strategy ∈ {ortools,
+    greedy_fallback,...} ale NIGDY ortools_rejected_v3274.
     """
     _setup_mock()
     caplog.set_level(logging.WARNING, logger="route_simulator_v2")
@@ -197,19 +196,18 @@ def test_fix_2b_strategy_ortools_rejected_v3274_emitted_on_violation(caplog):
     plan = simulate_bag_route_v2(courier_pos, [bag_frozen, bag_picked], new_order, now=now)
     assert plan is not None
 
-    # CASE 1: TSP INFEASIBLE → fallback greedy (window [0,5] niemożliwe drive)
-    # CASE 2: TSP feasible (np. solver relaxation) ALE plan violates window
-    #         → V3274_OR_TOOLS_VIOLATION fires → strategy="ortools_rejected_v3274"
-    # Verify: strategy w jednej z 2 expected paths.
-    expected_strategies = {"greedy_fallback", "ortools_rejected_v3274", "greedy", "bruteforce"}
+    # E2/E3 sprint 2026-05-17: plan OR-Tools NIE jest już odrzucany do greedy
+    # przy przekroczeniu okna frozen (strategy "ortools_rejected_v3274" wycofany).
+    # E3 luźna górna granica okna frozen → solver feasible → strategy="ortools";
+    # przy innym INFEASIBLE → "greedy_fallback".
+    expected_strategies = {"ortools", "greedy_fallback", "greedy", "bruteforce"}
     assert plan.strategy in expected_strategies, (
         f"Unexpected strategy {plan.strategy!r}; expected one of {expected_strategies}"
     )
-
-    # Jeśli strategy="ortools_rejected_v3274", verify warning fired
-    if plan.strategy == "ortools_rejected_v3274":
-        violations = [r for r in caplog.records if "V3274_OR_TOOLS_VIOLATION" in r.message and "reject" in r.message]
-        assert len(violations) >= 1, "V3274_OR_TOOLS_VIOLATION reject warning must fire when strategy=ortools_rejected_v3274"
+    # E2: plan OR-Tools NIGDY nie jest odrzucany do greedy via V3274.
+    assert plan.strategy != "ortools_rejected_v3274", (
+        "E2: ścieżka V3274 reject→greedy wycofana — strategy nie może być ortools_rejected_v3274"
+    )
 
 
 def test_fix_2c_caller_preserves_pre_set_strategy():

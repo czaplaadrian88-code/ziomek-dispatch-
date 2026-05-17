@@ -22,9 +22,9 @@ from dispatch_v2.route_simulator_v2 import (
 
 
 def test_dwell_pickup_returns_dwell_pickup_min():
-    """node.kind='pickup' → DWELL_PICKUP_MIN (3.5 kalibracja 2026-05-17)."""
+    """node.kind='pickup' → DWELL_PICKUP_MIN (E1 2026-05-17: 1.0, czysta obsługa)."""
     assert _dwell_min_for_arriving({"kind": "pickup"}) == DWELL_PICKUP_MIN
-    assert _dwell_min_for_arriving({"kind": "pickup"}) == 3.5
+    assert _dwell_min_for_arriving({"kind": "pickup"}) == 1.0
 
 
 def test_dwell_delivery_returns_dwell_dropoff_min():
@@ -45,9 +45,12 @@ def test_dwell_unknown_kind_defensive_zero():
     assert _dwell_min_for_arriving({}) == 0.0  # missing kind → None
 
 
-def test_dwell_symmetric_pickup_dropoff():
-    """Kalibracja 2026-05-17: DWELL_PICKUP_MIN == DWELL_DROPOFF_MIN = 3.5."""
-    assert DWELL_PICKUP_MIN == DWELL_DROPOFF_MIN == 3.5
+def test_dwell_pickup_dropoff_asymmetric():
+    """E1 sprint 2026-05-17: pickup (obsługa pod restauracją — chwyć torbę)
+    krótszy niż dropoff (handoff u klienta). DWELL_PICKUP_MIN=1.0 < DWELL_DROPOFF_MIN=3.5."""
+    assert DWELL_PICKUP_MIN == 1.0
+    assert DWELL_DROPOFF_MIN == 3.5
+    assert DWELL_PICKUP_MIN < DWELL_DROPOFF_MIN
 
 
 # ─── Flag + source regression ────────────────────────────────────────
@@ -98,26 +101,22 @@ def test_time_matrix_construction_preserves_9999_sentinel():
 
 
 def test_dwell_accumulation_math_bag2():
-    """Bag=2 (4 stops: 2 pickups + 2 drops) DWELL accum = 4*3.5 = 14 min.
+    """Bag=2 (4 stops: 2 pickups + 2 drops). E1 2026-05-17: pickup DWELL=1.0,
+    dropoff DWELL=3.5 → accum = 2*1.0 + 2*3.5 = 9.0 min.
 
-    Mirror FAZA 0 audit: solver MUSI widzieć DWELL, inaczej okno [ck-5, ck+5]
-    łamane. Po kalibracji 2026-05-17 (DWELL 2.0→3.5) nawet bag=2 przekracza
-    okno — tym bardziej solver musi DWELL uwzględniać.
+    Solver MUSI widzieć DWELL w time_matrix, inaczej _simulate_sequence
+    post-process rozjeżdża się z zegarem solvera o ~9 min/bag2 (SLA + timing
+    liczone błędnie). FAZA 3 ścieżka A rationale nadal aktualne.
     """
-    # 4 stops × DWELL=3.5 = 14 min total DWELL skumulowany
-    total_dwell = 4 * DWELL_PICKUP_MIN
-    assert total_dwell == 14.0
-    # Window slack = 10 min (±5). Bag=2: 14 > 10 = breach (DWELL-blind solver fails)
-    window_slack = 10.0
-    assert total_dwell > window_slack
+    total_dwell = 2 * DWELL_PICKUP_MIN + 2 * DWELL_DROPOFF_MIN
+    assert total_dwell == 9.0
 
 
-def test_dwell_accumulation_math_bag3_window_breach():
-    """Bag=3 (6 stops) DWELL=21 > window 10 → guaranteed DWELL-blind breach."""
-    total_dwell = 6 * DWELL_PICKUP_MIN
-    assert total_dwell == 21.0
-    window_slack = 10.0
-    assert total_dwell > window_slack  # window breach gdy solver DWELL-blind
+def test_dwell_accumulation_math_bag3():
+    """Bag=3 (6 stops: 3 pickups + 3 drops). E1: 3*1.0 + 3*3.5 = 13.5 min
+    skumulowanego DWELL — istotny składnik czasu trasy, solver musi go widzieć."""
+    total_dwell = 3 * DWELL_PICKUP_MIN + 3 * DWELL_DROPOFF_MIN
+    assert total_dwell == 13.5
 
 
 if __name__ == "__main__":

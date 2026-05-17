@@ -2885,16 +2885,19 @@ def _assess_order_impl(
             return _result_stale
 
         # P3-D6 path B 2026-05-11 — geometry-blind fallback KOORD escalation.
-        # Tech debt #29 + Lekcja #108: gdy V3.27.4 frozen window forsuje wszystkie
-        # kandydaci do `_greedy_plan` (strategy=ortools_rejected_v3274) AND wszyscy
-        # mają negative R1 corridor cosine (drops w przeciwnych kierunkach), greedy
-        # geometry-blind nie ma żadnej ścieżki do dobrej trasy. Eskaluj człowiekowi
-        # (Adrian) zamiast auto-proponować low-quality bundle.
-        # Case 472338 Ogniomistrz 10.05 archetype: zigzag plan przeszedł, Adrian
-        # panel override → cid=500.
+        # Tech debt #29 + Lekcja #108: gdy wszyscy kandydaci spadli na
+        # `_greedy_plan` (strategy=greedy_fallback — OR-Tools INFEASIBLE) AND
+        # wszyscy mają negative R1 corridor cosine (drops w przeciwnych
+        # kierunkach), greedy geometry-blind nie ma żadnej ścieżki do dobrej
+        # trasy. Eskaluj człowiekowi (Adrian) zamiast auto-proponować low-quality
+        # bundle. Case 472338 Ogniomistrz 10.05 archetype: zigzag plan przeszedł.
+        # E2 sprint 2026-05-17: warunek był `ortools_rejected_v3274` (V3.27.4
+        # reject→greedy). Po wycofaniu tej ścieżki OR-Tools nie jest już
+        # odrzucany; jedyny pozostały geometrycznie ślepy fallback to
+        # `greedy_fallback` (realny INFEASIBLE) — na ten enum przepinamy.
         if len(feasible) >= 2:
             _all_greedy_fallback = all(
-                getattr(getattr(_c, "plan", None), "strategy", "") == "ortools_rejected_v3274"
+                getattr(getattr(_c, "plan", None), "strategy", "") == "greedy_fallback"
                 for _c in feasible
             )
             _all_negative_cos = all(
@@ -2908,7 +2911,7 @@ def _assess_order_impl(
                     verdict="KOORD",
                     reason=(
                         f"geometry_blind_fallback (all {len(feasible)} kandydaci "
-                        f"strategy=ortools_rejected_v3274 + cos<0; escalate)"
+                        f"strategy=greedy_fallback + cos<0; escalate)"
                     ),
                     best=top[0],
                     candidates=top,
