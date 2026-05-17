@@ -20,7 +20,9 @@ if [ -z "$UNIT" ]; then
     exit 0
 fi
 
-/root/.openclaw/venvs/dispatch/bin/python -c "
+# 2026-05-17 fix: PYTHONPATH explicit — services bez WorkingDirectory= (np.
+# dispatch-restic-backup) miały cwd=/ → ModuleNotFoundError: dispatch_v2.
+PYTHONPATH=/root/.openclaw/workspace/scripts /root/.openclaw/venvs/dispatch/bin/python -c "
 from dispatch_v2.observability import cron_health
 cron_health.record_run_success('$UNIT', unit_type='cron_timer')
 " 2>&1
