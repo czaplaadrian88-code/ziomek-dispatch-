@@ -226,6 +226,12 @@ def _serialize_candidate(c) -> dict:
         "r6_worst_oid": m.get("r6_worst_oid"),
         "r6_is_solo": m.get("r6_is_solo"),
         "r6_bag_size": m.get("r6_bag_size"),
+        # Fix 2026-05-17 (#474227): r6_bag_size jest null gdy feasibility_v2
+        # robi early-return PRZED blokiem R6 (np. bramka sla_violation:538).
+        # bag_size_before (feasibility_v2:276) ustawiane bezwarunkowo = len(bag).
+        # Bez propagacji telegram render fallback chain go nie dostaje →
+        # kurier z pełną torbą renderuje się jako "🟢 0 / Wolny od ręki".
+        "bag_size_before": m.get("bag_size_before"),
         # V3.28 ANCHOR FIX 2026-05-10 — per-order thermal violations (anchor=ready_at)
         "r6_per_order_violations": m.get("r6_per_order_violations"),
         "r6_picked_up_violations": m.get("r6_picked_up_violations"),
@@ -444,6 +450,10 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r6_worst_oid": best_m.get("r6_worst_oid"),
             "r6_is_solo": best_m.get("r6_is_solo"),
             "r6_bag_size": best_m.get("r6_bag_size"),
+            # Fix 2026-05-17 (#474227): bag_size_before propagation (LOCATION B
+            # — best). Patrz _serialize_candidate dla detali. r6_bag_size null
+            # przy feasibility early-return przed R6 → fallback do bag_size_before.
+            "bag_size_before": best_m.get("bag_size_before"),
             # V3.28 ANCHOR FIX 2026-05-10 — per-order thermal violations (anchor=ready_at)
             "r6_per_order_violations": best_m.get("r6_per_order_violations"),
             "r6_picked_up_violations": best_m.get("r6_picked_up_violations"),

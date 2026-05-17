@@ -822,7 +822,10 @@ def _candidate_line_v2(idx: int, c: dict, is_winner: bool) -> str:
     name = name_lookup(c.get("courier_id"), c.get("name"))
     gps = _gps_marker_v2(c.get("pos_source"))
     eta = c.get("eta_pickup_hhmm") or c.get("eta_drive_hhmm") or "—"
-    bag_n = c.get("r6_bag_size") or c.get("bag_size_before") or 0
+    # Fix 2026-05-17 (#474227): r7_bag_size jako 3. źródło. r6_bag_size jest null
+    # gdy feasibility_v2 robi early-return przed blokiem R6 (bramka sla_violation).
+    # bag_size_before + r7_bag_size = len(bag) ustawiane wcześniej/bezwarunkowo.
+    bag_n = c.get("r6_bag_size") or c.get("bag_size_before") or c.get("r7_bag_size") or 0
     try:
         bag_n = int(bag_n)
     except (TypeError, ValueError):
@@ -1061,7 +1064,8 @@ def _reason_text_v2(
     if not best:
         return ""
 
-    bag_n = best.get("r6_bag_size") or best.get("bag_size_before") or 0
+    # Fix 2026-05-17 (#474227): r7_bag_size fallback — patrz _candidate_line_v2.
+    bag_n = best.get("r6_bag_size") or best.get("bag_size_before") or best.get("r7_bag_size") or 0
     try:
         bag_n = int(bag_n)
     except (TypeError, ValueError):
@@ -1097,7 +1101,7 @@ def _reason_text_v2(
     for a in alts[:2]:
         if not a:
             continue
-        a_bag = a.get("r6_bag_size") or a.get("bag_size_before") or 0
+        a_bag = a.get("r6_bag_size") or a.get("bag_size_before") or a.get("r7_bag_size") or 0
         try:
             a_bag = int(a_bag)
         except (TypeError, ValueError):
@@ -1114,7 +1118,7 @@ def _reason_text_v2(
                 break
 
     if contrast_alt is not None:
-        a_bag = contrast_alt.get("r6_bag_size") or contrast_alt.get("bag_size_before") or 0
+        a_bag = contrast_alt.get("r6_bag_size") or contrast_alt.get("bag_size_before") or contrast_alt.get("r7_bag_size") or 0
         try:
             a_bag = int(a_bag)
         except (TypeError, ValueError):
