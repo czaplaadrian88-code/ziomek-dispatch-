@@ -22,15 +22,15 @@ from dispatch_v2.route_simulator_v2 import (
 
 
 def test_dwell_pickup_returns_dwell_pickup_min():
-    """node.kind='pickup' → DWELL_PICKUP_MIN (2.0 V3.27.3 baseline)."""
+    """node.kind='pickup' → DWELL_PICKUP_MIN (3.5 kalibracja 2026-05-17)."""
     assert _dwell_min_for_arriving({"kind": "pickup"}) == DWELL_PICKUP_MIN
-    assert _dwell_min_for_arriving({"kind": "pickup"}) == 2.0
+    assert _dwell_min_for_arriving({"kind": "pickup"}) == 3.5
 
 
 def test_dwell_delivery_returns_dwell_dropoff_min():
     """node.kind='delivery' → DWELL_DROPOFF_MIN."""
     assert _dwell_min_for_arriving({"kind": "delivery"}) == DWELL_DROPOFF_MIN
-    assert _dwell_min_for_arriving({"kind": "delivery"}) == 2.0
+    assert _dwell_min_for_arriving({"kind": "delivery"}) == 3.5
 
 
 def test_dwell_courier_depot_zero():
@@ -46,8 +46,8 @@ def test_dwell_unknown_kind_defensive_zero():
 
 
 def test_dwell_symmetric_pickup_dropoff():
-    """V3.27.3 baseline: DWELL_PICKUP_MIN == DWELL_DROPOFF_MIN = 2.0."""
-    assert DWELL_PICKUP_MIN == DWELL_DROPOFF_MIN == 2.0
+    """Kalibracja 2026-05-17: DWELL_PICKUP_MIN == DWELL_DROPOFF_MIN = 3.5."""
+    assert DWELL_PICKUP_MIN == DWELL_DROPOFF_MIN == 3.5
 
 
 # ─── Flag + source regression ────────────────────────────────────────
@@ -98,25 +98,26 @@ def test_time_matrix_construction_preserves_9999_sentinel():
 
 
 def test_dwell_accumulation_math_bag2():
-    """Bag=2 (4 stops: 2 pickups + 2 drops) DWELL accum = 4*2 = 8 min.
+    """Bag=2 (4 stops: 2 pickups + 2 drops) DWELL accum = 4*3.5 = 14 min.
 
-    Mirror FAZA 0 audit prediction: pre-fix solver unaware → window check
-    fail. Post-fix solver respects [ck-5, ck+5] correctly.
+    Mirror FAZA 0 audit: solver MUSI widzieć DWELL, inaczej okno [ck-5, ck+5]
+    łamane. Po kalibracji 2026-05-17 (DWELL 2.0→3.5) nawet bag=2 przekracza
+    okno — tym bardziej solver musi DWELL uwzględniać.
     """
-    # 4 stops × DWELL=2 = 8 min total DWELL skumulowany
+    # 4 stops × DWELL=3.5 = 14 min total DWELL skumulowany
     total_dwell = 4 * DWELL_PICKUP_MIN
-    assert total_dwell == 8.0
-    # Window slack = 10 min (±5). Bag=2: 8 vs 10 = borderline (34% reject pre-fix)
+    assert total_dwell == 14.0
+    # Window slack = 10 min (±5). Bag=2: 14 > 10 = breach (DWELL-blind solver fails)
     window_slack = 10.0
-    assert total_dwell < window_slack  # not impossible but tight
+    assert total_dwell > window_slack
 
 
 def test_dwell_accumulation_math_bag3_window_breach():
-    """Bag=3 (6 stops) DWELL=12 > window 10 → guaranteed pre-fix breach."""
+    """Bag=3 (6 stops) DWELL=21 > window 10 → guaranteed DWELL-blind breach."""
     total_dwell = 6 * DWELL_PICKUP_MIN
-    assert total_dwell == 12.0
+    assert total_dwell == 21.0
     window_slack = 10.0
-    assert total_dwell > window_slack  # window breach pre-fix
+    assert total_dwell > window_slack  # window breach gdy solver DWELL-blind
 
 
 if __name__ == "__main__":

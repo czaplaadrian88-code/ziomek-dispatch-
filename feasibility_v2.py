@@ -267,6 +267,7 @@ def check_feasibility_v2(
     base_sequence: Optional[List[str]] = None,  # V3.19d passthrough
     r07_chain_eta_utc: Optional[datetime] = None,  # V3.26 STEP 6 (R-07 v2) — chain_eta source of truth dla R-01 MANDATORY
     pos_source: Optional[str] = None,  # V3.28 ETAP 2 — pre_shift departure clamp gate
+    courier_tier: Optional[str] = None,  # 2026-05-17 — tier-aware DWELL (tier_bag)
 ) -> Tuple[str, str, Dict, Optional[RoutePlanV2]]:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -524,9 +525,17 @@ def check_feasibility_v2(
         metrics["earliest_departure_utc"] = earliest_departure.isoformat()
         metrics["pre_shift_clamp_applied"] = True
 
+    # 2026-05-17 tier-aware DWELL: postój kuriera zależny od tier_bag
+    # (gold krócej, slow/new dłużej). Nieznany tier → DWELL_DEFAULT_MIN.
+    _dwell_pickup, _dwell_dropoff = C.dwell_for_tier(courier_tier)
+    metrics["dwell_tier"] = courier_tier
+    metrics["dwell_pickup_min"] = _dwell_pickup
+    metrics["dwell_dropoff_min"] = _dwell_dropoff
+
     plan = simulate_bag_route_v2(
         courier_pos, bag, new_order, now=now, sla_minutes=sla_minutes,
         base_sequence=base_sequence, earliest_departure=earliest_departure,
+        dwell_pickup=_dwell_pickup, dwell_dropoff=_dwell_dropoff,
     )
 
     metrics["sequence"] = plan.sequence

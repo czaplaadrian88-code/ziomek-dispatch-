@@ -1507,6 +1507,7 @@ def _assess_order_impl(
             base_sequence=_base_sequence,
             r07_chain_eta_utc=r07_chain_eta_utc,  # V3.26 STEP 6 R-07 MANDATORY when flag=True
             pos_source=getattr(cs, "pos_source", None),  # V3.28 ETAP 2 — clamp gate
+            courier_tier=getattr(cs, "tier_bag", None),  # 2026-05-17 tier-aware DWELL
         )
 
         # F1.8f hard guard: kurier którego zmiana kończy się PRZED pickup_ready_at
@@ -3042,6 +3043,7 @@ def _assess_order_impl(
                 now=now,
                 sla_minutes=35,
                 pos_source=getattr(cs, "pos_source", None),  # V3.28 ETAP 2 — clamp gate
+                courier_tier=getattr(cs, "tier_bag", None),  # 2026-05-17 tier-aware DWELL
             )
             if sv in ("YES", "MAYBE") and sp is not None:
                 sc = sm.get("pickup_dist_km", 999)

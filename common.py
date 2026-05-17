@@ -1219,6 +1219,29 @@ V326_SPEED_MULTIPLIER_MAP = {
 # gold (0.889) → +5.55 score boost, slow (1.111) → -5.55 penalty, new (1.30) → -15.
 V326_SPEED_SCORE_FACTOR = 50.0
 
+# Tier-aware DWELL (2026-05-17, wartości Adrian domain expert). Postój kuriera:
+# pickup pod restauracją + handoff u klienta. Szybszy tier = krótszy postój.
+# Symetryczne pickup=dropoff. Klucze = tier_bag (jak V326_SPEED_MULTIPLIER_MAP).
+# Nieznany/None tier → DWELL_DEFAULT_MIN. Pętla ucząca (eta_calibration_log.jsonl)
+# dopreciezuje wartości per tier — Sprint 4 auto-rekalibracji.
+DWELL_DEFAULT_MIN = 3.5  # fallback; == route_simulator_v2.DWELL_PICKUP/DROPOFF_MIN
+DWELL_BY_TIER = {
+    'gold': 2.5,
+    'std+': 3.0,
+    'std':  3.5,
+    'slow': 4.0,
+    'new':  4.0,
+}
+
+
+def dwell_for_tier(tier):
+    """Zwraca (dwell_pickup_min, dwell_dropoff_min) dla tieru kuriera (tier_bag).
+
+    Symetryczne pickup=dropoff. Nieznany/None tier → DWELL_DEFAULT_MIN fallback.
+    """
+    d = DWELL_BY_TIER.get(tier, DWELL_DEFAULT_MIN)
+    return (d, d)
+
 # V3.26 STEP 3 (R-09 WAVE-GEOMETRIC-VETO) — refinement V3.19h BUG-2.
 # Bug case (Adrian Q&A 22.04 Kacper Sa): wave_continuation +30 fire'uje gdy
 # gap OK (free_at 5min after pickup wave#2) ALE drops rozrzucone na 2 końce

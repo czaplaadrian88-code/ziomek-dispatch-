@@ -31,8 +31,8 @@ import logging as _logging
 _log = _logging.getLogger("route_simulator_v2")
 
 
-DWELL_PICKUP_MIN = 2.0   # V3.27.3 rollback 27.04 (was 3.0 V3.27.2; pre-V3.27.2 was 2.0). Symmetric 2.0/2.0.
-DWELL_DROPOFF_MIN = 2.0  # V3.27.3 rollback 27.04 (was 3.0 V3.27.2; pre-V3.27.2 was 1.0). Symmetric 2.0/2.0.
+DWELL_PICKUP_MIN = 3.5   # 2026-05-17 kalibracja: GPS tier-1 dwell pod restauracją med 3.6-3.8 min (n=13-39). Było 2.0 (V3.27.3).
+DWELL_DROPOFF_MIN = 3.5  # 2026-05-17 kalibracja: GPS tier-1 dwell u klienta med 3.4-4.25 min (n=15-46). Było 2.0 (V3.27.3).
 BRUTEFORCE_MAX_BAG_AFTER = 3  # per D19
 
 # V3.27 Bug Y tie-breaker (2026-04-25 wieczór): gdy 2+ permutacje mają
@@ -214,6 +214,8 @@ def simulate_bag_route_v2(
     sla_minutes: int = 35,
     base_sequence: Optional[List[str]] = None,
     earliest_departure: Optional[datetime] = None,
+    dwell_pickup: float = DWELL_PICKUP_MIN,
+    dwell_dropoff: float = DWELL_DROPOFF_MIN,
 ) -> RoutePlanV2:
     """Hybrid simulator. Never returns None (osrm_client has fallback).
 
@@ -404,6 +406,14 @@ def simulate_bag_route_v2(
     except Exception:
         use_ortools = False
 
+    # Tier-aware DWELL (2026-05-17): stempel wartości dwell na każdym węźle.
+    # Dzięki temu dwell podróżuje z `nodes` do wszystkich plannerów i do
+    # _simulate_sequence / _dwell_min_for_arriving BEZ zmiany ich sygnatur.
+    # Route-constant — cała trasa to jeden kurier = jeden tier.
+    for _n in nodes:
+        _n["dwell_pickup"] = dwell_pickup
+        _n["dwell_dropoff"] = dwell_dropoff
+
     if use_sticky:
         plan = _sticky_sequence_plan(
             nodes, leg_min, sticky_bag_idxs,
@@ -521,10 +531,10 @@ def _simulate_sequence(
                 ready_utc = ready.astimezone(timezone.utc)
                 if t < ready_utc:
                     t = ready_utc  # wait at restaurant (prep_variance)
-            t = t + timedelta(minutes=DWELL_PICKUP_MIN)
+            t = t + timedelta(minutes=node.get("dwell_pickup", DWELL_PICKUP_MIN))
             # V3.26 Fix 7: super-pickup z group_oids zapisuje pickup_at dla
             # WSZYSTKICH oidów w grupie przy single visit (kurier zabiera all
-            # orders na raz z restauracji). Single DWELL_PICKUP_MIN dla całej grupy.
+            # orders na raz z restauracji). Single dwell pickup dla całej grupy.
             group_oids = node.get("group_oids")
             if group_oids:
                 for grp_oid in group_oids:
@@ -548,7 +558,8 @@ def _simulate_sequence(
                     ref_pra_utc = ref_pra.astimezone(timezone.utc)
                     # Minimalny realny drop = pickup_ready + pickup dwell
                     # (drive from restaurant to drop nie znany tu, ale >=0).
-                    min_drop_possible = ref_pra_utc + timedelta(minutes=DWELL_PICKUP_MIN)
+                    min_drop_possible = ref_pra_utc + timedelta(
+                        minutes=node.get("dwell_pickup", DWELL_PICKUP_MIN))
                     if t < min_drop_possible:
                         t = min_drop_possible
             # V3.19a: symetryczny floor dla picked_up — kurier już odebrał z
@@ -574,11 +585,11 @@ def _simulate_sequence(
                     floor_t = (
                         ref_picked_utc
                         + timedelta(seconds=drive_s)
-                        + timedelta(minutes=DWELL_DROPOFF_MIN)
+                        + timedelta(minutes=node.get("dwell_dropoff", DWELL_DROPOFF_MIN))
                     )
                     if t < floor_t:
                         t = floor_t
-            t = t + timedelta(minutes=DWELL_DROPOFF_MIN)
+            t = t + timedelta(minutes=node.get("dwell_dropoff", DWELL_DROPOFF_MIN))
             delivered_at[node["order_id"]] = t
         current = idx
     total_min = (t - now).total_seconds() / 60.0
@@ -836,13 +847,17 @@ def _dwell_min_for_arriving(node: dict) -> float:
     z `_simulate_sequence` pickup_at storage convention (post-DWELL = "leaves
     restaurant" / "after delivery handoff"). FAZA 0 audit (n=2767, 12 dni)
     empirycznie confirmed: bag>=2 reject rate 34-100% explained by DWELL
-    accumulation not seen by solver. Symmetric DWELL_PICKUP_MIN = DWELL_DROPOFF_MIN.
+    accumulation not seen by solver.
+
+    Tier-aware (2026-05-17): czyta dwell ostemplowany na węźle przez
+    simulate_bag_route_v2 (per tier kuriera). Fallback na moduł-default gdy
+    węzeł niestemplowany (defensywnie).
     """
     kind = node.get("kind")
     if kind == "pickup":
-        return DWELL_PICKUP_MIN
+        return node.get("dwell_pickup", DWELL_PICKUP_MIN)
     if kind == "delivery":
-        return DWELL_DROPOFF_MIN
+        return node.get("dwell_dropoff", DWELL_DROPOFF_MIN)
     return 0.0  # courier depot or unknown — no service time
 
 
