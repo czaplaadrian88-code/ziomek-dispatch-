@@ -1,29 +1,25 @@
 #!/usr/bin/env python3
 """eta_calibration_logger — pętla uczenia Ziomka: predykcja ETA vs rzeczywistość.
 
-Sprint 1 (2026-05-17). Adrian: "Ziomek daje za krótkie czasy" — żeby je
-skalibrować i żeby Ziomek się uczył, musi najpierw WIDZIEĆ swój błąd.
+Sprint 1 (2026-05-17). Po diagnozie 2026-05-17: pierwsza wersja joinowała
+predykcję `best` (kuriera, którego Ziomek PROPONUJE) z rzeczywistością — ale
+realny kurier ≠ best w 83% przypadków → metryka mierzyła rozjazd atrybucji,
+nie błąd modelu. WERSJA 2: joinuje predykcję dla kuriera, który REALNIE
+dowiózł zlecenie.
 
-Co robi: joinuje dwa logi i dopisuje wynik do dedykowanego logu kalibracyjnego.
-  - shadow_decisions.jsonl  — decyzje dispatchu; `best.plan.per_order_delivery_times[oid]`
-                              to predykcja Ziomka (ile minut zajmie dostawa).
-  - sla_log.jsonl           — `delivery_time_minutes` to REALNY czas pickup→delivery.
+Jak: shadow_decisions.jsonl ma dla każdego zlecenia `best` + `alternatives[]`
+— każdy kandydat to inny kurier z własnym `plan.predicted_delivered_at`.
+Logger szuka w tej puli kuriera == realny kurier (z sla_log) i bierze JEGO
+predykcję. Gdy realnego kuriera nie ma w puli → fallback na `best` + flaga
+matched_courier=False (żeby było widać pokrycie).
 
-Dla każdego dostarczonego zlecenia liczy `error_min = real - predicted`
-(dodatni = Ziomek niedoszacował) i zapisuje wiersz do eta_calibration_log.jsonl
-wraz z kontekstem (rozmiar baga, godzina, restauracja, strategia TSP, ...).
+Metryka nagłówkowa: `eta_error_min` = realny delivered_at − predicted_delivered_at
+kuriera realnego (anchor-free). Dodatni = dostawa później niż obiecano.
+`prediction_age_min` = picked_up_at − shadow_ts — eksponuje staleness predykcji
+(jest jednorazowa, robiona ~44 min przed pickupem).
 
-WAŻNE — to NIE jest hot-path. Osobny proces uruchamiany z timera, tylko CZYTA
-logi produkcyjne i pisze własny plik. Zero ryzyka dla dispatchu.
-
-Idempotentny: pamięta które oid-y już zapisał (czyta istniejący log na starcie),
-więc kolejne uruchomienia dopisują tylko nowe. Pierwsze uruchomienie backfilluje
-całą historię z sla_log.
-
-Anchor (uwaga dla analizy w Sprincie 2/4): `per_order_delivery_times` liczone od
-`pickup_ready_at`, `delivery_time_minutes` od faktycznego `picked_up_at` — lekko
-różne kotwice. Logujemy oba pola surowe + picked_up_at, żeby warstwa analizy
-mogła je przeliczyć. Logger jest tylko WIERNYM rejestratorem, nie interpretuje.
+NIE hot-path. Timer dispatch-eta-calibration co 30 min. Tylko czyta logi
+produkcyjne, pisze własny eta_calibration_log.jsonl. Idempotentny per oid.
 
 Uruchomienie:
     /root/.openclaw/venvs/dispatch/bin/python eta_calibration_logger.py
@@ -31,7 +27,6 @@ Uruchomienie:
 import json
 import os
 import sys
-import tempfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -42,8 +37,6 @@ SLA_LOG = f"{BASE}/scripts/logs/sla_log.jsonl"
 SHADOW_LOG = f"{BASE}/scripts/logs/shadow_decisions.jsonl"
 OUT_LOG = f"{BASE}/dispatch_state/eta_calibration_log.jsonl"
 
-# Godziny szczytu (Warsaw) — peak window dispatchu Białystok. Wartość pomocnicza;
-# źródłem prawdy dla analizy jest surowe hour_warsaw + weekday w wierszu.
 PEAK_HOURS = frozenset({11, 12, 13, 17, 18, 19})
 SHOULDER_HOURS = frozenset({10, 14, 15, 16, 20})
 
@@ -57,12 +50,11 @@ def _bucket(hour):
 
 
 def _parse_dt(s):
-    """Parsuje datetime z logu. Zwraca aware UTC datetime albo None."""
+    """Parsuje datetime z logu. Zwraca aware UTC/Warsaw datetime albo None."""
     if not s or not isinstance(s, str):
         return None
     txt = s.strip()
     try:
-        # ISO z offsetem (logged_at / ts / shadow ts)
         if "T" in txt:
             dt = datetime.fromisoformat(txt.replace("Z", "+00:00"))
         else:
@@ -75,8 +67,14 @@ def _parse_dt(s):
         return None
 
 
+def _cid(v):
+    """Normalizuje courier_id do str (źródła mieszają int/str)."""
+    if v is None:
+        return None
+    return str(v).strip()
+
+
 def _read_jsonl(path):
-    """Czyta plik JSONL linia-po-linii, pomija uszkodzone wiersze."""
     if not os.path.exists(path):
         return
     with open(path, encoding="utf-8") as fh:
@@ -91,7 +89,6 @@ def _read_jsonl(path):
 
 
 def load_already_logged():
-    """Zbiór oid-ów już zapisanych w logu kalibracyjnym (idempotencja)."""
     seen = set()
     for rec in _read_jsonl(OUT_LOG):
         oid = rec.get("oid")
@@ -101,21 +98,12 @@ def load_already_logged():
 
 
 def build_shadow_index():
-    """oid -> lista (ts_dt, rekord) decyzji shadow z populated `best.plan`.
-
-    Jedno zlecenie może mieć kilka decyzji (re-propozycje). Trzymamy wszystkie,
-    posortowane rosnąco po czasie; selekcja predykcji następuje przy joinie.
-    """
+    """oid -> lista (ts_dt, rekord). Wszystkie decyzje shadow per zlecenie."""
     idx = {}
     for rec in _read_jsonl(SHADOW_LOG):
         oid = rec.get("order_id")
         if oid is None:
             continue
-        best = rec.get("best") or {}
-        plan = best.get("plan") or {}
-        podt = plan.get("per_order_delivery_times") or {}
-        if str(oid) not in podt:
-            continue  # decyzja bez predykcji dla tego zlecenia — pomijamy
         ts = _parse_dt(rec.get("ts"))
         if ts is None:
             continue
@@ -125,110 +113,146 @@ def build_shadow_index():
     return idx
 
 
-def pick_prediction(oid, delivered_at, shadow_recs):
-    """Wybiera decyzję shadow reprezentatywną dla predykcji Ziomka.
+def _candidates(record):
+    """[best] + alternatives[] — wszyscy kurierzy ocenieni dla tego zlecenia."""
+    out = []
+    best = record.get("best")
+    if isinstance(best, dict) and best:
+        out.append(best)
+    for a in record.get("alternatives") or []:
+        if isinstance(a, dict):
+            out.append(a)
+    return out
 
-    Bierze NAJPÓŹNIEJSZĄ decyzję sprzed dostawy (najświeższy obraz sytuacji,
-    na którym najpewniej działał koordynator). Jeśli żadna nie jest sprzed
-    dostawy — bierze pierwszą dostępną (edge: zegar/log lag).
+
+def _pred_for(cand, oid):
+    """predicted_delivered_at[oid] z planu kandydata albo None."""
+    plan = cand.get("plan") or {}
+    return (plan.get("predicted_delivered_at") or {}).get(oid)
+
+
+def pick_prediction(oid, real_cid, delivered_at, shadow_recs):
+    """Wybiera predykcję dla kuriera, który REALNIE dowiózł zlecenie.
+
+    Skanuje decyzje shadow od najnowszej: szuka w puli kandydatów (best +
+    alternatives) kuriera == real_cid z predykcją dla tego oid. Gdy znajdzie
+    → (ts, record, candidate, matched=True). Gdy realnego kuriera nie ma w
+    żadnej puli → fallback: najnowszy rekord, jego `best` (matched=False).
     """
     if not shadow_recs:
         return None
     before = [(ts, r) for ts, r in shadow_recs
-              if delivered_at is None or ts <= delivered_at]
-    chosen_ts, chosen = (before[-1] if before else shadow_recs[0])
-    return chosen_ts, chosen, len(shadow_recs)
+              if delivered_at is None or ts <= delivered_at] or shadow_recs
+
+    # 1. Predykcja dla realnego kuriera — od najnowszej decyzji.
+    if real_cid:
+        for ts, rec in reversed(before):
+            for cand in _candidates(rec):
+                if _cid(cand.get("courier_id")) == real_cid and _pred_for(cand, oid):
+                    return (ts, rec, cand, True)
+
+    # 2. Fallback: best najnowszej decyzji (realnego kuriera nie było w puli).
+    for ts, rec in reversed(before):
+        best = rec.get("best") or {}
+        if best and _pred_for(best, oid):
+            return (ts, rec, best, False)
+    return None
+
+
+def _bag_final(cand):
+    """Finalny rozmiar baga kandydata: r6_bag_size+1 (z fallbackiem)."""
+    b = cand.get("r6_bag_size")
+    if b is None:
+        b = cand.get("bag_size_before")
+    if b is None:
+        b = cand.get("r7_bag_size")
+    return (b + 1) if isinstance(b, (int, float)) else None
 
 
 def extract_row(sla_rec, shadow_index):
-    """Buduje jeden wiersz kalibracyjny ze zlecenia sla_log + kontekstu shadow."""
+    """Buduje jeden wiersz kalibracyjny: predykcja realnego kuriera vs rzeczywistość."""
     oid = str(sla_rec.get("order_id"))
+    real_cid = _cid(sla_rec.get("courier_id"))
     delivered_at = _parse_dt(sla_rec.get("delivered_at"))
     picked_up_at = _parse_dt(sla_rec.get("picked_up_at"))
     real_min = sla_rec.get("delivery_time_minutes")
 
-    hour_warsaw = picked_up_at.astimezone(WARSAW).hour if picked_up_at else None
+    hour = picked_up_at.astimezone(WARSAW).hour if picked_up_at else None
     weekday = picked_up_at.astimezone(WARSAW).weekday() if picked_up_at else None
 
     row = {
         "oid": oid,
         "logged_at": datetime.now(WARSAW).isoformat(),
         "real_delivery_min": real_min,
-        "predicted_delivery_min": None,
-        # error_min: real - predykcja czasu trwania. UWAGA: per_order_delivery_times
-        # kotwiczone na pickup_ready_at, real na picked_up_at — przy bagach ta
-        # różnica kotwic zniekształca metrykę. Do diagnostyki, NIE do kalibracji.
-        "error_min": None,
-        # eta_error_min: faktyczny delivered_at - predicted_delivered_at (oba
-        # absolutne timestampy → anchor-free). Dodatni = dostawa PÓŹNIEJ niż Ziomek
-        # obiecał = "za krótkie czasy". To jest metryka nagłówkowa kalibracji.
+        "real_courier_id": real_cid,
+        # matched_courier=True → predykcja dotyczy kuriera, który REALNIE dowiózł.
+        # To jedyna metryka, na której wolno kalibrować. False → fallback na best.
+        "matched_courier": False,
+        "predicted_for": None,            # 'real_courier' | 'best_fallback'
+        "best_courier_id": None,          # kogo Ziomek proponował (do analizy rozjazdu)
         "predicted_delivered_at": None,
+        "predicted_delivery_min": None,   # per_order_delivery_times[oid]
+        # eta_error_min: delivered_at − predicted_delivered_at dla REALNEGO kuriera.
+        # Dodatni = za późno = czas obiecany za krótki. METRYKA NAGŁÓWKOWA.
         "eta_error_min": None,
-        "matched": False,
-        "bag_size": None,             # finalny bag w którym jechało zlecenie
+        # prediction_age_min: picked_up_at − shadow_ts. Predykcja jest jednorazowa;
+        # to pole pokazuje jak bardzo była nieaktualna w chwili odbioru.
+        "prediction_age_min": None,
+        "bag_size": None,
         "is_bundle": None,
         "r6_max_bag_time_min": None,
         "total_duration_min": None,
-        "strategy": None,             # ortools / greedy / ortools_rejected_v3274
+        "strategy": None,
         "verdict": None,
-        "courier_id": sla_rec.get("courier_id"),
-        "courier_name": None,
         "restaurant": sla_rec.get("restaurant"),
         "delivery_address": sla_rec.get("delivery_address"),
         "picked_up_at": sla_rec.get("picked_up_at"),
         "delivered_at": sla_rec.get("delivered_at"),
-        "hour_warsaw": hour_warsaw,
-        "weekday": weekday,           # 0=pon ... 5=sob, 6=niedz
+        "hour_warsaw": hour,
+        "weekday": weekday,
         "is_weekend": (weekday >= 5) if weekday is not None else None,
-        "bucket": _bucket(hour_warsaw) if hour_warsaw is not None else None,
+        "bucket": _bucket(hour) if hour is not None else None,
         "sla_ok": sla_rec.get("sla_ok"),
         "was_czasowka": sla_rec.get("was_czasowka"),
         "n_shadow_records": 0,
         "shadow_ts": None,
     }
 
-    picked = pick_prediction(oid, delivered_at, shadow_index.get(oid))
+    recs = shadow_index.get(oid)
+    if recs:
+        row["n_shadow_records"] = len(recs)
+    picked = pick_prediction(oid, real_cid, delivered_at, recs or [])
     if picked is not None:
-        chosen_ts, rec, n_recs = picked
+        chosen_ts, rec, cand, matched = picked
+        plan = cand.get("plan") or {}
         best = rec.get("best") or {}
-        plan = best.get("plan") or {}
-        podt = plan.get("per_order_delivery_times") or {}
-        pred = podt.get(oid)
-        # finalny rozmiar baga: r6_bag_size = ile było PRZED dodaniem; +1 = z nowym.
-        # Fallback chain jak w fixie #474227 (pole bywa null przy early-return R6).
-        bag_before = best.get("r6_bag_size")
-        if bag_before is None:
-            bag_before = best.get("bag_size_before")
-        if bag_before is None:
-            bag_before = best.get("r7_bag_size")
-        bag_final = (bag_before + 1) if isinstance(bag_before, (int, float)) else None
 
-        row["matched"] = True
-        row["predicted_delivery_min"] = pred
-        if isinstance(pred, (int, float)) and isinstance(real_min, (int, float)):
-            row["error_min"] = round(real_min - pred, 2)
-        # Anchor-free: predicted_delivered_at vs faktyczny delivered_at.
+        row["matched_courier"] = matched
+        row["predicted_for"] = "real_courier" if matched else "best_fallback"
+        row["best_courier_id"] = _cid(best.get("courier_id"))
         pred_deliv_at = (plan.get("predicted_delivered_at") or {}).get(oid)
         row["predicted_delivered_at"] = pred_deliv_at
-        pred_deliv_dt = _parse_dt(pred_deliv_at)
-        if pred_deliv_dt is not None and delivered_at is not None:
-            row["eta_error_min"] = round(
-                (delivered_at - pred_deliv_dt).total_seconds() / 60.0, 2)
-        row["bag_size"] = bag_final
-        row["is_bundle"] = (bag_final >= 2) if bag_final is not None else None
-        row["r6_max_bag_time_min"] = best.get("r6_max_bag_time_min")
+        row["predicted_delivery_min"] = (plan.get("per_order_delivery_times") or {}).get(oid)
+        row["bag_size"] = _bag_final(cand)
+        row["is_bundle"] = (row["bag_size"] >= 2) if row["bag_size"] is not None else None
+        row["r6_max_bag_time_min"] = cand.get("r6_max_bag_time_min")
         row["total_duration_min"] = plan.get("total_duration_min")
         row["strategy"] = plan.get("strategy")
         row["verdict"] = rec.get("verdict")
-        row["courier_name"] = best.get("name")
-        row["n_shadow_records"] = n_recs
         row["shadow_ts"] = chosen_ts.isoformat()
+
+        pred_dt = _parse_dt(pred_deliv_at)
+        if pred_dt is not None and delivered_at is not None:
+            row["eta_error_min"] = round(
+                (delivered_at - pred_dt).total_seconds() / 60.0, 2)
+        if picked_up_at is not None:
+            row["prediction_age_min"] = round(
+                (picked_up_at - chosen_ts).total_seconds() / 60.0, 2)
 
     return row
 
 
 def append_atomic(rows):
-    """Dopisuje wiersze do logu kalibracyjnego (append + fsync, bez nadpisania)."""
     if not rows:
         return
     os.makedirs(os.path.dirname(OUT_LOG), exist_ok=True)
@@ -240,46 +264,43 @@ def append_atomic(rows):
 
 
 def summarize(rows):
-    """Zwięzłe podsumowanie na stdout — logger pełni też rolę mini-dashboardu.
-
-    Metryka nagłówkowa: eta_error_min (anchor-free). Dodatni = dostawa później
-    niż Ziomek obiecał = czasy za krótkie.
-    """
-    matched = [r for r in rows if r.get("eta_error_min") is not None]
-    print(f"  nowych wierszy: {len(rows)}  |  z metryką ETA (matched): {len(matched)}")
+    """Podsumowanie na stdout. Metryka liczy się TYLKO z matched_courier=True."""
+    czas = [r for r in rows if r.get("was_czasowka")]
+    matched = [r for r in rows if r.get("matched_courier")
+               and r.get("eta_error_min") is not None and not r.get("was_czasowka")]
+    fallback = [r for r in rows if not r.get("matched_courier")
+                and not r.get("was_czasowka")]
+    print(f"  nowych wierszy: {len(rows)}  (czasówki: {len(czas)})")
+    print(f"  kurier dopasowany (metryka wiarygodna): {len(matched)}  |  "
+          f"fallback na best (pomijane): {len(fallback)}")
     if not matched:
         return
 
-    def _stats(errs):
-        s = sorted(errs)
-        return sum(errs) / len(errs), s[len(s) // 2], s[int(len(s) * 0.9)]
+    def _stats(v):
+        s = sorted(v)
+        return sum(v) / len(v), s[len(s) // 2], s[int(len(s) * 0.9)]
 
     by_bucket = {}
     for r in matched:
         by_bucket.setdefault(r["bucket"], []).append(r["eta_error_min"])
-    print("  eta_error (delivered - obiecane) per bucket [dodatni = za krótko]:")
+    print("  eta_error (delivered - obiecane, kurier realny) [dodatni = za krótko]:")
     for b in ("peak", "shoulder", "offpeak"):
-        errs = by_bucket.get(b)
-        if not errs:
+        v = by_bucket.get(b)
+        if not v:
             continue
-        mean, med, p90 = _stats(errs)
-        print(f"    {b:9s} n={len(errs):4d}  mean={mean:+6.1f}  median={med:+6.1f}  p90={p90:+6.1f}")
-    solo = [r["eta_error_min"] for r in matched if r.get("bag_size") == 1]
-    bund = [r["eta_error_min"] for r in matched if r.get("bag_size") and r["bag_size"] >= 2]
-    if solo:
-        mean, med, _ = _stats(solo)
-        print(f"  solo:   n={len(solo):4d}  mean={mean:+6.1f}  median={med:+6.1f}")
-    if bund:
-        mean, med, _ = _stats(bund)
-        print(f"  bundle: n={len(bund):4d}  mean={mean:+6.1f}  median={med:+6.1f}")
+        mean, med, p90 = _stats(v)
+        print(f"    {b:9s} n={len(v):4d}  mean={mean:+6.1f}  median={med:+6.1f}  p90={p90:+6.1f}")
+    ages = [r["prediction_age_min"] for r in matched if r.get("prediction_age_min") is not None]
+    if ages:
+        _, amed, _ = _stats(ages)
+        print(f"  wiek predykcji (shadow_ts→pickup) mediana: {amed:.0f} min")
 
 
 def main():
-    print(f"[eta_calibration_logger] {datetime.now(WARSAW).isoformat()}")
+    print(f"[eta_calibration_logger v2] {datetime.now(WARSAW).isoformat()}")
     already = load_already_logged()
     shadow_index = build_shadow_index()
 
-    # Ostatni rekord per oid w sla_log (deduplikacja ewentualnych powtórek).
     sla_by_oid = {}
     for rec in _read_jsonl(SLA_LOG):
         oid = rec.get("order_id")
@@ -293,7 +314,7 @@ def main():
             continue
         try:
             new_rows.append(extract_row(sla_rec, shadow_index))
-        except Exception as exc:  # noqa: BLE001 — defensywnie, pojedynczy oid nie wywala całości
+        except Exception as exc:  # noqa: BLE001 — pojedynczy oid nie wywala całości
             print(f"  WARN oid={oid}: {type(exc).__name__}: {exc}", file=sys.stderr)
 
     append_atomic(new_rows)
