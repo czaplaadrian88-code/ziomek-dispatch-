@@ -88,6 +88,25 @@ def test_explicit_fields_take_precedence():
     assert result2["courier_id"] == 999
 
 
+def test_dwell_and_drive_speed_keys_propagated():
+    # 2026-05-17: tier-aware DWELL sprint emituje dwell_tier/dwell_pickup_min/
+    # dwell_dropoff_min (feasibility_v2:531-533) + drive_speed_mult (:538).
+    # Bez prefiksów dwell_/drive_speed_ w _AUTO_PROP_PREFIXES = niewidoczne
+    # w shadow_decisions → kalibracja per tier ślepa (Lekcja #109 recurring).
+    cand = _MockCand(metrics={
+        "dwell_tier": "gold",
+        "dwell_pickup_min": 2.5,
+        "dwell_dropoff_min": 2.5,
+        "drive_speed_mult": 1.0,
+    })
+    result = _serialize_candidate(cand)
+    for k in ("dwell_tier", "dwell_pickup_min", "dwell_dropoff_min", "drive_speed_mult"):
+        assert k in result, f"key NOT propagated: {k}"
+    assert result["dwell_tier"] == "gold"
+    assert result["dwell_pickup_min"] == 2.5
+    assert result["drive_speed_mult"] == 1.0
+
+
 def test_propagate_helper_handles_none_metrics():
     base = {"x": 1}
     _propagate_prefixed_metrics(base, None)
@@ -103,6 +122,8 @@ if __name__ == "__main__":
     print("test_unknown_prefix_not_propagated: PASS")
     test_explicit_fields_take_precedence()
     print("test_explicit_fields_take_precedence: PASS")
+    test_dwell_and_drive_speed_keys_propagated()
+    print("test_dwell_and_drive_speed_keys_propagated: PASS")
     test_propagate_helper_handles_none_metrics()
     print("test_propagate_helper_handles_none_metrics: PASS")
-    print("ALL 4/4 PASS")
+    print("ALL 5/5 PASS")
