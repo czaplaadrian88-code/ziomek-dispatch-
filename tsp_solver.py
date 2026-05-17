@@ -46,6 +46,7 @@ def solve_tsp_with_constraints(
     max_route_min: float = 90.0,
     time_limit_ms: int = 200,
     cost_matrix_min: Optional[List[List[float]]] = None,
+    delivery_soft_deadlines: Optional[List[Optional[Tuple[float, float]]]] = None,
 ) -> Optional[TspSolution]:
     """Solve PDP z OR-Tools.
 
@@ -103,6 +104,9 @@ def solve_tsp_with_constraints(
         len(cost_matrix_min) != num_stops
         or any(len(row) != num_stops for row in cost_matrix_min)
     ):
+        return None
+    # Sprint OBJ F1: delivery_soft_deadlines validation
+    if delivery_soft_deadlines is not None and len(delivery_soft_deadlines) != num_stops:
         return None
 
     # OR-Tools setup
@@ -200,6 +204,31 @@ def solve_tsp_with_constraints(
             scaled_close = min(scaled_close, capacity_max)
             index = manager.NodeToIndex(stop_idx)
             time_dimension.CumulVar(index).SetRange(scaled_open, scaled_close)
+
+    # Sprint OBJ F1 (2026-05-17): R6 soft upper bound na węzłach delivery.
+    # CumulVar(delivery) > deadline → kara coeff×overshoot w objective. Solver
+    # respektuje R6 (35 min) gdy wykonalne; gdy R6-doomed MINIMALIZUJE
+    # przekroczenie (dostarcza ASAP) zamiast parkować doomed dostawy na końcu.
+    # Picked-up jedzenie: deadline blisko/0 → front-load. Soft — feasibility R6
+    # hard-gate zostaje post-hoc; tu tylko prowadzenie sekwencji solvera.
+    if delivery_soft_deadlines is not None:
+        import math as _m_dl
+        capacity_max = int(max_route_min * TIME_SCALE)
+        for stop_idx in range(num_stops):
+            spec = delivery_soft_deadlines[stop_idx]
+            if spec is None:
+                continue
+            deadline_min, coeff = spec
+            if deadline_min is None or coeff is None or coeff <= 0:
+                continue
+            if _m_dl.isnan(deadline_min) or _m_dl.isinf(deadline_min):
+                continue
+            # bound w domenie [0, capacity]; deadline ujemny (jedzenie już
+            # przeterminowane) → 0 → każda minuta zwłoki karana → ASAP.
+            scaled_bound = max(0, min(int(deadline_min * TIME_SCALE), capacity_max))
+            idx = manager.NodeToIndex(stop_idx)
+            time_dimension.SetCumulVarSoftUpperBound(
+                idx, scaled_bound, int(round(coeff)))
 
     # Pickup-and-delivery constraints
     for pickup_idx, drop_idx in pickup_drop_pairs:

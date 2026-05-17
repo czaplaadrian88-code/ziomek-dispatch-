@@ -1058,6 +1058,40 @@ def _ortools_plan(
             f"bag_size={len(bag)} weight={_idle_w}"
         )
 
+    # Sprint OBJ F1 (2026-05-17): R6 soft upper bound per węzeł delivery
+    # (flag-gated, default OFF — deploy bez zmiany). Deadline CumulVar dostawy =
+    # anchor+sla; anchor = picked_up_at (odebrane — stare jedzenie, deadline
+    # blisko/0 → solver front-loaduje) lub pickup_ready_at (pending/new).
+    delivery_soft_deadlines = None
+    try:
+        if getattr(_common, "ENABLE_OBJ_R6_SOFT_DEADLINE", False) and now is not None:
+            _r6_coeff = float(getattr(_common, "OBJ_R6_DEADLINE_PENALTY_COEFF", 0.0))
+            _sla_f = float(sla_minutes)
+            _dsd: List[Optional[Tuple[float, float]]] = [None] * N
+            for _i in range(N):
+                _node = nodes[_i]
+                if _node.get("kind") != "delivery":
+                    continue
+                _ref = _node.get("ref")
+                if _ref is None:
+                    continue
+                _picked = (getattr(_ref, "status", "assigned") == "picked_up"
+                           or getattr(_ref, "picked_up_at", None) is not None)
+                _anchor = (getattr(_ref, "picked_up_at", None) if _picked
+                           else getattr(_ref, "pickup_ready_at", None))
+                if _anchor is None:
+                    continue
+                if _anchor.tzinfo is None:
+                    _anchor = _anchor.replace(tzinfo=timezone.utc)
+                _deadline = (_anchor.astimezone(timezone.utc) - now
+                             ).total_seconds() / 60.0 + _sla_f
+                _dsd[_i] = (_deadline, _r6_coeff)
+            delivery_soft_deadlines = _dsd
+    except Exception as _dsd_e:
+        _log.warning(
+            f"OBJ_F1_DEADLINE_BUILD_FAIL {type(_dsd_e).__name__}: {_dsd_e}")
+        delivery_soft_deadlines = None
+
     solution = tsp_solver.solve_tsp_with_constraints(
         num_stops=N,
         pickup_drop_pairs=pickup_drop_pairs,
@@ -1067,6 +1101,7 @@ def _ortools_plan(
         max_route_min=120.0,
         time_limit_ms=int(_ot_ms),
         cost_matrix_min=cost_matrix,
+        delivery_soft_deadlines=delivery_soft_deadlines,
     )
 
     # V3.27.1 BUG-2 fallback: gdy INFEASIBLE z time windows, retry bez constraints
@@ -1085,6 +1120,7 @@ def _ortools_plan(
             time_windows=None,
             max_route_min=120.0,
             time_limit_ms=int(_ot_ms),
+            delivery_soft_deadlines=delivery_soft_deadlines,
         )
 
     if solution is None or not solution.sequence:

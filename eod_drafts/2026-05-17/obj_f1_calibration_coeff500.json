@@ -1,0 +1,64 @@
+{
+  "generated_at": "2026-05-17T22:37:55.461047+00:00",
+  "n_cases": 3,
+  "cases": [
+    {
+      "case_id": "474266",
+      "label": "Borsucza-przed-Młynową (frozen window)",
+      "now_utc": "2026-05-17T15:47:53+00:00",
+      "strategy": "ortools",
+      "sequence": [
+        "474235",
+        "474239",
+        "474266"
+      ],
+      "sla_violations": 0,
+      "metrics": {
+        "route_span_min": 38.4,
+        "idle_total_min": 0.0,
+        "max_thermal_age_min": 26.39,
+        "r6_breach_max_min": 0.0,
+        "r6_breach_count": 0
+      }
+    },
+    {
+      "case_id": "474253",
+      "label": "kurier stoi 15 min pod Ranym Julkiem (idle)",
+      "now_utc": "2026-05-17T15:58:56+00:00",
+      "strategy": "ortools",
+      "sequence": [
+        "474251",
+        "474274",
+        "474253"
+      ],
+      "sla_violations": 1,
+      "metrics": {
+        "route_span_min": 60.7,
+        "idle_total_min": 24.45,
+        "max_thermal_age_min": 36.43,
+        "r6_breach_max_min": 1.43,
+        "r6_breach_count": 1
+      }
+    },
+    {
+      "case_id": "474297",
+      "label": "thermal 82 min + R6 łamane (Kumar's)",
+      "now_utc": "2026-05-17T16:38:46+00:00",
+      "strategy": "ortools",
+      "sequence": [
+        "474252",
+        "474261",
+        "474297",
+        "474291"
+      ],
+      "sla_violations": 2,
+      "metrics": {
+        "route_span_min": 60.5,
+        "idle_total_min": 0.0,
+        "max_thermal_age_min": 40.9,
+        "r6_breach_max_min": 5.9,
+        "r6_breach_count": 2
+      }
+    }
+  ]
+}
