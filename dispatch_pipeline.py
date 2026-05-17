@@ -308,7 +308,13 @@ INFORMED_POS_SOURCES = (
 def _is_blind_empty_cand(c) -> bool:
     """V3.16: kandydat z synthetic pos (no_gps/pre_shift/none) i pustym bagiem."""
     ps = c.metrics.get("pos_source") if hasattr(c, "metrics") and c.metrics else None
-    bsize = c.metrics.get("r6_bag_size", 0) if hasattr(c, "metrics") and c.metrics else 0
+    # Hardening 2026-05-17 (#474227): r6_bag_size jest null gdy feasibility_v2
+    # robi early-return przed blokiem R6 (bramka sla_violation:538). Dziś ścieżka
+    # bezpieczna (wołane tylko na feasible — ci doszli do R6), ale fallback chain
+    # do bag_size_before (:276 bezwarunkowe) / r7_bag_size (:304) usuwa latent
+    # fragility i wyrównuje ze spójnością reszty pliku (linie ~421/500/511/766).
+    m = c.metrics if (hasattr(c, "metrics") and c.metrics) else {}
+    bsize = m.get("r6_bag_size") or m.get("bag_size_before") or m.get("r7_bag_size") or 0
     return ps in BLIND_POS_SOURCES and (bsize or 0) == 0
 
 
