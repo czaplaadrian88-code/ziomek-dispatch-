@@ -532,10 +532,16 @@ def check_feasibility_v2(
     metrics["dwell_pickup_min"] = _dwell_pickup
     metrics["dwell_dropoff_min"] = _dwell_dropoff
 
+    # Sprint 3 (2026-05-17) tier-aware czas jazdy: mnożnik tempa kuriera na
+    # nogach trasy. Domyślnie 1.0 (inert) — kalibracja per tier po Sprincie 1.
+    _drive_speed_mult = C.speed_mult_for_tier(courier_tier)
+    metrics["drive_speed_mult"] = _drive_speed_mult
+
     plan = simulate_bag_route_v2(
         courier_pos, bag, new_order, now=now, sla_minutes=sla_minutes,
         base_sequence=base_sequence, earliest_departure=earliest_departure,
         dwell_pickup=_dwell_pickup, dwell_dropoff=_dwell_dropoff,
+        drive_speed_mult=_drive_speed_mult,
     )
 
     metrics["sequence"] = plan.sequence

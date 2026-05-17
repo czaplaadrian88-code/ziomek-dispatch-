@@ -216,6 +216,7 @@ def simulate_bag_route_v2(
     earliest_departure: Optional[datetime] = None,
     dwell_pickup: float = DWELL_PICKUP_MIN,
     dwell_dropoff: float = DWELL_DROPOFF_MIN,
+    drive_speed_mult: float = 1.0,
 ) -> RoutePlanV2:
     """Hybrid simulator. Never returns None (osrm_client has fallback).
 
@@ -367,9 +368,10 @@ def simulate_bag_route_v2(
     def leg_min(i: int, j: int) -> float:
         cell = matrix[i][j]
         if cell is None:
-            return 9999.0
+            return 9999.0  # sentinel fallback — NIE skalowany tempem
         dur_s = cell.get("duration_s") or 0
-        return dur_s / 60.0
+        # Sprint 3 (2026-05-17): tier-aware — mnożnik tempa kuriera na nodze jazdy.
+        return (dur_s / 60.0) * drive_speed_mult
 
     # V3.19d: sticky sequence path — bag order locked by saved plan.
     # Validation: set(base_sequence) == {bag order_ids}. Mismatch → fallback.

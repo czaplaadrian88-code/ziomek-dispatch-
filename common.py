@@ -1242,6 +1242,32 @@ def dwell_for_tier(tier):
     d = DWELL_BY_TIER.get(tier, DWELL_DEFAULT_MIN)
     return (d, d)
 
+
+# Tier-aware czas JAZDY (Sprint 3, 2026-05-17). Mnożnik tempa kuriera na nogach
+# trasy w route_simulator (leg_min). >1.0 = kurier wolniejszy. Domyślnie 1.0 =
+# inert (zero zmiany) — wartości kalibrowane z eta_calibration_log po Sprincie 1
+# (composition-clean rezyduum per tier). NIE używać surowej V326_SPEED_MULTIPLIER_MAP:
+# była kalibrowana na całkowitym czasie dostawy przy płaskim DWELL — po tier-aware
+# DWELL zastosowanie jej do jazdy = podwójne liczenie. Patrz
+# eod_drafts/2026-05-17/sprint3_tier_aware_drive_design.md.
+DRIVE_SPEED_MULT_DEFAULT = 1.0
+DRIVE_SPEED_MULT_BY_TIER = {
+    'gold': 1.0,
+    'std+': 1.0,
+    'std':  1.0,
+    'slow': 1.0,
+    'new':  1.0,
+}
+
+
+def speed_mult_for_tier(tier):
+    """Mnożnik tempa jazdy kuriera dla route_simulator leg_min.
+
+    >1.0 = wolniej (dłuższe nogi trasy). Nieznany/None tier →
+    DRIVE_SPEED_MULT_DEFAULT (1.0).
+    """
+    return DRIVE_SPEED_MULT_BY_TIER.get(tier, DRIVE_SPEED_MULT_DEFAULT)
+
 # V3.26 STEP 3 (R-09 WAVE-GEOMETRIC-VETO) — refinement V3.19h BUG-2.
 # Bug case (Adrian Q&A 22.04 Kacper Sa): wave_continuation +30 fire'uje gdy
 # gap OK (free_at 5min after pickup wave#2) ALE drops rozrzucone na 2 końce
