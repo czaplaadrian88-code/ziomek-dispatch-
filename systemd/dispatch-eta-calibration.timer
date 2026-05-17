@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek ETA Calibration Logger — co 30 minut
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+Persistent=false
+Unit=dispatch-eta-calibration.service
+
+[Install]
+WantedBy=timers.target

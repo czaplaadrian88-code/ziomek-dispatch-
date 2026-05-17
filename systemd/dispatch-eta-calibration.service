@@ -1,0 +1,14 @@
+[Unit]
+Description=Ziomek ETA Calibration Logger — join predykcja vs rzeczywistość -> eta_calibration_log
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts/dispatch_v2
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python /root/.openclaw/workspace/scripts/dispatch_v2/eta_calibration_logger.py
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/eta_calibration.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/eta_calibration.log
+
+[Install]
+WantedBy=multi-user.target
