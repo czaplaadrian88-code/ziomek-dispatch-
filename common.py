@@ -1524,11 +1524,13 @@ ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(
 # węzła delivery > pickup_anchor+35 → kara coeff×overshoot. Sprawia że solver
 # respektuje R6 (35 min) gdy się da, a gdy R6-doomed minimalizuje przekroczenie
 # (picked-up jedzenie front-loadowane). Default OFF (deploy bez zmiany → flip po
-# shadow-verify). Coeff kalibrowany harnessem (kryterium F0: 1 min breach ≫ jazda).
+# shadow-verify). Coeff SKALIBROWANY 2026-05-18 sweepem obj_harness (1090 bundli):
+# F1 nie jest tradeoffem — soft deadline tnie r6_breach/span/idle naraz; coeff
+# nieczuły powyżej ~50, 100 = środek plateau. Default zrównany do unit-override.
 ENABLE_OBJ_R6_SOFT_DEADLINE = _os.environ.get(
     "ENABLE_OBJ_R6_SOFT_DEADLINE", "0") == "1"
 OBJ_R6_DEADLINE_PENALTY_COEFF = float(_os.environ.get(
-    "OBJ_R6_DEADLINE_PENALTY_COEFF", "500"))
+    "OBJ_R6_DEADLINE_PENALTY_COEFF", "100"))
 V328_P3D1_IDLE_WEIGHT = float(_os.environ.get("V328_P3D1_IDLE_WEIGHT", "1.0"))  # 1.0 = wait min cost = drive min cost
 
 # ============================================================
