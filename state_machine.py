@@ -11,6 +11,7 @@ Kluczowe wlasciwosci:
 import fcntl
 import json
 import os
+import shutil
 import tempfile
 import time
 from contextlib import contextmanager
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from dispatch_v2.common import load_config, now_iso, setup_logger
+from dispatch_v2.common import flag, load_config, now_iso, setup_logger
 
 
 class CorruptedTimestampError(ValueError):
@@ -32,6 +33,22 @@ class CorruptedTimestampError(ValueError):
     Sygnał korupcji parsera (panel_client._czas_kuriera_to_datetime edge
     case, malformed input, albo downstream corruption). Lepiej fail-fast
     niż tichy persist bzdury do orders_state.
+    """
+    pass
+
+
+class StateReadError(RuntimeError):
+    """Faza 1 (incydent 2026-05-18 14:47 — orders_state.json clobber):
+    _read_state nie zwrócił definitywnego stanu (FileNotFoundError mimo że
+    plik powinien istnieć, albo JSONDecodeError).
+
+    RMW writer (upsert_order / set_status / touch_check_cursor / delete_order)
+    MUSI przerwać zapis przy tym wyjątku — zapis pustego/niekompletnego stanu
+    nadpisałby cały orders_state.json (total state loss). Fail-loud, nie
+    fail-catastrophic (Lekcja #32 silent except + #81 fail-loud sentinel).
+
+    Lepiej zgubić aplikację jednego eventu (event zostaje w events.db,
+    append-only → odtwarzalny) niż skasować stan całej floty.
     """
     pass
 
@@ -124,8 +141,34 @@ def _locked_write():
         lock_fd.close()
 
 
+def _backup_prev(path: Path) -> None:
+    """Faza 1 backup-on-write: snapshot obecnej wersji state file → .prev
+    (1-deep recovery point) PRZED nadpisaniem. Best-effort — porażka backupu
+    NIE blokuje głównego zapisu (loguje warning). Atomiczny: copy do temp +
+    os.replace na .prev."""
+    if not path.exists():
+        return
+    ptmp = None
+    try:
+        ptmp_fd, ptmp = tempfile.mkstemp(
+            dir=str(path.parent), prefix=".prevtmp_", suffix=".json"
+        )
+        os.close(ptmp_fd)
+        shutil.copy2(path, ptmp)
+        os.replace(ptmp, Path(str(path) + ".prev"))
+    except Exception as e:
+        _log.warning(f"_backup_prev: snapshot .prev nieudany dla {path}: "
+                     f"{type(e).__name__}: {e} (zapis główny kontynuuje)")
+        if ptmp and os.path.exists(ptmp):
+            try:
+                os.unlink(ptmp)
+            except OSError:
+                pass
+
+
 def _atomic_write(path: Path, data: dict):
-    """Zapis temp -> fsync -> rename (atomic na POSIX)."""
+    """Zapis temp -> fsync -> replace (atomic na POSIX).
+    Faza 1: przed nadpisaniem robi snapshot obecnej wersji → .prev."""
     tmp_fd, tmp_path = tempfile.mkstemp(
         dir=str(path.parent), prefix=".tmp_", suffix=".json"
     )
@@ -134,11 +177,71 @@ def _atomic_write(path: Path, data: dict):
             json.dump(data, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.rename(tmp_path, path)
+        _backup_prev(path)          # Faza 1: 1-deep recovery snapshot
+        os.replace(tmp_path, path)
     except Exception:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
         raise
+
+
+def _guarded_write(path: Path, new_state: dict, old_count: int, op: str):
+    """Faza 1 count-regression guard: zapis state z weryfikacją liczności.
+
+    upsert_order / set_status / touch_check_cursor NIGDY nie zmniejszają
+    liczby zleceń (tylko dodają/aktualizują). delete_order zmniejsza o
+    dokładnie 1. Każde inne zmniejszenie = oznaka clobberu (np. czytany stan
+    był niekompletny) → raise StateReadError, NIE zapisuj.
+
+    Defense-in-depth: łapie KAŻDY przyszły bug kurczący stan, nie tylko znany
+    wektor _read_state→{}. Kill-switch: ENABLE_STATE_WRITE_GUARD=false
+    (flags.json) — wyłącza guard, przywraca surowy _atomic_write."""
+    if not flag("ENABLE_STATE_WRITE_GUARD", True):
+        _atomic_write(path, new_state)
+        return
+    new_count = len(new_state)
+    if op == "delete":
+        ok = new_count >= old_count - 1
+    else:  # upsert / set_status / touch — add/update only, count nie maleje
+        ok = new_count >= old_count
+    if not ok:
+        detail = (f"_guarded_write: regresja liczności state {old_count}->{new_count} "
+                  f"przy op={op!r} — zapis ZABLOKOWANY (możliwy clobber orders_state)")
+        _alert_state_read_failure(detail)
+        raise StateReadError(detail)
+    _atomic_write(path, new_state)
+
+
+# Faza 1: throttled alert gdy state RMW odmawia zapisu (clobber prevention).
+_STATE_READ_ALERT_COOLDOWN_S = 300.0
+_last_state_read_alert_ts = 0.0
+
+
+def _alert_state_read_failure(detail: str) -> None:
+    """Faza 1: loud, throttled (5 min) admin alert gdy RMW writer przerywa
+    zapis (orders_state nieczytelny ALBO regresja liczności).
+
+    Lazy import telegram_utils — state_machine to moduł niskopoziomowy, nie
+    ciągnie zależności na sztywno. send_admin_alert sam refuse'uje pod pytest
+    (Lekcja #75). Best-effort: nigdy nie raise (alert nie może zablokować
+    głównej ścieżki ani zamaskować pierwotnego StateReadError)."""
+    global _last_state_read_alert_ts
+    now = time.monotonic()
+    if now - _last_state_read_alert_ts < _STATE_READ_ALERT_COOLDOWN_S:
+        return
+    _last_state_read_alert_ts = now
+    _log.error(f"STATE WRITE GUARD: {detail}")
+    try:
+        from dispatch_v2.telegram_utils import send_admin_alert
+        send_admin_alert(
+            f"🛑 STATE WRITE GUARD — RMW writer przerwany\n\n{detail}\n\n"
+            f"Stan NIE został nadpisany (ochrona przed clobberem orders_state). "
+            f"Eventy zostają w events.db (append-only → odtwarzalne). "
+            f"Sprawdź dispatch_state/orders_state.json i logi state_machine."
+        )
+    except Exception as e:
+        _log.warning(f"_alert_state_read_failure: alert nieudany: "
+                     f"{type(e).__name__}: {e}")
 
 
 def _read_state() -> dict:
@@ -171,6 +274,51 @@ def _read_state() -> dict:
     return {}
 
 
+def _is_bootstrap() -> bool:
+    """Faza 1: True TYLKO gdy orders_state.json nigdy nie istniał (świeża
+    instalacja). Obecność backupu .prev oznacza, że plik istniał wcześniej —
+    więc jego brak teraz to anomalia (skasowany / zniknął), NIE bootstrap.
+
+    Dzięki temu _read_state_strict odróżnia legalny pierwszy zapis od
+    sytuacji „plik zniknął" (incydent 2026-05-18) i nie pozwala RMW writerowi
+    odtworzyć stanu z jednym zleceniem zamiast całej floty."""
+    return not Path(str(_state_path()) + ".prev").exists()
+
+
+def _read_state_strict() -> dict:
+    """Faza 1: zwraca state ALBO raise StateReadError. Wyłącznie dla RMW
+    writerów (upsert/set_status/touch/delete).
+
+    W przeciwieństwie do _read_state() NIGDY nie zwraca {} przez fallback —
+    cichy {} z RMW nadpisałby cały orders_state.json. Pusty wynik dozwolony
+    tylko przy świadomym bootstrapie (plik nigdy nie istniał)."""
+    path = Path(_state_path())
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            with open(path) as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                try:
+                    return json.load(f)
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except FileNotFoundError as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(0.05 * (2 ** attempt))  # 50ms, 100ms
+        except json.JSONDecodeError as e:
+            last_err = e
+            break  # malformed — retry nie pomoże, plik istnieje ale zepsuty
+    if isinstance(last_err, FileNotFoundError) and _is_bootstrap():
+        _log.warning(f"_read_state_strict: {path} nie istnieje — bootstrap (świeża instalacja)")
+        return {}
+    detail = (f"_read_state_strict: {path} nieczytelny po retry "
+              f"({type(last_err).__name__}: {last_err}) — RMW przerwany, "
+              f"NIE nadpisuję orders_state (ochrona przed clobberem)")
+    _alert_state_read_failure(detail)
+    raise StateReadError(detail)
+
+
 def get_all() -> dict:
     """Zwraca caly state. Uzywaj ostroznie - kopiuj jesli modyfikujesz."""
     return _read_state()
@@ -200,7 +348,8 @@ def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict
     """Dodaje lub aktualizuje zlecenie. Zapisuje history entry.
     Zwraca zaktualizowany rekord."""
     with _locked_write() as path:
-        state = _read_state()
+        state = _read_state_strict()        # Faza 1: raise StateReadError zamiast cichego {}
+        old_count = len(state)
         existing = state.get(order_id, {})
         merged = {**existing, **data, "order_id": order_id}
 
@@ -212,7 +361,7 @@ def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict
         merged["updated_at"] = now_iso()
 
         state[order_id] = merged
-        _atomic_write(path, state)
+        _guarded_write(path, state, old_count, op="upsert")
         _log.info(f"upsert {order_id} status={merged.get('status')} event={event}")
         return merged
 
@@ -481,11 +630,12 @@ def touch_check_cursor(order_id: str) -> bool:
     Uzywane przez panel_watcher picked_up reconcile do rotacji candidate'ow.
     Zwraca True jesli order istnial, False inaczej."""
     with _locked_write():
-        state = _read_state()
+        state = _read_state_strict()        # Faza 1: raise StateReadError zamiast cichego {}
+        old_count = len(state)
         if order_id not in state:
             return False
         state[order_id]["assigned_check_ts"] = now_iso()
-        _atomic_write(Path(_state_path()), state)
+        _guarded_write(Path(_state_path()), state, old_count, op="touch")
         return True
 
 
@@ -498,7 +648,8 @@ def delete_order(order_id: str) -> bool:
     """
     TERMINAL_STATUSES = ("delivered", "cancelled", "returned_to_pool")
     with _locked_write() as path:
-        state = _read_state()
+        state = _read_state_strict()        # Faza 1: raise StateReadError zamiast cichego {}
+        old_count = len(state)
         if order_id in state:
             current_status = state[order_id].get("status")
             if current_status not in TERMINAL_STATUSES:
@@ -507,7 +658,7 @@ def delete_order(order_id: str) -> bool:
                     f"(must be in {TERMINAL_STATUSES}). Emit terminal event first to avoid events.db phantom."
                 )
             del state[order_id]
-            _atomic_write(path, state)
+            _guarded_write(path, state, old_count, op="delete")
             _log.info(f"delete {order_id} (status={current_status})")
             return True
         return False
