@@ -122,7 +122,30 @@ _log = setup_logger("state_machine", "/root/.openclaw/workspace/scripts/logs/dis
 
 
 def _state_path() -> str:
-    return load_config()["paths"]["orders_state"]
+    """Ścieżka orders_state.json.
+
+    Faza 2b (2026-05-18, diagnoza D2): honoruje override env DISPATCH_STATE_DIR.
+    Testy `test_v3275_*` ustawiały tę zmienną wierząc, że izoluje stan — ale
+    _state_path jej NIGDY nie czytał → test robił `os.remove` na PRODUKCYJNYM
+    `orders_state.json` (incydent 2026-05-18: kasacja stanu floty + residuum
+    fixture'ów typu order 469087). Override = realna izolacja per-test."""
+    override_dir = os.environ.get("DISPATCH_STATE_DIR")
+    if override_dir:
+        return os.path.join(override_dir, "orders_state.json")
+    path = load_config()["paths"]["orders_state"]
+    # Faza 2b guard (klasa Lekcji #75 — leak izolacji testu): pod pytest ŻADEN
+    # test nie może operować na produkcyjnym orders_state.json. Brak
+    # DISPATCH_STATE_DIR + brak monkeypatcha _state_path = test nieizolowany
+    # → raise zamiast pozwolić skasować/zatruć stan całej floty. Świadomy
+    # wyjątek (np. read-only smoke na realnym pliku): ALLOW_PROD_STATE_IN_TEST=1.
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("ALLOW_PROD_STATE_IN_TEST"):
+        raise RuntimeError(
+            f"_state_path: pod pytest zwrócono ścieżkę PRODUKCYJNĄ ({path}) — "
+            f"test nieizolowany, ryzyko skasowania/zatrucia stanu floty. Napraw: "
+            f"env DISPATCH_STATE_DIR=<tmpdir> albo monkeypatch "
+            f"state_machine._state_path. Świadomy override: ALLOW_PROD_STATE_IN_TEST=1."
+        )
+    return path
 
 
 @contextmanager

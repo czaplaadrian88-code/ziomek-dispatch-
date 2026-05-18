@@ -30,9 +30,13 @@ from dispatch_v2 import state_machine  # noqa: E402
 
 
 def _reset_state():
+    """Faza 2b (2026-05-18): zapis pustego `{}` zamiast os.remove. Faza 1
+    `_read_state_strict` traktuje brak pliku przy istniejącym `.prev` jako
+    błąd — pusty walidny stan = legalny reset."""
     p = state_machine._state_path()
-    if os.path.exists(p):
-        os.remove(p)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as f:
+        f.write("{}")
 
 
 def _capture_warnings():
