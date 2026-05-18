@@ -108,12 +108,16 @@ def _addr_coord(addr: str) -> Optional[Tuple[float, float]]:
 
 def _courier_pos(spec: str, resolved_drops: dict) -> Optional[Tuple[float, float]]:
     """Pozycja kuriera wg specyfikacji Case.
-      gps:CID  → najbliższy GPS z courier_api.db do decyzji (resolved_drops['now_epoch'])
-      drop:OID → delivery_coords zlecenia OID (pos_source=last_picked_up_delivery)
-      lat,lon  → wprost
+      gps:CID    → najbliższy GPS z courier_api.db do decyzji (resolved_drops['now_epoch'])
+      drop:OID   → delivery_coords zlecenia OID (pos_source=last_picked_up_delivery)
+      pickup:OID → pickup_coords (restauracja) zlecenia OID — F4 Krok 1 proxy
+                   (pos_source=last_picked_up_pickup)
+      lat,lon    → wprost
     """
     if spec.startswith("drop:"):
         return resolved_drops.get(spec[5:])
+    if spec.startswith("pickup:"):
+        return resolved_drops.get("pickup:" + spec[7:])
     if spec.startswith("gps:"):
         cid = spec[4:]
         now_epoch = resolved_drops["__now_epoch__"]
@@ -156,6 +160,7 @@ def run_case(case: Case) -> dict:
             if dc is None:
                 coord_miss.append(f"addr:{o.delivery_addr}")
             drops[o.oid] = dc
+            drops["pickup:" + o.oid] = rc  # F4 Krok 1 — courier_pos pickup:OID
             sim = OrderSim(
                 order_id=o.oid,
                 pickup_coords=rc or (0.0, 0.0),
@@ -235,6 +240,27 @@ FAITHFUL_CASES: List[Case] = [
         now_utc="2026-05-17T15:47:53+00:00", tier="std", courier_pos="drop:474235",
         new_oid="474266",
         notes="diagnoza /tmp/diagnoza_474266_or_tools_2026-05-17.md",
+        orders=[
+            Order("474235", "_500 stopni", "Borsucza 10/33",
+                  "2026-05-17T17:41:00+02:00", True,
+                  picked_up_at_utc="2026-05-17T15:41:00+00:00"),
+            Order("474239", "Restauracja Sioux", "Młynowa 70/11",
+                  "2026-05-17T17:49:00+02:00", False,
+                  ready_utc="2026-05-17T15:49:00+00:00"),
+            Order("474266", "Pani Pierożek", "Aleja Józefa Piłsudskiego",
+                  None, False, ready_utc="2026-05-17T16:17:24+00:00"),
+        ],
+    ),
+    Case(
+        # F4 Krok 1: ten sam scenariusz co 474266, ale courier_pos = pickup
+        # ostatniego picked_up (474235) zamiast jego dropu. Punkt realnie
+        # odwiedzony (restauracja _500 stopni) → jazda do kolejnego pickupu
+        # krótsza → frozen window 474266 FEASIBLE. Porównaj z baseline 474266
+        # (drop:474235 INFEASIBLE). Design obj_f4_courier_position_design.md.
+        case_id="474266-f4", label="474266 z F4 proxy (pickup:474235)",
+        now_utc="2026-05-17T15:47:53+00:00", tier="std", courier_pos="pickup:474235",
+        new_oid="474266",
+        notes="F4 Krok 1 Opcja A — courier_pos flip drop→pickup",
         orders=[
             Order("474235", "_500 stopni", "Borsucza 10/33",
                   "2026-05-17T17:41:00+02:00", True,

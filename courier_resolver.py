@@ -15,7 +15,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from dispatch_v2.common import setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag
+from dispatch_v2.common import (
+    setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag,
+    ENABLE_F4_COURIER_POS_PICKUP_PROXY,
+)
 from dispatch_v2 import state_machine
 
 _log = setup_logger("courier_resolver", "/root/.openclaw/workspace/scripts/logs/courier_resolver.log")
@@ -66,6 +69,7 @@ PRE_SHIFT_WINDOW_MIN = 50
 # kurierów występujących pod kilkoma courier_id (legacy + panel).
 POS_SOURCE_PRIORITY = {
     "gps": 0,
+    "last_picked_up_pickup": 1,    # F4 Krok 1 — punkt realnie odwiedzony
     "last_picked_up_delivery": 1,
     "last_assigned_pickup": 2,
     "last_delivered": 3,
@@ -394,10 +398,16 @@ def _reconstruct_bag_from_panel_packs(
     # Mirror kroku 2 build_fleet_snapshot: picked_up>assigned, najnowszy wygrywa.
     for order in sorted(rebuilt, key=_bag_sort_key, reverse=True):
         st = order.get("status")
-        if st == "picked_up" and order.get("delivery_coords"):
-            cs.pos = tuple(order["delivery_coords"])
-            cs.pos_source = "last_picked_up_delivery"
-            break
+        if st == "picked_up":
+            # F4 Krok 1: pickup_coords (punkt realny) > delivery_coords (proxy).
+            if ENABLE_F4_COURIER_POS_PICKUP_PROXY and order.get("pickup_coords"):
+                cs.pos = tuple(order["pickup_coords"])
+                cs.pos_source = "last_picked_up_pickup"
+                break
+            if order.get("delivery_coords"):
+                cs.pos = tuple(order["delivery_coords"])
+                cs.pos_source = "last_picked_up_delivery"
+                break
         if st == "assigned" and order.get("pickup_coords"):
             cs.pos = tuple(order["pickup_coords"])
             cs.pos_source = "last_assigned_pickup"
@@ -523,7 +533,9 @@ def build_fleet_snapshot(
                     continue
 
         # 2. AKTYWNY BAG priorytet (picked_up > assigned, najnowszy wygrywa)
-        #    picked_up -> delivery_coords (kurier wiezie do klienta)
+        #    picked_up -> F4 Krok 1: pickup_coords (kurier BYL przy restauracji
+        #      o picked_up_at — punkt realny); fail-soft delivery_coords gdy brak.
+        #      Flaga OFF -> delivery_coords (zachowanie sprzed F4).
         #    assigned -> pickup_coords (kurier jedzie odebrac)
         #    Iteracja malejaco: jesli najnowszy broken -> probuj kolejny
         active_bag_orders = [o for o in orders if o.get("status") in ("picked_up", "assigned")]
@@ -532,6 +544,13 @@ def build_fleet_snapshot(
             resolved = False
             for order in sorted_bag:
                 if order.get("status") == "picked_up":
+                    # F4 Krok 1 (Opcja A): proxy = pickup_coords zamiast
+                    # delivery_coords — eliminuje bias frozen-window (474266).
+                    if ENABLE_F4_COURIER_POS_PICKUP_PROXY and order.get("pickup_coords"):
+                        cs.pos = tuple(order["pickup_coords"])
+                        cs.pos_source = "last_picked_up_pickup"
+                        resolved = True
+                        break
                     if order.get("delivery_coords"):
                         cs.pos = tuple(order["delivery_coords"])
                         cs.pos_source = "last_picked_up_delivery"

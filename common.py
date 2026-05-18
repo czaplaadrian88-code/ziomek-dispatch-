@@ -1545,6 +1545,21 @@ OBJ_F3_R6_BREACH_KOORD_MIN = float(_os.environ.get(
 ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(
     "ENABLE_OBJ_REPLAY_CAPTURE", "0") == "1"
 
+# Sprint OBJ F4 Krok 1 (2026-05-18, Opcja A): proxy pozycji kuriera no-gps.
+# Krok 2 build_fleet_snapshot dla ostatniego picked_up ordera ustawiał
+# cs.pos = delivery_coords — punkt gdzie kurier DOPIERO DOJEDZIE — więc model
+# stawiał go w nieodwiedzonym jeszcze dropie. Realnie kurier jest W TRASIE,
+# często bliżej kolejnego pickupu. Skażona macierz odległości → frozen window
+# INFEASIBLE → kaskada retry/V3274-reject/greedy (diagnoza 474266, ~7,5k
+# INFEASIBLE/dzień). Flaga ON: picked_up → pickup_coords (restauracja, gdzie
+# kurier BYŁ o picked_up_at — punkt rzeczywisty, nie ekstrapolacja w przyszłość).
+# Fail-soft: gdy brak pickup_coords → delivery_coords (zachowanie sprzed F4).
+# Default OFF — env ON po replay-pass. Krok 2 (Opcja C, interpolacja
+# pickup→delivery) osobno po shadow-verify. Design:
+# eod_drafts/2026-05-18/obj_f4_courier_position_design.md
+ENABLE_F4_COURIER_POS_PICKUP_PROXY = _os.environ.get(
+    "ENABLE_F4_COURIER_POS_PICKUP_PROXY", "0") == "1"
+
 # Sprint OBJ F1 (2026-05-17): R6 soft upper bound w solverze TSP — CumulVar
 # węzła delivery > pickup_anchor+35 → kara coeff×overshoot. Sprawia że solver
 # respektuje R6 (35 min) gdy się da, a gdy R6-doomed minimalizuje przekroczenie
