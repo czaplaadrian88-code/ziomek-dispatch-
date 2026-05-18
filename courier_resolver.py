@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from dispatch_v2.common import setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC
+from dispatch_v2.common import setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag
 from dispatch_v2 import state_machine
 
 _log = setup_logger("courier_resolver", "/root/.openclaw/workspace/scripts/logs/courier_resolver.log")
@@ -106,6 +106,9 @@ class CourierState:
     # auto na pierwszym COURIER_ASSIGNED dnia LUB manual TG `<nick> start/stop`.
     is_coordinator: bool = False
     coordinator_active: bool = False  # True = jeździ aktywnie dziś
+    # Faza 4 (D5, 2026-05-18): True gdy cs.bag został odbudowany z panel_packs
+    # (orders_state miał bag pusty mimo że panel widzi kuriera z bagiem).
+    bag_from_panel_packs: bool = False
 
     def to_dict(self):
         return {
@@ -117,6 +120,7 @@ class CourierState:
             "bag_oids": [o.get("order_id") or o.get("id") for o in self.bag],
             "name": self.name,
             "tier_bag": self.tier_bag,
+            "bag_from_panel_packs": self.bag_from_panel_packs,
         }
 
 
@@ -349,6 +353,60 @@ def _bag_not_stale(order: Dict, now_utc: datetime) -> bool:
         return age_min < _threshold
     except Exception:
         return True  # parse fail = defensywnie zachowaj
+
+
+def _reconstruct_bag_from_panel_packs(
+    cs: "CourierState",
+    candidate_oids: List,
+    state: Dict[str, Dict],
+    now_utc: datetime,
+) -> None:
+    """Faza 4 (D5, 2026-05-18): odbuduj cs.bag z panel_packs ground-truth.
+
+    Gdy panel_packs widzi kuriera z bagiem, a build_fleet_snapshot zbudował
+    cs.bag pusty (grupowanie po courier_id gubi zlecenia z cid=None — lag
+    V3.15 reconcile). Zlecenie JEST w orders_state z pełnymi danymi (coords,
+    status) — tylko nie podlinkowane do kuriera. Lookup po order_id w już
+    wczytanym `state` → zero I/O.
+
+    Mutuje cs in-place: ustawia cs.bag, cs.bag_from_panel_packs i re-resolve
+    cs.pos/cs.pos_source (kurier był no_gps). No-op gdy żadnego oid nie da się
+    zrekonstruować (brak w state / status terminalny / stale) — zostaje
+    panel_packs_oids_signal + kara score jako fallback."""
+    rebuilt: List[Dict] = []
+    for oid in candidate_oids:
+        oid_s = str(oid)
+        o = state.get(oid_s)
+        if not isinstance(o, dict):
+            continue  # brak rekordu — bez coords nie da się odbudować
+        if o.get("status") not in ("assigned", "picked_up"):
+            continue  # terminalny / planned — nie należy do aktywnego bagu
+        if not _bag_not_stale(o, now_utc):
+            continue  # TTL — prawdopodobnie już delivered, reconcile lag
+        # Entry spójne wewnętrznie: courier_id = ten kurier (state ma None/stary).
+        rebuilt.append(dict(o, order_id=oid_s, courier_id=cs.courier_id))
+    if not rebuilt:
+        return
+
+    cs.bag = rebuilt
+    cs.bag_from_panel_packs = True
+    # Re-resolve pozycję z odbudowanego bagu (cs miał pos_source=no_gps).
+    # Mirror kroku 2 build_fleet_snapshot: picked_up>assigned, najnowszy wygrywa.
+    for order in sorted(rebuilt, key=_bag_sort_key, reverse=True):
+        st = order.get("status")
+        if st == "picked_up" and order.get("delivery_coords"):
+            cs.pos = tuple(order["delivery_coords"])
+            cs.pos_source = "last_picked_up_delivery"
+            break
+        if st == "assigned" and order.get("pickup_coords"):
+            cs.pos = tuple(order["pickup_coords"])
+            cs.pos_source = "last_assigned_pickup"
+            break
+    _log.info(
+        f"Faza4 panel_packs bag reconstructed cid={cs.courier_id} "
+        f"nick={cs.name!r} oids={[o['order_id'] for o in rebuilt]} "
+        f"pos_source={cs.pos_source}"
+    )
 
 
 def build_fleet_snapshot(
@@ -614,6 +672,13 @@ def build_fleet_snapshot(
             _candidates = _packs_normalized.get(_nick_norm) or []
             if _candidates:
                 cs.panel_packs_oids_signal = [str(x) for x in _candidates]
+                # Faza 4 (D5): odbuduj cs.bag z panel_packs ground-truth. Po
+                # udanej rekonstrukcji cs.bag niepusty → bag_size/pos/trasa
+                # poprawne, a kara bonus_state_panel_mismatch sama się wyłącza
+                # (warunek _state_bag_size==0 przestaje być prawdą).
+                if flag("ENABLE_PANEL_PACKS_BAG_RECONSTRUCTION", True):
+                    _reconstruct_bag_from_panel_packs(
+                        cs, _candidates, state, now_utc)
     else:
         # Cache stale lub missing — wszystkie kuriery dostają age info dla C gate
         for cs in fleet.values():
