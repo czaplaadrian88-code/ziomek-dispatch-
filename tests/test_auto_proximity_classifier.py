@@ -245,14 +245,17 @@ def test_edge_czasowka_returns_ack():
     assert "czasowka_60min" in reason, f"unexpected reason: {reason}"
 
 
-def test_edge_best_effort_returns_ack():
-    """best.best_effort=True -> ACK 'best_effort_or_sla_violations'."""
+def test_edge_best_effort_returns_alert():
+    """best.best_effort=True -> ALERT 'best_effort_no_feasible'.
+
+    Kalibracja 2026-05-18: best_effort (0 feasible — Ziomek realnie zgaduje)
+    przeniesiony z ACK do ALERT — to JEST przypadek 'człowiek musi zdecydować'."""
     best = _make_candidate(courier_id="c1", score=80.0, best_effort=True)
     result = _make_result(best=best)
     flags = {"AUTO_PROXIMITY_ENABLED": True}
     route, reason = classify_auto_route(result, flags=flags)
-    assert route == ROUTE_ACK, f"expected ACK, got {route}"
-    assert "best_effort_or_sla_violations" in reason, f"unexpected reason: {reason}"
+    assert route == ROUTE_ALERT, f"expected ALERT, got {route}"
+    assert "best_effort_no_feasible" in reason, f"unexpected reason: {reason}"
 
 
 def test_edge_solo_fallback_returns_ack():
@@ -265,10 +268,14 @@ def test_edge_solo_fallback_returns_ack():
     assert "solo_fallback" in reason, f"unexpected reason: {reason}"
 
 
-def test_alert_mass_fail():
-    """pool_total=10, pool_feasible=2 -> ALERT 'mass_fail'."""
+def test_mass_fail_scenario_no_longer_alert():
+    """Kalibracja 2026-05-18: pula gdzie >50% kurierów to NO już NIE jest ALERT.
+
+    ">=50% NO" to norma dispatchu (większość floty po drugiej stronie miasta /
+    z pełną torbą dla danego zlecenia), nie anomalia — `mass_fail` usunięty
+    z routingu (odpalał 85% propozycji jako fałszywy ALERT)."""
     best = _make_candidate(courier_id="c1", score=80.0, feasibility_verdict="MAYBE")
-    # Build 10 candidates, only 2 MAYBE
+    # 9 kandydatów, tylko 1 MAYBE — historycznie odpalało mass_fail ALERT
     candidates = [best]
     for i in range(8):
         candidates.append(
@@ -282,8 +289,8 @@ def test_alert_mass_fail():
     )
     flags = {"AUTO_PROXIMITY_ENABLED": True}
     route, reason = classify_auto_route(result, flags=flags)
-    assert route == ROUTE_ALERT, f"expected ALERT, got {route}"
-    assert "mass_fail" in reason, f"unexpected reason: {reason}"
+    assert route != ROUTE_ALERT, f"mass_fail nie powinien już dawać ALERT, got {route}"
+    assert route == ROUTE_ACK, f"expected ACK, got {route} (reason={reason})"
 
 
 def test_alert_parser_degraded():
@@ -401,9 +408,9 @@ if __name__ == "__main__":
         test_c3_tier_unknown_returns_ack,
         test_c6_score_below_floor_returns_ack,
         test_edge_czasowka_returns_ack,
-        test_edge_best_effort_returns_ack,
+        test_edge_best_effort_returns_alert,
         test_edge_solo_fallback_returns_ack,
-        test_alert_mass_fail,
+        test_mass_fail_scenario_no_longer_alert,
         test_alert_parser_degraded,
         test_alert_frozen_window_violation,
         test_t2_relaxed_tier_std_passes,

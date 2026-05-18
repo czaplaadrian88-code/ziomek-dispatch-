@@ -749,12 +749,14 @@ def _route_section(decision: dict, best: dict) -> str:
 # =============================================================================
 
 def _conf_line_v2(decision: dict) -> str:
-    """Confidence bucket line z decision.auto_route + best_effort banner.
+    """Linia routingu z decision.auto_route + best_effort banner.
 
-    Mapping (Adrian spec lock 2026-05-07):
-        AUTO  → '🟢 Top 30% pewności — w trybie auto poszłoby samo.'
-        ACK   → '🟡 Środek 40% — potrzebny szybki check.'
-        ALERT → '🔴 Bottom 30% — wymaga decyzji.'
+    Mapping (rekalibracja 2026-05-18 — porzucone fikcyjne percentyle
+    "Top 30%/Środek 40%/Bottom 30%" ze spec 2026-05-07; opisują CO znaczy
+    dany route, nie zmyślony rozkład):
+        AUTO  → '🟢 AUTO — pewny wybór, w trybie auto poszłoby samo.'
+        ACK   → '🟡 ACK — sensowny wybór, rzuć okiem.'
+        ALERT → '🔴 ALERT — wymaga Twojej decyzji.'
         None/legacy → ACK (default fallback dla legacy decisions bez Faza 7 field)
 
     best_effort=True → prepend '⚠️ Best effort — brak feasible kandydata.\n'.
@@ -764,11 +766,11 @@ def _conf_line_v2(decision: dict) -> str:
     best_effort = best.get("best_effort", False)
 
     if auto_route == "AUTO":
-        line = "🟢 Top 30% pewności — w trybie auto poszłoby samo."
+        line = "🟢 AUTO — pewny wybór, w trybie auto poszłoby samo."
     elif auto_route == "ALERT":
-        line = "🔴 Bottom 30% — wymaga decyzji."
+        line = "🔴 ALERT — wymaga Twojej decyzji."
     else:
-        line = "🟡 Środek 40% — potrzebny szybki check."
+        line = "🟡 ACK — sensowny wybór, rzuć okiem."
 
     if best_effort:
         return "⚠️ Best effort — brak feasible kandydata.\n" + line

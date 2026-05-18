@@ -127,7 +127,13 @@ def _has_frozen_window_violation(best_metrics: Dict[str, Any]) -> bool:
 
 
 def _mass_fail(pool_feasible: int, pool_total: int) -> bool:
-    """Mass fail = >50% candidates rejected AND pool meaningful (>=4)."""
+    """Mass fail = >50% candidates rejected AND pool meaningful (>=4).
+
+    DEPRECATED 2026-05-18 (kalibracja auto_route): USUNIĘTY z `_detect_edge_routing`
+    — odpalał 85% propozycji jako fałszywy ALERT. ">=50% NO" to norma dispatchu,
+    nie anomalia. Funkcja zachowana (pure, bez side-effectów) — może wrócić jako
+    sygnał telemetryczny, NIE jako trigger routingu.
+    """
     if pool_total < MASS_FAIL_MIN_POOL:
         return False
     no_count = pool_total - pool_feasible
@@ -227,22 +233,29 @@ def _resolve_thresholds(flags: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
 def _detect_edge_routing(ctx: ClassifierContext) -> Optional[Tuple[str, str]]:
     """Returns (route, reason) if edge case detected, else None.
 
-    Order matters: ALERT > ACK. ALERT routes are reserved for system anomalies.
-    ACK routes are operational edge cases requiring human judgment.
+    Order matters: ALERT > ACK. ALERT = realny problem wymagający decyzji
+    człowieka. ACK = wybór sensowny, wymaga tylko rzutu okiem.
+
+    Kalibracja 2026-05-18 (rolling replay, 397 zleceń niedz. 17.05):
+      • `mass_fail` USUNIĘTY z routingu — odpalał 85% propozycji jako ALERT
+        (324/324 ALERT = mass_fail). ">=50% kurierów NO" to NORMA dispatchu
+        (większość floty jest po drugiej stronie miasta / z pełną torbą dla
+        danego zlecenia), nie anomalia systemu.
+      • `best_effort`/SLA-violation przeniesione z ACK do ALERT — to JEST
+        przypadek "0 feasible, Ziomek realnie zgaduje → człowiek decyduje".
+      Efekt: ALERT 85% → ~16% (tylko realne problemy).
     """
-    # ALERT path — system anomalies / hard signals to escalate
+    # ALERT path — realne problemy: człowiek MUSI zdecydować
     if ctx.parser_degraded:
         return ROUTE_ALERT, "parser_degraded"
     if _has_frozen_window_violation(ctx.best_metrics):
         return ROUTE_ALERT, "frozen_window_violation"
-    if _mass_fail(ctx.pool_feasible_count, ctx.pool_total_count):
-        return ROUTE_ALERT, f"mass_fail (no={ctx.no_feasible_count}/total={ctx.pool_total_count})"
+    if ctx.best_effort or ctx.best_plan_violations > 0:
+        return ROUTE_ALERT, f"best_effort_no_feasible (sla_viol={ctx.best_plan_violations})"
 
-    # ACK path — operational edge cases (best != None already validated by caller)
+    # ACK path — operacyjne edge: wybór sensowny, wymaga rzutu okiem
     if ctx.czasowka:
         return ROUTE_ACK, "czasowka_60min"
-    if ctx.best_effort or ctx.best_plan_violations > 0:
-        return ROUTE_ACK, f"best_effort_or_sla_violations ({ctx.best_plan_violations})"
     if ctx.best_metrics.get("solo_fallback"):
         return ROUTE_ACK, "solo_fallback (R1/R5/R8 ignored)"
     if ctx.shift_end_edge:
