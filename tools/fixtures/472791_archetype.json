@@ -1,0 +1,77 @@
+{
+  "label": "472791 archetyp — picked_up almost-done kurier (Piotr 470) filtrowany; pre_shift Tomek 514 wygrywa",
+  "source": "shadow_decisions 2026-05-13 + audit_log + geocode (replay_validation_38_findings_2026-05-18.md)",
+  "now": "2026-05-13T09:54:01+00:00",
+  "assumptions": [
+    "Piotr 470 bag = 1 picked_up order (per diagnoza #38: 'picked_up Wiosenna, 4 min od deliveru') — ACK Adrian 2026-05-18 bag=1.",
+    "Piotr 470 tier = std — nieznany z logow 13.05, ACK Adrian 2026-05-18 std (domyslny).",
+    "Piotr 470 picked_up_at 09:40 UTC — szacowane (delivery Wiosenna ~09:58, '4 min od deliveru' o 09:54).",
+    "Piotr 470 shift 08:00-14:00 Warsaw — z audit_log mial zlecenia od 08:49; godziny szacowane.",
+    "Tomek 514 shift 12:00-18:00 Warsaw — z rekordu effective_start_at 12:00 + pos_source pre_shift.",
+    "Tomek 514 pos = BIALYSTOK_CENTER — pre_shift kurier nie ma realnej pozycji GPS.",
+    "Picked_up order Piotra (472778) pickup_coords ~Sweet Fit — nieistotne (status picked_up pomija bundle L2).",
+    "Wspolrzedne: geocode 2026-05-18 (Pani Pierozek/Sweet Fit/Rany Julek przez geocode_restaurant; adresy dostaw przez geocode)."
+  ],
+  "order_event": {
+    "order_id": "472791",
+    "restaurant": "Pani Pierożek",
+    "delivery_address": "Poleska 85A",
+    "address_id": 89,
+    "pickup_coords": [53.1245058, 23.150954],
+    "delivery_coords": [53.137963, 23.1453522],
+    "pickup_at_warsaw": "2026-05-13T12:23:39+02:00",
+    "order_created_at": "2026-05-13T09:53:39+00:00"
+  },
+  "fleet": [
+    {
+      "courier_id": "514",
+      "name": "Tomasz Ch",
+      "pos": [53.13222, 23.16844],
+      "pos_source": "pre_shift",
+      "tier_bag": "std",
+      "shift_start": "2026-05-13T10:00:00+00:00",
+      "shift_end": "2026-05-13T18:00:00+00:00",
+      "bag": [
+        {
+          "order_id": "472788",
+          "restaurant": "Sweet Fit & Eat",
+          "status": "assigned",
+          "pickup_coords": [53.1282361, 23.1524011],
+          "delivery_coords": [53.1116263, 23.1274353],
+          "czas_kuriera_warsaw": "2026-05-13T12:15:00+02:00",
+          "pickup_at_warsaw": "2026-05-13T12:15:00+02:00"
+        },
+        {
+          "order_id": "472790",
+          "restaurant": "Rany Julek",
+          "status": "assigned",
+          "pickup_coords": [53.134242, 23.1488231],
+          "delivery_coords": [53.1277997, 23.1446447],
+          "czas_kuriera_warsaw": "2026-05-13T12:17:00+02:00",
+          "pickup_at_warsaw": "2026-05-13T12:17:00+02:00"
+        }
+      ]
+    },
+    {
+      "courier_id": "470",
+      "name": "Piotr Zaw",
+      "pos": [53.1110363, 23.1478516],
+      "pos_source": "last_picked_up_delivery",
+      "tier_bag": "std",
+      "shift_start": "2026-05-13T06:00:00+00:00",
+      "shift_end": "2026-05-13T12:00:00+00:00",
+      "bag": [
+        {
+          "order_id": "472778",
+          "restaurant": "Sweet Fit & Eat",
+          "status": "picked_up",
+          "pickup_coords": [53.1282361, 23.1524011],
+          "delivery_coords": [53.1110363, 23.1478516],
+          "picked_up_at": "2026-05-13T09:40:00+00:00",
+          "czas_kuriera_warsaw": "2026-05-13T11:35:00+02:00",
+          "pickup_at_warsaw": "2026-05-13T11:35:00+02:00"
+        }
+      ]
+    }
+  ]
+}

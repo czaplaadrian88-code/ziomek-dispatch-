@@ -2567,10 +2567,25 @@ def _assess_order_impl(
 
         # V3.27.3 hard reject: kurier idle >20 min pod restauracją (bag>=1).
         # Same pattern jak v324a — override MAYBE → NO, nie przebijamy wcześniejszego NO.
+        #
+        # tech-debt #38 re-scope 2026-05-18 (Adrian + replay 472791): hard-reject
+        # TYLKO gdy kurier ma realny pending pickup (order `assigned`, picked_up_at
+        # is None) — wait pod nowym pickupem zaburza jego niezrealizowany odbiór.
+        # Wolny kurier (bag pusty / wszystkie picked_up) — wait BIJE bezczynność
+        # ("lepiej czekać 20 min niż stać godzinę"); skip reject, verdict zostaje
+        # MAYBE, penalty bonus_v3273_wait_courier zostaje jako SOFT (lepszy kurier
+        # i tak wygrywa na score). R6 BAG_TIME 35min nadal niezależnie chroni przed
+        # zimnym jedzeniem. Kill-switch: ENABLE_V3273_WAIT_REJECT_FREE_COURIER_SKIP=0.
         if v3273_wait_courier_hard_reject and verdict == "MAYBE":
-            verdict = "NO"
-            _rest_273 = v3273_wait_courier_max_restaurant or "?"
-            reason = f"v3273_wait_courier_hard_reject ({v3273_wait_courier_max_min:.1f}min > {C.V3273_WAIT_COURIER_HARD_REJECT_MIN} pod {_rest_273})"
+            _v3273_has_pending_pickup = any(
+                getattr(_b273, "picked_up_at", None) is None for _b273 in bag_sim
+            )
+            _v3273_skip_free = getattr(
+                C, "ENABLE_V3273_WAIT_REJECT_FREE_COURIER_SKIP", True)
+            if _v3273_has_pending_pickup or not _v3273_skip_free:
+                verdict = "NO"
+                _rest_273 = v3273_wait_courier_max_restaurant or "?"
+                reason = f"v3273_wait_courier_hard_reject ({v3273_wait_courier_max_min:.1f}min > {C.V3273_WAIT_COURIER_HARD_REJECT_MIN} pod {_rest_273})"
 
         # R-INTRA-RESTAURANT-GAP hard reject (2026-05-14): same-restaurant
         # pickup gap > MAX_INTRA_RESTAURANT_GAP_MIN. Override MAYBE → NO.

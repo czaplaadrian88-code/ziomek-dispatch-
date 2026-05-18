@@ -1474,6 +1474,15 @@ V3273_WAIT_COURIER_THRESHOLD_MIN = 3.0   # P3-D2 2026-05-11: tighten 5→3 (Adri
 V3273_WAIT_COURIER_FIRST_STEP_PENALTY = -10.0  # at wait=6 (first min above threshold)
 V3273_WAIT_COURIER_PER_MIN_PENALTY = -5.0      # +5 penalty per min above wait=6
 V3273_WAIT_COURIER_HARD_REJECT_MIN = 15.0      # P3-D2 2026-05-11: tighten 20→15 (idle >15 min = unacceptable)
+# tech-debt #38 re-scope 2026-05-18 (Adrian): hard-reject wait_courier NIE dla
+# wolnego kuriera. Decyzja: "jeżeli kurier jest wolny i nie ma lepszych opcji —
+# niech bierze; jeżeli ma 0 w bagu, lepiej czekać 20 min niż stać godzinę".
+# Gate: hard-reject (verdict→NO) tylko gdy bag ma order `assigned` (pending pickup,
+# picked_up_at is None). Bag pusty / wszystkie picked_up → skip reject, penalty
+# bonus_v3273_wait_courier zostaje jako SOFT. True=skip aktywny (default), False=
+# kill-switch przywraca stary hard-reject niezależny od bagu.
+ENABLE_V3273_WAIT_REJECT_FREE_COURIER_SKIP = _os.environ.get(
+    "ENABLE_V3273_WAIT_REJECT_FREE_COURIER_SKIP", "1") == "1"
 
 # R-INTRA-RESTAURANT-GAP (HARD, 2026-05-14): max gap między dwoma kolejnymi
 # pickupami w tej samej restauracji. Adrian doktryna: kurier nie będzie czekał
