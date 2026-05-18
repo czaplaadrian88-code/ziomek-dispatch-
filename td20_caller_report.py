@@ -25,9 +25,24 @@ if _SCRIPTS not in sys.path:
 LOG_GLOB = "/root/.openclaw/workspace/scripts/logs/dispatch.log*"
 
 
+# tech-debt #20: wywołania nie-produkcyjne instrumentacji — wykluczyć
+# z rozkładu, żeby raport pokazał wyłącznie realne call-site'y pipeline:
+#  • probe smoke — `_probe_caller` (poprz. sesja 19:12), `td20_probe` (21:05)
+#  • suita testowa — pliki `test_*.py` (np. test_uwagi_defense_gates, których
+#    sentinel-asercje hitują instrumentowane haversine przy każdym runie).
+_PROBE_MARKERS = ("_probe_caller", "td20_probe")
+
+
+def _is_artifact_caller(caller):
+    """True gdy caller= to probe instrumentacji albo run suity testowej."""
+    if any(m in caller for m in _PROBE_MARKERS):
+        return True
+    return caller.split(":", 1)[0].startswith("test_")
+
+
 def collect():
-    """Zwraca (total, {caller: count}, {caller: sample_line})."""
-    counts, samples, total = {}, {}, 0
+    """Zwraca (total, {caller: count}, {caller: sample_line}, probes_skipped)."""
+    counts, samples, total, probes_skipped = {}, {}, 0, 0
     for path in sorted(glob.glob(LOG_GLOB)):
         if path.endswith(".gz"):
             continue  # instrumentacja <2 dni — nieskompresowane wystarczą
@@ -35,22 +50,30 @@ def collect():
             with open(path, errors="replace") as f:
                 for line in f:
                     if "haversine sentinel" in line and "caller=" in line:
-                        total += 1
                         caller = line.split("caller=", 1)[1].strip()
+                        if _is_artifact_caller(caller):
+                            probes_skipped += 1
+                            continue
+                        total += 1
                         counts[caller] = counts.get(caller, 0) + 1
                         samples.setdefault(caller, line.strip())
         except OSError:
             continue
-    return total, counts, samples
+    return total, counts, samples, probes_skipped
 
 
-def build_message(total, counts, samples):
+def build_message(total, counts, samples, probes_skipped=0):
+    probe_note = (
+        f"\n\n(pominięto {probes_skipped} wywołań nie-produkcyjnych: "
+        f"probe instrumentacji + suita testowa)"
+        if probes_skipped else ""
+    )
     if total == 0:
         return ("🔎 tech-debt #20 — raport caller= (haversine sentinel)\n\n"
                 "0 trafień z `caller=`. Albo instrumentacja nie złapała nic "
                 "(mało prawdopodobne — ~60-130/dzień), albo rotacja logu "
                 "wypchnęła linie do .gz. Sprawdź ręcznie:\n"
-                "grep 'haversine sentinel' logs/dispatch.log*")
+                "grep 'haversine sentinel' logs/dispatch.log*" + probe_note)
     ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
     lines = [f"  {n}×  {caller}" for caller, n in ranked]
     top_caller, top_n = ranked[0]
@@ -69,14 +92,14 @@ def build_message(total, counts, samples):
         "Krok 2: fix u źródła w sesji Claude — który argument haversine "
         "jest (0,0) (pozycja kuriera / pickup / drop / anchor) → fail-loud "
         "None zamiast (0,0) (Lekcja #81) albo fallback coords. "
-        "Detal: memory/tech_debt_backlog.md #20."
+        "Detal: memory/tech_debt_backlog.md #20." + probe_note
     )
 
 
 def main():
     dry = "--dry-run" in sys.argv
-    total, counts, samples = collect()
-    msg = build_message(total, counts, samples)
+    total, counts, samples, probes_skipped = collect()
+    msg = build_message(total, counts, samples, probes_skipped)
     if dry:
         print(msg)
         return
