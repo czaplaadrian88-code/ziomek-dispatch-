@@ -1,0 +1,17 @@
+[Unit]
+Description=Ziomek rolling late-binding Faza 0 — pending pool sweeper (reconciliation + obserwacja)
+After=network.target dispatch-shadow.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+Environment="PYTHONPATH=/root/.openclaw/workspace/scripts"
+Environment="ENABLE_PENDING_POOL=1"
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.pending_pool_sweeper
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/pending_pool_sweeper.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/pending_pool_sweeper.log
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

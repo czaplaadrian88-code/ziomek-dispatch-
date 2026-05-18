@@ -1,0 +1,12 @@
+[Unit]
+Description=Ziomek pending pool sweeper — every 1 min
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1min
+Persistent=false
+AccuracySec=10s
+Unit=dispatch-pending-pool.service
+
+[Install]
+WantedBy=timers.target
