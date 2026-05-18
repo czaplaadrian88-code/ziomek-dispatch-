@@ -568,36 +568,14 @@ def check_feasibility_v2(
     except Exception as _orc_e:
         log.warning(f"OBJ_REPLAY_CAPTURE_HOOK_FAIL {type(_orc_e).__name__}: {_orc_e}")
 
-    if plan.sla_violations > 0:
-        violations_detail = []
-        for o in list(bag) + [new_order]:
-            pred = plan.predicted_delivered_at.get(o.order_id)
-            if pred is None:
-                continue
-            if o.order_id in plan.pickup_at:
-                pu = plan.pickup_at[o.order_id]
-            elif o.picked_up_at is not None:
-                pu = o.picked_up_at
-                if pu.tzinfo is None:
-                    pu = pu.replace(tzinfo=timezone.utc)
-                pu = pu.astimezone(timezone.utc)
-            else:
-                pu = now
-            elapsed_min = (pred - pu).total_seconds() / 60.0
-            if elapsed_min > sla_minutes:
-                violations_detail.append({
-                    "order_id": o.order_id,
-                    "elapsed_min": round(elapsed_min, 1),
-                    "over_sla_by_min": round(elapsed_min - sla_minutes, 1),
-                })
-        metrics["sla_violations"] = violations_detail
-        worst = max(violations_detail, key=lambda v: v["over_sla_by_min"])
-        return (
-            "NO",
-            f"sla_violation ({worst['order_id']} +{worst['elapsed_min']}min, over by {worst['over_sla_by_min']})",
-            metrics,
-            plan,
-        )
+    # Sprint OBJ F3 / BUG-5 (2026-05-18): pomiar R6 (metryki r6_*) PRZENIESIONY
+    # PRZED sla-return. Pre-fix: kandydat odrzucony na plan-level sla_violations
+    # robił return przed blokiem R6 → r6_max_bag_time_min / r6_bag_size /
+    # r6_per_order_violations = null → _r6_pov_count (dispatch_pipeline best_effort)
+    # widział 0, reason "r6_violations=0" KŁAMAŁ przy realnym 70-82 min carry
+    # (diagnoza 474297). Pomiar nie ma return-ów i nie zależy od sla — bezpieczny
+    # do przeniesienia. sla-CHECK i R6-hard-REJECT zostają w niezmienionej kolejności
+    # (oba → NO; sla nadal pierwsze). Detal: eod_drafts/2026-05-18/obj_f3_bug5_design.md.
 
     # R6 (F2.1b + V3.28 ANCHOR FIX 2026-05-10) — BAG_TIME termiczny PER-ORDER hard cap.
     #
@@ -679,6 +657,37 @@ def check_feasibility_v2(
     else:
         metrics["r6_soft_penalty"] = 0.0
         metrics["r6_soft_zone_active"] = False
+
+    if plan.sla_violations > 0:
+        violations_detail = []
+        for o in list(bag) + [new_order]:
+            pred = plan.predicted_delivered_at.get(o.order_id)
+            if pred is None:
+                continue
+            if o.order_id in plan.pickup_at:
+                pu = plan.pickup_at[o.order_id]
+            elif o.picked_up_at is not None:
+                pu = o.picked_up_at
+                if pu.tzinfo is None:
+                    pu = pu.replace(tzinfo=timezone.utc)
+                pu = pu.astimezone(timezone.utc)
+            else:
+                pu = now
+            elapsed_min = (pred - pu).total_seconds() / 60.0
+            if elapsed_min > sla_minutes:
+                violations_detail.append({
+                    "order_id": o.order_id,
+                    "elapsed_min": round(elapsed_min, 1),
+                    "over_sla_by_min": round(elapsed_min - sla_minutes, 1),
+                })
+        metrics["sla_violations"] = violations_detail
+        worst = max(violations_detail, key=lambda v: v["over_sla_by_min"])
+        return (
+            "NO",
+            f"sla_violation ({worst['order_id']} +{worst['elapsed_min']}min, over by {worst['over_sla_by_min']})",
+            metrics,
+            plan,
+        )
     # V3.28 ANCHOR FIX: hard reject TYLKO za assigned-but-not-picked + new_order >35.
     # Picked_up orders są tracked ale NIE rejected (kurier kończy w drodze).
     if r6_per_order_violations:
