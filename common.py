@@ -382,6 +382,12 @@ ENABLE_C5_SHADOW_LOG = True
 ENABLE_MID_TRIP_PICKUP = False        # C6: state_machine rewake for overlap
 ENABLE_PENDING_QUEUE_VIEW = False     # C7: dispatch_pipeline signature change
 
+# Rolling late-binding Faza 0 (2026-05-18): pula pending — obserwacja.
+# True → shadow_dispatcher zasila pending_pool, dispatch-pending-pool.timer
+# robi reconciliation. Faza 0 = czysta obserwacja, zero wpływu na dispatch.
+ENABLE_PENDING_POOL = os.environ.get("ENABLE_PENDING_POOL", "0") == "1"
+FREEZE_LEAD_MIN = 15                  # zlecenie zamrażane FREEZE_LEAD_MIN przed odbiorem
+
 # ============================================================
 # Telegram Transparency OPCJA A flags (2026-04-19)
 # Redesign propozycji — Adrian chce rozumieć CZEMU ten kurier i
@@ -1496,24 +1502,31 @@ ENABLE_INTRA_RESTAURANT_GAP_LIMIT = _os.environ.get(
 MAX_INTRA_RESTAURANT_GAP_MIN = 5.0
 
 # ============================================================
-# V3.28-P3-D1 Idle-as-cost — TSP solver objective augment (2026-05-10 wieczór)
+# Sprint OBJ F2 — koszt SPAN trasy (idle) w objective solvera TSP (2026-05-18)
 # ============================================================
-# Naprawia 472339 root cause: TSP solver objective = sum(drive_min) only.
-# Wait-at-pickup (kurier dotrze przed ready_at) NIE liczony w cost → solver
-# wybiera plan z 12 min wait zamiast plan 6 min drive + interleaved drop.
-# Adrian doktryna 2026-05-10 wieczór: "kurierzy wolą jeździć niż czekać, bo
-# wtedy szybciej dowiozą i restauracje będą zadowolone".
+# Naprawia 474253: objective OR-Tools minimalizował SAMĄ jazdę. Czekanie kuriera
+# na gotowość pickupu (slack w Time dimension) było w objective DARMOWE → solver
+# obojętny między "dojedź i stój 15 min" a "doręcz coś po drodze, dojedź na czas".
 #
-# Mechanizm: w _ortools_plan przed solve, build cost_matrix:
-#   cost_matrix[i][j] = time_matrix[i][j] + max(0, ready_at[j] - drive[i→j]) × W
-# dla pickup nodes z time_window_open > 0. time_matrix unchanged (constraint
-# dimension cumul). Solver minimalizuje augmented cost → preferuje sequences
-# gdzie wait minimalny, "drop-by-the-way" pomiędzy pickupami z ready_at gap.
+# Mechanizm: SetSpanCostCoefficientForAllVehicles na Time dimension. Span =
+# makespan trasy (cumul end), zawiera slack (idle). coeff×span wchodzi do
+# objective → solver unika dead-stopów i konwertuje idle na produktywną jazdę
+# (= "throughput per shift", feedback_dispatch_idle_vs_drive).
 #
-# W=1.0 = "1 min wait kosztuje tyle ile 1 min drive" (neutral baseline).
-# Default flag OFF — empirical calibration via env override + 24h shadow obs.
-ENABLE_V328_P3D1_IDLE_COST = _os.environ.get(
-    "ENABLE_V328_P3D1_IDLE_COST", "0") == "1"  # V3.28 P3-D1 flag (default OFF)
+# Zastępuje strukturalnie zepsute P3-D1 (per-edge idle estimate: time_matrix[i][j]
+# = pojedyncza krawędź nie skumulowany przyjazd; karał KAŻDĄ krawędź jednakowo;
+# perwersyjny incentyw "dłuższy dojazd = mniejsza kara"; magnitudy dominowały
+# objective ~6:1 — diagnoza 474253). P3-D1 retired sprintem OBJ F2.
+#
+# OBJ_SPAN_COST_COEFF = waga 1 min span względem 1 min jazdy w arc-cost.
+# coeff=1.0 → 1 min idle kosztuje tyle co 1 min jazdy. Default OFF (env override
+# w dispatch-shadow.service). Coeff SKALIBROWANY 2026-05-18 sweepem obj_harness
+# (1091 bundli, 797 ortools): span cost tnie idle/span/thermal monotonicznie,
+# R6 bez regresji (nie tradeoff). coeff=1.0 = −9,9% idle floty przy umiarkowanej
+# dyspersji (14/797 sekwencji); powyżej 1.0 diminishing returns. Default
+# zrównany do unit-override. Raport: /tmp/obj_f2_cal/REPORT.md.
+ENABLE_OBJ_SPAN_COST = _os.environ.get("ENABLE_OBJ_SPAN_COST", "0") == "1"
+OBJ_SPAN_COST_COEFF = float(_os.environ.get("OBJ_SPAN_COST_COEFF", "1.0"))
 
 # Sprint OBJ F0.3 (2026-05-17): replay-capture wejść solvera do offline
 # harnessu (zestaw masowy / regresja). Default OFF — włączane env na czas sprintu.
@@ -1531,7 +1544,6 @@ ENABLE_OBJ_R6_SOFT_DEADLINE = _os.environ.get(
     "ENABLE_OBJ_R6_SOFT_DEADLINE", "0") == "1"
 OBJ_R6_DEADLINE_PENALTY_COEFF = float(_os.environ.get(
     "OBJ_R6_DEADLINE_PENALTY_COEFF", "100"))
-V328_P3D1_IDLE_WEIGHT = float(_os.environ.get("V328_P3D1_IDLE_WEIGHT", "1.0"))  # 1.0 = wait min cost = drive min cost
 
 # ============================================================
 # V3.28 FAZA 3 ścieżka A — time_matrix DWELL correction (2026-05-11)

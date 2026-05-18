@@ -47,6 +47,7 @@ def solve_tsp_with_constraints(
     time_limit_ms: int = 200,
     cost_matrix_min: Optional[List[List[float]]] = None,
     delivery_soft_deadlines: Optional[List[Optional[Tuple[float, float]]]] = None,
+    span_cost_coeff: float = 0.0,
 ) -> Optional[TspSolution]:
     """Solve PDP z OR-Tools.
 
@@ -161,6 +162,18 @@ def solve_tsp_with_constraints(
         "Time",
     )
     time_dimension = routing.GetDimensionOrDie("Time")
+
+    # Sprint OBJ F2 (2026-05-18): koszt SPAN trasy. SetSpanCostCoefficient
+    # dolicza coeff×span do objective; span = makespan (cumul end), zawiera
+    # slack (idle — czekanie kuriera pod restauracją na gotowość pickupu).
+    # Bez tego idle = darmowy slack w Time dim (diagnoza 474253). Konwersja
+    # jednostek: arc cost = min × SCALE, span (Time dim cumul) = min × TIME_SCALE.
+    # By span_cost_coeff=1.0 znaczyło "1 min span = 1 min jazdy w arc-cost":
+    #   internal = coeff × SCALE / TIME_SCALE.
+    if span_cost_coeff and span_cost_coeff > 0:
+        _span_int = int(round(span_cost_coeff * SCALE / TIME_SCALE))
+        if _span_int > 0:
+            time_dimension.SetSpanCostCoefficientForAllVehicles(_span_int)
 
     # Time windows (jeśli supplied)
     # V3.28 Fix 2 (incident 03.05.2026): SetRange domain validation.

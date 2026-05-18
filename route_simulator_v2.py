@@ -998,65 +998,17 @@ def _ortools_plan(
             else:
                 time_windows.append((0.0, _common.V327_DROP_TIME_WINDOW_MAX_MIN))
 
-    # V3.28-P3-D1 (2026-05-10 wieczór): build cost_matrix z idle-at-pickup penalty.
-    # Adrian doktryna "kurierzy wolą jeździć niż czekać" → augment edges leading
-    # do pickup nodes z early-arrival risk (drive[i→j] < ready_at[j] = wait).
-    # cost_matrix jest osobny od time_matrix (constraint dim cumul) — solver
-    # minimalizuje augmented cost ale time dimension cumul zostaje drive-only.
-    # Default flag OFF (env override) — empirical calibration.
-    cost_matrix: List[List[float]] = [row[:] for row in time_matrix]
-    _p3d1_idle_estimate_total = 0.0  # sum wait_estimate (min) — observability
-    _p3d1_n_edges_augmented = 0
-    _p3d1_active = False
-    try:
-        if (
-            getattr(_common, "ENABLE_V328_P3D1_IDLE_COST", False)
-            and time_windows is not None
-            and now is not None
-        ):
-            _p3d1_active = True
-            _idle_w = float(getattr(_common, "V328_P3D1_IDLE_WEIGHT", 1.0))
-            for j in range(N):
-                node_j = nodes[j]
-                if node_j.get("kind") != "pickup":
-                    continue
-                if j >= len(time_windows) or time_windows[j] is None:
-                    continue
-                ready_min, _close_min = time_windows[j]
-                if ready_min <= 0:
-                    continue  # ready_at past — kurier zawsze on-time / late
-                for i in range(N):
-                    if i == j:
-                        continue
-                    arrival_lb = time_matrix[i][j]
-                    if arrival_lb >= ready_min:
-                        continue  # no idle expected — kurier dojdzie po ready_at
-                    wait_estimate = ready_min - arrival_lb
-                    # Cap przy 60 min (= V327_PICKUP_TIME_WINDOW_CLOSE_MIN) —
-                    # defensive guard przeciw absurdnym ready_min wartościom.
-                    wait_estimate = min(wait_estimate, 60.0)
-                    cost_matrix[i][j] += wait_estimate * _idle_w
-                    _p3d1_idle_estimate_total += wait_estimate
-                    _p3d1_n_edges_augmented += 1
-    except Exception as _idle_e:
-        _log.warning(
-            f"V328_P3D1_IDLE_COST_FAIL fallback to time_matrix N={N}: "
-            f"{type(_idle_e).__name__}: {str(_idle_e)[:120]}"
-        )
-        cost_matrix = [row[:] for row in time_matrix]  # re-copy clean
-        _p3d1_idle_estimate_total = 0.0
-        _p3d1_n_edges_augmented = 0
-        _p3d1_active = False
-    # V3.28-P3-D1 observability — empirical signal dla weight calibration.
-    # Grep pattern: `V328_P3D1_COST oid=`. Emit only gdy active & non-zero (signal).
-    if _p3d1_active and _p3d1_n_edges_augmented > 0:
-        _new_oid = getattr(new_order, "order_id", "?")
-        _log.info(
-            f"V328_P3D1_COST oid={_new_oid} N={N} "
-            f"idle_estimate_min={_p3d1_idle_estimate_total:.1f} "
-            f"n_edges_augmented={_p3d1_n_edges_augmented} "
-            f"bag_size={len(bag)} weight={_idle_w}"
-        )
+    # Sprint OBJ F2 (2026-05-18): koszt SPAN (idle) — zastępuje zepsuty P3-D1.
+    # P3-D1 (per-edge idle estimate augmentujący cost_matrix) był strukturalnie
+    # wadliwy: karał pojedynczą krawędź zamiast skumulowanego przyjazdu, każdą
+    # krawędź jednakowo (brak gradientu), perwersyjnie nagradzał dłuższy dojazd,
+    # a magnitudy dominowały objective ~6:1 (diagnoza 474253). F2 wycenia idle
+    # natywnie przez SetSpanCostCoefficient w solverze (patrz tsp_solver) — span
+    # makespan zawiera slack czekania. cost_matrix usunięty: solver liczy cost
+    # z distance_matrix (= czysty time_matrix). Default OFF (env override).
+    _span_cost_coeff = 0.0
+    if getattr(_common, "ENABLE_OBJ_SPAN_COST", False):
+        _span_cost_coeff = float(getattr(_common, "OBJ_SPAN_COST_COEFF", 0.0))
 
     # Sprint OBJ F1 (2026-05-17): R6 soft upper bound per węzeł delivery
     # (flag-gated, default OFF — deploy bez zmiany). Deadline CumulVar dostawy =
@@ -1100,8 +1052,8 @@ def _ortools_plan(
         time_windows=time_windows,
         max_route_min=120.0,
         time_limit_ms=int(_ot_ms),
-        cost_matrix_min=cost_matrix,
         delivery_soft_deadlines=delivery_soft_deadlines,
+        span_cost_coeff=_span_cost_coeff,
     )
 
     # V3.27.1 BUG-2 fallback: gdy INFEASIBLE z time windows, retry bez constraints
@@ -1121,6 +1073,7 @@ def _ortools_plan(
             max_route_min=120.0,
             time_limit_ms=int(_ot_ms),
             delivery_soft_deadlines=delivery_soft_deadlines,
+            span_cost_coeff=_span_cost_coeff,
         )
 
     if solution is None or not solution.sequence:
