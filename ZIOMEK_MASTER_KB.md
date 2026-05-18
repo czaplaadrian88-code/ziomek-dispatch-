@@ -1,3 +1,9 @@
+# ⚠️ STATUS — plik STATYCZNY od 2026-05-10 (snapshot, adnotacja 2026-05-18)
+
+Bieżący stan projektu — sprinty, backlog, lekcje, „co robić teraz" — jest w katalogu **`memory/`** (`/root/.claude/projects/-root/memory/`): `sprint_timeline.md`, `tech_debt_backlog.md`, `lessons.md`. Ten plik = **reference historyczny** (konsolidacja Plików Wiedzy #1-#13, 04.05.2026). Reguły operacyjne / infra / Panel API niżej dalej obowiązują; sekcje „Current state" i historie wersji = zamrożone.
+
+---
+
 # ZIOMEK / NadajeSz — MASTER KNOWLEDGE FILE
 **Wersja:** v1.0 (konsolidacja Pliki Wiedzy #1-#13 + Plan Pracy)
 **Data:** 04.05.2026

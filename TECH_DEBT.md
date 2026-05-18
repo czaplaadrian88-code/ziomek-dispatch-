@@ -1,3 +1,9 @@
+# ⚠️ STATUS — plik STATYCZNY od 2026-05-05 (ostatni wpis V3.27.6 / 28.04; adnotacja 2026-05-18)
+
+**Aktywny, priorytetyzowany backlog tech-debt → `memory/tech_debt_backlog.md`** (`/root/.claude/projects/-root/memory/`, P0-P3, auto-ładowany). Ten plik = archiwum historyczne sprzed konsolidacji backlogu do `memory/`. **NIE dodawaj tu nowych pozycji** — idą do `memory/tech_debt_backlog.md`.
+
+---
+
 # TECH DEBT — Ziomek
 
 **V3.27.6 closed 28.04 wieczór (Path C robust + diagnostic assertion), V3.28 backlog**

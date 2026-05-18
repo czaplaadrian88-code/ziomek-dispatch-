@@ -1,3 +1,17 @@
+# ⚠️ STATUS TEGO PLIKU — przeczytaj ZANIM zaufasz treści (adnotacja 2026-05-18)
+
+**Ten plik jest STATYCZNYM SNAPSHOTEM od 2026-05-10.** Od tej daty przeszło kilkanaście sprintów (V3.28 dwell, OBJ F0/F1, E1-E3, tech-debt #38, Drtusz Bridge, kalibracja ETA, sprint „bag zero" Fazy 1-5, …) — **żadnego z nich tu NIE ma.**
+
+**Źródło prawdy o BIEŻĄCYM stanie = katalog `memory/`** (`/root/.claude/projects/-root/memory/`, auto-ładowany co sesję):
+- **Co robić teraz / co było zrobione** → `sprint_timeline.md` (`## CURRENT HANDOFF` na górze + bloki `ARCHIVE`)
+- **Backlog / tech-debt** → `memory/tech_debt_backlog.md` (P0-P3 priorytetyzowany; NIE `TECH_DEBT.md` w tym katalogu — też zamrożony)
+- **Lekcje** → `memory/lessons.md` (#1-#126)
+- **Live wartości flag** → `flags.json` (hot-reload) + `common.py` — **NIE** tabele „Stan flag (LIVE od…)" niżej
+
+**Co w TYM pliku DALEJ wiarygodne (evergreen):** workflow (per-step ACK, py_compile, atomic writes, NIE restartuj `dispatch-telegram` bez ACK), CRITICAL PATHS, 3 zasady kardynalne Z1/Z2/Z3, Panel API reference, infra/kontakty/porty, hard constraints. **Co jest ZAMROŻONYM snapshotem 2026-05-10 (NIE ufaj jako bieżące):** sekcje „Current state", „Stan flag (LIVE od…)", historie wersji V3.2x, nagłówki „post-sprint".
+
+---
+
 ## ⚡ NAJWAŻNIEJSZE — przeczytaj NAJPIERW
 
 **Pełen kontekst projektu:** `/root/.openclaw/workspace/scripts/dispatch_v2/ZIOMEK_MASTER_KB.md`
