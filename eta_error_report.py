@@ -8,8 +8,11 @@ obiecane) dla dnia docelowego vs baseline sprzed kalibracji tier-aware DWELL
 eta_error dodatni = dostawa później niż Ziomek obiecał = czas za krótki.
 
 Uruchomienie:
-    /root/.openclaw/venvs/dispatch/bin/python eta_error_report.py [YYYY-MM-DD]
-Domyślnie dzień = dziś (Warsaw). Odpalane przez at-job (pon po lunchu).
+    eta_error_report.py                          → dziś (Warsaw)
+    eta_error_report.py YYYY-MM-DD               → pojedynczy dzień
+    eta_error_report.py YYYY-MM-DD YYYY-MM-DD    → zakres [start, end] inclusive
+Tryb zakresu (2026-05-18) — kumuluje wiersze z wielu dni dla grubszej próby
+(kalibracja DRIVE_SPEED_MULT wymaga peak n≥40). Odpalane przez at-job.
 """
 import json
 import os
@@ -66,13 +69,27 @@ def load_tiers():
     return out
 
 
+def _parse_args(argv):
+    """argv[1:] → (start, end) ISO daty inclusive. 0 arg=dziś, 1=single, 2=zakres."""
+    args = argv[1:]
+    if len(args) >= 2:
+        start, end = sorted([args[0], args[1]])
+    elif len(args) == 1:
+        start = end = args[0]
+    else:
+        start = end = datetime.now(WARSAW).date().isoformat()
+    return start, end
+
+
 def main():
-    target = sys.argv[1] if len(sys.argv) > 1 else datetime.now(WARSAW).date().isoformat()
+    start, end = _parse_args(sys.argv)
+    is_range = start != end
+    period_label = start if not is_range else f"{start}..{end}"
+    span_word = "OKRES" if is_range else "DZIEŃ"
     tiers = load_tiers()
 
     baseline = []   # eta_error przed go-live tier-aware DWELL
-    today = []      # wiersze z dnia docelowego (po kalibracji)
-    rows_today = []
+    period = []     # wiersze z okresu docelowego (po kalibracji)
     for line in open(CAL_LOG, encoding="utf-8"):
         line = line.strip()
         if not line:
@@ -91,21 +108,26 @@ def main():
             continue
         if deliv < DWELL_GO_LIVE:
             baseline.append(r)
-        if str(r.get("delivered_at", ""))[:10] == target:
-            today.append(r)
-            rows_today.append(r)
+        # Zakres inclusive; single-day = przypadek start==end. Period = TYLKO
+        # post-DWELL-go-live — wiersze sprzed go-live należą do baseline, nie do
+        # „docelowego" (istotne gdy zakres obejmuje 17.05, dzień go-live).
+        _dday = str(r.get("delivered_at", ""))[:10]
+        if start <= _dday <= end and deliv >= DWELL_GO_LIVE:
+            period.append(r)
 
     def by_bucket(rows, b):
         return [r["eta_error_min"] for r in rows if r.get("bucket") == b]
 
-    lines = [f"📊 Kalibracja czasów — odczyt {target}", ""]
+    lines = [f"📊 Kalibracja czasów — odczyt {period_label}", ""]
     lines.append("eta_error = dostawa minus czas obiecany przez Ziomka.")
     lines.append("Dodatni = za krótko. Cel: zbliżyć do zera.")
+    if is_range:
+        lines.append(f"(zakres kumulatywny {start} → {end})")
     lines.append("")
-    lines.append("PER BUCKET — baseline (przed) → dzień docelowy:")
+    lines.append("PER BUCKET — baseline (przed) → docelowy:")
     for b in ("peak", "shoulder", "offpeak"):
         bn, bmed, _ = _stats(by_bucket(baseline, b))
-        tn, tmed, _ = _stats(by_bucket(today, b))
+        tn, tmed, _ = _stats(by_bucket(period, b))
         if bn == 0 and tn == 0:
             continue
         bm = f"{bmed:+.1f}" if bmed is not None else "—"
@@ -114,28 +136,28 @@ def main():
         lines.append(f"  {b:9s} {bm:>6s} → {tm:>6s} (n={tn}){delta}")
 
     lines.append("")
-    lines.append(f"DZIEŃ {target} — solo vs bundle:")
-    solo = [r["eta_error_min"] for r in today if r.get("bag_size") == 1]
-    bund = [r["eta_error_min"] for r in today if r.get("bag_size") and r["bag_size"] >= 2]
+    lines.append(f"{span_word} {period_label} — solo vs bundle:")
+    solo = [r["eta_error_min"] for r in period if r.get("bag_size") == 1]
+    bund = [r["eta_error_min"] for r in period if r.get("bag_size") and r["bag_size"] >= 2]
     lines.append(f"  solo:   {_fmt(_stats(solo))}")
     lines.append(f"  bundle: {_fmt(_stats(bund))}")
 
     lines.append("")
-    lines.append(f"DZIEŃ {target} — per tier kuriera:")
+    lines.append(f"{span_word} {period_label} — per tier kuriera:")
     per_tier = {}
-    for r in today:
+    for r in period:
         t = tiers.get(str(r.get("real_courier_id"))) or "nieznany"
         per_tier.setdefault(t, []).append(r["eta_error_min"])
     for t in ("gold", "std+", "std", "slow", "new", "nieznany"):
         if t in per_tier:
             lines.append(f"  {t:9s} {_fmt(_stats(per_tier[t]))}")
 
-    # Werdykt — porównanie mediany peak.
+    # Werdykt — porównanie mediany peak. Próg „solidny" dla kalibracji = peak n≥40.
     bn, bmed, _ = _stats(by_bucket(baseline, "peak"))
-    tn, tmed, _ = _stats(by_bucket(today, "peak"))
+    tn, tmed, _ = _stats(by_bucket(period, "peak"))
     lines.append("")
-    if tn < 15:
-        lines.append(f"⏳ Za mało danych dziennych (peak n={tn}) — odczyt orientacyjny.")
+    if tn < 40:
+        lines.append(f"⏳ Za mało danych (peak n={tn}, próg kalibracji n≥40) — odczyt orientacyjny.")
     elif bmed is not None and tmed is not None:
         d = tmed - bmed
         if d <= -1.5:
