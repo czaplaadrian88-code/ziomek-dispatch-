@@ -1,0 +1,19 @@
+[Unit]
+Description=Ziomek V3.28-MONITOR-001 — 419 storm detector + Telegram alerter
+After=network.target dispatch-shadow.service dispatch-panel-watcher.service
+
+[Service]
+Type=simple
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.monitoring.detector_419
+Environment=PYTHONPATH=/root/.openclaw/workspace/scripts
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+# Read-only: detector tylko czyta logs i wysyła Telegram alerts
+ProtectSystem=strict
+ReadWritePaths=/var/log
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
