@@ -281,7 +281,15 @@ def haversine(ll1: tuple, ll2: tuple) -> float:
         _log.error("haversine None coords: ll1=%r ll2=%r", ll1, ll2)
         raise ValueError(f"haversine: None coords (ll1={ll1!r}, ll2={ll2!r})")
     if ll1 == (0.0, 0.0) or ll2 == (0.0, 0.0):
-        _log.error("haversine sentinel (0,0): ll1=%r ll2=%r", ll1, ll2)
+        # tech-debt #20 Krok 1 instrumentacja: ramka wołającego — log wskaże
+        # który z 8 call-site'ów wstrzykuje (0,0) (źródło transientne, nie ma
+        # go w plikach stanu). Tylko gałąź błędu (~100×/dzień — koszt znikomy).
+        import traceback
+        _c = traceback.extract_stack(limit=2)[0]
+        _log.error(
+            "haversine sentinel (0,0): ll1=%r ll2=%r caller=%s:%d in %s()",
+            ll1, ll2, _c.filename.rsplit("/", 1)[-1], _c.lineno, _c.name,
+        )
         raise ValueError(f"haversine: sentinel (0,0) (ll1={ll1!r}, ll2={ll2!r})")
     lat1, lon1 = ll1
     lat2, lon2 = ll2
