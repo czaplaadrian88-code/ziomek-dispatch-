@@ -1528,6 +1528,18 @@ MAX_INTRA_RESTAURANT_GAP_MIN = 5.0
 ENABLE_OBJ_SPAN_COST = _os.environ.get("ENABLE_OBJ_SPAN_COST", "0") == "1"
 OBJ_SPAN_COST_COEFF = float(_os.environ.get("OBJ_SPAN_COST_COEFF", "1.0"))
 
+# Sprint OBJ F3 / BUG-4 (2026-05-18): best_effort z najlepszym kandydatem
+# łamiącym hard R6 o > próg → verdict KOORD zamiast auto-PROPOSE. Diagnoza
+# 474297: kurier R6-doomed (carry 47-82 min), Ziomek proponował trasę-potworka
+# zamiast eskalować do koordynatora. Trasa przekraczająca R6 (35 min) o 20+ min
+# = dostawa 55+ min = decyzja człowieka, nie propozycja. Próg WYSOKI — nie
+# rusza normalnych buforów R-BUFFER-OK (soft zone 30-35). Mierzone
+# objm_r6_breach_max_min (route_metrics, anchor=gotowość/picked_up). Default OFF.
+ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD = _os.environ.get(
+    "ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD", "0") == "1"
+OBJ_F3_R6_BREACH_KOORD_MIN = float(_os.environ.get(
+    "OBJ_F3_R6_BREACH_KOORD_MIN", "20.0"))
+
 # Sprint OBJ F0.3 (2026-05-17): replay-capture wejść solvera do offline
 # harnessu (zestaw masowy / regresja). Default OFF — włączane env na czas sprintu.
 ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(
