@@ -2992,6 +2992,14 @@ def _assess_order_impl(
         pov = c.metrics.get("r6_per_order_violations")
         return len(pov) if pov else 0
 
+    # Sprint OBJ F3 / BUG-4: największe przekroczenie R6 (min) kandydata wg
+    # objm_ (route_metrics.compute_plan_metrics, anchor=gotowość/picked_up).
+    # 0.0 gdy brak metryki — conservative (brak danych → brak eskalacji).
+    def _r6_breach_max(c):
+        m = getattr(c, "metrics", None) or {}
+        v = m.get("objm_r6_breach_max_min")
+        return float(v) if isinstance(v, (int, float)) else 0.0
+
     # R-INTRA-RESTAURANT-GAP filter (2026-05-14, Opcja A): eliminuje kandydatów
     # z hard_reject z best_effort poolu. Bez tego best_effort PROPOSE wybierał
     # cid z gap 26 min Chicago Pizza (case 473251 19:35 UTC) bo MAYBE→NO override
@@ -3005,6 +3013,34 @@ def _assess_order_impl(
     if with_plan:
         best = with_plan[0]
         best.best_effort = True
+        # Sprint OBJ F3 / BUG-4 (2026-05-18): best_effort z najlepszym kandydatem
+        # łamiącym hard R6 o > próg → KOORD, nie auto-PROPOSE. Diagnoza 474297:
+        # kurier R6-doomed (carry 47-82 min), Ziomek proponował trasę-potworka.
+        # Trasa przekraczająca R6 o 20+ min = decyzja koordynatora. Próg wysoki —
+        # nie rusza buforów R-BUFFER-OK (soft zone 30-35). objm_r6_breach_max_min
+        # liczony przez compute_plan_metrics — wiarygodny dla kandydatów z planem.
+        _be_r6_breach = _r6_breach_max(best)
+        if (getattr(C, "ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD", False)
+                and _be_r6_breach > C.OBJ_F3_R6_BREACH_KOORD_MIN):
+            _result_be_r6 = PipelineResult(
+                order_id=order_id,
+                verdict="KOORD",
+                reason=(
+                    f"best_effort_r6_breach (best={best.courier_id} "
+                    f"r6_breach={_be_r6_breach:.0f}min > "
+                    f"{C.OBJ_F3_R6_BREACH_KOORD_MIN:.0f}; 0 feasible)"
+                ),
+                best=best,
+                candidates=with_plan[:TOP_N_CANDIDATES],
+                pickup_ready_at=pickup_ready_at,
+                restaurant=restaurant,
+                delivery_address=delivery_address,
+                pool_total_count=len(candidates),
+                pool_feasible_count=0,
+            )
+            _classify_and_set_auto_route(
+                _result_be_r6, fleet_snapshot, order_event, now=now)
+            return _result_be_r6
         # P3-D3 2026-05-11 (root cause 3): MIN_PROPOSE_SCORE gate aligned z feasible
         # branch (line ~2800). Pre-fix: best_effort skip gate → score=-390 carry
         # przeszedł jako PROPOSE (Bartek O. 187/196 min case 10.05).
