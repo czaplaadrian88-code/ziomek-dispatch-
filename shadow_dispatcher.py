@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from dispatch_v2 import common as C, event_bus, state_machine
+from dispatch_v2 import common as C, event_bus, pending_pool, state_machine
 from dispatch_v2.common import load_config, now_iso, setup_logger
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
@@ -693,6 +693,19 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
                     continue
 
             result = process_event(ev, fleet, meta)
+
+            # Rolling late-binding Faza 0 (2026-05-18): zasilenie puli pending.
+            # Flag-gated, defensywne — NIGDY nie wywróci shadow dispatchu.
+            # Faza 0 = czysta obserwacja; pula tylko lustruje NEW_ORDERy.
+            if C.ENABLE_PENDING_POOL:
+                try:
+                    _pp_created = payload.get("created_at_utc") or payload.get("first_seen")
+                    _pp_pickup = payload.get("pickup_at_warsaw")
+                    if oid is not None and _pp_created and _pp_pickup:
+                        pending_pool.upsert_order(str(oid), _pp_created, _pp_pickup)
+                except Exception as _pp_e:
+                    _log.warning(f"pending_pool upsert fail order={oid}: {_pp_e}")
+
             latency_ms = (time.time() - t0) * 1000.0
             record = _serialize_result(result, eid, latency_ms)
             # Propagate raw restaurant pickup time (pre-extension) — telegram_approver
