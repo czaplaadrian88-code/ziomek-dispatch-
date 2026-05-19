@@ -1578,6 +1578,20 @@ ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(
 ENABLE_F4_COURIER_POS_PICKUP_PROXY = _os.environ.get(
     "ENABLE_F4_COURIER_POS_PICKUP_PROXY", "0") == "1"
 
+# Sprint OBJ F4 Krok 2 (Opcja C, 2026-05-19): interpolacja pozycji kuriera
+# bez świeżego GPS po nodze pickup→delivery. f = clamp(elapsed/eta_leg, 0, 1),
+# gdzie elapsed = now − picked_up_at, eta_leg = OSRM pickup→delivery
+# (`osrm_client.route` z cache). cs.pos = pickup + f·(delivery − pickup),
+# pos_source = "last_picked_up_interp". Fail-soft (brak coords / brak ts /
+# eta=0 / OSRM exception) → caller pada na Krok 1 (pickup_proxy) → legacy
+# delivery. Flaga niezależna od Kroku 1: gdy obie ON, interp ma pierwszeństwo
+# nad pickup_proxy. Default OFF — env ON po replay + shadow-verify Kroku 1
+# (#54 PASS 2026-05-19 21:00 UTC). Hot-path resolvera: 1 wywołanie OSRM per
+# kurier no-gps z picked_up — cache OSRM mityguje. Design:
+# eod_drafts/2026-05-18/obj_f4_courier_position_design.md
+ENABLE_F4_COURIER_POS_INTERP = _os.environ.get(
+    "ENABLE_F4_COURIER_POS_INTERP", "0") == "1"
+
 # Sprint OBJ F1 (2026-05-17): R6 soft upper bound w solverze TSP — CumulVar
 # węzła delivery > pickup_anchor+35 → kara coeff×overshoot. Sprawia że solver
 # respektuje R6 (35 min) gdy się da, a gdy R6-doomed minimalizuje przekroczenie

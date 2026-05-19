@@ -18,8 +18,10 @@ from typing import Dict, List, Optional, Tuple
 from dispatch_v2.common import (
     setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag,
     ENABLE_F4_COURIER_POS_PICKUP_PROXY,
+    ENABLE_F4_COURIER_POS_INTERP,
 )
 from dispatch_v2 import state_machine
+from dispatch_v2 import osrm_client
 
 _log = setup_logger("courier_resolver", "/root/.openclaw/workspace/scripts/logs/courier_resolver.log")
 
@@ -69,6 +71,7 @@ PRE_SHIFT_WINDOW_MIN = 50
 # kurierów występujących pod kilkoma courier_id (legacy + panel).
 POS_SOURCE_PRIORITY = {
     "gps": 0,
+    "last_picked_up_interp": 1,    # F4 Krok 2 — interpolacja na nodze pickup→delivery
     "last_picked_up_pickup": 1,    # F4 Krok 1 — punkt realnie odwiedzony
     "last_picked_up_delivery": 1,
     "last_assigned_pickup": 2,
@@ -359,6 +362,47 @@ def _bag_not_stale(order: Dict, now_utc: datetime) -> bool:
         return True  # parse fail = defensywnie zachowaj
 
 
+def _compute_interp_pos(
+    order: Dict, now_utc: datetime
+) -> Optional[Tuple[Tuple[float, float], str]]:
+    """F4 Krok 2 (Opcja C): pozycja kuriera = interpolacja liniowa
+    pickup_coords → delivery_coords po f = clamp(elapsed/eta_leg, 0, 1).
+
+    elapsed = now − picked_up_at; eta_leg = OSRM duration_min pickup→delivery.
+    Zwraca ((lat, lon), "last_picked_up_interp") albo None gdy fail-soft
+    (caller pada na Krok 1 → legacy). Fail-soft pokrywa:
+      • brak pickup_coords / delivery_coords / picked_up_at
+      • picked_up_at parsuje się błędnie
+      • elapsed < 0 (sanity: ts w przyszłości)
+      • OSRM exception lub duration_min ≤ 0 (degenerat)
+    """
+    pickup = order.get("pickup_coords")
+    delivery = order.get("delivery_coords")
+    ts_str = order.get("picked_up_at")
+    if not pickup or not delivery or not ts_str:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+    elapsed_min = (now_utc - ts).total_seconds() / 60.0
+    if elapsed_min < 0:
+        return None
+    try:
+        leg = osrm_client.route(tuple(pickup), tuple(delivery), use_cache=True)
+        eta_min = float(leg.get("duration_min") or 0.0)
+    except Exception:
+        return None
+    if eta_min <= 0:
+        return None
+    f = max(0.0, min(1.0, elapsed_min / eta_min))
+    lat = float(pickup[0]) + f * (float(delivery[0]) - float(pickup[0]))
+    lon = float(pickup[1]) + f * (float(delivery[1]) - float(pickup[1]))
+    return ((lat, lon), "last_picked_up_interp")
+
+
 def _reconstruct_bag_from_panel_packs(
     cs: "CourierState",
     candidate_oids: List,
@@ -399,6 +443,14 @@ def _reconstruct_bag_from_panel_packs(
     for order in sorted(rebuilt, key=_bag_sort_key, reverse=True):
         st = order.get("status")
         if st == "picked_up":
+            # F4 Krok 2 (Opcja C): interpolacja pickup→delivery po elapsed/eta_leg.
+            # Ma pierwszeństwo nad pickup_proxy (Krok 1) gdy obie flagi ON;
+            # fail-soft (None) → caller pada na pickup_proxy → legacy delivery.
+            if ENABLE_F4_COURIER_POS_INTERP:
+                _interp = _compute_interp_pos(order, now_utc)
+                if _interp is not None:
+                    cs.pos, cs.pos_source = _interp
+                    break
             # F4 Krok 1: pickup_coords (punkt realny) > delivery_coords (proxy).
             if ENABLE_F4_COURIER_POS_PICKUP_PROXY and order.get("pickup_coords"):
                 cs.pos = tuple(order["pickup_coords"])
@@ -544,6 +596,15 @@ def build_fleet_snapshot(
             resolved = False
             for order in sorted_bag:
                 if order.get("status") == "picked_up":
+                    # F4 Krok 2 (Opcja C): interpolacja pickup→delivery
+                    # po elapsed/eta_leg. Pierwszeństwo nad pickup_proxy;
+                    # fail-soft (None) → ścieżka Krok 1 / legacy poniżej.
+                    if ENABLE_F4_COURIER_POS_INTERP:
+                        _interp = _compute_interp_pos(order, now_utc)
+                        if _interp is not None:
+                            cs.pos, cs.pos_source = _interp
+                            resolved = True
+                            break
                     # F4 Krok 1 (Opcja A): proxy = pickup_coords zamiast
                     # delivery_coords — eliminuje bias frozen-window (474266).
                     if ENABLE_F4_COURIER_POS_PICKUP_PROXY and order.get("pickup_coords"):
