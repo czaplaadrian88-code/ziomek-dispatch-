@@ -570,6 +570,60 @@ def update_from_event(event: dict) -> Optional[dict]:
         )
         return upsert_order(oid, update_fields, event="CZAS_KURIERA_UPDATED")
 
+    if etype == "PICKUP_TIME_UPDATED":
+        # Root cause oid 474577 (2026-05-19): pickup_at_warsaw zapisywany RAZ
+        # w NEW_ORDER, nigdy nie odświeżany dla czasówek status=planned →
+        # koordynator zmienił czas odbioru na życzenie restauracji, Ziomek
+        # czytał stary (czasowka_scheduler._minutes_to_pickup → FORCE_ASSIGN
+        # spam). panel_watcher._diff_pickup_time wykrył zmianę pickup_at_warsaw
+        # (|Δt| ≥ próg). Odśwież pola czasu odbioru, preserve status/courier/
+        # czas_kuriera/commitment (orthogonal — czas_kuriera ma własny handler).
+        new_pickup = payload.get("new_pickup_at_warsaw")
+        if not new_pickup:
+            _log.error(
+                f"PICKUP_TIME_UPDATED {oid}: brak new_pickup_at_warsaw, skip"
+            )
+            return None
+        # Sanity: musi parsować się jako ISO datetime (Lekcja #81 fail-loud).
+        try:
+            datetime.fromisoformat(new_pickup)
+        except (ValueError, TypeError) as e:
+            _log.error(
+                f"PICKUP_TIME_UPDATED {oid}: pickup_at_warsaw parse fail "
+                f"({new_pickup!r}): {e}, skip"
+            )
+            return None
+        existing = get_order(oid)
+        if existing is None:
+            _log.warning(f"PICKUP_TIME_UPDATED for unknown oid={oid}, skipping")
+            return None
+        prev_count = int(existing.get("pickup_time_change_count") or 0)
+        update_fields = {
+            "pickup_at_warsaw": new_pickup,
+            "pickup_time_change_count": prev_count + 1,
+        }
+        # prep_minutes / decision_deadline / zmiana_czasu_odbioru — odśwież
+        # gdy panel dostarczył świeże; NIE nadpisuj realnej wartości None'em.
+        new_prep = payload.get("new_prep_minutes")
+        if new_prep is not None:
+            update_fields["prep_minutes"] = new_prep
+        new_dd = payload.get("new_decision_deadline")
+        if new_dd is not None:
+            update_fields["decision_deadline"] = new_dd
+        new_zco = payload.get("new_zmiana_czasu_odbioru")
+        if new_zco is not None:
+            update_fields["zmiana_czasu_odbioru"] = new_zco
+        _p_delta = payload.get("delta_min")
+        _p_delta_str = (
+            f"Δ={_p_delta:+.1f}min" if _p_delta is not None else "Δ=null(late)"
+        )
+        _log.info(
+            f"PICKUP_TIME_UPDATED oid={oid} pickup "
+            f"{payload.get('old_pickup_at_warsaw')} → {new_pickup} "
+            f"{_p_delta_str} src={payload.get('source')}"
+        )
+        return upsert_order(oid, update_fields, event="PICKUP_TIME_UPDATED")
+
     if etype == "COURIER_PICKED_UP":
         # F2.1b step 5: CELOWO NIE resetujemy bag_time_alerted tutaj.
         # Panel_watcher może reemit COURIER_PICKED_UP przez reconcile retry po

@@ -72,9 +72,9 @@ def test_audit_queue_sets_disjoint_and_complete():
     assert queue & broadcast == set(), f"QUEUE and BROADCAST overlap: {queue & broadcast}"
     union = audit | queue | broadcast
     assert union == event_bus.EVENT_TYPES, f"Union != EVENT_TYPES: missing {event_bus.EVENT_TYPES - union}"
-    # Sanity: 4 audit types
+    # Sanity: 5 audit types (PICKUP_TIME_UPDATED dodany 2026-05-19, oid 474577)
     assert audit == {
-        "COURIER_ASSIGNED", "CZAS_KURIERA_UPDATED",
+        "COURIER_ASSIGNED", "CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED",
         "PANEL_UNREACHABLE", "ORDER_RETURNED_TO_POOL",
     }
     # Sanity: A4 broadcast types

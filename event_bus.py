@@ -52,6 +52,11 @@ EVENT_TYPES = {
     # ValueError → state_machine NIE dostaje update → orders_state stale czas_kuriera.
     # state_machine.py:316 ma już handler. Dodanie do allowlist completes V3.19g1.
     "CZAS_KURIERA_UPDATED",
+    # PICKUP_TIME_UPDATED (oid 474577 root cause, 2026-05-19): panel_watcher
+    # wykrył zmianę pickup_at_warsaw (czas odbioru z restauracji) dla czasówki
+    # planned / assigned / picked_up. state_machine.py ma handler — odświeża
+    # pickup_at_warsaw + prep_minutes + decision_deadline. Audit type (niżej).
+    "PICKUP_TIME_UPDATED",
     # A4 (audit META RC2 2026-05-07): CONFIG_RELOAD broadcast event dla
     # cache invalidation cross-process. Każdy long-running service polling'uje
     # via poll_broadcast() + invalidate per-process caches gdy scope match.
@@ -75,6 +80,7 @@ BROADCAST_EVENT_TYPES = {
 AUDIT_EVENT_TYPES = {
     "COURIER_ASSIGNED",
     "CZAS_KURIERA_UPDATED",
+    "PICKUP_TIME_UPDATED",
     "PANEL_UNREACHABLE",
     "ORDER_RETURNED_TO_POOL",
 }

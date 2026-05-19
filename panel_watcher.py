@@ -423,6 +423,82 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
     }
 
 
+def _diff_pickup_time(old_state: dict, fresh_response: dict,
+                      oid: str) -> Optional[dict]:
+    """Detect pickup_at_warsaw change (restaurant-declared pickup time).
+
+    Root cause oid 474577 (2026-05-19): koordynator zmienił czas odbioru
+    czasówki trzymanej przez Koordynatora na życzenie restauracji.
+    pickup_at_warsaw zapisywany RAZ w NEW_ORDER, nigdy nie odświeżany dla
+    status=planned → czasowka_scheduler._minutes_to_pickup liczył T-minus
+    od starego czasu (FORCE_ASSIGN spam ~3h za wcześnie).
+
+    pickup_at_warsaw pochodzi z panelowego czas_odbioru_timestamp —
+    OSOBNE pole niż czas_kuriera (które pokrywa V3.19g1). Oba mogą się
+    rozjechać, więc potrzebna niezależna detekcja.
+
+    Returns None gdy: brak zmiany, poniżej progu, null→null,
+    value→null (panel revert — warn + skip).
+    Returns event dict gdy |Δt| >= PICKUP_TIME_DELTA_THRESHOLD_MIN
+    lub null→value (late-arriving panel field).
+    """
+    from dispatch_v2.common import PICKUP_TIME_DELTA_THRESHOLD_MIN
+
+    old_state = old_state or {}
+    fresh_response = fresh_response or {}
+
+    old_iso = old_state.get("pickup_at_warsaw")
+    new_iso = fresh_response.get("pickup_at_warsaw")
+
+    # null→null — brak danych po obu stronach.
+    if not old_iso and not new_iso:
+        return None
+    # value→null — panel revert; nie nadpisuj realnej wartości None'em.
+    if old_iso and not new_iso:
+        _log.warning(f"pickup_time oid={oid} change_to_null old={old_iso}")
+        return None
+
+    delta_min: Optional[float] = None
+    event_id_suffix: Optional[str] = None
+    if not old_iso and new_iso:
+        # null→value — panel dostarczył pickup_at_warsaw późno (rzadkie:
+        # NEW_ORDER zwykle je ma). Traktuj jak update, brak baseline delty.
+        event_id_suffix = "_LATE"
+    else:
+        # value→value — policz signed deltę.
+        try:
+            old_dt = datetime.fromisoformat(old_iso)
+            new_dt = datetime.fromisoformat(new_iso)
+        except (ValueError, TypeError) as e:
+            _log.warning(f"pickup_time oid={oid} iso parse fail: {e}")
+            return None
+        delta_min = (new_dt - old_dt).total_seconds() / 60.0
+        if abs(delta_min) < PICKUP_TIME_DELTA_THRESHOLD_MIN:
+            return None  # noise floor
+
+    payload = {
+        "oid": oid,
+        "courier_id": old_state.get("courier_id"),
+        "old_pickup_at_warsaw": old_iso,
+        "new_pickup_at_warsaw": new_iso,
+        "old_prep_minutes": old_state.get("prep_minutes"),
+        "new_prep_minutes": fresh_response.get("prep_minutes"),
+        "new_decision_deadline": fresh_response.get("decision_deadline"),
+        "new_zmiana_czasu_odbioru": fresh_response.get("zmiana_czasu_odbioru"),
+        "delta_min": round(delta_min, 2) if delta_min is not None else None,
+        "source": "panel_re_check",
+    }
+    evt = {
+        "event_type": "PICKUP_TIME_UPDATED",
+        "order_id": oid,
+        "courier_id": old_state.get("courier_id"),
+        "payload": payload,
+    }
+    if event_id_suffix:
+        evt["event_id_suffix"] = event_id_suffix
+    return evt
+
+
 def _compute_kid_diagnostic(state_order: dict, fresh_order: dict) -> dict:
     """V3.19g1 diagnostic: kid_state / kid_panel / kid_mismatch.
 
@@ -1219,18 +1295,44 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _update_plan_on_picked_up(kid, zid, dzien_odbioru)
     # ================== END PICKED_UP RECONCILE ==================
 
-    # ================== V3.19g1 czas_kuriera DETECTION ==================
-    # Detect czas_kuriera changes for already-assigned orders. Emits
-    # CZAS_KURIERA_UPDATED events so state_machine re-persists fresh ck and
-    # subsequent scoring reads fresh pickup_ready_at via bag_raw rebuild.
-    # Flag-gated — no cost when False.
+    # ============ ORDER-TIME RE-CHECK (czas_kuriera + pickup) ============
+    # Re-czytaj panelowe pola czasu dla NIE-terminalnych zleceń i emituj
+    # update gdy się zmieniły. Dwie niezależne detekcje na jednym fetchu:
+    #
+    #  V3.19g1 CZAS_KURIERA_UPDATED — panelowe czas_kuriera (HH:MM, declared
+    #    courier arrival). Pokrywało historycznie tylko assigned/picked_up.
+    #
+    #  PICKUP_TIME_UPDATED (oid 474577 root cause, 2026-05-19) — panelowe
+    #    czas_odbioru_timestamp → pickup_at_warsaw (czas odbioru z restauracji).
+    #    pickup_at_warsaw zapisywany RAZ w NEW_ORDER, nigdy nie odświeżany dla
+    #    status=planned. Czasówka żyje większość czasu jako planned w buckecie
+    #    Koordynatora — koordynator zmieniał czas na życzenie restauracji,
+    #    czasowka_scheduler czytał stary pickup_at_warsaw.
+    #
+    # SCOPE: assigned/picked_up (dowolny typ) + planned CZASÓWKI. Czasówki
+    # planned są nieliczne i długowieczne (godziny w Koordynatorze) — koszt
+    # fetchu ograniczony. Elastyki planned rozwiązują się w minuty (krótkie
+    # okno ryzyka) i są liczne → pominięte dla kosztu; po assign trafiają w
+    # scope assigned. Każda detekcja osobno flag-gated — zero kosztu gdy obie
+    # False.
     try:
-        from dispatch_v2.common import ENABLE_V319G_CK_DETECTION
+        from dispatch_v2.common import (
+            ENABLE_V319G_CK_DETECTION, ENABLE_PICKUP_TIME_DETECTION)
     except Exception:
         ENABLE_V319G_CK_DETECTION = False
-    if ENABLE_V319G_CK_DETECTION:
+        ENABLE_PICKUP_TIME_DETECTION = False
+    if ENABLE_V319G_CK_DETECTION or ENABLE_PICKUP_TIME_DETECTION:
         for zid, state_order in list(current_state.items()):
-            if state_order.get("status") not in ("assigned", "picked_up"):
+            _status = state_order.get("status")
+            _is_czasowka = (
+                state_order.get("order_type") == "czasowka"
+                or (state_order.get("prep_minutes") or 0) >= 60
+            )
+            in_scope = (
+                _status in ("assigned", "picked_up")
+                or (_status == "planned" and _is_czasowka)
+            )
+            if not in_scope:
                 continue
             if zid not in html_order_ids:
                 continue  # terminal or vanished — skip
@@ -1238,7 +1340,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 raw_ck = fetch_order_details(zid, csrf)
                 stats["fetched_details"] = stats.get("fetched_details", 0) + 1
             except Exception as e:
-                _log.debug(f"v319g1 fetch fail zid={zid}: {e}")
+                _log.debug(f"order-time fetch fail zid={zid}: {e}")
                 continue
             if not raw_ck:
                 continue
@@ -1250,39 +1352,74 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 # on every tick → 25-min crash loop 2026-04-21.
                 norm_ck = normalize_order(raw_ck) or {}
             except Exception as e:
-                _log.debug(f"v319g1 normalize fail zid={zid}: {e}")
+                _log.debug(f"order-time normalize fail zid={zid}: {e}")
                 continue
-            fresh_snippet = {
-                "czas_kuriera_warsaw": norm_ck.get("czas_kuriera_warsaw"),
-                "czas_kuriera_hhmm": norm_ck.get("czas_kuriera_hhmm"),
-                "id_kurier": raw_ck.get("id_kurier"),
-            }
-            evt = _diff_czas_kuriera(state_order, fresh_snippet, oid=zid)
-            if evt is None:
-                continue
-            # V3.27.1 BUG-1: event_id suffix dispatch — first_acceptance używa _FIRST_ACK
-            # dla łatwego grep, value→value zachowuje delta-based suffix.
-            suffix = evt.get("event_id_suffix")
-            if suffix:
-                event_id_str = f"{zid}_CZAS_KURIERA_UPDATED{suffix}"
-            else:
-                event_id_str = f"{zid}_CZAS_KURIERA_UPDATED_{int(evt['payload'].get('delta_min',0)*10)}"
-            emit_audit(
-                "CZAS_KURIERA_UPDATED",
-                order_id=zid,
-                courier_id=str(state_order.get("courier_id") or ""),
-                payload=evt["payload"],
-                event_id=event_id_str,
-            )
-            update_from_event(evt)
-            delta_val = evt["payload"].get("delta_min")
-            delta_str = f"Δ={delta_val:+.1f}min" if delta_val is not None else "Δ=null(first_ack)"
-            _log.info(
-                f"V3.19g1 oid={zid} ck "
-                f"{evt['payload'].get('old_ck_hhmm')}→{evt['payload'].get('new_ck_hhmm')} "
-                f"{delta_str}"
-            )
-    # ================== END V3.19g1 ==================
+
+            # ---- Detekcja A: czas_kuriera (V3.19g1) ----
+            if ENABLE_V319G_CK_DETECTION:
+                fresh_snippet = {
+                    "czas_kuriera_warsaw": norm_ck.get("czas_kuriera_warsaw"),
+                    "czas_kuriera_hhmm": norm_ck.get("czas_kuriera_hhmm"),
+                    "id_kurier": raw_ck.get("id_kurier"),
+                }
+                evt = _diff_czas_kuriera(state_order, fresh_snippet, oid=zid)
+                if evt is not None:
+                    # V3.27.1 BUG-1: event_id suffix dispatch — first_acceptance
+                    # używa _FIRST_ACK dla łatwego grep, value→value zachowuje
+                    # delta-based suffix.
+                    suffix = evt.get("event_id_suffix")
+                    if suffix:
+                        event_id_str = f"{zid}_CZAS_KURIERA_UPDATED{suffix}"
+                    else:
+                        event_id_str = f"{zid}_CZAS_KURIERA_UPDATED_{int(evt['payload'].get('delta_min',0)*10)}"
+                    emit_audit(
+                        "CZAS_KURIERA_UPDATED",
+                        order_id=zid,
+                        courier_id=str(state_order.get("courier_id") or ""),
+                        payload=evt["payload"],
+                        event_id=event_id_str,
+                    )
+                    update_from_event(evt)
+                    delta_val = evt["payload"].get("delta_min")
+                    delta_str = f"Δ={delta_val:+.1f}min" if delta_val is not None else "Δ=null(first_ack)"
+                    _log.info(
+                        f"V3.19g1 oid={zid} ck "
+                        f"{evt['payload'].get('old_ck_hhmm')}→{evt['payload'].get('new_ck_hhmm')} "
+                        f"{delta_str} status={_status}"
+                    )
+
+            # ---- Detekcja B: pickup_at_warsaw (PICKUP_TIME_UPDATED) ----
+            if ENABLE_PICKUP_TIME_DETECTION:
+                pickup_snippet = {
+                    "pickup_at_warsaw": norm_ck.get("pickup_at_warsaw"),
+                    "prep_minutes": norm_ck.get("prep_minutes"),
+                    "decision_deadline": norm_ck.get("decision_deadline"),
+                    "zmiana_czasu_odbioru": norm_ck.get("zmiana_czasu_odbioru"),
+                }
+                evt_p = _diff_pickup_time(state_order, pickup_snippet, oid=zid)
+                if evt_p is not None:
+                    p_suffix = evt_p.get("event_id_suffix")
+                    if p_suffix:
+                        p_event_id = f"{zid}_PICKUP_TIME_UPDATED{p_suffix}"
+                    else:
+                        p_event_id = f"{zid}_PICKUP_TIME_UPDATED_{int(evt_p['payload'].get('delta_min',0)*10)}"
+                    emit_audit(
+                        "PICKUP_TIME_UPDATED",
+                        order_id=zid,
+                        courier_id=str(state_order.get("courier_id") or ""),
+                        payload=evt_p["payload"],
+                        event_id=p_event_id,
+                    )
+                    update_from_event(evt_p)
+                    p_delta = evt_p["payload"].get("delta_min")
+                    p_delta_str = f"Δ={p_delta:+.1f}min" if p_delta is not None else "Δ=null(late)"
+                    _log.info(
+                        f"PICKUP_TIME_UPDATED oid={zid} pickup "
+                        f"{evt_p['payload'].get('old_pickup_at_warsaw')}→"
+                        f"{evt_p['payload'].get('new_pickup_at_warsaw')} "
+                        f"{p_delta_str} status={_status}"
+                    )
+    # ================== END ORDER-TIME RE-CHECK ==================
 
     return stats
 

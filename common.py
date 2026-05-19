@@ -1029,6 +1029,24 @@ ENABLE_V319G_CK_DETECTION = _os.environ.get(
     "ENABLE_V319G_CK_DETECTION", "1") == "1"
 V319G_CK_DELTA_THRESHOLD_MIN = 3.0
 
+# ============================================================
+# PICKUP_TIME_UPDATED — detekcja zmiany pickup_at_warsaw (czas odbioru).
+# Root cause oid 474577 (2026-05-19): pickup_at_warsaw zapisywany RAZ w
+# NEW_ORDER (event_id deterministyczny _NEW_ORDER_first), nigdy nie
+# odświeżany dla zleceń status=planned. Czasówka spędza większość życia
+# jako planned w buckecie Koordynatora — gdy koordynator zmieni czas
+# odbioru na życzenie restauracji, Ziomek czyta stary pickup_at_warsaw
+# (czasowka_scheduler._minutes_to_pickup → błędny FORCE_ASSIGN spam).
+# V3.19g1 czas_kuriera detection pokrywała tylko assigned/picked_up i
+# tylko pole czas_kuriera (osobne pole panelu niż czas_odbioru_timestamp).
+# Ta detekcja diffuje pickup_at_warsaw świeżo z panelu co tick dla
+# czasówek planned + wszystkich assigned/picked_up.
+# Env kill-switch: ENABLE_PICKUP_TIME_DETECTION=0
+# ============================================================
+ENABLE_PICKUP_TIME_DETECTION = _os.environ.get(
+    "ENABLE_PICKUP_TIME_DETECTION", "1") == "1"
+PICKUP_TIME_DELTA_THRESHOLD_MIN = 3.0
+
 
 # ============================================================
 # Telegram free-text assign control — Adrian 2026-04-21 disabled per
