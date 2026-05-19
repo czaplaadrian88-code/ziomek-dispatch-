@@ -234,6 +234,56 @@ def test_anchor_order_missing_in_bag_returns_none():
     assert anchor is None  # safe degradation
 
 
+# --- TD-#20 Krok 2: anchor z sentinela (0,0) brakujących coords ---
+
+def test_td20_anchor_pickup_zero_coords_returns_none():
+    """Anchor-pickup order z pickup_coords=(0,0) (P0.4 missing-coords sentinel)
+    → compute_insertion_anchor zwraca None (fail-soft). Bez fixa krotka (0,0)
+    jest truthy, przechodzi check `location is None`, anchor=(0,0) skażał
+    haversine w _v327_eval_courier:1584 (osrm sentinel ERROR ~24-30×/dobę)."""
+    plan, bag = _make_468404_fixture()
+    for o in bag:
+        if o.order_id == "468402":  # anchor dla 468404 = pickup 468402
+            o.pickup_coords = (0.0, 0.0)
+    anchor = compute_insertion_anchor(plan, "468404", bag)
+    assert anchor is None, f"Expected None dla (0,0) pickup anchor, got {anchor}"
+
+
+def test_td20_anchor_drop_zero_coords_returns_none():
+    """Anchor-drop order z delivery_coords=(0,0) → None (fail-soft)."""
+    bag = [
+        _MockOrderSim(
+            order_id="A",
+            pickup_coords=(53.13, 23.15),
+            delivery_coords=(0.0, 0.0),  # sentinel braku coords
+            restaurant="Rest A",
+            delivery_address="Drop A",
+        ),
+    ]
+    plan = _MockPlan(
+        sequence=["A", "NEW"],
+        pickup_at={
+            "A": _utc("2026-05-19T10:00:00+00:00"),
+            "NEW": _utc("2026-05-19T10:20:00+00:00"),
+        },
+        predicted_delivered_at={
+            "A": _utc("2026-05-19T10:15:00+00:00"),  # drop A tuż przed pickup NEW
+            "NEW": _utc("2026-05-19T10:40:00+00:00"),
+        },
+    )
+    anchor = compute_insertion_anchor(plan, "NEW", bag)
+    assert anchor is None, f"Expected None dla (0,0) drop anchor, got {anchor}"
+
+
+def test_td20_normal_coords_still_produce_anchor():
+    """Kauzalny guard: ten sam fixture z REALNYMI coords nadal daje anchor —
+    fix odpala się WYŁĄCZNIE dla (0,0), nie tłumi poprawnych przypadków."""
+    plan, bag = _make_468404_fixture()
+    anchor = compute_insertion_anchor(plan, "468404", bag)
+    assert anchor is not None
+    assert anchor.location == DONER_NSZ
+
+
 if __name__ == "__main__":
     test_468404_anchor_is_doner_pickup()
     print("test_468404_anchor_is_doner_pickup: PASS")
@@ -251,4 +301,10 @@ if __name__ == "__main__":
     print("test_iso_string_timestamps_supported: PASS")
     test_anchor_order_missing_in_bag_returns_none()
     print("test_anchor_order_missing_in_bag_returns_none: PASS")
-    print("ALL 8/8 PASS")
+    test_td20_anchor_pickup_zero_coords_returns_none()
+    print("test_td20_anchor_pickup_zero_coords_returns_none: PASS")
+    test_td20_anchor_drop_zero_coords_returns_none()
+    print("test_td20_anchor_drop_zero_coords_returns_none: PASS")
+    test_td20_normal_coords_still_produce_anchor()
+    print("test_td20_normal_coords_still_produce_anchor: PASS")
+    print("ALL 11/11 PASS")

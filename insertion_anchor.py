@@ -134,6 +134,15 @@ def compute_insertion_anchor(
     except (IndexError, TypeError, ValueError):
         return None
 
+    # TD-#20 Krok 2: (0,0) = sentinel brakujących coords (P0.4 data quality),
+    # NIE realna pozycja. Order w bagu bez geokodowania niesie pickup/delivery
+    # _coords=(0,0); krotka jest truthy, więc przechodzi check `is None` wyżej.
+    # Anchor z takich coords skażał haversine w _v327_eval_courier (osrm_client
+    # sentinel ERROR ~24-30×/dobę). Fail-soft jak `location is None` — brak
+    # anchora → caller pomija blok, legacy ścieżka bundle_level2.
+    if location_tuple == (0.0, 0.0):
+        return None
+
     return InsertionAnchor(
         location=location_tuple,
         timestamp=anchor_ts,
