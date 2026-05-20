@@ -1,0 +1,10 @@
+[Unit]
+Description=Ziomek State Snapshot — daily 03:00 UTC (= 05:00 Warsaw)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+Unit=dispatch-state-snapshot.service
+
+[Install]
+WantedBy=timers.target

@@ -24,6 +24,7 @@ Layout bloku tygodnia (25 kolumn):
 
 Interpreter: /root/.openclaw/venvs/sheets/bin/python3 (gspread + google-auth).
 """
+import os
 import sys
 import math
 import json
@@ -501,6 +502,97 @@ def apply_block_borders(ws, header_row: int, has_month_label: bool, logger):
     )
 
 
+# ---------- anomaly guard (incydent 2026-05-18: clobber → cichy zapis zer) ----------
+
+def _parse_block_monday(row, current_year: int) -> date | None:
+    """Parsuje datę poniedziałku z headera bloku. Wspiera 2 layouty:
+    - nowy (V3.27+): col B = 'pon DD.MM' (rok wnioskowany z current_year)
+    - stary (pre-V3.27): col B = 'poniedziałek', col C = 'DD.MM.YYYY'
+    Layouty mają tę samą strukturę kolumn count (B/E/H/K/N/Q/T), różnią się tylko nagłówkami."""
+    if len(row) <= COL_DAY_FIRST - 1:
+        return None
+    c_b = (row[COL_DAY_FIRST - 1] or "").strip().lstrip("'")
+    if c_b.startswith("pon ") and "." in c_b:
+        try:
+            ds = c_b.split(" ", 1)[1]
+            return datetime.strptime(f"{ds}.{current_year}", "%d.%m.%Y").date()
+        except Exception:
+            return None
+    if c_b.lower() == "poniedziałek":
+        if len(row) >= COL_DAY_FIRST + 1:
+            c_c = (row[COL_DAY_FIRST] or "").strip()
+            try:
+                return datetime.strptime(c_c, "%d.%m.%Y").date()
+            except Exception:
+                return None
+    return None
+
+
+def _same_weekday_history(all_values, current_monday: date, weekday_idx: int,
+                          lookback_weeks: int = 4) -> list[tuple[date, int]]:
+    """Sumuje kolumnę 'count' (B/E/H/K/N/Q/T) z poprzednich {lookback_weeks}
+    wystąpień tego samego dnia tygodnia. Zwraca listę (monday, total) zsort.
+    malejąco po dacie. Pomija bieżący/przyszły tydzień."""
+    col_idx = day_col_offset(weekday_idx)
+    history: list[tuple[date, int]] = []
+    n = len(all_values)
+    for i, row in enumerate(all_values):
+        block_monday = _parse_block_monday(row, current_monday.year)
+        if block_monday is None:
+            continue
+        if block_monday >= current_monday:
+            continue
+        total = 0
+        for hi in range(HOUR_END - HOUR_START + 1):
+            ri = i + 1 + hi
+            if ri >= n:
+                break
+            r = all_values[ri]
+            if len(r) <= col_idx:
+                continue
+            try:
+                total += int((r[col_idx] or "0").strip() or 0)
+            except (ValueError, AttributeError):
+                continue
+        history.append((block_monday, total))
+    history.sort(key=lambda t: t[0], reverse=True)
+    return history[:lookback_weeks]
+
+
+def check_total_anomaly(target: date, current_total: int, history: list,
+                        ratio_threshold: float = 0.5,
+                        min_baseline: int = 50) -> str | None:
+    """Zwraca komunikat ALERT-u jeśli current_total < ratio_threshold * baseline
+    (baseline = średnia same-weekday z historii). None gdy OK / brak danych.
+
+    Zapobiega cichym zapisom zer (incydent 2026-05-18 14:47 UTC: clobber
+    orders_state.json przez test bez izolacji → cron daily_stats wpisał 0
+    do kolumn pon h9-h15 zamiast emitować ALERT)."""
+    if not history:
+        return None
+    totals = [t for _, t in history]
+    baseline = sum(totals) / len(totals)
+    if baseline < min_baseline:
+        return None
+    if current_total >= ratio_threshold * baseline:
+        return None
+    weekday_name = DAYS_SHORT[target.weekday()]
+    hist_str = ", ".join(
+        f"{d.isoformat()}={t}" for d, t in history
+    )
+    return (
+        f"📉 ANOMALIA daily_stats {target.isoformat()} ({weekday_name}): "
+        f"total={current_total} < {ratio_threshold:.0%} same-weekday avg "
+        f"({baseline:.0f}) z {len(history)} tyg.\n"
+        f"Historia: {hist_str}\n"
+        f"Możliwy clobber/utrata orders_state.json. Sprawdź:\n"
+        f"  ls -la /root/.openclaw/workspace/dispatch_state/snapshots/\n"
+        f"  python3 -m dispatch_v2.tools.rebuild_state_from_events --since {target.isoformat()}T00:00:00+00:00 --target /tmp/recovery_{target.isoformat()}/\n"
+        f"Bypass (po weryfikacji że dzień faktycznie cichy):\n"
+        f"  daily_stats_sheets.py --date {target.isoformat()} --overwrite"
+    )
+
+
 # ---------- main ----------
 
 def main():
@@ -551,6 +643,25 @@ def main():
 
     monday = monday_of(target)
     header_row, all_values, created = upsert_block(ws, monday, log, args.dry_run)
+
+    # Anomaly guard (incydent 2026-05-18) — zapobiega cichym zapisom zer.
+    # --overwrite (manual backfill) i DAILY_STATS_BYPASS_ANOMALY=1 obchodzą.
+    if not args.overwrite and not os.environ.get("DAILY_STATS_BYPASS_ANOMALY"):
+        history = _same_weekday_history(all_values, monday, weekday_idx)
+        anomaly_msg = check_total_anomaly(target, total, history)
+        if anomaly_msg:
+            log.error(anomaly_msg)
+            try:
+                from dispatch_v2.telegram_utils import send_admin_alert
+                send_admin_alert(anomaly_msg)
+            except Exception as e:
+                log.warning(f"send_admin_alert failed: {e!r}")
+            log.error(
+                "Skip write — total wygląda na zbyt niski względem same-weekday "
+                "baseline. Po weryfikacji odpal z --overwrite lub "
+                "DAILY_STATS_BYPASS_ANOMALY=1."
+            )
+            sys.exit(4)
 
     # Apply borders for freshly-created block (idempotent redraws are fine too,
     # but cheaper to do it only once per block creation).

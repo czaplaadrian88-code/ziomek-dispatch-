@@ -1,0 +1,13 @@
+[Unit]
+Description=Ziomek State Snapshot — daily backup orders_state.json (7-day retention)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/root/.openclaw/workspace/scripts/dispatch_v2/tools/snapshot_orders_state.sh
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/state_snapshot.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/state_snapshot.log
+
+[Install]
+WantedBy=multi-user.target
