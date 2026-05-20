@@ -634,6 +634,10 @@ def process_event(
         # dispatch_pipeline consumer (pod flagą ENABLE_CZAS_KURIERA_PROPAGATION).
         "czas_kuriera_warsaw": payload.get("czas_kuriera_warsaw"),
         "czas_kuriera_hhmm": payload.get("czas_kuriera_hhmm"),
+        # R-PACZKI-FLEX (2026-05-20): propagate paczka classifier inputs.
+        "address_id": payload.get("address_id"),
+        "order_type": payload.get("order_type"),
+        "created_at_utc": payload.get("created_at_utc") or payload.get("created_at"),
     }
     return assess_order(order_event, fleet, meta, now=now)
 
