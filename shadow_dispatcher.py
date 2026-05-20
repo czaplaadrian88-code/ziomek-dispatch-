@@ -176,7 +176,8 @@ def _serialize_dt_map(m):
 # *_speed_*, *_fleet_*, etc. trafia do logu bez ręcznego dodawania pole-po-polu.
 _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "bonus_", "rule_", "intra_",
                        "dwell_", "drive_speed_",  # 2026-05-17: tier-aware DWELL + drive-speed metryki (#109)
-                       "objm_")  # sprint OBJ F0.3: metryki jakości planu (idle/thermal/r6_breach/span)
+                       "objm_",  # sprint OBJ F0.3: metryki jakości planu (idle/thermal/r6_breach/span)
+                       "paczka_")  # R-PACZKI-FLEX (2026-05-20): paczka_is / paczka_flex_eligible / paczka_*
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
@@ -748,10 +749,18 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             except (TypeError, ValueError):
                 _aid_int = None
             record["address_id"] = _aid  # audit trail in shadow log
+            # R-PACZKI-FLEX (2026-05-20): firmowe nadajesz.pl jako paczka =
+            # Ziomek proponuje (flip suppressu). Gdy flag OFF — stara semantyka.
+            _payload = ev.get("payload") or {}
+            _is_paczka_flex = (
+                C.ENABLE_R_PACZKI_FLEX
+                and C.is_paczka_order(_payload)
+            )
             if (record.get("verdict") == "PROPOSE"
                     and _aid_int is not None
                     and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS
-                    and not C.flag("ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS", False)):
+                    and not C.flag("ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS", False)
+                    and not _is_paczka_flex):
                 _log.info(
                     f"SHADOW {oid} firmowe-konto aid={_aid}: PROPOSE suppressed "
                     f"(flag ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=false). "

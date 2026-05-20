@@ -1845,6 +1845,47 @@ def extension_penalty(planned_pickup_at, restaurant_requested_at):
 
 FIRMOWE_KONTO_ADDRESS_IDS = frozenset({161})  # Nadajesz.pl firmowe konto
 
+# R-PACZKI-FLEX (2026-05-20) — paczki vs jedzeniówki ground truth.
+# 6 kont firmowych identyfikowanych przez address_id (zweryfikowane empirycznie
+# events.db 2026-05-20): Nadajesz.pl firmowe (161), Dr Tusz (232), Dentomax (233),
+# 3Giga (234), Interpap Polska (235), Orthdruk (236). Paczki nie mają deadline
+# restauracyjnego (R-DECLARED-TIME nieaplikowalne, nic się nie psuje).
+# Ziomek planuje je elastycznie wokół jedzeniówek z soft cap 2h pickup / 3h delivery
+# liczonym od pojawienia się w panelu gastro (created_at_utc z normalize_order).
+# WYJĄTEK: czasówki (order_type=='czasowka', prep_minutes>=60) trzymają konkretną
+# porę bez względu na konto — R-DECLARED-TIME nadrzędne nad R-PACZKI-FLEX.
+PACZKA_ADDRESS_IDS = frozenset({161, 232, 233, 234, 235, 236})
+PACZKA_PICKUP_SOFT_CAP_MIN = 120.0    # 2h od created_at gastro
+PACZKA_DELIVERY_SOFT_CAP_MIN = 180.0  # 3h od created_at gastro
+PACZKA_FLEX_PENALTY_PER_MIN = 1.0     # liniowy, -1 punkt/min nad cap
+
+# Flag default OFF — shadow mode pierwsze 24h, flip True przez flags.json hot-reload.
+ENABLE_R_PACZKI_FLEX = _os.environ.get("ENABLE_R_PACZKI_FLEX", "0") == "1"
+
+
+def is_paczka_order(order_dict) -> bool:
+    """True jeśli order pochodzi z jednego z 6 kont paczkowych.
+    Fail-safe: corrupt/None address_id → False (jedzeniówka, surowe R-35MIN-MAX apply).
+    """
+    if not isinstance(order_dict, dict):
+        return False
+    aid = order_dict.get("address_id")
+    try:
+        return int(aid) in PACZKA_ADDRESS_IDS
+    except (TypeError, ValueError):
+        return False
+
+
+def is_paczka_flex_eligible(order_dict) -> bool:
+    """True gdy paczka kwalifikuje się do R-PACZKI-FLEX (flex soft cap zamiast 35min hard).
+    Czasówka (order_type=='czasowka') NIE jest flex — R-DECLARED-TIME nadrzędne.
+    """
+    if not is_paczka_order(order_dict):
+        return False
+    if not isinstance(order_dict, dict):
+        return False
+    return order_dict.get("order_type") != "czasowka"
+
 # Last-resort fallback coords gdy parser uwag zawiedzie (P3 edge / malformed
 # uwagi / geocode fail). Source: Adrian decision 2026-05-07 — DMS
 # 53°07'56.0"N 23°10'06.4"E (~centrala/baza Nadajesz.pl, Białystok centrum).

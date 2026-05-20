@@ -41,10 +41,12 @@ from dispatch_v2.common import (
     ENABLE_TIMELINE_FORMAT,
     ENABLE_TRANSPARENCY_REASON,
     ENABLE_TRANSPARENCY_ROUTE,
+    ENABLE_R_PACZKI_FLEX,
     FIRMOWE_KONTO_ADDRESS_IDS,
     WARSAW,
     drop_zone_from_address,
     flag,
+    is_paczka_order,
     load_config,
     load_flags,
     now_iso,
@@ -1847,9 +1849,13 @@ async def proposal_sender(state: dict) -> None:
             _aid_int = int(_aid_raw) if _aid_raw is not None else None
         except (TypeError, ValueError):
             _aid_int = None
+        # R-PACZKI-FLEX (2026-05-20): firmowe nadajesz.pl jako paczka → propose
+        # (flip suppressu). is_paczka_order patrzy na address_id (rec dict).
+        _is_paczka_flex = ENABLE_R_PACZKI_FLEX and is_paczka_order(rec)
         if (_aid_int is not None
                 and _aid_int in FIRMOWE_KONTO_ADDRESS_IDS
-                and not flag("ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS", False)):
+                and not flag("ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS", False)
+                and not _is_paczka_flex):
             _log.info(
                 f"PROPOSAL SUPPRESSED oid={oid} address_id={_aid_raw} "
                 f"(firmowe konto, flag ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=false)"

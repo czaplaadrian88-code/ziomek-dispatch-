@@ -589,6 +589,21 @@ def check_feasibility_v2(
     # Dlaczego nie plan.pickup_at (jak pre-V3.28): TSP może projektować pickup later
     # niż ready_at (np. +37 min gdy kurier zajęty), maskując 70+ min real thermal.
     # Diagnoza 2026-05-10 472189: r6_max_bag_time=34 min "pass" while real thermal 70 min.
+    # R-PACZKI-FLEX (2026-05-20): bypass R6 35min hard gate gdy CAŁY proponowany
+    # bag (bag + new_order) składa się wyłącznie z paczek — paczki nie mają
+    # termiki, nic się nie psuje. Jakakolwiek jedzeniówka w mixie → standardowy
+    # 35min apply do wszystkich (jedzeniówka rządzi). Czasówka-paczka też
+    # bypass R6 (paczka), czasówka rządzi tylko czasem pickupu nie delivery.
+    def _is_paczka_sim(o):
+        return C.is_paczka_order({
+            "address_id": getattr(o, "address_id", None),
+            "order_type": getattr(o, "order_type", None),
+        })
+    _paczki_only_mix = (
+        C.ENABLE_R_PACZKI_FLEX
+        and _is_paczka_sim(new_order)
+        and all(_is_paczka_sim(_o) for _o in bag)
+    )
     r6_max_bag_time = 0.0
     r6_worst_oid: Optional[str] = None
     r6_per_order_violations: List[Tuple[str, float]] = []
@@ -639,7 +654,9 @@ def check_feasibility_v2(
             r6_max_bag_time = bag_time_min
             r6_worst_oid = o.order_id
         # Per-order violation tracking (split picked-up vs not)
-        if bag_time_min > C.BAG_TIME_HARD_MAX_MIN:
+        # R-PACZKI-FLEX: skip tracking gdy paczki-only mix → hard reject linia
+        # 693 nie aktywuje się (empty list). Soft zone niżej też respektuje.
+        if bag_time_min > C.BAG_TIME_HARD_MAX_MIN and not _paczki_only_mix:
             if is_picked:
                 r6_picked_up_violations.append((o.order_id, round(bag_time_min, 1)))
             else:
@@ -651,7 +668,8 @@ def check_feasibility_v2(
     metrics["r6_per_order_violations"] = r6_per_order_violations
     metrics["r6_picked_up_violations"] = r6_picked_up_violations
     # F2.2 C3 narrow (2026-04-18): R6 soft warning zone (30, 35] — metric-only.
-    if 30.0 < r6_max_bag_time <= C.BAG_TIME_HARD_MAX_MIN:
+    # R-PACZKI-FLEX: paczki-only mix bypass tej strefy (paczki bez termiki).
+    if 30.0 < r6_max_bag_time <= C.BAG_TIME_HARD_MAX_MIN and not _paczki_only_mix:
         metrics["r6_soft_penalty"] = round(-3.0 * (r6_max_bag_time - 30.0), 2)
         metrics["r6_soft_zone_active"] = True
     else:

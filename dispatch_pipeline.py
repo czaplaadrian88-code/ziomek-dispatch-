@@ -1083,7 +1083,56 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     sim.czas_kuriera_warsaw = d.get("czas_kuriera_warsaw")
     sim.assigned_at = d.get("assigned_at")
     sim.courier_id = d.get("courier_id")
+    # R-PACZKI-FLEX (2026-05-20): address_id (=restaurant_id w panelu gastro),
+    # order_type (czasowka vs elastic), created_at_utc (pojawienie w gastro).
+    sim.address_id = d.get("address_id")
+    sim.order_type = d.get("order_type")
+    sim.created_at_utc = d.get("created_at_utc") or d.get("created_at")
     return sim
+
+
+def _r_paczki_flex_penalty(new_order: OrderSim, plan, now: datetime) -> float:
+    """R-PACZKI-FLEX (2026-05-20): liniowa kara dla NIE-czasówka paczki, nad
+    soft cap 2h pickup / 3h delivery liczonym od created_at (pojawienie w
+    panelu gastro). Czasówka-paczka → 0 (R-DECLARED-TIME nadrzędne).
+    Fail-soft: zwraca 0.0 przy braku danych / wyjątku."""
+    try:
+        if not C.ENABLE_R_PACZKI_FLEX:
+            return 0.0
+        if not C.is_paczka_flex_eligible({
+            "address_id": getattr(new_order, "address_id", None),
+            "order_type": getattr(new_order, "order_type", None),
+        }):
+            return 0.0
+        if plan is None:
+            return 0.0
+        created = getattr(new_order, "created_at_utc", None)
+        if isinstance(created, str):
+            created = parse_panel_timestamp(created)
+        if created is None:
+            return 0.0
+        if getattr(created, "tzinfo", None) is None:
+            created = created.replace(tzinfo=timezone.utc)
+        oid = new_order.order_id
+        penalty = 0.0
+        eta_pickup = plan.pickup_at.get(oid) if hasattr(plan, "pickup_at") else None
+        if eta_pickup is not None:
+            if eta_pickup.tzinfo is None:
+                eta_pickup = eta_pickup.replace(tzinfo=timezone.utc)
+            overrun = (eta_pickup - created).total_seconds() / 60.0 - C.PACZKA_PICKUP_SOFT_CAP_MIN
+            if overrun > 0:
+                penalty -= overrun * C.PACZKA_FLEX_PENALTY_PER_MIN
+        eta_deliv = plan.predicted_delivered_at.get(oid) if hasattr(plan, "predicted_delivered_at") else None
+        if eta_deliv is not None:
+            if eta_deliv.tzinfo is None:
+                eta_deliv = eta_deliv.replace(tzinfo=timezone.utc)
+            overrun = (eta_deliv - created).total_seconds() / 60.0 - C.PACZKA_DELIVERY_SOFT_CAP_MIN
+            if overrun > 0:
+                penalty -= overrun * C.PACZKA_FLEX_PENALTY_PER_MIN
+        return penalty
+    except Exception as _ex:
+        log.warning(f"_r_paczki_flex_penalty failed oid={getattr(new_order, 'order_id', '?')}: {type(_ex).__name__}: {_ex}")
+        return 0.0
 
 
 def _oldest_in_bag_min(bag: List[OrderSim], now: datetime) -> Optional[float]:
@@ -1287,6 +1336,10 @@ def _assess_order_impl(
         status="assigned",
         pickup_ready_at=pickup_ready_at,
     )
+    # R-PACZKI-FLEX (2026-05-20): patrz _bag_dict_to_ordersim site dla rationale.
+    new_order.address_id = order_event.get("address_id")
+    new_order.order_type = order_event.get("order_type")
+    new_order.created_at_utc = order_event.get("created_at_utc") or order_event.get("created_at")
 
     # Traffic-aware fallback speed dla estymat ETA (zgodne z P0.5 common.py)
     fleet_speed_kmh = get_fallback_speed_kmh(now)
@@ -1879,6 +1932,10 @@ def _assess_order_impl(
             else:
                 bonus_r6_soft_pen = 0.0
 
+        # R-PACZKI-FLEX (2026-05-20): gradient -1pt/min nad soft cap 2h pickup
+        # / 3h delivery dla NIE-czasówka paczki. Fail-soft 0.0 dla jedzeniówek.
+        bonus_r_paczki_flex = _r_paczki_flex_penalty(new_order, plan, now)
+
         # R9 stopover — differential tax (bag=0 → 0, bag=1 → -8, bag=2 → -16, ...).
         # Rationale: scoring porównuje kandydatów względem kosztu DODANIA stopu,
         # nie absolutnego. Zgodny z op.1 "podatek przystankowy".
@@ -2304,7 +2361,7 @@ def _assess_order_impl(
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
         bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch + bonus_coordinator_idle
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch + bonus_coordinator_idle + bonus_r_paczki_flex
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.
@@ -2446,6 +2503,17 @@ def _assess_order_impl(
             "panel_packs_oids_signal": list(_panel_packs_signal[:8]),  # cap dla logu
             "panel_packs_cache_age_s": _panel_packs_age_s,
             "bonus_state_panel_mismatch": round(bonus_state_panel_mismatch, 2),
+            # R-PACZKI-FLEX (2026-05-20): gradient penalty + paczka_is dla shadow obs.
+            # Auto-propagated do shadow log przez prefix bonus_ + paczka_.
+            "bonus_r_paczki_flex": round(bonus_r_paczki_flex, 2),
+            "paczka_is": C.is_paczka_order({
+                "address_id": getattr(new_order, "address_id", None),
+                "order_type": getattr(new_order, "order_type", None),
+            }),
+            "paczka_flex_eligible": C.is_paczka_flex_eligible({
+                "address_id": getattr(new_order, "address_id", None),
+                "order_type": getattr(new_order, "order_type", None),
+            }),
             # V3.28 P4 — coordinator hybrid duty (Adrian doktryna 2026-05-10 wieczór)
             "is_coordinator": _is_coord,
             "coordinator_active": _coord_active,
