@@ -677,7 +677,16 @@ def check_feasibility_v2(
         metrics["r6_soft_zone_active"] = False
 
     if plan.sla_violations > 0:
+        # 2026-05-20 (diagnoza 474863 Gabryś) — SLA pre-existing bypass:
+        # rozdziel violations na (a) "pre-existing" — picked_up order którego
+        # plan dostarczy PRZED `plan.pickup_at[new_order]` (nowy order nie wpływa
+        # na jego carry-time) vs (b) "blokujące" — new_order sam lub picked_up
+        # którego dropoff plan robi PO new_order pickup (detour). Wzorzec P3-D4.
         violations_detail = []
+        violations_pre_existing: List[dict] = []
+        new_pickup_at_utc = plan.pickup_at.get(new_order.order_id)
+        if new_pickup_at_utc is not None and new_pickup_at_utc.tzinfo is None:
+            new_pickup_at_utc = new_pickup_at_utc.replace(tzinfo=timezone.utc)
         for o in list(bag) + [new_order]:
             pred = plan.predicted_delivered_at.get(o.order_id)
             if pred is None:
@@ -693,19 +702,45 @@ def check_feasibility_v2(
                 pu = now
             elapsed_min = (pred - pu).total_seconds() / 60.0
             if elapsed_min > sla_minutes:
-                violations_detail.append({
+                vd = {
                     "order_id": o.order_id,
                     "elapsed_min": round(elapsed_min, 1),
                     "over_sla_by_min": round(elapsed_min - sla_minutes, 1),
-                })
+                }
+                violations_detail.append(vd)
+                # Pre-existing classification: picked_up order, drop PRZED new pickup
+                is_picked_o = (o is not new_order) and (
+                    getattr(o, "picked_up_at", None) is not None
+                    or getattr(o, "status", None) == "picked_up"
+                )
+                if is_picked_o and new_pickup_at_utc is not None:
+                    pred_utc = pred if pred.tzinfo else pred.replace(tzinfo=timezone.utc)
+                    if pred_utc <= new_pickup_at_utc:
+                        violations_pre_existing.append(vd)
         metrics["sla_violations"] = violations_detail
-        worst = max(violations_detail, key=lambda v: v["over_sla_by_min"])
-        return (
-            "NO",
-            f"sla_violation ({worst['order_id']} +{worst['elapsed_min']}min, over by {worst['over_sla_by_min']})",
-            metrics,
-            plan,
-        )
+        metrics["sla_violations_pre_existing"] = violations_pre_existing
+        n_blocking = len(violations_detail) - len(violations_pre_existing)
+        metrics["sla_violations_blocking_count"] = n_blocking
+        # Bypass tylko gdy WSZYSTKIE violations są pre-existing (kurier i tak je
+        # ma niezależnie od nowego ordera). New-induced lub new_order sam → reject.
+        if (C.ENABLE_SLA_PREEXISTING_BYPASS
+                and len(violations_detail) > 0
+                and n_blocking == 0):
+            log.info(
+                f"SLA_PREEXISTING_BYPASS oid={new_order.order_id} "
+                f"pre_existing={[v['order_id'] for v in violations_pre_existing]} "
+                f"(plan dostarcza picked_up przed new pickup, no detour) — "
+                f"continue feasibility"
+            )
+            # Nie return — niech P3-D4 / per-order R6 dalej oceniają
+        else:
+            worst = max(violations_detail, key=lambda v: v["over_sla_by_min"])
+            return (
+                "NO",
+                f"sla_violation ({worst['order_id']} +{worst['elapsed_min']}min, over by {worst['over_sla_by_min']})",
+                metrics,
+                plan,
+            )
     # V3.28 ANCHOR FIX: hard reject TYLKO za assigned-but-not-picked + new_order >35.
     # Picked_up orders są tracked ale NIE rejected (kurier kończy w drodze).
     if r6_per_order_violations:

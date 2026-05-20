@@ -1862,6 +1862,27 @@ PACZKA_FLEX_PENALTY_PER_MIN = 1.0     # liniowy, -1 punkt/min nad cap
 # Flag default OFF — shadow mode pierwsze 24h, flip True przez flags.json hot-reload.
 ENABLE_R_PACZKI_FLEX = _os.environ.get("ENABLE_R_PACZKI_FLEX", "0") == "1"
 
+# 2026-05-20 — SLA pre-existing bypass (diagnoza 474863 / Gabryś).
+# `plan.sla_violations` reject (feasibility_v2.py linia 679) odrzucał plany dla
+# kuriera, którego picked_up order już PRZED `now` przekroczył 35min carry-time
+# (kurier jeszcze nie zdążył dostarczyć, drive+dwell zostały > 35 min). Bug: ten
+# reject odpalał się ZAWSZE — pre-existing breach trzymał kuriera całkowicie poza
+# pool dla nowych orderów, mimo że Gabryś IDEALNIE bundlował 474858+474863 z tej
+# samej restauracji (Goodboy). P3-D4 (linia 727) ma delta-logikę (`pu_pred >
+# new_pickup_at` = nowy pickup robi detour → reject), ale ona uruchamia się PO
+# SLA reject — nigdy nie dochodziła do głosu.
+#
+# Fix: jeśli WSZYSTKIE violations są picked_up orderami których plan dostarczy
+# PRZED `plan.pickup_at[new_order]` (czyli nowy order ZERO wpływu na ich carry),
+# bypass SLA reject — niech P3-D4 / per-order R6 / C2 dalej oceniają. New_order
+# sam jako violation NIE bypass'uje (to spowodowane planem z nowym).
+#
+# Flag default ON: bug realny, fix konserwatywny (nie luźni twardych granic dla
+# new_order, tylko nie blokuje pre-existing breaches które kurier i tak musi
+# obsłużyć). Rollback: env=0 lub flags.json hot-reload.
+ENABLE_SLA_PREEXISTING_BYPASS = _os.environ.get(
+    "ENABLE_SLA_PREEXISTING_BYPASS", "1") == "1"
+
 
 def is_paczka_order(order_dict) -> bool:
     """True jeśli order pochodzi z jednego z 6 kont paczkowych.
