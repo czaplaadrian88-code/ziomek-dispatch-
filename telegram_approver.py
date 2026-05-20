@@ -805,6 +805,9 @@ def _gps_marker_v2(pos_source: Optional[str]) -> str:
     if pos_source in ("last_pickup", "last-pickup"):
         # Legacy alias (mockup v2 spec użył tej formy) — zachowane dla bw-compat
         return "📍last-pickup"
+    if pos_source == "heuristic_fallback":
+        # V3.28 mass-fail heuristic winner — degraded mode signal (Adrian 2026-05-20)
+        return "🆘 fallback"
     return "❔?"
 
 

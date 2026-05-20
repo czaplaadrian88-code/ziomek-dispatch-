@@ -2744,8 +2744,21 @@ def _assess_order_impl(
         )
         try:
             _v328_heuristic_results = []
+            # Safety guard (#474808-style 2026-05-20): heuristic NIE używa
+            # feasibility_v2 więc nie egzekwuje D3 sanity cap (MAX_BAG_SANITY_CAP=8).
+            # Bez tego filtra heuristic proponuje kuriera z bag-at-cap który normalną
+            # ścieżką byłby R3 hard-reject. Diagnoza: Dariusz cid=509 bag=8 wybrany
+            # jako WYBRANY mimo bag_full reject path w OR-Tools.
+            _v328_bag_cap = int(getattr(C, "MAX_BAG_SANITY_CAP", 8))
             for _h_cid, _h_cs in fleet_snapshot.items():
                 try:
+                    _h_bag = getattr(_h_cs, "bag", None) or []
+                    if len(_h_bag) >= _v328_bag_cap:
+                        log.warning(
+                            f"V328_HEURISTIC_SKIP_BAG_AT_CAP cid={_h_cid} "
+                            f"bag={len(_h_bag)}>={_v328_bag_cap}"
+                        )
+                        continue
                     _h_score = _v328_simple_heuristic_score(_h_cid, _h_cs, order_event)
                     _v328_heuristic_results.append((_h_score, _h_cid, _h_cs))
                 except Exception as _h_e:
@@ -2762,6 +2775,18 @@ def _assess_order_impl(
                         f"cid={_h_top_cid} score={_h_top_score:.2f} "
                         f"name={getattr(_h_top_cs, 'name', None)!r}"
                     )
+                    # Propaguj realne dane z CourierState do metrics — telegram
+                    # display (_candidate_line_v2) używa r6_bag_size / bag_size_before
+                    # i pos_source; bez tych pól rysuje 🟢 0 / ❔? / ETA — co maskuje
+                    # rzeczywisty stan kuriera (Adrian incident 2026-05-20 Dariusz
+                    # cid=509 bag=8 widziany jako 🟢 0). Pos_source z CS gdy realne
+                    # GPS/proxy istnieje, fallback "heuristic_fallback" jako sygnał
+                    # degraded mode.
+                    _h_top_bag = getattr(_h_top_cs, "bag", None) or []
+                    _h_top_pos_src = (
+                        getattr(_h_top_cs, "pos_source", None)
+                        or "heuristic_fallback"
+                    )
                     _v328_fb_cand = Candidate(
                         courier_id=str(_h_top_cid),
                         name=getattr(_h_top_cs, "name", None),
@@ -2775,7 +2800,9 @@ def _assess_order_impl(
                             "mass_fail_ratio": _v328_fail_ratio,
                             "mass_fail_count": len(_v328_failed_couriers),
                             "fleet_size": len(fleet_snapshot),
-                            "pos_source": "heuristic_fallback",
+                            "pos_source": _h_top_pos_src,
+                            "bag_size_before": len(_h_top_bag),
+                            "r6_bag_size": len(_h_top_bag),
                         },
                     )
                     candidates.append(_v328_fb_cand)
