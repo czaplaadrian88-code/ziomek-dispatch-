@@ -753,7 +753,7 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             # Ziomek proponuje (flip suppressu). Gdy flag OFF — stara semantyka.
             _payload = ev.get("payload") or {}
             _is_paczka_flex = (
-                C.ENABLE_R_PACZKI_FLEX
+                (C.ENABLE_R_PACZKI_FLEX or C.flag("ENABLE_R_PACZKI_FLEX", False))
                 and C.is_paczka_order(_payload)
             )
             if (record.get("verdict") == "PROPOSE"

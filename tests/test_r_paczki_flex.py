@@ -97,6 +97,8 @@ _NOW = datetime(2026, 5, 20, 8, 0, tzinfo=timezone.utc)
 # ============================================================
 def test_s5_flag_off_returns_zero(monkeypatch):
     monkeypatch.setattr(C, "ENABLE_R_PACZKI_FLEX", False)
+    # Hot-reload flag w flags.json też musi byc OFF — patch C.flag dla testu
+    monkeypatch.setattr(C, "flag", lambda name, default=False: False if name == "ENABLE_R_PACZKI_FLEX" else default)
     no = _make_new_order()
     pl = _make_plan(
         pickup_utc=datetime(2026, 5, 20, 12, 0, tzinfo=timezone.utc),

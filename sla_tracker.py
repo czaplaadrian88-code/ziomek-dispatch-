@@ -272,7 +272,7 @@ def _check_bag_time_alerts(now_utc: datetime) -> None:
             # R-PACZKI-FLEX (2026-05-20): paczki nie mają termiki, brak alertu
             # "kurier wiezie >30min". Gdy ENABLE_BAG_TIME_ALERTS=True flipped
             # w przyszłości, paczki dalej suppress (jedzeniówki normalnie).
-            if C.ENABLE_R_PACZKI_FLEX and C.is_paczka_order(order):
+            if (C.ENABLE_R_PACZKI_FLEX or C.flag("ENABLE_R_PACZKI_FLEX", False)) and C.is_paczka_order(order):
                 continue
 
             # Gate met. Set flag PRZED send (set-then-send, Opcja X).

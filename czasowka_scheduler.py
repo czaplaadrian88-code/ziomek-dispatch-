@@ -531,7 +531,7 @@ def _send_koord_alert(oid: str, order_state: dict, result: dict) -> None:
     _is_firmowe = _aid_int is not None and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS
     # R-PACZKI-FLEX (2026-05-20): paczki czasówki firmowe DOSTAJĄ KOORD alert
     # (paczka-czasówka ma sztywną porę pickupu, Ziomek/koord musi działać).
-    _is_paczka_flex = C.ENABLE_R_PACZKI_FLEX and C.is_paczka_order(order_state)
+    _is_paczka_flex = (C.ENABLE_R_PACZKI_FLEX or C.flag("ENABLE_R_PACZKI_FLEX", False)) and C.is_paczka_order(order_state)
     if (_is_firmowe
             and not C.flag("ENABLE_FIRMOWE_KONTO_KOORD_ALERTS", False)
             and not _is_paczka_flex):

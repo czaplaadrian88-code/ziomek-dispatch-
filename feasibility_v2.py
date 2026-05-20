@@ -600,7 +600,7 @@ def check_feasibility_v2(
             "order_type": getattr(o, "order_type", None),
         })
     _paczki_only_mix = (
-        C.ENABLE_R_PACZKI_FLEX
+        (C.ENABLE_R_PACZKI_FLEX or C.flag("ENABLE_R_PACZKI_FLEX", False))
         and _is_paczka_sim(new_order)
         and all(_is_paczka_sim(_o) for _o in bag)
     )

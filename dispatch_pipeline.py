@@ -1097,7 +1097,7 @@ def _r_paczki_flex_penalty(new_order: OrderSim, plan, now: datetime) -> float:
     panelu gastro). Czasówka-paczka → 0 (R-DECLARED-TIME nadrzędne).
     Fail-soft: zwraca 0.0 przy braku danych / wyjątku."""
     try:
-        if not C.ENABLE_R_PACZKI_FLEX:
+        if not (C.ENABLE_R_PACZKI_FLEX or C.flag("ENABLE_R_PACZKI_FLEX", False)):
             return 0.0
         if not C.is_paczka_flex_eligible({
             "address_id": getattr(new_order, "address_id", None),
