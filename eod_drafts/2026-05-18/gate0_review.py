@@ -14,6 +14,7 @@ Werdykt PASS → ruszać Fazę 1 (pętla re-optymalizacji). FAIL → lista probl
 Wynik na Telegram do grupy ziomka.
 """
 import json
+import os
 import sqlite3
 import sys
 import urllib.parse
@@ -28,7 +29,8 @@ EVENTS_DB = f"{DS}/events.db"
 TELEGRAM_ENV = "/root/.openclaw/workspace/.secrets/telegram.env"
 GROUP_CHAT_ID = "-5149910559"
 
-WINDOW_START = "2026-05-18T23:00:00"   # deploy Fazy 0
+# deploy Fazy 0; nadpisywalne env GATE0_WINDOW_START dla re-runu na świeżym oknie
+WINDOW_START = os.environ.get("GATE0_WINDOW_START", "2026-05-18T23:00:00")
 VALID_REMOVE = {"assigned_in_panel", "picked_up", "delivered", "cancelled",
                 "returned_to_pool"}
 COVERAGE_MIN = 0.80
@@ -83,6 +85,12 @@ def _send_telegram(text):
 def main():
     now = datetime.now(timezone.utc)
     log = _load_log()
+    # filtruj log do okna po `ts` — inaczej K2/K3 liczyłyby zdarzenia z całej
+    # (append-only) historii zamiast z ocenianego okna
+    ws = _parse(WINDOW_START)
+    if ws is not None:
+        log = [r for r in log
+               if (_parse(r.get("ts")) is not None and _parse(r.get("ts")) >= ws)]
     upserts = {r.get("order_id") for r in log if r.get("action") == "upsert"}
     removes = [r for r in log if r.get("action") == "remove"]
     reasons = Counter(r.get("reason") for r in removes)
