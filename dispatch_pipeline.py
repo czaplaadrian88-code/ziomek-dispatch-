@@ -1050,6 +1050,42 @@ def _build_fleet_context_from_snapshot(
     return build_fleet_context(bag_states, now=now)
 
 
+def _bag_coord_city(d: dict, kind: str) -> str:
+    """Miasto dla geokodu bag-ordera (kind='pickup'|'delivery'), fallback Białystok."""
+    return (d.get(f"{kind}_city") or d.get("city") or "Białystok")
+
+
+def _repair_bag_coords(d: dict, kind: str):
+    """Lekcja #140: re-geokoduj brakującą/nieprawidłową współrzędną bag-ordera tą
+    samą ścieżką co defense gate nowego zlecenia (NIE (0,0)). Zwraca (lat,lon) lub
+    None. Best-effort — geokod cache-first, nigdy nie crashuje assess_order.
+    Pickup→geocode_restaurant(nazwa), delivery→geocode(adres)."""
+    if not C.ENABLE_BAG_COORD_REPAIR:
+        return None
+    try:
+        from dispatch_v2 import geocoding as _geo
+        city = _bag_coord_city(d, kind)
+        if kind == "pickup":
+            name = d.get("restaurant") or d.get("pickup_name")
+            if not name:
+                return None
+            r = _geo.geocode_restaurant(str(name), d.get("pickup_address", "") or "", city=city)
+        else:
+            addr = d.get("delivery_address")
+            if not addr:
+                return None
+            r = _geo.geocode(str(addr), city=city)
+        if r and C.coords_in_bialystok_bbox(r):
+            log.warning(
+                "BAG_COORD_REPAIR oid=%s kind=%s restaurant=%r → %r (było brak/nieprawidłowe)",
+                d.get("order_id"), kind, d.get("restaurant"), tuple(r))
+            return (round(float(r[0]), 6), round(float(r[1]), 6))
+    except Exception as e:
+        log.warning("BAG_COORD_REPAIR fail oid=%s kind=%s: %r",
+                    d.get("order_id"), kind, e)
+    return None
+
+
 def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     picked = parse_panel_timestamp(d.get("picked_up_at"))
     # V3.19f: czas_kuriera_warsaw first-choice dla pickup_ready_at (F2.1c R8 T_KUR).
@@ -1060,8 +1096,16 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     if pra is None:
         pra = parse_panel_timestamp(d.get("pickup_at_warsaw"))
     status = d.get("status", "assigned")
-    pickup_c = d.get("pickup_coords") or (0.0, 0.0)
-    deliv_c = d.get("delivery_coords") or (0.0, 0.0)
+    # Lekcja #140: bag-order z brakującą/nieprawidłową współrzędną → re-geokod
+    # (NIE (0,0), bo (0,0) snapuje w OSRM do krawędzi ekstraktu → phantom 148min
+    # leg → false INFEASIBLE → wycięcie wolnych kurierów). (0,0) zostaje tylko gdy
+    # repair zawiedzie — wtedy guard OSRM (table/route) sentineluje JAWNIE.
+    pickup_c = d.get("pickup_coords")
+    deliv_c = d.get("delivery_coords")
+    if not C.coords_in_bialystok_bbox(pickup_c):
+        pickup_c = _repair_bag_coords(d, "pickup") or pickup_c or (0.0, 0.0)
+    if not C.coords_in_bialystok_bbox(deliv_c):
+        deliv_c = _repair_bag_coords(d, "delivery") or deliv_c or (0.0, 0.0)
     # V3.27.5 Path A (2026-04-27): defense-in-depth dla state inconsistency.
     # Pre-fix: status field jedyny signal picked_up. Path B fixes state_machine
     # COURIER_ASSIGNED handler (preserve terminal status), ale picked_up_at

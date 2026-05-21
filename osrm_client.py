@@ -25,7 +25,11 @@ from datetime import datetime, timezone
 
 from dispatch_v2.common import (
     ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER,
+    ENABLE_OSRM_COORD_GUARD,
     HAVERSINE_ROAD_FACTOR_BIALYSTOK,
+    OSRM_INVALID_COORD_SENTINEL_MIN,
+    OSRM_MAX_SNAP_KM,
+    coords_in_bialystok_bbox,
     get_fallback_speed_kmh,
     get_time_bucket,
     get_traffic_multiplier,
@@ -330,6 +334,35 @@ def _cache_set(from_ll: tuple, to_ll: tuple, result: dict):
         _route_cache[key] = (time.time(), result)
 
 
+# === COORD POISON GUARD (Lekcja #140, 2026-05-21) ===
+# Współrzędna (0,0)/None/cross-country NIE może cicho dać realistycznej trasy.
+# OSRM snapuje (0,0) do krawędzi ekstraktu (~113 km, code:Ok) — fail-loud #81
+# (haversine) tego NIE łapie, bo OSRM "succeeded". Tu chokepoint: route()/table().
+_BBOX_CENTER = (53.1325, 23.1688)  # placeholder dla nieprawidłowej współrzędnej w table()
+_coord_guard_log_count: int = 0
+
+
+def _coord_guard_log(msg: str):
+    """Loud, ale rate-limited (pełny log pierwsze 20×, potem co 100×)."""
+    global _coord_guard_log_count
+    _coord_guard_log_count += 1
+    if _coord_guard_log_count <= 20 or _coord_guard_log_count % 100 == 0:
+        _log.error("COORD_GUARD #%d: %s", _coord_guard_log_count, msg)
+
+
+def _invalid_coord_result(now_utc: datetime) -> dict:
+    """Wynik dla nieprawidłowej współrzędnej — jawnie infeasible, NIE realna trasa."""
+    sentinel_min = OSRM_INVALID_COORD_SENTINEL_MIN
+    return {
+        "duration_s": round(sentinel_min * 60, 1),
+        "distance_m": round(sentinel_min * 1000, 0),
+        "duration_min": sentinel_min,
+        "distance_km": round(sentinel_min, 2),
+        "osrm_fallback": True,
+        "coord_invalid": True,
+    }
+
+
 def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
     """Route od from_ll do to_ll. Zawsze zwraca dict (OSRM lub fallback, nigdy None).
 
@@ -337,8 +370,20 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
     (post-cache, post-OSRM, post-fallback). Cache stores RAW values; multiplier
     is applied to a COPY after lookup so cached entries are time-bucket
     independent.
+
+    Lekcja #140: guard wejściowy (bbox) + snap-distance — zła współrzędna →
+    coord_invalid sentinel, nigdy cicha phantom-trasa.
     """
     now = datetime.now(timezone.utc)
+
+    # Guard wejściowy: (0,0)/None/poza bbox → sentinel (NIE wysyłaj do OSRM,
+    # bo (0,0) snapuje do krawędzi i wraca jako "prawidłowa" trasa ~117 min).
+    if ENABLE_OSRM_COORD_GUARD and not (
+        coords_in_bialystok_bbox(from_ll) and coords_in_bialystok_bbox(to_ll)
+    ):
+        _coord_guard_log(f"route invalid coord from={from_ll!r} to={to_ll!r} "
+                         f"→ sentinel {OSRM_INVALID_COORD_SENTINEL_MIN}min")
+        return _apply_traffic_multiplier(_invalid_coord_result(now), now)
 
     if use_cache:
         cached = _cache_get(from_ll, to_ll)
@@ -368,6 +413,21 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
             with _module_lock:
                 _osrm_stats["calls_fallback"] += 1
             return _apply_traffic_multiplier(_haversine_fallback(from_ll, to_ll, now), now)
+        # Snap guard (Lekcja #140): jeśli OSRM musiał snapować waypoint > próg, to
+        # punkt nie leży na mapie (np. (0,0)→6225 km) — code:Ok ale trasa fikcyjna.
+        if ENABLE_OSRM_COORD_GUARD:
+            _max_snap_m = OSRM_MAX_SNAP_KM * 1000.0
+            _wps = data.get("waypoints") or []
+            _bad_snap = next(
+                (w.get("distance") for w in _wps
+                 if isinstance(w, dict) and (w.get("distance") or 0) > _max_snap_m),
+                None,
+            )
+            if _bad_snap is not None:
+                _coord_guard_log(
+                    f"route snap {round(_bad_snap/1000,1)}km > {OSRM_MAX_SNAP_KM}km "
+                    f"from={from_ll!r} to={to_ll!r} → sentinel")
+                return _apply_traffic_multiplier(_invalid_coord_result(now), now)
         route0 = data["routes"][0]
         result = {
             "duration_s": route0["duration"],
@@ -399,6 +459,33 @@ def table(origins: list, destinations: list) -> list:
     if not origins or not destinations:
         return []
 
+    # Guard wejściowy (Lekcja #140): podmień nieprawidłowe współrzędne
+    # ((0,0)/None/poza bbox) na _BBOX_CENTER (by OSRM/haversine nie snapowały do
+    # krawędzi / nie crashowały), zapamiętaj maski → po policzeniu nadpisz każdą
+    # komórkę dotykającą nieprawidłowego punktu sentinelem (jawnie infeasible).
+    _valid_o = _valid_d = None
+    if ENABLE_OSRM_COORD_GUARD:
+        _vo = [coords_in_bialystok_bbox(o) for o in origins]
+        _vd = [coords_in_bialystok_bbox(d) for d in destinations]
+        if not (all(_vo) and all(_vd)):
+            _bad = [o for o, v in zip(origins, _vo) if not v] + \
+                   [d for d, v in zip(destinations, _vd) if not v]
+            _coord_guard_log(f"table {len(_bad)} invalid coord(s) {_bad[:4]!r} "
+                             f"→ sentinel cells {OSRM_INVALID_COORD_SENTINEL_MIN}min")
+            _valid_o, _valid_d = _vo, _vd
+            origins = [o if v else _BBOX_CENTER for o, v in zip(origins, _vo)]
+            destinations = [d if v else _BBOX_CENTER for d, v in zip(destinations, _vd)]
+
+    def _sentinel_invalid(matrix: list) -> list:
+        """Nadpisz komórki dotykające nieprawidłowego punktu (Lekcja #140)."""
+        if _valid_o is None:
+            return matrix
+        for i, row in enumerate(matrix):
+            for j in range(len(row)):
+                if i < len(_valid_o) and j < len(_valid_d) and not (_valid_o[i] and _valid_d[j]):
+                    row[j] = _invalid_coord_result(now)
+        return matrix
+
     # Cache miss — realny HTTP call (table nie ma cache)
     # V3.27 latency parallel: stats inkrement pod RLock.
     with _module_lock:
@@ -409,7 +496,7 @@ def table(origins: list, destinations: list) -> list:
     if _osrm_is_circuit_open():
         with _module_lock:
             _osrm_stats["calls_fallback"] += 1
-        return _table_fallback(origins, destinations, now)
+        return _sentinel_invalid(_table_fallback(origins, destinations, now))
 
     all_points = origins + destinations
     coords = ";".join(f"{ll[1]},{ll[0]}" for ll in all_points)
@@ -423,7 +510,7 @@ def table(origins: list, destinations: list) -> list:
             _osrm_record_failure()
             with _module_lock:
                 _osrm_stats["calls_fallback"] += 1
-            return _table_fallback(origins, destinations, now)
+            return _sentinel_invalid(_table_fallback(origins, destinations, now))
         durations = data.get("durations") or []
         distances = data.get("distances") or [[0] * len(destinations) for _ in range(len(origins))]
         matrix = []
@@ -441,13 +528,13 @@ def table(origins: list, destinations: list) -> list:
                 matrix_row.append(_apply_traffic_multiplier(cell, now))
             matrix.append(matrix_row)
         _osrm_record_success()
-        return matrix
+        return _sentinel_invalid(matrix)
     except Exception as e:
         _log.warning(f"OSRM table fail: {e}")
         _osrm_record_failure()
         with _module_lock:
             _osrm_stats["calls_fallback"] += 1
-        return _table_fallback(origins, destinations, now)
+        return _sentinel_invalid(_table_fallback(origins, destinations, now))
 
 
 def _table_fallback(origins: list, destinations: list, now_utc: datetime) -> list:

@@ -139,6 +139,37 @@ def parse_panel_timestamp(value) -> "datetime | None":
 # Raw data: dispatch_state/calibration_20260412_baseline.json
 HAVERSINE_ROAD_FACTOR_BIALYSTOK = 1.37
 
+# === COORD SANITY GUARD (Lekcja #140, 2026-05-21) ===
+# Bug 2026-05-21: bag-order pickup_coords=None → (0,0) → OSRM SNAPUJE (0,0) do
+# krawędzi ekstraktu (~113 km) i zwraca code:Ok z trasą ~117-148 min → phantom
+# leg → false INFEASIBLE → wycięcie wolnych kurierów. Fail-loud #81 (haversine)
+# NIE odpalał, bo OSRM "succeeded". Guard: KAŻDA współrzędna wchodząca do OSRM
+# musi być w bbox metropolii Białystok; (0,0)/None/cross-country → sentinel+log,
+# NIGDY cicha realistyczna trasa. Bbox HOJNY (≈±55 km) — pokrywa wszystkie
+# realne adresy dispatchu (Wasilków/Choroszcz/Supraśl/Zabłudów/Łapy), odrzuca
+# (0,0) [lat 0] i geokody cross-country. R6=35min ⇒ realny zasięg ~25-30 km, więc
+# >±55 km = na pewno błąd danych, nie legit zlecenie.
+BIALYSTOK_BBOX_LAT = (52.6, 53.7)
+BIALYSTOK_BBOX_LON = (22.3, 24.1)
+
+
+def coords_in_bialystok_bbox(ll) -> bool:
+    """True gdy ll=(lat,lon) jest realną współrzędną w zasięgu dispatchu.
+    False dla None / nie-2-tuple / NaN / (0,0) / poza bbox metropolii."""
+    try:
+        if ll is None:
+            return False
+        lat, lon = float(ll[0]), float(ll[1])
+    except (TypeError, ValueError, IndexError):
+        return False
+    if lat != lat or lon != lon:  # NaN
+        return False
+    if lat == 0.0 and lon == 0.0:
+        return False
+    lo_lat, hi_lat = BIALYSTOK_BBOX_LAT
+    lo_lon, hi_lon = BIALYSTOK_BBOX_LON
+    return (lo_lat <= lat <= hi_lat) and (lo_lon <= lon <= hi_lon)
+
 # Buckety prędkości oparte na KORKACH (nie na popycie).
 # Peak operacyjny (Nd 15:00 = 45 orders/h) ma PUSTE ulice.
 # Peak korkowy (Pt 17-19) ma SZCZYT ruchu.
@@ -1545,6 +1576,24 @@ MAX_INTRA_RESTAURANT_GAP_MIN = 5.0
 # zrównany do unit-override. Raport: /tmp/obj_f2_cal/REPORT.md.
 ENABLE_OBJ_SPAN_COST = _os.environ.get("ENABLE_OBJ_SPAN_COST", "0") == "1"
 OBJ_SPAN_COST_COEFF = float(_os.environ.get("OBJ_SPAN_COST_COEFF", "1.0"))
+
+# === COORD POISON GUARD flagi (Lekcja #140, 2026-05-21) — default ON ===
+# Defense-in-depth, by ten bug NIGDY nie wrócił cicho:
+#  - ENABLE_OSRM_COORD_GUARD: osrm_client.route()/table() walidują bbox KAŻDEJ
+#    współrzędnej + snap-distance route(); zła współrzędna → sentinel+loud log
+#    (NIE realistyczna phantom-trasa). Kill-switch: env=0.
+#  - ENABLE_BAG_COORD_REPAIR: dispatch_pipeline._bag_dict_to_ordersim re-geokoduje
+#    brakujące/nieprawidłowe współrzędne bag-orderów (ta sama ścieżka co defense
+#    gate nowego zlecenia) zamiast (0,0). Kill-switch: env=0.
+#  - OSRM_MAX_SNAP_KM: max dystans snapu waypointa OSRM; >próg = punkt nie leży na
+#    mapie (np. (0,0)→6225 km) → traktuj jak no-route.
+#  - OSRM_INVALID_COORD_SENTINEL_MIN: czas legu dla nieprawidłowej współrzędnej
+#    (duży = jawnie infeasible, NIE mylony z realną trasą).
+ENABLE_OSRM_COORD_GUARD = _os.environ.get("ENABLE_OSRM_COORD_GUARD", "1") == "1"
+ENABLE_BAG_COORD_REPAIR = _os.environ.get("ENABLE_BAG_COORD_REPAIR", "1") == "1"
+OSRM_MAX_SNAP_KM = float(_os.environ.get("OSRM_MAX_SNAP_KM", "5.0"))
+OSRM_INVALID_COORD_SENTINEL_MIN = float(
+    _os.environ.get("OSRM_INVALID_COORD_SENTINEL_MIN", "9999"))
 
 # Sprint OBJ F3 / BUG-4 (2026-05-18): best_effort z najlepszym kandydatem
 # łamiącym hard R6 o > próg → verdict KOORD zamiast auto-PROPOSE. Diagnoza
