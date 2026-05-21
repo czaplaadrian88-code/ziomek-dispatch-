@@ -29,7 +29,8 @@ TELEGRAM_ENV = "/root/.openclaw/workspace/.secrets/telegram.env"
 GROUP_CHAT_ID = "-5149910559"
 
 WINDOW_START = "2026-05-18T23:00:00"   # deploy Fazy 0
-VALID_REMOVE = {"assigned_in_panel", "picked_up", "delivered", "cancelled"}
+VALID_REMOVE = {"assigned_in_panel", "picked_up", "delivered", "cancelled",
+                "returned_to_pool"}
 COVERAGE_MIN = 0.80
 LEAK_AGE_H = 3.0   # aktywny wpis starszy niż tyle godzin = podejrzenie wycieku
 

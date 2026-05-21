@@ -38,6 +38,7 @@ def _upsert(oid, created, pickup):
     ("picked_up", "picked_up"),
     ("delivered", "delivered"),
     ("cancelled", "cancelled"),
+    ("returned_to_pool", "returned_to_pool"),
 ])
 def test_reconciliation_removes_resolved(status, expect_reason, monkeypatch):
     """Zlecenie ze statusem rozwiązanym → usunięte z puli z właściwym powodem."""
@@ -67,12 +68,12 @@ def test_reconciliation_keeps_unknown(monkeypatch):
     assert "o3" in pp.load_pool()
 
 
-# ── stuck-guard ─────────────────────────────────────────────────────
+# ── stuck-guard (TYLKO sieroty) ─────────────────────────────────────
 
-def test_stuck_removes_old_order(monkeypatch):
-    """Zlecenie >STUCK_AFTER_MIN po pickup_ready wciąż w puli → stuck + remove."""
+def test_stuck_removes_orphan_order(monkeypatch):
+    """SIEROTA: brak rekordu w state_machine + >STUCK_AFTER_MIN po pickup → stuck."""
     _upsert("o4", "2026-05-17T10:00:00+00:00", "2026-05-17T10:50:00+00:00")
-    monkeypatch.setattr(sw.state_machine, "get_order", _fake_state({"o4": "planned"}))
+    monkeypatch.setattr(sw.state_machine, "get_order", _fake_state({}))  # sierota
     # pickup 10:50 + 45 min = 11:35 → now 11:40 jest po progu
     now = datetime(2026, 5, 17, 11, 40, tzinfo=timezone.utc)
     counts = sw.sweep(now=now)
@@ -80,10 +81,22 @@ def test_stuck_removes_old_order(monkeypatch):
     assert counts["stuck"] == 1
 
 
+def test_planned_old_order_not_stuck(monkeypatch):
+    """REGRESJA Gate 0: zlecenie `planned` dawno po nominalnym pickup (czasówka)
+    NIE jest stuck — wciąż legalnie czeka, pula je poprawnie odzwierciedla."""
+    _upsert("o4b", "2026-05-17T10:00:00+00:00", "2026-05-17T10:50:00+00:00")
+    monkeypatch.setattr(sw.state_machine, "get_order", _fake_state({"o4b": "planned"}))
+    # 50 min po nominalnym pickup_ready — w starym kodzie = stuck (bug)
+    now = datetime(2026, 5, 17, 11, 40, tzinfo=timezone.utc)
+    counts = sw.sweep(now=now)
+    assert "o4b" in pp.load_pool()
+    assert counts["stuck"] == 0
+
+
 def test_stuck_not_triggered_before_threshold(monkeypatch):
-    """Zlecenie tuż po pickup, przed progiem stuck → zostaje."""
+    """Sierota tuż po pickup, przed progiem stuck → zostaje."""
     _upsert("o5", "2026-05-17T10:00:00+00:00", "2026-05-17T10:50:00+00:00")
-    monkeypatch.setattr(sw.state_machine, "get_order", _fake_state({"o5": "planned"}))
+    monkeypatch.setattr(sw.state_machine, "get_order", _fake_state({}))  # sierota
     now = datetime(2026, 5, 17, 11, 0, tzinfo=timezone.utc)  # 10 min po pickup
     counts = sw.sweep(now=now)
     assert "o5" in pp.load_pool()
