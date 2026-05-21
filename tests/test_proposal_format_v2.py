@@ -116,23 +116,26 @@ def test_v2_body_happy_path():
 
 def test_v2_conf_bucket_auto_ack_alert():
     """3 wariants confidence z decision.auto_route."""
+    # De-erozja 2026-05-21: etykiety conf-line zmienione w sprincie auto_route
+    # (2026-05-18) — porzucono fikcyjne percentyle "Top 30%/Środek 40%/Bottom 30%"
+    # na rzecz routingu AUTO/ACK/ALERT (telegram_approver._conf_line_v2).
     d_auto = _mk_decision(auto_route="AUTO")
     out_auto = ta._conf_line_v2(d_auto)
-    assert "🟢 Top 30%" in out_auto and "auto poszłoby samo" in out_auto
+    assert "🟢 AUTO" in out_auto and "auto poszłoby samo" in out_auto
 
     d_ack = _mk_decision(auto_route="ACK")
     out_ack = ta._conf_line_v2(d_ack)
-    assert "🟡 Środek 40%" in out_ack and "szybki check" in out_ack
+    assert "🟡 ACK" in out_ack and "rzuć okiem" in out_ack
 
     d_alert = _mk_decision(auto_route="ALERT")
     out_alert = ta._conf_line_v2(d_alert)
-    assert "🔴 Bottom 30%" in out_alert and "wymaga decyzji" in out_alert
+    assert "🔴 ALERT" in out_alert and "wymaga Twojej decyzji" in out_alert
 
     # None / legacy → ACK fallback
     d_legacy = _mk_decision(auto_route=None)
     d_legacy["auto_route"] = None
     out_legacy = ta._conf_line_v2(d_legacy)
-    assert "🟡 Środek 40%" in out_legacy, "legacy/None auto_route powinien być ACK fallback"
+    assert "🟡 ACK" in out_legacy, "legacy/None auto_route powinien być ACK fallback"
 
 
 def test_v2_best_effort_banner():
@@ -140,7 +143,7 @@ def test_v2_best_effort_banner():
     d = _mk_decision(auto_route="ACK", best_effort=True)
     out = ta._conf_line_v2(d)
     assert out.startswith("⚠️ Best effort"), f"banner missing: {out!r}"
-    assert "🟡 Środek 40%" in out, "conf line musi pozostać po bannerze"
+    assert "🟡 ACK" in out, "conf line musi pozostać po bannerze"
 
 
 def test_v2_gps_markers_full_live_distribution():
@@ -280,7 +283,7 @@ def test_v2_flag_off_returns_legacy_format():
     # v2 layout markery NIEOBECNE
     assert "🚖 Piotr Zaw (K-470)" not in out
     assert "👥 Kandydaci:" not in out
-    assert "🟡 Środek 40%" not in out
+    assert "🟡 ACK" not in out  # de-erozja: v2 conf-line marker (było "Środek 40%")
 
 
 def test_v2_flag_on_uses_v2_path():

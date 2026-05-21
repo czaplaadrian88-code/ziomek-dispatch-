@@ -14,6 +14,16 @@ sys.path.insert(0, '/root/.openclaw/workspace/scripts')
 from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2.route_simulator_v2 import OrderSim
 from dispatch_v2 import route_simulator_v2 as rs
+from dispatch_v2 import common as _C
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _disable_v325_schedule(monkeypatch):
+    """De-erozja 2026-05-21: te testy sprawdzają R6 (termika), nie grafik. Bez
+    shift_end V3.25 schedule-hardening fail-CLOSED zwraca v325_NO_ACTIVE_SHIFT
+    PRZED blokiem R6 → maskuje testowaną logikę. Wyłącz V3.25 per-test (restore)."""
+    monkeypatch.setattr(_C, "ENABLE_V325_SCHEDULE_HARDENING", False, raising=False)
 
 
 class FakeMatrix:
@@ -75,7 +85,9 @@ def test_r6_hard_reject_over_35_unchanged():
     )
     # Either SLA or R6 rejects — both enforce 35min threshold
     assert verdict == "NO", f"expected NO for bag_time > 35; got {verdict} / {reason}"
-    assert ("R6_bag_time_exceeded" in reason) or ("sla_violation" in reason), \
+    # De-erozja 2026-05-21: reason R6 przemianowany w V3.28 ANCHOR FIX
+    # ("R6_bag_time_exceeded" → "R6_per_order_>35min", per-order termika).
+    assert ("R6_per_order" in reason) or ("R6_bag_time" in reason) or ("sla_violation" in reason), \
         f"expected R6 or SLA rejection; got {reason}"
     # Note: if SLA rejects first, R6 soft zone metrics never populated (early return)
     # If R6 rejects, soft zone logic ran first but field says False (bag_time > 35 outside zone)
@@ -88,8 +100,10 @@ def test_r6_soft_zone_metric_logged():
     """bag_time w zone (30, 35] → metrics r6_soft_penalty populated."""
     _setup_mock(duration_s=60)  # 1 min legs = krótka trasa
     now = datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc)
-    # Bag item picked 32 min ago + krótka symulacja → r6_max_bag_time ~32-33 min (zone 30-35)
-    bag = [_make_bag_item("B1", picked_up_ago_min=32, now=now)]
+    # Bag item picked 28 min ago + krótka symulacja → r6_max_bag_time w (30,35].
+    # De-erozja 2026-05-21: było 32 → 36.5 min (poza zoną) po wzroście tier-aware
+    # DWELL (E1-E3 / V3.28); rekalibracja fixture do 28, by trafić soft-zone.
+    bag = [_make_bag_item("B1", picked_up_ago_min=28, now=now)]
     new_order = _make_new_order("NEW", pickup_ready=now)
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.0, 23.0), bag=bag, new_order=new_order, now=now,

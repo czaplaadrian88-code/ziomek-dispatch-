@@ -44,6 +44,9 @@ def fake_state_get_all():
     return FAKE_STATE
 
 panel_watcher.emit = fake_emit
+# De-erozja 2026-05-21: ORDER_RETURNED_TO_POOL emitowane przez emit_audit (R-04
+# dual-write 2026-05-13), nie emit. Ten sam fake (identyczna sygnatura) łapie oba.
+panel_watcher.emit_audit = fake_emit
 panel_watcher.update_from_event = fake_update_from_event
 panel_watcher.fetch_order_details = fake_fetch_order_details
 panel_watcher.state_get_all = fake_state_get_all

@@ -14,6 +14,9 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
+import pytest
+pytest.importorskip("gspread")  # cod_weekly = feature Sheets; venv dispatch bez gspread → skip
+
 from dispatch_v2.cod_weekly import run_weekly as rw
 from dispatch_v2.cod_weekly.sheet_writer import (
     NoTargetColumnError, AmbiguousTargetError,

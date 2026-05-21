@@ -66,9 +66,21 @@ def _mock_osrm_haversine(a, b):
     return _haversine_km(a, b)
 
 
-# Install mocks globally (all tests after this see mocked OSRM)
-osrm_client.table = _mock_osrm_table
-osrm_client.haversine = _mock_osrm_haversine
+# De-erozja 2026-05-21: PRZEDTEM module-level assignment wyciekał osrm_client.table/
+# haversine na CAŁĄ sesję pytest → zanieczyszczał test_uwagi_defense_gates (haversine
+# fail-loud), test_f4_courier_pos_interp, test_v326_traffic_multiplier (pass solo, fail
+# w-suicie). Teraz autouse fixture (monkeypatch = auto-restore per test, izolacja).
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _install_osrm_mocks(monkeypatch):
+    monkeypatch.setattr(osrm_client, "table", _mock_osrm_table)
+    monkeypatch.setattr(osrm_client, "haversine", _mock_osrm_haversine)
+    # NB: część testów w tym pliku to legacy pre-V3.25 (brak shift_end →
+    # v325_NO_ACTIVE_SHIFT) — udokumentowane pre-existing FAIL. NIE wyłączamy
+    # V3.25 globalnie tutaj (test_D3_shift_ending/B11 TESTUJĄ grafik). Per-test
+    # shift_end = osobny refactor legacy.
 
 
 # ═══════════════════════════════════════════════════════════════════

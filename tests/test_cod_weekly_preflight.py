@@ -14,6 +14,9 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
+import pytest
+pytest.importorskip("gspread")  # cod_weekly = feature Sheets; venv dispatch bez gspread → skip
+
 from dispatch_v2.cod_weekly import run_weekly as rw
 from dispatch_v2.cod_weekly.week_calculator import (
     get_current_week_ending_sunday,

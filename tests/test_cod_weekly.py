@@ -87,6 +87,8 @@ def test_get_previous_closed_week():
 # -------------------------------------------------------------------
 def test_find_target_cod_columns():
     _hdr("TEST 2: find_target_cod_columns")
+    import pytest
+    pytest.importorskip("gspread")  # sheet_writer wymaga gspread (venv dispatch bez)
     from dispatch_v2.cod_weekly.sheet_writer import (
         find_target_cod_columns,
         NoTargetColumnError,
@@ -267,6 +269,8 @@ def test_cod_formula():
 # -------------------------------------------------------------------
 def test_validate_target_column():
     _hdr("TEST 6: write_cod_column_skip_filled + validate_column_empty_ratio")
+    import pytest
+    pytest.importorskip("gspread")  # sheet_writer wymaga gspread (venv dispatch bez)
     from dispatch_v2.cod_weekly.sheet_writer import (
         write_cod_column_skip_filled,
         validate_column_empty_ratio,

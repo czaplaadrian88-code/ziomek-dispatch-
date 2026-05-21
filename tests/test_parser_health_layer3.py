@@ -195,7 +195,11 @@ def test_10_asymmetry_detection_02may_incident(fresh_monitor, mock_telegram):
 
 
 def test_11_historical_known_no_false_alert(fresh_monitor, mock_telegram):
-    fresh_monitor._known_ids_window.add({"470053", "470055"}, ts="2026-05-02T00:00:00+00:00")
+    # De-erozja 2026-05-21: ts musi być WZGLĘDNY (w oknie 7 dni) — wcześniej hardkod
+    # "2026-05-02" zestarzał się (>7 dni temu → auto-expiry okna → fałszywy alert).
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    _recent_ts = (_dt.now(_tz.utc) - _td(days=1)).isoformat()
+    fresh_monitor._known_ids_window.add({"470053", "470055"}, ts=_recent_ts)
     parsed = {
         "order_ids": ["469997", "469998"],
         "assigned_ids": set(["470053", "470055"]),

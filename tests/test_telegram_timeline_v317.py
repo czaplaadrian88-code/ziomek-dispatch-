@@ -152,7 +152,8 @@ def test_timeline_flag_off_fallback_to_old_format():
     try:
         ta.ENABLE_TIMELINE_FORMAT = False
         out = ta._route_section(decision, decision["best"])
-        assert "🗺️ Kolejność:" in out, f"flag off → old format should use Kolejność header, got:\n{out}"
+        # De-erozja 2026-05-21: nagłówek legacy formatu = "📍 TRASA:" (było "🗺️ Kolejność:").
+        assert "📍 TRASA:" in out, f"flag off → old format should use TRASA header, got:\n{out}"
         assert "17:" not in out and "18:" not in out, f"flag off should NOT contain timeline timestamps, got:\n{out}"
     finally:
         ta.ENABLE_TIMELINE_FORMAT = saved

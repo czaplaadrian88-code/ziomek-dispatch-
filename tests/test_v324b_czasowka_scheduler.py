@@ -154,10 +154,19 @@ def _mock_build_fleet_snapshot(*args, **kwargs):
     return _FAKE_FLEET
 
 
-# Monkey-patch
+# De-erozja 2026-05-21: PRZEDTEM module-level monkeypatch wyciekał na całą sesję
+# pytest (kolekcja importuje WSZYSTKIE moduły → CS.courier_resolver.build_fleet_snapshot
+# = mock globalnie → zanieczyszczał test_f4_courier_pos_interp "cid=520 missing").
+# Teraz autouse fixture (monkeypatch = auto-restore per test, izolacja).
 from dispatch_v2 import dispatch_pipeline as _dp, courier_resolver as _cr
-CS.assess_order = _mock_assess_order
-CS.courier_resolver.build_fleet_snapshot = _mock_build_fleet_snapshot
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _v324b_install_mocks(monkeypatch):
+    monkeypatch.setattr(CS, "assess_order", _mock_assess_order, raising=False)
+    monkeypatch.setattr(CS.courier_resolver, "build_fleet_snapshot",
+                        _mock_build_fleet_snapshot, raising=False)
 
 
 def _run_eval(pickup_iso, now_utc, candidates, best=None):

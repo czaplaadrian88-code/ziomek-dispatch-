@@ -171,7 +171,7 @@ def test_recheck_force_fetch_old_emits_event():
 
     # MOCK panel HTTP boundary (fetch_order_details), ale REAL normalize_order
     with patch.object(panel_client, "fetch_order_details", side_effect=_spy_fetch), \
-         patch("dispatch_v2.event_bus.emit", side_effect=_spy_emit), \
+         patch("dispatch_v2.event_bus.emit_audit", side_effect=_spy_emit), \
          patch("dispatch_v2.state_machine.update_from_event", side_effect=_spy_apply):
         result = dispatch_pipeline.get_fresh_czas_kuriera_for_bag(bag, now)
 

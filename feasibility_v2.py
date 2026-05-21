@@ -311,8 +311,11 @@ def check_feasibility_v2(
                 None,
             )
 
-    # R1 spread outlier (hard block). R3 dynamic cap zsoftowany — liczymy
-    # metryki do telemetrii (learning_log) ale NIE rejectujemy.
+    # R1 spread outlier — SOFT (NIE hard block, zweryfikowane audytem 2026-05-21).
+    # Tu liczymy tylko metryki do telemetrii (learning_log); reject NIE następuje.
+    # Egzekwowane jako kara scoringowa (dispatch_pipeline ~2191) + zerowanie bonusu
+    # bundla "Fix C" (BUNDLE_MAX_DELIV_SPREAD_KM, dispatch_pipeline ~2369). Realne
+    # twarde granice bundla = R6 (35min) + SLA. R3 dynamic cap również zsoftowany.
     if bag and _valid(new_order.delivery_coords):
         spread_km = _max_deliv_spread_km(bag, new_order.delivery_coords)
         metrics["deliv_spread_km"] = round(spread_km, 2)
@@ -411,7 +414,9 @@ def check_feasibility_v2(
         metrics["inter_wave_deadhead_max_km"] = 0.0
         metrics["inter_wave_n_segments"] = 0
 
-    # R8 (F2.1c) — pickup_span hard cap (T_KUR spread w bagu).
+    # R8 (F2.1c) — pickup_span (T_KUR spread w bagu). SOFT — telemetria + kara
+    # scoringowa (dispatch_pipeline ~2298), NIE hard reject (audyt 2026-05-21).
+    # PICKUP_SPAN_HARD_* to próg kary, nie bramka feasibility.
     if bag:
         bag_size_after = len(bag) + 1
         pra_list = [b.pickup_ready_at for b in bag if b.pickup_ready_at is not None and b.status != "picked_up"]  # F2.1c hotfix: picked_up już odebrany, historyczny T_KUR nie liczy się do span

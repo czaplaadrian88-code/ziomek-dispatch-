@@ -43,9 +43,12 @@ def test_other_event_types_not_removed():
 
 
 def test_event_count():
-    """Sanity: 12 pre-existing + 1 new (CZAS_KURIERA_UPDATED) = 13."""
-    assert len(event_bus.EVENT_TYPES) == 13, (
-        f"Expected 13 event types post-fix, got {len(event_bus.EVENT_TYPES)}"
+    """Sanity: baseline >= 13 typów (12 pre-existing + CZAS_KURIERA_UPDATED).
+    De-erozja 2026-05-21: było brittle `== 13`; od tego czasu dodano legalnie
+    kolejne typy (PICKUP_TIME_UPDATED, ORDER_RETURNED_TO_POOL, …). Sanity-count
+    nie może pękać przy KAŻDYM nowym typie → `>=` zamiast `==`."""
+    assert len(event_bus.EVENT_TYPES) >= 13, (
+        f"Expected >=13 event types, got {len(event_bus.EVENT_TYPES)} — typ usunięty?"
     )
 
 
