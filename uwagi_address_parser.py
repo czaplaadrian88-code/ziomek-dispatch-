@@ -4,11 +4,18 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 # Regex patterns compiled at module level for speed
-# Pattern to extract pickup line from uwagi text
-# Pickup line starts after "Odbiór" or "Odbierasz" keyword, ends at
-# "\r\n" + "Dostawa:" / "Doręczenie" / "doręczenie" or end of string
+# Pattern to extract pickup line from uwagi text.
+# Pickup line starts after "Odbiór"/"Odbierasz", ends przy markerze DOSTAWY
+# ("Dostawa"/"Doręczenie"/"doręcz...") poprzedzonym przecinkiem LUB nową linią,
+# albo na końcu stringa.
+# 2026-05-21 (fix bug P2): wcześniej granica wymagała `\r?\n` przed markerem →
+# narracja inline "Odbiór ze sklepu X, ul. Y 64, doręczenie do Z, Zambrowska 86"
+# NIE była ucinana → cała linia (z ulicą DOSTAWY) wpadała do P1, które brało
+# ostatnie dopasowanie ulicy = adres dostawy zamiast odbioru. Teraz `[,\r\n]`
+# łapie też przecinek inline. Sam przecinek (separator ulica/firma) NIE ucina —
+# tylko przecinek/newline BEZPOŚREDNIO przed markerem dostawy.
 _PICKUP_LINE_PATTERN = re.compile(
-    r'(?:Odbiór|Odbierasz)\s*[:\-]?\s*(.*?)(?:\r?\n\s*(?:Dostawa:|Doręczenie|doręczenie)|$)',
+    r'(?:Odbiór|Odbierasz)\s*[:\-]?\s*(.*?)(?:[,\r\n]\s*(?:Dostawa|Doręcz|dostawa|doręcz)|$)',
     re.DOTALL | re.IGNORECASE
 )
 
