@@ -114,12 +114,42 @@ def _extract_pickup_line(text: str) -> Optional[str]:
     return line
 
 
+def _is_plausible_company(token: str) -> bool:
+    """Czy nie-uliczny token wygląda jak nazwa firmy (a nie narracja/śmieć).
+
+    Firma: ≤3 słowa i zaczyna się wielką literą. Narracja typu „za szlabanem
+    20 m schody po lewej." (zaczyna małą literą / wiele słów) = śmieć, nie firma.
+    """
+    if not token:
+        return False
+    words = token.split()
+    if len(words) > 3:
+        return False
+    if len(token) >= 50:
+        return False
+    if token.replace(' ', '').isdigit():
+        return False
+    first_alpha = next((c for c in token if c.isalpha()), '')
+    if first_alpha and first_alpha.islower():
+        return False
+    return True
+
+
 def _try_p1(pickup_line: str, stoplist: frozenset) -> Optional[ParsedPickup]:
-    """Try strict P1 extraction."""
+    """Try strict P1 extraction.
+
+    2026-05-21 (Adrian): firmy ze stoplisty są NULLOWANE (company=None) — nie
+    raportujemy ich jako company (i tak nie są realną nazwą lokalu, mieszają
+    `_restaurant_override`). Stoplisted token nadal LICZY się jako „rozpoznana
+    firma" do confidence (czysty strukturalny pickup); leftover narracyjny śmieć
+    (nie-uliczny, nie-stoplisted, nie-company-like) obniża confidence do 0.8.
+    """
     tokens = [t.strip() for t in pickup_line.split(',')]
     street = None
     number = None
     company = None
+    had_known_company = False   # token ze stoplisty (rozpoznana firma — nullowana)
+    had_extra = False           # leftover nie-uliczny token nierozpoznany (śmieć)
     for token in tokens:
         if not token:
             continue
@@ -131,14 +161,24 @@ def _try_p1(pickup_line: str, stoplist: frozenset) -> Optional[ParsedPickup]:
                 street = cand_street
                 number = cand_number
                 continue
-        # Not a street+number token -> potential company
-        # Only consider if it's a single word or short phrase
-        if company is None:
-            # Simple heuristic: if token is not too long and not a number
-            if len(token) < 50 and not token.replace(' ', '').isdigit():
-                company = token
+        # Non-street token.
+        norm = _normalize(token).lower()
+        if norm in stoplist:
+            # Firma ze stoplisty → NULL company, ale rozpoznana (clean).
+            had_known_company = True
+            continue
+        # Nie-uliczny, nie-stoplisted: realna firma vs narracyjny śmieć.
+        if company is None and _is_plausible_company(token):
+            company = token
+        else:
+            had_extra = True
     if street is not None and number is not None:
-        confidence = 1.0 if company is not None else 0.8
+        if had_extra:
+            confidence = 0.8
+        elif company is not None or had_known_company:
+            confidence = 1.0
+        else:
+            confidence = 0.8
         return ParsedPickup(
             street=_canonicalize_street(street),
             number=number,
