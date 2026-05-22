@@ -1045,6 +1045,15 @@ def drop_proximity_factor(zone1, zone2):
 BUG2_WAVE_CONTINUATION_BONUS = 30.0
 BUG2_INTERLEAVE_GATE_MIN = 10.0
 
+# FIX 1 (2026-05-22): licz interleave gap z REALNEGO zaplanowanego odbioru TSP
+# (plan.pickup_at[new]) zamiast z gotowości jedzenia. Elastyk gotowy wcześnie →
+# ready-time daje gap ~zawsze ujemny → phantom +30 dla DRUGIEJ FALI (kurier fizycznie
+# odbiera dużo później). Diagnoza 475235 Raj→Hallera: Michał K real odbiór 12:56 vs
+# free 12:46 = +10 (nowa fala), a ready-time dawał -6.5 → +30. Default OFF (shadow-first).
+# Env kill-switch: ENABLE_BUG2_GAP_FROM_PLAN=1
+ENABLE_BUG2_GAP_FROM_PLAN = _os.environ.get(
+    "ENABLE_BUG2_GAP_FROM_PLAN", "0") == "1"
+
 ENABLE_V319H_BUG2_WAVE_CONTINUATION = _os.environ.get(
     "ENABLE_V319H_BUG2_WAVE_CONTINUATION", "1") == "1"
 
@@ -1338,6 +1347,20 @@ ENABLE_V326_WAVE_GEOMETRIC_VETO = _os.environ.get(
 # Threshold km od last_drop do new_pickup powyżej którego BUG-2 bonus zostaje
 # zveto'wany. 3.0 km = ~5 min ride w Bialymstoku — krzyżowanie ½ miasta.
 V326_WAVE_VETO_KM_THRESHOLD = 3.0
+
+# FIX 2 (2026-05-22): R-09 oś nowej DOSTAWY. R-09 powyżej mierzy tylko odbiór
+# (last_drop→new_pickup), FIX_C tylko cały spread bagu — pojedyncza daleka rozbieżna
+# DOSTAWA (Hallera 3.25km NW w 475235) wpada w lukę między progi i utrzymuje +30.
+# Veto bonusu kontynuacji gdy nowa dostawa JEDNOCZEŚNIE: daleko od centroidu dostaw bagu
+# (km) ORAZ rozbieżna kierunkowo (izolowany cosinus < próg). AND chroni legalną
+# kontynuację "dalej tym samym korytarzem" (daleko, ale wysoki cosinus → bonus zostaje).
+# Default OFF (shadow-first). Env: ENABLE_V326_WAVE_VETO_NEW_DROP=1
+ENABLE_V326_WAVE_VETO_NEW_DROP = _os.environ.get(
+    "ENABLE_V326_WAVE_VETO_NEW_DROP", "0") == "1"
+V326_WAVE_VETO_NEW_DROP_KM = float(_os.environ.get(
+    "V326_WAVE_VETO_NEW_DROP_KM", "2.5"))
+V326_WAVE_VETO_NEW_DROP_COS = float(_os.environ.get(
+    "V326_WAVE_VETO_NEW_DROP_COS", "0.5"))
 
 # V3.26 STEP 4 (R-10 FLEET-LOAD-BALANCE) — score adjustment dla równomiernego
 # rozkładu obciążenia floty. Adrian Q&A: nie chcemy 1 kurier z 5 bagami gdy

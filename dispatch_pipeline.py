@@ -2311,9 +2311,26 @@ def _assess_order_impl(
         # pickup_at: V3.19f first-choice czas_kuriera_warsaw → pickup_at_warsaw.
         bug2_interleave_gap_min = None
         bonus_bug2_continuation = 0.0
+        bug2_pickup_src = "ready_time"
         if C.ENABLE_V319H_BUG2_WAVE_CONTINUATION:
-            if free_at_dt is not None and pickup_at is not None:
-                _pu_utc = pickup_at if pickup_at.tzinfo else pickup_at.replace(tzinfo=WARSAW)
+            # FIX 1 (2026-05-22): gap z REALNEGO zaplanowanego odbioru plan.pickup_at[new],
+            # nie z gotowości jedzenia. Elastyk gotowy wcześnie → ready-time daje gap
+            # ~zawsze ujemny → phantom +30 dla DRUGIEJ FALI (475235: Michał K real odbiór
+            # 12:56 vs free 12:46 = +10 nowa fala; ready-time dawał -6.5 → +30). Default OFF.
+            _bug2_pu = pickup_at
+            if getattr(C, "ENABLE_BUG2_GAP_FROM_PLAN", False) and plan is not None:
+                _pp_iso = (getattr(plan, "pickup_at", None) or {}).get(str(order_id))
+                if _pp_iso:
+                    try:
+                        _bug2_pu = datetime.fromisoformat(str(_pp_iso).replace("Z", "+00:00"))
+                        bug2_pickup_src = "plan_pickup_at"
+                    except Exception as _b2e:
+                        log.warning(
+                            f"BUG2_GAP_FROM_PLAN parse fail order={order_id} "
+                            f"cid={cid} val={_pp_iso!r}: {_b2e}"
+                        )
+            if free_at_dt is not None and _bug2_pu is not None:
+                _pu_utc = _bug2_pu if _bug2_pu.tzinfo else _bug2_pu.replace(tzinfo=WARSAW)
                 _pu_utc = _pu_utc.astimezone(timezone.utc)
                 _fa_utc = free_at_dt if free_at_dt.tzinfo else free_at_dt.replace(tzinfo=timezone.utc)
                 _gap_sec = (_pu_utc - _fa_utc).total_seconds()
@@ -2321,7 +2338,7 @@ def _assess_order_impl(
                 bonus_bug2_continuation = C.bug2_wave_continuation_bonus(
                     bug2_interleave_gap_min
                 )
-            # edge: bag empty albo pickup_at=None → gap=None, bonus=0 (default)
+            # edge: bag empty albo pickup=None → gap=None, bonus=0 (default)
 
         # V3.26 STEP 3 (R-09 WAVE-GEOMETRIC-VETO): refinement BUG-2.
         # Veto bonus gdy geometryczna incoherence: km(last_drop → new_pickup) > threshold.
@@ -2357,6 +2374,28 @@ def _assess_order_impl(
                             bonus_bug2_continuation = 0.0
             except Exception as _ve:
                 log.warning(f"V326_WAVE_VETO compute fail order={order_id} cid={cid}: {_ve}")
+
+        # FIX 2 (2026-05-22, R-09 oś nowej DOSTAWY): veto bonusu kontynuacji gdy nowa
+        # dostawa opuszcza korytarz bagu — daleko od centroidu dostaw I rozbieżna
+        # kierunkowo. Domyka ślepą plamę: R-09 mierzy odbiór (475235 last_drop→Raj 0.98km
+        # OK), FIX_C cały spread (5.01km<8 OK), a pojedyncza daleka rozbieżna dostawa
+        # (Hallera 3.25km NW, cos≈-0.39) wpada między progi i utrzymuje phantom +30.
+        v326_wave_veto_newdrop = False
+        if (getattr(C, "ENABLE_V326_WAVE_VETO_NEW_DROP", False)
+                and bonus_bug2_continuation > 0):
+            _nd_km = metrics.get("r1_new_drop_dist_km")
+            _nd_cos = metrics.get("r1_new_drop_cosine")
+            if (_nd_km is not None and _nd_cos is not None
+                    and _nd_km > C.V326_WAVE_VETO_NEW_DROP_KM
+                    and _nd_cos < C.V326_WAVE_VETO_NEW_DROP_COS):
+                v326_wave_veto_newdrop = True
+                log.info(
+                    f"V326_WAVE_VETO_NEWDROP order={order_id} cid={cid} "
+                    f"new_drop_km={_nd_km:.2f}>{C.V326_WAVE_VETO_NEW_DROP_KM} "
+                    f"cos={_nd_cos:.2f}<{C.V326_WAVE_VETO_NEW_DROP_COS} — bonus "
+                    f"+{bonus_bug2_continuation:.1f} VETOED"
+                )
+                bonus_bug2_continuation = 0.0
 
         # V3.28 FIX_C: Bundle deliv_spread hard cap (FILOZ-3 peak-safe gate).
         # Cross-restaurant bundle scoring (bonus_l2 cross-pickup proximity + bug2
@@ -2530,6 +2569,9 @@ def _assess_order_impl(
             "r5_violation_km": metrics.get("r5_violation_km", 0.0),
             # V3.28 P1 — R1 directionality + R5 pickup detour (Adrian doktryna 2026-05-10)
             "r1_avg_pairwise_cosine": metrics.get("r1_avg_pairwise_cosine"),
+            # FIX 2 observability — izolowany kierunek + dystans nowej dostawy
+            "r1_new_drop_dist_km": metrics.get("r1_new_drop_dist_km"),
+            "r1_new_drop_cosine": metrics.get("r1_new_drop_cosine"),
             "r5_pickup_detour_total_km": metrics.get("r5_pickup_detour_total_km"),
             "r5_pickup_detour_per_order_km": metrics.get("r5_pickup_detour_per_order_km"),
             "bonus_r1_corridor": round(bonus_r1_corridor, 2),
@@ -2636,6 +2678,9 @@ def _assess_order_impl(
                 round(v326_wave_geometric_km, 2)
                 if v326_wave_geometric_km is not None else None
             ),
+            # FIX 2 (R-09 oś nowej dostawy) + FIX 1 (źródło czasu odbioru) observability
+            "v326_wave_veto_newdrop": v326_wave_veto_newdrop,
+            "bug2_pickup_src": bug2_pickup_src,
             # V3.24-A extension metrics
             "v324a_extension_min": round(v324a_extension_min, 2) if v324a_extension_min is not None else None,
             "v324a_extension_penalty": v324a_extension_penalty,

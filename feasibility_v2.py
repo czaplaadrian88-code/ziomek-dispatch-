@@ -356,6 +356,35 @@ def check_feasibility_v2(
                     metrics["r1_avg_pairwise_cosine"] = round(
                         cos_sum / pairs if pairs else 0.0, 3
                     )
+            # FIX 2 (2026-05-22): izolowany kierunek NOWEJ dostawy vs średni kierunek
+            # dostaw bagu (NIE uśredniona para — outlier nie rozcieńczony przez spójne
+            # dropy, jak Hallera 0.304 avg vs -0.39 izolowany) + dystans nowej dostawy od
+            # centroidu dostaw bagu. Zasila R-09 oś nowej dostawy (dispatch_pipeline veto).
+            _bag_drops_fix2 = [b.delivery_coords for b in bag if _valid(b.delivery_coords)]
+            if _bag_drops_fix2:
+                _cx = sum(d[0] for d in _bag_drops_fix2) / len(_bag_drops_fix2)
+                _cy = sum(d[1] for d in _bag_drops_fix2) / len(_bag_drops_fix2)
+                metrics["r1_new_drop_dist_km"] = round(
+                    osrm_client.haversine((_cx, _cy), new_order.delivery_coords), 2
+                )
+                _bag_dirs2 = []
+                for d in _bag_drops_fix2:
+                    vx = d[0] - courier_pos[0]
+                    vy = d[1] - courier_pos[1]
+                    n = (vx * vx + vy * vy) ** 0.5
+                    if n > 1e-9:
+                        _bag_dirs2.append((vx / n, vy / n))
+                if _bag_dirs2:
+                    _mx = sum(v[0] for v in _bag_dirs2) / len(_bag_dirs2)
+                    _my = sum(v[1] for v in _bag_dirs2) / len(_bag_dirs2)
+                    _mn = (_mx * _mx + _my * _my) ** 0.5
+                    nvx = new_order.delivery_coords[0] - courier_pos[0]
+                    nvy = new_order.delivery_coords[1] - courier_pos[1]
+                    _nn = (nvx * nvx + nvy * nvy) ** 0.5
+                    if _mn > 1e-9 and _nn > 1e-9:
+                        metrics["r1_new_drop_cosine"] = round(
+                            (_mx / _mn) * (nvx / _nn) + (_my / _mn) * (nvy / _nn), 3
+                        )
 
     # R5 mixed-restaurant pickup spread — same restaurant → spread=0 (no fire).
     if bag and _valid(new_order.pickup_coords):
