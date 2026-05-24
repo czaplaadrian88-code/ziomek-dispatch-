@@ -65,6 +65,61 @@ def _valid(coord) -> bool:
     return bool(coord) and coord != (0.0, 0.0) and coord[0] != 0.0
 
 
+def _parse_dt_utc(val):
+    """ISO str / datetime → tz-aware UTC datetime, albo None."""
+    if val is None:
+        return None
+    dt = val if isinstance(val, datetime) else None
+    if dt is None:
+        try:
+            dt = datetime.fromisoformat(str(val).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def detect_return_to_restaurant(bag, new_order, plan,
+                                same_rest_km: float = 0.08,
+                                group_tol_min: float = 5.0):
+    """F5 (2026-05-24) — wykrywa ZAKAZANY powrót do tej samej restauracji.
+
+    Reguła Adriana: kurier nie odbiera z restauracji R, nie doręcza, i wraca do R
+    po kolejny odbiór niosąc dowóz z R. Wrócić do R może tylko BEZ dowozu z R w bagu.
+
+    Commit-aware (plan GRUPUJE odbiory po ETA → maskuje powrót wymuszony zamrożonym
+    czas_kuriera wcześniejszego zlecenia, Case B 475698). Dla zlecenia B w bagu z TEJ
+    SAMEJ restauracji (pickup_coords < same_rest_km):
+      - realny odbiór B (picked_up_at / czas_kuriera commit / plan ETA) WCZEŚNIEJSZY
+        od odbioru new_order o > group_tol_min → osobna wizyta (powrót),
+      - B doręczany PO odbiorze new_order → dowóz z R wciąż w bagu na powrocie → ZAKAZANE.
+    Zwraca order_id pierwszego takiego B, albo None.
+    """
+    np_coords = getattr(new_order, "pickup_coords", None)
+    if not _valid(np_coords):
+        return None
+    t_np = _parse_dt_utc((plan.pickup_at or {}).get(new_order.order_id))
+    if t_np is None:
+        return None
+    for b in bag:
+        bp = getattr(b, "pickup_coords", None)
+        if not _valid(bp):
+            continue
+        if osrm_client.haversine(bp, np_coords) >= same_rest_km:
+            continue  # inna restauracja
+        t_bp = (_parse_dt_utc(getattr(b, "picked_up_at", None))
+                or _parse_dt_utc(getattr(b, "czas_kuriera_warsaw", None))
+                or _parse_dt_utc((plan.pickup_at or {}).get(b.order_id)))
+        t_bd = _parse_dt_utc((plan.predicted_delivered_at or {}).get(b.order_id))
+        if t_bp is None or t_bd is None:
+            continue
+        gap_min = (t_np - t_bp).total_seconds() / 60.0
+        if gap_min > group_tol_min and t_bd > t_np:
+            return b.order_id
+    return None
+
+
 def _max_deliv_spread_km(bag, new_delivery) -> float:
     """Max pair-wise road km across all bag deliveries + new delivery."""
     coords = [b.delivery_coords for b in bag if _valid(b.delivery_coords)]
@@ -658,6 +713,22 @@ def check_feasibility_v2(
                     metrics["r1_new_drop_cosine"] = None
             else:
                 metrics["r1_new_drop_cosine"] = None
+
+    # F5 RETURN-TO-RESTAURANT (2026-05-24) — wykryj zakazany powrót do tej samej
+    # restauracji niosąc jej dowóz (Case B korpusu). Metryka → kara w dispatch_pipeline.
+    # Defense-in-depth (Lekcja #83): instrumentacja NIGDY nie przerywa feasibility.
+    if (getattr(C, "ENABLE_R_RETURN_TO_RESTAURANT_VETO", False)
+            or C.flag("ENABLE_R_RETURN_TO_RESTAURANT_VETO", False)):
+        try:
+            _rtr_oid = detect_return_to_restaurant(
+                bag, new_order, plan,
+                same_rest_km=getattr(C, "RETURN_TO_RESTAURANT_SAME_KM", 0.08),
+                group_tol_min=getattr(C, "RETURN_TO_RESTAURANT_GROUP_TOL_MIN", 5.0),
+            )
+            metrics["return_to_restaurant_oid"] = _rtr_oid
+            metrics["return_to_restaurant"] = _rtr_oid is not None
+        except Exception as _rtr_e:
+            log.warning(f"F5_RETURN_TO_RESTAURANT_FAIL {type(_rtr_e).__name__}: {_rtr_e}")
 
     # Sprint OBJ F0.3 (2026-05-17): metryki jakości planu (route_metrics) →
     # shadow_decisions (prefix objm_, whitelist serializera) + replay-capture

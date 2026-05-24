@@ -2250,6 +2250,14 @@ def _assess_order_impl(
                 r1_corridor_spread_mult = min(2.0, 1.0 + (_r1_deliv_spread - 8.0) * 0.125)
                 bonus_r1_corridor = bonus_r1_corridor * r1_corridor_spread_mult
 
+        # F5 RETURN-TO-RESTAURANT (2026-05-24) — zakazany powrót do tej samej
+        # restauracji niosąc jej dowóz (Case B korpusu). Detekcja w feasibility_v2
+        # (commit-aware), tu silna kara dominująca (deprioryzuje kuriera; NIE hard
+        # veto — gdy jedyny kandydat, dostawa > brak dostawy, R-FLEET-LEVEL).
+        bonus_r_return_rest = 0.0
+        if metrics.get("return_to_restaurant"):
+            bonus_r_return_rest = -float(getattr(C, "RETURN_TO_RESTAURANT_PENALTY", 100.0))
+
         # V3.28 P1 — R5 pickup detour per order — Adrian doktryna 2026-05-10.
         # detour_per_pickup_km = ile dodatkowego km każdy pickup płaci za udział w bagu
         # (vs solo pickup). Galeria Biała "po drodze" do Wasilkowa → ~0 detour → 0 penalty.
@@ -2463,7 +2471,7 @@ def _assess_order_impl(
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
         bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch + bonus_coordinator_idle + bonus_r_paczki_flex
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch + bonus_coordinator_idle + bonus_r_paczki_flex + bonus_r_return_rest
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.
@@ -2617,6 +2625,10 @@ def _assess_order_impl(
             # R-PACZKI-FLEX (2026-05-20): gradient penalty + paczka_is dla shadow obs.
             # Auto-propagated do shadow log przez prefix bonus_ + paczka_.
             "bonus_r_paczki_flex": round(bonus_r_paczki_flex, 2),
+            # F5 RETURN-TO-RESTAURANT (2026-05-24)
+            "bonus_r_return_rest": round(bonus_r_return_rest, 2),
+            "return_to_restaurant": metrics.get("return_to_restaurant"),
+            "return_to_restaurant_oid": metrics.get("return_to_restaurant_oid"),
             "paczka_is": C.is_paczka_order({
                 "address_id": getattr(new_order, "address_id", None),
                 "order_type": getattr(new_order, "order_type", None),

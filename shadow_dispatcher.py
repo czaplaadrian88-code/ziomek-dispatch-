@@ -247,6 +247,9 @@ def _serialize_candidate(c) -> dict:
         "r1_wholebag_avg_pairwise_cosine": m.get("r1_wholebag_avg_pairwise_cosine"),
         "r1_wholebag_new_drop_cosine": m.get("r1_wholebag_new_drop_cosine"),
         "r1ws_open_drop_count": m.get("r1ws_open_drop_count"),
+        # F5 RETURN-TO-RESTAURANT obs (2026-05-24)
+        "return_to_restaurant": m.get("return_to_restaurant"),
+        "return_to_restaurant_oid": m.get("return_to_restaurant_oid"),
         # FIX 1 obs — źródło czasu odbioru w gap kontynuacji (ready_time vs plan_pickup_at)
         "bug2_pickup_src": m.get("bug2_pickup_src"),
         "r5_pickup_detour_total_km": m.get("r5_pickup_detour_total_km"),
@@ -478,6 +481,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r1_wholebag_avg_pairwise_cosine": best_m.get("r1_wholebag_avg_pairwise_cosine"),
             "r1_wholebag_new_drop_cosine": best_m.get("r1_wholebag_new_drop_cosine"),
             "r1ws_open_drop_count": best_m.get("r1ws_open_drop_count"),
+            # F5 RETURN-TO-RESTAURANT obs (2026-05-24, LOCATION B)
+            "return_to_restaurant": best_m.get("return_to_restaurant"),
+            "return_to_restaurant_oid": best_m.get("return_to_restaurant_oid"),
             # FIX 1 obs — źródło czasu odbioru w gap kontynuacji (LOCATION B)
             "bug2_pickup_src": best_m.get("bug2_pickup_src"),
             "r5_pickup_detour_total_km": best_m.get("r5_pickup_detour_total_km"),

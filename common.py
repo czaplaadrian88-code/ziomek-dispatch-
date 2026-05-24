@@ -1947,6 +1947,19 @@ ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY = _os.environ.get(
 ENABLE_R1_CORRIDOR_GRADIENT = _os.environ.get(
     "ENABLE_R1_CORRIDOR_GRADIENT", "0") == "1"
 
+# F5 RETURN-TO-RESTAURANT (2026-05-24) — zakazany powrót do tej samej restauracji
+# niosąc jej dowóz (reguła Adriana, Case B korpusu). Detekcja commit-aware w
+# feasibility_v2.detect_return_to_restaurant; silna kara (NIE hard veto — gdy jedyny
+# kandydat, dostawa > brak). Default OFF — flags.json hot-reload.
+ENABLE_R_RETURN_TO_RESTAURANT_VETO = _os.environ.get(
+    "ENABLE_R_RETURN_TO_RESTAURANT_VETO", "0") == "1"
+RETURN_TO_RESTAURANT_PENALTY = float(
+    _os.environ.get("RETURN_TO_RESTAURANT_PENALTY", "100.0"))
+RETURN_TO_RESTAURANT_SAME_KM = float(
+    _os.environ.get("RETURN_TO_RESTAURANT_SAME_KM", "0.08"))
+RETURN_TO_RESTAURANT_GROUP_TOL_MIN = float(
+    _os.environ.get("RETURN_TO_RESTAURANT_GROUP_TOL_MIN", "5.0"))
+
 # 2026-05-20 — SLA pre-existing bypass (diagnoza 474863 / Gabryś).
 # `plan.sla_violations` reject (feasibility_v2.py linia 679) odrzucał plany dla
 # kuriera, którego picked_up order już PRZED `now` przekroczył 35min carry-time
