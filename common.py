@@ -1934,6 +1934,13 @@ PACZKA_FLEX_PENALTY_PER_MIN = 1.0     # liniowy, -1 punkt/min nad cap
 # Flag default OFF — shadow mode pierwsze 24h, flip True przez flags.json hot-reload.
 ENABLE_R_PACZKI_FLEX = _os.environ.get("ENABLE_R_PACZKI_FLEX", "0") == "1"
 
+# F2 R1-WAVE-SCOPED DIRECTIONALITY (2026-05-24) — kierunkowość korytarza liczona
+# tylko na dropach współistniejących z falą nowego ordera (feasibility_v2 po planie),
+# zamiast na całym mieszanym bagu. Root cause korpusu eod_drafts/2026-05-24.
+# Default OFF — flip True przez flags.json hot-reload; okno kilkudniowej walidacji.
+ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY = _os.environ.get(
+    "ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY", "0") == "1"
+
 # 2026-05-20 — SLA pre-existing bypass (diagnoza 474863 / Gabryś).
 # `plan.sla_violations` reject (feasibility_v2.py linia 679) odrzucał plany dla
 # kuriera, którego picked_up order już PRZED `now` przekroczył 35min carry-time

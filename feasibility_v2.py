@@ -584,6 +584,81 @@ def check_feasibility_v2(
     metrics["osrm_fallback_used"] = plan.osrm_fallback_used
     metrics["sla_violations_count"] = plan.sla_violations
 
+    # F2 R1-WAVE-SCOPED (2026-05-24) — kierunkowość korytarza liczona TYLKO na
+    # dropach współistniejących z falą nowego ordera. Root cause korpusu
+    # eod_drafts/2026-05-24/ziomek_bad_picks_corpus.md: r1_avg_pairwise_cosine /
+    # r1_new_drop_cosine liczone na WSZYSTKICH dropach bagu z pozycji kuriera
+    # (linie 328-387, PRZED planem) zanieczyszczają sygnał dropami, które zostaną
+    # doręczone ZANIM zacznie się noga nowego ordera. Case A (Baanko+Rany Julek):
+    # stare dropy Rukoli przeciwne → fałszywe -35. Case C: realna para przeciwna
+    # (Wierzbowa↔Chrobrego) rozcieńczona już-doręczonym Sybirakowem → za słaba kara.
+    # Tu: zbiór = bag drops z predicted_delivered_at >= pickup_at[new] (realnie
+    # wiezione razem) + drop nowego; origin = pickup nowego ordera. <2 wektory
+    # (np. Case A: brak współistniejących) → None → dispatch_pipeline: brak
+    # kary/bonusu (solo noga). Stary wholebag-cosinus zachowany pod r1_wholebag_*
+    # (porównanie w shadow przez okno walidacji). Flag default OFF — zero wpływu
+    # gdy wyłączona (reguła kilkudniowej walidacji). Nadpisuje r1_avg_pairwise_cosine
+    # / r1_new_drop_cosine → wszyscy konsumenci (bonus_r1_corridor, R-09 wave veto,
+    # geo-blind path) dostają poprawioną wartość spójnie.
+    if (getattr(C, "ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY", False)
+            or C.flag("ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY", False)):
+        _ws_origin = (new_order.pickup_coords
+                      if _valid(new_order.pickup_coords) else courier_pos)
+        _ws_new_pickup_t = plan.pickup_at.get(new_order.order_id)
+        if (_valid(_ws_origin) and _ws_new_pickup_t is not None
+                and _valid(new_order.delivery_coords)):
+            _ws_open_drops: List[Tuple[float, float]] = []
+            for _b in bag:
+                _pd = plan.predicted_delivered_at.get(_b.order_id)
+                if (_pd is not None and _pd >= _ws_new_pickup_t
+                        and _valid(_b.delivery_coords)):
+                    _ws_open_drops.append(_b.delivery_coords)
+            metrics["r1ws_open_drop_count"] = len(_ws_open_drops)
+            # zachowaj stare (wholebag) wartości do porównania before/after
+            metrics["r1_wholebag_avg_pairwise_cosine"] = metrics.get(
+                "r1_avg_pairwise_cosine")
+            metrics["r1_wholebag_new_drop_cosine"] = metrics.get(
+                "r1_new_drop_cosine")
+
+            def _ws_unit(_o, _p):
+                _vx = _p[0] - _o[0]
+                _vy = _p[1] - _o[1]
+                _n = (_vx * _vx + _vy * _vy) ** 0.5
+                return (_vx / _n, _vy / _n) if _n > 1e-9 else None
+
+            # avg pairwise cosine na {open_drops + new_drop} z origin
+            _ws_dirs = [d for d in (_ws_unit(_ws_origin, _p)
+                        for _p in (list(_ws_open_drops) + [new_order.delivery_coords]))
+                        if d is not None]
+            if len(_ws_dirs) >= 2:
+                _ws_cs = 0.0
+                _ws_pairs = 0
+                for _i in range(len(_ws_dirs)):
+                    for _j in range(_i + 1, len(_ws_dirs)):
+                        _ws_cs += (_ws_dirs[_i][0] * _ws_dirs[_j][0]
+                                   + _ws_dirs[_i][1] * _ws_dirs[_j][1])
+                        _ws_pairs += 1
+                metrics["r1_avg_pairwise_cosine"] = round(
+                    _ws_cs / _ws_pairs if _ws_pairs else 0.0, 3)
+            else:
+                metrics["r1_avg_pairwise_cosine"] = None
+            # new_drop_cosine: nowy drop vs średni kierunek open_drops z origin
+            _ws_od_dirs = [d for d in (_ws_unit(_ws_origin, _p)
+                           for _p in _ws_open_drops) if d is not None]
+            _ws_nv = _ws_unit(_ws_origin, new_order.delivery_coords)
+            if _ws_od_dirs and _ws_nv is not None:
+                _ws_mx = sum(v[0] for v in _ws_od_dirs) / len(_ws_od_dirs)
+                _ws_my = sum(v[1] for v in _ws_od_dirs) / len(_ws_od_dirs)
+                _ws_mn = (_ws_mx * _ws_mx + _ws_my * _ws_my) ** 0.5
+                if _ws_mn > 1e-9:
+                    metrics["r1_new_drop_cosine"] = round(
+                        (_ws_mx / _ws_mn) * _ws_nv[0]
+                        + (_ws_my / _ws_mn) * _ws_nv[1], 3)
+                else:
+                    metrics["r1_new_drop_cosine"] = None
+            else:
+                metrics["r1_new_drop_cosine"] = None
+
     # Sprint OBJ F0.3 (2026-05-17): metryki jakości planu (route_metrics) →
     # shadow_decisions (prefix objm_, whitelist serializera) + replay-capture
     # wejść solvera dla offline harnessu. Defense-in-depth (Lekcja #83):

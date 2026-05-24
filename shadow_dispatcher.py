@@ -243,6 +243,10 @@ def _serialize_candidate(c) -> dict:
         # FIX 2 obs (2026-05-22) — izolowany kierunek + dystans nowej dostawy (R-09 oś dostawy)
         "r1_new_drop_dist_km": m.get("r1_new_drop_dist_km"),
         "r1_new_drop_cosine": m.get("r1_new_drop_cosine"),
+        # F2 R1-WAVE-SCOPED obs (2026-05-24) — wholebag (przed) vs wave-scoped (po)
+        "r1_wholebag_avg_pairwise_cosine": m.get("r1_wholebag_avg_pairwise_cosine"),
+        "r1_wholebag_new_drop_cosine": m.get("r1_wholebag_new_drop_cosine"),
+        "r1ws_open_drop_count": m.get("r1ws_open_drop_count"),
         # FIX 1 obs — źródło czasu odbioru w gap kontynuacji (ready_time vs plan_pickup_at)
         "bug2_pickup_src": m.get("bug2_pickup_src"),
         "r5_pickup_detour_total_km": m.get("r5_pickup_detour_total_km"),
@@ -470,6 +474,10 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             # FIX 2 obs (2026-05-22) — izolowany kierunek + dystans nowej dostawy (LOCATION B)
             "r1_new_drop_dist_km": best_m.get("r1_new_drop_dist_km"),
             "r1_new_drop_cosine": best_m.get("r1_new_drop_cosine"),
+            # F2 R1-WAVE-SCOPED obs (2026-05-24) — wholebag vs wave-scoped (LOCATION B)
+            "r1_wholebag_avg_pairwise_cosine": best_m.get("r1_wholebag_avg_pairwise_cosine"),
+            "r1_wholebag_new_drop_cosine": best_m.get("r1_wholebag_new_drop_cosine"),
+            "r1ws_open_drop_count": best_m.get("r1ws_open_drop_count"),
             # FIX 1 obs — źródło czasu odbioru w gap kontynuacji (LOCATION B)
             "bug2_pickup_src": best_m.get("bug2_pickup_src"),
             "r5_pickup_detour_total_km": best_m.get("r5_pickup_detour_total_km"),

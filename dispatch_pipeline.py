@@ -2572,6 +2572,12 @@ def _assess_order_impl(
             # FIX 2 observability — izolowany kierunek + dystans nowej dostawy
             "r1_new_drop_dist_km": metrics.get("r1_new_drop_dist_km"),
             "r1_new_drop_cosine": metrics.get("r1_new_drop_cosine"),
+            # F2 R1-WAVE-SCOPED (2026-05-24) — wholebag (przed) vs wave-scoped
+            # (po). Gdy flaga ON: r1_avg_pairwise_cosine/r1_new_drop_cosine wyżej
+            # = wave-scoped; r1_wholebag_* = stara wartość do porównania.
+            "r1_wholebag_avg_pairwise_cosine": metrics.get("r1_wholebag_avg_pairwise_cosine"),
+            "r1_wholebag_new_drop_cosine": metrics.get("r1_wholebag_new_drop_cosine"),
+            "r1ws_open_drop_count": metrics.get("r1ws_open_drop_count"),
             "r5_pickup_detour_total_km": metrics.get("r5_pickup_detour_total_km"),
             "r5_pickup_detour_per_order_km": metrics.get("r5_pickup_detour_per_order_km"),
             "bonus_r1_corridor": round(bonus_r1_corridor, 2),
