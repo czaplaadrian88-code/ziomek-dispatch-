@@ -230,7 +230,10 @@ def _resolve_thresholds(flags: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
 
 # -------------- Edge case detection -> ACK or ALERT --------------
 
-def _detect_edge_routing(ctx: ClassifierContext) -> Optional[Tuple[str, str]]:
+def _detect_edge_routing(
+    ctx: ClassifierContext,
+    weak_pick_floor: Optional[float] = None,
+) -> Optional[Tuple[str, str]]:
     """Returns (route, reason) if edge case detected, else None.
 
     Order matters: ALERT > ACK. ALERT = realny problem wymagający decyzji
@@ -244,6 +247,12 @@ def _detect_edge_routing(ctx: ClassifierContext) -> Optional[Tuple[str, str]]:
       • `best_effort`/SLA-violation przeniesione z ACK do ALERT — to JEST
         przypadek "0 feasible, Ziomek realnie zgaduje → człowiek decyduje".
       Efekt: ALERT 85% → ~16% (tylko realne problemy).
+
+    F4 (2026-05-24): weak_pick_floor (z flagi ENABLE_AUTO_ROUTE_WEAK_PICK_ALERT)
+      — gdy najlepszy pick ma score < floor (default 0.0 = ujemny), to obiektywnie
+      słaby/wymuszony wybór (Case D korpusu: -20.34 prezentowane jako "🟡 sensowny
+      wybór"). → ALERT "wymaga decyzji", NIE "sensowny wybór". Czasówki wykluczone
+      (Adrian: czasówki ZAWSZE ACK, Bartek wave-line judgment).
     """
     # ALERT path — realne problemy: człowiek MUSI zdecydować
     if ctx.parser_degraded:
@@ -252,6 +261,9 @@ def _detect_edge_routing(ctx: ClassifierContext) -> Optional[Tuple[str, str]]:
         return ROUTE_ALERT, "frozen_window_violation"
     if ctx.best_effort or ctx.best_plan_violations > 0:
         return ROUTE_ALERT, f"best_effort_no_feasible (sla_viol={ctx.best_plan_violations})"
+    if (weak_pick_floor is not None and not ctx.czasowka
+            and ctx.best_score < weak_pick_floor):
+        return ROUTE_ALERT, f"weak_pick_score={ctx.best_score:.1f}<{weak_pick_floor:g}"
 
     # ACK path — operacyjne edge: wybór sensowny, wymaga rzutu okiem
     if ctx.czasowka:
@@ -343,8 +355,16 @@ def classify_auto_route(
 
     ctx = _build_context(result, fleet_snapshot, order_event, flags)
 
+    # F4 (2026-05-24): słaby pick (ujemny score) → ALERT zamiast "sensowny wybór".
+    weak_pick_floor: Optional[float] = None
+    if flags.get("ENABLE_AUTO_ROUTE_WEAK_PICK_ALERT", False):
+        try:
+            weak_pick_floor = float(flags.get("AUTO_ROUTE_WEAK_PICK_SCORE_FLOOR", 0.0))
+        except (TypeError, ValueError):
+            weak_pick_floor = 0.0
+
     # Edge cases override threshold check
-    edge = _detect_edge_routing(ctx)
+    edge = _detect_edge_routing(ctx, weak_pick_floor=weak_pick_floor)
     if edge is not None:
         return edge
 
