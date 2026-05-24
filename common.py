@@ -1941,6 +1941,12 @@ ENABLE_R_PACZKI_FLEX = _os.environ.get("ENABLE_R_PACZKI_FLEX", "0") == "1"
 ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY = _os.environ.get(
     "ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY", "0") == "1"
 
+# F1 R1-CORRIDOR-GRADIENT (2026-05-24) — kara korytarza R1 jako gradient liniowy
+# (0 przy cos=0 → -40 przy cos=-1) zamiast klifu (avg_cos ∈ (-0.5,0] → płaskie -35).
+# Sensowne po F2 (czysty wave-scoped cosine). Default OFF — flags.json hot-reload.
+ENABLE_R1_CORRIDOR_GRADIENT = _os.environ.get(
+    "ENABLE_R1_CORRIDOR_GRADIENT", "0") == "1"
+
 # 2026-05-20 — SLA pre-existing bypass (diagnoza 474863 / Gabryś).
 # `plan.sla_violations` reject (feasibility_v2.py linia 679) odrzucał plany dla
 # kuriera, którego picked_up order już PRZED `now` przekroczył 35min carry-time

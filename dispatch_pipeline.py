@@ -65,6 +65,32 @@ log.info(f"V326_DEFAULT_CITY: {DEFAULT_CITY}")
 _BIALYSTOK_CENTER_FALLBACK = (53.1325, 23.1688)
 
 
+def _r1_corridor_base_bonus(avg_cos, gradient: bool) -> float:
+    """F1 (2026-05-24) — bazowa kara/bonus korytarza R1 z avg pairwise cosine
+    (PRZED mnożnikiem deliv_spread). Strona dodatnia (reward) bez zmian.
+
+    gradient=False (legacy): klif na ujemnej stronie — avg_cos ∈ (-0.5,0] → płaskie
+    -35, ≤-0.5 → -40. Problem: -0.05 karane tak samo jak -0.49.
+    gradient=True (F1): liniowo 0 przy cos=0 → -40 przy cos=-1 (40*cos). Po F2
+    (wave-scoped cosine) sygnał jest czysty — lekka rozbieżność dostaje lekką karę,
+    przeciwne kierunki mocną. Mnożnik deliv_spread (caller) nadal dokłada dla
+    szerokich dropów. None → 0 (solo noga / brak sygnału).
+    """
+    if avg_cos is None:
+        return 0.0
+    if avg_cos > 0.85:
+        return 20.0
+    if avg_cos > 0.5:
+        return 5.0
+    if avg_cos > 0.0:
+        return 0.0
+    if gradient:
+        return 40.0 * avg_cos
+    if avg_cos > -0.5:
+        return -35.0  # P3-D5 2026-05-11: tighten -15 → -35
+    return -40.0
+
+
 def _sanitize_courier_pos(pos):
     """Return BIALYSTOK_CENTER gdy pos to (0,0) sentinel, else pass-through."""
     if pos is None:
@@ -2208,18 +2234,11 @@ def _assess_order_impl(
         # drops (>8 km): linear scale 8→1.0x, 16+→2.0x. Tylko negative bucket — bonus
         # pozostaje bez zmiany.
         _r1_avg_cos = metrics.get("r1_avg_pairwise_cosine")
-        bonus_r1_corridor = 0.0
-        if _r1_avg_cos is not None:
-            if _r1_avg_cos > 0.85:
-                bonus_r1_corridor = +20.0
-            elif _r1_avg_cos > 0.5:
-                bonus_r1_corridor = +5.0
-            elif _r1_avg_cos > 0.0:
-                bonus_r1_corridor = 0.0
-            elif _r1_avg_cos > -0.5:
-                bonus_r1_corridor = -35.0  # P3-D5 2026-05-11: tighten -15 → -35
-            else:
-                bonus_r1_corridor = -40.0
+        bonus_r1_corridor = _r1_corridor_base_bonus(
+            _r1_avg_cos,
+            getattr(C, "ENABLE_R1_CORRIDOR_GRADIENT", False)
+            or C.flag("ENABLE_R1_CORRIDOR_GRADIENT", False),
+        )
 
         # P3-D5 2026-05-11: deliv_spread mnożnik dla wide drops (negative bucket only).
         # Case 472338 deliv_spread=12.63km → 1.578x mnożnik → -35 × 1.578 = -55.2.

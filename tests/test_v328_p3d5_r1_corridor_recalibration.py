@@ -20,21 +20,17 @@ import inspect
 
 
 def test_r1_bucket_minus_0_5_to_0_tightened_to_minus_35():
-    """Source regression: bucket -0.5..0 nie ma już -15, ma -35."""
-    from dispatch_v2 import dispatch_pipeline
-    src = inspect.getsource(dispatch_pipeline)
-    # Pre-P3-D5: bonus_r1_corridor = -15.0
-    # Post-P3-D5: bonus_r1_corridor = -35.0 w bucket -0.5..0
-    # Find the elif _r1_avg_cos > -0.5: block
-    r1_section_start = src.find("# V3.28 P1 — R1 directionality")
-    assert r1_section_start > 0
-    r1_section = src[r1_section_start:r1_section_start + 2000]
-    assert "bonus_r1_corridor = -35.0" in r1_section
-    # Old value -15 nie powinno already być w tym bloku (poza komentarzem o tighten)
-    bucket_block = r1_section[r1_section.find("elif _r1_avg_cos > -0.5:"):r1_section.find("else:")]
-    assert "bonus_r1_corridor = -35.0" in bucket_block
-    # Pre-fix assignment -15.0 nie powinno być (comment "-15 → -35" tighten note OK)
-    assert "bonus_r1_corridor = -15.0" not in bucket_block
+    """Bucket -0.5..0 = -35 (P3-D5), -15 wycofane. Po refaktorze F1 (2026-05-24)
+    logika w helperze _r1_corridor_base_bonus; legacy (gradient=False) = stary klif
+    1:1. Test behavior-based zamiast grep źródła."""
+    from dispatch_v2.dispatch_pipeline import _r1_corridor_base_bonus as B
+    # bucket -0.5..0 (legacy/klif) → -35, NIE -15
+    assert B(-0.326, False) == -35.0   # case 472338 cos
+    assert B(-0.1, False) == -35.0
+    assert B(-0.49, False) == -35.0
+    assert B(-0.326, False) != -15.0
+    # próg -0.5 i niżej → -40
+    assert B(-0.5, False) == -40.0
 
 
 def test_r1_spread_mult_present():
