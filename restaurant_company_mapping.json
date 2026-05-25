@@ -3,7 +3,7 @@
     "Arsenał Panteon": 14,
     "Atmosfera": 135,
     "Aztek Tex-Mex": 164,
-    "Bankoo": 66,
+    "Baanko": 66,
     "Bar Express": 19,
     "Bar Merino": 17,
     "Bar Słoneczny": 18,
@@ -17,6 +17,7 @@
     "Enklawa (u lodziarzy)": 131,
     "Epic Pizza": 210,
     "Farina": 183,
+    "Fire Doner": 153,
     "500 stopni Biała": 214,
     "Gęba w niebie": 173,
     "Good Boy": 191,
@@ -75,8 +76,13 @@
   },
   "unmatched_sheet": [],
   "unused_panel": [
+    "3Giga",
     "Bar Eljot",
+    "Dentomax",
+    "Dr Tusz",
+    "Interpap Polska",
     "Nadajesz.pl",
+    "Orthdruk",
     "Pruszynka NIEAKTYWNE",
     "Test",
     "tst"
@@ -85,7 +91,7 @@
     "Arsenał Panteon": "strict",
     "Atmosfera": "strict",
     "Aztek Tex-Mex": "strict",
-    "Bankoo": "alias",
+    "Baanko": "strict",
     "Bar Express": "strict",
     "Bar Merino": "strict",
     "Bar Słoneczny": "strict",
@@ -99,6 +105,7 @@
     "Enklawa (u lodziarzy)": "strict",
     "Epic Pizza": "strict",
     "Farina": "strict",
+    "Fire Doner": "strict",
     "500 stopni Biała": "token",
     "Gęba w niebie": "strict",
     "Good Boy": "alias",
@@ -106,7 +113,7 @@
     "Gym Fit Food": "strict",
     "Hacienda Pizza": "strict",
     "HALVA": "strict",
-    "HoNoTu": "startswith",
+    "HoNoTu": "alias",
     "Karczma Maciejówka": "strict",
     "Kebab Król": "strict",
     "Kurra": "strict",
@@ -151,19 +158,18 @@
     "350 stopni": "alias",
     "500 stopni 500 stopni": "alias"
   },
-  "generated_at": "2026-05-04T02:40:11.248143+02:00",
+  "generated_at": "2026-05-25T22:01:22.069511+02:00",
   "source": "panel_dropdown_scrape_v2",
   "counts": {
-    "sheet_total": 68,
-    "panel_total": 75,
-    "matched": 68,
+    "sheet_total": 69,
+    "panel_total": 81,
+    "matched": 69,
     "unmatched_sheet": 0,
-    "unused_panel": 5,
+    "unused_panel": 10,
     "by_method": {
-      "strict": 55,
-      "alias": 7,
+      "strict": 57,
       "token": 5,
-      "startswith": 1
+      "alias": 7
     }
   }
 }

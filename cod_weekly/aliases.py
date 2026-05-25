@@ -10,6 +10,7 @@ ALIAS_MAP = {
     "Trzy po trzy SIEN": "Trzy Po Trzy Sienkiewicza",
     "Mama Thai Bistro, Mama Thai Street i Miejska Miska": ["Mama Thai Bistro", "Street Mama Thai", "Miejska Miska"],  # MULTI: suma 3 company (jeden właściciel)
     "Good Boy": "Goodboy",                    # spacja vs bez spacji
+    "HoNoTu": "Sztuka Dzika",                 # panel cid=207 przemianowany z "HoNoTu" → "Sztuka Dzika" (Adrian 25.05)
 }
 
 # Wiersze arkusza do pominięcia (agregaty, nie restauracje)
