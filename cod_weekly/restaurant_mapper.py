@@ -20,7 +20,9 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unicodedata
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +30,8 @@ sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 from dispatch_v2.panel_client import login
 from dispatch_v2.cod_weekly.config import (
     PANEL_DROPDOWN_URL,
+    PANEL_DROPDOWN_TIMEOUT_SEC,
+    PANEL_DROPDOWN_RETRIES,
     MAPPING_PATH,
     WARSAW,
     SPREADSHEET_ID,
@@ -83,10 +87,31 @@ def normalize(s: str) -> str:
 
 
 def scrape_panel_dropdown() -> dict:
-    """{panel_name_original: company_id} z <select name="company">."""
+    """{panel_name_original: company_id} z <select name="company">.
+
+    Endpoint = pełna lista zleceń (ciężka, ~18-25s). Retry + szeroki timeout
+    bo stary hardkod 20s trafiał w krawędź → intermittent TimeoutError (E1).
+    """
     opener, _, _ = login()
-    res = opener.open(PANEL_DROPDOWN_URL, timeout=20)
-    html = res.read().decode("utf-8", errors="replace")
+    html = None
+    last_err = None
+    for attempt in range(1, PANEL_DROPDOWN_RETRIES + 1):
+        try:
+            res = opener.open(PANEL_DROPDOWN_URL, timeout=PANEL_DROPDOWN_TIMEOUT_SEC)
+            html = res.read().decode("utf-8", errors="replace")
+            break
+        except (urllib.error.URLError, OSError) as e:
+            last_err = e
+            log.warning(
+                f"scrape_panel_dropdown: próba {attempt}/{PANEL_DROPDOWN_RETRIES} "
+                f"nieudana ({type(e).__name__}: {e}); timeout={PANEL_DROPDOWN_TIMEOUT_SEC}s"
+            )
+            if attempt < PANEL_DROPDOWN_RETRIES:
+                time.sleep(2 * attempt)  # backoff 2s, 4s
+    if html is None:
+        raise RuntimeError(
+            f"scrape_panel_dropdown: {PANEL_DROPDOWN_RETRIES} prób nieudanych"
+        ) from last_err
     m = SELECT_RE.search(html)
     if not m:
         raise RuntimeError("Brak <select name=company> w HTML panelu")

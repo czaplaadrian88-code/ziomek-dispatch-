@@ -18,6 +18,12 @@ PANEL_BASE = "https://www.gastro.nadajesz.pl"
 PANEL_DROPDOWN_URL = f"{PANEL_BASE}/admin2017/orders/zlecenia"
 PANEL_ORDERS_URL = f"{PANEL_BASE}/admin2017/orders/zlecenia"
 
+# E1 dropdown scrape: strona /admin2017/orders/zlecenia jest ciężka (renderuje
+# pełną listę zleceń) → ~18-25s odpowiedzi. Stary hardkod timeout=20 trafiał
+# w krawędź → intermittent TimeoutError. 60s + retry daje zapas (run off-peak).
+PANEL_DROPDOWN_TIMEOUT_SEC = 60
+PANEL_DROPDOWN_RETRIES = 3
+
 FUZZY_CUTOFF = 0.85
 ROW_START = 3            # pierwsza restauracja w kolumnie A
 COL_A_IDX = 0            # kolumna A (nazwa restauracji)
