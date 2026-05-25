@@ -832,12 +832,22 @@ def main() -> int:
              "tygodnia (default = current week pn-niedz, override przez --week). "
              "NO scrape, NO write. Alert Telegram tylko gdy missing.",
     )
+    ap.add_argument(
+        "--prev-week",
+        action="store_true",
+        help="Wymuś PREVIOUS closed week (ten sam co --write). Z --preflight = "
+             "poniedziałkowy last-call 1h przed auto-runem: sprawdza tydzień, "
+             "który zaraz policzy write o 08:00 (nie bieżący).",
+    )
     args = ap.parse_args()
 
     # --preflight default uses CURRENT week (kończący się dziś), nie previous closed.
+    # --prev-week wymusza previous closed (Mon 07:00 last-call sprawdza tydzień write'u).
     # Inne komendy (--write, --dry-run-*) używają previous closed.
     if args.week:
         week_start, week_end = parse_override(args.week)
+    elif args.prev_week:
+        week_start, week_end = get_previous_closed_week()
     elif args.preflight:
         week_start, week_end = get_current_week_ending_sunday()
     else:
