@@ -1641,6 +1641,43 @@ OBJ_F3_R6_BREACH_KOORD_MIN = float(_os.environ.get(
 ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT = _os.environ.get(
     "ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT", "1") == "1"
 
+# BUG A shadow (2026-05-26): Σ bag_time + max bag_time + FIFO penalty w scoring.
+# Reguła Adriana: „Suma czasów wszystkich dowozów w bagu jak najmniejsza. Lepiej
+# żeby OBA jechały po 15 min, niż jedno 25 a drugie 8. Jeśli podobnie, najpierw
+# to co zostało wcześniej odebrane." Solver minimalizuje total_drive_min (geo
+# efficiency), nie bag-time fairness — Case #2 (Andersa) TomTom potwierdza
+# Adrian wygrywa 15.7 vs 17.2 min mimo wyższego total_drive. Default OFF —
+# shadow-first, kalibracja wag po 7-14 dni replay corpus. Wagi startowe per
+# SPRINT_PLAN (eod_drafts/2026-05-26/...).
+ENABLE_BAG_TIME_FAIRNESS_SCORING = _os.environ.get(
+    "ENABLE_BAG_TIME_FAIRNESS_SCORING", "0") == "1"
+BAG_TIME_SUM_PENALTY_PER_MIN = float(_os.environ.get(
+    "BAG_TIME_SUM_PENALTY_PER_MIN", "1.0"))
+BAG_TIME_MAX_PENALTY_PER_MIN = float(_os.environ.get(
+    "BAG_TIME_MAX_PENALTY_PER_MIN", "0.7"))
+BAG_TIME_FIFO_TIE_PENALTY = float(_os.environ.get(
+    "BAG_TIME_FIFO_TIE_PENALTY", "5.0"))
+
+# BUG B shadow (2026-05-26): kara za detour pickup-not-on-route. Reguła Adriana
+# „dowóz w żaden sposób nie jest po drodze" (Case C). r5_pickup_detour_total_km
+# już zbierane (linia ~2608 dispatch_pipeline) jako metryka obserwacyjna — brak
+# negative weight w bonus aggregation. Default OFF. Wagi startowe: penalty 8.0
+# pkt/km (~ R4 clip), free threshold 0.5 km (naturalnie po drodze, bez kary).
+ENABLE_R5_PICKUP_DETOUR_PENALTY = _os.environ.get(
+    "ENABLE_R5_PICKUP_DETOUR_PENALTY", "0") == "1"
+R5_DETOUR_PENALTY_PER_KM = float(_os.environ.get(
+    "R5_DETOUR_PENALTY_PER_KM", "8.0"))
+R5_DETOUR_FREE_THRESHOLD_KM = float(_os.environ.get(
+    "R5_DETOUR_FREE_THRESHOLD_KM", "0.5"))
+
+# BUG F long-term (2026-05-26): klastry geograficzne (osiedla). Reguła Adriana:
+# „Kraszewskiego i Wąska są blisko siebie na jednym osiedlu (Case D), szybkie
+# do doręczenia, a później miałby najdalej na Jaroszówce". `districts_data.py`
+# mapuje ulice na osiedla, ale TSP go ignoruje. Faza 1 = shadow metric only
+# (zbieranie korpusu); sprint długoterminowy z osobnym planowaniem.
+ENABLE_CLUSTER_DROP_GROUPING_METRIC = _os.environ.get(
+    "ENABLE_CLUSTER_DROP_GROUPING_METRIC", "0") == "1"
+
 # Sprint OBJ F0.3 (2026-05-17): replay-capture wejść solvera do offline
 # harnessu (zestaw masowy / regresja). Default OFF — włączane env na czas sprintu.
 ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(

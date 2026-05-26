@@ -2006,6 +2006,59 @@ def _assess_order_impl(
         # / 3h delivery dla NIE-czasówka paczki. Fail-soft 0.0 dla jedzeniówek.
         bonus_r_paczki_flex = _r_paczki_flex_penalty(new_order, plan, now)
 
+        # === BUG A shadow (2026-05-26): Σ bag_time + max + FIFO ===
+        # Mierzymy bag_time per order z plan.pickup_at / predicted_delivered_at.
+        # Sum + max + FIFO violations zbierane ZAWSZE (observability), bonus
+        # tylko gdy flag ON. Default OFF — shadow-first, kalibracja po replay.
+        # Reguła Adriana: „Suma czasów wszystkich dowozów w bagu jak najmniejsza,
+        # lepiej oba po 15 min niż 25+8, FIFO tie-break".
+        bag_times_per_order: Dict[str, float] = {}
+        sum_bag_time_min_v = 0.0
+        max_bag_time_min_v = 0.0
+        fifo_violations = 0
+        bonus_bag_time_sum = 0.0
+        bonus_bag_time_max = 0.0
+        bonus_fifo_violation = 0.0
+        if plan is not None:
+            _pu_map = getattr(plan, "pickup_at", None) or {}
+            _do_map = getattr(plan, "predicted_delivered_at", None) or {}
+            _pickup_order: List = []
+            for _oid, _pu in _pu_map.items():
+                _do = _do_map.get(_oid)
+                if _pu is not None and _do is not None:
+                    try:
+                        bag_times_per_order[_oid] = (_do - _pu).total_seconds() / 60.0
+                        _pickup_order.append((_pu, _oid))
+                    except (TypeError, AttributeError):
+                        pass
+            _pickup_order.sort()
+            sum_bag_time_min_v = sum(bag_times_per_order.values())
+            max_bag_time_min_v = (
+                max(bag_times_per_order.values()) if bag_times_per_order else 0.0
+            )
+            # FIFO violations: ile par (i<j by pickup) gdzie i delivered LATER niż j.
+            for _i, (_pu_i, _oid_i) in enumerate(_pickup_order):
+                for _pu_j, _oid_j in _pickup_order[_i + 1:]:
+                    _do_i = _do_map.get(_oid_i)
+                    _do_j = _do_map.get(_oid_j)
+                    if _do_i is not None and _do_j is not None and _do_i > _do_j:
+                        fifo_violations += 1
+            if getattr(C, "ENABLE_BAG_TIME_FAIRNESS_SCORING", False):
+                bonus_bag_time_sum = -C.BAG_TIME_SUM_PENALTY_PER_MIN * sum_bag_time_min_v
+                bonus_bag_time_max = -C.BAG_TIME_MAX_PENALTY_PER_MIN * max_bag_time_min_v
+                bonus_fifo_violation = -C.BAG_TIME_FIFO_TIE_PENALTY * fifo_violations
+
+        # === BUG B shadow (2026-05-26): kara za detour pickup-not-on-route ===
+        # r5_pickup_detour_total_km już zbierane przez route_metrics jako metryka
+        # obserwacyjna — dodajemy negative weight (free threshold + penalty/km).
+        # Default OFF.
+        bonus_r5_pickup_detour_penalty = 0.0
+        _r5_detour_km_raw = metrics.get("r5_pickup_detour_total_km")
+        _r5_detour_km = float(_r5_detour_km_raw) if isinstance(_r5_detour_km_raw, (int, float)) else 0.0
+        if getattr(C, "ENABLE_R5_PICKUP_DETOUR_PENALTY", False):
+            _excess_km = max(0.0, _r5_detour_km - C.R5_DETOUR_FREE_THRESHOLD_KM)
+            bonus_r5_pickup_detour_penalty = -C.R5_DETOUR_PENALTY_PER_KM * _excess_km
+
         # R9 stopover — differential tax (bag=0 → 0, bag=1 → -8, bag=2 → -16, ...).
         # Rationale: scoring porównuje kandydatów względem kosztu DODANIA stopu,
         # nie absolutnego. Zgodny z op.1 "podatek przystankowy".
@@ -2515,6 +2568,16 @@ def _assess_order_impl(
                 v324a_extension_penalty = _pen_v324
 
         final_score = score_result["total"] + bundle_bonus + timing_gap_bonus + wave_bonus + bonus_penalty_sum + bonus_bug2_continuation + v324a_extension_penalty
+        # BUG A+B shadow (2026-05-26): bag_time fairness + r5 detour. Wszystkie
+        # cztery bonus_* są 0.0 gdy flagi OFF (default) → zero behavior change
+        # dopóki flagi nie zostaną włączone (env override / hot-reload).
+        final_score = (
+            final_score
+            + bonus_bag_time_sum
+            + bonus_bag_time_max
+            + bonus_fifo_violation
+            + bonus_r5_pickup_detour_penalty
+        )
 
         # V3.27 Bug Z Q5: SOFT bundle score multiplier dla cross-quadrant bag.
         # 0.0 (cross-quadrant) → score *= 0.1
@@ -2625,6 +2688,18 @@ def _assess_order_impl(
             # R-PACZKI-FLEX (2026-05-20): gradient penalty + paczka_is dla shadow obs.
             # Auto-propagated do shadow log przez prefix bonus_ + paczka_.
             "bonus_r_paczki_flex": round(bonus_r_paczki_flex, 2),
+            # BUG A shadow (2026-05-26): bag_time fairness — Σ + max + FIFO.
+            # Metryki ZAWSZE zbierane (observability), bonus_* tylko gdy flag ON.
+            # Auto-propagated via prefix bonus_ w shadow_dispatcher.
+            "sum_bag_time_min": round(sum_bag_time_min_v, 2),
+            "max_bag_time_min": round(max_bag_time_min_v, 2),
+            "fifo_violations": fifo_violations,
+            "bonus_bag_time_sum": round(bonus_bag_time_sum, 2),
+            "bonus_bag_time_max": round(bonus_bag_time_max, 2),
+            "bonus_fifo_violation": round(bonus_fifo_violation, 2),
+            # BUG B shadow (2026-05-26): pickup-not-on-route penalty.
+            # r5_pickup_detour_total_km już wyżej w enriched_metrics.
+            "bonus_r5_pickup_detour_penalty": round(bonus_r5_pickup_detour_penalty, 2),
             # F5 RETURN-TO-RESTAURANT (2026-05-24)
             "bonus_r_return_rest": round(bonus_r_return_rest, 2),
             "return_to_restaurant": metrics.get("return_to_restaurant"),

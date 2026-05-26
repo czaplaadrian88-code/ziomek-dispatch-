@@ -296,6 +296,12 @@ def _serialize_candidate(c) -> dict:
         "bonus_r9_wait_pen_legacy": m.get("bonus_r9_wait_pen_legacy"),
         "bonus_r9_wait_pen_v327": m.get("bonus_r9_wait_pen_v327"),
         "bonus_penalty_sum": m.get("bonus_penalty_sum"),
+        # BUG A shadow (2026-05-26): bag_time fairness — Σ + max + FIFO.
+        # bonus_bag_time_sum/max/fifo_violation, bonus_r5_pickup_detour_penalty
+        # auto-propagated via prefix bonus_. Trzy raw metryki bez prefixu → explicit.
+        "sum_bag_time_min": m.get("sum_bag_time_min"),
+        "max_bag_time_min": m.get("max_bag_time_min"),
+        "fifo_violations": m.get("fifo_violations"),
         "plan": None if plan is None else {
             "sequence": plan.sequence,
             "total_duration_min": plan.total_duration_min,
@@ -529,6 +535,11 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "bonus_r8_soft_pen": best_m.get("bonus_r8_soft_pen"),
             "bonus_r9_stopover": best_m.get("bonus_r9_stopover"),
             "bonus_r9_wait_pen": best_m.get("bonus_r9_wait_pen"),
+            # BUG A shadow (2026-05-26): bag_time fairness LOC B (best).
+            # Reszta (bonus_bag_time_*, bonus_r5_pickup_detour_penalty) auto-prefix.
+            "sum_bag_time_min": best_m.get("sum_bag_time_min"),
+            "max_bag_time_min": best_m.get("max_bag_time_min"),
+            "fifo_violations": best_m.get("fifo_violations"),
             # V3.27.1 A/B comparison (LOCATION B — best): legacy zawsze, v327 = 0 gdy flag=False
             "bonus_r9_wait_pen_legacy": best_m.get("bonus_r9_wait_pen_legacy"),
             "bonus_r9_wait_pen_v327": best_m.get("bonus_r9_wait_pen_v327"),
