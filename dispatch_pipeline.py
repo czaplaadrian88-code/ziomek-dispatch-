@@ -3234,6 +3234,60 @@ def _assess_order_impl(
     if with_plan:
         best = with_plan[0]
         best.best_effort = True
+        # BUG E hotfix (2026-05-26): best_effort z >=1 orderem łamiącym hard R6
+        # (35 min bag_time) → KOORD. Stricter superset OBJ F3 — bez progu
+        # min-breach, ANY breach. Mierzone bezpośrednio z plan.pickup_at /
+        # predicted_delivered_at per order (anchor solvera, ten sam horizon co
+        # operator widzi). Default ON. Reguła Adriana: „już lepiej dać 10 min
+        # później i wrócić po to". Case D/E/F/G 26.05 — 4 propozycje z carry
+        # 43-90 min uciekły jako best_effort PROPOSE bo OBJ F3 próg=20 łapie
+        # tylko bag_time > 55. Nowy check łapie bag_time > 35.
+        _be_plan = getattr(best, "plan", None)
+        _be_bag_times: Dict[str, float] = {}
+        if _be_plan is not None:
+            _pu_map = getattr(_be_plan, "pickup_at", None) or {}
+            _do_map = getattr(_be_plan, "predicted_delivered_at", None) or {}
+            for _oid, _pu in _pu_map.items():
+                _do = _do_map.get(_oid)
+                if _pu is not None and _do is not None:
+                    try:
+                        _be_bag_times[_oid] = (_do - _pu).total_seconds() / 60.0
+                    except (TypeError, AttributeError):
+                        pass
+        _be_max_bt = max(_be_bag_times.values()) if _be_bag_times else 0.0
+        _be_breach_orders = [
+            _oid for _oid, _bt in _be_bag_times.items()
+            if _bt > C.BAG_TIME_HARD_MAX_MIN
+        ]
+        if (getattr(C, "ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT", True)
+                and _be_max_bt > C.BAG_TIME_HARD_MAX_MIN
+                and len(_be_breach_orders) >= 1):
+            _result_be_e = PipelineResult(
+                order_id=order_id,
+                verdict="KOORD",
+                reason=(
+                    f"best_effort_r6_breach_v2 (best={best.courier_id} "
+                    f"breach_orders={len(_be_breach_orders)} "
+                    f"max_bag_time={_be_max_bt:.1f}min > "
+                    f"{C.BAG_TIME_HARD_MAX_MIN}min; 0 feasible)"
+                ),
+                best=best,
+                candidates=with_plan[:TOP_N_CANDIDATES],
+                pickup_ready_at=pickup_ready_at,
+                restaurant=restaurant,
+                delivery_address=delivery_address,
+                pool_total_count=len(candidates),
+                pool_feasible_count=0,
+            )
+            # Surface dla render Telegram (banner KOORD z listą orderów w breach)
+            _result_be_e.best_effort_r6_redirect = {
+                "breach_count": len(_be_breach_orders),
+                "max_bag_time_min": round(_be_max_bt, 1),
+                "orders_in_breach": _be_breach_orders,
+            }
+            _classify_and_set_auto_route(
+                _result_be_e, fleet_snapshot, order_event, now=now)
+            return _result_be_e
         # Sprint OBJ F3 / BUG-4 (2026-05-18): best_effort z najlepszym kandydatem
         # łamiącym hard R6 o > próg → KOORD, nie auto-PROPOSE. Diagnoza 474297:
         # kurier R6-doomed (carry 47-82 min), Ziomek proponował trasę-potworka.

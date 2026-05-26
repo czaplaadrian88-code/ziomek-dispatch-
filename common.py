@@ -1630,6 +1630,17 @@ ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD = _os.environ.get(
 OBJ_F3_R6_BREACH_KOORD_MIN = float(_os.environ.get(
     "OBJ_F3_R6_BREACH_KOORD_MIN", "20.0"))
 
+# BUG E hotfix (2026-05-26): best_effort fallback gdy >=1 order łamie hard R6
+# (35 min) → verdict KOORD, bez progu min-breach jak OBJ_F3 (czyli ANY breach,
+# nie tylko 20+ ponad próg). Diagnoza 26.05: 4 z 9 case'ów (D/E/F/G) odjeżdżały
+# jako best_effort PROPOSE z bag_times 43-90 min — Adrian akceptował myśląc że
+# to sensowny wybór, generując R6 violations dla istniejących orderów. Reguła
+# Adriana: „przecież to psuje na 100% dowóz, już lepiej dać 10 min później".
+# Liczone z plan.pickup_at/predicted_delivered_at per order (NIE objm_…), bo
+# anchor solver'a — dokładnie ten sam horizon co operator widzi. Default ON.
+ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT = _os.environ.get(
+    "ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT", "1") == "1"
+
 # Sprint OBJ F0.3 (2026-05-17): replay-capture wejść solvera do offline
 # harnessu (zestaw masowy / regresja). Default OFF — włączane env na czas sprintu.
 ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(
