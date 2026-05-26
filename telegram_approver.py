@@ -940,6 +940,10 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
         pickup_oid_set.add(cur_oid)
 
     # Collect stops: list[(dt_utc, kind, oid, addr, source)]
+    # BUG C (2026-05-26): per-oid plan_dt zapisany gdy commit i plan_eta
+    # różnią się > COMMIT_RENDER_DIVERGENCE_TILDE_MIN (3 min) — używamy w pętli
+    # render niżej do dorzucenia markera `⚠plan~HH:MM` (operator widzi fikcję).
+    divergence_plan_dt: dict = {}
     stops = []
     for oid in pickup_oid_set:
         dt, source = _resolve_pickup_at(oid, pickup_at, bag_context_map, decision)
@@ -951,9 +955,12 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
         # V3.28 divergence warning: gdy commit i plan eta oba present z |diff| > threshold,
         # log empirical signal że plan.pickup_at ETA rozjeżdża się z hard commit.
         # Surface bug pre-fix (V3.27.4 mass-reject greedy fallback) — w runtime, nie offline replay.
+        # BUG C (2026-05-26): drugi próg tilde (niższy: 3min vs 5min warn) — gdy
+        # przekroczony, zapisujemy plan_dt do dict, używamy w render dla operatora.
         try:
             from dispatch_v2 import common as _common
             warn_threshold = getattr(_common, "V3274_RENDER_DIVERGENCE_WARN_MIN", 5.0)
+            tilde_threshold = getattr(_common, "COMMIT_RENDER_DIVERGENCE_TILDE_MIN", 3.0)
             if source == "commit":
                 plan_iso = (pickup_at or {}).get(str(oid)) or (pickup_at or {}).get(oid)
                 if plan_iso:
@@ -961,6 +968,8 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
                     if plan_dt_for_check.tzinfo is None:
                         plan_dt_for_check = plan_dt_for_check.replace(tzinfo=timezone.utc)
                     diff_min = abs((plan_dt_for_check - dt).total_seconds() / 60.0)
+                    if diff_min > tilde_threshold:
+                        divergence_plan_dt[str(oid)] = plan_dt_for_check
                     if diff_min > warn_threshold:
                         _strategy = (best or {}).get("plan", {}).get("strategy", "?")
                         _log.warning(
@@ -1007,6 +1016,13 @@ def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
         # V3.28: tilde prefix dla "eta" source (computed, not committed).
         # Plain HH:MM dla "commit" source (hard contract czas_kuriera).
         time_str = f"~{hhmm}" if source == "eta" else hhmm
+        # BUG C (2026-05-26): commit-plan divergence marker. Gdy plan_eta
+        # rozjeżdża się z commit > COMMIT_RENDER_DIVERGENCE_TILDE_MIN (3min),
+        # operator widzi obie wartości żeby ocenić wykonalność (Case #3 Tor→GK
+        # 2 min commit fizycznie niemożliwe — bez markera fikcja przechodzi).
+        if source == "commit" and oid in divergence_plan_dt:
+            plan_hhmm = divergence_plan_dt[oid].astimezone(WARSAW).strftime("%H:%M")
+            time_str = f"{hhmm}⚠plan~{plan_hhmm}"
         out.append(f"{icon} {time_str} — {addr}{ta_marker}")
     return out
 

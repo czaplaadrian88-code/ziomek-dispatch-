@@ -1678,6 +1678,17 @@ R5_DETOUR_FREE_THRESHOLD_KM = float(_os.environ.get(
 ENABLE_CLUSTER_DROP_GROUPING_METRIC = _os.environ.get(
     "ENABLE_CLUSTER_DROP_GROUPING_METRIC", "0") == "1"
 
+# BUG C (2026-05-26): renderer commit-priority maskuje plan-divergence. Solver
+# OR-Tools respektuje [ck-5, ck+5] per pickup independently — może wcisnąć
+# pickup na ck+5 mimo że drive Tor→GK = 6 min realnie (Case #3 commit 13:08 +
+# Toriko 13:06 = niemożliwe 2 min). Renderer (`_route_lines_v2`) priorytetyzuje
+# commit nad plan ETA → pokazuje fikcję bez tyldy. V3274_RENDER_DIVERGENCE_WARN
+# (5min) już loguje warning, ale NIE pokazuje operatorowi. Faza 3 marker: gdy
+# commit i plan_eta różnią się > próg 3 min (niższy niż 5 min warn — pokazuje
+# rosnące napięcie zanim trafi do warning'a) → render `{hhmm}⚠plan~{plan_hhmm}`.
+COMMIT_RENDER_DIVERGENCE_TILDE_MIN = float(_os.environ.get(
+    "COMMIT_RENDER_DIVERGENCE_TILDE_MIN", "3.0"))
+
 # Sprint OBJ F0.3 (2026-05-17): replay-capture wejść solvera do offline
 # harnessu (zestaw masowy / regresja). Default OFF — włączane env na czas sprintu.
 ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(

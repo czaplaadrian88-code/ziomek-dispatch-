@@ -126,10 +126,11 @@ def test_route_lines_v2_renders_commit_for_bag_order():
     lines = ta._route_lines_v2(decision, best, now_utc)
     text = "\n".join(lines)
 
-    # Must show commit time 13:05 for 471744 (not ~13:17)
-    assert "🍕 13:05 — Grill Kebab" in text, f"missing commit render: {text}"
-    # Must NOT show ~13:17 (eta version)
-    assert "~13:17" not in text, f"unexpected eta render leaking: {text}"
+    # Must show commit time 13:05 for 471744 (not "~13:17" prefix-only style).
+    # BUG C (2026-05-26): commit-plan divergence > 3min → marker ⚠plan~HH:MM.
+    # Diff 12.5min > tilde threshold → render: 13:05⚠plan~13:17 (operator widzi
+    # obie wartości, ocenia wykonalność). Pre-BUG-C: tylko commit 13:05 bez markera.
+    assert "🍕 13:05⚠plan~13:17 — Grill Kebab" in text, f"missing BUG C marker: {text}"
     # Current new order (no commit) renders with tilde
     assert "~13:00" in text, f"new order should be ~ETA: {text}"
 
