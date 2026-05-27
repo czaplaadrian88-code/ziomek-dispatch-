@@ -177,7 +177,8 @@ def _serialize_dt_map(m):
 _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "bonus_", "rule_", "intra_",
                        "dwell_", "drive_speed_",  # 2026-05-17: tier-aware DWELL + drive-speed metryki (#109)
                        "objm_",  # sprint OBJ F0.3: metryki jakości planu (idle/thermal/r6_breach/span)
-                       "paczka_")  # R-PACZKI-FLEX (2026-05-20): paczka_is / paczka_flex_eligible / paczka_*
+                       "paczka_",  # R-PACZKI-FLEX (2026-05-20): paczka_is / paczka_flex_eligible / paczka_*
+                       "carry_chain_")  # Sprint 2 Etap 2.2 (2026-05-27): carry/bag-stack visibility
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:

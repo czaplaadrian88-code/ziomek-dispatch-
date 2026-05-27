@@ -2118,3 +2118,157 @@ PARSER_HEALTH_DELTA_MIN_ABS_DIFF = 3       # min |curr-prev| dla DELTA
 # dotknięty — algorytm dispatch dalej respektuje termiczny cap.
 ENABLE_BAG_TIME_ALERTS = _os.environ.get(
     "ENABLE_BAG_TIME_ALERTS", "0") == "1"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sprint 2 Etap 2.2 (2026-05-27): carry / bag-stack visibility feature.
+# Forensic Agent D (/tmp/kebab_krol_diagnostic.md):
+#   - Kebab Król R6 breach 22.5% w dinner peak (vs 7-8% baseline)
+#   - Carry penalty mechanism = KK siedzi 15-30 min w torbie gdy kurier
+#     dostarcza inną restaurację pierwszą (cross-restaurant bag chain).
+# Feature: penalty proporcjonalny do ETA pickup nowego zlecenia gdy kurier ma
+# już w torbie zlecenie Z INNEJ restauracji + ETA > threshold; hard reject gdy
+# wiele chain stops + dinner peak + restauracja w CARRY_RISK_LIST.
+# Default FLAG OFF — wymaga 14d shadow przed flip.
+ENABLE_CARRY_CHAIN_PENALTY = _os.environ.get(
+    "ENABLE_CARRY_CHAIN_PENALTY", "0") == "1"
+
+# Coefficient calibration starting point (Agent D KK dinner carry ~15-30 min).
+# Penalty (negative) = -COEFF * eta_pickup_min when chain detected.
+# 1.5 × 15 min carry = -22.5 pkt; 1.5 × 30 min = -45 pkt. Sweep w shadow.
+CARRY_CHAIN_PENALTY_COEFF = float(_os.environ.get(
+    "CARRY_CHAIN_PENALTY_COEFF", "1.5"))
+
+# ETA threshold (min) — gdy nowy pickup ETA <= próg, brak penalty (carry mały).
+# Default 15: KK breach pattern Agent D pokazał carry 15-30 min jako problem.
+CARRY_CHAIN_ETA_THRESHOLD_MIN = float(_os.environ.get(
+    "CARRY_CHAIN_ETA_THRESHOLD_MIN", "15.0"))
+
+# Hard reject thresholds — wiele "chain stops" w dinner peak + restauracja
+# wysokiego ryzyka = HARD reject (feasibility-side bypass). Bag stops counted
+# jako liczba DIFFERENT restauracji w bagu kuriera względem nowego pickup'u.
+CARRY_CHAIN_HARD_REJECT_STOPS = int(_os.environ.get(
+    "CARRY_CHAIN_HARD_REJECT_STOPS", "2"))
+
+# Warsaw hour window dla hard reject (dinner peak; same okno co KK exclusion).
+CARRY_CHAIN_DINNER_START_HOUR_WARSAW = int(_os.environ.get(
+    "CARRY_CHAIN_DINNER_START_HOUR_WARSAW", "17"))
+CARRY_CHAIN_DINNER_END_HOUR_WARSAW = int(_os.environ.get(
+    "CARRY_CHAIN_DINNER_END_HOUR_WARSAW", "21"))
+
+# Frozen set restauracji wysokiego ryzyka carry. Rozszerzalne. Start tylko KK.
+# Lower-case normalized; matching case-insensitive substring (per KK fix Etap 2.1).
+CARRY_RISK_LIST = frozenset({
+    "kebab król",
+})
+
+
+def _norm_restaurant_for_carry_match(name) -> str:
+    """Lower-case + strip dla matchingu CARRY_RISK_LIST. Defensive None/non-str."""
+    if not name:
+        return ""
+    try:
+        return str(name).strip().lower()
+    except Exception:
+        return ""
+
+
+def is_carry_risk_restaurant(name) -> bool:
+    """True gdy restaurant_name pasuje (substring case-insensitive) do CARRY_RISK_LIST.
+
+    Substring match (nie exact) by łapać warianty "Kebab Król - Sienkiewicza 73"
+    vs "Kebab Król 2" itd. Defensive: None / pusty / non-str → False.
+    """
+    norm = _norm_restaurant_for_carry_match(name)
+    if not norm:
+        return False
+    return any(risk in norm for risk in CARRY_RISK_LIST)
+
+
+def carry_chain_penalty(
+    bag_restaurants,
+    new_restaurant_name,
+    eta_pickup_min,
+    coeff=None,
+    threshold_min=None,
+):
+    """Pure carry-chain penalty calculation. Returns (penalty, chain_stops, applied).
+
+    Args:
+        bag_restaurants: iterable nazw restauracji w bagu kuriera (bag_size_before).
+            None values / pustki są filtrowane.
+        new_restaurant_name: nazwa nowego pickup'u (case-insensitive porównanie).
+        eta_pickup_min: predicted minutes do nowego pickup (>=0; gdy None → 0.0).
+        coeff: penalty multiplier (default CARRY_CHAIN_PENALTY_COEFF).
+        threshold_min: ETA below threshold → no penalty (default CARRY_CHAIN_ETA_THRESHOLD_MIN).
+
+    Returns:
+        (penalty: float, chain_stops: int, applied: bool)
+        penalty <= 0 (negative gdy applied, 0.0 gdy no-op).
+        chain_stops = liczba bag items z DIFFERENT restaurant niż new.
+        applied = True gdy chain_stops>=1 AND eta > threshold.
+
+    Pure: brak I/O, brak side-effectów, deterministyczne dla identycznych args.
+    """
+    if coeff is None:
+        coeff = CARRY_CHAIN_PENALTY_COEFF
+    if threshold_min is None:
+        threshold_min = CARRY_CHAIN_ETA_THRESHOLD_MIN
+
+    eta = 0.0
+    try:
+        eta = float(eta_pickup_min) if eta_pickup_min is not None else 0.0
+    except (TypeError, ValueError):
+        eta = 0.0
+
+    new_norm = _norm_restaurant_for_carry_match(new_restaurant_name)
+    chain_stops = 0
+    for r in (bag_restaurants or []):
+        bag_norm = _norm_restaurant_for_carry_match(r)
+        if not bag_norm:
+            continue
+        if bag_norm != new_norm:
+            chain_stops += 1
+
+    if chain_stops <= 0:
+        return 0.0, 0, False
+    if eta <= float(threshold_min):
+        return 0.0, chain_stops, False
+
+    penalty = -float(coeff) * eta
+    return penalty, chain_stops, True
+
+
+def carry_chain_hard_reject(
+    chain_stops,
+    new_restaurant_name,
+    now_utc=None,
+    min_stops=None,
+    dinner_start=None,
+    dinner_end=None,
+):
+    """Pure hard-reject decision. Returns True gdy:
+       chain_stops >= min_stops AND warsaw_hour ∈ [dinner_start, dinner_end) AND
+       new_restaurant_name jest w CARRY_RISK_LIST.
+
+    Defensive: now_utc=None → datetime.now(timezone.utc). Wszystkie configi
+    overridable per call (testowalne) lub z module-level constants.
+    """
+    if min_stops is None:
+        min_stops = CARRY_CHAIN_HARD_REJECT_STOPS
+    if dinner_start is None:
+        dinner_start = CARRY_CHAIN_DINNER_START_HOUR_WARSAW
+    if dinner_end is None:
+        dinner_end = CARRY_CHAIN_DINNER_END_HOUR_WARSAW
+
+    if int(chain_stops or 0) < int(min_stops):
+        return False
+    if not is_carry_risk_restaurant(new_restaurant_name):
+        return False
+
+    now_utc = now_utc or datetime.now(timezone.utc)
+    try:
+        warsaw_hour = now_utc.astimezone(WARSAW).hour
+    except Exception:
+        return False
+    return int(dinner_start) <= warsaw_hour < int(dinner_end)
