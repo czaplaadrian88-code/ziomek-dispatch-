@@ -32,6 +32,18 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
+
+# Sprint 2 (2026-05-27): Kebab Król dinner carry penalty fix.
+# Forensic agent D (`/tmp/kebab_krol_diagnostic.md`): R6 breach 22.5% w dinner
+# peak (17-21 Warsaw) vs 7-8% baseline. Root cause = carry/bag-stack penalty —
+# KK siedzi 15-30 min w torbie gdy kurier dostarcza inną restaurację pierwszą.
+# ML scorer ślepy (1/71 predicted vs 16/71 actual). Conditional exclusion:
+# dinner window = ALERT zamiast routingu AUTO. Lunch / off-peak nieruszane.
+_WARSAW_TZ = ZoneInfo("Europe/Warsaw")
+KEBAB_KROL_NAME_SUBSTR = "kebab król"  # case-insensitive substring
+KEBAB_KROL_DINNER_START_HOUR_WARSAW = 17  # inclusive
+KEBAB_KROL_DINNER_END_HOUR_WARSAW = 21    # exclusive (17..20 fires)
 
 from dispatch_v2 import drive_min_calibration as _drive_calib
 
@@ -507,6 +519,18 @@ def classify_auto_route(
     if edge is not None:
         return edge
 
+    # Sprint 2 Etap 2.1 (2026-05-27): Kebab Król dinner carry-penalty exclusion.
+    # Forensic agent D — KK dinner R6 breach 22.5% (vs lunch 0%, peer dinner 7.7%).
+    # Default flag TRUE: niski risk, conditional (tylko KK + dinner 17-21 Warsaw),
+    # lunch/off-peak/inne restauracje nieruszane. Adrian może flipować pre-commit.
+    if flags.get("ENABLE_KEBAB_KROL_DINNER_EXCLUSION", True):
+        restaurant_name = ((order_event or {}).get("restaurant") or "")
+        if isinstance(restaurant_name, str) and KEBAB_KROL_NAME_SUBSTR in restaurant_name.lower():
+            warsaw_now = (now or datetime.now(timezone.utc)).astimezone(_WARSAW_TZ)
+            warsaw_hour = warsaw_now.hour
+            if KEBAB_KROL_DINNER_START_HOUR_WARSAW <= warsaw_hour < KEBAB_KROL_DINNER_END_HOUR_WARSAW:
+                return ROUTE_ALERT, "kk_dinner_carry_risk_v2"
+
     # Threshold check
     tier_key, thresholds = _resolve_thresholds(flags)
     thresholds = dict(thresholds)
@@ -538,7 +562,7 @@ def build_context_for_logging(
             "auto_route_tier_best": None,
             "auto_route_pos_source_best": None,
         }
-    ctx = _build_context(result, fleet_snapshot or {}, order_event, flags)
+    ctx = _build_context(result, fleet_snapshot or {}, order_event, flags, now=None)
     return {
         "auto_route_pool_feasible": ctx.pool_feasible_count,
         "auto_route_pool_total": ctx.pool_total_count,
