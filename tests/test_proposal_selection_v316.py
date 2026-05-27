@@ -182,6 +182,50 @@ def main():
     expect("INFORMED_POS_SOURCES includes gps",
            "gps" in dispatch_pipeline.INFORMED_POS_SOURCES)
 
+    # ---------- TEST 13: Sprint 5 invariant — demote survives post-V326 boost ----------
+    # Scenario verified production (oid=474624 19.05): V326_fleet_load_balance
+    # boost +15 dla blind+empty Mateusz O + -15 dla bag=2 Adrian R = 30-pt gap
+    # restoreował blind na top mimo V3.16 demote (gdy demote był PRZED V325/V326).
+    # Po Sprint 5 fix demote = FINAL pass, więc symulujemy ten sam boost
+    # *przed* wywołaniem demote i weryfikujemy że demote nadal demotuje.
+    print("\n=== test 13: Sprint 5 — demote survives V326 fleet_load_balance boost ===")
+    # Start: informed Adrian R top (mocked) → V326 daje blind +15, bag -15 → re-sort
+    # → blind na top score=95 vs informed score=65 → demote musi nadal demote.
+    feasible_post_v326 = [
+        FakeCand("BLIND", 95, "no_gps", 0),        # blind+empty post V326 boost
+        FakeCand("INFORMED", 65, "gps", 2),        # bag=2 post V326 penalty
+    ]
+    result = dispatch_pipeline._demote_blind_empty(
+        feasible_post_v326, order_id="474624-sim"
+    )
+    expect("invariant: post-V326 boost blind nadal demoted",
+           result[0].courier_id == "INFORMED")
+    expect("invariant: blind+empty na końcu",
+           result[-1].courier_id == "BLIND")
+
+    # ---------- TEST 14: Sprint 5 — wieloskładnikowy V325/V326 cascade ----------
+    # Realny case: V325_new_courier penalty + V326_speed_multiplier (+5.55 gold,
+    # -2.8 std+) + V326_fleet_load_balance dla pełniejszego pool.
+    print("\n=== test 14: Sprint 5 — multi-step V325/V326 cascade, demote final ===")
+    # Hipotetyczna stan post-V326 cascade (boost+penalty już wmieszane do score):
+    feasible_post_cascade = [
+        FakeCand("GOLD_BLIND", 88.5, "no_gps", 0),        # gold tier no_gps+empty
+        FakeCand("STDPLUS_BAG_A", 60.0, "gps", 1),        # std+ z bag
+        FakeCand("STDPLUS_BAG_B", 55.0, "last_assigned_pickup", 2),  # std+ z bag
+        FakeCand("GOLD_BAG", 50.0, "last_picked_up_delivery", 3),    # gold z bag
+        FakeCand("NEW_BLIND", 30.0, "pre_shift", 0),      # new tier pre_shift+empty
+    ]
+    result = dispatch_pipeline._demote_blind_empty(
+        feasible_post_cascade, order_id="cascade-sim"
+    )
+    expect("post-cascade: informed STDPLUS_BAG_A top",
+           result[0].courier_id == "STDPLUS_BAG_A")
+    expect("post-cascade: kolejność informed zachowana (by-score)",
+           [c.courier_id for c in result[:3]]
+           == ["STDPLUS_BAG_A", "STDPLUS_BAG_B", "GOLD_BAG"])
+    expect("post-cascade: blind+empty na końcu (oba)",
+           {c.courier_id for c in result[-2:]} == {"GOLD_BLIND", "NEW_BLIND"})
+
     # ---------- FINAL ----------
     total = results["pass"] + results["fail"]
     print()

@@ -2521,10 +2521,43 @@ def _assess_order_impl(
             bug4_tier_cap_used = f"{_tier}/{_pora}/{_cap}"
             bonus_bug4_cap_soft = C.bug4_soft_penalty(bug4_cap_violation)
 
+        # Sprint 2 Etap 2.2 (2026-05-27): carry / bag-stack visibility penalty.
+        # Forensic Agent D — KK dinner R6 breach 22.5% root cause = carry chain
+        # (kurier z bag innej restauracji + długi ETA do nowego pickup → carry
+        # 15-30 min). Pure helper z common.py — penalty proporcjonalny do drive_min;
+        # hard reject feasibility-side gated przez flag + dinner + KK + chain>=2.
+        # Default flag OFF — wymaga 14d shadow.
+        bonus_carry_chain_penalty = 0.0
+        carry_chain_stops = 0
+        carry_chain_applied = False
+        carry_chain_hard_rejected = False
+        if C.ENABLE_CARRY_CHAIN_PENALTY:
+            try:
+                _bag_rests = [b.get("restaurant") for b in (bag_raw or [])]
+                _new_rest = restaurant  # closure: order_event.get("restaurant") line 1319
+                _eta_for_carry = float(drive_min or 0.0)
+                _pen, _stops, _appl = C.carry_chain_penalty(
+                    _bag_rests, _new_rest, _eta_for_carry,
+                )
+                bonus_carry_chain_penalty = _pen
+                carry_chain_stops = _stops
+                carry_chain_applied = _appl
+                carry_chain_hard_rejected = C.carry_chain_hard_reject(
+                    _stops, _new_rest, now_utc=now,
+                )
+            except Exception as _carry_e:
+                # Defense-in-depth: helper exception NIE psuje score loop.
+                try:
+                    log.warning(
+                        f"carry_chain_penalty exception cid={cid} order={order_id}: {_carry_e}"
+                    )
+                except Exception:
+                    pass
+
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
         bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch + bonus_coordinator_idle + bonus_r_paczki_flex + bonus_r_return_rest
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch + bonus_coordinator_idle + bonus_r_paczki_flex + bonus_r_return_rest + bonus_carry_chain_penalty
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.
@@ -2704,6 +2737,14 @@ def _assess_order_impl(
             "bonus_r_return_rest": round(bonus_r_return_rest, 2),
             "return_to_restaurant": metrics.get("return_to_restaurant"),
             "return_to_restaurant_oid": metrics.get("return_to_restaurant_oid"),
+            # Sprint 2 Etap 2.2 (2026-05-27): carry / bag-stack visibility.
+            # Penalty proporcjonalny do drive_min gdy bag ma items z innej
+            # restauracji niż nowy pickup. Hard reject = flag-gated KK + dinner.
+            "carry_chain_penalty": round(bonus_carry_chain_penalty, 2),
+            "carry_chain_stops": int(carry_chain_stops),
+            "carry_chain_applied": bool(carry_chain_applied),
+            "carry_chain_hard_reject": bool(carry_chain_hard_rejected),
+            "carry_chain_drive_min_used": round(float(drive_min or 0.0), 2),
             "paczka_is": C.is_paczka_order({
                 "address_id": getattr(new_order, "address_id", None),
                 "order_type": getattr(new_order, "order_type", None),
@@ -2833,6 +2874,18 @@ def _assess_order_impl(
         if v324a_extension_hard_reject and verdict == "MAYBE":
             verdict = "NO"
             reason = f"v324a_extension_too_large ({v324a_extension_min:.1f}min > {C.V324_HARD_REJECT_EXTENSION_OVER_MIN})"
+
+        # Sprint 2 Etap 2.2 (2026-05-27): carry chain hard reject.
+        # bag_chain_stops >= 2 AND dinner peak Warsaw AND restaurant w CARRY_RISK_LIST
+        # → hard reject (KK dinner R6 breach forensic). Flag-gated (ENABLE_CARRY_CHAIN_PENALTY
+        # default OFF), same flaga co soft penalty — gdy flag OFF, carry_chain_hard_rejected
+        # zawsze False (helper carry_chain_hard_reject nie dzieje sie bo branch flagowy nie odpala).
+        if carry_chain_hard_rejected and verdict == "MAYBE":
+            verdict = "NO"
+            reason = (
+                f"carry_chain_hard_reject (stops={carry_chain_stops}>=2, "
+                f"restaurant_in_CARRY_RISK_LIST, dinner_peak Warsaw)"
+            )
 
         # V3.27.3 hard reject: kurier idle >20 min pod restauracją (bag>=1).
         # Same pattern jak v324a — override MAYBE → NO, nie przebijamy wcześniejszego NO.
@@ -3082,9 +3135,6 @@ def _assess_order_impl(
     feasible = [c for c in candidates if c.feasibility_verdict == "MAYBE"]
     feasible.sort(key=lambda c: (-c.score, c.metrics.get("bundle_level3_dev") if c.metrics.get("bundle_level3_dev") is not None else 999.0))
 
-    # V3.16: no_gps + empty bag demotion (patrz _demote_blind_empty).
-    feasible = _demote_blind_empty(feasible, order_id)
-
     # V3.25 STEP C (R-04): NEW-COURIER-CAP gradient (flag-gated, default False).
     feasible = _v325_new_courier_penalty(feasible, order_id)
 
@@ -3096,6 +3146,15 @@ def _assess_order_impl(
 
     # V3.26 STEP 5 (R-06): multi-stop trajectory district-based (flag-gated, default False).
     feasible = _v326_multistop_trajectory(feasible, new_order, order_id)
+
+    # V3.16 demote — FINAL reorder pass, AFTER V325/V326 score adjustments.
+    # Sprint 5 (2026-05-27): moved here from pre-V325 position. Powód: V325/V326
+    # wywołują feasible.sort() po score, co restoreował blind+empty na top mimo
+    # demote (oid=474624 verified — Mateusz O cid=413 score 112 vs Adrian R cid=400
+    # score 4.1, mimo NO_GPS_DEMOTE log). Demote musi być LAST żeby V3.16
+    # invariant przeżył (informed first, blind+empty last) do final top[:16].
+    # Patrz: eod_drafts/2026-05-27/sprint_diag_27may/operator_favorites_root_cause_2026-05-27.md
+    feasible = _demote_blind_empty(feasible, order_id)
 
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]
