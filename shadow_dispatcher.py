@@ -756,20 +756,21 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             # zamówienia (panel created_at, UTC). Telegram pokazuje "(N min od
             # złożenia)" w linii Odbiór. Fallback w telegram_approver gdy None.
             record["order_created_at"] = payload.get("created_at_utc")
-            # Compute mins_since_creation (best ETA pickup vs created_at) raz tutaj
-            # gdy oba są dostępne — telegram tylko renderuje, brak parsing TZ tam.
+            # mins_since_creation = realny wiek zamówienia w chwili wysłania propozycji
+            # (now - created_at). Pre-fix 2026-05-27: anchor był `eta_pickup_utc` =
+            # planowany odbiór, co dawało mylące „3 min od złożenia" gdy real wiek
+            # był 16 min (zamówienie 11:57, synthetic pre-shift 12:00, prop 12:13).
+            # Etykieta „N min od złożenia" w telegram_approver wymaga real-age, NIE
+            # delta do planowanego odbioru. Telegram tylko renderuje pole.
             try:
                 _best = record.get("best") or {}
                 _created_iso = record.get("order_created_at")
-                _eta_iso = (result.best.metrics.get("eta_pickup_utc")
-                            if result.best is not None else None)
-                if _created_iso and _eta_iso:
+                if _created_iso:
                     from datetime import datetime as _dt, timezone as _tz
                     _c = _dt.fromisoformat(_created_iso.replace("Z", "+00:00"))
-                    _e = _dt.fromisoformat(_eta_iso.replace("Z", "+00:00"))
                     if _c.tzinfo is None: _c = _c.replace(tzinfo=_tz.utc)
-                    if _e.tzinfo is None: _e = _e.replace(tzinfo=_tz.utc)
-                    _delta = (_e - _c).total_seconds() / 60.0
+                    _now = _dt.now(_tz.utc)
+                    _delta = (_now - _c).total_seconds() / 60.0
                     if _delta < 0: _delta = 0.0
                     _best["mins_since_creation"] = int(round(_delta))
                     record["best"] = _best
