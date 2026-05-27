@@ -3309,26 +3309,36 @@ def _assess_order_impl(
     if with_plan:
         best = with_plan[0]
         best.best_effort = True
-        # BUG E hotfix (2026-05-26): best_effort z >=1 orderem łamiącym hard R6
-        # (35 min bag_time) → KOORD. Stricter superset OBJ F3 — bez progu
-        # min-breach, ANY breach. Mierzone bezpośrednio z plan.pickup_at /
-        # predicted_delivered_at per order (anchor solvera, ten sam horizon co
-        # operator widzi). Default ON. Reguła Adriana: „już lepiej dać 10 min
-        # później i wrócić po to". Case D/E/F/G 26.05 — 4 propozycje z carry
-        # 43-90 min uciekły jako best_effort PROPOSE bo OBJ F3 próg=20 łapie
-        # tylko bag_time > 55. Nowy check łapie bag_time > 35.
+        # BUG E hotfix (2026-05-26, naprawiony 2026-05-27): best_effort z >=1
+        # orderem łamiącym hard R6 (35 min thermal bag_time) → KOORD. Stricter
+        # superset OBJ F3 — bez progu min-breach, ANY breach. Default ON. Reguła
+        # Adriana: „już lepiej dać 10 min później i wrócić po to". Case D/E/F/G
+        # 26.05 — 4 propozycje z carry 43-90 min uciekły jako best_effort
+        # PROPOSE bo OBJ F3 próg=20 łapie tylko bag_time > 55. Nowy check łapie
+        # bag_time > 35.
+        #
+        # Hotfix 2026-05-27 (case Mama Thai Bistro Michał K. K-393): poprzednia
+        # implementacja iterowała tylko plan.pickup_at — z definicji „only for
+        # orders picked up during this plan" (route_simulator_v2:194), czyli
+        # NOWE pickupy. Picked_up carry (np. Sweet Fit z 10:05 jadące do
+        # Mickiewicza w bagu, drop 10:55 = 50 min thermal) byli pomijani →
+        # _be_max_bt liczone tylko z nowego pickupu (~16 min) → gate
+        # NIE odpalał → propozycja wychodziła jako best_effort PROPOSE.
+        #
+        # Fix: czytamy plan.per_order_delivery_times (POD) — pole populowane
+        # przez _compute_per_order_delivery_minutes (anchor=picked_up_at dla
+        # carry, pickup_ready_at dla in-bag/new). Ten sam horizon co
+        # route_metrics.compute_plan_metrics (objm_r6_breach_*) i feasibility
+        # check_per_order_35min_rule — jedna kanoniczna definicja thermal
+        # bag_time per order. Fallback (POD None / pusty) → conservative skip
+        # gate, nie blokujemy decyzji bez danych.
         _be_plan = getattr(best, "plan", None)
         _be_bag_times: Dict[str, float] = {}
         if _be_plan is not None:
-            _pu_map = getattr(_be_plan, "pickup_at", None) or {}
-            _do_map = getattr(_be_plan, "predicted_delivered_at", None) or {}
-            for _oid, _pu in _pu_map.items():
-                _do = _do_map.get(_oid)
-                if _pu is not None and _do is not None:
-                    try:
-                        _be_bag_times[_oid] = (_do - _pu).total_seconds() / 60.0
-                    except (TypeError, AttributeError):
-                        pass
+            _pod = getattr(_be_plan, "per_order_delivery_times", None) or {}
+            for _oid, _elapsed in _pod.items():
+                if isinstance(_elapsed, (int, float)):
+                    _be_bag_times[str(_oid)] = float(_elapsed)
         _be_max_bt = max(_be_bag_times.values()) if _be_bag_times else 0.0
         _be_breach_orders = [
             _oid for _oid, _bt in _be_bag_times.items()
