@@ -26,9 +26,22 @@ Adrian decyzje 2026-05-06:
 """
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+
+from dispatch_v2 import drive_min_calibration as _drive_calib
+
+
+# Sprint Drive_min Calibration v2 (2026-05-27): shadow log destination.
+# Default OFF na main path; SHADOW_LOG zawsze ON (zero side-effect na dispatch).
+# Override path via env DRIVE_MIN_CALIBRATION_SHADOW_LOG_PATH (tests / replay tools).
+DRIVE_MIN_CALIBRATION_SHADOW_LOG_PATH = (
+    "/root/.openclaw/workspace/dispatch_state/drive_min_calibration_log_v2.jsonl"
+)
 
 
 # Routes (sentinel constants — caller imports these)
@@ -149,11 +162,122 @@ def _parser_degraded(flags: Dict[str, Any]) -> bool:
     return bool(flags.get("PARSER_DEGRADED", False))
 
 
+def _peak_window_for(now: Optional[datetime]) -> bool:
+    """True jeśli lunch (12-14) lub dinner (18-20) peak (Europe/Warsaw).
+
+    Sprint Drive_min Calibration v2 — używane jako placeholder dla Faza 2
+    per-peak bump (current `apply_calibration` ignoruje, ale logujemy do
+    shadow log dla forward-compat).
+    """
+    if now is None:
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+        warsaw = now.astimezone(ZoneInfo("Europe/Warsaw"))
+        h = warsaw.hour
+        return (12 <= h < 14) or (18 <= h < 20)
+    except Exception:
+        return False
+
+
+def _append_drive_min_calibration_shadow(entry: Dict[str, Any]) -> None:
+    """Append-only JSONL log dla drive_min calibration shadow.
+
+    Side-effect: jeden write per call. Fail-safe — jakikolwiek I/O error
+    swallowed (classifier MUSI być deterministyczny, no-throw na log fail).
+    """
+    path = os.environ.get(
+        "DRIVE_MIN_CALIBRATION_SHADOW_LOG_PATH",
+        DRIVE_MIN_CALIBRATION_SHADOW_LOG_PATH,
+    )
+    try:
+        line = json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n"
+        # Append-mode write — atomic ENOUGH dla JSONL (POSIX append <= PIPE_BUF).
+        # NIE używamy temp+rename bo to log append, nie state file.
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        # Defensive: brak directory, permission, dysk full — log fail nie blokuje routingu.
+        pass
+
+
+def _maybe_apply_drive_min_calibration(
+    metrics: Dict[str, Any],
+    cs: Any,
+    flags: Dict[str, Any],
+    now: Optional[datetime],
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    tier: Optional[str],
+) -> Dict[str, Any]:
+    """Apply calibration do metrics["drive_min"] gdy flag ON. Always shadow-log.
+
+    Zwraca: enriched metrics dict (kopia) z `drive_min_raw`+`drive_min_calibrated`+
+    `drive_min_calibration_offset`+`drive_min_calibration_floor_hit` zawsze, oraz
+    `drive_min` zamienione na calibrated **tylko gdy** flag main=ON.
+
+    Shadow log entry zapisywany ZAWSZE gdy flag SHADOW=True (default True).
+    """
+    enable_main = bool(flags.get("ENABLE_DRIVE_MIN_CALIBRATION_V2", False))
+    enable_shadow = bool(flags.get("ENABLE_DRIVE_MIN_CALIBRATION_V2_SHADOW", True))
+
+    pos_source = metrics.get("pos_source") or (
+        getattr(cs, "pos_source", None) if cs is not None else None
+    )
+    raw_drive_min = metrics.get("drive_min")
+
+    if raw_drive_min is None:
+        # Nic do kalibracji — propagate metrics jak są.
+        return metrics
+
+    peak_window = _peak_window_for(now)
+    ctx_dict = {
+        "pos_source": pos_source,
+        "tier": tier,
+        "peak_window": peak_window,
+        "order_id": order_id,
+        "courier_id": courier_id,
+    }
+    calibrated, debug = _drive_calib.apply_calibration(raw_drive_min, ctx_dict)
+
+    enriched = dict(metrics)
+    enriched["drive_min_raw"] = debug["raw_drive_min"]
+    enriched["drive_min_calibrated"] = debug["calibrated_drive_min"]
+    enriched["drive_min_calibration_offset"] = debug["offset_applied"]
+    enriched["drive_min_calibration_floor_hit"] = debug["floor_hit"]
+    enriched["drive_min_calibration_version"] = debug["calibration_version"]
+
+    if enable_main:
+        # Substytucja main path — downstream consumer (telegram, score) zobaczy calibrated.
+        enriched["drive_min"] = debug["calibrated_drive_min"]
+
+    if enable_shadow:
+        ts_iso = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+        log_entry = {
+            "ts": ts_iso,
+            "order_id": str(order_id) if order_id is not None else None,
+            "courier_id": str(courier_id) if courier_id is not None else None,
+            "pos_source": pos_source,
+            "tier": tier,
+            "peak_window": peak_window,
+            "raw_drive_min": debug["raw_drive_min"],
+            "offset_applied": debug["offset_applied"],
+            "calibrated_drive_min": debug["calibrated_drive_min"],
+            "floor_applied": debug["floor_hit"],
+            "calibration_version": debug["calibration_version"],
+            "main_path_active": enable_main,
+        }
+        _append_drive_min_calibration_shadow(log_entry)
+
+    return enriched
+
+
 def _build_context(
     result: Any,                                # PipelineResult duck-type (avoid circular import)
     fleet_snapshot: Dict[str, Any],
     order_event: Optional[Dict[str, Any]],
     flags: Dict[str, Any],
+    now: Optional[datetime] = None,
 ) -> ClassifierContext:
     """Extract pure-data context from PipelineResult + fleet — single allocation."""
     candidates = result.candidates or []
@@ -190,6 +314,21 @@ def _build_context(
     tier = getattr(cs, "tier_bag", None) if cs is not None else None
 
     metrics = best.metrics or {}
+
+    # Sprint Drive_min Calibration v2 (2026-05-27) — apply calibration + shadow log.
+    # Flag-gated: main path tylko gdy ENABLE_DRIVE_MIN_CALIBRATION_V2=True. Shadow log
+    # zawsze gdy SHADOW=True (default). Returns enriched metrics z drive_min_raw +
+    # drive_min_calibrated zawsze, oraz drive_min sub'd na calibrated gdy main ON.
+    metrics = _maybe_apply_drive_min_calibration(
+        metrics=metrics,
+        cs=cs,
+        flags=flags,
+        now=now,
+        order_id=getattr(result, "order_id", None),
+        courier_id=getattr(best, "courier_id", None),
+        tier=tier,
+    )
+
     pos_source = metrics.get("pos_source") or (getattr(cs, "pos_source", "none") if cs else "none")
 
     plan_violations = 0
@@ -353,7 +492,7 @@ def classify_auto_route(
     if getattr(result, "best", None) is None:
         return ROUTE_ACK, "no_best_candidate"
 
-    ctx = _build_context(result, fleet_snapshot, order_event, flags)
+    ctx = _build_context(result, fleet_snapshot, order_event, flags, now=now)
 
     # F4 (2026-05-24): słaby pick (ujemny score) → ALERT zamiast "sensowny wybór".
     weak_pick_floor: Optional[float] = None
