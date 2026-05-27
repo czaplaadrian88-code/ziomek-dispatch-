@@ -1689,6 +1689,19 @@ ENABLE_CLUSTER_DROP_GROUPING_METRIC = _os.environ.get(
 COMMIT_RENDER_DIVERGENCE_TILDE_MIN = float(_os.environ.get(
     "COMMIT_RENDER_DIVERGENCE_TILDE_MIN", "3.0"))
 
+# BUG C verdict-gate eskalacja (2026-05-27): marker `⚠plan~HH:MM` w renderze
+# pokazuje operatorowi rozjazd commit-vs-plan, ale verdict nadal PROPOSE/AUTO —
+# operator może zatwierdzić "fikcję" jednym kliknięciem. Przy dużym rozjeździe
+# (Case #12 27.05: Retrospekcja commit 14:16, plan 14:32, divergence 16 min) =
+# realne ryzyko zimnej potrawy / dispatch failure. Gate: gdy max(plan_eta -
+# commit) > próg dla dowolnego bag-pickupa → verdict=KOORD (operator decyduje,
+# nie auto-PROPOSE z markerem). Próg 10 min = midpoint sprint planu (10/15/20).
+# Default ON — strict safety. Env override dla replay/calibration.
+ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE = _os.environ.get(
+    "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE", "1") == "1"
+COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN = float(_os.environ.get(
+    "COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN", "10.0"))
+
 # Sprint OBJ F0.3 (2026-05-17): replay-capture wejść solvera do offline
 # harnessu (zestaw masowy / regresja). Default OFF — włączane env na czas sprintu.
 ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(

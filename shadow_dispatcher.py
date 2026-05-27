@@ -631,6 +631,15 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # PipelineResult bez tych pól (dla replay zaszłych eventów).
         "pool_total_count": getattr(result, "pool_total_count", None),
         "pool_feasible_count": getattr(result, "pool_feasible_count", None),
+        # KOORD-redirect dicts (2026-05-26 / 2026-05-27): bramki best_effort_r6
+        # (BUG E) i commit_divergence (BUG C verdict-gate) emitują verdict=KOORD
+        # i dorzucają strukturalny payload na PipelineResult dla analytics +
+        # replay. KOORD verdicts NIE idą do Telegrama (shadow_tailer filtruje
+        # PROPOSE only), więc to JEDYNE miejsce gdzie payload jest persystowany.
+        # Defensive getattr — fallback None gdy bramka nie odpaliła (większość
+        # decyzji).
+        "best_effort_r6_redirect": getattr(result, "best_effort_r6_redirect", None),
+        "commit_divergence_redirect": getattr(result, "commit_divergence_redirect", None),
     }
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)

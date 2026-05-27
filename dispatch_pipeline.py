@@ -3260,6 +3260,88 @@ def _assess_order_impl(
             )
             _classify_and_set_auto_route(_result_low, fleet_snapshot, order_event, now=now)
             return _result_low
+
+        # BUG C verdict-gate (2026-05-27): jeśli plan.pickup_at[oid] (ETA z
+        # route_simulator) odjeżdża od commit czas_kuriera_warsaw (z bag_context
+        # bag-orderów lub z decision dla nowego ordera) o > próg → KOORD. Marker
+        # `⚠plan~HH:MM` w renderze (telegram_approver._route_lines_v2) tylko
+        # surface'uje rozjazd, ale verdict pozostaje PROPOSE/AUTO — operator
+        # może zatwierdzić fikcję. Case #12 27.05: Retrospekcja commit 14:16,
+        # plan 14:32, divergence 16 min — system PROPOSE'ował zamiast eskalować.
+        # Gate: per-oid one-sided (plan_eta - commit > próg, plan PÓŹNIEJ niż
+        # commit), bo to oznacza zimną potrawę. Reverse (plan wcześniej) =
+        # wait_courier penalty już to łapie.
+        _cd_top = top[0] if top else None
+        _cd_plan = getattr(_cd_top, "plan", None) if _cd_top is not None else None
+        if (getattr(C, "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE", True)
+                and _cd_plan is not None):
+            _cd_threshold = float(getattr(
+                C, "COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN", 10.0))
+            _cd_plan_pickup_at = getattr(_cd_plan, "pickup_at", None) or {}
+            # Build commit map: oid → czas_kuriera_warsaw ISO (bag-orders + new).
+            _cd_bag_context = (_cd_top.metrics or {}).get("bag_context", []) or []
+            _cd_commit_iso: Dict[str, Optional[str]] = {}
+            for _bc in _cd_bag_context:
+                _bc_oid = str(_bc.get("order_id") or "")
+                if _bc_oid:
+                    _cd_commit_iso[_bc_oid] = _bc.get("czas_kuriera_warsaw")
+            # Nowy order: czas_kuriera_warsaw może być w order_event (jeśli
+            # firma deklaruje hard commit z góry — F2.1c R8 T_KUR).
+            _cd_new_ck = order_event.get("czas_kuriera_warsaw")
+            if _cd_new_ck:
+                _cd_commit_iso[str(order_id)] = _cd_new_ck
+            # Compute max divergence (one-sided: plan_eta - commit, only positive).
+            _cd_max_div_min = 0.0
+            _cd_worst_oid: Optional[str] = None
+            for _oid, _plan_dt in _cd_plan_pickup_at.items():
+                _commit_iso = _cd_commit_iso.get(str(_oid))
+                if not _commit_iso or _plan_dt is None:
+                    continue
+                try:
+                    _commit_dt = datetime.fromisoformat(
+                        str(_commit_iso).replace("Z", "+00:00"))
+                    if _commit_dt.tzinfo is None:
+                        _commit_dt = _commit_dt.replace(tzinfo=timezone.utc)
+                    _plan_dt_norm = _plan_dt
+                    if isinstance(_plan_dt, str):
+                        _plan_dt_norm = datetime.fromisoformat(
+                            _plan_dt.replace("Z", "+00:00"))
+                    if _plan_dt_norm.tzinfo is None:
+                        _plan_dt_norm = _plan_dt_norm.replace(tzinfo=timezone.utc)
+                    _diff_min = (_plan_dt_norm - _commit_dt).total_seconds() / 60.0
+                    if _diff_min > _cd_max_div_min:
+                        _cd_max_div_min = _diff_min
+                        _cd_worst_oid = str(_oid)
+                except (TypeError, ValueError, AttributeError):
+                    continue  # Skip oid z nieparseowalnym timestampem (fail-soft).
+            if _cd_max_div_min > _cd_threshold:
+                _result_cd = PipelineResult(
+                    order_id=order_id,
+                    verdict="KOORD",
+                    reason=(
+                        f"commit_divergence_gate (best={_cd_top.courier_id} "
+                        f"worst_oid={_cd_worst_oid} divergence={_cd_max_div_min:.1f}min > "
+                        f"{_cd_threshold:.0f}min threshold; plan_eta later than commit, "
+                        f"zimna potrawa ryzyko)"
+                    ),
+                    best=_cd_top,
+                    candidates=top,
+                    pickup_ready_at=pickup_ready_at,
+                    restaurant=restaurant,
+                    delivery_address=delivery_address,
+                    pool_total_count=len(candidates),
+                    pool_feasible_count=len(feasible),
+                )
+                # Surface dla render Telegram (banner KOORD z worst oid + divergence).
+                _result_cd.commit_divergence_redirect = {
+                    "max_divergence_min": round(_cd_max_div_min, 1),
+                    "worst_oid": _cd_worst_oid,
+                    "threshold_min": _cd_threshold,
+                }
+                _classify_and_set_auto_route(
+                    _result_cd, fleet_snapshot, order_event, now=now)
+                return _result_cd
+
         _result_pf = PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",
