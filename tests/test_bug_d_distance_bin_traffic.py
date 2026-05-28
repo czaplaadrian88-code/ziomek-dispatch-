@@ -155,3 +155,88 @@ def test_table_structure_sorted_ascending():
     # Last must be inf (catch-all)
     import math
     assert math.isinf(boundaries[-1])
+
+
+# ─── BUG-D Faza 2a — stats per-bucket + tool ────────────────────────────
+
+
+def test_distance_bin_classification():
+    """get_distance_bin_v2 boundary correctness: <2 short, 2-5 medium, >=5 long, None=none."""
+    from dispatch_v2.common import get_distance_bin_v2
+    assert get_distance_bin_v2(None) == "none"
+    assert get_distance_bin_v2(0.0) == "short"
+    assert get_distance_bin_v2(1.99) == "short"
+    assert get_distance_bin_v2(2.0) == "medium"
+    assert get_distance_bin_v2(4.99) == "medium"
+    assert get_distance_bin_v2(5.0) == "long"
+    assert get_distance_bin_v2(50.0) == "long"
+
+
+def test_apply_traffic_multiplier_increments_v2_stats():
+    """_apply_traffic_multiplier should bump _osrm_stats v2 counters per call."""
+    from dispatch_v2 import osrm_client
+    # Reset baseline
+    osrm_client._osrm_stats["traffic_mult_v2_sum"] = 0.0
+    osrm_client._osrm_stats["traffic_mult_v2_calls"] = 0
+    for bd in osrm_client._osrm_stats["traffic_mult_v2_bins"].values():
+        bd["count"] = 0
+        bd["sum"] = 0.0
+
+    dt = _peak_dt(16)  # base 1.3
+    # Short call: 1.5km → mult v2 = 2.3
+    osrm_client._apply_traffic_multiplier({"duration_s": 60.0, "distance_km": 1.5}, dt)
+    # Medium call: 3.0km → mult v2 = 1.7
+    osrm_client._apply_traffic_multiplier({"duration_s": 120.0, "distance_km": 3.0}, dt)
+    # Long call: 7.0km → mult v2 = 1.15
+    osrm_client._apply_traffic_multiplier({"duration_s": 300.0, "distance_km": 7.0}, dt)
+    # Missing distance call → mult v2 = 1.3 (fallback to v1 base)
+    osrm_client._apply_traffic_multiplier({"duration_s": 60.0}, dt)
+
+    stats = osrm_client._osrm_stats
+    assert stats["traffic_mult_v2_calls"] == 4
+    assert stats["traffic_mult_v2_bins"]["short"]["count"] == 1
+    assert abs(stats["traffic_mult_v2_bins"]["short"]["sum"] - 2.3) < 0.001
+    assert stats["traffic_mult_v2_bins"]["medium"]["count"] == 1
+    assert abs(stats["traffic_mult_v2_bins"]["medium"]["sum"] - 1.7) < 0.001
+    assert stats["traffic_mult_v2_bins"]["long"]["count"] == 1
+    assert abs(stats["traffic_mult_v2_bins"]["long"]["sum"] - 1.15) < 0.001
+    assert stats["traffic_mult_v2_bins"]["none"]["count"] == 1
+
+
+def test_v2_stats_log_format_parseable_by_tool():
+    """Tool regex V2_LINE_RE must match _maybe_log_stats output format."""
+    from dispatch_v2.tools.osrm_traffic_v2_stats import V2_LINE_RE
+    # Sample log line as emitted by _maybe_log_stats
+    sample = (
+        "2026-05-28 12:00:00 [INFO] osrm_client: "
+        "OSRM traffic-mult-v2 hourly (shadow): calls=1247 avg_mult_v2=1.687 "
+        "bins={'short': {'n': 412, 'avg': 2.31}, 'medium': {'n': 587, 'avg': 1.62}, 'long': {'n': 248, 'avg': 1.12}}"
+    )
+    m = V2_LINE_RE.search(sample)
+    assert m is not None
+    mode, calls, avg, bins_repr = m.groups()
+    assert mode == "shadow"
+    assert calls == "1247"
+    assert avg == "1.687"
+    import ast
+    bins = ast.literal_eval(bins_repr)
+    assert bins["short"]["n"] == 412
+    assert bins["medium"]["avg"] == 1.62
+
+
+def test_tool_aggregate_weighted_average():
+    """aggregate() computes weighted avg by call count, not record count."""
+    from dispatch_v2.tools.osrm_traffic_v2_stats import aggregate
+    from datetime import datetime, timezone
+    records = [
+        {"ts": datetime(2026, 5, 28, 10, 0, tzinfo=timezone.utc), "mode": "shadow", "calls": 100,
+         "avg_mult": 2.0, "bins": {"short": {"n": 100, "avg": 2.0}}},
+        {"ts": datetime(2026, 5, 28, 11, 0, tzinfo=timezone.utc), "mode": "shadow", "calls": 300,
+         "avg_mult": 1.5, "bins": {"short": {"n": 300, "avg": 1.5}}},
+    ]
+    agg = aggregate(records)
+    # Weighted: (2.0*100 + 1.5*300) / 400 = 650/400 = 1.625
+    assert agg["total_calls"] == 400
+    assert abs(agg["weighted_avg_mult"] - 1.625) < 0.001
+    assert agg["bins"]["short"]["n"] == 400
+    assert abs(agg["bins"]["short"]["avg"] - 1.625) < 0.001

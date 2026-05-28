@@ -31,6 +31,7 @@ from dispatch_v2.common import (
     OSRM_INVALID_COORD_SENTINEL_MIN,
     OSRM_MAX_SNAP_KM,
     coords_in_bialystok_bbox,
+    get_distance_bin_v2,
     get_fallback_speed_kmh,
     get_time_bucket,
     get_traffic_multiplier,
@@ -79,6 +80,16 @@ _osrm_stats: dict = {
     "traffic_mult_sum": 0.0,
     "traffic_mult_calls": 0,
     "traffic_mult_buckets": {},  # {"1.00": count, "1.10": count, ...}
+    # BUG-D Faza 2a 2026-05-28 — per-distance-bin shadow stats
+    "traffic_mult_v2_sum": 0.0,
+    "traffic_mult_v2_calls": 0,
+    # per-bin breakdown: each value is {"count": int, "sum": float}
+    "traffic_mult_v2_bins": {
+        "short": {"count": 0, "sum": 0.0},
+        "medium": {"count": 0, "sum": 0.0},
+        "long": {"count": 0, "sum": 0.0},
+        "none": {"count": 0, "sum": 0.0},  # distance_km missing (legacy path)
+    },
     "hour_start": time.time(),
 }
 
@@ -199,12 +210,33 @@ def _maybe_log_stats():
                 f"OSRM traffic-mult hourly ({mode}): calls={_osrm_stats['traffic_mult_calls']} "
                 f"avg_mult={avg:.3f} buckets={buckets}"
             )
+        # BUG-D Faza 2a 2026-05-28: log v2 per-distance-bin stats (shadow always).
+        if _osrm_stats["traffic_mult_v2_calls"] > 0:
+            v2_avg = _osrm_stats["traffic_mult_v2_sum"] / _osrm_stats["traffic_mult_v2_calls"]
+            bins_summary = {}
+            for bin_name, bin_data in _osrm_stats["traffic_mult_v2_bins"].items():
+                if bin_data["count"] > 0:
+                    bins_summary[bin_name] = {
+                        "n": bin_data["count"],
+                        "avg": round(bin_data["sum"] / bin_data["count"], 3),
+                    }
+            v2_mode = "live" if ENABLE_V326_DISTANCE_BIN_TRAFFIC_BOOST else "shadow"
+            _log.info(
+                f"OSRM traffic-mult-v2 hourly ({v2_mode}): calls={_osrm_stats['traffic_mult_v2_calls']} "
+                f"avg_mult_v2={v2_avg:.3f} bins={bins_summary}"
+            )
         _osrm_stats["calls_total"] = 0
         _osrm_stats["calls_fallback"] = 0
         _osrm_stats["circuit_opens"] = 0
         _osrm_stats["traffic_mult_sum"] = 0.0
         _osrm_stats["traffic_mult_calls"] = 0
         _osrm_stats["traffic_mult_buckets"] = {}
+        # BUG-D Faza 2a: reset v2 stats per hour
+        _osrm_stats["traffic_mult_v2_sum"] = 0.0
+        _osrm_stats["traffic_mult_v2_calls"] = 0
+        for _bin in _osrm_stats["traffic_mult_v2_bins"].values():
+            _bin["count"] = 0
+            _bin["sum"] = 0.0
         _osrm_stats["hour_start"] = time.time()
 
 
@@ -236,12 +268,14 @@ def _apply_traffic_multiplier(result: dict, now_utc: datetime) -> dict:
     # BUG-D V3.28+ shadow: per-distance-bin multiplier (additive boost in peak)
     distance_km = result.get("distance_km")
     mult_v2 = get_traffic_multiplier_v2(now_utc, distance_km)
+    v2_bin = get_distance_bin_v2(distance_km)
 
     # Always record shadow fields (Block 4D instrumentation 2026-04-25)
     result["osrm_raw_duration_s"] = raw_s
     result["osrm_raw_duration_min"] = round(raw_s / 60, 1)
     # BUG-D shadow: record co BY zostalo applied gdyby v2 flag był ON
     result["traffic_multiplier_v2_shadow"] = mult_v2
+    result["distance_bin_v2"] = v2_bin
     # V3.27 latency parallel: stats updates pod RLock (concurrent dict mutation safety).
     with _module_lock:
         _osrm_stats["traffic_mult_sum"] += mult
@@ -250,6 +284,12 @@ def _apply_traffic_multiplier(result: dict, now_utc: datetime) -> dict:
         _osrm_stats["traffic_mult_buckets"][key] = (
             _osrm_stats["traffic_mult_buckets"].get(key, 0) + 1
         )
+        # BUG-D Faza 2a: per-bin stats
+        _osrm_stats["traffic_mult_v2_sum"] += mult_v2
+        _osrm_stats["traffic_mult_v2_calls"] += 1
+        _bin_stats = _osrm_stats["traffic_mult_v2_bins"][v2_bin]
+        _bin_stats["count"] += 1
+        _bin_stats["sum"] += mult_v2
 
     if not ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER:
         # SHADOW mode: record-only, NO mutation of duration_s/min

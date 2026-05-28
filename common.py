@@ -337,6 +337,21 @@ ENABLE_V326_DISTANCE_BIN_TRAFFIC_BOOST = os.environ.get(
     "ENABLE_V326_DISTANCE_BIN_TRAFFIC_BOOST", "0") == "1"
 
 
+def get_distance_bin_v2(distance_km: float) -> str:
+    """V3.28+ BUG-D: klasyfikacja distance bin dla per-distance multiplier.
+
+    Returns 'short' (<2km), 'medium' (2-5km), 'long' (>=5km), albo 'none' gdy
+    distance_km is None (legacy path, no distance correction available).
+    """
+    if distance_km is None:
+        return "none"
+    if distance_km < 2.0:
+        return "short"
+    if distance_km < 5.0:
+        return "medium"
+    return "long"
+
+
 def get_traffic_multiplier_v2(dt_utc: datetime, distance_km: float = None) -> float:
     """V3.28+ BUG-D: per-distance-bin traffic multiplier z hour base.
 
