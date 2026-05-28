@@ -40,6 +40,10 @@ DEFAULT_BACKFILL = "/tmp/backfill_decisions_outcomes_v1.jsonl"
 DEFAULT_DRIVE_CAL_LOG = (
     "/root/.openclaw/workspace/dispatch_state/drive_min_calibration_log_v2.jsonl"
 )
+# #21 Opcja C 2026-05-28: enriched log z ground truth (built by shadow_outcome_enricher)
+DEFAULT_ENRICHED_LOG = (
+    "/root/.openclaw/workspace/dispatch_state/drive_min_enriched.jsonl"
+)
 DEFAULT_CARRY_LOG = (
     "/root/.openclaw/workspace/dispatch_state/carry_chain_shadow_log.jsonl"
 )
@@ -203,6 +207,67 @@ def kpi_whitelist_top(whitelist_path: str, top_n: int = 5) -> list:
 
 
 # ──────────────────────── KPI 4: drive_min calibration ──────────────────
+def kpi_drive_min_empirical_bias(enriched_path: str, now: datetime) -> dict:
+    """#21 Opcja C 2026-05-28: empirical bias (predicted vs actual) z enriched log.
+
+    Reads `drive_min_enriched.jsonl` (built by `shadow_outcome_enricher` cron).
+    Per record: `delta.assign_to_pickup_vs_travel_min` = actual − predicted.
+
+    Returns per-pos_source aggregate z prawdziwym bias (NIE algorithm-delta proxy).
+    Empty file lub brak entries → None (caller fallback do legacy).
+    """
+    cutoff = now - timedelta(days=7)
+    bias_all: list = []
+    per_pos = defaultdict(list)
+    n_override = 0
+    n_total = 0
+
+    for d in _iter_jsonl(enriched_path):
+        ts = _parse_ts(d.get("decision_ts"))
+        if not ts or ts < cutoff:
+            continue
+        n_total += 1
+        if (d.get("actual") or {}).get("kurier_overridden"):
+            n_override += 1
+        delta = (d.get("delta") or {}).get("assign_to_pickup_vs_travel_min")
+        if delta is None:
+            continue
+        pos = (d.get("predicted") or {}).get("pos_source") or "unknown"
+        bias_all.append(delta)
+        per_pos[pos].append(delta)
+
+    if not bias_all:
+        return {"n_total": 0, "ground_truth_available": True, "samples_present": False}
+
+    def _median(xs):
+        if not xs:
+            return None
+        s = sorted(xs)
+        n = len(s)
+        return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+    def _mean(xs):
+        return sum(xs) / len(xs) if xs else None
+
+    return {
+        "n_total": n_total,
+        "n_with_bias": len(bias_all),
+        "override_rate": round(n_override / n_total, 4) if n_total else None,
+        "median_bias_min": round(_median(bias_all), 2),
+        "mean_bias_min": round(_mean(bias_all), 2),
+        "ground_truth_available": True,
+        "samples_present": True,
+        "per_pos_source": {
+            ps: {
+                "n": len(arr),
+                "median_bias": round(_median(arr), 2),
+                "mean_bias": round(_mean(arr), 2),
+            }
+            for ps, arr in per_pos.items()
+        },
+    }
+
+
 def kpi_drive_min_calibration(log_path: str, now: datetime) -> dict:
     """Algorithm-delta raw vs calibrated (z Sprint 1 shadow log, last 7d).
 
@@ -319,19 +384,18 @@ def faza7_readiness(override_kpi: dict, drive_kpi: dict, kk_kpi: dict) -> dict:
 
     Sygnał ON gdy:
       - override rate 7d < 60% (was 78.6% baseline → wymóg post Sprint 1+2)
-      - calibration algorithm-delta |offset| < 10 min (post Sprint 1 LIVE)
+      - calibration bias |x| < 10 min (Opcja C empirical preferred, fallback
+        do Opcja B algorithm-delta)
       - KK dinner breach rate < 15% (post Sprint 2.1)
-
-    NOTE (tech-debt #21 Opcja B): bez ground truth (`actual_drive_min`) gate
-    `calibration_bias_below_10min` mierzy ALGORITHM-DELTA (median offset
-    calibrated − raw) jako proxy. Empirical bias vs realne wartości dostępny
-    dopiero gdy backfill cron Opcja C enrichuje shadow log o panel_diff.
     """
     override_7d = override_kpi.get("7d", {}).get("rate")
-    cal_offset = drive_kpi.get("median_offset_min")
+    # Opcja C empirical bias preferred (samples_present=True), fallback do Opcja B offset
+    cal_metric = drive_kpi.get("median_bias_min")
+    if cal_metric is None:
+        cal_metric = drive_kpi.get("median_offset_min")
     kk_dinner = (kk_kpi.get("dinner") or {}).get("rate")
     gate_override = (override_7d is not None) and override_7d < 0.60
-    gate_calib = (cal_offset is None) or abs(cal_offset) < 10.0  # None = Sprint 1 not LIVE yet, soft pass
+    gate_calib = (cal_metric is None) or abs(cal_metric) < 10.0  # None = no data, soft pass
     gate_kk = (kk_dinner is None) or kk_dinner < 0.15
     return {
         "override_7d_below_60pct": gate_override,
@@ -377,11 +441,37 @@ def render_md(date_str: str, override_kpi, r6_kpi, top_wl, drive_kpi, kk_kpi, re
     else:
         lines.append("_empty whitelist — run `rebuild_courier_whitelist.py` first_")
 
-    lines.append("\n## 4. drive_min calibration algorithm-delta (7d, post Sprint 1)\n")
-    if drive_kpi.get("n_total"):
+    # #21 Opcja C 2026-05-28: empirical bias preferred. Algorithm-delta fallback.
+    if drive_kpi.get("samples_present"):
+        # Empirical bias (Opcja C — enriched.jsonl ground truth)
+        lines.append("\n## 4. drive_min EMPIRICAL bias (7d, Opcja C ground truth)\n")
+        lines.append(
+            f"- n total enriched: **{drive_kpi['n_total']}**, "
+            f"n with bias: **{drive_kpi['n_with_bias']}**"
+        )
+        ovr_rate = drive_kpi.get("override_rate") or 0
+        lines.append(
+            f"- override rate (human != proposed): **{ovr_rate*100:.1f}%**"
+        )
+        lines.append(
+            f"- median bias (actual − predicted travel_min): "
+            f"**{drive_kpi.get('median_bias_min'):+.2f}** min, "
+            f"mean: **{drive_kpi.get('mean_bias_min'):+.2f}** min "
+            f"(positive = under-predicted)"
+        )
+        lines.append("\n| pos_source | n | median_bias | mean_bias |")
+        lines.append("|---|---:|---:|---:|")
+        per_pos = drive_kpi.get("per_pos_source") or {}
+        for ps, d in sorted(per_pos.items(), key=lambda x: -x[1].get("n", 0)):
+            lines.append(
+                f"| {ps} | {d['n']} | {d['median_bias']:+.2f} | {d['mean_bias']:+.2f} |"
+            )
+    elif drive_kpi.get("n_total"):
+        # Algorithm-delta fallback (Opcja B — Sprint 1 log, no ground truth)
+        lines.append("\n## 4. drive_min calibration algorithm-delta (7d, post Sprint 1)\n")
         lines.append(
             f"- n total entries: **{drive_kpi['n_total']}** "
-            f"(ground_truth_available=**{drive_kpi.get('ground_truth_available')}** — Opcja C tech-debt #21 deferred)"
+            f"(ground_truth_available=**{drive_kpi.get('ground_truth_available')}** — Opcja C nie deployed)"
         )
         lines.append(
             f"- median raw drive_min: **{drive_kpi.get('median_raw_min')}** min, "
@@ -402,7 +492,8 @@ def render_md(date_str: str, override_kpi, r6_kpi, top_wl, drive_kpi, kk_kpi, re
             )
     else:
         lines.append(
-            "_no calibration log entries — Sprint 1 LIVE pre-condition not met yet_"
+            "\n## 4. drive_min calibration\n\n"
+            "_no entries yet — Sprint 1 + Opcja C cron pre-conditions not met_"
         )
 
     lines.append("\n## 5. Kebab Król KPI (14d, R6 breach)\n")
@@ -437,6 +528,12 @@ def main(argv=None) -> int:
     parser.add_argument("--out", default=None, help="Output markdown path (default: /tmp/faza7_daily_kpi_YYYY-MM-DD.md)")
     parser.add_argument("--backfill", default=DEFAULT_BACKFILL)
     parser.add_argument("--drive-log", default=DEFAULT_DRIVE_CAL_LOG)
+    parser.add_argument(
+        "--enriched-log",
+        default=DEFAULT_ENRICHED_LOG,
+        help="Path do drive_min_enriched.jsonl (Opcja C empirical bias source). "
+             "Gdy plik zawiera entries — preferred nad drive-log algorithm-delta.",
+    )
     parser.add_argument("--whitelist", default=DEFAULT_WHITELIST)
     parser.add_argument("--tiers", default=DEFAULT_TIERS)
     parser.add_argument("--names", default=DEFAULT_NAMES)
@@ -468,7 +565,12 @@ def main(argv=None) -> int:
     override_kpi = kpi_override_rate(rows, now, tiers)
     r6_kpi = kpi_r6_breach(rows, now)
     top_wl = kpi_whitelist_top(args.whitelist)
-    drive_kpi = kpi_drive_min_calibration(args.drive_log, now)
+    # #21 Opcja C: prefer empirical bias from enriched log; fallback do algorithm-delta
+    empirical_kpi = kpi_drive_min_empirical_bias(args.enriched_log, now)
+    if empirical_kpi.get("samples_present"):
+        drive_kpi = empirical_kpi
+    else:
+        drive_kpi = kpi_drive_min_calibration(args.drive_log, now)
     kk_kpi = kpi_kebab_krol(rows, now)
     readiness = faza7_readiness(override_kpi, drive_kpi, kk_kpi)
 
