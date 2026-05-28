@@ -140,6 +140,16 @@ def query_recent_summary(
 
     cutoff = datetime.now(timezone.utc).timestamp() - (hours * 3600)
     last_ts = None
+    # E3b follow-up (Lekcja #153): licz DISTINCT order_id, NIE detection-events.
+    # Reconciliation re-loguje ten sam nierozwiazany order co run; per-event liczenie
+    # pozwolilo jednemu young phantom (re-detected 8x w incydencie 476621) przebic
+    # manual_alerts>5 => falszywy degraded. Dedupe = "ile ROZNYCH orderow wymaga uwagi".
+    phantom_oids = set()
+    resync_oids = set()
+    manual_alert_oids = set()
+    ghost_oids = set()
+    hard_cap_hits = 0
+    none_seq = 0  # order_id=None trzymamy distinct (defensive — NIE maskuj real degraded)
     try:
         with open(log_path, "r", encoding="utf-8") as f:
             for ln in f:
@@ -161,25 +171,35 @@ def query_recent_summary(
                     last_ts = ts_unix
                     summary["last_run_ts"] = ts_str
                 t = rec.get("type")
+                oid = rec.get("order_id")
+                if oid is None:
+                    oid = f"__none_{none_seq}"
+                    none_seq += 1
                 if t == "PHANTOM":
-                    summary["discrepancies_24h"]["phantoms"] += 1
+                    phantom_oids.add(oid)
                     if rec.get("action") == "resynced":
-                        summary["discrepancies_24h"]["auto_resyncs"] += 1
+                        resync_oids.add(oid)
                     elif rec.get("action", "").startswith("alert_only"):
-                        summary["discrepancies_24h"]["manual_alerts"] += 1
+                        manual_alert_oids.add(oid)
                 elif t == "GHOST":
-                    summary["discrepancies_24h"]["ghosts"] += 1
-                    summary["discrepancies_24h"]["manual_alerts"] += 1
+                    ghost_oids.add(oid)
+                    manual_alert_oids.add(oid)
                 elif t == "RUN_SUMMARY":
                     counts = rec.get("counts", {})
                     if counts.get("hard_cap_hit"):
-                        summary["discrepancies_24h"]["hard_cap_hits"] += 1
+                        hard_cap_hits += 1
     except Exception:
         summary["status"] = "degraded"
         return summary
 
-    # Status classification
     d = summary["discrepancies_24h"]
+    d["phantoms"] = len(phantom_oids)
+    d["auto_resyncs"] = len(resync_oids)
+    d["manual_alerts"] = len(manual_alert_oids)
+    d["ghosts"] = len(ghost_oids)
+    d["hard_cap_hits"] = hard_cap_hits
+
+    # Status classification
     if d["hard_cap_hits"] > 0:
         summary["status"] = "critical"
     elif d["ghosts"] > 0 or d["manual_alerts"] > 5:

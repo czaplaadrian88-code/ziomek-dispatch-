@@ -372,6 +372,53 @@ def test_log_round_trip_atomic():
 t("log_round_trip_atomic", test_log_round_trip_atomic)
 
 
+def test_manual_alerts_dedupe_same_order():
+    """E3b follow-up (Lekcja #153): ten sam order flagowany alert_only N razy w N
+    runach → manual_alerts=1 DISTINCT order, NIE N events. Reprodukuje incydent
+    476621 (8x alert_only_young → false degraded przy arming :8888 cross-check)."""
+    tmpf = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+    tmpf.close()
+    log_path = Path(tmpf.name)
+    try:
+        for i in range(8):
+            actions = [{
+                "order_id": "476621", "classification": "PHANTOM",
+                "action": "alert_only_young", "last_event_age_h": 1.0,
+                "state_status": "delivered",
+            }]
+            records = reconcile_log.build_records(actions, f"run_{i}", {"hard_cap_hit": False})
+            reconcile_log.append_records(records, log_path=log_path)
+        summary = reconcile_log.query_recent_summary(log_path=log_path, hours=24)
+        assert summary["discrepancies_24h"]["manual_alerts"] == 1, summary["discrepancies_24h"]
+        assert summary["discrepancies_24h"]["phantoms"] == 1, summary["discrepancies_24h"]
+        assert summary["status"] == "ok", summary  # 1 <= 5 → NIE degraded
+    finally:
+        os.unlink(tmpf.name)
+t("manual_alerts_dedupe_same_order (476621 8x → 1)", test_manual_alerts_dedupe_same_order)
+
+
+def test_manual_alerts_six_distinct_orders_degraded():
+    """Sanity: 6 ROZNYCH orderow alert_only → manual_alerts=6 > 5 → degraded.
+    Dedupe NIE maskuje prawdziwego degraded (zero silent failures — Z2)."""
+    tmpf = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+    tmpf.close()
+    log_path = Path(tmpf.name)
+    try:
+        actions = [{
+            "order_id": f"O{i}", "classification": "PHANTOM",
+            "action": "alert_only_young", "last_event_age_h": 1.0,
+            "state_status": "delivered",
+        } for i in range(6)]
+        records = reconcile_log.build_records(actions, "run_busy", {"hard_cap_hit": False})
+        reconcile_log.append_records(records, log_path=log_path)
+        summary = reconcile_log.query_recent_summary(log_path=log_path, hours=24)
+        assert summary["discrepancies_24h"]["manual_alerts"] == 6, summary["discrepancies_24h"]
+        assert summary["status"] == "degraded", summary
+    finally:
+        os.unlink(tmpf.name)
+t("manual_alerts_six_distinct_orders_degraded", test_manual_alerts_six_distinct_orders_degraded)
+
+
 def test_health_endpoint_response():
     """get_reconciliation_health returns expected schema."""
     tmpf = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
