@@ -327,7 +327,13 @@ def _v328_compute_downstream_status(
             "downstream_reason": "pipeline_silent_despite_work",
         }
     # Critical — worker hard stuck (twice slow threshold)
-    if worker_age_sec is not None and worker_age_sec > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2:
+    # E3b (Lekcja #153): gate na new_orders_1h>0 — worker_age = last_processed_age,
+    # rośnie naturalnie off-peak bez napływu zleceń; bez pracy to NIE jest "stuck".
+    if (
+        worker_age_sec is not None
+        and worker_age_sec > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2
+        and new_orders_1h > 0
+    ):
         return {
             "downstream_status": "critical",
             "downstream_reason": "worker_stuck",
@@ -344,8 +350,13 @@ def _v328_compute_downstream_status(
             "downstream_status": "degraded",
             "downstream_reason": "elevated_failure_rate",
         }
-    # Degraded — worker slow
-    if worker_age_sec is not None and worker_age_sec > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC:
+    # Degraded — worker slow (E3b: ten sam gate co worker_stuck; alert hook
+    # odpala na critical LUB degraded, więc bez gate'a degraded też spamuje off-peak)
+    if (
+        worker_age_sec is not None
+        and worker_age_sec > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC
+        and new_orders_1h > 0
+    ):
         return {
             "downstream_status": "degraded",
             "downstream_reason": "worker_slow",
@@ -471,19 +482,21 @@ def _mp14_build_all_snapshot(parser_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     cron_comp = _mp14_load_cron_summary()
 
     # Component 5: shadow worker
+    # E3b (Lekcja #153): worker_age (last_processed_age) rośnie off-peak bez pracy;
+    # gate stuck/slow na new_orders_1h>0 — spójnie z SITE #1 i events pipeline.
+    new_orders_1h = parser_snapshot.get("new_orders_last_1h_count", 0)
     worker_age = parser_snapshot.get("worker_processed_age_sec")
     if worker_age is None:
         shadow_comp = {"status": "unknown", "reason": "no_heartbeat_in_5min", "age_sec": None}
-    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2:
+    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2 and new_orders_1h > 0:
         shadow_comp = {"status": "critical", "reason": "worker_stuck", "age_sec": worker_age}
-    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC:
+    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC and new_orders_1h > 0:
         shadow_comp = {"status": "degraded", "reason": "worker_slow", "age_sec": worker_age}
     else:
         shadow_comp = {"status": "ok", "reason": None, "age_sec": worker_age}
 
     # Component 6: events pipeline (telegram queue + new orders flow)
     failed_1h = parser_snapshot.get("events_failed_last_1h_count", 0)
-    new_orders_1h = parser_snapshot.get("new_orders_last_1h_count", 0)
     last_propose_age = parser_snapshot.get("last_proposal_sent_age_sec")
     if failed_1h > V328_DOWNSTREAM_FAILED_1H_THRESHOLD:
         events_comp = {"status": "degraded", "reason": "elevated_failure_rate"}

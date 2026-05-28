@@ -96,6 +96,37 @@ def test_compute_downstream_worker_slow_degraded():
     assert result["downstream_reason"] == "worker_slow"
 
 
+def test_compute_downstream_worker_stuck_no_work_NOT_critical():
+    """E3b (Lekcja #153): worker_age=1300s ALE new_orders=0 (off-peak) → NIE critical.
+
+    last_processed_age rośnie naturalnie bez napływu zleceń — to NIE "stuck".
+    Mirror test_compute_downstream_silent_no_work_NOT_critical dla worker branch.
+    """
+    result = phe._v328_compute_downstream_status(
+        last_proposal_age_sec=120.0,
+        events_failed_1h=0,
+        new_orders_1h=0,
+        worker_age_sec=1300.0,
+    )
+    assert result["downstream_status"] == "ok"
+    assert result["downstream_reason"] is None
+
+
+def test_compute_downstream_worker_slow_no_work_NOT_degraded():
+    """E3b (Lekcja #153): worker_age=700s ALE new_orders=0 (off-peak) → NIE degraded.
+
+    Alert hook odpala na critical LUB degraded, więc worker_slow też musi mieć gate.
+    """
+    result = phe._v328_compute_downstream_status(
+        last_proposal_age_sec=120.0,
+        events_failed_1h=0,
+        new_orders_1h=0,
+        worker_age_sec=700.0,
+    )
+    assert result["downstream_status"] == "ok"
+    assert result["downstream_reason"] is None
+
+
 def test_compute_downstream_critical_takes_priority_over_degraded():
     """Compound anomalies — critical bije degraded (priority order)."""
     result = phe._v328_compute_downstream_status(
