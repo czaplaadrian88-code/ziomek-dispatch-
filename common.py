@@ -1783,6 +1783,68 @@ COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN = float(_os.environ.get(
 ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(
     "ENABLE_OBJ_REPLAY_CAPTURE", "0") == "1"
 
+# Sprint R1+CB+KOORD redirect (2026-05-28): naprawa dwóch tragedii z 28.05
+# #476749 Kebab Król → Mieszka I (Adrian Cit, Kaczor→Mieszka→Antoniuk = "Z")
+# #476777 Rukola Sienkiewicza → Kraszewskiego 45b (cosine -0.991)
+#
+# Replay 7d (1170 decyzji, 21-28.05) — R1 progresywny + V319H guard łapie
+# 19 historycznych improvements (w tym oba dzisiejsze case'y) przy 2 maybe-
+# regresjach (cos<-0.85 + biedny pre_shift pool — adresowane przez KOORD redirect).
+#
+# R1_PROGRESSIVE_CLIP — istniejący bonus_r1_corridor ma flat clip:
+#   cosine <-0.5 → -40, cosine -0.5..0 → -35 (niewystarczająco wobec bonus_l2
+#   +11..17 + v319h_bug2_continuation +30). Progresywny:
+#   cos<-0.7 → -100, -0.7..-0.5 → -60, -0.5..-0.3 → -45, >=-0.3 → keep.
+#
+# V319H_CONTINUATION_GUARD — v319h_bug2_continuation_bonus=+30 za "kontynuacja
+# fali" maskuje karę kierunku. Guard: gdy cos<-0.3 (drops rozjeżdżają się),
+# continuation_bonus nie ma uzasadnienia → zeruj.
+#
+# DIFFICULT_CASE_KOORD_REDIRECT — gdy R1+CB obniży max score < floor (-30 init),
+# wszystkie kandydaty są "trudne geometrycznie", forsowanie złej propozycji =
+# operator override / fail. Lepiej redirect KOORD + log do
+# difficult_case_log.jsonl (korpus uczenia dla FIX-B / Faza 6 klastry osiedli).
+#
+# Default OFF (shadow-first). Plan: SHADOW 28.05 wieczór → 29-30.05 verify →
+# flip 31.05 → A/B 07.06 → decyzja o FIX-B (cosine-gate, osobny sprint).
+# Spec: eod_drafts/2026-05-28/SPRINT_PLAN_r1cb_koord_shadow.md
+ENABLE_R1_PROGRESSIVE_CLIP = _os.environ.get(
+    "ENABLE_R1_PROGRESSIVE_CLIP", "0") == "1"
+ENABLE_V319H_CONTINUATION_GUARD = _os.environ.get(
+    "ENABLE_V319H_CONTINUATION_GUARD", "0") == "1"
+ENABLE_DIFFICULT_CASE_KOORD_REDIRECT = _os.environ.get(
+    "ENABLE_DIFFICULT_CASE_KOORD_REDIRECT", "0") == "1"
+
+# R1 progresywny — empirycznie kalibrowane z 7d replay (n=51 cases z cos<-0.3)
+R1_PROGRESSIVE_CRITICAL_COS = float(_os.environ.get(
+    "R1_PROGRESSIVE_CRITICAL_COS", "-0.7"))  # cos < -0.7 → drops antypodalne
+R1_PROGRESSIVE_HEAVY_COS    = float(_os.environ.get(
+    "R1_PROGRESSIVE_HEAVY_COS",    "-0.5"))  # cos < -0.5 → drops mocno apart
+R1_PROGRESSIVE_MEDIUM_COS   = float(_os.environ.get(
+    "R1_PROGRESSIVE_MEDIUM_COS",   "-0.3"))  # cos < -0.3 → drops lekko apart
+R1_PROGRESSIVE_CRITICAL_VAL = float(_os.environ.get(
+    "R1_PROGRESSIVE_CRITICAL_VAL", "-100.0"))
+R1_PROGRESSIVE_HEAVY_VAL    = float(_os.environ.get(
+    "R1_PROGRESSIVE_HEAVY_VAL",    "-60.0"))
+R1_PROGRESSIVE_MEDIUM_VAL   = float(_os.environ.get(
+    "R1_PROGRESSIVE_MEDIUM_VAL",   "-45.0"))
+
+V319H_GUARD_COSINE_THRESHOLD = float(_os.environ.get(
+    "V319H_GUARD_COSINE_THRESHOLD", "-0.3"))
+
+# Difficult case floor — kalibrowane: 2 maybe-regresje z replay miały scores
+# post-fixes -55 i -56 (wszystkie kandydaci poniżej -30). Floor -30 = każdy
+# kandydat poniżej tej wartości = "trudne geometrycznie" → KOORD redirect.
+DIFFICULT_CASE_SCORE_FLOOR = float(_os.environ.get(
+    "DIFFICULT_CASE_SCORE_FLOOR", "-30.0"))
+
+# Path dedykowanego logu trudnych przypadków (różny od shadow_decisions.jsonl
+# — tu są tylko KOORD redirects, materiał do późniejszej analizy / FIX-B
+# kalibracji / Faza 6 klastry osiedli).
+DIFFICULT_CASE_LOG_PATH = _os.environ.get(
+    "DIFFICULT_CASE_LOG_PATH",
+    "/root/.openclaw/workspace/scripts/logs/difficult_case_log.jsonl")
+
 # Sprint OBJ F4 Krok 1 (2026-05-18, Opcja A): proxy pozycji kuriera no-gps.
 # Krok 2 build_fleet_snapshot dla ostatniego picked_up ordera ustawiał
 # cs.pos = delivery_coords — punkt gdzie kurier DOPIERO DOJEDZIE — więc model

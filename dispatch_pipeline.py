@@ -91,6 +91,76 @@ def _r1_corridor_base_bonus(avg_cos, gradient: bool) -> float:
     return -40.0
 
 
+def _compute_r1_progressive_delta(cosine, existing_bonus):
+    """Sprint 2026-05-28 — progresywna kara R1 dla skrajnych przeciwieństw drops.
+
+    Istniejący ``_r1_corridor_base_bonus`` flat-clip'uje karę na -35/-40 dla
+    cosine < 0. Niewystarczająco wobec ``bonus_l2`` (+11..+17) +
+    ``v319h_bug2_continuation_bonus`` (+30). Empiryczna kalibracja (7d replay):
+    cos<-0.7 (n=14) → -100, -0.7..-0.5 (n=7) → -60, -0.5..-0.3 (n=15) → -45.
+    Zachowuje cos>=-0.3 (15 cases) bez zmian — fix uderza tylko gdy drops
+    naprawdę się rozjeżdżają (Adrian: „inna strona miasta").
+
+    Zwraca delta do bonus_r1_corridor (NIGDY positive — nigdy nie lightening
+    istniejącej kary).
+    """
+    if cosine is None or not isinstance(cosine, (int, float)):
+        return 0.0
+    existing = existing_bonus if isinstance(existing_bonus, (int, float)) else 0.0
+    if cosine < C.R1_PROGRESSIVE_CRITICAL_COS:
+        new_val = C.R1_PROGRESSIVE_CRITICAL_VAL
+    elif cosine < C.R1_PROGRESSIVE_HEAVY_COS:
+        new_val = C.R1_PROGRESSIVE_HEAVY_VAL
+    elif cosine < C.R1_PROGRESSIVE_MEDIUM_COS:
+        new_val = C.R1_PROGRESSIVE_MEDIUM_VAL
+    else:
+        return 0.0
+    return min(new_val - existing, 0.0)
+
+
+def _compute_v319h_guard_delta(cosine, continuation_bonus):
+    """Sprint 2026-05-28 — guard zerujący ``v319h_bug2_continuation_bonus`` (+30)
+    gdy drops się rozjeżdżają (cosine < threshold, default -0.3).
+
+    Reguła Adriana: bonus „za kontynuację fali" nie ma uzasadnienia gdy nowy
+    drop jest w przeciwnym kierunku niż reszta bagu. Empirycznie: case
+    #476749 Kebab Król → Mieszka I (cos=-0.425, continuation +30 maskowało
+    karę kierunku, finalnie PROPOSE+ALERT zamiast KOORD).
+
+    Zwraca delta do v319h_bug2_continuation_bonus (zawsze ≤ 0).
+    """
+    if cosine is None or not isinstance(cosine, (int, float)):
+        return 0.0
+    if not isinstance(continuation_bonus, (int, float)) or continuation_bonus <= 0:
+        return 0.0
+    if cosine < C.V319H_GUARD_COSINE_THRESHOLD:
+        return -continuation_bonus
+    return 0.0
+
+
+def _append_difficult_case_log(entry: dict) -> None:
+    """Sprint 2026-05-28 — zapis trudnego przypadku (KOORD redirect z powodu
+    geometrii) do dedykowanego pliku do uczenia.
+
+    Atomic append: open w trybie 'a' z domyślnym buforowaniem JSONL.
+    Fail-soft: exception loguje warning ale nie wpływa na pipeline.
+    """
+    try:
+        import json as _json
+        import os as _os
+        path = getattr(C, "DIFFICULT_CASE_LOG_PATH",
+                       "/root/.openclaw/workspace/scripts/logs/difficult_case_log.jsonl")
+        # Ensure parent dir exists
+        _os.makedirs(_os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            f.write(_json.dumps(entry, default=str, ensure_ascii=False) + "\n")
+    except Exception as _e:
+        try:
+            log.warning(f"_append_difficult_case_log failed: {_e}")
+        except Exception:
+            pass
+
+
 def _sanitize_courier_pos(pos):
     """Return BIALYSTOK_CENTER gdy pos to (0,0) sentinel, else pass-through."""
     if pos is None:
@@ -2523,6 +2593,29 @@ def _assess_order_impl(
             # Recompute bundle_bonus po zero bonus_l2 (bonus_l1, bonus_r4 unchanged).
             bundle_bonus = bonus_l1 + bonus_l2 + bonus_r4
 
+        # === R1 progresywny + V319H guard SHADOW (2026-05-28) ===
+        # Cele:
+        #   R1: cosine < -0.3 dostaje progresywnie mocniejszą karę niż flat
+        #       clip (-35/-40) by łapać Z-route'y (#476749 Mieszka I,
+        #       #476777 Sikorskiego).
+        #   V319H: continuation_bonus (+30) nie ma sensu gdy drops się
+        #       rozjeżdżają — zerujemy.
+        # Wartości zawsze policzone (shadow logging); aplikacja do final_score
+        # tylko gdy flagi ON. Empirycznie: 19 historycznych improvements vs
+        # 2 maybe-regresje (KOORD-redirect mitigation niżej).
+        try:
+            bonus_r1_progressive_shadow_delta = _compute_r1_progressive_delta(
+                _r1_avg_cos, bonus_r1_corridor)
+        except Exception as _e:
+            log.warning(f"_compute_r1_progressive_delta exception cid={cid} order={order_id}: {_e!r}")
+            bonus_r1_progressive_shadow_delta = 0.0
+        try:
+            bonus_v319h_guard_shadow_delta = _compute_v319h_guard_delta(
+                _r1_avg_cos, bonus_bug2_continuation)
+        except Exception as _e:
+            log.warning(f"_compute_v319h_guard_delta exception cid={cid} order={order_id}: {_e!r}")
+            bonus_v319h_guard_shadow_delta = 0.0
+
         # V3.19h BUG-4: tier × pora bag cap soft penalty (progressive scaling).
         # Orthogonal do R6 hard bag_time. Flag gated (default False).
         bug4_tier_cap_used = None
@@ -2631,6 +2724,14 @@ def _assess_order_impl(
             + bonus_fifo_violation
             + bonus_r5_pickup_detour_penalty
         )
+
+        # === R1 progresywny + V319H guard apply (2026-05-28) ===
+        # Defaults OFF — shadow-first. Delty zawsze policzone (linie ~2596),
+        # tu dodajemy do final_score tylko gdy flagi ON.
+        if getattr(C, "ENABLE_R1_PROGRESSIVE_CLIP", False):
+            final_score = final_score + bonus_r1_progressive_shadow_delta
+        if getattr(C, "ENABLE_V319H_CONTINUATION_GUARD", False):
+            final_score = final_score + bonus_v319h_guard_shadow_delta
 
         # V3.27 Bug Z Q5: SOFT bundle score multiplier dla cross-quadrant bag.
         # 0.0 (cross-quadrant) → score *= 0.1
@@ -2753,6 +2854,11 @@ def _assess_order_impl(
             # BUG B shadow (2026-05-26): pickup-not-on-route penalty.
             # r5_pickup_detour_total_km już wyżej w enriched_metrics.
             "bonus_r5_pickup_detour_penalty": round(bonus_r5_pickup_detour_penalty, 2),
+            # R1 progresywny + V319H guard shadow (2026-05-28): delty
+            # zawsze policzone (observability), score-application gated flagą.
+            # Auto-propagated via prefix bonus_ w shadow_dispatcher.
+            "bonus_r1_progressive_shadow_delta": round(bonus_r1_progressive_shadow_delta, 2),
+            "bonus_v319h_guard_shadow_delta": round(bonus_v319h_guard_shadow_delta, 2),
             # F5 RETURN-TO-RESTAURANT (2026-05-24)
             "bonus_r_return_rest": round(bonus_r_return_rest, 2),
             "return_to_restaurant": metrics.get("return_to_restaurant"),
@@ -3428,6 +3534,92 @@ def _assess_order_impl(
                 _classify_and_set_auto_route(
                     _result_cd, fleet_snapshot, order_event, now=now)
                 return _result_cd
+
+        # === Difficult-case KOORD redirect (2026-05-28) ===
+        # Gdy R1+CB obniżyło wszystkich kandydatów poniżej DIFFICULT_CASE_SCORE_FLOOR
+        # (default -30), system uznaje że "geometria jest trudna" — żadna
+        # propozycja nie jest dobra. Zamiast forsować najmniej-zła propozycję,
+        # eskaluje do KOORD i loguje case do difficult_case_log.jsonl jako
+        # materiał uczący (sprint plan: korpus do FIX-B kalibracji / Faza 6
+        # klastry osiedli). Reguła Adriana: "system mówi: zapytaj koordynatora".
+        # Default OFF — shadow-first. Aktywacja po ACK Etap 3.
+        try:
+            _diff_floor = float(getattr(C, "DIFFICULT_CASE_SCORE_FLOOR", -30.0))
+            _diff_top_score = float(getattr(top[0], "score", 0.0) or 0.0)
+            _diff_above = sum(
+                1 for _c in top if float(getattr(_c, "score", 0.0) or 0.0) >= _diff_floor
+            )
+            # Detect — zawsze (shadow); apply — tylko gdy flag ON.
+            _diff_should_redirect = (top and _diff_top_score < _diff_floor)
+            if _diff_should_redirect and getattr(
+                    C, "ENABLE_DIFFICULT_CASE_KOORD_REDIRECT", False):
+                _diff_best_metrics = getattr(top[0], "metrics", {}) or {}
+                _diff_payload = {
+                    "max_score": round(_diff_top_score, 2),
+                    "floor": _diff_floor,
+                    "n_candidates_above_floor": _diff_above,
+                    "best_candidate_id": getattr(top[0], "courier_id", None),
+                    "best_cosine": _diff_best_metrics.get("r1_avg_pairwise_cosine"),
+                    "best_max_bag_min": _diff_best_metrics.get("max_bag_time_min"),
+                    "best_r5_detour_km": _diff_best_metrics.get("r5_pickup_detour_total_km"),
+                }
+                _result_diff = PipelineResult(
+                    order_id=order_id,
+                    verdict="KOORD",
+                    reason=(
+                        f"difficult_geometry_redirect (best={top[0].courier_id} "
+                        f"max_score={_diff_top_score:.1f} < floor={_diff_floor:.0f}; "
+                        f"n_above_floor={_diff_above}; geometryczny eskalator KOORD)"
+                    ),
+                    best=top[0],
+                    candidates=top,
+                    pickup_ready_at=pickup_ready_at,
+                    restaurant=restaurant,
+                    delivery_address=delivery_address,
+                    pool_total_count=len(candidates),
+                    pool_feasible_count=len(feasible),
+                )
+                _result_diff.difficult_case_redirect = _diff_payload
+                # Append do dedykowanego logu (materiał uczący)
+                _append_difficult_case_log({
+                    "ts": now.isoformat(),
+                    "order_id": order_id,
+                    "restaurant": restaurant,
+                    "delivery_address": delivery_address,
+                    "verdict_redirected": "KOORD",
+                    "verdict_legacy": "PROPOSE",
+                    "payload": _diff_payload,
+                    "top_candidates": [
+                        {
+                            "courier_id": getattr(_c, "courier_id", None),
+                            "name": getattr(_c, "name", None),
+                            "score": round(float(getattr(_c, "score", 0.0) or 0.0), 2),
+                            "cosine": (getattr(_c, "metrics", {}) or {}).get("r1_avg_pairwise_cosine"),
+                            "r5_detour_km": (getattr(_c, "metrics", {}) or {}).get("r5_pickup_detour_total_km"),
+                            "max_bag_min": (getattr(_c, "metrics", {}) or {}).get("max_bag_time_min"),
+                            "bag_size": (getattr(_c, "metrics", {}) or {}).get("r6_bag_size"),
+                            "pos_source": getattr(getattr(_c, "courier_state", None), "pos_source", None),
+                        }
+                        for _c in top[:5]
+                    ],
+                    "operator_decision": None,  # async fill via reconciliation
+                })
+                _classify_and_set_auto_route(
+                    _result_diff, fleet_snapshot, order_event, now=now)
+                return _result_diff
+            elif _diff_should_redirect:
+                # Flag OFF — zapisuj do shadow logu (best dict) by symulacja
+                # mogła sprawdzić ile case'ów BYŁOBY redirectowanych. Pole
+                # difficult_case_redirect_shadow w serializer.
+                top[0].metrics["difficult_case_redirect_shadow"] = {
+                    "max_score": round(_diff_top_score, 2),
+                    "floor": _diff_floor,
+                    "n_candidates_above_floor": _diff_above,
+                }
+        except Exception as _diff_e:
+            log.warning(
+                f"difficult_case_redirect exception order={order_id}: {_diff_e!r}"
+            )
 
         _result_pf = PipelineResult(
             order_id=order_id,

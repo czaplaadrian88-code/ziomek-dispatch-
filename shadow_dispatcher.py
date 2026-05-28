@@ -178,7 +178,8 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        "dwell_", "drive_speed_",  # 2026-05-17: tier-aware DWELL + drive-speed metryki (#109)
                        "objm_",  # sprint OBJ F0.3: metryki jakości planu (idle/thermal/r6_breach/span)
                        "paczka_",  # R-PACZKI-FLEX (2026-05-20): paczka_is / paczka_flex_eligible / paczka_*
-                       "carry_chain_")  # Sprint 2 Etap 2.2 (2026-05-27): carry/bag-stack visibility
+                       "carry_chain_",  # Sprint 2 Etap 2.2 (2026-05-27): carry/bag-stack visibility
+                       "difficult_")  # Sprint 2026-05-28: difficult_case_redirect_shadow per-candidate
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
@@ -650,6 +651,11 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # decyzji).
         "best_effort_r6_redirect": getattr(result, "best_effort_r6_redirect", None),
         "commit_divergence_redirect": getattr(result, "commit_divergence_redirect", None),
+        # Sprint 2026-05-28: difficult_case_redirect (R1+CB drop max score < floor)
+        # — szewczyk shadow-only ma `difficult_case_redirect_shadow` w best.metrics
+        # (auto-prop przez prefix "difficult_"), live KOORD redirect populuje to
+        # result-level pole.
+        "difficult_case_redirect": getattr(result, "difficult_case_redirect", None),
     }
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)
