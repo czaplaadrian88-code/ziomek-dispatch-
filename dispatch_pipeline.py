@@ -921,6 +921,11 @@ class Candidate:
     plan: Optional[RoutePlanV2]
     metrics: Dict[str, Any] = field(default_factory=dict)
     best_effort: bool = False
+    # BUG-D Faza 2b 2026-05-28 — per-route v2 traffic multiplier shadow data.
+    # Populated by `_v327_eval_courier` via TLS leg tracking + traffic_v2_aggregator.
+    # None gdy brak OSRM calls dla tego candidate (rare edge case, early return paths).
+    # Spec: dispatch_v2/traffic_v2_aggregator.py docstring.
+    traffic_v2_shadow_route: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -1438,6 +1443,21 @@ def _assess_order_impl(
     #   - Python logging built-in lock — safe
     # Wall time goal: 250-400ms (vs sequential 500-2000ms, baseline 100-150ms pre-flip).
     def _v327_eval_courier(cid, cs):
+        # BUG-D Faza 2b: opt-in TLS leg tracking dla per-route v2 aggregate.
+        # Każdy thread w ThreadPoolExecutor ma własny TLS context — parallel safe.
+        # Inner stop'nie tracking + aggregate przed return Candidate. Outer
+        # try/finally jest safety net dla early return None paths (cleanup TLS
+        # idempotent — stop_v2_request_tracking w obu miejscach OK).
+        from dispatch_v2 import osrm_client as _osrm_client
+        _osrm_client.start_v2_request_tracking()
+        try:
+            return _v327_eval_courier_inner(cid, cs)
+        finally:
+            # Idempotent cleanup — inner mogło już stop'nąć przed Candidate construction;
+            # ten call wtedy zwraca None (TLS już wyczyszczony). Defense-in-depth dla raise.
+            _osrm_client.stop_v2_request_tracking()
+
+    def _v327_eval_courier_inner(cid, cs):
         courier_pos = _sanitize_courier_pos(getattr(cs, "pos", None))
         if courier_pos is None:
             return None
@@ -2916,6 +2936,13 @@ def _assess_order_impl(
             _rest_irg = intra_rest_gap_max_restaurant or "?"
             reason = f"intra_restaurant_gap_exceeded ({intra_rest_gap_max_min:.1f}min > {C.MAX_INTRA_RESTAURANT_GAP_MIN} pod {_rest_irg})"
 
+        # BUG-D Faza 2b: stop TLS leg tracking + aggregate przed Candidate construction.
+        # stop_v2_request_tracking jest idempotent — outer finally zrobi second no-op call.
+        from dispatch_v2 import osrm_client as _osrm_client_inner
+        from dispatch_v2.traffic_v2_aggregator import aggregate_legs as _aggregate_legs
+        _v2_legs = _osrm_client_inner.stop_v2_request_tracking()
+        _v2_route = _aggregate_legs(_v2_legs) if _v2_legs else None
+
         return Candidate(
             courier_id=str(cid),
             name=getattr(cs, "name", None),
@@ -2924,8 +2951,9 @@ def _assess_order_impl(
             feasibility_reason=reason,
             plan=plan,
             metrics=enriched_metrics,
+            traffic_v2_shadow_route=_v2_route,
         )
-    # ── end _v327_eval_courier ──
+    # ── end _v327_eval_courier (inner) ──
 
     # V3.27 latency parallel: ThreadPoolExecutor map. 10 workers (lub mniej gdy
     # fleet < 10). Lambda unpacks (cid, cs) tuple z fleet_snapshot.items().

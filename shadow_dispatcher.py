@@ -379,6 +379,11 @@ def _serialize_candidate(c) -> dict:
         "r07_chain_truncated_count": m.get("r07_chain_truncated_count"),
         "r07_chain_warnings": m.get("r07_chain_warnings"),
         "r07_compute_latency_ms": m.get("r07_compute_latency_ms"),
+        # BUG-D Faza 2b 2026-05-28: per-route v2 traffic shadow aggregate (LOCATION A).
+        # Pełna struktura w `traffic_v2_aggregator.aggregate_legs` docstring; tu wprost
+        # przepisujemy z Candidate.traffic_v2_shadow_route (NIE z m["..."], bo to
+        # dedicated dataclass attribute, NIE w metrics dict — Lekcja #80 audit).
+        "traffic_v2_shadow_route": getattr(c, "traffic_v2_shadow_route", None),
     }
     _propagate_prefixed_metrics(out, m)
     return out
@@ -616,6 +621,10 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r07_chain_truncated_count": best_m.get("r07_chain_truncated_count"),
             "r07_chain_warnings": best_m.get("r07_chain_warnings"),
             "r07_compute_latency_ms": best_m.get("r07_compute_latency_ms"),
+            # BUG-D Faza 2b 2026-05-28: per-route v2 traffic shadow aggregate
+            # (LOCATION B — best inline). Dedicated Candidate dataclass attribute,
+            # NIE w best_m dict — Lekcja #80 audit. Patrz _serialize_candidate LOCATION A.
+            "traffic_v2_shadow_route": getattr(best, "traffic_v2_shadow_route", None) if best else None,
         },
         "alternatives": [
             _serialize_candidate(c) for c in result.candidates[1:]

@@ -240,3 +240,149 @@ def test_tool_aggregate_weighted_average():
     assert abs(agg["weighted_avg_mult"] - 1.625) < 0.001
     assert agg["bins"]["short"]["n"] == 400
     assert abs(agg["bins"]["short"]["avg"] - 1.625) < 0.001
+
+
+# ─── BUG-D Faza 2b — TLS leg tracking + per-route aggregate + serialization ───
+
+
+def test_aggregate_legs_empty_returns_none():
+    """aggregate_legs([]) → None, aggregate_legs(None) → None."""
+    from dispatch_v2.traffic_v2_aggregator import aggregate_legs
+    assert aggregate_legs([]) is None
+    assert aggregate_legs(None) is None
+
+
+def test_aggregate_legs_single_leg():
+    """Single-leg route: avg == max == min, totals = single value."""
+    from dispatch_v2.traffic_v2_aggregator import aggregate_legs
+    legs = [{"distance_km": 1.5, "raw_min": 2.5, "v1_mult": 1.3, "v2_mult": 2.3, "bin": "short"}]
+    out = aggregate_legs(legs)
+    assert out["n_legs"] == 1
+    assert out["avg_v2_mult"] == 2.3
+    assert out["max_v2_mult"] == 2.3
+    assert out["min_v2_mult"] == 2.3
+    assert out["bins_count"] == {"short": 1, "medium": 0, "long": 0, "none": 0}
+    assert out["total_raw_min"] == 2.5
+    assert abs(out["total_v2_predicted_min"] - 5.75) < 0.001  # 2.5 * 2.3
+    assert abs(out["total_v1_predicted_min"] - 3.25) < 0.001  # 2.5 * 1.3
+    assert abs(out["v2_v1_delta_min"] - 2.5) < 0.001
+
+
+def test_aggregate_legs_multi_leg_mixed_bins():
+    """Multi-leg mixed bins: aggregate sums + per-bin count + weighted totals."""
+    from dispatch_v2.traffic_v2_aggregator import aggregate_legs
+    legs = [
+        {"distance_km": 1.5, "raw_min": 3.0, "v1_mult": 1.3, "v2_mult": 2.3, "bin": "short"},
+        {"distance_km": 3.0, "raw_min": 6.0, "v1_mult": 1.3, "v2_mult": 1.7, "bin": "medium"},
+        {"distance_km": 7.0, "raw_min": 15.0, "v1_mult": 1.3, "v2_mult": 1.15, "bin": "long"},
+    ]
+    out = aggregate_legs(legs)
+    assert out["n_legs"] == 3
+    assert out["bins_count"] == {"short": 1, "medium": 1, "long": 1, "none": 0}
+    assert out["total_raw_min"] == 24.0
+    # Σ raw × v2: 3*2.3 + 6*1.7 + 15*1.15 = 6.9 + 10.2 + 17.25 = 34.35
+    assert abs(out["total_v2_predicted_min"] - 34.35) < 0.001
+    # Σ raw × v1: 24 * 1.3 = 31.2
+    assert abs(out["total_v1_predicted_min"] - 31.2) < 0.001
+    assert abs(out["v2_v1_delta_min"] - 3.15) < 0.001
+    # avg = (2.3 + 1.7 + 1.15) / 3 = 5.15 / 3 ≈ 1.717
+    assert abs(out["avg_v2_mult"] - 1.717) < 0.001
+    assert out["max_v2_mult"] == 2.3
+    assert out["min_v2_mult"] == 1.15
+    # Per-leg breakdown preserved as defensive copy
+    assert len(out["legs"]) == 3
+    assert out["legs"][0]["bin"] == "short"
+
+
+def test_aggregate_legs_tolerant_to_missing_fields():
+    """Legs z brakującymi raw_min lub v2_mult nie crashują — skipped w averages."""
+    from dispatch_v2.traffic_v2_aggregator import aggregate_legs
+    legs = [
+        {"distance_km": 1.5, "raw_min": 3.0, "v1_mult": 1.3, "v2_mult": 2.3, "bin": "short"},
+        {"distance_km": None, "raw_min": None, "v1_mult": 1.3, "v2_mult": None, "bin": "none"},
+    ]
+    out = aggregate_legs(legs)
+    assert out["n_legs"] == 2
+    # avg/max/min liczone tylko z non-None v2_mult
+    assert out["avg_v2_mult"] == 2.3
+    assert out["bins_count"]["none"] == 1
+
+
+def test_tls_tracking_isolated_per_thread():
+    """ThreadPoolExecutor: każdy thread ma własną legs list, brak cross-contamination."""
+    from concurrent.futures import ThreadPoolExecutor
+    from dispatch_v2.osrm_client import start_v2_request_tracking, stop_v2_request_tracking, _apply_traffic_multiplier
+    from datetime import datetime, timezone
+
+    def _worker(distance_km: float) -> int:
+        start_v2_request_tracking()
+        dt = datetime(2026, 5, 26, 14, 30, tzinfo=timezone.utc)
+        _apply_traffic_multiplier({"duration_s": 60.0, "distance_km": distance_km}, dt)
+        legs = stop_v2_request_tracking()
+        return len(legs)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(_worker, [1.0, 3.0, 7.0, 1.5]))
+    # Każdy thread powinien dostać dokładnie 1 leg (NIE 4 z cross-contamination)
+    assert all(r == 1 for r in results), f"unexpected: {results}"
+
+
+def test_tls_tracking_stop_without_start_returns_none():
+    """stop_v2_request_tracking bez wcześniejszego start → None (defense-in-depth)."""
+    from dispatch_v2.osrm_client import stop_v2_request_tracking, _request_legs
+    # Reset TLS state to ensure clean slate
+    _request_legs.legs = None
+    assert stop_v2_request_tracking() is None
+
+
+def test_tls_tracking_double_stop_idempotent():
+    """stop → stop (second call) zwraca None (cleanup zostawia legs=None)."""
+    from dispatch_v2.osrm_client import start_v2_request_tracking, stop_v2_request_tracking
+    start_v2_request_tracking()
+    assert stop_v2_request_tracking() == []  # empty list, started but no calls
+    assert stop_v2_request_tracking() is None  # second call: TLS cleared
+
+
+def test_candidate_dataclass_has_traffic_v2_shadow_route_field():
+    """Candidate dataclass new field default None, type compatible z aggregate output."""
+    from dispatch_v2.dispatch_pipeline import Candidate
+    c = Candidate(
+        courier_id="123", name="Test", score=0.0,
+        feasibility_verdict="MAYBE", feasibility_reason="ok",
+        plan=None,
+    )
+    assert c.traffic_v2_shadow_route is None
+    # Assign aggregate result
+    c.traffic_v2_shadow_route = {"n_legs": 2, "avg_v2_mult": 1.5}
+    assert c.traffic_v2_shadow_route["n_legs"] == 2
+
+
+def test_serialize_candidate_writes_traffic_v2_shadow_route_loc_a():
+    """shadow_dispatcher._serialize_candidate LOC A copies dataclass attribute."""
+    from dispatch_v2.shadow_dispatcher import _serialize_candidate
+    from dispatch_v2.dispatch_pipeline import Candidate
+
+    payload = {"n_legs": 3, "avg_v2_mult": 1.6, "bins_count": {"short": 1, "medium": 1, "long": 1, "none": 0}}
+    c = Candidate(
+        courier_id="123", name="X", score=0.0,
+        feasibility_verdict="MAYBE", feasibility_reason="ok",
+        plan=None, metrics={"km_to_pickup": 1.5},
+    )
+    c.traffic_v2_shadow_route = payload
+    out = _serialize_candidate(c)
+    assert out["traffic_v2_shadow_route"] == payload
+
+
+def test_serialize_candidate_none_when_attr_missing():
+    """LOC A: brak attribute (legacy Candidate albo None) → None (no crash)."""
+    from dispatch_v2.shadow_dispatcher import _serialize_candidate
+    from dispatch_v2.dispatch_pipeline import Candidate
+
+    c = Candidate(
+        courier_id="123", name="X", score=0.0,
+        feasibility_verdict="MAYBE", feasibility_reason="ok",
+        plan=None,
+    )
+    # Default = None
+    out = _serialize_candidate(c)
+    assert out["traffic_v2_shadow_route"] is None

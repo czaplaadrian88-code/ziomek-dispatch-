@@ -71,6 +71,33 @@ _osrm_degraded_since: Optional[float] = None  # epoch entry into degraded state 
 _osrm_degraded_alert_sent: bool = False  # dedup: jeden alert per degraded period (entry)
 _osrm_recovery_alert_sent: bool = False  # dedup: jeden alert per recovery (NIE re-alert na flapping)
 
+# === BUG-D Faza 2b — TLS per-request leg tracking (parallel-safe) ===
+# Każdy thread w ThreadPoolExecutor ma własny `legs` list. Caller (_v327_eval_courier)
+# inicjuje przez start_v2_request_tracking() przed evaluacją courier'a, odczytuje
+# przez stop_v2_request_tracking() po zakończeniu. _apply_traffic_multiplier append'uje
+# do TLS list ZAWSZE gdy tracking aktywny (legs is not None).
+#
+# Quality choice: TLS zamiast wrapping wszystkich OSRM call sites — OSRM jest wywoływany
+# w wielu modułach (route_simulator_v2, feasibility_v2, chain_eta, dispatch_pipeline),
+# wrapping byłby invasive. TLS isolation pod ThreadPoolExecutor jest inherent thread-safe.
+_request_legs = threading.local()
+
+
+def start_v2_request_tracking() -> None:
+    """Inicjuj per-request leg tracking dla bieżącego thread. Idempotent."""
+    _request_legs.legs = []
+
+
+def stop_v2_request_tracking() -> Optional[list]:
+    """Zakończ tracking, zwróć zebraną listę legs (lub None gdy nie startowane).
+
+    Cleanup TLS żeby kolejne calls bez start nie zbierały śmieci.
+    """
+    legs = getattr(_request_legs, "legs", None)
+    _request_legs.legs = None
+    return legs
+
+
 # === HOURLY METRICS (P0.5) ===
 _osrm_stats: dict = {
     "calls_total": 0,
@@ -290,6 +317,17 @@ def _apply_traffic_multiplier(result: dict, now_utc: datetime) -> dict:
         _bin_stats = _osrm_stats["traffic_mult_v2_bins"][v2_bin]
         _bin_stats["count"] += 1
         _bin_stats["sum"] += mult_v2
+
+    # BUG-D Faza 2b: per-request leg recording (TLS, parallel-safe, opt-in via caller)
+    _tls_legs = getattr(_request_legs, "legs", None)
+    if _tls_legs is not None:
+        _tls_legs.append({
+            "distance_km": distance_km,
+            "raw_min": round(raw_s / 60, 2),
+            "v1_mult": mult,
+            "v2_mult": mult_v2,
+            "bin": v2_bin,
+        })
 
     if not ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER:
         # SHADOW mode: record-only, NO mutation of duration_s/min
