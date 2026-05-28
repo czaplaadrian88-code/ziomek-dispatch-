@@ -138,32 +138,39 @@ def test_readiness_override_blocks():
 def test_readiness_calib_soft_pass_when_missing():
     """Sprint 1 not LIVE yet → cal bias None should soft-pass."""
     override_kpi = {"7d": {"rate": 0.55}}
-    drive_kpi = {"median_cal_bias": None}
+    drive_kpi = {"median_offset_min": None}
     kk_kpi = {"dinner": {"rate": 0.10}}
     r = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi)
     assert r["calibration_bias_below_10min"]
 
 
 def test_drive_min_calibration_no_log(tmp_path, now):
-    """Empty/missing log returns zero counts."""
+    """Empty/missing log returns zero counts (post-#21 Opcja B: algorithm-delta schema)."""
     missing = str(tmp_path / "missing.jsonl")
     out = KPI.kpi_drive_min_calibration(missing, now)
-    assert out["n_raw"] == 0
-    assert out["n_calibrated"] == 0
+    assert out["n_total"] == 0
+    assert out["median_offset_min"] is None
+    assert out["ground_truth_available"] is False
 
 
 def test_drive_min_calibration_with_entries(tmp_path, now):
+    """Sprint 1 writer schema: raw_drive_min/calibrated_drive_min/offset_applied (no actual)."""
     log = tmp_path / "drive.jsonl"
     entries = [
-        {"ts": _ts(now, hours=1), "raw_predicted": 10.0, "calibrated_predicted": 14.0, "actual": 15.0, "pos_source": "gps", "tier": "gold"},
-        {"ts": _ts(now, hours=2), "raw_predicted": 8.0, "calibrated_predicted": 13.0, "actual": 14.0, "pos_source": "no_gps", "tier": "std"},
+        {"ts": _ts(now, hours=1), "raw_drive_min": 10.0, "calibrated_drive_min": 14.0, "offset_applied": 4.0, "floor_applied": False, "pos_source": "gps", "tier": "gold"},
+        {"ts": _ts(now, hours=2), "raw_drive_min": 8.0, "calibrated_drive_min": 13.0, "offset_applied": 5.0, "floor_applied": True, "pos_source": "no_gps", "tier": "std"},
     ]
     log.write_text("\n".join(json.dumps(e) for e in entries))
     out = KPI.kpi_drive_min_calibration(str(log), now)
-    assert out["n_raw"] == 2
-    assert out["n_calibrated"] == 2
-    # raw bias: 5, 6 → median 5.5; cal bias: 1, 1 → median 1
-    assert out["median_cal_bias"] == 1.0
+    assert out["n_total"] == 2
+    assert out["ground_truth_available"] is False
+    # offsets: 4, 5 → median 4.5; raws: 8, 10 → median 9.0; cals: 13, 14 → median 13.5
+    assert out["median_offset_min"] == 4.5
+    assert out["median_raw_min"] == 9.0
+    assert out["median_calibrated_min"] == 13.5
+    assert out["floor_applied_count"] == 1
+    assert out["per_pos_source"]["gps"]["median_offset"] == 4.0
+    assert out["per_pos_source"]["no_gps"]["median_offset"] == 5.0
 
 
 def test_cli_writes_output(tmp_path, fake_rows):

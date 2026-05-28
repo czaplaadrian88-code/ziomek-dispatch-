@@ -204,33 +204,42 @@ def kpi_whitelist_top(whitelist_path: str, top_n: int = 5) -> list:
 
 # ──────────────────────── KPI 4: drive_min calibration ──────────────────
 def kpi_drive_min_calibration(log_path: str, now: datetime) -> dict:
-    """Raw vs calibrated bias (z Sprint 1 shadow log, last 7d).
+    """Algorithm-delta raw vs calibrated (z Sprint 1 shadow log, last 7d).
 
-    Schema expected (Sprint 1 design — `drive_min_calibration_log_v2.jsonl`):
-      {ts, raw_predicted, calibrated_predicted, actual, pos_source, tier}
+    NOTE (tech-debt #21 Opcja B 2026-05-28): Sprint 1 writer NIE pisze
+    `actual_drive_min` ground truth — bez tego niemożliwy pomiar empirical bias.
+    Reader raportuje wyłącznie algorithm-delta (calibrated − raw, czyli
+    `offset_applied`) per pos_source. Pełen ground-truth bias dostępny dopiero
+    gdy backfill cron (Opcja C) enrichuje shadow log o panel_diff outcomes.
+
+    Schema (Sprint 1 writer — `drive_min_calibration_log_v2.jsonl`):
+      {ts, raw_drive_min, calibrated_drive_min, offset_applied, floor_applied,
+       pos_source, tier, peak_window, main_path_active, calibration_version}
     """
     cutoff = now - timedelta(days=7)
-    raw_deltas: list = []
-    cal_deltas: list = []
-    per_pos = defaultdict(lambda: {"raw": [], "cal": []})
+    raws: list = []
+    cals: list = []
+    offsets: list = []
+    floor_count = 0
+    per_pos = defaultdict(lambda: {"raw": [], "cal": [], "offset": []})
     for d in _iter_jsonl(log_path):
         ts = _parse_ts(d.get("ts"))
         if not ts or ts < cutoff:
             continue
-        raw = d.get("raw_predicted")
-        cal = d.get("calibrated_predicted")
-        actual = d.get("actual")
-        if actual is None:
+        raw = d.get("raw_drive_min")
+        cal = d.get("calibrated_drive_min")
+        if raw is None or cal is None:
             continue
+        offset = cal - raw
+        raws.append(raw)
+        cals.append(cal)
+        offsets.append(offset)
+        if d.get("floor_applied"):
+            floor_count += 1
         pos = d.get("pos_source") or "unknown"
-        if raw is not None:
-            r = actual - raw
-            raw_deltas.append(r)
-            per_pos[pos]["raw"].append(r)
-        if cal is not None:
-            c = actual - cal
-            cal_deltas.append(c)
-            per_pos[pos]["cal"].append(c)
+        per_pos[pos]["raw"].append(raw)
+        per_pos[pos]["cal"].append(cal)
+        per_pos[pos]["offset"].append(offset)
 
     def _median(xs):
         if not xs:
@@ -239,17 +248,21 @@ def kpi_drive_min_calibration(log_path: str, now: datetime) -> dict:
         n = len(s)
         return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
 
+    n_total = len(offsets)
     summary = {
-        "n_raw": len(raw_deltas),
-        "n_calibrated": len(cal_deltas),
-        "median_raw_bias": round(_median(raw_deltas), 2) if raw_deltas else None,
-        "median_cal_bias": round(_median(cal_deltas), 2) if cal_deltas else None,
+        "n_total": n_total,
+        "median_raw_min": round(_median(raws), 2) if raws else None,
+        "median_calibrated_min": round(_median(cals), 2) if cals else None,
+        "median_offset_min": round(_median(offsets), 2) if offsets else None,
+        "floor_applied_count": floor_count,
+        "floor_applied_rate": round(floor_count / n_total, 4) if n_total else None,
+        "ground_truth_available": False,
         "per_pos_source": {
             ps: {
-                "n_raw": len(d["raw"]),
-                "n_cal": len(d["cal"]),
+                "n": len(d["raw"]),
                 "median_raw": round(_median(d["raw"]), 2) if d["raw"] else None,
                 "median_cal": round(_median(d["cal"]), 2) if d["cal"] else None,
+                "median_offset": round(_median(d["offset"]), 2) if d["offset"] else None,
             }
             for ps, d in per_pos.items()
         },
@@ -306,14 +319,19 @@ def faza7_readiness(override_kpi: dict, drive_kpi: dict, kk_kpi: dict) -> dict:
 
     Sygnał ON gdy:
       - override rate 7d < 60% (was 78.6% baseline → wymóg post Sprint 1+2)
-      - calibrated median bias < 10 min (post Sprint 1 LIVE)
+      - calibration algorithm-delta |offset| < 10 min (post Sprint 1 LIVE)
       - KK dinner breach rate < 15% (post Sprint 2.1)
+
+    NOTE (tech-debt #21 Opcja B): bez ground truth (`actual_drive_min`) gate
+    `calibration_bias_below_10min` mierzy ALGORITHM-DELTA (median offset
+    calibrated − raw) jako proxy. Empirical bias vs realne wartości dostępny
+    dopiero gdy backfill cron Opcja C enrichuje shadow log o panel_diff.
     """
     override_7d = override_kpi.get("7d", {}).get("rate")
-    cal_bias = drive_kpi.get("median_cal_bias")
+    cal_offset = drive_kpi.get("median_offset_min")
     kk_dinner = (kk_kpi.get("dinner") or {}).get("rate")
     gate_override = (override_7d is not None) and override_7d < 0.60
-    gate_calib = (cal_bias is None) or abs(cal_bias) < 10.0  # None = Sprint 1 not LIVE yet, soft pass
+    gate_calib = (cal_offset is None) or abs(cal_offset) < 10.0  # None = Sprint 1 not LIVE yet, soft pass
     gate_kk = (kk_dinner is None) or kk_dinner < 0.15
     return {
         "override_7d_below_60pct": gate_override,
@@ -359,22 +377,28 @@ def render_md(date_str: str, override_kpi, r6_kpi, top_wl, drive_kpi, kk_kpi, re
     else:
         lines.append("_empty whitelist — run `rebuild_courier_whitelist.py` first_")
 
-    lines.append("\n## 4. drive_min calibration bias (7d, post Sprint 1)\n")
-    if drive_kpi.get("n_raw") or drive_kpi.get("n_calibrated"):
+    lines.append("\n## 4. drive_min calibration algorithm-delta (7d, post Sprint 1)\n")
+    if drive_kpi.get("n_total"):
         lines.append(
-            f"- n raw entries: **{drive_kpi['n_raw']}**, "
-            f"n calibrated: **{drive_kpi['n_calibrated']}**"
+            f"- n total entries: **{drive_kpi['n_total']}** "
+            f"(ground_truth_available=**{drive_kpi.get('ground_truth_available')}** — Opcja C tech-debt #21 deferred)"
         )
         lines.append(
-            f"- median raw bias: **{drive_kpi.get('median_raw_bias')}** min, "
-            f"median calibrated bias: **{drive_kpi.get('median_cal_bias')}** min"
+            f"- median raw drive_min: **{drive_kpi.get('median_raw_min')}** min, "
+            f"median calibrated: **{drive_kpi.get('median_calibrated_min')}** min, "
+            f"median offset (cal − raw): **{drive_kpi.get('median_offset_min')}** min"
         )
-        lines.append("\n| pos_source | n_raw | median_raw | n_cal | median_cal |")
+        floor_rate = drive_kpi.get("floor_applied_rate")
+        lines.append(
+            f"- floor_applied: **{drive_kpi.get('floor_applied_count')}** "
+            f"({(floor_rate or 0)*100:.1f}% — safety net dla pre-shift/no_gps)"
+        )
+        lines.append("\n| pos_source | n | median_raw | median_cal | median_offset |")
         lines.append("|---|---:|---:|---:|---:|")
         for ps, d in (drive_kpi.get("per_pos_source") or {}).items():
             lines.append(
-                f"| {ps} | {d['n_raw']} | {d['median_raw']} | "
-                f"{d['n_cal']} | {d['median_cal']} |"
+                f"| {ps} | {d['n']} | {d['median_raw']} | "
+                f"{d['median_cal']} | {d['median_offset']} |"
             )
     else:
         lines.append(
