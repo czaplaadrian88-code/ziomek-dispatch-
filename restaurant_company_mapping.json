@@ -25,7 +25,7 @@
     "Gym Fit Food": 224,
     "Hacienda Pizza": 147,
     "HALVA": 160,
-    "HoNoTu": 207,
+    "Sztuka Dzika": 207,
     "Karczma Maciejówka": 24,
     "Kebab Król": 169,
     "Kurra": 171,
@@ -113,7 +113,7 @@
     "Gym Fit Food": "strict",
     "Hacienda Pizza": "strict",
     "HALVA": "strict",
-    "HoNoTu": "alias",
+    "Sztuka Dzika": "strict",
     "Karczma Maciejówka": "strict",
     "Kebab Król": "strict",
     "Kurra": "strict",
@@ -158,7 +158,7 @@
     "350 stopni": "alias",
     "500 stopni 500 stopni": "alias"
   },
-  "generated_at": "2026-05-25T22:01:22.069511+02:00",
+  "generated_at": "2026-05-28T11:51:20.413305+02:00",
   "source": "panel_dropdown_scrape_v2",
   "counts": {
     "sheet_total": 69,
@@ -167,9 +167,9 @@
     "unmatched_sheet": 0,
     "unused_panel": 10,
     "by_method": {
-      "strict": 57,
+      "strict": 58,
       "token": 5,
-      "alias": 7
+      "alias": 6
     }
   }
 }
