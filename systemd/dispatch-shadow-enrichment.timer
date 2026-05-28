@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek Shadow Outcome Enrichment — every 5 min (#21 Opcja C 2026-05-28)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=dispatch-shadow-enrichment.service
+
+[Install]
+WantedBy=timers.target
