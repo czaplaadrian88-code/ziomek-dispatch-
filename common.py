@@ -304,6 +304,67 @@ def get_traffic_multiplier(dt_utc: datetime) -> float:
     return 1.0  # safety net (np. h=24 nie powinno wystapic)
 
 
+# ─── BUG-D Distance-bin traffic boost (V3.28+) ──────────────────────────
+# TomTom sample 2026-05-26 (n=8 segmentów peak weekday Wt 16-20) ujawnił że
+# `V326_OSRM_TRAFFIC_TABLE` flat per-hour znacznie zaniża krótkie segmenty
+# centrum (lots of lights/intersections) i lekko zawyża długie międzydzielnicowe.
+#
+# Empirical TomTom/OSRM_ff ratio per distance bin:
+#   <2 km centrum: avg 2.3× (range 2.1-2.5×, n=4 short urban)
+#   2-5 km mixed:  avg 1.5× (range 1.02-2.35×, n=4 — dominują 1.0-1.3× spoza centrum)
+#   >5 km long:    avg 1.15× (range 1.02-1.33×, n=3 long inter-district)
+#
+# Strategy: ADDITIVE boost relative to base hour multiplier, applied ONLY in
+# peak hours (base > 1.0). Off-peak (base=1.0) zostaje 1.0 niezależnie od
+# distance. Floor at 1.0 (nigdy NIE zmniejszamy poniżej OSRM ff).
+#
+# Sample run validation (Pn-Pt 16-17, base=1.3):
+#   short 1.5km: 1.3 + 1.0 = 2.3 ✓ (sample avg 2.3)
+#   medium 4 km: 1.3 + 0.4 = 1.7 ✓ (sample range 1.5-2.5, midpoint OK)
+#   long 6 km:   max(1.0, 1.3 - 0.15) = 1.15 ✓ (sample 1.15 long-haul)
+#
+# Doc: eod_drafts/2026-05-26/measurements.md sekcja "BUG D"
+#
+# Format: (distance_max_km_exclusive, additive_boost)
+V326_OSRM_DISTANCE_BIN_BOOST_PEAK = (
+    (2.0, 1.0),        # <2 km: +1.0 (urban centrum, lots of stops/lights)
+    (5.0, 0.4),        # 2-5 km: +0.4 (mixed)
+    (float("inf"), -0.15),  # >=5 km: -0.15 (long inter-district, OSRM ff bliski real)
+)
+
+# Default OFF — shadow-first walidacja, Adrian ACK przed LIVE flip
+ENABLE_V326_DISTANCE_BIN_TRAFFIC_BOOST = os.environ.get(
+    "ENABLE_V326_DISTANCE_BIN_TRAFFIC_BOOST", "0") == "1"
+
+
+def get_traffic_multiplier_v2(dt_utc: datetime, distance_km: float = None) -> float:
+    """V3.28+ BUG-D: per-distance-bin traffic multiplier z hour base.
+
+    Backward compatible: jeśli `distance_km is None` lub off-peak (base=1.0)
+    zwraca dokładnie `get_traffic_multiplier(dt_utc)` — identyczne zachowanie.
+
+    W peak hours (base > 1.0) dodaje additive boost z V326_OSRM_DISTANCE_BIN_BOOST_PEAK
+    według distance bucket. Floor at 1.0 (boost ujemny NIE zmniejsza poniżej free-flow).
+
+    NIE zmienia get_traffic_multiplier() — to nowa funkcja dla shadow recording
+    i (po Adrian ACK) live integration w osrm_client._apply_traffic_multiplier.
+
+    Args:
+        dt_utc: aware UTC datetime
+        distance_km: OSRM result distance (None = no distance correction, legacy path)
+
+    Returns:
+        float multiplier, floored at 1.0
+    """
+    base = get_traffic_multiplier(dt_utc)
+    if distance_km is None or base <= 1.0:
+        return base
+    for max_km, boost in V326_OSRM_DISTANCE_BIN_BOOST_PEAK:
+        if distance_km < max_km:
+            return max(1.0, base + boost)
+    return base
+
+
 # ═══════════════════════════════════════════════════════════════════
 # F2.1 Decision Engine 3.0 — EXTENSIONS to Bartek Gold Standard
 # Dodane 2026-04-15. R1-R5 (F1.9) pozostają bez zmian.

@@ -27,12 +27,14 @@ from dispatch_v2.common import (
     ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER,
     ENABLE_OSRM_COORD_GUARD,
     HAVERSINE_ROAD_FACTOR_BIALYSTOK,
+    ENABLE_V326_DISTANCE_BIN_TRAFFIC_BOOST,
     OSRM_INVALID_COORD_SENTINEL_MIN,
     OSRM_MAX_SNAP_KM,
     coords_in_bialystok_bbox,
     get_fallback_speed_kmh,
     get_time_bucket,
     get_traffic_multiplier,
+    get_traffic_multiplier_v2,
     setup_logger,
 )
 
@@ -231,9 +233,15 @@ def _apply_traffic_multiplier(result: dict, now_utc: datetime) -> dict:
         return result
     mult = get_traffic_multiplier(now_utc)
 
+    # BUG-D V3.28+ shadow: per-distance-bin multiplier (additive boost in peak)
+    distance_km = result.get("distance_km")
+    mult_v2 = get_traffic_multiplier_v2(now_utc, distance_km)
+
     # Always record shadow fields (Block 4D instrumentation 2026-04-25)
     result["osrm_raw_duration_s"] = raw_s
     result["osrm_raw_duration_min"] = round(raw_s / 60, 1)
+    # BUG-D shadow: record co BY zostalo applied gdyby v2 flag był ON
+    result["traffic_multiplier_v2_shadow"] = mult_v2
     # V3.27 latency parallel: stats updates pod RLock (concurrent dict mutation safety).
     with _module_lock:
         _osrm_stats["traffic_mult_sum"] += mult
@@ -248,9 +256,11 @@ def _apply_traffic_multiplier(result: dict, now_utc: datetime) -> dict:
         result["traffic_multiplier_shadow"] = mult
         return result
 
-    # LIVE mode: actually multiply
-    adjusted_s = raw_s * mult
-    result["traffic_multiplier"] = mult
+    # LIVE mode: BUG-D conditional — v2 jeśli flag ON, inaczej v1 (legacy)
+    applied_mult = mult_v2 if ENABLE_V326_DISTANCE_BIN_TRAFFIC_BOOST else mult
+    adjusted_s = raw_s * applied_mult
+    result["traffic_multiplier"] = applied_mult
+    result["traffic_multiplier_v1"] = mult  # legacy v1 preserved for analytics
     result["duration_s"] = round(adjusted_s, 1)
     result["duration_min"] = round(adjusted_s / 60, 1)
     return result
