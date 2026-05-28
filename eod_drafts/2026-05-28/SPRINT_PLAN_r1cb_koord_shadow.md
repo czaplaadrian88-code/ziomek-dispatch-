@@ -13,6 +13,15 @@
 
 **Owner:** SELF + częściowo AIDER (per ZIOMEK_AI_ROUTING)
 
+**STATUS 2026-05-28 ~21:30 UTC — ETAP 1 DONE (shadow LIVE):**
+- Commit `4882668`, tag `r1-cb-koord-shadow-impl-2026-05-28`, restart dispatch-shadow 2026-05-28T20:10:51 UTC.
+- 3 flagi default OFF (shadow-first): `ENABLE_R1_PROGRESSIVE_CLIP`, `ENABLE_V319H_CONTINUATION_GUARD`, `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`. 15/15 testów.
+- Deploy zweryfikowany na obu case'ach (uruchomienie deployed helperów): #476749 combined -40, #476777 combined -60. Flagi potwierdzone OFF przez live import.
+- Smoke Etap 1 zamknięty proof-of-deploy zamiast czekania na ruch (end-of-day pusto).
+- At-job #92 (29.05 12:15 UTC = 14:15 Warsaw, PO peaku lunchowym) → `report_r1cb_shadow_2026-05-29.py` wyśle shadow-delty na Telegram Adriana.
+- **Etap 3 flip (≥31.05) WYMAGA explicit ACK Adriana** — nie robić autonomicznie. Etap 4 (~07.06) A/B + decyzja o FIX-B Variant 1 (cosine-gate 0.5).
+- Lekcje #151 (replay musi mieć V3.16 demote) + #152 (flat penalty out-competed → progressive; waliduj na GOOD cases).
+
 ---
 
 ## 0. Replay summary (7d, 21-28.05, 1170 decyzji)
