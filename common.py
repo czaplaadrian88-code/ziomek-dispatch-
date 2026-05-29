@@ -1637,6 +1637,28 @@ B3_WAIT_GRADIENT_SLOPE_PER_MIN = float(
 B3_WAIT_GRADIENT_FLOOR = float(
     _os.environ.get("B3_WAIT_GRADIENT_FLOOR", "-2000.0"))
 
+# ============================================================
+# D2 (audyt 2026-05-28) — soft-degrade zamiast BRAK KANDYDATÓW gdy grafik STALE.
+# Root-cause: gdy load_schedule() zwróci pusty {} (plik zniknął + fetch fail, albo
+# JSON parse fail bez cache), dispatchable_fleet pomija mapowanie shift → cs.shift_end
+# zostaje None → feasibility Gate 1 hard-rejectuje WSZYSTKICH (NO_ACTIVE_SHIFT) →
+# BRAK KANDYDATÓW na CAŁĄ flotę z powodu awarii pliku, nie realnej niedostępności.
+# Fix: gdy grafik wykryty jako STALE (is_schedule_stale() — ten sam 30min próg co
+# shift_notifications.worker STALE_SCHEDULE_AGE alert), zamiast hard-reject NO_ACTIVE_SHIFT
+# nakładamy SOFT penalty (-75, umiarkowany) i pozwalamy kurierowi przejść feasibility —
+# degradacja zamiast total blackout. Soft signal: ranking nadal preferuje kurierów z
+# realnym shift mapping, ale awaria grafiku nie blokuje dispatchu w 100%.
+# Brak osobnego alertu dispatch — polegamy na istniejącym shift_notifications.worker
+# STALE_SCHEDULE_AGE (ten sam sygnał źródłowy). D2 tylko soft-degraduje + loguje metrykę.
+# HARD safety NIETKNIĘTE: gdy grafik ŚWIEŻY a shift_end None (realnie brak shiftu) →
+# nadal hard reject NO_ACTIVE_SHIFT (Lekcja-QA-10). Default OFF — shadow.
+# Env: ENABLE_D2_STALE_SCHEDULE_SOFT=1 / D2_STALE_SCHEDULE_SOFT_PENALTY
+# ============================================================
+ENABLE_D2_STALE_SCHEDULE_SOFT = _os.environ.get(
+    "ENABLE_D2_STALE_SCHEDULE_SOFT", "0") == "1"
+D2_STALE_SCHEDULE_SOFT_PENALTY = float(
+    _os.environ.get("D2_STALE_SCHEDULE_SOFT_PENALTY", "-75.0"))
+
 # V3.27.1 sesja 2 — Pre-proposal czas_kuriera recheck (Mechanizm 3 hybrydowy).
 # Per Adrian sesja 2 spec: dla bagu kandydata kuriera, PRZED scoring force fetch
 # fresh czas_kuriera z panel jeśli (assignment age >10 min AND last recheck >5 min).

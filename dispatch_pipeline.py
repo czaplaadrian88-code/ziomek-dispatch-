@@ -845,6 +845,7 @@ def _v326_build_rationale(best: "Candidate", feasible: list) -> dict:
         ("ext_kara", None, float(bm.get("v324a_extension_penalty") or 0)),
         ("V3.25_pre_shift", None, float(bm.get("v325_pre_shift_soft_penalty") or 0)),
         ("V3.25_new", None, float(bm.get("v325_new_courier_penalty") or 0)),
+        ("D2_stale_grafik", None, float(bm.get("d2_soft_penalty") or 0)),
     ]
     # Filter out zero contributions, sort by |contribution| desc
     nonzero = [(label, value, contrib) for (label, value, contrib) in factors if abs(contrib) > 0.01]
@@ -1785,6 +1786,7 @@ def _assess_order_impl(
             r07_chain_eta_utc=r07_chain_eta_utc,  # V3.26 STEP 6 R-07 MANDATORY when flag=True
             pos_source=getattr(cs, "pos_source", None),  # V3.28 ETAP 2 — clamp gate
             courier_tier=getattr(cs, "tier_bag", None),  # 2026-05-17 tier-aware DWELL
+            schedule_source_stale=getattr(cs, "schedule_source_stale", False),  # D2 (audyt 2026-05-28)
         )
 
         # F1.8f hard guard: kurier którego zmiana kończy się PRZED pickup_ready_at
@@ -2728,7 +2730,10 @@ def _assess_order_impl(
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
         bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch + bonus_coordinator_idle + bonus_r_paczki_flex + bonus_r_return_rest + bonus_carry_chain_penalty
+        # D2 (audyt 2026-05-28): soft penalty gdy grafik STALE (shift_end None z awarii pliku,
+        # nie realnego braku shiftu). 0 gdy flag OFF lub grafik świeży. Default OFF → shadow.
+        bonus_d2_stale_soft = float(metrics.get("d2_soft_penalty", 0) or 0)
+        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_d2_stale_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch + bonus_coordinator_idle + bonus_r_paczki_flex + bonus_r_return_rest + bonus_carry_chain_penalty
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.
@@ -3877,6 +3882,7 @@ def _assess_order_impl(
                 sla_minutes=35,
                 pos_source=getattr(cs, "pos_source", None),  # V3.28 ETAP 2 — clamp gate
                 courier_tier=getattr(cs, "tier_bag", None),  # 2026-05-17 tier-aware DWELL
+                schedule_source_stale=getattr(cs, "schedule_source_stale", False),  # D2 (audyt 2026-05-28)
             )
             if sv in ("YES", "MAYBE") and sp is not None:
                 sc = sm.get("pickup_dist_km", 999)

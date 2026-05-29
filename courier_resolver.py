@@ -116,6 +116,10 @@ class CourierState:
     # Faza 4 (D5, 2026-05-18): True gdy cs.bag został odbudowany z panel_packs
     # (orders_state miał bag pusty mimo że panel widzi kuriera z bagiem).
     bag_from_panel_packs: bool = False
+    # D2 (audyt 2026-05-28): True gdy grafik wykryty jako STALE (is_schedule_stale)
+    # w momencie budowy floty — feasibility soft-degraduje zamiast hard-reject
+    # NO_ACTIVE_SHIFT gdy shift_end None z powodu awarii pliku grafiku.
+    schedule_source_stale: bool = False
 
     def to_dict(self):
         return {
@@ -879,13 +883,19 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
     import sys as _sys
     _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
     try:
-        from schedule_utils import load_schedule, is_on_shift, match_courier
+        from schedule_utils import (load_schedule, is_on_shift, match_courier,
+                                     is_schedule_stale)
         schedule = load_schedule()
+        # D2 (audyt 2026-05-28): wykryj stale grafik RAZ (ten sam 30min próg co
+        # shift_notifications.worker). Stempel per-courier niżej → feasibility
+        # soft-degraduje zamiast hard-reject NO_ACTIVE_SHIFT przy awarii pliku.
+        _sched_stale = bool(is_schedule_stale())
     except Exception as _e:
         _log.warning(f"schedule load failed: {_e} — skip filtrowania")
         schedule = {}
         match_courier = None
         is_on_shift = None
+        _sched_stale = True  # load failed → traktuj jako stale (D2 soft-degrade)
     try:
         from dispatch_v2 import manual_overrides
         excluded = set(manual_overrides.get_excluded())
@@ -973,6 +983,7 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                         _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                                   "reason": f"pre_shift_window_miss: {reason}"})
                         continue
+        cs.schedule_source_stale = _sched_stale  # D2: stempel stale-grafik dla feasibility
         result.append(cs)
         _passed_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                 "pos_source": cs.pos_source})
