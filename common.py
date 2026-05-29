@@ -1121,6 +1121,25 @@ def drop_proximity_factor(zone1, zone2):
 BUG2_WAVE_CONTINUATION_BONUS = 30.0
 BUG2_INTERLEAVE_GATE_MIN = 10.0
 
+# ============================================================
+# C2 (audyt 2026-05-28) — decay/cap dla SILNIE ujemnego gap (stara fala).
+# bug2_wave_continuation_bonus dawał FLAT +30 dla KAŻDEGO gap<0 — kurier którego
+# free_at jest 2 min po pickup_new (mild anticipation = realna kontynuacja fali) i
+# 40 min po (stara fala: jedzenie gotowe dawno, stale pickup) dostawali identyczne
+# +30. Fix: plateau pełnego bonusu dla |gap| ≤ FULL_BONUS_MIN (mild anticipation =
+# tight wave chaining, Bartek pattern), potem liniowy decay do FLOOR_FRAC*BONUS przez
+# DECAY_SPAN_MIN. Strona DODATNIA (gap≥0, kurier czeka) NIETKNIĘTA. Default OFF — shadow.
+# Env: ENABLE_C2_NEG_GAP_DECAY=1 / C2_NEG_GAP_FULL_BONUS_MIN / C2_NEG_GAP_DECAY_SPAN_MIN
+#      / C2_NEG_GAP_FLOOR_FRAC
+# ============================================================
+ENABLE_C2_NEG_GAP_DECAY = _os.environ.get("ENABLE_C2_NEG_GAP_DECAY", "0") == "1"
+C2_NEG_GAP_FULL_BONUS_MIN = float(
+    _os.environ.get("C2_NEG_GAP_FULL_BONUS_MIN", "10.0"))
+C2_NEG_GAP_DECAY_SPAN_MIN = float(
+    _os.environ.get("C2_NEG_GAP_DECAY_SPAN_MIN", "20.0"))
+C2_NEG_GAP_FLOOR_FRAC = float(
+    _os.environ.get("C2_NEG_GAP_FLOOR_FRAC", "0.0"))
+
 # FIX 1 (2026-05-22): licz interleave gap z REALNEGO zaplanowanego odbioru TSP
 # (plan.pickup_at[new]) zamiast z gotowości jedzenia. Elastyk gotowy wcześnie →
 # ready-time daje gap ~zawsze ujemny → phantom +30 dla DRUGIEJ FALI (kurier fizycznie
@@ -1182,14 +1201,25 @@ def bug2_wave_continuation_bonus(gap_min):
     """V3.19h BUG-2: compute bonus from interleave gap_min.
 
     gap_min: float (pickup_new - free_at_dt) w minutach. None → 0.
-      < 0 → full bonus (anticipation — pickup przed last drop)
+      < 0 → anticipation (pickup przed last drop):
+            C2 OFF (default) → full bonus FLAT (legacy)
+            C2 ON → plateau full bonus dla |gap|≤FULL_BONUS_MIN, potem decay
+                    (stara fala / stale pickup nie dostaje pełnego +30)
       0-10 inclusive → linear decay (0 → 30, 10 → 0)
       > 10 → 0
     """
     if gap_min is None:
         return 0.0
     if gap_min < 0:
-        return BUG2_WAVE_CONTINUATION_BONUS
+        if ENABLE_C2_NEG_GAP_DECAY:
+            over = -gap_min  # magnituda antycypacji (jak bardzo pickup wyprzedza free_at)
+            if over <= C2_NEG_GAP_FULL_BONUS_MIN:
+                return BUG2_WAVE_CONTINUATION_BONUS  # mild anticipation = realna fala
+            frac = min(
+                (over - C2_NEG_GAP_FULL_BONUS_MIN) / C2_NEG_GAP_DECAY_SPAN_MIN, 1.0)
+            return BUG2_WAVE_CONTINUATION_BONUS * (
+                1.0 - frac * (1.0 - C2_NEG_GAP_FLOOR_FRAC))
+        return BUG2_WAVE_CONTINUATION_BONUS  # legacy flat (flag OFF)
     if gap_min <= BUG2_INTERLEAVE_GATE_MIN:
         return BUG2_WAVE_CONTINUATION_BONUS * (
             1.0 - gap_min / BUG2_INTERLEAVE_GATE_MIN
