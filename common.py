@@ -1588,6 +1588,25 @@ V327_WAIT_PENALTY_TABLE = [
 ]
 V327_WAIT_PENALTY_HARD_FALLBACK = -1000.0  # safety net dla wait > 60min (poza tabelą)
 
+# ============================================================
+# B3 (audyt 2026-05-28) — ciągły gradient zamiast sentinela -1000 dla wait>60min.
+# Root-cause: nieciągłość -700 (tabela @60) → -1000 (sentinel @60.001) destabilizuje
+# ranking blisko progu; flat -1000 dla CAŁEGO wait>60 gubi dyskryminację (61min ==
+# 200min ten sam score). Fix: kontynuuj gradient z ostatniego punktu tabeli (-700 @60)
+# stromym, CIĄGŁYM nachyleniem do twardego floora. Continuity @60 = -700 (zero klifu).
+# slope -40/min: stromiej niż finalny segment tabeli (-30/min @50→60) → zachowuje
+# wypukłość (akceleracja kary). floor -2000: decydowanie gorszy niż każda wartość w
+# tabeli, ale skończony (nie -inf — to wciąż SOFT scoring signal, nie hard reject).
+# HARD safety NIETKNIĘTE: compute_wait_courier_penalty 20min reject + s_obciazenie
+# bag-cap→0 zostają (Lekcja-QA-10: binary tylko dla HARD safety). Default OFF — shadow.
+# Env: ENABLE_B3_WAIT_GRADIENT=1 / B3_WAIT_GRADIENT_SLOPE_PER_MIN / B3_WAIT_GRADIENT_FLOOR
+# ============================================================
+ENABLE_B3_WAIT_GRADIENT = _os.environ.get("ENABLE_B3_WAIT_GRADIENT", "0") == "1"
+B3_WAIT_GRADIENT_SLOPE_PER_MIN = float(
+    _os.environ.get("B3_WAIT_GRADIENT_SLOPE_PER_MIN", "-40.0"))
+B3_WAIT_GRADIENT_FLOOR = float(
+    _os.environ.get("B3_WAIT_GRADIENT_FLOOR", "-2000.0"))
+
 # V3.27.1 sesja 2 — Pre-proposal czas_kuriera recheck (Mechanizm 3 hybrydowy).
 # Per Adrian sesja 2 spec: dla bagu kandydata kuriera, PRZED scoring force fetch
 # fresh czas_kuriera z panel jeśli (assignment age >10 min AND last recheck >5 min).

@@ -85,9 +85,17 @@ def compute_wait_penalty(wait_min: float) -> float:
     # Below first table entry → sweet spot, zero penalty
     if wait_min <= table[0][0]:
         return 0.0
-    # Powyżej OSTATNIEGO entry (>60min) → hard fallback safety net.
+    # Powyżej OSTATNIEGO entry (>60min):
+    #   B3 flag OFF (default) → legacy hard fallback sentinel -1000 (flat).
+    #   B3 flag ON → ciągły gradient z ostatniego punktu tabeli (continuity @60min
+    #     = -700, zero klifu -700→-1000) stromym nachyleniem do twardego floora;
+    #     zachowuje monotoniczność i dyskryminację dla wait>60 (61min != 200min).
     # wait_min == 60 trafia do interpolation loop i otrzymuje exact table value -700.
     if wait_min > table[-1][0]:
+        if _common.ENABLE_B3_WAIT_GRADIENT:
+            last_x, last_y = table[-1]  # (60.0, -700.0)
+            val = last_y + _common.B3_WAIT_GRADIENT_SLOPE_PER_MIN * (wait_min - last_x)
+            return max(val, _common.B3_WAIT_GRADIENT_FLOOR)
         return float(_common.V327_WAIT_PENALTY_HARD_FALLBACK)
     # Linear interpolacja między najbliższymi punktami
     for i in range(len(table) - 1):
