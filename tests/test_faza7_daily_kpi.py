@@ -283,3 +283,125 @@ def test_readiness_auto_precision_blocks():
     r4 = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi)
     assert not r4["auto_precision_above_95pct"]
     assert r4["auto_precision_status"] == "insufficient_data"
+
+
+# ──────────────────────── G2: KPI-log + Telegram digest ──────────────────
+
+
+def test_default_backfill_in_dispatch_state():
+    """G2 opcja 2: backfill input przeniesiony z /tmp → dispatch_state (persistent)."""
+    assert KPI.DEFAULT_BACKFILL == "/root/.openclaw/workspace/dispatch_state/backfill_decisions_outcomes_v1.jsonl"
+    assert KPI.DEFAULT_KPI_LOG == "/root/.openclaw/workspace/dispatch_state/faza7_kpi_log.jsonl"
+
+
+def test_enriched_last_at():
+    rows = [
+        {"order_id": "a", "enriched_at": "2026-05-27T10:00:00+00:00"},
+        {"order_id": "b", "enriched_at": "2026-05-28T09:00:00+00:00"},  # latest
+        {"order_id": "c", "enriched_at": "2026-05-26T23:59:00+00:00"},
+        {"order_id": "d"},  # brak enriched_at → ignorowany
+    ]
+    assert KPI._enriched_last_at(rows) == "2026-05-28T09:00:00+00:00"
+    assert KPI._enriched_last_at([]) is None
+
+
+def _readiness_pass():
+    return KPI.faza7_readiness(
+        {"7d": {"rate": 0.55}}, {"median_bias_min": 5.0}, {"dinner": {"rate": 0.10}},
+        {"AUTO": {"n_joined": 40, "agreement_rate": 0.97}},
+    )
+
+
+def test_build_kpi_log_record_keys_and_values():
+    auto_prec = {"AUTO": {"n_joined": 40, "agreement_rate": 0.97}}
+    readiness = _readiness_pass()
+    rec = KPI.build_kpi_log_record(
+        "2026-05-29", {"7d": {"rate": 0.55}}, {"median_bias_min": 5.0},
+        {"dinner": {"rate": 0.10}}, auto_prec, readiness, "2026-05-28T09:00:00+00:00",
+    )
+    assert rec["date"] == "2026-05-29"
+    assert rec["override_7d"] == 0.55
+    assert rec["calib_bias_min"] == 5.0
+    assert rec["kk_dinner_rate"] == 0.10
+    assert rec["auto_agreement"] == 0.97
+    assert rec["auto_n_joined"] == 40
+    assert rec["auto_status"] == "ok"
+    assert rec["all_pass"] is True
+    assert rec["enriched_last_at"] == "2026-05-28T09:00:00+00:00"
+    assert "generated_at" in rec  # zawsze obecne (świeżość runu)
+
+
+def test_build_kpi_log_record_handles_empty_auto():
+    """auto_prec_kpi bez AUTO (np. None) → agreement/n_joined defaultują bez wyjątku."""
+    readiness = KPI.faza7_readiness(
+        {"7d": {"rate": 0.55}}, {"median_bias_min": 5.0}, {"dinner": {"rate": 0.10}})
+    rec = KPI.build_kpi_log_record(
+        "2026-05-29", {"7d": {"rate": 0.55}}, {"median_bias_min": 5.0},
+        {"dinner": {"rate": 0.10}}, None, readiness, None)
+    assert rec["auto_agreement"] is None
+    assert rec["auto_n_joined"] == 0
+    assert rec["enriched_last_at"] is None
+
+
+def test_append_kpi_log_roundtrip(tmp_path):
+    p = tmp_path / "kpi_log.jsonl"
+    KPI.append_kpi_log(str(p), {"date": "2026-05-28", "all_pass": False})
+    KPI.append_kpi_log(str(p), {"date": "2026-05-29", "all_pass": True})
+    lines = p.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2  # append-only, NIE rewrite
+    assert json.loads(lines[0])["date"] == "2026-05-28"
+    assert json.loads(lines[1])["all_pass"] is True
+
+
+def test_build_telegram_digest_not_ready():
+    auto_prec = {"AUTO": {"n_joined": 14, "agreement_rate": 0.214}}
+    readiness = KPI.faza7_readiness(
+        {"7d": {"rate": 0.78}}, {"median_bias_min": 6.6}, {"dinner": {"rate": 0.276}}, auto_prec)
+    rec = KPI.build_kpi_log_record(
+        "2026-05-29", {"7d": {"rate": 0.78}}, {"median_bias_min": 6.6},
+        {"dinner": {"rate": 0.276}}, auto_prec, readiness, "2026-05-28T09:00:00+00:00")
+    txt = KPI.build_telegram_digest(rec, readiness, auto_prec)
+    assert "Faza 7 KPI — 2026-05-29" in txt
+    assert "Override 7d: 78.0%" in txt
+    assert "AUTO agree: 21.4% n=14" in txt
+    assert "Enriched GT: ostatni 2026-05-28T09:00:00+00:00" in txt
+    assert "NOT READY" in txt
+    assert "✗" in txt  # przynajmniej jedna bramka czerwona
+
+
+def test_build_telegram_digest_ready_and_frozen_enriched():
+    auto_prec = {"AUTO": {"n_joined": 40, "agreement_rate": 0.97}}
+    readiness = _readiness_pass()
+    rec = KPI.build_kpi_log_record(
+        "2026-05-29", {"7d": {"rate": 0.55}}, {"median_bias_min": 5.0},
+        {"dinner": {"rate": 0.10}}, auto_prec, readiness, None)
+    txt = KPI.build_telegram_digest(rec, readiness, auto_prec)
+    assert "READY" in txt
+    assert "Enriched GT: ostatni —" in txt  # brak enriched → widoczny myślnik (Z2)
+
+
+def test_cli_appends_kpi_log_without_telegram(tmp_path, fake_rows):
+    """main() bez --telegram: pisze JSONL record, NIE wysyła digestu."""
+    bf = tmp_path / "bf.jsonl"
+    bf.write_text("\n".join(json.dumps(r) for r in fake_rows))
+    kpi_log = tmp_path / "kpi_log.jsonl"
+    rc = KPI.main([
+        "--date", "2026-05-27",
+        "--out", str(tmp_path / "kpi.md"),
+        "--backfill", str(bf),
+        "--drive-log", str(tmp_path / "nope.jsonl"),
+        "--enriched-log", str(tmp_path / "nope.jsonl"),
+        "--whitelist", str(tmp_path / "nope.json"),
+        "--tiers", str(tmp_path / "nope.json"),
+        "--names", str(tmp_path / "nope.json"),
+        "--kpi-log", str(kpi_log),
+        "--quiet",
+    ])
+    assert rc == 0
+    assert kpi_log.exists()
+    lines = kpi_log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["date"] == "2026-05-27"
+    assert "all_pass" in rec
+    assert "enriched_last_at" in rec

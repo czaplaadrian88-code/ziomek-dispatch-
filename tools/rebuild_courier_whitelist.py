@@ -44,7 +44,8 @@ from pathlib import Path
 
 # ── domyślne ścieżki (env-overridable dla testów) ───────────────────────
 DEFAULT_BACKFILL = os.environ.get(
-    "FAZA7_BACKFILL_PATH", "/tmp/backfill_decisions_outcomes_v1.jsonl"
+    "FAZA7_BACKFILL_PATH",
+    "/root/.openclaw/workspace/dispatch_state/backfill_decisions_outcomes_v1.jsonl",  # G2: /tmp → dispatch_state
 )
 DEFAULT_LOAD = os.environ.get(
     "FAZA7_LOAD_PATH", "/tmp/courier_load_per_day.json"

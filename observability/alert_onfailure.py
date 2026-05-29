@@ -100,6 +100,13 @@ _UNIT_METADATA = {
         "type": "cron_timer",
         "expected_max_silence_h": 25.0,
     },
+    "dispatch-faza7-kpi.service": {
+        "severity": "P2",
+        "playbook": "G2 Faza 7 daily KPI — 04:00 UTC=06:00 Warsaw. ExecStartPre regeneruje backfill (read-only), ExecStart liczy bramki + digest Telegram.",
+        "hint": "exit 2 = brak backfillu (ExecStartPre padł — sprawdź backfill_decisions_outcomes). Zamarznięta linia 'Enriched GT' w digescie = martwy shadow-enricher.",
+        "type": "cron_timer",
+        "expected_max_silence_h": 25.0,
+    },
     "dispatch-state-reconcile.service": {
         "severity": "P2",
         "playbook": "Reconciliation worker — periodic ghost detection",

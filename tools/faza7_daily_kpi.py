@@ -36,7 +36,10 @@ from zoneinfo import ZoneInfo
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 
-DEFAULT_BACKFILL = "/tmp/backfill_decisions_outcomes_v1.jsonl"
+# G2 (2026-05-29): /tmp → dispatch_state (opcja 2, ACK Adrian). /tmp ephemeral →
+# po czyszczeniu daily timer dawałby exit 2 + fałszywy OnFailure Telegram. Producent
+# (backfill_decisions_outcomes) regenerowany w ExecStartPre timera na tę samą ścieżkę.
+DEFAULT_BACKFILL = "/root/.openclaw/workspace/dispatch_state/backfill_decisions_outcomes_v1.jsonl"
 DEFAULT_DRIVE_CAL_LOG = (
     "/root/.openclaw/workspace/dispatch_state/drive_min_calibration_log_v2.jsonl"
 )
@@ -52,6 +55,9 @@ DEFAULT_NAMES = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
 DEFAULT_WHITELIST = (
     "/root/.openclaw/workspace/dispatch_state/courier_whitelist_v1.json"
 )
+# G2 (2026-05-29): historyczny log readiness (1 wiersz JSONL / dzienny run) — trend
+# bramek over time; źródło dla przyszłego „ile dni z rzędu READY" pre-flip gate.
+DEFAULT_KPI_LOG = "/root/.openclaw/workspace/dispatch_state/faza7_kpi_log.jsonl"
 
 R6_LIMIT_MIN = 35.0
 KEBAB_KROL_RID = 484  # rid Kebab Król w panelu (Q1v2 Agent 2 + kebab_krol_diagnostic.md)
@@ -647,6 +653,90 @@ def render_md(date_str: str, override_kpi, r6_kpi, top_wl, drive_kpi, kk_kpi, re
     return "\n".join(lines)
 
 
+# ──────────────────────── G2: readiness log + Telegram digest ───────────
+def _cal_metric(drive_kpi: dict):
+    """Ten sam fallback co faza7_readiness: empirical median_bias_min → offset."""
+    m = (drive_kpi or {}).get("median_bias_min")
+    if m is None:
+        m = (drive_kpi or {}).get("median_offset_min")
+    return m
+
+
+def _enriched_last_at(enriched_rows: list):
+    """Max enriched_at — sygnał świeżości ground-truth. Jeśli enricher umrze, ta
+    data przestaje się ruszać → widoczne w digescie/logu (Z2 never-silent)."""
+    last = None
+    for d in enriched_rows:
+        ts = d.get("enriched_at")
+        if ts and (last is None or ts > last):
+            last = ts
+    return last
+
+
+def build_kpi_log_record(date_str, override_kpi, drive_kpi, kk_kpi, auto_prec_kpi,
+                         readiness, enriched_last) -> dict:
+    auto = (auto_prec_kpi or {}).get("AUTO") or {}
+    return {
+        "date": date_str,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "override_7d": override_kpi.get("7d", {}).get("rate"),
+        "calib_bias_min": _cal_metric(drive_kpi),
+        "kk_dinner_rate": (kk_kpi.get("dinner") or {}).get("rate"),
+        "auto_agreement": auto.get("agreement_rate"),
+        "auto_n_joined": auto.get("n_joined", 0),
+        "auto_status": readiness.get("auto_precision_status"),
+        "all_pass": readiness.get("all_pass"),
+        "enriched_last_at": enriched_last,
+    }
+
+
+def append_kpi_log(path: str, record: dict) -> None:
+    """Append-only JSONL (1 wiersz / run) — log historyczny, NIE rewrite (open 'a' + fsync)."""
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def build_telegram_digest(record: dict, readiness: dict, auto_prec_kpi: dict) -> str:
+    """Kompaktowy digest Telegram (mobile-readable). Pokazuje 4 bramki + freshness
+    enriched. Linia „Enriched GT" = sygnał Z2: zamarznięta data → martwy enricher."""
+    def g(ok):
+        return "✓" if ok else "✗"
+
+    auto = (auto_prec_kpi or {}).get("AUTO") or {}
+    ov = record.get("override_7d")
+    cb = record.get("calib_bias_min")
+    kk = record.get("kk_dinner_rate")
+    ar = auto.get("agreement_rate")
+    ov_s = f"{ov*100:.1f}%" if ov is not None else "—"
+    cb_s = f"{cb:+.1f}min" if cb is not None else "—"
+    kk_s = f"{kk*100:.1f}%" if kk is not None else "—"
+    ar_s = f"{ar*100:.1f}%" if ar is not None else "—"
+    lines = [
+        f"📊 Faza 7 KPI — {record['date']}",
+        f"Override 7d: {ov_s} (gate <60% {g(readiness['override_7d_below_60pct'])})",
+        f"Calib bias: {cb_s} (gate <10 {g(readiness['calibration_bias_below_10min'])})",
+        f"KK dinner: {kk_s} (gate <15% {g(readiness['kk_dinner_breach_below_15pct'])})",
+        (f"AUTO agree: {ar_s} n={auto.get('n_joined', 0)} (gate ≥95% "
+         f"n≥{MIN_AUTO_PRECISION_N} → {readiness.get('auto_precision_status')} "
+         f"{g(readiness['auto_precision_above_95pct'])})"),
+        f"Enriched GT: ostatni {record.get('enriched_last_at') or '—'}",
+        f"➡ {'READY ✅' if readiness['all_pass'] else 'NOT READY'}",
+    ]
+    return "\n".join(lines)
+
+
+def _send_digest(text: str) -> bool:
+    """Defensive — never raises. telegram_utils ma guard PYTEST_CURRENT_TEST (test-safe)."""
+    try:
+        from dispatch_v2 import telegram_utils
+        return telegram_utils.send_admin_alert(text)
+    except Exception as e:
+        print(f"[faza7_kpi] Telegram digest send failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return False
+
+
 # ──────────────────────── main / CLI ────────────────────────────────────
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
@@ -672,6 +762,10 @@ def main(argv=None) -> int:
     parser.add_argument("--tiers", default=DEFAULT_TIERS)
     parser.add_argument("--names", default=DEFAULT_NAMES)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--kpi-log", default=DEFAULT_KPI_LOG,
+                        help="Append-only JSONL z dziennym rekordem KPI (historia gate'ów).")
+    parser.add_argument("--telegram", action="store_true",
+                        help="Wyślij kompaktowy digest na Telegram (daily timer ON; smoke OFF).")
     args = parser.parse_args(argv)
 
     if args.date:
@@ -713,6 +807,14 @@ def main(argv=None) -> int:
 
     md = render_md(date_str, override_kpi, r6_kpi, top_wl, drive_kpi, kk_kpi, readiness, tiers, names, auto_prec_kpi)
     _atomic_write(out_path, md)
+
+    # G2 (2026-05-29): historia + digest. Log append-only ZAWSZE; Telegram tylko z --telegram.
+    enriched_last = _enriched_last_at(enriched_rows)
+    record = build_kpi_log_record(date_str, override_kpi, drive_kpi, kk_kpi,
+                                  auto_prec_kpi, readiness, enriched_last)
+    append_kpi_log(args.kpi_log, record)
+    if args.telegram:
+        _send_digest(build_telegram_digest(record, readiness, auto_prec_kpi))
 
     if not args.quiet:
         print(f"Wrote: {out_path}")
