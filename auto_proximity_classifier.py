@@ -221,6 +221,7 @@ def _maybe_apply_drive_min_calibration(
     order_id: Optional[str],
     courier_id: Optional[str],
     tier: Optional[str],
+    emit_shadow_log: bool = True,
 ) -> Dict[str, Any]:
     """Apply calibration do metrics["drive_min"] gdy flag ON. Always shadow-log.
 
@@ -263,7 +264,7 @@ def _maybe_apply_drive_min_calibration(
         # Substytucja main path — downstream consumer (telegram, score) zobaczy calibrated.
         enriched["drive_min"] = debug["calibrated_drive_min"]
 
-    if enable_shadow:
+    if enable_shadow and emit_shadow_log:
         ts_iso = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
         log_entry = {
             "ts": ts_iso,
@@ -290,6 +291,7 @@ def _build_context(
     order_event: Optional[Dict[str, Any]],
     flags: Dict[str, Any],
     now: Optional[datetime] = None,
+    emit_calibration_shadow: bool = False,
 ) -> ClassifierContext:
     """Extract pure-data context from PipelineResult + fleet — single allocation."""
     candidates = result.candidates or []
@@ -339,6 +341,9 @@ def _build_context(
         order_id=getattr(result, "order_id", None),
         courier_id=getattr(best, "courier_id", None),
         tier=tier,
+        # G5: _build_context jest wołany 2× per order (classify_auto_route +
+        # build_context_for_logging) — shadow-log tylko z realnej ścieżki, by nie dublować.
+        emit_shadow_log=emit_calibration_shadow,
     )
 
     pos_source = metrics.get("pos_source") or (getattr(cs, "pos_source", "none") if cs else "none")
@@ -504,7 +509,8 @@ def classify_auto_route(
     if getattr(result, "best", None) is None:
         return ROUTE_ACK, "no_best_candidate"
 
-    ctx = _build_context(result, fleet_snapshot, order_event, flags, now=now)
+    ctx = _build_context(result, fleet_snapshot, order_event, flags, now=now,
+                         emit_calibration_shadow=True)
 
     # F4 (2026-05-24): słaby pick (ujemny score) → ALERT zamiast "sensowny wybór".
     weak_pick_floor: Optional[float] = None
@@ -562,7 +568,10 @@ def build_context_for_logging(
             "auto_route_tier_best": None,
             "auto_route_pos_source_best": None,
         }
-    ctx = _build_context(result, fleet_snapshot or {}, order_event, flags, now=None)
+    # G5: telemetria — NIE loguj calibration shadow (realna ścieżka classify_auto_route
+    # już zalogowała ten order z poprawnym now/peak_window).
+    ctx = _build_context(result, fleet_snapshot or {}, order_event, flags, now=None,
+                         emit_calibration_shadow=False)
     return {
         "auto_route_pool_feasible": ctx.pool_feasible_count,
         "auto_route_pool_total": ctx.pool_total_count,

@@ -19,6 +19,8 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -226,6 +228,51 @@ def test_maybe_apply_flag_off_with_shadow_on_logs_entry():
             assert entries[0]["calibrated_drive_min"] == 16.5
             assert entries[0]["offset_applied"] == 6.5
             assert entries[0]["main_path_active"] is False
+        finally:
+            os.environ.pop("DRIVE_MIN_CALIBRATION_SHADOW_LOG_PATH", None)
+
+
+def test_calibration_shadow_logged_once_not_duplicated_by_logging_path():
+    """G5 (2026-05-29): `_build_context` jest wołany 2× per zlecenie —
+    `classify_auto_route` (realna ścieżka, now=real) ORAZ `build_context_for_logging`
+    (telemetria, now=None). Przed fixem każde zlecenie generowało 2 wpisy calibration
+    shadow (drugi z peak_window=False bo now=None) → korupcja datasetu kalibracji.
+    Po fixie: log TYLKO z realnej ścieżki → dokładnie 1 wpis."""
+    with tempfile.TemporaryDirectory() as td:
+        log_path = _isolated_shadow_log(td)
+        try:
+            best = SimpleNamespace(
+                courier_id="C7", score=50.0, feasibility_verdict="MAYBE",
+                plan=SimpleNamespace(sla_violations=0),
+                metrics={"drive_min": 10.0, "pos_source": "no_gps"},
+                best_effort=False,
+            )
+            r = SimpleNamespace(
+                verdict="PROPOSE", best=best, candidates=[best],
+                pool_feasible_count=1, pool_total_count=6, order_id="ORD-DEDUP",
+                pickup_ready_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+            )
+            fleet = {"C7": SimpleNamespace(
+                tier_bag="gold", pos_source="no_gps",
+                shift_end=datetime.now(timezone.utc) + timedelta(hours=2),
+                shift_start=datetime.now(timezone.utc) - timedelta(hours=4),
+            )}
+            flags = {
+                "AUTO_PROXIMITY_SHADOW_ONLY": True,
+                "ENABLE_DRIVE_MIN_CALIBRATION_V2_SHADOW": True,
+            }
+            # 10:30 UTC = 12:30 Warsaw (CEST +2) → peak window True na realnej ścieżce.
+            peak_now = datetime(2026, 5, 29, 10, 30, tzinfo=timezone.utc)
+
+            apc.classify_auto_route(result=r, fleet_snapshot=fleet, now=peak_now, flags=flags)
+            apc.build_context_for_logging(result=r, fleet_snapshot=fleet, flags=flags)
+
+            with open(log_path) as f:
+                entries = [json.loads(line) for line in f]
+            assert len(entries) == 1                      # NIE 2 — telemetria nie dubluje
+            assert entries[0]["order_id"] == "ORD-DEDUP"
+            # Jedyny wpis pochodzi z realnej ścieżki (now=real → peak True), nie z now=None.
+            assert entries[0]["peak_window"] is True
         finally:
             os.environ.pop("DRIVE_MIN_CALIBRATION_SHADOW_LOG_PATH", None)
 
