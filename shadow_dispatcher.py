@@ -674,6 +674,86 @@ def _append_decision(path: str, record: dict) -> None:
     append_jsonl(path, record)
 
 
+def _probe_age_s(iso_val, now: datetime) -> Optional[float]:
+    """Wiek (s) timestampu ISO względem now. None gdy brak/nieparsowalny."""
+    if not iso_val:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(iso_val).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (now - dt).total_seconds()
+    except Exception:
+        return None
+
+
+def _probe_same_restaurant_race(oid, result: "PipelineResult", fleet: Dict,
+                                state_all: dict) -> None:
+    """SHADOW probe (logging-only, 2026-05-29) — race Baanko-type.
+
+    Gdy nowe zlecenie z restauracji R jest scorowane, a w ostatnich ~120 s
+    pojawił się/został przypisany INNY order z R, loguje DOKŁADNY stan: czy
+    świeży sibling był widoczny w bagu swojego kuriera w chwili decyzji.
+    Cel: rozstrzygnąć orphan-drop (assigned ale courier_id=None / nie w bagu)
+    vs visible-but-not-proposed (w bagu kuriera, kurier w puli, ale nie best —
+    czyli filtr/scoring, nie wyścig danych). ZERO wpływu na decyzję.
+    Flaga `ENABLE_SAME_RESTAURANT_RACE_PROBE` (flags.json, hot-reload)."""
+    try:
+        if not C.flag("ENABLE_SAME_RESTAURANT_RACE_PROBE", True):
+            return
+        new_rest = getattr(result, "restaurant", None)
+        if not new_rest:
+            return
+        rkey = str(new_rest).strip().lower()
+        best = getattr(result, "best", None)
+        best_cid = str(getattr(best, "courier_id", "") or "") if best is not None else ""
+        now = datetime.now(timezone.utc)
+        WINDOW_S = 120.0
+        sibs = []
+        for soid, o in state_all.items():
+            if str(soid) == str(oid) or not isinstance(o, dict):
+                continue
+            if str(o.get("restaurant") or "").strip().lower() != rkey:
+                continue
+            fs_age = _probe_age_s(o.get("first_seen"), now)
+            as_age = _probe_age_s(o.get("assigned_at"), now)
+            recent = (fs_age is not None and fs_age <= WINDOW_S) or \
+                     (as_age is not None and as_age <= WINDOW_S)
+            if not recent:
+                continue
+            scid = str(o.get("courier_id") or "")
+            cs = fleet.get(scid) if scid else None
+            in_bag = bool(cs and any(
+                str(b.get("order_id")) == str(soid) for b in getattr(cs, "bag", [])))
+            sibs.append({
+                "oid": str(soid),
+                "status": o.get("status"),
+                "cid": scid or None,
+                "assigned_age_s": round(as_age, 1) if as_age is not None else None,
+                "first_seen_age_s": round(fs_age, 1) if fs_age is not None else None,
+                "courier_in_fleet": cs is not None,
+                "sibling_in_courier_bag": in_bag,
+                "courier_pos_source": getattr(cs, "pos_source", None) if cs else None,
+                "courier_bag_size": len(getattr(cs, "bag", [])) if cs else None,
+            })
+        if not sibs:
+            return
+        orphan = any(
+            s["status"] in ("assigned", "picked_up")
+            and (s["cid"] is None or not s["sibling_in_courier_bag"])
+            for s in sibs)
+        visible_not_proposed = any(
+            s["cid"] and s["sibling_in_courier_bag"] and s["cid"] != best_cid
+            for s in sibs)
+        _log.info(
+            "SAME_REST_RACE_PROBE oid=%s rest=%r best_cid=%s orphan=%s "
+            "visible_not_proposed=%s sibs=%s"
+            % (oid, new_rest, best_cid, orphan, visible_not_proposed,
+               json.dumps(sibs, ensure_ascii=False)))
+    except Exception as _e:
+        _log.warning(f"SAME_REST_RACE_PROBE fail oid={oid}: {_e}")
+
+
 def process_event(
     event: dict,
     fleet: Dict,
@@ -758,6 +838,11 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
                     continue
 
             result = process_event(ev, fleet, meta)
+
+            # SHADOW probe (2026-05-29) — race Baanko-type same-restaurant.
+            # Logging-only, flag-gated, try/except wewnątrz — NIGDY nie wywróci
+            # dispatchu. Diagnoza orphan-drop vs visible-but-filtered.
+            _probe_same_restaurant_race(oid, result, fleet, state_all)
 
             # Rolling late-binding Faza 0 (2026-05-18): zasilenie puli pending.
             # Flag-gated, defensywne — NIGDY nie wywróci shadow dispatchu.
