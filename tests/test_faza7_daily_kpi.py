@@ -122,7 +122,7 @@ def test_readiness_all_pass():
     override_kpi = {"7d": {"rate": 0.55}}
     drive_kpi = {"median_cal_bias": 5.0}
     kk_kpi = {"dinner": {"rate": 0.10}}
-    r = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi)
+    r = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi, {"AUTO": {"n_joined": 40, "agreement_rate": 0.97}})
     assert r["all_pass"]
 
 
@@ -130,7 +130,7 @@ def test_readiness_override_blocks():
     override_kpi = {"7d": {"rate": 0.78}}  # baseline, blocks
     drive_kpi = {"median_cal_bias": 5.0}
     kk_kpi = {"dinner": {"rate": 0.10}}
-    r = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi)
+    r = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi, {"AUTO": {"n_joined": 40, "agreement_rate": 0.97}})
     assert not r["all_pass"]
     assert not r["override_7d_below_60pct"]
 
@@ -140,7 +140,7 @@ def test_readiness_calib_soft_pass_when_missing():
     override_kpi = {"7d": {"rate": 0.55}}
     drive_kpi = {"median_offset_min": None}
     kk_kpi = {"dinner": {"rate": 0.10}}
-    r = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi)
+    r = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi, {"AUTO": {"n_joined": 40, "agreement_rate": 0.97}})
     assert r["calibration_bias_below_10min"]
 
 
@@ -182,6 +182,7 @@ def test_cli_writes_output(tmp_path, fake_rows):
         "--out", str(out),
         "--backfill", str(bf),
         "--drive-log", str(tmp_path / "nope.jsonl"),
+        "--enriched-log", str(tmp_path / "nope.jsonl"),
         "--whitelist", str(tmp_path / "nope.json"),
         "--tiers", str(tmp_path / "nope.json"),
         "--names", str(tmp_path / "nope.json"),
@@ -194,4 +195,91 @@ def test_cli_writes_output(tmp_path, fake_rows):
     assert "Override rate" in content
     assert "R6 breach" in content
     assert "Kebab Król" in content
+    assert "AUTO agreement" in content
     assert "readiness gate" in content
+
+
+def test_auto_route_precision_join(now):
+    """Join backfill auto_route ⋈ enriched ground truth po order_id."""
+    backfill = []
+    for oid in ("a1", "a2", "a3"):  # 3 AUTO orders
+        backfill.append({"order_id": oid, "decision_ts": _ts(now, days=1),
+                         "auto_route": "AUTO", "proposed_courier_id": "100"})
+    for oid in ("k1", "k2"):  # 2 ACK orders
+        backfill.append({"order_id": oid, "decision_ts": _ts(now, days=1),
+                         "auto_route": "ACK", "proposed_courier_id": "200"})
+    enriched = [
+        {"order_id": "a1", "predicted": {"courier_id": "100"},
+         "actual": {"applied_courier_id": "100", "kurier_overridden": False}},  # hit
+        {"order_id": "a2", "predicted": {"courier_id": "100"},
+         "actual": {"applied_courier_id": "555", "kurier_overridden": True}},   # miss
+        # a3 brak w enriched → unjoined
+        {"order_id": "k1", "predicted": {"courier_id": "200"},
+         "actual": {"applied_courier_id": "200", "kurier_overridden": False}},  # hit
+        {"order_id": "k2", "predicted": {"courier_id": "200"},
+         "actual": {"applied_courier_id": "777", "kurier_overridden": True}},   # miss
+    ]
+    k = KPI.kpi_auto_route_precision(backfill, enriched, now)
+    assert k["AUTO"]["n_verdict_orders"] == 3
+    assert k["AUTO"]["n_joined"] == 2
+    assert k["AUTO"]["n_unjoined"] == 1
+    assert k["AUTO"]["hit"] == 1
+    assert k["AUTO"]["miss"] == 1
+    assert k["AUTO"]["agreement_rate"] == 0.5
+    assert k["ACK"]["n_joined"] == 2
+    assert k["ACK"]["hit"] == 1
+    assert k["ACK"]["agreement_rate"] == 0.5
+    assert k["ALERT"]["n_verdict_orders"] == 0
+    assert k["ALERT"]["agreement_rate"] is None
+
+
+def test_auto_route_precision_skips_unresolved(now):
+    """Enriched bez applied_courier_id (np. niedostarczone) → nie liczy się jako hit/miss."""
+    backfill = [{"order_id": "x1", "decision_ts": _ts(now, days=1), "auto_route": "AUTO"}]
+    enriched = [{"order_id": "x1", "predicted": {"courier_id": "1"},
+                 "actual": {"applied_courier_id": None, "kurier_overridden": None}}]
+    k = KPI.kpi_auto_route_precision(backfill, enriched, now)
+    assert k["AUTO"]["n_verdict_orders"] == 1
+    assert k["AUTO"]["n_joined"] == 0
+    assert k["AUTO"]["agreement_rate"] is None
+
+
+def test_auto_route_precision_overridden_none_falls_back(now):
+    """Brak flagi kurier_overridden → wyliczenie z predicted vs applied courier."""
+    backfill = [
+        {"order_id": "p1", "decision_ts": _ts(now, days=1), "auto_route": "AUTO"},
+        {"order_id": "p2", "decision_ts": _ts(now, days=1), "auto_route": "AUTO"},
+    ]
+    enriched = [
+        {"order_id": "p1", "predicted": {"courier_id": "9"},
+         "actual": {"applied_courier_id": "9"}},   # hit (equal, no flag)
+        {"order_id": "p2", "predicted": {"courier_id": "9"},
+         "actual": {"applied_courier_id": "8"}},   # miss (differ, no flag)
+    ]
+    k = KPI.kpi_auto_route_precision(backfill, enriched, now)
+    assert k["AUTO"]["hit"] == 1
+    assert k["AUTO"]["miss"] == 1
+
+
+def test_readiness_auto_precision_blocks():
+    override_kpi = {"7d": {"rate": 0.55}}
+    drive_kpi = {"median_bias_min": 5.0}
+    kk_kpi = {"dinner": {"rate": 0.10}}
+    # (a) za mało danych (n<30) → insufficient_data, NIE pass nawet przy 100%
+    r = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi, {"AUTO": {"n_joined": 5, "agreement_rate": 1.0}})
+    assert not r["all_pass"]
+    assert not r["auto_precision_above_95pct"]
+    assert r["auto_precision_status"] == "insufficient_data"
+    # (b) dość danych, ale niska zgoda → NIE pass
+    r2 = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi, {"AUTO": {"n_joined": 40, "agreement_rate": 0.50}})
+    assert not r2["all_pass"]
+    assert not r2["auto_precision_above_95pct"]
+    assert r2["auto_precision_status"] == "ok"
+    # (c) dość danych + wysoka zgoda → bramka pass + all_pass
+    r3 = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi, {"AUTO": {"n_joined": 40, "agreement_rate": 0.97}})
+    assert r3["auto_precision_above_95pct"]
+    assert r3["all_pass"]
+    # (d) None auto_prec_kpi → NIE pass (nigdy silent-pass)
+    r4 = KPI.faza7_readiness(override_kpi, drive_kpi, kk_kpi)
+    assert not r4["auto_precision_above_95pct"]
+    assert r4["auto_precision_status"] == "insufficient_data"

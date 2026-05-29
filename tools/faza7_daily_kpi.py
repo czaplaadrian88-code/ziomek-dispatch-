@@ -57,6 +57,11 @@ R6_LIMIT_MIN = 35.0
 KEBAB_KROL_RID = 484  # rid Kebab Król w panelu (Q1v2 Agent 2 + kebab_krol_diagnostic.md)
 KEBAB_KROL_NAME_HINT = "kebab król"
 
+# G1 (2026-05-29): minimalna liczba joined-AUTO orders, by bramka AUTO-precision
+# mogła w ogóle „pass". Poniżej → insufficient_data = NIE ready (autonomii nie
+# odblokowujemy na cienkich danych). ACK Adrian 2026-05-29.
+MIN_AUTO_PRECISION_N = 30
+
 
 # ──────────────────────── helpers ───────────────────────────────────────
 def _load_json(path: str, default=None):
@@ -378,8 +383,86 @@ def kpi_kebab_krol(rows: list, now: datetime) -> dict:
     }
 
 
+# ──────────────────────── KPI 6: per-werdykt AUTO agreement (G1) ─────────
+def kpi_auto_route_precision(backfill_rows: list, enriched_rows: list, now: datetime) -> dict:
+    """G1 (2026-05-29): counterfactual agreement per werdykt auto_route — czy kurier,
+    którego Faza 7 by AUTO-przypisała, == kurier faktycznie przypisany (ground truth).
+
+    UWAGA — to NIE jest „precyzja" w czystym sensie. Pomiar w trybie shadow: człowiek
+    nie widzi werdyktu AUTO, więc każdy override == „człowiek wybrał innego". To miesza
+    „Ziomek się mylił" z „supersede / nie dostał szansy" → metryka ZANIŻONA przez timing.
+    Mimo to właściwy sygnał gate: jeśli AUTO rzadko zgadza się z realnym wyborem, NIE
+    wolno flipować autonomii.
+
+    Źródła (join po order_id, okno 7d):
+      - backfill_decisions_outcomes_v1.jsonl: `auto_route` (werdykt) + `proposed_courier_id`.
+      - drive_min_enriched.jsonl: ground truth `actual.kurier_overridden`
+        (== NOT(predicted.courier_id == actual.applied_courier_id)).
+    Backfill sam nie wystarcza (actual_courier_id populowane TYLKO przy override);
+    enriched nie niesie auto_route — stąd join.
+
+    Filtr override: ta metryka CELOWO wlicza override'y (to są miss'y). To inna rzecz
+    niż accepted-only filtr przy writerze biasu drive_min (tam override zaniża kalibrację,
+    bo gps OVERCORRECTS ~30 min). Nie mylić obu.
+    """
+    cutoff = now - timedelta(days=7)
+
+    # enriched indexed by order_id — tylko rekordy z rozstrzygalnym ground truth
+    enriched_by_oid: dict = {}
+    for d in enriched_rows:
+        oid = d.get("order_id")
+        if oid is None:
+            continue
+        if (d.get("actual") or {}).get("applied_courier_id") is None:
+            continue  # brak realnie przypisanego kuriera → nie da się ocenić agreement
+        enriched_by_oid[str(oid)] = d
+
+    # per werdykt: dedupe po order_id (werdykt z backfill w oknie 7d, last-write-wins)
+    verdict_oid: dict = {"AUTO": {}, "ACK": {}, "ALERT": {}}
+    for d in backfill_rows:
+        ts = _parse_ts(d.get("decision_ts"))
+        if not ts or ts < cutoff:
+            continue
+        route = d.get("auto_route")
+        if route not in verdict_oid:
+            continue
+        oid = d.get("order_id")
+        if oid is None:
+            continue
+        verdict_oid[route][str(oid)] = d
+
+    out: dict = {}
+    for route, oid_map in verdict_oid.items():
+        n_verdict_orders = len(oid_map)
+        hit = miss = 0
+        for oid in oid_map:
+            en = enriched_by_oid.get(oid)
+            if en is None:
+                continue  # brak ground truth → liczy się jako unjoined
+            overridden = (en.get("actual") or {}).get("kurier_overridden")
+            if overridden is None:
+                pred = (en.get("predicted") or {}).get("courier_id")
+                appl = (en.get("actual") or {}).get("applied_courier_id")
+                overridden = str(pred) != str(appl)
+            if overridden:
+                miss += 1
+            else:
+                hit += 1
+        joined = hit + miss
+        out[route] = {
+            "n_verdict_orders": n_verdict_orders,
+            "n_joined": joined,
+            "n_unjoined": n_verdict_orders - joined,
+            "hit": hit,
+            "miss": miss,
+            "agreement_rate": round(hit / joined, 4) if joined else None,
+        }
+    return out
+
+
 # ──────────────────────── readiness signal ──────────────────────────────
-def faza7_readiness(override_kpi: dict, drive_kpi: dict, kk_kpi: dict) -> dict:
+def faza7_readiness(override_kpi: dict, drive_kpi: dict, kk_kpi: dict,
+                    auto_prec_kpi: dict | None = None) -> dict:
     """Soft gate dla T1 ramp-up.
 
     Sygnał ON gdy:
@@ -387,6 +470,9 @@ def faza7_readiness(override_kpi: dict, drive_kpi: dict, kk_kpi: dict) -> dict:
       - calibration bias |x| < 10 min (Opcja C empirical preferred, fallback
         do Opcja B algorithm-delta)
       - KK dinner breach rate < 15% (post Sprint 2.1)
+      - G1 (2026-05-29): per-werdykt AUTO agreement >= 95% PRZY n_joined >= MIN_AUTO_PRECISION_N.
+        TWARDA bramka autonomii (no soft-pass): n poniżej progu → insufficient_data → NIE pass
+        (autonomii nie odblokowujemy na cienkich danych). auto_prec_kpi=None → też NIE pass.
     """
     override_7d = override_kpi.get("7d", {}).get("rate")
     # Opcja C empirical bias preferred (samples_present=True), fallback do Opcja B offset
@@ -397,16 +483,35 @@ def faza7_readiness(override_kpi: dict, drive_kpi: dict, kk_kpi: dict) -> dict:
     gate_override = (override_7d is not None) and override_7d < 0.60
     gate_calib = (cal_metric is None) or abs(cal_metric) < 10.0  # None = no data, soft pass
     gate_kk = (kk_dinner is None) or kk_dinner < 0.15
+
+    # G1 AUTO-agreement gate — HARD (no soft-pass na braku danych: autonomia musi być
+    # zwalidowana, nie domniemana). insufficient_data / None rate → gate False.
+    auto = (auto_prec_kpi or {}).get("AUTO") or {}
+    auto_n = auto.get("n_joined") or 0
+    auto_rate = auto.get("agreement_rate")
+    if auto_n < MIN_AUTO_PRECISION_N:
+        gate_auto = False
+        auto_status = "insufficient_data"
+    elif auto_rate is None:
+        gate_auto = False
+        auto_status = "no_rate"
+    else:
+        gate_auto = auto_rate >= 0.95
+        auto_status = "ok"
+
     return {
         "override_7d_below_60pct": gate_override,
         "calibration_bias_below_10min": gate_calib,
         "kk_dinner_breach_below_15pct": gate_kk,
-        "all_pass": gate_override and gate_calib and gate_kk,
+        "auto_precision_above_95pct": gate_auto,
+        "auto_precision_status": auto_status,
+        "auto_precision_n": auto_n,
+        "all_pass": gate_override and gate_calib and gate_kk and gate_auto,
     }
 
 
 # ──────────────────────── markdown render ───────────────────────────────
-def render_md(date_str: str, override_kpi, r6_kpi, top_wl, drive_kpi, kk_kpi, readiness, tiers, names) -> str:
+def render_md(date_str: str, override_kpi, r6_kpi, top_wl, drive_kpi, kk_kpi, readiness, tiers, names, auto_prec_kpi=None) -> str:
     lines = []
     lines.append(f"# Faza 7 Daily KPI — {date_str}\n")
     lines.append(f"Generated: {datetime.now(timezone.utc).isoformat()}\n")
@@ -503,11 +608,40 @@ def render_md(date_str: str, override_kpi, r6_kpi, top_wl, drive_kpi, kk_kpi, re
         k = kk_kpi.get(b) or {"n": 0, "breach": 0, "rate": 0.0}
         lines.append(f"| {b} | {k['n']} | {k['breach']} | {k['rate']*100:.1f}% |")
 
-    lines.append("\n## 6. Faza 7 T1 readiness gate\n")
+    lines.append("\n## 6. Per-werdykt AUTO agreement (G1 — counterfactual, shadow)\n")
+    lines.append(
+        "_Czy kurier, którego Faza 7 by AUTO-przypisała, == kurier faktycznie przypisany "
+        "(ground-truth join backfill⋈enriched po order_id). Tryb shadow: człowiek nie widzi "
+        "werdyktu AUTO → override myli „zła propozycja” z „supersede/nie dostał szansy” → "
+        "metryka ZANIŻONA przez timing. Mimo to właściwy sygnał gate._\n"
+    )
+    lines.append("| Werdykt | verdict orders | joined (GT) | hit | miss | agreement |")
+    lines.append("|---|---:|---:|---:|---:|---:|")
+    for r in ("AUTO", "ACK", "ALERT"):
+        k = (auto_prec_kpi or {}).get(r) or {}
+        rate = k.get("agreement_rate")
+        rate_s = f"{rate*100:.1f}%" if rate is not None else "—"
+        lines.append(
+            f"| {r} | {k.get('n_verdict_orders', 0)} | {k.get('n_joined', 0)} "
+            f"| {k.get('hit', 0)} | {k.get('miss', 0)} | {rate_s} |"
+        )
+    auto_k = (auto_prec_kpi or {}).get("AUTO") or {}
+    lines.append(
+        f"\n- AUTO joined n=**{auto_k.get('n_joined', 0)}** "
+        f"(unjoined={auto_k.get('n_unjoined', 0)} — brak ground truth w enriched), "
+        f"gate wymaga **n≥{MIN_AUTO_PRECISION_N} oraz agreement≥95%**."
+    )
+
+    lines.append("\n## 7. Faza 7 T1 readiness gate\n")
     lines.append("| Gate | Pass? |")
     lines.append("|---|:---:|")
-    for k in ("override_7d_below_60pct", "calibration_bias_below_10min", "kk_dinner_breach_below_15pct"):
+    for k in ("override_7d_below_60pct", "calibration_bias_below_10min",
+              "kk_dinner_breach_below_15pct", "auto_precision_above_95pct"):
         lines.append(f"| {k} | {'✓' if readiness[k] else '✗'} |")
+    lines.append(
+        f"\n_AUTO precision gate status: **{readiness.get('auto_precision_status')}** "
+        f"(n={readiness.get('auto_precision_n')})._"
+    )
     lines.append(f"\n**OVERALL: {'READY' if readiness['all_pass'] else 'NOT READY'}**\n")
 
     return "\n".join(lines)
@@ -559,6 +693,7 @@ def main(argv=None) -> int:
         return 2
 
     rows = list(_iter_jsonl(args.backfill))
+    enriched_rows = list(_iter_jsonl(args.enriched_log))
     tiers = _load_json(args.tiers)
     names = _load_json(args.names)
 
@@ -572,15 +707,21 @@ def main(argv=None) -> int:
     else:
         drive_kpi = kpi_drive_min_calibration(args.drive_log, now)
     kk_kpi = kpi_kebab_krol(rows, now)
-    readiness = faza7_readiness(override_kpi, drive_kpi, kk_kpi)
+    # G1 (2026-05-29): per-werdykt AUTO agreement (join backfill auto_route ⋈ enriched GT)
+    auto_prec_kpi = kpi_auto_route_precision(rows, enriched_rows, now)
+    readiness = faza7_readiness(override_kpi, drive_kpi, kk_kpi, auto_prec_kpi)
 
-    md = render_md(date_str, override_kpi, r6_kpi, top_wl, drive_kpi, kk_kpi, readiness, tiers, names)
+    md = render_md(date_str, override_kpi, r6_kpi, top_wl, drive_kpi, kk_kpi, readiness, tiers, names, auto_prec_kpi)
     _atomic_write(out_path, md)
 
     if not args.quiet:
         print(f"Wrote: {out_path}")
+        auto_k = auto_prec_kpi.get("AUTO") or {}
+        ar = auto_k.get("agreement_rate")
+        ar_s = f"{ar*100:.1f}%" if ar is not None else "—"
         print(
             f"override 7d={override_kpi.get('7d', {}).get('rate', 0)*100:.1f}%  "
+            f"AUTO agree={ar_s} (n={auto_k.get('n_joined', 0)})  "
             f"readiness={'READY' if readiness['all_pass'] else 'NOT READY'}"
         )
 
