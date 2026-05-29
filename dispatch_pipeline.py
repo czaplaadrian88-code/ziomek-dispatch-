@@ -29,6 +29,7 @@ from dispatch_v2.common import (
 from dispatch_v2.osrm_client import haversine
 from dispatch_v2.bag_state import build_courier_bag_state, CourierBagState
 from dispatch_v2.fleet_context import build_fleet_context, FleetContext
+import json
 import math
 import os
 import threading  # V3.27.1 sesja 2: in-memory cache lock dla pre-proposal recheck
@@ -55,6 +56,69 @@ _v327_pre_recheck_call_counter = 0
 # V3.29: DEFAULT_CITY z env (multi-tenant)
 DEFAULT_CITY = os.environ.get('ZIOMEK_DEFAULT_CITY', 'Białystok')
 log.info(f"V326_DEFAULT_CITY: {DEFAULT_CITY}")
+
+
+# B2 (audyt 2026-05-29): rule_weights.json — STATIC, strojone ręcznie (B1-b: brak writera).
+# Wcześniej ładowane per-kandydat z hardcoded path, a load-fail → CICHY `{}` → kary R1/R5/R8
+# znikały bez śladu (Z2 never-silent violation). Teraz: ścieżka z env, cache z mtime-checkiem
+# (zero disk I/O na cache-hit), load-fail → GŁOŚNY log.error + ostatnie-dobre/defaults
+# (fail-safe: scoring nie crashuje, ale awaria pliku jest WIDOCZNA w dispatch.log).
+# Thread-safe bez locka (parallel candidates w ThreadPoolExecutor): `data` budowane w local
+# i podmieniane jednym atomowym przypisaniem referencji (GIL) — reader widzi cały dict;
+# reload tylko na zmianę mtime i jest idempotentny (wyścig = redundantny read tych samych danych).
+_RULE_WEIGHTS_PATH = os.environ.get(
+    "RULE_WEIGHTS_PATH", "/root/.openclaw/workspace/dispatch_state/rule_weights.json"
+)
+_RULE_WEIGHTS_DEFAULTS: Dict[str, Any] = {
+    "R1_spread_per_km": -8.0,
+    "R5_pickup_per_km": -6.0,
+    "R8_span_per_min": -1.5,
+}
+_rule_weights_cache: Dict[str, Any] = {
+    "mtime": None,
+    "data": dict(_RULE_WEIGHTS_DEFAULTS),
+    "logged_fail": False,
+}
+
+
+def _load_rule_weights() -> Dict[str, Any]:
+    """Cached loader rule_weights.json (kary R1/R5/R8). Reload tylko gdy mtime się zmienił
+    → brak per-kandydat disk I/O. Load-fail → GŁOŚNY log.error (raz na stan błędu) +
+    ostatnie-dobre dane (lub defaults gdy nigdy nie wczytano). Scoring NIE crashuje, ale
+    awaria pliku jest widoczna w logu — koniec cichego `{}`."""
+    cache = _rule_weights_cache
+    try:
+        mtime = os.stat(_RULE_WEIGHTS_PATH).st_mtime
+    except OSError as e:
+        if not cache["logged_fail"]:
+            log.error(
+                "rule_weights NIEDOSTĘPNY path=%s err=%s — używam %s (kary R1/R5/R8 z fallbacku!)",
+                _RULE_WEIGHTS_PATH, e,
+                "ostatnich-dobrych" if cache["mtime"] is not None else "defaults",
+            )
+            cache["logged_fail"] = True
+        return cache["data"]
+    if mtime != cache["mtime"]:
+        try:
+            with open(_RULE_WEIGHTS_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("rule_weights.json nie jest obiektem JSON")
+            cache["data"] = data            # atomic ref-swap (GIL) — reader widzi cały dict
+            cache["mtime"] = mtime
+            if cache["logged_fail"]:
+                log.info("rule_weights ODZYSKANY path=%s keys=%d", _RULE_WEIGHTS_PATH, len(data))
+            cache["logged_fail"] = False
+        except Exception as e:
+            if not cache["logged_fail"]:
+                log.error(
+                    "rule_weights LOAD FAIL path=%s err=%s — używam %s (kary R1/R5/R8 z fallbacku!)",
+                    _RULE_WEIGHTS_PATH, e,
+                    "ostatnich-dobrych" if cache["mtime"] is not None else "defaults",
+                )
+                cache["logged_fail"] = True
+            return cache["data"]
+    return cache["data"]
 
 
 # V3.28 #28 (2026-05-11): defensive fallback dla (0,0) sentinel leak.
@@ -2347,14 +2411,8 @@ def _assess_order_impl(
                 if _gap_irg > C.MAX_INTRA_RESTAURANT_GAP_MIN:
                     intra_rest_gap_hard_reject = True
 
-        # Wczytaj rule_weights (adaptive penalties R1/R5/R8)
-        try:
-            import json as _json
-            _rw_path = "/root/.openclaw/workspace/dispatch_state/rule_weights.json"
-            with open(_rw_path) as _f:
-                _rw = _json.load(_f)
-        except Exception:
-            _rw = {}
+        # Wczytaj rule_weights (adaptive penalties R1/R5/R8) — B2: cached + głośny log na fail.
+        _rw = _load_rule_weights()
 
         # R1 soft penalty (delivery spread violation)
         _r1_viol = metrics.get("r1_violation_km") or 0.0
