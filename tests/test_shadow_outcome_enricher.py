@@ -195,3 +195,62 @@ def test_state_load_missing_returns_defaults(tmp_path, monkeypatch):
     s = enricher.load_state()
     assert s["last_offset"] == 0
     assert s["processed_oids"] == set()
+
+
+# ── run() pipeline regression (#6 fix) ───────────────────────────────────
+
+
+def _write_shadow(path, records):
+    with open(path, "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+
+def test_run_reenriches_after_outcome_lands(tmp_path, monkeypatch):
+    """REGRESJA #6: rekord not_ready w runie 1 MUSI zostać wzbogacony w runie 2,
+    gdy COURIER_PICKED_UP dotrze później. Stary kod przewijał offset do EOF po
+    pierwszym skanie → rekordu nigdy nie re-czytał → outcome nigdy złapany."""
+    from datetime import datetime, timezone, timedelta
+    from dispatch_v2.tools import shadow_outcome_enricher as enr
+
+    shadow = str(tmp_path / "shadow.jsonl")
+    enriched = str(tmp_path / "enriched.jsonl")
+    state = str(tmp_path / "state.json")
+    con, dbpath = _make_temp_db()  # tworzy tabelę audit_log (oid NR jeszcze nie istnieje)
+    con.close()  # run() otwiera własne połączenie
+    monkeypatch.setattr(enr, "SHADOW_LOG", shadow)
+    monkeypatch.setattr(enr, "ENRICHED_LOG", enriched)
+    monkeypatch.setattr(enr, "STATE_FILE", state)
+    monkeypatch.setattr(enr, "EVENTS_DB", dbpath)
+
+    ts = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    _write_shadow(shadow, [{"ts": ts, "order_id": "NR", "verdict": "PROPOSE",
+                            "best": {"courier_id": "9", "travel_min": 10, "drive_min": 8}}])
+
+    # Run 1: brak picked_up → not_ready
+    s1 = enr.run(hours=240)
+    assert s1["enriched"] == 0
+    assert s1["skipped_not_ready"] == 1
+
+    # Outcome dociera PO runie 1
+    con = sqlite3.connect(dbpath); cur = con.cursor()
+    pts = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    cur.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?)",
+                ("eNR1", "COURIER_ASSIGNED", "NR", "9", "{}", ts))
+    cur.execute("INSERT INTO audit_log VALUES (?,?,?,?,?,?)",
+                ("eNR2", "COURIER_PICKED_UP", "NR", "9", "{}", pts))
+    con.commit(); con.close()
+
+    # Run 2: MUSI wzbogacić (rekord re-czytany mimo stanu z runu 1)
+    s2 = enr.run(hours=240)
+    assert s2["enriched"] == 1, "rekord not_ready musi być re-czytany gdy outcome dojrzeje"
+    lines = open(enriched).read().strip().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["order_id"] == "NR"
+
+    # Run 3: dedup — już wzbogacony, brak duplikatu
+    s3 = enr.run(hours=240)
+    assert s3["enriched"] == 0
+    assert s3["skipped_dedup"] == 1
+
+    os.unlink(dbpath)

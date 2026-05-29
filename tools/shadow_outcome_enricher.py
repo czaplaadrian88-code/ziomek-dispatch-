@@ -277,24 +277,18 @@ def run(hours: int, dry_run: bool = False) -> dict:
 
     conn = sqlite3.connect(EVENTS_DB)
     try:
-        # Strategy: re-scan recent window (last `hours`) every run. Dedup po oid
-        # bo enrichment is idempotent — overwrite OK byłby acceptable, ale dedup
-        # skipuje re-write tych samych entries. last_offset = max bytes consumed
-        # dla incremental fast path; fallback do full scan when offset stale.
-        last_offset = state.get("last_offset", 0)
-        # Safety: jeśli plik się skurczył (rotate), reset offset
-        try:
-            file_size = os.path.getsize(SHADOW_LOG)
-            if last_offset > file_size:
-                last_offset = 0
-        except FileNotFoundError:
+        # FIX 2026-05-29 (#6): pełny re-scan okna `hours` od offsetu 0 KAŻDEGO runu.
+        # Poprzednio: skan od last_offset z przewijaniem do EOF. Rekord shadow jest
+        # dopisywany w momencie decyzji (order jeszcze nie picked_up — COURIER_PICKED_UP
+        # przychodzi ~30-60 min później). Skanowany RAZ jako not_ready, offset przewijał
+        # za niego → nigdy re-czytany → outcome nigdy złapany (enricher zielony, 0 output).
+        # Teraz: cutoff odsiewa stare; processed_oids (success-only) dedupuje; rekord
+        # not_ready zostaje POZA processed_oids → retry w kolejnym ticku gdy dojrzeje.
+        if not os.path.exists(SHADOW_LOG):
             return stats
-
         max_records = 50000  # safety cap per run
-        new_offset = last_offset
-        for offset, rec in iter_shadow_records(SHADOW_LOG, last_offset, max_records):
+        for _offset, rec in iter_shadow_records(SHADOW_LOG, 0, max_records):
             stats["shadow_scanned"] += 1
-            new_offset = offset
 
             ts = _parse_iso(rec.get("ts"))
             if ts is None or ts < cutoff:
@@ -327,7 +321,9 @@ def run(hours: int, dry_run: bool = False) -> dict:
     if len(state["processed_oids"]) > 50000:
         state["processed_oids"] = set(list(state["processed_oids"])[-25000:])
 
-    state["last_offset"] = new_offset
+    # last_offset nie bramkuje już skanu (pełny re-scan każdego runu) — trzymane =0
+    # dla zgodności formatu state file (save_state wymaga klucza).
+    state["last_offset"] = 0
 
     if not dry_run:
         append_enriched(enriched_batch)
