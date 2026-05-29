@@ -395,7 +395,14 @@ class ParserHealthMonitor:
                     assigned_motion = (max(assigned_values) - min(assigned_values)) if assigned_values else 0
                     # V3.28-TICKET1: motion sum threshold zamiast "any motion".
                     # Eliminuje false positives ze słabego motion (1+1+1=3 < 4 default).
-                    motion_total = sum_new + sum_delivered + assigned_motion
+                    # 2026-05-29 root-cause fix (Lekcja #76, #157): assigned_motion USUNIĘTY
+                    # z motion_total. Order unassigned→assigned ZOSTAJE w active_ids (oba
+                    # = non-closed) → wzrost licznika assigned NIE implikuje, że active set
+                    # powinien się zmienić. Liczył się jako fałszywy "ruch w mieście" przy
+                    # zamrożonym (legalnie, w ciszy) active set. Motion ważny tylko z NEW
+                    # (powinno wejść do active) + DELIVERED (powinno wyjść do closed).
+                    # assigned_motion zachowany poniżej wyłącznie do logu/context (diag).
+                    motion_total = sum_new + sum_delivered
                     panel_has_motion = motion_total >= PARSER_STUCK_MOTION_THRESHOLD
                 except Exception as _me:
                     log.warning(f"motion-aware compute fail (non-blocking, fallback legacy): {_me}")
