@@ -228,11 +228,21 @@ def _apply_changes(
             continue
         prev_short = bag.get("tier")
         bag["tier"] = new_tier_short
+        # Graduating out of 'new' MUST also clear the top-level tier_label='new'
+        # probation marker — V3.25 new-courier HARD-SKIP penalty keys off
+        # cs_tier_label (courier_resolver:548 → dispatch_pipeline:930), NOT bag.tier.
+        # Without this, a graduated courier stays effectively vetoed forever
+        # (latent bug found 2026-05-29 via cid=500 Grzegorz / order 476897).
+        tier_label_cleared = False
+        if entry.get("tier_label") == "new" and new_tier_short != "new":
+            entry.pop("tier_label", None)
+            tier_label_cleared = True
         applied.append({
             "cid": cid,
             "name": it.get("name"),
             "prev_tier": prev_short,
             "new_tier": new_tier_short,
+            "tier_label_cleared": tier_label_cleared,
         })
     # Update _meta last_manual_edit (using "auto-r04" marker)
     if "_meta" in tiers and isinstance(tiers["_meta"], dict):

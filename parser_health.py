@@ -401,6 +401,48 @@ class ParserHealthMonitor:
                     log.warning(f"motion-aware compute fail (non-blocking, fallback legacy): {_me}")
                     panel_has_motion = True  # Fallback: assume motion → alert (legacy behavior)
 
+                # 2026-05-29 DIAGNOSTIC (Z2, Lekcja #76): when stuck+motion (would-alert),
+                # dump ground-truth so we can tell a real parser miss (closed_ids /
+                # data-idkurier detection failing → delivered orders never leave active)
+                # from a sampling artifact, BEFORE deciding the real fix. Logging-only,
+                # does not change alert behavior. Fires pre-cooldown on every detection.
+                if set_stuck is True and panel_has_motion:
+                    try:
+                        first_set = active_sets[0] or frozenset()
+                        last_set = active_sets[-1] or frozenset()
+                        oid_sets = [c.get("order_ids") for c in recent]
+                        oid_first = oid_sets[0] if oid_sets[0] is not None else frozenset()
+                        oid_last = oid_sets[-1] if oid_sets[-1] is not None else frozenset()
+                        per_cycle = [
+                            {
+                                "cyc": c.get("cycle"),
+                                "act": c.get("active_orders"),
+                                "ord": (len(c["order_ids"]) if c.get("order_ids") is not None else None),
+                                "closed": (
+                                    len(c["order_ids"]) - len(c["active_ids"])
+                                    if c.get("order_ids") is not None and c.get("active_ids") is not None
+                                    else None
+                                ),
+                                "new": c.get("n_new"),
+                                "deliv": c.get("n_delivered"),
+                                "assi": c.get("n_assigned"),
+                            }
+                            for c in recent
+                        ]
+                        log.warning(
+                            "PARSER_STUCK_DIAG stuck_active=%d motion_total=%d "
+                            "order_ids_churn=%s(first=%d last=%d) "
+                            "stuck_active_sample=%s per_cycle=%s"
+                            % (
+                                recent_active[0], motion_total,
+                                (first_set != last_set) or (oid_first != oid_last),
+                                len(oid_first), len(oid_last),
+                                sorted(first_set)[:10], per_cycle,
+                            )
+                        )
+                    except Exception as _de:
+                        log.debug(f"PARSER_STUCK_DIAG dump fail (non-blocking): {_de}")
+
                 # Z2 fix: if set_stuck is False (sets differ) → suppress alert even if motion>=threshold
                 if set_stuck is False:
                     # Natural rotation underneath, count coincidence → no alert
