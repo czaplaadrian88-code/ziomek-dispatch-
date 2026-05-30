@@ -870,6 +870,57 @@ def _pickup_extension_delta_min(decision: dict) -> Optional[int]:
     return int(round((ready - raw).total_seconds() / 60.0))
 
 
+def _minutes_from_placement(decision: dict, pickup_dt: Optional[datetime]) -> Optional[int]:
+    """Minuty od złożenia zamówienia do planowanego odbioru.
+
+    N = pickup_dt − order_created_at. Adrian 2026-05-30: w linii Odbiór pokazuj
+    ile minut od złożenia minie do odbioru (zamiast godziny zegarowej).
+
+    Source order_created_at: payload created_at_utc, propagowany przez
+    shadow_dispatcher (record["order_created_at"]). Returns None gdy brak
+    created_at / pickup_dt / parse fail → caller renderuje legacy godzinę.
+    """
+    created_iso = decision.get("order_created_at")
+    if not created_iso or pickup_dt is None:
+        return None
+    try:
+        created = datetime.fromisoformat(str(created_iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    if pickup_dt.tzinfo is None:
+        pickup_dt = pickup_dt.replace(tzinfo=timezone.utc)
+    delta = (pickup_dt - created).total_seconds() / 60.0
+    if delta < 0:
+        delta = 0.0
+    return int(round(delta))
+
+
+def _pickup_delay_vs_restaurant(decision: dict, pickup_dt: Optional[datetime]) -> Optional[int]:
+    """Minuty o ile pokazany odbiór jest wydłużony względem deklaracji restauracji.
+
+    M = pickup_dt − pickup_at_warsaw (raw, surowa deklaracja restauracji,
+    pre-extension). Adrian 2026-05-30: w nawiasie przy Odbiór pokazuj o ile czas
+    jest wydłużony względem tego co zaproponowała restauracja.
+
+    Dodatnie = Ziomek wydłużył; ≤0 = zgodnie lub wcześniej. Same pickup_dt anchor
+    co `_minutes_from_placement` → spójny render. None gdy brak danych / parse fail.
+    """
+    raw_iso = decision.get("pickup_at_warsaw")
+    if not raw_iso or pickup_dt is None:
+        return None
+    try:
+        raw = datetime.fromisoformat(str(raw_iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if raw.tzinfo is None:
+        raw = raw.replace(tzinfo=timezone.utc)
+    if pickup_dt.tzinfo is None:
+        pickup_dt = pickup_dt.replace(tzinfo=timezone.utc)
+    return int(round((pickup_dt - raw).total_seconds() / 60.0))
+
+
 def _route_lines_v2(decision: dict, best: dict, now_utc: datetime) -> list:
     """Wave-aware chronological trasa dla wybranego kuriera.
 
@@ -1197,14 +1248,17 @@ def _format_proposal_v2(decision: dict) -> str:
     _cur_oid_str = str(oid) if oid else ""
     cur_plan_pickup_iso = (_plan.get("pickup_at") or {}).get(_cur_oid_str) if _plan else None
     actual_pickup_hhmm = None
+    actual_pickup_dt = None
     if cur_plan_pickup_iso:
         try:
             _ad = datetime.fromisoformat(str(cur_plan_pickup_iso).replace("Z", "+00:00"))
             if _ad.tzinfo is None:
                 _ad = _ad.replace(tzinfo=timezone.utc)
             actual_pickup_hhmm = _to_warsaw_hhmm(_ad)
+            actual_pickup_dt = _ad
         except (TypeError, ValueError):
             actual_pickup_hhmm = None
+            actual_pickup_dt = None
 
     ck_hhmm = None
     ck_iso = decision.get("czas_kuriera_warsaw")
@@ -1222,6 +1276,23 @@ def _format_proposal_v2(decision: dict) -> str:
     # Precedence: TSP actual (post-wait) > drive arrival > pickup_ready
     display_hhmm = actual_pickup_hhmm or best_pickup_hhmm or pickup_ready_hhmm
 
+    # Datetime odpowiadające pokazanemu odbiorowi (dla "N min od złożenia" +
+    # "ponad deklarację"). Precedencja zgodna z display_hhmm na tyle, na ile mamy
+    # pełny timestamp: TSP actual > pickup_ready_at. eta_pickup_hhmm to tylko HH:MM
+    # (brak dt) → gdy to jedyne źródło, display_pickup_dt=None i render spada na
+    # legacy godzinę (Adrian 2026-05-30 format wymaga dt do policzenia minut).
+    display_pickup_dt = actual_pickup_dt
+    if display_pickup_dt is None:
+        _pr_iso = decision.get("pickup_ready_at")
+        if _pr_iso:
+            try:
+                _prd = datetime.fromisoformat(str(_pr_iso).replace("Z", "+00:00"))
+                if _prd.tzinfo is None:
+                    _prd = _prd.replace(tzinfo=timezone.utc)
+                display_pickup_dt = _prd
+            except (TypeError, ValueError):
+                display_pickup_dt = None
+
     best_name = name_lookup(best.get("courier_id"), best.get("name")) if best else "?"
     best_cid = str(best.get("courier_id") or "?") if best else "?"
     drop_district = _district_safe(delivery)
@@ -1230,33 +1301,51 @@ def _format_proposal_v2(decision: dict) -> str:
         f"🚖 {best_name} (K-{best_cid}) → {rest} → {delivery} ({drop_district})",
     ]
     if display_hhmm is not None:
-        # Build context tail z explicit labels:
-        # - ck HH:MM (±delta) gdy commit różny od display
-        # - mins_since_creation gdy dostępne (Etap 1 backward compat)
-        # - extension delta (+N min) gdy brak ck/eta i delta>0 (legacy fallback)
-        ctx_parts = []
-        if ck_hhmm and ck_hhmm != display_hhmm:
-            try:
-                _disp_dt = datetime.strptime(display_hhmm, "%H:%M")
-                _ck_dt = datetime.strptime(ck_hhmm, "%H:%M")
-                _ck_delta = int(round((_disp_dt - _ck_dt).total_seconds() / 60.0))
-                _sign = "+" if _ck_delta >= 0 else ""
-                ctx_parts.append(f"ck {ck_hhmm} ({_sign}{_ck_delta} min)")
-            except (TypeError, ValueError):
-                ctx_parts.append(f"ck {ck_hhmm}")
-        elif ck_hhmm and ck_hhmm == display_hhmm:
-            ctx_parts.append(f"ck {ck_hhmm} (+0 min)")
-        if mins_since_creation is not None:
-            ctx_parts.append(f"{int(mins_since_creation)} min od złożenia")
-        if not ctx_parts:
-            # Legacy fallback: brak ck i mins → spróbuj extension delta
-            ext_delta = _pickup_extension_delta_min(decision)
-            if ext_delta is not None and ext_delta > 0:
-                ctx_parts.append(f"+{ext_delta} min od deklaracji")
-        if ctx_parts:
-            lines.append(f"⏱️ Odbiór: {display_hhmm} · " + " · ".join(ctx_parts))
+        # Adrian 2026-05-30: linia Odbiór pokazuje minuty od złożenia (NIE godzinę),
+        # a w nawiasie o ile czas odbioru jest wydłużony względem deklaracji
+        # restauracji. Wymaga order_created_at + pełnego pickup timestamp; gdy brak
+        # (legacy decision / eta-only HH:MM) → spada na render godzinowy poniżej.
+        mins_from_placement = _minutes_from_placement(decision, display_pickup_dt)
+        if mins_from_placement is not None:
+            delay_vs_rest = _pickup_delay_vs_restaurant(decision, display_pickup_dt)
+            if delay_vs_rest is None:
+                tail = ""
+            elif delay_vs_rest > 0:
+                tail = f" (+{delay_vs_rest} min ponad deklarację)"
+            elif delay_vs_rest == 0:
+                tail = " (zgodnie z deklaracją)"
+            else:
+                tail = f" ({-delay_vs_rest} min przed deklaracją)"
+            lines.append(f"⏱️ Odbiór: {mins_from_placement} min od złożenia{tail}")
         else:
-            lines.append(f"⏱️ Odbiór: {display_hhmm}")
+            # Legacy fallback (brak created_at / pickup dt): render godzinowy.
+            # Build context tail z explicit labels:
+            # - ck HH:MM (±delta) gdy commit różny od display
+            # - mins_since_creation gdy dostępne (Etap 1 backward compat)
+            # - extension delta (+N min) gdy brak ck/eta i delta>0 (legacy fallback)
+            ctx_parts = []
+            if ck_hhmm and ck_hhmm != display_hhmm:
+                try:
+                    _disp_dt = datetime.strptime(display_hhmm, "%H:%M")
+                    _ck_dt = datetime.strptime(ck_hhmm, "%H:%M")
+                    _ck_delta = int(round((_disp_dt - _ck_dt).total_seconds() / 60.0))
+                    _sign = "+" if _ck_delta >= 0 else ""
+                    ctx_parts.append(f"ck {ck_hhmm} ({_sign}{_ck_delta} min)")
+                except (TypeError, ValueError):
+                    ctx_parts.append(f"ck {ck_hhmm}")
+            elif ck_hhmm and ck_hhmm == display_hhmm:
+                ctx_parts.append(f"ck {ck_hhmm} (+0 min)")
+            if mins_since_creation is not None:
+                ctx_parts.append(f"{int(mins_since_creation)} min od złożenia")
+            if not ctx_parts:
+                # Legacy fallback: brak ck i mins → spróbuj extension delta
+                ext_delta = _pickup_extension_delta_min(decision)
+                if ext_delta is not None and ext_delta > 0:
+                    ctx_parts.append(f"+{ext_delta} min od deklaracji")
+            if ctx_parts:
+                lines.append(f"⏱️ Odbiór: {display_hhmm} · " + " · ".join(ctx_parts))
+            else:
+                lines.append(f"⏱️ Odbiór: {display_hhmm}")
     lines.append("")
     lines.append(_conf_line_v2(decision))
     lines.append("")

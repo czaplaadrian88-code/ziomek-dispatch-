@@ -560,6 +560,115 @@ def test_v2_route_start_falls_back_to_now():
         f"start line nie ma HH:MM: {route_section[:200]}"
 
 
+# ----- Odbiór "minuty od złożenia" tests (Adrian 2026-05-30) -----
+
+def test_v2_odbior_minutes_from_placement_new_format():
+    """Adrian 2026-05-30: linia Odbiór = "{N} min od złożenia (+{M} min ponad
+    deklarację)". N = pickup − order_created_at, M = pickup − pickup_at_warsaw.
+    Anchor pickup = pickup_ready_at gdy brak TSP actual.
+    """
+    from datetime import datetime, timezone, timedelta
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    d = _mk_decision()
+    d["pickup_ready_at"] = (base + timedelta(minutes=15)).isoformat()
+    d["order_created_at"] = (base - timedelta(minutes=20)).isoformat()
+    d["pickup_at_warsaw"] = (base + timedelta(minutes=10)).isoformat()
+    out = ta._format_proposal_v2(d)
+    pickup_line = next(ln for ln in out.split("\n") if ln.startswith("⏱️ Odbiór:"))
+    assert pickup_line == "⏱️ Odbiór: 35 min od złożenia (+5 min ponad deklarację)", \
+        f"unexpected new-format pickup line: {pickup_line!r}"
+    # Brak godziny zegarowej w linii Odbiór
+    import re
+    assert not re.search(r"\d{2}:\d{2}", pickup_line), \
+        f"godzina nie powinna występować w nowym formacie: {pickup_line!r}"
+
+
+def test_v2_odbior_minutes_uses_tsp_actual_anchor():
+    """Gdy jest TSP actual pickup (best.plan.pickup_at[oid]) → anchor = actual,
+    NIE pickup_ready_at."""
+    from datetime import datetime, timezone, timedelta
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    d = _mk_decision()
+    d["pickup_ready_at"] = (base + timedelta(minutes=15)).isoformat()
+    d["best"]["plan"] = {"pickup_at": {"471167": (base + timedelta(minutes=18)).isoformat()}}
+    d["order_created_at"] = (base - timedelta(minutes=22)).isoformat()
+    d["pickup_at_warsaw"] = (base + timedelta(minutes=12)).isoformat()
+    out = ta._format_proposal_v2(d)
+    pickup_line = next(ln for ln in out.split("\n") if ln.startswith("⏱️ Odbiór:"))
+    # N = 18 − (−22) = 40, M = 18 − 12 = 6
+    assert pickup_line == "⏱️ Odbiór: 40 min od złożenia (+6 min ponad deklarację)", \
+        f"actual TSP anchor not used: {pickup_line!r}"
+
+
+def test_v2_odbior_minutes_zero_delay_says_zgodnie():
+    """M == 0 → "(zgodnie z deklaracją)"."""
+    from datetime import datetime, timezone, timedelta
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    d = _mk_decision()
+    d["pickup_ready_at"] = (base + timedelta(minutes=15)).isoformat()
+    d["order_created_at"] = (base - timedelta(minutes=10)).isoformat()
+    d["pickup_at_warsaw"] = (base + timedelta(minutes=15)).isoformat()
+    out = ta._format_proposal_v2(d)
+    pickup_line = next(ln for ln in out.split("\n") if ln.startswith("⏱️ Odbiór:"))
+    assert pickup_line == "⏱️ Odbiór: 25 min od złożenia (zgodnie z deklaracją)", \
+        f"zero-delay label wrong: {pickup_line!r}"
+
+
+def test_v2_odbior_minutes_no_restaurant_decl_no_tail():
+    """Brak pickup_at_warsaw → bez nawiasu (sama liczba minut od złożenia)."""
+    from datetime import datetime, timezone, timedelta
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    d = _mk_decision()
+    d["pickup_ready_at"] = (base + timedelta(minutes=15)).isoformat()
+    d["order_created_at"] = (base - timedelta(minutes=20)).isoformat()
+    # brak pickup_at_warsaw
+    out = ta._format_proposal_v2(d)
+    pickup_line = next(ln for ln in out.split("\n") if ln.startswith("⏱️ Odbiór:"))
+    assert pickup_line == "⏱️ Odbiór: 35 min od złożenia", \
+        f"unexpected tail when no restaurant declaration: {pickup_line!r}"
+
+
+def test_v2_odbior_fallback_legacy_hour_when_no_created_at():
+    """Brak order_created_at (legacy decision) → fallback do renderu godzinowego."""
+    d = _mk_decision(best_eta_pickup_hhmm="11:00")
+    d["best"]["mins_since_creation"] = 40
+    # brak order_created_at
+    out = ta._format_proposal_v2(d)
+    pickup_line = next(ln for ln in out.split("\n") if ln.startswith("⏱️ Odbiór:"))
+    assert "11:00" in pickup_line, f"legacy hour fallback expected: {pickup_line!r}"
+    assert "od złożenia" in pickup_line
+
+
+def test_v2_minutes_from_placement_helper_unit():
+    """_minutes_from_placement — pure unit test."""
+    from datetime import datetime, timezone, timedelta
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    pickup = base + timedelta(minutes=15)
+    d = {"order_created_at": (base - timedelta(minutes=20)).isoformat()}
+    assert ta._minutes_from_placement(d, pickup) == 35
+    # pickup przed złożeniem → clamp do 0
+    assert ta._minutes_from_placement({"order_created_at": (base + timedelta(minutes=10)).isoformat()}, base) == 0
+    # brak created_at → None
+    assert ta._minutes_from_placement({}, pickup) is None
+    # brak pickup_dt → None
+    assert ta._minutes_from_placement(d, None) is None
+    # invalid ISO → None
+    assert ta._minutes_from_placement({"order_created_at": "not-iso"}, pickup) is None
+
+
+def test_v2_pickup_delay_vs_restaurant_helper_unit():
+    """_pickup_delay_vs_restaurant — pure unit test."""
+    from datetime import datetime, timezone, timedelta
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    pickup = base + timedelta(minutes=15)
+    assert ta._pickup_delay_vs_restaurant({"pickup_at_warsaw": base.isoformat()}, pickup) == 15
+    assert ta._pickup_delay_vs_restaurant({"pickup_at_warsaw": pickup.isoformat()}, pickup) == 0
+    assert ta._pickup_delay_vs_restaurant({"pickup_at_warsaw": (base + timedelta(minutes=20)).isoformat()}, pickup) == -5
+    assert ta._pickup_delay_vs_restaurant({}, pickup) is None
+    assert ta._pickup_delay_vs_restaurant({"pickup_at_warsaw": base.isoformat()}, None) is None
+    assert ta._pickup_delay_vs_restaurant({"pickup_at_warsaw": "not-iso"}, pickup) is None
+
+
 # ----- runner -----
 
 def main():
@@ -591,6 +700,20 @@ def main():
          test_v2_route_start_uses_effective_start_at),
         ('v2_route_start_falls_back_to_now',
          test_v2_route_start_falls_back_to_now),
+        ('v2_odbior_minutes_from_placement_new_format',
+         test_v2_odbior_minutes_from_placement_new_format),
+        ('v2_odbior_minutes_uses_tsp_actual_anchor',
+         test_v2_odbior_minutes_uses_tsp_actual_anchor),
+        ('v2_odbior_minutes_zero_delay_says_zgodnie',
+         test_v2_odbior_minutes_zero_delay_says_zgodnie),
+        ('v2_odbior_minutes_no_restaurant_decl_no_tail',
+         test_v2_odbior_minutes_no_restaurant_decl_no_tail),
+        ('v2_odbior_fallback_legacy_hour_when_no_created_at',
+         test_v2_odbior_fallback_legacy_hour_when_no_created_at),
+        ('v2_minutes_from_placement_helper_unit',
+         test_v2_minutes_from_placement_helper_unit),
+        ('v2_pickup_delay_vs_restaurant_helper_unit',
+         test_v2_pickup_delay_vs_restaurant_helper_unit),
     ]
     print('=' * 60)
     print('Mockup v2 — operator-friendly Telegram propozycja redesign')
