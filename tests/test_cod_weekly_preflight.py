@@ -14,8 +14,15 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
-import pytest
-pytest.importorskip("gspread")  # cod_weekly = feature Sheets; venv dispatch bez gspread → skip
+# 2026-05-30: pytest tylko w venv dispatch (collection), gspread tylko w venv
+# sheets (custom runner main()). Guard pozwala odpalić ten plik OBOMA ścieżkami:
+# - pod pytest (dispatch): importorskip skipuje gdy brak gspread
+# - pod custom runner (sheets venv, bez pytest): pomijamy importorskip, main() działa
+try:
+    import pytest
+    pytest.importorskip("gspread")  # cod_weekly = feature Sheets; venv dispatch bez gspread → skip
+except ModuleNotFoundError:
+    pass
 
 from dispatch_v2.cod_weekly import run_weekly as rw
 from dispatch_v2.cod_weekly.week_calculator import (
@@ -195,14 +202,16 @@ def test_p2_split_ok():
 # P3: NoTargetColumnError single-month → exit 1, instrukcja
 # -------------------------------------------------------------------
 def test_p3_no_target_single():
-    _hdr("P3: Brak kolumny single-month → exit 1, instrukcja Rafałowi")
+    _hdr("P3: Brak kolumny single-month → exit 0 SOFT-FAIL, instrukcja Rafałowi")
     with MockEnv() as env:
         env.patch_find_target(NoTargetColumnError("Brak bloku z payday=13-05-2026"))
         rc = rw.cmd_preflight(WEEK_SINGLE_START, WEEK_SINGLE_END)
-    if rc == 1:
-        _ok("exit 1")
+    # 2026-05-30 decouple: brak kolumny = SOFT-FAIL (alert wysłany, exit 0 —
+    # nie zatruwa cron-health success-ledger).
+    if rc == 0:
+        _ok("exit 0 (soft-fail, alert sent)")
     else:
-        _fail("exit 1", f"got {rc}")
+        _fail("exit 0 soft-fail", f"got {rc}")
     msg = env.telegram_messages[0] if env.telegram_messages else ""
     if "Brak kolumny" in msg and "tydzień 04-10.05.2026" in msg:
         _ok("Telegram header z numerem tygodnia")
@@ -226,16 +235,16 @@ def test_p3_no_target_single():
 # P4: AmbiguousTargetError split-month → exit 1, instrukcja split
 # -------------------------------------------------------------------
 def test_p4_ambiguous_split():
-    _hdr("P4: AmbiguousTargetError split-month → exit 1, instrukcja split")
+    _hdr("P4: AmbiguousTargetError split-month → exit 0 SOFT-FAIL, instrukcja split")
     with MockEnv() as env:
         env.patch_find_target(AmbiguousTargetError(
             "Oczekiwano 2 kandydatów dla rozbitego tygodnia, znaleziono 1"
         ))
         rc = rw.cmd_preflight(WEEK_SPLIT_START, WEEK_SPLIT_END)
-    if rc == 1:
-        _ok("exit 1")
+    if rc == 0:
+        _ok("exit 0 (soft-fail, alert sent)")
     else:
-        _fail("exit 1", f"got {rc}")
+        _fail("exit 0 soft-fail", f"got {rc}")
     msg = env.telegram_messages[0] if env.telegram_messages else ""
     if "Tydzień krosuje miesiąc" in msg:
         _ok("Instrukcja split-month detected")
@@ -263,14 +272,14 @@ def test_p4_ambiguous_split():
 # P5: ValueError malformed range → exit 1
 # -------------------------------------------------------------------
 def test_p5_malformed():
-    _hdr("P5: ValueError malformed range → exit 1")
+    _hdr("P5: ValueError malformed range → exit 0 SOFT-FAIL")
     with MockEnv() as env:
         env.patch_find_target(ValueError("Nie mogę sparsować zakresu w pos 4 kol BS: '???'"))
         rc = rw.cmd_preflight(WEEK_SPLIT_START, WEEK_SPLIT_END)
-    if rc == 1:
-        _ok("exit 1")
+    if rc == 0:
+        _ok("exit 0 (soft-fail, alert sent)")
     else:
-        _fail("exit 1", f"got {rc}")
+        _fail("exit 0 soft-fail", f"got {rc}")
     if env.telegram_messages and "ValueError" in env.telegram_messages[0]:
         _ok("Telegram zawiera ValueError")
     else:

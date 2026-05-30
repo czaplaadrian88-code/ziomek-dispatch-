@@ -81,10 +81,13 @@ _UNIT_METADATA = {
     },
     "dispatch-cod-weekly-preflight.service": {
         "severity": "P2",
-        "playbook": "F2.1d COD Weekly — Mon 08:00 Warsaw",
+        "playbook": "F2.1d COD Weekly — Sun 23:00 Warsaw preflight (main run Mon 08:00)",
         "hint": "Telegram reminder re-enable post 11.05",
+        # 2026-05-30: job runs weekly (168h period). Threshold MUST exceed the
+        # period or every pre-run moment is structurally 'stale'. 192h = 8 days
+        # gives ~24h margin so a single delayed/failed Sunday run does not spam P2.
         "type": "cron_timer",
-        "expected_max_silence_h": 168.0,
+        "expected_max_silence_h": 192.0,
     },
     "dispatch-daily-accounting.service": {
         "severity": "P2",

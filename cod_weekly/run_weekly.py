@@ -714,8 +714,15 @@ def _build_preflight_instruction(week_start, week_end, segments, payday_str, err
 def cmd_preflight(week_start, week_end) -> int:
     """E5 — sprawdź czy arkusz ma kolumnę docelową bez scrape/write.
 
-    Zwraca exit 0 gdy OK (no telegram, log only).
-    Zwraca exit 1 gdy missing/ambiguous/sheet error (alert Telegram).
+    Exit codes (2026-05-30 decouple — patrz niżej):
+    - 0 = OK target found (no telegram, log only)
+    - 0 = SOFT-FAIL "arkusz nie gotowy" (brak/ambiguous/malformed kolumny) —
+          wysyła dedykowany alert Rafałowi z instrukcją, ale NIE traktujemy tego
+          jako awarii crona. Wcześniej exit 1 zatruwał success-ledger
+          (cron_health) → fałszywy P2 STALE watchdog spam dopóki sheet nie
+          poprawiony. Rafał i tak dostaje pełny alert z _try_alert.
+    - 1 = HARD-FAIL infra (nie mogę otworzyć arkusza) lub anomalia liczby
+          targetów — to realna awaria, OnFailure + staleness mają sens.
 
     Cel: niedziela 23:00 cron alertuje Rafała przed pn 08:00 odpaleniem.
     """
@@ -764,9 +771,11 @@ def cmd_preflight(week_start, week_end) -> int:
             f"\n  python3 -m dispatch_v2.cod_weekly.run_weekly --preflight "
             f"--week {week_start.isoformat()}:{week_end.isoformat()}"
         )
-        log.error(f"PREFLIGHT FAIL: {type(e).__name__}: {e}")
+        # SOFT-FAIL: alert Rafała wysłany, ale exit 0 — to oczekiwany sygnał
+        # "arkusz wymaga ręcznego dodania kolumny", NIE awaria crona (2026-05-30).
+        log.warning(f"PREFLIGHT SOFT-FAIL (arkusz nie gotowy): {type(e).__name__}: {e} — alert wysłany, exit 0")
         _try_alert(msg)
-        return 1
+        return 0
 
     log.info(f"PREFLIGHT OK: {len(targets)} target(s) found")
     for t in targets:
