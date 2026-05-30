@@ -1958,6 +1958,30 @@ OBJ_R6_DEADLINE_PENALTY_COEFF = float(_os.environ.get(
     "OBJ_R6_DEADLINE_PENALTY_COEFF", "100"))
 
 # ============================================================
+# Sprint OBJ FRESH — świeżość odbioru w objective (2026-05-30)
+# ============================================================
+# Diagnoza (replay 2026-05-30, n=1627 food-only): objective TSP był ślepy na
+# punktualność ODBIORU. Pickup ma tylko dolne ograniczenie (SetRange podbija do
+# ready_at), zero kary za odbiór PO gotowości jedzenia. Solver spokojnie parkuje
+# odbiór zajętego kuriera grubo po gotowości, bo każda DOSTAWA i tak ląduje przed
+# soft-deadlinem. Skala: mediana luzu = +1 min (clamp), ALE ogon: ~31% odbiorów
+# projektowanych >5 min po gotowości, ~18% >10 min, max ~50 min (case Sweet&Fit
+# +7 = p75). Kara progowa celowana w ogon: aktywna dopiero gdy projektowany
+# odbiór > ready_at + THRESHOLD (mediana clamped-to-ready zostaje nietknięta).
+# Coeff w jednostkach SetCumulVarSoftUpperBound: kara = coeff×100 per min
+# overshoot; 1 min jazdy = 1000 w arc-cost. Coeff=20 → 1 min nieświeżości ponad
+# próg ≈ 2 min jazdy (gentle — łamie remisy sekwencji, nie dominuje R6=100).
+# LIVE od 2026-05-30 (env ENABLE_OBJ_PICKUP_FRESHNESS=1 w serwisie); pomiar w
+# cieniu = pre/post tail z plan.pickup_at w shadow_decisions.jsonl. Rollback =
+# usuń env / ustaw 0 (bez redeploy kodu). Default w kodzie OFF (deploy-safe).
+ENABLE_OBJ_PICKUP_FRESHNESS = _os.environ.get(
+    "ENABLE_OBJ_PICKUP_FRESHNESS", "0") == "1"
+OBJ_PICKUP_FRESHNESS_THRESHOLD_MIN = float(_os.environ.get(
+    "OBJ_PICKUP_FRESHNESS_THRESHOLD_MIN", "8.0"))
+OBJ_PICKUP_FRESHNESS_PENALTY_COEFF = float(_os.environ.get(
+    "OBJ_PICKUP_FRESHNESS_PENALTY_COEFF", "20.0"))
+
+# ============================================================
 # V3.28 FAZA 3 ścieżka A — time_matrix DWELL correction (2026-05-11)
 # ============================================================
 # OR-Tools time_matrix[i][j] = travel + DWELL_at_arriving_node. Aligns solver

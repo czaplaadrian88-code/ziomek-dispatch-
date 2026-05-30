@@ -1044,6 +1044,37 @@ def _ortools_plan(
             f"OBJ_F1_DEADLINE_BUILD_FAIL {type(_dsd_e).__name__}: {_dsd_e}")
         delivery_soft_deadlines = None
 
+    # Sprint OBJ FRESH (2026-05-30): świeżość odbioru — soft upper bound per
+    # węzeł pickup, bound = (ready_at − now) + THRESHOLD min. Flag-gated, default
+    # OFF (deploy-safe; LIVE przez env). Karze projektowany odbiór dopiero gdy
+    # przekroczy gotowość o > próg → celuje w ogon ~18% (replay 2026-05-30),
+    # nie rusza mediany clamped-to-ready. Soft — nie wpływa na feasibility.
+    pickup_freshness_penalties = None
+    try:
+        if getattr(_common, "ENABLE_OBJ_PICKUP_FRESHNESS", False) and now is not None:
+            _pf_thr = float(getattr(_common, "OBJ_PICKUP_FRESHNESS_THRESHOLD_MIN", 8.0))
+            _pf_coeff = float(getattr(_common, "OBJ_PICKUP_FRESHNESS_PENALTY_COEFF", 20.0))
+            if _pf_coeff > 0:
+                _pf: List[Optional[Tuple[float, float]]] = [None] * N
+                for _i in range(N):
+                    _node = nodes[_i]
+                    if _node.get("kind") != "pickup":
+                        continue
+                    _ref = _node.get("ref")
+                    _ready = getattr(_ref, "pickup_ready_at", None) if _ref is not None else None
+                    if _ready is None:
+                        continue
+                    if _ready.tzinfo is None:
+                        _ready = _ready.replace(tzinfo=timezone.utc)
+                    _open_min = max(0.0, (_ready.astimezone(timezone.utc) - now
+                                          ).total_seconds() / 60.0)
+                    _pf[_i] = (_open_min + _pf_thr, _pf_coeff)
+                pickup_freshness_penalties = _pf
+    except Exception as _pf_e:
+        _log.warning(
+            f"OBJ_FRESH_BUILD_FAIL {type(_pf_e).__name__}: {_pf_e}")
+        pickup_freshness_penalties = None
+
     solution = tsp_solver.solve_tsp_with_constraints(
         num_stops=N,
         pickup_drop_pairs=pickup_drop_pairs,
@@ -1053,6 +1084,7 @@ def _ortools_plan(
         max_route_min=120.0,
         time_limit_ms=int(_ot_ms),
         delivery_soft_deadlines=delivery_soft_deadlines,
+        pickup_freshness_penalties=pickup_freshness_penalties,
         span_cost_coeff=_span_cost_coeff,
     )
 
@@ -1073,6 +1105,7 @@ def _ortools_plan(
             max_route_min=120.0,
             time_limit_ms=int(_ot_ms),
             delivery_soft_deadlines=delivery_soft_deadlines,
+            pickup_freshness_penalties=pickup_freshness_penalties,
             span_cost_coeff=_span_cost_coeff,
         )
 

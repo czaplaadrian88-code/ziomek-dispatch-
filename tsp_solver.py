@@ -47,6 +47,7 @@ def solve_tsp_with_constraints(
     time_limit_ms: int = 200,
     cost_matrix_min: Optional[List[List[float]]] = None,
     delivery_soft_deadlines: Optional[List[Optional[Tuple[float, float]]]] = None,
+    pickup_freshness_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
     span_cost_coeff: float = 0.0,
 ) -> Optional[TspSolution]:
     """Solve PDP z OR-Tools.
@@ -108,6 +109,9 @@ def solve_tsp_with_constraints(
         return None
     # Sprint OBJ F1: delivery_soft_deadlines validation
     if delivery_soft_deadlines is not None and len(delivery_soft_deadlines) != num_stops:
+        return None
+    # Sprint OBJ FRESH (2026-05-30): pickup_freshness_penalties validation
+    if pickup_freshness_penalties is not None and len(pickup_freshness_penalties) != num_stops:
         return None
 
     # OR-Tools setup
@@ -239,6 +243,31 @@ def solve_tsp_with_constraints(
             # bound w domenie [0, capacity]; deadline ujemny (jedzenie już
             # przeterminowane) → 0 → każda minuta zwłoki karana → ASAP.
             scaled_bound = max(0, min(int(deadline_min * TIME_SCALE), capacity_max))
+            idx = manager.NodeToIndex(stop_idx)
+            time_dimension.SetCumulVarSoftUpperBound(
+                idx, scaled_bound, int(round(coeff)))
+
+    # Sprint OBJ FRESH (2026-05-30): świeżość odbioru — soft upper bound na
+    # węzłach pickup. CumulVar(pickup) > (ready_at + threshold) → kara
+    # coeff×overshoot w objective. Symetryczny do delivery_soft_deadlines:
+    # ten sam prymityw OR-Tools (SetCumulVarSoftUpperBound), tylko anchor =
+    # ready_at (gotowość jedzenia) zamiast deadline dostawy. Soft — NIGDY nie
+    # powoduje INFEASIBLE (czysto objective); celowany w ogon (~18% odbiorów
+    # projektowanych ≥10 min po gotowości — replay 2026-05-30). Próg odejmuje
+    # medianę (clamp +1 min do ready), karze dopiero gratuitous staleness.
+    if pickup_freshness_penalties is not None:
+        import math as _m_pf
+        capacity_max = int(max_route_min * TIME_SCALE)
+        for stop_idx in range(num_stops):
+            spec = pickup_freshness_penalties[stop_idx]
+            if spec is None:
+                continue
+            bound_min, coeff = spec
+            if bound_min is None or coeff is None or coeff <= 0:
+                continue
+            if _m_pf.isnan(bound_min) or _m_pf.isinf(bound_min):
+                continue
+            scaled_bound = max(0, min(int(bound_min * TIME_SCALE), capacity_max))
             idx = manager.NodeToIndex(stop_idx)
             time_dimension.SetCumulVarSoftUpperBound(
                 idx, scaled_bound, int(round(coeff)))
