@@ -541,6 +541,25 @@ ENABLE_GEOCODE_CACHE_TTL = os.environ.get("ENABLE_GEOCODE_CACHE_TTL", "1") == "1
 ENABLE_GEOCODE_CACHE_DRIFT_ALERT = os.environ.get("ENABLE_GEOCODE_CACHE_DRIFT_ALERT", "0") == "1"
 
 # ============================================================
+# Geocode bbox guard (2026-05-30) — odrzuca out-of-bbox wyniki Google PRZED
+# zapisem do cache. Diagnoza (zadanie #4 geo-poison): "Witosa 26/16" rozwiązało
+# się na "Witosa 26, Klepacze" (52.505,22.694 ~70km) zamiast Białystok →
+# max_bag_time=10003min → KOORD. Cache spuchł do 33/6197 out-of-bbox (12 jawnie
+# z "białystok"), w tym sentinel Google [51.9194,19.1451] (środek Polski) dla
+# zbyt ogólnych/parser-artefakt zapytań. Brak guardu w momencie geokodu → zła
+# trafia do cache i zostaje. Guard: result poza bbox → return None (NIE cache),
+# log WARN GEOCODE_BBOX_REJECT. Caller dostaje None → istniejące defense gates
+# (no_pickup_geocode / KOORD). Bbox = Białystok + ~28km (Kleosin, Wasilków,
+# Supraśl, Choroszcz, Łapy). Multi-tenant Warsaw: bbox env-overridable per deploy.
+# Kill-switch: ENABLE_GEOCODE_BBOX_GUARD=0.
+# ============================================================
+ENABLE_GEOCODE_BBOX_GUARD = os.environ.get("ENABLE_GEOCODE_BBOX_GUARD", "1") == "1"
+GEOCODE_BBOX_LAT_MIN = float(os.environ.get("GEOCODE_BBOX_LAT_MIN", "52.85"))
+GEOCODE_BBOX_LAT_MAX = float(os.environ.get("GEOCODE_BBOX_LAT_MAX", "53.35"))
+GEOCODE_BBOX_LON_MIN = float(os.environ.get("GEOCODE_BBOX_LON_MIN", "22.85"))
+GEOCODE_BBOX_LON_MAX = float(os.environ.get("GEOCODE_BBOX_LON_MAX", "23.45"))
+
+# ============================================================
 # Strict courier ID space flag (2026-04-19)
 # Bugfix: build_fleet_snapshot dodawał keys z kurier_piny.json (4-digit PIN-y)
 # jako osobnych kurierów obok prawdziwych courier_id z kurier_ids.json.

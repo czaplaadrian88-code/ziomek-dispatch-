@@ -128,6 +128,38 @@ def _is_cache_entry_fresh(entry: dict, ttl_sec: float) -> bool:
     return age_sec < ttl_sec
 
 
+def _bbox_config() -> tuple:
+    """Lazy-load bbox guard flags z common.py. Returns
+    (enabled, lat_min, lat_max, lon_min, lon_max). Import fail → guard ON z
+    defaultową bbox Białystok+~28km (safe default — odrzuca oczywiste trucizny).
+    """
+    try:
+        from dispatch_v2.common import (
+            ENABLE_GEOCODE_BBOX_GUARD as _on,
+            GEOCODE_BBOX_LAT_MIN as _la0,
+            GEOCODE_BBOX_LAT_MAX as _la1,
+            GEOCODE_BBOX_LON_MIN as _lo0,
+            GEOCODE_BBOX_LON_MAX as _lo1,
+        )
+        return (bool(_on), float(_la0), float(_la1), float(_lo0), float(_lo1))
+    except Exception:
+        return (True, 52.85, 53.35, 22.85, 23.45)
+
+
+def _in_service_bbox(lat: float, lon: float) -> bool:
+    """True gdy (lat, lon) mieści się w bboxie obszaru obsługi (lub guard OFF).
+
+    Guard OFF → zawsze True (legacy passthrough). Nie-liczbowe coords → False
+    (defensywnie traktujemy jako poison)."""
+    on, la0, la1, lo0, lo1 = _bbox_config()
+    if not on:
+        return True
+    try:
+        return la0 <= float(lat) <= la1 and lo0 <= float(lon) <= lo1
+    except (TypeError, ValueError):
+        return False
+
+
 def _drift_meters(old_lat: float, old_lon: float, new_lat: float, new_lon: float) -> float:
     """Haversine distance w metrach między cache i nowym geocode result.
     Lokalna implementacja (no circular import dispatch_v2.geometry → osrm_client → ...).
@@ -300,6 +332,21 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
                    (time.perf_counter() - t_start) * 1000.0, error="google_and_osrm_failed")
         return None
 
+    # Bbox guard: odrzuć out-of-bbox wynik PRZED cache write (geo-poison prevention,
+    # zadanie #4). Caller dostaje None → istniejące defense gates (no_pickup_geocode).
+    if not _in_service_bbox(result[0], result[1]):
+        _stats.setdefault("bbox_rejected", 0)
+        _stats["bbox_rejected"] += 1
+        _stats["failures"] += 1
+        _log.warning(
+            f"GEOCODE_BBOX_REJECT address={address!r} city={effective_city!r} "
+            f"coords=({result[0]:.6f},{result[1]:.6f}) source={source} — "
+            f"poza bbox obsługi, NIE cache'uję"
+        )
+        _audit_log("address", address, effective_city, result[0], result[1],
+                   source, (time.perf_counter() - t_start) * 1000.0, error="bbox_reject")
+        return None
+
     with _lock:
         cache = _load_cache(CACHE_PATH)
         cache[key] = {
@@ -375,6 +422,18 @@ def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None)
     if result is None:
         _audit_log("restaurant", name, effective_city, None, None, "none",
                    (time.perf_counter() - t_start) * 1000.0, error="google_failed")
+        return None
+
+    # Bbox guard: restauracja poza bboxem = poison (dotknęłaby KAŻDEGO ordera z niej).
+    if not _in_service_bbox(result[0], result[1]):
+        _stats.setdefault("bbox_rejected", 0)
+        _stats["bbox_rejected"] += 1
+        _log.warning(
+            f"GEOCODE_BBOX_REJECT (restaurant) name={name!r} city={effective_city!r} "
+            f"coords=({result[0]:.6f},{result[1]:.6f}) — poza bbox obsługi, NIE cache'uję"
+        )
+        _audit_log("restaurant", name, effective_city, result[0], result[1],
+                   "google", (time.perf_counter() - t_start) * 1000.0, error="bbox_reject")
         return None
 
     with _lock:
