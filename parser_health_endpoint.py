@@ -289,6 +289,40 @@ def _v328_parse_worker_age_from_log(_unused_path: str = "") -> Optional[float]:
     return None
 
 
+def _v328_parse_pending_new_orders_from_log() -> Optional[int]:
+    """2026-05-30: liczba PENDING NEW_ORDER w event-busie z HEARTBEAT shadow.
+
+    Root cause false-positive worker_slow/worker_stuck: bramka E3b (Lekcja #153)
+    gate'owała na `new_orders_1h > 0` (okno 60-min), ale worker_age jest CHWILOWY
+    (sekundy od ostatniego processed). Przy rzadkim ruchu off-peak (3 zlec/h co
+    ~20 min) worker_age naturalnie przebija progi gdy bus jest pusty, a godzinny
+    licznik wciąż ≥1 → spurious alert. Realny sygnał "jest zaległa praca" to
+    PENDING NEW_ORDER>0 (kurier nie odbiera nowych zleceń mimo że czekają).
+
+    HEARTBEAT format (shadow_dispatcher): `event_bus=pending:N(NEW_ORDER:M)/...`.
+    Zwraca M z ostatniego HEARTBEAT, lub None gdy log/journalctl niedostępny
+    (caller robi fallback do new_orders_1h — nie tracimy detekcji).
+    """
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["journalctl", "-u", "dispatch-shadow", "--since", "5 minutes ago",
+             "--no-pager", "-q"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        if result.returncode != 0:
+            return None
+        import re
+        matches = re.findall(r"NEW_ORDER:([0-9]+)", result.stdout)
+        if matches:
+            return int(matches[-1])  # last = najnowszy HEARTBEAT
+    except Exception as e:
+        log.debug(f"health endpoint: parse pending NEW_ORDER via journalctl fail: {e}")
+    return None
+
+
 def _v328_compute_downstream_status(
     last_proposal_age_sec: Optional[float],
     events_failed_1h: int,
@@ -296,6 +330,7 @@ def _v328_compute_downstream_status(
     worker_age_sec: Optional[float],
     reconciliation_status: Optional[str] = None,  # TASK 3 bonus 2026-05-04
     reconciliation_reason: Optional[str] = None,
+    pending_new_orders: Optional[int] = None,  # 2026-05-30 sparse-traffic gate
 ) -> Dict[str, Any]:
     """V3.28 Fix 5 helper: compute downstream_status + reason z cross-check signals.
 
@@ -316,6 +351,15 @@ def _v328_compute_downstream_status(
 
     Returns dict z 'downstream_status' (ok|degraded|critical) + 'downstream_reason'.
     """
+    # 2026-05-30: realny sygnał "jest zaległa praca dla workera" = PENDING
+    # NEW_ORDER>0 w event-busie, NIE godzinny new_orders_1h. worker_age jest
+    # chwilowy; new_orders_1h to okno 60-min → off-peak (rzadki ruch) daje
+    # spurious worker_slow/stuck. Fallback do new_orders_1h gdy pending
+    # niedostępny (journalctl/log fail) — nie tracimy detekcji (Z2 root cause).
+    if pending_new_orders is not None:
+        has_pending_work = pending_new_orders > 0
+    else:
+        has_pending_work = new_orders_1h > 0
     # Critical priority — pipeline silent despite work
     if (
         last_proposal_age_sec is not None
@@ -327,12 +371,13 @@ def _v328_compute_downstream_status(
             "downstream_reason": "pipeline_silent_despite_work",
         }
     # Critical — worker hard stuck (twice slow threshold)
-    # E3b (Lekcja #153): gate na new_orders_1h>0 — worker_age = last_processed_age,
-    # rośnie naturalnie off-peak bez napływu zleceń; bez pracy to NIE jest "stuck".
+    # E3b (Lekcja #153) + 2026-05-30: gate na has_pending_work (PENDING NEW_ORDER>0),
+    # NIE new_orders_1h. worker_age = last_processed_age rośnie naturalnie off-peak
+    # przy rzadkim ruchu (bus pusty); "stuck" tylko gdy realnie czekają zlecenia.
     if (
         worker_age_sec is not None
         and worker_age_sec > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2
-        and new_orders_1h > 0
+        and has_pending_work
     ):
         return {
             "downstream_status": "critical",
@@ -355,7 +400,7 @@ def _v328_compute_downstream_status(
     if (
         worker_age_sec is not None
         and worker_age_sec > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC
-        and new_orders_1h > 0
+        and has_pending_work
     ):
         return {
             "downstream_status": "degraded",
@@ -639,6 +684,8 @@ class _HealthHandler(BaseHTTPRequestHandler):
         # parser metadata".
         events_stats = _v328_query_events_stats()
         worker_age_sec = _v328_parse_worker_age_from_log()
+        # 2026-05-30: PENDING NEW_ORDER z HEARTBEAT shadow — gate worker_slow/stuck.
+        pending_new_orders = _v328_parse_pending_new_orders_from_log()
         # V3.28 Fix 5b: last_proposal_age z osobnego źródła (journalctl dispatch-telegram)
         last_proposal_age_sec = _v328_parse_last_propose_age_from_journal()
         # TASK 3 bonus (2026-05-04): reconciliation status feeds downstream cross-check.
@@ -663,6 +710,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             worker_age_sec=worker_age_sec,
             reconciliation_status=recon_status,
             reconciliation_reason=recon_reason,
+            pending_new_orders=pending_new_orders,
         )
 
         snapshot = {
@@ -686,6 +734,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             "events_failed_last_1h_count": events_stats.get("events_failed_last_1h_count", 0),
             "new_orders_last_1h_count": events_stats.get("new_orders_last_1h_count", 0),
             "worker_processed_age_sec": worker_age_sec,  # Fix 5b: journalctl dispatch-shadow
+            "pending_new_orders": pending_new_orders,  # 2026-05-30: gate signal dla worker_slow/stuck
             "downstream_status": downstream["downstream_status"],
             "downstream_reason": downstream["downstream_reason"],
         }

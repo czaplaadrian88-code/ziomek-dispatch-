@@ -127,6 +127,93 @@ def test_compute_downstream_worker_slow_no_work_NOT_degraded():
     assert result["downstream_reason"] is None
 
 
+def test_compute_downstream_sparse_traffic_stuck_NOT_critical():
+    """2026-05-30 sparse-traffic false-positive: new_orders_1h=3 (godzinne okno,
+    wszystkie już przetworzone) + pending_new_orders=0 + worker_age=1300s → NIE critical.
+
+    To realny scenariusz sobota rano: 3 zlec/h co ~20 min, worker_age rośnie między
+    nimi, bus pusty (pending NEW_ORDER:0). Stary gate (new_orders_1h>0) dawał
+    fałszywy worker_stuck. Nowy gate (pending) poprawnie milczy.
+    """
+    result = phe._v328_compute_downstream_status(
+        last_proposal_age_sec=120.0,
+        events_failed_1h=0,
+        new_orders_1h=3,
+        worker_age_sec=1300.0,
+        pending_new_orders=0,
+    )
+    assert result["downstream_status"] == "ok"
+    assert result["downstream_reason"] is None
+
+
+def test_compute_downstream_sparse_traffic_slow_NOT_degraded():
+    """2026-05-30: new_orders_1h=3 + pending_new_orders=0 + worker_age=700s → NIE degraded."""
+    result = phe._v328_compute_downstream_status(
+        last_proposal_age_sec=120.0,
+        events_failed_1h=0,
+        new_orders_1h=3,
+        worker_age_sec=700.0,
+        pending_new_orders=0,
+    )
+    assert result["downstream_status"] == "ok"
+    assert result["downstream_reason"] is None
+
+
+def test_compute_downstream_real_backlog_stuck_critical():
+    """2026-05-30: pending_new_orders=2 (realna zaległość) + worker_age=1300s → critical worker_stuck.
+
+    Worker NIE odbiera czekających zleceń → prawdziwy stuck (detekcja zachowana).
+    """
+    result = phe._v328_compute_downstream_status(
+        last_proposal_age_sec=120.0,
+        events_failed_1h=0,
+        new_orders_1h=3,
+        worker_age_sec=1300.0,
+        pending_new_orders=2,
+    )
+    assert result["downstream_status"] == "critical"
+    assert result["downstream_reason"] == "worker_stuck"
+
+
+def test_compute_downstream_real_backlog_slow_degraded():
+    """2026-05-30: pending_new_orders=1 + worker_age=700s → degraded worker_slow."""
+    result = phe._v328_compute_downstream_status(
+        last_proposal_age_sec=120.0,
+        events_failed_1h=0,
+        new_orders_1h=0,  # godzinne okno może być 0 ale bus ma zaległość
+        worker_age_sec=700.0,
+        pending_new_orders=1,
+    )
+    assert result["downstream_status"] == "degraded"
+    assert result["downstream_reason"] == "worker_slow"
+
+
+def test_compute_downstream_pending_none_falls_back_to_new_orders_1h():
+    """2026-05-30: pending niedostępny (journalctl fail) → fallback do new_orders_1h.
+
+    Zachowuje E3b behavior gdy log unparseable — nie tracimy detekcji.
+    """
+    # fallback: new_orders_1h>0 + worker_age stuck → critical (jak przed zmianą)
+    result_work = phe._v328_compute_downstream_status(
+        last_proposal_age_sec=120.0,
+        events_failed_1h=0,
+        new_orders_1h=5,
+        worker_age_sec=1300.0,
+        pending_new_orders=None,
+    )
+    assert result_work["downstream_status"] == "critical"
+    assert result_work["downstream_reason"] == "worker_stuck"
+    # fallback: new_orders_1h=0 + worker_age stuck → ok (off-peak)
+    result_quiet = phe._v328_compute_downstream_status(
+        last_proposal_age_sec=120.0,
+        events_failed_1h=0,
+        new_orders_1h=0,
+        worker_age_sec=1300.0,
+        pending_new_orders=None,
+    )
+    assert result_quiet["downstream_status"] == "ok"
+
+
 def test_compute_downstream_critical_takes_priority_over_degraded():
     """Compound anomalies — critical bije degraded (priority order)."""
     result = phe._v328_compute_downstream_status(
