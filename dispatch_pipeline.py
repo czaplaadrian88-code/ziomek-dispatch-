@@ -2413,72 +2413,67 @@ def _assess_order_impl(
                 if _gap_irg > C.MAX_INTRA_RESTAURANT_GAP_MIN:
                     intra_rest_gap_hard_reject = True
 
-        # R-LATE-PICKUP (HARD, 2026-05-31, Adrian): max 5 min spóźnienia na ODBIÓR.
-        # Dwie nienaruszalne reguły dyspozytorskie: (1) 5 min late pickup [tu],
-        # (2) 35 min doręczenie [R6 BAG_TIME_HARD_MAX_MIN]. Per-pickup w plan.pickup_at:
-        # late = plan_pickup_eta - ref. ref = committed czas_kuriera_warsaw (bag-order /
-        # nowy firm-commit) | pickup_ready_at (nowy bez commitu). Post-solve gate
-        # (NIE okno TSP — lekcja E3: zaciśnięcie → mass INFEASIBLE → ślepy greedy).
-        # Metryka liczona ZAWSZE (shadow); reject tylko gdy ENABLE_LATE_PICKUP_HARD_GATE.
-        late_pickup_max_min = 0.0
-        late_pickup_worst_oid = None
-        late_pickup_worst_restaurant = None
-        late_pickup_hard_reject = False
+        # R-LATE-PICKUP (2026-05-31, Adrian): max 5 min spóźnienia na ODBIÓR.
+        # Dwie nienaruszalne reguły: (1) 5 min spóźnienie odbioru [tu], (2) 35 min
+        # doręczenie [R6 BAG_TIME_HARD_MAX_MIN]. Liczone z plan.pickup_at vs ref.
+        # DWA osobne pomiary (Adrian 2026-05-31 — patrz feedback memory):
+        #   • COMMITTED bag-order (już zadeklarowany czas_kuriera): spóźnienie >5 =
+        #     „złamana obietnica" → kandydat demotowany do najniższego tieru (NIE bierze
+        #     tego zlecenia jeśli jest ktokolwiek lepszy; przypadek 477237 Rukola).
+        #   • NOWY order (vs pickup_ready / firm-commit): spóźnienie >5 NIE wyklucza —
+        #     sygnalizuje „trzeba przedłużyć czas odbioru". Selekcja (niżej) preferuje
+        #     kandydatów na czas; gdy brak → najszybszy + propozycja przedłużonego czasu.
+        # Selekcja = tiering (NIE hard-reject) → ZAWSZE jest propozycja (reguła Adriana
+        # „zawsze daje propozycje"). Post-solve (NIE okno TSP — lekcja E3). Metryki
+        # liczone ZAWSZE; tiering aktywny tylko gdy ENABLE_LATE_PICKUP_HARD_GATE.
+        late_pickup_max_min = 0.0            # max(committed, new) — ciągłość shadow
+        late_pickup_committed_max = 0.0      # tylko bag-committed (czas_kuriera)
+        late_pickup_committed_worst_oid = None
+        late_pickup_committed_worst_restaurant = None
+        new_pickup_late_min = 0.0            # nowy order vs jego ref
+        new_pickup_eta_iso = None            # ETA odbioru nowego (render + „najszybszy")
+        new_pickup_needs_extension = False   # nowy >5 → propozycja przedłużonego czasu
+        late_pickup_committed_breach = False  # committed >5 → tier ostateczny
         if plan is not None:
             from datetime import datetime as _dt_lp
+            _LP_LIMIT = getattr(C, "LATE_PICKUP_HARD_MAX_MIN", 5.0)
             _new_oid_lp = str(getattr(new_order, "order_id", "") or "")
-            _ref_by_oid_lp = {}  # oid → (declared_pickup_dt, restaurant)
+            _plan_pickup_at_lp = getattr(plan, "pickup_at", None) or {}
+
+            def _parse_lp(_raw):
+                try:
+                    _d = (_dt_lp.fromisoformat(str(_raw).replace("Z", "+00:00"))
+                          if isinstance(_raw, str) else _raw)
+                    return _d if _d.tzinfo else _d.replace(tzinfo=timezone.utc)
+                except (TypeError, ValueError, AttributeError):
+                    return None
+
+            # COMMITTED bag-orders: spóźnienie vs zadeklarowany czas_kuriera.
             for _b_lp in bag_raw or []:
                 _boid_lp = str(_b_lp.get("order_id") or "")
-                _ck_lp = _b_lp.get("czas_kuriera_warsaw")
-                if not _boid_lp or not _ck_lp:
-                    continue
-                try:
-                    _ref_dt_lp = _dt_lp.fromisoformat(str(_ck_lp).replace("Z", "+00:00"))
-                    if _ref_dt_lp.tzinfo is None:
-                        _ref_dt_lp = _ref_dt_lp.replace(tzinfo=timezone.utc)
-                    _ref_by_oid_lp[_boid_lp] = (_ref_dt_lp, _b_lp.get("restaurant"))
-                except (TypeError, ValueError):
-                    continue
-            if _new_oid_lp:
-                _new_ref_lp = None
-                _new_ck_lp = order_event.get("czas_kuriera_warsaw")
-                if _new_ck_lp:
-                    try:
-                        _new_ref_lp = _dt_lp.fromisoformat(str(_new_ck_lp).replace("Z", "+00:00"))
-                        if _new_ref_lp.tzinfo is None:
-                            _new_ref_lp = _new_ref_lp.replace(tzinfo=timezone.utc)
-                    except (TypeError, ValueError):
-                        _new_ref_lp = None
-                if _new_ref_lp is None and pickup_ready_at is not None:
-                    _new_ref_lp = pickup_ready_at
-                    if _new_ref_lp.tzinfo is None:
-                        _new_ref_lp = _new_ref_lp.replace(tzinfo=timezone.utc)
-                if _new_ref_lp is not None:
-                    _ref_by_oid_lp[_new_oid_lp] = (_new_ref_lp, restaurant)
-            _plan_pickup_at_lp = getattr(plan, "pickup_at", None) or {}
-            for _oid_lp, _pat_raw_lp in _plan_pickup_at_lp.items():
-                _ref_tuple_lp = _ref_by_oid_lp.get(str(_oid_lp))
-                if _ref_tuple_lp is None or _pat_raw_lp is None:
-                    continue
-                _ref_dt_lp, _ref_rest_lp = _ref_tuple_lp
-                try:
-                    _pat_dt_lp = (
-                        _dt_lp.fromisoformat(str(_pat_raw_lp).replace("Z", "+00:00"))
-                        if isinstance(_pat_raw_lp, str) else _pat_raw_lp
-                    )
-                    if _pat_dt_lp.tzinfo is None:
-                        _pat_dt_lp = _pat_dt_lp.replace(tzinfo=timezone.utc)
-                except (TypeError, ValueError):
+                _ref_dt_lp = _parse_lp(_b_lp.get("czas_kuriera_warsaw"))
+                _pat_dt_lp = _parse_lp(_plan_pickup_at_lp.get(_boid_lp))
+                if not _boid_lp or _ref_dt_lp is None or _pat_dt_lp is None:
                     continue
                 _late_lp = (_pat_dt_lp - _ref_dt_lp).total_seconds() / 60.0
-                if _late_lp > late_pickup_max_min:
-                    late_pickup_max_min = _late_lp
-                    late_pickup_worst_oid = str(_oid_lp)
-                    late_pickup_worst_restaurant = _ref_rest_lp
-            if (getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False)
-                    and late_pickup_max_min > getattr(C, "LATE_PICKUP_HARD_MAX_MIN", 5.0)):
-                late_pickup_hard_reject = True
+                if _late_lp > late_pickup_committed_max:
+                    late_pickup_committed_max = _late_lp
+                    late_pickup_committed_worst_oid = _boid_lp
+                    late_pickup_committed_worst_restaurant = _b_lp.get("restaurant")
+
+            # NOWY order: ETA odbioru + spóźnienie vs ref (firm-commit | pickup_ready).
+            if _new_oid_lp:
+                _new_ref_lp = _parse_lp(order_event.get("czas_kuriera_warsaw")) or _parse_lp(pickup_ready_at)
+                _new_pat_dt = _parse_lp(_plan_pickup_at_lp.get(_new_oid_lp))
+                if _new_pat_dt is not None:
+                    new_pickup_eta_iso = _new_pat_dt.astimezone(timezone.utc).isoformat()
+                if _new_ref_lp is not None and _new_pat_dt is not None:
+                    new_pickup_late_min = (_new_pat_dt - _new_ref_lp).total_seconds() / 60.0
+
+            late_pickup_max_min = max(late_pickup_committed_max, new_pickup_late_min)
+            if getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False):
+                late_pickup_committed_breach = late_pickup_committed_max > _LP_LIMIT
+                new_pickup_needs_extension = new_pickup_late_min > _LP_LIMIT
 
         # Wczytaj rule_weights (adaptive penalties R1/R5/R8) — B2: cached + głośny log na fail.
         _rw = _load_rule_weights()
@@ -3030,11 +3025,15 @@ def _assess_order_impl(
             "intra_rest_gap_max_pair": intra_rest_gap_max_pair,
             "intra_rest_gap_max_restaurant": intra_rest_gap_max_restaurant,
             "intra_rest_gap_hard_reject": intra_rest_gap_hard_reject,
-            # R-LATE-PICKUP (2026-05-31): max spóźnienie na odbiór vs zadeklarowany czas.
+            # R-LATE-PICKUP (2026-05-31): committed vs nowy odbiór (patrz tiering selekcji).
             "late_pickup_max_min": round(late_pickup_max_min, 2),
-            "late_pickup_worst_oid": late_pickup_worst_oid,
-            "late_pickup_worst_restaurant": late_pickup_worst_restaurant,
-            "late_pickup_hard_reject": late_pickup_hard_reject,
+            "late_pickup_committed_max": round(late_pickup_committed_max, 2),
+            "late_pickup_committed_worst_oid": late_pickup_committed_worst_oid,
+            "late_pickup_committed_worst_restaurant": late_pickup_committed_worst_restaurant,
+            "late_pickup_committed_breach": late_pickup_committed_breach,
+            "new_pickup_late_min": round(new_pickup_late_min, 2),
+            "new_pickup_eta_iso": new_pickup_eta_iso,
+            "new_pickup_needs_extension": new_pickup_needs_extension,
             "bonus_penalty_sum": round(bonus_penalty_sum, 2),
             # Transparency OPCJA A (2026-04-19): order_id → (restaurant, delivery_address)
             # mapping dla route section w telegram_approver. Per-courier bag snapshot.
@@ -3177,18 +3176,10 @@ def _assess_order_impl(
             _rest_irg = intra_rest_gap_max_restaurant or "?"
             reason = f"intra_restaurant_gap_exceeded ({intra_rest_gap_max_min:.1f}min > {C.MAX_INTRA_RESTAURANT_GAP_MIN} pod {_rest_irg})"
 
-        # R-LATE-PICKUP hard reject (2026-05-31, Adrian): plan pickup ETA > zadeklarowany
-        # czas odbioru + LATE_PICKUP_HARD_MAX_MIN (5 min). Override MAYBE → NO. Jedna z
-        # dwóch nienaruszalnych reguł (druga: R6 35 min doręczenie). Eliminuje propozycje
-        # ze spóźnionym/przeciągniętym odbiorem zamiast wciskać je z oknem +60 min.
-        if late_pickup_hard_reject and verdict == "MAYBE":
-            verdict = "NO"
-            _rest_lp = late_pickup_worst_restaurant or "?"
-            reason = (
-                f"late_pickup_hard_reject ({late_pickup_max_min:.1f}min > "
-                f"{C.LATE_PICKUP_HARD_MAX_MIN:.0f}min spóźnienie odbioru, "
-                f"oid={late_pickup_worst_oid} pod {_rest_lp})"
-            )
+        # R-LATE-PICKUP (2026-05-31): NIE hard-reject — kandydat zostaje feasible,
+        # a spóźnienie odbioru rozstrzyga TIERING selekcji niżej (Adrian: „zawsze daje
+        # propozycje"). late_pickup_committed_breach → najniższy tier; new_pickup_needs_extension
+        # → propozycja przedłużonego czasu. Patrz: late-pickup tiering reorder po _demote_blind_empty.
 
         # BUG-D Faza 2b: stop TLS leg tracking + aggregate przed Candidate construction.
         # stop_v2_request_tracking jest idempotent — outer finally zrobi second no-op call.
@@ -3437,6 +3428,55 @@ def _assess_order_impl(
     # invariant przeżył (informed first, blind+empty last) do final top[:16].
     # Patrz: eod_drafts/2026-05-27/sprint_diag_27may/operator_favorites_root_cause_2026-05-27.md
     feasible = _demote_blind_empty(feasible, order_id)
+
+    # R-LATE-PICKUP tiering (2026-05-31, Adrian) — FINAL reorder pass, AFTER demote.
+    # NIE usuwa kandydatów (→ „zawsze daje propozycje"), tylko ustawia priorytet:
+    #   tier 0: nie psuje umówionego odbioru ORAZ zdąży na nowy ≤5 min (na czas)
+    #   tier 1: nie psuje umówionego, ale nowy odbiór potrzebuje przedłużenia (>5 min)
+    #   tier 2: psuje umówiony odbiór committed (>5 min) — OSTATECZNOŚĆ (jak 477237)
+    # Stabilny sort po (tier, dotychczasowa kolejność) — demote/score zachowane w tierze.
+    # Gdy zwycięzca tier>0 → pickup_extension_redirect niesie propozycję czasu + powód.
+    # Aktywne tylko gdy ENABLE_LATE_PICKUP_HARD_GATE (metryki w candidate.metrics).
+    pickup_extension_redirect = None
+    if getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False) and feasible:
+        def _lp_tier(c):
+            m = c.metrics or {}
+            if m.get("late_pickup_committed_breach"):
+                return 2
+            if m.get("new_pickup_needs_extension"):
+                return 1
+            return 0
+        _orig_order = {id(c): i for i, c in enumerate(feasible)}
+        _has_lower = any(_lp_tier(c) == 0 for c in feasible)
+        # W trybie przedłużenia (brak tier-0) wybór = NAJSZYBSZY do odbioru nowego
+        # (Adrian: „bierze tego który będzie najszybciej"). Inaczej zachowaj ranking.
+        def _new_eta_key(c):
+            _iso = (c.metrics or {}).get("new_pickup_eta_iso")
+            return _iso or "9999"
+        if _has_lower:
+            feasible.sort(key=lambda c: (_lp_tier(c), _orig_order[id(c)]))
+        else:
+            feasible.sort(key=lambda c: (_lp_tier(c), _new_eta_key(c), _orig_order[id(c)]))
+        _winner = feasible[0]
+        _wm = _winner.metrics or {}
+        _wtier = _lp_tier(_winner)
+        if _wtier >= 1:
+            pickup_extension_redirect = {
+                "tier": _wtier,
+                "courier_id": str(getattr(_winner, "courier_id", "")),
+                "suggested_pickup_iso": _wm.get("new_pickup_eta_iso"),
+                "new_pickup_late_min": _wm.get("new_pickup_late_min"),
+                "committed_breach_min": (round(_wm.get("late_pickup_committed_max", 0.0), 1)
+                                         if _wtier == 2 else None),
+                "committed_worst_restaurant": (_wm.get("late_pickup_committed_worst_restaurant")
+                                               if _wtier == 2 else None),
+            }
+            log.info(
+                f"LATE_PICKUP_TIER order={order_id} winner={_winner.courier_id} tier={_wtier} "
+                f"new_late={_wm.get('new_pickup_late_min')}min "
+                f"committed_breach={_wm.get('late_pickup_committed_max')}min "
+                f"suggested_pickup={_wm.get('new_pickup_eta_iso')}"
+            )
 
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]
@@ -3781,6 +3821,8 @@ def _assess_order_impl(
             pool_total_count=len(candidates),
             pool_feasible_count=len(feasible),
         )
+        # R-LATE-PICKUP: propozycja przedłużonego czasu odbioru (tier 1/2) dla renderu.
+        _result_pf.pickup_extension_redirect = pickup_extension_redirect
         _classify_and_set_auto_route(_result_pf, fleet_snapshot, order_event, now=now)
         return _result_pf
 
@@ -3813,15 +3855,7 @@ def _assess_order_impl(
     # fallback (pusty bag, naturalnie eliminuje pair).
     def _intra_gap_reject(c):
         return bool((c.metrics or {}).get("intra_rest_gap_hard_reject"))
-    # R-LATE-PICKUP (2026-05-31): kandydat z >5 min spóźnieniem odbioru NIE wraca
-    # jako best_effort PROPOSE (twarda reguła — best_effort nie może jej łamać).
-    # No-op gdy ENABLE_LATE_PICKUP_HARD_GATE=False (late_pickup_hard_reject zawsze False).
-    def _late_pickup_reject(c):
-        return bool((c.metrics or {}).get("late_pickup_hard_reject"))
-    with_plan = [
-        c for c in candidates
-        if c.plan is not None and not _intra_gap_reject(c) and not _late_pickup_reject(c)
-    ]
+    with_plan = [c for c in candidates if c.plan is not None and not _intra_gap_reject(c)]
     with_plan.sort(key=lambda c: (_r6_pov_count(c), c.plan.sla_violations, c.plan.total_duration_min))
     if with_plan:
         best = with_plan[0]

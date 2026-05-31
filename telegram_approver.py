@@ -1346,6 +1346,27 @@ def _format_proposal_v2(decision: dict) -> str:
                 lines.append(f"⏱️ Odbiór: {display_hhmm} · " + " · ".join(ctx_parts))
             else:
                 lines.append(f"⏱️ Odbiór: {display_hhmm}")
+    # R-LATE-PICKUP (2026-05-31): propozycja przedłużonego czasu odbioru.
+    # tier 1 — nikt nie zdąży na deklarowany czas → najszybszy + sugerowany czas
+    # (do odpowiedzi restauracji; Ziomek NIE nadpisuje ustalonego czasu w panelu).
+    # tier 2 — jedyna opcja psuje JUŻ umówiony odbiór → ostrzeżenie.
+    _ext = decision.get("pickup_extension_redirect") or {}
+    if _ext:
+        _sug_hhmm = _iso_to_warsaw_hhmm(_ext.get("suggested_pickup_iso"))
+        if _ext.get("tier") == 2:
+            _br = _ext.get("committed_breach_min")
+            _rest_br = _ext.get("committed_worst_restaurant") or "umówiony odbiór"
+            lines.append(
+                f"⚠️ Brak kuriera na czas — najlepszy psuje {_rest_br} o +{_br} min "
+                f"(brak lepszej opcji)"
+            )
+        elif _sug_hhmm is not None:
+            _nl = _ext.get("new_pickup_late_min")
+            _nl_txt = f" (+{int(round(_nl))} min ponad deklarację)" if isinstance(_nl, (int, float)) else ""
+            lines.append(
+                f"⏰ Proponowany czas odbioru: {_sug_hhmm}{_nl_txt} — najszybszy kurier; "
+                f"do odpowiedzi restauracji"
+            )
     lines.append("")
     lines.append(_conf_line_v2(decision))
     lines.append("")

@@ -656,6 +656,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # (auto-prop przez prefix "difficult_"), live KOORD redirect populuje to
         # result-level pole.
         "difficult_case_redirect": getattr(result, "difficult_case_redirect", None),
+        # R-LATE-PICKUP (2026-05-31): propozycja przedłużonego czasu odbioru (tier 1/2).
+        # PROPOSE idzie do Telegrama — render dorzuca „⏰ odbiór przesunięty na HH:MM".
+        "pickup_extension_redirect": getattr(result, "pickup_extension_redirect", None),
     }
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)
