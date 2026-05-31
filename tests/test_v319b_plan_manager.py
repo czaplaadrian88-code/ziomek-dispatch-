@@ -342,6 +342,140 @@ except ValueError:
     check("save_plan validates stop type enum", True)
 
 # ============================================================
+print("=== KROK 2: refloor_pickup (czas_kuriera floor + cascade) ===")
+# ============================================================
+
+
+def _refloor_body(pu_pred, dr_pred, extra_stops=None):
+    """Plan: pickup R @ pu_pred, dropoff R @ dr_pred (+ opcjonalne stopy)."""
+    stops = [
+        {"order_id": "R", "type": "pickup",
+         "coords": {"lat": 53.10, "lng": 23.10}, "dwell_min": 2.0,
+         "status_at_plan_time": "assigned", "predicted_at": pu_pred},
+        {"order_id": "R", "type": "dropoff",
+         "coords": {"lat": 53.15, "lng": 23.20}, "dwell_min": 1.0,
+         "status_at_plan_time": "assigned", "predicted_at": dr_pred},
+    ]
+    if extra_stops:
+        stops.extend(extra_stops)
+    return {
+        "start_pos": {"lat": 53.13, "lng": 23.15, "source": "gps",
+                      "source_ts": _now_iso()},
+        "start_ts": _now_iso(),
+        "stops": stops,
+        "optimization_method": "bruteforce",
+    }
+
+
+def _pred_of(cid, oid, kind):
+    plan = pm.load_plan(cid)
+    for s in plan["stops"]:
+        if s["order_id"] == oid and s["type"] == kind:
+            return pm._parse_iso_aware(s["predicted_at"])
+    return None
+
+
+# Bug Rukola: pickup predicted = restauracja 13:09:45 (UTC 11:09:45),
+# obietnica czas_kuriera = 13:26 Warsaw (UTC 11:26:00) → delta 975s = 16.25 min.
+_wipe()
+pm.save_plan("r1", _refloor_body(
+    "2026-05-31T11:09:45+00:00", "2026-05-31T11:20:00+00:00"))
+v_before = pm.load_plan("r1")["plan_version"]
+shift = pm.refloor_pickup("r1", "R", "2026-05-31T13:26:00+02:00")
+check("refloor returns ~16.25 min shift", abs(shift - 16.25) < 0.01)
+pu = _pred_of("r1", "R", "pickup")
+check("refloor lifts pickup to czas_kuriera floor (UTC 11:26)",
+      pu == pm._parse_iso_aware("2026-05-31T11:26:00+00:00"))
+dr = _pred_of("r1", "R", "dropoff")
+check("refloor cascades dropoff by same +975s (UTC 11:36:15)",
+      dr == pm._parse_iso_aware("2026-05-31T11:36:15+00:00"))
+check("refloor bumps plan_version",
+      pm.load_plan("r1")["plan_version"] == v_before + 1)
+
+# Idempotent: druga próba z tym samym floor → pickup już == floor → no-op.
+v_after = pm.load_plan("r1")["plan_version"]
+shift2 = pm.refloor_pickup("r1", "R", "2026-05-31T13:26:00+02:00")
+check("refloor idempotent (second call no-op, returns 0)", shift2 == 0.0)
+check("refloor idempotent: no version bump",
+      pm.load_plan("r1")["plan_version"] == v_after)
+
+# Plan późniejszy niż obietnica (kurier z tyłu) → NIE obniżamy, no-op.
+_wipe()
+pm.save_plan("r2", _refloor_body(
+    "2026-05-31T11:40:00+00:00", "2026-05-31T11:55:00+00:00"))
+shift3 = pm.refloor_pickup("r2", "R", "2026-05-31T13:26:00+02:00")  # UTC 11:26 < 11:40
+check("refloor no-op when plan later than promise (never earlier)", shift3 == 0.0)
+check("refloor keeps later pickup untouched",
+      _pred_of("r2", "R", "pickup") == pm._parse_iso_aware("2026-05-31T11:40:00+00:00"))
+
+# Delta < 60s → no-op (anti-churn).
+_wipe()
+pm.save_plan("r3", _refloor_body(
+    "2026-05-31T11:09:45+00:00", "2026-05-31T11:20:00+00:00"))
+shift4 = pm.refloor_pickup("r3", "R", "2026-05-31T13:10:30+02:00")  # UTC 11:10:30, +45s
+check("refloor no-op when required lift < 60s", shift4 == 0.0)
+
+# Cascade obejmuje stop INNEGO ordera po pickupie R.
+_wipe()
+pm.save_plan("r4", _refloor_body(
+    "2026-05-31T11:09:45+00:00", "2026-05-31T11:30:00+00:00",
+    extra_stops=[{"order_id": "S", "type": "dropoff",
+                  "coords": {"lat": 53.18, "lng": 23.22}, "dwell_min": 1.0,
+                  "status_at_plan_time": "picked_up",
+                  "predicted_at": "2026-05-31T11:18:00+00:00"}]))
+pm.refloor_pickup("r4", "R", "2026-05-31T13:26:00+02:00")  # +975s
+s_dr = _pred_of("r4", "S", "dropoff")
+check("refloor cascades downstream stop of OTHER order (S +975s → 11:34:15)",
+      s_dr == pm._parse_iso_aware("2026-05-31T11:34:15+00:00"))
+
+# Brak żywego pickupu (order już odebrany — tylko dropoff) → no-op.
+_wipe()
+pm.save_plan("r5", {
+    "start_pos": {"lat": 53.13, "lng": 23.15, "source": "gps",
+                  "source_ts": _now_iso()},
+    "start_ts": _now_iso(),
+    "stops": [{"order_id": "R", "type": "dropoff",
+               "coords": {"lat": 53.15, "lng": 23.20}, "dwell_min": 1.0,
+               "status_at_plan_time": "picked_up",
+               "predicted_at": "2026-05-31T11:09:45+00:00"}],
+    "optimization_method": "bruteforce",
+})
+shift6 = pm.refloor_pickup("r5", "R", "2026-05-31T13:26:00+02:00")
+check("refloor no-op when no live pickup (already picked up)", shift6 == 0.0)
+check("refloor leaves dropoff untouched when no pickup",
+      _pred_of("r5", "R", "dropoff") == pm._parse_iso_aware("2026-05-31T11:09:45+00:00"))
+
+# Plan zinwalidowany → no-op.
+_wipe()
+pm.save_plan("r6", _refloor_body(
+    "2026-05-31T11:09:45+00:00", "2026-05-31T11:20:00+00:00"))
+pm.invalidate_plan("r6", "MANUAL")
+check("refloor no-op on invalidated plan",
+      pm.refloor_pickup("r6", "R", "2026-05-31T13:26:00+02:00") == 0.0)
+
+# Plan nieobecny → no-op.
+_wipe()
+check("refloor no-op when plan absent",
+      pm.refloor_pickup("nope", "R", "2026-05-31T13:26:00+02:00") == 0.0)
+
+# czas_kuriera nieparsowalny / pusty → no-op.
+_wipe()
+pm.save_plan("r7", _refloor_body(
+    "2026-05-31T11:09:45+00:00", "2026-05-31T11:20:00+00:00"))
+check("refloor no-op on garbage czas_kuriera",
+      pm.refloor_pickup("r7", "R", "garbage") == 0.0)
+check("refloor no-op on empty czas_kuriera",
+      pm.refloor_pickup("r7", "R", "") == 0.0)
+
+# _parse_iso_aware: Z-suffix, naive (assume UTC), aware offset.
+check("_parse_iso_aware Z-suffix → UTC",
+      pm._parse_iso_aware("2026-05-30T18:56:27Z")
+      == pm._parse_iso_aware("2026-05-30T18:56:27+00:00"))
+check("_parse_iso_aware naive assumed UTC",
+      pm._parse_iso_aware("2026-05-30T18:56:27").tzinfo is not None)
+check("_parse_iso_aware None → None", pm._parse_iso_aware(None) is None)
+
+# ============================================================
 total = passed + failed
 print()
 print("=" * 60)

@@ -21,7 +21,7 @@ import logging
 import os
 import tempfile
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -303,6 +303,82 @@ def mark_picked_up(courier_id: str, order_id: str,
         plan["plan_version"] = plan.get("plan_version", 0) + 1
         plan["last_modified_at"] = _now_iso()
         _write_raw(plans)
+
+
+def _parse_iso_aware(iso: Optional[str]) -> Optional[datetime]:
+    """Parse ISO-8601 → aware UTC datetime. None on empty/non-str/unparsable.
+    Naive timestamps are assumed already UTC (plan predicted_at is always UTC).
+    Aware timestamps (np. czas_kuriera_warsaw z offsetem +02:00) → przeliczone na UTC.
+    """
+    if not iso or not isinstance(iso, str):
+        return None
+    s = iso.strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def refloor_pickup(courier_id: str, order_id: str, czas_kuriera_iso: str,
+                   min_delta_sec: float = 60.0) -> float:
+    """Podnieś predicted_at pickupu do podłogi czas_kuriera i przesuń o tę samą
+    dodatnią deltę WSZYSTKIE kolejne stopy (kaskada w dół trasy).
+
+    Źródłowy odpowiednik display-clampa w courier_api: gdy plan policzono zanim
+    czas_kuriera (ustalony po odpowiedzi do restauracji) wpłynął, predicted_at
+    pickupu kotwiczy na czasie deklarowanym przez restaurację i nie jest nigdy
+    przeliczany. Refloor dosuwa plan do przodu — MONOTONICZNIE (tylko później,
+    nigdy wcześniej) — żeby trasa i ETA były spójne z obietnicą kurierowi, zanim
+    Ziomek przeliczy plan od zera. Naprawia też dropoff (clamp display tego nie robił).
+
+    No-op (zwraca 0.0): brak planu / zinwalidowany; czas_kuriera nieparsowalny;
+    brak żywego pickupu dla order_id (już odebrane / przycięte); albo wymagane
+    podniesienie < min_delta_sec (unikamy churnu na sub-minutowym szumie).
+
+    Zwraca zastosowane przesunięcie w minutach (0.0 gdy no-op).
+    """
+    cid = str(courier_id)
+    oid = str(order_id)
+    floor = _parse_iso_aware(czas_kuriera_iso)
+    if floor is None:
+        return 0.0
+    with _locked(exclusive=True):
+        plans = _read_raw()
+        plan = plans.get(cid)
+        if plan is None or plan.get("invalidated_at") is not None:
+            return 0.0
+        stops = plan.get("stops", [])
+        pu_idx = None
+        for i, s in enumerate(stops):
+            if str(s.get("order_id")) == oid and s.get("type") == "pickup":
+                pu_idx = i
+                break
+        if pu_idx is None:
+            return 0.0
+        pred = _parse_iso_aware(stops[pu_idx].get("predicted_at"))
+        if pred is None:
+            return 0.0
+        delta_sec = (floor - pred).total_seconds()
+        if delta_sec < min_delta_sec:
+            return 0.0
+        shift = timedelta(seconds=delta_sec)
+        # Przesuń pickup ORAZ każdy stop po nim (zachowuje przejazdy/dwell gaps).
+        for s in stops[pu_idx:]:
+            sp = _parse_iso_aware(s.get("predicted_at"))
+            if sp is not None:
+                s["predicted_at"] = (sp + shift).isoformat()
+        plan["stops"] = stops
+        plan["plan_version"] = plan.get("plan_version", 0) + 1
+        plan["last_modified_at"] = _now_iso()
+        _write_raw(plans)
+        return delta_sec / 60.0
 
 
 SHADOW_LOG_PATH = Path("/root/.openclaw/workspace/dispatch_state/v319c_read_shadow_log.jsonl")

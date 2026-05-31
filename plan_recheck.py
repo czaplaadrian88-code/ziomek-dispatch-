@@ -62,6 +62,13 @@ GPS_DRIFT_FRESHNESS_MIN = int(os.environ.get("GPS_DRIFT_FRESHNESS_MIN", "5"))
 
 MAX_PLAN_AGE_MIN = int(os.environ.get("MAX_PLAN_AGE_MIN", "120"))
 
+# KROK 2 (źródłowy fix bugu "apka pokazuje czas restauracji zamiast ustalonego"):
+# dla każdego żywego pickupu w aktywnym planie, jeśli order ma ustalony
+# czas_kuriera_warsaw (obietnica po odpowiedzi do restauracji) a predicted_at
+# pickupu jest WCZEŚNIEJSZY (plan policzony zanim czas wpłynął) → podnieś plan do
+# obietnicy i przesuń kolejne stopy. Monotoniczne, idempotentne. Default ON.
+ENABLE_PICKUP_REFLOOR = os.environ.get("ENABLE_PICKUP_REFLOOR", "1") == "1"
+
 TERMINAL_STATUSES = frozenset({"delivered", "cancelled", "returned_to_pool"})
 
 
@@ -248,6 +255,7 @@ def run_recheck() -> Dict[str, Any]:
     gps_positions = _load_gps_positions()
     summary["gps_drift_detected"] = 0
     summary["gps_drift_invalidated"] = 0
+    summary["pickup_refloored"] = 0
 
     findings: List[Dict[str, Any]] = []
     for cid, plan in plans.items():
@@ -255,6 +263,25 @@ def run_recheck() -> Dict[str, Any]:
         if plan.get("invalidated_at") is not None:
             continue
         summary["active_plans"] += 1
+        # KROK 2: dosuń pickupy planu do ustalonego czas_kuriera (źródłowy fix).
+        # refloor liczy deltę pod lockiem na świeżym pliku, więc przekazanie
+        # nieaktualnego snapshotu planu jest bezpieczne (re-read wewnątrz).
+        if ENABLE_PICKUP_REFLOOR:
+            for s in plan.get("stops", []):
+                if s.get("type") != "pickup":
+                    continue
+                oid = str(s.get("order_id"))
+                order = orders_state.get(oid)
+                kur = order.get("czas_kuriera_warsaw") if isinstance(order, dict) else None
+                if not kur:
+                    continue
+                shifted_min = plan_manager.refloor_pickup(cid, oid, kur)
+                if shifted_min > 0:
+                    summary["pickup_refloored"] += 1
+                    _log.info(
+                        f"PICKUP_REFLOOR cid={cid} oid={oid} "
+                        f"shift=+{shifted_min:.1f}min floor={kur}"
+                    )
         finding = _check_plan(cid, plan, orders_state, gps_positions, now)
         if finding["issues"]:
             summary["with_issues"] += 1
