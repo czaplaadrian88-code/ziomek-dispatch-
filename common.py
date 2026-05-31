@@ -541,6 +541,25 @@ ENABLE_GEOCODE_CACHE_TTL = os.environ.get("ENABLE_GEOCODE_CACHE_TTL", "1") == "1
 ENABLE_GEOCODE_CACHE_DRIFT_ALERT = os.environ.get("ENABLE_GEOCODE_CACHE_DRIFT_ALERT", "0") == "1"
 
 # ============================================================
+# Geocode bbox guard (2026-05-30) — odrzuca out-of-bbox wyniki Google PRZED
+# zapisem do cache. Diagnoza (zadanie #4 geo-poison): "Witosa 26/16" rozwiązało
+# się na "Witosa 26, Klepacze" (52.505,22.694 ~70km) zamiast Białystok →
+# max_bag_time=10003min → KOORD. Cache spuchł do 33/6197 out-of-bbox (12 jawnie
+# z "białystok"), w tym sentinel Google [51.9194,19.1451] (środek Polski) dla
+# zbyt ogólnych/parser-artefakt zapytań. Brak guardu w momencie geokodu → zła
+# trafia do cache i zostaje. Guard: result poza bbox → return None (NIE cache),
+# log WARN GEOCODE_BBOX_REJECT. Caller dostaje None → istniejące defense gates
+# (no_pickup_geocode / KOORD). Bbox = Białystok + ~28km (Kleosin, Wasilków,
+# Supraśl, Choroszcz, Łapy). Multi-tenant Warsaw: bbox env-overridable per deploy.
+# Kill-switch: ENABLE_GEOCODE_BBOX_GUARD=0.
+# ============================================================
+ENABLE_GEOCODE_BBOX_GUARD = os.environ.get("ENABLE_GEOCODE_BBOX_GUARD", "1") == "1"
+GEOCODE_BBOX_LAT_MIN = float(os.environ.get("GEOCODE_BBOX_LAT_MIN", "52.85"))
+GEOCODE_BBOX_LAT_MAX = float(os.environ.get("GEOCODE_BBOX_LAT_MAX", "53.35"))
+GEOCODE_BBOX_LON_MIN = float(os.environ.get("GEOCODE_BBOX_LON_MIN", "22.85"))
+GEOCODE_BBOX_LON_MAX = float(os.environ.get("GEOCODE_BBOX_LON_MAX", "23.45"))
+
+# ============================================================
 # Strict courier ID space flag (2026-04-19)
 # Bugfix: build_fleet_snapshot dodawał keys z kurier_piny.json (4-digit PIN-y)
 # jako osobnych kurierów obok prawdziwych courier_id z kurier_ids.json.
@@ -1956,6 +1975,30 @@ ENABLE_OBJ_R6_SOFT_DEADLINE = _os.environ.get(
     "ENABLE_OBJ_R6_SOFT_DEADLINE", "0") == "1"
 OBJ_R6_DEADLINE_PENALTY_COEFF = float(_os.environ.get(
     "OBJ_R6_DEADLINE_PENALTY_COEFF", "100"))
+
+# ============================================================
+# Sprint OBJ FRESH — świeżość odbioru w objective (2026-05-30)
+# ============================================================
+# Diagnoza (replay 2026-05-30, n=1627 food-only): objective TSP był ślepy na
+# punktualność ODBIORU. Pickup ma tylko dolne ograniczenie (SetRange podbija do
+# ready_at), zero kary za odbiór PO gotowości jedzenia. Solver spokojnie parkuje
+# odbiór zajętego kuriera grubo po gotowości, bo każda DOSTAWA i tak ląduje przed
+# soft-deadlinem. Skala: mediana luzu = +1 min (clamp), ALE ogon: ~31% odbiorów
+# projektowanych >5 min po gotowości, ~18% >10 min, max ~50 min (case Sweet&Fit
+# +7 = p75). Kara progowa celowana w ogon: aktywna dopiero gdy projektowany
+# odbiór > ready_at + THRESHOLD (mediana clamped-to-ready zostaje nietknięta).
+# Coeff w jednostkach SetCumulVarSoftUpperBound: kara = coeff×100 per min
+# overshoot; 1 min jazdy = 1000 w arc-cost. Coeff=20 → 1 min nieświeżości ponad
+# próg ≈ 2 min jazdy (gentle — łamie remisy sekwencji, nie dominuje R6=100).
+# LIVE od 2026-05-30 (env ENABLE_OBJ_PICKUP_FRESHNESS=1 w serwisie); pomiar w
+# cieniu = pre/post tail z plan.pickup_at w shadow_decisions.jsonl. Rollback =
+# usuń env / ustaw 0 (bez redeploy kodu). Default w kodzie OFF (deploy-safe).
+ENABLE_OBJ_PICKUP_FRESHNESS = _os.environ.get(
+    "ENABLE_OBJ_PICKUP_FRESHNESS", "0") == "1"
+OBJ_PICKUP_FRESHNESS_THRESHOLD_MIN = float(_os.environ.get(
+    "OBJ_PICKUP_FRESHNESS_THRESHOLD_MIN", "8.0"))
+OBJ_PICKUP_FRESHNESS_PENALTY_COEFF = float(_os.environ.get(
+    "OBJ_PICKUP_FRESHNESS_PENALTY_COEFF", "20.0"))
 
 # ============================================================
 # V3.28 FAZA 3 ścieżka A — time_matrix DWELL correction (2026-05-11)

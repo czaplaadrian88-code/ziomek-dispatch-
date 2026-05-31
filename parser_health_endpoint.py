@@ -341,7 +341,7 @@ def _v328_compute_downstream_status(
     detection feeds Fix 5c alert pipeline (single Telegram source, shared cooldown).
 
     Priority order (critical first):
-    1. PIPELINE_SILENT_DESPITE_WORK (critical) — last_proposal_age > 30min AND new_orders > 0
+    1. PIPELINE_SILENT_DESPITE_WORK (critical) — last_proposal_age > 30min AND pending NEW_ORDER > 0
     2. WORKER_STUCK (critical) — worker_age > worker_slow * 2 (twice slow threshold)
     3. RECONCILIATION_CRITICAL (critical) — hard_cap_hit OR ghosts detected
     4. EVENTS_FAILED_HIGH (degraded) — events_failed_1h > threshold (5)
@@ -361,10 +361,16 @@ def _v328_compute_downstream_status(
     else:
         has_pending_work = new_orders_1h > 0
     # Critical priority — pipeline silent despite work
+    # 2026-05-31: gate na has_pending_work (PENDING NEW_ORDER>0), NIE new_orders_1h.
+    # Spójnie z worker_stuck/slow (fix 2026-05-30): off-peak rzadki ruch (2-3 zlec/h
+    # już przetworzone, pending=0) + ostatnia propozycja >30min temu dawał spurious
+    # pipeline_silent. "Silent despite work" = są ZALEGŁE NEW_ORDERY a output milczy,
+    # NIE "były jakieś zlecenia w ostatniej godzinie". Auto/KOORD/firmowe nie generują
+    # propozycji Telegram — brak SENT przy pending=0 to normalny off-peak, nie awaria.
     if (
         last_proposal_age_sec is not None
         and last_proposal_age_sec > V328_DOWNSTREAM_PIPELINE_SILENT_AGE_SEC
-        and new_orders_1h > 0
+        and has_pending_work
     ):
         return {
             "downstream_status": "critical",
@@ -527,27 +533,34 @@ def _mp14_build_all_snapshot(parser_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     cron_comp = _mp14_load_cron_summary()
 
     # Component 5: shadow worker
-    # E3b (Lekcja #153): worker_age (last_processed_age) rośnie off-peak bez pracy;
-    # gate stuck/slow na new_orders_1h>0 — spójnie z SITE #1 i events pipeline.
+    # E3b (Lekcja #153) + 2026-05-30/31 (#158/#160): worker_age (last_processed_age)
+    # rośnie off-peak bez pracy; bramka stuck/slow na PENDING NEW_ORDER>0 (realna
+    # zaległość), fallback new_orders_1h gdy pending niedostępny — spójnie z
+    # _v328_compute_downstream_status (alertująca ścieżka /health/parser).
     new_orders_1h = parser_snapshot.get("new_orders_last_1h_count", 0)
+    pending_no = parser_snapshot.get("pending_new_orders")
+    has_work = pending_no > 0 if pending_no is not None else new_orders_1h > 0
     worker_age = parser_snapshot.get("worker_processed_age_sec")
     if worker_age is None:
         shadow_comp = {"status": "unknown", "reason": "no_heartbeat_in_5min", "age_sec": None}
-    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2 and new_orders_1h > 0:
+    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2 and has_work:
         shadow_comp = {"status": "critical", "reason": "worker_stuck", "age_sec": worker_age}
-    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC and new_orders_1h > 0:
+    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC and has_work:
         shadow_comp = {"status": "degraded", "reason": "worker_slow", "age_sec": worker_age}
     else:
         shadow_comp = {"status": "ok", "reason": None, "age_sec": worker_age}
 
     # Component 6: events pipeline (telegram queue + new orders flow)
+    # 2026-05-31: pipeline_silent gate na pending NEW_ORDER>0 (fallback new_orders_1h
+    # gdy pending niedostępny) — spójnie z _v328_compute_downstream_status.
     failed_1h = parser_snapshot.get("events_failed_last_1h_count", 0)
     last_propose_age = parser_snapshot.get("last_proposal_sent_age_sec")
+    events_has_work = has_work
     if failed_1h > V328_DOWNSTREAM_FAILED_1H_THRESHOLD:
         events_comp = {"status": "degraded", "reason": "elevated_failure_rate"}
     elif (last_propose_age is not None and
           last_propose_age > V328_DOWNSTREAM_PIPELINE_SILENT_AGE_SEC and
-          new_orders_1h > 0):
+          events_has_work):
         events_comp = {"status": "critical", "reason": "pipeline_silent_despite_work"}
     else:
         events_comp = {"status": "ok", "reason": None}
