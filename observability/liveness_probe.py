@@ -154,6 +154,34 @@ def _should_alert(state: dict, unit: str, now: float) -> bool:
     return last is None or (now - last) >= DEDUP_WINDOW_SEC
 
 
+# ------------------------------------------------------------------- ledger reconcile
+
+# Map liveness check unit-name -> (cron_health ledger key, unit_type). The
+# cron_health ledger is failure-only (OnFailure handler writes failures, nothing
+# wrote successes), so a unit that failed once stayed status=failed forever even
+# after recovery -> permanent /health/all cron_timers=degraded false positive
+# (2026-05-31). Recording success on every confirmed-ok check reconciles the
+# ledger within one probe tick. parser-health-8888 is an in-process thread, not a
+# systemd unit, so it is intentionally absent.
+_LEDGER_UNITS = {
+    "dispatch-shadow": ("dispatch-shadow.service", "long_running"),
+    "dispatch-sla-tracker": ("dispatch-sla-tracker.service", "long_running"),
+    "dispatch-panel-watcher": ("dispatch-panel-watcher.service", "long_running"),
+    "dispatch-telegram": ("dispatch-telegram.service", "long_running"),
+    "dispatch-gps": ("dispatch-gps.service", "long_running"),
+}
+SELF_LEDGER_UNIT = "dispatch-liveness-probe.service"
+
+
+def _record_ledger_success(ledger_unit: str, unit_type: str) -> None:
+    """Mark a confirmed-healthy unit as succeeded in cron_health (fail-soft)."""
+    try:
+        from dispatch_v2.observability import cron_health
+        cron_health.record_run_success(ledger_unit, unit_type=unit_type)
+    except Exception as e:  # noqa: BLE001 - ledger write must never crash the probe
+        logger.warning("cron_health record_run_success fail for %s: %s", ledger_unit, e)
+
+
 def _mark_alerted(state: dict, unit: str, now: float) -> None:
     state["last_alert"][unit] = now
 
@@ -280,6 +308,9 @@ def main() -> None:
     for unit, status, detail in checks:
         if status == "ok":
             logger.info("%s: OK %s", unit, detail)
+            mapped = _LEDGER_UNITS.get(unit)
+            if mapped and not args.dry_run:
+                _record_ledger_success(*mapped)
             if unit in state["last_alert"]:
                 del state["last_alert"][unit]  # re-arm so recovery->failure alerts immediately
                 changed = True
@@ -300,7 +331,9 @@ def main() -> None:
     logger.info("liveness-probe run done: %s", summary)
 
     # check_gps may mutate the streak even without alerting, so persist when not dry-run.
+    # A completed run is itself this cron_timer's success signal.
     if not args.dry_run:
+        _record_ledger_success(SELF_LEDGER_UNIT, "cron_timer")
         save_state(state)
 
     sys.exit(0)
