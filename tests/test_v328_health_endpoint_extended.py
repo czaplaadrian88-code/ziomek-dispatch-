@@ -60,6 +60,40 @@ def test_compute_downstream_silent_no_work_NOT_critical():
     assert result["downstream_reason"] is None
 
 
+def test_compute_downstream_sparse_traffic_silent_NOT_critical():
+    """2026-05-31: new_orders_1h=2 (przetworzone) + pending_new_orders=0 +
+    last_proposal_age=2000s → NIE critical pipeline_silent.
+
+    Production false-positive 31.05: rzadki off-peak — kilka zleceń napłynęło w ciągu
+    godziny, wszystkie przerobione (NEW_ORDER:0 w event-busie), ale brak propozycji
+    Telegram >30min (auto/KOORD/firmowe nie generują propose). Bramka pending milczy.
+    """
+    result = phe._v328_compute_downstream_status(
+        last_proposal_age_sec=2000.0,
+        events_failed_1h=0,
+        new_orders_1h=2,
+        worker_age_sec=60.0,
+        pending_new_orders=0,
+    )
+    assert result["downstream_status"] == "ok"
+    assert result["downstream_reason"] is None
+
+
+def test_compute_downstream_real_backlog_silent_critical():
+    """2026-05-31: pending_new_orders=2 (realna zaległość) + last_proposal_age=2000s
+    → critical pipeline_silent_despite_work. Bramka pending wciąż łapie prawdziwą awarię.
+    """
+    result = phe._v328_compute_downstream_status(
+        last_proposal_age_sec=2000.0,
+        events_failed_1h=0,
+        new_orders_1h=5,
+        worker_age_sec=60.0,
+        pending_new_orders=2,
+    )
+    assert result["downstream_status"] == "critical"
+    assert result["downstream_reason"] == "pipeline_silent_despite_work"
+
+
 def test_compute_downstream_worker_stuck_critical():
     """worker_age=1300s (>2x slow threshold 600) → critical worker_stuck."""
     result = phe._v328_compute_downstream_status(
