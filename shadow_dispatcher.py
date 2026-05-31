@@ -291,6 +291,7 @@ def _serialize_candidate(c) -> dict:
         "r8_pickup_span_min": m.get("r8_pickup_span_min"),
         # F2.1b step 4 scoring penalties + F2.1c R8 soft penalty
         "bonus_r6_soft_pen": m.get("bonus_r6_soft_pen"),
+        "bonus_r6_soft_pen_legacy": m.get("bonus_r6_soft_pen_legacy"),  # Fix #6 shadow
         "bonus_r8_soft_pen": m.get("bonus_r8_soft_pen"),
         "bonus_r9_stopover": m.get("bonus_r9_stopover"),
         "bonus_r9_wait_pen": m.get("bonus_r9_wait_pen"),
@@ -304,6 +305,16 @@ def _serialize_candidate(c) -> dict:
         "sum_bag_time_min": m.get("sum_bag_time_min"),
         "max_bag_time_min": m.get("max_bag_time_min"),
         "fifo_violations": m.get("fifo_violations"),
+        # R-LATE-PICKUP tiering (2026-05-31, LOCATION A — per-candidate). Bez prefiksu
+        # auto-prop → MUSZĄ być explicit, inaczej tier per-candidate niewidoczny w shadow
+        # logu (tylko zwycięzca w late_pickup_shadow/pickup_extension_redirect). SPEC §6
+        # krok 1 / encoding-checklist Lekcja #80 (audytowalność Opcji B score-first).
+        "late_pickup_max_min": m.get("late_pickup_max_min"),
+        "late_pickup_committed_max": m.get("late_pickup_committed_max"),
+        "late_pickup_committed_breach": m.get("late_pickup_committed_breach"),
+        "new_pickup_late_min": m.get("new_pickup_late_min"),
+        "new_pickup_eta_iso": m.get("new_pickup_eta_iso"),
+        "new_pickup_needs_extension": m.get("new_pickup_needs_extension"),
         "plan": None if plan is None else {
             "sequence": plan.sequence,
             "total_duration_min": plan.total_duration_min,
@@ -539,6 +550,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r8_pickup_span_min": best_m.get("r8_pickup_span_min"),
             # F2.1b step 4 scoring penalties + F2.1c R8 soft penalty
             "bonus_r6_soft_pen": best_m.get("bonus_r6_soft_pen"),
+            "bonus_r6_soft_pen_legacy": best_m.get("bonus_r6_soft_pen_legacy"),  # Fix #6 shadow
             "bonus_r8_soft_pen": best_m.get("bonus_r8_soft_pen"),
             "bonus_r9_stopover": best_m.get("bonus_r9_stopover"),
             "bonus_r9_wait_pen": best_m.get("bonus_r9_wait_pen"),
@@ -659,6 +671,15 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # R-LATE-PICKUP (2026-05-31): propozycja przedłużonego czasu odbioru (tier 1/2).
         # PROPOSE idzie do Telegrama — render dorzuca „⏰ odbiór przesunięty na HH:MM".
         "pickup_extension_redirect": getattr(result, "pickup_extension_redirect", None),
+        # R-LATE-PICKUP Opcja B (2026-05-31): counterfactual stary-vs-nowy tiering.
+        # {"changed": bool, old_winner_*, new_winner_*} gdy Opcja B przestawiła
+        # zwycięzcę vs stary tier-primary sort. Adrian widzi efekt zmiany w propozycjach
+        # bez czekania na replay. None gdy gate nieaktywny. grep: LATE_PICKUP_SCORE_FIRST.
+        "late_pickup_shadow": getattr(result, "late_pickup_shadow", None),
+        # Fix #6 (2026-05-31): R6 danger-zone counterfactual (legacy liniowa vs stroma).
+        # {"changed": bool, old_winner_*, new_winner_*} gdy stroma kara near-limit (32-35)
+        # przestawiła zwycięzcę vs legacy -8/min. grep: R6_DANGER_DIVERGENCE.
+        "r6_danger_shadow": getattr(result, "r6_danger_shadow", None),
     }
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)

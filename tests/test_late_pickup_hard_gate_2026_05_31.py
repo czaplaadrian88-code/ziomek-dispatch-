@@ -83,9 +83,12 @@ def test_tiering_reorder_present():
     idx = src.find("R-LATE-PICKUP tiering (2026-05-31")
     section = src[idx:idx + 2500]
     assert "_lp_tier" in section
-    assert "late_pickup_committed_breach" in section  # tier 2
-    assert "new_pickup_needs_extension" in section     # tier 1
-    assert "return 0" in section                       # tier 0
+    # Opcja B (2026-05-31): logika tieru w modułowym _late_pickup_tier (testowalny).
+    # Inline block aliasuje `_lp_tier = _late_pickup_tier`.
+    tier_src = inspect.getsource(dispatch_pipeline._late_pickup_tier)
+    assert "late_pickup_committed_breach" in tier_src  # tier 2
+    assert "new_pickup_needs_extension" in tier_src     # tier 1
+    assert "return 0" in tier_src                       # tier 0
 
 
 def test_tiering_after_demote_blind_empty():
@@ -107,12 +110,13 @@ def test_extension_mode_picks_fastest():
 
 
 def test_pickup_extension_redirect_payload():
+    # Blok urósł (Opcja B + r6_danger shadow) → sprawdzamy w pełnym źródle (markery unikalne),
+    # nie w oknie fixed-size (było brittle wobec każdej rozbudowy bloku).
     src = inspect.getsource(dispatch_pipeline)
-    idx = src.find("R-LATE-PICKUP tiering (2026-05-31")
-    section = src[idx:idx + 2500]
-    assert "pickup_extension_redirect = {" in section
-    assert "suggested_pickup_iso" in section
-    assert "committed_breach_min" in section
+    assert "R-LATE-PICKUP tiering (2026-05-31" in src
+    assert "pickup_extension_redirect = {" in src
+    assert "suggested_pickup_iso" in src
+    assert "committed_breach_min" in src
     assert "_result_pf.pickup_extension_redirect = pickup_extension_redirect" in src
 
 

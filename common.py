@@ -395,6 +395,17 @@ BAG_TIME_HARD_MAX_MIN = 35
 BAG_TIME_SOFT_MIN = 30
 BAG_TIME_PRE_WARNING_MIN = 30    # sla_tracker alert Telegramu (krok #6)
 BAG_TIME_SOFT_PENALTY_PER_MIN = 8
+# Fix #6 477285 (2026-05-31): danger zone — progresywna kara near-limit R6.
+# Strefa 30-32 = normalny bufor (R-BUFFER-OK) → liniowa -8/min bez zmian. Strefa
+# 32-35 = near-limit ryzykowna → EKSTRA -16/min (łącznie -24/min). Powód: 33-35 min
+# dostawa to jeden korek od zimnego jedzenia / SLA breach >35; ryzyko nieliniowe →
+# kara nieliniowa. Diagnoza 477285 (Kołłątaja 33.9/35 wciśnięte): -31.2 (liniowa) za
+# słabe by Aleksander przegrał z Andreiem (29.1 min <30, 0 kary). Z fix #6: 33.9 →
+# ~-61.6 → Andrei (lepszy dowóz) wygrywa. env-tunable, default ON, legacy w cieniu.
+ENABLE_R6_DANGER_ZONE_PENALTY = os.environ.get(
+    "ENABLE_R6_DANGER_ZONE_PENALTY", "1") == "1"   # ON od 2026-05-31 (Adrian: live)
+BAG_TIME_DANGER_MIN = float(os.environ.get("BAG_TIME_DANGER_MIN", "32.0"))
+BAG_TIME_DANGER_PENALTY_PER_MIN = float(os.environ.get("BAG_TIME_DANGER_PENALTY_PER_MIN", "16.0"))
 
 # V3.28 ANCHOR FIX 2026-05-10 — Adrian doktryna: PROPOSE quality threshold.
 # Gdy best.score < MIN_PROPOSE_SCORE → verdict=KOORD reason=all_candidates_low_score.
@@ -1716,7 +1727,11 @@ ENABLE_V3273_WAIT_COURIER_PENALTY = _os.environ.get(
     "ENABLE_V3273_WAIT_COURIER_PENALTY", "1") == "1"  # V3.27.3 flag flip 2026-04-27 wieczór (Adrian ACK post-Task B shadow validation)
 V3273_WAIT_COURIER_THRESHOLD_MIN = 3.0   # P3-D2 2026-05-11: tighten 5→3 (Adrian doktryna "kurierzy wolą jeździć niż czekać")
 V3273_WAIT_COURIER_FIRST_STEP_PENALTY = -10.0  # at wait=6 (first min above threshold)
-V3273_WAIT_COURIER_PER_MIN_PENALTY = -5.0      # +5 penalty per min above wait=6
+# Fix #7 477271 (2026-05-31): steepen -5 → -8 (Adrian „kurier ma jak najmniej czekać
+# pod restauracją"). env-tunable; legacy -5 zachowane do shadow-porównania.
+V3273_WAIT_COURIER_PER_MIN_PENALTY = float(_os.environ.get(
+    "V3273_WAIT_COURIER_PER_MIN_PENALTY", "-8.0"))   # /min powyżej wait=6 (było -5.0)
+V3273_WAIT_COURIER_PER_MIN_PENALTY_LEGACY = -5.0     # pre-fix #7 baseline (shadow)
 V3273_WAIT_COURIER_HARD_REJECT_MIN = 15.0      # P3-D2 2026-05-11: tighten 20→15 (idle >15 min = unacceptable)
 # tech-debt #38 re-scope 2026-05-18 (Adrian): hard-reject wait_courier NIE dla
 # wolnego kuriera. Decyzja: "jeżeli kurier jest wolny i nie ma lepszych opcji —
@@ -1884,6 +1899,26 @@ ENABLE_LATE_PICKUP_HARD_GATE = _os.environ.get(
     "ENABLE_LATE_PICKUP_HARD_GATE", "1") == "1"  # ON od 2026-05-31 (Adrian: widzieć efekt w propozycjach + pomiar shadow)
 LATE_PICKUP_HARD_MAX_MIN = float(_os.environ.get(
     "LATE_PICKUP_HARD_MAX_MIN", "5.0"))
+
+# R-LATE-PICKUP Opcja B (2026-05-31) — score-first tiering z miękką karą za późny
+# odbiór nowego zlecenia. Naprawia nadkorektę starego tieringu (tier-0 odbiór-na-czas
+# bił każdy tier-1 NIEZALEŻNIE od score → krzyżowo-miejskie bundle wygrywały mimo
+# −58 R1 korytarz; diagnoza eod_drafts/2026-05-31/SPEC_late_pickup_tiering_fix.md).
+# Mechanizm: tier-2 (łamanie committed czas_kuriera) = twardy demote (ostateczność);
+# reszta ranking po score (z demote-bucketami V3.16) MINUS gradient kara
+# ∝ max(0, new_pickup_late_min − FREE_MIN). Pickup-lateness KONKURUJE z jakością
+# dowozu (R6/spread w score), nie DOMINUJE. Adrian (31.05): „lepiej przedłużyć
+# 15-20 min i zawieźć w 20 min niż odebrać na czas i wozić 35 min" → kara GENTLE
+# (delivery zwykle wygrywa). LIVE default ON; stary tiering liczony równolegle w
+# cieniu (late_pickup_shadow) dla porównania efektu. Kalibracja COEFF replay 7-14d.
+ENABLE_LATE_PICKUP_TIERING_SCORE_FIRST = _os.environ.get(
+    "ENABLE_LATE_PICKUP_TIERING_SCORE_FIRST", "1") == "1"  # ON od 2026-05-31 (Adrian: live + shadow-compare)
+LATE_PICKUP_SOFT_FREE_MIN = float(_os.environ.get(
+    "LATE_PICKUP_SOFT_FREE_MIN", "5.0"))   # spóźnienie ≤ FREE_MIN → kara 0 (spójne z HARD_MAX)
+LATE_PICKUP_SOFT_COEFF = float(_os.environ.get(
+    "LATE_PICKUP_SOFT_COEFF", "1.5"))      # pkt kary / min ponad FREE_MIN (gentle: delivery zwykle wygrywa)
+LATE_PICKUP_SOFT_CAP = float(_os.environ.get(
+    "LATE_PICKUP_SOFT_CAP", "60.0"))       # górny limit kary (zapobiega absurdalnym przedłużeniom)
 
 # Sprint OBJ F0.3 (2026-05-17): replay-capture wejść solvera do offline
 # harnessu (zestaw masowy / regresja). Default OFF — włączane env na czas sprintu.

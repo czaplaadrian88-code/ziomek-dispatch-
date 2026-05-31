@@ -462,6 +462,12 @@ BLIND_POS_SOURCES = ("no_gps", "pre_shift", "none")
 INFORMED_POS_SOURCES = (
     "gps", "last_assigned_pickup", "last_picked_up_delivery",
     "last_picked_up_recent", "last_delivered", "post_wave",
+    # Fix #5 (2026-05-31): last_picked_up_pickup = „punkt realnie odwiedzony"
+    # (courier_resolver tier wiarygodności 1, ten sam co last_picked_up_delivery,
+    # LEPSZY niż last_assigned_pickup=tier 2 który TU już był). Wykluczenie było
+    # przeoczeniem → kandydat spadał do bucketu „other" w _demote_blind_empty mimo
+    # top-score (Paweł SC 477329 +12.2 zdegradowany pod gorzej-punktowanych informed).
+    "last_picked_up_pickup",
 )
 
 
@@ -482,6 +488,85 @@ def _is_informed_cand(c) -> bool:
     """V3.16: kandydat z real pos source (fresh GPS lub recent panel activity)."""
     ps = c.metrics.get("pos_source") if hasattr(c, "metrics") and c.metrics else None
     return ps in INFORMED_POS_SOURCES
+
+
+def _late_pickup_tier(c) -> int:
+    """R-LATE-PICKUP tier kandydata (2026-05-31).
+
+    2 = łamie committed czas_kuriera bag-ordera (>HARD_MAX) — OSTATECZNOŚĆ.
+    1 = nowy odbiór potrzebuje przedłużenia (>HARD_MAX).
+    0 = na czas (≤HARD_MAX) i nie psuje committed.
+    """
+    m = (c.metrics if (hasattr(c, "metrics") and c.metrics) else {}) or {}
+    if m.get("late_pickup_committed_breach"):
+        return 2
+    if m.get("new_pickup_needs_extension"):
+        return 1
+    return 0
+
+
+def _late_pickup_soft_penalty(c, free_min: float, coeff: float, cap: float) -> float:
+    """Opcja B (2026-05-31): gradient kara ∝ max(0, new_pickup_late_min − free_min).
+
+    Gentle (delivery zwykle wygrywa). Cap zapobiega absurdalnym przedłużeniom.
+    """
+    m = (c.metrics if (hasattr(c, "metrics") and c.metrics) else {}) or {}
+    lm = m.get("new_pickup_late_min")
+    if not isinstance(lm, (int, float)) or lm <= free_min:
+        return 0.0
+    return min(cap, coeff * (lm - free_min))
+
+
+def _is_pre_shift_cand(c) -> bool:
+    """Fix #7 477271 (2026-05-31): kurier pre_shift = zmiana jeszcze nie zaczęła →
+    nie pracuje, syntetyczna pozycja (clamp do shift_start) → ZAWYŻONY score (Grzegorz
+    477271 = 97). Niezależnie od bagu = niska pewność → bucket 2 (jak blind+empty), żeby
+    NIE bił aktywnych kurierów mimo zawyżonego score. (Poprzednio pre_shift+bag był
+    bucket „other" tylko przypadkiem — nie-w-INFORMED. Teraz EXPLICITNIE.)"""
+    ps = c.metrics.get("pos_source") if hasattr(c, "metrics") and c.metrics else None
+    return ps == "pre_shift"
+
+
+def _late_pickup_score_first_key(c, tier: int, orig_rank: int,
+                                 free_min: float, coeff: float, cap: float,
+                                 score: Optional[float] = None):
+    """Opcja B sort key (TESTOWALNY) — naprawia nadkorektę starego tieringu.
+
+    Klucz: (tier-2 ostatecznie na koniec, V3.16 demote-bucket, score − kara_za_późny_odbiór,
+    stabilny tie-break). Pickup-lateness KONKURUJE z jakością dowozu (R6/spread w score),
+    nie DOMINUJE jak stary tier-primary sort (gdzie tier-0 bił każdy tier-1 niezależnie
+    od score → 477330 Andrei −5.3 11.7km bił Michała Ro +36.4).
+
+    `score` override (default = c.score) — używane przez r6_danger_shadow do
+    przeliczenia rankingu pod legacy (liniową) karą R6 bez mutacji kandydata.
+    """
+    if _is_informed_cand(c):
+        bucket = 0
+    elif _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
+        bucket = 2  # blind+empty LUB pre_shift (Fix #7) — niska pewność, pod aktywnych
+    else:
+        bucket = 1
+    _s = (getattr(c, "score", 0.0) or 0.0) if score is None else score
+    adj = _s - _late_pickup_soft_penalty(c, free_min, coeff, cap)
+    return (1 if tier == 2 else 0, bucket, -adj, orig_rank)
+
+
+def _r6_soft_penalty(r6_max_bag_time, soft_min: float, per_min: float,
+                     danger_on: bool, danger_min: float, danger_per_min: float):
+    """R6-soft kara (Fix #6 2026-05-31) — liniowa nad soft_min + EKSTRA stroma w danger zone.
+
+    Strefa soft_min..danger_min (30-32): liniowa -per_min/min (normalny bufor R-BUFFER-OK).
+    Strefa danger_min..35 (32-35): EKSTRA -danger_per_min/min (near-limit ryzykowne — jeden
+    korek od zimnego/SLA breach >35, ryzyko nieliniowe → kara nieliniowa).
+    Zwraca (penalty, legacy_linear_penalty) — legacy = sama liniowa baza dla shadow.
+    """
+    if r6_max_bag_time is None or r6_max_bag_time <= soft_min:
+        return 0.0, 0.0
+    legacy = -(r6_max_bag_time - soft_min) * per_min
+    pen = legacy
+    if danger_on and r6_max_bag_time > danger_min:
+        pen -= (r6_max_bag_time - danger_min) * danger_per_min
+    return pen, legacy
 
 
 # V3.26 STEP 5 (R-06): cache restaurant_name → district lookup at module load.
@@ -2145,6 +2230,7 @@ def _assess_order_impl(
         # (F2.1b step 3), tu widzimy tylko przypadki 30-35 min które przeszły hard.
         # Reuse metrics.r6_max_bag_time_min (step 3) — zero duplicate computation.
         bonus_r6_soft_pen: Optional[float] = None
+        bonus_r6_soft_pen_legacy: Optional[float] = None  # Fix #6: liniowa (pre-danger) dla shadow
         if plan is not None:
             r6_max_bag_time = metrics.get("r6_max_bag_time_min")
             if r6_max_bag_time is None:
@@ -2153,10 +2239,14 @@ def _assess_order_impl(
                     f"despite plan!=None (expected after krok #6 restart)"
                 )
                 r6_max_bag_time = 0.0
-            if r6_max_bag_time > C.BAG_TIME_SOFT_MIN:
-                bonus_r6_soft_pen = -(r6_max_bag_time - C.BAG_TIME_SOFT_MIN) * C.BAG_TIME_SOFT_PENALTY_PER_MIN
-            else:
-                bonus_r6_soft_pen = 0.0
+            # Fix #6 477285 (2026-05-31): liniowa baza (legacy) + EKSTRA stroma kara
+            # w danger zone (32-35) — patrz _r6_soft_penalty. 30-32 (R-BUFFER-OK) bez zmian.
+            bonus_r6_soft_pen, bonus_r6_soft_pen_legacy = _r6_soft_penalty(
+                r6_max_bag_time, C.BAG_TIME_SOFT_MIN, C.BAG_TIME_SOFT_PENALTY_PER_MIN,
+                getattr(C, "ENABLE_R6_DANGER_ZONE_PENALTY", False),
+                getattr(C, "BAG_TIME_DANGER_MIN", 32.0),
+                getattr(C, "BAG_TIME_DANGER_PENALTY_PER_MIN", 16.0),
+            )
 
         # R-PACZKI-FLEX (2026-05-20): gradient -1pt/min nad soft cap 2h pickup
         # / 3h delivery dla NIE-czasówka paczki. Fail-soft 0.0 dla jedzeniówek.
@@ -2304,6 +2394,7 @@ def _assess_order_impl(
         # bag_size>=1 (jedzenie w aucie stygnie). HARD REJECT >20 min.
         # Per-pickup w plan.sequence; uses plan.arrival_at (V3.27.3 NEW field).
         bonus_v3273_wait_courier = 0.0
+        bonus_v3273_wait_courier_legacy = 0.0  # Fix #7: per_min=-5 (pre-steepen) dla shadow
         v3273_wait_courier_max_min = 0.0
         v3273_wait_courier_max_oid = None
         v3273_wait_courier_max_restaurant = None
@@ -2343,6 +2434,10 @@ def _assess_order_impl(
                         _ready_273 = _ready_273.replace(tzinfo=timezone.utc)
                     _wait_273 = max(0.0, (_ready_273 - _arr_dt_273).total_seconds() / 60.0)
                     _pen_273, _reject_273 = _v3273_wcp(_wait_273, _bag_size_at_insertion_273)
+                    # Fix #7: legacy (per_min=-5) liczone równolegle dla shadow-porównania.
+                    _pen_273_legacy, _ = _v3273_wcp(
+                        _wait_273, _bag_size_at_insertion_273,
+                        per_min=getattr(C, "V3273_WAIT_COURIER_PER_MIN_PENALTY_LEGACY", -5.0))
                     v3273_wait_courier_per_pickup.append({
                         "oid": _str_oid_273,
                         "wait_min": round(_wait_273, 2),
@@ -2352,6 +2447,7 @@ def _assess_order_impl(
                     if _reject_273:
                         v3273_wait_courier_hard_reject = True
                     bonus_v3273_wait_courier += _pen_273
+                    bonus_v3273_wait_courier_legacy += _pen_273_legacy
                     if _wait_273 > v3273_wait_courier_max_min:
                         v3273_wait_courier_max_min = _wait_273
                         v3273_wait_courier_max_oid = _str_oid_273
@@ -2931,6 +3027,11 @@ def _assess_order_impl(
                 round(bonus_r6_soft_pen, 2)
                 if bonus_r6_soft_pen is not None else None
             ),
+            # Fix #6 (2026-05-31): liniowa (pre-danger) kara R6 dla shadow-porównania.
+            "bonus_r6_soft_pen_legacy": (
+                round(bonus_r6_soft_pen_legacy, 2)
+                if bonus_r6_soft_pen_legacy is not None else None
+            ),
             "bonus_r1_soft_pen": round(bonus_r1_soft_pen, 2),
             "bonus_r5_soft_pen": round(bonus_r5_soft_pen, 2),
             "bonus_r8_soft_pen": round(bonus_r8_soft_pen, 2),
@@ -3015,6 +3116,7 @@ def _assess_order_impl(
             "bonus_r9_wait_pen_legacy": round(bonus_r9_wait_pen_legacy, 2),
             "bonus_r9_wait_pen_v327": round(bonus_r9_wait_pen_v327, 2),
             "bonus_v3273_wait_courier": round(bonus_v3273_wait_courier, 2),
+            "bonus_v3273_wait_courier_legacy": round(bonus_v3273_wait_courier_legacy, 2),  # Fix #7 shadow
             "v3273_wait_courier_max_min": round(v3273_wait_courier_max_min, 2),
             "v3273_wait_courier_max_restaurant": v3273_wait_courier_max_restaurant,
             "v3273_wait_courier_max_oid": v3273_wait_courier_max_oid,
@@ -3438,28 +3540,119 @@ def _assess_order_impl(
     # Gdy zwycięzca tier>0 → pickup_extension_redirect niesie propozycję czasu + powód.
     # Aktywne tylko gdy ENABLE_LATE_PICKUP_HARD_GATE (metryki w candidate.metrics).
     pickup_extension_redirect = None
+    late_pickup_shadow = None
+    r6_danger_shadow = None  # Fix #6: rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6
     if getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False) and feasible:
-        def _lp_tier(c):
-            m = c.metrics or {}
-            if m.get("late_pickup_committed_breach"):
-                return 2
-            if m.get("new_pickup_needs_extension"):
-                return 1
-            return 0
+        _lp_tier = _late_pickup_tier  # module-level (testowalny)
         _orig_order = {id(c): i for i, c in enumerate(feasible)}
-        _has_lower = any(_lp_tier(c) == 0 for c in feasible)
-        # W trybie przedłużenia (brak tier-0) wybór = NAJSZYBSZY do odbioru nowego
-        # (Adrian: „bierze tego który będzie najszybciej"). Inaczej zachowaj ranking.
+        _free = float(getattr(C, "LATE_PICKUP_SOFT_FREE_MIN", 5.0))
+        _coeff = float(getattr(C, "LATE_PICKUP_SOFT_COEFF", 1.5))
+        _cap = float(getattr(C, "LATE_PICKUP_SOFT_CAP", 60.0))
         def _new_eta_key(c):
             _iso = (c.metrics or {}).get("new_pickup_eta_iso")
             return _iso or "9999"
+
+        # --- STARY tiering (SHADOW counterfactual — „co by było bez Opcji B") ---
+        # Stary klucz: tier PIERWSZY → tier-0 (odbiór ≤5 min na czas) bił każdy tier-1
+        # NIEZALEŻNIE od score → krzyżowo-miejskie bundle wygrywały mimo R1/R6 w score
+        # (477330 Andrei −5.3 bił Michała Ro +36.4). Liczone bez mutacji `feasible`.
+        _has_lower = any(_lp_tier(c) == 0 for c in feasible)
         if _has_lower:
-            feasible.sort(key=lambda c: (_lp_tier(c), _orig_order[id(c)]))
+            _old_sorted = sorted(feasible, key=lambda c: (_lp_tier(c), _orig_order[id(c)]))
         else:
-            feasible.sort(key=lambda c: (_lp_tier(c), _new_eta_key(c), _orig_order[id(c)]))
+            _old_sorted = sorted(feasible, key=lambda c: (_lp_tier(c), _new_eta_key(c), _orig_order[id(c)]))
+        _old_winner = _old_sorted[0] if _old_sorted else None
+
+        # --- Opcja B (LIVE gdy flaga ON) — score-first z miękką karą za późny odbiór ---
+        # Tier-2 (łamanie committed czas_kuriera) = twardy demote (ostateczność, 477237).
+        # Reszta: ranking po score (z zachowanymi V3.16 demote-bucketami informed>other>
+        # blind) MINUS gradient kara ∝ max(0, new_pickup_late_min − FREE_MIN). Pickup-
+        # lateness KONKURUJE z jakością dowozu (R6/spread w score), nie DOMINUJE.
+        if getattr(C, "ENABLE_LATE_PICKUP_TIERING_SCORE_FIRST", False):
+            feasible.sort(key=lambda c: _late_pickup_score_first_key(
+                c, _lp_tier(c), _orig_order[id(c)], _free, _coeff, _cap))
+        else:
+            # flaga OFF → identyczne zachowanie ze starym tieringiem (in-place)
+            if _has_lower:
+                feasible.sort(key=lambda c: (_lp_tier(c), _orig_order[id(c)]))
+            else:
+                feasible.sort(key=lambda c: (_lp_tier(c), _new_eta_key(c), _orig_order[id(c)]))
+
         _winner = feasible[0]
         _wm = _winner.metrics or {}
         _wtier = _lp_tier(_winner)
+
+        # SHADOW: rozjazd stary-vs-nowy zwycięzca (Adrian chce widzieć efekt natychmiast).
+        # Serializowany top-level w shadow_dispatcher → grep LATE_PICKUP_SCORE_FIRST.
+        if (_old_winner is not None
+                and str(getattr(_old_winner, "courier_id", "")) != str(getattr(_winner, "courier_id", ""))):
+            _ow_m = _old_winner.metrics or {}
+            late_pickup_shadow = {
+                "changed": True,
+                "old_winner_cid": str(getattr(_old_winner, "courier_id", "")),
+                "old_winner_name": getattr(_old_winner, "name", None),
+                "old_winner_score": round(float(getattr(_old_winner, "score", 0.0) or 0.0), 2),
+                "old_winner_tier": _lp_tier(_old_winner),
+                "old_winner_deliv_spread_km": _ow_m.get("deliv_spread_km"),
+                "old_winner_r6_max_bag_time_min": _ow_m.get("r6_max_bag_time_min"),
+                "old_winner_new_pickup_late_min": _ow_m.get("new_pickup_late_min"),
+                "new_winner_cid": str(getattr(_winner, "courier_id", "")),
+                "new_winner_name": getattr(_winner, "name", None),
+                "new_winner_score": round(float(getattr(_winner, "score", 0.0) or 0.0), 2),
+                "new_winner_tier": _wtier,
+                "new_winner_deliv_spread_km": _wm.get("deliv_spread_km"),
+                "new_winner_r6_max_bag_time_min": _wm.get("r6_max_bag_time_min"),
+                "new_winner_new_pickup_late_min": _wm.get("new_pickup_late_min"),
+            }
+            log.info(
+                f"LATE_PICKUP_SCORE_FIRST_DIVERGENCE order={order_id} "
+                f"old={_old_winner.courier_id}(score={getattr(_old_winner,'score',0.0):.1f},"
+                f"tier={_lp_tier(_old_winner)},spread={_ow_m.get('deliv_spread_km')},"
+                f"r6={_ow_m.get('r6_max_bag_time_min')}) "
+                f"new={_winner.courier_id}(score={getattr(_winner,'score',0.0):.1f},"
+                f"tier={_wtier},spread={_wm.get('deliv_spread_km')},"
+                f"r6={_wm.get('r6_max_bag_time_min')})"
+            )
+        else:
+            late_pickup_shadow = {"changed": False}
+
+        # Fix #6 SHADOW: czy stroma kara R6 (danger zone) zmieniła zwycięzcę vs legacy
+        # liniowa. Tylko gdy obie flagi ON (live config) — score-override w kluczu Opcji B
+        # cofa ekstra danger-penalty: legacy_score = score + (legacy_r6 − new_r6).
+        if (getattr(C, "ENABLE_R6_DANGER_ZONE_PENALTY", False)
+                and getattr(C, "ENABLE_LATE_PICKUP_TIERING_SCORE_FIRST", False)):
+            def _legacy_r6_score(c):
+                m = c.metrics or {}
+                _new = m.get("bonus_r6_soft_pen") or 0.0
+                _leg = m.get("bonus_r6_soft_pen_legacy")
+                if _leg is None:
+                    _leg = _new
+                return (getattr(c, "score", 0.0) or 0.0) + (_leg - _new)
+            _r6_legacy_sorted = sorted(feasible, key=lambda c: _late_pickup_score_first_key(
+                c, _lp_tier(c), _orig_order[id(c)], _free, _coeff, _cap, score=_legacy_r6_score(c)))
+            _r6_old = _r6_legacy_sorted[0] if _r6_legacy_sorted else None
+            if (_r6_old is not None
+                    and str(getattr(_r6_old, "courier_id", "")) != str(getattr(_winner, "courier_id", ""))):
+                _r6om = _r6_old.metrics or {}
+                r6_danger_shadow = {
+                    "changed": True,
+                    "old_winner_cid": str(getattr(_r6_old, "courier_id", "")),
+                    "old_winner_name": getattr(_r6_old, "name", None),
+                    "old_winner_r6_max_bag_time_min": _r6om.get("r6_max_bag_time_min"),
+                    "old_winner_r6_pen_legacy": _r6om.get("bonus_r6_soft_pen_legacy"),
+                    "new_winner_cid": str(getattr(_winner, "courier_id", "")),
+                    "new_winner_name": getattr(_winner, "name", None),
+                    "new_winner_r6_max_bag_time_min": _wm.get("r6_max_bag_time_min"),
+                    "new_winner_r6_pen": _wm.get("bonus_r6_soft_pen"),
+                }
+                log.info(
+                    f"R6_DANGER_DIVERGENCE order={order_id} "
+                    f"legacy_lin={_r6_old.courier_id}(r6={_r6om.get('r6_max_bag_time_min')}min) "
+                    f"danger={_winner.courier_id}(r6={_wm.get('r6_max_bag_time_min')}min)"
+                )
+            else:
+                r6_danger_shadow = {"changed": False}
+
         if _wtier >= 1:
             pickup_extension_redirect = {
                 "tier": _wtier,
@@ -3823,6 +4016,10 @@ def _assess_order_impl(
         )
         # R-LATE-PICKUP: propozycja przedłużonego czasu odbioru (tier 1/2) dla renderu.
         _result_pf.pickup_extension_redirect = pickup_extension_redirect
+        # R-LATE-PICKUP Opcja B (2026-05-31): stary-vs-nowy zwycięzca tieringu (shadow).
+        _result_pf.late_pickup_shadow = late_pickup_shadow
+        # Fix #6 (2026-05-31): rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6 (shadow).
+        _result_pf.r6_danger_shadow = r6_danger_shadow
         _classify_and_set_auto_route(_result_pf, fleet_snapshot, order_event, now=now)
         return _result_pf
 

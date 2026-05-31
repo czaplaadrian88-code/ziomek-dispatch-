@@ -110,6 +110,7 @@ def compute_wait_penalty(wait_min: float) -> float:
 def compute_wait_courier_penalty(
     wait_min: float,
     bag_size_at_insertion: int,
+    per_min: float = None,
 ) -> Tuple[float, bool]:
     """V3.27.3 Wait kuriera penalty (2026-04-27).
 
@@ -152,7 +153,10 @@ def compute_wait_courier_penalty(
     # Formula: penalty = first_step + (wait_min - 6) * per_min_step
     # wait=6: -10; wait=7: -15; wait=8: -20; ... wait=20: -80
     extra_min_above_6 = max(0.0, wait_min - 6.0)
-    penalty = _common.V3273_WAIT_COURIER_FIRST_STEP_PENALTY + extra_min_above_6 * _common.V3273_WAIT_COURIER_PER_MIN_PENALTY
+    # Fix #7 (2026-05-31): per_min override (default common) — pozwala policzyć legacy (-5)
+    # obok live (-8) dla shadow bez mutacji configu.
+    _per_min = _common.V3273_WAIT_COURIER_PER_MIN_PENALTY if per_min is None else per_min
+    penalty = _common.V3273_WAIT_COURIER_FIRST_STEP_PENALTY + extra_min_above_6 * _per_min
     # For wait_min in (5, 6) interpolate from 0 to -10 linearly
     if wait_min < 6.0:
         ratio = (wait_min - _common.V3273_WAIT_COURIER_THRESHOLD_MIN) / (6.0 - _common.V3273_WAIT_COURIER_THRESHOLD_MIN)
