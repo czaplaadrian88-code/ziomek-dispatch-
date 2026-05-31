@@ -166,7 +166,7 @@ def test_cron_summary_long_running_skip_stale_check():
 def _make_parser_snap(downstream_status="ok", downstream_reason=None,
                      status="healthy", anomaly_reason=None,
                      worker_age=30.0, failed_1h=0, new_orders_1h=10,
-                     last_propose_age=120.0):
+                     last_propose_age=120.0, pending_new_orders=None):
     return {
         "status": status,
         "anomaly_reason": anomaly_reason,
@@ -176,6 +176,7 @@ def _make_parser_snap(downstream_status="ok", downstream_reason=None,
         "events_failed_last_1h_count": failed_1h,
         "new_orders_last_1h_count": new_orders_1h,
         "last_proposal_sent_age_sec": last_propose_age,
+        "pending_new_orders": pending_new_orders,
     }
 
 
@@ -199,6 +200,27 @@ def test_build_all_snapshot_critical_worker_stuck():
     assert snap["components"]["shadow_worker"]["status"] == "critical"
     assert snap["components"]["shadow_worker"]["reason"] == "worker_stuck"
     assert "shadow_worker" in snap["overall_reason"]
+
+
+def test_build_all_snapshot_sparse_traffic_worker_NOT_critical():
+    """2026-05-31 (#160): worker_age=1500s + new_orders_1h=10 ALE pending_new_orders=0
+    → shadow_worker NIE critical. Spójnie z /health/parser — off-peak sparse traffic
+    (zlecenia z ostatniej h już przetworzone) nie jest worker_stuck."""
+    snap = _mp14_build_all_snapshot(
+        _make_parser_snap(worker_age=1500.0, new_orders_1h=10, pending_new_orders=0)
+    )
+    assert snap["components"]["shadow_worker"]["status"] == "ok"
+    assert snap["components"]["shadow_worker"]["reason"] is None
+
+
+def test_build_all_snapshot_real_backlog_worker_stuck():
+    """2026-05-31 (#160): worker_age=1500s + pending_new_orders=3 (realna zaległość)
+    → shadow_worker=critical worker_stuck. Bramka pending wciąż łapie prawdziwą awarię."""
+    snap = _mp14_build_all_snapshot(
+        _make_parser_snap(worker_age=1500.0, pending_new_orders=3)
+    )
+    assert snap["components"]["shadow_worker"]["status"] == "critical"
+    assert snap["components"]["shadow_worker"]["reason"] == "worker_stuck"
 
 
 def test_build_all_snapshot_degraded_failed_events():

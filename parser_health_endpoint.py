@@ -533,15 +533,19 @@ def _mp14_build_all_snapshot(parser_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     cron_comp = _mp14_load_cron_summary()
 
     # Component 5: shadow worker
-    # E3b (Lekcja #153): worker_age (last_processed_age) rośnie off-peak bez pracy;
-    # gate stuck/slow na new_orders_1h>0 — spójnie z SITE #1 i events pipeline.
+    # E3b (Lekcja #153) + 2026-05-30/31 (#158/#160): worker_age (last_processed_age)
+    # rośnie off-peak bez pracy; bramka stuck/slow na PENDING NEW_ORDER>0 (realna
+    # zaległość), fallback new_orders_1h gdy pending niedostępny — spójnie z
+    # _v328_compute_downstream_status (alertująca ścieżka /health/parser).
     new_orders_1h = parser_snapshot.get("new_orders_last_1h_count", 0)
+    pending_no = parser_snapshot.get("pending_new_orders")
+    has_work = pending_no > 0 if pending_no is not None else new_orders_1h > 0
     worker_age = parser_snapshot.get("worker_processed_age_sec")
     if worker_age is None:
         shadow_comp = {"status": "unknown", "reason": "no_heartbeat_in_5min", "age_sec": None}
-    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2 and new_orders_1h > 0:
+    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC * 2 and has_work:
         shadow_comp = {"status": "critical", "reason": "worker_stuck", "age_sec": worker_age}
-    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC and new_orders_1h > 0:
+    elif worker_age > V328_DOWNSTREAM_WORKER_SLOW_AGE_SEC and has_work:
         shadow_comp = {"status": "degraded", "reason": "worker_slow", "age_sec": worker_age}
     else:
         shadow_comp = {"status": "ok", "reason": None, "age_sec": worker_age}
@@ -551,8 +555,7 @@ def _mp14_build_all_snapshot(parser_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     # gdy pending niedostępny) — spójnie z _v328_compute_downstream_status.
     failed_1h = parser_snapshot.get("events_failed_last_1h_count", 0)
     last_propose_age = parser_snapshot.get("last_proposal_sent_age_sec")
-    pending_no = parser_snapshot.get("pending_new_orders")
-    events_has_work = pending_no > 0 if pending_no is not None else new_orders_1h > 0
+    events_has_work = has_work
     if failed_1h > V328_DOWNSTREAM_FAILED_1H_THRESHOLD:
         events_comp = {"status": "degraded", "reason": "elevated_failure_rate"}
     elif (last_propose_age is not None and
