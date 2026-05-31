@@ -35,6 +35,58 @@ from typing import Any, Dict, List, Optional
 
 DEFAULT_LOG_PATH = Path("/root/.openclaw/workspace/dispatch_state/reconciliation_log.jsonl")
 
+# Self-heal (2026-05-31): okno 24h liczy GHOSTy z historycznego logu bez sprawdzenia
+# czy rozjazd NADAL istnieje. Pojedynczy przejściowy ghost (TOCTOU race w jednym runie
+# reconcile — worker wczytał state PRZED zapisem `delivered`) trzymał downstream_status
+# degraded przez pełne 24h → godzinny Telegram spam. Self-heal re-waliduje każdy
+# policzony ghost przeciw bieżącemu orders_state.json; rozwiązany → nie liczy.
+DEFAULT_ORDERS_STATE_PATH = Path("/root/.openclaw/workspace/dispatch_state/orders_state.json")
+# Ghost = events.db terminal + state aktywny. Rozwiązany iff bieżący state NIE jest aktywny
+# (dogonił do terminal) ALBO order zniknął ze state (oba → classify zwróciłby None).
+_ACTIVE_STATE_STATUSES = frozenset({"assigned", "picked_up"})
+
+
+def _self_heal_enabled() -> bool:
+    """Hot-reload flag gate. Fail-open (default True) gdy common niedostępny."""
+    try:
+        from dispatch_v2.common import flag as _flag
+        return _flag("RECONCILIATION_HEALTH_SELF_HEAL", True)
+    except Exception:
+        return True
+
+
+def _load_orders_state_snapshot(path: Path) -> Optional[Dict[str, Any]]:
+    """Świeży odczyt orders_state.json dla self-heal. None = nie mogę zweryfikować
+    (brak pliku/parse fail) → caller zachowawczo NIE self-heal'uje (nie maskuj real)."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _resolved_ghost_oids(
+    ghost_oids: set,
+    orders_state: Dict[str, Any],
+) -> set:
+    """Zwraca podzbiór ghost oidów które już NIE są rozjazdem wg bieżącego stanu.
+
+    Ghost ma events terminal (append-only → zostaje terminal) + state aktywny.
+    Resolved iff: order zniknął ze state (None) LUB status nie jest już aktywny.
+    Syntetyczne `__none_*` oidy (order_id=None) pomijamy — nie da się zweryfikować.
+    """
+    resolved = set()
+    for oid in ghost_oids:
+        if isinstance(oid, str) and oid.startswith("__none_"):
+            continue
+        rec = orders_state.get(oid)
+        if rec is None:
+            resolved.add(oid)
+            continue
+        if rec.get("status") not in _ACTIVE_STATE_STATUSES:
+            resolved.add(oid)
+    return resolved
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -119,8 +171,18 @@ def build_records(
 def query_recent_summary(
     log_path: Optional[Path] = None,
     hours: int = 24,
+    self_heal: Optional[bool] = None,
+    orders_state_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Aggregate counts dla health endpoint. Returns last hours stats."""
+    """Aggregate counts dla health endpoint. Returns last hours stats.
+
+    self_heal: None → czytaj flagę RECONCILIATION_HEALTH_SELF_HEAL (default True);
+               explicit bool override (dla testów). Gdy True, GHOSTy które dogoniły
+               do terminal w bieżącym orders_state.json NIE są liczone (eliminuje
+               degraded od przejściowego TOCTOU race). Manual_alerts pochodzące
+               z tych ghostów też odpadają (GHOST liczy się w obu zbiorach).
+    orders_state_path: None → domyślny path (override dla testów).
+    """
     if log_path is None:
         log_path = DEFAULT_LOG_PATH
     log_path = Path(log_path)
@@ -191,6 +253,18 @@ def query_recent_summary(
     except Exception:
         summary["status"] = "degraded"
         return summary
+
+    # Self-heal (2026-05-31): odrzuć GHOSTy które już dogoniły do terminal w bieżącym
+    # stanie (przejściowy TOCTOU race). Zachowawczo: gdy nie mogę wczytać state → skip.
+    do_self_heal = _self_heal_enabled() if self_heal is None else self_heal
+    if do_self_heal and ghost_oids:
+        os_path = orders_state_path or DEFAULT_ORDERS_STATE_PATH
+        orders_state = _load_orders_state_snapshot(os_path)
+        if orders_state is not None:
+            resolved = _resolved_ghost_oids(ghost_oids, orders_state)
+            if resolved:
+                ghost_oids -= resolved
+                manual_alert_oids -= resolved
 
     d = summary["discrepancies_24h"]
     d["phantoms"] = len(phantom_oids)

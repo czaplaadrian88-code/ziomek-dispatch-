@@ -31,7 +31,7 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -60,6 +60,11 @@ FLAG_DEFAULTS = {
     "RECONCILIATION_DYNAMIC_SCALING": True,
     "RECONCILIATION_HARD_CAP_MAX": 20,
     "RECONCILIATION_BACKLOG_ALERT_THRESHOLD": 50,
+    # 2026-05-31: re-walidacja transient TOCTOU. detect_all wczytuje orders_state
+    # raz; order doręczony MID-RUN (event terminal w events.db, ale state jeszcze
+    # nie zapisany jako delivered) jest fałszywie flagowany jako GHOST. Re-odczyt
+    # świeżego stanu tuż przed logowaniem eliminuje przejściowe rozjazdy u źródła.
+    "RECONCILIATION_REVALIDATE_TRANSIENT": True,
 }
 
 _log = setup_logger("reconciliation", LOG_FILE)
@@ -165,6 +170,57 @@ def _load_orders_state() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
+def _revalidate_transient(
+    discrepancies: list,
+    lookback_days: int,
+) -> list:
+    """Re-waliduj rozbieżności świeżym odczytem stanu — odrzuć przejściowe TOCTOU.
+
+    detect_all() użył snapshotu orders_state z początku runu. Order doręczony
+    mid-run ma już event terminal w events.db, ale state mógł nie być jeszcze
+    zapisany jako `delivered` → fałszywy GHOST. Re-odczyt świeżego state + świeży
+    last-event per oid i re-klasyfikacja: gdy classify zwraca None → rozjazd zniknął
+    → drop (transient). Defensive: gdy nie mogę re-odczytać eventu danego oid →
+    zachowaj wpis (nie maskuj potencjalnie realnego rozjazdu).
+    """
+    if not discrepancies:
+        return discrepancies
+    fresh_state = _load_orders_state()
+    now_dt = datetime.now(timezone.utc)
+    since_dt = now_dt - timedelta(days=lookback_days)
+    try:
+        fresh_last = phantom_detector.get_last_events_per_order(
+            str(EVENTS_DB_PATH), since_dt=since_dt
+        )
+    except Exception as e:
+        _log.warning(f"REVALIDATE skipped (events re-read fail): {type(e).__name__}: {e}")
+        return discrepancies
+
+    kept = []
+    dropped = []
+    for d in discrepancies:
+        oid = d.get("order_id")
+        evt = fresh_last.get(oid) if oid else None
+        if not oid or evt is None:
+            kept.append(d)
+            continue
+        verdict = phantom_detector.classify_discrepancy(
+            evt, fresh_state.get(oid), now_dt=now_dt
+        )
+        if verdict is None:
+            dropped.append((oid, d.get("classification")))
+            continue
+        verdict["order_id"] = oid
+        kept.append(verdict)
+
+    if dropped:
+        _log.info(
+            f"REVALIDATE dropped={len(dropped)} transient discrepancies "
+            f"(TOCTOU race, resolved on fresh read): {dropped[:5]}"
+        )
+    return kept
+
+
 def run(
     dry_run: bool = False,
     lookback_days_override: Optional[int] = None,
@@ -230,6 +286,17 @@ def run(
         since_days=lookback_days,
     )
     _log.info(f"DETECT discrepancies={len(discrepancies)}")
+
+    # 1b. Re-walidacja transient TOCTOU (gated) — odrzuć rozjazdy które zniknęły
+    # przy świeżym odczycie stanu (order doręczony mid-run między snapshotem a logiem).
+    if flag(
+        "RECONCILIATION_REVALIDATE_TRANSIENT",
+        default=FLAG_DEFAULTS["RECONCILIATION_REVALIDATE_TRANSIENT"],
+    ):
+        before = len(discrepancies)
+        discrepancies = _revalidate_transient(discrepancies, lookback_days)
+        if len(discrepancies) != before:
+            _log.info(f"REVALIDATE discrepancies {before}→{len(discrepancies)}")
 
     # 2. Auto-resync (gated)
     result = auto_resync.auto_resync_phantoms(

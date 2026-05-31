@@ -88,11 +88,13 @@ t("fix5c_recon_none_graceful", test_fix5c_recon_none_graceful)
 def test_fix5c_recon_priority_under_pipeline():
     """Reconciliation critical does NOT escalate when pipeline already shows critical."""
     from dispatch_v2.parser_health_endpoint import _v328_compute_downstream_status
-    # Worker stuck = priority 2 critical
+    # Worker stuck = priority 2 critical. 2026-05-30: worker_stuck gejtowany na
+    # has_pending_work (pending NEW_ORDER>0) — podajemy pending_new_orders=1 żeby
+    # branch realnie odpalił (inaczej spada do reconciliation_critical).
     result = _v328_compute_downstream_status(
         last_proposal_age_sec=None, events_failed_1h=0, new_orders_1h=0,
         worker_age_sec=10000, reconciliation_status="critical",
-        reconciliation_reason="hard_cap_hits=2",
+        reconciliation_reason="hard_cap_hits=2", pending_new_orders=1,
     )
     assert result["downstream_status"] == "critical"
     assert result["downstream_reason"] == "worker_stuck"

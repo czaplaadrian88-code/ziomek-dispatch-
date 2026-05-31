@@ -362,7 +362,9 @@ def test_log_round_trip_atomic():
         ]
         records = reconcile_log.build_records(actions, "test", {"hard_cap_hit": False})
         reconcile_log.append_records(records, log_path=log_path)
-        summary = reconcile_log.query_recent_summary(log_path=log_path, hours=24)
+        # self_heal=False: ten test waliduje SUROWE zliczanie z logu (ortogonalne do
+        # self-heal, ktore re-walidowaloby ghost 'C' przeciw PROD orders_state.json).
+        summary = reconcile_log.query_recent_summary(log_path=log_path, hours=24, self_heal=False)
         assert summary["discrepancies_24h"]["phantoms"] == 2
         assert summary["discrepancies_24h"]["ghosts"] == 1
         assert summary["discrepancies_24h"]["auto_resyncs"] == 1
