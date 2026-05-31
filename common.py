@@ -1868,6 +1868,23 @@ ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE = _os.environ.get(
 COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN = float(_os.environ.get(
     "COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN", "10.0"))
 
+# R-LATE-PICKUP (2026-05-31, Adrian): twarda reguła — max 5 min spóźnienia na
+# ODBIÓR względem zadeklarowanego czasu odbioru. Referencja = committed
+# czas_kuriera_warsaw (bag-order lub nowy z firm-commit) | pickup_ready_at (nowy
+# bez commitu). Per-pickup hard gate na plan.pickup_at (post-solve, NIE okno TSP
+# — lekcja E3 17.05: zaciśnięcie okien TSP → 7.5k INFEASIBLE/dzień → ślepy
+# greedy; tu OR-Tools dalej optymalizuje z luźnym oknem, a bramka filtruje
+# FINALNĄ pulę po realnym ETA). Komplementarna do R6 (35 min doręczenie,
+# BAG_TIME_HARD_MAX_MIN) — DWIE nienaruszalne reguły. Gdy plan_pickup_eta - ref
+# > próg → kandydat infeasible (verdict NO, wypada z feasible + z best_effort).
+# Reguła Adriana: „lepiej wydłużyć/odroczyć czas odbioru niż złamać te dwie
+# reguły"; eliminuje stare propozycje +1h (V327_PICKUP_TIME_WINDOW_CLOSE_MIN=60).
+# Metryka late_pickup_max_min liczona ZAWSZE (shadow); reject tylko gdy flag ON.
+ENABLE_LATE_PICKUP_HARD_GATE = _os.environ.get(
+    "ENABLE_LATE_PICKUP_HARD_GATE", "1") == "1"  # ON od 2026-05-31 (Adrian: widzieć efekt w propozycjach + pomiar shadow)
+LATE_PICKUP_HARD_MAX_MIN = float(_os.environ.get(
+    "LATE_PICKUP_HARD_MAX_MIN", "5.0"))
+
 # Sprint OBJ F0.3 (2026-05-17): replay-capture wejść solvera do offline
 # harnessu (zestaw masowy / regresja). Default OFF — włączane env na czas sprintu.
 ENABLE_OBJ_REPLAY_CAPTURE = _os.environ.get(
