@@ -1367,6 +1367,19 @@ def _format_proposal_v2(decision: dict) -> str:
                 f"⏰ Proponowany czas odbioru: {_sug_hhmm}{_nl_txt} — najszybszy kurier; "
                 f"do odpowiedzi restauracji"
             )
+    # ALWAYS-PROPOSE (2026-06-01): difficult_case w trybie shadow (flaga
+    # ENABLE_DIFFICULT_CASE_KOORD_REDIRECT OFF) → zlecenie proponuje, ale render
+    # oznacza graniczną geometrię (best score < DIFFICULT_CASE_SCORE_FLOOR) żeby
+    # Adrian wiedział że to trudny case i ocenił ostrożnie. Dyrektywa: nie milcz,
+    # proponuj + pokaż. Payload auto-prop przez prefix "difficult_" w serializerze.
+    _diff = best.get("difficult_case_redirect_shadow") or {}
+    if _diff and isinstance(_diff.get("max_score"), (int, float)):
+        _df_floor = _diff.get("floor")
+        _df_floor_txt = f" < próg {int(round(_df_floor))}" if isinstance(_df_floor, (int, float)) else ""
+        lines.append(
+            f"⚠️ Trudna geometria — najlepszy score {_diff['max_score']:.0f}{_df_floor_txt} "
+            f"(graniczna trasa, oceń ostrożnie)"
+        )
     lines.append("")
     lines.append(_conf_line_v2(decision))
     lines.append("")
