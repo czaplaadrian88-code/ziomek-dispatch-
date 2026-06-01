@@ -81,10 +81,17 @@ def main():
         print("\n=== T4: /wraca bartek ===")
         action, response = mo.parse_command("/wraca bartek")
         expect("action == 'include'", action == "include")
-        expect("response zawiera '✅' i 'wrócił'", "✅" in response and "wrócił" in response,
+        # 2026-06-01 working-override: include teraz daje uczciwy komunikat
+        # "pracuje dziś — będę go proponował" (zamiast mylącego "wrócił do flow"),
+        # bo zdejmuje ze STOP ORAZ dodaje syntetyczny wpis grafiku na dziś.
+        expect("response: include + 'pracuje' + 'proponował'",
+               "✅" in response and "pracuje" in response and "proponował" in response,
                f"got {response!r}")
         with open(TMP_OVERRIDES) as f: d = json.load(f)
         expect("excluded list NIE ma 'Bartek O.'", "Bartek O." not in d.get("excluded", []))
+        expect("working-override dodany dla bartka (cid-keyed)",
+               any(v.get("name") == "Bartek O." for v in d.get("working", {}).values()),
+               f"working={d.get('working')}")
 
         # ---------- T5: /wrocil bartek (alias) ----------
         print("\n=== T5: /wrocil bartek (alias spelling) ===")

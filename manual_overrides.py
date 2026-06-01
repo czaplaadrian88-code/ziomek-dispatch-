@@ -7,9 +7,13 @@ Lifecycle: do końca dnia (reset codziennie rano przez cron lub ręcznie "reset"
 """
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
+
+_WAW = ZoneInfo("Europe/Warsaw")
 
 OVERRIDES_PATH = "/root/.openclaw/workspace/dispatch_state/manual_overrides.json"
 COURIER_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
@@ -17,6 +21,10 @@ KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"  # 
 
 EXCLUDE_KEYWORDS = ("nie pracuje", "wyklucz", "choruje", "nie ma")
 INCLUDE_KEYWORDS = ("wrócił", "wrocil", "wróciła", "wrocila", "wraca", "pracuje", "jest", "dodaj")
+# 2026-06-01: podzbiór INCLUDE_KEYWORDS który DODAJE do grafiku (working-override),
+# nie tylko zdejmuje ze STOP. "jest" celowo pominięte — zbyt słabe ("gdzie jest X")
+# żeby tworzyć syntetyczny wpis grafiku; "jest" zostaje czystym un-exclude (legacy).
+_WORKING_ADD_KEYWORDS = ("wrócił", "wrocil", "wróciła", "wrocila", "wraca", "pracuje", "dodaj")
 
 UNKNOWN_MSG = "❓ Nie rozumiem. Przykład: 'Mykyta nie pracuje' lub 'Mykyta wrócił'"
 
@@ -30,6 +38,9 @@ def load() -> dict:
     if not isinstance(d, dict):
         d = {}
     d.setdefault("excluded", [])
+    d.setdefault("working", {})
+    if not isinstance(d["working"], dict):
+        d["working"] = {}
     d.setdefault("updated_at", "")
     return d
 
@@ -47,6 +58,17 @@ def save(data: dict) -> None:
 
 def get_excluded() -> List[str]:
     return list(load().get("excluded", []))
+
+
+def get_working() -> Dict[str, dict]:
+    """Working-override (2026-06-01): {cid_str: {"start": "HH:MM", "end": "HH:MM", ...}}.
+
+    Syntetyczne wpisy grafiku z komendy "X pracuje" — cid-keyed (jednoznaczne, bez
+    fuzzy name-match). Konsumowane w courier_resolver.dispatchable_fleet jako
+    autorytatywna gałąź (kurier spoza grafiku staje się dispatchowalny). Lifecycle:
+    do końca dnia (reset 06:00 via manual_overrides_daily_reset). Zwraca kopię."""
+    w = load().get("working", {})
+    return dict(w) if isinstance(w, dict) else {}
 
 
 def _load_names() -> List[str]:
@@ -164,6 +186,111 @@ def _resolve_cid(name: str) -> str:
         return "?"
 
 
+def _now_warsaw_hhmm() -> str:
+    return datetime.now(_WAW).strftime("%H:%M")
+
+
+def _default_end() -> str:
+    """Domyślny koniec syntetycznej zmiany. Env override WORKING_OVERRIDE_DEFAULT_END
+    (czytane przy każdym wywołaniu → spójne z common.py + test-friendly)."""
+    return os.environ.get("WORKING_OVERRIDE_DEFAULT_END", "24:00")
+
+
+def _parse_shift_bounds(text: str) -> Tuple[str, str]:
+    """Free-text → (start_hhmm, end_hhmm). Default start=teraz (Warsaw), end=DEFAULT_END.
+
+    Rozpoznaje opcjonalne 'od HH[:MM]' (start) oraz 'do HH[:MM]' (end), np.
+    "Adrian pracuje do 22" → end 22:00; "Bartek pracuje od 15:30 do 23" → 15:30–23:00.
+    Tolerancyjne — przy błędnym zakresie zostawia default."""
+    low = (text or "").lower()
+    start = _now_warsaw_hhmm()
+    end = _default_end()
+    m_od = re.search(r"\bod\s+(\d{1,2})(?::(\d{2}))?", low)
+    if m_od:
+        h = int(m_od.group(1))
+        mm = int(m_od.group(2) or 0)
+        if 0 <= h <= 23 and 0 <= mm <= 59:
+            start = f"{h:02d}:{mm:02d}"
+    m_do = re.search(r"\bdo\s+(\d{1,2})(?::(\d{2}))?", low)
+    if m_do:
+        h = int(m_do.group(1))
+        mm = int(m_do.group(2) or 0)
+        if h == 24 and mm == 0:
+            end = "24:00"
+        elif 0 <= h <= 23 and 0 <= mm <= 59:
+            end = f"{h:02d}:{mm:02d}"
+    return start, end
+
+
+def _add_working(data: dict, courier: str, text: str) -> Optional[Tuple[str, str, str]]:
+    """Dodaj cid-keyed working entry dla 'X pracuje'. Returns (cid_str, start, end) lub
+    None gdy cid nieznany (bez cid nie da się zakotwiczyć override'a → caller informuje
+    operatora żeby użył /dopisz). Mutuje data (caller zapisuje przez save)."""
+    cid = _resolve_cid(courier)
+    if cid == "?":
+        return None
+    start, end = _parse_shift_bounds(text)
+    working = data.setdefault("working", {})
+    if not isinstance(working, dict):
+        working = {}
+        data["working"] = working
+    working[cid] = {
+        "start": start,
+        "end": end,
+        "name": courier,
+        "added_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return cid, start, end
+
+
+def _do_include(data: dict, courier: str, text: str, add_to_grafik: bool = True) -> Tuple[str, str]:
+    """Wspólna ścieżka 'pracuje/wrócił/wraca/dodaj' + /wraca + /pracuje. Realizuje OBA
+    przypadki Adriana: (1) zdejmij z excluded (powracający po /stop), (2) gdy add_to_grafik
+    → dodaj working override (spoza grafiku / zaczyna teraz). Working jest FALLBACKIEM —
+    courier_resolver użyje go tylko gdy kurier NIE jest na realnej zmianie (nie rozszerza
+    godzin powracającego, który jest w grafiku). Uczciwe potwierdzenie."""
+    excluded = data.get("excluded", [])
+    was_excluded = courier in excluded
+    if was_excluded:
+        excluded.remove(courier)
+        data["excluded"] = excluded
+    added = _add_working(data, courier, text) if add_to_grafik else None
+    save(data)
+    if added is not None:
+        cid, start, end = added
+        end_disp = "końca dnia" if end == "24:00" else end
+        prefix = "✅" if not was_excluded else "✅ (zdjęty ze STOP)"
+        return "include", (f"{prefix} {courier} (cid={cid}) pracuje dziś "
+                           f"({start}–{end_disp}) — będę go proponował")
+    if add_to_grafik:
+        # próbowaliśmy dodać do grafiku, ale cid nieznany
+        if was_excluded:
+            return "include", (f"✅ {courier} przywrócony (zdjęty ze STOP). "
+                               f"⚠️ Brak cid — jeśli nie ma go w grafiku, dodaj: /dopisz <cid> <imię>")
+        return "include", (f"⚠️ {courier}: nie znam cid — nie dodam do grafiku. "
+                           f"Użyj /dopisz <cid> <imię>")
+    # add_to_grafik False (np. samo 'jest') — tylko zdjęcie ze STOP (legacy)
+    if was_excluded:
+        return "include", f"✅ {courier} (cid={_resolve_cid(courier)}) przywrócony"
+    return "include", f"✅ {courier} (cid={_resolve_cid(courier)}) — aktywny"
+
+
+def _do_exclude(data: dict, courier: str) -> Tuple[str, str]:
+    """Wspólna ścieżka 'nie pracuje/wyklucz/choruje' + /stop. Dodaj do excluded ORAZ
+    usuń ewentualny working override (operator zatrzymał kuriera — czyść stan)."""
+    excluded = data.get("excluded", [])
+    if courier not in excluded:
+        excluded.append(courier)
+        data["excluded"] = excluded
+    cid = _resolve_cid(courier)
+    working = data.get("working", {})
+    if isinstance(working, dict):
+        working.pop(cid, None)
+        data["working"] = working
+    save(data)
+    return "exclude", f"🛑 {courier} (cid={cid}) STOP — wykluczony do końca dnia"
+
+
 def parse_command(text: str) -> Tuple[str, str]:
     """Zwraca (action, response). action ∈ {exclude, include, reset, unknown, noop}.
 
@@ -189,34 +316,23 @@ def parse_command(text: str) -> Tuple[str, str]:
         courier = _find_courier(rest, names)
         if courier is None:
             return "unknown", f"❓ Nie znalazłem kuriera dla '{rest}'"
-        data = load()
-        excluded = data.get("excluded", [])
-        if courier not in excluded:
-            excluded.append(courier)
-            data["excluded"] = excluded
-            save(data)
-        return "exclude", f"🛑 {courier} (cid={_resolve_cid(courier)}) STOP — wykluczony do końca dnia"
-    if low.startswith("/wraca") or low.startswith("/wrocil"):
-        # /wraca <imię>
+        return _do_exclude(load(), courier)
+    if low.startswith("/wraca") or low.startswith("/wrocil") or low.startswith("/pracuje"):
+        # /wraca <imię> | /pracuje <imię> [od HH:MM] [do HH:MM]
         parts = raw.split(maxsplit=1)
         rest = parts[1].strip() if len(parts) > 1 else ""
         if not rest:
-            return "unknown", "❓ Użycie: /wraca <imię kuriera> (np. /wraca bartek)"
+            return "unknown", "❓ Użycie: /pracuje <imię> [do HH:MM] (np. /pracuje bartek do 22)"
         names = _load_names()
         courier = _find_courier(rest, names)
         if courier is None:
             return "unknown", f"❓ Nie znalazłem kuriera dla '{rest}'"
-        data = load()
-        excluded = data.get("excluded", [])
-        if courier in excluded:
-            excluded.remove(courier)
-            data["excluded"] = excluded
-            save(data)
-        return "include", f"✅ {courier} (cid={_resolve_cid(courier)}) wrócił do flow"
+        return _do_include(load(), courier, raw)
 
     if low in ("reset", "reset overrides"):
         data = load()
         data["excluded"] = []
+        data["working"] = {}
         save(data)
         return "reset", "✅ Reset — wszyscy kurierzy aktywni"
 
@@ -232,16 +348,8 @@ def parse_command(text: str) -> Tuple[str, str]:
         return "unknown", UNKNOWN_MSG
 
     data = load()
-    excluded = data.get("excluded", [])
     if has_exclude:
-        if courier not in excluded:
-            excluded.append(courier)
-            data["excluded"] = excluded
-            save(data)
-        return "exclude", f"✅ {courier} (cid={_resolve_cid(courier)}) wykluczony do końca dnia"
-    # has_include
-    if courier in excluded:
-        excluded.remove(courier)
-        data["excluded"] = excluded
-        save(data)
-    return "include", f"✅ {courier} (cid={_resolve_cid(courier)}) przywrócony"
+        return _do_exclude(data, courier)
+    # has_include — 'pracuje/wrócił/wraca/dodaj' dodają do grafiku; samo 'jest' tylko un-exclude
+    _add_grafik = any(kw in low for kw in _WORKING_ADD_KEYWORDS)
+    return _do_include(data, courier, raw, add_to_grafik=_add_grafik)

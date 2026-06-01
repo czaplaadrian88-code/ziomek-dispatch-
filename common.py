@@ -1344,6 +1344,18 @@ CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES = _os.environ.get(
 ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN = _os.environ.get(
     "ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN", "0") == "1"
 
+# Working-override (Adrian 2026-06-01): komenda Telegram "X pracuje" ma działać dla
+# DWÓCH przypadków — (1) powracający po /stop (zdjęcie z excluded, jak dotąd),
+# (2) kurier SPOZA grafiku który właśnie zaczyna → syntetyczny wpis grafiku na dziś.
+# Override jest cid-keyed (manual_overrides.json["working"] = {cid: {start,end}}),
+# AUTORYTATYWNY (wygrywa z realnym grafikiem: pokrywa "brak w grafiku", "zmiana
+# skończona", "nie pracuje dziś"), lifecycle "do końca dnia" (reset 06:00 razem z
+# manual_overrides). Default ON — feature jawnie zamówiony; env ENABLE_WORKING_OVERRIDE=0
+# wyłącza (courier_resolver ignoruje sekcję "working", zero wpływu). Default end "24:00"
+# = do północy; operator może zawęzić wpisując "X pracuje do HH:MM".
+ENABLE_WORKING_OVERRIDE = _os.environ.get("ENABLE_WORKING_OVERRIDE", "1") == "1"
+WORKING_OVERRIDE_DEFAULT_END = _os.environ.get("WORKING_OVERRIDE_DEFAULT_END", "24:00")
+
 
 def get_flag_czasowka_proactive_use_all_candidates() -> bool:
     return flag("CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", default=False)

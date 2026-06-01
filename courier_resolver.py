@@ -899,17 +899,25 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
     try:
         from dispatch_v2 import manual_overrides
         excluded = set(manual_overrides.get_excluded())
+        working = manual_overrides.get_working()  # {cid_str: {"start","end",...}}
     except Exception as _e:
         _log.warning(f"manual_overrides load failed: {_e}")
         excluded = set()
+        working = {}
     if fleet is None:
         fleet = build_fleet_snapshot()
     # Faza 7 flag — read once per dispatchable_fleet() call (no per-courier cost).
     try:
         from dispatch_v2 import common as _C7
         _post_shift_5min_enabled = bool(getattr(_C7, "ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN", False))
+        # Hot-reload kill-switch: flags.json wygrywa (instant disable bez restartu);
+        # gdy klucza brak → env-latched default z common.py (ENABLE_WORKING_OVERRIDE).
+        _working_override_enabled = bool(_C7.flag(
+            "ENABLE_WORKING_OVERRIDE",
+            default=bool(getattr(_C7, "ENABLE_WORKING_OVERRIDE", True))))
     except Exception:
         _post_shift_5min_enabled = False
+        _working_override_enabled = True
     _now_utc_fleet = datetime.now(timezone.utc)
     result = []
     # TASK 3: collect rejected dla observability logger (zero overhead gdy flag false)
@@ -926,6 +934,15 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                 cs.pos = BIALYSTOK_CENTER
                 cs.pos_source = "post_shift_start_synthetic"
                 _log.debug(f"post_shift_5min synthetic {cs.name} ({cs.courier_id})")
+        # Working-override (Adrian 2026-06-01): operator wpisał "X pracuje" → cs.courier_id
+        # w working set. Daj syntetyczną pozycję (BIALYSTOK_CENTER, jak pre_shift) gdy brak
+        # GPS, żeby kurier spoza grafiku był dispatchowalny od razu. Realny GPS wygrywa
+        # (granted tylko gdy cs.pos is None). Flag-gated ENABLE_WORKING_OVERRIDE.
+        if (_working_override_enabled and cs.pos is None and working
+                and str(cs.courier_id or "") in working):
+            cs.pos = BIALYSTOK_CENTER
+            cs.pos_source = "working_override_synthetic"
+            _log.debug(f"working_override synthetic pos {cs.name} ({cs.courier_id})")
         if cs.pos is None:
             _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                       "reason": "no_position", "pos_source": cs.pos_source})
@@ -935,6 +952,47 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
             _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                       "reason": "manual_override"})
             continue
+
+        # ===== Working-override (Adrian 2026-06-01) — FALLBACK gałąź =====
+        # Operator jawnie wpisał "X pracuje". Override cid-keyed (jednoznaczny — omija
+        # fuzzy match_courier, więc zero ambiguity z V3.25 landmine "Jakub OL").
+        # FALLBACK: bierze górę TYLKO gdy kurier NIE jest na realnej zmianie teraz —
+        # pokrywa "brak w grafiku" (spoza), "zmiana skończona", "przed zmianą". Gdy kurier
+        # JEST na realnej zmianie → realny grafik wygrywa (zachowuje realne godziny, by NIE
+        # rozszerzać powracającemu po /stop zmiany do końca dnia). Flag ENABLE_WORKING_OVERRIDE.
+        _wo_entry = (working.get(str(cs.courier_id or ""))
+                     if (_working_override_enabled and working) else None)
+        if _wo_entry is not None:
+            _real_on_shift_now = False
+            if schedule and cs.name and match_courier is not None and is_on_shift is not None:
+                _rfn = match_courier(cs.name, schedule)
+                if _rfn is not None and schedule.get(_rfn) is not None:
+                    _ros, _ = is_on_shift(cs.name, schedule)
+                    _real_on_shift_now = bool(_ros)
+            if not _real_on_shift_now:
+                cs.shift_start = _shift_start_dt(_wo_entry)
+                cs.shift_end = _shift_end_dt(_wo_entry)
+                if cs.shift_end is not None and _now_utc_fleet >= cs.shift_end:
+                    # "pracuje do HH:MM" już minęło → po zmianie, pomiń (jak off-shift).
+                    _log.debug(f"skip {cs.name} ({cs.courier_id}): working_override po zmianie")
+                    _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
+                                              "reason": "working_override_ended"})
+                    continue
+                _wo_mins = _mins_to_shift_start(_wo_entry)
+                if _wo_mins is not None and _wo_mins > 0:
+                    # "pracuje od HH:MM" w przyszłości → pre_shift hold (mirror V3.24-A).
+                    cs.pos_source = "pre_shift"
+                    cs.pos = BIALYSTOK_CENTER
+                    cs.shift_start_min = _wo_mins
+                    _log.debug(f"working_override pre_shift {cs.name} ({cs.courier_id}): za {_wo_mins:.0f} min")
+                # else: start <= now → na zmianie teraz, proceed.
+                cs.schedule_source_stale = _sched_stale
+                result.append(cs)
+                _passed_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
+                                        "pos_source": cs.pos_source})
+                continue
+            # else: kurier na realnej zmianie → realny grafik wygrywa, ścieżka niżej.
+
         if schedule and cs.name:
             full_name = match_courier(cs.name, schedule)
             if full_name is None:
