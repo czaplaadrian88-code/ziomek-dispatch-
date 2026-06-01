@@ -3711,50 +3711,59 @@ def _assess_order_impl(
             )
 
     # SELECTION VETO SHADOW (2026-06-01) — liczy „co by wybrał veto kierunkowe"
-    # OBOK live (feasible[0] po wszystkich passach). SHADOW: NIGDY nie mutuje
-    # feasible ani best → zero zmiany zachowania. Serializowane top-level w
-    # shadow_dispatcher → grep SELECTION_VETO_SHADOW. Flaga default OFF.
+    # OBOK live (feasible[0] po wszystkich passach), w DWÓCH dialach RÓWNOLEGLE:
+    #   informed = flip tylko do kuriera ze znaną pozycją (bezpieczny);
+    #   any      = flip też do pustych/solo (agresywny, oddaj solo zamiast cross-bundla).
+    # SHADOW: NIGDY nie mutuje feasible ani best → zero zmiany zachowania.
+    # Serializowane top-level → grep SELECTION_VETO_SHADOW. Flaga default OFF.
     if getattr(C, "ENABLE_SELECTION_VETO_SHADOW", False) and feasible:
         try:
             _sv_block = float(getattr(C, "SELECTION_VETO_COS_BLOCK", -0.5))
             _sv_ok = float(getattr(C, "SELECTION_VETO_COS_OK", -0.1))
-            _sv_inf = bool(getattr(C, "SELECTION_VETO_INFORMED_ONLY", True))
-            _sv_winner, _sv_changed, _sv_reason = _selection_veto_winner(
-                feasible, _sv_block, _sv_ok, _sv_inf)
             _sv_live = feasible[0]
             _sv_lm = (_sv_live.metrics or {}) if hasattr(_sv_live, "metrics") else {}
-            if _sv_changed and _sv_winner is not None:
-                _sv_vm = (_sv_winner.metrics or {}) if hasattr(_sv_winner, "metrics") else {}
-                selection_veto_shadow = {
-                    "changed": True,
-                    "reason": _sv_reason,
-                    "cos_block": _sv_block,
-                    "cos_ok": _sv_ok,
-                    "informed_only": _sv_inf,
-                    "live_winner_cid": str(getattr(_sv_live, "courier_id", "")),
-                    "live_winner_name": getattr(_sv_live, "name", None),
-                    "live_winner_score": round(float(getattr(_sv_live, "score", 0.0) or 0.0), 2),
-                    "live_winner_cosine": _sv_lm.get("r1_avg_pairwise_cosine"),
-                    "live_winner_deliv_spread_km": _sv_lm.get("deliv_spread_km"),
-                    "live_winner_bag_size": _sv_lm.get("r6_bag_size"),
-                    "live_winner_pos_source": _sv_lm.get("pos_source"),
-                    "veto_winner_cid": str(getattr(_sv_winner, "courier_id", "")),
-                    "veto_winner_name": getattr(_sv_winner, "name", None),
-                    "veto_winner_score": round(float(getattr(_sv_winner, "score", 0.0) or 0.0), 2),
-                    "veto_winner_cosine": _sv_vm.get("r1_avg_pairwise_cosine"),
-                    "veto_winner_deliv_spread_km": _sv_vm.get("deliv_spread_km"),
-                    "veto_winner_bag_size": _sv_vm.get("r6_bag_size"),
-                    "veto_winner_pos_source": _sv_vm.get("pos_source"),
-                }
+
+            def _sv_dial(_informed_only):
+                _w, _ch, _r = _selection_veto_winner(
+                    feasible, _sv_block, _sv_ok, _informed_only)
+                if _ch and _w is not None:
+                    _m = (_w.metrics or {}) if hasattr(_w, "metrics") else {}
+                    return {
+                        "changed": True, "reason": _r,
+                        "veto_winner_cid": str(getattr(_w, "courier_id", "")),
+                        "veto_winner_name": getattr(_w, "name", None),
+                        "veto_winner_score": round(float(getattr(_w, "score", 0.0) or 0.0), 2),
+                        "veto_winner_cosine": _m.get("r1_avg_pairwise_cosine"),
+                        "veto_winner_deliv_spread_km": _m.get("deliv_spread_km"),
+                        "veto_winner_bag_size": _m.get("r6_bag_size"),
+                        "veto_winner_pos_source": _m.get("pos_source"),
+                    }
+                return {"changed": False, "reason": _r}
+
+            _sv_informed = _sv_dial(True)
+            _sv_any = _sv_dial(False)
+            selection_veto_shadow = {
+                "cos_block": _sv_block,
+                "cos_ok": _sv_ok,
+                "changed_any": bool(_sv_informed.get("changed") or _sv_any.get("changed")),
+                "live_winner_cid": str(getattr(_sv_live, "courier_id", "")),
+                "live_winner_name": getattr(_sv_live, "name", None),
+                "live_winner_score": round(float(getattr(_sv_live, "score", 0.0) or 0.0), 2),
+                "live_winner_cosine": _sv_lm.get("r1_avg_pairwise_cosine"),
+                "live_winner_deliv_spread_km": _sv_lm.get("deliv_spread_km"),
+                "live_winner_bag_size": _sv_lm.get("r6_bag_size"),
+                "live_winner_pos_source": _sv_lm.get("pos_source"),
+                "informed": _sv_informed,   # dial bezpieczny
+                "any": _sv_any,             # dial agresywny
+            }
+            if selection_veto_shadow["changed_any"]:
                 log.info(
                     f"SELECTION_VETO_SHADOW order={order_id} "
                     f"live={_sv_live.courier_id}(cos={_sv_lm.get('r1_avg_pairwise_cosine')},"
                     f"spread={_sv_lm.get('deliv_spread_km')},bag={_sv_lm.get('r6_bag_size')}) "
-                    f"veto={_sv_winner.courier_id}(cos={_sv_vm.get('r1_avg_pairwise_cosine')},"
-                    f"pos={_sv_vm.get('pos_source')},bag={_sv_vm.get('r6_bag_size')})"
+                    f"informed={_sv_informed.get('veto_winner_cid') if _sv_informed.get('changed') else '-'} "
+                    f"any={_sv_any.get('veto_winner_cid') if _sv_any.get('changed') else '-'}"
                 )
-            else:
-                selection_veto_shadow = {"changed": False, "reason": _sv_reason}
         except Exception as _sv_e:
             log.warning(
                 f"SELECTION_VETO_SHADOW build fail order={order_id}: {_sv_e}")
