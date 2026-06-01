@@ -680,6 +680,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # {"changed": bool, old_winner_*, new_winner_*} gdy stroma kara near-limit (32-35)
         # przestawiła zwycięzcę vs legacy -8/min. grep: R6_DANGER_DIVERGENCE.
         "r6_danger_shadow": getattr(result, "r6_danger_shadow", None),
+        # SELECTION VETO SHADOW (2026-06-01): counterfactual veta kierunkowego.
+        # {"changed": bool, live_winner_*, veto_winner_*} gdy live zwycięzca jest
+        # mocno-cross (cos<BLOCK) a istnieje feasible nie-cross → veto wskazałby
+        # innego. SHADOW — zero zmiany zachowania. None gdy flaga OFF. grep:
+        # SELECTION_VETO_SHADOW. Pomiar: eod_drafts/2026-06-01/SELECTION_*.
+        "selection_veto_shadow": getattr(result, "selection_veto_shadow", None),
     }
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)

@@ -1986,6 +1986,31 @@ R1_PROGRESSIVE_MEDIUM_VAL   = float(_os.environ.get(
 V319H_GUARD_COSINE_THRESHOLD = float(_os.environ.get(
     "V319H_GUARD_COSINE_THRESHOLD", "-0.3"))
 
+# ── SELECTION VETO SHADOW (2026-06-01) — diagnoza selekcji przeciw-kierunkowej ──
+# Analiza replay 259 decyzji (eod_drafts/2026-06-01/SELECTION_cross_direction_verdict.md):
+# przeciw-kierunkowi zwycięzcy NIE wygrywają na score (1/18) — wygrywają bo klucz
+# selekcji (bucket informed>blind + late-pickup tier-2) NADPISUJE lepiej-skierowanego
+# kandydata (10/18) lub brak nie-cross w puli (7/18 scarcity). Kara kierunku jest
+# JUŻ mocna (cos<-0.7 ≈ -100) → wzmacnianie scoringu nieskuteczne. Lever = klucz
+# selekcji. Ten shadow liczy „co by wybrał veto kierunkowe" OBOK live (ZERO zmiany
+# zachowania) i serializuje rozjazd → kalibracja przed ewentualnym flipem.
+# Flaga default OFF (shadow-first, jak late_pickup_shadow). Pomiar = grep
+# SELECTION_VETO_SHADOW w shadow_decisions.jsonl przez kilka peaków.
+ENABLE_SELECTION_VETO_SHADOW = _os.environ.get(
+    "ENABLE_SELECTION_VETO_SHADOW", "0") == "1"
+# Live winner z cos < BLOCK = „mocno przeciw-kierunkowy" → kandydat do veta.
+SELECTION_VETO_COS_BLOCK = float(_os.environ.get(
+    "SELECTION_VETO_COS_BLOCK", "-0.5"))
+# Alternatywa „nie-cross" musi mieć cos > OK (lub None = solo/brak konfliktu kierunku).
+SELECTION_VETO_COS_OK = float(_os.environ.get(
+    "SELECTION_VETO_COS_OK", "-0.1"))
+# True = veto przenosi tylko na kuriera ze ZNANĄ pozycją (informed) — bezpieczny dial
+# (2 flipy/dzień, bez ryzyka no_gps/pre_shift). False = any (agresywny, 4 flipy, w tym
+# na pustych/mniej pewnych). Replay 2026-06-01: informed-only flipuje do bag-aligned,
+# any flipuje głównie do pustych (zlecenie solo zamiast cross-bundla).
+SELECTION_VETO_INFORMED_ONLY = _os.environ.get(
+    "SELECTION_VETO_INFORMED_ONLY", "1") == "1"
+
 # Difficult case floor — kalibrowane: 2 maybe-regresje z replay miały scores
 # post-fixes -55 i -56 (wszystkie kandydaci poniżej -30). Floor -30 = każdy
 # kandydat poniżej tej wartości = "trudne geometrycznie" → KOORD redirect.
