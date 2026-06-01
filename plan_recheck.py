@@ -69,6 +69,24 @@ MAX_PLAN_AGE_MIN = int(os.environ.get("MAX_PLAN_AGE_MIN", "120"))
 # obietnicy i przesuń kolejne stopy. Monotoniczne, idempotentne. Default ON.
 ENABLE_PICKUP_REFLOOR = os.environ.get("ENABLE_PICKUP_REFLOOR", "1") == "1"
 
+# 2026-06-01 (apka pokazuje fallback_nn zamiast trasy Ziomka):
+# gdy kurier MA realny worek (≥1 zlecenie assigned/picked_up w orders_state) ale
+# NIE ma aktywnego planu w courier_plans.json (np. PANEL_OVERRIDE — koordynator
+# przypisał innego kuriera niż Ziomek proponował, więc panel_watcher nie zapisał
+# planu) → apka liczy własne geo-NN (fallback_nn). Ten pass gap-fill uruchamia
+# realny planner Ziomka (route_simulator_v2) na FAKTYCZNYM worku kuriera i zapisuje
+# plan, dzięki czemu apka pokazuje route_source=ziomek_plan z tą samą kolejnością
+# i czasami. Tylko gap-fill (brak aktywnego planu) — istniejących planów NIE rusza,
+# więc po zapisie kolejny tick pomija kuriera (zero churn). NIE dotyka Telegrama
+# (zapis tylko do courier_plans.json czytanego przez apkę). Default ON.
+ENABLE_PLAN_FOR_ACTUAL_BAG = os.environ.get(
+    "ENABLE_PLAN_FOR_ACTUAL_BAG", "1"
+) == "1"
+# Powyżej tylu zleceń w worku → skip (za dużo wywołań OSRM × sweep designacji w
+# oknie oneshot 120s); apka degraduje do fallback_nn jak dotychczas.
+PLAN_FOR_ACTUAL_BAG_MAX = int(os.environ.get("PLAN_FOR_ACTUAL_BAG_MAX", "5"))
+ACTIVE_STATUSES = frozenset({"assigned", "picked_up"})
+
 TERMINAL_STATUSES = frozenset({"delivered", "cancelled", "returned_to_pool"})
 
 
@@ -237,6 +255,165 @@ def _check_plan(cid: str, plan: Dict[str, Any],
     }
 
 
+def _parse_dt(s: Optional[str]) -> Optional[datetime]:
+    """ISO-8601 → aware UTC datetime. None gdy puste/nie-str/nie-parsuje.
+
+    NIE używać dla naiwnych Warsaw timestampów (np. orders_state.picked_up_at
+    "YYYY-MM-DD HH:MM:SS" bez offsetu — interpretacja jako UTC = błąd +2h).
+    """
+    if not s or not isinstance(s, str):
+        return None
+    try:
+        v = s.strip()
+        if v.endswith("Z"):
+            v = v[:-1] + "+00:00"
+        dt = datetime.fromisoformat(v)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
+def _coords_ok(c: Any) -> bool:
+    return (isinstance(c, (list, tuple)) and len(c) == 2
+            and c[0] is not None and c[1] is not None)
+
+
+def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
+                      gps_positions: Dict[str, Any], now: datetime,
+                      R: Any) -> bool:
+    """Wygeneruj+zapisz plan Ziomka dla faktycznego worka kuriera.
+
+    Zwraca True gdy zapisano, False gdy skip (worek za duży / brak GPS / brak
+    coords / niekompletny plan). Wyjątki propagują do callera (per-courier guard).
+    """
+    if len(oids) > PLAN_FOR_ACTUAL_BAG_MAX:
+        return False
+    gps = gps_positions.get(cid) or {}
+    glat, glon = gps.get("lat"), gps.get("lon")
+    if glat is None or glon is None:
+        return False  # brak pozycji kuriera → nie ma od czego liczyć trasy
+    pos = (float(glat), float(glon))
+
+    sims: Dict[str, Any] = {}
+    for oid in oids:
+        rec = orders_state.get(oid) or {}
+        dc = rec.get("delivery_coords")
+        if not _coords_ok(dc):
+            return False  # brak coords dostawy → fallback_nn (jak dotąd)
+        status = rec.get("status")
+        pc = rec.get("pickup_coords")
+        if status != "picked_up" and not _coords_ok(pc):
+            return False  # assigned bez coords odbioru → skip cały kurier
+        pickup_coords = (float(pc[0]), float(pc[1])) if _coords_ok(pc) \
+            else (float(dc[0]), float(dc[1]))  # picked_up: nieużywane (brak pickup-node)
+        sims[oid] = R.OrderSim(
+            order_id=oid,
+            pickup_coords=pickup_coords,
+            delivery_coords=(float(dc[0]), float(dc[1])),
+            picked_up_at=None,  # naiwny Warsaw w orders_state → pomijamy; anchor=czas_kuriera
+            status=status,
+            pickup_ready_at=_parse_dt(rec.get("czas_kuriera_warsaw")),
+        )
+
+    # Sweep designacji new_order (route_simulator_v2 traktuje 1 order jako wstawiany)
+    # → wybierz najlepszy plan deterministycznie (sla, dur, sequence).
+    ordered = list(sims.keys())
+    best = None
+    for newoid in ordered:
+        bag = [sims[o] for o in ordered if o != newoid]
+        p = R.simulate_bag_route_v2(pos, bag, sims[newoid], now=now, sla_minutes=35)
+        key = (p.sla_violations, round(p.total_duration_min, 3), tuple(p.sequence))
+        if best is None or key < best[0]:
+            best = (key, p)
+    plan = best[1]
+
+    # Stopy w REALNEJ kolejności czasowej (przeplot pickup/dropoff) — apka czyta
+    # kolejność tablicy stops jako kolejność przejazdu (_plan_stop_sequence).
+    events = []
+    for oid in ordered:
+        pu = plan.pickup_at.get(oid)
+        if pu is not None:
+            events.append((pu, "pickup", oid))
+        dp = plan.predicted_delivered_at.get(oid)
+        if dp is None:
+            return False  # niekompletny plan — nie zapisujemy częściowego
+        events.append((dp, "dropoff", oid))
+    events.sort(key=lambda e: e[0])
+
+    stops = []
+    for t, kind, oid in events:
+        rec = orders_state.get(oid) or {}
+        coords = rec.get("pickup_coords") if kind == "pickup" else rec.get("delivery_coords")
+        stops.append({
+            "order_id": oid,
+            "type": kind,
+            "coords": {"lat": float(coords[0]), "lng": float(coords[1])},
+            "scheduled_at": None,
+            "predicted_at": t.isoformat(),
+            "dwell_min": 1.0 if kind == "pickup" else 3.5,
+            "status_at_plan_time": "picked_up" if rec.get("status") == "picked_up" else "assigned",
+        })
+
+    body = {
+        "start_pos": {
+            "lat": pos[0], "lng": pos[1],
+            "source": "gps_pwa",
+            "source_ts": gps.get("timestamp"),
+        },
+        "start_ts": now.isoformat(),
+        "stops": stops,
+        "optimization_method": "incremental",
+    }
+    plan_manager.save_plan(cid, body)
+    _log.info(
+        f"BAG_PLAN_GENERATED cid={cid} stops={len(stops)} seq={plan.sequence} "
+        f"sla={plan.sla_violations} dur={plan.total_duration_min:.1f}"
+    )
+    return True
+
+
+def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
+                    gps_positions: Dict[str, Any], now: datetime,
+                    summary: Dict[str, Any]) -> None:
+    """Dla kuriera z realnym workiem ale BEZ aktywnego planu → wygeneruj plan
+    Ziomka i zapisz, by apka pokazała ziomek_plan zamiast fallback_nn.
+
+    Tylko gap-fill: kurierów z aktywnym planem NIE rusza (zero churn — po zapisie
+    plan staje się aktywny, kolejny tick pomija kuriera). Fail-soft per kurier.
+    """
+    summary["bag_plans_generated"] = 0
+    summary["bag_plans_skipped"] = 0
+    try:
+        from dispatch_v2 import route_simulator_v2 as R
+    except Exception as e:
+        _log.warning(f"gap_fill import fail (skip pass): {e}")
+        return
+
+    bags: Dict[str, List[str]] = {}
+    for oid, rec in orders_state.items():
+        if not isinstance(rec, dict) or rec.get("status") not in ACTIVE_STATUSES:
+            continue
+        cid = str(rec.get("courier_id") or "")
+        if not cid:
+            continue
+        bags.setdefault(cid, []).append(str(oid))
+
+    for cid, oids in bags.items():
+        existing = plans.get(cid)
+        if existing is not None and existing.get("invalidated_at") is None \
+                and existing.get("stops"):
+            continue  # kurier ma aktywny plan — nie nadpisuj
+        try:
+            ok = _gen_one_bag_plan(cid, oids, orders_state, gps_positions, now, R)
+        except Exception as e:
+            summary["bag_plans_skipped"] += 1
+            _log.warning(f"gap_fill cid={cid} fail: {type(e).__name__}: {e}")
+            continue
+        summary["bag_plans_generated" if ok else "bag_plans_skipped"] += 1
+
+
 def run_recheck() -> Dict[str, Any]:
     """Main entry point. Returns summary dict."""
     now = _now_utc()
@@ -303,6 +480,10 @@ def run_recheck() -> Dict[str, Any]:
                     )
         else:
             summary["healthy"] += 1
+
+    # Gap-fill: kurierzy z realnym workiem ale bez aktywnego planu → plan Ziomka.
+    if ENABLE_PLAN_FOR_ACTUAL_BAG:
+        _gap_fill_plans(orders_state, plans, gps_positions, now, summary)
 
     _log.info(f"PLAN_RECHECK summary={summary}")
     return summary
