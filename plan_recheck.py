@@ -377,14 +377,27 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
 def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
                     gps_positions: Dict[str, Any], now: datetime,
                     summary: Dict[str, Any]) -> None:
-    """Dla kuriera z realnym workiem ale BEZ aktywnego planu → wygeneruj plan
-    Ziomka i zapisz, by apka pokazała ziomek_plan zamiast fallback_nn.
+    """Dla kuriera z realnym workiem bez planu LUB z planem CZĘŚCIOWYM →
+    wygeneruj plan Ziomka i zapisz, by apka pokazała ziomek_plan zamiast
+    fallback_nn.
 
-    Tylko gap-fill: kurierów z aktywnym planem NIE rusza (zero churn — po zapisie
-    plan staje się aktywny, kolejny tick pomija kuriera). Fail-soft per kurier.
+    Dwa przypadki regeneracji:
+    1. brak aktywnego planu (PANEL_OVERRIDE — koordynator przypisał innego
+       kuriera niż Ziomek proponował, więc panel_watcher nie zapisał planu);
+    2. aktywny plan pokrywa tylko CZĘŚĆ realnego worka (część zapisana, potem
+       doszło nowe zlecenie). courier_api/build_view renderuje ziomek_plan
+       TYLKO przy pełnym pokryciu (worek ⊆ plan) — częściowy plan tam spada do
+       fallback_nn. Regenerujemy, by ziomek_plan został autorytatywny.
+
+    Plan z PEŁNYM pokryciem (worek ⊆ plan) NIE jest ruszany (zero churn —
+    konwerguje: po regeneracji kolejny tick widzi pełne pokrycie i pomija).
+    Worek > PLAN_FOR_ACTUAL_BAG_MAX → _gen_one_bag_plan bailuje przed OSRM,
+    apka zostaje na spójnym fallbacku. Fail-soft per kurier. NIE dotyka
+    Telegrama (zapis tylko do courier_plans.json czytanego przez apkę).
     """
     summary["bag_plans_generated"] = 0
     summary["bag_plans_skipped"] = 0
+    summary["bag_plans_partial_regen"] = 0
     try:
         from dispatch_v2 import route_simulator_v2 as R
     except Exception as e:
@@ -402,9 +415,15 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
 
     for cid, oids in bags.items():
         existing = plans.get(cid)
+        partial = False
         if existing is not None and existing.get("invalidated_at") is None \
                 and existing.get("stops"):
-            continue  # kurier ma aktywny plan — nie nadpisuj
+            plan_ids = {str(s.get("order_id"))
+                        for s in existing.get("stops", [])
+                        if s.get("order_id") is not None}
+            if set(oids) <= plan_ids:
+                continue  # plan pokrywa cały worek — nie nadpisuj (zero churn)
+            partial = True  # plan częściowy → regeneruj na pełnym worku
         try:
             ok = _gen_one_bag_plan(cid, oids, orders_state, gps_positions, now, R)
         except Exception as e:
@@ -412,6 +431,9 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
             _log.warning(f"gap_fill cid={cid} fail: {type(e).__name__}: {e}")
             continue
         summary["bag_plans_generated" if ok else "bag_plans_skipped"] += 1
+        if ok and partial:
+            summary["bag_plans_partial_regen"] += 1
+            _log.info(f"BAG_PLAN_PARTIAL_REGEN cid={cid} bag={len(oids)}")
 
 
 def run_recheck() -> Dict[str, Any]:
