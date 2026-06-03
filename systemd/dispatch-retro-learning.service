@@ -1,0 +1,26 @@
+[Unit]
+Description=Ziomek OFFLINE Retro-Learning loop — dzienna akumulacja trendów do decyzji o flipie (read-only, zero wpływu na żywy dispatch)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts/dispatch_v2
+# Kolejność WAŻNA: feed (retro -> reliability) PRZED konsumentami (eta czyta
+# retro_conclusions.json; a2 czyta courier_reliability.json). oneshot wykonuje
+# ExecStart sekwencyjnie; gdy któryś krok padnie (exit != 0), kolejne się NIE
+# wykonają i unit kończy fail — to celowe, chcemy wiedzieć że łańcuch się zerwał.
+# 1) retro_learning — produkuje dispatch_state/retro_conclusions.json
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python /root/.openclaw/workspace/scripts/dispatch_v2/tools/retro_learning.py --json-only
+# 2) courier_reliability — produkuje dispatch_state/courier_reliability.json
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python /root/.openclaw/workspace/scripts/dispatch_v2/tools/courier_reliability.py --json-only
+# 3) eta_calibration_shadow — czyta retro_conclusions.json, dopisuje dispatch_state/eta_calibration_shadow.jsonl
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python /root/.openclaw/workspace/scripts/dispatch_v2/tools/eta_calibration_shadow.py
+# 4) a2_selection_shadow — czyta courier_reliability.json, dopisuje dispatch_state/a2_selection_shadow.jsonl
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python /root/.openclaw/workspace/scripts/dispatch_v2/tools/a2_selection_shadow.py --max-lines 200000
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/retro_learning.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/retro_learning.log
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

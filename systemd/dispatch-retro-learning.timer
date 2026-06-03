@@ -1,0 +1,10 @@
+[Unit]
+Description=Ziomek OFFLINE Retro-Learning loop — codziennie 04:30 UTC (= 06:30 Warsaw, poza peakiem)
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+Persistent=true
+Unit=dispatch-retro-learning.service
+
+[Install]
+WantedBy=timers.target
