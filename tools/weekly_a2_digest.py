@@ -12,7 +12,9 @@ OFFLINE, READ-ONLY (poza wysyłką Telegram). Uruchamiany jednorazowo przez `at`
 import argparse
 import json
 import os
+import re
 import statistics
+import subprocess
 import sys
 from collections import defaultdict
 
@@ -27,6 +29,7 @@ COEFF_REP = "60"   # reprezentatywny COEFF (dobry stosunek lepsze:gorsze, ~9% po
 ADRIAN_DM_CHAT_ID = "8765130486"
 TELEGRAM_ENV = "/root/.openclaw/workspace/.secrets/telegram.env"
 BASELINE_FILE = "/root/.openclaw/workspace/dispatch_state/rule_deviation_baseline_2026-06-03.json"
+GETFIX_FILE = "/root/.openclaw/workspace/dispatch_state/getfix_effect_2026-06-03.json"
 
 
 def _send_dm(msg):
@@ -153,13 +156,56 @@ def _baseline_delta_section():
     return "\n".join(lines)
 
 
+def _current_failed_rate():
+    """Live failed-rate z ostatniego HEARTBEAT dispatch-shadow (journalctl).
+    Zwraca (rate, processed, failed) lub None gdy brak odczytu."""
+    try:
+        out = subprocess.run(
+            ["journalctl", "-u", "dispatch-shadow", "-n", "120", "--no-pager"],
+            capture_output=True, text=True, timeout=15,
+        ).stdout
+    except Exception:
+        return None
+    last = None
+    for m in re.finditer(r"totals=\{'processed': (\d+), 'failed': (\d+)", out):
+        last = (int(m.group(1)), int(m.group(2)))
+    if not last or last[0] == 0:
+        return None
+    return last[1] / last[0], last[0], last[1]
+
+
+def _getfix_section():
+    """Dowód: dzisiejsze wdrożenie .get() = pozytyw (early_bird KOORD nie failuje)."""
+    if not os.path.exists(GETFIX_FILE):
+        return ""
+    try:
+        g = json.load(open(GETFIX_FILE, encoding="utf-8"))
+    except Exception:
+        return ""
+    pre = g.get("pre_fix_failed_rate")
+    cur = _current_failed_rate()
+    head = f"🔧 Fix .get() (wdrożony {g.get('ts')} 14:24 UTC) — dowód pozytywu:"
+    if pre is not None and cur:
+        rate, proc, fail = cur
+        body = (f"  failed-rate pre-fix {pre*100:.1f}% ({g.get('pre_fix_failed')}/{g.get('pre_fix_processed')}) "
+                f"→ live {rate*100:.1f}% ({fail}/{proc} bieżący proces)")
+    elif pre is not None:
+        body = f"  failed-rate pre-fix {pre*100:.1f}% → live: (brak odczytu journala)"
+    else:
+        body = "  (brak danych pre-fix)"
+    return f"{head}\n{body}\n  early_bird KOORD nie failuje już (KeyError naprawiony) = metryka 'failed' wiarygodna"
+
+
 def build_message(today):
     trend, _ = _trend_section()
     rules = _rules_section()
     baseline = _baseline_delta_section()
+    getfix = _getfix_section()
     parts = [f"🤖 ZIOMEK — przegląd tygodniowy A2 + reguły ({today})", trend, rules]
     if baseline:
         parts.append(baseline)
+    if getfix:
+        parts.append(getfix)
     parts.append("Pełny raport: tools/rule_deviation_report.py + a2_selection_shadow.jsonl. "
                  "Pingnij CC po decyzję flip A2.")
     return "\n\n".join(parts)
