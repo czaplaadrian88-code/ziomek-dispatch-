@@ -594,7 +594,18 @@ def build_fleet_snapshot(
         #      Flaga OFF -> delivery_coords (zachowanie sprzed F4).
         #    assigned -> pickup_coords (kurier jedzie odebrac)
         #    Iteracja malejaco: jesli najnowszy broken -> probuj kolejny
-        active_bag_orders = [o for o in orders if o.get("status") in ("picked_up", "assigned")]
+        # FAIL-02 fix (audyt 2026-06-03): pozycja MUSI używać tego samego filtra
+        # stale co bag (linie 537-541). Bez tego porzucony kurier (picked_up
+        # >BAG_STALE_THRESHOLD_MIN, brak świeżego GPS) miał cs.bag=[] (widziany jako
+        # WOLNY) ale cs.pos = ZAMROŻONE coords porzuconego zlecenia → fałszywa
+        # bliskość → wysoki score → dostawał NOWE zlecenia (kurier-widmo).
+        # Po filtrze: brak aktywnego ordera → fall-through do no_gps fallback (krok 4,
+        # BIALYSTOK_CENTER) → _demote_blind_empty degraduje go pod aktywnych kurierów.
+        active_bag_orders = [
+            o for o in orders
+            if o.get("status") in ("picked_up", "assigned")
+            and _bag_not_stale(o, now_utc)
+        ]
         if active_bag_orders:
             sorted_bag = sorted(active_bag_orders, key=_bag_sort_key, reverse=True)
             resolved = False
