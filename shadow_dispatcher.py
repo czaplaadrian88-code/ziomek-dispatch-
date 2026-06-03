@@ -957,7 +957,7 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             stats["processed"] += 1
             _log.info(
                 f"SHADOW {oid} → {record.get('verdict', result.verdict)} "
-                f"best={record['best']['courier_id'] if record['best'] else None} "
+                f"best={record['best'].get('courier_id') if record['best'] else None} "
                 f"latency={record['latency_ms']}ms"
             )
         except Exception as e:
