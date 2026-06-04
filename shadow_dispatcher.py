@@ -37,6 +37,18 @@ from dispatch_v2.monitoring.consumer_stuck_alert import (
     evaluate_stuck_alert,
     render_telegram_message,
 )
+# GPS-01 (audyt 2026-06-03): fleet-level GPS feed freshness detector.
+# Pelna sciezka import (Z3 doktryna). DOMYSLNIE INERT (GPS_FEED_ALERT_ENABLED=false
+# w flags.json) — brak GPS to CELOWY stan testowy 2026-06, hook short-circuituje
+# gdy enabled=False (zero logu/halasu). Flip True dopiero przy autonomicznym starcie.
+from dispatch_v2.monitoring.gps_feed_health import (
+    GpsFeedAlertConfig,
+    GpsFeedAlertState,
+    append_gps_feed_log,
+    compute_gps_feed_health,
+    evaluate_gps_feed_alert,
+    render_gps_feed_message,
+)
 
 
 POLL_INTERVAL_SEC = 5
@@ -784,6 +796,37 @@ def _probe_same_restaurant_race(oid, result: "PipelineResult", fleet: Dict,
         _log.warning(f"SAME_REST_RACE_PROBE fail oid={oid}: {_e}")
 
 
+# FAIL-03-K1 KROK 1: shadow licznik near-term KOORD-cisza (log-only).
+_AP_KOORD_SILENCE_PREFIXES = ("best_effort_r6_breach_v2", "best_effort_r6_breach", "all_candidates_low_score", "best_effort_low_score", "no_solo_candidates")
+
+
+def _always_propose_would_redirect_shadow(record, payload, now):
+    """Pure log-only: near-term KOORD-cisza -> dict (pole shadow) lub None. ZERO
+    mutacji verdiktu. Wyklucza early_bird i firmowe. now=None=>wallclock.
+    """
+    if not C.flag("ALWAYS_PROPOSE_WOULD_REDIRECT_SHADOW", True):
+        return None
+    reason = record.get("reason") or ""
+    matched = next((p for p in _AP_KOORD_SILENCE_PREFIXES if reason.startswith(p)), None)
+    if (record.get("verdict") or "") != "KOORD" or matched is None or reason.startswith("early_bird"):
+        return None
+    _aid = (payload or {}).get("address_id")
+    try:
+        _aid_int = int(_aid) if _aid is not None else None
+    except (TypeError, ValueError):
+        _aid_int = None
+    if _aid_int is not None and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS:
+        return None
+    pickup_dt = C.parse_panel_timestamp((payload or {}).get("pickup_at_warsaw"))
+    if pickup_dt is None:
+        return None
+    mtp = (pickup_dt - (now or datetime.now(timezone.utc))).total_seconds() / 60.0
+    from dispatch_v2.dispatch_pipeline import EARLY_BIRD_THRESHOLD_MIN
+    if mtp >= EARLY_BIRD_THRESHOLD_MIN:
+        return None
+    return {"path": matched, "minutes_to_pickup": round(mtp, 1), "verdict": "KOORD"}
+
+
 def process_event(
     event: dict,
     fleet: Dict,
@@ -951,6 +994,15 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
                     (record.get("reason") or "PROPOSE")
                     + " | telegram_suppressed_firmowe_konto"
                 )
+
+            # FAIL-03-K1 KROK 1: shadow licznik (log-only, ZERO mutacji verdiktu).
+            try:
+                _ap = _always_propose_would_redirect_shadow(record, payload, datetime.now(timezone.utc))
+                if _ap is not None:
+                    record["always_propose_would_redirect_shadow"] = _ap
+                    _log.info("SHADOW %s ALWAYS_PROPOSE_WOULD_REDIRECT path=%s mtp=%smin" % (oid, _ap["path"], _ap["minutes_to_pickup"]))
+            except Exception as _ap_e:
+                _log.warning(f"ap_redirect_shadow fail oid={oid}: {_ap_e}")
 
             _append_decision(shadow_log_path, record)
             event_bus.mark_processed(eid)
@@ -1199,6 +1251,11 @@ def run() -> int:
     # restart). Legacy `_v328_*` thin wrappery zachowują contract dla 25 testów
     # backward-compat (do delete po Sprint #37+1 stable 7d).
     _shadow_stuck_state = StuckAlertState()
+    # GPS-01 (audyt 2026-06-03): in-memory state detektora feedu GPS (restart-clean,
+    # wzór _shadow_stuck_state). + cache aktywnej floty 60s (dispatchable_fleet drogie).
+    _gps_feed_state = GpsFeedAlertState()
+    _gps_feed_active_ids_cache = []
+    _gps_feed_active_ids_cache_ts = 0.0
 
     while not _shutdown:
         try:
@@ -1291,6 +1348,73 @@ def run() -> int:
                         f"V328_WORKER_STUCK telegram alert fail "
                         f"({type(_v328_alert_e).__name__}: {_v328_alert_e}) — log only"
                     )
+
+            # ===== GPS-01 (audyt 2026-06-03): fleet GPS feed freshness detector =====
+            # BEZWARUNKOWO w HEARTBEAT (co 60s), NIE w _tick (early-returns bez NEW_ORDER).
+            # Cały hook w defensive try/except — HEARTBEAT to krytyczny liveness V328,
+            # nie wolno go wywrócić. DOMYSLNIE INERT: gdy GPS_FEED_ALERT_ENABLED=false
+            # config.enabled=False → short-circuit, zero pracy/logu (GPS celowo off teraz).
+            try:
+                _gps_cfg = GpsFeedAlertConfig.from_flags(C.flag)
+                if _gps_cfg.enabled:
+                    _gps_now = time.time()
+                    # Cache aktywnej floty 60s (dispatchable_fleet() drogie — grafik+GPS).
+                    if _gps_now - _gps_feed_active_ids_cache_ts >= 60.0:
+                        try:
+                            _gps_feed_active_ids_cache = [
+                                str(getattr(_cs, "courier_id", "") or "")
+                                for _cs in dispatchable_fleet()
+                            ]
+                        except Exception as _gps_fleet_e:
+                            _log.warning(
+                                f"GPS-01 dispatchable_fleet fail "
+                                f"({type(_gps_fleet_e).__name__}: {_gps_fleet_e}) — "
+                                f"reuse last cache"
+                            )
+                        _gps_feed_active_ids_cache_ts = _gps_now
+                    from dispatch_v2.courier_resolver import _load_gps_positions as _gps_load
+                    _gps_dict = _gps_load()
+                    _gps_health = compute_gps_feed_health(
+                        active_ids=_gps_feed_active_ids_cache,
+                        gps_dict=_gps_dict,
+                        now_utc=datetime.now(timezone.utc),
+                        fresh_cutoff_min=_gps_cfg.fresh_cutoff_min,
+                    )
+                    _gps_state_before = _gps_feed_state
+                    _gps_emit, _gps_kind, _gps_feed_state = evaluate_gps_feed_alert(
+                        state=_gps_state_before,
+                        health=_gps_health,
+                        now=_gps_now,
+                        config=_gps_cfg,
+                    )
+                    append_gps_feed_log(
+                        health=_gps_health,
+                        state_before=_gps_state_before,
+                        state_after=_gps_feed_state,
+                        emit=_gps_emit,
+                        kind=_gps_kind,
+                        config=_gps_cfg,
+                        now=_gps_now,
+                    )
+                    if _gps_emit and not _gps_cfg.shadow_only:
+                        try:
+                            from dispatch_v2.telegram_utils import send_admin_alert as _gps_send
+                            _gps_send(render_gps_feed_message(
+                                kind=_gps_kind, health=_gps_health,
+                                state=_gps_feed_state, config=_gps_cfg, now=_gps_now,
+                            ))
+                        except Exception as _gps_tg_e:
+                            _log.error(
+                                f"GPS-01 telegram alert fail "
+                                f"({type(_gps_tg_e).__name__}: {_gps_tg_e}) — log only"
+                            )
+            except Exception as _gps_hook_e:
+                # Defense-in-depth: cały hook GPS-01 NIE może wywrócić HEARTBEAT (Lekcja #87/#110).
+                _log.warning(
+                    f"GPS-01 hook fail ({type(_gps_hook_e).__name__}: {_gps_hook_e}) — "
+                    f"skip, heartbeat continues"
+                )
+
             last_heartbeat = time.time()
 
         # Sleep in short slices so shutdown signal is responsive

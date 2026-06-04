@@ -555,8 +555,38 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     assigned_in_panel = parsed["assigned_ids"]
     rest_names = parsed["rest_names"]
 
-    # 1. NOWE: ID widoczne w HTML ale nieznane w state
-    for zid in parsed["order_ids"]:
+    # PARSE-01 (audyt 2026-06-03): straż ciągłości parse PRZED emisją NOWYCH.
+    # Gdy aktywne (order_ids - closed_ids) nagle spadną do 0 (a wcześniej było
+    # >0) lub o >= PARSE_DROP_PCT — to wzorzec zerwanego parse (HTTP 200 + pusty
+    # wynik), nie 'brak zamówień'. Shadow-first: flaga OFF => guard tylko loguje
+    # 'ZABLOKOWALBYM', _freeze_new pozostaje False. Flaga ON + potwierdzone =>
+    # _freeze_new=True (pomijamy emisję NEW_ORDER, ZOSTAWIAMy detekcję terminalną
+    # disappeared/delivered niżej) + PARSER_DEGRADED=true. Defense: NIGDY nie
+    # wywraca tick() — guard.evaluate ma własne try/except i zwraca no-trip.
+    _freeze_new = False
+    try:
+        from dispatch_v2 import parse_continuity_guard as _pcg
+        _n_state_active = sum(
+            1 for _so in current_state.values()
+            if _so.get("status") not in ("delivered", "returned_to_pool", "cancelled")
+        )
+        _guard = _pcg.evaluate(
+            parsed.get("order_ids"),
+            parsed.get("closed_ids"),
+            n_state_active=_n_state_active,
+        )
+        _freeze_new = bool(_guard.get("freeze_new"))
+        stats["parse_guard_suspicious"] = int(bool(_guard.get("suspicious")))
+        stats["parse_guard_freeze_new"] = int(_freeze_new)
+    except Exception as _pcg_e:
+        _log.warning(f"PARSE-01 guard fail (non-blocking, no-freeze): {_pcg_e}")
+        _freeze_new = False
+
+    # 1. NOWE: ID widoczne w HTML ale nieznane w state.
+    # PARSE-01: gdy _freeze_new => iterujemy po pustej liście (zero emisji NEW),
+    # reszta _diff_and_emit (sekcja 2 — zmiany/terminalne) działa normalnie.
+    _new_scan_ids = [] if _freeze_new else parsed["order_ids"]
+    for zid in _new_scan_ids:
         if zid in current_state:
             continue
         if zid in _ignored_ids:
