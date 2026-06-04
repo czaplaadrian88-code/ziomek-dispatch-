@@ -2,7 +2,7 @@
 
 **Co to:** autonomiczny audyt dispatchera Ziomek (118 findingów: 17 P0 / 51 P1 / 36 P2 / 14 P3) + co z niego zrobiono dnia 2026-06-03. Pełny raport: `AUDIT_2026-06-03/ZIOMEK_AUDYT_2026-06-03.md`. Korpus findingów: `AUDIT_2026-06-03/_ziomek_audit_extract.md`. Pamięć: `[[ziomek-autonomy-audit-2026-06-03]]`.
 
-**TL;DR dla nowej sesji:** audyt jest w ~90% OTWARTY. Zamknięto 2 P0 (FAIL-02, SELECT-01) + zbudowano OFFLINE aparat uczenia/pomiaru (shadow). Reszta czeka. Najwyższy ROI teraz = **paczka cichych bezpieczników + quick-winów** (sekcja „NASTĘPNY KROK").
+**TL;DR dla nowej sesji:** Grupa **A+B ZAMKNIĘTA 2026-06-04** (ciche bezpieczniki + quick-winy — patrz sekcja niżej). Zostały 3 duże fronty: **C skalowalność** (`PANEL-SCRAPE-01` P0), **D jakość/bundling** (`SEL-01/FEAS-02` selekcja bez GPS, `BUNDLE-02..06`), **E autonomia** (cel czerwiec'26 — `AUTON-01` ścieżka auto-assign NIE istnieje) + reszta A (FAIL-12 P1, PARSER-DEGRADED, PACKS, GPS-02, FAIL-04/06/07/09). **Rekomendacja kolejności:** D/`SEL-01`+`FEAS-02` (propozycje bez koordów — mierzone teraz w cieniu przez FAIL-03-K1) → C/`PANEL-SCRAPE-01` → E (dopiero po zamknięciu luk jakościowych).
 
 ---
 
@@ -10,6 +10,24 @@
 - **FAIL-02** (P0) — porzucony kurier-widmo nie podbiera nowych zleceń. `courier_resolver.py:597` filtr stale na pozycji. Commit `774293d`, tag `fail02-stale-pos-consistency-2026-06-03`, restart dispatch-shadow 13:44 UTC. Test `tests/test_fail02_stale_pos_consistency.py`.
 - **SELECT-01** (P0→P2) — „0% zgodności" obalone jako artefakt pomiarowy (`actual_courier_id` populowany tylko przy override). Realna zgodność ~15-18%.
 - **(bonus, nie z audytu) shadow `.get()` fix** — early_bird KOORD nie failuje już (KeyError `shadow_dispatcher.py:960`). Commit `5c0b8cb`, restart 14:24 UTC. Efekt: failed-rate 10.1%→0%.
+
+## ✅ ZAMKNIĘTE 2026-06-04 (sesja A+B — ciche bezpieczniki + quick-winy)
+Workflow weryfikacji `wz1xefz57` + codegen `w5xgmvahh`. Commity na master (auto-push + tagi pushnięte na origin). 44 nowe testy, regresja 45=baseline (zero regresji).
+- **STATE-RMW-02** (P0) — `prune_terminal_orders()` + `prune_orders_state.py` + timer `dispatch-orders-state-prune` **LIVE** (03:30 UTC, po snapshocie). Prune live 3727→177 (8,4MB→0,4MB), 0 aktywnych utraconych. Commit `78ba075`, tag `state-rmw-02-prune-live-config-hygiene-2026-06-04`.
+- **CONFIG-HYGIENE** (DEADFLAGS-01 + SHADOW-NAMING-01 + CONFIG-DUAL-01) — flags.json 108→100 (−15 martwych +9 nowych), `flags_admin effective` ujawnia 21 flag env z override.conf. Commit `78ba075`.
+- **JSONL-UNBOUNDED-06** — `/etc/logrotate.d/dispatch-v2` GRUPA B-2 (8 plików, copytruncate). LIVE, `.bak` lokalny.
+- **GPS-01** (P0) — `monitoring/gps_feed_health.py` + hook HEARTBEAT (fresh_ratio wzgl. AKTYWNEJ floty). **DOMYŚLNIE INERT.** ⚠️ KOREKTA Adriana 06-04: brak GPS = CELOWY stan testowy (apka GPS na kilku kontach, debug), NIE incydent — aktywacja flagi przy autonomicznym starcie. Commit `c431ade`, tag `groupB-shadow-gps01-parse01-fail03k1-2026-06-04`.
+- **PARSE-01** (P0) — `parse_continuity_guard.py` + straż pre-emit w panel_watcher. Shadow LIVE (flaga OFF, log-only). **Flip live: at-job 114 @ 2026-06-05 12:00 UTC** (gated: 0 false-pos w obserwacji) + niezależna weryfikacja at-job 115 @ 12:15. Commit `c431ade`.
+- **FAIL-03-K1** (P0) — shadow licznik near-term KOORD-cisza (log-only, ZERO mutacji verdiktu); mierzy „propozycje bez koordów". **KROK 2 live (KOORD→PROPOSE) = osobny sprint + ACK + restart dispatch-telegram.** Commit `c431ade`.
+
+**Odroczone/pominięte świadomie:**
+- **FAIL-01** — orphan-watchdog na wieku GPS bezużyteczny przy celowo-nieobecnym GPS (Z2). Wróci przy autonomii z innym sygnałem (panel-status/events).
+- **RECON-01** — audyt mylny („flip 1 flagi" — wymaga `chat_id` w env), 0 ghostów od 31.05 + dubluje v328 → niska wartość, pominięty.
+- **VETO-RETIRE-01 + R6 dublet** — PO 2026-06-08 (at-job #110 czyta selection_veto_shadow do digestu).
+
+**Korekty audytu (znalezione w weryfikacji):** anchor `delivered_at`→`updated_at` (STATE-RMW); PARSE-01 wektor 02.05 już naprawiony (`\d{5,7}`); `commitment_level` to pole stanu nie flaga; GPS feed „martwy" = celowy nie incydent.
+
+---
 
 ## 🟡 W TOKU (offline/shadow, metodycznie — NIE „nietknięte")
 Klaster breach/autonomia/reliability — zbudowano POMIAR, flip czeka na walidację:
