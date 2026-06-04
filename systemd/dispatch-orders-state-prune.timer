@@ -1,0 +1,10 @@
+[Unit]
+Description=Ziomek STATE-RMW-02 prune — 03:30 UTC (po snapshocie 03:00, off-peak)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+Unit=dispatch-orders-state-prune.service
+
+[Install]
+WantedBy=timers.target

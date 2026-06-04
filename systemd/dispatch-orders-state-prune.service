@@ -1,0 +1,14 @@
+[Unit]
+Description=Ziomek STATE-RMW-02 — prune terminalnych zlecen z orders_state.json (anchor updated_at)
+After=network.target dispatch-state-snapshot.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.prune_orders_state
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/prune_orders_state.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/prune_orders_state.log
+
+[Install]
+WantedBy=multi-user.target

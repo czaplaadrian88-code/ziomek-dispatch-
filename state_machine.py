@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from dispatch_v2.common import flag, load_config, now_iso, setup_logger
+from dispatch_v2.common import flag, load_config, now_iso, now_utc, setup_logger
 
 
 class CorruptedTimestampError(ValueError):
@@ -739,6 +739,140 @@ def delete_order(order_id: str) -> bool:
             _log.info(f"delete {order_id} (status={current_status})")
             return True
         return False
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# STATE-RMW-02 (audyt 2026-06-03): bulk-prune terminalnych zleceń.
+#
+# Problem: orders_state.json rośnie monotonicznie (~+0.5 MB/dzień; 3693 zleceń =
+# 8.4 MB, z czego 99.3% terminalnych), a KAŻDY RMW writer czyta+zapisuje+fsync
+# CAŁY plik pod LOCK_EX → koszt każdego upsertu = O(cały stan) + rosnąca
+# rywalizacja o lock z czytelnikami (watcher/sla_tracker/reconcile).
+#
+# Fix: nocny prune usuwa zlecenia TERMINALNE (delivered/cancelled/
+# returned_to_pool) starsze niż retention_hours wg `updated_at` (tz-aware ISO,
+# 100% pokrycia — NIE `delivered_at`, który jest naiwnym czasem Warsaw z lukami).
+#
+# Bezpieczeństwo: bulk-write OMIJA `_guarded_write` (dopuszcza max 1 delete na
+# wywołanie → naiwna pętla = ~3500 pełnych zapisów 8 MB pod LOCK_EX = godziny
+# I/O). Zamiast tego: jeden `_read_state_strict` + jeden `_atomic_write` pod tym
+# samym współdzielonym `_locked_write` (serializacja z upsert/set_status/touch/
+# delete) + TWARDY sanity-guard PRZED zapisem (zastępuje _guarded_write):
+#   1. żaden kandydat nie może być nie-terminalny,
+#   2. żaden aktywny order nie znika (regresja liczby aktywnych = abort),
+#   3. spójność liczby + zakaz całkowitego wyzerowania,
+#   → inaczej raise StateReadError + throttled admin alert.
+# Odzysk pełnego payloadu pruned-zlecenia: snapshot (.prev / /snapshots, ~7 dni)
+# lub events.db. Audit_log (90 dni) zachowuje closure eventy (forensyka).
+TERMINAL_STATUSES_PRUNE = ("delivered", "cancelled", "returned_to_pool")
+
+
+def _parse_updated_at_utc(value) -> Optional[datetime]:
+    """Parsuje `updated_at` (ISO) → tz-aware UTC datetime, albo None gdy się nie da.
+    Naiwny (bez tz) traktowany jako UTC (now_iso() zawsze pisze tz-aware)."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def prune_terminal_orders(retention_hours: float = 12.0, dry_run: bool = True) -> dict:
+    """Usuwa terminalne zlecenia starsze niż retention_hours (anchor: `updated_at`).
+
+    Zwraca raport (zawsze, też w dry-run):
+      {old_count, active_count, pruned_count, new_count, retention_hours,
+       dry_run, skipped_no_updated_at, sample}
+
+    dry_run=True → tylko liczy i loguje, NIC nie zapisuje (zero ryzyka).
+    Bezpieczeństwo: patrz docstring sekcji. Aktywne (planned/assigned/picked_up)
+    NIGDY nie są usuwane — pełna ochrona przez status-filter + sanity-guard.
+    """
+    cutoff = now_utc() - timedelta(hours=retention_hours)
+    with _locked_write() as path:
+        state = _read_state_strict()        # Faza 1: raise zamiast cichego {}
+        old_count = len(state)
+        active_count = sum(
+            1 for r in state.values()
+            if r.get("status") not in TERMINAL_STATUSES_PRUNE
+        )
+        skipped_no_updated_at = 0
+        to_prune = []
+        for oid, rec in state.items():
+            if rec.get("status") not in TERMINAL_STATUSES_PRUNE:
+                continue
+            dt = _parse_updated_at_utc(rec.get("updated_at"))
+            if dt is None:
+                skipped_no_updated_at += 1   # brak wiarygodnego anchora → NIE ruszaj
+                continue
+            if dt < cutoff:
+                to_prune.append(oid)
+
+        report = {
+            "old_count": old_count,
+            "active_count": active_count,
+            "pruned_count": len(to_prune),
+            "new_count": old_count - len(to_prune),
+            "retention_hours": retention_hours,
+            "dry_run": dry_run,
+            "skipped_no_updated_at": skipped_no_updated_at,
+            "sample": to_prune[:10],
+        }
+
+        if not to_prune:
+            _log.info(
+                f"prune_terminal_orders: nic do usunięcia "
+                f"(old={old_count}, active={active_count}, retention={retention_hours}h)"
+            )
+            return report
+
+        prune_set = set(to_prune)
+        new_state = {k: v for k, v in state.items() if k not in prune_set}
+        new_count = len(new_state)
+        active_after = sum(
+            1 for r in new_state.values()
+            if r.get("status") not in TERMINAL_STATUSES_PRUNE
+        )
+
+        # ── TWARDY sanity-guard (zastępuje _guarded_write dla bulk-delete) ──
+        non_terminal_in_prune = [
+            oid for oid in to_prune
+            if state[oid].get("status") not in TERMINAL_STATUSES_PRUNE
+        ]
+        if (
+            non_terminal_in_prune                       # 1. tknięto nie-terminalny
+            or active_after != active_count             # 2. zniknął aktywny order
+            or new_count != old_count - len(to_prune)   # 3. niespójność liczby
+            or (old_count > 0 and new_count == 0)        # 4. całkowite wyzerowanie
+        ):
+            detail = (
+                f"prune_terminal_orders SANITY ABORT: old={old_count} new={new_count} "
+                f"prune={len(to_prune)} active={active_count}→{active_after} "
+                f"non_terminal_in_prune={len(non_terminal_in_prune)} — zapis ZABLOKOWANY "
+                f"(ochrona przed utratą aktywnych/clobberem)"
+            )
+            _alert_state_read_failure(detail)
+            raise StateReadError(detail)
+
+        if dry_run:
+            _log.info(
+                f"prune_terminal_orders DRY-RUN: usunąłbym {len(to_prune)} terminalnych "
+                f">{retention_hours}h ({old_count}→{new_count}); active={active_count} "
+                f"nietknięte; skipped_no_ts={skipped_no_updated_at}"
+            )
+            return report
+
+        _atomic_write(path, new_state)
+        _log.info(
+            f"prune_terminal_orders: usunięto {len(to_prune)} terminalnych "
+            f"({old_count}→{new_count}); active={active_count} nietknięte; "
+            f"skipped_no_ts={skipped_no_updated_at}"
+        )
+        return report
 
 
 def compute_oldest_picked_up_age_min(bag, now_utc):
