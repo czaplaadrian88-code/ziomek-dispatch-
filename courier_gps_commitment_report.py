@@ -17,6 +17,15 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
+# Skrypt odpalany z cwd=dispatch_v2 jako top-level (`python courier_gps_commitment_report.py`)
+# → `dispatch_v2` nie jest na sys.path, więc telegram_utils (import absolutny
+# `from dispatch_v2 import ...`, łańcuchowo telegram_approver→manual_overrides…)
+# wybuchał ModuleNotFoundError przy wysyłce. Dołóż katalog-rodzic (scripts/),
+# wtedy cały łańcuch `dispatch_v2.*` się rozwiązuje. Idempotentne.
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+
 SHADOW_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/courier_gps_commitment_shadow.jsonl"
 REPORT_DIR = "/root/.openclaw/workspace/scripts/logs"
 
