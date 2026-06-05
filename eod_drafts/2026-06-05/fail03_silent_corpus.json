@@ -1,0 +1,2844 @@
+[
+ {
+  "oid": "478326",
+  "ts": "2026-06-04T13:03:38.623493+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.7,
+  "z_best_cid": "179",
+  "z_best_score": -18.7,
+  "z_best_breach": 36.03,
+  "z_best_feas": "NO",
+  "z_best_km": 0.0,
+  "alt_cids": [
+   "123",
+   "520",
+   "400",
+   "289",
+   "514",
+   "509",
+   "370"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.1395516,
+   23.2309895
+  ],
+  "pickup_ready_ep": 1780579101.0,
+  "human_cid": "400",
+  "human_defer_min": 44.0,
+  "human_leg_min": 40.1,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 449,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478328",
+  "ts": "2026-06-04T13:07:33.682087+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.9,
+  "z_best_cid": "179",
+  "z_best_score": -51.2,
+  "z_best_breach": 26.23,
+  "z_best_feas": "NO",
+  "z_best_km": 1.11,
+  "alt_cids": [
+   "509",
+   "123",
+   "370",
+   "520",
+   "514",
+   "289",
+   "400"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.13913969999999,
+   23.100054
+  ],
+  "pickup_ready_ep": 1780579346.0,
+  "human_cid": "514",
+  "human_defer_min": 9.4,
+  "human_leg_min": 39.8,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 158,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478329",
+  "ts": "2026-06-04T13:09:36.696467+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.5,
+  "z_best_cid": "179",
+  "z_best_score": -103.8,
+  "z_best_breach": 24.75,
+  "z_best_feas": "NO",
+  "z_best_km": 1.25,
+  "alt_cids": [
+   "509",
+   "123",
+   "520",
+   "289",
+   "370",
+   "514",
+   "400"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.142779,
+   23.1109567
+  ],
+  "pickup_ready_ep": 1780579446.0,
+  "human_cid": "514",
+  "human_defer_min": 7.4,
+  "human_leg_min": 31.4,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 160,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478331",
+  "ts": "2026-06-04T13:09:57.581826+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.5,
+  "z_best_cid": "179",
+  "z_best_score": -83.6,
+  "z_best_breach": 31.22,
+  "z_best_feas": "NO",
+  "z_best_km": 2.39,
+  "alt_cids": [
+   "123",
+   "289",
+   "370",
+   "520",
+   "509",
+   "400",
+   "514"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.1649521,
+   23.1228407
+  ],
+  "pickup_ready_ep": 1780579768.0,
+  "human_cid": "514",
+  "human_defer_min": 23.0,
+  "human_leg_min": 66.6,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 161,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478337",
+  "ts": "2026-06-04T13:20:21.377185+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.6,
+  "z_best_cid": "123",
+  "z_best_score": -19.4,
+  "z_best_breach": 19.39,
+  "z_best_feas": "NO",
+  "z_best_km": 4.07,
+  "alt_cids": [
+   "179",
+   "413",
+   "289",
+   "370",
+   "400",
+   "514",
+   "509",
+   "520"
+  ],
+  "pickup_coords": [
+   53.124719,
+   23.151966
+  ],
+  "delivery_coords": [
+   53.1463257,
+   23.1906574
+  ],
+  "pickup_ready_ep": 1780580398.0,
+  "human_cid": "179",
+  "human_defer_min": 6.8,
+  "human_leg_min": 25.3,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 404,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478344",
+  "ts": "2026-06-04T13:28:47.098074+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.7,
+  "z_best_cid": "520",
+  "z_best_score": -20.4,
+  "z_best_breach": 29.19,
+  "z_best_feas": "NO",
+  "z_best_km": 1.19,
+  "alt_cids": [
+   "370",
+   "509",
+   "400",
+   "289",
+   "123",
+   "413",
+   "179",
+   "514"
+  ],
+  "pickup_coords": [
+   53.151179,
+   23.111787
+  ],
+  "delivery_coords": [
+   53.1231263,
+   23.141027
+  ],
+  "pickup_ready_ep": 1780580909.0,
+  "human_cid": "289",
+  "human_defer_min": 6.8,
+  "human_leg_min": 18.3,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 89,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478343",
+  "ts": "2026-06-04T13:28:48.032620+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 24.7,
+  "z_best_cid": "123",
+  "z_best_score": -70.0,
+  "z_best_breach": 36.38,
+  "z_best_feas": "NO",
+  "z_best_km": 0.83,
+  "alt_cids": [
+   "370",
+   "520",
+   "289",
+   "400",
+   "179",
+   "509",
+   "413"
+  ],
+  "pickup_coords": [
+   53.132464,
+   23.165517
+  ],
+  "delivery_coords": [
+   53.1405462,
+   23.1017918
+  ],
+  "pickup_ready_ep": 1780581208.0,
+  "human_cid": "509",
+  "human_defer_min": 22.3,
+  "human_leg_min": 17.9,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 352,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478345",
+  "ts": "2026-06-04T13:32:44.421824+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.7,
+  "z_best_cid": "370",
+  "z_best_score": -82.3,
+  "z_best_breach": 47.79,
+  "z_best_feas": "NO",
+  "z_best_km": 1.89,
+  "alt_cids": [
+   "514",
+   "123",
+   "179",
+   "520",
+   "400",
+   "509",
+   "289",
+   "413"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.108343,
+   23.120869
+  ],
+  "pickup_ready_ep": 1780581147.0,
+  "human_cid": "370",
+  "human_defer_min": 13.2,
+  "human_leg_min": 11.1,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 364,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478347",
+  "ts": "2026-06-04T13:33:06.223130+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "514",
+  "z_best_score": -101.0,
+  "z_best_breach": 20.11,
+  "z_best_feas": "NO",
+  "z_best_km": 0.32,
+  "alt_cids": [
+   "520",
+   "509",
+   "370",
+   "123",
+   "400",
+   "179",
+   "413",
+   "289"
+  ],
+  "pickup_coords": [
+   53.15441,
+   23.086452
+  ],
+  "delivery_coords": [
+   53.1250993,
+   23.1537601
+  ],
+  "pickup_ready_ep": 1780580864.0,
+  "human_cid": "515",
+  "human_defer_min": 30.0,
+  "human_leg_min": 37.3,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 290,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478346",
+  "ts": "2026-06-04T13:33:06.976021+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "123",
+  "z_best_score": -160.0,
+  "z_best_breach": 23.17,
+  "z_best_feas": "NO",
+  "z_best_km": 6.06,
+  "alt_cids": [
+   "514",
+   "509",
+   "370",
+   "520",
+   "179",
+   "413",
+   "289",
+   "400"
+  ],
+  "pickup_coords": [
+   53.15441,
+   23.086452
+  ],
+  "delivery_coords": [
+   53.1622972,
+   23.0733509
+  ],
+  "pickup_ready_ep": 1780580864.0,
+  "human_cid": "515",
+  "human_defer_min": 29.5,
+  "human_leg_min": 7.1,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 290,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478348",
+  "ts": "2026-06-04T13:33:32.720985+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 24.7,
+  "z_best_cid": "123",
+  "z_best_score": -51.9,
+  "z_best_breach": 43.07,
+  "z_best_feas": "NO",
+  "z_best_km": 0.68,
+  "alt_cids": [
+   "370",
+   "514",
+   "509",
+   "400",
+   "520",
+   "413",
+   "289"
+  ],
+  "pickup_coords": [
+   53.124719,
+   23.151966
+  ],
+  "delivery_coords": [
+   53.1275279,
+   23.1210798
+  ],
+  "pickup_ready_ep": 1780581494.0,
+  "human_cid": "509",
+  "human_defer_min": 5.9,
+  "human_leg_min": 22.4,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 352,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478349",
+  "ts": "2026-06-04T13:37:30.490407+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 29.7,
+  "z_best_cid": "509",
+  "z_best_score": -99.9,
+  "z_best_breach": 26.69,
+  "z_best_feas": "NO",
+  "z_best_km": 6.98,
+  "alt_cids": [
+   "514",
+   "520",
+   "123",
+   "370",
+   "289",
+   "413",
+   "400",
+   "179"
+  ],
+  "pickup_coords": [
+   53.161415,
+   23.199078
+  ],
+  "delivery_coords": [
+   53.1310894,
+   23.111599
+  ],
+  "pickup_ready_ep": 1780582031.0,
+  "human_cid": "526",
+  "human_defer_min": 47.4,
+  "human_leg_min": 47.5,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 2,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478351",
+  "ts": "2026-06-04T13:39:17.427405+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.6,
+  "z_best_cid": "514",
+  "z_best_score": -140.0,
+  "z_best_breach": 15.22,
+  "z_best_feas": "NO",
+  "z_best_km": 7.15,
+  "alt_cids": [
+   "520",
+   "400",
+   "123",
+   "289",
+   "413",
+   "179",
+   "370",
+   "509"
+  ],
+  "pickup_coords": [
+   53.132815,
+   23.158044
+  ],
+  "delivery_coords": [
+   53.1618168,
+   23.1181166
+  ],
+  "pickup_ready_ep": 1780581533.0,
+  "human_cid": "530",
+  "human_defer_min": 34.9,
+  "human_leg_min": 49.0,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 2,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478352",
+  "ts": "2026-06-04T13:40:58.447655+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.6,
+  "z_best_cid": "123",
+  "z_best_score": -111.2,
+  "z_best_breach": 27.25,
+  "z_best_feas": "NO",
+  "z_best_km": 3.08,
+  "alt_cids": [
+   "514",
+   "370",
+   "289",
+   "179",
+   "520",
+   "400",
+   "413",
+   "509"
+  ],
+  "pickup_coords": [
+   53.15395609205138,
+   23.186294697149975
+  ],
+  "delivery_coords": [
+   53.1546732,
+   23.1160072
+  ],
+  "pickup_ready_ep": 1780581634.0,
+  "human_cid": "526",
+  "human_defer_min": 64.8,
+  "human_leg_min": 16.9,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 3,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478353",
+  "ts": "2026-06-04T13:43:09.731307+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.5,
+  "z_best_cid": "520",
+  "z_best_score": -161.7,
+  "z_best_breach": 26.6,
+  "z_best_feas": "NO",
+  "z_best_km": 6.11,
+  "alt_cids": [
+   "123",
+   "514",
+   "289",
+   "370",
+   "400",
+   "179",
+   "413",
+   "509"
+  ],
+  "pickup_coords": [
+   53.15441,
+   23.086452
+  ],
+  "delivery_coords": [
+   53.1256839,
+   23.0707836
+  ],
+  "pickup_ready_ep": 1780581462.0,
+  "human_cid": "515",
+  "human_defer_min": 19.6,
+  "human_leg_min": 24.8,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 292,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478355",
+  "ts": "2026-06-04T13:44:00.783497+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.8,
+  "z_best_cid": "514",
+  "z_best_score": -97.9,
+  "z_best_breach": 10.12,
+  "z_best_feas": "NO",
+  "z_best_km": 7.48,
+  "alt_cids": [
+   "520",
+   "123",
+   "515",
+   "289",
+   "400",
+   "179",
+   "413",
+   "370",
+   "509"
+  ],
+  "pickup_coords": [
+   53.134481,
+   23.16308
+  ],
+  "delivery_coords": [
+   53.1395344,
+   23.1415642
+  ],
+  "pickup_ready_ep": 1780581526.0,
+  "human_cid": "530",
+  "human_defer_min": 47.1,
+  "human_leg_min": 23.6,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 3,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478354",
+  "ts": "2026-06-04T13:44:01.670615+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 29.6,
+  "z_best_cid": "370",
+  "z_best_score": -168.2,
+  "z_best_breach": 77.94,
+  "z_best_feas": "NO",
+  "z_best_km": 3.61,
+  "alt_cids": [
+   "514",
+   "520",
+   "179",
+   "289",
+   "509",
+   "123",
+   "400"
+  ],
+  "pickup_coords": [
+   53.134203,
+   23.148828
+  ],
+  "delivery_coords": [
+   53.12812719999999,
+   23.095023
+  ],
+  "pickup_ready_ep": 1780582420.0,
+  "human_cid": "514",
+  "human_defer_min": 45.9,
+  "human_leg_min": 21.1,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 159,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478356",
+  "ts": "2026-06-04T13:44:53.281262+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.8,
+  "z_best_cid": "123",
+  "z_best_score": -47.9,
+  "z_best_breach": 45.67,
+  "z_best_feas": "NO",
+  "z_best_km": 4.57,
+  "alt_cids": [
+   "514",
+   "515",
+   "289",
+   "520",
+   "370",
+   "179",
+   "509",
+   "413",
+   "400"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.1418614,
+   23.0998914
+  ],
+  "pickup_ready_ep": 1780581581.0,
+  "human_cid": "123",
+  "human_defer_min": 1.7,
+  "human_leg_min": 47.1,
+  "realized": "breach",
+  "human_km": 3.32,
+  "human_bag": 501,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478357",
+  "ts": "2026-06-04T13:46:44.693596+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.4,
+  "z_best_cid": "520",
+  "z_best_score": -56.3,
+  "z_best_breach": 51.7,
+  "z_best_feas": "NO",
+  "z_best_km": 1.06,
+  "alt_cids": [
+   "123",
+   "515",
+   "289",
+   "400",
+   "514",
+   "179",
+   "370",
+   "413",
+   "509"
+  ],
+  "pickup_coords": [
+   53.132464,
+   23.165517
+  ],
+  "delivery_coords": [
+   53.1551322,
+   23.1218575
+  ],
+  "pickup_ready_ep": 1780581669.0,
+  "human_cid": "509",
+  "human_defer_min": 9.0,
+  "human_leg_min": 41.8,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 351,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478358",
+  "ts": "2026-06-04T13:49:31.122239+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "289",
+  "z_best_score": -17.6,
+  "z_best_breach": 29.31,
+  "z_best_feas": "NO",
+  "z_best_km": 0.51,
+  "alt_cids": [
+   "370",
+   "179",
+   "515",
+   "400",
+   "413",
+   "514",
+   "520",
+   "509",
+   "123"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.13450839999999,
+   23.1034383
+  ],
+  "pickup_ready_ep": 1780581849.0,
+  "human_cid": "289",
+  "human_defer_min": 16.1,
+  "human_leg_min": 18.3,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 88,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478360",
+  "ts": "2026-06-04T13:51:29.229340+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.5,
+  "z_best_cid": "179",
+  "z_best_score": -104.7,
+  "z_best_breach": 55.63,
+  "z_best_feas": "NO",
+  "z_best_km": 1.36,
+  "alt_cids": [
+   "514",
+   "289",
+   "123",
+   "515",
+   "413",
+   "400",
+   "520",
+   "370",
+   "509"
+  ],
+  "pickup_coords": [
+   53.134481,
+   23.16308
+  ],
+  "delivery_coords": [
+   53.1347542,
+   23.1275284
+  ],
+  "pickup_ready_ep": 1780581957.0,
+  "human_cid": "530",
+  "human_defer_min": 40.4,
+  "human_leg_min": 12.2,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 4,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478362",
+  "ts": "2026-06-04T13:52:51.205356+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 24.4,
+  "z_best_cid": "179",
+  "z_best_score": -90.3,
+  "z_best_breach": 53.09,
+  "z_best_feas": "NO",
+  "z_best_km": 1.91,
+  "alt_cids": [
+   "370",
+   "514",
+   "289",
+   "123",
+   "400",
+   "515",
+   "520",
+   "413",
+   "509"
+  ],
+  "pickup_coords": [
+   53.130384,
+   23.166466
+  ],
+  "delivery_coords": [
+   53.1308982,
+   23.1578653
+  ],
+  "pickup_ready_ep": 1780582637.0,
+  "human_cid": "179",
+  "human_defer_min": 28.6,
+  "human_leg_min": 11.3,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 404,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478363",
+  "ts": "2026-06-04T13:54:17.383628+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.4,
+  "z_best_cid": "123",
+  "z_best_score": -80.2,
+  "z_best_breach": 58.63,
+  "z_best_feas": "NO",
+  "z_best_km": 1.08,
+  "alt_cids": [
+   "515",
+   "179",
+   "400",
+   "514",
+   "413",
+   "520",
+   "289",
+   "509",
+   "370"
+  ],
+  "pickup_coords": [
+   53.137686,
+   23.168566
+  ],
+  "delivery_coords": [
+   53.1513943,
+   23.0854484
+  ],
+  "pickup_ready_ep": 1780582124.0,
+  "human_cid": "123",
+  "human_defer_min": 14.7,
+  "human_leg_min": 32.6,
+  "realized": "ok",
+  "human_km": 1.97,
+  "human_bag": 501,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478365",
+  "ts": "2026-06-04T13:59:22.978086+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 49.6,
+  "z_best_cid": "520",
+  "z_best_score": -40.1,
+  "z_best_breach": 39.65,
+  "z_best_feas": "NO",
+  "z_best_km": 0.44,
+  "alt_cids": [
+   "515",
+   "179",
+   "289",
+   "400",
+   "509",
+   "123"
+  ],
+  "pickup_coords": [
+   53.134203,
+   23.148828
+  ],
+  "delivery_coords": [
+   53.1265071,
+   23.220655
+  ],
+  "pickup_ready_ep": 1780584537.0,
+  "human_cid": "400",
+  "human_defer_min": 19.8,
+  "human_leg_min": 12.4,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 449,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478364",
+  "ts": "2026-06-04T13:59:23.859892+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.3,
+  "z_best_cid": "400",
+  "z_best_score": -156.2,
+  "z_best_breach": 30.96,
+  "z_best_feas": "NO",
+  "z_best_km": 0.0,
+  "alt_cids": [
+   "515",
+   "370",
+   "179",
+   "289",
+   "520",
+   "413",
+   "509",
+   "514",
+   "123"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.1200013,
+   23.1677449
+  ],
+  "pickup_ready_ep": 1780582724.0,
+  "human_cid": "413",
+  "human_defer_min": 21.9,
+  "human_leg_min": 7.7,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 292,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478366",
+  "ts": "2026-06-04T14:02:20.147675+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.3,
+  "z_best_cid": "370",
+  "z_best_score": -181.4,
+  "z_best_breach": 12.41,
+  "z_best_feas": "NO",
+  "z_best_km": 4.2,
+  "alt_cids": [
+   "179",
+   "515",
+   "413",
+   "123",
+   "289",
+   "509",
+   "400",
+   "520",
+   "514"
+  ],
+  "pickup_coords": [
+   53.132464,
+   23.165517
+  ],
+  "delivery_coords": [
+   53.1334457,
+   23.1964906
+  ],
+  "pickup_ready_ep": 1780582901.0,
+  "human_cid": "520",
+  "human_defer_min": 40.1,
+  "human_leg_min": 32.5,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 155,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478367",
+  "ts": "2026-06-04T14:10:05.301398+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 24.4,
+  "z_best_cid": "370",
+  "z_best_score": -128.5,
+  "z_best_breach": 24.46,
+  "z_best_feas": "NO",
+  "z_best_km": 3.4,
+  "alt_cids": [
+   "179",
+   "413",
+   "515",
+   "289",
+   "514",
+   "400",
+   "520",
+   "123",
+   "509"
+  ],
+  "pickup_coords": [
+   53.129405,
+   23.158005
+  ],
+  "delivery_coords": [
+   53.0972298,
+   23.1323264
+  ],
+  "pickup_ready_ep": 1780583671.0,
+  "human_cid": "179",
+  "human_defer_min": 26.2,
+  "human_leg_min": 17.2,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 403,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478368",
+  "ts": "2026-06-04T14:11:01.400914+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.7,
+  "z_best_cid": "413",
+  "z_best_score": -34.2,
+  "z_best_breach": 11.64,
+  "z_best_feas": "NO",
+  "z_best_km": 2.46,
+  "alt_cids": [
+   "370",
+   "515",
+   "289",
+   "179",
+   "400",
+   "509",
+   "514",
+   "123",
+   "520"
+  ],
+  "pickup_coords": [
+   53.151179,
+   23.111787
+  ],
+  "delivery_coords": [
+   53.1291167,
+   23.0873458
+  ],
+  "pickup_ready_ep": 1780583446.0,
+  "human_cid": "514",
+  "human_defer_min": 9.9,
+  "human_leg_min": 13.3,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 159,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478369",
+  "ts": "2026-06-04T14:14:22.871519+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.9,
+  "z_best_cid": "413",
+  "z_best_score": -48.1,
+  "z_best_breach": 24.85,
+  "z_best_feas": "NO",
+  "z_best_km": 7.95,
+  "alt_cids": [
+   "370",
+   "289",
+   "179",
+   "515",
+   "123",
+   "514",
+   "400",
+   "520"
+  ],
+  "pickup_coords": [
+   53.132464,
+   23.165517
+  ],
+  "delivery_coords": [
+   53.1216094,
+   23.0982301
+  ],
+  "pickup_ready_ep": 1780583655.0,
+  "human_cid": "370",
+  "human_defer_min": 21.8,
+  "human_leg_min": 25.7,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 364,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478373",
+  "ts": "2026-06-04T14:21:35.453468+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.7,
+  "z_best_cid": "370",
+  "z_best_score": -219.5,
+  "z_best_breach": 26.7,
+  "z_best_feas": "NO",
+  "z_best_km": 11.03,
+  "alt_cids": [
+   "520",
+   "289",
+   "515",
+   "514",
+   "509",
+   "413",
+   "123",
+   "400",
+   "179"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.127743,
+   23.2019061
+  ],
+  "pickup_ready_ep": 1780583777.0,
+  "human_cid": "515",
+  "human_defer_min": 33.2,
+  "human_leg_min": 13.8,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 293,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478375",
+  "ts": "2026-06-04T14:24:18.319060+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.8,
+  "z_best_cid": "289",
+  "z_best_score": -51.9,
+  "z_best_breach": 20.4,
+  "z_best_feas": "NO",
+  "z_best_km": 1.82,
+  "alt_cids": [
+   "509",
+   "123",
+   "413",
+   "514",
+   "515",
+   "370",
+   "400",
+   "520",
+   "179"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.15064169999999,
+   23.1172382
+  ],
+  "pickup_ready_ep": 1780583945.0,
+  "human_cid": "413",
+  "human_defer_min": 5.9,
+  "human_leg_min": 25.5,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 292,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478378",
+  "ts": "2026-06-04T14:25:40.000373+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "289",
+  "z_best_score": -57.2,
+  "z_best_breach": 23.63,
+  "z_best_feas": "NO",
+  "z_best_km": 1.82,
+  "alt_cids": [
+   "515",
+   "123",
+   "509",
+   "514",
+   "370",
+   "413",
+   "520",
+   "400",
+   "179"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.1283855,
+   23.0762735
+  ],
+  "pickup_ready_ep": 1780584018.0,
+  "human_cid": "413",
+  "human_defer_min": 5.6,
+  "human_leg_min": 42.8,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 292,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478380",
+  "ts": "2026-06-04T14:30:58.929322+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "179",
+  "z_best_score": -125.0,
+  "z_best_breach": 23.98,
+  "z_best_feas": "NO",
+  "z_best_km": 9.67,
+  "alt_cids": [
+   "515",
+   "289",
+   "400",
+   "123",
+   "509",
+   "514",
+   "520",
+   "370",
+   "413"
+  ],
+  "pickup_coords": [
+   53.15441,
+   23.086452
+  ],
+  "delivery_coords": [
+   53.1934218,
+   22.9799884
+  ],
+  "pickup_ready_ep": 1780584336.0,
+  "human_cid": "509",
+  "human_defer_min": 21.7,
+  "human_leg_min": 14.4,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 351,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478381",
+  "ts": "2026-06-04T14:34:30.861280+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.8,
+  "z_best_cid": "179",
+  "z_best_score": -13.0,
+  "z_best_breach": 32.06,
+  "z_best_feas": "NO",
+  "z_best_km": 0.33,
+  "alt_cids": [
+   "370",
+   "400",
+   "123",
+   "514",
+   "289",
+   "515",
+   "520",
+   "509",
+   "413"
+  ],
+  "pickup_coords": [
+   53.132464,
+   23.165517
+  ],
+  "delivery_coords": [
+   53.1313047,
+   23.0803674
+  ],
+  "pickup_ready_ep": 1780584559.0,
+  "human_cid": "370",
+  "human_defer_min": 7.3,
+  "human_leg_min": 34.0,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 363,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478386",
+  "ts": "2026-06-04T14:36:25.785299+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.5,
+  "z_best_cid": "179",
+  "z_best_score": -38.3,
+  "z_best_breach": 32.08,
+  "z_best_feas": "NO",
+  "z_best_km": 1.74,
+  "alt_cids": [
+   "289",
+   "123",
+   "520",
+   "514",
+   "400",
+   "370",
+   "515",
+   "509",
+   "413"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.12639,
+   23.2646615
+  ],
+  "pickup_ready_ep": 1780584654.0,
+  "human_cid": "400",
+  "human_defer_min": 7.7,
+  "human_leg_min": 33.9,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 448,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478387",
+  "ts": "2026-06-04T14:39:33.966421+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 34.3,
+  "z_best_cid": "370",
+  "z_best_score": -60.9,
+  "z_best_breach": 33.59,
+  "z_best_feas": "NO",
+  "z_best_km": 7.1,
+  "alt_cids": [
+   "289",
+   "123",
+   "520",
+   "509",
+   "514",
+   "515",
+   "400",
+   "413"
+  ],
+  "pickup_coords": [
+   53.129405,
+   23.158005
+  ],
+  "delivery_coords": [
+   53.1409709,
+   23.2265336
+  ],
+  "pickup_ready_ep": 1780586030.0,
+  "human_cid": "520",
+  "human_defer_min": 27.0,
+  "human_leg_min": 19.6,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 156,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478392",
+  "ts": "2026-06-04T14:44:52.264760+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 13.4,
+  "z_best_cid": "514",
+  "z_best_score": -39.6,
+  "z_best_breach": 15.88,
+  "z_best_feas": "NO",
+  "z_best_km": 2.83,
+  "alt_cids": [
+   "289",
+   "123",
+   "179",
+   "400",
+   "520",
+   "515",
+   "370",
+   "509",
+   "413"
+  ],
+  "pickup_coords": [
+   53.132786,
+   23.15775
+  ],
+  "delivery_coords": [
+   53.1398533,
+   23.1404167
+  ],
+  "pickup_ready_ep": 1780585098.0,
+  "human_cid": "515",
+  "human_defer_min": 13.2,
+  "human_leg_min": 16.1,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 293,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478394",
+  "ts": "2026-06-04T14:46:13.067086+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.8,
+  "z_best_cid": "179",
+  "z_best_score": -11.0,
+  "z_best_breach": 27.69,
+  "z_best_feas": "NO",
+  "z_best_km": 0.9,
+  "alt_cids": [
+   "123",
+   "289",
+   "370",
+   "400",
+   "515",
+   "509",
+   "514",
+   "413",
+   "520"
+  ],
+  "pickup_coords": [
+   53.134481,
+   23.16308
+  ],
+  "delivery_coords": [
+   53.1145043,
+   23.1280332
+  ],
+  "pickup_ready_ep": 1780585261.0,
+  "human_cid": "289",
+  "human_defer_min": 22.7,
+  "human_leg_min": 33.6,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 89,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478395",
+  "ts": "2026-06-04T14:48:20.398431+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.5,
+  "z_best_cid": "289",
+  "z_best_score": -75.3,
+  "z_best_breach": 54.75,
+  "z_best_feas": "NO",
+  "z_best_km": 1.82,
+  "alt_cids": [
+   "123",
+   "179",
+   "400",
+   "515",
+   "509",
+   "370",
+   "520",
+   "413",
+   "514"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.1253372,
+   23.0625612
+  ],
+  "pickup_ready_ep": 1780585368.0,
+  "human_cid": "179",
+  "human_defer_min": 8.8,
+  "human_leg_min": 19.1,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 403,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478396",
+  "ts": "2026-06-04T14:48:46.460898+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "289",
+  "z_best_score": -74.1,
+  "z_best_breach": 54.91,
+  "z_best_feas": "NO",
+  "z_best_km": 1.82,
+  "alt_cids": [
+   "179",
+   "515",
+   "400",
+   "123",
+   "509",
+   "413",
+   "370",
+   "520",
+   "514"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.1534072,
+   23.0852757
+  ],
+  "pickup_ready_ep": 1780585404.0,
+  "human_cid": "179",
+  "human_defer_min": 7.6,
+  "human_leg_min": 29.8,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 403,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478397",
+  "ts": "2026-06-04T14:49:17.440347+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.8,
+  "z_best_cid": "515",
+  "z_best_score": -74.8,
+  "z_best_breach": 19.97,
+  "z_best_feas": "NO",
+  "z_best_km": 0.85,
+  "alt_cids": [
+   "289",
+   "400",
+   "123",
+   "179",
+   "370",
+   "413",
+   "514",
+   "509",
+   "520"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.138936,
+   23.1632686
+  ],
+  "pickup_ready_ep": 1780585444.0,
+  "human_cid": "370",
+  "human_defer_min": 42.4,
+  "human_leg_min": 34.1,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 364,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478399",
+  "ts": "2026-06-04T14:49:43.302616+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.9,
+  "z_best_cid": "289",
+  "z_best_score": -51.1,
+  "z_best_breach": 33.11,
+  "z_best_feas": "NO",
+  "z_best_km": 1.89,
+  "alt_cids": [
+   "509",
+   "179",
+   "370",
+   "515",
+   "413",
+   "520",
+   "123",
+   "400",
+   "514"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.12628429999999,
+   23.1981481
+  ],
+  "pickup_ready_ep": 1780585776.0,
+  "human_cid": "370",
+  "human_defer_min": 40.1,
+  "human_leg_min": 21.3,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 364,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478400",
+  "ts": "2026-06-04T14:50:15.147698+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.8,
+  "z_best_cid": "400",
+  "z_best_score": -263.8,
+  "z_best_breach": 32.81,
+  "z_best_feas": "NO",
+  "z_best_km": 10.85,
+  "alt_cids": [
+   "289",
+   "515",
+   "509",
+   "370",
+   "413",
+   "123",
+   "179",
+   "514",
+   "520"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.12749239999999,
+   23.1438656
+  ],
+  "pickup_ready_ep": 1780585804.0,
+  "human_cid": "370",
+  "human_defer_min": 38.0,
+  "human_leg_min": 8.5,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 364,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478402",
+  "ts": "2026-06-04T14:51:16.259670+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.8,
+  "z_best_cid": "400",
+  "z_best_score": -56.8,
+  "z_best_breach": 32.81,
+  "z_best_feas": "NO",
+  "z_best_km": 10.85,
+  "alt_cids": [
+   "515",
+   "509",
+   "289",
+   "413",
+   "123",
+   "520",
+   "514",
+   "179",
+   "370"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.1441531,
+   23.117304
+  ],
+  "pickup_ready_ep": 1780585864.0,
+  "human_cid": "370",
+  "human_defer_min": 38.2,
+  "human_leg_min": 41.9,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 366,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478401",
+  "ts": "2026-06-04T14:51:17.151239+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.4,
+  "z_best_cid": "400",
+  "z_best_score": -27.2,
+  "z_best_breach": 32.81,
+  "z_best_feas": "NO",
+  "z_best_km": 8.95,
+  "alt_cids": [
+   "123",
+   "289",
+   "515",
+   "509",
+   "520",
+   "413",
+   "179",
+   "370",
+   "514"
+  ],
+  "pickup_coords": [
+   53.137686,
+   23.168566
+  ],
+  "delivery_coords": [
+   53.1369991,
+   23.1859944
+  ],
+  "pickup_ready_ep": 1780585839.0,
+  "human_cid": "123",
+  "human_defer_min": 14.1,
+  "human_leg_min": 16.1,
+  "realized": "ok",
+  "human_km": 4.58,
+  "human_bag": 501,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478404",
+  "ts": "2026-06-04T14:54:32.197338+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.5,
+  "z_best_cid": "509",
+  "z_best_score": -166.3,
+  "z_best_breach": 24.48,
+  "z_best_feas": "NO",
+  "z_best_km": 6.9,
+  "alt_cids": [
+   "515",
+   "413",
+   "400",
+   "179",
+   "289",
+   "520",
+   "123",
+   "370"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.139495,
+   23.130902
+  ],
+  "pickup_ready_ep": 1780585741.0,
+  "human_cid": "179",
+  "human_defer_min": 2.1,
+  "human_leg_min": 40.0,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 404,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478405",
+  "ts": "2026-06-04T14:54:58.287459+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 24.6,
+  "z_best_cid": "509",
+  "z_best_score": -154.7,
+  "z_best_breach": 39.3,
+  "z_best_feas": "NO",
+  "z_best_km": 6.03,
+  "alt_cids": [
+   "520",
+   "179",
+   "289",
+   "413",
+   "123",
+   "400",
+   "514",
+   "515",
+   "370"
+  ],
+  "pickup_coords": [
+   53.15395609205138,
+   23.186294697149975
+  ],
+  "delivery_coords": [
+   53.13909109999999,
+   23.1017412
+  ],
+  "pickup_ready_ep": 1780586377.0,
+  "human_cid": "400",
+  "human_defer_min": 28.0,
+  "human_leg_min": 25.4,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 449,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478406",
+  "ts": "2026-06-04T14:56:34.465511+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 39.5,
+  "z_best_cid": "123",
+  "z_best_score": -25.7,
+  "z_best_breach": 36.99,
+  "z_best_feas": "NO",
+  "z_best_km": 0.78,
+  "alt_cids": [
+   "413",
+   "515",
+   "520",
+   "289",
+   "514",
+   "509",
+   "400",
+   "179",
+   "370"
+  ],
+  "pickup_coords": [
+   53.133384,
+   23.15401
+  ],
+  "delivery_coords": [
+   53.1233618,
+   23.1673249
+  ],
+  "pickup_ready_ep": 1780587365.0,
+  "human_cid": "526",
+  "human_defer_min": 19.6,
+  "human_leg_min": 16.9,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 4,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478407",
+  "ts": "2026-06-04T14:58:05.547292+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "515",
+  "z_best_score": -53.8,
+  "z_best_breach": 38.77,
+  "z_best_feas": "NO",
+  "z_best_km": 0.0,
+  "alt_cids": [
+   "509",
+   "123",
+   "289",
+   "413",
+   "520",
+   "514",
+   "370",
+   "400",
+   "179"
+  ],
+  "pickup_coords": [
+   53.137686,
+   23.168566
+  ],
+  "delivery_coords": [
+   53.1338443,
+   23.1509095
+  ],
+  "pickup_ready_ep": 1780585960.0,
+  "human_cid": "123",
+  "human_defer_min": 13.0,
+  "human_leg_min": 31.7,
+  "realized": "ok",
+  "human_km": 5.75,
+  "human_bag": 501,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478408",
+  "ts": "2026-06-04T15:03:18.027785+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "520",
+  "z_best_score": -33.7,
+  "z_best_breach": 42.78,
+  "z_best_feas": "NO",
+  "z_best_km": 1.59,
+  "alt_cids": [
+   "509",
+   "413",
+   "123",
+   "289",
+   "400",
+   "179",
+   "514",
+   "370"
+  ],
+  "pickup_coords": [
+   53.137686,
+   23.168566
+  ],
+  "delivery_coords": [
+   53.1301774,
+   23.1813653
+  ],
+  "pickup_ready_ep": 1780586275.0,
+  "human_cid": "123",
+  "human_defer_min": 7.7,
+  "human_leg_min": 23.6,
+  "realized": "ok",
+  "human_km": 2.98,
+  "human_bag": 502,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478418",
+  "ts": "2026-06-04T15:26:03.403736+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.5,
+  "z_best_cid": "123",
+  "z_best_score": -61.5,
+  "z_best_breach": 27.72,
+  "z_best_feas": "NO",
+  "z_best_km": 1.35,
+  "alt_cids": [
+   "289",
+   "179",
+   "520",
+   "515",
+   "413",
+   "514"
+  ],
+  "pickup_coords": [
+   53.132464,
+   23.165517
+  ],
+  "delivery_coords": [
+   53.1261151,
+   23.2201245
+  ],
+  "pickup_ready_ep": 1780587634.0,
+  "human_cid": "413",
+  "human_defer_min": 22.7,
+  "human_leg_min": 29.7,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 292,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478419",
+  "ts": "2026-06-04T15:26:34.375717+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.5,
+  "z_best_cid": "509",
+  "z_best_score": -21.1,
+  "z_best_breach": 34.79,
+  "z_best_feas": "NO",
+  "z_best_km": 6.11,
+  "alt_cids": [
+   "123",
+   "289",
+   "179",
+   "520",
+   "413",
+   "515",
+   "514",
+   "370"
+  ],
+  "pickup_coords": [
+   53.126106,
+   23.162215
+  ],
+  "delivery_coords": [
+   53.1182189,
+   23.0997168
+  ],
+  "pickup_ready_ep": 1780587664.0,
+  "human_cid": "509",
+  "human_defer_min": 22.6,
+  "human_leg_min": 18.0,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 349,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478410",
+  "ts": "2026-06-04T15:41:56.940354+00:00",
+  "path": "all_candidates_low_score",
+  "mtp": 48.6,
+  "z_best_cid": "179",
+  "z_best_score": -116.9,
+  "z_best_breach": 12.96,
+  "z_best_feas": "MAYBE",
+  "z_best_km": 3.34,
+  "alt_cids": [
+   "520",
+   "123",
+   "289"
+  ],
+  "pickup_coords": [
+   53.132464,
+   23.165517
+  ],
+  "delivery_coords": [
+   53.10656909999999,
+   23.128139
+  ],
+  "pickup_ready_ep": 1780590634.0,
+  "human_cid": "179",
+  "human_defer_min": 2.5,
+  "human_leg_min": 20.6,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 401,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478465",
+  "ts": "2026-06-04T17:03:33.882637+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.7,
+  "z_best_cid": "413",
+  "z_best_score": -22.6,
+  "z_best_breach": 30.26,
+  "z_best_feas": "NO",
+  "z_best_km": 4.15,
+  "alt_cids": [
+   "289",
+   "179",
+   "509",
+   "520",
+   "370",
+   "514",
+   "515"
+  ],
+  "pickup_coords": [
+   53.15395609205138,
+   23.186294697149975
+  ],
+  "delivery_coords": [
+   53.0968478,
+   23.1318147
+  ],
+  "pickup_ready_ep": 1780593495.0,
+  "human_cid": "526",
+  "human_defer_min": 21.5,
+  "human_leg_min": 21.5,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 3,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478522",
+  "ts": "2026-06-05T08:37:27.739315+00:00",
+  "path": "all_candidates_low_score",
+  "mtp": 16.5,
+  "z_best_cid": "123",
+  "z_best_score": -103.9,
+  "z_best_breach": 4.99,
+  "z_best_feas": "MAYBE",
+  "z_best_km": 1.13,
+  "alt_cids": [
+   "179",
+   "370",
+   "413",
+   "207"
+  ],
+  "pickup_coords": [
+   53.1292,
+   23.1572
+  ],
+  "delivery_coords": [
+   53.1220793,
+   23.1593733
+  ],
+  "pickup_ready_ep": 1780649638.0,
+  "human_cid": "179",
+  "human_defer_min": 102.2,
+  "human_leg_min": 6.7,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 400,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478535",
+  "ts": "2026-06-05T08:43:49.825759+00:00",
+  "path": "all_candidates_low_score",
+  "mtp": 14.9,
+  "z_best_cid": "123",
+  "z_best_score": -225.1,
+  "z_best_breach": 13.54,
+  "z_best_feas": "MAYBE",
+  "z_best_km": 2.48,
+  "alt_cids": [],
+  "pickup_coords": [
+   53.121494,
+   23.176691
+  ],
+  "delivery_coords": [
+   53.1597523,
+   23.209227
+  ],
+  "pickup_ready_ep": 1780649922.0,
+  "human_cid": "484",
+  "human_defer_min": 26.6,
+  "human_leg_min": 41.0,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 409,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478558",
+  "ts": "2026-06-05T10:08:19.129172+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "123",
+  "z_best_score": -7.8,
+  "z_best_breach": 34.05,
+  "z_best_feas": "NO",
+  "z_best_km": 2.06,
+  "alt_cids": [
+   "484",
+   "400",
+   "370",
+   "179"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.0702414,
+   23.1129714
+  ],
+  "pickup_ready_ep": 1780654974.0,
+  "human_cid": "179",
+  "human_defer_min": 33.0,
+  "human_leg_min": 19.8,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 403,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478563",
+  "ts": "2026-06-05T10:12:43.528301+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 19.8,
+  "z_best_cid": "413",
+  "z_best_score": -675.2,
+  "z_best_breach": 12.77,
+  "z_best_feas": "NO",
+  "z_best_km": null,
+  "alt_cids": [
+   "207",
+   "123",
+   "484",
+   "400",
+   "179",
+   "370"
+  ],
+  "pickup_coords": [
+   53.1308,
+   23.0915
+  ],
+  "delivery_coords": [
+   53.1610108,
+   23.1248209
+  ],
+  "pickup_ready_ep": 1780655550.0,
+  "human_cid": "123",
+  "human_defer_min": 7.8,
+  "human_leg_min": 16.8,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 500,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478564",
+  "ts": "2026-06-05T10:13:04.118441+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 24.7,
+  "z_best_cid": "413",
+  "z_best_score": -327.4,
+  "z_best_breach": 19.5,
+  "z_best_feas": "NO",
+  "z_best_km": null,
+  "alt_cids": [
+   "207",
+   "400",
+   "123",
+   "484",
+   "179",
+   "370"
+  ],
+  "pickup_coords": [
+   53.132791,
+   23.158297
+  ],
+  "delivery_coords": [
+   53.12106259999999,
+   23.2702977
+  ],
+  "pickup_ready_ep": 1780655864.0,
+  "human_cid": "400",
+  "human_defer_min": 3.3,
+  "human_leg_min": 55.0,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 449,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478565",
+  "ts": "2026-06-05T10:14:24.808866+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "484",
+  "z_best_score": -36.9,
+  "z_best_breach": 37.48,
+  "z_best_feas": "NO",
+  "z_best_km": 1.04,
+  "alt_cids": [
+   "179",
+   "123",
+   "400",
+   "370"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.129529,
+   23.157972
+  ],
+  "pickup_ready_ep": 1780655339.0,
+  "human_cid": "123",
+  "human_defer_min": 35.8,
+  "human_leg_min": 16.8,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 501,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478570",
+  "ts": "2026-06-05T10:21:41.528604+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.4,
+  "z_best_cid": "207",
+  "z_best_score": -234.7,
+  "z_best_breach": 16.09,
+  "z_best_feas": "NO",
+  "z_best_km": null,
+  "alt_cids": [
+   "509",
+   "123",
+   "413",
+   "179",
+   "400",
+   "370"
+  ],
+  "pickup_coords": [
+   53.132464,
+   23.165517
+  ],
+  "delivery_coords": [
+   53.1401772,
+   23.2293464
+  ],
+  "pickup_ready_ep": 1780655768.0,
+  "human_cid": "400",
+  "human_defer_min": 12.6,
+  "human_leg_min": 36.9,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 450,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478574",
+  "ts": "2026-06-05T10:25:04.109890+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.8,
+  "z_best_cid": "207",
+  "z_best_score": -301.0,
+  "z_best_breach": 14.13,
+  "z_best_feas": "NO",
+  "z_best_km": null,
+  "alt_cids": [
+   "509",
+   "179",
+   "370",
+   "123",
+   "413",
+   "484",
+   "400"
+  ],
+  "pickup_coords": [
+   53.151179,
+   23.111787
+  ],
+  "delivery_coords": [
+   53.13125119999999,
+   23.1746406
+  ],
+  "pickup_ready_ep": 1780655992.0,
+  "human_cid": "530",
+  "human_defer_min": 51.4,
+  "human_leg_min": 14.6,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 2,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478595",
+  "ts": "2026-06-05T11:23:27.972650+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.8,
+  "z_best_cid": "409",
+  "z_best_score": -225.6,
+  "z_best_breach": 14.69,
+  "z_best_feas": "NO",
+  "z_best_km": null,
+  "alt_cids": [
+   "509",
+   "484",
+   "179",
+   "413",
+   "123",
+   "400",
+   "370"
+  ],
+  "pickup_coords": [
+   53.121879,
+   23.146168
+  ],
+  "delivery_coords": [
+   53.1083525,
+   23.1898445
+  ],
+  "pickup_ready_ep": 1780659496.0,
+  "human_cid": "179",
+  "human_defer_min": 3.1,
+  "human_leg_min": 39.8,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 403,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478605",
+  "ts": "2026-06-05T11:31:33.393762+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.7,
+  "z_best_cid": "409",
+  "z_best_score": -61.1,
+  "z_best_breach": 17.54,
+  "z_best_feas": "NO",
+  "z_best_km": null,
+  "alt_cids": [
+   "509",
+   "123",
+   "413",
+   "484",
+   "370",
+   "400"
+  ],
+  "pickup_coords": [
+   53.126106,
+   23.162215
+  ],
+  "delivery_coords": [
+   53.0972714,
+   23.2158071
+  ],
+  "pickup_ready_ep": 1780659974.0,
+  "human_cid": "530",
+  "human_defer_min": 13.9,
+  "human_leg_min": 35.8,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 2,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478621",
+  "ts": "2026-06-05T12:04:57.912357+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.6,
+  "z_best_cid": "413",
+  "z_best_score": -67.1,
+  "z_best_breach": 27.88,
+  "z_best_feas": "NO",
+  "z_best_km": 3.53,
+  "alt_cids": [
+   "123",
+   "509",
+   "409",
+   "484",
+   "179",
+   "400",
+   "370"
+  ],
+  "pickup_coords": [
+   53.113643,
+   23.127595
+  ],
+  "delivery_coords": [
+   53.1492592,
+   23.0796579
+  ],
+  "pickup_ready_ep": 1780661973.0,
+  "human_cid": "400",
+  "human_defer_min": 50.6,
+  "human_leg_min": 14.9,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 450,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478692",
+  "ts": "2026-06-05T15:25:18.741457+00:00",
+  "path": "best_effort_low_score",
+  "mtp": 14.8,
+  "z_best_cid": "123",
+  "z_best_score": -119.7,
+  "z_best_breach": 29.35,
+  "z_best_feas": "NO",
+  "z_best_km": 9.94,
+  "alt_cids": [
+   "370",
+   "509",
+   "179",
+   "484",
+   "409",
+   "515",
+   "413"
+  ],
+  "pickup_coords": [
+   53.15441,
+   23.086452
+  ],
+  "delivery_coords": [
+   53.1413093,
+   23.1770669
+  ],
+  "pickup_ready_ep": 1780674009.0,
+  "human_cid": "484",
+  "human_defer_min": 21.4,
+  "human_leg_min": 33.7,
+  "realized": "ok",
+  "human_km": 5.18,
+  "human_bag": 410,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478694",
+  "ts": "2026-06-05T15:26:50.826237+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.5,
+  "z_best_cid": "123",
+  "z_best_score": -20.4,
+  "z_best_breach": 33.92,
+  "z_best_feas": "NO",
+  "z_best_km": 9.94,
+  "alt_cids": [
+   "370",
+   "509",
+   "179",
+   "515",
+   "413",
+   "409",
+   "484"
+  ],
+  "pickup_coords": [
+   53.15441,
+   23.086452
+  ],
+  "delivery_coords": [
+   53.11541339999999,
+   23.1407539
+  ],
+  "pickup_ready_ep": 1780674083.0,
+  "human_cid": "484",
+  "human_defer_min": 20.2,
+  "human_leg_min": 17.1,
+  "realized": "ok",
+  "human_km": 4.95,
+  "human_bag": 411,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478697",
+  "ts": "2026-06-05T15:30:04.641175+00:00",
+  "path": "all_candidates_low_score",
+  "mtp": 14.5,
+  "z_best_cid": "123",
+  "z_best_score": -155.8,
+  "z_best_breach": 15.74,
+  "z_best_feas": "MAYBE",
+  "z_best_km": 3.02,
+  "alt_cids": [],
+  "pickup_coords": [
+   53.121494,
+   23.176691
+  ],
+  "delivery_coords": [
+   53.1307208,
+   23.2007524
+  ],
+  "pickup_ready_ep": 1780674276.0,
+  "human_cid": "509",
+  "human_defer_min": 19.1,
+  "human_leg_min": 7.9,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 350,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478699",
+  "ts": "2026-06-05T15:32:37.446817+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.7,
+  "z_best_cid": "179",
+  "z_best_score": -51.2,
+  "z_best_breach": 23.89,
+  "z_best_feas": "NO",
+  "z_best_km": 3.31,
+  "alt_cids": [
+   "123",
+   "413",
+   "515",
+   "509",
+   "409",
+   "370",
+   "484"
+  ],
+  "pickup_coords": [
+   53.122795,
+   23.178359
+  ],
+  "delivery_coords": [
+   53.207862,
+   23.200162
+  ],
+  "pickup_ready_ep": 1780674441.0,
+  "human_cid": "530",
+  "human_defer_min": 46.8,
+  "human_leg_min": 44.8,
+  "realized": "breach",
+  "human_km": null,
+  "human_bag": 2,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478705",
+  "ts": "2026-06-05T15:49:55.730370+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.7,
+  "z_best_cid": "413",
+  "z_best_score": -10.4,
+  "z_best_breach": 32.38,
+  "z_best_feas": "NO",
+  "z_best_km": 3.11,
+  "alt_cids": [
+   "509",
+   "123",
+   "370",
+   "179",
+   "515",
+   "409",
+   "484"
+  ],
+  "pickup_coords": [
+   53.122795,
+   23.178359
+  ],
+  "delivery_coords": [
+   53.13979089999999,
+   23.1012052
+  ],
+  "pickup_ready_ep": 1780675479.0,
+  "human_cid": "179",
+  "human_defer_min": 25.8,
+  "human_leg_min": 25.8,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 403,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478711",
+  "ts": "2026-06-05T16:02:18.923199+00:00",
+  "path": "best_effort_r6_breach_v2",
+  "mtp": 14.5,
+  "z_best_cid": "123",
+  "z_best_score": -79.3,
+  "z_best_breach": 17.82,
+  "z_best_feas": "NO",
+  "z_best_km": 2.68,
+  "alt_cids": [
+   "370",
+   "509",
+   "484",
+   "179",
+   "515",
+   "409"
+  ],
+  "pickup_coords": [
+   53.126106,
+   23.162215
+  ],
+  "delivery_coords": [
+   53.0982256,
+   23.2146607
+  ],
+  "pickup_ready_ep": 1780676210.0,
+  "human_cid": "509",
+  "human_defer_min": 24.2,
+  "human_leg_min": 24.6,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 349,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ },
+ {
+  "oid": "478739",
+  "ts": "2026-06-05T17:45:37.272362+00:00",
+  "path": "all_candidates_low_score",
+  "mtp": 34.7,
+  "z_best_cid": "370",
+  "z_best_score": -211.4,
+  "z_best_breach": 30.29,
+  "z_best_feas": "MAYBE",
+  "z_best_km": 2.13,
+  "alt_cids": [
+   "413",
+   "409",
+   "123",
+   "179",
+   "515"
+  ],
+  "pickup_coords": [
+   53.135506,
+   23.124808
+  ],
+  "delivery_coords": [
+   53.1552574,
+   23.122769
+  ],
+  "pickup_ready_ep": 1780683618.0,
+  "human_cid": "530",
+  "human_defer_min": 11.1,
+  "human_leg_min": 13.0,
+  "realized": "ok",
+  "human_km": null,
+  "human_bag": 1,
+  "gt_cid": null,
+  "gt_km": null,
+  "gt_bag": null,
+  "gt_n_avail": 0
+ }
+]

@@ -827,6 +827,75 @@ def _always_propose_would_redirect_shadow(record, payload, now):
     return {"path": matched, "minutes_to_pickup": round(mtp, 1), "verdict": "KOORD"}
 
 
+# FAIL-03-K2 SHADOW (faza 1) — co K2 BY zaproponowal dla near-term KOORD-ciszy.
+# Decyzje Adriana 2026-06-05: (1) ZAWSZE PROPOSE + baner (jeden tor), (2) brak cap
+# odroczenia -> soft kara rosnaca. Faza 1: obecny best_effort + ESTYMATA odroczenia
+# z pol kandydata (free_at_min - time_to_pickup_ready_min), bez re-symulacji trasy.
+# Faza 2 (osobno) doda flote no-GPS (decyzja #3) by zbic defer do poziomu czlowieka.
+# LOG-ONLY, ZERO mutacji verdiktu. Wywolac TYLKO gdy K1 != None.
+_FAIL03_DEFER_FREE_MIN = 5.0        # w granicy reguly 5-min late-pickup -> 0 kary
+_FAIL03_DEFER_PEN_PER_MIN = 1.5     # kara/min powyzej free (TUNABLE w shadow)
+_FAIL03_DEFER_PEN_STEEP_AT = 20.0  # od tylu min NAD free kara stromieje
+_FAIL03_DEFER_PEN_STEEP_MULT = 2.0
+_FAIL03_NO_LIVE_GPS = ("no_gps", "pre_shift", "none", "last_assigned_pickup", "post_wave")
+
+
+def _fail03_defer_soft_penalty(defer_min):
+    """Rosnaca soft-kara za minuty odroczenia odbioru (decyzja #2: brak cap)."""
+    if defer_min is None or defer_min <= _FAIL03_DEFER_FREE_MIN:
+        return 0.0
+    over = defer_min - _FAIL03_DEFER_FREE_MIN
+    base = _FAIL03_DEFER_PEN_PER_MIN * min(over, _FAIL03_DEFER_PEN_STEEP_AT)
+    steep = (_FAIL03_DEFER_PEN_PER_MIN * _FAIL03_DEFER_PEN_STEEP_MULT
+             * max(0.0, over - _FAIL03_DEFER_PEN_STEEP_AT))
+    return -round(base + steep, 1)
+
+
+def _fail03_k2_shadow(record, k1):
+    """Pure log-only: co K2 BY zaproponowal (zawsze PROPOSE + defer) dla near-term
+    KOORD-ciszy. ZERO mutacji verdiktu. Zwraca dict (pole shadow) lub None gdy flaga OFF.
+    """
+    if not C.flag("ENABLE_FAIL03_K2_SHADOW", True):
+        return None
+    best = record.get("best") or {}
+    path = (k1 or {}).get("path", "")
+    cid = best.get("courier_id")
+    if not cid:
+        # no_solo / pusta pula -> wymaga rozszerzenia floty (decyzja #3, faza 2)
+        return {"would_propose": False, "reason": "fail03_k2_no_candidate", "path": path,
+                "note": "brak best_effort — wymaga floty no-GPS (faza 2)", "phase": 1}
+    maxbag = best.get("max_bag_time_min")
+    est_breach = round(maxbag - 35.0, 1) if isinstance(maxbag, (int, float)) and maxbag > 35.0 else 0.0
+    free_at = best.get("free_at_min")
+    t2ready = best.get("time_to_pickup_ready_min")
+    defer_est = None
+    if isinstance(free_at, (int, float)) and isinstance(t2ready, (int, float)):
+        defer_est = round(max(0.0, free_at - t2ready), 1)
+    pen = _fail03_defer_soft_penalty(defer_est)
+    pos_src = best.get("pos_source")
+    no_gps = pos_src in _FAIL03_NO_LIVE_GPS
+    if path.startswith("all_candidates_low_score") or path.startswith("best_effort_low_score"):
+        reason = "fail03_k2_lowscore"
+    elif defer_est:
+        reason = "fail03_k2_defer"
+    else:
+        reason = "fail03_k2_best_effort"
+    parts = []
+    if defer_est:
+        parts.append("odbiór odroczony +%.0fmin" % defer_est)
+    if est_breach > 0:
+        parts.append("łamie R6 o %.0fmin" % est_breach)
+    if reason == "fail03_k2_lowscore":
+        parts.append("słaba opcja (score %.0f)" % (best.get("score") or 0))
+    if no_gps:
+        parts.append("pozycja szacowana (%s)" % pos_src)
+    banner = ("⚠ " + ", ".join(parts) + " — najlepsza dostępna") if parts else "najlepsza dostępna"
+    return {"would_propose": True, "reason": reason, "path": path, "best_cid": str(cid),
+            "best_score": round(best.get("score") or 0, 1), "est_breach_min": est_breach,
+            "defer_est_min": defer_est, "defer_soft_penalty": pen,
+            "pos_source": pos_src, "no_gps": no_gps, "banner": banner, "phase": 1}
+
+
 def process_event(
     event: dict,
     fleet: Dict,
@@ -1003,6 +1072,18 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
                     _log.info("SHADOW %s ALWAYS_PROPOSE_WOULD_REDIRECT path=%s mtp=%smin" % (oid, _ap["path"], _ap["minutes_to_pickup"]))
             except Exception as _ap_e:
                 _log.warning(f"ap_redirect_shadow fail oid={oid}: {_ap_e}")
+
+            # FAIL-03-K2 SHADOW faza 1: co K2 BY zaproponowal (log-only, ZERO mutacji).
+            try:
+                if _ap is not None:
+                    _k2 = _fail03_k2_shadow(record, _ap)
+                    if _k2 is not None:
+                        record["fail03_k2_shadow"] = _k2
+                        _log.info("SHADOW %s FAIL03_K2 reason=%s defer=%smin pen=%s no_gps=%s" % (
+                            oid, _k2.get("reason"), _k2.get("defer_est_min"),
+                            _k2.get("defer_soft_penalty"), _k2.get("no_gps")))
+            except Exception as _k2_e:
+                _log.warning(f"fail03_k2_shadow fail oid={oid}: {_k2_e}")
 
             _append_decision(shadow_log_path, record)
             event_bus.mark_processed(eid)
