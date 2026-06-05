@@ -26,7 +26,7 @@ GENERIC_POSTCODE = {"15-000"}
 # Restauracje ktore realnie siedza pod tymi samymi koordynatami
 # (pasaze, pierzeje, food courty). Whitelist dla HARD duplicates - same coords OK.
 HARD_DUPLICATE_WHITELIST = {
-    frozenset({96, 114, 138}),        # Kilinskiego 12 pasaz: Raj + 350 Stopni + Grill Kebab
+    frozenset({114, 138}),            # 350 Stopni (Kilinskiego 7) + Grill Kebab (Kilinskiego 12) — ~72m, rounduja do tej samej komorki 3-dec. Raj (96) USUNIETY 2026-06-05 (BUG-2): realnie Kilinskiego 13, NIE w tym pasazu.
     frozenset({131, 168, 169, 186}),  # Rynek Kosciuszki pierzeja (bez Zapiecka - drugi dojazd)
     frozenset({145, 154, 166}),       # Kaczorowskiego 14/Kopernika 2 (rog): Chinatown + Mama Thai + Rukola K
     frozenset({199, 214}),            # Galeria Biala Milosza 2: Pizzeria 105 + 500 Stopni
@@ -36,7 +36,8 @@ HARD_DUPLICATE_WHITELIST = {
 # Whitelist SOFT duplicates (<50m)
 SOFT_DUPLICATE_WHITELIST = {
     frozenset({199, 214, 226}),     # Galeria Biala: Pizzeria 105 + 500 Stopni + Eat Point
-    frozenset({53, 96, 138}),       # Maison du cafe (Kilinskiego 10) obok pasazu Kilinskiego 12
+    frozenset({53, 138}),           # Maison du cafe (Kilinskiego 10) obok Grill Kebab (Kilinskiego 12) — ~30m.
+    frozenset({96, 138}),           # Raj (Kilinskiego 13) <-> Grill Kebab (Kilinskiego 12) — ~29m, SASIEDNIE budynki, ROZNE punkty odbioru. Koordy poprawne od 2026-06-05 (BUG-2). HARD-whitelist {96,...} CELOWO usuniety, by identyczne koordy (regresja) znow alarmowaly; ta para to legit SOFT (rozne adresy, blisko). Widoczna w audycie 'WHITELIST maskuje ROZNE NAZWY'.
     frozenset({53, 114}),           # Maison du cafe obok 350 Stopni
     frozenset({12, 136}),           # Lipowa 12/14: Nalesniki Jak Smok + Sushi Rany Julek
 }
@@ -58,6 +59,10 @@ def haversine_m(a, b):
     return 2*R*math.asin(math.sqrt(h))
 
 def haversine_km(a, b): return haversine_m(a, b) / 1000.0
+
+def _norm_name(s):
+    """Normalizacja nazwy restauracji do porownania (case/whitespace-insensitive)."""
+    return " ".join((s or "").lower().split())
 
 def build_query(info):
     # geocode() sam dokleja ", Białystok, Polska" - dajemy tylko ulicę (+ kod jeśli sensowny)
@@ -158,9 +163,22 @@ def report(results, failed, hard, soft, outliers, low_acc):
     if hard_flagged:
         print(f"\n🔴 HARD DUPLICATES nieznanych ({len(hard_flagged)}) — wymaga poprawki:")
         for aid_a, na, aid_b, nb, _ in hard_flagged:
-            print(f"  [{aid_a}] {na}  ==  [{aid_b}] {nb}")
+            diff = "  ← RÓŻNE NAZWY (prawdopodobnie zły rekord adresowy w panelu)" \
+                if _norm_name(na) != _norm_name(nb) else ""
+            print(f"  [{aid_a}] {na}  ==  [{aid_b}] {nb}{diff}")
     else:
         print("\n🔴 HARD DUPLICATES (nieznanych): brak ✓")
+    # BUG-2 Front C guard (2026-06-05): dwie RÓŻNE nazwy restauracji pod identycznymi
+    # koordami = sygnał, że albo to realny pasaż/food court (whitelist OK), albo BŁĘDNY
+    # rekord adresowy w panelu (jak Raj↔Grill Kebab — Raj realnie Kilinskiego 13, nie 12).
+    # Whitelisted+różne-nazwy NIE blokuje (legit food court), ale jest wypisany do audytu,
+    # by operator zweryfikował rekord zamiast bezrefleksyjnie ufać whiteliscie.
+    hard_wl_diff = [h for h in hard_wl if _norm_name(h[1]) != _norm_name(h[3])]
+    if hard_wl_diff:
+        print(f"\nℹ️  WHITELIST maskuje RÓŻNE NAZWY pod identycznymi koordami ({len(hard_wl_diff)}) "
+              f"— zweryfikuj że to realnie JEDEN punkt odbioru (pasaż), a nie zły adres w panelu:")
+        for aid_a, na, aid_b, nb, _ in hard_wl_diff:
+            print(f"  [{aid_a}] {na}  ==  [{aid_b}] {nb}")
     soft_flagged = [s for s in soft if not whitelisted(s)]
     soft_whitelisted = [s for s in soft if whitelisted(s)]
     if soft_whitelisted:
