@@ -86,6 +86,30 @@ def test_flag_enabled_passthrough():
     assert recs[0]["flag_enabled"] is True
 
 
+def test_stale_entry_skipped_by_window():
+    # wpis ground-truth starszy niż okno (8h) → pomijany (źródło "sierot"/"17h")
+    old = NOW - (9 * 3600)
+    gt = {"100": {"courier_id": "400", "picked_up_at": old, "last_status_code": 5}}
+    assert shadow.reconcile(gt, {}, NOW) == []          # nie zgłasza GPS_ORPHAN
+    state = {"100": {"courier_id": "400", "commitment_level": "assigned", "status": "assigned"}}
+    assert shadow.reconcile(gt, state, NOW) == []        # nie zgłasza GPS_PICKUP_AHEAD
+
+
+def test_fresh_within_window_still_flagged():
+    # tuż w oknie (7h) → nadal liczone
+    recent = NOW - (7 * 3600)
+    gt = {"100": {"courier_id": "400", "picked_up_at": recent, "last_status_code": 5}}
+    state = {"100": {"courier_id": "400", "commitment_level": "assigned", "status": "assigned"}}
+    recs = shadow.reconcile(gt, state, NOW)
+    assert _types(recs) == ["GPS_PICKUP_AHEAD"]
+
+
+def test_entry_event_epoch_picks_newest():
+    assert shadow._entry_event_epoch({"picked_up_at": 100, "delivered_at": 200}) == 200
+    assert shadow._entry_event_epoch({"last_status_at": 50}) == 50
+    assert shadow._entry_event_epoch({}) is None
+
+
 def test_parse_state_ts_naive_and_iso():
     assert shadow._parse_state_ts("2026-05-29 14:16:48") is not None
     assert shadow._parse_state_ts("2026-05-29T14:16:48+02:00") is not None

@@ -31,6 +31,15 @@ TERMINAL_COMMITMENTS = ("picked_up", "delivered")
 # Typy, które przy LIVE skutkowałyby zmianą commitment (would_apply=True).
 APPLY_TYPES = ("GPS_PICKUP_AHEAD", "GPS_DELIVERED_AHEAD")
 
+# Okno kalibracji: ignoruj wpisy ground-truth starsze niż to. orders_state jest
+# przycinany do ~12h (ENABLE_ORDERS_STATE_PRUNE), więc wpis 5-dniowy NIE jest
+# realnym "GPS wyprzedza panel" — to szum (stary trup re-flagowany co tik jako
+# sierota). 8h < 12h retencji → eliminuje sieroty strukturalne i fałszywe "17h ahead".
+GROUND_TRUTH_WINDOW_SEC = int(os.environ.get("GPS_COMMITMENT_WINDOW_SEC", 8 * 3600))
+# Dedup: jeden rekord na (order_id, typ_rozjazdu) zamiast na każdy 5-min tik
+# (bez tego 73 sieroty × 497 tików = 34k śmieci w logu kalibracji).
+SEEN_PATH = f"{STATE_DIR}/courier_gps_commitment_seen.json"
+
 
 def _load_json(path: str) -> dict:
     try:
@@ -93,6 +102,14 @@ def _rec(oid, e, state, dtype, now_epoch, flag_enabled,
     }
 
 
+def _entry_event_epoch(e):
+    """Najświeższy twardy znacznik wpisu ground-truth (do okna czasowego)."""
+    cands = (e.get("delivered_at"), e.get("picked_up_at"),
+             e.get("last_status_at"), e.get("updated_at"))
+    vals = [c for c in cands if isinstance(c, (int, float))]
+    return max(vals) if vals else None
+
+
 def reconcile(ground_truth: dict, orders_state: dict, now_epoch: float,
               flag_enabled: bool = False) -> list:
     """Czysta funkcja: zwraca listę rekordów rozjazdu (tylko niezgodne).
@@ -114,6 +131,10 @@ def reconcile(ground_truth: dict, orders_state: dict, now_epoch: float,
         gt_deliv = e.get("delivered_at")
         if gt_pick is None and gt_deliv is None:
             continue  # tylko dojazd/odbior — brak twardego faktu pickup/deliver
+
+        ev = _entry_event_epoch(e)
+        if ev is not None and (now_epoch - ev) > GROUND_TRUTH_WINDOW_SEC:
+            continue  # stale — poza oknem kalibracji (retencja orders_state ~12h)
 
         state = orders_state.get(str(oid)) if isinstance(orders_state, dict) else None
         if state is None:
@@ -167,8 +188,42 @@ def _append_jsonl(path: str, records: list):
     os.replace(tmp, path)
 
 
+def _load_seen() -> dict:
+    try:
+        with open(SEEN_PATH) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+
+
+def _save_seen(seen: dict):
+    tmp = f"{SEEN_PATH}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(seen, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, SEEN_PATH)
+
+
+def _dedup(records: list, now_epoch: float) -> list:
+    """Jeden rekord na (order_id, typ). Pamięć w SEEN_PATH, przycinana do okna."""
+    seen = _load_seen()
+    cutoff = now_epoch - (GROUND_TRUTH_WINDOW_SEC + 3600)
+    seen = {k: v for k, v in seen.items() if isinstance(v, (int, float)) and v >= cutoff}
+    fresh = []
+    for r in records:
+        key = f"{r['order_id']}:{r['divergence_type']}"
+        if key in seen:
+            continue
+        seen[key] = now_epoch
+        fresh.append(r)
+    _save_seen(seen)
+    return fresh
+
+
 def run_once() -> dict:
-    """Wczytaj pliki, policz rozjazd, dopisz do shadow-logu, zwróć summary."""
+    """Wczytaj pliki, policz rozjazd, dopisz NOWE rozjazdy do shadow-logu."""
     try:
         import common
         flag_enabled = common.flag(FLAG_NAME, False)
@@ -180,16 +235,18 @@ def run_once() -> dict:
     now_epoch = datetime.now(timezone.utc).timestamp()
 
     records = reconcile(ground_truth, orders_state, now_epoch, flag_enabled)
-    if records:
-        _append_jsonl(SHADOW_LOG_PATH, records)
+    fresh = _dedup(records, now_epoch)
+    if fresh:
+        _append_jsonl(SHADOW_LOG_PATH, fresh)
 
     counts = {}
-    for r in records:
+    for r in fresh:
         counts[r["divergence_type"]] = counts.get(r["divergence_type"], 0) + 1
     summary = {
         "gt_orders": len(ground_truth),
-        "divergences": len(records),
-        "would_apply": sum(1 for r in records if r["would_apply"]),
+        "divergences_window": len(records),
+        "divergences_new": len(fresh),
+        "would_apply": sum(1 for r in fresh if r["would_apply"]),
         "by_type": counts,
         "flag_enabled": flag_enabled,
     }
