@@ -38,6 +38,7 @@ INVALIDATION_REASONS = frozenset({
     "SHIFT_END",
     "MANUAL",
     "SCHEMA_UPGRADE",
+    "BAG_CHANGED",  # BUG-1 (2026-06-05): reassign/PANEL_OVERRIDE dorzucił order poza planem
 })
 
 

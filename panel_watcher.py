@@ -278,6 +278,60 @@ def _save_plan_on_assign(order_id: str, courier_id: str) -> None:
         _log.warning(f"V3.19b save_plan fail cid={courier_id} oid={order_id}: {e}")
 
 
+def _invalidate_plan_on_bag_change(order_id: str, courier_id: str) -> None:
+    """BUG-1 (2026-06-05): gdy zlecenie zostaje przypisane/przepisane kurierowi, a NIE
+    jest pokryte jego zapisanym planem (typowo PANEL_OVERRIDE / reassign — koordynator
+    przypisał ręcznie, nie z propozycji Ziomka, więc _save_plan_on_assign cicho pomija
+    zapis), unieważnij istniejący plan kuriera.
+
+    invalidate_plan bumpuje invalidated_at → /api/courier/plan-version zmienia sygnał +
+    SSE PLAN_UPDATED → apka natychmiast robi pełny GET /api/courier/orders (build_view
+    zwraca cały aktualny worek), zamiast czekać do 5-min plan_recheck gap-fill.
+
+    Cicho no-op gdy: flaga off, saved-plans off, kurier bez aktywnego planu (apka i tak
+    na fallbacku pełnego worka), albo order już pokryty planem (świeży save_plan ruszył
+    plan_version, sygnał jest). Błędy nie propagują do callera.
+    """
+    try:
+        from dispatch_v2.common import ENABLE_SAVED_PLANS, flag
+        if not ENABLE_SAVED_PLANS:
+            return
+        if not flag("ENABLE_INVALIDATE_PLAN_ON_BAG_CHANGE", True):
+            return
+    except Exception:
+        return
+    if not courier_id or not order_id:
+        return
+    try:
+        from dispatch_v2 import plan_manager
+        # load_plan zwraca None gdy brak planu LUB plan już invalidated → no-op w obu
+        plan = plan_manager.load_plan(str(courier_id))
+        if plan is None:
+            return
+        covered = {str(s.get("order_id")) for s in plan.get("stops", [])}
+        if str(order_id) in covered:
+            return
+        plan_manager.invalidate_plan(str(courier_id), "BAG_CHANGED")
+        _log.info(
+            f"BUG-1 invalidate_plan_on_bag_change cid={courier_id} oid={order_id} "
+            f"— order poza planem (reassign/override) → apka odświeży worek"
+        )
+    except Exception as e:
+        _log.warning(
+            f"BUG-1 invalidate_plan_on_bag_change fail cid={courier_id} oid={order_id}: {e}"
+        )
+
+
+def _save_plan_on_assign_signal(order_id: str, courier_id: str) -> None:
+    """BUG-1 (2026-06-05): zapisz plan z propozycji (gdy to nasz kurier) ORAZ zasygnalizuj
+    apce zmianę worka. _save_plan_on_assign cicho pomija zapis przy PANEL_OVERRIDE/reassign,
+    więc plan_version stoi i apka nie odświeża worka aż do 5-min plan_recheck.
+    _invalidate_plan_on_bag_change łapie ten przypadek (order poza planem) i unieważnia
+    plan → SSE PLAN_UPDATED → natychmiastowy pełny GET. No-op gdy save pokrył order."""
+    _save_plan_on_assign(order_id, courier_id)
+    _invalidate_plan_on_bag_change(order_id, courier_id)
+
+
 def _advance_plan_on_deliver(courier_id: str, order_id: str,
                              delivered_at_raw: Optional[str],
                              delivery_coords: Optional[list]) -> None:
@@ -788,7 +842,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "payload": _assigned_payload,
                 })
                 _check_panel_override(zid, courier_id, "panel_initial")
-                _save_plan_on_assign(zid, courier_id)
+                _save_plan_on_assign_signal(zid, courier_id)
 
     # 2. ZMIANY: ID znane w state, sprawdz czy cos sie zmienilo
     # V3.15 pre-req fix: reassign_checked/MAX_REASSIGN_PER_CYCLE musi być
@@ -895,7 +949,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         })
                         _log.info(f"ASSIGNED {zid} -> {courier_id}")
                         _check_panel_override(zid, courier_id, "panel_diff")
-                        _save_plan_on_assign(zid, courier_id)
+                        _save_plan_on_assign_signal(zid, courier_id)
             except Exception as e:
                 _log.warning(f"fetch for assigned {zid}: {e}")
                 stats["errors"] += 1
@@ -926,7 +980,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         })
                         _log.info(f"REASSIGNED {zid} {state_courier} -> {panel_courier}")
                         _check_panel_override(zid, panel_courier, "panel_reassign")
-                        _save_plan_on_assign(zid, panel_courier)
+                        _save_plan_on_assign_signal(zid, panel_courier)
             except Exception as e:
                 _log.warning(f"fetch for reassign {zid}: {e}")
                 stats["errors"] += 1
@@ -1038,7 +1092,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             f"PACKS_CATCHUP {_oid_str} → cid={_target_cid} nick={_nick_key!r} "
                             f"(was cid={_state_cid or 'None'})"
                         )
-                        _save_plan_on_assign(_oid_str, _target_cid)
+                        _save_plan_on_assign_signal(_oid_str, _target_cid)
             if _packs_catchup:
                 stats["packs_catchup"] = _packs_catchup
     # ================== END PANEL_PACKS FALLBACK ==================
@@ -1554,7 +1608,7 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
                     f"COLD_START_CATCHUP {_oid_str} → cid={_target_cid} "
                     f"nick={_nick_key!r} sid={_sid}"
                 )
-                _save_plan_on_assign(_oid_str, _target_cid)
+                _save_plan_on_assign_signal(_oid_str, _target_cid)
     return stats
 
 
