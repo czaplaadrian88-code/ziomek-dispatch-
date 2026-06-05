@@ -35,27 +35,28 @@ def _utc_for_warsaw(year, month, day, hour, minute=0, second=0):
 # ─── Helper tests ──────────────────────────────────────────────────
 
 def test_helper_weekday_buckets():
-    """Each Adrian table weekday row maps to expected multiplier.
+    """Each weekday hour maps to expected multiplier.
 
-    V3.27.3 TASK G update 2026-04-27: 5 buckets adjusted (Adrian's domain
-    knowledge): 13-14 i 14-15 → 1.2 (was 1.3); 15-16 → 1.5 (was 1.6);
-    16-17 → 1.3 (was 1.6, largest delta); 20-21 → 1.0 (was 1.1).
+    RECALIB 2026-06-05 (wariant B): krzywa godzinowa median-based zastąpiła
+    statyczną tabelę V3.27.3 TASK G (recalib_verdict_B_2026-06-05.txt — bias
+    RAZEM −2.23→−1.37 min). Zeruje medianowe niedoszacowanie popołudnia.
+    Wariant B: 17-18 = 1.25 (doc-curve 1.30/1.35 przestrzeliwała).
     """
     # 2026-04-20 is a Monday (weekday()==0)
     cases = [
-        (5, 1.0),    # 00-06
-        (7, 1.0),    # 06-08
-        (9, 1.1),    # 08-10
-        (11, 1.1),   # 10-12
-        (12, 1.2),   # 12-13
-        (13, 1.2),   # 13-14 (was 1.3) — TASK G
-        (14, 1.2),   # 14-15 (was 1.3) — TASK G
-        (15, 1.5),   # 15-16 (was 1.6) — TASK G
-        (16, 1.3),   # 16-17 (was 1.6, largest delta) — TASK G
-        (18, 1.2),   # 17-19
-        (19, 1.1),   # 19-20
-        (20, 1.0),   # 20-21 (was 1.1) — TASK G
-        (22, 1.0),   # 21-24
+        (5, 1.0),     # 00-09
+        (7, 1.0),     # 00-09
+        (9, 1.15),    # 09-10 (recalib: was 1.1)
+        (11, 1.25),   # 10-12 (recalib: was 1.1)
+        (12, 1.40),   # 12-13 (recalib: was 1.2)
+        (13, 1.50),   # 13-14 (recalib: was 1.2)
+        (14, 1.35),   # 14-15 (recalib: was 1.2)
+        (15, 1.55),   # 15-17 (recalib: was 1.5)
+        (16, 1.55),   # 15-17 (recalib: was 1.3)
+        (18, 1.25),   # 18-19 wariant B (doc-curve 1.35)
+        (19, 1.25),   # 19-20 (recalib: was 1.1)
+        (20, 1.10),   # 20-21 (recalib: was 1.0)
+        (22, 1.05),   # 21-24 (recalib: was 1.0)
     ]
     for h, expected in cases:
         ts = _utc_for_warsaw(2026, 4, 20, h, 0)
@@ -87,20 +88,19 @@ def test_helper_weekend_all_day():
 
 
 def test_helper_boundary_lower_inclusive():
-    """17:00:00 sharp → 1.2 (z 17-19), nie 1.6 (z 15-17)."""
+    """RECALIB: 17:00:00 sharp → 1.25 (z 17-18), nie 1.55 (z 15-17)."""
     ts = _utc_for_warsaw(2026, 4, 20, 17, 0, 0)
-    assert common.get_traffic_multiplier(ts) == 1.2
+    assert common.get_traffic_multiplier(ts) == 1.25
     print("PASS test_helper_boundary_lower_inclusive")
 
 
 def test_helper_boundary_upper_exclusive():
-    """V3.27.3 TASK G: 16:59:59 → 1.3 (still in 16-17, was 15-17 peak 1.6).
+    """RECALIB: 16:59:59 → 1.55 (mieści się w buckecie [15, 17)).
 
-    Sprawdzanie boundary upper-exclusive: 16:59:59 mieści się w buckecie
-    [16, 17) o wartości 1.3 (Adrian's largest correction post-TASK G).
+    Sprawdzanie boundary upper-exclusive: 16:59:59 < 17:00 → bucket 15-17 = 1.55.
     """
     ts = _utc_for_warsaw(2026, 4, 20, 16, 59, 59)
-    assert common.get_traffic_multiplier(ts) == 1.3
+    assert common.get_traffic_multiplier(ts) == 1.55
     print("PASS test_helper_boundary_upper_exclusive")
 
 
@@ -179,14 +179,14 @@ def test_route_flag_false_shadow_records_no_mutation():
 
 
 def test_route_flag_true_applies_and_preserves_raw():
-    """V3.27.3 TASK G: flag=True at peak hour 15:00: duration_s = 600 × 1.5 = 900; raw preserved.
+    """RECALIB: flag=True at peak hour 15:00: duration_s = 600 × 1.55 = 930; raw preserved.
 
-    Updated post-TASK G: peak Mon 16:00 = 1.3 (was 1.6). Test używa Mon 15:00
-    = 1.5 (was 1.6) jako representative peak hour.
+    Post-recalib (2026-06-05 wariant B): Mon 15:00 → mult 1.55 (bucket 15-17,
+    krzywa median-based). Representative peak hour.
     """
     _reset_state()
     # Mock now_utc inside osrm_client.route via patching datetime.datetime.now
-    peak_utc = _utc_for_warsaw(2026, 4, 20, 15, 0)  # Mon 15:00 → mult 1.5 (TASK G)
+    peak_utc = _utc_for_warsaw(2026, 4, 20, 15, 0)  # Mon 15:00 → mult 1.55 (recalib)
 
     fake_dt = mock.MagicMock(wraps=datetime)
     fake_dt.now = mock.MagicMock(return_value=peak_utc)
@@ -195,10 +195,10 @@ def test_route_flag_true_applies_and_preserves_raw():
          mock.patch.object(osrm_client, "datetime", fake_dt), \
          _patch_urlopen_returning(_osrm_route_payload(duration_s=600)):
         r = osrm_client.route((53.13, 23.16), (53.10, 23.20), use_cache=False)
-    assert r["traffic_multiplier"] == 1.5, f"expected mult 1.5, got {r.get('traffic_multiplier')}"
+    assert r["traffic_multiplier"] == 1.55, f"expected mult 1.55, got {r.get('traffic_multiplier')}"
     assert r["osrm_raw_duration_s"] == 600, f"raw should be 600, got {r['osrm_raw_duration_s']}"
-    assert r["duration_s"] == 900.0, f"adjusted should be 900, got {r['duration_s']}"
-    assert r["duration_min"] == 15.0, f"adjusted min should be 15.0, got {r['duration_min']}"
+    assert r["duration_s"] == 930.0, f"adjusted should be 930, got {r['duration_s']}"
+    assert r["duration_min"] == 15.5, f"adjusted min should be 15.5, got {r['duration_min']}"
     assert r["osrm_raw_duration_min"] == 10.0, f"raw min should be 10.0, got {r['osrm_raw_duration_min']}"
     assert osrm_client._osrm_stats["traffic_mult_calls"] == 1
     print("PASS test_route_flag_true_applies_and_preserves_raw")
@@ -231,8 +231,8 @@ def test_route_cache_idempotency_across_hours():
         f"cache must hold RAW 600, got {cached_dict.get('duration_s')}"
     )
 
-    # V3.27.3 TASK G update: Second call at PEAK Mon 15:00 (mult=1.5, was 1.6):
-    # should adjust from RAW 600 → 900 (NOT 600×1.0×1.5 either way; correct = 900)
+    # RECALIB: Second call at PEAK Mon 15:00 (mult=1.55, recalib bucket 15-17):
+    # should adjust from RAW 600 → 930 (NOT 600×1.0×1.55 either way; correct = 930)
     peak_utc = _utc_for_warsaw(2026, 4, 20, 15, 0)
     fake_dt_peak = mock.MagicMock(wraps=datetime)
     fake_dt_peak.now = mock.MagicMock(return_value=peak_utc)
@@ -240,11 +240,11 @@ def test_route_cache_idempotency_across_hours():
     with mock.patch.object(osrm_client, "ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER", True), \
          mock.patch.object(osrm_client, "datetime", fake_dt_peak):
         r2 = osrm_client.route((53.13, 23.16), (53.10, 23.20), use_cache=True)
-    assert r2["traffic_multiplier"] == 1.5, f"peak: expected mult 1.5, got {r2['traffic_multiplier']}"
+    assert r2["traffic_multiplier"] == 1.55, f"peak: expected mult 1.55, got {r2['traffic_multiplier']}"
     assert r2["osrm_raw_duration_s"] == 600, f"raw still 600, got {r2['osrm_raw_duration_s']}"
-    assert r2["duration_s"] == 900.0, (
-        f"peak from cache: 600 × 1.5 = 900, got {r2['duration_s']} "
-        f"(double-mult bug would give 600×1.5×1.5=1350)"
+    assert r2["duration_s"] == 930.0, (
+        f"peak from cache: 600 × 1.55 = 930, got {r2['duration_s']} "
+        f"(double-mult bug would give 600×1.55×1.55=1441.5)"
     )
     print("PASS test_route_cache_idempotency_across_hours")
 

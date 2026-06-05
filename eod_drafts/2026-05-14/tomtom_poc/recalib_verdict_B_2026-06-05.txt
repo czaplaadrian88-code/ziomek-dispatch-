@@ -1,0 +1,60 @@
+========================================================================================
+DARMOWY WERDYKT RECALIB — krzywa godzinowa vs obecna tabela V326 (offline, $0)
+========================================================================================
+rw_results: 3833   ground truth (bez tier2_underflow): 1384
+po join: weekday=688  weekend=304 (weekend nietknięty — pomijam)
+sanity: |rekonstr. obecny − logowany osrm_eta_min| śr=0.24min med=0.00min (rozjazd = measure-hour vs pickup-hour, OK jeśli mały)
+
+=== WEEKDAY — pełen sample (tier-1 + tier-2) (n=688) ===
+bucket       n |          OBECNY           |          RECALIB          |  recal
+               |    bias rawRMSE rawMAE |    bias rawRMSE rawMAE |   win%
+----------------------------------------------------------------------------------------
+peak       145 |   -2.16    5.92   3.62 |   -0.73    5.63   3.56 |    59%
+shoulder   498 |   -2.27    6.53   3.90 |   -1.53    6.30   3.81 |    55%
+offpeak     45 |   -2.01    5.48   3.30 |   -1.65    5.38   3.24 |    58%
+RAZEM      688 |   -2.23    6.34   3.80 |   -1.37    6.11   3.72 |    56%
+
+=== WEEKDAY — cross-check tier-1 (GPS gold) (n=77) ===
+bucket       n |          OBECNY           |          RECALIB          |  recal
+               |    bias rawRMSE rawMAE |    bias rawRMSE rawMAE |   win%
+----------------------------------------------------------------------------------------
+peak        17 |   -1.14    3.30   2.74 |   +0.35    3.28   2.53 |    59%
+shoulder    55 |   -1.22    2.64   1.98 |   -0.46    2.43   1.82 |    56%
+offpeak      5 |   -3.81    5.36   3.90 |   -3.47    5.10   3.63 |    80%
+RAZEM       77 |   -1.37    3.04   2.27 |   -0.48    2.88   2.09 |    58%
+
+=== MEDIANA REZYDUUM per GODZINA ODBIORU (weekday) — mirror krzywej ===
+  rezid = predykcja − realna jazda (min). Ujemne = NIEDOSZACOWANIE.
+godz    n | cur_mult rec_mult |  rezid OBECNY  rezid RECALIB
+--------------------------------------------------------------
+   9    9 |     1.10     1.15 |         +1.45          +1.68
+  10   14 |     1.10     1.25 |         -1.38          -0.50  <<
+  11   37 |     1.10     1.25 |         -1.09          +0.16  <<
+  12   52 |     1.20     1.40 |         -1.17          -0.13  <<
+  13   56 |     1.20     1.50 |         -2.05          +0.01  <<
+  14   65 |     1.20     1.35 |         -1.19          -0.02  <<
+  15   59 |     1.50     1.55 |         -0.82          -0.31
+  16   68 |     1.30     1.55 |         -1.83          -0.10  <<
+  17   76 |     1.20     1.25 |         -0.19          +0.19
+  18   80 |     1.20     1.25 |         -0.36          +0.01
+  19   59 |     1.10     1.25 |         -1.26          -0.14  <<
+  20   68 |     1.00     1.10 |         -0.85          -0.22
+  21   25 |     1.00     1.05 |         -0.35          -0.16
+  22   19 |     1.00     1.05 |         -1.07          -0.53  <<
+  23    1 |     1.00     1.05 |         +3.23          +3.65
+
+========================================================================================
+WERDYKT (kryterium Krok 0 z planu): recalib zeruje systematyczne
+niedoszacowanie (bias→0) NIE psując surowego rozrzutu (MAE)?
+----------------------------------------------------------------------------------------
+  peak      n= 145 | |bias| 2.16→0.73 (↓ POPRAWA)  |  MAE 3.62→3.56 (↓ POPRAWA)
+  shoulder  n= 498 | |bias| 2.27→1.53 (↓ POPRAWA)  |  MAE 3.90→3.81 (↓ POPRAWA)
+  offpeak   n=  45 | |bias| 2.01→1.65 (↓ POPRAWA)  |  MAE 3.30→3.24 (↓ POPRAWA)
+  RAZEM     n= 688 | |bias| 2.23→1.37 (↓ POPRAWA)  |  MAE 3.80→3.72 (↓ POPRAWA)
+----------------------------------------------------------------------------------------
+  ✅ RECALIB WYGRYWA → promuj krzywę do common.py:V326_OSRM_TRAFFIC_TABLE
+     (RAZEM bias -2.23→-1.37 min, MAE 3.80→3.72 min — $0, zero ryzyka)
+
+  CAVEAT: krzywa wyliczona z PODZBIORU tego zbioru (595 weekday tropów,
+  03.06) → częściowo in-sample. Prawdziwy out-of-sample = forward-live A/B.
+  Ten werdykt = potwierdzenie kierunku + skala, nie niezależna walidacja.

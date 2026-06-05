@@ -37,38 +37,45 @@ def test_v2_offpeak_returns_base_regardless_of_distance():
 
 
 def test_v2_peak_short_segment_boost():
-    """Peak short (<2 km): base + 1.0. Empirical: Toriko→GK 1.47km @ 16-17 → 2.3×."""
+    """Peak short (<2 km): base + 1.0. RECALIB 2026-06-05: base(16:30)=1.55 → 2.55.
+
+    UWAGA recalib↔BUG-D: empirical target był 2.3× (stara base 1.3 + 1.0 boost).
+    Recalib podniósł base do 1.55 → boost +1.0 teraz PRZESTRZELIWA do 2.55. BUG-D
+    additive boosts wymagają rekalibracji PRZED promocją flagi (shadow OFF →
+    nie dotyka produkcji; test weryfikuje faktyczny output funkcji, nie target)."""
     from dispatch_v2.common import get_traffic_multiplier_v2
-    dt = _peak_dt(16)  # 16:30 Warsaw, base=1.3 z (16,17,1.3)
-    assert get_traffic_multiplier_v2(dt, 1.5) == 2.3
-    assert get_traffic_multiplier_v2(dt, 0.3) == 2.3  # boundary toward 0
-    assert get_traffic_multiplier_v2(dt, 1.99) == 2.3  # upper boundary exclusive
+    dt = _peak_dt(16)  # 16:30 Warsaw, base=1.55 z (15,17,1.55) post-recalib
+    assert get_traffic_multiplier_v2(dt, 1.5) == 2.55
+    assert get_traffic_multiplier_v2(dt, 0.3) == 2.55  # boundary toward 0
+    assert get_traffic_multiplier_v2(dt, 1.99) == 2.55  # upper boundary exclusive
 
 
 def test_v2_peak_medium_segment_boost():
-    """Peak medium (2-5 km): base + 0.4."""
+    """Peak medium (2-5 km): base + 0.4. RECALIB: base(16:30)=1.55 → 1.95."""
     from dispatch_v2.common import get_traffic_multiplier_v2
-    dt = _peak_dt(16)  # base=1.3
-    assert abs(get_traffic_multiplier_v2(dt, 2.0) - 1.7) < 0.001
-    assert abs(get_traffic_multiplier_v2(dt, 4.0) - 1.7) < 0.001
-    assert abs(get_traffic_multiplier_v2(dt, 4.99) - 1.7) < 0.001
+    dt = _peak_dt(16)  # base=1.55 post-recalib
+    assert abs(get_traffic_multiplier_v2(dt, 2.0) - 1.95) < 0.001
+    assert abs(get_traffic_multiplier_v2(dt, 4.0) - 1.95) < 0.001
+    assert abs(get_traffic_multiplier_v2(dt, 4.99) - 1.95) < 0.001
 
 
 def test_v2_peak_long_segment_reduction():
-    """Peak long (>=5 km): base - 0.15. Empirical: Bacieczki→JP61B 2.88km/Saturna→Rukola 6.23km avg 1.15×."""
+    """Peak long (>=5 km): base - 0.15. RECALIB: base(16:30)=1.55 → 1.40."""
     from dispatch_v2.common import get_traffic_multiplier_v2
-    dt = _peak_dt(16)  # base=1.3
-    assert abs(get_traffic_multiplier_v2(dt, 5.0) - 1.15) < 0.001
-    assert abs(get_traffic_multiplier_v2(dt, 7.0) - 1.15) < 0.001
-    assert abs(get_traffic_multiplier_v2(dt, 20.0) - 1.15) < 0.001
+    dt = _peak_dt(16)  # base=1.55 post-recalib
+    assert abs(get_traffic_multiplier_v2(dt, 5.0) - 1.40) < 0.001
+    assert abs(get_traffic_multiplier_v2(dt, 7.0) - 1.40) < 0.001
+    assert abs(get_traffic_multiplier_v2(dt, 20.0) - 1.40) < 0.001
 
 
 def test_v2_floor_at_1_0():
-    """Boost ujemny nie obniża poniżej 1.0 (OSRM ff floor — nigdy szybciej niż brak ruchu)."""
+    """Boost ujemny nie obniża poniżej 1.0 (OSRM ff floor — nigdy szybciej niż brak ruchu).
+
+    RECALIB: hour 19 podniesione do 1.25 (long → 1.10, już nie floor) → test używa
+    hour 20 (base 1.10 z (20,21,1.10)) → long boost -0.15 = 0.95 → floored to 1.0."""
     from dispatch_v2.common import get_traffic_multiplier_v2
-    # Hour Warsaw 19 (base 1.1 z (19,20,1.1)) → long boost -0.15 = 0.95 → floored to 1.0
-    dt_119 = _peak_dt(19)
-    assert get_traffic_multiplier_v2(dt_119, 10.0) == 1.0
+    dt_120 = _peak_dt(20)  # 20:30 Warsaw, base 1.10 → long -0.15 = 0.95 → floor 1.0
+    assert get_traffic_multiplier_v2(dt_120, 10.0) == 1.0
 
 
 def test_v2_naive_datetime_raises():
@@ -86,10 +93,10 @@ def test_apply_traffic_multiplier_records_v2_shadow():
     """osrm_client._apply_traffic_multiplier records traffic_multiplier_v2_shadow field."""
     from dispatch_v2.osrm_client import _apply_traffic_multiplier
     result = {"duration_s": 100.0, "distance_km": 1.5, "distance_m": 1500}
-    dt = _peak_dt(16)  # base=1.3, short 1.5km → v2=2.3
+    dt = _peak_dt(16)  # RECALIB base=1.55, short 1.5km → v2=2.55
     out = _apply_traffic_multiplier(result, dt)
     assert "traffic_multiplier_v2_shadow" in out
-    assert out["traffic_multiplier_v2_shadow"] == 2.3
+    assert out["traffic_multiplier_v2_shadow"] == 2.55
     # Raw preserved
     assert out["osrm_raw_duration_s"] == 100.0
 
@@ -101,7 +108,7 @@ def test_apply_traffic_multiplier_v2_shadow_handles_missing_distance():
     dt = _peak_dt(16)
     out = _apply_traffic_multiplier(result, dt)
     assert "traffic_multiplier_v2_shadow" in out
-    assert abs(out["traffic_multiplier_v2_shadow"] - 1.3) < 0.001  # = base mult, no boost
+    assert abs(out["traffic_multiplier_v2_shadow"] - 1.55) < 0.001  # RECALIB base mult, no boost
 
 
 def test_apply_traffic_multiplier_legacy_v1_when_flag_off():
@@ -116,11 +123,11 @@ def test_apply_traffic_multiplier_legacy_v1_when_flag_off():
     result = {"duration_s": 100.0, "distance_km": 1.5}
     dt = _peak_dt(16)
     out = osrm_client._apply_traffic_multiplier(result, dt)
-    # v1 applied: 100 * 1.3 = 130
-    assert out["duration_s"] == 130.0
-    assert abs(out["traffic_multiplier"] - 1.3) < 0.001
-    # v2_shadow recorded but NOT applied
-    assert out["traffic_multiplier_v2_shadow"] == 2.3
+    # RECALIB v1 applied: 100 * 1.55 = 155
+    assert out["duration_s"] == 155.0
+    assert abs(out["traffic_multiplier"] - 1.55) < 0.001
+    # v2_shadow recorded but NOT applied (overshoots 2.55 — recalibrate before promote)
+    assert out["traffic_multiplier_v2_shadow"] == 2.55
 
 
 def test_empirical_case_3_toriko_gk():
@@ -138,13 +145,13 @@ def test_empirical_case_3_toriko_gk():
 
 def test_empirical_case_d_bacieczki_jp61b_long():
     """Case F (measurements.md): Bacieczki→JP61B 2.88km @ 18-19 Wt → TomTom 4.7min, OSRM ff 4.6min.
-    Real ratio 1.02×. V2 predicts: 2-5km medium bin: base(17-19=1.2) + 0.4 = 1.6 → 7.36 min.
+    Real ratio 1.02×. RECALIB: 2-5km medium bin: base(18-19=1.25) + 0.4 = 1.65.
     Acknowledged over-prediction dla tej kategorii — sample n=4 medium variable (1.02-2.35×).
     """
     from dispatch_v2.common import get_traffic_multiplier_v2
     dt = _peak_dt(18)
     mult = get_traffic_multiplier_v2(dt, 2.88)
-    assert abs(mult - 1.6) < 0.001  # 1.2 + 0.4 medium
+    assert abs(mult - 1.65) < 0.001  # RECALIB 1.25 + 0.4 medium
 
 
 def test_table_structure_sorted_ascending():
@@ -182,24 +189,24 @@ def test_apply_traffic_multiplier_increments_v2_stats():
         bd["count"] = 0
         bd["sum"] = 0.0
 
-    dt = _peak_dt(16)  # base 1.3
-    # Short call: 1.5km → mult v2 = 2.3
+    dt = _peak_dt(16)  # RECALIB base 1.55
+    # Short call: 1.5km → mult v2 = 2.55
     osrm_client._apply_traffic_multiplier({"duration_s": 60.0, "distance_km": 1.5}, dt)
-    # Medium call: 3.0km → mult v2 = 1.7
+    # Medium call: 3.0km → mult v2 = 1.95
     osrm_client._apply_traffic_multiplier({"duration_s": 120.0, "distance_km": 3.0}, dt)
-    # Long call: 7.0km → mult v2 = 1.15
+    # Long call: 7.0km → mult v2 = 1.40
     osrm_client._apply_traffic_multiplier({"duration_s": 300.0, "distance_km": 7.0}, dt)
-    # Missing distance call → mult v2 = 1.3 (fallback to v1 base)
+    # Missing distance call → mult v2 = 1.55 (fallback to v1 base)
     osrm_client._apply_traffic_multiplier({"duration_s": 60.0}, dt)
 
     stats = osrm_client._osrm_stats
     assert stats["traffic_mult_v2_calls"] == 4
     assert stats["traffic_mult_v2_bins"]["short"]["count"] == 1
-    assert abs(stats["traffic_mult_v2_bins"]["short"]["sum"] - 2.3) < 0.001
+    assert abs(stats["traffic_mult_v2_bins"]["short"]["sum"] - 2.55) < 0.001
     assert stats["traffic_mult_v2_bins"]["medium"]["count"] == 1
-    assert abs(stats["traffic_mult_v2_bins"]["medium"]["sum"] - 1.7) < 0.001
+    assert abs(stats["traffic_mult_v2_bins"]["medium"]["sum"] - 1.95) < 0.001
     assert stats["traffic_mult_v2_bins"]["long"]["count"] == 1
-    assert abs(stats["traffic_mult_v2_bins"]["long"]["sum"] - 1.15) < 0.001
+    assert abs(stats["traffic_mult_v2_bins"]["long"]["sum"] - 1.40) < 0.001
     assert stats["traffic_mult_v2_bins"]["none"]["count"] == 1
 
 

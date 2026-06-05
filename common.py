@@ -236,28 +236,27 @@ def get_fallback_speed_kmh(dt_utc: datetime) -> float:
 # Convention: bucket = [hour_lo, hour_hi) — lower inclusive, upper exclusive.
 V326_OSRM_TRAFFIC_TABLE = {
     "weekday": [   # MON-FRI (weekday()==0..4)
-        # V3.27.3 TASK G update 2026-04-27 wieczór (Adrian's domain knowledge,
-        # combined dataset 2,681 datapoints potwierdziło że current tabela jest
-        # zbyt pesymistyczna w peak hours). 5 buckets adjusted, reszta unchanged:
-        #   13-14: 1.3 → 1.2 (-0.1)
-        #   14-15: 1.3 → 1.2 (-0.1)
-        #   15-16: 1.6 → 1.5 (-0.1)
-        #   16-17: 1.6 → 1.3 (-0.3, largest delta)
-        #   20-21: 1.1 → 1.0 (-0.1)
-        # Synergia z V3.27.2 DWELL rollback i V3.27.3 TASK B (wait_courier).
-        (0, 6, 1.0),
-        (6, 8, 1.0),
-        (8, 10, 1.1),
-        (10, 12, 1.1),
-        (12, 13, 1.2),
-        (13, 14, 1.2),    # was (13, 15, 1.3) → split: 13-14 = 1.2
-        (14, 15, 1.2),    # 14-15 = 1.2
-        (15, 16, 1.5),    # was (15, 17, 1.6) → split: 15-16 = 1.5
-        (16, 17, 1.3),    # 16-17 = 1.3 (Adrian's largest correction)
-        (17, 19, 1.2),    # unchanged
-        (19, 20, 1.1),    # was (19, 21, 1.1) → split: 19-20 unchanged
-        (20, 21, 1.0),    # 20-21 = 1.0 (Adrian's value)
-        (21, 24, 1.0),
+        # RECALIB 2026-06-05 (wariant B) — krzywa godzinowa median-based zastąpiła
+        # statyczną tabelę V3.27.3 TASK G. Wyliczona z 595 weekday tropów GATE B
+        # (eod_drafts/2026-06-03/hourly_multiplier_curve.md), zweryfikowana na 688
+        # tropach (eod_drafts/2026-05-14/tomtom_poc/recalib_verdict_B_2026-06-05.txt):
+        # bias RAZEM −2.23→−1.37 min, MAE 3.80→3.72, tier-1 GPS bias −1.37→−0.39.
+        # Zeruje medianowe niedoszacowanie popołudnia (godz 12-16,19: −1..−2 → ~0).
+        # Resztkowy bias = ogon breachy (wariancja) → zadanie dla live-traffic A/B.
+        # Wariant B: 17-18 = 1.25 (doc-curve 1.30/1.35 przestrzeliwała +0.5/+0.36).
+        # Poprzednie wartości V3.27.3 TASK G zachowane w git (tag pre-recalib).
+        (0, 9, 1.0),
+        (9, 10, 1.15),
+        (10, 12, 1.25),
+        (12, 13, 1.40),
+        (13, 14, 1.50),
+        (14, 15, 1.35),
+        (15, 17, 1.55),    # 15-16 i 16-17 (tier-1 GPS blended w krzywej)
+        (17, 18, 1.25),    # wariant B (doc-curve 1.30 → ściągnięte)
+        (18, 19, 1.25),    # wariant B (doc-curve 1.35 → ściągnięte)
+        (19, 20, 1.25),
+        (20, 21, 1.10),
+        (21, 24, 1.05),
     ],
     # V3.27 Bug X fix (2026-04-25 wieczór): split weekend → saturday/sunday.
     # Pre-fix: weekend=1.0 flat całą dobę → matrix=raw OSRM free-flow w sobotni
