@@ -85,6 +85,18 @@ ENABLE_PLAN_FOR_ACTUAL_BAG = os.environ.get(
 # Powyżej tylu zleceń w worku → skip (za dużo wywołań OSRM × sweep designacji w
 # oknie oneshot 120s); apka degraduje do fallback_nn jak dotychczas.
 PLAN_FOR_ACTUAL_BAG_MAX = int(os.environ.get("PLAN_FOR_ACTUAL_BAG_MAX", "5"))
+# Regeneracja planu BLISKO odbioru. Plan workowy generowany ~2h przed odbiorem i
+# zamrażany (zero churn) front-loaduje odbiory: cel świeżości (R6 soft deadline)
+# liczony względem „teraz" 2h wcześniej jest za luźny, by gryźć. Gdy najwcześniejszy
+# nieodebrany odbiór wchodzi w to okno → odśwież plan, by cel liczył się względem
+# czasu bliskiego wykonania (kurier dostaje trasę przeplataną, nie front-load).
+# Diagnoza 2026-06-05 (replay: 84→12 naruszeń R6 na dzisiejszych workach).
+ENABLE_PLAN_REGEN_NEAR_PICKUP = os.environ.get(
+    "ENABLE_PLAN_REGEN_NEAR_PICKUP", "1"
+) == "1"
+PLAN_REGEN_NEAR_PICKUP_WINDOW_MIN = float(
+    os.environ.get("PLAN_REGEN_NEAR_PICKUP_WINDOW_MIN", "45")
+)
 ACTIVE_STATUSES = frozenset({"assigned", "picked_up"})
 
 TERMINAL_STATUSES = frozenset({"delivered", "cancelled", "returned_to_pool"})
@@ -374,6 +386,35 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     return True
 
 
+def _pickup_approaching(oids: List[str], orders_state: Dict[str, Any],
+                        now: datetime) -> bool:
+    """True gdy najwcześniejszy NIEODEBRANY odbiór w worku jest w oknie
+    PLAN_REGEN_NEAR_PICKUP_WINDOW_MIN od teraz (lub już minął — spóźniony).
+
+    Wtedy plan z pełnym pokryciem warto odświeżyć mimo zero-churn, by cel
+    świeżości liczył się względem czasu bliskiego wykonania. Odbiory daleko w
+    przyszłości (> okno) → False (zachowanie jak dotąd, brak churnu). Brak
+    nieodebranych odbiorów (cały worek picked_up) → False (nic do odświeżenia
+    pod kątem front-loadu odbiorów).
+    """
+    if not ENABLE_PLAN_REGEN_NEAR_PICKUP:
+        return False
+    soonest: Optional[datetime] = None
+    for oid in oids:
+        rec = orders_state.get(oid) or {}
+        if rec.get("status") == "picked_up":
+            continue
+        ck = _parse_dt(rec.get("czas_kuriera_warsaw"))
+        if ck is None:
+            continue
+        if soonest is None or ck < soonest:
+            soonest = ck
+    if soonest is None:
+        return False
+    delta_min = (soonest - now).total_seconds() / 60.0
+    return delta_min <= PLAN_REGEN_NEAR_PICKUP_WINDOW_MIN
+
+
 def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
                     gps_positions: Dict[str, Any], now: datetime,
                     summary: Dict[str, Any]) -> None:
@@ -398,6 +439,7 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
     summary["bag_plans_generated"] = 0
     summary["bag_plans_skipped"] = 0
     summary["bag_plans_partial_regen"] = 0
+    summary["bag_plans_near_pickup_regen"] = 0
     try:
         from dispatch_v2 import route_simulator_v2 as R
     except Exception as e:
@@ -416,14 +458,22 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
     for cid, oids in bags.items():
         existing = plans.get(cid)
         partial = False
+        near_regen = False
         if existing is not None and existing.get("invalidated_at") is None \
                 and existing.get("stops"):
             plan_ids = {str(s.get("order_id"))
                         for s in existing.get("stops", [])
                         if s.get("order_id") is not None}
             if set(oids) <= plan_ids:
-                continue  # plan pokrywa cały worek — nie nadpisuj (zero churn)
-            partial = True  # plan częściowy → regeneruj na pełnym worku
+                # Pełne pokrycie. Normalnie zero churn — ALE gdy odbiory się
+                # zbliżają, odśwież plan, by cel świeżości (R6 soft deadline)
+                # liczył się względem czasu bliskiego wykonania. Bez tego
+                # zamrożony plan sprzed ~2h front-loaduje odbiory.
+                if not _pickup_approaching(oids, orders_state, now):
+                    continue  # odbiory daleko → nie nadpisuj (zero churn)
+                near_regen = True
+            else:
+                partial = True  # plan częściowy → regeneruj na pełnym worku
         try:
             ok = _gen_one_bag_plan(cid, oids, orders_state, gps_positions, now, R)
         except Exception as e:
@@ -434,6 +484,9 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
         if ok and partial:
             summary["bag_plans_partial_regen"] += 1
             _log.info(f"BAG_PLAN_PARTIAL_REGEN cid={cid} bag={len(oids)}")
+        if ok and near_regen:
+            summary["bag_plans_near_pickup_regen"] += 1
+            _log.info(f"BAG_PLAN_NEAR_PICKUP_REGEN cid={cid} bag={len(oids)}")
 
 
 def run_recheck() -> Dict[str, Any]:
