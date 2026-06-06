@@ -72,17 +72,58 @@ def build_query(info):
         return f"{street}, {pc}"
     return street
 
-def geocode_all(addresses):
+# GEO-02 guard (2026-06-06): źródła z RĘCZNIE ustawionymi coords (Adrian) — auto-geokod
+# ich NIGDY nie nadpisuje. Dry-run GEO-02 wykazał 7 takich wpisów (Drtusz-bridge:
+# Dr Tusz/Dentomax/3Giga/Orthdruk/Interpap + Mama Thai Street + Toriko) z PUSTYM street →
+# blind re-geocode zwracał środek Białegostoku (53.1325,23.1688 = śmieć w bbox, guard go
+# nie łapie). Bez tego guardu `--write` zniszczyłby autorytatywne ręczne coords.
+PRESERVE_SOURCE_PREFIXES = ("adrian_manual", "manual_override", "manual")
+
+
+def _is_preserved_source(entry):
+    """True jeśli wpis ma ręcznie ustawione coords (NIGDY nie nadpisuj auto-geokodem)."""
+    src = ((entry or {}).get("source") or "")
+    return any(src.startswith(p) for p in PRESERVE_SOURCE_PREFIXES)
+
+
+def geocode_all(addresses, existing=None):
+    existing = existing or {}
     results = {}
     failed = []
+    preserved = []
     total = len(addresses)
     for i, (aid_str, info) in enumerate(sorted(addresses.items(), key=lambda x: int(x[0])), 1):
         aid = int(aid_str)
+        prev = existing.get(str(aid)) or existing.get(aid)
+        cname = (info.get("company") or (prev or {}).get("company") or "")
+        # GUARD 1: ręczne coords (source=adrian_manual_*/manual_override) — zachowaj 1:1.
+        if _is_preserved_source(prev):
+            results[aid] = dict(prev)
+            preserved.append((aid, cname, prev.get("source"), "manual_source"))
+            log.info(f"[{i}/{total}] {aid} {cname[:30]:30s} PRESERVE (source={prev.get('source')})")
+            continue
         q = build_query(info)
+        # GUARD 2: pusty street → geocode() zwróci środek miasta (śmieć). Nie geokoduj;
+        # zachowaj poprzednie coords jeśli są, inaczej zgłoś jako wymagające ręcznych.
+        if not (q or "").strip():
+            if prev and prev.get("lat") and prev.get("lng"):
+                results[aid] = dict(prev)
+                preserved.append((aid, cname, prev.get("source"), "empty_street_kept_prev"))
+                log.info(f"[{i}/{total}] {aid} {cname[:30]:30s} PRESERVE (pusty street → zachowano poprzednie coords)")
+            else:
+                failed.append((aid, cname, q, "pusty street + brak poprzednich coords — wymaga ręcznych"))
+                log.warning(f"[{i}/{total}] {aid} {cname} SKIP: pusty street, brak fallbacku")
+            continue
         try:
             r = geocode(q)  # zwraca (lat, lon) lub None
             if not r:
-                failed.append((aid, info["company"], q, "empty result"))
+                # GUARD 3: geocode fail → zachowaj poprzednie coords zamiast gubić restaurację.
+                if prev and prev.get("lat") and prev.get("lng"):
+                    results[aid] = dict(prev)
+                    preserved.append((aid, cname, prev.get("source"), "geocode_fail_kept_prev"))
+                    log.warning(f"[{i}/{total}] {aid} {cname} geocode FAIL → zachowano poprzednie coords")
+                else:
+                    failed.append((aid, cname, q, "empty result"))
                 continue
             lat, lon = r
             results[aid] = {
@@ -100,8 +141,8 @@ def geocode_all(addresses):
             }
             log.info(f"[{i}/{total}] {aid} {info['company'][:30]:30s} -> {lat:.6f},{lon:.6f}")
         except Exception as e:
-            failed.append((aid, info["company"], q, str(e)))
-            log.warning(f"[{i}/{total}] {aid} {info['company']} FAIL: {e}")
+            failed.append((aid, cname, q, str(e)))
+            log.warning(f"[{i}/{total}] {aid} {cname} FAIL: {e}")
     # Apply manual overrides (np. budynki z dwoma adresami)
     for aid, override in MANUAL_COORDS_OVERRIDE.items():
         if aid in results:
@@ -113,7 +154,7 @@ def geocode_all(addresses):
             log.info(f"MANUAL OVERRIDE [{aid}] {results[aid]['company']}: {old_ll} -> ({results[aid]['lat']}, {results[aid]['lng']})")
         else:
             log.warning(f"MANUAL_COORDS_OVERRIDE ma [{aid}] ale restauracji nie ma w wynikach geocodingu")
-    return results, failed
+    return results, failed, preserved
 
 def validate(results):
     hard = []; soft = []; outliers = []; low_accuracy = []
@@ -214,7 +255,13 @@ def main():
     addresses = json.loads(IN.read_text())
     log.info(f"Input: {len(addresses)} adresów z {IN}")
 
-    results, failed = geocode_all(addresses)
+    # GEO-02 guard: wczytaj istniejący plik, by chronić ręczne/pusty-street coords.
+    existing = json.loads(OUT.read_text()) if OUT.exists() else {}
+    results, failed, preserved = geocode_all(addresses, existing)
+    if preserved:
+        log.info(f"PRESERVED {len(preserved)} wpisów (ręczne/pusty-street/fail — NIE nadpisane):")
+        for aid, name, src, reason in preserved:
+            log.info(f"  [{aid}] {name} — {reason} (source={src})")
     hard, soft, outliers, low_acc = validate(results)
     blocking = report(results, failed, hard, soft, outliers, low_acc)
 

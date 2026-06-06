@@ -1,0 +1,1230 @@
+{
+  "generated_ts": 1780751564,
+  "n": 68,
+  "rows": [
+    {
+      "address_id": 3,
+      "company": "Retrospekcja",
+      "street": "Wiejska 65",
+      "query": "Wiejska 65, 15-351",
+      "stored": [
+        53.114585,
+        23.147187
+      ],
+      "new": [
+        53.11458529999999,
+        23.147187
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 12,
+      "company": "Naleśniki Jak Smok",
+      "street": "Ul. Lipowa 12",
+      "query": "Ul. Lipowa 12, 15-427",
+      "stored": [
+        53.133299,
+        23.15461
+      ],
+      "new": [
+        53.1332992,
+        23.15461
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 14,
+      "company": "Arsenal Panteon",
+      "street": "ul. Mickiewicza 2",
+      "query": "ul. Mickiewicza 2, 15-222",
+      "stored": [
+        53.130384,
+        23.166466
+      ],
+      "new": [
+        53.1303837,
+        23.1664665
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 17,
+      "company": "Bar Merino",
+      "street": "Grochowa 6",
+      "query": "Grochowa 6, 15-423",
+      "stored": [
+        53.131647,
+        23.150663
+      ],
+      "new": [
+        53.1316467,
+        23.1506632
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 18,
+      "company": "Bar Słoneczny",
+      "street": "Henryka Sienkiewicza 5, Osiedle Waryńskiego, Centrum",
+      "query": "Henryka Sienkiewicza 5, Osiedle Waryńskiego, Centrum",
+      "stored": [
+        53.1332,
+        23.1607
+      ],
+      "new": [
+        53.1333699,
+        23.1609491
+      ],
+      "manual_override": false,
+      "drift_m": 25.2,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 19,
+      "company": "Bar Express",
+      "street": "Marii Skłodowskiej-Curie 4/1, Osiedle Skłodowskiej, Piaski",
+      "query": "Marii Skłodowskiej-Curie 4/1, Osiedle Skłodowskiej, Piaski",
+      "stored": [
+        53.1292,
+        23.1572
+      ],
+      "new": [
+        53.1293461,
+        23.1571993
+      ],
+      "manual_override": false,
+      "drift_m": 16.2,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 24,
+      "company": "Karczma Maciejówka",
+      "street": "WASZYNGTONA 34",
+      "query": "WASZYNGTONA 34, 15-305",
+      "stored": [
+        53.124719,
+        23.151966
+      ],
+      "new": [
+        53.1247195,
+        23.1519664
+      ],
+      "manual_override": false,
+      "drift_m": 0.1,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 27,
+      "company": "Bar Eljot",
+      "street": "Starobojarska 25",
+      "query": "Starobojarska 25, 16-073",
+      "stored": [
+        53.137036,
+        23.169549
+      ],
+      "new": [
+        53.1370362,
+        23.1695492
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 28,
+      "company": "500 stopni",
+      "street": "Nowy Świat 3/U4",
+      "query": "Nowy Świat 3/U4, 15-453",
+      "stored": [
+        53.134316,
+        23.153801
+      ],
+      "new": [
+        53.1343158,
+        23.1538007
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 42,
+      "company": "Rany Julek",
+      "street": "Lipowa 28",
+      "query": "Lipowa 28, 15-453",
+      "stored": [
+        53.134203,
+        23.148828
+      ],
+      "new": [
+        53.13420250000001,
+        23.148828
+      ],
+      "manual_override": false,
+      "drift_m": 0.1,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 53,
+      "company": "Maison du cafe",
+      "street": "Jana Kilińskiego 10",
+      "query": "Jana Kilińskiego 10, 15-089",
+      "stored": [
+        53.132524,
+        23.165949
+      ],
+      "new": [
+        53.1325242,
+        23.1659495
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 60,
+      "company": "Pawilon Towarzyski",
+      "street": "Akademicka 30",
+      "query": "Akademicka 30, 15-267",
+      "stored": [
+        53.12683,
+        23.163572
+      ],
+      "new": [
+        53.1268296,
+        23.1635721
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 64,
+      "company": "Doner Kebab",
+      "street": "Narodowych Sił Zbrojnych 15B",
+      "query": "Narodowych Sił Zbrojnych 15B, 15-690",
+      "stored": [
+        53.149259,
+        23.079658
+      ],
+      "new": [
+        53.1492592,
+        23.0796579
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 66,
+      "company": "Baanko",
+      "street": "Spółdzielcza 8",
+      "query": "Spółdzielcza 8, 15-441",
+      "stored": [
+        53.133558,
+        23.158249
+      ],
+      "new": [
+        53.1335581,
+        23.158249
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 89,
+      "company": "Pani Pierożek",
+      "street": "Waszyngtona 38/lok U3",
+      "query": "Waszyngtona 38/lok U3, 15-304",
+      "stored": [
+        53.124506,
+        23.150954
+      ],
+      "new": [
+        53.12450579999999,
+        23.150954
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 96,
+      "company": "Raj",
+      "street": "Kilińskiego 13",
+      "query": "Kilińskiego 13, 15-089",
+      "stored": [
+        53.1322335,
+        23.1653257
+      ],
+      "new": [
+        53.1322335,
+        23.1653257
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 99,
+      "company": "Sweet Fit & Eat",
+      "street": "Legionowa 30 lok. 6",
+      "query": "Legionowa 30 lok. 6, 15-281",
+      "stored": [
+        53.128252,
+        23.15241
+      ],
+      "new": [
+        53.12825249999999,
+        23.1524095
+      ],
+      "manual_override": false,
+      "drift_m": 0.1,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 106,
+      "company": "Restauracja Kumar's",
+      "street": "Pietkiewicza 2 lok. 1",
+      "query": "Pietkiewicza 2 lok. 1, 15-689",
+      "stored": [
+        53.15441,
+        23.086452
+      ],
+      "new": [
+        53.15441,
+        23.086452
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 114,
+      "company": "350 Stopni KILIŃSKIEGO",
+      "street": "Kilińskiego 7 lok. U1",
+      "query": "Kilińskiego 7 lok. U1, 15-089",
+      "stored": [
+        53.132169,
+        23.166483
+      ],
+      "new": [
+        53.13216910000001,
+        23.1664826
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 122,
+      "company": "Upalna Pizza",
+      "street": "Upalna 19 lok. 5",
+      "query": "Upalna 19 lok. 5, 15-668",
+      "stored": [
+        53.12776,
+        23.098623
+      ],
+      "new": [
+        53.1277596,
+        23.0986234
+      ],
+      "manual_override": false,
+      "drift_m": 0.1,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 131,
+      "company": "Enklawa",
+      "street": "Rynek Kościuszki 26a",
+      "query": "Rynek Kościuszki 26a, 15-426",
+      "stored": [
+        53.132791,
+        23.158297
+      ],
+      "new": [
+        53.132791,
+        23.1582969
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 133,
+      "company": "Trattoria Angelino Pasta Wino",
+      "street": "Waszyngtona 26A u1",
+      "query": "Waszyngtona 26A u1, 15-305",
+      "stored": [
+        53.126296,
+        23.153383
+      ],
+      "new": [
+        53.1262963,
+        23.1533834
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 136,
+      "company": "Sushi Rany Julek & Pizza Majstry",
+      "street": "Lipowa 14",
+      "query": "Lipowa 14, 15-427",
+      "stored": [
+        53.133384,
+        23.15401
+      ],
+      "new": [
+        53.133384,
+        23.15401
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 138,
+      "company": "Grill Kebab",
+      "street": "Jana Kilińskiego 12/lok 1U",
+      "query": "Jana Kilińskiego 12/lok 1U, 15-089",
+      "stored": [
+        53.132464,
+        23.165517
+      ],
+      "new": [
+        53.1324635,
+        23.1655174
+      ],
+      "manual_override": false,
+      "drift_m": 0.1,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 145,
+      "company": "Chinatown Bistro",
+      "street": "Kaczorowskiego 14/lok U7",
+      "query": "Kaczorowskiego 14/lok U7, 15-375",
+      "stored": [
+        53.121879,
+        23.146168
+      ],
+      "new": [
+        53.1218793,
+        23.1461676
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 147,
+      "company": "Hacienda Pizza",
+      "street": "Szarych Szeregów 2, Leśna Dolina",
+      "query": "Szarych Szeregów 2, Leśna Dolina",
+      "stored": [
+        53.1308,
+        23.0915
+      ],
+      "new": [
+        53.13095089999999,
+        23.0914774
+      ],
+      "manual_override": false,
+      "drift_m": 16.8,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 149,
+      "company": "Piwo Kaczka Sushi",
+      "street": "Węglowa 1 (MUZEUM)",
+      "query": "Węglowa 1 (MUZEUM), 15-062",
+      "stored": [
+        53.143468,
+        23.175526
+      ],
+      "new": [
+        53.1434679,
+        23.175526
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 154,
+      "company": "Mama Thai Bistro",
+      "street": "Kopernika 2",
+      "query": "Kopernika 2, 15-740",
+      "stored": [
+        53.121879,
+        23.146168
+      ],
+      "new": [
+        53.1260884,
+        23.1335986
+      ],
+      "manual_override": true,
+      "drift_m": 960.5,
+      "new_in_bbox": true,
+      "flag": "MANUAL_OVERRIDE (drift oczekiwany)"
+    },
+    {
+      "address_id": 160,
+      "company": "Halva",
+      "street": "Rycerska 1",
+      "query": "Rycerska 1, 15-157",
+      "stored": [
+        53.161415,
+        23.199078
+      ],
+      "new": [
+        53.161415,
+        23.199078
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 162,
+      "company": "Ramen Base",
+      "street": "Sienkiewicza 26 u.1",
+      "query": "Sienkiewicza 26 u.1",
+      "stored": [
+        53.134481,
+        23.16308
+      ],
+      "new": [
+        53.1344811,
+        23.1630797
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 164,
+      "company": "Aztek Tex-Mex",
+      "street": "Jana Pawła II 47",
+      "query": "Jana Pawła II 47, 15-001",
+      "stored": [
+        53.137832,
+        23.116555
+      ],
+      "new": [
+        53.1378318,
+        23.1165553
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 165,
+      "company": "Rukola Sienkiewicza",
+      "street": "Sienkiewicza 52",
+      "query": "Sienkiewicza 52",
+      "stored": [
+        53.137686,
+        23.168566
+      ],
+      "new": [
+        53.1376857,
+        23.1685659
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 166,
+      "company": "Rukola Kaczorowskiego",
+      "street": "Kaczorowskiego 14 lok.13",
+      "query": "Kaczorowskiego 14 lok.13",
+      "stored": [
+        53.121879,
+        23.146168
+      ],
+      "new": [
+        53.1218793,
+        23.1461676
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 168,
+      "company": "Pizza Dealer",
+      "street": "Rynek Kościuszki 28/1",
+      "query": "Rynek Kościuszki 28/1, 15-426",
+      "stored": [
+        53.132815,
+        23.158044
+      ],
+      "new": [
+        53.1328153,
+        23.158044
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 169,
+      "company": "Kebab Król",
+      "street": "Rynek Kościuszki 30",
+      "query": "Rynek Kościuszki 30, 15-426",
+      "stored": [
+        53.132744,
+        23.157961
+      ],
+      "new": [
+        53.1327437,
+        23.1579607
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 170,
+      "company": "Zapiecek",
+      "street": "Rynek Kościuszki 13/8u",
+      "query": "Rynek Kościuszki 13/8u, 15-426",
+      "stored": [
+        53.131889,
+        23.158576
+      ],
+      "new": [
+        53.1318895,
+        23.1585764
+      ],
+      "manual_override": false,
+      "drift_m": 0.1,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 171,
+      "company": "Kurra",
+      "street": "Nowy Świat 2, Osiedle Waryńskiego, Centrum",
+      "query": "Nowy Świat 2, Osiedle Waryńskiego, Centrum",
+      "stored": [
+        53.134,
+        23.1542
+      ],
+      "new": [
+        53.13362919999999,
+        23.1539604
+      ],
+      "manual_override": false,
+      "drift_m": 44.2,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 172,
+      "company": "Paradiso",
+      "street": "Skłodowskiej-Curie 19",
+      "query": "Skłodowskiej-Curie 19",
+      "stored": [
+        53.126106,
+        23.162215
+      ],
+      "new": [
+        53.126106,
+        23.162215
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 173,
+      "company": "Gęba w Niebie",
+      "street": "Świętojańska 21",
+      "query": "Świętojańska 21",
+      "stored": [
+        53.124318,
+        23.165667
+      ],
+      "new": [
+        53.1243178,
+        23.165667
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 175,
+      "company": "Szklanki Talerze",
+      "street": "Rynek Kościuszki 32, Centrum",
+      "query": "Rynek Kościuszki 32, Centrum",
+      "stored": [
+        53.1328,
+        23.1575
+      ],
+      "new": [
+        53.13278649999999,
+        23.1577497
+      ],
+      "manual_override": false,
+      "drift_m": 16.7,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 177,
+      "company": "Trzy Po Trzy Mickiewicza",
+      "street": "Mickiewicza 47",
+      "query": "Mickiewicza 47",
+      "stored": [
+        53.119819,
+        23.175192
+      ],
+      "new": [
+        53.119819,
+        23.175192
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 180,
+      "company": "Chicago Pizza",
+      "street": "Marii Skłodowskiej-Curie 3/U1",
+      "query": "Marii Skłodowskiej-Curie 3/U1, 15-094",
+      "stored": [
+        53.129405,
+        23.158005
+      ],
+      "new": [
+        53.1294986,
+        23.157865
+      ],
+      "manual_override": false,
+      "drift_m": 14.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 181,
+      "company": "Pan Schabowy",
+      "street": "Hugo Kołłątaja, Osiedle TBS, Bacieczki",
+      "query": "Hugo Kołłątaja, Osiedle TBS, Bacieczki",
+      "stored": [
+        53.1529,
+        23.0879
+      ],
+      "new": [
+        53.1518248,
+        23.0891519
+      ],
+      "manual_override": false,
+      "drift_m": 145.8,
+      "new_in_bbox": true,
+      "flag": "drift 50-200m"
+    },
+    {
+      "address_id": 183,
+      "company": "Farina",
+      "street": "ul. Jurowiecka (street center approx)",
+      "query": "ul. Jurowiecka (street center approx)",
+      "stored": [
+        53.1391,
+        23.1607
+      ],
+      "new": [
+        53.1385208,
+        23.1610878
+      ],
+      "manual_override": false,
+      "drift_m": 69.4,
+      "new_in_bbox": true,
+      "flag": "drift 50-200m"
+    },
+    {
+      "address_id": 186,
+      "company": "Restauracja Sioux",
+      "street": "Rynek Kościuszki 32",
+      "query": "Rynek Kościuszki 32, 15-426",
+      "stored": [
+        53.132786,
+        23.15775
+      ],
+      "new": [
+        53.13278649999999,
+        23.1577497
+      ],
+      "manual_override": false,
+      "drift_m": 0.1,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 187,
+      "company": "Chinkali u Nany",
+      "street": "Sienkiewicza 81/3/u12",
+      "query": "Sienkiewicza 81/3/u12, 15-003",
+      "stored": [
+        53.140716,
+        23.17265
+      ],
+      "new": [
+        53.1407162,
+        23.1726498
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 190,
+      "company": "Trzy Po Trzy Sienkiewicza",
+      "street": "Sienkiewicza 24",
+      "query": "Sienkiewicza 24",
+      "stored": [
+        53.134319,
+        23.162849
+      ],
+      "new": [
+        53.1343188,
+        23.1628489
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 191,
+      "company": "Goodboy",
+      "street": "Wiejska 55 lok u1",
+      "query": "Wiejska 55 lok u1, 15-351",
+      "stored": [
+        53.115336,
+        23.14607
+      ],
+      "new": [
+        53.11533619999999,
+        23.1460702
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 196,
+      "company": "Pruszynka Restauracja",
+      "street": "Jarzębinowa 2A/1",
+      "query": "Jarzębinowa 2A/1",
+      "stored": [
+        53.151179,
+        23.111787
+      ],
+      "new": [
+        53.15117919999999,
+        23.111787
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 198,
+      "company": "Ogniomistrz",
+      "street": "Gruntowa 9A",
+      "query": "Gruntowa 9A",
+      "stored": [
+        53.135506,
+        23.124808
+      ],
+      "new": [
+        53.135506,
+        23.124808
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 199,
+      "company": "Pizzeria 105 Galeria Biała",
+      "street": "Czesława Miłosza 2",
+      "query": "Czesława Miłosza 2, 15-265",
+      "stored": [
+        53.121494,
+        23.176691
+      ],
+      "new": [
+        53.1214944,
+        23.1766913
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 205,
+      "company": "Czebureki",
+      "street": "Jurowiecka 1",
+      "query": "Jurowiecka 1, 15-001",
+      "stored": [
+        53.136543,
+        23.163326
+      ],
+      "new": [
+        53.13654289999999,
+        23.1633264
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 207,
+      "company": "HoNoTu!",
+      "street": "Pietkiewicza 4/U1",
+      "query": "Pietkiewicza 4/U1, 15-687",
+      "stored": [
+        53.153458,
+        23.083617
+      ],
+      "new": [
+        53.1534577,
+        23.0836172
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 210,
+      "company": "Epic Pizza",
+      "street": "Piasta 35",
+      "query": "Piasta 35, 15-044",
+      "stored": [
+        53.134923,
+        23.184423
+      ],
+      "new": [
+        53.134923,
+        23.1844228
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 212,
+      "company": "Pablos kebab",
+      "street": "Gajowa 61B",
+      "query": "Gajowa 61B",
+      "stored": [
+        53.153771,
+        23.12073
+      ],
+      "new": [
+        53.15377059999999,
+        23.1207302
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 214,
+      "company": "Galeria Biała 500 Stopni",
+      "street": "Miłosza 2",
+      "query": "Miłosza 2, 15-265",
+      "stored": [
+        53.121494,
+        23.176691
+      ],
+      "new": [
+        53.1214944,
+        23.1766913
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 215,
+      "company": "Miejska Miska",
+      "street": "Legionowa 6",
+      "query": "Legionowa 6, 15-099",
+      "stored": [
+        53.131298,
+        23.161298
+      ],
+      "new": [
+        53.131298,
+        23.1612978
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 218,
+      "company": "Ziemniaczek",
+      "street": "Lipowa 16, Osiedle Waryńskiego, Centrum",
+      "query": "Lipowa 16, Osiedle Waryńskiego, Centrum",
+      "stored": [
+        53.1336,
+        23.1526
+      ],
+      "new": [
+        53.1338916,
+        23.1535534
+      ],
+      "manual_override": false,
+      "drift_m": 71.4,
+      "new_in_bbox": true,
+      "flag": "drift 50-200m"
+    },
+    {
+      "address_id": 222,
+      "company": "Trójkąty i Kwadraty",
+      "street": "Sienkiewicza 28",
+      "query": "Sienkiewicza 28",
+      "stored": [
+        53.135932,
+        23.16602
+      ],
+      "new": [
+        53.1359317,
+        23.1660203
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 224,
+      "company": "Gym Fit Food",
+      "street": "Transportowa 2D/U7",
+      "query": "Transportowa 2D/U7, 15-399",
+      "stored": [
+        53.113643,
+        23.127595
+      ],
+      "new": [
+        53.1136431,
+        23.1275949
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 226,
+      "company": "Eat Point",
+      "street": "Czesława Miłosza 2",
+      "query": "Czesława Miłosza 2",
+      "stored": [
+        53.122795,
+        23.178359
+      ],
+      "new": [
+        53.1227951,
+        23.1783591
+      ],
+      "manual_override": false,
+      "drift_m": 0.0,
+      "new_in_bbox": true,
+      "flag": "ok (<50m)"
+    },
+    {
+      "address_id": 230,
+      "company": "Mama Thai Street",
+      "street": "",
+      "query": "",
+      "stored": [
+        53.15395609205138,
+        23.186294697149975
+      ],
+      "new": [
+        53.13248859999999,
+        23.1688403
+      ],
+      "manual_override": false,
+      "drift_m": 2655.8,
+      "new_in_bbox": true,
+      "flag": "DRIFT>=200m"
+    },
+    {
+      "address_id": 231,
+      "company": "Toriko",
+      "street": "",
+      "query": "",
+      "stored": [
+        53.13385642342763,
+        23.152109796786114
+      ],
+      "new": [
+        53.13248859999999,
+        23.1688403
+      ],
+      "manual_override": false,
+      "drift_m": 1126.4,
+      "new_in_bbox": true,
+      "flag": "DRIFT>=200m"
+    },
+    {
+      "address_id": 232,
+      "company": "Dr Tusz",
+      "street": "",
+      "query": "",
+      "stored": [
+        53.13133412617732,
+        23.138804139114693
+      ],
+      "new": [
+        53.13248859999999,
+        23.1688403
+      ],
+      "manual_override": false,
+      "drift_m": 2007.9,
+      "new_in_bbox": true,
+      "flag": "DRIFT>=200m"
+    },
+    {
+      "address_id": 233,
+      "company": "Dentomax",
+      "street": "",
+      "query": "",
+      "stored": [
+        53.12403346904887,
+        23.188693642813146
+      ],
+      "new": [
+        53.13248859999999,
+        23.1688403
+      ],
+      "manual_override": false,
+      "drift_m": 1624.3,
+      "new_in_bbox": true,
+      "flag": "DRIFT>=200m"
+    },
+    {
+      "address_id": 234,
+      "company": "3Giga",
+      "street": "",
+      "query": "",
+      "stored": [
+        53.130872670137826,
+        23.119113979676502
+      ],
+      "new": [
+        53.13248859999999,
+        23.1688403
+      ],
+      "manual_override": false,
+      "drift_m": 3322.3,
+      "new_in_bbox": true,
+      "flag": "DRIFT>=200m"
+    },
+    {
+      "address_id": 235,
+      "company": "Interpap Polska",
+      "street": "",
+      "query": "",
+      "stored": [
+        53.134466022057914,
+        23.140701394936702
+      ],
+      "new": [
+        53.13248859999999,
+        23.1688403
+      ],
+      "manual_override": false,
+      "drift_m": 1890.0,
+      "new_in_bbox": true,
+      "flag": "DRIFT>=200m"
+    },
+    {
+      "address_id": 236,
+      "company": "Orthdruk",
+      "street": "",
+      "query": "",
+      "stored": [
+        53.11844667057382,
+        23.12634018144251
+      ],
+      "new": [
+        53.13248859999999,
+        23.1688403
+      ],
+      "manual_override": false,
+      "drift_m": 3237.2,
+      "new_in_bbox": true,
+      "flag": "DRIFT>=200m"
+    }
+  ]
+}
