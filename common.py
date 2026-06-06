@@ -1997,6 +1997,14 @@ V319H_GUARD_COSINE_THRESHOLD = float(_os.environ.get(
 # SELECTION_VETO_SHADOW w shadow_decisions.jsonl przez kilka peaków.
 ENABLE_SELECTION_VETO_SHADOW = _os.environ.get(
     "ENABLE_SELECTION_VETO_SHADOW", "0") == "1"
+# R6BREACH-01 / GATE-02 SHADOW (2026-06-05): post-selekcyjny guard R6. Gdy LIVE
+# zwycięzca łamie 35-min (r6_max_bag_time_min > BAG_TIME_HARD_MAX_MIN) a istnieje
+# feasible kandydat ≤35 → guard wskazałby najlepszy-score czysty. SHADOW — NIGDY nie
+# mutuje feasible/best (zero zmiany zachowania), tylko serializuje rozjazd → grep
+# R6_BREACH_GUARD_SHADOW. Flaga default OFF (flip po kalibracji). Konsument:
+# dispatch_pipeline._assess_order_impl (getattr C, default False).
+ENABLE_R6_BREACH_GUARD_SHADOW = _os.environ.get(
+    "ENABLE_R6_BREACH_GUARD_SHADOW", "0") == "1"
 # Live winner z cos < BLOCK = „mocno przeciw-kierunkowy" → kandydat do veta.
 SELECTION_VETO_COS_BLOCK = float(_os.environ.get(
     "SELECTION_VETO_COS_BLOCK", "-0.5"))

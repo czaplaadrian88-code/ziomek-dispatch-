@@ -589,6 +589,41 @@ def _selection_veto_winner(feasible, cos_block: float, cos_ok: float,
     return veto, True, "veto_applied"
 
 
+def _r6_breach_guard_winner(feasible, hard_max_min: float):
+    """R6BREACH-01 / GATE-02 SHADOW (2026-06-05) — czysty, testowalny.
+
+    Gdy LIVE zwycięzca (feasible[0]) ŁAMIE R6 (r6_max_bag_time_min > hard_max_min,
+    35-min hard od odbioru do dostawy) A istnieje feasible kandydat „czysty"
+    (r6_max_bag_time_min <= hard_max_min) → zwróć najlepszy-score czysty. Modeluje
+    R-35MIN-MAX: „nie proponuj worka łamiącego 35 min gdy istnieje feasible
+    alternatywa ≤35" (oddaj solo / mniejszy worek / odrocz odbiór — NIE KOORD-cisza).
+
+    Zwraca (guard_winner, changed: bool, reason: str, n_clean_alts: int). SHADOW —
+    caller NIGDY nie mutuje `feasible`/`best` na tej podstawie (zero zmiany zachowania).
+    """
+    if not feasible:
+        return None, False, "empty_pool", 0
+    live = feasible[0]
+    lm = (live.metrics if (hasattr(live, "metrics") and live.metrics) else {}) or {}
+    lr6 = lm.get("r6_max_bag_time_min")
+    if not isinstance(lr6, (int, float)) or lr6 <= hard_max_min:
+        return live, False, "live_within_r6", 0
+    clean = []
+    for c in feasible:
+        if c is live:
+            continue
+        m = (c.metrics if (hasattr(c, "metrics") and c.metrics) else {}) or {}
+        cr6 = m.get("r6_max_bag_time_min")
+        # „czysty" = znany r6 ≤ hard_max. None (brak sygnału R6) NIE liczy się jako
+        # bezpieczny — konserwatywnie nie swapujemy na nieznane breach-ryzyko.
+        if isinstance(cr6, (int, float)) and cr6 <= hard_max_min:
+            clean.append(c)
+    if not clean:
+        return live, False, "no_clean_alt", 0
+    guard = max(clean, key=lambda c: (getattr(c, "score", 0.0) or 0.0))
+    return guard, True, "r6_guard_applied", len(clean)
+
+
 def _r6_soft_penalty(r6_max_bag_time, soft_min: float, per_min: float,
                      danger_on: bool, danger_min: float, danger_per_min: float):
     """R6-soft kara (Fix #6 2026-05-31) — liniowa nad soft_min + EKSTRA stroma w danger zone.
@@ -3581,6 +3616,7 @@ def _assess_order_impl(
     late_pickup_shadow = None
     r6_danger_shadow = None  # Fix #6: rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6
     selection_veto_shadow = None  # 2026-06-01: veto kierunkowe — shadow only
+    r6_breach_guard_shadow = None  # 2026-06-05: GATE-02 post-selekcyjny guard R6 — shadow only
     if getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False) and feasible:
         _lp_tier = _late_pickup_tier  # module-level (testowalny)
         _orig_order = {id(c): i for i, c in enumerate(feasible)}
@@ -3768,6 +3804,61 @@ def _assess_order_impl(
             log.warning(
                 f"SELECTION_VETO_SHADOW build fail order={order_id}: {_sv_e}")
             selection_veto_shadow = None
+
+    # R6BREACH-01 / GATE-02 SHADOW (2026-06-05) — liczy „kogo wskazałby post-selekcyjny
+    # guard R6" OBOK live (feasible[0] po wszystkich passach). Gdy live zwycięzca łamie
+    # 35-min (r6_max_bag_time_min > hard) a istnieje feasible kandydat ≤35 → guard
+    # wskazałby najlepszy-score czysty. SHADOW: NIGDY nie mutuje feasible/best → zero
+    # zmiany zachowania. Serializowane top-level → grep R6_BREACH_GUARD_SHADOW. Flaga OFF.
+    if getattr(C, "ENABLE_R6_BREACH_GUARD_SHADOW", False) and feasible:
+        try:
+            _r6_hard = float(getattr(C, "BAG_TIME_HARD_MAX_MIN", 35.0))
+            _rg_win, _rg_ch, _rg_reason, _rg_nclean = _r6_breach_guard_winner(
+                feasible, _r6_hard)
+            _rg_live = feasible[0]
+            _rg_lm = (_rg_live.metrics or {}) if hasattr(_rg_live, "metrics") else {}
+            if _rg_ch and _rg_win is not None:
+                _rg_gm = (_rg_win.metrics or {}) if hasattr(_rg_win, "metrics") else {}
+                _rg_live_score = round(float(getattr(_rg_live, "score", 0.0) or 0.0), 2)
+                _rg_guard_score = round(float(getattr(_rg_win, "score", 0.0) or 0.0), 2)
+                r6_breach_guard_shadow = {
+                    "changed": True,
+                    "reason": _rg_reason,
+                    "hard_max_min": _r6_hard,
+                    "n_clean_alts": _rg_nclean,
+                    "live_winner_cid": str(getattr(_rg_live, "courier_id", "")),
+                    "live_winner_name": getattr(_rg_live, "name", None),
+                    "live_winner_score": _rg_live_score,
+                    "live_winner_r6_max_bag_time_min": _rg_lm.get("r6_max_bag_time_min"),
+                    "live_winner_bag_size": _rg_lm.get("r6_bag_size"),
+                    "live_winner_pos_source": _rg_lm.get("pos_source"),
+                    "guard_winner_cid": str(getattr(_rg_win, "courier_id", "")),
+                    "guard_winner_name": getattr(_rg_win, "name", None),
+                    "guard_winner_score": _rg_guard_score,
+                    "guard_winner_r6_max_bag_time_min": _rg_gm.get("r6_max_bag_time_min"),
+                    "guard_winner_bag_size": _rg_gm.get("r6_bag_size"),
+                    "guard_winner_pos_source": _rg_gm.get("pos_source"),
+                    "score_gap": round(_rg_live_score - _rg_guard_score, 2),
+                }
+                log.info(
+                    f"R6_BREACH_GUARD_SHADOW order={order_id} "
+                    f"live={_rg_live.courier_id}(r6={_rg_lm.get('r6_max_bag_time_min')},"
+                    f"bag={_rg_lm.get('r6_bag_size')},score={_rg_live_score}) "
+                    f"guard={_rg_win.courier_id}(r6={_rg_gm.get('r6_max_bag_time_min')},"
+                    f"bag={_rg_gm.get('r6_bag_size')},score={_rg_guard_score}) "
+                    f"gap={round(_rg_live_score - _rg_guard_score, 2)} nclean={_rg_nclean}"
+                )
+            else:
+                r6_breach_guard_shadow = {
+                    "changed": False,
+                    "reason": _rg_reason,
+                    "hard_max_min": _r6_hard,
+                    "live_winner_r6_max_bag_time_min": _rg_lm.get("r6_max_bag_time_min"),
+                }
+        except Exception as _rg_e:
+            log.warning(
+                f"R6_BREACH_GUARD_SHADOW build fail order={order_id}: {_rg_e}")
+            r6_breach_guard_shadow = None
 
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]
@@ -4119,6 +4210,8 @@ def _assess_order_impl(
         _result_pf.late_pickup_shadow = late_pickup_shadow
         # Fix #6 (2026-05-31): rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6 (shadow).
         _result_pf.r6_danger_shadow = r6_danger_shadow
+        # GATE-02 (2026-06-05): post-selekcyjny guard R6 — kogo wskazałby guard (shadow).
+        _result_pf.r6_breach_guard_shadow = r6_breach_guard_shadow
         _classify_and_set_auto_route(_result_pf, fleet_snapshot, order_event, now=now)
         return _result_pf
 
