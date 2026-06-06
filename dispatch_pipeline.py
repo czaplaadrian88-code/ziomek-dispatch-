@@ -551,6 +551,38 @@ def _late_pickup_score_first_key(c, tier: int, orig_rank: int,
     return (1 if tier == 2 else 0, bucket, -adj, orig_rank)
 
 
+def _best_effort_sort_key(c):
+    """FEAS-01 (2026-06-06): klucz sortu ścieżki best_effort (feasible=0) — spójny z
+    główną selekcją. Czysta funkcja (testowalna).
+
+    PRIMARY = R6 per-order violations + plan.sla_violations (best_effort to już
+    kompromis SLA, ale NIE proponuj kandydata GORSZEGO na R6 niż inny w puli — ta
+    sama prymarność co stary klucz). Dalej bucket pos_source (informed=0 / other=1 /
+    blind+empty|pre_shift=2) — informed z REALNĄ pozycją bije no_gps z FIKCYJNYM
+    BIALYSTOK_CENTER (mirror _demote_blind_empty + _late_pickup_score_first_key z
+    głównej ścieżki). Potem -score, na końcu total_duration_min (stabilny tie-break).
+
+    r6_pov=99 gdy brak metrics (mirror lokalnego _r6_pov_count — kandydat bez danych
+    na dół, NIE na górę).
+    """
+    if not (hasattr(c, "metrics") and c.metrics):
+        r6_pov = 99
+    else:
+        _pov = c.metrics.get("r6_per_order_violations")
+        r6_pov = len(_pov) if _pov else 0
+    if _is_informed_cand(c):
+        bucket = 0
+    elif _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
+        bucket = 2
+    else:
+        bucket = 1
+    plan = c.plan
+    sla = getattr(plan, "sla_violations", 0) or 0
+    dur = getattr(plan, "total_duration_min", 0.0) or 0.0
+    score = getattr(c, "score", 0.0) or 0.0
+    return (r6_pov, sla, bucket, -score, dur)
+
+
 def _selection_veto_winner(feasible, cos_block: float, cos_ok: float,
                            informed_only: bool):
     """SELECTION VETO SHADOW (2026-06-01) — czysty, testowalny.
@@ -4245,7 +4277,15 @@ def _assess_order_impl(
     def _intra_gap_reject(c):
         return bool((c.metrics or {}).get("intra_rest_gap_hard_reject"))
     with_plan = [c for c in candidates if c.plan is not None and not _intra_gap_reject(c)]
-    with_plan.sort(key=lambda c: (_r6_pov_count(c), c.plan.sla_violations, c.plan.total_duration_min))
+    # FEAS-01 / SEL-01 (2026-06-06): best_effort sortuje z bucketem pos_source + score
+    # (mirror głównej selekcji) — bez tego no_gps z fikcyjnym BIALYSTOK_CENTER bił
+    # informed kuriera z obrzeży. R6/SLA zostają PRIMARY (identycznie jak stary klucz),
+    # bucket+score rozstrzygają WŚRÓD równych na R6/SLA. Kill-switch
+    # ENABLE_BEST_EFFORT_POS_SOURCE_KEY=false (flags.json) → stary klucz.
+    if C.flag("ENABLE_BEST_EFFORT_POS_SOURCE_KEY", default=True):
+        with_plan.sort(key=_best_effort_sort_key)
+    else:
+        with_plan.sort(key=lambda c: (_r6_pov_count(c), c.plan.sla_violations, c.plan.total_duration_min))
     if with_plan:
         best = with_plan[0]
         best.best_effort = True
