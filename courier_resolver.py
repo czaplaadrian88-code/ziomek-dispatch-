@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Tuple
 
 from dispatch_v2.common import (
     setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag,
+    coords_in_bialystok_bbox,
     ENABLE_F4_COURIER_POS_PICKUP_PROXY,
     ENABLE_F4_COURIER_POS_INTERP,
 )
@@ -582,11 +583,40 @@ def build_fleet_snapshot(
             if gps_dt:
                 age_min = (now_utc - gps_dt).total_seconds() / 60.0
                 if age_min < GPS_FRESHNESS_MIN:
-                    cs.pos = (float(gps_entry["lat"]), float(gps_entry["lon"]))
-                    cs.pos_source = "gps"
-                    cs.pos_age_min = age_min
-                    fleet[kid] = cs
-                    continue
+                    try:
+                        _glat = float(gps_entry["lat"])
+                        _glon = float(gps_entry["lon"])
+                    except (TypeError, ValueError, KeyError):
+                        _glat = _glon = None
+                    # FAIL-05 (audyt 2026-06-03): sanity-bbox świeżego GPS PRZED zaufaniem
+                    # mu jako pos_source="gps" (najwyższy priorytet pozycji). Skażony fix
+                    # ((0,0), NaN, spike poza region) wchodził z najwyższym zaufaniem →
+                    # zatruwał fleet_avg/scoring/OSRM (Lekcja #140: OSRM snapuje (0,0) na
+                    # krawędź ekstraktu i zwraca code:Ok z ~117 min legiem → fałszywa
+                    # geometria). Poza bboxem → NIE ufaj GPS; fall-through do bag/recent/
+                    # no_gps (krok 2-4), NIGDY sentinel (0,0). Bbox HOJNY (±55km,
+                    # coords_in_bialystok_bbox) → odrzuca śmieci, NIE krawędzie miasta
+                    # (Wasilków/Supraśl/Łapy w środku). Parse-guard (try) zawsze ON —
+                    # ortogonalna ochrona przed crashem na złym lat/lon. Kill-switch bbox:
+                    # ENABLE_GPS_BBOX_GUARD=false (flags.json hot-reload).
+                    _bbox_on = flag("ENABLE_GPS_BBOX_GUARD", default=True)
+                    _gps_ok = (_glat is not None) and (
+                        not _bbox_on or coords_in_bialystok_bbox((_glat, _glon)))
+                    if _gps_ok:
+                        cs.pos = (_glat, _glon)
+                        cs.pos_source = "gps"
+                        cs.pos_age_min = age_min
+                        fleet[kid] = cs
+                        continue
+                    # świeży GPS odrzucony (poza bbox / nieparsowalny) → log raz/kid,
+                    # fall-through do bag/recent/no_gps (NIGDY (0,0)).
+                    _seen = getattr(build_fleet_snapshot, "_warned_gps_bbox", set())
+                    if kid not in _seen and len(_seen) < 50:
+                        _log.warning(
+                            f"GPS_BBOX_REJECT kid={kid} fix=({_glat},{_glon}) "
+                            f"age={age_min:.1f}min → fall-through (nie ufam GPS jako pos)")
+                        _seen.add(kid)
+                        build_fleet_snapshot._warned_gps_bbox = _seen
 
         # 2. AKTYWNY BAG priorytet (picked_up > assigned, najnowszy wygrywa)
         #    picked_up -> F4 Krok 1: pickup_coords (kurier BYL przy restauracji
