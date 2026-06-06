@@ -456,6 +456,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         "auto_route": getattr(result, "auto_route", "ACK"),
         "auto_route_reason": getattr(result, "auto_route_reason", ""),
         "auto_route_context": getattr(result, "auto_route_context", {}) or {},
+        # FAIL-04 (2026-06-06): shadow-first prep-variance anomaly (slepa wiara w
+        # prep panelu). None gdy brak anomalii lub flaga OFF. NIE wplywa na decyzje.
+        "prep_variance_anomaly": getattr(result, "prep_variance_anomaly", None),
         # MP-#13 (2026-05-08): L3 caller propagation. degraded_osrm True gdy
         # osrm_client.is_degraded() przy entry do assess_order. Telegram_approver
         # format_proposal może hint'ować "⚠ OSRM degraded" gdy True. Snapshots

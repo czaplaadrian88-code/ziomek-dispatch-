@@ -1286,6 +1286,140 @@ class PipelineResult:
     # Snapshot diagnostic counters at assess_order time. Defaults to None (no degradation).
     osrm_cache_age_s: Optional[float] = None
     osrm_degraded_since_ts: Optional[float] = None
+    # FAIL-04 (2026-06-06): shadow-first "slepa wiara w prep" sygnal. None gdy brak
+    # anomalii lub flaga OFF. Dict {restaurant, declared_prep_min, empirical_median_min,
+    # empirical_p90_min, gap_min, threshold_min, chronically_late}. Read-only consumption
+    # w shadow_dispatcher._serialize_result. NIE wplywa na pickup_ready_at/score/verdict.
+    prep_variance_anomaly: Optional[Dict[str, Any]] = None
+
+
+# ─── FAIL-04: prep-variance anomaly (A1 anomaly block, shadow-first) ───
+# Empiryczne zrodlo: restaurant_meta.json (te same dane co daily_briefing R17/R19).
+# F1.8g LANDMINE: prep_variance NIE wolno doliczac do pickup_ready_at (zawyzalo
+# wyswietlany czas = bug wg Adriana). Tu uzywamy go TYLKO jako sygnal alertu/shadow.
+RESTAURANT_META_PATH = "/root/.openclaw/workspace/dispatch_state/restaurant_meta.json"
+_PREP_META_CACHE: Dict[str, Any] = {"mtime": None, "data": None, "index": None}
+
+
+def _load_restaurant_meta_cached() -> Optional[dict]:
+    """mtime-cached load restaurant_meta.json. Fail-soft -> None (zero raise)."""
+    try:
+        mt = os.path.getmtime(RESTAURANT_META_PATH)
+        if _PREP_META_CACHE["mtime"] != mt:
+            with open(RESTAURANT_META_PATH, encoding="utf-8") as fh:
+                data = json.load(fh)
+            rests = (data.get("restaurants") or {}) if isinstance(data, dict) else {}
+            # lowercase index dla tolerancyjnego dopasowania nazwy
+            _PREP_META_CACHE["index"] = {
+                str(k).strip().lower(): v for k, v in rests.items()
+            }
+            _PREP_META_CACHE["data"] = data
+            _PREP_META_CACHE["mtime"] = mt
+        return _PREP_META_CACHE["data"]
+    except Exception:
+        return None
+
+
+def restaurant_prep_variance(
+    restaurant_name: Optional[str], meta: Optional[dict] = None
+) -> Optional[Dict[str, Any]]:
+    """Empiryczna prep-variance restauracji z restaurant_meta.json.
+
+    Zwraca {median, p90, sample_n, high, low_confidence, chronically_late} lub
+    None (brak nazwy / brak danych / median=None). Dopasowanie nazwy: exact-strip
+    potem lowercase fallback. Pure read, fail-soft.
+    """
+    if not restaurant_name:
+        return None
+    name = str(restaurant_name).strip()
+    r = None
+    if meta is not None:
+        rests = (meta.get("restaurants") or {}) if isinstance(meta, dict) else {}
+        r = rests.get(name) or {
+            str(k).strip().lower(): v for k, v in rests.items()
+        }.get(name.lower())
+    else:
+        if _load_restaurant_meta_cached() is None:
+            return None
+        idx = _PREP_META_CACHE.get("index") or {}
+        r = idx.get(name.lower())
+    if not isinstance(r, dict):
+        return None
+    pv = r.get("prep_variance_min") or {}
+    flags = r.get("flags") or {}
+    if pv.get("median") is None:
+        return None
+    return {
+        "median": pv.get("median"),
+        "p90": pv.get("p90"),
+        "sample_n": pv.get("sample_n"),
+        "high": bool(flags.get("prep_variance_high")),
+        "low_confidence": bool(flags.get("low_confidence")),
+        "chronically_late": bool(flags.get("chronically_late")),
+    }
+
+
+def detect_prep_variance_anomaly(
+    restaurant_name: Optional[str],
+    declared_prep_min: Optional[float],
+    meta: Optional[dict] = None,
+) -> Optional[Dict[str, Any]]:
+    """FAIL-04: anomalia "slepej wiary w prep".
+
+    Fires gdy restauracja prep_variance_high (i NIE low_confidence) ma zadeklarowany
+    prep nizszy od empirycznej mediany o >= RESTAURANT_PREP_VARIANCE_HARD_MIN.
+    Zwraca dict anomalii albo None. NIE modyfikuje czasu (F1.8g) — czysty sygnal.
+    """
+    pv = restaurant_prep_variance(restaurant_name, meta=meta)
+    if not pv or not pv.get("high") or pv.get("low_confidence"):
+        return None
+    median = pv.get("median")
+    if median is None:
+        return None
+    declared = float(declared_prep_min) if declared_prep_min is not None else 0.0
+    gap = float(median) - declared
+    if gap < float(C.RESTAURANT_PREP_VARIANCE_HARD_MIN):
+        return None
+    return {
+        "restaurant": str(restaurant_name).strip(),
+        "declared_prep_min": declared,
+        "empirical_median_min": median,
+        "empirical_p90_min": pv.get("p90"),
+        "gap_min": round(gap, 1),
+        "threshold_min": float(C.RESTAURANT_PREP_VARIANCE_HARD_MIN),
+        "chronically_late": pv.get("chronically_late"),
+    }
+
+
+def _detect_and_set_prep_variance_anomaly(
+    result: "PipelineResult", order_event: Optional[Dict[str, Any]]
+) -> None:
+    """FAIL-04 hook (shadow-first). Ustawia result.prep_variance_anomaly.
+
+    Gated flaga ENABLE_PREP_VARIANCE_ANOMALY_SHADOW (default OFF). NIGDY raise,
+    NIE zmienia pickup_ready_at/score/verdict — czysta telemetria do shadow logu.
+    """
+    try:
+        if not C.flag("ENABLE_PREP_VARIANCE_ANOMALY_SHADOW", False):
+            return
+        rest = getattr(result, "restaurant", None) or (order_event or {}).get("restaurant")
+        declared = (order_event or {}).get("prep_minutes")
+        anomaly = detect_prep_variance_anomaly(rest, declared)
+        result.prep_variance_anomaly = anomaly
+        if anomaly:
+            log.info(
+                f"PREP_VARIANCE_ANOMALY order={getattr(result, 'order_id', '?')} "
+                f"rest={rest!r} declared={anomaly['declared_prep_min']} "
+                f"median={anomaly['empirical_median_min']} gap={anomaly['gap_min']}min"
+            )
+    except Exception as _e:
+        try:
+            log.warning(
+                f"prep_variance_anomaly detect exception "
+                f"order={getattr(result, 'order_id', '?')}: {_e}"
+            )
+        except Exception:
+            pass
 
 
 def _classify_and_set_auto_route(
@@ -1328,6 +1462,9 @@ def _classify_and_set_auto_route(
             log.warning(f"auto_proximity classifier exception order={getattr(result, 'order_id', '?')}: {_e}")
         except Exception:
             pass
+    # FAIL-04 (shadow-first): wykryj slepa-wiare-w-prep dla wysoko-wariancyjnych
+    # restauracji. Osobny try wewnatrz helpera — nie moze zaklocic auto_route.
+    _detect_and_set_prep_variance_anomaly(result, order_event)
 
 
 def get_pickup_ready_at(

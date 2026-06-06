@@ -463,6 +463,15 @@ COURIER_RECENT_DELAY_HARD_MIN = 10
 COURIER_CIRCUIT_BREAK_PENALTY = 25
 ANOMALY_DETECTION_ENABLED = False
 
+# FAIL-04 (2026-06-06): shadow-first detekcja "slepej wiary w prep panelu".
+# Gdy wysoko-wariancyjna restauracja (restaurant_meta prep_variance_high) ma
+# zadeklarowany czas_odbioru znaczaco nizszy od empirycznej mediany variancji
+# (gap >= RESTAURANT_PREP_VARIANCE_HARD_MIN) -> zapis sygnalu na result.
+# SHADOW: czysta telemetria, NIE zmienia pickup_ready_at (landmine F1.8g!),
+# NIE kara/reject/verdict. Default OFF; flip live = osobna decyzja po danych.
+# Konsument flagi: dispatch_pipeline._detect_and_set_prep_variance_anomaly.
+ENABLE_PREP_VARIANCE_ANOMALY_SHADOW = False
+
 # ============================================================
 # F2.2 Sprint C Feature Flags (2026-04-18)
 # Per F2.2_SECTION_4_ARCHITECTURE_SPEC sekcja 6 (Rollback Plan).
