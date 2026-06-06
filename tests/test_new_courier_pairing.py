@@ -95,6 +95,14 @@ def test_match_disambiguates_two_bartosz(roster):
     assert pr.match_name_to_cid("Bartosz Choiński", roster).cid == 530
 
 
+def test_match_disambiguates_abbrev_collision():
+    # Rafał Jankowski (gastro "Rafał Jan", 529) vs Rafał Jabłoński (gastro "Rafał J", 101):
+    # longer matched abbrev wins -> no false tie.
+    r = {101: "Rafał J", 529: "Rafał Jan"}
+    assert pr.match_name_to_cid("Rafał Jankowski", r).cid == 529
+    assert pr.match_name_to_cid("Rafał Jabłoński", r).cid == 101
+
+
 def test_match_exact_known(roster):
     m = pr.match_name_to_cid("Bartek Ołdziej", roster)
     assert m.status == "matched" and m.cid == 123

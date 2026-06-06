@@ -156,8 +156,11 @@ def _score(full_name: str, roster_name: str) -> int:
     """Score a grafik full name against a roster (possibly abbreviated) name.
 
     First name MUST match (case-insensitive). Surname matched by prefix in either
-    direction ('Choiński' vs 'Ch.'). Score = matched-prefix length * 10. A roster
-    entry with only a first name scores 1 (weak — last resort).
+    direction ('Choiński' vs 'Ch.'). Score = length of the MATCHED (overlapping)
+    prefix * 10 — this rewards the longer abbreviation so e.g. "Rafał Jankowski"
+    prefers gastro "Rafał Jan" (matched 'jan'=3 → 30) over "Rafał J" (matched
+    'j'=1 → 10), disambiguating two same-first-name couriers. A roster entry with
+    only a first name scores 1 (weak — last resort).
     """
     sp = [t for t in (full_name or "").strip().split() if t]
     rp = [t for t in (roster_name or "").strip().split() if t]
@@ -171,8 +174,10 @@ def _score(full_name: str, roster_name: str) -> int:
         return 1  # roster has bare first name only
     if not s_last:
         return 0  # grafik has only first name, roster has a surname -> mismatch
-    if s_last.startswith(r_last) or r_last.startswith(s_last):
-        return max(len(r_last), len(s_last)) * 10
+    if s_last.startswith(r_last):
+        return len(r_last) * 10   # roster abbrev fully contained in grafik surname
+    if r_last.startswith(s_last):
+        return len(s_last) * 10
     return 0
 
 
