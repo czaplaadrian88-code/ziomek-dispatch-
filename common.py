@@ -1700,6 +1700,33 @@ ENABLE_D2_STALE_SCHEDULE_SOFT = _os.environ.get(
 D2_STALE_SCHEDULE_SOFT_PENALTY = float(
     _os.environ.get("D2_STALE_SCHEDULE_SOFT_PENALTY", "-75.0"))
 
+# ============================================================
+# FAIL-12 (audyt Ziomka 2026-06-03) — grafik (Google Sheet) padł / niepełny →
+# fail-OPEN dla kuriera FIZYCZNIE pracującego (aktywny bag LUB świeży GPS).
+# ------------------------------------------------------------
+# Root-cause: D2 (wyżej) ratuje TYLKO gdy CAŁY arkusz wykryty jako stale (>30min,
+# per-flota) ORAZ jest ON. Gdy arkusz jest niepełny / pojedynczy kurier nie ma
+# mapowania shift (cs.shift_end=None) przy zdrowym-ale-dziurawym grafiku — albo gdy
+# D2 jest OFF (default) — feasibility Gate 1 hard-rejectuje go (NO_ACTIVE_SHIFT,
+# fail-CLOSED). Precedens: incident #471036 — 3 aktywnych kurierów odrzuconych.
+# Fix: gdy shift_end=None ALE kurier ma TWARDY dowód aktywnej pracy NIEZALEŻNY od
+# grafiku (len(bag)>0 — wiezie zlecenia; LUB pos_source=="gps" — realny świeży fix
+# ten tick) → fail-OPEN: przepuść przez Gate 1 (degradacja zamiast blackout).
+# Świadomy dyskryminator vs FAIL-07: sam BRAK GPS NIE wystarcza (GPS bywa celowo
+# nieobecny → odcięcie odcięłoby legalnie pracujących bez apki). Bag/świeży GPS to
+# pozytywny sygnał pracy, nie jego brak.
+# HARD safety NIETKNIĘTE: R6 35min / SLA / post-shift dalej egzekwowane w dalszej
+# części feasibility (fail-OPEN dotyczy WYŁĄCZNIE bramki obecności w grafiku).
+# Krok 1 (2026-06-06): pure pass-through + obserwowalność (metryka + GŁOŚNY log).
+# BEZ kary scoringowej — w pełnej awarii arkusza wszyscy mają shift_end=None →
+# wspólna kara zbiłaby flotę poniżej MIN_PROPOSE_SCORE i odtworzyła blackout miękką
+# drogą. Demota w trybie mieszanym = osobna decyzja po danych z cienia.
+# Z2 anti-silent-failure: fail-OPEN MASKUJE realną awarię grafiku → log.warning.
+# Default OFF — shadow-first. Env: ENABLE_FAIL12_SCHEDULE_FAILOPEN=1
+# ============================================================
+ENABLE_FAIL12_SCHEDULE_FAILOPEN = _os.environ.get(
+    "ENABLE_FAIL12_SCHEDULE_FAILOPEN", "0") == "1"
+
 # V3.27.1 sesja 2 — Pre-proposal czas_kuriera recheck (Mechanizm 3 hybrydowy).
 # Per Adrian sesja 2 spec: dla bagu kandydata kuriera, PRZED scoring force fetch
 # fresh czas_kuriera z panel jeśli (assignment age >10 min AND last recheck >5 min).

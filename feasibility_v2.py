@@ -558,6 +558,22 @@ def check_feasibility_v2(
                 # — D2 nie dubluje alertu, tylko soft-degraduje + loguje metrykę.
                 metrics["d2_stale_schedule_soft"] = True
                 metrics["d2_soft_penalty"] = C.D2_STALE_SCHEDULE_SOFT_PENALTY
+            elif C.ENABLE_FAIL12_SCHEDULE_FAILOPEN and (len(bag) > 0 or pos_source == "gps"):
+                # FAIL-12 (audyt 2026-06-03): grafik padł/niepełny → shift_end=None mimo
+                # że kurier FIZYCZNIE pracuje (ma bag LUB świeży GPS ten tick). Zamiast
+                # hard-reject NO_ACTIVE_SHIFT (fail-CLOSED całej floty, precedens #471036)
+                # → fail-OPEN: przepuść przez Gate 1. Bag/świeży GPS to twardy dowód pracy
+                # niezależny od grafiku. R6 35min / SLA / post-shift egzekwowane dalej niżej.
+                fail12_signal = "bag" if len(bag) > 0 else "gps"
+                metrics["fail12_schedule_failopen"] = True
+                metrics["fail12_signal"] = fail12_signal
+                # Z2 anti-silent-failure: fail-OPEN MASKUJE realną awarię grafiku → GŁOŚNO.
+                log.warning(
+                    "FAIL12_SCHEDULE_FAILOPEN: shift_end=None ale kurier aktywny "
+                    "(signal=%s bag=%d pos_source=%s) — fail-OPEN soft-degrade zamiast "
+                    "NO_ACTIVE_SHIFT. SPRAWDŹ GRAFIK (Google Sheet awaria/niepełny?).",
+                    fail12_signal, len(bag), pos_source,
+                )
             else:
                 metrics["v325_reject_reason"] = "NO_ACTIVE_SHIFT"
                 return ("NO", "v325_NO_ACTIVE_SHIFT (cs.shift_end=None — brak schedule mapping)", metrics, None)
