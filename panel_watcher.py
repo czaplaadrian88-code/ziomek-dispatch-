@@ -1612,6 +1612,46 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
     return stats
 
 
+def _should_skip_empty_packs_write(
+    new_packs: dict,
+    prev_cache: Optional[dict],
+    max_age_s: float,
+    now_utc: datetime,
+) -> Tuple[bool, Optional[float], int]:
+    """FAIL-09 / PACKS-01 (2026-06-06) — czysta decyzja: czy POMINĄĆ zapis pustego
+    panel_packs_cache, bo poprzedni był świeży i niepusty (prawdopodobnie zdegradowany
+    parse, np. HTTP 200 login-page).
+
+    Zwraca (skip, prev_age_s, n_prev_packs).
+    Zasady (konserwatywne — pomiń tylko gdy pewne, że to regresja, nie realne zero):
+      • new_packs niepuste → NIGDY nie pomijaj (zapis realnych danych).
+      • brak/uszkodzony poprzedni cache → nie pomijaj (write-through; reader i tak ma TTL).
+      • poprzedni cache pusty → nie pomijaj (zero→zero, nic nie tracimy).
+      • poprzedni nieczytelny ts lub starszy niż max_age_s → nie pomijaj (i tak by się
+        zestarzał u czytnika — write-through prościej).
+      • poprzedni niepusty ORAZ świeży (age ≤ max_age_s) → POMIŃ (zachowaj last-good).
+    """
+    if new_packs:
+        return False, None, 0
+    if not isinstance(prev_cache, dict):
+        return False, None, 0
+    prev_packs = prev_cache.get("packs") or {}
+    if not prev_packs:
+        return False, None, len(prev_packs)
+    prev_age: Optional[float] = None
+    prev_ts = prev_cache.get("ts")
+    if prev_ts:
+        try:
+            prev_age = (
+                now_utc - datetime.fromisoformat(str(prev_ts).replace("Z", "+00:00"))
+            ).total_seconds()
+        except Exception:
+            prev_age = None
+    if prev_age is None or prev_age > max_age_s:
+        return False, prev_age, len(prev_packs)
+    return True, prev_age, len(prev_packs)
+
+
 def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
     """Jeden cykl watchera. Zwraca (statystyki, parsed_dict_or_None).
 
@@ -1641,28 +1681,65 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
         # ground truth panel niezależnie od panel_watcher tick rate.
         try:
             import tempfile as _tempfile
-            _packs_cache_data = {
-                "ts": now_iso(),
-                "packs": parsed.get("courier_packs") or {},
-                "tick": cycle_num,
-                "orders_in_panel": cycle_stats.get("orders_in_panel"),
-            }
+            from dispatch_v2 import common as _C
             _packs_cache_path = "/root/.openclaw/workspace/dispatch_state/panel_packs_cache.json"
-            _fd, _tmp = _tempfile.mkstemp(
-                prefix="panel_packs_cache.",
-                suffix=".tmp",
-                dir="/root/.openclaw/workspace/dispatch_state/",
-            )
-            try:
-                with os.fdopen(_fd, "w", encoding="utf-8") as _fh:
-                    json.dump(_packs_cache_data, _fh, ensure_ascii=False, separators=(",", ":"))
-                    _fh.flush()
-                    os.fsync(_fh.fileno())
-                os.replace(_tmp, _packs_cache_path)
-            except Exception:
-                try: os.unlink(_tmp)
-                except Exception: pass
-                raise
+            _new_packs = parsed.get("courier_packs") or {}
+            # FAIL-09 / PACKS-01 guard (2026-06-06): nie nadpisuj ŚWIEŻEGO niepustego
+            # cache pustką. Pusty parse (HTTP 200 login-page / zmiana layoutu) zwraca
+            # courier_packs={} mimo że chwilę temu panel widział kurierów z workami →
+            # konsumenci packs (courier_resolver._load_panel_packs_cache,
+            # state_panel_monitor) straciliby ground-truth na okno degradacji → kurier
+            # z workiem widziany jako wolny (wzorzec V3.13-15). Zachowaj poprzedni cache;
+            # jeśli degradacja trwa, zestarzeje się wg TTL czytnika
+            # (PANEL_PACKS_CACHE_MAX_AGE_S=120s) → naturalny fail-safe, brak stale-forever.
+            # Tylko EMPTY (wysoka precyzja); partial-drop = domena PARSE-01.
+            # Kill-switch: ENABLE_PANEL_PACKS_EMPTY_WRITE_GUARD=false (flags.json hot-reload).
+            _skip_packs_write = False
+            if (not _new_packs) and _C.flag(
+                    "ENABLE_PANEL_PACKS_EMPTY_WRITE_GUARD", default=True):
+                try:
+                    with open(_packs_cache_path, encoding="utf-8") as _pf:
+                        _prev = json.load(_pf)
+                    _guard_max_age = float(
+                        _C.flag("PANEL_PACKS_EMPTY_GUARD_MAX_PREV_AGE_S", default=180.0))
+                    _skip_packs_write, _prev_age, _n_prev = _should_skip_empty_packs_write(
+                        _new_packs, _prev, _guard_max_age, datetime.now(timezone.utc))
+                    if _skip_packs_write:
+                        cycle_stats["panel_packs_empty_write_skipped"] = True
+                        _log.warning(
+                            f"PANEL_PACKS_EMPTY_WRITE_GUARD skip: parse packs=0 a poprzedni "
+                            f"cache miał {_n_prev} packs (age={_prev_age:.0f}s "
+                            f"<= {_guard_max_age:.0f}s) — prawdopodobnie zdegradowany parse; "
+                            f"zachowuję poprzedni cache "
+                            f"(orders_in_panel={cycle_stats.get('orders_in_panel')})"
+                        )
+                except FileNotFoundError:
+                    pass
+                except Exception as _ge:
+                    _log.warning(
+                        f"PANEL_PACKS_EMPTY_WRITE_GUARD read prev fail (write through): {_ge}")
+            if not _skip_packs_write:
+                _packs_cache_data = {
+                    "ts": now_iso(),
+                    "packs": _new_packs,
+                    "tick": cycle_num,
+                    "orders_in_panel": cycle_stats.get("orders_in_panel"),
+                }
+                _fd, _tmp = _tempfile.mkstemp(
+                    prefix="panel_packs_cache.",
+                    suffix=".tmp",
+                    dir="/root/.openclaw/workspace/dispatch_state/",
+                )
+                try:
+                    with os.fdopen(_fd, "w", encoding="utf-8") as _fh:
+                        json.dump(_packs_cache_data, _fh, ensure_ascii=False, separators=(",", ":"))
+                        _fh.flush()
+                        os.fsync(_fh.fileno())
+                    os.replace(_tmp, _packs_cache_path)
+                except Exception:
+                    try: os.unlink(_tmp)
+                    except Exception: pass
+                    raise
         except Exception as _e:
             _log.warning(f"panel_packs_cache write fail: {_e}")
 
