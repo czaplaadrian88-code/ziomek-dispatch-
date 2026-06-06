@@ -253,7 +253,10 @@ def _v326_help_text() -> str:
         "    — PIN kuriera do logowania w aplikacji\n"
         "▪️ /instrukcja_gps [imię]  lub  'instrukcja gps [imię]'\n"
         "    — pełna instrukcja instalacji aplikacji + ustawienia Android\n"
-        "▪️ /dopisz <cid> <full_name> — atomic add nowego kuriera\n"
+        "▪️ /nowy <cid> <Imię Nazwisko>  lub  /nowy <Imię Nazwisko>\n"
+        "    — wpina nowego kuriera WSZĘDZIE (dyspozytornia+COD+apka+scoring),\n"
+        "      sam znajduje cid w gastro gdy pominięty, zwraca PIN\n"
+        "▪️ /dopisz <cid> <full_name> — (niskopoziomowo) atomic add nowego kuriera\n"
         "▪️ /status — pełny raport serwisów\n"
         "▪️ reset — czyści wszystkie wykluczenia\n"
         "\n"
@@ -2577,6 +2580,19 @@ async def handle_message(state: dict, msg: dict) -> None:
                 )
             return
 
+        if text.startswith("/nowy ") or text.strip() == "/nowy":
+            reply = await asyncio.to_thread(_handle_nowy_command, state, msg, text)
+            if reply:
+                await asyncio.to_thread(
+                    tg_request, state["token"], "sendMessage",
+                    {
+                        "chat_id": msg["chat"]["id"],
+                        "text": reply,
+                        "reply_to_message_id": msg["message_id"],
+                    },
+                )
+            return
+
         if cmd in ("/stop", "/wraca", "/wrocil"):
             action, response = await asyncio.to_thread(manual_overrides.parse_command, text)
             if response:
@@ -3493,6 +3509,85 @@ def _handle_dopisz_command(state: dict, msg: dict, text: str) -> Optional[str]:
         f"Alias: {result['alias']}\n"
         f"PIN: `{result['pin']}` — przeslij temu kurierowi.\n"
         f"Zaktualizowane pliki: kurier_ids, kurier_full_names, kurier_piny, courier_tiers."
+    )
+
+
+def _handle_nowy_command(state: dict, msg: dict, text: str) -> Optional[str]:
+    """/nowy <cid> <Imię Nazwisko>  lub  /nowy <Imię Nazwisko>.
+
+    Wpina nowego kuriera wszędzie (dyspozytornia + COD + apka PIN + scoring) i
+    zwraca PIN + checklistę widoczności. Gdy cid podany — krzyżowo weryfikuje go
+    z aktywnym rosterem gastro (literówka cid = bugi wszędzie). Gdy cid pominięty
+    — sam znajduje go po imieniu w gastro (/admin2017/list-users). Cokolwiek
+    niepewne (brak/dwuznaczność) → pyta, nie zgaduje.
+    """
+    user_id = (msg.get("from") or {}).get("id")
+    if user_id not in _authorized_user_ids():
+        return "❌ unauthorized"
+    parts = text.strip().split(maxsplit=2)
+    if len(parts) < 2:
+        return ("❌ użycie: /nowy <cid> <Imię Nazwisko>  lub  /nowy <Imię Nazwisko>\n"
+                "np. /nowy 530 Bartosz Choiński   |   /nowy Bartosz Choiński")
+
+    from dispatch_v2 import panel_roster as _pr
+    from dispatch_v2.courier_admin import add_new_courier as _add
+    from dispatch_v2.new_courier_pairing import verify_courier_wired as _verify
+
+    # Forma z cid: /nowy <cid> <name>
+    if parts[1].isdigit():
+        if len(parts) < 3 or not parts[2].strip():
+            return "❌ użycie: /nowy <cid> <Imię Nazwisko>"
+        cid = int(parts[1])
+        full_name = parts[2].strip()
+        if cid < 100 or cid > 9999:
+            return f"❌ cid {cid} poza zakresem 100..9999"
+        # Cross-check z aktywnym rosterem gastro
+        roster = _pr.fetch_active_roster()
+        note = ""
+        if roster:
+            rname = roster.get(cid)
+            if rname:
+                rf = _pr._norm_token(rname.split()[0]) if rname.split() else ""
+                nf = _pr._norm_token(full_name.split()[0]) if full_name.split() else ""
+                if rf and nf and rf != nf:
+                    return (f"❌ cid {cid} w gastro to '{rname}', a podałeś '{full_name}'.\n"
+                            f"To wygląda na literówkę cid. Sprawdź numer w gastro "
+                            f"(/admin2017/list-users) i popraw.")
+                note = f"\n(gastro cid {cid} = '{rname}' ✓)"
+            else:
+                note = (f"\n⚠️ uwaga: cid {cid} nie jest aktywnym kurierem w gastro — "
+                        f"upewnij się, że konto założone i aktywne.")
+        full_name_resolved = full_name
+    else:
+        # Forma bez cid: /nowy <name> — sam znajdź cid
+        full_name = text.strip().split(maxsplit=1)[1].strip()
+        m = _pr.match_name_to_cid(full_name)
+        if m.status == "matched":
+            cid = m.cid
+            note = f"\n(dopasowane z gastro: cid {cid} = '{m.name}')"
+            full_name_resolved = full_name
+        elif m.status == "ambiguous":
+            cands = "\n".join(f"  • {c} — {n}" for c, n, _ in m.candidates[:5])
+            return (f"❓ Kilku pasuje w gastro do '{full_name}':\n{cands}\n"
+                    f"Wybierz numer: /nowy <cid> {full_name}")
+        else:
+            return (f"❌ Nie znajduję '{full_name}' wśród aktywnych kurierów gastro.\n"
+                    f"Załóż konto w gastro albo podaj cid ręcznie: /nowy <cid> {full_name}")
+
+    try:
+        result = _add(cid, full_name_resolved)
+    except ValueError as e:
+        return f"❌ {e}"
+    except Exception as e:
+        return f"❌ błąd: {type(e).__name__}: {e}"
+
+    ok, lines = _verify(cid, full_name_resolved)
+    checklist = "\n".join(lines)
+    head = "✅ Wpięty" if ok else "⚠️ Wpięty (weryfikacja niepełna)"
+    return (
+        f"{head}: {result['full_name']} (cid {result['cid']}, alias {result['alias']}){note}\n"
+        f"PIN: `{result['pin']}` — prześlij kurierowi.\n"
+        f"Widoczny w:\n{checklist}"
     )
 
 

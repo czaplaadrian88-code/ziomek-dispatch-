@@ -1,0 +1,10 @@
+[Unit]
+Description=Ziomek New-Courier Auto-Pairing timer (co 30 min, 06:00-20:00 Warsaw)
+
+[Timer]
+OnCalendar=06..20:0/30 Europe/Warsaw
+Persistent=false
+Unit=dispatch-new-courier-watch.service
+
+[Install]
+WantedBy=timers.target

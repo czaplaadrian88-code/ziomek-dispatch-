@@ -1,0 +1,14 @@
+[Unit]
+Description=Ziomek New-Courier Auto-Pairing (wykrywa nowych w grafiku, znajduje cid w gastro, wpina + PIN na Telegram) 2026-06-06
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.new_courier_pairing
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/new_courier_pairing.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/new_courier_pairing.log
+
+[Install]
+WantedBy=multi-user.target
