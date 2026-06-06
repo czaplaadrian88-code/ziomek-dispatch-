@@ -71,7 +71,9 @@ except Exception:  # pragma: no cover
 
 # resolve_cid + garbage filter live in the (otherwise dormant) shift_notifications
 # worker — reuse them so name->cid logic stays identical across the codebase.
-from dispatch_v2.shift_notifications.worker import resolve_cid, _is_garbage_name
+from dispatch_v2.shift_notifications.worker import (
+    resolve_cid, _is_garbage_name, _load_ignored_names,
+)
 from dispatch_v2.shift_notifications.telegram_send import tg_send_text_with_keyboard
 
 
@@ -216,12 +218,16 @@ def scan_once(now: Optional[datetime] = None, *, dry_run: bool = False) -> dict:
     state = _load_state()
     bucket = _day_bucket(state, today)
     roster = panel_roster.fetch_active_roster()
+    ignored = _load_ignored_names()  # shared skiplist: retired / duplicate accounts
     dirty = False
 
     for full_name, entry in schedule.items():
         if not _has_real_shift(entry):
             continue
         if _is_garbage_name(full_name):
+            continue
+        if full_name in ignored:
+            # Permanent-inactive / duplicate (e.g. Albert Dec retired) — never pair.
             continue
         summary["scanned"] += 1
         if resolve_cid(full_name) is not None:

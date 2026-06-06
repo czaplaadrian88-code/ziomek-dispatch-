@@ -156,6 +156,9 @@ def patched_scan(monkeypatch, tmp_path):
     flags = {"NEW_COURIER_AUTOPAIR_AUTOWRITE": True}
     monkeypatch.setattr(ncp, "flag", lambda name, default=False: flags.get(name, default))
 
+    # Isolate from the real shift_ignored_names.json (tests opt-in per case)
+    monkeypatch.setattr(ncp, "_load_ignored_names", lambda: set())
+
     # resolve_cid: only "Bartek Ołdziej" already mapped
     monkeypatch.setattr(ncp, "resolve_cid",
                         lambda name, kids=None: "123" if name == "Bartek Ołdziej" else None)
@@ -216,6 +219,15 @@ def test_scan_autowrite_off_asks_even_when_matched(patched_scan, monkeypatch):
     assert patched_scan["added"] == []
     assert len(s["asked"]) == 1
     assert any("530" in t for t in patched_scan["sent"])  # tells Adrian the cid
+
+
+def test_scan_ignored_name_skipped(patched_scan, monkeypatch):
+    """Retired/duplicate accounts on the skiplist are never paired even with a shift."""
+    monkeypatch.setattr(ncp, "_load_ignored_names", lambda: {"Albert Dec"})
+    _sched(monkeypatch, {"Albert Dec": {"start": "09:00", "end": "17:00"}})
+    s = ncp.scan_once(dry_run=False)
+    assert patched_scan["added"] == []
+    assert s["asked"] == [] and s["paired"] == []
 
 
 def test_scan_garbage_name_skipped(patched_scan, monkeypatch):
