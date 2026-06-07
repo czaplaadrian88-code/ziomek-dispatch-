@@ -192,7 +192,8 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        "paczka_",  # R-PACZKI-FLEX (2026-05-20): paczka_is / paczka_flex_eligible / paczka_*
                        "carry_chain_",  # Sprint 2 Etap 2.2 (2026-05-27): carry/bag-stack visibility
                        "difficult_",  # Sprint 2026-05-28: difficult_case_redirect_shadow per-candidate
-                       "fail12_")  # FAIL-12 (2026-06-06): schedule fail-OPEN observability (shadow-first)
+                       "fail12_",  # FAIL-12 (2026-06-06): schedule fail-OPEN observability (shadow-first)
+                       "a2_")  # A2 reliability soft-score (2026-06-07): a2_reliability_delta -> shadow_decisions
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
