@@ -179,6 +179,13 @@ def save_plan(
             "start_ts": plan_body["start_ts"],
             "stops": plan_body["stops"],
             "optimization_method": plan_body["optimization_method"],
+            # F2 zunifikowany silnik trasy: sygnatura worka (kiedy zdecydowano
+            # sekwencję) + znacznik ostatniego re-czasowania. Opcjonalne — gdy
+            # caller nie poda bag_signature, przenosimy z poprzedniej wersji, by
+            # zapis nie-F2 (np. _save_plan_on_assign) jej nie kasował.
+            "bag_signature": plan_body.get(
+                "bag_signature", (current or {}).get("bag_signature")),
+            "retimed_at": plan_body.get("retimed_at"),
             "invalidated_at": None,
             "invalidation_reason": None,
         }

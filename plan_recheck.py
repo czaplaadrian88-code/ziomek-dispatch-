@@ -22,7 +22,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -310,6 +310,20 @@ def _sim_picked_up_at(rec: Dict[str, Any], status: Optional[str]):
         return None
 
 
+def _bag_signature(oids: List[str], orders_state: Dict[str, Any]) -> str:
+    """Sygnatura worka dla F2 — kiedy Ziomek (po)decyduje SEKWENCJĘ.
+
+    Koduje (order_id, czy_picked_up) posortowane. Zmiana składu worka LUB odbiór
+    zlecenia (assigned→picked_up znika węzeł pickup, jedzenie staje się niesione)
+    = zmiana sygnatury = re-decyzja. Identyczna sygnatura = tylko re-czasowanie.
+    """
+    parts = []
+    for oid in oids:
+        rec = orders_state.get(oid) or {}
+        parts.append(f"{oid}:{1 if rec.get('status') == 'picked_up' else 0}")
+    return "|".join(sorted(parts))
+
+
 # --- Kotwica startu trasy: GPS-free (flota z założenia bez GPS) ---------------
 # Fix GPS starszy niż próg traktujemy jak BRAK — nie kotwiczymy estymaty na
 # pozycji sprzed godzin/dni. Trasę liczymy z tego, co Ziomek SAM zna: committed
@@ -322,6 +336,10 @@ ENABLE_GPS_FREE_ANCHOR = os.environ.get("ENABLE_GPS_FREE_ANCHOR", "0") == "1"
 # (route_simulator_v2:1030) chroniła NIESIONE jedzenie. Bez tego anchor=None →
 # `continue` → carried bez deadline → solver deferuje stygnące jedzenie. Default OFF.
 ENABLE_PLAN_REAL_PICKED_UP_AT = os.environ.get("ENABLE_PLAN_REAL_PICKED_UP_AT", "0") == "1"
+# F2 zunifikowany silnik trasy: Ziomek decyduje SEKWENCJĘ tylko na zmianę worka
+# (bag_signature), a tick TYLKO re-czasuje wzdłuż stałej kolejności. Bez tego
+# plan_recheck re-optymalizował co tick (oscylacja carried-first↔last). Default OFF.
+ENABLE_PLAN_SEQUENCE_LOCK = os.environ.get("ENABLE_PLAN_SEQUENCE_LOCK", "0") == "1"
 _ANCHOR_EVENT_MAX_AGE_MIN = 360.0  # zdarzenia starsze niż 6h = inna zmiana
 
 
@@ -505,12 +523,91 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         "start_ts": now.isoformat(),
         "stops": stops,
         "optimization_method": "incremental",
+        # F2: sygnatura worka w chwili DECYZJI sekwencji — kolejne ticki z tą samą
+        # sygnaturą tylko re-czasują (nie permutują). Zawsze zapisywane (gdy F2 OFF
+        # = nieszkodliwa metadana; gdy ON = baza porównania).
+        "bag_signature": _bag_signature(oids, orders_state),
     }
     plan_manager.save_plan(cid, body)
     _log.info(
         f"BAG_PLAN_GENERATED cid={cid} stops={len(stops)} seq={plan.sequence} "
         f"sla={plan.sla_violations} dur={plan.total_duration_min:.1f} anchor={anchor_source}"
     )
+    return True
+
+
+def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
+                         orders_state: Dict[str, Any],
+                         gps_positions: Dict[str, Any], now: datetime) -> bool:
+    """F2 RE-CZASOWANIE: przelicz predicted_at wzdłuż ISTNIEJĄCEJ, STAŁEJ sekwencji.
+
+    Ziomek zdecydował kolejność przy zmianie worka; tu tylko odświeżamy czasy
+    (kurier jedzie / spóźnia się), NIE permutujemy. Łańcuch OSRM od kotwicy przez
+    stopy w ich zapisanej kolejności + clamp committed na odbiorach. Coords z
+    orders_state (autorytatywne — plany z propozycji mają 0,0). Zwraca False gdy
+    brak kotwicy/coords/OSRM → caller spada do pełnej decyzji (defense-in-depth).
+    """
+    stops = plan.get("stops") or []
+    if not stops:
+        return False
+    anchor = _start_anchor(cid, oids, orders_state, gps_positions, now)
+    if anchor is None:
+        return False
+    pos, anchor_departure, anchor_source = anchor
+
+    # Coords per stop z orders_state (autorytatywne). Brak → nie re-czasujemy.
+    coords = []
+    for s in stops:
+        oid = str(s.get("order_id"))
+        rec = orders_state.get(oid) or {}
+        c = rec.get("pickup_coords") if s.get("type") == "pickup" else rec.get("delivery_coords")
+        if not _coords_ok(c):
+            return False
+        coords.append((float(c[0]), float(c[1])))
+
+    try:
+        from dispatch_v2 import osrm_client
+    except Exception:
+        return False
+    points = [pos] + coords
+    matrix = osrm_client.table(points, points)
+    if not matrix:
+        return False
+
+    t = max(now, anchor_departure) if anchor_departure else now
+    new_stops = []
+    for i, s in enumerate(stops):
+        cell = matrix[i][i + 1] if (i + 1) < len(matrix[i]) else None
+        leg_min = (cell or {}).get("duration_s")
+        leg_min = (leg_min / 60.0) if (leg_min is not None and leg_min < 9e8) else 0.0
+        t = t + timedelta(minutes=leg_min)
+        if s.get("type") == "pickup":
+            ck = _parse_dt((orders_state.get(str(s.get("order_id"))) or {}).get("czas_kuriera_warsaw"))
+            if ck is not None and ck > t:
+                t = ck  # clamp committed (odbiór nie wcześniej niż deklaracja panelu)
+        ns = dict(s)
+        ns["predicted_at"] = t.astimezone(timezone.utc).isoformat()
+        new_stops.append(ns)
+        dwell = s.get("dwell_min")
+        if dwell is None:
+            dwell = 1.0 if s.get("type") == "pickup" else 3.5
+        t = t + timedelta(minutes=float(dwell))
+
+    _gps = gps_positions.get(cid) or {}
+    body = {
+        "start_pos": {
+            "lat": pos[0], "lng": pos[1],
+            "source": anchor_source,
+            "source_ts": _gps.get("timestamp") if anchor_source == "gps_pwa" else now.isoformat(),
+        },
+        "start_ts": now.isoformat(),
+        "stops": new_stops,
+        "optimization_method": plan.get("optimization_method") or "incremental",
+        "bag_signature": plan.get("bag_signature") or _bag_signature(oids, orders_state),
+        "retimed_at": now.isoformat(),
+    }
+    plan_manager.save_plan(cid, body)
+    _log.info(f"BAG_PLAN_RETIMED cid={cid} stops={len(new_stops)} anchor={anchor_source}")
     return True
 
 
@@ -568,6 +665,7 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
     summary["bag_plans_skipped"] = 0
     summary["bag_plans_partial_regen"] = 0
     summary["bag_plans_near_pickup_regen"] = 0
+    summary["bag_plans_retimed"] = 0
     try:
         from dispatch_v2 import route_simulator_v2 as R
     except Exception as e:
@@ -585,10 +683,34 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
 
     for cid, oids in bags.items():
         existing = plans.get(cid)
+        valid = (existing is not None and existing.get("invalidated_at") is None
+                 and existing.get("stops"))
+
+        # ---- F2: sekwencja zamrożona, decyzja tylko na zmianę worka ----
+        if ENABLE_PLAN_SEQUENCE_LOCK:
+            if valid and existing.get("bag_signature") == _bag_signature(oids, orders_state):
+                # Worek bez zmian (skład + picked_up) → TYLKO re-czasuj, nie permutuj.
+                try:
+                    if _retime_one_bag_plan(cid, existing, oids, orders_state, gps_positions, now):
+                        summary["bag_plans_retimed"] += 1
+                        continue
+                except Exception as e:
+                    _log.warning(f"retime cid={cid} fail: {type(e).__name__}: {e}")
+                # re-czasowanie się nie udało → spadnij do pełnej decyzji
+            # Zmiana worka / brak planu / retime fail → DECYZJA sekwencji (raz).
+            try:
+                ok = _gen_one_bag_plan(cid, oids, orders_state, gps_positions, now, R)
+            except Exception as e:
+                summary["bag_plans_skipped"] += 1
+                _log.warning(f"gap_fill cid={cid} fail: {type(e).__name__}: {e}")
+                continue
+            summary["bag_plans_generated" if ok else "bag_plans_skipped"] += 1
+            continue
+
+        # ---- F2 OFF: zachowanie sprzed (re-optymalizacja per tick) ----
         partial = False
         near_regen = False
-        if existing is not None and existing.get("invalidated_at") is None \
-                and existing.get("stops"):
+        if valid:
             plan_ids = {str(s.get("order_id"))
                         for s in existing.get("stops", [])
                         if s.get("order_id") is not None}
