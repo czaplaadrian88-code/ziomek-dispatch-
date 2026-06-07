@@ -24,7 +24,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dispatch_v2 import plan_manager
 
@@ -292,6 +292,109 @@ def _coords_ok(c: Any) -> bool:
             and c[0] is not None and c[1] is not None)
 
 
+# --- Kotwica startu trasy: GPS-free (flota z założenia bez GPS) ---------------
+# Fix GPS starszy niż próg traktujemy jak BRAK — nie kotwiczymy estymaty na
+# pozycji sprzed godzin/dni. Trasę liczymy z tego, co Ziomek SAM zna: committed
+# odbiorów + obserwowanych zdarzeń odbioru/doręczenia (czas + lokalizacja
+# ostatniego przystanku). Tak liczy człowiek, gdy nikt nie ma GPS.
+GPS_FRESH_MAX_MIN = float(os.environ.get("GPS_FRESH_MAX_MIN", "10"))
+ENABLE_GPS_FREE_ANCHOR = os.environ.get("ENABLE_GPS_FREE_ANCHOR", "0") == "1"
+_ANCHOR_EVENT_MAX_AGE_MIN = 360.0  # zdarzenia starsze niż 6h = inna zmiana
+
+
+def _gps_age_min(gps: Dict[str, Any], now: datetime) -> Optional[float]:
+    ts = _parse_dt((gps or {}).get("timestamp"))
+    return None if ts is None else (now - ts).total_seconds() / 60.0
+
+
+def _last_event_anchor(cid: str, orders_state: Dict[str, Any],
+                       now: datetime) -> Optional[Tuple[Tuple[float, float], datetime]]:
+    """Najświeższe realne zdarzenie kuriera → (pozycja, czas), bez GPS.
+
+    Doręczenie (COURIER_DELIVERED) lub odbiór (COURIER_PICKED_UP) z bieżącej
+    zmiany. Pozycja: coords dostawy/odbioru danego zlecenia (fallback na
+    pickup_coords gdy delivery_coords brak). History `at` = ISO UTC (parsowalne),
+    w przeciwieństwie do naiwnego picked_up_at. Zdarzenia >6h pomijamy.
+    """
+    best_at: Optional[datetime] = None
+    best_pos: Optional[Tuple[float, float]] = None
+    for rec in orders_state.values():
+        if not isinstance(rec, dict) or str(rec.get("courier_id") or "") != cid:
+            continue
+        for h in rec.get("history", []) or []:
+            ev = h.get("event")
+            if ev not in ("COURIER_DELIVERED", "COURIER_PICKED_UP"):
+                continue
+            at = _parse_dt(h.get("at"))
+            if at is None:
+                continue
+            if (now - at).total_seconds() / 60.0 > _ANCHOR_EVENT_MAX_AGE_MIN:
+                continue
+            loc = rec.get("delivery_coords") if ev == "COURIER_DELIVERED" else None
+            if not _coords_ok(loc):
+                loc = rec.get("pickup_coords")  # delivery niegeokodowane / odbiór
+            if not _coords_ok(loc):
+                continue
+            if best_at is None or at > best_at:
+                best_at, best_pos = at, (float(loc[0]), float(loc[1]))
+    if best_at is None:
+        return None
+    return best_pos, best_at
+
+
+def _earliest_committed_pickup_anchor(
+        oids: List[str], orders_state: Dict[str, Any]
+) -> Optional[Tuple[Tuple[float, float], datetime]]:
+    """Brak zdarzeń (kurier jeszcze nic nie odebrał) → kotwica na NAJBLIŻSZYM
+    committed odbiorze: pozycja = restauracja, czas = committed (twarda podłoga).
+    """
+    best: Optional[Tuple[Tuple[float, float], datetime]] = None
+    for oid in oids:
+        rec = orders_state.get(oid) or {}
+        if rec.get("status") != "assigned":
+            continue
+        ck = _parse_dt(rec.get("czas_kuriera_warsaw"))
+        pc = rec.get("pickup_coords")
+        if ck is None or not _coords_ok(pc):
+            continue
+        if best is None or ck < best[1]:
+            best = ((float(pc[0]), float(pc[1])), ck)
+    return best
+
+
+def _start_anchor(cid: str, oids: List[str], orders_state: Dict[str, Any],
+                  gps_positions: Dict[str, Any], now: datetime
+                  ) -> Optional[Tuple[Tuple[float, float], Optional[datetime], str]]:
+    """(pos, earliest_departure, source) startu symulacji.
+
+    GPS tylko gdy ŚWIEŻY (≤GPS_FRESH_MAX_MIN); inaczej kotwica zdarzeniowa
+    (ostatni przystanek, start=teraz) lub — gdy nic nieodebrane — committed
+    najbliższego odbioru (pozycja=restauracja, start=committed). None gdy nic
+    policzalnego. Flaga OFF → wyłącznie GPS (zachowanie sprzed zmiany).
+    """
+    gps = gps_positions.get(cid) or {}
+    glat, glon = gps.get("lat"), gps.get("lon")
+    has_gps = glat is not None and glon is not None
+    age = _gps_age_min(gps, now)
+    gps_fresh = has_gps and age is not None and age <= GPS_FRESH_MAX_MIN
+
+    if not ENABLE_GPS_FREE_ANCHOR:
+        return ((float(glat), float(glon)), None, "gps_pwa") if has_gps else None
+    if gps_fresh:
+        return (float(glat), float(glon)), None, "gps_pwa"
+
+    ev = _last_event_anchor(cid, orders_state, now)
+    if ev is not None:
+        return ev[0], None, "last_event"  # pozycja=ostatni przystanek, start=teraz
+    cp = _earliest_committed_pickup_anchor(oids, orders_state)
+    if cp is not None:
+        return cp[0], cp[1], "committed_pickup"  # restauracja + committed jako floor
+    # Ostatnia deska: stary GPS lepszy niż nic (np. wszystko assigned bez committed).
+    if has_gps:
+        return (float(glat), float(glon)), None, "gps_stale"
+    return None
+
+
 def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
                       gps_positions: Dict[str, Any], now: datetime,
                       R: Any) -> bool:
@@ -302,11 +405,10 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     """
     if len(oids) > PLAN_FOR_ACTUAL_BAG_MAX:
         return False
-    gps = gps_positions.get(cid) or {}
-    glat, glon = gps.get("lat"), gps.get("lon")
-    if glat is None or glon is None:
-        return False  # brak pozycji kuriera → nie ma od czego liczyć trasy
-    pos = (float(glat), float(glon))
+    anchor = _start_anchor(cid, oids, orders_state, gps_positions, now)
+    if anchor is None:
+        return False  # ani (świeży) GPS, ani kotwica czasowa → nie ma od czego liczyć
+    pos, anchor_departure, anchor_source = anchor
 
     sims: Dict[str, Any] = {}
     for oid in oids:
@@ -335,7 +437,8 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     best = None
     for newoid in ordered:
         bag = [sims[o] for o in ordered if o != newoid]
-        p = R.simulate_bag_route_v2(pos, bag, sims[newoid], now=now, sla_minutes=35)
+        p = R.simulate_bag_route_v2(pos, bag, sims[newoid], now=now, sla_minutes=35,
+                                    earliest_departure=anchor_departure)
         key = (p.sla_violations, round(p.total_duration_min, 3), tuple(p.sequence))
         if best is None or key < best[0]:
             best = (key, p)
@@ -368,11 +471,12 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
             "status_at_plan_time": "picked_up" if rec.get("status") == "picked_up" else "assigned",
         })
 
+    _gps = gps_positions.get(cid) or {}
     body = {
         "start_pos": {
             "lat": pos[0], "lng": pos[1],
-            "source": "gps_pwa",
-            "source_ts": gps.get("timestamp"),
+            "source": anchor_source,
+            "source_ts": _gps.get("timestamp") if anchor_source == "gps_pwa" else now.isoformat(),
         },
         "start_ts": now.isoformat(),
         "stops": stops,
@@ -381,7 +485,7 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     plan_manager.save_plan(cid, body)
     _log.info(
         f"BAG_PLAN_GENERATED cid={cid} stops={len(stops)} seq={plan.sequence} "
-        f"sla={plan.sla_violations} dur={plan.total_duration_min:.1f}"
+        f"sla={plan.sla_violations} dur={plan.total_duration_min:.1f} anchor={anchor_source}"
     )
     return True
 
