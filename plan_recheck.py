@@ -340,6 +340,11 @@ ENABLE_PLAN_REAL_PICKED_UP_AT = os.environ.get("ENABLE_PLAN_REAL_PICKED_UP_AT", 
 # (bag_signature), a tick TYLKO re-czasuje wzdłuż stałej kolejności. Bez tego
 # plan_recheck re-optymalizował co tick (oscylacja carried-first↔last). Default OFF.
 ENABLE_PLAN_SEQUENCE_LOCK = os.environ.get("ENABLE_PLAN_SEQUENCE_LOCK", "0") == "1"
+# F3: natychmiastowa decyzja sekwencji NA ZMIANĘ WORKA (override/reassign) z
+# panel_watcher — Ziomek układa trasę od razu, bez czekania ≤5 min na tick. Tylko
+# gdy żaden ważny plan nie pokrywa worka (nie nadpisuje trasy z propozycji). OFF.
+ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE = os.environ.get(
+    "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE", "0") == "1"
 _ANCHOR_EVENT_MAX_AGE_MIN = 360.0  # zdarzenia starsze niż 6h = inna zmiana
 
 
@@ -609,6 +614,51 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     plan_manager.save_plan(cid, body)
     _log.info(f"BAG_PLAN_RETIMED cid={cid} stops={len(new_stops)} anchor={anchor_source}")
     return True
+
+
+def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = None,
+                     gps_positions: Optional[Dict[str, Any]] = None,
+                     now: Optional[datetime] = None) -> bool:
+    """F3: natychmiastowa decyzja sekwencji dla JEDNEGO kuriera (wywoływana z
+    panel_watcher na zmianę worka: override/reassign), bez czekania na 5-min tick.
+
+    Samo-bramkująca: jeśli ważny plan POKRYWA cały bieżący worek → no-op (NIE
+    nadpisuje trasy z propozycji). Inaczej liczy kanon `_gen_one_bag_plan`.
+    Best-effort, zawsze zwraca bool, nigdy nie rzuca. Flaga OFF → no-op.
+    """
+    if not ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE:
+        return False
+    try:
+        from dispatch_v2 import route_simulator_v2 as R
+        cid = str(courier_id)
+        if orders_state is None:
+            try:
+                with open(ORDERS_STATE_PATH) as fh:
+                    orders_state = json.load(fh)
+            except Exception:
+                return False
+        oids = [str(oid) for oid, rec in orders_state.items()
+                if isinstance(rec, dict) and str(rec.get("courier_id") or "") == cid
+                and rec.get("status") in ACTIVE_STATUSES]
+        if not oids:
+            return False
+        # Już pokryte ważnym planem (np. świeży zapis propozycji)? → nie ruszaj.
+        plan = plan_manager.load_plan(cid)
+        if plan and plan.get("stops"):
+            covered = {str(s.get("order_id")) for s in plan.get("stops", [])}
+            if set(oids) <= covered:
+                return False
+        if gps_positions is None:
+            gps_positions = _load_gps_positions()
+        if now is None:
+            now = datetime.now(timezone.utc)
+        ok = _gen_one_bag_plan(cid, oids, orders_state, gps_positions, now, R)
+        if ok:
+            _log.info(f"REDECIDE_ON_OVERRIDE cid={cid} bag={len(oids)}")
+        return ok
+    except Exception as e:
+        _log.warning(f"redecide_courier cid={courier_id} fail: {type(e).__name__}: {e}")
+        return False
 
 
 def _pickup_approaching(oids: List[str], orders_state: Dict[str, Any],
