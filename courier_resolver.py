@@ -867,6 +867,57 @@ def _shift_end_dt(entry: Optional[dict]) -> Optional[datetime]:
         return None
 
 
+def _parse_added_at(entry: Optional[dict]) -> Optional[datetime]:
+    """Working-override entry → aware datetime kiedy override dodano (UTC).
+    None gdy brak pola / parse fail. Używane przez GRAFIK-CAP do rozróżnienia
+    'pracuje' wpisanego W TRAKCIE grafiku (added_at <= grafik_end → przytnij)
+    od 'pracuje' wpisanego PO grafiku (realna druga zmiana → nie przycinaj)."""
+    s = (entry or {}).get("added_at")
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def _effective_working_override_shift_end(
+    wo_entry: Optional[dict],
+    grafik_entry: Optional[dict],
+    cap_enabled: bool,
+) -> Optional[datetime]:
+    """Efektywny shift_end dla working-override w gałęzi FALLBACK (kurier NIE jest na
+    realnej zmianie teraz). GRAFIK-CAP (Adrian 2026-06-07): domyślny koniec override'a
+    (24:00) wpisany w trakcie/przed realną zmianą NIE może wskrzeszać kuriera po realnym
+    końcu grafiku → przycinamy do min(override_end, grafik_end). Pure function (testowalna).
+
+    Zwraca Warsaw-aware datetime końca, lub None (None = brak ograniczenia, jak legacy).
+    Przycięcie POMIJANE gdy którekolwiek:
+      - cap_enabled == False (flaga ENABLE_WORKING_OVERRIDE_GRAFIK_CAP off),
+      - wo_entry["end_explicit"] == True (operator podał jawny 'do HH:MM'),
+      - brak grafik_entry (kurier spoza grafiku dziś — 24:00 słuszne),
+      - grafik_end lub added_at nie do sparsowania,
+      - added_at > grafik_end (override dodany PO zmianie = realna druga/wieczorna zmiana).
+    """
+    wo_end = _shift_end_dt(wo_entry)
+    if not cap_enabled:
+        return wo_end
+    if bool((wo_entry or {}).get("end_explicit", False)):
+        return wo_end
+    if not grafik_entry:
+        return wo_end
+    grafik_end = _shift_end_dt(grafik_entry)
+    added_at = _parse_added_at(wo_entry)
+    if grafik_end is None or added_at is None:
+        return wo_end
+    if added_at <= grafik_end:
+        return min(wo_end, grafik_end) if wo_end is not None else grafik_end
+    return wo_end
+
+
 def _post_shift_start_synthetic_eligible(
     cs: CourierState,
     now_utc: datetime,
@@ -956,9 +1007,14 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         _working_override_enabled = bool(_C7.flag(
             "ENABLE_WORKING_OVERRIDE",
             default=bool(getattr(_C7, "ENABLE_WORKING_OVERRIDE", True))))
+        # GRAFIK-CAP (2026-06-07): hot-reload kill-switch; flags.json wygrywa, fallback env-latched.
+        _wo_grafik_cap_enabled = bool(_C7.flag(
+            "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP",
+            default=bool(getattr(_C7, "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP", True))))
     except Exception:
         _post_shift_5min_enabled = False
         _working_override_enabled = True
+        _wo_grafik_cap_enabled = True
     _now_utc_fleet = datetime.now(timezone.utc)
     result = []
     # TASK 3: collect rejected dla observability logger (zero overhead gdy flag false)
@@ -1005,17 +1061,23 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                      if (_working_override_enabled and working) else None)
         if _wo_entry is not None:
             _real_on_shift_now = False
+            _real_grafik_entry = None
             if schedule and cs.name and match_courier is not None and is_on_shift is not None:
                 _rfn = match_courier(cs.name, schedule)
                 if _rfn is not None and schedule.get(_rfn) is not None:
+                    _real_grafik_entry = schedule.get(_rfn)
                     _ros, _ = is_on_shift(cs.name, schedule)
                     _real_on_shift_now = bool(_ros)
             if not _real_on_shift_now:
                 cs.shift_start = _shift_start_dt(_wo_entry)
-                cs.shift_end = _shift_end_dt(_wo_entry)
+                # GRAFIK-CAP (2026-06-07): domyślny koniec "pracuje" (24:00) wpisany w trakcie/
+                # przed realnym grafikiem NIE wskrzesza kuriera po realnym końcu zmiany —
+                # przycina shift_end do min(override_end, grafik_end). Patrz helper docstring.
+                cs.shift_end = _effective_working_override_shift_end(
+                    _wo_entry, _real_grafik_entry, _wo_grafik_cap_enabled)
                 if cs.shift_end is not None and _now_utc_fleet >= cs.shift_end:
-                    # "pracuje do HH:MM" już minęło → po zmianie, pomiń (jak off-shift).
-                    _log.debug(f"skip {cs.name} ({cs.courier_id}): working_override po zmianie")
+                    # override (po ew. cap'ie do grafiku) już minął → po zmianie, pomiń (off-shift).
+                    _log.debug(f"skip {cs.name} ({cs.courier_id}): working_override po zmianie (grafik-cap)")
                     _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                               "reason": "working_override_ended"})
                     continue

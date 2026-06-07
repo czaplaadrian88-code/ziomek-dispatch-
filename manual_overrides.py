@@ -196,15 +196,21 @@ def _default_end() -> str:
     return os.environ.get("WORKING_OVERRIDE_DEFAULT_END", "24:00")
 
 
-def _parse_shift_bounds(text: str) -> Tuple[str, str]:
-    """Free-text → (start_hhmm, end_hhmm). Default start=teraz (Warsaw), end=DEFAULT_END.
+def _parse_shift_bounds(text: str) -> Tuple[str, str, bool]:
+    """Free-text → (start_hhmm, end_hhmm, end_explicit). Default start=teraz (Warsaw),
+    end=DEFAULT_END, end_explicit=False.
 
     Rozpoznaje opcjonalne 'od HH[:MM]' (start) oraz 'do HH[:MM]' (end), np.
     "Adrian pracuje do 22" → end 22:00; "Bartek pracuje od 15:30 do 23" → 15:30–23:00.
-    Tolerancyjne — przy błędnym zakresie zostawia default."""
+    Tolerancyjne — przy błędnym zakresie zostawia default.
+
+    end_explicit=True gdy operator JAWNIE podał 'do HH[:MM]' (świadoma decyzja o końcu).
+    courier_resolver GRAFIK-CAP (2026-06-07) używa tego flagu, by NIE przycinać jawnego
+    końca do końca realnego grafiku — domyślny 24:00 jest przycinany, jawny respektowany."""
     low = (text or "").lower()
     start = _now_warsaw_hhmm()
     end = _default_end()
+    end_explicit = False
     m_od = re.search(r"\bod\s+(\d{1,2})(?::(\d{2}))?", low)
     if m_od:
         h = int(m_od.group(1))
@@ -217,9 +223,11 @@ def _parse_shift_bounds(text: str) -> Tuple[str, str]:
         mm = int(m_do.group(2) or 0)
         if h == 24 and mm == 0:
             end = "24:00"
+            end_explicit = True
         elif 0 <= h <= 23 and 0 <= mm <= 59:
             end = f"{h:02d}:{mm:02d}"
-    return start, end
+            end_explicit = True
+    return start, end, end_explicit
 
 
 def _add_working(data: dict, courier: str, text: str) -> Optional[Tuple[str, str, str]]:
@@ -229,7 +237,7 @@ def _add_working(data: dict, courier: str, text: str) -> Optional[Tuple[str, str
     cid = _resolve_cid(courier)
     if cid == "?":
         return None
-    start, end = _parse_shift_bounds(text)
+    start, end, end_explicit = _parse_shift_bounds(text)
     working = data.setdefault("working", {})
     if not isinstance(working, dict):
         working = {}
@@ -237,6 +245,7 @@ def _add_working(data: dict, courier: str, text: str) -> Optional[Tuple[str, str
     working[cid] = {
         "start": start,
         "end": end,
+        "end_explicit": end_explicit,
         "name": courier,
         "added_at": datetime.now(timezone.utc).isoformat(),
     }

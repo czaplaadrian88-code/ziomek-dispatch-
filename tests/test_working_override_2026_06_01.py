@@ -86,10 +86,10 @@ def test_3_pracuje_do_hour(tmp_path, monkeypatch):
 
 
 def test_4_parse_bounds():
-    s, e = mo._parse_shift_bounds("bartek pracuje od 15:30 do 23")
-    assert s == "15:30" and e == "23:00"
-    _s, e2 = mo._parse_shift_bounds("adrian pracuje")
-    assert e2 == "24:00"
+    s, e, ex = mo._parse_shift_bounds("bartek pracuje od 15:30 do 23")
+    assert s == "15:30" and e == "23:00" and ex is True  # jawny 'do' → end_explicit
+    _s, e2, ex2 = mo._parse_shift_bounds("adrian pracuje")
+    assert e2 == "24:00" and ex2 is False  # domyślny koniec → NIE jawny
 
 
 def test_5_reset_clears_working(tmp_path, monkeypatch):

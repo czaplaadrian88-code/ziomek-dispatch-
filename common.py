@@ -1364,6 +1364,18 @@ ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN = _os.environ.get(
 ENABLE_WORKING_OVERRIDE = _os.environ.get("ENABLE_WORKING_OVERRIDE", "1") == "1"
 WORKING_OVERRIDE_DEFAULT_END = _os.environ.get("WORKING_OVERRIDE_DEFAULT_END", "24:00")
 
+# Working-override GRAFIK-CAP (Adrian 2026-06-07, fix "Ziomek proponuje kuriera po zmianie").
+# Komenda "X pracuje" z DOMYŚLNYM końcem (24:00), wpisana w trakcie/przed realną zmianą
+# kuriera (added_at <= grafik_end), NIE może wskrzeszać go po realnym końcu grafiku —
+# courier_resolver przycina efektywny shift_end do min(override_end, grafik_end). Pomijane gdy:
+#   - operator podał JAWNY koniec ("pracuje do HH:MM" → entry["end_explicit"]=True),
+#   - kurier NIE ma wpisu w grafiku dziś (spoza grafiku — 24:00 słuszne, brak innego źródła),
+#   - override dodany PO końcu grafiku (added_at > grafik_end = realna druga/wieczorna zmiana).
+# Default ON — korektność aktywnego buga; hot-reload kill-switch przez flags.json,
+# env ENABLE_WORKING_OVERRIDE_GRAFIK_CAP=0 wyłącza (legacy: override_end bez przycięcia).
+ENABLE_WORKING_OVERRIDE_GRAFIK_CAP = _os.environ.get(
+    "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP", "1") == "1"
+
 
 def get_flag_czasowka_proactive_use_all_candidates() -> bool:
     return flag("CZASOWKA_PROACTIVE_USE_ALL_CANDIDATES", default=False)
