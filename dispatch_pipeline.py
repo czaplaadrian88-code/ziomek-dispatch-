@@ -1684,6 +1684,51 @@ def _oldest_in_bag_min(bag: List[OrderSim], now: datetime) -> Optional[float]:
     return max(ages) if ages else None
 
 
+def _compute_loadaware_shadow(candidates, feasible, top):
+    """Load-aware distribution counterfactual (2026-06-07) — SHADOW / log-only.
+
+    Kogo wybrałaby dystrybucja load-aware (najmniej obłożony kurier z PEŁNEGO
+    rosteru `candidates`) vs argmax-best (top[0]). Pure, testowalny, ZERO mutacji
+    best/feasible/top. Walidacja offline modelem outcome + cascade harness
+    (eod_drafts/2026-06-07/). Patrz memory ziomek-autonomy-cascade-verdict.
+    """
+    if not candidates:
+        return None
+
+    def _bag(c):
+        return int((getattr(c, "metrics", {}) or {}).get("bag_size_before") or 0)
+
+    def _key(c):
+        return (_bag(c), -(float(getattr(c, "score", 0.0) or 0.0)))
+
+    best_cid = str(getattr(top[0], "courier_id", "")) if top else None
+    feas = [c for c in candidates if getattr(c, "feasibility_verdict", None) == "MAYBE"]
+    la_feas = min(feas, key=_key) if feas else None
+    la_all = min(candidates, key=_key)
+    la_feas_cid = str(getattr(la_feas, "courier_id", "")) if la_feas else None
+    la_all_cid = str(getattr(la_all, "courier_id", ""))
+    return {
+        "best_cid": best_cid,
+        "best_bag": _bag(top[0]) if top else None,
+        "la_feasible_cid": la_feas_cid,
+        "la_feasible_bag": _bag(la_feas) if la_feas else None,
+        "la_roster_cid": la_all_cid,
+        "la_roster_bag": _bag(la_all),
+        "changed_feasible": bool(la_feas_cid and la_feas_cid != best_cid),
+        "changed_roster": la_all_cid != best_cid,
+        "roster": [
+            {
+                "cid": str(getattr(c, "courier_id", "")),
+                "bag": _bag(c),
+                "feas": (getattr(c, "feasibility_verdict", None) == "MAYBE"),
+                "score": round(float(getattr(c, "score", 0.0) or 0.0), 1),
+                "pos": (getattr(c, "metrics", {}) or {}).get("pos_source"),
+            }
+            for c in candidates
+        ],
+    }
+
+
 def assess_order(
     order_event: dict,
     fleet_snapshot: Dict[str, Any],
@@ -4360,6 +4405,16 @@ def _assess_order_impl(
                 f"difficult_case_redirect exception order={order_id}: {_diff_e!r}"
             )
 
+        # === Load-aware selection SHADOW (2026-06-07) — log-only, PEŁNY roster ===
+        # Counterfactual dystrybucji load-aware vs argmax-best. ZERO zmiany
+        # zachowania (nie dotyka best/feasible/top/verdiktu). Walidacja offline.
+        loadaware_shadow = None
+        if getattr(C, "ENABLE_LOADAWARE_SELECTION_SHADOW", False):
+            try:
+                loadaware_shadow = _compute_loadaware_shadow(candidates, feasible, top)
+            except Exception as _la_e:
+                log.warning(f"loadaware_shadow fail order={order_id}: {_la_e!r}")
+
         _result_pf = PipelineResult(
             order_id=order_id,
             verdict="PROPOSE",
@@ -4381,6 +4436,8 @@ def _assess_order_impl(
         _result_pf.r6_danger_shadow = r6_danger_shadow
         # GATE-02 (2026-06-05): post-selekcyjny guard R6 — kogo wskazałby guard (shadow).
         _result_pf.r6_breach_guard_shadow = r6_breach_guard_shadow
+        # Load-aware distribution counterfactual (2026-06-07) — shadow only.
+        _result_pf.loadaware_shadow = loadaware_shadow
         _classify_and_set_auto_route(_result_pf, fleet_snapshot, order_event, now=now)
         return _result_pf
 

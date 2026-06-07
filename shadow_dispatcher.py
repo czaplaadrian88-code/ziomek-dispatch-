@@ -702,6 +702,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # innego. SHADOW — zero zmiany zachowania. None gdy flaga OFF. grep:
         # SELECTION_VETO_SHADOW. Pomiar: eod_drafts/2026-06-01/SELECTION_*.
         "selection_veto_shadow": getattr(result, "selection_veto_shadow", None),
+        # LOAD-AWARE SELECTION SHADOW (2026-06-07): counterfactual dystrybucji
+        # load-aware (najmniej obłożony z PEŁNEGO rosteru) vs argmax-best. Pełny
+        # snapshot rosteru (cid/bag/feas/score/pos) do walidacji offline modelem +
+        # cascade harness. SHADOW — zero zmiany zachowania. None gdy flaga OFF.
+        # grep: loadaware_shadow. Patrz memory ziomek-autonomy-cascade-verdict.
+        "loadaware_shadow": getattr(result, "loadaware_shadow", None),
         # R6BREACH-01 / GATE-02 SHADOW (2026-06-05): counterfactual post-selekcyjnego
         # guarda R6. {"changed": bool, live_winner_*, guard_winner_*, score_gap,
         # n_clean_alts} gdy live zwycięzca łamie 35min a istnieje feasible ≤35 → guard

@@ -2033,6 +2033,13 @@ V319H_GUARD_COSINE_THRESHOLD = float(_os.environ.get(
 # SELECTION_VETO_SHADOW w shadow_decisions.jsonl przez kilka peaków.
 ENABLE_SELECTION_VETO_SHADOW = _os.environ.get(
     "ENABLE_SELECTION_VETO_SHADOW", "0") == "1"
+# Load-aware selection SHADOW (2026-06-07) — log-only, PEŁNY roster.
+# Counterfactual: kogo wybrałaby dystrybucja load-aware (najmniej obłożony
+# kurier z całego rosteru `candidates`) vs argmax-best. ZERO zmiany zachowania.
+# Walidacja offline modelem outcome + cascade harness (eod_drafts/2026-06-07/).
+# Flaga default OFF (shadow-first). Aktywacja: override.conf dispatch-shadow.
+ENABLE_LOADAWARE_SELECTION_SHADOW = _os.environ.get(
+    "ENABLE_LOADAWARE_SELECTION_SHADOW", "0") == "1"
 # R6BREACH-01 / GATE-02 SHADOW (2026-06-05): post-selekcyjny guard R6. Gdy LIVE
 # zwycięzca łamie 35-min (r6_max_bag_time_min > BAG_TIME_HARD_MAX_MIN) a istnieje
 # feasible kandydat ≤35 → guard wskazałby najlepszy-score czysty. SHADOW — NIGDY nie
