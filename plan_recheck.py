@@ -340,6 +340,12 @@ ENABLE_PLAN_REAL_PICKED_UP_AT = os.environ.get("ENABLE_PLAN_REAL_PICKED_UP_AT", 
 # (bag_signature), a tick TYLKO re-czasuje wzdłuż stałej kolejności. Bez tego
 # plan_recheck re-optymalizował co tick (oscylacja carried-first↔last). Default OFF.
 ENABLE_PLAN_SEQUENCE_LOCK = os.environ.get("ENABLE_PLAN_SEQUENCE_LOCK", "0") == "1"
+# F6: TWARDE niezmienniki kolejności W DECYZJI kanonu (carried-first + odbiory wg
+# committed) + re-czasowanie po reorderze. Te same reguły co build_view, ale w
+# kanonie → wszystkie powierzchnie (apka/panele/Telegram) widzą TĘ SAMĄ, poprawną
+# kolejność (reorder build_view staje się no-op). Niezależne od pilności R6. OFF.
+ENABLE_PLAN_CANON_ORDER_INVARIANTS = os.environ.get(
+    "ENABLE_PLAN_CANON_ORDER_INVARIANTS", "0") == "1"
 # F3: natychmiastowa decyzja sekwencji NA ZMIANĘ WORKA (override/reassign) z
 # panel_watcher — Ziomek układa trasę od razu, bez czekania ≤5 min na tick. Tylko
 # gdy żaden ważny plan nie pokrywa worka (nie nadpisuje trasy z propozycji). OFF.
@@ -518,6 +524,21 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
             "status_at_plan_time": "picked_up" if rec.get("status") == "picked_up" else "assigned",
         })
 
+    # F6: twarde niezmienniki kolejności w DECYZJI kanonu (carried-first + odbiory
+    # wg committed) + re-czasowanie po reorderze → kanon poprawny i identyczny na
+    # wszystkich powierzchniach (reorder build_view staje się no-op). Best-effort:
+    # gdy re-czasowanie się nie uda, zostaje surowa kolejność z reorderu (ETA z
+    # symulatora) — nadal lepsza kolejność niż bez F6.
+    if ENABLE_PLAN_CANON_ORDER_INVARIANTS:
+        try:
+            reordered = _apply_canon_order_invariants(stops, orders_state)
+            if [s["order_id"] for s in reordered] != [s["order_id"] for s in stops] or \
+               [s["type"] for s in reordered] != [s["type"] for s in stops]:
+                retimed = _retime_stops(reordered, pos, anchor_departure, orders_state, now)
+                stops = retimed if retimed is not None else reordered
+        except Exception as e:
+            _log.warning(f"canon_order_invariants cid={cid} fail: {type(e).__name__}: {e}")
+
     _gps = gps_positions.get(cid) or {}
     body = {
         "start_pos": {
@@ -541,46 +562,31 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     return True
 
 
-def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
-                         orders_state: Dict[str, Any],
-                         gps_positions: Dict[str, Any], now: datetime) -> bool:
-    """F2 RE-CZASOWANIE: przelicz predicted_at wzdłuż ISTNIEJĄCEJ, STAŁEJ sekwencji.
-
-    Ziomek zdecydował kolejność przy zmianie worka; tu tylko odświeżamy czasy
-    (kurier jedzie / spóźnia się), NIE permutujemy. Łańcuch OSRM od kotwicy przez
-    stopy w ich zapisanej kolejności + clamp committed na odbiorach. Coords z
-    orders_state (autorytatywne — plany z propozycji mają 0,0). Zwraca False gdy
-    brak kotwicy/coords/OSRM → caller spada do pełnej decyzji (defense-in-depth).
-    """
-    stops = plan.get("stops") or []
+def _retime_stops(stops, pos, anchor_departure, orders_state, now):
+    """Przelicz predicted_at wzdłuż DANEJ kolejności stopów: łańcuch OSRM od `pos`
+    + clamp committed na odbiorach + dwell. Coords z orders_state (autorytatywne —
+    plany z propozycji mają 0,0). KOLEJNOŚCI NIE ZMIENIA. None gdy brak coords/OSRM.
+    Używane przez F2 (re-czasowanie) i F6 (po reorderze niezmienników)."""
     if not stops:
-        return False
-    anchor = _start_anchor(cid, oids, orders_state, gps_positions, now)
-    if anchor is None:
-        return False
-    pos, anchor_departure, anchor_source = anchor
-
-    # Coords per stop z orders_state (autorytatywne). Brak → nie re-czasujemy.
+        return None
     coords = []
     for s in stops:
         oid = str(s.get("order_id"))
         rec = orders_state.get(oid) or {}
         c = rec.get("pickup_coords") if s.get("type") == "pickup" else rec.get("delivery_coords")
         if not _coords_ok(c):
-            return False
+            return None
         coords.append((float(c[0]), float(c[1])))
-
     try:
         from dispatch_v2 import osrm_client
     except Exception:
-        return False
+        return None
     points = [pos] + coords
     matrix = osrm_client.table(points, points)
     if not matrix:
-        return False
-
+        return None
     t = max(now, anchor_departure) if anchor_departure else now
-    new_stops = []
+    out = []
     for i, s in enumerate(stops):
         cell = matrix[i][i + 1] if (i + 1) < len(matrix[i]) else None
         leg_min = (cell or {}).get("duration_s")
@@ -592,11 +598,69 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
                 t = ck  # clamp committed (odbiór nie wcześniej niż deklaracja panelu)
         ns = dict(s)
         ns["predicted_at"] = t.astimezone(timezone.utc).isoformat()
-        new_stops.append(ns)
+        out.append(ns)
         dwell = s.get("dwell_min")
         if dwell is None:
             dwell = 1.0 if s.get("type") == "pickup" else 3.5
         t = t + timedelta(minutes=float(dwell))
+    return out
+
+
+def _apply_canon_order_invariants(stops, orders_state):
+    """F6: TWARDE niezmienniki kolejności kanonu (1:1 jak build_view, ale w decyzji):
+    (1) niesione (picked_up) dropoffy → front (kolejność względna zachowana),
+    (2) odbiory wg committed (czas_kuriera) rosnąco. Deterministyczne, niezależne od
+    pilności R6. Fail-safe 'dostawa po odbiorze' (cofa reorder odbiorów gdy złamałby).
+    Zwraca przestawioną listę (te same obiekty stopów). Re-czasowanie robi caller."""
+    seq = list(stops)
+    carried = {str(oid) for oid, o in orders_state.items()
+               if isinstance(o, dict) and o.get("status") == "picked_up"}
+    if carried:
+        front = [s for s in seq if s.get("type") == "dropoff" and str(s.get("order_id")) in carried]
+        if front and seq[:len(front)] != front:
+            rest = [s for s in seq if s not in front]
+            seq = front + rest
+    pickup_positions = [i for i, s in enumerate(seq) if s.get("type") == "pickup"]
+    if len(pickup_positions) >= 2:
+        pickup_steps = [seq[i] for i in pickup_positions]
+
+        def _ck(s):
+            o = orders_state.get(str(s.get("order_id")))
+            dt = _parse_dt(o.get("czas_kuriera_warsaw")) if isinstance(o, dict) else None
+            return dt.timestamp() if dt is not None else float("inf")
+
+        ordered = sorted(pickup_steps, key=_ck)
+        if [s.get("order_id") for s in ordered] != [s.get("order_id") for s in pickup_steps]:
+            new_seq = list(seq)
+            for pos_i, s in zip(pickup_positions, ordered):
+                new_seq[pos_i] = s
+            pidx, didx = {}, {}
+            for i, s in enumerate(new_seq):
+                (pidx if s.get("type") == "pickup" else didx)[str(s.get("order_id"))] = i
+            if all(didx.get(oid) is None or pi <= didx[oid] for oid, pi in pidx.items()):
+                seq = new_seq
+    return seq
+
+
+def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
+                         orders_state: Dict[str, Any],
+                         gps_positions: Dict[str, Any], now: datetime) -> bool:
+    """F2 RE-CZASOWANIE: przelicz predicted_at wzdłuż ISTNIEJĄCEJ, STAŁEJ sekwencji.
+
+    Ziomek zdecydował kolejność przy zmianie worka; tu tylko odświeżamy czasy
+    (kurier jedzie / spóźnia się), NIE permutujemy. Zwraca False gdy brak
+    kotwicy/coords/OSRM → caller spada do pełnej decyzji (defense-in-depth).
+    """
+    stops = plan.get("stops") or []
+    if not stops:
+        return False
+    anchor = _start_anchor(cid, oids, orders_state, gps_positions, now)
+    if anchor is None:
+        return False
+    pos, anchor_departure, anchor_source = anchor
+    new_stops = _retime_stops(stops, pos, anchor_departure, orders_state, now)
+    if new_stops is None:
+        return False
 
     _gps = gps_positions.get(cid) or {}
     body = {
