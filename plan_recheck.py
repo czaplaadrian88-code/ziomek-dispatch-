@@ -658,6 +658,15 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     if anchor is None:
         return False
     pos, anchor_departure, anchor_source = anchor
+    # F6 też w re-czasowaniu: niezmienniki są DETERMINISTYCZNE (carried-first +
+    # committed), więc egzekwowanie ich przy każdym ticku NIE oscyluje (≠ re-
+    # optymalizacja solvera) i sprawia, że zamrożone złe sekwencje same się
+    # poprawiają na następnym ticku, bez czekania na zmianę worka.
+    if ENABLE_PLAN_CANON_ORDER_INVARIANTS:
+        try:
+            stops = _apply_canon_order_invariants(stops, orders_state)
+        except Exception as e:
+            _log.warning(f"canon_order_invariants(retime) cid={cid} fail: {type(e).__name__}: {e}")
     new_stops = _retime_stops(stops, pos, anchor_departure, orders_state, now)
     if new_stops is None:
         return False
