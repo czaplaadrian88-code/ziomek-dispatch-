@@ -292,6 +292,24 @@ def _coords_ok(c: Any) -> bool:
             and c[0] is not None and c[1] is not None)
 
 
+def _sim_picked_up_at(rec: Dict[str, Any], status: Optional[str]):
+    """Realny picked_up_at (aware UTC) dla NIESIONEGO zlecenia — kotwica deadline
+    R6 (route_simulator_v2:1030) chroniąca stygnące jedzenie przed deferowaniem. F1.
+
+    Ten sam parser co ścieżka propozycji (`_bag_dict_to_ordersim` →
+    parse_panel_timestamp), żeby input symulatora był identyczny jak na Telegramie.
+    None gdy flaga OFF / status≠picked_up / brak/niepoprawny timestamp (zachowanie
+    sprzed F1: anchor=czas_kuriera). Lazy import — common już załadowany przez R.
+    """
+    if not ENABLE_PLAN_REAL_PICKED_UP_AT or status != "picked_up":
+        return None
+    try:
+        from dispatch_v2.common import parse_panel_timestamp
+        return parse_panel_timestamp(rec.get("picked_up_at"))
+    except Exception:
+        return None
+
+
 # --- Kotwica startu trasy: GPS-free (flota z założenia bez GPS) ---------------
 # Fix GPS starszy niż próg traktujemy jak BRAK — nie kotwiczymy estymaty na
 # pozycji sprzed godzin/dni. Trasę liczymy z tego, co Ziomek SAM zna: committed
@@ -299,6 +317,11 @@ def _coords_ok(c: Any) -> bool:
 # ostatniego przystanku). Tak liczy człowiek, gdy nikt nie ma GPS.
 GPS_FRESH_MAX_MIN = float(os.environ.get("GPS_FRESH_MAX_MIN", "10"))
 ENABLE_GPS_FREE_ANCHOR = os.environ.get("ENABLE_GPS_FREE_ANCHOR", "0") == "1"
+# F1 unifikacja silnika trasy: przekaż REALNY picked_up_at do symulatora (jak
+# ścieżka propozycji `_bag_dict_to_ordersim`), żeby kara R6 soft-deadline
+# (route_simulator_v2:1030) chroniła NIESIONE jedzenie. Bez tego anchor=None →
+# `continue` → carried bez deadline → solver deferuje stygnące jedzenie. Default OFF.
+ENABLE_PLAN_REAL_PICKED_UP_AT = os.environ.get("ENABLE_PLAN_REAL_PICKED_UP_AT", "0") == "1"
 _ANCHOR_EVENT_MAX_AGE_MIN = 360.0  # zdarzenia starsze niż 6h = inna zmiana
 
 
@@ -422,11 +445,12 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
             return False  # assigned bez coords odbioru → skip cały kurier
         pickup_coords = (float(pc[0]), float(pc[1])) if _coords_ok(pc) \
             else (float(dc[0]), float(dc[1]))  # picked_up: nieużywane (brak pickup-node)
+        picked_up_at = _sim_picked_up_at(rec, status)
         sims[oid] = R.OrderSim(
             order_id=oid,
             pickup_coords=pickup_coords,
             delivery_coords=(float(dc[0]), float(dc[1])),
-            picked_up_at=None,  # naiwny Warsaw w orders_state → pomijamy; anchor=czas_kuriera
+            picked_up_at=picked_up_at,
             status=status,
             pickup_ready_at=_parse_dt(rec.get("czas_kuriera_warsaw")),
         )
