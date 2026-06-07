@@ -2040,6 +2040,17 @@ ENABLE_SELECTION_VETO_SHADOW = _os.environ.get(
 # Flaga default OFF (shadow-first). Aktywacja: override.conf dispatch-shadow.
 ENABLE_LOADAWARE_SELECTION_SHADOW = _os.environ.get(
     "ENABLE_LOADAWARE_SELECTION_SHADOW", "0") == "1"
+# A2 reliability soft-score (2026-06-07) — dźwignia A2 z audytu autonomii 03.06.
+# Kara score ∝ nadwyżka breach_rate kuriera nad medianą floty (confidence-gated).
+# Metoda zwalidowana offline: tools/a2_selection_shadow.py (−5..−9pp, better:worse 4.5:1).
+# Default OFF -> inert. Flip: override.conf dispatch-shadow + restart po digescie at#113.
+ENABLE_A2_RELIABILITY_SOFT_SCORE = _os.environ.get(
+    "ENABLE_A2_RELIABILITY_SOFT_SCORE", "0") == "1"
+A2_RELIABILITY_COEFF = float(_os.environ.get("A2_RELIABILITY_COEFF", "60"))
+A2_RELIABILITY_MIN_GAP = float(_os.environ.get("A2_RELIABILITY_MIN_GAP", "0.05"))
+A2_RELIABILITY_FEED_PATH = _os.environ.get(
+    "A2_RELIABILITY_FEED_PATH",
+    "/root/.openclaw/workspace/dispatch_state/courier_reliability.json")
 # R6BREACH-01 / GATE-02 SHADOW (2026-06-05): post-selekcyjny guard R6. Gdy LIVE
 # zwycięzca łamie 35-min (r6_max_bag_time_min > BAG_TIME_HARD_MAX_MIN) a istnieje
 # feasible kandydat ≤35 → guard wskazałby najlepszy-score czysty. SHADOW — NIGDY nie

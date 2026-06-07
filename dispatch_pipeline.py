@@ -827,6 +827,84 @@ def _v326_multistop_trajectory(feasible: list, new_order, order_id=None) -> list
     return feasible
 
 
+# ── A2 reliability soft-score (2026-06-07, dźwignia A2 z audytu autonomii 03.06) ──
+# Kara score ∝ nadwyżka breach_rate kuriera nad medianą floty, z confidence-gatingiem.
+# Metoda 1:1 z tools/a2_selection_shadow.py (zwalidowana offline na realnych wynikach).
+_A2_FEED_CACHE = {"mtime": None, "data": (None, None, None)}
+
+
+def _load_courier_reliability():
+    """(breach_by_cid, conf_by_cid, fleet_median) z courier_reliability.json.
+    Cache wg mtime; brak/zły plik → (None, None, None) + log (fail-safe = brak kary)."""
+    import os as _os2
+    p = getattr(C, "A2_RELIABILITY_FEED_PATH", "")
+    try:
+        mt = _os2.path.getmtime(p)
+    except OSError:
+        return (None, None, None)
+    if _A2_FEED_CACHE["mtime"] == mt:
+        return _A2_FEED_CACHE["data"]
+    data = (None, None, None)
+    try:
+        import json as _json
+        d = _json.load(open(p, encoding="utf-8"))
+        fm = d.get("fleet_median_breach_rate")
+        cr = d.get("couriers") or {}
+        if not isinstance(fm, (int, float)):
+            raise ValueError("brak fleet_median_breach_rate")
+        breach = {
+            str(k): v.get("breach_rate")
+            for k, v in cr.items()
+            if isinstance(v, dict) and isinstance(v.get("breach_rate"), (int, float))
+        }
+        conf = {
+            str(k): str(v.get("confidence", "low"))
+            for k, v in cr.items() if isinstance(v, dict)
+        }
+        data = (breach, conf, float(fm))
+    except Exception as _e:
+        log.error(f"A2 reliability feed load fail ({p}): {_e!r} — kara=0")
+    _A2_FEED_CACHE.update(mtime=mt, data=data)
+    return data
+
+
+def _a2_reliability_delta(cid, breach, conf, fleet_median, coeff, min_gap):
+    """Kara = -coeff*max(0, breach-median); 0 gdy nieznany cid / gap<min_gap / confidence=='low'."""
+    if not breach:
+        return 0.0
+    br = breach.get(str(cid))
+    if br is None:
+        return 0.0
+    gap = br - fleet_median
+    if gap < min_gap:
+        return 0.0
+    if str((conf or {}).get(str(cid), "low")) == "low":
+        return 0.0
+    return -coeff * max(0.0, gap)
+
+
+def _a2_reliability_soft_score(feasible, order_id=None):
+    """Dźwignia A2: kara score za niską niezawodność kuriera. Flag-gated, default OFF.
+    Buckety pos/tier zachowuje późniejszy _demote_blind_empty + late-pickup tiering
+    (semantyka 'nie-gorszy koszyk + score+delta' jak a2_selection_shadow). Re-sort desc."""
+    if not getattr(C, "ENABLE_A2_RELIABILITY_SOFT_SCORE", False) or not feasible:
+        return feasible
+    breach, conf, fm = _load_courier_reliability()
+    if not breach or fm is None:
+        return feasible
+    coeff = float(getattr(C, "A2_RELIABILITY_COEFF", 60.0))
+    min_gap = float(getattr(C, "A2_RELIABILITY_MIN_GAP", 0.05))
+    for c in feasible:
+        d = _a2_reliability_delta(getattr(c, "courier_id", None), breach, conf, fm, coeff, min_gap)
+        if d:
+            c.score = (c.score or 0.0) + d
+            m = getattr(c, "metrics", None)
+            if isinstance(m, dict):
+                m["a2_reliability_delta"] = round(d, 2)
+    feasible.sort(key=lambda c: -(c.score or 0.0))
+    return feasible
+
+
 def _v326_fleet_load_balance(feasible: list, candidates: list, order_id=None) -> list:
     """V3.26 STEP 4 (R-10 FLEET-LOAD-BALANCE).
 
@@ -3805,6 +3883,10 @@ def _assess_order_impl(
 
     # V3.26 STEP 4 (R-10): fleet load balance adjustment (flag-gated, default False).
     feasible = _v326_fleet_load_balance(feasible, candidates, order_id)
+
+    # A2 reliability soft-score (2026-06-07, dźwignia A2) — flag-gated OFF. PRZED
+    # demote/tiering, by buckety pos/tier zostały re-narzucone (semantyka A2).
+    feasible = _a2_reliability_soft_score(feasible, order_id)
 
     # V3.26 STEP 5 (R-06): multi-stop trajectory district-based (flag-gated, default False).
     feasible = _v326_multistop_trajectory(feasible, new_order, order_id)
