@@ -1403,6 +1403,27 @@ def run() -> int:
                 f"last_processed_age_sec={_snapshot.age_sec:.0f} "
                 f"worker_alive={_snapshot.worker_alive}"
             )
+            # Asystent operacyjny (Faza 1): puls dla watchera (alert „Ziomek milczy")
+            # + get_ziomek_status. Fail-safe (moduł łapie własne wyjątki) — NIE wolno
+            # wywrócić pętli dispatchu. Reużywa policzone eb/pending_queue/_snapshot,
+            # zero dodatkowego I/O w hot pathie.
+            try:
+                from dispatch_v2 import assistant_heartbeat as _ahb
+                _ahb.write_heartbeat(
+                    optimizer_running=True,
+                    queue_depth=pending_queue,
+                    processed=eb.get("processed", 0),
+                    failed=eb.get("failed", 0),
+                    worker_alive=_snapshot.worker_alive,
+                    fallback_active=bool(_snapshot.is_stuck),
+                    pending_reoptimization=eb.get("pending", 0),
+                    logger=_log,
+                )
+            except Exception as _ahb_e:
+                _log.warning(
+                    f"assistant_heartbeat hook fail "
+                    f"({type(_ahb_e).__name__}: {_ahb_e})"
+                )
             if _snapshot.is_stuck:
                 _log.critical(
                     f"V328_WORKER_STUCK age={_snapshot.age_sec:.0f}s "
