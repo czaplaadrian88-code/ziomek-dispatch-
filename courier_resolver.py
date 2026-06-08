@@ -90,8 +90,23 @@ _LAST_POS_GOOD_SOURCES = frozenset({
 })
 
 
+# Zamrożona kopia domyślnej ścieżki — do wykrycia "test patchnął ścieżkę na tmp".
+_DEFAULT_COURIER_LAST_POS_PATH = COURIER_LAST_POS_PATH
+
+
+def _store_blocked_under_test() -> bool:
+    """Guard: pytest na PROD boxie nie może czytać/pisać PRODUKCYJNEGO store —
+    inaczej testowe cid (999 Widmo, 520, 888) lądują w dispatch state → ryzyko
+    widma. Testy które JAWNIE patchują COURIER_LAST_POS_PATH na tmp (round-trip)
+    NIE są blokowane (ścieżka != domyślna)."""
+    return ("PYTEST_CURRENT_TEST" in os.environ
+            and COURIER_LAST_POS_PATH == _DEFAULT_COURIER_LAST_POS_PATH)
+
+
 def _load_last_known_pos() -> Dict[str, dict]:
     """Read courier_last_pos.json → {cid: {lat,lon,ts,source}}. Fail-soft → {}."""
+    if _store_blocked_under_test():
+        return {}
     try:
         with open(COURIER_LAST_POS_PATH, "r", encoding="utf-8") as _f:
             _d = json.load(_f)
@@ -112,6 +127,8 @@ def _lp_entry_ts(entry: dict) -> datetime:
 def _save_last_known_pos(store: Dict[str, dict]) -> None:
     """Atomic write z merge-by-ts (multi-proces safe) + prune. Fail-soft —
     NIGDY nie wywala hot path build_fleet_snapshot."""
+    if _store_blocked_under_test():
+        return
     try:
         disk = _load_last_known_pos()
         merged = dict(disk)

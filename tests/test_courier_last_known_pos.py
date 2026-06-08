@@ -249,6 +249,27 @@ def test_recent_delivery_still_works_without_store():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 4. Guard: pytest na PROD boxie nie zatruwa produkcyjnego store
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_store_io_blocked_on_default_path_under_pytest():
+    """Pod pytest + domyślna ścieżka → load/save są no-op (test cid nie ląduje
+    w produkcyjnym dispatch_state). PYTEST_CURRENT_TEST ustawia pytest sam."""
+    assert CR._store_blocked_under_test() is True
+    CR._save_last_known_pos({"999": _entry(POS_OK, 1)})  # no-op, brak wyjątku
+    assert CR._load_last_known_pos() == {}
+
+
+def test_store_io_allowed_on_patched_tmp_path():
+    """Test który JAWNIE patchuje ścieżkę na tmp (round-trip) NIE jest blokowany."""
+    def body(path):
+        assert CR._store_blocked_under_test() is False
+        CR._save_last_known_pos({"470": _entry(POS_OK, 1)})
+        assert "470" in CR._load_last_known_pos()
+    _with_tmp_store(body)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
