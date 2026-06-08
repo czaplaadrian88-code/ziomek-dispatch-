@@ -10,6 +10,7 @@ Pure dataclass-based, lazy-load GPS aby nie blokowac dispatchu gdy Traccar offli
 """
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -63,6 +64,100 @@ def _load_panel_packs_cache() -> Tuple[Optional[datetime], Dict[str, list], Opti
 # Nie wykluczamy go z dispatchu; dispatch_pipeline normalizuje km_to_pickup
 # do średniej floty, a travel_min do max(prep, 15 min).
 BIALYSTOK_CENTER = (53.1325, 23.1688)
+
+# ── Persistent last-known-position store (FIX 2026-06-08) ────────────────────
+# Problem (case Piotr Zaw 470, order 479289): kurier który chwilę wcześniej był
+# aktywny (dostawa ~10 min temu) traci pozycję do BIALYSTOK_CENTER fiction, bo
+# jego order zniknął z orders_state (prune terminalnych LUB cid=None unlink z
+# V3.15 lag) ZANIM 30-min recent-activity fallback zdążył go użyć → pos_source=
+# no_gps → kara +offset + _demote_blind_empty → mniej zleceń. Store jest
+# courier-keyed i NIEZALEŻNY od orders_state, więc przeżywa oba zdarzenia.
+# W luce GPS odtwarza OSTATNIE ŻYWE źródło pozycji (last_delivered/last_picked_up_*/
+# last_assigned_pickup) — istniejący enum, więc ZERO nowych interakcji w
+# scoringu/feasibility/telegramie. Bounded TTL (≤25 min) → zachowuje guard
+# FAIL-02 (kurier dłużej ciemny niż TTL nadal spada do no_gps i jest demote'owany,
+# brak >25-min phantom). Pozycje odtworzone ze store NIE są re-persystowane
+# (laundering guard) — starzeją się i wygasają. Flag-gated, fail-soft, atomic.
+COURIER_LAST_POS_PATH = "/root/.openclaw/workspace/dispatch_state/courier_last_pos.json"
+LAST_KNOWN_POS_TTL_MIN = 25.0      # wpis starszy niż TTL → ignoruj (fall do no_gps)
+LAST_KNOWN_POS_PRUNE_MIN = 360.0   # wpisy starsze niż 6h usuwane przy zapisie
+# Źródła uznane za "żywą" pozycję — TYLKO te lądują w store. no_gps/pre_shift/none
+# (brak realnej pozycji) NIGDY nie są zapisywane.
+_LAST_POS_GOOD_SOURCES = frozenset({
+    "gps", "last_picked_up_interp", "last_picked_up_pickup",
+    "last_picked_up_delivery", "last_assigned_pickup",
+    "last_delivered", "last_picked_up_recent",
+})
+
+
+def _load_last_known_pos() -> Dict[str, dict]:
+    """Read courier_last_pos.json → {cid: {lat,lon,ts,source}}. Fail-soft → {}."""
+    try:
+        with open(COURIER_LAST_POS_PATH, "r", encoding="utf-8") as _f:
+            _d = json.load(_f)
+        return _d if isinstance(_d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _lp_entry_ts(entry: dict) -> datetime:
+    """ts wpisu store → aware UTC datetime (DT_MIN_UTC gdy brak/zły)."""
+    try:
+        _t = datetime.fromisoformat(str(entry.get("ts", "")).replace("Z", "+00:00"))
+        return _t.replace(tzinfo=timezone.utc) if _t.tzinfo is None else _t
+    except Exception:
+        return DT_MIN_UTC
+
+
+def _save_last_known_pos(store: Dict[str, dict]) -> None:
+    """Atomic write z merge-by-ts (multi-proces safe) + prune. Fail-soft —
+    NIGDY nie wywala hot path build_fleet_snapshot."""
+    try:
+        disk = _load_last_known_pos()
+        merged = dict(disk)
+        for cid, ent in store.items():
+            if not isinstance(ent, dict):
+                continue
+            cur = merged.get(cid)
+            # newer ts wygrywa — proces ze stałą daną nie cofnie świeższej
+            if cur is None or _lp_entry_ts(ent) >= _lp_entry_ts(cur):
+                merged[cid] = ent
+        now = datetime.now(timezone.utc)
+        for cid in list(merged.keys()):
+            if (now - _lp_entry_ts(merged[cid])).total_seconds() / 60.0 > LAST_KNOWN_POS_PRUNE_MIN:
+                del merged[cid]
+        _dir = os.path.dirname(COURIER_LAST_POS_PATH)
+        _fd, _tmp = tempfile.mkstemp(dir=_dir, suffix=".tmp")
+        with os.fdopen(_fd, "w", encoding="utf-8") as _f:
+            json.dump(merged, _f, ensure_ascii=False)
+            _f.flush()
+            os.fsync(_f.fileno())
+        os.replace(_tmp, COURIER_LAST_POS_PATH)
+    except Exception as _e:
+        _log.warning(f"_save_last_known_pos fail: {_e}")
+
+
+def _rescue_from_last_pos(entry, now_utc: datetime):
+    """Pure (testowalne, zero I/O): waliduj wpis store i zwróć
+    ((lat,lon), source, age_min) gdy świeży (<TTL) i w bboxie Białegostoku.
+    None gdy brak / za stary / skażony. source spoza dozwolonych → last_delivered."""
+    if not isinstance(entry, dict):
+        return None
+    try:
+        lat = float(entry["lat"])
+        lon = float(entry["lon"])
+    except (KeyError, ValueError, TypeError):
+        return None
+    age = (now_utc - _lp_entry_ts(entry)).total_seconds() / 60.0
+    if age < 0 or age >= LAST_KNOWN_POS_TTL_MIN:
+        return None
+    if not coords_in_bialystok_bbox((lat, lon)):
+        return None
+    src = entry.get("source")
+    if src not in _LAST_POS_GOOD_SOURCES:
+        src = "last_delivered"
+    return ((lat, lon), src, age)
+
 
 # Pre-shift: kurier którego zmiana zaczyna się w ciągu N min może już dostać
 # propozycję — czas deklarowany uwzględnia jego shift_start.
@@ -121,6 +216,9 @@ class CourierState:
     # w momencie budowy floty — feasibility soft-degraduje zamiast hard-reject
     # NO_ACTIVE_SHIFT gdy shift_end None z powodu awarii pliku grafiku.
     schedule_source_stale: bool = False
+    # FIX 2026-06-08: True gdy pozycja odtworzona z persistent last-known-pos
+    # store (luka GPS). Save-block NIE re-persystuje takich (laundering guard).
+    pos_from_store: bool = False
 
     def to_dict(self):
         return {
@@ -490,6 +588,11 @@ def build_fleet_snapshot(
     gps = _load_gps_positions()
     now_utc = datetime.now(timezone.utc)
 
+    # FIX 2026-06-08: persistent last-known-pos store (flag-gated, fail-soft).
+    # OFF → pusty dict → zero zmiany zachowania (step 4 idzie wprost do no_gps).
+    _lp_on = flag("ENABLE_COURIER_LAST_KNOWN_POS", default=False)
+    _last_pos_store = _load_last_known_pos() if _lp_on else {}
+
     # Grupuj ordery per kurier
     per_courier: Dict[str, List[Dict]] = {}
     for oid, o in state.items():
@@ -743,6 +846,22 @@ def build_fleet_snapshot(
             fleet[kid] = cs
             continue
 
+        # 4a. FIX 2026-06-08: ZANIM fikcja centrum miasta — persistent store.
+        #     Jeśli widzieliśmy tego kuriera na ŻYWEJ pozycji ≤TTL min temu
+        #     (zanim order zniknął ze stanu), odtwórz TĘ pozycję+źródło. To jest
+        #     dokładnie "Ziomek obejdzie się bez GPS, bo wie z planu/historii
+        #     gdzie kurier był". Kurier ciemny >TTL → fall-through do no_gps.
+        if _lp_on:
+            _rescued = _rescue_from_last_pos(_last_pos_store.get(kid), now_utc)
+            if _rescued is not None:
+                cs.pos, cs.pos_source, cs.pos_age_min = _rescued
+                cs.pos_from_store = True
+                fleet[kid] = cs
+                _log.info(
+                    f"LAST_KNOWN_POS_USED kid={kid} src={cs.pos_source} "
+                    f"age={cs.pos_age_min:.1f}min → uratowany z BIALYSTOK_CENTER")
+                continue
+
         # 4. no_gps fallback: kurier wolny, brak GPS i brak historii.
         #    Dajemy syntetyczną pozycję = centrum miasta. Dispatch_pipeline
         #    nadpisze km_to_pickup średnią floty i travel_min = max(prep, 15).
@@ -824,6 +943,34 @@ def build_fleet_snapshot(
         # Cache stale lub missing — wszystkie kuriery dostają age info dla C gate
         for cs in fleet.values():
             cs.panel_packs_cache_age_s = _pks_age
+
+    # FIX 2026-06-08: zapisz świeże ŻYWE pozycje do persistent store, by następne
+    # wywołanie mogło uratować kuriera w luce GPS (step 4a). Pozycje odtworzone
+    # ZE store (pos_from_store, pusty bag) NIE są odświeżane → starzeją się i
+    # wygasają (laundering / immortal-phantom guard). Gdy panel_packs odbudował
+    # worek (len(bag)>0), pozycja jest znów ŻYWA → odświeżamy ts.
+    if _lp_on:
+        try:
+            _now_iso = now_iso()
+            _updates: Dict[str, dict] = {}
+            for kid, cs in fleet.items():
+                if not cs.pos or cs.pos_source not in _LAST_POS_GOOD_SOURCES:
+                    continue
+                if cs.pos_from_store and len(cs.bag) == 0:
+                    continue  # replay ze store — niech wygaśnie, nie odświeżaj
+                try:
+                    _lat = float(cs.pos[0])
+                    _lon = float(cs.pos[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                _updates[kid] = {
+                    "lat": _lat, "lon": _lon,
+                    "ts": _now_iso, "source": cs.pos_source,
+                }
+            if _updates:
+                _save_last_known_pos(_updates)
+        except Exception as _e:
+            _log.warning(f"last_known_pos save block fail: {_e}")
 
     return fleet
 
