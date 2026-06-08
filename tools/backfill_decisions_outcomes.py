@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import argparse
 import glob
+import gzip
 import json
+import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +42,55 @@ def _parse_iso(s):
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+def _open_maybe_gz(p):
+    """Otwórz plik tekstowo, transparentnie obsługując .gz (zrotowane logi)."""
+    if str(p).endswith(".gz"):
+        return gzip.open(p, "rt", encoding="utf-8", errors="replace")
+    return open(p, encoding="utf-8", errors="replace")
+
+
+def _learning_log_files_in_window(cutoff_dt):
+    """Żywy learning_log + zrotowane siblingi (.1, .2.gz, ...) w oknie --days.
+
+    FIX 2026-06-08: logrotate (/etc/logrotate.d/dispatch-v2, size 100M + copytruncate)
+    truncuje żywy plik co ~tydzień → backfill --days 14 widział tylko bieżący ogon
+    (o 04:00 = pusto, noc bez zleceń) → 'Brak danych' → łańcuch retro/A2 padał, feed
+    courier_reliability.json zamarzał (A2 reliability soft-score live od 06-07 jechał
+    na stale danych). Dołączamy zrotowane pliki, których mtime (czas rotacji = koniec
+    zawartości) >= cutoff; gdy mtime < cutoff cała treść jest starsza od okna → pomijamy.
+    Per-line filtr ts<cutoff dotnie resztę. Newest→oldest po numerze rotacji.
+    """
+    files = [str(LEARNING_LOG)]  # żywy zawsze (mtime = teraz)
+    rotated = []
+    for p in glob.glob(str(LEARNING_LOG) + ".*"):
+        m = re.search(r"\.(\d+)(\.gz)?$", p)
+        if not m:
+            continue
+        try:
+            mt = datetime.fromtimestamp(os.path.getmtime(p), timezone.utc)
+        except OSError:
+            continue
+        if mt >= cutoff_dt:
+            rotated.append((int(m.group(1)), p))
+    rotated.sort()  # .1, .2, .3 rosnąco = newest→oldest
+    files.extend(p for _, p in rotated)
+    return files
+
+
+def _iter_learning_lines(log_files):
+    """Yield linie z listy plików learning_log (żywy + zrotowane, w tym .gz)."""
+    for p in log_files:
+        if not os.path.exists(p):
+            continue
+        try:
+            with _open_maybe_gz(p) as f:
+                for line in f:
+                    yield line
+        except OSError as e:
+            sys.stderr.write(f"[backfill] pomijam {p}: {e!r}\n")
+            continue
 
 
 def load_snapshots() -> dict[str, dict]:
@@ -101,9 +153,14 @@ def extract_outcome(order: dict) -> dict:
 
 
 def backfill(days: int, out_path: Path) -> dict:
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = cutoff_dt.isoformat()
     snapshots = load_snapshots()
     sys.stderr.write(f"[backfill] snapshots union: {len(snapshots)} orders\n")
+    log_files = _learning_log_files_in_window(cutoff_dt)
+    sys.stderr.write(
+        f"[backfill] learning_log w oknie {days}d: {[Path(p).name for p in log_files]}\n"
+    )
 
     stats = {
         "n_decisions_total": 0,
@@ -113,8 +170,8 @@ def backfill(days: int, out_path: Path) -> dict:
         "n_skipped_no_decision": 0,
     }
     n_written = 0
-    with LEARNING_LOG.open() as inf, out_path.open("w") as outf:
-        for line in inf:
+    with out_path.open("w") as outf:
+        for line in _iter_learning_lines(log_files):
             try:
                 entry = json.loads(line)
             except Exception:
