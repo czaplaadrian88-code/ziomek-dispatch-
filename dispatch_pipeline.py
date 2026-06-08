@@ -3359,6 +3359,10 @@ def _assess_order_impl(
             "eta_drive_utc": drive_arrival_utc.isoformat(),
             "eta_source": eta_source,
             "pos_source": getattr(cs, "pos_source", None),
+            # FIX 2026-06-08: True gdy pozycja odtworzona z last-known-pos store
+            # (kurier bez GPS uratowany z BIALYSTOK_CENTER fiction). Obserwowalność
+            # dla harnessu — odróżnia rescue od żywego pos_source tego samego enum.
+            "pos_from_store": getattr(cs, "pos_from_store", False),
             "shift_start_min": getattr(cs, "shift_start_min", None),
             # V3.24-A: default False (in-shift kurier — naive_eta > shift_start zawsze).
             # Post-loop override ustawia True dla pos_source=pre_shift (linie ~925).
