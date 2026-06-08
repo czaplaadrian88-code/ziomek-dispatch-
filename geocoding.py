@@ -214,13 +214,32 @@ def _normalize(address: str, city: str) -> str:
     """
     s = address.strip().lower()
     s = re.sub(r"\s+", " ", s)
-    s = re.sub(r"\b(lok|lokal|m|mieszkanie|pietro|piętro)\.?\s*\w+", "", s)
+    # Marker lokalu/mieszkania MUSI być zakończony numerem (lokal=zawsze cyfra).
+    # BUG 2026-06-08: stary wzorzec `\b(...|m|...)\.?\s*\w+` zjadał nazwę KAŻDEJ
+    # ulicy na „M" — „m"+„agazynowa" = całe słowo → „Magazynowa 3"/„Malachitowa 3"
+    # kolidowały w kluczu „3, białystok" (113 zatrutych wpisów, same ulice M).
+    # Wymóg `\d+` po markerze: „magazynowa" (m+a…) NIE pasuje, „m 3"/„m3"/„m.3" tak.
+    s = re.sub(r"\b(?:mieszkanie|lokal|lok|piętro|pietro|m)\.?\s*\d+[a-z]?\b", "", s)
     s = re.sub(r"/[^\s]+", "", s)  # wszystko po pierwszym / (numery lokali)
     s = s.strip(" ,/")
     c = (city or "").strip().lower()
     if c and c not in s:
         s = f"{s}, {c}"
     return s
+
+
+def _is_streetless_key(key: str, city: Optional[str]) -> bool:
+    """True gdy znormalizowany klucz NIE zawiera nazwy ulicy — sam numer domu
+    (np. „3, białystok"). Taki klucz koliduje między różnymi ulicami i jest
+    przyczyną geo-poison (bug `m`-eating-M-streets 2026-06-08). Guard: takich
+    kluczy NIE używamy do cache — zawsze świeży geocode + głośny log, żeby
+    Ziomek NIGDY nie zwracał cudzych współrzędnych po cichu."""
+    core = (key or "").strip().lower()
+    c = (city or "").strip().lower()
+    if c and core.endswith(c):
+        core = core[:-len(c)]
+    core = core.strip(" ,")
+    return bool(re.fullmatch(r"\d+[a-z]?", core))
 
 
 def _google_geocode(address: str, timeout: float = 5.0) -> Optional[tuple]:
@@ -297,13 +316,24 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
 
     key = _normalize(address, effective_city)
 
+    # Geo-poison guard (2026-06-08): klucz bez ulicy = sam numer domu → koliduje
+    # między ulicami. NIE czytamy/piszemy cache dla takiego klucza — zawsze świeży
+    # Google, żeby nigdy nie zwrócić cudzych współrzędnych. Głośny ERROR = sygnał,
+    # że normalizacja zdegenerowała (regresja regexu) — nie cichy bug.
+    streetless = _is_streetless_key(key, effective_city)
+    if streetless:
+        _log.error(
+            f"GEOCODE_STREETLESS_KEY address={address!r} city={effective_city!r} "
+            f"key={key!r} — klucz bez ulicy, OMIJAM cache (świeży geocode, bez zapisu)"
+        )
+
     # A3: TTL check + drift alert prep (przed cache hit decision)
     ttl_on, ttl_sec, _drift_on, _drift_m = _ttl_config()
     stale_old_coords = None  # populated jeśli cache hit ALE stale
 
     with _lock:
         cache = _load_cache(CACHE_PATH)
-        if key in cache:
+        if not streetless and key in cache:
             entry = cache[key]
             if not ttl_on or _is_cache_entry_fresh(entry, ttl_sec):
                 _stats["hits"] += 1
@@ -347,17 +377,18 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
                    source, (time.perf_counter() - t_start) * 1000.0, error="bbox_reject")
         return None
 
-    with _lock:
-        cache = _load_cache(CACHE_PATH)
-        cache[key] = {
-            "lat": result[0],
-            "lon": result[1],
-            "source": source,
-            "original": address,
-            "city": effective_city,
-            "cached_at": time.time(),
-        }
-        _save_cache(CACHE_PATH, cache)
+    if not streetless:
+        with _lock:
+            cache = _load_cache(CACHE_PATH)
+            cache[key] = {
+                "lat": result[0],
+                "lon": result[1],
+                "source": source,
+                "original": address,
+                "city": effective_city,
+                "cached_at": time.time(),
+            }
+            _save_cache(CACHE_PATH, cache)
 
     # A3: drift alert gdy stale entry był re-geocoded i nowe coords różnią się
     # >threshold od cache. Opt-in flag (default OFF) — log WARN ujawnia
