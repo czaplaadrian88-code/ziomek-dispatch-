@@ -278,8 +278,11 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             _aid_int = int(_aid_raw) if _aid_raw is not None else None
         except (TypeError, ValueError):
             _aid_int = None
-        if _aid_int is not None and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS:
-            # Firmowe Nadajesz.pl — fallback coords zamiast KOORD/no_pickup_geocode.
+        _firmowe = _aid_int is not None and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS
+        _reject = C.flag("ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL",
+                         C.ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL)
+        if _firmowe and not _reject:
+            # Legacy (reject OFF): firmowe → fallback coords zamiast KOORD.
             # Mutate local order_state copy NIE persist (state machine source-of-truth).
             order_state = dict(order_state)
             order_state["pickup_coords"] = list(C.FIRMOWE_KONTO_FALLBACK_COORDS)
@@ -289,6 +292,15 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
                 f"({C.FIRMOWE_KONTO_FALLBACK_COORDS}) — KOORD/no_pickup_geocode bypass"
             )
         else:
+            # FAZA 2 #1: reject+flag — NIE podstawiamy centrali. Zła-ale-wiarygodna
+            # pozycja jest gorsza niż głośna porażka → KOORD no_pickup_geocode
+            # (alert NIE-suppressowany dla firmowych pod reject-flagą, patrz
+            # _send_koord_alert).
+            if _firmowe:
+                _log.error(
+                    f"V328_CZASOWKA_FIRMOWE_REJECT oid={order_id} address_id={_aid_int} "
+                    f"— brak pickup geocode → KOORD (reject+flag, NIE centrala)"
+                )
             return {
                 "decision": "KOORD",
                 "reason": "no_pickup_geocode",
@@ -532,9 +544,17 @@ def _send_koord_alert(oid: str, order_state: dict, result: dict) -> None:
     # R-PACZKI-FLEX (2026-05-20): paczki czasówki firmowe DOSTAJĄ KOORD alert
     # (paczka-czasówka ma sztywną porę pickupu, Ziomek/koord musi działać).
     _is_paczka_flex = (C.ENABLE_R_PACZKI_FLEX or C.flag("ENABLE_R_PACZKI_FLEX", False)) and C.is_paczka_order(order_state)
+    # FAZA 2 #1: no_pickup_geocode pod reject-flagą MUSI dotrzeć do koordynatora
+    # (reject bez flagi = cichy drop). Wyjątek od suppress, jak paczka-flex.
+    _no_geocode_reject = (
+        result.get("reason") == "no_pickup_geocode"
+        and C.flag("ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL",
+                   C.ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL)
+    )
     if (_is_firmowe
             and not C.flag("ENABLE_FIRMOWE_KONTO_KOORD_ALERTS", False)
-            and not _is_paczka_flex):
+            and not _is_paczka_flex
+            and not _no_geocode_reject):
         _log.info(
             f"KOORD alert SUPPRESSED oid={oid} address_id={_aid} "
             f"(firmowe konto, flag ENABLE_FIRMOWE_KONTO_KOORD_ALERTS=false). "

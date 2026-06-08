@@ -703,12 +703,23 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _pickup_address_override = f"{_parsed.street} {_parsed.number}"
                 _pcoords = geocode(_pickup_address_override, city="Białystok", timeout=2.0)
                 if _pcoords is None:
-                    _log.warning(
-                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser "
-                        f"OK ({_pickup_address_override!r} conf={_parsed.confidence}) "
-                        f"ALE geocode fail — fallback do FIRMOWE_KONTO_FALLBACK_COORDS"
-                    )
-                    _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
+                    if flag("ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", True):
+                        # FAZA 2 #1: reject+flag — znamy adres, geocode padł →
+                        # NIE udawaj że to centrala. None → no_pickup_geocode → KOORD.
+                        _log.error(
+                            f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser OK "
+                            f"({_pickup_address_override!r} conf={_parsed.confidence}) "
+                            f"ALE geocode FAIL — REJECT+FLAG (→ no_pickup_geocode/KOORD), "
+                            f"NIE podstawiam centrali"
+                        )
+                        # _pcoords zostaje None → downstream defense gate → KOORD
+                    else:
+                        _log.warning(
+                            f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser "
+                            f"OK ({_pickup_address_override!r} conf={_parsed.confidence}) "
+                            f"ALE geocode fail — fallback do FIRMOWE_KONTO_FALLBACK_COORDS"
+                        )
+                        _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
                 else:
                     _log.info(
                         f"NEW_ORDER {zid} firmowe-konto aid={_aid}: uwagi-parser "
@@ -726,22 +737,35 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 }
             else:
                 # P3 edge: parser nie wyciągnął adresu (np. uwagi=company-only
-                # "MALI WOJOWNICY"). Fallback do hardcoded coords centrali —
-                # kurier dostaje real feasibility loop zamiast manual KOORD.
-                _log.info(
-                    f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
-                    f"None (P3 edge), fallback do FIRMOWE_KONTO_FALLBACK_COORDS. "
-                    f"Uwagi: {_uwagi_text!r}"
-                )
-                _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
-                _uwagi_pickup_parsed = {
-                    "street": None,
-                    "number": None,
-                    "company": None,
-                    "confidence": 0.0,
-                    "raw_pickup_line": _uwagi_text or "",
-                    "fallback_coords_used": True,
-                }
+                # "MALI WOJOWNICY"). FAZA 2 #1: reject+flag — bez adresu NIE
+                # zgadujemy centrali; koordynator ustala adres (None → KOORD).
+                if flag("ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", True):
+                    _log.error(
+                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
+                        f"None (P3 edge) — REJECT+FLAG (→ no_pickup_geocode/KOORD), "
+                        f"NIE podstawiam centrali. Uwagi: {_uwagi_text!r}"
+                    )
+                    _pcoords = None
+                    _uwagi_pickup_parsed = {
+                        "street": None, "number": None, "company": None,
+                        "confidence": 0.0, "raw_pickup_line": _uwagi_text or "",
+                        "geocode_rejected": True,
+                    }
+                else:
+                    _log.info(
+                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
+                        f"None (P3 edge), fallback do FIRMOWE_KONTO_FALLBACK_COORDS. "
+                        f"Uwagi: {_uwagi_text!r}"
+                    )
+                    _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
+                    _uwagi_pickup_parsed = {
+                        "street": None,
+                        "number": None,
+                        "company": None,
+                        "confidence": 0.0,
+                        "raw_pickup_line": _uwagi_text or "",
+                        "fallback_coords_used": True,
+                    }
 
         # Geocode delivery address (cache hit ~90% = 0ms, miss = Google API max 2s)
         _del_addr = norm.get("delivery_address")

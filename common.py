@@ -579,6 +579,34 @@ GEOCODE_BBOX_LON_MIN = float(os.environ.get("GEOCODE_BBOX_LON_MIN", "22.85"))
 GEOCODE_BBOX_LON_MAX = float(os.environ.get("GEOCODE_BBOX_LON_MAX", "23.45"))
 
 # ============================================================
+# FAZA 2 — Geocode verification layer ("nie ma prawa się pomylić", 2026-06-08).
+# Bbox to filtr trucizny (czy w mieście), NIE check poprawności wewnątrz miasta.
+# Warstwa weryfikacji łączy 3 sygnały: (2) Google location_type/partial_match,
+# (3) zgodność dzielnicy wyniku z dzielnicą adresu, (4) cross-check z drugim
+# źródłem (Nominatim). ENFORCE domyślnie OFF (shadow: liczy+loguje co BY odrzucił,
+# zero zmiany zachowania) — po dniu obserwacji shadow flip ENFORCE=1.
+# ============================================================
+ENABLE_GEOCODE_VERIFICATION = os.environ.get("ENABLE_GEOCODE_VERIFICATION", "1") == "1"          # compute + log
+ENABLE_GEOCODE_VERIFICATION_ENFORCE = os.environ.get("ENABLE_GEOCODE_VERIFICATION_ENFORCE", "0") == "1"  # reject low-conf
+# (2) location_type, które uznajemy za niepewne (środek geometryczny / przybliżenie)
+GEOCODE_LOW_CONFIDENCE_LOCATION_TYPES = frozenset({"APPROXIMATE", "GEOMETRIC_CENTER"})
+# (3) próg niezgodności dzielnicy: wynik w innej, NIE-sąsiedniej dzielnicy = mismatch
+ENABLE_GEOCODE_DISTRICT_CHECK = os.environ.get("ENABLE_GEOCODE_DISTRICT_CHECK", "1") == "1"
+# (4) cross-source Nominatim
+ENABLE_GEOCODE_CROSS_SOURCE = os.environ.get("ENABLE_GEOCODE_CROSS_SOURCE", "1") == "1"
+GEOCODE_CROSS_SOURCE_MAX_DISAGREE_M = float(os.environ.get("GEOCODE_CROSS_SOURCE_MAX_DISAGREE_M", "400"))
+GEOCODE_NOMINATIM_TIMEOUT_S = float(os.environ.get("GEOCODE_NOMINATIM_TIMEOUT_S", "3.0"))
+GEOCODE_NOMINATIM_USER_AGENT = os.environ.get(
+    "GEOCODE_NOMINATIM_USER_AGENT", "ziomek-dispatch/1.0 (ac@nadajesz.pl)")
+
+# FAZA 2 #1 — firmowe konto: reject+flag zamiast podstawiania centrali gdy
+# parser/geocode padnie (zła-ale-wiarygodna pozycja gorsza niż głośna porażka).
+# Domyślnie ON (dyrektywa Adriana 2026-06-08). ⚠ ODWRACA decyzję 07.05 (fallback
+# do centrali) — firmowe ordery z nieudanym geocode idą do KOORD zamiast centrum.
+# Rollback: ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL=0.
+ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL = os.environ.get("ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", "1") == "1"
+
+# ============================================================
 # Strict courier ID space flag (2026-04-19)
 # Bugfix: build_fleet_snapshot dodawał keys z kurier_piny.json (4-digit PIN-y)
 # jako osobnych kurierów obok prawdziwych courier_id z kurier_ids.json.

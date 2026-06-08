@@ -33,17 +33,20 @@ _NARRATIVE_PREFIX_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# P1 strict pattern for street+number in a token
+# P1 strict pattern for street+number in a token.
+# 2026-06-08 (FAZA 2 item 6): opcjonalny numer wiodący ulicy — „3 Maja",
+# „11 Listopada", „26 Kwietnia" (realne ulice). Wcześniej street wymagał startu
+# od WIELKIEJ litery → „3" było gubione, „3 Maja 5" → street=„Maja" (zły geocode).
 _P1_STREET_NUMBER_PATTERN = re.compile(
     r'^\s*(?:ul\.\s*|al\.\s*)?'
-    r'([A-ZŁŚĆŹŻ][A-Za-złśćźżóęąńĄĘĆŁŃŚŻŹÓ\.\-\s]{2,40}?)'
+    r'((?:\d{1,3}\s+)?[A-ZŁŚĆŹŻ][A-Za-złśćźżóęąńĄĘĆŁŃŚŻŹÓ\.\-\s]{2,40}?)'
     r'\s+(\d+[A-Za-z]?(?:/\d+|/lok\.\s*\d+|\s+Lokal\s+\d+)?)\s*$'
 )
 
-# P2 narrative fallback pattern
+# P2 narrative fallback pattern (też z opcjonalnym numerem wiodącym).
 _P2_NARRATIVE_PATTERN = re.compile(
     r'(?:ul\.\s*|al\.\s*)?'
-    r'([A-ZŁŚĆŹŻa-złśćźżóęąńĄĘĆŁŃŚŻŹÓ\.\-]+(?:\s+[A-ZŁŚĆŹŻa-złśćźżóęąńĄĘĆŁŃŚŻŹÓ\.\-]+){0,3})'
+    r'((?:\d{1,3}\s+)?[A-ZŁŚĆŹŻa-złśćźżóęąńĄĘĆŁŃŚŻŹÓ\.\-]+(?:\s+[A-ZŁŚĆŹŻa-złśćźżóęąńĄĘĆŁŃŚŻŹÓ\.\-]+){0,3})'
     r'\s+(\d+[A-Za-z]?(?:/\d+)?)'
 )
 

@@ -239,7 +239,9 @@ def test_assess_order_normal_flow_with_fallback_coords():
 # ─────────────────────────────────────────────
 
 def test_send_koord_alert_suppressed_for_firmowe_konto():
-    """address_id=161 + flag False → tg_request NIE wywołane, log info zamiast send."""
+    """Firmowe (aid=161) + reason zwykły (BRAK KANDYDATÓW) + flag False → suppress.
+    (Decyzja Adriana 07.05 — firmowe zwykłe KOORD = noise; nadal aktualne dla
+    reason ≠ no_pickup_geocode.)"""
     from unittest.mock import patch
     from dispatch_v2 import czasowka_scheduler
     from dispatch_v2 import common as C
@@ -249,14 +251,44 @@ def test_send_koord_alert_suppressed_for_firmowe_konto():
         "uwagi": "Odbiór: Drtusz, Wyszyńskiego 2/75",
         "pickup_at_warsaw": "2026-05-07T11:00:00+02:00",
     }
-    result = {"reason": "no_pickup_geocode", "minutes_to_pickup": 36, "best": None, "alternatives": []}
+    # reason ≠ no_pickup_geocode → firmowe suppress nadal działa
+    result = {"reason": "brak_feasible_maybe", "minutes_to_pickup": 36, "best": None, "alternatives": []}
 
     with patch.object(C, "flag", side_effect=lambda name, default=False: False if name == "ENABLE_FIRMOWE_KONTO_KOORD_ALERTS" else default), \
          patch.object(czasowka_scheduler, "tg_request") as mock_tg, \
          patch.object(czasowka_scheduler, "_resolve_bot_token", return_value="dummy"), \
          patch.object(czasowka_scheduler, "_resolve_alert_chat_id", return_value=-123):
         czasowka_scheduler._send_koord_alert("471173", order_state, result)
-    assert mock_tg.call_count == 0, "tg_request must NOT be called when firmowe + flag False"
+    assert mock_tg.call_count == 0, "tg_request must NOT be called when firmowe + zwykły reason + flag False"
+
+
+def test_send_koord_alert_FIRES_for_firmowe_no_pickup_geocode_reject():
+    """FAZA 2 #1: firmowe + no_pickup_geocode + reject-flag ON → alert MUSI dotrzeć
+    do koordynatora (reject bez flagi = cichy drop). Wyjątek od firmowe-suppress."""
+    from unittest.mock import patch
+    from dispatch_v2 import czasowka_scheduler
+    from dispatch_v2 import common as C
+
+    order_state = {
+        "address_id": "161",
+        "uwagi": "Odbiór: MALI WOJOWNICY",
+        "pickup_at_warsaw": "2026-05-07T11:00:00+02:00",
+    }
+    result = {"reason": "no_pickup_geocode", "minutes_to_pickup": 36, "best": None, "alternatives": []}
+
+    def _flag(name, default=False):
+        if name == "ENABLE_FIRMOWE_KONTO_KOORD_ALERTS":
+            return False
+        if name == "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL":
+            return True
+        return default
+
+    with patch.object(C, "flag", side_effect=_flag), \
+         patch.object(czasowka_scheduler, "tg_request") as mock_tg, \
+         patch.object(czasowka_scheduler, "_resolve_bot_token", return_value="dummy"), \
+         patch.object(czasowka_scheduler, "_resolve_alert_chat_id", return_value=-123):
+        czasowka_scheduler._send_koord_alert("471173", order_state, result)
+    assert mock_tg.call_count == 1, "no_pickup_geocode pod reject-flagą MUSI alertować koordynatora"
 
 
 def test_send_koord_alert_fires_for_non_firmowe():

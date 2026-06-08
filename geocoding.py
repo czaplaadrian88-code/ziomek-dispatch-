@@ -26,9 +26,11 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from dispatch_v2 import common as C
 from dispatch_v2.common import setup_logger
 from dispatch_v2.geocoding_audit import log_geocode as _audit_log
 from dispatch_v2.osrm_client import nearest as osrm_nearest
+from dispatch_v2 import geocode_verify as _gv
 
 GMAPS_ENV = Path("/root/.openclaw/workspace/.secrets/gmaps.env")
 CACHE_PATH = Path("/root/.openclaw/workspace/dispatch_state/geocode_cache.json")
@@ -242,6 +244,78 @@ def _is_streetless_key(key: str, city: Optional[str]) -> bool:
     return bool(re.fullmatch(r"\d+[a-z]?", core))
 
 
+_PIN_SOURCE_MARKERS = (
+    "adrian_manual", "manual_override", "manual_fix", "manual", "pinned",
+    "panel_ground_truth", "ground_truth", "adrian_verified",
+)
+
+
+def _is_pinned_entry(entry: dict) -> bool:
+    """FAZA 2 (item 5) — wpis ręcznie zweryfikowany (pin). Live re-geokod/TTL
+    NIGDY nie może go nadpisać. Markery: cached_at='pinned:…' lub source z listą."""
+    if not isinstance(entry, dict):
+        return False
+    ca = entry.get("cached_at")
+    if isinstance(ca, str) and ca.lower().startswith("pinned"):
+        return True
+    src = str(entry.get("source") or "").lower()
+    return any(m in src for m in _PIN_SOURCE_MARKERS)
+
+
+def _districts_adjacent(d1: str, d2: str) -> bool:
+    try:
+        adj = C.BIALYSTOK_DISTRICT_ADJACENCY
+    except Exception:
+        return False
+    return (d2 in adj.get(d1, set())) or (d1 in adj.get(d2, set()))
+
+
+def _run_verification(address: str, city, lat: float, lon: float, meta: dict):
+    """FAZA 2 — warstwa weryfikacji (items 2+3+4). Zwraca verdict dict lub None.
+
+    Nominatim (drugie źródło) wołane TYLKO gdy items 2+3 już coś podejrzewają —
+    oszczędność latencji + szacunek dla rate-limitu OSM. Fail-soft: każdy wyjątek
+    → None (brak werdyktu, zero wpływu)."""
+    if not getattr(C, "ENABLE_GEOCODE_VERIFICATION", False):
+        return None
+    try:
+        meta = meta or {}
+
+        def _expected(addr, cty):
+            return C.drop_zone_from_address(addr, cty)
+
+        def _actual(la, lo):
+            from dispatch_v2.district_reverse_lookup import get_district_lookup
+            return get_district_lookup().lookup(la, lo)
+
+        kw = dict(
+            location_type=meta.get("location_type"),
+            partial_match=meta.get("partial_match", False),
+            low_conf_location_types=getattr(
+                C, "GEOCODE_LOW_CONFIDENCE_LOCATION_TYPES", frozenset()),
+            district_check=getattr(C, "ENABLE_GEOCODE_DISTRICT_CHECK", True),
+            expected_district_fn=_expected,
+            actual_district_fn=_actual,
+            districts_adjacent_fn=_districts_adjacent,
+            cross_source_max_disagree_m=getattr(
+                C, "GEOCODE_CROSS_SOURCE_MAX_DISAGREE_M", 400.0),
+        )
+        pre = _gv.verify(address, city, lat, lon,
+                         cross_source=False, cross_source_coords=None, **kw)
+        if pre["confidence"] == "ok" or not getattr(C, "ENABLE_GEOCODE_CROSS_SOURCE", False):
+            return pre
+        # escalate to second source only when suspicious
+        nom = _gv.nominatim_geocode(
+            address, city,
+            timeout=getattr(C, "GEOCODE_NOMINATIM_TIMEOUT_S", 3.0),
+            user_agent=getattr(C, "GEOCODE_NOMINATIM_USER_AGENT", "ziomek-dispatch/1.0"))
+        return _gv.verify(address, city, lat, lon,
+                          cross_source=True, cross_source_coords=nom, **kw)
+    except Exception as e:
+        _log.warning(f"GEOCODE_VERIFY_ERROR address={address!r}: {e}")
+        return None
+
+
 def _google_geocode(address: str, timeout: float = 5.0) -> Optional[tuple]:
     key = _load_key()
     if not key:
@@ -260,9 +334,17 @@ def _google_geocode(address: str, timeout: float = 5.0) -> Optional[tuple]:
         if data.get("status") != "OK" or not data.get("results"):
             _log.debug(f"Google ZERO_RESULTS: {address} status={data.get('status')}")
             return None
-        loc = data["results"][0]["geometry"]["location"]
+        top = data["results"][0]
+        loc = top["geometry"]["location"]
         _stats["google"] += 1
-        return (loc["lat"], loc["lng"])
+        # FAZA 2 (item 2): nieś sygnały pewności — 3. element = meta dict.
+        # location_type ROOFTOP/RANGE_INTERPOLATED = pewne; GEOMETRIC_CENTER/
+        # APPROXIMATE = przybliżenie. partial_match = Google zgadywał ulicę.
+        meta = {
+            "location_type": top["geometry"].get("location_type"),
+            "partial_match": bool(top.get("partial_match", False)),
+        }
+        return (loc["lat"], loc["lng"], meta)
     except Exception as e:
         _log.warning(f"Google geocode fail: {e}")
         return None
@@ -377,6 +459,29 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
                    source, (time.perf_counter() - t_start) * 1000.0, error="bbox_reject")
         return None
 
+    # FAZA 2 — warstwa weryfikacji poprawności (location_type + dzielnica +
+    # cross-source). Shadow: liczy+loguje; ENFORCE: odrzuca „reject" → None
+    # (jak bbox, caller dostaje no_pickup_geocode). „low" zawsze tylko log.
+    _verdict = _run_verification(
+        address, effective_city, result[0], result[1],
+        result[2] if len(result) > 2 else {})
+    if _verdict is not None and _verdict["confidence"] in ("reject", "low"):
+        _lvl = _log.error if _verdict["confidence"] == "reject" else _log.warning
+        _lvl(
+            f"GEOCODE_VERIFY_{_verdict['confidence'].upper()} address={address!r} "
+            f"city={effective_city!r} coords=({result[0]:.5f},{result[1]:.5f}) "
+            f"reasons={_verdict['reasons']} checks={_verdict['checks']} "
+            f"enforce={C.ENABLE_GEOCODE_VERIFICATION_ENFORCE}"
+        )
+        if (_verdict["confidence"] == "reject"
+                and C.ENABLE_GEOCODE_VERIFICATION_ENFORCE):
+            _stats.setdefault("verify_rejected", 0)
+            _stats["verify_rejected"] += 1
+            _audit_log("address", address, effective_city, result[0], result[1],
+                       source, (time.perf_counter() - t_start) * 1000.0,
+                       error="verify_reject")
+            return None
+
     if not streetless:
         with _lock:
             cache = _load_cache(CACHE_PATH)
@@ -406,8 +511,11 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
 
     _audit_log("address", address, effective_city, result[0], result[1],
                source, (time.perf_counter() - t_start) * 1000.0)
-    _log.info(f"Geocoded: {address} / city={effective_city} -> {result} ({source})")
-    return result
+    _log.info(f"Geocoded: {address} / city={effective_city} -> "
+              f"({result[0]:.6f},{result[1]:.6f}) ({source})")
+    # ZAWSZE 2-tuple (lat, lon) — meta (result[2]) jest wewnętrzna (weryfikacja),
+    # callerzy oczekują (lat, lon). Cache-hit też zwraca 2-tuple → spójny typ.
+    return (result[0], result[1])
 
 
 def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None) -> Optional[tuple]:
@@ -430,6 +538,13 @@ def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None)
         cache = _load_cache(RESTAURANT_CACHE_PATH)
         if key in cache:
             entry = cache[key]
+            # FAZA 2 (item 5): pin = ręcznie zweryfikowany → ZAWSZE zwróć, nigdy
+            # nie re-geokoduj ani nie nadpisuj (TTL/drift nie ruszają pinów).
+            if _is_pinned_entry(entry):
+                _stats["hits"] += 1
+                _audit_log("restaurant", name, entry.get("city"), entry["lat"], entry["lon"],
+                           "cache_pin", (time.perf_counter() - t_start) * 1000.0)
+                return (entry["lat"], entry["lon"])
             if not ttl_on or _is_cache_entry_fresh(entry, ttl_sec):
                 _stats["hits"] += 1
                 _audit_log("restaurant", name, entry.get("city"), entry["lat"], entry["lon"],
@@ -469,6 +584,11 @@ def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None)
 
     with _lock:
         cache = _load_cache(RESTAURANT_CACHE_PATH)
+        # FAZA 2 (item 5): nie nadpisuj pinu (re-check pod lockiem — race-safe).
+        _existing = cache.get(key)
+        if _is_pinned_entry(_existing):
+            _log.info(f"geocode_restaurant: pin chroniony, NIE nadpisuję key={key!r}")
+            return (_existing["lat"], _existing["lon"])
         cache[key] = {
             "lat": result[0],
             "lon": result[1],
@@ -494,8 +614,9 @@ def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None)
 
     _audit_log("restaurant", name, effective_city, result[0], result[1],
                "google", (time.perf_counter() - t_start) * 1000.0)
-    _log.info(f"Geocoded restaurant: {name} / city={effective_city} -> {result}")
-    return result
+    _log.info(f"Geocoded restaurant: {name} / city={effective_city} -> "
+              f"({result[0]:.6f},{result[1]:.6f})")
+    return (result[0], result[1])  # ZAWSZE 2-tuple (meta wewnętrzna)
 
 
 def cache_stats() -> dict:
