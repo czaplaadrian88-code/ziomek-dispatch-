@@ -466,15 +466,16 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
         address, effective_city, result[0], result[1],
         result[2] if len(result) > 2 else {})
     if _verdict is not None and _verdict["confidence"] in ("reject", "low"):
+        _enforce = C.flag("ENABLE_GEOCODE_VERIFICATION_ENFORCE",
+                          C.ENABLE_GEOCODE_VERIFICATION_ENFORCE)  # hot-reload via flags.json
         _lvl = _log.error if _verdict["confidence"] == "reject" else _log.warning
         _lvl(
             f"GEOCODE_VERIFY_{_verdict['confidence'].upper()} address={address!r} "
             f"city={effective_city!r} coords=({result[0]:.5f},{result[1]:.5f}) "
             f"reasons={_verdict['reasons']} checks={_verdict['checks']} "
-            f"enforce={C.ENABLE_GEOCODE_VERIFICATION_ENFORCE}"
+            f"enforce={_enforce}"
         )
-        if (_verdict["confidence"] == "reject"
-                and C.ENABLE_GEOCODE_VERIFICATION_ENFORCE):
+        if _verdict["confidence"] == "reject" and _enforce:
             _stats.setdefault("verify_rejected", 0)
             _stats["verify_rejected"] += 1
             _audit_log("address", address, effective_city, result[0], result[1],
