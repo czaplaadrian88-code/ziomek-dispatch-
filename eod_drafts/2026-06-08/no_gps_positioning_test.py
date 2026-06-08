@@ -26,6 +26,11 @@ LEARNING = "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl"
 
 # Moment flipu flagi (UTC). Przed = flaga OFF (fikcja), po = flaga ON (rescue).
 FLIP_TS = datetime(2026, 6, 8, 19, 2, 13, tzinfo=timezone.utc)
+# Okno „czystej produkcji" — po tym czasie żaden pytest nie biegł na prod boxie
+# (08.06 testy do ~19:14). JUTRO ustaw na początek dnia/peaku. Wyklucza residue.
+PROD_CLEAN_TS = datetime(2026, 6, 8, 19, 20, 0, tzinfo=timezone.utc)
+# Testowe cid (fixtures) — nigdy nie są realnym rescue produkcyjnym.
+TEST_CIDS = {"520", "888", "999"}
 
 RESCUE_RE = re.compile(
     r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d).*LAST_KNOWN_POS_USED kid=(\S+) src=(\S+) age=([\d.]+)min")
@@ -53,9 +58,10 @@ def rescue_events():
                 if not m:
                     continue
                 t = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                if t < FLIP_TS:
-                    continue  # przed flipem = artefakty testów / brak rescue produkcyjnego
-                ev.append((t, m.group(2), m.group(3), float(m.group(4))))
+                kid = m.group(2)
+                if t < PROD_CLEAN_TS or kid in TEST_CIDS:
+                    continue  # residue testów (pytest na prod boxie do ~19:14)
+                ev.append((t, kid, m.group(3), float(m.group(4))))
     except FileNotFoundError:
         pass
     return ev
