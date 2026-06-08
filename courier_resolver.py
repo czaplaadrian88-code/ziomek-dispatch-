@@ -547,6 +547,22 @@ def build_fleet_snapshot(
         _tiers = _load_courier_tiers()
         _tinfo = _tiers.get(kid) if isinstance(_tiers, dict) else None
         if isinstance(_tinfo, dict):
+            # TIER-01 (audyt 2026-06-03, conf=high): flaga `inactive` (ex-kurier,
+            # np. cid=61/426 od 04-23) była czytana TYLKO w telegram_approver (UI),
+            # NIGDY w dispatchu → ex-kurier ręcznie wpisany do grafiku dostałby gold
+            # priorytet. Defense-in-depth OBOK grafiku/manual_overrides: inactive ⇒
+            # NIE wchodzi do floty (jak nie-na-zmianie). Warn raz/kid = sygnał stale
+            # roster (Z2 never-silent), nie cisza. Kill-switch flags.json hot-reload.
+            if _tinfo.get("inactive") and flag("ENABLE_INACTIVE_COURIER_GUARD", default=True):
+                _seen_inact = getattr(build_fleet_snapshot, "_warned_inactive", set())
+                if kid not in _seen_inact and len(_seen_inact) < 50:
+                    _log.warning(
+                        f"INACTIVE_COURIER_GUARD kid={kid} "
+                        f"({_tinfo.get('inactive_reason') or 'ex-courier'}) w rosterze/grafiku "
+                        f"→ wykluczony z floty (sprawdź grafik/manual_overrides)")
+                    _seen_inact.add(kid)
+                    build_fleet_snapshot._warned_inactive = _seen_inact
+                continue
             _bag_info = _tinfo.get("bag") or {}
             cs.tier_bag = _bag_info.get("tier")
             cs.tier_cap_override = _bag_info.get("cap_override")
