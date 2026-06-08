@@ -53,6 +53,21 @@ CZASOWKA_THRESHOLD_MIN = 60
 
 _log = setup_logger("panel_client", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
 
+# A3/A4 (anti-silent-failure, doktryna Z2 / Lekcje #32 #80, 2026-06-08): cichy
+# `return None` w parserach + debug-log nowego pola panelu = niewidoczna utrata
+# danych w prod. _warn_once podnosi widoczność do WARNING bez zalewania logu —
+# dedup po kluczu (np. nazwa pola / typ parsera), więc nowy/zepsuty kształt panelu
+# krzyczy RAZ, nie per-zlecenie. Zero zmiany logiki (czysta obserwowalność).
+_WARNED_KEYS: set = set()
+
+
+def _warn_once(key: str, msg: str) -> None:
+    if key in _WARNED_KEYS:
+        return
+    _WARNED_KEYS.add(key)
+    _log.warning(msg)
+
+
 _session_lock = threading.Lock()
 _session = {
     "opener": None,
@@ -409,9 +424,13 @@ def fetch_order_details(zid: str, csrf: Optional[str] = None, timeout: int = 10)
                 if _k in _handled:
                     _zlecenie[_k] = _v
                 else:
-                    _log.debug(
-                        f"fetch_order_details({zid}): unhandled top-level key "
-                        f"'{_k}' (type={type(_v).__name__})"
+                    # A4: było _log.debug (niewidoczne w prod) → warn_once: nowe
+                    # nieobsłużone pole panelu = potencjalna utrata danych (Lekcja #80).
+                    _warn_once(
+                        f"unhandled_top_level:{_k}",
+                        f"fetch_order_details: unhandled top-level key "
+                        f"'{_k}' (type={type(_v).__name__}) — invisible data loss? "
+                        f"(loguję raz na klucz)",
                     )
         return _zlecenie
     except urllib.error.HTTPError as he:
@@ -428,7 +447,14 @@ def _parse_warsaw_naive(s: Optional[str]) -> Optional[datetime]:
         return None
     try:
         return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=WARSAW_TZ)
-    except Exception:
+    except Exception as _e:
+        # A3 (Lekcja #32): NIEpusty wejściowy string którego nie umiemy sparsować =
+        # realna porażka (zmiana formatu panelu), NIE legalne None. Krzyknij raz.
+        _warn_once(
+            f"parse_warsaw_naive:{type(_e).__name__}",
+            f"_parse_warsaw_naive: nieparsowalny ts '{str(s)[:40]}' "
+            f"({type(_e).__name__}) — None (loguję raz na typ błędu)",
+        )
         return None
 
 
@@ -486,7 +512,13 @@ def _parse_utc(s: Optional[str]) -> Optional[datetime]:
     try:
         s2 = s.replace("Z", "+00:00")
         return datetime.fromisoformat(s2)
-    except Exception:
+    except Exception as _e:
+        # A3 (Lekcja #32): jw. — nieparsowalny niepusty ts UTC = sygnał, nie cisza.
+        _warn_once(
+            f"parse_utc:{type(_e).__name__}",
+            f"_parse_utc: nieparsowalny ts '{str(s)[:40]}' "
+            f"({type(_e).__name__}) — None (loguję raz na typ błędu)",
+        )
         return None
 
 
