@@ -461,6 +461,37 @@ def _bag_not_stale(order: Dict, now_utc: datetime) -> bool:
                 seen.add(key)
                 _bag_not_stale._warned_pu = seen
 
+    # ZOMBIE-01 (audyt 2026-06-03): order z `picked_up_at` starszym niż próg = ghost
+    # NIEZALEŻNIE od statusu. Luka strukturalna: status=assigned z zachowanym (starym)
+    # picked_up_at przechodził filtr (gałąź assigned niżej używa updated_at, świeży),
+    # ale route_simulator/feasibility anchorują elapsed na picked_up_at
+    # (is_picked = picked_up_at is not None) → absurd carry (oid=476621: 1463min/24h)
+    # zatruwa r6_max_bag_time (→ scoring carry penalty) + C2 shadow + per-order projekcje
+    # (NIE hard-reject: is_picked→tracked, ale truje metrykę). Filtr PRZY ŹRÓDLE (bag) >
+    # TTL w stanie; ten sam próg co reszta (delivery >threshold od pickupu = patologia
+    # daleko poza R6=35). picked_up_at w przyszłości / parse-fail → NIE filtruj tu
+    # (gałąź per-status oceni). Kill-switch flags.json hot-reload.
+    if flag("ENABLE_ZOMBIE_PICKUP_AT_GUARD", default=True):
+        _pu_ghost = order.get("picked_up_at")
+        if _pu_ghost:
+            try:
+                _pu_dt = datetime.fromisoformat(str(_pu_ghost).replace("Z", "+00:00"))
+                if _pu_dt.tzinfo is None:
+                    _pu_dt = _pu_dt.replace(tzinfo=timezone.utc)
+                if (now_utc - _pu_dt).total_seconds() / 60.0 > _threshold:
+                    _zseen = getattr(_bag_not_stale, "_warned_zombie", set())
+                    _zoid = str(order.get("order_id") or "?")
+                    if _zoid not in _zseen and len(_zseen) < 50:
+                        _log.warning(
+                            f"ZOMBIE_PICKUP_GUARD oid={_zoid} status={status} picked_up_at "
+                            f">{_threshold}min → STALE (ghost: odebrane dawno, nigdy nie "
+                            f"domknięte — nie zatruwa carry/R6)")
+                        _zseen.add(_zoid)
+                        _bag_not_stale._warned_zombie = _zseen
+                    return False
+            except Exception:
+                pass  # parse fail → gałąź per-status oceni
+
     # Timestamp wyboru per status
     if status == "assigned":
         ts_str = order.get("updated_at") or order.get("assigned_at")
