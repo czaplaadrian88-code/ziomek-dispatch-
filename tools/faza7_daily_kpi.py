@@ -77,6 +77,23 @@ def _load_json(path: str, default=None):
         return json.load(f)
 
 
+# PARSE-01 / lekcja #180 (ETAP 1 krok 6, 2026-06-10): okno 2026-06-06 17:53 UTC →
+# 2026-06-10 18:23 UTC ma dane ZATRUTE — PARSER_DEGRADED=true zawieszone przez pytest
+# (AUTO=0, ~85% propozycji = fałszywy ALERT „parser_degraded"). Każda analiza/kalibracja
+# auto_route na tym oknie kalibrowałaby artefakt. Wykluczamy u źródła wczytywania.
+CALIBRATION_EXCLUDE_WINDOWS = [
+    (datetime(2026, 6, 6, 17, 53, tzinfo=timezone.utc),
+     datetime(2026, 6, 10, 18, 24, tzinfo=timezone.utc)),
+]
+
+
+def _in_excluded_window(raw_ts: str | None) -> bool:
+    ts = _parse_ts(raw_ts)
+    if not ts:
+        return False
+    return any(a <= ts <= b for a, b in CALIBRATION_EXCLUDE_WINDOWS)
+
+
 def _parse_ts(raw: str | None) -> datetime | None:
     if not raw:
         return None
@@ -786,8 +803,8 @@ def main(argv=None) -> int:
         print(f"ERROR: backfill not found: {args.backfill}", file=sys.stderr)
         return 2
 
-    rows = list(_iter_jsonl(args.backfill))
-    enriched_rows = list(_iter_jsonl(args.enriched_log))
+    rows = [d for d in _iter_jsonl(args.backfill) if not _in_excluded_window(d.get("decision_ts"))]
+    enriched_rows = [d for d in _iter_jsonl(args.enriched_log) if not _in_excluded_window(d.get("decision_ts") or d.get("ts"))]
     tiers = _load_json(args.tiers)
     names = _load_json(args.names)
 

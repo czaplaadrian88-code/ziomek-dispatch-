@@ -42,6 +42,7 @@ import logging
 import os
 import tempfile
 import threading
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 log = logging.getLogger("parse_continuity_guard")
@@ -60,17 +61,23 @@ def _flag(name: str, default):
 
 
 # Confirm-cycles state (module-level — guard wołany sekwencyjnie z 1 wątku tick()).
+# UWAGA (lekcja #180): lifecycle PARSER_DEGRADED NIE jest już trzymany w pamięci
+# procesu (_degraded_set_by_guard usunięte) — set/clear rozpoznawany po
+# PARSER_DEGRADED_SET_BY w flags.json, niezależnie od procesu/restartu.
 _consecutive_suspicious = 0
-_degraded_set_by_guard = False
 _state_lock = threading.Lock()
+
+# Identyfikator writera w flags.json (lifecycle persystentny, lekcja #180).
+GUARD_SET_BY = "parse01"
+SET_BY_KEY = "PARSER_DEGRADED_SET_BY"
+SET_TS_KEY = "PARSER_DEGRADED_SET_TS"
 
 
 def reset_for_test() -> None:
     """Reset module state — UŻYWAJ TYLKO W TESTACH."""
-    global _consecutive_suspicious, _degraded_set_by_guard
+    global _consecutive_suspicious
     with _state_lock:
         _consecutive_suspicious = 0
-        _degraded_set_by_guard = False
 
 
 def _prev_active_window(cycles: Optional[Iterable[Dict[str, Any]]], window: int = 5) -> List[int]:
@@ -102,18 +109,50 @@ def _median(values: Sequence[int]) -> int:
     return s[len(s) // 2]
 
 
+def _pytest_write_blocked() -> bool:
+    """L1 (wzorzec lekcji #75/telegram_utils, rozszerzony lekcją #180 na flags.json):
+    writer flags.json ODMAWIA zapisu z procesu testowego. PYTEST_CURRENT_TEST jest
+    auto-ustawiane przez pytest (w prod nigdy). Opt-out dla testów które jawnie
+    testują zapis (po spatchowaniu FLAGS_PATH na tmp): ALLOW_FLAGS_WRITE_IN_TEST=1.
+    """
+    if os.environ.get("ALLOW_FLAGS_WRITE_IN_TEST") == "1":
+        return False
+    return "PYTEST_CURRENT_TEST" in os.environ
+
+
+def _read_flags_raw() -> Dict[str, Any]:
+    """Surowy odczyt flags.json (bez cache common — potrzebujemy SET_BY/TS świeże)."""
+    with open(FLAGS_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def _set_parser_degraded(value: bool) -> bool:
     """Atomowy zapis PARSER_DEGRADED w flags.json (temp+fsync+rename).
+
+    Lifecycle (lekcja #180): przy set=True zapisuje też PARSER_DEGRADED_SET_BY
+    ="parse01" + PARSER_DEGRADED_SET_TS; przy clear usuwa oba klucze. Dzięki temu
+    recovery działa cross-procesowo/po restarcie (stan w pliku, nie w pamięci).
 
     Hot-reload przez common.load_flags() podchwyci następny odczyt. NIGDY raise.
     Zwraca True gdy zapis się udał (lub był no-op bo wartość już ustawiona).
     """
     try:
-        with open(FLAGS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        if _pytest_write_blocked():
+            log.warning(
+                "PARSE-01 L1: odmowa zapisu flags.json z procesu testowego "
+                "(PYTEST_CURRENT_TEST w env; opt-out ALLOW_FLAGS_WRITE_IN_TEST=1)"
+            )
+            return False
+        data = _read_flags_raw()
         if bool(data.get("PARSER_DEGRADED", False)) == bool(value):
             return True  # no-op, nie dotykaj pliku (unik mtime churn)
         data["PARSER_DEGRADED"] = bool(value)
+        if value:
+            data[SET_BY_KEY] = GUARD_SET_BY
+            data[SET_TS_KEY] = datetime.now(timezone.utc).isoformat()
+        else:
+            data.pop(SET_BY_KEY, None)
+            data.pop(SET_TS_KEY, None)
         d = os.path.dirname(FLAGS_PATH)
         fd, tmp = tempfile.mkstemp(prefix="flags.", suffix=".tmp", dir=d)
         try:
@@ -132,6 +171,29 @@ def _set_parser_degraded(value: bool) -> bool:
         return True
     except Exception as e:
         log.warning(f"parse_continuity_guard._set_parser_degraded fail (non-blocking): {e}")
+        return False
+
+
+def _degraded_in_flags() -> bool:
+    """Czy PARSER_DEGRADED=true w flags.json (świeży odczyt z pliku). NIGDY raise."""
+    try:
+        return bool(_read_flags_raw().get("PARSER_DEGRADED", False))
+    except Exception as e:
+        log.warning(f"parse_continuity_guard._degraded_in_flags fail (non-blocking): {e}")
+        return False
+
+
+def _degraded_set_by_us() -> bool:
+    """Czy PARSER_DEGRADED=true ORAZ SET_BY=="parse01" (lifecycle persystentny).
+
+    Process-independent: działa też gdy set zrobił inny proces / poprzedni
+    proces przed restartem. NIGDY raise.
+    """
+    try:
+        data = _read_flags_raw()
+        return bool(data.get("PARSER_DEGRADED", False)) and data.get(SET_BY_KEY) == GUARD_SET_BY
+    except Exception as e:
+        log.warning(f"parse_continuity_guard._degraded_set_by_us fail (non-blocking): {e}")
         return False
 
 
@@ -173,7 +235,7 @@ def evaluate(
 
     Defense-in-depth: NIGDY raise. Każdy except => log + no-trip (freeze_new=False).
     """
-    global _consecutive_suspicious, _degraded_set_by_guard
+    global _consecutive_suspicious
     result = {
         "suspicious": False,
         "confirmed": False,
@@ -268,9 +330,11 @@ def evaluate(
                         f"PARSE-01 ACTIVE freeze NEW emisji: {reason} "
                         f"consecutive={_consecutive_suspicious}/{confirm_cycles}"
                     )
-                    if not _degraded_set_by_guard:
+                    # Lifecycle w pliku (lekcja #180): set tylko gdy flaga jeszcze
+                    # nie ustawiona — re-alert/re-write nie powtarza się per cykl,
+                    # niezależnie od procesu/restartu.
+                    if not _degraded_in_flags():
                         if _set_parser_degraded(True):
-                            _degraded_set_by_guard = True
                             _alert(
                                 "🚨 PARSE-01: panel nagle pusty/zwężony — wstrzymuję "
                                 "emisję NOWYCH zleceń (możliwy zerwany parse / zmiana "
@@ -286,10 +350,11 @@ def evaluate(
                         f"consecutive={_consecutive_suspicious}/{confirm_cycles}"
                     )
             else:
-                # RECOVERY: parse wrócił — wyczyść degraded jeśli to my ustawiliśmy.
-                if _degraded_set_by_guard:
+                # RECOVERY: parse wrócił — wyczyść degraded jeśli SET_BY=="parse01"
+                # (cross-procesowo: także set z innego procesu / sprzed restartu;
+                # set ręczny/obcy NIE jest czyszczony — lekcja #180).
+                if _degraded_set_by_us():
                     if _set_parser_degraded(False):
-                        _degraded_set_by_guard = False
                         log.warning("PARSE-01 recovery: PARSER_DEGRADED wyczyszczone (parse wrócił)")
                         _alert(
                             "✅ PARSE-01: parse wrócił do normy — wznawiam emisję NOWYCH "

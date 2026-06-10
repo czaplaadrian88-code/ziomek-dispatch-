@@ -193,6 +193,56 @@ def _restore_osrm_state():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_flags_json(monkeypatch, tmp_path):
+    """L2 (lekcja #180, PARSE-01): globalna izolacja flags.json od testów.
+
+    Incydent 06.06: test_v320_packs_ghost wołał pośrednio parse_continuity_guard,
+    który zapisał PARSER_DEGRADED=true do PRODUKCYJNEGO flags.json → AUTO=0 przez
+    5 dni. Warstwy obrony:
+      L1: parse_continuity_guard._set_parser_degraded odmawia zapisu pod
+          PYTEST_CURRENT_TEST (chroni też script-runnery subprocess, które
+          NIE dostają tego fixture — ScriptRunItem ustawia im env).
+      L2: ten fixture — kopiuje żywy flags.json do tmp_path i patchuje
+          FLAGS_PATH w common + parse_continuity_guard + core.flags_io.
+          Odczyty widzą te same wartości flag (kopia żywego pliku — zero zmiany
+          zachowania testów), zapisy lądują w tmp.
+      L3: per-file patche (np. test_parse_continuity_guard._patch_flags) zostają.
+
+    UWAGA cache: common.load_flags() cache'uje po mtime — resetujemy przed i po
+    teście, inaczej tmp-cache przeciekłby do kolejnych odczytów produkcyjnych.
+    """
+    import shutil
+    from pathlib import Path as _P
+    try:
+        from dispatch_v2 import common
+    except ImportError:
+        yield
+        return
+    _live = _P("/root/.openclaw/workspace/scripts/flags.json")
+    _tmp_flags = tmp_path / "flags.json"
+    try:
+        shutil.copyfile(_live, _tmp_flags)
+    except OSError:
+        _tmp_flags.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(common, "FLAGS_PATH", _tmp_flags)
+    common._flags_cache = None
+    common._flags_mtime = 0
+    try:
+        from dispatch_v2 import parse_continuity_guard as _pcg
+        monkeypatch.setattr(_pcg, "FLAGS_PATH", str(_tmp_flags))
+    except ImportError:
+        pass
+    try:
+        from dispatch_v2.core import flags_io as _fio
+        monkeypatch.setattr(_fio, "FLAGS_PATH", _tmp_flags)
+    except ImportError:
+        pass
+    yield
+    common._flags_cache = None
+    common._flags_mtime = 0
+
+
+@pytest.fixture(autouse=True)
 def _block_real_telegram_sends(monkeypatch, request):
     """Default-block dla send_admin_alert na czas testu.
 

@@ -60,13 +60,22 @@ def _flags_file(tmpdir, **overrides):
     return p
 
 
-def _patch_flags(monkeypatch, path):
-    """Wpina tmp flags.json do pcg (zapis) i common (odczyt hot-reload)."""
+def _patch_flags(monkeypatch, path, allow_write=True):
+    """Wpina tmp flags.json do pcg (zapis) i common (odczyt hot-reload).
+
+    allow_write=True → ALLOW_FLAGS_WRITE_IN_TEST=1 (opt-out L1, lekcja #180):
+    te testy jawnie testują zapis do SPATCHOWANEGO tmp flags.json, więc odmowa
+    L1 (PYTEST_CURRENT_TEST) jest tu wyłączana świadomie.
+    """
     monkeypatch.setattr(pcg, "FLAGS_PATH", str(path))
     from dispatch_v2 import common
     monkeypatch.setattr(common, "FLAGS_PATH", path)
     common._flags_cache = None
     common._flags_mtime = 0
+    if allow_write:
+        monkeypatch.setenv("ALLOW_FLAGS_WRITE_IN_TEST", "1")
+    else:
+        monkeypatch.delenv("ALLOW_FLAGS_WRITE_IN_TEST", raising=False)
 
 
 def _cycles(active_values):
@@ -187,3 +196,84 @@ def test_active_excludes_closed_ids(monkeypatch):
         r = pcg.evaluate(order, closed_ids=closed, cycles=cy)
         assert r["n_active"] == 0
         assert r["suspicious"] is True  # 10->0 active, median 10 >= min_prev 5
+
+
+# ── ETAP 1 PARSE-01 (lekcja #180): lifecycle persystentny + L1 pytest-guard ──
+
+def _read_key(path, key):
+    return json.loads(Path(path).read_text(encoding="utf-8")).get(key)
+
+
+def test_set_writes_lifecycle_keys_and_clear_removes_them(monkeypatch):
+    """Set → PARSER_DEGRADED_SET_BY='parse01' + SET_TS w flags.json; clear usuwa oba."""
+    with tempfile.TemporaryDirectory() as td:
+        fp = _flags_file(td, PARSE_CONTINUITY_GUARD_ENABLED=True,
+                         PARSE_GUARD_CONFIRM_CYCLES=2)
+        _patch_flags(monkeypatch, fp)
+        cy = _cycles([20, 21, 22, 22, 21])
+        pcg.evaluate([], closed_ids=[], cycles=cy)
+        pcg.evaluate([], closed_ids=[], cycles=cy)
+        assert _read_degraded(fp) is True
+        assert _read_key(fp, pcg.SET_BY_KEY) == pcg.GUARD_SET_BY
+        assert _read_key(fp, pcg.SET_TS_KEY)  # ISO ts obecny
+        # recovery
+        good = [str(i) for i in range(18)]
+        pcg.evaluate(good, closed_ids=[], cycles=cy)
+        assert _read_degraded(fp) is False
+        assert _read_key(fp, pcg.SET_BY_KEY) is None
+        assert _read_key(fp, pcg.SET_TS_KEY) is None
+
+
+def test_cross_process_set_then_clear(monkeypatch):
+    """Set w 'procesie A', clear w świeżym 'procesie B' (reset_for_test symuluje
+    restart — lifecycle MUSI być w pliku, nie w pamięci; sedno incydentu #180)."""
+    with tempfile.TemporaryDirectory() as td:
+        fp = _flags_file(td, PARSE_CONTINUITY_GUARD_ENABLED=True,
+                         PARSE_GUARD_CONFIRM_CYCLES=2)
+        _patch_flags(monkeypatch, fp)
+        cy = _cycles([20, 21, 22, 22, 21])
+        # proces A: set
+        pcg.evaluate([], closed_ids=[], cycles=cy)
+        pcg.evaluate([], closed_ids=[], cycles=cy)
+        assert _read_degraded(fp) is True
+        # proces B: świeży stan modułu (restart / inny proces)
+        pcg.reset_for_test()
+        good = [str(i) for i in range(18)]
+        r = pcg.evaluate(good, closed_ids=[], cycles=cy)
+        assert r["suspicious"] is False
+        assert _read_degraded(fp) is False, (
+            "recovery musi czyścić po SET_BY w pliku, nie po zmiennej in-memory"
+        )
+
+
+def test_manual_or_foreign_set_not_cleared_on_recovery(monkeypatch):
+    """PARSER_DEGRADED=true ustawione ręcznie/przez inny mechanizm (brak SET_BY
+    lub SET_BY != 'parse01') NIE jest czyszczone przez recovery guardu."""
+    with tempfile.TemporaryDirectory() as td:
+        fp = _flags_file(td, PARSE_CONTINUITY_GUARD_ENABLED=True,
+                         PARSER_DEGRADED=True)
+        _patch_flags(monkeypatch, fp)
+        cy = _cycles([20, 21, 22, 22, 21])
+        good = [str(i) for i in range(20)]
+        r = pcg.evaluate(good, closed_ids=[], cycles=cy)
+        assert r["suspicious"] is False
+        assert _read_degraded(fp) is True  # nie ruszone (brak SET_BY)
+
+
+def test_l1_refuses_flags_write_under_pytest(monkeypatch):
+    """L1 (lekcja #180/#75): writer flags.json odmawia zapisu gdy
+    PYTEST_CURRENT_TEST w env i brak opt-outu ALLOW_FLAGS_WRITE_IN_TEST=1."""
+    with tempfile.TemporaryDirectory() as td:
+        fp = _flags_file(td, PARSE_CONTINUITY_GUARD_ENABLED=True,
+                         PARSE_GUARD_CONFIRM_CYCLES=2)
+        _patch_flags(monkeypatch, fp, allow_write=False)
+        assert "PYTEST_CURRENT_TEST" in __import__("os").environ
+        # bezpośrednio writer:
+        assert pcg._set_parser_degraded(True) is False
+        assert _read_degraded(fp) is False
+        # i przez pełny flow confirmed (zapis zablokowany, freeze dalej działa):
+        cy = _cycles([20, 21, 22, 22, 21])
+        pcg.evaluate([], closed_ids=[], cycles=cy)
+        r = pcg.evaluate([], closed_ids=[], cycles=cy)
+        assert r["freeze_new"] is True
+        assert _read_degraded(fp) is False  # plik NIE dotknięty z testu
