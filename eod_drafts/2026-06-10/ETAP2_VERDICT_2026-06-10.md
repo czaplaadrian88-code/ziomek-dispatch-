@@ -73,6 +73,14 @@ tylko `restaurant_company_mapping.json` (JSON valid). dispatch-telegram NIE rusz
 
 ## Weryfikacja live (po restarcie)
 - [x] restart czysty 19:09:43 UTC, zero errorów w journalu
-- [ ] nowe pola w shadow_decisions przy pierwszych decyzjach: `v327_bundle_score_mult`,
-  `v327_mult_sign_guarded`, `pos_from_store`, `auto_route_best_is_score_top`
-  (sprawdzone na pierwszej decyzji po restarcie — patrz niżej / następna sesja jeśli noc bez zleceń)
+- [x] **smoke E2E 19:15 UTC na ŻYWEJ flocie** (assess_order + _serialize_result, syntetyczny
+  order SMOKE_ETAP2, bez zapisu do logu): 8 kluczy `v327_*` w best ORAZ alternatives
+  (w tym `v327_mult_sign_guarded`/`v327_min_drop_factor_known`/`v327_unknown_zone_present`),
+  `pos_from_store`+`pos_age_min` w obu lokalizacjach, `late_pickup_*`/`new_pickup_*` w best,
+  `auto_route_best_is_score_top` w context. **Bonus — Z-10 zadziałał na realnym przypadku:**
+  NO_GPS_DEMOTE zdjął cid=515 z topu → best=Patryk (4.5 pkt) NIE jest score-topem →
+  auto_route=ACK reason `best_not_score_top`, margin −120.5 (stary kod policzyłby
+  margin z dwóch innych kandydatów). Store-rescue też żywy w smoke
+  (LAST_KNOWN_POS_USED kid=413 age=23.9 min).
+- [ ] potwierdzenie na pierwszej PRODUKCYJNEJ decyzji (rano 11.06: `tail shadow_decisions.jsonl`
+  → klucze v327_*/pos_from_store/auto_route_best_is_score_top)
