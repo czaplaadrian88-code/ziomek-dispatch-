@@ -995,12 +995,47 @@ def build_fleet_snapshot(
             _key = _pn.strip().rstrip(".,;:").lower()
             if _key:
                 _packs_normalized[_key] = _po
+        # #2 (2026-06-10): po PANEL-CANON (#1) cs.name to PEŁNE imię grafiku
+        # ("Michał Karpiuk"), a panel_packs nick to SKRÓT panelu ("Michał K.") →
+        # samo cs.name już NIE pasuje, co rozbroiło V3.15/D5 anty-lag dla pełno-
+        # imiennych kurierów (bag=0 w state-lag nie dostawał rekonstrukcji). Fix:
+        # rozwiąż nick panelu → cid przez SUROWE aliasy (kurier_ids/courier_names
+        # trzymają skróty panelu jako klucze), EXACT-normalized (nie fuzzy → zero
+        # mis-resolve) i matchuj po cid. Union z dawnym cs.name → strictly >= dawne
+        # pokrycie (zero regresji). Flag-gated kill-switch.
+        _packs_by_cid: Dict[str, list] = {}
+        if flag("ENABLE_PANEL_PACKS_CID_MATCH", True):
+            _nick2cid: Dict[str, str] = {}
+            for _ap in (KURIER_IDS_PATH, COURIER_NAMES_PATH):
+                try:
+                    with open(_ap) as _af:
+                        _adata = json.load(_af)
+                except Exception:
+                    continue
+                # kurier_ids: {imię: cid}; courier_names: {cid: imię}
+                _pairs = (_adata.items() if _ap == KURIER_IDS_PATH
+                          else ((_v, _k) for _k, _v in _adata.items()))
+                for _nm, _c in _pairs:
+                    if isinstance(_nm, str):
+                        _nick2cid.setdefault(
+                            _nm.strip().rstrip(".,;:").lower(), str(_c))
+            for _pn, _po in _pks_packs.items():
+                if not isinstance(_pn, str):
+                    continue
+                _c = _nick2cid.get(_pn.strip().rstrip(".,;:").lower())
+                if _c:
+                    _packs_by_cid[_c] = _po
         for kid, cs in fleet.items():
             cs.panel_packs_cache_age_s = round(_pks_age, 1)
-            if not cs.name or len(cs.bag) > 0:
+            if len(cs.bag) > 0:
                 continue
-            _nick_norm = cs.name.strip().rstrip(".,;:").lower()
-            _candidates = _packs_normalized.get(_nick_norm) or []
+            # match po cid (alias-resolved, robust na pełne cs.name) LUB po cs.name
+            # (dawne — backstop gdy cid nierozwiązany z aliasów). Union.
+            _candidates = _packs_by_cid.get(str(kid))
+            if not _candidates and cs.name:
+                _candidates = _packs_normalized.get(
+                    cs.name.strip().rstrip(".,;:").lower())
+            _candidates = _candidates or []
             if _candidates:
                 cs.panel_packs_oids_signal = [str(x) for x in _candidates]
                 # Faza 4 (D5): odbuduj cs.bag z panel_packs ground-truth. Po
@@ -1226,10 +1261,17 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         from dispatch_v2 import manual_overrides
         excluded = set(manual_overrides.get_excluded())
         working = manual_overrides.get_working()  # {cid_str: {"start","end",...}}
+        # Opcja A (2026-06-10): egzekucja wykluczenia PO CID, nie tylko po nazwie.
+        # Naprawia desync — flota od 06-10 nadaje cs.name pełne imię z grafiku
+        # ('Mateusz Ostapczuk'), a override trzyma skrót panelowy ('Mateusz O') →
+        # czysty match nazw gubił blokadę. get_excluded_cids() mapuje dowolną formę
+        # nazwy → cid. Flag-gated (hot-reload kill-switch), fail-soft.
+        excluded_cids = manual_overrides.get_excluded_cids()
     except Exception as _e:
         _log.warning(f"manual_overrides load failed: {_e}")
         excluded = set()
         working = {}
+        excluded_cids = set()
     if fleet is None:
         fleet = build_fleet_snapshot()
     # Faza 7 flag — read once per dispatchable_fleet() call (no per-courier cost).
@@ -1245,10 +1287,16 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         _wo_grafik_cap_enabled = bool(_C7.flag(
             "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP",
             default=bool(getattr(_C7, "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP", True))))
+        # EXCLUDE-BY-CID (2026-06-10): hot-reload kill-switch; default ON. OFF →
+        # zachowanie sprzed fixu (match tylko po nazwie cs.name).
+        _exclude_by_cid_enabled = bool(_C7.flag(
+            "ENABLE_EXCLUDE_BY_CID",
+            default=bool(getattr(_C7, "ENABLE_EXCLUDE_BY_CID", True))))
     except Exception:
         _post_shift_5min_enabled = False
         _working_override_enabled = True
         _wo_grafik_cap_enabled = True
+        _exclude_by_cid_enabled = True
     _now_utc_fleet = datetime.now(timezone.utc)
     result = []
     # TASK 3: collect rejected dla observability logger (zero overhead gdy flag false)
@@ -1278,10 +1326,14 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
             _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                       "reason": "no_position", "pos_source": cs.pos_source})
             continue
-        if cs.name and cs.name in excluded:
-            _log.debug(f"skip {cs.name} ({cs.courier_id}): manual override")
-            _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
-                                      "reason": "manual_override"})
+        _cid_str_excl = str(cs.courier_id or "")
+        _excl_by_name = bool(cs.name and cs.name in excluded)
+        _excl_by_cid = bool(_exclude_by_cid_enabled and _cid_str_excl and _cid_str_excl in excluded_cids)
+        if _excl_by_name or _excl_by_cid:
+            _how = "name+cid" if (_excl_by_name and _excl_by_cid) else ("cid" if _excl_by_cid else "name")
+            _log.debug(f"skip {cs.name} ({cs.courier_id}): manual override [{_how}]")
+            _rejected_for_log.append({"cid": _cid_str_excl, "panel_name": cs.name,
+                                      "reason": "manual_override", "match": _how})
             continue
 
         # ===== Working-override (Adrian 2026-06-01) — FALLBACK gałąź =====

@@ -57,6 +57,11 @@ KURIER_IDS = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
 KURIER_PINY = "/root/.openclaw/workspace/dispatch_state/kurier_piny.json"
 COURIER_TIERS = "/root/.openclaw/workspace/dispatch_state/courier_tiers.json"
 KURIER_FULL_NAMES = "/root/.openclaw/workspace/scripts/dispatch_v2/daily_accounting/kurier_full_names.json"
+# PANEL-CANON (#1, 2026-06-10): autorytatywne {pełne imię: cid} czytane przez
+# courier_resolver._load_courier_names (NAJWYŻSZY priorytet) + panel admin. #2
+# (self-heal): auto-parowanie utrzymuje ten plik, by nowy/zmapowany kurier trafiał
+# do źródła prawdy dispatchu → kolizja skrótów (Rafał Ja → AMBIGUOUS) nie wraca.
+GRAFIK_FULL_NAMES = "/root/.openclaw/workspace/dispatch_state/grafik_full_names.json"
 
 _STATE_RETENTION_DAYS = 7
 
@@ -148,6 +153,35 @@ def _read_json(path: str) -> dict:
         return {}
 
 
+def _ensure_grafik_full_name(full_name: str, cid) -> bool:
+    """Utrzymuj grafik_full_names.json = {pełne imię: cid} — źródło prawdy cid↔imię
+    dla dispatchu (courier_resolver._load_courier_names, PANEL-CANON #1) i panelu.
+    Zwraca True gdy wpis JUŻ był poprawny (no-op), False gdy DOPISANO/poprawiono
+    (self-heal). Atomic (temp+fsync+rename) + fail-soft. Bez tego nowy/zmapowany
+    kurier nie trafia do źródła prawdy → kolizja skrótów wraca (bug 2026-06-10)."""
+    try:
+        cid_val = int(cid)
+    except (ValueError, TypeError):
+        cid_val = cid
+    try:
+        data = _read_json(GRAFIK_FULL_NAMES)
+        if str(data.get(full_name)) == str(cid_val):
+            return True  # już poprawne — no-op
+        data[full_name] = cid_val
+        _d = os.path.dirname(GRAFIK_FULL_NAMES)
+        fd, tmp = tempfile.mkstemp(dir=_d, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, GRAFIK_FULL_NAMES)
+        _log.info(f"grafik_full_names self-heal: {full_name!r} -> {cid_val}")
+        return False
+    except Exception as e:  # noqa: BLE001
+        _log.warning(f"_ensure_grafik_full_name fail {full_name!r}: {e}")
+        return True  # fail-soft: nie blokuj scanu
+
+
 def verify_courier_wired(cid: int, full_name: str) -> tuple[bool, List[str]]:
     """Re-read the 4 roster files and confirm the courier is visible everywhere.
 
@@ -170,6 +204,28 @@ def verify_courier_wired(cid: int, full_name: str) -> tuple[bool, List[str]]:
     checks.append(("apka kuriera (PIN login)", pin_ok))
     cod_ok = alias in full and cid not in EXCLUDED_CIDS
     checks.append(("liczenie COD (kurier_full_names)", cod_ok))
+
+    # #2 (2026-06-10): REVERSE. Dispatch używa cid->imię->match_courier(grafik).
+    # Forward resolve_cid(imię)->cid przechodzi nawet gdy reverse zatruty skrótem
+    # ("Rafał Ja" wygrywa w _load_courier_names -> AMBIGUOUS -> kurier niewidzialny),
+    # dając false "✓ dyspozytornia". Sprawdź, że cid->imię->grafik resolwuje
+    # JEDNOZNACZNIE do full_name. Fail-soft (błąd introspekcji nie blokuje).
+    # Egzekwuj TYLKO gdy kurier realnie na grafiku (full_name in schedule) — wtedy
+    # dispatch MUSI resolwować cid->imię->ten full_name. Gdy brak disp_name / nie na
+    # grafiku → nie potwierdzamy, nie blokujemy (reverse_ok=True). Łapie POZYTYWNĄ
+    # niezgodność (ambiguous/zły), nie brak danych (test-isolation: mock roster bez
+    # realnego grafiku → reverse_ok=True).
+    reverse_ok = True
+    try:
+        from dispatch_v2 import courier_resolver as _cr
+        from schedule_utils import load_schedule as _ls, match_courier as _mc
+        _sched = _ls() or {}
+        _disp_name = _cr._load_courier_names().get(str(cid))
+        if _disp_name and full_name in _sched:
+            reverse_ok = (_mc(_disp_name, _sched) == full_name)
+    except Exception:  # noqa: BLE001
+        reverse_ok = True  # nie blokuj na błędzie introspekcji
+    checks.append(("dispatch reverse (cid->imię->grafik)", reverse_ok))
 
     lines = [f"{'✓' if ok else '✗'} {label}" for label, ok in checks]
     return all(ok for _, ok in checks), lines
@@ -194,6 +250,9 @@ def _auto_wire(full_name: str, cid: int) -> dict:
         return {"ok": False, "conflict": True, "note": str(e)}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "note": f"{type(e).__name__}: {e}"}
+    # #2: wpisz pełne imię do źródła prawdy dispatchu PRZED weryfikacją, by reverse
+    # (cid->imię->grafik) resolwował (PANEL-CANON #1). Self-heal nowego kuriera.
+    _ensure_grafik_full_name(full_name, cid)
     ok, lines = verify_courier_wired(cid, full_name)
     return {"ok": ok, "pin": result.get("pin"), "alias": result.get("alias"),
             "lines": lines}
@@ -230,8 +289,16 @@ def scan_once(now: Optional[datetime] = None, *, dry_run: bool = False) -> dict:
             # Permanent-inactive / duplicate (e.g. Albert Dec retired) — never pair.
             continue
         summary["scanned"] += 1
-        if resolve_cid(full_name) is not None:
-            continue  # already mapped -> visible everywhere already
+        _cid_existing = resolve_cid(full_name)
+        if _cid_existing is not None:
+            # #2 self-heal: already-mapped (forward resolve_cid) NIE gwarantuje
+            # reverse (cid->imię w dispatchu). Upewnij się, że pełne imię grafiku
+            # jest w grafik_full_names -> cid (źródło prawdy #1). Bez tego kolizja
+            # skrótów wraca dla istniejących kurierów spoza grafik_full_names.
+            if not dry_run and not _ensure_grafik_full_name(full_name, _cid_existing):
+                summary.setdefault("healed", []).append(
+                    {"name": full_name, "cid": _cid_existing})
+            continue  # zmapowany + zapewniony w źródle prawdy
         if full_name in bucket["paired"]:
             summary["skipped_already"] += 1
             continue
