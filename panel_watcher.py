@@ -198,6 +198,175 @@ def _check_panel_override(order_id: str, panel_courier_id: str, source: str) -> 
     )
 
 
+# ---- PANEL_AGREE reconciliation (ETAP 3 audytu 2026-06-10, finding Z-03) ----
+# Lustrzane do PANEL_OVERRIDE: zgodne przypisanie panelem (koordynator daje TEGO
+# SAMEGO kuriera co best propozycji) nie zostawiało żadnego śladu w learning_log
+# (_check_panel_override robi return przy zgodności) → acceptance-rate propozycji
+# nie istniał. Czysta telemetria — zero wpływu na scoring/feasibility/emit.
+# Kill-switch: env ENABLE_PANEL_AGREE=0 (default ON) albo flags.json (hot-reload).
+_PANEL_AGREE_MAX_AGE_MIN = float(os.environ.get("PANEL_AGREE_MAX_PROPOSAL_AGE_MIN", "15"))
+_PANEL_AGREE_TAIL_BYTES = 262144  # tail-scan learning_log za ASSIGN_DIRECT (edge c)
+
+
+def _panel_agree_enabled() -> bool:
+    return flag("ENABLE_PANEL_AGREE",
+                default=os.environ.get("ENABLE_PANEL_AGREE", "1") != "0")
+
+
+def _parse_iso_utc(ts_str) -> Optional[datetime]:
+    if not ts_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _find_recent_assign_direct(order_id: str) -> Optional[dict]:
+    """ASSIGN z przycisku w Telegramie popuje pending_proposals PRZED tym, jak
+    panel pokaże przypisanie — propozycji już nie ma, ale telegram_approver
+    zostawił wpis ASSIGN_DIRECT (chosen_courier_id + proposed_courier_id +
+    decision). Tail-scan ostatnich _PANEL_AGREE_TAIL_BYTES learning_log,
+    najnowszy wpis dla oid świeższy niż _PANEL_AGREE_MAX_AGE_MIN."""
+    import json
+    oid = str(order_id)
+    try:
+        with open(_LEARNING_LOG_PATH, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - _PANEL_AGREE_TAIL_BYTES))
+            tail = f.read().decode("utf-8", errors="ignore")
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        _log.warning(f"PANEL_AGREE tail-scan fail oid={oid}: {e}")
+        return None
+    now = datetime.now(timezone.utc)
+    for ln in reversed(tail.splitlines()):
+        if "ASSIGN_DIRECT" not in ln or oid not in ln:
+            continue
+        try:
+            rec = json.loads(ln)
+        except Exception:
+            continue
+        if rec.get("action") != "ASSIGN_DIRECT" or str(rec.get("order_id")) != oid:
+            continue
+        ts = _parse_iso_utc(rec.get("ts"))
+        if ts is None or (now - ts).total_seconds() > _PANEL_AGREE_MAX_AGE_MIN * 60.0:
+            return None  # najnowszy wpis dla oid za stary → brak związku
+        return rec
+    return None
+
+
+def _write_panel_agree(order_id: str, proposed_cid: str, panel_courier_id: str,
+                       latency_s, dr: dict, source_kind: str, panel_source: str) -> None:
+    """Schemat zgodny z PANEL_OVERRIDE (proposed_courier_id/actual_courier_id —
+    sequential_replay.build_roster łapie cidy bez zmian) + pola pod raport
+    acceptance (tier/prep/verdict). Celowo BEZ pełnego `decision` — komponenty
+    score są w shadow_decisions po order_id (nie bloatujemy learning_log)."""
+    best = dr.get("best") or {}
+    tier = best.get("dwell_tier")
+    if not tier:
+        cap_used = str(best.get("v319h_bug4_tier_cap_used") or "")
+        tier = cap_used.split("/")[0] or None
+    agree_rec = {
+        "ts": now_iso(),
+        "order_id": str(order_id),
+        "action": "PANEL_AGREE",
+        "proposed_courier_id": str(proposed_cid),
+        "actual_courier_id": str(panel_courier_id),
+        "latency_s": latency_s,
+        "proposed_score": best.get("score"),
+        "proposal_verdict": dr.get("verdict"),
+        "restaurant": dr.get("restaurant"),
+        "proposed_tier": tier,
+        "pickup_ready_at": dr.get("pickup_ready_at"),
+        "order_created_at": dr.get("order_created_at"),
+        "source": source_kind,        # "panel" | "telegram" (edge c — bez dublu w raporcie)
+        "panel_source": panel_source,  # panel_initial | panel_diff | panel_reassign
+    }
+    # MP-#11: atomic JSONL append (flock) — ta sama dyscyplina co PANEL_OVERRIDE;
+    # panel_watcher i telegram_approver piszą do TEGO SAMEGO learning_log.
+    try:
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(_LEARNING_LOG_PATH, agree_rec)
+    except Exception as e:
+        _log.warning(f"PANEL_AGREE write learning_log fail oid={order_id}: {e}")
+        return
+    _log.info(
+        f"PANEL_AGREE oid={order_id} cid={panel_courier_id} "
+        f"(score={best.get('score')}) latency_s={latency_s} "
+        f"source={source_kind} src={panel_source}"
+    )
+
+
+def _check_panel_agree(order_id: str, panel_courier_id: str, source: str) -> None:
+    """Jeśli order_id ma świeżą (≤15 min) propozycję i kurier panelu ZGODNY z
+    best — zapisz PANEL_AGREE do learning_log. Rozjazd obsługuje istniejący
+    _check_panel_override (nietknięty). Wywoływane TYLKO po non-duplicate emit
+    COURIER_ASSIGNED (te same 3 call-sites co OVERRIDE — symetria, packs_fallback
+    i coldstart celowo poza oboma). Żadne błędy nie propagują do callera."""
+    import json
+    try:
+        if not _panel_agree_enabled():
+            return
+        if not panel_courier_id or str(panel_courier_id) == str(KOORDYNATOR_ID):
+            return  # hold na Koordynatora = nie-decyzja (edge a, belt-and-suspenders)
+
+        try:
+            with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
+                pending = json.load(f)
+        except FileNotFoundError:
+            pending = {}
+        except Exception as e:
+            _log.warning(f"PANEL_AGREE read pending fail: {e}")
+            return
+
+        rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
+        if rec:
+            # pending_proposals[oid] = zawsze OSTATNIA propozycja (proposal_sender
+            # nadpisuje; starsze kończą jako TIMEOUT_SUPERSEDED) — edge (b).
+            dr = rec.get("decision_record") or {}
+            best = dr.get("best") or {}
+            proposed = str(best.get("courier_id") or "")
+            if not proposed or proposed != str(panel_courier_id):
+                return  # rozjazd → PANEL_OVERRIDE path
+            sent_at = _parse_iso_utc(rec.get("sent_at") or dr.get("ts"))
+            latency_s = None
+            if sent_at is not None:
+                age_s = (datetime.now(timezone.utc) - sent_at).total_seconds()
+                if age_s > _PANEL_AGREE_MAX_AGE_MIN * 60.0:
+                    return  # propozycja za stara — brak związku przyczynowego
+                latency_s = round(age_s, 1)
+            _write_panel_agree(order_id, proposed, panel_courier_id,
+                               latency_s, dr, "panel", source)
+            return
+
+        # Brak pending → możliwy ASSIGN z Telegrama (edge c).
+        ad = _find_recent_assign_direct(order_id)
+        if not ad:
+            return
+        chosen = str(ad.get("chosen_courier_id") or "")
+        proposed = str(ad.get("proposed_courier_id") or "")
+        if not chosen or chosen != str(panel_courier_id):
+            return
+        if not proposed or chosen != proposed:
+            return  # ASSIGN w alternatywę ≠ zgoda z best — zostaje sam ASSIGN_DIRECT
+        dr = ad.get("decision") or {}
+        latency_s = None
+        t_dec = _parse_iso_utc(dr.get("ts"))
+        t_assign = _parse_iso_utc(ad.get("ts"))
+        if t_dec is not None and t_assign is not None:
+            latency_s = round((t_assign - t_dec).total_seconds(), 1)
+        _write_panel_agree(order_id, proposed, panel_courier_id,
+                           latency_s, dr, "telegram", source)
+    except Exception as e:
+        _log.warning(f"PANEL_AGREE check fail oid={order_id}: {type(e).__name__}: {e}")
+
+
 def _save_plan_on_assign(order_id: str, courier_id: str) -> None:
     """V3.19b: zapisz plan z pending_proposals po emit COURIER_ASSIGNED.
 
@@ -874,6 +1043,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "courier_id": courier_id,
                     "payload": _assigned_payload,
                 })
+                _check_panel_agree(zid, courier_id, "panel_initial")
                 _check_panel_override(zid, courier_id, "panel_initial")
                 _save_plan_on_assign_signal(zid, courier_id)
 
@@ -981,6 +1151,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             "payload": {"source": "panel_diff"},
                         })
                         _log.info(f"ASSIGNED {zid} -> {courier_id}")
+                        _check_panel_agree(zid, courier_id, "panel_diff")
                         _check_panel_override(zid, courier_id, "panel_diff")
                         _save_plan_on_assign_signal(zid, courier_id)
             except Exception as e:
@@ -1012,6 +1183,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             "payload": {"source": "panel_reassign"},
                         })
                         _log.info(f"REASSIGNED {zid} {state_courier} -> {panel_courier}")
+                        _check_panel_agree(zid, panel_courier, "panel_reassign")
                         _check_panel_override(zid, panel_courier, "panel_reassign")
                         _save_plan_on_assign_signal(zid, panel_courier)
             except Exception as e:
