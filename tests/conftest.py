@@ -124,6 +124,12 @@ class ScriptRunItem(pytest.Item):
         env["PYTHONHASHSEED"] = "0"          # determinizm (Lekcja replay harness)
         env["PYTEST_CURRENT_TEST"] = self.modname  # L1 telegram-block guard ON
         env.setdefault("PYTHONPATH", _SCRIPTS_ROOT)
+        # ETAP 4 (2026-06-10, Z-04): subprocess nie dostaje fixture
+        # _isolate_flags_json → bez tego czytałby ŻYWY flags.json z flagami
+        # decyzyjnymi (wartości shadow) zamiast env-defaultów jak dotąd.
+        stripped = _stripped_flags_copy()
+        if stripped:
+            env["DISPATCH_FLAGS_PATH"] = stripped
         proc = subprocess.run(
             [sys.executable, "-m", self.modname],
             cwd=_SCRIPTS_ROOT, env=env, capture_output=True, text=True,
@@ -139,6 +145,35 @@ class ScriptRunItem(pytest.Item):
 
     def reportinfo(self):
         return self.path, 0, f"script: {self.modname}"
+
+
+_STRIPPED_FLAGS_PATH = None
+
+
+def _stripped_flags_copy():
+    """Kopia żywego flags.json BEZ flag decyzyjnych ETAP 4 (raz per sesję pytest).
+
+    Script-runnery (subprocess) dostają ją przez env DISPATCH_FLAGS_PATH →
+    common.FLAGS_PATH; flagi decyzyjne wracają do env-defaultów (zachowanie
+    testów identyczne jak przed unifikacją ETAP 4)."""
+    global _STRIPPED_FLAGS_PATH
+    if _STRIPPED_FLAGS_PATH is not None:
+        return _STRIPPED_FLAGS_PATH
+    import json
+    import tempfile
+    try:
+        from dispatch_v2 import common as _c
+        with open(os.path.join(_SCRIPTS_ROOT, "flags.json")) as f:
+            d = json.load(f)
+        for k in getattr(_c, "ETAP4_DECISION_FLAGS", ()):
+            d.pop(k, None)
+        fd, p = tempfile.mkstemp(prefix="flags_etap4_stripped_", suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            json.dump(d, f)
+        _STRIPPED_FLAGS_PATH = p
+    except Exception:
+        _STRIPPED_FLAGS_PATH = ""
+    return _STRIPPED_FLAGS_PATH
 
 
 class ScriptRunError(Exception):
@@ -224,6 +259,19 @@ def _isolate_flags_json(monkeypatch, tmp_path):
         shutil.copyfile(_live, _tmp_flags)
     except OSError:
         _tmp_flags.write_text("{}", encoding="utf-8")
+    # ETAP 4 (2026-06-10, Z-04): wytnij flagi DECYZYJNE z kopii — w produkcji
+    # flags.json jest dla nich kanonem (wartości shadow), ale testy muszą dalej
+    # sterować zachowaniem przez patch stałej modułu (common.ENABLE_X /
+    # courier_resolver.ENABLE_F4_*). decision_flag() przy braku klucza spada
+    # na stałą modułu → idiom testów sprzed unifikacji działa bez zmian.
+    try:
+        import json as _json
+        _d = _json.loads(_tmp_flags.read_text(encoding="utf-8"))
+        for _k in getattr(common, "ETAP4_DECISION_FLAGS", ()):
+            _d.pop(_k, None)
+        _tmp_flags.write_text(_json.dumps(_d), encoding="utf-8")
+    except Exception:
+        pass
     monkeypatch.setattr(common, "FLAGS_PATH", _tmp_flags)
     common._flags_cache = None
     common._flags_mtime = 0

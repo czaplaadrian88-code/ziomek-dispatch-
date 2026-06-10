@@ -8,7 +8,10 @@ from zoneinfo import ZoneInfo
 
 SCRIPTS_DIR = Path("/root/.openclaw/workspace/scripts")
 CONFIG_PATH = SCRIPTS_DIR / "config.json"
-FLAGS_PATH = SCRIPTS_DIR / "flags.json"
+# ETAP 4 (2026-06-10): env override TYLKO dla izolacji testów script-runner
+# (conftest ScriptRunItem podaje subprocesowi kopię bez flag decyzyjnych).
+# W produkcji env nieustawiony → ścieżka kanoniczna.
+FLAGS_PATH = Path(os.environ.get("DISPATCH_FLAGS_PATH") or (SCRIPTS_DIR / "flags.json"))
 
 _config_cache = None
 _config_mtime = 0
@@ -41,6 +44,63 @@ def load_flags():
 def flag(name: str, default=False) -> bool:
     """Szybki odczyt flagi z hot-reload."""
     return load_flags().get(name, default)
+
+
+# ─── ETAP 4 (2026-06-10, audyt Z-04): flagi DECYZYJNE wspólne cross-proces ───
+# Problem: te flagi były module-level env (wartość zamrożona przy imporcie),
+# a env różnił się per unit systemd → dispatch-czasowka (assess_order) i
+# dispatch-plan-recheck (simulate_bag_route_v2) liczyły INNYM silnikiem niż
+# dispatch-shadow (override.conf ~15 flag). Kanon wartości = flags.json
+# (hot-reload, wspólny dla wszystkich procesów); stała modułu (env-default)
+# zostaje WYŁĄCZNIE jako fallback gdy klucza brak w flags.json.
+# Inwentaryzacja + ACK Adriana: eod_drafts/2026-06-10/flag_inventory_etap4.md.
+# UWAGA testy: conftest._isolate_flags_json wycina te klucze z tmp-kopii
+# flags.json, żeby testy dalej sterowały zachowaniem przez patch stałej modułu.
+ETAP4_DECISION_FLAGS = (
+    "ENABLE_BUNDLE_DELIV_SPREAD_CAP",
+    "ENABLE_R1_PROGRESSIVE_CLIP",
+    "ENABLE_V319H_CONTINUATION_GUARD",
+    "ENABLE_A2_RELIABILITY_SOFT_SCORE",
+    "ENABLE_FAIL12_SCHEDULE_FAILOPEN",
+    "ENABLE_F4_COURIER_POS_PICKUP_PROXY",
+    "ENABLE_F4_COURIER_POS_INTERP",
+    "ENABLE_C2_NEG_GAP_DECAY",
+    "ENABLE_PRE_SHIFT_DEPARTURE_CLAMP",
+    "ENABLE_OBJ_SPAN_COST",
+    "ENABLE_OBJ_R6_SOFT_DEADLINE",
+    "ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD",
+    "ENABLE_OBJ_PICKUP_FRESHNESS",
+    "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE",
+    "ENABLE_DIFFICULT_CASE_KOORD_REDIRECT",
+)
+
+# Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
+# do fingerprinta, ich call-sites pozostają bez zmian.
+_FINGERPRINT_EXTRA_FLAGS = (
+    "ENABLE_V327_MULT_SIGN_GUARD",
+    "ENABLE_V328_HEURISTIC_SHIFT_END_GUARD",
+    "ENABLE_FAIL12_STOREPOS_STRICT",
+    "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP",
+)
+
+
+def decision_flag(name: str) -> bool:
+    """Flaga decyzyjna wspólna cross-proces: flags.json → stała modułu → False.
+
+    Stała modułu czytana przez globals() W CZASIE WYWOŁANIA (nie importu) —
+    testy patchujące common.ENABLE_X działają, o ile klucza nie ma w flags.json.
+    """
+    return bool(load_flags().get(name, globals().get(name, False)))
+
+
+def flag_fingerprint() -> str:
+    """Jedna linia z wartościami wszystkich flag decyzyjnych (ETAP 4 KROK 3).
+
+    Logowana przy starcie każdego procesu silnika; po unifikacji fingerprinty
+    shadow / czasowka / plan-recheck MUSZĄ być identyczne.
+    """
+    names = ETAP4_DECISION_FLAGS + _FINGERPRINT_EXTRA_FLAGS
+    return " ".join(f"{n}={int(decision_flag(n))}" for n in names)
 
 
 def now_utc():
@@ -1286,7 +1346,7 @@ def bug2_wave_continuation_bonus(gap_min):
     if gap_min is None:
         return 0.0
     if gap_min < 0:
-        if ENABLE_C2_NEG_GAP_DECAY:
+        if decision_flag("ENABLE_C2_NEG_GAP_DECAY"):  # ETAP 4: flags.json → const
             over = -gap_min  # magnituda antycypacji (jak bardzo pickup wyprzedza free_at)
             if over <= C2_NEG_GAP_FULL_BONUS_MIN:
                 return BUG2_WAVE_CONTINUATION_BONUS  # mild anticipation = realna fala
