@@ -1794,6 +1794,14 @@ D2_STALE_SCHEDULE_SOFT_PENALTY = float(
 # ============================================================
 ENABLE_FAIL12_SCHEDULE_FAILOPEN = _os.environ.get(
     "ENABLE_FAIL12_SCHEDULE_FAILOPEN", "0") == "1"
+# Z-06 (audyt 2026-06-10): rescue z last-known-pos store (TTL 25 min) replay'uje
+# pierwotny label pos_source="gps" → przechodził gate świeżego GPS w FAIL-12
+# ("kurier FIZYCZNIE pracuje — świeży GPS TEN TICK"). Pozycja sprzed ≤25 min to
+# NIE jest dowód pracy w tym ticku → strict: pos_source=="gps" and not
+# pos_from_store. Bag nadal wystarcza. Env default ON; hot-reload kill-switch:
+# flags.json ENABLE_FAIL12_STOREPOS_STRICT=false.
+ENABLE_FAIL12_STOREPOS_STRICT = _os.environ.get(
+    "ENABLE_FAIL12_STOREPOS_STRICT", "1") == "1"
 
 # V3.27.1 sesja 2 — Pre-proposal czas_kuriera recheck (Mechanizm 3 hybrydowy).
 # Per Adrian sesja 2 spec: dla bagu kandydata kuriera, PRZED scoring force fetch

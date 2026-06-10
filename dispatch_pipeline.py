@@ -2283,6 +2283,7 @@ def _assess_order_impl(
             pos_source=getattr(cs, "pos_source", None),  # V3.28 ETAP 2 — clamp gate
             courier_tier=getattr(cs, "tier_bag", None),  # 2026-05-17 tier-aware DWELL
             schedule_source_stale=getattr(cs, "schedule_source_stale", False),  # D2 (audyt 2026-05-28)
+            pos_from_store=getattr(cs, "pos_from_store", False),  # Z-06 (audyt 2026-06-10) — store-rescue to nie świeży fix
         )
 
         # F1.8f hard guard: kurier którego zmiana kończy się PRZED pickup_ready_at
@@ -4791,6 +4792,7 @@ def _assess_order_impl(
                 pos_source=getattr(cs, "pos_source", None),  # V3.28 ETAP 2 — clamp gate
                 courier_tier=getattr(cs, "tier_bag", None),  # 2026-05-17 tier-aware DWELL
                 schedule_source_stale=getattr(cs, "schedule_source_stale", False),  # D2 (audyt 2026-05-28)
+                pos_from_store=getattr(cs, "pos_from_store", False),  # Z-06 (audyt 2026-06-10)
             )
             if sv in ("YES", "MAYBE") and sp is not None:
                 sc = sm.get("pickup_dist_km", 999)

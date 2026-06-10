@@ -310,6 +310,20 @@ def _emit_c2_shadow_diff_event(
         log.warning(f"C2 shadow log write failed: {e}")
 
 
+def _fail12_storepos_strict_on() -> bool:
+    """Z-06 (audyt 2026-06-10): hot-reload kill-switch strict store-pos w FAIL12.
+
+    flags.json ENABLE_FAIL12_STOREPOS_STRICT (default: env const w common, ON).
+    Defensive: błąd odczytu flag → env const.
+    """
+    try:
+        return bool(C.flag(
+            "ENABLE_FAIL12_STOREPOS_STRICT",
+            default=bool(getattr(C, "ENABLE_FAIL12_STOREPOS_STRICT", True))))
+    except Exception:
+        return bool(getattr(C, "ENABLE_FAIL12_STOREPOS_STRICT", True))
+
+
 def check_feasibility_v2(
     courier_pos: Tuple[float, float],
     bag: List[OrderSim],
@@ -324,6 +338,7 @@ def check_feasibility_v2(
     pos_source: Optional[str] = None,  # V3.28 ETAP 2 — pre_shift departure clamp gate
     courier_tier: Optional[str] = None,  # 2026-05-17 — tier-aware DWELL (tier_bag)
     schedule_source_stale: bool = False,  # D2 (audyt 2026-05-28) — grafik STALE → soft-degrade Gate 1
+    pos_from_store: bool = False,  # Z-06 (audyt 2026-06-10) — pozycja odtworzona z last-known-pos store (≤25 min), NIE świeży fix tego ticku
 ) -> Tuple[str, str, Dict, Optional[RoutePlanV2]]:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -558,12 +573,19 @@ def check_feasibility_v2(
                 # — D2 nie dubluje alertu, tylko soft-degraduje + loguje metrykę.
                 metrics["d2_stale_schedule_soft"] = True
                 metrics["d2_soft_penalty"] = C.D2_STALE_SCHEDULE_SOFT_PENALTY
-            elif C.ENABLE_FAIL12_SCHEDULE_FAILOPEN and (len(bag) > 0 or pos_source == "gps"):
+            elif C.ENABLE_FAIL12_SCHEDULE_FAILOPEN and (
+                    len(bag) > 0
+                    or (pos_source == "gps" and not (
+                        pos_from_store and _fail12_storepos_strict_on()))):
                 # FAIL-12 (audyt 2026-06-03): grafik padł/niepełny → shift_end=None mimo
                 # że kurier FIZYCZNIE pracuje (ma bag LUB świeży GPS ten tick). Zamiast
                 # hard-reject NO_ACTIVE_SHIFT (fail-CLOSED całej floty, precedens #471036)
                 # → fail-OPEN: przepuść przez Gate 1. Bag/świeży GPS to twardy dowód pracy
                 # niezależny od grafiku. R6 35min / SLA / post-shift egzekwowane dalej niżej.
+                # Z-06 (audyt 2026-06-10): rescue z last-known-pos store replay'uje
+                # pierwotny label "gps" — pozycja sprzed ≤25 min to NIE jest świeży fix
+                # tego ticku, więc nie jest dowodem pracy → nie przechodzi gate'u
+                # (flaga ENABLE_FAIL12_STOREPOS_STRICT, default ON). Bag wystarcza dalej.
                 fail12_signal = "bag" if len(bag) > 0 else "gps"
                 metrics["fail12_schedule_failopen"] = True
                 metrics["fail12_signal"] = fail12_signal
@@ -575,6 +597,16 @@ def check_feasibility_v2(
                     fail12_signal, len(bag), pos_source,
                 )
             else:
+                # Z-06 obserwowalność: fail-open ZABLOKOWANY wyłącznie przez
+                # store-pos strict (kurier przeszedłby gate na replayowanym "gps").
+                if (C.ENABLE_FAIL12_SCHEDULE_FAILOPEN and pos_source == "gps"
+                        and pos_from_store):
+                    metrics["fail12_storepos_blocked"] = True
+                    log.warning(
+                        "FAIL12_STOREPOS_BLOCKED: shift_end=None, pos_source=gps "
+                        "ale pozycja ze store (nie świeży fix) — fail-open odmówiony, "
+                        "NO_ACTIVE_SHIFT (Z-06; kill-switch ENABLE_FAIL12_STOREPOS_STRICT=false).",
+                    )
                 metrics["v325_reject_reason"] = "NO_ACTIVE_SHIFT"
                 return ("NO", "v325_NO_ACTIVE_SHIFT (cs.shift_end=None — brak schedule mapping)", metrics, None)
         else:

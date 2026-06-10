@@ -501,8 +501,13 @@ def _meets_high_conf(ctx: ClassifierContext, thresholds: Dict[str, Any]) -> Tupl
         return False, f"C3_tier={ctx.best_tier}_not_in_{allowed_tiers}"
 
     # C4: pos_source (Adrian relax — strict_gps default False)
-    if thresholds.get("strict_gps", False) and ctx.best_pos_source != "gps":
-        return False, f"C4_pos_source={ctx.best_pos_source}"
+    # Z-06 (audyt 2026-06-10): rescue ze store replay'uje label "gps" — strict_gps
+    # wymaga ŻYWEGO fixa: pos_source=="gps" and not pos_from_store.
+    if thresholds.get("strict_gps", False):
+        if ctx.best_pos_source != "gps":
+            return False, f"C4_pos_source={ctx.best_pos_source}"
+        if ctx.best_metrics.get("pos_from_store"):
+            return False, "C4_pos_source=gps_from_store"
 
     # C5: edge cases — handled in _detect_edge_routing before reaching here
 
