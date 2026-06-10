@@ -114,6 +114,137 @@ def _top_nie_restaurants(
     return nie_per_rest.most_common(top_n)
 
 
+# ---- acceptance (PANEL_AGREE / PANEL_OVERRIDE) — ETAP 3 krok 3 (Z-03) ----
+# PANEL_AGREE liczy też source=telegram (ASSIGN_DIRECT NIE wchodzi do wzoru
+# osobno → zero podwójnego liczenia). Peak za project_overview: 11-14 / 17-20
+# Warsaw (NIE 12-14/18-20 z klasyfikatora — finding Z-20).
+
+_PEAK_HOURS_WARSAW = frozenset(range(11, 14)) | frozenset(range(17, 20))
+# Pola best NIE będące komponentami score (agregaty / warianty nieaktywne).
+_COMPONENT_SKIP = {"bonus_penalty_sum"}
+_COMPONENT_EXTRA = ("timing_gap_bonus", "bundle_bonus")
+_CZASOWKA_PREP_MIN = 60.0
+
+
+def _parse_any_iso(ts_str) -> Optional[datetime]:
+    if not ts_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def _acceptance_line(lc: Counter) -> Optional[str]:
+    """Dzienna linia acceptance: AGREE/(AGREE+OVERRIDE). None gdy brak danych."""
+    agree = lc.get("PANEL_AGREE", 0)
+    override = lc.get("PANEL_OVERRIDE", 0)
+    total = agree + override
+    if total == 0:
+        return None
+    rate = 100.0 * agree / total
+    return f"• Acceptance (panel): {agree}/{total} = {rate:.1f}% (OVERRIDE: {override})"
+
+
+def _accept_rec_dims(r: dict) -> Tuple[str, str, str]:
+    """(tier, pora, typ) dla rekordu PANEL_AGREE / PANEL_OVERRIDE.
+
+    AGREE niesie pola wprost (proposed_tier/pickup_ready_at/order_created_at);
+    OVERRIDE embeduje pełny decision (ta sama decyzja co w shadow_decisions
+    po order_id — pending_proposals.decision_record pochodzi z shadow)."""
+    if r.get("action") == "PANEL_AGREE":
+        tier = r.get("proposed_tier")
+        pra, oca = r.get("pickup_ready_at"), r.get("order_created_at")
+    else:
+        d = r.get("decision") or {}
+        best = d.get("best") or {}
+        tier = best.get("dwell_tier")
+        if not tier:
+            tier = str(best.get("v319h_bug4_tier_cap_used") or "").split("/")[0] or None
+        pra, oca = d.get("pickup_ready_at"), d.get("order_created_at")
+    ts = _parse_any_iso(r.get("ts"))
+    pora = "?"
+    if ts is not None:
+        pora = "peak" if ts.astimezone(WARSAW).hour in _PEAK_HOURS_WARSAW else "off"
+    typ = "?"
+    t_pra, t_oca = _parse_any_iso(pra), _parse_any_iso(oca)
+    if t_pra is not None and t_oca is not None:
+        prep_min = (t_pra - t_oca).total_seconds() / 60.0
+        typ = "czasówka" if prep_min >= _CZASOWKA_PREP_MIN else "elastyk"
+    return (tier or "?", pora, typ)
+
+
+def _top_override_components(override_recs: list, top_n: int = 3) -> list:
+    """Top N komponentów score u OVERRIDE'owanych zwycięzców (decision.best),
+    ranking po |średniej|. Zwraca [(komponent, śr, n)]."""
+    vals: Dict[str, list] = {}
+    for r in override_recs:
+        best = ((r.get("decision") or {}).get("best")) or {}
+        for k, v in best.items():
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not v:
+                continue
+            is_bonus = (
+                k.startswith("bonus_")
+                and k not in _COMPONENT_SKIP
+                and not k.endswith(("_raw", "_legacy"))
+                and "shadow" not in k
+            )
+            if is_bonus or k in _COMPONENT_EXTRA:
+                vals.setdefault(k, []).append(float(v))
+    rows = [
+        (k, sum(v) / len(v), len(v))
+        for k, v in vals.items()
+    ]
+    rows.sort(key=lambda x: -abs(x[1]))
+    return rows[:top_n]
+
+
+def _acceptance_breakdown_lines(
+    path: str, start_utc: datetime, end_utc: datetime
+) -> list:
+    """Sekcja „Acceptance 7d": overall + per tier / pora / typ + top-3
+    komponenty score OVERRIDE'owanych zwycięzców. [] gdy brak danych."""
+    agree_recs, override_recs = [], []
+    for r in _iter_learning_in_range(path, start_utc, end_utc):
+        a = r.get("action")
+        if a == "PANEL_AGREE":
+            agree_recs.append(r)
+        elif a == "PANEL_OVERRIDE":
+            override_recs.append(r)
+    total = len(agree_recs) + len(override_recs)
+    if total == 0:
+        return []
+
+    def _rates(dim_idx: int) -> str:
+        agg: Dict[str, list] = {}
+        for r in agree_recs:
+            agg.setdefault(_accept_rec_dims(r)[dim_idx], [0, 0])[0] += 1
+        for r in override_recs:
+            agg.setdefault(_accept_rec_dims(r)[dim_idx], [0, 0])[1] += 1
+        parts = []
+        for key in sorted(agg, key=lambda k: -(agg[k][0] + agg[k][1])):
+            a, o = agg[key]
+            parts.append(f"{key} {100.0 * a / (a + o):.0f}% ({a}/{a + o})")
+        return " | ".join(parts)
+
+    rate = 100.0 * len(agree_recs) / total
+    lines = [
+        "Acceptance 7d (panel):",
+        f"• Razem: {len(agree_recs)}/{total} = {rate:.1f}%",
+        f"• Tier: {_rates(0)}",
+        f"• Pora: {_rates(1)}",
+        f"• Typ: {_rates(2)}",
+    ]
+    top = _top_override_components(override_recs)
+    if top:
+        comp = " | ".join(f"{k} śr {m:+.1f} (n={n})" for k, m, n in top)
+        lines.append(f"• Top komponenty OVERRIDE'owanych zwycięzców: {comp}")
+    return lines
+
+
 # ---- static meta ----
 
 def _top_problem_static(top_n: int = 3) -> list:
@@ -186,9 +317,18 @@ def format_morning() -> str:
         f"• Propozycje: {total}",
         f"• Agreement: {tak}/{total} = {rate:.1f}%",
     ]
+    acceptance = _acceptance_line(lc)
+    if acceptance:
+        lines.append(acceptance)
     if timeout:
         lines.append(f"• Timeouts: {timeout}")
     lines.append("")
+    # ETAP 3 krok 3: trailing 7 dni — tygodniowa widoczność bez nowego crona
+    week_start = end - timedelta(days=7)
+    breakdown = _acceptance_breakdown_lines(LEARNING_LOG_PATH, week_start, end)
+    if breakdown:
+        lines.extend(breakdown)
+        lines.append("")
     if top_problem:
         lines.append("Top problem restauracji (static):")
         for name, med in top_problem:
@@ -220,6 +360,9 @@ def format_evening() -> str:
         f"• Propozycje: {total}",
         f"• Agreement: {tak}/{total} = {rate:.1f}%",
     ]
+    acceptance = _acceptance_line(lc)
+    if acceptance:
+        lines.append(acceptance)
     details = []
     if nie:
         details.append(f"NIE:{nie}")
