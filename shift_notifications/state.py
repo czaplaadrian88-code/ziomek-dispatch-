@@ -28,6 +28,9 @@ from dispatch_v2.common import setup_logger
 
 STATE_FILE: Path = Path("/root/.openclaw/workspace/dispatch_state/shift_confirmations.json")
 LEARNING_LOG: Path = Path("/root/.openclaw/workspace/dispatch_state/learning_log.jsonl")
+# ETAP 3 krok 2 (2026-06-10, Z-03): debug matchowania nazw (RESOLVE_CID_*) idzie
+# do osobnego pliku — learning_log zostaje strumieniem decyzji propozycji.
+MATCH_DEBUG_LOG: Path = Path("/root/.openclaw/workspace/dispatch_state/courier_match_debug.jsonl")
 LOG_DIR = "/root/.openclaw/workspace/scripts/logs/"
 
 _log = setup_logger("shift_notifications.state", LOG_DIR + "shift_notifications.log")
@@ -160,19 +163,30 @@ def save_state(state: dict) -> None:
     _atomic_write(STATE_FILE, state)
 
 
-def append_learning_log(event: dict) -> None:
+def _append_jsonl_to(path: Path, event: dict, label: str) -> None:
     """Append-only JSONL. Adds 'ts' (UTC ISO) if missing.
     Best-effort: log warnings on IO error but never raise.
     """
     if not isinstance(event, dict):
-        _log.warning(f"append_learning_log: event is not dict ({type(event).__name__}), skip")
+        _log.warning(f"{label}: event is not dict ({type(event).__name__}), skip")
         return
     rec = dict(event)
     if "ts" not in rec:
         rec["ts"] = datetime.now(timezone.utc).isoformat()
     try:
-        LEARNING_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with open(LEARNING_LOG, "a", encoding="utf-8") as f:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:
-        _log.warning(f"append_learning_log fail: {type(e).__name__}: {e}")
+        _log.warning(f"{label} fail: {type(e).__name__}: {e}")
+
+
+def append_learning_log(event: dict) -> None:
+    _append_jsonl_to(LEARNING_LOG, event, "append_learning_log")
+
+
+def append_match_debug_log(event: dict) -> None:
+    """ETAP 3 krok 2 (2026-06-10): RESOLVE_CID_* (debug matchowania nazw) do
+    courier_match_debug.jsonl zamiast learning_log. Uwaga: path czytany w runtime
+    (module attr) — testy patchują state.MATCH_DEBUG_LOG."""
+    _append_jsonl_to(MATCH_DEBUG_LOG, event, "append_match_debug_log")

@@ -135,14 +135,16 @@ print("\n=== #14 GRUPA 5: side-effect logging ===")
 # ============================================================
 
 # Test 15 — RESOLVE_CID_AMBIGUOUS_RESOLVED logged when score-based fallback picks winner
+# ETAP 3 krok 2 (2026-06-10): RESOLVE_CID_* idą do courier_match_debug.jsonl
+# (odszumienie learning_log) — testy czytają match_debug_log.
 with isolated_shift_state() as paths:
     kids = {"Adrian": "21", "Adrian Cit": "457"}
     cid = worker.resolve_cid("Adrian Citko", kids)
-    if not paths.learning_log.exists():
+    if not paths.match_debug_log.exists():
         check("15. ambiguous_resolved_logs_event", False,
-              detail="learning_log file not created")
+              detail="match_debug_log file not created")
     else:
-        with open(paths.learning_log) as f:
+        with open(paths.match_debug_log) as f:
             lines = [ln for ln in f.read().splitlines() if ln.strip()]
         events = [json.loads(ln) for ln in lines]
         resolved = [e for e in events if e.get("event") == "RESOLVE_CID_AMBIGUOUS_RESOLVED"]
@@ -157,11 +159,11 @@ with isolated_shift_state() as paths:
 with isolated_shift_state() as paths:
     kids = {"Adrian Ka": "111", "Adrian Ko": "222"}
     cid = worker.resolve_cid("Adrian K", kids)
-    if not paths.learning_log.exists():
+    if not paths.match_debug_log.exists():
         check("16. ambiguous_tie_logs_event", False,
-              detail="learning_log file not created")
+              detail="match_debug_log file not created")
     else:
-        with open(paths.learning_log) as f:
+        with open(paths.match_debug_log) as f:
             lines = [ln for ln in f.read().splitlines() if ln.strip()]
         events = [json.loads(ln) for ln in lines]
         ties = [e for e in events if e.get("event") == "RESOLVE_CID_AMBIGUOUS_TIE"]
@@ -173,8 +175,8 @@ with isolated_shift_state() as paths:
 with isolated_shift_state() as paths:
     kids = {"Bartek O": "123", "Krystian": "61"}
     cid = worker.resolve_cid("Bartek Ołdziej", kids)
-    if paths.learning_log.exists():
-        with open(paths.learning_log) as f:
+    if paths.match_debug_log.exists():
+        with open(paths.match_debug_log) as f:
             lines = [ln for ln in f.read().splitlines() if ln.strip()]
         events = [json.loads(ln) for ln in lines]
         ambiguous = [e for e in events

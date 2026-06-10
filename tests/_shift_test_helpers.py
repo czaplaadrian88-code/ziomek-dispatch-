@@ -43,20 +43,25 @@ def isolated_shift_state() -> Iterator[SimpleNamespace]:
     tmpdir = tempfile.mkdtemp(prefix="shift_test_")
     orig_state = shift_state.STATE_FILE
     orig_log = shift_state.LEARNING_LOG
+    orig_match_debug = shift_state.MATCH_DEBUG_LOG
 
     state_file = Path(tmpdir) / "shift_confirmations.json"
     learning_log = Path(tmpdir) / "learning_log.jsonl"
+    match_debug_log = Path(tmpdir) / "courier_match_debug.jsonl"
     shift_state.STATE_FILE = state_file
     shift_state.LEARNING_LOG = learning_log
+    shift_state.MATCH_DEBUG_LOG = match_debug_log
 
     paths = SimpleNamespace(
         tmpdir=Path(tmpdir),
         state_file=state_file,
         learning_log=learning_log,
+        match_debug_log=match_debug_log,
     )
     try:
         yield paths
     finally:
         shift_state.STATE_FILE = orig_state
         shift_state.LEARNING_LOG = orig_log
+        shift_state.MATCH_DEBUG_LOG = orig_match_debug
         shutil.rmtree(tmpdir, ignore_errors=True)

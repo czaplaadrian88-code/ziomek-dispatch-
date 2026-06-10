@@ -190,7 +190,8 @@ def resolve_cid(full_name: str, kurier_ids: Optional[Dict[str, str]] = None) -> 
     if len(scored) > 1 and scored[1][0] == best_score:
         # Tie → ambiguous. Log + return None (caller emits UNMAPPED_COURIER alert).
         try:
-            state_mod.append_learning_log({
+            # ETAP 3 krok 2 (2026-06-10): debug matchowania → match_debug log
+            state_mod.append_match_debug_log({
                 "event": "RESOLVE_CID_AMBIGUOUS_TIE",
                 "full_name": full_name,
                 "tied_aliases": [a for _, _, a in scored if _ == best_score],
@@ -206,7 +207,8 @@ def resolve_cid(full_name: str, kurier_ids: Optional[Dict[str, str]] = None) -> 
         for a in kurier_ids.keys() if a != best_alias
     ):
         try:
-            state_mod.append_learning_log({
+            # ETAP 3 krok 2 (2026-06-10): debug matchowania → match_debug log
+            state_mod.append_match_debug_log({
                 "event": "RESOLVE_CID_AMBIGUOUS_RESOLVED",
                 "full_name": full_name,
                 "winner_alias": best_alias,
