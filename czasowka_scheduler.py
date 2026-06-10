@@ -598,6 +598,10 @@ def main() -> int:
         _log.debug("flag OFF — no-op")
         return 0
 
+    # ETAP 4 (2026-06-10, Z-04): fingerprint flag decyzyjnych — MUSI być
+    # identyczny z shadow/plan-recheck (czasówki liczą TYM SAMYM silnikiem).
+    _log.info("FLAG_FINGERPRINT proc=czasowka %s", C.flag_fingerprint())
+
     now_utc = _now_utc()
     state = _load_state()
     cleaned = _cleanup_stale(state, now_utc)

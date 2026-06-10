@@ -1284,6 +1284,9 @@ def run() -> int:
         f"shadow_dispatcher START poll={POLL_INTERVAL_SEC}s "
         f"log={shadow_log_path} meta_n={len((meta or {}).get('restaurants', {}))}"
     )
+    # ETAP 4 (2026-06-10, Z-04): fingerprint flag decyzyjnych — MUSI być
+    # identyczny w shadow / czasowka / plan-recheck (jeden silnik cross-proces).
+    _log.info("FLAG_FINGERPRINT proc=shadow %s", C.flag_fingerprint())
 
     # V3.27 Phase 1F (2026-04-25 wieczór): warm-up ortools import na startup.
     # D2 verified pierwszy thread cold import 153.5ms — eliminujemy z ścieżki

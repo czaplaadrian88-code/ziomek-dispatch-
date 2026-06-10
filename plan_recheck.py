@@ -864,6 +864,13 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
 
 def run_recheck() -> Dict[str, Any]:
     """Main entry point. Returns summary dict."""
+    # ETAP 4 (2026-06-10, Z-04): fingerprint flag decyzyjnych — MUSI być
+    # identyczny z shadow/czasowka (re-plan liczy TYM SAMYM silnikiem OBJ).
+    try:
+        from dispatch_v2 import common as _C
+        _log.info("FLAG_FINGERPRINT proc=plan-recheck %s", _C.flag_fingerprint())
+    except Exception:
+        pass
     now = _now_utc()
     orders_state = _load_orders_state()
     plans = plan_manager.load_plans()

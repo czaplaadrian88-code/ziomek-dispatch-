@@ -1998,6 +1998,13 @@ def run():
     cfg = load_config()
     interval = cfg["polling"]["panel_interval_seconds"]
     _log.info(f"Panel watcher START interval={interval}s")
+    # ETAP 4 (2026-06-10, Z-04): fingerprint flag decyzyjnych (watcher nie ma
+    # silnika scoringu — linia czysto diagnostyczna, strażnik na przyszłość).
+    try:
+        from dispatch_v2 import common as _C4
+        _log.info("FLAG_FINGERPRINT proc=panel-watcher %s", _C4.flag_fingerprint())
+    except Exception:
+        pass
 
     # Health check na start
     h = health_check()
