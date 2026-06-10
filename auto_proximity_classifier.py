@@ -97,6 +97,23 @@ MASS_FAIL_RATIO = 0.5  # >=50% NO verdict → mass fail signal
 # Schedule edge: shift ending soon after pickup_ready
 SHIFT_END_EDGE_MIN = 15.0  # if shift_end - pickup_ready_at <= 15min → ACK
 
+# Z-10 (audyt 2026-06-10): margin liczony na FINALNYM rankingu, nie surowym score.
+# Stary margin = top1−top2 po surowym score wśród feasible, a result.best wybierany
+# jest PO demote/tieringu (V3.16 blind-empty demote, late_pickup Opcja B, …) —
+# margin potrafił opisywać dwóch NIE-wybranych kandydatów, a AUTO mogło odpalić
+# na best który nie jest score-topem. Nowy: margin = score(best) − max(score
+# POZOSTAŁYCH feasible); AUTO dodatkowo wymaga best==score-top (C7).
+# Prerequisite flipu Fazy 7. Env default ON; hot-reload kill-switch:
+# flags.json ENABLE_F7_MARGIN_FINAL_RANKING=false. AUTO_PROXIMITY jest live-OFF
+# (shadow-only) → zmiana wpływa wyłącznie na shadow-klasyfikację.
+_ENV_F7_MARGIN_FINAL_RANKING_DEFAULT = os.environ.get(
+    "ENABLE_F7_MARGIN_FINAL_RANKING", "1") == "1"
+
+
+def _f7_margin_final_ranking_on(flags: Dict[str, Any]) -> bool:
+    return bool(flags.get("ENABLE_F7_MARGIN_FINAL_RANKING",
+                          _ENV_F7_MARGIN_FINAL_RANKING_DEFAULT))
+
 
 @dataclass(frozen=True)
 class ClassifierContext:
@@ -115,6 +132,10 @@ class ClassifierContext:
     shift_end_edge: bool            # shift_end - pickup_ready_at <= SHIFT_END_EDGE_MIN
     no_feasible_count: int          # number of candidates with verdict=NO
     parser_degraded: bool
+    # Z-10 (audyt 2026-06-10): czy result.best jest score-topem wśród feasible.
+    # False gdy selekcja post-score (demote/tiering) wybrała innego niż argmax —
+    # AUTO wymaga True (C7). Default True = zachowanie legacy (flaga OFF).
+    best_is_score_top: bool = True
 
 
 # -------------- Detector helpers (deterministic, side-effect-free) --------------
@@ -317,12 +338,33 @@ def _build_context(
             parser_degraded=_parser_degraded(flags),
         )
 
-    # Score margin: top1 - top2 (only over MAYBE candidates — NO scores meaningless)
-    feasible_sorted = sorted(feasible, key=lambda c: -getattr(c, "score", 0.0))
-    if len(feasible_sorted) >= 2:
-        margin = feasible_sorted[0].score - feasible_sorted[1].score
+    # Score margin (only over MAYBE candidates — NO scores meaningless).
+    # Z-10 (audyt 2026-06-10, flaga ENABLE_F7_MARGIN_FINAL_RANKING): margin liczony
+    # względem FAKTYCZNIE WYBRANEGO best — score(best) − max(score POZOSTAŁYCH
+    # feasible). Legacy (flaga OFF): top1−top2 po surowym score, niezależnie od
+    # tego kim jest best (mógł opisywać dwóch NIE-wybranych kandydatów).
+    best_is_score_top = True
+    if _f7_margin_final_ranking_on(flags):
+        best_score_val = float(getattr(best, "score", 0.0) or 0.0)
+        _best_cid = str(getattr(best, "courier_id", ""))
+        other_scores = [
+            float(getattr(c, "score", 0.0) or 0.0)
+            for c in feasible
+            if str(getattr(c, "courier_id", "")) != _best_cid
+        ]
+        if other_scores:
+            top_other = max(other_scores)
+            margin = best_score_val - top_other
+            # tolerancja float — remis traktujemy jako score-top
+            best_is_score_top = best_score_val >= top_other - 1e-9
+        else:
+            margin = 0.0  # solo win — margin undefined (will fail T1/T2 min_pool=2 anyway)
     else:
-        margin = 0.0  # solo win — margin undefined, treat as 0 (will fail T1/T2 min_pool=2 anyway)
+        feasible_sorted = sorted(feasible, key=lambda c: -getattr(c, "score", 0.0))
+        if len(feasible_sorted) >= 2:
+            margin = feasible_sorted[0].score - feasible_sorted[1].score
+        else:
+            margin = 0.0  # solo win — margin undefined, treat as 0 (will fail T1/T2 min_pool=2 anyway)
 
     cs = fleet_snapshot.get(best.courier_id) if fleet_snapshot else None
     tier = getattr(cs, "tier_bag", None) if cs is not None else None
@@ -370,6 +412,7 @@ def _build_context(
         shift_end_edge=shift_edge,
         no_feasible_count=no_count,
         parser_degraded=_parser_degraded(flags),
+        best_is_score_top=best_is_score_top,
     )
 
 
@@ -435,10 +478,16 @@ def _detect_edge_routing(
 # -------------- Threshold check -> AUTO or ACK --------------
 
 def _meets_high_conf(ctx: ClassifierContext, thresholds: Dict[str, Any]) -> Tuple[bool, str]:
-    """C1-C6 conditions per spec sekcja 2.2. Returns (passed, reason)."""
+    """C1-C7 conditions per spec sekcja 2.2 (+C7 Z-10). Returns (passed, reason)."""
     # C1: pool_feasible_count
     if ctx.pool_feasible_count < thresholds["min_pool_feasible"]:
         return False, f"C1_pool_feasible={ctx.pool_feasible_count}<{thresholds['min_pool_feasible']}"
+
+    # C7 (Z-10, audyt 2026-06-10): AUTO tylko gdy best jest score-topem wśród
+    # feasible. Selekcja post-score (demote blind-empty, late_pickup tiering)
+    # może wybrać NIE-argmax — wtedy margin nie opisuje przewagi best → ACK.
+    if not ctx.best_is_score_top:
+        return False, "best_not_score_top"
 
     # C2: score margin
     if ctx.best_score_margin < thresholds["min_score_margin"]:
@@ -581,4 +630,6 @@ def build_context_for_logging(
         "auto_route_czasowka": ctx.czasowka,
         "auto_route_best_effort": ctx.best_effort,
         "auto_route_shift_end_edge": ctx.shift_end_edge,
+        # Z-10 (audyt 2026-06-10): telemetria rozjazdu best vs score-top.
+        "auto_route_best_is_score_top": ctx.best_is_score_top,
     }
