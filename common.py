@@ -690,6 +690,15 @@ ENABLE_FLEET_OVERLOAD_PENALTY = _os.environ.get("ENABLE_FLEET_OVERLOAD_PENALTY",
 # disable (mass fail wraca do silent NO_PROPOSE).
 ENABLE_V328_MASS_FAIL_FALLBACK = _os.environ.get("ENABLE_V328_MASS_FAIL_FALLBACK", "1") == "1"
 V328_MASS_FAIL_RATIO_THRESHOLD = float(_os.environ.get("V328_MASS_FAIL_RATIO_THRESHOLD", "0.5"))
+# Z-11 (audyt 2026-06-10): heurystyka mass-fail omija CAŁĄ feasibility (jedyny
+# guard = bag-cap) — kurier PO KOŃCU ZMIANY mógł wygrać w degraded mode (łamie
+# R-SCHEDULE-AWARE / V325 PICKUP_POST_SHIFT). Guard: skip gdy
+# shift_end < now + naive_eta (haversine / fallback speed). Brak shift_end →
+# NIE skipuj (degraded mode, fail-open spójny z duchem FAIL-12; grafik mógł paść
+# razem z OR-Tools). Env default ON (lustrzane do bezwarunkowego bag-cap guard);
+# hot-reload kill-switch: flags.json ENABLE_V328_HEURISTIC_SHIFT_END_GUARD=false.
+ENABLE_V328_HEURISTIC_SHIFT_END_GUARD = _os.environ.get(
+    "ENABLE_V328_HEURISTIC_SHIFT_END_GUARD", "1") == "1"
 ENABLE_PANEL_IS_FREE_AUTHORITATIVE = _os.environ.get("ENABLE_PANEL_IS_FREE_AUTHORITATIVE", "1") == "1"
 ENABLE_BUNDLE_VALUE_SCORING = _os.environ.get("ENABLE_BUNDLE_VALUE_SCORING", "0") == "1"
 

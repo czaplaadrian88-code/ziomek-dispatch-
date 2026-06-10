@@ -1000,6 +1000,33 @@ def _v328_simple_heuristic_score(cid: str, cs: Any, order_event: dict) -> float:
         return -1000.0
 
 
+def _v328_heuristic_post_shift_skip(cs, order_event, now, fleet_speed_kmh):
+    """Z-11 (audyt 2026-06-10): True gdy kuriera pominąć w heurystyce mass-fail,
+    bo nie zdąży dojechać do restauracji przed końcem zmiany.
+
+    Heurystyka omija CAŁĄ feasibility (V325 PICKUP_POST_SHIFT) — to minimalna
+    bramka grafikowa: shift_end < now + naive_eta (haversine / fallback speed).
+    Fail-open: brak shift_end / brak pozycji / pickup_coords zero / wyjątek →
+    False (NIE skipuj — degraded mode, grafik mógł paść razem z OR-Tools).
+    """
+    try:
+        shift_end = getattr(cs, "shift_end", None)
+        if shift_end is None:
+            return False
+        pos = getattr(cs, "pos", None)
+        pickup = (order_event or {}).get("pickup_coords")
+        if not pos or not pos[0] or not pickup or not pickup[0]:
+            return False
+        from dispatch_v2.osrm_client import haversine as _hav
+        dist_km = float(_hav(tuple(pickup), tuple(pos)))
+        naive_eta_min = (dist_km / max(float(fleet_speed_kmh or 0.0), 1.0)) * 60.0
+        if shift_end.tzinfo is None:
+            shift_end = shift_end.replace(tzinfo=timezone.utc)
+        return shift_end < now + timedelta(minutes=naive_eta_min)
+    except Exception:
+        return False
+
+
 def _v326_speed_multiplier_adjust(feasible: list, order_id=None) -> list:
     """V3.26 STEP 2 (R-05 SPEED-MULTIPLIER).
 
@@ -3780,6 +3807,11 @@ def _assess_order_impl(
             # ścieżką byłby R3 hard-reject. Diagnoza: Dariusz cid=509 bag=8 wybrany
             # jako WYBRANY mimo bag_full reject path w OR-Tools.
             _v328_bag_cap = int(getattr(C, "MAX_BAG_SANITY_CAP", 8))
+            # Z-11 (audyt 2026-06-10): bramka grafikowa obok bag-cap. Hot-reload
+            # kill-switch flags.json, env default ON (common).
+            _v328_shift_guard_on = C.flag(
+                "ENABLE_V328_HEURISTIC_SHIFT_END_GUARD",
+                default=bool(getattr(C, "ENABLE_V328_HEURISTIC_SHIFT_END_GUARD", True)))
             for _h_cid, _h_cs in fleet_snapshot.items():
                 try:
                     _h_bag = getattr(_h_cs, "bag", None) or []
@@ -3787,6 +3819,14 @@ def _assess_order_impl(
                         log.warning(
                             f"V328_HEURISTIC_SKIP_BAG_AT_CAP cid={_h_cid} "
                             f"bag={len(_h_bag)}>={_v328_bag_cap}"
+                        )
+                        continue
+                    if _v328_shift_guard_on and _v328_heuristic_post_shift_skip(
+                            _h_cs, order_event, now, fleet_speed_kmh):
+                        log.warning(
+                            f"V328_HEURISTIC_SKIP_POST_SHIFT cid={_h_cid} "
+                            f"shift_end={getattr(_h_cs, 'shift_end', None)} "
+                            f"(Z-11: nie zdąży przed końcem zmiany)"
                         )
                         continue
                     _h_score = _v328_simple_heuristic_score(_h_cid, _h_cs, order_event)
