@@ -195,6 +195,8 @@ Tylko 18% best-kandydatów ma żywy GPS; 82% pozycji syntetycznych ogranicza KA�
 - Z-22: decyzja wave_scoring.py — usunąć (FILOZ-4 robi BUG-2+R-09) albo wpiąć; dziś martwa obietnica.
 - Z-17: katalog 21 reguł w KB → kolumna „w kodzie: plik:linia / emergentne / martwe / OFF-by-directive".
 - Z-13: ASSIGN z Telegrama — przeliczać `time` z `eta_pickup_utc` w momencie kliku + odrzucać kliki w propozycje starsze niż 10 min (re-assess). (Mała zmiana w telegram_approver → wymaga ACK na restart telegrama — zaplanować przy innej okazji restartu.)
+- H-SECRETS (2026-06-10): przemianować `.secrets/panel.env` → `gastro.env` (zawiera login bota do gastro.nadajesz.pl `adrian.czapla@epaka.pl`/`adrian`, NIE do panelu admina — myląca nazwa wprowadziła w błąd przy odzyskiwaniu dostępu 10.06). Zaktualizować konsumentów (`grep -rl panel.env` w scripts/ — panel_client/most). Przy okazji: hasło bota gastro `adrian` jest słabe — rozważyć rotację, jeśli gastro na to pozwala.
+- H-PANEL-PW (2026-06-10): hasło admina `gps.nadajesz.pl/admin` zresetowane ad-hoc (oba konta `ziomek_admin`: `ac@nadajesz.pl` + `admin@ziomek.pl`). Docelowo: (a) Adrian zmienia na własne przez `change-password` po pierwszym logowaniu; (b) udokumentować w memory/sekrecie KTÓRE konto jest kanoniczne + endpoint resetu, żeby następna sesja nie zgadywała; (c) usunąć/wyłączyć nieużywane konta seed demo (`owner@demo.pl`/`manager@demo.pl`/`staff@demo.pl` jeśli istnieją na prodzie).
 
 ---
 
