@@ -693,7 +693,7 @@ def main() -> int:
         }
 
         # Log every eval (observational)
-        _append_eval_log({
+        log_rec = {
             "ts": now_utc.isoformat(),
             "order_id": oid,
             "decision": result["decision"],
@@ -703,7 +703,23 @@ def main() -> int:
             "best_courier_id": (result["best"].courier_id if result["best"] else None),
             "best_score": (result["best"].score if result["best"] else None),
             "eval_count": prev_count + 1,
-        })
+        }
+        # ETAP 5 KROK 1 (2026-06-10, Z-05): shadow score-based selektor T-60/T-50.
+        # Counterfactual „kogo wybrałby selektor score+margin+wait+R6" — pola sb_*
+        # w eval-logu, zero zmiany decyzji. Flag CZASOWKA_PROACTIVE_SCORE_SHADOW.
+        try:
+            from dispatch_v2.czasowka_proactive.score_selector import (
+                shadow_fields_for_eval,
+            )
+            log_rec.update(
+                shadow_fields_for_eval(result, result.get("minutes_to_pickup"))
+            )
+        except Exception as _sb_e:
+            _log.warning(
+                f"score_selector shadow fail oid={oid}: "
+                f"{type(_sb_e).__name__}: {_sb_e}"
+            )
+        _append_eval_log(log_rec)
 
         # B11 emit paths z V3.28 Fix 8.B (dryrun) + Fix 8.D (rate limit)
         is_emit_decision = result["decision"] in ("EMIT", "FORCE_ASSIGN", "KOORD")
