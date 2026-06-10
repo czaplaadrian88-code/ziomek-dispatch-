@@ -573,7 +573,7 @@ def check_feasibility_v2(
                 # — D2 nie dubluje alertu, tylko soft-degraduje + loguje metrykę.
                 metrics["d2_stale_schedule_soft"] = True
                 metrics["d2_soft_penalty"] = C.D2_STALE_SCHEDULE_SOFT_PENALTY
-            elif C.ENABLE_FAIL12_SCHEDULE_FAILOPEN and (
+            elif C.decision_flag("ENABLE_FAIL12_SCHEDULE_FAILOPEN") and (
                     len(bag) > 0
                     or (pos_source == "gps" and not (
                         pos_from_store and _fail12_storepos_strict_on()))):
@@ -599,7 +599,8 @@ def check_feasibility_v2(
             else:
                 # Z-06 obserwowalność: fail-open ZABLOKOWANY wyłącznie przez
                 # store-pos strict (kurier przeszedłby gate na replayowanym "gps").
-                if (C.ENABLE_FAIL12_SCHEDULE_FAILOPEN and pos_source == "gps"
+                if (C.decision_flag("ENABLE_FAIL12_SCHEDULE_FAILOPEN")
+                        and pos_source == "gps"
                         and pos_from_store):
                     metrics["fail12_storepos_blocked"] = True
                     log.warning(
@@ -667,7 +668,7 @@ def check_feasibility_v2(
     # Plan timestamps shift'owane od shift_start (eliminuje fikcyjny "kurier
     # startuje teraz" dla kuriera który jeszcze nie pracuje). Flag-gated.
     earliest_departure = None
-    if (getattr(C, "ENABLE_PRE_SHIFT_DEPARTURE_CLAMP", False)
+    if (C.decision_flag("ENABLE_PRE_SHIFT_DEPARTURE_CLAMP")
             and shift_start is not None
             and pos_source in ("pre_shift", "no_gps")
             and shift_start > now):

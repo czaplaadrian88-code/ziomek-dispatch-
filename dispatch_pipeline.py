@@ -887,7 +887,7 @@ def _a2_reliability_soft_score(feasible, order_id=None):
     """Dźwignia A2: kara score za niską niezawodność kuriera. Flag-gated, default OFF.
     Buckety pos/tier zachowuje późniejszy _demote_blind_empty + late-pickup tiering
     (semantyka 'nie-gorszy koszyk + score+delta' jak a2_selection_shadow). Re-sort desc."""
-    if not getattr(C, "ENABLE_A2_RELIABILITY_SOFT_SCORE", False) or not feasible:
+    if not C.decision_flag("ENABLE_A2_RELIABILITY_SOFT_SCORE") or not feasible:
         return feasible
     breach, conf, fm = _load_courier_reliability()
     if not breach or fm is None:
@@ -3206,7 +3206,7 @@ def _assess_order_impl(
         # SR-only już guarded). Default OFF (env ENABLE_BUNDLE_DELIV_SPREAD_CAP=1).
         fix_c_applied = False
         fix_c_deliv_spread_km = metrics.get("deliv_spread_km")
-        if (C.ENABLE_BUNDLE_DELIV_SPREAD_CAP
+        if (C.decision_flag("ENABLE_BUNDLE_DELIV_SPREAD_CAP")
                 and len(bag_raw) >= 1
                 and fix_c_deliv_spread_km is not None
                 and fix_c_deliv_spread_km > C.BUNDLE_MAX_DELIV_SPREAD_KM):
@@ -3361,9 +3361,9 @@ def _assess_order_impl(
         # === R1 progresywny + V319H guard apply (2026-05-28) ===
         # Defaults OFF — shadow-first. Delty zawsze policzone (linie ~2596),
         # tu dodajemy do final_score tylko gdy flagi ON.
-        if getattr(C, "ENABLE_R1_PROGRESSIVE_CLIP", False):
+        if C.decision_flag("ENABLE_R1_PROGRESSIVE_CLIP"):
             final_score = final_score + bonus_r1_progressive_shadow_delta
-        if getattr(C, "ENABLE_V319H_CONTINUATION_GUARD", False):
+        if C.decision_flag("ENABLE_V319H_CONTINUATION_GUARD"):
             final_score = final_score + bonus_v319h_guard_shadow_delta
 
         # V3.27 Bug Z Q5: SOFT bundle score multiplier dla cross-quadrant bag.
@@ -4409,7 +4409,7 @@ def _assess_order_impl(
         # wait_courier penalty już to łapie.
         _cd_top = top[0] if top else None
         _cd_plan = getattr(_cd_top, "plan", None) if _cd_top is not None else None
-        if (getattr(C, "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE", True)
+        if (C.decision_flag("ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE")
                 and _cd_plan is not None):
             _cd_threshold = float(getattr(
                 C, "COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN", 10.0))
@@ -4494,8 +4494,8 @@ def _assess_order_impl(
             )
             # Detect — zawsze (shadow); apply — tylko gdy flag ON.
             _diff_should_redirect = (top and _diff_top_score < _diff_floor)
-            if _diff_should_redirect and getattr(
-                    C, "ENABLE_DIFFICULT_CASE_KOORD_REDIRECT", False):
+            if _diff_should_redirect and C.decision_flag(
+                    "ENABLE_DIFFICULT_CASE_KOORD_REDIRECT"):
                 _diff_best_metrics = getattr(top[0], "metrics", {}) or {}
                 _diff_payload = {
                     "max_score": round(_diff_top_score, 2),
@@ -4713,7 +4713,7 @@ def _assess_order_impl(
         # nie rusza buforów R-BUFFER-OK (soft zone 30-35). objm_r6_breach_max_min
         # liczony przez compute_plan_metrics — wiarygodny dla kandydatów z planem.
         _be_r6_breach = _r6_breach_max(best)
-        if (getattr(C, "ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD", False)
+        if (C.decision_flag("ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD")
                 and _be_r6_breach > C.OBJ_F3_R6_BREACH_KOORD_MIN):
             _result_be_r6 = PipelineResult(
                 order_id=order_id,

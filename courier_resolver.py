@@ -27,6 +27,15 @@ from dispatch_v2 import osrm_client
 
 _log = setup_logger("courier_resolver", "/root/.openclaw/workspace/scripts/logs/courier_resolver.log")
 
+
+def _f4_flag(name: str) -> bool:
+    """ETAP 4 (2026-06-10, Z-04): flaga F4 wspólna cross-proces.
+
+    flags.json (hot-reload) → atrybut TEGO modułu (importowany env-default;
+    testy patchują courier_resolver.ENABLE_F4_*) → False.
+    """
+    return bool(flag(name, globals().get(name, False)))
+
 KURIER_PINY_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny.json"
 COURIER_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
 KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
@@ -620,13 +629,13 @@ def _reconstruct_bag_from_panel_packs(
             # F4 Krok 2 (Opcja C): interpolacja pickup→delivery po elapsed/eta_leg.
             # Ma pierwszeństwo nad pickup_proxy (Krok 1) gdy obie flagi ON;
             # fail-soft (None) → caller pada na pickup_proxy → legacy delivery.
-            if ENABLE_F4_COURIER_POS_INTERP:
+            if _f4_flag("ENABLE_F4_COURIER_POS_INTERP"):
                 _interp = _compute_interp_pos(order, now_utc)
                 if _interp is not None:
                     cs.pos, cs.pos_source = _interp
                     break
             # F4 Krok 1: pickup_coords (punkt realny) > delivery_coords (proxy).
-            if ENABLE_F4_COURIER_POS_PICKUP_PROXY and order.get("pickup_coords"):
+            if _f4_flag("ENABLE_F4_COURIER_POS_PICKUP_PROXY") and order.get("pickup_coords"):
                 cs.pos = tuple(order["pickup_coords"])
                 cs.pos_source = "last_picked_up_pickup"
                 break
@@ -834,7 +843,7 @@ def build_fleet_snapshot(
                     # F4 Krok 2 (Opcja C): interpolacja pickup→delivery
                     # po elapsed/eta_leg. Pierwszeństwo nad pickup_proxy;
                     # fail-soft (None) → ścieżka Krok 1 / legacy poniżej.
-                    if ENABLE_F4_COURIER_POS_INTERP:
+                    if _f4_flag("ENABLE_F4_COURIER_POS_INTERP"):
                         _interp = _compute_interp_pos(order, now_utc)
                         if _interp is not None:
                             cs.pos, cs.pos_source = _interp
@@ -842,7 +851,7 @@ def build_fleet_snapshot(
                             break
                     # F4 Krok 1 (Opcja A): proxy = pickup_coords zamiast
                     # delivery_coords — eliminuje bias frozen-window (474266).
-                    if ENABLE_F4_COURIER_POS_PICKUP_PROXY and order.get("pickup_coords"):
+                    if _f4_flag("ENABLE_F4_COURIER_POS_PICKUP_PROXY") and order.get("pickup_coords"):
                         cs.pos = tuple(order["pickup_coords"])
                         cs.pos_source = "last_picked_up_pickup"
                         resolved = True

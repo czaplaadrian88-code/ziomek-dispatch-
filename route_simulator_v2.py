@@ -1007,7 +1007,7 @@ def _ortools_plan(
     # makespan zawiera slack czekania. cost_matrix usunięty: solver liczy cost
     # z distance_matrix (= czysty time_matrix). Default OFF (env override).
     _span_cost_coeff = 0.0
-    if getattr(_common, "ENABLE_OBJ_SPAN_COST", False):
+    if _common.decision_flag("ENABLE_OBJ_SPAN_COST"):
         _span_cost_coeff = float(getattr(_common, "OBJ_SPAN_COST_COEFF", 0.0))
 
     # Sprint OBJ F1 (2026-05-17): R6 soft upper bound per węzeł delivery
@@ -1016,7 +1016,7 @@ def _ortools_plan(
     # blisko/0 → solver front-loaduje) lub pickup_ready_at (pending/new).
     delivery_soft_deadlines = None
     try:
-        if getattr(_common, "ENABLE_OBJ_R6_SOFT_DEADLINE", False) and now is not None:
+        if _common.decision_flag("ENABLE_OBJ_R6_SOFT_DEADLINE") and now is not None:
             _r6_coeff = float(getattr(_common, "OBJ_R6_DEADLINE_PENALTY_COEFF", 0.0))
             _sla_f = float(sla_minutes)
             _dsd: List[Optional[Tuple[float, float]]] = [None] * N
@@ -1051,7 +1051,7 @@ def _ortools_plan(
     # nie rusza mediany clamped-to-ready. Soft — nie wpływa na feasibility.
     pickup_freshness_penalties = None
     try:
-        if getattr(_common, "ENABLE_OBJ_PICKUP_FRESHNESS", False) and now is not None:
+        if _common.decision_flag("ENABLE_OBJ_PICKUP_FRESHNESS") and now is not None:
             _pf_thr = float(getattr(_common, "OBJ_PICKUP_FRESHNESS_THRESHOLD_MIN", 8.0))
             _pf_coeff = float(getattr(_common, "OBJ_PICKUP_FRESHNESS_PENALTY_COEFF", 20.0))
             if _pf_coeff > 0:
