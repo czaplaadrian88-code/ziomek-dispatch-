@@ -108,6 +108,10 @@ def _patch_fleet(monkeypatch, schedule, working):
     monkeypatch.setattr(schedule_utils, "is_on_shift", lambda name, sch: (False, "po zmianie"))
     monkeypatch.setattr(schedule_utils, "match_courier", lambda name, sch: name if name in sch else None)
     monkeypatch.setattr(mo, "get_excluded", lambda: [])
+    # 2026-06-10: izoluj też cid-keyed wykluczenie (get_excluded_cids czyta realny
+    # plik manual_overrides.json — bez tego live-block np. Mateusz O/413 wyciekał
+    # do testów floty po wprowadzeniu egzekucji po cid).
+    monkeypatch.setattr(mo, "get_excluded_cids", lambda: set())
     monkeypatch.setattr(mo, "get_working", lambda: working)
 
 

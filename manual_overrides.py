@@ -18,6 +18,12 @@ _WAW = ZoneInfo("Europe/Warsaw")
 OVERRIDES_PATH = "/root/.openclaw/workspace/dispatch_state/manual_overrides.json"
 COURIER_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
 KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"  # V3.25 inverse fallback
+# PANEL-CANON desync fix (2026-06-10): grafik = {pełne imię: cid}. courier_resolver
+# od 06-10 nadaje flocie pełne imię z grafiku jako cs.name (commit bb9bc27), więc
+# egzekucja wykluczenia po nazwie (cs.name in excluded) gubiła skrót panelowy
+# zapisany tutaj (np. "Mateusz O" ≠ "Mateusz Ostapczuk"). Czytamy ten plik, by
+# zmapować dowolną formę nazwy → cid (get_excluded_cids → match po cid).
+GRAFIK_FULL_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/grafik_full_names.json"
 
 EXCLUDE_KEYWORDS = ("nie pracuje", "wyklucz", "choruje", "nie ma")
 INCLUDE_KEYWORDS = ("wrócił", "wrocil", "wróciła", "wrocila", "wraca", "pracuje", "jest", "dodaj")
@@ -38,6 +44,11 @@ def load() -> dict:
     if not isinstance(d, dict):
         d = {}
     d.setdefault("excluded", [])
+    # zalążek B (2026-06-10): cid jawnie zapisany przy /stop — egzekucja po cid
+    # (dispatchable_fleet) odporna na desync nick↔pełne imię z grafiku.
+    d.setdefault("excluded_cids", [])
+    if not isinstance(d["excluded_cids"], list):
+        d["excluded_cids"] = []
     d.setdefault("working", {})
     if not isinstance(d["working"], dict):
         d["working"] = {}
@@ -69,6 +80,74 @@ def get_working() -> Dict[str, dict]:
     do końca dnia (reset 06:00 via manual_overrides_daily_reset). Zwraca kopię."""
     w = load().get("working", {})
     return dict(w) if isinstance(w, dict) else {}
+
+
+def _all_name_to_cid() -> Dict[str, int]:
+    """Wyczerpujący {name: cid_int} z WSZYSTKICH źródeł nazw — łapie zarówno skrót
+    panelowy (kurier_ids forward + courier_names inverse) JAK I pełne imię z grafiku
+    (grafik_full_names forward). Odporne na desync 2026-06-10 (flota nazywa cid
+    pełnym imieniem, override trzyma skrót). Fail-soft per źródło."""
+    out: Dict[str, int] = {}
+    # kurier_ids.json: {name: cid} (zawiera i skrót i pełne imię od 06-10)
+    try:
+        with open(KURIER_IDS_PATH) as f:
+            for name, cid in json.load(f).items():
+                if isinstance(name, str) and name.strip():
+                    try:
+                        out[name] = int(cid)
+                    except (TypeError, ValueError):
+                        pass
+    except Exception:
+        pass
+    # courier_names.json: {cid: name} → inverse
+    try:
+        with open(COURIER_NAMES_PATH) as f:
+            for cid_str, name in json.load(f).items():
+                if isinstance(name, str) and name.strip():
+                    try:
+                        out[name] = int(cid_str)
+                    except (TypeError, ValueError):
+                        pass
+    except Exception:
+        pass
+    # grafik_full_names.json: {pełne imię: cid}
+    try:
+        with open(GRAFIK_FULL_NAMES_PATH, encoding="utf-8") as f:
+            for name, cid in json.load(f).items():
+                if isinstance(name, str) and name.strip():
+                    try:
+                        out[name] = int(cid)
+                    except (TypeError, ValueError):
+                        pass
+    except Exception:
+        pass
+    return out
+
+
+def get_excluded_cids() -> set:
+    """Zbiór cid (str) wykluczonych kurierów — autorytatywne źródło egzekucji w
+    dispatchable_fleet (match po cid, NIE po nazwie). Łączy:
+    - cid jawnie zapisane przy /stop (excluded_cids, zalążek B),
+    - cid zmapowane z nazw na liście `excluded` (Opcja A — wsteczna zgodność +
+      naprawa LIVE: stary wpis 'Mateusz O' rozwiązuje się na cid 413 bez ponownego
+      /stop, mimo że flota nazywa go 'Mateusz Ostapczuk').
+    Fail-soft: gdy mapowanie nazwy → cid nieznane, nazwa zostaje backstopem w
+    name-match (courier_resolver sprawdza OBA)."""
+    d = load()
+    out: set = set()
+    for c in d.get("excluded_cids", []) or []:
+        cs = str(c).strip()
+        if cs:
+            out.add(cs)
+    try:
+        name2cid = _all_name_to_cid()
+    except Exception:
+        name2cid = {}
+    for name in d.get("excluded", []) or []:
+        cid = name2cid.get(name)
+        if cid is not None:
+            out.add(str(cid))
+    return out
 
 
 def _load_names() -> List[str]:
@@ -262,7 +341,28 @@ def _do_include(data: dict, courier: str, text: str, add_to_grafik: bool = True)
     was_excluded = courier in excluded
     if was_excluded:
         excluded.remove(courier)
-        data["excluded"] = excluded
+    # zalążek B (2026-06-10): rozwiąż cid odpornie (skrót LUB pełne imię) i zdejmij
+    # ze STOP po cid — usuń WSZYSTKIE nazwy mapujące na ten cid (desync nick/full)
+    # oraz cid z excluded_cids. Dzięki temu "X wrócił" pełnym imieniem zdejmuje też
+    # wpis zapisany skrótem (i odwrotnie).
+    try:
+        _inc_cid = _all_name_to_cid().get(courier)
+    except Exception:
+        _inc_cid = None
+    if _inc_cid is not None:
+        try:
+            _n2c = _all_name_to_cid()
+        except Exception:
+            _n2c = {}
+        before = len(excluded)
+        excluded = [n for n in excluded if _n2c.get(n) != _inc_cid]
+        if len(excluded) != before:
+            was_excluded = True
+        ec = data.get("excluded_cids", [])
+        if isinstance(ec, list) and str(_inc_cid) in [str(c) for c in ec]:
+            data["excluded_cids"] = [c for c in ec if str(c) != str(_inc_cid)]
+            was_excluded = True
+    data["excluded"] = excluded
     added = _add_working(data, courier, text) if add_to_grafik else None
     save(data)
     if added is not None:
@@ -292,6 +392,15 @@ def _do_exclude(data: dict, courier: str) -> Tuple[str, str]:
         excluded.append(courier)
         data["excluded"] = excluded
     cid = _resolve_cid(courier)
+    # zalążek B (2026-06-10): zapisz cid jawnie → egzekucja po cid w dispatchable_fleet
+    # odporna na desync nazw (panel-nick 'Mateusz O' vs grafik 'Mateusz Ostapczuk').
+    if cid != "?":
+        ec = data.get("excluded_cids", [])
+        if not isinstance(ec, list):
+            ec = []
+        if cid not in ec:
+            ec.append(cid)
+        data["excluded_cids"] = ec
     working = data.get("working", {})
     if isinstance(working, dict):
         working.pop(cid, None)
@@ -341,6 +450,7 @@ def parse_command(text: str) -> Tuple[str, str]:
     if low in ("reset", "reset overrides"):
         data = load()
         data["excluded"] = []
+        data["excluded_cids"] = []
         data["working"] = {}
         save(data)
         return "reset", "✅ Reset — wszyscy kurierzy aktywni"
