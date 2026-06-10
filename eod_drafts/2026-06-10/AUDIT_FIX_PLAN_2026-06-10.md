@@ -108,7 +108,14 @@ Cztery małe, dobrze wycelowane fixy poprawiające dzisiejsze propozycje:
 
 ---
 
-## ETAP 4 — UNIFIKACJA FLAG DECYZYJNYCH CROSS-PROCES (1 d) `[ ]`
+## ETAP 4 — UNIFIKACJA FLAG DECYZYJNYCH CROSS-PROCES (1 d) `[x]` ✅ 2026-06-10 ~20:10 UTC
+
+> **WYKONANE 2026-06-10 wieczór** (sesja CC ETAP 4). Commity (master): `17407e8` mechanizm (common.decision_flag: flags.json→stała modułu→False + ETAP4_DECISION_FLAGS + flag_fingerprint + conftest wycina klucze ETAP4 z tmp-kopii + script-runnery dostają kopię bez flag przez env `DISPATCH_FLAGS_PATH` + tool `tools/flag_fingerprint.py`) → `6e3108d` call-sites 15 flag (dispatch_pipeline/feasibility_v2/route_simulator_v2/courier_resolver `_f4_flag`/common C2) → `81676b3` FLAG_FINGERPRINT przy starcie 4 procesów → `c317d05` tabela inwentaryzacyjna. Tag `etap4-flag-unification-2026-06-10`.
+> - **Inwentaryzacja + ACK Adriana**: `flag_inventory_etap4.md` (obok) — 13 flag (a)→flags.json (wartości = stan shadow 06-10, w tym **COMMIT_DIVERGENCE_VERDICT_GATE=false — czasówka miała gate ON wbrew ALWAYS-PROPOSE, bo default common.py="1"**); 5 flag (b) telemetria zostaje shadow-only (REPLAY_CAPTURE/LGBM×2/SELECTION_VETO/PENDING_POOL); 8 wpisów (c) celowo per-proces. Koeficjenty (A2=60/SPAN=1.0/R6=100) = identyczne z defaultami → tylko sprzątnięte z unitów.
+> - **Unity sprzątnięte**: override.conf shadow (zostały tylko (b)+(c) z klasyfikacją w komentarzach), main unit (R6 przeniesiony — R6FRESH-DUP-CONFIG-01 zamknięty, kanon=flags.json), `etap2-flip.conf` i `objective-alignment.conf` (plan-recheck) USUNIĘTE. Backupy `*.bak-pre-etap4-2026-06-10` obok plików + flags.json.bak.
+> - **Walidacja**: test integracyjny (ten sam order+flota przez assess_order przy env „czasowka" vs „shadow" → identyczny ranking) PASS; suita 49 failed = diff vs baseline PUSTY, 2160 passed (+6); **fingerprinty 4 procesów IDENTYCZNE po flipie** (czasowka 20:09:13 PRZED: wszystko 0 + commit_div=1 → 20:10:18 PO: = shadow). Restarty shadow+panel-watcher 20:10 czyste (NRestarts=0, journal bez err); telegram NIETKNIĘTY.
+> - Rollback per flaga = wpis w flags.json (hot-reload); pełny = `.bak` unitów + daemon-reload + restart.
+> - KROK 0 (push ~10 commitów): nieaktualny — master był już na origin (E2/E3 wypchnęły).
 
 **Problem (Z-04):** dispatch-shadow ma w override.conf ~15 flag env (m.in. `ENABLE_BUNDLE_DELIV_SPREAD_CAP`, `ENABLE_R1_PROGRESSIVE_CLIP`, `ENABLE_V319H_CONTINUATION_GUARD`, `ENABLE_A2_RELIABILITY_SOFT_SCORE`, `ENABLE_FAIL12_SCHEDULE_FAILOPEN`, `ENABLE_F4_COURIER_POS_PICKUP_PROXY/INTERP`, `ENABLE_C2_NEG_GAP_DECAY`, `ENABLE_OBJ_SPAN_COST`, `ENABLE_OBJ_R6_SOFT_DEADLINE` [main unit], `ENABLE_PRE_SHIFT_DEPARTURE_CLAMP`, `ENABLE_LGBM_SHADOW`), których **dispatch-czasowka i dispatch-plan-recheck NIE mają** → czasówki/re-decyzje liczone starszym silnikiem.
 
