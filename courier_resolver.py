@@ -30,6 +30,10 @@ _log = setup_logger("courier_resolver", "/root/.openclaw/workspace/scripts/logs/
 KURIER_PINY_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny.json"
 COURIER_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
 KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
+# PANEL-CANON (2026-06-10): {pełne imię: cid} — autorytatywne wiązanie cid↔nazwisko,
+# współdzielone z panelem admin (schedule_grid/fleet_state). Najwyższy priorytet w
+# _load_courier_names → eliminuje dwuznaczne skróty u źródła.
+GRAFIK_FULL_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/grafik_full_names.json"
 GPS_POSITIONS_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions.json"
 GPS_POSITIONS_PWA_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions_pwa.json"
 GPS_FRESHNESS_MIN = 5  # GPS nowszy niz 5 min = aktualny
@@ -327,6 +331,25 @@ def _load_courier_names() -> Dict:
         pass
     except Exception as e:
         _log.warning(f"_load_courier_names: courier_names fail: {e}")
+    # PANEL-CANON (2026-06-10): grafik_full_names.json = {pełne imię: cid} —
+    # autorytatywne, JEDNOZNACZNE wiązanie cid↔pełne nazwisko, którego używa też
+    # panel admin (schedule_grid/fleet_state) do związania grafiku z kurierami.
+    # NAJWYŻSZY priorytet: nadpisuje skróty z kurier_ids/courier_names ("Rafał Ja"
+    # → Jankowski|Jabłoński AMBIGUOUS) pełnym imieniem trafiającym WPROST w klucz
+    # grafiku → match_courier resolwuje, eliminuje całą klasę kolizji skrótów u
+    # źródła. Flag-gated (hot-reload kill-switch) + fail-soft (brak/zły plik →
+    # zachowanie sprzed zmiany, courier_names.json zostaje backstopem).
+    if flag("ENABLE_GRAFIK_FULL_NAMES_SOURCE", default=True):
+        try:
+            with open(GRAFIK_FULL_NAMES_PATH, encoding="utf-8") as f:
+                gfn = json.load(f)
+            for full_name, cid in gfn.items():
+                if isinstance(full_name, str) and full_name.strip():
+                    merged[str(cid)] = full_name
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            _log.warning(f"_load_courier_names: grafik_full_names fail: {e}")
     return merged
 
 
