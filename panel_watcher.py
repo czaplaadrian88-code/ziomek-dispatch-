@@ -1551,6 +1551,20 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             continue
         sid = raw.get("id_status_zamowienia")
         dzien_odbioru = raw.get("dzien_odbioru")
+        # ETAP 5 KROK 5 (2026-06-10, upgrade E6/Z-19): persystencja wejścia w
+        # id_status=4 (oczekiwanie pod restauracją). Pierwszy raz widziany sid=4
+        # → waiting_at=now_iso (idempotent — NIE nadpisujemy; granulacja = cykl
+        # pu_reconcile). Konsument: sla_tracker._check_restaurant_violations
+        # (arrival_source=status4 zamiast commit_fallback — czysta atrybucja
+        # kurier-vs-restauracja). Flaga hot-reload w flags.json.
+        if (sid == 4 and not sorder.get("waiting_at")
+                and flag("ENABLE_WAITING_AT_PERSIST", True)):
+            try:
+                upsert_order(zid, {"waiting_at": now_iso()},
+                             event="WAITING_AT_RESTAURANT_OBSERVED")
+                _log.info(f"WAITING_AT set {zid} (pu_reconcile sid=4)")
+            except Exception as e:
+                _log.warning(f"waiting_at persist fail {zid}: {e}")
         if sid == 5 and dzien_odbioru:
             kid = str(raw.get("id_kurier") or "")
             # pickup_coords z lookup - order moze miec address_id w state (po patch enrichment)
