@@ -1469,11 +1469,16 @@ V326_RATIONALE_CLEAR_WIN_THRESHOLD = 50.0
 ENABLE_V326_SPEED_MULTIPLIER = _os.environ.get(
     "ENABLE_V326_SPEED_MULTIPLIER", "1") == "1"
 V326_SPEED_MULTIPLIER_MAP = {
-    'gold':  0.889,  # backtest 8,108 deliveries (Mateusz O, Bartek O, Gabriel)
-    'std+':  1.056,  # backtest 4,837 (Jakub OL, Adrian R) — distance bias suspected
-    'std':   1.000,  # baseline (always 1.0)
-    'slow':  1.111,  # backtest 1,895 (Łukasz B, Michał Li, Artsem Km)
-    'new':   1.300,  # policy default — n=739 empirical insufficient (Adrian Q&A "duuużo czasu")
+    # REKALIBRACJA 2026-06-10 z 3056 realnych dostaw (backfill_decisions_outcomes_v1),
+    # atrybucja outcome.courier_id_final → AKTUALNY tier (przypisania z panelu). Mediana
+    # realnego czasu dostawy / std: gold 14.8/17.4=0.83, std+ 16.3/17.4=0.94,
+    # slow 22.6/17.4=1.30, new 20.4/17.4=1.17. Stare wartości (backtest XI.2025-IV.2026,
+    # inne przypisania tierów): gold 0.889 / std+ 1.056 / std 1.0 / slow 1.111 / new 1.300.
+    'gold':  0.850,  # real 0.83× std (Bartek O/Mateusz O/Gabriel med ~14-15 min, resid +6)
+    'std+':  0.940,  # FIX INWERSJI: std+ realnie SZYBSZY niż std (16.3<17.4 min); było 1.056 (>1.0)
+    'std':   1.000,  # baseline (zawsze 1.0)
+    'slow':  1.250,  # real 1.30× std (Adrian R/Michał Li med ~22 min, breach 18%); było 1.111
+    'new':   1.200,  # real 1.17× std — dane (n=357) zastępują policy 1.30; tail-risk → DWELL/ETA
 }
 # Score adjustment = (1.0 - multi) * SCORE_FACTOR.
 # gold (0.889) → +5.55 score boost, slow (1.111) → -5.55 penalty, new (1.30) → -15.
@@ -1489,12 +1494,17 @@ V326_SPEED_SCORE_FACTOR = 50.0
 # ucząca (eta_calibration_log.jsonl) dopreciezuje dropoff per tier.
 DWELL_PICKUP_FLAT_MIN = 1.0  # E1 2026-05-17 — postój pod restauracją (obsługa)
 DWELL_DEFAULT_MIN = 3.5  # dropoff fallback dla nieznanego tieru
-DWELL_BY_TIER = {  # wartości = DROPOFF (handoff u klienta) per tier
-    'gold': 2.5,
-    'std+': 3.0,
-    'std':  3.5,
-    'slow': 4.0,
-    'new':  4.0,
+DWELL_BY_TIER = {  # wartości = DROPOFF per tier (rezyduum ETA uczony z eta_calibration_log)
+    # REKALIBRACJA 2026-06-10: korekta = bieżący DWELL + mediana błędu predykcji ETA per
+    # tier (real_delivery − predicted_delivery, 7496 dopasowanych rekordów eta_calibration_log).
+    # Błąd predykcji: gold −1.2 / std+ −0.6 / std +1.2 / slow +2.3 / new +2.3 min. Zeruje
+    # systematyczny bias — Ziomek kompresował spread tierów (real 15.2→20.6, pred 14.9→17.3).
+    # Stare wartości: gold 2.5 / std+ 3.0 / std 3.5 / slow 4.0 / new 4.0.
+    'gold': 1.5,   # 2.5 − 1.0 (Ziomek przeszacowywał gold ETA o ~1.2 min)
+    'std+': 2.5,   # 3.0 − 0.5
+    'std':  4.5,   # 3.5 + 1.0
+    'slow': 6.5,   # 4.0 + 2.5 (niedoszacowanie ~2.3 min, breach 18%)
+    'new':  6.5,   # 4.0 + 2.5 (niedoszacowanie + ogon p90 +23 min)
 }
 
 

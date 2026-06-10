@@ -2,11 +2,11 @@
 
 Tests:
 - T1 flag default False → no adjustment
-- T2 gold tier (multi 0.889) → score +5.55 boost
-- T3 std+ tier (multi 1.056) → score -2.80 penalty (per backtest)
-- T4 slow tier (multi 1.111) → score -5.55 penalty
+- T2 gold tier (multi 0.85) → score +7.5 boost  [rekalibracja 2026-06-10]
+- T3 std+ tier (multi 0.94) → score +3.0 boost  [fix inwersji: std+ szybszy niż std]
+- T4 slow tier (multi 1.25) → score -12.5 penalty
 - T5 std tier → no change (multi 1.0)
-- T6 new tier → -15 penalty (multi 1.30 policy)
+- T6 new tier → -10 penalty (multi 1.20, data n=357 zastępuje policy 1.30)
 - T7 unknown tier → fallback std + WARNING log
 - T8 metrics propagated (cs_tier_bag → v326_speed_*)
 - T9 re-sort happens (gold boosted past std previously top)
@@ -62,32 +62,32 @@ def main():
     expect("flipped via env", common.ENABLE_V326_SPEED_MULTIPLIER is True)
 
     # ---------- T2: gold tier ----------
-    print("\n=== T2: gold (multi 0.889) → +5.55 boost ===")
+    print("\n=== T2: gold (multi 0.85) → +7.5 boost ===")
     feasible = [_MockCandidate('413', 'Mateusz O', 100.0, 'gold')]
     out = dispatch_pipeline._v326_speed_multiplier_adjust(feasible, "t2")
-    expected = 100.0 + (1.0 - 0.889) * 50.0  # +5.55
+    expected = 100.0 + (1.0 - 0.85) * 50.0  # +7.5
     expect(f"gold score 100 → {expected:.2f}",
            abs(out[0].score - expected) < 0.01,
            f"got {out[0].score}")
-    expect("metrics.v326_speed_multiplier == 0.889",
-           out[0].metrics.get("v326_speed_multiplier") == 0.889)
+    expect("metrics.v326_speed_multiplier == 0.85",
+           out[0].metrics.get("v326_speed_multiplier") == 0.85)
     expect("metrics.v326_speed_tier_used == 'gold'",
            out[0].metrics.get("v326_speed_tier_used") == 'gold')
 
     # ---------- T3: std+ tier ----------
-    print("\n=== T3: std+ (multi 1.056) → -2.80 penalty ===")
+    print("\n=== T3: std+ (multi 0.94) → +3.0 boost [fix inwersji] ===")
     feasible = [_MockCandidate('370', 'Jakub OL', 100.0, 'std+')]
     out = dispatch_pipeline._v326_speed_multiplier_adjust(feasible, "t3")
-    expected = 100.0 + (1.0 - 1.056) * 50.0  # -2.80
+    expected = 100.0 + (1.0 - 0.94) * 50.0  # +3.0 (std+ realnie szybszy niż std)
     expect(f"std+ score 100 → {expected:.2f}",
            abs(out[0].score - expected) < 0.01,
            f"got {out[0].score}")
 
     # ---------- T4: slow tier ----------
-    print("\n=== T4: slow (multi 1.111) → -5.55 penalty ===")
+    print("\n=== T4: slow (multi 1.25) → -12.5 penalty ===")
     feasible = [_MockCandidate('511', 'Łukasz B', 100.0, 'slow')]
     out = dispatch_pipeline._v326_speed_multiplier_adjust(feasible, "t4")
-    expected = 100.0 + (1.0 - 1.111) * 50.0
+    expected = 100.0 + (1.0 - 1.25) * 50.0  # -12.5
     expect(f"slow score 100 → {expected:.2f}",
            abs(out[0].score - expected) < 0.01,
            f"got {out[0].score}")
@@ -102,10 +102,10 @@ def main():
            out[0].metrics.get("v326_speed_score_adjustment") == 0.0)
 
     # ---------- T6: new tier ----------
-    print("\n=== T6: new (multi 1.30) → -15 penalty ===")
+    print("\n=== T6: new (multi 1.20) → -10 penalty ===")
     feasible = [_MockCandidate('522', 'Szymon Sa', 100.0, 'new')]
     out = dispatch_pipeline._v326_speed_multiplier_adjust(feasible, "t6")
-    expected = 100.0 + (1.0 - 1.30) * 50.0  # -15.0
+    expected = 100.0 + (1.0 - 1.20) * 50.0  # -10.0
     expect(f"new score 100 → {expected:.1f}",
            abs(out[0].score - expected) < 0.01,
            f"got {out[0].score}")
@@ -132,7 +132,7 @@ def main():
     out = dispatch_pipeline._v326_speed_multiplier_adjust(feasible, "t8")
     m = out[0].metrics
     expect("v326_speed_tier_used", m.get("v326_speed_tier_used") == 'gold')
-    expect("v326_speed_multiplier", m.get("v326_speed_multiplier") == 0.889)
+    expect("v326_speed_multiplier", m.get("v326_speed_multiplier") == 0.85)
     expect("v326_speed_score_adjustment exists", "v326_speed_score_adjustment" in m)
 
     # ---------- T9: re-sort: slow demoted past gold ----------
@@ -142,7 +142,7 @@ def main():
         _MockCandidate('413', 'Mateusz O', 99.0, 'gold'),  # original 2nd
     ]
     out = dispatch_pipeline._v326_speed_multiplier_adjust(feasible, "t9")
-    # slow: 102 - 5.55 = 96.45; gold: 99 + 5.55 = 104.55 → gold becomes BEST
+    # slow: 102 - 12.5 = 89.5; gold: 99 + 7.5 = 106.5 → gold becomes BEST
     expect("post-adjustment gold becomes BEST (re-sort)",
            out[0].courier_id == '413',
            f"got order: {[c.courier_id for c in out]}")
