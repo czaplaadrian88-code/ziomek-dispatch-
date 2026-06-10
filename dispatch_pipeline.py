@@ -2125,6 +2125,13 @@ def _assess_order_impl(
         v327_min_drop_factor = None
         v327_bundle_score_mult = 1.0
         v327_drop_zones_audit = None
+        v327_min_drop_factor_known = None
+        v327_unknown_zone_present = False
+        # Z-02 (audyt 2026-06-10): sign-guard + Unknown-split. Hot-reload kill-switch
+        # w flags.json, env default ON (common.ENABLE_V327_MULT_SIGN_GUARD).
+        _v327_sign_guard_on = C.flag(
+            "ENABLE_V327_MULT_SIGN_GUARD",
+            default=bool(getattr(C, "ENABLE_V327_MULT_SIGN_GUARD", True)))
         if C.ENABLE_V327_BUG_FIXES_BUNDLE and bag_raw:
             try:
                 _v327_new_zone = C.drop_zone_from_address(
@@ -2142,10 +2149,22 @@ def _assess_order_impl(
                 v327_min_drop_factor = C.min_drop_proximity_factor(_v327_all_zones)
                 if v327_min_drop_factor is not None:
                     v327_bundle_score_mult = C.bundle_score_multiplier(v327_min_drop_factor)
+                # Z-02: 'Unknown' (luka pokrycia districts) nie jest dowodem
+                # cross-quadrant → mult łagodny 0.7; realny cross-quadrant wśród
+                # ZNANYCH stref zostaje 0.1 (min z obu sygnałów).
+                if _v327_sign_guard_on and v327_min_drop_factor is not None:
+                    v327_min_drop_factor_known, v327_unknown_zone_present = (
+                        C.min_drop_proximity_factor_split(_v327_all_zones))
+                    _v327_mult = C.bundle_score_multiplier(v327_min_drop_factor_known)
+                    if v327_unknown_zone_present:
+                        _v327_mult = min(_v327_mult, C.V327_BUNDLE_UNKNOWN_SCORE_MULT)
+                    v327_bundle_score_mult = _v327_mult
                 v327_drop_zones_audit = {
                     "new_zone": _v327_new_zone,
                     "bag_zones": _v327_bag_zones,
                     "min_factor": v327_min_drop_factor,
+                    "min_factor_known": v327_min_drop_factor_known,
+                    "has_unknown": v327_unknown_zone_present,
                     "score_mult": v327_bundle_score_mult,
                 }
             except Exception as _v327_z_e:
@@ -3324,9 +3343,12 @@ def _assess_order_impl(
         # 0.5 (adjacent) → score *= 0.7
         # 1.0 (same quadrant) → score *= 1.0 (unchanged)
         # Gated by flag (v327_bundle_score_mult=1.0 gdy flag=False lub empty bag).
+        # Z-02 (audyt 2026-06-10, _v327_sign_guard_on): mnożnik <1.0 na UJEMNYM
+        # score ODWRACA karę (−80×0.1=−8 bije −50 same-quadrant) → aplikuj
+        # wyłącznie na dodatnim score; ujemny zostaje bez zmian (kary już działają).
         v327_score_pre_mult = final_score
-        if v327_bundle_score_mult != 1.0:
-            final_score = final_score * v327_bundle_score_mult
+        final_score, v327_mult_sign_guarded = C.apply_bundle_score_mult(
+            final_score, v327_bundle_score_mult, _v327_sign_guard_on)
 
         # V3.19e Opcja B — R1' observability only, zero behavior change.
         # Dla propozycji z synthetic pos=last_assigned_pickup (kurier w drodze
@@ -3383,6 +3405,10 @@ def _assess_order_impl(
             "v327_corridor_mult_applied": round(v327_corridor_mult_applied, 3),
             "v327_score_pre_mult": round(v327_score_pre_mult, 2) if v327_bundle_score_mult != 1.0 else None,
             "v327_drop_zones_audit": v327_drop_zones_audit,
+            # Z-02 (audyt 2026-06-10): sign-guard + Unknown-split observability.
+            "v327_min_drop_factor_known": v327_min_drop_factor_known,
+            "v327_unknown_zone_present": v327_unknown_zone_present,
+            "v327_mult_sign_guarded": v327_mult_sign_guarded,
             "timing_gap_bonus": round(timing_gap_bonus, 2),
             "timing_gap_min": round(gap_min, 1),
             "time_to_pickup_ready_min": round(time_to_pickup_ready, 1),

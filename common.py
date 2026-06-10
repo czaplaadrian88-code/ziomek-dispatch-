@@ -2291,6 +2291,19 @@ V327_BUNDLE_CROSS_QUADRANT_SCORE_MULT = 0.1   # factor=0.0 → score *= 0.1
 V327_BUNDLE_ADJACENT_SCORE_MULT = 0.7         # factor=0.5 → score *= 0.7
 V327_BUNDLE_SAME_QUADRANT_SCORE_MULT = 1.0    # factor=1.0 → unchanged
 
+# Z-02 (audyt 2026-06-10): sign-guard mnożnika Bug Z + rozdzielenie 'Unknown'
+# od realnego cross-quadrant.
+#   1. Mnożnik <1.0 na UJEMNYM score ODWRACA karę (×0.1 = 10× poprawa — najgorsze
+#      geometrycznie bundle z ujemnym score wygrywały z lepszymi) → mnożymy
+#      wyłącznie dodatni score.
+#   2. 'Unknown' (luka pokrycia districts) to NIE dowód cross-quadrant — łagodny
+#      mult 0.7 zamiast 0.1; realny cross-quadrant wśród ZNANYCH stref zostaje 0.1.
+# Env default ON; runtime kill-switch hot-reload: flags.json ENABLE_V327_MULT_SIGN_GUARD=false.
+ENABLE_V327_MULT_SIGN_GUARD = _os.environ.get(
+    "ENABLE_V327_MULT_SIGN_GUARD", "1") == "1"
+V327_BUNDLE_UNKNOWN_SCORE_MULT = float(_os.environ.get(
+    "V327_BUNDLE_UNKNOWN_SCORE_MULT", "0.7"))
+
 
 def bundle_score_multiplier(min_factor):
     """V3.27 Bug Z Q5: map min(drop_proximity_factor) → score multiplier.
@@ -2340,6 +2353,54 @@ def min_drop_proximity_factor(zones):
             if f < min_f:
                 min_f = f
     return min_f
+
+
+def min_drop_proximity_factor_split(zones):
+    """Z-02 (audyt 2026-06-10): jak min_drop_proximity_factor, ale rozdziela
+    luki pokrycia ('Unknown'/None/pusta strefa) od realnego sygnału geometrycznego.
+
+    Args:
+        zones: list of zone names (str) — może zawierać 'Unknown'/None.
+
+    Returns:
+        (min_factor_known, has_unknown):
+        min_factor_known — min pairwise factor po parach ZNANYCH stref,
+            None gdy < 2 znanych stref (brak sygnału geometrycznego),
+        has_unknown — True gdy w zones jest co najmniej jedna nieznana strefa.
+    """
+    if not zones:
+        return None, False
+    known = [z for z in zones if z and z != 'Unknown']
+    has_unknown = len(known) < len(zones)
+    if len(known) < 2:
+        return None, has_unknown
+    n = len(known)
+    min_f = 1.0
+    for i in range(n):
+        for j in range(i + 1, n):
+            f = drop_proximity_factor(known[i], known[j])
+            if f < min_f:
+                min_f = f
+    return min_f, has_unknown
+
+
+def apply_bundle_score_mult(final_score, mult, sign_guard_on=None):
+    """Z-02 (audyt 2026-06-10): aplikacja mnożnika Bug Z z guardem znaku.
+
+    Mnożnik <1.0 na UJEMNYM score odwraca karę (−80×0.1=−8 bije −50
+    same-quadrant) → przy guardzie ON mnożymy wyłącznie dodatni score.
+
+    Returns:
+        (new_score, sign_guarded) — sign_guarded=True gdy mnożnik POMINIĘTY
+        przez guard (score ujemny/zero); False przy aplikacji lub mult=1.0.
+    """
+    if sign_guard_on is None:
+        sign_guard_on = ENABLE_V327_MULT_SIGN_GUARD
+    if mult == 1.0:
+        return final_score, False
+    if sign_guard_on and final_score <= 0.0:
+        return final_score, True
+    return final_score * mult, False
 
 
 # V3.26 STEP 6 (R-07 v2 CHAIN-ETA ENGINE) — Adrian Q&A 2026-04-24.
