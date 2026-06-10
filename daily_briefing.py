@@ -245,6 +245,63 @@ def _acceptance_breakdown_lines(
     return lines
 
 
+# ---- restaurant violations ±5 min — ETAP 6 (Z-19) ----
+# Źródło: dispatch_state/restaurant_violations.jsonl (pisze sla_tracker).
+# Mianownik %: zlecenia per restauracja z sla_log.jsonl (każde delivered
+# z odbiorem) w tym samym oknie — przybliżenie (delivered vs picked_up),
+# wystarczające do rankingu rozmów kontraktowych.
+
+RESTAURANT_VIOLATIONS_PATH = "/root/.openclaw/workspace/dispatch_state/restaurant_violations.jsonl"
+SLA_LOG_PATH = "/root/.openclaw/workspace/scripts/logs/sla_log.jsonl"
+
+
+def _median(vals: list) -> float:
+    s = sorted(vals)
+    n = len(s)
+    mid = n // 2
+    return float(s[mid]) if n % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+
+def _restaurant_violations_lines(
+    start_utc: datetime, end_utc: datetime, top_n: int = 5
+) -> list:
+    """Sekcja „Naruszenia restauracji 7d": top N wg liczby naruszeń +
+    mediana wait_min + % zleceń restauracji z naruszeniem. [] gdy brak."""
+    waits: Dict[str, list] = {}
+    for r in _iter_learning_in_range(RESTAURANT_VIOLATIONS_PATH, start_utc, end_utc):
+        rest = r.get("restaurant") or "?"
+        try:
+            waits.setdefault(rest, []).append(float(r.get("wait_min")))
+        except (TypeError, ValueError):
+            continue
+    if not waits:
+        return []
+
+    totals: Counter = Counter()
+    try:
+        with open(SLA_LOG_PATH) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                    ts = _parse_any_iso(rec.get("logged_at"))
+                    if ts is None or not (start_utc <= ts < end_utc):
+                        continue
+                    totals[rec.get("restaurant") or "?"] += 1
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+
+    rows = sorted(waits.items(), key=lambda kv: -len(kv[1]))[:top_n]
+    lines = ["Naruszenia restauracji 7d (odbiór >5 min po umówionym):"]
+    for rest, ws in rows:
+        n = len(ws)
+        total = totals.get(rest, 0)
+        pct = f", {100.0 * n / total:.0f}% zleceń" if total >= n else ""
+        lines.append(f"• {rest}: {n}× (mediana czekania {_median(ws):.0f} min{pct})")
+    return lines
+
+
 # ---- static meta ----
 
 def _top_problem_static(top_n: int = 3) -> list:
@@ -328,6 +385,11 @@ def format_morning() -> str:
     breakdown = _acceptance_breakdown_lines(LEARNING_LOG_PATH, week_start, end)
     if breakdown:
         lines.extend(breakdown)
+        lines.append("")
+    # ETAP 6 (Z-19): tygodniowe naruszenia kontraktu restauracji ±5 min
+    violations = _restaurant_violations_lines(week_start, end)
+    if violations:
+        lines.extend(violations)
         lines.append("")
     if top_problem:
         lines.append("Top problem restauracji (static):")

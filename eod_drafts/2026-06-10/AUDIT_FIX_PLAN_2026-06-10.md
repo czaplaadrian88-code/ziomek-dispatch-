@@ -143,9 +143,11 @@ Cztery małe, dobrze wycelowane fixy poprawiające dzisiejsze propozycje:
 
 ---
 
-## ETAP 6 — RESTAURANT_VIOLATIONS ±5 MIN (0.5-1 d, niezależny — można wcisnąć wcześniej) `[ ]`
+## ETAP 6 — RESTAURANT_VIOLATIONS ±5 MIN (0.5-1 d, niezależny — można wcisnąć wcześniej) `[x]` DONE 2026-06-10 ~20:20 UTC
 
 **Wymaganie potwierdzone przez Adriana 10.06** („5± jest w kontrakcie i powinno działać"). KB §II.8 deklaruje plik `restaurant_violations.jsonl` — nigdy nie powstał (Z-19).
+
+**WYKONANE:** detektor `sla_tracker._check_restaurant_violations` (wzorzec R6: skan per tick picked_up+delivered, seen-flag `restaurant_violation_logged` set-then-write, paczki pominięte, ZERO Telegrama; flaga `ENABLE_RESTAURANT_VIOLATIONS` default ON inline `C.flag`, próg 5.0 w sla_tracker — celowo NIE w common.py, kolizja z E4). **Przyjazd = commit_fallback:** zwiad KROK 0 potwierdził, że wejście w id_status=4 NIE jest nigdzie persystowane, a dodanie go = edycja panel_watcher.py (gorąca ścieżka + niezacommitowany WIP sesji E4) → STOP wg planu; kod forward-compat czyta `waiting_at` (arrival_source=status4) gdy pole kiedyś powstanie. Zapis przez `core.jsonl_appender` (flock). Sekcja „Naruszenia restauracji 7d" w `daily_briefing.format_morning` (top-5: liczba + mediana wait + % zleceń, mianownik z sla_log). Backfill 54 726 zleceń z CSV (2025-11→2026-06-09): **36,3% łamie ±5 min** — top Rany Julek 46,2% / Mama Thai Bistro 44,8% / Karczma Maciejówka 42,1% → `restaurant_violations_baseline.md` (obok). Testy 16/16, suita 49 failed = baseline (0 nowych). Restart dispatch-sla-tracker 20:16 UTC czysto (telegram nietknięty); live pierwsze ticki: 110 wpisów / 110 unikalnych oid / 0 ERROR.
 
 **Kroki:**
 1. Detektor w `sla_tracker.py` (już skanuje aktywne ordery co tick): naruszenie restauracji ≈ `czas_odbioru_timestamp (realny pickup) − max(czas_kuriera_warsaw (commit), przyjazd_kuriera) > 5 min`. Przyjazd kuriera: timestamp wejścia w `id_status=4` („oczekiwanie pod restauracją") z orders_state/event_bus; fallback: brak statusu 4 → licz od commit.

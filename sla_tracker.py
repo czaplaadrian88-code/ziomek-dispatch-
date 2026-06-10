@@ -29,7 +29,8 @@ from dispatch_v2.telegram_utils import send_admin_alert
 
 _log = setup_logger("sla_tracker", "/root/.openclaw/workspace/scripts/logs/sla_tracker.log")
 _running = True
-_stats = {"pickup": 0, "delivered": 0, "violations": 0, "r6_alerts": 0}
+_stats = {"pickup": 0, "delivered": 0, "violations": 0, "r6_alerts": 0,
+          "restaurant_violations": 0}
 
 # Sprint #37 v2 Phase B (2026-05-13): per-consumer stuck alert dla sla_tracker.
 # Post-#36 (poison-msg fix) sla_tracker miał per-event isolation ALE brakowało
@@ -54,6 +55,14 @@ _SLA_STUCK_CONFIG = StuckAlertConfig.from_env(
 )
 SLA_HEARTBEAT_INTERVAL_SEC = 60.0
 LOG_PATH = Path("/root/.openclaw/workspace/scripts/logs/sla_log.jsonl")
+# ETAP 6 (Z-19, 2026-06-10): naruszenia kontraktu restauracji ±5 min.
+# KB §II.8 deklarował ten plik od początku — kod nigdy nie powstał.
+# Próg celowo TUTAJ (nie w common.py) — równoległa sesja ETAPU 4 pracuje
+# na common.py; flaga czytana inline przez C.flag() z tego samego powodu.
+RESTAURANT_VIOLATIONS_PATH = Path(
+    "/root/.openclaw/workspace/dispatch_state/restaurant_violations.jsonl"
+)
+RESTAURANT_VIOLATION_MAX_WAIT_MIN = 5.0
 COURIER_NAMES_PATH = Path("/root/.openclaw/workspace/dispatch_state/courier_names.json")
 KURIER_IDS_PATH = Path("/root/.openclaw/workspace/dispatch_state/kurier_ids.json")  # V3.25 inverse fallback
 _courier_names: Dict[str, str] = {}
@@ -314,6 +323,109 @@ def _check_bag_time_alerts(now_utc: datetime) -> None:
             continue  # next order, nie crashuj całego ticku
 
 
+def _check_restaurant_violations() -> None:
+    """ETAP 6 (Z-19): naruszenie RESTAURACJI = kurier był na czas, a jedzenie nie.
+
+    Formuła (kontrakt ±5 min, Adrian 2026-06-10):
+      wait_min = real_pickup (czas_odbioru_timestamp → orders_state.picked_up_at)
+                 − max(commit (czas_kuriera_warsaw), przyjazd kuriera)
+      violation gdy wait_min > RESTAURANT_VIOLATION_MAX_WAIT_MIN.
+
+    Przyjazd kuriera: orders_state NIE persystuje wejścia w id_status=4
+    (zwiad 2026-06-10 — wymagałoby edycji panel_watcher, gorąca ścieżka
+    z WIP równoległej sesji). Forward-compat: gdy pole `waiting_at` kiedyś
+    powstanie, zostanie użyte (arrival_source=status4); do tego czasu
+    przyjazd = commit (arrival_source=commit_fallback) — bo max(commit,
+    przyjazd) i tak obcina wcześniejszy przyjazd do commitu, fallback
+    zawyża jedynie gdy kurier przyjechał PO commicie (naruszenie wtedy
+    raportowane łagodniej dla restauracji — bezpieczny kierunek błędu).
+
+    Wzorzec R6 _check_bag_time_alerts: skan per tick + persisted seen-flag
+    (`restaurant_violation_logged`, set-then-write — duplicate-safe przez
+    restart; przegrany append po udanym upsert = wpis stracony, widoczny
+    w logu ERROR). Skan obejmuje picked_up ORAZ delivered (przejście
+    picked_up→delivered między tickami nie gubi naruszenia; delivered żyją
+    w orders_state do porannego prune). ZERO Telegrama (Adrian zarządza
+    przez panel). Paczki pomijane (brak termiki/deadline'u restauracji).
+    Flaga ENABLE_RESTAURANT_VIOLATIONS (default ON) hot-reload via flags.json.
+    """
+    if not C.flag("ENABLE_RESTAURANT_VIOLATIONS", True):
+        return
+    try:
+        orders = get_by_status("picked_up") + get_by_status("delivered")
+    except Exception as e:
+        _log.error(f"restaurant_violations scan: get_by_status fail: {e}")
+        return
+
+    for order in orders:
+        oid = order.get("order_id") or "unknown"
+        try:
+            if order.get("restaurant_violation_logged", False):
+                continue  # one-shot gate — JEDEN wpis per oid
+
+            real_ts = order.get("picked_up_at")
+            commit_ts = order.get("czas_kuriera_warsaw")
+            if not real_ts or not commit_ts:
+                continue  # brak realnego odbioru albo commitu → nie da się ocenić
+
+            if C.is_paczka_order(order):
+                continue  # paczki bez termiki — kontrakt ±5 nie dotyczy
+
+            real_dt = C.parse_panel_timestamp(real_ts)
+            commit_dt = C.parse_panel_timestamp(commit_ts)
+            if real_dt is None or commit_dt is None:
+                _log.warning(
+                    f"restaurant_violations skip {oid}: unparseable "
+                    f"real={real_ts!r} commit={commit_ts!r}"
+                )
+                continue
+
+            waiting_dt = C.parse_panel_timestamp(order.get("waiting_at"))
+            if waiting_dt is not None:
+                arrival_dt = max(commit_dt, waiting_dt)
+                arrival_source = "status4"
+            else:
+                arrival_dt = commit_dt
+                arrival_source = "commit_fallback"
+
+            wait_min = (real_dt - arrival_dt).total_seconds() / 60.0
+            if wait_min <= RESTAURANT_VIOLATION_MAX_WAIT_MIN:
+                continue
+
+            # set-then-write (wzorzec R6 Opcja X): flaga PRZED append.
+            upsert_order(
+                oid, {"restaurant_violation_logged": True},
+                event="RESTAURANT_VIOLATION",
+            )
+            from zoneinfo import ZoneInfo
+            _waw = ZoneInfo("Europe/Warsaw")
+            record = {
+                "ts": now_iso(),
+                "order_id": oid,
+                "restaurant": order.get("restaurant"),
+                "committed_hhmm": commit_dt.astimezone(_waw).strftime("%H:%M"),
+                "arrival_source": arrival_source,
+                "real_pickup_hhmm": real_dt.astimezone(_waw).strftime("%H:%M"),
+                "wait_min": round(wait_min, 1),
+                "courier_id": str(order.get("courier_id") or "?"),
+                "order_type": order.get("order_type"),
+            }
+            from dispatch_v2.core.jsonl_appender import append_jsonl
+            append_jsonl(RESTAURANT_VIOLATIONS_PATH, record)
+            _stats["restaurant_violations"] += 1
+            _log.warning(
+                f"RESTAURANT_VIOLATION {oid} {record['restaurant']} "
+                f"wait={wait_min:.1f}min commit={record['committed_hhmm']} "
+                f"real={record['real_pickup_hhmm']} src={arrival_source}"
+            )
+        except Exception as e:
+            _log.error(
+                f"restaurant_violations check failed for "
+                f"{order.get('order_id', 'unknown')}: {type(e).__name__}: {e}"
+            )
+            continue  # next order, nie crashuj całego ticku
+
+
 def run():
     signal.signal(signal.SIGTERM, _handler)
     signal.signal(signal.SIGINT, _handler)
@@ -403,6 +515,12 @@ def run():
             _check_bag_time_alerts(datetime.now(timezone.utc))
         except Exception as e:
             _log.error(f"R6 scan wrapper fail: {e}")
+
+        # ETAP 6 (Z-19): naruszenia restauracji ±5 min per tick (outer safety net).
+        try:
+            _check_restaurant_violations()
+        except Exception as e:
+            _log.error(f"restaurant_violations scan wrapper fail: {e}")
 
         # A4.1: poll CONFIG_RELOAD broadcast events co 30s rate-limited.
         if _broadcast_sub is not None and time.time() - last_broadcast_poll >= BROADCAST_POLL_INTERVAL_S:
