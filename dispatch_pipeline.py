@@ -3385,6 +3385,12 @@ def _assess_order_impl(
             # (kurier bez GPS uratowany z BIALYSTOK_CENTER fiction). Obserwowalność
             # dla harnessu — odróżnia rescue od żywego pos_source tego samego enum.
             "pos_from_store": getattr(cs, "pos_from_store", False),
+            # Z-09 (audyt 2026-06-10): wiek pozycji w minutach (recent-fallback /
+            # store-rescue); None dla żywego GPS/no_gps. Razem z pos_from_store
+            # pozwala odróżnić świeży fix od repliki ze store w shadow_decisions.
+            "pos_age_min": (
+                round(getattr(cs, "pos_age_min"), 1)
+                if getattr(cs, "pos_age_min", None) is not None else None),
             "shift_start_min": getattr(cs, "shift_start_min", None),
             # V3.24-A: default False (in-shift kurier — naive_eta > shift_start zawsze).
             # Post-loop override ustawia True dla pos_source=pre_shift (linie ~925).

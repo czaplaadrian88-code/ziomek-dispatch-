@@ -193,7 +193,15 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        "carry_chain_",  # Sprint 2 Etap 2.2 (2026-05-27): carry/bag-stack visibility
                        "difficult_",  # Sprint 2026-05-28: difficult_case_redirect_shadow per-candidate
                        "fail12_",  # FAIL-12 (2026-06-06): schedule fail-OPEN observability (shadow-first)
-                       "a2_")  # A2 reliability soft-score (2026-06-07): a2_reliability_delta -> shadow_decisions
+                       "a2_",  # A2 reliability soft-score (2026-06-07): a2_reliability_delta -> shadow_decisions
+                       # Z-09 (audyt 2026-06-10): łańcuch mnożnika Bug Z (min_drop_factor /
+                       # bundle_score_mult / score_pre_mult / drop_zones_audit / sign_guarded)
+                       # NIE był serializowany — kalibracja Z-02 niemożliwa z logu.
+                       "v327_",
+                       # Z-09: late_pickup_*/new_pickup_* były explicit tylko w LOCATION A
+                       # (alternatives) — best (LOCATION B) ich nie miał. Prefiks wyrównuje
+                       # oba miejsca (LOCATION B dostaje przez _propagate na out["best"]).
+                       "late_pickup_", "new_pickup_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
@@ -222,6 +230,10 @@ def _serialize_candidate(c) -> dict:
         "eta_pickup_hhmm": _eta_hhmm_warsaw(m.get("eta_pickup_utc")),
         "eta_drive_hhmm": _eta_hhmm_warsaw(m.get("eta_drive_utc")),
         "pos_source": m.get("pos_source"),
+        # Z-09 (audyt 2026-06-10): rescue ze store replay'uje pierwotny label
+        # pos_source (np. "gps") — bez tych pól nieodróżnialny od żywego fixa.
+        "pos_from_store": m.get("pos_from_store"),
+        "pos_age_min": m.get("pos_age_min"),
         "bundle_level1": m.get("bundle_level1"),
         "bundle_level2": m.get("bundle_level2"),
         "bundle_level2_dist": m.get("bundle_level2_dist"),
@@ -483,6 +495,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "eta_drive_hhmm": _eta_hhmm_warsaw(best_m.get("eta_drive_utc")),
             "target_pickup_at": target_pickup_at_iso,
             "pos_source": best_m.get("pos_source"),
+            # Z-09 (audyt 2026-06-10): patrz _serialize_candidate (LOCATION A).
+            "pos_from_store": best_m.get("pos_from_store"),
+            "pos_age_min": best_m.get("pos_age_min"),
             "bundle_level1": best_m.get("bundle_level1"),
             "bundle_level2": best_m.get("bundle_level2"),
             "bundle_level2_dist": best_m.get("bundle_level2_dist"),
