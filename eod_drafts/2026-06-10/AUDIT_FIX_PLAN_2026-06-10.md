@@ -130,7 +130,16 @@ Cztery małe, dobrze wycelowane fixy poprawiające dzisiejsze propozycje:
 
 ---
 
-## ETAP 5 — CZASÓWKI: SELEKCJA SCORE-BASED W T-60/T-50 (1-2 d) `[ ]`
+## ETAP 5 — CZASÓWKI: SELEKCJA SCORE-BASED W T-60/T-50 (1-2 d) `[~]` KROK 1+5 DONE 2026-06-10 ~20:50 UTC; KROK 2 czeka na 24-48h danych shadow
+
+**WYKONANE 10.06 wieczór (commity `f1f37d3`+`3ddfbcb`+`c2ca316`, tagi `etap5-krok1-czasowka-score-shadow-2026-06-10` + `etap5-krok5-waiting-at-persist-2026-06-10`, PUSHED origin):**
+- **KROK 1 SHADOW LIVE:** `czasowka_proactive/score_selector.py` (czysta funkcja) + hook w `czasowka_scheduler` — w oknie 40<mins≤60 do `czasowka_eval_log` dopisywane pola `sb_*` (would_assign / cid / score / margin E2-Z10 / wait / r6 / pool / best_is_score_top / reject_reason). Gates: score≥`CZASOWKA_PROACTIVE_MIN_SCORE`(30), margin≥`CZASOWKA_PROACTIVE_MIN_MARGIN`(15; pula solo=strict reject `solo_pool`), wait≤`CZASOWKA_PROACTIVE_MAX_WAIT_MIN`(10), R6=0. Flagi w flags.json; `CZASOWKA_PROACTIVE_SCORE_SHADOW=true`, `CZASOWKA_PROACTIVE_SCORE_BASED=false` (flip = KROK 3 za ACK). Zero zmiany decyzji, zero restartów (oneshot). Tick 20:40 czysty. Testy 24/24; suita 49 failed = baseline (0 nowych).
+- **KROK 2 TOOLING GOTOWY:** `eod_drafts/2026-06-10/czasowka_proactive_calib.py` — raport: would_assign rate T-60/T-50, zgodność sb_cid vs FORCE_ASSIGN T-40 vs realny kurier (learning_log PANEL_AGREE/OVERRIDE z E3), histogram reject_reasons, rozkłady score/margin/wait, **sensitivity 6 wariantów progów** (m.in. solo=OK, margin 10/5/0) → propozycja progów Z DANYCH. Uruchomić ≥12.06 wieczór: `/root/.openclaw/venvs/dispatch/bin/python eod_drafts/2026-06-10/czasowka_proactive_calib.py --md eod_drafts/<data>/czasowka_proactive_calib.md` → **STOP → ACK Adriana na progi → dopiero KROK 3 (flip TYLKO T-50)**.
+- **KROK 5 BONUS LIVE:** `waiting_at` persystowany w orders_state (panel_watcher pu_reconcile, pierwszy widziany sid=4, idempotent, event `WAITING_AT_RESTAURANT_OBSERVED`; flaga `ENABLE_WAITING_AT_PERSIST` ON hot-reload). Detektor E6 podchwytuje automatycznie (arrival_source=status4 zamiast commit_fallback). Restart panel-watchera 20:47 UTC czysto. Testy 5/5.
+- **OBSERWACJA (ważna do KROKU 2):** Z-05 częściowo zdezaktualizowany przez E4 — po unifikacji flag czasówki dostają match_quality=good i realne EMIT-y (10.06 np. #479740 EMIT @48min). 14d: WAIT 2506 / EMIT 233 / FORCE 215 (EMIT-y głównie post-E4). Kalibracja zmierzy przyrost score-based NAD nowym baseline'em, nie nad „100% FORCE".
+- **SIDE-FINDINGS:** (a) `czasowka_proactive/state.cleanup_stale` NIGDY nie wpięty do prod — proposals_state rośnie od 05.05 (315 zamówień, 251KB); wpiąć przy KROKU 3; (b) testowy oid 500001 w prod proposals_state + 126× JSONDecodeError w czasowka_proactive.log = noise z testów (klasa #180 — ścieżki patchowane, ale logger wspólny i test mass-catchup używa oidów 500000+); prod plik VALID.
+
+**ZOSTAJE:** KROK 2 raport (po 24-48h) → ACK progi → KROK 3 flip T-50 (`CZASOWKA_PROACTIVE_SCORE_BASED=true`; emisja ISTNIEJĄCĄ ścieżką czasowka_scheduler/czasowka_proactive — telegram_approver NIETKNIĘTY) → KROK 4 KPI w briefingu (% przypisanych przed T-40 cel ≥30%, R6-breach przed/po, „żałowane wczesne przypisania", wait kuriera).
 
 **Problem (Z-05):** 2813/2813 ewaluacji (14 d) z candidates=0 → 100% czasówek = FORCE_ASSIGN na T-40. Progi proaktywne (kurier ≤1-2 km od restauracji + drop_prox ≥0.5, `common.py:1352-1357`) są niespełnialne przy 18% pokryciu GPS.
 
@@ -160,6 +169,8 @@ Cztery małe, dobrze wycelowane fixy poprawiające dzisiejsze propozycje:
 
 ## ETAP 7 — RE-TUNE HIERARCHII WAG (po ≥7-14 dniach danych z E3!) `[ ]`
 
+> ⏰ **KICKOFF ZAPLANOWANY: at#131 → 2026-06-17 06:00 UTC (08:00 Warsaw)** — skrypt `eod_drafts/2026-06-10/e7_kickoff_notify.py` (read-only) wyśle Adrianowi na Telegram raport gotowości (acceptance tygodnia PANEL_AGREE per tier + AUTO/best_not_score_top + czasówki E5 + naruszenia) i wskaże tę sekcję jako spec sesji. Log: `scripts/logs/e7_kickoff.log`. Dry-run: `E7_DRY=1`. Anulowanie: `atrm 131`.
+
 **Problem (Z-07/Z-08/Z-14/Z-15):** R4 do +150 pkt dominuje hierarchię R-PRIORYTETÓW (dystans max 30); tabela R-NO-WASTE z REGULY niezaimplementowana (ekstremalny overlap bez kary); `s_obciazenie` zeruje się uniwersalnie na bag≥5 wbrew doktrynie per-courier; tie-break R2 martwy (float equality).
 
 **Kroki (jedna spójna paczka, replay + shadow-compare jak late_pickup Opcja B):**
@@ -184,6 +195,17 @@ Tylko 18% best-kandydatów ma żywy GPS; 82% pozycji syntetycznych ogranicza KA�
 - Z-22: decyzja wave_scoring.py — usunąć (FILOZ-4 robi BUG-2+R-09) albo wpiąć; dziś martwa obietnica.
 - Z-17: katalog 21 reguł w KB → kolumna „w kodzie: plik:linia / emergentne / martwe / OFF-by-directive".
 - Z-13: ASSIGN z Telegrama — przeliczać `time` z `eta_pickup_utc` w momencie kliku + odrzucać kliki w propozycje starsze niż 10 min (re-assess). (Mała zmiana w telegram_approver → wymaga ACK na restart telegrama — zaplanować przy innej okazji restartu.)
+
+---
+
+## ☀ WERYFIKACJA PORANNA 11.06 (po lunch peaku 11-14 Warsaw; ~5 min, bez sesji albo na start kolejnej)
+
+1. **E0/E1:** AUTO > 0 i `parser_degraded=0` w auto_route_reason (komenda w ETAPIE 0 wyżej); watchdog R16 NIE wysłał alertu.
+2. **E2:** rozkład `best_not_score_top` w nowych decyzjach (jeśli >30% propozycji — ważny sygnał do E7, nie bug; wczoraj na replayu best≠score-top w 68% decyzji).
+3. **E3:** briefing 06:00 UTC przyszedł z sekcjami „Acceptance" + „Naruszenia restauracji 7d"; `grep -c PANEL_AGREE /root/.openclaw/workspace/dispatch_state/learning_log.jsonl` rośnie (wczoraj wieczorem: 1).
+4. **E4:** świeże decyzje shadow wyglądają jak wczoraj (te same flagi z konstrukcji); PIERWSZA czasówka dnia ma w eval metryki pełnego silnika (`fail12_*`/`a2_reliability_delta` gdy dotyczy); `tools/flag_fingerprint.py` nadal 4×identyczny. (Wieczorem 10.06 po flipie: 1 decyzja shadow — normalna; 0 czasówek — czekamy na poranne.)
+5. **E6:** `restaurant_violations.jsonl` przyrasta bez duplikatów (wczoraj 110 wpisów / 110 oid).
+6. **E5 (jeśli KROK 1 shadow już wszedł):** wpisy `would_assign` w czasowka_eval_log — po 24-48h raport kalibracyjny → ACK progów → flip T-50.
 
 ---
 
