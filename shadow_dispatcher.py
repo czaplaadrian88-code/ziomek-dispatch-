@@ -220,7 +220,12 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        # SP-B2-LOADGOV (2026-06-11): loadgov_load_now/_ewma /
                        # loadgov_active_orders/_couriers (bonus_loadgov_*
                        # przez prefix bonus_) — LOCATION A+B.
-                       "loadgov_")
+                       "loadgov_",
+                       # SP-B2-PLN (2026-06-11): pln_v / pln_p_breach /
+                       # pln_delta_km / pln_vehicle / pln_lezenie_min /
+                       # pln_czekanie_min / pln_opp_rate per kandydat +
+                       # pln_best_cid / pln_best_v / pln_vs_score_flip na best.
+                       "pln_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:

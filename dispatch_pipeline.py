@@ -19,6 +19,7 @@ from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2 import scoring
 from dispatch_v2 import common as C
 from dispatch_v2 import calib_maps  # SP-B2 (2026-06-11): mapy ETA-quantile + prep-bias (shadow)
+from dispatch_v2 import pln_objective  # SP-B2-PLN (2026-06-11): funkcja celu PLN (shadow)
 from dispatch_v2 import panel_client  # V3.27.1 sesja 2: pre-proposal recheck (Blocker 2 Opcja A)
 from dispatch_v2.common import (
     parse_panel_timestamp,
@@ -4833,6 +4834,60 @@ def _assess_order_impl(
         _rationale = _v326_build_rationale(top[0], feasible)
         if _rationale and hasattr(top[0], "metrics") and isinstance(top[0].metrics, dict):
             top[0].metrics["v326_rationale"] = _rationale
+
+        # === SP-B2-PLN (2026-06-11): funkcja celu PLN w shadow ===
+        # V = 6,33 − koszt_km·Δkm − 14·P(breach) − 0,20·leżenie − opp·(blokada
+        # + czekanie) dla top-5 kandydatów; pln_* per kandydat + pln_best_cid /
+        # pln_best_v / pln_vs_score_flip na zwycięzcy (LOCATION A+B przez
+        # prefix pln_). Czysta telemetria za ENABLE_PLN_OBJECTIVE_SHADOW (ON);
+        # jakiekolwiek użycie w decyzji = 🛑 ACK. Δkm = (repo dead-head albo
+        # dojazd z pozycji) + noga pickup→drop (haversine×1,37 jak agent_econ);
+        # blokada ≈ dojazd + noga/24 km/h + 2×DWELL (przybliżenie, opisane
+        # w pln_objective docstring).
+        if C.flag("ENABLE_PLN_OBJECTIVE_SHADOW", True):
+            try:
+                _pln_leg_km = None
+                if (delivery_coords and delivery_coords != (0.0, 0.0)
+                        and pickup_coords and pickup_coords[0] != 0.0):
+                    _pln_leg_km = round(
+                        haversine(pickup_coords, delivery_coords)
+                        * HAVERSINE_ROAD_FACTOR_BIALYSTOK, 2)
+                _pln_best_cid = None
+                _pln_best_v = None
+                for _pc in top[:5]:
+                    _pm = getattr(_pc, "metrics", None)
+                    if not isinstance(_pm, dict):
+                        continue
+                    _base_km = _pm.get("repo_km")
+                    if _base_km is None:
+                        _base_km = _pm.get("km_to_pickup")
+                    if _base_km is None or _pln_leg_km is None:
+                        continue
+                    _dkm = float(_base_km) + _pln_leg_km
+                    _trav = _pm.get("travel_min")
+                    _leg_min = _pln_leg_km * 2.5 + 4.0  # 24 km/h + 2×DWELL
+                    _pln = pln_objective.compute_pln_value(
+                        cid=_pc.courier_id,
+                        delta_km=_dkm,
+                        bag_before=_pm.get("bag_size_before") or 0,
+                        load=_pm.get("loadgov_load_ewma"),
+                        travel_min=_trav,
+                        time_to_ready_min=_pm.get("time_to_pickup_ready_min"),
+                        blokada_min=(float(_trav) + _leg_min) if _trav is not None else None,
+                        now=now,
+                    )
+                    if _pln:
+                        _pm.update(_pln)
+                        if _pln_best_v is None or _pln["pln_v"] > _pln_best_v:
+                            _pln_best_v = _pln["pln_v"]
+                            _pln_best_cid = str(_pc.courier_id)
+                if _pln_best_cid is not None and isinstance(top[0].metrics, dict):
+                    top[0].metrics["pln_best_cid"] = _pln_best_cid
+                    top[0].metrics["pln_best_v"] = _pln_best_v
+                    top[0].metrics["pln_vs_score_flip"] = (
+                        _pln_best_cid != str(top[0].courier_id))
+            except Exception as _pln_e:
+                log.warning(f"SP-B2-PLN shadow fail order={order_id}: {_pln_e!r}")
 
         # V3.28 Faza 6 — LGBM shadow inference (parallel, ZERO behavior change).
         # Pure BC model trained na 399K pairs CSV history (Faza 5 v1.0). Result
