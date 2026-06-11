@@ -37,6 +37,7 @@ from dispatch_v2.common import (
     get_traffic_multiplier,
     get_traffic_multiplier_v2,
     setup_logger,
+    flag as _common_flag,
 )
 
 OSRM_BASE = "http://localhost:5001"
@@ -103,6 +104,12 @@ _osrm_stats: dict = {
     "calls_total": 0,
     "calls_fallback": 0,
     "circuit_opens": 0,
+    # OSRM-TABLE-03 (2026-06-12) — per-cell cache table() hourly stats
+    "table_cells_hit": 0,
+    "table_cells_miss": 0,
+    "table_full_hits": 0,
+    "table_decomposed_calls": 0,
+    "table_legacy_calls": 0,
     # V3.26 BUG-3 STEP 1 — traffic multiplier hourly stats (no-op when flag=False)
     "traffic_mult_sum": 0.0,
     "traffic_mult_calls": 0,
@@ -228,6 +235,22 @@ def _maybe_log_stats():
             f"fallback={_osrm_stats['calls_fallback']} "
             f"circuit_opens={_osrm_stats['circuit_opens']}"
         )
+        # OSRM-TABLE-03: hit-rate cache komórek table() (pomiar w logu)
+        _tc_hit = _osrm_stats["table_cells_hit"]
+        _tc_miss = _osrm_stats["table_cells_miss"]
+        if _tc_hit + _tc_miss > 0:
+            _log.info(
+                f"OSRM table-cache hourly: cells_hit={_tc_hit} "
+                f"cells_miss={_tc_miss} "
+                f"hit_rate={_tc_hit / (_tc_hit + _tc_miss) * 100:.1f}% "
+                f"full_hits={_osrm_stats['table_full_hits']} "
+                f"decomposed={_osrm_stats['table_decomposed_calls']} "
+                f"legacy={_osrm_stats['table_legacy_calls']} "
+                f"cache_size={len(_table_cell_cache)}"
+            )
+            for _tk in ("table_cells_hit", "table_cells_miss", "table_full_hits",
+                        "table_decomposed_calls", "table_legacy_calls"):
+                _osrm_stats[_tk] = 0
         # Block 4D 2026-04-25: log traffic-mult stats always (shadow + live).
         if _osrm_stats["traffic_mult_calls"] > 0:
             avg = _osrm_stats["traffic_mult_sum"] / _osrm_stats["traffic_mult_calls"]
@@ -422,6 +445,73 @@ def _cache_set(from_ll: tuple, to_ll: tuple, result: dict):
         _route_cache[key] = (time.time(), result)
 
 
+# === OSRM-TABLE-03 (Front C audytu 03.06, 2026-06-12): per-cell cache table() ===
+# table() NIE miało cache — każdy kandydat liczył świeży HTTP N×N, mimo że pary
+# pickup↔drop/drop↔drop są wspólne między kandydatami tego samego zlecenia i
+# między tickami (Białystok = skończony zbiór par). Cache trzyma komórki RAW
+# (PRZED traffic multiplierem) — multiplier liczony świeżo per call z bieżącym
+# `now` (identycznie jak _route_cache w route()): ZERO zmiany wyników, bo
+# surowe czasy OSRM są niezmienne w czasie (statyczna mapa).
+# Kill-switch hot-reload: ENABLE_OSRM_TABLE_CELL_CACHE w flags.json (OFF =
+# dokładnie stara ścieżka). Fallback/circuit-breaker NIGDY nie cache'owane.
+TABLE_CACHE_MAX_SIZE = 50000  # komórki (pary), ~kilkanaście B/klucz — tanie
+_table_cell_cache: dict = {}  # {(o_key, d_key): (timestamp, raw_cell)}
+
+
+def _table_cache_enabled() -> bool:
+    try:
+        return bool(_common_flag("ENABLE_OSRM_TABLE_CELL_CACHE", False))
+    except Exception:  # noqa: BLE001 — cache to optymalizacja, nie zależność
+        return False
+
+
+def _table_cache_get(o_ll: tuple, d_ll: tuple) -> Optional[dict]:
+    key = (_cache_key(o_ll), _cache_key(d_ll))
+    with _module_lock:
+        if key in _table_cell_cache:
+            ts, raw = _table_cell_cache[key]
+            if time.time() - ts < CACHE_TTL_SECONDS:
+                return raw
+            del _table_cell_cache[key]
+    return None
+
+
+def _table_cache_set(o_ll: tuple, d_ll: tuple, raw_cell: dict):
+    key = (_cache_key(o_ll), _cache_key(d_ll))
+    with _module_lock:
+        if len(_table_cell_cache) >= TABLE_CACHE_MAX_SIZE:
+            oldest = sorted(_table_cell_cache.items(),
+                            key=lambda x: x[1][0])[: TABLE_CACHE_MAX_SIZE // 10]
+            for k, _ in oldest:
+                del _table_cell_cache[k]
+        _table_cell_cache[key] = (time.time(), raw_cell)
+
+
+def _decompose_miss_rects(miss: list, n_o: int, n_d: int) -> list:
+    """≤2 prostokąty pokrywające wszystkie brakujące komórki (czysta funkcja).
+
+    R1 = wiersze W PEŁNI brakujące × wszystkie kolumny (typowo: wiersz kuriera
+    ze świeżym GPS — jedyny nowy punkt vs poprzednie wywołania).
+    R2 = pozostałe wiersze-z-missami × unia ich kolumn (typowo: kolumna kuriera).
+    Dla zimnego cache: R1 = pełna macierz, R2 puste (≡ stare zachowanie).
+    Pokrycie: każdy miss jest w wierszu pełnym (R1) albo w R2 z konstrukcji.
+    Zwraca listę (row_idxs, col_idxs).
+    """
+    by_row: dict = {}
+    for i, j in miss:
+        by_row.setdefault(i, set()).add(j)
+    full_rows = sorted(i for i, cols in by_row.items() if len(cols) == n_d)
+    rects = []
+    if full_rows:
+        rects.append((full_rows, list(range(n_d))))
+    rest = {i: cols for i, cols in by_row.items() if i not in set(full_rows)}
+    if rest:
+        rows = sorted(rest)
+        cols = sorted(set().union(*rest.values()))
+        rects.append((rows, cols))
+    return rects
+
+
 # === COORD POISON GUARD (Lekcja #140, 2026-05-21) ===
 # Współrzędna (0,0)/None/cross-country NIE może cicho dać realistycznej trasy.
 # OSRM snapuje (0,0) do krawędzi ekstraktu (~113 km, code:Ok) — fail-loud #81
@@ -574,7 +664,6 @@ def table(origins: list, destinations: list) -> list:
                     row[j] = _invalid_coord_result(now)
         return matrix
 
-    # Cache miss — realny HTTP call (table nie ma cache)
     # V3.27 latency parallel: stats inkrement pod RLock.
     with _module_lock:
         _osrm_stats["calls_total"] += 1
@@ -586,6 +675,73 @@ def table(origins: list, destinations: list) -> list:
             _osrm_stats["calls_fallback"] += 1
         return _sentinel_invalid(_table_fallback(origins, destinations, now))
 
+    # OSRM-TABLE-03: ścieżka cache (flaga OFF → dokładnie legacy full call).
+    if _table_cache_enabled():
+        n_o, n_d = len(origins), len(destinations)
+        cells = [[_table_cache_get(o, d) for d in destinations] for o in origins]
+        miss = [(i, j) for i in range(n_o) for j in range(n_d) if cells[i][j] is None]
+        with _module_lock:
+            _osrm_stats["table_cells_hit"] += n_o * n_d - len(miss)
+            _osrm_stats["table_cells_miss"] += len(miss)
+        if not miss:
+            with _module_lock:
+                _osrm_stats["table_full_hits"] += 1
+            matrix = [[_apply_traffic_multiplier(dict(c), now) for c in row]
+                      for row in cells]
+            return _sentinel_invalid(matrix)
+        rects = _decompose_miss_rects(miss, n_o, n_d)
+        fetched_cells = sum(len(r) * len(c) for r, c in rects)
+        # Dekompozycja opłacalna tylko gdy realnie tnie macierz; inaczej legacy
+        # full call (1 HTTP, też zasila cache).
+        if fetched_cells < n_o * n_d:
+            ok = True
+            for r_idx, c_idx in rects:
+                sub = _table_http([origins[i] for i in r_idx],
+                                  [destinations[j] for j in c_idx])
+                # guard wymiarów: code=Ok z niepełną macierzą → legacy path
+                # (stara ścieżka nigdy nie rzucała — ta też nie może)
+                if (sub is None or len(sub) != len(r_idx)
+                        or any(len(row) != len(c_idx) for row in sub)):
+                    ok = False
+                    break
+                for a, i in enumerate(r_idx):
+                    for b, j in enumerate(c_idx):
+                        cells[i][j] = sub[a][b]
+                        _table_cache_set(origins[i], destinations[j], sub[a][b])
+            if ok:
+                with _module_lock:
+                    _osrm_stats["table_decomposed_calls"] += 1
+                matrix = [[_apply_traffic_multiplier(dict(c), now) for c in row]
+                          for row in cells]
+                return _sentinel_invalid(matrix)
+            # częściowy fail dekompozycji → spadnij na legacy full call niżej
+            # (te same failure semantics co przed OSRM-TABLE-03)
+
+    raw = _table_http(origins, destinations)
+    if raw is None:
+        with _module_lock:
+            _osrm_stats["calls_fallback"] += 1
+        return _sentinel_invalid(_table_fallback(origins, destinations, now))
+    with _module_lock:
+        _osrm_stats["table_legacy_calls"] += 1
+    if _table_cache_enabled():
+        # enumerate(raw) nie origins — krótka/poszarpana odpowiedź (code=Ok,
+        # durations niepełne) nie może rzucić (stara ścieżka nie rzucała)
+        for i, row in enumerate(raw):
+            if i >= len(origins):
+                break
+            for j, cell in enumerate(row):
+                if j >= len(destinations):
+                    break
+                _table_cache_set(origins[i], destinations[j], cell)
+    matrix = [[_apply_traffic_multiplier(dict(c), now) for c in row] for row in raw]
+    return _sentinel_invalid(matrix)
+
+
+def _table_http(origins: list, destinations: list) -> Optional[list]:
+    """Surowy HTTP table → macierz komórek RAW (BEZ traffic multiplier) albo
+    None przy jakimkolwiek fail (caller decyduje o fallbacku — identyczne
+    failure semantics co przed OSRM-TABLE-03). Aktualizuje circuit-breaker."""
     all_points = origins + destinations
     coords = ";".join(f"{ll[1]},{ll[0]}" for ll in all_points)
     sources = ";".join(str(i) for i in range(len(origins)))
@@ -596,9 +752,7 @@ def table(origins: list, destinations: list) -> list:
             data = json.loads(r.read().decode())
         if data.get("code") != "Ok":
             _osrm_record_failure()
-            with _module_lock:
-                _osrm_stats["calls_fallback"] += 1
-            return _sentinel_invalid(_table_fallback(origins, destinations, now))
+            return None
         durations = data.get("durations") or []
         distances = data.get("distances") or [[0] * len(destinations) for _ in range(len(origins))]
         matrix = []
@@ -606,23 +760,20 @@ def table(origins: list, destinations: list) -> list:
             matrix_row = []
             for j, dur in enumerate(row):
                 dist = distances[i][j] if i < len(distances) and j < len(distances[i]) else 0
-                cell = {
+                matrix_row.append({
                     "duration_s": dur,
                     "duration_min": round(dur / 60, 1) if dur else None,
                     "distance_m": dist,
                     "distance_km": round(dist / 1000, 2) if dist else 0,
                     "osrm_fallback": False,
-                }
-                matrix_row.append(_apply_traffic_multiplier(cell, now))
+                })
             matrix.append(matrix_row)
         _osrm_record_success()
-        return _sentinel_invalid(matrix)
+        return matrix
     except Exception as e:
         _log.warning(f"OSRM table fail: {e}")
         _osrm_record_failure()
-        with _module_lock:
-            _osrm_stats["calls_fallback"] += 1
-        return _sentinel_invalid(_table_fallback(origins, destinations, now))
+        return None
 
 
 def _table_fallback(origins: list, destinations: list, now_utc: datetime) -> list:
