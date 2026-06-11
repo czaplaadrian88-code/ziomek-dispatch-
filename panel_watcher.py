@@ -573,6 +573,17 @@ def _update_plan_on_picked_up(courier_id: str, order_id: str,
         plan_manager.mark_picked_up(str(courier_id), str(order_id), picked_up_at)
     except Exception as e:
         _log.warning(f"V3.19c mark_picked_up fail cid={courier_id} oid={order_id}: {e}")
+    # Redecide natychmiast po ODEBRANE (zmiana stanu worka = zmiana bag_signature
+    # F2): kanon zdecydowany tuż PRZED wpisem statusu (reconcile lag ~1 min)
+    # zostawał z odbiorami przed niesionym aż do następnego 5-min ticku — case
+    # Gabriel cid=179 11.06 (Mama Thai/Sushi przed dostawą 42PP, okno 17:03→17:08).
+    # Samo-bramkujące w plan_recheck (no-op gdy sygnatura planu aktualna), flaga
+    # ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP (OFF). Best-effort — nie psuje pętli.
+    try:
+        from dispatch_v2 import plan_recheck
+        plan_recheck.redecide_courier(str(courier_id), reason="pickup")
+    except Exception as e:
+        _log.warning(f"redecide-on-pickup fail cid={courier_id} oid={order_id}: {e}")
 
 
 def _diff_czas_kuriera(old_state: dict, fresh_response: dict,

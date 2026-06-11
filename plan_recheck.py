@@ -351,6 +351,13 @@ ENABLE_PLAN_CANON_ORDER_INVARIANTS = os.environ.get(
 # gdy żaden ważny plan nie pokrywa worka (nie nadpisuje trasy z propozycji). OFF.
 ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE = os.environ.get(
     "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE", "0") == "1"
+# Redecide także po ODEBRANE (zmiana stanu worka = zmiana bag_signature F2):
+# bez tego kanon zdecydowany tuż PRZED wpisem statusu z panelu (reconcile lag
+# ~1 min) zostaje z odbiorami przed niesionym aż do następnego 5-min ticku
+# (case Gabriel cid=179, 11.06: pickup Mama Thai/Sushi przed dostawą 42PP,
+# złe okno 17:03→17:08). Wołane z panel_watcher._update_plan_on_picked_up. OFF.
+ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP = os.environ.get(
+    "ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP", "0") == "1"
 _ANCHOR_EVENT_MAX_AGE_MIN = 360.0  # zdarzenia starsze niż 6h = inna zmiana
 
 
@@ -718,15 +725,23 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
 
 def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = None,
                      gps_positions: Optional[Dict[str, Any]] = None,
-                     now: Optional[datetime] = None) -> bool:
+                     now: Optional[datetime] = None,
+                     reason: str = "override") -> bool:
     """F3: natychmiastowa decyzja sekwencji dla JEDNEGO kuriera (wywoływana z
-    panel_watcher na zmianę worka: override/reassign), bez czekania na 5-min tick.
+    panel_watcher na zmianę worka: override/reassign LUB odebranie zlecenia),
+    bez czekania na 5-min tick.
 
-    Samo-bramkująca: jeśli ważny plan POKRYWA cały bieżący worek → no-op (NIE
-    nadpisuje trasy z propozycji). Inaczej liczy kanon `_gen_one_bag_plan`.
-    Best-effort, zawsze zwraca bool, nigdy nie rzuca. Flaga OFF → no-op.
+    Samo-bramkująca: jeśli ważny plan POKRYWA cały bieżący worek I ma AKTUALNĄ
+    bag_signature → no-op (NIE nadpisuje trasy z propozycji). Pokrycie bez
+    aktualnej sygnatury = plan sprzed zmiany stanu worka (np. odebranie) →
+    decyzja od nowa, dokładnie jak na 5-min ticku F2, tylko natychmiast.
+    Inaczej liczy kanon `_gen_one_bag_plan`. Best-effort, zawsze zwraca bool,
+    nigdy nie rzuca. reason: 'override' (flaga F3) / 'pickup' (osobna flaga).
     """
-    if not ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE:
+    if reason == "pickup":
+        if not ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP:
+            return False
+    elif not ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE:
         return False
     try:
         from dispatch_v2 import route_simulator_v2 as R
@@ -743,18 +758,27 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
         if not oids:
             return False
         # Już pokryte ważnym planem (np. świeży zapis propozycji)? → nie ruszaj.
+        # Wyjątek reason='pickup': pokrycie NIE wystarcza — odebranie zmienia
+        # bag_signature, a plan zdecydowany przed wpisem statusu może mieć
+        # niesione w środku trasy; redecide tylko gdy sygnatura nieaktualna.
+        # Dla 'override' pokrycie = no-op jak dotąd (plan z propozycji NIE ma
+        # własnej bag_signature — zapis dziedziczy starą — więc test sygnatury
+        # nadpisywałby świeże trasy z propozycji).
         plan = plan_manager.load_plan(cid)
         if plan and plan.get("stops"):
             covered = {str(s.get("order_id")) for s in plan.get("stops", [])}
             if set(oids) <= covered:
-                return False
+                if reason != "pickup":
+                    return False
+                if plan.get("bag_signature") == _bag_signature(oids, orders_state):
+                    return False
         if gps_positions is None:
             gps_positions = _load_gps_positions()
         if now is None:
             now = datetime.now(timezone.utc)
         ok = _gen_one_bag_plan(cid, oids, orders_state, gps_positions, now, R)
         if ok:
-            _log.info(f"REDECIDE_ON_OVERRIDE cid={cid} bag={len(oids)}")
+            _log.info(f"REDECIDE_ON_{reason.upper()} cid={cid} bag={len(oids)}")
         return ok
     except Exception as e:
         _log.warning(f"redecide_courier cid={courier_id} fail: {type(e).__name__}: {e}")
