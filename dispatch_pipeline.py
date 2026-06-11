@@ -18,6 +18,7 @@ from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2, DWELL_PICKUP_M
 from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2 import scoring
 from dispatch_v2 import common as C
+from dispatch_v2 import calib_maps  # SP-B2 (2026-06-11): mapy ETA-quantile + prep-bias (shadow)
 from dispatch_v2 import panel_client  # V3.27.1 sesja 2: pre-proposal recheck (Blocker 2 Opcja A)
 from dispatch_v2.common import (
     parse_panel_timestamp,
@@ -1557,6 +1558,7 @@ def _classify_and_set_auto_route(
             fleet_snapshot=fleet_snapshot,
             flags=flags,
             order_event=order_event,
+            now=now,  # SP-B2-PEAKWIN: spójny bucket czasowy z classify_auto_route
         )
     except Exception as _e:
         # Defense-in-depth: classifier exception NIE powinien zatrzymać dispatch.
@@ -3404,6 +3406,15 @@ def _assess_order_impl(
             "v326_anchor_restaurant": v326_anchor_restaurant,
             "v326_anchor_used": v326_anchor_used,
             "travel_min": round(travel_min, 1),
+            # SP-B2-ETAQ shadow (2026-06-11): travel_min po kalibracji kwantylowej
+            # pred→real (dispatch_state/eta_quantile_map.json, generator = tor
+            # narzędziowy). None gdy mapy brak / flaga OFF. Czysta telemetria —
+            # NIE wpływa na score/feasibility/verdict (flip = ENABLE_ETA_QUANTILE_LIVE,
+            # osobny sprint za ACK). Serializer LOCATION A+B.
+            "travel_min_cal": (
+                calib_maps.eta_quantile_calibrate(travel_min, now)
+                if C.flag("ENABLE_ETA_QUANTILE_SHADOW", True) else None
+            ),
             "drive_min": round(drive_min, 1),
             "eta_pickup_utc": eta_pickup_utc.isoformat(),
             "eta_drive_utc": drive_arrival_utc.isoformat(),
@@ -3916,6 +3927,10 @@ def _assess_order_impl(
             c.metrics["eta_pickup_utc"] = no_gps_eta_utc.isoformat()
             c.metrics["eta_drive_utc"] = no_gps_eta_utc.isoformat()
             c.metrics["eta_source"] = "no_gps_fallback"
+            # SP-B2-ETAQ: travel_min nadpisany po pętli → przelicz kalibrację
+            # (inaczej travel_min_cal zostałby z wartości sprzed fallbacku).
+            if C.flag("ENABLE_ETA_QUANTILE_SHADOW", True):
+                c.metrics["travel_min_cal"] = calib_maps.eta_quantile_calibrate(no_gps_travel_min, now)
         elif ps == "pre_shift":
             # Kurier zaczyna zmianę za N min — travel_min = N (czas oczekiwania).
             # Bez km (nieznane gdzie będzie). eta_pickup = start zmiany.
@@ -3927,6 +3942,9 @@ def _assess_order_impl(
             c.metrics["eta_pickup_utc"] = shift_eta
             c.metrics["eta_drive_utc"] = shift_eta
             c.metrics["eta_source"] = "pre_shift"
+            # SP-B2-ETAQ: jw. — travel_min nadpisany, przelicz kalibrację.
+            if C.flag("ENABLE_ETA_QUANTILE_SHADOW", True):
+                c.metrics["travel_min_cal"] = calib_maps.eta_quantile_calibrate(shift_min, now)
             # V3.24-A: eta_pickup_utc dla pre_shift = shift_start (clamp aktywny).
             c.metrics["v324a_pickup_clamped_to_shift_start"] = True
             if C.ENABLE_V324A_SCHEDULE_INTEGRATION:

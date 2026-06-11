@@ -28,6 +28,11 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Deque, Tuple
+from zoneinfo import ZoneInfo
+
+# SP-B2-PEAKWIN / Z-20 (2026-06-11): astimezone() bez argumentu = strefa
+# SYSTEMOWA (serwer chodzi w UTC) — alert podpisywał czas UTC jako "Warsaw".
+_WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 from dispatch_v2.telegram_utils import send_admin_alert
@@ -96,7 +101,7 @@ def _maybe_alert(count: int) -> None:
 
     by_src = _events_by_source()
     src_str = ", ".join(f"{k}={v}" for k, v in sorted(by_src.items()))
-    warsaw_now = datetime.now(timezone.utc).astimezone().strftime("%H:%M Warsaw")
+    warsaw_now = datetime.now(timezone.utc).astimezone(_WARSAW_TZ).strftime("%H:%M Warsaw")
     text = (
         f"🚨 Burza błędów sesji panelu — {count} razy w {WINDOW_SECONDS} sekund\n"
         f"O {warsaw_now} services traciły sesję CSRF z panelem.\n"

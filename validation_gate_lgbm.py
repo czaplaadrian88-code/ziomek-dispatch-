@@ -26,9 +26,14 @@ import argparse
 import json
 import sys
 from collections import Counter
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
+
+# SP-B2-PEAKWIN / Z-20 (2026-06-11): sztywne UTC+2 ("CEST May") dawało złą
+# godzinę poza okresem letnim i nie jest DST-aware. Kanon = Europe/Warsaw.
+_WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
 
 LEARNING_LOG_PATH = Path("/root/.openclaw/workspace/dispatch_state/learning_log.jsonl")
@@ -52,13 +57,12 @@ def parse_arg_ts(arg: str) -> datetime:
     try:
         dt = datetime.fromisoformat(arg)
         if dt.tzinfo is None:
-            # Assume Warsaw (UTC+2 CEST May)
-            dt = dt.replace(tzinfo=timezone(timedelta(hours=2)))
+            dt = dt.replace(tzinfo=_WARSAW_TZ)
         return dt.astimezone(timezone.utc)
     except (ValueError, TypeError):
         try:
             dt = datetime.strptime(arg, "%Y-%m-%d %H:%M")
-            dt = dt.replace(tzinfo=timezone(timedelta(hours=2)))
+            dt = dt.replace(tzinfo=_WARSAW_TZ)
             return dt.astimezone(timezone.utc)
         except (ValueError, TypeError):
             return None
@@ -175,12 +179,12 @@ def main():
     args = ap.parse_args()
 
     if args.today:
-        now_warsaw = datetime.now(timezone(timedelta(hours=2)))
+        now_warsaw = datetime.now(_WARSAW_TZ)
         today_str = now_warsaw.strftime("%Y-%m-%d")
         since_utc = parse_arg_ts(f"{today_str} 11:00")
         until_utc = parse_arg_ts(f"{today_str} 14:00")
     elif args.all_today:
-        now_warsaw = datetime.now(timezone(timedelta(hours=2)))
+        now_warsaw = datetime.now(_WARSAW_TZ)
         today_str = now_warsaw.strftime("%Y-%m-%d")
         since_utc = parse_arg_ts(f"{today_str} 00:00")
         until_utc = datetime.now(timezone.utc)

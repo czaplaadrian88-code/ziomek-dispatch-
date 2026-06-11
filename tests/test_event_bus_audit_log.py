@@ -172,8 +172,13 @@ def test_emit_audit_rejects_unknown_type():
 
 # ─── Test 7: cleanup_audit_log retention ────────────────────────────────
 def test_cleanup_audit_log_retention():
+    # SP-B2-PEAKWIN fix flake (2026-06-11): cleanup_audit_log pomija peak
+    # (11-14/17-20 Warsaw) → test odpalony w peaku dostawał deleted=0.
+    # Testujemy retencję, nie bramkę peak — mrozimy bramkę na False.
     state = {}
     db_path = _setup_tmp_db(state)
+    _orig_peak = event_bus._is_peak_window
+    event_bus._is_peak_window = lambda now=None: False
     try:
         # Insert raw old + recent
         conn = sqlite3.connect(db_path)
@@ -194,6 +199,7 @@ def test_cleanup_audit_log_retention():
         conn.close()
         assert remaining == ["recent_eid"]
     finally:
+        event_bus._is_peak_window = _orig_peak
         _restore_db(state, db_path)
 
 

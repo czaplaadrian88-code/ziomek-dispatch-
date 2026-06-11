@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from dispatch_v2 import calib_maps  # SP-B2 (2026-06-11): prep-bias shadow w _serialize_result
 from dispatch_v2 import common as C, event_bus, pending_pool, state_machine
 from dispatch_v2.common import load_config, now_iso, setup_logger
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
@@ -226,6 +227,8 @@ def _serialize_candidate(c) -> dict:
         "best_effort": c.best_effort,
         "km_to_pickup": m.get("km_to_pickup"),
         "travel_min": m.get("travel_min"),
+        # SP-B2-ETAQ shadow (2026-06-11, LOCATION A): kalibracja kwantylowa ETA.
+        "travel_min_cal": m.get("travel_min_cal"),
         "drive_min": m.get("drive_min"),
         "eta_pickup_hhmm": _eta_hhmm_warsaw(m.get("eta_pickup_utc")),
         "eta_drive_hhmm": _eta_hhmm_warsaw(m.get("eta_drive_utc")),
@@ -428,9 +431,30 @@ def _serialize_candidate(c) -> dict:
 
 
 def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) -> dict:
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
     best = result.best
     best_m = (best.metrics if best is not None else {}) or {}
+
+    # SP-B2-PREPBIAS shadow (2026-06-11): effective_ready_shadow = pickup_ready
+    # + bias_med(restauracja, slot) z dispatch_state/restaurant_prep_bias.json
+    # (generator = tor narzędziowy). Czysta telemetria order-level — NIE wpływa
+    # na decyzje (flip konsumpcji = ENABLE_PREP_BIAS_TABLE, osobny sprint za ACK).
+    # Fail-soft: brak mapy / restauracji / pickup_ready → None.
+    prep_bias_min = None
+    effective_ready_shadow = None
+    try:
+        if C.flag("ENABLE_PREP_BIAS_SHADOW", True):
+            prep_bias_min = calib_maps.prep_bias_for(result.restaurant)
+            _ready_pb = result.pickup_ready_at
+            if prep_bias_min is not None and _ready_pb is not None:
+                if _ready_pb.tzinfo is None:
+                    _ready_pb = _ready_pb.replace(tzinfo=timezone.utc)
+                effective_ready_shadow = (
+                    _ready_pb + timedelta(minutes=prep_bias_min)
+                ).isoformat()
+    except Exception:
+        prep_bias_min = None
+        effective_ready_shadow = None
 
     # F1.8 fix: target_pickup_at = absolutny moment kiedy kurier ma być w restauracji.
     # Liczone JEDEN raz przy tworzeniu propozycji, używane w handle_callback przy TAK
@@ -472,6 +496,10 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # FAIL-04 (2026-06-06): shadow-first prep-variance anomaly (slepa wiara w
         # prep panelu). None gdy brak anomalii lub flaga OFF. NIE wplywa na decyzje.
         "prep_variance_anomaly": getattr(result, "prep_variance_anomaly", None),
+        # SP-B2-PREPBIAS shadow (2026-06-11): bias deklaracja→rzeczywistość
+        # restauracji [min] + skorygowana gotowość (ISO). None gdy brak mapy.
+        "prep_bias_min": prep_bias_min,
+        "effective_ready_shadow": effective_ready_shadow,
         # MP-#13 (2026-05-08): L3 caller propagation. degraded_osrm True gdy
         # osrm_client.is_degraded() przy entry do assess_order. Telegram_approver
         # format_proposal może hint'ować "⚠ OSRM degraded" gdy True. Snapshots
@@ -490,6 +518,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "best_effort": best.best_effort,
             "km_to_pickup": best_m.get("km_to_pickup"),
             "travel_min": best_m.get("travel_min"),
+            # SP-B2-ETAQ shadow (2026-06-11, LOCATION B): kalibracja kwantylowa ETA.
+            "travel_min_cal": best_m.get("travel_min_cal"),
             "drive_min": best_m.get("drive_min"),
             "eta_pickup_hhmm": _eta_hhmm_warsaw(best_m.get("eta_pickup_utc")),
             "eta_drive_hhmm": _eta_hhmm_warsaw(best_m.get("eta_drive_utc")),

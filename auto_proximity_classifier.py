@@ -46,6 +46,8 @@ KEBAB_KROL_DINNER_START_HOUR_WARSAW = 17  # inclusive
 KEBAB_KROL_DINNER_END_HOUR_WARSAW = 21    # exclusive (17..20 fires)
 
 from dispatch_v2 import drive_min_calibration as _drive_calib
+# SP-B2-PEAKWIN: wspólne sloty czasowe z mapami kalibracyjnymi (czysta funkcja).
+from dispatch_v2.calib_maps import time_slot_warsaw as _time_slot_warsaw
 
 
 # Sprint Drive_min Calibration v2 (2026-05-27): shadow log destination.
@@ -86,6 +88,17 @@ DEFAULT_THRESHOLDS: Dict[str, Dict[str, Any]] = {
         "strict_gps": False,
     },
 }
+
+# SP-B2-PEAKWIN (2026-06-11, raport BARTEK_2.0 §3.1 / mining H6/H10):
+# strefa śmierci 14-17 Warsaw — breach 13-20% przy load jak 17-20 (9%), 39%
+# zleceń leży >20 min. Bucket HIGH_RISK zaostrza progi AUTO: margin +5,
+# tiery zawężone do gold/std+ (przecięcie z whitelistą poziomu T1/T2/T3).
+# Flaga ENABLE_F7_HIGH_RISK_BUCKET (flags.json hot-reload, default ON —
+# Faza 7 jest shadow, zmiana bezpieczna; kill-switch = false).
+HIGH_RISK_START_HOUR_WARSAW = 14   # inclusive
+HIGH_RISK_END_HOUR_WARSAW = 17     # exclusive
+HIGH_RISK_MARGIN_BUMP = 5.0
+HIGH_RISK_TIERS = ("gold", "std+")
 
 # Czasówka detection (aligns with czasowka_scheduler._is_czasowka — czas_odbioru >= 60)
 CZASOWKA_PREP_MIN = 60
@@ -196,7 +209,11 @@ def _parser_degraded(flags: Dict[str, Any]) -> bool:
 
 
 def _peak_window_for(now: Optional[datetime]) -> bool:
-    """True jeśli lunch (12-14) lub dinner (18-20) peak (Europe/Warsaw).
+    """True jeśli lunch (11-14) lub dinner (17-20) peak (Europe/Warsaw).
+
+    SP-B2-PEAKWIN (2026-06-11, Z-20): okna były 12-14/18-20 — niezgodne
+    z doktryną peaków (pn-pt 11-14/17-20). Wyrównane do doktryny; strefa
+    14-17 to osobny bucket HIGH_RISK (patrz _time_bucket_for).
 
     Sprint Drive_min Calibration v2 — używane jako placeholder dla Faza 2
     per-peak bump (current `apply_calibration` ignoruje, ale logujemy do
@@ -205,12 +222,25 @@ def _peak_window_for(now: Optional[datetime]) -> bool:
     if now is None:
         return False
     try:
-        from zoneinfo import ZoneInfo
-        warsaw = now.astimezone(ZoneInfo("Europe/Warsaw"))
+        warsaw = now.astimezone(_WARSAW_TZ)
         h = warsaw.hour
-        return (12 <= h < 14) or (18 <= h < 20)
+        return (11 <= h < 14) or (17 <= h < 20)
     except Exception:
         return False
+
+
+def _time_bucket_for(now: Optional[datetime]) -> str:
+    """Bucket czasowy Warsaw: peak_lunch / high_risk / peak_dinner / off.
+
+    SP-B2-PEAKWIN: wspólna definicja slotów z calib_maps.time_slot_warsaw
+    (mapy ETA-quantile i prep-bias używają tych samych kluczy slotów).
+    now=None → real now (klasyfikator dostaje now z pipeline'u; None tylko
+    w starych call-sites — wtedy bieżący czas jest właściwym kontekstem).
+    """
+    try:
+        return _time_slot_warsaw(now)
+    except Exception:
+        return "off"
 
 
 def _append_drive_min_calibration_shadow(entry: Dict[str, Any]) -> None:
@@ -595,9 +625,31 @@ def classify_auto_route(
     tier_key, thresholds = _resolve_thresholds(flags)
     thresholds = dict(thresholds)
     thresholds.setdefault("_label", tier_key)
+
+    # SP-B2-PEAKWIN (2026-06-11): bucket HIGH_RISK 14-17 Warsaw — strefa
+    # śmierci (breach 13-20%, food-sitting 39%). Zaostrzenie progów AUTO:
+    # margin +5, tiery zawężone do przecięcia z HIGH_RISK_TIERS (gold/std+).
+    # Brak przecięcia → zostaje HIGH_RISK_TIERS (C3 i tak odrzuci słabsze).
+    # TYLKO przy jawnym now (pipeline zawsze przekazuje) — now=None NIE czyta
+    # zegara, żeby testy/replaye bez now nie zależały od pory uruchomienia.
+    bucket = _time_bucket_for(now) if now is not None else None
+    high_risk_applied = False
+    if bucket == "high_risk" and flags.get("ENABLE_F7_HIGH_RISK_BUCKET", True):
+        high_risk_applied = True
+        try:
+            thresholds["min_score_margin"] = float(thresholds.get("min_score_margin", 0.0)) + HIGH_RISK_MARGIN_BUMP
+        except (TypeError, ValueError):
+            thresholds["min_score_margin"] = HIGH_RISK_MARGIN_BUMP
+        _allowed = tuple(t for t in (thresholds.get("tiers") or ()) if t in HIGH_RISK_TIERS)
+        thresholds["tiers"] = _allowed or HIGH_RISK_TIERS
+        thresholds["_label"] = f"{tier_key}_HR"
+
     passed, reason = _meets_high_conf(ctx, thresholds)
     if passed:
-        return ROUTE_AUTO, f"high_conf_{tier_key}|margin={ctx.best_score_margin:.1f}|tier={ctx.best_tier}"
+        _hr = "_HR" if high_risk_applied else ""
+        return ROUTE_AUTO, f"high_conf_{tier_key}{_hr}|margin={ctx.best_score_margin:.1f}|tier={ctx.best_tier}"
+    if high_risk_applied:
+        return ROUTE_ACK, f"hr1417|{reason}"
     return ROUTE_ACK, reason
 
 
@@ -608,10 +660,13 @@ def build_context_for_logging(
     fleet_snapshot: Optional[Dict[str, Any]] = None,
     flags: Optional[Dict[str, Any]] = None,
     order_event: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Caller-friendly dict snapshot of ClassifierContext — for shadow log enrichment.
 
     Used by shadow_dispatcher LOCATION B serialization. Returns flat dict.
+    SP-B2-PEAKWIN: + auto_route_time_bucket (peak_lunch/high_risk/peak_dinner/off);
+    now z pipeline'u — None → real now (ten sam tick, identyczny bucket).
     """
     flags = flags or {}
     if getattr(result, "best", None) is None:
@@ -621,6 +676,7 @@ def build_context_for_logging(
             "auto_route_score_margin": 0.0,
             "auto_route_tier_best": None,
             "auto_route_pos_source_best": None,
+            "auto_route_time_bucket": _time_bucket_for(now) if now is not None else None,
         }
     # G5: telemetria — NIE loguj calibration shadow (realna ścieżka classify_auto_route
     # już zalogowała ten order z poprawnym now/peak_window).
@@ -637,4 +693,7 @@ def build_context_for_logging(
         "auto_route_shift_end_edge": ctx.shift_end_edge,
         # Z-10 (audyt 2026-06-10): telemetria rozjazdu best vs score-top.
         "auto_route_best_is_score_top": ctx.best_is_score_top,
+        # SP-B2-PEAKWIN (2026-06-11): bucket czasowy decyzji (high_risk=14-17).
+        # None gdy caller nie podał now (determinizm testów/replay).
+        "auto_route_time_bucket": _time_bucket_for(now) if now is not None else None,
     }
