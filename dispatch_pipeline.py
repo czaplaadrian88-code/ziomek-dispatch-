@@ -1556,6 +1556,106 @@ def _compute_repo_cost_km(bag_sim, plan, order_id, pickup_coords):
         return None, None
 
 
+# ── SP-B2-LOADGOV (2026-06-11): load governor floty ──
+# Stan procesowy: EWMA (tau 15 min) + uzbrojenie alertu trybu defensywnego.
+# Shadow daemon = długo żyjący proces (EWMA ciągła); czasowka/plan-recheck =
+# świeży proces per tick (EWMA startuje od próbki chwilowej — fail-soft OK,
+# bo flaga decyzyjna i tak OFF, a telemetria chwilowa pozostaje poprawna).
+_LOADGOV_STATE = {"ts": None, "ewma": None, "alert_armed": True}
+_LOADGOV_ORDERS_CACHE = {"mtime": None, "count": None}
+LOADGOV_ORDERS_STATE_PATH = "/root/.openclaw/workspace/dispatch_state/orders_state.json"
+_LOADGOV_TERMINAL_STATUSES = frozenset(
+    {"delivered", "cancelled", "not_picked", "nieodebrano", "anulowane"})
+
+
+def _loadgov_active_orders(now) -> Optional[int]:
+    """Aktywne zlecenia z orders_state.json: status nie-terminalny + updated_at
+    świeższe niż LOADGOV_ORDER_FRESH_H (guard na zalegające wpisy — wzorzec
+    V3.14 stale-bag). mtime-cache; fail-soft → None."""
+    import os as _os4
+    try:
+        mt = _os4.path.getmtime(LOADGOV_ORDERS_STATE_PATH)
+    except OSError:
+        return None
+    if _LOADGOV_ORDERS_CACHE["mtime"] == mt:
+        return _LOADGOV_ORDERS_CACHE["count"]
+    count = None
+    try:
+        with open(LOADGOV_ORDERS_STATE_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        fresh_h = float(getattr(C, "LOADGOV_ORDER_FRESH_H", 3.0))
+        cutoff = now - timedelta(hours=fresh_h)
+        n = 0
+        for v in (data or {}).values():
+            if not isinstance(v, dict):
+                continue
+            if str(v.get("status") or "") in _LOADGOV_TERMINAL_STATUSES:
+                continue
+            ua = v.get("updated_at")
+            if ua:
+                try:
+                    ua_dt = datetime.fromisoformat(str(ua).replace("Z", "+00:00"))
+                    if ua_dt.tzinfo is None:
+                        ua_dt = ua_dt.replace(tzinfo=timezone.utc)
+                    if ua_dt < cutoff:
+                        continue
+                except (ValueError, TypeError):
+                    pass  # brak/zły timestamp → licz (konserwatywnie aktywny)
+            n += 1
+        count = n
+    except Exception as _e:
+        log.warning(f"SP-B2-LOADGOV: orders_state load fail: {_e!r}")
+        count = None
+    _LOADGOV_ORDERS_CACHE.update(mtime=mt, count=count)
+    return count
+
+
+def _loadgov_compute(fleet_snapshot, now):
+    """(load_now, load_ewma, active_orders, active_couriers) — fail-soft Nones.
+
+    load = aktywne zlecenia / aktywni kurierzy (dispatchable fleet przekazany
+    do assess_order). EWMA: alpha = 1 - exp(-dt/tau), pierwsza próbka = load.
+    """
+    couriers = len(fleet_snapshot or {})
+    orders = _loadgov_active_orders(now)
+    if orders is None or couriers <= 0:
+        return None, _LOADGOV_STATE["ewma"], orders, couriers
+    load_now = round(orders / couriers, 3)
+    try:
+        prev_ts = _LOADGOV_STATE["ts"]
+        prev = _LOADGOV_STATE["ewma"]
+        if prev is None or prev_ts is None:
+            ewma = load_now
+        else:
+            dt_min = max(0.0, (now - prev_ts).total_seconds() / 60.0)
+            tau = max(0.1, float(getattr(C, "LOADGOV_EWMA_TAU_MIN", 15.0)))
+            alpha = 1.0 - math.exp(-dt_min / tau)
+            ewma = round(alpha * load_now + (1.0 - alpha) * prev, 3)
+        _LOADGOV_STATE["ts"] = now
+        _LOADGOV_STATE["ewma"] = ewma
+    except Exception:
+        ewma = load_now
+    return load_now, ewma, orders, couriers
+
+
+def _loadgov_alert_transition(ewma, armed,
+                              on_at=None, rearm_at=None):
+    """Czysta maszynka hysteresis alertu (wzorzec _v328_should_emit_stuck_alert):
+    (emit, new_armed). Uzbrojony + ewma>on → emit raz i rozbrój; rozbrojony +
+    ewma<rearm → uzbrój ponownie (bez emisji)."""
+    if on_at is None:
+        on_at = float(getattr(C, "LOADGOV_DEFENSIVE_AT", 3.5))
+    if rearm_at is None:
+        rearm_at = float(getattr(C, "LOADGOV_REARM_AT", 3.0))
+    if ewma is None:
+        return False, armed
+    if armed and ewma > on_at:
+        return True, False
+    if not armed and ewma < rearm_at:
+        return False, True
+    return False, armed
+
+
 def _soon_free_probe(cid, bag_raw, now):
     """SP-B2-ZARAZWOLNY (2026-06-11, B2): czy busy kurier kończy ≤12 min.
 
@@ -2263,6 +2363,30 @@ def _assess_order_impl(
     order_id = str(order_event.get("order_id") or "")
     restaurant = order_event.get("restaurant")
     delivery_address = order_event.get("delivery_address")
+
+    # === SP-B2-LOADGOV (2026-06-11): chwilowy load floty + EWMA 15 min ===
+    # Telemetria ZAWSZE (loadgov_* per kandydat, LOCATION A+B); polityka
+    # (kara bag≥3 przy ewma>2,7 + alert >3,5) za 🛑 ENABLE_FLEET_LOAD_GOVERNOR.
+    loadgov_now, loadgov_ewma, loadgov_orders, loadgov_couriers = (
+        _loadgov_compute(fleet_snapshot, now))
+    if C.decision_flag("ENABLE_FLEET_LOAD_GOVERNOR"):
+        _lg_emit, _LOADGOV_STATE["alert_armed"] = _loadgov_alert_transition(
+            loadgov_ewma, _LOADGOV_STATE["alert_armed"])
+        if _lg_emit:
+            try:
+                from dispatch_v2.telegram_utils import send_admin_alert as _lg_alert
+                _lg_alert(
+                    "🛑 Flota przeciążona — tryb defensywny\n"
+                    f"Na każdego aktywnego kuriera przypada średnio {loadgov_ewma:.1f} "
+                    f"zleceń ({loadgov_orders} aktywnych zleceń / {loadgov_couriers} kurierów).\n"
+                    "Co robię: ostrożniej dokładam do pełnych toreb (kara za worki 3+), "
+                    "propozycje nadal wychodzą normalnie.\n"
+                    "Co Ty masz zrobić: dzwoń po posiłki — każdy dodatkowy kurier "
+                    "realnie zbija opóźnienia (próg alarmu: 3,5 zlec./kuriera, "
+                    "odwołanie poniżej 3,0)."
+                )
+            except Exception:
+                pass  # Telegram unreachable nie blokuje dispatchu
 
     # Defense gate (L2): brak pickup_coords = order bez geokodacji.
     # Pre-fix scenariusz: panel_watcher dla firmowego konta (address_id=161)
@@ -3623,6 +3747,15 @@ def _assess_order_impl(
             if repo_km is not None:
                 bonus_repo_cost_shadow_delta = round(_repo_cost_penalty(repo_km), 2)
 
+        # === SP-B2-LOADGOV (2026-06-11): kara za dokładanie do pełnych toreb
+        # przy przeciążonej flocie. Delta zawsze liczona (shadow); aplikacja
+        # za 🛑 flagą niżej. Miękki odpowiednik "tighten capów o 1".
+        bonus_loadgov_shadow_delta = 0.0
+        if (loadgov_ewma is not None
+                and loadgov_ewma > float(getattr(C, "LOADGOV_TIGHTEN_AT", 2.7))
+                and len(bag_raw) >= int(getattr(C, "LOADGOV_BAG_MIN", 3))):
+            bonus_loadgov_shadow_delta = float(getattr(C, "LOADGOV_BAG_PENALTY", -40.0))
+
         # === R1 progresywny + V319H guard SHADOW (2026-05-28) ===
         # Cele:
         #   R1: cosine < -0.3 dostaje progresywnie mocniejszą karę niż flat
@@ -3772,6 +3905,9 @@ def _assess_order_impl(
         # SP-B2-REPO (2026-06-11): kara repozycjonowania — aplikacja za 🛑 flagą.
         if C.decision_flag("ENABLE_REPO_COST_LIVE"):
             final_score = final_score + bonus_repo_cost_shadow_delta
+        # SP-B2-LOADGOV (2026-06-11): governor load floty — aplikacja za 🛑 flagą.
+        if C.decision_flag("ENABLE_FLEET_LOAD_GOVERNOR"):
+            final_score = final_score + bonus_loadgov_shadow_delta
 
         # V3.27 Bug Z Q5: SOFT bundle score multiplier dla cross-quadrant bag.
         # 0.0 (cross-quadrant) → score *= 0.1
@@ -3944,6 +4080,14 @@ def _assess_order_impl(
             "repo_km": repo_km,
             "repo_last_drop_oid": repo_last_drop_oid,
             "bonus_repo_cost_shadow_delta": bonus_repo_cost_shadow_delta,
+            # SP-B2-LOADGOV (2026-06-11): load floty (chwilowy + EWMA) per
+            # decyzja — identyczne dla kandydatów jednego zlecenia; loadgov_*
+            # prefix LOCATION A+B (bonus_ auto).
+            "loadgov_load_now": loadgov_now,
+            "loadgov_load_ewma": loadgov_ewma,
+            "loadgov_active_orders": loadgov_orders,
+            "loadgov_active_couriers": loadgov_couriers,
+            "bonus_loadgov_shadow_delta": round(bonus_loadgov_shadow_delta, 2),
             # SP-B2-ZARAZWOLNY (2026-06-11): telemetria B2 — busy kończący
             # ≤12 min (z zapisanego planu). soon_free_* prefix LOCATION A+B.
             "soon_free_eligible": bool(soon_free_probe and soon_free_probe.get("eligible")),

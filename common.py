@@ -81,6 +81,8 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_REPO_COST_LIVE",
     # SP-B2-ZARAZWOLNY (2026-06-11): substytucja soon_free (🛑 ACK).
     "ENABLE_SOON_FREE_CANDIDATE",
+    # SP-B2-LOADGOV (2026-06-11): governor load floty (🛑 ACK).
+    "ENABLE_FLEET_LOAD_GOVERNOR",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
@@ -1589,6 +1591,25 @@ ENABLE_REPO_COST_LIVE = _os.environ.get("ENABLE_REPO_COST_LIVE", "0") == "1"
 # Telemetria soon_free_* zawsze; substytucja za 🛑 flagą (OFF, flip = ACK).
 SOON_FREE_MAX_MIN = float(_os.environ.get("SOON_FREE_MAX_MIN", "12.0"))
 ENABLE_SOON_FREE_CANDIDATE = _os.environ.get("ENABLE_SOON_FREE_CANDIDATE", "0") == "1"
+
+# SP-B2-LOADGOV (2026-06-11, M1 + werdykt CASCADE): load governor floty.
+# Argmax bez hamulca floty = 17% breach/worek 33 w kaskadzie; load-aware =
+# 8-10%. Load = aktywne zlecenia (orders_state, nie-terminalne, świeże) /
+# aktywni kurierzy (dispatchable_fleet), wygładzone EWMA tau=15 min.
+# Polityka (za 🛑 flagą ENABLE_FLEET_LOAD_GOVERNOR, OFF):
+#   ewma > TIGHTEN_AT (2,7) → kara score za dokładanie do bagów ≥ BAG_MIN (3)
+#     (miękki odpowiednik "tighten capów o 1"; ALWAYS-PROPOSE — zero rejectów);
+#   ewma > DEFENSIVE_AT (3,5) → JEDEN alert Telegram "tryb defensywny"
+#     (hysteresis: re-arm dopiero < REARM_AT 3,0 — nie spam).
+# Telemetria loadgov_* serializowana ZAWSZE (kalibracja przed flipem).
+LOADGOV_TIGHTEN_AT = float(_os.environ.get("LOADGOV_TIGHTEN_AT", "2.7"))
+LOADGOV_DEFENSIVE_AT = float(_os.environ.get("LOADGOV_DEFENSIVE_AT", "3.5"))
+LOADGOV_REARM_AT = float(_os.environ.get("LOADGOV_REARM_AT", "3.0"))
+LOADGOV_BAG_MIN = int(_os.environ.get("LOADGOV_BAG_MIN", "3"))
+LOADGOV_BAG_PENALTY = float(_os.environ.get("LOADGOV_BAG_PENALTY", "-40.0"))
+LOADGOV_EWMA_TAU_MIN = float(_os.environ.get("LOADGOV_EWMA_TAU_MIN", "15.0"))
+LOADGOV_ORDER_FRESH_H = float(_os.environ.get("LOADGOV_ORDER_FRESH_H", "3.0"))
+ENABLE_FLEET_LOAD_GOVERNOR = _os.environ.get("ENABLE_FLEET_LOAD_GOVERNOR", "0") == "1"
 
 # V3.26 STEP 1 (R-11 TRANSPARENCY-RATIONALE) — decision rationale dla każdej
 # propozycji: top 3 factors + advantage vs next-best. Visible w Telegram
