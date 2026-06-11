@@ -38,6 +38,14 @@ COURIER_TIERS_PATH = "/root/.openclaw/workspace/dispatch_state/courier_tiers.jso
 SUGGESTIONS_OUT = "/root/.openclaw/workspace/dispatch_state/tier_suggestions.json"
 EVOLUTION_LOG = "/root/.openclaw/workspace/dispatch_state/tier_evolution.jsonl"
 
+# E7-DOKLEJKA 1 (2026-06-11): learning_log rotowany przez logrotate (100M
+# copytruncate) — czytanie TYLKO żywego pliku przycinało okno 30d do ogona od
+# ostatniej rotacji (~3 dni). Wzorzec _rotated_logs = SP-B2-LOGROT.
+try:
+    from dispatch_v2.tools._rotated_logs import iter_jsonl_records
+except ImportError:  # uruchomienie bezpośrednie z katalogu dispatch_v2
+    from tools._rotated_logs import iter_jsonl_records
+
 log = logging.getLogger(__name__)
 
 
@@ -108,6 +116,38 @@ def _to_warsaw_hour_day(iso_utc: str) -> Tuple[int, str]:
         dt = dt.replace(tzinfo=timezone.utc)
     w = dt.astimezone(WARSAW)
     return w.hour, w.date().isoformat()
+
+
+# tg_negative: jeden przebieg learning_log (żywy + zrotowane .1/.2.gz) na run,
+# współdzielony przez wszystkie cid — per-courier re-read 170MB+ × roster nie
+# skaluje. Klucz cache = (path, cutoff); evaluate_all woła ze stałym now_utc.
+_TG_NEG_CACHE: Dict[Tuple[str, str], Dict[str, int]] = {}
+
+
+def _tg_negative_counts(log_path: str, cutoff: str) -> Dict[str, int]:
+    key = (str(log_path), cutoff)
+    cached = _TG_NEG_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        cutoff_dt = datetime.fromisoformat(cutoff)
+        if cutoff_dt.tzinfo is None:
+            cutoff_dt = cutoff_dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        cutoff_dt = None
+    if not os.path.exists(log_path):
+        log.warning(f"learning_log not found: {log_path}")
+    counts: Dict[str, int] = {}
+    for d in iter_jsonl_records(str(log_path), cutoff_dt=cutoff_dt):
+        if d.get("ts", "") < cutoff:
+            continue
+        if d.get("action") not in ("INNY", "TG_REASON"):
+            continue
+        bcid = str((d.get("decision") or {}).get("best", {}).get("courier_id") or "")
+        if bcid:
+            counts[bcid] = counts.get(bcid, 0) + 1
+    _TG_NEG_CACHE[key] = counts
+    return counts
 
 
 def compute_courier_metrics(
@@ -204,26 +244,9 @@ def compute_courier_metrics(
         except Exception:
             pass
 
-    # tg_negative_30d from learning_log
+    # tg_negative_30d from learning_log (żywy + zrotowane, wspólny przebieg per run)
     try:
-        tg_neg = 0
-        with open(log_path, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    d = json.loads(line)
-                except Exception:
-                    continue
-                if d.get("ts", "") < cutoff:
-                    continue
-                action = d.get("action")
-                if action not in ("INNY", "TG_REASON"):
-                    continue
-                bcid = str((d.get("decision") or {}).get("best", {}).get("courier_id") or "")
-                if bcid == cid:
-                    tg_neg += 1
-        m.tg_negative_30d = tg_neg
-    except FileNotFoundError:
-        log.warning(f"learning_log not found: {log_path}")
+        m.tg_negative_30d = _tg_negative_counts(log_path, cutoff).get(str(cid), 0)
     except Exception as e:
         log.error(f"tg_negative_30d cid={cid}: {e}")
 

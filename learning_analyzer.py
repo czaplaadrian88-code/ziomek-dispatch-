@@ -18,6 +18,14 @@ from pathlib import Path
 LOG_PATH = Path("/root/.openclaw/workspace/dispatch_state/learning_log.jsonl")
 OUT_PATH = Path("/root/.openclaw/workspace/dispatch_state/learning_analysis.json")
 
+# E7-DOKLEJKA 1 (2026-06-11): analizator z założenia czyta CAŁOŚĆ logu — po
+# wprowadzeniu logrotate (100M copytruncate) "całość" zrobiła się ogonem od
+# rotacji. Doczytujemy zrotowane siblingi (wzorzec SP-B2-LOGROT).
+try:
+    from dispatch_v2.tools._rotated_logs import iter_jsonl_records
+except ImportError:  # uruchomienie bezpośrednie z katalogu dispatch_v2
+    from tools._rotated_logs import iter_jsonl_records
+
 HUMAN_ACTIONS = {"TAK", "NIE", "INNY", "KOORD"}
 AGREEMENT_DENOM = {"TAK", "NIE", "INNY"}
 TIMEOUT_ACTIONS = {
@@ -46,19 +54,7 @@ THRESHOLDS = [85, 88, 90, 92, 95, 98]
 
 
 def load_entries(path: Path) -> list[dict]:
-    out = []
-    if not path.exists():
-        return out
-    with path.open() as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return out
+    return list(iter_jsonl_records(str(path)))
 
 
 def pct_stats(values: list[float]) -> dict:

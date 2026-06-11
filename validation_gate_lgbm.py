@@ -38,6 +38,13 @@ _WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
 LEARNING_LOG_PATH = Path("/root/.openclaw/workspace/dispatch_state/learning_log.jsonl")
 
+# E7-DOKLEJKA 1 (2026-06-11): logrotate (100M copytruncate) przycinał okno do
+# ogona żywego pliku — czytamy też zrotowane siblingi (wzorzec SP-B2-LOGROT).
+try:
+    from dispatch_v2.tools._rotated_logs import iter_jsonl_records
+except ImportError:  # uruchomienie bezpośrednie z katalogu dispatch_v2
+    from tools._rotated_logs import iter_jsonl_records
+
 
 def parse_ts(ts_str: str) -> Optional[datetime]:
     if not ts_str:
@@ -72,34 +79,32 @@ def load_entries(log_path: Path, since_utc: datetime, until_utc: datetime) -> Li
     """Load learning_log entries w window. Filter dla lgbm_shadow data presence."""
     entries = []
     if not log_path.exists():
+        # żywy plik może chwilowo nie istnieć — zrotowane siblingi czytamy niżej
         print(f"ERROR: learning_log not found at {log_path}", file=sys.stderr)
-        return entries
     try:
-        with open(log_path, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    d = json.loads(line)
-                    ts = parse_ts(d.get("ts", ""))
-                    if ts is None:
-                        continue
-                    if since_utc and ts < since_utc:
-                        continue
-                    if until_utc and ts >= until_utc:
-                        continue
-                    decision = d.get("decision", {}) or {}
-                    best = decision.get("best", {}) or {}
-                    lgbm = best.get("lgbm_shadow")
-                    if not lgbm:
-                        continue
-                    entries.append({
-                        "ts": ts,
-                        "order_id": d.get("order_id"),
-                        "current_winner_cid": str(best.get("courier_id") or ""),
-                        "lgbm": lgbm,
-                    })
-                except Exception:
+        for d in iter_jsonl_records(str(log_path), cutoff_dt=since_utc):
+            try:
+                ts = parse_ts(d.get("ts", ""))
+                if ts is None:
                     continue
-    except (OSError, json.JSONDecodeError) as e:
+                if since_utc and ts < since_utc:
+                    continue
+                if until_utc and ts >= until_utc:
+                    continue
+                decision = d.get("decision", {}) or {}
+                best = decision.get("best", {}) or {}
+                lgbm = best.get("lgbm_shadow")
+                if not lgbm:
+                    continue
+                entries.append({
+                    "ts": ts,
+                    "order_id": d.get("order_id"),
+                    "current_winner_cid": str(best.get("courier_id") or ""),
+                    "lgbm": lgbm,
+                })
+            except Exception:
+                continue
+    except OSError as e:
         print(f"ERROR loading log: {e}", file=sys.stderr)
     return entries
 
