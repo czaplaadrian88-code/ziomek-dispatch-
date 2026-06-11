@@ -72,6 +72,10 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_OBJ_PICKUP_FRESHNESS",
     "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE",
     "ENABLE_DIFFICULT_CASE_KOORD_REDIRECT",
+    # SP-B2-SYNCWORKA + PREPBIAS-konsumpcja (2026-06-11): flagi decyzyjne
+    # cross-proces (shadow/czasowka/plan-recheck liczą tym samym silnikiem).
+    "ENABLE_BUNDLE_SYNC_SPREAD",
+    "ENABLE_PREP_BIAS_TABLE",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
@@ -1532,6 +1536,27 @@ V325_NEW_COURIER_MED_ADV_THRESHOLD = 20.0
 NEW_COURIER_RAMP_DELIVERIES = int(_os.environ.get("NEW_COURIER_RAMP_DELIVERIES", "30"))
 NEW_COURIER_RAMP_MAX_KM = float(_os.environ.get("NEW_COURIER_RAMP_MAX_KM", "2.5"))
 NEW_COURIER_RAMP_MALUS = float(_os.environ.get("NEW_COURIER_RAMP_MALUS", "-20.0"))
+
+# SP-B2-SYNCWORKA (2026-06-11, H1 — największa dźwignia bundlingu).
+# Worki o spreadzie gotowości >10 min niosą 50% WSZYSTKICH breachy
+# (mining 2e: pick_spread ≤2:6,4% → 5-10:10,6% → 10-20:21,9% → >20:52,5%);
+# multi-rest przy sync ≤5 min jest bezpieczny jak same-rest. Kara gradientowa
+# za ready_spread worka (max−min effective_ready niedoręczonych + nowego):
+# 0 przy ≤7 min, -30 przy 10, -80 przy 15, -150 przy ≥20 (liniowo między
+# węzłami; NIE hard reject — ALWAYS-PROPOSE) + zerowanie bonusów bundlowych
+# przy spreadzie >10 (wzór Fix C). Flaga decyzyjna ENABLE_BUNDLE_SYNC_SPREAD
+# default OFF — shadow-delta zawsze serializowana; flip = 🛑 ACK Adriana.
+ENABLE_BUNDLE_SYNC_SPREAD = _os.environ.get(
+    "ENABLE_BUNDLE_SYNC_SPREAD", "0") == "1"
+SYNC_SPREAD_KNOTS = ((7.0, 0.0), (10.0, -30.0), (15.0, -80.0), (20.0, -150.0))
+SYNC_SPREAD_BUNDLE_ZERO_MIN = float(_os.environ.get("SYNC_SPREAD_BUNDLE_ZERO_MIN", "10.0"))
+
+# SP-B2-PREPBIAS konsumpcja w DECYZJACH (effective_ready = deklaracja + bias
+# z restaurant_prep_bias.json) — default OFF, flip = 🛑 ACK Adriana (osobny
+# punkt roadmapy). SYNCWORKA liczy spread z biasem gdy ta flaga ON, inaczej
+# z samych deklaracji.
+ENABLE_PREP_BIAS_TABLE = _os.environ.get(
+    "ENABLE_PREP_BIAS_TABLE", "0") == "1"
 
 # V3.26 STEP 1 (R-11 TRANSPARENCY-RATIONALE) — decision rationale dla każdej
 # propozycji: top 3 factors + advantage vs next-best. Visible w Telegram

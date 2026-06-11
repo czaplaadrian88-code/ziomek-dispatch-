@@ -1369,6 +1369,94 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
     return feasible
 
 
+def _sync_spread_penalty(spread_min: float) -> float:
+    """SP-B2-SYNCWORKA H1: kara gradientowa za spread gotowości worka.
+
+    Węzły C.SYNC_SPREAD_KNOTS ((7,0),(10,-30),(15,-80),(20,-150)), liniowa
+    interpolacja między nimi, płasko -150 powyżej ostatniego węzła.
+    NIE hard reject — ALWAYS-PROPOSE (kandydat tylko traci w rankingu).
+    """
+    knots = getattr(C, "SYNC_SPREAD_KNOTS",
+                    ((7.0, 0.0), (10.0, -30.0), (15.0, -80.0), (20.0, -150.0)))
+    try:
+        s = float(spread_min)
+    except (TypeError, ValueError):
+        return 0.0
+    if s <= knots[0][0]:
+        return 0.0
+    for (x0, y0), (x1, y1) in zip(knots, knots[1:]):
+        if s <= x1:
+            return y0 + (y1 - y0) * (s - x0) / (x1 - x0)
+    return float(knots[-1][1])
+
+
+def _sync_effective_ready(ready_dt, restaurant, now):
+    """effective_ready dla SYNCWORKI: deklaracja + prep-bias TYLKO gdy
+    ENABLE_PREP_BIAS_TABLE flipnięty (🛑 ACK Adriana); inaczej sama deklaracja.
+    Naive datetime traktowany jako UTC (konwencja pipeline'u). Fail-soft."""
+    if ready_dt is None:
+        return None
+    if ready_dt.tzinfo is None:
+        ready_dt = ready_dt.replace(tzinfo=timezone.utc)
+    if C.decision_flag("ENABLE_PREP_BIAS_TABLE"):
+        try:
+            b = calib_maps.prep_bias_for(restaurant, now)
+            if b is not None:
+                return ready_dt + timedelta(minutes=float(b))
+        except Exception:
+            pass
+    return ready_dt
+
+
+def _compute_sync_spread(bag_sim, bag_raw, new_ready_at, new_restaurant, now):
+    """SP-B2-SYNCWORKA H1 (2026-06-11): spread gotowości worka w minutach.
+
+    spread = max−min po kotwicach czasowych: nowe zlecenie i bag-assigned =
+    effective_ready (deklaracja + bias za flagą); bag picked_up = faktyczny
+    picked_up_at (jedzenie już w torbie — liczy się od kiedy; fallback
+    pickup_ready_at). Zwraca (spread_min | None, n_punktów). None gdy pusty
+    bag albo <2 znanych czasów (solo / brak danych) — wtedy zero kary.
+
+    Mining 2e: pick_spread ≤5 min → multi-rest bezpieczny jak same-rest
+    (6,1% vs 6,5%); >10 min → worki niosące 50% wszystkich breachy.
+    """
+    if not bag_sim:
+        return None, 0
+    rest_by_oid = {}
+    try:
+        for b in (bag_raw or []):
+            if isinstance(b, dict) and b.get("order_id") is not None:
+                rest_by_oid[str(b.get("order_id"))] = b.get("restaurant")
+    except Exception:
+        pass
+    times = []
+    t_new = _sync_effective_ready(new_ready_at, new_restaurant, now)
+    if t_new is not None:
+        times.append(t_new)
+    for bo in bag_sim:
+        try:
+            picked = (getattr(bo, "status", "assigned") == "picked_up"
+                      or getattr(bo, "picked_up_at", None) is not None)
+            if picked:
+                anchor = getattr(bo, "picked_up_at", None) or getattr(bo, "pickup_ready_at", None)
+                if anchor is not None and anchor.tzinfo is None:
+                    anchor = anchor.replace(tzinfo=timezone.utc)
+            else:
+                anchor = _sync_effective_ready(
+                    getattr(bo, "pickup_ready_at", None),
+                    rest_by_oid.get(str(getattr(bo, "order_id", ""))),
+                    now,
+                )
+            if anchor is not None:
+                times.append(anchor)
+        except Exception:
+            continue
+    if len(times) < 2:
+        return None, len(times)
+    spread = (max(times) - min(times)).total_seconds() / 60.0
+    return round(spread, 1), len(times)
+
+
 def _demote_blind_empty(feasible: list, order_id=None) -> list:
     """V3.16 demotion: jeśli top-1 jest blind+empty AND istnieje informed alt,
     reorder — informed first (stable), other middle, blind+empty last.
@@ -3320,6 +3408,27 @@ def _assess_order_impl(
             # Recompute bundle_bonus po zero bonus_l2 (bonus_l1, bonus_r4 unchanged).
             bundle_bonus = bonus_l1 + bonus_l2 + bonus_r4
 
+        # === SP-B2-SYNCWORKA H1 (2026-06-11): spread gotowości worka ===
+        # Metryki ZAWSZE liczone (observability/replay); wpływ na score TYLKO
+        # gdy ENABLE_BUNDLE_SYNC_SPREAD (decision_flag, default OFF, 🛑 ACK).
+        # Delta = kara gradientowa + (przy spreadzie >10 min) zerowanie
+        # dodatnich bonusów bundlowych (bundle_bonus + continuation) wzorem
+        # Fix C — liczona PO Fix C, żeby nie zerować podwójnie.
+        sync_ready_spread_min, sync_spread_n = _compute_sync_spread(
+            bag_sim, bag_raw, pickup_ready_at, order_event.get("restaurant"), now)
+        bonus_sync_spread = 0.0
+        sync_spread_bundle_zeroed = False
+        bonus_sync_spread_shadow_delta = 0.0
+        if sync_ready_spread_min is not None:
+            bonus_sync_spread = round(_sync_spread_penalty(sync_ready_spread_min), 2)
+            bonus_sync_spread_shadow_delta = bonus_sync_spread
+            if sync_ready_spread_min > float(getattr(C, "SYNC_SPREAD_BUNDLE_ZERO_MIN", 10.0)):
+                _sync_zero_part = max(0.0, bundle_bonus) + max(0.0, bonus_bug2_continuation)
+                if _sync_zero_part > 0.0:
+                    sync_spread_bundle_zeroed = True
+                    bonus_sync_spread_shadow_delta = round(
+                        bonus_sync_spread - _sync_zero_part, 2)
+
         # === R1 progresywny + V319H guard SHADOW (2026-05-28) ===
         # Cele:
         #   R1: cosine < -0.3 dostaje progresywnie mocniejszą karę niż flat
@@ -3462,6 +3571,10 @@ def _assess_order_impl(
             final_score = final_score + bonus_r1_progressive_shadow_delta
         if C.decision_flag("ENABLE_V319H_CONTINUATION_GUARD"):
             final_score = final_score + bonus_v319h_guard_shadow_delta
+        # SP-B2-SYNCWORKA H1 (2026-06-11): delta liczona zawsze (wyżej, po Fix C),
+        # aplikacja za flagą decyzyjną — shadow-first, flip 🛑 ACK Adriana.
+        if C.decision_flag("ENABLE_BUNDLE_SYNC_SPREAD"):
+            final_score = final_score + bonus_sync_spread_shadow_delta
 
         # V3.27 Bug Z Q5: SOFT bundle score multiplier dla cross-quadrant bag.
         # 0.0 (cross-quadrant) → score *= 0.1
@@ -3620,6 +3733,15 @@ def _assess_order_impl(
             # Auto-propagated via prefix bonus_ w shadow_dispatcher.
             "bonus_r1_progressive_shadow_delta": round(bonus_r1_progressive_shadow_delta, 2),
             "bonus_v319h_guard_shadow_delta": round(bonus_v319h_guard_shadow_delta, 2),
+            # SP-B2-SYNCWORKA H1 (2026-06-11): spread gotowości worka + kara
+            # gradientowa + delta shadow (kara + zerowanie bonusów bundlowych
+            # przy >10 min). bonus_* auto-prefix; sync_* prefix dodany w
+            # shadow_dispatcher._AUTO_PROP_PREFIXES (LOCATION A+B).
+            "sync_ready_spread_min": sync_ready_spread_min,
+            "sync_spread_n": sync_spread_n,
+            "sync_spread_bundle_zeroed": sync_spread_bundle_zeroed,
+            "bonus_sync_spread": bonus_sync_spread,
+            "bonus_sync_spread_shadow_delta": bonus_sync_spread_shadow_delta,
             # F5 RETURN-TO-RESTAURANT (2026-05-24)
             "bonus_r_return_rest": round(bonus_r_return_rest, 2),
             "return_to_restaurant": metrics.get("return_to_restaurant"),

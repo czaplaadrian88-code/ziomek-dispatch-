@@ -205,7 +205,11 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        "late_pickup_", "new_pickup_",
                        # SP-B2-RAMPA (2026-06-11): new_courier_ramp dict (active/eligible/
                        # deliveries/malus|reason) — LOCATION A+B przez propagate.
-                       "new_courier_")
+                       "new_courier_",
+                       # SP-B2-SYNCWORKA (2026-06-11): sync_ready_spread_min /
+                       # sync_spread_n / sync_spread_bundle_zeroed (bonus_sync_*
+                       # idzie prefiksem bonus_) — LOCATION A+B przez propagate.
+                       "sync_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
