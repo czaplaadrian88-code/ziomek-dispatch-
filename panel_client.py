@@ -138,7 +138,68 @@ def _fresh_opener():
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
     opener.addheaders = [("User-Agent", "Mozilla/5.0")]
-    return opener
+    return opener, cj
+
+
+# Persist sesji na DYSK (2026-06-11): shadow_quote panelu restauracji startuje
+# świeżym subprocessem per wycena — in-memory `_session` umiera z procesem, więc
+# każde „Sprawdź czas" robiło pełny login (~5 s z 8 s budżetu subprocessu →
+# timeouty/fałszywe „brak kuriera" przy pierwszym sprawdzeniu). Plik trzyma
+# cookies+csrf (0600, w .secrets obok panel.env). Load ZAWSZE weryfikuje sesję
+# GET-em (redirect na login → odpada, idzie zwykły login). Fail-soft: każdy
+# błąd cache → fresh login jak dotąd. Daemon nietknięty: jego ścieżka in-memory
+# ma pierwszeństwo, a force=True (bg refresh) omija dysk i nadpisuje go świeżą sesją.
+_SESSION_CACHE_PATH = Path("/root/.openclaw/workspace/.secrets/panel_session_cache.json")
+_SESSION_CACHE_TTL_SEC = 1200  # spójnie z in-memory TTL
+
+
+def _save_session_to_disk(cj, csrf: str, ts: float) -> None:
+    """Best-effort, nigdy nie rzuca — cache to optymalizacja, nie zależność."""
+    try:
+        cookies = [{
+            "name": c.name, "value": c.value, "domain": c.domain,
+            "path": c.path, "secure": c.secure, "expires": c.expires,
+        } for c in cj]
+        tmp = _SESSION_CACHE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"saved_at": ts, "csrf": csrf, "cookies": cookies}))
+        tmp.chmod(0o600)
+        tmp.replace(_SESSION_CACHE_PATH)
+    except Exception as e:  # noqa: BLE001
+        _log.warning(f"session disk save fail: {type(e).__name__}: {e}")
+
+
+def _load_session_from_disk():
+    """(opener, csrf, saved_at) z sesji z dysku, albo None. Nigdy nie rzuca.
+    BEZ weryfikacji HTTP (zlecenia-page GET to ~5 s — droższy niż sam login):
+    ufamy TTL 20 min; martwą sesję samonaprawiają istniejące ścieżki retry
+    (_open_with_relogin na 401/419, fetch_panel_html redirect→force=True)."""
+    try:
+        if not _SESSION_CACHE_PATH.exists():
+            return None
+        data = json.loads(_SESSION_CACHE_PATH.read_text())
+        saved_at = float(data.get("saved_at", 0))
+        if time.time() - saved_at >= _SESSION_CACHE_TTL_SEC:
+            return None
+        csrf = data.get("csrf")
+        if not csrf or not data.get("cookies"):
+            return None
+        cj = http.cookiejar.CookieJar()
+        for c in data["cookies"]:
+            dom = str(c.get("domain") or "")
+            cj.set_cookie(http.cookiejar.Cookie(
+                version=0, name=c["name"], value=c["value"], port=None,
+                port_specified=False, domain=dom, domain_specified=bool(dom),
+                domain_initial_dot=dom.startswith("."),
+                path=c.get("path") or "/", path_specified=True,
+                secure=bool(c.get("secure")), expires=c.get("expires"),
+                discard=False, comment=None, comment_url=None, rest={},
+            ))
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+        opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+        return opener, csrf, saved_at
+    except Exception as e:  # noqa: BLE001
+        _log.warning(f"session disk load fail: {type(e).__name__}: {e}")
+        return None
 
 
 def login(force: bool = False) -> tuple:
@@ -159,9 +220,22 @@ def login(force: bool = False) -> tuple:
                 _log.debug("login: cached")
                 return _session["opener"], _session["csrf"], None
 
+        # Próba re-użycia sesji z dysku (subprocess shadow_quote / cold start)
+        # ZANIM zrobimy pełny login — 1 GET weryfikacyjny vs 3 round-tripy.
+        if not force:
+            disk = _load_session_from_disk()
+            if disk is not None:
+                d_opener, d_csrf, d_saved_at = disk
+                _session["opener"] = d_opener
+                _session["csrf"] = d_csrf
+                _session["last_login_at"] = d_saved_at  # wiek realny, nie „odświeżony"
+                _session["last_ok"] = True
+                _log.info(f"login: disk-cache reuse (age={time.time() - d_saved_at:.0f}s)")
+                return d_opener, d_csrf, None
+
         _log.info(f"login: fresh (age={age:.0f}s, force={force})")
         env = _creds()
-        opener = _fresh_opener()
+        opener, _login_cj = _fresh_opener()
 
         try:
             r1 = opener.open(f"{BASE_URL}/admin2017/login", timeout=15)
@@ -213,6 +287,7 @@ def login(force: bool = False) -> tuple:
         _session["csrf"] = csrf
         _session["last_login_at"] = now
         _session["last_ok"] = True
+        _save_session_to_disk(_login_cj, csrf, now)
         _log.info(f"login OK csrf={csrf[:10]}...")
         return opener, csrf, html
 
