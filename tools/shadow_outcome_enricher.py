@@ -32,6 +32,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+try:
+    from dispatch_v2.tools._rotated_logs import iter_jsonl_records
+except ImportError:  # uruchomienie bezpośrednie: python tools/<plik>.py
+    from _rotated_logs import iter_jsonl_records
+
 # ── Paths ────────────────────────────────────────────────────────────────
 SHADOW_LOG = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
 EVENTS_DB = "/root/.openclaw/workspace/dispatch_state/events.db"
@@ -287,7 +292,13 @@ def run(hours: int, dry_run: bool = False) -> dict:
         if not os.path.exists(SHADOW_LOG):
             return stats
         max_records = 50000  # safety cap per run
-        for _offset, rec in iter_shadow_records(SHADOW_LOG, 0, max_records):
+        # SP-B2-LOGROT 2026-06-11: re-scan obejmuje też zrotowane siblingi (.1,
+        # .2.gz) w oknie cutoff — copytruncate o 00:00 przenosił rekordy
+        # not_ready (outcome dojrzewa 30-60 min) do .1, czyli poza zasięg
+        # skanu → outcome'y z końca dnia nigdy nie były łapane.
+        for rec in iter_jsonl_records(SHADOW_LOG, cutoff_dt=cutoff):
+            if stats["shadow_scanned"] >= max_records:
+                break
             stats["shadow_scanned"] += 1
 
             ts = _parse_iso(rec.get("ts"))

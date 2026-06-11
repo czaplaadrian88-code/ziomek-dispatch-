@@ -30,6 +30,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
+try:
+    from dispatch_v2.tools._rotated_logs import iter_jsonl_records
+except ImportError:  # uruchomienie bezpośrednie: python tools/<plik>.py
+    from _rotated_logs import iter_jsonl_records
+
 SHADOW_LOG = Path("/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl")
 EVENTS_DB = Path("/root/.openclaw/workspace/dispatch_state/events.db")
 RESOLUTION_LOG = Path("/root/.openclaw/workspace/scripts/logs/bug_e_resolutions.jsonl")
@@ -99,32 +104,26 @@ def collect_ziomek_koord_records(hours_back: int) -> Dict[str, dict]:
         return by_oid
     n_total = 0
     n_match = 0
-    with SHADOW_LOG.open() as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            ts = parse_iso_utc(rec.get("ts"))
-            if ts is None or ts < cutoff:
-                continue
-            n_total += 1
-            if not is_best_effort_koord(rec):
-                continue
-            n_match += 1
-            oid = str(rec.get("order_id") or "")
-            if not oid:
-                continue
-            prev = by_oid.get(oid)
-            if prev is None:
+    # SP-B2-LOGROT 2026-06-11: logrotate (copytruncate) truncuje żywy plik
+    # ~co tydzień — okno 24h tuż po rotacji leżało prawie w całości w .1.
+    for rec in iter_jsonl_records(str(SHADOW_LOG), cutoff_dt=cutoff):
+        ts = parse_iso_utc(rec.get("ts"))
+        if ts is None or ts < cutoff:
+            continue
+        n_total += 1
+        if not is_best_effort_koord(rec):
+            continue
+        n_match += 1
+        oid = str(rec.get("order_id") or "")
+        if not oid:
+            continue
+        prev = by_oid.get(oid)
+        if prev is None:
+            by_oid[oid] = rec
+        else:
+            prev_ts = parse_iso_utc(prev.get("ts"))
+            if prev_ts is None or ts > prev_ts:
                 by_oid[oid] = rec
-            else:
-                prev_ts = parse_iso_utc(prev.get("ts"))
-                if prev_ts is None or ts > prev_ts:
-                    by_oid[oid] = rec
     _log.info(f"scan shadow log: {n_total} records last {hours_back}h, {n_match} best_effort KOORD, {len(by_oid)} unique oids")
     return by_oid
 

@@ -27,6 +27,7 @@ from typing import Dict, Optional, Tuple
 
 from dispatch_v2.common import WARSAW, load_config, parse_panel_timestamp, setup_logger
 from dispatch_v2 import telegram_approver  # reuse _load_env + tg_request
+from dispatch_v2.tools._rotated_logs import iter_jsonl_records  # SP-B2-LOGROT
 
 
 LEARNING_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl"
@@ -75,23 +76,20 @@ def _count_delivered_in_range(start_utc: datetime, end_utc: datetime) -> int:
 
 
 def _iter_learning_in_range(path: str, start_utc: datetime, end_utc: datetime):
-    try:
-        with open(path) as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                    ts_str = r.get("ts", "")
-                    if not ts_str:
-                        continue
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
-                    if start_utc <= ts < end_utc:
-                        yield r
-                except Exception:
-                    continue
-    except FileNotFoundError:
-        return
+    # SP-B2-LOGROT 2026-06-11: learning_log rotuje (copytruncate ~tygodniowo) —
+    # iter_jsonl_records dokłada zrotowane .1/.2.gz w oknie od start_utc.
+    for r in iter_jsonl_records(path, cutoff_dt=start_utc):
+        try:
+            ts_str = r.get("ts", "")
+            if not ts_str:
+                continue
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if start_utc <= ts < end_utc:
+                yield r
+        except Exception:
+            continue
 
 
 def _count_learning_in_range(path: str, start_utc: datetime, end_utc: datetime) -> Counter:
@@ -278,19 +276,15 @@ def _restaurant_violations_lines(
         return []
 
     totals: Counter = Counter()
-    try:
-        with open(SLA_LOG_PATH) as f:
-            for line in f:
-                try:
-                    rec = json.loads(line)
-                    ts = _parse_any_iso(rec.get("logged_at"))
-                    if ts is None or not (start_utc <= ts < end_utc):
-                        continue
-                    totals[rec.get("restaurant") or "?"] += 1
-                except Exception:
-                    continue
-    except FileNotFoundError:
-        pass
+    # SP-B2-LOGROT 2026-06-11: sla_log pod logrotate — czytaj też .1/.2.gz w oknie.
+    for rec in iter_jsonl_records(SLA_LOG_PATH, cutoff_dt=start_utc):
+        try:
+            ts = _parse_any_iso(rec.get("logged_at"))
+            if ts is None or not (start_utc <= ts < end_utc):
+                continue
+            totals[rec.get("restaurant") or "?"] += 1
+        except Exception:
+            continue
 
     rows = sorted(waits.items(), key=lambda kv: -len(kv[1]))[:top_n]
     lines = ["Naruszenia restauracji 7d (odbiór >5 min po umówionym):"]
