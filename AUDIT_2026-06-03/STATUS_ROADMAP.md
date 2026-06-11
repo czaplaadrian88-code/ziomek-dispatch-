@@ -66,7 +66,9 @@ Klaster breach/autonomia/reliability — zbudowano POMIAR, flip czeka na walidac
 PANEL-SCRAPE-01 (P0, sekwencyjny fetch — pęka ~2x), OSRM-TABLE-03 (brak cache table()), THREADPOOL-04 (pre-filtr puli), TICK-OVERLAP-05, LATENCY-TREND-08, STATE→SQLite.
 
 ### D. JAKOŚĆ / BUNDLING (większe, zmierzone)
-BUNDLE-02..06 (bundle_fit score zamiast samej odległości; 80% worków bez sygnału wartości), SEL-01/FEAS-02 (kierunek do klucza selekcji; no_gps-empty z fikcyjnej pozycji), GEO-01/02/03 (OSRM w scoringu zamiast haversine×1.37; model barier rzeka/tory; geo-ślepa kalibracja drive_min), SCORE-01..05 (sprzeczne wagi scoringu). **Świeżo skwantyfikowane (rule_deviation_report): R5 odbiory >1.8km = 58% worków, R8 span >cap = 46%, fleet top-3 Ziomek 43% vs człowiek 31%.**
+BUNDLE-02..06 (bundle_fit score zamiast samej odległości; 80% worków bez sygnału wartości), ~~SEL-01~~/FEAS-02 (no_gps-empty z fikcyjnej pozycji), GEO-01/02/03 (OSRM w scoringu zamiast haversine×1.37; model barier rzeka/tory; geo-ślepa kalibracja drive_min), SCORE-01..05 (sprzeczne wagi scoringu). **Świeżo skwantyfikowane (rule_deviation_report): R5 odbiory >1.8km = 58% worków, R8 span >cap = 46%, fleet top-3 Ziomek 43% vs człowiek 31%.**
+
+**✖ SEL-01 ROZSTRZYGNIĘTY 2026-06-12: WERDYKT NIE-ROBIĆ** (`eod_drafts/2026-06-12/SEL01_VERDICT_2026-06-12.md`) — replay 1802 PROPOSE (02-11.06): wariant dir-bucket w kluczu dubluje błąd SELECTION_VETO (23/24 flipów na ujemny score, 2/24 na sentinel −1e9, 16/24 nadpisuje tier 0→1 late-pickup, 14/24 ucieka w cos=None); wariant tie-break bezpieczny ale pusty (0,1-0,3% decyzji); 57% cross-zwycięzców = scarcity (brak alternatyw — naprawia podaż, nie klucz). Kierunek wzmacniać przez wagi `bonus_r1_corridor` w E7 re-tune (at#131 17.06).
 
 ### E. AUTONOMIA (cel czerwiec'26 — ścieżka zaczęta)
 AUTON-01 (ścieżka auto-assign NIE ISTNIEJE w kodzie — `AUTO_APPROVE_*` zero call-site), AUTON-02 (4% AUTO), AUTON-04 (próg C2 placeholder), AUTON-08 (batching/continuous re-opt), AUTON-09 (wyuczony model ETA). A2 shadow = pierwszy krok Fazy 1.
