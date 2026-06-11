@@ -1520,6 +1520,19 @@ V325_NEW_COURIER_PENALTY_LOW_ADVANTAGE = -50   # advantage < 20 (default discoun
 V325_NEW_COURIER_HIGH_ADV_THRESHOLD = 50.0
 V325_NEW_COURIER_MED_ADV_THRESHOLD = 20.0
 
+# SP-B2-RAMPA (2026-06-11, roadmapa BARTEK 2.0; Z-18 + mining H13/B6).
+# Rampa nowych kurierów zamiast niewidzialności: przez pierwsze
+# NEW_COURIER_RAMP_DELIVERIES dostaw kandydat tier='new' wchodzi do selekcji
+# TYLKO na krótkie, proste kursy (dist ≤ MAX_KM, pusta torba, poza strefą
+# śmierci 14-17) ze stałym malusem RAMP_MALUS zamiast gradientu/-1e9; kursy
+# poza profilem → sentinel -1e9 (sort na koniec — kandydat ZOSTAJE w puli,
+# ALWAYS-PROPOSE zachowane). Po rampie → normalne reguły R-04 (gradient wyżej).
+# Licznik dostaw: courier_reliability.json (regen daily 04:30; brak wpisu = 0).
+# Flaga: ENABLE_NEW_COURIER_RAMP w flags.json (hot-reload, default ON).
+NEW_COURIER_RAMP_DELIVERIES = int(_os.environ.get("NEW_COURIER_RAMP_DELIVERIES", "30"))
+NEW_COURIER_RAMP_MAX_KM = float(_os.environ.get("NEW_COURIER_RAMP_MAX_KM", "2.5"))
+NEW_COURIER_RAMP_MALUS = float(_os.environ.get("NEW_COURIER_RAMP_MALUS", "-20.0"))
+
 # V3.26 STEP 1 (R-11 TRANSPARENCY-RATIONALE) — decision rationale dla każdej
 # propozycji: top 3 factors + advantage vs next-best. Visible w Telegram
 # proposal text + serialized in shadow_decisions/learning_log dla audit.

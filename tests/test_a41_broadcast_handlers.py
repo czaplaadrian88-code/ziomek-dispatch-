@@ -113,28 +113,59 @@ def main():
     expect(f"50 processed (got {n})", n == 50)
 
     # ---- TEST 11: end-to-end via real event_bus + subscriber ----
+    # SP-B2-RAMPA fix flake + lekcja #180 (2026-06-11): test emitował do
+    # PRODUKCYJNEGO events.db (śmieci a41_test_* w broadcast backlogu) i
+    # czytał fresh-cursor poll z limit=20 — gdy zaległość CONFIG_RELOAD
+    # przekroczyła 20 (cleanup pomija peak), nasz event NIE mieścił się
+    # w pierwszej stronie → fail zależny od stanu prod. Teraz: tymczasowa
+    # baza (wzorzec test_event_bus_audit_log._setup_tmp_db).
     print("\n=== test 11: e2e emit_config_reload → BroadcastSubscriber → handler ===")
     with tempfile.TemporaryDirectory() as tmpdir:
         sub_state = Path(tmpdir) / "subscriber.json"
-        # Use real DB, real subscriber, real emit
         import os
-        scope_test = f"a41_test_{os.getpid()}"
-        eid = event_bus.emit_config_reload(scope=scope_test, payload={"a41_test": True})
-        expect("emit returns event_id", bool(eid))
+        import sqlite3 as _sq
+        tmp_db = str(Path(tmpdir) / "events_a41.db")
+        conn = _sq.connect(tmp_db)
+        conn.executescript("""
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                order_id TEXT,
+                courier_id TEXT,
+                payload TEXT,
+                created_at TEXT NOT NULL,
+                processed_at TEXT,
+                status TEXT DEFAULT 'pending'
+            );
+            CREATE INDEX idx_events_status ON events(status);
+            CREATE TABLE processed_events (
+                event_id TEXT PRIMARY KEY,
+                processed_at TEXT NOT NULL
+            );
+        """)
+        conn.commit()
+        conn.close()
+        _orig_db_path = event_bus._db_path
+        event_bus._db_path = lambda: tmp_db
+        try:
+            scope_test = f"a41_test_{os.getpid()}"
+            eid = event_bus.emit_config_reload(scope=scope_test, payload={"a41_test": True})
+            expect("emit returns event_id", bool(eid))
 
-        sub = BroadcastSubscriber(consumer_id="test_e2e", state_path=sub_state)
-        new_events = sub.poll(["CONFIG_RELOAD"], limit=20)
-        # We can have many other broadcast events in DB; filter ours
-        ours = [e for e in new_events if (e.get("payload") or {}).get("scope") == scope_test]
-        expect(f"e2e subscriber poll picks up our event ({len(ours)} matched)", len(ours) >= 1)
+            sub = BroadcastSubscriber(consumer_id="test_e2e", state_path=sub_state)
+            new_events = sub.poll(["CONFIG_RELOAD"], limit=20)
+            ours = [e for e in new_events if (e.get("payload") or {}).get("scope") == scope_test]
+            expect(f"e2e subscriber poll picks up our event ({len(ours)} matched)", len(ours) >= 1)
 
-        n = broadcast_handlers.dispatch_config_reload(ours, "test_e2e")
-        expect("handler processed e2e events", n >= 1)
+            n = broadcast_handlers.dispatch_config_reload(ours, "test_e2e")
+            expect("handler processed e2e events", n >= 1)
 
-        # Cursor advance — second poll should NOT redeliver our event
-        again = sub.poll(["CONFIG_RELOAD"], limit=20)
-        again_ours = [e for e in again if (e.get("payload") or {}).get("scope") == scope_test]
-        expect("cursor advance: no redelivery of our event", len(again_ours) == 0)
+            # Cursor advance — second poll should NOT redeliver our event
+            again = sub.poll(["CONFIG_RELOAD"], limit=20)
+            again_ours = [e for e in again if (e.get("payload") or {}).get("scope") == scope_test]
+            expect("cursor advance: no redelivery of our event", len(again_ours) == 0)
+        finally:
+            event_bus._db_path = _orig_db_path
 
     # ---- TEST 12: BroadcastSubscriber import via 4 workers ----
     print("\n=== test 12: 4 workers import broadcast wire OK ===")

@@ -1191,13 +1191,55 @@ def _v326_build_rationale(best: "Candidate", feasible: list) -> dict:
     }
 
 
-def _v325_new_courier_penalty(feasible: list, order_id=None) -> list:
-    """V3.25 STEP C (R-04 NEW-COURIER-CAP gradient).
+_NEW_COURIER_DELIV_CACHE = {"mtime": None, "data": {}}
+
+
+def _new_courier_deliveries(cid) -> int:
+    """SP-B2-RAMPA: licznik dostaw kuriera z courier_reliability.json (n_delivered).
+
+    Cache wg mtime (ten sam plik co feed A2, osobny cache — inny kontrakt).
+    Brak pliku / brak wpisu (min_history=5 wycina świeżych) / zły format → 0,
+    czyli rampa AKTYWNA — konserwatywnie traktujemy nieznanego jako nowego.
+    Plik regenerowany daily 04:30 — licznik rośnie raz dziennie (wystarcza:
+    rampa to dziesiątki dostaw, nie minuty).
+    """
+    import os as _os3
+    p = getattr(C, "A2_RELIABILITY_FEED_PATH", "")
+    try:
+        mt = _os3.path.getmtime(p)
+    except OSError:
+        return 0
+    if _NEW_COURIER_DELIV_CACHE["mtime"] != mt:
+        data = {}
+        try:
+            import json as _json2
+            d = _json2.load(open(p, encoding="utf-8"))
+            for k, v in (d.get("couriers") or {}).items():
+                if isinstance(v, dict) and isinstance(v.get("n_delivered"), (int, float)):
+                    data[str(k)] = int(v["n_delivered"])
+        except Exception as _e:
+            log.warning(f"SP-B2-RAMPA: courier_reliability load fail ({p}): {_e!r} — liczniki=0")
+            data = {}
+        _NEW_COURIER_DELIV_CACHE.update(mtime=mt, data=data)
+    return int(_NEW_COURIER_DELIV_CACHE["data"].get(str(cid), 0))
+
+
+def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
+    """V3.25 STEP C (R-04 NEW-COURIER-CAP gradient) + SP-B2-RAMPA (2026-06-11).
 
     Post-scoring penalty layer dla kurierów z tier_label='new'. Mimicked po
     _demote_blind_empty pattern (V3.16) — read-modify candidate.score, re-sort.
 
-    Logic per candidate gdzie metrics.cs_tier_label == 'new':
+    SP-B2-RAMPA (flaga ENABLE_NEW_COURIER_RAMP, hot-reload, default ON):
+    przez pierwsze NEW_COURIER_RAMP_DELIVERIES (30) dostaw nowy kurier:
+    - kurs "rampowy" (km_to_pickup ≤ 2,5 ∧ bag==0 ∧ slot ≠ high_risk 14-17)
+      → stały malus NEW_COURIER_RAMP_MALUS (-20) zamiast gradientu — nowy
+      STAJE SIĘ widzialny dla krótkich kursów (Z-18: człowiek tak robi, B6);
+    - kurs poza profilem → sentinel -1e9 (sort na koniec, kandydat zostaje
+      w puli — ALWAYS-PROPOSE; mining H13: dni 0-7 = 16,8% breach).
+    Po rampie (≥30 dostaw) lub flaga OFF → dotychczasowa logika niżej.
+
+    Logic per candidate gdzie metrics.cs_tier_label == 'new' (post-rampa):
     - bag_size_before >= 2 → HARD SKIP (effective -inf score, sort to end)
     - else: compute advantage = candidate.score - max(non-new alt scores)
       - advantage >= 50 → penalty -10 (objectively significantly better)
@@ -1221,12 +1263,65 @@ def _v325_new_courier_penalty(feasible: list, order_id=None) -> list:
     ]
     max_non_new = max(non_new_scores) if non_new_scores else None
 
+    ramp_on = bool(C.flag("ENABLE_NEW_COURIER_RAMP", True))
+    ramp_deliveries = int(getattr(C, "NEW_COURIER_RAMP_DELIVERIES", 30))
+    ramp_max_km = float(getattr(C, "NEW_COURIER_RAMP_MAX_KM", 2.5))
+    ramp_malus = float(getattr(C, "NEW_COURIER_RAMP_MALUS", -20.0))
+
     NEG_INF = -1e9
     for cand in feasible:
         m = getattr(cand, "metrics", {}) or {}
         if m.get("cs_tier_label") != "new":
             continue
         bag_before = m.get("bag_size_before", 0) or 0
+
+        # ── SP-B2-RAMPA: pierwsze N dostaw = tylko kursy rampowe ──
+        if ramp_on:
+            _deliv = _new_courier_deliveries(cand.courier_id)
+            if _deliv < ramp_deliveries:
+                _km = m.get("km_to_pickup")
+                _slot = calib_maps.time_slot_warsaw(now)
+                _block = None
+                if bag_before > 0:
+                    _block = "bag_niepusty"
+                elif _km is None or float(_km) > ramp_max_km:
+                    _block = f"dystans_{_km if _km is not None else 'brak'}km"
+                elif _slot == "high_risk":
+                    _block = "slot_14_17"
+                if _block is None:
+                    cand.score = cand.score + ramp_malus
+                    m["v325_new_courier_penalty"] = ramp_malus
+                    m["new_courier_ramp"] = {
+                        "active": True, "eligible": True, "deliveries": _deliv,
+                        "malus": ramp_malus, "km_to_pickup": _km, "slot": _slot,
+                    }
+                    m["v325_new_courier_flag"] = (
+                        f"🆕 NOWY KURIER (rampa {_deliv}/{ramp_deliveries}) — "
+                        f"krótki kurs {_km:.1f} km, pusta torba"
+                    )
+                    log.info(
+                        f"SP-B2-RAMPA order={order_id} cid={cand.courier_id} ELIGIBLE "
+                        f"deliv={_deliv} km={_km} slot={_slot} new_score={cand.score:.2f}"
+                    )
+                else:
+                    cand.score = NEG_INF
+                    m["v325_new_courier_penalty"] = NEG_INF
+                    m["new_courier_ramp"] = {
+                        "active": True, "eligible": False, "reason": _block,
+                        "deliveries": _deliv, "km_to_pickup": _km, "slot": _slot,
+                    }
+                    m["v325_new_courier_flag"] = (
+                        f"🆕 NOWY KURIER (rampa {_deliv}/{ramp_deliveries}) — "
+                        f"kurs poza rampą ({_block})"
+                    )
+                    log.info(
+                        f"SP-B2-RAMPA order={order_id} cid={cand.courier_id} BLOCK={_block} "
+                        f"deliv={_deliv} km={_km} slot={_slot}"
+                    )
+                continue
+            # post-rampa: licznik do telemetrii, dalej normalne reguły R-04
+            m["new_courier_ramp"] = {"active": False, "deliveries": _deliv}
+
         if bag_before >= C.V325_NEW_COURIER_BAG_HARD_SKIP_AT:
             cand.score = NEG_INF
             m["v325_new_courier_penalty"] = NEG_INF
@@ -3971,7 +4066,8 @@ def _assess_order_impl(
     feasible.sort(key=lambda c: (-c.score, c.metrics.get("bundle_level3_dev") if c.metrics.get("bundle_level3_dev") is not None else 999.0))
 
     # V3.25 STEP C (R-04): NEW-COURIER-CAP gradient (flag-gated, default False).
-    feasible = _v325_new_courier_penalty(feasible, order_id)
+    # SP-B2-RAMPA: now dla slotu rampy (high_risk 14-17 wyłączony z rampy).
+    feasible = _v325_new_courier_penalty(feasible, order_id, now=now)
 
     # V3.26 STEP 2 (R-05): speed multiplier adjustment (flag-gated, default False).
     feasible = _v326_speed_multiplier_adjust(feasible, order_id)

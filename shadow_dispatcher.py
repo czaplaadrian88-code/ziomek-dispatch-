@@ -202,7 +202,10 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        # Z-09: late_pickup_*/new_pickup_* były explicit tylko w LOCATION A
                        # (alternatives) — best (LOCATION B) ich nie miał. Prefiks wyrównuje
                        # oba miejsca (LOCATION B dostaje przez _propagate na out["best"]).
-                       "late_pickup_", "new_pickup_")
+                       "late_pickup_", "new_pickup_",
+                       # SP-B2-RAMPA (2026-06-11): new_courier_ramp dict (active/eligible/
+                       # deliveries/malus|reason) — LOCATION A+B przez propagate.
+                       "new_courier_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
