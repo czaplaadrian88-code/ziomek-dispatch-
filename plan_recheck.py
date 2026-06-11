@@ -606,11 +606,40 @@ def _retime_stops(stops, pos, anchor_departure, orders_state, now):
     return out
 
 
+def _repair_dropoffs_after_pickups(seq):
+    """Dostawy wyprzedzone przez sortowanie odbiorów → przenieś tuż ZA ich odbiór.
+
+    Worek PRZEPLATANY (odbiór→dostawa→odbiór): sortowanie odbiorów wg committed
+    potrafi wepchnąć dostawę przed jej własny odbiór. Stary fail-safe rezygnował
+    wtedy z CAŁEGO sortowania → inwersja odbiorów zostawała w kanonie i w apce
+    (case Mateusz O 11.06: Zapiecek 16:23 przed Kebab Król 16:21). Zamiast
+    rezygnować, każdą taką dostawę wstawiamy bezpośrednio za jej odbiór
+    (kolejność względna reszty bez zmian). Przeniesienie dostawy W PRAWO nie
+    tworzy nowych naruszeń → pętla domyka się w ≤ liczbie naruszeń; twardy limit
+    iteracji = defense-in-depth. None gdy się nie domknęła (caller zostawia
+    sekwencję bez zmian — zachowanie jak dawny fail-safe). Lustrzany helper w
+    courier_api/courier_orders.py (klucz 'kind' zamiast 'type')."""
+    out = list(seq)
+    for _ in range(len(out) * len(out) + 1):
+        pidx = {str(s.get("order_id")): i for i, s in enumerate(out)
+                if s.get("type") == "pickup"}
+        viol = next((i for i, s in enumerate(out)
+                     if s.get("type") == "dropoff"
+                     and pidx.get(str(s.get("order_id")), -1) > i), None)
+        if viol is None:
+            return out
+        pi = pidx[str(out[viol].get("order_id"))]
+        s = out.pop(viol)
+        out.insert(pi, s)   # po pop odbiór zjechał na pi-1 → insert(pi) = tuż za nim
+    return None
+
+
 def _apply_canon_order_invariants(stops, orders_state):
     """F6: TWARDE niezmienniki kolejności kanonu (1:1 jak build_view, ale w decyzji):
     (1) niesione (picked_up) dropoffy → front (kolejność względna zachowana),
     (2) odbiory wg committed (czas_kuriera) rosnąco. Deterministyczne, niezależne od
-    pilności R6. Fail-safe 'dostawa po odbiorze' (cofa reorder odbiorów gdy złamałby).
+    pilności R6. 'Dostawa po odbiorze' trzymana przez repair pass (dostawa
+    wyprzedzona sortem → tuż za swój odbiór), NIE przez rezygnację z sortu.
     Zwraca przestawioną listę (te same obiekty stopów). Re-czasowanie robi caller."""
     seq = list(stops)
     carried = {str(oid) for oid, o in orders_state.items()
@@ -634,11 +663,9 @@ def _apply_canon_order_invariants(stops, orders_state):
             new_seq = list(seq)
             for pos_i, s in zip(pickup_positions, ordered):
                 new_seq[pos_i] = s
-            pidx, didx = {}, {}
-            for i, s in enumerate(new_seq):
-                (pidx if s.get("type") == "pickup" else didx)[str(s.get("order_id"))] = i
-            if all(didx.get(oid) is None or pi <= didx[oid] for oid, pi in pidx.items()):
-                seq = new_seq
+            repaired = _repair_dropoffs_after_pickups(new_seq)
+            if repaired is not None:
+                seq = repaired
     return seq
 
 

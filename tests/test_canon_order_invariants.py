@@ -48,15 +48,36 @@ def test_combined_carried_then_committed():
     assert _seq(out)[1:3] == [("pickup", "B"), ("pickup", "A")]  # B(18:06) < A(18:15)
 
 
-def test_failsafe_blocks_delivery_before_pickup():
-    # przeplecione (p:A d:A p:B d:B) — swap odbiorów złamałby 'dostawa po odbiorze'
-    # → fail-safe trzyma oryginał (ta sama ostrożność co build_view).
+def test_interleaved_bag_repaired_not_abandoned():
+    # przeplecione (p:A d:A p:B d:B) — swap odbiorów wepchnąłby d:A przed p:A.
+    # Stary fail-safe rezygnował z całego sortu → inwersja odbiorów zostawała
+    # w apce (case Mateusz O 11.06: Zapiecek 16:23 przed Kebab Król 16:21).
+    # Teraz: repair pass przenosi d:A tuż za p:A — sort committed UTRZYMANY
+    # i 'dostawa po odbiorze' UTRZYMANA.
     orders = {"A": {"status": "assigned", "czas_kuriera_warsaw": _ck("18:20")},
               "B": {"status": "assigned", "czas_kuriera_warsaw": _ck("18:05")}}
     stops = [{"order_id": "A", "type": "pickup"}, {"order_id": "A", "type": "dropoff"},
              {"order_id": "B", "type": "pickup"}, {"order_id": "B", "type": "dropoff"}]
     out = PR._apply_canon_order_invariants(stops, orders)
-    assert _seq(out) == _seq(stops)  # bez zmian (fail-safe)
+    assert _seq(out) == [("pickup", "B"), ("pickup", "A"),
+                         ("dropoff", "A"), ("dropoff", "B")]
+
+
+def test_interleaved_three_orders_repaired():
+    # 3 zlecenia, środkowe przeplecione — wszystkie odbiory wg committed,
+    # każda dostawa nadal po swoim odbiorze.
+    orders = {"A": {"status": "assigned", "czas_kuriera_warsaw": _ck("18:30")},
+              "B": {"status": "assigned", "czas_kuriera_warsaw": _ck("18:10")},
+              "C": {"status": "assigned", "czas_kuriera_warsaw": _ck("18:20")}}
+    stops = [{"order_id": "A", "type": "pickup"}, {"order_id": "A", "type": "dropoff"},
+             {"order_id": "C", "type": "pickup"}, {"order_id": "C", "type": "dropoff"},
+             {"order_id": "B", "type": "pickup"}, {"order_id": "B", "type": "dropoff"}]
+    out = PR._apply_canon_order_invariants(stops, orders)
+    pickups = [oid for typ, oid in _seq(out) if typ == "pickup"]
+    assert pickups == ["B", "C", "A"]
+    pos = {(typ, oid): i for i, (typ, oid) in enumerate(_seq(out))}
+    for oid in ("A", "B", "C"):
+        assert pos[("pickup", oid)] < pos[("dropoff", oid)]
 
 
 def test_already_correct_is_noop():
