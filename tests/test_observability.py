@@ -5,7 +5,7 @@ Coverage:
   2. test_no_log_when_flag_disabled — zero file write gdy flag false
   3. test_log_size_within_5ms_target — performance (avg <5ms per log call)
   4. test_atomic_append_no_corruption — concurrent append integrity
-  5. test_log_rotation_after_14d — old files deleted, fresh kept
+  5. (log_rotation usunięty 2026-06-11 — rotacja = systemowy logrotate)
   6. test_fleet_filter_log_complete — passed/rejected schema
   7. test_score_breakdown_sum_equals_total — sanity (when breakdown provided)
   8. test_serialize_candidate_tolerates_dict — duck typing
@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
-from dispatch_v2.observability import candidate_logger as cl, log_rotation
+from dispatch_v2.observability import candidate_logger as cl
 
 
 passed, failed = 0, 0
@@ -169,28 +169,9 @@ def test_atomic_append_no_corruption():
 t("atomic_append_no_corruption (4 threads × 25 writes)", test_atomic_append_no_corruption)
 
 
-# ---------- 5. Log rotation ----------
-
-def test_log_rotation_after_14d():
-    tmp = Path(tempfile.mkdtemp())
-    try:
-        # Create files: today, 5d old, 14d old, 20d old
-        now = datetime.now(timezone.utc)
-        for offset, name in [(0, "today"), (5, "5d"), (14, "14d_boundary"), (20, "20d_old")]:
-            d = (now - timedelta(days=offset)).strftime("%Y%m%d")
-            (tmp / f"candidate_decisions_{d}.jsonl").write_text("{}\n")
-        # rotation z retention_days=14: cutoff = today - 14d. Files older niż cutoff → deleted.
-        # 14d boundary is == cutoff (NOT <), so kept. 20d_old < cutoff → deleted.
-        counts = log_rotation.rotate(log_dir=tmp, retention_days=14, now_dt=now)
-        assert counts["deleted"] == 1, f"expected 1 deleted (20d), got {counts}"
-        assert counts["kept"] == 3
-        remaining = sorted(f.name for f in tmp.iterdir())
-        assert "candidate_decisions_" + (now - timedelta(days=20)).strftime("%Y%m%d") + ".jsonl" not in remaining
-    finally:
-        if tmp.exists():
-            for f in tmp.iterdir(): f.unlink()
-            tmp.rmdir()
-t("log_rotation_after_14d", test_log_rotation_after_14d)
+# ---------- 5. Log rotation — moduł USUNIĘTY 2026-06-11 (higiena E5) ----------
+# Rotację robi systemowy logrotate (/etc/logrotate.d/dispatch-v2); drugi
+# mechanizm w Pythonie bez prod call-site = mylący (klasa incydentu 06-08).
 
 
 # ---------- 6. Fleet filter ----------

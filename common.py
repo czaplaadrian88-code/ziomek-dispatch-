@@ -543,13 +543,12 @@ AUTO_APPROVE_THRESHOLD = 130
 AUTO_APPROVE_MIN_GAP = 10
 AUTO_APPROVE_ENABLED = False
 
-# ─── A1/A2: Anomaly detection (flag off, implementacja w F2.1c) ───
-# Wymaga implementacji context.restaurant_prep_variance() i
-# context.courier_recent_delay() na bazie restaurant_meta.json / shadow_decisions.jsonl.
+# ─── Anomaly detection: prep-variance ZREALIZOWANE jako FAIL-04 (2026-06-06,
+# shadow LIVE, konsument dispatch_pipeline._detect_prep_variance_anomaly).
+# Odnoga kurierska (courier_recent_delay/CIRCUIT_BREAK/ANOMALY_DETECTION) —
+# USUNIĘTA 2026-06-11 (higiena, werdykt CB-01 06.08: A2 reliability soft-score
+# JEST tym mechanizmem; martwe definicje bez call-site od F2.1c).
 RESTAURANT_PREP_VARIANCE_HARD_MIN = 15
-COURIER_RECENT_DELAY_HARD_MIN = 10
-COURIER_CIRCUIT_BREAK_PENALTY = 25
-ANOMALY_DETECTION_ENABLED = False
 
 # FAIL-04 (2026-06-06): shadow-first detekcja "slepej wiary w prep panelu".
 # Gdy wysoko-wariancyjna restauracja (restaurant_meta prep_variance_high) ma
@@ -788,7 +787,9 @@ V328_MASS_FAIL_RATIO_THRESHOLD = float(_os.environ.get("V328_MASS_FAIL_RATIO_THR
 ENABLE_V328_HEURISTIC_SHIFT_END_GUARD = _os.environ.get(
     "ENABLE_V328_HEURISTIC_SHIFT_END_GUARD", "1") == "1"
 ENABLE_PANEL_IS_FREE_AUTHORITATIVE = _os.environ.get("ENABLE_PANEL_IS_FREE_AUTHORITATIVE", "1") == "1"
-ENABLE_BUNDLE_VALUE_SCORING = _os.environ.get("ENABLE_BUNDLE_VALUE_SCORING", "0") == "1"
+# ENABLE_BUNDLE_VALUE_SCORING USUNIĘTA 2026-06-11 (BUNDLE-08: zero call-site
+# od V3.18; kandydat V3.22 nigdy nie zbudowany — bundle value liczy dziś
+# bonus-stack V32x + SYNCWORKA/PLN-shadow Bartek 2.0).
 
 # ============================================================
 # V3.19a picked_up drop floor (2026-04-19)

@@ -4781,7 +4781,8 @@ def _assess_order_impl(
                 if hasattr(top[0], "metrics") and isinstance(top[0].metrics, dict):
                     top[0].metrics["lgbm_shadow"] = _shadow_result.to_dict()
                 # V3.28-TICKET2: explicit LGBM_SHADOW log line dla validation gate pipeline.
-                # Format grep-friendly: oid + winners + agreement + fallback + latency + pool_size.
+                # C4 (2026-06-11): "pool_size" było mylące (to LICZBA KANDYDATÓW
+                # SCOROWANYCH przez LGBM, nie pula kurierów) → candidates_scored.
                 try:
                     _lgbm_winner = _shadow_result.winner_cid
                     _current_winner = str(top[0].courier_id) if top else None
@@ -4791,7 +4792,7 @@ def _assess_order_impl(
                         f"winner_lgbm={_lgbm_winner} winner_current={_current_winner} "
                         f"agreement={_agreement} fallback={_shadow_result.fallback_reason or 'NONE'} "
                         f"latency_ms={_shadow_result.latency_ms} "
-                        f"pool_size={_shadow_result.n_candidates_scored} "
+                        f"candidates_scored={_shadow_result.n_candidates_scored} "
                         f"model_version={_shadow_result.model_version}"
                     )
                 except Exception as _log_e:

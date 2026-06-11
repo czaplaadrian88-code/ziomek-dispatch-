@@ -927,9 +927,9 @@ def test_F8_R7_longhaul_constants():
 
 
 def test_F9_auto_approve_flag_off_beton():
-    """AUTO_APPROVE_ENABLED=False betonowo do F2.1c. ANOMALY też flag off."""
+    """AUTO_APPROVE_ENABLED=False betonowo do F2.1c.
+    (ANOMALY_DETECTION_ENABLED usunięta 2026-06-11 — higiena CB-01.)"""
     assert C.AUTO_APPROVE_ENABLED is False
-    assert C.ANOMALY_DETECTION_ENABLED is False
     assert C.AUTO_APPROVE_THRESHOLD == 130
     assert C.AUTO_APPROVE_MIN_GAP == 10
 
