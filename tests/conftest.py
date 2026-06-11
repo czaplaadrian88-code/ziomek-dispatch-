@@ -167,6 +167,10 @@ def _stripped_flags_copy():
             d = json.load(f)
         for k in getattr(_c, "ETAP4_DECISION_FLAGS", ()):
             d.pop(k, None)
+        # E7-doklejka 3: numeryczne override'y stałych (BUG A/B) też precz —
+        # testy sterują przez patch stałej modułu, nie żywy flags.json.
+        for k in getattr(_c, "FLAGS_JSON_NUMERIC_OVERRIDES", ()):
+            d.pop(k, None)
         fd, p = tempfile.mkstemp(prefix="flags_etap4_stripped_", suffix=".json")
         with os.fdopen(fd, "w") as f:
             json.dump(d, f)
@@ -268,6 +272,8 @@ def _isolate_flags_json(monkeypatch, tmp_path):
         import json as _json
         _d = _json.loads(_tmp_flags.read_text(encoding="utf-8"))
         for _k in getattr(common, "ETAP4_DECISION_FLAGS", ()):
+            _d.pop(_k, None)
+        for _k in getattr(common, "FLAGS_JSON_NUMERIC_OVERRIDES", ()):
             _d.pop(_k, None)
         _tmp_flags.write_text(_json.dumps(_d), encoding="utf-8")
     except Exception:

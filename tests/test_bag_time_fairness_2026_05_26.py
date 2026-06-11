@@ -27,7 +27,7 @@ def test_buga_block_present_in_source():
     assert "BUG A shadow (2026-05-26)" in src
     start = src.find("BUG A shadow (2026-05-26)")
     assert start > 0
-    section = src[start:start + 2500]
+    section = src[start:start + 4200]  # E7-doklejki 3+4: blok urósł (shadow compute-always)
     assert "sum_bag_time_min_v" in section
     assert "max_bag_time_min_v" in section
     assert "fifo_violations" in section
@@ -41,7 +41,7 @@ def test_buga_flag_gates_bonus_only_metrics_always():
     """Metryki sum/max/fifo zbierane ZAWSZE; bonus_* tylko gdy flag ON."""
     src = inspect.getsource(dispatch_pipeline)
     start = src.find("BUG A shadow (2026-05-26)")
-    section = src[start:start + 2500]
+    section = src[start:start + 4200]  # E7-doklejki 3+4: blok urósł (shadow compute-always)
     # Bonus blok zagnieżdżony pod flag check
     assert "ENABLE_BAG_TIME_FAIRNESS_SCORING" in section
     # Sanity: bag_times computed BEFORE flag check (raw)
@@ -56,7 +56,7 @@ def test_buga_keys_in_enriched_metrics():
     # Plik znajdzie sekcję dla enriched_metrics
     em_start = src.find('"sum_bag_time_min": round(sum_bag_time_min_v')
     assert em_start > 0
-    section = src[em_start:em_start + 800]
+    section = src[em_start:em_start + 1600]  # E7: klucze _shadow w środku
     for key in (
         "sum_bag_time_min", "max_bag_time_min", "fifo_violations",
         "bonus_bag_time_sum", "bonus_bag_time_max", "bonus_fifo_violation",

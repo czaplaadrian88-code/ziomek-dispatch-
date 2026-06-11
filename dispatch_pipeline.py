@@ -3166,6 +3166,9 @@ def _assess_order_impl(
         bonus_bag_time_sum = 0.0
         bonus_bag_time_max = 0.0
         bonus_fifo_violation = 0.0
+        shadow_bag_time_sum = 0.0
+        shadow_bag_time_max = 0.0
+        shadow_fifo_violation = 0.0
         if plan is not None:
             _pu_map = getattr(plan, "pickup_at", None) or {}
             _do_map = getattr(plan, "predicted_delivered_at", None) or {}
@@ -3190,10 +3193,25 @@ def _assess_order_impl(
                     _do_j = _do_map.get(_oid_j)
                     if _do_i is not None and _do_j is not None and _do_i > _do_j:
                         fifo_violations += 1
-            if getattr(C, "ENABLE_BAG_TIME_FAIRNESS_SCORING", False):
-                bonus_bag_time_sum = -C.BAG_TIME_SUM_PENALTY_PER_MIN * sum_bag_time_min_v
-                bonus_bag_time_max = -C.BAG_TIME_MAX_PENALTY_PER_MIN * max_bag_time_min_v
-                bonus_fifo_violation = -C.BAG_TIME_FIFO_TIE_PENALTY * fifo_violations
+            # E7-doklejki 3+4 (2026-06-11): kary liczone ZAWSZE (lekcja #186 —
+            # pola shadow przy OFF były zerowe, werdykt A/B wymagał rekonstrukcji
+            # ze surowców); flaga gate'uje WYŁĄCZNIE aplikację do score. Stałe:
+            # flags.json → stała modułu/env (flip A werdyktu = max+FIFO,
+            # BAG_TIME_SUM_PENALTY_PER_MIN=0.0 ustawiane w flags.json).
+            _fl_a = C.load_flags()
+            shadow_bag_time_sum = -float(_fl_a.get(
+                "BAG_TIME_SUM_PENALTY_PER_MIN",
+                C.BAG_TIME_SUM_PENALTY_PER_MIN)) * sum_bag_time_min_v
+            shadow_bag_time_max = -float(_fl_a.get(
+                "BAG_TIME_MAX_PENALTY_PER_MIN",
+                C.BAG_TIME_MAX_PENALTY_PER_MIN)) * max_bag_time_min_v
+            shadow_fifo_violation = -float(_fl_a.get(
+                "BAG_TIME_FIFO_TIE_PENALTY",
+                C.BAG_TIME_FIFO_TIE_PENALTY)) * fifo_violations
+            if C.decision_flag("ENABLE_BAG_TIME_FAIRNESS_SCORING"):
+                bonus_bag_time_sum = shadow_bag_time_sum
+                bonus_bag_time_max = shadow_bag_time_max
+                bonus_fifo_violation = shadow_fifo_violation
 
         # === BUG B shadow (2026-05-26): kara za detour pickup-not-on-route ===
         # r5_pickup_detour_total_km już zbierane przez route_metrics jako metryka
@@ -3202,9 +3220,21 @@ def _assess_order_impl(
         bonus_r5_pickup_detour_penalty = 0.0
         _r5_detour_km_raw = metrics.get("r5_pickup_detour_total_km")
         _r5_detour_km = float(_r5_detour_km_raw) if isinstance(_r5_detour_km_raw, (int, float)) else 0.0
-        if getattr(C, "ENABLE_R5_PICKUP_DETOUR_PENALTY", False):
-            _excess_km = max(0.0, _r5_detour_km - C.R5_DETOUR_FREE_THRESHOLD_KM)
-            bonus_r5_pickup_detour_penalty = -C.R5_DETOUR_PENALTY_PER_KM * _excess_km
+        # E7-doklejki 3+4: kara liczona ZAWSZE (lekcja #186), flaga gate'uje
+        # tylko score; stałe flags.json → moduł/env (flip B werdyktu 11.06 =
+        # R5_DETOUR_PENALTY_PER_KM=4.0 w flags.json, eskalacja 8.0 po 7 dniach).
+        _fl_b = C.load_flags()
+        _excess_km = max(0.0, _r5_detour_km - float(_fl_b.get(
+            "R5_DETOUR_FREE_THRESHOLD_KM", C.R5_DETOUR_FREE_THRESHOLD_KM)))
+        shadow_r5_pickup_detour_penalty = -float(_fl_b.get(
+            "R5_DETOUR_PENALTY_PER_KM", C.R5_DETOUR_PENALTY_PER_KM)) * _excess_km
+        # DETOUR-01 (audyt 03.06, case oid=477347 detour 9.1 km z dodatnim
+        # score): marker ekstremalnego detouru przy worku ≥2 — obserwowalność
+        # pod decyzję o vecie PO danych z flipu B, bez wpływu na score.
+        r5_detour_extreme = bool(
+            _r5_detour_km > C.R5_DETOUR_EXTREME_KM and len(bag_sim) >= 2)
+        if C.decision_flag("ENABLE_R5_PICKUP_DETOUR_PENALTY"):
+            bonus_r5_pickup_detour_penalty = shadow_r5_pickup_detour_penalty
 
         # R9 stopover — differential tax (bag=0 → 0, bag=1 → -8, bag=2 → -16, ...).
         # Rationale: scoring porównuje kandydatów względem kosztu DODANIA stopu,
@@ -4059,9 +4089,18 @@ def _assess_order_impl(
             "bonus_bag_time_sum": round(bonus_bag_time_sum, 2),
             "bonus_bag_time_max": round(bonus_bag_time_max, 2),
             "bonus_fifo_violation": round(bonus_fifo_violation, 2),
+            # E7-doklejki 3+4 (2026-06-11): wersje _shadow liczone ZAWSZE
+            # (lekcja #186) — bonus_* powyżej = zaaplikowane (0 przy OFF).
+            "bonus_bag_time_sum_shadow": round(shadow_bag_time_sum, 2),
+            "bonus_bag_time_max_shadow": round(shadow_bag_time_max, 2),
+            "bonus_fifo_violation_shadow": round(shadow_fifo_violation, 2),
             # BUG B shadow (2026-05-26): pickup-not-on-route penalty.
             # r5_pickup_detour_total_km już wyżej w enriched_metrics.
             "bonus_r5_pickup_detour_penalty": round(bonus_r5_pickup_detour_penalty, 2),
+            "bonus_r5_pickup_detour_penalty_shadow": round(shadow_r5_pickup_detour_penalty, 2),
+            # DETOUR-01: marker ekstremalny (detour > R5_DETOUR_EXTREME_KM ∧
+            # bag≥2) — explicit w shadow_dispatcher LOC A+B (bez prefiksu auto).
+            "r5_detour_extreme": r5_detour_extreme,
             # R1 progresywny + V319H guard shadow (2026-05-28): delty
             # zawsze policzone (observability), score-application gated flagą.
             # Auto-propagated via prefix bonus_ w shadow_dispatcher.

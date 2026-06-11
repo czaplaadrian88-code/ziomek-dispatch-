@@ -83,6 +83,23 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_SOON_FREE_CANDIDATE",
     # SP-B2-LOADGOV (2026-06-11): governor load floty (🛑 ACK).
     "ENABLE_FLEET_LOAD_GOVERNOR",
+    # E7-doklejka 3 (2026-06-11): BUG A/B geometry/fairness z env-only do
+    # kanonu flags.json PRZED flipem (werdykty eod_drafts/2026-06-11/
+    # VERDICT_bug_a_b.md; sekwencja: B 4.0/km → ≥7 dni → A max+FIFO bez SUM).
+    "ENABLE_BAG_TIME_FAIRNESS_SCORING",
+    "ENABLE_R5_PICKUP_DETOUR_PENALTY",
+)
+
+# E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
+# startowych werdyktu razem z flagą, hot-reload bez restartu; fallback = stała
+# modułu/env). Test-izolacja: conftest wycina te klucze z tmp-kopii flags.json
+# (jak ETAP4_DECISION_FLAGS), żeby testy sterowały przez patch stałej.
+FLAGS_JSON_NUMERIC_OVERRIDES = (
+    "BAG_TIME_SUM_PENALTY_PER_MIN",
+    "BAG_TIME_MAX_PENALTY_PER_MIN",
+    "BAG_TIME_FIFO_TIE_PENALTY",
+    "R5_DETOUR_PENALTY_PER_KM",
+    "R5_DETOUR_FREE_THRESHOLD_KM",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
@@ -2115,6 +2132,11 @@ R5_DETOUR_PENALTY_PER_KM = float(_os.environ.get(
     "R5_DETOUR_PENALTY_PER_KM", "8.0"))
 R5_DETOUR_FREE_THRESHOLD_KM = float(_os.environ.get(
     "R5_DETOUR_FREE_THRESHOLD_KM", "0.5"))
+# DETOUR-01 (audyt 03.06): marker ekstremalnego detouru przy worku ≥2 — sama
+# obserwowalność (case oid=477347: 9.1 km z dodatnim score); decyzja o vecie
+# dopiero po danych z flipu B (werdykt 11.06: 8.0/km bywał już za mocny).
+R5_DETOUR_EXTREME_KM = float(_os.environ.get(
+    "R5_DETOUR_EXTREME_KM", "7.5"))
 
 # BUG F long-term (2026-05-26): klastry geograficzne (osiedla). Reguła Adriana:
 # „Kraszewskiego i Wąska są blisko siebie na jednym osiedlu (Case D), szybkie

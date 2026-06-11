@@ -308,6 +308,8 @@ def _serialize_candidate(c) -> dict:
         "bug2_pickup_src": m.get("bug2_pickup_src"),
         "r5_pickup_detour_total_km": m.get("r5_pickup_detour_total_km"),
         "r5_pickup_detour_per_order_km": m.get("r5_pickup_detour_per_order_km"),
+        # DETOUR-01 (E7-doklejka, 2026-06-11): marker ekstremalnego detouru.
+        "r5_detour_extreme": m.get("r5_detour_extreme"),
         "bonus_r1_corridor": m.get("bonus_r1_corridor"),
         "bonus_r5_detour": m.get("bonus_r5_detour"),
         # V3.28 P3-D4 (2026-05-11): R6 picked_up delta-based reject — heurystyka czy
@@ -597,6 +599,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "bug2_pickup_src": best_m.get("bug2_pickup_src"),
             "r5_pickup_detour_total_km": best_m.get("r5_pickup_detour_total_km"),
             "r5_pickup_detour_per_order_km": best_m.get("r5_pickup_detour_per_order_km"),
+            # DETOUR-01 (E7-doklejka, 2026-06-11): marker ekstremalnego detouru.
+            "r5_detour_extreme": best_m.get("r5_detour_extreme"),
             "bonus_r1_corridor": best_m.get("bonus_r1_corridor"),
             "bonus_r5_detour": best_m.get("bonus_r5_detour"),
             # V3.28 P3-D4 (2026-05-11): R6 picked_up delta reject (LOCATION B — best)

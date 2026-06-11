@@ -22,7 +22,7 @@ def test_bugb_block_present_in_source():
     src = inspect.getsource(dispatch_pipeline)
     assert "BUG B shadow (2026-05-26)" in src
     start = src.find("BUG B shadow (2026-05-26)")
-    section = src[start:start + 800]
+    section = src[start:start + 2200]  # E7-doklejki 3+4: blok urósł (shadow compute-always)
     assert "r5_pickup_detour_total_km" in section
     assert "ENABLE_R5_PICKUP_DETOUR_PENALTY" in section
     assert "R5_DETOUR_FREE_THRESHOLD_KM" in section
@@ -74,7 +74,7 @@ def test_bugb_metrics_get_handles_missing():
     """Source: gdy metrics.get('r5_pickup_detour_total_km') == None → 0.0 default."""
     src = inspect.getsource(dispatch_pipeline)
     start = src.find("BUG B shadow (2026-05-26)")
-    section = src[start:start + 800]
+    section = src[start:start + 2200]  # E7-doklejki 3+4: blok urósł (shadow compute-always)
     # Defensywne pobranie z metrics
     assert "metrics.get(\"r5_pickup_detour_total_km\")" in section
     # isinstance guard dla None
