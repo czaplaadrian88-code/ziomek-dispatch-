@@ -76,6 +76,9 @@ ETAP4_DECISION_FLAGS = (
     # cross-proces (shadow/czasowka/plan-recheck liczą tym samym silnikiem).
     "ENABLE_BUNDLE_SYNC_SPREAD",
     "ENABLE_PREP_BIAS_TABLE",
+    # SP-B2-REPO (2026-06-11): aplikacja kary repozycjonowania do score
+    # (telemetria zawsze; LIVE flip = 🛑 ACK).
+    "ENABLE_REPO_COST_LIVE",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
@@ -1536,6 +1539,11 @@ V325_NEW_COURIER_MED_ADV_THRESHOLD = 20.0
 NEW_COURIER_RAMP_DELIVERIES = int(_os.environ.get("NEW_COURIER_RAMP_DELIVERIES", "30"))
 NEW_COURIER_RAMP_MAX_KM = float(_os.environ.get("NEW_COURIER_RAMP_MAX_KM", "2.5"))
 NEW_COURIER_RAMP_MALUS = float(_os.environ.get("NEW_COURIER_RAMP_MALUS", "-20.0"))
+# Solo-guard (replay 11.06: rozszerzony sentinel dawał 6-7 NOWYCH eskalacji
+# PROPOSE→KOORD/tydz. gdy zablokowany nowy był jedyną opcją — łamało
+# ALWAYS-PROPOSE). Gdy po blokadach CAŁA pula < MIN_PROPOSE_SCORE: najlepszy
+# zablokowany wraca na pre_block + SOLO_MALUS (mocno zdemotowany, proposable).
+NEW_COURIER_RAMP_SOLO_MALUS = float(_os.environ.get("NEW_COURIER_RAMP_SOLO_MALUS", "-60.0"))
 
 # SP-B2-SYNCWORKA (2026-06-11, H1 — największa dźwignia bundlingu).
 # Worki o spreadzie gotowości >10 min niosą 50% WSZYSTKICH breachy
@@ -1557,6 +1565,20 @@ SYNC_SPREAD_BUNDLE_ZERO_MIN = float(_os.environ.get("SYNC_SPREAD_BUNDLE_ZERO_MIN
 # z samych deklaracji.
 ENABLE_PREP_BIAS_TABLE = _os.environ.get(
     "ENABLE_PREP_BIAS_TABLE", "0") == "1"
+
+# SP-B2-REPO (2026-06-11, raport §3.1.4): koszt repozycjonowania w selekcji.
+# Mediana 3,56 km z ostatniego dropa do następnego odbioru = ukryta połowa
+# kilometrów (najlepsi 2,4, ogon 4,3); score widzi tylko km_to_pickup
+# z BIEŻĄCEJ pozycji. s_repo = kara za dead-head: km(drop poprzedzający
+# nowy odbiór w PLANIE kandydata → nowy pickup); odbiór PRZED dropami
+# (po drodze / pusty bag) → 0 (km_to_pickup już to wycenia — bez podwójnego
+# liczenia). Kara = -REPO_COST_MAX_PENALTY * min(1, km/REPO_KM_FULL_SCALE)
+# — waga rzędu komponentu dystansu (~30 pkt), nie 5-pkt bonus.
+# Flagi (wzorzec ETAQ): _SHADOW = telemetria (ON), _LIVE = aplikacja do score
+# (OFF, flip = 🛑 ACK Adriana po replay).
+REPO_COST_MAX_PENALTY = float(_os.environ.get("REPO_COST_MAX_PENALTY", "30.0"))
+REPO_KM_FULL_SCALE = float(_os.environ.get("REPO_KM_FULL_SCALE", "4.0"))
+ENABLE_REPO_COST_LIVE = _os.environ.get("ENABLE_REPO_COST_LIVE", "0") == "1"
 
 # V3.26 STEP 1 (R-11 TRANSPARENCY-RATIONALE) — decision rationale dla każdej
 # propozycji: top 3 factors + advantage vs next-best. Visible w Telegram

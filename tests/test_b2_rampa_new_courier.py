@@ -93,7 +93,8 @@ def test_ramp_blocks_long_distance():
 
 def test_ramp_blocks_missing_km():
     new = _Cand("555", 60.0, km=None)
-    dp._v325_new_courier_penalty([new], order_id="t2b", now=T_LUNCH)
+    alt = _Cand("123", 30.0, tier="gold")
+    dp._v325_new_courier_penalty([new, alt], order_id="t2b", now=T_LUNCH)
     assert new.score == NEG_INF
     assert new.metrics["new_courier_ramp"]["reason"] == "dystans_brakkm"
 
@@ -101,14 +102,16 @@ def test_ramp_blocks_missing_km():
 def test_ramp_blocks_nonempty_bag():
     """bag=1 przechodził w starym gradiencie — rampa jest surowsza (H13)."""
     new = _Cand("555", 60.0, bag=1, km=1.0)
-    dp._v325_new_courier_penalty([new], order_id="t3", now=T_LUNCH)
+    alt = _Cand("123", 30.0, tier="gold")
+    dp._v325_new_courier_penalty([new, alt], order_id="t3", now=T_LUNCH)
     assert new.score == NEG_INF
     assert new.metrics["new_courier_ramp"]["reason"] == "bag_niepusty"
 
 
 def test_ramp_blocks_high_risk_slot():
     new = _Cand("555", 60.0, km=1.0)
-    dp._v325_new_courier_penalty([new], order_id="t4", now=T_HIGH_RISK)
+    alt = _Cand("123", 30.0, tier="gold")
+    dp._v325_new_courier_penalty([new, alt], order_id="t4", now=T_HIGH_RISK)
     assert new.score == NEG_INF
     ramp = new.metrics["new_courier_ramp"]
     assert ramp["reason"] == "slot_14_17" and ramp["slot"] == "high_risk"
@@ -148,12 +151,37 @@ def test_non_new_tier_untouched():
     assert "new_courier_ramp" not in gold.metrics
 
 
-def test_always_propose_sole_blocked_candidate_stays_in_pool():
-    """Jedyny kandydat poza rampą: -1e9, ale ZOSTAJE w feasible (zero KOORD)."""
+def test_always_propose_sole_blocked_gets_solo_rescue():
+    """SOLO-GUARD (replay 11.06): jedyny kandydat poza rampą NIE spada na
+    -1e9 (KOORD all_candidates_low_score) — wraca na pre_block -60,
+    proposable (> MIN_PROPOSE_SCORE), z flagą solo_rescue."""
     new = _Cand("555", 60.0, km=7.0)
     out = dp._v325_new_courier_penalty([new], order_id="t9", now=T_LUNCH)
     assert len(out) == 1 and out[0] is new
+    assert new.score == 0.0  # 60 + (-60)
+    assert new.score >= C.MIN_PROPOSE_SCORE
+    ramp = new.metrics["new_courier_ramp"]
+    assert ramp["eligible"] is False and ramp.get("solo_rescue") is True
+    assert "jedyna opcja" in new.metrics["v325_new_courier_flag"]
+
+
+def test_solo_guard_inactive_when_proposable_alternative_exists():
+    """Zdrowa alternatywa w puli → sentinel zostaje (brak rescue)."""
+    new = _Cand("555", 60.0, km=7.0)
+    alt = _Cand("123", 30.0, tier="gold")
+    dp._v325_new_courier_penalty([new, alt], order_id="t9b", now=T_LUNCH)
     assert new.score == NEG_INF
+    assert new.metrics["new_courier_ramp"].get("solo_rescue") is None
+    assert alt.score == 30.0
+
+
+def test_solo_guard_rescues_best_of_two_blocked():
+    """Dwóch zablokowanych, zero innych: rescue TYLKO lepszego pre_block."""
+    n1 = _Cand("555", 60.0, km=7.0)
+    n2 = _Cand("556", 40.0, km=9.0)
+    out = dp._v325_new_courier_penalty([n1, n2], order_id="t9c", now=T_LUNCH)
+    assert n1.score == 0.0 and n2.score == NEG_INF
+    assert out[0] is n1
 
 
 def test_ramp_eligible_sorts_above_blocked():

@@ -1267,6 +1267,7 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
     ramp_deliveries = int(getattr(C, "NEW_COURIER_RAMP_DELIVERIES", 30))
     ramp_max_km = float(getattr(C, "NEW_COURIER_RAMP_MAX_KM", 2.5))
     ramp_malus = float(getattr(C, "NEW_COURIER_RAMP_MALUS", -20.0))
+    _ramp_blocked = []  # [(cand, pre_block_score)] — do solo-guard niżej
 
     NEG_INF = -1e9
     for cand in feasible:
@@ -1304,6 +1305,7 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
                         f"deliv={_deliv} km={_km} slot={_slot} new_score={cand.score:.2f}"
                     )
                 else:
+                    _ramp_blocked.append((cand, float(cand.score)))
                     cand.score = NEG_INF
                     m["v325_new_courier_penalty"] = NEG_INF
                     m["new_courier_ramp"] = {
@@ -1356,6 +1358,37 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
             f"V325_NEW_COURIER order={order_id} cid={cand.courier_id} "
             f"adv={advantage} penalty={penalty} new_score={cand.score:.2f}"
         )
+
+    # SP-B2-RAMPA SOLO-GUARD (replay 11.06, ALWAYS-PROPOSE): sentinel -1e9 nie
+    # może wepchnąć decyzji w KOORD "wszyscy poniżej progu propozycji", gdy
+    # zablokowany nowy był jedyną realną opcją (6-7 eskalacji/tydz. w replayu).
+    # Gdy po blokadach ŻADEN feasible nie ma score >= MIN_PROPOSE_SCORE:
+    # najlepszy zablokowany wraca na pre_block + SOLO_MALUS — mocno
+    # zdemotowany, ale proposable; decyduje człowiek, nie cisza.
+    if _ramp_blocked:
+        _min_prop = float(getattr(C, "MIN_PROPOSE_SCORE", -100.0))
+        _all_below = all(
+            (not isinstance(c.score, (int, float))) or c.score < _min_prop
+            for c in feasible
+        )
+        if _all_below:
+            _best_blocked, _pre = max(_ramp_blocked, key=lambda t: t[1])
+            _solo = float(getattr(C, "NEW_COURIER_RAMP_SOLO_MALUS", -60.0))
+            _best_blocked.score = _pre + _solo
+            _bm = getattr(_best_blocked, "metrics", {}) or {}
+            if isinstance(_bm.get("new_courier_ramp"), dict):
+                _bm["new_courier_ramp"]["solo_rescue"] = True
+                _bm["new_courier_ramp"]["malus"] = _solo
+            _bm["v325_new_courier_penalty"] = _solo
+            _bm["v325_new_courier_flag"] = (
+                (_bm.get("v325_new_courier_flag") or "")
+                + " — jedyna opcja, proponuję mimo rampy"
+            )
+            log.info(
+                f"SP-B2-RAMPA SOLO-RESCUE order={order_id} "
+                f"cid={_best_blocked.courier_id} pre={_pre:.1f} "
+                f"score={_best_blocked.score:.1f}"
+            )
 
     # Re-sort feasible po score (descending) + tie-break corridor deviation
     feasible.sort(
@@ -1455,6 +1488,72 @@ def _compute_sync_spread(bag_sim, bag_raw, new_ready_at, new_restaurant, now):
         return None, len(times)
     spread = (max(times) - min(times)).total_seconds() / 60.0
     return round(spread, 1), len(times)
+
+
+def _repo_cost_penalty(repo_km) -> float:
+    """SP-B2-REPO: kara za dead-head repozycjonowania (≤0).
+
+    -REPO_COST_MAX_PENALTY * min(1, km / REPO_KM_FULL_SCALE); km None/0 → 0.
+    Waga rzędu komponentu dystansu (~30 pkt @ ≥4 km; mediana floty 3,56 km
+    → ~-27), NIE 5-punktowy bonus (raport §3.1.4).
+    """
+    try:
+        km = float(repo_km)
+    except (TypeError, ValueError):
+        return 0.0
+    if km <= 0.0:
+        return 0.0
+    max_pen = float(getattr(C, "REPO_COST_MAX_PENALTY", 30.0))
+    scale = float(getattr(C, "REPO_KM_FULL_SCALE", 4.0))
+    if scale <= 0:
+        return -max_pen
+    return -max_pen * min(1.0, km / scale)
+
+
+def _compute_repo_cost_km(bag_sim, plan, order_id, pickup_coords):
+    """SP-B2-REPO (2026-06-11): km dead-headu do nowego odbioru wg PLANU kandydata.
+
+    Szuka dropu poprzedzającego nowy pickup w planie: bag-zlecenia z
+    predicted_delivered_at <= pickup_at[nowego]. Jest taki → km(haversine)
+    od jego delivery_coords do pickup nowego (ukryta połowa kilometrów,
+    raport §3.1.4). Nowy odbiór PRZED dropami (kurier jedzie od razu /
+    po drodze) → None (km_to_pickup z bieżącej pozycji już to wycenia —
+    zero podwójnego liczenia z BUG-2/road-to-rest: tamte są czasowe/correlate
+    z bieżącą pozycją, ta kara dotyczy wyłącznie końcówki istniejącego worka).
+
+    Zwraca (repo_km | None, last_drop_oid | None). Fail-soft.
+    """
+    if not bag_sim or plan is None or pickup_coords is None:
+        return None, None
+    try:
+        pickup_at = plan.pickup_at or {}
+        t_pick = pickup_at.get(order_id)
+        if t_pick is None:
+            return None, None
+        if t_pick.tzinfo is None:
+            t_pick = t_pick.replace(tzinfo=timezone.utc)
+        delivered = plan.predicted_delivered_at or {}
+        by_oid = {str(o.order_id): o for o in bag_sim}
+        last_t = None
+        last_oid = None
+        for oid, t_drop in delivered.items():
+            if str(oid) == str(order_id) or str(oid) not in by_oid:
+                continue
+            if t_drop is None:
+                continue
+            if t_drop.tzinfo is None:
+                t_drop = t_drop.replace(tzinfo=timezone.utc)
+            if t_drop <= t_pick and (last_t is None or t_drop > last_t):
+                last_t = t_drop
+                last_oid = str(oid)
+        if last_oid is None:
+            return None, None
+        drop_coords = getattr(by_oid[last_oid], "delivery_coords", None)
+        if not drop_coords:
+            return None, None
+        return round(haversine(tuple(drop_coords), tuple(pickup_coords)), 2), last_oid
+    except Exception:
+        return None, None
 
 
 def _demote_blind_empty(feasible: list, order_id=None) -> list:
@@ -3429,6 +3528,21 @@ def _assess_order_impl(
                     bonus_sync_spread_shadow_delta = round(
                         bonus_sync_spread - _sync_zero_part, 2)
 
+        # === SP-B2-REPO (2026-06-11): koszt repozycjonowania (dead-head) ===
+        # km(drop poprzedzający nowy odbiór w planie → nowy pickup) — ukryta
+        # połowa kilometrów (raport §3.1.4, mediana 3,56 km). Telemetria za
+        # ENABLE_REPO_COST_SHADOW (ON); aplikacja do score za 🛑
+        # ENABLE_REPO_COST_LIVE (decision_flag, OFF). Odbiór przed dropami /
+        # pusty bag → None (km_to_pickup już wycenia — bez podwójnego liczenia).
+        repo_km = None
+        repo_last_drop_oid = None
+        bonus_repo_cost_shadow_delta = 0.0
+        if C.flag("ENABLE_REPO_COST_SHADOW", True):
+            repo_km, repo_last_drop_oid = _compute_repo_cost_km(
+                bag_sim, plan, order_id, pickup_coords)
+            if repo_km is not None:
+                bonus_repo_cost_shadow_delta = round(_repo_cost_penalty(repo_km), 2)
+
         # === R1 progresywny + V319H guard SHADOW (2026-05-28) ===
         # Cele:
         #   R1: cosine < -0.3 dostaje progresywnie mocniejszą karę niż flat
@@ -3575,6 +3689,9 @@ def _assess_order_impl(
         # aplikacja za flagą decyzyjną — shadow-first, flip 🛑 ACK Adriana.
         if C.decision_flag("ENABLE_BUNDLE_SYNC_SPREAD"):
             final_score = final_score + bonus_sync_spread_shadow_delta
+        # SP-B2-REPO (2026-06-11): kara repozycjonowania — aplikacja za 🛑 flagą.
+        if C.decision_flag("ENABLE_REPO_COST_LIVE"):
+            final_score = final_score + bonus_repo_cost_shadow_delta
 
         # V3.27 Bug Z Q5: SOFT bundle score multiplier dla cross-quadrant bag.
         # 0.0 (cross-quadrant) → score *= 0.1
@@ -3742,6 +3859,11 @@ def _assess_order_impl(
             "sync_spread_bundle_zeroed": sync_spread_bundle_zeroed,
             "bonus_sync_spread": bonus_sync_spread,
             "bonus_sync_spread_shadow_delta": bonus_sync_spread_shadow_delta,
+            # SP-B2-REPO (2026-06-11): dead-head do nowego odbioru wg planu.
+            # repo_* prefix w shadow_dispatcher (LOCATION A+B); bonus_ auto.
+            "repo_km": repo_km,
+            "repo_last_drop_oid": repo_last_drop_oid,
+            "bonus_repo_cost_shadow_delta": bonus_repo_cost_shadow_delta,
             # F5 RETURN-TO-RESTAURANT (2026-05-24)
             "bonus_r_return_rest": round(bonus_r_return_rest, 2),
             "return_to_restaurant": metrics.get("return_to_restaurant"),

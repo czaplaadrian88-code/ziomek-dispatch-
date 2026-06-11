@@ -209,7 +209,10 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        # SP-B2-SYNCWORKA (2026-06-11): sync_ready_spread_min /
                        # sync_spread_n / sync_spread_bundle_zeroed (bonus_sync_*
                        # idzie prefiksem bonus_) — LOCATION A+B przez propagate.
-                       "sync_")
+                       "sync_",
+                       # SP-B2-REPO (2026-06-11): repo_km / repo_last_drop_oid
+                       # (bonus_repo_cost_shadow_delta przez prefix bonus_).
+                       "repo_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
