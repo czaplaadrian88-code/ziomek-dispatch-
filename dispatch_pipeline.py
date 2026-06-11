@@ -585,42 +585,8 @@ def _best_effort_sort_key(c):
     return (r6_pov, sla, bucket, -score, dur)
 
 
-def _selection_veto_winner(feasible, cos_block: float, cos_ok: float,
-                           informed_only: bool):
-    """SELECTION VETO SHADOW (2026-06-01) — czysty, testowalny.
-
-    Gdy LIVE zwycięzca (feasible[0]) jest mocno przeciw-kierunkowy (cosine <
-    cos_block) A istnieje feasible kandydat NIE-cross (cosine > cos_ok lub None =
-    solo/brak konfliktu kierunku) → zwróć najlepszy-score nie-cross. To modeluje
-    „odrocz odbiór / oddaj solo, nie łam kierunku" zamiast krzyżowo-miejskiego
-    bundla. informed_only → veto przenosi tylko na kuriera ze znaną pozycją.
-
-    Zwraca (veto_winner, changed: bool, reason: str). SHADOW — caller NIGDY nie
-    mutuje `feasible` na tej podstawie (zero zmiany zachowania).
-    """
-    if not feasible:
-        return None, False, "empty_pool"
-    live = feasible[0]
-    lm = (live.metrics if (hasattr(live, "metrics") and live.metrics) else {}) or {}
-    lcos = lm.get("r1_avg_pairwise_cosine")
-    if not isinstance(lcos, (int, float)) or lcos >= cos_block:
-        return live, False, "live_not_cross"
-    alts = []
-    for c in feasible:
-        if c is live:
-            continue
-        m = (c.metrics if (hasattr(c, "metrics") and c.metrics) else {}) or {}
-        cc = m.get("r1_avg_pairwise_cosine")
-        # nie-cross = brak sygnału kierunku (solo/empty) LUB cosine > cos_ok
-        if isinstance(cc, (int, float)) and cc <= cos_ok:
-            continue
-        if informed_only and m.get("pos_source") not in INFORMED_POS_SOURCES:
-            continue
-        alts.append(c)
-    if not alts:
-        return live, False, "no_noncross_alt"
-    veto = max(alts, key=lambda c: (getattr(c, "score", 0.0) or 0.0))
-    return veto, True, "veto_applied"
+# _selection_veto_winner — RETIRED 2026-06-11 (ACK Adrian po digescie at#113;
+# A2 soft-score dowiózł, veto nadpisywałoby legalne decyzje — werdykt 08.06).
 
 
 def _r6_breach_guard_winner(feasible, hard_max_min: float):
@@ -4620,7 +4586,6 @@ def _assess_order_impl(
     pickup_extension_redirect = None
     late_pickup_shadow = None
     r6_danger_shadow = None  # Fix #6: rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6
-    selection_veto_shadow = None  # 2026-06-01: veto kierunkowe — shadow only
     r6_breach_guard_shadow = None  # 2026-06-05: GATE-02 post-selekcyjny guard R6 — shadow only
     if getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False) and feasible:
         _lp_tier = _late_pickup_tier  # module-level (testowalny)
@@ -4751,64 +4716,8 @@ def _assess_order_impl(
                 f"suggested_pickup={_wm.get('new_pickup_eta_iso')}"
             )
 
-    # SELECTION VETO SHADOW (2026-06-01) — liczy „co by wybrał veto kierunkowe"
-    # OBOK live (feasible[0] po wszystkich passach), w DWÓCH dialach RÓWNOLEGLE:
-    #   informed = flip tylko do kuriera ze znaną pozycją (bezpieczny);
-    #   any      = flip też do pustych/solo (agresywny, oddaj solo zamiast cross-bundla).
-    # SHADOW: NIGDY nie mutuje feasible ani best → zero zmiany zachowania.
-    # Serializowane top-level → grep SELECTION_VETO_SHADOW. Flaga default OFF.
-    if getattr(C, "ENABLE_SELECTION_VETO_SHADOW", False) and feasible:
-        try:
-            _sv_block = float(getattr(C, "SELECTION_VETO_COS_BLOCK", -0.5))
-            _sv_ok = float(getattr(C, "SELECTION_VETO_COS_OK", -0.1))
-            _sv_live = feasible[0]
-            _sv_lm = (_sv_live.metrics or {}) if hasattr(_sv_live, "metrics") else {}
-
-            def _sv_dial(_informed_only):
-                _w, _ch, _r = _selection_veto_winner(
-                    feasible, _sv_block, _sv_ok, _informed_only)
-                if _ch and _w is not None:
-                    _m = (_w.metrics or {}) if hasattr(_w, "metrics") else {}
-                    return {
-                        "changed": True, "reason": _r,
-                        "veto_winner_cid": str(getattr(_w, "courier_id", "")),
-                        "veto_winner_name": getattr(_w, "name", None),
-                        "veto_winner_score": round(float(getattr(_w, "score", 0.0) or 0.0), 2),
-                        "veto_winner_cosine": _m.get("r1_avg_pairwise_cosine"),
-                        "veto_winner_deliv_spread_km": _m.get("deliv_spread_km"),
-                        "veto_winner_bag_size": _m.get("r6_bag_size"),
-                        "veto_winner_pos_source": _m.get("pos_source"),
-                    }
-                return {"changed": False, "reason": _r}
-
-            _sv_informed = _sv_dial(True)
-            _sv_any = _sv_dial(False)
-            selection_veto_shadow = {
-                "cos_block": _sv_block,
-                "cos_ok": _sv_ok,
-                "changed_any": bool(_sv_informed.get("changed") or _sv_any.get("changed")),
-                "live_winner_cid": str(getattr(_sv_live, "courier_id", "")),
-                "live_winner_name": getattr(_sv_live, "name", None),
-                "live_winner_score": round(float(getattr(_sv_live, "score", 0.0) or 0.0), 2),
-                "live_winner_cosine": _sv_lm.get("r1_avg_pairwise_cosine"),
-                "live_winner_deliv_spread_km": _sv_lm.get("deliv_spread_km"),
-                "live_winner_bag_size": _sv_lm.get("r6_bag_size"),
-                "live_winner_pos_source": _sv_lm.get("pos_source"),
-                "informed": _sv_informed,   # dial bezpieczny
-                "any": _sv_any,             # dial agresywny
-            }
-            if selection_veto_shadow["changed_any"]:
-                log.info(
-                    f"SELECTION_VETO_SHADOW order={order_id} "
-                    f"live={_sv_live.courier_id}(cos={_sv_lm.get('r1_avg_pairwise_cosine')},"
-                    f"spread={_sv_lm.get('deliv_spread_km')},bag={_sv_lm.get('r6_bag_size')}) "
-                    f"informed={_sv_informed.get('veto_winner_cid') if _sv_informed.get('changed') else '-'} "
-                    f"any={_sv_any.get('veto_winner_cid') if _sv_any.get('changed') else '-'}"
-                )
-        except Exception as _sv_e:
-            log.warning(
-                f"SELECTION_VETO_SHADOW build fail order={order_id}: {_sv_e}")
-            selection_veto_shadow = None
+    # SELECTION VETO SHADOW — RETIRED 2026-06-11 (ACK po at#113): A2 dowiózł,
+    # werdykt 08.06 = veto nadpisywałoby legalne decyzje. Kod usunięty w całości.
 
     # R6BREACH-01 / GATE-02 SHADOW (2026-06-05) — liczy „kogo wskazałby post-selekcyjny
     # guard R6" OBOK live (feasible[0] po wszystkich passach). Gdy live zwycięzca łamie
@@ -5274,7 +5183,6 @@ def _assess_order_impl(
         )
         # R-LATE-PICKUP: propozycja przedłużonego czasu odbioru (tier 1/2) dla renderu.
         _result_pf.pickup_extension_redirect = pickup_extension_redirect
-        _result_pf.selection_veto_shadow = selection_veto_shadow
         # R-LATE-PICKUP Opcja B (2026-05-31): stary-vs-nowy zwycięzca tieringu (shadow).
         _result_pf.late_pickup_shadow = late_pickup_shadow
         # Fix #6 (2026-05-31): rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6 (shadow).

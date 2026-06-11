@@ -773,8 +773,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # {"changed": bool, live_winner_*, veto_winner_*} gdy live zwycięzca jest
         # mocno-cross (cos<BLOCK) a istnieje feasible nie-cross → veto wskazałby
         # innego. SHADOW — zero zmiany zachowania. None gdy flaga OFF. grep:
-        # SELECTION_VETO_SHADOW. Pomiar: eod_drafts/2026-06-01/SELECTION_*.
-        "selection_veto_shadow": getattr(result, "selection_veto_shadow", None),
+        # selection_veto_shadow RETIRED 2026-06-11 (ACK po at#113).
         # LOAD-AWARE SELECTION SHADOW (2026-06-07): counterfactual dystrybucji
         # load-aware (najmniej obłożony z PEŁNEGO rosteru) vs argmax-best. Pełny
         # snapshot rosteru (cid/bag/feas/score/pos) do walidacji offline modelem +
