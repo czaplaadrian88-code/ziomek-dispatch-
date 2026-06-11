@@ -6,50 +6,68 @@ UTC. Porównuje lunch 09-13 UTC: PRE (06-01, przed flipem) vs POST (06-02, po fl
 na żywym shadow logu (winner plans, bag>=1). Replay przewidywał carry>35 i R6
 breaches w dół ~o połowę. Wysyła digest Telegram. Read-only.
 
-at-job: at -t 202606021300 (venv python).
+at-job: at -t 202606021300 (venv python). Parametryzacja: --pre YYYY-MM-DD
+--post YYYY-MM-DD (domyślnie pre=2026-06-01 baseline, post=dziś UTC).
+
+ROTACJA LOGU (fix 2026-06-02): shadow_decisions.jsonl rotuje się o północy →
+dane dnia PRE lądują w .jsonl.1 (potem .2 …, ew. .gz). Czytamy WSZYSTKIE pliki
+(bieżący + zrotowane), inaczej PRE z poprzedniego dnia = n=0 → fałszywy werdykt
+(at#111 06-02 wysłał błędne „carry WZRÓSŁ" bo czytał tylko żywy plik).
 """
-import json, sys
-from datetime import datetime
+import json, sys, glob, os, gzip
+from datetime import datetime, timezone
 
 SHADOW = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+
+
+def _open(path):
+    return gzip.open(path, "rt") if path.endswith(".gz") else open(path)
+
+
+def _shadow_files():
+    # bieżący + zrotowane (.1/.2/…, ew. .gz); dana data żyje w dokładnie jednym
+    # pliku (rotacja o północy, brak overlapu) → bez ryzyka double-count.
+    files = [SHADOW] + sorted(glob.glob(SHADOW + ".*"))
+    return [p for p in files if os.path.exists(p)]
 
 
 def window_stats(date_iso, h0=9, h1=13):
     n = carry = r6any = r6sum = eafter = 0
     therm = []
-    with open(SHADOW) as f:
-        for line in f:
-            if f'"{date_iso}' not in line[:40]:
-                continue
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            t = datetime.fromisoformat(d["ts"])
-            if not (t.date().isoformat() == date_iso and h0 <= t.hour < h1):
-                continue
-            b = d.get("best") or {}
-            pl = b.get("plan") or {}
-            if (b.get("bag_size_before") or 0) < 1:
-                continue
-            n += 1
-            th = b.get("objm_max_thermal_age_min")
-            if isinstance(th, (int, float)):
-                therm.append(th)
-                if th > 35:
-                    carry += 1
-            bc = b.get("objm_r6_breach_count")
-            if isinstance(bc, (int, float)):
-                r6sum += bc
-                if bc > 0:
-                    r6any += 1
-            new = str(d.get("order_id"))
-            dv = pl.get("predicted_delivered_at") or {}
-            ndv = dv.get(new)
-            if ndv:
-                ndt = datetime.fromisoformat(ndv)
-                if any(str(k) != new and datetime.fromisoformat(v) > ndt for k, v in dv.items()):
-                    eafter += 1
+    for path in _shadow_files():
+        with _open(path) as f:
+            for line in f:
+                if f'"{date_iso}' not in line[:40]:
+                    continue
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                t = datetime.fromisoformat(d["ts"])
+                if not (t.date().isoformat() == date_iso and h0 <= t.hour < h1):
+                    continue
+                b = d.get("best") or {}
+                pl = b.get("plan") or {}
+                if (b.get("bag_size_before") or 0) < 1:
+                    continue
+                n += 1
+                th = b.get("objm_max_thermal_age_min")
+                if isinstance(th, (int, float)):
+                    therm.append(th)
+                    if th > 35:
+                        carry += 1
+                bc = b.get("objm_r6_breach_count")
+                if isinstance(bc, (int, float)):
+                    r6sum += bc
+                    if bc > 0:
+                        r6any += 1
+                new = str(d.get("order_id"))
+                dv = pl.get("predicted_delivered_at") or {}
+                ndv = dv.get(new)
+                if ndv:
+                    ndt = datetime.fromisoformat(ndv)
+                    if any(str(k) != new and datetime.fromisoformat(v) > ndt for k, v in dv.items()):
+                        eafter += 1
     return {"n": n, "carry": carry, "r6any": r6any, "r6sum": r6sum, "eafter": eafter,
             "therm_p90": (sorted(therm)[int(0.9 * (len(therm) - 1))] if therm else 0)}
 
@@ -76,8 +94,19 @@ def build_digest(pre_date="2026-06-01", post_date="2026-06-02"):
     return "\n".join(L)
 
 
+def _arg(name, default):
+    if name in sys.argv:
+        i = sys.argv.index(name)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return default
+
+
 def main():
-    text = build_digest()
+    today = datetime.now(timezone.utc).date().isoformat()
+    pre = _arg("--pre", "2026-06-01")
+    post = _arg("--post", today)
+    text = build_digest(pre_date=pre, post_date=post)
     if "--dry" in sys.argv:
         print(text)
         return

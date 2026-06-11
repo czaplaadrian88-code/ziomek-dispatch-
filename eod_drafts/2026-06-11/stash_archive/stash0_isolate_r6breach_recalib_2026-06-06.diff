@@ -1,0 +1,476 @@
+diff --git a/common.py b/common.py
+index 35ff6cc..87863a0 100644
+--- a/common.py
++++ b/common.py
+@@ -258,20 +258,32 @@ V326_OSRM_TRAFFIC_TABLE = {
+         (20, 21, 1.10),
+         (21, 24, 1.05),
+     ],
+-    # V3.27 Bug X fix (2026-04-25 wieczór): split weekend → saturday/sunday.
+-    # Pre-fix: weekend=1.0 flat całą dobę → matrix=raw OSRM free-flow w sobotni
+-    # peak 16-21 → 30-50% pod-estymata timing (#468508/#468509 reproduction).
+-    # Adrian's decyzja: sobota peak 12-21 conservative (max 1.2), niedziela płaska 1.0.
+-    # Memory user: "Pn-Pt 11-14 + 17-20, sobota 16-21 (długi peak), niedziela TBD".
+-    "saturday": [   # SAT (weekday()==5)
++    # V3.27 Bug X fix (2026-04-25): split weekend → saturday/sunday (static, conserw.).
++    # RECALIB WEEKEND (2026-06-05, $0): median-based z GATE B (sob n=142 / niedz n=162,
++    #   rw_results ⨝ trips_realworld). Werdykt: sob bias -2.10→-1.44 MAE 3.46→3.34;
++    #   niedz bias -2.69→-0.70 MAE 3.18 (płaskie 1.0 mocno zaniżało — F2.2 niedz 13-19 peak).
++    #   Krzywe WYGŁADZONE (cienkie godziny n<6 → konserwatywnie; analog weekday wariant B).
++    #   Walidacja: validate_weekend_smoothed.py (oba ✅ biją obecną). Caveat: weekend
++    #   n<50/dzień = sygnał wstępny; monitoruj forward. Werdykt: recalib_weekend_verdict_2026-06-05.txt.
++    "saturday": [   # SAT (weekday()==5) — recalib 06-05
+         (0, 12, 1.0),
+-        (12, 15, 1.1),
+-        (15, 17, 1.2),
+-        (17, 21, 1.2),
+-        (21, 24, 1.0),
++        (12, 13, 1.30),
++        (13, 16, 1.20),
++        (16, 17, 1.55),
++        (17, 18, 1.45),
++        (18, 21, 1.25),
++        (21, 22, 1.10),
++        (22, 24, 1.0),
+     ],
+-    "sunday": [     # SUN (weekday()==6) — drogi puste, zero peak weekend
+-        (0, 24, 1.0),
++    "sunday": [     # SUN (weekday()==6) — recalib 06-05 (NIE płaskie: peak 11-19)
++        (0, 11, 1.0),
++        (11, 12, 1.50),
++        (12, 13, 1.40),
++        (13, 15, 1.35),
++        (15, 16, 1.45),
++        (16, 19, 1.30),
++        (19, 20, 1.15),
++        (20, 24, 1.0),
+     ],
+ }
+ 
+diff --git a/dispatch_pipeline.py b/dispatch_pipeline.py
+index effa809..be485ec 100644
+--- a/dispatch_pipeline.py
++++ b/dispatch_pipeline.py
+@@ -589,6 +589,41 @@ def _selection_veto_winner(feasible, cos_block: float, cos_ok: float,
+     return veto, True, "veto_applied"
+ 
+ 
++def _r6_breach_guard_winner(feasible, hard_max_min: float):
++    """R6BREACH-01 / GATE-02 SHADOW (2026-06-05) — czysty, testowalny.
++
++    Gdy LIVE zwycięzca (feasible[0]) ŁAMIE R6 (r6_max_bag_time_min > hard_max_min,
++    35-min hard od odbioru do dostawy) A istnieje feasible kandydat „czysty"
++    (r6_max_bag_time_min <= hard_max_min) → zwróć najlepszy-score czysty. Modeluje
++    R-35MIN-MAX: „nie proponuj worka łamiącego 35 min gdy istnieje feasible
++    alternatywa ≤35" (oddaj solo / mniejszy worek / odrocz odbiór — NIE KOORD-cisza).
++
++    Zwraca (guard_winner, changed: bool, reason: str, n_clean_alts: int). SHADOW —
++    caller NIGDY nie mutuje `feasible`/`best` na tej podstawie (zero zmiany zachowania).
++    """
++    if not feasible:
++        return None, False, "empty_pool", 0
++    live = feasible[0]
++    lm = (live.metrics if (hasattr(live, "metrics") and live.metrics) else {}) or {}
++    lr6 = lm.get("r6_max_bag_time_min")
++    if not isinstance(lr6, (int, float)) or lr6 <= hard_max_min:
++        return live, False, "live_within_r6", 0
++    clean = []
++    for c in feasible:
++        if c is live:
++            continue
++        m = (c.metrics if (hasattr(c, "metrics") and c.metrics) else {}) or {}
++        cr6 = m.get("r6_max_bag_time_min")
++        # „czysty" = znany r6 ≤ hard_max. None (brak sygnału R6) NIE liczy się jako
++        # bezpieczny — konserwatywnie nie swapujemy na nieznane breach-ryzyko.
++        if isinstance(cr6, (int, float)) and cr6 <= hard_max_min:
++            clean.append(c)
++    if not clean:
++        return live, False, "no_clean_alt", 0
++    guard = max(clean, key=lambda c: (getattr(c, "score", 0.0) or 0.0))
++    return guard, True, "r6_guard_applied", len(clean)
++
++
+ def _r6_soft_penalty(r6_max_bag_time, soft_min: float, per_min: float,
+                      danger_on: bool, danger_min: float, danger_per_min: float):
+     """R6-soft kara (Fix #6 2026-05-31) — liniowa nad soft_min + EKSTRA stroma w danger zone.
+@@ -3581,6 +3616,7 @@ def _assess_order_impl(
+     late_pickup_shadow = None
+     r6_danger_shadow = None  # Fix #6: rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6
+     selection_veto_shadow = None  # 2026-06-01: veto kierunkowe — shadow only
++    r6_breach_guard_shadow = None  # 2026-06-05: GATE-02 post-selekcyjny guard R6 — shadow only
+     if getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False) and feasible:
+         _lp_tier = _late_pickup_tier  # module-level (testowalny)
+         _orig_order = {id(c): i for i, c in enumerate(feasible)}
+@@ -3769,6 +3805,61 @@ def _assess_order_impl(
+                 f"SELECTION_VETO_SHADOW build fail order={order_id}: {_sv_e}")
+             selection_veto_shadow = None
+ 
++    # R6BREACH-01 / GATE-02 SHADOW (2026-06-05) — liczy „kogo wskazałby post-selekcyjny
++    # guard R6" OBOK live (feasible[0] po wszystkich passach). Gdy live zwycięzca łamie
++    # 35-min (r6_max_bag_time_min > hard) a istnieje feasible kandydat ≤35 → guard
++    # wskazałby najlepszy-score czysty. SHADOW: NIGDY nie mutuje feasible/best → zero
++    # zmiany zachowania. Serializowane top-level → grep R6_BREACH_GUARD_SHADOW. Flaga OFF.
++    if getattr(C, "ENABLE_R6_BREACH_GUARD_SHADOW", False) and feasible:
++        try:
++            _r6_hard = float(getattr(C, "BAG_TIME_HARD_MAX_MIN", 35.0))
++            _rg_win, _rg_ch, _rg_reason, _rg_nclean = _r6_breach_guard_winner(
++                feasible, _r6_hard)
++            _rg_live = feasible[0]
++            _rg_lm = (_rg_live.metrics or {}) if hasattr(_rg_live, "metrics") else {}
++            if _rg_ch and _rg_win is not None:
++                _rg_gm = (_rg_win.metrics or {}) if hasattr(_rg_win, "metrics") else {}
++                _rg_live_score = round(float(getattr(_rg_live, "score", 0.0) or 0.0), 2)
++                _rg_guard_score = round(float(getattr(_rg_win, "score", 0.0) or 0.0), 2)
++                r6_breach_guard_shadow = {
++                    "changed": True,
++                    "reason": _rg_reason,
++                    "hard_max_min": _r6_hard,
++                    "n_clean_alts": _rg_nclean,
++                    "live_winner_cid": str(getattr(_rg_live, "courier_id", "")),
++                    "live_winner_name": getattr(_rg_live, "name", None),
++                    "live_winner_score": _rg_live_score,
++                    "live_winner_r6_max_bag_time_min": _rg_lm.get("r6_max_bag_time_min"),
++                    "live_winner_bag_size": _rg_lm.get("r6_bag_size"),
++                    "live_winner_pos_source": _rg_lm.get("pos_source"),
++                    "guard_winner_cid": str(getattr(_rg_win, "courier_id", "")),
++                    "guard_winner_name": getattr(_rg_win, "name", None),
++                    "guard_winner_score": _rg_guard_score,
++                    "guard_winner_r6_max_bag_time_min": _rg_gm.get("r6_max_bag_time_min"),
++                    "guard_winner_bag_size": _rg_gm.get("r6_bag_size"),
++                    "guard_winner_pos_source": _rg_gm.get("pos_source"),
++                    "score_gap": round(_rg_live_score - _rg_guard_score, 2),
++                }
++                log.info(
++                    f"R6_BREACH_GUARD_SHADOW order={order_id} "
++                    f"live={_rg_live.courier_id}(r6={_rg_lm.get('r6_max_bag_time_min')},"
++                    f"bag={_rg_lm.get('r6_bag_size')},score={_rg_live_score}) "
++                    f"guard={_rg_win.courier_id}(r6={_rg_gm.get('r6_max_bag_time_min')},"
++                    f"bag={_rg_gm.get('r6_bag_size')},score={_rg_guard_score}) "
++                    f"gap={round(_rg_live_score - _rg_guard_score, 2)} nclean={_rg_nclean}"
++                )
++            else:
++                r6_breach_guard_shadow = {
++                    "changed": False,
++                    "reason": _rg_reason,
++                    "hard_max_min": _r6_hard,
++                    "live_winner_r6_max_bag_time_min": _rg_lm.get("r6_max_bag_time_min"),
++                }
++        except Exception as _rg_e:
++            log.warning(
++                f"R6_BREACH_GUARD_SHADOW build fail order={order_id}: {_rg_e}")
++            r6_breach_guard_shadow = None
++
+     if feasible:
+         top = feasible[:TOP_N_CANDIDATES]
+         # V3.26 STEP 1 (R-11): build rationale dla BEST candidate (flag-gated).
+@@ -4119,6 +4210,8 @@ def _assess_order_impl(
+         _result_pf.late_pickup_shadow = late_pickup_shadow
+         # Fix #6 (2026-05-31): rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6 (shadow).
+         _result_pf.r6_danger_shadow = r6_danger_shadow
++        # GATE-02 (2026-06-05): post-selekcyjny guard R6 — kogo wskazałby guard (shadow).
++        _result_pf.r6_breach_guard_shadow = r6_breach_guard_shadow
+         _classify_and_set_auto_route(_result_pf, fleet_snapshot, order_event, now=now)
+         return _result_pf
+ 
+diff --git a/eod_drafts/2026-06-01/v4_carry_check.py b/eod_drafts/2026-06-01/v4_carry_check.py
+index 8a4babf..f7a6fe3 100644
+--- a/eod_drafts/2026-06-01/v4_carry_check.py
++++ b/eod_drafts/2026-06-01/v4_carry_check.py
+@@ -6,50 +6,68 @@ UTC. Porównuje lunch 09-13 UTC: PRE (06-01, przed flipem) vs POST (06-02, po fl
+ na żywym shadow logu (winner plans, bag>=1). Replay przewidywał carry>35 i R6
+ breaches w dół ~o połowę. Wysyła digest Telegram. Read-only.
+ 
+-at-job: at -t 202606021300 (venv python).
++at-job: at -t 202606021300 (venv python). Parametryzacja: --pre YYYY-MM-DD
++--post YYYY-MM-DD (domyślnie pre=2026-06-01 baseline, post=dziś UTC).
++
++ROTACJA LOGU (fix 2026-06-02): shadow_decisions.jsonl rotuje się o północy →
++dane dnia PRE lądują w .jsonl.1 (potem .2 …, ew. .gz). Czytamy WSZYSTKIE pliki
++(bieżący + zrotowane), inaczej PRE z poprzedniego dnia = n=0 → fałszywy werdykt
++(at#111 06-02 wysłał błędne „carry WZRÓSŁ" bo czytał tylko żywy plik).
+ """
+-import json, sys
+-from datetime import datetime
++import json, sys, glob, os, gzip
++from datetime import datetime, timezone
+ 
+ SHADOW = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+ 
+ 
++def _open(path):
++    return gzip.open(path, "rt") if path.endswith(".gz") else open(path)
++
++
++def _shadow_files():
++    # bieżący + zrotowane (.1/.2/…, ew. .gz); dana data żyje w dokładnie jednym
++    # pliku (rotacja o północy, brak overlapu) → bez ryzyka double-count.
++    files = [SHADOW] + sorted(glob.glob(SHADOW + ".*"))
++    return [p for p in files if os.path.exists(p)]
++
++
+ def window_stats(date_iso, h0=9, h1=13):
+     n = carry = r6any = r6sum = eafter = 0
+     therm = []
+-    with open(SHADOW) as f:
+-        for line in f:
+-            if f'"{date_iso}' not in line[:40]:
+-                continue
+-            try:
+-                d = json.loads(line)
+-            except Exception:
+-                continue
+-            t = datetime.fromisoformat(d["ts"])
+-            if not (t.date().isoformat() == date_iso and h0 <= t.hour < h1):
+-                continue
+-            b = d.get("best") or {}
+-            pl = b.get("plan") or {}
+-            if (b.get("bag_size_before") or 0) < 1:
+-                continue
+-            n += 1
+-            th = b.get("objm_max_thermal_age_min")
+-            if isinstance(th, (int, float)):
+-                therm.append(th)
+-                if th > 35:
+-                    carry += 1
+-            bc = b.get("objm_r6_breach_count")
+-            if isinstance(bc, (int, float)):
+-                r6sum += bc
+-                if bc > 0:
+-                    r6any += 1
+-            new = str(d.get("order_id"))
+-            dv = pl.get("predicted_delivered_at") or {}
+-            ndv = dv.get(new)
+-            if ndv:
+-                ndt = datetime.fromisoformat(ndv)
+-                if any(str(k) != new and datetime.fromisoformat(v) > ndt for k, v in dv.items()):
+-                    eafter += 1
++    for path in _shadow_files():
++        with _open(path) as f:
++            for line in f:
++                if f'"{date_iso}' not in line[:40]:
++                    continue
++                try:
++                    d = json.loads(line)
++                except Exception:
++                    continue
++                t = datetime.fromisoformat(d["ts"])
++                if not (t.date().isoformat() == date_iso and h0 <= t.hour < h1):
++                    continue
++                b = d.get("best") or {}
++                pl = b.get("plan") or {}
++                if (b.get("bag_size_before") or 0) < 1:
++                    continue
++                n += 1
++                th = b.get("objm_max_thermal_age_min")
++                if isinstance(th, (int, float)):
++                    therm.append(th)
++                    if th > 35:
++                        carry += 1
++                bc = b.get("objm_r6_breach_count")
++                if isinstance(bc, (int, float)):
++                    r6sum += bc
++                    if bc > 0:
++                        r6any += 1
++                new = str(d.get("order_id"))
++                dv = pl.get("predicted_delivered_at") or {}
++                ndv = dv.get(new)
++                if ndv:
++                    ndt = datetime.fromisoformat(ndv)
++                    if any(str(k) != new and datetime.fromisoformat(v) > ndt for k, v in dv.items()):
++                        eafter += 1
+     return {"n": n, "carry": carry, "r6any": r6any, "r6sum": r6sum, "eafter": eafter,
+             "therm_p90": (sorted(therm)[int(0.9 * (len(therm) - 1))] if therm else 0)}
+ 
+@@ -76,8 +94,19 @@ def build_digest(pre_date="2026-06-01", post_date="2026-06-02"):
+     return "\n".join(L)
+ 
+ 
++def _arg(name, default):
++    if name in sys.argv:
++        i = sys.argv.index(name)
++        if i + 1 < len(sys.argv):
++            return sys.argv[i + 1]
++    return default
++
++
+ def main():
+-    text = build_digest()
++    today = datetime.now(timezone.utc).date().isoformat()
++    pre = _arg("--pre", "2026-06-01")
++    post = _arg("--post", today)
++    text = build_digest(pre_date=pre, post_date=post)
+     if "--dry" in sys.argv:
+         print(text)
+         return
+diff --git a/shadow_dispatcher.py b/shadow_dispatcher.py
+index 669d550..171fead 100644
+--- a/shadow_dispatcher.py
++++ b/shadow_dispatcher.py
+@@ -698,6 +698,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float)
+         # innego. SHADOW — zero zmiany zachowania. None gdy flaga OFF. grep:
+         # SELECTION_VETO_SHADOW. Pomiar: eod_drafts/2026-06-01/SELECTION_*.
+         "selection_veto_shadow": getattr(result, "selection_veto_shadow", None),
++        # R6BREACH-01 / GATE-02 SHADOW (2026-06-05): counterfactual post-selekcyjnego
++        # guarda R6. {"changed": bool, live_winner_*, guard_winner_*, score_gap,
++        # n_clean_alts} gdy live zwycięzca łamie 35min a istnieje feasible ≤35 → guard
++        # wskazałby najlepszy-score czysty. SHADOW — zero zmiany zachowania. None gdy
++        # flaga OFF. grep: R6_BREACH_GUARD_SHADOW. Pomiar: eod_drafts/2026-06-05/R6BREACH_*.
++        "r6_breach_guard_shadow": getattr(result, "r6_breach_guard_shadow", None),
+     }
+     if out["best"] is not None:
+         _propagate_prefixed_metrics(out["best"], best_m)
+diff --git a/tests/test_v326_traffic_multiplier.py b/tests/test_v326_traffic_multiplier.py
+index 057ddb1..2334fc2 100644
+--- a/tests/test_v326_traffic_multiplier.py
++++ b/tests/test_v326_traffic_multiplier.py
+@@ -66,24 +66,23 @@ def test_helper_weekday_buckets():
+ 
+ 
+ def test_helper_weekend_all_day():
+-    """V3.27 update: Saturday peak 12-21 (max 1.2), Sunday flat 1.0.
+-
+-    Pre-V3.27: weekend was flat 1.0 całą dobę → matrix raw OSRM free-flow w
+-    sobotni peak 16-21 → 30-50% timing pod-estymata (Bug X #468508/#468509).
+-    V3.27 Bug X fix split weekend → sat/sun, sobota peak 12-21 max ×1.2.
++    """RECALIB WEEKEND 06-05: sobota median-based (16:00=1.55), niedziela NIE płaska
++    (peak 11-19; 16:00=1.30). Płaskie 1.0 niedzieli zaniżało (F2.2 niedz 13-19 peak).
++    Sobota poranek 00-12 nadal 1.0.
+     """
+     # 2026-04-25 Sat (weekday()==5), 2026-04-26 Sun (weekday()==6)
+     sat_morning = _utc_for_warsaw(2026, 4, 25, 9, 0)   # 00-12 → 1.0
+-    sun = _utc_for_warsaw(2026, 4, 26, 16, 0)           # niedziela płaska → 1.0
++    sun_morning = _utc_for_warsaw(2026, 4, 26, 9, 0)   # 00-11 → 1.0
+     assert common.get_traffic_multiplier(sat_morning) == 1.0
+-    assert common.get_traffic_multiplier(sun) == 1.0
+-    # V3.27 Saturday peak hour 16:00 → 1.2 (NIE 1.0 jak pre-V3.27)
++    assert common.get_traffic_multiplier(sun_morning) == 1.0
++    # RECALIB sobota peak hour 16:00 → 1.55
+     sat_peak = _utc_for_warsaw(2026, 4, 25, 16, 0)
+-    assert common.get_traffic_multiplier(sat_peak) == 1.2, \
+-        f"V3.27: sobota 16:00 powinno być 1.2, got {common.get_traffic_multiplier(sat_peak)}"
+-    # Niedziela peak hour identical → 1.0
++    assert common.get_traffic_multiplier(sat_peak) == 1.55, \
++        f"recalib: sobota 16:00 powinno być 1.55, got {common.get_traffic_multiplier(sat_peak)}"
++    # RECALIB niedziela peak hour 16:00 → 1.30 (NIE 1.0)
+     sun_peak = _utc_for_warsaw(2026, 4, 26, 16, 0)
+-    assert common.get_traffic_multiplier(sun_peak) == 1.0
++    assert common.get_traffic_multiplier(sun_peak) == 1.30, \
++        f"recalib: niedziela 16:00 powinno być 1.30, got {common.get_traffic_multiplier(sun_peak)}"
+     print("PASS test_helper_weekend_all_day")
+ 
+ 
+diff --git a/tests/test_v327_traffic_multiplier.py b/tests/test_v327_traffic_multiplier.py
+index 0a2cba2..2a22769 100644
+--- a/tests/test_v327_traffic_multiplier.py
++++ b/tests/test_v327_traffic_multiplier.py
+@@ -55,20 +55,23 @@ def test_weekday_buckets_unchanged():
+ 
+ 
+ def test_saturday_peak_12_21():
+-    """V3.27 sobota peak buckety: 00-12=1.0, 12-15=1.1, 15-17=1.2, 17-21=1.2, 21-24=1.0."""
+-    # Saturday 25.04.2026 (weekday 5) — proposal #468508/#468509 reproduction
++    """RECALIB 06-05 sobota: 00-12=1.0, 12-13=1.30, 13-16=1.20, 16-17=1.55,
++    17-18=1.45, 18-21=1.25, 21-22=1.10, 22-24=1.0 (median-based wygładzone)."""
++    # Saturday 25.04.2026 (weekday 5)
+     cases = [
+         (0, 1.0),    # 00-12
+         (8, 1.0),    # 00-12
+         (11, 1.0),   # 00-12 (boundary just before)
+-        (12, 1.1),   # 12-15
+-        (14, 1.1),   # 12-15
+-        (15, 1.2),   # 15-17
+-        (16, 1.2),   # 15-17 — #468508/#468509 reproduction case
+-        (17, 1.2),   # 17-21
+-        (20, 1.2),   # 17-21
+-        (21, 1.0),   # 21-24
+-        (23, 1.0),   # 21-24
++        (12, 1.30),  # 12-13 (lunch)
++        (13, 1.20),  # 13-16
++        (15, 1.20),  # 13-16
++        (16, 1.55),  # 16-17 (afternoon peak — #468508/#468509 case)
++        (17, 1.45),  # 17-18
++        (18, 1.25),  # 18-21
++        (20, 1.25),  # 18-21
++        (21, 1.10),  # 21-22
++        (22, 1.0),   # 22-24
++        (23, 1.0),   # 22-24
+     ]
+     for h, expected in cases:
+         dt = _wsa(2026, 4, 25, h)  # Saturday
+@@ -76,9 +79,19 @@ def test_saturday_peak_12_21():
+         assert actual == expected, f"saturday h={h}: expected {expected}, got {actual}"
+ 
+ 
+-def test_sunday_flat_1_0():
+-    """V3.27 niedziela płaska 1.0 całą dobę — drogi puste."""
+-    cases = [(0, 1.0), (8, 1.0), (12, 1.0), (16, 1.0), (20, 1.0), (23, 1.0)]
++def test_sunday_recalib_curve():
++    """RECALIB 06-05 niedziela: NIE płaskie 1.0 (płaskie zaniżało peak 11-19, F2.2).
++    00-11=1.0, 11-12=1.50, 12-13=1.40, 13-15=1.35, 15-16=1.45, 16-19=1.30,
++    19-20=1.15, 20-24=1.0."""
++    cases = [
++        (0, 1.0), (8, 1.0), (10, 1.0),   # 00-11
++        (11, 1.50), (12, 1.40),
++        (13, 1.35), (14, 1.35),
++        (15, 1.45),
++        (16, 1.30), (17, 1.30), (18, 1.30),
++        (19, 1.15),
++        (20, 1.0), (23, 1.0),            # 20-24
++    ]
+     for h, expected in cases:
+         dt = _wsa(2026, 4, 26, h)  # Sunday
+         actual = C.get_traffic_multiplier(dt)
+@@ -97,17 +110,18 @@ def test_naive_datetime_raises():
+ 
+ 
+ def test_boundary_inclusive_lower_exclusive_upper():
+-    """V3.27 bucket convention [lo, hi) — lower inclusive, upper exclusive.
+-    Sobota 12:00 sharp → 1.1 (12-15), 15:00 sharp → 1.2 (15-17).
++    """Bucket convention [lo, hi) — lower inclusive, upper exclusive.
++    RECALIB sobota: 12:00→1.30 (12-13), 16:00→1.55 (16-17), 17:00→1.45 (17-18),
++    21:00→1.10 (21-22).
+     """
+     dt_12 = _wsa(2026, 4, 25, 12, 0)
+-    assert C.get_traffic_multiplier(dt_12) == 1.1, "sobota 12:00 sharp = 1.1"
+-    dt_15 = _wsa(2026, 4, 25, 15, 0)
+-    assert C.get_traffic_multiplier(dt_15) == 1.2, "sobota 15:00 sharp = 1.2"
++    assert C.get_traffic_multiplier(dt_12) == 1.30, "sobota 12:00 sharp = 1.30 (12-13)"
++    dt_16 = _wsa(2026, 4, 25, 16, 0)
++    assert C.get_traffic_multiplier(dt_16) == 1.55, "sobota 16:00 sharp = 1.55 (16-17)"
+     dt_17 = _wsa(2026, 4, 25, 17, 0)
+-    assert C.get_traffic_multiplier(dt_17) == 1.2, "sobota 17:00 sharp = 1.2 (17-21)"
++    assert C.get_traffic_multiplier(dt_17) == 1.45, "sobota 17:00 sharp = 1.45 (17-18)"
+     dt_21 = _wsa(2026, 4, 25, 21, 0)
+-    assert C.get_traffic_multiplier(dt_21) == 1.0, "sobota 21:00 sharp = 1.0 (21-24)"
++    assert C.get_traffic_multiplier(dt_21) == 1.10, "sobota 21:00 sharp = 1.10 (21-22)"
+ 
+ 
+ def test_table_structure_consistency():
+@@ -128,12 +142,12 @@ def test_table_structure_consistency():
+ 
+ 
+ def test_proposal_468508_reproduction():
+-    """#468508 reproduction: sobota 14:00 UTC = 16:00 Warsaw → mult=1.2 (NIE 1.0).
+-    Pre-fix matrix was raw OSRM free-flow → 30% pod-estymata.
+-    Post-fix matrix × 1.2 → reflects sobotni peak."""
++    """#468508 reproduction: sobota 14:00 UTC = 16:00 Warsaw → mult=1.55 (RECALIB 06-05).
++    Pre-V3.27 matrix raw OSRM free-flow → 30% pod-estymata; V3.27 static→1.2;
++    recalib (median-based) → 1.55 (16:00 miało -2.52 min medianowego niedoszacowania)."""
+     dt = datetime(2026, 4, 25, 14, 0, tzinfo=UTC)  # 16:00 Warsaw Saturday
+     actual = C.get_traffic_multiplier(dt)
+-    assert actual == 1.2, f"#468508 case (sobota 16:00 Warsaw): expected 1.2, got {actual}"
++    assert actual == 1.55, f"#468508 case (sobota 16:00 Warsaw): expected 1.55, got {actual}"
+ 
+ 
+ if __name__ == "__main__":
+@@ -141,8 +155,8 @@ if __name__ == "__main__":
+     print("test_weekday_buckets_unchanged: PASS")
+     test_saturday_peak_12_21()
+     print("test_saturday_peak_12_21: PASS")
+-    test_sunday_flat_1_0()
+-    print("test_sunday_flat_1_0: PASS")
++    test_sunday_recalib_curve()
++    print("test_sunday_recalib_curve: PASS")
+     test_naive_datetime_raises()
+     print("test_naive_datetime_raises: PASS")
+     test_boundary_inclusive_lower_exclusive_upper()
