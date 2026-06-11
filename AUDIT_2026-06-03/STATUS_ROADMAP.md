@@ -63,7 +63,13 @@ Klaster breach/autonomia/reliability — zbudowano POMIAR, flip czeka na walidac
 | JSONL-UNBOUNDED-06 | jsonl rosną bez logrotate (consumer_stuck 27MB) | quick |
 
 ### C. SKALOWALNOŚĆ (pęka 2x-5x)
-PANEL-SCRAPE-01 (P0, sekwencyjny fetch — pęka ~2x), OSRM-TABLE-03 (brak cache table()), THREADPOOL-04 (pre-filtr puli), TICK-OVERLAP-05, LATENCY-TREND-08, STATE→SQLite.
+~~PANEL-SCRAPE-01~~ ~~OSRM-TABLE-03~~ ~~TICK-OVERLAP-05~~ — **DONE 2026-06-12 (nocna sesja)**. Zostały: THREADPOOL-04 (pre-filtr puli), LATENCY-TREND-08 (częściowo adresowany przez TABLE-03), STATE→SQLite.
+
+**✔ PANEL-SCRAPE-01 LIVE 12.06** (`panel-scrape01-prefetch-2026-06-12`): równoległy pre-fetch detali osobnymi sesjami per wątek (panel_detail_prefetch, NIGDY-reguła głównej sesji nienaruszona), miss→sekwencyjny fallback; kill-switch `ENABLE_PANEL_DETAIL_PREFETCH` (ON) + `PANEL_DETAIL_PREFETCH_WORKERS=4` w flags.json. Baseline: tick p50=7.4s p95=23.7s, peak 11.06 p50=20.5s>interwał. Watch po peaku: at#135 12.06 13:30 UTC.
+**✔ TICK-OVERLAP-05 LIVE 12.06** (`tick-overlap05-metric-2026-06-12`): ratio elapsed/interval w SUMMARY (ratio_last/ratio_max/over0.8=n/N) + WARNING rate-limited 1/5min przy >0.8, zero Telegrama.
+**✔ OSRM-TABLE-03 LIVE 12.06** (`osrm-table03-cell-cache-2026-06-12`): per-cell cache table() (raw przed multiplierem, TTL 1h) + dekompozycja missów na ≤2 cienkie prostokąty (ruch kuriera: 2N zamiast N² komórek); kill-switch `ENABLE_OSRM_TABLE_CELL_CACHE` (ON); probe live: zimny 24ms → full-hit 0ms → dekompozycja 3ms, wyniki identyczne; hit-rate w logu hourly (dispatch.log).
+**✔ GPS-04 12.06** (`gps04-positions-gc-2026-06-12`): GC wpisów GPS >24h, cron 04:50; pierwszy apply pwa 14→4, legacy 11→0.
+**✔ OSRM-01 12.06** (`osrm01-fallback-smoke-2026-06-12`): smoke fallbacku — bias_med +1.3min MAE 2.09 ratio_med 1.173 (przeszacowanie = bezpieczne), circuit-breaker 7/7; cron miesięczny 1. dnia 05:10.
 
 ### D. JAKOŚĆ / BUNDLING (większe, zmierzone)
 BUNDLE-02..06 (bundle_fit score zamiast samej odległości; 80% worków bez sygnału wartości), ~~SEL-01~~/FEAS-02 (no_gps-empty z fikcyjnej pozycji), GEO-01/02/03 (OSRM w scoringu zamiast haversine×1.37; model barier rzeka/tory; geo-ślepa kalibracja drive_min), SCORE-01..05 (sprzeczne wagi scoringu). **Świeżo skwantyfikowane (rule_deviation_report): R5 odbiory >1.8km = 58% worków, R8 span >cap = 46%, fleet top-3 Ziomek 43% vs człowiek 31%.**
