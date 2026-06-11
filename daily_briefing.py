@@ -350,6 +350,24 @@ def _format_agreement(lc: Counter) -> Tuple[int, int, float]:
     return tak, total, rate
 
 
+def _demand_forecast_lines(day_offset: int) -> list:
+    """SP-B2-OBSADA: blok prognozy popytu + alarmu obsady (QW7).
+
+    day_offset: 0 = dziś (morning), 1 = jutro (evening = alarm D-1).
+    Fail-soft: sekcja NIGDY nie wywraca briefingu (arkusz grafiku może być
+    niedostępny — wtedy sama prognoza z jawnym ⚠)."""
+    try:
+        from datetime import date as _date
+        from dispatch_v2.tools import demand_forecast as _df
+        target = _date.today() + timedelta(days=day_offset)
+        a = _df.assess(target)
+        prefix = "Obsada DZIŚ" if day_offset == 0 else "Obsada JUTRO (D-1)"
+        return _df.render_lines(a, header_prefix=prefix)
+    except Exception as e:  # noqa: BLE001 — briefing musi wyjść mimo wszystko
+        _log.warning(f"demand_forecast section failed: {e!r}")
+        return []
+
+
 def format_morning() -> str:
     start, end = _yesterday_range_utc()
     yesterday_date = (end - timedelta(hours=12)).astimezone(WARSAW).strftime("%d.%m")
@@ -389,6 +407,10 @@ def format_morning() -> str:
         lines.append("Top problem restauracji (static):")
         for name, med in top_problem:
             lines.append(f"• {name}: prep median {med:.0f} min")
+        lines.append("")
+    forecast = _demand_forecast_lines(day_offset=0)
+    if forecast:
+        lines.extend(forecast)
         lines.append("")
     lines.append("Systemy teraz:")
     lines.append(_systemd_status_block())
@@ -438,6 +460,11 @@ def format_evening() -> str:
     else:
         lines.append("Top problem dziś: (brak NIE dziś)")
     lines.append("")
+    # SP-B2-OBSADA: alarm D-1 — prognoza jutra vs grafik (QW7, próg 2,7)
+    forecast = _demand_forecast_lines(day_offset=1)
+    if forecast:
+        lines.extend(forecast)
+        lines.append("")
     lines.append("Systemy: " + _systemd_status_block())
     return "\n".join(lines)
 
