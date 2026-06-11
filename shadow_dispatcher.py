@@ -212,7 +212,11 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        "sync_",
                        # SP-B2-REPO (2026-06-11): repo_km / repo_last_drop_oid
                        # (bonus_repo_cost_shadow_delta przez prefix bonus_).
-                       "repo_")
+                       "repo_",
+                       # SP-B2-ZARAZWOLNY (2026-06-11): soon_free_eligible /
+                       # soon_free_applied / soon_free_free_at_min /
+                       # soon_free_last_drop_km — LOCATION A+B.
+                       "soon_free_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:

@@ -1556,6 +1556,50 @@ def _compute_repo_cost_km(bag_sim, plan, order_id, pickup_coords):
         return None, None
 
 
+def _soon_free_probe(cid, bag_raw, now):
+    """SP-B2-ZARAZWOLNY (2026-06-11, B2): czy busy kurier kończy ≤12 min.
+
+    61% busy-picków człowieka = kurier kończący ≤12 min — Ziomek karze
+    zajętych nie modelując zwolnienia. Probe czyta ZAPISANY plan kuriera
+    (plan_manager, walidacja active_bag_oids jak V3.19d) i zwraca:
+      {eligible, free_at_min, free_at_iso, last_drop_coords (lat, lng)}
+    None gdy pusty bag / brak planu / plan mismatch / błąd (fail-soft).
+    free_at_min clampowane ≥0 (plan przeterminowany = „wolny zaraz").
+    """
+    if not bag_raw:
+        return None
+    try:
+        from dispatch_v2 import plan_manager as _pm_sf
+        _bag_oids = {str(b.get("order_id")) for b in bag_raw if b.get("order_id")}
+        if not _bag_oids:
+            return None
+        saved = _pm_sf.load_plan(str(cid), active_bag_oids=_bag_oids)
+        if saved is None:
+            return None
+        drops = [
+            s for s in (saved.get("stops") or [])
+            if s.get("type") == "dropoff" and s.get("predicted_at")
+            and isinstance(s.get("coords"), dict)
+        ]
+        if not drops:
+            return None
+        last = max(drops, key=lambda s: s["predicted_at"])
+        free_at = datetime.fromisoformat(str(last["predicted_at"]).replace("Z", "+00:00"))
+        if free_at.tzinfo is None:
+            free_at = free_at.replace(tzinfo=timezone.utc)
+        free_at_min = max(0.0, (free_at - now).total_seconds() / 60.0)
+        coords = (float(last["coords"]["lat"]), float(last["coords"]["lng"]))
+        max_min = float(getattr(C, "SOON_FREE_MAX_MIN", 12.0))
+        return {
+            "eligible": free_at_min <= max_min,
+            "free_at_min": round(free_at_min, 1),
+            "free_at_iso": free_at.isoformat(),
+            "last_drop_coords": coords,
+        }
+    except Exception:
+        return None
+
+
 def _demote_blind_empty(feasible: list, order_id=None) -> list:
     """V3.16 demotion: jeśli top-1 jest blind+empty AND istnieje informed alt,
     reorder — informed first (stable), other middle, blind+empty last.
@@ -2360,6 +2404,23 @@ def _assess_order_impl(
         bag_raw = getattr(cs, "bag", []) or []
         bag_sim = [_bag_dict_to_ordersim(b) for b in bag_raw]
 
+        # === SP-B2-ZARAZWOLNY (2026-06-11): kurier "zaraz-wolny" ===
+        # Probe ZAWSZE (telemetria soon_free_* do shadow); substytucja wejść
+        # TYLKO za 🛑 flagą ENABLE_SOON_FREE_CANDIDATE (OFF): busy kończący
+        # ≤12 min ewaluowany jako pusty-przy-ostatnim-dropie, dostępny od
+        # free_at (pozycja/travel/gap niżej). Upraszczenie vs "dwa warianty":
+        # przy ≤12 min do końca worka wartość interleave jest marginalna —
+        # substytucja zamiast drugiego kandydata (ten sam cid w mapach
+        # downstream nie może wystąpić 2×).
+        soon_free_probe = _soon_free_probe(cid, bag_raw, now)
+        soon_free_applied = False
+        if (soon_free_probe is not None and soon_free_probe.get("eligible")
+                and C.decision_flag("ENABLE_SOON_FREE_CANDIDATE")):
+            courier_pos = tuple(soon_free_probe["last_drop_coords"])
+            bag_raw = []
+            bag_sim = []
+            soon_free_applied = True
+
         # V3.27.1 sesja 2: Pre-proposal czas_kuriera recheck dla bagu kandydata.
         # Flag-gated (default False). Mechanizm 3 hybrydowy: 10min age + 5min cache,
         # ZERO max bag limit (Bartek peak bag=8-11 expected). Parallel fetchy via
@@ -2802,6 +2863,15 @@ def _assess_order_impl(
             travel_min = r07_chain_result.total_chain_min
             eta_source = "r07_chain_eta"
 
+        # SP-B2-ZARAZWOLNY: dostępność od free_at — kurier rusza po ostatnim
+        # dropie (wzór pre_shift: czas oczekiwania + dojazd z pozycji dropa).
+        if soon_free_applied:
+            _sf_wait = max(0.0, float(soon_free_probe.get("free_at_min") or 0.0))
+            travel_min = round(_sf_wait + drive_min, 1)
+            eta_pickup_utc = now + timedelta(minutes=travel_min)
+            drive_arrival_utc = eta_pickup_utc
+            eta_source = "soon_free"
+
         # Bundle bonus — sumowanie L1 + L2 + R4 (Bartek Gold Standard).
         # L1 = +25 (same restaurant), L2 = max(0, 20 - dist*10).
         # R4 (zastępuje L3): tier-based free-stop curve × weight 1.5.
@@ -2898,6 +2968,16 @@ def _assess_order_impl(
                         _free_at_dt = _free_at_dt.replace(tzinfo=timezone.utc)
                     free_at_dt = _free_at_dt
                     free_at_min = max(0.0, (_free_at_dt - now).total_seconds() / 60.0)
+
+        # SP-B2-ZARAZWOLNY: po substytucji bag jest pusty → free_at_min=0
+        # zafałszowałby timing gap; przywróć realne zwolnienie z probe
+        # (gap = free_at vs gotowość nowego — dokładnie semantyka B2).
+        if soon_free_applied:
+            free_at_min = max(0.0, float(soon_free_probe.get("free_at_min") or 0.0))
+            try:
+                free_at_dt = datetime.fromisoformat(soon_free_probe["free_at_iso"])
+            except Exception:
+                free_at_dt = None
 
         if pickup_ready_at is not None:
             _pra_utc = pickup_ready_at if pickup_ready_at.tzinfo else pickup_ready_at.replace(tzinfo=timezone.utc)
@@ -3864,6 +3944,16 @@ def _assess_order_impl(
             "repo_km": repo_km,
             "repo_last_drop_oid": repo_last_drop_oid,
             "bonus_repo_cost_shadow_delta": bonus_repo_cost_shadow_delta,
+            # SP-B2-ZARAZWOLNY (2026-06-11): telemetria B2 — busy kończący
+            # ≤12 min (z zapisanego planu). soon_free_* prefix LOCATION A+B.
+            "soon_free_eligible": bool(soon_free_probe and soon_free_probe.get("eligible")),
+            "soon_free_applied": soon_free_applied,
+            "soon_free_free_at_min": (
+                soon_free_probe.get("free_at_min") if soon_free_probe else None),
+            "soon_free_last_drop_km": (
+                round(haversine(tuple(soon_free_probe["last_drop_coords"]), pickup_coords), 2)
+                if (soon_free_probe and pickup_coords and pickup_coords[0] != 0.0)
+                else None),
             # F5 RETURN-TO-RESTAURANT (2026-05-24)
             "bonus_r_return_rest": round(bonus_r_return_rest, 2),
             "return_to_restaurant": metrics.get("return_to_restaurant"),

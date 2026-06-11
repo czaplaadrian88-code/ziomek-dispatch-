@@ -79,6 +79,8 @@ ETAP4_DECISION_FLAGS = (
     # SP-B2-REPO (2026-06-11): aplikacja kary repozycjonowania do score
     # (telemetria zawsze; LIVE flip = 🛑 ACK).
     "ENABLE_REPO_COST_LIVE",
+    # SP-B2-ZARAZWOLNY (2026-06-11): substytucja soon_free (🛑 ACK).
+    "ENABLE_SOON_FREE_CANDIDATE",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
@@ -1579,6 +1581,14 @@ ENABLE_PREP_BIAS_TABLE = _os.environ.get(
 REPO_COST_MAX_PENALTY = float(_os.environ.get("REPO_COST_MAX_PENALTY", "30.0"))
 REPO_KM_FULL_SCALE = float(_os.environ.get("REPO_KM_FULL_SCALE", "4.0"))
 ENABLE_REPO_COST_LIVE = _os.environ.get("ENABLE_REPO_COST_LIVE", "0") == "1"
+
+# SP-B2-ZARAZWOLNY (2026-06-11, B2): kurier busy kończący ≤ SOON_FREE_MAX_MIN
+# (wg zapisanego planu) jako pełnoprawny kandydat — pozycja = ostatni drop,
+# dostępność = free_at, bez kary obciążenia bieżącym bagiem (nowy odbiór i tak
+# PO zwolnieniu). 61% busy-picków człowieka to kurier kończący ≤12 min.
+# Telemetria soon_free_* zawsze; substytucja za 🛑 flagą (OFF, flip = ACK).
+SOON_FREE_MAX_MIN = float(_os.environ.get("SOON_FREE_MAX_MIN", "12.0"))
+ENABLE_SOON_FREE_CANDIDATE = _os.environ.get("ENABLE_SOON_FREE_CANDIDATE", "0") == "1"
 
 # V3.26 STEP 1 (R-11 TRANSPARENCY-RATIONALE) — decision rationale dla każdej
 # propozycji: top 3 factors + advantage vs next-best. Visible w Telegram
