@@ -845,6 +845,43 @@ def _a2_reliability_soft_score(feasible, order_id=None):
     return feasible
 
 
+def _gps_age_discount(feasible, order_id=None):
+    """GPS-03/DATA-04 (2026-06-11): confidence-discount za wiek pozycji.
+
+    pos_age_min (recent-fallback / store-rescue; None = żywy fix lub no_gps)
+    dotąd nie kosztował nic w score — kandydat z repliką pozycji sprzed 20 min
+    rywalizował jak świeży GPS. Dyskonto: -PER_MIN za minutę ponad FREE_MIN,
+    cap CAP. Liczone ZAWSZE do bonus_gps_age_discount_shadow (lekcja #186);
+    aplikacja + re-sort wyłącznie pod flagą ENABLE_GPS_AGE_DISCOUNT (kanon
+    flags.json). Stałe nadpisywalne z flags.json (FLAGS_JSON_NUMERIC_OVERRIDES).
+    Buckety pos/tier zachowuje późniejszy _demote_blind_empty (jak A2)."""
+    if not feasible:
+        return feasible
+    _fl = C.load_flags()
+    free_min = float(_fl.get("GPS_AGE_DISCOUNT_FREE_MIN", C.GPS_AGE_DISCOUNT_FREE_MIN))
+    per_min = float(_fl.get("GPS_AGE_DISCOUNT_PER_MIN", C.GPS_AGE_DISCOUNT_PER_MIN))
+    cap = float(_fl.get("GPS_AGE_DISCOUNT_CAP", C.GPS_AGE_DISCOUNT_CAP))
+    apply_live = C.decision_flag("ENABLE_GPS_AGE_DISCOUNT")
+    applied_any = False
+    for c in feasible:
+        m = getattr(c, "metrics", None)
+        if not isinstance(m, dict):
+            continue
+        age = m.get("pos_age_min")
+        delta = 0.0
+        if isinstance(age, (int, float)) and age > free_min:
+            delta = -min(cap, (float(age) - free_min) * per_min)
+        m["bonus_gps_age_discount_shadow"] = round(delta, 2)
+        m["bonus_gps_age_discount"] = 0.0
+        if apply_live and delta:
+            c.score = (c.score or 0.0) + delta
+            m["bonus_gps_age_discount"] = round(delta, 2)
+            applied_any = True
+    if applied_any:
+        feasible.sort(key=lambda c: -(c.score or 0.0))
+    return feasible
+
+
 def _v326_fleet_load_balance(feasible: list, candidates: list, order_id=None) -> list:
     """V3.26 STEP 4 (R-10 FLEET-LOAD-BALANCE).
 
@@ -4534,6 +4571,8 @@ def _assess_order_impl(
     # A2 reliability soft-score (2026-06-07, dźwignia A2) — flag-gated OFF. PRZED
     # demote/tiering, by buckety pos/tier zostały re-narzucone (semantyka A2).
     feasible = _a2_reliability_soft_score(feasible, order_id)
+    # GPS-03/DATA-04: shadow liczy się zawsze, aplikacja za flagą (OFF).
+    feasible = _gps_age_discount(feasible, order_id)
 
     # V3.26 STEP 5 (R-06): multi-stop trajectory district-based (flag-gated, default False).
     feasible = _v326_multistop_trajectory(feasible, new_order, order_id)

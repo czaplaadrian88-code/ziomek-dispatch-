@@ -88,6 +88,8 @@ ETAP4_DECISION_FLAGS = (
     # VERDICT_bug_a_b.md; sekwencja: B 4.0/km → ≥7 dni → A max+FIFO bez SUM).
     "ENABLE_BAG_TIME_FAIRNESS_SCORING",
     "ENABLE_R5_PICKUP_DETOUR_PENALTY",
+    # GPS-03/DATA-04 (2026-06-11): dyskonto pewności za wiek pozycji (shadow-first).
+    "ENABLE_GPS_AGE_DISCOUNT",
 )
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
@@ -100,6 +102,10 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "BAG_TIME_FIFO_TIE_PENALTY",
     "R5_DETOUR_PENALTY_PER_KM",
     "R5_DETOUR_FREE_THRESHOLD_KM",
+    # GPS-03/DATA-04 (2026-06-11):
+    "GPS_AGE_DISCOUNT_FREE_MIN",
+    "GPS_AGE_DISCOUNT_PER_MIN",
+    "GPS_AGE_DISCOUNT_CAP",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
@@ -2284,6 +2290,16 @@ ENABLE_A2_RELIABILITY_SOFT_SCORE = _os.environ.get(
 # Coeff 60→100: decyzja Adriana 11.06 po digescie at#113 (σ=0.012 stabilny,
 # marginalne swapy 60→100 niemal czysto pozytywne, np. 06-11 +23better/−2worse).
 A2_RELIABILITY_COEFF = float(_os.environ.get("A2_RELIABILITY_COEFF", "100"))
+# GPS-03/DATA-04 (2026-06-11): gradacja świeżości pozycji. pos_age_min
+# (recent-fallback / store-rescue; None = żywy fix lub no_gps) dotąd NIE
+# kosztował nic w score — replika sprzed 20 min rywalizowała jak świeży GPS.
+# Dyskonto liczone ZAWSZE do bonus_gps_age_discount_shadow (lekcja #186),
+# aplikacja za flagą (kanon flags.json, default OFF — kalibracja progów po
+# rolloucie apki v2 / realnym wolumenie GPS; pokrewny odłożony GPS-02).
+ENABLE_GPS_AGE_DISCOUNT = _os.environ.get("ENABLE_GPS_AGE_DISCOUNT", "0") == "1"
+GPS_AGE_DISCOUNT_FREE_MIN = float(_os.environ.get("GPS_AGE_DISCOUNT_FREE_MIN", "5.0"))
+GPS_AGE_DISCOUNT_PER_MIN = float(_os.environ.get("GPS_AGE_DISCOUNT_PER_MIN", "0.8"))
+GPS_AGE_DISCOUNT_CAP = float(_os.environ.get("GPS_AGE_DISCOUNT_CAP", "12.0"))
 A2_RELIABILITY_MIN_GAP = float(_os.environ.get("A2_RELIABILITY_MIN_GAP", "0.05"))
 A2_RELIABILITY_FEED_PATH = _os.environ.get(
     "A2_RELIABILITY_FEED_PATH",
