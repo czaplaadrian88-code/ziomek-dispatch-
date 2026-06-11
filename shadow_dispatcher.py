@@ -780,12 +780,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # cascade harness. SHADOW — zero zmiany zachowania. None gdy flaga OFF.
         # grep: loadaware_shadow. Patrz memory ziomek-autonomy-cascade-verdict.
         "loadaware_shadow": getattr(result, "loadaware_shadow", None),
-        # R6BREACH-01 / GATE-02 SHADOW (2026-06-05): counterfactual post-selekcyjnego
-        # guarda R6. {"changed": bool, live_winner_*, guard_winner_*, score_gap,
-        # n_clean_alts} gdy live zwycięzca łamie 35min a istnieje feasible ≤35 → guard
-        # wskazałby najlepszy-score czysty. SHADOW — zero zmiany zachowania. None gdy
-        # flaga OFF. grep: R6_BREACH_GUARD_SHADOW. Pomiar: eod_drafts/2026-06-05/R6BREACH_*.
-        "r6_breach_guard_shadow": getattr(result, "r6_breach_guard_shadow", None),
+        # r6_breach_guard_shadow RETIRED 2026-06-11 (Adrian: duplikat R6, wytnij).
     }
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)

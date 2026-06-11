@@ -2287,14 +2287,10 @@ A2_RELIABILITY_MIN_GAP = float(_os.environ.get("A2_RELIABILITY_MIN_GAP", "0.05")
 A2_RELIABILITY_FEED_PATH = _os.environ.get(
     "A2_RELIABILITY_FEED_PATH",
     "/root/.openclaw/workspace/dispatch_state/courier_reliability.json")
-# R6BREACH-01 / GATE-02 SHADOW (2026-06-05): post-selekcyjny guard R6. Gdy LIVE
-# zwycięzca łamie 35-min (r6_max_bag_time_min > BAG_TIME_HARD_MAX_MIN) a istnieje
-# feasible kandydat ≤35 → guard wskazałby najlepszy-score czysty. SHADOW — NIGDY nie
-# mutuje feasible/best (zero zmiany zachowania), tylko serializuje rozjazd → grep
-# R6_BREACH_GUARD_SHADOW. Flaga default OFF (flip po kalibracji). Konsument:
-# dispatch_pipeline._assess_order_impl (getattr C, default False).
-ENABLE_R6_BREACH_GUARD_SHADOW = _os.environ.get(
-    "ENABLE_R6_BREACH_GUARD_SHADOW", "0") == "1"
+# R6BREACH-01/GATE-02 — RETIRED 2026-06-11 (Adrian: „duplikat R6 = R6BREACH,
+# wytnij"). Guard nigdy nie zebrał danych (flaga OFF od commitu f64ff81,
+# 0/2452 rekordów). Oś R6 pokrywają late-pickup gate / OBJ_R6_SOFT_DEADLINE /
+# best_effort_r6_breach (OBJ F3) / A2; po flipie BUG-A też kara max_bag_time.
 # Difficult case floor — kalibrowane: 2 maybe-regresje z replay miały scores
 # post-fixes -55 i -56 (wszystkie kandydaci poniżej -30). Floor -30 = każdy
 # kandydat poniżej tej wartości = "trudne geometrycznie" → KOORD redirect.
