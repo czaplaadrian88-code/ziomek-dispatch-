@@ -90,6 +90,8 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_R5_PICKUP_DETOUR_PENALTY",
     # GPS-03/DATA-04 (2026-06-11): dyskonto pewności za wiek pozycji (shadow-first).
     "ENABLE_GPS_AGE_DISCOUNT",
+    # FRONT-B (2026-06-11): pickup_coords na żywo z adresu panelu (shadow-first).
+    "ENABLE_PICKUP_COORDS_FROM_PANEL",
 )
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
@@ -106,6 +108,8 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "GPS_AGE_DISCOUNT_FREE_MIN",
     "GPS_AGE_DISCOUNT_PER_MIN",
     "GPS_AGE_DISCOUNT_CAP",
+    # FRONT-B (2026-06-11):
+    "PICKUP_COORDS_DRIFT_WARN_M",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
@@ -2300,6 +2304,17 @@ ENABLE_GPS_AGE_DISCOUNT = _os.environ.get("ENABLE_GPS_AGE_DISCOUNT", "0") == "1"
 GPS_AGE_DISCOUNT_FREE_MIN = float(_os.environ.get("GPS_AGE_DISCOUNT_FREE_MIN", "5.0"))
 GPS_AGE_DISCOUNT_PER_MIN = float(_os.environ.get("GPS_AGE_DISCOUNT_PER_MIN", "0.8"))
 GPS_AGE_DISCOUNT_CAP = float(_os.environ.get("GPS_AGE_DISCOUNT_CAP", "12.0"))
+# FRONT-B (2026-06-11): pickup_coords liczone NA ŻYWO z address.street panelu
+# (geokod cache-first) zamiast zamrożonego restaurant_coords.json (bootstrap
+# 11.04 nie podąża za zmianami adresu — incydent Raj/Grill Kebab 05.06).
+# Drift cache↔live mierzony ZAWSZE (lekcja #186, log FRONT_B w watcher.log);
+# selekcja live-first za flagą (kanon flags.json, OFF). Guardy: wpisy
+# source=manual*/adrian_manual* autorytatywne (GEO-02 — często pusty street),
+# firmowe konta (FIRMOWE_KONTO_ADDRESS_IDS) poza Front B (pickup w uwagach).
+ENABLE_PICKUP_COORDS_FROM_PANEL = _os.environ.get(
+    "ENABLE_PICKUP_COORDS_FROM_PANEL", "0") == "1"
+PICKUP_COORDS_DRIFT_WARN_M = float(_os.environ.get(
+    "PICKUP_COORDS_DRIFT_WARN_M", "150.0"))
 A2_RELIABILITY_MIN_GAP = float(_os.environ.get("A2_RELIABILITY_MIN_GAP", "0.05"))
 A2_RELIABILITY_FEED_PATH = _os.environ.get(
     "A2_RELIABILITY_FEED_PATH",

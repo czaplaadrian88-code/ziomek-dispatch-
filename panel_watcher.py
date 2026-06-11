@@ -28,14 +28,18 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
+from dispatch_v2 import common as C
 from dispatch_v2.common import (
     FIRMOWE_KONTO_ADDRESS_IDS,
     FIRMOWE_KONTO_FALLBACK_COORDS,
+    decision_flag,
     flag,
     load_config,
+    load_flags,
     now_iso,
     setup_logger,
 )
+from dispatch_v2.osrm_client import haversine as _haversine_km
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.event_bus import emit, emit_audit
@@ -78,13 +82,14 @@ _cold_start_done = False
 # (np. nowy add_id mapping od Adriana). META top-5 quick win, STATE_OWNERSHIP F3+F8.
 _COORDS_PATH = "/root/.openclaw/workspace/dispatch_state/restaurant_coords.json"
 _COORDS = {}
+_COORDS_META = {}   # FRONT-B: aid → source (guard manual*/adrian_manual*, GEO-02)
 _COORDS_MTIME = 0.0
 _COORDS_LAST_CHECK_TS = 0.0
 _COORDS_CHECK_INTERVAL_S = 15.0
 
 
 def _load_coords():
-    global _COORDS, _COORDS_MTIME
+    global _COORDS, _COORDS_META, _COORDS_MTIME
     try:
         import json
         import os
@@ -92,11 +97,71 @@ def _load_coords():
         with open(_COORDS_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         _COORDS = {str(k): (v["lat"], v["lng"]) for k, v in data.items() if "lat" in v and "lng" in v}
+        _COORDS_META = {str(k): str(v.get("source") or "")
+                        for k, v in data.items() if isinstance(v, dict)}
         _COORDS_MTIME = mtime
     except Exception as e:
         _log.warning(f"_load_coords fail: {e}")
         _COORDS = {}
+        _COORDS_META = {}
         _COORDS_MTIME = 0.0
+
+
+_FRONTB_DRIFT_WARNED = set()  # aid → WARNING raz na proces (anti-spam Z3)
+
+
+def _resolve_pickup_coords(aid_str, street, city, zid=None):
+    """FRONT-B (2026-06-11): pickup_coords na żywo z adresu panelu.
+
+    Cache restaurant_coords.json (bootstrap 11.04, bez timera) nie podąża za
+    zmianami adresu w panelu — incydent Raj/Grill Kebab 05.06 (2 restauracje,
+    bajt-w-bajt identyczne koordy). Geokod aktualnego address.street liczony
+    ZAWSZE (lekcja #186; cache-first przez geocode_cache → ~0 ms dla znanych
+    ulic; tylko NOWE zlecenia) + drift vs cache do logu FRONT_B (korpus pod
+    werdykt flipu). Selekcję przełącza ENABLE_PICKUP_COORDS_FROM_PANEL (kanon
+    flags.json, default OFF = zachowanie bez zmian: cache albo None).
+
+    GUARD GEO-02: wpis cache source=manual*/adrian_manual* jest autorytatywny
+    (ręczne koordy Adriana, często PUSTY street — geokod dałby centrum miasta):
+    zero geokodu, zero driftu. Firmowe konta filtruje CALL-SITE (ich pickup
+    jest w uwagach, nie w address.street).
+
+    Zwraca (coords|None, source_label, drift_m|None).
+    """
+    _maybe_reload_coords()
+    cached = _COORDS.get(aid_str) if aid_str else None
+    src = _COORDS_META.get(aid_str, "") if aid_str else ""
+    if cached and (src.startswith("adrian_manual") or src.startswith("manual")):
+        return tuple(cached), "cache_manual", None
+    live = None
+    if street:
+        try:
+            live = geocode(street, city=city, timeout=2.0)
+        except Exception as e:
+            _log.warning(f"FRONT_B geocode fail zid={zid} '{street}': {e}")
+    drift_m = None
+    if cached and live:
+        try:
+            drift_m = round(_haversine_km(tuple(cached), tuple(live)) * 1000.0, 1)
+        except Exception:
+            drift_m = None
+        warn_m = float(load_flags().get(
+            "PICKUP_COORDS_DRIFT_WARN_M", C.PICKUP_COORDS_DRIFT_WARN_M))
+        if (drift_m is not None and drift_m > warn_m
+                and aid_str not in _FRONTB_DRIFT_WARNED):
+            _FRONTB_DRIFT_WARNED.add(aid_str)
+            _log.warning(
+                f"FRONT_B drift aid={aid_str} zid={zid} drift_m={drift_m} "
+                f"cache={cached} live={live} street='{street}' — cache nie "
+                f"podąża za panelem (warn raz/proces)")
+    _log.info(
+        f"FRONT_B resolve zid={zid} aid={aid_str} cache={bool(cached)} "
+        f"live={bool(live)} drift_m={drift_m}")
+    if decision_flag("ENABLE_PICKUP_COORDS_FROM_PANEL") and live:
+        return tuple(live), "panel_live", drift_m
+    if cached:
+        return tuple(cached), "cache", drift_m
+    return None, "miss", drift_m
 
 
 def _maybe_reload_coords():
@@ -857,7 +922,19 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         # Emit NEW_ORDER (idempotent per zid + first_seen)
         _aid = norm.get("address_id")
         _aid_str = str(_aid) if _aid is not None else None
-        _pcoords = _COORDS.get(_aid_str) if _aid_str else None
+        _is_firmowe_konto = (
+            _aid is not None
+            and int(_aid) in FIRMOWE_KONTO_ADDRESS_IDS
+        )
+        # FRONT-B (2026-06-11): zwykłe restauracje → helper (geokod adresu
+        # panelu liczony zawsze + drift; selekcja live-first za flagą OFF).
+        # Firmowe konto ZOSTAJE na starym lookupie — pickup w uwagach (niżej).
+        if _is_firmowe_konto:
+            _pcoords = _COORDS.get(_aid_str) if _aid_str else None
+        else:
+            _pcoords, _pc_source, _pc_drift_m = _resolve_pickup_coords(
+                _aid_str, norm.get("pickup_address"), norm.get("pickup_city"),
+                zid=zid)
 
         # Firmowe konto path: address_id ∈ FIRMOWE_KONTO_ADDRESS_IDS znaczy
         # adres pickup'u jest w polu uwagi (free-text), nie w panel address.
@@ -870,10 +947,6 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         _uwagi_pickup_parsed = None
         _pickup_address_override = None
         _restaurant_override = None
-        _is_firmowe_konto = (
-            _aid is not None
-            and int(_aid) in FIRMOWE_KONTO_ADDRESS_IDS
-        )
         if (_pcoords is None
                 and _is_firmowe_konto
                 and flag("ENABLE_UWAGI_ADDRESS_PARSER", True)):
@@ -1582,7 +1655,16 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             # lub fallback z raw.address.id
             aid = sorder.get("address_id") or (raw.get("address", {}) or {}).get("id")
             aid_str = str(aid) if aid is not None else None
-            pu_coords = _COORDS.get(aid_str) if aid_str else None
+            # FRONT-B: pod flagą preferuj koordy persystowane na orderze
+            # (NEW_ORDER już je rozwiązał — spójne z tym, co widział scoring);
+            # OFF = stary lookup z cache (zero zmiany zachowania).
+            pu_coords = None
+            if decision_flag("ENABLE_PICKUP_COORDS_FROM_PANEL"):
+                _st_pc = sorder.get("pickup_coords")
+                if _st_pc and len(_st_pc) == 2:
+                    pu_coords = tuple(_st_pc)
+            if pu_coords is None:
+                pu_coords = _COORDS.get(aid_str) if aid_str else None
             ev = emit(
                 "COURIER_PICKED_UP",
                 order_id=zid,
