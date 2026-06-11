@@ -845,6 +845,58 @@ def _compute_kid_diagnostic(state_order: dict, fresh_order: dict) -> dict:
     }
 
 
+class _TickOverlapTracker:
+    """TICK-OVERLAP-05 (Front C audytu 03.06, 2026-06-12): metryka headroomu
+    ticka elapsed/interval. Sygnał WYPRZEDZAJĄCY (log WARNING, ZERO Telegrama):
+    ratio>0.8 znaczy że tick zjada interwał i przy wzroście ruchu ticki polecą
+    back-to-back (sleep 0.5 s) → opóźniona detekcja nowych zleceń + więcej
+    requestów/min do panelu (ryzyko 419). Baseline 2026-06-12: p50=7.4 s,
+    p95=23.7 s przy interval=20 s (p95 JUŻ nad interwałem w peak).
+
+    Czysta logika (testowalna): note() per tick, summary_fragment() per SUMMARY
+    (resetuje okno). Warning rate-limited (1/5 min) żeby peak nie zalał loga.
+    """
+
+    WARN_RATIO = 0.8
+    WARN_COOLDOWN_S = 300.0
+
+    def __init__(self):
+        self.window_max = 0.0
+        self.over_count = 0
+        self.tick_count = 0
+        self.last_ratio = 0.0
+        self._last_warn_at = 0.0
+
+    def note(self, elapsed: float, interval: float, now: float = None) -> str:
+        """Rejestruje tick. Zwraca tekst WARNING do zalogowania albo ''."""
+        now = time.time() if now is None else now
+        ratio = (elapsed / interval) if interval > 0 else 0.0
+        self.last_ratio = ratio
+        self.tick_count += 1
+        if ratio > self.window_max:
+            self.window_max = ratio
+        if ratio <= self.WARN_RATIO:
+            return ""
+        self.over_count += 1
+        if now - self._last_warn_at < self.WARN_COOLDOWN_S:
+            return ""
+        self._last_warn_at = now
+        return (f"TICK_OVERLAP ratio={ratio:.2f} (elapsed={elapsed:.1f}s / "
+                f"interval={interval:.0f}s) > {self.WARN_RATIO} — tick zjada "
+                f"headroom, przy 2x ruchu ticki polecą back-to-back "
+                f"(TICK-OVERLAP-05; sygnał wyprzedzający, bez Telegrama)")
+
+    def summary_fragment(self) -> str:
+        """Fragment do SUMMARY; resetuje okno (wołać raz na SUMMARY)."""
+        frag = (f"ratio_last={self.last_ratio:.2f}, "
+                f"ratio_max={self.window_max:.2f}, "
+                f"over{self.WARN_RATIO}={self.over_count}/{self.tick_count}")
+        self.window_max = 0.0
+        self.over_count = 0
+        self.tick_count = 0
+        return frag
+
+
 def _build_prefetch_candidates(parsed: dict, current_state: dict, ignored_ids,
                                freeze_new: bool, ck_detection_on: bool,
                                pickup_time_detection_on: bool) -> list:
@@ -2251,6 +2303,7 @@ def run():
     last_broadcast_poll = 0.0
     BROADCAST_POLL_INTERVAL_S = 30.0
     totals = {"new": 0, "assigned": 0, "picked_up": 0, "delivered": 0, "ignored": 0, "errors": 0}
+    _overlap = _TickOverlapTracker()  # TICK-OVERLAP-05
 
     while _running:
         cycle += 1
@@ -2265,6 +2318,11 @@ def run():
         _maybe_reload_coords()
         stats, parsed = tick(cycle)
         elapsed = time.time() - t0
+
+        # TICK-OVERLAP-05: headroom ticka (WARNING rate-limited, bez Telegrama)
+        _ov_warn = _overlap.note(elapsed, interval)
+        if _ov_warn:
+            _log.warning(_ov_warn)
 
         # Zbieramy totals
         for k in totals:
@@ -2283,6 +2341,7 @@ def run():
         if time.time() - last_log_summary >= 60:
             _log.info(
                 f"SUMMARY {cycle} cykli, elapsed_last={elapsed:.1f}s, "
+                f"{_overlap.summary_fragment()}, "
                 f"panel={stats.get('orders_in_panel','?')}, totals={totals}"
             )
             totals = {k: 0 for k in totals}
