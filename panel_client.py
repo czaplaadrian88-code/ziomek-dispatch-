@@ -216,6 +216,62 @@ def _load_session_from_disk():
         return None
 
 
+def _perform_login():
+    """Pełny flow loginu na ŚWIEŻYM openerze: GET _token → POST credentials →
+    GET verify. Zwraca (opener, cookiejar, csrf, html). Rzuca przy błędzie.
+
+    PANEL-SCRAPE-01 (2026-06-12): wyekstrahowane z login() bez zmiany logiki,
+    żeby panel_detail_prefetch budował NIEZALEŻNE sesje workerów tym samym
+    kanonicznym flow (osobny opener+CookieJar per wątek = zero kontaktu
+    z _session głównego procesu — landmine 419/install_opener nietykalna).
+    """
+    env = _creds()
+    opener, login_cj = _fresh_opener()
+
+    try:
+        r1 = opener.open(f"{BASE_URL}/admin2017/login", timeout=15)
+        body = r1.read().decode("utf-8", errors="replace")
+        m = re.search(r'name="_token" value="([^"]+)"', body)
+        if not m:
+            raise RuntimeError("Brak _token na stronie loginu")
+        token = m.group(1)
+    except Exception as e:
+        _log.error(f"login GET: {e}")
+        raise
+
+    try:
+        req = urllib.request.Request(
+            f"{BASE_URL}/admin2017/login",
+            urllib.parse.urlencode({
+                "email": env["PANEL_LOGIN"],
+                "password": env["PANEL_PASSWORD"],
+                "_token": token,
+            }).encode(),
+            headers={
+                "Referer": f"{BASE_URL}/admin2017/login",
+                "Origin": BASE_URL,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        opener.open(req, timeout=15)
+    except Exception as e:
+        _log.error(f"login POST: {e}")
+        raise
+
+    try:
+        res = opener.open(f"{BASE_URL}/admin2017/new/orders/zlecenia", timeout=15)
+        if "admin2017/login" in res.url:
+            raise RuntimeError("Zle credentials")
+        html = res.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        _log.error(f"login verify: {e}")
+        raise
+
+    m_csrf = re.search(r"var TOKEN = '([^']+)'", html)
+    csrf = m_csrf.group(1) if m_csrf else token
+    return opener, login_cj, csrf, html
+
+
 def login(force: bool = False) -> tuple:
     """Loguje. Zwraca (opener, csrf, html). Cache 20 min."""
     with _session_lock:
@@ -248,54 +304,11 @@ def login(force: bool = False) -> tuple:
                 return d_opener, d_csrf, None
 
         _log.info(f"login: fresh (age={age:.0f}s, force={force})")
-        env = _creds()
-        opener, _login_cj = _fresh_opener()
-
         try:
-            r1 = opener.open(f"{BASE_URL}/admin2017/login", timeout=15)
-            body = r1.read().decode("utf-8", errors="replace")
-            m = re.search(r'name="_token" value="([^"]+)"', body)
-            if not m:
-                raise RuntimeError("Brak _token na stronie loginu")
-            token = m.group(1)
-        except Exception as e:
+            opener, _login_cj, csrf, html = _perform_login()
+        except Exception:
             _session["last_ok"] = False
-            _log.error(f"login GET: {e}")
             raise
-
-        try:
-            req = urllib.request.Request(
-                f"{BASE_URL}/admin2017/login",
-                urllib.parse.urlencode({
-                    "email": env["PANEL_LOGIN"],
-                    "password": env["PANEL_PASSWORD"],
-                    "_token": token,
-                }).encode(),
-                headers={
-                    "Referer": f"{BASE_URL}/admin2017/login",
-                    "Origin": BASE_URL,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            )
-            opener.open(req, timeout=15)
-        except Exception as e:
-            _session["last_ok"] = False
-            _log.error(f"login POST: {e}")
-            raise
-
-        try:
-            res = opener.open(f"{BASE_URL}/admin2017/new/orders/zlecenia", timeout=15)
-            if "admin2017/login" in res.url:
-                _session["last_ok"] = False
-                raise RuntimeError("Zle credentials")
-            html = res.read().decode("utf-8", errors="replace")
-        except Exception as e:
-            _session["last_ok"] = False
-            _log.error(f"login verify: {e}")
-            raise
-
-        m_csrf = re.search(r"var TOKEN = '([^']+)'", html)
-        csrf = m_csrf.group(1) if m_csrf else token
 
         _session["opener"] = opener
         _session["csrf"] = csrf
@@ -470,6 +483,55 @@ def _open_with_relogin(req: urllib.request.Request, timeout: float = 10):
     raise RuntimeError("_open_with_relogin: unreachable")
 
 
+def _details_request(csrf: str, zid: str) -> urllib.request.Request:
+    """Request edit-zamowienie (detail endpoint) — wspólny dla głównej sesji
+    i workerów prefetchu (PANEL-SCRAPE-01)."""
+    return urllib.request.Request(
+        f"{BASE_URL}/admin2017/new/orders/edit-zamowienie",
+        urllib.parse.urlencode({"_token": csrf, "id_zlecenie": zid}).encode(),
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"{BASE_URL}/admin2017/new/orders/zlecenia",
+        },
+    )
+
+
+def _extract_zlecenie(parsed: dict) -> Optional[dict]:
+    """Z odpowiedzi edit-zamowienie wyciąga dict 'zlecenie' + merge top-level.
+
+    V3.19f FIX Finding #1 (2026-04-20): poprzednia wersja zwracała
+    wyłącznie raw.get("zlecenie"), wywalając top-level klucze. Panel
+    trzyma czas_kuriera (HH:MM declared courier arrival) na poziomie
+    response sibling do "zlecenie". Invisible data loss od V1 pipeline.
+    Fix: merge wszystkich top-level kluczy (oprócz "zlecenie") do
+    returned dict, żeby downstream normalize_order miał dostęp.
+    TECH_DEBT rule (2026-04-20): parse wrapper layer loguje unhandled
+    top-level keys — invisible data loss kosztowniejszy niż verbose log.
+    PANEL-SCRAPE-01 (2026-06-12): wyekstrahowane bez zmiany logiki — workerzy
+    prefetchu parsują identycznie jak główna ścieżka.
+    """
+    _zlecenie = parsed.get("zlecenie")
+    if isinstance(_zlecenie, dict):
+        _known_top = {"zlecenie"}
+        _handled = {"czas_kuriera"}  # explicitly propagate
+        for _k, _v in parsed.items():
+            if _k in _known_top:
+                continue
+            if _k in _handled:
+                _zlecenie[_k] = _v
+            else:
+                # A4: było _log.debug (niewidoczne w prod) → warn_once: nowe
+                # nieobsłużone pole panelu = potencjalna utrata danych (Lekcja #80).
+                _warn_once(
+                    f"unhandled_top_level:{_k}",
+                    f"fetch_order_details: unhandled top-level key "
+                    f"'{_k}' (type={type(_v).__name__}) — invisible data loss? "
+                    f"(loguję raz na klucz)",
+                )
+    return _zlecenie
+
+
 def fetch_order_details(zid: str, csrf: Optional[str] = None, timeout: int = 10) -> Optional[dict]:
     """POST edit-zamowienie. Zwraca surowy dict 'zlecenie' lub None.
 
@@ -484,44 +546,9 @@ def fetch_order_details(zid: str, csrf: Optional[str] = None, timeout: int = 10)
         opener, csrf, _ = login()
 
     try:
-        req = urllib.request.Request(
-            f"{BASE_URL}/admin2017/new/orders/edit-zamowienie",
-            urllib.parse.urlencode({"_token": csrf, "id_zlecenie": zid}).encode(),
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "X-Requested-With": "XMLHttpRequest",
-                "Referer": f"{BASE_URL}/admin2017/new/orders/zlecenia",
-            },
-        )
+        req = _details_request(csrf, zid)
         raw = _open_with_relogin(req, timeout=timeout).read().decode("utf-8", errors="replace")
-        _parsed = json.loads(raw)
-        _zlecenie = _parsed.get("zlecenie")
-        if isinstance(_zlecenie, dict):
-            # V3.19f FIX Finding #1 (2026-04-20): poprzednia wersja zwracała
-            # wyłącznie raw.get("zlecenie"), wywalając top-level klucze. Panel
-            # trzyma czas_kuriera (HH:MM declared courier arrival) na poziomie
-            # response sibling do "zlecenie". Invisible data loss od V1 pipeline.
-            # Fix: merge wszystkich top-level kluczy (oprócz "zlecenie") do
-            # returned dict, żeby downstream normalize_order miał dostęp.
-            # TECH_DEBT rule (2026-04-20): parse wrapper layer loguje unhandled
-            # top-level keys — invisible data loss kosztowniejszy niż verbose log.
-            _known_top = {"zlecenie"}
-            _handled = {"czas_kuriera"}  # explicitly propagate
-            for _k, _v in _parsed.items():
-                if _k in _known_top:
-                    continue
-                if _k in _handled:
-                    _zlecenie[_k] = _v
-                else:
-                    # A4: było _log.debug (niewidoczne w prod) → warn_once: nowe
-                    # nieobsłużone pole panelu = potencjalna utrata danych (Lekcja #80).
-                    _warn_once(
-                        f"unhandled_top_level:{_k}",
-                        f"fetch_order_details: unhandled top-level key "
-                        f"'{_k}' (type={type(_v).__name__}) — invisible data loss? "
-                        f"(loguję raz na klucz)",
-                    )
-        return _zlecenie
+        return _extract_zlecenie(json.loads(raw))
     except urllib.error.HTTPError as he:
         _log.warning(f"fetch_order_details({zid}): HTTP {he.code}")
         return None

@@ -845,6 +845,46 @@ def _compute_kid_diagnostic(state_order: dict, fresh_order: dict) -> dict:
     }
 
 
+def _build_prefetch_candidates(parsed: dict, current_state: dict, ignored_ids,
+                               freeze_new: bool, ck_detection_on: bool,
+                               pickup_time_detection_on: bool) -> list:
+    """PANEL-SCRAPE-01 (2026-06-12): lista zid, które bieżący tick i tak
+    fetchowałby sekwencyjnie — kandydaci do równoległego pre-fetchu.
+
+    Czysta funkcja (testowalna). Lustrzane predykaty pętli _diff_and_emit:
+      1. NOWE: w HTML, nieznane w state, nie-ignorowane (chyba że freeze_new).
+      2. ZNIKNIĘTE: aktywne w state, nieobecne w HTML (details → status 7/8/9?).
+      3. planned→assigned: w HTML, state nie-assigned, panel pokazuje przypisanie.
+      4. Scope re-checku czasów (V319G/PICKUP_TIME): assigned/picked_up
+         + planned czasówki obecne w HTML — to jest WIĘKSZOŚĆ fetchy/tick
+         (mediana 42, zmierzone 2026-06-12).
+    Pętle budżetowane (reassign≤5, packs, ghost, pu_reconcile≤10, closed
+    reconcile) celowo POZA prefetchem — mały wolumen, zostają sekwencyjne.
+    """
+    html_order_ids = set(parsed.get("order_ids") or [])
+    assigned_in_panel = parsed.get("assigned_ids") or set()
+    out = []
+    if not freeze_new:
+        for zid in parsed.get("order_ids") or []:
+            if zid not in current_state and zid not in ignored_ids:
+                out.append(zid)
+    for zid, so in current_state.items():
+        status = so.get("status")
+        if status in ("delivered", "returned_to_pool", "cancelled"):
+            continue
+        if zid not in html_order_ids:
+            out.append(zid)
+            continue
+        if status != "assigned" and zid in assigned_in_panel:
+            out.append(zid)
+        if ck_detection_on or pickup_time_detection_on:
+            is_czasowka = (so.get("order_type") == "czasowka"
+                           or (so.get("prep_minutes") or 0) >= 60)
+            if status in ("assigned", "picked_up") or (status == "planned" and is_czasowka):
+                out.append(zid)
+    return list(dict.fromkeys(out))
+
+
 def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     """Porownuje stan panel vs orders_state, emituje eventy.
     Zwraca statystyki tego cyklu."""
@@ -890,6 +930,43 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         _log.warning(f"PARSE-01 guard fail (non-blocking, no-freeze): {_pcg_e}")
         _freeze_new = False
 
+    # PANEL-SCRAPE-01 (2026-06-12): równoległy pre-fetch detali, które ten tick
+    # i tak by fetchował sekwencyjnie (~0.3 s/szt na głównej sesji, mediana
+    # 42/tick → ~12.6 s z 20 s interwału). Osobne sesje per wątek — główna
+    # sesja NIETKNIĘTA (NIGDY: edit-zamowienie na głównej sesji sekwencyjnie).
+    # Miss → sekwencyjny fallback w _details() = zachowanie sprzed zmiany.
+    # Kill-switch hot-reload: ENABLE_PANEL_DETAIL_PREFETCH w flags.json.
+    _prefetch_map = {}
+    try:
+        from dispatch_v2 import panel_detail_prefetch as _pdp
+        try:
+            from dispatch_v2.common import (
+                ENABLE_V319G_CK_DETECTION as _pf_ck,
+                ENABLE_PICKUP_TIME_DETECTION as _pf_pt)
+        except Exception:
+            _pf_ck = _pf_pt = False
+        _pf_zids = _build_prefetch_candidates(
+            parsed, current_state, _ignored_ids, _freeze_new, _pf_ck, _pf_pt)
+        _prefetch_map, _pf_stats = _pdp.prefetch_details(_pf_zids)
+        if _pf_stats.get("prefetch_enabled"):
+            for _pk in ("prefetch_requested", "prefetch_fetched",
+                        "prefetch_errors", "prefetch_s"):
+                stats[_pk] = _pf_stats[_pk]
+    except Exception as _pfe:
+        _log.warning(f"PANEL-SCRAPE-01 prefetch fail (non-blocking, full "
+                     f"fallback): {type(_pfe).__name__}: {_pfe}")
+        _prefetch_map = {}
+
+    def _details(zid):
+        """Detal zlecenia: hit z prefetchu (już pobrany równolegle) albo
+        sekwencyjny fetch na głównej sesji (miss — identyczna semantyka co
+        przed PANEL-SCRAPE-01). Wartość None W mapie = legit odpowiedź panelu
+        bez 'zlecenie' (nie ponawiamy)."""
+        if zid in _prefetch_map:
+            stats["prefetch_hits"] = stats.get("prefetch_hits", 0) + 1
+            return _prefetch_map[zid]
+        return fetch_order_details(zid, csrf)
+
     # 1. NOWE: ID widoczne w HTML ale nieznane w state.
     # PARSE-01: gdy _freeze_new => iterujemy po pustej liście (zero emisji NEW),
     # reszta _diff_and_emit (sekcja 2 — zmiany/terminalne) działa normalnie.
@@ -901,9 +978,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             stats["ignored"] += 1
             continue
 
-        # Nowe ID - fetch details i normalize
+        # Nowe ID - fetch details i normalize (PANEL-SCRAPE-01: prefetch-first)
         try:
-            raw = fetch_order_details(zid, csrf)
+            raw = _details(zid)
             stats["fetched_details"] += 1
         except Exception as e:
             _log.warning(f"fetch_details({zid}) fail: {e}")
@@ -1146,9 +1223,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         # Czy zlecenie nadal widoczne w panelu?
         if zid not in html_order_ids:
             # Zniknelo - moze zostalo zakonczone lub anulowane
-            # Sprawdzmy details zeby wiedziec
+            # Sprawdzmy details zeby wiedziec (PANEL-SCRAPE-01: prefetch-first)
             try:
-                raw = fetch_order_details(zid, csrf)
+                raw = _details(zid)
                 stats["fetched_details"] += 1
                 if raw:
                     status_id = raw.get("id_status_zamowienia")
@@ -1213,9 +1290,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
 
         # Transition: planned -> assigned
         if not was_assigned and is_assigned_now:
-            # Fetch details zeby wiedziec ktory kurier
+            # Fetch details zeby wiedziec ktory kurier (PANEL-SCRAPE-01)
             try:
-                raw = fetch_order_details(zid, csrf)
+                raw = _details(zid)
                 stats["fetched_details"] += 1
                 if raw and raw.get("id_kurier") and raw["id_kurier"] != KOORDYNATOR_ID:
                     courier_id = str(raw["id_kurier"])
@@ -1733,7 +1810,8 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             if zid not in html_order_ids:
                 continue  # terminal or vanished — skip
             try:
-                raw_ck = fetch_order_details(zid, csrf)
+                # PANEL-SCRAPE-01: ten scope to WIĘKSZOŚĆ fetchy/tick — prefetch-first
+                raw_ck = _details(zid)
                 stats["fetched_details"] = stats.get("fetched_details", 0) + 1
             except Exception as e:
                 _log.debug(f"order-time fetch fail zid={zid}: {e}")
