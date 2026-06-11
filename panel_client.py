@@ -149,7 +149,12 @@ def _fresh_opener():
 # GET-em (redirect na login → odpada, idzie zwykły login). Fail-soft: każdy
 # błąd cache → fresh login jak dotąd. Daemon nietknięty: jego ścieżka in-memory
 # ma pierwszeństwo, a force=True (bg refresh) omija dysk i nadpisuje go świeżą sesją.
-_SESSION_CACHE_PATH = Path("/root/.openclaw/workspace/.secrets/panel_session_cache.json")
+# dispatch_state (NIE .secrets): nadajesz-panel.service ma ProtectHome=read-only
+# z ReadWritePaths tylko na dispatch_state+scripts — zapis do .secrets dawał
+# OSError 30 (zaobserwowane 06-11 19:35). Plik i tak 0600. Legacy path zostaje
+# do ODCZYTU — piszą tam demony Ziomka do czasu ich restartu z nowym kodem.
+_SESSION_CACHE_PATH = Path("/root/.openclaw/workspace/dispatch_state/panel_session_cache.json")
+_SESSION_CACHE_LEGACY_PATH = Path("/root/.openclaw/workspace/.secrets/panel_session_cache.json")
 _SESSION_CACHE_TTL_SEC = 1200  # spójnie z in-memory TTL
 
 
@@ -174,11 +179,20 @@ def _load_session_from_disk():
     ufamy TTL 20 min; martwą sesję samonaprawiają istniejące ścieżki retry
     (_open_with_relogin na 401/419, fetch_panel_html redirect→force=True)."""
     try:
-        if not _SESSION_CACHE_PATH.exists():
-            return None
-        data = json.loads(_SESSION_CACHE_PATH.read_text())
-        saved_at = float(data.get("saved_at", 0))
-        if time.time() - saved_at >= _SESSION_CACHE_TTL_SEC:
+        # świeższy z dwóch plików (primary + legacy pisany przez stare demony)
+        data = None
+        saved_at = 0.0
+        for p in (_SESSION_CACHE_PATH, _SESSION_CACHE_LEGACY_PATH):
+            try:
+                if not p.exists():
+                    continue
+                d = json.loads(p.read_text())
+                sa = float(d.get("saved_at", 0))
+                if sa > saved_at:
+                    data, saved_at = d, sa
+            except Exception:  # noqa: BLE001 — uszkodzony jeden plik nie blokuje drugiego
+                continue
+        if data is None or time.time() - saved_at >= _SESSION_CACHE_TTL_SEC:
             return None
         csrf = data.get("csrf")
         if not csrf or not data.get("cookies"):
