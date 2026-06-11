@@ -182,6 +182,14 @@ Cztery małe, dobrze wycelowane fixy poprawiające dzisiejsze propozycje:
 
 **Ryzyko:** wysokie (szeroka zmiana rozkładu score) — dlatego OSTATNIE i dopiero z sędzią z E3. **Zależności:** E3 (dane), E2 (mnożnik naprawiony — inaczej kalibrujemy na artefakcie), E4 (jeden silnik).
 
+### E7-DOKLEJKI (dopisane 2026-06-11, sesja audytowa Bartek 2.0 — ACK Adriana)
+
+1. **Logrotate-aware sweep (ogon po SP-B2-LOGROT):** 3 czytniki nadal czytają TYLKO żywy plik i zaniżą okna po rotacji 100 MB: `r04_evaluator` (**okno 30 dni na learning_log!** — po rotacji widzi ~3 dni), `validation_gate_lgbm`, `learning_analyzer`. Fix = wzorzec `tools/_rotated_logs.py` (commit `4ba36ec`, SP-B2-LOGROT). ~1h, zrobić W TEJ sesji przed kalibracją wag (inaczej E7 liczy na obciętych danych!).
+2. **Konsumpcja pól Bartek 2.0 (NIE dublować analiz):** `pln_*` (funkcja celu PLN w shadow od 11.06 14:13, commit `76d6c5a`) + `sync_*`/`bonus_sync_spread` (FLIPNIĘTY 11.06) + `loadgov_*` (FLIPNIĘTY 11.06) + `repo_*`/`soon_free_*` (shadow) — pełen kontekst i werdykty: `/root/ROADMAP_BARTEK2_2026-06-11.md` sekcja „DO DECYZJI ADRIANA" + `/root/bartek2_workdir/agent_econ/REPORT.md`. Przy re-tune R4/R-NO-WASTE sprawdzić nakładanie z nowymi karami (sync/repo/loadgov), żeby nie karać tej samej osi 2×.
+3. **Wykonawczo przy flipach BUG A/B i carry_chain** (werdykty z 11.06 w DO DECYZJI): flagi są env-only — wciągnąć we wzorzec `decision_flag`/flags.json z ETAP4 (sekwencja: B → 7 dni → A częściowy bez Σ; carry_chain soft z `CARRY_CHAIN_HARD_REJECT_STOPS=999`).
+4. **Lekcja #186 sweep:** przy okazji sprawdzić, czy żadna z flag dotykanych w E7 nie gate'uje OBLICZENIA pól shadow (wzorzec: licz zawsze, flaga tylko score).
+5. **TODO drobne:** `dispatch_state/courier_vehicle.json` (cid → auto firmowe/własne) z panelu — uściśla koszt km w PLN-shadow (dziś konserwatywnie 0,90 dla wszystkich).
+
 ---
 
 ## RÓWNOLEGLE — ADOPCJA GPS (ops, Adrian; największa dźwignia danych) `[ ]`
