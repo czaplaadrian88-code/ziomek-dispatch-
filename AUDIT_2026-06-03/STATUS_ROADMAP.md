@@ -76,6 +76,12 @@ BUNDLE-02..06 (bundle_fit score zamiast samej odległości; 80% worków bez sygn
 
 **✖ SEL-01 ROZSTRZYGNIĘTY 2026-06-12: WERDYKT NIE-ROBIĆ** (`eod_drafts/2026-06-12/SEL01_VERDICT_2026-06-12.md`) — replay 1802 PROPOSE (02-11.06): wariant dir-bucket w kluczu dubluje błąd SELECTION_VETO (23/24 flipów na ujemny score, 2/24 na sentinel −1e9, 16/24 nadpisuje tier 0→1 late-pickup, 14/24 ucieka w cos=None); wariant tie-break bezpieczny ale pusty (0,1-0,3% decyzji); 57% cross-zwycięzców = scarcity (brak alternatyw — naprawia podaż, nie klucz). Kierunek wzmacniać przez wagi `bonus_r1_corridor` w E7 re-tune (at#131 17.06).
 
+**✖ FEAS-02 ROZSTRZYGNIĘTY 2026-06-12: WERDYKT NIE-ROBIĆ w kluczu** (`eod_drafts/2026-06-12/FEAS02_VERDICT_2026-06-12.md`, tag `feas02-verdict-no-go-2026-06-12`) — replay 2024 PROPOSE: blind-best 15,7%, 60% scarcity; flip na informed = mediana 111 pkt, gorszy tier 126/126. Store LAST-KNOWN-POS bez paliwa (gps w best 368→13 — adopcja GPS się zawaliła). Dźwignie: ops adopcja GPS 18→60% (PRIORYTET), flip `ENABLE_GPS_AGE_DISCOUNT` po rolloucie apki v2.
+
+**✔ BUNDLE-06 Faza 1 + BUNDLE-02 + BUNDLE-03 SHADOW LIVE 2026-06-12** (tag `bundle-fit-shadow-2026-06-12`): `bundle_fit` compute-zawsze (kierunek/świeżość/rozstrzał z istniejących sygnałów, zero nowych OSRM; solo→None) + `bundle_fit_marginal_min` (plan_total−free_at, telemetria) + `fix_c_additive_pen_shadow` (BUNDLE-03: kara addytywna zamiast no-op zerowania; cos<−0.3 → kara od pełnego spreadu). Flagi w kanonie ETAP4 flags.json=false: `ENABLE_BUNDLE_VALUE_SCORING` (reaktywowana per BUNDLE-08, tym razem z konsumentem) + `ENABLE_FIX_C_ADDITIVE_PENALTY`; wagi hot w NUMERIC_OVERRIDES. **Kalibracja wag + decyzja o flipie = E7 (at#131 17.06)** na zebranych polach shadow.
+
+**Zostało z D:** BUNDLE-04 (twardy cap span — walidacja na sla_log przy E7) · **BUNDLE-05 = lista flipów istniejących bramek dla Adriana** (V327 cross-quadrant score×0.1 + V326 wave veto + intra-rest gap — kod z testami, OFF; replay calibration przed flipem) · GEO-01/02/03 (OSRM w S_dystans / bariery / kalibracja drive_min — osobny sprint, effort medium-large) · SCORE-01..05 (= E7 17.06).
+
 ### E. AUTONOMIA (cel czerwiec'26 — ścieżka zaczęta)
 AUTON-01 (ścieżka auto-assign NIE ISTNIEJE w kodzie — `AUTO_APPROVE_*` zero call-site), AUTON-02 (4% AUTO), AUTON-04 (próg C2 placeholder), AUTON-08 (batching/continuous re-opt), AUTON-09 (wyuczony model ETA). A2 shadow = pierwszy krok Fazy 1.
 
