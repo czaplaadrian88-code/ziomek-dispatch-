@@ -270,6 +270,21 @@ def atomic_write_json(path: Path, data: dict) -> None:
         raise
 
 
+def _content_unchanged(existing: dict, payload: dict) -> bool:
+    """True gdy payload różni się od istniejącego pliku TYLKO polem generated_at.
+
+    Plik jest trackowany w git — cotygodniowy rebuild bez zmiany mapowania
+    bumpował sam timestamp i trzymał repo wiecznie brudnym (szum w git status
+    każdej sesji). Porównanie fail-soft: błąd → False (pisz jak dotychczas).
+    """
+    try:
+        a = {k: v for k, v in (existing or {}).items() if k != "generated_at"}
+        b = {k: v for k, v in (payload or {}).items() if k != "generated_at"}
+        return bool(a) and a == b
+    except Exception:
+        return False
+
+
 def build_and_save() -> dict:
     log.info("Scraping panel dropdown...")
     panel = scrape_panel_dropdown()
@@ -297,6 +312,15 @@ def build_and_save() -> dict:
             "by_method": method_counts,
         },
     }
+    try:
+        with open(MAPPING_PATH, encoding="utf-8") as f:
+            existing = json.load(f)
+    except Exception:
+        existing = None
+    if existing is not None and _content_unchanged(existing, payload):
+        log.info(f"Mapowanie bez zmian — plik nietknięty (generated_at zostaje "
+                 f"{existing.get('generated_at')})")
+        return existing
     atomic_write_json(MAPPING_PATH, payload)
     log.info(f"Zapisano → {MAPPING_PATH}")
     return payload
