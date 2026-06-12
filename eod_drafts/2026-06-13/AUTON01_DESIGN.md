@@ -152,3 +152,38 @@ czyta tylko znane klucze). Tor panelowy, czasówki (decyzyjnie), Lokalka — nie
   do tego czasu są neutralne.
 - Egzekutor: `ENABLE_AUTO_ASSIGN=false` w flags.json (hot, killswitch) —
   stan domyślny; twardy rollback = revert tagu `auton01-shadow-2026-06-13`.
+
+---
+
+## 9. FOLLOW-UP (ta sama noc, druga sesja): lekcja #188 w bramce — G11 ex-delta + G12
+
+**Korekta do §4 pkt 4** („tu brak delt score") — to było nieścisłe: delty rankingowe
+SĄ w surowym `best.score` i w marginie klasyfikatora, więc dotykały kryteriów AUTO
+w obu kierunkach:
+- kara sync −150 na best potrafiła **OTWORZYĆ** sufit G11 (jakość 200 → surowy 50 → pass);
+- kara sync na runner-upie sztucznie **ROZDYMAŁA** margin klasyfikatora (60−(−95)=155
+  zamiast jakościowych 5) → C2 przepuszczał.
+
+**Fix (commit follow-up po `a7efd21`):**
+- **G11** liczony na score jakościowym = reuse `dispatch_pipeline.
+  _gate_score_excluding_ranking_deltas` (kanon z `30a01d2`; lazy import, fail-soft
+  do surowego). Delty są ujemne ⇒ jakość ≥ surowy ⇒ test na jakości domyka oba kierunki.
+- **G12 (nowa)**: margin jakościowy w semantyce Z-10 — `quality(best) − max(quality
+  reszty MAYBE)` < próg bazowy poziomu (T1=15, bez bumpa HIGH_RISK — bump zaostrza
+  tylko G2) → blok `margin_ex_delta`. Bez listy kandydatów → fallback na margin
+  z `auto_route_context` vs ten sam próg (`margin_ex_delta_ctx`).
+- Kierunek „kara na best ZAMYKA AUTO przez G2" zostaje świadomie (fail-closed,
+  bezpieczna strona); recompute klasyfikatora na score ex-delta = decyzja E7.
+
+**Plan replayu pre-flip (wymóg #188 — symulacja bramek progowych, nie tylko selekcji):**
+1. Offline przebieg `evaluate_auto_assign` po ≥7 dniach shadow_decisions
+   (rekonstrukcja best/kandydatów z rekordu; pola `bonus_*_shadow_delta` są
+   serializowane — wystarczają do odtworzenia score jakościowego).
+2. Dwa przebiegi: flagi delt ON vs OFF — zbiór `would_auto` MUSI być identyczny
+   (inwariancja na delty). Różnica = regresja klasy #188, stop.
+3. Acceptance PANEL_AGREE w podzbiorze `would_auto` + rozkład `auto_block_reasons`
+   (per bramka) — baza: `eod_drafts/2026-06-13/AUTON01_ACCEPTANCE_SEGMENTS.md`
+   (12.06: route=AUTO acceptance 27%, pełny stos przepuszcza ~0 decyzji/2d —
+   progi flipu §4 wymagają rekalibracji w E7 zanim w ogóle będzie co flipować).
+4. Symulacja bramek progowych egzekutora: rate-cap/cooldown na osi czasu replayu
+   (ile wykonań/h by realnie wyszło), nie tylko statyczne would_auto.

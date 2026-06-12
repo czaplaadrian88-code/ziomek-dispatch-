@@ -37,6 +37,44 @@ def _gate_numeric(flags: Optional[Dict[str, Any]], name: str) -> float:
         return float(getattr(C, name))
 
 
+def _quality_score(cand: Any) -> Optional[float]:
+    """Score kandydata BEZ delt rankingowych (lekcja #188, fix 30a01d2).
+
+    Reuse kanonicznego `dispatch_pipeline._gate_score_excluding_ranking_deltas`
+    (lazy import — pipeline importuje ten moduł lazy w hooku, brak cyklu w
+    czasie wywołania). Fail-soft: gdy helper niedostępny/wyjątek → surowy score
+    (zachowanie sprzed fixa, bez nowych ścieżek błędu w hot-path).
+    """
+    try:
+        from dispatch_v2.dispatch_pipeline import (
+            _gate_score_excluding_ranking_deltas as _ex,
+        )
+        v = _ex(cand)
+        if isinstance(v, (int, float)):
+            return float(v)
+    except Exception:
+        pass
+    sc = getattr(cand, "score", None)
+    return float(sc) if isinstance(sc, (int, float)) else None
+
+
+def _min_margin_threshold(flags: Optional[Dict[str, Any]]) -> float:
+    """Próg marginu poziomu klasyfikatora (T1/T2/T3) — bez bumpa HIGH_RISK.
+
+    Bump HIGH_RISK zaostrza wyłącznie klasyfikator (G2 egzekwuje go na marginie
+    z deltami); G12 sprawdza próg BAZOWY na marginie ex-delta. Fail-soft → T1.
+    """
+    src = flags if isinstance(flags, dict) else {}
+    try:
+        from dispatch_v2.auto_proximity_classifier import DEFAULT_THRESHOLDS
+        level = str(src.get("AUTO_PROXIMITY_THRESHOLD", "T1"))
+        table = src.get("AUTO_PROXIMITY_THRESHOLDS") or DEFAULT_THRESHOLDS
+        cfg = table.get(level) or DEFAULT_THRESHOLDS.get("T1", {})
+        return float(cfg.get("min_score_margin", 15.0))
+    except Exception:
+        return 15.0
+
+
 def evaluate_auto_assign(
     result: Any,
     order_event: Optional[Dict[str, Any]],
@@ -134,9 +172,42 @@ def evaluate_auto_assign(
 
     # G11: sufit nieufności score (Bartek 2.0 §4.1 — breach 13,5-18% przy
     # score>90, inflacja R4; korelacja score↔wynik odwraca się w górze).
+    # Lekcja #188 (wymóg promptu AUTON-01): kryterium na score BEZ delt
+    # rankingowych (sync/loadgov) — kara sync −150 na surowym score potrafiła
+    # OTWORZYĆ sufit (jakość 200 → surowy 50 → pass). Delty są ujemne, więc
+    # score jakościowy ≥ surowy — test na jakościowym domyka oba kierunki.
     ceiling = _gate_numeric(flags, "AUTO_ASSIGN_SCORE_DISTRUST_CEILING")
-    score = float(getattr(best, "score", 0.0) or 0.0)
+    q_best = _quality_score(best)
+    score = q_best if q_best is not None else float(getattr(best, "score", 0.0) or 0.0)
     if score > ceiling:
         blocks.append(f"score_distrust_ceiling:{score:.1f}")
+
+    # G12: margin na score BEZ delt rankingowych (lekcja #188, semantyka Z-10:
+    # quality(best) − max(quality reszty feasible)). Kara sync −150 na runner-upie
+    # sztucznie ROZDYMA margin klasyfikatora (G2 widzi margin z deltami) — kara
+    # nie może otwierać AUTO. Kierunek odwrotny (kara na best ZAMYKA AUTO przez
+    # niższy margin w G2) = fail-closed, świadomie zostaje — recompute klasyfikatora
+    # ex-delta to temat E7. Bez listy kandydatów (stare rekordy/testy) fallback:
+    # margin z kontekstu klasyfikatora vs ten sam próg bazowy.
+    min_margin = _min_margin_threshold(flags)
+    cands = getattr(result, "candidates", None) or []
+    others_q: List[float] = []
+    for c in cands:
+        if c is best or getattr(c, "courier_id", None) == getattr(best, "courier_id", None):
+            continue
+        if getattr(c, "feasibility_verdict", "MAYBE") != "MAYBE":
+            continue
+        qc = _quality_score(c)
+        if qc is not None:
+            others_q.append(qc)
+    if others_q and q_best is not None:
+        margin_ex = q_best - max(others_q)
+        if margin_ex < min_margin:
+            blocks.append(f"margin_ex_delta:{margin_ex:.1f}<{min_margin:.0f}")
+    elif not cands:
+        ctx_margin = ctx.get("auto_route_score_margin")
+        if isinstance(ctx_margin, (int, float)) and float(ctx_margin) < min_margin:
+            blocks.append(f"margin_ex_delta_ctx:{float(ctx_margin):.1f}<{min_margin:.0f}")
+    # (kandydaci są, ale solo-feasible → margin niezdefiniowany; scarcity łapie G10)
 
     return (len(blocks) == 0), blocks

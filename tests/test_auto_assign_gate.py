@@ -389,3 +389,85 @@ def test_module_default_is_off():
 def test_decision_flag_default_off():
     # conftest izoluje flags.json (klucz wycięty) → fallback = stała modułu OFF
     assert C.decision_flag("ENABLE_AUTO_ASSIGN") is False
+
+
+# ---------------- G11+G12 — lekcja #188: score bez delt rankingowych ----------------
+# Follow-up po a7efd21 (wymóg promptu AUTON-01): kara sync/loadgov nie może
+# ani otwierać, ani zamykać AUTO. Reuse dispatch_pipeline.
+# _gate_score_excluding_ranking_deltas (fix 30a01d2).
+
+def test_g11_sync_penalty_cannot_open_ceiling(monkeypatch):
+    # Jakość 200 (sufit 90 blokuje), kara sync -150 → surowy 50.
+    # Przed fixem #188 bramka widziała 50 i przepuszczała.
+    monkeypatch.setattr(C, "ENABLE_BUNDLE_SYNC_SPREAD", True, raising=False)
+    best = _candidate(score=50.0, metrics={
+        "pos_source": "gps", "bonus_sync_spread_shadow_delta": -150.0,
+    })
+    would, blocks = evaluate_auto_assign(_result(best=best), _ev(), INFORMED)
+    assert would is False
+    assert any(b.startswith("score_distrust_ceiling:200.0") for b in blocks)
+
+
+def test_g11_flag_off_raw_score_unchanged(monkeypatch):
+    # Flaga sync OFF → helper nie koryguje → surowy 50 pod sufitem → pass.
+    monkeypatch.setattr(C, "ENABLE_BUNDLE_SYNC_SPREAD", False, raising=False)
+    best = _candidate(score=50.0, metrics={
+        "pos_source": "gps", "bonus_sync_spread_shadow_delta": -150.0,
+    })
+    would, blocks = evaluate_auto_assign(_result(best=best), _ev(), INFORMED)
+    assert would is True
+    assert blocks == []
+
+
+def test_g12_penalty_on_runner_up_cannot_inflate_margin(monkeypatch):
+    # Runner-up z karą sync -150: margin z deltami = 60-(-95) = 155 (klasyfikator
+    # widzi AUTO), margin jakościowy = 60-55 = 5 < 15 → blok.
+    monkeypatch.setattr(C, "ENABLE_BUNDLE_SYNC_SPREAD", True, raising=False)
+    best = _candidate(score=60.0, cid="101")
+    best.feasibility_verdict = "MAYBE"
+    other = _candidate(score=-95.0, cid="202", metrics={
+        "pos_source": "gps", "bonus_sync_spread_shadow_delta": -150.0,
+    })
+    other.feasibility_verdict = "MAYBE"
+    would, blocks = evaluate_auto_assign(
+        _result(best=best, candidates=[best, other]), _ev(), INFORMED)
+    assert would is False
+    assert any(b.startswith("margin_ex_delta:5.0<15") for b in blocks)
+
+
+def test_g12_clean_wide_margin_passes():
+    best = _candidate(score=60.0, cid="101")
+    best.feasibility_verdict = "MAYBE"
+    other = _candidate(score=20.0, cid="202")
+    other.feasibility_verdict = "MAYBE"
+    would, blocks = evaluate_auto_assign(
+        _result(best=best, candidates=[best, other]), _ev(), INFORMED)
+    assert would is True
+    assert blocks == []
+
+
+def test_g12_ctx_fallback_blocks_low_margin():
+    # Bez listy kandydatów (stare rekordy/testy) → fallback na margin z kontekstu.
+    ctx = {
+        "auto_route_pool_feasible": 4,
+        "auto_route_pool_total": 9,
+        "auto_route_score_margin": 3.0,
+        "auto_route_tier_best": "std+",
+        "auto_route_pos_source_best": "gps",
+        "auto_route_czasowka": False,
+        "auto_route_best_effort": False,
+        "auto_route_best_is_score_top": True,
+    }
+    would, blocks = evaluate_auto_assign(_result(ctx=ctx), _ev(), INFORMED)
+    assert would is False
+    assert any(b.startswith("margin_ex_delta_ctx:3.0<15") for b in blocks)
+
+
+def test_g12_solo_feasible_no_margin_block():
+    # Kandydaci są, ale solo-feasible → margin niezdefiniowany; scarcity to G10.
+    best = _candidate(score=60.0, cid="101")
+    best.feasibility_verdict = "MAYBE"
+    would, blocks = evaluate_auto_assign(
+        _result(best=best, candidates=[best]), _ev(), INFORMED)
+    assert would is True
+    assert not any(b.startswith("margin_ex_delta") for b in blocks)
