@@ -190,6 +190,13 @@ Cztery małe, dobrze wycelowane fixy poprawiające dzisiejsze propozycje:
 4. **Lekcja #186 sweep:** przy okazji sprawdzić, czy żadna z flag dotykanych w E7 nie gate'uje OBLICZENIA pól shadow (wzorzec: licz zawsze, flaga tylko score).
 5. **TODO drobne:** `dispatch_state/courier_vehicle.json` (cid → auto firmowe/własne) z panelu — uściśla koszt km w PLN-shadow (dziś konserwatywnie 0,90 dla wszystkich).
 
+### E7-DOKLEJKI #6-#9 (dopisane 2026-06-13 nocą, ACK Adriana „jedziemy z tym")
+
+6. **AUTON-01 — kalibracja bramki AUTO (wejście obowiązkowe):** telemetria `would_auto_assign`+`auto_block_reasons` płynie od restartu shadow 13.06 02:30 UTC (commit `a7efd21` tag `auton01-shadow-2026-06-13`; projekt `eod_drafts/2026-06-13/AUTON01_DESIGN.md`). Na 17.06 będzie ~4 dni — NAJMŁODSZY strumień; jeśli n za małe na segmenty, kalibrację progów AUTO dosłać +3 dni (flip i tak osobny krok za ACK + E2E). Zadania: (a) progi T1/T2/T3 przeliczyć na marginie Z-10; (b) decyzja margin-first vs **acceptance-first targeting** na podstawie `eod_drafts/2026-06-13/AUTON01_ACCEPTANCE_SEGMENTS.md` (n=245: margin NIE przewiduje acceptance; najlepsze segmenty std/std+ × off-peak 40-53%); (c) **anomalia gold (16% acceptance) wyjaśnić PRZED flipem** (hipoteza rotacji B3 — AUTO na goldach psułoby dystrybucję zarobków); (d) sufit `AUTO_ASSIGN_SCORE_DISTRUST_CEILING=90` re-ocenić PO capie R4 (krok 1 — sufit jest obejściem inflacji R4); (e) kalibracja na ROZKŁADZIE block-reasons (zdejmowanie bramek po jednej), nie na czekaniu aż pełny stos przepuści ≥200.
+7. **Czasówki — nowa baza score do bramki T-60/T-50 (decyzja Adriana 13.06: spiąć z E7):** raport `eod_drafts/2026-06-12/czasowka_proactive_calib.md` — próg score≥30 w obecnej semantyce NIE przejdzie nigdy (czyste okno: median sb_score −125,5, would_assign 0/27); potrzebna **projekcja score na T-0** (zdjąć komponenty zależne od „teraz": timing/wait/bag w chwili ewaluacji), nie strojenie progów. Czyste dane sb_* od 12.06 18:33 (~4-5 dni na 17.06). Dopiero po tej decyzji KROK 3 (flip TYLKO T-50) → KROK 4 KPI.
+8. **Okna skażone — wykluczyć z KAŻDEJ analizy E7:** (a) PARSER_DEGRADED 06-06 17:53 → 06-10 18:24 (już wykluczone z faza7_daily_kpi — utrzymać w replayach); (b) **incydent syncworki 11.06 14:28 → 12.06 18:32** (kara −150 w score wszystkich silników, median sb_score −163,7; lekcja #188).
+9. **Przy każdym liczeniu na score w E7:** używać score BEZ delt rankingowych (`_gate_score_excluding_ranking_deltas`, fix `30a01d2`) tam, gdzie pytanie dotyczy JAKOŚCI kandydata, a score z deltami tam, gdzie pytanie dotyczy SELEKCJI — rozjazd tych dwóch to mechanika incydentu syncworki (lekcja #188); w bramce AUTON-01 robi to G11/G12.
+
 ---
 
 ## RÓWNOLEGLE — ADOPCJA GPS (ops, Adrian; największa dźwignia danych) `[ ]`
