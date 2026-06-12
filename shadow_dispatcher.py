@@ -525,6 +525,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         "auto_route": getattr(result, "auto_route", "ACK"),
         "auto_route_reason": getattr(result, "auto_route_reason", ""),
         "auto_route_context": getattr(result, "auto_route_context", {}) or {},
+        # AUTON-01 (2026-06-13): bramka auto-assign — telemetria compute-zawsze
+        # (dispatch_pipeline._classify_and_set_auto_route → auto_assign_gate).
+        # would_auto_assign=None gdy gate nie liczony (KOORD/SKIP bez classify).
+        # Egzekucja TYLKO przez auto_assign_executor za ENABLE_AUTO_ASSIGN.
+        "would_auto_assign": getattr(result, "would_auto_assign", None),
+        "auto_block_reasons": getattr(result, "auto_block_reasons", None),
         # FAIL-04 (2026-06-06): shadow-first prep-variance anomaly (slepa wiara w
         # prep panelu). None gdy brak anomalii lub flaga OFF. NIE wplywa na decyzje.
         "prep_variance_anomaly": getattr(result, "prep_variance_anomaly", None),
@@ -1178,6 +1184,19 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
                 _log.warning(f"fail03_k2_shadow fail oid={oid}: {_k2_e}")
 
             _append_decision(shadow_log_path, record)
+
+            # AUTON-01 (2026-06-13): egzekutor auto-assign ZA FLAGĄ (kanon
+            # ETAP4, ENABLE_AUTO_ASSIGN default false → return None, zero I/O).
+            # Hook TYLKO tu (nie w pipeline) — czasówka/plan-recheck nigdy nie
+            # wykonują przypisań. Fail-safe: wyjątek nie zakłóca pętli shadow.
+            try:
+                from dispatch_v2 import auto_assign_executor
+                _aa_out = auto_assign_executor.maybe_execute(record, result, payload)
+                if _aa_out is not None:
+                    _log.info(f"AUTO_ASSIGN oid={oid} outcome={_aa_out}")
+            except Exception as _aa_e:
+                _log.warning(f"auto_assign executor hook fail oid={oid}: {_aa_e}")
+
             event_bus.mark_processed(eid)
             stats["processed"] += 1
             _log.info(

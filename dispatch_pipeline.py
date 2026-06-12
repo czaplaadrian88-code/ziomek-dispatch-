@@ -1825,6 +1825,12 @@ class PipelineResult:
     # empirical_p90_min, gap_min, threshold_min, chronically_late}. Read-only consumption
     # w shadow_dispatcher._serialize_result. NIE wplywa na pickup_ready_at/score/verdict.
     prep_variance_anomaly: Optional[Dict[str, Any]] = None
+    # AUTON-01 (2026-06-13): telemetria bramki auto-assign, compute-zawsze
+    # (lekcja #186). would_auto_assign=None tylko gdy gate nie był liczony
+    # (KOORD/SKIP bez classify). Egzekucja = auto_assign_executor (shadow only,
+    # flaga ENABLE_AUTO_ASSIGN). Projekt: eod_drafts/2026-06-13/AUTON01_DESIGN.md.
+    would_auto_assign: Optional[bool] = None
+    auto_block_reasons: Optional[List[str]] = None
 
 
 # ─── FAIL-04: prep-variance anomaly (A1 anomaly block, shadow-first) ───
@@ -2000,6 +2006,25 @@ def _classify_and_set_auto_route(
     # FAIL-04 (shadow-first): wykryj slepa-wiare-w-prep dla wysoko-wariancyjnych
     # restauracji. Osobny try wewnatrz helpera — nie moze zaklocic auto_route.
     _detect_and_set_prep_variance_anomaly(result, order_event)
+    # AUTON-01 (2026-06-13): bramka auto-assign — czysta telemetria liczona
+    # ZAWSZE po klasyfikacji (lekcja #186). Defensywnie: wyjatek → fail-closed
+    # (would=False + marker), nigdy nie zaklóca decyzji.
+    try:
+        from dispatch_v2.auto_assign_gate import evaluate_auto_assign
+        _would, _blocks = evaluate_auto_assign(
+            result, order_event, INFORMED_POS_SOURCES, flags=C.load_flags(),
+        )
+        result.would_auto_assign = _would
+        result.auto_block_reasons = _blocks
+    except Exception as _aa_e:
+        result.would_auto_assign = False
+        result.auto_block_reasons = [f"gate_exception:{type(_aa_e).__name__}"]
+        try:
+            log.warning(
+                f"auto_assign gate exception order={getattr(result, 'order_id', '?')}: {_aa_e}"
+            )
+        except Exception:
+            pass
 
 
 def get_pickup_ready_at(

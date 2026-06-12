@@ -96,6 +96,11 @@ ETAP4_DECISION_FLAGS = (
     # addytywna kara FIX_C (shadow-first, delty zawsze, flip po E7 za ACK).
     "ENABLE_BUNDLE_VALUE_SCORING",
     "ENABLE_FIX_C_ADDITIVE_PENALTY",
+    # AUTON-01 (Front E, 2026-06-13): egzekutor auto-assign. Telemetria
+    # would_auto_assign liczona ZAWSZE (lekcja #186); flaga gate'uje WYŁĄCZNIE
+    # wykonanie w auto_assign_executor. Flip po E7 za ACK + osobne E2E.
+    # Projekt: eod_drafts/2026-06-13/AUTON01_DESIGN.md.
+    "ENABLE_AUTO_ASSIGN",
 )
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
@@ -122,6 +127,11 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "BUNDLE_FIT_SPAN_PER_MIN",
     "FIX_C_ADDITIVE_PEN_PER_KM",
     "FIX_C_ADDITIVE_COS_TRIGGER",
+    # AUTON-01 (2026-06-13): progi bramki + bezpieczniki egzekutora.
+    "AUTO_ASSIGN_MIN_POOL_FEASIBLE",
+    "AUTO_ASSIGN_SCORE_DISTRUST_CEILING",
+    "AUTO_ASSIGN_MAX_PER_HOUR",
+    "AUTO_ASSIGN_OVERRIDE_COOLDOWN_MIN",
 )
 
 # Front C (2026-06-12): killswitche INFRA (nie-decyzyjne) sterowane z flags.json
@@ -586,6 +596,26 @@ POST_WAVE_BONUS_SLOW = 8.0        # free_at_min ≤ 30 min
 AUTO_APPROVE_THRESHOLD = 130
 AUTO_APPROVE_MIN_GAP = 10
 AUTO_APPROVE_ENABLED = False
+# ⚠ DEPRECATED (2026-06-13, AUTON-01): powyższe AUTO_APPROVE_* to martwe
+# placeholdery F2.1c (zero call-site od zawsze) — zostawione tylko dla
+# legacy testu test_decision_engine_f21. Realna ścieżka auto-assign =
+# auto_assign_gate (telemetria) + auto_assign_executor (egzekucja za
+# ENABLE_AUTO_ASSIGN). Projekt: eod_drafts/2026-06-13/AUTON01_DESIGN.md.
+
+# ─── AUTON-01 (2026-06-13): bramka + bezpieczniki auto-assign ───
+# Flaga decyzyjna: kanon flags.json (ETAP4), fallback module-level OFF.
+# Telemetria would_auto_assign/auto_block_reasons liczona ZAWSZE niezależnie
+# od flagi (lekcja #186) — flaga gate'uje wyłącznie egzekutor.
+ENABLE_AUTO_ASSIGN = False
+# Bramka jakościowa (auto_assign_gate; nadpisywalne hot z flags.json):
+AUTO_ASSIGN_MIN_POOL_FEASIBLE = 3        # mniej feasible = scarcity → człowiek
+# Bartek 2.0 §4.1: breach 13,5-18% przy score>90 (inflacja R4) — korelacja
+# score↔wynik się odwraca w górnym zakresie. Sufit do re-oceny w E7 po capie R4.
+AUTO_ASSIGN_SCORE_DISTRUST_CEILING = 90.0
+# Bezpieczniki egzekutora (auto_assign_executor, stanowe — NIE wchodzą do
+# would_auto_assign, patrz AUTON01_DESIGN.md §3/§5):
+AUTO_ASSIGN_MAX_PER_HOUR = 6             # rate-cap wykonań
+AUTO_ASSIGN_OVERRIDE_COOLDOWN_MIN = 60.0 # cisza po PANEL_OVERRIDE na kurierze
 
 # ─── Anomaly detection: prep-variance ZREALIZOWANE jako FAIL-04 (2026-06-06,
 # shadow LIVE, konsument dispatch_pipeline._detect_prep_variance_anomaly).
