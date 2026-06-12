@@ -3,9 +3,10 @@
 Pre-fix: weekend = 1.0 flat → matrix = raw OSRM free-flow w sobotni peak 16-21
 → #468508/#468509 30-50% pod-estymata timing.
 
-Post-fix:
-- saturday: peak 12-21 max ×1.2 (Adrian's conservative table)
-- sunday: flat ×1.0 (drogi puste)
+Post-fix V3.27: saturday peak 12-21 max ×1.2, sunday flat ×1.0.
+RECALIB WEEKEND 2026-06-12 (smoothed, GATE B): saturday peak 16-17 ×1.55,
+sunday lunch/popołudnie 1.15-1.50 (recalib_weekend_verdict_2026-06-05.txt
++ validate_weekend_smoothed.py).
 
 Run: python3 tests/test_v327_traffic_multiplier.py
 """
@@ -55,20 +56,21 @@ def test_weekday_buckets_unchanged():
 
 
 def test_saturday_peak_12_21():
-    """V3.27 sobota peak buckety: 00-12=1.0, 12-15=1.1, 15-17=1.2, 17-21=1.2, 21-24=1.0."""
-    # Saturday 25.04.2026 (weekday 5) — proposal #468508/#468509 reproduction
+    """RECALIB WEEKEND 2026-06-12 sobota (smoothed): 00-12=1.0, 12-13=1.3,
+    13-16=1.2, 16-17=1.55, 17-18=1.45, 18-21=1.25, 21-22=1.1, 22-24=1.0."""
+    # Saturday 25.04.2026 (weekday 5)
     cases = [
-        (0, 1.0),    # 00-12
-        (8, 1.0),    # 00-12
-        (11, 1.0),   # 00-12 (boundary just before)
-        (12, 1.1),   # 12-15
-        (14, 1.1),   # 12-15
-        (15, 1.2),   # 15-17
-        (16, 1.2),   # 15-17 — #468508/#468509 reproduction case
-        (17, 1.2),   # 17-21
-        (20, 1.2),   # 17-21
-        (21, 1.0),   # 21-24
-        (23, 1.0),   # 21-24
+        (0, 1.0),     # 00-12
+        (8, 1.0),     # 00-12
+        (11, 1.0),    # 00-12 (boundary just before)
+        (12, 1.30),   # 12-13
+        (14, 1.20),   # 13-16
+        (15, 1.20),   # 13-16
+        (16, 1.55),   # 16-17 — peak (#468508/#468509 case, było 1.2)
+        (17, 1.45),   # 17-18
+        (20, 1.25),   # 18-21
+        (21, 1.10),   # 21-22
+        (23, 1.0),    # 22-24
     ]
     for h, expected in cases:
         dt = _wsa(2026, 4, 25, h)  # Saturday
@@ -77,8 +79,11 @@ def test_saturday_peak_12_21():
 
 
 def test_sunday_flat_1_0():
-    """V3.27 niedziela płaska 1.0 całą dobę — drogi puste."""
-    cases = [(0, 1.0), (8, 1.0), (12, 1.0), (16, 1.0), (20, 1.0), (23, 1.0)]
+    """RECALIB WEEKEND 2026-06-12 niedziela: NIE-płaska — lunch/popołudnie realnie
+    obciążone (stara flat 1.0 zaniżała do bias −3.96 OOS). Nazwa funkcji zachowana
+    dla ciągłości historii uruchomień."""
+    cases = [(0, 1.0), (8, 1.0), (11, 1.50), (12, 1.40), (16, 1.30), (19, 1.15),
+             (20, 1.0), (23, 1.0)]
     for h, expected in cases:
         dt = _wsa(2026, 4, 26, h)  # Sunday
         actual = C.get_traffic_multiplier(dt)
@@ -98,16 +103,16 @@ def test_naive_datetime_raises():
 
 def test_boundary_inclusive_lower_exclusive_upper():
     """V3.27 bucket convention [lo, hi) — lower inclusive, upper exclusive.
-    Sobota 12:00 sharp → 1.1 (12-15), 15:00 sharp → 1.2 (15-17).
+    RECALIB WEEKEND 06-12: sobota 12:00 sharp → 1.3 (12-13), 13:00 sharp → 1.2 (13-16).
     """
     dt_12 = _wsa(2026, 4, 25, 12, 0)
-    assert C.get_traffic_multiplier(dt_12) == 1.1, "sobota 12:00 sharp = 1.1"
-    dt_15 = _wsa(2026, 4, 25, 15, 0)
-    assert C.get_traffic_multiplier(dt_15) == 1.2, "sobota 15:00 sharp = 1.2"
+    assert C.get_traffic_multiplier(dt_12) == 1.30, "sobota 12:00 sharp = 1.30 (12-13)"
+    dt_13 = _wsa(2026, 4, 25, 13, 0)
+    assert C.get_traffic_multiplier(dt_13) == 1.20, "sobota 13:00 sharp = 1.20 (13-16)"
     dt_17 = _wsa(2026, 4, 25, 17, 0)
-    assert C.get_traffic_multiplier(dt_17) == 1.2, "sobota 17:00 sharp = 1.2 (17-21)"
-    dt_21 = _wsa(2026, 4, 25, 21, 0)
-    assert C.get_traffic_multiplier(dt_21) == 1.0, "sobota 21:00 sharp = 1.0 (21-24)"
+    assert C.get_traffic_multiplier(dt_17) == 1.45, "sobota 17:00 sharp = 1.45 (17-18)"
+    dt_22 = _wsa(2026, 4, 25, 22, 0)
+    assert C.get_traffic_multiplier(dt_22) == 1.0, "sobota 22:00 sharp = 1.0 (22-24)"
 
 
 def test_table_structure_consistency():
@@ -128,12 +133,12 @@ def test_table_structure_consistency():
 
 
 def test_proposal_468508_reproduction():
-    """#468508 reproduction: sobota 14:00 UTC = 16:00 Warsaw → mult=1.2 (NIE 1.0).
-    Pre-fix matrix was raw OSRM free-flow → 30% pod-estymata.
-    Post-fix matrix × 1.2 → reflects sobotni peak."""
+    """#468508 reproduction: sobota 14:00 UTC = 16:00 Warsaw → mult>1.0 (NIE 1.0).
+    Pre-V3.27 matrix was raw OSRM free-flow → 30% pod-estymata; V3.27 dało 1.2,
+    RECALIB WEEKEND 06-12 (median-based) → 1.55 (bucket 16-17)."""
     dt = datetime(2026, 4, 25, 14, 0, tzinfo=UTC)  # 16:00 Warsaw Saturday
     actual = C.get_traffic_multiplier(dt)
-    assert actual == 1.2, f"#468508 case (sobota 16:00 Warsaw): expected 1.2, got {actual}"
+    assert actual == 1.55, f"#468508 case (sobota 16:00 Warsaw): expected 1.55, got {actual}"
 
 
 if __name__ == "__main__":

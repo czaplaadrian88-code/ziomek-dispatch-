@@ -66,24 +66,25 @@ def test_helper_weekday_buckets():
 
 
 def test_helper_weekend_all_day():
-    """V3.27 update: Saturday peak 12-21 (max 1.2), Sunday flat 1.0.
+    """RECALIB WEEKEND 2026-06-12 (smoothed): sobota peak 16-17=1.55,
+    niedziela NIE-płaska (16:00 → 1.30).
 
-    Pre-V3.27: weekend was flat 1.0 całą dobę → matrix raw OSRM free-flow w
-    sobotni peak 16-21 → 30-50% timing pod-estymata (Bug X #468508/#468509).
-    V3.27 Bug X fix split weekend → sat/sun, sobota peak 12-21 max ×1.2.
+    Historia: pre-V3.27 weekend flat 1.0 (Bug X #468508/#468509), V3.27 sobota
+    max 1.2 / niedziela 1.0, recalib 06-12 median-based z GATE B (sob n=186,
+    ndz n=215 — niedziela była zaniżana do bias −3.96 OOS).
     """
     # 2026-04-25 Sat (weekday()==5), 2026-04-26 Sun (weekday()==6)
     sat_morning = _utc_for_warsaw(2026, 4, 25, 9, 0)   # 00-12 → 1.0
-    sun = _utc_for_warsaw(2026, 4, 26, 16, 0)           # niedziela płaska → 1.0
+    sun_late = _utc_for_warsaw(2026, 4, 26, 21, 0)      # 20-24 → 1.0
     assert common.get_traffic_multiplier(sat_morning) == 1.0
-    assert common.get_traffic_multiplier(sun) == 1.0
-    # V3.27 Saturday peak hour 16:00 → 1.2 (NIE 1.0 jak pre-V3.27)
+    assert common.get_traffic_multiplier(sun_late) == 1.0
+    # RECALIB Saturday peak hour 16:00 → 1.55
     sat_peak = _utc_for_warsaw(2026, 4, 25, 16, 0)
-    assert common.get_traffic_multiplier(sat_peak) == 1.2, \
-        f"V3.27: sobota 16:00 powinno być 1.2, got {common.get_traffic_multiplier(sat_peak)}"
-    # Niedziela peak hour identical → 1.0
+    assert common.get_traffic_multiplier(sat_peak) == 1.55, \
+        f"RECALIB: sobota 16:00 powinno być 1.55, got {common.get_traffic_multiplier(sat_peak)}"
+    # RECALIB Sunday peak hour 16:00 → 1.30 (bucket 16-19)
     sun_peak = _utc_for_warsaw(2026, 4, 26, 16, 0)
-    assert common.get_traffic_multiplier(sun_peak) == 1.0
+    assert common.get_traffic_multiplier(sun_peak) == 1.30
     print("PASS test_helper_weekend_all_day")
 
 

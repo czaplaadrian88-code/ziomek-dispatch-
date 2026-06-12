@@ -368,20 +368,33 @@ V326_OSRM_TRAFFIC_TABLE = {
         (20, 21, 1.10),
         (21, 24, 1.05),
     ],
-    # V3.27 Bug X fix (2026-04-25 wieczór): split weekend → saturday/sunday.
-    # Pre-fix: weekend=1.0 flat całą dobę → matrix=raw OSRM free-flow w sobotni
-    # peak 16-21 → 30-50% pod-estymata timing (#468508/#468509 reproduction).
-    # Adrian's decyzja: sobota peak 12-21 conservative (max 1.2), niedziela płaska 1.0.
-    # Memory user: "Pn-Pt 11-14 + 17-20, sobota 16-21 (długi peak), niedziela TBD".
+    # RECALIB WEEKEND 2026-06-12 (smoothed, analog weekday wariant B) — median-based
+    # z GATE B (eod_drafts/2026-05-14/tomtom_poc/recalib_weekend_verdict_2026-06-05.txt,
+    # smoothed: validate_weekend_smoothed.py). Walidacja na danych do 11.06
+    # (sob n=186: bias −1.75→−1.03, RMSE 5.32→5.18; ndz n=215: bias −3.06→−1.08,
+    # MAE 3.84→3.51, win 63%). Stara tabela (sob max 1.2 / ndz flat 1.0, V3.27 Bug X)
+    # systematycznie zaniżała niedzielę (bias do −3.96 OOS). Poprzednie wartości w git
+    # (tag pre-weekend-recalib). Caveat: per-godz n cieńsze niż weekday — walidacja
+    # OOS przez monitor_recalib_oos.py --day-kind weekend do ~22.06.
     "saturday": [   # SAT (weekday()==5)
         (0, 12, 1.0),
-        (12, 15, 1.1),
-        (15, 17, 1.2),
-        (17, 21, 1.2),
-        (21, 24, 1.0),
+        (12, 13, 1.30),
+        (13, 16, 1.20),
+        (16, 17, 1.55),
+        (17, 18, 1.45),
+        (18, 21, 1.25),
+        (21, 22, 1.10),
+        (22, 24, 1.0),
     ],
-    "sunday": [     # SUN (weekday()==6) — drogi puste, zero peak weekend
-        (0, 24, 1.0),
+    "sunday": [     # SUN (weekday()==6) — lunch/popołudnie realnie NIE-płaskie
+        (0, 11, 1.0),
+        (11, 12, 1.50),
+        (12, 13, 1.40),
+        (13, 15, 1.35),
+        (15, 16, 1.45),
+        (16, 19, 1.30),
+        (19, 20, 1.15),
+        (20, 24, 1.0),
     ],
 }
 
