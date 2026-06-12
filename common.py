@@ -92,6 +92,10 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_GPS_AGE_DISCOUNT",
     # FRONT-B (2026-06-11): pickup_coords na żywo z adresu panelu (shadow-first).
     "ENABLE_PICKUP_COORDS_FROM_PANEL",
+    # BUNDLE-06 Faza 1 + BUNDLE-03 (Front D, 2026-06-12): wartość worka +
+    # addytywna kara FIX_C (shadow-first, delty zawsze, flip po E7 za ACK).
+    "ENABLE_BUNDLE_VALUE_SCORING",
+    "ENABLE_FIX_C_ADDITIVE_PENALTY",
 )
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
@@ -110,6 +114,14 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "GPS_AGE_DISCOUNT_CAP",
     # FRONT-B (2026-06-11):
     "PICKUP_COORDS_DRIFT_WARN_M",
+    # BUNDLE-06 Faza 1 + BUNDLE-03 (2026-06-12):
+    "BUNDLE_FIT_W_COS",
+    "BUNDLE_FIT_THERMAL_FREE_MIN",
+    "BUNDLE_FIT_THERMAL_PER_MIN",
+    "BUNDLE_FIT_SPAN_FREE_MIN",
+    "BUNDLE_FIT_SPAN_PER_MIN",
+    "FIX_C_ADDITIVE_PEN_PER_KM",
+    "FIX_C_ADDITIVE_COS_TRIGGER",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
@@ -797,9 +809,36 @@ V328_MASS_FAIL_RATIO_THRESHOLD = float(_os.environ.get("V328_MASS_FAIL_RATIO_THR
 ENABLE_V328_HEURISTIC_SHIFT_END_GUARD = _os.environ.get(
     "ENABLE_V328_HEURISTIC_SHIFT_END_GUARD", "1") == "1"
 ENABLE_PANEL_IS_FREE_AUTHORITATIVE = _os.environ.get("ENABLE_PANEL_IS_FREE_AUTHORITATIVE", "1") == "1"
-# ENABLE_BUNDLE_VALUE_SCORING USUNIĘTA 2026-06-11 (BUNDLE-08: zero call-site
-# od V3.18; kandydat V3.22 nigdy nie zbudowany — bundle value liczy dziś
-# bonus-stack V32x + SYNCWORKA/PLN-shadow Bartek 2.0).
+# === BUNDLE-06 Faza 1 / BUNDLE-02 (Front D audytu 03.06, 2026-06-12) ===
+# bundle_fit: scalony sygnał wartości worka (kierunek nowego dropu / marginalny
+# koszt świeżości / rozstrzał gotowości odbiorów) — liczony ZAWSZE w
+# dispatch_pipeline (lekcja #186), do score TYLKO za flagą (ETAP4 kanon,
+# flags.json=false; kalibracja wag = E7 at#131 17.06). Reaktywacja flagi
+# V3.18 usuniętej 2026-06-11 w BUNDLE-08 („zero call-site") — tym razem
+# Z konsumentem. Wagi nadpisywalne hot z flags.json (NUMERIC_OVERRIDES).
+ENABLE_BUNDLE_VALUE_SCORING = _os.environ.get(
+    "ENABLE_BUNDLE_VALUE_SCORING", "0") == "1"
+BUNDLE_FIT_W_COS = float(_os.environ.get("BUNDLE_FIT_W_COS", "12.0"))
+BUNDLE_FIT_THERMAL_FREE_MIN = float(_os.environ.get(
+    "BUNDLE_FIT_THERMAL_FREE_MIN", "25.0"))
+BUNDLE_FIT_THERMAL_PER_MIN = float(_os.environ.get(
+    "BUNDLE_FIT_THERMAL_PER_MIN", "1.5"))
+BUNDLE_FIT_SPAN_FREE_MIN = float(_os.environ.get(
+    "BUNDLE_FIT_SPAN_FREE_MIN", "8.0"))
+BUNDLE_FIT_SPAN_PER_MIN = float(_os.environ.get(
+    "BUNDLE_FIT_SPAN_PER_MIN", "1.0"))
+# BUNDLE-03 (2026-06-12): FIX_C zeruje bonusy, których najgorsze worki
+# (przeciw-kierunkowe, różne restauracje) i tak NIE MAJĄ → no-op dla case'u,
+# do którego był pisany (#469834). Addytywna kara: −PEN_PER_KM·(spread−cap),
+# a przy cos<COS_TRIGGER (przeciwny kierunek) −PEN_PER_KM·spread (pełny —
+# zły kierunek czyni KAŻDY rozrzut kosztownym). Liczona zawsze; aplikacja
+# za flagą (E7 kalibruje/decyduje).
+ENABLE_FIX_C_ADDITIVE_PENALTY = _os.environ.get(
+    "ENABLE_FIX_C_ADDITIVE_PENALTY", "0") == "1"
+FIX_C_ADDITIVE_PEN_PER_KM = float(_os.environ.get(
+    "FIX_C_ADDITIVE_PEN_PER_KM", "3.0"))
+FIX_C_ADDITIVE_COS_TRIGGER = float(_os.environ.get(
+    "FIX_C_ADDITIVE_COS_TRIGGER", "-0.3"))
 
 # ============================================================
 # V3.19a picked_up drop floor (2026-04-19)

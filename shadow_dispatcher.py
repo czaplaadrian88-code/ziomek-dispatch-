@@ -225,7 +225,12 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        # pln_delta_km / pln_vehicle / pln_lezenie_min /
                        # pln_czekanie_min / pln_opp_rate per kandydat +
                        # pln_best_cid / pln_best_v / pln_vs_score_flip na best.
-                       "pln_")
+                       "pln_",
+                       # BUNDLE-06 Faza 1 (2026-06-12): bundle_fit_shadow /
+                       # bundle_fit_marginal_min (bonus_bundle_fit_shadow_delta
+                       # przez prefix bonus_; fix_c_additive_pen_shadow przez
+                       # explicit fix_c_* niżej) — LOCATION A+B.
+                       "bundle_fit_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
@@ -407,6 +412,8 @@ def _serialize_candidate(c) -> dict:
         "fix_c_applied": m.get("fix_c_applied"),
         "fix_c_deliv_spread_km": m.get("fix_c_deliv_spread_km"),
         "fix_c_cap_km": m.get("fix_c_cap_km"),
+        # BUNDLE-03 (2026-06-12): addytywna kara FIX_C (shadow, flaga OFF)
+        "fix_c_additive_pen_shadow": m.get("fix_c_additive_pen_shadow"),
         # V3.28 R-04 v2.0: tier suggestion (LOCATION A) — Phase 1 SHADOW only.
         "r04": _r04_field_for_cid(str(m.get("courier_id") or "")),
         # V3.28 Faza 6 LGBM shadow (LOCATION A) — parallel BC ranker prediction.
@@ -687,6 +694,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "fix_c_applied": best_m.get("fix_c_applied"),
             "fix_c_deliv_spread_km": best_m.get("fix_c_deliv_spread_km"),
             "fix_c_cap_km": best_m.get("fix_c_cap_km"),
+            # BUNDLE-03 (2026-06-12): addytywna kara FIX_C (shadow, flaga OFF)
+            "fix_c_additive_pen_shadow": best_m.get("fix_c_additive_pen_shadow"),
             # V3.28 R-04 v2.0: tier suggestion (LOCATION B) — Phase 1 SHADOW only.
             "r04": _r04_field_for_cid(str(best_m.get("courier_id") or "")),
             # V3.28 Faza 6 LGBM shadow (LOCATION B) — best courier z metrics.

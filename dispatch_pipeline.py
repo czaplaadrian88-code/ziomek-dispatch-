@@ -3717,6 +3717,74 @@ def _assess_order_impl(
             # Recompute bundle_bonus po zero bonus_l2 (bonus_l1, bonus_r4 unchanged).
             bundle_bonus = bonus_l1 + bonus_l2 + bonus_r4
 
+        # === BUNDLE-03 (Front D audytu 03.06, 2026-06-12): FIX_C addytywnie ===
+        # Zerowanie bonusów = no-op dla najgorszych worków (przeciw-kierunkowe,
+        # różne restauracje — NIE MAJĄ bonus_l2/continuation do wyzerowania;
+        # case #469834, do którego FIX_C był pisany). Shadow: addytywna kara
+        # liczona ZAWSZE — (a) spread>cap: −PEN·(spread−cap); (b) cos<TRIGGER
+        # (przeciwny kierunek nowego dropu): −PEN·spread PEŁNY (zły kierunek
+        # czyni każdy rozrzut kosztownym). Aplikacja za 🛑
+        # ENABLE_FIX_C_ADDITIVE_PENALTY (decision_flag, flags.json=false; E7).
+        fix_c_additive_pen_shadow = 0.0
+        if len(bag_raw) >= 1 and fix_c_deliv_spread_km is not None:
+            _fl_fc = C.load_flags()
+            _fc_pen = float(_fl_fc.get(
+                "FIX_C_ADDITIVE_PEN_PER_KM", C.FIX_C_ADDITIVE_PEN_PER_KM))
+            _fc_cos_trig = float(_fl_fc.get(
+                "FIX_C_ADDITIVE_COS_TRIGGER", C.FIX_C_ADDITIVE_COS_TRIGGER))
+            _fc_cos = metrics.get("r1_new_drop_cosine")
+            _fc_over = max(0.0, fix_c_deliv_spread_km - C.BUNDLE_MAX_DELIV_SPREAD_KM)
+            if isinstance(_fc_cos, (int, float)) and _fc_cos < _fc_cos_trig:
+                fix_c_additive_pen_shadow = round(
+                    -_fc_pen * fix_c_deliv_spread_km, 2)
+            elif _fc_over > 0.0:
+                fix_c_additive_pen_shadow = round(-_fc_pen * _fc_over, 2)
+
+        # === BUNDLE-06 Faza 1 / BUNDLE-02 (Front D, 2026-06-12): bundle_fit ===
+        # 80,2% proponowanych worków ma zerowy bundle bonus — brak bonusu ≠
+        # kara, worek wygrywa „za darmo" bazowym score bliskości. Faza 1 per
+        # REKO audytu: scal ISTNIEJĄCE sygnały (zero nowych OSRM) w jedną deltę:
+        #   + W_COS·r1_new_drop_cosine                      [kierunek; None→0]
+        #   − THERMAL_PER_MIN·max(0, objm_max_thermal − FREE)  [koszt świeżości]
+        #   − SPAN_PER_MIN·max(0, r8_pickup_span − FREE)    [rozstrzał odbiorów]
+        # Delta ZAWSZE (lekcja #186); do score TYLKO za 🛑
+        # ENABLE_BUNDLE_VALUE_SCORING (reaktywacja flagi V3.18 per BUNDLE-08 —
+        # tym razem z konsumentem; decision_flag, flags.json=false; wagi = E7).
+        # Osobno bundle_fit_marginal_min = plan_total − free_at (ile minut
+        # NAPRAWDĘ dokłada ten order TEMU kurierowi) — czysta telemetria dla
+        # E7, świadomie POZA deltą (nakłada się z S_dystans, wymaga studium).
+        bundle_fit_shadow = None
+        bonus_bundle_fit_shadow_delta = 0.0
+        bundle_fit_marginal_min = None
+        _bf_plan = metrics.get("plan")
+        _bf_total = (_bf_plan.get("total_duration_min")
+                     if isinstance(_bf_plan, dict)
+                     else getattr(_bf_plan, "total_duration_min", None))
+        if isinstance(_bf_total, (int, float)):
+            bundle_fit_marginal_min = round(
+                max(0.0, float(_bf_total) - float(free_at_min or 0.0)), 1)
+        if len(bag_raw) >= 1:
+            _fl_bf = C.load_flags()
+            _bf_cos = metrics.get("r1_new_drop_cosine")
+            _bf_thermal = metrics.get("objm_max_thermal_age_min")
+            _bf_span = metrics.get("r8_pickup_span_min")
+            _bf = 0.0
+            if isinstance(_bf_cos, (int, float)):
+                _bf += float(_fl_bf.get(
+                    "BUNDLE_FIT_W_COS", C.BUNDLE_FIT_W_COS)) * float(_bf_cos)
+            if isinstance(_bf_thermal, (int, float)):
+                _bf -= float(_fl_bf.get(
+                    "BUNDLE_FIT_THERMAL_PER_MIN", C.BUNDLE_FIT_THERMAL_PER_MIN)) * max(
+                    0.0, float(_bf_thermal) - float(_fl_bf.get(
+                        "BUNDLE_FIT_THERMAL_FREE_MIN", C.BUNDLE_FIT_THERMAL_FREE_MIN)))
+            if isinstance(_bf_span, (int, float)):
+                _bf -= float(_fl_bf.get(
+                    "BUNDLE_FIT_SPAN_PER_MIN", C.BUNDLE_FIT_SPAN_PER_MIN)) * max(
+                    0.0, float(_bf_span) - float(_fl_bf.get(
+                        "BUNDLE_FIT_SPAN_FREE_MIN", C.BUNDLE_FIT_SPAN_FREE_MIN)))
+            bundle_fit_shadow = round(_bf, 2)
+            bonus_bundle_fit_shadow_delta = bundle_fit_shadow
+
         # === SP-B2-SYNCWORKA H1 (2026-06-11): spread gotowości worka ===
         # Metryki ZAWSZE liczone (observability/replay); wpływ na score TYLKO
         # gdy ENABLE_BUNDLE_SYNC_SPREAD (decision_flag, default OFF, 🛑 ACK).
@@ -3914,6 +3982,13 @@ def _assess_order_impl(
         # SP-B2-LOADGOV (2026-06-11): governor load floty — aplikacja za 🛑 flagą.
         if C.decision_flag("ENABLE_FLEET_LOAD_GOVERNOR"):
             final_score = final_score + bonus_loadgov_shadow_delta
+        # BUNDLE-06 Faza 1 (2026-06-12): wartość worka — aplikacja za 🛑 flagą
+        # (wagi kalibruje E7 at#131; delta zawsze policzona wyżej).
+        if C.decision_flag("ENABLE_BUNDLE_VALUE_SCORING"):
+            final_score = final_score + bonus_bundle_fit_shadow_delta
+        # BUNDLE-03 (2026-06-12): FIX_C addytywna kara — aplikacja za 🛑 flagą.
+        if C.decision_flag("ENABLE_FIX_C_ADDITIVE_PENALTY"):
+            final_score = final_score + fix_c_additive_pen_shadow
 
         # V3.27 Bug Z Q5: SOFT bundle score multiplier dla cross-quadrant bag.
         # 0.0 (cross-quadrant) → score *= 0.1
@@ -4090,6 +4165,13 @@ def _assess_order_impl(
             "sync_spread_bundle_zeroed": sync_spread_bundle_zeroed,
             "bonus_sync_spread": bonus_sync_spread,
             "bonus_sync_spread_shadow_delta": bonus_sync_spread_shadow_delta,
+            # BUNDLE-06 Faza 1 + BUNDLE-03 (Front D, 2026-06-12): wartość worka
+            # + addytywna kara FIX_C. bundle_fit_*/fix_c_* prefixy w
+            # shadow_dispatcher (LOCATION A+B); bonus_ auto przez prefix.
+            "bundle_fit_shadow": bundle_fit_shadow,
+            "bundle_fit_marginal_min": bundle_fit_marginal_min,
+            "bonus_bundle_fit_shadow_delta": bonus_bundle_fit_shadow_delta,
+            "fix_c_additive_pen_shadow": fix_c_additive_pen_shadow,
             # SP-B2-REPO (2026-06-11): dead-head do nowego odbioru wg planu.
             # repo_* prefix w shadow_dispatcher (LOCATION A+B); bonus_ auto.
             "repo_km": repo_km,
