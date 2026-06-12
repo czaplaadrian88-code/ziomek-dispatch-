@@ -124,11 +124,15 @@ def test_courier_moved_thin_decomposition(_cache_env):
     m2 = oc.table(pts2, pts2)
     # dekompozycja: wiersz kuriera (1×4) + kolumna kuriera (3×1)
     assert calls[1:] == [(1, 4), (3, 1)]
-    # wyniki identyczne z fresh call
-    fresh = [[{"duration_s": round((o[0] + d[0]) * 100, 1)} for d in pts2] for o in pts2]
+    # wyniki ZE ŚCIEŻKI CACHE identyczne z realnym fresh callem przez TEN SAM
+    # pipeline (z traffic multiplierem — porównanie ręcznie liczonych raw
+    # padało rano: bucket ×1.1 vs nocne ×1.0; lekcja drive_min testów)
+    oc._table_cell_cache.clear()
+    fresh = oc.table(pts2, pts2)
     for i in range(4):
         for j in range(4):
             assert m2[i][j]["duration_s"] == fresh[i][j]["duration_s"]
+            assert m2[i][j]["distance_m"] == fresh[i][j]["distance_m"]
 
 
 def test_decompose_http_fail_falls_to_legacy(monkeypatch, _cache_env):

@@ -171,6 +171,10 @@ def _stripped_flags_copy():
         # testy sterują przez patch stałej modułu, nie żywy flags.json.
         for k in getattr(_c, "FLAGS_JSON_NUMERIC_OVERRIDES", ()):
             d.pop(k, None)
+        # Front C (2026-06-12): killswitche infra (table-cache/prefetch) precz —
+        # testy nie dziedziczą żywych przełączników (determinizm).
+        for k in getattr(_c, "TEST_ISOLATED_INFRA_FLAGS", ()):
+            d.pop(k, None)
         fd, p = tempfile.mkstemp(prefix="flags_etap4_stripped_", suffix=".json")
         with os.fdopen(fd, "w") as f:
             json.dump(d, f)
@@ -274,6 +278,8 @@ def _isolate_flags_json(monkeypatch, tmp_path):
         for _k in getattr(common, "ETAP4_DECISION_FLAGS", ()):
             _d.pop(_k, None)
         for _k in getattr(common, "FLAGS_JSON_NUMERIC_OVERRIDES", ()):
+            _d.pop(_k, None)
+        for _k in getattr(common, "TEST_ISOLATED_INFRA_FLAGS", ()):
             _d.pop(_k, None)
         _tmp_flags.write_text(_json.dumps(_d), encoding="utf-8")
     except Exception:

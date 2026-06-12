@@ -124,6 +124,15 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "FIX_C_ADDITIVE_COS_TRIGGER",
 )
 
+# Front C (2026-06-12): killswitche INFRA (nie-decyzyjne) sterowane z flags.json
+# hot-reload — conftest wycina je z tmp-kopii jak ETAP4 (testy deterministyczne
+# niezależnie od żywych killswitchy; klasa lekcji #180/#183).
+TEST_ISOLATED_INFRA_FLAGS = (
+    "ENABLE_OSRM_TABLE_CELL_CACHE",
+    "ENABLE_PANEL_DETAIL_PREFETCH",
+    "PANEL_DETAIL_PREFETCH_WORKERS",
+)
+
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
 # do fingerprinta, ich call-sites pozostają bez zmian.
 _FINGERPRINT_EXTRA_FLAGS = (
