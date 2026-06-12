@@ -83,10 +83,14 @@ def test_drive_min_falls_back_to_haversine_on_exception():
 
     assert captured["used"] == "fallback", f"expected fallback path, got {captured['used']}"
     assert drive_min > 0
-    # Fallback drive_min powinien być przemnożone przez 1.2 (sobota peak)
+    # Fallback drive_min przemnożony przez ŻYWY mult soboty 16:00 (kanon z
+    # tabeli — weekend-recalib 2026-06-12 `e7876a8` podniósł 1.2 → 1.55;
+    # literal 1.2 łamał się przy każdej rekalibracji krzywej).
     fallback_no_mult = (_drive_km / fleet_speed_kmh) * 60.0
-    assert abs(drive_min - fallback_no_mult * 1.2) < 0.01, \
-        f"fallback should apply mult: drive_min={drive_min}, no_mult×1.2={fallback_no_mult*1.2}"
+    _expected_mult = float(C.get_traffic_multiplier(now))
+    assert _expected_mult > 1.0, "sobota 16:00 ma być peakiem (mult > 1.0)"
+    assert abs(drive_min - fallback_no_mult * _expected_mult) < 0.01, \
+        f"fallback should apply mult: drive_min={drive_min}, no_mult×{_expected_mult}={fallback_no_mult*_expected_mult}"
 
 
 def test_drive_min_osrm_returns_haversine_fallback_already_with_mult():
@@ -127,12 +131,14 @@ def test_drive_min_pre_fix_demonstrates_underestimation():
     drive_km = h_km * HAVERSINE_ROAD_FACTOR_BIALYSTOK
 
     pre_fix = (drive_km / fleet_speed_kmh) * 60.0  # NIE applied mult
-    post_fix_fallback = pre_fix * float(C.get_traffic_multiplier(now))  # × 1.2
+    _mult = float(C.get_traffic_multiplier(now))  # żywa tabela (1.2 → 1.55 po e7876a8)
+    post_fix_fallback = pre_fix * _mult
 
     assert post_fix_fallback > pre_fix, "post-fix fallback path > pre-fix"
-    # 1.2x increase
-    assert abs(post_fix_fallback / pre_fix - 1.2) < 0.001, \
-        f"ratio {post_fix_fallback/pre_fix} != 1.2"
+    # wzrost o żywy mult soboty peak (kanon z tabeli, nie literal 1.2)
+    assert _mult > 1.0, "sobota 16:00 ma być peakiem (mult > 1.0)"
+    assert abs(post_fix_fallback / pre_fix - _mult) < 0.001, \
+        f"ratio {post_fix_fallback/pre_fix} != {_mult}"
 
 
 if __name__ == "__main__":
