@@ -1632,6 +1632,32 @@ def _loadgov_alert_transition(ewma, armed,
     return False, armed
 
 
+def _gate_score_excluding_ranking_deltas(cand):
+    """INCYDENT-FIX 2026-06-12: score do bramki KOORD "wszyscy poniżej progu".
+
+    (Literał nazwy reason celowo nieużyty w tym docstringu — test kolejności
+    ścieżek KOORD szuka jego PIERWSZEGO wystąpienia w źródle.)
+    Kary RANKINGOWE aplikowane flagami decyzyjnymi (SYNCWORKA -150 / LOADGOV
+    -40) po flipie 11.06 wepchnęły 92 decyzje/30h w KOORD (rate 15,6%→50%) —
+    próg MIN_PROPOSE_SCORE=-100 był kalibrowany na SUROWYCH score. Bramka
+    ocenia score Z WYŁĄCZENIEM tych delt: kara poprawia ranking (kto wygrywa),
+    NIGDY nie wpycha decyzji w ciszę (dyrektywa ALWAYS-PROPOSE). Serializowany
+    score zostaje z deltami. None gdy score nie-liczbowy. Fail-soft.
+    """
+    sc = getattr(cand, "score", None)
+    if not isinstance(sc, (int, float)):
+        return None
+    try:
+        m = getattr(cand, "metrics", None) or {}
+        if C.decision_flag("ENABLE_BUNDLE_SYNC_SPREAD"):
+            sc = sc - float(m.get("bonus_sync_spread_shadow_delta") or 0.0)
+        if C.decision_flag("ENABLE_FLEET_LOAD_GOVERNOR"):
+            sc = sc - float(m.get("bonus_loadgov_shadow_delta") or 0.0)
+    except Exception:
+        pass
+    return sc
+
+
 def _soon_free_probe(cid, bag_raw, now):
     """SP-B2-ZARAZWOLNY (2026-06-11, B2): czy busy kurier kończy ≤12 min.
 
@@ -5012,8 +5038,19 @@ def _assess_order_impl(
         # Diagnoza 2026-05-10 472189: PROPOSE Andrei score=-50 + Mateusz Bro alt -1047 =
         # both bad, operator i tak nadpisał (89% override rate). MIN_PROPOSE_SCORE=-100
         # = tylko ekstremalnie złe (jak -1047) lecą do KOORD; lekko ujemne (peak rescue) zostają.
+        #
+        # INCYDENT-FIX 2026-06-12 (post-flip SYNCWORKA/LOADGOV, ALWAYS-PROPOSE):
+        # kary RANKINGOWE (sync_spread -150, loadgov -40) po flipie 11.06 14:28
+        # wepchnęły 92 decyzje/30h w KOORD all_candidates_low_score (KOORD-rate
+        # 15,6%→50%) — próg był kalibrowany na SUROWYCH score (sprzed delt).
+        # Bramka ocenia więc score Z WYŁĄCZENIEM delt aplikowanych flagami
+        # decyzyjnymi: kara ma poprawiać ranking (kto wygrywa), NIGDY nie
+        # wpychać decyzji w ciszę. Serializowany score zostaje z deltami
+        # (uczciwa wartość rankingowa).
         _best_score = getattr(top[0], "score", None)
-        if isinstance(_best_score, (int, float)) and _best_score < C.MIN_PROPOSE_SCORE:
+        _best_score_gate = _gate_score_excluding_ranking_deltas(top[0])
+        if isinstance(_best_score, (int, float)) and _best_score_gate is not None \
+                and _best_score_gate < C.MIN_PROPOSE_SCORE:
             _result_low = PipelineResult(
                 order_id=order_id,
                 verdict="KOORD",
