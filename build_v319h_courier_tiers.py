@@ -102,7 +102,15 @@ def build():
             ),
             "eligibility_min_waves_for_stats": 50,
             "tier_ground_truth_cids": TIER_GROUND_TRUTH,
-            "cap_override_cids": list(CAP_OVERRIDE.keys()),
+            # Z-21 (higiena 2026-06-13): cap_override_cids = pole METADANE-ONLY,
+            # NIGDY nie czytane przez kod live. Źródłem prawdy dla live jest
+            # per-entry bag.cap_override (courier_resolver:839 czyta TO pole).
+            # Tu trzymamy listę spójną z CAP_OVERRIDE BY CONSTRUCTION (te same klucze
+            # co per-entry niżej) — ale uwaga: ŻYWY courier_tiers.json bywa ręcznie
+            # edytowany w panelu (FLT-04, lekcje #177/#179), więc jego _meta.cap_override_cids
+            # może być nieaktualny względem realnych bag.cap_override. Rebuild tym skryptem
+            # przywraca spójność. NIE polegać na tym polu w logice — to dokumentacja.
+            "cap_override_cids": sorted(CAP_OVERRIDE.keys(), key=lambda c: int(c) if str(c).isdigit() else 9999),
         }
     }
     # Reverse name lookup dla labelów

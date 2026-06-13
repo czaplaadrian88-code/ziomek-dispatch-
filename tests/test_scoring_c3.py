@@ -1,4 +1,4 @@
-"""F2.2 C3 narrow tests — scoring.py r6_soft_penalty integration.
+"""F2.2 C3 narrow tests — scoring.py r6_soft_penalty_c3_legacy integration.
 
 Flag-gated: DEPRECATE_LEGACY_HARD_GATES False (default) → ignored.
 Flag True → penalty (negative) subtracts from total.
@@ -14,7 +14,7 @@ from dispatch_v2 import common
 
 
 def test_scoring_ignores_r6_penalty_when_flag_false():
-    """Default flag False → r6_soft_penalty kwarg ignored."""
+    """Default flag False → r6_soft_penalty_c3_legacy kwarg ignored."""
     # Baseline without penalty
     r_baseline = scoring.score_candidate(
         courier_pos=(53.0, 23.0), restaurant_pos=(53.1, 23.1),
@@ -24,7 +24,7 @@ def test_scoring_ignores_r6_penalty_when_flag_false():
     r_with_penalty = scoring.score_candidate(
         courier_pos=(53.0, 23.0), restaurant_pos=(53.1, 23.1),
         bag_size=1, oldest_in_bag_min=20.0, road_km=2.0,
-        r6_soft_penalty=-9.0,
+        r6_soft_penalty_c3_legacy=-9.0,
     )
     assert common.DEPRECATE_LEGACY_HARD_GATES is False, "test assumes default flag state"
     assert r_baseline["total"] == r_with_penalty["total"], \
@@ -34,7 +34,7 @@ def test_scoring_ignores_r6_penalty_when_flag_false():
 
 
 def test_scoring_includes_r6_penalty_when_flag_true():
-    """Flag True → r6_soft_penalty subtracts from total."""
+    """Flag True → r6_soft_penalty_c3_legacy subtracts from total."""
     original = common.DEPRECATE_LEGACY_HARD_GATES
     try:
         common.DEPRECATE_LEGACY_HARD_GATES = True
@@ -44,12 +44,12 @@ def test_scoring_includes_r6_penalty_when_flag_true():
         r_no_penalty = scoring.score_candidate(
             courier_pos=(53.0, 23.0), restaurant_pos=(53.1, 23.1),
             bag_size=1, oldest_in_bag_min=20.0, road_km=2.0,
-            r6_soft_penalty=0.0,
+            r6_soft_penalty_c3_legacy=0.0,
         )
         r_with_penalty = scoring.score_candidate(
             courier_pos=(53.0, 23.0), restaurant_pos=(53.1, 23.1),
             bag_size=1, oldest_in_bag_min=20.0, road_km=2.0,
-            r6_soft_penalty=-9.0,
+            r6_soft_penalty_c3_legacy=-9.0,
         )
         assert r_with_penalty["total"] < r_no_penalty["total"], \
             f"flag on + negative penalty → lower total; {r_no_penalty['total']} vs {r_with_penalty['total']}"
@@ -63,7 +63,7 @@ def test_scoring_includes_r6_penalty_when_flag_true():
 
 
 def test_scoring_handles_missing_r6_metric_gracefully():
-    """No r6_soft_penalty kwarg → default 0.0, zero impact."""
+    """No r6_soft_penalty_c3_legacy kwarg → default 0.0, zero impact."""
     r = scoring.score_candidate(
         courier_pos=(53.0, 23.0), restaurant_pos=(53.1, 23.1),
         bag_size=0, road_km=1.5,
@@ -81,7 +81,7 @@ def main():
         ("scoring_handles_missing_r6_metric_gracefully", test_scoring_handles_missing_r6_metric_gracefully),
     ]
     print("=" * 60)
-    print("F2.2 C3 narrow: scoring.py r6_soft_penalty integration tests")
+    print("F2.2 C3 narrow: scoring.py r6_soft_penalty_c3_legacy integration tests")
     print("=" * 60)
     passed = 0
     failed = []

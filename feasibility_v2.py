@@ -1050,11 +1050,19 @@ def check_feasibility_v2(
     metrics["r6_picked_up_violations"] = r6_picked_up_violations
     # F2.2 C3 narrow (2026-04-18): R6 soft warning zone (30, 35] — metric-only.
     # R-PACZKI-FLEX: paczki-only mix bypass tej strefy (paczki bez termiki).
+    # ── Z-21 (higiena 2026-06-13): RENAME r6_soft_penalty → r6_soft_penalty_c3_legacy ──
+    # To pole (-3/min) jest MARTWE w produkcji: trafia tylko do scoring.score_candidate
+    # kwargu r6_soft_penalty, który dodaje je do score WYŁĄCZNIE gdy
+    # DEPRECATE_LEGACY_HARD_GATES=True (stała = False, nigdy nie flipnięta) — a live
+    # caller (dispatch_pipeline:~2975) tego kwargu i tak NIE przekazuje. ŻYWA kara R6-soft
+    # to dispatch_pipeline._r6_soft_penalty (-8/min, BAG_TIME_SOFT_PENALTY_PER_MIN) →
+    # bonus_r6_soft_pen. Zmiana nazwy = tylko ujednoznacznienie (dwa różne -3 vs -8 nosiły
+    # tę samą nazwę). Zero zmiany zachowania: martwa ścieżka pozostaje martwa.
     if 30.0 < r6_max_bag_time <= C.BAG_TIME_HARD_MAX_MIN and not _paczki_only_mix:
-        metrics["r6_soft_penalty"] = round(-3.0 * (r6_max_bag_time - 30.0), 2)
+        metrics["r6_soft_penalty_c3_legacy"] = round(-3.0 * (r6_max_bag_time - 30.0), 2)
         metrics["r6_soft_zone_active"] = True
     else:
-        metrics["r6_soft_penalty"] = 0.0
+        metrics["r6_soft_penalty_c3_legacy"] = 0.0
         metrics["r6_soft_zone_active"] = False
 
     if plan.sla_violations > 0:
