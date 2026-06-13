@@ -25,11 +25,14 @@ from pathlib import Path
 
 
 # Ground truth od właściciela 2026-04-20 (CONTEXT PACK).
+# UWAGA: cid=61 (Krystian) USUNIĘTY 2026-06-13 (TIER-01) — ex-courier od
+# 2026-04-23 (inactive_reason w courier_tiers.json), zero dostaw w ostatnich
+# 60 dniach (Postgres delivery). Pozostawienie jako "gold" zatruwało agregaty
+# percentyli kohorty gold + utrzymywało martwy gold w tier_ground_truth_cids.
 TIER_GROUND_TRUTH = {
-    # Gold: Bartek O. (123), Mateusz O (413), Krystian (61), Gabriel (179)
+    # Gold: Bartek O. (123), Mateusz O (413), Gabriel (179)
     "123": "gold",   # Bartek O.
     "413": "gold",   # Mateusz O
-    "61":  "gold",   # Krystian
     "179": "gold",   # Gabriel [cap=4 override]
     # Standard+: Adrian R (400)
     "400": "std+",   # Adrian R
