@@ -1,0 +1,531 @@
+{
+  "_meta": {
+    "schema": "cid(str) -> 'firmowe'|'wlasne' (consumed by dispatch_v2/pln_objective.py _vehicle_for)",
+    "purpose": "B6 DRAFT — per-courier vehicle ownership / km-cost for E7 PLN objective",
+    "status": "DRAFT — NOT live; swap to dispatch_state/courier_vehicle.json is a separate ACK'd action",
+    "generated_at": "2026-06-13T15:18:56.448245+00:00",
+    "source": "panel Postgres nadajesz_panel.courier (external_id=cid, vehicle_owner), read-only",
+    "owner_to_label": {
+      "own": "wlasne",
+      "company": "firmowe"
+    },
+    "km_cost_pln_by_label": {
+      "firmowe": 0.9,
+      "wlasne": 0.0
+    },
+    "default_for_missing_cid": "firmowe (0.90 PLN/km) — pln_objective._vehicle_for fallback",
+    "couriers_total_panel": 359,
+    "couriers_active_nonarchived": 49,
+    "mapped_in_draft": 48,
+    "own_count": 6,
+    "company_count": 42,
+    "own_cids": [
+      "179",
+      "207",
+      "370",
+      "413",
+      "457",
+      "515"
+    ],
+    "skipped_virtual": [
+      "26 (Koordynator — holding bucket, not a driver)"
+    ],
+    "coverage_vs_ziomek_roster": {
+      "ziomek_roster_cids": 53,
+      "own_present_in_roster": [
+        "179",
+        "207",
+        "370",
+        "413",
+        "457",
+        "515"
+      ],
+      "active_missing_from_roster": [
+        "26"
+      ]
+    },
+    "provenance_note": "vehicle_owner='own' rows confirmed by operator via panel courier_history (kind=vehicle): 179, 207, 413, 515. cids set to 'own' WITHOUT an explicit history entry (lower provenance, likely bulk/seed set): 370, 457"
+  },
+  "21": "firmowe",
+  "23": "firmowe",
+  "75": "firmowe",
+  "101": "firmowe",
+  "123": "firmowe",
+  "179": "wlasne",
+  "207": "wlasne",
+  "267": "firmowe",
+  "284": "firmowe",
+  "289": "firmowe",
+  "354": "firmowe",
+  "357": "firmowe",
+  "370": "wlasne",
+  "376": "firmowe",
+  "387": "firmowe",
+  "393": "firmowe",
+  "400": "firmowe",
+  "409": "firmowe",
+  "413": "wlasne",
+  "441": "firmowe",
+  "447": "firmowe",
+  "457": "wlasne",
+  "463": "firmowe",
+  "470": "firmowe",
+  "471": "firmowe",
+  "484": "firmowe",
+  "492": "firmowe",
+  "500": "firmowe",
+  "502": "firmowe",
+  "503": "firmowe",
+  "504": "firmowe",
+  "508": "firmowe",
+  "509": "firmowe",
+  "511": "firmowe",
+  "514": "firmowe",
+  "515": "wlasne",
+  "517": "firmowe",
+  "518": "firmowe",
+  "520": "firmowe",
+  "522": "firmowe",
+  "523": "firmowe",
+  "524": "firmowe",
+  "525": "firmowe",
+  "526": "firmowe",
+  "527": "firmowe",
+  "529": "firmowe",
+  "530": "firmowe",
+  "531": "firmowe",
+  "_detail": [
+    {
+      "cid": "21",
+      "name": "Adrian",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "23",
+      "name": "Rutcom kurier",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "75",
+      "name": "Patryk",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "101",
+      "name": "Rafał J",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "123",
+      "name": "Bartek O",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "179",
+      "name": "Gabriel",
+      "vehicle_owner_panel": "own",
+      "label": "wlasne",
+      "km_cost_pln": 0.0,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": "2026-06-07 19:19:39"
+    },
+    {
+      "cid": "207",
+      "name": "Marek",
+      "vehicle_owner_panel": "own",
+      "label": "wlasne",
+      "km_cost_pln": 0.0,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": "2026-06-07 19:20:02"
+    },
+    {
+      "cid": "267",
+      "name": "Edward",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "284",
+      "name": "Mateusz L",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "289",
+      "name": "Grzegorz W",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "354",
+      "name": "Filip P",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "357",
+      "name": "Jakub L",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "370",
+      "name": "Jakub OL",
+      "vehicle_owner_panel": "own",
+      "label": "wlasne",
+      "km_cost_pln": 0.0,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "376",
+      "name": "Paweł SC",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "387",
+      "name": "Aleksander G",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "393",
+      "name": "Michał K.",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "400",
+      "name": "Adrian R",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "409",
+      "name": "Mateusz Bro",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "413",
+      "name": "Mateusz O",
+      "vehicle_owner_panel": "own",
+      "label": "wlasne",
+      "km_cost_pln": 0.0,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": "2026-06-07 19:20:13"
+    },
+    {
+      "cid": "441",
+      "name": "Sylwia L",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "447",
+      "name": "Dawid Kal",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "457",
+      "name": "Adrian Cit",
+      "vehicle_owner_panel": "own",
+      "label": "wlasne",
+      "km_cost_pln": 0.0,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "463",
+      "name": "Michał C",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "470",
+      "name": "Piotr Zaw",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "471",
+      "name": "Łukasz W",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "484",
+      "name": "Andrei K",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "492",
+      "name": "Jakub W",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "500",
+      "name": "Grzegorz",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "502",
+      "name": "Kacper Sa",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "503",
+      "name": "Gabriel J",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "504",
+      "name": "Artsem Km",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "508",
+      "name": "Michał Li",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "509",
+      "name": "Dariusz M",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "511",
+      "name": "Łukasz B",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "514",
+      "name": "Tomasz Ch",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "515",
+      "name": "Szymon P",
+      "vehicle_owner_panel": "own",
+      "label": "wlasne",
+      "km_cost_pln": 0.0,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": "2026-06-07 19:19:01"
+    },
+    {
+      "cid": "517",
+      "name": "Gabriel Je",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "518",
+      "name": "Michał Ro",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "520",
+      "name": "Michał Rom",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "522",
+      "name": "Szymon Sa",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "523",
+      "name": "Marcin By",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "524",
+      "name": "Dawid Cha",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "525",
+      "name": "Kacper Sz",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "526",
+      "name": "Bartosz K",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "527",
+      "name": "Piotr Wr",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "529",
+      "name": "Rafał Jan",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "530",
+      "name": "Bartosz Ch.",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    },
+    {
+      "cid": "531",
+      "name": "Piotr Kul",
+      "vehicle_owner_panel": "company",
+      "label": "firmowe",
+      "km_cost_pln": 0.9,
+      "in_ziomek_roster": true,
+      "ownership_audit_from": null
+    }
+  ]
+}
