@@ -41,8 +41,11 @@ C2_SHADOW_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/c2_shadow_log.jso
 # zsoftowany po shadow-data 14.04 (za ostry, blokował Bartka na spread 7 km).
 # Absolute hard block = sanity cap. R3 spread/dyn_cap nadal liczone jako
 # telemetria w metrics, ale nie rejectują.
+# SCALE-01: kanon wartości = flags.json (hot-reload, multi-city); stałe modułu
+# zostają jako fallback gdy klucza brak (default = obecne produkcyjne 8 / 15 km).
+# Konsumenci poniżej czytają przez _bag_sanity_cap() / _pickup_reach_km().
 MAX_BAG_SIZE = MAX_BAG_SANITY_CAP
-MAX_PICKUP_REACH_KM = 15.0
+MAX_PICKUP_REACH_KM = float(getattr(C, "MAX_PICKUP_REACH_KM", 15.0))
 SHIFT_END_BUFFER_MIN = 20
 DEFAULT_SLA_MINUTES = 35
 
@@ -54,6 +57,16 @@ R1_MAX_DELIV_SPREAD_KM = 8.0
 R3_DYNAMIC_MAX = [(5.0, 5), (8.0, 4), (float("inf"), 3)]
 # R5: mixed-restaurant pickup spread — p100 Bartek = 1.79 km.
 R5_MAX_MIXED_PICKUP_SPREAD_KM = 2.5  # F2.1c: poluzowane z 1.8 (p100 Bartek) → 2.5 (akceptowalny mixed pickup spread)
+
+
+def _bag_sanity_cap() -> int:
+    """SCALE-01: bag sanity cap — flags.json (hot) → stała modułu common (=8)."""
+    return int(C.load_flags().get("MAX_BAG_SANITY_CAP", C.MAX_BAG_SANITY_CAP))
+
+
+def _pickup_reach_km() -> float:
+    """SCALE-01: pickup-reach cap — flags.json (hot) → stała modułu common (=15 km)."""
+    return float(C.load_flags().get("MAX_PICKUP_REACH_KM", C.MAX_PICKUP_REACH_KM))
 
 
 def _road_km(a, b) -> float:
@@ -351,9 +364,11 @@ def check_feasibility_v2(
 
     # D3 sanity cap (MAX_BAG_SIZE = MAX_BAG_SANITY_CAP = 8). R3 absolute cap
     # usunięty w F1.9b po shadow data — blokował Bartka na legit bundlach.
+    # SCALE-01: cap z flags.json (hot, multi-city) z fallback do stałej =8.
+    _bag_cap = _bag_sanity_cap()
     bag_after = len(bag) + 1
-    if len(bag) >= MAX_BAG_SIZE:
-        return ("NO", f"bag_full ({len(bag)}/{MAX_BAG_SIZE})", metrics, None)
+    if len(bag) >= _bag_cap:
+        return ("NO", f"bag_full ({len(bag)}/{_bag_cap})", metrics, None)
 
     # R7 (F2.1b) — long-haul isolation w peak hours.
     # Długa trasa (>4.5 km) NIE MOŻE być bundlowana w peak (14-17 Warsaw).
@@ -538,7 +553,8 @@ def check_feasibility_v2(
 
     pickup_dist_km = osrm_client.haversine(courier_pos, new_order.pickup_coords)
     metrics["pickup_dist_km"] = round(pickup_dist_km, 2)
-    if pickup_dist_km > MAX_PICKUP_REACH_KM:
+    # SCALE-01: pickup-reach cap z flags.json (hot, multi-city), fallback =15 km.
+    if pickup_dist_km > _pickup_reach_km():
         return ("NO", f"pickup_too_far ({pickup_dist_km:.1f} km)", metrics, None)
 
     # V3.25 STEP B (R-01 SCHEDULE-HARDENING) — unconditional PRE-CHECK przed

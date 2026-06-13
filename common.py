@@ -132,6 +132,15 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "AUTO_ASSIGN_SCORE_DISTRUST_CEILING",
     "AUTO_ASSIGN_MAX_PER_HOUR",
     "AUTO_ASSIGN_OVERRIDE_COOLDOWN_MIN",
+    # SCALE-01 (2026-06-13): zahardkodowane "capy" do flags.json (multi-city
+    # prep). Refaktor BEHAVIOR-PRESERVING — defaulty stałych modułu = obecne
+    # wartości produkcyjne (EARLY_BIRD=60 / MIN_PROPOSE=-100 / bag=8 / 15 km).
+    # Override z flags.json (hot-reload) podmieni per-miasto; conftest wycina
+    # te klucze z tmp-kopii → testy sterują przez stałą modułu (jak BUG A/B).
+    "EARLY_BIRD_THRESHOLD_MIN",
+    "MIN_PROPOSE_SCORE",
+    "MAX_BAG_SANITY_CAP",
+    "MAX_PICKUP_REACH_KM",
 )
 
 # Front C (2026-06-12): killswitche INFRA (nie-decyzyjne) sterowane z flags.json
@@ -218,7 +227,17 @@ MAX_BAG_TSP_BRUTEFORCE = 5
 
 # Anomaly guard: bag >8 = blad stanu albo koordynatora.
 # Feasibility zwraca NO + alert krytyczny.
-MAX_BAG_SANITY_CAP = 8
+# SCALE-01: env-default = 8 (bez zmiany); kanon override = flags.json
+# (FLAGS_JSON_NUMERIC_OVERRIDES). Konsumenci czytają przez load_flags().get(...).
+MAX_BAG_SANITY_CAP = int(os.environ.get("MAX_BAG_SANITY_CAP", "8"))
+
+# SCALE-01: pickup-reach cap (feasibility fast-filter "pickup_too_far") i
+# early-bird KOORD threshold — wyciągnięte z feasibility_v2 / dispatch_pipeline
+# do kanonu common.py (multi-city prep). Defaulty = obecne produkcyjne wartości
+# (15 km / 60 min); override per-miasto z flags.json (hot-reload). Konsumenci
+# czytają przez load_flags().get("KEY", C.KEY).
+MAX_PICKUP_REACH_KM = float(os.environ.get("MAX_PICKUP_REACH_KM", "15.0"))
+EARLY_BIRD_THRESHOLD_MIN = int(os.environ.get("EARLY_BIRD_THRESHOLD_MIN", "60"))
 
 
 # === TIMEZONE + TIMESTAMP PARSING (V3.1 P0.3) ===
@@ -573,7 +592,9 @@ BAG_TIME_DANGER_PENALTY_PER_MIN = float(os.environ.get("BAG_TIME_DANGER_PENALTY_
 # (best of bad). Operator override 89% — system proponuje gdy realnie wszyscy źli.
 # Próg -100 = "tylko ekstremalne sub-optymalne (jak -1047) lecą do KOORD".
 # Lekko ujemne propozycje (peak day rescue) zostają PROPOSE.
-MIN_PROPOSE_SCORE = -100.0
+# SCALE-01: env-default = -100.0 (bez zmiany); kanon override = flags.json
+# (FLAGS_JSON_NUMERIC_OVERRIDES). Konsumenci czytają przez load_flags().get(...).
+MIN_PROPOSE_SCORE = float(os.environ.get("MIN_PROPOSE_SCORE", "-100.0"))
 
 # ─── R7 (H4): Long-haul isolation w peak hours ───
 # Placeholder — brak danych empirycznych na ride_distance w shadow_decisions.

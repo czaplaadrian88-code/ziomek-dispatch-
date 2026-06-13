@@ -919,8 +919,10 @@ def _always_propose_would_redirect_shadow(record, payload, now):
     if pickup_dt is None:
         return None
     mtp = (pickup_dt - (now or datetime.now(timezone.utc))).total_seconds() / 60.0
-    from dispatch_v2.dispatch_pipeline import EARLY_BIRD_THRESHOLD_MIN
-    if mtp >= EARLY_BIRD_THRESHOLD_MIN:
+    # SCALE-01: early-bird threshold z flags.json (hot, multi-city) — helper pipeline
+    # czyta load_flags() z fallbackiem do common.EARLY_BIRD_THRESHOLD_MIN (=60).
+    from dispatch_v2.dispatch_pipeline import _early_bird_threshold_min
+    if mtp >= _early_bird_threshold_min():
         return None
     return {"path": matched, "minutes_to_pickup": round(mtp, 1), "verdict": "KOORD"}
 
