@@ -59,28 +59,37 @@ def test_wait_6_min_first_step_minus_10():
     assert r is False
 
 
+# De-erozja 2026-06-13: PER_MIN penalty przekalibrowany -5.0 → -8.0 (Fix #7 2026-05-31,
+# common.py:2117). Formuła: FIRST_STEP(-10) + max(0, wait-6) * PER_MIN. Liczymy expected
+# z aktualnych stałych modułu (odporne na kolejną kalibrację) zamiast literałów z -5/min.
+def _expected_wait_penalty(wait_min):
+    first = _common.V3273_WAIT_COURIER_FIRST_STEP_PENALTY
+    per_min = _common.V3273_WAIT_COURIER_PER_MIN_PENALTY
+    return first + max(0.0, wait_min - 6.0) * per_min
+
+
 def test_wait_7_min_minus_15():
     p, r = compute_wait_courier_penalty(7.0, bag_size_at_insertion=1)
-    assert p == -15.0
+    assert abs(p - _expected_wait_penalty(7.0)) < 0.01
     assert r is False
 
 
 def test_wait_10_min_minus_30():
     p, r = compute_wait_courier_penalty(10.0, bag_size_at_insertion=1)
-    assert p == -30.0
+    assert abs(p - _expected_wait_penalty(10.0)) < 0.01
     assert r is False
 
 
 def test_wait_12_min_minus_40_andrei_case():
     p, r = compute_wait_courier_penalty(12.6, bag_size_at_insertion=1)
-    # 12.6 → -10 + (12.6 - 6) * -5 = -10 - 33 = -43
-    assert abs(p - -43.0) < 0.01
+    # 12.6 → FIRST_STEP + (12.6 - 6) * PER_MIN (PER_MIN aktualnie -8.0 → -62.8)
+    assert abs(p - _expected_wait_penalty(12.6)) < 0.01
     assert r is False
 
 
 def test_wait_15_min_minus_55():
     p, r = compute_wait_courier_penalty(15.0, bag_size_at_insertion=1)
-    assert p == -55.0
+    assert abs(p - _expected_wait_penalty(15.0)) < 0.01
     assert r is False
 
 
