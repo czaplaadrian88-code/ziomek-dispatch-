@@ -29,6 +29,42 @@ from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2.route_simulator_v2 import OrderSim
 from dispatch_v2 import common as C
 
+try:
+    import pytest
+except ImportError:  # standalone __main__ runner bez pytest
+    pytest = None
+
+
+if pytest is not None:
+    @pytest.fixture(autouse=True)
+    def _force_obj_objective():
+        """Wymuś OBJ-objective (span + R6 soft deadline) niezależnie od kolejności
+        importu i sposobu uruchomienia — lekcja #191.
+
+        `os.environ.setdefault` wyżej działa TYLKO gdy ten plik wyzwala pierwszy
+        import `common` (uruchomienie w izolacji / standalone). W pełnej suicie
+        lub pod `PYTHONPATH=scripts` `common` bywa już zaimportowany ze stałymi
+        OFF, a conftest `_isolate_flags_json` wycina te flagi z flags.json →
+        `decision_flag()` spada do stałej modułu. Ustawiamy ją wprost (i
+        przywracamy po teście), żeby plan TSP front-loadował picked_up order —
+        inaczej 474835 ląduje OSTATNI i test fałszywie czerwieni (carry ~82 min /
+        blocking zamiast pre-existing / MAYBE). Produkcja czyta flags.json (OBJ
+        ON) — ten fixture nie dotyka silnika, tylko warunki testu.
+        """
+        _saved = {k: getattr(C, k, None) for k in (
+            "ENABLE_OBJ_SPAN_COST", "OBJ_SPAN_COST_COEFF",
+            "ENABLE_OBJ_R6_SOFT_DEADLINE", "OBJ_R6_DEADLINE_PENALTY_COEFF",
+        )}
+        C.ENABLE_OBJ_SPAN_COST = True
+        C.OBJ_SPAN_COST_COEFF = 1.0
+        C.ENABLE_OBJ_R6_SOFT_DEADLINE = True
+        C.OBJ_R6_DEADLINE_PENALTY_COEFF = 100.0
+        try:
+            yield
+        finally:
+            for _k, _v in _saved.items():
+                setattr(C, _k, _v)
+
 
 def _dt(s):
     d = datetime.fromisoformat(s)
