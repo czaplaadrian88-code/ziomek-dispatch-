@@ -189,7 +189,10 @@ def test_fuzzy_restaurant_match():
         "Restauracja Eatally": 182,
         "Restauracja Kumar&#039;s": 106,
         "Nago Kwestia Czasu": 228,
-        "HoNoTu": 207,
+        # De-erozja 2026-06-13: panel cid=207 przemianowany "HoNoTu" → "Sztuka Dzika"
+        # (Adrian 25.05), dodano ALIAS_MAP["HoNoTu"]="Sztuka Dzika". Fixture panelu
+        # musi mieć NOWĄ nazwę, inaczej _resolve_alias("Sztuka Dzika") → KeyError.
+        "Sztuka Dzika": 207,
         "_350 Stopni KILIŃSKIEGO": 114,
         "_500 stopni": 28,
         "Mama Thai Bistro": 154,
@@ -222,7 +225,9 @@ def test_fuzzy_restaurant_match():
         ("Eatally", 182, "strict"),
         ("Kumar's", 106, "strict"),
         ("Nago", 228, "token"),
-        ("HoNoTu", 207, "strict"),   # po normalize "honotu" == "honotu" (strict, nie startswith)
+        # De-erozja 2026-06-13: "HoNoTu" mapuje się teraz przez ALIAS_MAP→"Sztuka Dzika"
+        # (cid=207), nie strict (panel przemianowany 25.05).
+        ("HoNoTu", 207, "alias"),
         ("350 stopni", 114, "alias"),
         ("Mama Thai Bistro i Miejska Miska", [154, 215], "alias"),
         ("Trzy po trzy MIC", 177, "alias"),

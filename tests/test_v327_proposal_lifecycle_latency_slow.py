@@ -189,6 +189,12 @@ def test_proposal_lifecycle_under_500ms_p95():
     latencies = []
     with patch("dispatch_v2.osrm_client.route", side_effect=_mock_osrm_route):
         with patch("dispatch_v2.osrm_client.table", side_effect=_mock_osrm_table):
+            # De-erozja 2026-06-13: pierwsze assess_order płaci jednorazowy koszt
+            # panel-login (disk-cache CSRF expiry → re-login, blocking 6-7s w real,
+            # tu ~0.5s). W PRODUKCJI login jest PRE-WARMOWANY na starcie (fix V3.27.1
+            # sesja 4, CLAUDE.md). Test mierzy steady-state latencję propozycji →
+            # 1 iteracja rozgrzewkowa (discard) zamiast liczyć login do p95.
+            _ = DP.assess_order(order, fleet, now=now)
             for _ in range(20):
                 t0 = time.perf_counter()
                 result = DP.assess_order(order, fleet, now=now)
