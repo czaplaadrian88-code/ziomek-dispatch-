@@ -24,6 +24,7 @@ from dispatch_v2.common import (
 )
 from dispatch_v2 import state_machine
 from dispatch_v2 import osrm_client
+from dispatch_v2 import gps_quality
 
 _log = setup_logger("courier_resolver", "/root/.openclaw/workspace/scripts/logs/courier_resolver.log")
 
@@ -187,6 +188,82 @@ def _rescue_from_last_pos(entry, now_utc: datetime):
     if src not in _LAST_POS_GOOD_SOURCES:
         src = "last_delivered"
     return ((lat, lon), src, age)
+
+
+# ── GPS-02 (audyt 2026-06-10): filtr jakości fixu GPS — SHADOW-first ─────────
+# Compute-zawsze (telemetria gps_quality logowana niezależnie od flagi); efekt
+# na flotę TYLKO gdy ENABLE_GPS_ACCURACY_TELEPORT_FILTER=True (domyślnie OFF).
+# Cel: odrzucać ZŁY fix (słaba dokładność / teleport), NIGDY brak GPS (korekta
+# Adriana 13.06 — brak GPS = celowa polityka treningowa). Logika w gps_quality.py
+# (czyste funkcje); tu tylko I/O kotwicy (poprzedni fix GPS ze store) + shadow log.
+GPS_QUALITY_SHADOW_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/gps_quality_shadow.jsonl"
+# Zamrożona kopia domyślnej ścieżki — wykrycie "test patchnął na tmp" (jak store).
+_DEFAULT_GPS_QUALITY_SHADOW_LOG_PATH = GPS_QUALITY_SHADOW_LOG_PATH
+# Kotwica teleport-detekcji = ostatnia wiarygodna pozycja GPS z last-known-pos
+# store (zapisywana z source="gps" przy poprzednim ticku). Współgra ze store
+# (nie duplikujemy historii pozycji), nie wymaga nowego pliku stanu.
+_GPS_QUALITY_ANCHOR_SOURCES = frozenset({"gps"})
+
+
+def _gps_quality_anchor(store_entry, new_age_min: float, now_utc: datetime):
+    """Zwróć (anchor_pos, dt_seconds, anchor_age_min) dla teleport-detekcji
+    z wpisu last-known-pos store, albo (None, None, None).
+
+    Kotwicą jest TYLKO poprzedni fix GPS (source=="gps") — kotwice z bagu/
+    historii (delivery_coords itp.) są geometrycznie grubsze i dałyby
+    fałszywe teleporty. dt = wiek_kotwicy − wiek_nowego_fixu (oba od now).
+    Pure (zero I/O), testowalne. Brak/zły wpis/za stara kotwica → None.
+    """
+    if not isinstance(store_entry, dict):
+        return (None, None, None)
+    if store_entry.get("source") not in _GPS_QUALITY_ANCHOR_SOURCES:
+        return (None, None, None)
+    try:
+        a_lat = float(store_entry["lat"])
+        a_lon = float(store_entry["lon"])
+    except (KeyError, ValueError, TypeError):
+        return (None, None, None)
+    anchor_age_min = (now_utc - _lp_entry_ts(store_entry)).total_seconds() / 60.0
+    if anchor_age_min <= 0:
+        return (None, None, None)
+    # dt między fixami = ile czasu minęło od kotwicy do nowego fixu.
+    dt_seconds = (anchor_age_min - new_age_min) * 60.0
+    return ((a_lat, a_lon), dt_seconds, anchor_age_min)
+
+
+def _log_gps_quality_shadow(kid: str, verdict, now_iso_str: str, flag_on: bool,
+                            new_pos, new_age_min: float) -> None:
+    """Append-only shadow log werdyktu jakości GPS. Fail-soft (NIGDY nie wywala
+    hot path). Pisze ZAWSZE (compute-shadow), niezależnie od flagi — pole
+    `filter_active` mówi czy werdykt miałby efekt na flotę po flipie.
+
+    Guard (lekcja #176): pytest na PROD boxie NIE może pisać do PRODUKCYJNEGO
+    shadow logu (testowe cid 888/520/470 → zatruwają plik kalibracyjny). Test
+    który JAWNIE patchuje ścieżkę na tmp (≠ domyślna) NIE jest blokowany."""
+    if ("PYTEST_CURRENT_TEST" in os.environ
+            and GPS_QUALITY_SHADOW_LOG_PATH == _DEFAULT_GPS_QUALITY_SHADOW_LOG_PATH):
+        return
+    try:
+        rec = {
+            "ts": now_iso_str,
+            "kid": str(kid),
+            "filter_active": bool(flag_on),
+            "pos": [round(new_pos[0], 6), round(new_pos[1], 6)] if new_pos else None,
+            "fix_age_min": round(new_age_min, 2),
+        }
+        rec.update(verdict.to_log_dict())
+        _dir = os.path.dirname(GPS_QUALITY_SHADOW_LOG_PATH)
+        _fd, _tmp = tempfile.mkstemp(dir=_dir, suffix=".tmp")
+        # append-safe: czytamy istniejący? Nie — JSONL append przez open('a').
+        os.close(_fd)
+        try:
+            os.unlink(_tmp)
+        except OSError:
+            pass
+        with open(GPS_QUALITY_SHADOW_LOG_PATH, "a", encoding="utf-8") as _f:
+            _f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as _e:
+        _log.warning(f"_log_gps_quality_shadow fail: {_e}")
 
 
 # Pre-shift: kurier którego zmiana zaczyna się w ciągu N min może już dostać
@@ -673,6 +750,17 @@ def build_fleet_snapshot(
     _lp_on = flag("ENABLE_COURIER_LAST_KNOWN_POS", default=False)
     _last_pos_store = _load_last_known_pos() if _lp_on else {}
 
+    # GPS-02 (audyt 2026-06-10): filtr jakości fixu (accuracy + teleport).
+    # `_gpsq_compute` = czy w ogóle liczyć/logować shadow (compute-zawsze, default
+    # ON — czysta telemetria). `_gpsq_active` = czy werdykt "reject" ma WPŁYWAĆ na
+    # flotę (default OFF — flip dopiero po kalibracji + ACK). Kotwicę teleportu
+    # bierzemy z last-known-pos store (poprzedni fix GPS); gdy store nie jest
+    # załadowany (last-known-pos OFF) — ładujemy go read-only TYLKO dla kotwicy.
+    _gpsq_compute = flag("ENABLE_GPS_QUALITY_SHADOW", default=True)
+    _gpsq_active = flag("ENABLE_GPS_ACCURACY_TELEPORT_FILTER", default=False)
+    _gpsq_store = _last_pos_store if _last_pos_store else (
+        _load_last_known_pos() if _gpsq_compute else {})
+
     # Grupuj ordery per kurier
     per_courier: Dict[str, List[Dict]] = {}
     for oid, o in state.items():
@@ -802,11 +890,47 @@ def build_fleet_snapshot(
                     _gps_ok = (_glat is not None) and (
                         not _bbox_on or coords_in_bialystok_bbox((_glat, _glon)))
                     if _gps_ok:
-                        cs.pos = (_glat, _glon)
-                        cs.pos_source = "gps"
-                        cs.pos_age_min = age_min
-                        fleet[kid] = cs
-                        continue
+                        # GPS-02: filtr jakości (accuracy + teleport) — compute-zawsze,
+                        # efekt za flagą. Werdykt liczony PO bbox (mamy realny fix w
+                        # regionie) i logowany do shadow. Kotwica teleportu = poprzedni
+                        # fix GPS ze store. Reject TYLKO gdy filtr aktywny → fall-through
+                        # (jak GPS_BBOX_REJECT): last-known-pos store/no_gps przejmuje.
+                        _gpsq_reject = False
+                        if _gpsq_compute:
+                            try:
+                                _anchor_pos, _anchor_dt, _anchor_age = _gps_quality_anchor(
+                                    _gpsq_store.get(kid), age_min, now_utc)
+                                _gpsq_verdict = gps_quality.assess_gps_quality(
+                                    (_glat, _glon),
+                                    gps_entry.get("accuracy"),
+                                    anchor_pos=_anchor_pos,
+                                    dt_seconds=_anchor_dt,
+                                    anchor_age_min=_anchor_age,
+                                )
+                                _log_gps_quality_shadow(
+                                    kid, _gpsq_verdict, now_iso(), _gpsq_active,
+                                    (_glat, _glon), age_min)
+                                if _gpsq_active and not _gpsq_verdict.accept:
+                                    _gpsq_reject = True
+                            except Exception as _qe:
+                                # fail-soft: błąd filtra NIGDY nie blokuje floty
+                                _log.warning(f"gps_quality assess fail kid={kid}: {_qe}")
+                        if not _gpsq_reject:
+                            cs.pos = (_glat, _glon)
+                            cs.pos_source = "gps"
+                            cs.pos_age_min = age_min
+                            fleet[kid] = cs
+                            continue
+                        # filtr aktywny + werdykt reject → log raz/kid, fall-through
+                        _seenq = getattr(build_fleet_snapshot, "_warned_gps_quality", set())
+                        if kid not in _seenq and len(_seenq) < 50:
+                            _log.warning(
+                                f"GPS_QUALITY_REJECT kid={kid} fix=({_glat},{_glon}) "
+                                f"age={age_min:.1f}min reasons={_gpsq_verdict.reasons} "
+                                f"→ fall-through (filtr aktywny)")
+                            _seenq.add(kid)
+                            build_fleet_snapshot._warned_gps_quality = _seenq
+                        # NIE 'continue' — pozwól na fall-through do bag/recent/store/no_gps
                     # świeży GPS odrzucony (poza bbox / nieparsowalny) → log raz/kid,
                     # fall-through do bag/recent/no_gps (NIGDY (0,0)).
                     _seen = getattr(build_fleet_snapshot, "_warned_gps_bbox", set())
