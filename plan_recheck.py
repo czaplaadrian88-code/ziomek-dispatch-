@@ -346,6 +346,15 @@ ENABLE_PLAN_SEQUENCE_LOCK = os.environ.get("ENABLE_PLAN_SEQUENCE_LOCK", "0") == 
 # kolejność (reorder build_view staje się no-op). Niezależne od pilności R6. OFF.
 ENABLE_PLAN_CANON_ORDER_INVARIANTS = os.environ.get(
     "ENABLE_PLAN_CANON_ORDER_INVARIANTS", "0") == "1"
+
+# Z-RULE (Adrian 2026-06-13, case Bartek/Raj 480295+480434): NIGDY nie wracaj do
+# restauracji, którą kurier już opuścił, niosąc/po kolejnym odbiorze. Dwa odbiory
+# z tej samej restauracji bierzemy w JEDNEJ wizycie (re-czasowanie clampuje
+# committed → 2. order = czekanie pod restauracją, NIE powrót 2.5 km tam i z
+# powrotem). DETEKCJA zawsze ON (log BACK_TO_DEPARTED_RESTAURANT — sygnał nawet
+# przy fix OFF), REORDER za flagą (shadow-first, flip po ACK). Default OFF.
+ENABLE_NO_RETURN_TO_DEPARTED_PICKUP = os.environ.get(
+    "ENABLE_NO_RETURN_TO_DEPARTED_PICKUP", "0") == "1"
 # F3: natychmiastowa decyzja sekwencji NA ZMIANĘ WORKA (override/reassign) z
 # panel_watcher — Ziomek układa trasę od razu, bez czekania ≤5 min na tick. Tylko
 # gdy żaden ważny plan nie pokrywa worka (nie nadpisuje trasy z propozycji). OFF.
@@ -641,6 +650,58 @@ def _repair_dropoffs_after_pickups(seq):
     return None
 
 
+def _pickup_rest_key(stop, orders_state):
+    """Klucz restauracji odbioru = zaokrąglone pickup_coords (~1 m). Adres bywa
+    None/firmowy → coords są wiarygodne; fallback na znormalizowaną nazwę."""
+    if stop.get("type") != "pickup":
+        return None
+    o = orders_state.get(str(stop.get("order_id"))) or {}
+    pc = o.get("pickup_coords")
+    if pc and len(pc) >= 2:
+        try:
+            return ("xy", round(float(pc[0]), 5), round(float(pc[1]), 5))
+        except (TypeError, ValueError):
+            pass
+    return ("name", (o.get("restaurant_name") or o.get("restaurant") or "").strip().lower())
+
+
+def _detect_departed_pickup_revisit(seq, orders_state):
+    """Z-RULE detekcja: odbiór w restauracji R występujący PO ≥1 stopie pośrednim,
+    gdy WCZEŚNIEJ w trasie był już odbiór w tej samej R → kurier opuścił R i ma do
+    niej wrócić. Zwraca listę (first_idx, revisit_idx, [oid_first, oid_revisit]);
+    pusta = OK. Dwa odbiory z R obok siebie (jedna wizyta) = brak naruszenia."""
+    out = []
+    first_at = {}
+    for i, s in enumerate(seq):
+        k = _pickup_rest_key(s, orders_state)
+        if k is None:
+            continue
+        if k in first_at and (i - first_at[k]) >= 2:
+            out.append((first_at[k], i,
+                        [seq[first_at[k]].get("order_id"), s.get("order_id")]))
+        else:
+            first_at.setdefault(k, i)
+    return out
+
+
+def _coalesce_same_pickup_nodes(seq, orders_state):
+    """Z-RULE fix: każdy odbiór w restauracji już opuszczonej przesuwany jest tuż
+    ZA pierwszy odbiór w tej R → oba w jednej wizycie. Dostawy wyprzedzone przez
+    przesunięcie naprawia repair pass. Iteruje do zbieżności (twardy limit =
+    defense-in-depth). Przesunięcie odbioru W LEWO obok bliźniaka nie tworzy
+    nowych naruszeń tego samego typu → pętla domyka się."""
+    out = list(seq)
+    for _ in range(len(out) * len(out) + 1):
+        viol = _detect_departed_pickup_revisit(out, orders_state)
+        if not viol:
+            break
+        first_idx, revisit_idx, _oids = viol[0]
+        node = out.pop(revisit_idx)          # revisit_idx > first_idx → first_idx stabilny
+        out.insert(first_idx + 1, node)      # tuż za pierwszym odbiorem w tej R
+    repaired = _repair_dropoffs_after_pickups(out)
+    return repaired if repaired is not None else out
+
+
 def _apply_canon_order_invariants(stops, orders_state):
     """F6: TWARDE niezmienniki kolejności kanonu (1:1 jak build_view, ale w decyzji):
     (1) niesione (picked_up) dropoffy → front (kolejność względna zachowana),
@@ -673,6 +734,18 @@ def _apply_canon_order_invariants(stops, orders_state):
             repaired = _repair_dropoffs_after_pickups(new_seq)
             if repaired is not None:
                 seq = repaired
+    # Z-RULE: detekcja zawsze (sygnał nawet gdy fix OFF), reorder za flagą.
+    try:
+        viol = _detect_departed_pickup_revisit(seq, orders_state)
+        if viol:
+            _log.warning(
+                "BACK_TO_DEPARTED_RESTAURANT pairs=%s coalesce=%s",
+                [v[2] for v in viol], ENABLE_NO_RETURN_TO_DEPARTED_PICKUP)
+            if ENABLE_NO_RETURN_TO_DEPARTED_PICKUP:
+                seq = _coalesce_same_pickup_nodes(seq, orders_state)
+    except Exception as e:
+        _log.warning("no_return_to_departed_pickup fail: %s: %s",
+                     type(e).__name__, e)
     return seq
 
 
