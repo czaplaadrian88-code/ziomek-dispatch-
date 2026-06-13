@@ -97,14 +97,25 @@ def main():
 
         # ---------- TEST 5: guard OFF → legacy passthrough (kill-switch działa) ----------
         print("\n=== test 5: ENABLE_GEOCODE_BBOX_GUARD=False → trucizna przechodzi ===")
+        # De-erozja 2026-06-13: dołożono NIEZALEŻNĄ warstwę GEOCODE_VERIFY (cross-source
+        # disagree / district mismatch, flaga ENABLE_GEOCODE_VERIFICATION_ENFORCE), która
+        # też odrzuca tę trucizdę (Witosa 26 → 75 km od Białegostoku). Test 5 izoluje
+        # SAM kill-switch bbox guarda → wyłączamy też warstwę verify (patch _run_verification
+        # → None), żeby bbox guard był jedyną zmienną. Inaczej trucizna i tak ginie na verify.
+        _orig_run_verification = getattr(geocoding, "_run_verification", None)
         common.ENABLE_GEOCODE_BBOX_GUARD = False
+        geocoding._run_verification = lambda *a, **k: None
         geocoding.CACHE_PATH = tmpdir / "addr_guard_off.json"
         geocoding._google_geocode = lambda *a, **k: POISON
-        r = geocoding.geocode("Witosa 26", city="Białystok")
-        expect("guard OFF → trucizna przechodzi (legacy)", r == POISON, f"got {r!r}")
-        expect("guard OFF → trucizna zapisana (legacy)",
-               len(_read_cache(geocoding.CACHE_PATH)) == 1,
-               f"cache={_read_cache(geocoding.CACHE_PATH)!r}")
+        try:
+            r = geocoding.geocode("Witosa 26", city="Białystok")
+            expect("guard OFF → trucizna przechodzi (legacy)", r == POISON, f"got {r!r}")
+            expect("guard OFF → trucizna zapisana (legacy)",
+                   len(_read_cache(geocoding.CACHE_PATH)) == 1,
+                   f"cache={_read_cache(geocoding.CACHE_PATH)!r}")
+        finally:
+            if _orig_run_verification is not None:
+                geocoding._run_verification = _orig_run_verification
     finally:
         geocoding.CACHE_PATH = orig_cache
         geocoding.RESTAURANT_CACHE_PATH = orig_rest
