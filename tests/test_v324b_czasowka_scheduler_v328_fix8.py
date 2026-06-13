@@ -73,14 +73,16 @@ def _build_synthetic_state(now_utc: datetime, n_recent_czasowki: int = 1, n_old_
 
 def test_constants_module_level_defaults():
     """V3.28 Fix 8 module-level constants z env-overridable defaults."""
-    # Fresh import w isolated env (defaults active)
-    if "dispatch_v2.czasowka_scheduler" in sys.modules:
-        del sys.modules["dispatch_v2.czasowka_scheduler"]
-    # Clear env overrides
+    # De-erozja 2026-06-13: stary wzorzec `del sys.modules[...]` + import + reload był
+    # kruchy zależnie od kolejności testów — gdy inny test wcześniej usunął/zaimportował
+    # moduł, obiekt `cs` po `from ... import` mógł NIE być wpisem w sys.modules pod
+    # swoim __name__ → importlib.reload(cs) rzucał "module not in sys.modules". Robustnie:
+    # czyść env, wymuś świeży import przez sys.modules.pop, czytaj stałe z aktualnego wpisu.
     for k in ("CZASOWKA_TELEGRAM_DRYRUN", "CZASOWKA_RETROACTIVE_HOURS", "CZASOWKA_MAX_EMIT_PER_TICK"):
         os.environ.pop(k, None)
-    from dispatch_v2 import czasowka_scheduler as cs
-    importlib.reload(cs)
+    sys.modules.pop("dispatch_v2.czasowka_scheduler", None)
+    import importlib as _il
+    cs = _il.import_module("dispatch_v2.czasowka_scheduler")
 
     assert cs.DRYRUN_MODE is True  # default ON (SAFE)
     assert cs.RETROACTIVE_HOURS == 2  # default cutoff

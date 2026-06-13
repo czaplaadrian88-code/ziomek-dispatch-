@@ -97,6 +97,20 @@ def _fixed_now_offpeak():
     return datetime(2026, 4, 15, 10, 0, 0, tzinfo=timezone.utc)
 
 
+def _active_shift_end(now=None):
+    """Aktywna zmiana (shift_end +4h) — wymagana przez V3.25 schedule hardening.
+
+    De-erozja 2026-06-13: V3.25 (ENABLE_V325_SCHEDULE_HARDENING, feasibility_v2.py:565)
+    fail-CLOSED hard-rejectuje kuriera bez `shift_end` (`v325_NO_ACTIVE_SHIFT`).
+    Testy reguł R5/R6/R8/D1 sprzed V3.25 nie podawały `shift_end` → dziś wpadają w tę
+    bramkę zamiast testować właściwą regułę. Podajemy daleki shift_end (+4h), żeby
+    bramki V3.25/V3.24-A przeszły i reguła docelowa była faktycznie egzekwowana.
+    Testy które CELOWO testują grafik (D3 koniec zmiany) ustawiają shift_end same.
+    """
+    base = now if now is not None else _fixed_now_offpeak()
+    return base + timedelta(hours=4)
+
+
 def mk_order(id="1", pickup=None, drop=None, status="assigned",
              picked_up_at=None, pickup_ready_at=None):
     """Factory OrderSim. Defaults: centrum pickup, 1.5km NE drop."""
@@ -176,7 +190,8 @@ def test_A5_R5_pickup_spread_over_1_8km_reject():
     o1 = mk_order(id=1, pickup=(53.132, 23.168), drop=(53.145, 23.185))
     new = mk_order(id=2, pickup=(53.155, 23.220), drop=(53.165, 23.230))  # ~4 km
     verdict, reason, metrics, plan = check_feasibility_v2(
-        courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=_fixed_now_offpeak()
+        courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=_fixed_now_offpeak(),
+        shift_end=_active_shift_end()
     )
     assert verdict == "MAYBE"  # F2.2: R5 soft penalty (nie hard reject)
     assert metrics.get("r5_violation_km", 0) > 0
@@ -282,7 +297,8 @@ def test_B5_R6_bag_time_exceeded_reject():
     )
     new = mk_order(id=2, drop=(53.145, 23.185))
     verdict, reason, metrics, plan = check_feasibility_v2(
-        courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=now
+        courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=now,
+        shift_end=_active_shift_end(now)
     )
     assert verdict == "NO", f"Expected NO, got {verdict}. reason={reason}"
     assert any(m in reason for m in ("R6_bag_time", "sla_violation")), \
@@ -293,7 +309,8 @@ def test_B6_R6_metric_emitted_on_happy_path():
     """R6: solo happy path → metrics['r6_max_bag_time_min'] present."""
     new = mk_order(id=1, drop=(53.145, 23.185))
     verdict, reason, metrics, plan = check_feasibility_v2(
-        courier_pos=(53.132, 23.168), bag=[], new_order=new, now=_fixed_now_offpeak()
+        courier_pos=(53.132, 23.168), bag=[], new_order=new, now=_fixed_now_offpeak(),
+        shift_end=_active_shift_end()
     )
     assert verdict == "MAYBE", f"Expected MAYBE, got {verdict}: {reason}"
     assert "r6_max_bag_time_min" in metrics, f"R6 metric missing: {list(metrics.keys())}"
@@ -362,6 +379,12 @@ def test_B11_courier_picked_up_reconcile_preserves_bag_time_alerted():
         os.unlink(test_path)
     if os.path.exists(test_path + ".lock"):
         os.unlink(test_path + ".lock")
+    # De-erozja 2026-06-13: state_machine._read_state_strict (Faza 1 hardening)
+    # NIE toleruje już brakującego pliku poza bootstrapem — rzuca StateReadError
+    # (ochrona przed clobberem orders_state). Wcześniej brak pliku → ciche {}.
+    # Seedujemy pusty stan {} (semantycznie „świeży stan", intencja testu zachowana).
+    with open(test_path, "w", encoding="utf-8") as _f:
+        _f.write("{}")
 
     orig_state_path = state_machine._state_path
     state_machine._state_path = lambda: test_path
@@ -693,7 +716,8 @@ def test_D1_empty_bag_solo_order_accept():
     """Solo order + bag pusty = happy path → MAYBE z pełnym planem."""
     new = mk_order(id=1)
     verdict, reason, metrics, plan = check_feasibility_v2(
-        courier_pos=(53.132, 23.168), bag=[], new_order=new, now=_fixed_now_offpeak()
+        courier_pos=(53.132, 23.168), bag=[], new_order=new, now=_fixed_now_offpeak(),
+        shift_end=_active_shift_end()
     )
     assert verdict == "MAYBE", f"Expected MAYBE, got {verdict} ({reason})"
     assert plan is not None
@@ -714,15 +738,25 @@ def test_D2_sentinel_pickup_coords_handled():
 
 
 def test_D3_shift_ending_reject():
-    """shift_end < SHIFT_END_BUFFER_MIN (20 min) → NO shift_ending."""
+    """Koniec zmiany → NO gdy planowane doręczenie wykracza poza shift_end + 5 min.
+
+    De-erozja 2026-06-13: legacy gruba bramka `SHIFT_END_BUFFER_MIN=20`
+    (remaining_min < 20 → shift_ending) jest SKIPOWANA gdy
+    ENABLE_V324A_SCHEDULE_INTEGRATION=ON (feasibility_v2.py:654-659) — zastąpiona
+    precyzyjniejszym post-simulate checkiem `planned_dropoff > shift_end + 5min`
+    (`v324a_dropoff_after_shift`, linia 1030+). Stary test (`shift_end=now+5min`,
+    reason "shift_ending") asertował wycofane zachowanie — po zmianie now+5min daje
+    MAYBE (excess ~3.9min ≤ 5). Scenariusz „kurier nie zdąży" = shift_end=now+1min
+    (doręczenie solo ~8 min po teraz → excess ~7.9min > 5).
+    """
     now = _fixed_now_offpeak()
     new = mk_order(id=1)
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.132, 23.168), bag=[], new_order=new,
-        shift_end=now + timedelta(minutes=5), now=now
+        shift_end=now + timedelta(minutes=1), now=now
     )
     assert verdict == "NO"
-    assert "shift_ending" in reason
+    assert "v324a_dropoff_after_shift" in reason
 
 
 def test_D4_pickup_too_far_reject():
@@ -943,7 +977,8 @@ def test_F10_smoke_feasibility_plan_metrics_integration():
     """
     new = mk_order(id=1, drop=(53.145, 23.185))
     verdict, reason, metrics, plan = check_feasibility_v2(
-        courier_pos=(53.132, 23.168), bag=[], new_order=new, now=_fixed_now_offpeak()
+        courier_pos=(53.132, 23.168), bag=[], new_order=new, now=_fixed_now_offpeak(),
+        shift_end=_active_shift_end()
     )
     assert verdict == "MAYBE", f"Expected MAYBE, got {verdict}: {reason}"
     assert plan is not None
@@ -975,6 +1010,7 @@ def test_r8_hard_bundle2_reject():
         bag=[bag_order],
         new_order=new_order,
         now=now,
+        shift_end=_active_shift_end(now),
     )
     assert verdict == "MAYBE", f"Oczekiwano MAYBE (soft), got {verdict}"  # F2.2
     assert metrics.get("r8_violation_min", 0) > 0, "Oczekiwano r8_violation_min > 0"
@@ -999,7 +1035,16 @@ def test_r8_hard_bundle2_pass():
     return "OK"
 
 def test_r8_hard_bundle3_reject():
-    """Bundle=3, span=32min > 30min hard cap → reject R8."""
+    """Bundle=3, span=32min > 30min: R8 jest SOFT (telemetria), NIE hard-reject sam z siebie.
+
+    De-erozja 2026-06-13: F2.2 uczynił R8 soft (nie blokuje). Oryginał asertował
+    sztywno verdict==MAYBE, ale ta geometria (order 111 ready_at=now, span 32 min →
+    111 doręczony ~49 min po ready) NIEZALEŻNIE łamie R6 per-order thermal 35min
+    (V3.28 ANCHOR FIX, feasibility_v2.py:988 — hard, anchor=ready_at). To poprawny,
+    osobny gate. Intencja testu = „R8 span NIE jest przyczyną odrzucenia" +
+    telemetria R8 obecna (wzorzec jak test_A2/test_B5). Verdict może być NO przez
+    R6/SLA — ale NIE przez R8.
+    """
     now = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
     t1 = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
     t2 = datetime(2026, 4, 16, 12, 15, 0, tzinfo=timezone.utc)
@@ -1011,8 +1056,11 @@ def test_r8_hard_bundle3_reject():
         bag=bag,
         new_order=new_order,
         now=now,
+        shift_end=_active_shift_end(now),
     )
-    assert verdict == "MAYBE", f"Oczekiwano MAYBE (soft), got {verdict}"  # F2.2
+    # R8 soft: nie może być przyczyną odrzucenia (reject — jeśli jest — z R6/SLA)
+    assert "R8_pickup_span" not in reason, f"R8 nie powinno hard-reject (soft): {reason}"
+    # Telemetria R8 nadal liczona niezależnie od werdyktu
     assert metrics.get("r8_violation_min", 0) > 0, "Oczekiwano r8_violation_min > 0"
     assert metrics.get("r8_pickup_span_min") == 32.0
     return "OK"

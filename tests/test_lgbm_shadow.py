@@ -68,7 +68,10 @@ class TestLGBMShadowInference(unittest.TestCase):
         self.assertIsNone(result.fallback_reason)
         self.assertIsNotNone(result.winner_cid)
         self.assertGreaterEqual(len(result.ranking), 1)
-        self.assertTrue(result.reconstruction_features_defaulted)
+        # De-erozja 2026-06-13: hot-swap v1.0→v1.1 (01.05.2026, ml_inference.py:38-71).
+        # v1.1 trenowany BEZ 7 reconstruction-only features → flaga teraz False
+        # (GROUP_A_DEFAULTS={} pusty). Stary test asertował kontrakt v1.0 (=True).
+        self.assertFalse(result.reconstruction_features_defaulted)
 
     def test_B_bundle_disagreement_pattern(self):
         """Different scenarios produce different winners (tests model is sensitive)."""
@@ -151,16 +154,21 @@ class TestLGBMShadowInference(unittest.TestCase):
         self.assertEqual(result.fallback_reason, "model_not_loaded")
 
     def test_H_reconstruction_defaults_flag(self):
-        """v1.0 always has reconstruction_features_defaulted=True (Group A)."""
+        """v1.1: reconstruction-only features USUNIĘTE z treningu → flaga False.
+
+        De-erozja 2026-06-13: hot-swap v1.0→v1.1 (01.05.2026, ml_inference.py:38-71).
+        v1.0 zawsze miał reconstruction_features_defaulted=True (7 Group A defaults).
+        v1.1 trenowany BEZ tych 7 features (zero accuracy delta) → flaga False,
+        GROUP_A_DEFAULTS={} (pusty). Stary test asertował kontrakt v1.0.
+        """
         cands = [
             MockCand("123", "Bartek O.", 53.1017, 23.2344, bag_size=1, idle_min=10),
             MockCand("400", "Adrian R", 53.1255, 23.1508, bag_size=2, idle_min=5),
         ]
         result = self.inferer.predict_for_decision(_make_ctx(), cands)
-        self.assertTrue(result.reconstruction_features_defaulted)
-        # Verify Group A defaults known
-        self.assertEqual(GROUP_A_DEFAULTS["level_A_count"], 0)
-        self.assertEqual(GROUP_A_DEFAULTS["exclude_virtual"], 0)
+        self.assertFalse(result.reconstruction_features_defaulted)
+        # v1.1: Group A defaults usunięte (dict pusty)
+        self.assertEqual(GROUP_A_DEFAULTS, {})
 
     # ── F4 tests ──────────────────────────────────────────────────────────
     def test_I_get_candidate_attr_reads_from_metrics(self):

@@ -10,8 +10,20 @@ Testuje 4 scenariusze:
 4. Order w state=assigned ale NIE w panel closed -> zero wywolan (skip)
 5. 15 kandydatow w closed, MAX_RECONCILE=10 -> tylko 10 fetchow
 """
+import os
 import sys
+import tempfile
 sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+
+# De-erozja 2026-06-13 (auton/legacy-test-fixes): state_machine._state_path (Faza 2b
+# guard) RZUCA pod pytest gdy zwróciłby ścieżkę PRODUKCYJNĄ bez izolacji — reconcile
+# DELIVERED/RETURNED woła state_machine bezpośrednio (refactor; mock pokrywał tylko
+# panel_watcher.update_from_event). Monkeypatch _state_path na tmpdir (sposób wprost
+# zalecony przez sam guard; odporny na kolejność env/PYTHONPATH).
+_TMP_STATE_DIR = tempfile.mkdtemp(prefix="reconcile_dryrun_state_")
+os.environ["DISPATCH_STATE_DIR"] = _TMP_STATE_DIR
+from dispatch_v2 import state_machine as _sm
+_sm._state_path = lambda: os.path.join(_TMP_STATE_DIR, "orders_state.json")
 
 from dispatch_v2 import panel_watcher
 
@@ -54,6 +66,10 @@ def fake_state_get_all():
 
 # === Install mocks ===
 panel_watcher.emit = fake_emit
+# De-erozja 2026-06-13: reconcile ORDER_RETURNED_TO_POOL (status 8/9) idzie przez
+# emit_audit (refactor: event audit-only do audit_log), NIE przez emit. Mock tylko
+# emit gubił te eventy (count 0). Kierujemy emit_audit do tego samego kolektora.
+panel_watcher.emit_audit = fake_emit
 panel_watcher.update_from_event = fake_update_from_event
 panel_watcher.fetch_order_details = fake_fetch_order_details
 panel_watcher.state_get_all = fake_state_get_all
@@ -159,10 +175,16 @@ def test_delivered_only_for_assigned_not_delivered():
     assert "T005" not in fetched, "delivered w state nie powinien byc fetchowany"
 
 def test_budget_max_10():
-    # 15 sztucznych orderow w state i w closed, wszystkie status=7
+    # De-erozja 2026-06-13: MAX_RECONCILE_PER_CYCLE podniesiony 10 -> 25 (F2.1c,
+    # zombie backlog, panel_watcher._diff_and_emit:1660). Stary test asertował sztywno
+    # 10. Stała jest LOKALNA w funkcji (niedostępna z modułu) → wartość wprost 25
+    # (zsynchronizuj z panel_watcher.py jeśli się zmieni). Tworzymy budget+5 kandydatów,
+    # żeby budżet realnie obciął fetch.
+    budget = 25
+    n_cands = budget + 5
     global FAKE_STATE, FAKE_DETAILS
-    big_state = {f"B{i:03d}": {"status": "assigned", "delivery_address": f"ulica {i}"} for i in range(15)}
-    big_details = {f"B{i:03d}": {"id_status_zamowienia": 7, "id_kurier": 900+i, "czas_doreczenia": "2026-04-11 15:00:00"} for i in range(15)}
+    big_state = {f"B{i:03d}": {"status": "assigned", "delivery_address": f"ulica {i}"} for i in range(n_cands)}
+    big_details = {f"B{i:03d}": {"id_status_zamowienia": 7, "id_kurier": 900+i, "czas_doreczenia": "2026-04-11 15:00:00"} for i in range(n_cands)}
     # Save and swap
     orig_state = FAKE_STATE
     orig_details = dict(FAKE_DETAILS)
@@ -177,9 +199,9 @@ def test_budget_max_10():
     try:
         parsed = build_parsed(set(big_state.keys()))
         panel_watcher._diff_and_emit(parsed, csrf="dummy")
-        assert len(fetched) == 10, f"budzet MAX_RECONCILE_PER_CYCLE=10, fetched={len(fetched)}"
+        assert len(fetched) == budget, f"budzet MAX_RECONCILE_PER_CYCLE={budget}, fetched={len(fetched)}"
         deliv = [e for e in emitted if e["event_type"] == "COURIER_DELIVERED"]
-        assert len(deliv) == 10, f"oczekiwano 10 DELIVERED, dostano {len(deliv)}"
+        assert len(deliv) == budget, f"oczekiwano {budget} DELIVERED, dostano {len(deliv)}"
     finally:
         # Restore
         FAKE_STATE = orig_state

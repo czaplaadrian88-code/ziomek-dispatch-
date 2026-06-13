@@ -47,9 +47,12 @@ def check(label, cond, detail=""):
 print("=== V3.19h BUG-2: constants + flag gate ===")
 # ============================================================
 
-check("1. ENABLE_V319H_BUG2_WAVE_CONTINUATION flag present, default False",
+# De-erozja 2026-06-13: flaga FLIPNIĘTA na True (common.py:1418 default "1"=True) —
+# V3.19h BUG-2 wdrożony do produkcji. Stary check „default False" był pre-flip guardem.
+# Liczy się obecność flagi (kontrakt) — wartość = produkcyjne True.
+check("1. ENABLE_V319H_BUG2_WAVE_CONTINUATION flag present (flipped True post-deploy)",
       hasattr(C, 'ENABLE_V319H_BUG2_WAVE_CONTINUATION') and
-      C.ENABLE_V319H_BUG2_WAVE_CONTINUATION is False)
+      C.ENABLE_V319H_BUG2_WAVE_CONTINUATION is True)
 check("2. BUG2_WAVE_CONTINUATION_BONUS=30.0",
       getattr(C, 'BUG2_WAVE_CONTINUATION_BONUS', None) == 30.0)
 check("3. BUG2_INTERLEAVE_GATE_MIN=10.0",

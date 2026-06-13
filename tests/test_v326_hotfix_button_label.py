@@ -41,11 +41,15 @@ def _run(travel_min, prep_min, order_id="test-123"):
         kbd = telegram_approver.build_keyboard(
             order_id, candidates=[cand], pickup_ready_at=pickup_ready_iso
         )
-    # Extract time_min from first button text
-    btn_text = kbd["inline_keyboard"][0][0]["text"]  # "✅ Test Courier {N}min"
-    # Parse number: "✅ Test Courier 10min" → 10
+    # De-erozja 2026-06-13: redesign przycisku — czas NIE jest już w TEKŚCIE
+    # przycisku ("✅ Akceptuj" zamiast "✅ Test Courier {N}min"). Wartość czasu
+    # (ta sama formuła max(travel,prep) clamp 5..60) żyje teraz w callback_data
+    # ASSIGN:{order}:{cid}:{time_min}. Czytamy ją stamtąd.
     import re
-    m = re.search(r'(\d+)min', btn_text)
+    btn = kbd["inline_keyboard"][0][0]
+    cb = btn.get("callback_data", "")
+    # Format: ASSIGN:<order_id>:<courier_id>:<time_min>
+    m = re.match(r'ASSIGN:.*:(\d+)$', cb)
     if not m:
         return None
     return int(m.group(1))
@@ -99,9 +103,10 @@ def main():
         mock_dt.fromisoformat = datetime.fromisoformat
         kbd = telegram_approver.build_keyboard("t1", candidates=[cand], pickup_ready_at=pickup_ready)
     btn = kbd["inline_keyboard"][0][0]
-    # label "20min" + callback "ASSIGN:t1:999:20"
-    expect("label and callback_data both carry 20",
-           ("20min" in btn["text"]) and btn["callback_data"].endswith(":20"), True)
+    # De-erozja 2026-06-13: czas już nie jest w tekście przycisku (redesign:
+    # "✅ Akceptuj"). callback_data jest JEDYNYM nośnikiem czasu → weryfikujemy je.
+    expect("callback_data carries computed time 20 (text=Akceptuj)",
+           btn["callback_data"].endswith(":20") and "Akceptuj" in btn["text"], True)
 
     print(f"\n=== summary: {results['pass']} pass, {results['fail']} fail ===")
     return 0 if results["fail"] == 0 else 1

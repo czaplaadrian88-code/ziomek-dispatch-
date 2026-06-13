@@ -346,14 +346,20 @@ plan7 = simulate_bag_route_v2(
 )
 gab_kill_pred = plan7.predicted_delivered_at.get("467262K")
 delta_min_kill = (gab_kill_pred - _now(17, 47)).total_seconds() / 60.0
+# De-erozja 2026-06-13: floor OFF → bug reproduces (brak ochrony floorem). Kurier JEST
+# w punkcie drop (choroszcz==drop) → doręczenie ~natychmiast = sam DWELL_DROPOFF_MIN.
+# Stary próg ≤2.0 zakładał dwell 1.0; po kalibracji dwell=3.5 → próg = dwell + mała tolerancja.
 check(
-    "Flag=False → V3.18 legacy (delta ≤ 2min, bug reproduces)",
-    delta_min_kill <= 2.0,
+    "Flag=False → V3.18 legacy (delta ≈ tylko DWELL, bug reproduces)",
+    delta_min_kill <= DWELL_DROPOFF_MIN + 0.5,
 )
 _restore_flags()
 
-# Test 9 — DWELL_DROPOFF_MIN constant unchanged (regression guard).
-check("DWELL_DROPOFF_MIN == 1.0", abs(DWELL_DROPOFF_MIN - 1.0) < 1e-6)
+# Test 9 — DWELL_DROPOFF_MIN regression guard.
+# De-erozja 2026-06-13: stała przekalibrowana 1.0 → 3.5 (2026-05-17: GPS tier-1 dwell
+# u klienta med 3.4-4.25 min, n=15-46; route_simulator_v2.py:35). Pin do aktualnej
+# wartości produkcyjnej (zsynchronizuj jeśli ponowna kalibracja).
+check("DWELL_DROPOFF_MIN == 3.5", abs(DWELL_DROPOFF_MIN - 3.5) < 1e-6)
 
 # Test 10 — Floor NO-OP gdy real drive-based ETA już > floor (real GPS, not synthetic).
 # Scenario: courier at real GPS pos far from drop; leg_min(courier, drop) = 20min;
@@ -388,10 +394,15 @@ plan8 = simulate_bag_route_v2(
     now=_now(17, 45),
 )
 g_pred = plan8.predicted_delivered_at.get("G")
-expected_no_floor = _now(17, 45) + timedelta(minutes=20) + timedelta(minutes=DWELL_DROPOFF_MIN)
+# De-erozja 2026-06-13: intencja testu = floor NIE jest wiążący gdy realna trasa daje
+# ETA później niż floor (floor = no-op). Sztywne `now+20+DWELL` zakładało konkretną
+# sekwencję trasy — przekalibrowany dwell + sekwencjonowanie z new_order Q zmieniły
+# dokładny timestamp. Sprawdzamy WŁAŚCIWOŚĆ: G doręczony PO floorze (floor nie podbił
+# ETA), tj. realne routing > floor. Floor = picked_up_at + osrm(pickup→drop) + DWELL.
+floor_g = real_gps_order.picked_up_at + timedelta(minutes=5) + timedelta(minutes=DWELL_DROPOFF_MIN)
 check(
-    "Real GPS drive-based ETA > floor → no-op (delta ≈ leg_min=20+1)",
-    g_pred is not None and abs((g_pred - expected_no_floor).total_seconds()) < 1.0,
+    "Real GPS drive-based ETA > floor → no-op (floor nie podbija ETA)",
+    g_pred is not None and g_pred > floor_g,
 )
 
 # Test 11 — Regression: V3.18 Bug 1 path nadal działa dla unpicked z pickup_ready_at.
@@ -447,8 +458,10 @@ plan10 = simulate_bag_route_v2(
     now=_now(17, 45),
 )
 so_pred = plan10.predicted_delivered_at.get("SO")
-# courier → pickup 3min + pickup dwell 2min + drop 5min + drop dwell 1min = 11min total
-expected_solo = _now(17, 45) + timedelta(minutes=3 + 2 + 5 + 1)
+# De-erozja 2026-06-13: dwell przekalibrowane (kalibracja 2026-05-17): pickup 2.0→1.0,
+# drop 1.0→3.5. Liczymy expected z aktualnych stałych modułu zamiast literałów 2/1.
+# courier → pickup 3min + pickup dwell + drop 5min + drop dwell.
+expected_solo = _now(17, 45) + timedelta(minutes=3 + DWELL_PICKUP_MIN + 5 + DWELL_DROPOFF_MIN)
 check("Solo order (empty bag) not affected",
       so_pred is not None and abs((so_pred - expected_solo).total_seconds()) < 1.0)
 

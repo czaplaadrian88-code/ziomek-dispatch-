@@ -153,6 +153,12 @@ def test_fix_firmowe_czasowka_uses_fallback_coords_when_pickup_coords_none():
     """Firmowe Nadajesz.pl (address_id=161) z pickup_coords=None → eval_czasowka
     NIE returns KOORD/no_pickup_geocode. Zamiast tego mutate order_state z
     FIRMOWE_KONTO_FALLBACK_COORDS i forward do assess_order.
+
+    De-erozja 2026-06-13: domyślne zachowanie produkcji ZMIENIONE (FAZA 2 #1,
+    common.py:768): ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL=True (default) → firmowe
+    bez coords lecą KOORD/no_pickup_geocode (reject+flag), NIE fallback do centrali.
+    Ten test weryfikuje LEGACY ścieżkę fallback (reject OFF), która wciąż istnieje za
+    flagą → jawnie wyłączamy reject, żeby testować to, do czego test był pisany.
     """
     now_utc = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
     order_state = _firmowe_order_state(now_utc, mins_to_pickup=45.0)
@@ -172,7 +178,8 @@ def test_fix_firmowe_czasowka_uses_fallback_coords_when_pickup_coords_none():
         captured_order_event.update(order_event)
         return fake_res
 
-    with mock.patch.object(cs.courier_resolver, "dispatchable_fleet",
+    with mock.patch.object(C, "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", False), \
+         mock.patch.object(cs.courier_resolver, "dispatchable_fleet",
                            return_value=[fake_courier]), \
          mock.patch.object(cs, "assess_order", side_effect=_capture_assess):
         result = cs.eval_czasowka("FIRMOWE_TEST", order_state, now_utc)

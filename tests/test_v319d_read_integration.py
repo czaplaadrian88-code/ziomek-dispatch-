@@ -101,8 +101,13 @@ plan_fresh = simulate_bag_route_v2(
     courier_pos=posA, bag=bag, new_order=new_order, now=_now(),
     base_sequence=None,
 )
-check("base_sequence=None → strategy in {bruteforce,greedy}",
-      plan_fresh.strategy in ("bruteforce", "greedy"))
+# De-erozja 2026-06-13: doszedł strategy='ortools' (V3.27, bag≥2 → OR-Tools TSP).
+# Ten setup (2 picked_up + new = 3 stopy) wpada w ortools. Intencja testu = świeży
+# TSP, NIE sticky-sequence. Asertujemy WŁAŚCIWOŚĆ (świeży TSP, != sticky) zamiast
+# zamkniętej listy {bruteforce,greedy} (pomijała ortools/greedy_fallback).
+check("base_sequence=None → fresh TSP (strategy != sticky)",
+      plan_fresh.strategy != "sticky" and
+      plan_fresh.strategy in ("bruteforce", "greedy", "greedy_fallback", "ortools"))
 
 # Test 2 — base_sequence=['X','Y'] → strategy="sticky", dropoff X before Y
 plan_sticky = simulate_bag_route_v2(
