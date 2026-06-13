@@ -33,6 +33,32 @@ def _load_module(path: str, name: str):
     return mod
 
 
+# De-erozja 2026-06-13 (auton/legacy-test-fixes): aktualizacja kontraktu alertów.
+# Zmiana produkcyjna 2026-05-07 (`_maybe_send_alert_v3`, komentarz w
+# parser_health_layer3.py:405): token techniczny typu alertu (PARSER_STUCK,
+# SET_ASSIGNED_ORPHAN, …) JUŻ NIE jest w treści wiadomości Telegram — `msg`
+# zawiera kompletny human-readable content (tytuł z emoji + treść + akcja).
+# Token typu pozostaje TYLKO w log.warning/log.error: `[ANOMALY <TYPE>]`.
+# Stare testy asertowały `"<TYPE>" in <telegram_message>` → po zmianie zawsze
+# False (token nie ma go w treści). Faktyczny, zamierzony kontrakt = token typu
+# w logu, więc helpery liczą wystąpienia w `caplog` (gdzie token teraz żyje).
+# `caplog` łapie ten sam moment co send (log + send w jednej ścieżce po cooldownie),
+# więc liczba alertów = liczba `[ANOMALY <TYPE>]` w logu.
+
+
+def _alert_log_count(caplog, type_substr: str) -> int:
+    """Ile razy alert o danym typie został wyemitowany (token w log `[ANOMALY <TYPE>]`)."""
+    return sum(
+        1
+        for r in caplog.records
+        if "[ANOMALY " in r.getMessage() and type_substr in r.getMessage()
+    )
+
+
+def _alert_fired(caplog, type_substr: str) -> bool:
+    return _alert_log_count(caplog, type_substr) > 0
+
+
 @pytest.fixture(scope="module")
 def ph():
     """Layer 2 module (prefer /tmp/ pre-deploy, fallback dispatch_v2)."""
@@ -106,7 +132,7 @@ def test_01_healthy_no_alerts(fresh_monitor, mock_telegram):
     assert len(mock_telegram) == 0
 
 
-def test_02_stuck_alert(fresh_monitor, mock_telegram):
+def test_02_stuck_alert(fresh_monitor, mock_telegram, caplog):
     """02.05 incident pattern: count stuck + panel motion (PACKS_CATCHUP fires dla 47XXXX).
 
     Post V3.28-LAYER2-MOTION-AWARE: alert fires tylko gdy motion present.
@@ -117,37 +143,50 @@ def test_02_stuck_alert(fresh_monitor, mock_telegram):
         cycle_stats = {"cycle": c, "orders_in_panel": 180, "delivered": 1}
         parsed = {"assigned_ids": set([str(i) for i in range(c)])}
         fresh_monitor.record_tick(cycle_stats, parsed)
-    assert any("PARSER_STUCK" in a for a in mock_telegram)
+    assert mock_telegram, "alert powinien pójść do Telegrama"
+    assert _alert_fired(caplog, "PARSER_STUCK")
 
 
-def test_03_zero_output_alert(fresh_monitor, mock_telegram):
+def test_03_zero_output_alert(fresh_monitor, mock_telegram, caplog):
     for c, n in enumerate([180, 0, 0, 0], 1):
         fresh_monitor.record_tick({"cycle": c, "orders_in_panel": n}, {"assigned_ids": set(), "order_ids": []})
-    assert any("PARSER_ZERO_OUTPUT" in a for a in mock_telegram)
+    assert mock_telegram, "alert powinien pójść do Telegrama"
+    assert _alert_fired(caplog, "PARSER_ZERO_OUTPUT")
 
 
-def test_04_delta_spike_alert(fresh_monitor, mock_telegram):
+def test_04_delta_spike_alert(fresh_monitor, mock_telegram, caplog):
+    # De-erozja 2026-06-13: CHECK 2 (DELTA) operuje na active_orders od fixa 2026-05-07
+    # (`active_ids = order_ids - closed_ids`), NIE na surowym orders_in_panel. Stary
+    # test sterował sekwencją tylko przez orders_in_panel i puste order_ids → n_active=0
+    # → delta nie odpalała (gate `n_active > 0`). Sterujemy sekwencją aktywnych przez
+    # order_ids (brak closed_ids → active = order_ids), wartości jak w oryginale.
     for c, n in enumerate([180, 175, 178, 180, 182, 100], 1):
-        fresh_monitor.record_tick({"cycle": c, "orders_in_panel": n}, {"assigned_ids": set(), "order_ids": []})
-    assert any("PARSER_DELTA_SPIKE" in a for a in mock_telegram)
+        order_ids = [str(400000 + i) for i in range(n)]
+        fresh_monitor.record_tick(
+            {"cycle": c, "orders_in_panel": n},
+            {"assigned_ids": set(), "order_ids": order_ids},
+        )
+    assert mock_telegram, "alert powinien pójść do Telegrama"
+    assert _alert_fired(caplog, "PARSER_DELTA_SPIKE")
 
 
-def test_05_layer2_asymmetry_alert(fresh_monitor, mock_telegram):
+def test_05_layer2_asymmetry_alert(fresh_monitor, mock_telegram, caplog):
     fresh_monitor.record_tick(
         {"cycle": 1, "orders_in_panel": 10},
         {"assigned_ids": set([str(i) for i in range(20)]), "order_ids": [str(i) for i in range(10)]},
     )
-    assert any("PARSER_ASYMMETRY" in a for a in mock_telegram)
+    assert mock_telegram, "alert powinien pójść do Telegrama"
+    assert _alert_fired(caplog, "PARSER_ASYMMETRY")
 
 
-def test_06_cooldown(fresh_monitor, mock_telegram):
+def test_06_cooldown(fresh_monitor, mock_telegram, caplog):
     """Cooldown test z motion (post-MOTION-AWARE fix). 7 cycles motion + count stuck → 1 alert + 6 suppressed."""
     for c in range(1, 8):
         # Motion: delivered=1 per cycle + assigned growing (ten sam pattern co test_02)
         cycle_stats = {"cycle": c, "orders_in_panel": 180, "delivered": 1}
         parsed = {"assigned_ids": set([str(i) for i in range(c)])}
         fresh_monitor.record_tick(cycle_stats, parsed)
-    stuck_count = sum(1 for a in mock_telegram if "PARSER_STUCK" in a)
+    stuck_count = _alert_log_count(caplog, "PARSER_STUCK")
     assert stuck_count == 1, f"expected 1 alert + 6 cooldown'd, got {stuck_count}"
 
 
@@ -178,7 +217,7 @@ def test_09_persistence(ph, fresh_monitor):
 # Layer 3 cross-validation (tests 10-14)
 # ============================================================================
 
-def test_10_asymmetry_detection_02may_incident(fresh_monitor, mock_telegram):
+def test_10_asymmetry_detection_02may_incident(fresh_monitor, mock_telegram, caplog):
     """02.05 incident pattern reproduction — Layer 3 detection w 1 tick."""
     parsed = {
         "order_ids": ["469997", "469998"],
@@ -191,7 +230,8 @@ def test_10_asymmetry_detection_02may_incident(fresh_monitor, mock_telegram):
     with fresh_monitor._lock:
         for a in alerts:
             fresh_monitor._maybe_send_alert(a)
-    assert any("SET_ASSIGNED_ORPHAN" in a for a in mock_telegram)
+    assert mock_telegram, "alert powinien pójść do Telegrama"
+    assert _alert_fired(caplog, "SET_ASSIGNED_ORPHAN")
 
 
 def test_11_historical_known_no_false_alert(fresh_monitor, mock_telegram):
@@ -211,7 +251,7 @@ def test_11_historical_known_no_false_alert(fresh_monitor, mock_telegram):
     assert not any("SET_ASSIGNED_ORPHAN" in str(a) for a in alerts)
 
 
-def test_12_packs_leak_alert(fresh_monitor, mock_telegram):
+def test_12_packs_leak_alert(fresh_monitor, mock_telegram, caplog):
     parsed = {
         "order_ids": ["470001", "470002", "470003"],
         "assigned_ids": set(["470001"]),
@@ -223,7 +263,8 @@ def test_12_packs_leak_alert(fresh_monitor, mock_telegram):
     with fresh_monitor._lock:
         for a in alerts:
             fresh_monitor._maybe_send_alert(a)
-    assert any("PACKS_LEAK" in a for a in mock_telegram)
+    assert mock_telegram, "alert powinien pójść do Telegrama"
+    assert _alert_fired(caplog, "PACKS_LEAK")
 
 
 def test_13_window_expiration(fresh_monitor):
@@ -236,7 +277,7 @@ def test_13_window_expiration(fresh_monitor):
     assert "FRESH_ID" in known
 
 
-def test_14_critical_cooldown_5min(fresh_monitor, mock_telegram):
+def test_14_critical_cooldown_5min(fresh_monitor, mock_telegram, caplog):
     """Critical cooldown 5 min vs warning 30 min."""
     parsed_critical = {
         "order_ids": [],
@@ -250,7 +291,7 @@ def test_14_critical_cooldown_5min(fresh_monitor, mock_telegram):
     with fresh_monitor._lock:
         for a in alerts1:
             fresh_monitor._maybe_send_alert(a)
-    count_first = sum(1 for a in mock_telegram if "SET_ASSIGNED_ORPHAN" in a)
+    count_first = _alert_log_count(caplog, "SET_ASSIGNED_ORPHAN")
 
     # Simulate 5+ min passage
     fresh_monitor._last_alert_at["PARSER_SET_ASSIGNED_ORPHAN"] = time.time() - 350
@@ -258,7 +299,7 @@ def test_14_critical_cooldown_5min(fresh_monitor, mock_telegram):
     with fresh_monitor._lock:
         for a in alerts2:
             fresh_monitor._maybe_send_alert(a)
-    count_second = sum(1 for a in mock_telegram if "SET_ASSIGNED_ORPHAN" in a)
+    count_second = _alert_log_count(caplog, "SET_ASSIGNED_ORPHAN")
 
     assert count_first == 1 and count_second == 2
 
@@ -267,7 +308,7 @@ def test_14_critical_cooldown_5min(fresh_monitor, mock_telegram):
 # Layer 4 NEW tests (15-16)
 # ============================================================================
 
-def test_15_integration_end_to_end(fresh_monitor, mock_telegram, l3):
+def test_15_integration_end_to_end(fresh_monitor, mock_telegram, l3, caplog):
     """End-to-end: bootstrap + 5 healthy + injected anomaly + alert + state persisted."""
     # Bootstrap z synthetic data
     fresh_monitor._known_ids_window.add({"460001", "460002", "460003"})
@@ -296,7 +337,8 @@ def test_15_integration_end_to_end(fresh_monitor, mock_telegram, l3):
         {"cycle": 6, "orders_in_panel": 7},
         parsed_anomaly,
     )
-    assert any("SET_ASSIGNED_ORPHAN" in a for a in mock_telegram)
+    assert mock_telegram, "alert powinien pójść do Telegrama"
+    assert _alert_fired(caplog, "SET_ASSIGNED_ORPHAN")
 
     # Verify state persisted
     state_path = fresh_monitor._test_state_path
@@ -326,9 +368,17 @@ def test_16_health_endpoint_contract():
       - 503: status=critical/error (defense-in-depth — endpoint zwraca JSON nawet gdy module fail)
     Both must return valid JSON z required schema keys.
     """
-    endpoint_mod = _load_module(
-        "/tmp/v328_layer4_health_endpoint.py", "parser_health_endpoint"
-    )
+    # De-erozja 2026-06-13: ścieżka /tmp/ była pre-deploy staging (V3.28 development).
+    # Moduł od dawna wdrożony jako dispatch_v2/parser_health_endpoint.py — fallback
+    # jak w fixture'ach `ph`/`l3` (prefer /tmp/ pre-deploy, potem deployed).
+    _endpoint_paths = [
+        "/tmp/v328_layer4_health_endpoint.py",
+        "/root/.openclaw/workspace/scripts/dispatch_v2/parser_health_endpoint.py",
+    ]
+    _endpoint_path = next((p for p in _endpoint_paths if os.path.exists(p)), None)
+    if _endpoint_path is None:
+        pytest.skip("parser_health_endpoint module not found (ani /tmp/ ani deployed)")
+    endpoint_mod = _load_module(_endpoint_path, "parser_health_endpoint")
     # Random port — zero collision risk
     import socket
     sock = socket.socket(socket.AF_INET)
@@ -380,7 +430,7 @@ def test_16_health_endpoint_contract():
 # Layer 2 motion-aware (V3.28-LAYER2-MOTION-AWARE) — tests 17, 18, 19, 20
 # ============================================================================
 
-def test_17_motion_aware_natural_plateau_no_alert(fresh_monitor, mock_telegram):
+def test_17_motion_aware_natural_plateau_no_alert(fresh_monitor, mock_telegram, caplog):
     """Natural plateau: panel quiet (no motion) — orders_in_panel stuck ALE NIE bug.
 
     Post-fix: PARSER_STUCK SUPPRESSED gdy motion=0.
@@ -390,36 +440,46 @@ def test_17_motion_aware_natural_plateau_no_alert(fresh_monitor, mock_telegram):
         cycle_stats = {"cycle": c, "orders_in_panel": 180}  # no delivered, no new
         parsed = {"assigned_ids": set()}  # n_assigned=0 stałe
         fresh_monitor.record_tick(cycle_stats, parsed)
-    assert not any("PARSER_STUCK" in a for a in mock_telegram), (
-        f"Natural plateau should NOT alert. Got: {mock_telegram}"
+    assert not _alert_fired(caplog, "PARSER_STUCK"), (
+        f"Natural plateau should NOT alert. Telegram: {mock_telegram}"
     )
 
 
-def test_18_motion_aware_real_stuck_with_motion(fresh_monitor, mock_telegram):
+def test_18_motion_aware_real_stuck_with_motion(fresh_monitor, mock_telegram, caplog):
     """Real stuck: panel ma ruch (delivered/assigned growing) ALE order_ids stuck."""
     for c in range(1, 6):
         cycle_stats = {"cycle": c, "orders_in_panel": 180, "delivered": 2}
         parsed = {"assigned_ids": set([str(i) for i in range(4 + c)])}  # 5→9
         fresh_monitor.record_tick(cycle_stats, parsed)
-    assert any("PARSER_STUCK" in a for a in mock_telegram), (
-        f"Real stuck (motion present) MUST alert. Got: {mock_telegram}"
+    assert _alert_fired(caplog, "PARSER_STUCK"), (
+        f"Real stuck (motion present) MUST alert. Telegram: {mock_telegram}"
     )
 
 
-def test_19_motion_aware_02may_rollover_pattern(fresh_monitor, mock_telegram):
-    """02.05.2026 incident: order_ids stuck (regex 46\\d{4} broken) ALE assigned 47XXXX growing."""
+def test_19_motion_aware_02may_rollover_pattern(fresh_monitor, mock_telegram, caplog):
+    """02.05.2026 incident: order_ids stuck (regex 46\\d{4} broken) mimo realnego ruchu.
+
+    De-erozja 2026-06-13: kontrakt motion zmieniony 2026-05-29 (Lekcja #157).
+    `motion_total = sum_new + sum_delivered` — wzrost `assigned` NIE liczy się jako
+    ruch (order unassigned→assigned ZOSTAJE w active_ids, oba=non-closed → nie zmienia
+    monitorowanego zbioru, był źródłem false-positive). Oryginał modelował 02.05 SAMYM
+    wzrostem assigned → po fixie to dziś poprawnie NIE alertuje. Intencja testu („realny
+    stuck z ruchem MUSI alertować") zachowana przez modelowanie ruchu przez `delivered`
+    (dostawy powinny opuścić active → realny ruch; active stuck = realny bug parsera).
+    """
     for c in range(1, 6):
-        cycle_stats = {"cycle": c, "orders_in_panel": 180}
-        # assigned grows 5→9 (47XXXX dodawane via PACKS_CATCHUP)
+        # Realny ruch: delivered=2/cykl (×5 = 10 ≥ próg 4) ALE active count stuck (parser miss).
+        cycle_stats = {"cycle": c, "orders_in_panel": 180, "delivered": 2}
+        # assigned grows 5→9 (47XXXX dodawane via PACKS_CATCHUP) — diagnostyczny kontekst, nie motion
         assigned_set = set([str(470000 + i) for i in range(4 + c)])
         parsed = {"assigned_ids": assigned_set}
         fresh_monitor.record_tick(cycle_stats, parsed)
-    assert any("PARSER_STUCK" in a for a in mock_telegram), (
-        f"02.05 rollover pattern (assigned grows, order_ids stuck) MUST alert. Got: {mock_telegram}"
+    assert _alert_fired(caplog, "PARSER_STUCK"), (
+        f"02.05 rollover pattern (realny ruch delivered, active stuck) MUST alert. Telegram: {mock_telegram}"
     )
 
 
-def test_21_motion_below_threshold_no_alert(fresh_monitor, mock_telegram):
+def test_21_motion_below_threshold_no_alert(fresh_monitor, mock_telegram, caplog):
     """V3.28-TICKET1: motion=1+1+1=3 < 4 threshold → NO alert (false positive eliminated).
 
     Reproduces 02.05 wieczór scenario: panel quiet ale slabe motion (1 new, 1 delivered, 1 assigned change)
@@ -437,30 +497,35 @@ def test_21_motion_below_threshold_no_alert(fresh_monitor, mock_telegram):
             cycle_stats = {"cycle": c, "orders_in_panel": 350}
             parsed = {"assigned_ids": set(["A", "B"])}
         fresh_monitor.record_tick(cycle_stats, parsed)
-    # motion_total = 1 (new) + 1 (delivered) + 1 (assigned variance 1→2) = 3 < 4 threshold
-    assert not any("PARSER_STUCK" in a for a in mock_telegram), (
-        f"Slabe motion (sum=3 < threshold=4) should NOT alert. Got: {mock_telegram}"
+    # De-erozja 2026-06-13 (Lekcja #157): motion_total = sum_new + sum_delivered
+    # (assigned_motion USUNIĘTY). new=1 + delivered=1 = 2 < 4 → brak alertu (poprawnie).
+    assert not _alert_fired(caplog, "PARSER_STUCK"), (
+        f"Slabe motion (sum=2 < threshold=4) should NOT alert. Telegram: {mock_telegram}"
     )
 
 
-def test_22_motion_strong_above_threshold_alert(fresh_monitor, mock_telegram):
-    """V3.28-TICKET1: motion=10 (assigned 5→15) >> 4 threshold → ALERT (real 02.05 stronger pattern).
+def test_22_motion_strong_above_threshold_alert(fresh_monitor, mock_telegram, caplog):
+    """Silny ruch >> próg 4 → ALERT gdy active stuck (real 02.05 stronger pattern).
 
-    Real 02.05 incident magnitude: PACKS_CATCHUP fires dla many 47XXXX assigned, motion >> threshold.
+    De-erozja 2026-06-13 (Lekcja #157): oryginał liczył na motion = wariancja assigned
+    (5→15). Po 2026-05-29 assigned-growth NIE jest ruchem (nie zmienia active set).
+    Intencja („silny realny ruch + active stuck = alert") zachowana: ruch przez
+    delivered=3/cykl (×5 = 15 >> próg 4).
     """
     for c in range(1, 6):
-        cycle_stats = {"cycle": c, "orders_in_panel": 350}
-        # assigned grows 5→15 (10 orderów dodanych do assigned_ids w 5 cyklach)
+        # Silny realny ruch: delivered=3/cykl (×5 = 15 >> próg 4), active count stuck (parser miss)
+        cycle_stats = {"cycle": c, "orders_in_panel": 350, "delivered": 3}
+        # assigned grows 5→13 — diagnostyczny kontekst (nie liczony do motion po 2026-05-29)
         assigned_set = set([str(470000 + i) for i in range((c - 1) * 2 + 5)])  # 5, 7, 9, 11, 13
         parsed = {"assigned_ids": assigned_set}
         fresh_monitor.record_tick(cycle_stats, parsed)
-    # motion_total = 0 + 0 + (13-5)=8 = 8 >= 4 threshold → alert
-    assert any("PARSER_STUCK" in a for a in mock_telegram), (
-        f"Strong motion (assigned variance 8 > threshold 4) MUST alert. Got: {mock_telegram}"
+    # motion_total = sum_delivered = 15 >= 4 threshold → alert
+    assert _alert_fired(caplog, "PARSER_STUCK"), (
+        f"Strong motion (delivered 15 > threshold 4) MUST alert. Telegram: {mock_telegram}"
     )
 
 
-def test_20_motion_aware_legacy_mode_disabled(ph, fresh_monitor, mock_telegram, monkeypatch):
+def test_20_motion_aware_legacy_mode_disabled(ph, fresh_monitor, mock_telegram, monkeypatch, caplog):
     """Legacy fallback: ENABLE_PARSER_STUCK_MOTION_AWARE=0 → original behavior (alert na każdy stuck).
 
     monkeypatch target = `ph` fixture module (the loaded module instance fresh_monitor uses),
@@ -471,8 +536,8 @@ def test_20_motion_aware_legacy_mode_disabled(ph, fresh_monitor, mock_telegram, 
         cycle_stats = {"cycle": c, "orders_in_panel": 180}  # no motion
         parsed = {"assigned_ids": set()}
         fresh_monitor.record_tick(cycle_stats, parsed)
-    assert any("PARSER_STUCK" in a for a in mock_telegram), (
-        f"Legacy mode (motion-aware OFF) MUST alert. Got: {mock_telegram}"
+    assert _alert_fired(caplog, "PARSER_STUCK"), (
+        f"Legacy mode (motion-aware OFF) MUST alert. Telegram: {mock_telegram}"
     )
 
 
