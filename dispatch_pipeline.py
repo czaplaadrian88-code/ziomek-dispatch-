@@ -1342,7 +1342,7 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
     # najlepszy zablokowany wraca na pre_block + SOLO_MALUS — mocno
     # zdemotowany, ale proposable; decyduje człowiek, nie cisza.
     if _ramp_blocked:
-        _min_prop = float(getattr(C, "MIN_PROPOSE_SCORE", -100.0))
+        _min_prop = _min_propose_score()  # SCALE-01: flags.json (hot) → common (=-100)
         _all_below = all(
             (not isinstance(c.score, (int, float))) or c.score < _min_prop
             for c in feasible
@@ -1762,12 +1762,25 @@ def _min_dist_to_route_km(point, courier_pos, bag_dropoffs) -> Optional[float]:
     return min(_point_to_segment_km(point, nodes[i], nodes[i+1]) for i in range(len(nodes)-1))
 
 
-EARLY_BIRD_THRESHOLD_MIN = 60
+# SCALE-01: kanon = common.EARLY_BIRD_THRESHOLD_MIN (env-default 60). Stała tu
+# zostaje jako backward-compat re-export (shadow_dispatcher importuje ją),
+# ale runtime threshold czytany przez _early_bird_threshold_min() (flags.json hot).
+EARLY_BIRD_THRESHOLD_MIN = int(getattr(C, "EARLY_BIRD_THRESHOLD_MIN", 60))
 # Sprint-1 2026-04-30 (logging extension): bumped 5→16 to capture full feasible
 # pool dla counterfactual analysis (PANEL_OVERRIDE pairwise). Faza 2 baseline
 # pool mean=10.24, max=17 — top-15 alternatives + best=16 covers ~100% pool.
 TOP_N_CANDIDATES = 16
 DEFAULT_FLEET_PREP_VARIANCE_MIN = 13.0
+
+
+def _early_bird_threshold_min() -> float:
+    """SCALE-01: early-bird KOORD threshold — flags.json (hot) → common (=60 min)."""
+    return float(C.load_flags().get("EARLY_BIRD_THRESHOLD_MIN", C.EARLY_BIRD_THRESHOLD_MIN))
+
+
+def _min_propose_score() -> float:
+    """SCALE-01: PROPOSE-quality floor — flags.json (hot) → common (=-100.0)."""
+    return float(C.load_flags().get("MIN_PROPOSE_SCORE", C.MIN_PROPOSE_SCORE))
 
 
 @dataclass
@@ -2481,7 +2494,7 @@ def _assess_order_impl(
     if pickup_at_for_early_bird is not None:
         pu = pickup_at_for_early_bird if pickup_at_for_early_bird.tzinfo else pickup_at_for_early_bird.replace(tzinfo=WARSAW)
         minutes_ahead = (pu.astimezone(timezone.utc) - now).total_seconds() / 60.0
-        if minutes_ahead >= EARLY_BIRD_THRESHOLD_MIN:
+        if minutes_ahead >= _early_bird_threshold_min():  # SCALE-01: flags.json hot
             return PipelineResult(
                 order_id=order_id,
                 verdict="KOORD",
@@ -4539,7 +4552,8 @@ def _assess_order_impl(
             # Bez tego filtra heuristic proponuje kuriera z bag-at-cap który normalną
             # ścieżką byłby R3 hard-reject. Diagnoza: Dariusz cid=509 bag=8 wybrany
             # jako WYBRANY mimo bag_full reject path w OR-Tools.
-            _v328_bag_cap = int(getattr(C, "MAX_BAG_SANITY_CAP", 8))
+            # SCALE-01: bag-cap z flags.json (hot, multi-city), fallback common =8.
+            _v328_bag_cap = int(C.load_flags().get("MAX_BAG_SANITY_CAP", C.MAX_BAG_SANITY_CAP))
             # Z-11 (audyt 2026-06-10): bramka grafikowa obok bag-cap. Hot-reload
             # kill-switch flags.json, env default ON (common).
             _v328_shift_guard_on = C.flag(
@@ -5074,14 +5088,15 @@ def _assess_order_impl(
         # (uczciwa wartość rankingowa).
         _best_score = getattr(top[0], "score", None)
         _best_score_gate = _gate_score_excluding_ranking_deltas(top[0])
+        _min_prop_gate = _min_propose_score()  # SCALE-01: flags.json hot → common
         if isinstance(_best_score, (int, float)) and _best_score_gate is not None \
-                and _best_score_gate < C.MIN_PROPOSE_SCORE:
+                and _best_score_gate < _min_prop_gate:
             _result_low = PipelineResult(
                 order_id=order_id,
                 verdict="KOORD",
                 reason=(
                     f"all_candidates_low_score (best={top[0].courier_id} "
-                    f"score={_best_score:.1f}<{C.MIN_PROPOSE_SCORE:.0f}; "
+                    f"score={_best_score:.1f}<{_min_prop_gate:.0f}; "
                     f"feasible={len(feasible)})"
                 ),
                 best=top[0],
@@ -5433,14 +5448,15 @@ def _assess_order_impl(
         # branch (line ~2800). Pre-fix: best_effort skip gate → score=-390 carry
         # przeszedł jako PROPOSE (Bartek O. 187/196 min case 10.05).
         _be_best_score = getattr(best, "score", None)
-        if isinstance(_be_best_score, (int, float)) and _be_best_score < C.MIN_PROPOSE_SCORE:
+        _min_prop_be = _min_propose_score()  # SCALE-01: flags.json hot → common
+        if isinstance(_be_best_score, (int, float)) and _be_best_score < _min_prop_be:
             _be_r6_count = _r6_pov_count(best)
             _result_be_low = PipelineResult(
                 order_id=order_id,
                 verdict="KOORD",
                 reason=(
                     f"best_effort_low_score (best={best.courier_id} "
-                    f"score={_be_best_score:.1f}<{C.MIN_PROPOSE_SCORE:.0f}; "
+                    f"score={_be_best_score:.1f}<{_min_prop_be:.0f}; "
                     f"r6_violations={_be_r6_count})"
                 ),
                 best=best,
