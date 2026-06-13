@@ -46,6 +46,15 @@ from dispatch_v2.czasowka_proactive import evaluator as cp_eval
 from dispatch_v2.czasowka_proactive import observability as cp_obs
 from dispatch_v2 import czasowka_scheduler as cs
 
+# De-erozja 2026-06-13 (auton/legacy-test-fixes): test_wait_branch dochodzi do
+# assess_order/dispatchable_fleet → state_machine._state_path (Faza 2b guard) RZUCA pod
+# pytest na ścieżce produkcyjnej. Izolujemy stan do tmpdir (monkeypatch _state_path).
+import os as _os
+_TMP_STATE_DIR = tempfile.mkdtemp(prefix="czasowka_proactive_state_")
+_os.environ["DISPATCH_STATE_DIR"] = _TMP_STATE_DIR
+from dispatch_v2 import state_machine as _sm
+_sm._state_path = lambda: _os.path.join(_TMP_STATE_DIR, "orders_state.json")
+
 
 passed, failed = 0, 0
 
@@ -505,6 +514,11 @@ def test_wait_branch_returns_all_candidates():
             "restaurant": "Test",
             "delivery_address": "Mickiewicza 1",
             "delivery_city": "Białystok",
+            # De-erozja 2026-06-13: doszedł guard no_pickup_geocode (czasowka_scheduler:273)
+            # — early KOORD exit gdy brak pickup_coords (zanim assess_order zwróci kandydatów).
+            # Dajemy realne coords pickup (centrum Białegostoku), żeby dojść do gałęzi WAIT
+            # (faktyczna ścieżka testowana: all_candidates_for_proactive z result.candidates).
+            "pickup_coords": [53.1325, 23.1688],
         }
         now = datetime(2026, 5, 6, 10, 0, 0, tzinfo=timezone.utc)
         result = cs_mod._eval_czasowka_impl("470999", order_state, now)
