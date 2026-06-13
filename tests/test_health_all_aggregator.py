@@ -180,9 +180,18 @@ def _make_parser_snap(downstream_status="ok", downstream_reason=None,
     }
 
 
+# De-erozja 2026-06-13: _mp14_build_all_snapshot zaciąga komponent cron_timers z ŻYWEGO
+# cron_health.json (failed systemd units tej maszyny — np. dispatch-daily-accounting/
+# retro-learning), co czyni overall=degraded niezależnie od logiki agregacji testowanej tu.
+# Testy oczekujące overall=ok muszą izolować cron od stanu hosta → stub healthy summary.
+_HEALTHY_CRON = {"status": "ok", "reason": None, "stale_units": [], "failed_units": [], "units_count": 0}
+
+
 def test_build_all_snapshot_healthy():
     """Wszystkie sygnały OK → overall_status=ok."""
-    snap = _mp14_build_all_snapshot(_make_parser_snap())
+    with patch("dispatch_v2.parser_health_endpoint._mp14_load_cron_summary",
+               return_value=dict(_HEALTHY_CRON)):
+        snap = _mp14_build_all_snapshot(_make_parser_snap())
     assert snap["overall_status"] == "ok"
     assert snap["overall_reason"] is None
     assert snap["endpoint_version"] == "1"
@@ -243,7 +252,11 @@ def test_build_all_snapshot_critical_pipeline_silent():
 
 def test_build_all_snapshot_no_worker_heartbeat():
     """worker_age=None → shadow_worker=unknown (NIE error)."""
-    snap = _mp14_build_all_snapshot(_make_parser_snap(worker_age=None))
+    # De-erozja 2026-06-13: izoluj cron od stanu hosta (patrz komentarz przy
+    # test_build_all_snapshot_healthy) — test oczekuje overall=ok.
+    with patch("dispatch_v2.parser_health_endpoint._mp14_load_cron_summary",
+               return_value=dict(_HEALTHY_CRON)):
+        snap = _mp14_build_all_snapshot(_make_parser_snap(worker_age=None))
     assert snap["components"]["shadow_worker"]["status"] == "unknown"
     assert snap["components"]["shadow_worker"]["age_sec"] is None
     # unknown nie eskaluje overall — overall pozostaje ok jeśli reszta zdrowa
