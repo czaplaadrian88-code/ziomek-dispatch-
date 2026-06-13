@@ -667,15 +667,27 @@ def update_from_event(event: dict) -> Optional[dict]:
                     deliv_coords = [round(float(r[0]), 6), round(float(r[1]), 6)]
             except Exception as _e:
                 pass  # geocode fail nie blokuje zapisu delivered
-        return upsert_order(oid, {
+        # FIX 2026-06-13 (sink guard, B3/B5): dwa defekty u ujścia.
+        # (1) `payload.get("timestamp", now_iso())` zwraca None gdy klucz ISTNIEJE
+        #     z wartością None — a reconcile/panel_diff/packs_ghost podają
+        #     {"timestamp": raw.get("czas_doreczenia")} BEZ fallbacku → delivered_at
+        #     = null → build_delivered wyklucza → znika z "Doręczone" + utarg 0.
+        #     `or now_iso()` łapie też None-value (default działa tylko dla braku klucza).
+        # (2) Gdy geocode zawiódł (brak delivery_city → no_city) deliv_coords=None
+        #     NADPISYWAŁO poprawne coords z NEW_ORDER → piny mapy znikały całej flocie.
+        #     upsert_order MERGE'uje ({**existing, **data}), więc pominięcie klucza
+        #     delivery_coords zachowuje istniejące — nie nadpisujemy dobrych None'em.
+        delivered_update = {
             "status": "delivered",
             "commitment_level": "planned",  # reset, kurier wolny
-            "delivered_at": payload.get("timestamp", now_iso()),
+            "delivered_at": payload.get("timestamp") or now_iso(),
             "final_location": payload.get("final_location"),
             "delivery_address": deliv_addr,
-            "delivery_coords": deliv_coords,
             "bag_time_alerted": False,  # F2.1b step 5: housekeeping reset at end-of-life
-        }, event="COURIER_DELIVERED")
+        }
+        if deliv_coords:
+            delivered_update["delivery_coords"] = deliv_coords
+        return upsert_order(oid, delivered_update, event="COURIER_DELIVERED")
 
     if etype == "ORDER_RETURNED_TO_POOL":
         return upsert_order(oid, {
