@@ -90,6 +90,33 @@ def count_free_rows_after(ws, last_filled: int, sample_limit: int = 500) -> int:
     return max(0, total_rows - last_filled)
 
 
+def ensure_grid_capacity(ws, max_target_row: int, buffer: int = 500) -> int:
+    """Zapewnij że worksheet ma >= max_target_row wierszy (auto-grow z zapasem).
+
+    Google Sheets ma twardy grid limit (gridProperties.rowCount). Batch write poza
+    ten limit → APIError 400 'Range (...) exceeds grid limits' (root cause awarii
+    2026-06-12: arkusz 'Obliczenia' miał 995 wierszy, write od A991 wywalał caly run).
+    Rozszerzamy PRZED zapisem z zapasem (`buffer`), żeby kolejne dni miały miejsce
+    i nie wołać API co wiersz.
+
+    Args:
+        max_target_row: najwyższy 1-indexed wiersz który zostanie zapisany.
+        buffer: ile dodatkowych pustych wierszy dorzucić ponad potrzebę.
+
+    Returns: liczba dodanych wierszy (0 = już dość miejsca).
+    """
+    current = ws.row_count
+    if max_target_row <= current:
+        return 0
+    needed = (max_target_row - current) + buffer
+    ws.add_rows(needed)
+    log.info(
+        f"grid auto-grow: row_count {current} -> {ws.row_count} "
+        f"(+{needed}; target row {max_target_row})"
+    )
+    return needed
+
+
 def build_batch_data(ws, rows: List[Dict]) -> List[Dict]:
     """Zbuduj listę {'range': "'Obliczenia'!A123", 'values': [[val]]} per komórka.
 
@@ -145,6 +172,11 @@ def batch_write_rows(
         f"batch_write: {len(rows)} rows, {expected_cells} cells, "
         f"sheet={ws.title!r}, sample range={data[0]['range']!r}"
     )
+
+    # Self-healing: zapewnij dość wierszy PRZED zapisem (eliminuje APIError 400
+    # 'exceeds grid limits' niezależnie od wywołującego).
+    max_target_row = max((r["row"] for r in rows), default=0)
+    ensure_grid_capacity(ws, max_target_row)
 
     # batch_update z value_input_option USER_ENTERED (Sheets lokalizuje liczby PL)
     resp = ws.spreadsheet.values_batch_update(body={

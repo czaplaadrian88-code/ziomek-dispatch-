@@ -107,6 +107,7 @@ def run(
         batch_write_rows,
         build_batch_data,
         count_free_rows_after,
+        ensure_grid_capacity,
         fetch_grid,
         first_empty_row,
         verify_writes,
@@ -217,6 +218,13 @@ def run(
             },
         })
         row_cursor += 1
+
+    # Auto-grow grid PRZED policzeniem wolnych wierszy i zapisem (tylko real-path),
+    # żeby free_after odzwierciedlał rozszerzoną pojemność (nie odpalał mylnego
+    # alertu "dodaj wiersze ręcznie" po auto-grow). batch_write_rows też to robi
+    # (defense-in-depth), tu robimy wcześniej dla spójności free_after.
+    if not dry_run and rows_to_write:
+        ensure_grid_capacity(ws, row_cursor - 1)
 
     free_after = count_free_rows_after(ws, row_cursor - 1)
 
