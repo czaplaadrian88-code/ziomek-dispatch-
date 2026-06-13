@@ -319,12 +319,18 @@ plan8 = simulate_bag_route_v2(
     courier_pos=courier_start, bag=[bag_single],
     new_order=new_order, now=now8,
 )
-# Sprawdź: per_order_delivery_times["SINGLE"] = drop - pickup ≈ 5 (drive) + 1 (dwell)
-# NIE = drop - now ≈ 9 (5 drive + 2 dwell pickup + 3 drive + 1 dwell drop?)
+# De-erozja 2026-06-13: V3.28 ANCHOR FIX (route_simulator_v2.py:636) zmienił semantykę
+# per_order_delivery_times na thermal carry od `pickup_ready_at` (kiedy jedzenie GOTOWE),
+# NIE od TSP-projected pickup. Stary test zakładał ~drive pickup→drop (~4 min). Dla SINGLE
+# z pickup_ready_at=now8 ORAZ równoległym new_order w trasie, SINGLE czeka aż kurier
+# obsłuży new → thermal carry = delivered_at − pickup_ready_at (=now8). Asertujemy
+# WŁAŚCIWOŚĆ: per_order time == delivered − pickup_ready_at (anchor=ready).
 if plan8.per_order_delivery_times and "SINGLE" in plan8.per_order_delivery_times:
     elapsed = plan8.per_order_delivery_times["SINGLE"]
-    check(f"8. per_order_delivery_times[SINGLE]={elapsed}min = pickup→drop (expected ~4)",
-          3.0 <= elapsed <= 6.0)
+    single_delivered = plan8.predicted_delivered_at.get("SINGLE")
+    expected_thermal = (single_delivered - now8).total_seconds() / 60.0 if single_delivered else None
+    check(f"8. per_order_delivery_times[SINGLE]={elapsed}min = thermal od pickup_ready_at",
+          expected_thermal is not None and abs(elapsed - expected_thermal) < 0.1)
 else:
     check("8. per_order_delivery_times[SINGLE] present", False)
 
