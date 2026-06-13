@@ -1,0 +1,5644 @@
+{
+  "restaurants": {
+    "Retrospekcja": {
+      "sample_n": 1126,
+      "first_order": "2025-11-01T10:16:17",
+      "last_order": "2026-06-09T13:24:40",
+      "active": true,
+      "volume_pct": 2.03,
+      "prep_variance_min": {
+        "sample_n": 1124,
+        "median": 12.0,
+        "p75": 23.0,
+        "p90": 35.0,
+        "mean": 14.83,
+        "stddev": 18.86,
+        "min": -19.0,
+        "max": 369.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1126,
+        "non_zero_count": 50,
+        "non_zero_pct": 4.44,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 6.05,
+        "max_sec": 777,
+        "median_non_zero_sec": 84.5,
+        "p75_non_zero_sec": 177.5
+      },
+      "extension_min": {
+        "sample_n": 1126,
+        "median_min": 7.0,
+        "p75_min": 16.0,
+        "p90_min": 26.0,
+        "mean_min": 10.61,
+        "never_extended_pct": 29.22,
+        "extended_count": 764,
+        "extended_pct": 67.85,
+        "shortened_count": 33
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Gabriel",
+        "Mateusz O",
+        "Bartek O.",
+        "Adrian R",
+        "Andrei K"
+      ],
+      "delivery_addresses_sample": [
+        "42 Pułku Piechoty 72e/35",
+        "Poleska 45/1",
+        "Harcerska 4c",
+        "Stanisława Dubois 17/6",
+        "rtm. Witolda Pileckiego 9/33"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Pruszynka Restauracja": {
+      "sample_n": 1126,
+      "first_order": "2025-11-01T11:05:30",
+      "last_order": "2026-06-09T11:32:42",
+      "active": true,
+      "volume_pct": 2.03,
+      "prep_variance_min": {
+        "sample_n": 1119,
+        "median": 18.0,
+        "p75": 31.0,
+        "p90": 41.0,
+        "mean": 20.93,
+        "stddev": 15.74,
+        "min": -14.0,
+        "max": 101.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1126,
+        "non_zero_count": 337,
+        "non_zero_pct": 29.93,
+        "median_sec": 0.0,
+        "p75_sec": 72.0,
+        "p90_sec": 284.5,
+        "mean_sec": 78.9,
+        "max_sec": 1504,
+        "median_non_zero_sec": 179,
+        "p75_non_zero_sec": 325.0
+      },
+      "extension_min": {
+        "sample_n": 1126,
+        "median_min": 12.0,
+        "p75_min": 26.0,
+        "p90_min": 32.0,
+        "mean_min": 15.41,
+        "never_extended_pct": 19.36,
+        "extended_count": 899,
+        "extended_pct": 79.84,
+        "shortened_count": 9
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Michał K.",
+        "Andrei K",
+        "Piotr Zaw",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Feliksa Filipowicza 6/99",
+        "Bolesława Chrobrego 5b/29",
+        "Piasta 9a",
+        "Chrobrego 5b/29",
+        "Bohaterów Monte Cassino 13a/24"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Mama Thai Bistro": {
+      "sample_n": 2532,
+      "first_order": "2025-11-01T11:25:19",
+      "last_order": "2026-06-09T14:09:02",
+      "active": true,
+      "volume_pct": 4.57,
+      "prep_variance_min": {
+        "sample_n": 2526,
+        "median": 17.0,
+        "p75": 28.0,
+        "p90": 41.0,
+        "mean": 19.8,
+        "stddev": 17.41,
+        "min": -29.0,
+        "max": 198.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 2532,
+        "non_zero_count": 969,
+        "non_zero_pct": 38.27,
+        "median_sec": 0.0,
+        "p75_sec": 150.0,
+        "p90_sec": 438.9,
+        "mean_sec": 140.75,
+        "max_sec": 3474,
+        "median_non_zero_sec": 229,
+        "p75_non_zero_sec": 460.0
+      },
+      "extension_min": {
+        "sample_n": 2532,
+        "median_min": 7.0,
+        "p75_min": 18.0,
+        "p90_min": 27.0,
+        "mean_min": 11.4,
+        "never_extended_pct": 26.11,
+        "extended_count": 1790,
+        "extended_pct": 70.7,
+        "shortened_count": 81
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Bartek O.",
+        "Krystian",
+        "Mateusz O",
+        "Gabriel",
+        "Adrian R"
+      ],
+      "delivery_addresses_sample": [
+        "Jodłowa 8A lokal 19",
+        "Piotrkowska 2a lokal 11, piętro 3",
+        "Jarzębinowa 12 lokal 7, piętro 3",
+        "Jurowiecka 11/16",
+        "Antoniuk Fabryczny 11A lokal 39, piętro 4"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Bar Eljot": {
+      "sample_n": 199,
+      "first_order": "2025-11-01T11:26:23",
+      "last_order": "2026-06-07T16:47:03",
+      "active": true,
+      "volume_pct": 0.36,
+      "prep_variance_min": {
+        "sample_n": 198,
+        "median": 17.0,
+        "p75": 27.0,
+        "p90": 36.3,
+        "mean": 18.68,
+        "stddev": 13.85,
+        "min": -6.0,
+        "max": 67.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 199,
+        "non_zero_count": 14,
+        "non_zero_pct": 7.04,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 10.48,
+        "max_sec": 618,
+        "median_non_zero_sec": 103.0,
+        "p75_non_zero_sec": 175.25
+      },
+      "extension_min": {
+        "sample_n": 199,
+        "median_min": 13.0,
+        "p75_min": 23.0,
+        "p90_min": 31.0,
+        "mean_min": 14.96,
+        "never_extended_pct": 16.08,
+        "extended_count": 165,
+        "extended_pct": 82.91,
+        "shortened_count": 2
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Adrian Cit",
+        "Andrei K",
+        "Jakub OL",
+        "Adrian R"
+      ],
+      "delivery_addresses_sample": [
+        "Legionowa 11/96",
+        "Dobra 14A/6",
+        "ks. Stanisława Suchowolca 26D/2",
+        "ks. Stanisława Suchowolca 26d/2",
+        "Suchowolca 26D/2"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Ramen Base": {
+      "sample_n": 687,
+      "first_order": "2025-11-01T12:05:42",
+      "last_order": "2026-06-07T20:47:03",
+      "active": true,
+      "volume_pct": 1.24,
+      "prep_variance_min": {
+        "sample_n": 682,
+        "median": 17.0,
+        "p75": 27.0,
+        "p90": 43.0,
+        "mean": 19.83,
+        "stddev": 17.51,
+        "min": -11.0,
+        "max": 119.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 687,
+        "non_zero_count": 137,
+        "non_zero_pct": 19.94,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 145.4,
+        "mean_sec": 44.48,
+        "max_sec": 1440,
+        "median_non_zero_sec": 146,
+        "p75_non_zero_sec": 290.0
+      },
+      "extension_min": {
+        "sample_n": 687,
+        "median_min": 11.0,
+        "p75_min": 21.0,
+        "p90_min": 32.0,
+        "mean_min": 13.63,
+        "never_extended_pct": 23.14,
+        "extended_count": 513,
+        "extended_pct": 74.67,
+        "shortened_count": 15
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Sylwia L",
+        "Gabriel",
+        "Adrian R",
+        "Mateusz O",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Marii Konopnickiej 4/42",
+        "Witosa 6/16",
+        "Wincentego Witosa 6/16",
+        "Lipowa 45/13",
+        "Jurowiecka 19/75"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Ogniomistrz": {
+      "sample_n": 1148,
+      "first_order": "2025-11-01T12:07:17",
+      "last_order": "2026-06-08T17:04:12",
+      "active": true,
+      "volume_pct": 2.07,
+      "prep_variance_min": {
+        "sample_n": 1144,
+        "median": 12.0,
+        "p75": 21.0,
+        "p90": 32.0,
+        "mean": 14.61,
+        "stddev": 13.95,
+        "min": -31.0,
+        "max": 86.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1148,
+        "non_zero_count": 466,
+        "non_zero_pct": 40.59,
+        "median_sec": 0.0,
+        "p75_sec": 181.25,
+        "p90_sec": 416.8,
+        "mean_sec": 125.77,
+        "max_sec": 1913,
+        "median_non_zero_sec": 240.5,
+        "p75_non_zero_sec": 409.5
+      },
+      "extension_min": {
+        "sample_n": 1148,
+        "median_min": 5.0,
+        "p75_min": 13.0,
+        "p90_min": 23.0,
+        "mean_min": 8.5,
+        "never_extended_pct": 33.89,
+        "extended_count": 732,
+        "extended_pct": 63.76,
+        "shortened_count": 27
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Jakub OL",
+        "Andrei K",
+        "Michał K.",
+        "Adrian Cit"
+      ],
+      "delivery_addresses_sample": [
+        "św. Andrzeja Boboli 63/43",
+        "gen. Władysława Andersa 38",
+        "Skorupska 50/29",
+        "M. Curie-Skłodowskiej 24a",
+        "M. Curie-Skłodowskiej 24A"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Karczma Maciejówka": {
+      "sample_n": 1485,
+      "first_order": "2025-11-01T12:08:02",
+      "last_order": "2026-06-09T13:04:47",
+      "active": true,
+      "volume_pct": 2.68,
+      "prep_variance_min": {
+        "sample_n": 1481,
+        "median": 15.0,
+        "p75": 26.0,
+        "p90": 37.0,
+        "mean": 17.47,
+        "stddev": 14.58,
+        "min": -16.0,
+        "max": 96.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1485,
+        "non_zero_count": 208,
+        "non_zero_pct": 14.01,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 135.2,
+        "mean_sec": 50.37,
+        "max_sec": 2677,
+        "median_non_zero_sec": 243.5,
+        "p75_non_zero_sec": 472.25
+      },
+      "extension_min": {
+        "sample_n": 1485,
+        "median_min": 9.0,
+        "p75_min": 19.0,
+        "p90_min": 27.0,
+        "mean_min": 11.56,
+        "never_extended_pct": 26.6,
+        "extended_count": 1061,
+        "extended_pct": 71.45,
+        "shortened_count": 29
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Krystian",
+        "Mateusz O",
+        "Bartek O.",
+        "Gabriel",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Aleja Jana Pawła II 59b/71",
+        "Jana Pawła 59b/71",
+        "Słonimska 34/7",
+        "Kręta 52/12",
+        "Szpitalna 39/22"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Rukola Sienkiewicza": {
+      "sample_n": 2916,
+      "first_order": "2025-11-01T12:12:53",
+      "last_order": "2026-06-09T11:53:57",
+      "active": true,
+      "volume_pct": 5.27,
+      "prep_variance_min": {
+        "sample_n": 2902,
+        "median": 14.0,
+        "p75": 26.0,
+        "p90": 38.0,
+        "mean": 20.06,
+        "stddev": 44.17,
+        "min": -103.0,
+        "max": 730.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 2916,
+        "non_zero_count": 521,
+        "non_zero_pct": 17.87,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 161.5,
+        "mean_sec": 50.26,
+        "max_sec": 1954,
+        "median_non_zero_sec": 183,
+        "p75_non_zero_sec": 362.0
+      },
+      "extension_min": {
+        "sample_n": 2916,
+        "median_min": 8.0,
+        "p75_min": 19.0,
+        "p90_min": 28.0,
+        "mean_min": 14.51,
+        "never_extended_pct": 28.02,
+        "extended_count": 2003,
+        "extended_pct": 68.69,
+        "shortened_count": 96
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": true
+      },
+      "courier_sample": [
+        "Bartek O.",
+        "Adrian R",
+        "Mateusz O",
+        "Jakub OL",
+        "Gabriel"
+      ],
+      "delivery_addresses_sample": [
+        "Suraska 4/16",
+        "Kraszewskiego 12/25",
+        "Ryska 3a/62",
+        "42pulku Piechoty 74d/28",
+        "Kraszewskiego 17c/24"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Upalna Pizza": {
+      "sample_n": 166,
+      "first_order": "2025-11-01T12:14:37",
+      "last_order": "2026-06-01T14:03:20",
+      "active": true,
+      "volume_pct": 0.3,
+      "prep_variance_min": {
+        "sample_n": 165,
+        "median": 19.0,
+        "p75": 32.0,
+        "p90": 40.2,
+        "mean": 21.85,
+        "stddev": 15.72,
+        "min": -3.0,
+        "max": 89.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 166,
+        "non_zero_count": 41,
+        "non_zero_pct": 24.7,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 274.0,
+        "mean_sec": 67.3,
+        "max_sec": 1059,
+        "median_non_zero_sec": 221,
+        "p75_non_zero_sec": 348.0
+      },
+      "extension_min": {
+        "sample_n": 166,
+        "median_min": 12.0,
+        "p75_min": 25.75,
+        "p90_min": 32.0,
+        "mean_min": 15.89,
+        "never_extended_pct": 11.45,
+        "extended_count": 144,
+        "extended_pct": 86.75,
+        "shortened_count": 3
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Adrian R",
+        "Piotr Zaw",
+        "Michał K.",
+        "Andrei K"
+      ],
+      "delivery_addresses_sample": [
+        "Armii Krajowej 27/11",
+        "Wrocławska 67/7",
+        "Władysława Broniewskiego 5/78",
+        "Wąska 4/100",
+        "Blokowa 4/57"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Rukola Kaczorowskiego": {
+      "sample_n": 2220,
+      "first_order": "2025-11-01T12:16:27",
+      "last_order": "2026-06-09T13:44:29",
+      "active": true,
+      "volume_pct": 4.01,
+      "prep_variance_min": {
+        "sample_n": 2214,
+        "median": 14.0,
+        "p75": 26.0,
+        "p90": 37.0,
+        "mean": 17.66,
+        "stddev": 24.55,
+        "min": -29.0,
+        "max": 686.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 2220,
+        "non_zero_count": 353,
+        "non_zero_pct": 15.9,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 153.2,
+        "mean_sec": 43.37,
+        "max_sec": 2265,
+        "median_non_zero_sec": 184,
+        "p75_non_zero_sec": 360.0
+      },
+      "extension_min": {
+        "sample_n": 2220,
+        "median_min": 8.0,
+        "p75_min": 17.0,
+        "p90_min": 27.0,
+        "mean_min": 11.75,
+        "never_extended_pct": 26.62,
+        "extended_count": 1554,
+        "extended_pct": 70.0,
+        "shortened_count": 75
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Bartek O.",
+        "Gabriel",
+        "Mateusz O",
+        "Krystian",
+        "Bartek O,"
+      ],
+      "delivery_addresses_sample": [
+        "Hetmańska 79/9",
+        "Marii Skłodowskiej-Curie 3/77",
+        "Składowskiej 3/77",
+        "Dubois 10/1",
+        "Handlowa 6G/3"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Miejska Miska": {
+      "sample_n": 1637,
+      "first_order": "2025-11-01T12:24:36",
+      "last_order": "2026-06-09T09:55:17",
+      "active": true,
+      "volume_pct": 2.96,
+      "prep_variance_min": {
+        "sample_n": 1634,
+        "median": 11.0,
+        "p75": 22.0,
+        "p90": 35.7,
+        "mean": 14.83,
+        "stddev": 15.47,
+        "min": -24.0,
+        "max": 150.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1637,
+        "non_zero_count": 177,
+        "non_zero_pct": 10.81,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 13.8,
+        "mean_sec": 25.43,
+        "max_sec": 1474,
+        "median_non_zero_sec": 153,
+        "p75_non_zero_sec": 305.0
+      },
+      "extension_min": {
+        "sample_n": 1637,
+        "median_min": 6.0,
+        "p75_min": 17.0,
+        "p90_min": 27.0,
+        "mean_min": 10.55,
+        "never_extended_pct": 28.53,
+        "extended_count": 1110,
+        "extended_pct": 67.81,
+        "shortened_count": 60
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Mateusz O",
+        "Adrian R",
+        "Gabriel",
+        "Bartek O.",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Fabryczna 57 lokal 86, piętro 2",
+        "Zwierzyniecka 29",
+        "Al. Piłsudskiego 32/36 lokal 36",
+        "Mikołaja Kopernika 2 lokal 170, piętro 3",
+        "Jaśminowa 58"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "_350 Stopni KILIŃSKIEGO": {
+      "sample_n": 374,
+      "first_order": "2025-11-01T12:25:59",
+      "last_order": "2026-06-08T19:20:45",
+      "active": true,
+      "volume_pct": 0.68,
+      "prep_variance_min": {
+        "sample_n": 374,
+        "median": 13.0,
+        "p75": 24.0,
+        "p90": 40.4,
+        "mean": 17.75,
+        "stddev": 18.62,
+        "min": -8.0,
+        "max": 123.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 374,
+        "non_zero_count": 41,
+        "non_zero_pct": 10.96,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 36.5,
+        "mean_sec": 23.93,
+        "max_sec": 1016,
+        "median_non_zero_sec": 108,
+        "p75_non_zero_sec": 242.0
+      },
+      "extension_min": {
+        "sample_n": 374,
+        "median_min": 6.0,
+        "p75_min": 19.0,
+        "p90_min": 31.0,
+        "mean_min": 12.48,
+        "never_extended_pct": 23.53,
+        "extended_count": 274,
+        "extended_pct": 73.26,
+        "shortened_count": 12
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Gabriel",
+        "Adrian R",
+        "Andrei K",
+        "Piotr Zaw",
+        "Mateusz O"
+      ],
+      "delivery_addresses_sample": [
+        "Różana 3/40",
+        "Pułkowa 5/10",
+        "Pozioma 2a/79",
+        "Kozłowa 5/13",
+        "Aleja Jana Pawła II 59/197"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Sushi Rany Julek & Pizza Majstry": {
+      "sample_n": 1978,
+      "first_order": "2025-11-01T12:29:48",
+      "last_order": "2026-06-09T13:21:35",
+      "active": true,
+      "volume_pct": 3.57,
+      "prep_variance_min": {
+        "sample_n": 1973,
+        "median": 12.0,
+        "p75": 23.0,
+        "p90": 34.0,
+        "mean": 15.48,
+        "stddev": 13.91,
+        "min": -47.0,
+        "max": 84.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1978,
+        "non_zero_count": 541,
+        "non_zero_pct": 27.35,
+        "median_sec": 0.0,
+        "p75_sec": 54.0,
+        "p90_sec": 234.0,
+        "mean_sec": 69.19,
+        "max_sec": 1894,
+        "median_non_zero_sec": 179,
+        "p75_non_zero_sec": 340.0
+      },
+      "extension_min": {
+        "sample_n": 1978,
+        "median_min": 6.0,
+        "p75_min": 16.0,
+        "p90_min": 26.0,
+        "mean_min": 9.67,
+        "never_extended_pct": 31.04,
+        "extended_count": 1307,
+        "extended_pct": 66.08,
+        "shortened_count": 57
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Jakub OL",
+        "Adrian R",
+        "Piotr Zaw",
+        "Mateusz O"
+      ],
+      "delivery_addresses_sample": [
+        "Prezydenta Ryszarda Kaczorowskiego 7/39",
+        "Jerzego Waszyngtona 17",
+        "Prowiantowa 19/79",
+        "Sielska 2",
+        "Marii Konopnickiej 14/9"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Burger Station": {
+      "sample_n": 147,
+      "first_order": "2025-11-01T13:06:51",
+      "last_order": "2025-11-30T17:18:58",
+      "active": false,
+      "volume_pct": 0.27,
+      "prep_variance_min": {
+        "sample_n": 144,
+        "median": 16.0,
+        "p75": 28.0,
+        "p90": 37.4,
+        "mean": 19.08,
+        "stddev": 15.88,
+        "min": -8.0,
+        "max": 75.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 147,
+        "non_zero_count": 29,
+        "non_zero_pct": 19.73,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 137.0,
+        "mean_sec": 41.03,
+        "max_sec": 654,
+        "median_non_zero_sec": 137,
+        "p75_non_zero_sec": 319.0
+      },
+      "extension_min": {
+        "sample_n": 147,
+        "median_min": 12.0,
+        "p75_min": 22.0,
+        "p90_min": 31.4,
+        "mean_min": 14.59,
+        "never_extended_pct": 20.41,
+        "extended_count": 116,
+        "extended_pct": 78.91,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Gabriel",
+        "Sylwia L",
+        "Marek",
+        "Mateusz O",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Bohaterów Getta 7/7",
+        "Młynowa 82/7",
+        "Dobra 18/1",
+        "Piastowska 3c/57",
+        "Józefa Ignacego Kraszewskiego 45b/270"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Zapiecek": {
+      "sample_n": 942,
+      "first_order": "2025-11-01T13:10:07",
+      "last_order": "2026-06-09T12:25:39",
+      "active": true,
+      "volume_pct": 1.7,
+      "prep_variance_min": {
+        "sample_n": 941,
+        "median": 13.0,
+        "p75": 23.0,
+        "p90": 35.0,
+        "mean": 16.13,
+        "stddev": 14.38,
+        "min": -14.0,
+        "max": 120.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 942,
+        "non_zero_count": 133,
+        "non_zero_pct": 14.12,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 69.8,
+        "mean_sec": 25.68,
+        "max_sec": 1059,
+        "median_non_zero_sec": 127,
+        "p75_non_zero_sec": 230.0
+      },
+      "extension_min": {
+        "sample_n": 942,
+        "median_min": 6.0,
+        "p75_min": 16.0,
+        "p90_min": 26.0,
+        "mean_min": 10.27,
+        "never_extended_pct": 26.86,
+        "extended_count": 675,
+        "extended_pct": 71.66,
+        "shortened_count": 14
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Andrei K",
+        "Mateusz O",
+        "Jakub OL",
+        "Adrian R",
+        "Piotr Zaw"
+      ],
+      "delivery_addresses_sample": [
+        "Antoniukowska 17b/56",
+        "Młynowa 38/83",
+        "Wiatrakowa 3/25",
+        "Kazimierza Pułaskiego 26/3",
+        "Wierzbowa 5/77"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Paradiso": {
+      "sample_n": 916,
+      "first_order": "2025-11-01T13:28:14",
+      "last_order": "2026-06-07T20:01:04",
+      "active": true,
+      "volume_pct": 1.65,
+      "prep_variance_min": {
+        "sample_n": 914,
+        "median": 18.0,
+        "p75": 31.0,
+        "p90": 42.7,
+        "mean": 20.85,
+        "stddev": 18.27,
+        "min": -39.0,
+        "max": 174.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 916,
+        "non_zero_count": 140,
+        "non_zero_pct": 15.28,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 117.5,
+        "mean_sec": 35.59,
+        "max_sec": 1536,
+        "median_non_zero_sec": 181.5,
+        "p75_non_zero_sec": 279.0
+      },
+      "extension_min": {
+        "sample_n": 916,
+        "median_min": 12.0,
+        "p75_min": 22.0,
+        "p90_min": 31.0,
+        "mean_min": 14.65,
+        "never_extended_pct": 19.43,
+        "extended_count": 722,
+        "extended_pct": 78.82,
+        "shortened_count": 16
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Adrian R",
+        "Michał K.",
+        "Andrei K",
+        "Gabriel"
+      ],
+      "delivery_addresses_sample": [
+        "Ekologiczna 14/11",
+        "Mieszka I 4/12",
+        "Żelazna 9/30",
+        "Wąska 71/1",
+        "Sitarska 68/15"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Chicago Pizza": {
+      "sample_n": 3085,
+      "first_order": "2025-11-01T13:35:37",
+      "last_order": "2026-06-09T12:51:47",
+      "active": true,
+      "volume_pct": 5.57,
+      "prep_variance_min": {
+        "sample_n": 3072,
+        "median": 10.0,
+        "p75": 19.0,
+        "p90": 30.0,
+        "mean": 13.42,
+        "stddev": 14.09,
+        "min": -27.0,
+        "max": 191.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 3085,
+        "non_zero_count": 1120,
+        "non_zero_pct": 36.3,
+        "median_sec": 0,
+        "p75_sec": 115.0,
+        "p90_sec": 323.6,
+        "mean_sec": 98.03,
+        "max_sec": 3734,
+        "median_non_zero_sec": 185.0,
+        "p75_non_zero_sec": 344.0
+      },
+      "extension_min": {
+        "sample_n": 3085,
+        "median_min": 3.0,
+        "p75_min": 11.0,
+        "p90_min": 20.0,
+        "mean_min": 7.13,
+        "never_extended_pct": 37.73,
+        "extended_count": 1829,
+        "extended_pct": 59.29,
+        "shortened_count": 92
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": true
+      },
+      "courier_sample": [
+        "Mateusz O",
+        "Gabriel",
+        "Adrian R",
+        "Bartek O.",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Szeroka 16/25",
+        "Magazynowa 2",
+        "Prowiantowa 15/144",
+        "Jurowiecka 19/69",
+        "Kopernika 21"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Rany Julek": {
+      "sample_n": 4622,
+      "first_order": "2025-11-01T13:37:46",
+      "last_order": "2026-06-09T11:58:50",
+      "active": true,
+      "volume_pct": 8.35,
+      "prep_variance_min": {
+        "sample_n": 4609,
+        "median": 13.0,
+        "p75": 22.0,
+        "p90": 32.0,
+        "mean": 15.37,
+        "stddev": 24.04,
+        "min": -1374.0,
+        "max": 115.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 4622,
+        "non_zero_count": 2611,
+        "non_zero_pct": 56.49,
+        "median_sec": 107.0,
+        "p75_sec": 292.0,
+        "p90_sec": 529.0,
+        "mean_sec": 194.15,
+        "max_sec": 3011,
+        "median_non_zero_sec": 264,
+        "p75_non_zero_sec": 447.0
+      },
+      "extension_min": {
+        "sample_n": 4622,
+        "median_min": 2.0,
+        "p75_min": 11.0,
+        "p90_min": 18.0,
+        "mean_min": 6.13,
+        "never_extended_pct": 41.5,
+        "extended_count": 2557,
+        "extended_pct": 55.32,
+        "shortened_count": 147
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": true
+      },
+      "courier_sample": [
+        "Mateusz O",
+        "Jakub OL",
+        "Adrian R",
+        "Gabriel",
+        "Andrei K"
+      ],
+      "delivery_addresses_sample": [
+        "M. Curie-Skłodowskiej 24a",
+        "Łąkowa 7/91",
+        "Siewna 9",
+        "Kokosowa 4c",
+        "Antoniukowska 58/4"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Pizza Dealer": {
+      "sample_n": 419,
+      "first_order": "2025-11-01T13:48:33",
+      "last_order": "2026-06-09T14:08:22",
+      "active": true,
+      "volume_pct": 0.76,
+      "prep_variance_min": {
+        "sample_n": 418,
+        "median": 14.0,
+        "p75": 24.75,
+        "p90": 36.0,
+        "mean": 16.56,
+        "stddev": 15.63,
+        "min": -14.0,
+        "max": 126.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 419,
+        "non_zero_count": 87,
+        "non_zero_pct": 20.76,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 140.6,
+        "mean_sec": 38.39,
+        "max_sec": 816,
+        "median_non_zero_sec": 139,
+        "p75_non_zero_sec": 286.0
+      },
+      "extension_min": {
+        "sample_n": 419,
+        "median_min": 7.0,
+        "p75_min": 17.0,
+        "p90_min": 27.0,
+        "mean_min": 11.43,
+        "never_extended_pct": 27.92,
+        "extended_count": 296,
+        "extended_pct": 70.64,
+        "shortened_count": 6
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Andrei K",
+        "Mateusz O",
+        "Adrian R",
+        "Gabriel"
+      ],
+      "delivery_addresses_sample": [
+        "Żabia 10/38",
+        "Zielna 37/1",
+        "Fabryczna 57/51",
+        "Wyszyńskiego 15/44",
+        "Sybiraków 3/34"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "_500 stopni": {
+      "sample_n": 417,
+      "first_order": "2025-11-01T13:48:57",
+      "last_order": "2026-06-08T21:11:33",
+      "active": true,
+      "volume_pct": 0.75,
+      "prep_variance_min": {
+        "sample_n": 417,
+        "median": 12.0,
+        "p75": 23.0,
+        "p90": 38.0,
+        "mean": 15.58,
+        "stddev": 17.67,
+        "min": -28.0,
+        "max": 113.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 417,
+        "non_zero_count": 48,
+        "non_zero_pct": 11.51,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 45.0,
+        "mean_sec": 19.54,
+        "max_sec": 1187,
+        "median_non_zero_sec": 107.0,
+        "p75_non_zero_sec": 235.25
+      },
+      "extension_min": {
+        "sample_n": 417,
+        "median_min": 5.0,
+        "p75_min": 16.0,
+        "p90_min": 27.0,
+        "mean_min": 9.8,
+        "never_extended_pct": 30.22,
+        "extended_count": 272,
+        "extended_pct": 65.23,
+        "shortened_count": 19
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Gabriel",
+        "Adrian R",
+        "Mateusz O",
+        "Michał K.",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Kazimierza Pułaskiego 17/1",
+        "Aleja Jana Pawła II 72/22",
+        "Antoniukowska 46/12",
+        "Magazynowa 5/181",
+        "Malmeda Icchoka 31a/15"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Pizza point": {
+      "sample_n": 14,
+      "first_order": "2025-11-01T13:53:28",
+      "last_order": "2025-11-10T13:33:33",
+      "active": false,
+      "volume_pct": 0.03,
+      "prep_variance_min": {
+        "sample_n": 14,
+        "median": 11.5,
+        "p75": 16.75,
+        "p90": 24.4,
+        "mean": 14.43,
+        "stddev": 12.22,
+        "min": -3.0,
+        "max": 48.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 14,
+        "non_zero_count": 1,
+        "non_zero_pct": 7.14,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 6.57,
+        "max_sec": 92,
+        "median_non_zero_sec": 92,
+        "p75_non_zero_sec": 92
+      },
+      "extension_min": {
+        "sample_n": 14,
+        "median_min": 6.5,
+        "p75_min": 14.75,
+        "p90_min": 17.7,
+        "mean_min": 8.14,
+        "never_extended_pct": 35.71,
+        "extended_count": 9,
+        "extended_pct": 64.29,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Łukasz W",
+        "Mateusz O",
+        "Mateusz Bro",
+        "Adrian Ba",
+        "Sylwia L"
+      ],
+      "delivery_addresses_sample": [
+        "Ryska 3/84",
+        "lagodnaklepacze 6",
+        "Bialystok Konopnickiej 6 lokal 10, piętro 3",
+        "Bialystok Aleja Piłsudskiego 16 7 lokal 7, piętro Pierwsze",
+        "Zagórna 23/90"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Restauracja Sioux": {
+      "sample_n": 1163,
+      "first_order": "2025-11-01T13:54:52",
+      "last_order": "2026-06-08T20:46:18",
+      "active": true,
+      "volume_pct": 2.1,
+      "prep_variance_min": {
+        "sample_n": 1159,
+        "median": 12.0,
+        "p75": 22.0,
+        "p90": 33.0,
+        "mean": 14.8,
+        "stddev": 14.01,
+        "min": -40.0,
+        "max": 76.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1163,
+        "non_zero_count": 132,
+        "non_zero_pct": 11.35,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 36.8,
+        "mean_sec": 22.56,
+        "max_sec": 1213,
+        "median_non_zero_sec": 154.0,
+        "p75_non_zero_sec": 236.0
+      },
+      "extension_min": {
+        "sample_n": 1163,
+        "median_min": 6.0,
+        "p75_min": 16.0,
+        "p90_min": 26.0,
+        "mean_min": 9.35,
+        "never_extended_pct": 28.98,
+        "extended_count": 795,
+        "extended_pct": 68.36,
+        "shortened_count": 31
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Bartek O.",
+        "Adrian R",
+        "Mateusz O",
+        "Gabriel",
+        "Andrei K"
+      ],
+      "delivery_addresses_sample": [
+        "Adama Asnyka 14/67",
+        "Prezydenta Ryszarda Kaczorowskiego 14/122",
+        "Kardynała Stefana Wyszyńskiego 27/33",
+        "Poleska 45/1",
+        "Bitwy Białostockiej 29/5"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Pani Pierożek": {
+      "sample_n": 1454,
+      "first_order": "2025-11-01T13:55:49",
+      "last_order": "2026-06-09T12:43:02",
+      "active": true,
+      "volume_pct": 2.63,
+      "prep_variance_min": {
+        "sample_n": 1445,
+        "median": 10.0,
+        "p75": 19.0,
+        "p90": 27.0,
+        "mean": 12.55,
+        "stddev": 18.49,
+        "min": -15.0,
+        "max": 522.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1454,
+        "non_zero_count": 197,
+        "non_zero_pct": 13.55,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 84.0,
+        "mean_sec": 41.35,
+        "max_sec": 2377,
+        "median_non_zero_sec": 158,
+        "p75_non_zero_sec": 415.0
+      },
+      "extension_min": {
+        "sample_n": 1454,
+        "median_min": 3.0,
+        "p75_min": 11.0,
+        "p90_min": 18.0,
+        "mean_min": 7.33,
+        "never_extended_pct": 35.21,
+        "extended_count": 888,
+        "extended_pct": 61.07,
+        "shortened_count": 54
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Gabriel",
+        "Krystian",
+        "Mateusz O",
+        "Bartek O.",
+        "Adrian R"
+      ],
+      "delivery_addresses_sample": [
+        "Władysława Bełzy 5/40",
+        "M. Curie-Skłodowskiej 24a",
+        "Marii Konopnickiej 12c/3",
+        "Piasta 35/13",
+        "Stanisława Bukowskiego 1/4"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Raj": {
+      "sample_n": 2476,
+      "first_order": "2025-11-01T14:05:39",
+      "last_order": "2026-06-09T14:01:01",
+      "active": true,
+      "volume_pct": 4.47,
+      "prep_variance_min": {
+        "sample_n": 2468,
+        "median": 12.0,
+        "p75": 22.0,
+        "p90": 32.0,
+        "mean": 14.61,
+        "stddev": 14.94,
+        "min": -37.0,
+        "max": 292.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 2476,
+        "non_zero_count": 488,
+        "non_zero_pct": 19.71,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 136.0,
+        "mean_sec": 38.2,
+        "max_sec": 1646,
+        "median_non_zero_sec": 137.5,
+        "p75_non_zero_sec": 245.5
+      },
+      "extension_min": {
+        "sample_n": 2476,
+        "median_min": 6.0,
+        "p75_min": 16.0,
+        "p90_min": 26.0,
+        "mean_min": 9.79,
+        "never_extended_pct": 29.85,
+        "extended_count": 1647,
+        "extended_pct": 66.52,
+        "shortened_count": 90
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Bartek O.",
+        "Mateusz O",
+        "Jakub OL",
+        "Adrian R",
+        "Gabriel"
+      ],
+      "delivery_addresses_sample": [
+        "Włościańska 14",
+        "Mazowiecka 48/13",
+        "Kawaleryjska 9/U3",
+        "Szeroka 16/9",
+        "Horodniańska 12ab"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Chinatown Bistro": {
+      "sample_n": 1045,
+      "first_order": "2025-11-01T14:08:03",
+      "last_order": "2026-06-08T21:11:27",
+      "active": true,
+      "volume_pct": 1.89,
+      "prep_variance_min": {
+        "sample_n": 1042,
+        "median": 15.0,
+        "p75": 27.0,
+        "p90": 38.0,
+        "mean": 17.9,
+        "stddev": 18.61,
+        "min": -9.0,
+        "max": 271.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1045,
+        "non_zero_count": 46,
+        "non_zero_pct": 4.4,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 7.58,
+        "max_sec": 1392,
+        "median_non_zero_sec": 102.5,
+        "p75_non_zero_sec": 192.5
+      },
+      "extension_min": {
+        "sample_n": 1045,
+        "median_min": 11.0,
+        "p75_min": 21.0,
+        "p90_min": 31.0,
+        "mean_min": 13.18,
+        "never_extended_pct": 20.48,
+        "extended_count": 797,
+        "extended_pct": 76.27,
+        "shortened_count": 34
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Gabriel",
+        "Adrian R",
+        "Bartek O.",
+        "Mateusz O",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Bolesława Chrobrego 3d/35",
+        "42 Pułku Piechoty 72/2",
+        "Biebrzańska 8c",
+        "Plażowa 5/82",
+        "ks. Witolda Pietkuna 3/34"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Kebab Król": {
+      "sample_n": 1091,
+      "first_order": "2025-11-01T14:14:30",
+      "last_order": "2026-06-08T20:10:21",
+      "active": true,
+      "volume_pct": 1.97,
+      "prep_variance_min": {
+        "sample_n": 1090,
+        "median": 15.0,
+        "p75": 28.0,
+        "p90": 38.1,
+        "mean": 17.86,
+        "stddev": 16.37,
+        "min": -12.0,
+        "max": 120.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1091,
+        "non_zero_count": 79,
+        "non_zero_pct": 7.24,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 10.64,
+        "max_sec": 938,
+        "median_non_zero_sec": 106,
+        "p75_non_zero_sec": 180.0
+      },
+      "extension_min": {
+        "sample_n": 1091,
+        "median_min": 11.0,
+        "p75_min": 22.0,
+        "p90_min": 32.0,
+        "mean_min": 14.06,
+        "never_extended_pct": 22.64,
+        "extended_count": 818,
+        "extended_pct": 74.98,
+        "shortened_count": 26
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Adrian R",
+        "Andrei K",
+        "Michał K.",
+        "Mateusz O"
+      ],
+      "delivery_addresses_sample": [
+        "Blokowa 18/17",
+        "Upalna 7/8",
+        "Świętojańska 18/1/8",
+        "Wiejska 71/33",
+        "Palmowa 8/18"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Grill Kebab": {
+      "sample_n": 4751,
+      "first_order": "2025-11-01T14:22:54",
+      "last_order": "2026-06-09T13:45:17",
+      "active": true,
+      "volume_pct": 8.58,
+      "prep_variance_min": {
+        "sample_n": 4735,
+        "median": 9.0,
+        "p75": 20.0,
+        "p90": 32.0,
+        "mean": 12.13,
+        "stddev": 15.84,
+        "min": -70.0,
+        "max": 156.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 4751,
+        "non_zero_count": 557,
+        "non_zero_pct": 11.72,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 46.0,
+        "mean_sec": 22.06,
+        "max_sec": 1127,
+        "median_non_zero_sec": 123,
+        "p75_non_zero_sec": 236.0
+      },
+      "extension_min": {
+        "sample_n": 4751,
+        "median_min": 4.0,
+        "p75_min": 14.0,
+        "p90_min": 25.0,
+        "mean_min": 8.64,
+        "never_extended_pct": 34.67,
+        "extended_count": 2879,
+        "extended_pct": 60.6,
+        "shortened_count": 225
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": true
+      },
+      "courier_sample": [
+        "Mateusz O",
+        "Bartek O.",
+        "Jakub OL",
+        "Gabriel",
+        "Andrei K"
+      ],
+      "delivery_addresses_sample": [
+        "Poligonowa 6",
+        "Gołdapska 10/25",
+        "Gruntowa 5/14",
+        "Kopernika 21",
+        "Hetmańska 36"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Epic Pizza": {
+      "sample_n": 377,
+      "first_order": "2025-11-01T14:34:43",
+      "last_order": "2026-06-07T19:41:53",
+      "active": true,
+      "volume_pct": 0.68,
+      "prep_variance_min": {
+        "sample_n": 376,
+        "median": 11.0,
+        "p75": 22.0,
+        "p90": 34.0,
+        "mean": 13.94,
+        "stddev": 13.69,
+        "min": -25.0,
+        "max": 64.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 377,
+        "non_zero_count": 72,
+        "non_zero_pct": 19.1,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 139.4,
+        "mean_sec": 41.84,
+        "max_sec": 1080,
+        "median_non_zero_sec": 158.0,
+        "p75_non_zero_sec": 261.5
+      },
+      "extension_min": {
+        "sample_n": 377,
+        "median_min": 7.0,
+        "p75_min": 17.0,
+        "p90_min": 27.0,
+        "mean_min": 10.2,
+        "never_extended_pct": 27.85,
+        "extended_count": 266,
+        "extended_pct": 70.56,
+        "shortened_count": 6
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Mateusz O",
+        "Mateusz Bro",
+        "Adrian R",
+        "Andrei K"
+      ],
+      "delivery_addresses_sample": [
+        "Juliusza Słowackiego 10/18",
+        "Kręta 16/7",
+        "Władysława Warneńczyka 30",
+        "Warmińska 34B",
+        "Mieszka I 7/17"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Szklanki Talerze": {
+      "sample_n": 79,
+      "first_order": "2025-11-01T14:35:35",
+      "last_order": "2026-05-26T18:07:45",
+      "active": true,
+      "volume_pct": 0.14,
+      "prep_variance_min": {
+        "sample_n": 79,
+        "median": 16.0,
+        "p75": 26.5,
+        "p90": 39.2,
+        "mean": 19.51,
+        "stddev": 17.46,
+        "min": -4.0,
+        "max": 92.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 79,
+        "non_zero_count": 18,
+        "non_zero_pct": 22.78,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 242.6,
+        "mean_sec": 78.84,
+        "max_sec": 1637,
+        "median_non_zero_sec": 177.0,
+        "p75_non_zero_sec": 575.25
+      },
+      "extension_min": {
+        "sample_n": 79,
+        "median_min": 11.0,
+        "p75_min": 17.0,
+        "p90_min": 26.0,
+        "mean_min": 12.37,
+        "never_extended_pct": 22.78,
+        "extended_count": 60,
+        "extended_pct": 75.95,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian Cit",
+        "Piotr Zaw",
+        "Adrian R",
+        "Mateusz O",
+        "Sylwia L"
+      ],
+      "delivery_addresses_sample": [
+        "Marii Konopnickiej 1c/21",
+        "Towarowa 10/7",
+        "Skorupska 25/5",
+        "Elewatorska 4",
+        "Akademicka 28a/1"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Chinkali u Nany": {
+      "sample_n": 276,
+      "first_order": "2025-11-01T15:01:15",
+      "last_order": "2026-06-08T17:50:46",
+      "active": true,
+      "volume_pct": 0.5,
+      "prep_variance_min": {
+        "sample_n": 276,
+        "median": 12.0,
+        "p75": 21.0,
+        "p90": 29.5,
+        "mean": 14.63,
+        "stddev": 11.83,
+        "min": -5.0,
+        "max": 79.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 276,
+        "non_zero_count": 93,
+        "non_zero_pct": 33.7,
+        "median_sec": 0.0,
+        "p75_sec": 125.0,
+        "p90_sec": 397.0,
+        "mean_sec": 105.68,
+        "max_sec": 1075,
+        "median_non_zero_sec": 290,
+        "p75_non_zero_sec": 444.0
+      },
+      "extension_min": {
+        "sample_n": 276,
+        "median_min": 6.0,
+        "p75_min": 14.0,
+        "p90_min": 21.0,
+        "mean_min": 8.82,
+        "never_extended_pct": 25.36,
+        "extended_count": 197,
+        "extended_pct": 71.38,
+        "shortened_count": 9
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Andrei K",
+        "Jakub OL",
+        "Adrian R",
+        "Piotr Zaw",
+        "Michał K."
+      ],
+      "delivery_addresses_sample": [
+        "Marii Skłodowskiej-Curie 24A",
+        "Młynowa 46/163",
+        "Bohaterów Monte Cassino 13A  Flatnumber: 24 Floor: 4",
+        "Jerzego Waszyngtona 23B",
+        "Sukienna 2C  m 4"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Goodboy": {
+      "sample_n": 943,
+      "first_order": "2025-11-01T15:31:15",
+      "last_order": "2026-06-08T20:37:09",
+      "active": true,
+      "volume_pct": 1.7,
+      "prep_variance_min": {
+        "sample_n": 941,
+        "median": 16.0,
+        "p75": 27.0,
+        "p90": 41.0,
+        "mean": 18.58,
+        "stddev": 16.32,
+        "min": -14.0,
+        "max": 96.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 943,
+        "non_zero_count": 59,
+        "non_zero_pct": 6.26,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 10.34,
+        "max_sec": 601,
+        "median_non_zero_sec": 96,
+        "p75_non_zero_sec": 248.0
+      },
+      "extension_min": {
+        "sample_n": 943,
+        "median_min": 12.0,
+        "p75_min": 22.0,
+        "p90_min": 32.0,
+        "mean_min": 14.98,
+        "never_extended_pct": 20.57,
+        "extended_count": 733,
+        "extended_pct": 77.73,
+        "shortened_count": 16
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Mateusz O",
+        "Gabriel",
+        "Bartek O.",
+        "Jakub OL",
+        "Krystian"
+      ],
+      "delivery_addresses_sample": [
+        "Turystyczna 17",
+        "Jurowiecka 11/98",
+        "Kawaleryjska 70",
+        "Kopernika 3A/1",
+        "Jerzego Waszyngtona 14/138"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Istanbuł Kebab": {
+      "sample_n": 7,
+      "first_order": "2025-11-01T16:08:45",
+      "last_order": "2025-11-20T18:13:36",
+      "active": false,
+      "volume_pct": 0.01,
+      "prep_variance_min": {
+        "sample_n": 7,
+        "median": 25.0,
+        "p75": 29.5,
+        "p90": 33.2,
+        "mean": 21.43,
+        "stddev": 11.25,
+        "min": 5.0,
+        "max": 35.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 7,
+        "non_zero_count": 0,
+        "non_zero_pct": 0.0,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 0,
+        "max_sec": 0,
+        "median_non_zero_sec": null,
+        "p75_non_zero_sec": null
+      },
+      "extension_min": {
+        "sample_n": 7,
+        "median_min": 20.0,
+        "p75_min": 31.5,
+        "p90_min": 34.0,
+        "mean_min": 21.14,
+        "never_extended_pct": 14.29,
+        "extended_count": 6,
+        "extended_pct": 85.71,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Mateusz Bro",
+        "Łukasz W",
+        "Grzegorz W",
+        "Jakub OL",
+        "Paweł SC"
+      ],
+      "delivery_addresses_sample": [
+        "Zagurna 25/1",
+        "Atlasowa 17/6",
+        "Wierzbowa 5B/60",
+        "Jarzembinowa 12/10",
+        "Nowosielska 114"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Enklawa": {
+      "sample_n": 584,
+      "first_order": "2025-11-01T16:29:41",
+      "last_order": "2026-06-07T19:52:47",
+      "active": true,
+      "volume_pct": 1.05,
+      "prep_variance_min": {
+        "sample_n": 582,
+        "median": 11.0,
+        "p75": 22.0,
+        "p90": 32.0,
+        "mean": 13.85,
+        "stddev": 16.97,
+        "min": -27.0,
+        "max": 243.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 584,
+        "non_zero_count": 91,
+        "non_zero_pct": 15.58,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 86.4,
+        "mean_sec": 30.66,
+        "max_sec": 961,
+        "median_non_zero_sec": 126,
+        "p75_non_zero_sec": 267.0
+      },
+      "extension_min": {
+        "sample_n": 584,
+        "median_min": 6.0,
+        "p75_min": 16.0,
+        "p90_min": 24.0,
+        "mean_min": 9.49,
+        "never_extended_pct": 29.97,
+        "extended_count": 389,
+        "extended_pct": 66.61,
+        "shortened_count": 20
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Andrei K",
+        "Gabriel",
+        "Adrian R",
+        "Mateusz O",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Warszawska 14b/12",
+        "Prezydenta Ryszarda Kaczorowskiego 7/220",
+        "Kręta 22",
+        "Michała Pietkiewicza 21/30",
+        "42 Pułku Piechoty 131/66"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Pawilon Towarzyski": {
+      "sample_n": 149,
+      "first_order": "2025-11-01T18:45:37",
+      "last_order": "2026-05-28T16:10:45",
+      "active": true,
+      "volume_pct": 0.27,
+      "prep_variance_min": {
+        "sample_n": 149,
+        "median": 15.0,
+        "p75": 27.0,
+        "p90": 36.0,
+        "mean": 17.8,
+        "stddev": 14.3,
+        "min": -37.0,
+        "max": 58.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 149,
+        "non_zero_count": 32,
+        "non_zero_pct": 21.48,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 120.8,
+        "mean_sec": 36.21,
+        "max_sec": 635,
+        "median_non_zero_sec": 118.0,
+        "p75_non_zero_sec": 248.75
+      },
+      "extension_min": {
+        "sample_n": 149,
+        "median_min": 6.0,
+        "p75_min": 18.0,
+        "p90_min": 26.2,
+        "mean_min": 10.96,
+        "never_extended_pct": 21.48,
+        "extended_count": 111,
+        "extended_pct": 74.5,
+        "shortened_count": 6
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Michał K.",
+        "Mateusz O",
+        "Andrei K",
+        "Marek"
+      ],
+      "delivery_addresses_sample": [
+        "Warszawska 79",
+        "Upalna 11/18",
+        "Elewatorska 60",
+        "Tygrysia 6",
+        "Ogrodowa 3/10"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Halva": {
+      "sample_n": 165,
+      "first_order": "2025-11-01T19:01:19",
+      "last_order": "2026-06-07T14:07:28",
+      "active": true,
+      "volume_pct": 0.3,
+      "prep_variance_min": {
+        "sample_n": 165,
+        "median": 18.0,
+        "p75": 30.0,
+        "p90": 39.0,
+        "mean": 20.36,
+        "stddev": 19.65,
+        "min": -82.0,
+        "max": 121.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 165,
+        "non_zero_count": 48,
+        "non_zero_pct": 29.09,
+        "median_sec": 0,
+        "p75_sec": 79.0,
+        "p90_sec": 237.6,
+        "mean_sec": 53.77,
+        "max_sec": 536,
+        "median_non_zero_sec": 183.5,
+        "p75_non_zero_sec": 268.0
+      },
+      "extension_min": {
+        "sample_n": 165,
+        "median_min": 16.0,
+        "p75_min": 23.0,
+        "p90_min": 33.0,
+        "mean_min": 15.48,
+        "never_extended_pct": 16.36,
+        "extended_count": 137,
+        "extended_pct": 83.03,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Andrei K",
+        "Piotr Zaw",
+        "Michał K.",
+        "Jakub OL",
+        "Adrian R"
+      ],
+      "delivery_addresses_sample": [
+        "Marczukowska 20/29",
+        "Lodowa 52a",
+        "Błękitna 9",
+        "Rumiankowa 29/7",
+        "M. Curie-Skłodowskiej 24A"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Sweet Fit & Eat": {
+      "sample_n": 590,
+      "first_order": "2025-11-02T09:11:25",
+      "last_order": "2026-06-09T13:43:06",
+      "active": true,
+      "volume_pct": 1.07,
+      "prep_variance_min": {
+        "sample_n": 587,
+        "median": 9.0,
+        "p75": 22.0,
+        "p90": 34.0,
+        "mean": 13.51,
+        "stddev": 15.78,
+        "min": -25.0,
+        "max": 93.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 590,
+        "non_zero_count": 59,
+        "non_zero_pct": 10.0,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 1.9,
+        "mean_sec": 26.83,
+        "max_sec": 1754,
+        "median_non_zero_sec": 241,
+        "p75_non_zero_sec": 287.0
+      },
+      "extension_min": {
+        "sample_n": 589,
+        "median_min": 6.0,
+        "p75_min": 17.0,
+        "p90_min": 27.0,
+        "mean_min": 10.64,
+        "never_extended_pct": 30.9,
+        "extended_count": 394,
+        "extended_pct": 66.89,
+        "shortened_count": 13
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian Cit",
+        "Michał K.",
+        "Adrian R",
+        "Piotr Zaw",
+        "Andrei K"
+      ],
+      "delivery_addresses_sample": [
+        "Sybiraków 12/88",
+        "Bohaterów Monte Cassino 15/42",
+        "Szeroka 16/9",
+        "Generała Władysława Sikorskiego 26/16",
+        "Oskara Sosnowskiego 9/55"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "MakeMyDay": {
+      "sample_n": 54,
+      "first_order": "2025-11-02T10:04:12",
+      "last_order": "2026-02-22T09:05:25",
+      "active": false,
+      "volume_pct": 0.1,
+      "prep_variance_min": {
+        "sample_n": 54,
+        "median": 7.5,
+        "p75": 17.75,
+        "p90": 34.7,
+        "mean": 11.81,
+        "stddev": 14.59,
+        "min": -18.0,
+        "max": 50.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 54,
+        "non_zero_count": 8,
+        "non_zero_pct": 14.81,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 59.6,
+        "mean_sec": 33.56,
+        "max_sec": 946,
+        "median_non_zero_sec": 133.5,
+        "p75_non_zero_sec": 214.25
+      },
+      "extension_min": {
+        "sample_n": 54,
+        "median_min": 2.5,
+        "p75_min": 11.75,
+        "p90_min": 25.1,
+        "mean_min": 7.8,
+        "never_extended_pct": 44.44,
+        "extended_count": 28,
+        "extended_pct": 51.85,
+        "shortened_count": 2
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian Cit",
+        "Adrian R",
+        "Paweł Za",
+        "Michał K.",
+        "Patryk My"
+      ],
+      "delivery_addresses_sample": [
+        "Świętego Rocha 5a/29",
+        "Pawła Sapiehy 8",
+        "Kardynała Stefana Wyszyńskiego 27/30",
+        "Kardynała Stefana Wyszyńskiego 27",
+        "Ogrodowa 31/2"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Baanko": {
+      "sample_n": 1136,
+      "first_order": "2025-11-02T11:43:01",
+      "last_order": "2026-06-05T17:16:34",
+      "active": true,
+      "volume_pct": 2.05,
+      "prep_variance_min": {
+        "sample_n": 1134,
+        "median": 16.0,
+        "p75": 28.0,
+        "p90": 40.0,
+        "mean": 18.78,
+        "stddev": 16.62,
+        "min": -28.0,
+        "max": 114.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1136,
+        "non_zero_count": 90,
+        "non_zero_pct": 7.92,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 20.11,
+        "max_sec": 1147,
+        "median_non_zero_sec": 149.0,
+        "p75_non_zero_sec": 353.5
+      },
+      "extension_min": {
+        "sample_n": 1136,
+        "median_min": 11.0,
+        "p75_min": 22.0,
+        "p90_min": 31.5,
+        "mean_min": 13.86,
+        "never_extended_pct": 21.3,
+        "extended_count": 863,
+        "extended_pct": 75.97,
+        "shortened_count": 31
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Jakub OL",
+        "Andrei K",
+        "Adrian R",
+        "Mateusz O"
+      ],
+      "delivery_addresses_sample": [
+        "Biebrzańska 16",
+        "Wierzbowa 5b/33",
+        "Żurawia 69",
+        "Łąkowa 3/19",
+        "gen. Władysława Andersa 38"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Bar Express": {
+      "sample_n": 59,
+      "first_order": "2025-11-02T11:51:18",
+      "last_order": "2026-06-08T09:52:21",
+      "active": true,
+      "volume_pct": 0.11,
+      "prep_variance_min": {
+        "sample_n": 59,
+        "median": 13.0,
+        "p75": 22.0,
+        "p90": 34.2,
+        "mean": 19.19,
+        "stddev": 31.35,
+        "min": -8.0,
+        "max": 218.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 59,
+        "non_zero_count": 1,
+        "non_zero_pct": 1.69,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 2.2,
+        "max_sec": 130,
+        "median_non_zero_sec": 130,
+        "p75_non_zero_sec": 130
+      },
+      "extension_min": {
+        "sample_n": 59,
+        "median_min": 9.0,
+        "p75_min": 22.5,
+        "p90_min": 32.0,
+        "mean_min": 16.58,
+        "never_extended_pct": 18.64,
+        "extended_count": 47,
+        "extended_pct": 79.66,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian Cit",
+        "Bartek O,",
+        "Gabriel",
+        "Adrian R",
+        "Michał K."
+      ],
+      "delivery_addresses_sample": [
+        "Sienkiewicza 2/2",
+        "Legionowa 11/96",
+        "Sielska 10",
+        "Słoneczna 1",
+        "Zwierzyniecka 4"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Trzy Po Trzy Mickiewicza": {
+      "sample_n": 495,
+      "first_order": "2025-11-02T12:06:10",
+      "last_order": "2026-06-07T14:42:30",
+      "active": true,
+      "volume_pct": 0.89,
+      "prep_variance_min": {
+        "sample_n": 494,
+        "median": 13.0,
+        "p75": 21.0,
+        "p90": 31.0,
+        "mean": 14.94,
+        "stddev": 14.37,
+        "min": -46.0,
+        "max": 120.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 495,
+        "non_zero_count": 168,
+        "non_zero_pct": 33.94,
+        "median_sec": 0,
+        "p75_sec": 87.5,
+        "p90_sec": 378.0,
+        "mean_sec": 95.27,
+        "max_sec": 1315,
+        "median_non_zero_sec": 202.5,
+        "p75_non_zero_sec": 430.25
+      },
+      "extension_min": {
+        "sample_n": 495,
+        "median_min": 4.0,
+        "p75_min": 13.0,
+        "p90_min": 22.0,
+        "mean_min": 8.52,
+        "never_extended_pct": 32.93,
+        "extended_count": 322,
+        "extended_pct": 65.05,
+        "shortened_count": 10
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Piotr Zaw",
+        "Gabriel",
+        "Michał K.",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Warszawska 39/4",
+        "Jagienki 6/42",
+        "Adama Mickiewicza 39/40",
+        "Wiejska 68a/69",
+        "Zagórna 17/27"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Restauracja Kumar's": {
+      "sample_n": 1708,
+      "first_order": "2025-11-02T13:02:38",
+      "last_order": "2026-06-09T13:25:50",
+      "active": true,
+      "volume_pct": 3.09,
+      "prep_variance_min": {
+        "sample_n": 1706,
+        "median": 17.0,
+        "p75": 29.0,
+        "p90": 42.0,
+        "mean": 18.93,
+        "stddev": 16.65,
+        "min": -49.0,
+        "max": 108.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 1708,
+        "non_zero_count": 140,
+        "non_zero_pct": 8.2,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 18.97,
+        "max_sec": 1279,
+        "median_non_zero_sec": 142.5,
+        "p75_non_zero_sec": 326.75
+      },
+      "extension_min": {
+        "sample_n": 1708,
+        "median_min": 13.0,
+        "p75_min": 23.0,
+        "p90_min": 32.0,
+        "mean_min": 14.79,
+        "never_extended_pct": 20.37,
+        "extended_count": 1297,
+        "extended_pct": 75.94,
+        "shortened_count": 63
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Bartek O.",
+        "Gabriel",
+        "Mateusz O",
+        "Adrian R",
+        "Krystian"
+      ],
+      "delivery_addresses_sample": [
+        "Ludwika Waryńskiego 29/29",
+        "Wiewiórcza 7",
+        "M. Curie-Skłodowskiej 24a",
+        "Mikołaja Kopernika 2/172",
+        "Poleska 17/81"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Oregano Pizza": {
+      "sample_n": 31,
+      "first_order": "2025-11-02T13:36:57",
+      "last_order": "2026-03-08T20:25:58",
+      "active": false,
+      "volume_pct": 0.06,
+      "prep_variance_min": {
+        "sample_n": 31,
+        "median": 11.0,
+        "p75": 19.5,
+        "p90": 31.0,
+        "mean": 13.87,
+        "stddev": 9.84,
+        "min": -3.0,
+        "max": 39.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 31,
+        "non_zero_count": 9,
+        "non_zero_pct": 29.03,
+        "median_sec": 0,
+        "p75_sec": 129.5,
+        "p90_sec": 244.0,
+        "mean_sec": 78.19,
+        "max_sec": 602,
+        "median_non_zero_sec": 213,
+        "p75_non_zero_sec": 330.0
+      },
+      "extension_min": {
+        "sample_n": 31,
+        "median_min": 3.0,
+        "p75_min": 11.0,
+        "p90_min": 22.0,
+        "mean_min": 8.13,
+        "never_extended_pct": 29.03,
+        "extended_count": 21,
+        "extended_pct": 67.74,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Krystian",
+        "Łukasz W",
+        "Grzegorz",
+        "Gabriel J",
+        "Adrian Cit"
+      ],
+      "delivery_addresses_sample": [
+        "Oleńki 5/9",
+        "Jerzego Waszyngtona 23a/111",
+        "Stanisława Dubois 19/13",
+        "Świętego Jerzego 51/55",
+        "Stroma 8/30"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Trzy Po Trzy Sienkiewicza": {
+      "sample_n": 449,
+      "first_order": "2025-11-02T13:40:58",
+      "last_order": "2026-06-08T17:30:52",
+      "active": true,
+      "volume_pct": 0.81,
+      "prep_variance_min": {
+        "sample_n": 447,
+        "median": 13.0,
+        "p75": 24.0,
+        "p90": 34.4,
+        "mean": 15.54,
+        "stddev": 14.13,
+        "min": -12.0,
+        "max": 76.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 449,
+        "non_zero_count": 69,
+        "non_zero_pct": 15.37,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 70.4,
+        "mean_sec": 28.43,
+        "max_sec": 798,
+        "median_non_zero_sec": 110,
+        "p75_non_zero_sec": 252.0
+      },
+      "extension_min": {
+        "sample_n": 449,
+        "median_min": 6.0,
+        "p75_min": 16.0,
+        "p90_min": 23.4,
+        "mean_min": 9.49,
+        "never_extended_pct": 27.62,
+        "extended_count": 309,
+        "extended_pct": 68.82,
+        "shortened_count": 16
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Adrian R",
+        "Andrei K",
+        "Piotr Zaw",
+        "Gabriel"
+      ],
+      "delivery_addresses_sample": [
+        "Ludwika Zamenhofa 17/10",
+        "Aleja Jana Pawła II 63/78",
+        "Warszawska 39/4",
+        "Stroma 29/12",
+        "Wisławy Szymborskiej 2/A51"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Arsenal Panteon": {
+      "sample_n": 409,
+      "first_order": "2025-11-02T13:52:01",
+      "last_order": "2026-06-09T13:16:22",
+      "active": true,
+      "volume_pct": 0.74,
+      "prep_variance_min": {
+        "sample_n": 408,
+        "median": 11.0,
+        "p75": 21.0,
+        "p90": 33.0,
+        "mean": 14.32,
+        "stddev": 14.88,
+        "min": -8.0,
+        "max": 116.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 409,
+        "non_zero_count": 42,
+        "non_zero_pct": 10.27,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 3.2,
+        "mean_sec": 21.46,
+        "max_sec": 882,
+        "median_non_zero_sec": 149.5,
+        "p75_non_zero_sec": 224.25
+      },
+      "extension_min": {
+        "sample_n": 409,
+        "median_min": 6.0,
+        "p75_min": 16.0,
+        "p90_min": 26.0,
+        "mean_min": 9.83,
+        "never_extended_pct": 31.05,
+        "extended_count": 270,
+        "extended_pct": 66.01,
+        "shortened_count": 12
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Gabriel",
+        "Adrian R",
+        "Dariusz M",
+        "Bartek O."
+      ],
+      "delivery_addresses_sample": [
+        "Żabia 12/6",
+        "Elektryczna 13",
+        "Józefa Mackiewicza 3/47",
+        "M. Curie-Skłodowskiej 24 A",
+        "Prezydenta Ryszarda Kaczorowskiego 7/223"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Chilli Chicken": {
+      "sample_n": 118,
+      "first_order": "2025-11-02T13:59:33",
+      "last_order": "2026-06-03T15:36:16",
+      "active": true,
+      "volume_pct": 0.21,
+      "prep_variance_min": {
+        "sample_n": 118,
+        "median": 15.0,
+        "p75": 27.75,
+        "p90": 35.0,
+        "mean": 17.63,
+        "stddev": 15.11,
+        "min": -8.0,
+        "max": 83.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 118,
+        "non_zero_count": 24,
+        "non_zero_pct": 20.34,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 178.1,
+        "mean_sec": 54.67,
+        "max_sec": 1392,
+        "median_non_zero_sec": 179.5,
+        "p75_non_zero_sec": 294.75
+      },
+      "extension_min": {
+        "sample_n": 118,
+        "median_min": 11.0,
+        "p75_min": 21.0,
+        "p90_min": 31.0,
+        "mean_min": 12.57,
+        "never_extended_pct": 24.58,
+        "extended_count": 86,
+        "extended_pct": 72.88,
+        "shortened_count": 3
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Andrei K",
+        "Mateusz O",
+        "Paweł SC",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Kazimierza Pułaskiego 57/17",
+        "42 Pułku Piechoty 74D/20",
+        "Aleja Jana Pawła II 59B/26",
+        "Zagórna 31/17",
+        "Pozioma 1B/1"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Trójkąty i Kwadraty": {
+      "sample_n": 241,
+      "first_order": "2025-11-02T14:07:19",
+      "last_order": "2026-06-05T15:59:00",
+      "active": true,
+      "volume_pct": 0.44,
+      "prep_variance_min": {
+        "sample_n": 240,
+        "median": 14.0,
+        "p75": 25.0,
+        "p90": 35.1,
+        "mean": 16.66,
+        "stddev": 14.19,
+        "min": -14.0,
+        "max": 79.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 241,
+        "non_zero_count": 63,
+        "non_zero_pct": 26.14,
+        "median_sec": 0,
+        "p75_sec": 17.0,
+        "p90_sec": 195.0,
+        "mean_sec": 54.32,
+        "max_sec": 923,
+        "median_non_zero_sec": 132,
+        "p75_non_zero_sec": 272.5
+      },
+      "extension_min": {
+        "sample_n": 241,
+        "median_min": 11.0,
+        "p75_min": 17.0,
+        "p90_min": 25.0,
+        "mean_min": 11.55,
+        "never_extended_pct": 20.33,
+        "extended_count": 188,
+        "extended_pct": 78.01,
+        "shortened_count": 4
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Andrei K",
+        "Mateusz O",
+        "Mateusz Bro",
+        "Paweł SC",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Aleja Józefa Piłsudskiego 7/27",
+        "Nowogródzka 6/17",
+        "Kręta 52/15",
+        "Ślusarska 18/18",
+        "Mieszka I 2a/15"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Trattoria Angelino Pasta Wino": {
+      "sample_n": 128,
+      "first_order": "2025-11-02T15:10:32",
+      "last_order": "2026-06-07T17:59:12",
+      "active": true,
+      "volume_pct": 0.23,
+      "prep_variance_min": {
+        "sample_n": 128,
+        "median": 21.0,
+        "p75": 32.0,
+        "p90": 45.3,
+        "mean": 27.34,
+        "stddev": 56.04,
+        "min": -5.0,
+        "max": 632.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 128,
+        "non_zero_count": 13,
+        "non_zero_pct": 10.16,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 5.7,
+        "mean_sec": 37.53,
+        "max_sec": 901,
+        "median_non_zero_sec": 370,
+        "p75_non_zero_sec": 516.0
+      },
+      "extension_min": {
+        "sample_n": 128,
+        "median_min": 16.0,
+        "p75_min": 25.25,
+        "p90_min": 33.0,
+        "mean_min": 20.34,
+        "never_extended_pct": 14.84,
+        "extended_count": 105,
+        "extended_pct": 82.03,
+        "shortened_count": 4
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Gabriel",
+        "Bartek O.",
+        "Krystian",
+        "Mateusz O"
+      ],
+      "delivery_addresses_sample": [
+        "Sudecka 6/20",
+        "Stanisława Dubois 5a/17",
+        "Młynowa 60a/32",
+        "Jurowiecka 19/85",
+        "Mikołaja Kopernika 2/135"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Pan Schabowy": {
+      "sample_n": 482,
+      "first_order": "2025-11-02T15:49:49",
+      "last_order": "2026-05-29T16:03:38",
+      "active": true,
+      "volume_pct": 0.87,
+      "prep_variance_min": {
+        "sample_n": 481,
+        "median": 19.0,
+        "p75": 31.0,
+        "p90": 44.0,
+        "mean": 21.25,
+        "stddev": 15.98,
+        "min": -13.0,
+        "max": 94.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 482,
+        "non_zero_count": 113,
+        "non_zero_pct": 23.44,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 253.0,
+        "mean_sec": 66.67,
+        "max_sec": 1769,
+        "median_non_zero_sec": 227,
+        "p75_non_zero_sec": 337.0
+      },
+      "extension_min": {
+        "sample_n": 482,
+        "median_min": 13.0,
+        "p75_min": 24.0,
+        "p90_min": 33.0,
+        "mean_min": 15.22,
+        "never_extended_pct": 22.82,
+        "extended_count": 364,
+        "extended_pct": 75.52,
+        "shortened_count": 8
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Andrei K",
+        "Michał K.",
+        "Adrian R",
+        "Piotr Zaw",
+        "Jakub OL"
+      ],
+      "delivery_addresses_sample": [
+        "Krupniki 25",
+        "gen. Stanisława Sosabowskiego 1",
+        "Zachodnia 15/20",
+        "Scaleniowa 25/79",
+        "Antoniukowska 19/37"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Czebureki": {
+      "sample_n": 171,
+      "first_order": "2025-11-02T15:50:00",
+      "last_order": "2026-06-02T12:36:54",
+      "active": true,
+      "volume_pct": 0.31,
+      "prep_variance_min": {
+        "sample_n": 171,
+        "median": 14.0,
+        "p75": 24.0,
+        "p90": 36.0,
+        "mean": 17.04,
+        "stddev": 15.5,
+        "min": -8.0,
+        "max": 91.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 171,
+        "non_zero_count": 40,
+        "non_zero_pct": 23.39,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 193.0,
+        "mean_sec": 48.27,
+        "max_sec": 845,
+        "median_non_zero_sec": 163.5,
+        "p75_non_zero_sec": 268.75
+      },
+      "extension_min": {
+        "sample_n": 171,
+        "median_min": 9.0,
+        "p75_min": 16.5,
+        "p90_min": 27.0,
+        "mean_min": 11.31,
+        "never_extended_pct": 22.22,
+        "extended_count": 132,
+        "extended_pct": 77.19,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Andrei K",
+        "Michał K.",
+        "Sylwia L",
+        "Piotr Zaw"
+      ],
+      "delivery_addresses_sample": [
+        "Skrybicze 27f",
+        "Wysoka 1a/4",
+        "Aleja Jana Pawła II 59f/59",
+        "Kręta 2/72",
+        "42 Pułku Piechoty 133a/75"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Gęba w Niebie": {
+      "sample_n": 185,
+      "first_order": "2025-11-02T16:02:29",
+      "last_order": "2026-06-05T15:04:14",
+      "active": true,
+      "volume_pct": 0.33,
+      "prep_variance_min": {
+        "sample_n": 184,
+        "median": 20.0,
+        "p75": 30.0,
+        "p90": 43.0,
+        "mean": 21.62,
+        "stddev": 16.41,
+        "min": -22.0,
+        "max": 74.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 185,
+        "non_zero_count": 43,
+        "non_zero_pct": 23.24,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 136.0,
+        "mean_sec": 36.66,
+        "max_sec": 958,
+        "median_non_zero_sec": 131,
+        "p75_non_zero_sec": 197.0
+      },
+      "extension_min": {
+        "sample_n": 185,
+        "median_min": 16.0,
+        "p75_min": 26.0,
+        "p90_min": 33.6,
+        "mean_min": 16.06,
+        "never_extended_pct": 14.05,
+        "extended_count": 155,
+        "extended_pct": 83.78,
+        "shortened_count": 4
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Mateusz O",
+        "Jakub OL",
+        "Andrei K",
+        "Gabriel",
+        "Paweł SC"
+      ],
+      "delivery_addresses_sample": [
+        "Transportowa 2F/92",
+        "Słonecznikowa 25/50",
+        "Mieszka I 11/194",
+        "42 Pułku Piechoty 125/4",
+        "Ciepła 21.32"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Galeria Biała 500 Stopni": {
+      "sample_n": 192,
+      "first_order": "2025-11-02T17:18:01",
+      "last_order": "2026-06-08T18:01:12",
+      "active": true,
+      "volume_pct": 0.35,
+      "prep_variance_min": {
+        "sample_n": 192,
+        "median": 15.5,
+        "p75": 29.0,
+        "p90": 47.0,
+        "mean": 20.84,
+        "stddev": 21.89,
+        "min": -16.0,
+        "max": 120.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 192,
+        "non_zero_count": 29,
+        "non_zero_pct": 15.1,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 134.1,
+        "mean_sec": 30.67,
+        "max_sec": 608,
+        "median_non_zero_sec": 161,
+        "p75_non_zero_sec": 275.0
+      },
+      "extension_min": {
+        "sample_n": 192,
+        "median_min": 11.0,
+        "p75_min": 22.0,
+        "p90_min": 35.9,
+        "mean_min": 15.11,
+        "never_extended_pct": 25.0,
+        "extended_count": 141,
+        "extended_pct": 73.44,
+        "shortened_count": 3
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Gabriel",
+        "Michał K.",
+        "Andrei K",
+        "Dariusz M"
+      ],
+      "delivery_addresses_sample": [
+        "Jurowiecka 13/116",
+        "Sienkiewicza 83/43",
+        "Akademicka 28A/9",
+        "Radzymińska 15/4",
+        "Jana III Sobieskiego 26/64"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Restauracja Eatally": {
+      "sample_n": 275,
+      "first_order": "2025-11-02T19:14:02",
+      "last_order": "2026-03-17T21:24:05",
+      "active": false,
+      "volume_pct": 0.5,
+      "prep_variance_min": {
+        "sample_n": 275,
+        "median": 19.0,
+        "p75": 31.0,
+        "p90": 47.0,
+        "mean": 22.83,
+        "stddev": 21.44,
+        "min": -15.0,
+        "max": 125.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 275,
+        "non_zero_count": 35,
+        "non_zero_pct": 12.73,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 45.0,
+        "mean_sec": 28.43,
+        "max_sec": 766,
+        "median_non_zero_sec": 131,
+        "p75_non_zero_sec": 301.0
+      },
+      "extension_min": {
+        "sample_n": 275,
+        "median_min": 12.0,
+        "p75_min": 24.0,
+        "p90_min": 36.6,
+        "mean_min": 16.47,
+        "never_extended_pct": 19.27,
+        "extended_count": 218,
+        "extended_pct": 79.27,
+        "shortened_count": 4
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Mateusz O",
+        "Jakub OL",
+        "Piotr Zaw",
+        "Paweł SC",
+        "Adrian R"
+      ],
+      "delivery_addresses_sample": [
+        "Szosa Ełcka 90",
+        "nadawki 5/21",
+        "M. Curie-Skłodowskiej 10/39",
+        "Warszawska 39/12",
+        "gen. Józefa Bema 93/59"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Maison du cafe": {
+      "sample_n": 367,
+      "first_order": "2025-11-03T08:47:27",
+      "last_order": "2026-06-08T10:52:23",
+      "active": true,
+      "volume_pct": 0.66,
+      "prep_variance_min": {
+        "sample_n": 366,
+        "median": 10.0,
+        "p75": 20.0,
+        "p90": 29.0,
+        "mean": 12.41,
+        "stddev": 12.52,
+        "min": -21.0,
+        "max": 61.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 367,
+        "non_zero_count": 90,
+        "non_zero_pct": 24.52,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 234.0,
+        "mean_sec": 61.59,
+        "max_sec": 1180,
+        "median_non_zero_sec": 190.0,
+        "p75_non_zero_sec": 298.0
+      },
+      "extension_min": {
+        "sample_n": 367,
+        "median_min": 5.0,
+        "p75_min": 13.0,
+        "p90_min": 22.0,
+        "mean_min": 7.98,
+        "never_extended_pct": 33.79,
+        "extended_count": 229,
+        "extended_pct": 62.4,
+        "shortened_count": 14
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Adrian Cit",
+        "Piotr Zaw",
+        "Adrian R",
+        "Andrei K"
+      ],
+      "delivery_addresses_sample": [
+        "Jacka Kuronia 4",
+        "gen. Józefa Bema 7/6",
+        "Dobra 8/7",
+        "Janusza Korczaka 14",
+        "Warszawska 79"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Piwo Kaczka Sushi": {
+      "sample_n": 754,
+      "first_order": "2025-11-03T10:45:50",
+      "last_order": "2026-06-09T13:39:29",
+      "active": true,
+      "volume_pct": 1.36,
+      "prep_variance_min": {
+        "sample_n": 754,
+        "median": 12.0,
+        "p75": 23.0,
+        "p90": 34.7,
+        "mean": 14.83,
+        "stddev": 15.31,
+        "min": -18.0,
+        "max": 97.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 754,
+        "non_zero_count": 91,
+        "non_zero_pct": 12.07,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 93.4,
+        "mean_sec": 37.9,
+        "max_sec": 1607,
+        "median_non_zero_sec": 269,
+        "p75_non_zero_sec": 400.0
+      },
+      "extension_min": {
+        "sample_n": 754,
+        "median_min": 6.0,
+        "p75_min": 16.0,
+        "p90_min": 25.0,
+        "mean_min": 9.26,
+        "never_extended_pct": 32.1,
+        "extended_count": 479,
+        "extended_pct": 63.53,
+        "shortened_count": 33
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Adrian R",
+        "Jakub OL",
+        "Andrei K",
+        "Piotr Zaw"
+      ],
+      "delivery_addresses_sample": [
+        "Artyleryjska 2a/30",
+        "Wiosenna 12/11",
+        "gen. Józefa Bema 89b/89",
+        "Wiadukt 7/45",
+        "Marii Konopnickiej 5/14"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Doner Kebab": {
+      "sample_n": 697,
+      "first_order": "2025-11-03T10:45:57",
+      "last_order": "2026-06-08T19:00:30",
+      "active": true,
+      "volume_pct": 1.26,
+      "prep_variance_min": {
+        "sample_n": 696,
+        "median": 19.0,
+        "p75": 32.25,
+        "p90": 44.0,
+        "mean": 21.48,
+        "stddev": 17.32,
+        "min": -20.0,
+        "max": 120.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 697,
+        "non_zero_count": 66,
+        "non_zero_pct": 9.47,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 14.56,
+        "max_sec": 586,
+        "median_non_zero_sec": 116.0,
+        "p75_non_zero_sec": 207.0
+      },
+      "extension_min": {
+        "sample_n": 697,
+        "median_min": 16.0,
+        "p75_min": 27.0,
+        "p90_min": 35.0,
+        "mean_min": 16.96,
+        "never_extended_pct": 15.93,
+        "extended_count": 577,
+        "extended_pct": 82.78,
+        "shortened_count": 9
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Andrei K",
+        "Michał K.",
+        "Piotr Zaw",
+        "Adrian Cit"
+      ],
+      "delivery_addresses_sample": [
+        "Plac Brodowicza 1",
+        "Hugo Kołłątaja 22",
+        "Upalna 74/17",
+        "Magazynowa 2",
+        "Władysława Broniewskiego 6C/33"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Naleśniki Jak Smok": {
+      "sample_n": 815,
+      "first_order": "2025-11-03T10:49:51",
+      "last_order": "2026-06-09T12:54:41",
+      "active": true,
+      "volume_pct": 1.47,
+      "prep_variance_min": {
+        "sample_n": 815,
+        "median": 15.0,
+        "p75": 25.0,
+        "p90": 37.0,
+        "mean": 17.45,
+        "stddev": 14.46,
+        "min": -11.0,
+        "max": 112.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 815,
+        "non_zero_count": 126,
+        "non_zero_pct": 15.46,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 87.0,
+        "mean_sec": 27.29,
+        "max_sec": 681,
+        "median_non_zero_sec": 124.0,
+        "p75_non_zero_sec": 234.0
+      },
+      "extension_min": {
+        "sample_n": 815,
+        "median_min": 11.0,
+        "p75_min": 21.0,
+        "p90_min": 30.0,
+        "mean_min": 12.97,
+        "never_extended_pct": 20.98,
+        "extended_count": 626,
+        "extended_pct": 76.81,
+        "shortened_count": 18
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Piotr Zaw",
+        "Adrian R",
+        "Jakub OL",
+        "Adrian Cit"
+      ],
+      "delivery_addresses_sample": [
+        "Absolwentów 4/72",
+        "Konopnickiej 12/58",
+        "Kardynała Stefana Wyszyńskiego 15/33a",
+        "Marii Konopnickiej 12/58",
+        "Asnyka 14/67"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Aztek Tex-Mex": {
+      "sample_n": 173,
+      "first_order": "2025-11-03T12:19:18",
+      "last_order": "2026-05-09T14:27:49",
+      "active": false,
+      "volume_pct": 0.31,
+      "prep_variance_min": {
+        "sample_n": 173,
+        "median": 21.0,
+        "p75": 33.0,
+        "p90": 52.0,
+        "mean": 27.07,
+        "stddev": 31.09,
+        "min": -8.0,
+        "max": 349.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 173,
+        "non_zero_count": 24,
+        "non_zero_pct": 13.87,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 109.2,
+        "mean_sec": 29.81,
+        "max_sec": 485,
+        "median_non_zero_sec": 212.0,
+        "p75_non_zero_sec": 301.5
+      },
+      "extension_min": {
+        "sample_n": 173,
+        "median_min": 17.0,
+        "p75_min": 27.0,
+        "p90_min": 39.8,
+        "mean_min": 21.71,
+        "never_extended_pct": 8.09,
+        "extended_count": 158,
+        "extended_pct": 91.33,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Gabriel",
+        "Michał K.",
+        "Jakub OL",
+        "Krystian D"
+      ],
+      "delivery_addresses_sample": [
+        "Słonimska 56/2",
+        "gen. Józefa Bema 87/52",
+        "Zwycięstwa 26b/6",
+        "Gajowa 77/9",
+        "Poleska 45/1"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Pizzeria 105 Galeria Biała": {
+      "sample_n": 440,
+      "first_order": "2025-11-03T13:09:15",
+      "last_order": "2026-06-06T16:31:07",
+      "active": true,
+      "volume_pct": 0.79,
+      "prep_variance_min": {
+        "sample_n": 439,
+        "median": 20.0,
+        "p75": 31.5,
+        "p90": 43.0,
+        "mean": 22.3,
+        "stddev": 16.24,
+        "min": -11.0,
+        "max": 110.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 440,
+        "non_zero_count": 56,
+        "non_zero_pct": 12.73,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 92.9,
+        "mean_sec": 34.7,
+        "max_sec": 1613,
+        "median_non_zero_sec": 238.0,
+        "p75_non_zero_sec": 352.0
+      },
+      "extension_min": {
+        "sample_n": 440,
+        "median_min": 16.0,
+        "p75_min": 26.0,
+        "p90_min": 33.0,
+        "mean_min": 17.23,
+        "never_extended_pct": 12.27,
+        "extended_count": 382,
+        "extended_pct": 86.82,
+        "shortened_count": 4
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Piotr Zaw",
+        "Jakub OL",
+        "Michał K.",
+        "Dariusz M",
+        "Adrian R"
+      ],
+      "delivery_addresses_sample": [
+        "Bolesława Chrobrego 5c/46",
+        "Sokólska 27/24",
+        "Pułkowa 7/3",
+        "Zagórna 17/21",
+        "Przyrodnicza 3/29"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Trufla i Wino": {
+      "sample_n": 3,
+      "first_order": "2025-11-03T17:27:22",
+      "last_order": "2025-12-01T19:21:55",
+      "active": false,
+      "volume_pct": 0.01,
+      "prep_variance_min": {
+        "sample_n": 3,
+        "median": 11.0,
+        "p75": 19.5,
+        "p90": 24.6,
+        "mean": 14.33,
+        "stddev": 12.34,
+        "min": 4.0,
+        "max": 28.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 3,
+        "non_zero_count": 1,
+        "non_zero_pct": 33.33,
+        "median_sec": 0,
+        "p75_sec": 60.5,
+        "p90_sec": 96.8,
+        "mean_sec": 40.33,
+        "max_sec": 121,
+        "median_non_zero_sec": 121,
+        "p75_non_zero_sec": 121
+      },
+      "extension_min": {
+        "sample_n": 3,
+        "median_min": 6.0,
+        "p75_min": 10.0,
+        "p90_min": 12.4,
+        "mean_min": 5.33,
+        "never_extended_pct": 0.0,
+        "extended_count": 2,
+        "extended_pct": 66.67,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Sylwia L",
+        "Mateusz O",
+        "Piotr Zaw"
+      ],
+      "delivery_addresses_sample": [
+        "Kręta 16/73",
+        "Lesna 8/7 tel.",
+        "Jodłowa 6a/14"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Farina": {
+      "sample_n": 324,
+      "first_order": "2025-11-04T12:36:48",
+      "last_order": "2026-04-01T19:54:49",
+      "active": false,
+      "volume_pct": 0.59,
+      "prep_variance_min": {
+        "sample_n": 323,
+        "median": 21.0,
+        "p75": 34.0,
+        "p90": 49.0,
+        "mean": 24.94,
+        "stddev": 19.98,
+        "min": -57.0,
+        "max": 122.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 324,
+        "non_zero_count": 122,
+        "non_zero_pct": 37.65,
+        "median_sec": 0.0,
+        "p75_sec": 186.0,
+        "p90_sec": 455.5,
+        "mean_sec": 133.44,
+        "max_sec": 2147,
+        "median_non_zero_sec": 291.5,
+        "p75_non_zero_sec": 466.75
+      },
+      "extension_min": {
+        "sample_n": 324,
+        "median_min": 15.0,
+        "p75_min": 26.0,
+        "p90_min": 37.7,
+        "mean_min": 17.36,
+        "never_extended_pct": 16.05,
+        "extended_count": 269,
+        "extended_pct": 83.02,
+        "shortened_count": 3
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Andrei K",
+        "Jakub OL",
+        "Piotr Zaw",
+        "Antoni Tr",
+        "Adrian R"
+      ],
+      "delivery_addresses_sample": [
+        "Bema 62a/23",
+        "Krokusowa 19",
+        "Prowiantowa 19/64",
+        "Rycerska 8",
+        "Brukowa 9/14"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Pizza Prosta": {
+      "sample_n": 9,
+      "first_order": "2025-11-04T13:25:52",
+      "last_order": "2025-11-27T13:26:01",
+      "active": false,
+      "volume_pct": 0.02,
+      "prep_variance_min": {
+        "sample_n": 8,
+        "median": 10.5,
+        "p75": 19.25,
+        "p90": 21.5,
+        "mean": 9.12,
+        "stddev": 13.18,
+        "min": -16.0,
+        "max": 25.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 9,
+        "non_zero_count": 0,
+        "non_zero_pct": 0.0,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 0,
+        "max_sec": 0,
+        "median_non_zero_sec": null,
+        "p75_non_zero_sec": null
+      },
+      "extension_min": {
+        "sample_n": 9,
+        "median_min": 2.0,
+        "p75_min": 12.0,
+        "p90_min": 16.0,
+        "mean_min": 4.67,
+        "never_extended_pct": 22.22,
+        "extended_count": 6,
+        "extended_pct": 66.67,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian Cit",
+        "Jakub OL",
+        "Marek",
+        "Dzmitry Kr",
+        "Kamil Kr"
+      ],
+      "delivery_addresses_sample": [
+        "11 Listopada 28",
+        "Aleja Jana Pawła II 59F/45",
+        "Skorupska 24/4",
+        "Walentego Lewandowskiego 2/73",
+        "Władysława Broniewskiego 7/75"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Kuro Neko": {
+      "sample_n": 81,
+      "first_order": "2025-11-04T13:41:02",
+      "last_order": "2025-12-13T12:09:37",
+      "active": false,
+      "volume_pct": 0.15,
+      "prep_variance_min": {
+        "sample_n": 80,
+        "median": 13.0,
+        "p75": 26.25,
+        "p90": 36.1,
+        "mean": 20.1,
+        "stddev": 29.92,
+        "min": -4.0,
+        "max": 195.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 81,
+        "non_zero_count": 5,
+        "non_zero_pct": 6.17,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 22.98,
+        "max_sec": 715,
+        "median_non_zero_sec": 373,
+        "p75_non_zero_sec": 629.0
+      },
+      "extension_min": {
+        "sample_n": 81,
+        "median_min": 6.0,
+        "p75_min": 17.0,
+        "p90_min": 27.0,
+        "mean_min": 14.33,
+        "never_extended_pct": 22.22,
+        "extended_count": 61,
+        "extended_pct": 75.31,
+        "shortened_count": 2
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Marek",
+        "Jakub OL",
+        "Piotr Zaw",
+        "Adrian R",
+        "Sylwia L"
+      ],
+      "delivery_addresses_sample": [
+        "Mieszka I 11/9",
+        "Sosnowskiego 9/76",
+        "Kraszewskiego 22/33",
+        "Wiejska 57/64",
+        "Pogodna 25/26"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Zachodnia Kawiarnia i Bistro": {
+      "sample_n": 32,
+      "first_order": "2025-11-04T14:54:04",
+      "last_order": "2025-12-30T13:17:50",
+      "active": false,
+      "volume_pct": 0.06,
+      "prep_variance_min": {
+        "sample_n": 32,
+        "median": 15.5,
+        "p75": 34.0,
+        "p90": 42.7,
+        "mean": 20.16,
+        "stddev": 16.03,
+        "min": -3.0,
+        "max": 57.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 32,
+        "non_zero_count": 5,
+        "non_zero_pct": 15.62,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 41.0,
+        "mean_sec": 14.78,
+        "max_sec": 189,
+        "median_non_zero_sec": 44,
+        "p75_non_zero_sec": 166.0
+      },
+      "extension_min": {
+        "sample_n": 32,
+        "median_min": 16.0,
+        "p75_min": 23.75,
+        "p90_min": 32.9,
+        "mean_min": 15.41,
+        "never_extended_pct": 21.88,
+        "extended_count": 25,
+        "extended_pct": 78.12,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Krystian",
+        "Gabriel",
+        "Adrian Ba",
+        "Mateusz O",
+        "Adrian Cit"
+      ],
+      "delivery_addresses_sample": [
+        "Mieszka I 8/58",
+        "Prowiantowa 15/144",
+        "Horodniańska 36J/1",
+        "Słowicza 10",
+        "absolwentów 4/72"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Piri Piri": {
+      "sample_n": 42,
+      "first_order": "2025-11-04T18:02:06",
+      "last_order": "2026-02-20T14:26:13",
+      "active": false,
+      "volume_pct": 0.08,
+      "prep_variance_min": {
+        "sample_n": 42,
+        "median": 19.0,
+        "p75": 28.5,
+        "p90": 38.0,
+        "mean": 20.33,
+        "stddev": 14.01,
+        "min": -7.0,
+        "max": 60.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 42,
+        "non_zero_count": 6,
+        "non_zero_pct": 14.29,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 105.9,
+        "mean_sec": 22.64,
+        "max_sec": 265,
+        "median_non_zero_sec": 136.0,
+        "p75_non_zero_sec": 202.25
+      },
+      "extension_min": {
+        "sample_n": 42,
+        "median_min": 17.0,
+        "p75_min": 22.0,
+        "p90_min": 32.8,
+        "mean_min": 16.21,
+        "never_extended_pct": 7.14,
+        "extended_count": 37,
+        "extended_pct": 88.1,
+        "shortened_count": 2
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Gabriel",
+        "Andrei K",
+        "Sylwia L",
+        "Paweł Za"
+      ],
+      "delivery_addresses_sample": [
+        "Bitwy Białostockiej 4a/102",
+        "Skalna 104",
+        "Pogodna 4d/21",
+        "Zwirowa 5a",
+        "Skłodowskiej 24a"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Ziemniaczek": {
+      "sample_n": 19,
+      "first_order": "2025-11-04T18:05:29",
+      "last_order": "2026-05-07T12:21:44",
+      "active": false,
+      "volume_pct": 0.03,
+      "prep_variance_min": {
+        "sample_n": 19,
+        "median": 14.0,
+        "p75": 23.0,
+        "p90": 33.8,
+        "mean": 16.47,
+        "stddev": 13.82,
+        "min": -5.0,
+        "max": 52.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 19,
+        "non_zero_count": 6,
+        "non_zero_pct": 31.58,
+        "median_sec": 0,
+        "p75_sec": 139.5,
+        "p90_sec": 399.2,
+        "mean_sec": 131.26,
+        "max_sec": 843,
+        "median_non_zero_sec": 302.0,
+        "p75_non_zero_sec": 652.75
+      },
+      "extension_min": {
+        "sample_n": 19,
+        "median_min": 6.0,
+        "p75_min": 15.5,
+        "p90_min": 28.6,
+        "mean_min": 11.16,
+        "never_extended_pct": 26.32,
+        "extended_count": 14,
+        "extended_pct": 73.68,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian Cit",
+        "Mateusz O",
+        "Mateusz Bro",
+        "Bartek O.",
+        "Mateusz Ko"
+      ],
+      "delivery_addresses_sample": [
+        "Działkowa 6/26",
+        "rocha 8/6",
+        "krakowska 11",
+        "Antoniukowska 22a 19",
+        "Rocha 8 /6"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "HoNoTu!": {
+      "sample_n": 31,
+      "first_order": "2025-11-04T19:14:56",
+      "last_order": "2026-04-19T13:33:22",
+      "active": false,
+      "volume_pct": 0.06,
+      "prep_variance_min": {
+        "sample_n": 30,
+        "median": 19.5,
+        "p75": 31.25,
+        "p90": 37.4,
+        "mean": 20.4,
+        "stddev": 13.76,
+        "min": -4.0,
+        "max": 46.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 31,
+        "non_zero_count": 3,
+        "non_zero_pct": 9.68,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 40.68,
+        "max_sec": 1137,
+        "median_non_zero_sec": 122,
+        "p75_non_zero_sec": 629.5
+      },
+      "extension_min": {
+        "sample_n": 31,
+        "median_min": 13.0,
+        "p75_min": 21.5,
+        "p90_min": 27.0,
+        "mean_min": 14.06,
+        "never_extended_pct": 19.35,
+        "extended_count": 25,
+        "extended_pct": 80.65,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Piotr Zaw",
+        "Michał C",
+        "Mateusz O",
+        "Mateusz L"
+      ],
+      "delivery_addresses_sample": [
+        "Pietkuna 3/26",
+        "Grzeczna 24",
+        "Armii Krajowej 8A/22",
+        "Michała Pietkiewicza 6D/21",
+        "Wiesława Kazaneckiego 1"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Bar Merino": {
+      "sample_n": 132,
+      "first_order": "2025-11-05T11:01:52",
+      "last_order": "2026-06-07T11:24:22",
+      "active": true,
+      "volume_pct": 0.24,
+      "prep_variance_min": {
+        "sample_n": 132,
+        "median": 13.5,
+        "p75": 27.0,
+        "p90": 37.0,
+        "mean": 16.02,
+        "stddev": 15.35,
+        "min": -7.0,
+        "max": 58.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 132,
+        "non_zero_count": 11,
+        "non_zero_pct": 8.33,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 16.44,
+        "max_sec": 605,
+        "median_non_zero_sec": 162,
+        "p75_non_zero_sec": 235.5
+      },
+      "extension_min": {
+        "sample_n": 132,
+        "median_min": 11.0,
+        "p75_min": 19.5,
+        "p90_min": 30.7,
+        "mean_min": 12.98,
+        "never_extended_pct": 23.48,
+        "extended_count": 99,
+        "extended_pct": 75.0,
+        "shortened_count": 2
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Adrian Cit",
+        "Mateusz O",
+        "Gabriel",
+        "Mateusz L"
+      ],
+      "delivery_addresses_sample": [
+        "Stołeczna 4/7",
+        "stoleczna 4/7",
+        "Stołeczna 4 / 7",
+        "Ogrodniczki 51",
+        "Lodowa 79 A / 20"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Hacienda Pizza": {
+      "sample_n": 272,
+      "first_order": "2025-11-05T13:15:38",
+      "last_order": "2026-06-09T12:41:14",
+      "active": true,
+      "volume_pct": 0.49,
+      "prep_variance_min": {
+        "sample_n": 271,
+        "median": 12.0,
+        "p75": 23.5,
+        "p90": 35.0,
+        "mean": 14.74,
+        "stddev": 14.18,
+        "min": -11.0,
+        "max": 55.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 272,
+        "non_zero_count": 34,
+        "non_zero_pct": 12.5,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 61.4,
+        "mean_sec": 28.89,
+        "max_sec": 998,
+        "median_non_zero_sec": 132.5,
+        "p75_non_zero_sec": 264.0
+      },
+      "extension_min": {
+        "sample_n": 272,
+        "median_min": 10.0,
+        "p75_min": 18.25,
+        "p90_min": 28.0,
+        "mean_min": 11.67,
+        "never_extended_pct": 25.37,
+        "extended_count": 193,
+        "extended_pct": 70.96,
+        "shortened_count": 10
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Michał K.",
+        "Piotr Zaw",
+        "Szymon P",
+        "Adrian R"
+      ],
+      "delivery_addresses_sample": [
+        "Prowiantowa 17/83",
+        "Parkowa 18/9",
+        "Prowiantowa 15/57",
+        "Atłasowa 20/3",
+        "Hetmańska 16"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Nadajesz.pl": {
+      "sample_n": 392,
+      "first_order": "2025-11-05T14:29:07",
+      "last_order": "2026-06-09T14:02:28",
+      "active": true,
+      "volume_pct": 0.71,
+      "prep_variance_min": {
+        "sample_n": 386,
+        "median": 23.0,
+        "p75": 61.75,
+        "p90": 143.0,
+        "mean": 47.34,
+        "stddev": 66.29,
+        "min": -78.0,
+        "max": 282.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 392,
+        "non_zero_count": 6,
+        "non_zero_pct": 1.53,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 11.58,
+        "max_sec": 1966,
+        "median_non_zero_sec": 484.0,
+        "p75_non_zero_sec": 1045.25
+      },
+      "extension_min": {
+        "sample_n": 392,
+        "median_min": 10.0,
+        "p75_min": 36.25,
+        "p90_min": 129.5,
+        "mean_min": 35.51,
+        "never_extended_pct": 30.1,
+        "extended_count": 261,
+        "extended_pct": 66.58,
+        "shortened_count": 13
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Adrian R",
+        "Adrian Cit",
+        "Piotr Zaw",
+        "Bartek O,"
+      ],
+      "delivery_addresses_sample": [
+        "Sokólska 3/6",
+        "Mickiewicza 50 tel.",
+        "Boruty 17",
+        "Mickiewicza 43/budynek C tel.",
+        "Grochowa 2A"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Kurra": {
+      "sample_n": 86,
+      "first_order": "2025-11-05T18:32:13",
+      "last_order": "2026-05-31T15:52:10",
+      "active": true,
+      "volume_pct": 0.16,
+      "prep_variance_min": {
+        "sample_n": 86,
+        "median": 7.0,
+        "p75": 17.0,
+        "p90": 30.0,
+        "mean": 11.21,
+        "stddev": 13.25,
+        "min": -13.0,
+        "max": 50.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 86,
+        "non_zero_count": 12,
+        "non_zero_pct": 13.95,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 23.5,
+        "mean_sec": 15.57,
+        "max_sec": 392,
+        "median_non_zero_sec": 70.0,
+        "p75_non_zero_sec": 132.5
+      },
+      "extension_min": {
+        "sample_n": 86,
+        "median_min": 6.0,
+        "p75_min": 12.75,
+        "p90_min": 26.5,
+        "mean_min": 9.23,
+        "never_extended_pct": 27.91,
+        "extended_count": 56,
+        "extended_pct": 65.12,
+        "shortened_count": 6
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Patryk",
+        "Andrei K",
+        "Marek",
+        "Adrian R"
+      ],
+      "delivery_addresses_sample": [
+        "Pogodna 25/26",
+        "Prowiantowa 17/109",
+        "Feliksa Filipowicza 12/42",
+        "Rodzinna 16",
+        "Marczukowska 30/108"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Pablos kebab": {
+      "sample_n": 59,
+      "first_order": "2025-11-06T17:09:28",
+      "last_order": "2026-06-08T12:44:08",
+      "active": true,
+      "volume_pct": 0.11,
+      "prep_variance_min": {
+        "sample_n": 58,
+        "median": 21.0,
+        "p75": 29.75,
+        "p90": 39.9,
+        "mean": 20.26,
+        "stddev": 15.07,
+        "min": -8.0,
+        "max": 57.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 59,
+        "non_zero_count": 4,
+        "non_zero_pct": 6.78,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 24.02,
+        "max_sec": 1181,
+        "median_non_zero_sec": 110.0,
+        "p75_non_zero_sec": 383.0
+      },
+      "extension_min": {
+        "sample_n": 59,
+        "median_min": 16.0,
+        "p75_min": 25.5,
+        "p90_min": 31.0,
+        "mean_min": 16.32,
+        "never_extended_pct": 8.47,
+        "extended_count": 52,
+        "extended_pct": 88.14,
+        "shortened_count": 2
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Andrei K",
+        "Adrian R",
+        "Mateusz Ko",
+        "Sylwia L",
+        "Łukasz W"
+      ],
+      "delivery_addresses_sample": [
+        "Generała Józefa Hallera 40/50",
+        "złotoria 6",
+        "ZŁOTORIA 6",
+        "Produkcyjna 92",
+        "PRODUKCYJNA 92"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Bar Słoneczny": {
+      "sample_n": 15,
+      "first_order": "2025-11-08T11:43:05",
+      "last_order": "2026-05-21T14:17:37",
+      "active": false,
+      "volume_pct": 0.03,
+      "prep_variance_min": {
+        "sample_n": 15,
+        "median": 16.0,
+        "p75": 31.0,
+        "p90": 46.4,
+        "mean": 21.33,
+        "stddev": 16.59,
+        "min": 4.0,
+        "max": 53.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 15,
+        "non_zero_count": 3,
+        "non_zero_pct": 20.0,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 143.8,
+        "mean_sec": 69.47,
+        "max_sec": 781,
+        "median_non_zero_sec": 197,
+        "p75_non_zero_sec": 489.0
+      },
+      "extension_min": {
+        "sample_n": 15,
+        "median_min": 9.0,
+        "p75_min": 23.5,
+        "p90_min": 25.2,
+        "mean_min": 12.2,
+        "never_extended_pct": 33.33,
+        "extended_count": 10,
+        "extended_pct": 66.67,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian Cit",
+        "Michał K.",
+        "Adrian Ba",
+        "Piotr Zaw",
+        "Bartek O."
+      ],
+      "delivery_addresses_sample": [
+        "Upalna 48/22",
+        "Władysława Broniewskiego 6B/24",
+        "Aleja 1OOOlecia P.P 8",
+        "Aleja 100-lecia PP 8",
+        "Niedźwiedzia 6A"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Test": {
+      "sample_n": 1,
+      "first_order": "2025-11-20T14:37:23",
+      "last_order": "2025-11-20T14:37:23",
+      "active": false,
+      "volume_pct": 0.0,
+      "prep_variance_min": {
+        "sample_n": 0,
+        "median": null,
+        "p75": null,
+        "p90": null,
+        "mean": null,
+        "stddev": null,
+        "min": null,
+        "max": null
+      },
+      "waiting_time_sec": {
+        "sample_n": 1,
+        "non_zero_count": 0,
+        "non_zero_pct": 0.0,
+        "median_sec": 0,
+        "p75_sec": 0,
+        "p90_sec": 0,
+        "mean_sec": 0,
+        "max_sec": 0,
+        "median_non_zero_sec": null,
+        "p75_non_zero_sec": null
+      },
+      "extension_min": {
+        "sample_n": 1,
+        "median_min": 1.0,
+        "p75_min": 1.0,
+        "p90_min": 1.0,
+        "mean_min": 1.0,
+        "never_extended_pct": 100.0,
+        "extended_count": 0,
+        "extended_pct": 0.0,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Bartek O."
+      ],
+      "delivery_addresses_sample": [
+        "Róży Wiatrów 15"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Gym Fit Food": {
+      "sample_n": 503,
+      "first_order": "2025-11-22T14:46:22",
+      "last_order": "2026-06-09T11:40:27",
+      "active": true,
+      "volume_pct": 0.91,
+      "prep_variance_min": {
+        "sample_n": 503,
+        "median": 18.0,
+        "p75": 30.0,
+        "p90": 46.8,
+        "mean": 22.49,
+        "stddev": 20.55,
+        "min": -22.0,
+        "max": 170.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 503,
+        "non_zero_count": 149,
+        "non_zero_pct": 29.62,
+        "median_sec": 0,
+        "p75_sec": 87.0,
+        "p90_sec": 384.0,
+        "mean_sec": 100.82,
+        "max_sec": 1576,
+        "median_non_zero_sec": 259,
+        "p75_non_zero_sec": 488.0
+      },
+      "extension_min": {
+        "sample_n": 503,
+        "median_min": 11.0,
+        "p75_min": 22.5,
+        "p90_min": 36.0,
+        "mean_min": 15.68,
+        "never_extended_pct": 20.68,
+        "extended_count": 388,
+        "extended_pct": 77.14,
+        "shortened_count": 11
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Michał K.",
+        "Andrei K",
+        "Gabriel",
+        "Piotr Zaw",
+        "Adrian R"
+      ],
+      "delivery_addresses_sample": [
+        "Hetmańska 79/9",
+        "Bohaterów Monte Cassino 3/80",
+        "Jana Klemensa Branickiego 25/16",
+        "Dobra 18/1",
+        "Choroszczanska 30/80"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Atmosfera": {
+      "sample_n": 25,
+      "first_order": "2026-01-01T16:51:24",
+      "last_order": "2026-06-06T23:36:15",
+      "active": true,
+      "volume_pct": 0.05,
+      "prep_variance_min": {
+        "sample_n": 25,
+        "median": 16.0,
+        "p75": 29.0,
+        "p90": 54.6,
+        "mean": 21.8,
+        "stddev": 22.49,
+        "min": -4.0,
+        "max": 79.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 25,
+        "non_zero_count": 2,
+        "non_zero_pct": 8.0,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 39.12,
+        "max_sec": 594,
+        "median_non_zero_sec": 489.0,
+        "p75_non_zero_sec": 541.5
+      },
+      "extension_min": {
+        "sample_n": 25,
+        "median_min": 12.0,
+        "p75_min": 24.0,
+        "p90_min": 33.8,
+        "mean_min": 16.24,
+        "never_extended_pct": 20.0,
+        "extended_count": 20,
+        "extended_pct": 80.0,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Grzegorz W",
+        "Dawid Kal",
+        "Aleksander G",
+        "Michał Li",
+        "Gabriel J"
+      ],
+      "delivery_addresses_sample": [
+        "Wąska 15a/8",
+        "Zawilców 14",
+        "Jodłowa 8a/2",
+        "Plażowa 11/30",
+        "Fabryczna 24/66"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Eat Point": {
+      "sample_n": 224,
+      "first_order": "2026-01-09T16:40:30",
+      "last_order": "2026-06-08T17:38:20",
+      "active": true,
+      "volume_pct": 0.4,
+      "prep_variance_min": {
+        "sample_n": 224,
+        "median": 12.0,
+        "p75": 27.25,
+        "p90": 39.0,
+        "mean": 16.54,
+        "stddev": 15.99,
+        "min": -30.0,
+        "max": 76.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 224,
+        "non_zero_count": 19,
+        "non_zero_pct": 8.48,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 14.07,
+        "max_sec": 464,
+        "median_non_zero_sec": 109,
+        "p75_non_zero_sec": 308.0
+      },
+      "extension_min": {
+        "sample_n": 224,
+        "median_min": 9.5,
+        "p75_min": 22.0,
+        "p90_min": 32.7,
+        "mean_min": 13.34,
+        "never_extended_pct": 25.89,
+        "extended_count": 164,
+        "extended_pct": 73.21,
+        "shortened_count": 2
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Andrei K",
+        "Michał Li",
+        "Dariusz M",
+        "Michał K."
+      ],
+      "delivery_addresses_sample": [
+        "supraślska 52",
+        "Aleja Jana Pawła II 54",
+        "Aleja Józefa Piłsudskiego 17/44",
+        "Wiedeńska 3/48",
+        "Wiślana 100"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Nago Kwestia Czasu": {
+      "sample_n": 3,
+      "first_order": "2026-03-05T14:45:33",
+      "last_order": "2026-06-05T12:21:26",
+      "active": true,
+      "volume_pct": 0.01,
+      "prep_variance_min": {
+        "sample_n": 3,
+        "median": 13.0,
+        "p75": 18.0,
+        "p90": 21.0,
+        "mean": 13.33,
+        "stddev": 9.5,
+        "min": 4.0,
+        "max": 23.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 3,
+        "non_zero_count": 0,
+        "non_zero_pct": 0.0,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 0,
+        "max_sec": 0,
+        "median_non_zero_sec": null,
+        "p75_non_zero_sec": null
+      },
+      "extension_min": {
+        "sample_n": 3,
+        "median_min": 6.0,
+        "p75_min": 13.0,
+        "p90_min": 17.2,
+        "mean_min": 10.67,
+        "never_extended_pct": 0.0,
+        "extended_count": 3,
+        "extended_pct": 100.0,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Bartek O.",
+        "Piotr Zaw",
+        "Dariusz M"
+      ],
+      "delivery_addresses_sample": [
+        "Pracownicza 9/1",
+        "Wołodyjowskiego 2",
+        "starobojarska 18"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Uwędzony Beef & Chicken": {
+      "sample_n": 30,
+      "first_order": "2026-04-16T11:10:15",
+      "last_order": "2026-06-08T12:48:57",
+      "active": true,
+      "volume_pct": 0.05,
+      "prep_variance_min": {
+        "sample_n": 30,
+        "median": 2.0,
+        "p75": 9.75,
+        "p90": 16.1,
+        "mean": 4.03,
+        "stddev": 12.26,
+        "min": -44.0,
+        "max": 31.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 30,
+        "non_zero_count": 2,
+        "non_zero_pct": 6.67,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 6.07,
+        "max_sec": 115,
+        "median_non_zero_sec": 91.0,
+        "p75_non_zero_sec": 103.0
+      },
+      "extension_min": {
+        "sample_n": 30,
+        "median_min": 2.0,
+        "p75_min": 6.75,
+        "p90_min": 16.3,
+        "mean_min": 4.17,
+        "never_extended_pct": 36.67,
+        "extended_count": 18,
+        "extended_pct": 60.0,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Piotr Zaw",
+        "Jakub OL",
+        "Michał K.",
+        "Gabriel",
+        "Dawid Cha"
+      ],
+      "delivery_addresses_sample": [
+        "Hetmańska 92",
+        "Stefana Żeromskiego 3B/U2",
+        "Świętojańska 12A",
+        "hurtowa 17",
+        "zeromskiego 3b/u2"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Toriko": {
+      "sample_n": 140,
+      "first_order": "2026-04-22T14:43:35",
+      "last_order": "2026-06-09T12:39:07",
+      "active": true,
+      "volume_pct": 0.25,
+      "prep_variance_min": {
+        "sample_n": 140,
+        "median": 9.5,
+        "p75": 17.5,
+        "p90": 38.1,
+        "mean": 13.27,
+        "stddev": 16.46,
+        "min": -32.0,
+        "max": 103.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 140,
+        "non_zero_count": 17,
+        "non_zero_pct": 12.14,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 73.0,
+        "mean_sec": 33.92,
+        "max_sec": 920,
+        "median_non_zero_sec": 212,
+        "p75_non_zero_sec": 354.0
+      },
+      "extension_min": {
+        "sample_n": 140,
+        "median_min": 4.0,
+        "p75_min": 16.0,
+        "p90_min": 28.2,
+        "mean_min": 9.51,
+        "never_extended_pct": 33.57,
+        "extended_count": 87,
+        "extended_pct": 62.14,
+        "shortened_count": 6
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Gabriel",
+        "Adrian R",
+        "Bartek O,",
+        "Jakub OL",
+        "Michał K."
+      ],
+      "delivery_addresses_sample": [
+        "ks. Stanisława Andrukiewicza 13\\19",
+        "gen. Stanisława Maczka 62a",
+        "gen. Józefa Bema 3",
+        "Wołyńska 9",
+        "Familijna 79"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Street Mama Thai": {
+      "sample_n": 160,
+      "first_order": "2026-04-26T13:48:18",
+      "last_order": "2026-06-08T19:38:58",
+      "active": true,
+      "volume_pct": 0.29,
+      "prep_variance_min": {
+        "sample_n": 160,
+        "median": 16.0,
+        "p75": 29.0,
+        "p90": 40.1,
+        "mean": 18.74,
+        "stddev": 18.62,
+        "min": -11.0,
+        "max": 113.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 160,
+        "non_zero_count": 21,
+        "non_zero_pct": 13.12,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 61.8,
+        "mean_sec": 24.62,
+        "max_sec": 760,
+        "median_non_zero_sec": 175,
+        "p75_non_zero_sec": 250.0
+      },
+      "extension_min": {
+        "sample_n": 160,
+        "median_min": 13.0,
+        "p75_min": 27.0,
+        "p90_min": 33.1,
+        "mean_min": 16.34,
+        "never_extended_pct": 23.12,
+        "extended_count": 122,
+        "extended_pct": 76.25,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Michał K.",
+        "Andrei K",
+        "Dariusz M",
+        "Mateusz Bro"
+      ],
+      "delivery_addresses_sample": [
+        "Kraszewskiego 9a/5",
+        "Nowosielska 114",
+        "Aleksandra Puszkina 19",
+        "Dolna 25",
+        "Marii Skłodowskiej-Curie 24A piętro IV"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Fire Doner": {
+      "sample_n": 3,
+      "first_order": "2026-05-15T13:29:15",
+      "last_order": "2026-05-15T15:45:36",
+      "active": false,
+      "volume_pct": 0.01,
+      "prep_variance_min": {
+        "sample_n": 3,
+        "median": 23.0,
+        "p75": 25.0,
+        "p90": 26.2,
+        "mean": 17.67,
+        "stddev": 12.86,
+        "min": 3.0,
+        "max": 27.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 3,
+        "non_zero_count": 0,
+        "non_zero_pct": 0.0,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 0,
+        "max_sec": 0,
+        "median_non_zero_sec": null,
+        "p75_non_zero_sec": null
+      },
+      "extension_min": {
+        "sample_n": 3,
+        "median_min": 16.0,
+        "p75_min": 16.0,
+        "p90_min": 16.0,
+        "mean_min": 11.0,
+        "never_extended_pct": 33.33,
+        "extended_count": 2,
+        "extended_pct": 66.67,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Jakub OL",
+        "Paweł SC"
+      ],
+      "delivery_addresses_sample": [
+        "Kalinowa 15",
+        "Slusarska 18/36",
+        "Bialowny 2/17"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Sztuka Dzika": {
+      "sample_n": 9,
+      "first_order": "2026-05-16T16:00:52",
+      "last_order": "2026-05-22T20:37:43",
+      "active": false,
+      "volume_pct": 0.02,
+      "prep_variance_min": {
+        "sample_n": 9,
+        "median": 15.0,
+        "p75": 31.0,
+        "p90": 39.2,
+        "mean": 21.33,
+        "stddev": 14.31,
+        "min": 3.0,
+        "max": 48.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 9,
+        "non_zero_count": 2,
+        "non_zero_pct": 22.22,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 184.8,
+        "mean_sec": 90.33,
+        "max_sec": 776,
+        "median_non_zero_sec": 406.5,
+        "p75_non_zero_sec": 591.25
+      },
+      "extension_min": {
+        "sample_n": 9,
+        "median_min": 15.0,
+        "p75_min": 27.0,
+        "p90_min": 31.2,
+        "mean_min": 15.11,
+        "never_extended_pct": 22.22,
+        "extended_count": 7,
+        "extended_pct": 77.78,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Mateusz Bro",
+        "Gabriel J",
+        "Dariusz M",
+        "Jakub OL",
+        "Szymon P"
+      ],
+      "delivery_addresses_sample": [
+        "Mickiewicza 30",
+        "Michała Pietkiewicza 6a/13",
+        "Komisji Edukacji Narodowej 36/13",
+        "Jurowiecka 19/112",
+        "Krakowska 7a/62"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Dr Tusz": {
+      "sample_n": 46,
+      "first_order": "2026-05-19T10:01:35",
+      "last_order": "2026-06-09T13:45:53",
+      "active": true,
+      "volume_pct": 0.08,
+      "prep_variance_min": {
+        "sample_n": 46,
+        "median": 21.0,
+        "p75": 29.5,
+        "p90": 58.0,
+        "mean": 22.59,
+        "stddev": 25.89,
+        "min": -10.0,
+        "max": 109.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 46,
+        "non_zero_count": 0,
+        "non_zero_pct": 0.0,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 0,
+        "max_sec": 0,
+        "median_non_zero_sec": null,
+        "p75_non_zero_sec": null
+      },
+      "extension_min": {
+        "sample_n": 46,
+        "median_min": 11.5,
+        "p75_min": 24.75,
+        "p90_min": 27.0,
+        "mean_min": 14.09,
+        "never_extended_pct": 15.22,
+        "extended_count": 38,
+        "extended_pct": 82.61,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": false,
+        "chronically_late": false,
+        "prep_variance_high": true,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian Cit",
+        "Adrian R",
+        "Michał K.",
+        "Bartek O,",
+        "Piotr Zaw"
+      ],
+      "delivery_addresses_sample": [
+        "Króla Zygmunta Augusta 26",
+        "Żytnia 5",
+        "Elewatorska 58",
+        "Fabryczna 10",
+        "Towarowa 12"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": null,
+      "waiting_time_fallback_sec": null,
+      "extension_fallback_min": null
+    },
+    "Orthdruk": {
+      "sample_n": 10,
+      "first_order": "2026-05-20T09:39:04",
+      "last_order": "2026-06-03T08:04:39",
+      "active": true,
+      "volume_pct": 0.02,
+      "prep_variance_min": {
+        "sample_n": 10,
+        "median": 185.0,
+        "p75": 211.5,
+        "p90": 221.1,
+        "mean": 130.5,
+        "stddev": 97.57,
+        "min": 5.0,
+        "max": 222.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 10,
+        "non_zero_count": 3,
+        "non_zero_pct": 30.0,
+        "median_sec": 0.0,
+        "p75_sec": 78.0,
+        "p90_sec": 104.1,
+        "mean_sec": 31.3,
+        "max_sec": 105,
+        "median_non_zero_sec": 104,
+        "p75_non_zero_sec": 104.5
+      },
+      "extension_min": {
+        "sample_n": 10,
+        "median_min": 163.5,
+        "p75_min": 208.0,
+        "p90_min": 224.1,
+        "mean_min": 123.0,
+        "never_extended_pct": 10.0,
+        "extended_count": 9,
+        "extended_pct": 90.0,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian Cit",
+        "Michał K.",
+        "Adrian R",
+        "Bartek O,"
+      ],
+      "delivery_addresses_sample": [
+        "Zamenhofa 27",
+        "Składowa 11",
+        "Aksamitna 8",
+        "Legionowa 2"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Interpap Polska": {
+      "sample_n": 4,
+      "first_order": "2026-05-20T12:25:50",
+      "last_order": "2026-06-02T11:53:55",
+      "active": true,
+      "volume_pct": 0.01,
+      "prep_variance_min": {
+        "sample_n": 4,
+        "median": 6.5,
+        "p75": 8.75,
+        "p90": 10.1,
+        "mean": 4.5,
+        "stddev": 7.42,
+        "min": -6.0,
+        "max": 11.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 4,
+        "non_zero_count": 0,
+        "non_zero_pct": 0.0,
+        "median_sec": 0.0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 0,
+        "max_sec": 0,
+        "median_non_zero_sec": null,
+        "p75_non_zero_sec": null
+      },
+      "extension_min": {
+        "sample_n": 4,
+        "median_min": 1.0,
+        "p75_min": 1.0,
+        "p90_min": 1.0,
+        "mean_min": -2.5,
+        "never_extended_pct": 75.0,
+        "extended_count": 0,
+        "extended_pct": 0.0,
+        "shortened_count": 1
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Adrian Cit"
+      ],
+      "delivery_addresses_sample": [
+        "Ciepła 32",
+        "Pod Krzywą 28",
+        "BRONIEWSKIEGO 8/34",
+        "BEMA 2/142, DOSTAWA DO 14 00"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "Dentomax": {
+      "sample_n": 13,
+      "first_order": "2026-05-20T12:33:37",
+      "last_order": "2026-06-09T11:02:49",
+      "active": true,
+      "volume_pct": 0.02,
+      "prep_variance_min": {
+        "sample_n": 13,
+        "median": 26.0,
+        "p75": 53.0,
+        "p90": 87.6,
+        "mean": 35.08,
+        "stddev": 32.76,
+        "min": -3.0,
+        "max": 100.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 13,
+        "non_zero_count": 0,
+        "non_zero_pct": 0.0,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 0,
+        "max_sec": 0,
+        "median_non_zero_sec": null,
+        "p75_non_zero_sec": null
+      },
+      "extension_min": {
+        "sample_n": 13,
+        "median_min": 20.0,
+        "p75_min": 33.0,
+        "p90_min": 43.0,
+        "mean_min": 20.08,
+        "never_extended_pct": 7.69,
+        "extended_count": 12,
+        "extended_pct": 92.31,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Adrian R",
+        "Piotr Zaw",
+        "Michał K.",
+        "Adrian Cit",
+        "Gabriel"
+      ],
+      "delivery_addresses_sample": [
+        "Św. Rocha 7 /lok 16",
+        "Piłsudskiego 11/3",
+        "KACZOROWSKIEGO 7/50",
+        "Andersa 38",
+        "ANTONIUKOWSKA 11A"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    },
+    "3Giga": {
+      "sample_n": 3,
+      "first_order": "2026-05-20T14:21:08",
+      "last_order": "2026-05-29T10:57:32",
+      "active": true,
+      "volume_pct": 0.01,
+      "prep_variance_min": {
+        "sample_n": 3,
+        "median": 26.0,
+        "p75": 27.0,
+        "p90": 27.6,
+        "mean": 18.33,
+        "stddev": 15.04,
+        "min": 1.0,
+        "max": 28.0
+      },
+      "waiting_time_sec": {
+        "sample_n": 3,
+        "non_zero_count": 0,
+        "non_zero_pct": 0.0,
+        "median_sec": 0,
+        "p75_sec": 0.0,
+        "p90_sec": 0.0,
+        "mean_sec": 0,
+        "max_sec": 0,
+        "median_non_zero_sec": null,
+        "p75_non_zero_sec": null
+      },
+      "extension_min": {
+        "sample_n": 3,
+        "median_min": 22.0,
+        "p75_min": 24.5,
+        "p90_min": 26.0,
+        "mean_min": 20.0,
+        "never_extended_pct": 0.0,
+        "extended_count": 3,
+        "extended_pct": 100.0,
+        "shortened_count": 0
+      },
+      "flags": {
+        "low_confidence": true,
+        "chronically_late": false,
+        "prep_variance_high": false,
+        "unreliable": false,
+        "critical": false
+      },
+      "courier_sample": [
+        "Piotr Zaw",
+        "Adrian Cit"
+      ],
+      "delivery_addresses_sample": [
+        "gen. Władysława Andersa 38/2, Windą 7",
+        "Świętokrzyska 4",
+        "Św. Jerzego 49A lok U 1"
+      ],
+      "last_updated": "2026-06-13T08:50:03",
+      "prep_variance_fallback_min": 14.0,
+      "waiting_time_fallback_sec": 0.0,
+      "extension_fallback_min": 9.25
+    }
+  },
+  "fleet_medians": {
+    "fleet_prep_variance_median": 14.0,
+    "fleet_waiting_time_median_sec": 0.0,
+    "fleet_extension_median_min": 9.25,
+    "source_restaurants_n": 72
+  },
+  "metadata": {
+    "total_delivered_orders": 55356,
+    "unique_restaurants": 87,
+    "reference_date": "2026-06-09T14:09:02",
+    "source_csv": "/root/_auton_wt/tier01/dispatch_v2/eod_drafts/2026-06-13/merged_panel_history_depvhs8i.csv",
+    "computed_from": "tools/gap_fill_restaurant_meta.py",
+    "computed_at": "2026-06-13T08:50:03",
+    "min_sample_confident": 30,
+    "active_window_days": 14,
+    "critical_volume_pct": 5.0
+  }
+}

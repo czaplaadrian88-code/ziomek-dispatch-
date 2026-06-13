@@ -1,0 +1,700 @@
+{
+  "_meta": {
+    "schema_version": "v1",
+    "generated_at": "2026-06-13T08:48:38.852388+00:00",
+    "source": "postgres nadajesz_panel.delivery",
+    "window_days": 60,
+    "window_cutoff": "2026-04-14T08:40:00+00:00",
+    "window_latest": "2026-06-13T08:40:00+00:00",
+    "min_orders_for_stats": 50,
+    "bundle_gap_min": 8.0,
+    "excluded_cids": [
+      "61"
+    ],
+    "couriers_with_stats": 34,
+    "couriers_skipped_low_n": 10,
+    "tool": "eod_drafts/2026-06-13/regen_tier_stats.py"
+  },
+  "couriers": {
+    "123": {
+      "bag": {
+        "orders_per_wave_p50": 2,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 5,
+        "max_concurrent_observed": 7,
+        "bag_time_p90_min": 32.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 26.0,
+        "n_singletons": 232
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.784,
+        "bundle_waves_rate": 0.577
+      },
+      "_n_orders": 1073,
+      "_n_waves": 548,
+      "name": "Bartek O"
+    },
+    "179": {
+      "bag": {
+        "orders_per_wave_p50": 2,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 5,
+        "max_concurrent_observed": 5,
+        "bag_time_p90_min": 31.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 25.0,
+        "n_singletons": 194
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.746,
+        "bundle_waves_rate": 0.534
+      },
+      "_n_orders": 764,
+      "_n_waves": 416,
+      "name": "Gabriel"
+    },
+    "207": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 3,
+        "bag_time_p90_min": 47.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 38.5,
+        "n_singletons": 56
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.537,
+        "bundle_waves_rate": 0.333
+      },
+      "_n_orders": 121,
+      "_n_waves": 84,
+      "name": "Marek"
+    },
+    "289": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 30.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 26.0,
+        "n_singletons": 79
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.419,
+        "bundle_waves_rate": 0.248
+      },
+      "_n_orders": 136,
+      "_n_waves": 105,
+      "name": "Grzegorz W"
+    },
+    "370": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 5,
+        "bag_time_p90_min": 35.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 32.0,
+        "n_singletons": 330
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.582,
+        "bundle_waves_rate": 0.38
+      },
+      "_n_orders": 789,
+      "_n_waves": 532,
+      "name": "Jakub OL"
+    },
+    "376": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 5,
+        "bag_time_p90_min": 32.8
+      },
+      "speed": {
+        "delivery_time_p90_min": 27.5,
+        "n_singletons": 146
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.598,
+        "bundle_waves_rate": 0.373
+      },
+      "_n_orders": 363,
+      "_n_waves": 233,
+      "name": "Paweł SC"
+    },
+    "387": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 3,
+        "bag_time_p90_min": 30.6
+      },
+      "speed": {
+        "delivery_time_p90_min": 27.9,
+        "n_singletons": 122
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.378,
+        "bundle_waves_rate": 0.213
+      },
+      "_n_orders": 196,
+      "_n_waves": 155,
+      "name": "Aleksander G"
+    },
+    "393": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 5,
+        "bag_time_p90_min": 36.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 31.0,
+        "n_singletons": 484
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.48,
+        "bundle_waves_rate": 0.286
+      },
+      "_n_orders": 931,
+      "_n_waves": 678,
+      "name": "Michał K."
+    },
+    "400": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 5,
+        "bag_time_p90_min": 40.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 34.6,
+        "n_singletons": 385
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.545,
+        "bundle_waves_rate": 0.337
+      },
+      "_n_orders": 848,
+      "_n_waves": 582,
+      "name": "Adrian R"
+    },
+    "409": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 5,
+        "bag_time_p90_min": 35.9
+      },
+      "speed": {
+        "delivery_time_p90_min": 30.3,
+        "n_singletons": 128
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.635,
+        "bundle_waves_rate": 0.419
+      },
+      "_n_orders": 353,
+      "_n_waves": 222,
+      "name": "Mateusz Bro"
+    },
+    "413": {
+      "bag": {
+        "orders_per_wave_p50": 2,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 6,
+        "bag_time_p90_min": 29.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 24.0,
+        "n_singletons": 195
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.719,
+        "bundle_waves_rate": 0.504
+      },
+      "_n_orders": 694,
+      "_n_waves": 393,
+      "name": "Mateusz O"
+    },
+    "414": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 3,
+        "bag_time_p90_min": 27.4
+      },
+      "speed": {
+        "delivery_time_p90_min": 23.8,
+        "n_singletons": 43
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.463,
+        "bundle_waves_rate": 0.283
+      },
+      "_n_orders": 80,
+      "_n_waves": 60,
+      "name": "Albert D"
+    },
+    "441": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 32.4
+      },
+      "speed": {
+        "delivery_time_p90_min": 27.0,
+        "n_singletons": 56
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.556,
+        "bundle_waves_rate": 0.356
+      },
+      "_n_orders": 126,
+      "_n_waves": 87,
+      "name": "Sylwia L"
+    },
+    "447": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 3,
+        "bag_time_p90_min": 28.9
+      },
+      "speed": {
+        "delivery_time_p90_min": 27.1,
+        "n_singletons": 60
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.31,
+        "bundle_waves_rate": 0.167
+      },
+      "_n_orders": 87,
+      "_n_waves": 72,
+      "name": "Dawid Kal"
+    },
+    "457": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 35.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 30.6,
+        "n_singletons": 198
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.449,
+        "bundle_waves_rate": 0.273
+      },
+      "_n_orders": 363,
+      "_n_waves": 275,
+      "name": "Adrian Cit"
+    },
+    "470": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 34.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 30.1,
+        "n_singletons": 310
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.384,
+        "bundle_waves_rate": 0.215
+      },
+      "_n_orders": 503,
+      "_n_waves": 395,
+      "name": "Piotr Zaw"
+    },
+    "471": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 6,
+        "bag_time_p90_min": 39.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 34.8,
+        "n_singletons": 113
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.626,
+        "bundle_waves_rate": 0.399
+      },
+      "_n_orders": 302,
+      "_n_waves": 188,
+      "name": "Łukasz W"
+    },
+    "484": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 6,
+        "bag_time_p90_min": 38.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 34.0,
+        "n_singletons": 474
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.4,
+        "bundle_waves_rate": 0.233
+      },
+      "_n_orders": 792,
+      "_n_waves": 619,
+      "name": "Andrei K"
+    },
+    "500": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 5,
+        "bag_time_p90_min": 35.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 31.0,
+        "n_singletons": 226
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.539,
+        "bundle_waves_rate": 0.336
+      },
+      "_n_orders": 492,
+      "_n_waves": 342,
+      "name": "Grzegorz"
+    },
+    "502": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 30.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 28.9,
+        "n_singletons": 102
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.498,
+        "bundle_waves_rate": 0.306
+      },
+      "_n_orders": 203,
+      "_n_waves": 147,
+      "name": "Kacper Sa"
+    },
+    "503": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 5,
+        "bag_time_p90_min": 36.9
+      },
+      "speed": {
+        "delivery_time_p90_min": 29.0,
+        "n_singletons": 180
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.512,
+        "bundle_waves_rate": 0.313
+      },
+      "_n_orders": 369,
+      "_n_waves": 262,
+      "name": "Gabriel J"
+    },
+    "508": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 38.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 35.6,
+        "n_singletons": 245
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.377,
+        "bundle_waves_rate": 0.217
+      },
+      "_n_orders": 393,
+      "_n_waves": 313,
+      "name": "Michał Li"
+    },
+    "509": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 6,
+        "bag_time_p90_min": 32.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 27.0,
+        "n_singletons": 274
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.554,
+        "bundle_waves_rate": 0.34
+      },
+      "_n_orders": 614,
+      "_n_waves": 415,
+      "name": "Dariusz M"
+    },
+    "514": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 37.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 36.0,
+        "n_singletons": 168
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.394,
+        "bundle_waves_rate": 0.226
+      },
+      "_n_orders": 277,
+      "_n_waves": 217,
+      "name": "Tomasz Ch"
+    },
+    "515": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 37.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 32.7,
+        "n_singletons": 194
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.577,
+        "bundle_waves_rate": 0.384
+      },
+      "_n_orders": 459,
+      "_n_waves": 315,
+      "name": "Szymon P"
+    },
+    "517": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 3,
+        "bag_time_p90_min": 37.9
+      },
+      "speed": {
+        "delivery_time_p90_min": 34.0,
+        "n_singletons": 86
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.472,
+        "bundle_waves_rate": 0.295
+      },
+      "_n_orders": 163,
+      "_n_waves": 122,
+      "name": "Gabriel Je"
+    },
+    "518": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 39.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 35.0,
+        "n_singletons": 169
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.442,
+        "bundle_waves_rate": 0.262
+      },
+      "_n_orders": 303,
+      "_n_waves": 229,
+      "name": "Michał Ro"
+    },
+    "520": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 37.9
+      },
+      "speed": {
+        "delivery_time_p90_min": 32.0,
+        "n_singletons": 116
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.605,
+        "bundle_waves_rate": 0.396
+      },
+      "_n_orders": 294,
+      "_n_waves": 192,
+      "name": "Michał Rom"
+    },
+    "522": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 3,
+        "bag_time_p90_min": 41.6
+      },
+      "speed": {
+        "delivery_time_p90_min": 33.7,
+        "n_singletons": 52
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.358,
+        "bundle_waves_rate": 0.2
+      },
+      "_n_orders": 81,
+      "_n_waves": 65,
+      "name": "Szymon Sa"
+    },
+    "523": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 3,
+        "bag_time_p90_min": 39.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 34.1,
+        "n_singletons": 140
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.426,
+        "bundle_waves_rate": 0.259
+      },
+      "_n_orders": 244,
+      "_n_waves": 189,
+      "name": "Marcin By"
+    },
+    "524": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 4,
+        "bag_time_p90_min": 35.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 34.0,
+        "n_singletons": 94
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.412,
+        "bundle_waves_rate": 0.242
+      },
+      "_n_orders": 160,
+      "_n_waves": 124,
+      "name": "Dawid Cha"
+    },
+    "526": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 2,
+        "max_concurrent_observed": 3,
+        "bag_time_p90_min": 56.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 53.0,
+        "n_singletons": 41
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.339,
+        "bundle_waves_rate": 0.196
+      },
+      "_n_orders": 62,
+      "_n_waves": 51,
+      "name": "Bartosz K"
+    },
+    "530": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 2,
+        "orders_per_wave_p99": 3,
+        "max_concurrent_observed": 3,
+        "bag_time_p90_min": 34.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 33.0,
+        "n_singletons": 65
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.369,
+        "bundle_waves_rate": 0.217
+      },
+      "_n_orders": 103,
+      "_n_waves": 83,
+      "name": "Bartosz Ch."
+    },
+    "75": {
+      "bag": {
+        "orders_per_wave_p50": 1,
+        "orders_per_wave_p90": 3,
+        "orders_per_wave_p99": 4,
+        "max_concurrent_observed": 5,
+        "bag_time_p90_min": 35.0
+      },
+      "speed": {
+        "delivery_time_p90_min": 31.0,
+        "n_singletons": 48
+      },
+      "bundle": {
+        "bundle_rate_orders": 0.631,
+        "bundle_waves_rate": 0.415
+      },
+      "_n_orders": 130,
+      "_n_waves": 82,
+      "name": "Patryk"
+    }
+  }
+}
