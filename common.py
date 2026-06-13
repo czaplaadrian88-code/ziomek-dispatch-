@@ -266,6 +266,11 @@ def parse_panel_timestamp(value) -> "datetime | None":
 # === OSRM FALLBACK CONFIG (V3.1 P0.5) ===
 # Kalibracja 12.04.2026: 206 delivered orders, median=1.371, std=0.354
 # Raw data: dispatch_state/calibration_20260412_baseline.json
+# REKALIBRACJA 2026-06-13 (GEO-04 audyt): 482 świeże delivered orders (events.db
+#   NEW_ORDER coords vs OSRM :5001) → median=1.390, mean=1.489, std=0.329,
+#   p10=1.207 p90=1.916. Różnica vs 1.37 = 1.4% = w granicy szumu (~0.06σ) →
+#   BEZ ZMIANY. Brak trendu „zaniżania" (baseline median 1.371 → 1.390 stabilne).
+#   Werdykt+dane: eod_drafts/2026-06-13/geo04_road_factor.md.
 HAVERSINE_ROAD_FACTOR_BIALYSTOK = 1.37
 
 # === COORD SANITY GUARD (Lekcja #140, 2026-05-21) ===
@@ -278,6 +283,20 @@ HAVERSINE_ROAD_FACTOR_BIALYSTOK = 1.37
 # realne adresy dispatchu (Wasilków/Choroszcz/Supraśl/Zabłudów/Łapy), odrzuca
 # (0,0) [lat 0] i geokody cross-country. R6=35min ⇒ realny zasięg ~25-30 km, więc
 # >±55 km = na pewno błąd danych, nie legit zlecenie.
+#
+# === GEO-06/07 (audyt 2026-06-13): DWA bboxy — celowo różne, NIE niespójność ===
+# W kodzie żyją DWA bboxy o ROZŁĄCZNYCH zadaniach (nie błąd, nie do „unifikacji"):
+#   (1) BIALYSTOK_BBOX_LAT/LON (niżej) = METROPOLIA ±55 km — filtr trucizny dla
+#       OSRM/GPS (coords_in_bialystok_bbox); MUSI być szeroki, by przyjąć
+#       Wasilków/Zabłudów/Łapy do routingu.
+#   (2) GEOCODE_BBOX_* (sekcja „GEOCODE BBOX GUARD" niżej) = OBSZAR OBSŁUGI
+#       +~28 km — filtr akceptacji geokodu (_in_service_bbox w geocoding.py).
+# INWARIANT KANONICZNY (test go pilnuje, test_geo_bbox_consistency):
+#   GEOCODE_BBOX ⊂ BIALYSTOK_BBOX (ścisłe podzbiór). Inaczej geocoding mógłby
+#   zaakceptować punkt, który OSRM zaraz odrzuci jako truciznę → niespójność.
+# Zweryfikowane 2026-06-13: wszystkie realne miejscowości dispatchu (Wasilków/
+#   Choroszcz/Zabłudów/Łapy/Kleosin/Supraśl/Ignatki) mieszczą się w OBU. Werdykt:
+#   eod_drafts/2026-06-13/geo0607_bbox.md.
 BIALYSTOK_BBOX_LAT = (52.6, 53.7)
 BIALYSTOK_BBOX_LON = (22.3, 24.1)
 
@@ -1102,13 +1121,17 @@ BIALYSTOK_DISTRICT_ADJACENCY = {
     'Bojary':         {'Centrum', 'Piasta I', 'Piasta II', 'Sienkiewicza',
                        'Mickiewicza', 'Skorupy'},
     'Piaski':         {'Centrum', 'Mickiewicza', 'Przydworcowe'},
+    # GEO-05 fix 2026-06-13: usunięto 'Dojlidy Górne' (centroidy 4.38 km, Dojlidy
+    # leży MIĘDZY nimi — Mick→Dojlidy 1.71 km, Dojlidy→Dojlidy Górne 2.75 km;
+    # link omijał Dojlidy = fałszywe sąsiedztwo. Symetrycznie zdjęte z 'Dojlidy
+    # Górne'. Dowód: eod_drafts/2026-06-13/geo05_adjacency.md).
     'Mickiewicza':    {'Centrum', 'Dojlidy', 'Kawaleryjskie', 'Piaski',
-                       'Piasta II', 'Skorupy', 'Bojary', 'Dojlidy Górne'},
+                       'Piasta II', 'Skorupy', 'Bojary'},
     'Sienkiewicza':   {'Wygoda', 'Bojary', 'Centrum', 'Białostoczek',
                        'Wasilków', 'Jaroszówka'},
     # E/SE Dojlidy kierunek
     'Dojlidy':        {'Skorupy', 'Mickiewicza', 'Dojlidy Górne', 'Centrum'},
-    'Dojlidy Górne':  {'Dojlidy', 'Mickiewicza'},
+    'Dojlidy Górne':  {'Dojlidy'},  # GEO-05 fix 2026-06-13: usunięto 'Mickiewicza' (patrz Mickiewicza wyżej)
     'Skorupy':        {'Dojlidy', 'Mickiewicza', 'Piasta I', 'Piasta II', 'Bojary'},
     'Piasta I':       {'Bojary', 'Piasta II', 'Skorupy', 'Wygoda', 'Jaroszówka'},
     'Piasta II':      {'Bojary', 'Mickiewicza', 'Centrum', 'Piasta I', 'Skorupy',
