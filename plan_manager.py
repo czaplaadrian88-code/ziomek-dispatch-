@@ -210,6 +210,35 @@ def invalidate_plan(courier_id: str, reason: str) -> None:
         _write_raw(plans)
 
 
+def touch_plan(courier_id: str, reason: str = "SIGNAL") -> bool:
+    """FIX-E (2026-06-13, B1): LEKKI sygnał zmiany dla apki — bump plan_version +
+    last_modified_at BEZ invalidacji. Plan ZOSTAJE w obecnym stanie (ważny zostaje
+    ważny, invalidated zostaje invalidated) → plan_recheck NIE jest zmuszany do
+    regeneracji ani apka nie migocze widokiem fallback (co dałby invalidate_plan).
+
+    Po co: czas_kuriera/pickup zmienia się dla zlecenia POKRYTEGO planem; sam plan
+    nie musi się zmienić (build_view i tak klampuje wyświetlane eta do committed z
+    orders_state), ale apka odświeża /api/courier/orders TYLKO gdy plan_version
+    LUB invalidated_at się ruszy. touch_plan rusza plan_version (per-cid) bez kosztu
+    regeneracji. Działa też na planie JUŻ invalidated (B1: PANEL_OVERRIDE unieważnił
+    plan, potem wchodzi czas_kuriera) — bump plan_version i tak zmienia /plan-version.
+
+    No-op (False) gdy brak planu w pliku (apka i tak na pełnym worku z fresh czas_kuriera).
+    Zwraca True gdy bumpnięto. Bump monotoniczny — spójny z save_plan/advance_plan."""
+    cid = str(courier_id)
+    with _locked(exclusive=True):
+        plans = _read_raw()
+        plan = plans.get(cid)
+        if plan is None:
+            return False
+        plan["plan_version"] = int(plan.get("plan_version", 0)) + 1
+        plan["last_modified_at"] = _now_iso()
+        new_ver = plan["plan_version"]
+        _write_raw(plans)
+    _log.info(f"touch_plan cid={cid} reason={reason} → plan_version={new_ver}")
+    return True
+
+
 def advance_plan(
     courier_id: str,
     delivered_order_id: str,

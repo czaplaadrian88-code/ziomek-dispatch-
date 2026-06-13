@@ -556,6 +556,52 @@ def _invalidate_plan_on_bag_change(order_id: str, courier_id: str) -> None:
         )
 
 
+def _invalidate_plan_on_committed_change(order_id: str, courier_id: str) -> None:
+    """FIX-E (2026-06-13, B1): gdy zmienia się czas_kuriera/pickup (committed/ready)
+    zlecenia PRZYPISANEGO kurierowi, zasygnalizuj zmianę JEGO planu (touch_plan: bump
+    plan_version BEZ invalidacji) → /api/courier/plan-version się zmienia → apka robi
+    pełny GET /orders i pobiera świeże eta_committed.
+
+    Root B1 (wyścig odświeżania): czas_kuriera mutował orders_state, ale NIE bumpował
+    plan_version, a apka odświeża /orders TYLKO po zmianie plan_version/invalidated_at.
+    Po PANEL_OVERRIDE (bag-change → 1 refresh) czas_kuriera wchodził sekundy później,
+    apka trzymała stale snapshot z eta_committed=null → nagłówek odbioru spadał do
+    surowego predicted_at (np. 12:44 zamiast committed 13:20).
+
+    W PRZECIWIEŃSTWIE do _invalidate_plan_on_bag_change NIE pomija gdy order jest
+    POKRYTY planem — committed zmienia się właśnie dla pokrytych zleceń, a to ICH
+    eta_committed w widoku jest nieaktualne. Per-cid (bumpuje tylko plan tego kuriera).
+    Best-effort (błędy nie propagują). Plan_recheck re-czasuje plan z nowym committed
+    (refloor) na następnym ticku. Kill-switch: flaga ENABLE_COMMITTED_INVALIDATES_VIEW.
+    """
+    try:
+        from dispatch_v2.common import ENABLE_SAVED_PLANS, flag
+        if not ENABLE_SAVED_PLANS:
+            return
+        if not flag("ENABLE_COMMITTED_INVALIDATES_VIEW", True):
+            return
+    except Exception:
+        return
+    if not courier_id or not order_id:
+        return
+    try:
+        from dispatch_v2 import plan_manager
+        # touch_plan bumpuje plan_version (per-cid) BEZ invalidacji → /plan-version
+        # się zmienia → apka odświeża /orders i czyta świeże eta_committed. Działa TEŻ
+        # na planie JUŻ invalidated (scenariusz B1: PANEL_OVERRIDE unieważnił plan, a
+        # czas_kuriera wchodzi sekundy później — load_plan zwracałby None i no-opował).
+        # No-op (False) gdy brak planu — apka i tak na pełnym worku z fresh czas_kuriera.
+        if plan_manager.touch_plan(str(courier_id), "COMMITTED_TIME_CHANGED"):
+            _log.info(
+                f"FIX-E committed_change cid={courier_id} oid={order_id} "
+                f"— apka odświeży widok (eta_committed)"
+            )
+    except Exception as e:
+        _log.warning(
+            f"FIX-E committed_change fail cid={courier_id} oid={order_id}: {e}"
+        )
+
+
 def _save_plan_on_assign_signal(order_id: str, courier_id: str) -> None:
     """BUG-1 (2026-06-05): zapisz plan z propozycji (gdy to nasz kurier) ORAZ zasygnalizuj
     apce zmianę worka. _save_plan_on_assign cicho pomija zapis przy PANEL_OVERRIDE/reassign,
@@ -1906,6 +1952,10 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         event_id=event_id_str,
                     )
                     update_from_event(evt)
+                    # FIX-E (B1): committed się zmienił → unieważnij plan kuriera,
+                    # by apka odświeżyła /orders i pobrała świeże eta_committed.
+                    _invalidate_plan_on_committed_change(
+                        zid, state_order.get("courier_id"))
                     delta_val = evt["payload"].get("delta_min")
                     delta_str = f"Δ={delta_val:+.1f}min" if delta_val is not None else "Δ=null(first_ack)"
                     _log.info(
@@ -1937,6 +1987,9 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         event_id=p_event_id,
                     )
                     update_from_event(evt_p)
+                    # FIX-E (B1): pickup/ready (czasówka) się zmienił → ten sam refresh
+                    _invalidate_plan_on_committed_change(
+                        zid, state_order.get("courier_id"))
                     p_delta = evt_p["payload"].get("delta_min")
                     p_delta_str = f"Δ={p_delta:+.1f}min" if p_delta is not None else "Δ=null(late)"
                     _log.info(
