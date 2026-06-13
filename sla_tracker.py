@@ -165,7 +165,7 @@ def process(evt):
     payload = evt.get("payload", {})
 
     if etype == "COURIER_PICKED_UP":
-        ts = payload.get("timestamp", now_iso())
+        ts = payload.get("timestamp") or now_iso()
         upsert_order(oid, {"picked_up_at": ts}, event="SLA_PICKUP")
         _stats["pickup"] += 1
         _log.info(f"pickup {oid} at {ts}")
@@ -173,7 +173,7 @@ def process(evt):
 
     if etype == "COURIER_DELIVERED":
         order = get_order(oid) or {}
-        delivered_ts = payload.get("timestamp", now_iso())
+        delivered_ts = payload.get("timestamp") or now_iso()
         picked_ts = order.get("picked_up_at")
 
         dmin = None

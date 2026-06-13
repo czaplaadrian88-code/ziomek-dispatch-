@@ -424,7 +424,7 @@ def update_from_event(event: dict) -> Optional[dict]:
                 "pickup_address": payload.get("pickup_address"),
                 "delivery_address": payload.get("delivery_address"),
                 "pickup_time_minutes": payload.get("pickup_time_minutes"),
-                "first_seen": payload.get("first_seen", now_iso()),
+                "first_seen": payload.get("first_seen") or now_iso(),
                 "address_id": payload.get("address_id"),
                 "pickup_coords": payload.get("pickup_coords"),
                 "delivery_coords": payload.get("delivery_coords"),
@@ -448,7 +448,7 @@ def update_from_event(event: dict) -> Optional[dict]:
             "pickup_address": payload.get("pickup_address"),
             "delivery_address": payload.get("delivery_address"),
             "pickup_time_minutes": payload.get("pickup_time_minutes"),
-            "first_seen": payload.get("first_seen", now_iso()),
+            "first_seen": payload.get("first_seen") or now_iso(),
             "address_id": payload.get("address_id"),
             "pickup_coords": payload.get("pickup_coords"),
             "delivery_coords": payload.get("delivery_coords"),
@@ -630,7 +630,7 @@ def update_from_event(event: dict) -> Optional[dict]:
         # tym jak sla_tracker już ustawił flag=True. Reset w tym handlerze
         # spowodowałby duplicate alerty (flag→False, następny tick→kolejny alert).
         # Reset jest w ASSIGNED/DELIVERED/REJECTED/RETURNED — bezpieczne punkty.
-        picked = payload.get("timestamp", now_iso())
+        picked = payload.get("timestamp") or now_iso()
         # expected_delivery_by = picked + 35 min (SLA)
         try:
             # panel timestamps sa naive Warsaw, dorzuc UTC jako fallback

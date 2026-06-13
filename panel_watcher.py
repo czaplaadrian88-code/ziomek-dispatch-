@@ -1348,7 +1348,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                                 "event_type": "COURIER_DELIVERED",
                                 "order_id": zid,
                                 "courier_id": _adv_cid,
-                                "payload": {"timestamp": raw.get("czas_doreczenia")},
+                                "payload": {"timestamp": raw.get("czas_doreczenia") or now_iso()},
                             })
                             _log.info(f"DELIVERED {zid}")
                             _advance_plan_on_deliver(
@@ -1678,7 +1678,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         "order_id": str(_oid),
                         "courier_id": _state_cid,
                         "payload": {
-                            "timestamp": _raw_gd.get("czas_doreczenia"),
+                            "timestamp": _raw_gd.get("czas_doreczenia") or now_iso(),
                             "final_location": _deliv_addr_gd,
                             "delivery_address": _deliv_addr_gd,
                         },
@@ -1746,7 +1746,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "order_id": zid,
                     "courier_id": kid,
                     "payload": {
-                        "timestamp": raw.get("czas_doreczenia"),
+                        "timestamp": raw.get("czas_doreczenia") or now_iso(),
                         "final_location": deliv_addr,
                         "delivery_address": deliv_addr,
                     },
