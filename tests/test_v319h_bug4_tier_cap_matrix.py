@@ -130,9 +130,10 @@ check("27. CourierState default tier_bag None",
 print("\n=== V3.19h BUG-4: flag gate behavior ===")
 # ============================================================
 
-# Flag default False — z design ENABLE_V319H_BUG4_TIER_CAP_MATRIX
-check("28. flag default False (pre-flip)",
-      C.ENABLE_V319H_BUG4_TIER_CAP_MATRIX is False)
+# De-erozja 2026-06-13: flaga FLIPNIĘTA na True (common.py:1037 default "1"=True) —
+# V3.19h BUG-4 wdrożony. Stary check „default False (pre-flip)" był pre-flip guardem.
+check("28. flag present (flipped True post-deploy)",
+      C.ENABLE_V319H_BUG4_TIER_CAP_MATRIX is True)
 
 # ============================================================
 print("\n=== V3.19h BUG-4: max bonus stack warning (Q3 GUARDRAIL) ===")

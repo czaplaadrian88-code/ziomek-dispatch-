@@ -14,8 +14,19 @@ Tests:
   6:   state_machine.delete_order akceptuje terminal status
   7:   panel_diff path 8/9 → reason mapping spójny z reconcile L960
 """
+import os
 import sys
+import tempfile
 sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+
+# De-erozja 2026-06-13 (auton/legacy-test-fixes): _diff_and_emit woła teraz
+# state_machine.touch_check_cursor (RMW przez _locked_write → _state_path), który
+# pod pytest RZUCA na ścieżce produkcyjnej (Faza 2b guard). Izolujemy stan do tmpdir
+# (monkeypatch _state_path — sposób zalecony przez guard).
+_TMP_STATE_DIR = tempfile.mkdtemp(prefix="task2a_state_")
+os.environ["DISPATCH_STATE_DIR"] = _TMP_STATE_DIR
+from dispatch_v2 import state_machine as _sm
+_sm._state_path = lambda: os.path.join(_TMP_STATE_DIR, "orders_state.json")
 
 from dispatch_v2 import panel_watcher
 
@@ -128,18 +139,26 @@ t("panel_diff source discriminator (vs reconcile)", test_panel_diff_source_discr
 
 
 def test_panel_diff_no_update_when_emit_dedup():
+    # De-erozja 2026-06-13: ORDER_RETURNED_TO_POOL idzie przez emit_audit (R-04
+    # dual-write), więc to ZWROT emit_audit (None=dedup) gateuje update_from_event
+    # dla tej ścieżki — nie emit. Stary test nadpisywał tylko emit → ścieżka dalej
+    # leciała przez prawdziwy fake_emit (truthy) i update SIĘ wołał. Nadpisujemy
+    # emit_audit (i emit dla spójności), żeby zasymulować dedup całej ścieżki.
     parsed = build_parsed_panel_diff(["PD001"])
     saved_emit = panel_watcher.emit
+    saved_emit_audit = panel_watcher.emit_audit
     def dedup_emit(*a, **kw):
         emitted.append({"event_type": kw.get("event_type") or (a[0] if a else None), **kw})
         return None
     panel_watcher.emit = dedup_emit
+    panel_watcher.emit_audit = dedup_emit
     try:
         panel_watcher._diff_and_emit(parsed, csrf="dummy")
         rtp_updates = [u for u in updated if u["event_type"] == "ORDER_RETURNED_TO_POOL"]
         assert len(rtp_updates) == 0
     finally:
         panel_watcher.emit = saved_emit
+        panel_watcher.emit_audit = saved_emit_audit
 t("idempotent: no update when emit deduped", test_panel_diff_no_update_when_emit_dedup)
 
 
