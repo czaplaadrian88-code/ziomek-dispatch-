@@ -1311,7 +1311,15 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
                 else:
                     _ramp_blocked.append((cand, float(cand.score)))
                     cand.score = NEG_INF
-                    m["v325_new_courier_penalty"] = NEG_INF
+                    # Z-18 (higiena 2026-06-13): score=NEG_INF zostaje (sort/decyzja
+                    # bez zmian), ale NIE wpisujemy magic-number do pola analitycznego
+                    # v325_new_courier_penalty — sentinel -1e9 przeciekał do shadow
+                    # (analityka) + reason breakdown (l.1119 "V3.25_new -1000000000").
+                    # Powód hard-skipu = jawna etykieta v325_skipped_reason (auto-
+                    # serializowana przez prefix "v325_"). penalty=None → reason
+                    # breakdown `or 0` → 0 → odfiltrowany; decyzja identyczna.
+                    m["v325_new_courier_penalty"] = None
+                    m["v325_skipped_reason"] = f"new_courier_ramp_off_profile:{_block}"
                     m["new_courier_ramp"] = {
                         "active": True, "eligible": False, "reason": _block,
                         "deliveries": _deliv, "km_to_pickup": _km, "slot": _slot,
@@ -1330,7 +1338,10 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
 
         if bag_before >= C.V325_NEW_COURIER_BAG_HARD_SKIP_AT:
             cand.score = NEG_INF
-            m["v325_new_courier_penalty"] = NEG_INF
+            # Z-18 (higiena 2026-06-13): patrz blok ramp-block wyżej — score=NEG_INF
+            # decyduje, ale powód idzie jako jawna etykieta, nie -1e9 w polu penalty.
+            m["v325_new_courier_penalty"] = None
+            m["v325_skipped_reason"] = f"new_courier_bag_hard_skip:bag={bag_before}"
             m["v325_new_courier_flag"] = (
                 f"🆕 NOWY KURIER — HARD SKIP (bag={bag_before} >= {C.V325_NEW_COURIER_BAG_HARD_SKIP_AT})"
             )
@@ -1384,6 +1395,9 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
                 _bm["new_courier_ramp"]["solo_rescue"] = True
                 _bm["new_courier_ramp"]["malus"] = _solo
             _bm["v325_new_courier_penalty"] = _solo
+            # Z-18: rescue → kandydat znów proposable, zdejmij etykietę skipu
+            # (analityka nie powinna widzieć "skipped" na proponowanym kurierze).
+            _bm.pop("v325_skipped_reason", None)
             _bm["v325_new_courier_flag"] = (
                 (_bm.get("v325_new_courier_flag") or "")
                 + " — jedyna opcja, proponuję mimo rampy"

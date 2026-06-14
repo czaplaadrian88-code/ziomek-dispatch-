@@ -1,5 +1,27 @@
 """F2.2 C5 full: wave_scoring — adaptive scoring engine (6 features).
 
+══════════════════════════════════════════════════════════════════════════════
+⚠️  DEAD — KEPT FOR REFERENCE (Z-22, higiena 2026-06-13)
+══════════════════════════════════════════════════════════════════════════════
+Ten moduł jest MARTWY w produkcji. Audyt 2026-06-10 (Z-22) potwierdził:
+  • Punkt wejścia `compute_wave_adjustment(...)` NIE jest wywoływany przez ŻADEN
+    moduł produkcyjny (dispatch_pipeline / scoring / shadow_dispatcher) — tylko
+    przez własne testy `tests/test_wave_scoring.py`.
+  • `ENABLE_WAVE_SCORING=False` (common.py) → nawet gdyby był wołany, total=0.
+  • Live `scoring.score_candidate(...)` (dispatch_pipeline:~2975) NIE przekazuje
+    kwargu `wave_adjustment=` → zostaje default 0.0 (kwarg w scoring.py martwy).
+  • `c5_shadow_log.jsonl` NIE jest zapisywany w produkcji (nikt nie woła
+    compute_wave_adjustment → _emit_c5_shadow_diff nigdy nie odpala).
+Funkcjonalność „fali" realizuje DZIŚ inny tor (FILOZ-4): BUG-2 wave-continuation
+w dispatch_pipeline (`v319h_bug2_continuation_bonus`) + R-09 wave-geometric-veto.
+Ten plik = obietnica architektoniczna z F2.2 Sprint C, która nigdy nie weszła.
+
+NIE USUWAMY (CLAUDE.md hard-rule: „NEVER modify wave_scoring.py without explicit
+ACK — Sprint C boundary"); zostaje jako referencja na wypadek reaktywacji C5.
+Reaktywacja wymaga: wpięcia compute_wave_adjustment w pipeline + flip
+ENABLE_WAVE_SCORING + przekazania wave_adjustment do score_candidate + ACK Adriana.
+══════════════════════════════════════════════════════════════════════════════
+
 Per Architecture Spec sekcja 4.1 + 5.C5.
 
 Features (all default OFF — ENABLE_WAVE_SCORING=False → total=0):

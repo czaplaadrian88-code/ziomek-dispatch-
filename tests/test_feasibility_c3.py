@@ -97,7 +97,7 @@ def test_r6_hard_reject_over_35_unchanged():
 
 
 def test_r6_soft_zone_metric_logged():
-    """bag_time w zone (30, 35] → metrics r6_soft_penalty populated."""
+    """bag_time w zone (30, 35] → metrics r6_soft_penalty_c3_legacy populated."""
     _setup_mock(duration_s=60)  # 1 min legs = krótka trasa
     now = datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc)
     # Bag item picked 28 min ago + krótka symulacja → r6_max_bag_time w (30,35].
@@ -108,19 +108,19 @@ def test_r6_soft_zone_metric_logged():
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.0, 23.0), bag=bag, new_order=new_order, now=now,
     )
-    # Should pass (bag_time <=35) BUT have r6_soft_penalty logged
+    # Should pass (bag_time <=35) BUT have r6_soft_penalty_c3_legacy logged
     bt = metrics.get("r6_max_bag_time_min", 0)
     assert 30.0 < bt <= 35.0, f"setup expected bag_time in (30,35]; got {bt}"
     assert metrics.get("r6_soft_zone_active") is True, "soft zone flag should be True"
-    assert metrics.get("r6_soft_penalty", 0) < 0, f"expected negative penalty; got {metrics.get('r6_soft_penalty')}"
+    assert metrics.get("r6_soft_penalty_c3_legacy", 0) < 0, f"expected negative penalty; got {metrics.get('r6_soft_penalty_c3_legacy')}"
     # Penalty formula: -3 * (bag_time - 30)
     expected = round(-3.0 * (bt - 30.0), 2)
-    assert metrics["r6_soft_penalty"] == expected, f"expected {expected}, got {metrics['r6_soft_penalty']}"
+    assert metrics["r6_soft_penalty_c3_legacy"] == expected, f"expected {expected}, got {metrics['r6_soft_penalty_c3_legacy']}"
     return True
 
 
 def test_r6_no_penalty_under_30():
-    """bag_time <= 30 → r6_soft_penalty == 0.0 and r6_soft_zone_active False."""
+    """bag_time <= 30 → r6_soft_penalty_c3_legacy == 0.0 and r6_soft_zone_active False."""
     _setup_mock(duration_s=60)
     now = datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc)
     # Bag picked 20 min ago → bag_time ~21 min (well under 30)
@@ -131,7 +131,7 @@ def test_r6_no_penalty_under_30():
     )
     bt = metrics.get("r6_max_bag_time_min", 0)
     assert bt <= 30.0, f"setup expected bag_time <=30; got {bt}"
-    assert metrics["r6_soft_penalty"] == 0.0
+    assert metrics["r6_soft_penalty_c3_legacy"] == 0.0
     assert metrics["r6_soft_zone_active"] is False
     return True
 
@@ -149,7 +149,7 @@ def test_r6_boundary_exactly_30():
     bt = metrics.get("r6_max_bag_time_min", 0)
     # Empirical: may be 30 or slightly above/below. Key assertion: if == 30, penalty = 0
     if abs(bt - 30.0) < 0.1:
-        assert metrics["r6_soft_penalty"] == 0.0, f"exactly 30 → 0; got {metrics['r6_soft_penalty']}"
+        assert metrics["r6_soft_penalty_c3_legacy"] == 0.0, f"exactly 30 → 0; got {metrics['r6_soft_penalty_c3_legacy']}"
     return True
 
 
@@ -165,8 +165,8 @@ def test_r6_boundary_exactly_35_still_passes():
     bt = metrics.get("r6_max_bag_time_min", 0)
     # If bag_time lands just under 35, should pass + have high soft penalty
     if bt <= 35.0 and bt > 30.0:
-        assert metrics["r6_soft_penalty"] < -10.0, \
-            f"near-35 should have strong penalty; got {metrics['r6_soft_penalty']}"
+        assert metrics["r6_soft_penalty_c3_legacy"] < -10.0, \
+            f"near-35 should have strong penalty; got {metrics['r6_soft_penalty_c3_legacy']}"
         # Verdict is MAYBE (feasibility passed) OR NO from other reasons (SLA, etc.)
         # Not R6 rejection since <= 35
         assert "R6_bag_time_exceeded" not in (reason or ""), \
@@ -186,7 +186,7 @@ def test_r6_solo_no_soft_zone():
     # Solo plan with 1-min legs → delivery time is few minutes. No soft zone trigger.
     assert metrics["r6_is_solo"] is True
     assert metrics["r6_soft_zone_active"] is False
-    assert metrics["r6_soft_penalty"] == 0.0
+    assert metrics["r6_soft_penalty_c3_legacy"] == 0.0
     return True
 
 

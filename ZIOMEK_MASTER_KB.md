@@ -233,34 +233,61 @@ Defer (BUG-3 not confirmed na 40k, wymaga real GPS).
 
 ## II.3 21 reguł — katalog (z Q&A 22.04, finalizacja status)
 
+> **Kolumna „w kodzie" (dodana 2026-06-13, Z-17 higiena):** dla każdej reguły podany
+> stan implementacyjny: `plik:linia` (gdzie żyje), `emergentne` (nie ma osobnej reguły —
+> efekt wynika z innego mechanizmu), `martwe` (kod istnieje, ale OFF/nie-wpięty), lub
+> `OFF-by-directive` (wyłączone decyzją Adriana / anulowane). Linie orientacyjne — kod się
+> przesuwa; szukaj po nazwie symbolu. Live wartości flag = `flags.json` + `common.py`, NIE ten plik.
+
 ### CRITICAL (V3.25 zaimplementowane)
 - **R-01 SCHEDULE-HARDENING** ✅ LIVE — Hard rejects: cid_unknown, pickup_post_shift, dropoff_post_shift+5min. Pre-shift gradient.
+  → **w kodzie:** `feasibility_v2.py` (V325 gate `v325_NO_ACTIVE_SHIFT` / post-shift hard reject, flaga `ENABLE_V325_SCHEDULE_HARDENING` ON) + cold-start synth `courier_resolver.py:~1413` (`ENABLE_AUTO_PROXIMITY_POST_SHIFT_5MIN`, default OFF). LIVE.
 - **R-02 COURIER-SYNC + DISTRICTS** ✅ LIVE — Szymon Sadowski cid=522, Kuba OL→Std+, Krystian inactive.
+  → **w kodzie:** dane/roster, nie pojedyncza funkcja: `kurier_ids.json` + `courier_names.json` + `courier_tiers.json` + `districts_data.py`; egzekucja w `courier_resolver.build_fleet_snapshot` + `manual_overrides.py`. Docelowo tożsamość po cid (lekcje #177/#178). LIVE jako dane.
 - **R-03 TELEGRAM-OPS-PARSER** ✅ LIVE — `/zwolnij /zostaje /wraca /pauza` na grupie.
+  → **w kodzie:** `manual_overrides.py` (`/stop`,`/wraca`,`include/exclude`, TTL) + router w `telegram_approver.py`; wykluczanie PO CID `courier_resolver.dispatchable_fleet` (flaga `ENABLE_EXCLUDE_BY_CID` ON). LIVE.
 - **R-04 NEW-COURIER-CAP** — v1 ABANDONED, **v2.0 peak-quality philosophy LIVE** (01.05): peak_speed_med, on_time_rate, p90 latency. Gold tier: peak_speed_med ≤ 14 min.
+  → **w kodzie:** `dispatch_pipeline.py:_v325_new_courier_penalty` (gradient + SP-B2-RAMPA + solo-rescue; flaga `ENABLE_V325_NEW_COURIER_CAP`). Tiering = `build_v319h_courier_tiers.py` + panel FLT-04. LIVE.
 
 ### HIGH (V3.26 zaimplementowane / w toku)
 - **R-05 SPEED-MULTIPLIER** — tier-based eta multiplier (fast=0.85, normal=1.0, slow=1.20).
+  → **w kodzie:** `common.py:~1792` `V326_SPEED_MULTIPLIER_MAP` (flaga `ENABLE_V326_SPEED_MULTIPLIER` ON) → score komponent `(1−mult)×50`; `DWELL_BY_TIER` = rezyduum ETA. Kalibracja #179. LIVE.
 - **R-06 MULTI-STOP-TRAJECTORY** — angle diff z bag route.
+  → **w kodzie:** **emergentne** — R1 directionality (`r1_avg_pairwise_cosine`, `bonus_r1_corridor`) w `dispatch_pipeline.py` (P1 doktryna 2026-05-10) + `scoring.s_kierunek`. Pierwotny pomysł „angle z bag route" rozdzielony na R1/R-09. LIVE jako R1.
 - **R-07 PICKUP-COLLISION** — gap <15min + diff restaurant = HARD REJECT.
+  → **w kodzie:** **emergentne / zastąpione** — kolizja odbiorów pokryta przez R5 pickup-detour (`bonus_r5_detour`, `R5_DETOUR_PENALTY_PER_KM`) + late-pickup gate + TSP time-windows; osobnego twardego „gap<15min" rejectu brak (r07_chain_eta był shadow). Patrz `dispatch_pipeline.py:~2756` r07_chain (shadow/OFF).
 - **R-08 PICKUP-EXTENSION-NEGOTIATION** — RESTAURANT_EXTENSION_TOLERANCE table. **STATUS: ANULOWANE 24.04** (Adrian explicit).
+  → **w kodzie:** **OFF-by-directive** — nie zaimplementowane (anulowane 24.04). Brak w kodzie.
 - **R-09 WAVE-GEOMETRIC-VETO** — wave_continuation veto jeśli km_from_last_drop > 3.0.
+  → **w kodzie:** `common.py:~1874` `ENABLE_V326_WAVE_GEOMETRIC_VETO` (ON) + `V326_WAVE_VETO_KM_THRESHOLD=3.0`, egzekucja w `dispatch_pipeline.py`. LIVE. (NIE mylić z martwym `wave_scoring.py` — Z-22.)
 - **R-10 FLEET-LOAD-BALANCE** — bag balance z fleet_avg ±1.
+  → **w kodzie:** `scoring.py:~218` fleet overload penalty (`ENABLE_FLEET_OVERLOAD_PENALTY`, `OVERLOAD_THRESHOLD_BAGS`, `OVERLOAD_PENALTY`, `fleet_context.overload_delta`) + `fleet_context.py`. Flaga sprawdź w common.py. Częściowo LIVE.
 - **R-11 TRANSPARENCY-RATIONALE** — `"dlaczego": "<top 3 factors>"` w Telegram.
+  → **w kodzie:** `dispatch_pipeline.py:~1105` budowa „dlaczego" (top-3 factors) + `common.py:724-726` `ENABLE_TRANSPARENCY_ROUTE/REASON/SCORING` (ON); render w `telegram_approver.py` (operational logic, nie scoring). LIVE.
 
 ### MEDIUM (V3.27+ status mixed)
 - **R-12** restaurant-holding-detection — **STATUS: ANULOWANE 24.04**.
+  → **w kodzie:** **OFF-by-directive** — nie zaimplementowane (anulowane 24.04).
 - **R-13** dedicated-courier — DEDICATED_COURIER_MAP +120 (Kacper Sa ↔ Sioux).
+  → **w kodzie:** **martwe / nie wdrożone** — brak `DEDICATED_COURIER_MAP` w produkcji (grep pusty). Idea z Q&A, nigdy nie zakodowana.
 - **R-14** natural-wave-continuation — gap ∈[-2,+2] min = +20.
+  → **w kodzie:** `dispatch_pipeline.py:~165` `v319h_bug2_continuation_bonus` (+30, kalibracja 7d) + guard `_compute_v319h_guard_delta` (`dispatch_pipeline.py:~187`). LIVE (to jest „BUG-2" z FILOZ-4).
 - **R-15** match-source-attribution — pole `"match_source"`.
+  → **w kodzie:** **emergentne** — atrybucja przez `pos_source` / `bundle_level*` / `match_source`-podobne pola w serializerze `shadow_dispatcher._serialize_candidate`. Brak osobnego pola `match_source` jako reguły; pokryte telemetrią. LIVE jako telemetria.
 - **R-16** recent-delivery-decrement — delivered w 10min → fresh_pos -5min.
+  → **w kodzie:** `courier_resolver.py:~282` tier `last_picked_up_recent`/`last_delivered` (świeże <30 min) — pos-freshness przez last_event/store (LAST-KNOWN-POS, Z-06). Wariant „−5min" zastąpiony świeżością GPS. LIVE jako pos-freshness.
 - **R-17** tier-dynamic — quarterly re-tier z Adrian ACK.
+  → **w kodzie:** `r04_apply.py` / `r04_evaluator.py` (tier_evolution + cooldown) + panel FLT-04 (ręczna re-tier, lekcje #177/#179). Półautomat, LIVE.
 - **R-18** districts-complete-sync — normalizacja ulic.
+  → **w kodzie:** `districts_data.py` + `common.drop_zone_from_address` + aliasy ulic; geokod-fix #181/landmine „ulice na M". LIVE (long-tail open).
 
 ### LOW (post Q4)
 - **R-19** late-evening-simple-mode — po 21:00 simplified scoring.
+  → **w kodzie:** **martwe / nie wdrożone** — brak osobnego trybu „po 21:00"; traffic-mult ma buckety wieczorne, ale uproszczonego scoringu nie ma. Pomysł, nie kod.
 - **R-20** post-wave-pos-downgrade — wave ≥3 stops, pos confidence.
+  → **w kodzie:** **emergentne / częściowe** — pos confidence przez `pos_source`/`pos_age_min`/`pos_from_store` (Z-06/Z-09); osobnego „downgrade przy wave≥3" brak. Pokryte freshness.
 - **R-21** extended-shift-awareness — pending bag post-shift = auto /zostaje.
+  → **w kodzie:** **częściowe** — TASK B shift-notifications (`shift_notifications/` + `/koniec`) obsługuje koniec zmiany; auto-`/zostaje` przy pending bagu = nie w pełni wdrożone (manualne [Zostaje dłużej]). Częściowo LIVE.
 
 ## II.4 4 BUGI fundamentalne (z Pliku #1, 21.04)
 

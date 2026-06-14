@@ -171,7 +171,11 @@ def score_candidate(
     bag_size: int = 0,
     oldest_in_bag_min: Optional[float] = None,
     road_km: Optional[float] = None,
-    r6_soft_penalty: float = 0.0,
+    # Z-21 (higiena 2026-06-13): rename r6_soft_penalty → r6_soft_penalty_c3_legacy.
+    # MARTWY kwarg: dodawany do score tylko gdy DEPRECATE_LEGACY_HARD_GATES=True
+    # (stała=False) i NIGDY nie przekazywany przez live caller (dispatch_pipeline).
+    # Nazwa kolidowała z ŻYWĄ karą dispatch_pipeline._r6_soft_penalty (-8/min).
+    r6_soft_penalty_c3_legacy: float = 0.0,
     wave_adjustment: float = 0.0,
     fleet_context=None,  # V3.18: FleetContext | None (duck-typed, unused when flag off)
 ) -> dict:
@@ -199,9 +203,9 @@ def score_candidate(
     # Flag False → param ignored, zero behavior change (default).
     # Flag True → penalty (negative value from feasibility metrics) subtracts from total.
     r6_penalty_applied = 0.0
-    if DEPRECATE_LEGACY_HARD_GATES and r6_soft_penalty != 0.0:
-        total += r6_soft_penalty
-        r6_penalty_applied = r6_soft_penalty
+    if DEPRECATE_LEGACY_HARD_GATES and r6_soft_penalty_c3_legacy != 0.0:
+        total += r6_soft_penalty_c3_legacy
+        r6_penalty_applied = r6_soft_penalty_c3_legacy
 
     # F2.2 C5 full (2026-04-18): wave_adjustment from wave_scoring module, gated by flag.
     # Flag False → kwarg ignored, zero behavior change.
