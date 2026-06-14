@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 
 C2_PER_ORDER_THRESHOLD_MIN = 35.0
 C2_SHADOW_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/c2_shadow_log.jsonl"
+R6_BREACH_SHADOW_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/r6_breach_shadow.jsonl"
 
 
 # Hard cap per D3 MAX_BAG_SANITY_CAP (=8). F1.9b: R3 dynamic cap został
@@ -280,6 +281,29 @@ def check_per_order_35min_rule(
             details["violations"].append((oid, round(float(elapsed), 2)))
     passes = len(details["violations"]) == 0
     return (passes, details)
+
+
+def _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, violations, metrics) -> None:
+    """Append R6_HARD_REJECT event to dispatch_state/r6_breach_shadow.jsonl (log-only).
+
+    Mierzy falszywe-odrzuty R6: offline join new_order_id -> sla_log (czy realnie
+    dostarczono <=35 min). Zero wplywu na decyzje — append-only, fail-soft.
+    """
+    event = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event_type": "R6_HARD_REJECT",
+        "new_order_id": getattr(new_order, "order_id", None),
+        "worst_oid": worst_oid,
+        "worst_bag_time_min": round(float(worst_bt), 1),
+        "n_violations": len(violations),
+        "r6_max_bag_time_min": metrics.get("r6_max_bag_time_min"),
+    }
+    try:
+        with open(R6_BREACH_SHADOW_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+            f.flush()
+    except Exception as e:
+        log.warning(f"R6 breach shadow log write failed: {e}")
 
 
 def _emit_c2_shadow_diff_event(
@@ -1058,6 +1082,8 @@ def check_feasibility_v2(
     # Picked_up orders są tracked ale NIE rejected (kurier kończy w drodze).
     if r6_per_order_violations:
         worst_oid, worst_bt = max(r6_per_order_violations, key=lambda v: v[1])
+        if C.flag("ENABLE_R6_BREACH_SHADOW_LOG", False):
+            _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, r6_per_order_violations, metrics)
         return (
             "NO",
             f"R6_per_order_>35min ({worst_oid} {worst_bt:.1f}min, "
