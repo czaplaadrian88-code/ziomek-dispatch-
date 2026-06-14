@@ -1820,6 +1820,36 @@ def _early_bird_threshold_min() -> float:
     return float(C.load_flags().get("EARLY_BIRD_THRESHOLD_MIN", C.EARLY_BIRD_THRESHOLD_MIN))
 
 
+# EARLYBIRD-01 (2026-06-14): forward-shadow domykający lukę „deferowalności".
+# Problem: early_bird KOORD zwiera obwód PRZED budową puli feasibility → nie wiemy
+# czy w T-30 zlecenie byłoby rozwiązywalne (kandydat istnieje) czy to realna eskalacja.
+# Shadow: gdy early_bird odpala, re-uruchom assess_order z _bypass_early_bird=True
+# (kontrfaktyk „co gdyby przepuścić do feasibility teraz") i zaloguj wynik. LOG-ONLY —
+# live verdict POZOSTAJE KOORD. Flaga OFF default. Pomiar/decyzja: VERDICT_c_redux_measurement_2026-06-14.
+EARLYBIRD_T30_SHADOW_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/earlybird_shadow.jsonl"
+
+
+def _earlybird_t30_shadow_enabled() -> bool:
+    """EARLYBIRD-01: czy zbierać forward-shadow kontrfaktyk early_bird (flags.json hot, OFF default)."""
+    return bool(C.load_flags().get("ENABLE_EARLYBIRD_T30_SHADOW", False))
+
+
+def _append_earlybird_t30_shadow(entry: dict) -> None:
+    """EARLYBIRD-01 forward-shadow append (atomic 'a', fail-soft — wzór _append_difficult_case_log)."""
+    try:
+        import json as _json
+        import os as _os
+        path = getattr(C, "EARLYBIRD_T30_SHADOW_LOG_PATH", EARLYBIRD_T30_SHADOW_LOG_PATH)
+        _os.makedirs(_os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            f.write(_json.dumps(entry, default=str, ensure_ascii=False) + "\n")
+    except Exception as _e:
+        try:
+            log.warning(f"_append_earlybird_t30_shadow failed: {_e}")
+        except Exception:
+            pass
+
+
 def _min_propose_score() -> float:
     """SCALE-01: PROPOSE-quality floor — flags.json (hot) → common (=-100.0)."""
     return float(C.load_flags().get("MIN_PROPOSE_SCORE", C.MIN_PROPOSE_SCORE))
@@ -2352,6 +2382,7 @@ def assess_order(
     *,
     pending_queue: Optional[list] = None,
     demand_context: Optional[dict] = None,
+    _bypass_early_bird: bool = False,
 ) -> PipelineResult:
     """Public assess_order wrapper — calls _assess_order_impl + observability hook.
 
@@ -2361,6 +2392,7 @@ def assess_order(
     result = _assess_order_impl(
         order_event, fleet_snapshot, restaurant_meta, now,
         pending_queue=pending_queue, demand_context=demand_context,
+        _bypass_early_bird=_bypass_early_bird,
     )
     # MP-#13 (2026-05-08): L3 — snapshot OSRM degraded state at assess time.
     # Caller (shadow_dispatcher serializer + telegram_approver format_proposal) reads.
@@ -2418,6 +2450,8 @@ def _assess_order_impl(
     # When ENABLE_PENDING_QUEUE_VIEW=True AND kwargs=None → auto-fetch providers.
     pending_queue: Optional[list] = None,
     demand_context: Optional[dict] = None,
+    # EARLYBIRD-01 (2026-06-14): True → pomiń early_bird short-circuit (kontrfaktyk shadow).
+    _bypass_early_bird: bool = False,
 ) -> PipelineResult:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -2533,10 +2567,41 @@ def _assess_order_impl(
     )
 
     # Early bird → KOORD
-    if pickup_at_for_early_bird is not None:
+    if pickup_at_for_early_bird is not None and not _bypass_early_bird:
         pu = pickup_at_for_early_bird if pickup_at_for_early_bird.tzinfo else pickup_at_for_early_bird.replace(tzinfo=WARSAW)
         minutes_ahead = (pu.astimezone(timezone.utc) - now).total_seconds() / 60.0
         if minutes_ahead >= _early_bird_threshold_min():  # SCALE-01: flags.json hot
+            # EARLYBIRD-01 forward-shadow: kontrfaktyk „co gdyby przepuścić do feasibility
+            # teraz" (bez early_bird short-circuit). LOG-ONLY, flaga OFF default, fail-soft
+            # (defense-in-depth — błąd shadow NIGDY nie psuje live KOORD). _bypass_early_bird=True
+            # zapobiega rekurencji (max głębokość 1).
+            if _earlybird_t30_shadow_enabled():
+                try:
+                    # Kontrfaktyk woła _assess_order_impl BEZPOŚREDNIO (nie wrapper) —
+                    # inaczej observability hook podwójnie zalogowałby zlecenie do
+                    # candidate_decisions.jsonl (= strumień, który czyta pomiar EARLYBIRD).
+                    _cf = _assess_order_impl(
+                        order_event, fleet_snapshot, restaurant_meta, now,
+                        pending_queue=pending_queue, demand_context=demand_context,
+                        _bypass_early_bird=True,
+                    )
+                    _append_earlybird_t30_shadow({
+                        "ts": now.isoformat(),
+                        "order_id": order_id,
+                        "restaurant": restaurant,
+                        "minutes_ahead": round(minutes_ahead, 1),
+                        "cf_verdict": _cf.verdict,
+                        "cf_reason": _cf.reason,
+                        "cf_pool_total": _cf.pool_total_count,
+                        "cf_pool_feasible": _cf.pool_feasible_count,
+                        "cf_best_cid": (_cf.best.courier_id if _cf.best else None),
+                        "cf_best_score": (round(_cf.best.score, 2) if _cf.best else None),
+                        # would_resolve = przepuszczenie dałoby realną PROPOZYCJĘ (nie kolejny
+                        # KOORD/SKIP/NO) → kandydat do auto-resolve w T-30 zamiast eskalacji.
+                        "would_resolve": (_cf.verdict == "PROPOSE"),
+                    })
+                except Exception as _eb_e:
+                    log.warning(f"earlybird_t30_shadow failed oid={order_id}: {_eb_e}")
             return PipelineResult(
                 order_id=order_id,
                 verdict="KOORD",
