@@ -229,7 +229,8 @@ def _send_telegram(text: str) -> bool:
     """Defensive Telegram send via existing utility. Never raises."""
     try:
         from dispatch_v2 import telegram_utils
-        return telegram_utils.send_admin_alert(text)
+        # Awaria infra = ZAWSZE HIGH → główny bot, nigdy nie odcinane do kafla.
+        return telegram_utils.send_admin_alert(text, source="alert_onfailure", priority="high")
     except Exception as e:
         print(f"[alert_onfailure] Telegram send failed: {type(e).__name__}: {e}", file=sys.stderr)
         return False
