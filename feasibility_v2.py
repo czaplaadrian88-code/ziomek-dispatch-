@@ -826,6 +826,61 @@ def check_feasibility_v2(
     except Exception as _orc_e:
         log.warning(f"OBJ_REPLAY_CAPTURE_HOOK_FAIL {type(_orc_e).__name__}: {_orc_e}")
 
+    # Sprint OBJ FOOD-AGE SHADOW (2026-06-14): forward comparator BUG#5. Gdy flaga
+    # shadow ON, plan produkcyjny = ortools multi-stop, a fix NIE jest jeszcze
+    # flipnięty produkcyjnie — re-licz ten sam plan z food-age ON (thread-local
+    # override, race-safe w ThreadPoolExecutor) i zaloguj rozbieżność OFF↔ON.
+    # NIE zmienia decyzji (override tylko wokół re-computu). Defense-in-depth:
+    # NIGDY nie przerywa feasibility (try/except). Gate ortools-multistop trzyma
+    # koszt (zdublowany solve) wyłącznie tam gdzie fix może coś zmienić.
+    try:
+        if (C.decision_flag("ENABLE_OBJ_DELIVERY_FOOD_AGE_SHADOW")
+                and not C.decision_flag("ENABLE_OBJ_DELIVERY_FOOD_AGE")
+                and plan is not None and plan.strategy == "ortools"
+                and plan.sequence and len(plan.sequence) >= 2):
+            with C.food_age_override(True):
+                _fa_plan = simulate_bag_route_v2(
+                    courier_pos, bag, new_order, now=now, sla_minutes=sla_minutes,
+                    base_sequence=base_sequence, earliest_departure=earliest_departure,
+                    dwell_pickup=_dwell_pickup, dwell_dropoff=_dwell_dropoff,
+                    drive_speed_mult=_drive_speed_mult,
+                )
+            from dispatch_v2.route_metrics import compute_plan_metrics as _cpm_fa
+            _on_m = _cpm_fa(_fa_plan, _dwell_pickup)
+
+            def _stop_order(_p):
+                # Pełna kolejność PRZYSTANKÓW (odbiory+dostawy interleaved). UWAGA:
+                # plan.sequence to kolejność DOSTAW — w BUG#5 identyczna A vs B;
+                # różnica jest w interleaving odbiorów → porównuj pełną kolejność.
+                _ev = [(_t, "P", _o) for _o, _t in (_p.pickup_at or {}).items()]
+                _ev += [(_t, "D", _o) for _o, _t in (_p.predicted_delivered_at or {}).items()]
+                _ev.sort(key=lambda e: e[0])
+                return [f"{_k}:{_o}" for _t, _k, _o in _ev]
+
+            _off_order, _on_order = _stop_order(plan), _stop_order(_fa_plan)
+            metrics["food_age_shadow"] = {
+                "changed": _off_order != _on_order,
+                "off_order": _off_order,
+                "on_order": _on_order,
+                "deliv_seq": list(plan.sequence),
+                "on_strategy": _fa_plan.strategy,
+                "off_thermal_max": metrics.get("objm_max_thermal_age_min"),
+                "on_thermal_max": _on_m.get("max_thermal_age_min"),
+                "off_idle": metrics.get("objm_idle_total_min"),
+                "on_idle": _on_m.get("idle_total_min"),
+                "off_span": metrics.get("objm_route_span_min"),
+                "on_span": _on_m.get("route_span_min"),
+                "off_r6_breach": metrics.get("objm_r6_breach_count"),
+                "on_r6_breach": _on_m.get("r6_breach_count"),
+                "off_r6_breach_max": metrics.get("objm_r6_breach_max_min"),
+                "on_r6_breach_max": _on_m.get("r6_breach_max_min"),
+                "off_sla_viol": plan.sla_violations,
+                "on_sla_viol": _fa_plan.sla_violations,
+                "coeff": getattr(C, "OBJ_DELIVERY_FOOD_AGE_COEFF", None),
+            }
+    except Exception as _fa_e:
+        log.warning(f"FOOD_AGE_SHADOW_FAIL {type(_fa_e).__name__}: {_fa_e}")
+
     # Sprint OBJ F3 / BUG-5 (2026-05-18): pomiar R6 (metryki r6_*) PRZENIESIONY
     # PRZED sla-return. Pre-fix: kandydat odrzucony na plan-level sla_violations
     # robił return przed blokiem R6 → r6_max_bag_time_min / r6_bag_size /

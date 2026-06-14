@@ -2,6 +2,8 @@
 import json
 import logging
 import os
+import threading
+import contextlib
 from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -71,6 +73,7 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD",
     "ENABLE_OBJ_PICKUP_FRESHNESS",
     "ENABLE_OBJ_DELIVERY_FOOD_AGE",
+    "ENABLE_OBJ_DELIVERY_FOOD_AGE_SHADOW",
     "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE",
     "ENABLE_DIFFICULT_CASE_KOORD_REDIRECT",
     # SP-B2-SYNCWORKA + PREPBIAS-konsumpcja (2026-06-11): flagi decyzyjne
@@ -163,12 +166,37 @@ _FINGERPRINT_EXTRA_FLAGS = (
 )
 
 
+# OBJ FOOD-AGE SHADOW (2026-06-14): thread-local override flagi food-age dla
+# forward comparatora. Pipeline liczy kandydatów w ThreadPoolExecutor → globalny
+# toggle byłby race-unsafe; thread-local izoluje per-wątek. food_age_override(True)
+# wymusza ON tylko wokół re-computu shadow, NIE ruszając decyzji produkcyjnej.
+_FOOD_AGE_TL = threading.local()
+
+
+@contextlib.contextmanager
+def food_age_override(value):
+    """Wymuś ENABLE_OBJ_DELIVERY_FOOD_AGE=value w tym wątku na czas bloku."""
+    _prev = getattr(_FOOD_AGE_TL, "override", None)
+    _FOOD_AGE_TL.override = value
+    try:
+        yield
+    finally:
+        _FOOD_AGE_TL.override = _prev
+
+
 def decision_flag(name: str) -> bool:
     """Flaga decyzyjna wspólna cross-proces: flags.json → stała modułu → False.
 
     Stała modułu czytana przez globals() W CZASIE WYWOŁANIA (nie importu) —
     testy patchujące common.ENABLE_X działają, o ile klucza nie ma w flags.json.
+
+    Wyjątek: ENABLE_OBJ_DELIVERY_FOOD_AGE respektuje thread-local override
+    (food_age_override) — forward shadow comparator wymusza ON per-wątek.
     """
+    if name == "ENABLE_OBJ_DELIVERY_FOOD_AGE":
+        _ov = getattr(_FOOD_AGE_TL, "override", None)
+        if _ov is not None:
+            return bool(_ov)
     return bool(load_flags().get(name, globals().get(name, False)))
 
 
@@ -2567,6 +2595,12 @@ ENABLE_OBJ_DELIVERY_FOOD_AGE = _os.environ.get(
     "ENABLE_OBJ_DELIVERY_FOOD_AGE", "0") == "1"
 OBJ_DELIVERY_FOOD_AGE_COEFF = float(_os.environ.get(
     "OBJ_DELIVERY_FOOD_AGE_COEFF", "6.0"))
+# Forward shadow comparator (2026-06-14): gdy ON, feasibility_v2 re-liczy plan
+# best/kandydatów ortools-multistop z food-age ON (thread-local override) i
+# loguje rozbieżność OFF↔ON w metrics["food_age_shadow"] — bez zmiany decyzji
+# produkcyjnej. Default OFF. Aktywacja: flip + restart dispatch-shadow.
+ENABLE_OBJ_DELIVERY_FOOD_AGE_SHADOW = _os.environ.get(
+    "ENABLE_OBJ_DELIVERY_FOOD_AGE_SHADOW", "0") == "1"
 
 # ============================================================
 # V3.28 FAZA 3 ścieżka A — time_matrix DWELL correction (2026-05-11)

@@ -230,7 +230,10 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        # bundle_fit_marginal_min (bonus_bundle_fit_shadow_delta
                        # przez prefix bonus_; fix_c_additive_pen_shadow przez
                        # explicit fix_c_* niżej) — LOCATION A+B.
-                       "bundle_fit_")
+                       "bundle_fit_",
+                       # OBJ FOOD-AGE SHADOW (2026-06-14): food_age_shadow dict
+                       # (forward comparator BUG#5) — LOCATION A+B przez propagate.
+                       "food_age_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:

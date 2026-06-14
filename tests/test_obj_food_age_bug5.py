@@ -120,3 +120,43 @@ def test_fa_t3_flag_reconfigures_soft_deadline_anchor():
     on_coeff = {v[1] for v in cap_on[0]["delivery_soft_deadlines"] if v is not None}
     assert off_coeff == {common.OBJ_R6_DEADLINE_PENALTY_COEFF}
     assert on_coeff == {common.OBJ_DELIVERY_FOOD_AGE_COEFF}
+
+
+# ─── Forward shadow comparator: thread-local override ──────────────────
+
+def test_fa_t4_food_age_override_toggles_and_restores():
+    """food_age_override wymusza flagę per-wątek i przywraca (też po wyjątku)."""
+    assert common.decision_flag("ENABLE_OBJ_DELIVERY_FOOD_AGE") is False
+    with common.food_age_override(True):
+        assert common.decision_flag("ENABLE_OBJ_DELIVERY_FOOD_AGE") is True
+    assert common.decision_flag("ENABLE_OBJ_DELIVERY_FOOD_AGE") is False
+    try:
+        with common.food_age_override(True):
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+    assert common.decision_flag("ENABLE_OBJ_DELIVERY_FOOD_AGE") is False, \
+        "override musi się przywrócić nawet po wyjątku"
+
+
+def test_fa_t5_override_is_the_live_toggle_comparator_uses():
+    """Komparator liczy wariant ON przez food_age_override(True) — pod override
+    silnik zwraca B, bez/OFF → A. Dowód że override steruje realnym planem."""
+    courier_pos, bag, new_order, now = _jakub_case()
+
+    with common.food_age_override(True):
+        plan_on = rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
+    plan_off = rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
+
+    on_second = _ordered_events(plan_on)[1]
+    off_second = _ordered_events(plan_off)[1]
+    assert on_second[1] == "DROP" and on_second[2] == "480581", \
+        f"override(True) → B (2-gi = dostawa Piastowska); got {on_second}"
+    assert off_second[1] == "PICKUP" and off_second[2] == "480568", \
+        f"bez override → A (2-gi = odbiór Paradiso); got {off_second}"
+    # interleaving się różni mimo identycznej kolejności DOSTAW (deliveries-only)
+    on_order = [(e[1], e[2]) for e in _ordered_events(plan_on)]
+    off_order = [(e[1], e[2]) for e in _ordered_events(plan_off)]
+    assert on_order != off_order
+    assert list(plan_on.sequence) == list(plan_off.sequence), \
+        "kolejność DOSTAW identyczna w A i B — dowód że 'changed' musi patrzeć na interleaving"
