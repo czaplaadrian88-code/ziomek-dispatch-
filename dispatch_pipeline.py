@@ -1032,6 +1032,34 @@ def _v328_heuristic_post_shift_skip(cs, order_event, now, fleet_speed_kmh):
         return False
 
 
+# DATA-DRIVEN SPEED (2026-06-14): mtime-cache loadera realnej prędkości per cid
+# (tools/build_speed_tiers.py — solo-legi, OSRM). Do SHADOW re-pointu V326
+# (owner-tier ≠ prędkość, test ρ−0.29). NIGDY nie mutuje stanu.
+_SPEED_DATA_PATH = "/root/.openclaw/workspace/dispatch_state/courier_speed_data.json"
+_speed_data_cache = {"mtime": None, "data": None, "ref_kmh": None}
+
+
+def _load_speed_data():
+    """Data-driven prędkość per cid (mtime-cache); None gdy brak/zły plik/brak ref.
+    Zwraca cache {"data": {cid:{median_kmh,n_solo,...}}, "ref_kmh": std-median}."""
+    try:
+        mt = os.path.getmtime(_SPEED_DATA_PATH)
+    except OSError:
+        return None
+    if _speed_data_cache["mtime"] != mt:
+        try:
+            with open(_SPEED_DATA_PATH, encoding="utf-8") as fh:
+                d = json.load(fh)
+            _speed_data_cache["data"] = d.get("couriers") if isinstance(d, dict) else None
+            _speed_data_cache["ref_kmh"] = (d.get("_meta") or {}).get("std_tier_median_kmh")
+            _speed_data_cache["mtime"] = mt
+        except Exception:
+            return None
+    if not _speed_data_cache["data"] or not _speed_data_cache["ref_kmh"]:
+        return None
+    return _speed_data_cache
+
+
 def _v326_speed_multiplier_adjust(feasible: list, order_id=None) -> list:
     """V3.26 STEP 2 (R-05 SPEED-MULTIPLIER).
 
@@ -1073,6 +1101,21 @@ def _v326_speed_multiplier_adjust(feasible: list, order_id=None) -> list:
         m["v326_speed_tier_used"] = tier_used
         m["v326_speed_multiplier"] = mult
         m["v326_speed_score_adjustment"] = round(adjustment, 2)
+        # DATA-DRIVEN SPEED shadow (2026-06-14): co dałby mnożnik z REALNEJ
+        # prędkości (solo-legi, n_solo≥5) zamiast owner-tieru; logujemy deltę —
+        # NIE aplikujemy do score (telemetria pod replay; v326_ auto-serializuje).
+        # Try/except: NIGDY nie wywróci hot-path (Lekcja #32).
+        try:
+            _sd = _load_speed_data()
+            _ci = _sd["data"].get(str(cand.courier_id)) if _sd else None
+            if _ci and (_ci.get("n_solo") or 0) >= 5 and _ci.get("median_kmh"):
+                _dd_mult = min(1.25, max(0.85, float(_sd["ref_kmh"]) / float(_ci["median_kmh"])))
+                _dd_adj = round((1.0 - _dd_mult) * factor, 2)
+                m["v326_speed_dd_multiplier"] = round(_dd_mult, 3)
+                m["v326_speed_dd_adjustment_shadow"] = _dd_adj
+                m["v326_speed_dd_delta"] = round(_dd_adj - adjustment, 2)
+        except Exception:
+            pass
     # Re-sort feasible by score desc (tie-break corridor dev — pattern z _v325)
     feasible.sort(
         key=lambda c: (
@@ -4001,6 +4044,24 @@ def _assess_order_impl(
                 and len(bag_raw) >= int(getattr(C, "LOADGOV_BAG_MIN", 3))):
             bonus_loadgov_shadow_delta = float(getattr(C, "LOADGOV_BAG_PENALTY", -40.0))
 
+        # === P(breach)-GOVERNANCE shadow (2026-06-14): kandydat na zastąpienie
+        # binarnego progu load (test 06-14: knee NIE istnieje, mean ewma breach≈
+        # on-time) ciągłym P(breach) z pln_objective (km+worek dominują, load
+        # najsłabszy 0.090). Compute+log ZAWSZE; NIE dodawane do final_score =
+        # czysta telemetria pod replay-kalibrację (aplikacja = osobny flip + ACK).
+        # Defensive try/except → 0.0 (NIGDY nie wywróci hot-path, Lekcja #32).
+        pbreach_gov = None
+        bonus_pbreach_gov_shadow_delta = 0.0
+        try:
+            _km_pb = repo_km if repo_km is not None else km_to_pickup_haversine
+            if _km_pb is not None and loadgov_ewma is not None:
+                pbreach_gov = pln_objective.p_breach(
+                    float(_km_pb), len(bag_raw) + 1, float(loadgov_ewma))
+                bonus_pbreach_gov_shadow_delta = round(
+                    -float(getattr(C, "PBREACH_GOV_COEFF", 40.0)) * pbreach_gov, 2)
+        except Exception as _pbg_e:
+            log.warning(f"pbreach_gov shadow fail cid={cid} order={order_id}: {_pbg_e!r}")
+
         # === R1 progresywny + V319H guard SHADOW (2026-05-28) ===
         # Cele:
         #   R1: cosine < -0.3 dostaje progresywnie mocniejszą karę niż flat
@@ -4356,6 +4417,10 @@ def _assess_order_impl(
             "loadgov_active_orders": loadgov_orders,
             "loadgov_active_couriers": loadgov_couriers,
             "bonus_loadgov_shadow_delta": round(bonus_loadgov_shadow_delta, 2),
+            # P(breach)-GOVERNANCE shadow (2026-06-14): ciągły P(breach) jako
+            # kandydat-zamiennik binarnego governora. loadgov_/bonus_ auto-prefix.
+            "loadgov_pbreach": round(pbreach_gov, 4) if pbreach_gov is not None else None,
+            "bonus_pbreach_gov_shadow_delta": bonus_pbreach_gov_shadow_delta,
             # SP-B2-ZARAZWOLNY (2026-06-11): telemetria B2 — busy kończący
             # ≤12 min (z zapisanego planu). soon_free_* prefix LOCATION A+B.
             "soon_free_eligible": bool(soon_free_probe and soon_free_probe.get("eligible")),

@@ -182,12 +182,32 @@ def _std(vals: list) -> float:
     return (sum((v - mean) ** 2 for v in vals) / (n - 1)) ** 0.5
 
 
+# PREP-VARIANCE (2026-06-14): próg IQR [min] dla flagi "high-variance kitchen".
+# Test historyczny: Spearman(IQR, breach)=+0.42 (istotne) vs bias_med +0.17
+# (nieistotne) — ogon bije medianę 2.5×; top-decyl IQR≈37.5 (lift 2.2×), dolny≈15.7.
+HIGH_VAR_IQR_MIN = 25.0
+
+
+def _pct(sorted_vals: list, q: float) -> float:
+    """Percentyl q∈[0,1] (nearest-rank) z POSORTOWANEJ listy."""
+    if not sorted_vals:
+        return 0.0
+    idx = min(len(sorted_vals) - 1, max(0, int(round(q * (len(sorted_vals) - 1)))))
+    return float(sorted_vals[idx])
+
+
 def _cell(vals: list) -> dict:
     sv = sorted(vals)
+    iqr = round(_pct(sv, 0.75) - _pct(sv, 0.25), 1)
     return {
         "bias_med": round(_median(sv), 1),
         "n": len(sv),
         "std": round(_std(sv), 1),
+        # PREP-VARIANCE: percentyle + flaga zmiennej kuchni (konsument shadow).
+        "p80": round(_pct(sv, 0.80), 1),
+        "p90": round(_pct(sv, 0.90), 1),
+        "iqr": iqr,
+        "high_variance": iqr >= HIGH_VAR_IQR_MIN,
     }
 
 
