@@ -284,16 +284,18 @@ def check_per_order_35min_rule(
 
 
 def _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, violations, metrics,
-                           bag_total=None, now=None) -> None:
+                           bag_total=None, now=None, tier=None) -> None:
     """Append R6_HARD_REJECT event to dispatch_state/r6_breach_shadow.jsonl (log-only).
 
     Mierzy falszywe-odrzuty R6: offline join new_order_id -> sla_log (czy realnie
     dostarczono <=35 min). Zero wplywu na decyzje — append-only, fail-soft.
 
-    Handoff 14.06 (bag<=3): dla worka <=3 dorzuca skalibrowany p80 bag-time
-    (`bag_time_calibrated_p80`) + `would_pass_calibrated` (cal<=35). LOG-ONLY,
-    NIE podmienia decyzji (gate live = osobna flaga, Krok 3). Mapa moze byc
-    zamrozona do 04:35 — eta_quantile_calibrate fail-soft (None=brak mapy).
+    14.06 TIER-AWARE: loguje `tier` kandydata + skalibrowany p80 bag-time dla
+    bag<=6 (obserwowalnosc incl. gold-bag-5, ktora chcemy zwalidowac na zywo).
+    `tier_cap` = 4 dla gold, 3 dla reszty (reguła z replay v3 tier-aware:
+    gold bezpieczny @bag4, std/slow/new regresuja; gold-bag-5 zbieramy dalej).
+    `within_tier_cap` = czy ten odrzut bylby w zasiegu live-gate. LOG-ONLY,
+    gate live = osobna flaga (Krok 3). eta_quantile_calibrate fail-soft.
     """
     event = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -304,13 +306,20 @@ def _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, violations, metrics,
         "n_violations": len(violations),
         "r6_max_bag_time_min": metrics.get("r6_max_bag_time_min"),
         "bag_total": bag_total,
+        "tier": tier,
+        "restaurant": getattr(new_order, "restaurant", None),
+        "delivery_coords": getattr(new_order, "delivery_coords", None)
+        or getattr(new_order, "drop_coords", None),
     }
-    if bag_total is not None and bag_total <= 3:
+    if bag_total is not None and bag_total <= 6:
         try:
             from dispatch_v2.calib_maps import eta_quantile_calibrate
             cal = eta_quantile_calibrate(worst_bt, now=now, quantile="p80")
             event["bag_time_calibrated_p80"] = cal
             event["would_pass_calibrated"] = (cal is not None and cal <= 35.0)
+            _tcap = 4 if tier == "gold" else 3
+            event["tier_cap"] = _tcap
+            event["within_tier_cap"] = (bag_total <= _tcap)
         except Exception as _ce:
             event["bag_time_calibrated_p80"] = None
             log.warning(f"R6 breach shadow calib failed: {type(_ce).__name__}: {_ce}")
@@ -1100,7 +1109,7 @@ def check_feasibility_v2(
         worst_oid, worst_bt = max(r6_per_order_violations, key=lambda v: v[1])
         if C.flag("ENABLE_R6_BREACH_SHADOW_LOG", False):
             _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, r6_per_order_violations, metrics,
-                                   bag_total=len(bag) + 1, now=now)
+                                   bag_total=len(bag) + 1, now=now, tier=courier_tier)
         return (
             "NO",
             f"R6_per_order_>35min ({worst_oid} {worst_bt:.1f}min, "
