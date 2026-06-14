@@ -120,6 +120,18 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_PLN_COURIER_PAY",
 )
 
+# Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
+# 2026-06-14 (gold-gate ETA + r6-breach shadow + PLN A/B). Konsumpcja runtime
+# idzie przez C.flag()/decision_flag() z flags.json (KANON live), więc te stałe
+# NIE zmieniają zachowania produkcji — pełnią rolę: (1) bezpieczny fallback OFF
+# gdy flags.json nie ma klucza, (2) inwariant ETAP4 (test_all_etap4_flags_have_
+# module_const) + test-izolacja (conftest wycina klucze z tmp flags.json →
+# determinizm suity). Wzorzec jak ENABLE_AUTO_ASSIGN = False (l.691, ta sama era).
+ENABLE_ETA_QUANTILE_R6_BAGCAP = False
+ENABLE_R6_BREACH_SHADOW_LOG = False
+ENABLE_E2_PLN_AB = False
+ENABLE_PLN_COURIER_PAY = False
+
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
 # startowych werdyktu razem z flagą, hot-reload bez restartu; fallback = stała
 # modułu/env). Test-izolacja: conftest wycina te klucze z tmp-kopii flags.json
