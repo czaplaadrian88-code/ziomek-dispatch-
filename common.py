@@ -2596,18 +2596,21 @@ OBJ_PICKUP_FRESHNESS_PENALTY_COEFF = float(_os.environ.get(
 # = gentle. Monotonicznie zawiera cel R6 (min food-age = min delivery-time = min
 # breach). MUSI być na wymiarze Time (nie nowy wymiar bez czekania — pure-transit
 # wariant odwraca sygnał: ignoruje 12-min postój który JEST przyczyną). Soft —
-# nie wpływa na feasibility. Coeff w jednostkach SetCumulVarSoftUpperBound:
-# kara = coeff×100 per min food-age; 1 min jazdy = 1000 w arc-cost → coeff=6 ≈
-# 0.6 min jazdy per min food-age (gentle: łamie remisy kolejności, NIE dominuje;
-# replay Jakub flip A→B wymaga >~2.7). Default OFF (deploy-safe). Workflow:
-# OFF → shadow → replay 7-14d (czy nie psuje R6/SLA gdzie indziej) → flip.
-# ⚠ gdy ON: delivery bound przechodzi z R6 (ready+sla, coeff 100) na food-age
-# (ready, coeff niżej) — R6 i food-age = dwie KONFIGURACJE jednej dźwigni
-# (mutually exclusive per węzeł, bo OR-Tools soft-bound overwrite nie stackuje).
+# nie wpływa na feasibility. ⚠ REDESIGN 2026-06-14 ADDITIVE: food-age NIE zastępuje
+# R6 — to OSOBNY soft bound (wymiar FoodAge==Time w tsp_solver), ADDYTYWNY do R6.
+# R6 (ready+sla, coeff 100) chroni SLA; food-age (ready, sla=0, gentle) nudguje
+# świeżość TYLKO gdzie R6 obojętne. (Wersja ZASTĘPUJĄCA R6 regresowała SLA 9.4% /
+# thermal −5.48 na replay n=891.) Coeff w jedn. SetCumulVarSoftUpperBound: kara =
+# coeff×100 per min; 1 min jazdy = 1000 w arc-cost → coeff=3 ≈ 0.3 min jazdy per
+# min food-age. COEFF=3.0 SKALIBROWANY sweepem 2026-06-14 (foodage_coeff_sweep.py,
+# n=1200): tnie ogon regresji w dużych workach (bag≥3: 8@coeff6 → 6@coeff3)
+# zachowując Jakub→B + thermal +2.22; wyższy coeff = więcej zasięgu ale więcej
+# szkody bag≥3 i GORSZY thermal. Default OFF (deploy-safe). Workflow: OFF →
+# offline replay (foodage_offline_replay_review.py, zero latencji) → flip za ACK.
 ENABLE_OBJ_DELIVERY_FOOD_AGE = _os.environ.get(
     "ENABLE_OBJ_DELIVERY_FOOD_AGE", "0") == "1"
 OBJ_DELIVERY_FOOD_AGE_COEFF = float(_os.environ.get(
-    "OBJ_DELIVERY_FOOD_AGE_COEFF", "6.0"))
+    "OBJ_DELIVERY_FOOD_AGE_COEFF", "3.0"))
 # Forward shadow comparator (2026-06-14): gdy ON, feasibility_v2 re-liczy plan
 # best/kandydatów ortools-multistop z food-age ON (thread-local override) i
 # loguje rozbieżność OFF↔ON w metrics["food_age_shadow"] — bez zmiany decyzji
