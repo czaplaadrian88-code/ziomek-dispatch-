@@ -823,6 +823,34 @@ def _a2_reliability_delta(cid, breach, conf, fleet_median, coeff, min_gap):
     return -coeff * max(0.0, gap)
 
 
+def _e2_ab_arm(order_id) -> str:
+    """E2 20% live A/B split (deterministyczny po order_id): 'pln' (20%) | 'score'."""
+    try:
+        return "pln" if (int(str(order_id)) % 5 == 0) else "score"
+    except (TypeError, ValueError):
+        import hashlib
+        h = int(hashlib.md5(str(order_id).encode()).hexdigest(), 16)
+        return "pln" if (h % 5 == 0) else "score"
+
+
+def _pln_pure_resort(top) -> None:
+    """E2: sortuj `top` malejaco po pln_v (kandydaci bez pln_v na koniec, stabilnie). In-place."""
+    if not top:
+        return
+    _orig = {id(c): i for i, c in enumerate(top)}
+
+    def _key(c):
+        pv = (getattr(c, "metrics", None) or {}).get("pln_v")
+        if isinstance(pv, (int, float)):
+            return (-float(pv), _orig[id(c)])
+        return (float("inf"), _orig[id(c)])
+
+    _pre = id(top[0])
+    top.sort(key=_key)
+    if id(top[0]) != _pre and isinstance(getattr(top[0], "metrics", None), dict):
+        top[0].metrics["pln_ab_flipped"] = True
+
+
 def _a2_reliability_soft_score(feasible, order_id=None):
     """Dźwignia A2: kara score za niską niezawodność kuriera. Flag-gated, default OFF.
     Buckety pos/tier zachowuje późniejszy _demote_blind_empty + late-pickup tiering
@@ -4941,6 +4969,21 @@ def _assess_order_impl(
                         _pln_best_cid != str(top[0].courier_id))
             except Exception as _pln_e:
                 log.warning(f"SP-B2-PLN shadow fail order={order_id}: {_pln_e!r}")
+
+        # ── E2 (2026-06-14) 20% LIVE A/B: PLN-sort dla 20% zlecen (split int(order_id)%5),
+        # reszta=kontrola. Tylko ENABLE_E2_PLN_AB ON (default OFF = inert). Tag pln_ab_arm
+        # do shadow → porownanie realnego breachu PLN vs score (join order_id->sla_log).
+        # Re-sort `top` po pln_v (top[:5] ma pln_v); selekcja nizej bierze nowego top[0].
+        # MIN_PROPOSE gate dalej na top[0].score (low-score PLN-pick -> KOORD, human-gated).
+        if C.flag("ENABLE_E2_PLN_AB", False) and top:
+            _e2_arm = _e2_ab_arm(order_id)
+            if _e2_arm == "pln":
+                _pln_pure_resort(top)
+            try:
+                if isinstance(getattr(top[0], "metrics", None), dict):
+                    top[0].metrics["pln_ab_arm"] = _e2_arm
+            except Exception:
+                pass
 
         # V3.28 Faza 6 — LGBM shadow inference (parallel, ZERO behavior change).
         # Pure BC model trained na 399K pairs CSV history (Faza 5 v1.0). Result

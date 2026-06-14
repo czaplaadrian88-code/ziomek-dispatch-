@@ -105,6 +105,15 @@ ETAP4_DECISION_FLAGS = (
     # wykonanie w auto_assign_executor. Flip po E7 za ACK + osobne E2E.
     # Projekt: eod_drafts/2026-06-13/AUTON01_DESIGN.md.
     "ENABLE_AUTO_ASSIGN",
+    # R6-ETA-GATE (2026-06-14): kalibracja p80 R6 dla gold worek<=4 (LIVE) +
+    # shadow-log falszywych odrzutow. Test-izolacja: conftest scina z tmp flags.json,
+    # zeby gate gold->4 NIE przeciekal do testow R6/SLA (determinizm suity).
+    # Koordynacja: HANDOFF_eta_calib_bag3_gate.md (sesja 126 = wariant bag<=3 na tej
+    # samej fladze; gold->4 juz wpiete commit 0073486 — union, nie konflikt).
+    "ENABLE_ETA_QUANTILE_R6_BAGCAP",
+    "ENABLE_R6_BREACH_SHADOW_LOG",
+    # E2 (2026-06-14): 20% live A/B PLN-sort selekcji kandydatow (dispatch_pipeline).
+    "ENABLE_E2_PLN_AB",
 )
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
