@@ -70,6 +70,7 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_OBJ_R6_SOFT_DEADLINE",
     "ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD",
     "ENABLE_OBJ_PICKUP_FRESHNESS",
+    "ENABLE_OBJ_DELIVERY_FOOD_AGE",
     "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE",
     "ENABLE_DIFFICULT_CASE_KOORD_REDIRECT",
     # SP-B2-SYNCWORKA + PREPBIAS-konsumpcja (2026-06-11): flagi decyzyjne
@@ -2535,6 +2536,37 @@ OBJ_PICKUP_FRESHNESS_THRESHOLD_MIN = float(_os.environ.get(
     "OBJ_PICKUP_FRESHNESS_THRESHOLD_MIN", "8.0"))
 OBJ_PICKUP_FRESHNESS_PENALTY_COEFF = float(_os.environ.get(
     "OBJ_PICKUP_FRESHNESS_PENALTY_COEFF", "20.0"))
+
+# ============================================================
+# Sprint OBJ FOOD-AGE — świeżość DOSTAWY w objective (2026-06-14)
+# ============================================================
+# Diagnoza BUG#5 (Jakub OL 14.06, replay na żywym silniku — courier-routing-bug-
+# foodage-2026-06-14): silnik łańcuchował NIEGOTOWY odbiór przed GOTOWĄ dostawą,
+# bo cel = arc(jazda) + span(makespan), a makespan IDENTYCZNY w obu kolejnościach
+# (wąskie gardło = okno gotowości niegotowego odbioru, nie trasa) → span nic nie
+# rozróżnia, cel redukuje się do „min kilometrów" → bliższy niegotowy odbiór
+# pierwszy, kurier stoi jałowo, gotowe jedzenie wieziona zimna na końcu. R6
+# soft-deadline NIE łapie: obie dostawy poniżej ready+sla → kara 0 w obu.
+#
+# Fix: człon food-age = liniowa kara za wiek niesionego/gotowego jedzenia
+# (delivered − ready). REKONFIGURUJE istniejący delivery soft upper bound (ten
+# sam prymityw co R6, wymiar Time → widzi REALNY harmonogram z czekaniem): gdy
+# flaga ON, kotwica = czas gotowości (anchor−now, sla=0) zamiast ready+sla, coeff
+# = gentle. Monotonicznie zawiera cel R6 (min food-age = min delivery-time = min
+# breach). MUSI być na wymiarze Time (nie nowy wymiar bez czekania — pure-transit
+# wariant odwraca sygnał: ignoruje 12-min postój który JEST przyczyną). Soft —
+# nie wpływa na feasibility. Coeff w jednostkach SetCumulVarSoftUpperBound:
+# kara = coeff×100 per min food-age; 1 min jazdy = 1000 w arc-cost → coeff=6 ≈
+# 0.6 min jazdy per min food-age (gentle: łamie remisy kolejności, NIE dominuje;
+# replay Jakub flip A→B wymaga >~2.7). Default OFF (deploy-safe). Workflow:
+# OFF → shadow → replay 7-14d (czy nie psuje R6/SLA gdzie indziej) → flip.
+# ⚠ gdy ON: delivery bound przechodzi z R6 (ready+sla, coeff 100) na food-age
+# (ready, coeff niżej) — R6 i food-age = dwie KONFIGURACJE jednej dźwigni
+# (mutually exclusive per węzeł, bo OR-Tools soft-bound overwrite nie stackuje).
+ENABLE_OBJ_DELIVERY_FOOD_AGE = _os.environ.get(
+    "ENABLE_OBJ_DELIVERY_FOOD_AGE", "0") == "1"
+OBJ_DELIVERY_FOOD_AGE_COEFF = float(_os.environ.get(
+    "OBJ_DELIVERY_FOOD_AGE_COEFF", "6.0"))
 
 # ============================================================
 # V3.28 FAZA 3 ścieżka A — time_matrix DWELL correction (2026-05-11)

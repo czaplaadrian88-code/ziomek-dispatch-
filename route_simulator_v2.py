@@ -1014,11 +1014,24 @@ def _ortools_plan(
     # (flag-gated, default OFF — deploy bez zmiany). Deadline CumulVar dostawy =
     # anchor+sla; anchor = picked_up_at (odebrane — stare jedzenie, deadline
     # blisko/0 → solver front-loaduje) lub pickup_ready_at (pending/new).
+    # Sprint OBJ FOOD-AGE (2026-06-14): gdy ENABLE_OBJ_DELIVERY_FOOD_AGE ON,
+    # ten sam delivery soft upper bound REKONFIGURUJE się z R6 (anchor ready+sla,
+    # coeff 100) na food-age (anchor = czas gotowości, sla=0, gentle coeff) →
+    # liniowa kara za wiek niesionego jedzenia, łapie BUG#5 (niegotowy odbiór
+    # przed gotową dostawą) którego R6 nie widzi (obie dostawy < ready+sla).
+    # Mutually exclusive per węzeł (OR-Tools soft-bound nie stackuje); food-age
+    # ma precedens. Widzi REALNY harmonogram (wymiar Time, z czekaniem).
     delivery_soft_deadlines = None
+    _foodage_on = _common.decision_flag("ENABLE_OBJ_DELIVERY_FOOD_AGE")
     try:
-        if _common.decision_flag("ENABLE_OBJ_R6_SOFT_DEADLINE") and now is not None:
-            _r6_coeff = float(getattr(_common, "OBJ_R6_DEADLINE_PENALTY_COEFF", 0.0))
-            _sla_f = float(sla_minutes)
+        if (_foodage_on or _common.decision_flag("ENABLE_OBJ_R6_SOFT_DEADLINE")) \
+                and now is not None:
+            if _foodage_on:
+                _dsd_coeff = float(getattr(_common, "OBJ_DELIVERY_FOOD_AGE_COEFF", 0.0))
+                _sla_f = 0.0  # food-age: kotwica na gotowości, bez SLA-grace
+            else:
+                _dsd_coeff = float(getattr(_common, "OBJ_R6_DEADLINE_PENALTY_COEFF", 0.0))
+                _sla_f = float(sla_minutes)
             _dsd: List[Optional[Tuple[float, float]]] = [None] * N
             for _i in range(N):
                 _node = nodes[_i]
@@ -1037,7 +1050,7 @@ def _ortools_plan(
                     _anchor = _anchor.replace(tzinfo=timezone.utc)
                 _deadline = (_anchor.astimezone(timezone.utc) - now
                              ).total_seconds() / 60.0 + _sla_f
-                _dsd[_i] = (_deadline, _r6_coeff)
+                _dsd[_i] = (_deadline, _dsd_coeff)
             delivery_soft_deadlines = _dsd
     except Exception as _dsd_e:
         _log.warning(
