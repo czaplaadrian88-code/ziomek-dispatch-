@@ -89,9 +89,10 @@ def _capture_solver(captured):
     return _stub
 
 
-def test_fa_t3_flag_reconfigures_soft_deadline_anchor():
-    """Flag ON usuwa SLA-grace z kotwicy delivery soft bound: każdy deadline ON
-    < odpowiadający OFF (kotwica = czas gotowości zamiast ready+sla)."""
+def test_fa_t3_food_age_is_additive_to_r6():
+    """Food-age ON: R6 (delivery_soft_deadlines) NIEZMIENIONE + OSOBNE
+    delivery_food_age_penalties (kotwica gotowości, sla=0). Food-age DODAJE drugi
+    bound, NIE zastępuje R6 (poprzedni redesign zastępujący regresował SLA 9.4%)."""
     courier_pos, bag, new_order, now = _jakub_case()
 
     cap_off: list = []
@@ -102,24 +103,28 @@ def test_fa_t3_flag_reconfigures_soft_deadline_anchor():
 
     cap_on: list = []
     with patch.object(common, "ENABLE_OBJ_DELIVERY_FOOD_AGE", True), \
+         patch.object(common, "ENABLE_OBJ_R6_SOFT_DEADLINE", True), \
          patch.object(tsp_solver, "solve_tsp_with_constraints", _capture_solver(cap_on)):
         rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
 
-    def _deadlines(cap):
-        dsd = cap[0].get("delivery_soft_deadlines")
-        assert dsd is not None, "delivery_soft_deadlines nie zbudowane"
-        return sorted(v[0] for v in dsd if v is not None)
+    def _vals(cap, key):
+        lst = cap[0].get(key)
+        return [v for v in lst if v is not None] if lst else []
 
-    off_dl, on_dl = _deadlines(cap_off), _deadlines(cap_on)
-    assert len(off_dl) == len(on_dl) == 2
-    # OFF = ready+sla (≥35), ON = ready (sla=0) → ON ściśle mniejsze o sla
-    assert max(on_dl) < min(off_dl), (
-        f"ON powinno być bez SLA-grace (wszystkie < OFF); off={off_dl} on={on_dl}")
-    # coeff też się zmienia: OFF=R6(100), ON=food-age(6)
-    off_coeff = {v[1] for v in cap_off[0]["delivery_soft_deadlines"] if v is not None}
-    on_coeff = {v[1] for v in cap_on[0]["delivery_soft_deadlines"] if v is not None}
-    assert off_coeff == {common.OBJ_R6_DEADLINE_PENALTY_COEFF}
-    assert on_coeff == {common.OBJ_DELIVERY_FOOD_AGE_COEFF}
+    # 1. R6 (delivery_soft_deadlines) IDENTYCZNE OFF↔ON — food-age go nie rusza
+    r6_off = sorted(v[0] for v in _vals(cap_off, "delivery_soft_deadlines"))
+    r6_on = sorted(v[0] for v in _vals(cap_on, "delivery_soft_deadlines"))
+    assert r6_off == r6_on and len(r6_on) == 2, "R6 musi zostać nietknięte przez food-age"
+    assert {v[1] for v in _vals(cap_on, "delivery_soft_deadlines")} == {common.OBJ_R6_DEADLINE_PENALTY_COEFF}
+
+    # 2. food-age = OSOBNA lista, tylko ON, coeff food-age
+    assert cap_off[0].get("delivery_food_age_penalties") is None
+    fa = _vals(cap_on, "delivery_food_age_penalties")
+    assert len(fa) == 2
+    assert {v[1] for v in fa} == {common.OBJ_DELIVERY_FOOD_AGE_COEFF}
+    # 3. food-age bound (ready, sla=0) < R6 deadline (ready+sla) → dwukawałkowa kara
+    assert max(v[0] for v in fa) < min(r6_on), \
+        f"food-age (ready) musi być < R6 (ready+sla); fa={fa} r6={r6_on}"
 
 
 # ─── Forward shadow comparator: thread-local override ──────────────────

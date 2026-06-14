@@ -1014,24 +1014,11 @@ def _ortools_plan(
     # (flag-gated, default OFF — deploy bez zmiany). Deadline CumulVar dostawy =
     # anchor+sla; anchor = picked_up_at (odebrane — stare jedzenie, deadline
     # blisko/0 → solver front-loaduje) lub pickup_ready_at (pending/new).
-    # Sprint OBJ FOOD-AGE (2026-06-14): gdy ENABLE_OBJ_DELIVERY_FOOD_AGE ON,
-    # ten sam delivery soft upper bound REKONFIGURUJE się z R6 (anchor ready+sla,
-    # coeff 100) na food-age (anchor = czas gotowości, sla=0, gentle coeff) →
-    # liniowa kara za wiek niesionego jedzenia, łapie BUG#5 (niegotowy odbiór
-    # przed gotową dostawą) którego R6 nie widzi (obie dostawy < ready+sla).
-    # Mutually exclusive per węzeł (OR-Tools soft-bound nie stackuje); food-age
-    # ma precedens. Widzi REALNY harmonogram (wymiar Time, z czekaniem).
     delivery_soft_deadlines = None
-    _foodage_on = _common.decision_flag("ENABLE_OBJ_DELIVERY_FOOD_AGE")
     try:
-        if (_foodage_on or _common.decision_flag("ENABLE_OBJ_R6_SOFT_DEADLINE")) \
-                and now is not None:
-            if _foodage_on:
-                _dsd_coeff = float(getattr(_common, "OBJ_DELIVERY_FOOD_AGE_COEFF", 0.0))
-                _sla_f = 0.0  # food-age: kotwica na gotowości, bez SLA-grace
-            else:
-                _dsd_coeff = float(getattr(_common, "OBJ_R6_DEADLINE_PENALTY_COEFF", 0.0))
-                _sla_f = float(sla_minutes)
+        if _common.decision_flag("ENABLE_OBJ_R6_SOFT_DEADLINE") and now is not None:
+            _r6_coeff = float(getattr(_common, "OBJ_R6_DEADLINE_PENALTY_COEFF", 0.0))
+            _sla_f = float(sla_minutes)
             _dsd: List[Optional[Tuple[float, float]]] = [None] * N
             for _i in range(N):
                 _node = nodes[_i]
@@ -1050,12 +1037,49 @@ def _ortools_plan(
                     _anchor = _anchor.replace(tzinfo=timezone.utc)
                 _deadline = (_anchor.astimezone(timezone.utc) - now
                              ).total_seconds() / 60.0 + _sla_f
-                _dsd[_i] = (_deadline, _dsd_coeff)
+                _dsd[_i] = (_deadline, _r6_coeff)
             delivery_soft_deadlines = _dsd
     except Exception as _dsd_e:
         _log.warning(
             f"OBJ_F1_DEADLINE_BUILD_FAIL {type(_dsd_e).__name__}: {_dsd_e}")
         delivery_soft_deadlines = None
+
+    # Sprint OBJ FOOD-AGE ADDITIVE (2026-06-14 redesign): food-age = DRUGI soft
+    # bound dostawy, ADDYTYWNY do R6 (NIE zastępuje — wcześniejsza wersja
+    # zastępująca regresowała SLA 9.4% / thermal −5.48 na replay-korpusie n=891).
+    # Kotwica = czas gotowości (sla=0), coeff gentle → liniowa kara za wiek
+    # niesionego jedzenia. R6 (ready+sla, coeff 100) chroni SLA; food-age nudguje
+    # świeżość TYLKO gdzie R6 obojętne (obie dostawy < deadline — case Jakuba).
+    # Solver: osobny wymiar "FoodAge" == Time (mirror realnego harmonogramu).
+    delivery_food_age_penalties = None
+    try:
+        if _common.decision_flag("ENABLE_OBJ_DELIVERY_FOOD_AGE") and now is not None:
+            _fa_coeff = float(getattr(_common, "OBJ_DELIVERY_FOOD_AGE_COEFF", 0.0))
+            if _fa_coeff > 0:
+                _fap: List[Optional[Tuple[float, float]]] = [None] * N
+                for _i in range(N):
+                    _node = nodes[_i]
+                    if _node.get("kind") != "delivery":
+                        continue
+                    _ref = _node.get("ref")
+                    if _ref is None:
+                        continue
+                    _picked = (getattr(_ref, "status", "assigned") == "picked_up"
+                               or getattr(_ref, "picked_up_at", None) is not None)
+                    _anchor = (getattr(_ref, "picked_up_at", None) if _picked
+                               else getattr(_ref, "pickup_ready_at", None))
+                    if _anchor is None:
+                        continue
+                    if _anchor.tzinfo is None:
+                        _anchor = _anchor.replace(tzinfo=timezone.utc)
+                    _fa_bound = (_anchor.astimezone(timezone.utc) - now
+                                 ).total_seconds() / 60.0  # sla=0 (od gotowości)
+                    _fap[_i] = (_fa_bound, _fa_coeff)
+                delivery_food_age_penalties = _fap
+    except Exception as _fa_e:
+        _log.warning(
+            f"OBJ_FOOD_AGE_BUILD_FAIL {type(_fa_e).__name__}: {_fa_e}")
+        delivery_food_age_penalties = None
 
     # Sprint OBJ FRESH (2026-05-30): świeżość odbioru — soft upper bound per
     # węzeł pickup, bound = (ready_at − now) + THRESHOLD min. Flag-gated, default
@@ -1098,6 +1122,7 @@ def _ortools_plan(
         time_limit_ms=int(_ot_ms),
         delivery_soft_deadlines=delivery_soft_deadlines,
         pickup_freshness_penalties=pickup_freshness_penalties,
+        delivery_food_age_penalties=delivery_food_age_penalties,
         span_cost_coeff=_span_cost_coeff,
     )
 
@@ -1119,6 +1144,7 @@ def _ortools_plan(
             time_limit_ms=int(_ot_ms),
             delivery_soft_deadlines=delivery_soft_deadlines,
             pickup_freshness_penalties=pickup_freshness_penalties,
+            delivery_food_age_penalties=delivery_food_age_penalties,
             span_cost_coeff=_span_cost_coeff,
         )
 

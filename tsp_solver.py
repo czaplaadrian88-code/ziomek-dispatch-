@@ -48,6 +48,7 @@ def solve_tsp_with_constraints(
     cost_matrix_min: Optional[List[List[float]]] = None,
     delivery_soft_deadlines: Optional[List[Optional[Tuple[float, float]]]] = None,
     pickup_freshness_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
+    delivery_food_age_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
     span_cost_coeff: float = 0.0,
 ) -> Optional[TspSolution]:
     """Solve PDP z OR-Tools.
@@ -112,6 +113,9 @@ def solve_tsp_with_constraints(
         return None
     # Sprint OBJ FRESH (2026-05-30): pickup_freshness_penalties validation
     if pickup_freshness_penalties is not None and len(pickup_freshness_penalties) != num_stops:
+        return None
+    # Sprint OBJ FOOD-AGE ADDITIVE (2026-06-14): delivery_food_age_penalties validation
+    if delivery_food_age_penalties is not None and len(delivery_food_age_penalties) != num_stops:
         return None
 
     # OR-Tools setup
@@ -271,6 +275,44 @@ def solve_tsp_with_constraints(
             idx = manager.NodeToIndex(stop_idx)
             time_dimension.SetCumulVarSoftUpperBound(
                 idx, scaled_bound, int(round(coeff)))
+
+    # Sprint OBJ FOOD-AGE ADDITIVE (2026-06-14 redesign): drugi soft upper bound na
+    # CUMUL DOSTAWY, ADDYTYWNY do R6 (delivery_soft_deadlines). OR-Tools nie stackuje
+    # dwóch soft-boundów na jednym węźle Time → osobny wymiar "FoodAge" (ten sam
+    # transit) + TWARDA równość CumulVar(FoodAge)==CumulVar(Time) na każdym węźle →
+    # FoodAge mirroruje REALNY harmonogram (z czekaniem), więc kara liczy się od
+    # rzeczywistego czasu dostawy. Soft bound food-age: kotwica=gotowość (sla=0),
+    # coeff gentle. Łączny koszt dostawy = R6(ready+sla, coeff~100) + food-age
+    # (ready, coeff~6) = dwukawałkowa wypukła kara: stroma chroni SLA, łagodna
+    # nudguje świeżość TYLKO gdzie R6 obojętne (obie dostawy < deadline = case Jakuba).
+    # Poprzednia wersja (food-age ZASTĘPUJĄCA R6) regresowała SLA 9.4% na replay n=891.
+    if delivery_food_age_penalties is not None and any(
+            p is not None for p in delivery_food_age_penalties):
+        import math as _m_fa
+        routing.AddDimension(
+            time_callback_index,
+            int(max_route_min * TIME_SCALE),   # slack
+            int(max_route_min * TIME_SCALE),   # capacity
+            True,                              # fix_start_cumul_to_zero
+            "FoodAge",
+        )
+        _food_dim = routing.GetDimensionOrDie("FoodAge")
+        capacity_max = int(max_route_min * TIME_SCALE)
+        for stop_idx in range(num_stops):
+            idx = manager.NodeToIndex(stop_idx)
+            # mirror realnego (wait-inclusive) czasu z wymiaru Time
+            routing.solver().Add(
+                _food_dim.CumulVar(idx) == time_dimension.CumulVar(idx))
+            spec = delivery_food_age_penalties[stop_idx]
+            if spec is None:
+                continue
+            bound_min, coeff = spec
+            if bound_min is None or coeff is None or coeff <= 0:
+                continue
+            if _m_fa.isnan(bound_min) or _m_fa.isinf(bound_min):
+                continue
+            scaled_bound = max(0, min(int(bound_min * TIME_SCALE), capacity_max))
+            _food_dim.SetCumulVarSoftUpperBound(idx, scaled_bound, int(round(coeff)))
 
     # Pickup-and-delivery constraints
     for pickup_idx, drop_idx in pickup_drop_pairs:
