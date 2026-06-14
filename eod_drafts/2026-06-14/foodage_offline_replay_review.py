@@ -154,21 +154,27 @@ def main():
             by_bag[r["bag"]][1] += 1
 
     coeff = a.coeff if a.coeff is not None else getattr(C, "OBJ_DELIVERY_FOOD_AGE_COEFF", 6.0)
+    # Reguła NET-aware (additive R6+food-age): blokuj tylko gdy regresje dominują
+    # lub rate wysoki — NIE na jakąkolwiek regresję (pojedyncze są normalne, liczy
+    # się NETTO i magnituda ogona). Stary blanket-block był za sztywny.
+    _reg_rate = (100.0 * len(sla_reg) / n) if n else 0.0
+    _net_sla = len(sla_improve) - len(sla_reg)
     if n < 200:
         rec = f"⏳ ZA MAŁO ortools-decyzji (n={n}). Poszerz --window-days / --max."
-    elif sla_reg:
-        rec = (f"🛑 NIE FLIPOWAĆ. Regresja SLA na {len(sla_reg)} z {n} ({100*len(sla_reg)/n:.1f}%) "
-               f"(on_sla>off_sla — food-age zdejmuje SLA-grace/stromość R6). Zbadać te przypadki PRZED flipem.")
+    elif len(sla_reg) >= len(sla_improve) or _reg_rate > 2.0:
+        rec = (f"🛑 NIE FLIPOWAĆ. Regresja SLA dominuje/za wysoka: {len(sla_reg)} regresji vs "
+               f"{len(sla_improve)} poprawy ({_reg_rate:.1f}%). Zbadać przyczynę PRZED flipem.")
     elif cr < 5:
         rec = (f"🔧 NISKI ZASIĘG (changed={cr:.1f}%). Rozważ podkręcenie coeff (jest {coeff}) "
                f"i powtórz, albo uznać BUG#5 za rzadki.")
     elif th_mean is not None and th_mean > 0:
-        rec = (f"✅ KANDYDAT DO FLIPA (do ACK). changed={cr:.1f}%, ZERO regresji SLA, "
-               f"+{len(sla_improve)} poprawia SLA, średnia poprawa thermal na zmienionych +{th_mean} min. "
-               f"Flip ENABLE_OBJ_DELIVERY_FOOD_AGE (hot) + obserwacja prod 48h.")
+        rec = (f"✅ KANDYDAT DO FLIPA (do ACK Adriana). changed={cr:.1f}%, NETTO SLA {_net_sla:+d} "
+               f"({len(sla_improve)} poprawy vs {len(sla_reg)} regresji = {_reg_rate:.1f}%), "
+               f"thermal na zmienionych +{th_mean} min. ⚠ Zbadać {len(sla_reg)} regresji (ogon) "
+               f"przed flipem. Po ACK: flip ENABLE_OBJ_DELIVERY_FOOD_AGE (hot) + obs prod 48h.")
     else:
-        rec = (f"🟡 NIEJEDNOZNACZNE. changed={cr:.1f}%, brak regresji SLA, poprawa thermal nieoczywista "
-               f"(mean={th_mean}). Przejrzeć ręcznie zmienione trasy / sweep coeff.")
+        rec = (f"🟡 NIEJEDNOZNACZNE. changed={cr:.1f}%, netto SLA {_net_sla:+d}, poprawa thermal "
+               f"nieoczywista (mean={th_mean}). Sweep coeff / ręczny przegląd zmienionych tras.")
 
     lines = [
         "=== OFFLINE REPLAY food-age OFF↔ON (BUG#5) ===",
