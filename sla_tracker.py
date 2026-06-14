@@ -63,6 +63,15 @@ RESTAURANT_VIOLATIONS_PATH = Path(
     "/root/.openclaw/workspace/dispatch_state/restaurant_violations.jsonl"
 )
 RESTAURANT_VIOLATION_MAX_WAIT_MIN = 5.0
+# Fala 1 fundament (2026-06-14): durable per-order log gotowości jedzenia.
+# orders_state = ulotny snapshot (poranny prune) → ready_at logowane 1/7291.
+# Ten log persystuje declared/arrived/picked + prep-bias per odbiór do offline
+# join (prep-bias per restauracja, luka „pokazane vs realne ETA"). Telemetria,
+# ZERO wpływu na decyzje/score/verdict. Reuse sygnałów już łapanych przez
+# _check_restaurant_violations (waiting_at status4 + picked_up_at + czas_kuriera).
+READY_AT_LOG_PATH = Path(
+    "/root/.openclaw/workspace/dispatch_state/ready_at_log.jsonl"
+)
 COURIER_NAMES_PATH = Path("/root/.openclaw/workspace/dispatch_state/courier_names.json")
 KURIER_IDS_PATH = Path("/root/.openclaw/workspace/dispatch_state/kurier_ids.json")  # V3.25 inverse fallback
 _courier_names: Dict[str, str] = {}
@@ -389,6 +398,48 @@ def _check_restaurant_violations() -> None:
                 arrival_source = "commit_fallback"
 
             wait_min = (real_dt - arrival_dt).total_seconds() / 60.0
+
+            # Fala 1 fundament (2026-06-14): durable per-order ready_at dla
+            # WSZYSTKICH odbiorów (nie tylko violations — to dopiero ogon).
+            # Reuse policzonych declared(commit)/arrived(waiting)/picked(real).
+            # Telemetria-only, flaga OFF default, one-shot (ready_at_logged),
+            # fail-soft. set-then-write (flaga PRZED append, duplicate-safe).
+            # prep_bias = picked − declared (jak późno jedzenie vs deklaracja);
+            # ready_basis odróżnia czy kurier czekał (ready≈picked) od gotowego-
+            # przed-przyjazdem (ready≤arrived) i braku sygnału przyjazdu.
+            if (C.flag("ENABLE_READY_AT_INSTRUMENTATION", False)
+                    and not order.get("ready_at_logged")):
+                try:
+                    if waiting_dt is not None:
+                        _ready_basis = "waited" if wait_min > 0 else "ready_by_arrival"
+                    else:
+                        _ready_basis = "no_arrival_signal"
+                    _ra_rec = {
+                        "ts": now_iso(),
+                        "order_id": oid,
+                        "restaurant": order.get("restaurant"),
+                        "courier_id": str(order.get("courier_id") or "?"),
+                        "order_type": order.get("order_type"),
+                        "declared_ready_iso": commit_dt.isoformat(),
+                        "arrived_at_iso": (
+                            waiting_dt.isoformat() if waiting_dt else None),
+                        "picked_up_at_iso": real_dt.isoformat(),
+                        "arrival_source": arrival_source,
+                        "wait_min": round(wait_min, 1),
+                        "prep_bias_min": round(
+                            (real_dt - commit_dt).total_seconds() / 60.0, 1),
+                        "ready_basis": _ready_basis,
+                    }
+                    upsert_order(oid, {"ready_at_logged": True},
+                                 event="READY_AT_OBSERVED")
+                    from dispatch_v2.core.jsonl_appender import append_jsonl
+                    append_jsonl(READY_AT_LOG_PATH, _ra_rec)
+                    _stats["ready_at_logged"] = _stats.get("ready_at_logged", 0) + 1
+                except Exception as _rae:
+                    _log.warning(
+                        f"ready_at instrumentation fail {oid}: "
+                        f"{type(_rae).__name__}: {_rae}")
+
             if wait_min <= RESTAURANT_VIOLATION_MAX_WAIT_MIN:
                 continue
 
