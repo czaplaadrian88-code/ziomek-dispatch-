@@ -1015,10 +1015,29 @@ def check_feasibility_v2(
         if bag_time_min > r6_max_bag_time:
             r6_max_bag_time = bag_time_min
             r6_worst_oid = o.order_id
+        # GOLD->4 LIVE GATE (14.06, replay v3 tier-aware): dla gold worek<=4 bramkuj
+        # R6 na skalibrowanej p80 ETA (odzysk false-rejectow; CI[-0.63,+1.25], 14:1).
+        # Flaga ENABLE_ETA_QUANTILE_R6_BAGCAP default OFF; inne tiery = legacy hard-35.
+        # Surowy bag_time_min ZOSTAJE dla metryki/logu (brak podwojnej kalibracji);
+        # bramkujemy tylko sam check przez _gate_bt. Fail-soft: cal None -> surowy.
+        _gate_bt = bag_time_min
+        if (C.flag("ENABLE_ETA_QUANTILE_R6_BAGCAP", False)
+                and courier_tier == "gold" and (len(bag) + 1) <= 4):
+            try:
+                from dispatch_v2.calib_maps import eta_quantile_calibrate
+                _c = eta_quantile_calibrate(bag_time_min, now=anchor, quantile="p80")
+                if _c is not None:
+                    _gate_bt = _c
+                    if (bag_time_min > C.BAG_TIME_HARD_MAX_MIN
+                            and _c <= C.BAG_TIME_HARD_MAX_MIN):
+                        metrics["r6_gold4_gate_recovered"] = (
+                            metrics.get("r6_gold4_gate_recovered", 0) + 1)
+            except Exception:
+                pass
         # Per-order violation tracking (split picked-up vs not)
         # R-PACZKI-FLEX: skip tracking gdy paczki-only mix → hard reject linia
         # 693 nie aktywuje się (empty list). Soft zone niżej też respektuje.
-        if bag_time_min > C.BAG_TIME_HARD_MAX_MIN and not _paczki_only_mix:
+        if _gate_bt > C.BAG_TIME_HARD_MAX_MIN and not _paczki_only_mix:
             if is_picked:
                 r6_picked_up_violations.append((o.order_id, round(bag_time_min, 1)))
             else:
