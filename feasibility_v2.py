@@ -283,11 +283,17 @@ def check_per_order_35min_rule(
     return (passes, details)
 
 
-def _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, violations, metrics) -> None:
+def _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, violations, metrics,
+                           bag_total=None, now=None) -> None:
     """Append R6_HARD_REJECT event to dispatch_state/r6_breach_shadow.jsonl (log-only).
 
     Mierzy falszywe-odrzuty R6: offline join new_order_id -> sla_log (czy realnie
     dostarczono <=35 min). Zero wplywu na decyzje — append-only, fail-soft.
+
+    Handoff 14.06 (bag<=3): dla worka <=3 dorzuca skalibrowany p80 bag-time
+    (`bag_time_calibrated_p80`) + `would_pass_calibrated` (cal<=35). LOG-ONLY,
+    NIE podmienia decyzji (gate live = osobna flaga, Krok 3). Mapa moze byc
+    zamrozona do 04:35 — eta_quantile_calibrate fail-soft (None=brak mapy).
     """
     event = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -297,7 +303,17 @@ def _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, violations, metrics) 
         "worst_bag_time_min": round(float(worst_bt), 1),
         "n_violations": len(violations),
         "r6_max_bag_time_min": metrics.get("r6_max_bag_time_min"),
+        "bag_total": bag_total,
     }
+    if bag_total is not None and bag_total <= 3:
+        try:
+            from dispatch_v2.calib_maps import eta_quantile_calibrate
+            cal = eta_quantile_calibrate(worst_bt, now=now, quantile="p80")
+            event["bag_time_calibrated_p80"] = cal
+            event["would_pass_calibrated"] = (cal is not None and cal <= 35.0)
+        except Exception as _ce:
+            event["bag_time_calibrated_p80"] = None
+            log.warning(f"R6 breach shadow calib failed: {type(_ce).__name__}: {_ce}")
     try:
         with open(R6_BREACH_SHADOW_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
@@ -1083,7 +1099,8 @@ def check_feasibility_v2(
     if r6_per_order_violations:
         worst_oid, worst_bt = max(r6_per_order_violations, key=lambda v: v[1])
         if C.flag("ENABLE_R6_BREACH_SHADOW_LOG", False):
-            _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, r6_per_order_violations, metrics)
+            _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, r6_per_order_violations, metrics,
+                                   bag_total=len(bag) + 1, now=now)
         return (
             "NO",
             f"R6_per_order_>35min ({worst_oid} {worst_bt:.1f}min, "
