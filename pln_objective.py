@@ -61,6 +61,16 @@ COURIER_VEHICLE_PATH = os.environ.get(
 )
 _vehicle_cache: Dict[str, Any] = {"mtime": None, "data": {}}
 
+# Płaca kuriera per-osoba (mirror panel finance.courier_cost_components). Sync z
+# panelu → courier_pay.json {cid:{mode,tariff_base,tariff_per_km,hourly_rate,active}}.
+# Term PLN = −(realna_płaca − PLN_AVG_COURIER_PAY); średnia floty=0 → neutralny.
+PLN_AVG_COURIER_PAY = float(os.environ.get("PLN_AVG_COURIER_PAY", "0.0"))
+COURIER_PAY_PATH = os.environ.get(
+    "COURIER_PAY_PATH",
+    "/root/.openclaw/workspace/dispatch_state/courier_pay.json",
+)
+_pay_cache: Dict[str, Any] = {"mtime": None, "data": {}}
+
 
 def _vehicle_for(cid) -> str:
     """'wlasne' | 'firmowe' z courier_vehicle.json; fail-soft → 'firmowe'."""
@@ -78,6 +88,39 @@ def _vehicle_for(cid) -> str:
         return "wlasne" if v in ("wlasne", "własne", "own") else "firmowe"
     except Exception:
         return "firmowe"
+
+
+def _pay_for(cid) -> Optional[Dict[str, Any]]:
+    """Profil płac kuriera z courier_pay.json (mtime-cache); None gdy brak/nieaktywny."""
+    try:
+        mt = os.path.getmtime(COURIER_PAY_PATH)
+    except OSError:
+        return None
+    try:
+        if _pay_cache["mtime"] != mt:
+            with open(COURIER_PAY_PATH, encoding="utf-8") as fh:
+                d = json.load(fh)
+            _pay_cache["data"] = d if isinstance(d, dict) else {}
+            _pay_cache["mtime"] = mt
+        p = _pay_cache["data"].get(str(cid))
+        return p if isinstance(p, dict) and p.get("active", True) else None
+    except Exception:
+        return None
+
+
+def courier_labor_cost(profile: Optional[Dict[str, Any]], *, duration_min: float) -> Optional[float]:
+    """Realny koszt PŁACY tej dostawy [zł] wg profilu (mirror panel finance.courier_cost_components):
+    tariff/both → tariff_base; hourly/both → +(duration/60)×hourly_rate. None gdy brak profilu.
+    (Składnik per_km pomijamy w v1 — pokrywa się z km_cost; refinement.)"""
+    if not profile:
+        return None
+    mode = str(profile.get("mode", "tariff"))
+    labor = 0.0
+    if mode in ("tariff", "both"):
+        labor += float(profile.get("tariff_base") or 0.0)
+    if mode in ("hourly", "both"):
+        labor += (max(0.0, float(duration_min)) / 60.0) * float(profile.get("hourly_rate") or 0.0)
+    return labor
 
 
 def p_breach(delta_km: float, bag_after: int, load: float) -> float:
@@ -119,6 +162,7 @@ def compute_pln_value(
     time_to_ready_min: Optional[float],
     blokada_min: Optional[float] = None,
     now: Optional[datetime] = None,
+    apply_courier_pay: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """V [PLN] dla kandydata. None gdy brak Δkm/travel (nie zgadujemy).
 
@@ -151,6 +195,15 @@ def compute_pln_value(
              - PLN_BREACH_COST * pb
              - PLN_FRESH_COST_PER_MIN * lezenie_min
              - rate * (max(0.0, float(blokada_min)) + czekanie_min))
+        # Term płacy kuriera per-osoba (mirror panel). Liczony ZAWSZE (telemetria
+        # cienia pln_v_payaware); APLIKOWANY do pln_v tylko gdy apply_courier_pay.
+        _pay = _pay_for(cid)
+        courier_labor = courier_labor_cost(_pay, duration_min=float(blokada_min))
+        pay_mode = str(_pay.get("mode")) if _pay else None
+        pay_delta = (courier_labor - PLN_AVG_COURIER_PAY) if courier_labor is not None else 0.0
+        v_payaware = round(v - pay_delta, 2)
+        if apply_courier_pay and courier_labor is not None:
+            v = v - pay_delta
         return {
             "pln_v": round(v, 2),
             "pln_p_breach": round(pb, 4),
@@ -159,6 +212,9 @@ def compute_pln_value(
             "pln_lezenie_min": round(lezenie_min, 1),
             "pln_czekanie_min": round(czekanie_min, 1),
             "pln_opp_rate": rate,
+            "pln_courier_labor": round(courier_labor, 2) if courier_labor is not None else None,
+            "pln_pay_mode": pay_mode,
+            "pln_v_payaware": v_payaware,
         }
     except Exception:
         return None

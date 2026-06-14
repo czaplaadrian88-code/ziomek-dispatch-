@@ -114,6 +114,10 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_R6_BREACH_SHADOW_LOG",
     # E2 (2026-06-14): 20% live A/B PLN-sort selekcji kandydatow (dispatch_pipeline).
     "ENABLE_E2_PLN_AB",
+    # PLN-PAY (2026-06-14): term realnej placy kuriera per-osoba w pln_v (mirror
+    # panel finance.courier_cost_components). Telemetria pln_v_payaware ZAWSZE;
+    # aplikacja do pln_v (i tym samym arm PLN E2) za flaga. courier_pay.json z syncu.
+    "ENABLE_PLN_COURIER_PAY",
 )
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości

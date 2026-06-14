@@ -4956,6 +4956,7 @@ def _assess_order_impl(
                         time_to_ready_min=_pm.get("time_to_pickup_ready_min"),
                         blokada_min=(float(_trav) + _leg_min) if _trav is not None else None,
                         now=now,
+                        apply_courier_pay=C.flag("ENABLE_PLN_COURIER_PAY", False),
                     )
                     if _pln:
                         _pm.update(_pln)
