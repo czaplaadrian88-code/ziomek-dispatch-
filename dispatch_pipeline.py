@@ -585,6 +585,33 @@ def _best_effort_sort_key(c):
     return (r6_pov, sla, bucket, -score, dur)
 
 
+def _best_effort_fastest_pickup_key(c, new_order_id):
+    """SHADOW (Adrian 2026-06-15): klucz selekcji „NAJSZYBSZY ODBIÓR → potem najszybszy
+    dowóz". PRIMARY = projektowany czas DOJAZDU DO ODBIORU nowego ordera (kiedy kurier
+    dotrze do restauracji = plan.pickup_at[oid]). SECONDARY = projektowana dostawa
+    (predicted_delivered_at). TERTIARY = bucket pos_source (informed<other<blind) —
+    tie-break, by NIE ufać fikcyjnej pozycji blind (BIALYSTOK_CENTER) przy równym ETA.
+    None → +inf (na dół). Czysta funkcja. LOG-ONLY do czasu walidacji shadow."""
+    plan = getattr(c, "plan", None)
+    BIG = float("inf")
+    pu = dv = None
+    if plan is not None:
+        _pu = (getattr(plan, "pickup_at", {}) or {}).get(new_order_id)
+        _dv = (getattr(plan, "predicted_delivered_at", {}) or {}).get(new_order_id)
+        try:
+            pu = _pu.timestamp() if _pu is not None else None
+            dv = _dv.timestamp() if _dv is not None else None
+        except Exception:
+            pu = dv = None
+    if _is_informed_cand(c):
+        bucket = 0
+    elif _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
+        bucket = 2
+    else:
+        bucket = 1
+    return (pu if pu is not None else BIG, dv if dv is not None else BIG, bucket)
+
+
 # _selection_veto_winner — RETIRED 2026-06-11 (ACK Adrian po digescie at#113;
 # A2 soft-score dowiózł, veto nadpisywałoby legalne decyzje — werdykt 08.06).
 
@@ -5550,6 +5577,33 @@ def _assess_order_impl(
     if with_plan:
         best = with_plan[0]
         best.best_effort = True
+        # FASTEST-PICKUP SHADOW (Adrian 2026-06-15): co BY wybrała selekcja „najszybszy
+        # odbiór → potem najszybszy dowóz". LOG-ONLY — NIE zmienia `best` (live = stary
+        # klucz). Walidacja w shadow_decisions przed ewentualnym flipem live. flags.json hot.
+        if C.flag("ENABLE_BEST_EFFORT_FASTEST_PICKUP_SHADOW",
+                  getattr(C, "ENABLE_BEST_EFFORT_FASTEST_PICKUP_SHADOW", False)):
+            try:
+                _fp_best = min(with_plan, key=lambda c: _best_effort_fastest_pickup_key(c, new_order.order_id))
+                _live_pu = (getattr(best.plan, "pickup_at", {}) or {}).get(new_order.order_id)
+                _fp_pu = (getattr(_fp_best.plan, "pickup_at", {}) or {}).get(new_order.order_id)
+                _earlier = None
+                if _live_pu is not None and _fp_pu is not None:
+                    _earlier = round((_live_pu - _fp_pu).total_seconds() / 60.0, 1)  # >0 = shadow odbiera wcześniej
+                best.metrics["best_effort_fastest_pickup_shadow"] = {
+                    "live_cid": best.courier_id,
+                    "live_pickup_eta": _live_pu.isoformat() if _live_pu is not None else None,
+                    "shadow_cid": _fp_best.courier_id,
+                    "shadow_pickup_eta": _fp_pu.isoformat() if _fp_pu is not None else None,
+                    "would_differ": _fp_best.courier_id != best.courier_id,
+                    "shadow_pickup_earlier_min": _earlier,
+                    "pool_size": len(with_plan),
+                }
+                if _fp_best.courier_id != best.courier_id:
+                    log.info(
+                        "BEST_EFFORT_FASTEST_PICKUP_SHADOW oid=%s live=%s shadow=%s earlier=%smin pool=%d"
+                        % (new_order.order_id, best.courier_id, _fp_best.courier_id, _earlier, len(with_plan)))
+            except Exception as _fp_e:
+                log.warning(f"fastest_pickup_shadow fail oid={new_order.order_id}: {_fp_e!r}")
         # BUG E hotfix (2026-05-26, naprawiony 2026-05-27): best_effort z >=1
         # orderem łamiącym hard R6 (35 min thermal bag_time) → KOORD. Stricter
         # superset OBJ F3 — bez progu min-breach, ANY breach. Default ON. Reguła

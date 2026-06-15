@@ -2314,6 +2314,13 @@ ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT = _os.environ.get(
 ENABLE_ALWAYS_PROPOSE_ON_SATURATION = _os.environ.get(
     "ENABLE_ALWAYS_PROPOSE_ON_SATURATION", "0") == "1"
 
+# BEST-EFFORT FASTEST-PICKUP SHADOW (Adrian 2026-06-15): log-only — co BY wybrała
+# selekcja „najszybszy odbiór → potem najszybszy dowóz" (PRIMARY = plan.pickup_at[oid]).
+# ZERO zmiany live (best dalej _best_effort_sort_key); waliduje w shadow_decisions przed
+# ewentualnym flipem. Hot-reload flags.json; konstanta-default False.
+ENABLE_BEST_EFFORT_FASTEST_PICKUP_SHADOW = _os.environ.get(
+    "ENABLE_BEST_EFFORT_FASTEST_PICKUP_SHADOW", "0") == "1"
+
 # BUG A shadow (2026-05-26): Σ bag_time + max bag_time + FIFO penalty w scoring.
 # Reguła Adriana: „Suma czasów wszystkich dowozów w bagu jak najmniejsza. Lepiej
 # żeby OBA jechały po 15 min, niż jedno 25 a drugie 8. Jeśli podobnie, najpierw
