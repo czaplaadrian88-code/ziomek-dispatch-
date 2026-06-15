@@ -5592,8 +5592,10 @@ def _assess_order_impl(
                 best.metrics["best_effort_fastest_pickup_shadow"] = {
                     "live_cid": best.courier_id,
                     "live_pickup_eta": _live_pu.isoformat() if _live_pu is not None else None,
+                    "live_pos_source": getattr(best, "pos_source", None),
                     "shadow_cid": _fp_best.courier_id,
                     "shadow_pickup_eta": _fp_pu.isoformat() if _fp_pu is not None else None,
+                    "shadow_pos_source": getattr(_fp_best, "pos_source", None),  # blind-check: fikcyjny ETA?
                     "would_differ": _fp_best.courier_id != best.courier_id,
                     "shadow_pickup_earlier_min": _earlier,
                     "pool_size": len(with_plan),
