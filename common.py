@@ -853,6 +853,13 @@ GEOCODE_CROSS_SOURCE_MAX_DISAGREE_M = float(os.environ.get("GEOCODE_CROSS_SOURCE
 GEOCODE_NOMINATIM_TIMEOUT_S = float(os.environ.get("GEOCODE_NOMINATIM_TIMEOUT_S", "3.0"))
 GEOCODE_NOMINATIM_USER_AGENT = os.environ.get(
     "GEOCODE_NOMINATIM_USER_AGENT", "ziomek-dispatch/1.0 (ac@nadajesz.pl)")
+# Fallback OSM/Nominatim gdy Google zawiódł (None) LUB zwrócił out-of-bbox poison.
+# Google nie ma w indeksie części białostockich ulic (np. „Proroka Eliasza",
+# „Poniatowskiego" w Pieczurkach) → dopasowuje miejscowość „Białystok" 22-540 na
+# południu z pewnością ROOFTOP. Nominatim (bounded do bboxu obsługi) trafia je 100%.
+# Ściśle addytywne: odpala się tylko gdy Google już zawiódł → najgorszy przypadek =
+# dzisiejszy reject. Hot-reload via flags.json. Default OFF (replay-walidacja przed flip).
+ENABLE_GEOCODE_NOMINATIM_FALLBACK = os.environ.get("ENABLE_GEOCODE_NOMINATIM_FALLBACK", "0") == "1"
 
 # FAZA 2 #1 — firmowe konto: reject+flag zamiast podstawiania centrali gdy
 # parser/geocode padnie (zła-ale-wiarygodna pozycja gorsza niż głośna porażka).

@@ -37,13 +37,24 @@ def haversine_m(a: Tuple[float, float], b: Tuple[float, float]) -> float:
 def nominatim_geocode(
     address: str, city: Optional[str], timeout: float = 3.0,
     user_agent: str = "ziomek-dispatch/1.0",
+    viewbox: Optional[str] = None, bounded: bool = False,
 ) -> Optional[Tuple[float, float]]:
-    """Drugie źródło (OSM/Nominatim). Zwraca (lat, lon) lub None. Fail-soft."""
+    """Drugie źródło (OSM/Nominatim). Zwraca (lat, lon) lub None. Fail-soft.
+
+    viewbox/bounded (opcjonalne, default = stare zachowanie): gdy podane,
+    ogranicza wyszukiwanie do prostokąta obszaru obsługi (viewbox=
+    'lon_min,lat_max,lon_max,lat_min', bounded=True → twarde ograniczenie).
+    Zapobiega dopasowaniu ulicy o tej samej nazwie z innego miasta."""
     q = f"{address}, {city}, Polska" if city else f"{address}, Polska"
-    params = urllib.parse.urlencode({
+    _p = {
         "q": q, "format": "json", "limit": "1", "countrycodes": "pl",
         "addressdetails": "0",
-    })
+    }
+    if viewbox:
+        _p["viewbox"] = viewbox
+    if bounded:
+        _p["bounded"] = "1"
+    params = urllib.parse.urlencode(_p)
     url = f"https://nominatim.openstreetmap.org/search?{params}"
     req = urllib.request.Request(url, headers={"User-Agent": user_agent})
     try:

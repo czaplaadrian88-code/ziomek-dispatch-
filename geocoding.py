@@ -362,6 +362,35 @@ def _osrm_fallback(address: str) -> Optional[tuple]:
     return None
 
 
+def _nominatim_fallback(address: str, city: Optional[str], timeout: float) -> Optional[tuple]:
+    """Realny fallback tekstowy OSM/Nominatim, bounded do bboxu obszaru obsługi.
+
+    Odpala się TYLKO gdy Google zawiódł (None) lub zwrócił out-of-bbox poison
+    (gating w geocode()). Google nie ma w indeksie części białostockich ulic
+    (np. „Proroka Eliasza", „Poniatowskiego" w Pieczurkach) → Nominatim trafia.
+    Zwraca (lat, lon) lub None. Wynik i tak przechodzi przez bbox-guard callera."""
+    # Guard: pusty/śmieciowy adres („—", sam numer, telefon) degeneruje query do
+    # samego miasta → Nominatim zwróciłby centroid Białegostoku (fałszywy odzysk
+    # → ciche mis-route). Wymagaj realnego tokenu ulicy (≥1 ciąg liter len≥3).
+    if not re.search(r"[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]{3,}", address or ""):
+        return None
+    on, la0, la1, lo0, lo1 = _bbox_config()
+    # viewbox = lon_min,lat_max,lon_max,lat_min (lewy-górny, prawy-dolny róg)
+    viewbox = f"{lo0},{la1},{lo1},{la0}" if on else None
+    try:
+        coords = _gv.nominatim_geocode(
+            address, city,
+            timeout=getattr(C, "GEOCODE_NOMINATIM_TIMEOUT_S", 3.0),
+            user_agent=getattr(C, "GEOCODE_NOMINATIM_USER_AGENT", "ziomek-dispatch/1.0"),
+            viewbox=viewbox, bounded=bool(on))
+    except Exception as e:
+        _log.warning(f"NOMINATIM_FALLBACK_ERROR address={address!r}: {e}")
+        return None
+    _stats.setdefault("nominatim_fallback", 0)
+    _stats["nominatim_fallback"] += 1
+    return coords
+
+
 def _effective_city(city: Optional[str], context: str) -> Optional[str]:
     """Resolve city per flag. Zwraca effective_city lub None gdy fail-loud mode."""
     if city and city.strip():
@@ -434,9 +463,15 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
     result = _google_geocode(f"{address}, {effective_city}, Polska", timeout=timeout)
     source = "google" if result is not None else None
     if result is None:
-        result = _osrm_fallback(address)
-        if result is not None:
-            source = "osrm"
+        if C.flag("ENABLE_GEOCODE_NOMINATIM_FALLBACK", C.ENABLE_GEOCODE_NOMINATIM_FALLBACK):
+            _nom = _nominatim_fallback(address, effective_city, timeout)
+            if _nom is not None:
+                result = _nom
+                source = "nominatim_fallback"
+        if result is None:
+            result = _osrm_fallback(address)
+            if result is not None:
+                source = "osrm"
 
     if result is None:
         _stats["failures"] += 1
@@ -447,17 +482,35 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
     # Bbox guard: odrzuć out-of-bbox wynik PRZED cache write (geo-poison prevention,
     # zadanie #4). Caller dostaje None → istniejące defense gates (no_pickup_geocode).
     if not _in_service_bbox(result[0], result[1]):
-        _stats.setdefault("bbox_rejected", 0)
-        _stats["bbox_rejected"] += 1
-        _stats["failures"] += 1
-        _log.warning(
-            f"GEOCODE_BBOX_REJECT address={address!r} city={effective_city!r} "
-            f"coords=({result[0]:.6f},{result[1]:.6f}) source={source} — "
-            f"poza bbox obsługi, NIE cache'uję"
-        )
-        _audit_log("address", address, effective_city, result[0], result[1],
-                   source, (time.perf_counter() - t_start) * 1000.0, error="bbox_reject")
-        return None
+        # Google zwrócił out-of-bbox (zwykle poison: miejscowość „Białystok" 22-540
+        # na południu). Spróbuj Nominatim bounded ZANIM odrzucisz — odzyskuje realne
+        # białostockie ulice, których Google nie ma w indeksie. Strictly additive.
+        _nom = None
+        if source == "google" and C.flag(
+                "ENABLE_GEOCODE_NOMINATIM_FALLBACK", C.ENABLE_GEOCODE_NOMINATIM_FALLBACK):
+            _nom = _nominatim_fallback(address, effective_city, timeout)
+        if _nom is not None and _in_service_bbox(_nom[0], _nom[1]):
+            _log.info(
+                f"GEOCODE_NOMINATIM_RECOVERED address={address!r} city={effective_city!r} "
+                f"google_oob=({result[0]:.5f},{result[1]:.5f}) → "
+                f"osm=({_nom[0]:.5f},{_nom[1]:.5f})"
+            )
+            _stats.setdefault("nominatim_recovered", 0)
+            _stats["nominatim_recovered"] += 1
+            result = (_nom[0], _nom[1])
+            source = "nominatim_fallback"
+        else:
+            _stats.setdefault("bbox_rejected", 0)
+            _stats["bbox_rejected"] += 1
+            _stats["failures"] += 1
+            _log.warning(
+                f"GEOCODE_BBOX_REJECT address={address!r} city={effective_city!r} "
+                f"coords=({result[0]:.6f},{result[1]:.6f}) source={source} — "
+                f"poza bbox obsługi, NIE cache'uję"
+            )
+            _audit_log("address", address, effective_city, result[0], result[1],
+                       source, (time.perf_counter() - t_start) * 1000.0, error="bbox_reject")
+            return None
 
     # FAZA 2 — warstwa weryfikacji poprawności (location_type + dzielnica +
     # cross-source). Shadow: liczy+loguje; ENFORCE: odrzuca „reject" → None
