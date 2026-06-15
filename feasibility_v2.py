@@ -970,6 +970,7 @@ def check_feasibility_v2(
     r6_worst_oid: Optional[str] = None
     r6_per_order_violations: List[Tuple[str, float]] = []
     r6_picked_up_violations: List[Tuple[str, float]] = []
+    r6_paczka_exempt_oids: List[str] = []  # firmowe paczki wyłączone z reguły 35min (Adrian 2026-06-15)
     for o in list(bag) + [new_order]:
         pred = plan.predicted_delivered_at.get(o.order_id)
         if pred is None:
@@ -986,6 +987,15 @@ def check_feasibility_v2(
             getattr(o, "picked_up_at", None) is not None
             or getattr(o, "status", None) == "picked_up"
         )
+        # FIRMOWE PACZKI (Adrian 2026-06-15): paczka/firmowe (Dr Tusz/tonery, Nadajesz.pl,
+        # PACZKA_ADDRESS_IDS) to NIE gorące jedzenie → wyłączona z reguły 35min (R6 termik),
+        # także w MIESZANYM worku. Nie ustawia r6_max/worst i nie trafia do violations.
+        _o_paczka_exempt = (
+            C.flag("ENABLE_PACZKA_R6_THERMAL_EXEMPT",
+                   getattr(C, "ENABLE_PACZKA_R6_THERMAL_EXEMPT", False))
+            and _is_paczka_sim(o))
+        if _o_paczka_exempt and o.order_id not in r6_paczka_exempt_oids:
+            r6_paczka_exempt_oids.append(o.order_id)
         # Anchor selection per-status
         anchor: Optional[datetime] = None
         anchor_src: str = "now"
@@ -1012,7 +1022,7 @@ def check_feasibility_v2(
         if anchor is None:
             anchor = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
         bag_time_min = (pred - anchor).total_seconds() / 60.0
-        if bag_time_min > r6_max_bag_time:
+        if (not _o_paczka_exempt) and bag_time_min > r6_max_bag_time:
             r6_max_bag_time = bag_time_min
             r6_worst_oid = o.order_id
         # GOLD->4 LIVE GATE (14.06, replay v3 tier-aware): dla gold worek<=4 bramkuj
@@ -1037,7 +1047,7 @@ def check_feasibility_v2(
         # Per-order violation tracking (split picked-up vs not)
         # R-PACZKI-FLEX: skip tracking gdy paczki-only mix → hard reject linia
         # 693 nie aktywuje się (empty list). Soft zone niżej też respektuje.
-        if _gate_bt > C.BAG_TIME_HARD_MAX_MIN and not _paczki_only_mix:
+        if _gate_bt > C.BAG_TIME_HARD_MAX_MIN and not _paczki_only_mix and not _o_paczka_exempt:
             if is_picked:
                 r6_picked_up_violations.append((o.order_id, round(bag_time_min, 1)))
             else:
@@ -1048,6 +1058,8 @@ def check_feasibility_v2(
     metrics["r6_bag_size"] = len(bag)
     metrics["r6_per_order_violations"] = r6_per_order_violations
     metrics["r6_picked_up_violations"] = r6_picked_up_violations
+    if r6_paczka_exempt_oids:
+        metrics["r6_paczka_exempt_oids"] = r6_paczka_exempt_oids
     # F2.2 C3 narrow (2026-04-18): R6 soft warning zone (30, 35] — metric-only.
     # R-PACZKI-FLEX: paczki-only mix bypass tej strefy (paczki bez termiki).
     # ── Z-21 (higiena 2026-06-13): RENAME r6_soft_penalty → r6_soft_penalty_c3_legacy ──
@@ -1079,6 +1091,12 @@ def check_feasibility_v2(
         for o in list(bag) + [new_order]:
             pred = plan.predicted_delivered_at.get(o.order_id)
             if pred is None:
+                continue
+            # FIRMOWE PACZKI (Adrian 2026-06-15): paczka nie podlega regule 35min
+            # także w bramce SLA — pomiń jako violation (spójnie z R6 termik exempt).
+            if (C.flag("ENABLE_PACZKA_R6_THERMAL_EXEMPT",
+                       getattr(C, "ENABLE_PACZKA_R6_THERMAL_EXEMPT", False))
+                    and _is_paczka_sim(o)):
                 continue
             if o.order_id in plan.pickup_at:
                 pu = plan.pickup_at[o.order_id]
@@ -1112,7 +1130,11 @@ def check_feasibility_v2(
         metrics["sla_violations_blocking_count"] = n_blocking
         # Bypass tylko gdy WSZYSTKIE violations są pre-existing (kurier i tak je
         # ma niezależnie od nowego ordera). New-induced lub new_order sam → reject.
-        if (C.ENABLE_SLA_PREEXISTING_BYPASS
+        if not violations_detail:
+            # FIRMOWE PACZKI (Adrian 2026-06-15): wszystkie SLA-violations to paczki
+            # (exempt) → brak realnej blokady; nie odrzucaj (max() na pustej = crash).
+            pass
+        elif (C.ENABLE_SLA_PREEXISTING_BYPASS
                 and len(violations_detail) > 0
                 and n_blocking == 0):
             log.info(

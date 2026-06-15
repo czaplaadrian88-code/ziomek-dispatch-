@@ -2949,6 +2949,14 @@ PACZKA_FLEX_PENALTY_PER_MIN = 1.0     # liniowy, -1 punkt/min nad cap
 # Flag default OFF — shadow mode pierwsze 24h, flip True przez flags.json hot-reload.
 ENABLE_R_PACZKI_FLEX = _os.environ.get("ENABLE_R_PACZKI_FLEX", "0") == "1"
 
+# PACZKA R6 THERMAL EXEMPT (Adrian 2026-06-15): firmowe paczki (Dr Tusz/tonery,
+# Nadajesz.pl, PACZKA_ADDRESS_IDS) to NIE gorące jedzenie → NIE podlegają regule
+# 35min (R6 termik). Per-order exempt: paczka NIE ustawia r6_max_bag_time/worst i
+# NIE trafia do violations — także w MIESZANYM worku (różnica vs _paczki_only_mix,
+# które wymagało CAŁEGO worka-paczek). Jedzeniówka w tym samym worku DALEJ ma 35min.
+# Hot-reload via flags.json; konstanta-default False (kod inertny do flipu).
+ENABLE_PACZKA_R6_THERMAL_EXEMPT = _os.environ.get("ENABLE_PACZKA_R6_THERMAL_EXEMPT", "0") == "1"
+
 # F2 R1-WAVE-SCOPED DIRECTIONALITY (2026-05-24) — kierunkowość korytarza liczona
 # tylko na dropach współistniejących z falą nowego ordera (feasibility_v2 po planie),
 # zamiast na całym mieszanym bagu. Root cause korpusu eod_drafts/2026-05-24.
