@@ -2304,6 +2304,16 @@ OBJ_F3_R6_BREACH_KOORD_MIN = float(_os.environ.get(
 ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT = _os.environ.get(
     "ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT", "1") == "1"
 
+# ALWAYS-PROPOSE ON SATURATION (Adrian 2026-06-15): gdy nie da się dotrzymać 35min
+# (best_effort r6_breach/low_score, all_candidates_low_score), Ziomek NIE milczy —
+# proponuje najlepszego dostępnego (best_effort, już posortowany) z bannerem
+# "⚠️ Best effort", choćby dostawa była >35min. Koordynator nadpisze. Cel: pełna
+# autonomia (Z1) — Ziomek radzi sobie nie gorzej od człowieka. KOORD ZOSTAJE tylko
+# gdy: early_bird (za wcześnie, wraca do puli) lub PUSTA pula (brak kandydata).
+# Hot-reload flags.json; konstanta-default False (kod inertny do flipu).
+ENABLE_ALWAYS_PROPOSE_ON_SATURATION = _os.environ.get(
+    "ENABLE_ALWAYS_PROPOSE_ON_SATURATION", "0") == "1"
+
 # BUG A shadow (2026-05-26): Σ bag_time + max bag_time + FIFO penalty w scoring.
 # Reguła Adriana: „Suma czasów wszystkich dowozów w bagu jak najmniejsza. Lepiej
 # żeby OBA jechały po 15 min, niż jedno 25 a drugie 8. Jeśli podobnie, najpierw

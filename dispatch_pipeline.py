@@ -1898,6 +1898,15 @@ def _min_propose_score() -> float:
     return float(C.load_flags().get("MIN_PROPOSE_SCORE", C.MIN_PROPOSE_SCORE))
 
 
+def _always_propose_on() -> bool:
+    """ALWAYS-PROPOSE ON SATURATION (Adrian 2026-06-15): gdy ON, bramki ciszy
+    (best_effort r6_breach/low_score, all_candidates_low_score) NIE zwracają KOORD —
+    przepadają do istniejącego PROPOSE (best_effort=True → banner ⚠️). flags.json hot
+    → konstanta common (default False). early_bird i pusta pula ZOSTAJĄ KOORD."""
+    return bool(C.flag("ENABLE_ALWAYS_PROPOSE_ON_SATURATION",
+                       getattr(C, "ENABLE_ALWAYS_PROPOSE_ON_SATURATION", False)))
+
+
 @dataclass
 class Candidate:
     courier_id: str
@@ -5278,7 +5287,8 @@ def _assess_order_impl(
         _best_score_gate = _gate_score_excluding_ranking_deltas(top[0])
         _min_prop_gate = _min_propose_score()  # SCALE-01: flags.json hot → common
         if isinstance(_best_score, (int, float)) and _best_score_gate is not None \
-                and _best_score_gate < _min_prop_gate:
+                and _best_score_gate < _min_prop_gate \
+                and not _always_propose_on():  # ALWAYS-PROPOSE: nie milcz, proponuj feasible best
             _result_low = PipelineResult(
                 order_id=order_id,
                 verdict="KOORD",
@@ -5577,7 +5587,8 @@ def _assess_order_impl(
         ]
         if (getattr(C, "ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT", True)
                 and _be_max_bt > C.BAG_TIME_HARD_MAX_MIN
-                and len(_be_breach_orders) >= 1):
+                and len(_be_breach_orders) >= 1
+                and not _always_propose_on()):  # ALWAYS-PROPOSE: proponuj best_effort z bannerem ⚠️
             _result_be_e = PipelineResult(
                 order_id=order_id,
                 verdict="KOORD",
@@ -5612,7 +5623,8 @@ def _assess_order_impl(
         # liczony przez compute_plan_metrics — wiarygodny dla kandydatów z planem.
         _be_r6_breach = _r6_breach_max(best)
         if (C.decision_flag("ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD")
-                and _be_r6_breach > C.OBJ_F3_R6_BREACH_KOORD_MIN):
+                and _be_r6_breach > C.OBJ_F3_R6_BREACH_KOORD_MIN
+                and not _always_propose_on()):  # ALWAYS-PROPOSE: proponuj best_effort z bannerem ⚠️
             _result_be_r6 = PipelineResult(
                 order_id=order_id,
                 verdict="KOORD",
@@ -5637,7 +5649,8 @@ def _assess_order_impl(
         # przeszedł jako PROPOSE (Bartek O. 187/196 min case 10.05).
         _be_best_score = getattr(best, "score", None)
         _min_prop_be = _min_propose_score()  # SCALE-01: flags.json hot → common
-        if isinstance(_be_best_score, (int, float)) and _be_best_score < _min_prop_be:
+        if (isinstance(_be_best_score, (int, float)) and _be_best_score < _min_prop_be
+                and not _always_propose_on()):  # ALWAYS-PROPOSE: proponuj best_effort z bannerem ⚠️
             _be_r6_count = _r6_pov_count(best)
             _result_be_low = PipelineResult(
                 order_id=order_id,
