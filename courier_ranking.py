@@ -190,19 +190,13 @@ def format_ranking(ranking: List[dict], names: Dict[str, str]) -> str:
 # ---- telegram send ----
 
 def _send_telegram(text: str) -> dict:
-    env = telegram_approver._load_env(TELEGRAM_ENV_PATH)
-    token = env.get("TELEGRAM_BOT_TOKEN", "")
-    if not token:
-        raise RuntimeError("Missing TELEGRAM_BOT_TOKEN in telegram.env")
-    try:
-        cfg = load_config()
-        admin_id = str(cfg["telegram"]["admin_id"])
-    except Exception as e:
-        raise RuntimeError(f"Missing telegram.admin_id in config.json: {e}")
-    return telegram_approver.tg_request(
-        token, "sendMessage",
-        {"chat_id": admin_id, "text": text},
-    )
+    """Ranking przez centrum powiadomień (notify_router) jako LOW — gdy flaga
+    ENABLE_NOTIFY_PRIORITY_ROUTING ON trafia na cichy bot @DajeszBot + kafel
+    panelu, NIE na główny bot (Faza 2, 2026-06-15, prośba Adriana). Flaga OFF =
+    zachowanie legacy (główny bot). Zwraca {ok} dla zgodności z main()."""
+    from dispatch_v2 import telegram_utils
+    ok = telegram_utils.send_admin_alert(text, source="courier_ranking", priority="low")
+    return {"ok": bool(ok)}
 
 
 # ---- main ----
