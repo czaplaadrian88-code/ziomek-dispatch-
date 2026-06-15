@@ -667,6 +667,17 @@ _MP15_STALE_THRESHOLD_SEC = 30 * 60  # 30 min per master plan TOP-15 #15
 _MP15_ALERT_DEDUP_SEC = 30 * 60  # one alert per 30min (no spam)
 _MP15_STATE_PATH = "/root/.openclaw/workspace/dispatch_state/mp15_schedule_staleness.json"
 
+# Pkt 1 (2026-06-15): okno operacyjne alertu STALE_SCHEDULE_AGE.
+# Root cause nocnych false-positive: schedule_today.json odświeża się leniwie
+# (load_schedule TTL 10min) TYLKO gdy żywy konsument dispatchu go woła + cron
+# 06:00/08:00. W nocy ruch zleceń = 0 → nikt nie woła → plik naturalnie starzeje
+# się ponad 30min → alarm, mimo że nie ma zmian ani nowych kurierów do
+# przegapienia ("nowi kurierzy nie widoczni" jest w nocy bezprzedmiotowe).
+# Rozwiązanie: alarmuj tylko w oknie operacyjnym [START, END) Warsaw. Realny
+# sygnał (Sheets API down rano/w dzień) zostaje; nocny szum znika. Env-override.
+_MP15_STALE_ALERT_HOUR_START = int(os.environ.get("MP15_STALE_ALERT_HOUR_START", "6"))
+_MP15_STALE_ALERT_HOUR_END = int(os.environ.get("MP15_STALE_ALERT_HOUR_END", "23"))
+
 
 def _mp15_load_state() -> dict:
     """Load MP-#15 alert dedup state. Fail-open na empty dict."""
@@ -715,8 +726,23 @@ def _mp15_check_schedule_staleness(now, today_iso: str) -> None:
         nowi kurierzy nie widoczni do następnego refresh"
 
     Defensive: NIGDY raise (worker krytyczny). Logged warnings na exception.
+
+    Pkt 1 (2026-06-15): alarm tylko w oknie operacyjnym Warsaw
+    [_MP15_STALE_ALERT_HOUR_START, _MP15_STALE_ALERT_HOUR_END). Poza nim
+    (noc) stale grafiku jest nieszkodliwe — eliminuje nocne false-positive.
     """
     try:
+        # Pkt 1: okno operacyjne — w nocy NIE alarmuj (no-op). `now` to czas
+        # warszawski (datetime.now(WARSAW) z main()).
+        try:
+            hour = now.hour
+        except Exception:
+            hour = None
+        if hour is not None and not (
+            _MP15_STALE_ALERT_HOUR_START <= hour < _MP15_STALE_ALERT_HOUR_END
+        ):
+            return
+
         # Lazy import — tests mogą monkey-patch w schedule_utils
         try:
             from schedule_utils import schedule_age_sec

@@ -116,12 +116,18 @@ def isolated_mp15_state(tmp_path, monkeypatch):
     return state_path
 
 
+# Pkt 1 (2026-06-15): staleness alert ma okno operacyjne (06:00–23:00 Warsaw).
+# Testy używają STAŁEJ godziny dziennej, żeby były deterministyczne niezależnie
+# od pory uruchomienia CI (real now() w nocy tłumiłby alert → flaky).
+_DAYTIME_WARSAW = datetime(2026, 5, 8, 12, 0, tzinfo=ZoneInfo("Europe/Warsaw"))
+
+
 def test_mp15_check_no_alert_when_schedule_fresh(monkeypatch, isolated_mp15_state):
     from dispatch_v2.shift_notifications import worker as w
     sent = []
     with patch("dispatch_v2.telegram_utils.send_admin_alert", side_effect=lambda m: sent.append(m)):
         with patch("schedule_utils.schedule_age_sec", return_value=600):  # 10 min — fresh
-            w._mp15_check_schedule_staleness(datetime.now(ZoneInfo("Europe/Warsaw")), "2026-05-08")
+            w._mp15_check_schedule_staleness(_DAYTIME_WARSAW, "2026-05-08")
     assert sent == []
 
 
@@ -130,7 +136,7 @@ def test_mp15_check_alerts_when_schedule_stale(monkeypatch, isolated_mp15_state)
     sent = []
     with patch("dispatch_v2.telegram_utils.send_admin_alert", side_effect=lambda m: sent.append(m)):
         with patch("schedule_utils.schedule_age_sec", return_value=2400):  # 40 min — stale
-            w._mp15_check_schedule_staleness(datetime.now(ZoneInfo("Europe/Warsaw")), "2026-05-08")
+            w._mp15_check_schedule_staleness(_DAYTIME_WARSAW, "2026-05-08")
     assert len(sent) == 1
     assert "STALE_SCHEDULE_AGE" in sent[0]
     assert "40 min" in sent[0]
@@ -141,11 +147,10 @@ def test_mp15_check_dedup_within_30min(monkeypatch, isolated_mp15_state):
     sent = []
     with patch("dispatch_v2.telegram_utils.send_admin_alert", side_effect=lambda m: sent.append(m)):
         with patch("schedule_utils.schedule_age_sec", return_value=2400):
-            now = datetime.now(ZoneInfo("Europe/Warsaw"))
             # Fire 3 times w bliskim oknie → tylko 1 alert
-            w._mp15_check_schedule_staleness(now, "2026-05-08")
-            w._mp15_check_schedule_staleness(now, "2026-05-08")
-            w._mp15_check_schedule_staleness(now, "2026-05-08")
+            w._mp15_check_schedule_staleness(_DAYTIME_WARSAW, "2026-05-08")
+            w._mp15_check_schedule_staleness(_DAYTIME_WARSAW, "2026-05-08")
+            w._mp15_check_schedule_staleness(_DAYTIME_WARSAW, "2026-05-08")
     assert len(sent) == 1, f"expected 1 alert (dedup), got {len(sent)}"
 
 
@@ -156,9 +161,52 @@ def test_mp15_check_logs_warning_when_telegram_unreachable(monkeypatch, isolated
     caplog.set_level(logging.WARNING)
     with patch("dispatch_v2.telegram_utils.send_admin_alert", side_effect=ConnectionError("network")):
         with patch("schedule_utils.schedule_age_sec", return_value=2400):
-            w._mp15_check_schedule_staleness(datetime.now(ZoneInfo("Europe/Warsaw")), "2026-05-08")
+            w._mp15_check_schedule_staleness(_DAYTIME_WARSAW, "2026-05-08")
     assert any("MP-#15 alert Telegram" in r.message or "STALE_SCHEDULE_AGE" in r.message
                for r in caplog.records)
+
+
+def test_mp15_check_no_alert_at_night_even_when_stale(monkeypatch, isolated_mp15_state):
+    """Pkt 1: w nocy (poza oknem operacyjnym) stale grafiku NIE alarmuje.
+
+    Reprodukcja realnego incydentu 2026-06-15 01:12 Warsaw (grafik 129 min stale,
+    brak zmian/nowych kurierów do przegapienia → szum)."""
+    from dispatch_v2.shift_notifications import worker as w
+    night = datetime(2026, 6, 15, 1, 12, tzinfo=ZoneInfo("Europe/Warsaw"))
+    sent = []
+    with patch("dispatch_v2.telegram_utils.send_admin_alert", side_effect=lambda m: sent.append(m)):
+        with patch("schedule_utils.schedule_age_sec", return_value=129 * 60):  # 129 min
+            w._mp15_check_schedule_staleness(night, "2026-06-15")
+    assert sent == [], f"noc nie powinna alarmować, got {sent}"
+
+
+def test_mp15_check_alerts_in_daytime_when_stale(monkeypatch, isolated_mp15_state):
+    """Pkt 1: realny sygnał (Sheets API down w dzień) zostaje — alarm o 09:00."""
+    from dispatch_v2.shift_notifications import worker as w
+    daytime = datetime(2026, 6, 15, 9, 0, tzinfo=ZoneInfo("Europe/Warsaw"))
+    sent = []
+    with patch("dispatch_v2.telegram_utils.send_admin_alert", side_effect=lambda m: sent.append(m)):
+        with patch("schedule_utils.schedule_age_sec", return_value=45 * 60):  # 45 min
+            w._mp15_check_schedule_staleness(daytime, "2026-06-15")
+    assert len(sent) == 1 and "STALE_SCHEDULE_AGE" in sent[0]
+
+
+def test_mp15_check_window_boundaries(monkeypatch, isolated_mp15_state):
+    """Pkt 1: brzeg okna — 06:00 alarmuje (inclusive start), 23:00 nie (exclusive end)."""
+    from dispatch_v2.shift_notifications import worker as w
+    for hour, expect_alert in ((5, False), (6, True), (22, True), (23, False)):
+        sent = []
+        # świeży stan per iteracja — inaczej dedup zje 2. alert
+        isolated_mp15_state.write_text("{}") if isolated_mp15_state.exists() else None
+        with patch.object(w, "_mp15_load_state", return_value={}):
+            with patch.object(w, "_mp15_save_state"):
+                with patch("dispatch_v2.telegram_utils.send_admin_alert",
+                           side_effect=lambda m: sent.append(m)):
+                    with patch("schedule_utils.schedule_age_sec", return_value=45 * 60):
+                        w._mp15_check_schedule_staleness(
+                            datetime(2026, 6, 15, hour, 0, tzinfo=ZoneInfo("Europe/Warsaw")),
+                            "2026-06-15")
+        assert (len(sent) == 1) is expect_alert, f"hour={hour} expected_alert={expect_alert}, sent={sent}"
 
 
 def test_mp15_daily_backup_writes_after_06_warsaw(monkeypatch, isolated_mp15_state, tmp_path):
