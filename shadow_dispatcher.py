@@ -233,7 +233,12 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        "bundle_fit_",
                        # OBJ FOOD-AGE SHADOW (2026-06-14): food_age_shadow dict
                        # (forward comparator BUG#5) — LOCATION A+B przez propagate.
-                       "food_age_")
+                       "food_age_",
+                       # BEST-EFFORT FASTEST-PICKUP SHADOW (2026-06-15): dict
+                       # best_effort_fastest_pickup_shadow {live_cid/shadow_cid/
+                       # would_differ/shadow_pickup_earlier_min} — walidacja selekcji
+                       # „najszybszy odbiór" PRZED flipem live. LOCATION A+B.
+                       "best_effort_fastest_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
