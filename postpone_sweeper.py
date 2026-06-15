@@ -99,7 +99,7 @@ def run_once(now: Optional[datetime] = None) -> Dict[str, int]:
             expired_oids.append(oid)
 
             # Check if order has been manually assigned
-            orders_state = state_machine.load_state()
+            orders_state = state_machine._read_state()
             current = orders_state.get("orders", {}).get(oid) or {}
             current_cid = current.get("cid")
             if current_cid not in (None, "", "26", 26, "None"):
@@ -125,6 +125,16 @@ def run_once(now: Optional[datetime] = None) -> Dict[str, int]:
                 or {}
             )
             if not order_event:
+                if not current:
+                    # Order zniknął ze stanu (terminalny/usunięty) i brak payloadu
+                    # w decision_record → nic do re-emitu, retry nigdy nie pomoże.
+                    # Drop zamiast pętlić w nieskończoność (zombie postponed entry).
+                    log.warning(
+                        f"POSTPONE_DROP_STALE oid={oid} — order nieobecny w stanie, brak order_event → drop"
+                    )
+                    stats["skipped"] += 1
+                    postponed.pop(oid, None)
+                    continue
                 log.warning(
                     f"POSTPONE_REEMIT_NO_ORDER oid={oid} — skip, will retry next tick"
                 )

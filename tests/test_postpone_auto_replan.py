@@ -89,10 +89,10 @@ def test_sweeper_resolves_when_cid_set(tmp_postponed, tmp_pending):
     entry = _make_entry(minutes_ahead=-5)
     postpone_sweeper._atomic_write_json(str(tmp_postponed), {"12345": entry})
 
-    # mock state_machine.load_state to return a cid
+    # mock state_machine._read_state to return a cid
     mock_state = {"orders": {"12345": {"cid": "500"}}}
     with patch.object(postpone_sweeper, "state_machine") as mock_sm:
-        mock_sm.load_state.return_value = mock_state
+        mock_sm._read_state.return_value = mock_state
         stats = postpone_sweeper.run_once()
 
     assert stats["resolved"] == 1
@@ -110,7 +110,7 @@ def test_sweeper_escalates_when_count_reaches_max(tmp_postponed, tmp_pending):
     with patch.object(postpone_sweeper, "telegram_utils") as mock_tg:
         mock_tg.send_admin_alert = MagicMock()
         with patch.object(postpone_sweeper, "state_machine") as mock_sm:
-            mock_sm.load_state.return_value = {"orders": {"12345": {"cid": None}}}
+            mock_sm._read_state.return_value = {"orders": {"12345": {"cid": None}}}
             stats = postpone_sweeper.run_once()
 
     assert stats["escalated"] == 1
@@ -136,7 +136,7 @@ def test_sweeper_reemits_when_unassigned_and_below_max(
     mock_result = SimpleNamespace(verdict="PROPOSE")
 
     with patch.object(postpone_sweeper, "state_machine") as mock_sm:
-        mock_sm.load_state.return_value = {"orders": {"12345": {"cid": None}}}
+        mock_sm._read_state.return_value = {"orders": {"12345": {"cid": None}}}
         with patch.object(postpone_sweeper, "courier_resolver") as mock_cr:
             mock_cr.dispatchable_fleet.return_value = {}
             with patch.object(postpone_sweeper, "dispatch_pipeline") as mock_dp:
@@ -163,7 +163,7 @@ def test_sweeper_idempotent_on_rerun(tmp_postponed, tmp_pending):
     mock_result = SimpleNamespace(verdict="PROPOSE")
 
     with patch.object(postpone_sweeper, "state_machine") as mock_sm:
-        mock_sm.load_state.return_value = {"orders": {"12345": {"cid": None}}}
+        mock_sm._read_state.return_value = {"orders": {"12345": {"cid": None}}}
         with patch.object(postpone_sweeper, "courier_resolver") as mock_cr:
             mock_cr.dispatchable_fleet.return_value = {}
             with patch.object(postpone_sweeper, "dispatch_pipeline") as mock_dp:
@@ -203,7 +203,7 @@ def test_sweeper_keeps_entry_on_assess_order_error(
     postpone_sweeper._atomic_write_json(str(tmp_postponed), {"12345": entry})
 
     with patch.object(postpone_sweeper, "state_machine") as mock_sm:
-        mock_sm.load_state.return_value = {"orders": {"12345": {"cid": None}}}
+        mock_sm._read_state.return_value = {"orders": {"12345": {"cid": None}}}
         with patch.object(postpone_sweeper, "courier_resolver") as mock_cr:
             mock_cr.dispatchable_fleet.return_value = {}
             with patch.object(postpone_sweeper, "dispatch_pipeline") as mock_dp:
