@@ -82,13 +82,15 @@ from dispatch_v2.shift_notifications.worker import (
 from dispatch_v2.shift_notifications.telegram_send import tg_send_text_with_keyboard
 
 
-def _tg(text: str) -> None:
+def _tg(text: str, *, silent: bool = False) -> None:
     """Send a plain message to the ziomek group (SHIFT_NOTIFY_TARGET_CHAT_ID).
 
+    silent=True → cicha dostawa (bez pinga) dla rutynowych „LOW" zdarzeń
+    (nowy kurier wpięty automatycznie). Konflikty/akcje zostają głośne.
     Best-effort: never raises.
     """
     try:
-        tg_send_text_with_keyboard(text, [])
+        tg_send_text_with_keyboard(text, [], disable_notification=silent)
     except Exception as e:  # noqa: BLE001
         _log.warning(f"_tg send fail: {type(e).__name__}: {e}")
 
@@ -335,7 +337,8 @@ def scan_once(now: Optional[datetime] = None, *, dry_run: bool = False) -> dict:
                     f"{full_name} (cid {m.cid}, gastro: {m.name})\n"
                     f"PIN: <code>{pin}</code> — prześlij kurierowi.\n"
                     f"Widoczny w:\n{lines}\n"
-                    f"Grafik dopasuje się sam (alias '{res.get('alias')}')."
+                    f"Grafik dopasuje się sam (alias '{res.get('alias')}').",
+                    silent=True,  # rutynowy sukces → cicha dostawa (LOW); konflikt niżej zostaje głośny
                 )
                 summary["paired"].append({"name": full_name, "cid": m.cid, "pin": pin})
                 _log.info(f"AUTO-WIRED {full_name!r} -> cid={m.cid} pin={pin}")

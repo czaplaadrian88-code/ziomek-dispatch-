@@ -90,8 +90,14 @@ def tg_send_text_with_keyboard(
     text: str,
     inline_keyboard: list,
     chat_id: Optional[int] = None,
+    *,
+    disable_notification: bool = False,
 ) -> bool:
     """POST sendMessage with inline_keyboard reply_markup.
+
+    disable_notification=True → cicha dostawa (wiadomość trafia do grupy, ale
+    bez pinga/dźwięku). Używane dla rutynowych „LOW" alertów grupowych
+    (np. nowy kurier wpięty) — patrz centrum powiadomień (2026-06-15).
 
     Returns True on success. Best-effort: NEVER raises (caller never blocked).
     """
@@ -121,6 +127,7 @@ def tg_send_text_with_keyboard(
                 "-d", f"chat_id={target_chat}",
                 "-d", f"text={text}",
                 "-d", "parse_mode=HTML",
+                "-d", f"disable_notification={'true' if disable_notification else 'false'}",
                 "-d", f"reply_markup={json.dumps(reply_markup, ensure_ascii=False)}",
             ],
             capture_output=True, text=True, timeout=10,
