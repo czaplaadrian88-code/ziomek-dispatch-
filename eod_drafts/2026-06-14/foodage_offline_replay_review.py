@@ -33,6 +33,9 @@ from dispatch_v2.route_metrics import compute_plan_metrics  # noqa: E402
 CAPTURE = "/root/.openclaw/workspace/dispatch_state/obj_replay_capture.jsonl"
 REPORT = SCRIPTS + "/logs/foodage_offline_replay_review.txt"
 SLA = 35
+SERIOUS_OVER_MIN = 5.0   # regresja "POWAŻNA" = newly-breach >5min ponad SLA (drill-down 15.06)
+GENESIS_OFF_MAX = 33.0   # "genesis" = zlecenie <33min pod OFF (ON tworzy breach ze SPOKOJNEGO planu)
+MIN_TAIL_SAMPLE = 5000   # min re-sim by zaufać, że rzadki (~0,4%) ogon serious/genesis się ujawnił
 
 
 def _dt(iso):
@@ -61,6 +64,32 @@ def _stop_order(p):
     ev += [(t, "D", o) for o, t in (p.predicted_delivered_at or {}).items()]
     ev.sort(key=lambda e: e[0])
     return [f"{k}:{o}" for _, k, o in ev]
+
+
+def _per_order_elapsed(plan, bag, new_order):
+    """Replika _count_sla_violations per-order: {oid: (elapsed_min, breach_bool)}.
+    Kotwica = pickup_at(TSP) | picked_up_at; brak twardej kotwicy → pomiń."""
+    out = {}
+    da = plan.predicted_delivered_at or {}
+    pa = plan.pickup_at or {}
+    for o in list(bag) + [new_order]:
+        pred = da.get(o.order_id)
+        if pred is None:
+            continue
+        if o.order_id in pa:
+            pu = pa[o.order_id]
+        elif o.picked_up_at is not None:
+            pu = o.picked_up_at
+            if pu.tzinfo is None:
+                pu = pu.replace(tzinfo=timezone.utc)
+            pu = pu.astimezone(timezone.utc)
+        else:
+            continue
+        if pred.tzinfo is None:
+            pred = pred.replace(tzinfo=timezone.utc)
+        elapsed = (pred - pu).total_seconds() / 60.0
+        out[o.order_id] = (round(elapsed, 1), elapsed > SLA)
+    return out
 
 
 def _p(xs, q):
@@ -126,12 +155,27 @@ def main():
             with C.food_age_override(True):
                 p_on = simulate_bag_route_v2(tuple(cp), bag, no, **kw)
             m_off, m_on = compute_plan_metrics(p_off, dp or 1.0), compute_plan_metrics(p_on, dp or 1.0)
+            _soff, _son = p_off.sla_violations or 0, p_on.sla_violations or 0
+            _worst_over, _genesis = 0.0, False
+            if _son > _soff:                      # regresja → rozłóż najgorszy newly-breach
+                _eoff = _per_order_elapsed(p_off, bag, no)
+                _eon = _per_order_elapsed(p_on, bag, no)
+                _overs = []
+                for _oid, (_elon, _bron) in _eon.items():
+                    _eloff, _broff = _eoff.get(_oid, (None, False))
+                    if _bron and not _broff:      # breachuje pod ON a NIE pod OFF
+                        _overs.append((round(_elon - SLA, 1),
+                                       _eloff is not None and _eloff < GENESIS_OFF_MAX))
+                if _overs:
+                    _overs.sort(reverse=True)
+                    _worst_over, _genesis = _overs[0]
             results.append({
                 "changed": _stop_order(p_off) != _stop_order(p_on),
                 "bag": len(bag),
                 "th_off": m_off.get("max_thermal_age_min"), "th_on": m_on.get("max_thermal_age_min"),
                 "idle_off": m_off.get("idle_total_min"), "idle_on": m_on.get("idle_total_min"),
-                "sla_off": p_off.sla_violations or 0, "sla_on": p_on.sla_violations or 0,
+                "sla_off": _soff, "sla_on": _son,
+                "worst_over": _worst_over, "genesis": _genesis,
             })
         except Exception:
             skipped += 1
@@ -141,6 +185,9 @@ def main():
     changed = [r for r in results if r["changed"]]
     sla_reg = [r for r in results if r["sla_on"] > r["sla_off"]]
     sla_improve = [r for r in results if r["sla_on"] < r["sla_off"]]
+    serious_reg = [r for r in sla_reg if r.get("worst_over", 0) > SERIOUS_OVER_MIN]
+    genesis_serious = [r for r in serious_reg if r.get("genesis")]
+    worst_mag = round(max((r.get("worst_over", 0) for r in sla_reg), default=0.0), 1)
     th_d = [r["th_off"] - r["th_on"] for r in changed
             if isinstance(r["th_off"], (int, float)) and isinstance(r["th_on"], (int, float))]
     idle_d = [r["idle_off"] - r["idle_on"] for r in changed
@@ -159,14 +206,29 @@ def main():
     # się NETTO i magnituda ogona). Stary blanket-block był za sztywny.
     _reg_rate = (100.0 * len(sla_reg) / n) if n else 0.0
     _net_sla = len(sla_improve) - len(sla_reg)
+    _subsampled = len(recs) < total_elig   # ogon serious/genesis SPARSE → subsample go gubi (15.06)
     if n < 200:
         rec = f"⏳ ZA MAŁO ortools-decyzji (n={n}). Poszerz --window-days / --max."
     elif len(sla_reg) >= len(sla_improve) or _reg_rate > 2.0:
         rec = (f"🛑 NIE FLIPOWAĆ. Regresja SLA dominuje/za wysoka: {len(sla_reg)} regresji vs "
                f"{len(sla_improve)} poprawy ({_reg_rate:.1f}%). Zbadać przyczynę PRZED flipem.")
+    elif len(serious_reg) >= 3 or len(genesis_serious) >= 2:
+        # Bramka CIĘŻKIEGO OGONA (15.06): net+mean maskują rozkład — blokuj gdy regresje
+        # są POWAŻNE (magnituda), nie tylko liczne. genesis = breach stworzony ze spokojnego planu.
+        rec = (f"🛑 NIE FLIPOWAĆ — CIĘŻKI OGON (net/mean to maskują, NIE patrz na sam 'KANDYDAT'). "
+               f"{len(serious_reg)} regresji POWAŻNYCH (>{SERIOUS_OVER_MIN:.0f}min ponad SLA) z {len(sla_reg)}, "
+               f"w tym {len(genesis_serious)} genesis (breach stworzony ze SPOKOJNEGO <{GENESIS_OFF_MAX:.0f}min planu), "
+               f"max +{worst_mag}min. NETTO SLA {_net_sla:+d} liczy SZTUKI nie magnitudę — poprawy marginalne, "
+               f"regresje katastrofalne. Redesign single-solve hard-constraint (food-age nie zwiększa "
+               f"sla_viol vs R6) PRZED flipem. Detal: eod_drafts/2026-06-15/foodage_regression_drilldown.py.")
     elif cr < 5:
         rec = (f"🔧 NISKI ZASIĘG (changed={cr:.1f}%). Rozważ podkręcenie coeff (jest {coeff}) "
                f"i powtórz, albo uznać BUG#5 za rzadki.")
+    elif _subsampled and len(recs) < MIN_TAIL_SAMPLE:
+        rec = (f"🟡 PRÓBA ZA MAŁA NA OGON (re-sim {len(recs)}/{total_elig}, próg {MIN_TAIL_SAMPLE}) — "
+               f"NIE certyfikować flipa. Ogon serious/genesis SPARSE (~0,4%), mała próba go gubi "
+               f"(15.06: --max 1500 → 0 serious; --max 6000 → 23 serious). "
+               f"Uruchom --max ≥{MIN_TAIL_SAMPLE} (lub pełne {total_elig}) dla wiążącego werdyktu.")
     elif th_mean is not None and th_mean > 0:
         rec = (f"✅ KANDYDAT DO FLIPA (do ACK Adriana). changed={cr:.1f}%, NETTO SLA {_net_sla:+d} "
                f"({len(sla_improve)} poprawy vs {len(sla_reg)} regresji = {_reg_rate:.1f}%), "
@@ -183,6 +245,8 @@ def main():
         f"ORTOOLS-decyzji (po filtrze strategy): n={n}",
         f"  changed (zmiana kolejności przystanków): {len(changed)} ({cr:.1f}%)",
         f"  regresja SLA (on>off): {len(sla_reg)}  <-- 0=OK, >0=BLOCKER",
+        f"  ├─ POWAŻNE (>{SERIOUS_OVER_MIN:.0f}min ponad SLA): {len(serious_reg)} | "
+        f"genesis (<{GENESIS_OFF_MAX:.0f}min pod OFF→breach): {len(genesis_serious)} | max +{worst_mag}min",
         f"  poprawa SLA (on<off):  {len(sla_improve)}",
         "",
         "Delta thermal na ZMIENIONYCH (off−on, +=świeższe):",
