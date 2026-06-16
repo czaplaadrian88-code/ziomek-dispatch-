@@ -1866,6 +1866,69 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _update_plan_on_picked_up(kid, zid, dzien_odbioru)
     # ================== END PICKED_UP RECONCILE ==================
 
+    # ============ GROUND-TRUTH PICKUP FALLBACK (R1, 2026-06-16) ============
+    # Kurierzy BEZ konta panel-sync (wszyscy poza cid 123/21): odbiór melduje apka
+    # → courier_ground_truth.picked_up_at + courier_status_events status 5, ALE panel
+    # nie pokazuje OTWARTEGO sid==5 → PICKED_UP RECONCILE wyżej go gubi → zlecenie
+    # domyka DELIVERED-reconcile (ustawia delivered_at, NIGDY picked_up_at) → plan_recheck
+    # planuje FANTOMOWY odbiór już-niesionego (zawyżone ETA, dostawa-przed-odbiorem).
+    # Domykamy lukę u ŹRÓDŁA: gdy ground_truth zna odbiór dla (kurier ZGODNY, oid) a
+    # orders_state wciąż assigned/picked_up_at=null → emit COURIER_PICKED_UP z czasem GT.
+    # = zaplanowana „Faza 2b-LIVE" z courier_ground_truth.py. Idempotentne (event_id +
+    # guard picked_up_at). Default OFF (decision_flag absent → False). Naprawia WSZYSTKICH
+    # konsumentów orders_state (plan + sla_tracker + gate_audit + apka).
+    if decision_flag("ENABLE_PICKUP_FROM_GROUND_TRUTH"):
+        try:
+            from dispatch_v2 import courier_ground_truth as _gtmod
+            from zoneinfo import ZoneInfo as _ZI
+            _WARSAW_GT = _ZI("Europe/Warsaw")
+            _gt = _gtmod.load_ground_truth()
+            for _zid, _sorder in current_state.items():
+                if _sorder.get("status") != "assigned" or _sorder.get("picked_up_at"):
+                    continue
+                _kid = str(_sorder.get("courier_id") or "")
+                if not _kid:
+                    continue
+                _e = _gtmod.get_entry(_gt, _zid)
+                if not _e:
+                    continue
+                _pu_epoch = _e.get("picked_up_at")
+                # tylko gdy GT zna odbiór, NIE zna jeszcze doręczenia (delivered idzie
+                # własną ścieżką), i kurier w GT zgadza się z orders_state (B6: nie ufaj
+                # wpisom reassign o niezgodnym kurierze).
+                if not _pu_epoch or _e.get("delivered_at"):
+                    continue
+                if str(_e.get("courier_id") or "") != _kid:
+                    continue
+                try:
+                    _pu_ts = datetime.fromtimestamp(int(_pu_epoch), _WARSAW_GT).strftime(
+                        "%Y-%m-%d %H:%M:%S")
+                except (ValueError, OSError, OverflowError, TypeError):
+                    continue
+                _st_pc = _sorder.get("pickup_coords")
+                _pc = list(_st_pc) if (_st_pc and len(_st_pc) == 2) else None
+                _ev = emit(
+                    "COURIER_PICKED_UP",
+                    order_id=_zid,
+                    courier_id=_kid,
+                    payload={"timestamp": _pu_ts, "pickup_coords": _pc,
+                             "source": "ground_truth_fallback"},
+                    event_id=f"{_zid}_COURIER_PICKED_UP_gtfallback",
+                )
+                if _ev:
+                    stats["picked_up"] += 1
+                    update_from_event({
+                        "event_type": "COURIER_PICKED_UP",
+                        "order_id": _zid,
+                        "courier_id": _kid,
+                        "payload": {"timestamp": _pu_ts, "pickup_coords": _pc},
+                    })
+                    _log.info(f"PICKED_UP {_zid} (ground_truth_fallback) kurier={_kid} at {_pu_ts}")
+                    _update_plan_on_picked_up(_kid, _zid, _pu_ts)
+        except Exception as _e:
+            _log.warning(f"gt_pickup_fallback fail: {type(_e).__name__}: {_e}")
+    # ============ END GROUND-TRUTH PICKUP FALLBACK ============
+
     # ============ ORDER-TIME RE-CHECK (czas_kuriera + pickup) ============
     # Re-czytaj panelowe pola czasu dla NIE-terminalnych zleceń i emituj
     # update gdy się zmieniły. Dwie niezależne detekcje na jednym fetchu:
