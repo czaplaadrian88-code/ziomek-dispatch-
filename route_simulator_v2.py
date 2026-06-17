@@ -35,6 +35,17 @@ DWELL_PICKUP_MIN = 1.0   # E1 2026-05-17: postój pod restauracją = czysta obs�
 DWELL_DROPOFF_MIN = 3.5  # 2026-05-17 kalibracja: GPS tier-1 dwell u klienta med 3.4-4.25 min (n=15-46). Było 2.0 (V3.27.3).
 BRUTEFORCE_MAX_BAG_AFTER = 3  # per D19
 
+# N5 krok 2 (2026-06-17): tolerancja punktualności committed (min) — kontekst per-decyzja.
+# Ustawiana przez dispatch_pipeline z loadgov_ewma (strict 5 / loose 10 przy niedoborze)
+# PRZED oceną kandydatów zlecenia (stała w obrębie zlecenia → bezpieczna dla thread-poola
+# kandydatów). None = użyj strict default. Wzorzec jak _LOADGOV_STATE (module context).
+_COMMITTED_PICKUP_TOL_MIN = None
+
+def set_committed_pickup_tolerance(tol_min):
+    """Pipeline ustawia tolerancję committed (min) per-decyzja. None → strict default."""
+    global _COMMITTED_PICKUP_TOL_MIN
+    _COMMITTED_PICKUP_TOL_MIN = tol_min
+
 # V3.27 Bug Y tie-breaker (2026-04-25 wieczór): gdy 2+ permutacje mają
 # |total_duration_diff| < 2 min od leader, secondary sort by first_drop arrival
 # time ASC. Adrian's reasoning: "lepiej żeby jedno zamówienie jechało 3min,
@@ -1112,6 +1123,42 @@ def _ortools_plan(
             f"OBJ_FRESH_BUILD_FAIL {type(_pf_e).__name__}: {_pf_e}")
         pickup_freshness_penalties = None
 
+    # N5 krok 2 (2026-06-17): KARA PUNKTUALNOŚCI COMMITTED — soft upper bound na
+    # pickupach z czas_kuriera (obietnica dla restauracji). bound = (czas_kuriera−now)
+    # + tolerancja (load-aware: 5 strict / 10 niedobór, z _COMMITTED_PICKUP_TOL_MIN
+    # ustawionego przez pipeline z loadgov_ewma). Flag-gated, default OFF. Soft —
+    # NIGDY INFEASIBLE (lekcja 7500/d). Cel: solver nie ślizga committed dla skrótu.
+    pickup_committed_penalties = None
+    try:
+        if _common.decision_flag("ENABLE_OBJ_COMMITTED_PICKUP_PENALTY") and now is not None:
+            _pc_coeff = float(getattr(_common, "OBJ_COMMITTED_PICKUP_PENALTY_COEFF", 0.0))
+            _pc_tol = _COMMITTED_PICKUP_TOL_MIN
+            if _pc_tol is None:
+                _pc_tol = float(getattr(_common, "OBJ_COMMITTED_PICKUP_TOL_STRICT_MIN", 5.0))
+            if _pc_coeff > 0:
+                _pc: List[Optional[Tuple[float, float]]] = [None] * N
+                for _i in range(N):
+                    _node = nodes[_i]
+                    if _node.get("kind") != "pickup":
+                        continue
+                    _ref = _node.get("ref")
+                    _ck_raw = getattr(_ref, "czas_kuriera_warsaw", None) if _ref is not None else None
+                    if _ck_raw is None or str(_ck_raw).strip() in ("", "None", "null", "NULL"):
+                        continue
+                    _ck_dt = _common.parse_panel_timestamp(_ck_raw)
+                    if _ck_dt is None:
+                        continue
+                    if _ck_dt.tzinfo is None:
+                        _ck_dt = _ck_dt.replace(tzinfo=timezone.utc)
+                    _bound_min = (_ck_dt.astimezone(timezone.utc) - now
+                                  ).total_seconds() / 60.0 + _pc_tol
+                    _pc[_i] = (_bound_min, _pc_coeff)
+                pickup_committed_penalties = _pc
+    except Exception as _pc_e:
+        _log.warning(
+            f"OBJ_COMMITTED_PICKUP_BUILD_FAIL {type(_pc_e).__name__}: {_pc_e}")
+        pickup_committed_penalties = None
+
     solution = tsp_solver.solve_tsp_with_constraints(
         num_stops=N,
         pickup_drop_pairs=pickup_drop_pairs,
@@ -1122,6 +1169,7 @@ def _ortools_plan(
         time_limit_ms=int(_ot_ms),
         delivery_soft_deadlines=delivery_soft_deadlines,
         pickup_freshness_penalties=pickup_freshness_penalties,
+        pickup_committed_penalties=pickup_committed_penalties,
         delivery_food_age_penalties=delivery_food_age_penalties,
         span_cost_coeff=_span_cost_coeff,
     )
@@ -1144,6 +1192,7 @@ def _ortools_plan(
             time_limit_ms=int(_ot_ms),
             delivery_soft_deadlines=delivery_soft_deadlines,
             pickup_freshness_penalties=pickup_freshness_penalties,
+            pickup_committed_penalties=pickup_committed_penalties,
             delivery_food_age_penalties=delivery_food_age_penalties,
             span_cost_coeff=_span_cost_coeff,
         )

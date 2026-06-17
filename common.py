@@ -2252,6 +2252,20 @@ V3273_WAIT_IDLE_SOFT_THRESHOLD_MIN = 5.0   # Adrian 17.06: kara idle rośnie pow
 V3273_WAIT_IDLE_SOFT_PER_MIN = float(_os.environ.get(
     "V3273_WAIT_IDLE_SOFT_PER_MIN", "-4.0"))   # /min idle powyżej progu (empty-handed, bez reject)
 
+# N5 krok 2 (2026-06-17, Adrian ACK): KARA PUNKTUALNOŚCI COMMITTED w celu solvera.
+# Soft upper bound na pickupach z czas_kuriera (obietnica dla restauracji), anchor =
+# czas_kuriera + tolerancja. Solver przestaje ślizgać committed dla skrótu jazdy.
+# SOFT (SetCumulVarSoftUpperBound) — NIGDY nie INFEASIBLE (lekcja: sztywne ±5 = 7500 INFEASIBLE/d).
+# Tolerancja load-aware: strict 5 min / loose 10 min gdy loadgov_ewma ≥ próg (awaryjne, dni jak 16.05).
+# Flaga przez decision_flag (flags.json), default OFF. Coeff env-tunable (kalibracja w replayu).
+ENABLE_OBJ_COMMITTED_PICKUP_PENALTY = _os.environ.get(
+    "ENABLE_OBJ_COMMITTED_PICKUP_PENALTY", "0") == "1"
+OBJ_COMMITTED_PICKUP_PENALTY_COEFF = float(_os.environ.get(
+    "OBJ_COMMITTED_PICKUP_PENALTY_COEFF", "100.0"))
+OBJ_COMMITTED_PICKUP_TOL_STRICT_MIN = 5.0
+OBJ_COMMITTED_PICKUP_TOL_LOOSE_MIN = 10.0
+OBJ_COMMITTED_PICKUP_LOAD_THRESHOLD = 4.5   # loadgov_ewma ≥ to → loosening (Adrian: 50 zleceń/11 std ≈ 4,5)
+
 # R-INTRA-RESTAURANT-GAP (HARD, 2026-05-14): max gap między dwoma kolejnymi
 # pickupami w tej samej restauracji. Adrian doktryna: kurier nie będzie czekał
 # >5 min w tej samej restauracji żeby razem odebrać. Diagnoza propozycji

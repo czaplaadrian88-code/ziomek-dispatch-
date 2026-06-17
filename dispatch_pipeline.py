@@ -2719,6 +2719,21 @@ def _assess_order_impl(
     # (kara bag≥3 przy ewma>2,7 + alert >3,5) za 🛑 ENABLE_FLEET_LOAD_GOVERNOR.
     loadgov_now, loadgov_ewma, loadgov_orders, loadgov_couriers = (
         _loadgov_compute(fleet_snapshot, now))
+    # N5 krok 2 (2026-06-17): tolerancja punktualności committed load-aware →
+    # route_simulator (czyta ją w _ortools_plan). loadgov_ewma ≥ próg 4,5 (niedobór,
+    # dni jak 16.05) → loose 10 min; inaczej strict 5. Gated; flaga OFF → bound się
+    # nie buduje (no-op). loadgov_ewma None → strict (bezpiecznie).
+    try:
+        if C.decision_flag("ENABLE_OBJ_COMMITTED_PICKUP_PENALTY"):
+            from dispatch_v2 import route_simulator_v2 as _rsim_n5
+            _n5_thr = float(getattr(C, "OBJ_COMMITTED_PICKUP_LOAD_THRESHOLD", 4.5))
+            _n5_tol = (
+                float(getattr(C, "OBJ_COMMITTED_PICKUP_TOL_LOOSE_MIN", 10.0))
+                if (loadgov_ewma is not None and loadgov_ewma >= _n5_thr)
+                else float(getattr(C, "OBJ_COMMITTED_PICKUP_TOL_STRICT_MIN", 5.0)))
+            _rsim_n5.set_committed_pickup_tolerance(_n5_tol)
+    except Exception:
+        pass  # best-effort; bound ma strict default gdy nie ustawione
     if C.decision_flag("ENABLE_FLEET_LOAD_GOVERNOR"):
         _lg_emit, _LOADGOV_STATE["alert_armed"] = _loadgov_alert_transition(
             loadgov_ewma, _LOADGOV_STATE["alert_armed"])

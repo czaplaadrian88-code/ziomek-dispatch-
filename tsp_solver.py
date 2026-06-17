@@ -48,6 +48,7 @@ def solve_tsp_with_constraints(
     cost_matrix_min: Optional[List[List[float]]] = None,
     delivery_soft_deadlines: Optional[List[Optional[Tuple[float, float]]]] = None,
     pickup_freshness_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
+    pickup_committed_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
     delivery_food_age_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
     span_cost_coeff: float = 0.0,
 ) -> Optional[TspSolution]:
@@ -113,6 +114,9 @@ def solve_tsp_with_constraints(
         return None
     # Sprint OBJ FRESH (2026-05-30): pickup_freshness_penalties validation
     if pickup_freshness_penalties is not None and len(pickup_freshness_penalties) != num_stops:
+        return None
+    # N5 krok 2 (2026-06-17): pickup_committed_penalties validation
+    if pickup_committed_penalties is not None and len(pickup_committed_penalties) != num_stops:
         return None
     # Sprint OBJ FOOD-AGE ADDITIVE (2026-06-14): delivery_food_age_penalties validation
     if delivery_food_age_penalties is not None and len(delivery_food_age_penalties) != num_stops:
@@ -270,6 +274,29 @@ def solve_tsp_with_constraints(
             if bound_min is None or coeff is None or coeff <= 0:
                 continue
             if _m_pf.isnan(bound_min) or _m_pf.isinf(bound_min):
+                continue
+            scaled_bound = max(0, min(int(bound_min * TIME_SCALE), capacity_max))
+            idx = manager.NodeToIndex(stop_idx)
+            time_dimension.SetCumulVarSoftUpperBound(
+                idx, scaled_bound, int(round(coeff)))
+
+    # N5 krok 2 (2026-06-17): KARA PUNKTUALNOŚCI COMMITTED — soft upper bound na
+    # węzłach pickup z committed czas_kuriera. CumulVar(pickup) > (czas_kuriera +
+    # tolerancja) → kara coeff×overshoot. TEN SAM prymityw co FRESH/R6 (Soft —
+    # NIGDY INFEASIBLE). Chroni OBIETNICĘ dla restauracji: solver przestaje ślizgać
+    # committed odbiór dla skrótu jazdy (tier2 breach z #1/#3). Tolerancja load-aware
+    # (5 strict / 10 przy niedoborze) wstrzyknięta w bound_min przez route_simulator.
+    if pickup_committed_penalties is not None:
+        import math as _m_pc
+        capacity_max = int(max_route_min * TIME_SCALE)
+        for stop_idx in range(num_stops):
+            spec = pickup_committed_penalties[stop_idx]
+            if spec is None:
+                continue
+            bound_min, coeff = spec
+            if bound_min is None or coeff is None or coeff <= 0:
+                continue
+            if _m_pc.isnan(bound_min) or _m_pc.isinf(bound_min):
                 continue
             scaled_bound = max(0, min(int(bound_min * TIME_SCALE), capacity_max))
             idx = manager.NodeToIndex(stop_idx)
