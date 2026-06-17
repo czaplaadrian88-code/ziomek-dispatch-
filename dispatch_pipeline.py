@@ -861,16 +861,39 @@ def _e2_ab_arm(order_id) -> str:
 
 
 def _pln_pure_resort(top) -> None:
-    """E2: sortuj `top` malejaco po pln_v (kandydaci bez pln_v na koniec, stabilnie). In-place."""
+    """E2: sortuj `top` po pln_v (pay-aware). In-place.
+
+    FIX 2026-06-17 (bug tier2): czysty sort po pln_v IGNOROWAŁ twardy demote tier2
+    (łamanie committed odbioru) + buckety GPS → pay-pick łamał cudzy committed o
+    5–28 min dla drobnego zysku pay (audit: 23 vs 8 wymuszonych złamań / 3 dni,
+    ΣΔpln_v=117 = marny zysk, mediana +2,83/flip). pln NIE może liczyć tylko po
+    wynagrodzeniu — zła jakość = utrata klienta. Gdy ENABLE_PLN_RESORT_WITHIN_TIER
+    ON: sortuj W OBRĘBIE tieru/bucketu — `(tier2 na koniec, bucket informed>other>
+    blind, -pln_v)` — tier2 NIGDY nie bije tier0/1; pay-aware decyduje tylko
+    wewnątrz tego samego tieru (eksperyment zachowany tam, gdzie bezpieczny).
+    Flaga OFF (default) = legacy czysty pln_v (porównanie A/B)."""
     if not top:
         return
     _orig = {id(c): i for i, c in enumerate(top)}
+    _within = C.flag("ENABLE_PLN_RESORT_WITHIN_TIER", False)
 
-    def _key(c):
+    def _pln_ord(c):
         pv = (getattr(c, "metrics", None) or {}).get("pln_v")
-        if isinstance(pv, (int, float)):
-            return (-float(pv), _orig[id(c)])
-        return (float("inf"), _orig[id(c)])
+        return -float(pv) if isinstance(pv, (int, float)) else float("inf")
+
+    def _bucket(c):
+        if _is_informed_cand(c):
+            return 0
+        if _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
+            return 2
+        return 1
+
+    if _within:
+        def _key(c):
+            return (1 if _late_pickup_tier(c) == 2 else 0, _bucket(c), _pln_ord(c), _orig[id(c)])
+    else:
+        def _key(c):
+            return (_pln_ord(c), _orig[id(c)])
 
     _pre = id(top[0])
     top.sort(key=_key)
