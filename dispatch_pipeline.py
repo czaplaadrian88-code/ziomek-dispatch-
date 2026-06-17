@@ -876,10 +876,33 @@ def _pln_pure_resort(top) -> None:
         return
     _orig = {id(c): i for i, c in enumerate(top)}
     _within = C.flag("ENABLE_PLN_RESORT_WITHIN_TIER", False)
+    # C (2026-06-17): pln_v quality-aware — kara za faktyczny R6-breach planu +
+    # spóźniony NOWY odbiór, by pln NIE liczył tylko po wynagrodzeniu (zła jakość =
+    # utrata klienta). pln_v ma już P(breach) statystyczny + lezenie, ale NIE realny
+    # R6/late tego planu. Aplikowane TYLKO z within-tier (gated). Wagi env-override.
+    # OFF = czysty pln_v w obrębie tieru (polityka B).
+    _quality = C.flag("ENABLE_PLN_QUALITY_AWARE", False)
+    _q_r6 = float(getattr(C, "PLN_QUALITY_R6_COEFF", 0.5))
+    _q_late = float(getattr(C, "PLN_QUALITY_LATE_COEFF", 0.3))
+    _q_free = float(getattr(C, "PLN_QUALITY_LATE_FREE_MIN", 5.0))
+
+    def _pln_v_of(c):
+        pv = (getattr(c, "metrics", None) or {}).get("pln_v")
+        return float(pv) if isinstance(pv, (int, float)) else None
 
     def _pln_ord(c):
-        pv = (getattr(c, "metrics", None) or {}).get("pln_v")
-        return -float(pv) if isinstance(pv, (int, float)) else float("inf")
+        pv = _pln_v_of(c)
+        return -pv if pv is not None else float("inf")
+
+    def _pln_ord_quality(c):
+        pv = _pln_v_of(c)
+        if pv is None:
+            return float("inf")
+        m = getattr(c, "metrics", None) or {}
+        r6 = m.get("objm_r6_breach_max_min") or 0.0
+        late = m.get("new_pickup_late_min") or 0.0
+        pv = pv - _q_r6 * max(0.0, float(r6)) - _q_late * max(0.0, float(late) - _q_free)
+        return -pv
 
     def _bucket(c):
         if _is_informed_cand(c):
@@ -888,9 +911,10 @@ def _pln_pure_resort(top) -> None:
             return 2
         return 1
 
+    _pln_key = _pln_ord_quality if (_within and _quality) else _pln_ord
     if _within:
         def _key(c):
-            return (1 if _late_pickup_tier(c) == 2 else 0, _bucket(c), _pln_ord(c), _orig[id(c)])
+            return (1 if _late_pickup_tier(c) == 2 else 0, _bucket(c), _pln_key(c), _orig[id(c)])
     else:
         def _key(c):
             return (_pln_ord(c), _orig[id(c)])
