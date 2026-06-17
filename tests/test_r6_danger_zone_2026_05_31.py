@@ -32,40 +32,40 @@ def test_flag_off_via_env(monkeypatch):
 # === penalty math ===
 
 def test_under_soft_zero():
-    assert _r6_soft_penalty(29.1, 30, 8, True, 32, 16) == (0.0, 0.0)
-    assert _r6_soft_penalty(30.0, 30, 8, True, 32, 16) == (0.0, 0.0)
+    assert _r6_soft_penalty(29.1, 30, 8, True, 32, 16) == (0.0, 0.0, 0.0)
+    assert _r6_soft_penalty(30.0, 30, 8, True, 32, 16) == (0.0, 0.0, 0.0)
 
 
 def test_soft_zone_linear_unchanged():
     # 30-32 = bufor R-BUFFER-OK, bez ekstra kary (danger zaczyna się od 32)
-    pen, leg = _r6_soft_penalty(31.0, 30, 8, True, 32, 16)
+    pen, leg, _ = _r6_soft_penalty(31.0, 30, 8, True, 32, 16)
     assert pen == -8.0 and leg == -8.0
-    pen, leg = _r6_soft_penalty(32.0, 30, 8, True, 32, 16)
+    pen, leg, _ = _r6_soft_penalty(32.0, 30, 8, True, 32, 16)
     assert pen == -16.0 and leg == -16.0
 
 
 def test_danger_zone_steeper():
     # 33 min: legacy -24, danger ekstra -16 → -40
-    pen, leg = _r6_soft_penalty(33.0, 30, 8, True, 32, 16)
+    pen, leg, _ = _r6_soft_penalty(33.0, 30, 8, True, 32, 16)
     assert leg == -24.0
     assert pen == -40.0
     # 33.9 (477285 Kołłątaja): legacy -31.2 → danger -61.6 (≈2×)
-    pen, leg = _r6_soft_penalty(33.9, 30, 8, True, 32, 16)
+    pen, leg, _ = _r6_soft_penalty(33.9, 30, 8, True, 32, 16)
     assert abs(leg - (-31.2)) < 0.01
     assert abs(pen - (-61.6)) < 0.01
     # 35 (hard limit): legacy -40 → danger -88
-    pen, leg = _r6_soft_penalty(35.0, 30, 8, True, 32, 16)
+    pen, leg, _ = _r6_soft_penalty(35.0, 30, 8, True, 32, 16)
     assert pen == -88.0 and leg == -40.0
 
 
 def test_flag_off_equals_legacy():
-    pen, leg = _r6_soft_penalty(33.9, 30, 8, False, 32, 16)
+    pen, leg, _ = _r6_soft_penalty(33.9, 30, 8, False, 32, 16)
     assert pen == leg  # danger off → tylko liniowa
     assert abs(pen - (-31.2)) < 0.01
 
 
 def test_none_zero():
-    assert _r6_soft_penalty(None, 30, 8, True, 32, 16) == (0.0, 0.0)
+    assert _r6_soft_penalty(None, 30, 8, True, 32, 16) == (0.0, 0.0, 0.0)
 
 
 # === 477285: flip Aleksander (33.9) -> Andrei (29.1) ===
@@ -73,8 +73,8 @@ def test_none_zero():
 def test_477285_danger_penalty_flips_winner():
     """Ekstra kara danger na Aleksandrze (33.9) MUSI przewyższyć przewagę score
     nad Andreiem (29.1, 0 kary R6), żeby wygrał lepszy dowóz."""
-    alek_pen_new, alek_pen_leg = _r6_soft_penalty(33.9, 30, 8, True, 32, 16)
-    andrei_pen_new, _ = _r6_soft_penalty(29.1, 30, 8, True, 32, 16)
+    alek_pen_new, alek_pen_leg, _ = _r6_soft_penalty(33.9, 30, 8, True, 32, 16)
+    andrei_pen_new, _, _ = _r6_soft_penalty(29.1, 30, 8, True, 32, 16)
     extra_on_alek = alek_pen_leg - alek_pen_new   # ile dodatkowo karzemy Aleksandra
     score_gap = 0.6 - (-0.5)                       # Aleksander 0.6 vs Andrei -0.5 (z replay)
     assert andrei_pen_new == 0.0                   # Andrei <30 → bez kary, score nietknięty
@@ -87,7 +87,7 @@ def test_477285_danger_penalty_flips_winner():
 
 def test_inline_uses_helper_and_legacy():
     src = inspect.getsource(dispatch_pipeline)
-    assert "bonus_r6_soft_pen, bonus_r6_soft_pen_legacy = _r6_soft_penalty(" in src
+    assert "bonus_r6_soft_pen, bonus_r6_soft_pen_legacy, bonus_r6_soft_pen_raw = _r6_soft_penalty(" in src
     assert '"bonus_r6_soft_pen_legacy":' in src  # serializowane do metrics
 
 

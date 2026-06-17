@@ -640,6 +640,14 @@ ENABLE_R6_DANGER_ZONE_PENALTY = os.environ.get(
 BAG_TIME_DANGER_MIN = float(os.environ.get("BAG_TIME_DANGER_MIN", "32.0"))
 BAG_TIME_DANGER_PENALTY_PER_MIN = float(os.environ.get("BAG_TIME_DANGER_PENALTY_PER_MIN", "16.0"))
 
+# E7 2026-06-17 (robustness/higiena) — cap kary R6-soft, by astronomiczne wartości z
+# zombie-pickup (r6_max_bag_time liczone z dni → kara ~ -240000) nie zatruwały score/LGBM.
+# Próg -2000 dobrany replayem flipów (eod_drafts/2026-06-17/r6cap_flip_replay.py): 0 zmian
+# selekcji na 7d (kandydat z karą < -2000 i tak jest zdominowany). UWAGA: -300/-500 z notatki
+# kalibracyjnej dałyby 20/8 flipów — odrzucone pomiarem. Flaga kanon = flags.json (default OFF).
+ENABLE_R6_SOFT_PEN_CAP = False  # ETAP4-style module fallback; flags.json = kanon (C.flag)
+R6_SOFT_PEN_CAP_FLOOR = float(os.environ.get("R6_SOFT_PEN_CAP_FLOOR", "-2000.0"))
+
 # V3.28 ANCHOR FIX 2026-05-10 — Adrian doktryna: PROPOSE quality threshold.
 # Gdy best.score < MIN_PROPOSE_SCORE → verdict=KOORD reason=all_candidates_low_score.
 # Background: 2026-05-10 472189 PROPOSE Andrei score=-50 mimo Mateusz Bro alt -1047

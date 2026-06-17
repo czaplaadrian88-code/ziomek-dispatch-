@@ -624,21 +624,32 @@ def _best_effort_fastest_pickup_key(c, new_order_id):
 
 
 def _r6_soft_penalty(r6_max_bag_time, soft_min: float, per_min: float,
-                     danger_on: bool, danger_min: float, danger_per_min: float):
+                     danger_on: bool, danger_min: float, danger_per_min: float,
+                     cap_floor=None):
     """R6-soft kara (Fix #6 2026-05-31) — liniowa nad soft_min + EKSTRA stroma w danger zone.
 
     Strefa soft_min..danger_min (30-32): liniowa -per_min/min (normalny bufor R-BUFFER-OK).
     Strefa danger_min..35 (32-35): EKSTRA -danger_per_min/min (near-limit ryzykowne — jeden
     korek od zimnego/SLA breach >35, ryzyko nieliniowe → kara nieliniowa).
-    Zwraca (penalty, legacy_linear_penalty) — legacy = sama liniowa baza dla shadow.
+
+    cap_floor (E7 2026-06-17, robustness): gdy podany (np. -2000.0), kara NIE schodzi
+    poniżej floor. Cel = uodpornić score/LGBM na astronomiczne wartości z zombie-pickup
+    (r6_max_bag_time liczone z dni → kara ~ -240000). Próg -2000 dobrany replayem flipów
+    (eod_drafts/2026-06-17/r6cap_flip_replay.py): 0 zmian selekcji na 7d (kandydat z karą
+    < -2000 i tak jest zdominowany — cap to czysta higiena, nie zmiana decyzji).
+    Zwraca (penalty, legacy_linear_penalty, raw_penalty) — raw = przed capem (telemetria);
+    legacy = sama liniowa baza dla shadow (też przed capem).
     """
     if r6_max_bag_time is None or r6_max_bag_time <= soft_min:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     legacy = -(r6_max_bag_time - soft_min) * per_min
     pen = legacy
     if danger_on and r6_max_bag_time > danger_min:
         pen -= (r6_max_bag_time - danger_min) * danger_per_min
-    return pen, legacy
+    raw = pen
+    if cap_floor is not None and pen < cap_floor:
+        pen = float(cap_floor)
+    return pen, legacy, raw
 
 
 # V3.26 STEP 5 (R-06): cache restaurant_name → district lookup at module load.
@@ -3472,6 +3483,7 @@ def _assess_order_impl(
         # Reuse metrics.r6_max_bag_time_min (step 3) — zero duplicate computation.
         bonus_r6_soft_pen: Optional[float] = None
         bonus_r6_soft_pen_legacy: Optional[float] = None  # Fix #6: liniowa (pre-danger) dla shadow
+        bonus_r6_soft_pen_raw: Optional[float] = None  # E7 2026-06-17: kara przed capem (telemetria)
         if plan is not None:
             r6_max_bag_time = metrics.get("r6_max_bag_time_min")
             if r6_max_bag_time is None:
@@ -3482,11 +3494,17 @@ def _assess_order_impl(
                 r6_max_bag_time = 0.0
             # Fix #6 477285 (2026-05-31): liniowa baza (legacy) + EKSTRA stroma kara
             # w danger zone (32-35) — patrz _r6_soft_penalty. 30-32 (R-BUFFER-OK) bez zmian.
-            bonus_r6_soft_pen, bonus_r6_soft_pen_legacy = _r6_soft_penalty(
+            # E7 2026-06-17: cap_floor (flag-gated) uodparnia na zombie-pickup (-240k).
+            _r6_cap_floor = (
+                float(getattr(C, "R6_SOFT_PEN_CAP_FLOOR", -2000.0))
+                if C.flag("ENABLE_R6_SOFT_PEN_CAP", False) else None
+            )
+            bonus_r6_soft_pen, bonus_r6_soft_pen_legacy, bonus_r6_soft_pen_raw = _r6_soft_penalty(
                 r6_max_bag_time, C.BAG_TIME_SOFT_MIN, C.BAG_TIME_SOFT_PENALTY_PER_MIN,
                 getattr(C, "ENABLE_R6_DANGER_ZONE_PENALTY", False),
                 getattr(C, "BAG_TIME_DANGER_MIN", 32.0),
                 getattr(C, "BAG_TIME_DANGER_PENALTY_PER_MIN", 16.0),
+                cap_floor=_r6_cap_floor,
             )
 
         # R-PACZKI-FLEX (2026-05-20): gradient -1pt/min nad soft cap 2h pickup
@@ -4476,6 +4494,11 @@ def _assess_order_impl(
             "bonus_r6_soft_pen_legacy": (
                 round(bonus_r6_soft_pen_legacy, 2)
                 if bonus_r6_soft_pen_legacy is not None else None
+            ),
+            # E7 (2026-06-17): kara R6 PRZED capem — telemetria zombie-pickup (gdy != pen → ucapowane).
+            "bonus_r6_soft_pen_raw": (
+                round(bonus_r6_soft_pen_raw, 2)
+                if bonus_r6_soft_pen_raw is not None else None
             ),
             "bonus_r1_soft_pen": round(bonus_r1_soft_pen, 2),
             "bonus_r5_soft_pen": round(bonus_r5_soft_pen, 2),
