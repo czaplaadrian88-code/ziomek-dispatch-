@@ -164,6 +164,28 @@ def compute_wait_courier_penalty(
     return (penalty, False)
 
 
+def compute_idle_wait_soft_penalty(wait_min: float) -> float:
+    """N2 (2026-06-17): rosnąca kara SOFT za idle pod restauracją dla kuriera
+    BEZ odebranego (gorącego) jedzenia w aucie.
+
+    Stosowana gdy picked_up_count == 0 (nic nie stygnie) — zamiast hard-reject
+    dajemy ROSNĄCĄ karę za bezczynność powyżej progu. NIGDY nie odrzuca (reject
+    zostaje domeną reguły 'stygnące jedzenie' dla orderów ODEBRANYCH).
+
+    Adrian 17.06: "zostaw soft, ale z rosnącą karą powyżej 5 min czekania pod
+    restauracją". Liniowo: 0 do progu, potem (wait - próg) * per_min (<0).
+
+    Returns:
+        penalty (float) <= 0. Brak flagi/komponentu reject — to czysty soft.
+    """
+    from dispatch_v2 import common as _common
+    _thr = getattr(_common, "V3273_WAIT_IDLE_SOFT_THRESHOLD_MIN", 5.0)
+    if wait_min is None or wait_min <= _thr:
+        return 0.0
+    _per_min = getattr(_common, "V3273_WAIT_IDLE_SOFT_PER_MIN", -4.0)
+    return (wait_min - _thr) * _per_min
+
+
 def score_candidate(
     courier_pos: Tuple[float, float],
     restaurant_pos: Tuple[float, float],

@@ -2240,6 +2240,18 @@ V3273_WAIT_COURIER_HARD_REJECT_MIN = 15.0      # P3-D2 2026-05-11: tighten 20→
 ENABLE_V3273_WAIT_REJECT_FREE_COURIER_SKIP = _os.environ.get(
     "ENABLE_V3273_WAIT_REJECT_FREE_COURIER_SKIP", "1") == "1"
 
+# N2 (2026-06-17, Adrian ACK + replay dowodowy): hard-reject "stygnące jedzenie"
+# ma zależeć od jedzenia REALNIE ODEBRANEGO (picked_up_at != None), nie od liczby
+# orderów PRZYPISANYCH. Kurier z workiem samych przypisanych-nieodebranych (jak
+# 413 o 12:39: 1 przypisane, 0 odebrane) nie wiezie nic gorącego → fałszywy odrzut.
+# Flaga sterowana przez flags.json (C.flag, hot-reload). Gdy ON: licznik reżimu
+# hard-reject = liczba ODEBRANYCH w worku; gdy 0 odebranych → brak hard-reject,
+# a idle pod restauracją karany ROSNĄCO powyżej progu (soft, bez reject).
+# Replay 2026-06-17: ~276 fałszywych odrzutów naprawione, 0 regresji.
+V3273_WAIT_IDLE_SOFT_THRESHOLD_MIN = 5.0   # Adrian 17.06: kara idle rośnie powyżej 5 min
+V3273_WAIT_IDLE_SOFT_PER_MIN = float(_os.environ.get(
+    "V3273_WAIT_IDLE_SOFT_PER_MIN", "-4.0"))   # /min idle powyżej progu (empty-handed, bez reject)
+
 # R-INTRA-RESTAURANT-GAP (HARD, 2026-05-14): max gap między dwoma kolejnymi
 # pickupami w tej samej restauracji. Adrian doktryna: kurier nie będzie czekał
 # >5 min w tej samej restauracji żeby razem odebrać. Diagnoza propozycji

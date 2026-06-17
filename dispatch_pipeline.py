@@ -3725,7 +3725,20 @@ def _assess_order_impl(
             _bag_by_oid_273 = {b.order_id: b for b in bag_sim} if bag_sim else {}
             _plan_arrival_273 = getattr(plan, "arrival_at", None) or {}
             _plan_seq_273 = getattr(plan, "sequence", None) or []
-            _bag_size_at_insertion_273 = len(bag_sim) if bag_sim else 0
+            # N2 (2026-06-17, flaga ENABLE_V3273_WAIT_REJECT_PICKED_UP_ONLY):
+            # reżim hard-reject "stygnące jedzenie" liczony po ODEBRANYCH (gorące
+            # realnie w aucie), nie po PRZYPISANYCH. Kurier z workiem samych
+            # przypisanych-nieodebranych (np. 413 12:39: 1 przypisane/0 odebrane)
+            # nic nie wiezie → bag_size 0 → compute_wait_courier_penalty zwraca
+            # (0,False) zanim sprawdzi wait → brak fałszywego hard-reject.
+            _picked_up_count_273 = (
+                sum(1 for _b273s in bag_sim if getattr(_b273s, "picked_up_at", None))
+                if bag_sim else 0
+            )
+            if C.flag("ENABLE_V3273_WAIT_REJECT_PICKED_UP_ONLY", False):
+                _bag_size_at_insertion_273 = _picked_up_count_273
+            else:
+                _bag_size_at_insertion_273 = len(bag_sim) if bag_sim else 0
             for _oid_273 in _plan_seq_273:
                 _str_oid_273 = str(_oid_273)
                 _order_ready_273 = None
@@ -3778,6 +3791,19 @@ def _assess_order_impl(
                                     break
                 except Exception:
                     continue
+
+            # N2 (2026-06-17): kurier BEZ odebranego jedzenia (0 picked_up) nie
+            # dostaje hard-reject (nic nie stygnie), ale idle pod restauracją
+            # karany ROSNĄCO powyżej progu — Adrian: "zostaw soft, ale z rosnącą
+            # karą powyżej 5 min czekania pod restauracją". Bazujemy na MAX wait
+            # (najdłuższy postój), bez sumowania per-pickup żeby nie stackować.
+            if (C.flag("ENABLE_V3273_WAIT_REJECT_PICKED_UP_ONLY", False)
+                    and _picked_up_count_273 == 0
+                    and v3273_wait_courier_max_min > 0):
+                from dispatch_v2.scoring import compute_idle_wait_soft_penalty as _v3273_idle
+                _idle_pen_273 = _v3273_idle(v3273_wait_courier_max_min)
+                bonus_v3273_wait_courier += _idle_pen_273
+                bonus_v3273_wait_courier_legacy += _idle_pen_273
 
         # R-INTRA-RESTAURANT-GAP (HARD, 2026-05-14): max gap między dwoma
         # kolejnymi pickupami tej samej restauracji w plan.pickup_at.
