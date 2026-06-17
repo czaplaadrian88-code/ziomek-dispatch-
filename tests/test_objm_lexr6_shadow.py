@@ -109,3 +109,57 @@ def test_defensive_missing_objm_and_bad_metrics():
 def test_empty_inputs():
     _objm_lexr6_shadow([], [], order_id="T9")            # no-op
     _objm_lexr6_shadow(None, None, order_id="T10")       # no-op
+
+# ── pln tie-breaker (2026-06-17, ACK Adrian) ──────────────────────────────────
+def test_pln_breaks_quality_tie():
+    # w i a IDENTYCZNI jakościowo (R6/committed/new_late) → pln rozstrzyga; a ma wyższy pln_v
+    w = _mk(1, 10.0, committed=0.0, new_late=0.0)
+    a = _mk(2, 10.0, committed=0.0, new_late=0.0)
+    w.metrics["pln_v"] = 3.0
+    a.metrics["pln_v"] = 5.5
+    _objm_lexr6_shadow([w], [w, a], order_id="P1")
+    m = w.metrics
+    assert m["objm_lexr6_best_cid"] == "1"     # kanon zostaje jakościowy (remis → pierwszy)
+    assert m["objm_lexr6_flip"] is False
+    assert m["objm_lexr6_pln_cid"] == "2"      # pln wybrałby lepiej płatnego
+    assert m["objm_lexr6_pln_changed"] is True
+    assert m["objm_lexr6_d_pln_v"] == 2.5      # 5.5 - 3.0
+    assert m["objm_lexr6_pln_d_r6"] == 0.0     # gwarancja: pln nie kosztuje jakości
+    assert m["objm_lexr6_pln_coverage"] == 2
+
+
+def test_pln_does_not_override_worse_quality():
+    # a ma OGROMNY pln_v ale GORSZY R6 → pln NIE może go wybrać (jakość primary)
+    w = _mk(1, 5.0)
+    a = _mk(2, 25.0)
+    w.metrics["pln_v"] = 1.0
+    a.metrics["pln_v"] = 99.0
+    _objm_lexr6_shadow([w], [w, a], order_id="P2")
+    m = w.metrics
+    assert m["objm_lexr6_pln_cid"] == "1"      # quality-best, mimo niższego pln
+    assert m["objm_lexr6_pln_changed"] is False
+    assert "objm_lexr6_d_pln_v" not in m
+
+
+def test_pln_coverage_partial_and_no_change_when_missing():
+    # brak pln_v u nikogo → pln_changed False, coverage 0, kanon nietknięty
+    w = _mk(1, 8.0)
+    a = _mk(2, 8.0)
+    _objm_lexr6_shadow([w], [w, a], order_id="P3")
+    m = w.metrics
+    assert m["objm_lexr6_pln_coverage"] == 0
+    assert m["objm_lexr6_pln_changed"] is False
+    assert m["objm_lexr6_pln_cid"] == "1"
+
+
+def test_pln_tiebreak_respects_group_only():
+    # kandydat z innej grupy (tier 2) z wysokim pln NIE wchodzi do tie-breaku
+    w = _mk(1, 10.0)
+    a = _mk(2, 10.0); a.metrics["pln_v"] = 9.0
+    other = _mk(3, 10.0, breach=True, ext=True)  # inny tier → poza grupą
+    other.metrics["pln_v"] = 99.0
+    w.metrics["pln_v"] = 1.0
+    _objm_lexr6_shadow([w], [w, a, other], order_id="P4")
+    m = w.metrics
+    assert m["objm_lexr6_pln_cid"] == "2"       # tylko grupa w (cid 1,2)
+    assert m["objm_lexr6_pln_coverage"] == 2

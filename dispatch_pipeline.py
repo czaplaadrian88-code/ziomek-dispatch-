@@ -965,13 +965,32 @@ def _objm_lexr6_shadow(top, feasible, order_id=None) -> None:
         _w_tb = (_late_pickup_tier(_w), _bucket(_w))
         _grp = [c for c in feasible if (_late_pickup_tier(c), _bucket(c)) == _w_tb]
 
-        def _lex(c):
+        def _lex_qual(c):
             r6 = _objm(c, "objm_r6_breach_max_min")
             return (r6 if r6 is not None else 9e9,
                     _objm(c, "late_pickup_committed_max") or 0.0,
                     _objm(c, "new_pickup_late_min") or 0.0)
 
-        _d2 = min(_grp, key=_lex) if _grp else _w
+        # E2↔D2 (2026-06-17, dyrektywa Adriana „brał pod uwagę też pln, nie w pierwszej
+        # kolejności"): pln_v jako tie-breaker NAJNIŻSZEGO rzędu — jakość (R6→committed→
+        # new-late) zostaje PRIMARY (peak quality). Kanon `_d2` = czysto jakościowy (NIE
+        # kontaminuje walidacji at#152); mierzymy OSOBNO ile pln zmieniłby pick WŚRÓD
+        # równych jakościowo i za ile zł. Z gwarancji leksykograficznej pln rusza pick
+        # tylko przy remisie 3 pierwszych kluczy → pln_d_r6/pln_d_committed ~0 (sanity).
+        def _pln_of(c):
+            v = (getattr(c, "metrics", None) or {}).get("pln_v")
+            return float(v) if isinstance(v, (int, float)) else None
+
+        def _lex_pln(c):
+            pv = _pln_of(c)
+            return _lex_qual(c) + ((-pv) if pv is not None else float("inf"),)
+
+        def _f(m, k):
+            v = m.get(k)
+            return float(v) if isinstance(v, (int, float)) else 0.0
+
+        _d2 = min(_grp, key=_lex_qual) if _grp else _w
+        _d2_pln = min(_grp, key=_lex_pln) if _grp else _w
         _wm = getattr(_w, "metrics", None)
         if not isinstance(_wm, dict):
             return
@@ -979,13 +998,23 @@ def _objm_lexr6_shadow(top, feasible, order_id=None) -> None:
         _wm["objm_lexr6_best_cid"] = str(getattr(_d2, "courier_id", ""))
         _wm["objm_lexr6_flip"] = _flip
         _wm["objm_lexr6_group_size"] = len(_grp)
+        # tie-breaker pln (obserwacja): kogo wybrałby pln WŚRÓD równych jakościowo
+        _pln_cid = str(getattr(_d2_pln, "courier_id", ""))
+        _wm["objm_lexr6_pln_cid"] = _pln_cid
+        _wm["objm_lexr6_pln_coverage"] = sum(1 for c in _grp if _pln_of(c) is not None)
+        _pln_changed = _pln_cid != str(getattr(_d2, "courier_id", ""))
+        _wm["objm_lexr6_pln_changed"] = _pln_changed
+        if _pln_changed:
+            _pv_pln = _pln_of(_d2_pln)
+            _pv_qual = _pln_of(_d2)
+            if _pv_pln is not None and _pv_qual is not None:
+                _wm["objm_lexr6_d_pln_v"] = round(_pv_pln - _pv_qual, 2)
+            _dmp = getattr(_d2_pln, "metrics", None) or {}
+            _dmq = getattr(_d2, "metrics", None) or {}
+            _wm["objm_lexr6_pln_d_r6"] = round(_f(_dmp, "objm_r6_breach_max_min") - _f(_dmq, "objm_r6_breach_max_min"), 1)
+            _wm["objm_lexr6_pln_d_committed"] = round(_f(_dmp, "late_pickup_committed_max") - _f(_dmq, "late_pickup_committed_max"), 1)
         if _flip:
             _dm = getattr(_d2, "metrics", None) or {}
-
-            def _f(m, k):
-                v = m.get(k)
-                return float(v) if isinstance(v, (int, float)) else 0.0
-
             _wm["objm_lexr6_d_r6_breach"] = round(_f(_dm, "objm_r6_breach_max_min") - _f(_wm, "objm_r6_breach_max_min"), 1)
             _wm["objm_lexr6_d_committed"] = round(_f(_dm, "late_pickup_committed_max") - _f(_wm, "late_pickup_committed_max"), 1)
             _wm["objm_lexr6_d_new_late"] = round(_f(_dm, "new_pickup_late_min") - _f(_wm, "new_pickup_late_min"), 1)
@@ -5253,7 +5282,13 @@ def _assess_order_impl(
                         * HAVERSINE_ROAD_FACTOR_BIALYSTOK, 2)
                 _pln_best_cid = None
                 _pln_best_v = None
-                for _pc in top[:5]:
+                # 2026-06-17 (rozszerzenie grupy, ACK Adrian): pln_v liczone dla CAŁEJ puli
+                # feasible (nie tylko top[:5]) → tie-breaker pln w _objm_lexr6_shadow ma
+                # pełne pokrycie grupy (tier×bucket). compute_pln_value = czysta arytmetyka
+                # + mtime-cache (tylko getmtime/kandydat — tani stat). pln_best_cid/_v dalej
+                # WYŁĄCZNIE z top[:5] (zachowana semantyka + izolacja walidacji at#152).
+                _pln_top5_ids = {id(_pc) for _pc in top[:5]}
+                for _pc in feasible:
                     _pm = getattr(_pc, "metrics", None)
                     if not isinstance(_pm, dict):
                         continue
@@ -5278,7 +5313,8 @@ def _assess_order_impl(
                     )
                     if _pln:
                         _pm.update(_pln)
-                        if _pln_best_v is None or _pln["pln_v"] > _pln_best_v:
+                        if id(_pc) in _pln_top5_ids and (
+                                _pln_best_v is None or _pln["pln_v"] > _pln_best_v):
                             _pln_best_v = _pln["pln_v"]
                             _pln_best_cid = str(_pc.courier_id)
                 if _pln_best_cid is not None and isinstance(top[0].metrics, dict):
