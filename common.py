@@ -2270,6 +2270,14 @@ MAX_INTRA_RESTAURANT_GAP_MIN = 5.0
 ENABLE_OBJ_SPAN_COST = _os.environ.get("ENABLE_OBJ_SPAN_COST", "0") == "1"
 OBJ_SPAN_COST_COEFF = float(_os.environ.get("OBJ_SPAN_COST_COEFF", "1.0"))
 
+# OBJM-LEXR6 SHADOW (2026-06-17): obserwacyjny R6-breach-primary lexicographic selektor.
+# Pisze top[0].metrics['objm_lexr6_*'] (prefix objm_ auto-serializowany), ZERO wpływu na
+# selekcję/werdykt. Faza 1 walidacji selekcji D2 z replay-harness (−577 min twardych spóźnień
+# /7d na 54 napr.). Konsumpcja runtime: C.flag("ENABLE_OBJM_LEXR6_SELECT_SHADOW", False)
+# (flags.json = KANON live/hot-reload; ta stała = fallback OFF gdy brak klucza). NIE jest
+# flagą decyzyjną (ETAP4) — czysta telemetria. Live-flip selekcji = OSOBNA flaga + ACK.
+ENABLE_OBJM_LEXR6_SELECT_SHADOW = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT_SHADOW", "0") == "1"
+
 # === COORD POISON GUARD flagi (Lekcja #140, 2026-05-21) — default ON ===
 # Defense-in-depth, by ten bug NIGDY nie wrócił cicho:
 #  - ENABLE_OSRM_COORD_GUARD: osrm_client.route()/table() walidują bbox KAŻDEJ

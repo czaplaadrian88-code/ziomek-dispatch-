@@ -925,6 +925,74 @@ def _pln_pure_resort(top) -> None:
         top[0].metrics["pln_ab_flipped"] = True
 
 
+def _objm_lexr6_shadow(top, feasible, order_id=None) -> None:
+    """D2 SHADOW (2026-06-17): R6-breach-primary lexicographic selektor W OBRĘBIE grupy
+    (tier × bucket) zwycięzcy. OBSERWACYJNY — pisze TYLKO top[0].metrics['objm_lexr6_*']
+    (prefix objm_ → auto-serializowany w shadow_dispatcher), NIGDY nie mutuje top/feasible/
+    werdyktu. Replay-harness 2026-06-17 wskazał tę selekcję jako jedyny czysty zysk
+    (−577 min twardych spóźnień / 7d na 54 naprawionych, +23 new-late/+41 idle). Faza 1 =
+    walidacja na żywo; live-flip selekcji = OSOBNA flaga ENABLE_OBJM_LEXR6_SELECT + ACK.
+    Grupa = ten sam (tier,bucket) co live top[0]: dokładnie zakres, w którym dziś rozstrzyga
+    score. Hard-rejecty są już poza `feasible` (selekcja je usuwa przed top), więc tu nie ma
+    wave_veto/NEG_INF. Defensywny per Lekcja #83 (try/except, fail-open, zero raise)."""
+    if not top or not feasible:
+        return
+    try:
+        _w = top[0]
+
+        def _bucket(c):
+            if _is_informed_cand(c):
+                return 0
+            if _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
+                return 2
+            return 1
+
+        def _objm(c, k):
+            v = (getattr(c, "metrics", None) or {}).get(k)
+            return float(v) if isinstance(v, (int, float)) else None
+
+        _w_tb = (_late_pickup_tier(_w), _bucket(_w))
+        _grp = [c for c in feasible if (_late_pickup_tier(c), _bucket(c)) == _w_tb]
+
+        def _lex(c):
+            r6 = _objm(c, "objm_r6_breach_max_min")
+            return (r6 if r6 is not None else 9e9,
+                    _objm(c, "late_pickup_committed_max") or 0.0,
+                    _objm(c, "new_pickup_late_min") or 0.0)
+
+        _d2 = min(_grp, key=_lex) if _grp else _w
+        _wm = getattr(_w, "metrics", None)
+        if not isinstance(_wm, dict):
+            return
+        _flip = str(getattr(_d2, "courier_id", "")) != str(getattr(_w, "courier_id", ""))
+        _wm["objm_lexr6_best_cid"] = str(getattr(_d2, "courier_id", ""))
+        _wm["objm_lexr6_flip"] = _flip
+        _wm["objm_lexr6_group_size"] = len(_grp)
+        if _flip:
+            _dm = getattr(_d2, "metrics", None) or {}
+
+            def _f(m, k):
+                v = m.get(k)
+                return float(v) if isinstance(v, (int, float)) else 0.0
+
+            _wm["objm_lexr6_d_r6_breach"] = round(_f(_dm, "objm_r6_breach_max_min") - _f(_wm, "objm_r6_breach_max_min"), 1)
+            _wm["objm_lexr6_d_committed"] = round(_f(_dm, "late_pickup_committed_max") - _f(_wm, "late_pickup_committed_max"), 1)
+            _wm["objm_lexr6_d_new_late"] = round(_f(_dm, "new_pickup_late_min") - _f(_wm, "new_pickup_late_min"), 1)
+            _wm["objm_lexr6_d_idle"] = round(_f(_dm, "v3273_wait_courier_max_min") - _f(_wm, "v3273_wait_courier_max_min"), 1)
+            try:
+                log.info(
+                    f"OBJM_LEXR6_DIVERGENCE order={order_id} live={getattr(_w, 'courier_id', None)} "
+                    f"d2={getattr(_d2, 'courier_id', None)} dR6={_wm['objm_lexr6_d_r6_breach']} "
+                    f"dCom={_wm['objm_lexr6_d_committed']} dIdle={_wm['objm_lexr6_d_idle']}")
+            except Exception:
+                pass
+    except Exception as _e:
+        try:
+            log.warning(f"OBJM_LEXR6_SHADOW failed order={order_id}: {_e!r}")
+        except Exception:
+            pass
+
+
 def _a2_reliability_soft_score(feasible, order_id=None):
     """Dźwignia A2: kara score za niską niezawodność kuriera. Flag-gated, default OFF.
     Buckety pos/tier zachowuje późniejszy _demote_blind_empty + late-pickup tiering
@@ -5212,6 +5280,12 @@ def _assess_order_impl(
                     top[0].metrics["pln_ab_arm"] = _e2_arm
             except Exception:
                 pass
+
+        # D2 SHADOW (2026-06-17): objm R6-primary lexicographic selektor — OBSERWACYJNY,
+        # flaga default OFF (zero wpływu na selekcję/werdykt). Po E2 hooku → top[0] = finalny
+        # serializowany best. Pisze top[0].metrics['objm_lexr6_*']. Patrz _objm_lexr6_shadow.
+        if C.flag("ENABLE_OBJM_LEXR6_SELECT_SHADOW", False):
+            _objm_lexr6_shadow(top, feasible, order_id)
 
         # V3.28 Faza 6 — LGBM shadow inference (parallel, ZERO behavior change).
         # Pure BC model trained na 399K pairs CSV history (Faza 5 v1.0). Result
