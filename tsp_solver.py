@@ -51,6 +51,10 @@ def solve_tsp_with_constraints(
     pickup_committed_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
     delivery_food_age_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
     span_cost_coeff: float = 0.0,
+    delivery_sla_hard_span: bool = False,
+    delivery_sla_hard_bounds: Optional[List[Optional[float]]] = None,
+    sla_minutes_hard: float = 35.0,
+    warm_start_routes: Optional[List[List[int]]] = None,
 ) -> Optional[TspSolution]:
     """Solve PDP z OR-Tools.
 
@@ -361,6 +365,30 @@ def solve_tsp_with_constraints(
             time_dimension.CumulVar(pickup_index)
             <= time_dimension.CumulVar(drop_index)
         )
+        # FOOD-AGE HARD-SLA (2026-06-17): TWARDY span pickup→delivery ≤ sla dla
+        # zleceń odbieranych w tym planie. Kotwica = węzeł pickup TSP = DOKŁADNIE
+        # kotwica metryki _count_sla_violations (NIE ready/R6-soft). Gwarantuje
+        # że solver nie wybierze sekwencji łamiącej SLA (strukturalne 38%) ani jej
+        # nie zwróci jako sub-optimum 200ms (budżet 62%). Infeasible → fallback OFF.
+        if delivery_sla_hard_span:
+            routing.solver().Add(
+                time_dimension.CumulVar(drop_index)
+                - time_dimension.CumulVar(pickup_index)
+                <= int(round(sla_minutes_hard * TIME_SCALE))
+            )
+
+    # FOOD-AGE HARD-SLA (2026-06-17): TWARDY SetMax dla zleceń JUŻ-ODEBRANYCH
+    # (delivery node spoza par — bez węzła pickup). Bound = (picked_up_at−now)+sla
+    # [min od startu trasy] = kotwica picked_up_at metryki. Ujemny (odebrane dawno)
+    # → clamp do 0 → dowieź ASAP. None → pomiń (pending/new chronione spanem wyżej).
+    if delivery_sla_hard_bounds is not None:
+        _cap = int(max_route_min * TIME_SCALE)
+        for _stop in range(num_stops):
+            _b = delivery_sla_hard_bounds[_stop]
+            if _b is None:
+                continue
+            _scaled = max(0, min(int(_b * TIME_SCALE), _cap))
+            time_dimension.CumulVar(manager.NodeToIndex(_stop)).SetMax(_scaled)
 
     # Optional: pin first stop (sticky bag delivery)
     if fixed_first_drop is not None and 1 <= fixed_first_drop < num_stops:
@@ -380,7 +408,25 @@ def solve_tsp_with_constraints(
     )
     search_parameters.time_limit.FromMilliseconds(int(time_limit_ms))
 
-    solution = routing.SolveWithParameters(search_parameters)
+    # FOOD-AGE HARD-SLA (2026-06-17): warm-start hintem (sekwencja bazowa node-idx,
+    # bez węzła startu/dummy — format jak self.sequence). Przyspiesza zbieżność pod
+    # twardymi ograniczeniami → kasuje artefakt budżetu 200ms (62% regresji). Hint
+    # niespójny z ograniczeniami (np. base łamie span) → initial=None → graceful
+    # fallback do zwykłego solve (nie crash). ReadAssignmentFromRoutes wymaga
+    # zamkniętego modelu → jawny CloseModelWithParameters.
+    if warm_start_routes:
+        try:
+            routing.CloseModelWithParameters(search_parameters)
+            _initial = routing.ReadAssignmentFromRoutes(warm_start_routes, True)
+            if _initial is not None:
+                solution = routing.SolveFromAssignmentWithParameters(
+                    _initial, search_parameters)
+            else:
+                solution = routing.SolveWithParameters(search_parameters)
+        except Exception:
+            solution = routing.SolveWithParameters(search_parameters)
+    else:
+        solution = routing.SolveWithParameters(search_parameters)
     elapsed_ms = (_time.perf_counter() - t0) * 1000.0
 
     if solution is None:

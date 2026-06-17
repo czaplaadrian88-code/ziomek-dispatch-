@@ -1159,57 +1159,126 @@ def _ortools_plan(
             f"OBJ_COMMITTED_PICKUP_BUILD_FAIL {type(_pc_e).__name__}: {_pc_e}")
         pickup_committed_penalties = None
 
-    solution = tsp_solver.solve_tsp_with_constraints(
-        num_stops=N,
-        pickup_drop_pairs=pickup_drop_pairs,
-        distance_matrix_km=distance_matrix,
-        time_matrix_min=time_matrix,
-        time_windows=time_windows,
-        max_route_min=120.0,
-        time_limit_ms=int(_ot_ms),
-        delivery_soft_deadlines=delivery_soft_deadlines,
-        pickup_freshness_penalties=pickup_freshness_penalties,
-        pickup_committed_penalties=pickup_committed_penalties,
-        delivery_food_age_penalties=delivery_food_age_penalties,
-        span_cost_coeff=_span_cost_coeff,
-    )
+    # FOOD-AGE HARD-SLA (2026-06-17): twarde bound dla zleceń JUŻ-ODEBRANYCH
+    # (delivery node bez węzła pickup). bound=(picked_up_at−now)+sla [min od startu].
+    # Pending/new (w parach) chronione twardym spanem → None. Kotwica = METRYKA
+    # (_count_sla_violations używa picked_up_at dla odebranych). Gated flagą.
+    _hard_sla = _common.decision_flag("ENABLE_OBJ_FOOD_AGE_HARD_SLA")
+    delivery_sla_hard_bounds = None
+    if _hard_sla and delivery_food_age_penalties is not None and now is not None:
+        try:
+            _hb: List[Optional[float]] = [None] * N
+            for _i in range(N):
+                _node = nodes[_i]
+                if _node.get("kind") != "delivery":
+                    continue
+                _ref = _node.get("ref")
+                if _ref is None:
+                    continue
+                _picked = (getattr(_ref, "status", "assigned") == "picked_up"
+                           or getattr(_ref, "picked_up_at", None) is not None)
+                if not _picked:
+                    continue
+                _pu = getattr(_ref, "picked_up_at", None)
+                if _pu is None:
+                    continue
+                if _pu.tzinfo is None:
+                    _pu = _pu.replace(tzinfo=timezone.utc)
+                _hb[_i] = ((_pu.astimezone(timezone.utc) - now).total_seconds() / 60.0
+                           + float(sla_minutes))
+            delivery_sla_hard_bounds = _hb
+        except Exception as _hb_e:
+            _log.warning(
+                f"OBJ_FOODAGE_HARDSLA_BOUNDS_FAIL {type(_hb_e).__name__}: {_hb_e}")
+            delivery_sla_hard_bounds = None
 
-    # V3.27.1 BUG-2 fallback: gdy INFEASIBLE z time windows, retry bez constraints
-    # (ochrona przed regresją vs. baseline; flag flip nigdy nie powinien zwiększyć
-    # liczby orderów które fail completely — gorsza sekwencja > brak proposal).
-    if (solution is None or not getattr(solution, "sequence", None)) and time_windows is not None:
-        _log.warning(
-            f"V3.27.1 OR-Tools INFEASIBLE z time windows "
-            f"(N={N}, pairs={len(pickup_drop_pairs)}), retry bez constraints"
-        )
-        solution = tsp_solver.solve_tsp_with_constraints(
+    def _solve(fa_pen, hard_span, hard_bounds, warm_routes):
+        """Solve + V3.27.1 BUG-2 retry bez time-windows. Hermetyzuje powtórkę."""
+        _sol = tsp_solver.solve_tsp_with_constraints(
             num_stops=N,
             pickup_drop_pairs=pickup_drop_pairs,
             distance_matrix_km=distance_matrix,
             time_matrix_min=time_matrix,
-            time_windows=None,
+            time_windows=time_windows,
             max_route_min=120.0,
             time_limit_ms=int(_ot_ms),
             delivery_soft_deadlines=delivery_soft_deadlines,
             pickup_freshness_penalties=pickup_freshness_penalties,
             pickup_committed_penalties=pickup_committed_penalties,
-            delivery_food_age_penalties=delivery_food_age_penalties,
+            delivery_food_age_penalties=fa_pen,
             span_cost_coeff=_span_cost_coeff,
+            delivery_sla_hard_span=hard_span,
+            delivery_sla_hard_bounds=hard_bounds,
+            sla_minutes_hard=float(sla_minutes),
+            warm_start_routes=warm_routes,
         )
-
-    if solution is None or not solution.sequence:
-        if solution is not None:
+        if (_sol is None or not getattr(_sol, "sequence", None)) and time_windows is not None:
             _log.warning(
-                f"OR-Tools no sequence: status={solution.solver_status} "
-                f"elapsed={solution.elapsed_ms}ms warnings={solution.warnings}"
+                f"V3.27.1 OR-Tools INFEASIBLE z time windows "
+                f"(N={N}, pairs={len(pickup_drop_pairs)}), retry bez constraints"
             )
-        return None
+            _sol = tsp_solver.solve_tsp_with_constraints(
+                num_stops=N,
+                pickup_drop_pairs=pickup_drop_pairs,
+                distance_matrix_km=distance_matrix,
+                time_matrix_min=time_matrix,
+                time_windows=None,
+                max_route_min=120.0,
+                time_limit_ms=int(_ot_ms),
+                delivery_soft_deadlines=delivery_soft_deadlines,
+                pickup_freshness_penalties=pickup_freshness_penalties,
+                pickup_committed_penalties=pickup_committed_penalties,
+                delivery_food_age_penalties=fa_pen,
+                span_cost_coeff=_span_cost_coeff,
+                delivery_sla_hard_span=hard_span,
+                delivery_sla_hard_bounds=hard_bounds,
+                sla_minutes_hard=float(sla_minutes),
+                warm_start_routes=None,
+            )
+        return _sol
 
-    # Convert sequence → RoutePlanV2 via _plan_from_sequence (re-uses standard
-    # _simulate_sequence z DWELL stops + pickup_ready_at wait + SLA violations).
-    plan = _plan_from_sequence(
-        solution.sequence, nodes, leg_min, new_order, bag, now, sla_minutes
-    )
+    if _hard_sla and delivery_food_age_penalties is not None:
+        # HYBRYDA (PHASE1_DESIGN_LOCK §3): base (bez food-age) → ON (food-age +
+        # twardy span + warm-start sekwencją base) → drabina fallbacku gwarantująca
+        # realny SLA(ON) ≤ SLA(base). base = dzisiejszy plan (źródło warm-startu +
+        # fallback). +1 solve TYLKO tu (warm-startowany, krótki).
+        base_sol = _solve(None, False, None, None)
+        base_plan = (_plan_from_sequence(base_sol.sequence, nodes, leg_min,
+                                         new_order, bag, now, sla_minutes)
+                     if base_sol is not None and base_sol.sequence else None)
+        _warm = ([list(base_sol.sequence)]
+                 if base_sol is not None and base_sol.sequence else None)
+        on_sol = _solve(delivery_food_age_penalties, True,
+                        delivery_sla_hard_bounds, _warm)
+        on_plan = (_plan_from_sequence(on_sol.sequence, nodes, leg_min,
+                                       new_order, bag, now, sla_minutes)
+                   if on_sol is not None and on_sol.sequence else None)
+        if on_plan is None:
+            plan, solution = base_plan, base_sol
+        elif base_plan is not None and (on_plan.sla_violations or 0) > (base_plan.sla_violations or 0):
+            _log.warning(
+                f"OBJ_FOODAGE_HARDSLA_FALLBACK_OFF realny sla_on={on_plan.sla_violations}"
+                f">{base_plan.sla_violations}=base (rozjazd time↔realizacja) → plan base"
+            )
+            plan, solution = base_plan, base_sol
+        else:
+            plan, solution = on_plan, on_sol
+        if plan is None or solution is None or not getattr(solution, "sequence", None):
+            return None
+    else:
+        solution = _solve(delivery_food_age_penalties, False, None, None)
+        if solution is None or not solution.sequence:
+            if solution is not None:
+                _log.warning(
+                    f"OR-Tools no sequence: status={solution.solver_status} "
+                    f"elapsed={solution.elapsed_ms}ms warnings={solution.warnings}"
+                )
+            return None
+        # Convert sequence → RoutePlanV2 via _plan_from_sequence (re-uses standard
+        # _simulate_sequence z DWELL stops + pickup_ready_at wait + SLA violations).
+        plan = _plan_from_sequence(
+            solution.sequence, nodes, leg_min, new_order, bag, now, sla_minutes
+        )
 
     # V3.27.6 FIX 2b (2026-04-28): post-solve assertion dla frozen ck pickups.
     # Diagnoses runtime divergence vs synthetic: czy plan.pickup_at[oid] dla

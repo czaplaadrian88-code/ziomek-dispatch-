@@ -118,6 +118,12 @@ ETAP4_DECISION_FLAGS = (
     # panel finance.courier_cost_components). Telemetria pln_v_payaware ZAWSZE;
     # aplikacja do pln_v (i tym samym arm PLN E2) za flaga. courier_pay.json z syncu.
     "ENABLE_PLN_COURIER_PAY",
+    # FOOD-AGE HARD-SLA (2026-06-17 Faza 2): twardy span pickup→delivery≤sla w
+    # solverze + warm-start sekwencją bazową + fallback OFF (gwarancja ON≤OFF).
+    # Komponuje się z ENABLE_OBJ_DELIVERY_FOOD_AGE. Faza 0 root-cause:
+    # eod_drafts/2026-06-17/PHASE0_ROOTCAUSE_VERDICT.md (62% regresji=budżet 200ms,
+    # 38% strukturalne). Design: PHASE1_DESIGN_LOCK.md.
+    "ENABLE_OBJ_FOOD_AGE_HARD_SLA",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -131,6 +137,7 @@ ENABLE_ETA_QUANTILE_R6_BAGCAP = False
 ENABLE_R6_BREACH_SHADOW_LOG = False
 ENABLE_E2_PLN_AB = False
 ENABLE_PLN_COURIER_PAY = False
+ENABLE_OBJ_FOOD_AGE_HARD_SLA = False  # Faza 2 2026-06-17 (food-age hard-SLA + warm-start)
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
 # startowych werdyktu razem z flagą, hot-reload bez restartu; fallback = stała

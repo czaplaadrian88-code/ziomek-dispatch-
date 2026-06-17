@@ -167,3 +167,87 @@ def test_fa_t5_override_is_the_live_toggle():
     off_cnt, off_res = _majority(False, ("PICKUP", "480568"))
     assert on_cnt >= 4, f"override(True) → B większość; got {on_cnt}/5: {on_res}"
     assert off_cnt >= 4, f"bez override → A większość; got {off_cnt}/5: {off_res}"
+
+
+# ─── FOOD-AGE HARD-SLA (Faza 2 2026-06-17) — twardy span + warm-start + fallback ──
+# Design: eod_drafts/2026-06-17/PHASE1_DESIGN_LOCK.md. Flaga ENABLE_OBJ_FOOD_AGE_HARD_SLA
+# (ETAP4 → conftest cuts z tmp flags.json → patch stałej steruje decision_flag).
+
+def _jakub_picked_case():
+    """Wariant Jakuba: 480581 JUŻ ODEBRANE (picked_up_at) → delivery bez węzła
+    pickup → chronione twardym SetMax (kotwica picked_up_at), nie spanem."""
+    courier_pos, bag, new_order, now = _jakub_case()
+    bag[0].status = "picked_up"
+    bag[0].picked_up_at = _w(12, 57)
+    return courier_pos, bag, new_order, now
+
+
+def test_fa_hardsla_off_no_hard_span_in_solver():
+    """Flaga hard-SLA OFF (food-age ON) → solver NIGDY nie dostaje hard-span.
+    Gwarancja: flaga OFF = zero nowego zachowania (additive jak dziś)."""
+    courier_pos, bag, new_order, now = _jakub_case()
+    cap: list = []
+    with patch.object(common, "ENABLE_OBJ_DELIVERY_FOOD_AGE", True), \
+         patch.object(common, "ENABLE_OBJ_FOOD_AGE_HARD_SLA", False), \
+         patch.object(tsp_solver, "solve_tsp_with_constraints", _capture_solver(cap)):
+        rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
+    assert cap, "solver powinien zostać wywołany"
+    assert all(not c.get("delivery_sla_hard_span") for c in cap), \
+        "flaga OFF: żaden solve nie może mieć hard-span"
+    assert all(c.get("warm_start_routes") is None for c in cap)
+
+
+def test_fa_hardsla_on_base_then_constrained_split():
+    """Flaga hard-SLA ON (food-age ON) → DWA logiczne solve: base (bez food-age,
+    bez hard-span) + ON (food-age + hard-span). Dowód hybrydy z PHASE1 §3."""
+    courier_pos, bag, new_order, now = _jakub_case()
+    cap: list = []
+    with patch.object(common, "ENABLE_OBJ_DELIVERY_FOOD_AGE", True), \
+         patch.object(common, "ENABLE_OBJ_FOOD_AGE_HARD_SLA", True), \
+         patch.object(tsp_solver, "solve_tsp_with_constraints", _capture_solver(cap)):
+        rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
+    base_calls = [c for c in cap if not c.get("delivery_sla_hard_span")
+                  and c.get("delivery_food_age_penalties") is None]
+    on_calls = [c for c in cap if c.get("delivery_sla_hard_span")
+                and c.get("delivery_food_age_penalties") is not None]
+    assert base_calls, "musi być solve BASE (bez food-age, bez hard-span)"
+    assert on_calls, "musi być solve ON (food-age + hard-span)"
+    assert all(c.get("sla_minutes_hard") == 35.0 for c in on_calls)
+
+
+def test_fa_hardsla_already_picked_gets_setmax_bound():
+    """Zlecenie JUŻ-ODEBRANE → delivery_sla_hard_bounds ma non-None wpis (SetMax,
+    kotwica picked_up_at), a pending/new = None (chronione spanem)."""
+    courier_pos, bag, new_order, now = _jakub_picked_case()
+    cap: list = []
+    with patch.object(common, "ENABLE_OBJ_DELIVERY_FOOD_AGE", True), \
+         patch.object(common, "ENABLE_OBJ_FOOD_AGE_HARD_SLA", True), \
+         patch.object(tsp_solver, "solve_tsp_with_constraints", _capture_solver(cap)):
+        rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
+    on_calls = [c for c in cap if c.get("delivery_sla_hard_span")]
+    assert on_calls, "musi być solve ON"
+    bounds = on_calls[0].get("delivery_sla_hard_bounds")
+    assert bounds is not None, "hard_bounds musi być zbudowane przy odebranym worku"
+    non_none = [b for b in bounds if b is not None]
+    assert len(non_none) >= 1, f"odebrane 480581 musi mieć SetMax bound; bounds={bounds}"
+
+
+def test_fa_hardsla_jakub_sla_not_worse():
+    """Realny solver, hard-SLA ON na Jakubie → SLA ≤ OFF (gwarancja ON≤OFF).
+    Kontekst prod (R6+span ON), majority z 5 (niedeterminizm 200ms)."""
+    courier_pos, bag, new_order, now = _jakub_case()
+
+    def _sla(hard_on):
+        with patch.object(common, "ENABLE_OBJ_R6_SOFT_DEADLINE", True), \
+             patch.object(common, "ENABLE_OBJ_SPAN_COST", True), \
+             patch.object(common, "ENABLE_OBJ_FOOD_AGE_HARD_SLA", hard_on):
+            if hard_on:
+                with common.food_age_override(True):
+                    p = rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
+            else:
+                p = rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
+        return (p.sla_violations or 0) if p is not None else 0
+
+    off = min(_sla(False) for _ in range(3))   # najlepszy OFF (baseline SLA-safe)
+    hard = [_sla(True) for _ in range(5)]
+    assert max(hard) <= max(off, 0), f"hard-SLA nie może pogorszyć SLA; off={off} hard={hard}"
