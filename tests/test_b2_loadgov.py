@@ -141,3 +141,42 @@ def test_serializer_location_b_best_loadgov_fields():
     out = shadow_dispatcher._serialize_result(result, event_id="ev", latency_ms=1.0)
     assert out["best"]["loadgov_load_now"] == 2.9
     assert out["best"]["bonus_loadgov_shadow_delta"] == -40.0
+
+
+# --- alert state DZIELONY między procesami (fix spamu „co minutę", 2026-06-18) ---
+
+def test_alert_state_roundtrip(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    p = tmp_path / "loadgov_alert_state.json"
+    monkeypatch.setattr(dp, "_LOADGOV_ALERT_STATE_PATH", str(p))
+    ts = datetime(2026, 6, 18, 20, 0, tzinfo=timezone.utc)
+    dp._loadgov_save_alert_state(False, ts)
+    armed, last = dp._loadgov_load_alert_state()
+    assert armed is False and last == ts
+
+
+def test_alert_state_missing_file_default_armed(tmp_path, monkeypatch):
+    monkeypatch.setattr(dp, "_LOADGOV_ALERT_STATE_PATH", str(tmp_path / "nope.json"))
+    assert dp._loadgov_load_alert_state() == (True, None)
+
+
+def test_cross_process_dedup_one_alert(tmp_path, monkeypatch):
+    """Sedno fixa: drugi 'świeży proces' (czasowka co minutę) NIE alarmuje ponownie,
+    bo czyta armed=False zapisane przez pierwszy. Wcześniej każdy proces startował armed=True."""
+    from datetime import datetime, timezone
+    p = tmp_path / "loadgov_alert_state.json"
+    monkeypatch.setattr(dp, "_LOADGOV_ALERT_STATE_PATH", str(p))
+    now = datetime(2026, 6, 18, 20, 0, tzinfo=timezone.utc)
+    # proces 1: uzbrojony (brak pliku) + ewma>3.5 → emit, zapis armed=False
+    armed, _ = dp._loadgov_load_alert_state()
+    emit, new_armed = dp._loadgov_alert_transition(3.6, armed)
+    assert emit is True
+    dp._loadgov_save_alert_state(new_armed, now)
+    # proces 2 (następny tick czasowki, świeży): czyta armed=False → BRAK emisji
+    armed2, _ = dp._loadgov_load_alert_state()
+    emit2, _ = dp._loadgov_alert_transition(3.8, armed2)
+    assert emit2 is False
+    # dopiero spadek <3.0 re-arm-uje (nowy epizod)
+    armed3, _ = dp._loadgov_load_alert_state()
+    _, rearmed = dp._loadgov_alert_transition(2.8, armed3)
+    assert rearmed is True

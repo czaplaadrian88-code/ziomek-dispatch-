@@ -1852,6 +1852,48 @@ LOADGOV_ORDERS_STATE_PATH = "/root/.openclaw/workspace/dispatch_state/orders_sta
 _LOADGOV_TERMINAL_STATUSES = frozenset(
     {"delivered", "cancelled", "not_picked", "nieodebrano", "anulowane"})
 
+# Stan alertu „tryb defensywny" DZIELONY między procesami. assess_order biega w shadow
+# (długo żyje) ORAZ w świeżych procesach per-tick: czasowka (CO MINUTĘ), plan-recheck,
+# panel-quote subprocess. `alert_armed` w pamięci procesu nie wystarcza — świeży proces
+# startuje armed=True i alarmuje od nowa → spam co minutę. Dzielimy hysteresis przez plik.
+_LOADGOV_ALERT_STATE_PATH = "/root/.openclaw/workspace/dispatch_state/loadgov_alert_state.json"
+
+
+def _loadgov_load_alert_state():
+    """(armed, last_alert_ts) z pliku — domyślnie (True, None). Fail-soft."""
+    try:
+        with open(_LOADGOV_ALERT_STATE_PATH, encoding="utf-8") as fh:
+            d = json.load(fh)
+        ts = d.get("last_alert_ts")
+        ts_dt = None
+        if ts:
+            try:
+                ts_dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                if ts_dt.tzinfo is None:
+                    ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                ts_dt = None
+        return bool(d.get("armed", True)), ts_dt
+    except Exception:  # brak pliku / zły JSON → uzbrojony, bez ostatniego alertu
+        return True, None
+
+
+def _loadgov_save_alert_state(armed, last_alert_ts):
+    """Atomowy zapis stanu alertu (temp+fsync+rename). Nie może wywalić dispatchu."""
+    import os as _oslg
+    import tempfile as _tflg
+    try:
+        payload = {"armed": bool(armed),
+                   "last_alert_ts": last_alert_ts.isoformat() if last_alert_ts else None}
+        fd, tmp = _tflg.mkstemp(dir=_oslg.path.dirname(_LOADGOV_ALERT_STATE_PATH), suffix=".tmp")
+        with _oslg.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+            fh.flush()
+            _oslg.fsync(fh.fileno())
+        _oslg.replace(tmp, _LOADGOV_ALERT_STATE_PATH)
+    except Exception:
+        pass
+
 
 def _loadgov_active_orders(now) -> Optional[int]:
     """Aktywne zlecenia z orders_state.json: status nie-terminalny + updated_at
@@ -2777,8 +2819,18 @@ def _assess_order_impl(
     except Exception:
         pass  # best-effort; bound ma strict default gdy nie ustawione
     if C.decision_flag("ENABLE_FLEET_LOAD_GOVERNOR"):
-        _lg_emit, _LOADGOV_STATE["alert_armed"] = _loadgov_alert_transition(
-            loadgov_ewma, _LOADGOV_STATE["alert_armed"])
+        # Hysteresis DZIELONA przez plik (nie pamięć procesu) → JEDEN alert na epizod
+        # przeciążenia, niezależnie ile procesów (czasowka co minutę!) liczy load.
+        _armed_disk, _last_ts = _loadgov_load_alert_state()
+        _lg_emit, _new_armed = _loadgov_alert_transition(loadgov_ewma, _armed_disk)
+        # Cooldown: nie alarmuj częściej niż co LOADGOV_ALERT_COOLDOWN_MIN (oscylacja
+        # wokół progu nie spamuje). Belt-and-suspenders ponad dzieloną hysteresis.
+        _cooldown = float(getattr(C, "LOADGOV_ALERT_COOLDOWN_MIN", 30.0))
+        if _lg_emit and _last_ts is not None and (now - _last_ts) < timedelta(minutes=_cooldown):
+            _lg_emit = False
+        if loadgov_ewma is not None and (_new_armed != _armed_disk or _lg_emit):
+            _loadgov_save_alert_state(_new_armed, now if _lg_emit else _last_ts)
+        _LOADGOV_STATE["alert_armed"] = _new_armed  # mirror do telemetrii procesu
         if _lg_emit:
             try:
                 from dispatch_v2.telegram_utils import send_admin_alert as _lg_alert
