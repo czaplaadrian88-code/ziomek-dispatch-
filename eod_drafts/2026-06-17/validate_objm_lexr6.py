@@ -2,13 +2,27 @@
 """VALIDATION (Faza 1 → bramka §6 specu) — czyta ŻYWĄ telemetrię objm_lexr6_* zebraną od flipu
 17.06 i sprawdza czy selekcja D2 jest czystym zyskiem. Uruchamiane lokalnie na serwerze (musi
 czytać shadow_decisions.jsonl tej maszyny). Werdykt: czy budować Fazę 2 (live-flip)."""
-import json, glob, os
+import json, glob, os, gzip
 from datetime import datetime
 
 LOGS = "/root/.openclaw/workspace/scripts/logs"
-# glob WSZYSTKIE rotacje (7 dni może objąć .jsonl + .1 + .2); post-flip rekordy filtrowane
+# glob WSZYSTKIE rotacje (7 dni może objąć .jsonl + .1 + .2.gz); post-flip rekordy filtrowane
 # po obecności pola objm_lexr6_best_cid, więc stare rotacje bez pola są nieszkodliwe.
 FILES = sorted(glob.glob(f"{LOGS}/shadow_decisions.jsonl*"))
+
+def _iter_lines(path):
+    """Yield linie rotacji logu jako text — gzip dla .gz, zwykle dla reszty.
+    logrotate kompresuje stare rotacje (.gz); plain open() na .gz wcześniej
+    wywalał cały run UnicodeDecodeError przy `for line in f` (poza try/except).
+    errors='replace' + per-rotację try/except = jedna uszkodzona rotacja nie
+    kładzie całej walidacji (fail-soft, spójne z resztą skryptu)."""
+    opener = gzip.open if path.endswith(".gz") else open
+    try:
+        with opener(path, "rt", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                yield line
+    except Exception as e:
+        print(f"[pominięto rotację {path}: {e!r}]")
 MIN_DECISIONS = 200          # próg istotności
 MIN_NET_GAIN = 50.0          # Σ(R6+committed) musi spaść o ≥50 min (improvement)
 MAX_REGR_RATE = 0.01         # <1% flipów może pogarszać twardą regułę
@@ -23,21 +37,20 @@ def run():
     feas_flips=0
     for path in FILES:
         if not os.path.exists(path): continue
-        with open(path) as f:
-            for line in f:
-                if not line.strip(): continue
-                try: r=json.loads(line)
-                except: continue
-                b=r.get("best") or {}
-                if "objm_lexr6_best_cid" not in b: continue   # tylko post-flip telemetria
-                n+=1
-                if not b.get("objm_lexr6_flip"): continue
-                flips+=1
-                dR6=num(b.get("objm_lexr6_d_r6_breach")); dCom=num(b.get("objm_lexr6_d_committed"))
-                sR6+=dR6; sCom+=dCom
-                sNew+=num(b.get("objm_lexr6_d_new_late")); sW+=num(b.get("objm_lexr6_d_idle"))
-                if dR6>1.0 or dCom>1.0: regr+=1   # D2-pick gorszy na twardej osi = regresja
-                if str(b.get("feasibility","")).upper() in ("YES","MAYBE"): feas_flips+=1
+        for line in _iter_lines(path):
+            if not line.strip(): continue
+            try: r=json.loads(line)
+            except: continue
+            b=r.get("best") or {}
+            if "objm_lexr6_best_cid" not in b: continue   # tylko post-flip telemetria
+            n+=1
+            if not b.get("objm_lexr6_flip"): continue
+            flips+=1
+            dR6=num(b.get("objm_lexr6_d_r6_breach")); dCom=num(b.get("objm_lexr6_d_committed"))
+            sR6+=dR6; sCom+=dCom
+            sNew+=num(b.get("objm_lexr6_d_new_late")); sW+=num(b.get("objm_lexr6_d_idle"))
+            if dR6>1.0 or dCom>1.0: regr+=1   # D2-pick gorszy na twardej osi = regresja
+            if str(b.get("feasibility","")).upper() in ("YES","MAYBE"): feas_flips+=1
 
     net = sR6+sCom
     regr_rate = regr/n if n else 0.0
@@ -58,7 +71,7 @@ def run():
     out.append(f"     (R6-breach {sR6:.0f} min, committed {sCom:.0f} min)")
     out.append(f"- G2 regresje = {regr}/{n} = **{100*regr_rate:.2f}%** (cel < {100*MAX_REGR_RATE:.0f}%) → {'✅' if g2 else '❌'}")
     out.append(f"- G3 próbka ≥ {MIN_DECISIONS}: **{n}** → {'✅' if g3 else '❌'}")
-    out.append(f"- KOSZT (do akceptacji Adriana): new-pickup-late +{sNew:.0f} min, idle +{sW:.0f} min")
+    out.append(f"- KOSZT (do akceptacji Adriana): new-pickup-late {sNew:+.0f} min, idle {sW:+.0f} min (ujemne = też zysk)")
     out.append("")
     out.append(f"## WERDYKT: {verdict}")
     out.append("")
