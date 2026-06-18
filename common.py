@@ -177,6 +177,11 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "MIN_PROPOSE_SCORE",
     "MAX_BAG_SANITY_CAP",
     "MAX_PICKUP_REACH_KM",
+    # FOOD-AGE HARD-SLA (2026-06-18 lewar latencji): krótszy limit czasu solvera
+    # dla warm-startowanego ON-solve (startuje z dobrego planu base). Twarde
+    # ograniczenie gwarantuje SLA niezależnie od jakości solve → cięcie czasu
+    # ryzykuje tylko nieco mniej optymalizacji food-age, NIE regresję SLA.
+    "OBJ_FOOD_AGE_HARD_SLA_ON_SOLVE_MS",
 )
 
 # Front C (2026-06-12): killswitche INFRA (nie-decyzyjne) sterowane z flags.json
@@ -2696,6 +2701,12 @@ ENABLE_OBJ_DELIVERY_FOOD_AGE = _os.environ.get(
     "ENABLE_OBJ_DELIVERY_FOOD_AGE", "0") == "1"
 OBJ_DELIVERY_FOOD_AGE_COEFF = float(_os.environ.get(
     "OBJ_DELIVERY_FOOD_AGE_COEFF", "3.0"))
+# Lewar latencji (2026-06-18): limit czasu warm-startowanego ON-solve hard-SLA.
+# 100ms (pół z 200ms base) bo startuje z dobrego planu base; twarde ograniczenie
+# gwarantuje SLA niezależnie od jakości → cięcie czasu nie regresuje SLA.
+# Numeric-override (flags.json hot-reload) dla tuningu per-miasto/obciążenie.
+OBJ_FOOD_AGE_HARD_SLA_ON_SOLVE_MS = float(_os.environ.get(
+    "OBJ_FOOD_AGE_HARD_SLA_ON_SOLVE_MS", "100"))
 # Forward shadow comparator (2026-06-14): gdy ON, feasibility_v2 re-liczy plan
 # best/kandydatów ortools-multistop z food-age ON (thread-local override) i
 # loguje rozbieżność OFF↔ON w metrics["food_age_shadow"] — bez zmiany decyzji

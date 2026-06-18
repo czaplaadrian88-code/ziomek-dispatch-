@@ -1192,8 +1192,10 @@ def _ortools_plan(
                 f"OBJ_FOODAGE_HARDSLA_BOUNDS_FAIL {type(_hb_e).__name__}: {_hb_e}")
             delivery_sla_hard_bounds = None
 
-    def _solve(fa_pen, hard_span, hard_bounds, warm_routes):
-        """Solve + V3.27.1 BUG-2 retry bez time-windows. Hermetyzuje powtórkę."""
+    def _solve(fa_pen, hard_span, hard_bounds, warm_routes, ot_ms=None):
+        """Solve + V3.27.1 BUG-2 retry bez time-windows. Hermetyzuje powtórkę.
+        ot_ms: limit czasu (lewar latencji — ON warm-startowany dostaje krótszy)."""
+        _ms = int(ot_ms if ot_ms is not None else _ot_ms)
         _sol = tsp_solver.solve_tsp_with_constraints(
             num_stops=N,
             pickup_drop_pairs=pickup_drop_pairs,
@@ -1201,7 +1203,7 @@ def _ortools_plan(
             time_matrix_min=time_matrix,
             time_windows=time_windows,
             max_route_min=120.0,
-            time_limit_ms=int(_ot_ms),
+            time_limit_ms=_ms,
             delivery_soft_deadlines=delivery_soft_deadlines,
             pickup_freshness_penalties=pickup_freshness_penalties,
             pickup_committed_penalties=pickup_committed_penalties,
@@ -1248,8 +1250,12 @@ def _ortools_plan(
                      if base_sol is not None and base_sol.sequence else None)
         _warm = ([list(base_sol.sequence)]
                  if base_sol is not None and base_sol.sequence else None)
+        # lewar latencji: ON warm-startowany dostaje krótszy limit (numeric-override).
+        _on_ms = _common.load_flags().get(
+            "OBJ_FOOD_AGE_HARD_SLA_ON_SOLVE_MS",
+            getattr(_common, "OBJ_FOOD_AGE_HARD_SLA_ON_SOLVE_MS", 100.0))
         on_sol = _solve(delivery_food_age_penalties, True,
-                        delivery_sla_hard_bounds, _warm)
+                        delivery_sla_hard_bounds, _warm, ot_ms=_on_ms)
         on_plan = (_plan_from_sequence(on_sol.sequence, nodes, leg_min,
                                        new_order, bag, now, sla_minutes)
                    if on_sol is not None and on_sol.sequence else None)
