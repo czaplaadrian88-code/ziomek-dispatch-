@@ -2342,6 +2342,13 @@ ENABLE_OBJM_LEXR6_SELECT_SHADOW = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT_SHAD
 # ta stała = fallback OFF gdy brak klucza. Konsumpcja: C.flag("ENABLE_OBJM_LEXR6_SELECT", False).
 ENABLE_OBJM_LEXR6_SELECT = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT", "0") == "1"
 
+# ETA R3 SHADOW (2026-06-18): residualny model LightGBM koryguje ETA bazową OSRM
+# (held-out MAE 9,97→8,63 = −13,4%). FAZA SHADOW: eta_calibration_logger liczy `corrected`
+# obok `predicted` i loguje OBA → pomiar MAE(base) vs MAE(corrected) na ŻYWYCH held-out danych.
+# ZERO wpływu na feasibility/chain_eta/selekcję (logger off-hot-path, post-hoc). Wpięcie live =
+# OSOBNA flaga + ACK PO potwierdzeniu MAE↓ na świeżych danych (uwaga: fałszywy optymizm +1,2%).
+ENABLE_ETA_R3_SHADOW = _os.environ.get("ENABLE_ETA_R3_SHADOW", "0") == "1"
+
 # === COORD POISON GUARD flagi (Lekcja #140, 2026-05-21) — default ON ===
 # Defense-in-depth, by ten bug NIGDY nie wrócił cicho:
 #  - ENABLE_OSRM_COORD_GUARD: osrm_client.route()/table() walidują bbox KAŻDEJ

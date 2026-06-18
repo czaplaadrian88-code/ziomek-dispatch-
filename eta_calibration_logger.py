@@ -32,6 +32,33 @@ from zoneinfo import ZoneInfo
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 
+# ETA R3 shadow (2026-06-18) — opcjonalne; logger nie może się wywalić gdy brak modułu/modelu.
+# Dual-path import (script-mode ExecStart WD=dispatch_v2 → bare; package-mode pytest → from
+# dispatch_v2). eta_residual_infer = stdlib+numpy+lightgbm, bez zależności od pakietu dispatch_v2.
+try:
+    import eta_residual_infer as _R3
+except Exception:
+    try:
+        from dispatch_v2 import eta_residual_infer as _R3
+    except Exception:
+        _R3 = None
+
+# Flagę czytamy WPROST z flags.json (KANON hot), NIE przez common — common.py wymaga pakietu
+# dispatch_v2 na ścieżce (absolutne importy), czego kontekst wykonania loggera nie gwarantuje.
+_FLAGS_PATH = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/flags.json"
+
+# Ustawiane raz w main() z flags.json (hot). Domyślnie OFF → zero nowych pól, zachowanie bez zmian.
+_R3_SHADOW_ON = False
+
+
+def _read_r3_flag():
+    """Czyta ENABLE_ETA_R3_SHADOW wprost z flags.json (fail-soft → False)."""
+    try:
+        with open(_FLAGS_PATH, encoding="utf-8") as fh:
+            return bool(json.load(fh).get("ENABLE_ETA_R3_SHADOW", False))
+    except Exception:
+        return False
+
 BASE = "/root/.openclaw/workspace"
 SLA_LOG = f"{BASE}/scripts/logs/sla_log.jsonl"
 SHADOW_LOG = f"{BASE}/scripts/logs/shadow_decisions.jsonl"
@@ -216,6 +243,12 @@ def extract_row(sla_rec, shadow_index):
         "was_czasowka": sla_rec.get("was_czasowka"),
         "n_shadow_records": 0,
         "shadow_ts": None,
+        # ETA R3 shadow (tylko gdy ENABLE_ETA_R3_SHADOW): korekta residualna obok bazy OSRM.
+        # corrected = predicted_delivery_min + residual_pred; error_min = real − corrected
+        # (analogicznie do eta bazowej real − predicted_delivery_min). ZERO wpływu na decyzje.
+        "eta_r3_residual_pred": None,
+        "eta_r3_corrected_delivery_min": None,
+        "eta_r3_corrected_error_min": None,
     }
 
     recs = shadow_index.get(oid)
@@ -248,6 +281,27 @@ def extract_row(sla_rec, shadow_index):
         if picked_up_at is not None:
             row["prediction_age_min"] = round(
                 (picked_up_at - chosen_ts).total_seconds() / 60.0, 2)
+
+        # --- ETA R3 shadow: corrected = base + residual_pred (fail-soft, zero wpływu) ---
+        if _R3_SHADOW_ON and _R3 is not None and row["predicted_delivery_min"] is not None:
+            try:
+                corrected, resid = _R3.predict_corrected(
+                    bag_size=row["bag_size"],
+                    predicted_delivery_min=row["predicted_delivery_min"],
+                    hour_warsaw=row["hour_warsaw"],
+                    is_weekend=row["is_weekend"],
+                    is_bundle=row["is_bundle"],
+                    restaurant=row["restaurant"],
+                    courier_id=real_cid,
+                    pool_feasible=rec.get("pool_feasible_count"),
+                )
+                if corrected is not None:
+                    row["eta_r3_residual_pred"] = resid
+                    row["eta_r3_corrected_delivery_min"] = corrected
+                    if isinstance(real_min, (int, float)):
+                        row["eta_r3_corrected_error_min"] = round(real_min - corrected, 2)
+            except Exception as exc:  # noqa: BLE001 — shadow nigdy nie wywala loggera
+                print(f"  WARN R3 shadow oid={oid}: {type(exc).__name__}: {exc}", file=sys.stderr)
 
     return row
 
@@ -297,7 +351,12 @@ def summarize(rows):
 
 
 def main():
+    global _R3_SHADOW_ON
     print(f"[eta_calibration_logger v2] {datetime.now(WARSAW).isoformat()}")
+    _R3_SHADOW_ON = _read_r3_flag()
+    if _R3_SHADOW_ON:
+        avail = _R3.is_available() if _R3 is not None else False
+        print(f"  ETA R3 shadow: ON (model_available={avail})")
     already = load_already_logged()
     shadow_index = build_shadow_index()
 

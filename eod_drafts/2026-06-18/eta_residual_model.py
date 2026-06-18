@@ -74,6 +74,10 @@ G = (mae_base-mae_corr)/mae_base>=0.10 and fp_c<=fp_b and (fo_c-fo_b)<=max(3,0.0
 print(f"\nBRAMKA: MAE↓≥10% & pesymizm nie rośnie & optymizm rośnie ≤2% → {'✅ PASS — gotowe do shadow-wiring' if G else '❌ FAIL — dopracować cechy/dane'}")
 if G:
     import os; os.makedirs(f"{DS}/../scripts/ml_data_prep/models/eta_residual_v1",exist_ok=True)
-    m.booster_.save_model("/root/.openclaw/workspace/scripts/ml_data_prep/models/eta_residual_v1/model.txt")
-    json.dump(FN,open("/root/.openclaw/workspace/scripts/ml_data_prep/models/eta_residual_v1/features.json","w"))
-    print("model zapisany → ml_data_prep/models/eta_residual_v1/")
+    MDIR="/root/.openclaw/workspace/scripts/ml_data_prep/models/eta_residual_v1"
+    m.booster_.save_model(f"{MDIR}/model.txt")
+    json.dump(FN,open(f"{MDIR}/features.json","w"))
+    # rest_freq = train-time częstość restauracji (NIE-żywa) — MUSI być persystowana,
+    # inaczej inference nie odtworzy cechy `rest_freq` (train/serve skew). Shadow-wiring czyta ten plik.
+    json.dump(dict(restcnt),open(f"{MDIR}/rest_freq.json","w"),ensure_ascii=False)
+    print("model zapisany → ml_data_prep/models/eta_residual_v1/ (model.txt + features.json + rest_freq.json)")
