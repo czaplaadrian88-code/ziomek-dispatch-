@@ -1,0 +1,13 @@
+=== PKT 6 — test reguł trasy 2026-06-14 (real bags sla_log → prod engine, OR-Tools 200ms) ===
+worki 2-4 ocenione: n=96 | z R6-breach w baseline: 12 | committed-map z capture: 0
+
+Wyłączenie POJEDYNCZEGO ograniczenia — ile breachy R6 odzyskuje (NET = recov−new):
+
+  V327_timewindows_OFF           recov= 0 (free-window=0 / committed-blocked=0) | new=12 | return-to-rest=0 | NET=-12
+  V3273_wait_OFF                 recov= 0 (free-window=0 / committed-blocked=0) | new=0 | return-to-rest=0 | NET=+0
+  V3274_frozen_committed_OFF     recov= 0 (free-window=0 / committed-blocked=0) | new=0 | return-to-rest=0 | NET=+0
+
+Legenda: free-window = worek BEZ committed → odzysk z 'za ciasnego okna' (KANDYDAT do rozluźnienia).
+         committed-blocked = worek z committed czas_kuriera → odzysk złamałby zobowiązanie (NIE ruszać).
+BRAMKA: rozluźnienie z NET>0 i recov_free>0 przy new≈0 i return-to-rest=0 → realna dźwignia.
+KILL: jeśli cały recov to committed-blocked, albo new≥recov → to NIE jest darmowa dźwignia (jak food-age).

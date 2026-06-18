@@ -1,0 +1,15 @@
+=== ADHERENCJA REGUŁ + co kurierzy FAKTYCZNIE jeżdżą (realne worki events.db) ===
+worki 2-6 = 149
+
+reguła                                        ZIOMEK       APP   CONSOLE
+------------------------------------------------------------------------
+R-NO-RETURN: backtrack/powroty (median, ↓=lepiej)         1         1         0
+pickup-order wg gotowości (% par OK, ↑=lepiej)       97%       92%       97%
+R6 breach (worki >35min, ↓=lepiej)                11         9         5
+
+── KTÓRĄ TRASĘ KURIERZY FAKTYCZNIE JADĄ (zgodność kolejności dostaw z realized, ↑) ──
+  realized ↔ CONSOLE : 64% zgodnych par (194/302)
+  realized ↔ APP     : 76% zgodnych par (231/302)
+  realized ↔ ZIOMEK  : 78% zgodnych par (236/302)
+
+Wniosek: wyższa zgodność realized↔X = kurierzy de-facto jadą bliżej X.

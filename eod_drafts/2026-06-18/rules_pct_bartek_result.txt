@@ -1,0 +1,26 @@
+=== ADHERENCJA REGUŁ W % (n=150 realnych worków) ===
+
+reguła                                      ZIOMEK       APP   CONSOLE
+----------------------------------------------------------------------
+R-NO-RETURN: worki BEZ powrotu (czyste)        45%       23%       51%
+pickup-order wg gotowości (% par OK)           97%       92%       97%
+R6 ≤35min: worki bez przekroczenia             93%       94%       97%
+— ŁĄCZNY wskaźnik adherencji (śr. 3 reguł)       78%       70%       82%
+
+=== WOREK BARTKA: 4 zleceń (badane dziś) ===
+   481634 sushi→Kopernika                  rest=Sushi Rany Julek & Pizza Majstry ready=15:25
+   481635 sushi→Kijowska                   rest=Sushi Rany Julek & Pizza Majstry ready=15:23
+   481641 toriko→Młynowa                   rest=Toriko ready=15:24
+   481618 KEBAB→Konopnickiej[czasówka15:40] rest=Kebab Król ready=15:32
+
+  [ZIOMEK] backtrack=0 R6breach=0 makespan=37min
+      kolejność: ↑sushi → ↑sushi → ↑toriko → ↑KEBAB → ↓Kijowska → ↓Młynowa → ↓Kopernika → ↓Konopnickiej[czasówka15:40]
+      food-age per zlecenie: sushi:22, sushi:11, toriko:13, KEBAB:24  | KEBAB-czasówka dostawa=15:56 (cel 15:40)
+  [APP] backtrack=1 R6breach=0 makespan=37min
+      kolejność: ↑sushi → ↑sushi → ↑toriko → ↓Kijowska → ↓Młynowa → ↓Kopernika → ↑KEBAB → ↓Konopnickiej[czasówka15:40]
+      food-age per zlecenie: sushi:15, sushi:7, toriko:7, KEBAB:7  | KEBAB-czasówka dostawa=15:56 (cel 15:40)
+  [CONSOLE] backtrack=0 R6breach=0 makespan=37min
+      kolejność: ↑sushi → ↑sushi → ↑toriko → ↑KEBAB → ↓Kijowska → ↓Młynowa → ↓Kopernika → ↓Konopnickiej[czasówka15:40]
+      food-age per zlecenie: sushi:22, sushi:13, toriko:14, KEBAB:24  | KEBAB-czasówka dostawa=15:56 (cel 15:40)
+
+  (food-age = minuty odbiór→dostawa; czasówka kebaba: żaden silnik nie ma okna-dostawy → patrz która najbliżej 15:40)

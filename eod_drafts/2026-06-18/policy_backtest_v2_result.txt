@@ -1,0 +1,57 @@
+=== OBJECTIVE BACKTEST (makespan BASE vs food-age FOODAGE) — production engine ===
+window 2026-06-04T00:00..2026-06-18T23:59 | eligible_bag>=3=12433 sampled=120 ortools-usable n=117 err=0 | OR-Tools=200ms sla=35 far_km=1.5
+wall=35s
+
+########## OPTION B — FOOD-AGE OBJECTIVE (per bag size) ##########
+
+── bag=2: n=0 ──
+
+── bag=3 (n=72) ──
+  changed-rate (food-age≠makespan seq): 3/72=4.2%
+  G1 NEW SLA regressions (fa>base): 0/72=0.0%  [GO if ~0]
+  food-age median: BASE=60.0 FA=60.0 | p90: BASE=92.7 FA=92.7
+  bags w/ R6 breach(>35): BASE=67/72=93.1% FA=67/72=93.1% | NET breaches removed=2
+  food-age fresher>0.5: 2/72=2.8% regressed<-0.5: 4/72=5.6%
+  Δfood-age on CHANGED: median=0.3 p90=4.8min (+=fresher) | drive cost median=1.1 p90=9.2min
+
+── bag=4 (n=24) ──
+  changed-rate (food-age≠makespan seq): 1/24=4.2%
+  G1 NEW SLA regressions (fa>base): 0/24=0.0%  [GO if ~0]
+  food-age median: BASE=69.0 FA=69.0 | p90: BASE=115.6 FA=115.6
+  bags w/ R6 breach(>35): BASE=24/24=100.0% FA=24/24=100.0% | NET breaches removed=-1
+  food-age fresher>0.5: 0/24=0.0% regressed<-0.5: 1/24=4.2%
+  Δfood-age on CHANGED: median=-1.1 p90=-1.1min (+=fresher) | drive cost median=1.1 p90=1.1min
+
+── bag=5 (n=13) ──
+  changed-rate (food-age≠makespan seq): 0/13=0.0%
+  G1 NEW SLA regressions (fa>base): 0/13=0.0%  [GO if ~0]
+  food-age median: BASE=56.4 FA=56.4 | p90: BASE=93.9 FA=93.9
+  bags w/ R6 breach(>35): BASE=13/13=100.0% FA=13/13=100.0% | NET breaches removed=0
+  food-age fresher>0.5: 1/13=7.7% regressed<-0.5: 0/13=0.0%
+
+── bag>=6 (n=8) ──
+  changed-rate (food-age≠makespan seq): 0/8=0.0%
+  G1 NEW SLA regressions (fa>base): 0/8=0.0%  [GO if ~0]
+  food-age median: BASE=96.3 FA=96.3 | p90: BASE=109.6 FA=109.6
+  bags w/ R6 breach(>35): BASE=8/8=100.0% FA=8/8=100.0% | NET breaches removed=0
+  food-age fresher>0.5: 0/8=0.0% regressed<-0.5: 0/8=0.0%
+
+── ALL bag>=2 (n=117) ──
+  changed-rate (food-age≠makespan seq): 4/117=3.4%
+  G1 NEW SLA regressions (fa>base): 0/117=0.0%  [GO if ~0]
+  food-age median: BASE=63.8 FA=64.1 | p90: BASE=109.8 FA=109.8
+  bags w/ R6 breach(>35): BASE=112/117=95.7% FA=112/117=95.7% | NET breaches removed=1
+  food-age fresher>0.5: 3/117=2.6% regressed<-0.5: 5/117=4.3%
+  Δfood-age on CHANGED: median=-0.4 p90=4.8min (+=fresher) | drive cost median=1.1 p90=9.2min
+
+########## OPTION C — CZASÓWKA DELIVERY LATENESS (committed orders, BASE) ##########
+  committed-order deliveries measured: 421
+  delivered LATE vs direct-run ideal (>0min): 421/421=100.0%
+  lateness median(all)=35.0 p90=68.8 | median(late only)=35.0 p90=68.8min
+  late >5min: 416/421=98.8% | >10min: 405/421=96.2%
+
+########## OPTION D — FAR-BUNDLE (committed deliv >1.5km from rest centroid) ##########
+  far-bundle decisions: 115/117=98.3%
+  food-age median: FAR=64.1 vs NON-FAR=30.6 | p90 FAR=109.8 NON-FAR=33.9
+  R6 breach rate in FAR bundles: 112/115=97.4%
+

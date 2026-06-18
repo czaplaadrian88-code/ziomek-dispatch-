@@ -1,0 +1,16 @@
+=== B_LOAD: twardy cap worka per tier — 2026-05-16 (real bags → prod engine) ===
+cap empiryczny: {'gold': 6, 'std+': 6, 'std': 4, 'slow': 4, 'new': 4} | worki > cap: 18
+
+  breachy R6 w workach-nad-capem (pełne):        53
+  breachy R6 po ucięciu do capa (zostają):       17
+  >>> breachy USUNIĘTE u przeciążonego kuriera:  36
+
+  zlecenia PRZEŁOŻONE (koszt floty — ktoś inny musi wziąć): 40
+  szac. breachy przełożonych gdyby szły w MAŁYM worku: ~3.7
+  >>> NETTO breachy mniej (jeśli flota ma zapas): ~32.3
+
+INTERPRETACJA:
+  • removed = breachy znikające u przeładowanego kuriera po utwardzeniu capa.
+  • displaced = ile zleceń trzeba przekierować = wymagana nadwyżka floty/godzin.
+  • NETTO dodatnie TYLKO gdy flota ma zapas wziąć przełożone bez breacha (na 16.05 niedobór! → netto mniejsze).
+BRAMKA: removed>0 i displaced realistycznie wchłanialne. KILL: displaced ~= flota której nie ma → cap tylko przesuwa breach.

@@ -1,0 +1,32 @@
+=== MULTI-POLICY ROUTING BACKTEST (production engine route_simulator_v2) ===
+window 2026-06-04T00:00..2026-06-18T23:59 | eligible_bag>=2=21589 sampled=40 ortools-usable n=40 err=0 | OR-Tools=200ms sla=35
+wall=18s
+
+── BASELINE PATHOLOGY (bags with >=1 R6 breach >35min) ──
+  STICKY(live-plan): 32/40 = 80.0% | FREE(re-TSP): 32/40 = 80.0% | FREE_FA: 32/40 = 80.0%
+  median max-food-age: STICKY=46.16 FREE=46.16 FREE_FA=46.16 | p90: STICKY=73.24 FREE=73.24 FREE_FA=73.24
+
+── OPTION A — re-TSP (free vs sticky/incremental) (baseline=sticky treatment=free, n=40) ──
+  changed sequence: 2/40 = 5.0%
+  max-food-age fresher>0.5min: 1/40 = 2.5% | regressed<-0.5: 1/40 = 2.5%
+  Δfood-age on CHANGED bags: median=1.21 p90=5.83 (+ = treatment fresher) n_changed=2
+  drive cost on CHANGED bags (treatment-baseline span): median=-2.9min p90=0.0min
+  R6 breaches: improved_bags=0 regressed_bags=0 NET_breaches_removed=0
+  total food-age-minutes saved (sum of positive Δ): 6.0
+
+── OPTION B — food-age marginal (free_fa vs free) (baseline=free treatment=fa, n=40) ──
+  changed sequence: 1/40 = 2.5%
+  max-food-age fresher>0.5min: 1/40 = 2.5% | regressed<-0.5: 2/40 = 5.0%
+  Δfood-age on CHANGED bags: median=30.52 p90=30.52 (+ = treatment fresher) n_changed=1
+  drive cost on CHANGED bags (treatment-baseline span): median=-3.0min p90=-3.0min
+  R6 breaches: improved_bags=0 regressed_bags=1 NET_breaches_removed=-1
+  total food-age-minutes saved (sum of positive Δ): 31.0
+
+── OPTION A+B — re-TSP + food-age (free_fa vs sticky) (baseline=sticky treatment=fa, n=40) ──
+  changed sequence: 3/40 = 7.5%
+  max-food-age fresher>0.5min: 2/40 = 5.0% | regressed<-0.5: 3/40 = 7.5%
+  Δfood-age on CHANGED bags: median=5.83 p90=30.52 (+ = treatment fresher) n_changed=3
+  drive cost on CHANGED bags (treatment-baseline span): median=-3.0min p90=0.0min
+  R6 breaches: improved_bags=0 regressed_bags=1 NET_breaches_removed=-1
+  total food-age-minutes saved (sum of positive Δ): 36.0
+

@@ -1,0 +1,21 @@
+=== KONSOLA (podjazdy) vs APKA — dlaczego konsola daje lepszą trasę (realne worki) ===
+worki 2-6 = 148 | CONSOLE świeższa od APP (food-age, >0.5min): 30/148 = 20%
+
+trasa       med_food  p90_food  R6 bags med_makespan  med_backtrack
+----------------------------------------------------------------
+REALIZED        21.4      38.4 18/148            33.4            0.0
+ZIOMEK          15.6      30.1 11/148            29.5            1.0
+APP             11.8      26.2 9/148            29.6            1.0
+CONSOLE         15.2      27.5 5/148            32.1            0.0
+
+backtrack = ile razy ODBIÓR po DOSTAWIE (powrót po jedzenie). Podjazdy konsoli to minimalizują.
+
+── przykłady (CONSOLE vs APP się różnią): food/r6/makespan/backtrack ──
+  cid=457 n=4 | ZIOMEK 19.8/2bt | APP 19.8/2bt | CONSOLE 31.5/0bt
+  cid=457 n=5 | ZIOMEK 134.4/0bt | APP 136.4/0bt | CONSOLE 27.5/2bt
+  cid=457 n=4 | ZIOMEK 35.2/2bt | APP 35.2/2bt | CONSOLE 44.2/1bt
+  cid=529 n=6 | ZIOMEK 344.3/0bt | APP 332.4/2bt | CONSOLE 39.0/2bt
+  cid=529 n=3 | ZIOMEK 29.6/0bt | APP 9.9/2bt | CONSOLE 30.5/0bt
+  cid=531 n=3 | ZIOMEK 13.7/1bt | APP 13.7/1bt | CONSOLE 23.0/0bt
+  cid=531 n=3 | ZIOMEK 35.3/1bt | APP 35.3/1bt | CONSOLE 23.9/1bt
+  cid=531 n=3 | ZIOMEK 28.6/0bt | APP 24.1/1bt | CONSOLE 22.0/1bt

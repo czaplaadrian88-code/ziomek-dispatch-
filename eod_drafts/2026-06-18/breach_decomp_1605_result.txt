@@ -1,0 +1,34 @@
+=== 16.05 — DEKOMPOZYCJA PRZYCZYN BREACHY R6 (real deliveries >35min) ===
+realnych breachy(sla_log) total=131 | solo=0 w-worku=131 | sklasyfikowanych=120
+
+── PRZYCZYNA → ile breachy → realna DŹWIGNIA ──
+  A_distance (direct odbiór→dostawa ≥35min)     :   0  → NIEUNIKNIONE (żaden dispatch; ew. podział miasta/akceptacja)
+  B_seq (lepsza kolejność by uratowała)         :  89  → ROUTING (sekwencja/objektyw) — GÓRNA granica (free-reorder ignoruje committed)
+  B_load (najlepsza kolejność też breach)       :  18  → FLOTA/ASSIGNMENT (worek za duży, mniej zleceń/kurier)
+  solo_slow (solo, direct<35 a realnie >35)     :   0  → realne opóźnienie/traffic/late-start (nie geometria)
+  unresolved (brak coords/OSRM)                 :  13
+
+  ⇒ routing-fixable (B_seq) = 89/131 = 68% realnych breachy
+  ⇒ flota/assignment (B_load) = 18/131 = 14%
+  ⇒ nieuniknione dystansem (A) = 0/131 = 0%
+  ⇒ wykonawcze/solo (solo_slow) = 0/131 = 0%
+
+── przykłady A_distance (oid, direct_min, real_foodage, typ) ──
+── przykłady B_seq (oid, real_OSRM, best_reorder_OSRM, kontekst) — routing by uratował ──
+    ('473655', 36.6, 13.2, 'bag4 cid=503')
+    ('473687', 55.2, 10.4, 'bag4 cid=503')
+    ('473707', 49.2, 11.6, 'bag5 cid=503')
+    ('473726', 35.5, 12.8, 'bag5 cid=503')
+    ('473808', 36.3, 28.3, 'bag6 cid=503')
+    ('473827', 46.0, 16.8, 'bag6 cid=503')
+    ('473607', 27.0, 6.4, 'bag3 cid=509')
+    ('473704', 35.1, 18.9, 'bag4 cid=509')
+── przykłady B_load (oid, direct_min, best_reorder_foodage, kontekst) — flota ──
+    ('473783', 5.5, 112.3, 'bag6 cid=503')
+    ('473876', 3.0, 73.2, 'bag6 cid=509')
+    ('473882', 6.5, 57.6, 'bag6 cid=509')
+    ('473836', 6.3, 57.9, 'bag6 cid=484')
+    ('473850', 15.8, 75.6, 'bag6 cid=484')
+    ('473915', 17.7, 84.5, 'bag6 cid=484')
+    ('473918', 11.2, 72.0, 'bag6 cid=484')
+    ('473927', 6.6, 91.0, 'bag8 cid=471')

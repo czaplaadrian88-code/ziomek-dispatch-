@@ -1,0 +1,30 @@
+=== REAL-BAG OBJECTIVE COMPARISON (events.db carried bags) ===
+window from 2026-05-18 | bags scored (size 2-4)=130 (skipped >4: 5) | czasówka-bags=2 | SLA=35.0 dwell_p=1.0 dwell_d=3.5
+
+policy     med_maxfood p90_maxfood  R6breach_bags med_makespan
+--------------------------------------------------------------
+REALIZED          20.6        37.5 14/130 (11%)            32.2
+MAKESPAN          15.4        27.8 6/130 (5%)            28.7
+FOODAGE            9.3        12.6 0/130 (0%)            31.1
+MINLAT            11.3        24.4 5/130 (4%)            28.9
+
+── vs MAKESPAN (Ziomek today): improvement counts ──
+  (food-age fresher / R6 removed vs makespan, per bag)
+  FOODAGE  : fresher=76 regressed=0 | R6-breach bags 6->0 | Δmakespan median=1.2min
+  MINLAT   : fresher=32 regressed=0 | R6-breach bags 6->5 | Δmakespan median=0.0min
+  REALIZED : fresher=22 regressed=83 | R6-breach bags 6->14 | Δmakespan median=2.9min
+
+  czasówka deliv lateness [REALIZED]: n=2 median=-11.2 p90=-9.8 | late>0: 0/2 | >10min: 0
+  czasówka deliv lateness [MAKESPAN]: n=2 median=-16.2 p90=-15.1 | late>0: 0/2 | >10min: 0
+  czasówka deliv lateness [FOODAGE]: n=2 median=-16.2 p90=-15.1 | late>0: 0/2 | >10min: 0
+  czasówka deliv lateness [MINLAT]: n=2 median=-16.2 p90=-15.1 | late>0: 0/2 | >10min: 0
+
+── sample bag>=3 examples (maxfood/R6/makespan per policy) ──
+  cid=457 n=4 REALIZED:28.0/0/41.3 | MAKESPAN:19.8/0/40.9 | FOODAGE:9.1/0/54.4 | MINLAT:19.8/0/40.9
+  cid=457 n=4 REALIZED:76.0/1/97.4 | MAKESPAN:35.2/1/87.3 | FOODAGE:18.2/0/88.9 | MINLAT:35.2/1/87.3
+  cid=529 n=4 REALIZED:77.1/1/85.3 | MAKESPAN:18.6/0/81.8 | FOODAGE:18.6/0/81.8 | MINLAT:18.6/0/81.8
+  cid=529 n=3 REALIZED:29.6/0/42.2 | MAKESPAN:29.6/0/42.2 | FOODAGE:9.9/0/47.5 | MINLAT:9.9/0/47.5
+  cid=531 n=3 REALIZED:15.7/0/36.0 | MAKESPAN:13.7/0/34.9 | FOODAGE:8.0/0/40.2 | MINLAT:13.7/0/34.9
+  cid=531 n=3 REALIZED:37.5/1/41.0 | MAKESPAN:35.3/1/38.8 | FOODAGE:10.9/0/42.2 | MINLAT:35.3/1/38.8
+  cid=370 n=3 REALIZED:23.0/0/36.8 | MAKESPAN:22.0/0/35.8 | FOODAGE:8.9/0/45.2 | MINLAT:22.0/0/35.8
+  cid=370 n=4 REALIZED:38.3/1/60.1 | MAKESPAN:27.6/0/56.4 | FOODAGE:12.1/0/58.4 | MINLAT:16.3/0/58.1

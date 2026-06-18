@@ -1,0 +1,11 @@
+=== PKT 6 iter-2 — legalna vs free recovery R6 (06-13..17, real bags, prod engine) ===
+worki 2-4: n=305 | worki z breach: 36 | suma breachy baseline: 40
+
+  recovery_LEGIT (food-age ON, committed RESPEKTOWANY):  1 breachy odzyskane | nowe: 0
+  recovery_FREE  (committed ZIGNOROWANY = górna granica): 0 breachy odzyskane | nowe: 5
+
+INTERPRETACJA:
+  • legit≈0 → reorder NIE ratuje breachy bez łamania committed → reguły NIE są darmową dźwignią (spójne z food-age no-op).
+  • free>>legit → handoffowy '68% B_seq' to głównie ŁAMANIE committed (nielegalne) → potwierdza caveat handoffu.
+  • free≈legit≈0 → breachy STRUKTURALNE (B_load/flota), nie kolejność.
+BRAMKA dźwigni: recovery_legit istotnie >0 przy new_b≈0. KILL: legit≈0 (jak tu/16.05 prawdopodobnie).

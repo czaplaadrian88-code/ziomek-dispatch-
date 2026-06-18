@@ -1,0 +1,22 @@
+=== 16.05 — DEPLOYABLE proof (production engine, OFF=Ziomek dziś vs ON=Opcja B) ===
+real bags 16.05 size 2-4 re-routed przez silnik: n=56 (skip 33) | OR-Tools=200ms
+
+── G1 BEZPIECZEŃSTWO (twardy wymóg) ──
+  nowe regresje SLA (ON>OFF): 0/56 = 0.00%  [musi ≈0]
+  SLA breachy NAPRAWIONE (ON<OFF): 0
+
+── G2 ZYSK ŚWIEŻOŚCI na realnych workach 16.05 ──
+  med max-food-age: OFF=32.0 -> ON=32.0 | p90: OFF=44.1 -> ON=44.1
+  worki z R6 breach (>35min): OFF=20/56 -> ON=20/56
+  worki świeższe pod ON: 0/56 | changed (seq/mk): 0/56
+  koszt makespanu ON-OFF: median=0.0min p90=0.0min
+
+── przykłady (akt=realny max food-age sla_log; OFF/ON: thermal/R6/makespan) ──
+  cid=503 n=4 akt=60.3 | OFF:49.13/2/77.5 -> ON:49.13/2/77.5
+  cid=503 n=3 akt=30.6 | OFF:35.32/1/50.6 -> ON:35.32/1/50.6
+  cid=509 n=3 akt=35.4 | OFF:20.34/0/34.5 -> ON:20.34/0/34.5
+  cid=509 n=3 akt=18.5 | OFF:30.1/0/37.1 -> ON:30.1/0/37.1
+  cid=509 n=4 akt=37.5 | OFF:41.07/1/58.6 -> ON:41.07/1/58.6
+  cid=509 n=3 akt=32.3 | OFF:29.6/0/29.6 -> ON:29.6/0/29.6
+  cid=509 n=4 akt=32.2 | OFF:36.84/2/46.9 -> ON:36.84/2/46.9
+  cid=509 n=3 akt=20.9 | OFF:33.2/0/43.3 -> ON:33.2/0/43.3

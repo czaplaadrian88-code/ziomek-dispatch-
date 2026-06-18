@@ -1,0 +1,29 @@
+=== 16.05 (realna sobota-peak) — DOWÓD NA DOWOZACH ===
+co-carried worki size 2-4 zrekonstruowane i re-routowane: 56 (skip 33)
+
+── KONTEKST: cały dzień 16.05 (sla_log, 376 dowozów, REALNE) ──
+  realny food-age: median=28.2 mean=30.1 p90=52.7 max=90.6
+  R6 breach (>35min) REALNIE: 131/376 = 34.8%
+
+objektyw      med_maxfood p90_maxfood   worki_R6>35 med_makespan
+----------------------------------------------------------------
+REALIZED(akt)        33.0        54.1 23/56        (z sla_log)
+REALIZED_SEQ         27.8        46.4 17/56                 39.5
+MAKESPAN             21.5        35.7 7/56                 35.0
+FOODAGE              11.1        13.7 0/56                 43.9
+MINLAT               18.5        34.6 4/56                 35.6
+
+── OPCJA B vs MAKESPAN (Ziomek dziś) na realnych workach 16.05 ──
+  worki świeższe pod FOODAGE: 50/56 | regresja: 0
+  worki z R6 breach: MAKESPAN=7/56 -> FOODAGE=0/56
+  koszt makespanu: median=6.4min p90=18.2min
+
+── przykłady (maxfood/R6/makespan; akt=realny max food-age z sla_log) ──
+  cid=503 n=4 akt=60.3 | REAL:55.2/2/66.6 | MAKE:37.8/1/58.0 | FOOD:13.8/0/77.3 | MINL:24.0/0/64.8
+  cid=503 n=3 akt=30.6 | REAL:30.7/0/49.1 | MAKE:15.6/0/41.9 | FOOD:10.2/0/50.1 | MINL:15.6/0/41.9
+  cid=509 n=3 akt=35.4 | REAL:27.0/0/37.0 | MAKE:13.4/0/31.1 | FOOD:6.4/0/32.7 | MINL:6.4/0/32.7
+  cid=509 n=3 akt=18.5 | REAL:24.2/0/34.6 | MAKE:29.9/0/33.4 | FOOD:8.0/0/36.8 | MINL:29.9/0/33.4
+  cid=509 n=4 akt=37.5 | REAL:35.1/1/56.1 | MAKE:25.2/0/51.8 | FOOD:18.9/0/56.8 | MINL:25.2/0/51.8
+  cid=509 n=3 akt=32.3 | REAL:22.9/0/26.4 | MAKE:22.9/0/26.4 | FOOD:9.8/0/44.6 | MINL:22.9/0/26.4
+  cid=509 n=4 akt=32.2 | REAL:34.9/0/42.5 | MAKE:34.9/0/42.5 | FOOD:12.5/0/75.3 | MINL:34.9/0/42.5
+  cid=509 n=3 akt=20.9 | REAL:25.6/0/39.1 | MAKE:17.9/0/35.2 | FOOD:8.5/0/44.6 | MINL:17.9/0/35.2
