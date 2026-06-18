@@ -13,7 +13,7 @@ Returns:
 import json
 import logging
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Dict, Optional
 
 from dispatch_v2 import osrm_client
@@ -49,6 +49,39 @@ MAX_BAG_SIZE = MAX_BAG_SANITY_CAP
 MAX_PICKUP_REACH_KM = float(getattr(C, "MAX_PICKUP_REACH_KM", 15.0))
 SHIFT_END_BUFFER_MIN = 20
 DEFAULT_SLA_MINUTES = 35
+
+
+def _company_close_utc(now):
+    """Koniec pracy FIRMY dla daty `now` (Warsaw): 23:00, a w pt/sb 24:00 (=00:00 dnia
+    następnego). Zwraca aware UTC albo None (fail-soft). Salvage końca dnia (2026-06-18)."""
+    try:
+        from zoneinfo import ZoneInfo
+        _w = ZoneInfo("Europe/Warsaw")
+        loc = now.astimezone(_w)
+        if loc.weekday() in (4, 5):  # piątek / sobota → 24:00
+            close_loc = (loc + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0)
+        else:
+            close_loc = loc.replace(hour=23, minute=0, second=0, microsecond=0)
+        return close_loc.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _end_of_day_salvage(now):
+    """(active, company_close_utc): czy jesteśmy w OSTATNIEJ GODZINIE pracy firmy ORAZ
+    flaga ON. W tym oknie (zwykle jeden kurier) wolno zluzować twarde reguły końca zmiany
+    — twardy warunek zostaje: ODBIÓR ≤ koniec pracy firmy (dostawa może wyjść później).
+    Default OFF (decision_flag ENABLE_END_OF_DAY_SALVAGE). Fail-soft → (False, None)."""
+    try:
+        if not C.decision_flag("ENABLE_END_OF_DAY_SALVAGE"):
+            return (False, None)
+        close = _company_close_utc(now)
+        if close is None:
+            return (False, None)
+        return ((close - timedelta(minutes=60)) <= now < close, close)
+    except Exception:
+        return (False, None)
 
 # ===== BARTEK GOLD STANDARD thresholds (see docs/BARTEK_GOLD_STANDARD.md) =====
 # R1: max delivery spread in bag (p90 of Bartek clean sample, n=47 bundles).
@@ -690,15 +723,25 @@ def check_feasibility_v2(
             _shift_end = shift_end.replace(tzinfo=timezone.utc) if shift_end.tzinfo is None else shift_end
             # Gate 2: pickup post-shift hard reject
             if pickup_ref > _shift_end:
-                excess = (pickup_ref - _shift_end).total_seconds() / 60.0
-                metrics["v325_pickup_post_shift_excess_min"] = round(excess, 2)
-                metrics["v325_reject_reason"] = "PICKUP_POST_SHIFT"
-                return (
-                    "NO",
-                    f"v325_PICKUP_POST_SHIFT (pickup {pickup_ref.strftime('%H:%M')} "
-                    f"vs shift_end {_shift_end.strftime('%H:%M')}, excess +{excess:.1f}min)",
-                    metrics, None,
-                )
+                # END-OF-DAY SALVAGE: w ostatniej godzinie pracy firmy (zwykle jeden kurier)
+                # pozwól wziąć zlecenie mimo końca JEGO zmiany — jeśli odbierze przed końcem
+                # pracy firmy. Twardy warunek: pickup ≤ company_close. Dostawa może wyjść później.
+                _salv, _close = _end_of_day_salvage(now)
+                if _salv and _close is not None and pickup_ref <= _close:
+                    metrics["end_of_day_salvage"] = True
+                    metrics["end_of_day_salvage_close_iso"] = _close.isoformat()
+                    metrics["end_of_day_salvage_pickup_excess_min"] = round(
+                        (pickup_ref - _shift_end).total_seconds() / 60.0, 2)
+                else:
+                    excess = (pickup_ref - _shift_end).total_seconds() / 60.0
+                    metrics["v325_pickup_post_shift_excess_min"] = round(excess, 2)
+                    metrics["v325_reject_reason"] = "PICKUP_POST_SHIFT"
+                    return (
+                        "NO",
+                        f"v325_PICKUP_POST_SHIFT (pickup {pickup_ref.strftime('%H:%M')} "
+                        f"vs shift_end {_shift_end.strftime('%H:%M')}, excess +{excess:.1f}min)",
+                        metrics, None,
+                    )
             # Gate 3: pre-shift hard reject + soft penalty zone
             if shift_start is not None:
                 _shift_start = shift_start.replace(tzinfo=timezone.utc) if shift_start.tzinfo is None else shift_start
@@ -731,7 +774,10 @@ def check_feasibility_v2(
         # patrz niżej tuż po R6). Flag OFF → legacy behavior.
         if not C.ENABLE_V324A_SCHEDULE_INTEGRATION:
             if remaining_min < SHIFT_END_BUFFER_MIN:
-                return ("NO", f"shift_ending ({remaining_min:.1f} min left)", metrics, None)
+                _salv_se, _ = _end_of_day_salvage(now)
+                if not _salv_se:  # salvage końca dnia pomija bufor 20min
+                    return ("NO", f"shift_ending ({remaining_min:.1f} min left)", metrics, None)
+                metrics["end_of_day_salvage"] = True
 
     # === SLA SIMULATION ===
 
@@ -1218,13 +1264,20 @@ def check_feasibility_v2(
             metrics["v324a_planned_dropoff_iso"] = pred_new.isoformat()
             metrics["v324a_dropoff_excess_min"] = round(excess_min, 2)
             if excess_min > C.V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN:
-                return (
-                    "NO",
-                    f"v324a_dropoff_after_shift (dropoff {pred_new.strftime('%H:%M')} "
-                    f"vs shift_end {shift_end.strftime('%H:%M')}, excess +{excess_min:.1f}min)",
-                    metrics,
-                    plan,
-                )
+                # END-OF-DAY SALVAGE: w ostatniej godzinie pracy firmy dostawa MOŻE wyjść po
+                # końcu zmiany kuriera (warunek to odbiór przed końcem dnia, nie dostawa) →
+                # nie odrzucaj na tej podstawie. Odbiór-przed-close pilnuje Gate 2 wyżej.
+                _salv_do, _ = _end_of_day_salvage(now)
+                if not _salv_do:
+                    return (
+                        "NO",
+                        f"v324a_dropoff_after_shift (dropoff {pred_new.strftime('%H:%M')} "
+                        f"vs shift_end {shift_end.strftime('%H:%M')}, excess +{excess_min:.1f}min)",
+                        metrics,
+                        plan,
+                    )
+                metrics["end_of_day_salvage"] = True
+                metrics["end_of_day_salvage_dropoff_excess_min"] = round(excess_min, 2)
 
     # F2.2 C2 — per-order 35min hard gate (shadow mode by default).
     # Current verdict at this point is MAYBE (survived all other gates).

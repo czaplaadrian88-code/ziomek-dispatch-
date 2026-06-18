@@ -124,6 +124,11 @@ ETAP4_DECISION_FLAGS = (
     # eod_drafts/2026-06-17/PHASE0_ROOTCAUSE_VERDICT.md (62% regresji=budżet 200ms,
     # 38% strukturalne). Design: PHASE1_DESIGN_LOCK.md.
     "ENABLE_OBJ_FOOD_AGE_HARD_SLA",
+    # END-OF-DAY SALVAGE (2026-06-18): w ostatniej godzinie pracy firmy (23:00, pt/sb
+    # 24:00) zluzuj twarde reguły końca zmiany dla (zwykle jedynego) kuriera — twardy
+    # warunek: ODBIÓR ≤ koniec pracy firmy, dostawa może wyjść po jego shift_end.
+    # Default OFF; flip po replay-walidacji + ACK. feasibility_v2._end_of_day_salvage.
+    "ENABLE_END_OF_DAY_SALVAGE",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -138,6 +143,7 @@ ENABLE_R6_BREACH_SHADOW_LOG = False
 ENABLE_E2_PLN_AB = False
 ENABLE_PLN_COURIER_PAY = False
 ENABLE_OBJ_FOOD_AGE_HARD_SLA = False  # Faza 2 2026-06-17 (food-age hard-SLA + warm-start)
+ENABLE_END_OF_DAY_SALVAGE = False  # 2026-06-18 (ostatnia godzina pracy firmy — bend reguł końca zmiany)
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
 # startowych werdyktu razem z flagą, hot-reload bez restartu; fallback = stała
