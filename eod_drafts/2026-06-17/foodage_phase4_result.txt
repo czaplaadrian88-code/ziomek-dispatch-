@@ -1,0 +1,21 @@
+=== FAZA 4: replay-walidacja GO/NO-GO food-age hard-SLA ===
+okno 2026-06-10T00:00..2026-06-17T23:59 | eligible=7836 re-sim=7836 | prod_ms=200 sla=35
+ortools-decyzji n=7741
+
+── G1: ZERO REGRESJI (sla_hardsla > sla_base) ──
+  nowe regresje: 0/7741 = 0.000%
+  (referencja: additive @200ms dawał ~0.99%/77 z PHASE0)
+
+── G2: ZYSK FOOD-AGE ZACHOWANY ──
+  changed-rate (sekwencja hardsla≠base): 1139/7741 = 14.7%
+  fallback (hardsla==base, brak zmiany): 6602/7741 = 85.3%
+  sla_improved (hardsla naprawił breach base): 675
+  thermal-trade (base-hardsla) na zmienionych: n=1139 median=0.0 p90=8.8 zysk>0 w 503/1139
+
+── G3: LATENCJA (hardsla = base + warm-startowany ON solve) ──
+  base   p50=213.0ms p95=225.0ms
+  hardsla p50=403.5ms p95=586.9ms
+  delta median: +190.6ms
+
+── WERDYKT: GO ──
+  G1 PASS gdy new_reg=0 (lub <<additive 0.99%) | G2 PASS gdy changed-rate>0 | G3 = koszt latencji do oceny
