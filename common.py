@@ -2334,6 +2334,14 @@ OBJ_SPAN_COST_COEFF = float(_os.environ.get("OBJ_SPAN_COST_COEFF", "1.0"))
 # flagą decyzyjną (ETAP4) — czysta telemetria. Live-flip selekcji = OSOBNA flaga + ACK.
 ENABLE_OBJM_LEXR6_SELECT_SHADOW = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT_SHADOW", "0") == "1"
 
+# OBJM-LEXR6 SELECT — FAZA 2 (2026-06-18, live-flip): ZMIENIA faktyczny wybór. Po tier-gate
+# sorcie przesuwa R6-breach-primary-lex pick na czoło JEGO grupy (tier×bucket) w `feasible`,
+# zanim wybrany zostanie feasible[0]. Zwalidowane Fazą 1 na żywej telemetrii (n=352, G1 Σ=−72min
+# R6+committed, G2 regresje 0%, outcome 12/12 delivered). OSOBNA flaga od shadow — domyślnie OFF;
+# flip = osobny ACK po re-walidacji live. flags.json = KANON hot-reload (rollback bez restartu);
+# ta stała = fallback OFF gdy brak klucza. Konsumpcja: C.flag("ENABLE_OBJM_LEXR6_SELECT", False).
+ENABLE_OBJM_LEXR6_SELECT = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT", "0") == "1"
+
 # === COORD POISON GUARD flagi (Lekcja #140, 2026-05-21) — default ON ===
 # Defense-in-depth, by ten bug NIGDY nie wrócił cicho:
 #  - ENABLE_OSRM_COORD_GUARD: osrm_client.route()/table() walidują bbox KAŻDEJ

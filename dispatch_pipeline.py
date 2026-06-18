@@ -1033,6 +1033,48 @@ def _objm_lexr6_shadow(top, feasible, order_id=None) -> None:
             pass
 
 
+def _objm_lexr6_d2_pick(feasible):
+    """FAZA 2 (2026-06-18, flaga ENABLE_OBJM_LEXR6_SELECT): zwróć kandydata, którego
+    R6-breach-primary lexicographic selektor D2 wskazuje W OBRĘBIE grupy (tier × bucket)
+    zwycięzcy score (feasible[0]). Klucz: min(R6-breach → committed-late → new-pickup-late).
+    Zwraca feasible[0] gdy brak lepszego / pusta grupa / brak metryk / błąd (fail-open).
+
+    INTENCJONALNIE powiela _bucket/_lex_qual z _objm_lexr6_shadow zamiast je współdzielić:
+    funkcja-cień jest ZAMROŻONA pod walidację at#152 (24.06) — handoff: „walidacji NIE
+    ruszać". Po PASS at#152 → unifikacja obu w jeden helper (TODO objm-lexr6-unify)."""
+    if not feasible:
+        return None
+    try:
+        _w0 = feasible[0]
+
+        def _bucket(c):
+            if _is_informed_cand(c):
+                return 0
+            if _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
+                return 2
+            return 1
+
+        def _objm(c, k):
+            v = (getattr(c, "metrics", None) or {}).get(k)
+            return float(v) if isinstance(v, (int, float)) else None
+
+        def _lex_qual(c):
+            r6 = _objm(c, "objm_r6_breach_max_min")
+            return (r6 if r6 is not None else 9e9,
+                    _objm(c, "late_pickup_committed_max") or 0.0,
+                    _objm(c, "new_pickup_late_min") or 0.0)
+
+        _w_tb = (_late_pickup_tier(_w0), _bucket(_w0))
+        _grp = [c for c in feasible if (_late_pickup_tier(c), _bucket(c)) == _w_tb]
+        return min(_grp, key=_lex_qual) if _grp else _w0
+    except Exception as _e:
+        try:
+            log.warning(f"OBJM_LEXR6_SELECT pick failed: {_e!r}")
+        except Exception:
+            pass
+        return feasible[0] if feasible else None
+
+
 def _a2_reliability_soft_score(feasible, order_id=None):
     """Dźwignia A2: kara score za niską niezawodność kuriera. Flag-gated, default OFF.
     Buckety pos/tier zachowuje późniejszy _demote_blind_empty + late-pickup tiering
@@ -5195,6 +5237,25 @@ def _assess_order_impl(
                 feasible.sort(key=lambda c: (_lp_tier(c), _orig_order[id(c)]))
             else:
                 feasible.sort(key=lambda c: (_lp_tier(c), _new_eta_key(c), _orig_order[id(c)]))
+
+        # FAZA 2 OBJM-LEXR6 (2026-06-18, flaga ENABLE_OBJM_LEXR6_SELECT default OFF): live-flip.
+        # PO tier-gate sorcie, PRZED wyborem feasible[0]: przesuń R6-primary-lex pick na czoło
+        # JEGO grupy (tier×bucket). Zachowuje bramkę tierów/committed (grupa = ten sam tier),
+        # bucket V3.16 demote (informed>other>blind), MIN_PROPOSE/KOORD gate (na feasible[0].score
+        # liczonym niżej). Reorder identity-safe (pop po id, nie .remove==). Rollback = flaga OFF
+        # (hot-reload). NIE wpinać przed tier-gate. Zwalidowane Fazą 1 (n=352, G1 −72min, G2 0%).
+        if C.flag("ENABLE_OBJM_LEXR6_SELECT", False) and feasible:
+            _d2 = _objm_lexr6_d2_pick(feasible)
+            if _d2 is not None and _d2 is not feasible[0]:
+                _d2_idx = next((i for i, c in enumerate(feasible) if c is _d2), None)
+                if _d2_idx is not None:
+                    feasible.pop(_d2_idx)
+                    feasible.insert(0, _d2)
+                    try:
+                        log.info(f"OBJM_LEXR6_SELECT order={order_id} reorder→cid="
+                                 f"{getattr(_d2, 'courier_id', None)}")
+                    except Exception:
+                        pass
 
         _winner = feasible[0]
         _wm = _winner.metrics or {}
