@@ -419,6 +419,16 @@ def check_feasibility_v2(
     if len(bag) >= _bag_cap:
         return ("NO", f"bag_full ({len(bag)}/{_bag_cap})", metrics, None)
 
+    # === TWARDY cap worka per tier (Adrian 2026-06-18) — powyżej = patologia (B_load) ===
+    # Metryka liczona ZAWSZE (shadow 'would-cap'); HARD reject TYLKO gdy flaga ON (flags.json, hot).
+    # Tier nieznany -> default 6 (łapie tylko patologię 7+). Egzekwowane parami z przelewem-na-falę
+    # + auto-przedłużeniem (zamiast KOORD). Rollback: flaga ENABLE_HARD_TIER_BAG_CAP=false.
+    _hard_cap = C.HARD_TIER_BAG_CAP.get(courier_tier, C.HARD_TIER_BAG_CAP_DEFAULT)
+    metrics["hard_tier_bag_cap"] = _hard_cap
+    metrics["would_hard_cap"] = bag_after > _hard_cap
+    if metrics["would_hard_cap"] and C.load_flags().get("ENABLE_HARD_TIER_BAG_CAP", False):
+        return ("NO", f"hard_tier_bag_cap ({courier_tier or '?'} {bag_after}>{_hard_cap})", metrics, None)
+
     # R7 (F2.1b) — long-haul isolation w peak hours.
     # Długa trasa (>4.5 km) NIE MOŻE być bundlowana w peak (14-17 Warsaw).
     # Solo (bag pusty) zawsze OK — R7 dotyczy tylko bundli.

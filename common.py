@@ -1157,6 +1157,16 @@ BUG4_TIER_CAP_MATRIX = {
 ENABLE_V319H_BUG4_TIER_CAP_MATRIX = _os.environ.get(
     "ENABLE_V319H_BUG4_TIER_CAP_MATRIX", "1") == "1"
 
+# === TWARDY cap worka per tier (Adrian 2026-06-18) ===
+# Powyżej = patologia (B_load). re-solve 16.05: breachy 53->17 (36 usuniętych u przeładowanego).
+# To HARD reject w feasibility (NIE soft jak BUG4 wyżej). flag-gated hot-reload (flags.json), default OFF.
+# Empiria (breach<20%, 8931 dowozów): gold/std+ ~6, std ~5, slow/new ~4. Tier nieznany -> default 6
+# (łapie tylko patologię 7+, brak fałszywych odrzutów na braku danych). Egzekwowane parami z
+# przelewem-na-falę + auto-przedłużeniem (zamiast KOORD) — patrz HANDOFF_hardcap_eta_2026-06-18.
+HARD_TIER_BAG_CAP = {"gold": 6, "std+": 6, "std": 5, "slow": 4, "new": 4}
+HARD_TIER_BAG_CAP_DEFAULT = 6
+ENABLE_HARD_TIER_BAG_CAP = _os.environ.get("ENABLE_HARD_TIER_BAG_CAP", "0") == "1"
+
 
 def bug4_pora_now(now_utc):
     """V3.19h: Warsaw-TZ peak detection. Returns 'peak'|'normal'|'off_peak'."""
