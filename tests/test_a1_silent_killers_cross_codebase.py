@@ -14,12 +14,16 @@ Coverage:
   Fix #7 plan_manager.gc_invalidated           — invalidated_at parse (LOW)
   Fix #8 scoring.score_candidate               — fleet_context.overload_delta (MED)
 """
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-from dispatch_v2 import courier_resolver, plan_manager, scoring
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # scripts/ na ścieżkę → pakiet dispatch_v2
+
+from dispatch_v2 import courier_resolver, plan_manager, scoring  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
