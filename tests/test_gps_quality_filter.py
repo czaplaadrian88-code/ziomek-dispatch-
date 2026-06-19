@@ -280,11 +280,16 @@ def test_shadow_log_blocked_on_prod_path_under_pytest(tmp_path):
         def to_log_dict(self):
             return {"accept": True, "reasons": []}
 
-    # 1. domyślna (prod) ścieżka pod pytest → NO-OP (plik nie powstaje)
+    # 1. domyślna (prod) ścieżka pod pytest → NO-OP (NIE dopisuje do prod pliku).
+    # UWAGA: na żywym serwerze prod plik ISTNIEJE (dispatch-shadow legalnie tam pisze),
+    # więc sprawdzamy brak DOPISANIA (rozmiar bez zmian), nie nieistnienie pliku.
     assert "PYTEST_CURRENT_TEST" in os.environ
+    _prod = cr.GPS_QUALITY_SHADOW_LOG_PATH
+    _size_before = os.path.getsize(_prod) if os.path.exists(_prod) else -1
     cr._log_gps_quality_shadow("999", _V(), "2026-06-13T00:00:00+00:00",
                                False, (53.13, 23.16), 1.0)
-    assert not os.path.exists(cr.GPS_QUALITY_SHADOW_LOG_PATH), \
+    _size_after = os.path.getsize(_prod) if os.path.exists(_prod) else -1
+    assert _size_after == _size_before, \
         "shadow log NIE może pisać do prod ścieżki pod pytest (lekcja #176)"
 
     # 2. ścieżka patchnięta na tmp → pisze (round-trip dozwolony)

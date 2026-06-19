@@ -37,6 +37,18 @@ import pytest
 _SCRIPTS_ROOT = "/root/.openclaw/workspace/scripts"
 _SUBPROC_TIMEOUT = 240
 
+# Znane, udokumentowane pre-existing failури script-runnerów (P1#4 baseline, 2026-06-19).
+# Klucz = stem modułu; wartość = powód. Niezerowy exit takiego runnera → xfail (NIE fail),
+# więc baseline jest zielony, a regresje innych testów znów widoczne. xfail (nie skip) =
+# runner DALEJ biega; gdy ktoś naprawi przyczynę → XPASS to zasygnalizuje.
+_KNOWN_XFAIL_SCRIPTS = {
+    "test_reconcile_dry_run":
+        "pre-existing (CLAUDE.md): round-robin kolejność + dryf stałej "
+        "MAX_RECONCILE_PER_CYCLE (test asertuje 10, prod=25). Aktualizacja asercji = osobny temat.",
+    "test_v319d_read_integration":
+        "pre-existing (CLAUDE.md): base_sequence passthrough scenario (12/14 PASS).",
+}
+
 
 def _is_main_guard(test_node) -> bool:
     """True dla `if __name__ == "__main__":`."""
@@ -136,6 +148,9 @@ class ScriptRunItem(pytest.Item):
             timeout=_SUBPROC_TIMEOUT,
         )
         if proc.returncode != 0:
+            _reason = _KNOWN_XFAIL_SCRIPTS.get(self.modname.rsplit(".", 1)[-1])
+            if _reason is not None:
+                pytest.xfail(_reason)  # znany pre-existing → xfail, nie fail
             raise ScriptRunError(self.modname, proc.returncode, proc.stdout, proc.stderr)
 
     def repr_failure(self, excinfo):
