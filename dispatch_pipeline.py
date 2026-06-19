@@ -1039,34 +1039,22 @@ def _objm_lexr6_d2_pick(feasible):
     zwycięzcy score (feasible[0]). Klucz: min(R6-breach → committed-late → new-pickup-late).
     Zwraca feasible[0] gdy brak lepszego / pusta grupa / brak metryk / błąd (fail-open).
 
-    INTENCJONALNIE powiela _bucket/_lex_qual z _objm_lexr6_shadow zamiast je współdzielić:
-    funkcja-cień jest ZAMROŻONA pod walidację at#152 (24.06) — handoff: „walidacji NIE
-    ruszać". Po PASS at#152 → unifikacja obu w jeden helper (TODO objm-lexr6-unify)."""
+    P1#5 (2026-06-19): lex-helpery + bucketowanie wydzielone do dzielonego modułu
+    `dispatch_v2.objm_lexr6` (kanon). Cień `_objm_lexr6_shadow` POZOSTAJE z własnymi
+    kopiami inline — ZAMROŻONY pod walidację at#152 (24.06, „walidacji NIE ruszać");
+    po PASS at#152 → przepiąć też cień na ten moduł (dokończenie objm-lexr6-unify).
+    Logika modułu jest bajt-identyczna z dawnym inline → zero zmiany zachowania D2."""
     if not feasible:
         return None
     try:
-        _w0 = feasible[0]
-
-        def _bucket(c):
-            if _is_informed_cand(c):
-                return 0
-            if _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
-                return 2
-            return 1
-
-        def _objm(c, k):
-            v = (getattr(c, "metrics", None) or {}).get(k)
-            return float(v) if isinstance(v, (int, float)) else None
-
-        def _lex_qual(c):
-            r6 = _objm(c, "objm_r6_breach_max_min")
-            return (r6 if r6 is not None else 9e9,
-                    _objm(c, "late_pickup_committed_max") or 0.0,
-                    _objm(c, "new_pickup_late_min") or 0.0)
-
-        _w_tb = (_late_pickup_tier(_w0), _bucket(_w0))
-        _grp = [c for c in feasible if (_late_pickup_tier(c), _bucket(c)) == _w_tb]
-        return min(_grp, key=_lex_qual) if _grp else _w0
+        from dispatch_v2 import objm_lexr6 as _olx
+        return _olx.pick(
+            feasible,
+            late_pickup_tier=_late_pickup_tier,
+            is_informed=_is_informed_cand,
+            is_blind_empty=_is_blind_empty_cand,
+            is_pre_shift=_is_pre_shift_cand,
+        )
     except Exception as _e:
         try:
             log.warning(f"OBJM_LEXR6_SELECT pick failed: {_e!r}")
