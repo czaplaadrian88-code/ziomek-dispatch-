@@ -51,6 +51,7 @@ def main():
     orig_rest = geocoding.RESTAURANT_CACHE_PATH
     orig_google = geocoding._google_geocode
     orig_osrm = geocoding._osrm_fallback
+    orig_nom_fb = geocoding._nominatim_fallback
     orig_city_flag = common.CITY_AWARE_GEOCODING
     orig_guard_flag = common.ENABLE_GEOCODE_BBOX_GUARD
 
@@ -64,6 +65,11 @@ def main():
         common.CITY_AWARE_GEOCODING = True
         common.ENABLE_GEOCODE_BBOX_GUARD = True
         geocoding._osrm_fallback = lambda *a, **k: None  # izoluj od OSRM
+        # Izoluj recovery Nominatim (flaga live=ON, czytana z flags.json przez
+        # C.flag — module-const tu nie wyłącza): bez tego trucizna z testu 2 jest
+        # ODZYSKIWANA → fałszywy fail. Ten test sprawdza SAM bbox guard; odzysk
+        # Nominatim ma własny test (test_nominatim_fallback).
+        geocoding._nominatim_fallback = lambda *a, **k: None
 
         # ---------- TEST 2: geocode out-of-bbox → None + brak cache write ----------
         print("\n=== test 2: geocode() trucizna odrzucona, NIE cache'owana ===")
@@ -121,6 +127,7 @@ def main():
         geocoding.RESTAURANT_CACHE_PATH = orig_rest
         geocoding._google_geocode = orig_google
         geocoding._osrm_fallback = orig_osrm
+        geocoding._nominatim_fallback = orig_nom_fb
         common.CITY_AWARE_GEOCODING = orig_city_flag
         common.ENABLE_GEOCODE_BBOX_GUARD = orig_guard_flag
         import shutil

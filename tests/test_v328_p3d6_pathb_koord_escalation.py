@@ -73,7 +73,10 @@ def test_pathb_positioned_after_stale_state_before_low_score():
     src = inspect.getsource(dispatch_pipeline)
     stale_pos = src.find("state_likely_stale")
     pathb_pos = src.find("P3-D6 path B 2026-05-11")
-    low_score_pos = src.find("all_candidates_low_score")
+    # `all_candidates_low_score` pojawia się też w docstringu modułu (l.~2157) PRZED
+    # gałęziami escalacji → szukamy realnej gałęzi PO path B, nie pierwszego mention
+    # w komentarzu (inaczej test łapie zły offset = krucha asercja, nie regresja).
+    low_score_pos = src.find("all_candidates_low_score", pathb_pos)
     assert stale_pos > 0 and pathb_pos > 0 and low_score_pos > 0
     assert stale_pos < pathb_pos < low_score_pos, (
         f"Order broken: stale={stale_pos}, pathb={pathb_pos}, low_score={low_score_pos}"

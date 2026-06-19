@@ -45,6 +45,7 @@ def main():
         "city": common.CITY_AWARE_GEOCODING,
         "guard": common.ENABLE_GEOCODE_BBOX_GUARD,
         "flag": common.ENABLE_GEOCODE_NOMINATIM_FALLBACK,
+        "flagfn": common.flag,
     }
     nom_calls = {"n": 0}
 
@@ -65,6 +66,14 @@ def main():
         common.ENABLE_GEOCODE_BBOX_GUARD = True
         geocoding._osrm_fallback = lambda *a, **k: None
         geocoding._run_verification = lambda *a, **k: None  # izoluj warstwę verify
+        # Prod czyta flagę przez C.flag(flags.json), NIE module-const → bez tego
+        # test 1 „flaga OFF" jest bezskuteczny (flags.json live ma
+        # ENABLE_GEOCODE_NOMINATIM_FALLBACK=true). Wymuś, by C.flag honorował
+        # stałą ustawianą w tym teście; pozostałe flagi deleguj do oryginału.
+        common.flag = (lambda name, default=False, _o=orig["flagfn"]:
+                       common.ENABLE_GEOCODE_NOMINATIM_FALLBACK
+                       if name == "ENABLE_GEOCODE_NOMINATIM_FALLBACK"
+                       else _o(name, default))
 
         # TEST 1: flaga OFF → out-of-bbox Google → reject, Nominatim NIE wołany
         print("\n=== test 1: flaga OFF → legacy reject, brak Nominatim ===")
@@ -132,6 +141,7 @@ def main():
         common.CITY_AWARE_GEOCODING = orig["city"]
         common.ENABLE_GEOCODE_BBOX_GUARD = orig["guard"]
         common.ENABLE_GEOCODE_NOMINATIM_FALLBACK = orig["flag"]
+        common.flag = orig["flagfn"]
         import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)
 

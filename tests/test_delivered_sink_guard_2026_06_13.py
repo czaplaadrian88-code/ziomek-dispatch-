@@ -24,6 +24,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 _TMP = tempfile.mkdtemp(prefix="delivered_guard_")
 os.environ["DISPATCH_STATE_DIR"] = _TMP
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -33,6 +35,19 @@ from dispatch_v2 import geocoding  # noqa: E402
 
 GOOD_COORDS = [53.137686, 23.168566]
 ADDR = "Al. 1000-lecia Panstwa Polskiego 8b Bialystok"
+
+
+@pytest.fixture(autouse=True)
+def _restore_geocode():
+    """Izolacja: poniższe testy podmieniają `geocoding.geocode` przez bezpośrednie
+    przypisanie (bez restore) → wyciekało na CAŁĄ sesję pytest (ostatni test zostawiał
+    `lambda: (53.15, 23.156)`), psując później `test_geocoding_audit` (3 testy
+    pass-solo/fail-w-suicie). Przywracamy oryginał po każdym teście. Zero zmian w
+    logice testów; standalone (`python -m`) nie odpala fixture, ale tam proces i tak
+    kończy się od razu."""
+    _orig = geocoding.geocode
+    yield
+    geocoding.geocode = _orig
 
 
 def _reset():
