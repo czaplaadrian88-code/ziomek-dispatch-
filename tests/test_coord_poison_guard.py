@@ -12,9 +12,14 @@ Defense-in-depth (każda warstwa testowana niezależnie):
   3. osrm_client.table — komórki dotykające nieprawidłowego punktu = sentinel.
   4. dispatch_pipeline._bag_dict_to_ordersim — re-geokod zamiast (0,0).
 """
-from dispatch_v2 import common as C
-from dispatch_v2 import osrm_client
-from dispatch_v2 import dispatch_pipeline as DP
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # scripts/ na ścieżkę → pakiet dispatch_v2
+
+from dispatch_v2 import common as C  # noqa: E402
+from dispatch_v2 import osrm_client  # noqa: E402
+from dispatch_v2 import dispatch_pipeline as DP  # noqa: E402
 
 GALERIA = (53.121494, 23.176691)   # realny punkt w Białymstoku
 MAMA_THAI = (53.12228, 23.1445556)

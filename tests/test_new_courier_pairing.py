@@ -134,7 +134,7 @@ def patched_scan(monkeypatch, tmp_path):
     monkeypatch.setattr(ncp, "STATE_PATH", str(state_file))
 
     sent = []
-    monkeypatch.setattr(ncp, "_tg", lambda text: sent.append(text))
+    monkeypatch.setattr(ncp, "_tg", lambda text, *, silent=False: sent.append(text))
 
     added = []
 

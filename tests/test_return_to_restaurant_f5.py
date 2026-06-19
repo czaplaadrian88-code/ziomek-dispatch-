@@ -4,10 +4,14 @@ detect_return_to_restaurant: zakazany powrót do tej samej restauracji niosąc j
 dowóz (Case B korpusu 475698). Commit-aware (czas_kuriera wcześniejszego zlecenia
 wymusza osobną wizytę, której plan-ETA nie widzi).
 """
+import sys
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
-from dispatch_v2.feasibility_v2 import detect_return_to_restaurant
-from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # scripts/ na ścieżkę → pakiet dispatch_v2
+
+from dispatch_v2.feasibility_v2 import detect_return_to_restaurant  # noqa: E402
+from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2  # noqa: E402
 
 R = (53.1350, 23.1490)          # restauracja R (Retrospekcja)
 R_DROP_A = (53.1450, 23.1530)   # dostawa B (Piłsudskiego-ish)
