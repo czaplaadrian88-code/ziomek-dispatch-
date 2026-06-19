@@ -214,6 +214,13 @@ def pytest_pycollect_makemodule(module_path, parent):
 # wyciek na całą sesję pytest → pass-solo/fail-w-suicie dla test_uwagi_defense_gates,
 # test_f4_courier_pos_interp, test_v326_traffic_multiplier. Conftest importuje się
 # PRZED modułami testów → łapiemy pristine i przywracamy po każdym teście.
+#
+# 2026-06-19 (P1#4): bez scripts/ na sys.path TEN import cicho failował
+# (ModuleNotFoundError → _osrm_mod=None) → CAŁY restore był MARTWY i pollution
+# c3 (FakeHaversine→2.0) wyciekała na mass_fail_fallback/coord_poison/return_to_restaurant.
+# Insert poniżej ożywia restore (i daje pakiet wszystkim testom bez per-plik sys.path).
+if _SCRIPTS_ROOT not in sys.path:
+    sys.path.insert(0, _SCRIPTS_ROOT)
 try:
     import dispatch_v2.osrm_client as _osrm_mod
     _PRISTINE_OSRM = {
