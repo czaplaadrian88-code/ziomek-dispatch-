@@ -1,0 +1,12 @@
+# Dzienny tick ~20:00 Warsaw — po dinner-peaku, łapie cały dzień trialu B3.
+# Persistent=true → jeśli host spał o 20:00, odpali przy najbliższym starcie.
+[Unit]
+Description=Ziomek B3 trial monitor — codziennie 20:00 Warsaw (po dinner-peaku)
+
+[Timer]
+OnCalendar=*-*-* 20:00:00 Europe/Warsaw
+Persistent=true
+Unit=dispatch-b3-trial-monitor.service
+
+[Install]
+WantedBy=timers.target
