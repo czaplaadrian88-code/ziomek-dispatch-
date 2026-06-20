@@ -12,9 +12,8 @@ Sources:
     state_machine.get_all()              — delivered_at filter po zakresie
     learning_log.jsonl                   — action counter (TAK/NIE/INNY/KOORD/TIMEOUT)
     restaurant_meta.json                 — static top prep_variance_high (morning)
-
-Nie uzywane (delivery_time_minutes=null w sla_log):
-    sla_log.jsonl SLA%                   — nie da sie policzyc (no data)
+    sla_log.jsonl (dispatch_state)       — % on-time (<=35 min) dzienny + peak/off
+                                           (A2 2026-06-20; fail-soft gdy plik brak)
 """
 import argparse
 import json
@@ -137,14 +136,22 @@ def _parse_any_iso(ts_str) -> Optional[datetime]:
 
 
 def _acceptance_line(lc: Counter) -> Optional[str]:
-    """Dzienna linia acceptance: AGREE/(AGREE+OVERRIDE). None gdy brak danych."""
+    """Dzienna linia acceptance: AGREE/(AGREE+OVERRIDE). None gdy brak danych.
+
+    A3 (2026-06-20): OVERRIDE pokazywany jako % wszystkich propozycji panelu
+    (mianownik = AGREE+OVERRIDE), nie surowy licznik — porównywalny dzień-do-dnia
+    (audyt: override ~76%, AUTO-agreement ~4.7%)."""
     agree = lc.get("PANEL_AGREE", 0)
     override = lc.get("PANEL_OVERRIDE", 0)
     total = agree + override
     if total == 0:
         return None
     rate = 100.0 * agree / total
-    return f"• Acceptance (panel): {agree}/{total} = {rate:.1f}% (OVERRIDE: {override})"
+    ovr_rate = 100.0 * override / total
+    return (
+        f"• Acceptance (panel): {agree}/{total} = {rate:.1f}% "
+        f"(OVERRIDE: {override}/{total} = {ovr_rate:.1f}%)"
+    )
 
 
 def _accept_rec_dims(r: dict) -> Tuple[str, str, str]:
@@ -252,12 +259,116 @@ def _acceptance_breakdown_lines(
 RESTAURANT_VIOLATIONS_PATH = "/root/.openclaw/workspace/dispatch_state/restaurant_violations.jsonl"
 SLA_LOG_PATH = "/root/.openclaw/workspace/scripts/logs/sla_log.jsonl"
 
+# A2 (2026-06-20): osobny strumień % on-time pisany przez worker SLA do
+# dispatch_state/sla_log.jsonl. Schemat rekordu: order_id, delivery_time_minutes,
+# on_time (bool/None), opcjonalnie peak (bool) — gdy peak brak, wyznaczamy po
+# godzinie dostawy (delivered_at/logged_at) względem _PEAK_HOURS_WARSAW.
+# Fail-soft: gdy plik jeszcze nie istnieje → "BRAK DANYCH" zamiast crashu.
+# Świadomie ODDZIELNY plik od SLA_LOG_PATH (logs/) — ten drugi to per-order audyt
+# sla_tracker.py (mianownik naruszeń restauracji), schemat sla_ok/logged_at.
+ONTIME_SLA_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/sla_log.jsonl"
+ONTIME_SLA_MAX_MIN = 35.0  # ≤35 min = on-time (R6 BAG_TIME_HARD_MAX_MIN, common.py)
+
 
 def _median(vals: list) -> float:
     s = sorted(vals)
     n = len(s)
     mid = n // 2
     return float(s[mid]) if n % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+
+# ---- % on-time (≤35 min) — A2 (2026-06-20) ----
+
+def _ontime_record_in_range(rec: dict, start_utc: datetime, end_utc: datetime) -> bool:
+    """True gdy rekord on-time pasuje do okna [start_utc, end_utc).
+
+    Czas dostawy bierzemy z delivered_at (preferowany) lub logged_at. Gdy
+    żadnego znacznika nie ma → wpuszczamy rekord (worker może go pominąć),
+    żeby brak pola czasu nie wycinał danych po cichu."""
+    ts = _parse_any_iso(rec.get("delivered_at")) or _parse_any_iso(rec.get("logged_at"))
+    if ts is None:
+        return True
+    return start_utc <= ts < end_utc
+
+
+def _ontime_is_on_time(rec: dict) -> Optional[bool]:
+    """on_time rekordu: pole `on_time` (bool) ma priorytet; gdy None/brak →
+    fallback z delivery_time_minutes ≤ 35. None gdy nie da się rozstrzygnąć
+    (rekord bez czasu i bez flagi — np. dostawa bez odbioru)."""
+    ot = rec.get("on_time")
+    if isinstance(ot, bool):
+        return ot
+    dmin = rec.get("delivery_time_minutes")
+    if isinstance(dmin, (int, float)) and not isinstance(dmin, bool):
+        return float(dmin) <= ONTIME_SLA_MAX_MIN
+    return None
+
+
+def _ontime_is_peak(rec: dict) -> Optional[bool]:
+    """peak rekordu: pole `peak` (bool) ma priorytet; gdy brak → wyznacz po
+    godzinie dostawy (Warsaw) względem _PEAK_HOURS_WARSAW (11-14 / 17-20).
+    None gdy nie da się ustalić pory (brak znacznika czasu)."""
+    pk = rec.get("peak")
+    if isinstance(pk, bool):
+        return pk
+    ts = _parse_any_iso(rec.get("delivered_at")) or _parse_any_iso(rec.get("logged_at"))
+    if ts is None:
+        return None
+    return ts.astimezone(WARSAW).hour in _PEAK_HOURS_WARSAW
+
+
+def _ontime_sla_lines(start_utc: datetime, end_utc: datetime) -> list:
+    """Sekcja „% on-time (≤35 min)" z dispatch_state/sla_log.jsonl: dzienny
+    agregat + rozbicie peak/off-peak. Fail-soft: gdy plik jeszcze nie istnieje
+    (worker nie zapisał) → linia „BRAK DANYCH" zamiast crashu/braku sekcji."""
+    p = Path(ONTIME_SLA_LOG_PATH)
+    if not p.exists():
+        return ["• SLA% on-time (≤35 min): BRAK DANYCH (worker jeszcze nie zapisał)"]
+
+    tot_ok = tot_n = 0
+    peak_ok = peak_n = off_ok = off_n = 0
+    try:
+        with p.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                if not _ontime_record_in_range(rec, start_utc, end_utc):
+                    continue
+                ot = _ontime_is_on_time(rec)
+                if ot is None:
+                    continue
+                tot_n += 1
+                tot_ok += 1 if ot else 0
+                pk = _ontime_is_peak(rec)
+                if pk is True:
+                    peak_n += 1
+                    peak_ok += 1 if ot else 0
+                elif pk is False:
+                    off_n += 1
+                    off_ok += 1 if ot else 0
+    except Exception as e:  # noqa: BLE001 — sekcja nie może wywrócić briefingu
+        _log.warning(f"ontime sla section read failed: {e!r}")
+        return ["• SLA% on-time (≤35 min): BRAK DANYCH (błąd odczytu)"]
+
+    if tot_n == 0:
+        return ["• SLA% on-time (≤35 min): BRAK DANYCH (worker jeszcze nie zapisał)"]
+
+    parts = [f"• SLA% on-time (≤35 min): {tot_ok}/{tot_n} = {100.0 * tot_ok / tot_n:.1f}%"]
+    sub = []
+    if peak_n:
+        sub.append(f"peak {100.0 * peak_ok / peak_n:.0f}% ({peak_ok}/{peak_n})")
+    if off_n:
+        sub.append(f"off {100.0 * off_ok / off_n:.0f}% ({off_ok}/{off_n})")
+    if sub:
+        parts.append("   ↳ " + " | ".join(sub))
+    return parts
 
 
 def _restaurant_violations_lines(
@@ -350,6 +461,15 @@ def _format_agreement(lc: Counter) -> Tuple[int, int, float]:
     return tak, total, rate
 
 
+def _action_rate(label: str, count: int, total: int) -> str:
+    """A3 (2026-06-20): „LABEL:count (rate%)" — % wszystkich decyzji w oknie
+    (mianownik = total z _format_agreement). Rate porównywalny dzień-do-dnia,
+    nie surowy licznik. total=0 → sam licznik (brak mianownika)."""
+    if total > 0:
+        return f"{label}:{count} ({100.0 * count / total:.1f}%)"
+    return f"{label}:{count}"
+
+
 def _demand_forecast_lines(day_offset: int) -> list:
     """SP-B2-OBSADA: blok prognozy popytu + alarmu obsady (QW7).
 
@@ -391,6 +511,8 @@ def format_morning() -> str:
         lines.append(acceptance)
     if timeout:
         lines.append(f"• Timeouts: {timeout}")
+    # A2 (2026-06-20): % on-time (≤35 min) wczoraj + peak/off (dispatch_state/sla_log)
+    lines.extend(_ontime_sla_lines(start, end))
     lines.append("")
     # ETAP 3 krok 3: trailing 7 dni — tygodniowa widoczność bez nowego crona
     week_start = end - timedelta(days=7)
@@ -441,17 +563,21 @@ def format_evening() -> str:
     acceptance = _acceptance_line(lc)
     if acceptance:
         lines.append(acceptance)
+    # A3 (2026-06-20): KOORD/NIE/INNY/TIMEOUT jako % wszystkich decyzji (total),
+    # nie surowy licznik — KOORD-rate porównywalny dzień-do-dnia.
     details = []
     if nie:
-        details.append(f"NIE:{nie}")
+        details.append(_action_rate("NIE", nie, total))
     if inny:
-        details.append(f"INNY:{inny}")
+        details.append(_action_rate("INNY", inny, total))
     if koord:
-        details.append(f"KOORD:{koord}")
+        details.append(_action_rate("KOORD", koord, total))
     if timeout:
-        details.append(f"TIMEOUT:{timeout}")
+        details.append(_action_rate("TIMEOUT", timeout, total))
     if details:
         lines.append("• " + " | ".join(details))
+    # A2 (2026-06-20): % on-time (≤35 min) dziś + peak/off (dispatch_state/sla_log)
+    lines.extend(_ontime_sla_lines(start, end))
     lines.append("")
     if top_nie:
         lines.append("Top problem dziś (wg NIE):")
