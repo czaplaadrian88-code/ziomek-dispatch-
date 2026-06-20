@@ -1,0 +1,41 @@
+====================================================================================================
+[D2] GRID-SEARCH OBJ_COMMITTED_PICKUP_PENALTY_COEFF (READ-ONLY, vs baseline OFF)
+Metryka: committed-late w PLANIE (planowany pickup_at − czas_kuriera), max per worek
+====================================================================================================
+linie capture:            72986
+w oknie (14-16.06):       9716
+ODFILTROWANE (ready-now>65m): 191  (dalekie czasówki nie proponowane)
+bez committed w worku:    1961  (kara bez celu)
+KWALIFIKUJĄCE: 7564
+PEŁNA POPULACJA: 7564
+shadow EWMA index order_ids w oknie: 774
+workers: 4  coeffs: [25, 50, 75, 100, 125, 150, 200, 300]
+
+rekordów przetworzonych: 7564  (skip=0, simfail=0)
+
+####################################################################################################
+### TABELA coeff → (G1, G2, G3)
+####################################################################################################
+ coeff    pop  reduced   red_sum  regr#(G2b)  regr_sum    G1_net   G2a_avg  G3_KOORD  border
+--------------------------------------------------------------------------------------------
+    25   7564       95     754.7        1366   15072.3  -14317.6    1.9926         0    5121  
+    50   7564       92     541.7        1047    9789.6   -9247.9    1.2942         0    5443  
+    75   7564       92     664.7         853    7474.9   -6810.2    0.9882         0    5637  
+   100   7564       89     658.3         692    5730.6   -5072.4    0.7576         0    5801  
+   125   7564       77     576.6         576    4640.0   -4063.4    0.6134         0    5929  
+   150   7564       82     590.6         474    3669.7   -3079.1    0.4852         0    6026  
+   200   7564       66     451.3         267    1946.4   -1495.0    0.2573         0    6249  
+   300   7564       31     369.3          33     336.3      33.0    0.0445         0    6518 *  <== KOLANO
+
+
+####################################################################################################
+### FRONT PARETO (G1↑ vs regr_sum↓) i KOLANO
+####################################################################################################
+ coeff    G1_net  regr_sum  G3_KOORD
+   300      33.0     336.3         0  <== KOLANO
+
+  >>> REKOMENDACJA (kolano Pareto): coeff = 300
+      G1 NET committed-late zaoszczędzony: 33.0 min
+      G2 regresja: 33 decyzji, sum 336.3 min (śr 0.0445 min/rec)
+
+dump -> /root/.openclaw/workspace/scripts/dispatch_v2/tools/coeff_grid_full_out.json
