@@ -249,6 +249,11 @@ def extract_row(sla_rec, shadow_index):
         "eta_r3_residual_pred": None,
         "eta_r3_corrected_delivery_min": None,
         "eta_r3_corrected_error_min": None,
+        # ETA R3 wariant B_drop (tylko gdy ENABLE_ETA_R3_DROP_SHADOW): bez cechy pool_feasible.
+        # corrected_drop = base + residual_drop; error_min_drop = real − corrected_drop. ZERO wpływu na decyzje.
+        "eta_r3_residual_pred_drop": None,
+        "eta_r3_corrected_delivery_min_drop": None,
+        "eta_r3_corrected_error_min_drop": None,
     }
 
     recs = shadow_index.get(oid)
@@ -302,6 +307,28 @@ def extract_row(sla_rec, shadow_index):
                         row["eta_r3_corrected_error_min"] = round(real_min - corrected, 2)
             except Exception as exc:  # noqa: BLE001 — shadow nigdy nie wywala loggera
                 print(f"  WARN R3 shadow oid={oid}: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+        # --- ETA R3 wariant B_drop shadow (guarded: ENABLE_ETA_R3_DROP_SHADOW, fail-soft, zero wpływu) ---
+        # Logujemy korektę bez cechy pool_feasible OBOK v1 — pozwala forward-porównać MAE(base) vs
+        # MAE(v1) vs MAE(drop) na NOWYCH dniach (zwłaszcza weekendach, gdzie DROP oblał bramkę 06-20).
+        if _R3 is not None and row["predicted_delivery_min"] is not None:
+            try:
+                corrected_d, resid_d = _R3.predict_corrected_drop_if_enabled(
+                    bag_size=row["bag_size"],
+                    predicted_delivery_min=row["predicted_delivery_min"],
+                    hour_warsaw=row["hour_warsaw"],
+                    is_weekend=row["is_weekend"],
+                    is_bundle=row["is_bundle"],
+                    restaurant=row["restaurant"],
+                    courier_id=real_cid,
+                )
+                if corrected_d is not None:
+                    row["eta_r3_residual_pred_drop"] = resid_d
+                    row["eta_r3_corrected_delivery_min_drop"] = corrected_d
+                    if isinstance(real_min, (int, float)):
+                        row["eta_r3_corrected_error_min_drop"] = round(real_min - corrected_d, 2)
+            except Exception as exc:  # noqa: BLE001 — shadow nigdy nie wywala loggera
+                print(f"  WARN R3 DROP shadow oid={oid}: {type(exc).__name__}: {exc}", file=sys.stderr)
 
     return row
 
