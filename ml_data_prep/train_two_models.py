@@ -43,8 +43,10 @@ sys.path.insert(0, str(PROD_ML))        # produkcyjne src.lgbm_training (read-on
 
 from twomodel_common import (  # noqa: E402
     BUNDLE_ONLY_BASE_FEATURES,
+    RECON_ONLY_DECISION_FEATURES,
     TIER_ORD_COL,
     DATASET_DIR,
+    apply_prod_feature_shaping,
     load_split,
     load_name_to_tier,
     solo_mask,
@@ -90,11 +92,24 @@ def _side_to_pointwise(df: pd.DataFrame, side_cols: List[str], prefix: str) -> p
 
 
 def build_pointwise(df: pd.DataFrame, drop_bundle: bool) -> pd.DataFrame:
-    """Pairwise (1 row/para) -> pointwise (2 rows/para). Opcjonalnie zdejmij cechy bundlowe."""
+    """Pairwise (1 row/para) -> pointwise (2 rows/para). Opcjonalnie zdejmij cechy bundlowe.
+
+    PROD-shaping (naprawa skew #2 delta_dist + #3 haversine) zastosowany ZAWSZE,
+    żeby trening widział cechy ciągłe w definicjach produkcyjnych — żywa ścieżka
+    serwowania (ml_inference.py) NIETKNIĘTA. delta_dist_km liczony PER decyzja
+    (pool-mean) PRZED dedup/drop, ale dedup na (decision_id, courier_name, label)
+    nie narusza grupy decyzji (pool-mean stały w obrębie decyzji).
+    """
     win = _side_to_pointwise(df, WINNER_COLS, "winner")
     los = _side_to_pointwise(df, LOSER_COLS, "loser")
     pw = pd.concat([win, los], ignore_index=True)
     pw = pw.drop_duplicates(subset=["decision_id", "courier_name", "label"]).reset_index(drop=True)
+    # PROD-shaping cech ciągłych (haversine ×1.42 + delta=kandydat−pool_mean per decyzja).
+    pw = apply_prod_feature_shaping(pw)
+    # Usuń cechy rekonstrukcyjne NIEdostępne live (parity z żywym serwowaniem).
+    recon = [c for c in RECON_ONLY_DECISION_FEATURES if c in pw.columns]
+    if recon:
+        pw = pw.drop(columns=recon)
     if drop_bundle:
         cols = [c for c in BUNDLE_ONLY_BASE_FEATURES if c in pw.columns]
         pw = pw.drop(columns=cols)

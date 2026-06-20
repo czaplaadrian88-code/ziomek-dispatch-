@@ -228,6 +228,62 @@ def analyze_continuous_skews() -> List[Dict[str, Any]]:
     ]
 
 
+def verify_prod_shaping_fixes_continuous_skews() -> Dict[str, Any]:
+    """POST-FIX: udowodnij że PROD-shaping treningu (apply_prod_feature_shaping)
+    daje DOKŁADNIE definicje produkcyjne dla delta_dist_km i haversine.
+
+    Wczytuje test.parquet, buduje pointwise jak trening, aplikuje shaping i
+    porównuje z niezależnie policzoną definicją produkcyjną:
+      - haversine: surowy_dataset × 1.42  (HAVERSINE_FACTOR)
+      - delta_dist_km: dist_to_pickup_km − mean(dist_to_pickup_km) per decision_id
+                       (NaN dystans lub brak ważnej puli → 0.0)
+    Zwraca {fixed: bool, ...} — fixed=True gdy 0 niezgodności (czyste parity).
+    """
+    try:
+        import numpy as np
+        from twomodel_common import load_split, apply_prod_feature_shaping
+        from src.lgbm_training import build_pointwise_dataset
+    except Exception as e:  # brak parquet/lgbm w tym interpreterze
+        return {"checked": False, "reason": f"stack niedostępny: {e}"}
+
+    df = load_split("test")
+    pw_raw = build_pointwise_dataset(df).drop_duplicates(
+        subset=["decision_id", "courier_name", "label"]
+    ).reset_index(drop=True)
+    pw_shaped = apply_prod_feature_shaping(pw_raw)
+
+    # (3) haversine: shaped == surowy × 1.42
+    hv_raw = pd.to_numeric(pw_raw["dist_to_pickup_haversine_km"], errors="coerce")
+    hv_shaped = pd.to_numeric(pw_shaped["dist_to_pickup_haversine_km"], errors="coerce")
+    hv_expected = hv_raw * 1.42
+    hv_mask = hv_raw.notna()
+    hv_mismatch = int((np.abs(hv_shaped[hv_mask] - hv_expected[hv_mask]) > 1e-9).sum())
+
+    # (2) delta_dist_km: shaped == candidate − pool_mean (def produkcyjna, niezależnie)
+    road = pd.to_numeric(pw_raw["dist_to_pickup_km"], errors="coerce")
+    valid = road.notna()
+    tmp = pd.DataFrame({"d": pw_raw["decision_id"], "r": road.where(valid)})
+    pool_mean = tmp.groupby("d")["r"].transform("mean")
+    delta_expected = (road - pool_mean).where(valid & pool_mean.notna(), 0.0).astype(float)
+    delta_shaped = pd.to_numeric(pw_shaped["delta_dist_km"], errors="coerce").astype(float)
+    delta_mismatch = int((np.abs(delta_shaped - delta_expected) > 1e-6).sum())
+
+    fixed = (hv_mismatch == 0 and delta_mismatch == 0)
+    return {
+        "checked": True,
+        "fixed": bool(fixed),
+        "n_rows": int(len(pw_shaped)),
+        "haversine_x142_mismatches": hv_mismatch,
+        "delta_pool_mean_mismatches": delta_mismatch,
+        "note": (
+            "Trening (apply_prod_feature_shaping) liczy delta=kandydat−pool_mean i "
+            "haversine×1.42 == definicje produkcyjne (ml_inference.py:452/334). "
+            "Żywa ścieżka serwowania v1.1 NIETKNIĘTA. Skew #2 i #3 zaadresowane "
+            "po stronie treningu (retrain). 0 niezgodności = parity czyste."
+        ),
+    }
+
+
 def main() -> int:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     print(f"[ML-PROD] parity ml_inference: PEAK_LUNCH prod={sorted(PROD_PEAK_LUNCH)} train={sorted(TRAIN_PEAK_LUNCH)}")
@@ -242,6 +298,7 @@ def main() -> int:
     ]
     level = analyze_level_mapping()
     continuous = analyze_continuous_skews()
+    post_fix = verify_prod_shaping_fixes_continuous_skews()
 
     # podsumowanie skew
     total_mismatch = sum(len(c["mismatches"]) for c in checks)
@@ -260,6 +317,7 @@ def main() -> int:
         "derived_features_with_skew": skew_features,
         "level_mapping_analysis": level,
         "continuous_feature_skews": continuous,
+        "post_fix_prod_shaping_verification": post_fix,
         "summary": {
             "categorical_derived_aligned_on_valid_inputs": "TAK — bag_size_category/idle_category/district_adjacent/time_features zgodne na poprawnych wejściach; różnice tylko na None/NaN (absorbowane przez fillna(-1))",
             "level_skew": "TAK (semantyczny) — oś-worka (trening) vs oś-GPS (produkcja)",
@@ -277,11 +335,18 @@ def main() -> int:
             print(f"      input={m['input']}: prod={m['prod']} train={m['train']}")
     print(f"\n  level A/B: SKEW (oś-worka vs oś-GPS) — patrz raport")
     print(f"  peak constants match: {constants_match}")
-    print(f"\n  CECHY CIĄGŁE (realny sygnał):")
+    print(f"\n  CECHY CIĄGŁE (realny sygnał) — definicje PRZED naprawą:")
     for c in continuous:
         print(f"      {c['feature']}: SKEW [{c['severity'].split(' — ')[0]}]")
         print(f"        trening: {c['training_definition'][:70]}")
         print(f"        prod   : {c['production_definition'][:70]}")
+    print(f"\n  POST-FIX (retrain z PROD-shaping):")
+    if post_fix.get("checked"):
+        print(f"      haversine×1.42 mismatches : {post_fix['haversine_x142_mismatches']}")
+        print(f"      delta=pool-mean mismatches: {post_fix['delta_pool_mean_mismatches']}")
+        print(f"      => parity czyste: {post_fix['fixed']} (n={post_fix['n_rows']})")
+    else:
+        print(f"      (pominięte: {post_fix.get('reason')})")
     print(f"\nraport -> {OUT}")
     return 0
 

@@ -1,0 +1,33 @@
+{
+  "generated_at": "2026-06-20T13:59:11.442354+00:00",
+  "authoritative_pairwise_forward": {
+    "solo": {
+      "forward_pairwise": 0.8961,
+      "n_pairs": 2205
+    },
+    "bundle": {
+      "forward_pairwise": 0.639,
+      "n_pairs": 24292
+    },
+    "cutoff_date": "2026-04-07",
+    "forward_days": 14
+  },
+  "online_top1_agreement": {
+    "checked": true,
+    "n_records": 2469,
+    "n_evaluated": 1487,
+    "n_skipped": 982,
+    "top1_agreement_vs_rule_based": 0.4755,
+    "top1_agreement_vs_single_model": 0.7022,
+    "n_single_model_available": 1293,
+    "decisions_with_empty_bag_in_pool": 1030,
+    "winner_regime_distribution": {
+      "solo": 1030,
+      "bundle": 457
+    },
+    "confident_decisions_total": 1038,
+    "confident_decisions_twomodel_kept_pick": 486,
+    "confident_keep_rate": 0.4682,
+    "note": "Test DEGRADOWANY na cechach geometrycznych: shadow_decisions nie ma surowych lat/lon → haversine=-1, dist_to_pickup_km=km_to_pickup. Sygnał = routing po worku + agreement względny, NIE absolutna jakość. Authoritative pairwise = warstwa (A) na held-out forward (pełne cechy, real data)."
+  }
+}

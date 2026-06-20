@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-20T09:47:21.609627+00:00",
+  "generated_at": "2026-06-20T13:51:28.729955+00:00",
   "peak_constants_match": true,
   "derived_feature_checks": [
     {
@@ -399,6 +399,14 @@
       "fix": "w serwowaniu podać surowy haversine (bez ×1.42) dla tej kolumny, lub przetrenować z ×1.42 (spójność)"
     }
   ],
+  "post_fix_prod_shaping_verification": {
+    "checked": true,
+    "fixed": true,
+    "n_rows": 58385,
+    "haversine_x142_mismatches": 0,
+    "delta_pool_mean_mismatches": 0,
+    "note": "Trening (apply_prod_feature_shaping) liczy delta=kandydat−pool_mean i haversine×1.42 == definicje produkcyjne (ml_inference.py:452/334). Żywa ścieżka serwowania v1.1 NIETKNIĘTA. Skew #2 i #3 zaadresowane po stronie treningu (retrain). 0 niezgodności = parity czyste."
+  },
   "summary": {
     "categorical_derived_aligned_on_valid_inputs": "TAK — bag_size_category/idle_category/district_adjacent/time_features zgodne na poprawnych wejściach; różnice tylko na None/NaN (absorbowane przez fillna(-1))",
     "level_skew": "TAK (semantyczny) — oś-worka (trening) vs oś-GPS (produkcja)",

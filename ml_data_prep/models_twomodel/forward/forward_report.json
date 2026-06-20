@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-20T10:06:25.486086+00:00",
+  "generated_at": "2026-06-20T13:53:14.583597+00:00",
   "method": "strict out-of-time: train < cutoff, forward = ostatnie N dni held-out, split po dacie",
   "forward_days": 14,
   "cutoff_date": "2026-04-07",
@@ -20,36 +20,36 @@
     "bundle_pairs": 24292
   },
   "forward_aggregate": {
-    "lgbm_solo_pairwise": 0.9143,
+    "lgbm_solo_pairwise": 0.8961,
     "solo_n": 2205,
     "old_model_v1_1_solo_pairwise": 0.5143,
     "old_solo_n": 2205,
-    "lgbm_bundle_pairwise": 0.9192,
+    "lgbm_bundle_pairwise": 0.6418,
     "bundle_n": 24292
   },
   "per_day": [
     {
       "date": "2026-04-07",
-      "solo_new_pa": 0.8922,
+      "solo_new_pa": 0.8824,
       "solo_n": 102,
       "solo_old_pa": 0.4314,
-      "bundle_new_pa": 0.9333,
+      "bundle_new_pa": 0.6406,
       "bundle_n": 1469
     },
     {
       "date": "2026-04-08",
-      "solo_new_pa": 0.9362,
+      "solo_new_pa": 0.9291,
       "solo_n": 141,
       "solo_old_pa": 0.4965,
-      "bundle_new_pa": 0.9241,
+      "bundle_new_pa": 0.6053,
       "bundle_n": 1396
     },
     {
       "date": "2026-04-09",
-      "solo_new_pa": 0.9267,
+      "solo_new_pa": 0.92,
       "solo_n": 150,
       "solo_old_pa": 0.62,
-      "bundle_new_pa": 0.9356,
+      "bundle_new_pa": 0.6673,
       "bundle_n": 1133
     },
     {
@@ -57,7 +57,7 @@
       "solo_new_pa": 0.8557,
       "solo_n": 97,
       "solo_old_pa": 0.0619,
-      "bundle_new_pa": 0.9261,
+      "bundle_new_pa": 0.65,
       "bundle_n": 3057
     },
     {
@@ -65,23 +65,23 @@
       "solo_new_pa": 0.9539,
       "solo_n": 152,
       "solo_old_pa": 0.5395,
-      "bundle_new_pa": 0.8997,
+      "bundle_new_pa": 0.6485,
       "bundle_n": 1764
     },
     {
       "date": "2026-04-12",
-      "solo_new_pa": 0.9142,
+      "solo_new_pa": 0.8603,
       "solo_n": 408,
       "solo_old_pa": 0.6569,
-      "bundle_new_pa": 0.928,
+      "bundle_new_pa": 0.6277,
       "bundle_n": 2321
     },
     {
       "date": "2026-04-13",
-      "solo_new_pa": 0.9379,
+      "solo_new_pa": 0.9448,
       "solo_n": 145,
       "solo_old_pa": 0.6,
-      "bundle_new_pa": 0.9584,
+      "bundle_new_pa": 0.6602,
       "bundle_n": 721
     },
     {
@@ -89,23 +89,23 @@
       "solo_new_pa": 0.8434,
       "solo_n": 83,
       "solo_old_pa": 0.2651,
-      "bundle_new_pa": 0.9072,
+      "bundle_new_pa": 0.6606,
       "bundle_n": 1541
     },
     {
       "date": "2026-04-15",
-      "solo_new_pa": 0.8254,
+      "solo_new_pa": 0.8095,
       "solo_n": 63,
       "solo_old_pa": 0.0159,
-      "bundle_new_pa": 0.9167,
+      "bundle_new_pa": 0.6556,
       "bundle_n": 1321
     },
     {
       "date": "2026-04-16",
-      "solo_new_pa": 0.9158,
+      "solo_new_pa": 0.9,
       "solo_n": 190,
       "solo_old_pa": 0.5895,
-      "bundle_new_pa": 0.904,
+      "bundle_new_pa": 0.6517,
       "bundle_n": 1229
     },
     {
@@ -113,60 +113,60 @@
       "solo_new_pa": 0.9362,
       "solo_n": 141,
       "solo_old_pa": 0.5248,
-      "bundle_new_pa": 0.899,
+      "bundle_new_pa": 0.6231,
       "bundle_n": 1653
     },
     {
       "date": "2026-04-18",
-      "solo_new_pa": 0.9516,
+      "solo_new_pa": 0.914,
       "solo_n": 186,
       "solo_old_pa": 0.6398,
-      "bundle_new_pa": 0.9237,
+      "bundle_new_pa": 0.6134,
       "bundle_n": 1547
     },
     {
       "date": "2026-04-19",
-      "solo_new_pa": 0.9039,
+      "solo_new_pa": 0.8865,
       "solo_n": 229,
       "solo_old_pa": 0.5502,
-      "bundle_new_pa": 0.9202,
+      "bundle_new_pa": 0.6462,
       "bundle_n": 3561
     },
     {
       "date": "2026-04-20",
-      "solo_new_pa": 0.8898,
+      "solo_new_pa": 0.8814,
       "solo_n": 118,
       "solo_old_pa": 0.2542,
-      "bundle_new_pa": 0.9082,
+      "bundle_new_pa": 0.646,
       "bundle_n": 1579
     }
   ],
   "per_week": [
     {
       "iso_week": 15,
-      "solo_new_pa": 0.9171,
+      "solo_new_pa": 0.8933,
       "solo_n": 1050,
-      "bundle_new_pa": 0.924,
+      "bundle_new_pa": 0.64,
       "bundle_n": 11140
     },
     {
       "iso_week": 16,
-      "solo_new_pa": 0.9142,
+      "solo_new_pa": 0.9007,
       "solo_n": 1037,
-      "bundle_new_pa": 0.9162,
+      "bundle_new_pa": 0.643,
       "bundle_n": 11573
     },
     {
       "iso_week": 17,
-      "solo_new_pa": 0.8898,
+      "solo_new_pa": 0.8814,
       "solo_n": 118,
-      "bundle_new_pa": 0.9082,
+      "bundle_new_pa": 0.646,
       "bundle_n": 1579
     }
   ],
   "gate": {
     "solo_forward_aggregate_gt_80": true,
-    "solo_min_day_pa_n50": 0.8254,
+    "solo_min_day_pa_n50": 0.8095,
     "solo_all_meaningful_days_gt_80": true
   }
 }

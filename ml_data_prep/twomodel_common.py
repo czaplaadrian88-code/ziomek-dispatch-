@@ -48,11 +48,82 @@ BUNDLE_ONLY_BASE_FEATURES: List[str] = [
     "bag_has_distant_drop",
 ]
 
+# ── Cechy „rekonstrukcyjne" NIEdostępne w żywym dispatchu (usuwane z OBU modeli) ─
+# Produkcyjny v1.1 zdjął te 7 cech w hot-swapie „Faza 5.1" (ml_inference.py:
+# GROUP_A_DEFAULTS={}) DOKŁADNIE dlatego, że da się je policzyć tylko przy
+# rekonstrukcji historii, a w żywej inferencji ich NIE ma. Dwumodel MUSI uczyć
+# się wyłącznie cech serwowalnych live — inaczej wprowadzamy nowy train/serve
+# skew (model widzi realne wartości w treningu, dostaje stałe -1 w serwowaniu).
+# Decyzja: [[lgbm-twomodel-prod-skew-2026-06-20]].
+RECON_ONLY_DECISION_FEATURES: List[str] = [
+    "level_A_count",
+    "level_B_count",
+    "level_C_excluded_count",
+    "exclude_virtual",
+    "exclude_historical",
+    "exclude_not_active",
+    "exclude_low_day",
+]
+
 # Kategoryczna cecha tieru/poziomu kandydata. W produkcji (`ml_inference.py`)
 # `level` mapuje się na `cs_tier_label` (gold/std+/std/slow/new). W datasecie
 # v2.0 `level` ma tylko A/B (poziom dostępności rekonstrukcji). Zadanie: zamiast
 # label-encodingu (porządkowego) — ONE-HOT. Robimy to niezależnie od kardynalności.
 TIER_ORD_COL = "level"
+
+# ── PROD-shaping cech ciągłych (naprawa train/serve skew #2 i #3) ────────────
+# Żywa ścieżka serwowania (`dispatch_v2/ml_inference.py`) liczy DWIE cechy ciągłe
+# inaczej niż surowy dataset v2.0. Aby NOWY dwumodel nauczył się DOKŁADNIE tego,
+# co dostanie w produkcji (a żywej, wdrożonej ścieżki v1.1 NIE ruszać), shapujemy
+# cechy w treningu do definicji produkcyjnych. Decyzja+dowód: memory
+# [[lgbm-twomodel-prod-skew-2026-06-20]].
+#
+#   skew #3 (haversine): prod = haversine × 1.42 (HAVERSINE_FACTOR), dataset = surowy.
+#   skew #2 (delta_dist_km): prod = kandydat_road − średnia_puli(road) (pointwise),
+#                            dataset = winner_road − loser_road (parowy, NIE-odtwarzalny
+#                            pointwise przy inferencji). Pool-mean = średnia
+#                            `dist_to_pickup_km` po `decision_id` w pointwise.
+HAVERSINE_FACTOR_BIALYSTOK = 1.42  # = ml_inference.py / src.feature_engineering
+
+
+def apply_prod_feature_shaping(pw: "pd.DataFrame") -> "pd.DataFrame":
+    """Przekształć cechy ciągłe pointwise do definicji PRODUKCYJNYCH (parity z serwowaniem).
+
+    Wejście: pointwise DataFrame PO build_pointwise (kolumny już bez prefiksu
+    winner_/loser_): wymaga `dist_to_pickup_km`, `dist_to_pickup_haversine_km`,
+    `decision_id` oraz (opcjonalnie) `delta_dist_km`.
+
+    Operacje (idempotentne na poziomie wartości — patrz flagi-markery niżej):
+      1. haversine: surowy → ×1.42 (jeśli kolumna obecna i jeszcze nie shapowana).
+      2. delta_dist_km: parowy → kandydat − pool_mean(dist_to_pickup_km) per decision_id.
+         Braki dystansu (NaN) → delta 0.0 (jak produkcja: `else 0.0`).
+
+    Zwraca NOWY DataFrame (kopię). NIE modyfikuje wejścia.
+    """
+    import numpy as _np
+
+    df = pw.copy()
+    # (3) haversine ×1.42 — produkcja mnoży surowy haversine przez HAVERSINE_FACTOR.
+    hv = "dist_to_pickup_haversine_km"
+    if hv in df.columns:
+        col = pd.to_numeric(df[hv], errors="coerce")
+        df[hv] = col * HAVERSINE_FACTOR_BIALYSTOK
+
+    # (2) delta_dist_km = kandydat_road − pool_mean(road) per decyzja (definicja prod).
+    if "dist_to_pickup_km" in df.columns and "decision_id" in df.columns:
+        road = pd.to_numeric(df["dist_to_pickup_km"], errors="coerce")
+        # Produkcja: pool_mean liczona z dystansów ważnych (nie-NaN) w puli.
+        valid = road.notna()
+        tmp = pd.DataFrame({"decision_id": df["decision_id"], "_road": road})
+        # mean tylko po ważnych; transform zachowuje indeks wierszy
+        pool_mean = tmp.assign(_road=tmp["_road"].where(valid)).groupby(
+            "decision_id"
+        )["_road"].transform("mean")
+        delta = road - pool_mean
+        # produkcja: gdy kandydat NaN lub brak ważnej puli → 0.0
+        delta = delta.where(valid & pool_mean.notna(), 0.0)
+        df["delta_dist_km"] = delta.astype(float)
+    return df
 
 
 def solo_mask(df: pd.DataFrame) -> pd.Series:

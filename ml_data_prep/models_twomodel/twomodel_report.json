@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-20T09:24:18.491207+00:00",
+  "generated_at": "2026-06-20T13:53:04.095485+00:00",
   "lightgbm_version": "4.6.0",
   "dataset": "/root/.openclaw/workspace/scripts/ml_data_prep/data/datasets/v2.0",
   "bundle_definition": "SOLO = winner pusty worek (bag_size==0 & drops==0 & pickup==0) == winner_level B",
@@ -38,7 +38,7 @@
   "lgbm_solo": {
     "regime": "solo",
     "drop_bundle": true,
-    "n_features": 45,
+    "n_features": 38,
     "bundle_features_removed": [
       "bag_size",
       "bag_drops_pending",
@@ -62,17 +62,17 @@
       "val": 652,
       "test": 653
     },
-    "test_pairwise_accuracy": 0.9162,
-    "val_pairwise_accuracy": 0.8894,
-    "test_ndcg_at_5": 0.9009,
-    "test_ndcg_at_10": 0.9009,
-    "train_time_sec": 0.2,
-    "best_iteration": 6
+    "test_pairwise_accuracy": 0.91,
+    "val_pairwise_accuracy": 0.8829,
+    "test_ndcg_at_5": 0.8861,
+    "test_ndcg_at_10": 0.8861,
+    "train_time_sec": 1.0,
+    "best_iteration": 52
   },
   "lgbm_bundle": {
     "regime": "bundle",
     "drop_bundle": false,
-    "n_features": 51,
+    "n_features": 44,
     "bundle_features_removed": [],
     "tier_onehot_categories": [
       "A",
@@ -89,16 +89,16 @@
       "val": 5793,
       "test": 5794
     },
-    "test_pairwise_accuracy": 0.9239,
-    "val_pairwise_accuracy": 0.9123,
-    "test_ndcg_at_5": 0.8896,
-    "test_ndcg_at_10": 0.9032,
-    "train_time_sec": 6.2,
-    "best_iteration": 86
+    "test_pairwise_accuracy": 0.6245,
+    "val_pairwise_accuracy": 0.6434,
+    "test_ndcg_at_5": 0.4766,
+    "test_ndcg_at_10": 0.5593,
+    "train_time_sec": 7.1,
+    "best_iteration": 4
   },
   "gate_solo_pairwise_gt_80pct": {
     "threshold": 0.8,
-    "lgbm_solo_test_pairwise": 0.9162,
+    "lgbm_solo_test_pairwise": 0.91,
     "PASS": true
   }
 }

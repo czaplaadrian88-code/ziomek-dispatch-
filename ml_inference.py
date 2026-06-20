@@ -46,6 +46,16 @@ FEATURE_COLUMNS_PATH = "/root/.openclaw/workspace/scripts/ml_data_prep/models/v1
 MODEL_VERSION = "1.1"
 TIERS_PATH = "/root/.openclaw/workspace/dispatch_state/courier_tiers.json"
 
+# ── A2 (2026-06-20): dwumodel LGBM solo/bundle (primary-candidate, OFF) ──────
+# Jednolity v1.1 zapada się na decyzjach SOLO (winner pusty worek). Dwa modele:
+# solo (bez cech worka) i bundle. Wpięcie ADDITIVE za flagą ENABLE_LGBM_PRIMARY
+# (default OFF) — gdy OFF, ta ścieżka NIE jest wołana (zachowanie 1:1 dzisiejsze).
+# Modele uczone na definicjach PRODUKCYJNYCH (delta=kandydat−pool_mean, haversine
+# ×1.42 — to co liczy _compute_all_candidate_features), router PO STANIE WORKA
+# (bag-state), level = oś-worka (NIE _level_from_metrics oś-GPS). FLIP = Adrian po
+# ACK. Decyzja+dowód: memory [[lgbm-twomodel-prod-skew-2026-06-20]].
+TWOMODEL_DIR = "/root/.openclaw/workspace/scripts/dispatch_v2/ml_data_prep/models_twomodel"
+
 # Group A: reconstruction-only features (Faza 1 specific, NIE w live dispatch).
 # v1.1: empty dict — features removed from training data, not needed at inference.
 # v1.0 had 7 reconstruction defaults; v1.1 trained without them, zero accuracy delta.
@@ -568,6 +578,24 @@ def _level_from_metrics(c) -> str:
     return "A"
 
 
+def _bag_axis_level(bag_size, bag_drops_pending, bag_pickup_pending) -> str:
+    """A2 dwumodel: `level` = oś-WORKA (definicja datasetu v2.0, 100% match).
+
+    A = kurier ma cokolwiek w worku/pending; B = pusty worek. To NIE jest oś-GPS
+    z _level_from_metrics — router/feature dwumodelu MUSI iść po stanie worka,
+    inaczej cichy skew GPS-vs-worek. Zweryfikowane na dataset winner/loser_level.
+    """
+    bs = int(bag_size or 0)
+    dp = int(bag_drops_pending or 0)
+    pp = int(bag_pickup_pending or 0)
+    return "A" if (bs > 0 or dp > 0 or pp > 0) else "B"
+
+
+def _is_solo_candidate(bag_size, bag_drops_pending, bag_pickup_pending) -> bool:
+    """Reżim SOLO (pusty worek) == bag_axis_level == 'B' == solo_mask datasetu."""
+    return _bag_axis_level(bag_size, bag_drops_pending, bag_pickup_pending) == "B"
+
+
 def _district_adjacent(zone1: Optional[str], zone2: Optional[str]) -> bool:
     if not zone1 or not zone2 or zone1 == "Unknown" or zone2 == "Unknown":
         return False
@@ -595,3 +623,231 @@ def get_lgbm_inferer() -> LGBMShadowInferer:
             log.error(f"get_lgbm_inferer init fail: {e}", exc_info=True)
             _inferer = LGBMShadowInferer(osrm_client=None, district_lookup=None)
     return _inferer
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# A2 (2026-06-20) — dwumodel solo/bundle (primary-candidate, za ENABLE_LGBM_PRIMARY OFF)
+# ════════════════════════════════════════════════════════════════════════════
+
+# Cechy „bundlowe" (ładunek worka) usuwane z modelu SOLO — MUSZĄ == twomodel_common.
+_TWOMODEL_BUNDLE_ONLY = (
+    "bag_size", "bag_drops_pending", "bag_pickup_pending",
+    "bag_size_category", "bag_n_distinct_districts", "bag_has_distant_drop",
+)
+
+
+@dataclass
+class TwoModelResult:
+    """Wynik dwumodelu (shadow). Analogiczny do ShadowResult, osobne pole serializacji."""
+    enabled: bool
+    fallback_reason: Optional[str]
+    winner_cid: Optional[str]
+    winner_score: Optional[float]
+    ranking: List[Dict[str, Any]] = field(default_factory=list)  # top 5
+    regime_counts: Dict[str, int] = field(default_factory=dict)   # {solo:n, bundle:n}
+    n_candidates_scored: int = 0
+    evaluation_ts: str = ""
+    latency_ms: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+class LGBMTwoModelInferer:
+    """Dwumodel solo/bundle. Reużywa LGBMShadowInferer do liczenia cech (delta=pool_mean,
+    haversine×1.42 — identyczne z definicją treningu), enkoduje wg ARTEFAKTÓW dwumodelu
+    (one-hot level oś-worka + label-encodery v2.0), routuje per-kandydat po stanie worka:
+    pusty worek → model SOLO, worek → model BUNDLE. Scalanie rankingu po RANKU
+    wewnątrz-modelowym (score'y lambdarank nieporównywalne między modelami).
+
+    NIGDY raise. Wołany WYŁĄCZNIE gdy ENABLE_LGBM_PRIMARY (flaga) — patrz
+    predict_two_model_for_decision (flag-gated). FLIP = Adrian po ACK.
+    """
+
+    def __init__(self, base_inferer: "LGBMShadowInferer", twomodel_dir: str = TWOMODEL_DIR):
+        self._base = base_inferer
+        self._dir = twomodel_dir
+        self._loaded = False
+        self._models: Dict[str, Any] = {}            # {solo, bundle} -> Booster
+        self._encoders: Dict[str, Dict[str, Any]] = {}   # regime -> {col: LabelEncoder}
+        self._tier_cats: Dict[str, List[str]] = {}       # regime -> [A,B,UNK]
+        self._feat_cols: Dict[str, List[str]] = {}       # regime -> feature order
+        self._predict_count = 0
+        self._fallback_count: Counter = Counter()
+        try:
+            self._load()
+        except Exception as e:
+            log.error(f"LGBMTwoModelInferer init fail: {e}", exc_info=True)
+            self._loaded = False
+
+    def _load(self) -> None:
+        import lightgbm as lgb
+        for regime in ("solo", "bundle"):
+            base = os.path.join(self._dir, regime)
+            self._models[regime] = lgb.Booster(model_file=os.path.join(base, "lgbm_ranker.txt"))
+            with open(os.path.join(base, "label_encoders.pkl"), "rb") as f:
+                self._encoders[regime] = pickle.load(f)
+            with open(os.path.join(base, "tier_categories.json"), encoding="utf-8") as f:
+                self._tier_cats[regime] = json.load(f)
+            with open(os.path.join(base, "feature_columns.json"), encoding="utf-8") as f:
+                self._feat_cols[regime] = json.load(f)
+        self._loaded = True
+        log.info(
+            f"LGBMTwoModelInferer loaded: solo={self._models['solo'].num_trees()}trees/"
+            f"{len(self._feat_cols['solo'])}feat, bundle={self._models['bundle'].num_trees()}trees/"
+            f"{len(self._feat_cols['bundle'])}feat"
+        )
+
+    def _encode_row(self, row: Dict[str, Any], regime: str):
+        """Enkoduj JEDEN wiersz cech → wektor wg feature_columns dwumodelu (regime).
+
+        Replikuje ścieżkę treningu: label-encode (district/idle_category/pickup/drop/
+        season) + one-hot `level` (oś-worka) + reszta numeryczna, kolejność = feature_cols.
+        """
+        enc = self._encoders[regime]
+        tier_cats = self._tier_cats[regime]
+        feat_cols = self._feat_cols[regime]
+        r = dict(row)
+        # one-hot level (oś-worka) — stałe kolumny niezależne od wejścia (parity)
+        raw_level = str(r.get("level", "UNK"))
+        if raw_level not in set(tier_cats):
+            raw_level = "UNK"
+        for cat in tier_cats:
+            r[f"level__{cat}"] = 1 if raw_level == cat else 0
+        # label-encode kategorycznych
+        for col, le in enc.items():
+            if col in r:
+                val = r[col]
+                val_str = "UNK" if val is None else str(val)
+                known = set(le.classes_)
+                if val_str not in known:
+                    val_str = "UNK"
+                r[col] = int(le.transform([val_str])[0]) if val_str in known else 0
+        # wektor wg kolejności feature_columns; brak → -1 (jak to_arrays fillna(-1))
+        vec = []
+        for col in feat_cols:
+            v = r.get(col, -1)
+            if isinstance(v, bool):
+                v = int(v)
+            vec.append(v if v is not None else -1)
+        return vec
+
+    def predict_for_decision(self, decision_ctx: Dict[str, Any], candidates: List[Any]) -> TwoModelResult:
+        """Dwumodel shadow inference. NIGDY raise. Router po stanie worka per-kandydat."""
+        import numpy as np
+        t_start = time.time()
+        res = TwoModelResult(
+            enabled=True, fallback_reason=None, winner_cid=None, winner_score=None,
+            evaluation_ts=datetime.now(timezone.utc).isoformat(),
+        )
+        if not self._loaded:
+            res.enabled = False
+            res.fallback_reason = "twomodel_not_loaded"
+            self._fallback_count["twomodel_not_loaded"] += 1
+            return res
+        if not candidates:
+            res.enabled = False
+            res.fallback_reason = "no_candidates"
+            return res
+        try:
+            # Reużyj liczenia cech bazowego inferera (delta=pool_mean, haversine×1.42).
+            rows = self._base._compute_all_candidate_features(decision_ctx, candidates)
+            # Router per-kandydat po stanie worka + override level na oś-worka.
+            solo_idx, bundle_idx = [], []
+            for i, row in enumerate(rows):
+                bag_axis = _bag_axis_level(
+                    row.get("bag_size"), row.get("bag_drops_pending"), row.get("bag_pickup_pending")
+                )
+                row["level"] = bag_axis  # NADPISZ oś-GPS na oś-worka (parity z datasetem)
+                (solo_idx if bag_axis == "B" else bundle_idx).append(i)
+
+            # Skoruj każdą grupę jej modelem; ranking wewnątrz-grupowy (1=najlepszy).
+            per_cand_rank: Dict[int, int] = {}
+            per_cand_score: Dict[int, float] = {}
+            for regime, idxs in (("solo", solo_idx), ("bundle", bundle_idx)):
+                if not idxs:
+                    continue
+                X = np.array([self._encode_row(rows[i], regime) for i in idxs], dtype=float)
+                scores = self._models[regime].predict(X)
+                order = sorted(range(len(idxs)), key=lambda k: -float(scores[k]))
+                for rank, k in enumerate(order):
+                    per_cand_rank[idxs[k]] = rank + 1
+                    per_cand_score[idxs[k]] = float(scores[k])
+
+            # Scal: kandydaci empty-bag (solo) preferowani gdy istnieją, w obrębie grupy
+            # po ranku; potem bundle.
+            # ⚠ OGRANICZENIE (zmierzone online shadow-parity 2026-06-20): score'y
+            # lambdarank solo vs bundle są NIEPORÓWNYWALNE, a reżim (solo/bundle) =
+            # OUTCOME (stan worka zwycięzcy), niedostępny na wejściu. Ta reguła „solo
+            # zawsze przed bundle" wymusza pick empty-bag gdy istnieje (1030/1487
+            # decyzji), podczas gdy obecny system wybiera empty tylko ~53% takich
+            # przypadków (resztę bundluje). Dwumodel optymalizuje WEWNĄTRZ reżimu, ale
+            # NIE arbitruje między reżimami — a to jest realna decyzja (bundle vs świeży
+            # kurier). To główny blocker GO na primary. Reguła jest jawna i mierzona —
+            # NIE traktować jako rozwiązanej. Szczegóły: [[lgbm-twomodel-prod-skew-2026-06-20]].
+            def merge_key(i: int):
+                grp = 0 if i in solo_idx else 1  # solo grupa przed bundle
+                return (grp, per_cand_rank.get(i, 10**6), -per_cand_score.get(i, -1e9))
+
+            merged = sorted(range(len(candidates)), key=merge_key)
+            scored = []
+            for i in merged:
+                scored.append({
+                    "cid": str(getattr(candidates[i], "courier_id", "")),
+                    "name": getattr(candidates[i], "name", None) or getattr(candidates[i], "courier_name", None),
+                    "regime": "solo" if i in solo_idx else "bundle",
+                    "model_score": round(per_cand_score.get(i, float("nan")), 4),
+                    "model_rank": per_cand_rank.get(i),
+                })
+            res.winner_cid = scored[0]["cid"] if scored else None
+            res.winner_score = scored[0]["model_score"] if scored else None
+            res.ranking = scored[:5]
+            res.regime_counts = {"solo": len(solo_idx), "bundle": len(bundle_idx)}
+            res.n_candidates_scored = len(scored)
+            res.latency_ms = round((time.time() - t_start) * 1000, 2)
+            self._predict_count += 1
+            return res
+        except Exception as e:
+            log.error(f"LGBMTwoModelInferer fail order={decision_ctx.get('order_id')}: {e}", exc_info=True)
+            res.enabled = False
+            res.fallback_reason = "twomodel_error"
+            res.latency_ms = round((time.time() - t_start) * 1000, 2)
+            self._fallback_count["twomodel_error"] += 1
+            return res
+
+    def stats(self) -> Dict[str, Any]:
+        return {"loaded": self._loaded, "predict_count": self._predict_count,
+                "fallback_counts": dict(self._fallback_count)}
+
+
+# Singleton dwumodelu
+_twomodel_inferer = None
+
+
+def get_twomodel_inferer() -> "LGBMTwoModelInferer":
+    """Singleton dwumodelu. Reużywa bazowy LGBMShadowInferer (osrm/district/cechy)."""
+    global _twomodel_inferer
+    if _twomodel_inferer is None:
+        _twomodel_inferer = LGBMTwoModelInferer(base_inferer=get_lgbm_inferer())
+    return _twomodel_inferer
+
+
+def predict_two_model_for_decision(
+    decision_ctx: Dict[str, Any], candidates: List[Any]
+) -> Optional[TwoModelResult]:
+    """Flag-gated entry. Zwraca TwoModelResult gdy ENABLE_LGBM_PRIMARY, inaczej None.
+
+    Gdy flaga OFF (default) → None, ZERO obliczeń dwumodelu, zachowanie 1:1 dzisiejsze.
+    NIGDY raise (defense-in-depth jak reszta ml_inference).
+    """
+    try:
+        from dispatch_v2.common import flag
+        if not flag("ENABLE_LGBM_PRIMARY", False):
+            return None
+    except Exception:
+        return None
+    try:
+        return get_twomodel_inferer().predict_for_decision(decision_ctx, candidates)
+    except Exception as e:
+        log.error(f"predict_two_model_for_decision fail: {e}", exc_info=True)
+        return None

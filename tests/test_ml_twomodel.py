@@ -497,5 +497,173 @@ class TestParityReportArtifact:
         assert "dist_to_pickup_haversine_km" in cont
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Warstwa D — PROD-shaping cech ciągłych (naprawa skew #2 delta + #3 haversine)
+# Czyste transformacje pandas → zawsze się wykonują (bez modelu/parquet).
+# ─────────────────────────────────────────────────────────────────────────────
+class TestProdFeatureShaping:
+    """apply_prod_feature_shaping == definicje produkcyjne (delta=pool_mean, hav×1.42)."""
+
+    def test_haversine_scaled_by_142(self):
+        df = pd.DataFrame({
+            "decision_id": ["d1", "d1"],
+            "courier_name": ["a", "b"],
+            "label": [1, 0],
+            "dist_to_pickup_km": [3.0, 5.0],
+            "dist_to_pickup_haversine_km": [2.0, 4.0],
+        })
+        out = tmc.apply_prod_feature_shaping(df)
+        # haversine surowy × 1.42 == produkcja (ml_inference.py:334)
+        assert out["dist_to_pickup_haversine_km"].tolist() == [2.0 * 1.42, 4.0 * 1.42]
+
+    def test_delta_dist_is_candidate_minus_pool_mean(self):
+        # pula d1: road [3,5,7] → mean=5 → delta [-2,0,2]; pula d2: [10] → mean=10 → delta 0
+        df = pd.DataFrame({
+            "decision_id": ["d1", "d1", "d1", "d2"],
+            "courier_name": ["a", "b", "c", "x"],
+            "label": [1, 0, 0, 1],
+            "dist_to_pickup_km": [3.0, 5.0, 7.0, 10.0],
+            "dist_to_pickup_haversine_km": [1.0, 1.0, 1.0, 1.0],
+        })
+        out = tmc.apply_prod_feature_shaping(df)
+        deltas = dict(zip(out["courier_name"], out["delta_dist_km"]))
+        assert abs(deltas["a"] - (-2.0)) < 1e-9
+        assert abs(deltas["b"] - 0.0) < 1e-9
+        assert abs(deltas["c"] - 2.0) < 1e-9
+        assert abs(deltas["x"] - 0.0) < 1e-9  # single-candidate decision → 0
+
+    def test_delta_nan_distance_maps_to_zero(self):
+        # produkcja: kandydat bez ważnego dystansu → delta 0.0
+        df = pd.DataFrame({
+            "decision_id": ["d1", "d1"],
+            "courier_name": ["a", "b"],
+            "label": [1, 0],
+            "dist_to_pickup_km": [np.nan, 4.0],
+            "dist_to_pickup_haversine_km": [1.0, 1.0],
+        })
+        out = tmc.apply_prod_feature_shaping(df)
+        deltas = dict(zip(out["courier_name"], out["delta_dist_km"]))
+        assert deltas["a"] == 0.0  # NaN dystans → 0
+        # b: pool_mean liczona tylko z ważnych = 4.0 → delta 0
+        assert abs(deltas["b"] - 0.0) < 1e-9
+
+    def test_shaping_does_not_mutate_input(self):
+        df = pd.DataFrame({
+            "decision_id": ["d1", "d1"],
+            "courier_name": ["a", "b"],
+            "label": [1, 0],
+            "dist_to_pickup_km": [3.0, 5.0],
+            "dist_to_pickup_haversine_km": [2.0, 4.0],
+        })
+        snapshot = df["dist_to_pickup_haversine_km"].tolist()
+        _ = tmc.apply_prod_feature_shaping(df)
+        assert df["dist_to_pickup_haversine_km"].tolist() == snapshot  # wejście nietknięte
+
+    def test_recon_only_features_listed(self):
+        # kontrakt: 7 cech rekonstrukcyjnych (niedostępnych live) usuwanych z OBU modeli
+        assert "level_A_count" in tmc.RECON_ONLY_DECISION_FEATURES
+        assert "exclude_not_active" in tmc.RECON_ONLY_DECISION_FEATURES
+        assert len(tmc.RECON_ONLY_DECISION_FEATURES) == 7
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Warstwa E — produkcyjna ścieżka dwumodelu (router po worku + flaga OFF identity)
+# Wymaga importu dispatch_v2.ml_inference → importorskip (potrzebuje dispatch_v2.common).
+# ─────────────────────────────────────────────────────────────────────────────
+class TestTwoModelServingPath:
+    def _mi(self):
+        return pytest.importorskip(
+            "dispatch_v2.ml_inference",
+            reason="dispatch_v2.ml_inference wymaga dispatch_v2.common",
+        )
+
+    def test_bag_axis_level_contract(self):
+        mi = self._mi()
+        # B = pusty worek; A = cokolwiek w worku/pending (oś-WORKA, NIE GPS)
+        assert mi._bag_axis_level(0, 0, 0) == "B"
+        assert mi._bag_axis_level(1, 0, 0) == "A"
+        assert mi._bag_axis_level(0, 1, 0) == "A"
+        assert mi._bag_axis_level(0, 0, 1) == "A"
+        assert mi._bag_axis_level(None, None, None) == "B"
+
+    def test_bag_axis_level_independent_of_gps(self):
+        """KONTRAKT kluczowy: level dwumodelu NIE zależy od GPS (vs _level_from_metrics)."""
+        mi = self._mi()
+        # _level_from_metrics zwróciłby B dla braku GPS; bag-axis patrzy TYLKO na worek
+        class _C:
+            def __init__(self, bag, gps):
+                self.bag_size = bag; self.last_pos_lat = gps
+        # kurier bez GPS ale z workiem: oś-GPS=B, oś-worka=A → MUSZĄ się różnić
+        assert mi._level_from_metrics(_C(2, None)) == "B"
+        assert mi._bag_axis_level(2, 0, 0) == "A"
+
+    def test_flag_off_returns_none_identity(self, monkeypatch):
+        """ENABLE_LGBM_PRIMARY OFF → predict zwraca None (zero compute, zachowanie 1:1)."""
+        mi = self._mi()
+        from dispatch_v2 import common as C
+        monkeypatch.setattr(C, "flag", lambda name, default=False: False if name == "ENABLE_LGBM_PRIMARY" else default)
+        out = mi.predict_two_model_for_decision({"order_id": "x"}, [object(), object()])
+        assert out is None
+
+    def test_is_solo_candidate(self):
+        mi = self._mi()
+        assert mi._is_solo_candidate(0, 0, 0) is True
+        assert mi._is_solo_candidate(1, 0, 0) is False
+
+
+@pytestmark_heavy
+class TestTwoModelRoutingWithArtifacts:
+    """Z załadowanymi modelami: router rozdziela po stanie worka, flaga ON liczy."""
+
+    def _mi(self):
+        return pytest.importorskip("dispatch_v2.ml_inference")
+
+    def test_router_splits_by_bag_state(self, monkeypatch):
+        mi = self._mi()
+        if not (MODELS_TWOMODEL / "solo" / "lgbm_ranker.txt").exists():
+            pytest.skip("brak artefaktów dwumodelu")
+
+        class Cand:
+            def __init__(self, cid, bag):
+                self.courier_id = cid; self.name = f"K{cid}"; self.courier_name = f"K{cid}"
+                self.bag_size = bag; self.bag_drops_pending = 0; self.bag_pickup_pending = 0
+                self.last_pos_lat = 53.13; self.last_pos_lon = 23.16; self.idle_min = 5
+                self.orders_today_before_T0 = 1; self.metrics = {}
+
+        base = mi.get_lgbm_inferer()
+        tmm = mi.LGBMTwoModelInferer(base_inferer=base)
+        if not tmm._loaded:
+            pytest.skip("dwumodel nie załadowany")
+        cands = [Cand("1", 0), Cand("2", 0), Cand("3", 3), Cand("4", 1)]
+        ctx = {"order_id": "T", "decision_ts": None, "pickup_lat": 53.132, "pickup_lon": 23.168,
+               "pickup_district": "Centrum", "drop_district": "Bojary"}
+        res = tmm.predict_for_decision(ctx, cands)
+        assert res.enabled is True
+        assert res.regime_counts == {"solo": 2, "bundle": 2}
+        assert res.n_candidates_scored == 4
+
+    def test_flag_on_produces_result(self, monkeypatch):
+        mi = self._mi()
+        if not (MODELS_TWOMODEL / "solo" / "lgbm_ranker.txt").exists():
+            pytest.skip("brak artefaktów dwumodelu")
+        from dispatch_v2 import common as C
+        monkeypatch.setattr(C, "flag", lambda name, default=False: True if name == "ENABLE_LGBM_PRIMARY" else default)
+
+        class Cand:
+            def __init__(self, cid, bag):
+                self.courier_id = cid; self.name = f"K{cid}"; self.courier_name = f"K{cid}"
+                self.bag_size = bag; self.bag_drops_pending = 0; self.bag_pickup_pending = 0
+                self.last_pos_lat = 53.13; self.last_pos_lon = 23.16; self.idle_min = 5
+                self.orders_today_before_T0 = 1; self.metrics = {}
+        out = mi.predict_two_model_for_decision(
+            {"order_id": "x", "decision_ts": None, "pickup_lat": 53.13, "pickup_lon": 23.16,
+             "pickup_district": "Centrum", "drop_district": "Centrum"},
+            [Cand("1", 0), Cand("2", 2)],
+        )
+        # flaga ON → wynik (nie None); może być enabled True
+        assert out is not None
+        assert out.n_candidates_scored == 2
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
