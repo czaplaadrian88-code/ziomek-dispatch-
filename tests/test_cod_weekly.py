@@ -150,6 +150,170 @@ def test_find_target_cod_columns():
 
 
 # -------------------------------------------------------------------
+# TEST 2b: find_target_column_auto + find_target_cod_columns_resilient (E5)
+#
+# Reprodukcja porażki 2026-05-17/18 ("TARGET COLUMN FAIL" / NoTargetColumnError
+# "Brak bloku z payday=…") — człowiek nie zdążył dodać ręcznie daty wypłaty.
+# Auto-detect rozpoznaje kolumnę po ZAKRESIE tygodnia (row1 pos+3), który jest
+# wypełniany pewniej niż payday. Plus guardy fail-safe: NIGDY zła kolumna.
+# -------------------------------------------------------------------
+def test_find_target_column_auto():
+    _hdr("TEST 2b: find_target_column_auto + resilient (E5 auto-detect)")
+    # Venv-agnostic guard (jak w test_cod_weekly_preflight.py): pod pytest
+    # (dispatch venv, bez gspread) → skip; pod custom runner (sheets venv,
+    # bez pytest, z gspread) → leć dalej i odpal logikę.
+    try:
+        import pytest
+        pytest.importorskip("gspread")  # venv dispatch bez gspread → skip
+    except ModuleNotFoundError:
+        pass
+    from dispatch_v2.cod_weekly.sheet_writer import (
+        find_target_column_auto,
+        find_target_cod_columns,
+        col_idx_to_letter,
+        NoTargetColumnError,
+        AmbiguousTargetError,
+    )
+    from dispatch_v2.cod_weekly.run_weekly import find_target_cod_columns_resilient
+
+    def _block(row1, row2, anchor, tydzien, payday, rng):
+        """Wstaw blok COD-Transport jak w arkuszu 'Wynagrodzenia Gastro':
+        anchor=COD-Transport, +1=Korekty, +2=Wypłata(payday), +3=Saldo(zakres).
+        payday/rng = '' symuluje komórkę jeszcze NIE wypełnioną ręcznie.
+        """
+        row1[anchor] = tydzien
+        row2[anchor] = "COD - Transport"
+        row1[anchor + 1] = "wypłata z dn."
+        row2[anchor + 1] = "Korekty"
+        row1[anchor + 2] = payday
+        row2[anchor + 2] = "Wypłata"
+        row1[anchor + 3] = rng
+        row2[anchor + 3] = "Saldo do przen."
+
+    # --- Scenariusz 1: PORAŻKA 2026-05-17/18 — payday-cell PUSTY, zakres OBECNY.
+    # Tydzień 11-17.05.2026, payday 20-05-2026 (środa). Sheet ma zakres '11-17.05.2026'
+    # w pos+3 ale pos+2 (Wypłata) jest pusty → primary NoTargetColumnError, auto OK.
+    row1 = [""] * 90
+    row2 = [""] * 90
+    _block(row1, row2, 79, "Tydzień 3", "", "11-17.05.2026")  # CB idx 79, payday BLANK
+    # primary musi failować (brak payday)
+    try:
+        find_target_cod_columns(row1, row2, date(2026, 5, 11), date(2026, 5, 17))
+        _fail("primary should fail when payday blank")
+    except NoTargetColumnError:
+        _ok("primary NoTargetColumnError gdy payday-cell pusty (repro 05-17/18)")
+    # auto-detect po zakresie → CB
+    targets = find_target_column_auto(row1, row2, date(2026, 5, 11), date(2026, 5, 17))
+    if len(targets) == 1 and targets[0]["col_letter"] == "CB":
+        _ok("auto-detect rozwiązuje 11-17.05 → CB (po zakresie)")
+    else:
+        _fail("auto-detect 11-17.05 → CB", targets)
+    assert targets[0]["segment_start"] == date(2026, 5, 11)
+    assert targets[0]["segment_end"] == date(2026, 5, 17)
+    assert targets[0]["payday"] == date(2026, 5, 20), targets[0]["payday"]
+    _ok("auto-detect payday policzony 20-05-2026 (środa po niedzieli)")
+    # resilient łapie to samo (fallback po porażce primary)
+    rtargets = find_target_cod_columns_resilient(
+        row1, row2, date(2026, 5, 11), date(2026, 5, 17)
+    )
+    if len(rtargets) == 1 and rtargets[0]["col_letter"] == "CB":
+        _ok("resilient fallback → CB (primary fail → auto)")
+    else:
+        _fail("resilient fallback → CB", rtargets)
+
+    # --- Scenariusz 2: BEHAVIOR-PRESERVING — gdy payday OBECNY, resilient ==
+    # primary (identyczny wynik, auto-detect NIE odpala).
+    row1 = [""] * 90
+    row2 = [""] * 90
+    _block(row1, row2, 79, "Tydzień 3", "20-05-2026", "11-17.05.2026")
+    prim = find_target_cod_columns(row1, row2, date(2026, 5, 11), date(2026, 5, 17))
+    resi = find_target_cod_columns_resilient(
+        row1, row2, date(2026, 5, 11), date(2026, 5, 17)
+    )
+    if prim == resi and resi[0]["col_letter"] == "CB":
+        _ok("resilient == primary gdy payday obecny (zero zmian zachowania)")
+    else:
+        _fail("resilient == primary", f"prim={prim} resi={resi}")
+
+    # --- Scenariusz 3: SPLIT-MONTH auto-detect. Tydzień 30.03-05.04.2026
+    # → segmenty '30-31.03.2026' + '01-05.04.2026', OBA payday 08-04-2026.
+    # payday-cells PUSTE, ale zakresy obecne → auto rozróżnia po zakresie.
+    row1 = [""] * 90
+    row2 = [""] * 90
+    _block(row1, row2, 45, "Tydzień 6", "", "30-31.03.2026")  # AT idx 45
+    _block(row1, row2, 50, "Tydzień 1", "", "01-05.04.2026")  # AY idx 50
+    targets = find_target_column_auto(row1, row2, date(2026, 3, 30), date(2026, 4, 5))
+    if len(targets) == 2:
+        at = next((t for t in targets if t["col_letter"] == "AT"), None)
+        ay = next((t for t in targets if t["col_letter"] == "AY"), None)
+        if at and ay and at["segment_end"] == date(2026, 3, 31) \
+                and ay["segment_start"] == date(2026, 4, 1):
+            _ok("split-month auto-detect → AT(30-31.03) + AY(01-05.04)")
+        else:
+            _fail("split-month columns", targets)
+    else:
+        _fail("split-month: expected 2 targets", targets)
+
+    # --- Scenariusz 4 (FAIL-SAFE): blok NIEPRZYGOTOWANY — payday I zakres PUSTE.
+    # Brak treściowego sygnału → auto MUSI raise (nie zgaduje po pozycji).
+    row1 = [""] * 90
+    row2 = [""] * 90
+    _block(row1, row2, 79, "Tydzień 3", "", "")  # CB anchor istnieje, ale puste +2/+3
+    try:
+        find_target_column_auto(row1, row2, date(2026, 5, 11), date(2026, 5, 17))
+        _fail("unprepared block → expected NoTargetColumnError")
+    except NoTargetColumnError:
+        _ok("FAIL-SAFE: pusty payday+zakres → NoTargetColumnError (nie zgaduje)")
+    # resilient też musi propagować błąd (nie znajdzie nic)
+    try:
+        find_target_cod_columns_resilient(
+            row1, row2, date(2026, 5, 11), date(2026, 5, 17)
+        )
+        _fail("resilient unprepared → expected NoTargetColumnError")
+    except NoTargetColumnError:
+        _ok("FAIL-SAFE: resilient propaguje NoTargetColumnError")
+
+    # --- Scenariusz 5 (FAIL-SAFE): zakres pasuje, ale payday-cell trzyma INNĄ
+    # ważną datę (blok rozjechany / nie nasz tydzień). NIE wolno nadpisać po cichu.
+    row1 = [""] * 90
+    row2 = [""] * 90
+    # zakres 11-17.05 ale payday wpisany BŁĘDNIE 13-05-2026 (≠ oczekiwany 20-05)
+    _block(row1, row2, 79, "Tydzień 3", "13-05-2026", "11-17.05.2026")
+    try:
+        find_target_column_auto(row1, row2, date(2026, 5, 11), date(2026, 5, 17))
+        _fail("misaligned payday → expected NoTargetColumnError")
+    except NoTargetColumnError:
+        _ok("FAIL-SAFE: zakres OK ale payday inny → odrzucony → NoTargetColumnError")
+
+    # --- Scenariusz 6 (FAIL-SAFE): DWIE kolumny z tym samym zakresem → ambiguous.
+    row1 = [""] * 90
+    row2 = [""] * 90
+    _block(row1, row2, 75, "Tydzień 2", "", "11-17.05.2026")  # BX idx 75
+    _block(row1, row2, 79, "Tydzień 3", "", "11-17.05.2026")  # CB idx 79 — duplikat
+    try:
+        find_target_column_auto(row1, row2, date(2026, 5, 11), date(2026, 5, 17))
+        _fail("duplicate range → expected AmbiguousTargetError")
+    except AmbiguousTargetError:
+        _ok("FAIL-SAFE: 2 kolumny z tym samym zakresem → AmbiguousTargetError")
+
+    # --- Scenariusz 7 (FAIL-SAFE): payday obecny ale BŁĘDNY + zakres też nie ma
+    # w arkuszu → ambiguous z primary NIE jest tłumiony (resilient nie łapie
+    # AmbiguousTargetError, tylko NoTargetColumnError).
+    row1 = [""] * 90
+    row2 = [""] * 90
+    # 2 bloki z tym samym payday (single-segment week) → primary AmbiguousTargetError
+    for anchor in (75, 79):
+        _block(row1, row2, anchor, "T", "20-05-2026", "")
+    try:
+        find_target_cod_columns_resilient(
+            row1, row2, date(2026, 5, 11), date(2026, 5, 17)
+        )
+        _fail("resilient should NOT swallow AmbiguousTargetError")
+    except AmbiguousTargetError:
+        _ok("FAIL-SAFE: resilient NIE tłumi AmbiguousTargetError z primary")
+
+
+# -------------------------------------------------------------------
 # TEST 3: _parse_zl (regex + polish/eng format)
 # -------------------------------------------------------------------
 def test_parse_panel_sums():
@@ -356,6 +520,7 @@ def main():
     for fn in [
         test_get_previous_closed_week,
         test_find_target_cod_columns,
+        test_find_target_column_auto,
         test_parse_panel_sums,
         test_fuzzy_restaurant_match,
         test_cod_formula,

@@ -24,6 +24,7 @@ from dispatch_v2.cod_weekly.panel_scraper import scrape_restaurant_cod
 from dispatch_v2.cod_weekly.sheet_writer import (
     fetch_sheet_grid,
     find_target_cod_columns,
+    find_target_column_auto,
     validate_column_empty_ratio,
     write_cod_column_skip_filled,
     split_week_by_month,
@@ -39,6 +40,42 @@ log = logging.getLogger("cod_weekly.run")
 def load_mapping() -> dict:
     with open(MAPPING_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def find_target_cod_columns_resilient(row1, row2, week_start, week_end):
+    """E5 — primary (payday-match) → przy NoTargetColumnError fallback do
+    auto-detect (range-match).
+
+    ADDITIVE / behavior-preserving: gdy primary znajdzie kolumnę, zwracamy
+    JEJ wynik bez zmian (auto-detect NIE odpala). Auto-detect uruchamia się
+    WYŁĄCZNIE gdy primary rzuci NoTargetColumnError — czyli gdy człowiek nie
+    zdążył ręcznie dodać daty wypłaty (pos+2), a blok tygodnia jest już w
+    arkuszu (rozpoznany po zakresie pos+3). To naprawia cotygodniowe
+    "TARGET COLUMN FAIL" z 2026-05-17/18.
+
+    Świadomie woła `find_target_cod_columns` i `find_target_column_auto` przez
+    globalsy modułu (NIE lokalne aliasy) — testy monkey-patchują
+    `rw.find_target_cod_columns`, więc patch musi mieć efekt.
+
+    AmbiguousTargetError / ValueError z primary NIE są przechwytywane — to
+    realne problemy struktury arkusza, nie 'zapomniana ręczna kolumna'.
+    """
+    try:
+        return find_target_cod_columns(row1, row2, week_start, week_end)
+    except NoTargetColumnError as primary_err:
+        log.warning(
+            f"Primary find_target (payday-match) nie znalazł kolumny "
+            f"({primary_err}); próba AUTO-DETECT po zakresie tygodnia."
+        )
+        targets = find_target_column_auto(row1, row2, week_start, week_end)
+        log.info(
+            "AUTO-DETECT sukces: "
+            + ", ".join(
+                f"{t['col_letter']} ({t['segment_start']}..{t['segment_end']})"
+                for t in targets
+            )
+        )
+        return targets
 
 
 def _refresh_mapping() -> dict:
@@ -116,7 +153,7 @@ def cmd_dry_run_full(week_start, week_end) -> int:
     )
 
     try:
-        targets = find_target_cod_columns(row1, row2, week_start, week_end)
+        targets = find_target_cod_columns_resilient(row1, row2, week_start, week_end)
     except (NoTargetColumnError, AmbiguousTargetError) as e:
         log.error(f"TARGET COLUMN FAIL: {e}")
         return 1
@@ -558,7 +595,7 @@ def cmd_write(week_start, week_end, opener=None) -> int:
     log.info(f"Restaurants: {len(restaurants)}")
 
     try:
-        targets = find_target_cod_columns(row1, row2, week_start, week_end)
+        targets = find_target_cod_columns_resilient(row1, row2, week_start, week_end)
     except (NoTargetColumnError, AmbiguousTargetError, ValueError) as e:
         log.error(f"TARGET COLUMN FAIL: {e}")
         _try_alert(f"[COD WEEKLY ALERT] Target column fail: {e}")
@@ -755,7 +792,7 @@ def cmd_preflight(week_start, week_end) -> int:
     payday_str = payday.strftime("%d-%m-%Y")
 
     try:
-        targets = find_target_cod_columns(row1, row2, week_start, week_end)
+        targets = find_target_cod_columns_resilient(row1, row2, week_start, week_end)
     except (NoTargetColumnError, AmbiguousTargetError, ValueError) as e:
         instr = _build_preflight_instruction(
             week_start, week_end, segments, payday_str, e,

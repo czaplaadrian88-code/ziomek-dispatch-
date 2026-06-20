@@ -23,10 +23,13 @@ from dispatch_v2.cod_weekly.config import (
     SEARCH_BLOCK_START_COL,
 )
 from dispatch_v2.cod_weekly.aliases import SHEET_SKIP_PREFIXES
+from dispatch_v2.cod_weekly.week_calculator import format_week_for_header
 
 log = logging.getLogger("cod_weekly.sheet")
 
 RANGE_RE = re.compile(r"^\s*(\d{1,2})-(\d{1,2})\.(\d{2})\.(\d{4})\s*$")
+# Payday cell format w row1 pos+2 ("Wypłata"): DD-MM-YYYY
+PAYDAY_RE = re.compile(r"^\s*(\d{2})-(\d{2})-(\d{4})\s*$")
 
 SCOPES_RW = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -178,6 +181,122 @@ def find_target_cod_columns(
                 "segment_end": seg["end"],
                 "payday": payday,
             }
+        )
+    return result
+
+
+def _parse_payday_cell(s: str):
+    """Parse 'DD-MM-YYYY' z komórki payday (row1 pos+2) → date albo None."""
+    m = PAYDAY_RE.match(s or "")
+    if not m:
+        return None
+    try:
+        return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None
+
+
+def find_target_column_auto(
+    row1: list,
+    row2: list,
+    target_week_start: date,
+    target_week_end: date,
+) -> List[Dict]:
+    """E5 auto-detect — odnajdź kolumnę docelową gdy RĘCZNIE dodana data wypłaty
+    (row1 pos+2 'Wypłata') jeszcze NIE istnieje, ale blok COD-Transport tygodnia
+    już jest w arkuszu (rozpoznany po komórce ZAKRESU dat, row1 pos+3
+    'Saldo do przen.').
+
+    To jest ścieżka FALLBACK wołana TYLKO gdy `find_target_cod_columns` rzuci
+    NoTargetColumnError. Klucz dopasowania = ZAKRES tygodnia (np. '06-12.04.2026'),
+    który w praktyce jest wypełniany pewniej niż payday (dane z arkusza: nawet
+    najstarsze bloki bez payday mają wypełniony zakres). Zakres jednoznacznie
+    identyfikuje segment — także w tygodniach krosujących miesiąc, gdzie payday
+    obu segmentów jest IDENTYCZNY a różni je tylko zakres (np. '30-31.03' vs
+    '01-05.04', oba payday '08-04-2026').
+
+    Bezpieczeństwo (fail-safe — NIGDY nie zwraca błędnej kolumny):
+      - dopasowanie po TREŚCI (zakres), nie po pozycji/arytmetyce (gapy bloków
+        bywają 4 lub 5 kolumn → liczenie pozycji byłoby zawodne);
+      - każdy segment MUSI mieć dokładnie 1 kandydata; 0 → NoTargetColumnError,
+        >1 → AmbiguousTargetError;
+      - kandydat odrzucony, jeśli payday-cell trzyma INNĄ ważną datę niż
+        oczekiwana (blok rozjechany / nie nasz — nie nadpisujemy po cichu);
+        pusty payday-cell LUB równy oczekiwanemu = OK;
+      - split-month: 2 segmenty muszą trafić w 2 RÓŻNE kolumny.
+
+    Zwraca tę samą strukturę co find_target_cod_columns:
+      [{col_idx, col_letter, segment_start, segment_end, payday}].
+    """
+    segments = split_week_by_month(target_week_start, target_week_end)
+    payday = compute_payday(target_week_start, target_week_end)
+    payday_str = payday.strftime("%d-%m-%Y")
+
+    max_scan = min(len(row1), len(row2))
+    start_col = SEARCH_BLOCK_START_COL - 1  # 0-based
+
+    result = []
+    used_cols = set()
+    for seg in segments:
+        expected_range = format_week_for_header(seg["start"], seg["end"])
+        expected_range_norm = _norm_header(expected_range)
+        candidates = []
+        for i in range(start_col, max_scan - 3):
+            r2 = row2[i] if i < len(row2) else ""
+            if _norm_header(r2) != "cod transport":
+                continue
+            range_cell = (row1[i + 3] if i + 3 < len(row1) else "").strip()
+            if _norm_header(range_cell) != expected_range_norm:
+                continue
+            # Fail-safe: payday-cell pusty LUB == oczekiwany. Inna ważna data =
+            # blok rozjechany → NIE kandydat (nie nadpisujemy cudzego/innego).
+            payday_cell = (row1[i + 2] if i + 2 < len(row1) else "").strip()
+            existing_pd = _parse_payday_cell(payday_cell)
+            if existing_pd is not None and existing_pd != payday:
+                log.warning(
+                    f"find_target_column_auto: kol {col_idx_to_letter(i)} ma "
+                    f"zakres={range_cell!r} ale payday={payday_cell!r} != "
+                    f"oczekiwany {payday_str} — pomijam (możliwy rozjazd bloku)."
+                )
+                continue
+            if i in used_cols:
+                continue
+            candidates.append(i)
+
+        log.info(
+            f"find_target_column_auto: segment {seg['start']}..{seg['end']} "
+            f"zakres={expected_range!r} payday={payday_str} → "
+            f"kandydaci={[col_idx_to_letter(c) for c in candidates]}"
+        )
+
+        if not candidates:
+            raise NoTargetColumnError(
+                f"AUTO-DETECT: brak bloku z zakresem {expected_range!r} "
+                f"(payday {payday_str}) w arkuszu. Ani data wypłaty (pos+2) ani "
+                f"zakres (pos+3) nie pasują — dodaj ręcznie blok tygodnia."
+            )
+        if len(candidates) > 1:
+            raise AmbiguousTargetError(
+                f"AUTO-DETECT: {len(candidates)} kolumn z zakresem "
+                f"{expected_range!r}: {[col_idx_to_letter(c) for c in candidates]}"
+            )
+        ci = candidates[0]
+        used_cols.add(ci)
+        result.append(
+            {
+                "col_idx": ci,
+                "col_letter": col_idx_to_letter(ci),
+                "segment_start": seg["start"],
+                "segment_end": seg["end"],
+                "payday": payday,
+            }
+        )
+
+    # Split-month sanity: 2 segmenty MUSZĄ być w 2 różnych kolumnach.
+    if len({r["col_idx"] for r in result}) != len(result):
+        raise AmbiguousTargetError(
+            f"AUTO-DETECT: segmenty zmapowane na tę samą kolumnę "
+            f"{[r['col_letter'] for r in result]} — rozjazd zakresów."
         )
     return result
 
