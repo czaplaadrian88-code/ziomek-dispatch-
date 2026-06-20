@@ -18,6 +18,7 @@ from typing import List, Tuple, Dict, Optional
 
 from dispatch_v2 import osrm_client
 from dispatch_v2 import common as C
+from dispatch_v2 import prep_bias_anchor
 from dispatch_v2.common import (
     ENABLE_C2_SHADOW_LOG,
     HAVERSINE_ROAD_FACTOR_BIALYSTOK,
@@ -1077,6 +1078,29 @@ def check_feasibility_v2(
                 anchor_src = "tsp_pickup_at"
         if anchor is None:
             anchor = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        # [C2] prep-bias anchor correction (flag ENABLE_PREP_BIAS_TABLE, default OFF).
+        # Gdy kuchnia restauracji systematycznie zaniża deklarowany czas gotowości
+        # (bias dodatni z prep_bias_table.json — zmierzony z czystego sygnału
+        # "kurier-czekał"), przesuwamy kotwicę termiczną WCZEŚNIEJ → bag_time rośnie
+        # → R6 bije wcześniej (ochrona świeżości, NIGDY bardziej liberalna; bias
+        # ujemny klampowany do 0). Korygujemy TYLKO kotwice z deklarowanego ready
+        # (pickup_ready_at / tsp_pickup_at); picked_up_at = realny pickup, nie estymata.
+        if (anchor_src in ("pickup_ready_at", "tsp_pickup_at")
+                and C.flag("ENABLE_PREP_BIAS_TABLE", False)):
+            try:
+                _shift_min, _bias_src = prep_bias_anchor.anchor_shift_min(
+                    getattr(o, "restaurant", None))
+                if _shift_min:
+                    anchor = anchor + timedelta(minutes=_shift_min)
+                    anchor_src = anchor_src + "+prep_bias"
+                    metrics.setdefault("prep_bias_shifts", []).append({
+                        "oid": o.order_id,
+                        "shift_min": round(_shift_min, 2),
+                        "bias_src": _bias_src,
+                    })
+            except Exception as _pbe:  # fail-soft: korekta nigdy nie wywala R6
+                log.warning("prep_bias anchor correction failed oid=%s: %s: %s",
+                            o.order_id, type(_pbe).__name__, _pbe)
         bag_time_min = (pred - anchor).total_seconds() / 60.0
         if (not _o_paczka_exempt) and bag_time_min > r6_max_bag_time:
             r6_max_bag_time = bag_time_min
