@@ -598,7 +598,7 @@ def _per_day_mixed(decisions, calibrators, best_arb: str) -> List[Dict[str, Any]
     return rows
 
 
-def run(forward_days: int = 14, seed: int = 42) -> Dict[str, Any]:
+def run(forward_days: int = 14, seed: int = 42, end_offset: int = 0) -> Dict[str, Any]:
     import pandas as pd
     import train_two_models as tm  # noqa: F401  (import wcześnie by złapać brak pyarrow czytelnie)
     from twomodel_common import load_split, apply_prod_feature_shaping, solo_mask
@@ -609,11 +609,18 @@ def run(forward_days: int = 14, seed: int = 42) -> Dict[str, Any]:
     allp = apply_prod_feature_shaping(allp)
     allp["_date"] = pd.to_datetime(allp["date"], errors="coerce").dt.normalize()
     days = sorted(allp["_date"].dropna().unique())
-    if len(days) <= forward_days:
-        raise ValueError(f"za mało dni ({len(days)}) na forward_days={forward_days}")
-    cutoff = days[-forward_days]
+    n_days = len(days)
+    if n_days <= forward_days + end_offset:
+        raise ValueError(f"za mało dni ({n_days}) na forward_days={forward_days}+end_offset={end_offset}")
+    # forward = okno [cutoff, fwd_end) przesunięte o end_offset dni od końca (rolling-window robustness).
+    # end_offset=0 → zachowanie pierwotne (cutoff=days[-forward_days], forward=ogon).
+    cutoff = days[n_days - forward_days - end_offset]
     train_df = allp[allp["_date"] < cutoff].reset_index(drop=True)
-    fwd_df = allp[allp["_date"] >= cutoff].reset_index(drop=True)
+    if end_offset > 0:
+        fwd_end = days[n_days - end_offset]
+        fwd_df = allp[(allp["_date"] >= cutoff) & (allp["_date"] < fwd_end)].reset_index(drop=True)
+    else:
+        fwd_df = allp[allp["_date"] >= cutoff].reset_index(drop=True)
 
     # 2) calib = ostatnie forward_days dni TRAIN-a; core_train = reszta
     train_days = sorted(train_df["_date"].dropna().unique())
