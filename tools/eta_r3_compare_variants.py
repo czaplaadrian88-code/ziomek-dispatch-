@@ -227,5 +227,138 @@ def print_report(res):
     return res
 
 
+# ───────────────────────── FORWARD-WINDOWS (pełny held-out, nie tylko R3-logged) ─────────────────────────
+# Motywacja: kolumna eta_r3_corrected_delivery_min jest zapisana w logu DOPIERO od 18.06 (flip
+# shadow-wiring) → run()/serve_usable widzi tylko ~256 oid (18-20.06). Ale dla wariantów v1 i B
+# corrected jest RECOMPUTOWANY z artefaktu (base + booster.predict), więc da się policzyć na
+# CAŁYM held-out (>TRAIN_MAX) — wszystkie rekordy z base+real, niezależnie od kolumny R3 w logu.
+# To daje uczciwą forward-walidację 7d/14d + WEEKEND zamiast degradacji do ~1,5 dnia.
+#
+# Tu liczymy okna NA DACIE KOŃCOWEJ (ostatnie N dni held-out) — to jest sens „okno 7d/14d":
+# najświeższe N dni jako jeden agregat, plus osobny wycinek weekendu (sob/niedz po dacie).
+
+
+def _heldout_records(ETA):
+    """Wszystkie rekordy held-out (>TRAIN_MAX) z base+real+nie-czasówka. Lustro valid() treningu."""
+    return [r for r in ETA if FIX.valid(r) and (r.get("logged_at") or "")[:10] > TRAIN_MAX]
+
+
+def _slice_last_days(recs, n_days):
+    """Wycina rekordy z ostatnich n_days kalendarzowych obecnych w danych (po dacie logu)."""
+    days = sorted({(r.get("logged_at") or "")[:10] for r in recs if (r.get("logged_at") or "")[:10]})
+    if not days:
+        return [], []
+    keep = set(days[-n_days:]) if n_days < len(days) else set(days)
+    return [r for r in recs if (r.get("logged_at") or "")[:10] in keep], sorted(keep)
+
+
+def _is_weekend_rec(r):
+    """Weekend wg flagi is_weekend zapisanej w logu (sob/niedz w strefie Warszawa)."""
+    return bool(r.get("is_weekend"))
+
+
+def _series_for(recs, *, model_dir, cid2tier, restcnt, pool, use_base=False):
+    """Statystyki błędu serii na recs: base (use_base) albo recompute z model_dir."""
+    if use_base:
+        preds = [H._num(r.get("predicted_delivery_min")) for r in recs]
+        reals = [H._num(r.get("real_delivery_min")) for r in recs]
+        pr = [(p, g) for p, g in zip(preds, reals) if p is not None and g is not None]
+        return H.error_stats([p for p, _ in pr], [g for _, g in pr])
+    corr = recompute_corrected(recs, model_dir, cid2tier=cid2tier, restcnt=restcnt, pool=pool)
+    preds, reals = [], []
+    for r in recs:
+        c = corr.get(r.get("oid"))
+        g = H._num(r.get("real_delivery_min"))
+        if c is not None and g is not None:
+            preds.append(c)
+            reals.append(g)
+    return H.error_stats(preds, reals)
+
+
+def _window_block(recs, *, cid2tier, restcnt, pool, min_n=10):
+    """Dla danego zbioru recs: MAE base / v1(recompute) / B(recompute) + poprawa % vs base."""
+    if len(recs) < min_n:
+        return {"n": len(recs), "insufficient": True}
+    sb = _series_for(recs, model_dir=None, cid2tier=cid2tier, restcnt=restcnt, pool=pool, use_base=True)
+    sv1 = _series_for(recs, model_dir=f"{MODELS}/eta_residual_v1",
+                      cid2tier=cid2tier, restcnt=restcnt, pool=pool)
+    sB = _series_for(recs, model_dir=f"{MODELS}/eta_residual_v2_drop",
+                     cid2tier=cid2tier, restcnt=restcnt, pool=pool)
+
+    def impr(s):
+        return 100 * (sb["mae"] - s["mae"]) / sb["mae"] if sb and sb["mae"] > 0 else 0.0
+    return {
+        "n": len(recs), "insufficient": False,
+        "base": sb, "v1": sv1, "B": sB,
+        "v1_impr": impr(sv1), "B_impr": impr(sB),
+        "v1_meets": impr(sv1) >= IMPR_TARGET, "B_meets": impr(sB) >= IMPR_TARGET,
+    }
+
+
+def forward_windows(min_n=10):
+    """Forward-walidacja v1 vs B na PEŁNYM held-out: okna 7d, 14d + wycinek WEEKEND.
+    Każde okno = ostatnie N dni held-out. v1/B recompute z artefaktów (base+predict)."""
+    cid2tier, pool, ETA, restcnt = FIX.load_inputs()
+    held = _heldout_records(ETA)
+    out = {"n_heldout": len(held), "train_max": TRAIN_MAX,
+           "days": sorted({(r.get("logged_at") or "")[:10] for r in held}), "windows": {}}
+    for label, n in [("14d", 14), ("7d", 7)]:
+        recs, days = _slice_last_days(held, n)
+        blk = _window_block(recs, cid2tier=cid2tier, restcnt=restcnt, pool=pool, min_n=min_n)
+        blk["days"] = days
+        out["windows"][label] = blk
+    # WEEKEND — wszystkie weekendowe rekordy w held-out (sob/niedz)
+    wk = [r for r in held if _is_weekend_rec(r)]
+    blkw = _window_block(wk, cid2tier=cid2tier, restcnt=restcnt, pool=pool, min_n=min_n)
+    blkw["days"] = sorted({(r.get("logged_at") or "")[:10] for r in wk})
+    out["windows"]["weekend"] = blkw
+    return out
+
+
+def print_forward(res):
+    print("=" * 84)
+    print("ETA R3 — FORWARD-WALIDACJA v1 vs B_drop | PEŁNY held-out (recompute z artefaktów)")
+    print("=" * 84)
+    print(f"held-out (>{res['train_max']}, base+real, nie-czasówka): {res['n_heldout']}  "
+          f"dni: {res['days'][0]}..{res['days'][-1]} ({len(res['days'])})")
+    print("-" * 84)
+    print("MAE per OKNO (ostatnie N dni held-out + weekend; ✅ = poprawa ≥%g%% vs baza):" % IMPR_TARGET)
+    print(f"  {'okno':9s} {'n':>5s} {'baza':>7s} | {'v1 MAE':>7s} {'v1%':>7s} {'':2s} | "
+          f"{'B MAE':>7s} {'B%':>7s} {'':2s} | {'B p95':>7s} {'B P(<0)':>8s}")
+    order = [("14d", "14d"), ("7d", "7d"), ("weekend", "WEEKEND")]
+    for key, lab in order:
+        w = res["windows"][key]
+        if w.get("insufficient"):
+            print(f"  {lab:9s} {w['n']:5d}  — za mało (min_n)")
+            continue
+        b, v1, B = w["base"], w["v1"], w["B"]
+        v1s = "✅" if w["v1_meets"] else "❌"
+        Bs = "✅" if w["B_meets"] else "❌"
+        print(f"  {lab:9s} {w['n']:5d} {b['mae']:7.2f} | {v1['mae']:7.2f} {w['v1_impr']:+7.1f} {v1s:2s} | "
+              f"{B['mae']:7.2f} {w['B_impr']:+7.1f} {Bs:2s} | {_f(B['p95_abs']):>7s} {B['frac_under']:8.2f}")
+    print("-" * 84)
+    print("BRAMKA: B_drop musi mieć poprawę ≥%g%% vs baza w KAŻDYM oknie (14d, 7d, weekend)." % IMPR_TARGET)
+    gate = all((not res["windows"][k].get("insufficient")) and res["windows"][k]["B_meets"]
+               for k, _ in order)
+    deltas = []
+    for key, lab in order:
+        w = res["windows"][key]
+        if not w.get("insufficient"):
+            deltas.append(f"{lab}: B {w['B_impr']:+.1f}% vs v1 {w['v1_impr']:+.1f}%")
+    print("  " + " | ".join(deltas))
+    print(f"  WERDYKT BRAMKI: {'GO (≥%g%% w każdym oknie)' % IMPR_TARGET if gate else 'NO-GO (poniżej progu w ≥1 oknie)'}")
+    print("=" * 84)
+    return res
+
+
 if __name__ == "__main__":
-    print_report(run())
+    import argparse
+    ap = argparse.ArgumentParser(description="ETA R3 — porównanie wariantów / forward-walidacja")
+    ap.add_argument("--forward", action="store_true",
+                    help="forward-okna 7d/14d/weekend na PEŁNYM held-out (recompute v1 vs B)")
+    ap.add_argument("--min-n", type=int, default=10)
+    a = ap.parse_args()
+    if a.forward:
+        print_forward(forward_windows(min_n=a.min_n))
+    else:
+        print_report(run())
