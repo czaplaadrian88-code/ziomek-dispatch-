@@ -1,0 +1,408 @@
+{
+  "generated_at": "2026-06-20T09:47:21.609627+00:00",
+  "peak_constants_match": true,
+  "derived_feature_checks": [
+    {
+      "feature": "bag_size_category",
+      "rows": [
+        {
+          "input": null,
+          "prod": "0",
+          "train": "unknown",
+          "match": false
+        },
+        {
+          "input": "nan",
+          "prod": "0",
+          "train": "unknown",
+          "match": false
+        },
+        {
+          "input": 0,
+          "prod": "0",
+          "train": "0",
+          "match": true
+        },
+        {
+          "input": 1,
+          "prod": "1",
+          "train": "1",
+          "match": true
+        },
+        {
+          "input": 2,
+          "prod": "2",
+          "train": "2",
+          "match": true
+        },
+        {
+          "input": 3,
+          "prod": "3+",
+          "train": "3+",
+          "match": true
+        },
+        {
+          "input": 4,
+          "prod": "3+",
+          "train": "3+",
+          "match": true
+        },
+        {
+          "input": 7,
+          "prod": "3+",
+          "train": "3+",
+          "match": true
+        },
+        {
+          "input": 11,
+          "prod": "3+",
+          "train": "3+",
+          "match": true
+        }
+      ],
+      "mismatches": [
+        {
+          "input": null,
+          "prod": "0",
+          "train": "unknown"
+        },
+        {
+          "input": "nan",
+          "prod": "0",
+          "train": "unknown"
+        }
+      ]
+    },
+    {
+      "feature": "idle_category",
+      "rows": [
+        {
+          "input": null,
+          "prod": "unknown",
+          "train": "unknown",
+          "match": true
+        },
+        {
+          "input": 0,
+          "prod": "fresh",
+          "train": "fresh",
+          "match": true
+        },
+        {
+          "input": 4.9,
+          "prod": "fresh",
+          "train": "fresh",
+          "match": true
+        },
+        {
+          "input": 5,
+          "prod": "medium",
+          "train": "medium",
+          "match": true
+        },
+        {
+          "input": 14.9,
+          "prod": "medium",
+          "train": "medium",
+          "match": true
+        },
+        {
+          "input": 15,
+          "prod": "stale",
+          "train": "stale",
+          "match": true
+        },
+        {
+          "input": 29.9,
+          "prod": "stale",
+          "train": "stale",
+          "match": true
+        },
+        {
+          "input": 30,
+          "prod": "cold",
+          "train": "cold",
+          "match": true
+        },
+        {
+          "input": 100,
+          "prod": "cold",
+          "train": "cold",
+          "match": true
+        }
+      ],
+      "mismatches": []
+    },
+    {
+      "feature": "idle_min_capped",
+      "rows": [
+        {
+          "input": null,
+          "prod": -1,
+          "train": null,
+          "match": false
+        },
+        {
+          "input": 0,
+          "prod": 0,
+          "train": 0,
+          "match": true
+        },
+        {
+          "input": 15,
+          "prod": 15,
+          "train": 15,
+          "match": true
+        },
+        {
+          "input": 29,
+          "prod": 29,
+          "train": 29,
+          "match": true
+        },
+        {
+          "input": 30,
+          "prod": 30,
+          "train": 30,
+          "match": true
+        },
+        {
+          "input": 45,
+          "prod": 30,
+          "train": 30,
+          "match": true
+        },
+        {
+          "input": 999,
+          "prod": 30,
+          "train": 30,
+          "match": true
+        }
+      ],
+      "mismatches": [
+        {
+          "input": null,
+          "prod": -1,
+          "train": null
+        }
+      ]
+    },
+    {
+      "feature": "district_adjacent",
+      "rows": [
+        {
+          "input": "Centrum|Centrum",
+          "prod": true,
+          "train": true,
+          "match": true
+        },
+        {
+          "input": "Centrum|Bojary",
+          "prod": true,
+          "train": true,
+          "match": true
+        },
+        {
+          "input": "Centrum|Unknown",
+          "prod": false,
+          "train": false,
+          "match": true
+        },
+        {
+          "input": "None|Centrum",
+          "prod": false,
+          "train": false,
+          "match": true
+        },
+        {
+          "input": "Unknown|Unknown",
+          "prod": false,
+          "train": false,
+          "match": true
+        },
+        {
+          "input": "Bema|Centrum",
+          "prod": false,
+          "train": false,
+          "match": true
+        },
+        {
+          "input": "Antoniuk|Wygoda",
+          "prod": false,
+          "train": false,
+          "match": true
+        },
+        {
+          "input": "Centrum|None",
+          "prod": false,
+          "train": false,
+          "match": true
+        }
+      ],
+      "mismatches": []
+    },
+    {
+      "feature": "time_features(season/peaks/weekend/minutes)",
+      "rows": [
+        {
+          "ts": "2026-01-15T12:30:00",
+          "prod": {
+            "season": "winter",
+            "is_lunch_peak": true,
+            "is_dinner_peak": false,
+            "is_weekend": false,
+            "minutes_since_midnight_warsaw": 750
+          },
+          "train": {
+            "season": "winter",
+            "is_lunch_peak": true,
+            "is_dinner_peak": false,
+            "is_weekend": false,
+            "minutes_since_midnight_warsaw": 750
+          },
+          "match": true
+        },
+        {
+          "ts": "2026-04-20T18:05:00",
+          "prod": {
+            "season": "spring",
+            "is_lunch_peak": false,
+            "is_dinner_peak": true,
+            "is_weekend": false,
+            "minutes_since_midnight_warsaw": 1085
+          },
+          "train": {
+            "season": "spring",
+            "is_lunch_peak": false,
+            "is_dinner_peak": true,
+            "is_weekend": false,
+            "minutes_since_midnight_warsaw": 1085
+          },
+          "match": true
+        },
+        {
+          "ts": "2026-07-04T09:00:00",
+          "prod": {
+            "season": "summer",
+            "is_lunch_peak": false,
+            "is_dinner_peak": false,
+            "is_weekend": true,
+            "minutes_since_midnight_warsaw": 540
+          },
+          "train": {
+            "season": "summer",
+            "is_lunch_peak": false,
+            "is_dinner_peak": false,
+            "is_weekend": true,
+            "minutes_since_midnight_warsaw": 540
+          },
+          "match": true
+        },
+        {
+          "ts": "2026-10-11T22:15:00",
+          "prod": {
+            "season": "autumn",
+            "is_lunch_peak": false,
+            "is_dinner_peak": false,
+            "is_weekend": true,
+            "minutes_since_midnight_warsaw": 1335
+          },
+          "train": {
+            "season": "autumn",
+            "is_lunch_peak": false,
+            "is_dinner_peak": false,
+            "is_weekend": true,
+            "minutes_since_midnight_warsaw": 1335
+          },
+          "match": true
+        },
+        {
+          "ts": "2026-03-21T13:59:00",
+          "prod": {
+            "season": "spring",
+            "is_lunch_peak": true,
+            "is_dinner_peak": false,
+            "is_weekend": true,
+            "minutes_since_midnight_warsaw": 839
+          },
+          "train": {
+            "season": "spring",
+            "is_lunch_peak": true,
+            "is_dinner_peak": false,
+            "is_weekend": true,
+            "minutes_since_midnight_warsaw": 839
+          },
+          "match": true
+        }
+      ],
+      "mismatches": []
+    }
+  ],
+  "derived_total_mismatches": 3,
+  "derived_features_with_skew": [
+    "bag_size_category",
+    "idle_min_capped"
+  ],
+  "level_mapping_analysis": {
+    "feature": "level (A/B)",
+    "SKEW_DETECTED": true,
+    "dataset_definition": {
+      "A": "bag_size > 0 (kurier z workiem)",
+      "B": "bag_size == 0 AND zlecenie submitted w [T0-30min, T0+45min] (świeżo/wnet aktywny, pusty worek)",
+      "note": "dataset A/B = oś OBCIĄŻENIA WORKA"
+    },
+    "production_definition": {
+      "A": "last_pos_lat is not None (ma GPS)",
+      "B": "last_pos_lat is None (brak GPS)",
+      "note": "produkcja A/B = oś OBECNOŚCI GPS (_level_from_metrics); Candidate nie ma .level"
+    },
+    "prod_eval_cases": [
+      {
+        "bag_size": 0,
+        "has_gps": false,
+        "prod_level": "B"
+      },
+      {
+        "bag_size": 0,
+        "has_gps": true,
+        "prod_level": "A"
+      },
+      {
+        "bag_size": 2,
+        "has_gps": false,
+        "prod_level": "B"
+      },
+      {
+        "bag_size": 3,
+        "has_gps": true,
+        "prod_level": "A"
+      }
+    ],
+    "consequence": "Model trenowany na A/B=oś-worka. Żywa ścieżka podaje A/B=oś-GPS. To RÓŻNE rozkłady tej samej kolumny → cichy skew w cesze `level`. (encoder v1.1 zna {A,B,UNK}, więc literalnie się zakoduje, ale ZNACZENIE jest inne.)",
+    "router_implication": "Router 2-modelowy MUSI wybierać reżim solo/bundle po STANIE WORKA (bag_size==0 & drops==0 & pickup==0), a NIE po feature `level`. Stan worka jest dostępny live (bag_size_before + bag_context) i pokrywa się 1:1 z definicją datasetu. Wtedy selekcja reżimu jest wolna od skew GPS-vs-worek."
+  },
+  "continuous_feature_skews": [
+    {
+      "feature": "delta_dist_km",
+      "SKEW_DETECTED": true,
+      "training_definition": "winner_road_km − loser_road_km (sygnał PAROWY winner-vs-loser); dataset match 100% (n=44063)",
+      "production_definition": "candidate_road_km − mean(pool road km) (ml_inference.py:452, sygnał kandydat-vs-średnia-puli)",
+      "severity": "WYSOKA — to inny rozkład cechy niosącej sygnał; model widział parową różnicę, w prod dostaje odchyłkę od średniej puli",
+      "fix": "policzyć delta_dist_km parowo też w serwowaniu (per-para winner-loser) ALBO przetrenować model na definicji pool-mean (spójność z produkcją)"
+    },
+    {
+      "feature": "dist_to_pickup_haversine_km",
+      "SKEW_DETECTED": true,
+      "training_definition": "surowy haversine_km BEZ współczynnika (feature_engineering.py:431); próbka 4.762",
+      "production_definition": "haversine × 1.42 (HAVERSINE_FACTOR, ml_inference.py:334); ta sama geometria ~6.76",
+      "severity": "ŚREDNIA — skala ~1.42× na cesze; drzewa LGBM są skala-monotoniczne, ale progi splitów uczone na surowych wartościach trafiają w złe miejsce",
+      "fix": "w serwowaniu podać surowy haversine (bez ×1.42) dla tej kolumny, lub przetrenować z ×1.42 (spójność)"
+    }
+  ],
+  "summary": {
+    "categorical_derived_aligned_on_valid_inputs": "TAK — bag_size_category/idle_category/district_adjacent/time_features zgodne na poprawnych wejściach; różnice tylko na None/NaN (absorbowane przez fillna(-1))",
+    "level_skew": "TAK (semantyczny) — oś-worka (trening) vs oś-GPS (produkcja)",
+    "continuous_skews": "delta_dist_km (parowy vs pool-mean) + haversine (×1.42 w prod, surowy w treningu) — DWA realne skew do naprawy przed primary",
+    "router_safe_path": "wybór reżimu solo/bundle po stanie worka (bag_size/drops/pickup), NIE po feature level"
+  }
+}

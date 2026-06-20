@@ -394,5 +394,108 @@ class TestArtifactsExistAndServingParity:
         assert new_solo - old_solo > 0.20, "dwa modele muszą wyraźnie poprawić solo (>20pp)"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Warstwa C — parity ŻYWEJ ścieżki ml_inference.py vs trening (blocker #2)
+# Wymaga importu PRODUKCYJNEGO modułu (dispatch_v2.ml_inference) → importorskip.
+# ─────────────────────────────────────────────────────────────────────────────
+SCRIPTS_DIR = "/root/.openclaw/workspace/scripts"
+if SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, SCRIPTS_DIR)
+
+
+def _prod_helpers():
+    """Importuj produkcyjne helpery; skip gdy moduł nie do zaimportowania tu."""
+    return pytest.importorskip(
+        "dispatch_v2.ml_inference",
+        reason="dispatch_v2.ml_inference niedostępny w tym interpreterze (wymaga dispatch_v2.common)",
+    )
+
+
+class TestProductionInferencePathParity:
+    """Helpery z ml_inference.py == transformacje treningowe na POPRAWNYCH wejściach.
+
+    Te testy KODYFIKUJĄ ustalenia parity:
+      - kategoryczne pochodne zgodne na poprawnych wejściach (różnice tylko None/NaN),
+      - level A/B w produkcji = oś-GPS (a NIE tier gold/std) — kontrakt _level_from_metrics,
+      - stałe peak identyczne.
+    """
+
+    def test_bag_size_category_aligned_on_valid_inputs(self):
+        prod = _prod_helpers()
+        for v in [0, 1, 2, 3, 4, 11]:
+            assert prod._bag_size_category(v) == ref_bag_size_category(v), f"bag_size_category({v}) skew"
+
+    def test_idle_category_aligned_everywhere(self):
+        prod = _prod_helpers()
+        for v in [None, 0, 4.9, 5, 14.9, 15, 29.9, 30, 100]:
+            assert prod._idle_category(v) == ref_idle_category(v), f"idle_category({v}) skew"
+
+    def test_peak_constants_identical(self):
+        prod = _prod_helpers()
+        ML_PREP_PATH = str(MODELS_TWOMODEL.parent)
+        if ML_PREP_PATH not in sys.path:
+            sys.path.insert(0, ML_PREP_PATH)
+        assert set(prod.PEAK_LUNCH) == {11, 12, 13}
+        assert set(prod.PEAK_DINNER) == {17, 18, 19}
+
+    def test_level_from_metrics_is_gps_axis_not_tier(self):
+        """KONTRAKT: produkcyjny level = B gdy brak GPS, A gdy GPS. NIE gold/std/...
+
+        To dokumentuje skew: dataset level=oś-worka, produkcja level=oś-GPS.
+        """
+        prod = _prod_helpers()
+
+        class _C:
+            def __init__(self, bag_size, last_pos_lat):
+                self.bag_size = bag_size
+                self.last_pos_lat = last_pos_lat
+
+        # brak GPS -> "B" niezależnie od worka
+        assert prod._level_from_metrics(_C(0, None)) == "B"
+        assert prod._level_from_metrics(_C(5, None)) == "B"
+        # GPS obecny -> "A" niezależnie od worka
+        assert prod._level_from_metrics(_C(0, 53.13)) == "A"
+        assert prod._level_from_metrics(_C(3, 53.13)) == "A"
+        # NIGDY nie zwraca tieru gold/std
+        assert prod._level_from_metrics(_C(2, 53.13)) in ("A", "B")
+
+    def test_router_must_key_on_bag_state_not_level(self):
+        """Router 2-modelowy: reżim solo/bundle MUSI iść po stanie worka.
+
+        Dataset solo == winner_level 'B' == pusty worek. Produkcyjny level 'B' == brak GPS.
+        Gdyby router używał feature `level`, w prod przypisałby reżim po GPS (źle).
+        Dlatego selektor reżimu = bag_size/drops/pickup (dostępne live, spójne z datasetem).
+        """
+        # czysto kontraktowy: solo_mask keyuje wyłącznie po polach worka
+        df = pd.DataFrame({
+            "winner_bag_size": [0, 0, 2],
+            "winner_bag_drops_pending": [0, 0, 0],
+            "winner_bag_pickup_pending": [0, 0, 0],
+            # GPS-y celowo różne — NIE wpływają na maskę
+            "winner_last_pos_lat": [None, 53.1, None],
+        })
+        mask = tmc.solo_mask(df)
+        assert mask.tolist() == [True, True, False], "maska reżimu nie może zależeć od GPS/level"
+
+
+@pytestmark_heavy
+class TestParityReportArtifact:
+    """Raport parity ml_inference istnieje i flaguje udokumentowane skew."""
+
+    def test_parity_report_present_and_flags_skews(self):
+        rp = MODELS_TWOMODEL / "parity_ml_inference_report.json"
+        if not rp.exists():
+            pytest.skip("Brak parity_ml_inference_report.json — uruchom parity_ml_inference.py")
+        rep = json.load(open(rp))
+        # peak constants match
+        assert rep["peak_constants_match"] is True
+        # level skew udokumentowany
+        assert rep["level_mapping_analysis"]["SKEW_DETECTED"] is True
+        # dwa skew ciągłe udokumentowane
+        cont = {c["feature"] for c in rep["continuous_feature_skews"]}
+        assert "delta_dist_km" in cont
+        assert "dist_to_pickup_haversine_km" in cont
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
