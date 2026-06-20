@@ -31,6 +31,7 @@ from dispatch_v2.common import (
 from dispatch_v2.osrm_client import haversine
 from dispatch_v2.bag_state import build_courier_bag_state, CourierBagState
 from dispatch_v2.fleet_context import build_fleet_context, FleetContext
+from dispatch_v2.pipeline_geometry import _point_to_segment_km, _min_dist_to_route_km  # B6: czysta geometria wydzielona
 import json
 import math
 import os
@@ -2070,35 +2071,9 @@ def _demote_blind_empty(feasible: list, order_id=None) -> list:
     return reordered
 
 
-def _point_to_segment_km(p, a, b) -> float:
-    """Najkrótsza odległość punktu p od odcinka [a, b] w km.
-    Equirectangular projection — wystarczająca dla skali Białegostoku (<30 km)."""
-    lat0 = (a[0] + b[0] + p[0]) / 3.0
-    coslat = math.cos(math.radians(lat0))
-    def to_xy(pt):
-        return (pt[1] * coslat * 111.32, pt[0] * 111.32)
-    ax, ay = to_xy(a)
-    bx, by = to_xy(b)
-    px, py = to_xy(p)
-    dx, dy = bx - ax, by - ay
-    if dx == 0 and dy == 0:
-        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
-    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
-    t = max(0.0, min(1.0, t))
-    proj_x = ax + t * dx
-    proj_y = ay + t * dy
-    return ((px - proj_x) ** 2 + (py - proj_y) ** 2) ** 0.5
-
-
-def _min_dist_to_route_km(point, courier_pos, bag_dropoffs) -> Optional[float]:
-    """Min dystans od punktu do polyline kurier→bag_dropoff_1→bag_dropoff_2...
-    None gdy bag pusty lub brak coords."""
-    if not bag_dropoffs:
-        return None
-    nodes = [courier_pos] + [d for d in bag_dropoffs if d]
-    if len(nodes) < 2:
-        return None
-    return min(_point_to_segment_km(point, nodes[i], nodes[i+1]) for i in range(len(nodes)-1))
+# Czysta geometria trasy (point→segment, min→route) → pipeline_geometry.py
+# (B6 2026-06-20, zaimportowane wyżej). Wywołanie w _assess_order_impl nietknięte,
+# zachowanie identyczne (test_pipeline_geometry + pełna suita = bramka).
 
 
 # SCALE-01: kanon = common.EARLY_BIRD_THRESHOLD_MIN (env-default 60). Stała tu
