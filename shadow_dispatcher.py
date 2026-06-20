@@ -426,6 +426,9 @@ def _serialize_candidate(c) -> dict:
         "r04": _r04_field_for_cid(str(m.get("courier_id") or "")),
         # V3.28 Faza 6 LGBM shadow (LOCATION A) — parallel BC ranker prediction.
         "lgbm_shadow": m.get("lgbm_shadow"),
+        # A2 dwumodel shadow (2026-06-20): ranking solo/bundle + agreement_with_primary
+        # (LOCATION B przez _propagate na out["best"]). None gdy ENABLE_LGBM_TWOMODEL_SHADOW OFF.
+        "lgbm_twomodel_shadow": m.get("lgbm_twomodel_shadow"),
         # V3.19g1: czas_kuriera change detection + kid diagnostic (LOCATION A).
         "v319g_ck_changed": m.get("v319g_ck_changed"),
         "v319g_ck_old": m.get("v319g_ck_old"),
@@ -714,6 +717,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r04": _r04_field_for_cid(str(best_m.get("courier_id") or "")),
             # V3.28 Faza 6 LGBM shadow (LOCATION B) — best courier z metrics.
             "lgbm_shadow": best_m.get("lgbm_shadow"),
+            # A2 dwumodel shadow (2026-06-20, LOCATION B) — solo/bundle ranking + agreement.
+            "lgbm_twomodel_shadow": best_m.get("lgbm_twomodel_shadow"),
             # V3.19g1: czas_kuriera change detection + kid diagnostic (LOCATION B).
             "v319g_ck_changed": best_m.get("v319g_ck_changed"),
             "v319g_ck_old": best_m.get("v319g_ck_old"),

@@ -5611,6 +5611,45 @@ def _assess_order_impl(
                     f"LGBM_SHADOW oid={order_id} winner_lgbm=None winner_current={top[0].courier_id if top else None} "
                     f"agreement=None fallback=exception_in_pipeline latency_ms=0.0 pool_size=0 model_version=unknown"
                 )
+
+        # A2 DWUMODEL SHADOW (2026-06-20): solo/bundle ranking OBOK selekcji reguł — OBSERWACYJNY.
+        # Liczone TU (pozycje kandydatów REALNE z feasible/pickup_coords, nie z logu) → rozwiązuje
+        # blocker lat/lon online-parytetu. Router per-kandydat po STANIE WORKA (3 skew naprawione,
+        # parity 0/58385). ZERO wpływu na werdykt/selekcję — wynik tylko do top[0].metrics →
+        # shadow log. Flaga hot-reload default OFF. NIGDY raise (predict_two_model_for_decision
+        # fail-soft + ten wrapper try/except). Self-contained _decision_ctx (niezależny od bloku
+        # ENABLE_LGBM_SHADOW powyżej).
+        if C.flag("ENABLE_LGBM_TWOMODEL_SHADOW", False) and top:
+            try:
+                from dispatch_v2.ml_inference import predict_two_model_for_decision
+                _tm_ctx = {
+                    "decision_ts": now,
+                    "order_id": order_id,
+                    "pickup_lat": pickup_coords[0] if pickup_coords and pickup_coords != (0.0, 0.0) else None,
+                    "pickup_lon": pickup_coords[1] if pickup_coords and pickup_coords != (0.0, 0.0) else None,
+                    "pickup_district": None,
+                    "drop_district": None,
+                }
+                _tm_result = predict_two_model_for_decision(_tm_ctx, feasible)
+                if _tm_result is not None:
+                    _tm_dict = _tm_result.to_dict()
+                    _tm_dict["agreement_with_primary"] = (
+                        str(_tm_result.winner_cid) == str(top[0].courier_id)
+                        if _tm_result.winner_cid else None
+                    )
+                    if hasattr(top[0], "metrics") and isinstance(top[0].metrics, dict):
+                        top[0].metrics["lgbm_twomodel_shadow"] = _tm_dict
+                    log.info(
+                        f"LGBM_TWOMODEL_SHADOW oid={order_id} "
+                        f"winner_tm={_tm_result.winner_cid} winner_current={top[0].courier_id} "
+                        f"agreement={_tm_dict['agreement_with_primary']} "
+                        f"regimes={_tm_result.regime_counts} "
+                        f"fallback={_tm_result.fallback_reason or 'NONE'} "
+                        f"latency_ms={_tm_result.latency_ms} scored={_tm_result.n_candidates_scored}"
+                    )
+            except Exception as _tm_e:
+                log.error(f"LGBM twomodel shadow fail order={order_id}: {_tm_e}", exc_info=True)
+
         # V3.28 P3 (C) — min latency gate KOORD escalate (Adrian doktryna 2026-05-10).
         # Gdy panel_packs_cache jest stale (>60s) AND >=2 candidates mają state-vs-panel
         # divergence (bag=0 w state ale signal>0 w panel) → state_likely_stale escalate

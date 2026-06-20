@@ -835,14 +835,19 @@ def get_twomodel_inferer() -> "LGBMTwoModelInferer":
 def predict_two_model_for_decision(
     decision_ctx: Dict[str, Any], candidates: List[Any]
 ) -> Optional[TwoModelResult]:
-    """Flag-gated entry. Zwraca TwoModelResult gdy ENABLE_LGBM_PRIMARY, inaczej None.
+    """Flag-gated entry. Zwraca TwoModelResult gdy ENABLE_LGBM_PRIMARY LUB
+    ENABLE_LGBM_TWOMODEL_SHADOW, inaczej None.
 
-    Gdy flaga OFF (default) → None, ZERO obliczeń dwumodelu, zachowanie 1:1 dzisiejsze.
+    SHADOW (2026-06-20): liczenie dwumodelu OBOK selekcji reguł, wynik tylko do
+    metrics/logu (NIE konsumowany przez werdykt — arbitraż solo↔bundle nierozwiązany,
+    patrz predict_for_decision §OGRANICZENIE). Oba tryby = obecnie logging-only;
+    różnica semantyczna pojawi się dopiero gdy selekcja zacznie konsumować winner_cid.
+    Gdy obie flagi OFF (default) → None, ZERO obliczeń, zachowanie 1:1 dzisiejsze.
     NIGDY raise (defense-in-depth jak reszta ml_inference).
     """
     try:
         from dispatch_v2.common import flag
-        if not flag("ENABLE_LGBM_PRIMARY", False):
+        if not (flag("ENABLE_LGBM_PRIMARY", False) or flag("ENABLE_LGBM_TWOMODEL_SHADOW", False)):
             return None
     except Exception:
         return None
