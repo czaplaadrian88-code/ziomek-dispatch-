@@ -1,0 +1,294 @@
+{
+  "generated_at": "2026-06-20T17:02:22.024346+00:00",
+  "forward_days": 14,
+  "cutoff_date": "2026-04-07",
+  "calib_cut_date": "2026-03-23",
+  "seed": 42,
+  "n_pairs": {
+    "core_train": 352575,
+    "calib": 20289,
+    "forward": 26497
+  },
+  "n_decisions": {
+    "forward": 3245,
+    "calib": 2708,
+    "subset": {
+      "ALL": 3245,
+      "MIXED": 1448,
+      "PURE_SOLO": 11,
+      "PURE_BUNDLE": 1786
+    }
+  },
+  "offset_delta_fitted_on_calib_mixed": -0.0796,
+  "zscore_stats_calib": {
+    "solo_mean": -0.6365,
+    "solo_std": 0.292,
+    "bundle_mean": -0.1626,
+    "bundle_std": 0.5821
+  },
+  "variant_definitions": {
+    "B1": "solo-first rule (argmax solo wśród empty, else argmax bundle) — obecny naiwny merge",
+    "B2": "clean-unified (argmax unified po całej puli)",
+    "B4": "nearest-dist floor (rank_by_dist==1 / min dist)",
+    "V0": "raw regime_score argmax (bez kalibracji)",
+    "V1": "zscore-standardized regime_score (mean/std z calib)",
+    "V2": "offset δ (bundle+δ), δ dobrany na calib MIXED",
+    "V3": "Pwin calibration (isotonic per-model raw_score→P(label==1) z calib)",
+    "V4": "stacking meta-LGBMRanker na calib (per-candidate features)"
+  },
+  "top1_by_variant_subset": {
+    "B1": {
+      "ALL": {
+        "top1": 0.1963,
+        "n": 3245
+      },
+      "MIXED": {
+        "top1": 0.1789,
+        "n": 1448
+      },
+      "PURE_SOLO": {
+        "top1": 1.0,
+        "n": 11
+      },
+      "PURE_BUNDLE": {
+        "top1": 0.2055,
+        "n": 1786
+      }
+    },
+    "B2": {
+      "ALL": {
+        "top1": 0.2203,
+        "n": 3245
+      },
+      "MIXED": {
+        "top1": 0.2445,
+        "n": 1448
+      },
+      "PURE_SOLO": {
+        "top1": 1.0,
+        "n": 11
+      },
+      "PURE_BUNDLE": {
+        "top1": 0.196,
+        "n": 1786
+      }
+    },
+    "B4": {
+      "ALL": {
+        "top1": 0.1544,
+        "n": 3245
+      },
+      "MIXED": {
+        "top1": 0.1733,
+        "n": 1448
+      },
+      "PURE_SOLO": {
+        "top1": 0.9091,
+        "n": 11
+      },
+      "PURE_BUNDLE": {
+        "top1": 0.1344,
+        "n": 1786
+      }
+    },
+    "V0": {
+      "ALL": {
+        "top1": 0.22,
+        "n": 3245
+      },
+      "MIXED": {
+        "top1": 0.232,
+        "n": 1448
+      },
+      "PURE_SOLO": {
+        "top1": 1.0,
+        "n": 11
+      },
+      "PURE_BUNDLE": {
+        "top1": 0.2055,
+        "n": 1786
+      }
+    },
+    "V1": {
+      "ALL": {
+        "top1": 0.1963,
+        "n": 3245
+      },
+      "MIXED": {
+        "top1": 0.1789,
+        "n": 1448
+      },
+      "PURE_SOLO": {
+        "top1": 1.0,
+        "n": 11
+      },
+      "PURE_BUNDLE": {
+        "top1": 0.2055,
+        "n": 1786
+      }
+    },
+    "V2": {
+      "ALL": {
+        "top1": 0.2188,
+        "n": 3245
+      },
+      "MIXED": {
+        "top1": 0.2293,
+        "n": 1448
+      },
+      "PURE_SOLO": {
+        "top1": 1.0,
+        "n": 11
+      },
+      "PURE_BUNDLE": {
+        "top1": 0.2055,
+        "n": 1786
+      }
+    },
+    "V3": {
+      "ALL": {
+        "top1": 0.2826,
+        "n": 3245
+      },
+      "MIXED": {
+        "top1": 0.2894,
+        "n": 1448
+      },
+      "PURE_SOLO": {
+        "top1": 1.0,
+        "n": 11
+      },
+      "PURE_BUNDLE": {
+        "top1": 0.2727,
+        "n": 1786
+      }
+    },
+    "V4": {
+      "ALL": {
+        "top1": 0.2089,
+        "n": 3245
+      },
+      "MIXED": {
+        "top1": 0.2182,
+        "n": 1448
+      },
+      "PURE_SOLO": {
+        "top1": 1.0,
+        "n": 11
+      },
+      "PURE_BUNDLE": {
+        "top1": 0.1965,
+        "n": 1786
+      }
+    }
+  },
+  "per_day_mixed_robustness": [
+    {
+      "date": "2026-04-07",
+      "n_mixed": 103,
+      "B1": 0.1359,
+      "B2": 0.301,
+      "V3": 0.3301
+    },
+    {
+      "date": "2026-04-08",
+      "n_mixed": 101,
+      "B1": 0.2178,
+      "B2": 0.2178,
+      "V3": 0.2673
+    },
+    {
+      "date": "2026-04-09",
+      "n_mixed": 95,
+      "B1": 0.2,
+      "B2": 0.3263,
+      "V3": 0.3579
+    },
+    {
+      "date": "2026-04-10",
+      "n_mixed": 112,
+      "B1": 0.1161,
+      "B2": 0.2589,
+      "V3": 0.2768
+    },
+    {
+      "date": "2026-04-11",
+      "n_mixed": 116,
+      "B1": 0.1724,
+      "B2": 0.2155,
+      "V3": 0.2759
+    },
+    {
+      "date": "2026-04-12",
+      "n_mixed": 136,
+      "B1": 0.2059,
+      "B2": 0.1618,
+      "V3": 0.2206
+    },
+    {
+      "date": "2026-04-13",
+      "n_mixed": 74,
+      "B1": 0.3108,
+      "B2": 0.3784,
+      "V3": 0.4189
+    },
+    {
+      "date": "2026-04-14",
+      "n_mixed": 77,
+      "B1": 0.1688,
+      "B2": 0.1948,
+      "V3": 0.2727
+    },
+    {
+      "date": "2026-04-15",
+      "n_mixed": 78,
+      "B1": 0.1282,
+      "B2": 0.2179,
+      "V3": 0.3077
+    },
+    {
+      "date": "2026-04-16",
+      "n_mixed": 112,
+      "B1": 0.1607,
+      "B2": 0.2946,
+      "V3": 0.2857
+    },
+    {
+      "date": "2026-04-17",
+      "n_mixed": 123,
+      "B1": 0.1545,
+      "B2": 0.2846,
+      "V3": 0.3252
+    },
+    {
+      "date": "2026-04-18",
+      "n_mixed": 132,
+      "B1": 0.1742,
+      "B2": 0.197,
+      "V3": 0.2803
+    },
+    {
+      "date": "2026-04-19",
+      "n_mixed": 99,
+      "B1": 0.1919,
+      "B2": 0.2121,
+      "V3": 0.2929
+    },
+    {
+      "date": "2026-04-20",
+      "n_mixed": 90,
+      "B1": 0.2,
+      "B2": 0.2111,
+      "V3": 0.1889
+    }
+  ],
+  "best_arbitrage_variant": "V3",
+  "arbitrage_beats_both_baselines_on_mixed": [
+    {
+      "variant": "V3",
+      "mixed_top1": 0.2894
+    }
+  ],
+  "robust_across_days_n5": false,
+  "verdict": "V3 bije OBA baseline'y na MIXED: 0.2894 vs B1=0.1789/B2=0.2445 (margines +0.0449 nad lepszym baselinem); robust-across-days(n>=5)=False"
+}
