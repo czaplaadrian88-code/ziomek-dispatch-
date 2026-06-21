@@ -1,0 +1,12 @@
+[Unit]
+Description=HA-lite backup freshness+integrity sentinel (audyt SaaS 2026-06-21)
+Documentation=file:/root/HA_LITE_RUNBOOK_2026-06-21.md
+# Backstop: gdy skrypt sam nie zdoła zaalarmować (exit 1) → generyczny Telegram.
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python /root/.openclaw/workspace/scripts/backup_sentinel.py
+Nice=10
+TimeoutStartSec=1200

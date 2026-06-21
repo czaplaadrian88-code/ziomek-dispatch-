@@ -52,3 +52,7 @@ Pełny drill: `./restore_from_restic.sh --load-db nadajesz_dr_test` → sanity �
 - Backup: `/root/.openclaw/workspace/scripts/backup_restic.sh` (backup pre-zmian: `*.bak-pre-halite-2026-06-21`)
 - Restore/DR: `/root/.openclaw/workspace/scripts/restore_from_restic.sh`
 - Aktywacja PITR (okno nocne): `/root/.openclaw/workspace/scripts/activate_pitr.sh --yes-restart-now`
+- Strażnik backupu (świeżość+integralność): `/root/.openclaw/workspace/scripts/backup_sentinel.py` (timer `backup-sentinel.timer` codziennie 08:00 UTC; Telegram gdy dump/snapshot nieświeży >26h lub `restic check` fail; niedziela = integralność)
+
+## 7. Monitoring backupu (dodane 2026-06-21)
+OnFailure na serwisach backupu łapie tylko „serwis padł". **`backup-sentinel.timer` (08:00 UTC)** łapie ciche luki: timer nie odpalił / dump pusty / snapshot restic nieświeży / repo skorumpowane → Telegram (kanał admina). Cichy fail backupu był dotąd niewykrywalny (cron_health pusty dla restic, liveness-probe nie pokrywa backupów).

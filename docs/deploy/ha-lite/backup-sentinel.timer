@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily backup sentinel — 08:00 UTC (po nocnych dumpach 00:00/02:15 + restic 03:30)
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 UTC
+Persistent=true
+AccuracySec=2min
+
+[Install]
+WantedBy=timers.target
