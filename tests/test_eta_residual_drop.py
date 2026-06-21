@@ -83,10 +83,19 @@ def test_drop_flag_off_guarded_returns_none(monkeypatch):
     assert out == (None, None)
 
 
-def test_drop_flag_default_off_when_absent():
-    """Bez wpisu ENABLE_ETA_R3_DROP_SHADOW w flags.json (stan obecny) flaga = OFF."""
-    # czyta realny flags.json — wpis nie istnieje → False (fail-soft default)
+def test_drop_flag_default_off_when_absent(monkeypatch, tmp_path):
+    """Kontrakt fail-soft: gdy klucza ENABLE_ETA_R3_DROP_SHADOW NIE ma w pliku flag
+    → drop_shadow_enabled()==False. Hermetyczny: NIE zależy od żywego flags.json
+    (gdzie flaga bywa flipnięta ON w cieniu — wtedy stary wariant testu fałszywie
+    czerwienił). Sprawdzamy też ścieżkę present+true → True (kontrakt odczytu)."""
+    _absent = tmp_path / "flags_absent.json"
+    _absent.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(R, "_FLAGS_PATH", str(_absent))
     assert R.drop_shadow_enabled() is False
+    _on = tmp_path / "flags_on.json"
+    _on.write_text('{"ENABLE_ETA_R3_DROP_SHADOW": true}', encoding="utf-8")
+    monkeypatch.setattr(R, "_FLAGS_PATH", str(_on))
+    assert R.drop_shadow_enabled() is True
 
 
 # ───────────────────────── (4) FLAGA ON = liczy, v1 nietknięte ─────────────────────────

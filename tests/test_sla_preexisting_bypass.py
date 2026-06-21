@@ -37,33 +37,32 @@ except ImportError:  # standalone __main__ runner bez pytest
 
 if pytest is not None:
     @pytest.fixture(autouse=True)
-    def _force_obj_objective():
+    def _force_obj_objective(monkeypatch):
         """Wymuś OBJ-objective (span + R6 soft deadline) niezależnie od kolejności
-        importu i sposobu uruchomienia — lekcja #191.
+        importu/uruchomienia i izolacji flag w conftest — lekcja #191 (+#192).
 
-        `os.environ.setdefault` wyżej działa TYLKO gdy ten plik wyzwala pierwszy
-        import `common` (uruchomienie w izolacji / standalone). W pełnej suicie
-        lub pod `PYTHONPATH=scripts` `common` bywa już zaimportowany ze stałymi
-        OFF, a conftest `_isolate_flags_json` wycina te flagi z flags.json →
-        `decision_flag()` spada do stałej modułu. Ustawiamy ją wprost (i
-        przywracamy po teście), żeby plan TSP front-loadował picked_up order —
-        inaczej 474835 ląduje OSTATNI i test fałszywie czerwieni (carry ~82 min /
-        blocking zamiast pre-existing / MAYBE). Produkcja czyta flags.json (OBJ
-        ON) — ten fixture nie dotyka silnika, tylko warunki testu.
+        Produkcja ma w flags.json ENABLE_OBJ_SPAN_COST i ENABLE_OBJ_R6_SOFT_DEADLINE
+        = true (zweryfikowane 2026-06-21). conftest `_isolate_flags_json` wycina te
+        flagi ETAP4 z izolowanej kopii → `decision_flag()` spada na stałą modułu, a w
+        PEŁNEJ suicie stan stałej/cache bywał zanieczyszczony przez inny plik testów
+        (pass-solo / fail-w-suicie — to był ROOT CAUSE 'failu', NIE bug produkcji:
+        replay case'u Gabryś z OBJ ON daje MAYBE). Dlatego nakładamy OBJ=ON WPROST na
+        wynik `load_flags()` (decision_flag czyta to PRZED stałą modułu) i dodatkowo
+        ustawiamy stałe-współczynniki (czytane bez decision_flag). monkeypatch
+        auto-przywraca po teście. Silnik NIETKNIĘTY — to odtworzenie konfiguracji
+        produkcyjnej, nie zmiana zachowania.
         """
-        _saved = {k: getattr(C, k, None) for k in (
-            "ENABLE_OBJ_SPAN_COST", "OBJ_SPAN_COST_COEFF",
-            "ENABLE_OBJ_R6_SOFT_DEADLINE", "OBJ_R6_DEADLINE_PENALTY_COEFF",
-        )}
-        C.ENABLE_OBJ_SPAN_COST = True
-        C.OBJ_SPAN_COST_COEFF = 1.0
-        C.ENABLE_OBJ_R6_SOFT_DEADLINE = True
-        C.OBJ_R6_DEADLINE_PENALTY_COEFF = 100.0
-        try:
-            yield
-        finally:
-            for _k, _v in _saved.items():
-                setattr(C, _k, _v)
+        _orig_load = C.load_flags
+        monkeypatch.setattr(C, "load_flags", lambda: {
+            **_orig_load(),
+            "ENABLE_OBJ_SPAN_COST": True,
+            "ENABLE_OBJ_R6_SOFT_DEADLINE": True,
+        })
+        monkeypatch.setattr(C, "ENABLE_OBJ_SPAN_COST", True, raising=False)
+        monkeypatch.setattr(C, "OBJ_SPAN_COST_COEFF", 1.0, raising=False)
+        monkeypatch.setattr(C, "ENABLE_OBJ_R6_SOFT_DEADLINE", True, raising=False)
+        monkeypatch.setattr(C, "OBJ_R6_DEADLINE_PENALTY_COEFF", 100.0, raising=False)
+        yield
 
 
 def _dt(s):

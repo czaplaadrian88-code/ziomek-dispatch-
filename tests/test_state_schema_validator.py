@@ -95,14 +95,22 @@ def test_synthetic_drift_dict_of_entries_fails(tmp_path):
     assert victim_id in gt["missing_key_examples"].get(removed, [])
 
 
-@pytest.mark.skipif(
-    not (STATE_DIR / "panel_packs_cache.json").exists(),
-    reason="żywe pliki stanu niedostępne — brak czego skopiować",
-)
 def test_synthetic_drift_flat_object_fails(tmp_path):
-    """Usuń wymagany klucz TOP-LEVEL w płaskim wrapperze -> drift, exit 1."""
-    work = _copy_live_into(tmp_path / "state")
+    """Usuń wymagany klucz TOP-LEVEL w płaskim wrapperze -> drift, exit 1.
+
+    Hermetyczny (2026-06-21): buduje SYNTETYCZNY plik zgodny ze schematem zamiast
+    kopiować ŻYWY panel_packs_cache.json. Żywy plik jest przepisywany przez
+    dispatch-panel-watcher co ~minutę (atomic temp→rename) → wyścig odczyt/zapis w
+    trakcie ~95 s pełnej suity dawał INTERMITTENT fail (pass-solo / okazjonalnie
+    fail-w-suicie). Walidator i jego logika są poprawne — to był wyłącznie coupling
+    testu do współbieżnie mutowanego stanu produkcyjnego. Pozostałe pliki baseline
+    nieobecne w `work` → WARN (nie drift), więc jedyny drift = usunięty 'packs'."""
+    work = tmp_path / "state"
+    work.mkdir(parents=True)
     target = work / "panel_packs_cache.json"
+    # Zgodny ze schematem baseline (required_keys: ts/packs/tick/orders_in_panel).
+    conformant = {"ts": "2026-06-21T00:00:00Z", "packs": {}, "tick": 1, "orders_in_panel": 0}
+    target.write_text(json.dumps(conformant), encoding="utf-8")
 
     with open(target, "r", encoding="utf-8") as f:
         data = json.load(f)
