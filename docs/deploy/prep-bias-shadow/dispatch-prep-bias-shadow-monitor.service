@@ -1,0 +1,11 @@
+[Unit]
+Description=C2 prep-bias live-shadow monitor (read-only; flag ENABLE_PREP_BIAS_TABLE OFF; ACK Adrian 21.06)
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/prep_bias_shadow_monitor.py
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.prep_bias_shadow_monitor
+Nice=10
+TimeoutStartSec=600

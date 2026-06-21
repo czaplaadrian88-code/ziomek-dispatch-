@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily C2 prep-bias shadow monitor — 05:00 UTC (po dispatch-faza7-kpi backfill 04:00)
+
+[Timer]
+OnCalendar=*-*-* 05:00:00 UTC
+Persistent=true
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target
