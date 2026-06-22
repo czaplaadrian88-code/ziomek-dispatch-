@@ -1,0 +1,16 @@
+[Unit]
+Description=Ziomek reassignment-shadow REVIEW — jednorazowy przeglad kosztu+sygnalu forward-shadow przerzutow + raport Telegram (read-only, bramka flipu)
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/reassignment_shadow_review.py
+After=network.target
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.reassignment_shadow_review
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/reassignment_forward_shadow.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/reassignment_forward_shadow.log
+
+[Install]
+WantedBy=multi-user.target
