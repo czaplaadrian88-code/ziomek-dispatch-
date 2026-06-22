@@ -2042,10 +2042,35 @@ def _soon_free_probe(cid, bag_raw, now):
         return None
 
 
+def _no_gps_equal_on() -> bool:
+    """Adrian 2026-06-22: kurier bez GPS traktowany NA RÓWNI z GPS — żadnych kar/
+    demote. no_gps konkuruje czystym score (ma już neutralne km=śr.floty + ETA=
+    max(15,prep) z F1.7). flags.json hot → common (default False)."""
+    try:
+        return bool(C.flag("ENABLE_NO_GPS_EQUAL_TREATMENT",
+                           getattr(C, "ENABLE_NO_GPS_EQUAL_TREATMENT", False)))
+    except Exception:
+        return False
+
+
+def _is_demotable_blind_empty(c) -> bool:
+    """blind+empty kandydat KWALIFIKUJĄCY SIĘ do demote. Gdy równe traktowanie ON,
+    no_gps jest WYŁĄCZONY (nie demote — równy GPS). pre_shift/none zostają."""
+    if not _is_blind_empty_cand(c):
+        return False
+    if _no_gps_equal_on():
+        ps = c.metrics.get("pos_source") if (hasattr(c, "metrics") and c.metrics) else None
+        if ps == "no_gps":
+            return False
+    return True
+
+
 def _demote_blind_empty(feasible: list, order_id=None) -> list:
     """V3.16 demotion: jeśli top-1 jest blind+empty AND istnieje informed alt,
     reorder — informed first (stable), other middle, blind+empty last.
     Guard "all blind": jeśli żadnego informed → zostaw bez zmian.
+    NO_GPS RÓWNE TRAKTOWANIE (2026-06-22): gdy ENABLE_NO_GPS_EQUAL_TREATMENT ON,
+    no_gps jest wyłączony z demote (_is_demotable_blind_empty) → konkuruje jak GPS.
     """
     try:
         flag = bool(getattr(C, "ENABLE_NO_GPS_EMPTY_DEMOTE", True))
@@ -2053,15 +2078,15 @@ def _demote_blind_empty(feasible: list, order_id=None) -> list:
         flag = True
     if not flag or not feasible:
         return feasible
-    if not _is_blind_empty_cand(feasible[0]):
+    if not _is_demotable_blind_empty(feasible[0]):
         return feasible
     informed = [c for c in feasible if _is_informed_cand(c)]
     if not informed:
         return feasible  # all blind — nie degraduj (empty shift edge)
     original_top_cid = feasible[0].courier_id
     other = [c for c in feasible
-             if not _is_informed_cand(c) and not _is_blind_empty_cand(c)]
-    blind_empty = [c for c in feasible if _is_blind_empty_cand(c)]
+             if not _is_informed_cand(c) and not _is_demotable_blind_empty(c)]
+    blind_empty = [c for c in feasible if _is_demotable_blind_empty(c)]
     reordered = informed + other + blind_empty
     log.info(
         f"NO_GPS_DEMOTE order={order_id}: top cid={original_top_cid} "
