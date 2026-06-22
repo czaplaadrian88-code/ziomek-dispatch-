@@ -57,6 +57,10 @@ MAX_ORDERS_KEY = "REASSIGN_FWD_MAX_ORDERS"
 DEFAULT_MARGIN = 15.0          # pkt score — rząd wielkości jak AUTO_PROXIMITY min_score_margin
 DEFAULT_MAX_ORDERS = 60        # cap zleceń na sweep (latency-guard na 2-vCPU w peaku)
 KOORDYNATOR_CID = "26"         # virtual holding bucket (czasówki) — NIE przerzucamy
+FLAG_TG = "REASSIGN_FWD_TELEGRAM_LIVE"   # podgląd live na grupę ziomka (default OFF)
+NOTIFIED_PATH = "/root/.openclaw/workspace/dispatch_state/reassignment_shadow_notified.json"
+TG_CAP = 8                     # max pozycji w 1 komunikacie/sweep (anty-spam grupy)
+_SYNTH_POS = {"none", "pin", "pre_shift", ""}  # brak realnej lokalizacji → fikcja/grafik (oznacz „zgadnięta")
 
 # Pola czytane przez assess_order (zweryfikowane dispatch_pipeline.py:2881-3055).
 _EVENT_FIELDS = (
@@ -184,6 +188,48 @@ def _append_jsonl(rows: List[dict], path: str = OUT_JSONL) -> None:
         _log.warning(f"append_jsonl fail: {e}")
 
 
+def _load_notified() -> dict:
+    try:
+        with open(NOTIFIED_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def _save_notified(d: dict) -> None:
+    try:
+        fd, t = tempfile.mkstemp(dir=os.path.dirname(NOTIFIED_PATH))
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(t, NOTIFIED_PATH)
+    except Exception as e:
+        _log.warning(f"save_notified fail: {e}")
+
+
+def _notify_telegram(new_rows: list) -> int:
+    """JEDEN komunikat SHADOW per sweep na grupę ziomka (send_admin_alert →
+    chat_id=admin_id=-5149910559). Wyraźnie NIE-do-wykonania — to grupa operacyjna."""
+    if not new_rows:
+        return 0
+    lines = ["🔁 SHADOW przerzutów (PODGLĄD Ziomka — NIE wykonane, NIE przydzielaj ręcznie):"]
+    for r in new_rows[:TG_CAP]:
+        real = (r.get("a_pos_source") not in _SYNTH_POS) and (r.get("b_pos_source") not in _SYNTH_POS)
+        d = r.get("delta_score")
+        lines.append(f"• #{r['order_id']} {r.get('restaurant') or ''}: {r['holder_cid']}→{r['best_cid']} "
+                     f"(Δ{('+%.0f' % d) if d is not None else '?'} pkt, {'GPS' if real else 'poz.~zgadnięta'})")
+    extra = len(new_rows) - TG_CAP
+    if extra > 0:
+        lines.append(f"…+{extra} więcej w tym ticku")
+    try:
+        from dispatch_v2.telegram_utils import send_admin_alert
+        send_admin_alert("\n".join(lines), source="reassignment_fwd_live")
+        return min(len(new_rows), TG_CAP)
+    except Exception as e:  # noqa: BLE001 — notyfikacja nie może wywalić sweepu
+        _log.warning(f"reassign tg notify fail: {e}")
+        return 0
+
+
 def run_once(now: Optional[datetime] = None, max_orders: Optional[int] = None,
              margin: Optional[float] = None) -> dict:
     """Jeden sweep: czyta żywy stan, buduje dispatchable flotę, ocenia aktywne zlecenia,
@@ -228,10 +274,27 @@ def run_once(now: Optional[datetime] = None, max_orders: Optional[int] = None,
             n_would += 1
 
     _append_jsonl(rows)
+
+    # Live podgląd na grupę ziomka (flag OFF default): 1 komunikat/sweep, dedup per zlecenie.
+    tg_sent = 0
+    if C.flag(FLAG_TG, False):
+        notified = _load_notified()
+        new_rows = [r for r in rows if r.get("would_reassign")
+                    and notified.get(r["order_id"]) != r["best_cid"]]
+        if new_rows:
+            tg_sent = _notify_telegram(new_rows)
+        active_oids = {r["order_id"] for r in rows}
+        merged = {oid: bc for oid, bc in notified.items() if oid in active_oids}  # auto-clean
+        for r in rows:
+            if r.get("would_reassign"):
+                merged[r["order_id"]] = r["best_cid"]
+        _save_notified(merged)
+
     summary = {
         "active": len(active),
         "evaluated": len(rows),
         "would_reassign": n_would,
+        "tg_sent": tg_sent,
         "margin": margin,
         "duration_s": round(time.monotonic() - _t0, 2),
         "ts": now.isoformat(),
