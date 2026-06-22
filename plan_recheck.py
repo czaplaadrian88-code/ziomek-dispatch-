@@ -381,6 +381,26 @@ ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP = os.environ.get(
     "ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP", "0") == "1"
 _ANCHOR_EVENT_MAX_AGE_MIN = 360.0  # zdarzenia starsze niż 6h = inna zmiana
 
+# CARRIED-FIRST RELAX (Adrian 2026-06-22, case Sioux→Wierzbowa cid=393): twarda
+# reguła carried-first (niesione picked_up dropoffy na FRONT) eliminuje zygzaki,
+# bo nie ma wyjątku na odbiór „po drodze". `_relax_carried_first` szuka KRÓTSZEJ
+# trasy która (1) dowozi każde niesione jedzenie w ≤SOFT_MAX od picked_up_at,
+# (2) nie opóźnia ŻADNEJ innej (przypisanej) dostawy o >DELAY_TOL vs carried-first,
+# (3) nie tworzy nowego przekroczenia R6 — i przyjmuje ją TYLKO gdy skraca jazdę
+# o >DRIVE_EPS. Inaczej zostaje carried-first. Z konstrukcji: tylko poprawa lub
+# no-op (najgorszy przypadek = obecne zachowanie). Replay 29 058 sytuacji z całej
+# historii (eod_drafts/2026-06-22): 0 szkód, mediana −3.7 min jazdy/przypadek.
+# Default OFF — flip po ACK + spójnym wdrożeniu powierzchni (apka/konsola).
+ENABLE_CARRIED_FIRST_RELAX = os.environ.get("ENABLE_CARRIED_FIRST_RELAX", "0") == "1"
+CARRIED_FIRST_RELAX_SOFT_MAX_MIN = float(
+    os.environ.get("CARRIED_FIRST_RELAX_SOFT_MAX_MIN", "20"))
+CARRIED_FIRST_RELAX_DELAY_TOL_MIN = float(
+    os.environ.get("CARRIED_FIRST_RELAX_DELAY_TOL_MIN", "3"))
+CARRIED_FIRST_RELAX_DRIVE_EPS_MIN = float(
+    os.environ.get("CARRIED_FIRST_RELAX_DRIVE_EPS_MIN", "0.3"))
+CARRIED_FIRST_RELAX_MAX_STOPS = int(
+    os.environ.get("CARRIED_FIRST_RELAX_MAX_STOPS", "8"))
+
 
 def _gps_age_min(gps: Dict[str, Any], now: datetime) -> Optional[float]:
     ts = _parse_dt((gps or {}).get("timestamp"))
@@ -590,7 +610,7 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     # symulatora) — nadal lepsza kolejność niż bez F6.
     if ENABLE_PLAN_CANON_ORDER_INVARIANTS:
         try:
-            reordered = _apply_canon_order_invariants(stops, orders_state)
+            reordered = _apply_canon_order_invariants(stops, orders_state, pos, now)
             if [s["order_id"] for s in reordered] != [s["order_id"] for s in stops] or \
                [s["type"] for s in reordered] != [s["type"] for s in stops]:
                 retimed = _retime_stops(reordered, pos, anchor_departure, orders_state, now)
@@ -708,20 +728,29 @@ def _pickup_rest_key(stop, orders_state):
     return ("name", (o.get("restaurant_name") or o.get("restaurant") or "").strip().lower())
 
 
-def _detect_departed_pickup_revisit(seq, orders_state):
+def _detect_departed_pickup_revisit(seq, orders_state, carried_rest_keys=None):
     """Z-RULE detekcja: odbiór w restauracji R występujący PO ≥1 stopie pośrednim,
     gdy WCZEŚNIEJ w trasie był już odbiór w tej samej R → kurier opuścił R i ma do
     niej wrócić. Zwraca listę (first_idx, revisit_idx, [oid_first, oid_revisit]);
-    pusta = OK. Dwa odbiory z R obok siebie (jedna wizyta) = brak naruszenia."""
+    pusta = OK. Dwa odbiory z R obok siebie (jedna wizyta) = brak naruszenia.
+
+    `carried_rest_keys`: restauracje, z których kurier JUŻ wiezie jedzenie (carried).
+    Traktowane jak odwiedzone i opuszczone PRZED trasą (seed idx=-2) → KAŻDY ich
+    odbiór w trasie = powrót (jedzenie w aucie, Adrian 2026-06-22). first_idx<0 =
+    pierwsza wizyta to carried (brak węzła odbioru w seq) → oid_first=None."""
     out = []
     first_at = {}
+    for rk in (carried_rest_keys or ()):
+        if rk is not None:
+            first_at[rk] = -2          # odwiedzona+opuszczona przed trasą → każdy odbiór = powrót
     for i, s in enumerate(seq):
         k = _pickup_rest_key(s, orders_state)
         if k is None:
             continue
         if k in first_at and (i - first_at[k]) >= 2:
-            out.append((first_at[k], i,
-                        [seq[first_at[k]].get("order_id"), s.get("order_id")]))
+            fi = first_at[k]
+            out.append((fi, i,
+                        [(seq[fi].get("order_id") if fi >= 0 else None), s.get("order_id")]))
         else:
             first_at.setdefault(k, i)
     return out
@@ -745,13 +774,171 @@ def _coalesce_same_pickup_nodes(seq, orders_state):
     return repaired if repaired is not None else out
 
 
-def _apply_canon_order_invariants(stops, orders_state):
+def _relax_carried_first(seq, orders_state, start_pos, now):
+    """Guarded „po drodze" relaxation of carried-first (Adrian 2026-06-22, Sioux).
+    Wejście = kolejność carried-first. Szuka KRÓTSZEJ (jazda) precedence-poprawnej
+    permutacji stopów worka, która: (1) dowozi każde niesione (picked_up) jedzenie
+    w ≤SOFT_MAX od picked_up_at, (2) nie opóźnia żadnej PRZYPISANEJ dostawy o
+    >DELAY_TOL vs wejście, (3) nie dodaje przekroczenia R6 (>35′ w worku). Przyjmuje
+    tylko gdy oszczędza >DRIVE_EPS jazdy; inaczej zwraca wejście. Deterministyczne,
+    tylko poprawa lub no-op (najgorszy przypadek = carried-first). Replay zero-harm:
+    eod_drafts/2026-06-22/carried_first_replay.py."""
+    if not ENABLE_CARRIED_FIRST_RELAX:
+        return seq
+    import itertools
+    n = len(seq)
+    if n < 3 or n > CARRIED_FIRST_RELAX_MAX_STOPS:
+        return seq
+    oid_of = [str(s.get("order_id")) for s in seq]
+    kind_pick = [s.get("type") == "pickup" for s in seq]
+    carried = {oid_of[i] for i in range(n)
+               if not kind_pick[i]
+               and (orders_state.get(oid_of[i]) or {}).get("status") == "picked_up"}
+    if not carried:
+        return seq
+    coords = []
+    for i, s in enumerate(seq):
+        rec = orders_state.get(oid_of[i]) or {}
+        c = rec.get("pickup_coords") if kind_pick[i] else rec.get("delivery_coords")
+        if not _coords_ok(c):
+            return seq
+        coords.append((float(c[0]), float(c[1])))
+    try:
+        from dispatch_v2 import osrm_client
+    except Exception:
+        return seq
+    matrix = osrm_client.table([(float(start_pos[0]), float(start_pos[1]))] + coords,
+                               [(float(start_pos[0]), float(start_pos[1]))] + coords)
+    if not matrix:
+        return seq
+    leg = []
+    for row in matrix:
+        lr = []
+        for cell in row:
+            d = (cell or {}).get("duration_s")
+            lr.append((d / 60.0) if (d is not None and d < 9e8) else 9e9)
+        leg.append(lr)
+    now_min = now.timestamp() / 60.0
+    dwell = [float(s.get("dwell_min") if s.get("dwell_min") is not None
+                   else (1.0 if kind_pick[i] else 3.5)) for i, s in enumerate(seq)]
+    committed_rel = []
+    for i in range(n):
+        if kind_pick[i]:
+            ck = _parse_dt((orders_state.get(oid_of[i]) or {}).get("czas_kuriera_warsaw"))
+            committed_rel.append((ck.timestamp() / 60.0 - now_min) if ck is not None else None)
+        else:
+            committed_rel.append(None)
+    carried_age = {}
+    for oid in carried:
+        pa = _parse_dt((orders_state.get(oid) or {}).get("picked_up_at"))
+        carried_age[oid] = (now_min - pa.timestamp() / 60.0) if pa is not None else None
+    ppos = {oid_of[i]: i for i in range(n) if kind_pick[i]}
+    dpos = {oid_of[i]: i for i in range(n) if not kind_pick[i]}
+    pairs = [(ppos[o], dpos[o]) for o in ppos]
+    assigned = [o for o in dpos if o not in carried]
+    # NO-RETURN (Adrian 2026-06-22): relax NIE wolno cofnąć Z-RULE — kurier nie wraca
+    # do restauracji, z której już wiezie jedzenie (carried), ani nie rozbija dwóch
+    # odbiorów tej samej restauracji na osobne wizyty. carried_rest = restauracje
+    # zleceń niesionych (jedzenie w aucie = restauracja opuszczona).
+    carried_rest_keys = {_pickup_rest_key({"type": "pickup", "order_id": o}, orders_state)
+                         for o in carried}
+    carried_rest_keys.discard(None)
+
+    def _walk(perm):
+        t = 0.0
+        drive = 0.0
+        prev = 0
+        deliv = [None] * n
+        pick = [None] * n
+        for si in perm:
+            lg = leg[prev][si + 1]
+            if lg >= 9e8:
+                return None
+            drive += lg
+            t += lg
+            prev = si + 1
+            if kind_pick[si]:
+                cr = committed_rel[si]
+                if cr is not None and cr > t:
+                    t = cr
+                pick[si] = t
+                t += dwell[si]
+            else:
+                deliv[si] = t
+                t += dwell[si]
+        carry, breaches = {}, 0
+        for i in range(n):
+            if kind_pick[i]:
+                continue
+            oid = oid_of[i]
+            dt = deliv[i]
+            if dt is None:
+                continue
+            if oid in carried:
+                age = carried_age.get(oid)
+                bag = (age + dt) if age is not None else None
+                if age is not None:
+                    carry[oid] = age + dt
+            else:
+                bp = pick[ppos[oid]]
+                bag = (dt - bp) if bp is not None else None
+            if bag is not None and bag > 35.0:
+                breaches += 1
+        return drive, deliv, carry, breaches, pick
+
+    wA = _walk(tuple(range(n)))
+    if wA is None:
+        return seq
+    driveA, delivA, _carryA, breachesA, pickA = wA
+    best = None
+    tol = CARRIED_FIRST_RELAX_DELAY_TOL_MIN
+    for perm in itertools.permutations(range(n)):
+        pos = [0] * n
+        for j, si in enumerate(perm):
+            pos[si] = j
+        if any(pos[p] > pos[d] for p, d in pairs):
+            continue
+        # NO-RETURN: odrzuć permutację wracającą do restauracji już opuszczonej
+        # (carried) lub rozbijającą odbiory tej samej restauracji na dwie wizyty.
+        if _detect_departed_pickup_revisit([seq[i] for i in perm], orders_state,
+                                           carried_rest_keys):
+            continue
+        w = _walk(perm)
+        if w is None:
+            continue
+        drive, deliv, carry, breaches, pick = w
+        if any(carry.get(o, 0.0) > CARRIED_FIRST_RELAX_SOFT_MAX_MIN for o in carried):
+            continue
+        if breaches > breachesA:
+            continue
+        bad = False
+        for oid in assigned:
+            a, b = delivA[dpos[oid]], deliv[dpos[oid]]
+            if a is not None and b is not None and (b - a) > tol:
+                bad = True               # nie opóźniaj innej DOSTAWY
+                break
+            pa, pb = pickA[ppos[oid]], pick[ppos[oid]]
+            if pa is not None and pb is not None and (pb - pa) > tol:
+                bad = True               # nie opóźniaj ODBIORU (jedzenie czeka pod restauracją)
+                break
+        if bad:
+            continue
+        if best is None or drive < best[0]:
+            best = (drive, perm)
+    if best is not None and best[0] < driveA - CARRIED_FIRST_RELAX_DRIVE_EPS_MIN:
+        return [seq[i] for i in best[1]]
+    return seq
+
+
+def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None):
     """F6: TWARDE niezmienniki kolejności kanonu (1:1 jak build_view, ale w decyzji):
     (1) niesione (picked_up) dropoffy → front (kolejność względna zachowana),
     (2) odbiory wg committed (czas_kuriera) rosnąco. Deterministyczne, niezależne od
     pilności R6. 'Dostawa po odbiorze' trzymana przez repair pass (dostawa
     wyprzedzona sortem → tuż za swój odbiór), NIE przez rezygnację z sortu.
-    Zwraca przestawioną listę (te same obiekty stopów). Re-czasowanie robi caller."""
+    Zwraca przestawioną listę (te same obiekty stopów). Re-czasowanie robi caller.
+    Gdy start_pos+now podane i ENABLE_CARRIED_FIRST_RELAX — końcowy guarded relax
+    „po drodze" (tylko poprawa jazdy, nigdy kosztem świeżości/innych dostaw)."""
     seq = list(stops)
     carried = {str(oid) for oid, o in orders_state.items()
                if isinstance(o, dict) and o.get("status") == "picked_up"}
@@ -789,6 +976,16 @@ def _apply_canon_order_invariants(stops, orders_state):
     except Exception as e:
         _log.warning("no_return_to_departed_pickup fail: %s: %s",
                      type(e).__name__, e)
+    if ENABLE_CARRIED_FIRST_RELAX and start_pos is not None and now is not None:
+        try:
+            relaxed = _relax_carried_first(seq, orders_state, start_pos, now)
+            if relaxed is not seq and \
+                    [s.get("order_id") for s in relaxed] != [s.get("order_id") for s in seq]:
+                _log.info("CARRIED_FIRST_RELAX applied seq=%s",
+                          [(s.get("order_id"), s.get("type")) for s in relaxed])
+            seq = relaxed
+        except Exception as e:
+            _log.warning("carried_first_relax fail: %s: %s", type(e).__name__, e)
     return seq
 
 
@@ -814,7 +1011,7 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     # poprawiają na następnym ticku, bez czekania na zmianę worka.
     if ENABLE_PLAN_CANON_ORDER_INVARIANTS:
         try:
-            stops = _apply_canon_order_invariants(stops, orders_state)
+            stops = _apply_canon_order_invariants(stops, orders_state, pos, now)
         except Exception as e:
             _log.warning(f"canon_order_invariants(retime) cid={cid} fail: {type(e).__name__}: {e}")
     new_stops = _retime_stops(stops, pos, anchor_departure, orders_state, now)
