@@ -398,6 +398,21 @@ the module constant. ~80+ flags exist. Notable **current** states:
 - ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_HARD_TIER_BAG_CAP`, `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
   `ENABLE_R5_PICKUP_DETOUR_PENALTY`, `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`,
   `kill_switch_to_v1`, `ENABLE_DRIVE_MIN_CALIBRATION_V2` (main).
+- 🟢 **LIVE route-sequencing (systemd-env flags, NOT `flags.json`; set on `dispatch-plan-recheck` +
+  `dispatch-panel-watcher` where the canon is written to `courier_plans.json`):**
+  `ENABLE_PLAN_CANON_ORDER_INVARIANTS` (carried `picked_up` dropoffs front + pickups sorted by committed
+  time), `ENABLE_NO_RETURN_TO_DEPARTED_PICKUP` (never re-visit a departed restaurant — two pickups of one
+  restaurant coalesced into one visit), and `ENABLE_CARRIED_FIRST_RELAX` (2026-06-22, **flipped LIVE**):
+  among precedence-valid bag permutations pick **min-drive** subject to **5 guards** — carried delivered
+  ≤SOFT_MAX(20) of `picked_up_at`, no other delivery later >TOL(3), no pickup later >TOL, no new R6, and
+  **NO-RETURN**: never route a pickup at a restaurant the courier already carries food from / never split
+  one restaurant's pickups (bundling preserved); accept only if >DRIVE_EPS(0.3) shorter, else carried-first.
+  By construction improve-or-no-op; replay 29k situations zero-harm. Code: `_relax_carried_first` +
+  `_detect_departed_pickup_revisit` (+`carried_rest_keys` seed) in `plan_recheck.py`. The courier app and
+  coordinator console render this canon verbatim via `ENABLE_BUILD_VIEW_TRUST_CANON_ORDER` (courier-api)
+  and `PANEL_FLAG_TRUST_CANON_ORDER` (nadajesz-panel) — both 🟢 LIVE. These re-sequence an **already
+  assigned** bag only; they do **not** touch assignment/feasibility (a courier carrying a restaurant's
+  food can still be assigned new orders, incl. from that restaurant).
 
 `kill_switch_to_v1=true` reverts the whole v2 to the legacy `gastro_trigger.sh`.
 
