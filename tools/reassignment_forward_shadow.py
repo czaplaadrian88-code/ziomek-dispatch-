@@ -37,6 +37,7 @@ import json
 import os
 import tempfile
 import logging
+import time
 import copy as _copy
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
@@ -190,6 +191,7 @@ def run_once(now: Optional[datetime] = None, max_orders: Optional[int] = None,
     if not C.flag(FLAG, False):
         return {"skipped": "flag_off"}
     now = now or _now_utc()
+    _t0 = time.monotonic()
     flags = C.load_flags()
     if margin is None:
         margin = float(flags.get(MARGIN_KEY, DEFAULT_MARGIN))
@@ -209,7 +211,8 @@ def run_once(now: Optional[datetime] = None, max_orders: Optional[int] = None,
     active.sort(key=lambda t: t[2].get("assigned_at") or t[2].get("created_at_utc") or "")
     active = active[:max_orders]
     if not active:
-        return {"active": 0, "evaluated": 0, "would_reassign": 0, "ts": now.isoformat()}
+        return {"active": 0, "evaluated": 0, "would_reassign": 0,
+                "duration_s": round(time.monotonic() - _t0, 2), "ts": now.isoformat()}
 
     fleet_list = CR.dispatchable_fleet()   # ⚠ enriched (shift_end) — NIE build_fleet_snapshot
     fleet = {str(cs.courier_id): cs for cs in fleet_list}
@@ -230,6 +233,7 @@ def run_once(now: Optional[datetime] = None, max_orders: Optional[int] = None,
         "evaluated": len(rows),
         "would_reassign": n_would,
         "margin": margin,
+        "duration_s": round(time.monotonic() - _t0, 2),
         "ts": now.isoformat(),
     }
     _log.info(f"REASSIGN_FWD sweep {summary}")
