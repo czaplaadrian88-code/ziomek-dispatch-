@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek reassignment-shadow EVAL — jednorazowo 2026-06-27 19:00 UTC (= 21:00 Warsaw, ~5 dni danych, materiał GO/NO-GO)
+
+[Timer]
+OnCalendar=2026-06-27 19:00:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=dispatch-reassignment-shadow-eval.service
+
+[Install]
+WantedBy=timers.target
