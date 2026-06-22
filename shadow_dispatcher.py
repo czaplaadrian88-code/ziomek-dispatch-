@@ -522,6 +522,24 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         if target_dt is not None:
             target_pickup_at_iso = target_dt.isoformat()
 
+    # TIER-1 PICKUP-DEBIAS SHADOW (2026-06-22): realistyczny target_pickup =
+    # target + PICKUP_DEBIAS_MIN. czas_kuriera systematycznie optymistyczny ~4.5 min
+    # (zmierzone OOS −47% spóźnień odbioru). CZYSTO LOG — NIE zmienia decyzji ani
+    # committed czas_kuriera. Walidacja przed ewentualnym live-apply (osobny flag).
+    # Re-parse z target_pickup_at_iso (None gdy best=None) → brak ryzyka zakresu target_dt.
+    target_pickup_debiased_iso = None
+    pickup_debias_min_used = None
+    try:
+        if target_pickup_at_iso is not None and C.flag("ENABLE_PICKUP_DEBIAS_SHADOW", True):
+            pickup_debias_min_used = float(getattr(C, "PICKUP_DEBIAS_MIN", 4.5))
+            _tgt_dt = datetime.fromisoformat(target_pickup_at_iso)
+            target_pickup_debiased_iso = (
+                _tgt_dt + timedelta(minutes=pickup_debias_min_used)
+            ).isoformat()
+    except Exception:
+        target_pickup_debiased_iso = None
+        pickup_debias_min_used = None
+
     out = {
         "ts": now_iso(),
         "event_id": event_id,
@@ -573,6 +591,11 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "eta_pickup_hhmm": _eta_hhmm_warsaw(best_m.get("eta_pickup_utc")),
             "eta_drive_hhmm": _eta_hhmm_warsaw(best_m.get("eta_drive_utc")),
             "target_pickup_at": target_pickup_at_iso,
+            # TIER-1 PICKUP-DEBIAS SHADOW (2026-06-22): realistyczny ck = target+bias
+            # (czas_kuriera optymistyczny ~4.5min). Log-only; offline porównaj z realnym
+            # picked_up_at → residual spóźnienia. None gdy flaga OFF.
+            "target_pickup_debiased": target_pickup_debiased_iso,
+            "pickup_debias_min": pickup_debias_min_used,
             "pos_source": best_m.get("pos_source"),
             # Z-09 (audyt 2026-06-10): patrz _serialize_candidate (LOCATION A).
             "pos_from_store": best_m.get("pos_from_store"),

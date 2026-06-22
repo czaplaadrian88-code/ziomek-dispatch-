@@ -2828,6 +2828,15 @@ ENABLE_V3274_FROZEN_PICKUP_WINDOW = _os.environ.get(
     "ENABLE_V3274_FROZEN_PICKUP_WINDOW", "1") == "1"  # default True per Adrian — safety zasada
 V3274_FROZEN_PICKUP_WINDOW_MIN = 5.0  # ±5 min od czas_kuriera dla committed orderów
 
+# TIER-1 PICKUP-DEBIAS (2026-06-22) — czas_kuriera jest SYSTEMATYCZNIE OPTYMISTYCZNY
+# o ~4.5 min (kurier dojeżdża później; zmierzone out-of-sample na 10 dniach: bias
+# med 4.3 / sd 1.2; debias tnie spóźnienie ODBIORU −47% OOS, mediana→~0). PICKUP_DEBIAS_MIN
+# = ile dodać do predykcji odbioru by „umówiony" był realistyczny. Konsumpcja: SHADOW
+# (flaga `ENABLE_PICKUP_DEBIAS_SHADOW` w flags.json, hot-reload) — shadow_dispatcher
+# loguje realistyczny target_pickup OBOK obecnego. ZERO zmiany decyzji/committed ck.
+# Live-apply = osobny flag PO walidacji shadow. Risk shadow = zero (tylko pole w logu).
+PICKUP_DEBIAS_MIN = float(_os.environ.get("PICKUP_DEBIAS_MIN", "4.5"))
+
 # V3.28 (2026-05-09) — render-side commit priority dla Telegram trasa.
 # Bug context (FAZA 0 audit): plan.pickup_at z greedy fallback po V3.27.4 reject
 # pokazuje computed ETA chain ignorujący czas_kuriera commit. Render telegram_approver
