@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek reassignment FORWARD shadow — co 3 min (measure-first; korpus would_reassign do porownania z realnymi przerzutami COURIER_ASSIGNED.previous_cid)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=3min
+Persistent=false
+Unit=dispatch-reassignment-shadow.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,30 @@
+[Unit]
+Description=Ziomek reassignment FORWARD shadow — kontrfaktyk "kogo wskazalby Ziomek, gdyby O bylo teraz nieprzypisane" (read-only, OSOBNY PROCES; flag ENABLE_REASSIGNMENT_FORWARD_SHADOW default OFF = natychmiastowy no-op; loguje reassignment_shadow.jsonl; ZERO wplywu na decyzje/panel/Telegram)
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/reassignment_forward_shadow.py
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-06-22/reassignment_forward_shadow_v2.md
+After=network.target
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.reassignment_forward_shadow
+# Peak-friendly: niski priorytet CPU + I/O w tle (assess_order woła OSRM; nie wypierac hot-pathu)
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# Latency-guard sweep na 2-vCPU (cap zlecen REASSIGN_FWD_MAX_ORDERS=60); oneshot, nie powinno przekroczyc minut
+TimeoutStartSec=120
+# Sandbox / pamiec — styl pozostalych shadow-serwisow (read-only, maly footprint; assess_order + OSRM klient)
+MemoryHigh=300M
+MemoryMax=400M
+TasksMax=256
+# Shadow = preferowany do ubicia gdy host OOM (dodatni = ginie PIERWSZY, NIE wypiera dispatch-shadow/panel-watcher)
+OOMScoreAdjust=200
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/reassignment_forward_shadow.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/reassignment_forward_shadow.log
+
+[Install]
+WantedBy=multi-user.target
