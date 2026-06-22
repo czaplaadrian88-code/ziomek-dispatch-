@@ -48,9 +48,54 @@ def _pickup_dt(o):
     return _iso(_attr(o, "czas_kuriera_warsaw"))
 
 
-def pickup_runs(to_pick):
+def _plan_pickup_clusters(plan_doc) -> dict:
+    """{oid: (cluster_idx, pickup_rank)} dla ODBIORÓW z planu Ziomka. KOLEJNE odbiory
+    (bez dostawy między nimi) = ten sam podjazd (cluster_idx). pickup_rank = pozycja
+    odbioru w planie (do wiernej kolejności wewnątrz podjazdu). Pusty gdy brak planu.
+
+    To jest sedno „podjazdów wg planu": Ziomek może świadomie zbundlować dwa odbiory
+    (odbierz A, odbierz B, dowieź A, dowieź B) mimo że ich umówione czasy są >PICKUP_MERGE_MIN
+    od siebie. Czysto-czasowe sklejanie rozbiłoby ten bundle na dwa kursy i wymusiło
+    powrót po jedzenie. Tu czytamy intencję planu zamiast zgadywać z czasu."""
+    out = {}
+    if not isinstance(plan_doc, dict):
+        return out
+    cidx = -1
+    rnk = 0
+    prev_pickup = False
+    for s in (plan_doc.get("stops") or []):
+        if not isinstance(s, dict):
+            continue
+        is_pickup = s.get("type") == "pickup"
+        if is_pickup:
+            oid = str(s.get("order_id"))
+            if not prev_pickup:
+                cidx += 1          # nowy podjazd zaczyna się po dostawie
+            if oid not in out:
+                out[oid] = (cidx, rnk)
+                rnk += 1
+        prev_pickup = is_pickup
+    return out
+
+
+def pickup_runs(to_pick, plan_doc=None, plan_aware=False):
     """Podziel odbiory na PODJAZDY (kursy) + grupuj po restauracji wewnątrz kursu.
-    Wejście/wyjście: listy zleceń (obiekty BagOrder-podobne albo dict-y)."""
+    Wejście/wyjście: listy zleceń (obiekty BagOrder-podobne albo dict-y).
+
+    plan_aware + plan Ziomka pokrywa WSZYSTKIE odbiory worka → grupuj wg klastrów planu
+    (odbiory które Ziomek skleja = jeden podjazd, niezależnie od progu czasowego), a w
+    podjeździe kolejność = kolejność odbiorów w planie. Inaczej (brak/niepełny plan lub
+    flaga OFF) → stary podział wg okna ≤PICKUP_MERGE_MIN."""
+    clusters = _plan_pickup_clusters(plan_doc) if plan_aware else {}
+    use_plan = bool(clusters) and all(str(_attr(o, "order_id")) in clusters for o in to_pick)
+    if use_plan:
+        groups: dict = {}
+        for o in to_pick:
+            cidx = clusters[str(_attr(o, "order_id"))][0]
+            groups.setdefault(cidx, []).append(o)
+        # podjazdy wg kolejności planu; w podjeździe odbiory wg pozycji odbioru w planie
+        return [sorted(groups[c], key=lambda o: clusters[str(_attr(o, "order_id"))][1])
+                for c in sorted(groups)]
     ordered = sorted(to_pick, key=lambda o: (_pickup_dt(o) or _SENTINEL, str(_attr(o, "order_id"))))
     runs = []
     prev = None
@@ -87,13 +132,15 @@ def plan_drop_rank(plan_doc) -> dict:
     return rank
 
 
-def order_podjazdy(bag, plan_doc=None) -> list[tuple[str, list[str]]]:
+def order_podjazdy(bag, plan_doc=None, plan_aware=False) -> list[tuple[str, list[str]]]:
     """JEDYNE źródło kolejności. Zwraca listę stopów [(typ, [order_ids]), ...]
     gdzie typ ∈ {'pickup','dropoff'} a order_ids to zgrupowane zlecenia
     (odbiory tej samej restauracji w jednym podjeździe = jeden stop).
 
     bag: lista obiektów/dict-ów z polami: order_id, status, restaurant,
          czas_kuriera_warsaw. plan_doc: dict planu Ziomka (opcjonalny).
+    plan_aware: gdy True i plan pokrywa worek, podjazdy idą wg klastrów planu
+         (patrz pickup_runs) — koordynator/kurier widzą bundle Ziomka, nie podział czasowy.
     """
     if not bag:
         return []
@@ -107,7 +154,7 @@ def order_podjazdy(bag, plan_doc=None) -> list[tuple[str, list[str]]]:
     to_pick = [o for o in bag if _attr(o, "status") != "picked_up"]
 
     order: list[tuple[str, list[str]]] = [("dropoff", [str(_attr(o, "order_id"))]) for o in carried]
-    for run in pickup_runs(to_pick):
+    for run in pickup_runs(to_pick, plan_doc, plan_aware):
         i = 0
         while i < len(run):
             rest = _attr(run[i], "restaurant")
