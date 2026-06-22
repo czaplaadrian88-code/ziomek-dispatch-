@@ -959,6 +959,15 @@ except (ValueError, TypeError):
 # ============================================================
 ENABLE_NO_GPS_EMPTY_DEMOTE = _os.environ.get("ENABLE_NO_GPS_EMPTY_DEMOTE", "1") == "1"
 
+# NO_GPS RÓWNE TRAKTOWANIE (Adrian 2026-06-22): "bez GPS musi być traktowany
+# na równi z GPS, żadnych kar". Kurier bezczynny bez GPS jest najpewniej WOLNY
+# i w zwartym Białymstoku dojedzie pod każdą restaurację ~15 min (już ma neutralne
+# km=śr.floty + ETA=max(15,prep) z F1.7). Flaga ON → no_gps NIE jest demote'owany
+# (_demote_blind_empty go pomija) → konkuruje czystym score jak GPS. pre_shift/none
+# bez zmian (genuinie nie-na-zmianie/nieznane). Default OFF (gated; flip po cieniu).
+# flags.json hot-reload. env: ENABLE_NO_GPS_EQUAL_TREATMENT=1.
+ENABLE_NO_GPS_EQUAL_TREATMENT = _os.environ.get("ENABLE_NO_GPS_EQUAL_TREATMENT", "0") == "1"
+
 # ============================================================
 # V3.18 unified bag reality check flags (2026-04-19)
 # Master switch dla CourierBagState + FleetContext projection.

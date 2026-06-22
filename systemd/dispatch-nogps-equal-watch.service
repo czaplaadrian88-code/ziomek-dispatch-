@@ -1,0 +1,24 @@
+# NO_GPS równe traktowanie — obserwacja override po flipie (Adrian 2026-06-22).
+# Read-only: liczy propozycje no_gps + override-rate od flipa, Telegram alert-only.
+# BEZ auto-rollback (rollback ręczny: ENABLE_NO_GPS_EQUAL_TREATMENT=false w flags.json
+# + systemctl restart dispatch-shadow). Baseline sprzed flipa: override 100% (40/40).
+[Unit]
+Description=Ziomek NO_GPS równe traktowanie — godzinna obserwacja override (alert-only)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+Environment=NOGPS_WATCH_FLIP_TS=2026-06-22T17:01:48+00:00
+Environment=NOGPS_WATCH_MIN_OUTCOME=15
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.nogps_equal_override_watch
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/nogps_equal_override_watch.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/nogps_equal_override_watch.log
+MemoryMax=400M
+MemoryHigh=320M
+CPUQuota=50%
+TasksMax=128
+NoNewPrivileges=true
+PrivateTmp=true
+OOMScoreAdjust=-100

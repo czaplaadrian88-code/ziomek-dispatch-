@@ -1,0 +1,11 @@
+# Godzinny tick — łapie napływ override w peaku po flipie 2026-06-22 17:01 UTC.
+[Unit]
+Description=Ziomek NO_GPS równe traktowanie — obserwacja override co godzinę
+
+[Timer]
+OnCalendar=*-*-* *:05:00
+Persistent=true
+Unit=dispatch-nogps-equal-watch.service
+
+[Install]
+WantedBy=timers.target
