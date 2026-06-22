@@ -81,9 +81,10 @@ def build_report(since_d: str, until_d: str) -> str:
         n_true += 1
         oid = str(r.get("order_id") or "")
         prev = flagged.get(oid)
-        # zachowaj NAJWCZEŚNIEJSZY flag (do wyprzedzenia), ale best/delta z niego
+        # zachowaj NAJWCZEŚNIEJSZY flag (do wyprzedzenia), ale best/delta/pos z niego
         if prev is None or d < prev[1]:
-            flagged[oid] = (str(r.get("best_cid") or ""), d, r.get("delta_score"))
+            flagged[oid] = (str(r.get("best_cid") or ""), d, r.get("delta_score"),
+                            str(r.get("a_pos_source") or ""), str(r.get("b_pos_source") or ""))
 
     if n_rows == 0:
         return (f"🔁 Reassignment-shadow EVAL {since_d}..{until_d}: 0 sweepów w oknie. "
@@ -91,20 +92,39 @@ def build_report(since_d: str, until_d: str) -> str:
 
     human = _human_reassigns(since_d, until_d)
     distinct_flagged = len(flagged)
+
+    # „realna pozycja" = GPS LUB ostatnia znana lokalizacja (gdzie kurier ostatnio
+    # odbierał/doręczał) — silnik tak liczy no_gps (Adrian 22.06). Syntetyczne (szum)
+    # = pin/none/pre_shift (brak realnej lokalizacji → fikcja centrum/grafik).
+    _REAL_POS = {"gps", "last_delivered", "last_picked_up", "last_assigned", "last_known", "store"}
+
+    def _trusted(a_pos, b_pos):
+        return a_pos in _REAL_POS and b_pos in _REAL_POS
+
+    n_trusted = sum(1 for v in flagged.values() if _trusted(v[3], v[4]))
     anticipated = same_target = 0
-    leads = []
-    for oid, (best_cid, ts_s, delta) in flagged.items():
+    anticipated_t = same_target_t = 0
+    leads = []; leads_t = []
+    for oid, (best_cid, ts_s, delta, a_pos, b_pos) in flagged.items():
         h = human.get(oid)
         if not h:
             continue
         anticipated += 1
         prev_cid, new_cid, t_h = h
-        if best_cid and best_cid == new_cid:
+        lead = (t_h - ts_s).total_seconds() / 60.0  # + = shadow wcześniej
+        leads.append(lead)
+        hit = bool(best_cid and best_cid == new_cid)
+        if hit:
             same_target += 1
-        leads.append((t_h - ts_s).total_seconds() / 60.0)  # + = shadow wcześniej
+        if _trusted(a_pos, b_pos):
+            anticipated_t += 1
+            leads_t.append(lead)
+            if hit:
+                same_target_t += 1
     never = distinct_flagged - anticipated
     lead_med = st.median(leads) if leads else None
     lead_pos = sum(1 for x in leads if x > 0)
+    lead_med_t = st.median(leads_t) if leads_t else None
 
     return (
         f"🔁 Reassignment FORWARD-shadow EVAL {since_d}..{until_d} (materiał GO/NO-GO)\n"
@@ -116,8 +136,13 @@ def build_report(since_d: str, until_d: str) -> str:
         f"• wyprzedzenie shadow: mediana {('%.0f min' % lead_med) if lead_med is not None else '—'}"
         f" | wcześniej w {lead_pos}/{len(leads)} przypadkach\n"
         f"• sflagowane a NIGDY nieprzerzucone: {never} (over-eager shadow LUB człowiek przeoczył)\n"
-        f"\n📊 To MATERIAŁ, nie werdykt. GO jeśli: wysoki % anticipated + dodatnie wyprzedzenie +\n"
-        f"sensowny same-target. NO-GO jeśli: dużo 'never' (szum) lub ujemne wyprzedzenie.\n"
+        f"\n🛰 SEGMENT PEWNEJ POZYCJI (A i B z GPS lub ostatnią znaną lokalizacją; reszta = pin/none/pre_shift = zgadnięte):\n"
+        f"• z pewną pozycją: {n_trusted}/{distinct_flagged}"
+        f" | anticipated: {anticipated_t}/{max(1, n_trusted)} | same-target: {same_target_t}"
+        f" | wyprzedzenie med {('%.0f min' % lead_med_t) if lead_med_t is not None else '—'}\n"
+        f"\n📊 To MATERIAŁ, nie werdykt. WAŻ segment pewnej pozycji (reszta = szum na zgadniętych\n"
+        f"pozycjach). GO jeśli: tam wysoki anticipated + same-target + dodatnie wyprzedzenie.\n"
+        f"NO-GO jeśli: mało pewnych pozycji lub dużo 'never'.\n"
         f"Decyzja autonomii = Adrian (07.06: ludzki przerzut = roster/idle, nie geometria → \n"
         f"sprawdź czy shadow łapie też te niegeometryczne)."
     )
