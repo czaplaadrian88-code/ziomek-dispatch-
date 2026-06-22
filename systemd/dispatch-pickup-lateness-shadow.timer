@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek pickup-lateness shadow — co 5 min (measure-first; przeglad po peaku przed deployem frontendu)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=false
+Unit=dispatch-pickup-lateness-shadow.service
+
+[Install]
+WantedBy=timers.target
