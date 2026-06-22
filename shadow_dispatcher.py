@@ -1142,6 +1142,24 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             except Exception as _ex:
                 _log.debug(f"mins_since_creation compute failed: {_ex}")
 
+            # Live ETA cache (2026-06-22, Adrian): świeże predicted_delivered_at z TEJ
+            # decyzji → apka (build_view) i konsola (_build_route) czytają te SAME czasy
+            # co trasa Telegrama, zamiast lagującego courier_plans.json. "Nowe propozycje
+            # = nowe czasy starych zleceń". Additywne, fail-soft, ZERO wpływu na
+            # decyzję/score/feasibility (tylko emit pliku obok shadow logu).
+            try:
+                _le_plan = (record.get("best") or {}).get("plan") or {}
+                _le_pda = _le_plan.get("predicted_delivered_at") or {}
+                if _le_pda:
+                    from dispatch_v2 import live_eta_cache as _live_eta_cache
+                    _live_eta_cache.upsert(
+                        predicted_delivered_at=_le_pda,
+                        pickup_at=_le_plan.get("pickup_at") or {},
+                        courier_id=(record.get("best") or {}).get("courier_id"),
+                    )
+            except Exception as _le_ex:
+                _log.debug(f"live_eta_cache upsert failed: {_le_ex}")
+
             # Adrian decision 2026-05-07: suppress Telegram proposals for firmowe
             # konto Nadajesz.pl (address_id=161). Adrian zarządza firmowymi przez
             # panel — Telegram noise. Pre-write filter w shadow (eliminuje noise
