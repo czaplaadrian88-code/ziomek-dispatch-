@@ -1,0 +1,13 @@
+# Adrian 2026-06-22 — monitor shadowowych "później" (pickup_extension_redirect).
+# Read-only digest z scripts/logs/shadow_decisions.jsonl. Bez wpływu na produkcję.
+[Unit]
+Description=Ziomek monitor "pozniej" — shadow pickup_extension_redirect daily digest
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.monitor_later_promises
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/later_promises_monitor.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/later_promises_monitor.log

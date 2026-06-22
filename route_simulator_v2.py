@@ -1159,6 +1159,40 @@ def _ortools_plan(
             f"OBJ_COMMITTED_PICKUP_BUILD_FAIL {type(_pc_e).__name__}: {_pc_e}")
         pickup_committed_penalties = None
 
+    # ESKALACJA (Adrian 2026-06-22 D1): tier-2 soft bound na pickupach committed,
+    # próg ck+T2 (T2>tol), coeff ostry. Łączy się z tier-1 (osobny wymiar w solverze)
+    # → kara WYPUKŁA: slope rośnie za 2. progiem ("mocno rosnąca od +6"). Tylko gdy
+    # tier-1 aktywny. Flag-gated, default OFF. Soft — NIGDY INFEASIBLE.
+    pickup_committed_penalties_t2 = None
+    try:
+        if (getattr(_common, "ENABLE_OBJ_COMMITTED_PICKUP_ESCALATION", False)
+                and pickup_committed_penalties is not None and now is not None):
+            _pc2_coeff = float(getattr(_common, "OBJ_COMMITTED_PICKUP_PENALTY_COEFF_T2", 0.0))
+            _pc2_t2 = float(getattr(_common, "OBJ_COMMITTED_PICKUP_ESCALATION_T2_MIN", 10.0))
+            if _pc2_coeff > 0:
+                _pc2: List[Optional[Tuple[float, float]]] = [None] * N
+                for _i in range(N):
+                    _node = nodes[_i]
+                    if _node.get("kind") != "pickup":
+                        continue
+                    _ref = _node.get("ref")
+                    _ck_raw = getattr(_ref, "czas_kuriera_warsaw", None) if _ref is not None else None
+                    if _ck_raw is None or str(_ck_raw).strip() in ("", "None", "null", "NULL"):
+                        continue
+                    _ck_dt = _common.parse_panel_timestamp(_ck_raw)
+                    if _ck_dt is None:
+                        continue
+                    if _ck_dt.tzinfo is None:
+                        _ck_dt = _ck_dt.replace(tzinfo=timezone.utc)
+                    _bound2_min = (_ck_dt.astimezone(timezone.utc) - now
+                                   ).total_seconds() / 60.0 + _pc2_t2
+                    _pc2[_i] = (_bound2_min, _pc2_coeff)
+                pickup_committed_penalties_t2 = _pc2
+    except Exception as _pc2_e:
+        _log.warning(
+            f"OBJ_COMMITTED_PICKUP_ESCALATION_BUILD_FAIL {type(_pc2_e).__name__}: {_pc2_e}")
+        pickup_committed_penalties_t2 = None
+
     # FOOD-AGE HARD-SLA (2026-06-17): twarde bound dla zleceń JUŻ-ODEBRANYCH
     # (delivery node bez węzła pickup). bound=(picked_up_at−now)+sla [min od startu].
     # Pending/new (w parach) chronione twardym spanem → None. Kotwica = METRYKA
@@ -1207,6 +1241,7 @@ def _ortools_plan(
             delivery_soft_deadlines=delivery_soft_deadlines,
             pickup_freshness_penalties=pickup_freshness_penalties,
             pickup_committed_penalties=pickup_committed_penalties,
+            pickup_committed_penalties_t2=pickup_committed_penalties_t2,
             delivery_food_age_penalties=fa_pen,
             span_cost_coeff=_span_cost_coeff,
             delivery_sla_hard_span=hard_span,
@@ -1230,6 +1265,7 @@ def _ortools_plan(
                 delivery_soft_deadlines=delivery_soft_deadlines,
                 pickup_freshness_penalties=pickup_freshness_penalties,
                 pickup_committed_penalties=pickup_committed_penalties,
+            pickup_committed_penalties_t2=pickup_committed_penalties_t2,
                 delivery_food_age_penalties=fa_pen,
                 span_cost_coeff=_span_cost_coeff,
                 delivery_sla_hard_span=hard_span,

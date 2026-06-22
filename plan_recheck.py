@@ -355,6 +355,18 @@ ENABLE_PLAN_CANON_ORDER_INVARIANTS = os.environ.get(
 # przy fix OFF), REORDER za flagą (shadow-first, flip po ACK). Default OFF.
 ENABLE_NO_RETURN_TO_DEPARTED_PICKUP = os.environ.get(
     "ENABLE_NO_RETURN_TO_DEPARTED_PICKUP", "0") == "1"
+
+# COMMITTED-PROPAGATION (Adrian 2026-06-22, case Michał K. Goodboy+Sushi 482630/482633):
+# re-sekwencer worka był ŚLEPY na punktualność committed, bo OrderSim budowany tu NIE
+# niósł `czas_kuriera_warsaw` (tylko jako pickup_ready_at = dolna granica „nie odbieraj
+# przed gotowym"). Cała egzekucja w route_simulator_v2 (okno frozen V3.27.4 :955, miękka
+# kara N5 :1145 coeff=100, post-solve assercja :1310) czyta getattr(ref,"czas_kuriera_
+# warsaw") → None → ciche no-opy. dispatch_pipeline.py:2642 dokleja to pole ręcznie; tu
+# nie było. Fix: doklej pole tak samo (raw string). Efekt zależny od miękkiej kary
+# (ENABLE_OBJ_COMMITTED_PICKUP_PENALTY, już ON) → gated, default OFF; flip dopiero po
+# replayu na korpusie (przestawienia worków vs SLA/KOORD). Default OFF = zero zmiany.
+ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION = os.environ.get(
+    "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION", "0") == "1"
 # F3: natychmiastowa decyzja sekwencji NA ZMIANĘ WORKA (override/reassign) z
 # panel_watcher — Ziomek układa trasę od razu, bez czekania ≤5 min na tick. Tylko
 # gdy żaden ważny plan nie pokrywa worka (nie nadpisuje trasy z propozycji). OFF.
@@ -479,6 +491,7 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     pos, anchor_departure, anchor_source = anchor
 
     sims: Dict[str, Any] = {}
+    ck_by_oid: Dict[str, Any] = {}  # raw czas_kuriera_warsaw per oid (tie-breaker)
     for oid in oids:
         rec = orders_state.get(oid) or {}
         dc = rec.get("delivery_coords")
@@ -499,19 +512,49 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
             status=status,
             pickup_ready_at=_parse_dt(rec.get("czas_kuriera_warsaw")),
         )
+        ck_by_oid[oid] = rec.get("czas_kuriera_warsaw")
 
     # Sweep designacji new_order (route_simulator_v2 traktuje 1 order jako wstawiany)
     # → wybierz najlepszy plan deterministycznie (sla, dur, sequence).
+    def _sweep():
+        ordered_l = list(sims.keys())
+        best = None
+        for newoid in ordered_l:
+            bag = [sims[o] for o in ordered_l if o != newoid]
+            p = R.simulate_bag_route_v2(pos, bag, sims[newoid], now=now, sla_minutes=35,
+                                        earliest_departure=anchor_departure)
+            key = (p.sla_violations, round(p.total_duration_min, 3), tuple(p.sequence))
+            if best is None or key < best[0]:
+                best = (key, p)
+        return best[1]
+
+    if ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION:
+        # TIE-BREAKER bez regresji dostaw (Adrian 2026-06-22): policz baseline
+        # (sims bez committed) ORAZ wariant świadomy committed (doklejone
+        # czas_kuriera_warsaw → okno frozen + miękka kara N5 w symulatorze).
+        # Przyjmij świadomy TYLKO gdy NIE zwiększa naruszeń SLA dostaw (R6 35min
+        # też twarda) — replay 22.06: zachowuje czyste wygrane punktualności
+        # odbioru, odrzuca trade-offy gdzie poprawa odbioru psułaby dostawę.
+        plan_base = _sweep()
+        for _oid in sims:
+            sims[_oid].czas_kuriera_warsaw = ck_by_oid.get(_oid)
+        plan_ck = _sweep()
+        if plan_ck.sla_violations <= plan_base.sla_violations:
+            plan = plan_ck
+            _adopted = (plan_ck.sequence != plan_base.sequence
+                        or plan_ck.pickup_at != plan_base.pickup_at)
+            if _adopted:
+                _log.info(
+                    f"COMMITTED_TIEBREAK_ADOPT cid={cid} oids={oids} "
+                    f"sla={plan_ck.sla_violations} dur={plan_ck.total_duration_min:.1f}")
+        else:
+            plan = plan_base
+            _log.info(
+                f"COMMITTED_TIEBREAK_REJECT cid={cid} oids={oids} "
+                f"sla_base={plan_base.sla_violations} sla_ck={plan_ck.sla_violations}")
+    else:
+        plan = _sweep()
     ordered = list(sims.keys())
-    best = None
-    for newoid in ordered:
-        bag = [sims[o] for o in ordered if o != newoid]
-        p = R.simulate_bag_route_v2(pos, bag, sims[newoid], now=now, sla_minutes=35,
-                                    earliest_departure=anchor_departure)
-        key = (p.sla_violations, round(p.total_duration_min, 3), tuple(p.sequence))
-        if best is None or key < best[0]:
-            best = (key, p)
-    plan = best[1]
 
     # Stopy w REALNEJ kolejności czasowej (przeplot pickup/dropoff) — apka czyta
     # kolejność tablicy stops jako kolejność przejazdu (_plan_stop_sequence).

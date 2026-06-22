@@ -49,6 +49,7 @@ def solve_tsp_with_constraints(
     delivery_soft_deadlines: Optional[List[Optional[Tuple[float, float]]]] = None,
     pickup_freshness_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
     pickup_committed_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
+    pickup_committed_penalties_t2: Optional[List[Optional[Tuple[float, float]]]] = None,
     delivery_food_age_penalties: Optional[List[Optional[Tuple[float, float]]]] = None,
     span_cost_coeff: float = 0.0,
     delivery_sla_hard_span: bool = False,
@@ -121,6 +122,9 @@ def solve_tsp_with_constraints(
         return None
     # N5 krok 2 (2026-06-17): pickup_committed_penalties validation
     if pickup_committed_penalties is not None and len(pickup_committed_penalties) != num_stops:
+        return None
+    # Eskalacja (2026-06-22): pickup_committed_penalties_t2 validation
+    if pickup_committed_penalties_t2 is not None and len(pickup_committed_penalties_t2) != num_stops:
         return None
     # Sprint OBJ FOOD-AGE ADDITIVE (2026-06-14): delivery_food_age_penalties validation
     if delivery_food_age_penalties is not None and len(delivery_food_age_penalties) != num_stops:
@@ -306,6 +310,39 @@ def solve_tsp_with_constraints(
             idx = manager.NodeToIndex(stop_idx)
             time_dimension.SetCumulVarSoftUpperBound(
                 idx, scaled_bound, int(round(coeff)))
+
+    # ESKALACJA committed (2026-06-22 D1, Adrian): tier-2 soft upper bound na CUMUL
+    # PICKUPÓW committed przez OSOBNY wymiar (OR-Tools nie stackuje 2 soft-boundów na
+    # 1 węźle Time) + TWARDA równość CumulVar(CommittedLate)==CumulVar(Time) → mirror
+    # realnego (wait-inclusive) harmonogramu. Łącznie z tier-1 (Time, próg ck+tol) =
+    # kara WYPUKŁA: 0 do ck+tol, slope c1 do ck+T2, slope c1+c2 powyżej ("mocno rosnąca").
+    if pickup_committed_penalties_t2 is not None and any(
+            p is not None for p in pickup_committed_penalties_t2):
+        import math as _m_pc2
+        routing.AddDimension(
+            time_callback_index,
+            int(max_route_min * TIME_SCALE),   # slack
+            int(max_route_min * TIME_SCALE),   # capacity
+            True,                              # fix_start_cumul_to_zero
+            "CommittedLate",
+        )
+        _cl_dim = routing.GetDimensionOrDie("CommittedLate")
+        capacity_max = int(max_route_min * TIME_SCALE)
+        for stop_idx in range(num_stops):
+            idx = manager.NodeToIndex(stop_idx)
+            # mirror realnego (wait-inclusive) czasu z wymiaru Time
+            routing.solver().Add(
+                _cl_dim.CumulVar(idx) == time_dimension.CumulVar(idx))
+            spec = pickup_committed_penalties_t2[stop_idx]
+            if spec is None:
+                continue
+            bound_min, coeff = spec
+            if bound_min is None or coeff is None or coeff <= 0:
+                continue
+            if _m_pc2.isnan(bound_min) or _m_pc2.isinf(bound_min):
+                continue
+            scaled_bound = max(0, min(int(bound_min * TIME_SCALE), capacity_max))
+            _cl_dim.SetCumulVarSoftUpperBound(idx, scaled_bound, int(round(coeff)))
 
     # Sprint OBJ FOOD-AGE ADDITIVE (2026-06-14 redesign): drugi soft upper bound na
     # CUMUL DOSTAWY, ADDYTYWNY do R6 (delivery_soft_deadlines). OR-Tools nie stackuje

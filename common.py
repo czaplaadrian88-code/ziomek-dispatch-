@@ -2316,6 +2316,21 @@ OBJ_COMMITTED_PICKUP_TOL_STRICT_MIN = 5.0
 OBJ_COMMITTED_PICKUP_TOL_LOOSE_MIN = 10.0
 OBJ_COMMITTED_PICKUP_LOAD_THRESHOLD = 4.5   # loadgov_ewma ≥ to → loosening (Adrian: 50 zleceń/11 std ≈ 4,5)
 
+# ESKALACJA kary committed (Adrian 2026-06-22 D1): "±5 za darmo, od +6 kara MOCNO
+# ROSNĄCA o każdą minutę". Pojedynczy SetCumulVarSoftUpperBound jest LINIOWY → drugi
+# próg przez OSOBNY WYMIAR (wzorzec food-age: CumulVar==Time) daje karę WYPUKŁĄ
+# (eskalującą): tier-1 (+tol, coeff bazowy) + tier-2 (+T2, coeff ostry) → slope rośnie
+# za drugim progiem. Flaga env, default OFF — flip po replayu. Łańcuch progów:
+#   ≤ ck+tol         : 0
+#   ck+tol .. ck+T2  : COEFF / min
+#   > ck+T2          : (COEFF + COEFF_T2) / min  ← „mocno rosnąca"
+ENABLE_OBJ_COMMITTED_PICKUP_ESCALATION = _os.environ.get(
+    "ENABLE_OBJ_COMMITTED_PICKUP_ESCALATION", "0") == "1"
+OBJ_COMMITTED_PICKUP_ESCALATION_T2_MIN = float(_os.environ.get(
+    "OBJ_COMMITTED_PICKUP_ESCALATION_T2_MIN", "10.0"))   # 2. próg: ck + tol + (T2 - tol) → bound = ck + T2
+OBJ_COMMITTED_PICKUP_PENALTY_COEFF_T2 = float(_os.environ.get(
+    "OBJ_COMMITTED_PICKUP_PENALTY_COEFF_T2", "400.0"))   # dodatkowy slope za 2. progiem (ostry)
+
 # R-INTRA-RESTAURANT-GAP (HARD, 2026-05-14): max gap między dwoma kolejnymi
 # pickupami w tej samej restauracji. Adrian doktryna: kurier nie będzie czekał
 # >5 min w tej samej restauracji żeby razem odebrać. Diagnoza propozycji
