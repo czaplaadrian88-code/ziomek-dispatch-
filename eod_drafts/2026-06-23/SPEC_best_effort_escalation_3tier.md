@@ -78,8 +78,10 @@ Pola eskalacji (nowe):
 Shadow: flaga `ENABLE_BEST_EFFORT_OBJM_SHADOW=0` (hot) / `rm` `.bak-pre-besteffort-objm-shadow-*` + restart.
 Progi (`ESC_TIER2_MAX_FREE_MIN`, `CAP_MIN`) — liczby w flags.json, hot.
 
-## 7. Otwarte / do potwierdzenia
-- **Tier 3 worek cap:** spec mówi **40**, w flags.json obecnie `BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN=35`
-  (z wcześniejszej rozmowy). Do decyzji: 40 (zgodnie z tym specem) czy 35?
+## 7. Progi (decyzja Adriana 23.06) — LIVE w flags.json (hot)
+- **Tier 3 worek cap = 40** (`BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN=40`). Stretch do 40 TYLKO w Tier 3.
+- **Próg Tier 2 = 90 min** (`BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN=90`): czekaj na pierwszego-wolnego
+  aż do 90 min; Tier 3 (stretch 40) dopiero gdy **nikt nie zwolni się <90 min** (= „wszyscy mają
+  2 worki, kurier nie przyjedzie wcześniej niż za 90 min"). Reguła Adriana.
 - **Tier 3 odbiór +10:** dziś hard limit 5; relaksacja do 10 = zmiana bramki feasibility (v2).
-- **Próg Tier 2** = 30 min (placeholder) — do kalibracji.
+- (opcja) log sygnału „flota pełna" (min bag w puli) by potwierdzić warunek „2 worki" gdy Tier 3 fire.
