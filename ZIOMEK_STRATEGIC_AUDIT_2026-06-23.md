@@ -365,4 +365,27 @@ weight_calibration · load_reshape_replay · distance_reshape_replay · base_amp
 3. **OPERACYJNY (najwyższy impakt, nie-algorytm): real-time „gotowe" z restauracji.** Dominujący błąd (pickup-slip ~9 min) = LUKA DANYCH (Ziomek nie wie kiedy jedzenie REALNIE gotowe). Ping „gotowe" naprawia największe źródło błędu ETA + kasuje wait. Spójne z całą kampanią (operacyjny > scoring).
 4. (Niżej) **efektywność/km** (bundlować więcej bez 3+); **ML two-model arbitraż** (shadow, nierozwiązany: solo 0.896 / bundle 0.642).
 
+### 18.4 STAN KOŃCOWY KAMPANII KALIBRACYJNEJ — READ-FIRST przy kalibracji (2026-06-23)
+
+**Przetestowano WSZYSTKO po stronie scoringu/bramek/tierów/predykcji. MAPA (9 narzędzi read-only w `tools/`):**
+
+| Kąt | Narzędzie | Werdykt |
+|---|---|---|
+| wagi bazowe (reshape / reweight / amplify) | `weight_calibration`, `load_reshape_replay`, `distance_reshape_replay`, `base_amplify_probe` | **NO-OP** (0,4-3% zmian; marginesy ~88 pkt dławią) |
+| bonus tier (gold/slow) | `tier_calibration_test` | **dobrze skalibrowany** (err_med konserwatywny; breach = realna wolniejszość, poprawnie przewidziana) |
+| **twarda bramka R6=35** | `r6_overpessimism_test` | **🟢 OVER-PESYMISTYCZNA — jedyny scoring-lewar** |
+| dokładniejsza predykcja | `prediction_reducibility_test` | **nieredukowalna przy decyzji** (delivery-pred już −1,7; 96,9% slipu LOSOWY, nie per-restauracja) |
+| shadow-sygnały (R3 / redirecty) | `shadow_signals_vs_tail` | **żaden nie łapie ogona** (R3 recall 4%, redirecty nie dyskryminują) |
+| ogon porażek (11,1%) | `failure_tail_analysis` | **44% saturacja + 71,5% nieprzewidywalny prep-slip** |
+| dane wejściowe | `calibration_screen`→`calibration_set_june.jsonl` (3721), `decision_outcome_join`, `pos_age_outcome` | przesiew miarodajnych |
+
+**WNIOSEK KOŃCOWY: scoring / wagi / tiery / predykcja Ziomka są DOBRZE USTAWIONE (replay-dowiedzione). 3 JEDYNE realne dźwignie:**
+1. **Zmiękczenie R6** (scoring, decision-time, do zrobienia TERAZ) — hard-reject ~42-45 / soft 35-42 → **−29% best-effort**, realny breach zostaje 11%. ⚠ obniża standard R-35MIN-MAX = **decyzja biznesowa Adriana** + wymaga **shadow-A/B w `feasibility_v2`** przed flipem.
+2. **Real-time „gotowe” z restauracji** (operacyjny ROOT-FIX) — jedyne co naprawia 71,5% prep-slip surprises (info NIE istnieje przy decyzji). Zmiana flow, nie scoring.
+3. **Pojemność floty** (operacyjny) — 44% saturacji.
+
+**NIE ruszać:** wagi / bonusy / tiery (zmierzone dobre/no-op). **NIE szukać więcej scoring-lewarów — wyczerpane.**
+**Mini-higiena (nie pilne):** `courier_tiers.json` z kwietnia → odświeżyć z czerwcowych danych; Marek (slow) tier-review (ACK); nowi kurierzy ramp (Marcin Pu/Rafał Ja 28-30% breach = oczekiwane).
+**Tagi rollback:** `ziomek-{calibration-screen, weight-calibration, load-reshape-replay, distance-reshape-replay, base-amplify-probe, failure-tail, shadow-signals-tail, r6-overpessimism, prediction-reducibility, tier-calibration}-2026-06-23`. Re-run narzędzi na świeższych danych kiedykolwiek.
+
 *Koniec checkpointu 2026-06-23.*
