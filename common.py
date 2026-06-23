@@ -2404,6 +2404,12 @@ ENABLE_OBJM_LEXR6_SELECT = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT", "0") == "
 # Live-flip selekcji = OSOBNA flaga ENABLE_BEST_EFFORT_OBJM_R6_KEY + ACK po walidacji.
 ENABLE_BEST_EFFORT_OBJM_SHADOW = _os.environ.get("ENABLE_BEST_EFFORT_OBJM_SHADOW", "0") == "1"
 
+# BEZPIECZNIK nowego zlecenia dla best_effort objm shadow (2026-06-23): carry-aware pick TYLKO
+# wśród kandydatów z new-order bag <= cap (max ~5 min ponad R6=35); fallback do pure carry-min gdy
+# żaden bezpieczny. Sweep 21-23.06: cap=40 → regresja nowego 27%→16%, zysk carry 83% utrzymany.
+# KANON hot = flags.json; ta stała = fallback. Konsumpcja: C.flag("BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN", 40.0).
+BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN = float(_os.environ.get("BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN", "40"))
+
 # ETA R3 SHADOW (2026-06-18): residualny model LightGBM koryguje ETA bazową OSRM
 # (held-out MAE 9,97→8,63 = −13,4%). FAZA SHADOW: eta_calibration_logger liczy `corrected`
 # obok `predicted` i loguje OBA → pomiar MAE(base) vs MAE(corrected) na ŻYWYCH held-out danych.
