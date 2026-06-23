@@ -438,6 +438,25 @@ the module constant. ~80+ flags exist. Notable **current** states:
   and `PANEL_FLAG_TRUST_CANON_ORDER` (nadajesz-panel) — both 🟢 LIVE. These re-sequence an **already
   assigned** bag only; they do **not** touch assignment/feasibility (a courier carrying a restaurant's
   food can still be assigned new orders, incl. from that restaurant).
+- 🟢 **`ENABLE_RECANON_ON_WRITE` (2026-06-23, LIVE on `dispatch-panel-watcher`).** Root cause fixed
+  "from the foundations": the canon order-invariants above were applied **only** by the 5-min
+  `plan_recheck` tick. Event-time writers of `courier_plans.json` (`_save_plan_on_assign` proposal-save,
+  `mark_picked_up` on pickup, `advance_plan` on delivery) wrote the plan **without** them → carried not
+  floored / pickups not sorted until the next tick (cases Piotr/Grzesiek/Dawid 23.06). `recanon_courier`
+  (in `plan_recheck.py`, called from the 3 `panel_watcher` event handlers) re-enforces the canon on the
+  **existing** plan immediately on every bag event via `_retime_one_bag_plan` (**no re-TSP** — Ziomek's
+  sequence preserved, just floor+committed-sort+relax + re-time). ~4–8 ms, idempotent, self-gating
+  (no-op if plan missing/invalidated/not-covering). Console complement: `PANEL_FLAG_SKIP_INVALIDATED_PLAN`
+  (🟢 LIVE) — for an invalidated plan the panel does **not** trust the raw canon, falls back to its
+  carried-first rebuild (measured ≡ full canon in 95.9% of carried bags).
+- 🔵 **`ENABLE_B_ROUTE_SHADOW` (2026-06-23, read-only).** Open question: would **immediate full re-TSP**
+  on every override ("option B", `_gen_one_bag_plan`) yield better real outcomes than the served canon?
+  Rejected as-live (0.8–2.1 s OR-Tools in the hot path would choke `panel_watcher` in peak; cheap
+  `insert_stop_optimal`+canon "B-lite" is ~10 ms / 120× but static-quality −1.4 min vs re-TSP). Shadow
+  (`tools/b_route_shadow.py`, timer every 5 min, writes to a **temp** plans file — zero live mutation)
+  logs served/B/B-lite + freshness/punctuality/drive metrics to `b_route_shadow.jsonl`; one-shot review
+  (`tools/b_route_shadow_review.py`, timer **2026-06-30**) joins `order_ids`→`sla_log.jsonl` for the
+  GO/NO-GO verdict (preliminary signal: B trades carried freshness for total-duration → leaning **NO-GO**).
 
 `kill_switch_to_v1=true` reverts the whole v2 to the legacy `gastro_trigger.sh`.
 
