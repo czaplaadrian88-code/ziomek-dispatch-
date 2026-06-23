@@ -325,4 +325,39 @@ bo **żadna nie jest pilna** (system działa stabilnie przy 180-300 zleceń/d):
 
 **Domyślna rekomendacja audytora:** nic z powyższych nie jest pilne; #3/#4 = inwestycje POD SKALĘ (robić gdy rośnie wolumen/miasta). Najtańszy realny zysk przy powrocie = **alarm-timer**. **Strojeń scoringu NIE ruszać** (zmierzone no-opy). Narzędzia pomiarowe (`tools/{decision_outcome_join,defer_hold_shadow,latency_alarm,pos_age_outcome}.py`) zostają — re-run kiedykolwiek by zweryfikować na świeższych danych.
 
+## 18. KAMPANIA KALIBRACYJNA 2026-06-23 + ROADMAP (następne sesje: START STĄD przy kalibracji)
+
+### 18.1 Zrobione — przesiew + WĄTEK WAG ZAMKNIĘTY
+**Przesiew:** `tools/calibration_screen.py` → `dispatch_state/calibration_set_june.jsonl` (**3721 miarodajnych**).
+Odsiewa: czasówki, nie-PROPOSE, **pick-Ziomka-realnie-nie-pracował** (aktywność sla_log ±90 min — Adriana
+„był w domu", 8%=323), brak floty <2. Re-run na świeższych danych kiedykolwiek.
+
+**WĄTEK WAG BAZOWYCH — ZAMKNIĘTY, NIE WRACAĆ. Werdykt: wagi (0.30/0.25/0.25/0.20) są dobrze ustawione.**
+7 narzędzi read-only w `tools/`: calibration_screen · decision_outcome_join · pos_age_outcome ·
+weight_calibration · load_reshape_replay · distance_reshape_replay · base_amplify_probe.
+- **reshape** formuły obciążenia (flat-0-2/kara-3+) → zmienia **0,4%** picków.
+- **reweight** dystansu (W 0.30→0.20 / decay 5→10) → **1-3%**.
+- **amplify** (baza ×K) → zmieniłoby, ale ZERWAŁOBY 2,5% bundli niesionych free-stopem (100% on-time) + nadpisało kary wait → **GORZEJ**.
+- **Mechanizm:** 97,5% picków = solo (baza+tier+wait decydują, marginesy ~88 pkt → odporne na tweaki); 2,5% = bundle (free-stop **+150** słusznie dominuje). Wagi correctly-powered.
+- **Czemu mediana nasycona:** on-time ~90% NIEZALEŻNIE od wyboru dostępnego kuriera (zależy od prep restauracji + dystansu-do-DOSTAWY, nie który-kurier). Ziomek ≈ człowiek gdy wzięty (87% vs 89%, czas 16,9 vs 18,0).
+- **METODA (działa też dla bonusów):** zmiana JEDNEGO członu = exact-recompute z zalogowanego `score`+cechy (`new = score + W·(s_new−s_old)`), bez re-runu silnika, re-rank feasible. Bonusy (`bonus_r4`/`v326_speed_score_adjustment`/`bonus_r9_wait_pen`/`bonus_l1` — serializowane) → identycznie.
+
+### 18.2 ROADMAP — następne testy (Adrian 2026-06-23)
+1. **BONUSY I KARY** (TE realnie ruszają picki, w przeciwieństwie do wag bazowych):
+   - **tier (gold +7,5 / slow −12,5)** — dane: gold prawdopodobnie ZA SILNY (człowiek odchodzi od golda 190 vs 110). Najbardziej obiecujący.
+   - **kary wait** (`bonus_r9_wait_pen` do −1000 / `v3273_wait_courier`) — czy poprawnie łapią stygnięcie; ważne dla OGONA (late restaurant).
+   - **free-stop r4 (+150) / L1 (+25)** — magnituda; rządzą 2,5% bundli.
+   - METODA: exact-recompute replay (jak load) na `calibration_set_june.jsonl` + outcome.
+2. **TWARDE BRAMKI** (zmieniają FEASIBILITY = realny lewar, wyższe ryzyko):
+   - **R6=35 termiczny** — czy próg dobry; czy over-rejectuje → wpycha w best-effort (18-20% peak orderów idzie best-effort pool=0)?
+   - **bag-capy** (sanity 8 / tier gold6/std5/slow4) — czy wymuszają best-effort w saturacji?
+   - **SLA=35** ≈ duplikat R6 (czy oba potrzebne).
+   - METODA: z czystego zbioru — kandydaci R6/cap-odrzuceni vs czy best-effort fallback wyszedł GORZEJ niż odrzucony by wyszedł; replay z przesuniętym progiem + monitor R6/SLA.
+
+### 18.3 MOJE PROPOZYCJE (potencjalnie najlepsze wyniki — uzasadnione kampanią)
+1. **🎯 ANALIZA OGONA PORAŻEK — rekomendacja #1.** Mediana nasycona/dobra → cała wartość w ~11% ZŁYCH dostaw (realny R6 breach). Zbadać co je ODRÓŻNIA: saturacja (pool=0)? konkretne restauracje (wolny prep)? strefy/dystans? godziny? czasówki? **Wzorzec adresowalny** (restauracja X zawsze breach / strefa Y) → handle specjalnie. **Czysta saturacja** → capacity (nie-algorytm). Mówi GDZIE realnie działać — zamiast stroić nasyconą medianę.
+2. **Committed pickup-time / pickup-debias.** +8,75 min e2e slip = optymizm zadeklarowanego `czas_kuriera`. Jest shadow `ENABLE_PICKUP_DEBIAS_SHADOW` (06-22). Kalibracja realistycznej OBIETNICY → mniej idle kuriera (stygnięcie), uczciwe ETA, lepiej gra z proaktywnym komunikatem. Zmienia co Ziomek OBIECUJE.
+3. **OPERACYJNY (najwyższy impakt, nie-algorytm): real-time „gotowe" z restauracji.** Dominujący błąd (pickup-slip ~9 min) = LUKA DANYCH (Ziomek nie wie kiedy jedzenie REALNIE gotowe). Ping „gotowe" naprawia największe źródło błędu ETA + kasuje wait. Spójne z całą kampanią (operacyjny > scoring).
+4. (Niżej) **efektywność/km** (bundlować więcej bez 3+); **ML two-model arbitraż** (shadow, nierozwiązany: solo 0.896 / bundle 0.642).
+
 *Koniec checkpointu 2026-06-23.*
