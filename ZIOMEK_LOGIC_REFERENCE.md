@@ -28,6 +28,31 @@
 
 ---
 
+> ## ⚠️ LIVE-STATE CORRECTION — 2026-06-23 (read before trusting any 🟢/🟡/⚪ tag below)
+>
+> A live-flags audit (2026-06-22/23; full `flags.json` + 3162 `shadow_decisions.jsonl` records) found
+> several mechanics below **mis-tagged vs production**. `flags.json` wins over the module constant
+> (`decision_flag`, `common.py:232`) and has drifted since this doc was generated. **Trust this block.**
+> Full strategic checkpoint: `dispatch_v2/ZIOMEK_STRATEGIC_AUDIT_2026-06-23.md`.
+>
+> | Mechanic | tag below | **LIVE today** | effect |
+> |---|---|---|---|
+> | `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` | 🟢 | **⚪ OFF** | cold-food divergence no longer →KOORD |
+> | `ENABLE_HARD_TIER_BAG_CAP` | ⚪ | **🟢 LIVE** | NEW hard reject: gold/std+ 6 / std 5 / slow,new 4 |
+> | `ENABLE_FLEET_LOAD_GOVERNOR` | 🟡 | **🟢 LIVE** | −40 ranking delta (12.4% of proposals) |
+> | `ENABLE_BUNDLE_SYNC_SPREAD` | 🟡 | **🟢 LIVE** | 0..−150 ranking delta (59.5% of proposals) |
+> | `ENABLE_R5_PICKUP_DETOUR_PENALTY` | ⚪ | **🟢 LIVE** | −4.0/km over 0.5km |
+> | `ENABLE_A2_RELIABILITY_SOFT_SCORE` | 🟡 | **🟢 LIVE** | reliability penalty coeff 60 |
+> | `ENABLE_OBJ_COMMITTED_PICKUP_PENALTY` | — | **🟢 LIVE** | OR-Tools soft coeff 100, never INFEASIBLE |
+> | `ENABLE_NO_GPS_UNCERTAINTY_PENALTY` (B3) | 🟢 trial | **⚪ OFF** | rolled back |
+> | `ENABLE_NO_GPS_EQUAL_TREATMENT` | — | **🟢 LIVE** | no_gps competes on raw score; `_demote_blind_empty` ~inert |
+> | `ENABLE_ALWAYS_PROPOSE_ON_SATURATION` | — | **🟢 LIVE** | every quality→KOORD gate carries `and not _always_propose_on()` |
+>
+> **Net (Adrian directive 2026-06-23 — full autonomy):** quality-driven KOORD escalation is deliberately
+> disabled. R6 35-min is hard at the feasibility/candidate layer, **soft at the verdict layer** (20.6% of
+> proposals ship breaching it). Safety invariant: LOADGOV/SYNCWORKA deltas are stripped from the KOORD
+> gate-score (`_gate_score_excluding_ranking_deltas`, `dp:1975`) — they re-rank but never silence. ML = pure shadow.
+
 ## 1. What Ziomek is
 
 Ziomek is an **autonomous, rule-based** dispatcher for NadajeSz (food + parcel delivery, Białystok):
