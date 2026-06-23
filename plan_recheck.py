@@ -411,6 +411,17 @@ CARRIED_FIRST_RELAX_DRIVE_EPS_MIN = float(
 CARRIED_FIRST_RELAX_MAX_STOPS = int(
     os.environ.get("CARRIED_FIRST_RELAX_MAX_STOPS", "8"))
 
+# CARRIED-AGE TZ FIX (Adrian 2026-06-23, root spuchniętych predykcji bundla): relax
+# liczył wiek niesionego jedzenia przez `_parse_dt(picked_up_at)`, a picked_up_at to
+# NAIWNY czas Warsaw → _parse_dt traktuje go jako UTC (+2h, patrz docstring :273) →
+# carried_age ~−120 min (jedzenie „z przyszłości") → guard SOFT_MAX (carry≤20) NIGDY nie
+# odrzucał parkowania carried za nowym odbiorem → długi predicted_at dostawy → bundle PRED
+# spuchnięty (15,6→28,8 min, real stabilny ~18-20). Fix: parsuj picked_up_at poprawnie
+# (parse_panel_timestamp — jak _sim_picked_up_at / ścieżka propozycji Telegrama). Default
+# OFF — flip po replay (carried_first_replay) + ACK. ON = relax znów respektuje świeżość
+# (zostaje carried-first, gdy carried nie zdąży ≤SOFT_MAX od ODEBRANIA).
+ENABLE_CARRIED_AGE_TZ_FIX = os.environ.get("ENABLE_CARRIED_AGE_TZ_FIX", "0") == "1"
+
 
 def _gps_age_min(gps: Dict[str, Any], now: datetime) -> Optional[float]:
     ts = _parse_dt((gps or {}).get("timestamp"))
@@ -840,7 +851,16 @@ def _relax_carried_first(seq, orders_state, start_pos, now):
             committed_rel.append(None)
     carried_age = {}
     for oid in carried:
-        pa = _parse_dt((orders_state.get(oid) or {}).get("picked_up_at"))
+        _puat = (orders_state.get(oid) or {}).get("picked_up_at")
+        if ENABLE_CARRIED_AGE_TZ_FIX:
+            # picked_up_at = naiwny Warsaw → parsuj jak ścieżka propozycji (NIE _parse_dt=UTC).
+            try:
+                from dispatch_v2.common import parse_panel_timestamp
+                pa = parse_panel_timestamp(_puat)
+            except Exception:
+                pa = None
+        else:
+            pa = _parse_dt(_puat)   # zachowanie sprzed fixa (błąd +2h) — flaga OFF
         carried_age[oid] = (now_min - pa.timestamp() / 60.0) if pa is not None else None
     ppos = {oid_of[i]: i for i in range(n) if kind_pick[i]}
     dpos = {oid_of[i]: i for i in range(n) if not kind_pick[i]}
