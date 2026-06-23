@@ -238,7 +238,12 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        # best_effort_fastest_pickup_shadow {live_cid/shadow_cid/
                        # would_differ/shadow_pickup_earlier_min} — walidacja selekcji
                        # „najszybszy odbiór" PRZED flipem live. LOCATION A+B.
-                       "best_effort_fastest_")
+                       "best_effort_fastest_",
+                       # BEST-EFFORT OBJM CARRY-INCLUSIVE SHADOW (2026-06-23): pola
+                       # best_effort_objm_{cid/flip/pool/live_r6/pick_r6/d_r6/d_committed/
+                       # live_newbag/pick_newbag/d_newbag} — walidacja carry-aware PRIMARY
+                       # na ścieżce best_effort (0 feasible) PRZED flipem. LOCATION B (best).
+                       "best_effort_objm_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:

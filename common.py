@@ -2394,6 +2394,16 @@ ENABLE_OBJM_LEXR6_SELECT_SHADOW = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT_SHAD
 # ta stała = fallback OFF gdy brak klucza. Konsumpcja: C.flag("ENABLE_OBJM_LEXR6_SELECT", False).
 ENABLE_OBJM_LEXR6_SELECT = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT", "0") == "1"
 
+# BEST-EFFORT OBJM SHADOW (2026-06-23): ścieżka best_effort (0 feasible) sortuje
+# `_best_effort_sort_key` z PRIMARY = r6_per_order_violations (new-pickup-only) — ŚLEPYM na
+# carry-ordery (case #482817: 370 wybrany r6_pov=0 mimo objm_breach 58min na 482800). Ten shadow
+# loguje co BY wybrała selekcja gdyby PRIMARY był carry-inclusive objm_r6_breach_max (mirror
+# _objm_lexr6_shadow), ZERO wpływu na werdykt. Faithful (sticky-aware) — offline capture replay
+# daje tylko 36% (sticky nieodtwarzalny). Konsumpcja: C.flag("ENABLE_BEST_EFFORT_OBJM_SHADOW",
+# False). flags.json = KANON hot-reload; ta stała = fallback OFF. Telemetria, NIE flaga decyzyjna.
+# Live-flip selekcji = OSOBNA flaga ENABLE_BEST_EFFORT_OBJM_R6_KEY + ACK po walidacji.
+ENABLE_BEST_EFFORT_OBJM_SHADOW = _os.environ.get("ENABLE_BEST_EFFORT_OBJM_SHADOW", "0") == "1"
+
 # ETA R3 SHADOW (2026-06-18): residualny model LightGBM koryguje ETA bazową OSRM
 # (held-out MAE 9,97→8,63 = −13,4%). FAZA SHADOW: eta_calibration_logger liczy `corrected`
 # obok `predicted` i loguje OBA → pomiar MAE(base) vs MAE(corrected) na ŻYWYCH held-out danych.

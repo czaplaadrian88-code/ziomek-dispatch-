@@ -613,6 +613,69 @@ def _best_effort_fastest_pickup_key(c, new_order_id):
     return (pu if pu is not None else BIG, dv if dv is not None else BIG, bucket)
 
 
+def _best_effort_objm_shadow(with_plan, live_best, new_oid) -> None:
+    """SHADOW (2026-06-23): co BY wybrała selekcja best_effort, gdyby PRIMARY był carry-inclusive
+    objm_r6_breach_max_min (mirror _objm_lexr6_shadow._lex_qual) zamiast new-pickup-only
+    r6_per_order_violations (ślepego na carry-ordery — case #482817). LOG-ONLY: pisze TYLKO
+    live_best.metrics['best_effort_objm_*'] (prefix auto-serializowany w shadow_dispatcher),
+    NIGDY nie mutuje with_plan/best/werdyktu. Faithful (sticky-aware) — liczy na DOKŁADNIE tych
+    planach co realna selekcja. Defensywny (Lekcja #83: try/except, fail-open, zero raise)."""
+    try:
+        if not with_plan or live_best is None:
+            return
+        lm = getattr(live_best, "metrics", None)
+        if not isinstance(lm, dict):
+            return
+
+        def _m(c, k):
+            v = (getattr(c, "metrics", None) or {}).get(k)
+            return float(v) if isinstance(v, (int, float)) else None
+
+        def _newbag(c):
+            pod = getattr(getattr(c, "plan", None), "per_order_delivery_times", None) or {}
+            v = pod.get(new_oid)
+            return float(v) if isinstance(v, (int, float)) else None
+
+        def _lex_qual(c):
+            r6 = _m(c, "objm_r6_breach_max_min")
+            return (r6 if r6 is not None else 9e9,
+                    _m(c, "late_pickup_committed_max") or 0.0,
+                    _m(c, "new_pickup_late_min") or 0.0)
+
+        pick = min(with_plan, key=_lex_qual)
+        flip = str(getattr(pick, "courier_id", "")) != str(getattr(live_best, "courier_id", ""))
+        lm["best_effort_objm_cid"] = str(getattr(pick, "courier_id", ""))
+        lm["best_effort_objm_flip"] = flip
+        lm["best_effort_objm_pool"] = len(with_plan)
+        lm["best_effort_objm_live_r6"] = round(_m(live_best, "objm_r6_breach_max_min") or 0.0, 1)
+        lm["best_effort_objm_pick_r6"] = round(_m(pick, "objm_r6_breach_max_min") or 0.0, 1)
+        if flip:
+            _ln, _pn = _newbag(live_best), _newbag(pick)
+            lm["best_effort_objm_d_r6"] = round(
+                (_m(pick, "objm_r6_breach_max_min") or 0.0)
+                - (_m(live_best, "objm_r6_breach_max_min") or 0.0), 1)
+            lm["best_effort_objm_d_committed"] = round(
+                (_m(pick, "late_pickup_committed_max") or 0.0)
+                - (_m(live_best, "late_pickup_committed_max") or 0.0), 1)
+            lm["best_effort_objm_live_newbag"] = round(_ln, 1) if _ln is not None else None
+            lm["best_effort_objm_pick_newbag"] = round(_pn, 1) if _pn is not None else None
+            lm["best_effort_objm_d_newbag"] = (round(_pn - _ln, 1)
+                                               if (_ln is not None and _pn is not None) else None)
+            try:
+                log.info(
+                    "BEST_EFFORT_OBJM_SHADOW oid=%s live=%s objm_pick=%s dR6=%s dNewBag=%s pool=%d"
+                    % (new_oid, getattr(live_best, "courier_id", None),
+                       getattr(pick, "courier_id", None), lm["best_effort_objm_d_r6"],
+                       lm.get("best_effort_objm_d_newbag"), len(with_plan)))
+            except Exception:
+                pass
+    except Exception as _e:
+        try:
+            log.warning("best_effort_objm_shadow fail oid=%s: %r" % (new_oid, _e))
+        except Exception:
+            pass
+
+
 # _selection_veto_winner — RETIRED 2026-06-11 (ACK Adrian po digescie at#113;
 # A2 soft-score dowiózł, veto nadpisywałoby legalne decyzje — werdykt 08.06).
 
@@ -6042,6 +6105,13 @@ def _assess_order_impl(
     if with_plan:
         best = with_plan[0]
         best.best_effort = True
+        # OBJM CARRY-INCLUSIVE SHADOW (2026-06-23): co BY wybrała selekcja gdyby PRIMARY był
+        # objm_r6_breach_max (carry-aware) zamiast r6_per_order_violations (new-pickup-only,
+        # ślepego na carry — case #482817). LOG-ONLY. flags.json hot. Walidacja PRZED
+        # ENABLE_BEST_EFFORT_OBJM_R6_KEY (live-flip = osobna flaga + ACK).
+        if C.flag("ENABLE_BEST_EFFORT_OBJM_SHADOW",
+                  getattr(C, "ENABLE_BEST_EFFORT_OBJM_SHADOW", False)):
+            _best_effort_objm_shadow(with_plan, best, new_order.order_id)
         # FASTEST-PICKUP SHADOW (Adrian 2026-06-15): co BY wybrała selekcja „najszybszy
         # odbiór → potem najszybszy dowóz". LOG-ONLY — NIE zmienia `best` (live = stary
         # klucz). Walidacja w shadow_decisions przed ewentualnym flipem live. flags.json hot.
