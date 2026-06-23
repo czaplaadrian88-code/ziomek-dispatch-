@@ -345,6 +345,7 @@ weight_calibration · load_reshape_replay · distance_reshape_replay · base_amp
 ### 18.2 ROADMAP — następne testy (Adrian 2026-06-23)
 1. **BONUSY I KARY** (TE realnie ruszają picki, w przeciwieństwie do wag bazowych):
    - **tier (gold +7,5 / slow −12,5)** — dane: gold prawdopodobnie ZA SILNY (człowiek odchodzi od golda 190 vs 110). Najbardziej obiecujący.
+     **WYNIK 23.06 (`tools/tier_calibration_test.py`): tier PREDYKCYJNIE dobrze skalibrowany — Ziomek NIE myli się dla żadnego tieru.** err_med (real−pred) wszystkie KONSERWATYWNE: gold −2,7 / std+ −2,4 / std −1,5 / slow −0,1 / new −0,1. breach rośnie monotonicznie (gold 8,1% → std 10,5% → slow 17,3% / new 15,8%) ALE to REALNA wolniejszość POPRAWNIE przewidziana (nie błąd modelu). Mis-tier per-kurier słaby/confounded: nowi (Marcin Pu 30%/Rafał Ja 28% breach = RAMP, expected); std/std+ high-breacherzy (Adrian Cit +9pp, Andrei K +7pp) mają err_med≈0 → confound TRASY/restauracji, NIE prędkość → prze-tierowanie nie pomoże. Soft kandydat: **Marek** (slow, err +5,9, breach +9,6pp, n=26 mały) — wymaga **ACK Adriana** (cid↔tier=domena, Lekcja QA-11). ⚠ `courier_tiers.json` z KWIETNIA → odświeżenie z czerwcowych danych = higiena, nie pilne. **Tier NIE jest lewarem na ogon.**
    - **kary wait** (`bonus_r9_wait_pen` do −1000 / `v3273_wait_courier`) — czy poprawnie łapią stygnięcie; ważne dla OGONA (late restaurant).
    - **free-stop r4 (+150) / L1 (+25)** — magnituda; rządzą 2,5% bundli.
    - METODA: exact-recompute replay (jak load) na `calibration_set_june.jsonl` + outcome.
