@@ -2410,6 +2410,13 @@ ENABLE_BEST_EFFORT_OBJM_SHADOW = _os.environ.get("ENABLE_BEST_EFFORT_OBJM_SHADOW
 # KANON hot = flags.json; ta stała = fallback. Konsumpcja: C.flag("BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN", 40.0).
 BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN = float(_os.environ.get("BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN", "40"))
 
+# ESKALACJA best_effort (2026-06-23, reguła Adriana 3-stopniowa): gdy 0 feasible (Tier 1
+# zawodzi), PRZED rozciąganiem worka (Tier 3) sprawdź Tier 2 = „daj pierwszemu wolnemu"
+# (min free_at — kurier kończący obecny worek; nowe odbiera PO rozładowaniu, obecne nietknięte).
+# Tier 2 akceptowalny gdy pierwszy-wolny zwalnia się ≤ ten próg (inaczej Tier 3 = cap-stretch).
+# SHADOW: log-only pod ENABLE_BEST_EFFORT_OBJM_SHADOW. KANON hot = flags.json.
+BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN = float(_os.environ.get("BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN", "30"))
+
 # ETA R3 SHADOW (2026-06-18): residualny model LightGBM koryguje ETA bazową OSRM
 # (held-out MAE 9,97→8,63 = −13,4%). FAZA SHADOW: eta_calibration_logger liczy `corrected`
 # obok `predicted` i loguje OBA → pomiar MAE(base) vs MAE(corrected) na ŻYWYCH held-out danych.

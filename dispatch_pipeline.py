@@ -667,6 +667,29 @@ def _best_effort_objm_shadow(with_plan, live_best, new_oid, cap_min=40.0) -> Non
         lm["best_effort_objm_guard_changed"] = _cid(pick) != _cid(raw)
         lm["best_effort_objm_live_r6"] = round(_m(live_best, "objm_r6_breach_max_min") or 0.0, 1)
         lm["best_effort_objm_pick_r6"] = round(_m(pick, "objm_r6_breach_max_min") or 0.0, 1)
+
+        # === ESKALACJA Tier 2 (pierwszy-wolny) — reguła Adriana 3-stopniowa ===
+        # Tier 2: daj nowe kurierowi z min free_at (kończy obecny worek najwcześniej); odbiera
+        # nowe PO rozładowaniu → obecne nietknięte. Akceptowalny gdy zwalnia się ≤ próg, inaczej
+        # Tier 3 = `pick` (carry-aware cap-stretch). LOG-ONLY (mierzy selekcję eskalacji).
+        def _free_at(c):
+            v = (getattr(c, "metrics", None) or {}).get("free_at_min")
+            return float(v) if isinstance(v, (int, float)) else None
+        _t2 = min(with_plan, key=lambda c: (_free_at(c) if _free_at(c) is not None else 9e9))
+        _t2_free = _free_at(_t2)
+        _esc_max = C.flag("BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN",
+                          getattr(C, "BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN", 30.0))
+        if _t2_free is not None and _t2_free <= _esc_max:
+            _esc_tier, _esc_cid = 2, _cid(_t2)
+        else:
+            _esc_tier, _esc_cid = 3, _cid(pick)
+        lm["best_effort_objm_t2_cid"] = _cid(_t2)
+        lm["best_effort_objm_t2_free_min"] = round(_t2_free, 1) if _t2_free is not None else None
+        lm["best_effort_objm_t2_bag"] = (getattr(_t2, "metrics", None) or {}).get("bag_size_before")
+        lm["best_effort_objm_esc_tier"] = _esc_tier
+        lm["best_effort_objm_esc_cid"] = _esc_cid
+        lm["best_effort_objm_esc_vs_live"] = _esc_cid != live_cid
+        lm["best_effort_objm_esc_max_free"] = round(float(_esc_max), 1)
         if flip:
             _ln, _pn = _newbag(live_best), _newbag(pick)
             lm["best_effort_objm_d_r6"] = round(
