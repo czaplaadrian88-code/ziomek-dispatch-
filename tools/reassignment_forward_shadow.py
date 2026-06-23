@@ -50,6 +50,7 @@ _log = logging.getLogger("reassignment_forward_shadow")
 
 ORDERS_STATE = "/root/.openclaw/workspace/dispatch_state/orders_state.json"
 OUT_JSONL = "/root/.openclaw/workspace/dispatch_state/reassignment_shadow.jsonl"
+KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"  # {nazwa: cid} — aliasy do komunikatu TG
 
 FLAG = "ENABLE_REASSIGNMENT_FORWARD_SHADOW"
 MARGIN_KEY = "REASSIGN_FWD_MARGIN"
@@ -119,6 +120,75 @@ def _fleet_without_order(fleet: Dict[str, Any], oid: str, holder_cid: str) -> Di
     return out
 
 
+_ALIAS_CACHE: Dict[str, str] = {}
+_ALIAS_MTIME: float = 0.0
+
+
+def _alias_map() -> Dict[str, str]:
+    """{str(cid): nazwa} z kurier_ids.json (plik trzyma {nazwa: cid}). Cache po mtime,
+    fail-soft (gdy plik znika → ostatni cache)."""
+    global _ALIAS_CACHE, _ALIAS_MTIME
+    try:
+        st = os.stat(KURIER_IDS_PATH)
+    except OSError:
+        return _ALIAS_CACHE
+    if st.st_mtime != _ALIAS_MTIME or not _ALIAS_CACHE:
+        try:
+            with open(KURIER_IDS_PATH, encoding="utf-8") as f:
+                raw = json.load(f)
+            _ALIAS_CACHE = {str(cid): str(name) for name, cid in raw.items()}
+            _ALIAS_MTIME = st.st_mtime
+        except (OSError, ValueError) as e:
+            _log.warning(f"alias_map load fail: {e}")
+    return _ALIAS_CACHE
+
+
+def _alias(cid: str, name_hint: Optional[str] = None) -> str:
+    """Nazwa kuriera: najpierw nazwa z silnika (Candidate.name), potem kurier_ids,
+    na końcu fallback #cid (nigdy gołe cid bez kontekstu)."""
+    if name_hint:
+        return str(name_hint)
+    return _alias_map().get(str(cid)) or f"#{cid}"
+
+
+def _cand_km(c: Any) -> Optional[float]:
+    """km_to_pickup z metryk kandydata (lub None)."""
+    if c is None:
+        return None
+    m = getattr(c, "metrics", None) or {}
+    v = m.get("km_to_pickup")
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _why(would: bool, a_in_pool: bool, a_km: Optional[float], b_km: Optional[float],
+         a_bag: Optional[int], b_bag: Optional[int], a_real: bool, b_real: bool,
+         delta: Optional[float]) -> str:
+    """JEDNO zdanie PL: dlaczego Ziomek wskazałby innego kuriera. Wyłącznie z faktów
+    porównania obecny↔najlepszy (bliskość odbioru / wielkość worka / realny GPS /
+    margines pkt) — nic nie zgaduje."""
+    if not would:
+        return "obecny kurier nadal najlepszy — Ziomek by nie przerzucał"
+    bits: List[str] = []
+    if not a_in_pool:
+        bits.append("obecny kurier wypadł z puli wykonalnych (niedostępny/po zmianie)")
+    else:
+        if a_km is not None and b_km is not None and (a_km - b_km) >= 0.5:
+            bits.append(f"bliżej odbioru ({b_km:.1f} vs {a_km:.1f} km)")
+        if a_bag is not None and b_bag is not None and b_bag < a_bag:
+            bits.append(f"luźniejszy worek ({b_bag} vs {a_bag} zlec.)")
+        if b_real and not a_real:
+            bits.append("ma realny GPS (pozycja obecnego zgadywana)")
+    if not bits:
+        bits.append("wyższe dopasowanie do trasy/floty")
+    s = "; ".join(bits[:2])
+    if delta is not None:
+        s += f" (Δ{delta:+.0f} pkt)"
+    return s
+
+
 def evaluate_order(rec: dict, holder_cid: str, fleet: Dict[str, Any],
                    now: Optional[datetime] = None, margin: float = DEFAULT_MARGIN) -> Optional[dict]:
     """Dla nieodebranego O (u A): policz PRAWDZIWYM assess_order nad flotą z O wyjętym
@@ -151,12 +221,26 @@ def evaluate_order(rec: dict, holder_cid: str, fleet: Dict[str, Any],
 
     cs_b = fleet_cf.get(b_cid)
     cs_a = fleet.get(holder_cid)
+    a_bag = len(cs_a.bag) if cs_a is not None and cs_a.bag is not None else None
+    b_bag = len(cs_b.bag) if cs_b is not None and cs_b.bag is not None else None
+    a_real = (getattr(cs_a, "pos_source", None) not in _SYNTH_POS) if cs_a is not None else False
+    b_real = (getattr(cs_b, "pos_source", None) not in _SYNTH_POS) if cs_b is not None else False
+    a_km = _cand_km(a_cand)
+    b_km = _cand_km(best)
+    a_name = getattr(a_cand, "name", None) if a_cand is not None else None
+    b_name = getattr(best, "name", None)
+    reason = _why(bool(would), a_cand is not None, a_km, b_km, a_bag, b_bag, a_real, b_real, delta)
     return {
         "ts": now.isoformat(),
         "order_id": oid,
         "restaurant": rec.get("restaurant"),
         "holder_cid": holder_cid,
         "best_cid": b_cid,
+        "a_name": a_name,
+        "b_name": b_name,
+        "a_km": round(a_km, 2) if a_km is not None else None,
+        "b_km": round(b_km, 2) if b_km is not None else None,
+        "reason": reason,
         "would_reassign": bool(would),
         "a_in_pool": a_cand is not None,
         "a_score": round(a_score, 2) if a_score is not None else None,
@@ -165,9 +249,9 @@ def evaluate_order(rec: dict, holder_cid: str, fleet: Dict[str, Any],
         "verdict": getattr(res, "verdict", None),
         "pool_feasible": int(getattr(res, "pool_feasible_count", 0) or 0),
         "a_pos_source": getattr(cs_a, "pos_source", None) if cs_a is not None else None,
-        "a_bag_size": len(cs_a.bag) if cs_a is not None and cs_a.bag is not None else None,
+        "a_bag_size": a_bag,
         "b_pos_source": getattr(cs_b, "pos_source", None) if cs_b is not None else None,
-        "b_bag_size": len(cs_b.bag) if cs_b is not None and cs_b.bag is not None else None,
+        "b_bag_size": b_bag,
         "b_tier": getattr(cs_b, "tier_bag", None) if cs_b is not None else None,
         "pickup_coords": rec.get("pickup_coords"),
         "delivery_coords": rec.get("delivery_coords"),
@@ -215,9 +299,12 @@ def _notify_telegram(new_rows: list) -> int:
     lines = ["🔁 SHADOW przerzutów (PODGLĄD Ziomka — NIE wykonane, NIE przydzielaj ręcznie):"]
     for r in new_rows[:TG_CAP]:
         real = (r.get("a_pos_source") not in _SYNTH_POS) and (r.get("b_pos_source") not in _SYNTH_POS)
-        d = r.get("delta_score")
-        lines.append(f"• #{r['order_id']} {r.get('restaurant') or ''}: {r['holder_cid']}→{r['best_cid']} "
-                     f"(Δ{('+%.0f' % d) if d is not None else '?'} pkt, {'GPS' if real else 'poz.~zgadnięta'})")
+        a_nm = _alias(r["holder_cid"], r.get("a_name"))
+        b_nm = _alias(r["best_cid"], r.get("b_name"))
+        rest = r.get("restaurant") or "?"
+        reason = r.get("reason") or "wyższe dopasowanie do trasy/floty"
+        lines.append(f"• #{r['order_id']} {rest}: {a_nm} → {b_nm}")
+        lines.append(f"   ↳ {reason} · {'GPS' if real else 'poz.~zgadnięta'}")
     extra = len(new_rows) - TG_CAP
     if extra > 0:
         lines.append(f"…+{extra} więcej w tym ticku")
