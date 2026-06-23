@@ -379,6 +379,16 @@ ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE = os.environ.get(
 # złe okno 17:03→17:08). Wołane z panel_watcher._update_plan_on_picked_up. OFF.
 ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP = os.environ.get(
     "ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP", "0") == "1"
+# RECANON-ON-WRITE (Adrian 2026-06-23, „od podstaw nie łatać"): niezmienniki kanonu
+# (carried-first floor + odbiory wg committed + relax „po drodze") były dotąd doklejane
+# WYŁĄCZNIE przez tick plan_recheck co 5 min. Każdy zapis ZDARZENIOWY (odbiór →
+# mark_picked_up, dostawa → advance_plan, przydział → _save_plan_on_assign) pisał plan
+# BEZ tej warstwy → niesione nie na froncie / odbiory niescalone wg czasu, aż do
+# następnego ticku (case Piotr/Grzesiek/Dawid 23.06). Ta flaga sprawia, że panel_watcher
+# RE-EGZEKWUJE kanon na istniejącym planie NATYCHMIAST po każdym zdarzeniu worka (przez
+# _retime_one_bag_plan — bez re-TSP, sekwencja Ziomka zachowana). Foundational: kanon
+# staje się częścią KAŻDEGO zapisu. Default OFF. Wymaga (jak tick) CANON_INVARIANTS+RELAX.
+ENABLE_RECANON_ON_WRITE = os.environ.get("ENABLE_RECANON_ON_WRITE", "0") == "1"
 _ANCHOR_EVENT_MAX_AGE_MIN = 360.0  # zdarzenia starsze niż 6h = inna zmiana
 
 # CARRIED-FIRST RELAX (Adrian 2026-06-22, case Sioux→Wierzbowa cid=393): twarda
@@ -1095,6 +1105,55 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
         return ok
     except Exception as e:
         _log.warning(f"redecide_courier cid={courier_id} fail: {type(e).__name__}: {e}")
+        return False
+
+
+def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = None,
+                    gps_positions: Optional[Dict[str, Any]] = None,
+                    now: Optional[datetime] = None, reason: str = "event") -> bool:
+    """RECANON-ON-WRITE: re-egzekwuj niezmienniki kanonu (carried-first floor +
+    odbiory wg committed + relax „po drodze") na ISTNIEJĄCYM planie kuriera
+    NATYCHMIAST po zdarzeniu worka (odbiór/dostawa/przydział), bez czekania ≤5 min
+    na tick i BEZ re-TSP — sekwencja Ziomka zachowana, tylko twarde reguły kolejności
+    + re-czasowanie (`_retime_one_bag_plan`). Foundational: kanon = część KAŻDEGO
+    zapisu, nie tylko okresowego.
+
+    Self-gating (no-op, zwraca False): flaga OFF / brak aktywnego worka / brak planu /
+    plan invalidated (load_plan→None) / plan NIE pokrywa worka (świeży/częściowy po
+    przydziale → pełna decyzja należy do _gen lub ticku). Best-effort, nigdy nie rzuca.
+    Determinizm niezmienników (carried-first + committed) gwarantuje brak oscylacji
+    między zdarzeniem a tickiem (ta sama transformacja co F6/F2)."""
+    if not ENABLE_RECANON_ON_WRITE:
+        return False
+    try:
+        cid = str(courier_id)
+        if orders_state is None:
+            try:
+                with open(ORDERS_STATE_PATH) as fh:
+                    orders_state = json.load(fh)
+            except Exception:
+                return False
+        oids = [str(oid) for oid, rec in orders_state.items()
+                if isinstance(rec, dict) and str(rec.get("courier_id") or "") == cid
+                and rec.get("status") in ACTIVE_STATUSES]
+        if not oids:
+            return False
+        plan = plan_manager.load_plan(cid)
+        if not plan or not plan.get("stops"):
+            return False  # brak/invalidated plan → decyzja należy do _gen/ticku
+        covered = {str(s.get("order_id")) for s in plan.get("stops", [])}
+        if not (set(oids) <= covered):
+            return False  # plan nie pokrywa worka (nowy przydział) → tick/gen
+        if gps_positions is None:
+            gps_positions = _load_gps_positions()
+        if now is None:
+            now = datetime.now(timezone.utc)
+        ok = _retime_one_bag_plan(cid, plan, oids, orders_state, gps_positions, now)
+        if ok:
+            _log.info(f"RECANON_ON_{reason.upper()} cid={cid} bag={len(oids)}")
+        return ok
+    except Exception as e:
+        _log.warning(f"recanon_courier cid={courier_id} fail: {type(e).__name__}: {e}")
         return False
 
 

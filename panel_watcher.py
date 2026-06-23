@@ -610,6 +610,14 @@ def _save_plan_on_assign_signal(order_id: str, courier_id: str) -> None:
     plan → SSE PLAN_UPDATED → natychmiastowy pełny GET. No-op gdy save pokrył order."""
     _save_plan_on_assign(order_id, courier_id)
     _invalidate_plan_on_bag_change(order_id, courier_id)
+    # RECANON: po zapisie planu z PROPOZYCJI (surowa sekwencja OR-Tools) egzekwuj
+    # od razu niezmienniki kanonu (carried-first + committed + relax). No-op gdy
+    # plan invalidated (override) — tym zajmuje się redecide niżej.
+    try:
+        from dispatch_v2 import plan_recheck
+        plan_recheck.recanon_courier(str(courier_id), reason="assign")
+    except Exception as e:
+        _log.warning(f"recanon-on-assign fail cid={courier_id} oid={order_id}: {e}")
     # F3: po override/reassign (plan unieważniony lub brak) Ziomek decyduje trasę
     # NATYCHMIAST, nie po ≤5 min ticku plan_recheck. Samo-bramkujące (no-op gdy
     # ważny plan już pokrywa worek — nie nadpisuje propozycji). Best-effort, flaga
@@ -647,6 +655,13 @@ def _advance_plan_on_deliver(courier_id: str, order_id: str,
         )
     except Exception as e:
         _log.warning(f"V3.19b advance_plan fail cid={courier_id} oid={order_id}: {e}")
+    # RECANON: po dostawie (advance_plan usunął stop) re-egzekwuj kanon na RESZCIE
+    # worka natychmiast — bez czekania na 5-min tick. No-op gdy worek pusty.
+    try:
+        from dispatch_v2 import plan_recheck
+        plan_recheck.recanon_courier(str(courier_id), reason="deliver")
+    except Exception as e:
+        _log.warning(f"recanon-on-deliver fail cid={courier_id} oid={order_id}: {e}")
 
 
 def _remove_stops_on_return(courier_id: str, order_id: str) -> None:
@@ -692,6 +707,9 @@ def _update_plan_on_picked_up(courier_id: str, order_id: str,
     # ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP (OFF). Best-effort — nie psuje pętli.
     try:
         from dispatch_v2 import plan_recheck
+        # RECANON: po ODEBRANE floor-uj świeżo-niesioną dostawę na front (+ relax)
+        # natychmiast — egzekwuje carried-first zanim apka/konsola pobiorą plan.
+        plan_recheck.recanon_courier(str(courier_id), reason="pickup")
         plan_recheck.redecide_courier(str(courier_id), reason="pickup")
     except Exception as e:
         _log.warning(f"redecide-on-pickup fail cid={courier_id} oid={order_id}: {e}")
