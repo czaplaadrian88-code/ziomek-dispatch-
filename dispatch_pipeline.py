@@ -4784,7 +4784,32 @@ def _assess_order_impl(
         # D2 (audyt 2026-05-28): soft penalty gdy grafik STALE (shift_end None z awarii pliku,
         # nie realnego braku shiftu). 0 gdy flag OFF lub grafik świeży. Default OFF → shadow.
         bonus_d2_stale_soft = float(metrics.get("d2_soft_penalty", 0) or 0)
-        bonus_penalty_sum = (bonus_r6_soft_pen or 0.0) + bonus_r1_soft_pen + bonus_r5_soft_pen + bonus_r8_soft_pen + bonus_r9_stopover + bonus_r9_wait_pen + bonus_bug4_cap_soft + bonus_v325_pre_shift_soft + bonus_d2_stale_soft + bonus_v3273_wait_courier + bonus_r1_corridor + bonus_r5_detour + bonus_wave_clean + bonus_inter_wave_deadhead + bonus_state_panel_mismatch + bonus_coordinator_idle + bonus_r_paczki_flex + bonus_r_return_rest + bonus_carry_chain_penalty
+        # P-7 higiena (audyt 2026-06-24): 19 termów kary w JEDNYM nazwanym słowniku zamiast
+        # rozproszonej sumy — auditowalność „jaka kara zapaliła dla kandydata" w jednym miejscu
+        # + łatwy log/breakdown. Zachowanie 1:1: ta sama kolejność (dict zachowuje insertion),
+        # sum() startuje od 0 (0+x==x dokładnie dla float) → wynik bit-identyczny.
+        bonus_penalty_terms = {
+            "r6_soft_pen": (bonus_r6_soft_pen or 0.0),
+            "r1_soft_pen": bonus_r1_soft_pen,
+            "r5_soft_pen": bonus_r5_soft_pen,
+            "r8_soft_pen": bonus_r8_soft_pen,
+            "r9_stopover": bonus_r9_stopover,
+            "r9_wait_pen": bonus_r9_wait_pen,
+            "bug4_cap_soft": bonus_bug4_cap_soft,
+            "v325_pre_shift_soft": bonus_v325_pre_shift_soft,
+            "d2_stale_soft": bonus_d2_stale_soft,
+            "v3273_wait_courier": bonus_v3273_wait_courier,
+            "r1_corridor": bonus_r1_corridor,
+            "r5_detour": bonus_r5_detour,
+            "wave_clean": bonus_wave_clean,
+            "inter_wave_deadhead": bonus_inter_wave_deadhead,
+            "state_panel_mismatch": bonus_state_panel_mismatch,
+            "coordinator_idle": bonus_coordinator_idle,
+            "r_paczki_flex": bonus_r_paczki_flex,
+            "r_return_rest": bonus_r_return_rest,
+            "carry_chain_penalty": bonus_carry_chain_penalty,
+        }
+        bonus_penalty_sum = sum(bonus_penalty_terms.values())
         # V3.19h BUG-2: wave continuation to BONUS (positive). Dodajemy do bundle_bonus
         # (nie penalty_sum) żeby zachować czysty semantyczny split penalty vs bonus.
         # Integracja z final_score — patrz niżej.
