@@ -28,8 +28,10 @@ def _fake_table(pts_a, pts_b):
 
 
 @pytest.fixture(autouse=True)
-def _mock_osrm(monkeypatch):
+def _mock_osrm(monkeypatch, tmp_path):
     monkeypatch.setattr(osrm_client, "table", _fake_table)
+    # NIGDY nie pisz do produkcyjnego shadow jsonl z testów
+    monkeypatch.setattr(P, "LEX_WINDOW_SHADOW_PATH", str(tmp_path / "lex_shadow.jsonl"))
 
 
 NOW = datetime(2026, 6, 24, 13, 0, 0, tzinfo=timezone.utc)
