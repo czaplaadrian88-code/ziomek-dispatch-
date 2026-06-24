@@ -422,6 +422,33 @@ CARRIED_FIRST_RELAX_MAX_STOPS = int(
 # (zostaje carried-first, gdy carried nie zdąży ≤SOFT_MAX od ODEBRANIA).
 ENABLE_CARRIED_AGE_TZ_FIX = os.environ.get("ENABLE_CARRIED_AGE_TZ_FIX", "0") == "1"
 
+# FIX K — WSPÓŁLOKALNY ODBIÓR (Adrian 2026-06-24, case Kuba Olchowik 370 Rany Julek):
+# reguła no-return seeduje restauracje carried jako 'opuszczone przed trasą' (idx=-2 w
+# `_detect_departed_pickup_revisit`), więc relax ODRZUCA każdą permutację z odbiorem w
+# tej restauracji — także gdy kurier WŁAŚNIE TAM STOI (start_pos == R). Skutek: zamiast
+# zabrać współlokalne zlecenie od razu (koszt ~0), plan każe dowieźć niesione i WRÓCIĆ po
+# nie 2.5 km. Korekta: restauracja w promieniu COLOC_M od pozycji kuriera NIE jest
+# 'opuszczona' → relax może wziąć współlokalny odbiór na początek (jedna wizyta). Świeżość
+# carried wciąż chroniona istniejącym SOFT_MAX. Replay 06-24: 15 worków, −drive, 0 regresji
+# >SOFT_MAX. Default OFF. Wymaga ENABLE_CARRIED_FIRST_RELAX (działa wewnątrz relaxu).
+ENABLE_RELAX_COLOC_PICKUP = os.environ.get("ENABLE_RELAX_COLOC_PICKUP", "0") == "1"
+RELAX_COLOC_PICKUP_M = float(os.environ.get("RELAX_COLOC_PICKUP_M", "180"))
+
+# FIX M — REORDER DROPOFFÓW W WORKU BEZ NIESIONYCH (Adrian 2026-06-24, case Mateusz
+# Ostapczuk 413 Skłodowska/Lipowa): carried-first/committed/relax NIE ruszają worka bez
+# żadnego niesionego (relax wymaga carried; sequence-lock wyłączył per-tick re-TSP) →
+# zamrożona kolejność z insert_stop_optimal daje zygzaki (Skłodowska przed Lipową, choć
+# Lipowa 0.26 km od odbioru). Min-jazda po permutacjach (precedencja odbiór<dostawa,
+# committed odbiorów dotrzymane, brak nowego R6, ŻADNA dostawa/odbiór nie później >TOL vs
+# obecna kolejność) — przyjmuje TYLKO gdy skraca jazdę >EPS. Deterministyczne, tylko
+# poprawa lub no-op. NIE oscyluje (brak carried = brak konfliktu carried-first↔last; ta
+# sama własność co relax, który już biega co tick). Replay 06-24: 18 worków, 0 pogorszeń.
+# Default OFF. Brak interakcji z relaxem (mutualnie wykluczające: relax tylko-carried).
+ENABLE_NONCARRIED_DROPOFF_REORDER = os.environ.get("ENABLE_NONCARRIED_DROPOFF_REORDER", "0") == "1"
+NONCARRIED_REORDER_MAX_STOPS = int(os.environ.get("NONCARRIED_REORDER_MAX_STOPS", "8"))
+NONCARRIED_REORDER_DRIVE_EPS_MIN = float(os.environ.get("NONCARRIED_REORDER_DRIVE_EPS_MIN", "0.3"))
+NONCARRIED_REORDER_DELAY_TOL_MIN = float(os.environ.get("NONCARRIED_REORDER_DELAY_TOL_MIN", "6"))
+
 
 def _gps_age_min(gps: Dict[str, Any], now: datetime) -> Optional[float]:
     ts = _parse_dt((gps or {}).get("timestamp"))
@@ -914,9 +941,23 @@ def _relax_carried_first(seq, orders_state, start_pos, now):
     # do restauracji, z której już wiezie jedzenie (carried), ani nie rozbija dwóch
     # odbiorów tej samej restauracji na osobne wizyty. carried_rest = restauracje
     # zleceń niesionych (jedzenie w aucie = restauracja opuszczona).
-    carried_rest_keys = {_pickup_rest_key({"type": "pickup", "order_id": o}, orders_state)
-                         for o in carried}
-    carried_rest_keys.discard(None)
+    carried_rest_keys = set()
+    for o in carried:
+        rk = _pickup_rest_key({"type": "pickup", "order_id": o}, orders_state)
+        if rk is None:
+            continue
+        # FIX K: restauracja pod którą kurier WŁAŚNIE STOI (start_pos) NIE jest 'opuszczona'
+        # → współlokalny odbiór wolno wziąć od razu (jedna wizyta), to NIE powrót.
+        if ENABLE_RELAX_COLOC_PICKUP:
+            pc = (orders_state.get(o) or {}).get("pickup_coords")
+            try:
+                if _coords_ok(pc) and _haversine_m(
+                        (float(start_pos[0]), float(start_pos[1])),
+                        (float(pc[0]), float(pc[1]))) <= RELAX_COLOC_PICKUP_M:
+                    continue
+            except Exception:
+                pass
+        carried_rest_keys.add(rk)
 
     def _walk(perm):
         t = 0.0
@@ -1004,6 +1045,124 @@ def _relax_carried_first(seq, orders_state, start_pos, now):
     return seq
 
 
+def _reorder_noncarried_min_drive(seq, orders_state, start_pos, now):
+    """FIX M: min-jazda dla worka BEZ niesionych (Adrian 2026-06-24, Mateusz 413).
+    Permutuje TYLKO DOSTAWY (dropoffy) między ich slotami — ODBIORY zostają nietknięte na
+    swoich miejscach (zero ryzyka spóźnienia committed odbioru / R-DECLARED-TIME). Wybiera
+    układ o NAJMNIEJSZEJ jeździe OSRM pod warunkiem: brak NOWEGO przekroczenia R6 (>35′ od
+    odbioru do dostawy) — twarde SLA chronione. Dostawa może wylądować kilka min później (w
+    granicy R6) — to celowe: dowieź to co po drodze, nie rób zygzaka. Przyjmuje TYLKO gdy
+    skraca jazdę >EPS; inaczej no-op. Deterministyczne. NIE rusza worków z niesionymi
+    (carried-first/relax). Replay 06-24: same poprawy jazdy, 0 nowych R6."""
+    if not ENABLE_NONCARRIED_DROPOFF_REORDER or start_pos is None or now is None:
+        return seq
+    import itertools
+    n = len(seq)
+    if n < 3 or n > NONCARRIED_REORDER_MAX_STOPS:
+        return seq
+    oid_of = [str(s.get("order_id")) for s in seq]
+    kind_pick = [s.get("type") == "pickup" for s in seq]
+    # tylko worki BEZ niesionych — z niesionymi zajmuje się carried-first + relax
+    if any((orders_state.get(oid_of[i]) or {}).get("status") == "picked_up" for i in range(n)):
+        return seq
+    coords = []
+    for i, s in enumerate(seq):
+        rec = orders_state.get(oid_of[i]) or {}
+        c = rec.get("pickup_coords") if kind_pick[i] else rec.get("delivery_coords")
+        if not _coords_ok(c):
+            return seq
+        coords.append((float(c[0]), float(c[1])))
+    try:
+        from dispatch_v2 import osrm_client
+    except Exception:
+        return seq
+    matrix = osrm_client.table([(float(start_pos[0]), float(start_pos[1]))] + coords,
+                               [(float(start_pos[0]), float(start_pos[1]))] + coords)
+    if not matrix:
+        return seq
+    leg = []
+    for row in matrix:
+        leg.append([(d / 60.0) if ((d := (cell or {}).get("duration_s")) is not None
+                                   and d < 9e8) else 9e9 for cell in row])
+    now_min = now.timestamp() / 60.0
+    dwell = [float(s.get("dwell_min") if s.get("dwell_min") is not None
+                   else (1.0 if kind_pick[i] else 3.5)) for i, s in enumerate(seq)]
+    committed_rel = []
+    for i in range(n):
+        if kind_pick[i]:
+            ck = _parse_dt((orders_state.get(oid_of[i]) or {}).get("czas_kuriera_warsaw"))
+            committed_rel.append((ck.timestamp() / 60.0 - now_min) if ck is not None else None)
+        else:
+            committed_rel.append(None)
+    ppos = {oid_of[i]: i for i in range(n) if kind_pick[i]}
+
+    def _walk(order):
+        """order = lista indeksów stopów w kolejności przejazdu."""
+        t = 0.0; drive = 0.0; prev = 0
+        deliv = [None] * n; pick = [None] * n
+        for si in order:
+            lg = leg[prev][si + 1]
+            if lg >= 9e8:
+                return None
+            drive += lg; t += lg; prev = si + 1
+            if kind_pick[si]:
+                cr = committed_rel[si]
+                if cr is not None and cr > t:
+                    t = cr
+                pick[si] = t; t += dwell[si]
+            else:
+                deliv[si] = t; t += dwell[si]
+        breaches = 0
+        for i in range(n):
+            if kind_pick[i]:
+                continue
+            dt = deliv[i]; bp = pick[ppos[oid_of[i]]] if oid_of[i] in ppos else None
+            if dt is not None and bp is not None and (dt - bp) > 35.0:
+                breaches += 1
+        return drive, breaches, deliv
+
+    drop_slots = [i for i in range(n) if not kind_pick[i]]      # pozycje dostaw w seq
+    drop_idx = list(drop_slots)                                  # indeksy obiektów-dostaw
+    base_order = list(range(n))
+    wA = _walk(base_order)
+    if wA is None:
+        return seq
+    driveA, breachesA, delivA = wA
+    tol = NONCARRIED_REORDER_DELAY_TOL_MIN
+    best = None
+    for perm in itertools.permutations(drop_idx):
+        order = list(range(n))
+        for slot, di in zip(drop_slots, perm):
+            order[slot] = di
+        # precedencja: każda dostawa po swoim odbiorze (pozycja w 'order')
+        posn = {si: j for j, si in enumerate(order)}
+        ok = True
+        for i in range(n):
+            if kind_pick[i]:
+                continue
+            o = oid_of[i]
+            if o in ppos and posn[ppos[o]] > posn[i]:
+                ok = False; break
+        if not ok:
+            continue
+        w = _walk(order)
+        if w is None:
+            continue
+        drive, breaches, deliv = w
+        if breaches > breachesA:
+            continue
+        # ŻADNA dostawa nie później >TOL vs obecna kolejność (chroni przed przerzucaniem
+        # „kto czeka" w przeładowanych workach — duże przesunięcia odrzucone, drobne OK).
+        if any(deliv[i] is not None and delivA[i] is not None and (deliv[i] - delivA[i]) > tol
+               for i in range(n) if not kind_pick[i]):
+            continue
+        if best is None or drive < best[0]:
+            best = (drive, order)
+    if best is not None and best[0] < driveA - NONCARRIED_REORDER_DRIVE_EPS_MIN:
+        return [seq[i] for i in best[1]]
+    return seq
+
+
 def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None):
     """F6: TWARDE niezmienniki kolejności kanonu (1:1 jak build_view, ale w decyzji):
     (1) niesione (picked_up) dropoffy → front (kolejność względna zachowana),
@@ -1060,6 +1219,17 @@ def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None)
             seq = relaxed
         except Exception as e:
             _log.warning("carried_first_relax fail: %s: %s", type(e).__name__, e)
+    # FIX M: worek bez niesionych — min-jazda po dropoffach (relax tego nie rusza).
+    if ENABLE_NONCARRIED_DROPOFF_REORDER and start_pos is not None and now is not None:
+        try:
+            mreorder = _reorder_noncarried_min_drive(seq, orders_state, start_pos, now)
+            if [s.get("order_id") for s in mreorder] != [s.get("order_id") for s in seq] or \
+                    [s.get("type") for s in mreorder] != [s.get("type") for s in seq]:
+                _log.info("NONCARRIED_MIN_DRIVE_REORDER applied seq=%s",
+                          [(s.get("order_id"), s.get("type")) for s in mreorder])
+            seq = mreorder
+        except Exception as e:
+            _log.warning("noncarried_min_drive fail: %s: %s", type(e).__name__, e)
     return seq
 
 
