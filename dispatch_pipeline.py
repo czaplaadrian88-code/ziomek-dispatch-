@@ -1196,6 +1196,105 @@ def _objm_lexr6_shadow(top, feasible, order_id=None) -> None:
             pass
 
 
+# ── Warstwa B (#483000, 2026-06-24): carry-ślepota w SAMEJ BRAMCE check_feasibility_v2.
+# SLA_PREEXISTING_BYPASS (feasibility_v2:1217) wybacza najgorszy realny breach gdy NIESIONY
+# (sunk carry, dostarczany przed nowym odbiorem), a HARD-rejectuje mniejsze na NIEodebranych
+# (blocking) → pula feasible może = GORSZY ocalały, a lepszy (carrying) kurier wycięty.
+# objm_lexr6 tego NIE łapie (działa tylko na NIEpustej feasible, a bramka już wycięła lepszego).
+# Pomiar 24.06: log-replay STRUKTURALNIE ślepy (feasible-path serializuje tylko survivorów MAYBE),
+# ale odrzuceni-w-procesie ISTNIEJĄ (pool_total>pool_feasible w 155/155) → re-ranking BEZ re-runu.
+# Ten SHADOW (OBSERWACYJNY, flaga ENABLE_FEAS_CARRY_BLIND_SHADOW default OFF) re-rankuje CHOSEN
+# survivora przeciw PEŁNEJ puli `candidates` (z NO) używając lex_qual (carry-inclusive, kanon
+# objm_lexr6) — faithful (zero sticky), ZERO mutacji decyzji/werdyktu. Dedyk. jsonl. Lekcja #83.
+FEAS_CARRY_BLIND_SHADOW_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/feas_carry_blind_shadow.jsonl"
+
+
+def _emit_feas_carry_blind(event) -> None:
+    """Append-only zapis dedyk. jsonl (rekord <4KB → atomowy O_APPEND, wzór _emit_r6_breach_shadow)."""
+    try:
+        with open(FEAS_CARRY_BLIND_SHADOW_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+    except Exception as e:  # noqa: BLE001
+        try:
+            log.warning(f"FEAS_CARRY_BLIND shadow write failed: {e!r}")
+        except Exception:
+            pass
+
+
+def _feas_carry_blind_shadow(top, feasible, candidates, order_id, now=None) -> None:
+    """SHADOW warstwy B — czy carry-ślepa bramka wycięła lepszego-na-prawdzie kandydata.
+    OBSERWACYJNY: pisze feas_carry_blind_shadow.jsonl, NIGDY nie mutuje top/feasible/
+    candidates/werdyktu. Fail-open (Lekcja #83). Odpala tylko gdy CHOSEN survivor niesie
+    WYBACZONY breach (objm_r6_breach_max_min>0) = populacja ryzyka #483000; porównuje z
+    odrzuconymi (NO) W PROCESIE używając kanonicznego lex_qual (carry-inclusive)."""
+    try:
+        if not top or not candidates:
+            return
+        from dispatch_v2 import objm_lexr6 as _OL
+        import re as _re
+        chosen = top[0]
+        chosen_objm = _OL.objm(chosen, "objm_r6_breach_max_min")
+        if chosen_objm is None or chosen_objm <= 0:
+            return  # chosen czysty → brak asymetrii bypassu, poza zakresem warstwy B
+        chosen_lex = _OL.lex_qual(chosen)
+
+        def _kind(c):
+            r = getattr(c, "feasibility_reason", "") or ""
+            if r.startswith("sla_violation"):
+                return "sla"
+            if r.startswith("R6_per_order"):
+                return "r6_new"
+            if r.startswith("R6_picked_up_delta"):
+                return "r6_carry_delta"
+            return "other"
+
+        def _overby(c):
+            m = _re.search(r"over by ([0-9.]+)", getattr(c, "feasibility_reason", "") or "")
+            return float(m.group(1)) if m else None
+
+        rejected = [c for c in candidates
+                    if getattr(c, "feasibility_verdict", None) == "NO"]
+        # blocking SLA/R6 = ofiary asymetrii bramki (reszta = legit reject: shift_end/C2/dist)
+        blocking = [c for c in rejected if _kind(c) in ("sla", "r6_new", "r6_carry_delta")]
+        best_rej = min(blocking, key=_OL.lex_qual) if blocking else None
+        rej_objm = _OL.objm(best_rej, "objm_r6_breach_max_min") if best_rej is not None else None
+        would_redirect = bool(best_rej is not None and _OL.lex_qual(best_rej) < chosen_lex)
+        ob = _overby(best_rej) if best_rej is not None else None
+
+        event = {
+            "ts": (now.isoformat() if hasattr(now, "isoformat") else None),
+            "order_id": order_id,
+            "pool_total": len(candidates),
+            "pool_feasible": len(feasible),
+            "chosen_cid": str(getattr(chosen, "courier_id", "")),
+            "chosen_forgiven_breach": round(chosen_objm, 1),
+            "would_redirect": would_redirect,
+            "redirect_cid": (str(getattr(best_rej, "courier_id", "")) if best_rej is not None else None),
+            "redirect_objm": (round(rej_objm, 1) if isinstance(rej_objm, (int, float)) else None),
+            "redirect_kind": (_kind(best_rej) if best_rej is not None else None),
+            "redirect_over_by": ob,
+            "regret_min": (round(chosen_objm - rej_objm, 1)
+                           if would_redirect and isinstance(rej_objm, (int, float)) else None),
+            "marginal": bool(would_redirect and ob is not None and ob <= 5.0),
+            "n_rejected": len(rejected),
+            "n_blocking": len(blocking),
+            "cands": [
+                {"cid": str(getattr(c, "courier_id", "")),
+                 "v": getattr(c, "feasibility_verdict", None),
+                 "objm": (round(_OL.objm(c, "objm_r6_breach_max_min"), 1)
+                          if isinstance(_OL.objm(c, "objm_r6_breach_max_min"), (int, float)) else None),
+                 "r": (getattr(c, "feasibility_reason", "") or "")[:34]}
+                for c in candidates[:14]
+            ],
+        }
+        _emit_feas_carry_blind(event)
+    except Exception as _e:  # noqa: BLE001
+        try:
+            log.warning(f"FEAS_CARRY_BLIND_SHADOW failed order={order_id}: {_e!r}")
+        except Exception:
+            pass
+
+
 def _objm_lexr6_d2_pick(feasible):
     """FAZA 2 (2026-06-18, flaga ENABLE_OBJM_LEXR6_SELECT): zwróć kandydata, którego
     R6-breach-primary lexicographic selektor D2 wskazuje W OBRĘBIE grupy (tier × bucket)
@@ -5888,6 +5987,12 @@ def _assess_order_impl(
         # serializowany best. Pisze top[0].metrics['objm_lexr6_*']. Patrz _objm_lexr6_shadow.
         if C.flag("ENABLE_OBJM_LEXR6_SELECT_SHADOW", False):
             _objm_lexr6_shadow(top, feasible, order_id)
+
+        # WARSTWA B SHADOW (#483000, 2026-06-24): carry-ślepota bramki feasibility —
+        # czy odrzucony (NO) kandydat W PROCESIE jest lepszy-na-prawdzie niż bypassowany
+        # survivor. OBSERWACYJNY, flaga default OFF, pełne `candidates` (z NO) w zasięgu.
+        if C.flag("ENABLE_FEAS_CARRY_BLIND_SHADOW", False):
+            _feas_carry_blind_shadow(top, feasible, candidates, order_id, now)
 
         # V3.28 Faza 6 — LGBM shadow inference (parallel, ZERO behavior change).
         # Pure BC model trained na 399K pairs CSV history (Faza 5 v1.0). Result
