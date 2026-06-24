@@ -299,7 +299,7 @@ shadow ranking penalty can re-order without silencing a proposal (`_gate_score_e
 | Gate | Threshold | Status | Source |
 |---|---|---|---|
 | Bag sanity cap | `len(bag) ≥ 8` | 🟢 | `MAX_BAG_SANITY_CAP=8` `common.py:306` |
-| Hard tier bag cap | gold/std+ 6, std 5, slow/new 4 (default 6) | ⚪ OFF (`ENABLE_HARD_TIER_BAG_CAP`) | `common.py:1174` |
+| Hard tier bag cap | gold/std+ 6, std 5, slow/new 4 (default 6) | 🟢 **LIVE** (`ENABLE_HARD_TIER_BAG_CAP`, flip ~06-22) | `common.py:1174` + `feasibility_v2.py:463` |
 | R7 long-haul peak | ride >99 km & hour∈[14,17] | 🟢 but **dormant** (99 km ⇒ never fires) | `LONG_HAUL_DISTANCE_KM=99` `common.py:684` |
 | Pickup too far | haversine·1.37 > 15 km | 🟢 | `MAX_PICKUP_REACH_KM=15` `common.py:313` |
 | `v325_NO_ACTIVE_SHIFT` | `shift_end is None` (no schedule), unless fail-open | 🟢 (`ENABLE_V325_SCHEDULE_HARDENING`) | `~feas:674-721` |
@@ -410,19 +410,20 @@ held under virtual courier `id_kurier=26`).
 The flag system (`common.load_flags` / `decision_flag`) reads `flags.json` first, then falls back to
 the module constant. ~80+ flags exist. Notable **current** states:
 
-- 🟢 **LIVE-ON:** `feasibility_check`, `RECONCILIATION_ENABLED`, `ENABLE_V325_SCHEDULE_HARDENING`,
+- 🟢 **LIVE-ON:** `RECONCILIATION_ENABLED`, `ENABLE_V325_SCHEDULE_HARDENING`,
   `ENABLE_V324A_SCHEDULE_INTEGRATION`, `ENABLE_V327_WAIT_PENALTY`, `ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER`,
   `ENABLE_V326_SPEED_MULTIPLIER`, `ENABLE_R_PACZKI_FLEX`, `ENABLE_R_RETURN_TO_RESTAURANT_VETO`,
-  `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE`, `ENABLE_STATE_WRITE_GUARD`, `ENABLE_NO_GPS_UNCERTAINTY_PENALTY`
-  (B3 trial), several `*_GUARD` defenses.
+  `ENABLE_HARD_TIER_BAG_CAP` (flip ~06-22), `ENABLE_R5_PICKUP_DETOUR_PENALTY`, `ENABLE_STATE_WRITE_GUARD`,
+  several `*_GUARD` defenses. _(zsynchronizowano 2026-06-24 z żywym flags.json + env; usunięto zombie `feasibility_check` — 0 odczytów)_
 - 🟡 **SHADOW (computed, logged, no effect):** `AUTO_PROXIMITY_SHADOW_ONLY`,
   `ENABLE_DRIVE_MIN_CALIBRATION_V2_SHADOW`, `ENABLE_ETA_QUANTILE_SHADOW`, `ENABLE_PREP_BIAS_SHADOW`,
   `ENABLE_REPO_COST_SHADOW`, `ENABLE_PLN_OBJECTIVE_SHADOW`, `ENABLE_LGBM_TWOMODEL_SHADOW`,
   `ENABLE_OBJM_LEXR6_SELECT_SHADOW`, `ENABLE_ETA_R3_SHADOW`, `ENABLE_ETA_R3_DROP_SHADOW`,
   `ALWAYS_PROPOSE_WOULD_REDIRECT_SHADOW`, `ENABLE_SAME_RESTAURANT_RACE_PROBE`.
-- ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_HARD_TIER_BAG_CAP`, `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
-  `ENABLE_R5_PICKUP_DETOUR_PENALTY`, `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`,
-  `kill_switch_to_v1`, `ENABLE_DRIVE_MIN_CALIBRATION_V2` (main).
+- ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` (cold-food divergence
+  no longer →KOORD), `ENABLE_NO_GPS_UNCERTAINTY_PENALTY` (B3 trial zakończony), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
+  `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`, `kill_switch_to_v1`,
+  `ENABLE_DRIVE_MIN_CALIBRATION_V2` (main).
 - 🟢 **LIVE route-sequencing (systemd-env flags, NOT `flags.json`; set on `dispatch-plan-recheck` +
   `dispatch-panel-watcher` where the canon is written to `courier_plans.json`):**
   `ENABLE_PLAN_CANON_ORDER_INVARIANTS` (carried `picked_up` dropoffs front + pickups sorted by committed
