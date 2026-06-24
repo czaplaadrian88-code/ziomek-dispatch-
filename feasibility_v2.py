@@ -30,6 +30,7 @@ from dispatch_v2.route_simulator_v2 import (
     OrderSim,
     RoutePlanV2,
     simulate_bag_route_v2,
+    r6_thermal_anchor,   # INV-R6-ANCHOR-CONSISTENCY: wspólna kotwica termiczna R6
 )
 
 log = logging.getLogger(__name__)
@@ -1040,10 +1041,9 @@ def check_feasibility_v2(
         if pred.tzinfo is None:
             pred = pred.replace(tzinfo=timezone.utc)
         is_new = o is new_order
-        is_picked = (not is_new) and (
-            getattr(o, "picked_up_at", None) is not None
-            or getattr(o, "status", None) == "picked_up"
-        )
+        # INV-R6-ANCHOR-CONSISTENCY: wspólna kotwica termiczna R6 (1:1 z route_simulator
+        # _compute_per_order_delivery_minutes). prep_bias (gate-stricter) nakładamy PO (niżej).
+        anchor, anchor_src, is_picked = r6_thermal_anchor(o, is_new, plan.pickup_at, now)
         # FIRMOWE PACZKI (Adrian 2026-06-15): paczka/firmowe (Dr Tusz/tonery, Nadajesz.pl,
         # PACZKA_ADDRESS_IDS) to NIE gorące jedzenie → wyłączona z reguły 35min (R6 termik),
         # także w MIESZANYM worku. Nie ustawia r6_max/worst i nie trafia do violations.
@@ -1053,31 +1053,6 @@ def check_feasibility_v2(
             and _is_paczka_sim(o))
         if _o_paczka_exempt and o.order_id not in r6_paczka_exempt_oids:
             r6_paczka_exempt_oids.append(o.order_id)
-        # Anchor selection per-status
-        anchor: Optional[datetime] = None
-        anchor_src: str = "now"
-        if is_picked:
-            pu = o.picked_up_at
-            if pu is not None:
-                if pu.tzinfo is None:
-                    pu = pu.replace(tzinfo=timezone.utc)
-                anchor = pu.astimezone(timezone.utc)
-                anchor_src = "picked_up_at"
-        else:
-            pra = getattr(o, "pickup_ready_at", None)
-            if pra is not None:
-                if pra.tzinfo is None:
-                    pra = pra.replace(tzinfo=timezone.utc)
-                anchor = pra.astimezone(timezone.utc)
-                anchor_src = "pickup_ready_at"
-            elif o.order_id in plan.pickup_at:
-                pu = plan.pickup_at[o.order_id]
-                if pu.tzinfo is None:
-                    pu = pu.replace(tzinfo=timezone.utc)
-                anchor = pu.astimezone(timezone.utc)
-                anchor_src = "tsp_pickup_at"
-        if anchor is None:
-            anchor = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
         # [C2] prep-bias anchor correction (flag ENABLE_PREP_BIAS_TABLE, default OFF).
         # Gdy kuchnia restauracji systematycznie zaniża deklarowany czas gotowości
         # (bias dodatni z prep_bias_table.json — zmierzony z czystego sygnału

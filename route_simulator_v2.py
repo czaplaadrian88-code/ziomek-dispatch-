@@ -637,6 +637,39 @@ def _count_sla_violations(
     return v
 
 
+def r6_thermal_anchor(order, is_new, plan_pickup_at, now):
+    """INV-R6-ANCHOR-CONSISTENCY (audyt 2026-06-24, spec odporności §6.A4): JEDNO źródło
+    kotwicy termicznej R6 — route_simulator (`_compute_per_order_delivery_minutes`) ORAZ
+    feasibility (`check_feasibility_v2`) MUSZĄ liczyć R6 tym samym anchorem, inaczej twarda
+    bramka ≠ ETA/scoring (dryft POD vs gate). Reguła (doktryna Adriana 2026-05-10):
+      - picked_up (picked_up_at lub status=='picked_up', NIE new) → picked_up_at (realny pickup),
+      - inaczej (w tym new_order) → pickup_ready_at (jedzenie czeka od gotowości) → tsp pickup_at → now.
+    Zwraca (anchor_utc, src, is_picked). prep_bias (feasibility-only, gate-stricter) NAKŁADA
+    wołający PO — to świadoma asymetria (bramka ostrzejsza), nie dryft kotwicy bazowej."""
+    is_picked = (not is_new) and (
+        getattr(order, "picked_up_at", None) is not None
+        or getattr(order, "status", None) == "picked_up")
+    anchor = None
+    src = "now"
+    if is_picked:
+        pu = getattr(order, "picked_up_at", None)
+        if pu is not None:
+            anchor = (pu if pu.tzinfo else pu.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+            src = "picked_up_at"
+    else:
+        pra = getattr(order, "pickup_ready_at", None)
+        if pra is not None:
+            anchor = (pra if pra.tzinfo else pra.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+            src = "pickup_ready_at"
+        elif plan_pickup_at and getattr(order, "order_id", None) in plan_pickup_at:
+            pu = plan_pickup_at[order.order_id]
+            anchor = (pu if pu.tzinfo else pu.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+            src = "tsp_pickup_at"
+    if anchor is None:
+        anchor = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    return anchor, src, is_picked
+
+
 def _compute_per_order_delivery_minutes(
     delivered_at: Dict[str, datetime],
     pickup_at: Dict[str, datetime],
@@ -666,30 +699,8 @@ def _compute_per_order_delivery_minutes(
         if pred.tzinfo is None:
             pred = pred.replace(tzinfo=timezone.utc)
         is_new = o is new_order
-        is_picked = (not is_new) and (
-            getattr(o, "picked_up_at", None) is not None
-            or getattr(o, "status", None) == "picked_up"
-        )
-        anchor: Optional[datetime] = None
-        if is_picked:
-            pu = o.picked_up_at
-            if pu is not None:
-                if pu.tzinfo is None:
-                    pu = pu.replace(tzinfo=timezone.utc)
-                anchor = pu.astimezone(timezone.utc)
-        else:
-            pra = getattr(o, "pickup_ready_at", None)
-            if pra is not None:
-                if pra.tzinfo is None:
-                    pra = pra.replace(tzinfo=timezone.utc)
-                anchor = pra.astimezone(timezone.utc)
-            elif o.order_id in pickup_at:
-                pu = pickup_at[o.order_id]
-                if pu.tzinfo is None:
-                    pu = pu.replace(tzinfo=timezone.utc)
-                anchor = pu.astimezone(timezone.utc)
-        if anchor is None:
-            anchor = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        # INV-R6-ANCHOR-CONSISTENCY: wspólna kotwica (1:1 z feasibility check_feasibility_v2).
+        anchor, _anchor_src, _is_picked = r6_thermal_anchor(o, is_new, pickup_at, now)
         result[o.order_id] = round((pred - anchor).total_seconds() / 60.0, 2)
     return result
 
