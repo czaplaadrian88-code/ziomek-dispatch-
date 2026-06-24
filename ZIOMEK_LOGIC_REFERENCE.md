@@ -47,6 +47,9 @@
 > | `ENABLE_NO_GPS_UNCERTAINTY_PENALTY` (B3) | 🟢 trial | **⚪ OFF** | rolled back |
 > | `ENABLE_NO_GPS_EQUAL_TREATMENT` | — | **🟢 LIVE** | no_gps competes on raw score; `_demote_blind_empty` ~inert |
 > | `ENABLE_ALWAYS_PROPOSE_ON_SATURATION` | — | **🟢 LIVE** | every quality→KOORD gate carries `and not _always_propose_on()` |
+> | `ENABLE_CZASOWKA_CK_PASSIVE_GUARD` | — | **🟢 LIVE** (24.06, #483023) | czasówka: passive gastro `czas_kuriera` re-stamp (`panel_re_check`/`pre_proposal_recheck`) NIE zmienia committed; umówiony czas = `pickup_at` |
+> | `ENABLE_PICKUP_TIME_MIRRORS_CK` | — | **🟢 LIVE** (24.06) | czasówka: `PICKUP_TIME_UPDATED` mirrors `pickup_at`→`czas_kuriera` (koordynator/restauracja, any direction) |
+> | `ENABLE_ELASTYK_CK_NO_BACKWARD` | — | **🟢 LIVE** (24.06, opcja B) | elastyk: passive `czas_kuriera` change blocked tylko BACKWARD (forward = +15/lateness zostaje) |
 >
 > **Net (Adrian directive 2026-06-23 — full autonomy):** quality-driven KOORD escalation is deliberately
 > disabled. R6 35-min is hard at the feasibility/candidate layer, **soft at the verdict layer** (20.6% of
