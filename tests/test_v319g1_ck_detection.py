@@ -138,19 +138,20 @@ def t3_above_threshold_emits_event():
 
 
 # Test 4
-def t4_negative_delta_emits_event():
+def t4_negative_delta_suppressed_elastyk_forward_only():
+    # UPDATED 2026-06-24 (elastyk forward-only, opcja B): pasywny re-odczyt
+    # NIE cofa committed czas_kuriera dla nie-czasówki ("przyjazd wcześniej niż
+    # umówiono" = wobble ETA). _state() bez order_type → traktowane jak elastyk
+    # → backward SUPPRESSED. Forward dalej emituje (test 3). Czasówki: osobny
+    # guard (any direction). Patrz test_elastyk_ck_no_backward.py.
     diff = _import_diff_helper()
     out = diff(
         _state("2026-04-21T10:33:00+02:00", "10:33"),
         _fresh("10:26", "2026-04-21T10:26:00+02:00"),
         oid="467533",
     )
-    ok = (
-        isinstance(out, dict)
-        and out.get("event_type") == "CZAS_KURIERA_UPDATED"
-        and abs(out.get("payload", {}).get("delta_min", 0) - (-7.0)) < 0.01
-    )
-    check("4. negative Δ=-7min (shortening) → emit event", ok, detail=f"got={out}")
+    check("4. negative Δ=-7min (shortening) → SUPPRESSED (elastyk forward-only)",
+          out is None, detail=f"got={out}")
 
 
 # Test 5 — V3.27.1 BUG-1: first acceptance (null→value) NOW emits event z source=first_acceptance
@@ -192,7 +193,7 @@ def t6_null_after_value_warn_skip():
 run("t1", t1_no_change_no_event)
 run("t2", t2_below_threshold_no_event)
 run("t3", t3_above_threshold_emits_event)
-run("t4", t4_negative_delta_emits_event)
+run("t4", t4_negative_delta_suppressed_elastyk_forward_only)
 run("t5", t5_first_acceptance_emits_event)
 run("t6", t6_null_after_value_warn_skip)
 

@@ -787,17 +787,29 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
         (old_state.get("order_type") == "czasowka")
         or (old_state.get("prep_minutes") or 0) >= 60
     )
+    try:
+        from dispatch_v2.common import flag as _flag
+    except Exception:
+        _flag = None
     if _is_czas:
-        try:
-            from dispatch_v2.common import flag as _flag
-            _guard = _flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
-        except Exception:
-            _guard = True
+        _guard = _flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True) if _flag else True
         if _guard:
             _log.info(
                 f"CK_PASSIVE_SUPPRESSED oid={oid} czasówka ck "
                 f"{old_ck_hhmm}→{new_ck_hhmm} Δ={delta_min:+.1f}min src=panel_re_check "
                 f"— committed=pickup_at, gastro re-stamp ignorowany (no emit)"
+            )
+            return None
+    else:
+        # Elastyk forward-only (Adrian 2026-06-24, opcja B): pasywny re-odczyt
+        # NIE cofa committed czas_kuriera („przyjazd wcześniej niż umówiono" =
+        # wobble ETA). Forward (koordynatorski +15 / spóźnienie) przechodzi.
+        _eguard = _flag("ENABLE_ELASTYK_CK_NO_BACKWARD", True) if _flag else True
+        if _eguard and delta_min < 0:
+            _log.info(
+                f"CK_ELASTYK_BACKWARD_BLOCKED oid={oid} ck {old_ck_hhmm}→{new_ck_hhmm} "
+                f"Δ={delta_min:+.1f}min src=panel_re_check — elastyk forward-only, "
+                f"nie cofamy (no emit)"
             )
             return None
 

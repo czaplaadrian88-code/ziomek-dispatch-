@@ -122,6 +122,30 @@ def _is_czasowka_order(o: Optional[dict]) -> bool:
             or (o.get("prep_minutes") or 0) >= 60)
 
 
+def _ck_backward_delta(
+    old_ck_iso: Optional[str],
+    new_ck_iso: Optional[str],
+) -> Optional[float]:
+    """Elastyk forward-only (Adrian 2026-06-24, opcja B). Committed czas_kuriera
+    elastyka NIE cofamy pasywnym re-odczytem gastro („przyjazd wcześniej niż
+    umówiono" = wobble ETA = śmieć; 5/75 zmian w 5 dni). Forward zostaje
+    (koordynatorski +15 / realne spóźnienie). Czasówki mają osobny, mocniejszy
+    guard (pickup_at authority) — to dotyczy TYLKO nie-czasówek.
+
+    Zwraca signed delta_min (<0) gdy `new` wcześniejszy niż `old` (= cofnięcie
+    do zablokowania). None gdy: brak wartości (np. first_acceptance), parse fail,
+    albo ruch do przodu/równy (= dozwolony). None == „przepuść"."""
+    if not old_ck_iso or not new_ck_iso:
+        return None
+    try:
+        old_dt = datetime.fromisoformat(old_ck_iso)
+        new_dt = datetime.fromisoformat(new_ck_iso)
+    except (ValueError, TypeError):
+        return None
+    delta = (new_dt - old_dt).total_seconds() / 60.0
+    return delta if delta < 0 else None
+
+
 # Zamkniete statusy zlecenia
 ORDER_STATUSES = {
     "planned",          # widoczne, jeszcze nieprzypisane
@@ -609,6 +633,22 @@ def update_from_event(event: dict) -> Optional[dict]:
                 f"— committed=pickup_at, gastro re-stamp ignorowany (skip persist)"
             )
             return None
+        # Elastyk (non-czasówka) forward-only (Adrian 2026-06-24, opcja B):
+        # pasywny re-odczyt gastro NIE może COFNĄĆ committed czas_kuriera
+        # („przyjazd wcześniej niż umówiono" = wobble ETA). Forward przechodzi
+        # (koordynatorski +15 / realne spóźnienie). Deliberatne sources nie są
+        # w _CK_PASSIVE_SOURCES → przechodzą w każdym kierunku.
+        if (flag("ENABLE_ELASTYK_CK_NO_BACKWARD", True)
+                and not _is_czasowka_order(existing)
+                and _src in _CK_PASSIVE_SOURCES):
+            _bwd = _ck_backward_delta(existing.get("czas_kuriera_warsaw"), new_ck_iso)
+            if _bwd is not None:
+                _log.info(
+                    f"CK_ELASTYK_BACKWARD_BLOCKED oid={oid} ck "
+                    f"{existing.get('czas_kuriera_hhmm')}→{new_ck_hhmm} Δ={_bwd:+.1f}min "
+                    f"src={_src} — elastyk forward-only, nie cofamy (skip persist)"
+                )
+                return None
         prev_count = int(existing.get("v319g_ck_change_count") or 0)
         update_fields = {
             "czas_kuriera_warsaw": new_ck_iso,
