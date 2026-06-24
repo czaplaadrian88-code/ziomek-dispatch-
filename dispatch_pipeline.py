@@ -2261,6 +2261,30 @@ def _is_demotable_blind_empty(c) -> bool:
     return True
 
 
+def _assert_feasibility_first(feasible: list, order_id=None) -> None:
+    """INV-FEASIBILITY-FIRST (audyt 2026-06-24, spec odporności §6.A). Gwarancja P0:
+    żaden kandydat z `feasibility_verdict=='NO'` NIE może być w puli selekcji — HARD bramki
+    feasibility egzekwowane PRZED warstwą scoring/bonus, żaden SOFT nie obejdzie HARD.
+    Filtr (`feasible=[c if MAYBE]`) zapewnia to z konstrukcji; ten strażnik łapie REGRESJĘ,
+    gdyby przyszła zmiana wpuściła NO do puli albo zmutowała verdict po odsiewie.
+    FAIL-LOUD (log.error + licznik metryki), NIGDY nie crashuje (fail-soft → nie psuje
+    pętli decyzyjnej). Read-only, jeden przebieg po małej liście feasible."""
+    try:
+        bad = [str(getattr(c, "courier_id", "?")) for c in feasible
+               if getattr(c, "feasibility_verdict", None) == "NO"]
+        if bad:
+            log.error(
+                f"INV_FEASIBILITY_FIRST_VIOLATION order={order_id} "
+                f"NO-verdict w puli selekcji: {bad} — SOFT mógł obejść HARD bramkę"
+            )
+            for c in feasible:
+                if getattr(c, "feasibility_verdict", None) == "NO" and isinstance(
+                        getattr(c, "metrics", None), dict):
+                    c.metrics["inv_feasibility_first_violation"] = True
+    except Exception:
+        pass
+
+
 def _demote_blind_empty(feasible: list, order_id=None) -> list:
     """V3.16 demotion: jeśli top-1 jest blind+empty AND istnieje informed alt,
     reorder — informed first (stable), other middle, blind+empty last.
@@ -5603,6 +5627,10 @@ def _assess_order_impl(
     # invariant przeżył (informed first, blind+empty last) do final top[:16].
     # Patrz: eod_drafts/2026-05-27/sprint_diag_27may/operator_favorites_root_cause_2026-05-27.md
     feasible = _demote_blind_empty(feasible, order_id)
+    # INV-FEASIBILITY-FIRST (spec odporności §6.A): po całym łańcuchu rescore/reorder
+    # (v325/v326/a2/gps_age/multistop/demote) pula selekcji MUSI być wyłącznie MAYBE.
+    # Tiering/LEXR6 niżej tylko PERMUTUJĄ ten sam zbiór (nie dodają NO). Fail-loud guard.
+    _assert_feasibility_first(feasible, order_id)
 
     # R-LATE-PICKUP tiering (2026-05-31, Adrian) — FINAL reorder pass, AFTER demote.
     # NIE usuwa kandydatów (→ „zawsze daje propozycje"), tylko ustawia priorytet:
