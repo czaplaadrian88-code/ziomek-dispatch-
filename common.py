@@ -1771,6 +1771,24 @@ V325_PRE_SHIFT_HARD_REJECT_MIN = 30
 # Pre-shift soft penalty: pickup_ready ∈ [shift_start - 30, shift_start)
 # → soft penalty -20 (gradient zone, kurier "warm-up" minutes).
 V325_PRE_SHIFT_SOFT_PENALTY = -20
+
+# --- Pre-shift okno + kara gradientowa (Adrian 2026-06-24) ---------------------
+# Pula pre-shift ograniczona do PRE_SHIFT_WINDOW_MAX_MIN (cap przywrócony — V3.24-A
+# go zniósł). Kara rośnie z liczbą minut do startu zmiany (shift_start_min):
+#   m ≤ PRE_SHIFT_NEAR_MIN        → lekka (∝ m): chętnie brany, restauracja nie czeka rano
+#   PRE_SHIFT_NEAR_MIN < m ≤ cap  → POTĘŻNA (~veto) POZA dużym przeładowaniem floty;
+#                                   przy loadgov_ewma ≥ PRE_SHIFT_FAR_UNLOCK_LOAD relaks
+#                                   do umiarkowanej kary (∝ m), by uniknąć długiego
+#                                   czekania restauracji (lepiej +20-25 min w bagu).
+# Rygor „odbiór nie przed zmianą" zapewnia osobno departure-clamp (≥ shift_start).
+# Kill-switch: ENABLE_PRE_SHIFT_GRADIENT_PENALTY=0; cap-off: PRE_SHIFT_WINDOW_MAX_MIN=99999.
+ENABLE_PRE_SHIFT_GRADIENT_PENALTY = _os.environ.get(
+    "ENABLE_PRE_SHIFT_GRADIENT_PENALTY", "1") == "1"
+PRE_SHIFT_WINDOW_MAX_MIN = float(_os.environ.get("PRE_SHIFT_WINDOW_MAX_MIN", "60"))
+PRE_SHIFT_NEAR_MIN = float(_os.environ.get("PRE_SHIFT_NEAR_MIN", "30"))
+PRE_SHIFT_NEAR_PEN_PER_MIN = float(_os.environ.get("PRE_SHIFT_NEAR_PEN_PER_MIN", "-1.0"))
+PRE_SHIFT_FAR_PEN = float(_os.environ.get("PRE_SHIFT_FAR_PEN", "-1000.0"))
+PRE_SHIFT_FAR_UNLOCK_LOAD = float(_os.environ.get("PRE_SHIFT_FAR_UNLOCK_LOAD", "3.5"))
 # Dropoff hard reject: planned_dropoff > shift_end + 5 min
 # (parallel do V3.24-A V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN, V3.25
 # zachowuje to ale flag-gated osobno dla rollout independence).

@@ -2881,6 +2881,26 @@ def _compute_loadaware_shadow(candidates, feasible, top):
     }
 
 
+def _pre_shift_gradient_penalty(shift_start_min, loadgov_ewma):
+    """Kara pre-shift gradientowa (Adrian 2026-06-24). Zwraca punkty (≤0) lub None.
+
+    m = minuty do startu zmiany (cs.shift_start_min):
+      m ≤ 0                  → None (brak kary; kurier praktycznie na zmianie)
+      m ≤ PRE_SHIFT_NEAR_MIN → ∝ m (lekka — chętnie brany, restauracja nie czeka rano)
+      NEAR < m ≤ cap         → PRE_SHIFT_FAR_PEN (~veto) POZA dużym przeładowaniem floty;
+                               loadgov_ewma ≥ PRE_SHIFT_FAR_UNLOCK_LOAD → relaks do ∝ m
+                               (lepiej kurier weźmie za chwilę niż restauracja czeka 40-60′).
+    Rygor „odbiór nie przed zmianą" egzekwuje osobno departure-clamp (≥ shift_start)."""
+    m = float(shift_start_min or 0)
+    if m <= 0:
+        return None
+    if m <= C.PRE_SHIFT_NEAR_MIN:
+        return C.PRE_SHIFT_NEAR_PEN_PER_MIN * m
+    if loadgov_ewma is not None and loadgov_ewma >= C.PRE_SHIFT_FAR_UNLOCK_LOAD:
+        return C.PRE_SHIFT_NEAR_PEN_PER_MIN * m
+    return C.PRE_SHIFT_FAR_PEN
+
+
 def assess_order(
     order_event: dict,
     fleet_snapshot: Dict[str, Any],
@@ -4661,6 +4681,15 @@ def _assess_order_impl(
         # Suma penalties (BUG-4 soft penalty dodany do puli)
         # V3.25 STEP B (R-01): pre-shift soft penalty z feasibility metrics
         bonus_v325_pre_shift_soft = float(metrics.get("v325_pre_shift_soft_penalty", 0) or 0)
+        # Pre-shift kara GRADIENTOWA (Adrian 2026-06-24) — zastępuje stałą feasibility
+        # dla kuriera pre_shift (logika: _pre_shift_gradient_penalty). Rygor „odbiór
+        # nie przed zmianą" = osobno departure-clamp (≥ shift_start).
+        if (C.decision_flag("ENABLE_PRE_SHIFT_GRADIENT_PENALTY")
+                and getattr(cs, "pos_source", None) == "pre_shift"):
+            _psp = _pre_shift_gradient_penalty(getattr(cs, "shift_start_min", 0), loadgov_ewma)
+            if _psp is not None:
+                bonus_v325_pre_shift_soft = _psp
+                metrics["v325_pre_shift_soft_penalty"] = _psp   # spójność breakdown/serializacji
         # D2 (audyt 2026-05-28): soft penalty gdy grafik STALE (shift_end None z awarii pliku,
         # nie realnego braku shiftu). 0 gdy flag OFF lub grafik świeży. Default OFF → shadow.
         bonus_d2_stale_soft = float(metrics.get("d2_soft_penalty", 0) or 0)

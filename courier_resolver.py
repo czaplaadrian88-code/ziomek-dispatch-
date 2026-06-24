@@ -1502,7 +1502,9 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                     continue
                 _wo_mins = _mins_to_shift_start(_wo_entry)
                 if _wo_mins is not None and _wo_mins > 0:
-                    # "pracuje od HH:MM" w przyszłości → pre_shift hold (mirror V3.24-A).
+                    # MANUALNY working-override koordynatora — NIE capujemy oknem pre-shift
+                    # (jawna decyzja człowieka ma pierwszeństwo, Lekcja #26). Cap 60 min
+                    # dotyczy tylko automatycznego pre-shift grafikowego (V3.24-A niżej).
                     cs.pos_source = "pre_shift"
                     cs.pos = BIALYSTOK_CENTER
                     cs.shift_start_min = _wo_mins
@@ -1542,15 +1544,16 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                 mins = _mins_to_shift_start(entry)
                 from dispatch_v2 import common as C_SCHED
                 if C_SCHED.ENABLE_V324A_SCHEDULE_INTEGRATION:
-                    if mins is not None and mins > 0:
+                    if mins is not None and 0 < mins <= C_SCHED.PRE_SHIFT_WINDOW_MAX_MIN:
                         cs.pos_source = "pre_shift"
                         cs.pos = BIALYSTOK_CENTER
                         cs.shift_start_min = mins
                         _log.debug(f"pre_shift v324a {cs.name} ({cs.courier_id}): za {mins:.0f} min")
                     else:
-                        _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason}")
+                        _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason} "
+                                   f"(okno pre-shift {C_SCHED.PRE_SHIFT_WINDOW_MAX_MIN:.0f} min)")
                         _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
-                                                  "reason": f"off_shift: {reason}"})
+                                                  "reason": f"off_shift_or_window: {reason}"})
                         continue
                 else:
                     if mins is not None and 0 < mins <= PRE_SHIFT_WINDOW_MIN:
