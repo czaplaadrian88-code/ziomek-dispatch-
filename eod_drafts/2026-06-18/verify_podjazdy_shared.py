@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
-"""Dowód: route_podjazdy.order_podjazdy == panel _build_route (kolejność stopów).
-Uruchamiać venv-em panelu (ma deps fleet_state). Porównuje na przypadkach
-pokrywających: grupowanie po restauracji, podział kursów (gap>10min), carried-first,
-rangę dostaw z planu Ziomka."""
+"""Dowód: route_podjazdy.order_podjazdy == panel _build_route (kolejność stopów)
+w KONFIGURACJI PRODUKCYJNEJ (plan-aware bundling). Uruchamiać venv-em panelu
+(ma deps fleet_state). Porównuje na przypadkach pokrywających: grupowanie po
+restauracji, podział kursów (gap>10min), carried-first, rangę dostaw z planu Ziomka.
+
+⚠ Parytet flag (lekcja 2026-06-24, [[console-app-time-route-divergence-2026-06-23]]):
+oba renderery MUSZĄ iść tą samą ścieżką co produkcja, inaczej dowód testuje
+nieistniejącą konfigurację. Produkcja: panel `PANEL_FLAG_TRUST_CANON_ORDER=1` +
+`PANEL_FLAG_PLAN_AWARE_PODJAZDY=1` (nadajesz-panel.service); apka woła
+`order_podjazdy(plan_aware=True)` (courier-api `ENABLE_PLAN_AWARE_PODJAZDY=1`).
+Ustawiamy env PRZED importem fleet_state (flag() czyta os.getenv na żywo)."""
+import os
+# mirror produkcji ZANIM zaimportujemy fleet_state (flag() czyta env w czasie wywołania)
+os.environ.setdefault("PANEL_FLAG_TRUST_CANON_ORDER", "1")
+os.environ.setdefault("PANEL_FLAG_PLAN_AWARE_PODJAZDY", "1")
 import sys
 sys.path.insert(0, "/root/.openclaw/workspace/nadajesz_clone/panel/backend")
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
@@ -43,7 +54,7 @@ CASES = {
 ok = 0
 for name, (bag, plan) in CASES.items():
     p = panel_order(bag, plan)
-    s = RP.order_podjazdy(bag, plan)
+    s = RP.order_podjazdy(bag, plan, plan_aware=True)   # mirror produkcji (courier-api)
     same = p == s
     ok += same
     print(f"[{'OK ' if same else 'DIFF'}] {name}")
