@@ -2236,6 +2236,22 @@ def _loadgov_alert_transition(ewma, armed,
     return False, armed
 
 
+# INV-GATE-SCORE-DELTA registry (audyt 2026-06-24): JEDNO źródło prawdy — (flaga, klucz
+# metrics) dla KAŻDEJ delty RANKINGOWEJ dopisywanej do final_score (dp ~5016-5035), którą
+# bramka MIN_PROPOSE/KOORD MUSI wyłączyć. Strażnik `test_inv_gate_score_delta` pilnuje, że
+# każda taka delta z final_score jest tu obecna (nie da się dodać rankingowej delty cicho
+# wpływającej na werdykt). Klucz metrics = DOKŁADNIE wartość dodana do final_score (dp:5206-5228).
+_GATE_RANKING_DELTA_EXCLUSIONS = (
+    ("ENABLE_BUNDLE_SYNC_SPREAD", "bonus_sync_spread_shadow_delta"),       # -150, LIVE
+    ("ENABLE_FLEET_LOAD_GOVERNOR", "bonus_loadgov_shadow_delta"),          # -40, LIVE
+    ("ENABLE_R1_PROGRESSIVE_CLIP", "bonus_r1_progressive_shadow_delta"),   # -45..-100, LIVE (była luka)
+    ("ENABLE_V319H_CONTINUATION_GUARD", "bonus_v319h_guard_shadow_delta"), # LIVE (była luka)
+    ("ENABLE_REPO_COST_LIVE", "bonus_repo_cost_shadow_delta"),             # OFF (preemptive)
+    ("ENABLE_BUNDLE_VALUE_SCORING", "bonus_bundle_fit_shadow_delta"),      # OFF (preemptive)
+    ("ENABLE_FIX_C_ADDITIVE_PENALTY", "fix_c_additive_pen_shadow"),        # OFF (preemptive)
+)
+
+
 def _gate_score_excluding_ranking_deltas(cand):
     """INCYDENT-FIX 2026-06-12: score do bramki KOORD "wszyscy poniżej progu".
 
@@ -2253,10 +2269,14 @@ def _gate_score_excluding_ranking_deltas(cand):
         return None
     try:
         m = getattr(cand, "metrics", None) or {}
-        if C.decision_flag("ENABLE_BUNDLE_SYNC_SPREAD"):
-            sc = sc - float(m.get("bonus_sync_spread_shadow_delta") or 0.0)
-        if C.decision_flag("ENABLE_FLEET_LOAD_GOVERNOR"):
-            sc = sc - float(m.get("bonus_loadgov_shadow_delta") or 0.0)
+        # INV-GATE-SCORE-DELTA (audyt 2026-06-24, A2): bramka wyłącza WSZYSTKIE delty
+        # rankingowe z `_GATE_RANKING_DELTA_EXCLUSIONS`, nie tylko SYNC/LOADGOV. Były LUKĄ:
+        # r1_progressive(−45..−100) + v319h ŻYWE dopisywane do final_score, ale gate ich NIE
+        # wyłączał → kara rankingowa mogła zbić gate-score <MIN_PROPOSE = best_effort-low_score
+        # (z ALWAYS-PROPOSE = etykieta, nie KOORD). repo/bundle_fit/fix_c OFF (no-op, preemptive).
+        for _flag, _key in _GATE_RANKING_DELTA_EXCLUSIONS:
+            if C.decision_flag(_flag):
+                sc = sc - float(m.get(_key) or 0.0)
     except Exception:
         pass
     return sc
