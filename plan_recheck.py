@@ -69,6 +69,20 @@ MAX_PLAN_AGE_MIN = int(os.environ.get("MAX_PLAN_AGE_MIN", "120"))
 # obietnicy i przesuń kolejne stopy. Monotoniczne, idempotentne. Default ON.
 ENABLE_PICKUP_REFLOOR = os.environ.get("ENABLE_PICKUP_REFLOOR", "1") == "1"
 
+# 2026-06-24 (A — „chcę czasy na bieżąco, te same w apce", Adrian): cache świeżych
+# ETA `live_order_eta.json` (czytany przez konsolę koordynatora i apkę kuriera)
+# był pisany TYLKO przez shadow_dispatcher przy DECYZJI/propozycji → między
+# decyzjami zamarzał (do TTL 20 min) i potrafił pokazywać trasę z dawnej, już
+# nieaktualnej propozycji (case Jakub Olchowik: Chicago→Kręta 22:05 = 34 min,
+# zamrożone z decyzji 20:57, choć plan miał poprawne 21:38). Fix: po każdym ticku
+# (timer co 5 min) dosyłamy do cache'a ŚWIEŻE czasy odbioru+dostawy z AKTUALNEGO
+# planu każdego aktywnego kuriera → cache nie zamarza, obie powierzchnie czytają
+# to samo i aktualne. Pisze tylko do live_order_eta.json (jak shadow), NIE dotyka
+# Telegrama ani decyzji. Default OFF — flip env=1 dropin po testach.
+ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH = os.environ.get(
+    "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH", "0"
+) == "1"
+
 # 2026-06-01 (apka pokazuje fallback_nn zamiast trasy Ziomka):
 # gdy kurier MA realny worek (≥1 zlecenie assigned/picked_up w orders_state) ale
 # NIE ma aktywnego planu w courier_plans.json (np. PANEL_OVERRIDE — koordynator
@@ -1519,6 +1533,46 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
             _log.info(f"BAG_PLAN_NEAR_PICKUP_REGEN cid={cid} bag={len(oids)}")
 
 
+def _refresh_live_eta_from_plans(plans: Dict[str, Any], summary: Dict[str, Any]) -> None:
+    """A: odśwież live_order_eta.json czasami z AKTUALNEGO planu każdego aktywnego
+    kuriera (latest-wins, decided_at=now), żeby cache nie zamarzał między decyzjami
+    Ziomka. Fail-soft: każdy błąd = no-op (nie wpływa na recheck). Pisze tylko do
+    live_order_eta.json (źródło konsoli+apki), nic poza tym."""
+    if not ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH:
+        return
+    try:
+        from dispatch_v2 import live_eta_cache as _live_eta
+    except Exception:
+        return
+    refreshed = 0
+    for cid, plan in plans.items():
+        if not isinstance(plan, dict) or plan.get("invalidated_at") is not None:
+            continue
+        deliv: Dict[str, str] = {}
+        pick: Dict[str, str] = {}
+        for s in (plan.get("stops") or []):
+            if not isinstance(s, dict):
+                continue
+            oid = str(s.get("order_id"))
+            pa = s.get("predicted_at")
+            if not pa:
+                continue
+            if s.get("type") == "pickup":
+                pick.setdefault(oid, pa)
+            else:
+                deliv.setdefault(oid, pa)
+        if not deliv:
+            continue
+        try:
+            if _live_eta.upsert(deliv, pick, cid):
+                refreshed += 1
+        except Exception:
+            pass
+    summary["live_eta_refreshed"] = refreshed
+    if refreshed:
+        _log.info(f"LIVE_ETA_REFRESH couriers={refreshed}")
+
+
 def run_recheck() -> Dict[str, Any]:
     """Main entry point. Returns summary dict."""
     # ETAP 4 (2026-06-10, Z-04): fingerprint flag decyzyjnych — MUSI być
@@ -1596,6 +1650,14 @@ def run_recheck() -> Dict[str, Any]:
     # Gap-fill: kurierzy z realnym workiem ale bez aktywnego planu → plan Ziomka.
     if ENABLE_PLAN_FOR_ACTUAL_BAG:
         _gap_fill_plans(orders_state, plans, gps_positions, now, summary)
+
+    # A (2026-06-24): po wszystkich zmianach planów dosyłamy świeże ETA do cache'a
+    # czytanego przez konsolę+apkę (gap-fill mógł dopisać/zmienić plany → reload).
+    if ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH:
+        try:
+            _refresh_live_eta_from_plans(plan_manager.load_plans(), summary)
+        except Exception as _e:
+            _log.warning(f"live_eta_refresh fail: {type(_e).__name__}: {_e}")
 
     _log.info(f"PLAN_RECHECK summary={summary}")
     return summary
