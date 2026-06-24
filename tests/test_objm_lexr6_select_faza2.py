@@ -57,8 +57,11 @@ def test_group_restriction_tier():
     assert _objm_lexr6_d2_pick([w, a]) is w
 
 
-def test_group_restriction_bucket():
-    # niższy R6 ale bucket2 (pre_shift+bag0) — inna grupa niż gps bucket0 → NIE wybrany
+def test_group_restriction_bucket(monkeypatch):
+    # restrykcja bucketów (stare zachowanie, equal-treatment OFF): pre_shift+bag0 = bucket2,
+    # inna grupa niż gps bucket0 → NIE wybrany. (Equal-treatment ON pokryte w
+    # test_equal_treatment_bucket.test_lexr6_pick_groups_nogps_with_informed.)
+    monkeypatch.setattr(P, "_equal_bucket_on", lambda: False)
     w = _mk(1, 20.0, pos="gps", bag=2)
     a = _mk(2, 1.0, pos="pre_shift", bag=0)
     assert _objm_lexr6_d2_pick([w, a]) is w

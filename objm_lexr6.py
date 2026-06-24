@@ -33,9 +33,14 @@ def lex_qual(c):
             objm(c, "new_pickup_late_min") or 0.0)
 
 
-def bucket(c, *, is_informed, is_blind_empty, is_pre_shift):
+def bucket(c, *, is_informed, is_blind_empty, is_pre_shift, bucket_fn=None):
     """Bucket pozycyjny: informed→0, blind-empty/pre-shift→2, reszta→1.
-    Klasyfikatory wstrzykiwane (funkcje przyjmujące kandydata)."""
+    Klasyfikatory wstrzykiwane (funkcje przyjmujące kandydata).
+    `bucket_fn` (opcjonalny, 2026-06-24) = JEDNO źródło prawdy bucketa z pipeline
+    (`_selection_bucket`, equal-treatment-aware: no_gps/pre_shift po score gdy ON). Gdy
+    podany — używany WPROST (spójność z główną selekcją); inaczej klasyfikatory (stare)."""
+    if bucket_fn is not None:
+        return bucket_fn(c)
     if is_informed(c):
         return 0
     if is_blind_empty(c) or is_pre_shift(c):
@@ -43,24 +48,27 @@ def bucket(c, *, is_informed, is_blind_empty, is_pre_shift):
     return 1
 
 
-def group_of(feasible, winner, *, late_pickup_tier, is_informed, is_blind_empty, is_pre_shift):
+def group_of(feasible, winner, *, late_pickup_tier, is_informed, is_blind_empty,
+             is_pre_shift, bucket_fn=None):
     """Kandydaci z `feasible` w tej samej grupie (late_pickup_tier, bucket) co `winner`."""
     def _tb(c):
         return (late_pickup_tier(c),
                 bucket(c, is_informed=is_informed, is_blind_empty=is_blind_empty,
-                       is_pre_shift=is_pre_shift))
+                       is_pre_shift=is_pre_shift, bucket_fn=bucket_fn))
     w_tb = _tb(winner)
     return [c for c in feasible if _tb(c) == w_tb]
 
 
-def pick(feasible, *, late_pickup_tier, is_informed, is_blind_empty, is_pre_shift):
+def pick(feasible, *, late_pickup_tier, is_informed, is_blind_empty, is_pre_shift,
+         bucket_fn=None):
     """Kandydat min(lex_qual) w grupie tier×bucket zwycięzcy score (feasible[0]).
     Zwraca feasible[0] gdy pusta grupa, None gdy puste `feasible`. `min` jest stabilny
-    (pierwszy z najmniejszym kluczem) — kolejność `feasible` zachowana jak w dawnym inline."""
+    (pierwszy z najmniejszym kluczem) — kolejność `feasible` zachowana jak w dawnym inline.
+    `bucket_fn` (opcjonalny) — equal-treatment-aware bucket z pipeline (patrz `bucket`)."""
     if not feasible:
         return None
     w0 = feasible[0]
     grp = group_of(feasible, w0, late_pickup_tier=late_pickup_tier,
                    is_informed=is_informed, is_blind_empty=is_blind_empty,
-                   is_pre_shift=is_pre_shift)
+                   is_pre_shift=is_pre_shift, bucket_fn=bucket_fn)
     return min(grp, key=lex_qual) if grp else w0

@@ -83,3 +83,40 @@ def test_demote_preshift_when_off(monkeypatch):
     pre = _Cand("PRE", 95.0, "pre_shift", bag_size=0)
     assert D._is_demotable_blind_empty(pre) is True, \
         "flaga OFF: pre_shift dalej demotowalny"
+
+
+# --- LEXR6 (live-flip path) — ten sam bucket equal-treatment przed flipem ---
+def _olx_bucket(c):
+    from dispatch_v2 import objm_lexr6 as olx
+    return olx.bucket(c, is_informed=D._is_informed_cand,
+                      is_blind_empty=D._is_blind_empty_cand,
+                      is_pre_shift=D._is_pre_shift_cand, bucket_fn=D._selection_bucket)
+
+
+@pytest.mark.parametrize("blind_ps", ["no_gps", "pre_shift"])
+def test_lexr6_bucket_equal_on(monkeypatch, blind_ps):
+    monkeypatch.setattr(D, "_equal_bucket_on", lambda: True)
+    assert _olx_bucket(_Cand("B", 90.0, blind_ps, 0)) == 0, \
+        f"LEXR6 bucket: {blind_ps} == informed (0) pod equal-treatment → ta sama grupa tier×bucket"
+
+
+def test_lexr6_bucket_equal_off(monkeypatch):
+    monkeypatch.setattr(D, "_equal_bucket_on", lambda: False)
+    assert _olx_bucket(_Cand("B", 90.0, "no_gps", 0)) == 2, \
+        "LEXR6 bucket: flaga OFF = stare zachowanie (no_gps → 2)"
+
+
+def test_lexr6_pick_groups_nogps_with_informed(monkeypatch):
+    """Pod equal-treatment LEXR6 grupuje no_gps z informed (ten sam bucket) → lex może
+    wybrać no_gps o lepszym R6 zamiast informed feasible[0]."""
+    monkeypatch.setattr(D, "_equal_bucket_on", lambda: True)
+    from dispatch_v2 import objm_lexr6 as olx
+    informed = _Cand("INF", 80.0, INF, 2)        # feasible[0] (najwyższy score)
+    informed.metrics["objm_r6_breach_max_min"] = 8.0
+    nogps = _Cand("NG", 70.0, "no_gps", 0)        # niższy score, ale 0 R6 breach
+    nogps.metrics["objm_r6_breach_max_min"] = 0.0
+    out = olx.pick([informed, nogps], late_pickup_tier=D._late_pickup_tier,
+                   is_informed=D._is_informed_cand, is_blind_empty=D._is_blind_empty_cand,
+                   is_pre_shift=D._is_pre_shift_cand, bucket_fn=D._selection_bucket)
+    assert out.courier_id == "NG", \
+        "no_gps w tej samej grupie (bucket 0) → lex R6-primary wybiera go (0<8 breach)"

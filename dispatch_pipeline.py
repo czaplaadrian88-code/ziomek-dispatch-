@@ -1188,6 +1188,9 @@ def _objm_lexr6_d2_pick(feasible):
             is_informed=_is_informed_cand,
             is_blind_empty=_is_blind_empty_cand,
             is_pre_shift=_is_pre_shift_cand,
+            # 2026-06-24: spójny bucket z główną selekcją — equal-treatment dla no_gps/
+            # pre_shift także w grupowaniu tier×bucket LEXR6 (przed flipem ENABLE_OBJM_LEXR6_SELECT).
+            bucket_fn=_selection_bucket,
         )
     except Exception as _e:
         try:

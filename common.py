@@ -87,6 +87,9 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_SOON_FREE_CANDIDATE",
     # B3 (2026-06-20): no_gps używalny z karą niepewności zamiast demote-KOORD (🛑 ACK).
     "ENABLE_NO_GPS_UNCERTAINTY_PENALTY",
+    # Equal-treatment dokończony (2026-06-24): no_gps+pre_shift po score w bucketach
+    # selekcji + demote (tiering/best_effort/LEXR6). Decyzyjna, cross-proces.
+    "ENABLE_EQUAL_TREATMENT_BUCKET",
     # SP-B2-LOADGOV (2026-06-11): governor load floty (🛑 ACK).
     "ENABLE_FLEET_LOAD_GOVERNOR",
     # E7-doklejka 3 (2026-06-11): BUG A/B geometry/fairness z env-only do
