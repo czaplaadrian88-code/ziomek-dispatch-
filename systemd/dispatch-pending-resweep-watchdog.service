@@ -1,0 +1,17 @@
+[Unit]
+Description=Ziomek pending-resweep WATCHDOG — sprawdza czy przegląd GO/NO-GO odpalił (cicho gdy OK, Telegram tylko gdy NIE odpalił/błąd). Read-only.
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/pending_global_resweep_watchdog.py
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.pending_global_resweep_watchdog
+TimeoutStartSec=60
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/pending_global_resweep_watchdog.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/pending_global_resweep_watchdog.log
+
+[Install]
+WantedBy=multi-user.target

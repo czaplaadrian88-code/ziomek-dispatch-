@@ -61,7 +61,11 @@ Rollback hot = `ENABLE_PENDING_RESWEEP=false`. Backup: `flags.json.bak-pre-reswe
   sandbox (Mem 400M / OOMScoreAdjust 200 / Nice 10) jak inne shadow-serwisy.
 - `tools/pending_global_resweep_review.py` + `systemd/dispatch-pending-resweep-review.{service,timer}`
   — one-shot `OnCalendar=2026-06-26 07:00 UTC` (=09:00 Warsaw, po peaku 25.06): raport GO/NO-GO
-  + Telegram do Adriana (`send_admin_alert`).
+  + Telegram do Adriana (`send_admin_alert`). `OnFailure=dispatch-onfailure-alert` (crash → alert).
+- `tools/pending_global_resweep_watchdog.py` + `systemd/dispatch-pending-resweep-watchdog.{service,timer}`
+  — one-shot `OnCalendar=2026-06-26 07:15 UTC` (15 min po przeglądzie): sprawdza przez systemd czy
+  przegląd odpalił dziś z sukcesem; CICHO gdy OK, Telegram TYLKO gdy nie odpalił/błąd (zamienia
+  ciszę w jawny sygnał). Czysta logika `evaluate()` testowalna — `tests/test_pending_global_resweep_watchdog.py` 5/5.
 - Testy `tests/test_pending_global_resweep.py` 8/8. Loguje `dispatch_state/pending_global_resweep.jsonl`.
 
 ## Shadow → LIVE (za ACK po 26.06)

@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek pending-resweep WATCHDOG — jednorazowo 2026-06-26 07:15 UTC (15 min po przeglądzie GO/NO-GO): pingnij Adriana TYLKO gdy przegląd nie odpalił/błąd
+
+[Timer]
+OnCalendar=2026-06-26 07:15:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=dispatch-pending-resweep-watchdog.service
+
+[Install]
+WantedBy=timers.target
