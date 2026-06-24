@@ -549,6 +549,18 @@ def _late_pickup_score_first_key(c, tier: int, orig_rank: int,
     return (1 if tier == 2 else 0, bucket, -adj, orig_rank)
 
 
+def _post_shift_overrun_penalty_of(c):
+    """Post-shift overrun penalty (pkt) z metrics kandydata — WIODĄCY term selekcji
+    best_effort gdy ENABLE_POST_SHIFT_OVERRUN_PENALTY. 0.0 gdy flaga OFF / brak
+    metryki (→ zero wpływu na sort, zachowanie sprzed zmiany). Wyższa wartość = kurier
+    kończy dalej PO zmianie = GORZEJ (sort rosnący → 0 nadwyżki na górze)."""
+    if not C.decision_flag("ENABLE_POST_SHIFT_OVERRUN_PENALTY"):
+        return 0.0
+    m = getattr(c, "metrics", None) or {}
+    v = m.get("post_shift_overrun_penalty")
+    return float(v) if isinstance(v, (int, float)) else 0.0
+
+
 def _best_effort_sort_key(c):
     """FEAS-01 (2026-06-06): klucz sortu ścieżki best_effort (feasible=0) — spójny z
     główną selekcją. Czysta funkcja (testowalna).
@@ -573,7 +585,11 @@ def _best_effort_sort_key(c):
     sla = getattr(plan, "sla_violations", 0) or 0
     dur = getattr(plan, "total_duration_min", 0.0) or 0.0
     score = getattr(c, "score", 0.0) or 0.0
-    return (r6_pov, sla, bucket, -score, dur)
+    # Post-shift overrun WIODĄCY (Adrian 2026-06-24): kurier kończący PO zmianie
+    # spada poniżej kończących w oknie (0 nadwyżki). 0.0 gdy flaga OFF = sort
+    # identyczny jak wcześniej.
+    ps_pen = _post_shift_overrun_penalty_of(c)
+    return (ps_pen, r6_pov, sla, bucket, -score, dur)
 
 
 def _best_effort_fastest_pickup_key(c, new_order_id):
@@ -627,9 +643,22 @@ def _best_effort_objm_pick(with_plan, new_oid, cap_min=40.0):
                 return float(v)
             return _m(c, "sum_bag_time_min")
 
+        # Post-shift overrun WIODĄCY term (Adrian 2026-06-24): 0.0 gdy flaga OFF →
+        # _lex_qual identyczny jak wcześniej (carry-R6 PRIMARY). ON → kurier kończący
+        # PO zmianie spada poniżej kończących w oknie (case 483144: Piotr/Kuba pod
+        # Patryka). Flaga czytana RAZ (poza min(), tańsze).
+        _ps_on = C.decision_flag("ENABLE_POST_SHIFT_OVERRUN_PENALTY")
+
+        def _ps_pen(c):
+            if not _ps_on:
+                return 0.0
+            v = _m(c, "post_shift_overrun_penalty")
+            return v if v is not None else 0.0
+
         def _lex_qual(c):
             r6 = _m(c, "objm_r6_breach_max_min")
-            return (r6 if r6 is not None else 9e9,
+            return (_ps_pen(c),
+                    r6 if r6 is not None else 9e9,
                     _m(c, "late_pickup_committed_max") or 0.0,
                     _m(c, "new_pickup_late_min") or 0.0)
 
@@ -4798,7 +4827,29 @@ def _assess_order_impl(
             else:
                 v324a_extension_penalty = _pen_v324
 
+        # Post-shift overrun (Adrian 2026-06-24): rosnąca kara za minuty, o jakie
+        # DOWÓZ nowego ordera wypada PO końcu zmiany kuriera. Liczone NIEZALEŻNIE
+        # od v324a_dropoff_excess_min (to ostatnie bywa None bo feasibility ucina
+        # się na wcześniejszej bramce — case 483144 Kuba/Patryk). Metryka liczona
+        # ZAWSZE (widoczność w shadow); wpływ na score/selekcję best_effort tylko
+        # gdy ENABLE_POST_SHIFT_OVERRUN_PENALTY. Fail-open: brak shift_end / dropoff
+        # → 0 (grafik mógł paść — nie karać na ślepo).
+        post_shift_overrun_min = 0.0
+        post_shift_overrun_penalty = 0.0
+        _cs_shift_end = getattr(cs, "shift_end", None)
+        if _cs_shift_end is not None and plan is not None:
+            _pred_new = (getattr(plan, "predicted_delivered_at", None) or {}).get(
+                getattr(new_order, "order_id", None))
+            if _pred_new is not None:
+                _se = _cs_shift_end if _cs_shift_end.tzinfo else _cs_shift_end.replace(tzinfo=timezone.utc)
+                _pn = _pred_new if _pred_new.tzinfo else _pred_new.replace(tzinfo=timezone.utc)
+                post_shift_overrun_min = round((_pn - _se).total_seconds() / 60.0, 2)
+                post_shift_overrun_penalty = C.post_shift_overrun_penalty(post_shift_overrun_min)
+
         final_score = score_result["total"] + bundle_bonus + timing_gap_bonus + wave_bonus + bonus_penalty_sum + bonus_bug2_continuation + v324a_extension_penalty
+        # Post-shift overrun: odjęcie kary od score TYLKO gdy flaga ON (shadow-first).
+        if C.decision_flag("ENABLE_POST_SHIFT_OVERRUN_PENALTY") and post_shift_overrun_penalty:
+            final_score = final_score - post_shift_overrun_penalty
         # BUG A+B shadow (2026-05-26): bag_time fairness + r5 detour. Wszystkie
         # cztery bonus_* są 0.0 gdy flagi OFF (default) → zero behavior change
         # dopóki flagi nie zostaną włączone (env override / hot-reload).
@@ -5163,6 +5214,11 @@ def _assess_order_impl(
             # V3.24-A extension metrics
             "v324a_extension_min": round(v324a_extension_min, 2) if v324a_extension_min is not None else None,
             "v324a_extension_penalty": v324a_extension_penalty,
+            # Post-shift overrun (Adrian 2026-06-24): minuty dowozu nowego ordera PO
+            # końcu zmiany + rosnąca kara (pkt). Liczone ZAWSZE (shadow); wiodący term
+            # selekcji best_effort + odjęcie od score gdy ENABLE_POST_SHIFT_OVERRUN_PENALTY.
+            "post_shift_overrun_min": post_shift_overrun_min,
+            "post_shift_overrun_penalty": post_shift_overrun_penalty,
             # V3.25 STEP C: tier propagation dla R-04 NEW-COURIER-CAP gradient.
             # cs_tier_label = 'new' dla świeżo dodanych (Szymon Sa, Grzegorz R).
             # cs_tier_bag = bag.tier (gold|std+|std|slow|new) dla cross-ref.

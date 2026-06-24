@@ -134,6 +134,11 @@ ETAP4_DECISION_FLAGS = (
     # warunek: ODBIÓR ≤ koniec pracy firmy, dostawa może wyjść po jego shift_end.
     # Default OFF; flip po replay-walidacji + ACK. feasibility_v2._end_of_day_salvage.
     "ENABLE_END_OF_DAY_SALVAGE",
+    # POST-SHIFT OVERRUN PENALTY (Adrian 2026-06-24): rosnąca kara za minuty dowozu
+    # po końcu zmiany — wiodący term selekcji best_effort + score. Decyzyjna,
+    # cross-proces (shadow/czasowka/plan-recheck liczą tym samym silnikiem).
+    # Default OFF; flip po replay + ACK poza peakiem. common.post_shift_overrun_penalty.
+    "ENABLE_POST_SHIFT_OVERRUN_PENALTY",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -1695,6 +1700,65 @@ V324_EXTENSION_PENALTY_TIERS = [
     (45, -100),     # 30-45 min: significant
     (60, -200),     # 45-60 min: large (edge przed hard reject)
 ]
+
+# ── Post-shift overrun penalty (Adrian 2026-06-24) ───────────────────────────
+# Best_effort (feasible=0): rosnąca kara za KAŻDĄ minutę, o jaką dowóz nowego
+# zlecenia wypada PO końcu zmiany kuriera. Powód: gdy nikt nie jest feasible,
+# selekcja best_effort (objm R6-breach) jest ŚLEPA na koniec zmiany — kurier z
+# czystym workiem (R6=0) wygrywa, mimo że kończy 30 min po zmianie (case 483144:
+# Piotr +27, Kuba +38, Patryk 0 → ma trafić Patryk).
+#
+# Stawka ROŚNIE z progiem (krzywa wypukła = „rosnąca za każdą minutę"). 0-5 min
+# = grace (skończyć ≤5 min po zmianie jest OK → 0 kary → kurier dalej konkuruje
+# normalnie na R6). Powyżej: gradient (LESSON-QA-10 gradient nie próg). Wartości
+# w PUNKTACH (te same jednostki co reszta penalty puli / -score). Kara liczona
+# kumulacyjnie po progach przez post_shift_overrun_penalty().
+#
+# excess_min ≤ 0 (dowóz przed końcem zmiany) → 0. Brak shift_end → caller liczy 0
+# (fail-open: grafik mógł paść — NIE karać na ślepo; mirror FAIL-12 / v325).
+# pair = (threshold_min_inclusive, penalty_pts_per_min_w_tym_progu)
+POST_SHIFT_OVERRUN_GRACE_MIN = 5.0
+POST_SHIFT_OVERRUN_PENALTY_TIERS = [
+    (5, 0.0),       # 0-5 min po zmianie: grace, brak kary
+    (10, 8.0),      # 5-10 min:   8 pkt/min
+    (20, 16.0),     # 10-20 min: 16 pkt/min
+    (30, 28.0),     # 20-30 min: 28 pkt/min
+    (10_000, 45.0),  # 30+ min:   45 pkt/min (≈ weto)
+]
+
+
+def post_shift_overrun_penalty(excess_min):
+    """Rosnąca (wypukła) kara w PUNKTACH za nadwyżkę minut po końcu zmiany.
+
+    excess_min: float — (planowany dowóz nowego ordera − shift_end) w minutach.
+        ≤ POST_SHIFT_OVERRUN_GRACE_MIN → 0.0 (grace). None / nie-liczba → 0.0.
+    Kumulacja po POST_SHIFT_OVERRUN_PENALTY_TIERS: w każdym progu nadwyżka mnożona
+    przez stawkę/min tego progu. Zwraca wartość ≥ 0 (im więcej, tym GORZEJ —
+    caller traktuje jako penalty / pierwszy term sortu best_effort).
+    """
+    if not isinstance(excess_min, (int, float)):
+        return 0.0
+    over = float(excess_min)
+    if over <= POST_SHIFT_OVERRUN_GRACE_MIN:
+        return 0.0
+    penalty = 0.0
+    prev = 0.0
+    for threshold_min, rate_per_min in POST_SHIFT_OVERRUN_PENALTY_TIERS:
+        if over <= prev:
+            break
+        span = min(over, float(threshold_min)) - prev
+        if span > 0:
+            penalty += span * float(rate_per_min)
+        prev = float(threshold_min)
+    return round(penalty, 2)
+
+
+# Best_effort: użyj post_shift_overrun_penalty jako WIODĄCEGO termu selekcji
+# (objm pick + sort_key fallback) + dodaj do score. Default OFF (shadow-first):
+# metryka post_shift_overrun_min/_penalty liczona ZAWSZE (widoczność w shadow),
+# ale wpływ na pick/score TYLKO gdy flaga ON. Flip = osobny ACK + poza peakiem.
+ENABLE_POST_SHIFT_OVERRUN_PENALTY = _os.environ.get(
+    "ENABLE_POST_SHIFT_OVERRUN_PENALTY", "0") == "1"
 
 # V3.24-B: start eval czasówki gdy minutes_to_pickup ≤ X
 V324B_CZASOWKA_EVAL_START_MIN = 60
