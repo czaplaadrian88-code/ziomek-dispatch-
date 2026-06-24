@@ -679,6 +679,17 @@ def _remove_stops_on_return(courier_id: str, order_id: str) -> None:
         plan_manager.remove_stops(str(courier_id), str(order_id))
     except Exception as e:
         _log.warning(f"V3.19b remove_stops fail cid={courier_id} oid={order_id}: {e}")
+    # RECANON: po anulowaniu/zwrocie (remove_stops usunął stopy) re-egzekwuj kanon na
+    # RESZCIE worka natychmiast — SYMETRIA z assign/deliver/pickup (P-5 audyt 2026-06-24).
+    # Bez tego anulowanie zlecenia (np. między dwiema dostawami) zostawiało plan
+    # niezkanonizowany (niesione nie na froncie / okno committed nieuwzględnione) do
+    # następnego 5-min ticku. Best-effort, self-gating na ENABLE_RECANON_ON_WRITE,
+    # no-op gdy worek pusty / brak kotwicy → nigdy nie psuje (≤ stan sprzed fixu).
+    try:
+        from dispatch_v2 import plan_recheck
+        plan_recheck.recanon_courier(str(courier_id), reason="return")
+    except Exception as e:
+        _log.warning(f"recanon-on-return fail cid={courier_id} oid={order_id}: {e}")
 
 
 def _update_plan_on_picked_up(courier_id: str, order_id: str,
