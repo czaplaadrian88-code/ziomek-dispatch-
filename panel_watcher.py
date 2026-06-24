@@ -777,6 +777,30 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
     if abs(delta_min) < V319G_CK_DELTA_THRESHOLD_MIN:
         return None  # noise floor
 
+    # Source-block L1 (Adrian 2026-06-24, root #483023): dla CZASÓWKI umówiony
+    # czas = pickup_at_warsaw. Gastro przestempluje `czas_kuriera` przy zmianie
+    # statusu → ten pasywny re-odczyt to śmieć (16:22→15:04 5 s po assignie).
+    # NIE emituj (żeby nie odpalić FIX-E „apka odświeży widok" + audit na bzdurze).
+    # Autorytatywny bliźniak: state_machine CZAS_KURIERA_UPDATED (_CK_PASSIVE_SOURCES).
+    # Zmiana umówionego czasu czasówki idzie kanałem pickup_at (PICKUP_TIME_UPDATED).
+    _is_czas = (
+        (old_state.get("order_type") == "czasowka")
+        or (old_state.get("prep_minutes") or 0) >= 60
+    )
+    if _is_czas:
+        try:
+            from dispatch_v2.common import flag as _flag
+            _guard = _flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+        except Exception:
+            _guard = True
+        if _guard:
+            _log.info(
+                f"CK_PASSIVE_SUPPRESSED oid={oid} czasówka ck "
+                f"{old_ck_hhmm}→{new_ck_hhmm} Δ={delta_min:+.1f}min src=panel_re_check "
+                f"— committed=pickup_at, gastro re-stamp ignorowany (no emit)"
+            )
+            return None
+
     payload = {
         "oid": oid,
         "courier_id": old_state.get("courier_id"),

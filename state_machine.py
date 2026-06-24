@@ -98,6 +98,30 @@ def _verify_czas_kuriera_consistency(
         return False
     return True
 
+
+# ── Czasówka committed-pickup authority (Adrian 2026-06-24, root #483023) ──
+# Umówiony czas CZASÓWKI = pickup_at_warsaw (twarda deklaracja restauracji).
+# Gastro przestempluje pole `czas_kuriera` przy KAŻDEJ zmianie statusu
+# (panel_kurier.py: "stempluje czas_odbioru/czas_doreczenia ze zmiany statusu")
+# → pasywny re-odczyt panelu (panel_re_check / pre_proposal_recheck) wpuszczał
+# ten śmieć jako zmianę committed (#483023: 16:22→15:04, 5 s po assignie).
+# Dla czasówek NIE ingestujemy pasywnego czas_kuriera. Umówiony czas zmienia
+# się TYLKO przez deklarację odbioru (pickup_at → PICKUP_TIME_UPDATED, dowolny
+# kierunek = koordynator/restauracja) albo deliberatny, otagowany kanał
+# (np. ziomek_late_extension). Źródła pasywne (re-odczyt gastro) → blok.
+_CK_PASSIVE_SOURCES = frozenset({"panel_re_check", "pre_proposal_recheck"})
+
+
+def _is_czasowka_order(o: Optional[dict]) -> bool:
+    """Czasówka = order_type=='czasowka' LUB prep_minutes >= 60 (≥60 = twarda
+    deklaracja restauracji, trzymana w buckecie Koordynatora). Lustrzane do
+    panel_watcher._diff_and_emit scope-check."""
+    if not o:
+        return False
+    return (o.get("order_type") == "czasowka"
+            or (o.get("prep_minutes") or 0) >= 60)
+
+
 # Zamkniete statusy zlecenia
 ORDER_STATUSES = {
     "planned",          # widoczne, jeszcze nieprzypisane
@@ -527,6 +551,19 @@ def update_from_event(event: dict) -> Optional[dict]:
         }
         if ck_iso is not None or ck_hhmm is not None:
             if _verify_czas_kuriera_consistency(ck_iso, ck_hhmm, oid):
+                # Source-block (Adrian 2026-06-24): CZASÓWKA z już ustalonym
+                # committed czas_kuriera — NIE nadpisuj odczytem z assignu
+                # (pasywny read gastro, może być już przestempl­owany). Umówiony
+                # czas czasówki rządzi pickup_at. Przypisanie i tak zapisujemy.
+                if (flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+                        and _is_czasowka_order(prev)
+                        and prev.get("czas_kuriera_warsaw")):
+                    _log.info(
+                        f"CK_PASSIVE_SUPPRESSED oid={oid} czasówka (COURIER_ASSIGNED) "
+                        f"keep committed {prev.get('czas_kuriera_hhmm')} "
+                        f"(ignore assign read {ck_hhmm})"
+                    )
+                    return upsert_order(oid, merged, event="COURIER_ASSIGNED")
                 merged["czas_kuriera_warsaw"] = ck_iso
                 merged["czas_kuriera_hhmm"] = ck_hhmm
                 _result = upsert_order(oid, merged, event="COURIER_ASSIGNED")
@@ -555,6 +592,22 @@ def update_from_event(event: dict) -> Optional[dict]:
         existing = get_order(oid)
         if existing is None:
             _log.warning(f"CZAS_KURIERA_UPDATED for unknown oid={oid}, skipping")
+            return None
+        # Source-block (Adrian 2026-06-24, root #483023): CZASÓWKA — pasywny
+        # re-odczyt gastro (panel_re_check / pre_proposal_recheck) NIE zmienia
+        # committed czas_kuriera (to przestempl­owany przy zmianie statusu śmieć).
+        # Umówiony czas czasówki rządzi pickup_at (PICKUP_TIME_UPDATED, dowolny
+        # kierunek). first_acceptance + kanały deliberatne (np. ziomek_late_
+        # extension/coordinator_edit) NIE są w _CK_PASSIVE_SOURCES → przechodzą.
+        _src = payload.get("source")
+        if (flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+                and _is_czasowka_order(existing)
+                and _src in _CK_PASSIVE_SOURCES):
+            _log.info(
+                f"CK_PASSIVE_SUPPRESSED oid={oid} czasówka ck "
+                f"{existing.get('czas_kuriera_hhmm')}→{new_ck_hhmm} src={_src} "
+                f"— committed=pickup_at, gastro re-stamp ignorowany (skip persist)"
+            )
             return None
         prev_count = int(existing.get("v319g_ck_change_count") or 0)
         update_fields = {
@@ -602,6 +655,19 @@ def update_from_event(event: dict) -> Optional[dict]:
             "pickup_at_warsaw": new_pickup,
             "pickup_time_change_count": prev_count + 1,
         }
+        # Mirror committed pickup → czas_kuriera (Adrian 2026-06-24): dla czasówki
+        # umówiony czas rządzi pickup_at, ale apka/kurier pokazują czas_kuriera —
+        # więc musi nadążać za LEGALNĄ zmianą odbioru (koordynator/restauracja,
+        # dowolny kierunek; w przyszłości ziomek_late_extension). To jest kanał,
+        # którym committed czasówki ma się zmieniać (zamiast pasywnego czas_kuriera).
+        if (flag("ENABLE_PICKUP_TIME_MIRRORS_CK", True)
+                and _is_czasowka_order(existing)):
+            try:
+                _np_dt = datetime.fromisoformat(new_pickup)
+                update_fields["czas_kuriera_warsaw"] = new_pickup
+                update_fields["czas_kuriera_hhmm"] = _np_dt.strftime("%H:%M")
+            except (ValueError, TypeError):
+                pass  # new_pickup już zwalidowany wyżej; defensywnie
         # prep_minutes / decision_deadline / zmiana_czasu_odbioru — odśwież
         # gdy panel dostarczył świeże; NIE nadpisuj realnej wartości None'em.
         new_prep = payload.get("new_prep_minutes")

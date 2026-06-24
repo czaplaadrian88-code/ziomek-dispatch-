@@ -242,9 +242,13 @@ def _evt(oid="474577", old=OLD_PICKUP, new=NEW_PICKUP, prep=180,
     }
 
 
-def t10_handler_updates_and_preserves():
-    """Handler odświeża pola czasu, preserve status/courier/czas_kuriera."""
+def t10_handler_updates_and_mirrors_ck_for_czasowka():
+    # UPDATED 2026-06-24 (czasówka committed-pickup authority, root #483023):
+    # dla CZASÓWKI PICKUP_TIME_UPDATED LUSTRZY pickup_at → czas_kuriera (apka
+    # nadąża za legalną zmianą odbioru koordynatora/restauracji, dowolny kierunek).
+    # Wcześniej czas_kuriera był ortogonalny (preserved). status/courier dalej preserve.
     from dispatch_v2 import state_machine
+    from datetime import datetime
     with _TmpState():
         state_machine.upsert_order("474577", {
             "status": "planned",
@@ -257,20 +261,22 @@ def t10_handler_updates_and_preserves():
         }, event="NEW_ORDER")
         state_machine.update_from_event(_evt())
         got = state_machine.get_order("474577") or {}
+        _new_hhmm = datetime.fromisoformat(NEW_PICKUP).strftime("%H:%M")
         ok = (
             got.get("pickup_at_warsaw") == NEW_PICKUP
             and got.get("prep_minutes") == 180
             and got.get("decision_deadline") == "2026-05-19T12:00:00+02:00"
             and got.get("zmiana_czasu_odbioru") is True
             and got.get("pickup_time_change_count") == 1
-            # preserved — orthogonal fields nietknięte
+            # status/courier preserved (orthogonal)
             and got.get("status") == "planned"
             and got.get("courier_id") == "26"
-            and got.get("czas_kuriera_warsaw") == "2026-05-19T10:10:00+02:00"
-            and got.get("czas_kuriera_hhmm") == "10:10"
+            # czas_kuriera MIRRORED to new pickup (czasówka authority)
+            and got.get("czas_kuriera_warsaw") == NEW_PICKUP
+            and got.get("czas_kuriera_hhmm") == _new_hhmm
         )
-        check("10. handler: pickup/prep/deadline odświeżone, status/courier/"
-              "czas_kuriera preserved, change_count=1", ok, detail=f"got={got}")
+        check("10. handler: czasówka pickup→czas_kuriera MIRROR (status/courier preserved), "
+              "change_count=1", ok, detail=f"got={got}")
 
 
 def t11_handler_unknown_oid():
@@ -316,7 +322,7 @@ def t13_handler_partial_bundle():
               detail=f"got={got}")
 
 
-for _t in (t10_handler_updates_and_preserves, t11_handler_unknown_oid,
+for _t in (t10_handler_updates_and_mirrors_ck_for_czasowka, t11_handler_unknown_oid,
            t12_handler_missing_new_pickup, t13_handler_partial_bundle):
     run(_t.__name__, _t)
 
