@@ -2422,6 +2422,16 @@ ENABLE_OBJM_LEXR6_SELECT = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT", "0") == "
 # Live-flip selekcji = OSOBNA flaga ENABLE_BEST_EFFORT_OBJM_R6_KEY + ACK po walidacji.
 ENABLE_BEST_EFFORT_OBJM_SHADOW = _os.environ.get("ENABLE_BEST_EFFORT_OBJM_SHADOW", "0") == "1"
 
+# BEST-EFFORT OBJM LIVE-KEY (2026-06-24, ACK Adrian po walidacji shadow): gdy ON, ścieżka
+# best_effort (0 feasible) wybiera `best` carry-aware guarded pickiem (_best_effort_objm_pick:
+# PRIMARY=objm_r6_breach_max_min, guard new-order bag <= BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN)
+# ZAMIAST carry-ślepego _best_effort_sort_key (r6_per_order_violations new-pickup-only, case
+# #482817). Walidacja: shadow flip 50% (21-24.06), guard cap35 = 0% regresji nowego / 68% zysku
+# carry. NAPRAWIA warstwę best_effort; NIE dotyka feasible-path gate (#483000 = osobny ticket).
+# KANON hot = flags.json (rollback bez restartu); ta stała = fallback OFF. Konsumpcja:
+# C.flag("ENABLE_BEST_EFFORT_OBJM_R6_KEY", False).
+ENABLE_BEST_EFFORT_OBJM_R6_KEY = _os.environ.get("ENABLE_BEST_EFFORT_OBJM_R6_KEY", "0") == "1"
+
 # BEZPIECZNIK nowego zlecenia dla best_effort objm shadow (2026-06-23): carry-aware pick TYLKO
 # wśród kandydatów z new-order bag <= cap (max ~5 min ponad R6=35); fallback do pure carry-min gdy
 # żaden bezpieczny. Sweep 21-23.06: cap=40 → regresja nowego 27%→16%, zysk carry 83% utrzymany.

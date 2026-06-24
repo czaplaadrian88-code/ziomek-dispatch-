@@ -613,6 +613,43 @@ def _best_effort_fastest_pickup_key(c, new_order_id):
     return (pu if pu is not None else BIG, dv if dv is not None else BIG, bucket)
 
 
+def _best_effort_objm_pick(with_plan, new_oid, cap_min=40.0):
+    """Carry-aware guarded best_effort pick (case #482817). PRIMARY = objm_r6_breach_max_min
+    (carry-inclusive, mirror _objm_lexr6_shadow._lex_qual) zamiast new-pickup-only
+    r6_per_order_violations. BEZPIECZNIK nowego zlecenia: carry-min TYLKO wśród kandydatów z
+    new-order bag <= cap_min; gdy żaden bezpieczny → fallback pure carry-min (raw).
+
+    JEDNO ŹRÓDŁO PRAWDY dla wyboru objm — używane przez _best_effort_objm_shadow (log) i
+    live-flip ENABLE_BEST_EFFORT_OBJM_R6_KEY (selekcja). Pure: zwraca kandydata z with_plan
+    lub None (puste/błąd → caller zostaje na carry-ślepym _best_effort_sort_key). Defensywny."""
+    try:
+        if not with_plan:
+            return None
+
+        def _m(c, k):
+            v = (getattr(c, "metrics", None) or {}).get(k)
+            return float(v) if isinstance(v, (int, float)) else None
+
+        def _newbag(c):
+            pod = getattr(getattr(c, "plan", None), "per_order_delivery_times", None) or {}
+            v = pod.get(new_oid)
+            if isinstance(v, (int, float)):
+                return float(v)
+            return _m(c, "sum_bag_time_min")
+
+        def _lex_qual(c):
+            r6 = _m(c, "objm_r6_breach_max_min")
+            return (r6 if r6 is not None else 9e9,
+                    _m(c, "late_pickup_committed_max") or 0.0,
+                    _m(c, "new_pickup_late_min") or 0.0)
+
+        raw = min(with_plan, key=_lex_qual)
+        _safe = [c for c in with_plan if (_newbag(c) is None or _newbag(c) <= cap_min)]
+        return min(_safe, key=_lex_qual) if _safe else raw
+    except Exception:
+        return None
+
+
 def _best_effort_objm_shadow(with_plan, live_best, new_oid, cap_min=40.0) -> None:
     """SHADOW (2026-06-23): co BY wybrała selekcja best_effort, gdyby PRIMARY był carry-inclusive
     objm_r6_breach_max_min (mirror _objm_lexr6_shadow._lex_qual) zamiast new-pickup-only
@@ -652,10 +689,11 @@ def _best_effort_objm_shadow(with_plan, live_best, new_oid, cap_min=40.0) -> Non
 
         _cid = lambda c: str(getattr(c, "courier_id", ""))
         live_cid = _cid(live_best)
-        # raw = bez bezpiecznika (pure carry-min); pick = z bezpiecznikiem (new-order cap)
+        # raw = bez bezpiecznika (pure carry-min); pick = z bezpiecznikiem (new-order cap).
+        # pick z _best_effort_objm_pick = JEDNO ŹRÓDŁO PRAWDY (identyczne z live-flip).
         raw = min(with_plan, key=_lex_qual)
         _safe = [c for c in with_plan if (_newbag(c) is None or _newbag(c) <= cap_min)]
-        pick = min(_safe, key=_lex_qual) if _safe else raw
+        pick = _best_effort_objm_pick(with_plan, new_oid, cap_min=cap_min) or raw
 
         flip = _cid(pick) != live_cid
         lm["best_effort_objm_cid"] = _cid(pick)
@@ -6185,6 +6223,37 @@ def _assess_order_impl(
             _be_objm_cap = C.flag("BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN",
                                   getattr(C, "BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN", 40.0))
             _best_effort_objm_shadow(with_plan, best, new_order.order_id, cap_min=_be_objm_cap)
+        # OBJM CARRY-INCLUSIVE LIVE-FLIP (2026-06-24, ENABLE_BEST_EFFORT_OBJM_R6_KEY, ACK Adrian):
+        # gdy ON, REALNIE wybierz carry-aware guarded pick (_best_effort_objm_pick — JEDNO ŹRÓDŁO
+        # PRAWDY z shadow) zamiast carry-ślepego _best_effort_sort_key (case #482817). flags.json
+        # hot → rollback bez restartu. Defensywny: pick None → zostań na starym best (fail-open).
+        # Telemetria best_effort_objm_* przeniesiona na realnie wybranego + marker live_*.
+        if C.flag("ENABLE_BEST_EFFORT_OBJM_R6_KEY",
+                  getattr(C, "ENABLE_BEST_EFFORT_OBJM_R6_KEY", False)):
+            _be_live_cap = C.flag("BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN",
+                                  getattr(C, "BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN", 40.0))
+            _objm_pick = _best_effort_objm_pick(with_plan, new_order.order_id, cap_min=_be_live_cap)
+            _carry_blind_cid = str(getattr(best, "courier_id", None))
+            if _objm_pick is not None and _objm_pick is not best:
+                try:
+                    _src = getattr(best, "metrics", None) or {}
+                    _dst = getattr(_objm_pick, "metrics", None)
+                    if isinstance(_dst, dict):
+                        for _k, _v in list(_src.items()):
+                            if _k.startswith("best_effort_objm_"):
+                                _dst[_k] = _v
+                except Exception:
+                    pass
+                best = _objm_pick
+                best.best_effort = True
+            try:
+                if isinstance(getattr(best, "metrics", None), dict):
+                    best.metrics["best_effort_objm_live_key_on"] = True
+                    best.metrics["best_effort_objm_live_flip"] = (
+                        str(getattr(best, "courier_id", None)) != _carry_blind_cid)
+                    best.metrics["best_effort_objm_live_from_cid"] = _carry_blind_cid
+            except Exception:
+                pass
         # FASTEST-PICKUP SHADOW (Adrian 2026-06-15): co BY wybrała selekcja „najszybszy
         # odbiór → potem najszybszy dowóz". LOG-ONLY — NIE zmienia `best` (live = stary
         # klucz). Walidacja w shadow_decisions przed ewentualnym flipem live. flags.json hot.
