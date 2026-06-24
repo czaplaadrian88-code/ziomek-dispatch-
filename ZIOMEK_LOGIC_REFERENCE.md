@@ -290,6 +290,16 @@ order >35 → KOORD) → `obj_f3_best_effort_r6` (breach >20 → KOORD) → `bes
 (<−100 → KOORD) → else **PROPOSE best_effort** (banner warns) → else **solo_fallback** (empty-bag
 courier, R1/R5/R8 ignored) → else **KOORD no_solo_candidates**.
 
+**Best_effort candidate selection** (which infeasible courier is proposed; `_best_effort_objm_pick`
+PRIMARY = carry-inclusive `objm_r6_breach_max_min`, cap≤40 safe-filter). **Post-shift overrun penalty**
+(Adrian 2026-06-24, `ENABLE_POST_SHIFT_OVERRUN_PENALTY`, **default OFF / forward-shadow**): rosnąca
+(wypukła, grace≤5, tiery 8/16/28/45 pkt/min) kara za minuty `predicted_delivered_at[new] − shift_end`
+jako WIODĄCY term selekcji (`_best_effort_objm_pick._lex_qual` + `_best_effort_sort_key`) → kurier
+kończący PO zmianie spada poniżej kończących w oknie (case 483144: Piotr +27/Kuba +38 pod Patryka 0).
+Cap≤40 chroni przed flipem na zimne. Metryka `post_shift_overrun_min/_penalty` logowana ZAWSZE;
+parytet w `objm_lexr6.lex_qual` (LEXR6 feasible D2). `common.post_shift_overrun_penalty`. Flip po
+replay 25.06 + ACK. _(verdict tool: `tools/post_shift_overrun_forward_replay.py`)_
+
 The `gate_score` used for low-score gates *excludes* ranking-only deltas (SYNCWORKA, LOADGOV) so a
 shadow ranking penalty can re-order without silencing a proposal (`_gate_score_excluding_ranking_deltas`,
 `~dp:1975`).
@@ -426,7 +436,9 @@ the module constant. ~80+ flags exist. Notable **current** states:
 - ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` (cold-food divergence
   no longer →KOORD), `ENABLE_NO_GPS_UNCERTAINTY_PENALTY` (B3 trial zakończony), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
   `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`, `kill_switch_to_v1`,
-  `ENABLE_DRIVE_MIN_CALIBRATION_V2` (main).
+  `ENABLE_DRIVE_MIN_CALIBRATION_V2` (main), `ENABLE_POST_SHIFT_OVERRUN_PENALTY` (ETAP4; forward-shadow
+  od 2026-06-24 20:52 — metryka logowana, flip czeka replay 25.06 + ACK; demote kuriera kończącego po
+  zmianie w selekcji best_effort + LEXR6).
 - 🟢 **LIVE route-sequencing (systemd-env flags, NOT `flags.json`; set on `dispatch-plan-recheck` +
   `dispatch-panel-watcher` where the canon is written to `courier_plans.json`):**
   `ENABLE_PLAN_CANON_ORDER_INVARIANTS` (carried `picked_up` dropoffs front + pickups sorted by committed
