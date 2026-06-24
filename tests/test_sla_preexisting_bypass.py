@@ -12,9 +12,19 @@ Goodboy).
 
 Pre-fix: VERDICT=NO `sla_violation (474835 +38.6min, over by 3.6)`.
 Post-fix: VERDICT=MAYBE `ok_sla_fits` (pre-existing breach nie blokuje).
+
+HERMETYZACJA 2026-06-24 (C-HERMETIC-GATE-TESTS): oryginalny capture trzymał
+474835 na granicy 35 min (carry 28 + drive ~10 z ŻYWEGO OSRM) → live-OSRM
+traffic-multiplier po porze dnia przesuwał bag_time 34.8↔38.6 → test pad/pass
+losowo (złapane podczas A4). Fix: (1) mock `osrm_client.table` haversine @30km/h
+(deterministyczny drive), (2) breach jest CARRY-DOMINANT — picked_up_at = now−40
+min, więc naruszenie >35 wynika z samego niesienia (pre-existing), niezależnie od
+estymaty dojazdu. Logika pod testem (pre-existing bypass) bez zmian; znika
+zależność od żywego OSRM. Faithful capture = git history + memory.
 """
 import sys
 import os
+import math
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, '/root/.openclaw/workspace/scripts')
@@ -28,11 +38,38 @@ os.environ.setdefault("OBJ_SPAN_COST_COEFF", "1.0")
 from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2.route_simulator_v2 import OrderSim
 from dispatch_v2 import common as C
+from dispatch_v2 import osrm_client
 
 try:
     import pytest
 except ImportError:  # standalone __main__ runner bez pytest
     pytest = None
+
+
+def _hav_m(a, b):
+    """Haversine w metrach — deterministyczny zamiennik żywego OSRM."""
+    R = 6371000.0
+    la1, la2 = math.radians(a[0]), math.radians(b[0])
+    dla = math.radians(b[0] - a[0])
+    dlo = math.radians(b[1] - a[1])
+    h = math.sin(dla / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin(dlo / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(h))
+
+
+def _fake_table(pts_a, pts_b):
+    # ~30 km/h => 8.333 m/s — czysta matematyka, zero zależności od pory/ruchu
+    return [[{"duration_s": _hav_m(a, b) / 8.333} for b in pts_b] for a in pts_a]
+
+
+if pytest is not None:
+    @pytest.fixture(autouse=True)
+    def _mock_osrm(monkeypatch):
+        """C-HERMETIC: deterministyczny OSRM (haversine) — usuwa zależność od
+        żywego serwera/ruchu. conftest auto-restore i tak przywraca, ale jawnie."""
+        monkeypatch.setattr(osrm_client, "table", _fake_table)
+        monkeypatch.setattr(osrm_client, "haversine", lambda a, b: _hav_m(a, b) / 1000.0,
+                            raising=False)
+        yield
 
 
 if pytest is not None:
@@ -80,9 +117,13 @@ def _gabrys_474863_fixture():
         OrderSim(order_id="474835",
                  pickup_coords=(53.121879, 23.146168),
                  delivery_coords=(53.1237496, 23.1753324),
-                 picked_up_at=_dt("2026-05-20T11:58:52+00:00"),
+                 # CARRY-DOMINANT (C-HERMETIC): picked_up_at = now−40 min → carry
+                 # już >35 zanim nowy order dojdzie (pre-existing breach pewny,
+                 # niezależny od estymaty dojazdu). Oryginał: 11:58:52 (carry 28
+                 # + drive ~10 = granica 35, OSRM-flaky).
+                 picked_up_at=now - timedelta(minutes=40),
                  status="picked_up",
-                 pickup_ready_at=_dt("2026-05-20T11:52:00+00:00")),
+                 pickup_ready_at=now - timedelta(minutes=46)),
         OrderSim(order_id="474843",
                  pickup_coords=(53.121879, 23.146168),
                  delivery_coords=(53.12799709999999, 23.148256),

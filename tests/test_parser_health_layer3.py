@@ -147,7 +147,12 @@ def test_02_stuck_alert(fresh_monitor, mock_telegram, caplog):
     assert _alert_fired(caplog, "PARSER_STUCK")
 
 
-def test_03_zero_output_alert(fresh_monitor, mock_telegram, caplog):
+def test_03_zero_output_alert(fresh_monitor, mock_telegram, caplog, ph, monkeypatch):
+    # C-HERMETIC 2026-06-24: PARSER_ZERO_OUTPUT ma bramkę godzinową
+    # (warsaw_hour >= PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW=9, suppress poranny
+    # rollover) → test pad/pass zależnie od pory uruchomienia (pre-09:00 Warsaw
+    # = brak alertu). Mrozimy bramkę do 0 (alert fires niezależnie od zegara).
+    monkeypatch.setattr(ph, "PARSER_HEALTH_STUCK_MIN_HOUR_WARSAW", 0)
     for c, n in enumerate([180, 0, 0, 0], 1):
         fresh_monitor.record_tick({"cycle": c, "orders_in_panel": n}, {"assigned_ids": set(), "order_ids": []})
     assert mock_telegram, "alert powinien pójść do Telegrama"

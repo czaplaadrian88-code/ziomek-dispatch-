@@ -342,3 +342,17 @@ def _block_real_telegram_sends(monkeypatch, request):
         lambda text: True,
         raising=False,
     )
+
+
+def pytest_configure(config):
+    """C-HERMETIC-GATE-TESTS (audyt 2026-06-24 §6.C): rejestracja markera
+    `nonhermetic` dla testów zależnych od żywego stanu (OSRM traffic, zegar,
+    flagi runtime). Hermetyczny przebieg CI: `pytest -m "not nonhermetic"`.
+    Cel: zielony test ma DOWODZIĆ — test zależny od pory dnia/ruchu OSRM
+    przechodzi/pada losowo, więc albo mockujemy zależność, albo jawnie znaczymy.
+    """
+    config.addinivalue_line(
+        "markers",
+        "nonhermetic: test zależny od żywego stanu (OSRM/zegar/flagi) — "
+        "wyklucz w hermetycznym CI przez -m 'not nonhermetic'",
+    )
