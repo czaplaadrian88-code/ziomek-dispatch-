@@ -107,5 +107,9 @@ def test_scoring_per_min_param():
 
 
 def test_bucket_rank_includes_pre_shift():
-    src = inspect.getsource(dispatch_pipeline._late_pickup_score_first_key)
-    assert "_is_pre_shift_cand(c)" in src
+    # 2026-06-24: bucket wydzielony do wspólnego `_selection_bucket` (equal-treatment-aware);
+    # _late_pickup_score_first_key woła go zamiast inline. pre_shift dalej obsłużony tam.
+    key_src = inspect.getsource(dispatch_pipeline._late_pickup_score_first_key)
+    assert "_selection_bucket(c)" in key_src
+    bucket_src = inspect.getsource(dispatch_pipeline._selection_bucket)
+    assert "_is_pre_shift_cand(c)" in bucket_src

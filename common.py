@@ -967,6 +967,10 @@ ENABLE_NO_GPS_EMPTY_DEMOTE = _os.environ.get("ENABLE_NO_GPS_EMPTY_DEMOTE", "1") 
 # bez zmian (genuinie nie-na-zmianie/nieznane). Default OFF (gated; flip po cieniu).
 # flags.json hot-reload. env: ENABLE_NO_GPS_EQUAL_TREATMENT=1.
 ENABLE_NO_GPS_EQUAL_TREATMENT = _os.environ.get("ENABLE_NO_GPS_EQUAL_TREATMENT", "0") == "1"
+# DOKOŃCZENIE równego traktowania (Adrian 2026-06-24): no_gps I pre_shift konkurują po score
+# także w bucketach selekcji (tiering + best_effort) i nie są demotowane. Kanon = flags.json
+# (hot-reload), stała = fallback. Pomiar przed flipem: 359 flipów/tydz (tools/nogps_preshift_bucket_replay.py).
+ENABLE_EQUAL_TREATMENT_BUCKET = _os.environ.get("ENABLE_EQUAL_TREATMENT_BUCKET", "0") == "1"
 
 # ============================================================
 # V3.18 unified bag reality check flags (2026-04-19)

@@ -543,12 +543,7 @@ def _late_pickup_score_first_key(c, tier: int, orig_rank: int,
     `score` override (default = c.score) — używane przez r6_danger_shadow do
     przeliczenia rankingu pod legacy (liniową) karą R6 bez mutacji kandydata.
     """
-    if _is_informed_cand(c):
-        bucket = 0
-    elif _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
-        bucket = 2  # blind+empty LUB pre_shift (Fix #7) — niska pewność, pod aktywnych
-    else:
-        bucket = 1
+    bucket = _selection_bucket(c)   # equal-treatment-aware (no_gps/pre_shift po score gdy ON)
     _s = (getattr(c, "score", 0.0) or 0.0) if score is None else score
     adj = _s - _late_pickup_soft_penalty(c, free_min, coeff, cap)
     return (1 if tier == 2 else 0, bucket, -adj, orig_rank)
@@ -573,12 +568,7 @@ def _best_effort_sort_key(c):
     else:
         _pov = c.metrics.get("r6_per_order_violations")
         r6_pov = len(_pov) if _pov else 0
-    if _is_informed_cand(c):
-        bucket = 0
-    elif _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
-        bucket = 2
-    else:
-        bucket = 1
+    bucket = _selection_bucket(c)   # equal-treatment-aware (wspólne z _late_pickup_score_first_key)
     plan = c.plan
     sla = getattr(plan, "sla_violations", 0) or 0
     dur = getattr(plan, "total_duration_min", 0.0) or 0.0
@@ -2196,15 +2186,46 @@ def _no_gps_equal_on() -> bool:
         return False
 
 
+def _equal_bucket_on() -> bool:
+    """Adrian 2026-06-24: DOKOŃCZENIE równego traktowania — no_gps I pre_shift konkurują
+    PO SCORE także w bucketach selekcji (tiering + best_effort) i nie są demotowane.
+    Model: kurier bez GPS / przed zmianą, w grafiku, dojazd 15 min; filtrem jest off-switch
+    w konsoli koordynatora, NIE demote. Pomiar przed flipem: 359 flipów/tydz (184 no_gps +
+    175 pre_shift), 282 czyste, wierność 92% (tools/nogps_preshift_bucket_replay.py).
+    'none' (poza grafikiem) zostaje demotowane. flags.json hot → common (default False)."""
+    try:
+        return bool(C.flag("ENABLE_EQUAL_TREATMENT_BUCKET",
+                           getattr(C, "ENABLE_EQUAL_TREATMENT_BUCKET", False)))
+    except Exception:
+        return False
+
+
+def _selection_bucket(c) -> int:
+    """V3.16 bucket selekcji: informed 0 / other 1 / blind(+pre_shift) 2. RÓWNE
+    TRAKTOWANIE (Adrian 2026-06-24, `_equal_bucket_on`): no_gps I pre_shift NIE są karane
+    bucketem → 0 (konkurują po score). Wspólny dla `_late_pickup_score_first_key` +
+    `_best_effort_sort_key` (jedno źródło prawdy). 'none' zawsze 2."""
+    if _is_informed_cand(c):
+        return 0
+    ps = c.metrics.get("pos_source") if (hasattr(c, "metrics") and c.metrics) else None
+    if _equal_bucket_on() and ps in ("no_gps", "pre_shift"):
+        return 0
+    if _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
+        return 2
+    return 1
+
+
 def _is_demotable_blind_empty(c) -> bool:
-    """blind+empty kandydat KWALIFIKUJĄCY SIĘ do demote. Gdy równe traktowanie ON,
-    no_gps jest WYŁĄCZONY (nie demote — równy GPS). pre_shift/none zostają."""
+    """blind+empty kandydat KWALIFIKUJĄCY SIĘ do demote. Równe traktowanie: no_gps wyłączony
+    (`_no_gps_equal_on`, 22.06); pre_shift wyłączony (`_equal_bucket_on`, 24.06 — decyzja
+    Adriana 'pre_shift też'). 'none' zostaje (poza grafikiem)."""
     if not _is_blind_empty_cand(c):
         return False
-    if _no_gps_equal_on():
-        ps = c.metrics.get("pos_source") if (hasattr(c, "metrics") and c.metrics) else None
-        if ps == "no_gps":
-            return False
+    ps = c.metrics.get("pos_source") if (hasattr(c, "metrics") and c.metrics) else None
+    if _no_gps_equal_on() and ps == "no_gps":
+        return False
+    if _equal_bucket_on() and ps == "pre_shift":
+        return False
     return True
 
 
