@@ -436,6 +436,26 @@ CARRIED_FIRST_RELAX_MAX_STOPS = int(
 # (zostaje carried-first, gdy carried nie zdąży ≤SOFT_MAX od ODEBRANIA).
 ENABLE_CARRIED_AGE_TZ_FIX = os.environ.get("ENABLE_CARRIED_AGE_TZ_FIX", "0") == "1"
 
+# P-1 LEX-COMMITTED-WINDOW (handoff 2026-06-24, audyt P-1): HARD okno odbioru ±tol
+# (R-DECLARED-TIME/R27) PRZEGRYWAŁO z SOFT carried-first w kanonie (carried-first wpychał
+# niesione na front bezwarunkowo, relax ślepy na BEZWZGLĘDNE okno + flat cap świeżości 20).
+# Fix „constrained lex D": wśród permutacji precedence-valid + NO-RETURN, FEASIBLE (brak
+# nowego R6 vs baseline, carried ≤ R6=35, żadna INNA dostawa nie później >TOL vs baseline) →
+# minimalizuj (naruszenia_okna, jazda, wiek_carried). Carried-first = emergentna miękka
+# preferencja, NIE twardy niezmiennik. Anchored na wyniku carried-first+relax → NIGDY nie
+# regresuje vs produkcja. Replay D zero-harm (eod_drafts/2026-06-24/lex_window_replay.py):
+# tol=5 −24% okno/+4177m jazdy, tol=10 −32%/+4368m, R6/carry/deliv harm = 0 OBA. Dwie flagi:
+#  SHADOW (oblicz + loguj rozjazd D-vs-live, ZERO zmiany decyzji) → mierz peak,
+#  APPLY (zmień decyzję) → flip po obserwacji. Default OFF.
+ENABLE_LEX_COMMITTED_WINDOW_SHADOW = os.environ.get("ENABLE_LEX_COMMITTED_WINDOW_SHADOW", "0") == "1"
+ENABLE_LEX_COMMITTED_WINDOW = os.environ.get("ENABLE_LEX_COMMITTED_WINDOW", "0") == "1"
+# Tolerancja okna: strict 5 (load-aware loose 10 @ loadgov≥4.5 = TODO wpiąć loadgov w plan_recheck;
+# na razie stała, tunable z shadow). Mirror OBJ_COMMITTED_PICKUP_TOL_STRICT_MIN.
+LEX_WINDOW_TOL_MIN = float(os.environ.get("LEX_WINDOW_TOL_MIN", "5"))
+LEX_WINDOW_DELAY_TOL_MIN = float(os.environ.get("LEX_WINDOW_DELAY_TOL_MIN", "3"))
+LEX_WINDOW_MAX_STOPS = int(os.environ.get("LEX_WINDOW_MAX_STOPS", "8"))
+LEX_WINDOW_SHADOW_PATH = "/root/.openclaw/workspace/dispatch_state/lex_committed_window_shadow.jsonl"
+
 # FIX K — WSPÓŁLOKALNY ODBIÓR (Adrian 2026-06-24, case Kuba Olchowik 370 Rany Julek):
 # reguła no-return seeduje restauracje carried jako 'opuszczone przed trasą' (idx=-2 w
 # `_detect_departed_pickup_revisit`), więc relax ODRZUCA każdą permutację z odbiorem w
@@ -1177,6 +1197,172 @@ def _reorder_noncarried_min_drive(seq, orders_state, start_pos, now):
     return seq
 
 
+def _lex_committed_window_reorder(seq, orders_state, start_pos, now):
+    """P-1 (handoff 2026-06-24): okno odbioru committed (R-DECLARED-TIME ±tol) PRZED
+    carried-first. Anchored na `seq` (wynik carried-first+relax) → identity zawsze feasible,
+    więc lex-min ≤ baseline = NIGDY nie regresuje. Lex-min (naruszenia_okna, jazda, wiek_carried)
+    wśród perm precedence-valid + NO-RETURN + FEASIBLE (carried ≤ R6=35, brak nowego R6 vs
+    baseline, żadna INNA dostawa nie później >TOL vs baseline). SHADOW: loguje rozjazd zawsze
+    (gdy flaga shadow|apply); APPLY: zmienia kolejność tylko gdy ENABLE_LEX_COMMITTED_WINDOW.
+    Replay D zero-harm: eod_drafts/2026-06-24/lex_window_replay.py."""
+    if not (ENABLE_LEX_COMMITTED_WINDOW_SHADOW or ENABLE_LEX_COMMITTED_WINDOW):
+        return seq
+    if start_pos is None or now is None:
+        return seq
+    import itertools
+    n = len(seq)
+    if n < 3 or n > LEX_WINDOW_MAX_STOPS:
+        return seq
+    oid_of = [str(s.get("order_id")) for s in seq]
+    kind_pick = [s.get("type") == "pickup" for s in seq]
+    carried = {oid_of[i] for i in range(n) if not kind_pick[i]
+               and (orders_state.get(oid_of[i]) or {}).get("status") == "picked_up"}
+    if not carried:
+        return seq                      # bez niesionych carried-first nie wiąże — to nie P-1
+    coords = []
+    for i in range(n):
+        rec = orders_state.get(oid_of[i]) or {}
+        c = rec.get("pickup_coords") if kind_pick[i] else rec.get("delivery_coords")
+        if not _coords_ok(c):
+            return seq
+        coords.append((float(c[0]), float(c[1])))
+    try:
+        from dispatch_v2 import osrm_client
+    except Exception:
+        return seq
+    matrix = osrm_client.table([(float(start_pos[0]), float(start_pos[1]))] + coords,
+                               [(float(start_pos[0]), float(start_pos[1]))] + coords)
+    if not matrix:
+        return seq
+    leg = []
+    for row in matrix:
+        leg.append([(d / 60.0) if ((d := (cell or {}).get("duration_s")) is not None
+                                   and d < 9e8) else 9e9 for cell in row])
+    now_min = now.timestamp() / 60.0
+    dwell = [float(s.get("dwell_min") if s.get("dwell_min") is not None
+                   else (1.0 if kind_pick[i] else 3.5)) for i, s in enumerate(seq)]
+    committed_rel = []
+    for i in range(n):
+        if kind_pick[i]:
+            ck = _parse_dt((orders_state.get(oid_of[i]) or {}).get("czas_kuriera_warsaw"))
+            committed_rel.append((ck.timestamp() / 60.0 - now_min) if ck is not None else None)
+        else:
+            committed_rel.append(None)
+    carried_age = {}
+    for oid in carried:
+        _puat = (orders_state.get(oid) or {}).get("picked_up_at")
+        if ENABLE_CARRIED_AGE_TZ_FIX:
+            try:
+                from dispatch_v2.common import parse_panel_timestamp
+                pa = parse_panel_timestamp(_puat)
+            except Exception:
+                pa = None
+        else:
+            pa = _parse_dt(_puat)
+        carried_age[oid] = (now_min - pa.timestamp() / 60.0) if pa is not None else None
+    ppos = {oid_of[i]: i for i in range(n) if kind_pick[i]}
+    dpos = {oid_of[i]: i for i in range(n) if not kind_pick[i]}
+    pairs = [(ppos[o], dpos[o]) for o in ppos]
+    assigned = [o for o in dpos if o not in carried]
+    carried_rest = {_pickup_rest_key({"type": "pickup", "order_id": o}, orders_state)
+                    for o in carried}
+    carried_rest.discard(None)
+
+    def _metrics(perm):
+        t = 0.0; drive = 0.0; prev = 0
+        deliv = [None] * n; pick = [None] * n
+        for si in perm:
+            lg = leg[prev][si + 1]
+            if lg >= 9e8:
+                return None
+            drive += lg; t += lg; prev = si + 1
+            if kind_pick[si]:
+                cr = committed_rel[si]
+                if cr is not None and cr > t:
+                    t = cr
+                pick[si] = t; t += dwell[si]
+            else:
+                deliv[si] = t; t += dwell[si]
+        n_viol = 0; breaches = 0; maxcarry = 0.0
+        for i in range(n):
+            if kind_pick[i]:
+                cr = committed_rel[i]
+                if cr is not None and pick[i] is not None and (pick[i] - cr) > LEX_WINDOW_TOL_MIN:
+                    n_viol += 1
+                continue
+            oid = oid_of[i]; dt = deliv[i]
+            if dt is None:
+                continue
+            if oid in carried:
+                age = carried_age.get(oid)
+                bag = (age + dt) if age is not None else None
+                if age is not None:
+                    maxcarry = max(maxcarry, age + dt)
+            else:
+                bp = pick[ppos[oid]] if oid in ppos else None
+                bag = (dt - bp) if bp is not None else None
+            if bag is not None and bag > 35.0:
+                breaches += 1
+        return drive, deliv, pick, n_viol, breaches, maxcarry
+
+    base = _metrics(tuple(range(n)))
+    if base is None:
+        return seq
+    bdrive, bdeliv, bpick, bviol, bbreach, bcarry = base
+    carry_cap = max(35.0, bcarry)
+    best = None
+    for perm in itertools.permutations(range(n)):
+        pos = [0] * n
+        for j, si in enumerate(perm):
+            pos[si] = j
+        if any(pos[p] > pos[d] for p, d in pairs):
+            continue
+        if _detect_departed_pickup_revisit([seq[i] for i in perm], orders_state, carried_rest):
+            continue
+        m = _metrics(perm)
+        if m is None:
+            continue
+        drive, deliv, pick, n_viol, breaches, maxcarry = m
+        if maxcarry > carry_cap:
+            continue
+        if breaches > bbreach:
+            continue
+        bad = False
+        for oid in assigned:
+            a, b = bdeliv[dpos[oid]], deliv[dpos[oid]]
+            if a is not None and b is not None and (b - a) > LEX_WINDOW_DELAY_TOL_MIN:
+                bad = True; break
+        if bad:
+            continue
+        key = (n_viol, round(drive, 1), round(maxcarry, 1))
+        if best is None or key < best[0]:
+            best = (key, perm, n_viol, drive)
+    if best is None:
+        return seq
+    _bkey, bperm, dviol, ddrive = best
+    if list(bperm) == list(range(n)):
+        return seq                                  # baseline już lex-optymalny
+    # rozjazd: lex-D różny od baseline (i ≤ baseline po anchorze). Shadow log + apply za flagą.
+    try:
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(LEX_WINDOW_SHADOW_PATH, {
+            "ts": now.isoformat(), "carried": sorted(carried),
+            "base_window_viol": bviol, "lex_window_viol": dviol,
+            "d_drive_min": round(ddrive - bdrive, 1),
+            "base_max_carry": round(bcarry, 1), "lex_max_carry": round(_bkey[2], 1),
+            "applied": ENABLE_LEX_COMMITTED_WINDOW,
+            "base_seq": [(oid_of[i], "P" if kind_pick[i] else "D") for i in range(n)],
+            "lex_seq": [(oid_of[i], "P" if kind_pick[i] else "D") for i in bperm],
+        })
+    except Exception as e:
+        _log.warning("lex_window shadow log fail: %s: %s", type(e).__name__, e)
+    _log.info("LEX_COMMITTED_WINDOW base_viol=%d lex_viol=%d d_drive=%.1f apply=%s",
+              bviol, dviol, ddrive - bdrive, ENABLE_LEX_COMMITTED_WINDOW)
+    if ENABLE_LEX_COMMITTED_WINDOW:
+        return [seq[i] for i in bperm]
+    return seq
+
+
 def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None):
     """F6: TWARDE niezmienniki kolejności kanonu (1:1 jak build_view, ale w decyzji):
     (1) niesione (picked_up) dropoffy → front (kolejność względna zachowana),
@@ -1233,6 +1419,18 @@ def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None)
             seq = relaxed
         except Exception as e:
             _log.warning("carried_first_relax fail: %s: %s", type(e).__name__, e)
+    # P-1: okno odbioru committed PRZED carried-first (anchored na relax → nie regresuje).
+    # Shadow log zawsze gdy flaga shadow/apply; zmiana decyzji tylko gdy APPLY flaga.
+    if start_pos is not None and now is not None:
+        try:
+            lexed = _lex_committed_window_reorder(seq, orders_state, start_pos, now)
+            if lexed is not seq and ENABLE_LEX_COMMITTED_WINDOW and \
+                    [s.get("order_id") for s in lexed] != [s.get("order_id") for s in seq]:
+                _log.info("LEX_COMMITTED_WINDOW applied seq=%s",
+                          [(s.get("order_id"), s.get("type")) for s in lexed])
+            seq = lexed
+        except Exception as e:
+            _log.warning("lex_committed_window fail: %s: %s", type(e).__name__, e)
     # FIX M: worek bez niesionych — min-jazda po dropoffach (relax tego nie rusza).
     if ENABLE_NONCARRIED_DROPOFF_REORDER and start_pos is not None and now is not None:
         try:
