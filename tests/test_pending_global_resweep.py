@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Testy `pending_global_resweep.py` — globalny re-ranking wiszących propozycji.
+Mockujemy `_assess` (→ zero realnego assess_order/OSRM) i `C.flag`. PipelineResult/
+Candidate udawane przez types.SimpleNamespace; CourierState-like też (ma .bag, kopiowalne).
+"""
+import sys
+import json
+import types
+from datetime import datetime, timezone
+
+sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+from dispatch_v2 import common as C
+from dispatch_v2.tools import pending_global_resweep as PGR
+
+_N = datetime(2026, 6, 24, 19, 15, 0, tzinfo=timezone.utc)
+
+
+# ---- fake'i ----
+def _cand(cid, score):
+    return types.SimpleNamespace(
+        courier_id=cid, score=float(score), name=cid,
+        feasibility_verdict="MAYBE",
+        metrics={"km_to_pickup": 1.0, "r6_max_bag_time_min": 20.0,
+                 "r1_new_drop_cosine": 0.1, "deliv_spread_km": 3.0})
+
+
+def _result(cands, total=3, feasible=3):
+    cands = sorted(cands, key=lambda c: -c.score)
+    best = cands[0] if cands and cands[0].score is not None else None
+    return types.SimpleNamespace(best=best, candidates=cands, verdict="PROPOSE",
+                                 pool_total_count=total, pool_feasible_count=feasible)
+
+
+def _cs(cid, bag=None):
+    return types.SimpleNamespace(courier_id=cid, bag=list(bag or []), name=cid)
+
+
+def _rec(oid, rest="Pizza"):
+    return {"order_id": oid, "status": "planned", "restaurant": rest,
+            "delivery_address": f"addr-{oid}",
+            "pickup_coords": [53.12, 23.14], "delivery_coords": [53.13, 23.20]}
+
+
+# scoring bazowy: A jest „najlepszy" dla wszystkich gdy pusty, ale każde zlecenie
+# w worku obniża jego score o 50 → orderzy w różne strony rozjeżdżają się na B/C.
+_BASE = {
+    "o1": {"A": 100, "B": 10, "C": 10},
+    "o2": {"A": 90, "B": 80, "C": 10},
+    "o3": {"A": 85, "B": 10, "C": 75},
+}
+_LOAD_PEN = 50.0
+
+
+def _fake_assess(order_event, fleet, now):
+    oid = order_event["order_id"]
+    cands = []
+    for cid in ("A", "B", "C"):
+        cs = fleet.get(cid)
+        load = len(cs.bag) if cs is not None else 0
+        cands.append(_cand(cid, _BASE[oid][cid] - _LOAD_PEN * load))
+    return _result(cands)
+
+
+# ---------- global_allocate: rdzeń rozjazdu kierunków ----------
+def test_global_allocate_spreads_directions(monkeypatch):
+    monkeypatch.setattr(PGR, "_assess", _fake_assess)
+    fleet = {c: _cs(c) for c in ("A", "B", "C")}
+    hanging = [("o1", _rec("o1")), ("o2", _rec("o2")), ("o3", _rec("o3"))]
+    alloc = PGR.global_allocate(hanging, fleet, _N)
+    # mimo że A jest najlepszy „na sucho" dla wszystkich, globalnie rozjeżdża się:
+    assert alloc["o1"]["cid"] == "A"
+    assert alloc["o2"]["cid"] == "B"
+    assert alloc["o3"]["cid"] == "C"
+    # nie pomylił scoringu — pierwszy (najpewniejszy) idzie do A
+    assert alloc["o1"]["score"] == 100.0
+
+
+def test_global_allocate_does_not_mutate_input_fleet(monkeypatch):
+    monkeypatch.setattr(PGR, "_assess", _fake_assess)
+    fleet = {c: _cs(c) for c in ("A", "B", "C")}
+    PGR.global_allocate([("o1", _rec("o1")), ("o2", _rec("o2"))], fleet, _N)
+    assert all(len(fleet[c].bag) == 0 for c in ("A", "B", "C"))  # wejście nietknięte
+
+
+def test_global_allocate_no_courier(monkeypatch):
+    monkeypatch.setattr(PGR, "_assess", lambda oe, fl, now: _result([], total=0, feasible=0))
+    alloc = PGR.global_allocate([("o1", _rec("o1"))], {"A": _cs("A")}, _N)
+    assert alloc["o1"]["no_courier"] is True
+    assert alloc["o1"]["cid"] is None
+
+
+# ---------- run_once: end-to-end (pending+state z tmp) ----------
+def _setup(tmp_path, monkeypatch, proposed_best):
+    """proposed_best: {oid: cid} = co Ziomek zaproponował (greedy)."""
+    pending = {}
+    orders = {}
+    for oid, cid in proposed_best.items():
+        orders[oid] = _rec(oid)
+        pending[oid] = {"order_id": oid, "message_id": 1, "sent_at": "2026-06-24T19:15:04+00:00",
+                        "expires_at": "2026-06-24T19:20:04+00:00",
+                        "decision_record": {"auto_route": "ALERT",
+                                             "best": {"courier_id": cid, "score": _BASE[oid][cid]}}}
+    pp = tmp_path / "pending.json"; pp.write_text(json.dumps(pending))
+    op = tmp_path / "orders.json"; op.write_text(json.dumps(orders))
+    out = tmp_path / "out.jsonl"
+    monkeypatch.setattr(PGR, "PENDING_PATH", str(pp))
+    monkeypatch.setattr(PGR, "ORDERS_STATE", str(op))
+    monkeypatch.setattr(PGR, "OUT_JSONL", str(out))
+    monkeypatch.setattr(PGR, "_assess", _fake_assess)
+    monkeypatch.setattr(PGR.CR, "dispatchable_fleet", lambda: [_cs(c) for c in ("A", "B", "C")])
+    monkeypatch.setattr(C, "flag", lambda n, d=False: True if n == PGR.FLAG else d)
+    monkeypatch.setattr(C, "load_flags", lambda: {})
+    return out
+
+
+def test_run_once_flag_off_noop(monkeypatch):
+    monkeypatch.setattr(C, "flag", lambda n, d=False: False)
+    assert PGR.run_once(now=_N).get("skipped") == "flag_off"
+
+
+def test_run_once_spread_fix(tmp_path, monkeypatch):
+    # Ziomek (greedy) zaproponował A do WSZYSTKICH trzech — pile-on jednego kuriera
+    out = _setup(tmp_path, monkeypatch, {"o1": "A", "o2": "A", "o3": "A"})
+    s = PGR.run_once(now=_N)
+    assert s["hanging"] == 3
+    assert s["maxpile_before"] == 3 and s["maxpile_after"] == 1
+    assert s["spread_improved"] is True
+    assert s["would_repropose"] == 2  # o2,o3 przerzucone na B,C
+    rows = [json.loads(l) for l in out.read_text().splitlines()]
+    by = {r["order_id"]: r for r in rows}
+    assert by["o1"]["would_repropose"] is False and by["o1"]["reason"] == "bez_zmian"
+    assert by["o2"]["new_cid"] == "B" and by["o2"]["reason"] == "rozjazd_kierunkow"
+    assert by["o3"]["new_cid"] == "C" and by["o3"]["would_repropose"] is True
+
+
+def test_run_once_single_rerank_better_courier(tmp_path, monkeypatch):
+    # 1 wiszące zlecenie o2; Ziomek proponował A (score 90), ale A obciążony „w tle":
+    # damy A startowy worek => jego score spadnie poniżej B.
+    out = _setup(tmp_path, monkeypatch, {"o2": "A"})
+    monkeypatch.setattr(PGR.CR, "dispatchable_fleet",
+                        lambda: [_cs("A", bag=[{"order_id": "x"}]), _cs("B"), _cs("C")])
+    s = PGR.run_once(now=_N)
+    assert s["hanging"] == 1
+    rows = [json.loads(l) for l in out.read_text().splitlines()]
+    r = rows[0]
+    assert r["new_cid"] == "B"           # A=90-50=40 < B=80
+    assert r["would_repropose"] is True
+    assert r["reason"] in ("lepszy_kurier", "rozjazd_kierunkow")
+
+
+def test_run_once_no_change(tmp_path, monkeypatch):
+    # Ziomek zaproponował zgodnie z globalną alokacją → brak repropose.
+    out = _setup(tmp_path, monkeypatch, {"o1": "A", "o2": "B", "o3": "C"})
+    s = PGR.run_once(now=_N)
+    assert s["would_repropose"] == 0
+    rows = [json.loads(l) for l in out.read_text().splitlines()]
+    assert all(r["reason"] == "bez_zmian" for r in rows)
+
+
+def test_run_once_skips_already_assigned(tmp_path, monkeypatch):
+    out = _setup(tmp_path, monkeypatch, {"o1": "A"})
+    # podmień status o1 na assigned → nie jest już „wiszące"
+    op = json.loads((tmp_path / "orders.json").read_text())
+    op["o1"]["status"] = "assigned"
+    (tmp_path / "orders.json").write_text(json.dumps(op))
+    s = PGR.run_once(now=_N)
+    assert s["hanging"] == 0

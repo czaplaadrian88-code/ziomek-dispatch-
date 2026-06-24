@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek pending-resweep REVIEW — jednorazowo 2026-06-26 07:00 UTC (= 09:00 Warsaw, po pełnym peaku 25.06): raport GO/NO-GO + Telegram do Adriana, decyzja o flipie PENDING_RESWEEP_LIVE
+
+[Timer]
+OnCalendar=2026-06-26 07:00:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=dispatch-pending-resweep-review.service
+
+[Install]
+WantedBy=timers.target

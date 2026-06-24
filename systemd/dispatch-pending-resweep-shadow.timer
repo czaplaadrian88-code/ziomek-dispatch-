@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek pending-resweep SHADOW — co 1 min (globalny re-ranking wiszących propozycji; measure-first korpus would_repropose / rozjazd kierunków do GO-NO-GO przed flipem PENDING_RESWEEP_LIVE)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=false
+Unit=dispatch-pending-resweep-shadow.service
+
+[Install]
+WantedBy=timers.target

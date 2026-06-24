@@ -1,0 +1,18 @@
+[Unit]
+Description=Ziomek pending-resweep REVIEW — jednorazowy raport GO/NO-GO korpusu shadow (pending_global_resweep.jsonl) + Telegram do Adriana. Read-only.
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/pending_global_resweep_review.py
+After=network.target
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.pending_global_resweep_review
+TimeoutStartSec=120
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/pending_global_resweep_review.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/pending_global_resweep_review.log
+
+[Install]
+WantedBy=multi-user.target
