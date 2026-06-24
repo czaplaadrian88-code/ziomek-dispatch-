@@ -639,6 +639,15 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         except Exception as e:
             _log.warning(f"canon_order_invariants cid={cid} fail: {type(e).__name__}: {e}")
 
+    # Floor-at-birth: odbiór nigdy < committed czas_kuriera (≥ start zmiany dla
+    # pre-shift, bo proposal ustawia czas_kuriera = shift_start + dojazd). Domyka
+    # okno surowego planu między (re)generacją a następnym tickiem refloor.
+    if ENABLE_PICKUP_REFLOOR:
+        try:
+            stops = _floor_pickups_to_committed(stops, orders_state)
+        except Exception as e:
+            _log.warning(f"floor_pickups_to_committed cid={cid} fail: {type(e).__name__}: {e}")
+
     _gps = gps_positions.get(cid) or {}
     body = {
         "start_pos": {
@@ -704,6 +713,41 @@ def _retime_stops(stops, pos, anchor_departure, orders_state, now):
             dwell = 1.0 if s.get("type") == "pickup" else 3.5
         t = t + timedelta(minutes=float(dwell))
     return out
+
+
+def _floor_pickups_to_committed(stops, orders_state, min_delta_sec: float = 60.0):
+    """Podnieś predicted_at KAŻDEGO odbioru do podłogi `czas_kuriera_warsaw` i
+    przesuń o tę samą dodatnią deltę wszystkie kolejne stopy (kaskada w dół).
+
+    Źródłowy odpowiednik `plan_manager.refloor_pickup` zastosowany JUŻ przy budowie
+    planu (przed save_plan). `_gen_one_bag_plan` zapisuje surowe czasy symulatora
+    (= przyjazd), a pętla refloor w `run_recheck` działa na planach z POCZĄTKU ticku
+    → plan (re)generowany w tym samym ticku rodziłby się z czasem odbioru
+    WCZEŚNIEJSZYM niż obietnica restauracji (np. kurier pre-shift: przyjazd 9:36 vs
+    committed 10:15) i był surowy do następnego ticku — okno, w którym konsola/apka
+    czytają zły czas. Floor-at-birth domyka to okno. MONOTONICZNY (tylko później),
+    idempotentny (po retime/refloor delta<min → no-op). Mutuje `stops` w miejscu i
+    zwraca tę samą listę. Gated `ENABLE_PICKUP_REFLOOR` (ta sama flaga co refloor)."""
+    if not stops:
+        return stops
+    for idx, s in enumerate(stops):
+        if s.get("type") != "pickup":
+            continue
+        ck = _parse_dt((orders_state.get(str(s.get("order_id"))) or {}).get("czas_kuriera_warsaw"))
+        if ck is None:
+            continue
+        pred = _parse_dt(s.get("predicted_at"))
+        if pred is None:
+            continue
+        delta_sec = (ck - pred).total_seconds()
+        if delta_sec < min_delta_sec:
+            continue
+        shift = timedelta(seconds=delta_sec)
+        for s2 in stops[idx:]:            # kaskada: odbiór + wszystko po nim
+            sp = _parse_dt(s2.get("predicted_at"))
+            if sp is not None:
+                s2["predicted_at"] = (sp + shift).isoformat()
+    return stops
 
 
 def _repair_dropoffs_after_pickups(seq):
