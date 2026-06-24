@@ -146,3 +146,32 @@ def test_no_overrun_courier_not_demoted(monkeypatch):
     monkeypatch.setattr(C, "ENABLE_POST_SHIFT_OVERRUN_PENALTY", True, raising=False)
     _, _, patryk = _trio()
     assert _post_shift_overrun_penalty_of(patryk) == 0.0
+
+
+# ── 5. PARYTET LEXR6 (objm_lexr6.lex_qual — selektor feasible, „robimy 3") ─────
+def _olx():
+    from dispatch_v2 import objm_lexr6 as olx
+    return olx
+
+
+def test_lexr6_flag_off_byte_identical_3tuple(monkeypatch):
+    """OFF: krotka 3-elem. bajt-identyczna jak dawne inline (tests at#152 nietknięte)."""
+    monkeypatch.setattr(C, "ENABLE_POST_SHIFT_OVERRUN_PENALTY", False, raising=False)
+    olx = _olx()
+    c = SimpleNamespace(metrics={"objm_r6_breach_max_min": 3.0,
+                                 "late_pickup_committed_max": 2.0,
+                                 "new_pickup_late_min": 1.0,
+                                 "post_shift_overrun_penalty": 999.0})
+    assert olx.lex_qual(c) == (3.0, 2.0, 1.0)  # post-shift IGNOROWANY gdy OFF
+
+
+def test_lexr6_flag_on_post_shift_leads(monkeypatch):
+    """ON: 4-elem., post-shift WIODĄCY — kurier po zmianie (pen>0) przegrywa z w-oknie (0)."""
+    monkeypatch.setattr(C, "ENABLE_POST_SHIFT_OVERRUN_PENALTY", True, raising=False)
+    olx = _olx()
+    piotr = SimpleNamespace(metrics={"objm_r6_breach_max_min": 0.0,
+                                     "post_shift_overrun_penalty": 422.6})
+    patryk = SimpleNamespace(metrics={"objm_r6_breach_max_min": 4.8,
+                                      "post_shift_overrun_penalty": 0.0})
+    assert olx.lex_qual(patryk) < olx.lex_qual(piotr)   # w oknie wygrywa
+    assert min([piotr, patryk], key=olx.lex_qual) is patryk

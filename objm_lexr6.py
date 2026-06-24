@@ -17,6 +17,8 @@ Logika tutaj jest bajt-identyczna z obiema kopiami, więc to przepięcie będzie
 """
 from __future__ import annotations
 
+import dispatch_v2.common as C  # tylko flaga (decision_flag); common = liść, brak cyklu
+
 
 def objm(c, k):
     """Metryka liczbowa kandydata `c` z `c.metrics[k]` jako float, albo None."""
@@ -26,11 +28,23 @@ def objm(c, k):
 
 def lex_qual(c):
     """Klucz jakości leksykograficznej: (R6-breach → committed-late → new-pickup-late).
-    Brak R6 → 9e9 (na koniec). Identyczny z dawnymi inline `_lex_qual`."""
+    Brak R6 → 9e9 (na koniec).
+
+    Parytet post-shift (Adrian 2026-06-24, „robimy 3"): gdy
+    ENABLE_POST_SHIFT_OVERRUN_PENALTY → prepend WIODĄCY term `post_shift_overrun_penalty`
+    (kurier kończący PO zmianie spada — spójnie z `_best_effort_objm_pick`). Selektor
+    feasible widzi nadwyżkę >grace tylko w end-of-day-salvage (poza tym v324a rejectuje
+    dropoff>shift_end+5). Flaga OFF → krotka BAJT-IDENTYCZNA (3-elem.) jak dawne inline
+    → zero zmian d2-picka + walidacja at#152 nietknięta. ON → 4-elem. (jednorodne w
+    obrębie jednego min(), bo flaga stała na czas selekcji)."""
     r6 = objm(c, "objm_r6_breach_max_min")
-    return (r6 if r6 is not None else 9e9,
+    base = (r6 if r6 is not None else 9e9,
             objm(c, "late_pickup_committed_max") or 0.0,
             objm(c, "new_pickup_late_min") or 0.0)
+    if C.decision_flag("ENABLE_POST_SHIFT_OVERRUN_PENALTY"):
+        v = objm(c, "post_shift_overrun_penalty")
+        return ((v if v is not None else 0.0),) + base
+    return base
 
 
 def bucket(c, *, is_informed, is_blind_empty, is_pre_shift, bucket_fn=None):
