@@ -2969,8 +2969,8 @@ V3274_RENDER_DIVERGENCE_WARN_MIN = 5.0  # warn gdy |plan_eta - commit| > 5 min
 # restauracji, elastyk=czas Ziomka „najwcześniej"); dojazd PO umówionym = spóźnienie i
 # zostaje. Parytet z konsolą/apką/widokiem restauracji (FLOOR_PICKUP_DISPLAY_TO_AGREED) —
 # display-only, silnik/plan nietknięte. Łapie też pre_shift (eta = start zmiany).
-ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED = _os.environ.get(
-    "ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED", "1") == "1"  # default True
+# Flaga przeniesiona do flags.json (czytana przez flag() w telegram_approver, default True)
+# — parytet wpięcia z bliźniakiem ENABLE_PROPOSAL_ETA_FLOOR_TO_PLAN (koniec env-frozen, 2026-06-25).
 
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
 # Adrian's specification: grupujemy ordery z tej samej restauracji TYLKO gdy

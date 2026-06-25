@@ -5730,7 +5730,8 @@ def _assess_order_impl(
         # (Pareto), by rozstrzygnąć: „min-total" netto wygrywa czy psuje flotę. ZERO zmiany
         # decyzji — `feasible`/`_winner` nietknięte. Defense-in-depth try/except (nie krasz
         # propozycji). Gated ENABLE_MIN_DELIVERED_AT_SHADOW (default OFF).
-        if C.flag("ENABLE_MIN_DELIVERED_AT_SHADOW", False):
+        if C.flag("ENABLE_MIN_DELIVERED_AT_SHADOW",
+                  getattr(C, "ENABLE_MIN_DELIVERED_AT_SHADOW", False)):
             try:
                 _mda = min(feasible, key=lambda c: (
                     _d.timestamp() if (_d := _new_delivered_at_dt(c, order_id)) is not None

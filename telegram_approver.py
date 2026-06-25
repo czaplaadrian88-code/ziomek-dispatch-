@@ -1434,13 +1434,8 @@ def _format_proposal_v2(decision: dict) -> str:
     # Floor ETA kandydatów do umówionego (czas_kuriera tej propozycji) — ten sam czas dla
     # wszystkich kandydatów (jedno zlecenie). Gated ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED.
     _floor_ck = None
-    if ck_hhmm:
-        try:
-            from dispatch_v2 import common as _commonf
-            if getattr(_commonf, "ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED", True):
-                _floor_ck = ck_hhmm
-        except Exception:
-            _floor_ck = ck_hhmm
+    if ck_hhmm and flag("ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED", default=True):
+        _floor_ck = ck_hhmm
     # Floor ETA kandydata do realnego planowanego odbioru silnika (plan.pickup_at[oid],
     # per-kandydat; fallback do gotowości jedzenia). Domyka bliźniaczą lukę: header już
     # pokazuje plan.pickup_at (Etap2 #472788), linia „Kandydaci" pokazywała eta_pickup_hhmm
