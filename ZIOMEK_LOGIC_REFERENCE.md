@@ -432,7 +432,11 @@ the module constant. ~80+ flags exist. Notable **current** states:
   `ENABLE_DRIVE_MIN_CALIBRATION_V2_SHADOW`, `ENABLE_ETA_QUANTILE_SHADOW`, `ENABLE_PREP_BIAS_SHADOW`,
   `ENABLE_REPO_COST_SHADOW`, `ENABLE_PLN_OBJECTIVE_SHADOW`, `ENABLE_LGBM_TWOMODEL_SHADOW`,
   `ENABLE_OBJM_LEXR6_SELECT_SHADOW`, `ENABLE_ETA_R3_SHADOW`, `ENABLE_ETA_R3_DROP_SHADOW`,
-  `ALWAYS_PROPOSE_WOULD_REDIRECT_SHADOW`, `ENABLE_SAME_RESTAURANT_RACE_PROBE`.
+  `ALWAYS_PROPOSE_WOULD_REDIRECT_SHADOW`, `ENABLE_SAME_RESTAURANT_RACE_PROBE`,
+  `ENABLE_MIN_DELIVERED_AT_SHADOW` (Adrian 2026-06-25: log-only komparator selekcji „min total
+  spóźnienie+dowóz" = `min predicted_delivered_at[new]` vs live winner + regresja floty R6/spread/late
+  w tej samej decyzji (Pareto); metryka `min_delivered_at_shadow` w `shadow_decisions.jsonl`;
+  helper `_new_delivered_at_dt`, `dispatch_pipeline` po `_winner=feasible[0]`; ZERO zmiany decyzji).
 - ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` (cold-food divergence
   no longer →KOORD), `ENABLE_NO_GPS_UNCERTAINTY_PENALTY` (B3 trial zakończony), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
   `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`, `kill_switch_to_v1`,

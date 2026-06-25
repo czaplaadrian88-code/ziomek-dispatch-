@@ -2581,6 +2581,14 @@ ENABLE_ALWAYS_PROPOSE_ON_SATURATION = _os.environ.get(
 ENABLE_BEST_EFFORT_FASTEST_PICKUP_SHADOW = _os.environ.get(
     "ENABLE_BEST_EFFORT_FASTEST_PICKUP_SHADOW", "0") == "1"
 
+# MIN-DELIVERED-AT SHADOW (Adrian 2026-06-25): log-only komparator selekcji na GŁÓWNEJ
+# ścieżce feasible — „min predicted_delivered_at[new]" (= min total spóźnienie+dowóz,
+# committed stały → najwcześniej do klienta) vs dzisiejszy live winner + regresja floty
+# (R6/spread/late) w TEJ SAMEJ decyzji (Pareto). ZERO zmiany decyzji (feasible[0] nietknięte).
+# Czytane przez C.flag(); flip obserwacji = flags.json. Hot-reload; konstanta-default False.
+ENABLE_MIN_DELIVERED_AT_SHADOW = _os.environ.get(
+    "ENABLE_MIN_DELIVERED_AT_SHADOW", "0") == "1"
+
 # BUG A shadow (2026-05-26): Σ bag_time + max bag_time + FIFO penalty w scoring.
 # Reguła Adriana: „Suma czasów wszystkich dowozów w bagu jak najmniejsza. Lepiej
 # żeby OBA jechały po 15 min, niż jedno 25 a drugie 8. Jeśli podobnie, najpierw

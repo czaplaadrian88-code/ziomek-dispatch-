@@ -821,6 +821,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # zwycięzcę vs stary tier-primary sort. Adrian widzi efekt zmiany w propozycjach
         # bez czekania na replay. None gdy gate nieaktywny. grep: LATE_PICKUP_SCORE_FIRST.
         "late_pickup_shadow": getattr(result, "late_pickup_shadow", None),
+        # MIN-DELIVERED-AT (Adrian 2026-06-25): „min total spóźnienie+dowóz" winner vs live
+        # + regresja floty (Pareto) w tej samej decyzji. None gdy flaga OFF. grep: min_delivered_at_shadow.
+        "min_delivered_at_shadow": getattr(result, "min_delivered_at_shadow", None),
         # Fix #6 (2026-05-31): R6 danger-zone counterfactual (legacy liniowa vs stroma).
         # {"changed": bool, old_winner_*, new_winner_*} gdy stroma kara near-limit (32-35)
         # przestawiła zwycięzcę vs legacy -8/min. grep: R6_DANGER_DIVERGENCE.

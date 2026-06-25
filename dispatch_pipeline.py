@@ -619,6 +619,17 @@ def _best_effort_fastest_pickup_key(c, new_order_id):
     return (pu if pu is not None else BIG, dv if dv is not None else BIG, bucket)
 
 
+def _new_delivered_at_dt(c, new_oid):
+    """predicted_delivered_at[new] kandydata (datetime|None). Adrianowa metryka
+    „najwcześniej do klienta" = min total (spóźnienie+dowóz), bo committed stały dla
+    zlecenia → min delivered_at = min total. Czysta funkcja (testowalna). None gdy brak
+    planu / klucza. UWAGA: tylko ODCZYT do shadow-komparatora, NIE zmienia selekcji."""
+    plan = getattr(c, "plan", None)
+    if plan is None:
+        return None
+    return (getattr(plan, "predicted_delivered_at", {}) or {}).get(new_oid)
+
+
 def _best_effort_objm_pick(with_plan, new_oid, cap_min=40.0):
     """Carry-aware guarded best_effort pick (case #482817). PRIMARY = objm_r6_breach_max_min
     (carry-inclusive, przez kanon objm_lexr6.lex_qual) zamiast new-pickup-only
@@ -5748,6 +5759,7 @@ def _assess_order_impl(
     pickup_extension_redirect = None
     late_pickup_shadow = None
     r6_danger_shadow = None  # Fix #6: rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6
+    min_delivered_at_shadow = None  # Adrian 2026-06-25: log-only min-total komparator
     if getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False) and feasible:
         _lp_tier = _late_pickup_tier  # module-level (testowalny)
         _orig_order = {id(c): i for i, c in enumerate(feasible)}
@@ -5806,6 +5818,42 @@ def _assess_order_impl(
         _winner = feasible[0]
         _wm = _winner.metrics or {}
         _wtier = _lp_tier(_winner)
+
+        # MIN-DELIVERED-AT SHADOW (Adrian 2026-06-25): log-only komparator — kto by wygrał
+        # gdyby selekcja minimalizowała `predicted_delivered_at[new]` (= min total
+        # spóźnienie+dowóz, committed stały → najwcześniej do klienta) vs dzisiejszy live
+        # `_winner`. Loguje też regresję floty (R6/spread/late) OBU w TEJ SAMEJ decyzji
+        # (Pareto), by rozstrzygnąć: „min-total" netto wygrywa czy psuje flotę. ZERO zmiany
+        # decyzji — `feasible`/`_winner` nietknięte. Defense-in-depth try/except (nie krasz
+        # propozycji). Gated ENABLE_MIN_DELIVERED_AT_SHADOW (default OFF).
+        if C.flag("ENABLE_MIN_DELIVERED_AT_SHADOW", False):
+            try:
+                _mda = min(feasible, key=lambda c: (
+                    _d.timestamp() if (_d := _new_delivered_at_dt(c, order_id)) is not None
+                    else float("inf")))
+                _live_d = _new_delivered_at_dt(_winner, order_id)
+                _mda_d = _new_delivered_at_dt(_mda, order_id)
+                _mm = _mda.metrics or {}
+                _sooner = (round((_live_d - _mda_d).total_seconds() / 60.0, 1)
+                           if (_live_d is not None and _mda_d is not None) else None)
+                min_delivered_at_shadow = {
+                    "changed": (str(getattr(_mda, "courier_id", ""))
+                                != str(getattr(_winner, "courier_id", ""))),
+                    "live_cid": str(getattr(_winner, "courier_id", "")),
+                    "live_delivered_at": (_live_d.isoformat() if _live_d is not None else None),
+                    "live_r6_max_bag_time_min": _wm.get("r6_max_bag_time_min"),
+                    "live_deliv_spread_km": _wm.get("deliv_spread_km"),
+                    "live_new_pickup_late_min": _wm.get("new_pickup_late_min"),
+                    "mda_cid": str(getattr(_mda, "courier_id", "")),
+                    "mda_delivered_at": (_mda_d.isoformat() if _mda_d is not None else None),
+                    "mda_r6_max_bag_time_min": _mm.get("r6_max_bag_time_min"),
+                    "mda_deliv_spread_km": _mm.get("deliv_spread_km"),
+                    "mda_new_pickup_late_min": _mm.get("new_pickup_late_min"),
+                    # >0 = „min-total" dowozi WCZEŚNIEJ do klienta niż live (o tyle minut)
+                    "mda_delivers_sooner_min": _sooner,
+                }
+            except Exception as _mda_e:
+                log.warning(f"min_delivered_at_shadow fail order={order_id}: {_mda_e!r}")
 
         # SHADOW: rozjazd stary-vs-nowy zwycięzca (Adrian chce widzieć efekt natychmiast).
         # Serializowany top-level w shadow_dispatcher → grep LATE_PICKUP_SCORE_FIRST.
@@ -6409,6 +6457,8 @@ def _assess_order_impl(
         _result_pf.pickup_extension_redirect = pickup_extension_redirect
         # R-LATE-PICKUP Opcja B (2026-05-31): stary-vs-nowy zwycięzca tieringu (shadow).
         _result_pf.late_pickup_shadow = late_pickup_shadow
+        # MIN-DELIVERED-AT (Adrian 2026-06-25): min-total vs live winner (shadow, log-only).
+        _result_pf.min_delivered_at_shadow = min_delivered_at_shadow
         # Fix #6 (2026-05-31): rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6 (shadow).
         _result_pf.r6_danger_shadow = r6_danger_shadow
         # Load-aware distribution counterfactual (2026-06-07) — shadow only.
