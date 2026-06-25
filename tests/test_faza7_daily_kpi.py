@@ -405,3 +405,50 @@ def test_cli_appends_kpi_log_without_telegram(tmp_path, fake_rows):
     assert rec["date"] == "2026-05-27"
     assert "all_pass" in rec
     assert "enriched_last_at" in rec
+    assert "readiness_sig" in rec  # G3: sygnatura do quiet-until-ready
+
+
+# ─────────── G3 quiet-until-ready (kill codziennego 'NOT READY') ───────────
+_R_NOTREADY = {"all_pass": False, "override_7d_below_60pct": False,
+               "calibration_bias_below_10min": True, "kk_dinner_breach_below_15pct": True,
+               "auto_precision_above_95pct": False, "auto_precision_status": "INSUFFICIENT_DATA"}
+_R_READY = dict(_R_NOTREADY, all_pass=True, override_7d_below_60pct=True,
+                auto_precision_above_95pct=True, auto_precision_status="PASS")
+
+
+def _rec(readiness):
+    return {"readiness_sig": KPI._readiness_sig(readiness)}
+
+
+def test_quiet_off_always_sends():
+    # legacy: quiet_until_ready=False → zawsze ślij (nawet NOT READY bez zmian)
+    rec = _rec(_R_NOTREADY)
+    assert KPI._should_send_digest(_R_NOTREADY, rec, rec, quiet_until_ready=False) is True
+
+
+def test_quiet_skips_when_unchanged_and_not_ready():
+    rec = _rec(_R_NOTREADY)
+    assert KPI._should_send_digest(_R_NOTREADY, rec, rec, quiet_until_ready=True) is False
+
+
+def test_quiet_sends_when_ready():
+    rec = _rec(_R_READY)
+    prev = _rec(_R_READY)  # nawet bez zmiany — READY zawsze ogłaszamy
+    assert KPI._should_send_digest(_R_READY, rec, prev, quiet_until_ready=True) is True
+
+
+def test_quiet_sends_on_gate_change():
+    changed = dict(_R_NOTREADY, override_7d_below_60pct=True)  # bramka drgnęła
+    assert KPI._should_send_digest(changed, _rec(changed), _rec(_R_NOTREADY),
+                                   quiet_until_ready=True) is True
+
+
+def test_quiet_sends_on_first_run():
+    rec = _rec(_R_NOTREADY)
+    assert KPI._should_send_digest(_R_NOTREADY, rec, None, quiet_until_ready=True) is True
+
+
+def test_readiness_sig_detects_change():
+    changed = dict(_R_NOTREADY, kk_dinner_breach_below_15pct=False)
+    assert KPI._readiness_sig(_R_NOTREADY) == KPI._readiness_sig(dict(_R_NOTREADY))
+    assert KPI._readiness_sig(_R_NOTREADY) != KPI._readiness_sig(changed)

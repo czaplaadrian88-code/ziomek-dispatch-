@@ -690,6 +690,42 @@ def _enriched_last_at(enriched_rows: list):
     return last
 
 
+def _readiness_sig(readiness: dict) -> str:
+    """Kompaktowa sygnatura stanu bramek readiness — do wykrycia ZMIANY między
+    dniami. quiet-until-ready ślij Telegram tylko gdy READY albo któraś bramka
+    drgnęła, zamiast codziennie identycznego 'NOT READY'."""
+    keys = ("all_pass", "override_7d_below_60pct", "calibration_bias_below_10min",
+            "kk_dinner_breach_below_15pct", "auto_precision_above_95pct",
+            "auto_precision_status")
+    return "|".join(f"{k}={readiness.get(k)}" for k in keys)
+
+
+def _last_kpi_record(path: str):
+    """Ostatni (poprzedni) rekord z append-only kpi_log, albo None. Fail-soft."""
+    try:
+        last = None
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    last = line
+        return json.loads(last) if last else None
+    except Exception:
+        return None
+
+
+def _should_send_digest(readiness: dict, record: dict, prev_record,
+                        quiet_until_ready: bool) -> bool:
+    """Czy wysłać digest na Telegram. quiet_until_ready=False → zawsze (legacy).
+    True → tylko gdy READY (all_pass) / pierwszy run (brak poprzedniego) / zmiana
+    sygnatury bramek vs poprzedni run. Czysta/testowalna."""
+    if not quiet_until_ready:
+        return True
+    if readiness.get("all_pass") or prev_record is None:
+        return True
+    return record.get("readiness_sig") != (prev_record or {}).get("readiness_sig")
+
+
 def build_kpi_log_record(date_str, override_kpi, drive_kpi, kk_kpi, auto_prec_kpi,
                          readiness, enriched_last) -> dict:
     auto = (auto_prec_kpi or {}).get("AUTO") or {}
@@ -703,6 +739,7 @@ def build_kpi_log_record(date_str, override_kpi, drive_kpi, kk_kpi, auto_prec_kp
         "auto_n_joined": auto.get("n_joined", 0),
         "auto_status": readiness.get("auto_precision_status"),
         "all_pass": readiness.get("all_pass"),
+        "readiness_sig": _readiness_sig(readiness),
         "enriched_last_at": enriched_last,
     }
 
@@ -783,6 +820,9 @@ def main(argv=None) -> int:
                         help="Append-only JSONL z dziennym rekordem KPI (historia gate'ów).")
     parser.add_argument("--telegram", action="store_true",
                         help="Wyślij kompaktowy digest na Telegram (daily timer ON; smoke OFF).")
+    parser.add_argument("--quiet-until-ready", action="store_true",
+                        help="Z --telegram: ślij digest TYLKO gdy READY albo gdy bramka readiness "
+                             "drgnęła vs poprzedni run (kill codziennego 'NOT READY'). Log+md zawsze.")
     args = parser.parse_args(argv)
 
     if args.date:
@@ -827,11 +867,16 @@ def main(argv=None) -> int:
 
     # G2 (2026-05-29): historia + digest. Log append-only ZAWSZE; Telegram tylko z --telegram.
     enriched_last = _enriched_last_at(enriched_rows)
+    # quiet-until-ready: przeczytaj POPRZEDNI rekord PRZED append (porównanie sygnatury)
+    prev_record = _last_kpi_record(args.kpi_log) if args.quiet_until_ready else None
     record = build_kpi_log_record(date_str, override_kpi, drive_kpi, kk_kpi,
                                   auto_prec_kpi, readiness, enriched_last)
     append_kpi_log(args.kpi_log, record)
     if args.telegram:
-        _send_digest(build_telegram_digest(record, readiness, auto_prec_kpi))
+        if _should_send_digest(readiness, record, prev_record, args.quiet_until_ready):
+            _send_digest(build_telegram_digest(record, readiness, auto_prec_kpi))
+        elif not args.quiet:
+            print("[faza7_kpi] quiet-until-ready: readiness bez zmian i NOT READY → Telegram pominięty")
 
     if not args.quiet:
         print(f"Wrote: {out_path}")
