@@ -24,7 +24,8 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
-from dispatch_v2.telegram_approver import _candidate_line_v2, _cand_plan_pickup_hhmm  # noqa: E402
+from dispatch_v2.telegram_approver import (  # noqa: E402
+    _candidate_line_v2, _cand_plan_pickup_hhmm, _format_proposal_v2)
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 SHADOW = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
@@ -140,14 +141,87 @@ def verify_surface_floor():
             "ck_lt_ready": ck_lt, "sliver_no_committed": sliver, "before_ready": before_ready}
 
 
+def verify_committed_floor(since, until):
+    """C) committed-floor na ŻYWEJ propozycji przez DEPLOYED _format_proposal_v2
+    (gate flag ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED, wpięty 2026-06-25). Replay PROPOSE
+    z okna: committed z best.czas_kuriera_warsaw (per-kandydat), bierze przypadki gdzie surowy
+    odbiór byłby PRZED umówionym → kandydat NIGDY nie pokazuje ETA przed committed."""
+    n = cases = floored_ok = before_committed = parse_fail = 0
+    examples = []
+    if not os.path.exists(SHADOW):
+        return {"err": "brak shadow_decisions.jsonl"}
+    with open(SHADOW) as f:
+        for ln in f:
+            if '"verdict": "PROPOSE"' not in ln:
+                continue
+            try:
+                d = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            ts = d.get("ts", "")
+            if not (since <= ts[:19] <= until):
+                continue
+            best = d.get("best") or {}
+            if not best:
+                continue
+            n += 1
+            ck_iso = best.get("czas_kuriera_warsaw")
+            ck = _hhmm(ck_iso)
+            raw = best.get("eta_pickup_hhmm")
+            if not ck or not raw or raw == "—":
+                continue
+            # interesują nas przypadki, w których surowy odbiór byłby PRZED umówionym
+            # (floor MUSI zadziałać). Gdy raw >= ck — floor i tak no-op, pomijamy.
+            if not (raw < ck):
+                continue
+            cases += 1
+            dec = {
+                "order_id": str(d.get("order_id") or ""),
+                "restaurant": d.get("restaurant") or "",
+                "delivery_address": d.get("delivery_address") or "",
+                "best": best,
+                "alternatives": d.get("alternatives") or [],
+                "auto_route": d.get("auto_route") or "ACK",
+                "pool_total_count": d.get("pool_total_count") or 1,
+                "pool_feasible_count": d.get("pool_feasible_count") or 1,
+                "czas_kuriera_warsaw": ck_iso,
+                "pickup_ready_at": d.get("pickup_ready_at"),
+            }
+            try:
+                out = _format_proposal_v2(dec)
+            except Exception:  # noqa: BLE001
+                parse_fail += 1
+                continue
+            shown = None
+            for L in out.splitlines():
+                Ls = L.strip()
+                if Ls.startswith("1.") and "ETA " in Ls:
+                    shown = _eta_in_line(Ls)
+                    break
+            if not shown or shown == "—":
+                continue
+            if shown >= ck:
+                floored_ok += 1
+                tag = "OK"
+            else:
+                before_committed += 1
+                tag = "⚠FAIL"
+            if len(examples) < 4:
+                examples.append(f"#{dec['order_id']} {dec['restaurant']} raw={raw}→ETA {shown} committed={ck} [{tag}]")
+    return {"n": n, "cases": cases, "floored_ok": floored_ok,
+            "before_committed": before_committed, "parse_fail": parse_fail, "examples": examples}
+
+
 def health():
     out = {}
     try:
         with open("/root/.openclaw/workspace/scripts/flags.json") as f:
             fl = json.load(f)
         out["proposal_plan_flag"] = fl.get("ENABLE_PROPOSAL_ETA_FLOOR_TO_PLAN")
+        out["proposal_committed_flag"] = fl.get("ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED")
     except (OSError, json.JSONDecodeError):
         out["proposal_plan_flag"] = "?"
+        out["proposal_committed_flag"] = "?"
     return out
 
 
@@ -161,21 +235,24 @@ def main():
 
     A = verify_proposal_floor(a.since[:19], a.until[:19])
     B = verify_surface_floor()
+    C = verify_committed_floor(a.since[:19], a.until[:19])
     H = health()
 
     # werdykt
     a_ok = A.get("before_plan", 1) == 0
     b_ok = B.get("before_ready", 1) == 0
+    c_ok = C.get("before_committed", 1) == 0
     a_tested = A.get("pre_shift", 0) > 0 or A.get("n", 0) > 0
     b_tested = B.get("sliver_no_committed", 0) > 0 or B.get("ck_lt_ready", 0) > 0
-    if a_ok and b_ok:
-        verdict = "✅ PASS" if (a_tested or b_tested) else "🟡 PASS (brak case'ów testowych w oknie)"
+    c_tested = C.get("cases", 0) > 0
+    if a_ok and b_ok and c_ok:
+        verdict = "✅ PASS" if (a_tested or b_tested or c_tested) else "🟡 PASS (brak case'ów testowych w oknie)"
     else:
         verdict = "❌ FAIL"
 
     lines = [
         f"🔎 VERIFY pickup-floor — {a.label}  {verdict}",
-        f"okno UTC {a.since[:16]}..{a.until[:16]} | flaga plan-floor={H.get('proposal_plan_flag')}",
+        f"okno UTC {a.since[:16]}..{a.until[:16]} | flagi plan={H.get('proposal_plan_flag')} committed={H.get('proposal_committed_flag')}",
         "",
         f"A) Propozycja Ziomka: {A.get('n', 0)} PROPOSE, {A.get('pre_shift', 0)} pre_shift",
         f"   odbiór POKAZANY przed planem: {A.get('before_plan', '?')} (cel=0)",
@@ -194,6 +271,18 @@ def main():
     ]
     if B.get("err"):
         lines.append(f"   ERR: {B['err']}")
+    lines += [
+        "",
+        f"C) committed-floor LIVE (przez _format_proposal_v2): {C.get('cases', 0)} propozycji z odbiorem-przed-umówionym",
+        f"   floored ≥ umówiony (OK): {C.get('floored_ok', '?')}",
+        f"   POKAZANY przed umówionym (BUG): {C.get('before_committed', '?')} (cel=0)",
+    ]
+    for ex in C.get("examples", []):
+        lines.append(f"     · {ex}")
+    if C.get("parse_fail"):
+        lines.append(f"   (pominięte parse-fail: {C['parse_fail']})")
+    if C.get("err"):
+        lines.append(f"   ERR: {C['err']}")
     msg = "\n".join(lines)
     print(msg)
 
