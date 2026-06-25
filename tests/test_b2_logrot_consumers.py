@@ -7,8 +7,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from dispatch_v2.tools import bug_e_resolution_tracker as bet
-from dispatch_v2.tools import commit_divergence_resolution_tracker as cdt
+# bug_e_resolution_tracker + commit_divergence_resolution_tracker = retired ("2 ciche
+# trackery", commit a7e5de4 2026-06-25). Ich testy logrot usunięte poniżej (orphan import
+# kładł kolekcję CAŁEGO suite). Pozostali konsumenci (daily_briefing/enricher/czasowka) bez zmian.
 from dispatch_v2.tools import czasowka_state_cleanup as csc
 from dispatch_v2.czasowka_proactive import state as cp_state
 from dispatch_v2 import daily_briefing as db
@@ -26,63 +27,6 @@ def _write_jsonl(path, records):
     with open(path, "w", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r) + "\n")
-
-
-# ---- bug_e tracker ----
-
-def _bug_e_rec(oid, ts):
-    return {
-        "ts": _iso(ts),
-        "order_id": oid,
-        "verdict": "KOORD",
-        "reason": "best_effort_r6_breach_v2",
-        "best": {"courier_id": "1", "courier_name": "X", "score": 1.0},
-    }
-
-
-def test_bug_e_tracker_reads_rotated(tmp_path, monkeypatch):
-    base = tmp_path / "shadow_decisions.jsonl"
-    t = _now()
-    _write_jsonl(str(base) + ".1", [_bug_e_rec("111", t - timedelta(hours=10))])
-    _write_jsonl(base, [_bug_e_rec("222", t - timedelta(hours=1))])
-    monkeypatch.setattr(bet, "SHADOW_LOG", Path(base))
-
-    by_oid = bet.collect_ziomek_koord_records(hours_back=24)
-    assert set(by_oid) == {"111", "222"}, "rekord z .1 musi wejść do okna 24h"
-
-
-def test_bug_e_tracker_window_filter_still_applies(tmp_path, monkeypatch):
-    base = tmp_path / "shadow_decisions.jsonl"
-    t = _now()
-    _write_jsonl(str(base) + ".1", [_bug_e_rec("111", t - timedelta(hours=30))])
-    _write_jsonl(base, [_bug_e_rec("222", t - timedelta(hours=1))])
-    monkeypatch.setattr(bet, "SHADOW_LOG", Path(base))
-
-    by_oid = bet.collect_ziomek_koord_records(hours_back=24)
-    assert set(by_oid) == {"222"}, "per-rekord cutoff ts nadal odsiewa"
-
-
-# ---- commit divergence tracker ----
-
-def _cd_rec(oid, ts):
-    return {
-        "ts": _iso(ts),
-        "order_id": oid,
-        "verdict": "KOORD",
-        "reason": "commit_divergence_gate",
-        "best": {"courier_id": "1", "courier_name": "X", "score": 1.0},
-    }
-
-
-def test_commit_divergence_tracker_reads_rotated(tmp_path, monkeypatch):
-    base = tmp_path / "shadow_decisions.jsonl"
-    t = _now()
-    _write_jsonl(str(base) + ".1", [_cd_rec("333", t - timedelta(hours=12))])
-    _write_jsonl(base, [_cd_rec("444", t - timedelta(minutes=30))])
-    monkeypatch.setattr(cdt, "SHADOW_LOG", Path(base))
-
-    by_oid = cdt.collect_ziomek_koord_records(hours_back=24)
-    assert set(by_oid) == {"333", "444"}
 
 
 # ---- daily_briefing ----

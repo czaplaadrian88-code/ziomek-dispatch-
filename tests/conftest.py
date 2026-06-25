@@ -47,6 +47,13 @@ _KNOWN_XFAIL_SCRIPTS = {
         "MAX_RECONCILE_PER_CYCLE (test asertuje 10, prod=25). Aktualizacja asercji = osobny temat.",
     "test_v319d_read_integration":
         "pre-existing (CLAUDE.md): base_sequence passthrough scenario (12/14 PASS).",
+    "test_daily_stats_presnapshot":
+        "pre-existing (środowiskowe): daily_stats_sheets importuje gspread, którego NIE ma "
+        "w venv dispatch (jest w venv sheets). Nie-objm. XPASS gdy gspread dojdzie do dispatch.",
+    "test_proposal_selection_v316":
+        "pre-existing: golden V3.16 demote (blind+empty na końcu / blind nadal demoted) sprzeczny "
+        "z equal-treatment no_gps/pre_shift (22-24.06, decyzja Adriana: NIE demote). 14/30 PASS. "
+        "Asercje demote do aktualizacji pod equal-treatment = osobny temat (nie-objm).",
 }
 
 
