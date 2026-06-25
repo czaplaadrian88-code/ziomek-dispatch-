@@ -823,8 +823,34 @@ def _bag_emoji_v2(bag_n: int) -> str:
     return "🔴"
 
 
+def _cand_plan_pickup_hhmm(cand: dict, oid_str: str) -> Optional[str]:
+    """plan.pickup_at[oid] danego kandydata → HH:MM Warsaw (None gdy brak/parse fail).
+
+    Ten sam autorytatywny czas odbioru, którego JUŻ używa header _format_proposal_v2
+    (Etap2 2026-05-13 #472788: pre_shift synthetic start ≠ prep_ready ≠ TSP actual
+    pickup). Linia „Kandydaci" historycznie pokazywała eta_pickup_hhmm (= dojazd pod
+    restaurację / dla pre_shift = start zmiany), rozjeżdżając się z headerem i pokazując
+    odbiór wcześniej niż silnik realnie planuje (np. pre_shift 18:00 vs plan 18:07).
+    Floor do tej wartości domyka bliźniaczy parytet header↔kandydat.
+    """
+    if not oid_str:
+        return None
+    plan = (cand or {}).get("plan") or {}
+    iso = (plan.get("pickup_at") or {}).get(oid_str)
+    if not iso:
+        return None
+    try:
+        d = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return _to_warsaw_hhmm(d)
+
+
 def _candidate_line_v2(idx: int, c: dict, is_winner: bool,
-                       committed_hhmm: str | None = None) -> str:
+                       committed_hhmm: str | None = None,
+                       plan_hhmm: str | None = None) -> str:
     """Mockup v2 candidate row.
 
     Format: '{idx}. {name} K-{cid} · {gps} · ETA {hhmm} · {bag_emoji} {bag_n}{ ← WYBRANY?}'
@@ -833,6 +859,11 @@ def _candidate_line_v2(idx: int, c: dict, is_winner: bool,
     PRZED umówionym pokazuje umówiony (czasówka=czas restauracji / elastyk=czas Ziomka), dojazd
     PO umówionym zostaje (spóźnienie). HH:MM porównywane leksykograficznie (odbiory w obrębie
     doby). None = bez floora (brak committed / flaga off). Parytet z konsolą/apką/restauracją.
+
+    `plan_hhmm` (HH:MM realnego planowanego odbioru = plan.pickup_at[oid], fallback
+    pickup_ready) podany → floor: eta_pickup_hhmm to dojazd / dla pre_shift start zmiany,
+    a TSP planuje pickup po gotowości jedzenia → nigdy nie pokazuj odbioru przed planem.
+    Komponuje z committed przez max (oba tylko podnoszą). Gated ENABLE_PROPOSAL_ETA_FLOOR_TO_PLAN.
     """
     cid = str(c.get("courier_id") or "?")
     name = name_lookup(c.get("courier_id"), c.get("name"))
@@ -840,6 +871,8 @@ def _candidate_line_v2(idx: int, c: dict, is_winner: bool,
     eta = c.get("eta_pickup_hhmm") or c.get("eta_drive_hhmm") or "—"
     if committed_hhmm and eta != "—" and eta < committed_hhmm:
         eta = committed_hhmm
+    if plan_hhmm and eta != "—" and eta < plan_hhmm:
+        eta = plan_hhmm
     # Fix 2026-05-17 (#474227): r7_bag_size jako 3. źródło. r6_bag_size jest null
     # gdy feasibility_v2 robi early-return przed blokiem R6 (bramka sla_violation).
     # bag_size_before + r7_bag_size = len(bag) ustawiane wcześniej/bezwarunkowo.
@@ -1408,10 +1441,19 @@ def _format_proposal_v2(decision: dict) -> str:
                 _floor_ck = ck_hhmm
         except Exception:
             _floor_ck = ck_hhmm
+    # Floor ETA kandydata do realnego planowanego odbioru silnika (plan.pickup_at[oid],
+    # per-kandydat; fallback do gotowości jedzenia). Domyka bliźniaczą lukę: header już
+    # pokazuje plan.pickup_at (Etap2 #472788), linia „Kandydaci" pokazywała eta_pickup_hhmm
+    # = dojazd / pre_shift start zmiany → odbiór za wcześnie (np. Patryk 18:00 vs plan 18:07).
+    _floor_plan_on = flag("ENABLE_PROPOSAL_ETA_FLOOR_TO_PLAN", default=True)
     for i, c in enumerate(top3, start=1):
         if not c:
             continue
-        lines.append(_candidate_line_v2(i, c, is_winner=(i == 1), committed_hhmm=_floor_ck))
+        _plan_hhmm = None
+        if _floor_plan_on:
+            _plan_hhmm = _cand_plan_pickup_hhmm(c, _cur_oid_str) or pickup_ready_hhmm
+        lines.append(_candidate_line_v2(i, c, is_winner=(i == 1),
+                                        committed_hhmm=_floor_ck, plan_hhmm=_plan_hhmm))
     lines.append("")
 
     top1_travel = best.get("travel_min") if best else None

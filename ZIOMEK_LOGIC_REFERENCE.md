@@ -443,6 +443,15 @@ the module constant. ~80+ flags exist. Notable **current** states:
   `ENABLE_DRIVE_MIN_CALIBRATION_V2` (main), `ENABLE_POST_SHIFT_OVERRUN_PENALTY` (ETAP4; forward-shadow
   od 2026-06-24 20:52 — metryka logowana, flip czeka replay 25.06 + ACK; demote kuriera kończącego po
   zmianie w selekcji best_effort + LEXR6).
+- 🟢 **`ENABLE_PROPOSAL_ETA_FLOOR_TO_PLAN` (2026-06-25, LIVE on `dispatch-shadow`, display-only).**
+  Linia „Kandydaci" w propozycji Telegram (`_candidate_line_v2`) pokazywała `eta_pickup_hhmm` =
+  dojazd pod restaurację, a dla `pre_shift` = **start zmiany** (np. Patryk K-75 18:00) — czyli odbiór
+  PRZED gotowością jedzenia / przed faktycznym planem (case #483301 Piwo Kaczka Sushi, plan 18:07).
+  Header `_format_proposal_v2` JUŻ floruje do `plan.pickup_at[oid]` (Etap2 2026-05-13 #472788) — ta
+  linia była **bliźniaczą luką**. Fix: floor ETA kandydata do `plan.pickup_at[oid]` (per-kandydat,
+  fallback `pickup_ready_at`); komponuje z `ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED` (czas_kuriera)
+  przez `max` — oba tylko podnoszą, nigdy nie obniżają. Silnik/plan NIETKNIĘTE (display). Rollback hot:
+  `flags.json` → `false`. Materialność: ~98% propozycji (głównie +1 min food-ready, pre_shift do +36 min).
 - 🟢 **LIVE route-sequencing (systemd-env flags, NOT `flags.json`; set on `dispatch-plan-recheck` +
   `dispatch-panel-watcher` where the canon is written to `courier_plans.json`):**
   `ENABLE_PLAN_CANON_ORDER_INVARIANTS` (carried `picked_up` dropoffs front + pickups sorted by committed
