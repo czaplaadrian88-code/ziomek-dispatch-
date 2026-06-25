@@ -1,0 +1,18 @@
+[Unit]
+Description=objm-lexr6 Faza-2 SMOKE-VERDICT — jednorazowo 2026-06-26 08:15 UTC (smoke +45 min). Czyta pick-failed/reorders ostatnich ~55 min; errors>0 -> AUTO-ROLLBACK (SELECT=OFF/SHADOW=ON + disable monitor) + Telegram STOP; clean -> Telegram CLEAN (SELECT zostaje ON = canary).
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/objm_lexr6_smoke_verdict.py
+After=network.target
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.objm_lexr6_smoke_verdict
+TimeoutStartSec=120
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/objm_lexr6_smoke.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/objm_lexr6_smoke.log
+
+[Install]
+WantedBy=multi-user.target

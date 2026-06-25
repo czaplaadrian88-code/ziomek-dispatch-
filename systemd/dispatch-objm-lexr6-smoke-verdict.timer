@@ -1,0 +1,10 @@
+[Unit]
+Description=objm-lexr6 SMOKE-VERDICT — JEDNORAZOWO 2026-06-26 08:15 UTC (smoke +45 min). Persistent=false: jeśli serwer był down, NIE nadrabiaj (monitor i tak pilnuje gate'y co 10 min).
+
+[Timer]
+OnCalendar=2026-06-26 08:15:00 UTC
+Persistent=false
+Unit=dispatch-objm-lexr6-smoke-verdict.service
+
+[Install]
+WantedBy=timers.target

@@ -66,13 +66,33 @@ def _parse_log_ts(line):
         return None
 
 
+def _rot_lines(base, since):
+    """Yield linie z `base` + rotacji `base.1[.gz]` (logrotate daily/copytruncate). Pomija
+    pliki, których mtime < since (cała rotacja starsza niż okno → nie czytaj 100MB). Odporne
+    na rotację W TRAKCIE okna (ta sama klasa pułapki co fałszywy HOLD walidatora 2026-06-25)."""
+    since_ts = since.timestamp()
+    for p in sorted(glob.glob(base + "*")):
+        try:
+            if os.path.getmtime(p) < since_ts:
+                continue
+        except OSError:
+            continue
+        opener = gzip.open if p.endswith(".gz") else open
+        try:
+            with opener(p, "rt", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    yield line
+        except Exception as e:
+            print(f"[skip rot {p}: {e!r}]")
+
+
 def shadow_metrics(since):
     n = koord = 0
     auto = {"AUTO": 0, "ACK": 0, "ALERT": 0}
     lats = []
     if not os.path.exists(SHADOW):
         return None
-    for line in open(SHADOW, encoding="utf-8", errors="replace"):
+    for line in _rot_lines(SHADOW, since):
         if not line.strip():
             continue
         try:
@@ -103,22 +123,17 @@ def shadow_metrics(since):
 
 def log_signals(since):
     reorders = errors = 0
-    for path in LOGS:
-        if not os.path.exists(path):
-            continue
-        try:
-            for line in open(path, encoding="utf-8", errors="replace"):
-                if "OBJM_LEXR6_SELECT" not in line:
-                    continue
-                t = _parse_log_ts(line)
-                if t is None or t < since:
-                    continue
-                if "pick failed" in line:
-                    errors += 1
-                elif "reorder" in line:
-                    reorders += 1
-        except Exception as e:
-            print(f"[skip log {path}: {e!r}]")
+    for base in LOGS:
+        for line in _rot_lines(base, since):
+            if "OBJM_LEXR6_SELECT" not in line:
+                continue
+            t = _parse_log_ts(line)
+            if t is None or t < since:
+                continue
+            if "pick failed" in line:
+                errors += 1
+            elif "reorder" in line:
+                reorders += 1
     return {"reorders": reorders, "errors": errors}
 
 

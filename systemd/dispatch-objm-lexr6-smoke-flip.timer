@@ -1,0 +1,10 @@
+[Unit]
+Description=objm-lexr6 SMOKE-FLIP — JEDNORAZOWO 2026-06-26 07:30 UTC (=09:30 Warsaw, off-peak). ACK Adrian 2026-06-25. Persistent=false: jeśli serwer był down o 07:30, NIE nadrabiaj (flip musi być off-peak).
+
+[Timer]
+OnCalendar=2026-06-26 07:30:00 UTC
+Persistent=false
+Unit=dispatch-objm-lexr6-smoke-flip.service
+
+[Install]
+WantedBy=timers.target

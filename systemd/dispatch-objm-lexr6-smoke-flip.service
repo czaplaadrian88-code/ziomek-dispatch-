@@ -1,0 +1,18 @@
+[Unit]
+Description=objm-lexr6 Faza-2 SMOKE-FLIP — jednorazowo 2026-06-26 07:30 UTC (09:30 Warsaw, off-peak; ACK Adrian 2026-06-25). Pre-flight+backup+atomic hot-reload SELECT=ON/SHADOW=OFF (BEZ restartu)+enable monitor+Telegram. Idempotentny.
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/objm_lexr6_smoke_flip.py
+After=network.target
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.objm_lexr6_smoke_flip
+TimeoutStartSec=120
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/objm_lexr6_smoke.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/objm_lexr6_smoke.log
+
+[Install]
+WantedBy=multi-user.target
