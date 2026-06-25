@@ -1,0 +1,12 @@
+{
+  "_frozen": "2026-06-25",
+  "_count": 5,
+  "_note": "C-FLAG-EFFECT: flagi decyzyjne ETAP4 bez testu dotykajacego flagi (swiadomy dlug). Cel = kurczyc liste. NOWA flaga ETAP4 bez testu efektu poza ta lista -> FAIL. Naprawa: test toggle ON<->OFF z asercja zmiany decyzji, potem usun z baseline.",
+  "baseline": [
+    "ENABLE_E2_PLN_AB",
+    "ENABLE_ETA_QUANTILE_R6_BAGCAP",
+    "ENABLE_OBJ_DELIVERY_FOOD_AGE_SHADOW",
+    "ENABLE_PLN_COURIER_PAY",
+    "ENABLE_R6_BREACH_SHADOW_LOG"
+  ]
+}
