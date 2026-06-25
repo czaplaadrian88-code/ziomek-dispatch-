@@ -690,26 +690,69 @@ def _enriched_last_at(enriched_rows: list):
     return last
 
 
+# Klucze sygnatury stanu bramek readiness — wspólne dla świeżego readiness dict
+# i (legacy) rekordu z kpi_log. ZMIANA którejkolwiek = sygnał „coś drgnęło".
+# TYLKO bramki boolean (pass/fail) — NIE status diagnostyczny `auto_precision_status`
+# (ok↔insufficient_data fluktuuje z oknem danych, nie jest zmianą gotowości).
+_READINESS_SIG_KEYS = (
+    "all_pass", "override_7d_below_60pct", "calibration_bias_below_10min",
+    "kk_dinner_breach_below_15pct", "auto_precision_above_95pct",
+)
+
+
 def _readiness_sig(readiness: dict) -> str:
-    """Kompaktowa sygnatura stanu bramek readiness — do wykrycia ZMIANY między
-    dniami. quiet-until-ready ślij Telegram tylko gdy READY albo któraś bramka
-    drgnęła, zamiast codziennie identycznego 'NOT READY'."""
-    keys = ("all_pass", "override_7d_below_60pct", "calibration_bias_below_10min",
-            "kk_dinner_breach_below_15pct", "auto_precision_above_95pct",
-            "auto_precision_status")
-    return "|".join(f"{k}={readiness.get(k)}" for k in keys)
+    """Kompaktowa sygnatura stanu bramek ze świeżego readiness dict (quiet-until-ready)."""
+    return "|".join(f"{k}={readiness.get(k)}" for k in _READINESS_SIG_KEYS)
 
 
-def _last_kpi_record(path: str):
-    """Ostatni (poprzedni) rekord z append-only kpi_log, albo None. Fail-soft."""
+def _state_sig(record) -> str:
+    """Sygnatura stanu bramek z REKORDU kpi_log — odporna na rekordy legacy bez
+    pola `readiness_sig` (wyprowadza bramki ze składowanych metryk TYMI SAMYMI
+    progami co faza7_readiness: override<60% / |calib|<10 / kk<15% / auto=ok).
+    Dzięki temu porównanie dzień-do-dnia działa też przez granicę starych/nowych
+    rekordów — bez backfillu. Pusty/None → ''."""
+    if not record:
+        return ""
+    sig = record.get("readiness_sig")
+    if sig:
+        return sig
+    ov = record.get("override_7d")
+    cb = record.get("calib_bias_min")
+    kk = record.get("kk_dinner_rate")
+    # auto gate = status 'ok' (n≥próg, rate znane) ORAZ rate≥0.95 — jak faza7_readiness.
+    # samo auto_status=='ok' NIE wystarcza (rate może być <95%, np. 5% przy n=59).
+    ar = record.get("auto_agreement")
+    gate_auto = (record.get("auto_status") == "ok") and (ar is not None) and ar >= 0.95
+    derived = {
+        "all_pass": record.get("all_pass"),
+        "override_7d_below_60pct": (ov is not None) and ov < 0.60,
+        "calibration_bias_below_10min": (cb is None) or abs(cb) < 10.0,
+        "kk_dinner_breach_below_15pct": (kk is None) or kk < 0.15,
+        "auto_precision_above_95pct": gate_auto,
+    }
+    return "|".join(f"{k}={derived.get(k)}" for k in _READINESS_SIG_KEYS)
+
+
+def _prev_day_record(path: str, today_date: str):
+    """Najświeższy rekord z kpi_log z datą ŚCIŚLE wcześniejszą niż dziś (ISO
+    YYYY-MM-DD, porównanie leksykalne). Odporny na: powtórne runy tego samego dnia
+    (porównujemy do WCZORAJ, nie do siebie) i resztkowe zanieczyszczenie innym
+    dniem. None gdy brak wcześniejszego. Fail-soft."""
     try:
-        last = None
+        best = None
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    last = line
-        return json.loads(last) if last else None
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                d = rec.get("date")
+                if d and d < today_date and (best is None or d >= best.get("date", "")):
+                    best = rec
+        return best
     except Exception:
         return None
 
@@ -723,7 +766,7 @@ def _should_send_digest(readiness: dict, record: dict, prev_record,
         return True
     if readiness.get("all_pass") or prev_record is None:
         return True
-    return record.get("readiness_sig") != (prev_record or {}).get("readiness_sig")
+    return _state_sig(record) != _state_sig(prev_record)
 
 
 def build_kpi_log_record(date_str, override_kpi, drive_kpi, kk_kpi, auto_prec_kpi,
@@ -867,8 +910,8 @@ def main(argv=None) -> int:
 
     # G2 (2026-05-29): historia + digest. Log append-only ZAWSZE; Telegram tylko z --telegram.
     enriched_last = _enriched_last_at(enriched_rows)
-    # quiet-until-ready: przeczytaj POPRZEDNI rekord PRZED append (porównanie sygnatury)
-    prev_record = _last_kpi_record(args.kpi_log) if args.quiet_until_ready else None
+    # quiet-until-ready: poprzedni DZIEŃ (data < dziś) PRZED append (porównanie sygnatury)
+    prev_record = _prev_day_record(args.kpi_log, date_str) if args.quiet_until_ready else None
     record = build_kpi_log_record(date_str, override_kpi, drive_kpi, kk_kpi,
                                   auto_prec_kpi, readiness, enriched_last)
     append_kpi_log(args.kpi_log, record)

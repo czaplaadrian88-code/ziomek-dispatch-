@@ -186,6 +186,7 @@ def test_cli_writes_output(tmp_path, fake_rows):
         "--whitelist", str(tmp_path / "nope.json"),
         "--tiers", str(tmp_path / "nope.json"),
         "--names", str(tmp_path / "nope.json"),
+        "--kpi-log", str(tmp_path / "kpi_log.jsonl"),  # izolacja: NIE pisz do prod DEFAULT_KPI_LOG
         "--quiet",
     ])
     assert rc == 0
@@ -452,3 +453,74 @@ def test_readiness_sig_detects_change():
     changed = dict(_R_NOTREADY, kk_dinner_breach_below_15pct=False)
     assert KPI._readiness_sig(_R_NOTREADY) == KPI._readiness_sig(dict(_R_NOTREADY))
     assert KPI._readiness_sig(_R_NOTREADY) != KPI._readiness_sig(changed)
+
+
+def test_state_sig_uses_readiness_sig_when_present():
+    rec = {"readiness_sig": "x", "override_7d": 0.9}  # sig wprost → ignoruj metryki
+    assert KPI._state_sig(rec) == "x"
+
+
+def test_state_sig_derives_legacy_record_matches_readiness():
+    # legacy rekord (BEZ readiness_sig) z metrykami NOT READY → wyprowadzony sig
+    # MUSI równać się sig policzonemu z odpowiadającego readiness dict.
+    legacy = {"override_7d": 0.73, "calib_bias_min": 2.0, "kk_dinner_rate": 0.10,
+              "auto_status": "insufficient_data", "all_pass": False}
+    expected = {"all_pass": False, "override_7d_below_60pct": False,
+                "calibration_bias_below_10min": True, "kk_dinner_breach_below_15pct": True,
+                "auto_precision_above_95pct": False, "auto_precision_status": "insufficient_data"}
+    assert KPI._state_sig(legacy) == KPI._readiness_sig(expected)
+    assert KPI._state_sig(None) == ""
+
+
+def test_state_sig_auto_gate_ok_status_but_low_rate_is_false():
+    # REGRESJA (case 2026-06-25): auto_status='ok' + agreement=5% + n=59 → gate
+    # auto MUSI być False (5% < 95%). Samo status=='ok' nie wystarcza.
+    rec = {"override_7d": 0.73, "calib_bias_min": 4.0, "kk_dinner_rate": 0.06,
+           "auto_status": "ok", "auto_agreement": 0.0508, "all_pass": False}
+    assert "auto_precision_above_95pct=False" in KPI._state_sig(rec)
+    # status='ok' + rate≥95% → True
+    rec_ok = dict(rec, auto_agreement=0.97)
+    assert "auto_precision_above_95pct=True" in KPI._state_sig(rec_ok)
+
+
+def test_sig_excludes_auto_status_string():
+    # auto_precision_status (ok↔insufficient_data) NIE jest częścią sygnatury —
+    # fluktuacja okna danych nie może wywołać 'zmiany'.
+    base = {"all_pass": False, "override_7d_below_60pct": False,
+            "calibration_bias_below_10min": True, "kk_dinner_breach_below_15pct": True,
+            "auto_precision_above_95pct": False, "auto_precision_status": "ok"}
+    flipped_status = dict(base, auto_precision_status="insufficient_data")
+    assert KPI._readiness_sig(base) == KPI._readiness_sig(flipped_status)
+    assert "auto_precision_status" not in KPI._readiness_sig(base)
+
+
+def test_quiet_silent_when_legacy_prev_same_state():
+    # JUTRO: prev = wczorajszy LEGACY rekord (bez sig), stan bramek IDENTYCZNY →
+    # _should_send_digest=False (cisza). To jest scenariusz produkcyjny po cleanupie.
+    legacy_prev = {"override_7d": 0.73, "calib_bias_min": 2.0, "kk_dinner_rate": 0.10,
+                   "auto_status": "insufficient_data", "all_pass": False}
+    today_readiness = {"all_pass": False, "override_7d_below_60pct": False,
+                       "calibration_bias_below_10min": True, "kk_dinner_breach_below_15pct": True,
+                       "auto_precision_above_95pct": False, "auto_precision_status": "insufficient_data"}
+    today_rec = _rec(today_readiness)
+    assert KPI._should_send_digest(today_readiness, today_rec, legacy_prev,
+                                   quiet_until_ready=True) is False
+    # a gdy override drgnie poniżej progu (gate flip) → wyślij
+    better = dict(today_readiness, override_7d_below_60pct=True)
+    assert KPI._should_send_digest(better, _rec(better), legacy_prev,
+                                   quiet_until_ready=True) is True
+
+
+def test_prev_day_record_picks_latest_before_today(tmp_path):
+    p = tmp_path / "kpi.jsonl"
+    rows = [
+        {"date": "2026-05-27", "tag": "pollution"},   # śmieć (stara data)
+        {"date": "2026-06-24", "tag": "day24"},
+        {"date": "2026-06-25", "tag": "day25"},       # poprzedni dzień
+        {"date": "2026-06-26", "tag": "today"},       # dzisiejszy — pomiń
+        {"date": "2026-05-27", "tag": "pollution2"},  # śmieć dopisany PO (last line)
+    ]
+    p.write_text("\n".join(json.dumps(r) for r in rows))
+    rec = KPI._prev_day_record(str(p), "2026-06-26")
+    assert rec is not None and rec["tag"] == "day25"  # NIE last-line, NIE today, NIE pollution
+    assert KPI._prev_day_record(str(p), "2020-01-01") is None  # brak wcześniejszego
