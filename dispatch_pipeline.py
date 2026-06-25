@@ -621,7 +621,7 @@ def _best_effort_fastest_pickup_key(c, new_order_id):
 
 def _best_effort_objm_pick(with_plan, new_oid, cap_min=40.0):
     """Carry-aware guarded best_effort pick (case #482817). PRIMARY = objm_r6_breach_max_min
-    (carry-inclusive, mirror _objm_lexr6_shadow._lex_qual) zamiast new-pickup-only
+    (carry-inclusive, przez kanon objm_lexr6.lex_qual) zamiast new-pickup-only
     r6_per_order_violations. BEZPIECZNIK nowego zlecenia: carry-min TYLKO wśród kandydatów z
     new-order bag <= cap_min; gdy żaden bezpieczny → fallback pure carry-min (raw).
 
@@ -643,28 +643,17 @@ def _best_effort_objm_pick(with_plan, new_oid, cap_min=40.0):
                 return float(v)
             return _m(c, "sum_bag_time_min")
 
-        # Post-shift overrun WIODĄCY term (Adrian 2026-06-24): 0.0 gdy flaga OFF →
-        # _lex_qual identyczny jak wcześniej (carry-R6 PRIMARY). ON → kurier kończący
-        # PO zmianie spada poniżej kończących w oknie (case 483144: Piotr/Kuba pod
-        # Patryka). Flaga czytana RAZ (poza min(), tańsze).
-        _ps_on = C.decision_flag("ENABLE_POST_SHIFT_OVERRUN_PENALTY")
+        # JEDNO ŹRÓDŁO PRAWDY tie-breaku = kanon objm_lexr6.lex_qual (post-shift-aware przy
+        # ENABLE_POST_SHIFT_OVERRUN_PENALTY: OFF → krotka 3-elem. R6-primary; ON → prepend
+        # WIODĄCY post_shift_overrun_penalty — kurier kończący PO zmianie spada, case 483144).
+        # Unifikacja 2026-06-25 (objm-lexr6-unify): dawna kopia inline (_ps_pen + _lex_qual)
+        # USUNIĘTA — bajt-identyczna z modułem (przy OFF wiodące 0.0 było no-opem w min()),
+        # więc zero zmiany zachowania. Parytet pilnuje test_objm_lexr6_unify_2026_06_25.
+        from dispatch_v2 import objm_lexr6 as _OL  # liść (common) — brak cyklu; lokalny jak _d2/_shadow
 
-        def _ps_pen(c):
-            if not _ps_on:
-                return 0.0
-            v = _m(c, "post_shift_overrun_penalty")
-            return v if v is not None else 0.0
-
-        def _lex_qual(c):
-            r6 = _m(c, "objm_r6_breach_max_min")
-            return (_ps_pen(c),
-                    r6 if r6 is not None else 9e9,
-                    _m(c, "late_pickup_committed_max") or 0.0,
-                    _m(c, "new_pickup_late_min") or 0.0)
-
-        raw = min(with_plan, key=_lex_qual)
+        raw = min(with_plan, key=_OL.lex_qual)
         _safe = [c for c in with_plan if (_newbag(c) is None or _newbag(c) <= cap_min)]
-        return min(_safe, key=_lex_qual) if _safe else raw
+        return min(_safe, key=_OL.lex_qual) if _safe else raw
     except Exception:
         return None
 
@@ -700,17 +689,14 @@ def _best_effort_objm_shadow(with_plan, live_best, new_oid, cap_min=40.0) -> Non
                 return float(v)
             return _m(c, "sum_bag_time_min")
 
-        def _lex_qual(c):
-            r6 = _m(c, "objm_r6_breach_max_min")
-            return (r6 if r6 is not None else 9e9,
-                    _m(c, "late_pickup_committed_max") or 0.0,
-                    _m(c, "new_pickup_late_min") or 0.0)
+        from dispatch_v2 import objm_lexr6 as _OL  # kanon lex_qual (unifikacja 2026-06-25)
 
         _cid = lambda c: str(getattr(c, "courier_id", ""))
         live_cid = _cid(live_best)
-        # raw = bez bezpiecznika (pure carry-min); pick = z bezpiecznikiem (new-order cap).
-        # pick z _best_effort_objm_pick = JEDNO ŹRÓDŁO PRAWDY (identyczne z live-flip).
-        raw = min(with_plan, key=_lex_qual)
+        # raw = bez bezpiecznika new-order (pure carry-min, kanon objm_lexr6.lex_qual);
+        # pick = z bezpiecznikiem (new-order cap) z _best_effort_objm_pick = to samo źródło.
+        # Po unifikacji raw i pick używają TEGO SAMEGO klucza → guard_changed izoluje sam cap.
+        raw = min(with_plan, key=_OL.lex_qual)
         _safe = [c for c in with_plan if (_newbag(c) is None or _newbag(c) <= cap_min)]
         pick = _best_effort_objm_pick(with_plan, new_oid, cap_min=cap_min) or raw
 
