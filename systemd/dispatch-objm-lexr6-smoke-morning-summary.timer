@@ -1,0 +1,10 @@
+[Unit]
+Description=objm-lexr6 SMOKE poranne podsumowanie — JEDNORAZOWO 2026-06-26 08:30 UTC (10:30 Warsaw). Persistent=true: to tylko Telegram-raport, bezpieczny późno (jeśli serwer był down, nadrób po starcie).
+
+[Timer]
+OnCalendar=2026-06-26 08:30:00 UTC
+Persistent=true
+Unit=dispatch-objm-lexr6-smoke-morning-summary.service
+
+[Install]
+WantedBy=timers.target
