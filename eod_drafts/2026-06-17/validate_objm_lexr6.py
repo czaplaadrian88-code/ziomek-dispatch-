@@ -57,7 +57,16 @@ def run():
     g1 = net <= -MIN_NET_GAIN
     g2 = regr_rate < MAX_REGR_RATE
     g3 = n >= MIN_DECISIONS
-    verdict = "PASS — buduj Fazę 2 (live-flip za ACK)" if (g1 and g2 and g3) else "HOLD — bramki nie spełnione"
+    # n<MIN_DECISIONS = za mało danych (np. odpalenie tuż po nocnej rotacji logu, gdy
+    # świeży .jsonl ma kilka linii) → to NIE jest HOLD bramek, tylko brak próby.
+    # Bez tego rozróżnienia walidator wysyłał fałszywy "HOLD | flipy 0/3" (2026-06-25).
+    insufficient = not g3
+    if insufficient:
+        verdict = f"INCONCLUSIVE — za mało danych (n={n} < {MIN_DECISIONS}, prawdop. tuż po rotacji logu)"
+    elif g1 and g2:
+        verdict = "PASS — buduj Fazę 2 (live-flip za ACK)"
+    else:
+        verdict = "HOLD — bramki nie spełnione"
 
     out=[]
     out.append(f"# WALIDACJA objm-lexr6 D2-shadow — {datetime.now().isoformat(timespec='seconds')}")
@@ -83,11 +92,15 @@ def run():
     with open(rp,"w") as g: g.write(txt+"\n")
     print(f"\n[zapisano {rp}]")
 
-    # opcjonalnie: powiadom panel (notify_router LOW → zakładka Powiadomienia), fail-soft
+    # opcjonalnie: powiadom panel (notify_router LOW → zakładka Powiadomienia), fail-soft.
+    # Przy n<MIN_DECISIONS (artefakt rotacji logu) NIE wysyłaj — to brak danych, nie alarm.
     try:
         import sys; sys.path.insert(0,"/root/.openclaw/workspace/scripts")
         from dispatch_v2.telegram_utils import send_admin_alert
-        send_admin_alert(f"[objm-lexr6 walidacja] {verdict} | net {net:.0f}min | flipy {flips}/{n} | regr {100*regr_rate:.1f}%", priority="low")
+        if insufficient:
+            print(f"[notify pominięte: za mało danych n={n}<{MIN_DECISIONS} — artefakt rotacji, nie alarmuję]")
+        else:
+            send_admin_alert(f"[objm-lexr6 walidacja] {verdict} | net {net:.0f}min | flipy {flips}/{n} | regr {100*regr_rate:.1f}%", priority="low")
     except Exception as e:
         print(f"[notify pominięte: {e!r}]")
 
