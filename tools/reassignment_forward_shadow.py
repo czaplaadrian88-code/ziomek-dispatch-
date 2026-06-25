@@ -62,6 +62,13 @@ FLAG_TG = "REASSIGN_FWD_TELEGRAM_LIVE"   # podgląd live na grupę ziomka (defau
 NOTIFIED_PATH = "/root/.openclaw/workspace/dispatch_state/reassignment_shadow_notified.json"
 TG_CAP = 8                     # max pozycji w 1 komunikacie/sweep (anty-spam grupy)
 _SYNTH_POS = {"none", "pin", "pre_shift", ""}  # brak realnej lokalizacji → fikcja/grafik (oznacz „zgadnięta")
+# Pewna pozycja = GPS lub ostatnia znana realna lokalizacja (jak silnik liczy no_gps,
+# Adrian 22.06). Mirror allow-listy z reassignment_shadow_eval._REAL_POS. Wszystko poza
+# tym (pin/pre_shift/none) = pozycja zgadnięta (fikcja centrum/grafik) = szum powiadomień.
+_REAL_POS = {"gps", "last_picked_up", "last_delivered", "last_assigned", "last_known", "store"}
+NOTIFY_TRUSTED_ONLY_FLAG = "REASSIGN_FWD_NOTIFY_TRUSTED_ONLY"  # notify tylko gdy A i B pewna poz. (default ON)
+NOTIFY_COOLDOWN_KEY = "REASSIGN_FWD_NOTIFY_COOLDOWN_MIN"       # min między powtórkami per zlecenie (default 20)
+DEFAULT_NOTIFY_COOLDOWN_MIN = 20.0
 
 # Pola czytane przez assess_order (zweryfikowane dispatch_pipeline.py:2881-3055).
 _EVENT_FIELDS = (
@@ -291,6 +298,39 @@ def _save_notified(d: dict) -> None:
         _log.warning(f"save_notified fail: {e}")
 
 
+def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+    """ISO ts → aware datetime (lub None). Tolerancyjny na format/None."""
+    try:
+        return datetime.fromisoformat(s) if s else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _pos_trusted(a_pos: Any, b_pos: Any) -> bool:
+    """True gdy OBAJ — obecny kurier A i proponowany B — mają realną pozycję
+    (GPS lub ostatnia znana lokalizacja). pin/pre_shift/none = zgadnięta → False."""
+    return (str(a_pos or "") in _REAL_POS) and (str(b_pos or "") in _REAL_POS)
+
+
+def _notify_eligible(r: dict, notified: dict, now: datetime,
+                     cooldown_min: float, trusted_only: bool) -> bool:
+    """Czy rekord ma iść na POWIADOMIENIE (zapis do jsonl jest osobny i dostaje
+    WSZYSTKO). Bramki: (1) would_reassign; (2) trusted_only → A i B pewna pozycja
+    (tnie ~90% szumu na zgadniętych pozycjach); (3) cooldown → nie powtarzaj tego
+    samego zlecenia częściej niż co cooldown_min (dławi churn best_cid co 3 min).
+    Stary format notified (oid→cid, bez ts) = cooldown nie blokuje (kompat wsteczna)."""
+    if not r.get("would_reassign"):
+        return False
+    if trusted_only and not _pos_trusted(r.get("a_pos_source"), r.get("b_pos_source")):
+        return False
+    if cooldown_min > 0:
+        prev = notified.get(str(r.get("order_id") or ""))
+        last_ts = _parse_iso(prev.get("ts")) if isinstance(prev, dict) else None
+        if last_ts is not None and (now - last_ts).total_seconds() < cooldown_min * 60.0:
+            return False
+    return True
+
+
 def _notify_telegram(new_rows: list) -> int:
     """JEDEN komunikat SHADOW per sweep na grupę ziomka (send_admin_alert →
     chat_id=admin_id=-5149910559). Wyraźnie NIE-do-wykonania — to grupa operacyjna."""
@@ -362,19 +402,24 @@ def run_once(now: Optional[datetime] = None, max_orders: Optional[int] = None,
 
     _append_jsonl(rows)
 
-    # Live podgląd na grupę ziomka (flag OFF default): 1 komunikat/sweep, dedup per zlecenie.
+    # Live podgląd na grupę ziomka (flag OFF default): bramki = pewna pozycja (A i B
+    # realny GPS/last-known) + cooldown per zlecenie (dławi churn best_cid co 3 min).
+    # ⚠ filtr działa TYLKO na notify — _append_jsonl wyżej dostał WSZYSTKIE rows (eval pełny).
     tg_sent = 0
+    tg_trusted_only = None
+    tg_cooldown_min = None
     if C.flag(FLAG_TG, False):
+        tg_trusted_only = bool(C.flag(NOTIFY_TRUSTED_ONLY_FLAG, True))
+        tg_cooldown_min = float(flags.get(NOTIFY_COOLDOWN_KEY, DEFAULT_NOTIFY_COOLDOWN_MIN))
         notified = _load_notified()
-        new_rows = [r for r in rows if r.get("would_reassign")
-                    and notified.get(r["order_id"]) != r["best_cid"]]
+        new_rows = [r for r in rows
+                    if _notify_eligible(r, notified, now, tg_cooldown_min, tg_trusted_only)]
         if new_rows:
             tg_sent = _notify_telegram(new_rows)
-        active_oids = {r["order_id"] for r in rows}
-        merged = {oid: bc for oid, bc in notified.items() if oid in active_oids}  # auto-clean
-        for r in rows:
-            if r.get("would_reassign"):
-                merged[r["order_id"]] = r["best_cid"]
+            for r in new_rows:  # stempel czasu tylko dla FAKTYCZNIE powiadomionych
+                notified[str(r["order_id"])] = {"best": str(r["best_cid"]), "ts": now.isoformat()}
+        active_oids = {str(r["order_id"]) for r in rows}
+        merged = {oid: v for oid, v in notified.items() if oid in active_oids}  # auto-clean
         _save_notified(merged)
 
     summary = {
@@ -382,6 +427,8 @@ def run_once(now: Optional[datetime] = None, max_orders: Optional[int] = None,
         "evaluated": len(rows),
         "would_reassign": n_would,
         "tg_sent": tg_sent,
+        "tg_trusted_only": tg_trusted_only,
+        "tg_cooldown_min": tg_cooldown_min,
         "margin": margin,
         "duration_s": round(time.monotonic() - _t0, 2),
         "ts": now.isoformat(),
