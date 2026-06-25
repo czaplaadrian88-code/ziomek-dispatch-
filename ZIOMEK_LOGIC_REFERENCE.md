@@ -44,7 +44,6 @@
 > | `ENABLE_R5_PICKUP_DETOUR_PENALTY` | ⚪ | **🟢 LIVE** | −4.0/km over 0.5km |
 > | `ENABLE_A2_RELIABILITY_SOFT_SCORE` | 🟡 | **🟢 LIVE** | reliability penalty coeff 60 |
 > | `ENABLE_OBJ_COMMITTED_PICKUP_PENALTY` | — | **🟢 LIVE** | OR-Tools soft coeff 100, never INFEASIBLE |
-> | `ENABLE_NO_GPS_UNCERTAINTY_PENALTY` (B3) | 🟢 trial | **⚪ OFF** | rolled back |
 > | `ENABLE_NO_GPS_EQUAL_TREATMENT` | — | **🟢 LIVE** | no_gps competes on raw score; `_demote_blind_empty` ~inert |
 > | `ENABLE_ALWAYS_PROPOSE_ON_SATURATION` | — | **🟢 LIVE** | every quality→KOORD gate carries `and not _always_propose_on()` |
 > | `ENABLE_CZASOWKA_CK_PASSIVE_GUARD` | — | **🟢 LIVE** (24.06, #483023) | czasówka: passive gastro `czas_kuriera` re-stamp (`panel_re_check`/`pre_proposal_recheck`) NIE zmienia committed; umówiony czas = `pickup_at` |
@@ -280,7 +279,6 @@ post_wave}`; **blind** = `{no_gps, pre_shift, none}`.
 | KOORD | `state_likely_stale` | panel cache >60 s & ≥2 stale signals | — | `~dp:5672` |
 | KOORD | `geometry_blind_fallback` | all candidates greedy-fallback **and** all pairwise cos<0 | — | `~dp:5702` |
 | KOORD | `all_candidates_low_score` | `best.score(excl. ranking deltas) < MIN_PROPOSE_SCORE` | `MIN_PROPOSE_SCORE=−100` | `~dp:5745`, `common.py:679` |
-| PROPOSE | `no_gps_uncertainty_propose` | rescue: blind+empty with good gate-score, `r6+12 ≤ 38` | `NO_GPS_UNCERTAINTY_MIN=12` | `~dp:2074-2167` 🟢 trial |
 | KOORD | `commit_divergence_gate` | `max(plan_pickup_eta − committed czas_kuriera) > 10 min` (cold-food risk) | `…KOORD_MIN_MIN=10` | `~dp:5790` 🟢 |
 | KOORD | `difficult_geometry_redirect` | `best.score < −30` | `DIFFICULT_CASE_SCORE_FLOOR=−30` | `~dp:5867` ⚪ (flag OFF) |
 | **PROPOSE** | `feasible=N best=…` | otherwise (≥1 feasible passes gates) | — | `~dp:5955` |
@@ -386,8 +384,8 @@ std 4.5 / slow 6.5 / new 6.5 (pickup is flat 1.0 for all).
   (`ENABLE_V326_DISTANCE_BIN_TRAFFIC_BOOST`).
 
 **H. Verdict thresholds** — `MIN_PROPOSE_SCORE −100` (`:679`); `EARLY_BIRD_THRESHOLD_MIN 60`
-(`:314`); commit-divergence 10 min; difficult-case floor −30 (OFF); `NO_GPS_UNCERTAINTY_MIN 12`
-(`:1869`); `V326_FLEET_LOAD_BONUS/PENALTY 15.0` (`:2023-2024`); `AUTO_APPROVE_THRESHOLD 130`
+(`:314`); commit-divergence 10 min; difficult-case floor −30 (OFF);
+`V326_FLEET_LOAD_BONUS/PENALTY 15.0` (`:2023-2024`); `AUTO_APPROVE_THRESHOLD 130`
 (disabled).
 
 **I. Schedule/shift** — pre-shift hard reject 30 min, soft penalty −20; dropoff-after-shift +5 min;
@@ -438,7 +436,7 @@ the module constant. ~80+ flags exist. Notable **current** states:
   w tej samej decyzji (Pareto); metryka `min_delivered_at_shadow` w `shadow_decisions.jsonl`;
   helper `_new_delivered_at_dt`, `dispatch_pipeline` po `_winner=feasible[0]`; ZERO zmiany decyzji).
 - ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` (cold-food divergence
-  no longer →KOORD), `ENABLE_NO_GPS_UNCERTAINTY_PENALTY` (B3 trial zakończony), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
+  no longer →KOORD), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
   `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`, `kill_switch_to_v1`,
   `ENABLE_DRIVE_MIN_CALIBRATION_V2` (main), `ENABLE_POST_SHIFT_OVERRUN_PENALTY` (ETAP4; forward-shadow
   od 2026-06-24 20:52 — metryka logowana, flip czeka replay 25.06 + ACK; demote kuriera kończącego po

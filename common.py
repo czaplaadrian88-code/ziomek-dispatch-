@@ -85,8 +85,6 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_REPO_COST_LIVE",
     # SP-B2-ZARAZWOLNY (2026-06-11): substytucja soon_free (🛑 ACK).
     "ENABLE_SOON_FREE_CANDIDATE",
-    # B3 (2026-06-20): no_gps używalny z karą niepewności zamiast demote-KOORD (🛑 ACK).
-    "ENABLE_NO_GPS_UNCERTAINTY_PENALTY",
     # Equal-treatment dokończony (2026-06-24): no_gps+pre_shift po score w bucketach
     # selekcji + demote (tiering/best_effort/LEXR6). Decyzyjna, cross-proces.
     "ENABLE_EQUAL_TREATMENT_BUCKET",
@@ -1958,26 +1956,6 @@ ENABLE_REPO_COST_LIVE = _os.environ.get("ENABLE_REPO_COST_LIVE", "0") == "1"
 # Telemetria soon_free_* zawsze; substytucja za 🛑 flagą (OFF, flip = ACK).
 SOON_FREE_MAX_MIN = float(_os.environ.get("SOON_FREE_MAX_MIN", "12.0"))
 ENABLE_SOON_FREE_CANDIDATE = _os.environ.get("ENABLE_SOON_FREE_CANDIDATE", "0") == "1"
-
-# B3 NO-GPS UŻYWALNY Z KARĄ NIEPEWNOŚCI (2026-06-20, roadmapa B3) — większość
-# kurierów jeździ BEZ GPS z założenia; twardy demote-do-KOORD czyni Ziomka ślepym.
-# Zamiast wykluczać: gdy CAŁA feasible pula < MIN_PROPOSE przez to że top[0] =
-# aktywny-słaby (np. sentinel -1e9), a istnieje no_gps+empty kandydat ze score
-# (z deltą) ≥ MIN_PROPOSE I R6-clean PO doliczeniu kary niepewności — proponuj
-# JEGO zamiast KOORD, z karą ETA = NO_GPS_UNCERTAINTY_MIN (pickup przesunięty,
-# R6 przeliczone z przesunięciem). Demote ZOSTAJE jako ranking (nie wykluczenie).
-# ⚠️ KALIBRACJA (tools/no_gps_eta_error.py, 2026-06-20): fikcja centrum ZANIŻA
-# odbiór o medianę 15,5 min / p80 32,6 (no_gps floor+empty), narzut SAMEJ fikcji
-# vs GPS = +11,4 min mediana. To NIE „kilka minut" — dlatego kara jest DUŻA
-# (12 min = mediana narzutu), a escape twardy: jeśli po karze R6 i tak breach →
-# KOORD. Default OFF; flip = osobny ACK po przeglądzie (NIEBEZPIECZNE bez tego).
-NO_GPS_UNCERTAINTY_MIN = float(_os.environ.get("NO_GPS_UNCERTAINTY_MIN", "12.0"))
-# Twardy bezpiecznik: jeśli kara wpycha R6 bag-time powyżej tego progu → NIE
-# proponuj (zostań KOORD). 35 = R-35MIN-MAX; 38 daje 3 min marginesu na fikcję.
-NO_GPS_UNCERTAINTY_R6_HARD_MAX_MIN = float(
-    _os.environ.get("NO_GPS_UNCERTAINTY_R6_HARD_MAX_MIN", "38.0"))
-ENABLE_NO_GPS_UNCERTAINTY_PENALTY = _os.environ.get(
-    "ENABLE_NO_GPS_UNCERTAINTY_PENALTY", "0") == "1"
 
 # SP-B2-LOADGOV (2026-06-11, M1 + werdykt CASCADE): load governor floty.
 # Argmax bez hamulca floty = 17% breach/worek 33 w kaskadzie; load-aware =

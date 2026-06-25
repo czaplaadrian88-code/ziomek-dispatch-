@@ -2432,102 +2432,6 @@ def _demote_blind_empty(feasible: list, order_id=None) -> list:
     return reordered
 
 
-def _no_gps_uncertainty_rescue(feasible, min_prop_gate, gate_score_fn,
-                               order_id=None):
-    """B3 (2026-06-20): gdy bramka all_candidates_low_score chce wysłać KOORD
-    (top[0] = aktywny-słaby, np. sentinel), a w feasible jest no_gps+empty
-    kandydat skądinąd DOBRY — zwróć GO do propozycji zamiast milczeć. Pozycja
-    no_gps jest fikcją (centrum), więc nakładamy karę niepewności ETA i
-    przeliczamy R6; promujemy TYLKO jeśli po karze nadal feasible.
-
-    Pure/testowalny. Zwraca (candidate, uncertainty_min) albo None.
-    Warunki promocji (wszystkie):
-      • flaga ENABLE_NO_GPS_UNCERTAINTY_PENALTY ON (inaczej None),
-      • kandydat blind+empty (no_gps, pusty bag),
-      • gate-score kandydata ≥ MIN_PROPOSE (już dość dobry SAM Z SIEBIE),
-      • r6_max_bag_time_min + kara ≤ NO_GPS_UNCERTAINTY_R6_HARD_MAX_MIN
-        (twardy escape: kara nie może zepchnąć R6 w głęboki breach),
-      • brak committed-late breach.
-    Wybiera najlepszego gate-score wśród kwalifikujących się. Fail-soft → None.
-    """
-    try:
-        if not C.decision_flag("ENABLE_NO_GPS_UNCERTAINTY_PENALTY"):
-            return None
-        if not feasible:
-            return None
-        unc = float(getattr(C, "NO_GPS_UNCERTAINTY_MIN", 12.0))
-        r6_cap = float(getattr(C, "NO_GPS_UNCERTAINTY_R6_HARD_MAX_MIN", 38.0))
-        best_c = None
-        best_sc = None
-        for c in feasible:
-            if not _is_blind_empty_cand(c):
-                continue
-            sc = gate_score_fn(c)
-            if not isinstance(sc, (int, float)) or sc < min_prop_gate:
-                continue
-            m = getattr(c, "metrics", None) or {}
-            # R6 po doliczeniu kary niepewności (realny odbiór ~unc później).
-            r6 = m.get("r6_max_bag_time_min")
-            if isinstance(r6, (int, float)) and (r6 + unc) > r6_cap:
-                continue  # escape: kara wpycha w głęboki breach → zostaw KOORD
-            # committed-late (deklarowany czas) — twarda blokada bez względu na karę.
-            if m.get("late_pickup_committed_breach"):
-                continue
-            if best_sc is None or sc > best_sc:
-                best_sc, best_c = sc, c
-        if best_c is None:
-            return None
-        log.info(
-            f"NO_GPS_UNCERTAINTY_RESCUE order={order_id} "
-            f"cid={best_c.courier_id} gate_score={best_sc:.1f} "
-            f"uncertainty={unc:.0f}min → PROPOSE zamiast KOORD"
-        )
-        return best_c, unc
-    except Exception as _e:
-        log.warning(f"no_gps_uncertainty_rescue fail order={order_id}: {_e!r}")
-        return None
-
-
-def _build_no_gps_uncertainty_result(feasible, top, min_prop_gate, best_score,
-                                     gate_score_fn, order_id, candidates,
-                                     pickup_ready_at, restaurant,
-                                     delivery_address):
-    """B3 (2026-06-20): zbuduj PROPOSE-result dla no_gps kandydata uratowanego
-    karą niepewności, albo None (→ wołający robi KOORD jak dziś). Wydzielone z
-    bramki by guard `_always_propose_on()` został przy reason KOORD (invariant
-    test). Dolicza karę unc do travel/drive/r6 metryk kandydata (jawny sygnał
-    no_gps_uncertainty_applied_min). Fail-soft → None."""
-    _ng = _no_gps_uncertainty_rescue(feasible, min_prop_gate, gate_score_fn,
-                                     order_id=order_id)
-    if _ng is None:
-        return None
-    _cand, _unc = _ng
-    _m = getattr(_cand, "metrics", None)
-    if isinstance(_m, dict):
-        _m["no_gps_uncertainty_applied_min"] = round(_unc, 1)
-        for _tk in ("travel_min", "drive_min"):
-            if isinstance(_m.get(_tk), (int, float)):
-                _m[_tk] = round(_m[_tk] + _unc, 1)
-        if isinstance(_m.get("r6_max_bag_time_min"), (int, float)):
-            _m["r6_max_bag_time_min"] = round(_m["r6_max_bag_time_min"] + _unc, 1)
-    return PipelineResult(
-        order_id=order_id,
-        verdict="PROPOSE",
-        reason=(
-            f"no_gps_uncertainty_propose (cid={_cand.courier_id} "
-            f"gate_score>={min_prop_gate:.0f}, +{_unc:.0f}min kara niepewności; "
-            f"top0={top[0].courier_id} score={best_score:.1f} był pod progiem)"
-        ),
-        best=_cand,
-        candidates=[_cand] + [c for c in top if c is not _cand],
-        pickup_ready_at=pickup_ready_at,
-        restaurant=restaurant,
-        delivery_address=delivery_address,
-        pool_total_count=len(candidates),
-        pool_feasible_count=len(feasible),
-    )
-
-
 # Czysta geometria trasy (point→segment, min→route) → pipeline_geometry.py
 # (B6 2026-06-20, zaimportowane wyżej). Wywołanie w _assess_order_impl nietknięte,
 # zachowanie identyczne (test_pipeline_geometry + pełna suita = bramka).
@@ -6253,16 +6157,8 @@ def _assess_order_impl(
                 pool_total_count=len(candidates),
                 pool_feasible_count=len(feasible),
             )
-            # B3 (2026-06-20, flaga ENABLE_NO_GPS_UNCERTAINTY_PENALTY OFF default):
-            # no_gps+empty kandydat skądinąd dobry → PROPOSE z karą niepewności
-            # zamiast tej ciszy. None (flaga OFF / brak kandydata) → KOORD jak dziś.
-            _result_ng = _build_no_gps_uncertainty_result(
-                feasible, top, _min_prop_gate, _best_score,
-                _gate_score_excluding_ranking_deltas, order_id, candidates,
-                pickup_ready_at, restaurant, delivery_address)
-            _result_final_low = _result_ng if _result_ng is not None else _result_low
-            _classify_and_set_auto_route(_result_final_low, fleet_snapshot, order_event, now=now)
-            return _result_final_low
+            _classify_and_set_auto_route(_result_low, fleet_snapshot, order_event, now=now)
+            return _result_low
 
         # BUG C verdict-gate (2026-05-27): jeśli plan.pickup_at[oid] (ETA z
         # route_simulator) odjeżdża od commit czas_kuriera_warsaw (z bag_context
