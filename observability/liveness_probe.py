@@ -44,6 +44,7 @@ HEALTH_PORT = 8888
 TCP_TIMEOUT_SEC = 2.0
 JOURNAL_LINES = 400
 GPS_TCP_FAIL_THRESHOLD = 2  # alert only after 2 consecutive TCP fails
+HEALTH_TCP_FAIL_THRESHOLD = 2  # parser-health: alert only after 2 consecutive TCP fails (twin of GPS)
 
 # (unit, status, detail); status is one of "ok" | "down" | "unknown"
 CheckResult = Tuple[str, str, str]
@@ -118,13 +119,15 @@ def _tcp_ok(host: str, port: int, timeout: float = TCP_TIMEOUT_SEC) -> bool:
 # --------------------------------------------------------------------------- state
 
 def load_state() -> dict:
-    state = {"last_alert": {}, "gps_tcp_fail_streak": 0}
+    state = {"last_alert": {}, "gps_tcp_fail_streak": 0, "health_tcp_fail_streak": 0}
     try:
         with open(STATE_PATH) as f:
             data = json.load(f)
         if isinstance(data, dict):
             state["last_alert"] = data.get("last_alert", {}) or {}
             state["gps_tcp_fail_streak"] = int(data.get("gps_tcp_fail_streak", 0) or 0)
+            # backward-compat: pre-2026-06-25 state files have no health streak -> default 0
+            state["health_tcp_fail_streak"] = int(data.get("health_tcp_fail_streak", 0) or 0)
     except FileNotFoundError:
         pass
     except Exception as e:  # noqa: BLE001 - corrupt state -> start fresh, don't crash
@@ -255,15 +258,28 @@ def check_gps(state: dict) -> CheckResult:
     return unit, "ok", f"active, TCP {GPS_PORT} transient fail x{streak} (tolerated)"
 
 
-def check_health_endpoint() -> CheckResult:
+def check_health_endpoint(state: dict) -> CheckResult:
     # Raw TCP connect only -- NOT an HTTP GET. A GET would invoke parser_health
     # do_GET, which fires the dormant downstream cross-check; that currently
     # false-positives as 'worker_stuck' off-peak (finding E3b). TCP accept proves
     # the health thread is alive without that side effect.
+    #
+    # The endpoint is a single-threaded HTTPServer (backlog 5) living inside
+    # panel_watcher on a 2-vCPU box: a busy tick (login refresh ~6-7s, OSRM) or an
+    # in-flight /health GET can starve accept() past the 2s connect timeout -> a
+    # one-tick transient that is NOT a dead thread (observed 2026-06-24 19:48:36,
+    # self-recovered next tick). Mirror check_gps: tolerate a single fail, alert
+    # only on >=2 consecutive fails -- a real thread death persists across ticks,
+    # so the worst case is +1 tick (~2 min) to detection. (2026-06-25 FP fix)
     unit = "parser-health-8888"
     if _tcp_ok("127.0.0.1", HEALTH_PORT):
+        state["health_tcp_fail_streak"] = 0
         return unit, "ok", f"accepting :{HEALTH_PORT}"
-    return unit, "down", f":{HEALTH_PORT} not accepting (parser_health thread dead)"
+    streak = state.get("health_tcp_fail_streak", 0) + 1
+    state["health_tcp_fail_streak"] = streak
+    if streak >= HEALTH_TCP_FAIL_THRESHOLD:
+        return unit, "down", f":{HEALTH_PORT} not accepting x{streak} (parser_health thread dead)"
+    return unit, "ok", f":{HEALTH_PORT} transient fail x{streak} (tolerated)"
 
 
 # --------------------------------------------------------------------------- alert
@@ -301,7 +317,7 @@ def main() -> None:
         check_panel_watcher(),
         check_telegram(),
         check_gps(state),
-        check_health_endpoint(),
+        check_health_endpoint(state),
     ]
 
     changed = False
@@ -330,7 +346,8 @@ def main() -> None:
     summary = " ".join(f"{u}={s}" for u, s, _ in checks)
     logger.info("liveness-probe run done: %s", summary)
 
-    # check_gps may mutate the streak even without alerting, so persist when not dry-run.
+    # check_gps / check_health_endpoint may mutate their fail-streak even without
+    # alerting (tolerated single transient), so persist when not dry-run.
     # A completed run is itself this cron_timer's success signal.
     if not args.dry_run:
         _record_ledger_success(SELF_LEDGER_UNIT, "cron_timer")
