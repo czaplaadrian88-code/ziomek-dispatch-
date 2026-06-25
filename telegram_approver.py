@@ -823,15 +823,23 @@ def _bag_emoji_v2(bag_n: int) -> str:
     return "🔴"
 
 
-def _candidate_line_v2(idx: int, c: dict, is_winner: bool) -> str:
+def _candidate_line_v2(idx: int, c: dict, is_winner: bool,
+                       committed_hhmm: str | None = None) -> str:
     """Mockup v2 candidate row.
 
     Format: '{idx}. {name} K-{cid} · {gps} · ETA {hhmm} · {bag_emoji} {bag_n}{ ← WYBRANY?}'
+
+    `committed_hhmm` (HH:MM umówionego czas_kuriera) podany → floor ETA: kandydat dojeżdżający
+    PRZED umówionym pokazuje umówiony (czasówka=czas restauracji / elastyk=czas Ziomka), dojazd
+    PO umówionym zostaje (spóźnienie). HH:MM porównywane leksykograficznie (odbiory w obrębie
+    doby). None = bez floora (brak committed / flaga off). Parytet z konsolą/apką/restauracją.
     """
     cid = str(c.get("courier_id") or "?")
     name = name_lookup(c.get("courier_id"), c.get("name"))
     gps = _gps_marker_v2(c.get("pos_source"))
     eta = c.get("eta_pickup_hhmm") or c.get("eta_drive_hhmm") or "—"
+    if committed_hhmm and eta != "—" and eta < committed_hhmm:
+        eta = committed_hhmm
     # Fix 2026-05-17 (#474227): r7_bag_size jako 3. źródło. r6_bag_size jest null
     # gdy feasibility_v2 robi early-return przed blokiem R6 (bramka sla_violation).
     # bag_size_before + r7_bag_size = len(bag) ustawiane wcześniej/bezwarunkowo.
@@ -1390,10 +1398,20 @@ def _format_proposal_v2(decision: dict) -> str:
     lines.append("👥 Kandydaci:")
     top3 = [best] + list(alts[:2])
     top3_nonempty = [c for c in top3 if c]
+    # Floor ETA kandydatów do umówionego (czas_kuriera tej propozycji) — ten sam czas dla
+    # wszystkich kandydatów (jedno zlecenie). Gated ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED.
+    _floor_ck = None
+    if ck_hhmm:
+        try:
+            from dispatch_v2 import common as _commonf
+            if getattr(_commonf, "ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED", True):
+                _floor_ck = ck_hhmm
+        except Exception:
+            _floor_ck = ck_hhmm
     for i, c in enumerate(top3, start=1):
         if not c:
             continue
-        lines.append(_candidate_line_v2(i, c, is_winner=(i == 1)))
+        lines.append(_candidate_line_v2(i, c, is_winner=(i == 1), committed_hhmm=_floor_ck))
     lines.append("")
 
     top1_travel = best.get("travel_min") if best else None

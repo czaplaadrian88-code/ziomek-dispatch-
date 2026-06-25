@@ -2971,6 +2971,14 @@ ENABLE_V3274_RENDER_PICKUP_COMMIT_PRIORITY = _os.environ.get(
     "ENABLE_V3274_RENDER_PICKUP_COMMIT_PRIORITY", "1") == "1"  # default True
 V3274_RENDER_DIVERGENCE_WARN_MIN = 5.0  # warn gdy |plan_eta - commit| > 5 min
 
+# Floor ETA odbioru w linii „Kandydaci" propozycji do umówionego czas_kuriera
+# (Adrian 2026-06-25): kandydat NIGDY nie pokazuje ETA PRZED umówionym (czasówka=czas
+# restauracji, elastyk=czas Ziomka „najwcześniej"); dojazd PO umówionym = spóźnienie i
+# zostaje. Parytet z konsolą/apką/widokiem restauracji (FLOOR_PICKUP_DISPLAY_TO_AGREED) —
+# display-only, silnik/plan nietknięte. Łapie też pre_shift (eta = start zmiany).
+ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED = _os.environ.get(
+    "ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED", "1") == "1"  # default True
+
 # V3.26 Fix 7 (2026-04-25 sobota) — same-restaurant grouping przed TSP.
 # Adrian's specification: grupujemy ordery z tej samej restauracji TYLKO gdy
 # czas_kuriera ±5 min AND drop quadrants compatible (same lub adjacent w
