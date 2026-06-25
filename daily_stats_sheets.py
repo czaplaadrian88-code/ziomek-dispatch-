@@ -37,6 +37,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 from dispatch_v2 import state_machine
+from dispatch_v2.common import flag
 
 import gspread
 from gspread.utils import rowcol_to_a1
@@ -47,6 +48,9 @@ SERVICE_ACCOUNT_PATH = "/root/.openclaw/workspace/scripts/service_account.json"
 SPREADSHEET_ID = "1Z5kSGUB0Tfl1TiUs5ho-ecMYJVz0-VuUctoq781OSK8"
 WORKSHEET_NAME = "Średnie"
 SHADOW_DECISIONS_PATH = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+# Pre-prune snapshot dir (dispatch-state-snapshot.timer, 03:00 UTC, PRZED prune 03:30).
+# Snapshot orders_state_<D>.json = pełny stan o 03:00 dnia D = zawiera komplet dnia D-1.
+SNAPSHOT_DIR = "/root/.openclaw/workspace/dispatch_state/snapshots"
 WARSAW = ZoneInfo("Europe/Warsaw")
 UTC = ZoneInfo("UTC")
 
@@ -137,7 +141,45 @@ def _resolve_pickup_intent_dt(o: dict) -> datetime | None:
     return None
 
 
-def count_orders_by_hour(target_day: date) -> dict:
+def _load_orders_for_day(target_day: date, logger=None) -> dict:
+    """Zwraca orders dict dla `target_day` z NAJLEPSZEGO źródła.
+
+    PROBLEM (root cause undercount 2026-06, fix 2026-06-25): żywy
+    `orders_state.json` jest dziesiątkowany przez `dispatch-orders-state-prune`
+    (retencja 12h, 03:30 UTC) ZANIM ten cron (06:00 UTC) policzy „wczoraj" —
+    daily_stats widział ~30-50% rzeczywistości → anomaly-guard skip / zaniżone
+    liczby. Dowód: post-prune `new_count` == total daily_stats co do sztuki.
+
+    FIX: preferuj snapshot 03:00 sprzed nocnego prune. Snapshot
+    `orders_state_<target+1>.json` (zrobiony rano PO target_day, o 03:00, PRZED
+    prune 03:30) zawiera pełny komplet dostaw target_day. Walidacja 2026-06-25:
+    snapshot 06-25 → 06-24 = 203 (zgadza się z CSV/realem); żywy state = 87.
+
+    Flaga `DAILY_STATS_USE_PRESNAPSHOT` (default True, hot-reload). Fallback do
+    żywego stanu gdy: flaga off, snapshot brak (np. `--date` stary dzień / awaria
+    snapshotu) lub błąd odczytu. Anomaly-guard nadal chroni przed złym zapisem.
+    """
+    if flag("DAILY_STATS_USE_PRESNAPSHOT", True):
+        snap = Path(SNAPSHOT_DIR) / f"orders_state_{(target_day + timedelta(days=1)).isoformat()}.json"
+        if snap.exists():
+            try:
+                with snap.open() as f:
+                    data = json.load(f)
+                if logger:
+                    logger.info(f"source: pre-prune snapshot {snap.name} ({len(data)} orders)")
+                return data
+            except Exception as e:  # noqa: BLE001 — fail-soft do żywego stanu
+                if logger:
+                    logger.warning(f"snapshot read failed {snap.name}: {e!r} → fallback live state")
+        elif logger:
+            logger.info(f"snapshot {snap.name} brak → fallback live state (może być zaniżony przez prune)")
+    orders = state_machine.get_all()
+    if logger:
+        logger.info(f"source: live state_machine.get_all() ({len(orders)} orders)")
+    return orders
+
+
+def count_orders_by_hour(target_day: date, orders: dict | None = None) -> dict:
     """Count delivered orders per hour of pickup intent (czas_kuriera priority,
     fallback created_at + prep_minutes). Bucket = hour of intended pickup
     (Warsaw time). Edge clamp: h<9→9, h>23→23.
@@ -145,8 +187,11 @@ def count_orders_by_hour(target_day: date) -> dict:
     V3.27 fix 2026-04-23.
     # 2026-05-14 fix: bucket teraz po pickup intent, nie creation time.
     Adrian directive — odpowiada na pytanie kiedy restauracja CHCE odbioru.
+    # 2026-06-25: `orders` można podać z `_load_orders_for_day` (snapshot
+    pre-prune); None → żywy stan (zachowanie zgodne wstecz).
     """
-    orders = state_machine.get_all()
+    if orders is None:
+        orders = state_machine.get_all()
     items = orders.items() if isinstance(orders, dict) else enumerate(orders)
     counts = Counter()
     for _, o in items:
@@ -618,7 +663,8 @@ def main():
     weekday_idx = target.weekday()
     log.info(f"target: {target.isoformat()} ({DAYS_SHORT[weekday_idx]})")
 
-    counts = count_orders_by_hour(target)
+    orders = _load_orders_for_day(target, log)
+    counts = count_orders_by_hour(target, orders)
     total = sum(counts.values())
     log.info(f"orders total={total}  hourly={dict((h,counts[h]) for h in sorted(counts))}")
 
