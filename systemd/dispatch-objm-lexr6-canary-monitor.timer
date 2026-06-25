@@ -1,0 +1,11 @@
+[Unit]
+Description=objm-lexr6 CANARY monitor — co 10 min W OKNIE CANARY (enable przy flipie ENABLE_OBJM_LEXR6_SELECT, disable po decyzji Fazy 4). DOMYSLNIE DISABLED — nie wlaczac bez flipu.
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+Persistent=false
+Unit=dispatch-objm-lexr6-canary-monitor.service
+
+[Install]
+WantedBy=timers.target

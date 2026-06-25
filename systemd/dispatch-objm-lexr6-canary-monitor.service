@@ -1,0 +1,19 @@
+[Unit]
+Description=objm-lexr6 Faza-2 CANARY monitor (read-only) — metryki 2. rzedu live-flipu ENABLE_OBJM_LEXR6_SELECT vs baseline; G1 latencja/bledy, G2a KOORD, G2b auto-route, G2c reorder%; STOP/WARN -> Telegram. AKTYWNY TYLKO w oknie canary (enable przy flipie, disable po decyzji Fazy 4). ZERO wplywu na decyzje/panel.
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/objm_lexr6_canary_monitor.py
+After=network.target
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python /root/.openclaw/workspace/scripts/dispatch_v2/tools/objm_lexr6_canary_monitor.py --window-min 60 --notify
+Nice=10
+TimeoutStartSec=120
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/objm_lexr6_canary_monitor.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/objm_lexr6_canary_monitor.log
+
+[Install]
+WantedBy=multi-user.target
