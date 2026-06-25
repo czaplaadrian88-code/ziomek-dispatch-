@@ -139,6 +139,13 @@ ETAP4_DECISION_FLAGS = (
     # cross-proces (shadow/czasowka/plan-recheck liczą tym samym silnikiem).
     # Default OFF; flip po replay + ACK poza peakiem. common.post_shift_overrun_penalty.
     "ENABLE_POST_SHIFT_OVERRUN_PENALTY",
+    # ETAP4-GAP DOMKNIĘTY (2026-06-25): live-decyzyjna flaga selekcji best_effort
+    # (carry-aware objm pick) była POZA rejestrem → poza zasięgiem flag_registry/
+    # parytetu cross-proces/izolacji conftest (testy dziedziczyły żywy flags.json=ON).
+    # Stała-fallback OFF istnieje (common.py ~2504). Produkcja czyta flags.json (ON);
+    # testy teraz izolowane (strip→OFF, chyba że test jawnie ustawi). Decyzyjna,
+    # cross-proces (shadow/plan-recheck liczą tym samym silnikiem).
+    "ENABLE_BEST_EFFORT_OBJM_R6_KEY",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
