@@ -19,7 +19,7 @@ Tryby:
 
 NIE mutuje stanu produkcyjnego. Fail-soft. Wzór: carried_first_peak_monitor.
 """
-import json, os, sys, glob, gzip, argparse
+import json, os, sys, glob, gzip, argparse, re
 from datetime import datetime, timezone, timedelta
 
 SCRIPTS = "/root/.openclaw/workspace/scripts"
@@ -40,6 +40,8 @@ MIN_N_FOR_STOP    = int(os.environ.get("CANARY_MIN_N_FOR_STOP", "30"))
 TOD_BASELINE_DAYS = int(os.environ.get("CANARY_TOD_DAYS", "7"))
 # G2a-KOORD ma własną próbę selektor-istotną (n_sel = excl early_bird) → guard inline, NIE tu.
 _SUPPRESSIBLE_UNDER_MIN_N = {"G2b-auto-route", "G2c-reorder", "G1-latencja"}
+# order_id z linii reorderu — dedup G2c po orderze (jedna linia/order, NIE per re-ewaluacja sweepera)
+_REORDER_OID_RE = re.compile(r"OBJM_LEXR6_SELECT order=(\d+) reorder")
 
 
 def _pct(part, whole):
@@ -103,6 +105,7 @@ def shadow_metrics(since):
     n = koord = koord_eb = 0
     auto = {"AUTO": 0, "ACK": 0, "ALERT": 0}
     lats = []
+    order_ids = set()  # distinct order_id decydowanych w oknie → mianownik dedup G2c
     if not os.path.exists(SHADOW):
         return None
     for line in _rot_lines(SHADOW, since):
@@ -116,6 +119,9 @@ def shadow_metrics(since):
         if t is None or t < since:
             continue
         n += 1
+        oid = r.get("order_id")
+        if oid is not None:
+            order_ids.add(str(oid))
         if str(r.get("verdict")) == "KOORD":
             koord += 1
             if _is_early_bird(r):
@@ -131,6 +137,8 @@ def shadow_metrics(since):
     n_sel = n - koord_eb
     return {
         "n": n,
+        "n_orders": len(order_ids),
+        "shadow_oids": order_ids,
         "koord_pct": round(_pct(koord, n), 2),            # raw (transparencja / flat fallback)
         "koord_eb": koord_eb,
         "n_sel": n_sel,
@@ -145,6 +153,8 @@ def shadow_metrics(since):
 
 def log_signals(since):
     reorders = errors = 0
+    reorder_oids = set()  # distinct order_id z reorderem → dedup G2c (ten sam order re-ewaluowany
+                          # przez sweeper/czasówkę emituje wiele linii; liczymy ORDER raz)
     for base in LOGS:
         for line in _rot_lines(base, since):
             if "OBJM_LEXR6_SELECT" not in line:
@@ -156,7 +166,10 @@ def log_signals(since):
                 errors += 1
             elif "reorder" in line:
                 reorders += 1
-    return {"reorders": reorders, "errors": errors}
+                m = _REORDER_OID_RE.search(line)
+                if m:
+                    reorder_oids.add(m.group(1))
+    return {"reorders": reorders, "errors": errors, "reorder_oids": reorder_oids}
 
 
 def flag_state():
@@ -244,7 +257,14 @@ def gates(cur, log, flags, base, since, now):
     """Zwróć listę (gate, status, detal). status ∈ GO/STOP/WARN/INFO."""
     out = []
     n = cur["n"]
-    reorder_pct = _pct(log["reorders"], n) if n else 0.0
+    # G2c DEDUP: licznik = distinct order z reorderem ∩ ordery decydowane w oknie; mianownik =
+    # distinct order w shadow (NIE raw linie/raw n — to mieszało populacje i ×2 zawyżało, patrz
+    # diagnoza 70% 2026-06-26). Ta sama populacja, jedno źródło per order.
+    shadow_oids = cur.get("shadow_oids") or set()
+    reorder_oids = log.get("reorder_oids") or set()
+    n_orders = cur.get("n_orders", n)
+    reorder_orders = len(reorder_oids & shadow_oids) if shadow_oids else len(reorder_oids)
+    reorder_pct = _pct(reorder_orders, n_orders) if n_orders else 0.0
 
     # G1 zdrowie
     if log["errors"] > 0:
@@ -288,12 +308,12 @@ def gates(cur, log, flags, base, since, now):
     else:
         out.append(("G2b-auto-route", "INFO", f"ACK+ALERT {cur['ack_alert_pct']:.1f}% / AUTO {cur['auto_pct']:.1f}% (brak baseline)"))
 
-    # G2c reorder sanity (tylko gdy SELECT faktycznie ON)
+    # G2c reorder sanity (dedup po order_id; tylko gdy SELECT faktycznie ON)
     if flags.get("select_on"):
-        if reorder_pct < REORDER_LO or reorder_pct > REORDER_HI:
-            out.append(("G2c-reorder", "WARN", f"{reorder_pct:.1f}% (oczek. ~12%, pas {REORDER_LO:.0f}-{REORDER_HI:.0f}%) — {log['reorders']}/{n}"))
-        else:
-            out.append(("G2c-reorder", "GO", f"{reorder_pct:.1f}% ({log['reorders']}/{n})"))
+        _det = (f"dedup {reorder_pct:.1f}% ({reorder_orders}/{n_orders} orderów; oczek. ~12%, "
+                f"pas {REORDER_LO:.0f}-{REORDER_HI:.0f}%) | raw {log['reorders']} linii (multi-eval)")
+        st = "WARN" if (reorder_pct < REORDER_LO or reorder_pct > REORDER_HI) else "GO"
+        out.append(("G2c-reorder", st, _det))
     else:
         out.append(("G2c-reorder", "INFO", "SELECT OFF — canary nieaktywne"))
 
@@ -335,7 +355,7 @@ def main():
     flags = flag_state()
 
     if a.save_baseline:
-        snap = {k: cur[k] for k in cur}
+        snap = {k: v for k, v in cur.items() if not isinstance(v, set)}  # set (shadow_oids) niejson-owalny
         snap["saved_at"] = now.isoformat()
         snap["window_min"] = a.window_min
         try:
@@ -392,7 +412,8 @@ def main():
 
     lines = []
     lines.append(f"# CANARY objm-lexr6 — {now.isoformat(timespec='seconds')} (okno {a.window_min} min)")
-    lines.append(f"SELECT={flags['select_on']} SHADOW={flags['shadow_on']} | decyzji {cur['n']} (sel {cur.get('n_sel', cur['n'])}) | reorder {log['reorders']} | błędy {log['errors']}")
+    _ro = len((log.get('reorder_oids') or set()) & (cur.get('shadow_oids') or set())) if cur.get('shadow_oids') else len(log.get('reorder_oids') or set())
+    lines.append(f"SELECT={flags['select_on']} SHADOW={flags['shadow_on']} | decyzji {cur['n']} (sel {cur.get('n_sel', cur['n'])}, ord {cur.get('n_orders', cur['n'])}) | reorder {_ro} ord/{log['reorders']} linii | błędy {log['errors']}")
     lines.append(f"KOORD sel {cur.get('koord_pct_sel', cur['koord_pct'])}% (raw {cur['koord_pct']}%, early_bird {cur.get('koord_eb', 0)}) | ACK+ALERT {cur['ack_alert_pct']}% | AUTO {cur['auto_pct']}% | lat p50 {cur['lat_p50']} p95 {cur['lat_p95']} ms")
     if base:
         lines.append(f"baseline: KOORD {base.get('koord_pct')}% | ACK+ALERT {base.get('ack_alert_pct')}% | lat p95 {base.get('lat_p95')} ms")

@@ -143,6 +143,37 @@ def test_shadow_metrics_excludes_early_bird_end_to_end(tmp_path, monkeypatch):
     assert m["koord_pct"] == 40.0  # raw zachowany dla transparencji
 
 
+# --- G2c reorder dedup po order_id -----------------------------------------
+
+def test_g2c_dedup_counts_distinct_orders_not_raw_lines():
+    # 30 orderów, 6 z reorderem ale 15 SUROWYCH linii (multi-eval sweepera) → dedup 20%, NIE 50%
+    oids = set(f"o{i}" for i in range(30))
+    cur = _cur(30, 5.0, n_orders=30, shadow_oids=oids)
+    log = {"reorders": 15, "errors": 0, "reorder_oids": set(f"o{i}" for i in range(6))}
+    gc = _g(M.gates(cur, log, FLAGS, BASE_TOD, _dt(13, 0), _dt(16, 0)), "G2c-reorder")
+    assert "20.0%" in gc[2] and "6/30" in gc[2], gc
+    assert "raw 15 linii" in gc[2]
+    assert gc[1] == "GO"  # 20% w paśmie 5-25
+
+
+def test_g2c_dedup_intersects_window_orders_only():
+    # reorder dla ordera SPOZA okna shadow (re-eval starego) NIE liczony do mianownika/licznika
+    oids = set(f"o{i}" for i in range(35))
+    cur = _cur(35, 0.0, n_orders=35, shadow_oids=oids)
+    log = {"reorders": 9, "errors": 0, "reorder_oids": {"o0", "o1", "o2", "STARY99"}}
+    gc = _g(M.gates(cur, log, FLAGS, BASE_TOD, _dt(13, 0), _dt(16, 0)), "G2c-reorder")
+    assert "3/35" in gc[2], gc  # o0,o1,o2 ∩ okno; STARY99 odrzucony
+
+
+def test_g2c_high_dedup_rate_warns():
+    # realnie wysoka stopa (po dedup) nadal WARN — sygnał prawdziwy, nie artefakt
+    oids = set(f"o{i}" for i in range(40))
+    cur = _cur(40, 0.0, n_orders=40, shadow_oids=oids)
+    log = {"reorders": 50, "errors": 0, "reorder_oids": set(f"o{i}" for i in range(16))}  # 16/40=40%
+    gc = _g(M.gates(cur, log, FLAGS, BASE_TOD, _dt(13, 0), _dt(16, 0)), "G2c-reorder")
+    assert gc[1] == "WARN" and "40.0%" in gc[2]
+
+
 def test_compute_tod_curve_excludes_early_bird(tmp_path, monkeypatch):
     # godzina 8: 10 decyzji, 5 KOORD z czego 4 early_bird → sel: koord 1 / n_sel 6
     import json as _j
