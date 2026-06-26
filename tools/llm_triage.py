@@ -183,6 +183,34 @@ def append_proposal(rec):
         os.fsync(fh.fileno())
 
 
+def _send_telegram(rec):
+    """Wyslij ZWIEZLE podsumowanie diagnozy na grupe ziomka (PODGLAD — nie do wykonania). Fail-soft."""
+    try:
+        from dispatch_v2.telegram_utils import send_admin_alert
+    except Exception as exc:
+        print(f"Telegram niedostepny: {exc}", file=sys.stderr)
+        return
+    tp = (rec.get("triage") or {}).get("parsed") or {}
+    jp = (rec.get("judge") or {}).get("parsed") or {}
+    lines = [
+        f"🔎 DIAGNOZA Ziomka (PODGLAD — nie wykonane) {rec.get('date')} | severity {rec.get('top_severity')}",
+        f"Triage: {(tp.get('summary') or '—')[:400]}",
+    ]
+    for h in (tp.get("hypotheses") or [])[:3]:
+        lines.append(f"• {str(h.get('issue',''))[:80]}: zbadaj — {str(h.get('what_to_investigate',''))[:120]}")
+    lines.append(
+        f"Sedzia [{rec.get('judge_model')}]: {jp.get('verdict','?')} | "
+        f"dane:{jp.get('grounded_in_data','?')} HARD:{jp.get('respects_hard_soft','?')}"
+    )
+    if jp.get("critique"):
+        lines.append(f"  ↳ {str(jp['critique'])[:300]}")
+    try:
+        send_admin_alert("\n".join(lines), source="llm_triage")
+        print("Wyslano podsumowanie na Telegram.")
+    except Exception as exc:
+        print(f"Blad wysylki Telegram: {exc}", file=sys.stderr)
+
+
 # ------------------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------------------
@@ -198,6 +226,8 @@ def main():
                         help="Wywołaj LLM nawet gdy wake_llm=False")
     parser.add_argument("--dry-run", action="store_true",
                         help="Nie zapisuj propozycji do pliku")
+    parser.add_argument("--telegram", action="store_true",
+                        help="wyslij podsumowanie na grupe ziomka (PODGLAD)")
     args = parser.parse_args()
 
     verdict = _load_json(args.verdict, {})
@@ -262,6 +292,9 @@ def main():
         print(f"\nPropozycja zapisana do {OUT_JSONL}")
     else:
         print("\nDry-run — nie zapisano propozycji.")
+
+    if args.telegram:
+        _send_telegram(rec)
 
     return 0
 
