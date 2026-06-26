@@ -442,6 +442,11 @@ the module constant. ~80+ flags exist. Notable **current** states:
   spóźnienie+dowóz" = `min predicted_delivered_at[new]` vs live winner + regresja floty R6/spread/late
   w tej samej decyzji (Pareto); metryka `min_delivered_at_shadow` w `shadow_decisions.jsonl`;
   helper `_new_delivered_at_dt`, `dispatch_pipeline` po `_winner=feasible[0]`; ZERO zmiany decyzji).
+  `ENABLE_BUG4_RESEQ_SHADOW` (Adrian 2026-06-26: log-only pomiar bug #4 „zygzak worka" — przy RETIME
+  worka ≥2 zleceń (`plan_recheck` gałąź lock-ON) liczy ŚWIEŻY solve (`_sweep` jak `_gen_one_bag_plan`)
+  i loguje deltę DRIVE zamrożona-sekwencja↔świeża + `seq_differs` do `dispatch_state/bug4_reseq_shadow.jsonl`;
+  helper `_bug4_reseq_shadow`/`_osrm_drive_min_sum`, cap 20/tick, fail-soft; ZERO zmiany decyzji/zapisu.
+  Cel: materialność kary zamrożonej sekwencji vs świeży solve przed naprawą u źródła feasibility↔route_simulator↔plan_recheck).
 - ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` (cold-food divergence
   no longer →KOORD), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
   `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`, `kill_switch_to_v1`,

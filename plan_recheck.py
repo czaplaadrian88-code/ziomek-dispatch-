@@ -1557,6 +1557,116 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     return True
 
 
+# ─── Bug #4 SHADOW (log-only): zamrożona sekwencja RETIME vs świeży solve ──────
+_BUG4_RESEQ_SHADOW_PATH = "/root/.openclaw/workspace/dispatch_state/bug4_reseq_shadow.jsonl"
+_BUG4_RESEQ_SHADOW_MAX_PER_TICK = 20  # cap kosztu OSRM/OR-tools na tick
+
+
+def _osrm_drive_min_sum(start, coords_list):
+    """Suma minut OSRM po kolei start→c0→c1→… (fail-soft → None)."""
+    try:
+        from dispatch_v2 import osrm_client as _osrm
+    except Exception:
+        return None
+    tot = 0.0
+    cur = (float(start[0]), float(start[1]))
+    for c in coords_list:
+        r = _osrm.route(cur, (float(c[0]), float(c[1])))
+        d = r.get("duration_min") if isinstance(r, dict) else None
+        if d is None:
+            return None
+        tot += float(d)
+        cur = (float(c[0]), float(c[1]))
+    return tot
+
+
+def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, now, R, summary):
+    """Bug #4 SHADOW (flaga ENABLE_BUG4_RESEQ_SHADOW, log-only): przy RETIME worka
+    ≥2 zleceń policz też ŚWIEŻY solve (jak _gen_one_bag_plan._sweep) i zaloguj deltę
+    drive (zamrożona kolejność stopów vs świeża) + czy sekwencja inna. ZERO wpływu na
+    decyzje/zapis — tylko jsonl. Fail-soft: każdy błąd = no-op (nie psuje retime)."""
+    try:
+        from dispatch_v2 import common as _C
+        if not _C.flag("ENABLE_BUG4_RESEQ_SHADOW", False):
+            return
+        if len(oids) < 2:
+            return
+        if summary.get("bug4_shadow_evals", 0) >= _BUG4_RESEQ_SHADOW_MAX_PER_TICK:
+            return
+        anchor = _start_anchor(cid, oids, orders_state, gps_positions, now)
+        if anchor is None:
+            return
+        pos, anchor_departure, _src = anchor
+        sims = {}
+        for oid in oids:
+            rec = orders_state.get(oid) or {}
+            dc = rec.get("delivery_coords")
+            if not _coords_ok(dc):
+                return
+            status = rec.get("status")
+            pc = rec.get("pickup_coords")
+            if status != "picked_up" and not _coords_ok(pc):
+                return
+            pickup_coords = (float(pc[0]), float(pc[1])) if _coords_ok(pc) \
+                else (float(dc[0]), float(dc[1]))
+            sims[oid] = R.OrderSim(
+                order_id=oid, pickup_coords=pickup_coords,
+                delivery_coords=(float(dc[0]), float(dc[1])),
+                picked_up_at=_sim_picked_up_at(rec, status), status=status,
+                pickup_ready_at=_parse_dt(rec.get("czas_kuriera_warsaw")))
+        # świeży solve — kopia _sweep z _gen_one_bag_plan (defaulty dwell/mult: delta DRIVE odporna)
+        best = None
+        for newoid in sims:
+            bag = [sims[o] for o in sims if o != newoid]
+            p = R.simulate_bag_route_v2(pos, bag, sims[newoid], now=now, sla_minutes=35,
+                                        earliest_departure=anchor_departure)
+            key = (p.sla_violations, round(p.total_duration_min, 3), tuple(p.sequence))
+            if best is None or key < best[0]:
+                best = (key, p)
+        if best is None:
+            return
+        plan_fresh = best[1]
+        events = []
+        for oid in sims:
+            pu = (plan_fresh.pickup_at or {}).get(oid)
+            if pu is not None:
+                events.append((pu, oid, "pickup", sims[oid].pickup_coords))
+            dp = (plan_fresh.predicted_delivered_at or {}).get(oid)
+            if dp is None:
+                return
+            events.append((dp, oid, "dropoff", sims[oid].delivery_coords))
+        events.sort(key=lambda e: e[0])
+        fresh_labels = [f"{e[1]}:{e[2]}" for e in events]
+        fresh_coords = [e[3] for e in events]
+        frozen_labels, frozen_coords = [], []
+        for s in (existing_plan.get("stops") or []):
+            c = s.get("coords") or {}
+            if "lat" not in c or "lng" not in c:
+                return
+            frozen_labels.append(f"{s.get('order_id')}:{s.get('type')}")
+            frozen_coords.append((float(c["lat"]), float(c["lng"])))
+        if not frozen_coords:
+            return
+        fresh_drive = _osrm_drive_min_sum(pos, fresh_coords)
+        frozen_drive = _osrm_drive_min_sum(pos, frozen_coords)
+        if fresh_drive is None or frozen_drive is None:
+            return
+        rec_out = {
+            "ts": now.isoformat(), "cid": str(cid), "bag": [str(o) for o in oids],
+            "n_orders": len(oids),
+            "seq_differs": frozen_labels != fresh_labels,
+            "frozen_drive_min": round(frozen_drive, 2),
+            "fresh_drive_min": round(fresh_drive, 2),
+            "delta_min": round(frozen_drive - fresh_drive, 2),
+            "frozen_seq": frozen_labels, "fresh_seq": fresh_labels,
+        }
+        with open(_BUG4_RESEQ_SHADOW_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec_out, ensure_ascii=False) + "\n")
+        summary["bug4_shadow_evals"] = summary.get("bug4_shadow_evals", 0) + 1
+    except Exception as e:
+        _log.warning(f"bug4_reseq_shadow cid={cid} fail: {type(e).__name__}: {e}")
+
+
 def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = None,
                      gps_positions: Optional[Dict[str, Any]] = None,
                      now: Optional[datetime] = None,
@@ -1750,6 +1860,8 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
                 try:
                     if _retime_one_bag_plan(cid, existing, oids, orders_state, gps_positions, now):
                         summary["bag_plans_retimed"] += 1
+                        _bug4_reseq_shadow(cid, oids, existing, orders_state,
+                                           gps_positions, now, R, summary)
                         continue
                 except Exception as e:
                     _log.warning(f"retime cid={cid} fail: {type(e).__name__}: {e}")
