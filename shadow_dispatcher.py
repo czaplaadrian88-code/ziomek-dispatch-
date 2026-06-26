@@ -1123,6 +1123,17 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
                     stats["skipped"] += 1
                     continue
 
+            # B (ulica↔miasto): shadow-detektor błędnego miasta na zleceniu (zły geokod).
+            # Log-only, flag-gated, try/except — NIGDY nie wywróci dispatchu. Zlecenia z gastro =
+            # dominujące źródło błędów; bliźniak panelowego /estimate check_street_town.
+            if C.flag("ENABLE_ADDRESS_TOWN_MISMATCH_SHADOW"):
+                try:
+                    from dispatch_v2 import address_mismatch as _am
+                    _am.maybe_log_mismatch(
+                        oid, payload.get("delivery_address"), payload.get("delivery_city"))
+                except Exception as _am_e:  # noqa: BLE001
+                    _log.warning(f"address_mismatch shadow fail order={oid}: {_am_e}")
+
             result = process_event(ev, fleet, meta)
 
             # SHADOW probe (2026-05-29) — race Baanko-type same-restaurant.
