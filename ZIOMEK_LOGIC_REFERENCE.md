@@ -49,6 +49,7 @@
 > | `ENABLE_CZASOWKA_CK_PASSIVE_GUARD` | — | **🟢 LIVE** (24.06, #483023) | czasówka: passive gastro `czas_kuriera` re-stamp (`panel_re_check`/`pre_proposal_recheck`) NIE zmienia committed; umówiony czas = `pickup_at` |
 > | `ENABLE_PICKUP_TIME_MIRRORS_CK` | — | **🟢 LIVE** (24.06) | czasówka: `PICKUP_TIME_UPDATED` mirrors `pickup_at`→`czas_kuriera` (koordynator/restauracja, any direction) |
 > | `ENABLE_ELASTYK_CK_NO_BACKWARD` | — | **🟢 LIVE** (24.06, opcja B) | elastyk: passive `czas_kuriera` change blocked tylko BACKWARD (forward = +15/lateness zostaje) |
+> | `ENABLE_CHECKPOINT_TS_WARSAW_PARSE` | — | **🟢 LIVE** (26.06 canary) | `picked_up_at`/`delivered_at` (Warsaw-naive) parsed as Warsaw not UTC w 4 miejscach `courier_resolver` (interp/recent-activity/ZOMBIE-guard/per-status) → ożywia predykcję pozycji no-GPS (interp 0/16984→żyje); OFF=legacy UTC |
 >
 > **Net (Adrian directive 2026-06-23 — full autonomy):** quality-driven KOORD escalation is deliberately
 > disabled. R6 35-min is hard at the feasibility/candidate layer, **soft at the verdict layer** (20.6% of
@@ -272,6 +273,12 @@ After scoring, `feasible` (MAYBE candidates) is ordered by **successive passes**
 
 `pos_source` buckets: **informed** = `{gps, last_assigned_pickup, last_picked_up_*, last_delivered,
 post_wave}`; **blind** = `{no_gps, pre_shift, none}`.
+
+**Position-cascade TZ (26.06, `ENABLE_CHECKPOINT_TS_WARSAW_PARSE` 🟢 canary):** `orders_state.picked_up_at`/`delivered_at`
+= NAIVE Warsaw (panel Rutcom); `updated_at`/`assigned_at` = aware-UTC. `courier_resolver` parsuje checkpointy
+przez `_parse_checkpoint_ts`→`parse_panel_timestamp` (naive→Warsaw) — inaczej świeży odbiór miał elapsed/age
+UJEMNE → interp (F4 Krok 2) martwy + recent-activity pomijał świeże + ZOMBIE/staleness zaniżone o offset (~2h).
+Rdzeń decyzyjny (feasibility/R6/ETA/plan) był czysty — wchodzi sparsowanym `OrderSim.picked_up_at`.
 
 ### 5.5 Verdict gates (in evaluation order → first match wins)
 | Verdict | reason | Condition | Knob | Source |
