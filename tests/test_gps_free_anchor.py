@@ -112,3 +112,51 @@ def test_committed_pickup_anchor_when_no_events():
     assert a[2] == "committed_pickup"
     assert a[0] == (53.12, 23.12)          # najbliższy committed (16:30) wygrywa
     assert a[1] is not None                # earliest_departure ustawione
+
+
+# ---- last-known-pos jako ostatnia deska dla kuriera bez GPS (2026-06-26, case 509) ----
+
+def _lp_entry(min_ago, lat=53.151, lon=23.186, source="last_assigned_pickup"):
+    return {"lat": lat, "lon": lon, "source": source,
+            "ts": (NOW - timedelta(minutes=min_ago)).isoformat()}
+
+
+def test_last_known_pos_anchor_used_when_flag_on(monkeypatch):
+    """Kurier BEZ GPS, bez zdarzenia, bez committed → z flagą ON sięga do store."""
+    from dispatch_v2 import courier_resolver as CR
+    _set_flag(True)
+    monkeypatch.setattr(PR, "ENABLE_GPS_FREE_ANCHOR_LAST_POS", True)
+    monkeypatch.setattr(CR, "_load_last_known_pos", lambda: {"9": _lp_entry(5)})
+    a = PR._start_anchor("9", [], {}, {}, NOW)
+    assert a is not None and a[2] == "last_known_pos"
+    assert a[0] == (53.151, 23.186) and a[1] is None
+
+
+def test_last_known_pos_anchor_flag_off_none(monkeypatch):
+    """Ta sama sytuacja z flagą OFF = stare zachowanie (None) — bajt-identyczne."""
+    from dispatch_v2 import courier_resolver as CR
+    _set_flag(True)
+    monkeypatch.setattr(PR, "ENABLE_GPS_FREE_ANCHOR_LAST_POS", False)
+    monkeypatch.setattr(CR, "_load_last_known_pos", lambda: {"9": _lp_entry(5)})
+    a = PR._start_anchor("9", [], {}, {}, NOW)
+    assert a is None
+
+
+def test_last_known_pos_anchor_respects_ttl(monkeypatch):
+    """Wpis starszy niż TTL (25 min) ignorowany (parytet courier_resolver rescue)."""
+    from dispatch_v2 import courier_resolver as CR
+    _set_flag(True)
+    monkeypatch.setattr(PR, "ENABLE_GPS_FREE_ANCHOR_LAST_POS", True)
+    monkeypatch.setattr(CR, "_load_last_known_pos", lambda: {"9": _lp_entry(40)})
+    a = PR._start_anchor("9", [], {}, {}, NOW)
+    assert a is None  # za stary → brak kotwicy (nie phantom)
+
+
+def test_last_known_pos_anchor_fresh_gps_still_wins(monkeypatch):
+    """Świeży GPS dalej ma pierwszeństwo nad store (store to OSTATNIA deska)."""
+    from dispatch_v2 import courier_resolver as CR
+    _set_flag(True)
+    monkeypatch.setattr(PR, "ENABLE_GPS_FREE_ANCHOR_LAST_POS", True)
+    monkeypatch.setattr(CR, "_load_last_known_pos", lambda: {"9": _lp_entry(5)})
+    a = PR._start_anchor("9", [], {}, {"9": _gps(2)}, NOW)
+    assert a[2] == "gps_pwa"

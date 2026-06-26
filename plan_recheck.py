@@ -586,6 +586,10 @@ def _start_anchor(cid: str, oids: List[str], orders_state: Dict[str, Any],
     if ENABLE_GPS_FREE_ANCHOR_LAST_POS:
         lp = _last_known_pos_anchor(cid, now)
         if lp is not None:
+            _log.info(
+                f"START_ANCHOR_LAST_POS cid={cid} pos={tuple(round(x, 4) for x in lp)} "
+                f"— plan regeneruje (kurier bez GPS, inaczej skip→tkwi)"
+            )
             return lp, None, "last_known_pos"  # pozycja=ostatnia znana, start=teraz
     return None
 
