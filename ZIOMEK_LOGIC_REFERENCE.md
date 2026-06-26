@@ -501,8 +501,24 @@ the module constant. ~80+ flags exist. Notable **current** states:
   `speed_mult_for_tier`, consumed by **both** twin route-sim paths: `feasibility_v2:811` (proposal/R6)
   **and** `plan_recheck` `_gen_one_bag_plan` (`_sweep`, the live ETA/display/re-sequence path — wired
   2026-06-26 for parity; previously ran at 1.0). Flag **OFF (default) → 1.0 = byte-identical/legacy**;
-  ON → calibrated. Rollback = flag OFF (hot-reload, no restart). Magnitude = aggressive step 1; deepen
-  later from composition-clean GPS-motion data. `slow`/`new` stay 1.0 (no clean data).
+  ON → calibrated. ⛔ **ROLLED BACK same-day (flag OFF):** composition-clean GPS-motion
+  (`courier_speed_build`: motion ~1.375×OSRM = NOT faster, `NO_PER_COURIER_SIGNAL`) + June-05 traffic
+  recalib (drive-leg bias already −1.37 min) showed the over-prediction is **not in drive speed** — it
+  is in DWELL/route-composition. Drive mult was mis-targeted (would overshoot). Code stays inert for
+  possible fleet-level reuse. See next entry for the real fix.
+- 🟢 **`ENABLE_PLAN_RECHECK_TIER_DWELL` (2026-06-26, Adrian — the real fix).** Brings `plan_recheck`
+  `_gen_one_bag_plan` (`_sweep`, the display/re-sequence path used by `panel_watcher`) to **parity with
+  `feasibility_v2:804`** which already uses `common.dwell_for_tier` (dropoff per tier gold 1.5 / std+
+  2.5 / std 4.5 …, **recalibrated 2026-06-10 from 7496 eta_calibration_log records — absorbs per-tier
+  ETA residual, unbiased**). Root cause of the displayed-ETA drift: plan_recheck used the route_simulator
+  **default** dropoff 3.5 (vs real geofence ~2.2 min, n=793, and vs feasibility's calibrated gold 1.5) →
+  **over**-estimated displayed ETA by ~dwell_gap × stops → "times drift down after each stop". This is
+  the **correct layer** (drive is fine). Self-bounded: it does not introduce a free shortening knob — it
+  reuses the already-live, calibrated, unbiased feasibility dwell, so gold shortens by exactly the
+  calibrated amount and **std actually lengthens** (3.5→4.5). Does **NOT** touch the R6/feasibility hard
+  gate (separate path, already on dwell_for_tier) — only display/sequencing. Flag OFF (default) → route_
+  simulator default dwell = byte-identical; ON → dwell_for_tier. Rollback = flag OFF (hot). Deploy needs
+  `dispatch-panel-watcher` restart (long-running consumer of plan_recheck) — flag-OFF restart is byte-id.
 
 `kill_switch_to_v1=true` reverts the whole v2 to the legacy `gastro_trigger.sh`.
 

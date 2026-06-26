@@ -345,6 +345,13 @@ def _bag_signature(oids: List[str], orders_state: Dict[str, Any]) -> str:
 # ostatniego przystanku). Tak liczy człowiek, gdy nikt nie ma GPS.
 GPS_FRESH_MAX_MIN = float(os.environ.get("GPS_FRESH_MAX_MIN", "10"))
 ENABLE_GPS_FREE_ANCHOR = os.environ.get("ENABLE_GPS_FREE_ANCHOR", "0") == "1"
+# 2026-06-26 (case 509 „plan tkwi 52 min"): ostatnia deska kotwicy dla kuriera BEZ
+# świeżego GPS + bez kotwicy zdarzeniowej/committed → sięgnij do last-known-pos store
+# (`courier_last_pos.json`, ten sam co courier_resolver rescue 08.06: TTL 25 min + bbox).
+# Bez tego `_start_anchor`=None → `_gen_one_bag_plan` pomija CAŁEGO kuriera → plan nigdy
+# się nie regeneruje (tkwi invalidated ze starymi dowiezionymi + bez nowych aktywnych).
+# Parytet z decyzyjną ścieżką (courier_resolver JUŻ rescue'uje). Default OFF = bez zmiany.
+ENABLE_GPS_FREE_ANCHOR_LAST_POS = os.environ.get("ENABLE_GPS_FREE_ANCHOR_LAST_POS", "0") == "1"
 # F1 unifikacja silnika trasy: przekaż REALNY picked_up_at do symulatora (jak
 # ścieżka propozycji `_bag_dict_to_ordersim`), żeby kara R6 soft-deadline
 # (route_simulator_v2:1030) chroniła NIESIONE jedzenie. Bez tego anchor=None →
@@ -574,7 +581,28 @@ def _start_anchor(cid: str, oids: List[str], orders_state: Dict[str, Any],
     # Ostatnia deska: stary GPS lepszy niż nic (np. wszystko assigned bez committed).
     if has_gps:
         return (float(glat), float(glon)), None, "gps_stale"
+    # Kurier BEZ GPS: sięgnij do last-known-pos store (parytet z courier_resolver rescue
+    # 08.06) zamiast pomijać kuriera → plan się regeneruje, nie tkwi stale. Gated flagą.
+    if ENABLE_GPS_FREE_ANCHOR_LAST_POS:
+        lp = _last_known_pos_anchor(cid, now)
+        if lp is not None:
+            return lp, None, "last_known_pos"  # pozycja=ostatnia znana, start=teraz
     return None
+
+
+def _last_known_pos_anchor(cid: str, now: datetime) -> Optional[Tuple[float, float]]:
+    """(lat,lon) z last-known-pos store dla kuriera bez GPS, albo None. Reużywa
+    czyste funkcje courier_resolver (TTL 25 min + bbox + dozwolone źródła) — JEDEN
+    szkielet, zero duplikacji walidacji. Fail-soft (każdy błąd → None = stare zachowanie)."""
+    try:
+        from dispatch_v2 import courier_resolver as _CR
+        entry = _CR._load_last_known_pos().get(str(cid))
+        if entry is None:
+            return None
+        res = _CR._rescue_from_last_pos(entry, now)  # ((lat,lon), source, age) | None
+        return res[0] if res is not None else None
+    except Exception:
+        return None
 
 
 def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
@@ -616,19 +644,30 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         )
         ck_by_oid[oid] = rec.get("czas_kuriera_warsaw")
 
-    # 2026-06-26: tier-aware drive speed mult — PARYTET z feasibility_v2:811
-    # (cs.tier_bag = courier_tiers.json[cid].bag.tier). Bez tego plan_recheck
-    # (żywy ETA + display + re-sekwencja) liczył pesymistycznie vs ścieżka
-    # propozycji → drift ETA w dół po każdym stopie. Bramka flagą
-    # ENABLE_DRIVE_SPEED_TIER_CORRECTION w speed_mult_for_tier (OFF → 1.0 =
-    # legacy/byte-identyczny). Fail-safe → 1.0.
+    # 2026-06-26 tier-aware — PARYTET z feasibility_v2:804/811 (cs.tier_bag =
+    # courier_tiers.json[cid].bag.tier).
+    #  • drive_speed_mult: speed_mult_for_tier (flaga ENABLE_DRIVE_SPEED_TIER_
+    #    CORRECTION OFF → 1.0; drive jest OK — motion ~OSRM, czerwcowy bias −1.37).
+    #  • DWELL (właściwa warstwa driftu): plan_recheck (display/re-sekwencja przez
+    #    panel_watcher) używał DEFAULTU route_simulator (dropoff 3.5) vs realny ~2.2
+    #    (geofence n=793) i feasibility dwell_for_tier (gold 1.5, REKALIBR. 10.06 z
+    #    eta_calibration_log 7496 rek — absorbuje per-tier rezyduum ETA) → ZAWYŻAŁ
+    #    wyświetlany ETA o ~dwell_gap×stops = „czasy lecą w dół po stopie". Bramka
+    #    ENABLE_PLAN_RECHECK_TIER_DWELL (OFF → default = byte-identyczny). NIE dotyka
+    #    bramki R6/feasibility (osobna ścieżka, już używa dwell_for_tier). Fail-safe.
     try:
         from dispatch_v2 import common as _C
         from dispatch_v2 import courier_resolver as _CR
         _tinfo = _CR._load_courier_tiers().get(str(cid)) or {}
-        _drive_speed_mult = _C.speed_mult_for_tier((_tinfo.get("bag") or {}).get("tier"))
+        _tier = (_tinfo.get("bag") or {}).get("tier")
+        _drive_speed_mult = _C.speed_mult_for_tier(_tier)
+        if _C.flag("ENABLE_PLAN_RECHECK_TIER_DWELL", False):
+            _dwell_pickup, _dwell_dropoff = _C.dwell_for_tier(_tier)
+        else:
+            _dwell_pickup, _dwell_dropoff = R.DWELL_PICKUP_MIN, R.DWELL_DROPOFF_MIN
     except Exception:
         _drive_speed_mult = 1.0
+        _dwell_pickup, _dwell_dropoff = R.DWELL_PICKUP_MIN, R.DWELL_DROPOFF_MIN
 
     # Sweep designacji new_order (route_simulator_v2 traktuje 1 order jako wstawiany)
     # → wybierz najlepszy plan deterministycznie (sla, dur, sequence).
@@ -639,7 +678,9 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
             bag = [sims[o] for o in ordered_l if o != newoid]
             p = R.simulate_bag_route_v2(pos, bag, sims[newoid], now=now, sla_minutes=35,
                                         earliest_departure=anchor_departure,
-                                        drive_speed_mult=_drive_speed_mult)
+                                        drive_speed_mult=_drive_speed_mult,
+                                        dwell_pickup=_dwell_pickup,
+                                        dwell_dropoff=_dwell_dropoff)
             key = (p.sla_violations, round(p.total_duration_min, 3), tuple(p.sequence))
             if best is None or key < best[0]:
                 best = (key, p)
