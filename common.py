@@ -855,6 +855,16 @@ GEOCODE_CACHE_TTL_DAYS = float(os.environ.get("GEOCODE_CACHE_TTL_DAYS", "30"))
 GEOCODE_CACHE_DRIFT_ALERT_M = float(os.environ.get("GEOCODE_CACHE_DRIFT_ALERT_M", "200"))
 ENABLE_GEOCODE_CACHE_TTL = os.environ.get("ENABLE_GEOCODE_CACHE_TTL", "1") == "1"
 ENABLE_GEOCODE_CACHE_DRIFT_ALERT = os.environ.get("ENABLE_GEOCODE_CACHE_DRIFT_ALERT", "0") == "1"
+# NEGATYWNY cache geokodowania (P1-latencja, 2026-06-26): adres odrzucony przez weryfikację
+# (verify_reject = zła dzielnica/APPROXIMATE/partial) NIE trafiał do cache → przy KAŻDYM
+# kolejnym wystąpieniu świeże zapytanie do Google + weryfikacja → znów reject (zmierzone ~460
+# jałowych odrzuceń/3h, +~200ms median na dotkniętych decyzjach). Neg-cache zapamiętuje „ten
+# adres się nie geokoduje" z krótkim TTL → kolejne lookupy zwracają None bez sieci. TYLKO
+# deterministyczny verify_reject — NIE bbox_reject (bywa transient poison Google, Nominatim go
+# odzyskuje) ani transient google/osrm fail. Kill-switch + TTL hot przez flags.json. TTL krótki
+# bo po fixie dzielnicy (P3b) adres może stać się ważny → wpis sam wygaśnie.
+ENABLE_GEOCODE_NEGATIVE_CACHE = os.environ.get("ENABLE_GEOCODE_NEGATIVE_CACHE", "1") == "1"
+GEOCODE_NEG_CACHE_TTL_SEC = float(os.environ.get("GEOCODE_NEG_CACHE_TTL_SEC", "21600"))  # 6h
 
 # ============================================================
 # Geocode bbox guard (2026-05-30) — odrzuca out-of-bbox wyniki Google PRZED

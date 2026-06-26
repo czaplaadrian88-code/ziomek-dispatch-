@@ -35,6 +35,10 @@ from dispatch_v2 import geocode_verify as _gv
 GMAPS_ENV = Path("/root/.openclaw/workspace/.secrets/gmaps.env")
 CACHE_PATH = Path("/root/.openclaw/workspace/dispatch_state/geocode_cache.json")
 RESTAURANT_CACHE_PATH = Path("/root/.openclaw/workspace/dispatch_state/restaurant_coords.json")
+# Negatywny cache: adresy DETERMINISTYCZNIE odrzucone (verify_reject/bbox_reject) — patrz
+# common.ENABLE_GEOCODE_NEGATIVE_CACHE. Klucz = _normalize(address, city). Wartość:
+# {"reason": str, "cached_at": float}. TTL z GEOCODE_NEG_CACHE_TTL_SEC.
+NEG_CACHE_PATH = Path("/root/.openclaw/workspace/dispatch_state/geocode_neg_cache.json")
 
 _log = setup_logger("geocoding", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
 _lock = threading.Lock()
@@ -204,6 +208,44 @@ def cache_gc_stale(path: Path, ttl_sec: Optional[float] = None) -> dict:
             _save_cache(path, cache)
     _log.info(f"cache_gc_stale path={path.name} scanned={scanned} removed={removed} kept_legacy={kept_legacy}")
     return {"scanned": scanned, "removed": removed, "kept_legacy": kept_legacy}
+
+
+def _neg_cache_enabled():
+    return C.flag("ENABLE_GEOCODE_NEGATIVE_CACHE",
+                  getattr(C, "ENABLE_GEOCODE_NEGATIVE_CACHE", True))
+
+
+def _neg_cache_check(key: str):
+    """True gdy `key` ma ŚWIEŻY wpis w neg-cache (adres deterministycznie nie-geokodowalny).
+    Czyta pod _lock. Defensywny — błąd/wyłączone → False (czyli normalny geocode)."""
+    if not _neg_cache_enabled():
+        return False
+    ttl = float(getattr(C, "GEOCODE_NEG_CACHE_TTL_SEC", 21600))
+    try:
+        with _lock:
+            neg = _load_cache(NEG_CACHE_PATH)
+        entry = neg.get(key)
+        if not isinstance(entry, dict):
+            return False
+        cached_at = entry.get("cached_at")
+        if not isinstance(cached_at, (int, float)):
+            return False
+        return (time.time() - float(cached_at)) < ttl
+    except Exception:
+        return False
+
+
+def _neg_cache_put(key: str, reason: str):
+    """Zapisz deterministyczny reject do neg-cache (atomic, pod _lock). Defensywny."""
+    if not _neg_cache_enabled():
+        return
+    try:
+        with _lock:
+            neg = _load_cache(NEG_CACHE_PATH)
+            neg[key] = {"reason": reason, "cached_at": time.time()}
+            _save_cache(NEG_CACHE_PATH, neg)
+    except Exception as _e:
+        _log.warning(f"neg_cache_put fail key={key!r}: {_e!r}")
 
 
 def _normalize(address: str, city: str) -> str:
@@ -457,6 +499,16 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
             _stats["stale_invalidated"] += 1
             _log.info(f"cache TTL invalidate key={key!r} age_d={((time.time() - entry.get('cached_at', 0)) / 86400.0):.1f}")
 
+    # NEGATYWNY cache (2026-06-26): adres wcześniej DETERMINISTYCZNIE odrzucony
+    # (verify/bbox) → zwróć None bez sieci. Oszczędza zapytanie Google + weryfikację
+    # i ucisza spam logów (był ~460 GEOCODE_VERIFY_REJECT/3h na tych samych adresach).
+    if not streetless and _neg_cache_check(key):
+        _stats.setdefault("neg_cache_hits", 0)
+        _stats["neg_cache_hits"] += 1
+        _audit_log("address", address, effective_city, None, None, "neg_cache",
+                   (time.perf_counter() - t_start) * 1000.0, error="neg_cache_hit")
+        return None
+
     _stats["misses"] += 1
 
     # Google primary — explicit city w query
@@ -510,6 +562,9 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
             )
             _audit_log("address", address, effective_city, result[0], result[1],
                        source, (time.perf_counter() - t_start) * 1000.0, error="bbox_reject")
+            # NIE neg-cache'ujemy bbox_reject — bywa TRANSIENTNY (poison Google z płd. Polski,
+            # który Nominatim odzyskuje); blokada na TTL mogłaby zamknąć dobry adres. Neg-cache
+            # tylko deterministyczny verify_reject (niżej).
             return None
 
     # FAZA 2 — warstwa weryfikacji poprawności (location_type + dzielnica +
@@ -534,6 +589,8 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
             _audit_log("address", address, effective_city, result[0], result[1],
                        source, (time.perf_counter() - t_start) * 1000.0,
                        error="verify_reject")
+            if not streetless:
+                _neg_cache_put(key, "verify_reject")
             return None
 
     if not streetless:
