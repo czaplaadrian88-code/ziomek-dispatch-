@@ -519,6 +519,20 @@ the module constant. ~80+ flags exist. Notable **current** states:
   gate (separate path, already on dwell_for_tier) — only display/sequencing. Flag OFF (default) → route_
   simulator default dwell = byte-identical; ON → dwell_for_tier. Rollback = flag OFF (hot). Deploy needs
   `dispatch-panel-watcher` restart (long-running consumer of plan_recheck) — flag-OFF restart is byte-id.
+- 🟢 **`ENABLE_GPS_FREE_ANCHOR_LAST_POS` (2026-06-26, Adrian — case 509 "plan stuck 52 min").** Adds a
+  **last-resort anchor** to `plan_recheck._start_anchor`: when a courier has no fresh GPS **and** no event
+  anchor **and** no committed-pickup anchor, it now falls back to the **last-known-pos store**
+  (`courier_last_pos.json`) instead of returning `None`. Without it, `_start_anchor=None` → `_gen_one_bag_plan`
+  **skips the whole courier** → the invalidated plan **never regenerates** (lingers with already-delivered
+  stops + missing active orders). Reuses `courier_resolver._load_last_known_pos`+`_rescue_from_last_pos`
+  (TTL 25 min + Białystok bbox + allowed sources — **one skeleton, zero dup**); brings plan_recheck regen to
+  **parity with the decision path** which has rescued no-GPS couriers since 2026-06-08. Strictly additive:
+  only fills the `None`→skip case, so **cannot regress** (OFF = byte-identical). Material effect is the
+  oneshot `dispatch-plan-recheck` gap-fill only (panel_watcher `recanon_courier` bails on invalidated plans,
+  so the store-fallback never bites there). Fires rarely (~1 stuck no-GPS courier at a time) — logs
+  `START_ANCHOR_LAST_POS` per firing for the evidence trail. Flag OFF (default). LIVE via env drop-in on
+  `dispatch-plan-recheck` (oneshot picks up next tick, **no daemon restart**). Rollback = rm drop-in +
+  daemon-reload (next tick OFF). Commit `bd2f7a2`.
 
 `kill_switch_to_v1=true` reverts the whole v2 to the legacy `gastro_trigger.sh`.
 
