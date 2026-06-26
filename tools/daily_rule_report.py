@@ -7,7 +7,7 @@ import json
 import math
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -63,6 +63,9 @@ def load_shadow_df(since=None, days=None):
                     continue
                 date_w = _parse_date(ts_val)
                 if date_w is None:
+                    continue
+                # stream-filtr: stare dni odrzucamy JUZ tu (pamiec — 106 MB pliku)
+                if since is not None and date_w < since:
                     continue
 
                 order_id = str(data["order_id"]) if data.get("order_id") is not None else None
@@ -262,9 +265,15 @@ def main():
     parser.add_argument("--days", type=int, default=None, help="Liczba ostatnich dni (różnych dat)")
     parser.add_argument("--out", type=str, default=OUT_DEFAULT)
     parser.add_argument("--no-save", action="store_true", help="Nie zapisuj JSON, tylko drukuj")
+    parser.add_argument("--tail-days", type=int, default=None,
+                        help="kroczace okno N ostatnich dni (od dzis, Warsaw) — pamieciowo bezpieczne dla timera")
     args = parser.parse_args()
 
-    df = load_shadow_df(since=args.since, days=args.days)
+    since = args.since
+    if since is None and args.tail_days is not None:
+        since = (datetime.now(ZoneInfo("Europe/Warsaw")) - timedelta(days=args.tail_days)).strftime("%Y-%m-%d")
+
+    df = load_shadow_df(since=since, days=args.days)
     outcomes = load_outcomes_map()
     rows = build_report(df, outcomes)
     print_report(rows)
