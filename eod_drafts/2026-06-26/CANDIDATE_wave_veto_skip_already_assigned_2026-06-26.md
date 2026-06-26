@@ -2,7 +2,7 @@
 
 **Data:** 2026-06-26 (peak — analiza read-only, deploy off-peak)
 **Zgłaszający:** Adrian (case Dariusz Maruszak 509: Street Mama Thai + Raj)
-**Protokół:** [[ziomek-change-protocol]] ETAP 0→7. **Status: ETAP 0-3 + root-cause zrobione, czeka ACK na kształt fixu.**
+**Protokół:** [[ziomek-change-protocol]] ETAP 0→7. **Status: 🟢 LIVE 26.06 — commit `35186f6` tag `bundle-deliv-coloc-2026-06-26`, flaga `ENABLE_BUNDLE_DELIVERY_COLOCATION` ON. Detal/rollback → [[bundle-delivery-colocation-2026-06-26]].**
 
 > ⚠️ KOREKTA DIAGNOZY (po nakazie Adriana „najpierw znajdź problem"): pierwotnie celowałem w wave-veto. Pełny rekord `shadow_decisions` pokazał, że **wave-veto to objaw wtórny** — root cause to **pickup-centryczny kredyt bundla**.
 
