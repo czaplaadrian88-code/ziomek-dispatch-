@@ -21,6 +21,7 @@ from dispatch_v2.common import (
     coords_in_bialystok_bbox,
     ENABLE_F4_COURIER_POS_PICKUP_PROXY,
     ENABLE_F4_COURIER_POS_INTERP,
+    ENABLE_CHECKPOINT_TS_WARSAW_PARSE,
 )
 from dispatch_v2 import state_machine
 from dispatch_v2 import osrm_client
@@ -36,6 +37,35 @@ def _f4_flag(name: str) -> bool:
     testy patchują courier_resolver.ENABLE_F4_*) → False.
     """
     return bool(flag(name, globals().get(name, False)))
+
+
+def _parse_checkpoint_ts(raw) -> Optional[datetime]:
+    """Parsuje state'owy timestamp checkpointu odbioru/doręczenia
+    (`picked_up_at`/`delivered_at` = NAIWNY czas Warsaw z panelu Rutcom) → aware UTC.
+
+    Flaga ENABLE_CHECKPOINT_TS_WARSAW_PARSE (default OFF, czytana _f4_flag):
+      OFF — legacy: fromisoformat + tzinfo=UTC (naive traktowany jak UTC). Dla
+            świeżego odbioru elapsed/age UJEMNE → interp + recent-activity martwe,
+            ZOMBIE-guard zaniża wiek o offset Warszawy. BAJT-IDENTYCZNE ze stanem
+            sprzed fixu (mirror granicy OrderSim sprzed parse_panel_timestamp).
+      ON  — kanoniczny parse_panel_timestamp (naive→Warszawa; 'T'/offset→UTC) — jak
+            granica OrderSim w dispatch_pipeline → poprawne elapsed/age → predykcja
+            pozycji no-GPS ożywa (interp odpala, świeże checkpointy używane, ghost
+            łapany od realnego progu).
+    Zwraca aware-UTC datetime albo None (fail-soft — caller decyduje, jak dotąd).
+    """
+    if raw is None:
+        return None
+    if _f4_flag("ENABLE_CHECKPOINT_TS_WARSAW_PARSE"):
+        return parse_panel_timestamp(raw)
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
 
 KURIER_PINY_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny.json"
 COURIER_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
@@ -583,23 +613,18 @@ def _bag_not_stale(order: Dict, now_utc: datetime) -> bool:
     if flag("ENABLE_ZOMBIE_PICKUP_AT_GUARD", default=True):
         _pu_ghost = order.get("picked_up_at")
         if _pu_ghost:
-            try:
-                _pu_dt = datetime.fromisoformat(str(_pu_ghost).replace("Z", "+00:00"))
-                if _pu_dt.tzinfo is None:
-                    _pu_dt = _pu_dt.replace(tzinfo=timezone.utc)
-                if (now_utc - _pu_dt).total_seconds() / 60.0 > _threshold:
-                    _zseen = getattr(_bag_not_stale, "_warned_zombie", set())
-                    _zoid = str(order.get("order_id") or "?")
-                    if _zoid not in _zseen and len(_zseen) < 50:
-                        _log.warning(
-                            f"ZOMBIE_PICKUP_GUARD oid={_zoid} status={status} picked_up_at "
-                            f">{_threshold}min → STALE (ghost: odebrane dawno, nigdy nie "
-                            f"domknięte — nie zatruwa carry/R6)")
-                        _zseen.add(_zoid)
-                        _bag_not_stale._warned_zombie = _zseen
-                    return False
-            except Exception:
-                pass  # parse fail → gałąź per-status oceni
+            _pu_dt = _parse_checkpoint_ts(_pu_ghost)  # parse fail → None → gałąź per-status oceni
+            if _pu_dt is not None and (now_utc - _pu_dt).total_seconds() / 60.0 > _threshold:
+                _zseen = getattr(_bag_not_stale, "_warned_zombie", set())
+                _zoid = str(order.get("order_id") or "?")
+                if _zoid not in _zseen and len(_zseen) < 50:
+                    _log.warning(
+                        f"ZOMBIE_PICKUP_GUARD oid={_zoid} status={status} picked_up_at "
+                        f">{_threshold}min → STALE (ghost: odebrane dawno, nigdy nie "
+                        f"domknięte — nie zatruwa carry/R6)")
+                    _zseen.add(_zoid)
+                    _bag_not_stale._warned_zombie = _zseen
+                return False
 
     # Timestamp wyboru per status
     if status == "assigned":
@@ -612,14 +637,13 @@ def _bag_not_stale(order: Dict, now_utc: datetime) -> bool:
     if not ts_str:
         return True  # brak timestampu = defensywnie zachowaj
 
-    try:
-        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        age_min = (now_utc - ts).total_seconds() / 60.0
-        return age_min < _threshold
-    except Exception:
+    # picked_up_at = Warsaw-naive (helper poprawia przy fl: ON); updated_at/assigned_at
+    # = aware-UTC (parse_panel_timestamp i legacy dają to samo). Bliźniak ZOMBIE-guard.
+    ts = _parse_checkpoint_ts(ts_str)
+    if ts is None:
         return True  # parse fail = defensywnie zachowaj
+    age_min = (now_utc - ts).total_seconds() / 60.0
+    return age_min < _threshold
 
 
 def _compute_interp_pos(
@@ -641,11 +665,8 @@ def _compute_interp_pos(
     ts_str = order.get("picked_up_at")
     if not pickup or not delivery or not ts_str:
         return None
-    try:
-        ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-    except Exception:
+    ts = _parse_checkpoint_ts(ts_str)
+    if ts is None:
         return None
     elapsed_min = (now_utc - ts).total_seconds() / 60.0
     if elapsed_min < 0:
@@ -1021,20 +1042,17 @@ def build_fleet_snapshot(
                 ts_str = o.get(ts_key)
                 if not ts_str:
                     continue
-                try:
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                except Exception as _e:
+                ts = _parse_checkpoint_ts(ts_str)
+                if ts is None:
                     # A1: order ts parse fail dawniej silent → bag aggregation
                     # może gubić ordery (Lekcja #32 + #80 tracone pole pattern).
                     seen = getattr(build_fleet_snapshot, "_warned_order_ts", set())
-                    key = (type(_e).__name__, ts_key, str(ts_str)[:40])
+                    key = (ts_key, str(ts_str)[:40])
                     if key not in seen and len(seen) < 50:
-                        _log.warning(f"order {ts_key} parse fail ({type(_e).__name__}: {_e}) input={ts_str!r}")
+                        _log.warning(f"order {ts_key} parse fail input={ts_str!r}")
                         seen.add(key)
                         build_fleet_snapshot._warned_order_ts = seen
                     continue
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
                 age = (now_utc - ts).total_seconds() / 60.0
                 if age < 0 or age >= RECENT_MAX_MIN:
                     continue

@@ -66,6 +66,7 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_FAIL12_SCHEDULE_FAILOPEN",
     "ENABLE_F4_COURIER_POS_PICKUP_PROXY",
     "ENABLE_F4_COURIER_POS_INTERP",
+    "ENABLE_CHECKPOINT_TS_WARSAW_PARSE",
     "ENABLE_C2_NEG_GAP_DECAY",
     "ENABLE_PRE_SHIFT_DEPARTURE_CLAMP",
     "ENABLE_OBJ_SPAN_COST",
@@ -2823,6 +2824,17 @@ ENABLE_F4_COURIER_POS_PICKUP_PROXY = _os.environ.get(
 # eod_drafts/2026-05-18/obj_f4_courier_position_design.md
 ENABLE_F4_COURIER_POS_INTERP = _os.environ.get(
     "ENABLE_F4_COURIER_POS_INTERP", "0") == "1"
+
+# TZ-FIX checkpointów (2026-06-26): `picked_up_at`/`delivered_at` w orders_state to
+# NAIWNY czas Warsaw (panel Rutcom), a 3 miejsca w courier_resolver re-parsowały je
+# jako UTC → dla świeżego odbioru elapsed/age UJEMNE → interpolacja pozycji (F4 Krok 2)
+# + recent-activity fallback MARTWE (0/16984 wystąpień interp), a ZOMBIE-guard zaniżał
+# wiek odbioru o offset Warszawy (~2h). Flaga ON → parse przez parse_panel_timestamp
+# (naive→Warszawa) jak granica OrderSim → predykcja pozycji no-GPS ożywa. Default OFF =
+# bajt-identyczne (legacy fromisoformat+UTC). Czytane przez courier_resolver._f4_flag
+# (flags.json hot-reload + module-global fallback). Design+replay: sprint 2026-06-26.
+ENABLE_CHECKPOINT_TS_WARSAW_PARSE = _os.environ.get(
+    "ENABLE_CHECKPOINT_TS_WARSAW_PARSE", "0") == "1"
 
 # Sprint OBJ F1 (2026-05-17): R6 soft upper bound w solverze TSP — CumulVar
 # węzła delivery > pickup_anchor+35 → kara coeff×overshoot. Sprawia że solver

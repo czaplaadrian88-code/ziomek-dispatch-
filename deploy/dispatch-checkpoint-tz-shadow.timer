@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek checkpoint-TZ shadow — co 5 min (measure-first; korpus OFF/ON do werdyktu flip ENABLE_CHECKPOINT_TS_WARSAW_PARSE po oknie 2 dni)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Persistent=false
+Unit=dispatch-checkpoint-tz-shadow.service
+
+[Install]
+WantedBy=timers.target

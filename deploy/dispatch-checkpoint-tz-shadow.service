@@ -1,0 +1,27 @@
+[Unit]
+Description=Ziomek checkpoint-TZ shadow — ETAP 5 ON/OFF dla ENABLE_CHECKPOINT_TS_WARSAW_PARSE (read-only, OSOBNY PROCES; build_fleet_snapshot 2x OFF/ON z neutralizacja zapisow; mierzy ozywienie interpolacji pozycji no-GPS + uratowanych z no_gps + przesuniecia pozycji + bag-zombie; loguje checkpoint_tz_shadow.jsonl; ZERO wplywu na decyzje/stan/Telegram)
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/checkpoint_tz_shadow.py
+After=network.target
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.checkpoint_tz_shadow
+# Peak-friendly: niski priorytet CPU + I/O (2x build_fleet_snapshot + OSRM dla interp)
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=120
+MemoryHigh=300M
+MemoryMax=400M
+TasksMax=256
+# Shadow ginie PIERWSZY przy OOM (nie wypiera dispatch-shadow/panel-watcher)
+OOMScoreAdjust=200
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/checkpoint_tz_shadow.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/checkpoint_tz_shadow.log
+
+[Install]
+WantedBy=multi-user.target
