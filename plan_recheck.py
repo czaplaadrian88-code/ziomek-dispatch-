@@ -741,7 +741,12 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
             "coords": {"lat": float(coords[0]), "lng": float(coords[1])},
             "scheduled_at": None,
             "predicted_at": t.isoformat(),
-            "dwell_min": 1.0 if kind == "pickup" else 3.5,
+            # 2026-06-26: stempel dwell SPÓJNY z tym, czego użył simulate powyżej
+            # (_dwell_pickup/_dwell_dropoff — tier-aware gdy flaga ON, default 1.0/3.5
+            # gdy OFF = byte-identyczny). Wcześniej hardkod 3.5 rozjeżdżał się z
+            # policzonym predicted_at i psuł wybór pozycji w plan_manager.insert_stop_
+            # optimal (_sequence_total_min sumuje dwell_min). Teraz konsekwentny.
+            "dwell_min": _dwell_pickup if kind == "pickup" else _dwell_dropoff,
             "status_at_plan_time": "picked_up" if rec.get("status") == "picked_up" else "assigned",
         })
 
