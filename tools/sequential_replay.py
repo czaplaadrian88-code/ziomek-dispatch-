@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sequential_replay — sekwencyjny harness „Ziomek sam prowadzi flotę".
+"""sequential_replay — sekwencyjny harness „Ziomek sam prowadzi flotę”.
 
 Pytanie: jak wyglądałby REALNY plan floty, gdyby Ziomek obsługiwał wszystkie
 zlecenia z danego okna sam — z commitem każdej decyzji?
@@ -656,6 +656,212 @@ def print_rolling_report(base_sum, roll_sum, churn, roll_recs, base_recs):
     print("=" * 72)
 
 
+# ──────────────────────────────────────────────────────────────────────
+# diff / fleet‑level comparison helpers
+# ──────────────────────────────────────────────────────────────────────
+
+def _gini(values: list) -> float:
+    """Współczynnik Giniego dla listy liczb (countów)."""
+    n = len(values)
+    if n <= 1:
+        return 0.0
+    total = sum(values)
+    if total == 0:
+        return 0.0
+    sorted_vals = sorted(values)
+    weighted = sum((i + 1) * v for i, v in enumerate(sorted_vals))
+    gini = (2.0 * weighted / (n * total)) - (n + 1) / n
+    return gini
+
+
+def _fleet_metrics(summary: dict) -> dict:
+    """Podstawowe metryki floty z pojedynczego *summary*."""
+    sla = int(summary.get("sla_breaches_in_plans", 0))
+    be = int(summary.get("best_effort", 0))
+    zf = int(summary.get("propose_0_feasible", 0))
+    alerts = int((summary.get("auto_route") or {}).get("ALERT", 0))
+    counts = [int(c) for _, c in (summary.get("distribution") or [])]
+    couriers_used = len(counts)
+    max_pile = max(counts) if counts else 0
+    mean_load = sum(counts) / couriers_used if couriers_used else 0.0
+    pile_ratio = max_pile / mean_load if mean_load > 0 else 0.0
+    gini = _gini(counts)
+    peek = max(summary.get("peak_bag", {}).values()) if summary.get("peak_bag") else 0
+    return {
+        "sla_breaches": sla,
+        "best_effort": be,
+        "zero_feasible": zf,
+        "alerts": alerts,
+        "couriers_used": couriers_used,
+        "max_pile": max_pile,
+        "pile_ratio": pile_ratio,
+        "gini": gini,
+        "peak_bag_max": peek,
+    }
+
+
+def _pick_fleet_summary(report: dict) -> tuple:
+    """Wybiera fleet summary z raportu wg priorytetu.
+
+    Zwraca (summary_dict, uzyty_klucz).
+    """
+    candidates = [
+        "summary_warm",
+        "summary_cold",
+        "summary_baseline",
+        "summary_rolling",
+        "summary_naive",
+    ]
+    for key in candidates:
+        if key in report and report[key] is not None:
+            return report[key], key
+    raise ValueError(
+        f"Brak fleet summary (sprawdzono: {', '.join(candidates)}) w raporcie."
+    )
+
+
+def _metrics_delta(base: dict, cand: dict) -> dict:
+    """Różnica cand – base dla każdej metryki (pod kluczami obu)."""
+    keys = [
+        "sla_breaches",
+        "best_effort",
+        "zero_feasible",
+        "alerts",
+        "couriers_used",
+        "max_pile",
+        "pile_ratio",
+        "gini",
+        "peak_bag_max",
+    ]
+    delta = {}
+    for k in keys:
+        delta[k] = cand.get(k, 0) - base.get(k, 0)
+    return delta
+
+
+def _determine_verdict(
+    base: dict,
+    cand: dict,
+    delta: dict,
+    target: str,
+    gini_tol: float,
+    pile_tol: float,
+) -> tuple:
+    """Określa werdykt GO / NO‑GO i listę zablokowanych metryk.
+
+    Zwraca (verdict, blocked_by).
+    """
+    blocked = []
+    # regresje
+    if delta["sla_breaches"] > 0:
+        blocked.append("sla_breaches")
+    if delta["best_effort"] > 0:
+        blocked.append("best_effort")
+    if delta["zero_feasible"] > 0:
+        blocked.append("zero_feasible")
+    if delta["alerts"] > 0:
+        blocked.append("alerts")
+    if delta["gini"] > gini_tol:
+        blocked.append("gini")
+    if delta["pile_ratio"] > pile_tol:
+        blocked.append("pile_ratio")
+
+    if blocked:
+        return "NO-GO", blocked
+
+    # target improvement
+    if target not in cand:
+        raise ValueError(f"Nieznany target '{target}'")
+    target_improved = base[target] - cand[target] > 0
+    if target_improved:
+        return "GO", []
+    return "NO-GO", ["target_not_improved"]
+
+
+def run_diff(
+    base_path: str,
+    cand_path: str,
+    target: str,
+    gini_tol: float,
+    pile_tol: float,
+) -> dict:
+    """Wczytuje dwa raporty, oblicza metryki floty i wystawia werdykt.
+
+    Zwraca słownik gotowy do JSON/druku.
+    """
+    with open(base_path, encoding="utf-8") as fb:
+        base_data = json.load(fb)
+    with open(cand_path, encoding="utf-8") as fc:
+        cand_data = json.load(fc)
+
+    base_sum, base_label = _pick_fleet_summary(base_data)
+    cand_sum, cand_label = _pick_fleet_summary(cand_data)
+
+    base_m = _fleet_metrics(base_sum)
+    cand_m = _fleet_metrics(cand_sum)
+
+    delta = _metrics_delta(base_m, cand_m)
+    verdict, blocked_by = _determine_verdict(
+        base_m, cand_m, delta, target, gini_tol, pile_tol
+    )
+
+    return {
+        "base_label": base_label,
+        "cand_label": cand_label,
+        "base": base_m,
+        "cand": cand_m,
+        "delta": delta,
+        "verdict": verdict,
+        "blocked_by": blocked_by,
+        "target": target,
+    }
+
+
+def print_diff(diffres: dict) -> None:
+    """Wypisuje czytelne porównanie fleet‑level."""
+    print(
+        "Porównanie FLEET-LEVEL z sekwencyjnego replayu (cascade-aware)"
+        f"\n  base ({diffres['base_label']}) vs cand ({diffres['cand_label']})\n"
+    )
+    metrics_order = [
+        "sla_breaches",
+        "best_effort",
+        "zero_feasible",
+        "alerts",
+        "couriers_used",
+        "max_pile",
+        "pile_ratio",
+        "gini",
+        "peak_bag_max",
+    ]
+    headers = f"{'metryka':20} {'BASE':>8} {'CAND':>8} {'DELTA':>8}"
+    print(headers)
+    print("-" * len(headers))
+    for m in metrics_order:
+        b = diffres["base"].get(m, 0)
+        c = diffres["cand"].get(m, 0)
+        d = diffres["delta"].get(m, 0)
+        if isinstance(b, int) and isinstance(c, int) and isinstance(d, float):
+            # d to delta jako float – wyświetlamy z 3 miejscami
+            print(f"{m:20} {b:8} {c:8} {d:8.3f}")
+        elif isinstance(b, float) or isinstance(c, float):
+            # metryki zmiennoprzecinkowe
+            print(f"{m:20} {b:8.3f} {c:8.3f} {d:8.3f}")
+        else:
+            # int
+            print(f"{m:20} {b:8} {c:8} {d:8}")
+
+    verdict = diffres["verdict"]
+    blocked = diffres["blocked_by"]
+    line = f"WERDYKT: {verdict}"
+    if blocked:
+        line += f" (zablokowane przez: {', '.join(blocked)})"
+    print("\n" + line)
+
+
+# ──────────────────────────────────────────────────────────────────────
+
+
 def main():
     ap = argparse.ArgumentParser(description="sekwencyjny replay Ziomka")
     ap.add_argument("--date", default="2026-05-17")
@@ -664,8 +870,38 @@ def main():
     ap.add_argument("--out", default=None, help="ścieżka raportu JSON")
     ap.add_argument("--rolling", action="store_true",
                     help="tryb rolling re-opt (baseline one-shot vs rolling late-binding)")
+    # ── diff / fleet‑level comparison arguments ──
+    ap.add_argument("--diff-base", default=None, metavar="PATH",
+                    help="ścieżka do raportu JSON z przebiegu baseline")
+    ap.add_argument("--diff-cand", default=None, metavar="PATH",
+                    help="ścieżka do raportu JSON z przebiegu kandydata")
+    ap.add_argument("--target", default="sla_breaches",
+                    help="metryka docelowa fleet: sla_breaches|best_effort|gini|"
+                         "pile_ratio|alerts|zero_feasible (domyślnie: sla_breaches)")
+    ap.add_argument("--gini-tol", type=float, default=0.02,
+                    help="tolerancja dla wzrostu Giniego (domyślnie 0.02)")
+    ap.add_argument("--pile-tol", type=float, default=0.10,
+                    help="tolerancja dla wzrostu pile_ratio (domyślnie 0.10)")
+
     args = ap.parse_args()
 
+    # ---- diff mode ----
+    if args.diff_base is not None and args.diff_cand is not None:
+        result = run_diff(
+            args.diff_base,
+            args.diff_cand,
+            args.target,
+            args.gini_tol,
+            args.pile_tol,
+        )
+        print_diff(result)
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=1, default=str)
+            print(f"\nraport JSON → {args.out}")
+        return
+
+    # ---- original replay paths unchanged ----
     orders = load_orders(args.date, args.hf, args.ht)
     roster = build_roster(args.date, args.hf, args.ht)
     print(f"okno: {args.date} {args.hf:02d}:00-{args.ht:02d}:00 UTC  |  "
