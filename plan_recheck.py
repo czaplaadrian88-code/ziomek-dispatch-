@@ -616,6 +616,20 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         )
         ck_by_oid[oid] = rec.get("czas_kuriera_warsaw")
 
+    # 2026-06-26: tier-aware drive speed mult — PARYTET z feasibility_v2:811
+    # (cs.tier_bag = courier_tiers.json[cid].bag.tier). Bez tego plan_recheck
+    # (żywy ETA + display + re-sekwencja) liczył pesymistycznie vs ścieżka
+    # propozycji → drift ETA w dół po każdym stopie. Bramka flagą
+    # ENABLE_DRIVE_SPEED_TIER_CORRECTION w speed_mult_for_tier (OFF → 1.0 =
+    # legacy/byte-identyczny). Fail-safe → 1.0.
+    try:
+        from dispatch_v2 import common as _C
+        from dispatch_v2 import courier_resolver as _CR
+        _tinfo = _CR._load_courier_tiers().get(str(cid)) or {}
+        _drive_speed_mult = _C.speed_mult_for_tier((_tinfo.get("bag") or {}).get("tier"))
+    except Exception:
+        _drive_speed_mult = 1.0
+
     # Sweep designacji new_order (route_simulator_v2 traktuje 1 order jako wstawiany)
     # → wybierz najlepszy plan deterministycznie (sla, dur, sequence).
     def _sweep():
@@ -624,7 +638,8 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         for newoid in ordered_l:
             bag = [sims[o] for o in ordered_l if o != newoid]
             p = R.simulate_bag_route_v2(pos, bag, sims[newoid], now=now, sla_minutes=35,
-                                        earliest_departure=anchor_departure)
+                                        earliest_departure=anchor_departure,
+                                        drive_speed_mult=_drive_speed_mult)
             key = (p.sla_violations, round(p.total_duration_min, 3), tuple(p.sequence))
             if best is None or key < best[0]:
                 best = (key, p)

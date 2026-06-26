@@ -491,6 +491,18 @@ the module constant. ~80+ flags exist. Notable **current** states:
   logs served/B/B-lite + freshness/punctuality/drive metrics to `b_route_shadow.jsonl`; one-shot review
   (`tools/b_route_shadow_review.py`, timer **2026-06-30**) joins `order_ids`→`sla_log.jsonl` for the
   GO/NO-GO verdict (preliminary signal: B trades carried freshness for total-duration → leaning **NO-GO**).
+- 🟢 **`ENABLE_DRIVE_SPEED_TIER_CORRECTION` (2026-06-26, Adrian).** Per-tier drive-speed multiplier on
+  every route leg (`common.speed_mult_for_tier` → `DRIVE_SPEED_MULT_BY_TIER` gold 0.78 / std+ 0.82 /
+  std 0.82 / slow,new 1.0). Root cause: the live ETA systematically **over**-estimated drive time
+  (fleet median −4.7 min delivered-vs-live-ETA, n=657; a stable bag's predicted `dur` drifts down each
+  tick as GPS re-anchoring catches the courier ahead of plan — Bartek 123: 54→44 min in 15 min). That
+  pessimism mis-ranks proposals (couriers shown "will be late / breach R6" though they arrive on time)
+  and churns re-sequencing. The mult (<1.0 = faster) is applied at the **single source**
+  `speed_mult_for_tier`, consumed by **both** twin route-sim paths: `feasibility_v2:811` (proposal/R6)
+  **and** `plan_recheck` `_gen_one_bag_plan` (`_sweep`, the live ETA/display/re-sequence path — wired
+  2026-06-26 for parity; previously ran at 1.0). Flag **OFF (default) → 1.0 = byte-identical/legacy**;
+  ON → calibrated. Rollback = flag OFF (hot-reload, no restart). Magnitude = aggressive step 1; deepen
+  later from composition-clean GPS-motion data. `slow`/`new` stay 1.0 (no clean data).
 
 `kill_switch_to_v1=true` reverts the whole v2 to the legacy `gastro_trigger.sh`.
 

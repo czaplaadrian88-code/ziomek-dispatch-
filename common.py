@@ -2063,10 +2063,17 @@ def dwell_for_tier(tier):
 # DWELL zastosowanie jej do jazdy = podwójne liczenie. Patrz
 # eod_drafts/2026-05-17/sprint3_tier_aware_drive_design.md.
 DRIVE_SPEED_MULT_DEFAULT = 1.0
+# 2026-06-26 (Adrian): kalibracja per-tier z biasu ŻYWEGO ETA. Model zawyżał
+# czas jazdy → propozycje/R6 widziały kurierów jako "spóźnią się / przekroczą",
+# choć realnie zdążali. Dowód: dur stałego worka leci w dół po każdym ticku
+# (Bartek 123: 54→44 min/15min) + flota mediana -4.7 min dostawy vs żywy ETA
+# (n=657). <1.0 = szybciej (krótsze nogi). Krok 1 agresywny (Adrian wybór
+# 2026-06-26). slow/new = 1.0 (brak czystych danych). Pogłębienie z GPS-motion
+# (composition-clean) w następnym kroku. Bramka flagą poniżej.
 DRIVE_SPEED_MULT_BY_TIER = {
-    'gold': 1.0,
-    'std+': 1.0,
-    'std':  1.0,
+    'gold': 0.78,
+    'std+': 0.82,
+    'std':  0.82,
     'slow': 1.0,
     'new':  1.0,
 }
@@ -2075,9 +2082,15 @@ DRIVE_SPEED_MULT_BY_TIER = {
 def speed_mult_for_tier(tier):
     """Mnożnik tempa jazdy kuriera dla route_simulator leg_min.
 
-    >1.0 = wolniej (dłuższe nogi trasy). Nieznany/None tier →
+    <1.0 = szybciej (krótsze nogi trasy). Nieznany/None tier →
     DRIVE_SPEED_MULT_DEFAULT (1.0).
+
+    Bramka flagą ENABLE_DRIVE_SPEED_TIER_CORRECTION (hot-reload):
+    OFF (default) → 1.0 dla każdego tieru = legacy/inert (zero zmiany decyzji);
+    ON → wartości kalibrowane per tier. Rollback = flaga OFF (bez restartu).
     """
+    if not flag("ENABLE_DRIVE_SPEED_TIER_CORRECTION", False):
+        return DRIVE_SPEED_MULT_DEFAULT
     return DRIVE_SPEED_MULT_BY_TIER.get(tier, DRIVE_SPEED_MULT_DEFAULT)
 
 # V3.26 STEP 3 (R-09 WAVE-GEOMETRIC-VETO) — refinement V3.19h BUG-2.
