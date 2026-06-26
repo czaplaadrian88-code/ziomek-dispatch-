@@ -34,6 +34,11 @@ ACKALERT_STOP_PP= float(os.environ.get("CANARY_ACKALERT_STOP_PP", "8.0"))
 LAT_P95_STOP_PCT= float(os.environ.get("CANARY_LAT_P95_STOP_PCT", "15.0"))
 REORDER_LO      = float(os.environ.get("CANARY_REORDER_LO_PCT", "5.0"))
 REORDER_HI      = float(os.environ.get("CANARY_REORDER_HI_PCT", "25.0"))
+# MIN-SAMPLE: poniżej tylu decyzji w oknie gate'y STATYSTYCZNE degradujemy STOP/WARN→INFO
+# (off-peak n jest strukturalnie maleńkie → szum). G1-błędy (pick failed) NIGDY nie wyciszane.
+MIN_N_FOR_STOP    = int(os.environ.get("CANARY_MIN_N_FOR_STOP", "30"))
+TOD_BASELINE_DAYS = int(os.environ.get("CANARY_TOD_DAYS", "7"))
+_SUPPRESSIBLE_UNDER_MIN_N = {"G2a-KOORD", "G2b-auto-route", "G2c-reorder", "G1-latencja"}
 
 
 def _pct(part, whole):
@@ -148,7 +153,73 @@ def flag_state():
         return {"select_on": None, "shadow_on": None}
 
 
-def gates(cur, log, flags, base):
+def compute_tod_curve(days, cutoff):
+    """Per-godzina UTC {koord%, n} z shadow_decisions PRZED `cutoff` (=SELECT-OFF), ostatnie `days` dni.
+    Zwraca (koord_by_hour, n_by_hour) z kluczami-stringami (json-friendly). READ-ONLY."""
+    from collections import defaultdict
+    agg = defaultdict(lambda: [0, 0])  # hour -> [n, koord]
+    start = cutoff - timedelta(days=days)
+    if not os.path.exists(SHADOW):
+        return {}, {}
+    for line in _rot_lines(SHADOW, start):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except Exception:
+            continue
+        t = _parse_iso(r.get("ts"))
+        if t is None or t < start or t >= cutoff:
+            continue
+        a = agg[t.hour]
+        a[0] += 1
+        if str(r.get("verdict")) == "KOORD":
+            a[1] += 1
+    koord_by_hour, n_by_hour = {}, {}
+    for h, (n, k) in agg.items():
+        if n <= 0:
+            continue
+        n_by_hour[str(h)] = n
+        koord_by_hour[str(h)] = round(_pct(k, n), 2)
+    return koord_by_hour, n_by_hour
+
+
+def _overlap_min(a0, a1, b0, b1):
+    """Minuty pokrycia [a0,a1] ∩ [b0,b1]."""
+    lo = max(a0, b0)
+    hi = min(a1, b1)
+    return max(0.0, (hi - lo).total_seconds() / 60.0)
+
+
+def _expected_koord_tod(base, since, now):
+    """Oczekiwany KOORD% dla SPAN okna [since, now] złożony z krzywej per-godzina (SELECT-OFF)
+    ważonej wolumenem historycznym × minutami pokrycia każdej godziny. Precyzyjnie obsługuje okno
+    straddlujące klif KOORD (np. 07→08). Zwraca float albo None (brak krzywej / zero wagi → fallback)."""
+    if not base:
+        return None
+    kbh = base.get("koord_by_hour")
+    nbh = base.get("n_by_hour")
+    if not kbh or not nbh:
+        return None
+    num = den = 0.0
+    one = timedelta(hours=1)
+    h = since.replace(minute=0, second=0, microsecond=0)
+    while h <= now:
+        key = str(h.hour)
+        n_h = nbh.get(key)
+        k_h = kbh.get(key)
+        if n_h and k_h is not None:
+            w = float(n_h) * _overlap_min(since, now, h, h + one) / 60.0
+            num += w * float(k_h)
+            den += w
+        h += one
+    if den <= 0:
+        return None
+    return num / den
+
+
+def gates(cur, log, flags, base, since, now):
     """Zwróć listę (gate, status, detal). status ∈ GO/STOP/WARN/INFO."""
     out = []
     n = cur["n"]
@@ -167,11 +238,18 @@ def gates(cur, log, flags, base):
     else:
         out.append(("G1-latencja", "INFO", f"p95 {cur['lat_p95']}ms (brak baseline)"))
 
-    # G2a KOORD
-    if base and base.get("koord_pct") is not None:
+    # G2a KOORD — time-of-day aware: porównaj do OCZEKIWANEGO KOORD% dla pory dnia okna
+    # (krzywa per-godzina SELECT-OFF). Usuwa confound „poranny off-peak vs peakowy baseline".
+    # Próg +5pp (KANON planu) zachowany — wykrywa REALNY wzrost ponad normę tej pory dnia.
+    exp_tod = _expected_koord_tod(base, since, now)
+    if exp_tod is not None:
+        d = cur["koord_pct"] - exp_tod
+        st = "STOP" if d > KOORD_STOP_PP else "GO"
+        out.append(("G2a-KOORD", st, f"{cur['koord_pct']:.1f}% vs oczek.(tod) {exp_tod:.1f}% (Δ{d:+.1f}pp, limit +{KOORD_STOP_PP:.0f})"))
+    elif base and base.get("koord_pct") is not None:
         d = cur["koord_pct"] - base["koord_pct"]
         st = "STOP" if d > KOORD_STOP_PP else "GO"
-        out.append(("G2a-KOORD", st, f"{cur['koord_pct']:.1f}% vs baseline {base['koord_pct']:.1f}% (Δ{d:+.1f}pp, limit +{KOORD_STOP_PP:.0f})"))
+        out.append(("G2a-KOORD", st, f"{cur['koord_pct']:.1f}% vs baseline {base['koord_pct']:.1f}% (Δ{d:+.1f}pp, limit +{KOORD_STOP_PP:.0f}) [flat — brak krzywej tod]"))
     else:
         out.append(("G2a-KOORD", "INFO", f"{cur['koord_pct']:.1f}% (brak baseline)"))
 
@@ -195,6 +273,17 @@ def gates(cur, log, flags, base):
     # hygiena: SHADOW nie powinien być ON razem z SELECT
     if flags.get("select_on") and flags.get("shadow_on"):
         out.append(("hygiena-shadow", "WARN", "SELECT i SHADOW oba ON → shadow liczy się po mutacji (zaślepia + double-compute); ustaw SHADOW=false"))
+
+    # MIN-SAMPLE guard: przy małej próbie (typowo off-peak poranek) gate'y STATYSTYCZNE są szumem
+    # → degraduj ich STOP/WARN do INFO (nie spamuj Telegrama). G1-błędy (realny pick-failed) zostaje.
+    if n < MIN_N_FOR_STOP:
+        degraded = []
+        for name, st, det in out:
+            if name in _SUPPRESSIBLE_UNDER_MIN_N and st in ("STOP", "WARN"):
+                degraded.append((name, "INFO", f"[n={n}<{MIN_N_FOR_STOP} za mała próba — wyciszony] {det}"))
+            else:
+                degraded.append((name, st, det))
+        out = degraded
     return out
 
 
@@ -202,6 +291,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--window-min", type=int, default=120)
     ap.add_argument("--save-baseline", action="store_true")
+    ap.add_argument("--save-tod-baseline", action="store_true",
+                    help="policz krzywą KOORD%/godzina (SELECT-OFF, pre-cutoff) i WMERGUJ do baseline (nie kasuje innych pól)")
+    ap.add_argument("--tod-cutoff", default=None, help="ISO UTC — dane PRZED tym = SELECT-OFF (default: now)")
+    ap.add_argument("--tod-days", type=int, default=TOD_BASELINE_DAYS)
     ap.add_argument("--baseline", default=BASELINE_DEFAULT)
     ap.add_argument("--notify", action="store_true")
     a = ap.parse_args()
@@ -229,6 +322,35 @@ def main():
             print(f"[zapis baseline fail: {e!r}]"); return 1
         return 0
 
+    if a.save_tod_baseline:
+        cutoff = _parse_iso(a.tod_cutoff) if a.tod_cutoff else now
+        if cutoff is None:
+            print(f"[--tod-cutoff nieparsowalne: {a.tod_cutoff!r}]"); return 1
+        kbh, nbh = compute_tod_curve(a.tod_days, cutoff)
+        if not kbh:
+            print("[brak danych SELECT-OFF do krzywej TOD — nic nie zapisano]"); return 1
+        existing = {}
+        if os.path.exists(a.baseline):
+            try:
+                existing = json.load(open(a.baseline))
+            except Exception:
+                existing = {}
+        existing["koord_by_hour"] = kbh
+        existing["n_by_hour"] = nbh
+        existing["tod_cutoff"] = cutoff.isoformat()
+        existing["tod_days"] = a.tod_days
+        existing["tod_saved_at"] = now.isoformat()
+        try:
+            tmp = a.baseline + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(existing, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, a.baseline)
+        except Exception as e:
+            print(f"[zapis tod baseline fail: {e!r}]"); return 1
+        print(f"[tod baseline wmergowany {a.baseline}] godzin={len(kbh)} cutoff={cutoff.isoformat()} days={a.tod_days}")
+        print(json.dumps({h: f"{kbh[h]}% (n={nbh[h]})" for h in sorted(kbh, key=int)}, indent=2, ensure_ascii=False))
+        return 0
+
     base = None
     if os.path.exists(a.baseline):
         try:
@@ -236,7 +358,7 @@ def main():
         except Exception as e:
             print(f"[baseline nieczytelny: {e!r}]")
 
-    g = gates(cur, log, flags, base)
+    g = gates(cur, log, flags, base, since, now)
     stops = [x for x in g if x[1] == "STOP"]
     warns = [x for x in g if x[1] == "WARN"]
     overall = "🔴 STOP (rollback)" if stops else ("🟡 WARN" if warns else "🟢 GO")
@@ -247,8 +369,13 @@ def main():
     lines.append(f"KOORD {cur['koord_pct']}% | ACK+ALERT {cur['ack_alert_pct']}% | AUTO {cur['auto_pct']}% | lat p50 {cur['lat_p50']} p95 {cur['lat_p95']} ms")
     if base:
         lines.append(f"baseline: KOORD {base.get('koord_pct')}% | ACK+ALERT {base.get('ack_alert_pct')}% | lat p95 {base.get('lat_p95')} ms")
+        _exp = _expected_koord_tod(base, since, now)
+        if _exp is not None:
+            lines.append(f"oczek.(tod) KOORD dla pory dnia tego okna: {_exp:.1f}% (krzywa per-godzina SELECT-OFF, cutoff {str(base.get('tod_cutoff', '?'))[:16]})")
     else:
         lines.append("baseline: BRAK (uruchom --save-baseline przed flipem)")
+    if cur["n"] < MIN_N_FOR_STOP:
+        lines.append(f"⚠ próba n={cur['n']} < {MIN_N_FOR_STOP} → gate'y statystyczne wyciszone do INFO (off-peak/mała próba)")
     lines.append("")
     for name, st, det in g:
         mark = {"GO": "🟢", "STOP": "🔴", "WARN": "🟡", "INFO": "⚪"}.get(st, "·")
