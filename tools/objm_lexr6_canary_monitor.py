@@ -27,6 +27,11 @@ SHADOW = f"{SCRIPTS}/logs/shadow_decisions.jsonl"
 LOGS = [f"{SCRIPTS}/logs/dispatch.log", f"{SCRIPTS}/logs/watcher.log"]
 FLAGS = f"{SCRIPTS}/flags.json"
 BASELINE_DEFAULT = "/root/.openclaw/workspace/dispatch_state/objm_lexr6_canary_baseline.json"
+# EDGE-TRIGGERED notify: stan ostatnio wysłanego werdyktu (sygnatura+poziom+czas) — alert tylko
+# gdy werdykt SIĘ ZMIENI (nowy gate / eskalacja / powrót do GO), nie co tick. Patrz _notify_decision.
+NOTIFY_STATE = "/root/.openclaw/workspace/dispatch_state/objm_lexr6_canary_notify_state.json"
+# Utrzymujący się STOP/WARN przypominaj nie częściej niż co tyle h (env-overridable). 0 = bez przypomnień.
+NOTIFY_REMIND_H = float(os.environ.get("CANARY_NOTIFY_REMIND_H", "2.0"))
 
 # Progi gate'ów (env-overridable; KANON = plan, Adrian potwierdza domenę)
 KOORD_STOP_PP   = float(os.environ.get("CANARY_KOORD_STOP_PP", "5.0"))
@@ -334,6 +339,70 @@ def gates(cur, log, flags, base, since, now):
     return out
 
 
+def _load_notify_state():
+    try:
+        with open(NOTIFY_STATE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_notify_state(d):
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(NOTIFY_STATE), prefix=".notify_state_")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(d, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, NOTIFY_STATE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        raise
+
+
+def _verdict_signature(stops, warns):
+    """(poziom, sygnatura) werdyktu. Sygnatura zmienia się gdy zmieni się poziom LUB zbiór
+    odpalonych gate'ów (nazwa:stan) — to wyzwala edge-triggered alert."""
+    level = "STOP" if stops else ("WARN" if warns else "GO")
+    items = ";".join(f"{n}:{s}" for n, s, _ in sorted(list(stops) + list(warns), key=lambda x: x[0]))
+    return level, f"{level}|{items}"
+
+
+def _notify_decision(stops, warns, prev, now, remind_after):
+    """Pure (testowalne): czy wysłać Telegram (edge-triggered) + treść + nowy stan.
+
+    Reguła „w odpowiednim momencie, nie co tick":
+      - GO: alert TYLKO gdy poprzednio było STOP/WARN (powrót do normy), inaczej cisza.
+      - STOP/WARN: alert gdy sygnatura ≠ poprzednia (nowy/eskalacja), albo gdy ten sam
+        stan utrzymuje się dłużej niż remind_after (rzadkie przypomnienie). Inaczej cisza.
+    Zwraca (send: bool, msg: str|None, new_state: dict).
+    """
+    level, sig = _verdict_signature(stops, warns)
+    prev_sig = prev.get("signature")
+    prev_level = prev.get("level")
+    prev_sent_raw = prev.get("last_sent")
+    prev_sent = _parse_iso(prev_sent_raw) if prev_sent_raw else None
+    send, msg = False, None
+    if level == "GO":
+        if prev_level and prev_level != "GO":
+            send = True
+            msg = f"🟢 CANARY objm-lexr6 GO — werdykt wrócił do normy (był {prev_level})"
+    else:
+        head = "🔴 CANARY objm-lexr6 STOP" if stops else "🟡 CANARY objm-lexr6 WARN"
+        detail = "; ".join(f"{n}:{s}" for n, s, _ in (stops or warns))
+        if sig != prev_sig:
+            send, msg = True, f"{head} | {detail}"
+        elif remind_after and (prev_sent is None or (now - prev_sent) >= remind_after):
+            hh = remind_after.total_seconds() / 3600.0
+            send, msg = True, f"{head} (nadal >{hh:.0f}h) | {detail}"
+    new_sent = now.isoformat() if send else prev_sent_raw
+    return send, msg, {"signature": sig, "level": level, "last_sent": new_sent}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--window-min", type=int, default=120)
@@ -433,14 +502,24 @@ def main():
     txt = "\n".join(lines)
     print(txt)
 
-    if a.notify and (stops or warns):
+    if a.notify:
+        # EDGE-TRIGGERED: alert tylko przy ZMIANIE werdyktu (+ rzadkie przypomnienie utrzymującego
+        # się STOP/WARN), nie co tick. Stan czytany/zapisywany TYLKO przy --notify, żeby ręczny
+        # read-only przebieg nie nadpisał stanu timera.
+        prev = _load_notify_state()
+        send, msg, new_state = _notify_decision(stops, warns, prev, now, timedelta(hours=NOTIFY_REMIND_H))
+        if send:
+            try:
+                sys.path.insert(0, SCRIPTS)
+                from dispatch_v2.telegram_utils import send_admin_alert
+                send_admin_alert(msg, priority="low")
+            except Exception as e:
+                print(f"[notify pominięte: {e!r}]")
+                new_state["last_sent"] = prev.get("last_sent")  # nie przesuwaj zegara → retry/remind zadziała
         try:
-            sys.path.insert(0, SCRIPTS)
-            from dispatch_v2.telegram_utils import send_admin_alert
-            head = "🔴 CANARY objm-lexr6 STOP" if stops else "🟡 CANARY objm-lexr6 WARN"
-            send_admin_alert(head + " | " + "; ".join(f"{n}:{s}" for n, s, _ in (stops or warns)), priority="low")
+            _save_notify_state(new_state)
         except Exception as e:
-            print(f"[notify pominięte: {e!r}]")
+            print(f"[zapis notify-state pominięty: {e!r}]")
     return 0
 
 
