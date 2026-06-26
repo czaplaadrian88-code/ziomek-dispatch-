@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Werdykt OVERSHOOT korekty drive-speed tier (LIVE 2026-06-26 ~17:25 UTC, flaga
+ENABLE_DRIVE_SPEED_TIER_CORRECTION, gold 0.78/std+ 0.82/std 0.82, AGRESYWNY krok).
+
+Ryzyko korekty: za mocno ściśnięte ETA → predykcja zbyt OPTYMISTYCZNA → kurier
+dostarcza PÓŹNIEJ niż przewidziano (overshoot) + feasibility/R6 przepuszcza za
+długi worek → realny breach/zimne jedzenie. Ten tool to sprawdza POMIAREM, nie
+deklaracją: porównuje cohort ON (dostawy po flipie) vs baseline (przed) na:
+  1) bias delivered_at − delivery_pred_last  (baseline ~ -4.7 min = pesymizm;
+     CEL: ku 0; ALARM gdy istotnie DODATNI = overshoot/optymizm),
+  2) % dostaw PÓŹNIEJ niż żywy ETA (late-vs-pred) ON vs baseline (ALARM gdy ↑),
+  3) split per tier (tylko gold/std+/std dotknięte; slow/new = kontrola).
+
+CLEAN → korekta trafna, zostaw. ALARM → cofnij ku 0.85/0.90 (flaga lub wartości).
+Read-only. --notify => Telegram (send_admin_alert). Bez peak-blokady.
+Powiązane: memory/drive-speed-tier-correction-2026-06-26.md, ziomek-change-protocol.
+"""
+import argparse
+import json
+import os
+import statistics as st
+import sys
+from datetime import datetime, timezone, timedelta
+
+BASE = "/root/.openclaw/workspace"
+CALIB = f"{BASE}/dispatch_state/ziomek_pred_calibration.jsonl"
+TIERS = f"{BASE}/dispatch_state/courier_tiers.json"
+OUT = f"{BASE}/dispatch_state/drive_speed_overshoot_verdict.txt"
+WARSAW = timezone(timedelta(hours=2))
+# Flip flagi ON (UTC). Override --flip.
+FLIP_DEFAULT = "2026-06-26T17:25:22+00:00"
+AFFECTED = {"gold", "std+", "std"}
+# Progi werdyktu (minuty / pkt proc.)
+BIAS_ALARM_MIN = 2.0       # mediana delivered-vs-pred > +2 min ON = overshoot
+LATE_FRAC_ALARM_PP = 12.0  # wzrost % late-vs-pred ON vs baseline > 12pp = ALARM
+
+
+def _p(s):
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _tier_of(tiers, cid):
+    e = tiers.get(str(cid))
+    return (e.get("bag") or {}).get("tier", "?") if isinstance(e, dict) else "?"
+
+
+def _deliv_bias(r):
+    """delivered_at − delivery_pred_last (min). + = później niż ETA (overshoot)."""
+    a = _p(r.get("delivered_at"))
+    p = _p(r.get("delivery_pred_last")) or _p(r.get("delivery_pred_assign"))
+    if not a or not p:
+        return None
+    a = a.replace(tzinfo=WARSAW)  # actual naive = Warsaw
+    return (a - p).total_seconds() / 60.0
+
+
+def compute(flip_iso):
+    flip = _p(flip_iso)
+    tiers = json.load(open(TIERS))
+    rows = []
+    with open(CALIB) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                pass
+    on, base = [], []
+    for r in rows:
+        d = _p(r.get("delivered_at"))
+        if not d:
+            continue
+        d = d.replace(tzinfo=WARSAW)
+        t = _tier_of(tiers, r.get("cid"))
+        if t not in AFFECTED:
+            continue
+        bias = _deliv_bias(r)
+        if bias is None:
+            continue
+        rec = {"tier": t, "bias": bias}
+        (on if d >= flip else base).append(rec)
+
+    def agg(rs):
+        b = [x["bias"] for x in rs]
+        if not b:
+            return {"n": 0}
+        late = sum(1 for x in b if x > 0)
+        return {
+            "n": len(b),
+            "bias_med": round(st.median(b), 1),
+            "bias_mean": round(st.mean(b), 1),
+            "late_frac_pp": round(100 * late / len(b), 1),
+        }
+
+    res = {"flip": flip_iso, "ON": agg(on), "baseline": agg(base)}
+    res["per_tier_ON"] = {
+        t: agg([x for x in on if x["tier"] == t]) for t in sorted(AFFECTED)
+    }
+    # Werdykt
+    o, bl = res["ON"], res["baseline"]
+    alarms = []
+    if o.get("n", 0) < 8:
+        verdict = "INCONCLUSIVE"
+        note = f"za mała próba ON (n={o.get('n',0)}<8) — poczekaj na pełny peak"
+    else:
+        if o["bias_med"] > BIAS_ALARM_MIN:
+            alarms.append(f"bias ON med={o['bias_med']:+}min > +{BIAS_ALARM_MIN} = OVERSHOOT (dostawy później niż ETA)")
+        if bl.get("n", 0) >= 8 and (o["late_frac_pp"] - bl["late_frac_pp"]) > LATE_FRAC_ALARM_PP:
+            alarms.append(f"late-vs-ETA wzrósł {bl['late_frac_pp']}%→{o['late_frac_pp']}% (+{round(o['late_frac_pp']-bl['late_frac_pp'],1)}pp)")
+        verdict = "ALARM" if alarms else "CLEAN"
+        note = "; ".join(alarms) if alarms else "bias siadł ku 0 bez wzrostu realnych spóźnień — korekta trafna"
+    res["verdict"] = verdict
+    res["note"] = note
+    return res
+
+
+def fmt(res):
+    o, bl = res["ON"], res["baseline"]
+    L = [f"🚦 DRIVE-SPEED OVERSHOOT WERDYKT: {res['verdict']}",
+         f"flip ON: {res['flip']}",
+         f"ON (po flipie):   n={o.get('n',0)} bias med={o.get('bias_med','?')} mean={o.get('bias_mean','?')} late-vs-ETA={o.get('late_frac_pp','?')}%",
+         f"baseline (przed): n={bl.get('n',0)} bias med={bl.get('bias_med','?')} late-vs-ETA={bl.get('late_frac_pp','?')}%",
+         "(bias + = dostawa PÓŹNIEJ niż ETA = overshoot; − = wcześniej = ok/zapas)"]
+    for t, a in res["per_tier_ON"].items():
+        L.append(f"  {t}: n={a.get('n',0)} bias med={a.get('bias_med','?')} late={a.get('late_frac_pp','?')}%")
+    L.append(f"→ {res['note']}")
+    if res["verdict"] == "ALARM":
+        L.append("ROLLBACK/dial: ENABLE_DRIVE_SPEED_TIER_CORRECTION=false (hot) LUB DRIVE_SPEED_MULT_BY_TIER ku 0.85/0.90 + restart dispatch-shadow.")
+    return "\n".join(L)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--flip", default=FLIP_DEFAULT)
+    ap.add_argument("--notify", action="store_true")
+    a = ap.parse_args()
+    res = compute(a.flip)
+    txt = fmt(res)
+    print(txt)
+    try:
+        with open(OUT, "w", encoding="utf-8") as fh:
+            fh.write(txt + "\n")
+    except Exception as e:
+        print(f"[warn] write OUT fail: {e}", file=sys.stderr)
+    if a.notify:
+        try:
+            sys.path.insert(0, f"{BASE}/scripts")
+            from dispatch_v2.telegram_utils import send_admin_alert
+            send_admin_alert(txt, source="drive_speed_overshoot_verdict")
+        except Exception as e:
+            print(f"[warn] telegram fail: {e}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
