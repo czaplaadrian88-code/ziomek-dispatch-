@@ -38,7 +38,8 @@ REORDER_HI      = float(os.environ.get("CANARY_REORDER_HI_PCT", "25.0"))
 # (off-peak n jest strukturalnie maleńkie → szum). G1-błędy (pick failed) NIGDY nie wyciszane.
 MIN_N_FOR_STOP    = int(os.environ.get("CANARY_MIN_N_FOR_STOP", "30"))
 TOD_BASELINE_DAYS = int(os.environ.get("CANARY_TOD_DAYS", "7"))
-_SUPPRESSIBLE_UNDER_MIN_N = {"G2a-KOORD", "G2b-auto-route", "G2c-reorder", "G1-latencja"}
+# G2a-KOORD ma własną próbę selektor-istotną (n_sel = excl early_bird) → guard inline, NIE tu.
+_SUPPRESSIBLE_UNDER_MIN_N = {"G2b-auto-route", "G2c-reorder", "G1-latencja"}
 
 
 def _pct(part, whole):
@@ -91,8 +92,15 @@ def _rot_lines(base, since):
             print(f"[skip rot {p}: {e!r}]")
 
 
+def _is_early_bird(r):
+    """KOORD z powodu `early_bird` (zlecenie złożone na długo przed odbiorem → koordynator
+    przytrzymuje). Wynik NIEZALEŻNY od wyboru kuriera → selektor objm-lexr6 nie ma na to wpływu,
+    więc wykluczamy z metryki G2a (num I denom), spójnie w oknie i w baseline."""
+    return str(r.get("reason") or "").strip().startswith("early_bird")
+
+
 def shadow_metrics(since):
-    n = koord = 0
+    n = koord = koord_eb = 0
     auto = {"AUTO": 0, "ACK": 0, "ALERT": 0}
     lats = []
     if not os.path.exists(SHADOW):
@@ -110,15 +118,24 @@ def shadow_metrics(since):
         n += 1
         if str(r.get("verdict")) == "KOORD":
             koord += 1
+            if _is_early_bird(r):
+                koord_eb += 1
         a = str(r.get("auto_route") or "")
         if a in auto:
             auto[a] += 1
         lm = r.get("latency_ms")
         if isinstance(lm, (int, float)):
             lats.append(float(lm))
+    # metryka selektor-istotna: wyklucz early_bird (od selektora niezależne) z num I denom
+    koord_sel = koord - koord_eb
+    n_sel = n - koord_eb
     return {
         "n": n,
-        "koord_pct": round(_pct(koord, n), 2),
+        "koord_pct": round(_pct(koord, n), 2),            # raw (transparencja / flat fallback)
+        "koord_eb": koord_eb,
+        "n_sel": n_sel,
+        "koord_sel": koord_sel,
+        "koord_pct_sel": round(_pct(koord_sel, n_sel), 2),  # G2a używa TEGO (excl early_bird)
         "ack_alert_pct": round(_pct(auto["ACK"] + auto["ALERT"], n), 2),
         "auto_pct": round(_pct(auto["AUTO"], n), 2),
         "lat_p50": _pctile(lats, 0.50),
@@ -157,7 +174,7 @@ def compute_tod_curve(days, cutoff):
     """Per-godzina UTC {koord%, n} z shadow_decisions PRZED `cutoff` (=SELECT-OFF), ostatnie `days` dni.
     Zwraca (koord_by_hour, n_by_hour) z kluczami-stringami (json-friendly). READ-ONLY."""
     from collections import defaultdict
-    agg = defaultdict(lambda: [0, 0])  # hour -> [n, koord]
+    agg = defaultdict(lambda: [0, 0, 0])  # hour -> [n, koord, koord_early_bird]
     start = cutoff - timedelta(days=days)
     if not os.path.exists(SHADOW):
         return {}, {}
@@ -176,12 +193,16 @@ def compute_tod_curve(days, cutoff):
         a[0] += 1
         if str(r.get("verdict")) == "KOORD":
             a[1] += 1
+            if _is_early_bird(r):
+                a[2] += 1
+    # krzywa SELEKTOR-ISTOTNA: per godzina wyklucz early_bird z num I denom (parytet z shadow_metrics)
     koord_by_hour, n_by_hour = {}, {}
-    for h, (n, k) in agg.items():
-        if n <= 0:
+    for h, (n, k, eb) in agg.items():
+        n_sel = n - eb
+        if n_sel <= 0:
             continue
-        n_by_hour[str(h)] = n
-        koord_by_hour[str(h)] = round(_pct(k, n), 2)
+        n_by_hour[str(h)] = n_sel
+        koord_by_hour[str(h)] = round(_pct(k - eb, n_sel), 2)
     return koord_by_hour, n_by_hour
 
 
@@ -238,20 +259,26 @@ def gates(cur, log, flags, base, since, now):
     else:
         out.append(("G1-latencja", "INFO", f"p95 {cur['lat_p95']}ms (brak baseline)"))
 
-    # G2a KOORD — time-of-day aware: porównaj do OCZEKIWANEGO KOORD% dla pory dnia okna
-    # (krzywa per-godzina SELECT-OFF). Usuwa confound „poranny off-peak vs peakowy baseline".
-    # Próg +5pp (KANON planu) zachowany — wykrywa REALNY wzrost ponad normę tej pory dnia.
+    # G2a KOORD — (1) SELEKTOR-ISTOTNA: wyklucz early_bird (od selektora niezależne) z num I denom;
+    # (2) TIME-OF-DAY aware: porównaj do oczek. KOORD% dla pory dnia okna (krzywa per-godzina,
+    # też excl early_bird). Próg +5pp (KANON planu) zachowany. Min-n liczony na n_sel (próba istotna).
+    koord_sel_pct = cur.get("koord_pct_sel", cur["koord_pct"])
+    n_sel = cur.get("n_sel", cur["n"])
+    eb = cur.get("koord_eb", 0)
+    _raw = f"; raw {cur['koord_pct']:.1f}% (early_bird {eb})"
     exp_tod = _expected_koord_tod(base, since, now)
-    if exp_tod is not None:
-        d = cur["koord_pct"] - exp_tod
+    if n_sel < MIN_N_FOR_STOP:
+        out.append(("G2a-KOORD", "INFO", f"[n_sel={n_sel}<{MIN_N_FOR_STOP} za mała próba selektor-istotna — wyciszony] sel {koord_sel_pct:.1f}%{_raw}"))
+    elif exp_tod is not None:
+        d = koord_sel_pct - exp_tod
         st = "STOP" if d > KOORD_STOP_PP else "GO"
-        out.append(("G2a-KOORD", st, f"{cur['koord_pct']:.1f}% vs oczek.(tod) {exp_tod:.1f}% (Δ{d:+.1f}pp, limit +{KOORD_STOP_PP:.0f})"))
+        out.append(("G2a-KOORD", st, f"sel {koord_sel_pct:.1f}% (excl early_bird) vs oczek.(tod) {exp_tod:.1f}% (Δ{d:+.1f}pp, limit +{KOORD_STOP_PP:.0f}){_raw}"))
     elif base and base.get("koord_pct") is not None:
-        d = cur["koord_pct"] - base["koord_pct"]
+        d = koord_sel_pct - base["koord_pct"]
         st = "STOP" if d > KOORD_STOP_PP else "GO"
-        out.append(("G2a-KOORD", st, f"{cur['koord_pct']:.1f}% vs baseline {base['koord_pct']:.1f}% (Δ{d:+.1f}pp, limit +{KOORD_STOP_PP:.0f}) [flat — brak krzywej tod]"))
+        out.append(("G2a-KOORD", st, f"sel {koord_sel_pct:.1f}% (excl early_bird) vs baseline {base['koord_pct']:.1f}% (Δ{d:+.1f}pp, limit +{KOORD_STOP_PP:.0f}) [flat — brak krzywej tod]{_raw}"))
     else:
-        out.append(("G2a-KOORD", "INFO", f"{cur['koord_pct']:.1f}% (brak baseline)"))
+        out.append(("G2a-KOORD", "INFO", f"sel {koord_sel_pct:.1f}% (brak baseline){_raw}"))
 
     # G2b auto-route
     if base and base.get("ack_alert_pct") is not None:
@@ -365,8 +392,8 @@ def main():
 
     lines = []
     lines.append(f"# CANARY objm-lexr6 — {now.isoformat(timespec='seconds')} (okno {a.window_min} min)")
-    lines.append(f"SELECT={flags['select_on']} SHADOW={flags['shadow_on']} | decyzji {cur['n']} | reorder {log['reorders']} | błędy {log['errors']}")
-    lines.append(f"KOORD {cur['koord_pct']}% | ACK+ALERT {cur['ack_alert_pct']}% | AUTO {cur['auto_pct']}% | lat p50 {cur['lat_p50']} p95 {cur['lat_p95']} ms")
+    lines.append(f"SELECT={flags['select_on']} SHADOW={flags['shadow_on']} | decyzji {cur['n']} (sel {cur.get('n_sel', cur['n'])}) | reorder {log['reorders']} | błędy {log['errors']}")
+    lines.append(f"KOORD sel {cur.get('koord_pct_sel', cur['koord_pct'])}% (raw {cur['koord_pct']}%, early_bird {cur.get('koord_eb', 0)}) | ACK+ALERT {cur['ack_alert_pct']}% | AUTO {cur['auto_pct']}% | lat p50 {cur['lat_p50']} p95 {cur['lat_p95']} ms")
     if base:
         lines.append(f"baseline: KOORD {base.get('koord_pct')}% | ACK+ALERT {base.get('ack_alert_pct')}% | lat p95 {base.get('lat_p95')} ms")
         _exp = _expected_koord_tod(base, since, now)
