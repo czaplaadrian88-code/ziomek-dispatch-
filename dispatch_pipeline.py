@@ -2775,6 +2775,49 @@ def get_pickup_ready_at(
     return max(now, pickup_utc)
 
 
+def compute_bundle_deliv_coloc(
+        bag_raw, delivery_coords, metrics, committed_breach, *,
+        flag_on, km_threshold, bonus_max, r6_hard_max, level1, level2):
+    """BUNDLE-DELIVERY-COLOCATION (Adrian 2026-06-26, case 509 Street Mama Thai+Raj).
+
+    Forced-bundle z 2 TWARDYCH reguł (NIE miękka geometria pickupów): kredyt gdy
+    nowa dostawa skolokowana z dostawą w bagu (różne restauracje, ten sam adres)
+    ORAZ R6 czyste (≤ r6_hard_max, bez naruszeń) ORAZ committed honorowane (±5,
+    `committed_breach is not True`). Zamyka pickup-centryczną ślepotę L1/L2.
+
+    Pure → testowalne (ON≠OFF). Zwraca (km|None, active:bool, bonus:float).
+    flag OFF / L1|L2 już daje kredyt / brak skolokowania → (·, False, 0.0).
+    """
+    if not flag_on or level1 is not None or level2 is not None:
+        return None, False, 0.0
+    if (not delivery_coords or tuple(delivery_coords) == (0.0, 0.0)
+            or delivery_coords[0] == 0.0):
+        return None, False, 0.0
+    best = None
+    for b in (bag_raw or []):
+        bd = b.get("delivery_coords")
+        if not bd or tuple(bd) == (0.0, 0.0) or bd[0] == 0.0:
+            continue
+        try:
+            dk = haversine(tuple(bd), tuple(delivery_coords))
+        except Exception:
+            continue
+        if best is None or dk < best:
+            best = dk
+    if best is None:
+        return None, False, 0.0
+    km = round(best, 3)
+    if km >= km_threshold:
+        return km, False, 0.0
+    r6_clean = (
+        not metrics.get("r6_per_order_violations")
+        and not metrics.get("r6_picked_up_violations")
+        and (metrics.get("r6_max_bag_time_min") or 0.0) <= r6_hard_max)
+    if r6_clean and committed_breach is not True:
+        return km, True, max(0.0, bonus_max - km * 10.0)
+    return km, False, 0.0
+
+
 def _bag_dict_to_order_in_bag_raw(d: dict) -> dict:
     """V3.18: bag dict → orders_raw entry dla build_courier_bag_state.
 
@@ -4525,12 +4568,38 @@ def _assess_order_impl(
                 )
             # edge: bag empty albo pickup=None → gap=None, bonus=0 (default)
 
+        # BUNDLE-DELIVERY-COLOCATION (Adrian 2026-06-26, case 509 Street Mama Thai+Raj):
+        # forced-bundle wynika z 2 TWARDYCH reguł, nie z miękkiej geometrii pickupów.
+        # Gdy nowa dostawa skolokowana z dostawą w bagu (różne restauracje, ten sam
+        # adres) ORAZ R6 czyste (≤35) ORAZ committed honorowane (±5) → kredyt + gate
+        # veta/FIX_C (to co-pickup wymuszony regułami, nie nawrót). L1/L2 (pickup-
+        # centryczne) dają tu 0 → ta luka. Default OFF (decision_flag).
+        bundle_deliv_coloc_km, bundle_deliv_coloc_active, bonus_deliv_coloc = (
+            compute_bundle_deliv_coloc(
+                bag_raw, delivery_coords, metrics, late_pickup_committed_breach,
+                flag_on=C.decision_flag("ENABLE_BUNDLE_DELIVERY_COLOCATION"),
+                km_threshold=C.BUNDLE_DELIV_COLOC_KM,
+                bonus_max=C.BUNDLE_DELIV_COLOC_BONUS_MAX,
+                r6_hard_max=C.BAG_TIME_HARD_MAX_MIN,
+                level1=bundle_level1, level2=bundle_level2))
+        if bundle_deliv_coloc_active:
+            bundle_bonus = bundle_bonus + bonus_deliv_coloc
+            log.info(
+                f"BUNDLE_DELIV_COLOC order={order_id} cid={cid} "
+                f"drop_dist={bundle_deliv_coloc_km:.3f}km "
+                f"r6={metrics.get('r6_max_bag_time_min')} "
+                f"commit_breach={late_pickup_committed_breach} "
+                f"+{bonus_deliv_coloc:.1f}")
+
         # V3.26 STEP 3 (R-09 WAVE-GEOMETRIC-VETO): refinement BUG-2.
         # Veto bonus gdy geometryczna incoherence: km(last_drop → new_pickup) > threshold.
         # Bug case Adrian Q&A 22.04 Kacper Sa: gap OK ale drops na 2 końcach miasta.
+        # BUNDLE-DELIVERY-COLOCATION: nie wetuj gdy dostawa skolokowana (co-pickup
+        # wymuszony committed+R6, nie nawrót).
         v326_wave_veto = False
         v326_wave_geometric_km = None
         if (C.ENABLE_V326_WAVE_GEOMETRIC_VETO and bonus_bug2_continuation > 0
+                and not bundle_deliv_coloc_active
                 and plan is not None and bag_raw):
             try:
                 pda = plan.predicted_delivered_at or {}
@@ -4567,7 +4636,8 @@ def _assess_order_impl(
         # (Hallera 3.25km NW, cos≈-0.39) wpada między progi i utrzymuje phantom +30.
         v326_wave_veto_newdrop = False
         if (getattr(C, "ENABLE_V326_WAVE_VETO_NEW_DROP", False)
-                and bonus_bug2_continuation > 0):
+                and bonus_bug2_continuation > 0
+                and not bundle_deliv_coloc_active):
             _nd_km = metrics.get("r1_new_drop_dist_km")
             _nd_cos = metrics.get("r1_new_drop_cosine")
             if (_nd_km is not None and _nd_cos is not None
@@ -4592,6 +4662,7 @@ def _assess_order_impl(
         fix_c_applied = False
         fix_c_deliv_spread_km = metrics.get("deliv_spread_km")
         if (C.decision_flag("ENABLE_BUNDLE_DELIV_SPREAD_CAP")
+                and not bundle_deliv_coloc_active
                 and len(bag_raw) >= 1
                 and fix_c_deliv_spread_km is not None
                 and fix_c_deliv_spread_km > C.BUNDLE_MAX_DELIV_SPREAD_KM):
@@ -5031,6 +5102,10 @@ def _assess_order_impl(
             "bonus_r4_raw": round(bonus_r4_raw, 2),
             "bonus_r4": round(bonus_r4, 2),
             "bundle_bonus": round(bundle_bonus, 2),
+            # BUNDLE-DELIVERY-COLOCATION (Adrian 2026-06-26) obs
+            "bundle_deliv_coloc_km": bundle_deliv_coloc_km,
+            "bundle_deliv_coloc_active": bundle_deliv_coloc_active,
+            "bonus_deliv_coloc": round(bonus_deliv_coloc, 2),
             # V3.27 Bug Z metrics (observability)
             "v327_min_drop_factor": v327_min_drop_factor,
             "v327_bundle_score_mult": round(v327_bundle_score_mult, 3) if v327_bundle_score_mult != 1.0 else 1.0,

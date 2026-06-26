@@ -145,6 +145,11 @@ ETAP4_DECISION_FLAGS = (
     # testy teraz izolowane (strip→OFF, chyba że test jawnie ustawi). Decyzyjna,
     # cross-proces (shadow/plan-recheck liczą tym samym silnikiem).
     "ENABLE_BEST_EFFORT_OBJM_R6_KEY",
+    # BUNDLE-DELIVERY-COLOCATION (Adrian 2026-06-26, case Dariusz Maruszak 509
+    # Street Mama Thai + Raj): kredyt bundla gdy nowa dostawa skolokowana z dostawą
+    # w bagu (różne restauracje, ten sam adres), a obie TWARDE reguły spełnione
+    # (R6 ≤35 czyste + committed honorowane). Zamyka pickup-centryczną ślepotę L1/L2.
+    "ENABLE_BUNDLE_DELIVERY_COLOCATION",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -2164,6 +2169,15 @@ ENABLE_BUNDLE_DELIV_SPREAD_CAP = _os.environ.get(
     "ENABLE_BUNDLE_DELIV_SPREAD_CAP", "0") == "1"
 BUNDLE_MAX_DELIV_SPREAD_KM = float(_os.environ.get(
     "BUNDLE_MAX_DELIV_SPREAD_KM", "8.0"))
+
+# BUNDLE-DELIVERY-COLOCATION (Adrian 2026-06-26) — forced-bundle z 2 twardych reguł.
+# Stała-fallback OFF (decision_flag: flags.json → ta stała → False). Próg = „ten sam
+# blok" (case 509 Raj↔Street Mama Thai = 0,037 km). Bonus jak L2 (max - dist*10).
+ENABLE_BUNDLE_DELIVERY_COLOCATION = False
+BUNDLE_DELIV_COLOC_KM = float(_os.environ.get(
+    "BUNDLE_DELIV_COLOC_KM", "0.3"))
+BUNDLE_DELIV_COLOC_BONUS_MAX = float(_os.environ.get(
+    "BUNDLE_DELIV_COLOC_BONUS_MAX", "20.0"))
 
 # V3.28 R-04 v2.0 GRADUATION SCHEMA (2026-05-01) — peak-quality based tier suggestions.
 # Phase 1 SHADOW: r04_evaluator generates tier_suggestions.json (cron 03:00 daily,
