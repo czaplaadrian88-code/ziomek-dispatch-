@@ -50,6 +50,7 @@
 > | `ENABLE_PICKUP_TIME_MIRRORS_CK` | — | **🟢 LIVE** (24.06) | czasówka: `PICKUP_TIME_UPDATED` mirrors `pickup_at`→`czas_kuriera` (koordynator/restauracja, any direction) |
 > | `ENABLE_ELASTYK_CK_NO_BACKWARD` | — | **🟢 LIVE** (24.06, opcja B) | elastyk: passive `czas_kuriera` change blocked tylko BACKWARD (forward = +15/lateness zostaje) |
 > | `ENABLE_CHECKPOINT_TS_WARSAW_PARSE` | — | **🟢 LIVE** (26.06 canary) | `picked_up_at`/`delivered_at` (Warsaw-naive) parsed as Warsaw not UTC w 4 miejscach `courier_resolver` (interp/recent-activity/ZOMBIE-guard/per-status) → ożywia predykcję pozycji no-GPS (interp 0/16984→żyje); OFF=legacy UTC |
+> | `ENABLE_O2_READY_ANCHOR_SWEEP` | — | ⚪ OFF (build 27.06, flip po review 02.07) | O2 re-seq Faza 1: objektyw worka = **overage** (Σ max(0, age_ready−cap), READY-anchor) zamiast `sla_violations`(count, pickup-anchor) w `_select_best_with_tie_breaker`+`plan_recheck._sweep` + **cap-Z** twardy sufit świeżości niesionego (`max_carried_age`≤Z). overage z `per_order_delivery_times` (compute-always). Faza 2 `czas_late` odroczona (brak deadline OrderSim). Gate `feasibility:1135` anchor = osobna sub-flaga (objektyw-first). cap/cap-Z tunable z `under_z` 02.07. Commit `22ba058`+`fe233d1`; design `eod_drafts/2026-06-27/O2_SPRINT_PREP.md` |
 >
 > **Net (Adrian directive 2026-06-23 — full autonomy):** quality-driven KOORD escalation is deliberately
 > disabled. R6 35-min is hard at the feasibility/candidate layer, **soft at the verdict layer** (20.6% of
