@@ -1,0 +1,25 @@
+=== DIAGNOZA estymatorów odbioru vs FAKT (same-courier, zajęty) ===
+matched busy: 68  (z czego blind<free_at 'bugowe': 31)
+
+estymator     n  mediana     śr    p90  (|est-fakt| min)
+blind        68      7.4    9.5   23.9
+free_at      68     20.2  167.5   43.1
+realny       68     20.2  167.5   43.1
+plan_pu      68      7.1    8.9   22.9
+new_pe       68      7.1    8.9   22.9
+debias       68      5.8    7.7   19.4
+
+--- ile razy każdy był NAJBLIŻSZY faktu (win) z 68 ---
+  debias       33  (49%)
+  blind        12  (18%)
+  plan_pu      12  (18%)
+  free_at      11  (16%)
+  realny        0  (0%)
+  new_pe        0  (0%)
+
+--- WERDYKT: czy któryś MIERZALNIE bije blind (mediana |est-fakt|)? ---
+  free_at    mediana 20.2 vs blind 7.4 → GORSZY
+  realny     mediana 20.2 vs blind 7.4 → GORSZY
+  plan_pu    mediana 7.1 vs blind 7.4 → ~równy
+  new_pe     mediana 7.1 vs blind 7.4 → ~równy
+  debias     mediana 5.8 vs blind 7.4 → LEPSZY
