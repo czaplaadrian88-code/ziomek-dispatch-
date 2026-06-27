@@ -3980,6 +3980,42 @@ def _assess_order_impl(
             except Exception:
                 free_at_dt = None
 
+        # Bug #1 (2026-06-27): realistyczny moment odbioru dla ZAJĘTEGO kuriera.
+        # eta_pickup_utc bywa ślepe na carried (gałąź haversine / nowy order spoza
+        # plan.pickup_at) → target_pickup_at floorowany do gotowości jedzenia,
+        # mediana 24 min za wcześnie (pomiar tools/measure_bug1_eta_vs_freeat.py).
+        # Realny = kiedy kurier SKOŃCZY niesiony worek (free_at_dt) + dojazd z
+        # ostatniego dropu do nowego pickupu. ADDITIVE: NIE zmienia eta_pickup_utc
+        # (zmienna decyzyjna: extension_penalty/hard-reject/time_arg).
+        # LICZONE ZAWSZE (shadow log-only) → walidacja realny-vs-faktyczny przed flipem
+        # (replay 27.06: free_at bywa pesymistyczny → realny przestrzela; potrzeba 2 dni
+        # pomiaru). UŻYCIE w target_pickup_at gatuje flaga ENABLE_ETA_PICKUP_REALISTIC
+        # (OFF=default) w shadow_dispatcher._target_pickup_floor. No-op gdy kurier wolny.
+        eta_pickup_realistic_utc = eta_pickup_utc
+        if free_at_dt is not None:
+            try:
+                _eta_real = eta_pickup_utc if eta_pickup_utc.tzinfo else eta_pickup_utc.replace(tzinfo=timezone.utc)
+                _fa_real = free_at_dt if free_at_dt.tzinfo else free_at_dt.replace(tzinfo=timezone.utc)
+                _last_drop = None
+                if soon_free_applied and soon_free_probe:
+                    _last_drop = soon_free_probe.get("last_drop_coords")
+                elif bag_sim and plan is not None and plan.predicted_delivered_at:
+                    _bset = {o.order_id for o in bag_sim}
+                    _bseq = [oid for oid in (plan.sequence or []) if oid in _bset]
+                    if _bseq:
+                        _lo = next((o for o in bag_sim if o.order_id == _bseq[-1]), None)
+                        if _lo is not None:
+                            _last_drop = _lo.delivery_coords
+                _drive_after = 0.0
+                if _last_drop is not None and fleet_speed_kmh > 0:
+                    _km_after = haversine(tuple(_last_drop), pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+                    _drive_after = (_km_after / fleet_speed_kmh) * 60.0
+                _realistic = _fa_real + timedelta(minutes=_drive_after)
+                if _realistic > _eta_real:
+                    eta_pickup_realistic_utc = _realistic
+            except Exception:
+                eta_pickup_realistic_utc = eta_pickup_utc
+
         if pickup_ready_at is not None:
             _pra_utc = pickup_ready_at if pickup_ready_at.tzinfo else pickup_ready_at.replace(tzinfo=timezone.utc)
             time_to_pickup_ready = max(0.0, (_pra_utc - now).total_seconds() / 60.0)
@@ -5120,6 +5156,11 @@ def _assess_order_impl(
             "timing_gap_min": round(gap_min, 1),
             "time_to_pickup_ready_min": round(time_to_pickup_ready, 1),
             "free_at_utc": free_at_dt.isoformat() if free_at_dt is not None else None,
+            # Bug #1 (2026-06-27): realistyczny odbiór (free_at + dojazd) gdy zajęty;
+            # == eta_pickup_utc gdy flaga OFF / kurier wolny. Konsument: target_pickup_at.
+            "eta_pickup_realistic_utc": (
+                eta_pickup_realistic_utc.isoformat()
+                if eta_pickup_realistic_utc is not None else None),
             "wave_bonus": round(wave_bonus, 2),
             "pos_source": pos_source_effective,
             "free_at_min": round(free_at_min, 1),

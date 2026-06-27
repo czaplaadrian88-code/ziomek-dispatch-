@@ -272,6 +272,8 @@ def _serialize_candidate(c) -> dict:
         "travel_min_cal": m.get("travel_min_cal"),
         "drive_min": m.get("drive_min"),
         "eta_pickup_hhmm": _eta_hhmm_warsaw(m.get("eta_pickup_utc")),
+        # Bug #1 (2026-06-27): realistyczny odbiór (free_at-aware) do displayu panelu.
+        "eta_pickup_realistic_hhmm": _eta_hhmm_warsaw(m.get("eta_pickup_realistic_utc")),
         "eta_drive_hhmm": _eta_hhmm_warsaw(m.get("eta_drive_utc")),
         "pos_source": m.get("pos_source"),
         # Z-09 (audyt 2026-06-10): rescue ze store replay'uje pierwotny label
@@ -481,6 +483,29 @@ def _serialize_candidate(c) -> dict:
     return out
 
 
+def _target_pickup_floor(best_m, eta_dt, ready_dt):
+    """target_pickup_at = absolutny moment, kiedy kurier ma być w restauracji.
+    Bug #1 (2026-06-27): gdy ENABLE_ETA_PICKUP_REALISTIC, podłoga z realistycznego
+    eta (free_at-aware, `eta_pickup_realistic_utc` z dispatch_pipeline) zamiast
+    ślepego `eta_pickup_utc`. Flaga OFF → max(eta_dt, ready_dt) jak dotąd.
+    Czysta funkcja (testowalna ON≠OFF)."""
+    from datetime import datetime, timezone
+    eta_floor_dt = eta_dt
+    if C.flag("ENABLE_ETA_PICKUP_REALISTIC", False):
+        _real_iso = (best_m or {}).get("eta_pickup_realistic_utc")
+        try:
+            _real_dt = datetime.fromisoformat(_real_iso.replace("Z", "+00:00")) if _real_iso else None
+        except Exception:
+            _real_dt = None
+        if _real_dt is not None and _real_dt.tzinfo is None:
+            _real_dt = _real_dt.replace(tzinfo=timezone.utc)
+        if _real_dt is not None and (eta_dt is None or _real_dt > eta_dt):
+            eta_floor_dt = _real_dt
+    if eta_floor_dt is not None and ready_dt is not None:
+        return max(eta_floor_dt, ready_dt)
+    return eta_floor_dt or ready_dt
+
+
 def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) -> dict:
     from datetime import datetime, timezone, timedelta
     best = result.best
@@ -523,10 +548,11 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         ready_dt = result.pickup_ready_at
         if ready_dt is not None and ready_dt.tzinfo is None:
             ready_dt = ready_dt.replace(tzinfo=timezone.utc)
-        if eta_dt is not None and ready_dt is not None:
-            target_dt = max(eta_dt, ready_dt)
-        else:
-            target_dt = eta_dt or ready_dt
+        # Bug #1 (2026-06-27): gdy ENABLE_ETA_PICKUP_REALISTIC, podłoga odbioru z
+        # realistycznego eta (free_at-aware, liczone w dispatch_pipeline) zamiast
+        # ślepego eta_pickup_utc. target_pickup_at = display (konsola/feed/TG) ORAZ
+        # commit auto_assign_executor → jedna prawdziwa godzina. Flaga OFF → bez zmian.
+        target_dt = _target_pickup_floor(best_m, eta_dt, ready_dt)
         if target_dt is not None:
             target_pickup_at_iso = target_dt.isoformat()
 
@@ -597,6 +623,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "travel_min_cal": best_m.get("travel_min_cal"),
             "drive_min": best_m.get("drive_min"),
             "eta_pickup_hhmm": _eta_hhmm_warsaw(best_m.get("eta_pickup_utc")),
+            "eta_pickup_realistic_hhmm": _eta_hhmm_warsaw(best_m.get("eta_pickup_realistic_utc")),
             "eta_drive_hhmm": _eta_hhmm_warsaw(best_m.get("eta_drive_utc")),
             "target_pickup_at": target_pickup_at_iso,
             # TIER-1 PICKUP-DEBIAS SHADOW (2026-06-22): realistyczny ck = target+bias

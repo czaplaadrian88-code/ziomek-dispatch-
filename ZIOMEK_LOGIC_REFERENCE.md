@@ -457,6 +457,18 @@ the module constant. ~80+ flags exist. Notable **current** states:
   `ENABLE_DRIVE_MIN_CALIBRATION_V2` (main), `ENABLE_POST_SHIFT_OVERRUN_PENALTY` (ETAP4; forward-shadow
   od 2026-06-24 20:52 — metryka logowana, flip czeka replay 25.06 + ACK; demote kuriera kończącego po
   zmianie w selekcji best_effort + LEXR6).
+  `ENABLE_ETA_PICKUP_REALISTIC` (Bug #1, 2026-06-27, OFF=default, INERTNY — kod wpięty, flip czeka ACK +
+  replay). Naprawa „pokazany/commitowany czas ODBIORU ślepy na carried": dla ZAJĘTEGO kuriera
+  `eta_pickup_utc` bywa z gałęzi haversine → `target_pickup_at` floorowany do gotowości jedzenia, mediana
+  ~24 min za wcześnie (pomiar `tools/measure_bug1_eta_vs_freeat.py`, 20% zajętych 27.06). ADDITIVE: nowa
+  metryka `eta_pickup_realistic_utc` = `max(eta_pickup_utc, free_at_dt + dojazd ostatni_drop→pickup)`
+  liczona w `dispatch_pipeline` (po finalizacji `free_at_dt`, ~l.3982); NIE rusza `eta_pickup_utc`
+  (zmienna decyzyjna: extension_penalty/hard-reject/time_arg). Konsument: helper `_target_pickup_floor`
+  w `shadow_dispatcher` podmienia podłogę `target_pickup_at` (= display konsola/feed/TG ORAZ commit
+  `auto_assign_executor`) na realistyczną gdy flaga ON. Serializery A+B emitują `eta_pickup_realistic_hhmm`.
+  No-op gdy kurier wolny (free_at_dt None) lub eta już insertion-aware. Decyzja Adriana = wariant **B1**
+  (jedna prawdziwa liczba wszędzie; feasibility R6/R27 nietknięte — już insertion-aware). Test ON≠OFF:
+  `tests/test_eta_pickup_realistic_2026_06_27.py` (6/6). Rollback: flaga OFF (hot) / `.bak-pre-bug1-eta-realistic-2026-06-27`.
 - 🟢 **`ENABLE_PROPOSAL_ETA_FLOOR_TO_PLAN` (2026-06-25, LIVE on `dispatch-shadow`, display-only).**
   Linia „Kandydaci" w propozycji Telegram (`_candidate_line_v2`) pokazywała `eta_pickup_hhmm` =
   dojazd pod restaurację, a dla `pre_shift` = **start zmiany** (np. Patryk K-75 18:00) — czyli odbiór
