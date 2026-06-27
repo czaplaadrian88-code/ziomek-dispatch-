@@ -457,8 +457,11 @@ the module constant. ~80+ flags exist. Notable **current** states:
   `ENABLE_DRIVE_MIN_CALIBRATION_V2` (main), `ENABLE_POST_SHIFT_OVERRUN_PENALTY` (ETAP4; forward-shadow
   od 2026-06-24 20:52 — metryka logowana, flip czeka replay 25.06 + ACK; demote kuriera kończącego po
   zmianie w selekcji best_effort + LEXR6).
-  `ENABLE_FEAS_CARRY_READMIT` (#483000, 2026-06-27, ETAP4 decyzyjna, default OFF — flip po replay
-  ON↔OFF + ACK). Bramka `check_feasibility_v2` wybacza najgorszy breach NIESIONEMU
+  `ENABLE_FEAS_CARRY_READMIT` (#483000, ETAP4 decyzyjna) — **🟢 LIVE od 2026-06-27 22:18 UTC**
+  (flaga flipnięta ON w flags.json; const-fallback OFF; replay GO przed flipem: redirect 52,6%,
+  median −9,7min worst-breach floty, Pareto, cap-koszt ≤5min; commit `e72139e`+monitor `3eecef6`;
+  post-flip at-192 28.06 21:00 UTC; rollback hot = flaga false bez restartu). Bramka
+  `check_feasibility_v2` wybacza najgorszy breach NIESIONEMU
   (`SLA_PREEXISTING_BYPASS`) a HARD-rejectuje blocking SLA/R6 → pula feasible bywa GORSZY ocalały,
   lepszy carry-inclusive wycięty (shadow `ENABLE_FEAS_CARRY_BLIND_SHADOW` 27.06: 55,5% would_redirect,
   n=596). Ta flaga re-dopuszcza odrzuconego (NO, blocking sla/r6) na warstwie SELEKCJI
