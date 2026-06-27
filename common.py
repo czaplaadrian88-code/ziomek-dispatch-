@@ -160,6 +160,13 @@ ETAP4_DECISION_FLAGS = (
     # divergence dalej gate'ują). Mirror _best_effort_objm_pick na feasible-path. Default
     # OFF; flip po replay ON↔OFF za ACK. Decyzyjna, cross-proces.
     "ENABLE_FEAS_CARRY_READMIT",
+    # O2 RE-SEQ (2026-06-27, review 02.07): master-flaga TRÓJKI — ready-anchor w
+    # _count_sla_violations + objektyw O2 (overage + λ·czas_late) w sweep/select +
+    # 2. anchor feasibility:1135. Czyni objektyw worka uczciwym o świeżości niesionego
+    # (dziś pickup-anchor ślepy → nagradza opóźnianie odbioru, 14,2% worków fałszywie
+    # czystych). Default OFF; flip po GO review 02.07 + dowód netto + cap-Z z danych.
+    # Decyzyjna, cross-proces. Składa się z B2 (carry-readmit selekcji) ku correctness.
+    "ENABLE_O2_READY_ANCHOR_SWEEP",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -176,6 +183,7 @@ ENABLE_PLN_COURIER_PAY = False
 ENABLE_OBJ_FOOD_AGE_HARD_SLA = False  # Faza 2 2026-06-17 (food-age hard-SLA + warm-start)
 ENABLE_END_OF_DAY_SALVAGE = False  # 2026-06-18 (ostatnia godzina pracy firmy — bend reguł końca zmiany)
 ENABLE_FEAS_CARRY_READMIT = False  # #483000 2026-06-27 (carry-aware re-admit feasible-path, cap-40 Tier-3)
+ENABLE_O2_READY_ANCHOR_SWEEP = False  # O2 re-seq 2026-06-27 (ready-anchor + overage+λ·czas_late objektyw worka, review 02.07)
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
 # startowych werdyktu razem z flagą, hot-reload bez restartu; fallback = stała
@@ -2542,6 +2550,17 @@ ENABLE_BEST_EFFORT_OBJM_R6_KEY = _os.environ.get("ENABLE_BEST_EFFORT_OBJM_R6_KEY
 # żaden bezpieczny. Sweep 21-23.06: cap=40 → regresja nowego 27%→16%, zysk carry 83% utrzymany.
 # KANON hot = flags.json; ta stała = fallback. Konsumpcja: C.flag("BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN", 40.0).
 BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN = float(_os.environ.get("BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN", "40"))
+
+# O2 RE-SEQ tuning (2026-06-27, review 02.07; konsumpcja hot przez C.flag(name, C.NAME)).
+# Objektyw O2 = overage(carry ponad cap, READY-anchor) + O2_LAMBDA_CZAS·czas_late(czasówki).
+# λ=1.5 = sweet-spot ZATWIERDZONY przez Adriana (bundle_calib, 42 worki — zeruje spóźnienia
+# czasówek przy +5min overage). cap=35 walidowany default; 40 na RZADKIE dni niedoboru
+# (tier-3, jak 16.05) = strojone z danych 02.07 (jak cap-Z, decyzja Adriana „wybierzemy
+# na danych"). cap-Z = TWARDY sufit świeżości niesionego w sweepie (O2 ślepy na pasmo
+# 20-35 → bez capa wozi do 90min); wartość z under_z review 02.07 (kandydaci 20/32/35).
+O2_LAMBDA_CZAS = float(_os.environ.get("O2_LAMBDA_CZAS", "1.5"))
+O2_OVERAGE_CAP_MIN = float(_os.environ.get("O2_OVERAGE_CAP_MIN", "35"))
+O2_CAP_Z_MIN = float(_os.environ.get("O2_CAP_Z_MIN", "35"))
 
 # ESKALACJA best_effort (2026-06-23, reguła Adriana 3-stopniowa): gdy 0 feasible (Tier 1
 # zawodzi), PRZED rozciąganiem worka (Tier 3) sprawdź Tier 2 = „daj pierwszemu wolnemu"
