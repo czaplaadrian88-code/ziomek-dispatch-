@@ -400,6 +400,10 @@ def _serialize_candidate(c) -> dict:
             "total_duration_min": plan.total_duration_min,
             "strategy": plan.strategy,
             "sla_violations": plan.sla_violations,
+            # O2 RE-SEQ (2026-06-27): compute-always → live engine-side O2 (obserwacja parytetu
+            # vs bundle_calib niezależnie od flagi). o2_score = overage; o2_max_carried_age = cap-Z.
+            "o2_score": getattr(plan, "o2_score", None),
+            "o2_max_carried_age": getattr(plan, "max_carried_age", None),
             "osrm_fallback_used": plan.osrm_fallback_used,
             # V3.17 (2026-04-19): per-stop timeline propagation for telegram formatter.
             "per_order_delivery_times": (
@@ -721,6 +725,10 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
                 "total_duration_min": best.plan.total_duration_min,
                 "strategy": best.plan.strategy,
                 "sla_violations": best.plan.sla_violations,
+                # O2 RE-SEQ (2026-06-27): compute-always → live engine-side O2 (LOCATION B,
+                # bliźniak A). o2_score = overage; o2_max_carried_age = cap-Z.
+                "o2_score": getattr(best.plan, "o2_score", None),
+                "o2_max_carried_age": getattr(best.plan, "max_carried_age", None),
                 "osrm_fallback_used": best.plan.osrm_fallback_used,
                 # V3.17 (2026-04-19): per-stop timeline propagation for telegram formatter.
                 "per_order_delivery_times": (

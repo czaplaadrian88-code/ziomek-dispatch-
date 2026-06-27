@@ -673,8 +673,24 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         _drive_speed_mult = 1.0
         _dwell_pickup, _dwell_dropoff = R.DWELL_PICKUP_MIN, R.DWELL_DROPOFF_MIN
 
+    # O2 RE-SEQ (2026-06-27, ENABLE_O2_READY_ANCHOR_SWEEP): flaga + cap-Z liczone RAZ
+    # (closure dla _sweep ORAZ committed-tiebreak niżej — twins spójne). OFF = byte-identyczne.
+    from dispatch_v2 import common as _C_o2sw
+    _o2_on = _C_o2sw.flag("ENABLE_O2_READY_ANCHOR_SWEEP",
+                          getattr(_C_o2sw, "ENABLE_O2_READY_ANCHOR_SWEEP", False))
+    _o2_z = _C_o2sw.flag("O2_CAP_Z_MIN", getattr(_C_o2sw, "O2_CAP_Z_MIN", 35.0))
+
+    def _o2_key(p):
+        """Klucz O2 (over_z, overage, dur) gdy flaga ON / (sla, dur) gdy OFF. over_z = twardy
+        cap-Z (carried>Z → na koniec, fallback gdy wszystkie). Bez sequence (dokleja caller)."""
+        if _o2_on:
+            _over_z = 1 if (p.max_carried_age or 0.0) > _o2_z else 0
+            _o2 = p.o2_score if p.o2_score is not None else float("inf")
+            return (_over_z, _o2, round(p.total_duration_min, 3))
+        return (p.sla_violations, round(p.total_duration_min, 3))
+
     # Sweep designacji new_order (route_simulator_v2 traktuje 1 order jako wstawiany)
-    # → wybierz najlepszy plan deterministycznie (sla, dur, sequence).
+    # → wybierz najlepszy plan deterministycznie (O2 overage+cap-Z gdy ON / sla,dur OFF).
     def _sweep():
         ordered_l = list(sims.keys())
         best = None
@@ -685,7 +701,7 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
                                         drive_speed_mult=_drive_speed_mult,
                                         dwell_pickup=_dwell_pickup,
                                         dwell_dropoff=_dwell_dropoff)
-            key = (p.sla_violations, round(p.total_duration_min, 3), tuple(p.sequence))
+            key = _o2_key(p) + (tuple(p.sequence),)
             if best is None or key < best[0]:
                 best = (key, p)
         return best[1]
@@ -701,7 +717,11 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         for _oid in sims:
             sims[_oid].czas_kuriera_warsaw = ck_by_oid.get(_oid)
         plan_ck = _sweep()
-        if plan_ck.sla_violations <= plan_base.sla_violations:
+        # O2 ON → adoptuj committed gdy nie pogarsza objektywu O2 (over_z, overage, dur);
+        # OFF → oryginał (sla_violations) byte-identyczny.
+        _committed_ok = (_o2_key(plan_ck) <= _o2_key(plan_base)) if _o2_on \
+            else (plan_ck.sla_violations <= plan_base.sla_violations)
+        if _committed_ok:
             plan = plan_ck
             _adopted = (plan_ck.sequence != plan_base.sequence
                         or plan_ck.pickup_at != plan_base.pickup_at)

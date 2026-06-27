@@ -136,11 +136,27 @@ def _select_best_with_tie_breaker(
     """
     if not plans:
         return None
-    # Primary sort
-    plans_sorted = sorted(
-        plans,
-        key=lambda p: (p.sla_violations, p.total_duration_min),
-    )
+    # Primary sort — O2 RE-SEQ (2026-06-27, ENABLE_O2_READY_ANCHOR_SWEEP ON) lub legacy
+    # sla_violations (OFF). Flaga RAZ na selekcję (nie per plan). `_o2_primary(p)` = klucz
+    # pierwszorzędny wspólny dla sortu I definicji ties niżej (spójność). OFF = byte-identyczne.
+    from dispatch_v2 import common as _C_o2sel
+    _o2_on = _C_o2sel.flag("ENABLE_O2_READY_ANCHOR_SWEEP",
+                           getattr(_C_o2sel, "ENABLE_O2_READY_ANCHOR_SWEEP", False))
+    if _o2_on:
+        # cap-Z = TWARDY sufit świeżości niesionego (Opcja 3 Adriana): preferuj plany gdzie
+        # max_carried_age ≤ Z; gdy ŻADEN się nie mieści (wymuszony carry) → cała pula (least-bad).
+        _z = _C_o2sel.flag("O2_CAP_Z_MIN", getattr(_C_o2sel, "O2_CAP_Z_MIN", 35.0))
+        _under_z = [p for p in plans if (p.max_carried_age or 0.0) <= _z]
+        _pool = _under_z if _under_z else plans
+
+        def _o2_primary(p):
+            return p.o2_score if p.o2_score is not None else float("inf")
+    else:
+        _pool = plans
+
+        def _o2_primary(p):
+            return p.sla_violations
+    plans_sorted = sorted(_pool, key=lambda p: (_o2_primary(p), p.total_duration_min))
     leader = plans_sorted[0]
 
     # Tie-breaker gated by flag (preserves baseline behavior gdy flag=False)
@@ -153,7 +169,7 @@ def _select_best_with_tie_breaker(
 
     ties = [
         p for p in plans_sorted
-        if p.sla_violations == leader.sla_violations
+        if _o2_primary(p) == _o2_primary(leader)
         and abs(p.total_duration_min - leader.total_duration_min) < threshold_min
     ]
     if len(ties) < 2:
@@ -215,6 +231,13 @@ class RoutePlanV2:
     # raw drive arrival time. Used by wait_courier penalty (max(0, ready - arrival)).
     # Empty dict default — backward compat dla test fixtures z keyword args.
     arrival_at: Dict[str, datetime] = field(default_factory=dict)
+    # O2 RE-SEQ (2026-06-27, ENABLE_O2_READY_ANCHOR_SWEEP, review 02.07): liczone ZAWSZE
+    # (cheap, z per_order_delivery_times = ready-anchor); UŻYWANE tylko gdy flaga ON w
+    # sweep/select. o2_score = overage (Σ max(0, age_ready − cap)) [FAZA 1; czas_late =
+    # FAZA 2 osobno, brak deadline na OrderSim]. max_carried_age = max wieku NIESIONEGO
+    # (status picked_up) do twardego cap-Z. None = nieliczone (brak per_order_times).
+    o2_score: Optional[float] = None
+    max_carried_age: Optional[float] = None
 
 
 def simulate_bag_route_v2(
@@ -705,6 +728,33 @@ def _compute_per_order_delivery_minutes(
     return result
 
 
+def _compute_o2_metrics(per_order_times, bag, new_order, cap_min):
+    """O2 FAZA 1 (2026-06-27): z `per_order_delivery_times` (ready-anchor = r6_thermal_anchor,
+    JUŻ policzone) licz:
+      o2_score        = overage = Σ max(0, age_ready − cap_min)   [CIĄGŁY objektyw świeżości]
+      max_carried_age = max wieku po NIESIONYCH (status picked_up) [do twardego cap-Z]
+    Wzór max_carried_age 1:1 z bundle_calib._max_carried_age (parytet). czas_late = FAZA 2
+    (brak deadline na OrderSim). Zwraca (None, None) gdy brak per_order_times (fail-closed
+    jak C2 gate). Czysta arytmetyka, zero I/O — bezpieczne compute-always per plan."""
+    if not per_order_times:
+        return None, None
+    picked = {
+        getattr(o, "order_id", None) for o in bag
+        if getattr(o, "picked_up_at", None) is not None
+        or getattr(o, "status", None) == "picked_up"
+    }
+    overage = 0.0
+    carried_ages = []
+    for oid, age in per_order_times.items():
+        if age is None:
+            continue
+        overage += max(0.0, age - cap_min)
+        if oid in picked:
+            carried_ages.append(age)
+    max_carried = max(carried_ages) if carried_ages else 0.0
+    return round(overage, 1), round(max_carried, 1)
+
+
 def _plan_from_sequence(
     seq: List[int],
     nodes: List[dict],
@@ -717,6 +767,13 @@ def _plan_from_sequence(
     total, delivered_at, pickup_at, arrival_at = _simulate_sequence(nodes, leg_min, seq, now)
     violations = _count_sla_violations(delivered_at, pickup_at, bag, new_order, now, sla_minutes)
     per_order_times = _compute_per_order_delivery_minutes(delivered_at, pickup_at, bag, new_order, now)
+    # O2 FAZA 1 (2026-06-27): compute-always (cheap, per_order_times = ready-anchor już liczony).
+    # cap z MODULE-const (env-overridable, ustawiany przy flipie 02.07) — NIE C.flag, by uniknąć
+    # I/O per plan w bruteforce. UŻYWANE tylko gdy ENABLE_O2_READY_ANCHOR_SWEEP ON (sweep/select).
+    from dispatch_v2 import common as _C_o2
+    _o2_score, _max_carried = _compute_o2_metrics(
+        per_order_times, bag, new_order,
+        getattr(_C_o2, "O2_OVERAGE_CAP_MIN", 35.0))
     delivery_order = [nodes[i]["order_id"] for i in seq if nodes[i]["kind"] == "delivery"]
     return RoutePlanV2(
         sequence=delivery_order,
@@ -728,6 +785,8 @@ def _plan_from_sequence(
         osrm_fallback_used=False,
         per_order_delivery_times=per_order_times,
         arrival_at=arrival_at,
+        o2_score=_o2_score,
+        max_carried_age=_max_carried,
     )
 
 
