@@ -1292,6 +1292,72 @@ def _feas_carry_blind_shadow(top, feasible, candidates, order_id, now=None) -> N
             pass
 
 
+def _feas_carry_readmit_pick(top, feasible, candidates, new_oid, cap_min=40.0):
+    """B2 LIVE (#483000, 2026-06-27): carry-aware re-admit na warstwie SELEKCJI feasible-path.
+    Mirror _feas_carry_blind_shadow, ale ZWRACA kandydata do promocji (zamiast tylko log).
+
+    Zwraca (cand, regret_min, orig_reason, newbag_min) gdy ISTNIEJE odrzucony (verdict NO,
+    blocking sla/r6) który (a) jest lepszy carry-inclusive (lex_qual < chosen) ORAZ (b) jego
+    NOWY order ≤ cap_min (40 = Tier-3 cap-stretch, ten sam guard co _best_effort_objm_pick).
+    Inaczej None (caller zostaje na live zwycięzcy). Odpala TYLKO gdy chosen niesie WYBACZONY
+    breach (objm_r6_breach_max_min>0) = populacja asymetrii #483000. Defensywny (fail-open)."""
+    try:
+        if not top or not candidates:
+            return None
+        from dispatch_v2 import objm_lexr6 as _OL
+        import re as _re
+        chosen = top[0]
+        chosen_objm = _OL.objm(chosen, "objm_r6_breach_max_min")
+        if chosen_objm is None or chosen_objm <= 0:
+            return None  # chosen czysty → brak asymetrii bypassu, poza zakresem B2
+        chosen_lex = _OL.lex_qual(chosen)
+
+        def _kind(c):
+            r = getattr(c, "feasibility_reason", "") or ""
+            if r.startswith("sla_violation"):
+                return "sla"
+            if r.startswith("R6_per_order"):
+                return "r6_new"
+            if r.startswith("R6_picked_up_delta"):
+                return "r6_carry_delta"
+            return "other"
+
+        def _newbag(c):
+            # Nowy order bag-time (mirror _best_effort_objm_pick._newbag): plan per-order
+            # → fallback sum_bag_time_min. Tier-3 cap dotyczy NOWEGO zlecenia.
+            pod = getattr(getattr(c, "plan", None), "per_order_delivery_times", None) or {}
+            v = pod.get(new_oid)
+            if isinstance(v, (int, float)):
+                return float(v)
+            m = (getattr(c, "metrics", None) or {}).get("sum_bag_time_min")
+            return float(m) if isinstance(m, (int, float)) else None
+
+        rejected = [c for c in candidates
+                    if getattr(c, "feasibility_verdict", None) == "NO"]
+        # blocking sla/r6 = ofiary asymetrii bramki (reszta = legit: shift_end/C2/dist/committed)
+        blocking = [c for c in rejected if _kind(c) in ("sla", "r6_new", "r6_carry_delta")]
+        # TWARDY guard Tier-3: nowy order ≤ cap_min (40). Brak danych newbag → odrzuć (bezpieczniej
+        # nie re-dopuszczać niż wpuścić ślepo); chosen pozostaje. NIE fallback do pure carry-min
+        # (to feasible-path, nie 0-feasible best_effort).
+        capped = [c for c in blocking if (_newbag(c) is not None and _newbag(c) <= cap_min)]
+        if not capped:
+            return None
+        best_rej = min(capped, key=_OL.lex_qual)
+        if _OL.lex_qual(best_rej) >= chosen_lex:
+            return None  # zwycięzca już nie gorszy carry-inclusive → bez zmiany
+        rej_objm = _OL.objm(best_rej, "objm_r6_breach_max_min")
+        regret = (round(chosen_objm - rej_objm, 1)
+                  if isinstance(rej_objm, (int, float)) else None)
+        return (best_rej, regret, (getattr(best_rej, "feasibility_reason", "") or "")[:60],
+                round(_newbag(best_rej), 1))
+    except Exception as _e:  # noqa: BLE001
+        try:
+            log.warning(f"FEAS_CARRY_READMIT pick failed new_oid={new_oid}: {_e!r}")
+        except Exception:
+            pass
+        return None
+
+
 def _objm_lexr6_d2_pick(feasible):
     """FAZA 2 (2026-06-18, flaga ENABLE_OBJM_LEXR6_SELECT): zwróć kandydata, którego
     R6-breach-primary lexicographic selektor D2 wskazuje W OBRĘBIE grupy (tier × bucket)
@@ -6027,6 +6093,51 @@ def _assess_order_impl(
         # survivor. OBSERWACYJNY, flaga default OFF, pełne `candidates` (z NO) w zasięgu.
         if C.flag("ENABLE_FEAS_CARRY_BLIND_SHADOW", False):
             _feas_carry_blind_shadow(top, feasible, candidates, order_id, now)
+
+        # WARSTWA B LIVE (#483000, 2026-06-27, flaga ENABLE_FEAS_CARRY_READMIT default OFF):
+        # carry-aware re-admit — promuj odrzuconego (verdict NO, blocking sla/r6) na top[0]
+        # gdy lepszy carry-inclusive (lex_qual) ORAZ nowy order ≤ cap-40 (Tier-3 cap-stretch,
+        # ta sama stała co best_effort). OSTATNIA mutacja selekcji (po E2/OBJM/shadow): mutuje
+        # `top`/`feasible` in-place (jak E2 _pln_pure_resort); downstream MIN_PROPOSE +
+        # commit_divergence_gate dalej gate'ują nowy top[0] (HARD nietknięte u źródła — bramka
+        # candidata dalej zwraca NO; tu selekcja przenosi go, promote verdict→MAYBE dla spójności
+        # serializacji/inwariantu). Rollback = flaga OFF (hot). Fail-open (nie krasz propozycji).
+        if C.decision_flag("ENABLE_FEAS_CARRY_READMIT"):
+            try:
+                _fcr_cap = float(C.flag(
+                    "BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN",
+                    getattr(C, "BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN", 40.0)))
+                _fcr = _feas_carry_readmit_pick(
+                    top, feasible, candidates, new_order.order_id, cap_min=_fcr_cap)
+                if _fcr is not None:
+                    _fcr_cand, _fcr_regret, _fcr_reason, _fcr_newbag = _fcr
+                    if _fcr_cand is not None and _fcr_cand is not top[0]:
+                        _prev_cid = getattr(top[0], "courier_id", None)
+                        try:
+                            _fcr_cand.feasibility_verdict = "MAYBE"
+                        except Exception:
+                            pass
+                        if isinstance(getattr(_fcr_cand, "metrics", None), dict):
+                            _fcr_cand.metrics["feas_carry_readmit"] = True
+                            _fcr_cand.metrics["feas_carry_regret_min"] = _fcr_regret
+                            _fcr_cand.metrics["feas_carry_orig_reason"] = _fcr_reason
+                            _fcr_cand.metrics["feas_carry_newbag_min"] = _fcr_newbag
+                            _fcr_cand.metrics["feas_carry_redirect_from_cid"] = str(_prev_cid)
+                            _fcr_cand.metrics["feas_carry_cap_min"] = _fcr_cap
+                        # przenieś na czoło top (identity-safe pop jak OBJM_LEXR6) + do feasible
+                        _fcr_idx = next((i for i, c in enumerate(top) if c is _fcr_cand), None)
+                        if _fcr_idx is not None:
+                            top.pop(_fcr_idx)
+                        top.insert(0, _fcr_cand)
+                        del top[TOP_N_CANDIDATES:]
+                        if _fcr_cand not in feasible:
+                            feasible.insert(0, _fcr_cand)
+                        log.info(
+                            f"FEAS_CARRY_READMIT order={order_id} redirect "
+                            f"{_prev_cid}→{getattr(_fcr_cand, 'courier_id', None)} "
+                            f"regret={_fcr_regret}min newbag={_fcr_newbag}min cap={_fcr_cap}")
+            except Exception as _fcr_e:  # noqa: BLE001
+                log.warning(f"FEAS_CARRY_READMIT live fail order={order_id}: {_fcr_e!r}")
 
         # V3.28 Faza 6 — LGBM shadow inference (parallel, ZERO behavior change).
         # Pure BC model trained na 399K pairs CSV history (Faza 5 v1.0). Result

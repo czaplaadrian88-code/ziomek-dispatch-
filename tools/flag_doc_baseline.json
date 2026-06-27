@@ -1,7 +1,7 @@
 {
   "_comment": "C-FLAG-DRIFT baseline (audyt 2026-06-24 §6.C): flagi decyzyjne ENABLE_/USE_ NIEudokumentowane w ZIOMEK_LOGIC_REFERENCE.md na dzien zamrozenia. Ratchet: NOWA flaga undoc poza ta lista = drift (udokumentuj w ref ALBO swiadomie dopisz tutaj). Cel dlugofalowy: kurczyc te liste.",
   "_frozen": "2026-06-24",
-  "_count": 70,
+  "_count": 69,
   "baseline": [
     "ENABLE_AUTO_ASSIGN",
     "ENABLE_AUTO_ROUTE_WEAK_PICK_ALERT",
@@ -24,7 +24,6 @@
     "ENABLE_F7_HIGH_RISK_BUCKET",
     "ENABLE_FAIL03_K2_SHADOW",
     "ENABLE_FAIL12_SCHEDULE_FAILOPEN",
-    "ENABLE_FEAS_CARRY_BLIND_SHADOW",
     "ENABLE_FIRMOWE_KONTO_KOORD_ALERTS",
     "ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS",
     "ENABLE_FIX_C_ADDITIVE_PENALTY",

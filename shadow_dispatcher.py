@@ -243,7 +243,12 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        # best_effort_objm_{cid/flip/pool/live_r6/pick_r6/d_r6/d_committed/
                        # live_newbag/pick_newbag/d_newbag} — walidacja carry-aware PRIMARY
                        # na ścieżce best_effort (0 feasible) PRZED flipem. LOCATION B (best).
-                       "best_effort_objm_")
+                       "best_effort_objm_",
+                       # FEAS-CARRY-READMIT / #483000 (2026-06-27): feas_carry_{readmit/
+                       # regret_min/orig_reason/newbag_min/redirect_from_cid/cap_min} —
+                       # LIVE re-admit carry-inclusive na feasible-path (top[0] przejęty
+                       # przez odrzuconego-NO lepszego-na-prawdzie). LOCATION B (best).
+                       "feas_carry_")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:

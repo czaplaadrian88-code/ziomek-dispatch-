@@ -150,6 +150,16 @@ ETAP4_DECISION_FLAGS = (
     # w bagu (różne restauracje, ten sam adres), a obie TWARDE reguły spełnione
     # (R6 ≤35 czyste + committed honorowane). Zamyka pickup-centryczną ślepotę L1/L2.
     "ENABLE_BUNDLE_DELIVERY_COLOCATION",
+    # FEAS-CARRY-READMIT / #483000 (Adrian 2026-06-27, at-167 sygnał TRZYMA 55.5%):
+    # bramka check_feasibility_v2 wybacza najgorszy breach NIESIONEMU (SLA_PREEXISTING_
+    # BYPASS), a HARD-rejectuje blocking SLA/R6 — pula feasible bywa GORSZY ocalały,
+    # lepszy carry-inclusive wycięty. Ta flaga re-dopuszcza odrzuconego (NO, blocking
+    # sla/r6) na warstwie SELEKCJI gdy carry-inclusive lex_qual lepszy od zwycięzcy ORAZ
+    # nowy order ≤ BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN (40 = Tier-3 cap-stretch, ten sam
+    # co best_effort). Werdykt HARD bramki nietknięty (downstream MIN_PROPOSE/commit-
+    # divergence dalej gate'ują). Mirror _best_effort_objm_pick na feasible-path. Default
+    # OFF; flip po replay ON↔OFF za ACK. Decyzyjna, cross-proces.
+    "ENABLE_FEAS_CARRY_READMIT",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -165,6 +175,7 @@ ENABLE_E2_PLN_AB = False
 ENABLE_PLN_COURIER_PAY = False
 ENABLE_OBJ_FOOD_AGE_HARD_SLA = False  # Faza 2 2026-06-17 (food-age hard-SLA + warm-start)
 ENABLE_END_OF_DAY_SALVAGE = False  # 2026-06-18 (ostatnia godzina pracy firmy — bend reguł końca zmiany)
+ENABLE_FEAS_CARRY_READMIT = False  # #483000 2026-06-27 (carry-aware re-admit feasible-path, cap-40 Tier-3)
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
 # startowych werdyktu razem z flagą, hot-reload bez restartu; fallback = stała

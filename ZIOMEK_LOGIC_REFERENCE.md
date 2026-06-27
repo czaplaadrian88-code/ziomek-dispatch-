@@ -457,6 +457,16 @@ the module constant. ~80+ flags exist. Notable **current** states:
   `ENABLE_DRIVE_MIN_CALIBRATION_V2` (main), `ENABLE_POST_SHIFT_OVERRUN_PENALTY` (ETAP4; forward-shadow
   od 2026-06-24 20:52 — metryka logowana, flip czeka replay 25.06 + ACK; demote kuriera kończącego po
   zmianie w selekcji best_effort + LEXR6).
+  `ENABLE_FEAS_CARRY_READMIT` (#483000, 2026-06-27, ETAP4 decyzyjna, default OFF — flip po replay
+  ON↔OFF + ACK). Bramka `check_feasibility_v2` wybacza najgorszy breach NIESIONEMU
+  (`SLA_PREEXISTING_BYPASS`) a HARD-rejectuje blocking SLA/R6 → pula feasible bywa GORSZY ocalały,
+  lepszy carry-inclusive wycięty (shadow `ENABLE_FEAS_CARRY_BLIND_SHADOW` 27.06: 55,5% would_redirect,
+  n=596). Ta flaga re-dopuszcza odrzuconego (NO, blocking sla/r6) na warstwie SELEKCJI
+  (`dispatch_pipeline` po `_feas_carry_blind_shadow`) gdy carry-inclusive `lex_qual` lepszy od top[0]
+  ORAZ nowy order ≤ `BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN` (40 = Tier-3 cap-stretch, ten sam guard co
+  `_best_effort_objm_pick`). Werdykt HARD bramki nietknięty u źródła — downstream MIN_PROPOSE +
+  `commit_divergence_gate` dalej gate'ują nowy top[0]. Mirror best_effort na feasible-path; promote
+  verdict→MAYBE, metryki prefix `feas_carry_` w `shadow_decisions.jsonl`. Helper `_feas_carry_readmit_pick`.
 - 🟢 **`ENABLE_PROPOSAL_ETA_FLOOR_TO_PLAN` (2026-06-25, LIVE on `dispatch-shadow`, display-only).**
   Linia „Kandydaci" w propozycji Telegram (`_candidate_line_v2`) pokazywała `eta_pickup_hhmm` =
   dojazd pod restaurację, a dla `pre_shift` = **start zmiany** (np. Patryk K-75 18:00) — czyli odbiór
