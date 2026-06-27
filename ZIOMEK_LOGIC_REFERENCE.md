@@ -447,6 +447,10 @@ the module constant. ~80+ flags exist. Notable **current** states:
   i loguje deltę DRIVE zamrożona-sekwencja↔świeża + `seq_differs` do `dispatch_state/bug4_reseq_shadow.jsonl`;
   helper `_bug4_reseq_shadow`/`_osrm_drive_min_sum`, cap 20/tick, fail-soft; ZERO zmiany decyzji/zapisu.
   Cel: materialność kary zamrożonej sekwencji vs świeży solve przed naprawą u źródła feasibility↔route_simulator↔plan_recheck).
+  `ENABLE_ADDRESS_TOWN_MISMATCH_SHADOW` (Adrian 2026-06-26: log-only detektor rozjazdu ulica↔miasto w ingestii —
+  `address_mismatch.check_street_town()` (bliźniak panelowego `/estimate`, próg 5/1) + `maybe_log_mismatch` →
+  `dispatch_state/address_mismatch_shadow.jsonl`; hook w `shadow_dispatcher._tick` po geokodzie dostawy, try/except
+  fail-soft; cel: złe miasto → zły geokod (case Olmonty/483504); ZERO zmiany decyzji/dispatchu).
 - ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` (cold-food divergence
   no longer →KOORD), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
   `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`, `kill_switch_to_v1`,
