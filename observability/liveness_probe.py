@@ -101,6 +101,23 @@ def _is_active(unit: str) -> Optional[bool]:
     return None
 
 
+def _is_enabled(unit: str) -> Optional[str]:
+    """Raw `systemctl is-enabled` state ('enabled'|'disabled'|'masked'|'static'
+    |'linked'|...), or None when systemctl is unreachable. Used to tell an
+    intentional operator disable apart from a crash (inactive while enabled)."""
+    rc, out = _run(["systemctl", "is-enabled", unit])
+    s = out.strip()
+    return s or None
+
+
+# Vendor unit-files that are an explicit operator decision to keep the service
+# OFF (disable/mask), not a liveness failure. A unit in one of these states is
+# expected to be inactive, so the probe must NOT flag it DOWN.
+_INTENTIONALLY_OFF_ENABLE_STATES = (
+    "disabled", "masked", "masked-runtime", "linked-runtime",
+)
+
+
 def _tcp_ok(host: str, port: int, timeout: float = TCP_TIMEOUT_SEC) -> bool:
     s = socket.socket()
     s.settimeout(timeout)
@@ -232,6 +249,17 @@ def check_telegram() -> CheckResult:
     # getUpdates MAX_FAILS, so crashes are covered by systemd OnFailure; the
     # probe only needs the active-state check here.
     unit = "dispatch-telegram"
+    # C1 (2026-06-26): dispatch-telegram is DELIBERATELY `disable --now` --
+    # proposals are reviewed in the coordinator console, not on Telegram. A
+    # disabled/masked unit is an intentional operator decision, NOT a liveness
+    # failure, so do not emit "DOWN" (that meta-alert would fire forever, every
+    # 30-min dedup window -- exactly "Ziomek nie wysyła propozycji na telegramie").
+    # If Adrian re-enables it, is-enabled flips to `enabled` and a real crash
+    # (enabled + inactive) alerts again; systemd OnFailure also covers crashes
+    # while enabled. (2026-06-27)
+    enabled = _is_enabled(unit)
+    if enabled in _INTENTIONALLY_OFF_ENABLE_STATES:
+        return unit, "ok", f"intentionally off (is-enabled={enabled})"
     active = _is_active(unit)
     if active is False:
         return unit, "down", "is-active != active"
