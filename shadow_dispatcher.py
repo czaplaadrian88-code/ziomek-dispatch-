@@ -1086,6 +1086,12 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
     state_all = state_machine.get_all()
     TERMINAL = ("delivered", "cancelled", "returned_to_pool", "picked_up")
 
+    # Opcja B (2026-06-26): zbierz PROPOSE-y do zasilenia pending_proposals.json z silnika
+    # (Telegram OFF → plik osierocony; konsumenci panel_watcher/resweep/Faza C go potrzebują).
+    # Flag-gated default OFF = no-op. Jeden atomowy zapis PO pętli (nie per event).
+    _pp_write = bool(C.flag("ENABLE_PENDING_PROPOSALS_WRITE", False))
+    _pp_upserts: list = []
+
     for ev in events:
         eid = ev["event_id"]
         oid = ev.get("order_id")
@@ -1266,6 +1272,10 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
 
             _append_decision(shadow_log_path, record)
 
+            # Opcja B: zbierz PROPOSE do pending_proposals (zapis po pętli, atomowo)
+            if _pp_write and record.get("verdict") == "PROPOSE" and oid is not None:
+                _pp_upserts.append((str(oid), record))
+
             # AUTON-01 (2026-06-13): egzekutor auto-assign ZA FLAGĄ (kanon
             # ETAP4, ENABLE_AUTO_ASSIGN default false → return None, zero I/O).
             # Hook TYLKO tu (nie w pipeline) — czasówka/plan-recheck nigdy nie
@@ -1289,6 +1299,22 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             stats["failed"] += 1
             _log.error(f"process_event fail {eid}: {e}\n{traceback.format_exc()}")
             event_bus.mark_failed(eid, str(e))
+
+    # Opcja B: jeden atomowy zapis zebranych PROPOSE → pending_proposals.json.
+    # Fail-soft (NIGDY nie wywala tick'a). No-op gdy flaga OFF / brak PROPOSE.
+    if _pp_write and _pp_upserts:
+        try:
+            from dispatch_v2 import pending_proposals_store as _pps
+            from datetime import datetime as _dt_pp, timezone as _tz_pp
+            _n = _pps.upsert_proposals(_pp_upserts, _dt_pp.now(_tz_pp.utc))
+            _log.info(f"PENDING_PROPOSALS_WRITE upserted={_n}")
+        except Exception as _pp_e:
+            _log.warning(f"pending_proposals write fail: {_pp_e}")
+
+    # Faza C: globalna re-alokacja → konsola realizowana POZA gorącą ścieżką
+    # (resweep co 1 min pisze dispatch_state/global_alloc.json, feed.py overlay).
+    # Decyzja po audycie 27.06: NIE re-emitować do shadow_decisions.jsonl (psułoby
+    # koord_cascade_monitor + bazę panelu; wieczna łatka). Patrz pending_global_resweep.
     return stats
 
 

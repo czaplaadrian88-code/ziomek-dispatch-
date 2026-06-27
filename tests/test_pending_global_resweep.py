@@ -165,3 +165,80 @@ def test_run_once_skips_already_assigned(tmp_path, monkeypatch):
     (tmp_path / "orders.json").write_text(json.dumps(op))
     s = PGR.run_once(now=_N)
     assert s["hanging"] == 0
+
+
+# ---------- Faza C: global_allocate_results (pełne wyniki → shadow_decisions) ----------
+def test_global_allocate_results_returns_full_results_consistent_with_alloc(monkeypatch):
+    """Zwraca {oid: PipelineResult}; best każdego wyniku = ten sam kurier co allocation
+    (jedno źródło logiki), i jest feasible-first (verdict MAYBE)."""
+    monkeypatch.setattr(PGR, "_assess", _fake_assess)
+    fleet = {c: _cs(c) for c in ("A", "B", "C")}
+    hanging = [("o1", _rec("o1")), ("o2", _rec("o2")), ("o3", _rec("o3"))]
+    alloc = PGR.global_allocate(hanging, {c: _cs(c) for c in ("A", "B", "C")}, _N)
+    results = PGR.global_allocate_results(hanging, fleet, _N)
+    assert set(results.keys()) == {"o1", "o2", "o3"}
+    for oid in ("o1", "o2", "o3"):
+        assert results[oid].best is not None
+        assert str(results[oid].best.courier_id) == str(alloc[oid]["cid"])
+        assert results[oid].best.feasibility_verdict == "MAYBE"  # feasible-first
+    # rozjazd kierunków zachowany w wynikach (nie wszystkie na A)
+    assert len({str(results[o].best.courier_id) for o in ("o1", "o2", "o3")}) == 3
+
+
+def test_global_allocate_results_does_not_mutate_input_fleet(monkeypatch):
+    monkeypatch.setattr(PGR, "_assess", _fake_assess)
+    fleet = {c: _cs(c) for c in ("A", "B", "C")}
+    PGR.global_allocate_results([("o1", _rec("o1")), ("o2", _rec("o2"))], fleet, _N)
+    assert all(len(fleet[c].bag) == 0 for c in ("A", "B", "C"))
+
+
+def test_global_allocate_backcompat_results_out_none_identical(monkeypatch):
+    """Bez _results_out allocation bajt-identyczny jak z _results_out (zero zmiany zachowania)."""
+    monkeypatch.setattr(PGR, "_assess", _fake_assess)
+    hanging = [("o1", _rec("o1")), ("o2", _rec("o2")), ("o3", _rec("o3"))]
+    alloc_plain = PGR.global_allocate(hanging, {c: _cs(c) for c in ("A", "B", "C")}, _N)
+    collected = {}
+    alloc_coll = PGR.global_allocate(hanging, {c: _cs(c) for c in ("A", "B", "C")}, _N,
+                                     _results_out=collected)
+    assert alloc_plain == alloc_coll
+    assert set(collected.keys()) == {"o1", "o2", "o3"}
+
+
+def test_global_allocate_results_failsoft_on_assess_error(monkeypatch):
+    def _boom(oe, fl, now):
+        raise RuntimeError("assess exploded")
+    monkeypatch.setattr(PGR, "_assess", _boom)
+    out = PGR.global_allocate_results([("o1", _rec("o1"))], {"A": _cs("A")}, _N)
+    assert out == {}
+
+
+def test_global_allocate_results_no_courier_still_recorded(monkeypatch):
+    """Brak feasible (best=None) → wynik nadal w mapie (konsola pokaże KOORD/no-courier)."""
+    monkeypatch.setattr(PGR, "_assess", lambda oe, fl, now: _result([], total=0, feasible=0))
+    out = PGR.global_allocate_results([("o1", _rec("o1"))], {"A": _cs("A")}, _N)
+    assert "o1" in out and out["o1"].best is None
+
+
+# ---------- Faza C: zapis global_alloc.json dla konsoli (flaga ENABLE_GLOBAL_ALLOC_WRITE) ----------
+def test_run_once_writes_global_alloc_when_flag_on(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch, {"o1": "A", "o2": "A", "o3": "A"})
+    monkeypatch.setattr(C, "flag",
+                        lambda n, d=False: True if n in (PGR.FLAG, "ENABLE_GLOBAL_ALLOC_WRITE") else d)
+    captured = {}
+    from dispatch_v2 import shadow_dispatcher as SD, global_alloc_store as GAS
+    monkeypatch.setattr(SD, "_serialize_result",
+                        lambda res, eid, lat: {"order_id": eid,
+                                               "best": {"courier_id": getattr(getattr(res, "best", None), "courier_id", None)}})
+    monkeypatch.setattr(GAS, "write", lambda props, now, **k: (captured.__setitem__("props", props), len(props))[1])
+    PGR.run_once(now=_N)
+    assert "props" in captured                                 # write zawołany
+    assert set(captured["props"].keys()) == {"o1", "o2", "o3"}  # WSZYSTKIE wiszące, nie tylko zmienione
+
+
+def test_run_once_no_global_alloc_write_when_flag_off(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch, {"o1": "A"})   # _setup: tylko PGR.FLAG ON, write-flag OFF
+    called = {"w": False}
+    from dispatch_v2 import global_alloc_store as GAS
+    monkeypatch.setattr(GAS, "write", lambda *a, **k: called.update(w=True) or 0)
+    PGR.run_once(now=_N)
+    assert called["w"] is False                  # write NIE zawołany przy fladze OFF

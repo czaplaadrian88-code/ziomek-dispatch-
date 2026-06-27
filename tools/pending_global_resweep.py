@@ -143,11 +143,19 @@ def _assess(order_event: dict, fleet: Dict[str, Any], now: datetime):
 
 
 def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
-                    now: datetime) -> Dict[str, dict]:
+                    now: datetime,
+                    _results_out: Optional[Dict[str, Any]] = None) -> Dict[str, dict]:
     """Sekwencyjny greedy z aktualizacją stanu floty.
 
     hanging: [(oid, orders_state_rec)]. Zwraca {oid: {cid,name,score,feasibility,
     pool_total,pool_feasible,km,r6,cos,spread}} = globalna alokacja.
+
+    _results_out (opcjonalny, Faza C): gdy podany dict — wypełniany {oid: PipelineResult}
+    PEŁNYM wynikiem assess_order użytym do alokacji TEGO zlecenia (liczonym nad flotą
+    wirtualnie doładowaną wcześniejszymi alokacjami w tym sweepie). Pozwala konsumentowi
+    (shadow_dispatcher Fazy C) zserializować te same rekordy do shadow_decisions.jsonl
+    (=lustro konsoli) BEZ 2. kopii reguł — selekcja/feasible-first/best_effort dziedziczone
+    z assess_order. Back-compat: gdy None, zachowanie bajt-identyczne (tylko zwrot allocation).
 
     Zasada: w każdej rundzie oceniamy WSZYSTKIE jeszcze-niealokowane zlecenia żywym
     assess_order nad BIEŻĄCĄ flotą; przypisujemy to o najwyższym best-score; doklejamy
@@ -196,6 +204,8 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
                                "cand_scores": cand_scores,
                                "pool_total": int(getattr(res, "pool_total_count", 0) or 0),
                                "pool_feasible": int(getattr(res, "pool_feasible_count", 0) or 0)}
+            if _results_out is not None and res is not None:
+                _results_out[oid] = res
             remaining.discard(oid)
             continue
 
@@ -211,6 +221,8 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
             "pool_feasible": int(getattr(res, "pool_feasible_count", 0) or 0),
             "no_courier": False,
         }
+        if _results_out is not None and res is not None:
+            _results_out[oid] = res
         # wirtualnie doklej zlecenie do worka kuriera → kolejne re-oceny widzą obciążenie
         fleet = _tentative_assign(fleet, cid, recs[oid])
         remaining.discard(oid)
@@ -220,6 +232,22 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
             if ocid == cid:
                 assessed[other] = _assess(events[other], fleet, now)
     return allocation
+
+
+def global_allocate_results(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
+                            now: datetime) -> Dict[str, Any]:
+    """Faza C: globalna alokacja → {oid: PipelineResult} (pełne wyniki assess_order nad
+    wirtualnie doładowaną flotą, w kolejności pewności score). Cienka nakładka na
+    `global_allocate` (jedno źródło logiki — zero duplikacji reguł). Konsument
+    (shadow_dispatcher, flaga ENABLE_GLOBAL_ALLOCATION) serializuje te wyniki do
+    shadow_decisions.jsonl = lustro konsoli koordynatora. Fail-soft: błąd/puste → {}."""
+    results: Dict[str, Any] = {}
+    try:
+        global_allocate(hanging, fleet0, now, _results_out=results)
+    except Exception as e:  # noqa: BLE001 — Faza C nie może wywalić tick'a shadow_dispatcher
+        _log.warning(f"global_allocate_results fail: {type(e).__name__}: {e}")
+        return {}
+    return results
 
 
 def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> dict:
@@ -270,7 +298,11 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
     fleet_list = CR.dispatchable_fleet()
     fleet = {str(cs.courier_id): cs for cs in fleet_list}
 
-    allocation = global_allocate(hanging, fleet, now)
+    # Faza C: gdy zapis dla konsoli ON, zbierz pełne wyniki w TYM SAMYM przebiegu
+    # (global_allocate._results_out) — zero podwójnego liczenia assess_order.
+    _alloc_write = C.flag("ENABLE_GLOBAL_ALLOC_WRITE", False)
+    _ga_results: Optional[Dict[str, Any]] = {} if _alloc_write else None
+    allocation = global_allocate(hanging, fleet, now, _results_out=_ga_results)
 
     # metryki rozjazdu (pile-on jednego kuriera) przed/po
     def _pile(d):
@@ -359,6 +391,27 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         })
 
     _append_jsonl(rows)
+
+    # Faza C (2026-06-27): dedykowany kanał globalnej alokacji DLA KONSOLI.
+    # resweep (proces POZA gorącą ścieżką, co 1 min) nadpisuje global_alloc.json PEŁNYM
+    # bieżącym podziałem wiszących; feed.py overlay pokazuje to na tablicy. NIE dotyka
+    # shadow_decisions.jsonl (audyt 27.06 — zostaje czysty). Serializacja przez
+    # shadow_dispatcher._serialize_result = ten sam kształt co shadow_decisions →
+    # feed._proposal_from_decision parsuje identycznie. Flaga OFF=no-op. Fail-soft.
+    if _alloc_write and _ga_results:
+        try:
+            from dispatch_v2 import shadow_dispatcher as _sd
+            from dispatch_v2 import global_alloc_store as _gas
+            _props: Dict[str, Any] = {}
+            for _oid, _res in _ga_results.items():
+                try:
+                    _props[str(_oid)] = _sd._serialize_result(_res, f"globalloc-{_oid}", 0.0)
+                except Exception as _se:
+                    _log.warning(f"global_alloc serialize fail oid={_oid}: {_se}")
+            _w = _gas.write(_props, now)
+            _log.info(f"GLOBAL_ALLOC_WRITE proposals={_w}")
+        except Exception as _gae:
+            _log.warning(f"global_alloc write fail: {_gae}")
 
     # LIVE re-proponowanie (edit istniejącej wiadomości TG + update pending_proposals)
     # — NIEzaimplementowane dopóki PENDING_RESWEEP_LIVE; wymaga lockowania pliku
