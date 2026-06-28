@@ -800,7 +800,13 @@ def _bruteforce_plan(
     to_place: List[int] = list(bag_delivery_idxs) + [new_delivery_idx]
     if new_pickup_idx is not None:
         to_place.append(new_pickup_idx)
-    to_place.extend(bag_pickup_idxs_by_oid.values())
+    # B4 FIX (audyt 2026-06-28): super-odbior (group_oids) jest WSPOLDZIELONY — mapa
+    # bag_pickup_idxs_by_oid kieruje N oidow grupy na ten SAM super_pickup_idx, wiec
+    # .values() ma duplikaty -> bruteforce wkladal super-odbior N razy (double-pickup).
+    # dict.fromkeys = dedup z zachowaniem kolejnosci -> super-odbior RAZ. Naprawia greedy
+    # path 2 (OR-Tools INFEASIBLE ~38/d) + panic-rollback OR-Tools off. OR-Tools on -> ta
+    # sciezka nie biegnie (runtime-neutralne live). Twin z _greedy_plan nizej.
+    to_place.extend(dict.fromkeys(bag_pickup_idxs_by_oid.values()))
 
     # Mapping delivery_idx → pickup_idx dla ordinances z pickup-before-delivery:
     #  - pending bag items (V3.19e): (pickup_idx, delivery_idx) par z bag_pickup_idxs_by_oid
@@ -879,6 +885,28 @@ def _greedy_plan(
     # ale O(k*N^2) zamiast bruteforce).
     for p_idx, d_idx in pending_pairs:
         n = len(seq_base)
+        # B4 FIX (audyt 2026-06-28): super-odbior (group_oids) WSPOLDZIELONY przez kilka
+        # zamowien grupy (bag_pickup_idxs_by_oid: N oidow -> ten SAM super_pickup_idx).
+        # Gdy juz wstawiony przez wczesniejsza pare grupy -> wstaw TYLKO dostawe (po
+        # istniejacym odbiorze), NIE dubluj odbioru (= double-pickup). _simulate_sequence
+        # liczy single dwell dla group_oids gdy wezel jest w sekwencji RAZ.
+        if p_idx in seq_base:
+            p_existing = seq_base.index(p_idx)
+            best_d_pos = None
+            best_d_key = (10 ** 9, float("inf"))
+            for d_pos in range(p_existing + 1, n + 1):
+                candidate = list(seq_base)
+                candidate.insert(d_pos, d_idx)
+                plan = _plan_from_sequence(
+                    candidate, nodes, leg_min, new_order, bag, now, sla_minutes
+                )
+                key = (plan.sla_violations, plan.total_duration_min)
+                if key < best_d_key:
+                    best_d_key = key
+                    best_d_pos = d_pos
+            if best_d_pos is not None:
+                seq_base.insert(best_d_pos, d_idx)
+            continue
         best_insertion: Optional[tuple] = None
         best_ins_key = (10 ** 9, float("inf"))
         for d_pos in range(n + 1):
