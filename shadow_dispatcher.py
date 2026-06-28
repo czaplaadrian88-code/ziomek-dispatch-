@@ -255,7 +255,12 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        # salvage* (LIVE relaksacja HARD konca zmiany BEZ sladu w shadow). Twin A+B przez
                        # wspolny _propagate_prefixed_metrics (l.~489 A / l.~864 B). Decyzyjnie-NEUTRALNE
                        # (metryki liczone ZAWSZE, dokladane tylko do logu).
-                       "post_shift_overrun_", "end_of_day_salvage")
+                       "post_shift_overrun_", "end_of_day_salvage",
+                       # #6 (audyt 28.06, metser-would-hard-cap P1): would_hard_cap/hard_tier_bag_cap
+                       # liczone ZAWSZE feasibility_v2:462-463 (LIVE HARD reject gdy ENABLE_HARD_TIER_BAG_CAP),
+                       # gineły z shadow_decisions (0/2000) -> kalibracja cap-Z slepa. Pelne klucze jak
+                       # end_of_day_salvage. Decyzyjnie-NEUTRALNE (liczone zawsze, dokladane tylko do logu).
+                       "would_hard_cap", "hard_tier_bag_cap")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:

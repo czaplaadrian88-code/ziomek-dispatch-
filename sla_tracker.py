@@ -216,6 +216,28 @@ def process(evt):
             "was_czasowka": order.get("order_type") == "czasowka",
             "logged_at": now_iso(),
         }
+        # #5 GPS-walidacja dostawy (SHADOW, flaga ENABLE_GPS_DELIVERY_VALIDATION 2026-06-28):
+        # fizyczne potwierdzenie vs prawda-przyciskowa. delivered_at panelu = klik; GPS z apki
+        # (courier_ground_truth, source=auto_geofence) = fizyczne wejście w strefę. Tylko telemetria
+        # → sla_log, ZERO wpływu na SLA/decyzje. OFF = byte-identyczny (brak pól). Lazy import, fail-soft.
+        if C.flag("ENABLE_GPS_DELIVERY_VALIDATION",
+                  getattr(C, "ENABLE_GPS_DELIVERY_VALIDATION", False)):
+            try:
+                from dispatch_v2 import courier_ground_truth as _cgt
+                _gt = _cgt.load_ground_truth()
+                _gps_epoch = _cgt.gps_delivered_at(_gt, oid)
+                _gps_src = (_cgt.get_entry(_gt, oid) or {}).get("source")
+                _pan = _parse_aware_utc(delivered_ts)
+                rec["gps_delivered_epoch"] = _gps_epoch
+                rec["gps_source"] = _gps_src
+                # auto_geofence = fizyczne (geofence); manual_button = klik kuriera (NIE fizyczne)
+                rec["physical_verified"] = bool(_gps_epoch) and _gps_src == "auto_geofence"
+                rec["button_vs_gps_delta_s"] = (
+                    round(_pan.timestamp() - float(_gps_epoch))
+                    if (_pan and _gps_epoch) else None)
+            except Exception as _e:
+                _log.warning(
+                    f"gps_delivery_validation skip {oid}: {type(_e).__name__}: {_e}")
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(LOG_PATH, "a") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

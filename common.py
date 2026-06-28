@@ -122,6 +122,13 @@ ETAP4_DECISION_FLAGS = (
     # panel finance.courier_cost_components). Telemetria pln_v_payaware ZAWSZE;
     # aplikacja do pln_v (i tym samym arm PLN E2) za flaga. courier_pay.json z syncu.
     "ENABLE_PLN_COURIER_PAY",
+    # #9 conftest-leak fix (audyt 28.06): 3 flagi decyzyjne flags.json=True ale POZA ETAP4 →
+    # conftest nie strippował → C.flag() w testach zwracał prod-True (regresja cicho biegła ON
+    # myśląc że OFF). Rejestracja = conftest strip + widoczne w flag_fingerprint. Fallback OFF:
+    # ALWAYS_PROPOSE_ON_SATURATION/R_PACZKI_FLEX (env-default), PLN_QUALITY_AWARE (callsite literal False).
+    "ENABLE_ALWAYS_PROPOSE_ON_SATURATION",
+    "ENABLE_R_PACZKI_FLEX",
+    "ENABLE_PLN_QUALITY_AWARE",
     # FOOD-AGE HARD-SLA (2026-06-17 Faza 2): twardy span pickup→delivery≤sla w
     # solverze + warm-start sekwencją bazową + fallback OFF (gwarancja ON≤OFF).
     # Komponuje się z ENABLE_OBJ_DELIVERY_FOOD_AGE. Faza 0 root-cause:
@@ -205,6 +212,7 @@ ENABLE_OBJ_FOOD_AGE_HARD_SLA = False  # Faza 2 2026-06-17 (food-age hard-SLA + w
 ENABLE_END_OF_DAY_SALVAGE = False  # 2026-06-18 (ostatnia godzina pracy firmy — bend reguł końca zmiany)
 ENABLE_FEAS_CARRY_READMIT = False  # #483000 2026-06-27 (carry-aware re-admit feasible-path, cap-40 Tier-3)
 ENABLE_O2_READY_ANCHOR_SWEEP = False  # O2 re-seq 2026-06-27 (ready-anchor + overage+λ·czas_late objektyw worka, review 02.07)
+ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria physical_verified delivered_at panel-vs-GPS courier_ground_truth; SHADOW, zero wpływu na decyzje/SLA; kanon=flags.json hot)
 ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
 ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
 
