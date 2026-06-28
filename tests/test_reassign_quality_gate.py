@@ -21,8 +21,24 @@ class _Cand:
                           {"O1": BASE + timedelta(minutes=pick_min)})
 
 
-def _gate(a, b, a_pos, b_pos, holder="123", bcid="370"):
-    return R._quality_gate(a, b, "O1", a_pos, b_pos, holder, bcid)
+def _gate(a, b, a_pos, b_pos, holder="123", bcid="370", b_bag=None):
+    return R._quality_gate(a, b, "O1", a_pos, b_pos, holder, bcid, b_bag=b_bag)
+
+
+import contextlib
+
+
+@contextlib.contextmanager
+def _env(k, v):
+    old = os.environ.get(k)
+    os.environ[k] = v
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = old
 
 
 # ---- _usable_pos: prefiks last_, gps, store/interp = OK; fikcja = NIE ----
@@ -120,3 +136,29 @@ def test_big_save_env_tunable():
             os.environ.pop(R.QUALITY_BIG_SAVE_KEY, None)
         else:
             os.environ[R.QUALITY_BIG_SAVE_KEY] = old
+
+
+# ---- RESERVE-AWARE: oszczędność = TYLKO bundling (B busy); wolnego nie palimy (Adrian 28.06) ----
+def test_oszcz_bundling_only_suppresses_free_courier():
+    a = _Cand("123", 20); b = _Cand("370", 10)   # oszczędność save=10 (oba na czas)
+    with _env(R.OSZCZ_BUNDLING_ONLY_FLAG, "1"):
+        g_free = _gate(a, b, "gps", "gps", b_bag=0)      # B WOLNY → wygaszone
+        assert g_free["quality_reassign"] is False
+        assert "WOLNY" in g_free["quality_reason"]
+        g_busy = _gate(a, b, "gps", "gps", b_bag=2)      # B ZAJĘTY (po drodze) → odpala
+        assert g_busy["quality_reassign"] is True
+
+
+def test_oszcz_bundling_only_off_fires_free():
+    a = _Cand("123", 20); b = _Cand("370", 10)
+    with _env(R.OSZCZ_BUNDLING_ONLY_FLAG, "0"):
+        g = _gate(a, b, "gps", "gps", b_bag=0)           # flaga OFF → stare zachowanie (odpala)
+        assert g["quality_reassign"] is True
+
+
+def test_ratunek_free_courier_fires_even_under_bundling_only():
+    a = _Cand("123", 40); b = _Cand("370", 25)           # RATUNEK (A spóźniony)
+    with _env(R.OSZCZ_BUNDLING_ONLY_FLAG, "1"):
+        g = _gate(a, b, "gps", "gps", b_bag=0)           # B wolny ALE ratunek → odpala
+        assert g["quality_reassign"] is True
+        assert "ratunek" in g["quality_reason"]

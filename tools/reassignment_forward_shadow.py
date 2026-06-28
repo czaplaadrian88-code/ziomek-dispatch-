@@ -81,6 +81,11 @@ QUALITY_BIG_SAVE_KEY = "REASSIGN_QUALITY_BIG_SAVE_MIN"
 QUALITY_R6_LATE_KEY = "REASSIGN_QUALITY_R6_LATE_MIN"
 DEFAULT_BIG_SAVE_MIN = 8.0     # „DUŻO szybciej" dla A-na-czas (Adrian 28.06: 8-10 min) — env-tunable
 DEFAULT_R6_LATE_MIN = 35.0     # bag_time(O)>35 = dowóz po czasie (= sla_log delivery_time_minutes>35)
+# RESERVE-AWARE (Adrian 28.06, measure: peak median 1 wolny kurier, ~1 zlec/min, koszt braku rezerwy
+# +2 min R6 + breachy nadchodzącym): ramię OSZCZĘDNOŚĆ odpala TYLKO jako dołożenie do JADĄCEGO kuriera
+# (b_bag>0 = bundling „dwa dalekie na jednego"); WOLNEGO (bag=0) NIE palimy pod samą oszczędność —
+# zostaje w rezerwie na napływ. RATUNEK bez zmian (spóźnienie holdera > koszt rezerwy → wolny OK).
+OSZCZ_BUNDLING_ONLY_FLAG = "ENABLE_REASSIGN_OSZCZ_BUNDLING_ONLY"
 
 # Pola czytane przez assess_order (zweryfikowane dispatch_pipeline.py:2881-3055).
 _EVENT_FIELDS = (
@@ -215,7 +220,7 @@ def _minutes(a, b) -> Optional[float]:
 
 
 def _quality_gate(a_cand: Any, best: Any, oid: str, a_pos, b_pos,
-                  holder_cid: str, b_cid: str) -> dict:
+                  holder_cid: str, b_cid: str, b_bag=None) -> dict:
     """Gradient gate JAKOŚCI (Krok 1, log-only). Duch-przerzut TYLKO gdy „na pewno lepiej":
       • RAMIĘ 1 (ratunek): obecny dowiezie po czasie (R6>próg) LUB jest infeasible, a nowy NA CZAS;
       • RAMIĘ 2 (oszczędność): obecny na czas, nowy dowiezie ≥ BIG_SAVE_MIN min wcześniej.
@@ -223,6 +228,7 @@ def _quality_gate(a_cand: Any, best: Any, oid: str, a_pos, b_pos,
     R6 per-zlecenie = predicted_delivered_at − pickup_at. Zwraca dict pól quality_*."""
     big_save = float(os.environ.get(QUALITY_BIG_SAVE_KEY, DEFAULT_BIG_SAVE_MIN))
     r6_late = float(os.environ.get(QUALITY_R6_LATE_KEY, DEFAULT_R6_LATE_MIN))
+    bundling_only = os.environ.get(OSZCZ_BUNDLING_ONLY_FLAG, "0") == "1"
     a_pred = _plan_dt(a_cand, oid, "predicted_delivered_at")
     a_pick = _plan_dt(a_cand, oid, "pickup_at")
     b_pred = _plan_dt(best, oid, "predicted_delivered_at")
@@ -241,8 +247,14 @@ def _quality_gate(a_cand: Any, best: Any, oid: str, a_pos, b_pos,
             reason = "ratunek: obecny dowiezie po czasie (R6>%.0f), nowy na czas" % r6_late
             quality = True
         elif (not a_late) and save_min is not None and save_min >= big_save:
-            reason = "oszczędność: nowy dowiezie ~%.0f min wcześniej (krótsza trasa)" % save_min
-            quality = True
+            b_busy = isinstance(b_bag, int) and b_bag > 0
+            if bundling_only and not b_busy:
+                # B = WOLNY → NIE pal rezerwy pod samą oszczędność (reserve-aware). Wolny zostaje na napływ.
+                reason = ("oszczędność ~%.0f min, ale B WOLNY → trzymamy w rezerwie (tylko bundling)" % save_min)
+            else:
+                reason = (("oszczędność: nowy (po drodze) dowiezie ~%.0f min wcześniej" % save_min)
+                          if b_busy else ("oszczędność: nowy dowiezie ~%.0f min wcześniej" % save_min))
+                quality = True
     return {
         "quality_reassign": quality,
         "quality_reason": reason,
@@ -357,7 +369,7 @@ def evaluate_order(rec: dict, holder_cid: str, fleet: Dict[str, Any],
             a_cand, best, oid,
             getattr(cs_a, "pos_source", None) if cs_a is not None else None,
             getattr(cs_b, "pos_source", None) if cs_b is not None else None,
-            holder_cid, b_cid))
+            holder_cid, b_cid, b_bag=b_bag))
     return rec_out
 
 
