@@ -67,6 +67,13 @@ def parse_delivery_deadline(uwagi, day_warsaw):
     hi = min(len(text), km.end() + _WINDOW_AFTER)
     window = text[lo:hi]
 
+    # PRECYZJA (sesja 20, 2026-06-28, audyt czystości pomiaru): "nie wcześniej" / "nie przed" /
+    # "najwcześniej" = ograniczenie NAJWCZEŚNIEJ (deliver NIE PRZED godziny), ODWROTNOŚĆ deadline'u
+    # DOSTAWY → to NIE jest deadline (case 477952 „Czasówka na 20 ... nie wcześniej bo nikogo nie
+    # będzie": dostawa 20:07 jest ZGODNA, nie +7 spóźnienia). Bez tego oracle liczył fałszywe „late".
+    if any(p in window.lower() for p in ("nie wcze", "nie przed", "najwcze")):
+        return None
+
     cands = []  # (pozycja_w_oknie, hh, mm) — bierzemy najwcześniejszy
     for m in _HHMM_RE.finditer(window):
         hh, mm = int(m.group(1)), int(m.group(2))

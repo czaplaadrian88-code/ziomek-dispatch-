@@ -80,6 +80,15 @@ def test_parser_precision_negatives():
     assert _hhmm("czasówka standardowa, bez godziny") is None
 
 
+def test_parser_nie_wczesniej_is_not_deadline():
+    """'nie wcześniej'/'nie przed' = ograniczenie NAJWCZEŚNIEJ (deliver NIE PRZED), nie deadline.
+    Bez tego oracle liczył fałszywe 'late' (case 477952 'na 20 nie wcześniej' → dostawa 20:07 OK)."""
+    assert _hhmm("Czasówka na 20 u klienta nie wcześniej bo nikogo nie będzie") is None
+    assert _hhmm("czasówka na 18, nie przed 18") is None
+    # kontrola: zwykły deadline dalej działa
+    assert _hhmm("Czasówka na 18 u klienta") == "18:00"
+
+
 # ---------- brak regresji recall vs parser-cień bundle_calib_shadow ----------
 
 def _load_bundle_calib():

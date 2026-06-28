@@ -94,10 +94,14 @@ def compute(files):
     rows = []
     for oid, o in merged.items():
         u = o.get("uwagi") or ""
+        ul = u.lower()
         anchor = (_parse_ts(o.get("pickup_at_warsaw")) or _parse_ts(o.get("first_seen"))
                   or _parse_ts(o.get("created_at_utc")))
         dl = parse_delivery_deadline(u, anchor) if anchor else None
-        hint = any(h in u.lower() for h in _DEADLINE_HINT)
+        hint = any(h in ul for h in _DEADLINE_HINT)
+        # "nie wcześniej"/"nie przed" = ograniczenie NAJWCZEŚNIEJ (nie deadline) → parser świadomie
+        # zwraca None; to NIE jest recall-gap, więc NIE liczymy jako parse_miss (instrument uczciwy).
+        _earliest_bound = any(p in ul for p in ("nie wcze", "nie przed", "najwcze"))
         deliv = _parse_ts(o.get("delivered_at"))
         pick = _parse_ts(o.get("picked_up_at")) or _parse_ts(o.get("pickup_at_warsaw"))
         late = round((deliv - dl).total_seconds() / 60.0, 1) if (deliv and dl) else None
@@ -110,7 +114,7 @@ def compute(files):
             "deadline_hhmm": dl.astimezone(WARSAW).strftime("%H:%M") if dl else None,
             "delivered_hhmm": deliv.astimezone(WARSAW).strftime("%H:%M") if deliv else None,
             "late_min": late,
-            "parse_miss": bool(hint and dl is None),
+            "parse_miss": bool(hint and dl is None and not _earliest_bound),
             "deadline_before_pickup": bool(dl and pick and dl < pick),
         })
 
