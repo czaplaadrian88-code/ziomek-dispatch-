@@ -6,60 +6,86 @@ WYŁĄCZNIE po `prep_minutes >= 60` (panel_client.normalize_order) i NIE czyta t
 deadline'u → zlecenie `order_type='elastic'` z twardym 17:10 jest niewidoczne dla
 SLA/feasibility/planu (R6 liczy generyczne pickup+35 → expected_delivery_by 17:34).
 
-TEN MODUŁ = JEDNO źródło ekstrakcji frazy (parytet semantyki z parserem-cieniem
-`tools/bundle_calib_shadow._parse_deadline`, który dziś żyje tylko w shadow — bundle_calib
-jest POD AUDYTEM, więc NIE migrujemy go; test `test_czasowka_uwagi_deadline` pilnuje
-PARYTETU regexu między tym modułem a shadow, żeby się nie rozjechały).
-
-ADDITYWNY (wzorzec #8 z ziomek-change-protocol): produkuje NOWE pole
+TEN MODUŁ = JEDNO źródło ekstrakcji frazy. ADDITYWNY (wzorzec #8): produkuje NOWE pole
 `delivery_deadline_uwagi`; NIE nadpisuje `order_type` ani `czas_kuriera*` (committed R27
 nietykalny). Deadline z `uwagi` to NOWA klasa ograniczenia — DOSTAWY (feasibility_v2:1016:
-"czasówka rządzi tylko czasem pickupu nie delivery"), nie pokrywa jej istniejąca czasówka
-(prep≥60 = pickup).
+"czasówka rządzi tylko czasem pickupu nie delivery").
 
-Konsumpcja DECYZYJNA (wpięcie w 3 bliźniaki SLA + serializer) = osobny, późniejszy etap
-za flagą, po dowodzie materialności z oracle + decyzji HARD-vs-SOFT. Dziś: ingest + persist
-+ pomiar offline (observability), zero wpływu na decyzje.
+STAGE 2 BROADENING (sesja 20, 2026-06-28 — empirical-first, Lekcja #82, na korpusie oracle):
+parser-cień `bundle_calib_shadow._DEADLINE_RE` (wąski: słowo-czasówka → potem liczba) gubił
+~6/48 realnych przypadków (recall): odwrotna kolejność ("na 15:00 czasówka", "na 20.20 …
+czasówka"), słowa pomiędzy ("czasówka u klienta na 12.15"), stem bez 'k' ("czasowe na 18:50"),
+literówki ("CZASOWKA BA 20:45"). Nowa detekcja = BRAMKA na słowo-kluczu `czas[oó]w` + najbliższy
+token czasu (HH:MM / HH.MM / "na HH" / liczba tuż po słowie) w OKNIE wokół słowa, w DOWOLNĄ
+stronę. Precyzja: bare-liczbę bierzemy TYLKO tuż-po-słowie lub po "na" (nie "4 piętro"/"50cm").
+Sanity (deadline ≥ pickup) NIE tu — robi konsument (normalize_order ma pickup_at). Recall/precyzja
+mierzone `tools/czasowka_uwagi_oracle.py` (deadline_before_pickup = suspekt FP).
 
-⚠ Parser jest CZYSTY (sama ekstrakcja) — sanity (deadline ≥ pickup) i tier-aware (35/40)
-należą do warstwy konsumującej, nie do ekstrakcji. Precyzję/recall regexu mierzy
-`tools/czasowka_uwagi_oracle.py` na realnych `uwagi` (empirical-first, Lekcja #82) PRZED
-ewentualnym poszerzeniem wzorca.
+Konsumpcja DECYZYJNA (3 bliźniaki SLA + serializer) = osobny etap za ACK po dowodzie materialności.
+Dziś: ingest + persist + pomiar offline (observability), zero wpływu na decyzje.
 """
 import re
 from datetime import datetime, timezone
 
 from dispatch_v2.common import WARSAW
 
-# Łapie m.in.: "Czasówka na 17:10", "czasowka 14", "na 14.00", "CZASOWKA NA 16.30".
-# Godzina 0-23, minuty opcjonalne. PARYTET 1:1 z tools/bundle_calib_shadow._DEADLINE_RE
-# (intencjonalna kopia do czasu migracji bundle_calib spod audytu — test pilnuje parytetu).
-_DELIVERY_DEADLINE_RE = re.compile(
-    r"czas[oó]wk[a-zą]*\s*(?:na\s*)?(\d{1,2})(?:[:.](\d{2}))?",
-    re.IGNORECASE)
+# Bramka: dowolny wariant słowa (czasówka/czasowka/czasowe/czasowy/czasowkaaaa/czasowo).
+_KEYWORD_RE = re.compile(r"czas[oó]w", re.IGNORECASE)
+# Token czasu z separatorem (HH:MM / HH.MM / HH,MM / HH;MM) — najwyższa pewność.
+# Separator `,`/`;` REALNY w korpusie (Polacy piszą "12,30", "20;30" — oracle 2026-06-28:
+# 4 realne deadline'y gubione bez tego → mis-parse na "na HH" → drop deadline<pickup).
+_HHMM_RE = re.compile(r"(\d{1,2})[:.,;](\d{2})")
+# "na HH" (bare godzina po przyimku) — średnia pewność; lookahead odcina HH<sep>MM/dłuższe.
+_NA_HH_RE = re.compile(r"\bna\s+(\d{1,2})(?![\d:.,;])", re.IGNORECASE)
+# Liczba tuż po słowie-kluczu (kompat z wąskim parserem-cieniem: "czasowka 14", "czasówka na 17:10").
+_KW_ADJ_RE = re.compile(r"czas[oó]wk[a-zą]*\s*(?:na\s*)?(\d{1,2})(?:[:.,;](\d{2}))?", re.IGNORECASE)
+
+# Okno wokół słowa-klucza (znaki) — łapie odwrotną kolejność i słowa pomiędzy, nie łapie
+# odległych liczb (precyzja). Empiryczne: realne frazy mają czas ≤~30 zn. od słowa.
+_WINDOW_BEFORE = 30
+_WINDOW_AFTER = 40
+
+
+def _valid(hh, mm):
+    return 0 <= hh <= 23 and 0 <= mm <= 59
 
 
 def parse_delivery_deadline(uwagi, day_warsaw):
     """Z pola `uwagi` → aware UTC deadline DOSTAWY tego dnia (Warsaw), albo None.
 
-    day_warsaw: obiekt z atrybutami .year/.month/.day (date lub datetime, dowolna tz)
-                — data Warsaw, do której przypinamy godzinę z `uwagi` (kotwica = data
-                odbioru `pickup_at`, fallback dziś Warsaw; analogicznie do `czas_kuriera`).
-    Zwraca: datetime aware w UTC, albo None gdy brak frazy / niepoprawna godzina.
-    Parser CZYSTY — żadnej sanity względem pickupu (to robi konsument).
+    day_warsaw: obiekt z .year/.month/.day (date lub datetime) — data Warsaw kotwicy
+                (data odbioru `pickup_at`, fallback dziś Warsaw).
+    Zwraca: datetime aware UTC, albo None. Parser CZYSTY (bez sanity względem pickupu).
     """
     if not uwagi or day_warsaw is None:
         return None
-    m = _DELIVERY_DEADLINE_RE.search(str(uwagi))
-    if not m:
+    text = str(uwagi)
+    km = _KEYWORD_RE.search(text)
+    if not km:
         return None
-    try:
+    lo = max(0, km.start() - _WINDOW_BEFORE)
+    hi = min(len(text), km.end() + _WINDOW_AFTER)
+    window = text[lo:hi]
+
+    cands = []  # (pozycja_w_oknie, hh, mm) — bierzemy najwcześniejszy
+    for m in _HHMM_RE.finditer(window):
+        hh, mm = int(m.group(1)), int(m.group(2))
+        if _valid(hh, mm):
+            cands.append((m.start(1), hh, mm))
+    for m in _NA_HH_RE.finditer(window):
         hh = int(m.group(1))
-        mm = int(m.group(2)) if m.group(2) is not None else 0
-    except (ValueError, TypeError):
+        if _valid(hh, 0):
+            cands.append((m.start(1), hh, 0))
+    ma = _KW_ADJ_RE.search(window)
+    if ma:
+        hh = int(ma.group(1))
+        mm = int(ma.group(2)) if ma.group(2) is not None else 0
+        if _valid(hh, mm):
+            cands.append((ma.start(1), hh, mm))
+
+    if not cands:
         return None
-    if not (0 <= hh <= 23 and 0 <= mm <= 59):
-        return None
-    dt = datetime(day_warsaw.year, day_warsaw.month, day_warsaw.day, hh, mm,
-                  tzinfo=WARSAW)
+    cands.sort(key=lambda c: c[0])
+    _, hh, mm = cands[0]
+    dt = datetime(day_warsaw.year, day_warsaw.month, day_warsaw.day, hh, mm, tzinfo=WARSAW)
     return dt.astimezone(timezone.utc)

@@ -19,7 +19,13 @@
 **Dowody (ETAP 4/5):**
 - Regresja CAŁEGO Ziomka: **3465 passed, 10 failed** — te same 10 obcych pre-existing (8× courier_reliability FLT-04 + flag_doc_coverage 3 obce flagi + working_override time-flaky), **ZERO nowych failów z mojego kodu**. (baseline pre-build: 3446P/10F).
 - ON≠OFF: OFF→brak klucza; ON→`delivery_deadline_uwagi`=17:10 (484034); order_type=`elastic`, czas_kuriera=`17:05` nietknięte.
-- **Oracle (materiality, korpus 4114 zleceń):** 48 deadline'ów + 6 recall-miss; **elastic-z-deadlinem = mediana +13,2 min spóźnienia / 60% late>3min** (vs czasówka pickup-protected +2,0 min) → blind-spot POTWIERDZONY liczbą. 6 deadline<pickup (12,5%) = precision-caveat. ⚠ `delivered_at`=klik ±3min (audyt #5) → patrz `on_time_le_deadline_plus3`.
+- **Oracle (materiality, korpus 4114 zleceń) — wersja Stage-1 (wąski regex):** 48 deadline'ów + 6 recall-miss; raportowała „elastic mediana +13,2 min late". ⚠ **TA LICZBA BYŁA ARTEFAKTEM** — zawyżona przez (a) mis-parse czasu z przecinkiem/średnikiem („12,30"→„na 12"→12:00) i (b) niewykluczone deadline<pickup. **Lekcja measure-first: pierwszy odczyt potrafi kłamać; oracle ujawnił bug parsera.**
+
+**Oracle Stage-2 (po broadening + separator `,;` + sanity-gate, KORYGUJE):**
+  - recall-miss **6→0**; effective deadline'y **51** (~1,2% zleceń); deadline<pickup suspekty **3** (dropniete sanity).
+  - **elastic-z-deadlinem (n=9): mediana −2,6 min (≈on-time), ale 33% late>3min, p90 +18,5 min.**
+  - czasówka-z-deadlinem (n=42): mediana +2,0, 43% late>3min, p90 +17,4.
+  - **Uczciwy wniosek:** zjawisko REALNE i powtarzalne (51 przyp.), **~1/3 mija deadline o >3 min, ogon p90 ~17–18 min** (case'y: 484034 +11, 477137 +18, 477492 +18, 476563 +15) — ale mediana ≈on-time i **n małe** → materialność dla flipu decyzyjnego NIE udowodniona; **potrzeba okna danych** zanim Stage 4. ⚠ `delivered_at`=klik ±3min (audyt #5) → `on_time_le_deadline_plus3`.
 
 **STOP — ACK przed:** `git commit` (jawne pliki) + restart `dispatch-panel-watcher` (załadowanie kodu; OFF→bajt-identyczny) + ew. flip flagi ON (start populacji shadow). To niedzielny wieczór ~23:30 PL = **po peaku**, ale deploy/restart = brama ACK (Przykazanie #0 ETAP 6).
 

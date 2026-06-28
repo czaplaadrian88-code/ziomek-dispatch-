@@ -751,6 +751,11 @@ def normalize_order(
     if flag("ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW"):
         _anchor = pickup_at or datetime.now(WARSAW_TZ)
         _dl = parse_delivery_deadline(raw.get("uwagi"), _anchor)
+        # Sanity-gate (Stage 2): deadline DOSTAWY przed ODBIOREM = artefakt parsera
+        # (np. "czasówka 2 dania" → 02:00) lub rzadki cross-midnight → odrzuć (precyzja).
+        # pickup_at aware Warsaw, _dl aware UTC — porównanie instant-owe bezpieczne.
+        if _dl is not None and pickup_at is not None and _dl < pickup_at:
+            _dl = None
         _norm["delivery_deadline_uwagi"] = _dl.isoformat() if _dl else None
 
     return _norm

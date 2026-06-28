@@ -128,19 +128,26 @@ def compute(files):
             "p90_late_min": _p90(lates),
         }
 
+    # "effective" = to, co normalize_order RZECZYWIŚCIE zapisze (sanity-gate Stage 2 odrzuca
+    # deadline < pickup) → segmenty liczą stored-reality; suspekty raportujemy osobno.
+    def _eff(r):
+        return bool(r["deadline_utc"]) and not r["deadline_before_pickup"]
+
     with_uwagi = [r for r in rows if r["uwagi"]]
-    with_deadline = [r for r in rows if r["deadline_utc"]]
+    with_deadline_raw = [r for r in rows if r["deadline_utc"]]
+    with_deadline_eff = [r for r in rows if _eff(r)]
     parse_miss = [r for r in rows if r["parse_miss"]]
     summary = {
         "n_orders": len(rows),
         "n_with_uwagi": len(with_uwagi),
-        "n_with_parsed_deadline": len(with_deadline),
-        "pct_orders_with_deadline": _pct(len(with_deadline), len(rows)),
+        "n_parsed_deadline_raw": len(with_deadline_raw),
+        "n_effective_deadline": len(with_deadline_eff),
+        "pct_orders_with_effective_deadline": _pct(len(with_deadline_eff), len(rows)),
         "n_parse_miss_recall_gap": len(parse_miss),
-        "n_deadline_before_pickup_suspect": sum(1 for r in rows if r["deadline_before_pickup"]),
-        "seg_all_with_deadline": _seg(lambda r: r["deadline_utc"]),
-        "seg_elastic_with_deadline": _seg(lambda r: r["deadline_utc"] and r["order_type"] == "elastic"),
-        "seg_czasowka_with_deadline": _seg(lambda r: r["deadline_utc"] and r["order_type"] == "czasowka"),
+        "n_deadline_before_pickup_suspect_dropped": sum(1 for r in rows if r["deadline_before_pickup"]),
+        "seg_all_effective": _seg(_eff),
+        "seg_elastic_effective": _seg(lambda r: _eff(r) and r["order_type"] == "elastic"),
+        "seg_czasowka_effective": _seg(lambda r: _eff(r) and r["order_type"] == "czasowka"),
     }
     return summary, rows, parse_miss
 
