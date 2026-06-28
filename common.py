@@ -167,6 +167,19 @@ ETAP4_DECISION_FLAGS = (
     # czystych). Default OFF; flip po GO review 02.07 + dowód netto + cap-Z z danych.
     # Decyzyjna, cross-proces. Składa się z B2 (carry-readmit selekcji) ku correctness.
     "ENABLE_O2_READY_ANCHOR_SWEEP",
+    # F3-HARD-RULE FLAGS (2026-06-28, audyt Ziomka — domknięcie ETAP4-gap): flagi
+    # rządzące TWARDYMI regułami feasibility/selekcji, które były POZA rejestrem →
+    # poza zasięgiem fingerprint-parytetu cross-proces / izolacji conftest / flag_registry.
+    # Wszystkie LIVE w flags.json=True; rejestracja runtime-NEUTRALNA (decision_flag czyta
+    # flags.json PRZED stałą). Każda z testem efektu ON≠OFF. Stałe-fallback: HARD_TIER_BAG_CAP
+    # l.~1237, PACZKA_R6 l.~3330, RETURN_VETO l.~3349, NO_GPS_EQUAL l.~1017, OBJM_LEXR6
+    # l.~2526; PLAN_RECHECK_TIER_DWELL dodana w bloku fallback niżej (brakowała).
+    "ENABLE_HARD_TIER_BAG_CAP",
+    "ENABLE_PACZKA_R6_THERMAL_EXEMPT",
+    "ENABLE_R_RETURN_TO_RESTAURANT_VETO",
+    "ENABLE_PLAN_RECHECK_TIER_DWELL",
+    "ENABLE_NO_GPS_EQUAL_TREATMENT",
+    "ENABLE_OBJM_LEXR6_SELECT",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -184,6 +197,7 @@ ENABLE_OBJ_FOOD_AGE_HARD_SLA = False  # Faza 2 2026-06-17 (food-age hard-SLA + w
 ENABLE_END_OF_DAY_SALVAGE = False  # 2026-06-18 (ostatnia godzina pracy firmy — bend reguł końca zmiany)
 ENABLE_FEAS_CARRY_READMIT = False  # #483000 2026-06-27 (carry-aware re-admit feasible-path, cap-40 Tier-3)
 ENABLE_O2_READY_ANCHOR_SWEEP = False  # O2 re-seq 2026-06-27 (ready-anchor + overage+λ·czas_late objektyw worka, review 02.07)
+ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
 # startowych werdyktu razem z flagą, hot-reload bez restartu; fallback = stała
