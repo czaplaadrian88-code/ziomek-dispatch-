@@ -492,7 +492,14 @@ the module constant. ~80+ flags exist. Notable **current** states:
   By construction improve-or-no-op; replay 29k situations zero-harm. Code: `_relax_carried_first` +
   `_detect_departed_pickup_revisit` (+`carried_rest_keys` seed) in `plan_recheck.py`. The courier app and
   coordinator console render this canon verbatim via `ENABLE_BUILD_VIEW_TRUST_CANON_ORDER` (courier-api)
-  and `PANEL_FLAG_TRUST_CANON_ORDER` (nadajesz-panel) — both 🟢 LIVE. These re-sequence an **already
+  and `PANEL_FLAG_TRUST_CANON_ORDER` (nadajesz-panel) — both 🟢 LIVE. ⚠ **2026-06-28 (faseta #3):** the
+  courier-api flag was previously DEAD (masked by `_console_done=True` set at `build_view:1105` before its
+  only consumer `courier_orders.py:1146`) → the app rendered via `route_podjazdy.order_podjazdy` which
+  force-carried-first, diverging from the console (which alone got the 22.06 relax — twin fix-in-1-of-2 #11).
+  **Fixed:** `route_podjazdy.order_podjazdy(trust_canon=…)` now renders the canon verbatim via
+  `_canon_order_from_plan` (mirror of console `_order_from_plan_seq`; coverage `cov_drop/cov_pick` like
+  console), flag wired at `build_view:1107`; monitor `ziomek_time_route_monitor.route_app` mirrors the flag
+  too. Live: q3_route_mismatches 15.1%→0 (app==console==canon). These re-sequence an **already
   assigned** bag only; they do **not** touch assignment/feasibility (a courier carrying a restaurant's
   food can still be assigned new orders, incl. from that restaurant).
 - 🟢 **`ENABLE_RECANON_ON_WRITE` (2026-06-23, LIVE on `dispatch-panel-watcher`).** Root cause fixed
