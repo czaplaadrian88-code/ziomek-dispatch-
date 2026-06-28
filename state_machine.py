@@ -505,6 +505,10 @@ def update_from_event(event: dict) -> Optional[dict]:
             "order_type": payload.get("order_type"),
             "uwagi": payload.get("uwagi"),
             "uwagi_pickup_parsed": payload.get("uwagi_pickup_parsed"),
+            # CZASÓWKA-W-UWAGACH SHADOW (2026-06-28, sesja 20): deklarowany deadline
+            # DOSTAWY sparsowany z `uwagi` (panel_client, za flagą). ADDITYWNE — żaden
+            # konsument decyzyjny go jeszcze nie czyta. None gdy flaga OFF / brak frazy.
+            "delivery_deadline_uwagi": payload.get("delivery_deadline_uwagi"),
             # V3.19f: czas_kuriera 2-field persist (ISO Warsaw + raw HH:MM).
             "czas_kuriera_warsaw": ck_iso,
             "czas_kuriera_hhmm": ck_hhmm,

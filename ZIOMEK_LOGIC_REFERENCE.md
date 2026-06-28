@@ -563,6 +563,20 @@ the module constant. ~80+ flags exist. Notable **current** states:
   `START_ANCHOR_LAST_POS` per firing for the evidence trail. Flag OFF (default). LIVE via env drop-in on
   `dispatch-plan-recheck` (oneshot picks up next tick, **no daemon restart**). Rollback = rm drop-in +
   daemon-reload (next tick OFF). Commit `bd2f7a2`.
+- 🔵 **`ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW` (2026-06-28, sesja 20 — case 484034 Sikorskiego, observability-first).**
+  Ziomek classifies czasówka **only** by `prep_minutes ≥ 60` (`panel_client.normalize_order`) and is **blind**
+  to a hard **delivery** deadline written in free-text `uwagi` ("Czasówka na 17:10") on an otherwise `elastic`
+  order → R6 computes generic pickup+35 (`expected_delivery_by` 17:34, not 17:10). This flag turns ON
+  **extraction + persistence** of that deadline: `czasowka_uwagi.parse_delivery_deadline` (single source,
+  regex parity with the `bundle_calib_shadow` shadow parser) populates a **new additive field**
+  `delivery_deadline_uwagi` in `normalize_order`, persisted by `state_machine.upsert_order` alongside `uwagi`.
+  **Strictly additive / observability-only:** it does **NOT** overwrite `order_type` or `czas_kuriera`
+  (committed R27 untouched, wzorzec #8), and **no decision consumer reads it yet** — wiring into the 3 SLA-anchor
+  twins (`_count_sla_violations` + `feasibility_v2` SLA-loop + `plan_recheck._o2_key`) + serializer is a separate,
+  ACK-gated step after the offline oracle (`tools/czasowka_uwagi_oracle.py`) proves materiality and the
+  HARD-vs-SOFT decision is made (note: `delivered_at` is button-press ±~3 min per the 2026-06-28 runtime-oracle
+  audit, so the oracle tolerances that). OFF (default) → field is not produced (byte-identical ingest). Rollback =
+  flag OFF (hot) / `.bak-pre-czasowka-uwagi-2026-06-28`. Spec: `eod_drafts/2026-06-28/CZASOWKA_UWAGI_PARSER_SPEC.md`.
 
 `kill_switch_to_v1=true` reverts the whole v2 to the legacy `gastro_trigger.sh`.
 

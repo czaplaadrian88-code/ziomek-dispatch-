@@ -31,7 +31,8 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from dispatch_v2.common import setup_logger
+from dispatch_v2.common import setup_logger, flag
+from dispatch_v2.czasowka_uwagi import parse_delivery_deadline
 
 BASE_URL = "https://www.gastro.nadajesz.pl"
 PANEL_ENV = Path("/root/.openclaw/workspace/.secrets/panel.env")
@@ -708,7 +709,7 @@ def normalize_order(
     if pickup_at:
         minutes_to_pickup = (pickup_at - datetime.now(WARSAW_TZ)).total_seconds() / 60
 
-    return {
+    _norm = {
         "order_id": zid,
         "status_id": status_id,
         "status_name": STATUS_MAP.get(status_id, f"unknown({status_id})"),
@@ -740,6 +741,19 @@ def normalize_order(
         "phone": raw.get("phone"),
         "uwagi": raw.get("uwagi"),
     }
+
+    # CZASÓWKA-W-UWAGACH SHADOW (2026-06-28, sesja 20, zlec. 484034): deklarowany
+    # deadline DOSTAWY z free-text `uwagi` ("Czasówka na 17:10") → nowe ADDITYWNE pole
+    # `delivery_deadline_uwagi` (aware UTC ISO / None). Kotwica daty = `pickup_at`
+    # (Warsaw), fallback dziś Warsaw — analogicznie do czas_kuriera (l.~665). NIE
+    # nadpisuje order_type/czas_kuriera (wzorzec #8). OFF → klucz nie powstaje
+    # (bajt-identyczny ingest). Konsument decyzyjny = osobny etap za ACK po oracle.
+    if flag("ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW"):
+        _anchor = pickup_at or datetime.now(WARSAW_TZ)
+        _dl = parse_delivery_deadline(raw.get("uwagi"), _anchor)
+        _norm["delivery_deadline_uwagi"] = _dl.isoformat() if _dl else None
+
+    return _norm
 
 
 def health_check() -> dict:

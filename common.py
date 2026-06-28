@@ -180,6 +180,14 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_PLAN_RECHECK_TIER_DWELL",
     "ENABLE_NO_GPS_EQUAL_TREATMENT",
     "ENABLE_OBJM_LEXR6_SELECT",
+    # CZASÓWKA-W-UWAGACH SHADOW (2026-06-28, sesja 20, zlec. 484034 Sikorskiego):
+    # parsuje deklarowany deadline DOSTAWY z free-text `uwagi` ("Czasówka na 17:10")
+    # → nowe pole `delivery_deadline_uwagi` (panel_client → state_machine persist).
+    # ADDITYWNE, observability-only: ŻADEN konsument decyzyjny go jeszcze nie czyta
+    # (wpięcie w 3 bliźniaki SLA + serializer = osobny etap za ACK po dowodzie z oracle).
+    # OFF → pole nie powstaje (bajt-identyczny ingest). W rejestrze: izolacja conftest
+    # (test mający OFF nie dziedziczy żywego flags.json) + parytet fingerprint cross-proces.
+    "ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -198,6 +206,7 @@ ENABLE_END_OF_DAY_SALVAGE = False  # 2026-06-18 (ostatnia godzina pracy firmy �
 ENABLE_FEAS_CARRY_READMIT = False  # #483000 2026-06-27 (carry-aware re-admit feasible-path, cap-40 Tier-3)
 ENABLE_O2_READY_ANCHOR_SWEEP = False  # O2 re-seq 2026-06-27 (ready-anchor + overage+λ·czas_late objektyw worka, review 02.07)
 ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
+ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
 # startowych werdyktu razem z flagą, hot-reload bez restartu; fallback = stała
