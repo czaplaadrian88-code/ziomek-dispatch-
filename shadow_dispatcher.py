@@ -248,7 +248,14 @@ _AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "b
                        # regret_min/orig_reason/newbag_min/redirect_from_cid/cap_min} —
                        # LIVE re-admit carry-inclusive na feasible-path (top[0] przejęty
                        # przez odrzuconego-NO lepszego-na-prawdzie). LOCATION B (best).
-                       "feas_carry_")
+                       "feas_carry_",
+                       # F2 (audyt Ziomka 2026-06-28, widocznosc metryk HARD): post_shift_overrun_min/
+                       # _penalty (P2 — WIODACY term selekcji best_effort; replay widzial 0 -> ETAP-5
+                       # flipa ENABLE_POST_SHIFT_OVERRUN_PENALTY nie dalo sie policzyc) + end_of_day_
+                       # salvage* (LIVE relaksacja HARD konca zmiany BEZ sladu w shadow). Twin A+B przez
+                       # wspolny _propagate_prefixed_metrics (l.~489 A / l.~864 B). Decyzyjnie-NEUTRALNE
+                       # (metryki liczone ZAWSZE, dokladane tylko do logu).
+                       "post_shift_overrun_", "end_of_day_salvage")
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
