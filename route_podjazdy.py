@@ -1,9 +1,15 @@
-"""WSPÓLNE źródło kolejności trasy kuriera — PODJAZDY (kursy).
+"""Źródło kolejności trasy kuriera — PODJAZDY (kursy) — dla APKI kuriera.
 
-JEDNO źródło prawdy dla kolejności stopów, importowane przez:
-  - konsolę koordynatora (panel `fleet_state._build_route` → deleguje tutaj),
-  - apkę kuriera (`courier_api/courier_orders` → renderuje tę samą kolejność).
-Tak koordynator i kurier widzą DOKŁADNIE to samo (cel: jedno źródło).
+Importowane przez apkę (`courier_api/courier_orders.build_view`).
+⚠ Konsola koordynatora ma WŁASNĄ kopię-lustro (panel
+`fleet_state._order_from_plan_seq`/`_build_route`) i NIE importuje tego modułu
+(osobne repo/venv) — parytet apka↔konsola utrzymywany TESTEM (golden fixture),
+NIE wspólnym importem. Każda zmiana reguły kolejności = zmień OBA bliźniaki.
+
+trust_canon (2026-06-28): gdy ON i plan Ziomka pokrywa CAŁY worek → renderuj
+kanon (courier_plans) VERBATIM przez `_canon_order_from_plan` = dokładnie to co
+konsola (zawiera carried-first relax 22.06 „odbierz po drodze zanim dowieziesz
+niesione"). Inaczej (flaga OFF / plan niepełny) → lokalne podjazdy carried-first.
 
 Wierna ekstrakcja logiki z panelu `fleet_state` (2026-06-18). PURE — bez I/O,
 bez OSRM, bez datetime.now → deterministyczne, łatwe do testów i identyczne
@@ -132,7 +138,57 @@ def plan_drop_rank(plan_doc) -> dict:
     return rank
 
 
-def order_podjazdy(bag, plan_doc=None, plan_aware=False) -> list[tuple[str, list[str]]]:
+def _canon_order_from_plan(bag, plan_doc):
+    """Kolejność stopów WPROST z kanonu Ziomka (courier_plans) — LUSTRO konsoli
+    `fleet_state._order_from_plan_seq`. Renderuje sekwencję planu verbatim:
+    niesione (picked_up) = tylko dostawa (pomiń węzeł odbioru), kolejne odbiory tej
+    samej restauracji scalone w JEDEN stop (jedna liczba), dostawy dedup.
+    Zawiera carried-first relax silnika („odbierz po drodze zanim dowieziesz niesione").
+
+    Zwraca [(typ,[order_ids])] TYLKO gdy plan pokrywa CAŁY worek (cov_drop>=need_drop
+    ORAZ cov_pick>=need_pick — identyczna bramka jak konsola); inaczej None (→ caller
+    spada do lokalnych podjazdów carried-first). PURE, deterministyczne."""
+    if not isinstance(plan_doc, dict):
+        return None
+    by_oid = {str(_attr(o, "order_id")): o for o in bag}
+    out: list[tuple[str, list[str]]] = []
+    seen_drop: set[str] = set()
+    saw_seq = False
+    for s in (plan_doc.get("stops") or []):
+        if not isinstance(s, dict):
+            continue
+        saw_seq = True
+        oid = str(s.get("order_id"))
+        typ = "pickup" if s.get("type") == "pickup" else "dropoff"
+        o = by_oid.get(oid)
+        if o is None:
+            continue
+        if typ == "pickup":
+            if _attr(o, "status") == "picked_up":      # carried = brak odbioru
+                continue
+            if out and out[-1][0] == "pickup" and \
+                    _attr(by_oid[out[-1][1][-1]], "restaurant") == _attr(o, "restaurant"):
+                out[-1][1].append(oid)                  # scal odbiory tej samej restauracji
+            else:
+                out.append(("pickup", [oid]))
+        else:
+            if oid in seen_drop:
+                continue
+            seen_drop.add(oid)
+            out.append(("dropoff", [oid]))
+    if not saw_seq:
+        return None
+    need_drop = {str(_attr(o, "order_id")) for o in bag}
+    need_pick = {str(_attr(o, "order_id")) for o in bag if _attr(o, "status") != "picked_up"}
+    cov_drop = {o for (t, oids) in out for o in oids if t == "dropoff"}
+    cov_pick = {o for (t, oids) in out for o in oids if t == "pickup"}
+    if cov_drop >= need_drop and cov_pick >= need_pick:
+        return out
+    return None
+
+
+def order_podjazdy(bag, plan_doc=None, plan_aware=False,
+                   trust_canon=False) -> list[tuple[str, list[str]]]:
     """JEDYNE źródło kolejności. Zwraca listę stopów [(typ, [order_ids]), ...]
     gdzie typ ∈ {'pickup','dropoff'} a order_ids to zgrupowane zlecenia
     (odbiory tej samej restauracji w jednym podjeździe = jeden stop).
@@ -141,9 +197,16 @@ def order_podjazdy(bag, plan_doc=None, plan_aware=False) -> list[tuple[str, list
          czas_kuriera_warsaw. plan_doc: dict planu Ziomka (opcjonalny).
     plan_aware: gdy True i plan pokrywa worek, podjazdy idą wg klastrów planu
          (patrz pickup_runs) — koordynator/kurier widzą bundle Ziomka, nie podział czasowy.
+    trust_canon: gdy True i plan Ziomka pokrywa CAŁY worek → renderuj kanon
+         (courier_plans) VERBATIM (lustro konsoli `_order_from_plan_seq`), z carried-first
+         relaxem silnika. Inaczej → lokalne podjazdy carried-first (niżej). Flaga = rollback.
     """
     if not bag:
         return []
+    if trust_canon:
+        canon = _canon_order_from_plan(bag, plan_doc)
+        if canon is not None:
+            return canon
     rank = plan_drop_rank(plan_doc)
 
     def _drop_key(o):
