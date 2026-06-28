@@ -70,6 +70,18 @@ NOTIFY_TRUSTED_ONLY_FLAG = "REASSIGN_FWD_NOTIFY_TRUSTED_ONLY"  # notify tylko gd
 NOTIFY_COOLDOWN_KEY = "REASSIGN_FWD_NOTIFY_COOLDOWN_MIN"       # min między powtórkami per zlecenie (default 20)
 DEFAULT_NOTIFY_COOLDOWN_MIN = 20.0
 
+# --- KROK 1 (2026-06-28): gate JAKOŚCI przerzutu (gradient) — duch tylko gdy „na pewno lepiej".
+# Ramię 1 (RATUNEK): obecny dowiezie po czasie (R6>próg / infeasible) a nowy NA CZAS → przerzut.
+# Ramię 2 (OSZCZĘDNOŚĆ): obecny na czas, nowy dowiezie >= BIG_SAVE_MIN min wcześniej (krótsza trasa) → przerzut.
+# Wymóg: pozycja A i B realna/checkpointowa (NIE fikcja). Metryka „kto kiedy dowiezie" = plan.predicted_delivered_at,
+# R6 per-zlecenie = predicted_delivered_at − pickup_at (zgodne z sla_log delivery_time_minutes>35).
+# Flaga OFF default → pola quality_* NIE liczone (rekord bajt-identyczny). ON (drop-in timera) = obserwacja log-only.
+QUALITY_FLAG = "ENABLE_REASSIGN_QUALITY_GATE"
+QUALITY_BIG_SAVE_KEY = "REASSIGN_QUALITY_BIG_SAVE_MIN"
+QUALITY_R6_LATE_KEY = "REASSIGN_QUALITY_R6_LATE_MIN"
+DEFAULT_BIG_SAVE_MIN = 8.0     # „DUŻO szybciej" dla A-na-czas (Adrian 28.06: 8-10 min) — env-tunable
+DEFAULT_R6_LATE_MIN = 35.0     # bag_time(O)>35 = dowóz po czasie (= sla_log delivery_time_minutes>35)
+
 # Pola czytane przez assess_order (zweryfikowane dispatch_pipeline.py:2881-3055).
 _EVENT_FIELDS = (
     "order_id", "restaurant", "delivery_address", "pickup_coords", "delivery_coords",
@@ -170,6 +182,80 @@ def _cand_km(c: Any) -> Optional[float]:
         return None
 
 
+def _quality_on() -> bool:
+    return os.environ.get(QUALITY_FLAG, "0") == "1"
+
+
+def _usable_pos(ps) -> bool:
+    """Pozycja wiarygodna do geometrii: GPS lub checkpoint/last-known (prefiks last_*) lub
+    store/interp. Fikcja (none/pin/pre_shift/no_gps) = niewiarygodna. PREFIKS (sufiksy realne:
+    last_picked_up_pickup, last_assigned_pickup, last_picked_up_interp, ...) — exact-match by zaniżał."""
+    ps = str(ps or "")
+    return ps == "gps" or ps.startswith("last_") or ps in {"store", "interp"}
+
+
+def _plan_dt(c: Any, oid: str, attr: str):
+    """datetime z planu kandydata: attr ∈ {predicted_delivered_at, pickup_at}. None gdy brak planu/klucza."""
+    plan = getattr(c, "plan", None) if c is not None else None
+    if plan is None:
+        return None
+    return (getattr(plan, attr, {}) or {}).get(oid)
+
+
+def _minutes(a, b) -> Optional[float]:
+    """(a−b) w minutach (float) gdy oba to datetime; None inaczej. Dodatni = a PÓŹNIEJ niż b."""
+    if a is None or b is None:
+        return None
+    try:
+        return (a - b).total_seconds() / 60.0
+    except Exception:
+        return None
+
+
+def _quality_gate(a_cand: Any, best: Any, oid: str, a_pos, b_pos,
+                  holder_cid: str, b_cid: str) -> dict:
+    """Gradient gate JAKOŚCI (Krok 1, log-only). Duch-przerzut TYLKO gdy „na pewno lepiej":
+      • RAMIĘ 1 (ratunek): obecny dowiezie po czasie (R6>próg) LUB jest infeasible, a nowy NA CZAS;
+      • RAMIĘ 2 (oszczędność): obecny na czas, nowy dowiezie ≥ BIG_SAVE_MIN min wcześniej.
+    Wymóg: B≠A oraz pozycje A i B usable (NIE fikcja). „kto kiedy dowiezie" = predicted_delivered_at;
+    R6 per-zlecenie = predicted_delivered_at − pickup_at. Zwraca dict pól quality_*."""
+    big_save = float(os.environ.get(QUALITY_BIG_SAVE_KEY, DEFAULT_BIG_SAVE_MIN))
+    r6_late = float(os.environ.get(QUALITY_R6_LATE_KEY, DEFAULT_R6_LATE_MIN))
+    a_pred = _plan_dt(a_cand, oid, "predicted_delivered_at")
+    a_pick = _plan_dt(a_cand, oid, "pickup_at")
+    b_pred = _plan_dt(best, oid, "predicted_delivered_at")
+    b_pick = _plan_dt(best, oid, "pickup_at")
+    a_bag_time = _minutes(a_pred, a_pick)
+    b_bag_time = _minutes(b_pred, b_pick)
+    # obecny spóźniony: brak feasible A (infeasible) LUB jego R6 dla O ponad próg
+    a_late = (a_cand is None) or (a_bag_time is not None and a_bag_time > r6_late)
+    b_late = (b_bag_time is not None and b_bag_time > r6_late)
+    save_min = _minutes(a_pred, b_pred)   # dodatni = nowy dowiezie wcześniej
+    pos_ok = _usable_pos(a_pos) and _usable_pos(b_pos)
+    quality = False
+    reason = "obecny zdąży na czas i nikt istotnie nie szybszy — bez przerzutu"
+    if b_cid and b_cid != holder_cid and pos_ok:
+        if a_late and not b_late:
+            reason = "ratunek: obecny dowiezie po czasie (R6>%.0f), nowy na czas" % r6_late
+            quality = True
+        elif (not a_late) and save_min is not None and save_min >= big_save:
+            reason = "oszczędność: nowy dowiezie ~%.0f min wcześniej (krótsza trasa)" % save_min
+            quality = True
+    return {
+        "quality_reassign": quality,
+        "quality_reason": reason,
+        "quality_pos_ok": pos_ok,
+        "a_pred_deliver": a_pred.isoformat() if a_pred is not None else None,
+        "b_pred_deliver": b_pred.isoformat() if b_pred is not None else None,
+        "a_bag_time_min": round(a_bag_time, 1) if a_bag_time is not None else None,
+        "b_bag_time_min": round(b_bag_time, 1) if b_bag_time is not None else None,
+        "a_late": bool(a_late),
+        "b_late": bool(b_late),
+        "save_min": round(save_min, 1) if save_min is not None else None,
+        "quality_big_save_min": big_save,
+    }
+
+
 def _why(would: bool, a_in_pool: bool, a_km: Optional[float], b_km: Optional[float],
          a_bag: Optional[int], b_bag: Optional[int], a_real: bool, b_real: bool,
          delta: Optional[float]) -> str:
@@ -237,7 +323,7 @@ def evaluate_order(rec: dict, holder_cid: str, fleet: Dict[str, Any],
     a_name = getattr(a_cand, "name", None) if a_cand is not None else None
     b_name = getattr(best, "name", None)
     reason = _why(bool(would), a_cand is not None, a_km, b_km, a_bag, b_bag, a_real, b_real, delta)
-    return {
+    rec_out = {
         "ts": now.isoformat(),
         "order_id": oid,
         "restaurant": rec.get("restaurant"),
@@ -263,6 +349,14 @@ def evaluate_order(rec: dict, holder_cid: str, fleet: Dict[str, Any],
         "pickup_coords": rec.get("pickup_coords"),
         "delivery_coords": rec.get("delivery_coords"),
     }
+    # KROK 1 gate JAKOŚCI — tylko gdy flaga ON (inaczej rekord bajt-identyczny ze starym).
+    if _quality_on():
+        rec_out.update(_quality_gate(
+            a_cand, best, oid,
+            getattr(cs_a, "pos_source", None) if cs_a is not None else None,
+            getattr(cs_b, "pos_source", None) if cs_b is not None else None,
+            holder_cid, b_cid))
+    return rec_out
 
 
 def _append_jsonl(rows: List[dict], path: str = OUT_JSONL) -> None:
