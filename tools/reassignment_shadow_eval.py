@@ -93,13 +93,18 @@ def build_report(since_d: str, until_d: str) -> str:
     human = _human_reassigns(since_d, until_d)
     distinct_flagged = len(flagged)
 
-    # „realna pozycja" = GPS LUB ostatnia znana lokalizacja (gdzie kurier ostatnio
-    # odbierał/doręczał) — silnik tak liczy no_gps (Adrian 22.06). Syntetyczne (szum)
-    # = pin/none/pre_shift (brak realnej lokalizacji → fikcja centrum/grafik).
-    _REAL_POS = {"gps", "last_delivered", "last_picked_up", "last_assigned", "last_known", "store"}
+    # „realna pozycja" = GPS LUB ostatnia znana / z checkpointu (gdzie kurier ostatnio
+    # odbierał/doręczał, też interpolowana) — silnik tak liczy no_gps (Adrian 22.06).
+    # ⚠ PREFIKS, nie exact-match: realne pos_source mają sufiksy (last_picked_up_pickup,
+    # last_assigned_pickup, last_picked_up_interp, last_picked_up_recent, ...). Exact-match
+    # na {last_picked_up,...} ich NIE łapał → zaniżał pewne pozycje ~83%→2% = fałszywe NO-GO
+    # (28.06, ta sama klasa błędu co monitor #15). Fikcja = pin/none/pre_shift/no_gps (szum).
+    def _usable(ps):
+        ps = str(ps or "")
+        return ps == "gps" or ps.startswith("last_") or ps in {"store", "interp"}
 
     def _trusted(a_pos, b_pos):
-        return a_pos in _REAL_POS and b_pos in _REAL_POS
+        return _usable(a_pos) and _usable(b_pos)
 
     n_trusted = sum(1 for v in flagged.values() if _trusted(v[3], v[4]))
     anticipated = same_target = 0
