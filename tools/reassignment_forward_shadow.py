@@ -108,6 +108,8 @@ def _active_assigned_orders(orders: dict) -> List[Tuple[str, str, dict]]:
             continue
         if r.get("status") != "assigned":
             continue
+        if r.get("picked_up_at"):
+            continue   # JUŻ ODEBRANE (status laguje za realnym pickupem) — nie przerzucaj jedzenia z ręki
         cid = r.get("courier_id")
         scid = str(cid) if cid is not None else ""
         if scid in ("", "None", KOORDYNATOR_CID):
