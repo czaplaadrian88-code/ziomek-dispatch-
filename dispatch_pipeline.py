@@ -1075,17 +1075,15 @@ def _pln_pure_resort(top) -> None:
         pv = pv - _q_r6 * max(0.0, float(r6)) - _q_late * max(0.0, float(late) - _q_free)
         return -pv
 
-    def _bucket(c):
-        if _is_informed_cand(c):
-            return 0
-        if _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
-            return 2
-        return 1
-
+    # B2 FIX (audyt 2026-06-28): bylo inline _bucket sprzed equal-treatment (demote
+    # no_gps/pre_shift do bucketu 2) -> teraz wspolny _selection_bucket (equal-treatment-
+    # aware, ta sama szuflada co reszta selekcji; sterowane ENABLE_EQUAL_TREATMENT_BUCKET).
+    # Replay 10d: 49/378 decyzji E2-arm stary demote zmienial pick, 100% przeciw
+    # no_gps/pre_shift. Twin z _objm_lexr6_shadow (nizej) naprawiony RAZEM.
     _pln_key = _pln_ord_quality if (_within and _quality) else _pln_ord
     if _within:
         def _key(c):
-            return (1 if _late_pickup_tier(c) == 2 else 0, _bucket(c), _pln_key(c), _orig[id(c)])
+            return (1 if _late_pickup_tier(c) == 2 else 0, _selection_bucket(c), _pln_key(c), _orig[id(c)])
     else:
         def _key(c):
             return (_pln_ord(c), _orig[id(c)])
@@ -1111,19 +1109,15 @@ def _objm_lexr6_shadow(top, feasible, order_id=None) -> None:
     try:
         _w = top[0]
 
-        def _bucket(c):
-            if _is_informed_cand(c):
-                return 0
-            if _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
-                return 2
-            return 1
-
+        # B2 FIX (audyt 2026-06-28): stale inline _bucket -> wspolny _selection_bucket
+        # (parytet z LIVE objm select, ktory uzywa bucket_fn=_selection_bucket; SHADOW
+        # musi miec te sama szuflade by byl wiernym cieniem live-selekcji).
         def _objm(c, k):
             v = (getattr(c, "metrics", None) or {}).get(k)
             return float(v) if isinstance(v, (int, float)) else None
 
-        _w_tb = (_late_pickup_tier(_w), _bucket(_w))
-        _grp = [c for c in feasible if (_late_pickup_tier(c), _bucket(c)) == _w_tb]
+        _w_tb = (_late_pickup_tier(_w), _selection_bucket(_w))
+        _grp = [c for c in feasible if (_late_pickup_tier(c), _selection_bucket(c)) == _w_tb]
 
         def _lex_qual(c):
             r6 = _objm(c, "objm_r6_breach_max_min")
