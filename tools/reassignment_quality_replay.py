@@ -9,22 +9,68 @@ Werdykt materiału (precyzja ratunku), nie autonomii. Telegram opcjonalny (--not
 import json
 import argparse
 from collections import Counter
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 SHADOW = "/root/.openclaw/workspace/dispatch_state/reassignment_shadow.jsonl"
 SLA = "/root/.openclaw/workspace/scripts/logs/sla_log.jsonl"
+# #1/#5b (top10): fizyczna prawda dostawy z GPS — PRIORYTET nad klikiem przy liczeniu
+# „realnego breachu" (klik ZAWYŻA wiek o medianę +2min → zawyżałby precyzję ratunku).
+GPS_TRUTH = "/root/.openclaw/workspace/dispatch_state/gps_delivery_truth.jsonl"
 R6 = 35.0
+_WAW = ZoneInfo("Europe/Warsaw")
+
+
+def _ep(ts):
+    if not ts:
+        return None
+    s = str(ts).strip()
+    try:
+        if "+" in s or s.endswith("Z") or (("T" in s) and s[-6] in "+-"):
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+        return datetime.strptime(s.replace("T", " ")[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_WAW).timestamp()
+    except Exception:
+        return None
+
+
+def _physical_index():
+    """{order_id: physical_delivered_at(epoch)} z gps_delivery_truth.jsonl (#1)."""
+    idx = {}
+    try:
+        for ln in open(GPS_TRUTH):
+            try:
+                d = json.loads(ln)
+            except ValueError:
+                continue
+            e = _ep(d.get("physical_delivered_at"))
+            if e is not None:
+                idx[str(d.get("order_id"))] = e
+    except FileNotFoundError:
+        pass
+    return idx
 
 
 def _load_sla():
+    phys = _physical_index()
     sla = {}
     for ln in open(SLA):
         try:
             d = json.loads(ln)
         except ValueError:
             continue
-        sla[str(d.get("order_id"))] = {
-            "cid": str(d.get("courier_id")), "dt": d.get("delivery_time_minutes"),
-            "ok": d.get("sla_ok")}
+        oid = str(d.get("order_id"))
+        dt = d.get("delivery_time_minutes")
+        src = "button"
+        # #1: jeśli jest fizyczny przyjazd GPS → policz dt OD GOTOWOŚCI fizycznie (picked_up→GPS-arrival)
+        _pu = _ep(d.get("picked_up_at"))
+        _ph = phys.get(oid)
+        if _pu is not None and _ph is not None:
+            dt = round((_ph - _pu) / 60.0, 1)
+            src = "physical"
+        sla[oid] = {
+            "cid": str(d.get("courier_id")), "dt": dt,
+            "ok": (dt <= R6) if isinstance(dt, (int, float)) else d.get("sla_ok"),
+            "src": src}
     return sla
 
 
@@ -65,13 +111,15 @@ def build_report(since=None):
 
     # PRECYZJA RATUNKU (TYLKO gałąź LATE-ETA): z ratunków zostawionych u holdera — ile realnie
     # breachowało. Infeasible-transient WYKLUCZONE (nie są predykcją spóźnienia → nie mierzą gate'u).
-    r_left = r_left_breach = 0
+    r_left = r_left_breach = r_left_phys = 0
     for d in rescue_eta:
         s = sla.get(str(d.get("order_id")))
         if not s:
             continue
         if s["cid"] in {str(d.get("holder_cid"))}:   # zostawione u holdera (nie przerzucone)
             r_left += 1
+            if s.get("src") == "physical":           # #1: breach liczony na fizycznym przyjeździe GPS
+                r_left_phys += 1
             if _breach(s):
                 r_left_breach += 1
     # OVER-EAGER kontrola: noflag zostawione u holdera — ile on-time (powinno być ~wszystkie)
@@ -90,7 +138,7 @@ def build_report(since=None):
         f"🔁 Q-GATE (gate jakości przerzutu) replay {since or 'all'} — MATERIAŁ",
         f"• zleceń z quality_*: {len(perq)} | ratunek: {len(rescue)} (late-ETA {len(rescue_eta)}, infeasible-transient {len(rescue_infeasible)}) | oszczędność: {len(saving)} | bez przerzutu: {len(noflag)}",
         f"• PRECYZJA RATUNKU (gałąź LATE-ETA): z {r_left} zostawionych u obecnego, REALNIE breach: "
-        f"{r_left_breach} = {prec:.0f}%" if prec is not None else
+        f"{r_left_breach} = {prec:.0f}% (#1: {r_left_phys}/{r_left} na FIZYCZNYM GPS, reszta klik)" if prec is not None else
         f"• PRECYZJA RATUNKU (gałąź LATE-ETA): N/A — {len(rescue_eta)} ratunków z realną predykcją ETA "
         f"({len(rescue_infeasible)} infeasible-transient WYKLUCZONE, nie mierzą gate'u). Gałąź ETA jeszcze nie dała danych.",
         f"• OSZCZĘDNOŚĆ: {len(saving)} propozycji, mediana save {med_save} min (counterfactual — nie werdykt)",
