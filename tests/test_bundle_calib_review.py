@@ -15,7 +15,10 @@ from dispatch_v2.tools import bundle_calib_review as B  # noqa: E402
 
 # ── helpery ─────────────────────────────────────────────────────────────────
 def test_o2_of():
-    assert B._o2_of({"overage": 4.0, "czas_late": 2.0}) == 4.0 + 1.5 * 2.0
+    # GATE = overage-ONLY (audyt 28.06 #1 — parytet z silnikiem o2_score; czas_late=FAZA 2,
+    # NIE wchodzi do gate'u GO/under_z). Inwariant: czas_late NIE wpływa na O2 gate.
+    assert B._o2_of({"overage": 4.0, "czas_late": 2.0}) == 4.0
+    assert B._o2_of({"overage": 4.0, "czas_late": 99.0}) == 4.0   # czas_late ignorowany w gate
     assert B._o2_of(None) == 0.0
     assert B._o2_of({}) == 0.0
 

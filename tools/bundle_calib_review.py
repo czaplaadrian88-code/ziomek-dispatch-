@@ -1,7 +1,9 @@
 """bundle_calib_review — outcome-join + werdykt korpusu BUNDLE-CALIB shadow (Adrian 25.06: przegląd 02.07).
 
-Czyta `bundle_calib_shadow.jsonl` (served vs CALIB pod objektywem O2 = overage + 1.5*czas_late,
-ready-anchored, λ=1.5) i odpowiada: czy skalibrowany objektyw dałby LEPSZE bundle niż serwowany
+Czyta `bundle_calib_shadow.jsonl` (served vs CALIB, ready-anchored). GATE GO/under_z liczony na
+O2 = overage-ONLY (parytet z dźwignią silnika `ENABLE_O2_READY_ANCHOR_SWEEP`; audyt 28.06 #1 —
+czas_late=FAZA 2, silnik ślepy na deadline, więc NIE wchodzi do gate'u; osobna soczewka info).
+Odpowiada: czy skalibrowany objektyw dałby LEPSZE bundle niż serwowany
 kanon — materialnie (≥20% worków) i BEZ regresji świeżości? Outcome-join: order_ids → REALNE
 delivered_at (sla_log), wiek liczony OD GOTOWOŚCI (czas_kuriera z logu) — czy served realnie
 naruszał R6 tam gdzie CALIB przewiduje mniej.
@@ -27,11 +29,15 @@ R6_MAX_MIN = 35.0
 MIN_MULTI = 20            # minimum UNIKALNYCH worków multi-order na pewny werdykt
 MATERIAL_PCT = 20.0      # próg materialności (ETAP 5)
 REGRESSION_PCT_MAX = 5.0 # max % worków regresji
-MATERIAL_O2_MIN = 2.0    # ΔO2 (overage+1.5*czas_late) ≥ tyle min/worek = materialna poprawa
-# UWAGA (2026-06-25, o2-consistent fix): objektyw, na którym SHADOW jest skalibrowany =
-# O2 = overage + 1.5*czas_late (λ zatwierdzona przez Adriana). CALIB = argmin O2 po WSZYSTKICH
-# poprawnych przeplotach (served jest jednym z nich) → CALIB NIGDY nie gorszy na O2 (regres_O2≡0
-# by construction; empirycznie 0/16 na 25.06). Stara flaga `bundle_improved` + count-regres liczą
+MATERIAL_O2_MIN = 2.0    # ΔO2 (overage-only) ≥ tyle min/worek = materialna poprawa
+# UWAGA (2026-06-29, audyt #1 — overage-only GATE): objektyw GATE = O2 = overage-ONLY = parytet
+# z dźwignią silnika (`route_simulator_v2._o2_key→o2_score` liczy overage-only; czas_late=FAZA 2,
+# OrderSim bez deadline). POPRZEDNIO gate = overage+1.5*czas_late → 13 fantomów czas_late (review
+# 317 'improved' vs silnik 304; cid 123 d_overage=-31.6 świeżość GORSZA liczona jako improved).
+# ⚠ CALIB w kolektorze wciąż λ-wybrana (λ=1.5) → overage CALIB ≥ overage-argmin silnika → gate
+# overage-only KONSERWATYWNY (silnik ≥ tyle; brak fałszywego GO). czas_late = med_d_czas_late
+# (osobna soczewka, info). PRÓG materialności (MATERIAL_PCT) = osobna decyzja Adriana (rejestr
+# 20%→2% + HOLD do #5b) — NIE zmieniany tym fixem. Stara flaga `bundle_improved` + count-regres liczą
 # LICZBĘ zleceń ponad 35 min — sprzeczne z O2 (zaniżają: cid 515 overage 67→30 = flaga False).
 # Werdykt = bramka PIERWOTNA na O2 (spójna z objektywem); count-lens (late-klienci) = wtórny +
 # jawne pytanie do Adriana gdy się rozjeżdża. Detal: memory bag-resequence-fill-deadtime-candidate.
@@ -77,9 +83,16 @@ def _p90(xs):
 
 
 def _o2_of(m):
-    """O2 = overage + 1.5*czas_late (objektyw kalibrowany; ten sam λ co collector)."""
+    """O2 GATE = overage-ONLY — PARYTET z dźwignią silnika `ENABLE_O2_READY_ANCHOR_SWEEP`
+    (audyt 28.06 #1). `route_simulator_v2._o2_key→o2_score` liczy overage-ONLY; czas_late =
+    FAZA 2 (OrderSim NIE ma deadline). λ·czas_late USUNIĘTE z gate'u GO/under_z — maskowało
+    13 fantomów czas_late (m.in. cid 123 d_overage=-31.6 = ŚWIEŻOŚĆ GORSZA liczone jako
+    'improved' bo czas_late dominował). czas_late = OSOBNA soczewka (med_d_czas_late, info),
+    silnik ślepy na deadline do FAZY 2. ⚠ trasa CALIB wciąż λ-wybrana w kolektorze (λ=1.5) →
+    overage CALIB ≥ overage trasy overage-argmin silnika → ten overage-gain KONSERWATYWNY
+    (silnik dowiózłby ≥ tyle; bezpieczny kierunek, brak fałszywego GO)."""
     m = m or {}
-    return m.get("overage", 0.0) + 1.5 * m.get("czas_late", 0.0)
+    return m.get("overage", 0.0)
 
 
 def _zkeys_in_corpus(corpus):
@@ -161,8 +174,8 @@ def build_report():
         a, b = ms.get(key), mc.get(key)
         return (a - b) if (a is not None and b is not None) else None
 
-    def o2(m):  # objektyw kalibrowany O2 = overage + 1.5*czas_late
-        return (m or {}).get("overage", 0.0) + 1.5 * (m or {}).get("czas_late", 0.0)
+    def o2(m):  # GATE = overage-ONLY (parytet z silnikiem o2_score; #1 audyt — bez λ·czas_late fantomów)
+        return (m or {}).get("overage", 0.0)
 
     def d_o2(r):  # served - calib (>=0 by construction; >0 = CALIB lepszy)
         ms, mc = r.get("m_served"), r.get("m_calib")
@@ -269,7 +282,8 @@ def _verdict(r):
 def _fmt(r):
     uz = r.get("under_z") or {}
     caps = uz.get("caps") or {}
-    L = ["🔬 BUNDLE-CALIB przegląd (objektyw O2=overage+1.5·czas_late, ready-anchor; + kalibracja X/Y/Z Opcji 3)",
+    L = ["🔬 BUNDLE-CALIB przegląd (GATE O2=overage-ONLY = parytet silnika; czas_late=osobna soczewka info, FAZA 2; + kalibracja X/Y/Z Opcji 3)",
+         "⚠ PRÓG: MATERIAL_PCT=20% w kodzie; decyzja Adriana 28.06 = 2% + HOLD flipu do #5b (geofence dostawy). overage-only KONSERWATYWNY (CALIB λ-wybrana).",
          f"Korpus: {r['corpus_rows']} wpisów / {r['multi_uniq']} unikalnych worków multi-order",
          f"CALIB≠served: {r['differs']} ({r['differs_pct']}%)",
          "",
