@@ -73,6 +73,23 @@ def test_geofence_preferred_over_manual():
     assert apm.haversine_m(best["lat"], best["lon"], BLAT, BLON) < 10.0
 
 
+def test_geofence_beats_trail_even_when_trail_more_numerous():
+    """1 geofence + 5 trail rozrzuconych → pinezka z geofence (lepszy tier wygrywa)."""
+    geo = [_s(BLAT, BLON, trigger="auto_geofence")]
+    trail = [_s(*_shift(BLAT, BLON, 150 + 20 * i, 0), trigger="trail") for i in range(5)]
+    best = apm.select_best_pin(geo + trail)
+    assert best["source"] == "auto_geofence"
+    assert apm.haversine_m(best["lat"], best["lon"], BLAT, BLON) < 5.0
+
+
+def test_trail_only_never_high_confidence():
+    """Nawet ciasne skupisko 3 trail = low (prawda-przyciskowa, nie fizyczna)."""
+    trail = [_s(*_shift(BLAT, BLON, d, 0), trigger="trail") for d in (-2, 0, 2)]
+    best = apm.select_best_pin(trail)
+    assert best["source"] == "trail"
+    assert best["confidence"] == "low"
+
+
 def test_invalid_points_dropped():
     assert apm.select_best_pin([_s(0.0, 0.0), _s(None, None)]) is None
     best = apm.select_best_pin([_s(0.0, 0.0), _s(BLAT, BLON)])
@@ -150,5 +167,5 @@ def test_public_pin_shape():
     apm.add_sample(store, "Rumiankowa 8 Białystok", _s(BLAT, BLON, order_id="o1", ts=1), now=1)
     pin = apm.public_pin(store[KEY])
     assert set(pin) == {"address_key", "address_text", "lat", "lon",
-                        "confidence", "deliveries", "updated_at"}
+                        "confidence", "source", "deliveries", "updated_at"}
     assert apm.public_pin({}) is None

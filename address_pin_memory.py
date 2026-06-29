@@ -35,6 +35,17 @@ ACCURACY_REJECT_M = 80.0   # odczyt GPS gorszy niż tyle metrów = odrzucony (gd
 MIN_INLIERS_HIGH_CONF = 3  # tyle zgodnych próbek → pinezka „pewna"
 MAX_SPREAD_HIGH_M = 25.0   # i rozrzut skupiska ≤ tyle → „pewna"
 GEOFENCE_TRIGGER = "auto_geofence"  # fizyczne wejście w strefę — preferowane nad ręcznym
+TRAIL_TRIGGER = "trail"    # punkt z trasy GPS (gps_history) przy delivered_at — prawda-przyciskowa, najsłabszy
+
+# Ranga wiarygodności źródła punktu: niższa = lepsza. Pinezkę liczymy z NAJLEPSZEGO
+# dostępnego tieru (geofence > ręczne > trail). trail = „prawda-przyciskowa"
+# (delivered_at ±~3min od fizyki) → nigdy nie daje statusu „pewny".
+def _provenance_rank(trigger) -> int:
+    if trigger == GEOFENCE_TRIGGER:
+        return 0
+    if trigger == TRAIL_TRIGGER:
+        return 2
+    return 1  # ręczne / inne zgłoszenie z apki
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -102,9 +113,10 @@ def select_best_pin(samples: list) -> dict | None:
     acc_ok = [s for s in pts if _accuracy_ok(s.get("accuracy"))]
     base = acc_ok or pts
 
-    # 2) preferuj fizyczne wejścia (geofence), gdy jest ich dość na pewny środek
-    geo = [s for s in base if s.get("trigger") == GEOFENCE_TRIGGER]
-    pool = geo if len(geo) >= MIN_INLIERS_HIGH_CONF else base
+    # 2) licz pinezkę z NAJLEPSZEGO dostępnego tieru źródła (geofence > ręczne > trail) —
+    #    słabsze źródła są tylko bootstrapem, lepsze nadpisuje gdy się pojawi
+    best_rank = min(_provenance_rank(s.get("trigger")) for s in base)
+    pool = [s for s in base if _provenance_rank(s.get("trigger")) == best_rank]
 
     # 3) mediana jako wstępny środek (odporna na pojedyncze odstrzały)
     c_lat = statistics.median(float(s["lat"]) for s in pool)
@@ -120,11 +132,12 @@ def select_best_pin(samples: list) -> dict | None:
     spread = max((haversine_m(float(s["lat"]), float(s["lon"]), b_lat, b_lon)
                   for s in inliers), default=0.0)
 
-    confidence = ("high" if len(inliers) >= MIN_INLIERS_HIGH_CONF
+    # „pewny" tylko dla wiarygodnego źródła (geofence/ręczne) — trail (prawda-przyciskowa)
+    # nigdy nie jest high, choćby skupisko było ciasne
+    confidence = ("high" if best_rank <= 1 and len(inliers) >= MIN_INLIERS_HIGH_CONF
                   and spread <= MAX_SPREAD_HIGH_M else "low")
     triggers = {s.get("trigger") for s in inliers}
-    source = (GEOFENCE_TRIGGER if triggers == {GEOFENCE_TRIGGER}
-              else "mixed" if len(triggers) > 1 else (triggers.pop() if triggers else None))
+    source = (triggers.pop() if len(triggers) == 1 else "mixed")
 
     return {
         "lat": round(b_lat, 7),
@@ -218,6 +231,7 @@ def public_pin(entry: dict) -> dict | None:
         "lat": entry["lat"],
         "lon": entry["lon"],
         "confidence": entry.get("confidence", "low"),
+        "source": entry.get("source"),
         "deliveries": entry.get("n_inliers", entry.get("n_samples", 0)),
         "updated_at": entry.get("updated_at"),
     }

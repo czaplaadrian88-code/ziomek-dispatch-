@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """address_pin_aggregator.py — READ-ONLY obserwator budujący pamięć pinezek adresów.
 
-Co robi (Etap 1, additive):
+Co robi (Etap 1+2, additive):
   1. Czyta `orders_state.json` → utrzymuje TRWAŁY indeks zlecenie→adres
-     (`address_pin_index.json`), żeby NIE tracić mapowania po wypadnięciu
-     zlecenia z okna stanu.
-  2. Czyta NOWE zdarzenia „doręczone" (status 7) z GPS z `courier_status_events`
-     (kursor po `id`) i dokłada punkt-kandydata do adresu (z indeksu).
-  3. Przelicza najlepszą pinezkę per adres (robust median + odrzut odstających)
+     (+ delivered_at/courier_id dla doręczonych), żeby NIE tracić mapowania po
+     wypadnięciu zlecenia z okna stanu.
+  2. Źródło A (geofence, najlepsze): NOWE „doręczone" (status 7) z GPS z
+     `courier_status_events` (kursor po `id`) → punkt-kandydat trigger=auto_geofence.
+  3. Źródło B (trail, bramkowane): dla doręczonych zleceń szuka pozycji POSTOJU
+     kuriera w chwili delivered_at w `gps_history` (±90s, dokładność≤25m, speed≈0)
+     → punkt-kandydat trigger=trail. Słabsze (prawda-przyciskowa), więc rdzeń
+     i tak preferuje geofence; trail tylko bootstrapuje adresy bez geofence.
+  4. Przelicza najlepszą pinezkę per adres (robust median + odrzut odstających)
      i zapisuje `address_pins.json`.
 
 NIE mutuje stanu Ziomka, NIE woła panelu/Telegrama, NIE dotyka feasibility/
@@ -17,13 +21,24 @@ import sys
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
 import argparse
+import bisect
 import json
 import logging
 import os
 import sqlite3
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from dispatch_v2 import address_pin_memory as apm
+
+WARSAW = ZoneInfo("Europe/Warsaw")
+
+# Źródło B (trail) — ostre sito jakości (z pomiaru 29.06: spread mediana ~32m)
+TRAIL_WINDOW_S = 90          # okno wokół delivered_at
+TRAIL_MAX_ACCURACY_M = 25.0  # tylko dobre fixy
+TRAIL_MAX_SPEED = 1.0        # postój (m/s) — kurier stoi pod klatką, nie w biegu
+TRAIL_STALE_S = 3600         # po godzinie bez punktu odpuść (gps już nie dojdzie)
 
 _log = logging.getLogger("address_pin_aggregator")
 
@@ -70,10 +85,28 @@ def update_order_index(index: dict, orders_state: dict) -> int:
         text = o.get("delivery_address")
         if not text:
             continue
-        if str(oid) not in index:
+        entry = index.get(str(oid))
+        if entry is None:
+            entry = {}
             new += 1
-        index[str(oid)] = {"address_text": text}
+        entry["address_text"] = text
+        # dane dla źródła B (trail): czas + kurier dostawy
+        if o.get("status") == "delivered" and o.get("courier_id") and o.get("delivered_at"):
+            ep = _delivered_epoch(o["delivered_at"])
+            if ep:
+                entry.setdefault("courier_id", str(o["courier_id"]))
+                entry.setdefault("delivered_epoch", ep)
+        index[str(oid)] = entry
     return new
+
+
+def _delivered_epoch(s):
+    """orders_state delivered_at ('YYYY-MM-DD HH:MM:SS', czas Warszawy) → epoch UTC."""
+    try:
+        return datetime.strptime(str(s).strip(), "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=WARSAW).timestamp()
+    except (ValueError, TypeError):
+        return None
 
 
 def seed_index_from_history(index: dict, files: list) -> int:
@@ -90,9 +123,54 @@ def seed_index_from_history(index: dict, files: list) -> int:
             if not isinstance(o, dict) or not o.get("delivery_address"):
                 continue
             if str(oid) not in index:
-                index[str(oid)] = {"address_text": o["delivery_address"]}
+                entry = {"address_text": o["delivery_address"]}
+                if o.get("status") == "delivered" and o.get("courier_id") and o.get("delivered_at"):
+                    ep = _delivered_epoch(o["delivered_at"])
+                    if ep:
+                        entry["courier_id"] = str(o["courier_id"])
+                        entry["delivered_epoch"] = ep
+                index[str(oid)] = entry
                 added += 1
     return added
+
+
+def _load_gps_by_courier(db_path: str, courier_ids: set) -> dict:
+    """gps_history dla wskazanych kurierów → {cid: posortowana lista (epoch,lat,lon,acc,speed)}."""
+    if not courier_ids or not os.path.exists(db_path):
+        return {}
+    con = sqlite3.connect(db_path)
+    try:
+        ph = ",".join("?" * len(courier_ids))
+        rows = con.execute(
+            "SELECT courier_id,lat,lon,accuracy,speed,recorded_at FROM gps_history "
+            f"WHERE lat IS NOT NULL AND lat!=0 AND courier_id IN ({ph})",
+            tuple(courier_ids),
+        ).fetchall()
+    finally:
+        con.close()
+    by_c = {}
+    for cid, lat, lon, acc, sp, ra in rows:
+        by_c.setdefault(str(cid), []).append(
+            (int(ra), lat, lon, acc if acc is not None else 999.0,
+             sp if sp is not None else 0.0))
+    for c in by_c:
+        by_c[c].sort()
+    return by_c
+
+
+def best_trail_point(arr, epoch):
+    """Najlepszy punkt POSTOJU w oknie wokół delivered_at (ostre sito) lub None."""
+    if not arr:
+        return None
+    ts = [a[0] for a in arr]
+    lo = bisect.bisect_left(ts, epoch - TRAIL_WINDOW_S)
+    hi = bisect.bisect_right(ts, epoch + TRAIL_WINDOW_S)
+    cand = [a for a in arr[lo:hi]
+            if a[3] <= TRAIL_MAX_ACCURACY_M and a[4] <= TRAIL_MAX_SPEED]
+    if not cand:
+        return None
+    cand.sort(key=lambda a: (a[3], abs(a[0] - epoch)))  # najlepsza dokładność, bliżej czasu
+    return cand[0]  # (epoch,lat,lon,acc,speed)
 
 
 def fetch_delivered_gps_events(db_path: str, after_id: int) -> list:
@@ -120,8 +198,10 @@ def fetch_delivered_gps_events(db_path: str, after_id: int) -> list:
     return out
 
 
-def run(dry_run: bool = False, seed_history: bool = False) -> dict:
-    """Jeden przebieg: odśwież indeks, dołącz nowe punkty, przelicz, zapisz."""
+def run(dry_run: bool = False, seed_history: bool = False,
+        trail_cap: int = 1500) -> dict:
+    """Jeden przebieg: odśwież indeks, dołącz punkty (geofence + trail), przelicz, zapisz."""
+    now = time.time()
     orders_state = _load_json(ORDERS_STATE)
     index = _load_json(INDEX_PATH)
     store = apm.load_store(STORE_PATH)
@@ -130,8 +210,9 @@ def run(dry_run: bool = False, seed_history: bool = False) -> dict:
 
     seeded = seed_index_from_history(index, HISTORY_FILES) if seed_history else 0
     new_orders = update_order_index(index, orders_state)
-    events = fetch_delivered_gps_events(COURIER_DB, last_id)
 
+    # --- Źródło A: geofence z courier_status_events (kursor po id) ---
+    events = fetch_delivered_gps_events(COURIER_DB, last_id)
     applied, skipped_no_addr = 0, 0
     max_id = last_id
     for ev in events:
@@ -142,14 +223,36 @@ def run(dry_run: bool = False, seed_history: bool = False) -> dict:
             continue
         apm.add_sample(store, meta["address_text"], {
             "lat": ev["lat"], "lon": ev["lon"], "accuracy": ev["accuracy"],
-            "trigger": ev["trigger"], "ts": ev["ts"], "order_id": ev["order_id"],
-        })
+            "trigger": ev["trigger"] or apm.GEOFENCE_TRIGGER, "ts": ev["ts"],
+            "order_id": ev["order_id"],
+        }, now=now)
         applied += 1
+
+    # --- Źródło B: trail z gps_history dla doręczonych (bramkowane) ---
+    pending = [(oid, e) for oid, e in index.items()
+               if not e.get("trail_done") and e.get("address_text")
+               and e.get("courier_id") and e.get("delivered_epoch")]
+    cap = trail_cap if (trail_cap and not seed_history) else None
+    if cap:
+        pending = pending[:cap]
+    trail_by_c = _load_gps_by_courier(COURIER_DB, {e["courier_id"] for _, e in pending})
+    trail_applied = 0
+    for oid, e in pending:
+        pt = best_trail_point(trail_by_c.get(e["courier_id"]), e["delivered_epoch"])
+        if pt:
+            apm.add_sample(store, e["address_text"], {
+                "lat": pt[1], "lon": pt[2], "accuracy": pt[3],
+                "trigger": apm.TRAIL_TRIGGER, "ts": e["delivered_epoch"], "order_id": oid,
+            }, now=now)
+            trail_applied += 1
+        # oznacz przetworzone gdy znaleziono LUB dostawa już stara (gps nie dojdzie)
+        if pt or (now - e["delivered_epoch"] > TRAIL_STALE_S):
+            e["trail_done"] = True
 
     if not dry_run:
         apm.save_store(STORE_PATH, store)
         apm.save_store(INDEX_PATH, index)
-        apm.save_store(CURSOR_PATH, {"last_event_id": max_id, "updated_at": int(time.time())})
+        apm.save_store(CURSOR_PATH, {"last_event_id": max_id, "updated_at": int(now)})
 
     high = sum(1 for e in store.values() if e.get("confidence") == "high")
     return {
@@ -158,6 +261,8 @@ def run(dry_run: bool = False, seed_history: bool = False) -> dict:
         "events_seen": len(events),
         "points_applied": applied,
         "skipped_no_address": skipped_no_addr,
+        "trail_pending": len(pending),
+        "trail_applied": trail_applied,
         "addresses_total": len(store),
         "addresses_high_conf": high,
         "cursor_from": last_id, "cursor_to": max_id,
