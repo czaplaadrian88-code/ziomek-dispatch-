@@ -1036,6 +1036,8 @@ def _build_prefetch_candidates(parsed: dict, current_state: dict, ignored_ids,
         status = so.get("status")
         if status in ("delivered", "returned_to_pool", "cancelled"):
             continue
+        if so.get("source") == "parcel":
+            continue  # PACZKI (Etap 3): własny tor (parcel_lane), NIGDY prefetch gastro
         if zid not in html_order_ids:
             out.append(zid)
             continue
@@ -1382,6 +1384,11 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     for zid, state_order in list(current_state.items()):
         # Pomijamy terminalne (delivered, cancelled) - nie obserwujemy ich dalej
         if state_order.get("status") in ("delivered", "returned_to_pool", "cancelled"):
+            continue
+
+        # PACZKI (Etap 3): mają własny tor (parcel_lane), NIE ma ich w gastro HTML — watcher
+        # ich NIE dotyka (bez fetch gastro „disappeared", bez fałszywej detekcji terminalnej).
+        if state_order.get("source") == "parcel":
             continue
 
         # Czy zlecenie nadal widoczne w panelu?

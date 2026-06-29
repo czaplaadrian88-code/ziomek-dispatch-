@@ -832,6 +832,12 @@ AUTO_APPROVE_ENABLED = False
 # Telemetria would_auto_assign/auto_block_reasons liczona ZAWSZE niezależnie
 # od flagi (lekcja #186) — flaga gate'uje wyłącznie egzekutor.
 ENABLE_AUTO_ASSIGN = False
+# ─── Paczki Faza 2 Etap 3 (2026-06-29): natywny tor paczek w ŻYWYM orders_state ───
+# Merger `parcel_lane_merge` wpisuje aktywne paczki z bialystok.nadajesz.pl do orders_state
+# przez state_machine.upsert_order (LOCK_EX, bez korupcji). Watcher pomija source=parcel
+# BEZWARUNKOWO (nie zależy od flagi). Flaga gate'uje TYLKO merger: OFF = zero paczek w
+# orders_state (guard wtedy nigdy nie odpala). Hot-flip z flags.json. Twin GASTRO nietknięty.
+ENABLE_PARCEL_LANE_LIVE = False
 # Bramka jakościowa (auto_assign_gate; nadpisywalne hot z flags.json):
 AUTO_ASSIGN_MIN_POOL_FEASIBLE = 3        # mniej feasible = scarcity → człowiek
 # Bartek 2.0 §4.1: breach 13,5-18% przy score>90 (inflacja R4) — korelacja

@@ -1,0 +1,90 @@
+"""Faza 2 Etap 3 — merger paczek do orders_state + strażnik watchera (pomija source=parcel).
+
+Flaga ON≠OFF, create/keep/retire, oraz dowód że watcher NIE prefetchuje paczek (twin gastro
+nietknięty). Izolowane (monkeypatch state_machine/flag/snapshot), bez sieci/plików.
+"""
+from dispatch_v2 import panel_watcher as pw
+from dispatch_v2 import parcel_lane_merge as plm
+
+_PARCEL = {"order_id": 900000005, "source": "parcel", "status": "planned",
+           "pickup_coords": [53.13, 23.16], "delivery_coords": [53.12, 23.14]}
+
+
+# ── merger ────────────────────────────────────────────────────────────────
+def test_merge_flag_off_noop(monkeypatch):
+    monkeypatch.setattr(plm.C, "flag", lambda n, d=False: False)
+    assert plm.run() == {"enabled": False}
+
+
+def test_merge_stale_or_missing_snapshot(monkeypatch):
+    monkeypatch.setattr(plm.C, "flag", lambda n, d=False: True)
+    monkeypatch.setattr(plm, "_load_snapshot", lambda: None)
+    assert plm.run() == {"enabled": True, "snapshot": "missing_or_stale"}
+
+
+def test_merge_creates_new_parcel(monkeypatch):
+    monkeypatch.setattr(plm.C, "flag", lambda n, d=False: True)
+    monkeypatch.setattr(plm, "_load_snapshot", lambda: {"900000005": _PARCEL})
+    monkeypatch.setattr(plm.sm, "get_all", lambda: {})
+    created = []
+    monkeypatch.setattr(plm.sm, "upsert_order", lambda oid, e, event=None: created.append((oid, event)))
+    monkeypatch.setattr(plm.sm, "set_status", lambda *a, **k: None)
+    stats = plm.run()
+    assert stats["created"] == 1 and created == [("900000005", "PARCEL_LANE_NEW")]
+
+
+def test_merge_keeps_existing_no_clobber(monkeypatch):
+    """Paczka już w stanie (silnik mógł dodać courier_id) → NIE re-upsert."""
+    monkeypatch.setattr(plm.C, "flag", lambda n, d=False: True)
+    monkeypatch.setattr(plm, "_load_snapshot", lambda: {"900000005": _PARCEL})
+    monkeypatch.setattr(plm.sm, "get_all",
+                        lambda: {"900000005": {"source": "parcel", "status": "assigned", "courier_id": 7}})
+    upserts = []
+    monkeypatch.setattr(plm.sm, "upsert_order", lambda *a, **k: upserts.append(a))
+    monkeypatch.setattr(plm.sm, "set_status", lambda *a, **k: None)
+    stats = plm.run()
+    assert stats["kept"] == 1 and stats["created"] == 0 and upserts == []
+
+
+def test_merge_retires_gone_parcel(monkeypatch):
+    """Paczka zniknęła ze snapshotu (anulowana/usunięta) → terminalna (sprzątanie)."""
+    monkeypatch.setattr(plm.C, "flag", lambda n, d=False: True)
+    monkeypatch.setattr(plm, "_load_snapshot", lambda: {})
+    monkeypatch.setattr(plm.sm, "get_all",
+                        lambda: {"900000005": {"source": "parcel", "status": "planned"}})
+    monkeypatch.setattr(plm.sm, "upsert_order", lambda *a, **k: None)
+    retired = []
+    monkeypatch.setattr(plm.sm, "set_status", lambda oid, st, event=None: retired.append((oid, st)))
+    stats = plm.run()
+    assert stats["retired"] == 1 and retired == [("900000005", "cancelled")]
+
+
+def test_merge_leaves_gastro_alone(monkeypatch):
+    """Sprzątanie dotyka TYLKO source=parcel — gastro w stanie nietknięte."""
+    monkeypatch.setattr(plm.C, "flag", lambda n, d=False: True)
+    monkeypatch.setattr(plm, "_load_snapshot", lambda: {})
+    monkeypatch.setattr(plm.sm, "get_all",
+                        lambda: {"484000": {"status": "planned"}})  # gastro, brak source
+    monkeypatch.setattr(plm.sm, "upsert_order", lambda *a, **k: None)
+    touched = []
+    monkeypatch.setattr(plm.sm, "set_status", lambda oid, st, event=None: touched.append(oid))
+    stats = plm.run()
+    assert stats["retired"] == 0 and touched == []
+
+
+# ── strażnik watchera ───────────────────────────────────────────────────────
+def test_watcher_prefetch_skips_parcels():
+    """_build_prefetch_candidates POMIJA source=parcel, ale gastro spoza HTML NADAL bierze."""
+    parsed = {"order_ids": ["111"], "assigned_ids": set()}
+    state = {
+        "900000005": {"status": "planned", "source": "parcel"},  # paczka → pominąć
+        "222": {"status": "planned"},                            # gastro spoza HTML → prefetch
+    }
+    out = pw._build_prefetch_candidates(parsed, state, set(), False, False, False)
+    assert "900000005" not in out      # strażnik działa
+    assert "222" in out                # twin gastro nietknięty
+
+
+if __name__ == "__main__":
+    import pytest
+    raise SystemExit(pytest.main([__file__, "-q"]))
