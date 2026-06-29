@@ -610,12 +610,12 @@ def _best_effort_fastest_pickup_key(c, new_order_id):
             dv = _dv.timestamp() if _dv is not None else None
         except Exception:
             pu = dv = None
-    if _is_informed_cand(c):
-        bucket = 0
-    elif _is_blind_empty_cand(c) or _is_pre_shift_cand(c):
-        bucket = 2
-    else:
-        bucket = 1
+    # Sprint3 NO-GPS-EQUAL (29.06): bucket pozycji z JEDNEGO źródła `_selection_bucket`
+    # (equal-treatment-aware). Było inline-kopią informed0/blind|pre_shift2 sprzed
+    # equal-treatment — ten klucz jest SHADOW/LOG-ONLY (l.~6711 → metrics _shadow, NIE
+    # zmienia realnego best), ale unifikujemy by ewentualny awans nie wskrzesił dyskryminacji
+    # (wzorzec #2 „klasa wraca"). Forward-ref OK (def runtime). Zero-live-impact.
+    bucket = _selection_bucket(c)
     return (pu if pu is not None else BIG, dv if dv is not None else BIG, bucket)
 
 
