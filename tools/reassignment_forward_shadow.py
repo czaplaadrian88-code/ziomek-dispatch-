@@ -86,6 +86,15 @@ DEFAULT_R6_LATE_MIN = 35.0     # bag_time(O)>35 = dowóz po czasie (= sla_log de
 # (b_bag>0 = bundling „dwa dalekie na jednego"); WOLNEGO (bag=0) NIE palimy pod samą oszczędność —
 # zostaje w rezerwie na napływ. RATUNEK bez zmian (spóźnienie holdera > koszt rezerwy → wolny OK).
 OSZCZ_BUNDLING_ONLY_FLAG = "ENABLE_REASSIGN_OSZCZ_BUNDLING_ONLY"
+# Sprint 2 NO-GPS-EQUAL (Adrian 2026-06-29): „duch przerzutu nie ma ripować zleceń od
+# kuriera który ma dobrą trasę". Ramię RATUNEK odpalało na samym `a_cand is None` (holder
+# wypadł z hipotetycznej puli re-pickupu) — a to NIE dowód spóźnienia: kurier BEZ GPS /
+# pre_shift / już-jadący w GRAFIKU wypada z re-assess (np. już odebrał), choć dowozi dobrze.
+# 59% quality_reassign było takim fałszywym ratunkiem (replay 29.06). Gdy flaga ON: a_cand=None
+# liczy się jako spóźnienie TYLKO gdy holder NIEOBECNY w żywej flocie (realnie po zmianie/
+# zniknął, cs_a is None); holder PRACUJĄCY bez zmierzonego R6>próg → brak dowodu → NIE ratujemy.
+# Default OFF=legacy. Env (drop-in, oneshot timer czyta świeżo co tick).
+RESCUE_REQUIRE_ABSENT_FLAG = "ENABLE_REASSIGN_RESCUE_REQUIRE_HOLDER_ABSENT"
 
 # Pola czytane przez assess_order (zweryfikowane dispatch_pipeline.py:2881-3055).
 _EVENT_FIELDS = (
@@ -220,7 +229,7 @@ def _minutes(a, b) -> Optional[float]:
 
 
 def _quality_gate(a_cand: Any, best: Any, oid: str, a_pos, b_pos,
-                  holder_cid: str, b_cid: str, b_bag=None) -> dict:
+                  holder_cid: str, b_cid: str, b_bag=None, a_in_fleet: bool = False) -> dict:
     """Gradient gate JAKOŚCI (Krok 1, log-only). Duch-przerzut TYLKO gdy „na pewno lepiej":
       • RAMIĘ 1 (ratunek): obecny dowiezie po czasie (R6>próg) LUB jest infeasible, a nowy NA CZAS;
       • RAMIĘ 2 (oszczędność): obecny na czas, nowy dowiezie ≥ BIG_SAVE_MIN min wcześniej.
@@ -229,14 +238,26 @@ def _quality_gate(a_cand: Any, best: Any, oid: str, a_pos, b_pos,
     big_save = float(os.environ.get(QUALITY_BIG_SAVE_KEY, DEFAULT_BIG_SAVE_MIN))
     r6_late = float(os.environ.get(QUALITY_R6_LATE_KEY, DEFAULT_R6_LATE_MIN))
     bundling_only = os.environ.get(OSZCZ_BUNDLING_ONLY_FLAG, "0") == "1"
+    require_absent = os.environ.get(RESCUE_REQUIRE_ABSENT_FLAG, "0") == "1"
     a_pred = _plan_dt(a_cand, oid, "predicted_delivered_at")
     a_pick = _plan_dt(a_cand, oid, "pickup_at")
     b_pred = _plan_dt(best, oid, "predicted_delivered_at")
     b_pick = _plan_dt(best, oid, "pickup_at")
     a_bag_time = _minutes(a_pred, a_pick)
     b_bag_time = _minutes(b_pred, b_pick)
-    # obecny spóźniony: brak feasible A (infeasible) LUB jego R6 dla O ponad próg
-    a_late = (a_cand is None) or (a_bag_time is not None and a_bag_time > r6_late)
+    # obecny spóźniony: zmierzony R6 dla O ponad próg LUB infeasible.
+    a_measured_late = (a_bag_time is not None and a_bag_time > r6_late)
+    rescue_suppressed_working = False
+    if require_absent:
+        # Sprint 2 NO-GPS-EQUAL: a_cand=None liczy się jako spóźnienie TYLKO gdy holder
+        # NIEOBECNY w żywej flocie (po zmianie/zniknął). Holder PRACUJĄCY (w grafiku, bez
+        # GPS/pre_shift/już jedzie) bez zmierzonego R6>próg = brak dowodu → NIE ratujemy.
+        a_genuinely_absent = (a_cand is None) and (not a_in_fleet)
+        a_late = a_genuinely_absent or a_measured_late
+        rescue_suppressed_working = (a_cand is None) and a_in_fleet and not a_measured_late
+    else:
+        # legacy: brak feasible A (infeasible) LUB R6 ponad próg
+        a_late = (a_cand is None) or a_measured_late
     b_late = (b_bag_time is not None and b_bag_time > r6_late)
     save_min = _minutes(a_pred, b_pred)   # dodatni = nowy dowiezie wcześniej
     pos_ok = _usable_pos(a_pos) and _usable_pos(b_pos)
@@ -255,10 +276,15 @@ def _quality_gate(a_cand: Any, best: Any, oid: str, a_pos, b_pos,
                 reason = (("oszczędność: nowy (po drodze) dowiezie ~%.0f min wcześniej" % save_min)
                           if b_busy else ("oszczędność: nowy dowiezie ~%.0f min wcześniej" % save_min))
                 quality = True
+    if rescue_suppressed_working and not quality:
+        reason = ("obecny pracuje (w grafiku, poz. bez GPS/pre_shift/już jedzie) — "
+                  "brak dowodu spóźnienia (R6 niezmierzony) → NIE przerzucamy [Sprint2 no-GPS-equal]")
     return {
         "quality_reassign": quality,
         "quality_reason": reason,
         "quality_pos_ok": pos_ok,
+        "quality_a_in_fleet": bool(a_in_fleet),
+        "quality_rescue_suppressed_working": bool(rescue_suppressed_working),
         "a_pred_deliver": a_pred.isoformat() if a_pred is not None else None,
         "b_pred_deliver": b_pred.isoformat() if b_pred is not None else None,
         "a_bag_time_min": round(a_bag_time, 1) if a_bag_time is not None else None,
@@ -369,7 +395,8 @@ def evaluate_order(rec: dict, holder_cid: str, fleet: Dict[str, Any],
             a_cand, best, oid,
             getattr(cs_a, "pos_source", None) if cs_a is not None else None,
             getattr(cs_b, "pos_source", None) if cs_b is not None else None,
-            holder_cid, b_cid, b_bag=b_bag))
+            holder_cid, b_cid, b_bag=b_bag,
+            a_in_fleet=(cs_a is not None)))
     return rec_out
 
 
