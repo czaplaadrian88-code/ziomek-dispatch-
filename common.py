@@ -208,6 +208,12 @@ ENABLE_ETA_QUANTILE_R6_BAGCAP = False
 ENABLE_R6_BREACH_SHADOW_LOG = False
 ENABLE_E2_PLN_AB = False
 ENABLE_PLN_COURIER_PAY = False
+# #9 conftest-leak DOKOŃCZENIE (audyt 28.06, sesja 29.06): callsite czyta C.flag(
+# "ENABLE_PLN_QUALITY_AWARE", False) [dispatch_pipeline ~1055]; flaga jest w
+# ETAP4_DECISION_FLAGS (conftest strip), ale brakowało stałej-fallback → test
+# test_all_etap4_flags_have_module_const padał. Fallback OFF (literał, NIE env-read
+# — unika anty-wzorca env-frozen). Decyzja czytana z flags.json przez C.flag.
+ENABLE_PLN_QUALITY_AWARE = False
 ENABLE_OBJ_FOOD_AGE_HARD_SLA = False  # Faza 2 2026-06-17 (food-age hard-SLA + warm-start)
 ENABLE_END_OF_DAY_SALVAGE = False  # 2026-06-18 (ostatnia godzina pracy firmy — bend reguł końca zmiany)
 ENABLE_FEAS_CARRY_READMIT = False  # #483000 2026-06-27 (carry-aware re-admit feasible-path, cap-40 Tier-3)

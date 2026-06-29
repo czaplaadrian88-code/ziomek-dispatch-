@@ -1,7 +1,8 @@
 {
   "_comment": "C-FLAG-DRIFT baseline (audyt 2026-06-24 §6.C): flagi decyzyjne ENABLE_/USE_ NIEudokumentowane w ZIOMEK_LOGIC_REFERENCE.md na dzien zamrozenia. Ratchet: NOWA flaga undoc poza ta lista = drift (udokumentuj w ref ALBO swiadomie dopisz tutaj). Cel dlugofalowy: kurczyc te liste.",
   "_frozen": "2026-06-24",
-  "_count": 70,
+  "_2026-06-29_note": "Audyt-fix sesja 29.06: +3 swiadomie baseline (BUNDLE_DELIVERY_COLOCATION z 35186f6, GLOBAL_ALLOC_WRITE+PENDING_PROPOSALS_WRITE z 4812f28 Faza C) — flagi LIVE udokumentowane w commitach/memory, dryf zlapany przez ratchet; docelowo udokumentowac w ZIOMEK_LOGIC_REFERENCE i skurczyc.",
+  "_count": 73,
   "baseline": [
     "ENABLE_AUTO_ASSIGN",
     "ENABLE_AUTO_ROUTE_WEAK_PICK_ALERT",
@@ -11,6 +12,7 @@
     "ENABLE_BEST_EFFORT_OBJM_SHADOW",
     "ENABLE_BEST_EFFORT_POS_SOURCE_KEY",
     "ENABLE_BUNDLE_DELIV_SPREAD_CAP",
+    "ENABLE_BUNDLE_DELIVERY_COLOCATION",
     "ENABLE_BUNDLE_VALUE_SCORING",
     "ENABLE_C2_NEG_GAP_DECAY",
     "ENABLE_COURIER_LAST_KNOWN_POS",
@@ -29,6 +31,7 @@
     "ENABLE_FIX_C_ADDITIVE_PENALTY",
     "ENABLE_GEOCODE_NOMINATIM_FALLBACK",
     "ENABLE_GEOCODE_VERIFICATION_ENFORCE",
+    "ENABLE_GLOBAL_ALLOC_WRITE",
     "ENABLE_GPS_AGE_DISCOUNT",
     "ENABLE_GPS_BBOX_GUARD",
     "ENABLE_GPS_DELIVERY_VALIDATION",
@@ -49,6 +52,7 @@
     "ENABLE_PANEL_DETAIL_PREFETCH",
     "ENABLE_PANEL_PACKS_BAG_RECONSTRUCTION",
     "ENABLE_PANEL_PACKS_EMPTY_WRITE_GUARD",
+    "ENABLE_PENDING_PROPOSALS_WRITE",
     "ENABLE_PENDING_RESWEEP",
     "ENABLE_PICKUP_COORDS_FROM_PANEL",
     "ENABLE_PICKUP_DEBIAS_SHADOW",
