@@ -139,3 +139,18 @@ def test_verdict_inconclusive_when_too_few_multi(monkeypatch):
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── #5b: fizyczna prawda dostawy (GPS) priorytet nad klikiem ─────────────────
+def test_physical_delivered_index_parses(tmp_path, monkeypatch):
+    """#5b: _physical_delivered_index czyta physical_delivered_at z gps_delivery_truth.jsonl."""
+    import json
+    p = tmp_path / "gps_delivery_truth.jsonl"
+    p.write_text(
+        json.dumps({"order_id": "111", "physical_delivered_at": "2026-06-10T12:13:55+00:00"}) + "\n"
+        + json.dumps({"order_id": "222", "physical_delivered_at": None}) + "\n",  # brak → pominięte
+        encoding="utf-8")
+    monkeypatch.setattr(B, "GPS_TRUTH", str(p))
+    idx = B._physical_delivered_index()
+    assert "111" in idx and idx["111"] is not None
+    assert "222" not in idx  # None physical → nie w indeksie (fallback do kliku)

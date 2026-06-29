@@ -25,6 +25,10 @@ sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 STATE_DIR = "/root/.openclaw/workspace/dispatch_state"
 CORPUS = f"{STATE_DIR}/bundle_calib_shadow.jsonl"
 SLA_LOG = f"{STATE_DIR}/sla_log.jsonl"
+# #5b (top10 #1, 29.06): fizyczna prawda dostawy z GPS (arrived_at_customer) — PRIORYTET
+# nad klikiem (sla_log), bo klik ZAWYŻA wiek o medianę +2 min (kalibracja #5b). Outcome-join
+# O2 liczy realne naruszenie R6 na FIZYCZNYM przyjeździe, nie na przyciskowym delivered_at.
+GPS_TRUTH = f"{STATE_DIR}/gps_delivery_truth.jsonl"
 R6_MAX_MIN = 35.0
 MIN_MULTI = 20            # minimum UNIKALNYCH worków multi-order na pewny werdykt
 MATERIAL_PCT = float(os.environ.get("BUNDLE_CALIB_MATERIAL_PCT", "2.0"))  # próg % worków policy-improved = GO
@@ -162,6 +166,17 @@ def _sla_delivered_index():
     return idx
 
 
+def _physical_delivered_index():
+    """{order_id: physical_delivered_at(datetime)} z gps_delivery_truth.jsonl (#5b).
+    Fizyczny przyjazd GPS — PRIORYTET nad klikiem (klik zawyża wiek ~+2 min)."""
+    idx = {}
+    for r in _read_jsonl(GPS_TRUTH):
+        d = _parse(r.get("physical_delivered_at"))
+        if d is not None:
+            idx[str(r.get("order_id"))] = d
+    return idx
+
+
 def build_report():
     corpus = _read_jsonl(CORPUS)
     # UNIKALNE worki: dedup po (cid, bag_sig) — last-wins (ostatni stan worka)
@@ -198,20 +213,28 @@ def build_report():
     regress_count = [r for r in differs
                      if (delt(r, "r6_ready") or 0) < 0 or (delt(r, "overage") or 0) < -2.0]
 
-    # OUTCOME-JOIN: realny wiek OD GOTOWOŚCI (delivered - czas_kuriera[oid]) z sla_log
+    # OUTCOME-JOIN: realny wiek OD GOTOWOŚCI (delivered - czas_kuriera[oid]).
+    # #5b: FIZYCZNY przyjazd GPS (gps_delivery_truth) PRIORYTET, fallback klik (sla_log).
     sla = _sla_delivered_index()
+    phys = _physical_delivered_index()
     joined = 0
     real_served_viol = 0   # ile zleceń realnie >35 min od gotowości (trasa SERWOWANA = rzeczywistość)
     real_total = 0
+    phys_total = 0         # ile zleceń join na FIZYCZNYM GPS (nie kliku) = jakość prawdy
     for r in differs:
         cks = r.get("czas_kuriera") or {}
         hit = False
         for oid in (r.get("order_ids") or []):
-            d = sla.get(str(oid))
+            d = phys.get(str(oid))
+            is_phys = d is not None
+            if d is None:
+                d = sla.get(str(oid))
             ck = _parse((cks or {}).get(str(oid)))
             if d is not None and ck is not None:
                 hit = True
                 real_total += 1
+                if is_phys:
+                    phys_total += 1
                 if (d - ck).total_seconds() / 60.0 > R6_MAX_MIN:
                     real_served_viol += 1
         if hit:
@@ -243,6 +266,8 @@ def build_report():
         "regress_count": len(regress_count),
         "regress_count_pct": round(100 * len(regress_count) / max(len(differs), 1), 1),
         "real_joined_bags": joined,
+        "real_joined_orders": real_total,
+        "real_physical_orders": phys_total,   # #5b: ile z join na FIZYCZNYM GPS (reszta=klik fallback)
         "real_served_viol_pct": round(100 * real_served_viol / max(real_total, 1), 1) if real_total else None,
         # KALIBRACJA X/Y/Z (Opcja 3 — twardy cap świeżości carried):
         "z_keys": zkeys,
@@ -287,7 +312,7 @@ def _fmt(r):
     uz = r.get("under_z") or {}
     caps = uz.get("caps") or {}
     L = ["🔬 BUNDLE-CALIB przegląd (GATE O2=overage-ONLY = parytet silnika; czas_late=osobna soczewka info, FAZA 2; + kalibracja X/Y/Z Opcji 3)",
-         f"⚠ PRÓG GO = {MATERIAL_PCT:.0f}% worków (Adrian 29.06: każdy progres warty). FLIP silnika WSTRZYMANY do #5b (geofence dostawy) — werdykt GO = 'warto się przyjrzeć', NIE 'włącz'. overage-only KONSERWATYWNY (CALIB λ-wybrana, silnik ≥ tyle).",
+         f"⚠ PRÓG GO = {MATERIAL_PCT:.0f}% worków (Adrian 29.06: każdy progres warty). #5b geofence DOSTARCZONE 29.06 (fizyczna prawda wpięta w outcome-join niżej); FLIP silnika (ENABLE_O2_READY_ANCHOR_SWEEP) czeka na review 02.07 + ACK — werdykt GO = 'warto się przyjrzeć', NIE 'włącz'. overage-only KONSERWATYWNY (CALIB λ-wybrana, silnik ≥ tyle).",
          f"Korpus: {r['corpus_rows']} wpisów / {r['multi_uniq']} unikalnych worków multi-order",
          f"CALIB≠served: {r['differs']} ({r['differs_pct']}%)",
          "",
@@ -305,7 +330,7 @@ def _fmt(r):
     else:
         L.append("   (brak rekordów z under_z — collector dopiero od 25.06; poczekać na napływ do 02.07)")
     L += ["",
-          f"Outcome-join (real delivered_at, n={r['real_joined_bags']} worków): served realnie naruszał R6 (od gotowości) w {r['real_served_viol_pct']}% zleceń",
+          f"Outcome-join #5b (FIZYCZNY GPS-priorytet: {r['real_physical_orders']}/{r['real_joined_orders']} zleceń na fizycznym przyjeździe, reszta klik-fallback; n={r['real_joined_bags']} worków): served realnie naruszał R6 (od gotowości) w {r['real_served_viol_pct']}% zleceń",
           "",
           f"➤ WERDYKT: {r['verdict']}",
           f"   {r['recommendation']}"]
