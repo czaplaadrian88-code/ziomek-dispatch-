@@ -453,6 +453,13 @@ the module constant. ~80+ flags exist. Notable **current** states:
   `address_mismatch.check_street_town()` (bliźniak panelowego `/estimate`, próg 5/1) + `maybe_log_mismatch` →
   `dispatch_state/address_mismatch_shadow.jsonl`; hook w `shadow_dispatcher._tick` po geokodzie dostawy, try/except
   fail-soft; cel: złe miasto → zły geokod (case Olmonty/483504); ZERO zmiany decyzji/dispatchu).
+  `ENABLE_ADDRESS_COORDS_MISMATCH_SHADOW` (Adrian 2026-06-29: log-only detektor rozjazdu TEKST↔PIN —
+  inna klasa niż town: miasto OK, ale napisany `delivery_address` geokoduje się > 400 m od zapisanego
+  `delivery_coords`, na których kurier jedzie. `address_mismatch.check_text_coords()` + throttlowany
+  `maybe_sweep_text_coords` (sweep aktywnych orders_state co ~300 s, dedup, geocode wstrzykiwany) →
+  ten sam `address_mismatch_shadow.jsonl` z polem `check:"text_coords"`; hook w `shadow_dispatcher._tick`
+  po `state_all`, try/except fail-soft; case 484269 „Można"≠„Mroźna" 4,26 km — tekst stał po edycji,
+  bo `gastro_edit.regeocode_and_update` aktualizuje tylko coords; ZERO zmiany decyzji/dispatchu).
 - ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` (cold-food divergence
   no longer →KOORD), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
   `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`, `kill_switch_to_v1`,

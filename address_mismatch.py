@@ -14,6 +14,7 @@ MIN_BIA=5 / MAX_HERE=1, ten sam klucz ulicy). Zmiana progu = zmień OBA miejsca.
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import unicodedata
@@ -117,3 +118,114 @@ def maybe_log_mismatch(order_id, street, town) -> dict | None:
     except OSError:
         pass
     return w
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# B2 — shadow-detektor rozjazdu TEKST ↔ PIN (współrzędne).
+#
+# Inna klasa niż ulica↔miasto: tu MIASTO bywa poprawne (Białystok), ale napisana
+# nazwa ulicy wskazuje inne miejsce niż pin, na którym kurier faktycznie jedzie.
+# Case 484269: tekst „Można 10/23" geokoduje się 4,26 km od zapisanego
+# `delivery_coords` (Mroźna 10) — tekst stał po edycji, coords poprawione
+# (`gastro_edit.regeocode_and_update` aktualizuje TYLKO coords, nie tekst).
+# Łapie też zwykłe literówki ulicy geokodujące się gdzie indziej.
+#
+# Wykrywanie ŹRÓDŁOWO-AGNOSTYCZNE: throttlowany sweep utrwalonego orders_state
+# (to, co konsola/apka POKAZUJE), niezależnie od tego jak rozjazd powstał
+# (tworzenie / nasza edycja / edycja w gastro / stale). NIE hook NEW_ORDER — tam
+# coords=geokod(tekst), więc rozjazd jeszcze nie istnieje.
+# SHADOW/log-only do TEGO SAMEGO jsonl z polem `check:"text_coords"`; flaga
+# `ENABLE_ADDRESS_COORDS_MISMATCH_SHADOW` (gate po stronie callera).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_COORDS_MISMATCH_MIN_M = 400.0   # próg rozjazdu tekst↔pin (Adrian 29.06)
+_SWEEP_INTERVAL_S = 300.0        # throttle sweepa (≈1 cykl plan_recheck)
+_ACTIVE_FOR_SWEEP = {"planned", "assigned", "picked_up"}
+
+_sweep_last_ts = 0.0
+_coords_logged: set = set()      # (oid, round(lat,5), round(lng,5)) — dedup w obrębie procesu
+
+
+def _haversine_m(a, b) -> float:
+    """Odległość w metrach między (lat,lng)."""
+    lat1, lng1 = math.radians(a[0]), math.radians(a[1])
+    lat2, lng2 = math.radians(b[0]), math.radians(b[1])
+    dlat, dlng = lat2 - lat1, lng2 - lng1
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
+    return 2 * 6371000.0 * math.asin(math.sqrt(h))
+
+
+def check_text_coords(street, city, used_coords, *, geocode_fn) -> dict | None:
+    """Rozjazd tekst↔pin: geokoduj `street` (cache-first) i porównaj z `used_coords`
+    (współrzędne, których pipeline realnie używa do trasy). > MIN_M = tekst i pin
+    wskazują różne miejsca → jedno z nich błędne. None = OK / za mało danych.
+
+    Czysta funkcja — `geocode_fn` wstrzykiwany (testowalność, brak importu cyklicznego).
+    Fail-soft: każdy błąd parsowania/geokodu → None (nie alarmuje, nie wywraca)."""
+    if not street or not used_coords:
+        return None
+    try:
+        uc = (float(used_coords[0]), float(used_coords[1]))
+    except (TypeError, ValueError, IndexError):
+        return None
+    try:
+        tc = geocode_fn(street, city=city or "Białystok")
+    except Exception:  # noqa: BLE001
+        return None
+    if not tc:
+        return None
+    try:
+        tcf = (float(tc[0]), float(tc[1]))
+        dist = _haversine_m(uc, tcf)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if dist <= _COORDS_MISMATCH_MIN_M:
+        return None
+    return {
+        "check": "text_coords",
+        "street": str(street).strip(),
+        "city": (str(city).strip() if city else "Białystok"),
+        "text_coords": [round(tcf[0], 6), round(tcf[1], 6)],
+        "used_coords": [round(uc[0], 6), round(uc[1], 6)],
+        "distance_m": round(dist, 1),
+    }
+
+
+def maybe_sweep_text_coords(state, now_ts, *, geocode_fn) -> int:
+    """SHADOW: throttlowany sweep aktywnych zleceń `orders_state` — porównuje
+    `delivery_address` (tekst) z `delivery_coords` (pin). Rozjazdy > MIN_M dopisuje
+    do jsonl (check=text_coords), dedup per (oid, coords) w obrębie procesu.
+    Zwraca liczbę NOWYCH wpisów. Fail-soft. Gate flagi po stronie callera."""
+    global _sweep_last_ts
+    try:
+        if (now_ts - _sweep_last_ts) < _SWEEP_INTERVAL_S:
+            return 0
+    except (TypeError, ValueError):
+        return 0
+    _sweep_last_ts = now_ts
+    n = 0
+    for oid, o in (state or {}).items():
+        if not isinstance(o, dict) or o.get("status") not in _ACTIVE_FOR_SWEEP:
+            continue
+        coords = o.get("delivery_coords")
+        street = o.get("delivery_address")
+        if not coords or not street:
+            continue
+        try:
+            dk = (str(oid), round(float(coords[0]), 5), round(float(coords[1]), 5))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if dk in _coords_logged:
+            continue
+        w = check_text_coords(street, o.get("delivery_city"), coords, geocode_fn=geocode_fn)
+        if not w:
+            continue
+        _coords_logged.add(dk)
+        rec = {"ts": now_ts, "order_id": str(oid), **w}
+        try:
+            with open(_SHADOW_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        n += 1
+    return n

@@ -47,7 +47,8 @@ def _day(ts: float) -> str:
 
 
 def build_report(since_ts: float | None) -> str:
-    rows = _load(since_ts)
+    # Tylko wpisy ulica↔miasto (text_coords = osobny detektor, własna sekcja niżej).
+    rows = [r for r in _load(since_ts) if r.get("check") != "text_coords"]
     L: list[str] = []
     L.append("🔎 PRZEGLĄD shadow ulica↔miasto (b2 ENABLE_ADDRESS_TOWN_MISMATCH_SHADOW)")
     if not rows:
@@ -92,6 +93,46 @@ def build_report(since_ts: float | None) -> str:
     return "\n".join(L)
 
 
+def build_coords_report(since_ts: float | None) -> str:
+    """Sekcja text↔pin (ENABLE_ADDRESS_COORDS_MISMATCH_SHADOW): rozjazd napisanego
+    adresu vs współrzędne trasy (case 484269 'Można'≠'Mroźna', 4,26 km)."""
+    rows = [r for r in _load(since_ts) if r.get("check") == "text_coords"]
+    L: list[str] = []
+    L.append("")
+    L.append("🔎 PRZEGLĄD shadow TEKST↔PIN (ENABLE_ADDRESS_COORDS_MISMATCH_SHADOW)")
+    if not rows:
+        L.append("Brak wpisów (0 rozjazdów tekst↔pin w oknie) — albo krótkie okno / mało ruchu.")
+        return "\n".join(L)
+    per_day = Counter(_day(r["ts"]) for r in rows)
+    orders = {r.get("order_id") for r in rows if r.get("order_id")}
+    streets = Counter(r.get("street", "?") for r in rows)
+    n_days = max(1, len(per_day))
+    per_day_avg = len(rows) / n_days
+    dists = sorted(float(r.get("distance_m", 0)) for r in rows)
+    med = dists[len(dists) // 2] if dists else 0.0
+    L.append(f"Okno: {min(per_day)}..{max(per_day)} ({n_days} dni) | wpisów: {len(rows)} "
+             f"| śr/dzień: {per_day_avg:.1f} | distinct zleceń: {len(orders)} "
+             f"| mediana rozjazdu: {med:.0f} m | max: {dists[-1]:.0f} m")
+    L.append("")
+    L.append("Top rozjazdy (napisana ulica ×N — pin gdzie indziej):")
+    for street, n in streets.most_common(12):
+        sample = next((r for r in rows if r.get("street") == street), {})
+        L.append(f"  {n:>3}× „{street}”  (rozjazd ~{float(sample.get('distance_m', 0)):.0f} m, "
+                 f"oid={sample.get('order_id')})")
+    L.append("")
+    if per_day_avg >= 3:
+        L.append(f"→ WERDYKT (heurystyka): A — {per_day_avg:.1f}/dzień materialny strumień kłamiących "
+                 f"adresów. Rozważ alert koordynatora „adres niepewny” + fix u źródła "
+                 f"(gastro_edit.regeocode_and_update sync tekstu z coords).")
+    elif per_day_avg >= 0.7:
+        L.append(f"→ WERDYKT (heurystyka): A-light — {per_day_avg:.1f}/dzień; cichy alert + obserwacja, "
+                 f"przejrzyj próbki pod false-positive (legit inne miasto / alias ulicy).")
+    else:
+        L.append(f"→ WERDYKT (heurystyka): C — rzadkie ({per_day_avg:.1f}/dzień), zostaw shadow.")
+    L.append("⚠ Bramka kodu/flip = człowiek (Adrian). Heurystyka tylko wskazuje kierunek.")
+    return "\n".join(L)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", help="YYYY-MM-DD (Warsaw) — tylko wpisy od tej daty")
@@ -102,7 +143,7 @@ def main() -> None:
     if args.since:
         since_ts = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=WARSAW).timestamp()
 
-    report = build_report(since_ts)
+    report = build_report(since_ts) + "\n" + build_coords_report(since_ts)
     print(report)
     try:
         VERDICT.write_text(report + "\n", encoding="utf-8")

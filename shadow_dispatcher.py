@@ -1111,6 +1111,18 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
     state_all = state_machine.get_all()
     TERMINAL = ("delivered", "cancelled", "returned_to_pool", "picked_up")
 
+    # B2 (tekst↔pin): shadow-detektor rozjazdu napisanego adresu dostawy vs współrzędne,
+    # na których kurier realnie jedzie (case 484269 „Można"≠„Mroźna", 4,26 km — tekst stał
+    # po edycji, coords poprawione). Throttlowany sweep orders_state (raz/tick, ~co 300 s),
+    # log-only, flag-gated, try/except — NIGDY nie wywróci dispatchu. Bliźniak (panel) =
+    # check tekst↔pin w app/api/dispatch.py — N-D w v1 (inna powierzchnia, dołożymy po dowodzie).
+    if C.flag("ENABLE_ADDRESS_COORDS_MISMATCH_SHADOW"):
+        try:
+            from dispatch_v2 import address_mismatch as _am
+            _am.maybe_sweep_text_coords(state_all, time.time(), geocode_fn=geocode)
+        except Exception as _ac_e:  # noqa: BLE001
+            _log.warning(f"address_coords_mismatch sweep fail: {_ac_e}")
+
     # Opcja B (2026-06-26): zbierz PROPOSE-y do zasilenia pending_proposals.json z silnika
     # (Telegram OFF → plik osierocony; konsumenci panel_watcher/resweep/Faza C go potrzebują).
     # Flag-gated default OFF = no-op. Jeden atomowy zapis PO pętli (nie per event).
