@@ -62,15 +62,26 @@ if MODULE_PATH.exists():
 
 # ───────────────────────── syntetyka ─────────────────────────
 
-def _row(cid, p2d, predicted=None, status="delivered", pos_source="gps"):
-    """Jeden wiersz backfillu (decyzja + realny outcome)."""
+_OID_CTR = [0]
+
+
+def _row(cid, p2d, predicted=None, status="delivered", pos_source="gps", oid=None):
+    """Jeden wiersz backfillu (decyzja + realny outcome).
+
+    UWAGA (drift fix 2026-06-29): build_profiles DEDUPuje per (cid, order_id) — commit e85c85b
+    (~45% backfillu to zdublowane decyzje tego samego zlecenia). Bez UNIKALNEGO order_id wszystkie
+    syntetyczne wiersze kolapsowały do 1 (str(None)) → n_delivered=1 < min_history → puste profile.
+    Każdy wiersz dostaje unikalny order_id (auto-licznik gdy nie podano)."""
+    if oid is None:
+        _OID_CTR[0] += 1
+        oid = f"auto-{_OID_CTR[0]}"
     outcome = {
         "status": status,
         "courier_id_final": cid,
         "pickup_to_delivery_min": p2d,
         "pos_source": pos_source,
     }
-    r = {"outcome": outcome}
+    r = {"outcome": outcome, "order_id": oid}
     if predicted is not None:
         r["predicted_drive_min"] = predicted
     return r
