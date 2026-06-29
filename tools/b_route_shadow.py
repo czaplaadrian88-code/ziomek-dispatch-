@@ -238,6 +238,19 @@ def _served_order(plan_doc, mine):
     return out
 
 
+def _served_is_synthetic(plan_doc, mine):
+    """True gdy `_served_order` MUSIAŁ użyć fallbacku (plan NIE pokrywa worka) → `served`
+    jest SYNTETYCZNYM carried-first, NIE realnym planem → NIE ground-truth. C9/#17 (near-miss
+    29.06 case Rećki: agent uznał „silnik produkuje carried-first" na podstawie TEGO artefaktu).
+    Marker w rekordzie → analiza/werdykt nie ufa `served`/`differs` gdy synthetic. Mirror
+    coverage-checku `_served_order` (l.225-227) — trzymać spójnie."""
+    if not (isinstance(plan_doc, dict) and plan_doc.get("stops")):
+        return True
+    cov_d = {str(s.get("order_id")) for s in plan_doc["stops"]
+             if str(s.get("order_id")) in mine and s.get("type") != "pickup"}
+    return not (cov_d >= set(mine.keys()))
+
+
 def _b_full_retsp(cid, oids, mine, pos, now):
     """B = pełne re-TSP _gen_one_bag_plan (zapis na shadow-temp). Zwraca stopy lub None."""
     osd = {oid: dict(o) for oid, o in mine.items()}
@@ -387,6 +400,9 @@ def run_once(now=None, dry_run=False):
             "n_orders": len(oids),
             "n_carried": len(carried),
             "served": _oid_seq(served),
+            # C9/#17: served = SYNTETYCZNY carried-first gdy plan nie pokrywa worka → NIE
+            # ground-truth (near-miss Rećki 29.06). Analiza/werdykt: pomijaj synthetic.
+            "served_synthetic": _served_is_synthetic(plans.get(cid), mine),
             "b": _oid_seq(b) if b else None,
             "blite": _oid_seq(blite) if blite else None,
             "differs_b": differs_b,
