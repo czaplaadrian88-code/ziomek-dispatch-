@@ -45,6 +45,7 @@
 > | `ENABLE_A2_RELIABILITY_SOFT_SCORE` | 🟡 | **🟢 LIVE** | reliability penalty coeff 60 |
 > | `ENABLE_OBJ_COMMITTED_PICKUP_PENALTY` | — | **🟢 LIVE** | OR-Tools soft coeff 100, never INFEASIBLE |
 > | `ENABLE_NO_GPS_EQUAL_TREATMENT` | — | **🟢 LIVE** | no_gps competes on raw score; `_demote_blind_empty` ~inert |
+> | `ENABLE_PRE_SHIFT_EQUAL_NO_PENALTY` | ⚪ | **SHADOW/OFF** (29.06, Sprint1 „bez kary przed zmianą") | ON → zeruje karę score pre_shift (`_apply_pre_shift_equal_gate`, oba źródła: stała V325 + gradient); „dotrze później" = clamp + R-LATE-PICKUP propozycja do restauracji, NIE ukryta kara; HARD-reject >30min-przed-zmianą zostaje. Default OFF=kara; flip po replayu+ACK |
 > | `ENABLE_ALWAYS_PROPOSE_ON_SATURATION` | — | **🟢 LIVE** | every quality→KOORD gate carries `and not _always_propose_on()` |
 > | `ENABLE_CZASOWKA_CK_PASSIVE_GUARD` | — | **🟢 LIVE** (24.06, #483023) | czasówka: passive gastro `czas_kuriera` re-stamp (`panel_re_check`/`pre_proposal_recheck`) NIE zmienia committed; umówiony czas = `pickup_at` |
 > | `ENABLE_PICKUP_TIME_MIRRORS_CK` | — | **🟢 LIVE** (24.06) | czasówka: `PICKUP_TIME_UPDATED` mirrors `pickup_at`→`czas_kuriera` (koordynator/restauracja, any direction) |

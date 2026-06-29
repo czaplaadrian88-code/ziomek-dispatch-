@@ -69,6 +69,7 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_CHECKPOINT_TS_WARSAW_PARSE",
     "ENABLE_C2_NEG_GAP_DECAY",
     "ENABLE_PRE_SHIFT_DEPARTURE_CLAMP",
+    "ENABLE_PRE_SHIFT_EQUAL_NO_PENALTY",
     "ENABLE_OBJ_SPAN_COST",
     "ENABLE_OBJ_R6_SOFT_DEADLINE",
     "ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD",
@@ -224,6 +225,14 @@ ENABLE_O2_READY_ANCHOR_SWEEP = False  # O2 re-seq 2026-06-27 (ready-anchor + ove
 ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria physical_verified delivered_at panel-vs-GPS courier_ground_truth; SHADOW, zero wpływu na decyzje/SLA; kanon=flags.json hot)
 ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
 ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
+# Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy ON → zeruje
+# karę score pre_shift (`bonus_v325_pre_shift_soft`, oba źródła: stała V325 + gradient
+# _pre_shift_gradient_penalty). „Kurier dotrze później" obsługuje LEGALNA ścieżka:
+# clamp do shift_start (ENABLE_PRE_SHIFT_DEPARTURE_CLAMP) + R-LATE-PICKUP propozycja
+# przedłużenia DO RESTAURACJI (ENABLE_LATE_PICKUP_HARD_GATE) — NIE ukryta kara w score.
+# HARD-reject >30min-przed-zmianą (feasibility_v2 V325_PRE_SHIFT_HARD_REJECT_MIN) ZOSTAJE
+# (realna niewykonalność). Default OFF=stała kara zachowana; flip flags.json=True po replayu+ACK.
+ENABLE_PRE_SHIFT_EQUAL_NO_PENALTY = False
 
 # E7-doklejka 3: stałe kar BUG A/B nadpisywalne z flags.json (flip wartości
 # startowych werdyktu razem z flagą, hot-reload bez restartu; fallback = stała

@@ -2410,6 +2410,26 @@ def _equal_bucket_on() -> bool:
         return False
 
 
+def _apply_pre_shift_equal_gate(bonus_pre_shift_soft, metrics):
+    """Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy flaga
+    `ENABLE_PRE_SHIFT_EQUAL_NO_PENALTY` ON → ZERUJE karę score pre_shift (zwraca 0.0,
+    mutuje metrics). Pojedynczy autorytatywny punkt PO obu źródłach kary (stała V325 +
+    gradient `_pre_shift_gradient_penalty`). „Kurier dotrze później" obsługuje LEGALNA
+    ścieżka (clamp do shift_start + R-LATE-PICKUP propozycja przedłużenia DO RESTAURACJI),
+    NIE ukryta kara w score. HARD-reject >30min-przed-zmianą (feasibility_v2) zostaje.
+    Default OFF (decision_flag → flags.json/stała False) = kara zachowana, czysty no-op.
+    Czysta (testowalna) — `v325_` prefix → metryka auto-serializowana."""
+    try:
+        on = bool(C.decision_flag("ENABLE_PRE_SHIFT_EQUAL_NO_PENALTY"))
+    except Exception:
+        on = False
+    if not on:
+        return bonus_pre_shift_soft
+    metrics["v325_pre_shift_penalty_suppressed"] = round(float(bonus_pre_shift_soft or 0.0), 2)
+    metrics["v325_pre_shift_soft_penalty"] = 0.0
+    return 0.0
+
+
 def _selection_bucket(c) -> int:
     """V3.16 bucket selekcji: informed 0 / other 1 / blind(+pre_shift) 2. RÓWNE
     TRAKTOWANIE (Adrian 2026-06-24, `_equal_bucket_on`): no_gps I pre_shift NIE są karane
@@ -4992,15 +5012,9 @@ def _assess_order_impl(
                 bonus_v325_pre_shift_soft = _psp
                 metrics["v325_pre_shift_soft_penalty"] = _psp   # spójność breakdown/serializacji
         # Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): kurier przed
-        # zmianą = liczony RÓWNO. Zeruj karę score pre_shift (PO obu źródłach: stała V325 +
-        # gradient — jeden autorytatywny punkt). „Dotrze później" obsługuje LEGALNA ścieżka
-        # (clamp do shift_start + R-LATE-PICKUP propozycja przedłużenia DO RESTAURACJI), NIE
-        # ukryta kara w score. HARD-reject >30min-przed-zmianą (feasibility_v2) zostaje.
-        # Default OFF = kara zachowana; flip flags.json=True po replayu+ACK. v325_ prefix → serializowane.
-        if C.decision_flag("ENABLE_PRE_SHIFT_EQUAL_NO_PENALTY"):
-            metrics["v325_pre_shift_penalty_suppressed"] = round(bonus_v325_pre_shift_soft, 2)
-            bonus_v325_pre_shift_soft = 0.0
-            metrics["v325_pre_shift_soft_penalty"] = 0.0
+        # zmianą = liczony RÓWNO. Gate PO obu źródłach kary (stała V325 + gradient) =
+        # jeden autorytatywny punkt; default OFF = no-op. Szczegóły w _apply_pre_shift_equal_gate.
+        bonus_v325_pre_shift_soft = _apply_pre_shift_equal_gate(bonus_v325_pre_shift_soft, metrics)
         # D2 (audyt 2026-05-28): soft penalty gdy grafik STALE (shift_end None z awarii pliku,
         # nie realnego braku shiftu). 0 gdy flag OFF lub grafik świeży. Default OFF → shadow.
         bonus_d2_stale_soft = float(metrics.get("d2_soft_penalty", 0) or 0)
