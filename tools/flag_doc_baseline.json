@@ -2,7 +2,7 @@
   "_comment": "C-FLAG-DRIFT baseline (audyt 2026-06-24 §6.C): flagi decyzyjne ENABLE_/USE_ NIEudokumentowane w ZIOMEK_LOGIC_REFERENCE.md na dzien zamrozenia. Ratchet: NOWA flaga undoc poza ta lista = drift (udokumentuj w ref ALBO swiadomie dopisz tutaj). Cel dlugofalowy: kurczyc te liste.",
   "_frozen": "2026-06-24",
   "_2026-06-29_note": "Audyt-fix sesja 29.06: +3 swiadomie baseline (BUNDLE_DELIVERY_COLOCATION z 35186f6, GLOBAL_ALLOC_WRITE+PENDING_PROPOSALS_WRITE z 4812f28 Faza C) — flagi LIVE udokumentowane w commitach/memory, dryf zlapany przez ratchet; docelowo udokumentowac w ZIOMEK_LOGIC_REFERENCE i skurczyc.",
-  "_count": 73,
+  "_count": 74,
   "baseline": [
     "ENABLE_AUTO_ASSIGN",
     "ENABLE_AUTO_ROUTE_WEAK_PICK_ALERT",
@@ -11,6 +11,7 @@
     "ENABLE_BEST_EFFORT_OBJM_R6_KEY",
     "ENABLE_BEST_EFFORT_OBJM_SHADOW",
     "ENABLE_BEST_EFFORT_POS_SOURCE_KEY",
+    "ENABLE_BUNDLE_COLOC_CENTROID_GUARD",
     "ENABLE_BUNDLE_DELIV_SPREAD_CAP",
     "ENABLE_BUNDLE_DELIVERY_COLOCATION",
     "ENABLE_BUNDLE_VALUE_SCORING",

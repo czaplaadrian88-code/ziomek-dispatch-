@@ -157,6 +157,9 @@ ETAP4_DECISION_FLAGS = (
     # w bagu (różne restauracje, ten sam adres), a obie TWARDE reguły spełnione
     # (R6 ≤35 czyste + committed honorowane). Zamyka pickup-centryczną ślepotę L1/L2.
     "ENABLE_BUNDLE_DELIVERY_COLOCATION",
+    # geocode-centroid guard (audyt 28.06): wyklucz fałszywy 0km coloc na defaultowym centroidzie
+    # (122 adresów cache→BIALYSTOK_CENTER, Google zwraca centrum dla dwuznacznych adresów).
+    "ENABLE_BUNDLE_COLOC_CENTROID_GUARD",
     # FEAS-CARRY-READMIT / #483000 (Adrian 2026-06-27, at-167 sygnał TRZYMA 55.5%):
     # bramka check_feasibility_v2 wybacza najgorszy breach NIESIONEMU (SLA_PREEXISTING_
     # BYPASS), a HARD-rejectuje blocking SLA/R6 — pula feasible bywa GORSZY ocalały,
@@ -2234,6 +2237,14 @@ BUNDLE_DELIV_COLOC_KM = float(_os.environ.get(
     "BUNDLE_DELIV_COLOC_KM", "0.3"))
 BUNDLE_DELIV_COLOC_BONUS_MAX = float(_os.environ.get(
     "BUNDLE_DELIV_COLOC_BONUS_MAX", "20.0"))
+# geocode-centroid guard (audyt 28.06): gdy Google nie zna adresu → zwraca CENTRUM miasta
+# (122 adresów cache → BIALYSTOK_CENTER 53.1325,23.1688). Dwa takie drops widzą się 0km →
+# FAŁSZYWY deliv-coloc bundle. Guard wyklucza pary, gdzie któryś drop jest „defaultowym"
+# centroidem (BIALYSTOK_CENTER + FIRMOWE_KONTO_FALLBACK). Flaga OFF→shadow→ON za ACK.
+ENABLE_BUNDLE_COLOC_CENTROID_GUARD = False
+BUNDLE_COLOC_DEFAULT_CENTROIDS = ((53.1325, 23.1688), (53.13222, 23.16844))
+BUNDLE_COLOC_CENTROID_TOL_KM = float(_os.environ.get(
+    "BUNDLE_COLOC_CENTROID_TOL_KM", "0.06"))
 
 # V3.28 R-04 v2.0 GRADUATION SCHEMA (2026-05-01) — peak-quality based tier suggestions.
 # Phase 1 SHADOW: r04_evaluator generates tier_suggestions.json (cron 03:00 daily,

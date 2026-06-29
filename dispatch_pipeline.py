@@ -2835,15 +2835,40 @@ def get_pickup_ready_at(
     return max(now, pickup_utc)
 
 
+def _coloc_is_default_centroid(coords) -> bool:
+    """#geocode-centroid (audyt 28.06): czy coords to DEFAULTOWY/nieznany punkt (Google→centrum
+    miasta dla dwuznacznego adresu / firmowe fallback) → 0km coloc na nim jest FAŁSZYWY.
+    122 adresów cache → BIALYSTOK_CENTER (53.1325,23.1688). Próg C.BUNDLE_COLOC_CENTROID_TOL_KM."""
+    if not coords:
+        return False
+    try:
+        c = (float(coords[0]), float(coords[1]))
+    except (TypeError, ValueError, IndexError):
+        return False
+    tol = getattr(C, "BUNDLE_COLOC_CENTROID_TOL_KM", 0.06)
+    for cen in getattr(C, "BUNDLE_COLOC_DEFAULT_CENTROIDS", ()):
+        try:
+            if haversine(c, (float(cen[0]), float(cen[1]))) <= tol:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def compute_bundle_deliv_coloc(
         bag_raw, delivery_coords, metrics, committed_breach, *,
-        flag_on, km_threshold, bonus_max, r6_hard_max, level1, level2):
+        flag_on, km_threshold, bonus_max, r6_hard_max, level1, level2,
+        centroid_guard=False):
     """BUNDLE-DELIVERY-COLOCATION (Adrian 2026-06-26, case 509 Street Mama Thai+Raj).
 
     Forced-bundle z 2 TWARDYCH reguł (NIE miękka geometria pickupów): kredyt gdy
     nowa dostawa skolokowana z dostawą w bagu (różne restauracje, ten sam adres)
     ORAZ R6 czyste (≤ r6_hard_max, bez naruszeń) ORAZ committed honorowane (±5,
     `committed_breach is not True`). Zamyka pickup-centryczną ślepotę L1/L2.
+
+    centroid_guard (#geocode-centroid audyt 28.06, flaga ENABLE_BUNDLE_COLOC_CENTROID_GUARD):
+    gdy ON — wyklucz pary, gdzie któryś drop to DEFAULTOWY centroid (Google→centrum miasta dla
+    nieznanego adresu) → 0km na nim FAŁSZYWY (122 adresów→BIALYSTOK_CENTER). OFF = zachowanie sprzed.
 
     Pure → testowalne (ON≠OFF). Zwraca (km|None, active:bool, bonus:float).
     flag OFF / L1|L2 już daje kredyt / brak skolokowania → (·, False, 0.0).
@@ -2853,10 +2878,16 @@ def compute_bundle_deliv_coloc(
     if (not delivery_coords or tuple(delivery_coords) == (0.0, 0.0)
             or delivery_coords[0] == 0.0):
         return None, False, 0.0
+    # #geocode-centroid: nowa dostawa na defaultowym centroidzie → WSZYSTKIE jej 0km matche fałszywe
+    if centroid_guard and _coloc_is_default_centroid(delivery_coords):
+        return None, False, 0.0
     best = None
     for b in (bag_raw or []):
         bd = b.get("delivery_coords")
         if not bd or tuple(bd) == (0.0, 0.0) or bd[0] == 0.0:
+            continue
+        # #geocode-centroid: drop w bagu na defaultowym centroidzie → pomiń (jego 0km fałszywy)
+        if centroid_guard and _coloc_is_default_centroid(bd):
             continue
         try:
             dk = haversine(tuple(bd), tuple(delivery_coords))
@@ -4640,7 +4671,8 @@ def _assess_order_impl(
                 km_threshold=C.BUNDLE_DELIV_COLOC_KM,
                 bonus_max=C.BUNDLE_DELIV_COLOC_BONUS_MAX,
                 r6_hard_max=C.BAG_TIME_HARD_MAX_MIN,
-                level1=bundle_level1, level2=bundle_level2))
+                level1=bundle_level1, level2=bundle_level2,
+                centroid_guard=C.decision_flag("ENABLE_BUNDLE_COLOC_CENTROID_GUARD")))
         if bundle_deliv_coloc_active:
             bundle_bonus = bundle_bonus + bonus_deliv_coloc
             log.info(

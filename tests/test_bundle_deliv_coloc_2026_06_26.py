@@ -102,3 +102,43 @@ def test_flag_wiring_on_off(monkeypatch):
            flag_on=C.decision_flag("ENABLE_BUNDLE_DELIVERY_COLOCATION"), **KW)
     assert off[1] is False and on[1] is True
     assert off != on  # PRAWDZIWA flaga zmienia decyzję
+
+
+# --- #geocode-centroid guard (audyt 28.06): wyklucz fałszywy 0km coloc na defaultowym centroidzie ---
+CENTROID = (53.1325, 23.1688)   # BIALYSTOK_CENTER — Google zwraca to dla nieznanego adresu (122 adresy cache)
+
+
+def test_centroid_guard_blocks_fake_coloc():
+    # dwa drops OBA na centroidzie miasta = fałszywy 0km. guard OFF=kredyt (bug), ON=wykluczony.
+    bag = [{"delivery_coords": list(CENTROID)}]
+    off = F(bag, CENTROID, M_OK, False, flag_on=True, centroid_guard=False, **KW)
+    on = F(bag, CENTROID, M_OK, False, flag_on=True, centroid_guard=True, **KW)
+    assert off[1] is True and off[2] > 0          # OFF: fałszywy bundle (stan sprzed fixu)
+    assert on[1] is False and on[2] == 0.0        # ON: guard wyklucza centroid
+
+
+def test_centroid_guard_preserves_real_coloc():
+    # realny coloc (case 509, 37m, daleko od centrum) — guard ON NIE rusza
+    on = F(BAG, RAJ, M_OK, False, flag_on=True, centroid_guard=True, **KW)
+    assert on[1] is True and on[2] > 0
+
+
+def test_centroid_guard_bag_drop_on_centroid_skipped():
+    # nowa dostawa realna, ale drop w bagu na centroidzie → ta para pominięta (jej 0km fałszywy)
+    bag = [{"delivery_coords": list(CENTROID)}]
+    on = F(bag, RAJ, M_OK, False, flag_on=True, centroid_guard=True, **KW)
+    assert on[1] is False and on[2] == 0.0
+
+
+def test_centroid_guard_flag_wiring_on_off(monkeypatch):
+    # wiring ENABLE_BUNDLE_COLOC_CENTROID_GUARD (ETAP4 dowód nie-martwoty): OFF=fałszywy centroid
+    # coloc, ON=wykluczony. decision_flag czyta (zestrippowany) flags.json → fallback stała modułu.
+    bag = [{"delivery_coords": list(CENTROID)}]
+    monkeypatch.setattr(C, "ENABLE_BUNDLE_COLOC_CENTROID_GUARD", False, raising=False)
+    off = F(bag, CENTROID, M_OK, False, flag_on=True,
+            centroid_guard=C.decision_flag("ENABLE_BUNDLE_COLOC_CENTROID_GUARD"), **KW)
+    monkeypatch.setattr(C, "ENABLE_BUNDLE_COLOC_CENTROID_GUARD", True, raising=False)
+    on = F(bag, CENTROID, M_OK, False, flag_on=True,
+           centroid_guard=C.decision_flag("ENABLE_BUNDLE_COLOC_CENTROID_GUARD"), **KW)
+    assert off[1] is True and on[1] is False
+    assert off != on  # PRAWDZIWA flaga zmienia decyzję
