@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""address_pin_aggregator.py — READ-ONLY obserwator budujący pamięć pinezek adresów.
+"""address_pin_aggregator.py — READ-ONLY obserwator budujący pamięć pinezek.
 
-Co robi (Etap 1+2, additive):
-  1. Czyta `orders_state.json` → utrzymuje TRWAŁY indeks zlecenie→adres
-     (+ delivered_at/courier_id dla doręczonych), żeby NIE tracić mapowania po
-     wypadnięciu zlecenia z okna stanu.
-  2. Źródło A (geofence, najlepsze): NOWE „doręczone" (status 7) z GPS z
-     `courier_status_events` (kursor po `id`) → punkt-kandydat trigger=auto_geofence.
-  3. Źródło B (trail, bramkowane): dla doręczonych zleceń szuka pozycji POSTOJU
-     kuriera w chwili delivered_at w `gps_history` (±90s, dokładność≤25m, speed≈0)
-     → punkt-kandydat trigger=trail. Słabsze (prawda-przyciskowa), więc rdzeń
-     i tak preferuje geofence; trail tylko bootstrapuje adresy bez geofence.
-  4. Przelicza najlepszą pinezkę per adres (robust median + odrzut odstających)
-     i zapisuje `address_pins.json`.
+Dwie przestrzenie (additive, bez konsumentów decyzyjnych):
+  • DOSTAWY (`address_pins.json`)      — klucz: znormalizowany `delivery_address`.
+  • RESTAURACJE (`restaurant_pins.json`) — klucz: znormalizowany `pickup_address`.
 
-NIE mutuje stanu Ziomka, NIE woła panelu/Telegrama, NIE dotyka feasibility/
-scoringu/selekcji. Magazyn nie ma jeszcze konsumentów decyzyjnych. Fail-soft.
+Źródła punktów (rdzeń i tak preferuje lepszy tier — geofence > ręczne > trail):
+  A. courier_status_events z GPS (kursor po `id`):
+       status 7 (doręczone)               → pinezka DOSTAWY,
+       status 4/5 (pod restauracją/odbiór) → pinezka RESTAURACJI.
+  B. trail z `gps_history` (bramkowane: postój ±90s, dokładność≤25m, speed≈0):
+       w chwili delivered_at → dostawa, w chwili picked_up_at → restauracja.
+
+Indeks zlecenie→adresy (`address_pin_index.json`) jest trwały, żeby nie tracić
+mapowania po wypadnięciu zlecenia z okna stanu. NIE mutuje stanu Ziomka, NIE woła
+panelu/Telegrama, NIE dotyka feasibility/scoringu/selekcji. Fail-soft.
 """
 import sys
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
@@ -32,28 +31,28 @@ from zoneinfo import ZoneInfo
 
 from dispatch_v2 import address_pin_memory as apm
 
-WARSAW = ZoneInfo("Europe/Warsaw")
-
-# Źródło B (trail) — ostre sito jakości (z pomiaru 29.06: spread mediana ~32m)
-TRAIL_WINDOW_S = 90          # okno wokół delivered_at
-TRAIL_MAX_ACCURACY_M = 25.0  # tylko dobre fixy
-TRAIL_MAX_SPEED = 1.0        # postój (m/s) — kurier stoi pod klatką, nie w biegu
-TRAIL_STALE_S = 3600         # po godzinie bez punktu odpuść (gps już nie dojdzie)
-
 _log = logging.getLogger("address_pin_aggregator")
+WARSAW = ZoneInfo("Europe/Warsaw")
 
 STATE_DIR = "/root/.openclaw/workspace/dispatch_state"
 ORDERS_STATE = os.path.join(STATE_DIR, "orders_state.json")
 COURIER_DB = os.path.join(STATE_DIR, "courier_api.db")
-STORE_PATH = os.path.join(STATE_DIR, "address_pins.json")
+DELIV_STORE = os.path.join(STATE_DIR, "address_pins.json")
+REST_STORE = os.path.join(STATE_DIR, "restaurant_pins.json")
 INDEX_PATH = os.path.join(STATE_DIR, "address_pin_index.json")
 CURSOR_PATH = os.path.join(STATE_DIR, "address_pin_cursor.json")
 
 DELIVERED_STATUS = 7
+PICKUP_STATUSES = (4, 5)        # 4=oczekiwanie pod restauracją (100% GPS), 5=odebrane
+EVENT_STATUSES = (4, 5, 7)
 
-# Jednorazowy seed indeksu zlecenie→adres z historycznych snapshotów orders_state
-# (żeby historyczne punkty GPS, których zlecenia wypadły z bieżącego okna, też
-# się zmapowały). order_id→adres jest stabilne, więc snapshot point-in-time jest OK.
+# Trail (źródło B) — ostre sito jakości (pomiar 29.06: spread restauracji ~16m, dostaw ~32m)
+TRAIL_WINDOW_S = 90
+TRAIL_MAX_ACCURACY_M = 25.0
+TRAIL_MAX_SPEED = 1.0
+TRAIL_STALE_S = 3600
+TRAIL_CAP_PER_RUN = 1500        # cap pracy trail na żywy tick (seed bez capa)
+
 HISTORY_FILES = [
     os.path.join(STATE_DIR, "orders_state.json.prev"),
     os.path.join(STATE_DIR, "orders_state.json.bak-pre-backfill-delivered-20260613-143557"),
@@ -70,38 +69,8 @@ def _load_json(path: str) -> dict:
         return {}
 
 
-def update_order_index(index: dict, orders_state: dict) -> int:
-    """Dokłada/odświeża mapowanie order_id→{address_text} z orders_state.
-
-    Klucz adresu liczymy z TEKSTU (`delivery_address`), bo address_id panelu jest
-    recyklingowany (patrz address_pin_memory.normalize_address). Trwałe — raz
-    poznany adres zlecenia zostaje, nawet gdy zlecenie wypadnie ze stanu.
-    Zwraca liczbę nowo poznanych zleceń.
-    """
-    new = 0
-    for oid, o in orders_state.items():
-        if not isinstance(o, dict):
-            continue
-        text = o.get("delivery_address")
-        if not text:
-            continue
-        entry = index.get(str(oid))
-        if entry is None:
-            entry = {}
-            new += 1
-        entry["address_text"] = text
-        # dane dla źródła B (trail): czas + kurier dostawy
-        if o.get("status") == "delivered" and o.get("courier_id") and o.get("delivered_at"):
-            ep = _delivered_epoch(o["delivered_at"])
-            if ep:
-                entry.setdefault("courier_id", str(o["courier_id"]))
-                entry.setdefault("delivered_epoch", ep)
-        index[str(oid)] = entry
-    return new
-
-
-def _delivered_epoch(s):
-    """orders_state delivered_at ('YYYY-MM-DD HH:MM:SS', czas Warszawy) → epoch UTC."""
+def _parse_warsaw_epoch(s):
+    """'YYYY-MM-DD HH:MM:SS' (czas Warszawy) → epoch UTC, lub None."""
     try:
         return datetime.strptime(str(s).strip(), "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=WARSAW).timestamp()
@@ -109,9 +78,44 @@ def _delivered_epoch(s):
         return None
 
 
+def _index_entry_from_order(entry: dict, o: dict) -> dict:
+    """Wzbogaca wpis indeksu danymi zlecenia (oba adresy + czasy + kurier)."""
+    if o.get("delivery_address"):
+        entry["address_text"] = o["delivery_address"]
+    if o.get("pickup_address"):
+        entry["pickup_text"] = o["pickup_address"]
+    if o.get("courier_id"):
+        entry.setdefault("courier_id", str(o["courier_id"]))
+    if o.get("delivered_at"):
+        ep = _parse_warsaw_epoch(o["delivered_at"])
+        if ep:
+            entry.setdefault("delivered_epoch", ep)
+    if o.get("picked_up_at"):
+        ep = _parse_warsaw_epoch(o["picked_up_at"])
+        if ep:
+            entry.setdefault("picked_up_epoch", ep)
+    return entry
+
+
+def update_order_index(index: dict, orders_state: dict) -> int:
+    """order_id → {address_text, pickup_text, courier_id, delivered_epoch, picked_up_epoch}.
+    Trwałe (raz poznane zostaje). Zwraca liczbę nowo poznanych zleceń."""
+    new = 0
+    for oid, o in orders_state.items():
+        if not isinstance(o, dict):
+            continue
+        if not (o.get("delivery_address") or o.get("pickup_address")):
+            continue
+        entry = index.get(str(oid))
+        if entry is None:
+            entry = {}
+            new += 1
+        index[str(oid)] = _index_entry_from_order(entry, o)
+    return new
+
+
 def seed_index_from_history(index: dict, files: list) -> int:
-    """Jednorazowo dokłada order_id→adres z historycznych snapshotów (nie nadpisuje
-    już znanych). Zwraca liczbę nowo dołożonych mapowań."""
+    """Jednorazowy seed indeksu z historycznych snapshotów (nie nadpisuje znanych)."""
     added = 0
     for f in files:
         try:
@@ -120,22 +124,36 @@ def seed_index_from_history(index: dict, files: list) -> int:
         except (FileNotFoundError, ValueError, OSError):
             continue
         for oid, o in d.items():
-            if not isinstance(o, dict) or not o.get("delivery_address"):
+            if not isinstance(o, dict) or not (o.get("delivery_address") or o.get("pickup_address")):
                 continue
             if str(oid) not in index:
-                entry = {"address_text": o["delivery_address"]}
-                if o.get("status") == "delivered" and o.get("courier_id") and o.get("delivered_at"):
-                    ep = _delivered_epoch(o["delivered_at"])
-                    if ep:
-                        entry["courier_id"] = str(o["courier_id"])
-                        entry["delivered_epoch"] = ep
-                index[str(oid)] = entry
+                index[str(oid)] = _index_entry_from_order({}, o)
                 added += 1
     return added
 
 
+def fetch_gps_events(db_path: str, after_id: int) -> list:
+    """Zdarzenia status 4/5/7 z poprawnym GPS, id > after_id, rosnąco po id."""
+    if not os.path.exists(db_path):
+        return []
+    con = sqlite3.connect(db_path)
+    try:
+        ph = ",".join("?" * len(EVENT_STATUSES))
+        rows = con.execute(
+            "SELECT id, order_id, lat, lon, accuracy, trigger, recorded_at, status_code "
+            f"FROM courier_status_events WHERE status_code IN ({ph}) AND id>? "
+            "AND lat IS NOT NULL AND lat!=0 AND lon IS NOT NULL AND lon!=0 ORDER BY id ASC",
+            (*EVENT_STATUSES, int(after_id)),
+        ).fetchall()
+    finally:
+        con.close()
+    return [{"event_id": r[0], "order_id": str(r[1]), "lat": r[2], "lon": r[3],
+             "accuracy": r[4], "trigger": r[5], "ts": r[6], "status_code": r[7]}
+            for r in rows]
+
+
 def _load_gps_by_courier(db_path: str, courier_ids: set) -> dict:
-    """gps_history dla wskazanych kurierów → {cid: posortowana lista (epoch,lat,lon,acc,speed)}."""
+    """gps_history dla kurierów → {cid: posortowana lista (epoch,lat,lon,acc,speed)}."""
     if not courier_ids or not os.path.exists(db_path):
         return {}
     con = sqlite3.connect(db_path)
@@ -159,7 +177,7 @@ def _load_gps_by_courier(db_path: str, courier_ids: set) -> dict:
 
 
 def best_trail_point(arr, epoch):
-    """Najlepszy punkt POSTOJU w oknie wokół delivered_at (ostre sito) lub None."""
+    """Najlepszy punkt POSTOJU w oknie wokół czasu zdarzenia (ostre sito) lub None."""
     if not arr:
         return None
     ts = [a[0] for a in arr]
@@ -169,42 +187,35 @@ def best_trail_point(arr, epoch):
             if a[3] <= TRAIL_MAX_ACCURACY_M and a[4] <= TRAIL_MAX_SPEED]
     if not cand:
         return None
-    cand.sort(key=lambda a: (a[3], abs(a[0] - epoch)))  # najlepsza dokładność, bliżej czasu
-    return cand[0]  # (epoch,lat,lon,acc,speed)
+    cand.sort(key=lambda a: (a[3], abs(a[0] - epoch)))
+    return cand[0]
 
 
-def fetch_delivered_gps_events(db_path: str, after_id: int) -> list:
-    """Zdarzenia status 7 z poprawnym GPS, id > after_id, rosnąco po id."""
-    if not os.path.exists(db_path):
-        return []
-    con = sqlite3.connect(db_path)
-    try:
-        rows = con.execute(
-            "SELECT id, order_id, lat, lon, accuracy, trigger, recorded_at "
-            "FROM courier_status_events "
-            "WHERE status_code=? AND id>? AND lat IS NOT NULL AND lat!=0 "
-            "      AND lon IS NOT NULL AND lon!=0 "
-            "ORDER BY id ASC",
-            (DELIVERED_STATUS, int(after_id)),
-        ).fetchall()
-    finally:
-        con.close()
-    out = []
-    for r in rows:
-        out.append({
-            "event_id": r[0], "order_id": str(r[1]), "lat": r[2], "lon": r[3],
-            "accuracy": r[4], "trigger": r[5], "ts": r[6],
-        })
-    return out
+def _apply_trail(index, store, key_field, epoch_field, done_field,
+                 trail_by_c, now, applied_counter):
+    """Wspólna pętla trail dla jednej przestrzeni (dostawa/restauracja)."""
+    for oid, e in index.items():
+        if e.get(done_field) or not e.get(key_field) or not e.get("courier_id") \
+                or not e.get(epoch_field):
+            continue
+        pt = best_trail_point(trail_by_c.get(e["courier_id"]), e[epoch_field])
+        if pt:
+            apm.add_sample(store, e[key_field], {
+                "lat": pt[1], "lon": pt[2], "accuracy": pt[3],
+                "trigger": apm.TRAIL_TRIGGER, "ts": e[epoch_field], "order_id": oid,
+            }, now=now)
+            applied_counter[0] += 1
+        if pt or (now - e[epoch_field] > TRAIL_STALE_S):
+            e[done_field] = True
 
 
-def run(dry_run: bool = False, seed_history: bool = False,
-        trail_cap: int = 1500) -> dict:
-    """Jeden przebieg: odśwież indeks, dołącz punkty (geofence + trail), przelicz, zapisz."""
+def run(dry_run: bool = False, seed_history: bool = False) -> dict:
+    """Jeden przebieg: odśwież indeks, dołącz punkty (geofence + trail) do obu przestrzeni."""
     now = time.time()
     orders_state = _load_json(ORDERS_STATE)
     index = _load_json(INDEX_PATH)
-    store = apm.load_store(STORE_PATH)
+    deliv = apm.load_store(DELIV_STORE)
+    rest = apm.load_store(REST_STORE)
     cursor = _load_json(CURSOR_PATH)
     last_id = int(cursor.get("last_event_id", 0))
 
@@ -212,94 +223,90 @@ def run(dry_run: bool = False, seed_history: bool = False,
     new_orders = update_order_index(index, orders_state)
 
     # --- Źródło A: geofence z courier_status_events (kursor po id) ---
-    events = fetch_delivered_gps_events(COURIER_DB, last_id)
-    applied, skipped_no_addr = 0, 0
+    events = fetch_gps_events(COURIER_DB, last_id)
+    d_applied = r_applied = skipped = 0
     max_id = last_id
     for ev in events:
         max_id = max(max_id, int(ev["event_id"]))
         meta = index.get(ev["order_id"])
-        if not meta or not meta.get("address_text"):
-            skipped_no_addr += 1
+        if not meta:
+            skipped += 1
             continue
-        apm.add_sample(store, meta["address_text"], {
+        if ev["status_code"] == DELIVERED_STATUS:
+            store, key = deliv, meta.get("address_text")
+        else:  # 4/5 → restauracja
+            store, key = rest, meta.get("pickup_text")
+        if not key:
+            skipped += 1
+            continue
+        apm.add_sample(store, key, {
             "lat": ev["lat"], "lon": ev["lon"], "accuracy": ev["accuracy"],
             "trigger": ev["trigger"] or apm.GEOFENCE_TRIGGER, "ts": ev["ts"],
             "order_id": ev["order_id"],
         }, now=now)
-        applied += 1
+        if ev["status_code"] == DELIVERED_STATUS:
+            d_applied += 1
+        else:
+            r_applied += 1
 
-    # --- Źródło B: trail z gps_history dla doręczonych (bramkowane) ---
-    pending = [(oid, e) for oid, e in index.items()
-               if not e.get("trail_done") and e.get("address_text")
-               and e.get("courier_id") and e.get("delivered_epoch")]
-    cap = trail_cap if (trail_cap and not seed_history) else None
-    if cap:
-        pending = pending[:cap]
-    trail_by_c = _load_gps_by_courier(COURIER_DB, {e["courier_id"] for _, e in pending})
-    trail_applied = 0
-    for oid, e in pending:
-        pt = best_trail_point(trail_by_c.get(e["courier_id"]), e["delivered_epoch"])
-        if pt:
-            apm.add_sample(store, e["address_text"], {
-                "lat": pt[1], "lon": pt[2], "accuracy": pt[3],
-                "trigger": apm.TRAIL_TRIGGER, "ts": e["delivered_epoch"], "order_id": oid,
-            }, now=now)
-            trail_applied += 1
-        # oznacz przetworzone gdy znaleziono LUB dostawa już stara (gps nie dojdzie)
-        if pt or (now - e["delivered_epoch"] > TRAIL_STALE_S):
-            e["trail_done"] = True
+    # --- Źródło B: trail z gps_history (bramkowane), obie przestrzenie ---
+    need = {e["courier_id"] for e in index.values()
+            if e.get("courier_id") and (
+                (e.get("delivered_epoch") and not e.get("deliv_trail_done") and e.get("address_text"))
+                or (e.get("picked_up_epoch") and not e.get("pickup_trail_done") and e.get("pickup_text")))}
+    trail_by_c = _load_gps_by_courier(COURIER_DB, need)
+    dt, rt = [0], [0]
+    _apply_trail(index, deliv, "address_text", "delivered_epoch", "deliv_trail_done", trail_by_c, now, dt)
+    _apply_trail(index, rest, "pickup_text", "picked_up_epoch", "pickup_trail_done", trail_by_c, now, rt)
 
     if not dry_run:
-        apm.save_store(STORE_PATH, store)
+        apm.save_store(DELIV_STORE, deliv)
+        apm.save_store(REST_STORE, rest)
         apm.save_store(INDEX_PATH, index)
         apm.save_store(CURSOR_PATH, {"last_event_id": max_id, "updated_at": int(now)})
 
-    high = sum(1 for e in store.values() if e.get("confidence") == "high")
     return {
-        "seeded_from_history": seeded,
-        "new_orders_indexed": new_orders,
-        "events_seen": len(events),
-        "points_applied": applied,
-        "skipped_no_address": skipped_no_addr,
-        "trail_pending": len(pending),
-        "trail_applied": trail_applied,
-        "addresses_total": len(store),
-        "addresses_high_conf": high,
-        "cursor_from": last_id, "cursor_to": max_id,
-        "dry_run": dry_run,
+        "seeded_from_history": seeded, "new_orders_indexed": new_orders,
+        "events_seen": len(events), "skipped_no_address": skipped,
+        "delivery": {"geofence_applied": d_applied, "trail_applied": dt[0],
+                     "addresses": len(deliv),
+                     "high_conf": sum(1 for e in deliv.values() if e.get("confidence") == "high")},
+        "restaurant": {"geofence_applied": r_applied, "trail_applied": rt[0],
+                       "restaurants": len(rest),
+                       "high_conf": sum(1 for e in rest.values() if e.get("confidence") == "high")},
+        "cursor_from": last_id, "cursor_to": max_id, "dry_run": dry_run,
     }
 
 
-def _report() -> None:
-    store = apm.load_store(STORE_PATH)
-    pins = [apm.public_pin(e) for e in store.values()]
-    pins = [p for p in pins if p]
+def _report(restaurants: bool) -> None:
+    store = apm.load_store(REST_STORE if restaurants else DELIV_STORE)
+    label = "RESTAURACJE" if restaurants else "DOSTAWY"
+    pins = [p for p in (apm.public_pin(e) for e in store.values()) if p]
     pins.sort(key=lambda p: (p["confidence"] != "high", -(p["deliveries"] or 0)))
-    print(f"Adresy z pinezką: {len(pins)} "
-          f"(pewne: {sum(1 for p in pins if p['confidence']=='high')})")
+    print(f"[{label}] pinezek: {len(pins)} (pewne: {sum(1 for p in pins if p['confidence']=='high')})")
     for p in pins[:30]:
-        print(f"  [{p['confidence']:4}] {p['deliveries']:2}× "
+        print(f"  [{p['confidence']:4}] {p['deliveries']:2}× [{p.get('source') or '?':12}] "
               f"{p['lat']},{p['lon']}  {p.get('address_text') or p['address_key']}")
 
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    ap = argparse.ArgumentParser(description="Agregator pamięci pinezek adresów (Etap 1)")
-    ap.add_argument("--dry-run", action="store_true", help="policz, nie zapisuj")
-    ap.add_argument("--report", action="store_true", help="wypisz bieżący magazyn")
-    ap.add_argument("--reset", action="store_true", help="wyczyść magazyn/indeks/kursor")
-    ap.add_argument("--seed-history", action="store_true",
-                    help="jednorazowo dołóż order→adres z historycznych snapshotów")
+    ap = argparse.ArgumentParser(description="Agregator pamięci pinezek (dostawy + restauracje)")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--report", action="store_true")
+    ap.add_argument("--restaurants", action="store_true", help="raport dla restauracji")
+    ap.add_argument("--reset", action="store_true")
+    ap.add_argument("--seed-history", action="store_true")
     args = ap.parse_args()
 
     if args.reset:
-        for p in (STORE_PATH, INDEX_PATH, CURSOR_PATH):
+        for p in (DELIV_STORE, REST_STORE, INDEX_PATH, CURSOR_PATH):
             if os.path.exists(p):
                 os.unlink(p)
         print("reset done")
         return 0
     if args.report:
-        _report()
+        _report(args.restaurants)
         return 0
     try:
         res = run(dry_run=args.dry_run, seed_history=args.seed_history)
