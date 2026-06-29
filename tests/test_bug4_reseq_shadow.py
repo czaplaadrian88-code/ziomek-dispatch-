@@ -91,3 +91,56 @@ def test_per_tick_cap(monkeypatch, tmp_path):
     summary = {"bug4_shadow_evals": PR._BUG4_RESEQ_SHADOW_MAX_PER_TICK}
     PR._bug4_reseq_shadow("99", ["A", "B"], _existing(), _orders(), {}, NOW, R, summary)
     assert not p.exists()  # cap osiągnięty → no-op
+
+
+# ───── #1 audyt 28.06: skip fikcyjnego pickupu odebranych + inwariant delta≥0 + realna sequence ─────
+
+def test_picked_up_no_fictional_pickup(monkeypatch, tmp_path):
+    """Odebrany (picked_up) NIE dostaje fikcyjnego pickupu w fresh (served też ma dropoff-only)."""
+    p = _setup(monkeypatch, tmp_path, flag_on=True, fresh=25.0, frozen=30.0)
+    orders = _orders()
+    orders["A"]["status"] = "picked_up"
+    orders["A"]["picked_up_at"] = "2026-06-26T19:00:00+00:00"
+    existing = {"stops": [   # carried A = tylko dropoff (jak served), B = pickup+dropoff
+        {"order_id": "A", "type": "dropoff", "coords": {"lat": 53.12, "lng": 23.13}},
+        {"order_id": "B", "type": "pickup", "coords": {"lat": 53.12, "lng": 23.15}},
+        {"order_id": "B", "type": "dropoff", "coords": {"lat": 53.13, "lng": 23.18}},
+    ]}
+    PR._bug4_reseq_shadow("99", ["A", "B"], existing, orders, {}, NOW, R, {})
+    rec = json.loads(p.read_text().strip())
+    assert "A:pickup" not in rec["fresh_seq"], rec["fresh_seq"]   # brak fikcyjnego pickupu odebranego
+    assert "A:dropoff" in rec["fresh_seq"]
+
+
+def test_invariant_violation_when_fresh_worse(monkeypatch, tmp_path):
+    """fresh GORSZY od frozen (delta<−0.5) = niemożliwe dla wiernego solvera → invariant_violation."""
+    p = _setup(monkeypatch, tmp_path, flag_on=True, fresh=40.0, frozen=30.0)  # delta = -10
+    PR._bug4_reseq_shadow("99", ["A", "B"], _existing(), _orders(), {}, NOW, R, {})
+    rec = json.loads(p.read_text().strip())
+    assert rec["delta_min"] == -10.0
+    assert rec["invariant_violation"] is True
+
+
+def test_invariant_ok_and_deliv_seq_same(monkeypatch, tmp_path):
+    p = _setup(monkeypatch, tmp_path, flag_on=True, fresh=25.0, frozen=30.0)  # delta = +5
+    PR._bug4_reseq_shadow("99", ["A", "B"], _existing(), _orders(), {}, NOW, R, {})
+    rec = json.loads(p.read_text().strip())
+    assert rec["invariant_violation"] is False
+    assert rec["fresh_deliv_order"] == ["A", "B"]
+    assert rec["frozen_deliv_order"] == ["A", "B"]
+    assert rec["deliv_seq_differs"] is False
+
+
+def test_deliv_seq_differs_uses_real_sequence(monkeypatch, tmp_path):
+    """deliv_seq_differs = plan.sequence (realna zmienna) vs frozen kolejność dostaw, NIE sort-ts."""
+    p = _setup(monkeypatch, tmp_path, flag_on=True, fresh=25.0, frozen=30.0)
+
+    class _RevPlan(_FakePlan):
+        sequence = ["B", "A"]   # fresh dostarcza B przed A
+
+    monkeypatch.setattr(R, "simulate_bag_route_v2", lambda *a, **k: _RevPlan())
+    PR._bug4_reseq_shadow("99", ["A", "B"], _existing(), _orders(), {}, NOW, R, {})
+    rec = json.loads(p.read_text().strip())
+    assert rec["fresh_deliv_order"] == ["B", "A"]
+    assert rec["frozen_deliv_order"] == ["A", "B"]
+    assert rec["deliv_seq_differs"] is True

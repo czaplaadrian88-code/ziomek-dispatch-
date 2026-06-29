@@ -1648,9 +1648,14 @@ def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, no
         plan_fresh = best[1]
         events = []
         for oid in sims:
-            pu = (plan_fresh.pickup_at or {}).get(oid)
-            if pu is not None:
-                events.append((pu, oid, "pickup", sims[oid].pickup_coords))
+            # #1 bug4 fix (audyt 28.06): NIE dokładaj fikcyjnego pickupu dla ODEBRANYCH (jedzenie
+            # już w worku) — served plan też ma dla nich tylko dropoff. Inaczej fresh dostaje extra
+            # węzeł (powrót do restauracji) → fresh_drive zawyżony → delta<0 (fresh „gorszy" od
+            # frozen = niemożliwe dla wiernego solvera). Pickup tylko dla NIE-odebranych.
+            if sims[oid].status != "picked_up":
+                pu = (plan_fresh.pickup_at or {}).get(oid)
+                if pu is not None:
+                    events.append((pu, oid, "pickup", sims[oid].pickup_coords))
             dp = (plan_fresh.predicted_delivered_at or {}).get(oid)
             if dp is None:
                 return
@@ -1658,6 +1663,9 @@ def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, no
         events.sort(key=lambda e: e[0])
         fresh_labels = [f"{e[1]}:{e[2]}" for e in events]
         fresh_coords = [e[3] for e in events]
+        # kolejność DOSTAW = realna zmienna decyzyjna (plan.sequence, deliveries-only), NIE proxy
+        # sort-ts (#8). Czysty sygnał „worek przesekwencjonowany"; sort-ts tylko do trasy drive.
+        fresh_deliv_order = [str(o) for o in (plan_fresh.sequence or [])]
         frozen_labels, frozen_coords = [], []
         for s in (existing_plan.get("stops") or []):
             c = s.get("coords") or {}
@@ -1667,17 +1675,28 @@ def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, no
             frozen_coords.append((float(c["lat"]), float(c["lng"])))
         if not frozen_coords:
             return
+        # frozen kolejność DOSTAW (dropoff-y w kolejności planu) — like-for-like z fresh_deliv_order
+        frozen_deliv_order = [str(s.get("order_id")) for s in (existing_plan.get("stops") or [])
+                              if s.get("type") == "dropoff"]
         fresh_drive = _osrm_drive_min_sum(pos, fresh_coords)
         frozen_drive = _osrm_drive_min_sum(pos, frozen_coords)
         if fresh_drive is None or frozen_drive is None:
             return
+        delta = round(frozen_drive - fresh_drive, 2)
         rec_out = {
             "ts": now.isoformat(), "cid": str(cid), "bag": [str(o) for o in oids],
             "n_orders": len(oids),
-            "seq_differs": frozen_labels != fresh_labels,
+            # REALNY sygnał: czy kolejność DOSTAW inna (plan.sequence vs frozen dropoff-y)
+            "deliv_seq_differs": frozen_deliv_order != fresh_deliv_order,
+            "frozen_deliv_order": frozen_deliv_order, "fresh_deliv_order": fresh_deliv_order,
+            "seq_differs": frozen_labels != fresh_labels,   # pełna trasa (z pickupami) — pomocniczo
             "frozen_drive_min": round(frozen_drive, 2),
             "fresh_drive_min": round(fresh_drive, 2),
-            "delta_min": round(frozen_drive - fresh_drive, 2),
+            "delta_min": delta,
+            # INWARIANT-TRIPWIRE (audyt C9): wierny re-solve NIE może być GORSZY od istniejącego
+            # planu (frozen = feasible sekwencja, którą solver też mógł wybrać). delta<−0.5 =
+            # pomiar skażony (resztkowy fikcyjny węzeł / semantyka) → suspect, NIE traktuj jak dane.
+            "invariant_violation": delta < -0.5,
             "frozen_seq": frozen_labels, "fresh_seq": fresh_labels,
         }
         with open(_BUG4_RESEQ_SHADOW_PATH, "a", encoding="utf-8") as fh:

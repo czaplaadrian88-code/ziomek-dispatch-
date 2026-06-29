@@ -21,6 +21,7 @@ def main():
     n = 0
     differ = 0
     material = 0
+    suspect = 0   # #1 audyt: invariant_violation (delta<−0.5 = fresh gorszy = pomiar skażony) — WYKLUCZ
     deltas = []
     by_day = {}
     worst = []
@@ -39,10 +40,17 @@ def main():
             if since and day < since:
                 continue
             n += 1
+            # #1 audyt: rekord z naruszonym inwariantem (fresh GORSZY od frozen) = pomiar skażony
+            # (semantyka ≠ live) → NIE licz do differ/material. Stare rekordy (przed fix 29.06) nie
+            # mają tego klucza — i tak zarchiwizowane jako widmo (czytaj tylko --since 2026-06-29).
+            if d.get("invariant_violation"):
+                suspect += 1
+                continue
             slot = by_day.setdefault(day, [0, 0, 0, 0.0])
             slot[0] += 1
             dm = d.get("delta_min")
-            if d.get("seq_differs"):
+            # REALNY sygnał = kolejność DOSTAW inna (deliv_seq_differs); fallback seq_differs (stare)
+            if d.get("deliv_seq_differs", d.get("seq_differs")):
                 differ += 1
                 slot[1] += 1
             if isinstance(dm, (int, float)) and dm >= MATERIAL_MIN:
@@ -59,9 +67,9 @@ def main():
     lines = [
         "=== BUG #4 reseq verdict (frozen RETIME seq vs fresh solve) ===",
         f"okno: {since or 'całość'}",
-        f"próbek (wielo-zlec. RETIME): {n}",
-        f"  seq_differs (inna kolejność): {differ}  ({100*differ/max(1,n):.0f}%)",
-        f"  delta>={MATERIAL_MIN:g}min (realny zygzak):  {material}  ({100*material/max(1,n):.0f}%)",
+        f"próbek (wielo-zlec. RETIME): {n}  (z tego suspect/inwariant-naruszony WYKLUCZONE: {suspect})",
+        f"  deliv_seq_differs (inna kolejność DOSTAW): {differ}  ({100*differ/max(1,n-suspect):.0f}% z ważnych)",
+        f"  delta>={MATERIAL_MIN:g}min (realny zygzak):  {material}  ({100*material/max(1,n-suspect):.0f}% z ważnych)",
         f"  delta drive: median={med:.1f}  p90={p90:.1f}  max={deltas[-1] if deltas else 0:.1f}  SUMA={total} min",
         "--- per dzień (próbek / seq_differs / material / suma_min) ---",
     ]
@@ -71,11 +79,16 @@ def main():
     lines.append("--- 6 najgorszych ---")
     for dm, ts, cid, bag in sorted(worst, reverse=True)[:6]:
         lines.append(f"  +{dm:4.1f}min  {str(ts)[:19]}  cid={cid} bag={bag}")
-    # rekomendacja: GO jeśli material>=20% prób i median>=1.5min
-    pct = 100 * material / max(1, n)
-    go = pct >= 20.0 and med >= 1.5
+    # rekomendacja: GO jeśli material>=20% WAŻNYCH prób i median>=1.5min. Gdy suspect>10% ważnych
+    # → instrument jeszcze skażony, NIE ufać werdyktowi (oracle-recheck przed GO).
+    valid = max(1, n - suspect)
+    pct = 100 * material / valid
+    suspect_pct = 100 * suspect / max(1, n)
+    go = pct >= 20.0 and med >= 1.5 and suspect_pct <= 10.0
     lines.append("")
-    lines.append(f"WERDYKT: {'GO — materialność spełniona, sprint naprawy źródła (feasibility↔route_simulator↔plan_recheck)' if go else 'WAIT/NO — materialność poniżej progu (≥20% prób + median≥1.5min) lub mała próba'}")
+    lines.append(f"ZDROWIE INSTRUMENTU: suspect (inwariant delta<−0.5 naruszony) {suspect}/{n} = {suspect_pct:.0f}% "
+                 f"{'⚠ >10% — pomiar wciąż skażony, oracle-recheck PRZED GO' if suspect_pct > 10 else '✓ ≤10% (instrument zdrowy)'}")
+    lines.append(f"WERDYKT: {'GO — materialność spełniona, sprint naprawy źródła (feasibility↔route_simulator↔plan_recheck)' if go else 'WAIT/NO — materialność poniżej progu (≥20% ważnych + median≥1.5min, suspect≤10%) lub mała próba'}")
     msg = "\n".join(lines)
     print(msg)
     _emit(OUT, msg, a.notify)
