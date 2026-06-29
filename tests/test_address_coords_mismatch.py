@@ -58,6 +58,50 @@ def test_missing_inputs_no_fire():
                                 geocode_fn=lambda s, city=None: None) is None
 
 
+def test_postal_prefix_suppressed():
+    """Kod pocztowy NN-NNN na początku (adres spoza miasta) → pomiń (fałszywka 484119)."""
+    far = (53.14738, 23.05132)  # geokod wymuszony-Białystok, 7,4 km od pinu Porosły
+    assert AM.check_text_coords("16-070 Porosły Kręta 3M lokal 2", None, list(_MROZNA),
+                                geocode_fn=lambda s, city=None: far) is None
+
+
+def test_numbered_street_not_suppressed():
+    """Ulice numerowane ('11 Listopada', '3 Maja') NIE są łapane guardem (brak myślnika NN-NNN)."""
+    assert AM._skip_for_text_pin("11 Listopada 5", "Białystok") is False
+    assert AM._skip_for_text_pin("3 Maja 12", "Białystok") is False
+    assert AM._skip_for_text_pin("16-070 Porosły", None) is True
+    # realny rozjazd na ulicy numerowanej dalej się odpala
+    far = (53.20, 23.30)
+    assert AM.check_text_coords("11 Listopada 5", "Białystok", list(_MROZNA),
+                                geocode_fn=lambda s, city=None: far) is not None
+
+
+def test_multitown_no_city_suppressed(monkeypatch):
+    """Brak delivery_city + ulica wielomiejska → pomiń (484332 Spacerowa→Nowodworce 7,7 km)."""
+    monkeypatch.setattr(AM, "_street_town_counts",
+                        lambda: {"spacerowa": {"bialystok": 7, "nowodworce": 8}})
+    far = (53.11584, 23.2742)
+    assert AM.check_text_coords("Spacerowa 17", None, list(_MROZNA),
+                                geocode_fn=lambda s, city=None: far) is None
+
+
+def test_singletown_no_city_fires(monkeypatch):
+    """Brak delivery_city ale ulica JEDNOMIASTOWA-białostocka → odpala (realne typo, np. Można)."""
+    monkeypatch.setattr(AM, "_street_town_counts", lambda: {"mozna": {"bialystok": 1}})
+    assert AM.check_text_coords("Można 10/23", None, list(_MROZNA),
+                                geocode_fn=_fake_geocode_mozna) is not None
+
+
+def test_multitown_WITH_city_not_skipped(monkeypatch):
+    """Ulica wielomiejska ALE delivery_city PODANE → geokod właściwym miastem, guard nie tnie."""
+    monkeypatch.setattr(AM, "_street_town_counts",
+                        lambda: {"spacerowa": {"bialystok": 7, "nowodworce": 8}})
+    assert AM._skip_for_text_pin("Spacerowa 17", "Białystok") is False
+    far = (53.20, 23.30)
+    assert AM.check_text_coords("Spacerowa 17", "Białystok", list(_MROZNA),
+                                geocode_fn=lambda s, city=None: far) is not None
+
+
 def test_geocode_exception_fail_soft():
     def _boom(street, city=None):
         raise RuntimeError("geocode down")

@@ -142,6 +142,33 @@ _COORDS_MISMATCH_MIN_M = 400.0   # próg rozjazdu tekst↔pin (Adrian 29.06)
 _SWEEP_INTERVAL_S = 300.0        # throttle sweepa (≈1 cykl plan_recheck)
 _ACTIVE_FOR_SWEEP = {"planned", "assigned", "picked_up"}
 
+# Precyzja (FAZA A, 29.06) — odsiew ZMIERZONYCH fałszywek, gdy geokod tekstu jest NIEPEWNY,
+# bo nie znamy właściwego miasta (detektor domyśla 'Białystok' przy braku delivery_city):
+#  (1) kod pocztowy NN-NNN na początku = adres luzem spoza miasta (484119 „16-070 Porosły", 7,4 km);
+#  (2) BRAK delivery_city + ulica WIELOMIEJSKA (jest w ≥1 innym mieście z liczbą ≥2) → wymuszony
+#      'Białystok' ląduje we wsi/innym miejscu (484332 „Spacerowa" Nowodworce 7,7 km; 484334
+#      „Ananasowa" Grabówka 6,5 km). Gdy delivery_city PODANE — geokodujemy właściwym miastem,
+#      więc NIE pomijamy. Ulica jednomiastowa-białostocka („Można" {bia:1}) przechodzi → realne
+#      typo łapane. Oś MIASTA należy do detektora ulica↔miasto, nie tu.
+# NIE filtrowane (świadomie, czeka na kalibrację danymi at-198, część to realne rozjazdy):
+# niepewność numeru na długiej ulicy (484298 „Wyszyńskiego" 1,25 km z PODANYM Białymstokiem).
+# Numerowane ulice („11 Listopada", „3 Maja") NIE są łapane — wzorzec wymaga myślnika NN-NNN.
+_POSTAL_PREFIX_RE = re.compile(r"^\s*\d{2}-\d{3}")
+
+
+def _skip_for_text_pin(street, city) -> bool:
+    """True = pomiń detekcję tekst-pin (geokod tekstu byłby niepewny → fałszywka). Patrz komentarz
+    wyżej: (1) kod pocztowy na początku; (2) brak miasta + ulica wielomiejska. Czysta."""
+    if _POSTAL_PREFIX_RE.match(street or ""):
+        return True
+    if not (city and str(city).strip()):           # brak delivery_city → ryzyko złego miasta
+        sk = _street_name_key(street or "")
+        if len(sk) >= 3:
+            counts = _street_town_counts().get(sk, {})
+            if any(c >= 2 for t, c in counts.items() if not t.startswith("bialystok")):
+                return True                          # ulica istotnie obecna poza Białymstokiem
+    return False
+
 _sweep_last_ts = 0.0
 _coords_logged: set = set()      # (oid, round(lat,5), round(lng,5)) — dedup w obrębie procesu
 
@@ -163,6 +190,8 @@ def check_text_coords(street, city, used_coords, *, geocode_fn) -> dict | None:
     Czysta funkcja — `geocode_fn` wstrzykiwany (testowalność, brak importu cyklicznego).
     Fail-soft: każdy błąd parsowania/geokodu → None (nie alarmuje, nie wywraca)."""
     if not street or not used_coords:
+        return None
+    if _skip_for_text_pin(street, city):    # FAZA A: kod pocztowy/spoza miasta → fałszywka
         return None
     try:
         uc = (float(used_coords[0]), float(used_coords[1]))
