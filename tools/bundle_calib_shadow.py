@@ -220,7 +220,12 @@ def _walk_calib(seq, mine, pos, now, idx, M, deadlines):
 
     Zwraca dict:
       r6_ready    = #zleceń gdzie delivered - ready > 35min,
-                    ready = czas_kuriera_warsaw (niesione: picked_up_at). NIE pickup_at.
+                    ready = czas_kuriera_warsaw; niesione: min(czas_kuriera, picked_up_at).
+                    ⚠ #11 audyt 28.06: to NIE 1:1 parytet z silnikiem — r6_thermal_anchor (silnik)
+                    dla niesionych = picked_up_at-ONLY. Tu ŚWIADOMY rozjazd: min() łapie wadliwy
+                    czas_kuriera (np. deklar. 14:07 a odbiór 13:38). Skutek: instrument bywa
+                    bardziej konserwatywny (dłuższy carried_age) — 214/603 differs w ±7min od capa
+                    Z → może przesunąć bucket Z. align-to-engine = kandydat sprintu O2 (02.07). NIE pickup_at (proj.).
       czas_late   = Σ max(0, delivered - deadline) [min] po zleceniach z deadlinem.
       finish_in_min, drive_min,
       carry_ready = {oid: minuty od ready/picked_up do dostawy} (do logu).
