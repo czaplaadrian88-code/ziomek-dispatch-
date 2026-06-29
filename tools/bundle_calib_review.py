@@ -27,7 +27,11 @@ CORPUS = f"{STATE_DIR}/bundle_calib_shadow.jsonl"
 SLA_LOG = f"{STATE_DIR}/sla_log.jsonl"
 R6_MAX_MIN = 35.0
 MIN_MULTI = 20            # minimum UNIKALNYCH worków multi-order na pewny werdykt
-MATERIAL_PCT = 20.0      # próg materialności (ETAP 5)
+MATERIAL_PCT = float(os.environ.get("BUNDLE_CALIB_MATERIAL_PCT", "2.0"))  # próg % worków policy-improved = GO
+# Adrian 2026-06-29: 20%→2%. „Każdy progres warty pochylenia — naprawy po 1% ×10 = procent
+# składany; Ziomek=moat, ma być idealny." Przy overage-only (#1 fix): under_z Z≤35 = 12,4% ≫ 2%
+# → GO-eligible. ⚠ SAM FLIP silnika (ENABLE_O2_READY_ANCHOR_SWEEP) i tak WSTRZYMANY do #5b
+# (fizyczna weryfikacja dostawy GPS); ten próg zmienia tylko CO MÓWI raport, nie włącza zmiany.
 REGRESSION_PCT_MAX = 5.0 # max % worków regresji
 MATERIAL_O2_MIN = 2.0    # ΔO2 (overage-only) ≥ tyle min/worek = materialna poprawa
 # UWAGA (2026-06-29, audyt #1 — overage-only GATE): objektyw GATE = O2 = overage-ONLY = parytet
@@ -36,8 +40,8 @@ MATERIAL_O2_MIN = 2.0    # ΔO2 (overage-only) ≥ tyle min/worek = materialna p
 # 317 'improved' vs silnik 304; cid 123 d_overage=-31.6 świeżość GORSZA liczona jako improved).
 # ⚠ CALIB w kolektorze wciąż λ-wybrana (λ=1.5) → overage CALIB ≥ overage-argmin silnika → gate
 # overage-only KONSERWATYWNY (silnik ≥ tyle; brak fałszywego GO). czas_late = med_d_czas_late
-# (osobna soczewka, info). PRÓG materialności (MATERIAL_PCT) = osobna decyzja Adriana (rejestr
-# 20%→2% + HOLD do #5b) — NIE zmieniany tym fixem. Stara flaga `bundle_improved` + count-regres liczą
+# (osobna soczewka, info). PRÓG materialności (MATERIAL_PCT) = 2% (Adrian 29.06, było 20%; flip
+# silnika i tak HOLD do #5b). Stara flaga `bundle_improved` + count-regres liczą
 # LICZBĘ zleceń ponad 35 min — sprzeczne z O2 (zaniżają: cid 515 overage 67→30 = flaga False).
 # Werdykt = bramka PIERWOTNA na O2 (spójna z objektywem); count-lens (late-klienci) = wtórny +
 # jawne pytanie do Adriana gdy się rozjeżdża. Detal: memory bag-resequence-fill-deadtime-candidate.
@@ -283,7 +287,7 @@ def _fmt(r):
     uz = r.get("under_z") or {}
     caps = uz.get("caps") or {}
     L = ["🔬 BUNDLE-CALIB przegląd (GATE O2=overage-ONLY = parytet silnika; czas_late=osobna soczewka info, FAZA 2; + kalibracja X/Y/Z Opcji 3)",
-         "⚠ PRÓG: MATERIAL_PCT=20% w kodzie; decyzja Adriana 28.06 = 2% + HOLD flipu do #5b (geofence dostawy). overage-only KONSERWATYWNY (CALIB λ-wybrana).",
+         f"⚠ PRÓG GO = {MATERIAL_PCT:.0f}% worków (Adrian 29.06: każdy progres warty). FLIP silnika WSTRZYMANY do #5b (geofence dostawy) — werdykt GO = 'warto się przyjrzeć', NIE 'włącz'. overage-only KONSERWATYWNY (CALIB λ-wybrana, silnik ≥ tyle).",
          f"Korpus: {r['corpus_rows']} wpisów / {r['multi_uniq']} unikalnych worków multi-order",
          f"CALIB≠served: {r['differs']} ({r['differs_pct']}%)",
          "",

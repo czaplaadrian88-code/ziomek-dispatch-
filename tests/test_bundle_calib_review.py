@@ -101,15 +101,18 @@ def _rep(coverage, caps, impO2=40.0):
 
 def test_verdict_go_recommends_smallest_passing_cap(monkeypatch):
     monkeypatch.setattr(B, "MIN_MULTI", 2)
+    monkeypatch.setattr(B, "MATERIAL_PCT", 20.0)  # pin progu — test LOGIKI (smallest passing cap),
+    # niezależny od produkcyjnej wartości (Adrian 29.06 = 2%); caps 5/25/28% → passing {32,35} → Z=32
     rep = _rep(25, {"20": _cap(5.0), "32": _cap(25.0), "35": _cap(28.0)})
     v, rec = B._verdict(rep)
     assert v == "GO"
-    assert "Z=32" in rec                       # najmniejszy cap ≥20% = max ochrona carried
+    assert "Z=32" in rec                       # najmniejszy cap ≥próg = max ochrona carried
     assert "NIE flipować surowego O2" in rec
 
 
 def test_verdict_nogo_when_ceiling_material_but_no_cap_passes(monkeypatch):
     monkeypatch.setattr(B, "MIN_MULTI", 2)
+    monkeypatch.setattr(B, "MATERIAL_PCT", 20.0)  # pin progu — caps 2/5/8% < 20% → żaden nie przechodzi
     rep = _rep(25, {"20": _cap(2.0), "32": _cap(5.0), "35": _cap(8.0)}, impO2=40.0)
     v, rec = B._verdict(rep)
     assert v == "NO-GO"
