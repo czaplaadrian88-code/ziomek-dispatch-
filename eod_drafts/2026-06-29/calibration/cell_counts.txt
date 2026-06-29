@@ -1,0 +1,84 @@
+# CELL COUNTS  load_bucket x tier x bag_bucket  (n<30 = THIN)
+
+load_bucket tier   bag          n  flag
+luzno      std    3+         226  
+luzno      gold   1          226  
+luzno      gold   3+         210  
+luzno      std    2          183  
+luzno      gold   2          180  
+niedobor   std    3+         176  
+niedobor   gold   3+         172  
+luzno      std    1          106  
+luzno      std+   2           99  
+luzno      std+   3+          95  
+srednio    std    3+          77  
+niedobor   new    3+          74  
+srednio    gold   3+          70  
+luzno      std+   1           62  
+srednio    std    2           57  
+luzno      new    2           52  
+srednio    gold   1           49  
+luzno      new    3+          48  
+niedobor   std+   3+          46  
+luzno      new    1           45  
+niedobor   std    1           45  
+niedobor   std    2           43  
+ciasno     std+   3+          41  
+srednio    std+   3+          40  
+srednio    std+   2           39  
+srednio    new    1           35  
+ciasno     std    3+          33  
+srednio    std    1           32  
+niedobor   gold   1           30  
+srednio    gold   2           28  THIN
+srednio    std+   1           24  THIN
+niedobor   new    2           20  THIN
+luzno      slow   2           20  THIN
+niedobor   std+   1           19  THIN
+niedobor   std+   2           17  THIN
+srednio    new    3+          17  THIN
+srednio    new    2           12  THIN
+luzno      slow   1           11  THIN
+luzno      slow   3+           9  THIN
+niedobor   gold   2            9  THIN
+niedobor   new    1            8  THIN
+ciasno     gold   3+           8  THIN
+niedobor   slow   3+           5  THIN
+ciasno     std+   2            5  THIN
+niedobor   gold   NA           4  THIN
+luzno      gold   NA           4  THIN
+niedobor   std+   NA           3  THIN
+luzno      std+   NA           2  THIN
+srednio    new    NA           2  THIN
+ciasno     new    3+           2  THIN
+ciasno     gold   2            2  THIN
+srednio    slow   2            1  THIN
+luzno      std    NA           1  THIN
+niedobor   new    NA           1  THIN
+srednio    std+   NA           1  THIN
+ciasno     std    2            1  THIN
+
+# 2-way: load_bucket x tier
+luzno      gold     620  
+luzno      std      516  
+niedobor   std      264  
+luzno      std+     258  
+niedobor   gold     215  
+srednio    std      166  
+srednio    gold     147  
+luzno      new      145  
+srednio    std+     104  
+niedobor   new      103  
+niedobor   std+      85  
+srednio    new       66  
+ciasno     std+      46  
+luzno      slow      40  
+ciasno     std       34  
+ciasno     gold      10  THIN
+niedobor   slow       5  THIN
+ciasno     new        2  THIN
+srednio    slow       1  THIN
+
+# 1-way load_bucket: {'niedobor': 672, 'srednio': 484, 'luzno': 1579, 'ciasno': 92}
+# 1-way tier: {'std+': 493, 'new': 316, 'std': 980, 'gold': 992, 'slow': 46}
+# 1-way bag: {'1': 692, '2': 768, '3+': 1349, 'NA': 18}
