@@ -2412,20 +2412,38 @@ def _equal_bucket_on() -> bool:
 
 def _apply_pre_shift_equal_gate(bonus_pre_shift_soft, metrics):
     """Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy flaga
-    `ENABLE_PRE_SHIFT_EQUAL_NO_PENALTY` ON → ZERUJE karę score pre_shift (zwraca 0.0,
-    mutuje metrics). Pojedynczy autorytatywny punkt PO obu źródłach kary (stała V325 +
-    gradient `_pre_shift_gradient_penalty`). „Kurier dotrze później" obsługuje LEGALNA
-    ścieżka (clamp do shift_start + R-LATE-PICKUP propozycja przedłużenia DO RESTAURACJI),
-    NIE ukryta kara w score. HARD-reject >30min-przed-zmianą (feasibility_v2) zostaje.
-    Default OFF (decision_flag → flags.json/stała False) = kara zachowana, czysty no-op.
-    Czysta (testowalna) — `v325_` prefix → metryka auto-serializowana."""
+    `ENABLE_PRE_SHIFT_EQUAL_NO_PENALTY` ON → zdejmuje LEKKĄ karę pre_shift (NEAR ∝m
+    `PRE_SHIFT_NEAR_PEN_PER_MIN`·m, ≤~−30; LUB stała feasibility `V325_PRE_SHIFT_SOFT_PENALTY`
+    −20 gdy gradient OFF). Pojedynczy autorytatywny punkt PO obu źródłach kary.
+
+    ⚠ ZACHOWUJE FAR-veto (`PRE_SHIFT_FAR_PEN` ≈ −1000) — kurier z odległym startem zmiany
+    (NEAR<m≤cap) NIE bierze now-ordera POZA przeładowaniem floty (loadgov≥unlock → gradient
+    sam relaksuje do ∝m, wtedy lekka i też zdjęta). To JEST reguła Adriana „chyba że trzeba
+    przedłużyć w odpowiedzi do restauracji" = load-aware, NIE ruszamy. Zdjęcie FAR-veta
+    posłałoby klienta na 40-60 min czekania → harm (replay 29.06 to wykrył).
+
+    „Kurier dotrze później" (NEAR) obsługuje LEGALNA ścieżka (clamp do shift_start +
+    R-LATE-PICKUP propozycja przedłużenia DO RESTAURACJI), NIE ukryta kara w score.
+    HARD-reject >30min-przed-zmianą (feasibility_v2) zostaje. Default OFF = czysty no-op.
+    Czysta (testowalna); `v325_` prefix → metryka auto-serializowana."""
     try:
         on = bool(C.decision_flag("ENABLE_PRE_SHIFT_EQUAL_NO_PENALTY"))
     except Exception:
         on = False
     if not on:
         return bonus_pre_shift_soft
-    metrics["v325_pre_shift_penalty_suppressed"] = round(float(bonus_pre_shift_soft or 0.0), 2)
+    pen = float(bonus_pre_shift_soft or 0.0)
+    if pen >= 0.0:
+        return bonus_pre_shift_soft
+    # FAR-veto (load-aware ~veto) ZOSTAJE; zdejmujemy tylko lekką karę NEAR/stałą.
+    try:
+        _far = float(C.PRE_SHIFT_FAR_PEN)
+    except Exception:
+        _far = -1000.0
+    if pen <= _far + 0.5:
+        metrics["v325_pre_shift_far_veto_kept"] = round(pen, 2)
+        return bonus_pre_shift_soft
+    metrics["v325_pre_shift_penalty_suppressed"] = round(pen, 2)
     metrics["v325_pre_shift_soft_penalty"] = 0.0
     return 0.0
 
