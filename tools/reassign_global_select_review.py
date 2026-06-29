@@ -59,10 +59,13 @@ def summarize(rows, hours, since=None):
     cutoff = cutoff or (now - timedelta(hours=hours))
     win = [r for r in rows if (_parse(r.get("ts")) or now) >= cutoff]
     pile = [r for r in win if (r.get("maxpile_before") or 0) >= 2]      # jakikolwiek pile-on
-    # DUŻE pile-ony (≥3 na jednego) = te co MUSZĄ spaść do ≤2 (cel Adriana „1-2"). Rozmiar 2 =
-    # walidny worek (nie wymaga rozbicia). „handled" = maxpile_after ≤ 2.
+    # NIE ma twardego capu „≤2" (Adrian 29.06: „mogą być i 4 o ile składają się na dobry worek").
+    # Silnik (global_allocate→assess_order) dokłada do kuriera DOPÓKI to jego najlepsza WYKONALNA
+    # opcja (R6 tier 35/40, dobra trasa) → worek 3-4 na jednego = OK gdy dobry. De-pile usuwa tylko
+    # SPURIOUS nadmiar (zlecenia lepsze u innego / nie mieszczące się w dobrym worku). Sukces =
+    # REDUKCJA tam gdzie nadmiar, NIE „zejście do 2". maxpile_after = rozmiar zwalidowanego worka.
     big = [r for r in pile if (r.get("maxpile_before") or 0) >= 3]
-    big_handled = [r for r in big if (r.get("maxpile_after") or 0) <= 2]
+    big_reduced = [r for r in big if (r.get("maxpile_after") or 0) < (r.get("maxpile_before") or 0)]
     worst_after = max([(r.get("maxpile_after") or 0) for r in win], default=0)
     # STRAŻNIK over-hide: pile-on był (candidates_in≥2) ale 0 survivorów = podejrzenie nadmiernego chowania
     overhide = [r for r in win if (r.get("candidates_in") or 0) >= 2 and (r.get("survivors_out") or 0) == 0]
@@ -72,7 +75,7 @@ def summarize(rows, hours, since=None):
         "ticks_in_window": len(win),
         "ticks_with_pileon": len(pile),
         "big_pileon_ge3": len(big),
-        "big_handled_to_le2": len(big_handled),
+        "big_reduced": len(big_reduced),
         "worst_maxpile_after": worst_after,
         "maxpile_before_dist": dict(sorted(Counter((r.get("maxpile_before") or 0) for r in win).items())),
         "maxpile_after_dist": dict(sorted(Counter((r.get("maxpile_after") or 0) for r in win).items())),
@@ -93,16 +96,14 @@ def verdict(s):
        s["overhide_suspect_ticks"] >= max(2, s["ticks_with_pileon"] // 3):
         return (f"⚠ UWAGA OVER-HIDE — {s['overhide_suspect_ticks']} ticków z ≥2 kandydatami ale 0 survivorów. "
                 f"Sprawdź czy nie chowa genuine przerzutów (bug singleton). Rozważ rollback flagi.")
-    if s["worst_maxpile_after"] >= 3:
-        return (f"⚠ UWAGA — najgorszy maxpile_after={s['worst_maxpile_after']} (>2). De-pile nie zszedł do "
-                f"1-2 w którymś ticku — sprawdź (R6 cap? bundling?).")
     if s["big_pileon_ge3"] > 0:
-        return (f"✅ DZIAŁA — {s['big_handled_to_le2']}/{s['big_pileon_ge3']} DUŻYCH pile-onów (≥3 na jednego) "
-                f"zredukowanych do ≤2. Najgorszy po: {s['worst_maxpile_after']}. {s['sum_hidden']} ukrytych de-piled. "
-                f"To dokładnie 'kilka na jednego → 1-2 dobry worek'.")
+        return (f"✅ DZIAŁA — {s['big_reduced']}/{s['big_pileon_ge3']} dużych pile-onów (≥3 na jednego) ROZBITYCH "
+                f"(spurious nadmiar zdjęty: {s['sum_hidden']} ukrytych de-piled). Worki kept = rozmiar "
+                f"zwalidowany feasibility (3-4 na jednego = OK gdy dobry worek, NIE problem). "
+                f"maxpile after: {s['maxpile_after_dist']}.")
     if s["ticks_with_pileon"] == 0:
         return "OK (cicho) — w oknie nie było pile-onu na jednego kuriera."
-    return (f"OK — pile-ony tylko rozmiaru 2 (walidne worki, brak dużych do rozbicia); maxpile_after≤2. "
+    return (f"OK — pile-ony rozmiaru 2 (walidne worki, brak dużych ≥3 do rozbicia); "
             f"{s['sum_survivors']} pokazanych / {s['sum_hidden']} ukrytych.")
 
 
@@ -120,8 +121,8 @@ def main() -> int:
 
     lines = ["🔁 RAPORT po peaku — globalne rozbijanie pile-on PRZERZUTÓW", ""]
     lines.append(f"okno {s['window_h']}h: ticków {s['ticks_in_window']}, z pile-on {s['ticks_with_pileon']}, "
-                 f"DUŻYCH(≥3) {s['big_pileon_ge3']}→zredukowanych {s['big_handled_to_le2']}, "
-                 f"najgorszy maxpile_after {s['worst_maxpile_after']}")
+                 f"DUŻYCH(≥3) {s['big_pileon_ge3']}→rozbitych {s['big_reduced']} "
+                 f"(worek kept feasibility-validated, 3-4 OK)")
     lines.append(f"kandydaci {s['sum_candidates']} → pokazani {s['sum_survivors']} / ukryci {s['sum_hidden']}")
     lines.append(f"maxpile before {s['maxpile_before_dist']} → after {s['maxpile_after_dist']}")
     if s["overhide_suspect_ticks"]:
