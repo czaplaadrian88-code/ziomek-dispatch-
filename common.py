@@ -199,6 +199,14 @@ ETAP4_DECISION_FLAGS = (
     # OFF → pole nie powstaje (bajt-identyczny ingest). W rejestrze: izolacja conftest
     # (test mający OFF nie dziedziczy żywego flags.json) + parytet fingerprint cross-proces.
     "ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW",
+    # CARRIED-FIRST RELAX READY-ANCHOR (2026-06-29, case Rećki cid 492): 3 bramki
+    # carried-first w plan_recheck (_relax_carried_first / _reorder_noncarried_min_drive /
+    # _lex_committed_window_reorder) liczyły R6 czas-w-torbie PŁASKO od TSP-pickup → carried-first
+    # oszukiwał R6 odraczając odbiór (mały in-bag, 0 breachy) i odrzucał poprawny pickup-first.
+    # ON → kotwica od GOTOWOŚCI (czas_kuriera, spójnie z r6_thermal_anchor) → odroczenie nie chowa
+    # wieku termicznego → pickup-first przechodzi gdy skraca jazdę. Default OFF; flip po replay ON↔OFF
+    # + ACK. Decyzyjna, cross-proces. Komplementarna z ENABLE_O2_READY_ANCHOR_SWEEP (tamta=SLA/objektyw).
+    "ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -225,6 +233,7 @@ ENABLE_O2_READY_ANCHOR_SWEEP = False  # O2 re-seq 2026-06-27 (ready-anchor + ove
 ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria physical_verified delivered_at panel-vs-GPS courier_ground_truth; SHADOW, zero wpływu na decyzje/SLA; kanon=flags.json hot)
 ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
 ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
+ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR = False  # 2026-06-29 case Rećki (ready-anchor R6 w 3 bramkach carried-first plan_recheck; OFF=legacy in-bag/byte-identyczne; KANON=flags.json)
 # Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy ON → zeruje
 # karę score pre_shift (`bonus_v325_pre_shift_soft`, oba źródła: stała V325 + gradient
 # _pre_shift_gradient_penalty). „Kurier dotrze później" obsługuje LEGALNA ścieżka:

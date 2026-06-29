@@ -985,6 +985,21 @@ def _coalesce_same_pickup_nodes(seq, orders_state):
     return repaired if repaired is not None else out
 
 
+def _r6_thermal_bag_min(dt, bp, ready_rel, ready_anchor_on):
+    """R6 czas termiczny (min) dla NIE-niesionego zlecenia w bramkach carried-first.
+    ready_anchor_on + znamy gotowość (ready_rel = czas_kuriera względem `now`):
+      → kotwica od GOTOWOŚCI jedzenia (dt − ready_rel) — odroczenie odbioru NIE chowa wieku
+        termicznego (spójne z route_simulator.r6_thermal_anchor: nowe/nieodebrane od pickup_ready_at).
+    OFF / brak czasu gotowości → legacy in-bag (dt − bp). Zwraca None gdy brak danych.
+    case Rećki cid 492: carried-first odraczał odbiór → in-bag mały → 0 breachy FAŁSZYWIE;
+    ready-anchor pokazuje realny wiek → pickup-first nie odrzucany za in-bag, jazda rozstrzyga."""
+    if dt is None:
+        return None
+    if ready_anchor_on and ready_rel is not None:
+        return dt - ready_rel
+    return (dt - bp) if bp is not None else None
+
+
 def _relax_carried_first(seq, orders_state, start_pos, now):
     """Guarded „po drodze" relaxation of carried-first (Adrian 2026-06-22, Sioux).
     Wejście = kolejność carried-first. Szuka KRÓTSZEJ (jazda) precedence-poprawnej
@@ -997,6 +1012,9 @@ def _relax_carried_first(seq, orders_state, start_pos, now):
     if not ENABLE_CARRIED_FIRST_RELAX:
         return seq
     import itertools
+    from dispatch_v2 import common as _Cra
+    _ra_on = _Cra.flag("ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR",
+                       getattr(_Cra, "ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR", False))
     n = len(seq)
     if n < 3 or n > CARRIED_FIRST_RELAX_MAX_STOPS:
         return seq
@@ -1115,7 +1133,7 @@ def _relax_carried_first(seq, orders_state, start_pos, now):
                     carry[oid] = age + dt
             else:
                 bp = pick[ppos[oid]]
-                bag = (dt - bp) if bp is not None else None
+                bag = _r6_thermal_bag_min(dt, bp, committed_rel[ppos[oid]], _ra_on)
             if bag is not None and bag > 35.0:
                 breaches += 1
         return drive, deliv, carry, breaches, pick
@@ -1176,6 +1194,9 @@ def _reorder_noncarried_min_drive(seq, orders_state, start_pos, now):
     if not ENABLE_NONCARRIED_DROPOFF_REORDER or start_pos is None or now is None:
         return seq
     import itertools
+    from dispatch_v2 import common as _Cra
+    _ra_on = _Cra.flag("ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR",
+                       getattr(_Cra, "ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR", False))
     n = len(seq)
     if n < 3 or n > NONCARRIED_REORDER_MAX_STOPS:
         return seq
@@ -1236,7 +1257,9 @@ def _reorder_noncarried_min_drive(seq, orders_state, start_pos, now):
             if kind_pick[i]:
                 continue
             dt = deliv[i]; bp = pick[ppos[oid_of[i]]] if oid_of[i] in ppos else None
-            if dt is not None and bp is not None and (dt - bp) > 35.0:
+            _rr = committed_rel[ppos[oid_of[i]]] if oid_of[i] in ppos else None
+            _bagr = _r6_thermal_bag_min(dt, bp, _rr, _ra_on)
+            if _bagr is not None and _bagr > 35.0:
                 breaches += 1
         return drive, breaches, deliv
 
@@ -1295,6 +1318,9 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now):
     if start_pos is None or now is None:
         return seq
     import itertools
+    from dispatch_v2 import common as _Cra
+    _ra_on = _Cra.flag("ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR",
+                       getattr(_Cra, "ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR", False))
     n = len(seq)
     if n < 3 or n > LEX_WINDOW_MAX_STOPS:
         return seq
@@ -1385,7 +1411,8 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now):
                     maxcarry = max(maxcarry, age + dt)
             else:
                 bp = pick[ppos[oid]] if oid in ppos else None
-                bag = (dt - bp) if bp is not None else None
+                bag = _r6_thermal_bag_min(dt, bp,
+                                          committed_rel[ppos[oid]] if oid in ppos else None, _ra_on)
             if bag is not None and bag > 35.0:
                 breaches += 1
         return drive, deliv, pick, n_viol, breaches, maxcarry
