@@ -40,6 +40,23 @@ FLAG = "ENABLE_B_ROUTE_SHADOW"
 MAX_PER_RUN = int(os.environ.get("B_ROUTE_SHADOW_MAX_PER_RUN", "25"))
 MAXN = int(os.environ.get("B_ROUTE_SHADOW_MAXN", "8"))
 ACTIVE = {"assigned", "picked_up"}
+# #4 audyt-fix (28.06 → naprawa 29.06): trasa B = _gen_one_bag_plan, ktore GAŁEZIUJE
+# na tych flagach route/canon. Serwis MUSI miec env-PARYTET z LIVE dispatch-plan-recheck
+# (drop-in route-flag-parity.conf), inaczej B liczy INNA geometrie niz serwowany kanon →
+# differs_b/delta = fantomy (pre-fix 45% differs, delta −30..+35). Stempel route_env na
+# KAZDYM rekordzie = provenance (C9: przyrzad niesie semantyke pod ktora liczyl); rekordy
+# bez route_env = epoka PRZED-parytet (widmo, zarchiwizowane). Re-weryfikacja parytetu:
+#   diff <(systemctl show dispatch-plan-recheck.service -p Environment) \
+#        <(systemctl show dispatch-b-route-shadow.service -p Environment)
+ROUTE_PARITY_FLAGS = (
+    "ENABLE_GPS_FREE_ANCHOR", "ENABLE_GPS_FREE_ANCHOR_LAST_POS",
+    "ENABLE_CARRIED_FIRST_RELAX", "ENABLE_CARRIED_AGE_TZ_FIX",
+    "ENABLE_LEX_COMMITTED_WINDOW", "ENABLE_LEX_COMMITTED_WINDOW_SHADOW",
+    "ENABLE_NONCARRIED_DROPOFF_REORDER", "ENABLE_NO_RETURN_TO_DEPARTED_PICKUP",
+    "ENABLE_PLAN_CANON_ORDER_INVARIANTS", "ENABLE_PLAN_REAL_PICKED_UP_AT",
+    "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION", "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH",
+    "ENABLE_PLAN_SEQUENCE_LOCK", "ENABLE_RELAX_COLOC_PICKUP",
+)
 
 # --- IZOLACJA: zapisy plan_manager (z _gen_one_bag_plan) idą na temp, NIE na żywy courier_plans ---
 from dispatch_v2 import plan_manager as PM          # noqa: E402
@@ -362,6 +379,9 @@ def run_once(now=None, dry_run=False):
         rows.append({
             "ts": now.isoformat(),
             "cid": cid,
+            # provenance epoki flag (C9): pod jakimi flagami route/canon liczona ta trasa B.
+            # Brak klucza = rekord PRZED-parytet (29.06) = NIE ufac differs/delta.
+            "route_env": {k: os.environ.get(k, "0") for k in ROUTE_PARITY_FLAGS},
             "bag_sig": sig,
             "order_ids": sorted(oids),
             "n_orders": len(oids),
