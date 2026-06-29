@@ -143,35 +143,48 @@ def test_shadow_metrics_excludes_early_bird_end_to_end(tmp_path, monkeypatch):
     assert m["koord_pct"] == 40.0  # raw zachowany dla transparencji
 
 
-# --- G2c reorder dedup po order_id -----------------------------------------
+# --- G2c reorder PER-DECYZJA (#6a audyt 28.06 — match reorder→ts proposala ±5s, NIE all-tick) ---
 
-def test_g2c_dedup_counts_distinct_orders_not_raw_lines():
-    # 30 orderów, 6 z reorderem ale 15 SUROWYCH linii (multi-eval sweepera) → dedup 20%, NIE 50%
-    oids = set(f"o{i}" for i in range(30))
-    cur = _cur(30, 5.0, n_orders=30, shadow_oids=oids)
-    log = {"reorders": 15, "errors": 0, "reorder_oids": set(f"o{i}" for i in range(6))}
+def test_g2c_per_decision_counts_matched_decisions_not_alltick():
+    # 30 decyzji w t=13:00; 6 z nich ma linię reorder TEGO orderu w ±5s → per-decyzja 20% GO.
+    T = _dt(13, 0)
+    decev = [(f"o{i}", T) for i in range(30)]
+    reoev = {f"o{i}": [T] for i in range(6)}      # 6 decyzji z matchem w tym samym ticku
+    cur = _cur(30, 5.0, n_orders=30, shadow_oids=set(f"o{i}" for i in range(30)), decision_events=decev)
+    log = {"reorders": 15, "errors": 0,
+           "reorder_oids": set(f"o{i}" for i in range(6)), "reorder_events": reoev}
     gc = _g(M.gates(cur, log, FLAGS, BASE_TOD, _dt(13, 0), _dt(16, 0)), "G2c-reorder")
-    assert "20.0%" in gc[2] and "6/30" in gc[2], gc
-    assert "raw 15 linii" in gc[2]
+    assert "per-decyzja 20.0%" in gc[2] and "6/30" in gc[2], gc
     assert gc[1] == "GO"  # 20% w paśmie 5-25
 
 
-def test_g2c_dedup_intersects_window_orders_only():
-    # reorder dla ordera SPOZA okna shadow (re-eval starego) NIE liczony do mianownika/licznika
-    oids = set(f"o{i}" for i in range(35))
-    cur = _cur(35, 0.0, n_orders=35, shadow_oids=oids)
-    log = {"reorders": 9, "errors": 0, "reorder_oids": {"o0", "o1", "o2", "STARY99"}}
+def test_g2c_per_decision_ignores_reorder_on_other_tick():
+    # KLUCZOWY FIX: order reorderowany w INNYM ticku (poza ±5s od decyzji) NIE liczy per-decyzja,
+    # choć all-tick by go policzył. 35 decyzji 13:00; o0..o2 reorder w oknie (match), o3..o9 reorder
+    # 60s później (inny tick) → NIE liczone. per-decyzja 3/35=8.6% GO; all-tick 10/35=28.6% (diagn.).
+    T = _dt(13, 0)
+    decev = [(f"o{i}", T) for i in range(35)]
+    reoev = {f"o{i}": [T] for i in range(3)}                       # 3 w oknie
+    reoev.update({f"o{i}": [_dt(13, 1)] for i in range(3, 10)})    # 7 poza oknem (+60s)
+    cur = _cur(35, 0.0, n_orders=35, shadow_oids=set(f"o{i}" for i in range(35)), decision_events=decev)
+    log = {"reorders": 10, "errors": 0,
+           "reorder_oids": set(f"o{i}" for i in range(10)), "reorder_events": reoev}
     gc = _g(M.gates(cur, log, FLAGS, BASE_TOD, _dt(13, 0), _dt(16, 0)), "G2c-reorder")
-    assert "3/35" in gc[2], gc  # o0,o1,o2 ∩ okno; STARY99 odrzucony
+    assert "3/35" in gc[2], gc                 # tylko 3 zmatchowane per-decyzja
+    assert "all-tick 10/35" in gc[2]           # diagnostyka pokazuje zawyżone all-tick
+    assert gc[1] == "GO"                        # 8.6% w paśmie 5-25 (a NIE WARN jak 28.6% all-tick)
 
 
-def test_g2c_high_dedup_rate_warns():
-    # realnie wysoka stopa (po dedup) nadal WARN — sygnał prawdziwy, nie artefakt
-    oids = set(f"o{i}" for i in range(40))
-    cur = _cur(40, 0.0, n_orders=40, shadow_oids=oids)
-    log = {"reorders": 50, "errors": 0, "reorder_oids": set(f"o{i}" for i in range(16))}  # 16/40=40%
+def test_g2c_high_per_decision_rate_warns():
+    # realnie wysoka stopa per-decyzja (16/40=40% w ±5s) nadal WARN — sygnał prawdziwy, nie artefakt
+    T = _dt(13, 0)
+    decev = [(f"o{i}", T) for i in range(40)]
+    reoev = {f"o{i}": [T] for i in range(16)}
+    cur = _cur(40, 0.0, n_orders=40, shadow_oids=set(f"o{i}" for i in range(40)), decision_events=decev)
+    log = {"reorders": 50, "errors": 0,
+           "reorder_oids": set(f"o{i}" for i in range(16)), "reorder_events": reoev}
     gc = _g(M.gates(cur, log, FLAGS, BASE_TOD, _dt(13, 0), _dt(16, 0)), "G2c-reorder")
-    assert gc[1] == "WARN" and "40.0%" in gc[2]
+    assert gc[1] == "WARN" and "per-decyzja 40.0%" in gc[2]
 
 
 def test_compute_tod_curve_excludes_early_bird(tmp_path, monkeypatch):

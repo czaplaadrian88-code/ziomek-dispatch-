@@ -39,6 +39,7 @@ ACKALERT_STOP_PP= float(os.environ.get("CANARY_ACKALERT_STOP_PP", "8.0"))
 LAT_P95_STOP_PCT= float(os.environ.get("CANARY_LAT_P95_STOP_PCT", "15.0"))
 REORDER_LO      = float(os.environ.get("CANARY_REORDER_LO_PCT", "5.0"))
 REORDER_HI      = float(os.environ.get("CANARY_REORDER_HI_PCT", "25.0"))
+REORDER_MATCH_S = float(os.environ.get("CANARY_REORDER_MATCH_S", "5.0"))  # ±s match reorder→DECYZJA (#6a audyt)
 # MIN-SAMPLE: poniżej tylu decyzji w oknie gate'y STATYSTYCZNE degradujemy STOP/WARN→INFO
 # (off-peak n jest strukturalnie maleńkie → szum). G1-błędy (pick failed) NIGDY nie wyciszane.
 MIN_N_FOR_STOP    = int(os.environ.get("CANARY_MIN_N_FOR_STOP", "30"))
@@ -110,7 +111,8 @@ def shadow_metrics(since):
     n = koord = koord_eb = 0
     auto = {"AUTO": 0, "ACK": 0, "ALERT": 0}
     lats = []
-    order_ids = set()  # distinct order_id decydowanych w oknie → mianownik dedup G2c
+    order_ids = set()  # distinct order_id decydowanych w oknie (legacy)
+    decision_events = []  # #6a audyt: (oid|None, ts) per DECYZJA → mianownik per-decyzja G2c
     if not os.path.exists(SHADOW):
         return None
     for line in _rot_lines(SHADOW, since):
@@ -125,6 +127,7 @@ def shadow_metrics(since):
             continue
         n += 1
         oid = r.get("order_id")
+        decision_events.append((str(oid) if oid is not None else None, t))
         if oid is not None:
             order_ids.add(str(oid))
         if str(r.get("verdict")) == "KOORD":
@@ -144,6 +147,7 @@ def shadow_metrics(since):
         "n": n,
         "n_orders": len(order_ids),
         "shadow_oids": order_ids,
+        "decision_events": decision_events,
         "koord_pct": round(_pct(koord, n), 2),            # raw (transparencja / flat fallback)
         "koord_eb": koord_eb,
         "n_sel": n_sel,
@@ -158,8 +162,9 @@ def shadow_metrics(since):
 
 def log_signals(since):
     reorders = errors = 0
-    reorder_oids = set()  # distinct order_id z reorderem → dedup G2c (ten sam order re-ewaluowany
-                          # przez sweeper/czasówkę emituje wiele linii; liczymy ORDER raz)
+    reorder_oids = set()  # distinct order_id z reorderem (legacy, all-tick — diagnostyka raw)
+    reorder_events = {}   # #6a audyt: oid → [ts linii reorder]. Per-DECYZJA G2c matchuje do ts
+                          # proposala (±REORDER_MATCH_S), NIE „reorder w JAKIMKOLWIEK ticku".
     for base in LOGS:
         for line in _rot_lines(base, since):
             if "OBJM_LEXR6_SELECT" not in line:
@@ -174,7 +179,9 @@ def log_signals(since):
                 m = _REORDER_OID_RE.search(line)
                 if m:
                     reorder_oids.add(m.group(1))
-    return {"reorders": reorders, "errors": errors, "reorder_oids": reorder_oids}
+                    reorder_events.setdefault(m.group(1), []).append(t)
+    return {"reorders": reorders, "errors": errors,
+            "reorder_oids": reorder_oids, "reorder_events": reorder_events}
 
 
 def flag_state():
@@ -262,14 +269,25 @@ def gates(cur, log, flags, base, since, now):
     """Zwróć listę (gate, status, detal). status ∈ GO/STOP/WARN/INFO."""
     out = []
     n = cur["n"]
-    # G2c DEDUP: licznik = distinct order z reorderem ∩ ordery decydowane w oknie; mianownik =
-    # distinct order w shadow (NIE raw linie/raw n — to mieszało populacje i ×2 zawyżało, patrz
-    # diagnoza 70% 2026-06-26). Ta sama populacja, jedno źródło per order.
+    # G2c PER-DECYZJA (#6a audyt 28.06): pasmo 5-25% (~12%) skalibrowane PER-DECYZJA
+    # (12,1%=174/1435). Poprzednio licznik=order reorderowany w JAKIMKOLWIEK ticku ∩ decydowane,
+    # mianownik=distinct order → MIESZAŁO populacje (all-tick vs per-decyzja): 62,5% raport vs
+    # 17,9% prawda (×3,5) → fałszywy WARN „over-reorder". TERAZ: licznik = DECYZJE, których tick
+    # miał linię reorder TEGO orderu w ±REORDER_MATCH_S; mianownik = wszystkie decyzje.
+    decision_events = cur.get("decision_events") or []
+    reorder_events = log.get("reorder_events") or {}
+    _win = REORDER_MATCH_S
+    reorder_dec = sum(
+        1 for (oid, td) in decision_events
+        if oid and any(abs((tr - td).total_seconds()) <= _win for tr in reorder_events.get(oid, []))
+    )
+    n_dec = len(decision_events)
+    reorder_pct = _pct(reorder_dec, n_dec) if n_dec else 0.0
+    # legacy all-tick (diagnostyka raw — pokazywane obok, NIE bramkuje):
     shadow_oids = cur.get("shadow_oids") or set()
     reorder_oids = log.get("reorder_oids") or set()
     n_orders = cur.get("n_orders", n)
-    reorder_orders = len(reorder_oids & shadow_oids) if shadow_oids else len(reorder_oids)
-    reorder_pct = _pct(reorder_orders, n_orders) if n_orders else 0.0
+    reorder_orders_alltick = len(reorder_oids & shadow_oids) if shadow_oids else len(reorder_oids)
 
     # G1 zdrowie
     if log["errors"] > 0:
@@ -313,10 +331,12 @@ def gates(cur, log, flags, base, since, now):
     else:
         out.append(("G2b-auto-route", "INFO", f"ACK+ALERT {cur['ack_alert_pct']:.1f}% / AUTO {cur['auto_pct']:.1f}% (brak baseline)"))
 
-    # G2c reorder sanity (dedup po order_id; tylko gdy SELECT faktycznie ON)
+    # G2c reorder sanity (PER-DECYZJA ±match; tylko gdy SELECT faktycznie ON)
     if flags.get("select_on"):
-        _det = (f"dedup {reorder_pct:.1f}% ({reorder_orders}/{n_orders} orderów; oczek. ~12%, "
-                f"pas {REORDER_LO:.0f}-{REORDER_HI:.0f}%) | raw {log['reorders']} linii (multi-eval)")
+        _at_pct = _pct(reorder_orders_alltick, n_orders) if n_orders else 0.0
+        _det = (f"per-decyzja {reorder_pct:.1f}% ({reorder_dec}/{n_dec} decyzji z reorderem ±{_win:.0f}s; "
+                f"oczek. ~12%, pas {REORDER_LO:.0f}-{REORDER_HI:.0f}%) | all-tick {reorder_orders_alltick}/{n_orders} "
+                f"ord = {_at_pct:.1f}% (diagnostyka, ZAWYŻONE ×~3,5) | raw {log['reorders']} linii")
         st = "WARN" if (reorder_pct < REORDER_LO or reorder_pct > REORDER_HI) else "GO"
         out.append(("G2c-reorder", st, _det))
     else:
