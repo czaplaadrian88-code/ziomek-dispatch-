@@ -29,10 +29,24 @@ OUT = f"{BASE}/dispatch_state/drive_speed_overshoot_verdict.txt"
 WARSAW = timezone(timedelta(hours=2))
 # Flip flagi ON (UTC). Override --flip.
 FLIP_DEFAULT = "2026-06-26T17:25:22+00:00"
+# #5 audyt 28.06: flaga ENABLE_DRIVE_SPEED_TIER_CORRECTION była ON tylko ~15 min (flip→rollback
+# 17:40 UTC), potem OFF (dziś OFF). BEZ górnej granicy kohorta „ON" (delivered_at>=flip) łapała
+# 98% dostaw PRZY FLADZE OFF (po rollbacku) → fałszywe CLEAN „korekta trafna". ON = [flip, flip_end);
+# po flip_end flaga OFF → ani ON ani clean-baseline → POMIŃ. Gdy ON za małe = N/A, NIE CLEAN.
+FLIP_END_DEFAULT = "2026-06-26T17:40:00+00:00"
 AFFECTED = {"gold", "std+", "std"}
 # Progi werdyktu (minuty / pkt proc.)
 BIAS_ALARM_MIN = 2.0       # mediana delivered-vs-pred > +2 min ON = overshoot
 LATE_FRAC_ALARM_PP = 12.0  # wzrost % late-vs-pred ON vs baseline > 12pp = ALARM
+
+
+def _flag_on(name):
+    """Efektywny stan flagi z flags.json (ta flaga jest hot-reload w flags.json, nie env-frozen)."""
+    try:
+        with open(f"{BASE}/scripts/flags.json") as f:
+            return bool(json.load(f).get(name, False))
+    except Exception:
+        return False
 
 
 def _p(s):
@@ -59,8 +73,9 @@ def _deliv_bias(r):
     return (a - p).total_seconds() / 60.0
 
 
-def compute(flip_iso):
+def compute(flip_iso, flip_end_iso=None):
     flip = _p(flip_iso)
+    flip_end = _p(flip_end_iso) if flip_end_iso else None
     tiers = json.load(open(TIERS))
     rows = []
     with open(CALIB) as f:
@@ -85,7 +100,12 @@ def compute(flip_iso):
         if bias is None:
             continue
         rec = {"tier": t, "bias": bias}
-        (on if d >= flip else base).append(rec)
+        # #5 audyt: ON = [flip, flip_end); po flip_end flaga OFF (rollback) → wyklucz (ani ON ani baseline)
+        if d < flip:
+            base.append(rec)
+        elif flip_end is None or d < flip_end:
+            on.append(rec)
+        # else d >= flip_end: flaga cofnięta → POMIŃ (NIE wlicz do ON ani baseline)
 
     def agg(rs):
         b = [x["bias"] for x in rs]
@@ -103,12 +123,30 @@ def compute(flip_iso):
     res["per_tier_ON"] = {
         t: agg([x for x in on if x["tier"] == t]) for t in sorted(AFFECTED)
     }
+    # #5 audyt 28.06: korekta NIE jest LIVE (flaga OFF/cofnięta) → werdykt BEZPRZEDMIOTOWY = N/A.
+    # Bez tego „CLEAN" (na kohorcie delivered_at, której flaga w ogóle nie dotknęła) sugerowałby
+    # przyszłej sesji „zostaw/wskrześ korektę" — a była świadomie cofnięta (mis-targeted; właściwy
+    # lewar = dwell-parytet). delivered_at ≠ czas DECYZJI, więc nawet okno [flip,flip_end) to proxy
+    # — definitywny werdykt wymaga per-decyzja stempla flagi; przy OFF i tak nie ma czego mierzyć.
+    if not _flag_on("ENABLE_DRIVE_SPEED_TIER_CORRECTION"):
+        res["verdict"] = "N/A"
+        res["note"] = ("ENABLE_DRIVE_SPEED_TIER_CORRECTION = OFF (cofnieta 26.06 ~17:40 UTC) — korekta "
+                       "NIE jest LIVE, nie ma czego ocenic. NIE wskrzeszac na podstawie tego werdyktu; "
+                       "wlasciwy lewar = dwell-parytet PLAN_RECHECK_TIER_DWELL (LIVE).")
+        return res
     # Werdykt
     o, bl = res["ON"], res["baseline"]
     alarms = []
     if o.get("n", 0) < 8:
-        verdict = "INCONCLUSIVE"
-        note = f"za mała próba ON (n={o.get('n',0)}<8) — poczekaj na pełny peak"
+        if flip_end is not None:
+            verdict = "N/A"
+            note = (f"flaga ON tylko [{flip_iso} .. {flip_end_iso}] (rollback po ~15 min, dzis OFF); "
+                    f"kohorta ON ograniczona do okna = n={o.get('n',0)}<8 -> KOREKTY NIE DA SIE OCENIC. "
+                    f"NIE czytac jako CLEAN/zostaw-korekte: byla swiadomie cofnieta (mis-targeted; "
+                    f"wlasciwy lewar = dwell-parytet PLAN_RECHECK_TIER_DWELL).")
+        else:
+            verdict = "INCONCLUSIVE"
+            note = f"za mała próba ON (n={o.get('n',0)}<8) — poczekaj na pełny peak"
     else:
         if o["bias_med"] > BIAS_ALARM_MIN:
             alarms.append(f"bias ON med={o['bias_med']:+}min > +{BIAS_ALARM_MIN} = OVERSHOOT (dostawy później niż ETA)")
@@ -139,9 +177,11 @@ def fmt(res):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--flip", default=FLIP_DEFAULT)
+    ap.add_argument("--flip-end", default=FLIP_END_DEFAULT, dest="flip_end",
+                    help="koniec okna ON (rollback flagi); po nim flaga OFF → wykluczone. Pusty=bez granicy.")
     ap.add_argument("--notify", action="store_true")
     a = ap.parse_args()
-    res = compute(a.flip)
+    res = compute(a.flip, a.flip_end or None)
     txt = fmt(res)
     print(txt)
     try:
