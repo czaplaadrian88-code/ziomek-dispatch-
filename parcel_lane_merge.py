@@ -22,7 +22,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dispatch_v2 import common as C
+from dispatch_v2 import event_bus
 from dispatch_v2 import state_machine as sm
+
+# Pola payloadu NEW_ORDER czytane przez shadow_dispatcher._event_to_pipeline.
+_NEW_ORDER_FIELDS = (
+    "restaurant", "delivery_address", "pickup_coords", "delivery_coords",
+    "pickup_at_warsaw", "czas_kuriera_warsaw", "czas_kuriera_hhmm",
+    "address_id", "order_type", "created_at_utc",
+)
 
 log = logging.getLogger("parcel_lane_merge")
 
@@ -68,12 +76,19 @@ def run() -> dict:
     stats = {"enabled": True, "created": 0, "kept": 0, "retired": 0}
 
     # 1. NOWE paczki → utwórz; ISTNIEJĄCE → zostaw silnikowi (bez clobberu).
+    #    ZAWSZE emituj NEW_ORDER (idempotent po event_id) → shadow_dispatcher PROPONUJE
+    #    paczkę jak gastro (silnik jest event-driven, nie skanuje orders_state).
+    stats["emitted"] = 0
     for oid, entry in snap.items():
         if oid in state:
             stats["kept"] += 1
-            continue
-        sm.upsert_order(oid, entry, event="PARCEL_LANE_NEW")
-        stats["created"] += 1
+        else:
+            sm.upsert_order(oid, entry, event="PARCEL_LANE_NEW")
+            stats["created"] += 1
+        payload = {k: entry.get(k) for k in _NEW_ORDER_FIELDS}
+        if event_bus.emit("NEW_ORDER", order_id=str(oid), payload=payload,
+                          event_id=f"{oid}_NEW_ORDER_parcel"):
+            stats["emitted"] += 1
 
     # 2. Sprzątanie: paczki w stanie, których już nie ma w snapshocie (anulowana/dostarczona/usunięta).
     for oid, so in list(state.items()):

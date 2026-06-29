@@ -29,8 +29,14 @@ def test_merge_creates_new_parcel(monkeypatch):
     created = []
     monkeypatch.setattr(plm.sm, "upsert_order", lambda oid, e, event=None: created.append((oid, event)))
     monkeypatch.setattr(plm.sm, "set_status", lambda *a, **k: None)
+    emitted = []
+    monkeypatch.setattr(plm.event_bus, "emit",
+                        lambda et, order_id=None, payload=None, event_id=None: emitted.append((et, order_id, event_id)) or event_id)
     stats = plm.run()
     assert stats["created"] == 1 and created == [("900000005", "PARCEL_LANE_NEW")]
+    # NEW_ORDER wyemitowany → shadow_dispatcher zaproponuje paczkę
+    assert stats["emitted"] == 1
+    assert emitted == [("NEW_ORDER", "900000005", "900000005_NEW_ORDER_parcel")]
 
 
 def test_merge_keeps_existing_no_clobber(monkeypatch):
@@ -42,6 +48,7 @@ def test_merge_keeps_existing_no_clobber(monkeypatch):
     upserts = []
     monkeypatch.setattr(plm.sm, "upsert_order", lambda *a, **k: upserts.append(a))
     monkeypatch.setattr(plm.sm, "set_status", lambda *a, **k: None)
+    monkeypatch.setattr(plm.event_bus, "emit", lambda *a, **k: None)  # już wyemitowany wcześniej
     stats = plm.run()
     assert stats["kept"] == 1 and stats["created"] == 0 and upserts == []
 
