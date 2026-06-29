@@ -84,6 +84,8 @@ def _index_entry_from_order(entry: dict, o: dict) -> dict:
         entry["address_text"] = o["delivery_address"]
     if o.get("pickup_address"):
         entry["pickup_text"] = o["pickup_address"]
+    if o.get("restaurant"):
+        entry["restaurant_name"] = o["restaurant"]
     if o.get("courier_id"):
         entry.setdefault("courier_id", str(o["courier_id"]))
     if o.get("delivered_at"):
@@ -258,6 +260,15 @@ def run(dry_run: bool = False, seed_history: bool = False) -> dict:
     dt, rt = [0], [0]
     _apply_trail(index, deliv, "address_text", "delivered_epoch", "deliv_trail_done", trail_by_c, now, dt)
     _apply_trail(index, rest, "pickup_text", "picked_up_epoch", "pickup_trail_done", trail_by_c, now, rt)
+
+    # Stempel nazwy restauracji na wpisach (konsola szuka pinezki restauracji po
+    # NAZWIE z feedu — `pickup_address` nie jest w obiekcie zlecenia koordynatora).
+    for e in index.values():
+        pt, nm = e.get("pickup_text"), e.get("restaurant_name")
+        if pt and nm:
+            k = apm.normalize_address(pt)
+            if k in rest:
+                rest[k]["restaurant_name"] = nm
 
     if not dry_run:
         apm.save_store(DELIV_STORE, deliv)
