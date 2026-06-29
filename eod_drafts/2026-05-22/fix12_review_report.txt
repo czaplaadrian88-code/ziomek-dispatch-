@@ -1,0 +1,10 @@
+FIX1+FIX2 — przegląd 2-dniowy (2026-05-22..2026-05-25), tag bug2-newdrop-fix-shadow-off-2026-05-22
+decyzji w oknie: 0 | z policzonym r1_new_drop (bag>=1): 0
+BEST dostałby FIX2 veto (km>2.5 & cos<0.5): 0
+BEST dostałby FIX1 zero (real_gap>10.0min = druga fala): 0
+BEST traci +30 którąkolwiek drogą: 0
+zmienia się najlepszy kurier po usunięciu +30: 0
+
+DECYZJA (człowiek/CC): jeśli sygnał realny i bez fałszywych trafień → flip flag ON
+(potem 2 dni walidacji zachowania, reguła 'dwudniowa walidacja w dispatchu').
+Jeśli mało danych / dużo borderline → korekta progów KM/COS. Kontekst: lessons #143, sprint_timeline ARCHIVE 2026-05-22.

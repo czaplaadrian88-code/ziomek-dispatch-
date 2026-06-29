@@ -1,0 +1,14 @@
+🔔 WERDYKT min-delivered-at shadow (przypomnienie 27.06)
+decyzje z metryką (non-null): 0 | changed (min-total≠live): 0 (0%)
+materialność <20% — przedłuż shadow ⚠
+wcześniej do klienta (changed): mediana 0.0 / p90 0.0 / max 0.0 min
+regresja floty (mda gorszy niż live, z 0 changed): R6 0 | spread 0 | late 0
+
+Werdykt (decyzja Adriana):
+  A = flip 'min-total' jako primary obiektyw selekcji (osobny sprint, mapa kompletności _late_pickup_score_first_key + _best_effort_* + objm_lexr6.lex_qual RAZEM)
+  B = dostroić istniejące committed_pickup+food_age do sumy 1:1
+  neither = jeśli regresja floty znacząca (psuje R6/spread/late)
+Kontekst: memory/min-delivered-at-shadow-2026-06-25.md, commit 60cfa57.
+⚠ Mało danych — rozważ przedłużenie shadowa zamiast werdyktu.
+
+[telegram sent=True] [result -> /root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-06-25/min_delivered_at_verdict_result.txt]

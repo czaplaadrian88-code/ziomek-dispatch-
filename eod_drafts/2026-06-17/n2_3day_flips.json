@@ -1,0 +1,23 @@
+{
+  "2026-06-14": {
+    "total_old_reject": 2722,
+    "fixed_intended": 1322,
+    "fixed_regress": 0,
+    "preserved": 1400,
+    "regress_detail": []
+  },
+  "2026-06-15": {
+    "total_old_reject": 873,
+    "fixed_intended": 346,
+    "fixed_regress": 0,
+    "preserved": 527,
+    "regress_detail": []
+  },
+  "2026-06-16": {
+    "total_old_reject": 815,
+    "fixed_intended": 400,
+    "fixed_regress": 0,
+    "preserved": 415,
+    "regress_detail": []
+  }
+}

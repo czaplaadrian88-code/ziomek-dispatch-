@@ -1,0 +1,6 @@
+2026-06-29 12:10:00 [INFO] dispatch_pipeline: V326_DEFAULT_CITY: Białystok
+=== B2 LIVE spot-check (okno 2026-06-29T09:00 .. 2026-06-29T12:00) ===
+E2 'pln' arm rekordow (>=2 kand): 6
+  z kandydatem no_gps/pre_shift:   3
+  ZYWY pick != stary stale-bucket: 1  (= fix zmienia pick na zywo = equal-treatment)
+  ZYWY pick == canon (_selection): 6/6  (powinno ~= all = fix deployed)

@@ -1,0 +1,594 @@
+================================================================================================
+N5-S2 SELECTION-IMPACT PROXY (PARALLEL, coeff=100) — does best-pick flip OFF->ON?
+RANK-A = shortest total_duration | RANK-B = lexical(committed-breach beyond tol, then duration)
+PROXY ONLY: real selection uses full scoring.py; penalty changes plan timing, not pool
+================================================================================================
+in-window rows: 9716 | decisions (groups): 868 | workers: 4
+
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=11, pairs=5), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=16, pairs=7), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=16, pairs=7), retry bez constraints
+2026-06-18 07:31:56 [ERROR] osrm_client: COORD_GUARD #1: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.32ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:31:56 [ERROR] osrm_client: COORD_GUARD #2: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.51ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:01 [ERROR] osrm_client: COORD_GUARD #3: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.19ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:01 [ERROR] osrm_client: COORD_GUARD #4: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.08ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:05 [ERROR] osrm_client: COORD_GUARD #5: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.72ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:05 [ERROR] osrm_client: COORD_GUARD #6: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.29ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:06 [ERROR] osrm_client: COORD_GUARD #1: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.03ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-18 07:32:06 [ERROR] osrm_client: COORD_GUARD #2: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.64ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-18 07:32:07 [ERROR] osrm_client: COORD_GUARD #3: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.58ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:07 [ERROR] osrm_client: COORD_GUARD #4: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.01ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:10 [ERROR] osrm_client: COORD_GUARD #5: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.82ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-18 07:32:10 [ERROR] osrm_client: COORD_GUARD #6: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.62ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-18 07:32:10 [ERROR] osrm_client: COORD_GUARD #7: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.85ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:10 [ERROR] osrm_client: COORD_GUARD #8: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.14ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:10 [ERROR] osrm_client: COORD_GUARD #9: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.79ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:32:10 [ERROR] osrm_client: COORD_GUARD #10: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.8ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:32:10 [ERROR] osrm_client: COORD_GUARD #7: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.27ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:10 [ERROR] osrm_client: COORD_GUARD #8: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.1ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:12 [ERROR] osrm_client: COORD_GUARD #11: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.85ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:32:12 [ERROR] osrm_client: COORD_GUARD #12: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.81ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:32:12 [ERROR] osrm_client: COORD_GUARD #13: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.89ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:12 [ERROR] osrm_client: COORD_GUARD #14: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.87ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:12 [ERROR] osrm_client: COORD_GUARD #15: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.47ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-18 07:32:12 [ERROR] osrm_client: COORD_GUARD #16: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.43ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-18 07:32:14 [ERROR] osrm_client: COORD_GUARD #9: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=9.52ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:14 [ERROR] osrm_client: COORD_GUARD #10: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.09ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:16 [ERROR] osrm_client: COORD_GUARD #17: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.85ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:16 [ERROR] osrm_client: COORD_GUARD #18: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.78ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:17 [ERROR] osrm_client: COORD_GUARD #19: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.16ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:17 [ERROR] osrm_client: COORD_GUARD #20: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.12ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:19 [ERROR] osrm_client: COORD_GUARD #11: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.07ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:19 [ERROR] osrm_client: COORD_GUARD #12: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.65ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.96ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.79ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.81ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.76ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=7.35ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.58ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:24 [ERROR] osrm_client: COORD_GUARD #13: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.21ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:24 [ERROR] osrm_client: COORD_GUARD #14: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.41ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=4, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.72ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=4, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.69ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:32:26 [ERROR] osrm_client: COORD_GUARD #1: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=4, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.91ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:32:26 [ERROR] osrm_client: COORD_GUARD #2: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=4, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.74ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.29ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.48ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.45ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.94ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:28 [ERROR] osrm_client: COORD_GUARD #15: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.89ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:32:28 [ERROR] osrm_client: COORD_GUARD #16: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=4.89ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:32:29 [ERROR] osrm_client: COORD_GUARD #17: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.2ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:29 [ERROR] osrm_client: COORD_GUARD #18: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.09ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=4.04ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=5.91ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.69ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.9ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:32:32 [ERROR] osrm_client: COORD_GUARD #19: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=8, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.64ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:32:32 [ERROR] osrm_client: COORD_GUARD #20: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=8, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=7.94ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.02ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.13ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.2ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.35ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=4, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.85ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=4, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.85ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.13ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.54ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.16ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.45ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.19ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.09ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.61ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.34ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.14ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.11ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.58ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.18ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=8, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=6.25ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=8, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.22ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.48ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.1ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.15ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.12ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=8, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.29ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=8, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.71ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.85ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.86ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:32:56 [ERROR] osrm_client: COORD_GUARD #1: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.77ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:32:56 [ERROR] osrm_client: COORD_GUARD #2: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.77ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=6.27ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.66ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:32:59 [ERROR] osrm_client: COORD_GUARD #3: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.02ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:32:59 [ERROR] osrm_client: COORD_GUARD #4: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.83ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.63ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.63ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:00 [ERROR] osrm_client: COORD_GUARD #5: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=6.96ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:33:00 [ERROR] osrm_client: COORD_GUARD #6: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=5.74ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.61ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.57ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:03 [ERROR] osrm_client: COORD_GUARD #7: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.86ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:33:03 [ERROR] osrm_client: COORD_GUARD #8: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.23ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:33:05 [ERROR] osrm_client: COORD_GUARD #3: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=7.04ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:05 [ERROR] osrm_client: COORD_GUARD #4: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=7.06ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:05 [ERROR] osrm_client: COORD_GUARD #9: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.78ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:33:05 [ERROR] osrm_client: COORD_GUARD #10: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.8ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:33:07 [ERROR] osrm_client: COORD_GUARD #5: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.21ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:07 [ERROR] osrm_client: COORD_GUARD #6: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.28ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:07 [ERROR] osrm_client: COORD_GUARD #11: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.15ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:07 [ERROR] osrm_client: COORD_GUARD #12: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.09ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:08 [ERROR] osrm_client: COORD_GUARD #13: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=6.65ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:08 [ERROR] osrm_client: COORD_GUARD #14: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.28ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:08 [ERROR] osrm_client: COORD_GUARD #7: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=4.49ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:09 [ERROR] osrm_client: COORD_GUARD #8: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.02ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:10 [ERROR] osrm_client: COORD_GUARD #9: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.08ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:10 [ERROR] osrm_client: COORD_GUARD #10: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.36ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:11 [ERROR] osrm_client: COORD_GUARD #15: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=5.34ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:11 [ERROR] osrm_client: COORD_GUARD #16: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.72ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:14 [ERROR] osrm_client: COORD_GUARD #11: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.89ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:14 [ERROR] osrm_client: COORD_GUARD #12: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.01ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:14 [ERROR] osrm_client: COORD_GUARD #17: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.46ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:33:14 [ERROR] osrm_client: COORD_GUARD #18: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.78ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+2026-06-18 07:33:16 [ERROR] osrm_client: COORD_GUARD #13: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+2026-06-18 07:33:16 [ERROR] osrm_client: COORD_GUARD #19: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.14ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-18 07:33:16 [ERROR] osrm_client: COORD_GUARD #14: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.23ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.39ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:16 [ERROR] osrm_client: COORD_GUARD #20: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=6.92ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:17 [ERROR] osrm_client: COORD_GUARD #15: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.92ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:17 [ERROR] osrm_client: COORD_GUARD #16: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.91ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.49ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.1ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=15, pairs=7), retry bez constraints
+2026-06-18 07:33:19 [ERROR] osrm_client: COORD_GUARD #17: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.79ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:19 [ERROR] osrm_client: COORD_GUARD #18: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.0ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=15, pairs=7), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=15, pairs=7), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.23ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.12ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:22 [ERROR] osrm_client: COORD_GUARD #19: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.96ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+2026-06-18 07:33:22 [ERROR] osrm_client: COORD_GUARD #20: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.0ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.94ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.88ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.13ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.08ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.01ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=4.84ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=4.93ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=4.74ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=15, pairs=7), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=15, pairs=7), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.85ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.53ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.62ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.56ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.82ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.92ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=1, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.19ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.11ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.1ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=3), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.13ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.94ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.49ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.92ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.88ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.17ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=6, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.99ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.82ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.79ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.82ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=5, pairs=1), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=0.79ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=2, falling back to greedy
+day         decisions multi-cand  flipA   A:worse/better/eq  flipB   B:worse/better/eq
+2026-06-14        397        397      0               0/0/0      0               0/0/0
+2026-06-15        224        222      0               0/0/0      1               0/0/1
+2026-06-16        223        223      0               0/0/0      0               0/0/0
+------------------------------------------------------------------------------------------------
+TOTAL             844        842      0               0/0/0      1               0/0/1
+
+multi-candidate decisions: 842
+RANK-A best-pick flips:    0 (0.0%) — worse 0 / better 0 / equal 0
+RANK-B best-pick flips:    1 (0.1%) — worse 0 / better 0 / equal 1
+
+--- RANK-B flip examples (committed-late of picked candidate OFF vs ON) ---
+   2026-06-15 oid=480944 OFF_pick_clate=4.5 ON_pick_clate=4.9 -> equal (tol=5.0)

@@ -1,0 +1,11 @@
+{
+  "drop_bundle": true,
+  "bundle_features_removed": [
+    "bag_size",
+    "bag_drops_pending",
+    "bag_pickup_pending",
+    "bag_size_category",
+    "bag_n_distinct_districts",
+    "bag_has_distant_drop"
+  ]
+}

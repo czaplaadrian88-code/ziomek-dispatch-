@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-20T13:53:14.583597+00:00",
+  "generated_at": "2026-06-20T15:07:00.882650+00:00",
   "method": "strict out-of-time: train < cutoff, forward = ostatnie N dni held-out, split po dacie",
   "forward_days": 14,
   "cutoff_date": "2026-04-07",

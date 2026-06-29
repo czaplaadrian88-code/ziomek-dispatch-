@@ -1,0 +1,9 @@
+🗺️ Geokod fallback Nominatim — podsumowanie wieczorne (od flipu 17:30 UTC)
+• Odzyski (RECOVERED): 3  |  nowe bbox-reject: 3  |  skuteczność: 50%
+• Błędy nowej ścieżki: 0  |  sygnały timeout Nominatim: 0
+• Odzyskane adresy: Poniatowskiego 2×1, Poniatowskiego 6×1, Eliasza 8×1
+• Wciąż nieodzyskane: Lodowa 12D×1, Zielna 13×1, Piasta 13×1
+✅ Flaga ZOSTAJE ON — odzysk realny, 0 błędów, 0 timeoutów Nominatim.
+Detal: pamięć geocode-nominatim-fallback-2026-06-15 · commit 6bb5814
+
+[alert priority=low wysłany]

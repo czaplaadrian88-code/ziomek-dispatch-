@@ -1,0 +1,16 @@
+=== FAZA 0: ARTEFAKT BUDŻETU vs STRUKTURALNE (food-age SLA regresje) ===
+okno 2026-06-13T00:00..2026-06-17T23:59 | eligible=5564 re-sim=1300 | prod_ms=200 hi_ms=2000 tries=2
+ortools-decyzji n=1282 | regresje@200ms R=9 (0.70%)
+
+  ARTEFAKT BUDŻETU (znika @ 2000ms): 4/9 = 44.4%
+  STRUKTURALNE  (zostaje @ 2000ms): 5/9 = 55.6%
+
+  artefakt po bag_size: {3: 1, 4: 1, 7: 2}
+  strukturalne po bag_size: {3: 4, 5: 1}
+
+  --- STRUKTURALNE case'y (ts, bag, sla_off, sla_on@200, sla_on@hi, dur@hi) ---
+    [2026-06-14T12:04:06] bag=5 sla 1→2@200 →2@hi dur=65.7
+    [2026-06-14T12:54:11] bag=3 sla 0→1@200 →1@hi dur=57.1
+    [2026-06-16T13:49:01] bag=3 sla 0→1@200 →1@hi dur=64.1
+    [2026-06-16T16:46:52] bag=3 sla 0→1@200 →1@hi dur=70.6
+    [2026-06-17T12:23:35] bag=3 sla 0→2@200 →2@hi dur=72.3

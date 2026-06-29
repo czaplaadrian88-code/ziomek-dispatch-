@@ -1,0 +1,27 @@
+predykcje rw_results: 1180   ground truth: 631   po join: 239
+
+=== PELEN SAMPLE (tier-1 + tier-2) ===
+bucket       n | OSRM bias  bcRMSE  bcMAE   p90 |  TT bias  bcRMSE  bcMAE   p90 | TT win%
+--------------------------------------------------------------------------------------------
+peak        54 |     -2.38    5.28   3.75  7.43 |    -0.17    5.30   3.74  8.80 |     57%
+shoulder   169 |     -2.49    6.49   4.31  9.71 |    -0.41    6.43   4.26  8.65 |     51%
+offpeak     16 |     -3.86    5.63   3.88  7.88 |    -3.05    5.48   3.63  6.44 |     50%
+RAZEM      239 |     -2.55    6.19   4.18  9.19 |    -0.53    6.17   4.17  8.53 |     51%
+  korelacja Pearson (predykcja vs realna jazda): OSRM r=0.425  TomTom r=0.437
+
+=== CROSS-CHECK tier-1 (zloty standard GPS, n=22) ===
+bucket       n | OSRM bias  bcRMSE  bcMAE   p90 |  TT bias  bcRMSE  bcMAE   p90 | TT win%
+--------------------------------------------------------------------------------------------
+peak         6 |     -2.17    1.77   1.61  2.55 |    +1.12    1.65   1.51  2.62 |     50%
+shoulder    15 |     -1.59    2.63   2.24  3.91 |    +0.68    1.46   1.15  2.51 |     73%
+offpeak      1 |     -3.98    0.00   0.00  0.00 |    -2.32    0.00   0.00  0.00 |     50%
+RAZEM       22 |     -1.86    2.42   2.07  3.55 |    +0.66    1.63   1.34  2.53 |     64%
+  korelacja Pearson (predykcja vs realna jazda): OSRM r=0.758  TomTom r=0.891
+
+============================================================
+GATE B — werdykt (pelen sample, bucket PEAK):
+  peak bcRMSE: OSRM 5.28 vs TomTom 5.30  (TomTom -0.02 min, -0%)  win-rate TomTom 57%
+  VERDICT: remis / marginalne → OSRM (Z3: prostsze, bez zaleznosci od API)
+
+tier-1 cross-check (peak):
+  NIEMIARODAJNY — peak n=6 < 25, zbieraj dalej

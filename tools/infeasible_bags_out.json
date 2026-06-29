@@ -1,0 +1,5821 @@
+{
+  "scanned": 1500,
+  "infeasible": 222,
+  "pct": 14.8,
+  "committed": 220,
+  "new_only": 2,
+  "deg_bad_coords": 165,
+  "deg_sentinel": 191,
+  "by_bag": {
+    "6": 5,
+    "5": 30,
+    "7": 18,
+    "4": 57,
+    "3": 112
+  },
+  "ladder": {
+    "L0_prodwin": 23,
+    "L1_nowin": 25,
+    "L3_bigroute": 29,
+    "L5_clamp_sentinel": 156,
+    "L6_clamp_nowin": 182
+  },
+  "soft": {
+    "50": {
+      "feas": 25,
+      "worse_committed": 22,
+      "worse_r6": 25,
+      "makespan_med": 92.89
+    },
+    "200": {
+      "feas": 25,
+      "worse_committed": 22,
+      "worse_r6": 25,
+      "makespan_med": 92.89
+    },
+    "1000": {
+      "feas": 25,
+      "worse_committed": 22,
+      "worse_r6": 25,
+      "makespan_med": 92.89
+    }
+  },
+  "max_open_over120": 5,
+  "rows": [
+    {
+      "order_id": "474405",
+      "bag": 6,
+      "has_committed": true,
+      "n_pickups": 6,
+      "max_open_min": 39.8,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": false,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 95.8,
+          "committed_breach": 22.4,
+          "r6_breach": 4
+        },
+        "200": {
+          "feas": true,
+          "makespan": 95.8,
+          "committed_breach": 22.4,
+          "r6_breach": 4
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 95.8,
+          "committed_breach": 22.4,
+          "r6_breach": 4
+        }
+      }
+    },
+    {
+      "order_id": "474407",
+      "bag": 6,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 29.8,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 87.3,
+          "committed_breach": 0.0,
+          "r6_breach": 2
+        },
+        "200": {
+          "feas": true,
+          "makespan": 87.3,
+          "committed_breach": 0.0,
+          "r6_breach": 2
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 87.3,
+          "committed_breach": 0.0,
+          "r6_breach": 2
+        }
+      }
+    },
+    {
+      "order_id": "474408",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 14.8,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 95.2,
+          "committed_breach": 0.0,
+          "r6_breach": 2
+        },
+        "200": {
+          "feas": true,
+          "makespan": 95.2,
+          "committed_breach": 0.0,
+          "r6_breach": 2
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 95.2,
+          "committed_breach": 0.0,
+          "r6_breach": 2
+        }
+      }
+    },
+    {
+      "order_id": "474409",
+      "bag": 6,
+      "has_committed": true,
+      "n_pickups": 6,
+      "max_open_min": 26.7,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 89.5,
+          "committed_breach": 36.2,
+          "r6_breach": 2
+        },
+        "200": {
+          "feas": true,
+          "makespan": 89.5,
+          "committed_breach": 36.2,
+          "r6_breach": 2
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 89.5,
+          "committed_breach": 36.2,
+          "r6_breach": 2
+        }
+      }
+    },
+    {
+      "order_id": "474412",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 8,
+      "max_open_min": 32.4,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 89.0,
+          "committed_breach": 53.0,
+          "r6_breach": 5
+        },
+        "200": {
+          "feas": true,
+          "makespan": 89.0,
+          "committed_breach": 53.0,
+          "r6_breach": 5
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 89.0,
+          "committed_breach": 53.0,
+          "r6_breach": 5
+        }
+      }
+    },
+    {
+      "order_id": "474413",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 30.4,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 99.8,
+          "committed_breach": 29.6,
+          "r6_breach": 3
+        },
+        "200": {
+          "feas": true,
+          "makespan": 99.8,
+          "committed_breach": 29.6,
+          "r6_breach": 3
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 99.8,
+          "committed_breach": 29.6,
+          "r6_breach": 3
+        }
+      }
+    },
+    {
+      "order_id": "474419",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 29.8,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 90.2,
+          "committed_breach": 33.1,
+          "r6_breach": 4
+        },
+        "200": {
+          "feas": true,
+          "makespan": 90.2,
+          "committed_breach": 33.1,
+          "r6_breach": 4
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 90.2,
+          "committed_breach": 33.1,
+          "r6_breach": 4
+        }
+      }
+    },
+    {
+      "order_id": "474418",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 59.4,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 96.0,
+          "committed_breach": 38.6,
+          "r6_breach": 4
+        },
+        "200": {
+          "feas": true,
+          "makespan": 96.0,
+          "committed_breach": 38.6,
+          "r6_breach": 4
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 96.0,
+          "committed_breach": 38.6,
+          "r6_breach": 4
+        }
+      }
+    },
+    {
+      "order_id": "474420",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 19.1,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 92.5,
+          "committed_breach": 44.6,
+          "r6_breach": 4
+        },
+        "200": {
+          "feas": true,
+          "makespan": 92.5,
+          "committed_breach": 44.6,
+          "r6_breach": 4
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 92.5,
+          "committed_breach": 44.6,
+          "r6_breach": 4
+        }
+      }
+    },
+    {
+      "order_id": "474422",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 29.5,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 92.1,
+          "committed_breach": 15.3,
+          "r6_breach": 5
+        },
+        "200": {
+          "feas": true,
+          "makespan": 92.1,
+          "committed_breach": 15.3,
+          "r6_breach": 5
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 92.1,
+          "committed_breach": 15.3,
+          "r6_breach": 5
+        }
+      }
+    },
+    {
+      "order_id": "474423",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 15.8,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 93.4,
+          "committed_breach": 39.2,
+          "r6_breach": 4
+        },
+        "200": {
+          "feas": true,
+          "makespan": 93.4,
+          "committed_breach": 39.2,
+          "r6_breach": 4
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 93.4,
+          "committed_breach": 39.2,
+          "r6_breach": 4
+        }
+      }
+    },
+    {
+      "order_id": "474418",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 47.8,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 91.0,
+          "committed_breach": 7.2,
+          "r6_breach": 5
+        },
+        "200": {
+          "feas": true,
+          "makespan": 91.0,
+          "committed_breach": 7.2,
+          "r6_breach": 5
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 91.0,
+          "committed_breach": 7.2,
+          "r6_breach": 5
+        }
+      }
+    },
+    {
+      "order_id": "474426",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.6,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 105.9,
+          "committed_breach": 2.0,
+          "r6_breach": 6
+        },
+        "200": {
+          "feas": true,
+          "makespan": 105.9,
+          "committed_breach": 2.0,
+          "r6_breach": 6
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 105.9,
+          "committed_breach": 2.0,
+          "r6_breach": 6
+        }
+      }
+    },
+    {
+      "order_id": "474418",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 42.5,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 91.0,
+          "committed_breach": 12.6,
+          "r6_breach": 6
+        },
+        "200": {
+          "feas": true,
+          "makespan": 91.0,
+          "committed_breach": 12.6,
+          "r6_breach": 6
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 91.0,
+          "committed_breach": 12.6,
+          "r6_breach": 6
+        }
+      }
+    },
+    {
+      "order_id": "474427",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 24.6,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 88.6,
+          "committed_breach": 10.8,
+          "r6_breach": 6
+        },
+        "200": {
+          "feas": true,
+          "makespan": 88.6,
+          "committed_breach": 10.8,
+          "r6_breach": 6
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 88.6,
+          "committed_breach": 10.8,
+          "r6_breach": 6
+        }
+      }
+    },
+    {
+      "order_id": "474428",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 24.9,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 91.6,
+          "committed_breach": 19.2,
+          "r6_breach": 6
+        },
+        "200": {
+          "feas": true,
+          "makespan": 91.6,
+          "committed_breach": 19.2,
+          "r6_breach": 6
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 91.6,
+          "committed_breach": 19.2,
+          "r6_breach": 6
+        }
+      }
+    },
+    {
+      "order_id": "474429",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.6,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 89.6,
+          "committed_breach": 7.3,
+          "r6_breach": 6
+        },
+        "200": {
+          "feas": true,
+          "makespan": 89.6,
+          "committed_breach": 7.3,
+          "r6_breach": 6
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 89.6,
+          "committed_breach": 7.3,
+          "r6_breach": 6
+        }
+      }
+    },
+    {
+      "order_id": "474430",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.8,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 90.2,
+          "committed_breach": 8.8,
+          "r6_breach": 6
+        },
+        "200": {
+          "feas": true,
+          "makespan": 90.2,
+          "committed_breach": 8.8,
+          "r6_breach": 6
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 90.2,
+          "committed_breach": 8.8,
+          "r6_breach": 6
+        }
+      }
+    },
+    {
+      "order_id": "474431",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.9,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 94.1,
+          "committed_breach": 15.9,
+          "r6_breach": 6
+        },
+        "200": {
+          "feas": true,
+          "makespan": 94.1,
+          "committed_breach": 15.9,
+          "r6_breach": 6
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 94.1,
+          "committed_breach": 15.9,
+          "r6_breach": 6
+        }
+      }
+    },
+    {
+      "order_id": "474432",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 34.8,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 92.9,
+          "committed_breach": 12.5,
+          "r6_breach": 6
+        },
+        "200": {
+          "feas": true,
+          "makespan": 92.9,
+          "committed_breach": 12.5,
+          "r6_breach": 6
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 92.9,
+          "committed_breach": 12.5,
+          "r6_breach": 6
+        }
+      }
+    },
+    {
+      "order_id": "474437",
+      "bag": 7,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 49.6,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 102.6,
+          "committed_breach": 52.9,
+          "r6_breach": 6
+        },
+        "200": {
+          "feas": true,
+          "makespan": 102.6,
+          "committed_breach": 52.9,
+          "r6_breach": 6
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 102.6,
+          "committed_breach": 52.9,
+          "r6_breach": 6
+        }
+      }
+    },
+    {
+      "order_id": "474439",
+      "bag": 7,
+      "has_committed": false,
+      "n_pickups": 1,
+      "max_open_min": 14.5,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 101.0,
+          "committed_breach": 0.0,
+          "r6_breach": 6
+        },
+        "200": {
+          "feas": true,
+          "makespan": 101.0,
+          "committed_breach": 0.0,
+          "r6_breach": 6
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 101.0,
+          "committed_breach": 0.0,
+          "r6_breach": 6
+        }
+      }
+    },
+    {
+      "order_id": "474481",
+      "bag": 6,
+      "has_committed": true,
+      "n_pickups": 6,
+      "max_open_min": 51.6,
+      "bad_coords": 1,
+      "sentinel_cells": 26,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474482",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 6,
+      "max_open_min": 48.9,
+      "bad_coords": 1,
+      "sentinel_cells": 24,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474483",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 6,
+      "max_open_min": 47.9,
+      "bad_coords": 1,
+      "sentinel_cells": 24,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474484",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 6,
+      "max_open_min": 42.9,
+      "bad_coords": 1,
+      "sentinel_cells": 24,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474485",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 30.2,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474486",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 27.2,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474487",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 22.5,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474488",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 45.9,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474489",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.8,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474490",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.8,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474491",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.6,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474492",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 39.7,
+      "bad_coords": 1,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474493",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 34.5,
+      "bad_coords": 1,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474494",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 33.5,
+      "bad_coords": 1,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474495",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 32.8,
+      "bad_coords": 1,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474560",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.7,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474561",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.8,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474562",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.6,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474563",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 14.6,
+      "bad_coords": 1,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474577",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 14.1,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474580",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 22.7,
+      "bad_coords": 2,
+      "sentinel_cells": 26,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474595",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 29.6,
+      "bad_coords": 2,
+      "sentinel_cells": 26,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474596",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 18.8,
+      "bad_coords": 2,
+      "sentinel_cells": 26,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474600",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 37.7,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474602",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 59.7,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474603",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 39.4,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474604",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 45.7,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474616",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 28.1,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474615",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 28.0,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474617",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 29.7,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474618",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 24.5,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474620",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 14.6,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474621",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 14.7,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474622",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.6,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474623",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.6,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474624",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 19.7,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474625",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 15.6,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474626",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 19.7,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474627",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 24.6,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474631",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.8,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474632",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.9,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474633",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.6,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474634",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.6,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474650",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.6,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 104.0,
+          "committed_breach": 10.2,
+          "r6_breach": 2
+        },
+        "200": {
+          "feas": true,
+          "makespan": 104.0,
+          "committed_breach": 10.2,
+          "r6_breach": 2
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 104.0,
+          "committed_breach": 10.2,
+          "r6_breach": 2
+        }
+      }
+    },
+    {
+      "order_id": "474691",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 24.8,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474692",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 38.2,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474693",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 35.6,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474740",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 16.8,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474741",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 34.6,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474742",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.7,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474743",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.8,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474744",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.6,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474745",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.7,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474782",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 39.3,
+      "bad_coords": 3,
+      "sentinel_cells": 42,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474783",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 59.6,
+      "bad_coords": 3,
+      "sentinel_cells": 42,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474785",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.7,
+      "bad_coords": 3,
+      "sentinel_cells": 42,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474784",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 60.2,
+      "bad_coords": 3,
+      "sentinel_cells": 42,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474786",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.7,
+      "bad_coords": 3,
+      "sentinel_cells": 42,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474784",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 143.3,
+      "bad_coords": 0,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474784",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 138.2,
+      "bad_coords": 0,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474795",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.8,
+      "bad_coords": 0,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474784",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 133.1,
+      "bad_coords": 0,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474798",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 24.1,
+      "bad_coords": 0,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474784",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 127.9,
+      "bad_coords": 0,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474799",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 26.8,
+      "bad_coords": 0,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474784",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 122.8,
+      "bad_coords": 0,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474800",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 29.8,
+      "bad_coords": 0,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474801",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 29.6,
+      "bad_coords": 0,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474784",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 117.7,
+      "bad_coords": 0,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474784",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 112.5,
+      "bad_coords": 0,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474802",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 39.4,
+      "bad_coords": 0,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474784",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 107.4,
+      "bad_coords": 0,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474803",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.6,
+      "bad_coords": 0,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474816",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 34.7,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474815",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.7,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474817",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 17.1,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474818",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.8,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474819",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 29.8,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474821",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 47.3,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474822",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 44.3,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474823",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 43.3,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474824",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 39.6,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474825",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 36.6,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474826",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 34.6,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474827",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 33.9,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474828",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 27.5,
+      "bad_coords": 2,
+      "sentinel_cells": 26,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474829",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 28.7,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474830",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 23.3,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474830",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 35.3,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": true,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474830",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 25.3,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474830",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 19.8,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": true,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474831",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 24.8,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474832",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 24.3,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474832",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 22.3,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": false,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 117.3,
+          "committed_breach": 51.4,
+          "r6_breach": 2
+        },
+        "200": {
+          "feas": true,
+          "makespan": 117.3,
+          "committed_breach": 51.4,
+          "r6_breach": 2
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 109.5,
+          "committed_breach": 14.8,
+          "r6_breach": 2
+        }
+      }
+    },
+    {
+      "order_id": "474833",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 23.3,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474834",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 22.2,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474835",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 18.2,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474836",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 17.8,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474837",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.8,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474838",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.8,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474839",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 49.9,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474840",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.7,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474842",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 40.5,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474841",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 40.5,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474844",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 37.4,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474845",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 37.0,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474846",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 25.7,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474846",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 24.6,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": true,
+      "l1_nowin": true,
+      "l3_bigroute": true,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": true,
+          "makespan": 103.5,
+          "committed_breach": 19.3,
+          "r6_breach": 1
+        },
+        "200": {
+          "feas": true,
+          "makespan": 103.5,
+          "committed_breach": 19.3,
+          "r6_breach": 1
+        },
+        "1000": {
+          "feas": true,
+          "makespan": 103.5,
+          "committed_breach": 19.3,
+          "r6_breach": 1
+        }
+      }
+    },
+    {
+      "order_id": "474846",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 6,
+      "max_open_min": 36.7,
+      "bad_coords": 1,
+      "sentinel_cells": 24,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474847",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 21.1,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": true,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474848",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 15.5,
+      "bad_coords": 0,
+      "sentinel_cells": 0,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": true,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474862",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 33.3,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474863",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.3,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474864",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 39.7,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474864",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 39.7,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474865",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 20.0,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474865",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 23.0,
+      "bad_coords": 2,
+      "sentinel_cells": 34,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474867",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 24.8,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474867",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 24.8,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474868",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 29.6,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474868",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.6,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474869",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 49.6,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474870",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 39.6,
+      "bad_coords": 2,
+      "sentinel_cells": 30,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474872",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 29.8,
+      "bad_coords": 2,
+      "sentinel_cells": 26,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474873",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 14.6,
+      "bad_coords": 2,
+      "sentinel_cells": 26,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474874",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 39.7,
+      "bad_coords": 2,
+      "sentinel_cells": 26,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474934",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 24.6,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474950",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.8,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474977",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 37.5,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474978",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 22.3,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474979",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 14.7,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474982",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 19.6,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "474988",
+      "bag": 6,
+      "has_committed": true,
+      "n_pickups": 6,
+      "max_open_min": 32.3,
+      "bad_coords": 1,
+      "sentinel_cells": 26,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475022",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 14.7,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475030",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 19.7,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475031",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 14.6,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": false,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475031",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 31.4,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475032",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 14.7,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475032",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 30.4,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475034",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.3,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475034",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 14.6,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475033",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.2,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475033",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 24.6,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475035",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.8,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475035",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 29.8,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475036",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 14.8,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475036",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 25.1,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475037",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 14.5,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475037",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 23.0,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475038",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 29.6,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475038",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 29.6,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475039",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 19.8,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475039",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 20.8,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475040",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 36.1,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475040",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 19.7,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475040",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 19.7,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475041",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 39.7,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475041",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 39.7,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475041",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 39.7,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475042",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 39.5,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475042",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 39.5,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475042",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 39.5,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475043",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 49.6,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475043",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 49.6,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475043",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 49.6,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475045",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 30.5,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475045",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 36.5,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475044",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 49.5,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475044",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 49.5,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475046",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 30.1,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475046",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 36.1,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475047",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 36.7,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475047",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 24.7,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475048",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 36.7,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475048",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 24.7,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475049",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 36.2,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475049",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 19.6,
+      "bad_coords": 1,
+      "sentinel_cells": 16,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475050",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 4,
+      "max_open_min": 28.0,
+      "bad_coords": 1,
+      "sentinel_cells": 18,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475050",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 51.0,
+      "bad_coords": 1,
+      "sentinel_cells": 22,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475051",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 43.2,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475052",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 42.5,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475053",
+      "bag": 4,
+      "has_committed": true,
+      "n_pickups": 5,
+      "max_open_min": 35.9,
+      "bad_coords": 1,
+      "sentinel_cells": 20,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475055",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 6,
+      "max_open_min": 34.6,
+      "bad_coords": 1,
+      "sentinel_cells": 24,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475054",
+      "bag": 5,
+      "has_committed": true,
+      "n_pickups": 6,
+      "max_open_min": 39.6,
+      "bad_coords": 1,
+      "sentinel_cells": 24,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475061",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 24.7,
+      "bad_coords": 1,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475062",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 29.8,
+      "bad_coords": 1,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475065",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 34.2,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": false,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475066",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 26.9,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475067",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 21.5,
+      "bad_coords": 1,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475073",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 25.5,
+      "bad_coords": 0,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475074",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 24.4,
+      "bad_coords": 0,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475076",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 19.8,
+      "bad_coords": 0,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475077",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 39.6,
+      "bad_coords": 0,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475078",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 19.8,
+      "bad_coords": 0,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475079",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 3,
+      "max_open_min": 19.6,
+      "bad_coords": 0,
+      "sentinel_cells": 14,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475083",
+      "bag": 3,
+      "has_committed": false,
+      "n_pickups": 2,
+      "max_open_min": 19.8,
+      "bad_coords": 0,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475084",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 33.1,
+      "bad_coords": 0,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475085",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 32.5,
+      "bad_coords": 0,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475086",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 34.4,
+      "bad_coords": 0,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    },
+    {
+      "order_id": "475087",
+      "bag": 3,
+      "has_committed": true,
+      "n_pickups": 2,
+      "max_open_min": 29.8,
+      "bad_coords": 0,
+      "sentinel_cells": 12,
+      "l0_prodwin": false,
+      "l1_nowin": false,
+      "l3_bigroute": false,
+      "l5_clamp": true,
+      "l6_clamp_nowin": true,
+      "soft": {
+        "50": {
+          "feas": false
+        },
+        "200": {
+          "feas": false
+        },
+        "1000": {
+          "feas": false
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+[2026-05-14T11:48:23.784990+00:00] monitor start; until=2026-05-14T18:40:00+00:00
+[2026-05-14T11:48:23.785274+00:00] n=20 ok=14 err=6 buckets=['shoulder']
+[2026-05-14T12:00:23.794307+00:00] n=30 ok=22 err=8 buckets=['shoulder']
+[2026-05-14T13:00:23.931699+00:00] n=40 ok=30 err=10 buckets=['shoulder', 'peak']
+[2026-05-14T14:00:24.015060+00:00] n=50 ok=38 err=12 buckets=['shoulder', 'peak']
+[2026-05-14T15:00:24.101361+00:00] n=60 ok=47 err=13 buckets=['shoulder', 'peak']
+[2026-05-14T16:00:24.193400+00:00] n=70 ok=56 err=14 buckets=['shoulder', 'peak']
+[2026-05-14T17:00:24.298663+00:00] n=80 ok=64 err=16 buckets=['shoulder', 'peak']
+[2026-05-14T18:40:24.498731+00:00] monitor done (until reached)

@@ -1,0 +1,32 @@
+⚠ Front-load 2026-06-07: 0 wpisow w plan_recheck.log za ten dzien (plan-recheck nie biegl? sprawdz timer).
+
+[notify] telegram sent=True
+🚚 Front-load Ziomek — niedziela 2026-06-07 (21:00 check)
+
+Regeny near-pickup: 203 (lunch UTC09-12=65, dinner UTC15-18=45)
+  godzinowo: 09h:4 10h:17 11h:17 12h:27 13h:25 14h:68 15h:45
+  kurierzy z regenem: 400×48, 484×44, 123×21, 503×14, 354×13, 413×11
+
+Naruszenia R6 w planach: 359/435 sla=0 (17.5% breach)
+  worki z sla>0:
+   • 2026-06-07 10:11:42 sla=1 stops=3 seq=['478927', '478924']
+   • 2026-06-07 10:16:47 sla=1 stops=5 seq=['478930', '478927', '478924']
+   • 2026-06-07 10:21:57 sla=1 stops=7 seq=['478930', '478927', '478934', '478924']
+   • 2026-06-07 10:27:07 sla=1 stops=7 seq=['478930', '478927', '478934', '478924']
+   • 2026-06-07 10:52:34 sla=1 stops=5 seq=['478941', '478936', '478935']
+   • 2026-06-07 10:57:37 sla=1 stops=4 seq=['478934', '478927', '478930']
+   • 2026-06-07 10:57:37 sla=1 stops=5 seq=['478941', '478936', '478935']
+   • 2026-06-07 11:18:06 sla=1 stops=3 seq=['478953', '478934']
+  rozmiary workow (stops): 1:13 2:56 3:70 4:100 5:60 6:71 7:29 8:20 9:6 10:10
+
+Churn: auto_invalidated=0, pickup_refloored=58, gap_fill-fail=4, bledy=0
+Wolumen: max active_plans=13
+
+Prep-variance anomalie (FAIL-04 shadow): 41/317 decyzji
+  restauracje: Paradiso×10(gap~18.0), Mama Thai Bistro×10(gap~18.0), Goodboy×7(gap~16.0), Pruszynka Restauracja×5(gap~16.0), Gym Fit Food×4(gap~16.0), Trattoria Angelino Pasta Wino×3(gap~16.0)
+
+vs sobota 06.06: 40 regen, 51/52 sla=0, 0 bledow, 1-2 akt.
+
+WERDYKT: ⚠ churn: auto_invalidated=0 refloored=58 | ⚠ R6 17.5% naruszen (>5%) | ✅ realny wolumen (max 13 akt. kurierow) | ✅ FAIL-04 wykryl 41 anomalii prep
+
+[notify] telegram sent=True

@@ -1,0 +1,1219 @@
+{
+  "2026-06-14": {
+    "n": 397,
+    "faithful": 389,
+    "winner_changed": 17,
+    "POPRAWA": 7,
+    "NEUTRAL": 0,
+    "REGRESJA": 0,
+    "REGRESJA_SOFT": 7,
+    "indeterminate": 3,
+    "regress_list": [],
+    "regress_soft_list": [
+      {
+        "oid": "480619",
+        "ts": "2026-06-14T11:39:00.081289+00:00",
+        "old_cid": "447",
+        "old_name": "Dawid Kalinowski",
+        "old_picked": 1,
+        "old_feas": "MAYBE",
+        "old_score": -71.1,
+        "new_cid": "509",
+        "new_name": "Dariusz Maruszak",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": false,
+        "new_score_adj": -68.5,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 11.0,
+          "delta": {
+            "wait": [
+              1.5,
+              11.5
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480662",
+        "ts": "2026-06-14T12:47:30.030488+00:00",
+        "old_cid": "409",
+        "old_name": "Mateusz Brodowski",
+        "old_picked": 1,
+        "old_feas": "MAYBE",
+        "old_score": -59.7,
+        "new_cid": "447",
+        "new_name": "Dawid Kalinowski",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": false,
+        "new_score_adj": -42.1,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 13.1,
+          "delta": {
+            "wait": [
+              4.3,
+              11.5
+            ],
+            "new_late": [
+              1.0,
+              6.0
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480677",
+        "ts": "2026-06-14T13:02:32.978860+00:00",
+        "old_cid": "413",
+        "old_name": "Mateusz Ostapczuk",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": -265.1,
+        "new_cid": "409",
+        "new_name": "Mateusz Brodowski",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -255.3,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 2.5,
+          "delta": {
+            "wait": [
+              0.5,
+              8.8
+            ],
+            "new_late": [
+              7.8,
+              1.0
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480692",
+        "ts": "2026-06-14T13:25:40.013035+00:00",
+        "old_cid": "413",
+        "old_name": "Mateusz Ostapczuk",
+        "old_picked": 2,
+        "old_feas": "MAYBE",
+        "old_score": -276.1,
+        "new_cid": "370",
+        "new_name": "Kuba Olchowik",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": false,
+        "new_score_adj": -235.8,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 1.3,
+          "delta": {
+            "wait": [
+              14.4,
+              12.8
+            ],
+            "committed": [
+              0.0,
+              3.0
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480748",
+        "ts": "2026-06-14T14:26:25.324920+00:00",
+        "old_cid": "289",
+        "old_name": "Grzegorz Wysocki",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": -140.3,
+        "new_cid": "447",
+        "new_name": "Dawid Kalinowski",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -113.4,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 8.3,
+          "delta": {
+            "wait": [
+              1.7,
+              10.6
+            ],
+            "committed": [
+              3.6,
+              1.0
+            ],
+            "new_late": [
+              5.5,
+              7.4
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480767",
+        "ts": "2026-06-14T15:09:41.623953+00:00",
+        "old_cid": "123",
+        "old_name": "Bartek Ołdziej",
+        "old_picked": 5,
+        "old_feas": "MAYBE",
+        "old_score": -281.4,
+        "new_cid": "509",
+        "new_name": "Dariusz Maruszak",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": false,
+        "new_score_adj": -254.4,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 3.9,
+          "delta": {
+            "committed": [
+              0.0,
+              3.0
+            ],
+            "new_late": [
+              1.0,
+              2.1
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480856",
+        "ts": "2026-06-14T17:31:54.839433+00:00",
+        "old_cid": "447",
+        "old_name": "Dawid Kalinowski",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": -266.6,
+        "new_cid": "484",
+        "new_name": "Andrei Kotsia",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -251.7,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 6.2,
+          "delta": {
+            "wait": [
+              3.9,
+              11.2
+            ]
+          }
+        }
+      }
+    ],
+    "change_list": [
+      {
+        "oid": "480551",
+        "ts": "2026-06-14T09:43:46.138876+00:00",
+        "old_cid": "526",
+        "old_name": "Bartosz Klejna",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": -12.0,
+        "new_cid": "447",
+        "new_name": "Dawid Kalinowski",
+        "new_picked": 1,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -154.1,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -39.4,
+          "delta": {
+            "wait": [
+              48.2,
+              7.9
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480555",
+        "ts": "2026-06-14T09:46:06.595158+00:00",
+        "old_cid": "526",
+        "old_name": "Bartosz Klejna",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 58.9,
+        "new_cid": "530",
+        "new_name": "Bartosz Choiński",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 27.5,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -4.1,
+          "delta": {
+            "wait": [
+              14.1,
+              10.0
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480551",
+        "ts": "2026-06-14T09:49:02.441885+00:00",
+        "old_cid": "530",
+        "old_name": "Bartosz Choiński",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": -13.1,
+        "new_cid": "447",
+        "new_name": "Dawid Kalinowski",
+        "new_picked": 1,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -134.2,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -33.3,
+          "delta": {
+            "wait": [
+              38.9,
+              4.6
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480568",
+        "ts": "2026-06-14T10:24:28.522219+00:00",
+        "old_cid": "370",
+        "old_name": "Kuba Olchowik",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 14.2,
+        "new_cid": "447",
+        "new_name": "Dawid Kalinowski",
+        "new_picked": 1,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -114.6,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -8.8,
+          "delta": {
+            "wait": [
+              49.1,
+              40.2
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480572",
+        "ts": "2026-06-14T10:28:08.951146+00:00",
+        "old_cid": "447",
+        "old_name": "Dawid Kalinowski",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 101.8,
+        "new_cid": "370",
+        "new_name": "Kuba Olchowik",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 96.4,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -3.5,
+          "delta": {
+            "wait": [
+              7.4,
+              3.9
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480619",
+        "ts": "2026-06-14T11:39:00.081289+00:00",
+        "old_cid": "447",
+        "old_name": "Dawid Kalinowski",
+        "old_picked": 1,
+        "old_feas": "MAYBE",
+        "old_score": -71.1,
+        "new_cid": "509",
+        "new_name": "Dariusz Maruszak",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": false,
+        "new_score_adj": -68.5,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 11.0,
+          "delta": {
+            "wait": [
+              1.5,
+              11.5
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480662",
+        "ts": "2026-06-14T12:47:30.030488+00:00",
+        "old_cid": "409",
+        "old_name": "Mateusz Brodowski",
+        "old_picked": 1,
+        "old_feas": "MAYBE",
+        "old_score": -59.7,
+        "new_cid": "447",
+        "new_name": "Dawid Kalinowski",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": false,
+        "new_score_adj": -42.1,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 13.1,
+          "delta": {
+            "wait": [
+              4.3,
+              11.5
+            ],
+            "new_late": [
+              1.0,
+              6.0
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480672",
+        "ts": "2026-06-14T12:55:53.288898+00:00",
+        "old_cid": "518",
+        "old_name": "Michał Rogucki",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 106.3,
+        "new_cid": "500",
+        "new_name": "Grzegorz Rogowski",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 82.0,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -4.1,
+          "delta": {
+            "wait": [
+              15.2,
+              11.1
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480677",
+        "ts": "2026-06-14T13:02:32.978860+00:00",
+        "old_cid": "413",
+        "old_name": "Mateusz Ostapczuk",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": -265.1,
+        "new_cid": "409",
+        "new_name": "Mateusz Brodowski",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -255.3,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 2.5,
+          "delta": {
+            "wait": [
+              0.5,
+              8.8
+            ],
+            "new_late": [
+              7.8,
+              1.0
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480692",
+        "ts": "2026-06-14T13:25:40.013035+00:00",
+        "old_cid": "413",
+        "old_name": "Mateusz Ostapczuk",
+        "old_picked": 2,
+        "old_feas": "MAYBE",
+        "old_score": -276.1,
+        "new_cid": "370",
+        "new_name": "Kuba Olchowik",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": false,
+        "new_score_adj": -235.8,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 1.3,
+          "delta": {
+            "wait": [
+              14.4,
+              12.8
+            ],
+            "committed": [
+              0.0,
+              3.0
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480748",
+        "ts": "2026-06-14T14:26:25.324920+00:00",
+        "old_cid": "289",
+        "old_name": "Grzegorz Wysocki",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": -140.3,
+        "new_cid": "447",
+        "new_name": "Dawid Kalinowski",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -113.4,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 8.3,
+          "delta": {
+            "wait": [
+              1.7,
+              10.6
+            ],
+            "committed": [
+              3.6,
+              1.0
+            ],
+            "new_late": [
+              5.5,
+              7.4
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480767",
+        "ts": "2026-06-14T15:09:41.623953+00:00",
+        "old_cid": "123",
+        "old_name": "Bartek Ołdziej",
+        "old_picked": 5,
+        "old_feas": "MAYBE",
+        "old_score": -281.4,
+        "new_cid": "509",
+        "new_name": "Dariusz Maruszak",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": false,
+        "new_score_adj": -254.4,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 3.9,
+          "delta": {
+            "committed": [
+              0.0,
+              3.0
+            ],
+            "new_late": [
+              1.0,
+              2.1
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480787",
+        "ts": "2026-06-14T15:21:21.394767+00:00",
+        "old_cid": "509",
+        "old_name": "Dariusz Maruszak",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": -117.2,
+        "new_cid": "447",
+        "new_name": "Dawid Kalinowski",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -143.9,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -8.0,
+          "delta": {
+            "wait": [
+              0.7,
+              12.0
+            ],
+            "committed": [
+              1.0,
+              4.7
+            ],
+            "new_late": [
+              24.0,
+              1.0
+            ]
+          }
+        }
+      },
+      {
+        "oid": "480856",
+        "ts": "2026-06-14T17:31:54.839433+00:00",
+        "old_cid": "447",
+        "old_name": "Dawid Kalinowski",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": -266.6,
+        "new_cid": "484",
+        "new_name": "Andrei Kotsia",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -251.7,
+        "verdict": "REGRESJA_SOFT",
+        "detail": {
+          "net_min": 6.2,
+          "delta": {
+            "wait": [
+              3.9,
+              11.2
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "2026-06-15": {
+    "n": 224,
+    "faithful": 155,
+    "winner_changed": 16,
+    "POPRAWA": 8,
+    "NEUTRAL": 0,
+    "REGRESJA": 0,
+    "REGRESJA_SOFT": 0,
+    "indeterminate": 8,
+    "regress_list": [],
+    "regress_soft_list": [],
+    "change_list": [
+      {
+        "oid": "481086",
+        "ts": "2026-06-15T15:44:43.853518+00:00",
+        "old_cid": "500",
+        "old_name": "Grzegorz Rogowski",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 98.9,
+        "new_cid": "484",
+        "new_name": "Andrei Kotsia",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 69.9,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -4.2,
+          "delta": {
+            "wait": [
+              13.7,
+              9.5
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481088",
+        "ts": "2026-06-15T15:45:05.907652+00:00",
+        "old_cid": "500",
+        "old_name": "Grzegorz Rogowski",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 102.6,
+        "new_cid": "484",
+        "new_name": "Andrei Kotsia",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 79.8,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -8.4,
+          "delta": {
+            "wait": [
+              15.5,
+              7.1
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481119",
+        "ts": "2026-06-15T17:56:47.572252+00:00",
+        "old_cid": "75",
+        "old_name": "Patryk Milankiewicz",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 90.4,
+        "new_cid": "413",
+        "new_name": "Mateusz Ostapczuk",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 29.9,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -7.1,
+          "delta": {
+            "wait": [
+              24.8,
+              17.7
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481122",
+        "ts": "2026-06-15T18:22:18.495192+00:00",
+        "old_cid": "413",
+        "old_name": "Mateusz Ostapczuk",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 113.9,
+        "new_cid": "509",
+        "new_name": "Dariusz Maruszak",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 96.6,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -3.4,
+          "delta": {
+            "wait": [
+              9.6,
+              6.2
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481126",
+        "ts": "2026-06-15T18:31:56.148700+00:00",
+        "old_cid": "75",
+        "old_name": "Patryk Milankiewicz",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 115.0,
+        "new_cid": "413",
+        "new_name": "Mateusz Ostapczuk",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 97.0,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -7.4,
+          "delta": {
+            "wait": [
+              14.6,
+              7.2
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481127",
+        "ts": "2026-06-15T18:37:39.069697+00:00",
+        "old_cid": "413",
+        "old_name": "Mateusz Ostapczuk",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 118.4,
+        "new_cid": "471",
+        "new_name": "Łukasz Więcko",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 89.6,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -7.8,
+          "delta": {
+            "wait": [
+              12.3,
+              4.5
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481128",
+        "ts": "2026-06-15T18:41:34.622428+00:00",
+        "old_cid": "413",
+        "old_name": "Mateusz Ostapczuk",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 75.2,
+        "new_cid": "471",
+        "new_name": "Łukasz Więcko",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -48.2,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -6.8,
+          "delta": {
+            "wait": [
+              36.1,
+              29.3
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481129",
+        "ts": "2026-06-15T18:41:55.001660+00:00",
+        "old_cid": "75",
+        "old_name": "Patryk Milankiewicz",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 130.0,
+        "new_cid": "413",
+        "new_name": "Mateusz Ostapczuk",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 103.4,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -4.8,
+          "delta": {
+            "wait": [
+              14.9,
+              10.0
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "2026-06-16": {
+    "n": 219,
+    "faithful": 195,
+    "winner_changed": 32,
+    "POPRAWA": 14,
+    "NEUTRAL": 0,
+    "REGRESJA": 0,
+    "REGRESJA_SOFT": 0,
+    "indeterminate": 18,
+    "regress_list": [],
+    "regress_soft_list": [],
+    "change_list": [
+      {
+        "oid": "481150",
+        "ts": "2026-06-16T08:54:25.176930+00:00",
+        "old_cid": "123",
+        "old_name": "Bartek Ołdziej",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 20.8,
+        "new_cid": "393",
+        "new_name": "Michał Karpiuk",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 4.9,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -9.5,
+          "delta": {
+            "wait": [
+              13.4,
+              2.7
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481161",
+        "ts": "2026-06-16T09:44:08.092891+00:00",
+        "old_cid": "123",
+        "old_name": "Bartek Ołdziej",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": -8.7,
+        "new_cid": "370",
+        "new_name": "Kuba Olchowik",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 4.9,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -13.0,
+          "delta": {
+            "wait": [
+              20.6,
+              6.7
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481216",
+        "ts": "2026-06-16T12:33:51.244511+00:00",
+        "old_cid": "413",
+        "old_name": "Mateusz Ostapczuk",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 134.2,
+        "new_cid": "179",
+        "new_name": "Gabriel Ostapczuk",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 118.7,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -7.4,
+          "delta": {
+            "wait": [
+              12.8,
+              5.4
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481217",
+        "ts": "2026-06-16T12:34:32.032318+00:00",
+        "old_cid": "413",
+        "old_name": "Mateusz Ostapczuk",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 134.2,
+        "new_cid": "179",
+        "new_name": "Gabriel Ostapczuk",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 118.2,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -7.4,
+          "delta": {
+            "wait": [
+              12.9,
+              5.5
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481218",
+        "ts": "2026-06-16T12:35:54.145295+00:00",
+        "old_cid": "413",
+        "old_name": "Mateusz Ostapczuk",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 117.6,
+        "new_cid": "179",
+        "new_name": "Gabriel Ostapczuk",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 85.0,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -5.6,
+          "delta": {
+            "wait": [
+              16.9,
+              11.3
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481227",
+        "ts": "2026-06-16T12:57:34.827139+00:00",
+        "old_cid": "179",
+        "old_name": "Gabriel Ostapczuk",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 121.4,
+        "new_cid": "376",
+        "new_name": "Paweł Ściepko",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 73.7,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -2.4,
+          "delta": {
+            "wait": [
+              18.2,
+              15.8
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481272",
+        "ts": "2026-06-16T14:44:17.931349+00:00",
+        "old_cid": "376",
+        "old_name": "Paweł Ściepko",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 42.0,
+        "new_cid": "508",
+        "new_name": "Michał Lizuń",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": -52.1,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -15.8,
+          "delta": {
+            "wait": [
+              40.4,
+              24.6
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481273",
+        "ts": "2026-06-16T14:46:13.974122+00:00",
+        "old_cid": "376",
+        "old_name": "Paweł Ściepko",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 92.1,
+        "new_cid": "508",
+        "new_name": "Michał Lizuń",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 59.2,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -13.8,
+          "delta": {
+            "wait": [
+              23.1,
+              9.3
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481274",
+        "ts": "2026-06-16T14:48:10.710612+00:00",
+        "old_cid": "376",
+        "old_name": "Paweł Ściepko",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 127.5,
+        "new_cid": "508",
+        "new_name": "Michał Lizuń",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 112.0,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -11.6,
+          "delta": {
+            "wait": [
+              11.7,
+              0.0
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481275",
+        "ts": "2026-06-16T14:51:51.987852+00:00",
+        "old_cid": "376",
+        "old_name": "Paweł Ściepko",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 99.8,
+        "new_cid": "508",
+        "new_name": "Michał Lizuń",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 66.2,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -8.2,
+          "delta": {
+            "wait": [
+              17.7,
+              9.5
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481276",
+        "ts": "2026-06-16T14:53:33.498884+00:00",
+        "old_cid": "376",
+        "old_name": "Paweł Ściepko",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 120.7,
+        "new_cid": "508",
+        "new_name": "Michał Lizuń",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 105.2,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -6.5,
+          "delta": {
+            "wait": [
+              9.5,
+              3.0
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481333",
+        "ts": "2026-06-16T17:23:55.981074+00:00",
+        "old_cid": "123",
+        "old_name": "Bartek Ołdziej",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 115.6,
+        "new_cid": "508",
+        "new_name": "Michał Lizuń",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 78.8,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -10.8,
+          "delta": {
+            "wait": [
+              15.3,
+              4.5
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481352",
+        "ts": "2026-06-16T18:41:16.375777+00:00",
+        "old_cid": "123",
+        "old_name": "Bartek Ołdziej",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 104.3,
+        "new_cid": "179",
+        "new_name": "Gabriel Ostapczuk",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 59.0,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -3.9,
+          "delta": {
+            "wait": [
+              17.4,
+              13.5
+            ]
+          }
+        }
+      },
+      {
+        "oid": "481353",
+        "ts": "2026-06-16T18:43:57.189623+00:00",
+        "old_cid": "123",
+        "old_name": "Bartek Ołdziej",
+        "old_picked": 0,
+        "old_feas": "MAYBE",
+        "old_score": 85.1,
+        "new_cid": "508",
+        "new_name": "Michał Lizuń",
+        "new_picked": 0,
+        "new_feas": "MAYBE",
+        "new_was_old_reject": false,
+        "best_rescored_emptyhanded": true,
+        "new_score_adj": 3.3,
+        "verdict": "POPRAWA",
+        "detail": {
+          "net_min": -13.2,
+          "delta": {
+            "wait": [
+              28.1,
+              14.8
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

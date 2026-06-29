@@ -1,6 +1,10 @@
 # SPEC — best_effort selekcja ślepa na carry-ordery (R6 new-pickup-only)
 
-**Data:** 2026-06-23 · **Status:** DIAGNOZA + REPLAY (read-only) · **NIC nie flipnięte**
+**Data:** 2026-06-23 · **Status:** DIAGNOZA + REPLAY + **SHADOW LIVE** (log-only, §6.1) · selekcja NIE zmieniona
+**Shadow LIVE od 2026-06-23 14:59 UTC:** flaga `ENABLE_BEST_EFFORT_OBJM_SHADOW=1` (flags.json), commit
+`7863a39` tag `best-effort-objm-shadow-2026-06-23`, restart dispatch-shadow OK. Pierwsza decyzja
+post-restart (#482838, sticky) zalogowała pola poprawnie (flip=False). Czeka na nazbieranie flipów
+w peaku → review przed live-flip. Rollback: flaga `=0` (hot) / `rm` 3 .bak + restart.
 **Trigger:** case #482817 (Adrian) — Ziomek zaproponował Jakuba Olchowika (cid=370) na sushi
 mimo że 370 wiózł 482800 do Niewodnicy; wpięcie sushi zepsułoby 482800 (+58 min / 93 min worek).
 
@@ -172,6 +176,24 @@ Dla #482817: 370 dostaje `objm_r6_breach_max=58.4` zamiast `r6_pov=0` → spada 
 
 **Flaga:** `ENABLE_BEST_EFFORT_OBJM_R6_KEY` (default OFF, hot-reload), kill-switch jak
 `ENABLE_BEST_EFFORT_POS_SOURCE_KEY`.
+
+### 5b. BEZPIECZNIK nowego zlecenia (cap, commit `0e28277` tag `...-guard-...`)
+
+Pure objm-first (carry-min) psuje nowy order w 27% flipów (>35 min) — redystrybucja worst-breach.
+Guard: pick = carry-min **TYLKO wśród kandydatów z new-order bag ≤ `cap_min`**; fallback do pure
+carry-min gdy żaden bezpieczny (nowy order i tak przepada). Hot: flags.json
+`BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN` — **LIVE = 35** (Adrian 23.06; default kodu 40). Sweep 21-23.06 (exact z logów):
+
+| cap | regresja nowego | zysk carry (suma min) |
+|---|---|---|
+| brak (raw) | 27% | 1828 |
+| 45 | 22% | 1643 |
+| **40 (default)** | **16%** (tylko 35-40) | **1518 (83%)** |
+| 38 | 12% | 1486 |
+| 35 (twardy) | 0% | 1241 (68%) |
+
+cap=40: nowy order nigdy >40 przez przerzut (max +5 nad R6), wielkie wygrane carry (457 −190min,
+new bag ≤35) zostają. Shadow loguje guarded (rekomendacja) + raw (porównanie) + `guard_changed`.
 
 ### Dlaczego niskie ryzyko
 - reużywa metrykę `objm_r6_breach_*` JUŻ zwalidowaną na ścieżce feasible (D2 replay 17.06),

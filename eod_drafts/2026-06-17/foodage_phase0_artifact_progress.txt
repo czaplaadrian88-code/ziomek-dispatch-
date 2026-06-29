@@ -1,0 +1,111 @@
+2026-06-17 21:18:14 [ERROR] osrm_client: COORD_GUARD #1: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=13, pairs=6), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=5.37ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=5, falling back to greedy
+2026-06-17 21:18:14 [ERROR] osrm_client: COORD_GUARD #2: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=13, pairs=6), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.03ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=5, falling back to greedy
+2026-06-17 21:18:14 [ERROR] osrm_client: COORD_GUARD #3: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=13, pairs=6), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.05ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=5, falling back to greedy
+2026-06-17 21:18:16 [ERROR] osrm_client: COORD_GUARD #4: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=13, pairs=6), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=8.07ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=5, falling back to greedy
+2026-06-17 21:18:17 [ERROR] osrm_client: COORD_GUARD #5: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=11, pairs=5), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.37ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-17 21:18:18 [ERROR] osrm_client: COORD_GUARD #6: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=11, pairs=5), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.2ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-17 21:18:18 [ERROR] osrm_client: COORD_GUARD #7: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=11, pairs=5), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.17ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-17 21:18:19 [ERROR] osrm_client: COORD_GUARD #8: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=11, pairs=5), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=5.47ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-17 21:18:19 [ERROR] osrm_client: COORD_GUARD #9: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=4.14ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-17 21:18:19 [ERROR] osrm_client: COORD_GUARD #10: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=3.11ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-17 21:18:20 [ERROR] osrm_client: COORD_GUARD #11: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.65ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-17 21:18:20 [ERROR] osrm_client: COORD_GUARD #12: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.67ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-17 21:18:20 [ERROR] osrm_client: COORD_GUARD #13: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.66ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-17 21:18:21 [ERROR] osrm_client: COORD_GUARD #14: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=2.58ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+[scan] 300/1300 ortools_n=285 regs=3
+[scan] 600/1300 ortools_n=585 regs=4
+2026-06-17 21:22:06 [ERROR] osrm_client: COORD_GUARD #15: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=9, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.56ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+2026-06-17 21:22:07 [ERROR] osrm_client: COORD_GUARD #16: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.7ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=4, falling back to greedy
+2026-06-17 21:22:18 [ERROR] osrm_client: COORD_GUARD #17: table 2 invalid coord(s) [(0.0, 0.0), (0.0, 0.0)] → sentinel cells 9999.0min
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=7, pairs=2), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=1.31ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=3, falling back to greedy
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=13, pairs=5), retry bez constraints
+OR-Tools no sequence: status=ROUTING_FAIL elapsed=191.27ms warnings=['INFEASIBLE: solver returned None']
+OR-Tools INFEASIBLE for bag_size=6, falling back to greedy
+V328_TSP_SETRANGE_OPEN_OOD stop=8 open=153.8min > max_route_min=120.0min — skip window
+V3274_OR_TOOLS_VIOLATION overshoot (E2: plan OR-Tools zostaje, NIE reject) violations=[('480952', 155.76486431666666, 120.0), ('480953', 157.76486431666666, 120.0), ('480961', 156.76486431666666, 120.0)] solver_status=ROUTING_SUCCESS elapsed=201.04ms
+V328_TSP_SETRANGE_OPEN_OOD stop=8 open=153.8min > max_route_min=120.0min — skip window
+V3274_OR_TOOLS_VIOLATION overshoot (E2: plan OR-Tools zostaje, NIE reject) violations=[('480952', 155.76486431666666, 120.0), ('480953', 157.76486431666666, 120.0), ('480961', 156.76486431666666, 120.0)] solver_status=ROUTING_SUCCESS elapsed=201.07ms
+V328_TSP_SETRANGE_OPEN_OOD stop=10 open=127.6min > max_route_min=120.0min — skip window
+V328_TSP_SETRANGE_OPEN_OOD stop=10 open=127.6min > max_route_min=120.0min — skip window
+V328_TSP_SETRANGE_OPEN_OOD stop=8 open=180.4min > max_route_min=120.0min — skip window
+V328_TSP_SETRANGE_OPEN_OOD stop=8 open=180.4min > max_route_min=120.0min — skip window
+[scan] 900/1300 ortools_n=881 regs=6
+V328_TSP_SETRANGE_OPEN_OOD stop=8 open=121.7min > max_route_min=120.0min — skip window
+V328_TSP_SETRANGE_OPEN_OOD stop=8 open=121.7min > max_route_min=120.0min — skip window
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=13, pairs=5), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=13, pairs=5), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=13, pairs=6), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=13, pairs=6), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+V328_TSP_SETRANGE_OPEN_OOD stop=9 open=232.6min > max_route_min=120.0min — skip window
+V328_TSP_SETRANGE_OPEN_OOD stop=9 open=232.6min > max_route_min=120.0min — skip window
+V328_TSP_SETRANGE_OPEN_OOD stop=6 open=156.9min > max_route_min=120.0min — skip window
+V328_TSP_SETRANGE_OPEN_OOD stop=6 open=156.9min > max_route_min=120.0min — skip window
+V328_TSP_SETRANGE_OPEN_OOD stop=7 open=136.5min > max_route_min=120.0min — skip window
+V3274_OR_TOOLS_VIOLATION overshoot (E2: plan OR-Tools zostaje, NIE reject) violations=[('481381', 162.41109648333335, 120.0), ('481389', 164.92442981666667, 120.0)] solver_status=ROUTING_SUCCESS elapsed=200.94ms
+V328_TSP_SETRANGE_OPEN_OOD stop=7 open=136.5min > max_route_min=120.0min — skip window
+V3274_OR_TOOLS_VIOLATION overshoot (E2: plan OR-Tools zostaje, NIE reject) violations=[('481381', 162.41109648333335, 120.0), ('481389', 164.92442981666667, 120.0)] solver_status=ROUTING_SUCCESS elapsed=201.05ms
+[scan] 1200/1300 ortools_n=1181 regs=8
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=10, pairs=4), retry bez constraints
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=8, pairs=3), retry bez constraints
+V3274_OR_TOOLS_VIOLATION overshoot (E2: plan OR-Tools zostaje, NIE reject) violations=[('481387', 130.41161355, 120.0)] solver_status=ROUTING_SUCCESS elapsed=200.83ms
+V3.27.1 OR-Tools INFEASIBLE z time windows (N=8, pairs=3), retry bez constraints
+V3274_OR_TOOLS_VIOLATION overshoot (E2: plan OR-Tools zostaje, NIE reject) violations=[('481387', 130.41161355, 120.0)] solver_status=ROUTING_SUCCESS elapsed=201.12ms
+V328_TSP_SETRANGE_OPEN_OOD stop=6 open=344.8min > max_route_min=120.0min — skip window
+V328_TSP_SETRANGE_OPEN_OOD stop=6 open=344.8min > max_route_min=120.0min — skip window
+V328_TSP_SETRANGE_OPEN_OOD stop=7 open=136.5min > max_route_min=120.0min — skip window
+V3274_OR_TOOLS_VIOLATION overshoot (E2: plan OR-Tools zostaje, NIE reject) violations=[('481484', 154.44231589999998, 120.0)] solver_status=ROUTING_SUCCESS elapsed=201.08ms
+V328_TSP_SETRANGE_OPEN_OOD stop=7 open=136.5min > max_route_min=120.0min — skip window
+[200ms] ortools-decyzji=1282 regresje=9

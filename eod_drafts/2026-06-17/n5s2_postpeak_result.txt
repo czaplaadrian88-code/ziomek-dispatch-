@@ -1,0 +1,4 @@
+N5-S2 post-peak check (2026-06-18 14:15 Warsaw)
+flaga ON=True | INFEASIBLE/fallback markery(journal)=42
+best-plan fallback: 0/71 = 0.00% (baseline pre-flip 0.00%)
+WERDYKT: HEALTHY -> flaga ZOSTAJE ON

@@ -1,0 +1,14 @@
+2026-06-13T02:30:00.107794+00:00 PRE telegram MainPID=1758885
+2026-06-13T02:30:03.409755+00:00 CHECK restart wykonany ok=True 
+2026-06-13T02:31:18.437833+00:00 CHECK SubState=running ok=True running
+2026-06-13T02:31:18.437968+00:00 CHECK NRestarts=0 ok=True 0
+2026-06-13T02:31:18.457626+00:00 CHECK FLAG_FINGERPRINT zalogowany ok=True 
+2026-06-13T02:31:18.457757+00:00 CHECK ENABLE_AUTO_ASSIGN=0 w fingerprincie ok=True 
+2026-06-13T02:31:18.457813+00:00 CHECK ENABLE_BUNDLE_SYNC_SPREAD=1 (re-flip 18:33) ok=True 
+2026-06-13T02:31:18.476453+00:00 CHECK ortools warm-up ok=True .27.1 sesja 4 panel_client pre-warm login complete: 4935.4ms
+2026-06-13T02:31:18.572189+00:00 CHECK zero błędów journalu ok=True 
+2026-06-13T02:31:18.590928+00:00 login lines: Jun 13 02:30:03 Ziomek python[3727416]: 2026-06-13 02:30:03 [INFO] panel_client: login: fresh (age=1781317804s, force=True)
+Jun 13 02:30:08 Ziomek python[3727416]: 2026-06-13 02:30:08 [INFO] panel_cli
+2026-06-13T02:31:18.603807+00:00 CHECK dispatch-telegram nietknięty (MainPID bez zmian) ok=True 1758885→1758885
+2026-06-13T02:31:18.608339+00:00 would_auto_assign w tail: 0 → brak nowych decyzji w oknie (zero ruchu nocą — sprawdzić rano)
+2026-06-13T02:31:18.841109+00:00 TG wysłany

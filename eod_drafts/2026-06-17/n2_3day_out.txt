@@ -1,0 +1,47 @@
+loading capture (14-16.06) ...
+
+=== 2026-06-14: 6047 candidate-records ===
+  OLD verdict-gate rejects (len-bag rule):        2722
+  (a) FLIP intended  (n_picked==0 -> feasible):   1322   [certain>18min: 1124 | borderline 15-18: 198]
+  (b) FLIP REGRESSION(n_picked>=1 -> feasible):   0   [certain>18min: 0 | borderline 15-18: 0]
+  (c) PRESERVED      (n_picked>=1 still reject):  1400
+      distinct new-orders: intended=320 regress=0 preserved=315
+  IDLE soft-penalty (empty-handed cands, picked==0, wait>0): n=3557, of which penalized(>5min)=3436
+      idle minutes: median=20.7  p90=41.8  max=59.7
+      idle penalty: median=-65.5  p90=-147.4  max(most-neg)=-218.8
+      ABSURD penalties (< -300): 0
+
+=== 2026-06-15: 1645 candidate-records ===
+  OLD verdict-gate rejects (len-bag rule):        873
+  (a) FLIP intended  (n_picked==0 -> feasible):   346   [certain>18min: 307 | borderline 15-18: 38]
+  (b) FLIP REGRESSION(n_picked>=1 -> feasible):   0   [certain>18min: 0 | borderline 15-18: 0]
+  (c) PRESERVED      (n_picked>=1 still reject):  527
+      distinct new-orders: intended=162 regress=0 preserved=182
+  IDLE soft-penalty (empty-handed cands, picked==0, wait>0): n=617, of which penalized(>5min)=595
+      idle minutes: median=21.4  p90=48.0  max=178.5
+      idle penalty: median=-67.2  p90=-174.6  max(most-neg)=-694.1
+      ABSURD penalties (< -300): 26  e.g. [-694.08, -694.08, -641.4]
+
+=== 2026-06-16: 2024 candidate-records ===
+  OLD verdict-gate rejects (len-bag rule):        815
+  (a) FLIP intended  (n_picked==0 -> feasible):   400   [certain>18min: 336 | borderline 15-18: 64]
+  (b) FLIP REGRESSION(n_picked>=1 -> feasible):   0   [certain>18min: 0 | borderline 15-18: 0]
+  (c) PRESERVED      (n_picked>=1 still reject):  415
+      distinct new-orders: intended=163 regress=0 preserved=174
+  IDLE soft-penalty (empty-handed cands, picked==0, wait>0): n=1124, of which penalized(>5min)=1070
+      idle minutes: median=18.0  p90=45.9  max=256.7
+      idle penalty: median=-54.3  p90=-169.5  max(most-neg)=-1006.7
+      ABSURD penalties (< -300): 38  e.g. [-1006.6800000000001, -1006.6800000000001, -1006.6800000000001]
+
+======================================================================
+RAZEM 14-16.06
+======================================================================
+  OLD verdict-gate rejects total:               4410
+  FLIP intended (picked==0):                    2068
+  FLIP REGRESSION (picked>=1):                  0
+  PRESERVED:                                    2342
+  IDLE penalized candidates total:              5101
+  idle minutes overall: median=19.9 p90=42.4 max=256.7
+  idle penalty overall: median=-64.0 max(most-neg)=-1006.7  absurd<-300=64
+
+[written n2_3day_flips.json]

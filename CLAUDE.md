@@ -1,3 +1,12 @@
+# ⛔ PRZYKAZANIE #0 — ZANIM TKNIESZ ZIOMKA (czytaj PIERWSZE)
+
+**Każda zmiana / naprawa / upgrade dispatchu (silnik, feasibility, scoring, selekcja, kanon/plan, flagi, metryki, konsola/apka, config) idzie PROTOKOŁEM — bez wyjątków:**
+➡ **`/root/.claude/projects/-root/memory/ziomek-change-protocol.md`** — wklej z niego PROMPT na początku zadania i przejdź ETAP 0→7.
+**Nigdy do pominięcia:** (0) stan na żywo + testy bazowe ZIELONE; (1) fix U ŹRÓDŁA we właściwej z 10 warstw (nie łatka na renderze); (2) SOFT nie osłabia HARD (P0), nie cofaj świadomych inwersji P‑1..P‑7 bez ACK; (3) **MAPA KOMPLETNOŚCI** — wszystkie miejsca danej klasy, **bliźniacze ścieżki RAZEM** (best_effort↔objm_lexr6, feasibility↔greedy↔plan_recheck, serializer A+B, 4 handlery recanon, każdy importer/konsument); (4) dowody nie deklaracje: flaga ON≠OFF (test), metryka w shadow_decisions.jsonl, parytet bliźniaków, checkery flag + invarianty, **PEŁNA regresja CAŁEGO Ziomka (pytest tests/ vs baseline) + e2e przez WSZYSTKIE dotknięte warstwy** (nie tylko unit klastra); (5) replay „warto + bez regresji" → dowód **POZYTYWNEGO wpływu** (metryka docelowa lepsza ON↔OFF — nie tylko brak regresji) + okno 2 dni; (6) backup→py_compile→test(kanoniczna ścieżka)→git log -3→ACK→1 restart (NIGDY telegram/peak bez OK); (7) rollback gotowy.
+**Zmiana częściowa = NIEZAKOŃCZONA. Wątpliwość co do priorytetów/inwersji → PYTAJ Adriana, nie zgaduj.**
+
+---
+
 # ⚠️ STATUS TEGO PLIKU — przeczytaj ZANIM zaufasz treści (adnotacja 2026-05-18)
 
 **Ten plik jest STATYCZNYM SNAPSHOTEM od 2026-05-10.** Od tej daty przeszło kilkanaście sprintów (V3.28 dwell, OBJ F0/F1, E1-E3, tech-debt #38, Drtusz Bridge, kalibracja ETA, sprint „bag zero" Fazy 1-5, …) — **żadnego z nich tu NIE ma.**

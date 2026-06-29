@@ -1,0 +1,35 @@
+# At-jobs LIVE dla Telegram checkpoint reminders
+# Dziś (zapis): 2026-05-26 19:05 UTC = 21:05 Warsaw CEST
+
+# Job 86 — CHECKPOINT #1 — niedziela 2026-05-31 18:00 UTC = 20:00 Warsaw
+#   Script: /tmp/checkpoint1_msg.sh
+#   Treść: BUG E quick check (4 dni live) + status shadow A+B+C, decyzja flip flag B
+#   Recovery: at-jobs są w /var/spool/cron/atjobs/ jako job86 — survives reboot (z chronyd)
+
+# Job 87 — CHECKPOINT #2 — niedziela 2026-06-07 18:00 UTC = 20:00 Warsaw
+#   Script: /tmp/checkpoint2_msg.sh
+#   Treść: pełna A/B przed/po BUG E + BUG B, decyzja flip flag A
+#   Recovery: at-jobs są w /var/spool/cron/atjobs/ jako job87
+
+# === Recovery / re-schedule ===
+# Sprawdzić: atq | sort -k2
+# Usunąć: atrm <jobid>
+# Odpalić ręcznie wcześniej: /tmp/checkpoint1_msg.sh
+
+# === Telegram delivery ===
+# Wysyła do admin (Adrian, chat_id 8765130486) via TELEGRAM_BOT_TOKEN z env
+# Skrypt: /root/.openclaw/workspace/scripts/dispatch_v2/telegram_utils.py:send_admin_alert
+# Fail-soft: jeśli token brak / API down — log warning, NIE crash
+
+# === Backup scripts pozycje ===
+# /tmp/checkpoint1_msg.sh — 781 bajtów, exec
+# /tmp/checkpoint2_msg.sh — 854 bajtów, exec
+# UWAGA: /tmp na niektórych Linuksach jest czyszczony przy reboot. Jeśli reboot się zdarzy
+# między teraz a 31.05 — przekopiuj te skrypty do /root/.openclaw/workspace/scripts/
+
+# === Jeśli at-jobs się nie odpalą ===
+# Manualny wysył przypomnienia:
+#   /tmp/checkpoint1_msg.sh   # dla #1
+#   /tmp/checkpoint2_msg.sh   # dla #2
+# Albo bezpośrednio z Adrian's terminal:
+#   bash -lc "cd /root/.openclaw/workspace/scripts/dispatch_v2 && /root/.openclaw/venvs/dispatch/bin/python3 -m dispatch_v2.telegram_utils 'tekst'"
