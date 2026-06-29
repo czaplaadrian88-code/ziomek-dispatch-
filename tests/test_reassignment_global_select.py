@@ -145,6 +145,48 @@ def test_arm_ratunek_vs_oszczednosc(monkeypatch):
     assert dec["O2"]["arm"] == "oszczędność"
 
 
+def test_singletons_passthrough_no_depile(monkeypatch):
+    """2 propozycje na RÓŻNE cele (brak kolizji celu) → obie SHOW passthrough; global_allocate
+    NIE wołany (regresja buga 484222/484195 z 29.06: usuwanie wszystkich z holderów fałszowało
+    flotę → genuine przerzut błędnie 'stays_with_holder'). De-pile TYLKO realne kolizje."""
+    cands = [("O1", "H", _rec()), ("O2", "H", _rec())]   # ten sam holder, RÓŻNE cele
+    fleet = {"H": FakeCS("H"), "J": FakeCS("J"), "P": FakeCS("P")}
+    called = {"n": 0}
+    def boom(items, fleet, now, _results_out=None):
+        called["n"] += 1
+        return {}
+    monkeypatch.setattr(M, "global_allocate", boom)
+    dec, metrics = M.select(cands, fleet, M._now_utc(), {}, {"O1": "J", "O2": "P"})
+    assert _shows(dec) == {"O1", "O2"}                   # obie pokazane (generator stoi)
+    assert dec["O1"].get("passthrough") and dec["O2"].get("passthrough")
+    assert dec["O1"].get("best_cid") is None             # passthrough = overlay zostawia feed
+    assert called["n"] == 0                              # brak kolizji → global_allocate pominięty
+    assert metrics["depiled_groups"] == 0
+
+
+def test_mixed_singleton_and_pileon(monkeypatch):
+    """3 propozycje: O1,O2 na J (kolizja → de-pile), O3 na P (singleton → passthrough)."""
+    cands = [("O1", "H1", _rec()), ("O2", "H2", _rec()), ("O3", "H3", _rec())]
+    fleet = {"H1": FakeCS("H1"), "H2": FakeCS("H2"), "H3": FakeCS("H3"),
+             "J": FakeCS("J"), "P": FakeCS("P"), "Q": FakeCS("Q")}
+    # tylko kolidujące (O1,O2) idą do global_allocate; O3 (singleton P) NIE
+    def fake_alloc(items, fleet, now, _results_out=None):
+        ids = {o for o, _ in items}
+        assert ids == {"O1", "O2"}                      # singleton O3 poza de-pile
+        amap = {"O1": {"cid": "J"}, "O2": {"cid": "Q"}}
+        if _results_out is not None:
+            for oid, _ in items:
+                _results_out[oid] = FakeRes(amap[oid]["cid"], "H")
+        return amap
+    monkeypatch.setattr(M, "global_allocate", fake_alloc)
+    _patch_quality(monkeypatch, {"O1": {"quality_reassign": True}, "O2": {"quality_reassign": True}})
+    dec, metrics = M.select(cands, fleet, M._now_utc(), {}, {"O1": "J", "O2": "J", "O3": "P"})
+    assert dec["O3"]["passthrough"] is True             # singleton → pokazany jak jest
+    assert dec["O1"]["best_cid"] == "J" and dec["O2"]["best_cid"] == "Q"   # de-piled
+    assert metrics["depiled_groups"] == 1
+    assert metrics["maxpile_before"] == 2               # J miało 2
+
+
 # ---- testy run_once() (flaga + passthrough) ----
 
 def _patch_run_once_io(monkeypatch, cands, flag_on, tmp_path):

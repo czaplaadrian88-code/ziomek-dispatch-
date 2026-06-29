@@ -190,89 +190,106 @@ def select(cands: List[Tuple[str, str, dict]], fleet: Dict[str, Any],
     selected = {oid: {best_cid,best_name,holder_cid,holder_name,arm,reason,save_min,
                       a_late, depiled}} — to co konsola ma POKAZAĆ (overlay filtruje do tego).
     metrics = podsumowanie ticku (pile-on before↔after, kept/dropped + powody)."""
-    # zdejmij WSZYSTKIE kandydaty z worków ich holderów → re-alokacja jak „nieprzypisane"
-    fleet_minus = dict(fleet)
-    for oid, holder, _ in cands:
-        fleet_minus = _fleet_without_order(fleet_minus, oid, holder)
-
-    res_map: Dict[str, Any] = {}
-    allocation = global_allocate([(oid, rec) for oid, _, rec in cands],
-                                 fleet_minus, now, _results_out=res_map)
-
+    rec_of = {oid: rec for oid, _, rec in cands}
     holder_of = {oid: holder for oid, holder, _ in cands}
-    # liczba kandydatów wcześniej zaalokowanych do danego kuriera (kolejność = insertion order
-    # allocation dict) → wirtualny rozmiar worka G w chwili oceny O (reserve-aware b_bag).
-    alloc_order = list(allocation.keys())
-    prior_to_courier: Dict[str, int] = {}
-    earlier_count: Dict[str, int] = {}
-    for oid in alloc_order:
-        g = (allocation.get(oid) or {}).get("cid")
-        earlier_count[oid] = prior_to_courier.get(str(g), 0) if g else 0
-        if g:
-            prior_to_courier[str(g)] = prior_to_courier.get(str(g), 0) + 1
-
-    # decisions[oid] = {action: "show"|"hide", ...}. „show" = survivor (1-2 dobry worek,
-    # best_cid = globalny kurier, może rerouted); „hide" = de-piled loser (do ukrycia w konsoli).
-    # Konsola: oid nieznany decisions → pokaż jak jest (fallback, zero skew-hide świeżych).
     decisions: Dict[str, dict] = {}
     dropped: List[dict] = []
-    survivors = 0
-    for oid, holder, rec in cands:
-        a = allocation.get(oid) or {}
-        g = a.get("cid")
-        def _hide(why, extra=None):
-            d = {"action": "hide", "order_id": oid, "holder_cid": holder, "why": why}
-            if extra:
-                d.update(extra)
-            decisions[oid] = d
-            dropped.append({"oid": oid, "why": why, **(extra or {})})
-        if a.get("no_courier") or g is None:
-            _hide("no_feasible_courier_KOORD")
-            continue
-        g = str(g)
-        if g == holder:
-            _hide("stays_with_holder", {"g": g})
-            continue
-        res = res_map.get(oid)
-        if res is None or getattr(res, "best", None) is None:
-            _hide("no_result")
-            continue
-        a_cand = _find_cand(res, holder)
-        best = res.best
-        cs_a = fleet.get(holder)
-        cs_g0 = fleet_minus.get(g)
-        a_pos = getattr(cs_a, "pos_source", None) if cs_a is not None else None
-        b_pos = getattr(fleet.get(g), "pos_source", None) if fleet.get(g) is not None else None
-        base_g_bag = len(cs_g0.bag) if (cs_g0 is not None and cs_g0.bag is not None) else 0
-        b_bag = base_g_bag + earlier_count.get(oid, 0)   # realny + wirtualnie doklejeni wcześniejsi
-        q = _quality_gate(a_cand, best, oid, a_pos, b_pos, holder, g,
-                          b_bag=b_bag, a_in_fleet=(cs_a is not None))
-        if not q.get("quality_reassign"):
-            _hide("quality_failed_vs_global", {"g": g, "q_reason": q.get("quality_reason")})
-            continue
-        survivors += 1
-        decisions[oid] = {
-            "action": "show",
-            "order_id": oid,
-            "restaurant": rec.get("restaurant"),
-            "holder_cid": holder,
-            "holder_name": names.get(holder, holder),
-            "best_cid": g,
-            "best_name": names.get(g, getattr(best, "name", None) or g),
-            "arm": ("ratunek" if q.get("a_late") else "oszczędność"),
-            "reason": q.get("quality_reason"),
-            "save_min": q.get("save_min"),
-            "a_late": bool(q.get("a_late")),
-            "depiled": True,
-        }
 
-    # metryki pile-on before↔after (best_cid generatora vs survivor best_cid=g)
+    # GRUPUJ po CELU generatora (best_cid) — pile-on = ≥2 propozycje na TEN SAM cel (skarga
+    # Adriana „10 na Jakuba"). Singleton (unikalny cel / brak) NIE jest kolizją → propozycja
+    # generatora stoi (SHOW passthrough, overlay zostawia oryginał z feedu). De-pile TYLKO
+    # kolizje — inaczej usunięcie wszystkich z holderów zafałszowuje (holder wygląda na wolnego
+    # → order błędnie „stays_with_holder"; bug złapany 29.06 na case 484222/484195).
+    groups: Dict[Any, List[str]] = {}
+    for oid, holder, _ in cands:
+        groups.setdefault(cand_best.get(oid), []).append(oid)
+
+    pile_oids: List[str] = []
+    for tgt, members in groups.items():
+        if tgt is None or len(members) < 2:
+            for oid in members:                       # brak kolizji → pokaż jak proponuje generator
+                decisions[oid] = {"action": "show", "order_id": oid,
+                                  "holder_cid": holder_of[oid], "best_cid": None,
+                                  "passthrough": True, "depiled": False}
+        else:
+            pile_oids.extend(members)
+
+    # de-pile TYLKO kolidujące: zdejmij je z holderów → global_allocate (sekwencyjna wirtualna
+    # alokacja) → 1-2 najlepsze dostają cel, reszta reroute (inny kurier) albo zostaje (hide).
+    if pile_oids:
+        fleet_minus = dict(fleet)
+        for oid in pile_oids:
+            fleet_minus = _fleet_without_order(fleet_minus, oid, holder_of[oid])
+        res_map: Dict[str, Any] = {}
+        allocation = global_allocate([(oid, rec_of[oid]) for oid in pile_oids],
+                                     fleet_minus, now, _results_out=res_map)
+        # wirtualny rozmiar worka G (kolejność = insertion order allocation) → reserve-aware b_bag
+        prior_to_courier: Dict[str, int] = {}
+        earlier_count: Dict[str, int] = {}
+        for oid in allocation:
+            g = (allocation.get(oid) or {}).get("cid")
+            earlier_count[oid] = prior_to_courier.get(str(g), 0) if g else 0
+            if g:
+                prior_to_courier[str(g)] = prior_to_courier.get(str(g), 0) + 1
+
+        for oid in pile_oids:
+            holder = holder_of[oid]
+            rec = rec_of[oid]
+            a = allocation.get(oid) or {}
+            g = a.get("cid")
+            def _hide(why, extra=None):
+                d = {"action": "hide", "order_id": oid, "holder_cid": holder, "why": why}
+                if extra:
+                    d.update(extra)
+                decisions[oid] = d
+                dropped.append({"oid": oid, "why": why, **(extra or {})})
+            if a.get("no_courier") or g is None:
+                _hide("no_feasible_courier_KOORD")
+                continue
+            g = str(g)
+            if g == holder:
+                _hide("stays_with_holder", {"g": g})
+                continue
+            res = res_map.get(oid)
+            if res is None or getattr(res, "best", None) is None:
+                _hide("no_result")
+                continue
+            a_cand = _find_cand(res, holder)
+            best = res.best
+            cs_a = fleet.get(holder)
+            cs_g0 = fleet_minus.get(g)
+            a_pos = getattr(cs_a, "pos_source", None) if cs_a is not None else None
+            b_pos = getattr(fleet.get(g), "pos_source", None) if fleet.get(g) is not None else None
+            base_g_bag = len(cs_g0.bag) if (cs_g0 is not None and cs_g0.bag is not None) else 0
+            b_bag = base_g_bag + earlier_count.get(oid, 0)   # realny + wirtualnie doklejeni wcześniejsi
+            q = _quality_gate(a_cand, best, oid, a_pos, b_pos, holder, g,
+                              b_bag=b_bag, a_in_fleet=(cs_a is not None))
+            if not q.get("quality_reassign"):
+                _hide("quality_failed_vs_global", {"g": g, "q_reason": q.get("quality_reason")})
+                continue
+            decisions[oid] = {
+                "action": "show", "order_id": oid, "restaurant": rec.get("restaurant"),
+                "holder_cid": holder, "holder_name": names.get(holder, holder),
+                "best_cid": g, "best_name": names.get(g, getattr(best, "name", None) or g),
+                "arm": ("ratunek" if q.get("a_late") else "oszczędność"),
+                "reason": q.get("quality_reason"), "save_min": q.get("save_min"),
+                "a_late": bool(q.get("a_late")), "depiled": True,
+            }
+
+    survivors = sum(1 for d in decisions.values() if d.get("action") == "show")
+    # metryki pile-on: before = max grupa celu generatora; after = max efektywny cel pokazanych
     before_counts = Counter(str(cand_best[oid]) for oid, _, _ in cands if cand_best.get(oid))
-    after_counts = Counter(d["best_cid"] for d in decisions.values() if d.get("action") == "show")
+    after_counts: Counter = Counter()
+    for oid, d in decisions.items():
+        if d.get("action") == "show":
+            tgt = d.get("best_cid") or cand_best.get(oid)   # de-piled→nowy cel; singleton→cel generatora
+            if tgt:
+                after_counts[str(tgt)] += 1
     metrics = {
         "candidates_in": len(cands),
         "survivors_out": survivors,
         "hidden_out": len(cands) - survivors,
+        "depiled_groups": sum(1 for t, m in groups.items() if t is not None and len(m) >= 2),
         "maxpile_before": (max(before_counts.values()) if before_counts else 0),
         "maxpile_after": (max(after_counts.values()) if after_counts else 0),
         "couriers_after": len(after_counts),
