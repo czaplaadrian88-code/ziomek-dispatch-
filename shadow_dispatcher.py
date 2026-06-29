@@ -855,6 +855,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # MIN-DELIVERED-AT (Adrian 2026-06-25): „min total spóźnienie+dowóz" winner vs live
         # + regresja floty (Pareto) w tej samej decyzji. None gdy flaga OFF. grep: min_delivered_at_shadow.
         "min_delivered_at_shadow": getattr(result, "min_delivered_at_shadow", None),
+        # #3 top10 (2026-06-29): reserve-aware tie-break (wolny-vs-jadący) log-only. None gdy flaga OFF. grep: reserve_tiebreak_shadow.
+        "reserve_tiebreak_shadow": getattr(result, "reserve_tiebreak_shadow", None),
         # Fix #6 (2026-05-31): R6 danger-zone counterfactual (legacy liniowa vs stroma).
         # {"changed": bool, old_winner_*, new_winner_*} gdy stroma kara near-limit (32-35)
         # przestawiła zwycięzcę vs legacy -8/min. grep: R6_DANGER_DIVERGENCE.

@@ -2532,6 +2532,53 @@ def _demote_blind_empty(feasible: list, order_id=None) -> list:
     return reordered
 
 
+def _reserve_aware_tiebreak_eval(winner, feasible, wtier, lp_tier_fn, margin):
+    """#3 top10 (2026-06-29): log-only ewaluacja reserve-aware tie-break. Czy zwycięzca to
+    WOLNY kurier (bag 0), a w TYM SAMYM tierze late-pickup jest FEASIBLE kandydat JUŻ W
+    TRASIE (bag≥1) w marginesie score (silnik ~obojętny) → tie-break dołożyłby do jadącego
+    (oszczędza rezerwę). PURE, ZERO mutacji feasible/winner. Zwraca dict (would_fire+detal).
+    same-tier = brak inwersji committed-odbioru; wyklucz sentinel/best_effort (|score|≥1e6)
+    + R6>40 (bundle nie może psuć świeżości). Margin = RESERVE_TIEBREAK_MARGIN."""
+    def _bag_before(c):
+        m = c.metrics or {}
+        b = m.get("bag_size_before")
+        return (b if b is not None else m.get("r6_bag_size")) or 0
+    if _bag_before(winner) != 0:
+        return {"would_fire": False, "winner_free": False}
+    ws = winner.score or 0.0
+    carriers = []
+    for c in feasible:
+        if c is winner or lp_tier_fn(c) != wtier:
+            continue  # tylko ten sam tier late-pickup (brak inwersji committed-odbioru)
+        if _bag_before(c) < 1:
+            continue  # musi już wieźć (jadący)
+        cs = c.score
+        if cs is None or abs(cs) >= 1e6:
+            continue  # sentinel/best_effort
+        m = c.metrics or {}
+        mb = m.get("max_bag_time_min")
+        mb = mb if mb is not None else m.get("r6_max_bag_time_min")
+        if mb is not None and mb > 40.0:
+            continue  # R6 tier-aware cap — bundle nie może psuć świeżości
+        if (ws - cs) <= margin:
+            carriers.append((c, cs, _bag_before(c), mb))
+    if not carriers:
+        return {"would_fire": False, "winner_free": True}
+    carriers.sort(key=lambda t: -t[1])
+    bc, bcs, bbag, bmb = carriers[0]
+    return {
+        "would_fire": True,
+        "winner_free": True,
+        "winner_cid": str(getattr(winner, "courier_id", "")),
+        "carry_cid": str(getattr(bc, "courier_id", "")),
+        "carry_bag_before": bbag,
+        "carry_r6_max_bag_time_min": bmb,
+        "dscore_free_minus_carry": round(ws - bcs, 1),
+        "same_late_pickup_tier": wtier,
+        "n_carrier_candidates": len(carriers),
+    }
+
+
 # Czysta geometria trasy (point→segment, min→route) → pipeline_geometry.py
 # (B6 2026-06-20, zaimportowane wyżej). Wywołanie w _assess_order_impl nietknięte,
 # zachowanie identyczne (test_pipeline_geometry + pełna suita = bramka).
@@ -5876,6 +5923,7 @@ def _assess_order_impl(
     late_pickup_shadow = None
     r6_danger_shadow = None  # Fix #6: rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6
     min_delivered_at_shadow = None  # Adrian 2026-06-25: log-only min-total komparator
+    reserve_tiebreak_shadow = None  # #3 top10 2026-06-29: log-only reserve-aware tie-break (wolny vs jadący)
     if getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False) and feasible:
         _lp_tier = _late_pickup_tier  # module-level (testowalny)
         _orig_order = {id(c): i for i, c in enumerate(feasible)}
@@ -5971,6 +6019,22 @@ def _assess_order_impl(
                 }
             except Exception as _mda_e:
                 log.warning(f"min_delivered_at_shadow fail order={order_id}: {_mda_e!r}")
+
+        # RESERVE-AWARE TIEBREAK SHADOW (#3 top10, 2026-06-29): log-only — gdy zwycięzca to
+        # WOLNY kurier (bag 0), a w TYM SAMYM tierze late-pickup jest FEASIBLE kandydat JUŻ
+        # W TRASIE (bag>=1) w wąskim marginesie score → tie-break dołożyłby do jadącego
+        # (oszczędza rezerwę). ZERO zmiany decyzji (feasible/_winner NIETKNIĘTE). same-tier =
+        # brak inwersji committed-odbioru; wyklucz sentinel/best_effort + R6>40 (świeżość).
+        # Pomiar dokładny 29.06: ~3-9/d czystych. Flip AKTYWNY = osobna flaga + ACK (po
+        # walidacji fizycznej #1, że bundle nie psuje świeżości). Gated OFF, try/except.
+        if C.flag("ENABLE_RESERVE_AWARE_TIEBREAK_SHADOW",
+                  getattr(C, "ENABLE_RESERVE_AWARE_TIEBREAK_SHADOW", False)):
+            try:
+                reserve_tiebreak_shadow = _reserve_aware_tiebreak_eval(
+                    _winner, feasible, _wtier, _lp_tier,
+                    float(getattr(C, "RESERVE_TIEBREAK_MARGIN", 30.0)))
+            except Exception as _rt_e:
+                log.warning(f"reserve_tiebreak_shadow fail order={order_id}: {_rt_e!r}")
 
         # SHADOW: rozjazd stary-vs-nowy zwycięzca (Adrian chce widzieć efekt natychmiast).
         # Serializowany top-level w shadow_dispatcher → grep LATE_PICKUP_SCORE_FIRST.
@@ -6613,6 +6677,8 @@ def _assess_order_impl(
         _result_pf.late_pickup_shadow = late_pickup_shadow
         # MIN-DELIVERED-AT (Adrian 2026-06-25): min-total vs live winner (shadow, log-only).
         _result_pf.min_delivered_at_shadow = min_delivered_at_shadow
+        # RESERVE-AWARE TIEBREAK (#3 top10 2026-06-29): wolny-vs-jadący tie-break (shadow, log-only).
+        _result_pf.reserve_tiebreak_shadow = reserve_tiebreak_shadow
         # Fix #6 (2026-05-31): rozjazd zwycięzcy legacy-liniowa-R6 vs danger-R6 (shadow).
         _result_pf.r6_danger_shadow = r6_danger_shadow
         # Load-aware distribution counterfactual (2026-06-07) — shadow only.

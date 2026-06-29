@@ -178,6 +178,10 @@ ETAP4_DECISION_FLAGS = (
     # czystych). Default OFF; flip po GO review 02.07 + dowód netto + cap-Z z danych.
     # Decyzyjna, cross-proces. Składa się z B2 (carry-readmit selekcji) ku correctness.
     "ENABLE_O2_READY_ANCHOR_SWEEP",
+    # #3 top10 (2026-06-29): reserve-aware tie-break SHADOW (wolny-vs-jadący) — log-only,
+    # zero zmiany decyzji; obserwuje ile razy tie-break by dołożył do jadącego (oszczędność
+    # rezerwy) w tym samym tierze late-pickup. Flip AKTYWNY = osobna flaga + ACK po walidacji #1.
+    "ENABLE_RESERVE_AWARE_TIEBREAK_SHADOW",
     # F3-HARD-RULE FLAGS (2026-06-28, audyt Ziomka — domknięcie ETAP4-gap): flagi
     # rządzące TWARDYMI regułami feasibility/selekcji, które były POZA rejestrem →
     # poza zasięgiem fingerprint-parytetu cross-proces / izolacji conftest / flag_registry.
@@ -236,6 +240,8 @@ ENABLE_OBJ_FOOD_AGE_HARD_SLA = False  # Faza 2 2026-06-17 (food-age hard-SLA + w
 ENABLE_END_OF_DAY_SALVAGE = False  # 2026-06-18 (ostatnia godzina pracy firmy — bend reguł końca zmiany)
 ENABLE_FEAS_CARRY_READMIT = False  # #483000 2026-06-27 (carry-aware re-admit feasible-path, cap-40 Tier-3)
 ENABLE_O2_READY_ANCHOR_SWEEP = False  # O2 re-seq 2026-06-27 (ready-anchor + overage+λ·czas_late objektyw worka, review 02.07)
+ENABLE_RESERVE_AWARE_TIEBREAK_SHADOW = False  # #3 top10 2026-06-29: log-only tie-break wolny-vs-jadący (shadow); flip=osobna flaga+ACK
+RESERVE_TIEBREAK_MARGIN = 30.0  # #3: max Δscore (wolny−jadący) by tie-break dołożył do jadącego (silnik ~obojętny = łatwy zysk)
 ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria physical_verified delivered_at panel-vs-GPS courier_ground_truth; SHADOW, zero wpływu na decyzje/SLA; kanon=flags.json hot)
 ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
 ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
