@@ -2356,7 +2356,9 @@ def _soon_free_probe(cid, bag_raw, now):
         _bag_oids = {str(b.get("order_id")) for b in bag_raw if b.get("order_id")}
         if not _bag_oids:
             return None
-        saved = _pm_sf.load_plan(str(cid), active_bag_oids=_bag_oids)
+        saved = _pm_sf.load_plan(
+            str(cid), active_bag_oids=_bag_oids,
+            invalidate_on_mismatch=not C.flag("ENABLE_LOAD_PLAN_PURE_READ"))
         if saved is None:
             return None
         drops = [
@@ -3652,7 +3654,9 @@ def _assess_order_impl(
                 if ENABLE_SAVED_PLANS_READ:
                     from dispatch_v2 import plan_manager as _pm_read
                     _bag_oids = {str(o.order_id) for o in bag_sim}
-                    _saved = _pm_read.load_plan(str(cid), active_bag_oids=_bag_oids)
+                    _saved = _pm_read.load_plan(
+                        str(cid), active_bag_oids=_bag_oids,
+                        invalidate_on_mismatch=not C.flag("ENABLE_LOAD_PLAN_PURE_READ"))
                     if _saved is not None:
                         _seq = [
                             str(s["order_id"]) for s in _saved.get("stops", [])
@@ -4987,6 +4991,16 @@ def _assess_order_impl(
             if _psp is not None:
                 bonus_v325_pre_shift_soft = _psp
                 metrics["v325_pre_shift_soft_penalty"] = _psp   # spójność breakdown/serializacji
+        # Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): kurier przed
+        # zmianą = liczony RÓWNO. Zeruj karę score pre_shift (PO obu źródłach: stała V325 +
+        # gradient — jeden autorytatywny punkt). „Dotrze później" obsługuje LEGALNA ścieżka
+        # (clamp do shift_start + R-LATE-PICKUP propozycja przedłużenia DO RESTAURACJI), NIE
+        # ukryta kara w score. HARD-reject >30min-przed-zmianą (feasibility_v2) zostaje.
+        # Default OFF = kara zachowana; flip flags.json=True po replayu+ACK. v325_ prefix → serializowane.
+        if C.decision_flag("ENABLE_PRE_SHIFT_EQUAL_NO_PENALTY"):
+            metrics["v325_pre_shift_penalty_suppressed"] = round(bonus_v325_pre_shift_soft, 2)
+            bonus_v325_pre_shift_soft = 0.0
+            metrics["v325_pre_shift_soft_penalty"] = 0.0
         # D2 (audyt 2026-05-28): soft penalty gdy grafik STALE (shift_end None z awarii pliku,
         # nie realnego braku shiftu). 0 gdy flag OFF lub grafik świeży. Default OFF → shadow.
         bonus_d2_stale_soft = float(metrics.get("d2_soft_penalty", 0) or 0)

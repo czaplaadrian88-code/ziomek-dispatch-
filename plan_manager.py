@@ -121,9 +121,24 @@ def load_plans() -> Dict[str, Any]:
 def load_plan(
     courier_id: str,
     active_bag_oids: Optional[set] = None,
+    invalidate_on_mismatch: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Load a single plan. If active_bag_oids provided and any plan stop's
-    order_id is outside that set → invalidate on read (mismatch with reality).
+    order_id is outside that set → mismatch with reality (return None).
+
+    invalidate_on_mismatch (default True = legacy): on mismatch ALSO persist
+    invalidate_plan(ORDER_DELIVERED_ALL).
+
+    FIX 2026-06-29 (root cause oscylacji carried-first): czytelnicy-PODGLĄDY
+    (dispatch_pipeline `_soon_free_probe` / base_sequence read) wołają to per-tick
+    z workiem KANDYDATA. Przy wyścigu z `advance_plan` (po dostawie, ZANIM
+    chirurgicznie wykreśli dostarczony stop) read widzi „stop planu spoza worka"
+    i DRZE CAŁY plan — invalidated z mylnym ORDER_DELIVERED_ALL MIMO żywych
+    stopów → konsola mruga co tick na carried-first (case Jakub W / Piotr K).
+    Z `invalidate_on_mismatch=False` read jest CZYSTY (zwraca None, NIE
+    persystuje) — autorytatywne unieważnienia (advance_plan na dostawie /
+    panel_watcher BAG_CHANGED na reassign / plan_recheck terminal/missing/stale)
+    pozostają JEDYNYM źródłem invalidacji. Flaga w callerze: ENABLE_LOAD_PLAN_PURE_READ.
 
     Returns None if no plan or plan invalidated.
     """
@@ -139,7 +154,8 @@ def load_plan(
         plan_oids = {s["order_id"] for s in plan.get("stops", [])
                      if s.get("type") == "dropoff"}
         if plan_oids and not plan_oids.issubset(active_bag_oids):
-            invalidate_plan(cid, "ORDER_DELIVERED_ALL")
+            if invalidate_on_mismatch:
+                invalidate_plan(cid, "ORDER_DELIVERED_ALL")
             return None
     return plan
 
