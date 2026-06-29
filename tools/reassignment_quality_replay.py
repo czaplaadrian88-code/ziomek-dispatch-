@@ -55,9 +55,18 @@ def build_report(since=None):
     saving = [d for d in perq.values() if d.get("quality_reassign") and not d.get("a_late")]
     noflag = [d for d in perq.values() if not d.get("quality_reassign")]
 
-    # PRECYZJA RATUNKU: z ratunków, które człowiek ZOSTAWIŁ u holdera — ile realnie breachowało
+    # #7 audyt 28.06: a_late = (a_cand None = infeasible/transient — holder poza pulą GPS/lag) LUB
+    # (realna predykcja ETA a_bag_time>r6_late). PRECYZJA ma sens TYLKO dla gałęzi LATE-ETA;
+    # infeasible (a_pred_deliver=None) NIE jest predykcją „obecny się spóźni" → liczona razem
+    # zawyżała mianownik i dawała mylące „0%". Inwariant audytu: a_late ⇔ a_pred=None = 100%
+    # infeasible, gałąź ETA 0 rek. → precyzja ETA = N/A (brak danych), NIE „0% (gate zły)".
+    rescue_eta = [d for d in rescue if d.get("a_pred_deliver") is not None]
+    rescue_infeasible = [d for d in rescue if d.get("a_pred_deliver") is None]
+
+    # PRECYZJA RATUNKU (TYLKO gałąź LATE-ETA): z ratunków zostawionych u holdera — ile realnie
+    # breachowało. Infeasible-transient WYKLUCZONE (nie są predykcją spóźnienia → nie mierzą gate'u).
     r_left = r_left_breach = 0
-    for d in rescue:
+    for d in rescue_eta:
         s = sla.get(str(d.get("order_id")))
         if not s:
             continue
@@ -79,10 +88,11 @@ def build_report(since=None):
     prec = (100*r_left_breach/r_left) if r_left else None
     lines = [
         f"🔁 Q-GATE (gate jakości przerzutu) replay {since or 'all'} — MATERIAŁ",
-        f"• zleceń z quality_*: {len(perq)} | ratunek: {len(rescue)} | oszczędność: {len(saving)} | bez przerzutu: {len(noflag)}",
-        f"• PRECYZJA RATUNKU: z {r_left} ratunków zostawionych u obecnego, REALNIE breach: "
+        f"• zleceń z quality_*: {len(perq)} | ratunek: {len(rescue)} (late-ETA {len(rescue_eta)}, infeasible-transient {len(rescue_infeasible)}) | oszczędność: {len(saving)} | bez przerzutu: {len(noflag)}",
+        f"• PRECYZJA RATUNKU (gałąź LATE-ETA): z {r_left} zostawionych u obecnego, REALNIE breach: "
         f"{r_left_breach} = {prec:.0f}%" if prec is not None else
-        "• PRECYZJA RATUNKU: brak ratunków zostawionych u obecnego (za mało danych)",
+        f"• PRECYZJA RATUNKU (gałąź LATE-ETA): N/A — {len(rescue_eta)} ratunków z realną predykcją ETA "
+        f"({len(rescue_infeasible)} infeasible-transient WYKLUCZONE, nie mierzą gate'u). Gałąź ETA jeszcze nie dała danych.",
         f"• OSZCZĘDNOŚĆ: {len(saving)} propozycji, mediana save {med_save} min (counterfactual — nie werdykt)",
         f"• KONTROLA over-eager: z {n_left} 'bez przerzutu' zostawionych, on-time: "
         f"{n_left_ontime} = {100*n_left_ontime/n_left:.0f}%" if n_left else
