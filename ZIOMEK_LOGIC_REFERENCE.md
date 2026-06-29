@@ -460,6 +460,13 @@ the module constant. ~80+ flags exist. Notable **current** states:
   ten sam `address_mismatch_shadow.jsonl` z polem `check:"text_coords"`; hook w `shadow_dispatcher._tick`
   po `state_all`, try/except fail-soft; case 484269 „Można"≠„Mroźna" 4,26 km — tekst stał po edycji,
   bo `gastro_edit.regeocode_and_update` aktualizuje tylko coords; ZERO zmiany decyzji/dispatchu).
+  `ENABLE_REGEOCODE_SYNC_TEXT` (Adrian 2026-06-29: fix asymetrii — po edycji adresu w gastro
+  `gastro_edit.regeocode_and_update` zapisuje też `delivery_address`+`delivery_city` spójnie z
+  `delivery_coords` (nie tylko coords). Koniec rozjazdu tekst↔pin tworzonego przez naszą ścieżkę
+  edycji; tekst karmi `drop_zone_from_address` → poprawny district w scoringu. Default OFF → flip ON
+  po weryfikacji; subprocess `gastro_edit.py` czyta flagę per-edycję, bez restartu. Komplement do
+  `ENABLE_ADDRESS_COORDS_MISMATCH_SHADOW` (detektor mierzy spadek rozjazdów). Naprawia case a/edycja,
+  NIE tekst błędny u źródła w gastro/case b).
 - ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` (cold-food divergence
   no longer →KOORD), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
   `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`, `kill_switch_to_v1`,
