@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek reassignment GLOBAL SELECT — co 3 min, offset +1min po dispatch-reassignment-shadow (czyta swiezy reassignment_shadow.jsonl). Rozbija pile-on propozycji przerzutu globalnie.
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=3min
+Persistent=false
+Unit=dispatch-reassign-global-select.service
+
+[Install]
+WantedBy=timers.target

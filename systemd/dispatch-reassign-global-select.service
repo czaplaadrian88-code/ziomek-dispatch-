@@ -1,0 +1,30 @@
+[Unit]
+Description=Ziomek reassignment GLOBAL SELECT — rozbija pile-on propozycji przerzutu (>=2 quality_reassign na jednego kuriera) sekwencyjnym global_allocate; survivor = 1-2 tworzace dobry worek, reszta sie rozjezdza/odpada. READ-ONLY, OSOBNY PROCES. Flaga ENABLE_REASSIGN_GLOBAL_SELECT default OFF = natychmiastowy no-op. Pisze kanal reassign_global_alloc.json (konsola overlay) + werdykt reassign_global_select.jsonl. ZERO wplywu na decyzje/dispatch/Telegram; shadow_decisions/analityka nietkniete.
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/reassignment_global_select.py
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-06-29/REASSIGN_GLOBAL_SELECT_DESIGN.md
+After=network.target
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.reassignment_global_select
+# Peak-friendly: niski priorytet CPU + I/O w tle (global_allocate woła assess_order/OSRM; nie wypierac hot-pathu)
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# Latency-guard: cap MAX_CANDIDATES=20 w module; oneshot, nie powinno przekroczyc minut
+TimeoutStartSec=120
+# Sandbox / pamiec — styl pozostalych shadow-serwisow (read-only, maly footprint)
+MemoryHigh=300M
+MemoryMax=400M
+TasksMax=256
+# Shadow = preferowany do ubicia gdy host OOM (dodatni = ginie PIERWSZY, NIE wypiera dispatch-shadow/panel-watcher)
+OOMScoreAdjust=200
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/reassignment_global_select.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/reassignment_global_select.log
+
+[Install]
+WantedBy=multi-user.target
