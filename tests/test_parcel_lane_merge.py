@@ -18,12 +18,14 @@ def test_merge_flag_off_noop(monkeypatch):
 
 def test_merge_stale_or_missing_snapshot(monkeypatch):
     monkeypatch.setattr(plm.C, "flag", lambda n, d=False: True)
+    monkeypatch.setattr(plm, "_apply_status_inbox", lambda: 0)  # osobny test; chroni guard _state_path
     monkeypatch.setattr(plm, "_load_snapshot", lambda: None)
-    assert plm.run() == {"enabled": True, "snapshot": "missing_or_stale"}
+    assert plm.run() == {"enabled": True, "snapshot": "missing_or_stale", "status_applied": 0}
 
 
 def test_merge_creates_new_parcel(monkeypatch):
     monkeypatch.setattr(plm.C, "flag", lambda n, d=False: True)
+    monkeypatch.setattr(plm, "_apply_status_inbox", lambda: 0)  # osobny test; chroni guard _state_path
     monkeypatch.setattr(plm, "_load_snapshot", lambda: {"900000005": _PARCEL})
     monkeypatch.setattr(plm.sm, "get_all", lambda: {})
     created = []
@@ -42,6 +44,7 @@ def test_merge_creates_new_parcel(monkeypatch):
 def test_merge_keeps_existing_no_clobber(monkeypatch):
     """Paczka już w stanie (silnik mógł dodać courier_id) → NIE re-upsert."""
     monkeypatch.setattr(plm.C, "flag", lambda n, d=False: True)
+    monkeypatch.setattr(plm, "_apply_status_inbox", lambda: 0)  # osobny test; chroni guard _state_path
     monkeypatch.setattr(plm, "_load_snapshot", lambda: {"900000005": _PARCEL})
     monkeypatch.setattr(plm.sm, "get_all",
                         lambda: {"900000005": {"source": "parcel", "status": "assigned", "courier_id": 7}})
@@ -56,6 +59,7 @@ def test_merge_keeps_existing_no_clobber(monkeypatch):
 def test_merge_retires_gone_parcel(monkeypatch):
     """Paczka zniknęła ze snapshotu (anulowana/usunięta) → terminalna (sprzątanie)."""
     monkeypatch.setattr(plm.C, "flag", lambda n, d=False: True)
+    monkeypatch.setattr(plm, "_apply_status_inbox", lambda: 0)  # osobny test; chroni guard _state_path
     monkeypatch.setattr(plm, "_load_snapshot", lambda: {})
     monkeypatch.setattr(plm.sm, "get_all",
                         lambda: {"900000005": {"source": "parcel", "status": "planned"}})
@@ -69,6 +73,7 @@ def test_merge_retires_gone_parcel(monkeypatch):
 def test_merge_leaves_gastro_alone(monkeypatch):
     """Sprzątanie dotyka TYLKO source=parcel — gastro w stanie nietknięte."""
     monkeypatch.setattr(plm.C, "flag", lambda n, d=False: True)
+    monkeypatch.setattr(plm, "_apply_status_inbox", lambda: 0)  # osobny test; chroni guard _state_path
     monkeypatch.setattr(plm, "_load_snapshot", lambda: {})
     monkeypatch.setattr(plm.sm, "get_all",
                         lambda: {"484000": {"status": "planned"}})  # gastro, brak source
@@ -90,6 +95,35 @@ def test_watcher_prefetch_skips_parcels():
     out = pw._build_prefetch_candidates(parsed, state, set(), False, False, False)
     assert "900000005" not in out      # strażnik działa
     assert "222" in out                # twin gastro nietknięty
+
+
+# ── Etap 3c: inbox statusów z apki → orders_state ──────────────────────────
+def test_apply_status_inbox(monkeypatch, tmp_path):
+    """5=odebrane→PICKED_UP, 7=doręczone→DELIVERED, 3=ignorowane. Idempotent po event_id."""
+    (tmp_path / "parcel_status_inbox.jsonl").write_text(
+        '{"oid":"900138096","status_code":5,"cid":61,"ts":111}\n'
+        '{"oid":"900138096","status_code":7,"cid":61,"ts":222}\n'
+        '{"oid":"900138096","status_code":3,"cid":61,"ts":333}\n', encoding="utf-8")
+    monkeypatch.setattr(plm.sm, "_state_path", lambda: str(tmp_path / "orders_state.json"))
+    emitted, applied = [], []
+    monkeypatch.setattr(plm.event_bus, "emit",
+                        lambda et, order_id=None, courier_id=None, event_id=None:
+                        emitted.append((et, event_id)) or event_id)
+    monkeypatch.setattr(plm.sm, "update_from_event", lambda ev: applied.append(ev["event_type"]))
+    assert plm._apply_status_inbox() == 2          # 5+7; 3 pominięte
+    assert applied == ["COURIER_PICKED_UP", "COURIER_DELIVERED"]
+    assert ("COURIER_PICKED_UP", "900138096_COURIER_PICKED_UP_111") in emitted
+
+
+def test_apply_status_inbox_idempotent(monkeypatch, tmp_path):
+    """event_bus.emit zwraca None (już wyemitowane) → NIE aplikuj ponownie."""
+    (tmp_path / "parcel_status_inbox.jsonl").write_text(
+        '{"oid":"900138096","status_code":5,"cid":61,"ts":111}\n', encoding="utf-8")
+    monkeypatch.setattr(plm.sm, "_state_path", lambda: str(tmp_path / "orders_state.json"))
+    monkeypatch.setattr(plm.event_bus, "emit", lambda *a, **k: None)
+    applied = []
+    monkeypatch.setattr(plm.sm, "update_from_event", lambda ev: applied.append(ev))
+    assert plm._apply_status_inbox() == 0 and applied == []
 
 
 if __name__ == "__main__":

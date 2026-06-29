@@ -38,6 +38,10 @@ SNAPSHOT_NAME = "orders_state.parcels_shadow.json"
 SNAPSHOT_MAX_AGE_SEC = 600  # >10 min = panel sidecar padł → NIE ufaj (nie wpychaj starych)
 _TERMINAL = ("delivered", "cancelled", "returned_to_pool")
 
+# Etap 3c: status apki kuriera (courier_api inbox) → orders_state. 5=odebrane, 7=doręczone.
+STATUS_INBOX_NAME = "parcel_status_inbox.jsonl"
+_STATUS_CODE_EVENT = {5: "COURIER_PICKED_UP", 7: "COURIER_DELIVERED"}
+
 
 def _snapshot_path() -> Path:
     return Path(sm._state_path()).parent / SNAPSHOT_NAME
@@ -63,13 +67,48 @@ def _load_snapshot():
     return orders if isinstance(orders, dict) else {}
 
 
+def _apply_status_inbox() -> int:
+    """Etap 3c: zastosuj statusy paczek z inboxu (apka kuriera → courier_api) do orders_state.
+    Idempotent po event_id (event_bus). 5→picked_up, 7→delivered; 3/4 nie zmieniają statusu.
+    Fail-soft per wiersz. (v1: czyta cały inbox/tick — niska wolumetria paczek; rotacja = TODO.)"""
+    path = Path(sm._state_path()).parent / STATUS_INBOX_NAME
+    if not path.exists():
+        return 0
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    applied = 0
+    for ln in lines:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            e = json.loads(ln)
+        except ValueError:
+            continue
+        etype = _STATUS_CODE_EVENT.get(int(e.get("status_code", 0) or 0))
+        if not etype:
+            continue
+        oid = str(e.get("oid"))
+        cid = str(e.get("cid") or "")
+        eid = f"{oid}_{etype}_{e.get('ts')}"
+        if event_bus.emit(etype, order_id=oid, courier_id=cid, event_id=eid):
+            sm.update_from_event({"event_type": etype, "order_id": oid, "courier_id": cid})
+            applied += 1
+            log.info("paczka %s ← %s (apka)", oid, etype)
+    return applied
+
+
 def run() -> dict:
     """Jeden przebieg mergera. Zwraca statystyki. Flaga OFF → no-op."""
     if not C.flag("ENABLE_PARCEL_LANE_LIVE", getattr(C, "ENABLE_PARCEL_LANE_LIVE", False)):
         return {"enabled": False}
+    # Etap 3c: statusy z apki (inbox) → orders_state — NIEZALEŻNIE od snapshotu.
+    status_applied = _apply_status_inbox()
     snap = _load_snapshot()
     if snap is None:
-        return {"enabled": True, "snapshot": "missing_or_stale"}
+        return {"enabled": True, "snapshot": "missing_or_stale", "status_applied": status_applied}
 
     state = sm.get_all()
     snap_oids = set(snap.keys())
@@ -98,6 +137,8 @@ def run() -> dict:
             continue
         sm.set_status(oid, "cancelled", event="PARCEL_LANE_GONE")
         stats["retired"] += 1
+
+    stats["status_applied"] = status_applied
     return stats
 
 
