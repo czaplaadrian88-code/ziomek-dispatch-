@@ -126,6 +126,19 @@ def test_apply_status_inbox_idempotent(monkeypatch, tmp_path):
     assert plm._apply_status_inbox() == 0 and applied == []
 
 
+def test_apply_status_inbox_rotates_when_large(monkeypatch, tmp_path):
+    """Po przetworzeniu, gdy inbox > próg → rotacja do .1 (świeży powstanie przy append)."""
+    inbox = tmp_path / "parcel_status_inbox.jsonl"
+    inbox.write_text('{"oid":"900000005","status_code":5,"cid":61,"ts":1}\n', encoding="utf-8")
+    monkeypatch.setattr(plm.sm, "_state_path", lambda: str(tmp_path / "orders_state.json"))
+    monkeypatch.setattr(plm.event_bus, "emit", lambda *a, **k: "e")
+    monkeypatch.setattr(plm.sm, "update_from_event", lambda ev: None)
+    monkeypatch.setattr(plm, "INBOX_MAX_BYTES", 0)   # wymuś rotację
+    plm._apply_status_inbox()
+    assert not inbox.exists()                         # zrotowany
+    assert (tmp_path / "parcel_status_inbox.jsonl.1").exists()
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -41,6 +41,7 @@ _TERMINAL = ("delivered", "cancelled", "returned_to_pool")
 # Etap 3c: status apki kuriera (courier_api inbox) → orders_state. 5=odebrane, 7=doręczone.
 STATUS_INBOX_NAME = "parcel_status_inbox.jsonl"
 _STATUS_CODE_EVENT = {5: "COURIER_PICKED_UP", 7: "COURIER_DELIVERED"}
+INBOX_MAX_BYTES = 2_000_000  # po przetworzeniu: >tyle → rotacja do .1 (kosmetyka)
 
 
 def _snapshot_path() -> Path:
@@ -97,6 +98,14 @@ def _apply_status_inbox() -> int:
             sm.update_from_event({"event_type": etype, "order_id": oid, "courier_id": cid})
             applied += 1
             log.info("paczka %s ← %s (apka)", oid, etype)
+    # Rotacja: po przetworzeniu (idempotent), gdy plik duży → archiwum .1; courier_api
+    # utworzy świeży przy kolejnym append. Bezpieczne: event_bus dedupuje okno rotacji.
+    try:
+        if path.stat().st_size > INBOX_MAX_BYTES:
+            path.rename(path.with_name(STATUS_INBOX_NAME + ".1"))
+            log.info("parcel_status_inbox zrotowany (>2MB → .1)")
+    except OSError:
+        pass
     return applied
 
 
