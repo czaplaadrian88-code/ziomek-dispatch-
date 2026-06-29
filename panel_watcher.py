@@ -61,6 +61,7 @@ from dispatch_v2.state_machine import (
     get_order as state_get_order,
     update_from_event,
     upsert_order,
+    resurrect_order,
     touch_check_cursor,
 )
 from dispatch_v2.geocoding import geocode
@@ -1760,6 +1761,86 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             if _ghost_confirmed:
                 stats["packs_ghost_detect"] = _ghost_confirmed
     # ================== END V3.20 PACKS GHOST DETECT ==================
+
+    # ================== DELIVERED RESURRECTION ==================
+    # Symetria do PACKS GHOST: zlecenie 'delivered' w state, ale WRÓCIŁO do packs kuriera
+    # (koordynator RĘCZNIE cofnął status w gastro — case Pizzeria 105 29.06: apka wysłała
+    # błędne 'doręczone' tuż po odbiorze, Adrian cofnął). Bez tego Ziomek ignoruje je NA
+    # ZAWSZE (terminal + _ignored_ids) → lista kuriera i czasy się nie aktualizują.
+    # fetch_details POTWIERDZA aktywny status gastro (3-6) ZANIM wskrzesi. Wąskie: tylko
+    # świeżo dostarczone (okno cofnięcia ~60 min) + budżet 5 fetchów/cykl.
+    try:
+        from dispatch_v2 import common as _Cres
+        _res_flag = _Cres.flag("ENABLE_DELIVERED_RESURRECTION",
+                               getattr(_Cres, "ENABLE_DELIVERED_RESURRECTION", False))
+    except Exception:
+        _res_flag = False
+    if _res_flag:
+        _packs_res = parsed.get("courier_packs") or {}
+        if _packs_res:
+            try:
+                import json as _json_res
+                with open("/root/.openclaw/workspace/dispatch_state/kurier_ids.json") as _f_res:
+                    _kids_res = _json_res.load(_f_res)
+                _cid2nick_res, _namecnt_res = {}, {}
+                for _nm, _cid in _kids_res.items():
+                    _nmk = (_nm or "").strip()
+                    if not _nmk:
+                        continue
+                    _namecnt_res[_nmk] = _namecnt_res.get(_nmk, 0) + 1
+                    _cid2nick_res[str(_cid)] = _nmk
+                _ambig_res = {n for n, c in _namecnt_res.items() if c > 1}
+            except Exception as _e_res:
+                _log.warning(f"resurrection: kurier_ids load fail: {_e_res}")
+                _cid2nick_res, _ambig_res = {}, set()
+            _packs_by_nick_res = {(n or "").strip(): {str(x) for x in (v or [])}
+                                  for n, v in _packs_res.items()}
+            _now_res = datetime.now(timezone.utc)
+            _res_checked = _res_done = 0
+            for _oid_r, _so_r in list(current_state.items()):
+                if _res_checked >= 5:
+                    break
+                if _so_r.get("status") != "delivered":
+                    continue
+                _da = _so_r.get("delivered_at")
+                if _da:                                   # tylko świeżo dostarczone (okno cofnięcia)
+                    try:
+                        _dadt = datetime.fromisoformat(str(_da).replace("Z", "+00:00"))
+                        if _dadt.tzinfo is None:
+                            _dadt = _dadt.replace(tzinfo=timezone.utc)
+                        if (_now_res - _dadt).total_seconds() / 60.0 > 60.0:
+                            continue
+                    except Exception:
+                        pass
+                _cid_r = str(_so_r.get("courier_id") or "")
+                _nick_r = _cid2nick_res.get(_cid_r)
+                if not _nick_r or _nick_r in _ambig_res:
+                    continue
+                if str(_oid_r) not in _packs_by_nick_res.get(_nick_r, set()):
+                    continue                              # NIE wróciło do packs — zostaje delivered
+                try:
+                    _raw_r = fetch_order_details(str(_oid_r), csrf)
+                    stats["fetched_details"] += 1
+                    _res_checked += 1
+                except Exception as _fe_r:
+                    _log.warning(f"resurrection fetch({_oid_r}): {_fe_r}")
+                    stats["errors"] += 1
+                    continue
+                if not _raw_r or _raw_r.get("id_status_zamowienia") not in (3, 4, 5, 6):
+                    continue                              # gastro nadal terminalny → nie wskrzeszaj
+                _sid_r = _raw_r.get("id_status_zamowienia")
+                _new_st = "picked_up" if _sid_r in (5, 6) else "assigned"
+                _ignored_ids.discard(str(_oid_r))
+                try:
+                    resurrect_order(str(_oid_r), _new_st, _cid_r, reason="panel_status_restored")
+                    _res_done += 1
+                    _log.info(f"RESURRECT {_oid_r} cid={_cid_r} sid={_sid_r}→{_new_st} "
+                              f"(wrócił do packs po ręcznym cofnięciu w gastro)")
+                except Exception as _re_r:
+                    _log.warning(f"resurrect fail {_oid_r}: {type(_re_r).__name__}: {_re_r}")
+            if _res_done:
+                stats["resurrected"] = _res_done
+    # ================== END DELIVERED RESURRECTION ==================
 
     # ================== RECONCILE STATUS ==================
     # Dla orderow ktore state widzi jako assigned/picked_up, a panel widzi jako closed

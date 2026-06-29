@@ -207,6 +207,12 @@ ETAP4_DECISION_FLAGS = (
     # wieku termicznego → pickup-first przechodzi gdy skraca jazdę. Default OFF; flip po replay ON↔OFF
     # + ACK. Decyzyjna, cross-proces. Komplementarna z ENABLE_O2_READY_ANCHOR_SWEEP (tamta=SLA/objektyw).
     "ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR",
+    # DELIVERED RESURRECTION (2026-06-29, case Pizzeria 105 cid 492): zlecenie błędnie oznaczone
+    # 'doręczone' (apka skok 6→7), koordynator cofnął status w gastro → bez tego Ziomek ignorował
+    # je na zawsze (terminal + _ignored_ids), lista/czasy się nie aktualizowały. ON → panel_watcher
+    # wykrywa delivered-które-wróciło-do-packs + potwierdza aktywny status gastro (3-6) → wskrzesza
+    # (status back, delivered_at=None). Wąskie: świeże <60min + budżet 5 fetchów/cykl. Default OFF.
+    "ENABLE_DELIVERED_RESURRECTION",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -234,6 +240,7 @@ ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria
 ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
 ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
 ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR = False  # 2026-06-29 case Rećki (ready-anchor R6 w 3 bramkach carried-first plan_recheck; OFF=legacy in-bag/byte-identyczne; KANON=flags.json)
+ENABLE_DELIVERED_RESURRECTION = False  # 2026-06-29 case Pizzeria 105 (panel_watcher wskrzesza delivered-które-wróciło-do-packs po ręcznym cofnięciu w gastro; OFF=stare ignorowanie na zawsze; KANON=flags.json)
 # Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy ON → zeruje
 # karę score pre_shift (`bonus_v325_pre_shift_soft`, oba źródła: stała V325 + gradient
 # _pre_shift_gradient_penalty). „Kurier dotrze później" obsługuje LEGALNA ścieżka:

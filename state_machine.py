@@ -447,6 +447,33 @@ def set_status(order_id: str, status: str, extra: Optional[dict] = None, event: 
     return upsert_order(order_id, data, event=event)
 
 
+def resurrect_order(order_id: str, new_status: str = "picked_up",
+                    courier_id: Optional[str] = None,
+                    reason: str = "panel_status_restored") -> Optional[dict]:
+    """Cofnięcie z 'delivered' do aktywnego — koordynator RĘCZNIE przywrócił status w gastro
+    (case Pizzeria 105 29.06: apka wysłała błędne 'doręczone' tuż po odbiorze, Adrian cofnął
+    w gastro → bez tego Ziomek ignorował zlecenie NA ZAWSZE [terminal + _ignored_ids], lista
+    kuriera i czasy się nie aktualizowały). ŚWIADOMIE bypassuje Path-B terminal-preserve —
+    wołane TYLKO gdy panel_watcher potwierdził aktywny status gastro (3-6) + zlecenie wróciło
+    do packs kuriera. Czyści delivered_at/final_location. No-op gdy zlecenie nie 'delivered'."""
+    prev = get_order(order_id) or {}
+    if prev.get("status") != "delivered":
+        return None
+    if new_status not in ("assigned", "picked_up"):
+        new_status = "picked_up"
+    data = {
+        "status": new_status,
+        "commitment_level": new_status,
+        "delivered_at": None,
+        "final_location": None,
+        "bag_time_alerted": False,
+    }
+    if courier_id:
+        data["courier_id"] = str(courier_id)
+    _log.warning(f"RESURRECT {order_id} delivered→{new_status} reason={reason} cid={courier_id}")
+    return upsert_order(order_id, data, event="ORDER_RESURRECTED")
+
+
 def update_from_event(event: dict) -> Optional[dict]:
     """Konsumuje event z event busa i aktualizuje state machine.
     Zwraca zaktualizowany rekord lub None."""
