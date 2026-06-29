@@ -250,6 +250,26 @@ def test_route_cache_idempotency_across_hours():
     print("PASS test_route_cache_idempotency_across_hours")
 
 
+def test_fallback_not_double_multiplied():
+    """#12 audyt 28.06: fallback haversine ma duration JUŻ korkową (get_fallback_speed_kmh =
+    bucket korkowy) → _apply_traffic_multiplier NIE mnoży go drugi raz. Real-OSRM nadal mnożony."""
+    peak = _utc_for_warsaw(2026, 6, 26, 18, 0)  # weekday_rush
+    fake_dt = mock.MagicMock(wraps=datetime)
+    fake_dt.now = mock.MagicMock(return_value=peak)
+    with mock.patch.object(osrm_client, "ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER", True):
+        # fallback (osrm_fallback=True) — NIE mnożony
+        fb = {"duration_s": 600.0, "duration_min": 10.0, "distance_km": 3.0, "osrm_fallback": True}
+        out_fb = osrm_client._apply_traffic_multiplier(dict(fb), peak)
+        assert out_fb["duration_s"] == 600.0, f"fallback nie powinien być mnożony: {out_fb['duration_s']}"
+        assert out_fb["traffic_multiplier"] == 1.0
+        assert out_fb.get("traffic_multiplier_fallback_already_corked") is True
+        # real OSRM (bez osrm_fallback) — NADAL mnożony w LIVE
+        real = {"duration_s": 600.0, "duration_min": 10.0, "distance_km": 3.0}
+        out_real = osrm_client._apply_traffic_multiplier(dict(real), peak)
+        assert out_real["duration_s"] > 600.0, f"real-OSRM powinien być mnożony: {out_real['duration_s']}"
+    print("PASS test_fallback_not_double_multiplied")
+
+
 # ─── Run all ──────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -262,6 +282,7 @@ if __name__ == "__main__":
         test_route_flag_false_shadow_records_no_mutation,
         test_route_flag_true_applies_and_preserves_raw,
         test_route_cache_idempotency_across_hours,
+        test_fallback_not_double_multiplied,
     ]
     failed = 0
     for t in tests:

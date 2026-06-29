@@ -313,6 +313,17 @@ def _apply_traffic_multiplier(result: dict, now_utc: datetime) -> dict:
     raw_s = result.get("osrm_raw_duration_s", result.get("duration_s"))
     if raw_s is None:
         return result
+    # #12 audyt 28.06: fallback haversine ma duration JUŻ korkową (get_fallback_speed_kmh = bucket
+    # korkowy 20-32 km/h, traffic w środku) → mnożenie get_traffic_multiplier DRUGI raz = podwójne
+    # liczenie ruchu (~+25..49% w peaku gdy OSRM degraded → przeszacowany drive → over-konserwatywny
+    # R6/feasibility → fałszywe odrzucenia). NIE jest to OSRM free-flow → poza traffic-drift stats
+    # (te walidują drift OSRM↔traffic, nie fallback). Zwróć już-korkową duration bez mnożnika.
+    if result.get("osrm_fallback"):
+        result["osrm_raw_duration_s"] = raw_s
+        result["osrm_raw_duration_min"] = round(raw_s / 60, 1)
+        result["traffic_multiplier"] = 1.0
+        result["traffic_multiplier_fallback_already_corked"] = True
+        return result
     mult = get_traffic_multiplier(now_utc)
 
     # BUG-D V3.28+ shadow: per-distance-bin multiplier (additive boost in peak)
