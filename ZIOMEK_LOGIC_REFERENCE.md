@@ -647,6 +647,27 @@ parser-degraded / frozen-window / best-effort / weak-pick / Kebab-Król-dinner; 
 solo-fallback / shift-end-edge; AUTO only if all conditions pass. High-risk 14–17 "death zone"
 bucket boosts margin +5 (R6 breach 13–20% there vs 7–9% lunch/dinner).
 
+**`auto_assign_gate.py` + `auto_assign_executor.py` — AUTON-01/02 (2026-06-13 / 2026-06-30)** ⚪ executor OFF.
+- **Gate** `evaluate_auto_assign` = pure telemetry computed **always** (lesson #186): `would_auto_assign` +
+  `auto_block_reasons` on every PROPOSE. Hard gates (always): G1 verdict=PROPOSE, G4 czasówka, G5
+  paczka/firmowe, G6 new-courier-ramp, G7 informed pos (not blind/store), G8 late-pickup, G9
+  R6/commit-divergence/best-effort/plan-sla, G11 score≤90 distrust ceiling, **G13 shift-end-edge**,
+  **G14 parser-degraded** (G13/G14 added AUTON-02, explicit — they were implicit in G2).
+- **AUTON-02 profile** (flags `AUTO_ASSIGN_REQUIRE_CLASSIFIER_AUTO` / `AUTO_ASSIGN_REQUIRE_MARGIN`,
+  ETAP4, **default True = strict AUTON-01**): when False → drops G2 (classifier=AUTO) and G12 (margin),
+  pool gate `AUTO_ASSIGN_MIN_POOL_FEASIBLE` 3→2. This is **"plaster D"** — gated by *physics* not
+  coordinator-agreement. Physical validation (calibration 2827/14d): AGREE≈OVERRIDE in delivery (R6
+  breach 8.6%≈9.0%) → couriers in the feasible pool are interchangeable; coordinator-agreement is a
+  *biased* gate. Slice D (pool≥2 + informed + non-czasówka/paczka) ≈ 62% vol / ~125/day at breach 5.5%
+  vs 9.0% human baseline. `dispatch_pipeline` logs `would_auto_assign_d` (pool≥2) + `_dprime` (pool≥3)
+  alongside strict in `shadow_decisions.jsonl` (compute-always, no execution impact).
+- **Executor** `maybe_execute` (only from `shadow_dispatcher`, behind `ENABLE_AUTO_ASSIGN` killswitch,
+  default **OFF**): rate-cap `AUTO_ASSIGN_MAX_PER_HOUR=6`, cooldown `AUTO_ASSIGN_OVERRIDE_COOLDOWN_MIN=60`
+  after PANEL_OVERRIDE on that courier, executes via subprocess `gastro_assign.py` (ASSIGN_DIRECT path).
+  ⚠ **never run E2E** — first execution must be supervised. Console killswitch: coordinator toggle
+  "Autonomia Ziomka WŁ/WYŁ" (`/api/coordinator/auto-assign` → `flags_admin set ENABLE_AUTO_ASSIGN`).
+  Design: `eod_drafts/2026-06-13/AUTON01_DESIGN.md` + `eod_drafts/2026-06-30/AUTON02_PLASTER_D_DESIGN.md`.
+
 **`calib_maps.py`** 🟡 SHADOW — `eta_quantile_map` (pred→real ETA calibration; pred>25 min biased
 −10..−25) and `restaurant_prep_bias` (declared vs real pickup-ready, med +9..+22 min). Consumption
 gated OFF — R-DECLARED-TIME stays authoritative.
