@@ -728,8 +728,14 @@ def _update_plan_on_picked_up(courier_id: str, order_id: str,
 
 
 def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
-                      oid: str) -> Optional[dict]:
+                      oid: str, deliberate: bool = False) -> Optional[dict]:
     """V3.19g1: detect czas_kuriera change for already-assigned order.
+
+    deliberate=True (force-recheck na żądanie koordynatora, kolejka
+    coordinator_time_recheck): pasywne strażniki (czasówka-passive, elastyk
+    forward-only) są POMIJANE i source="coordinator_force" — klik człowieka to
+    świadoma zmiana, ściągamy nowy czas w OBIE strony (state_machine też przepuści,
+    bo coordinator_force ∉ _CK_PASSIVE_SOURCES). Próg szumu ±3min zostaje.
 
     Returns None (no-op) when:
       - no change, below threshold, first acceptance (null→val), val→null revert
@@ -805,7 +811,7 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
         _flag = None
     if _is_czas:
         _guard = _flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True) if _flag else True
-        if _guard:
+        if _guard and not deliberate:
             _log.info(
                 f"CK_PASSIVE_SUPPRESSED oid={oid} czasówka ck "
                 f"{old_ck_hhmm}→{new_ck_hhmm} Δ={delta_min:+.1f}min src=panel_re_check "
@@ -816,8 +822,9 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
         # Elastyk forward-only (Adrian 2026-06-24, opcja B): pasywny re-odczyt
         # NIE cofa committed czas_kuriera („przyjazd wcześniej niż umówiono" =
         # wobble ETA). Forward (koordynatorski +15 / spóźnienie) przechodzi.
+        # deliberate (klik koordynatora) omija — to świadoma zmiana, nie szum.
         _eguard = _flag("ENABLE_ELASTYK_CK_NO_BACKWARD", True) if _flag else True
-        if _eguard and delta_min < 0:
+        if _eguard and delta_min < 0 and not deliberate:
             _log.info(
                 f"CK_ELASTYK_BACKWARD_BLOCKED oid={oid} ck {old_ck_hhmm}→{new_ck_hhmm} "
                 f"Δ={delta_min:+.1f}min src=panel_re_check — elastyk forward-only, "
@@ -833,7 +840,7 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
         "new_ck_iso": new_ck_iso,
         "new_ck_hhmm": new_ck_hhmm,
         "delta_min": round(delta_min, 2),
-        "source": "panel_re_check",
+        "source": "coordinator_force" if deliberate else "panel_re_check",
     }
     return {
         "event_type": "CZAS_KURIERA_UPDATED",
@@ -844,8 +851,13 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
 
 
 def _diff_pickup_time(old_state: dict, fresh_response: dict,
-                      oid: str) -> Optional[dict]:
+                      oid: str, deliberate: bool = False) -> Optional[dict]:
     """Detect pickup_at_warsaw change (restaurant-declared pickup time).
+
+    deliberate=True (force-recheck koordynatora): source="coordinator_force"
+    (audyt). Kanał pickup_at i tak nie ma strażnika kierunku — zmienia w obie
+    strony; deliberate jedynie znakuje źródło i pełni rolę dla czasówek (mirror
+    pickup→czas_kuriera w state_machine).
 
     Root cause oid 474577 (2026-05-19): koordynator zmienił czas odbioru
     czasówki trzymanej przez Koordynatora na życzenie restauracji.
@@ -906,7 +918,7 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
         "new_decision_deadline": fresh_response.get("decision_deadline"),
         "new_zmiana_czasu_odbioru": fresh_response.get("zmiana_czasu_odbioru"),
         "delta_min": round(delta_min, 2) if delta_min is not None else None,
-        "source": "panel_re_check",
+        "source": "coordinator_force" if deliberate else "panel_re_check",
     }
     evt = {
         "event_type": "PICKUP_TIME_UPDATED",
@@ -2108,8 +2120,26 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     except Exception:
         ENABLE_V319G_CK_DETECTION = False
         ENABLE_PICKUP_TIME_DETECTION = False
-    if ENABLE_V319G_CK_DETECTION or ENABLE_PICKUP_TIME_DETECTION:
+    # FORCE-RECHECK na żądanie koordynatora (przycisk „Odśwież czas" w konsoli):
+    # drenuj kolejkę coordinator_time_recheck (panel dopisał oid). Te oid wymuszamy
+    # BEZWARUNKOWO — także planned-elastyki (poza zwykłym scope) i w OBIE strony
+    # (deliberate=True omija forward-only/czasówka-passive). Flaga = kill-switch.
+    _force_ids: set = set()
+    try:
+        if C.flag("ENABLE_COORDINATOR_FORCE_TIME_RECHECK", True):
+            from dispatch_v2 import coordinator_time_recheck as _ctr
+            _force_ids = _ctr.drain()
+            if _force_ids:
+                _log.info(
+                    f"COORDINATOR_FORCE_TIME_RECHECK drained {len(_force_ids)} oid(s): "
+                    f"{sorted(_force_ids)}"
+                )
+    except Exception as _e:  # noqa: BLE001 — fail-soft, automat leci dalej
+        _log.warning(f"force-recheck drain fail: {_e}")
+
+    if ENABLE_V319G_CK_DETECTION or ENABLE_PICKUP_TIME_DETECTION or _force_ids:
         for zid, state_order in list(current_state.items()):
+            _force = zid in _force_ids
             _status = state_order.get("status")
             _is_czasowka = (
                 state_order.get("order_type") == "czasowka"
@@ -2118,10 +2148,13 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             in_scope = (
                 _status in ("assigned", "picked_up")
                 or (_status == "planned" and _is_czasowka)
+                or _force  # klik koordynatora wymusza re-check dowolnego statusu
             )
             if not in_scope:
                 continue
             if zid not in html_order_ids:
+                if _force:
+                    _log.info(f"force-recheck oid={zid} nie ma na boardzie — pomijam")
                 continue  # terminal or vanished — skip
             try:
                 # PANEL-SCRAPE-01: ten scope to WIĘKSZOŚĆ fetchy/tick — prefetch-first
@@ -2144,13 +2177,14 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 continue
 
             # ---- Detekcja A: czas_kuriera (V3.19g1) ----
-            if ENABLE_V319G_CK_DETECTION:
+            if ENABLE_V319G_CK_DETECTION or _force:
                 fresh_snippet = {
                     "czas_kuriera_warsaw": norm_ck.get("czas_kuriera_warsaw"),
                     "czas_kuriera_hhmm": norm_ck.get("czas_kuriera_hhmm"),
                     "id_kurier": raw_ck.get("id_kurier"),
                 }
-                evt = _diff_czas_kuriera(state_order, fresh_snippet, oid=zid)
+                evt = _diff_czas_kuriera(state_order, fresh_snippet, oid=zid,
+                                         deliberate=_force)
                 if evt is not None:
                     # V3.27.1 BUG-1: event_id suffix dispatch — first_acceptance
                     # używa _FIRST_ACK dla łatwego grep, value→value zachowuje
@@ -2181,14 +2215,15 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     )
 
             # ---- Detekcja B: pickup_at_warsaw (PICKUP_TIME_UPDATED) ----
-            if ENABLE_PICKUP_TIME_DETECTION:
+            if ENABLE_PICKUP_TIME_DETECTION or _force:
                 pickup_snippet = {
                     "pickup_at_warsaw": norm_ck.get("pickup_at_warsaw"),
                     "prep_minutes": norm_ck.get("prep_minutes"),
                     "decision_deadline": norm_ck.get("decision_deadline"),
                     "zmiana_czasu_odbioru": norm_ck.get("zmiana_czasu_odbioru"),
                 }
-                evt_p = _diff_pickup_time(state_order, pickup_snippet, oid=zid)
+                evt_p = _diff_pickup_time(state_order, pickup_snippet, oid=zid,
+                                          deliberate=_force)
                 if evt_p is not None:
                     p_suffix = evt_p.get("event_id_suffix")
                     if p_suffix:
