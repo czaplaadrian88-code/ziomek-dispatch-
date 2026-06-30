@@ -586,11 +586,13 @@ def _czas_kuriera_to_datetime(
     zamienić na pełen datetime, bierze date-component z pickup_at_warsaw
     (primary anchor), fallback today Warsaw.
 
-    6h wraparound guard:
-      - candidate.delta_hours(anchor) < -6 → wraparound forward (+1 dzień)
-        np. HH:MM="00:15" + pickup=23:45 poprzedniego dnia → następny dzień
-      - candidate.delta_hours(anchor) > +6 → wraparound backward (-1 dzień)
-        np. HH:MM="23:45" + pickup=00:15 następnego dnia → poprzedni dzień
+    Wybór doby = najbliższa do kotwicy (closest-day, 2026-06-30):
+      - spośród {dziś, jutro, wczoraj} bierze tę dobę, która minimalizuje
+        |candidate − anchor| (zastąpił dawny próg ±6h, który mis-stemplował
+        realnie późniejszy czas przy nieświeżej/wczesnej kotwicy na wczoraj)
+      - przełom północy zachowany: HH:MM="00:15" + pickup=23:45 → następny dzień;
+        HH:MM="23:45" + pickup=00:15 → poprzedni dzień
+      - remis → dziś/forward (czas kuriera ≥ gotowość = norma)
 
     Returns Warsaw-aware datetime, albo None gdy parse fail / out-of-range.
     """
@@ -611,14 +613,25 @@ def _czas_kuriera_to_datetime(
     else:
         anchor = anchor.astimezone(WARSAW_TZ)
 
-    candidate = datetime.combine(
-        anchor.date(), _time(h, m), tzinfo=WARSAW_TZ
+    # Wybór doby dla bez-datowego HH:MM. Niejednoznaczne na przełomie północy ORAZ
+    # gdy kotwica (pickup_at) jest NIEŚWIEŻA/wczesna. Stary strażnik ±6h zakładał
+    # „candidate >6h po kotwicy = poprzedni dzień" → mis-stemplował realnie PÓŹNIEJSZY
+    # czas na WCZORAJ (nocny pickup_at 02:52 + przełożony odbiór 11:37 → 2026-06-29
+    # 11:37 = Δ-960min → CK_ELASTYK_BACKWARD_BLOCKED, oid 484392/483654 2026-06-30):
+    # konsola zamrażała stary czas, nie ściągała poprawionego z rutcomu. Zamiast progu
+    # wybieramy dobę MINIMALIZUJĄCĄ |candidate − anchor| spośród {dziś, jutro, wczoraj}.
+    # Przełom północy zachowany (anchor 23:45 + 00:15 → jutro; anchor 00:15 + 23:45 →
+    # wczoraj — najbliższa doba). Remis → preferuj wcześniejszy w liście = dziś/forward
+    # (czas kuriera ≥ gotowość = norma). Testy test_v319f_parse Test 1-3 zachowane.
+    candidates = [
+        datetime.combine(anchor.date() + timedelta(days=_d), _time(h, m),
+                         tzinfo=WARSAW_TZ)
+        for _d in (0, 1, -1)
+    ]
+    candidate = min(
+        candidates,
+        key=lambda _c: abs((_c - anchor).total_seconds()),
     )
-    delta_hours = (candidate - anchor).total_seconds() / 3600.0
-    if delta_hours < -6:
-        candidate = candidate + timedelta(days=1)
-    elif delta_hours > 6:
-        candidate = candidate - timedelta(days=1)
     return candidate
 
 

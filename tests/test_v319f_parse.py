@@ -72,6 +72,17 @@ expected_b = datetime(2026, 4, 19, 23, 45, tzinfo=WARSAW)
 check("3. wraparound bwd: pickup 00:15 + czas=23:45 → 2026-04-19 23:45",
       out_b == expected_b, detail=f"got {out_b}")
 
+# Test 3b — STALE/wczesna kotwica + przełożony późniejszy odbiór (oid 484392,
+# 483654 2026-06-30). Nocny pickup_at 02:52 + rutcom ck=11:37 (>6h po kotwicy):
+# dawny próg ±6h stemplował to na WCZORAJ → Δ-960min → CK_ELASTYK_BACKWARD_BLOCKED,
+# konsola zamrażała stary czas. Closest-day: 11:37 dziś (8.75h) bliżej niż wczoraj
+# (15.25h) → DZIŚ. To regresja na bug daty kotwicy (fix 2026-06-30).
+pickup_stale = datetime(2026, 6, 30, 2, 52, 9, tzinfo=WARSAW)
+out_stale = _czas_kuriera_to_datetime("11:37", pickup_stale)
+expected_stale = datetime(2026, 6, 30, 11, 37, tzinfo=WARSAW)
+check("3b. stale-anchor: pickup 02:52 + czas=11:37 → SAME DAY 11:37 (nie wczoraj)",
+      out_stale == expected_stale, detail=f"got {out_stale}")
+
 # Test 4 — typical czasówka przedłużenie (pickup 16:42 + kurier 17:10)
 pickup_d = datetime(2026, 4, 20, 16, 42, tzinfo=WARSAW)
 out_d = _czas_kuriera_to_datetime("17:10", pickup_d)
