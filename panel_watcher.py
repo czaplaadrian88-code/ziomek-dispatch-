@@ -810,11 +810,16 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
     except Exception:
         _flag = None
     if _is_czas:
+        # Czasówka: committed = pickup_at, a czas_kuriera to przeklepywany przez gastro
+        # ŚMIEĆ (re-stamp na zmianie statusu) — guard suppress ZAWSZE, także przy deliberate
+        # (force koordynatora ściąga czasówkę kanałem pickup_at → PICKUP_TIME_UPDATED, który
+        # mirroruje na czas_kuriera). Bypass tu pociągnąłby śmieciowy czas_kuriera.
         _guard = _flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True) if _flag else True
-        if _guard and not deliberate:
+        if _guard:
             _log.info(
                 f"CK_PASSIVE_SUPPRESSED oid={oid} czasówka ck "
-                f"{old_ck_hhmm}→{new_ck_hhmm} Δ={delta_min:+.1f}min src=panel_re_check "
+                f"{old_ck_hhmm}→{new_ck_hhmm} Δ={delta_min:+.1f}min "
+                f"src={'coordinator_force' if deliberate else 'panel_re_check'} "
                 f"— committed=pickup_at, gastro re-stamp ignorowany (no emit)"
             )
             return None
