@@ -589,6 +589,13 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # Egzekucja TYLKO przez auto_assign_executor za ENABLE_AUTO_ASSIGN.
         "would_auto_assign": getattr(result, "would_auto_assign", None),
         "auto_block_reasons": getattr(result, "auto_block_reasons", None),
+        # AUTON-02 (2026-06-30): plaster D (pool>=2) i D' (pool>=3) liczone OBOK
+        # strict (czysta telemetria, NIE napędza egzekucji). Pomiar rozmiaru/jakości
+        # plastra na żywo przed flipem profilu. Projekt: AUTON02_PLASTER_D_DESIGN.md.
+        "would_auto_assign_d": getattr(result, "would_auto_assign_d", None),
+        "auto_block_reasons_d": getattr(result, "auto_block_reasons_d", None),
+        "would_auto_assign_dprime": getattr(result, "would_auto_assign_dprime", None),
+        "auto_block_reasons_dprime": getattr(result, "auto_block_reasons_dprime", None),
         # FAIL-04 (2026-06-06): shadow-first prep-variance anomaly (slepa wiara w
         # prep panelu). None gdy brak anomalii lub flaga OFF. NIE wplywa na decyzje.
         "prep_variance_anomaly": getattr(result, "prep_variance_anomaly", None),

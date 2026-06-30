@@ -2885,14 +2885,40 @@ def _classify_and_set_auto_route(
     # (would=False + marker), nigdy nie zaklóca decyzji.
     try:
         from dispatch_v2.auto_assign_gate import evaluate_auto_assign
+        _aa_flags = C.load_flags()
         _would, _blocks = evaluate_auto_assign(
-            result, order_event, INFORMED_POS_SOURCES, flags=C.load_flags(),
+            result, order_event, INFORMED_POS_SOURCES, flags=_aa_flags,
         )
         result.would_auto_assign = _would
         result.auto_block_reasons = _blocks
+        # AUTON-02 (2026-06-30): policz plaster D i D' OBOK strict — czysta
+        # telemetria (lekcja #186), NIE zmienia decyzji/egzekucji. Egzekutor
+        # czyta wyłącznie strict `would_auto_assign`. Pozwala zmierzyć na żywo
+        # rozmiar/jakość plastra przed flipem profilu w flags.json.
+        # D = pool≥2 (luzno+srednio), D' = pool≥3 (luzno) — oba bez G2/G12.
+        for _suf, _ov in (
+            ("_d", {"AUTO_ASSIGN_REQUIRE_CLASSIFIER_AUTO": False,
+                    "AUTO_ASSIGN_REQUIRE_MARGIN": False,
+                    "AUTO_ASSIGN_MIN_POOL_FEASIBLE": 2}),
+            ("_dprime", {"AUTO_ASSIGN_REQUIRE_CLASSIFIER_AUTO": False,
+                         "AUTO_ASSIGN_REQUIRE_MARGIN": False,
+                         "AUTO_ASSIGN_MIN_POOL_FEASIBLE": 3}),
+        ):
+            try:
+                _fd = dict(_aa_flags or {})
+                _fd.update(_ov)
+                _w2, _b2 = evaluate_auto_assign(
+                    result, order_event, INFORMED_POS_SOURCES, flags=_fd,
+                )
+            except Exception:
+                _w2, _b2 = False, ["shadow_profile_exception"]
+            setattr(result, f"would_auto_assign{_suf}", _w2)
+            setattr(result, f"auto_block_reasons{_suf}", _b2)
     except Exception as _aa_e:
         result.would_auto_assign = False
         result.auto_block_reasons = [f"gate_exception:{type(_aa_e).__name__}"]
+        result.would_auto_assign_d = False
+        result.would_auto_assign_dprime = False
         try:
             log.warning(
                 f"auto_assign gate exception order={getattr(result, 'order_id', '?')}: {_aa_e}"

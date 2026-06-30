@@ -37,6 +37,17 @@ def _gate_numeric(flags: Optional[Dict[str, Any]], name: str) -> float:
         return float(getattr(C, name))
 
 
+def _gate_bool(flags: Optional[Dict[str, Any]], name: str, default: bool = True) -> bool:
+    """Flaga bramki (AUTON-02 profil): flags dict (hot) → stała modułu → default.
+    Czytana z przekazanego `flags` (nie C.flag()) — bramka jest czysta, profil
+    wstrzykuje wołający (dispatch_pipeline: strict live + plaster D w shadow)."""
+    src = flags if isinstance(flags, dict) else {}
+    val = src.get(name, getattr(C, name, default))
+    if isinstance(val, str):
+        return val.strip().lower() in ("1", "true", "yes", "on")
+    return bool(val)
+
+
 def _quality_score(cand: Any) -> Optional[float]:
     """Score kandydata BEZ delt rankingowych (lekcja #188, fix 30a01d2).
 
@@ -98,8 +109,11 @@ def evaluate_auto_assign(
 
     # G2: klasyfikator Fazy 7 (margin Z-10, score floor, tier whitelist,
     # min pool, C7 best_is_score_top, HIGH_RISK 14-17, edge-cases).
+    # AUTON-02: w profilu „plaster D" (REQUIRE_CLASSIFIER_AUTO=False) ZDJĘTE —
+    # G2 przepuszczał tylko 7% (would_auto≈0). Edge'e które G2 niósł ukryte
+    # (shift_end_edge, parser_degraded) egzekwują JAWNIE G13/G14 niżej.
     route = getattr(result, "auto_route", "ACK")
-    if route != "AUTO":
+    if _gate_bool(flags, "AUTO_ASSIGN_REQUIRE_CLASSIFIER_AUTO") and route != "AUTO":
         reason = (getattr(result, "auto_route_reason", "") or "")[:80]
         blocks.append(f"classifier_not_auto:{route}:{reason}")
 
@@ -131,6 +145,17 @@ def evaluate_auto_assign(
     # G6: kurier w RAMPIE nowych (tier z kontekstu klasyfikatora).
     if ctx.get("auto_route_tier_best") == "new":
         blocks.append("new_courier_ramp")
+
+    # G13 (AUTON-02): kurier KOŃCZY ZMIANĘ (shift_end_edge) — klasyfikator
+    # routował te do ACK/ALERT; przy zdjętym G2 (plaster D) egzekwujemy JAWNIE,
+    # żeby autonomia nie przypisała kurierowi tuż przed końcem zmiany. ZAWSZE.
+    if ctx.get("auto_route_shift_end_edge"):
+        blocks.append("shift_end_edge")
+
+    # G14 (AUTON-02): degradacja parsera/zdrowia systemu — gdy parser_degraded,
+    # dane wejściowe niepewne → nigdy auto (klasyfikator też to wykluczał). ZAWSZE.
+    if _gate_bool(flags, "PARSER_DEGRADED", default=False) or ctx.get("auto_route_parser_degraded"):
+        blocks.append("parser_degraded")
 
     # G7: pozycja musi być informed (gps/bag-pochodne), nigdy blind/center;
     # store-replay nie jest żywym fixem (Z-06).
@@ -189,25 +214,30 @@ def evaluate_auto_assign(
     # niższy margin w G2) = fail-closed, świadomie zostaje — recompute klasyfikatora
     # ex-delta to temat E7. Bez listy kandydatów (stare rekordy/testy) fallback:
     # margin z kontekstu klasyfikatora vs ten sam próg bazowy.
-    min_margin = _min_margin_threshold(flags)
-    cands = getattr(result, "candidates", None) or []
-    others_q: List[float] = []
-    for c in cands:
-        if c is best or getattr(c, "courier_id", None) == getattr(best, "courier_id", None):
-            continue
-        if getattr(c, "feasibility_verdict", "MAYBE") != "MAYBE":
-            continue
-        qc = _quality_score(c)
-        if qc is not None:
-            others_q.append(qc)
-    if others_q and q_best is not None:
-        margin_ex = q_best - max(others_q)
-        if margin_ex < min_margin:
-            blocks.append(f"margin_ex_delta:{margin_ex:.1f}<{min_margin:.0f}")
-    elif not cands:
-        ctx_margin = ctx.get("auto_route_score_margin")
-        if isinstance(ctx_margin, (int, float)) and float(ctx_margin) < min_margin:
-            blocks.append(f"margin_ex_delta_ctx:{float(ctx_margin):.1f}<{min_margin:.0f}")
-    # (kandydaci są, ale solo-feasible → margin niezdefiniowany; scarcity łapie G10)
+    # AUTON-02: w profilu „plaster D" (REQUIRE_MARGIN=False) G12 ZDJĘTE —
+    # analiza fizyczna 14d: ZGODA≈OVERRIDE w wyniku dostawy (breach 8,6%≈9,0%),
+    # kurierzy w puli feasible wymienni → margin #1-vs-#2 nie jest warunkiem
+    # bezpieczeństwa. Scarcity łapie G10, świeżość pozycji G7. Sufit G11 zostaje.
+    if _gate_bool(flags, "AUTO_ASSIGN_REQUIRE_MARGIN"):
+        min_margin = _min_margin_threshold(flags)
+        cands = getattr(result, "candidates", None) or []
+        others_q: List[float] = []
+        for c in cands:
+            if c is best or getattr(c, "courier_id", None) == getattr(best, "courier_id", None):
+                continue
+            if getattr(c, "feasibility_verdict", "MAYBE") != "MAYBE":
+                continue
+            qc = _quality_score(c)
+            if qc is not None:
+                others_q.append(qc)
+        if others_q and q_best is not None:
+            margin_ex = q_best - max(others_q)
+            if margin_ex < min_margin:
+                blocks.append(f"margin_ex_delta:{margin_ex:.1f}<{min_margin:.0f}")
+        elif not cands:
+            ctx_margin = ctx.get("auto_route_score_margin")
+            if isinstance(ctx_margin, (int, float)) and float(ctx_margin) < min_margin:
+                blocks.append(f"margin_ex_delta_ctx:{float(ctx_margin):.1f}<{min_margin:.0f}")
+        # (kandydaci są, ale solo-feasible → margin niezdefiniowany; scarcity łapie G10)
 
     return (len(blocks) == 0), blocks

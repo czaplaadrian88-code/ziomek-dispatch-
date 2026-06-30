@@ -110,6 +110,13 @@ ETAP4_DECISION_FLAGS = (
     # wykonanie w auto_assign_executor. Flip po E7 za ACK + osobne E2E.
     # Projekt: eod_drafts/2026-06-13/AUTON01_DESIGN.md.
     "ENABLE_AUTO_ASSIGN",
+    # AUTON-02 (2026-06-30): profil bramki „plaster D". Default strict (oba True)
+    # = zachowanie AUTON-01. False zdejmuje wymóg klasyfikator=AUTO (G2) / margin
+    # (G12) → szerszy plaster bramkowany fizyką (pool_feasible≥2, non-scarcity).
+    # Twarde bramki (PROPOSE/czasówka/paczka/informed-pos/late-pickup/R6/shift-end/
+    # parser-degraded) ZAWSZE. Projekt: eod_drafts/2026-06-30/AUTON02_PLASTER_D_DESIGN.md.
+    "AUTO_ASSIGN_REQUIRE_CLASSIFIER_AUTO",
+    "AUTO_ASSIGN_REQUIRE_MARGIN",
     # R6-ETA-GATE (2026-06-14): kalibracja p80 R6 dla gold worek<=4 (LIVE) +
     # shadow-log falszywych odrzutow. Test-izolacja: conftest scina z tmp flags.json,
     # zeby gate gold->4 NIE przeciekal do testow R6/SLA (determinizm suity).
@@ -838,6 +845,13 @@ AUTO_APPROVE_ENABLED = False
 # Telemetria would_auto_assign/auto_block_reasons liczona ZAWSZE niezależnie
 # od flagi (lekcja #186) — flaga gate'uje wyłącznie egzekutor.
 ENABLE_AUTO_ASSIGN = False
+# AUTON-02 (2026-06-30): profil bramki. True = strict AUTON-01 (wymaga
+# klasyfikator=AUTO i margin≥próg). False = plaster D (szerszy, bramkowany
+# fizyką: pool_feasible≥2 + informed pos + twarde reguły; bez wymogu AUTO/margin).
+# Czytane przez auto_assign_gate z przekazanego dict `flags` (fallback ta stała).
+# Flip = 3 flagi RAZEM (te 2 + AUTO_ASSIGN_MIN_POOL_FEASIBLE→2), sprzężone (C3).
+AUTO_ASSIGN_REQUIRE_CLASSIFIER_AUTO = True
+AUTO_ASSIGN_REQUIRE_MARGIN = True
 # ─── Paczki Faza 2 Etap 3 (2026-06-29): natywny tor paczek w ŻYWYM orders_state ───
 # Merger `parcel_lane_merge` wpisuje aktywne paczki z bialystok.nadajesz.pl do orders_state
 # przez state_machine.upsert_order (LOCK_EX, bez korupcji). Watcher pomija source=parcel
