@@ -232,6 +232,28 @@ ETAP4_DECISION_FLAGS = (
     # OFF = zachowanie legacy (truthy-guardy, placeholdery (0,0), V328-eject).
     # Projekt: eod_drafts/2026-06-30/backing/B15/B16 + FAZA1 L2.1.
     "ENABLE_COORD_SENTINEL_INGEST_GUARD",
+    # === L0.1 conftest-leak closure (2026-07-01, Faza 3 audytu, oracle C19) ===
+    # 14 flag „truly-decision" żyło w flags.json=True POZA rejestrem → testy
+    # biegły cicho prod-ON (conftest wycina TYLKO członków ETAP4), a fingerprint
+    # ich nie widział. Dopisanie TUTAJ auto-domyka przeciek (conftest iteruje
+    # krotkę dynamicznie) i wciąga flagi do flag_fingerprint (64→78). Stałe-
+    # fallback = intencja STEADY-STATE (json=True), nie ślepe OFF — const o
+    # przeciwnej intencji niż json to mina klasy COMMIT_DIVERGENCE (utrata
+    # klucza json = cichy flip zachowania). Blok stałych: „L0.1 fallbacki" niżej.
+    "ENABLE_R6_SOFT_PEN_CAP",
+    "ENABLE_OBJ_COMMITTED_PICKUP_PENALTY",
+    "ENABLE_EXCLUDE_BY_CID",
+    "ENABLE_INACTIVE_COURIER_GUARD",
+    "ENABLE_ZOMBIE_PICKUP_AT_GUARD",
+    "ENABLE_GPS_BBOX_GUARD",
+    "ENABLE_V3273_WAIT_REJECT_PICKED_UP_ONLY",
+    "ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY",
+    "ENABLE_NEW_COURIER_RAMP",
+    "ENABLE_PLN_RESORT_WITHIN_TIER",
+    "ENABLE_BEST_EFFORT_POS_SOURCE_KEY",
+    "ENABLE_COURIER_LAST_KNOWN_POS",
+    "ENABLE_LOAD_PLAN_PURE_READ",
+    "ENABLE_PANEL_PACKS_BAG_RECONSTRUCTION",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -260,6 +282,27 @@ RESERVE_TIEBREAK_MARGIN = 30.0  # #3: max Δscore (wolny−jadący) by tie-break
 ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria physical_verified delivered_at panel-vs-GPS courier_ground_truth; SHADOW, zero wpływu na decyzje/SLA; kanon=flags.json hot)
 ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
 ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
+
+# === L0.1 fallbacki (2026-07-01): stałe dla 14 flag dopisanych do ETAP4 =====
+# W ODRÓŻNIENIU od bloku wyżej (era 2026-06-14, featury shipowane ciemne → OFF)
+# te flagi są USTALONYM stanem produkcji (flags.json=True od tygodni). Stała =
+# intencja steady-state: utrata klucza json NIE flipuje zachowania po cichu
+# (mina klasy COMMIT_DIVERGENCE — const/json o przeciwnych intencjach).
+# KANON pozostaje flags.json (decision_flag: json wygrywa); literały, NIE
+# env-read (anty-wzorzec env-frozen). 3 flagi z 14 mają stałe gdzie indziej:
+# ENABLE_R6_SOFT_PEN_CAP (niżej, wyrównana), ENABLE_OBJ_COMMITTED_PICKUP_PENALTY
+# + ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY (env-defaulty wyrównane do "1").
+ENABLE_EXCLUDE_BY_CID = True
+ENABLE_INACTIVE_COURIER_GUARD = True
+ENABLE_ZOMBIE_PICKUP_AT_GUARD = True
+ENABLE_GPS_BBOX_GUARD = True
+ENABLE_V3273_WAIT_REJECT_PICKED_UP_ONLY = True
+ENABLE_NEW_COURIER_RAMP = True
+ENABLE_PLN_RESORT_WITHIN_TIER = True
+ENABLE_BEST_EFFORT_POS_SOURCE_KEY = True
+ENABLE_COURIER_LAST_KNOWN_POS = True
+ENABLE_LOAD_PLAN_PURE_READ = True
+ENABLE_PANEL_PACKS_BAG_RECONSTRUCTION = True
 ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR = False  # 2026-06-29 case Rećki (ready-anchor R6 w 3 bramkach carried-first plan_recheck; OFF=legacy in-bag/byte-identyczne; KANON=flags.json)
 ENABLE_DELIVERED_RESURRECTION = False  # 2026-06-29 case Pizzeria 105 (panel_watcher wskrzesza delivered-które-wróciło-do-packs po ręcznym cofnięciu w gastro; OFF=stare ignorowanie na zawsze; KANON=flags.json)
 ENABLE_COORD_SENTINEL_INGEST_GUARD = False  # L2.1 2026-07-01 (walidator coords u ingest + guardy konsumentów geometrii; OFF=legacy (0,0)-as-data/V328-eject; KANON=flags.json)
@@ -790,7 +833,7 @@ BAG_TIME_DANGER_PENALTY_PER_MIN = float(os.environ.get("BAG_TIME_DANGER_PENALTY_
 # Próg -2000 dobrany replayem flipów (eod_drafts/2026-06-17/r6cap_flip_replay.py): 0 zmian
 # selekcji na 7d (kandydat z karą < -2000 i tak jest zdominowany). UWAGA: -300/-500 z notatki
 # kalibracyjnej dałyby 20/8 flipów — odrzucone pomiarem. Flaga kanon = flags.json (default OFF).
-ENABLE_R6_SOFT_PEN_CAP = False  # ETAP4-style module fallback; flags.json = kanon (C.flag)
+ENABLE_R6_SOFT_PEN_CAP = True  # L0.1 2026-07-01: wyrównana do steady-state (json=True od tygodni); była False = mina const≠json. flags.json = kanon (C.flag)
 R6_SOFT_PEN_CAP_FLOOR = float(os.environ.get("R6_SOFT_PEN_CAP_FLOOR", "-2000.0"))
 
 # V3.28 ANCHOR FIX 2026-05-10 — Adrian doktryna: PROPOSE quality threshold.
@@ -943,7 +986,7 @@ FREEZE_LEAD_MIN = 15                  # zlecenie zamrażane FREEZE_LEAD_MIN prze
 # ============================================================
 ENABLE_TRANSPARENCY_ROUTE = True       # Route section (pickupy then drops) w propozycji
 ENABLE_TRANSPARENCY_REASON = True      # Natural-language reason line (czemu ten kurier)
-ENABLE_TRANSPARENCY_SCORING = True     # Score decomposition (baza + wave + bundle)
+# (L0.1 D.4 2026-07-01: ENABLE_TRANSPARENCY_SCORING usunięta — martwa-True, 0 konsumentów w kodzie od dawna; historia w CLAUDE.md/TECH_DEBT snapshotach)
 
 # V3.17 (2026-04-19): per-stop timeline w Telegram proposal.
 # Replaces "pickups | drops" 2-line format with chronologically sorted events:
@@ -1150,7 +1193,7 @@ V328_MASS_FAIL_RATIO_THRESHOLD = float(_os.environ.get("V328_MASS_FAIL_RATIO_THR
 # hot-reload kill-switch: flags.json ENABLE_V328_HEURISTIC_SHIFT_END_GUARD=false.
 ENABLE_V328_HEURISTIC_SHIFT_END_GUARD = _os.environ.get(
     "ENABLE_V328_HEURISTIC_SHIFT_END_GUARD", "1") == "1"
-ENABLE_PANEL_IS_FREE_AUTHORITATIVE = _os.environ.get("ENABLE_PANEL_IS_FREE_AUTHORITATIVE", "1") == "1"
+# (L0.1 D.4 2026-07-01: ENABLE_PANEL_IS_FREE_AUTHORITATIVE usunięta — martwa-ON, 0 konsumentów; klucz nie istnieje w flags.json)
 # === BUNDLE-06 Faza 1 / BUNDLE-02 (Front D audytu 03.06, 2026-06-12) ===
 # bundle_fit: scalony sygnał wartości worka (kierunek nowego dropu / marginalny
 # koszt świeżości / rozstrzał gotowości odbiorów) — liczony ZAWSZE w
@@ -2557,7 +2600,7 @@ V3273_WAIT_IDLE_SOFT_PER_MIN = float(_os.environ.get(
 # Tolerancja load-aware: strict 5 min / loose 10 min gdy loadgov_ewma ≥ próg (awaryjne, dni jak 16.05).
 # Flaga przez decision_flag (flags.json), default OFF. Coeff env-tunable (kalibracja w replayu).
 ENABLE_OBJ_COMMITTED_PICKUP_PENALTY = _os.environ.get(
-    "ENABLE_OBJ_COMMITTED_PICKUP_PENALTY", "0") == "1"
+    "ENABLE_OBJ_COMMITTED_PICKUP_PENALTY", "1") == "1"  # L0.1 2026-07-01: default wyrównany do steady-state (json=True, konsumenci przez decision_flag); "0" = mina const≠json
 OBJ_COMMITTED_PICKUP_PENALTY_COEFF = float(_os.environ.get(
     "OBJ_COMMITTED_PICKUP_PENALTY_COEFF", "100.0"))
 OBJ_COMMITTED_PICKUP_TOL_STRICT_MIN = 5.0
@@ -2812,7 +2855,7 @@ COMMIT_RENDER_DIVERGENCE_TILDE_MIN = float(_os.environ.get(
 # nie auto-PROPOSE z markerem). Próg 10 min = midpoint sprint planu (10/15/20).
 # Default ON — strict safety. Env override dla replay/calibration.
 ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE = _os.environ.get(
-    "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE", "1") == "1"
+    "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE", "0") == "1"  # L0.1 D.5 2026-07-01: default "1"→"0" — const kodował PRZECIWNĄ intencję niż flags.json=False (ALWAYS-PROPOSE, werdykt Adriana); utrata klucza json = cichy flip gate'u ON. Efektywnie OFF było i jest; env override dla replay zostaje.
 COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN = float(_os.environ.get(
     "COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN", "10.0"))
 
@@ -3442,7 +3485,7 @@ ENABLE_PACZKA_R6_THERMAL_EXEMPT = _os.environ.get("ENABLE_PACZKA_R6_THERMAL_EXEM
 # zamiast na całym mieszanym bagu. Root cause korpusu eod_drafts/2026-05-24.
 # Default OFF — flip True przez flags.json hot-reload; okno kilkudniowej walidacji.
 ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY = _os.environ.get(
-    "ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY", "0") == "1"
+    "ENABLE_R1_WAVE_SCOPED_DIRECTIONALITY", "1") == "1"  # L0.1 2026-07-01: default wyrównany do steady-state (json=True; konsument feasibility_v2 czyta getattr OR flag)
 
 # F1 R1-CORRIDOR-GRADIENT (2026-05-24) — kara korytarza R1 jako gradient liniowy
 # (0 przy cos=0 → -40 przy cos=-1) zamiast klifu (avg_cos ∈ (-0.5,0] → płaskie -35).

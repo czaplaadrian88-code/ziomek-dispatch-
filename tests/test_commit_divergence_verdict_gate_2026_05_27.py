@@ -103,10 +103,19 @@ def test_commit_div_gate_fail_soft_on_unparseable_timestamps():
     assert "continue" in section
 
 
-def test_commit_div_common_contract_flag_default_on():
-    """common: flaga default ON (env unset → '1') — bezpieczne, eskalacja do KOORD."""
+def test_commit_div_common_contract_flag_default_off():
+    """common: const default OFF (env unset → '0') — L0.1 D.5 2026-07-01.
+
+    Historia: kontrakt 27.05 miał default ON („strict safety"), ale kanon
+    ALWAYS-PROPOSE (werdykt Adriana) trzyma flags.json=False jako stan żywy.
+    Const o PRZECIWNEJ intencji niż json = mina: utrata klucza json →
+    decision_flag spada na const → gate CICHO flipuje ON (KOORD-redirect
+    wraca wbrew kanonowi). Audyt spójności 30.06 (L0.1 D.5) → const
+    wyrównany do intencji json. Efektywny stan produkcji BEZ ZMIAN
+    (json wygrywa w decision_flag). Env override dla replay zostaje.
+    """
     assert hasattr(common, "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE")
-    assert common.ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE is True
+    assert common.ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE is False
 
 
 def test_commit_div_common_contract_threshold_default_10_min():
@@ -115,16 +124,17 @@ def test_commit_div_common_contract_threshold_default_10_min():
     assert common.COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN == 10.0
 
 
-def test_commit_div_flag_off_via_env(monkeypatch):
-    """Env override: ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE=0 → flaga False."""
-    monkeypatch.setenv("ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE", "0")
-    import importlib
-    # Re-importuj common z env (test isolation — pozostali używają default).
-    _common_mod = importlib.reload(common)
-    assert _common_mod.ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE is False
-    # Restore default
+def test_commit_div_flag_on_via_env(monkeypatch):
+    """Env override (replay/kalibracja): =1 → True; unset wraca do default False."""
     monkeypatch.setenv("ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE", "1")
+    import importlib
+    _common_mod = importlib.reload(common)
+    assert _common_mod.ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE is True
+    # Przywróć stan default (env unset → "0") — reload, żeby moduł nie został
+    # w stanie override dla kolejnych testów suity.
+    monkeypatch.delenv("ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE", raising=False)
     importlib.reload(common)
+    assert common.ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE is False
 
 
 def test_commit_div_threshold_override_via_env(monkeypatch):
