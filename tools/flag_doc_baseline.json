@@ -6,7 +6,6 @@
   "_2026-06-29_note3": "Sesja #3 (top10 #3): +1 ENABLE_RESERVE_AWARE_TIEBREAK_SHADOW — log-only shadow-observer reserve-aware tie-break (wolny-vs-jadący, same-tier late-pickup), ZERO zmiany decyzji; flip aktywny=osobna flaga+ACK. W ETAP4_DECISION_FLAGS + stała-literał common.py; docelowo do ZIOMEK_LOGIC_REFERENCE.",
   "_count": 79,
   "baseline": [
-    "ENABLE_AUTO_ASSIGN",
     "ENABLE_AUTO_ROUTE_WEAK_PICK_ALERT",
     "ENABLE_BAG_TIME_ALERTS",
     "ENABLE_BEST_EFFORT_FASTEST_PICKUP_SHADOW",
