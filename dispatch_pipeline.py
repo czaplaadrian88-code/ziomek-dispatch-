@@ -228,6 +228,19 @@ def _append_difficult_case_log(entry: dict) -> None:
             pass
 
 
+def _coords_pass(legacy_ok, *coords) -> bool:
+    """L2.1 sentinel-ingest (2026-07-01, K5a): wspólny guard callerów geometrii.
+
+    Flaga ON → KAŻDY coord przez kanoniczny walidator `coords_in_bialystok_bbox`
+    (None/NaN/(0,0)/poza-bbox = odpada; koniec truthy-guardów `if coords:` które
+    przepuszczały [0,0] do haversine → ValueError → V328 eject kuriera).
+    Flaga OFF → dokładnie legacy_ok (zachowanie sprzed L2.1, bajt-w-bajt).
+    """
+    if not C.decision_flag("ENABLE_COORD_SENTINEL_INGEST_GUARD"):
+        return bool(legacy_ok)
+    return all(C.coords_in_bialystok_bbox(c) for c in coords)
+
+
 def _sanitize_courier_pos(pos):
     """Return BIALYSTOK_CENTER gdy pos to (0,0) sentinel, else pass-through."""
     if pos is None:
@@ -2144,7 +2157,9 @@ def _compute_repo_cost_km(bag_sim, plan, order_id, pickup_coords):
         if last_oid is None:
             return None, None
         drop_coords = getattr(by_oid[last_oid], "delivery_coords", None)
-        if not drop_coords:
+        # L2.1: truthy-guard NIE łapał (0,0) → haversine raise połykany niżej
+        # → repo_km=None → kandydat z zatrutym workiem wyglądał TAŃSZY (M-4).
+        if not _coords_pass(bool(drop_coords), drop_coords, pickup_coords):
             return None, None
         return round(haversine(tuple(drop_coords), tuple(pickup_coords)), 2), last_oid
     except Exception:
@@ -2374,6 +2389,18 @@ def _soon_free_probe(cid, bag_raw, now):
             free_at = free_at.replace(tzinfo=timezone.utc)
         free_at_min = max(0.0, (free_at - now).total_seconds() / 60.0)
         coords = (float(last["coords"]["lat"]), float(last["coords"]["lng"]))
+        # L2.1 (K5b): plan bywa persystowany z placeholderem (0,0)
+        # (_save_plan_on_assign legacy) — DETONOWAŁ w serializerze
+        # (soon_free_last_drop_km haversine → ValueError → V328 eject
+        # CAŁEGO kuriera; 28 ofiar 01.07). Zatruty last_drop → probe=None
+        # (fail-soft, kurier ewaluowany normalnie z bieżącej pozycji).
+        if C.decision_flag("ENABLE_COORD_SENTINEL_INGEST_GUARD") \
+                and not C.coords_in_bialystok_bbox(coords):
+            log.warning(
+                f"COORD_INGEST_GUARD soon_free cid={cid}: last_drop_coords="
+                f"{coords!r} zatrute (plan placeholder?) — probe pominięty"
+            )
+            return None
         max_min = float(getattr(C, "SOON_FREE_MAX_MIN", 12.0))
         return {
             "eligible": free_at_min <= max_min,
@@ -2988,8 +3015,11 @@ def compute_bundle_deliv_coloc(
     """
     if not flag_on or level1 is not None or level2 is not None:
         return None, False, 0.0
-    if (not delivery_coords or tuple(delivery_coords) == (0.0, 0.0)
-            or delivery_coords[0] == 0.0):
+    # L2.1: konsolidacja predykatu sentinela do kanonicznego walidatora (flaga ON).
+    if not _coords_pass(
+            bool(delivery_coords) and tuple(delivery_coords) != (0.0, 0.0)
+            and delivery_coords[0] != 0.0,
+            delivery_coords):
         return None, False, 0.0
     # #geocode-centroid: nowa dostawa na defaultowym centroidzie → WSZYSTKIE jej 0km matche fałszywe
     if centroid_guard and _coloc_is_default_centroid(delivery_coords):
@@ -2997,7 +3027,8 @@ def compute_bundle_deliv_coloc(
     best = None
     for b in (bag_raw or []):
         bd = b.get("delivery_coords")
-        if not bd or tuple(bd) == (0.0, 0.0) or bd[0] == 0.0:
+        if not _coords_pass(
+                bool(bd) and tuple(bd) != (0.0, 0.0) and bd[0] != 0.0, bd):
             continue
         # #geocode-centroid: drop w bagu na defaultowym centroidzie → pomiń (jego 0km fałszywy)
         if centroid_guard and _coloc_is_default_centroid(bd):
@@ -3663,13 +3694,14 @@ def _assess_order_impl(
         bundle_level2 = None
         bundle_level2_dist = None
         if (bundle_level1 is None
-                and pickup_coords != (0.0, 0.0)
-                and pickup_coords[0] != 0.0):
+                and _coords_pass(
+                    pickup_coords != (0.0, 0.0) and pickup_coords[0] != 0.0,
+                    pickup_coords)):
             for b in bag_raw:
                 if b.get("status") != "assigned":
                     continue
                 bag_pc = b.get("pickup_coords")
-                if not bag_pc:
+                if not _coords_pass(bool(bag_pc), bag_pc):
                     continue
                 try:
                     dist = haversine(tuple(bag_pc), pickup_coords)
@@ -3684,9 +3716,13 @@ def _assess_order_impl(
         # trasy kurier → bag deliveries. Niezależny od L1/L2.
         bundle_level3 = False
         bundle_level3_dev = None
-        if (delivery_coords != (0.0, 0.0)
-                and delivery_coords[0] != 0.0):
-            bag_drops = [b.get("delivery_coords") for b in bag_raw if b.get("delivery_coords")]
+        if _coords_pass(
+                delivery_coords != (0.0, 0.0) and delivery_coords[0] != 0.0,
+                delivery_coords):
+            bag_drops = [
+                b.get("delivery_coords") for b in bag_raw
+                if _coords_pass(bool(b.get("delivery_coords")), b.get("delivery_coords"))
+            ]
             dev = _min_dist_to_route_km(delivery_coords, tuple(courier_pos), bag_drops)
             # V3.26 Bug C (2026-04-25): configurable threshold (was hardcoded 2.0).
             _po_drodze_dist_km = float(getattr(C, "PO_DRODZE_DIST_KM", 2.0))
@@ -4819,7 +4855,9 @@ def _assess_order_impl(
                             _last_drop = _b.get("delivery_coords")
                             break
                     _new_pickup = getattr(new_order, "pickup_coords", None)
-                    if _last_drop and _new_pickup:
+                    # L2.1: truthy-guard NIE łapał [0,0] → haversine raise.
+                    if _coords_pass(bool(_last_drop and _new_pickup),
+                                    _last_drop, _new_pickup):
                         v326_wave_geometric_km = haversine(
                             tuple(_last_drop), tuple(_new_pickup)
                         )
@@ -5451,10 +5489,28 @@ def _assess_order_impl(
             "soon_free_applied": soon_free_applied,
             "soon_free_free_at_min": (
                 soon_free_probe.get("free_at_min") if soon_free_probe else None),
+            # L2.1: guard obu stron — haversine na zatrutym last_drop_coords
+            # wywalał CAŁĄ ewaluację kuriera z tego dict-a telemetrii (V328).
             "soon_free_last_drop_km": (
                 round(haversine(tuple(soon_free_probe["last_drop_coords"]), pickup_coords), 2)
-                if (soon_free_probe and pickup_coords and pickup_coords[0] != 0.0)
+                if (soon_free_probe and pickup_coords and pickup_coords[0] != 0.0
+                    and _coords_pass(True, soon_free_probe["last_drop_coords"],
+                                     pickup_coords))
                 else None),
+            # L2.1 sentinel-ingest (2026-07-01): obserwowalność trucizny coords —
+            # które zlecenia w worku kandydata mają sentinel/poza-bbox coords
+            # (źródło V328-eject/COORD_GUARD). Unconditional (czysta telemetria,
+            # bez I/O); auto-serializacja deny-listą L1.1. None gdy czysto.
+            "coord_poison_bag_oids": ([
+                str(b.get("order_id")) for b in bag_raw
+                if (b.get("pickup_coords") is not None
+                    and not C.coords_in_bialystok_bbox(b.get("pickup_coords")))
+                or (b.get("delivery_coords") is not None
+                    and not C.coords_in_bialystok_bbox(b.get("delivery_coords")))
+            ] or None),
+            "coord_poison_new_delivery": (
+                delivery_coords is not None
+                and not C.coords_in_bialystok_bbox(delivery_coords)),
             # F5 RETURN-TO-RESTAURANT (2026-05-24)
             "bonus_r_return_rest": round(bonus_r_return_rest, 2),
             "return_to_restaurant": metrics.get("return_to_restaurant"),

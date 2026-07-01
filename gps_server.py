@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from dispatch_v2.common import setup_logger
+from dispatch_v2.common import coords_in_bialystok_bbox, decision_flag, setup_logger
 
 
 PORT = 8766  # 8765 zajęty przez legacy /root/gps_server.py (Traccar receiver)
@@ -101,6 +101,18 @@ def _resolve_pin(pin: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 # ---- write gps record ----
+
+def _ingest_coords_ok(lat: float, lon: float) -> bool:
+    """L2.1 sentinel-ingest (2026-07-01, K5a): (0,0)/NaN/poza-bbox metropolii
+    NIE wchodzi do store'a jako „dana" — downstream haversine raisuje na
+    sentinelu i V328 wyrzuca ZAJĘTEGO kuriera z puli (8-28 ofiar/dzień).
+    Odrzucona pozycja ⇒ kurier = no_gps ⇒ polityka równego traktowania
+    (Adrian 29.06), NIE zatruta geometria. Range-check w handlerze zostaje
+    jako legacy minimum; flaga OFF = pass-through (legacy)."""
+    if not decision_flag("ENABLE_COORD_SENTINEL_INGEST_GUARD"):
+        return True
+    return coords_in_bialystok_bbox((lat, lon))
+
 
 def _update_gps(courier_id: str, name: str, lat: float, lon: float,
                 accuracy: float) -> None:
@@ -327,6 +339,13 @@ class GpsHandler(BaseHTTPRequestHandler):
             return
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             self._json(400, {"ok": False, "error": "coords out of range"})
+            return
+        if not _ingest_coords_ok(lat, lon):
+            _log.warning(
+                f"COORD_INGEST_GUARD gps reject lat={lat!r} lon={lon!r} "
+                f"(pin=****{pin[-1:]})"
+            )
+            self._json(400, {"ok": False, "error": "coords rejected (sentinel/out-of-area)"})
             return
 
         cid, name = _resolve_pin(pin)

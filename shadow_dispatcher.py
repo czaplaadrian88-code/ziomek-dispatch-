@@ -1082,6 +1082,27 @@ def process_event(
     return assess_order(order_event, fleet, meta, now=now)
 
 
+def _sanitize_payload_coords(payload: dict, oid) -> bool:
+    """L2.1 sentinel-ingest (2026-07-01, K5a): truthy-check geocode-or-skip w _tick
+    NIE łapie [0,0] (niepusta lista = truthy) → trucizna wchodziła do pipeline'u.
+    Flaga ON: coords niepoprawne ((0,0)/NaN/poza-bbox) → None (traktowane jak
+    BRAKUJĄCE → re-geocode z adresu, a bez geokodu skip — ta sama ścieżka co
+    missing, zero nowej semantyki). Flaga OFF = no-op. Zwraca True gdy zmienił."""
+    if not C.decision_flag("ENABLE_COORD_SENTINEL_INGEST_GUARD"):
+        return False
+    changed = False
+    for _ck in ("pickup_coords", "delivery_coords"):
+        _cv = payload.get(_ck)
+        if _cv is not None and not C.coords_in_bialystok_bbox(_cv):
+            _log.warning(
+                f"COORD_INGEST_GUARD tick {oid}: {_ck}={_cv!r} "
+                f"odrzucone (sentinel/poza-bbox) — re-geocode"
+            )
+            payload[_ck] = None
+            changed = True
+    return changed
+
+
 def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
     """One poll cycle. Returns {processed, failed, skipped}."""
     stats = {"processed": 0, "failed": 0, "skipped": 0}
@@ -1127,6 +1148,9 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             continue
         try:
             payload = ev.get("payload") or {}
+            if _sanitize_payload_coords(payload, oid):
+                ev["payload"] = payload
+
             # Geocode missing coords on-the-fly (city z payloadu — NEW_ORDER event)
             if not payload.get("pickup_coords"):
                 addr = payload.get("pickup_address", "")

@@ -467,6 +467,16 @@ the module constant. ~80+ flags exist. Notable **current** states:
   po weryfikacji; subprocess `gastro_edit.py` czyta flagę per-edycję, bez restartu. Komplement do
   `ENABLE_ADDRESS_COORDS_MISMATCH_SHADOW` (detektor mierzy spadek rozjazdów). Naprawia case a/edycja,
   NIE tekst błędny u źródła w gastro/case b).
+  `ENABLE_COORD_SENTINEL_INGEST_GUARD` (L2.1 2026-07-01, Faza 3 audytu, most K5: JEDEN kanoniczny
+  walidator `coords_in_bialystok_bbox` u KAŻDEGO ingest — gps_server POST, `state_machine.upsert_order`
+  [chokepoint: NEW_ORDER×2 + picked_up + delivered + parcel_lane_merge], shadow-tick geocode-or-skip,
+  read-side `_load_gps_positions` — + guardy konsumentów geometrii `_coords_pass` (soon_free probe+serializer,
+  wave-veto, repo-cost, bundle L2/L3, coloc), `_save_plan_on_assign` pisze REALNE coords z orders_state
+  zamiast placeholderów (0,0) [K5b], `feasibility._valid`→kanon (6 definicji sentinela→1). OFF = legacy
+  bajt-w-bajt (truthy-guardy, (0,0)-as-data → haversine ValueError → `_v328_eval_safe` eject kuriera:
+  2046+14456 zdarzeń, 8-28 ofiar/dzień). Telemetria unconditional: `coord_poison_bag_oids`/
+  `coord_poison_new_delivery` w shadow_decisions. Testy: `test_coord_sentinel_ingest_l21` (22, e2e V328).
+  Flip = pełny deploy C2 (restart shadow+panel-watcher+gps) za ACK; potem L2.2 catch-all rozróżnia).
 - ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` (cold-food divergence
   no longer →KOORD), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
   `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`, `kill_switch_to_v1`,

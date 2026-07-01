@@ -111,6 +111,10 @@ def _road_km(a, b) -> float:
 
 
 def _valid(coord) -> bool:
+    # L2.1 sentinel-ingest (2026-07-01): flaga ON → kanoniczny walidator
+    # (None/NaN/(0,0)/poza-bbox — 6 definicji sentinela → 1). OFF = legacy.
+    if C.decision_flag("ENABLE_COORD_SENTINEL_INGEST_GUARD"):
+        return C.coords_in_bialystok_bbox(coord)
     return bool(coord) and coord != (0.0, 0.0) and coord[0] != 0.0
 
 

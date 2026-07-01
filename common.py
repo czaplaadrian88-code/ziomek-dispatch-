@@ -224,6 +224,14 @@ ETAP4_DECISION_FLAGS = (
     # wykrywa delivered-które-wróciło-do-packs + potwierdza aktywny status gastro (3-6) → wskrzesza
     # (status back, delivered_at=None). Wąskie: świeże <60min + budżet 5 fetchów/cykl. Default OFF.
     "ENABLE_DELIVERED_RESURRECTION",
+    # L2.1 sentinel-ingest (2026-07-01, Faza 3 audytu, most K5): JEDEN walidator
+    # coords_in_bialystok_bbox u KAŻDEGO ingest ((0,0)/NaN/poza-bbox NIE wchodzi
+    # jako „dana"): gps_server POST, state_machine.upsert_order, shadow tick
+    # geocode-or-skip, _save_plan_on_assign realne coords, guardy konsumentów
+    # geometrii (soon_free/wave-veto/repo-cost/bundle) + feasibility._valid.
+    # OFF = zachowanie legacy (truthy-guardy, placeholdery (0,0), V328-eject).
+    # Projekt: eod_drafts/2026-06-30/backing/B15/B16 + FAZA1 L2.1.
+    "ENABLE_COORD_SENTINEL_INGEST_GUARD",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -254,6 +262,7 @@ ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan
 ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
 ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR = False  # 2026-06-29 case Rećki (ready-anchor R6 w 3 bramkach carried-first plan_recheck; OFF=legacy in-bag/byte-identyczne; KANON=flags.json)
 ENABLE_DELIVERED_RESURRECTION = False  # 2026-06-29 case Pizzeria 105 (panel_watcher wskrzesza delivered-które-wróciło-do-packs po ręcznym cofnięciu w gastro; OFF=stare ignorowanie na zawsze; KANON=flags.json)
+ENABLE_COORD_SENTINEL_INGEST_GUARD = False  # L2.1 2026-07-01 (walidator coords u ingest + guardy konsumentów geometrii; OFF=legacy (0,0)-as-data/V328-eject; KANON=flags.json)
 # Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy ON → zeruje
 # karę score pre_shift (`bonus_v325_pre_shift_soft`, oba źródła: stała V325 + gradient
 # _pre_shift_gradient_penalty). „Kurier dotrze później" obsługuje LEGALNA ścieżka:

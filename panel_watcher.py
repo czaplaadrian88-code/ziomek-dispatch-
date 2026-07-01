@@ -475,6 +475,41 @@ def _save_plan_on_assign(order_id: str, courier_id: str) -> None:
         "source": best.get("pos_source") or "unknown",
         "source_ts": rec.get("ts"),
     }
+
+    # L2.1 sentinel-ingest (2026-07-01, K5b): stop.coords z REALNYCH coords zleceń
+    # w orders_state zamiast hardkodu (0,0). Placeholder (0,0) persystował w
+    # courier_plans.json (LIVE 11/79 stopów) i DETONOWAŁ w konsumentach planu
+    # (_soon_free_probe → haversine ValueError → V328 eject całego kuriera —
+    # 28 ofiar 01.07). Lookup fail → placeholder jak dotąd (konsumenci mają
+    # guardy), ale GŁOŚNO. Flaga OFF = legacy hardkod.
+    _real_coords = {}
+    if C.decision_flag("ENABLE_COORD_SENTINEL_INGEST_GUARD"):
+        try:
+            from dispatch_v2 import state_machine as _sm_plan
+            for _oid in sequence:
+                _so = _sm_plan.get_order(str(_oid)) or {}
+                _real_coords[str(_oid)] = {
+                    "pickup": _so.get("pickup_coords"),
+                    "dropoff": _so.get("delivery_coords"),
+                }
+        except Exception as _rc_e:
+            _log.warning(f"V3.19b real-coords lookup fail oid={order_id}: {_rc_e}")
+
+    def _stop_coords(oid_s: str, stop_type: str) -> dict:
+        c = (_real_coords.get(oid_s) or {}).get(stop_type)
+        try:
+            from dispatch_v2.common import coords_in_bialystok_bbox as _cib
+            if c is not None and _cib(c):
+                return {"lat": round(float(c[0]), 6), "lng": round(float(c[1]), 6)}
+        except Exception:
+            pass
+        if _real_coords:  # flaga ON, a coords brak/niepoprawne → głośno
+            _log.warning(
+                f"COORD_INGEST_GUARD plan-stop {oid_s}/{stop_type}: brak realnych "
+                f"coords ({c!r}) — placeholder (0,0) w planie cid={courier_id}"
+            )
+        return {"lat": 0.0, "lng": 0.0}
+
     stops = []
     for oid in sequence:
         oid_s = str(oid)
@@ -483,7 +518,7 @@ def _save_plan_on_assign(order_id: str, courier_id: str) -> None:
             stops.append({
                 "order_id": oid_s,
                 "type": "pickup",
-                "coords": {"lat": 0.0, "lng": 0.0},
+                "coords": _stop_coords(oid_s, "pickup"),
                 "scheduled_at": None,
                 "predicted_at": pickup_at[oid_s],
                 "dwell_min": 2.0,
@@ -493,7 +528,7 @@ def _save_plan_on_assign(order_id: str, courier_id: str) -> None:
         stops.append({
             "order_id": oid_s,
             "type": "dropoff",
-            "coords": {"lat": 0.0, "lng": 0.0},
+            "coords": _stop_coords(oid_s, "dropoff"),
             "scheduled_at": None,
             "predicted_at": pred,
             "dwell_min": 1.0,

@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 from dispatch_v2.common import (
     setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag,
-    coords_in_bialystok_bbox,
+    coords_in_bialystok_bbox, decision_flag,
     ENABLE_F4_COURIER_POS_PICKUP_PROXY,
     ENABLE_F4_COURIER_POS_INTERP,
     ENABLE_CHECKPOINT_TS_WARSAW_PARSE,
@@ -528,6 +528,30 @@ def _load_gps_positions() -> Dict:
         pass
     except Exception as e:
         _log.warning(f"_load_gps_positions legacy fail: {e}")
+
+    # L2.1 sentinel-ingest (2026-07-01, K5a read-side): wpisy z pozycją-sentinelem
+    # ((0,0)/NaN/poza-bbox) NIE wchodzą do floty jako „dane" — kurier bez wpisu
+    # = no_gps = polityka równego traktowania, nie zatruta geometria. Chroni po
+    # STARYCH plikach store'a i legacy Traccar (ingest gps_server łapie tylko
+    # nowe POSTy). Warning dedup: tylko gdy zbiór odrzuconych się ZMIENIA.
+    if decision_flag("ENABLE_COORD_SENTINEL_INGEST_GUARD"):
+        _bad = [
+            cid for cid, rec in merged.items()
+            if not coords_in_bialystok_bbox(
+                (rec.get("lat"), rec.get("lon")) if isinstance(rec, dict) else None)
+        ]
+        if _bad:
+            for cid in _bad:
+                del merged[cid]
+            _bad_key = tuple(sorted(_bad))
+            if getattr(_load_gps_positions, "_coord_guard_last", None) != _bad_key:
+                _log.warning(
+                    f"COORD_INGEST_GUARD gps-load: odrzucone pozycje-sentinele "
+                    f"cids={sorted(_bad)}"
+                )
+                _load_gps_positions._coord_guard_last = _bad_key
+        else:
+            _load_gps_positions._coord_guard_last = None
 
     return merged
 

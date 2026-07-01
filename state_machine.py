@@ -20,7 +20,15 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from dispatch_v2.common import flag, load_config, now_iso, now_utc, setup_logger
+from dispatch_v2.common import (
+    coords_in_bialystok_bbox,
+    decision_flag,
+    flag,
+    load_config,
+    now_iso,
+    now_utc,
+    setup_logger,
+)
 
 
 class CorruptedTimestampError(ValueError):
@@ -415,9 +423,38 @@ def get_by_courier(courier_id: str, statuses: Optional[list] = None) -> list:
     return result
 
 
+def _sanitize_ingest_coords(order_id: str, data: dict) -> dict:
+    """L2.1 sentinel-ingest (2026-07-01, K5a): JEDEN chokepoint walidacji coords
+    na wejściu do orders_state — pokrywa NEW_ORDER (oba branche), COURIER_PICKED_UP,
+    COURIER_DELIVERED, parcel_lane_merge i każdego przyszłego writera przez upsert.
+
+    Wartość niepoprawna ((0,0)/NaN/poza-bbox — `coords_in_bialystok_bbox`) →
+    klucz USUWANY z data (merge {**existing, **data} zachowuje ewentualne DOBRE
+    istniejące coords — wzorzec sink-guard 2026-06-13) + log.warning. Flaga OFF
+    = pass-through legacy. Zwraca data (kopię przy modyfikacji)."""
+    if not decision_flag("ENABLE_COORD_SENTINEL_INGEST_GUARD"):
+        return data
+    bad = [
+        k for k in ("pickup_coords", "delivery_coords")
+        if k in data and data[k] is not None
+        and not coords_in_bialystok_bbox(data[k])
+    ]
+    if not bad:
+        return data
+    data = dict(data)
+    for k in bad:
+        _log.warning(
+            f"COORD_INGEST_GUARD upsert {order_id}: {k}={data[k]!r} "
+            f"odrzucone (sentinel/poza-bbox) — klucz pominięty"
+        )
+        del data[k]
+    return data
+
+
 def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict:
     """Dodaje lub aktualizuje zlecenie. Zapisuje history entry.
     Zwraca zaktualizowany rekord."""
+    data = _sanitize_ingest_coords(order_id, data)
     with _locked_write() as path:
         state = _read_state_strict()        # Faza 1: raise StateReadError zamiast cichego {}
         old_count = len(state)
