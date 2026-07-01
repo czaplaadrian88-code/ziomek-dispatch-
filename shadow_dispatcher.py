@@ -182,95 +182,69 @@ def _serialize_dt_map(m):
     return out or None
 
 
-# H1 (2026-04-25): auto-propagation of prefixed metrics keys.
-# Pipeline regularly adds nowe v325_/v326_ keys do `metrics` ale serializer
-# trzymał hardcoded explicit list — 14+ kluczy droppowane do learning_log
-# (cross-review B#H1). Loop po prefixach zapewnia że *_reject_reason,
-# *_speed_*, *_fleet_*, etc. trafia do logu bez ręcznego dodawania pole-po-polu.
-_AUTO_PROP_PREFIXES = ("v325_", "v326_", "v3273_", "v3274_", "v319_", "r07_", "bonus_", "rule_", "intra_",
-                       "dwell_", "drive_speed_",  # 2026-05-17: tier-aware DWELL + drive-speed metryki (#109)
-                       "objm_",  # sprint OBJ F0.3: metryki jakości planu (idle/thermal/r6_breach/span)
-                       "paczka_",  # R-PACZKI-FLEX (2026-05-20): paczka_is / paczka_flex_eligible / paczka_*
-                       "carry_chain_",  # Sprint 2 Etap 2.2 (2026-05-27): carry/bag-stack visibility
-                       "difficult_",  # Sprint 2026-05-28: difficult_case_redirect_shadow per-candidate
-                       "fail12_",  # FAIL-12 (2026-06-06): schedule fail-OPEN observability (shadow-first)
-                       "a2_",  # A2 reliability soft-score (2026-06-07): a2_reliability_delta -> shadow_decisions
-                       # Z-09 (audyt 2026-06-10): łańcuch mnożnika Bug Z (min_drop_factor /
-                       # bundle_score_mult / score_pre_mult / drop_zones_audit / sign_guarded)
-                       # NIE był serializowany — kalibracja Z-02 niemożliwa z logu.
-                       "v327_",
-                       # Z-09: late_pickup_*/new_pickup_* były explicit tylko w LOCATION A
-                       # (alternatives) — best (LOCATION B) ich nie miał. Prefiks wyrównuje
-                       # oba miejsca (LOCATION B dostaje przez _propagate na out["best"]).
-                       "late_pickup_", "new_pickup_",
-                       # SP-B2-RAMPA (2026-06-11): new_courier_ramp dict (active/eligible/
-                       # deliveries/malus|reason) — LOCATION A+B przez propagate.
-                       "new_courier_",
-                       # SP-B2-SYNCWORKA (2026-06-11): sync_ready_spread_min /
-                       # sync_spread_n / sync_spread_bundle_zeroed (bonus_sync_*
-                       # idzie prefiksem bonus_) — LOCATION A+B przez propagate.
-                       "sync_",
-                       # SP-B2-REPO (2026-06-11): repo_km / repo_last_drop_oid
-                       # (bonus_repo_cost_shadow_delta przez prefix bonus_).
-                       "repo_",
-                       # SP-B2-ZARAZWOLNY (2026-06-11): soon_free_eligible /
-                       # soon_free_applied / soon_free_free_at_min /
-                       # soon_free_last_drop_km — LOCATION A+B.
-                       "soon_free_",
-                       # SP-B2-LOADGOV (2026-06-11): loadgov_load_now/_ewma /
-                       # loadgov_active_orders/_couriers (bonus_loadgov_*
-                       # przez prefix bonus_) — LOCATION A+B.
-                       "loadgov_",
-                       # SP-B2-PLN (2026-06-11): pln_v / pln_p_breach /
-                       # pln_delta_km / pln_vehicle / pln_lezenie_min /
-                       # pln_czekanie_min / pln_opp_rate per kandydat +
-                       # pln_best_cid / pln_best_v / pln_vs_score_flip na best.
-                       "pln_",
-                       # BUNDLE-06 Faza 1 (2026-06-12): bundle_fit_shadow /
-                       # bundle_fit_marginal_min (bonus_bundle_fit_shadow_delta
-                       # przez prefix bonus_; fix_c_additive_pen_shadow przez
-                       # explicit fix_c_* niżej) — LOCATION A+B.
-                       "bundle_fit_",
-                       # OBJ FOOD-AGE SHADOW (2026-06-14): food_age_shadow dict
-                       # (forward comparator BUG#5) — LOCATION A+B przez propagate.
-                       "food_age_",
-                       # BEST-EFFORT FASTEST-PICKUP SHADOW (2026-06-15): dict
-                       # best_effort_fastest_pickup_shadow {live_cid/shadow_cid/
-                       # would_differ/shadow_pickup_earlier_min} — walidacja selekcji
-                       # „najszybszy odbiór" PRZED flipem live. LOCATION A+B.
-                       "best_effort_fastest_",
-                       # BEST-EFFORT OBJM CARRY-INCLUSIVE SHADOW (2026-06-23): pola
-                       # best_effort_objm_{cid/flip/pool/live_r6/pick_r6/d_r6/d_committed/
-                       # live_newbag/pick_newbag/d_newbag} — walidacja carry-aware PRIMARY
-                       # na ścieżce best_effort (0 feasible) PRZED flipem. LOCATION B (best).
-                       "best_effort_objm_",
-                       # FEAS-CARRY-READMIT / #483000 (2026-06-27): feas_carry_{readmit/
-                       # regret_min/orig_reason/newbag_min/redirect_from_cid/cap_min} —
-                       # LIVE re-admit carry-inclusive na feasible-path (top[0] przejęty
-                       # przez odrzuconego-NO lepszego-na-prawdzie). LOCATION B (best).
-                       "feas_carry_",
-                       # F2 (audyt Ziomka 2026-06-28, widocznosc metryk HARD): post_shift_overrun_min/
-                       # _penalty (P2 — WIODACY term selekcji best_effort; replay widzial 0 -> ETAP-5
-                       # flipa ENABLE_POST_SHIFT_OVERRUN_PENALTY nie dalo sie policzyc) + end_of_day_
-                       # salvage* (LIVE relaksacja HARD konca zmiany BEZ sladu w shadow). Twin A+B przez
-                       # wspolny _propagate_prefixed_metrics (l.~489 A / l.~864 B). Decyzyjnie-NEUTRALNE
-                       # (metryki liczone ZAWSZE, dokladane tylko do logu).
-                       "post_shift_overrun_", "end_of_day_salvage",
-                       # #6 (audyt 28.06, metser-would-hard-cap P1): would_hard_cap/hard_tier_bag_cap
-                       # liczone ZAWSZE feasibility_v2:462-463 (LIVE HARD reject gdy ENABLE_HARD_TIER_BAG_CAP),
-                       # gineły z shadow_decisions (0/2000) -> kalibracja cap-Z slepa. Pelne klucze jak
-                       # end_of_day_salvage. Decyzyjnie-NEUTRALNE (liczone zawsze, dokladane tylko do logu).
-                       "would_hard_cap", "hard_tier_bag_cap")
+# H1 (2026-04-25) → L1.1 (Faza 3 audytu spójności, 2026-07-01): ODWRÓCENIE
+# allowlist→deny-list. Historia: serializer trzymał hardcoded explicit list
+# (H1), potem allowlistę 35 prefiksów `_AUTO_PROP_PREFIXES` dorzucanych
+# sprint-po-sprincie — BEZ kontroli kompletności. Skutek (audyt 30.06,
+# backing B07, ground-truth 858 świeżych decyzji): 38 kluczy `metrics`
+# NIGDY nie trafiało do shadow_decisions.jsonl (0/858), w tym 14 HARD
+# (sla_violations detail-lista / eta_source / pickup_dist_km /
+# r6_gold4_gate_recovered / r6_paczka_exempt_oids / c2_* / d2_*) →
+# kalibracja/replay/oracle ślepe na wewnętrzne decyzje HARD-bramek.
+#
+# KONTRAKT ⑤ „prawda przyrządów" (ZIOMEK_ARCHITECTURE): KAŻDY klucz
+# `metrics` JEST serializowany (LOCATION A alternatives + LOCATION B best —
+# wspólny helper `_propagate_prefixed_metrics`), CHYBA ŻE jawnie wykluczony
+# Z POWODEM w `_METRICS_EXCLUDE`. Nowa metryka = widoczna w ledgerze od
+# urodzenia; świadome pominięcie = wpis z powodem, nie cicha dziura.
+# Klucz explicit-read w serializerze nadal wygrywa (skip gdy `k in base`).
+# Decyzyjnie-NEUTRALNE: serializer tylko LOGUJE — zero wpływu na werdykt.
+_METRICS_EXCLUDE = {
+    # REDUND (audyt B07 #34-38): kopie pól planu wpisywane do metrics
+    # w feasibility_v2 (~:821-825) — te same dane serializowane
+    # strukturalnie w subdict "plan"; duplikat top-level = szum ledgera.
+    "sla_violations_count": "REDUND = plan.sla_violations (int)",
+    "sequence": "REDUND = plan.sequence",
+    "strategy": "REDUND = plan.strategy",
+    "total_duration_min": "REDUND = plan.total_duration_min",
+    "osrm_fallback_used": "REDUND = plan.osrm_fallback_used",
+}
+
+
+def _json_safe(v, _depth: int = 0):
+    """Wartość metrics → bezpieczna dla json.dumps.
+
+    append_jsonl propaguje TypeError — nie-serializowalny obiekt w metrics
+    wywaliłby zapis decyzji do ledgera. Skalary przechodzą wprost;
+    dict/list/tuple/set rekurencyjnie (cap głębokości 4); datetime →
+    isoformat; każdy inny obiekt → str(). Fail-safe z konstrukcji dla
+    przyszłych writerów metrics."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if _depth >= 4:
+        return str(v)
+    if isinstance(v, dict):
+        return {str(k): _json_safe(x, _depth + 1) for k, x in v.items()}
+    if isinstance(v, (list, tuple, set, frozenset)):
+        return [_json_safe(x, _depth + 1) for x in v]
+    if isinstance(v, datetime):
+        return v.isoformat()
+    return str(v)
 
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
+    """L1.1: propaguje WSZYSTKIE klucze `metrics` do serializowanego dictu
+    poza jawnie wykluczonymi (`_METRICS_EXCLUDE`, z powodem). Nazwa
+    historyczna (mechanizm prefiksowy zastąpiony deny-listą) — te same
+    2 call-site'y LOCATION A (_serialize_candidate) + B (best)."""
     if not metrics:
         return
     for k, v in metrics.items():
         if k in base:
             continue
-        if any(k.startswith(p) for p in _AUTO_PROP_PREFIXES):
-            base[k] = v
+        if k in _METRICS_EXCLUDE:
+            continue
+        base[k] = _json_safe(v)
 
 
 def _serialize_candidate(c) -> dict:

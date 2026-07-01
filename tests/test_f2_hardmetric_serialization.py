@@ -4,9 +4,11 @@ post_shift_overrun_* (P2, WIODACY term selekcji best_effort; replay widzial 0 ->
 ETAP-5 flipa ENABLE_POST_SHIFT_OVERRUN_PENALTY nie dalo sie policzyc) + end_of_day_
 salvage* (LIVE relaksacja HARD konca zmiany BEZ sladu) musza trafiac do logu.
 
-Mechanizm = _AUTO_PROP_PREFIXES -> wspolny _propagate_prefixed_metrics, wolany w OBU
-lokalizacjach serializera: LOCATION A (_serialize_candidate, l.~489) + LOCATION B
-(_serialize_result best, l.~864). Test helpera = pokrycie twin A+B (oba ta sama sciezka).
+Mechanizm (od L1.1 2026-07-01) = deny-lista _METRICS_EXCLUDE -> wspolny
+_propagate_prefixed_metrics (kazdy klucz metrics serializowany, chyba ze jawnie
+wykluczony z powodem), wolany w OBU lokalizacjach serializera: LOCATION A
+(_serialize_candidate) + LOCATION B (_serialize_result best). Test helpera =
+pokrycie twin A+B (oba ta sama sciezka). Historycznie: _AUTO_PROP_PREFIXES.
 """
 import sys
 
@@ -15,9 +17,16 @@ sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 from dispatch_v2 import shadow_dispatcher as SD
 
 
-def test_hard_metric_prefixes_registered():
-    assert "post_shift_overrun_" in SD._AUTO_PROP_PREFIXES
-    assert "end_of_day_salvage" in SD._AUTO_PROP_PREFIXES
+def test_hard_metric_keys_reach_ledger():
+    # L1.1 (2026-07-01): allowlist prefiksów zastąpiona deny-listą — klucze
+    # HARD trafiają do ledgera z konstrukcji (nie przez rejestrację prefiksu).
+    base = {}
+    SD._propagate_prefixed_metrics(base, {
+        "post_shift_overrun_min": 1.0,
+        "end_of_day_salvage": True,
+    })
+    assert "post_shift_overrun_min" in base
+    assert "end_of_day_salvage" in base
 
 
 def test_post_shift_overrun_propagated():
@@ -29,7 +38,9 @@ def test_post_shift_overrun_propagated():
     })
     assert base.get("post_shift_overrun_min") == 7.5
     assert base.get("post_shift_overrun_penalty") == -22.0
-    assert "unrelated_metric_xyz" not in base, "prefix nie moze lapac obcych kluczy"
+    # L1.1: NOWY kontrakt — każdy klucz metrics serializowany (deny-list),
+    # więc „obcy" klucz też trafia do ledgera (koniec cichych dziur).
+    assert base.get("unrelated_metric_xyz") == 1
 
 
 def test_end_of_day_salvage_propagated():

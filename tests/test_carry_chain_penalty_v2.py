@@ -203,14 +203,14 @@ def test_pipeline_imports_carry_chain():
     # i C.carry_chain_penalty (py_compile guard upstream — tu zero-side-effect smoke).
 
 
-def test_shadow_dispatcher_auto_prop_includes_carry_chain():
-    """shadow_dispatcher._AUTO_PROP_PREFIXES zawiera 'carry_chain_' → metryki
-    auto-propagują się do shadow log (location B)."""
+def test_shadow_dispatcher_propagates_carry_chain():
+    """L1.1 (2026-07-01): deny-list zamiast prefiksów — carry_chain_*
+    trafia do shadow log (LOCATION A+B) z konstrukcji."""
     from dispatch_v2 import shadow_dispatcher
-    assert "carry_chain_" in shadow_dispatcher._AUTO_PROP_PREFIXES, (
-        f"missing carry_chain_ prefix in _AUTO_PROP_PREFIXES: "
-        f"{shadow_dispatcher._AUTO_PROP_PREFIXES}"
-    )
+    base: dict = {}
+    shadow_dispatcher._propagate_prefixed_metrics(
+        base, {"carry_chain_penalty": -4.0})
+    assert base.get("carry_chain_penalty") == -4.0
 
 
 # ---------------------------------------------------------------------------

@@ -121,6 +121,10 @@ def test_flags_default_off():
 def test_serializer_has_fields():
     import inspect
     from dispatch_v2 import shadow_dispatcher as sd
+    # L1.1 (2026-07-01): prefix-allowlist zastapiona deny-lista — bundle_fit_*
+    # dociera do ledgera behawioralnie (nie przez literal prefiksu w zrodle).
+    base: dict = {}
+    sd._propagate_prefixed_metrics(base, {"bundle_fit_shadow": True})
+    assert base.get("bundle_fit_shadow") is True
     src = inspect.getsource(sd)
-    assert '"bundle_fit_' in src  # prefix LOCATION A+B
     assert src.count('"fix_c_additive_pen_shadow"') >= 2  # LOCATION A + B

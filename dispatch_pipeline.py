@@ -5413,8 +5413,9 @@ def _assess_order_impl(
             "bonus_v319h_guard_shadow_delta": round(bonus_v319h_guard_shadow_delta, 2),
             # SP-B2-SYNCWORKA H1 (2026-06-11): spread gotowości worka + kara
             # gradientowa + delta shadow (kara + zerowanie bonusów bundlowych
-            # przy >10 min). bonus_* auto-prefix; sync_* prefix dodany w
-            # shadow_dispatcher._AUTO_PROP_PREFIXES (LOCATION A+B).
+            # przy >10 min). Serializacja: L1.1 deny-list — każdy klucz metrics
+            # trafia do shadow_decisions (LOCATION A+B), chyba że w
+            # shadow_dispatcher._METRICS_EXCLUDE.
             "sync_ready_spread_min": sync_ready_spread_min,
             "sync_spread_n": sync_spread_n,
             "sync_spread_bundle_zeroed": sync_spread_bundle_zeroed,

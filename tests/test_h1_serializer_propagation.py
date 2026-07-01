@@ -64,16 +64,21 @@ def test_v325_v326_keys_propagated():
     assert result["v326_fleet_bag_avg"] == 2.3
 
 
-def test_unknown_prefix_not_propagated():
+def test_unknown_keys_propagated_unless_excluded():
+    # L1.1 (2026-07-01): ODWROCENIE starego kontraktu. Allowlist prefiksow
+    # gubila 38 kluczy (audyt B07, 0/858) -> teraz KAZDY klucz metrics
+    # trafia do ledgera, chyba ze jawnie wykluczony w _METRICS_EXCLUDE.
     cand = _MockCand(metrics={
-        "random_key": "should_not_appear",
+        "random_key": "now_visible",
         "foo_bar": 1,
         "panel_meta": "x",
+        "sequence": [1, 2],  # REDUND w _METRICS_EXCLUDE -> nadal pomijany
     })
     result = _serialize_candidate(cand)
-    assert "random_key" not in result
-    assert "foo_bar" not in result
-    assert "panel_meta" not in result
+    assert result["random_key"] == "now_visible"
+    assert result["foo_bar"] == 1
+    assert result["panel_meta"] == "x"
+    assert "sequence" not in result
 
 
 def test_explicit_fields_take_precedence():

@@ -611,10 +611,18 @@ decision to **`shadow_decisions.jsonl`** (append-only).
   bundle_level*, bonus_* (all terms), plan{sequence, total_duration_min, strategy, sla_violations,
   per_order_delivery_times, predicted_delivered_at, pickup_at}, czas_kuriera_warsaw, v326_rationale,
   …}, alternatives[…]`. ~200 fields per record (LOCATION A = alternatives, LOCATION B = best).
+- **Metrics completeness (L1.1, 2026-07-01, Faza 3 audytu):** serializer propaguje **KAŻDY** klucz
+  `metrics` do rekordu (LOCATION A+B przez wspólny `_propagate_prefixed_metrics`), chyba że klucz
+  jest jawnie wykluczony Z POWODEM w `_METRICS_EXCLUDE` (deny-lista; dziś tylko 5 REDUND-kopii pól
+  planu). Stary mechanizm allowlisty `_AUTO_PROP_PREFIXES` (35 prefiksów) gubił 38 kluczy, w tym
+  14 HARD (`sla_violations` detail, `eta_source`, `pickup_dist_km`, `r6_*`, `c2_*`, `d2_*`) —
+  0/858 w ledgerze (audyt 30.06 B07). Nowa metryka = widoczna od urodzenia, bez rejestracji.
+  Wartości sanityzowane `_json_safe` (datetime→iso, set→list, obiekt→str) — zapis nie może paść.
+  Inwariant: `tests/test_serializer_completeness_l11.py`.
 - **Shadow-only pattern:** a new mechanic writes a `*_shadow_delta` field + a serialized metric, runs
   7–14 days, is replayed/forward-validated by tools in `tools/` and `eod_drafts/`, and only then is
   its flag flipped 🟢. The **encoding checklist** for any new rule (or it's an invisible bug): code +
-  test + shadow serializer (A+B) + learning_analyzer reader + dashboard.
+  test + shadow serializer (A+B auto przez completeness) + learning_analyzer reader + dashboard.
 
 ---
 

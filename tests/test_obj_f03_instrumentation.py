@@ -30,8 +30,12 @@ def _order(oid, status="assigned"):
 
 # ─── serializer whitelist (encoding checklist: serializer) ───────────
 
-def test_objm_prefix_in_whitelist():
-    assert "objm_" in sd._AUTO_PROP_PREFIXES
+def test_objm_keys_reach_ledger():
+    # L1.1 (2026-07-01): whitelist prefiksów zastąpiona deny-listą —
+    # objm_* trafia do ledgera z konstrukcji.
+    base: dict = {}
+    sd._propagate_prefixed_metrics(base, {"objm_probe": 1.0})
+    assert base.get("objm_probe") == 1.0
 
 
 def test_propagate_objm_metric():
@@ -43,7 +47,9 @@ def test_propagate_objm_metric():
     })
     assert base["objm_idle_total_min"] == 5.0
     assert base["objm_r6_breach_max_min"] == 12.0
-    assert "not_whitelisted" not in base
+    # L1.1 (2026-07-01): deny-list — klucz spoza dawnej whitelisty TEŻ
+    # trafia do ledgera (kontrakt ⑤: koniec cichych dziur widoczności).
+    assert base.get("not_whitelisted") == 99
 
 
 # ─── replay-capture ──────────────────────────────────────────────────
