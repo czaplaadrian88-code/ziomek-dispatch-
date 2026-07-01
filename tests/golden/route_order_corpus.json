@@ -1,0 +1,1249 @@
+{
+ "meta": {
+  "generated_at": "2026-07-01T20:22:13.746120+00:00",
+  "generator": "dispatch_v2/tools/route_order_golden_corpus_gen.py",
+  "provenance": "L6.A1 Faza 3 audytu — zastępuje ziomek_time_route_monitor (expiry 2026-07-10)",
+  "flags": {
+   "plan_aware": true,
+   "trust_canon": true,
+   "panel": {
+    "TRUST_CANON_ORDER": true,
+    "TRUST_CANON_WHEN_COVERS_BAG": true,
+    "PLAN_AWARE_PODJAZDY": false,
+    "DELIVERY_DASH_WHEN_NO_PLAN": true
+   }
+  },
+  "pickup_merge_min": 10,
+  "proj_contract": "[(typ, sorted(order_ids))] — ETA/coords wylaczone z parytetu"
+ },
+ "cases": [
+  {
+   "id": "syn_empty_bag",
+   "source": "synthetic",
+   "note": "worek pusty -> pusta trasa",
+   "bag": [],
+   "plan_doc": null,
+   "expected_proj": [],
+   "console_parity": true
+  },
+  {
+   "id": "syn_single_order",
+   "source": "synthetic",
+   "note": "1 zlecenie: pickup->dropoff",
+   "bag": [
+    {
+     "order_id": "900001",
+     "status": "assigned",
+     "restaurant": "R1",
+     "delivery_address": "Adres 900001",
+     "czas_kuriera_warsaw": "12:30",
+     "pickup_address": "R1 ul. Testowa",
+     "pickup_coords": [
+      53.13,
+      23.16
+     ],
+     "delivery_coords": [
+      53.14,
+      23.17
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    }
+   ],
+   "plan_doc": null,
+   "expected_proj": [
+    [
+     "pickup",
+     [
+      "900001"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900001"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "syn_carried_first",
+   "source": "synthetic",
+   "note": "picked_up niesiony + nowy odbior",
+   "bag": [
+    {
+     "order_id": "900011",
+     "status": "picked_up",
+     "restaurant": "R1",
+     "delivery_address": "Adres 900011",
+     "czas_kuriera_warsaw": "12:00",
+     "pickup_address": "R1 ul. Testowa",
+     "pickup_coords": [
+      53.13,
+      23.16
+     ],
+     "delivery_coords": [
+      53.14,
+      23.17
+     ],
+     "picked_up_at": "2026-07-01T10:05:00+00:00",
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    },
+    {
+     "order_id": "900012",
+     "status": "assigned",
+     "restaurant": "R2",
+     "delivery_address": "Adres 900012",
+     "czas_kuriera_warsaw": "12:20",
+     "pickup_address": "R2 ul. Testowa",
+     "pickup_coords": [
+      53.14,
+      23.17
+     ],
+     "delivery_coords": [
+      53.13,
+      23.16
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    }
+   ],
+   "plan_doc": null,
+   "expected_proj": [
+    [
+     "dropoff",
+     [
+      "900011"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "900012"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900012"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "syn_same_restaurant_bundle",
+   "source": "synthetic",
+   "note": "2x ta sama restauracja, ck w progu sklejania",
+   "bag": [
+    {
+     "order_id": "900021",
+     "status": "assigned",
+     "restaurant": "R1",
+     "delivery_address": "Adres 900021",
+     "czas_kuriera_warsaw": "12:10",
+     "pickup_address": "R1 ul. Testowa",
+     "pickup_coords": [
+      53.13,
+      23.16
+     ],
+     "delivery_coords": [
+      53.14,
+      23.17
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    },
+    {
+     "order_id": "900022",
+     "status": "assigned",
+     "restaurant": "R1",
+     "delivery_address": "Adres 900022",
+     "czas_kuriera_warsaw": "12:15",
+     "pickup_address": "R1 ul. Testowa",
+     "pickup_coords": [
+      53.13,
+      23.16
+     ],
+     "delivery_coords": [
+      53.15,
+      23.18
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    }
+   ],
+   "plan_doc": null,
+   "expected_proj": [
+    [
+     "pickup",
+     [
+      "900021"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900021"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "900022"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900022"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "syn_committed_ascending",
+   "source": "synthetic",
+   "note": "odbiory wg committed rosnaco",
+   "bag": [
+    {
+     "order_id": "900031",
+     "status": "assigned",
+     "restaurant": "R3",
+     "delivery_address": "Adres 900031",
+     "czas_kuriera_warsaw": "13:00",
+     "pickup_address": "R3 ul. Testowa",
+     "pickup_coords": [
+      53.14,
+      23.17
+     ],
+     "delivery_coords": [
+      53.13,
+      23.16
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    },
+    {
+     "order_id": "900032",
+     "status": "assigned",
+     "restaurant": "R1",
+     "delivery_address": "Adres 900032",
+     "czas_kuriera_warsaw": "12:00",
+     "pickup_address": "R1 ul. Testowa",
+     "pickup_coords": [
+      53.13,
+      23.16
+     ],
+     "delivery_coords": [
+      53.14,
+      23.17
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    },
+    {
+     "order_id": "900033",
+     "status": "assigned",
+     "restaurant": "R2",
+     "delivery_address": "Adres 900033",
+     "czas_kuriera_warsaw": "12:30",
+     "pickup_address": "R2 ul. Testowa",
+     "pickup_coords": [
+      53.12,
+      23.15
+     ],
+     "delivery_coords": [
+      53.14,
+      23.17
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    }
+   ],
+   "plan_doc": null,
+   "expected_proj": [
+    [
+     "pickup",
+     [
+      "900031"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900031"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "900032"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900032"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "900033"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900033"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "syn_plan_covers_bag_trust_canon",
+   "source": "synthetic",
+   "note": "plan pokrywa CALY worek -> kanon verbatim (trust_canon)",
+   "bag": [
+    {
+     "order_id": "900041",
+     "status": "assigned",
+     "restaurant": "R1",
+     "delivery_address": "Adres 900041",
+     "czas_kuriera_warsaw": "12:00",
+     "pickup_address": "R1 ul. Testowa",
+     "pickup_coords": [
+      53.13,
+      23.16
+     ],
+     "delivery_coords": [
+      53.14,
+      23.17
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    },
+    {
+     "order_id": "900042",
+     "status": "assigned",
+     "restaurant": "R2",
+     "delivery_address": "Adres 900042",
+     "czas_kuriera_warsaw": "12:40",
+     "pickup_address": "R2 ul. Testowa",
+     "pickup_coords": [
+      53.14,
+      23.17
+     ],
+     "delivery_coords": [
+      53.13,
+      23.16
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    }
+   ],
+   "plan_doc": {
+    "sequence": [
+     {
+      "type": "pickup",
+      "order_id": "900042"
+     },
+     {
+      "type": "dropoff",
+      "order_id": "900042"
+     },
+     {
+      "type": "pickup",
+      "order_id": "900041"
+     },
+     {
+      "type": "dropoff",
+      "order_id": "900041"
+     }
+    ]
+   },
+   "expected_proj": [
+    [
+     "pickup",
+     [
+      "900041"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900041"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "900042"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900042"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "syn_plan_partial_fallback",
+   "source": "synthetic",
+   "note": "plan pokrywa CZESC worka -> fallback czasowy",
+   "bag": [
+    {
+     "order_id": "900051",
+     "status": "assigned",
+     "restaurant": "R1",
+     "delivery_address": "Adres 900051",
+     "czas_kuriera_warsaw": "12:00",
+     "pickup_address": "R1 ul. Testowa",
+     "pickup_coords": [
+      53.13,
+      23.16
+     ],
+     "delivery_coords": [
+      53.14,
+      23.17
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    },
+    {
+     "order_id": "900052",
+     "status": "assigned",
+     "restaurant": "R2",
+     "delivery_address": "Adres 900052",
+     "czas_kuriera_warsaw": "12:40",
+     "pickup_address": "R2 ul. Testowa",
+     "pickup_coords": [
+      53.14,
+      23.17
+     ],
+     "delivery_coords": [
+      53.13,
+      23.16
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    }
+   ],
+   "plan_doc": {
+    "sequence": [
+     {
+      "type": "pickup",
+      "order_id": "900051"
+     },
+     {
+      "type": "dropoff",
+      "order_id": "900051"
+     }
+    ]
+   },
+   "expected_proj": [
+    [
+     "pickup",
+     [
+      "900051"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900051"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "900052"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900052"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "syn_poisoned_zero_coords",
+   "source": "synthetic",
+   "note": "zatrute (0,0) -> porzadek deterministyczny mimo placeholdera",
+   "bag": [
+    {
+     "order_id": "900061",
+     "status": "assigned",
+     "restaurant": "R1",
+     "delivery_address": "Adres 900061",
+     "czas_kuriera_warsaw": "12:00",
+     "pickup_address": "R1 ul. Testowa",
+     "pickup_coords": [
+      0.0,
+      0.0
+     ],
+     "delivery_coords": [
+      0.0,
+      0.0
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    },
+    {
+     "order_id": "900062",
+     "status": "assigned",
+     "restaurant": "R2",
+     "delivery_address": "Adres 900062",
+     "czas_kuriera_warsaw": "12:20",
+     "pickup_address": "R2 ul. Testowa",
+     "pickup_coords": [
+      53.13,
+      23.16
+     ],
+     "delivery_coords": [
+      53.14,
+      23.17
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    }
+   ],
+   "plan_doc": null,
+   "expected_proj": [
+    [
+     "pickup",
+     [
+      "900061"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900061"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "900062"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900062"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "syn_no_ck_no_plan",
+   "source": "synthetic",
+   "note": "brak committed i planu -> stabilny fallback",
+   "bag": [
+    {
+     "order_id": "900071",
+     "status": "assigned",
+     "restaurant": "R1",
+     "delivery_address": "Adres 900071",
+     "czas_kuriera_warsaw": null,
+     "pickup_address": "R1 ul. Testowa",
+     "pickup_coords": [
+      53.13,
+      23.16
+     ],
+     "delivery_coords": [
+      53.14,
+      23.17
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    },
+    {
+     "order_id": "900072",
+     "status": "assigned",
+     "restaurant": "R2",
+     "delivery_address": "Adres 900072",
+     "czas_kuriera_warsaw": null,
+     "pickup_address": "R2 ul. Testowa",
+     "pickup_coords": [
+      53.14,
+      23.17
+     ],
+     "delivery_coords": [
+      53.13,
+      23.16
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T10:00:00+00:00",
+     "created_at_utc": "2026-07-01T09:50:00Z",
+     "pickup_at_warsaw": null
+    }
+   ],
+   "plan_doc": null,
+   "expected_proj": [
+    [
+     "pickup",
+     [
+      "900071"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900071"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "900072"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "900072"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "live_20260701_cid413",
+   "source": "live",
+   "note": "zywy worek cid=413 z orders_state.json",
+   "bag": [
+    {
+     "order_id": "484875",
+     "status": "picked_up",
+     "restaurant": "Raj",
+     "delivery_address": "Jurowiecka 11/144",
+     "czas_kuriera_warsaw": "2026-07-01T22:02:00+02:00",
+     "pickup_address": "Kilińskiego 12 lok. 1U",
+     "pickup_coords": [
+      53.1322335,
+      23.1653257
+     ],
+     "delivery_coords": [
+      53.1370768,
+      23.1623316
+     ],
+     "picked_up_at": "2026-07-01 22:11:21",
+     "assigned_at": "2026-07-01T19:33:09.898854+00:00",
+     "created_at_utc": "2026-07-01T19:28:00+00:00",
+     "pickup_at_warsaw": "2026-07-01T21:58:00+02:00"
+    },
+    {
+     "order_id": "484878",
+     "status": "picked_up",
+     "restaurant": "Raj",
+     "delivery_address": "Jurowiecka 7/96",
+     "czas_kuriera_warsaw": "2026-07-01T22:07:00+02:00",
+     "pickup_address": "Kilińskiego 12 lok. 1U",
+     "pickup_coords": [
+      53.1322335,
+      23.1653257
+     ],
+     "delivery_coords": [
+      53.1367965,
+      23.1618671
+     ],
+     "picked_up_at": "2026-07-01 22:11:22",
+     "assigned_at": "2026-07-01T20:11:56.243015+00:00",
+     "created_at_utc": "2026-07-01T19:31:51+00:00",
+     "pickup_at_warsaw": "2026-07-01T21:51:51+02:00"
+    },
+    {
+     "order_id": "484881",
+     "status": "assigned",
+     "restaurant": "Chicago Pizza",
+     "delivery_address": "Białostoczek 4/1",
+     "czas_kuriera_warsaw": "2026-07-01T22:30:00+02:00",
+     "pickup_address": "Marii Skłodowskiej-Curie 3/U1",
+     "pickup_coords": [
+      53.129405,
+      23.158005
+     ],
+     "delivery_coords": [
+      53.1432292,
+      23.1550488
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T20:00:21.173548+00:00",
+     "created_at_utc": "2026-07-01T19:59:02+00:00",
+     "pickup_at_warsaw": "2026-07-01T22:24:02+02:00"
+    },
+    {
+     "order_id": "484882",
+     "status": "assigned",
+     "restaurant": "Grill Kebab",
+     "delivery_address": "Poleska 13/24",
+     "czas_kuriera_warsaw": "2026-07-01T22:36:00+02:00",
+     "pickup_address": "Jana Kilińskiego 12/lok 1U",
+     "pickup_coords": [
+      53.132464,
+      23.165517
+     ],
+     "delivery_coords": [
+      53.1432335,
+      23.1660747
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T20:06:38.002425+00:00",
+     "created_at_utc": "2026-07-01T20:05:24+00:00",
+     "pickup_at_warsaw": "2026-07-01T22:20:24+02:00"
+    }
+   ],
+   "plan_doc": {
+    "plan_version": 3520,
+    "created_at": "2026-04-21T14:18:49.349090+00:00",
+    "last_modified_at": "2026-07-01T20:21:20.443368+00:00",
+    "start_pos": {
+     "lat": 53.1390082,
+     "lng": 23.1594455,
+     "source": "last_event",
+     "source_ts": "2026-07-01T20:21:20.431355+00:00"
+    },
+    "start_ts": "2026-07-01T20:21:20.431355+00:00",
+    "stops": [
+     {
+      "order_id": "484875",
+      "type": "dropoff",
+      "coords": {
+       "lat": 53.1370768,
+       "lng": 23.1623316
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:22:08.431355+00:00",
+      "dwell_min": 1.5,
+      "status_at_plan_time": "picked_up"
+     },
+     {
+      "order_id": "484878",
+      "type": "dropoff",
+      "coords": {
+       "lat": 53.1367965,
+       "lng": 23.1618671
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:23:49.531355+00:00",
+      "dwell_min": 1.5,
+      "status_at_plan_time": "picked_up"
+     },
+     {
+      "order_id": "484881",
+      "type": "pickup",
+      "coords": {
+       "lat": 53.129405,
+       "lng": 23.158005
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:30:00+00:00",
+      "dwell_min": 1.0,
+      "status_at_plan_time": "assigned"
+     },
+     {
+      "order_id": "484882",
+      "type": "pickup",
+      "coords": {
+       "lat": 53.132464,
+       "lng": 23.165517
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:36:00+00:00",
+      "dwell_min": 1.0,
+      "status_at_plan_time": "assigned"
+     },
+     {
+      "order_id": "484881",
+      "type": "dropoff",
+      "coords": {
+       "lat": 53.1432292,
+       "lng": 23.1550488
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:42:31.200000+00:00",
+      "dwell_min": 1.5,
+      "status_at_plan_time": "assigned"
+     },
+     {
+      "order_id": "484882",
+      "type": "dropoff",
+      "coords": {
+       "lat": 53.1432335,
+       "lng": 23.1660747
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:45:44.500000+00:00",
+      "dwell_min": 1.5,
+      "status_at_plan_time": "assigned"
+     }
+    ],
+    "optimization_method": "incremental",
+    "bag_signature": "484874:1|484875:1|484878:1|484881:0|484882:0",
+    "retimed_at": "2026-07-01T20:21:20.431355+00:00",
+    "invalidated_at": null,
+    "invalidation_reason": null
+   },
+   "expected_proj": [
+    [
+     "dropoff",
+     [
+      "484875"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "484878"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "484881"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "484882"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "484881"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "484882"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "live_20260701_cid447",
+   "source": "live",
+   "note": "zywy worek cid=447 z orders_state.json",
+   "bag": [
+    {
+     "order_id": "484866",
+     "status": "picked_up",
+     "restaurant": "Pruszynka Restauracja",
+     "delivery_address": "Kręta 52/15",
+     "czas_kuriera_warsaw": "2026-07-01T21:50:00+02:00",
+     "pickup_address": "Jarzębinowa 2A/1",
+     "pickup_coords": [
+      53.151179,
+      23.111787
+     ],
+     "delivery_coords": [
+      53.1116543,
+      23.1407819
+     ],
+     "picked_up_at": "2026-07-01 21:57:01",
+     "assigned_at": "2026-07-01T19:10:55.255737+00:00",
+     "created_at_utc": "2026-07-01T19:09:55+00:00",
+     "pickup_at_warsaw": "2026-07-01T21:24:55+02:00"
+    },
+    {
+     "order_id": "484872",
+     "status": "picked_up",
+     "restaurant": "Goodboy",
+     "delivery_address": "Ciołkowskiego 11/5",
+     "czas_kuriera_warsaw": "2026-07-01T22:17:00+02:00",
+     "pickup_address": "Wiejska 55 lok u1",
+     "pickup_coords": [
+      53.115336,
+      23.14607
+     ],
+     "delivery_coords": [
+      53.114723,
+      23.1791226
+     ],
+     "picked_up_at": "2026-07-01 22:15:46",
+     "assigned_at": "2026-07-01T19:37:15.226647+00:00",
+     "created_at_utc": "2026-07-01T19:23:17+00:00",
+     "pickup_at_warsaw": "2026-07-01T21:38:17+02:00"
+    }
+   ],
+   "plan_doc": {
+    "plan_version": 2883,
+    "created_at": "2026-06-13T09:19:21.787357+00:00",
+    "last_modified_at": "2026-07-01T20:19:37.485523+00:00",
+    "start_pos": {
+     "lat": 53.115336,
+     "lng": 23.14607,
+     "source": "last_event",
+     "source_ts": "2026-07-01T20:19:37.353216+00:00"
+    },
+    "start_ts": "2026-07-01T20:19:37.353216+00:00",
+    "stops": [
+     {
+      "order_id": "484866",
+      "type": "dropoff",
+      "coords": {
+       "lat": 53.1116543,
+       "lng": 23.1407819
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:21:55.153216+00:00",
+      "dwell_min": 2.5,
+      "status_at_plan_time": "picked_up"
+     },
+     {
+      "order_id": "484872",
+      "type": "dropoff",
+      "coords": {
+       "lat": 53.114723,
+       "lng": 23.1791226
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:30:46.053216+00:00",
+      "dwell_min": 2.5,
+      "status_at_plan_time": "picked_up"
+     }
+    ],
+    "optimization_method": "incremental",
+    "bag_signature": "484866:1|484872:1",
+    "retimed_at": "2026-07-01T20:19:37.353216+00:00",
+    "invalidated_at": null,
+    "invalidation_reason": null
+   },
+   "expected_proj": [
+    [
+     "dropoff",
+     [
+      "484866"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "484872"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "live_20260701_cid515",
+   "source": "live",
+   "note": "zywy worek cid=515 z orders_state.json",
+   "bag": [
+    {
+     "order_id": "484870",
+     "status": "picked_up",
+     "restaurant": "_500 stopni",
+     "delivery_address": "Transportowa 2B/90",
+     "czas_kuriera_warsaw": "2026-07-01T22:05:00+02:00",
+     "pickup_address": "Nowy Świat 3/U4",
+     "pickup_coords": [
+      53.134316,
+      23.153801
+     ],
+     "delivery_coords": [
+      53.1145043,
+      23.1280332
+     ],
+     "picked_up_at": "2026-07-01 22:17:23",
+     "assigned_at": "2026-07-01T19:34:51.234665+00:00",
+     "created_at_utc": "2026-07-01T19:21:30+00:00",
+     "pickup_at_warsaw": "2026-07-01T21:36:30+02:00"
+    },
+    {
+     "order_id": "484880",
+     "status": "assigned",
+     "restaurant": "Atmosfera",
+     "delivery_address": "Wrocławska 43/7",
+     "czas_kuriera_warsaw": "2026-07-01T22:20:00+02:00",
+     "pickup_address": "Warszawska 30",
+     "pickup_coords": null,
+     "delivery_coords": [
+      53.1239074,
+      23.0954173
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T19:55:57.969557+00:00",
+     "created_at_utc": "2026-07-01T19:53:23+00:00",
+     "pickup_at_warsaw": "2026-07-01T22:13:23+02:00"
+    }
+   ],
+   "plan_doc": {
+    "plan_version": 1429,
+    "created_at": "2026-04-20T13:01:34.654553+00:00",
+    "last_modified_at": "2026-07-01T19:56:22.956986+00:00",
+    "start_pos": {
+     "lat": 53.11997179999999,
+     "lng": 23.1401452,
+     "source": "last_event",
+     "source_ts": "2026-07-01T19:54:26.316013+00:00"
+    },
+    "start_ts": "2026-07-01T19:54:26.316013+00:00",
+    "stops": [
+     {
+      "order_id": "484877",
+      "type": "pickup",
+      "coords": {
+       "lat": 53.15441,
+       "lng": 23.086452
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:06:55.516013+00:00",
+      "dwell_min": 1.0,
+      "status_at_plan_time": "assigned"
+     },
+     {
+      "order_id": "484870",
+      "type": "pickup",
+      "coords": {
+       "lat": 53.134316,
+       "lng": 23.153801
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:17:24.216013+00:00",
+      "dwell_min": 1.0,
+      "status_at_plan_time": "assigned"
+     },
+     {
+      "order_id": "484877",
+      "type": "dropoff",
+      "coords": {
+       "lat": 53.1398203,
+       "lng": 23.131803
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:21:56.316013+00:00",
+      "dwell_min": 4.5,
+      "status_at_plan_time": "assigned"
+     },
+     {
+      "order_id": "484870",
+      "type": "dropoff",
+      "coords": {
+       "lat": 53.1145043,
+       "lng": 23.1280332
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:33:54.216013+00:00",
+      "dwell_min": 4.5,
+      "status_at_plan_time": "assigned"
+     }
+    ],
+    "optimization_method": "incremental",
+    "bag_signature": "484870:0|484877:0",
+    "retimed_at": "2026-07-01T19:54:26.316013+00:00",
+    "invalidated_at": "2026-07-01T19:55:57.480303+00:00",
+    "invalidation_reason": "BAG_CHANGED"
+   },
+   "expected_proj": [
+    [
+     "dropoff",
+     [
+      "484870"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "484880"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "484880"
+     ]
+    ]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "live_20260701_cid536",
+   "source": "live",
+   "note": "zywy worek cid=536 z orders_state.json",
+   "bag": [
+    {
+     "order_id": "484879",
+     "status": "assigned",
+     "restaurant": "Grill Kebab",
+     "delivery_address": "Sikorskiego 6/89",
+     "czas_kuriera_warsaw": "2026-07-01T22:19:00+02:00",
+     "pickup_address": "Jana Kilińskiego 12/lok 1U",
+     "pickup_coords": [
+      53.132464,
+      23.165517
+     ],
+     "delivery_coords": [
+      53.1312174,
+      23.1007843
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T19:43:34.319660+00:00",
+     "created_at_utc": "2026-07-01T19:40:48+00:00",
+     "pickup_at_warsaw": "2026-07-01T22:00:48+02:00"
+    },
+    {
+     "order_id": "484883",
+     "status": "assigned",
+     "restaurant": "Pizza Dealer",
+     "delivery_address": "Antoniukowska 22a/70",
+     "czas_kuriera_warsaw": "2026-07-01T22:43:00+02:00",
+     "pickup_address": "Rynek Kościuszki 28/1",
+     "pickup_coords": [
+      53.132815,
+      23.158044
+     ],
+     "delivery_coords": [
+      53.1418747,
+      23.1380305
+     ],
+     "picked_up_at": null,
+     "assigned_at": "2026-07-01T20:17:59.671589+00:00",
+     "created_at_utc": "2026-07-01T20:07:57+00:00",
+     "pickup_at_warsaw": "2026-07-01T22:32:57+02:00"
+    }
+   ],
+   "plan_doc": {
+    "plan_version": 434,
+    "created_at": "2026-06-29T14:50:33.749690+00:00",
+    "last_modified_at": "2026-07-01T20:19:40.901662+00:00",
+    "start_pos": {
+     "lat": 53.1297141,
+     "lng": 23.0769589,
+     "source": "last_event",
+     "source_ts": "2026-07-01T20:19:40.900605+00:00"
+    },
+    "start_ts": "2026-07-01T20:19:40.900605+00:00",
+    "stops": [
+     {
+      "order_id": "484879",
+      "type": "pickup",
+      "coords": {
+       "lat": 53.132464,
+       "lng": 23.165517
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:30:15.800605+00:00",
+      "dwell_min": 1.0,
+      "status_at_plan_time": "assigned"
+     },
+     {
+      "order_id": "484879",
+      "type": "dropoff",
+      "coords": {
+       "lat": 53.1312174,
+       "lng": 23.1007843
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:42:03.700605+00:00",
+      "dwell_min": 6.5,
+      "status_at_plan_time": "assigned"
+     },
+     {
+      "order_id": "484883",
+      "type": "pickup",
+      "coords": {
+       "lat": 53.132815,
+       "lng": 23.158044
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T20:58:23.400605+00:00",
+      "dwell_min": 1.0,
+      "status_at_plan_time": "assigned"
+     },
+     {
+      "order_id": "484883",
+      "type": "dropoff",
+      "coords": {
+       "lat": 53.1418747,
+       "lng": 23.1380305
+      },
+      "scheduled_at": null,
+      "predicted_at": "2026-07-01T21:03:46.300605+00:00",
+      "dwell_min": 6.5,
+      "status_at_plan_time": "assigned"
+     }
+    ],
+    "optimization_method": "incremental",
+    "bag_signature": "484873:1|484879:0|484883:0",
+    "retimed_at": "2026-07-01T20:19:40.900605+00:00",
+    "invalidated_at": null,
+    "invalidation_reason": null
+   },
+   "expected_proj": [
+    [
+     "pickup",
+     [
+      "484879"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "484879"
+     ]
+    ],
+    [
+     "pickup",
+     [
+      "484883"
+     ]
+    ],
+    [
+     "dropoff",
+     [
+      "484883"
+     ]
+    ]
+   ],
+   "console_parity": true
+  }
+ ]
+}
