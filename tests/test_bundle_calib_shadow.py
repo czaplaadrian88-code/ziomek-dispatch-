@@ -245,6 +245,56 @@ def test_build_row_emits_under_z_fields():
     assert set(row["under_z"].keys()) == {B._zkey(z) for z in B.Z_CAPS}
 
 
+# ── B1/L6.B1 (2026-07-01): parytet instrument↔dźwignia O2 ──────────────────
+def test_overage_cap_equals_engine_dial():
+    """Instrument mierzy DOKŁADNIE ten cap, który flip O2 przełącza.
+
+    R6_MAX_MIN MUSI być importem dialu common.O2_OVERAGE_CAP_MIN, nie literałem —
+    literał = dryf przy strojeniu dialu (np. tryb niedoboru 02.07). Misdiagnoza
+    „tier-aware 40" obalona pomiarem 01.07: 40 = BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN
+    (cap selekcji w eskalacji-3), nie termika worka; termiczna R6 płaska
+    (doktryna Adriana 2026-05-10). Łapie tylko dryf W KODZIE — env-frozen
+    rozjazd między serwisami łapie checklist drop-inów (wzorzec #9).
+    """
+    from dispatch_v2 import common as C
+    assert B.R6_MAX_MIN == C.O2_OVERAGE_CAP_MIN
+
+
+def test_overage_recompute_from_carry_ready_matches_walk():
+    """Wierność korpusu: overage w wierszu == hinge z logowanego carry_ready.
+
+    Gwarantuje, że przeliczenia post-hoc (np. wariant capu 40 obok primary 35)
+    z carry_ready odtwarzają overage bez re-symulacji — fundament reguły
+    „nie mutuj kolektora w środku okna, przeliczaj obok".
+    """
+    now = datetime(2026, 6, 25, 10, 0, tzinfo=timezone.utc)
+    mine = {
+        "A": {
+            "status": "assigned",
+            "czas_kuriera_warsaw": "2026-06-25T11:00:00+02:00",  # ready 09:00 UTC
+            "picked_up_at": None,
+            "pickup_coords": [53.13, 23.16],
+            "delivery_coords": [53.10, 23.20],
+        },
+        "B": {
+            "status": "picked_up",
+            "czas_kuriera_warsaw": "2026-06-25T10:30:00+02:00",  # ready 08:30 UTC
+            "picked_up_at": "2026-06-25T09:40:00+00:00",
+            "pickup_coords": [53.12, 23.14],
+            "delivery_coords": [53.11, 23.22],
+        },
+    }
+    pos = (53.14, 23.15)
+    seq = B._stops_from_mine(mine)
+    idx, M = B._osrm_matrix([seq], mine, pos)
+    assert idx is not None
+    m = B._walk_calib(seq, mine, pos, now, idx, M, {"A": None, "B": None})
+    assert m is not None and m["carry_ready"]
+    recomputed = sum(max(0.0, age - B.R6_MAX_MIN) for age in m["carry_ready"].values())
+    # carry_ready logowane z zaokrągleniem 0.1/oid → tolerancja 0.1*len
+    assert abs(recomputed - m["overage"]) <= 0.1 * len(m["carry_ready"]) + 1e-6
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

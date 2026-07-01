@@ -25,7 +25,7 @@
 - 🟢 **INV-SEL-MULT-SIGN**: mnożnik score nie odwraca na ujemnym score → `test_v327_mult_sign_guard`.
 - 🔴 **INV-LAYER-HARD-BEFORE-SOFT (pełny)**: `_assert_feasibility_first` istnieje, ale tylko na 1 call-site → re-assert na EMIT (po mutacjach `FEAS_CARRY_READMIT`, wzorzec #10). Strażnik globalny brak.
 - 🔴 **INV-LAYER-NO-VERDICT-OUTSIDE-L5**: `verdict=KOORD` tylko w warstwie 8; zakaz poza.
-- 🔴 **INV-FEAS-R6-TIER**: każdy konsument R6 liczy tier-aware (35 T1/2, 40 T3); żaden płaski 35 (dziś `bundle_calib` łamie).
+- 🔴 **INV-FEAS-R6-ONE-SOURCE** *(re-spec 2026-07-01 — pomiar B1 na 2718 worków OBALIŁ wersję „tier-aware 35 T1/2, 40 T3": myliła KLASĘ kuriera z POZIOMEM ESKALACJI; zgodność z KANON „35 normalnie / 40 TYLKO alarm")*: rodzina progów termicznych R6 (=35: `BAG_TIME_HARD_MAX_MIN`, `O2_OVERAGE_CAP_MIN`, bundle_calib…) → docelowo 1 źródło (L6.B2); każdy INSTRUMENT mierzy na TYM SAMYM dialu co dźwignia, którą kalibruje (bundle_calib↔`O2_OVERAGE_CAP_MIN`: 🟢 `test_overage_cap_equals_engine_dial`). Termiczna R6 jest PŁASKA (35, doktryna Adriana 2026-05-10, feasibility_v2 „35 min jedyną twardą regułą"); „40" = `BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN` — cap SELEKCJI kuriera w eskalacji-3 (ratunek przy 0 feasible), inny mechanizm niż termika. Bag-size cap per KLASĘ (`HARD_TIER_BAG_CAP` gold6/std5/slow4, flaga OFF) = jeszcze inna oś (liczba zleceń, nie minuty).
 - 🔴 **INV-FEAS-PICKUP-FLOOR**: `pickup_eta ≥ max(now, shift_start)` na każdej powierzchni (grep dziś = 0 strażników).
 - 🔴 **INV-FEAS-NO-DOUBLE-BOOK**: kurier nie zaproponowany do 2 sprzecznych zleceń w 1 ticku (greedy pile-on, K6 — global de-konflikcja).
 

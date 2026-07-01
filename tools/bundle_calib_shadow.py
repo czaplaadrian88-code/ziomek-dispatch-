@@ -53,7 +53,20 @@ MAX_PER_RUN = int(os.environ.get("BUNDLE_CALIB_SHADOW_MAX_PER_RUN", "25"))
 BRUTE_MAX_ORDERS = int(os.environ.get("BUNDLE_CALIB_SHADOW_BRUTE_MAX_ORDERS", "5"))
 ACTIVE = {"assigned", "picked_up"}
 
-R6_MAX_MIN = 35.0          # R6: delivered - ready > 35 min = naruszenie świeżości
+# R6: delivered - ready > cap = naruszenie świeżości. Cap = TEN SAM dial co dźwignia
+# flipu O2 (common.O2_OVERAGE_CAP_MIN; konsumenci: route_simulator_v2.o2_score,
+# plan_recheck._o2_key) — parytet instrument↔dźwignia jest CELOWY. Termiczna R6 jest
+# PŁASKA (doktryna Adriana 2026-05-10, feasibility_v2: „35 min jedyną twardą regułą");
+# „40" = BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN, cap SELEKCJI kuriera w eskalacji-3
+# (ratunek przy 0 feasible) — INNY mechanizm, nie termika worka (pomiar 01.07:
+# werdykt bramki O2 nieczuły na 35↔40, głębokie breachy med ~49 min dominują).
+# ⚠ dial jest env-frozen per-proces (wzorzec #9): strojenie = O2_OVERAGE_CAP_MIN
+# w env OBU serwisów (dispatch-shadow + dispatch-bundle-calib-shadow), inaczej dryf.
+# BUNDLE_CALIB_R6_MAX_MIN = lokalny knob do przeliczeń post-hoc (nie strojenie live).
+# Strażnik parytetu: tests/test_bundle_calib_shadow.py::test_overage_cap_equals_engine_dial
+from dispatch_v2 import common as _common  # noqa: E402
+R6_MAX_MIN = float(os.environ.get(
+    "BUNDLE_CALIB_R6_MAX_MIN", getattr(_common, "O2_OVERAGE_CAP_MIN", 35.0)))
 BUNDLE_IMPROVED_CZAS_MIN = 2.0   # min poprawa czas_late by liczyć improvement
 # O2 objektyw CIĄGŁY (kalibracja 2026-06-25, replay 42 worków): minimalizuj
 # overage (Σ minut świeżości ponad 35) + LAMBDA_CZAS * czas_late. Objektyw progowy
