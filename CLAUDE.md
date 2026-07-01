@@ -5,6 +5,8 @@
 **Nigdy do pominięcia:** (0) stan na żywo + testy bazowe ZIELONE; (1) fix U ŹRÓDŁA we właściwej z 10 warstw (nie łatka na renderze); (2) SOFT nie osłabia HARD (P0), nie cofaj świadomych inwersji P‑1..P‑7 bez ACK; (3) **MAPA KOMPLETNOŚCI** — wszystkie miejsca danej klasy, **bliźniacze ścieżki RAZEM** (best_effort↔objm_lexr6, feasibility↔greedy↔plan_recheck, serializer A+B, 4 handlery recanon, każdy importer/konsument); (4) dowody nie deklaracje: flaga ON≠OFF (test), metryka w shadow_decisions.jsonl, parytet bliźniaków, checkery flag + invarianty, **PEŁNA regresja CAŁEGO Ziomka (pytest tests/ vs baseline) + e2e przez WSZYSTKIE dotknięte warstwy** (nie tylko unit klastra); (5) replay „warto + bez regresji" → dowód **POZYTYWNEGO wpływu** (metryka docelowa lepsza ON↔OFF — nie tylko brak regresji) + okno 2 dni; (6) backup→py_compile→test(kanoniczna ścieżka)→git log -3→ACK→1 restart (NIGDY telegram/peak bez OK); (7) rollback gotowy.
 **Zmiana częściowa = NIEZAKOŃCZONA. Wątpliwość co do priorytetów/inwersji → PYTAJ Adriana, nie zgaduj.**
 
+➡ **Kanon architektury (zatwierdzony przez Adriana 01.07.2026, Faza 2 audytu):** `ZIOMEK_ARCHITECTURE.md` (10 warstw + 6 filarów + 8 kontraktów + rejestr bliźniaków) + `ZIOMEK_INVARIANTS.md` (co MUSI być prawdą + strażnicy) + `ZIOMEK_DEFINITION_OF_DONE.md` (DoD 1 ekran) + `tools/entropy_dashboard.py` (miernik 8 metryk — re-run po każdej fali, metryki mają MALEĆ). Produkt audytu: `eod_drafts/2026-06-30/FAZA1_00..06`.
+
 ---
 
 # ⚠️ STATUS TEGO PLIKU — przeczytaj ZANIM zaufasz treści (adnotacja 2026-05-18)
