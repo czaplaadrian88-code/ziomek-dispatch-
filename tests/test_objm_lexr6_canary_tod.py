@@ -134,7 +134,8 @@ def test_shadow_metrics_excludes_early_bird_end_to_end(tmp_path, monkeypatch):
     lines.append({"ts": "2026-06-26T08:20:00+00:00", "verdict": "KOORD", "reason": "no_candidate"})
     p = tmp_path / "shadow_decisions.jsonl"
     p.write_text("\n".join(__import__("json").dumps(x) for x in lines) + "\n", encoding="utf-8")
-    monkeypatch.setattr(M, "SHADOW", str(p))
+    from dispatch_v2.tools import ledger_io
+    monkeypatch.setitem(ledger_io.LEDGER, "shadow", str(p))  # L1.2: kanon odczytu
     m = M.shadow_metrics(datetime(2026, 6, 26, 0, 0, tzinfo=timezone.utc))
     assert m["n"] == 10
     assert m["koord_eb"] == 3
@@ -195,7 +196,8 @@ def test_compute_tod_curve_excludes_early_bird(tmp_path, monkeypatch):
     lines += [{"ts": "2026-06-25T08:20:00+00:00", "verdict": "KOORD", "reason": "no_candidate"}]
     p = tmp_path / "shadow_decisions.jsonl"
     p.write_text("\n".join(_j.dumps(x) for x in lines) + "\n", encoding="utf-8")
-    monkeypatch.setattr(M, "SHADOW", str(p))
+    from dispatch_v2.tools import ledger_io
+    monkeypatch.setitem(ledger_io.LEDGER, "shadow", str(p))  # L1.2: kanon odczytu
     kbh, nbh = M.compute_tod_curve(7, datetime(2026, 6, 26, 0, 0, tzinfo=timezone.utc))
     assert nbh["8"] == 6  # 10 - 4 early_bird
     assert kbh["8"] == round(100.0 / 6, 2)  # 1 selektor-istotny KOORD / 6

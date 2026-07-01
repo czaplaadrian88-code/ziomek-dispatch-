@@ -263,6 +263,70 @@ def iter_shadow_decisions(cutoff_dt: Optional[datetime], *,
         yield rec
 
 
+def parse_sla_ts(value) -> Optional[datetime]:
+    """Znacznik czasu POLA sla_log (`picked_up_at`/`delivered_at`) → aware UTC.
+
+    Semantyka writera (sla_tracker.py, panel Rutcom): stemple NAIVE = czas
+    WARSZAWSKI, nie UTC (§ docstring `_parse_aware_utc` w sla_tracker). Martwy
+    dispatch_state/sla_log.jsonl (sla_join_worker, zamrożony 20.06) niósł aware
+    UTC — konsumenci pisani pod niego, parsując naive żywego loga jako UTC,
+    wnoszą +2h błędu (near-miss L1.2, join no_gps_eta_error: mediana ~131 min
+    zamiast ~11). TEN parser to jedno źródło tej wiedzy: aware → UTC,
+    naive → Europe/Warsaw → UTC.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return _parse_ts(value)  # epoch = UTC z definicji
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        s = str(value).strip()
+        if not s:
+            return None
+        s = s.replace("Z", "+00:00") if s.endswith("Z") else s
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            dt = None
+        if dt is None:
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+                try:
+                    dt = datetime.strptime(s, fmt)
+                    break
+                except ValueError:
+                    continue
+            if dt is None:
+                return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc)
+    # naive = czas warszawski writera → przypnij Warszawę i przelicz na UTC
+    try:
+        from zoneinfo import ZoneInfo
+        return dt.replace(tzinfo=ZoneInfo("Europe/Warsaw")).astimezone(timezone.utc)
+    except Exception:  # brak tzdata (nie powinno się zdarzyć) — uczciwy fallback UTC
+        return dt.replace(tzinfo=timezone.utc)
+
+
+def iter_sla(cutoff_dt: Optional[datetime] = None) -> Iterator[dict]:
+    """Rekordy sla_log z okna [cutoff_dt, teraz], rotation-aware (L1.2).
+
+    Czyta ŻYWY `scripts/logs/sla_log.jsonl` (LEDGER["sla"]) — NIE martwy
+    `dispatch_state/sla_log.jsonl` (zamrożony 2026-06-20; dwa toole czytały go
+    do L1.2: no_gps_eta_error, prep_bias_r6_replay). Filtr ts per-rekord po
+    polach `logged_at`/`delivered_at`; oid kanonizowany do str.
+    """
+    cutoff_dt = _ensure_utc(cutoff_dt)
+    fields = _TS_FIELDS["sla"]
+    for rec in _rotated_logs.iter_jsonl_records(LEDGER["sla"], cutoff_dt):
+        if cutoff_dt is not None:
+            ts = _rec_ts(rec, fields)
+            if ts is None or ts < cutoff_dt:
+                continue
+        _canon_oid(rec)
+        yield rec
+
+
 def _load_keyed(ledger_key: str, cutoff_dt: Optional[datetime]) -> dict:
     """Wspólny loader {str(oid): rekord} dla JSONL ledgerów prawdy (last-wins).
 
@@ -380,7 +444,7 @@ __all__ = [
     "LedgerCoverageError",
     "TRUTH_PHYSICAL", "TRUTH_PROXY", "TRUTH_NONE",
     "VERDICT_GROUND_TRUTH", "VERDICT_PROXY_CERTIFIED", "VERDICT_VOID",
-    "iter_shadow_decisions",
+    "iter_shadow_decisions", "iter_sla", "parse_sla_ts",
     "load_gps_truth", "load_outcomes", "load_restaurant_dwell",
     "join_decisions_with_truth",
     "require_join_coverage", "label_verdict", "verdict_txt_header",

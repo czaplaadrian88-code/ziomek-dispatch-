@@ -24,6 +24,14 @@ Raportujemy per próbka i agregatem:
     więc wszystkie flipy są w stronę REJECT (ochrona świeżości).
 
 Fail-soft. python3. Tworzy tylko ten plik (tools/). Nic nie zapisuje na dysk.
+
+L1.2 (2026-07-01): dostawy przepięte na kanon `ledger_io.iter_sla` (ŻYWY
+scripts/logs/sla_log.jsonl, rotation-aware) — stary odczyt celował w MARTWY
+dispatch_state/sla_log.jsonl (zamrożony 2026-06-20 → replay ślepy na świeże dni).
+Stemple żywego loga są naive-Warsaw (writer sla_tracker) → normalizacja do aware
+UTC przez `ledger_io.parse_sla_ts` PRZED oddaniem do kontraktu A4
+`ontime_lib.compute_on_time` (który naive traktuje jako UTC — bez normalizacji
+join z ready_at_log [aware UTC] miałby +2h błędu). Semantyka replayu BEZ ZMIAN.
 """
 
 import os
@@ -35,12 +43,12 @@ _PKG_PARENT = os.path.dirname(os.path.dirname(_HERE))  # .../scripts
 if _PKG_PARENT not in sys.path:
     sys.path.insert(0, _PKG_PARENT)
 
+from dispatch_v2.tools import ledger_io  # noqa: E402
 from dispatch_v2.tools import ontime_lib  # noqa: E402
 from dispatch_v2 import prep_bias_anchor as pba  # noqa: E402
 
 DISPATCH_STATE = "/root/.openclaw/workspace/dispatch_state"
 READY_LOG = os.path.join(DISPATCH_STATE, "ready_at_log.jsonl")
-SLA_LOG = os.path.join(DISPATCH_STATE, "sla_log.jsonl")
 HARD_MAX = ontime_lib.ON_TIME_THRESHOLD_MIN  # 35.0 (kontrakt A4 = R6 hard)
 
 
@@ -76,38 +84,44 @@ def _build_decisions_and_rest(path=READY_LOG):
     return dec_idx, rest_of
 
 
-def _build_deliveries(path=SLA_LOG):
-    """Z sla_log (już płaski wynik compute_on_time): order_id -> rekord dostawy
-    z kluczami delivered_at/picked_up_at/status/courier_id (kontrakt A4)."""
+def _build_deliveries(records=None):
+    """Z sla_log (kanon: ledger_io.iter_sla, ŻYWY log): order_id -> rekord dostawy
+    z kluczami delivered_at/picked_up_at/status/courier_id (kontrakt A4).
+    Stemple normalizowane do aware UTC (`parse_sla_ts` — naive=Warsaw u writera),
+    żeby kontrakt A4 (naive→UTC) liczył wiek termiczny bez +2h przesunięcia."""
     deliv = {}
-    for rec in ontime_lib._iter_jsonl(path):
+    if records is None:
+        records = ledger_io.iter_sla(None)
+    for rec in records:
         oid = rec.get("order_id")
         if oid is None:
             continue
         oid = str(oid)
-        d = rec.get("delivered_at")
-        if not d:
+        d_dt = ledger_io.parse_sla_ts(rec.get("delivered_at"))
+        if d_dt is None:
             continue
+        d = d_dt.isoformat()
         prev = deliv.get(oid)
         if prev is not None:
             pdt = ontime_lib.parse_ts(prev.get("delivered_at"))
-            cdt = ontime_lib.parse_ts(d)
+            cdt = d_dt
             if pdt is not None and cdt is not None and cdt <= pdt:
                 continue
+        pu_dt = ledger_io.parse_sla_ts(rec.get("picked_up_at"))
         deliv[oid] = {
             "delivered_at": d,
-            "picked_up_at": rec.get("picked_up_at"),
+            "picked_up_at": pu_dt.isoformat() if pu_dt else rec.get("picked_up_at"),
             "status": rec.get("status"),
             "courier_id": rec.get("courier_id"),
         }
     return deliv
 
 
-def run(ready_log=READY_LOG, sla_log=SLA_LOG):
+def run(ready_log=READY_LOG, sla_records=None):
     # indeksy do kontraktu A4 ontime_lib.compute_on_time (mapowanie nazw pól
     # na granicy: declared_ready_iso -> pickup_ready_at).
     dec_idx, rest_of = _build_decisions_and_rest(ready_log)
-    deliv_idx = _build_deliveries(sla_log)
+    deliv_idx = _build_deliveries(sla_records)
 
     # zbiór orderów do oceny = mają i ready (restaurant) i delivery
     oids = [o for o in rest_of.keys() if o in deliv_idx]

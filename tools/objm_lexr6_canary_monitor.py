@@ -18,12 +18,24 @@ Tryby:
   --baseline PATH       ścieżka baseline (default dispatch_state/objm_lexr6_canary_baseline.json)
 
 NIE mutuje stanu produkcyjnego. Fail-soft. Wzór: carried_first_peak_monitor.
+
+L1.2 (2026-07-01): odczyt shadow_decisions przepięty na kanon
+`ledger_io.iter_shadow_decisions` (jedno źródło odczytu ledgera zamiast lokalnej
+kopii `_rot_lines`; semantyka metryk/bramek BEZ ZMIAN — per-rekord filtr ts
+zostaje tu). `_rot_lines` zostaje TYLKO dla dispatch.log/watcher.log (nie-ledger).
 """
 import json, os, sys, glob, gzip, argparse, re
 from datetime import datetime, timezone, timedelta
 
 SCRIPTS = "/root/.openclaw/workspace/scripts"
-SHADOW = f"{SCRIPTS}/logs/shadow_decisions.jsonl"
+sys.path.insert(0, SCRIPTS)
+from dispatch_v2.tools import ledger_io  # noqa: E402
+
+def _shadow_path():
+    """Ścieżka kanonu shadow — czytana dynamicznie (testy patchują ledger_io.LEDGER)."""
+    return ledger_io.LEDGER["shadow"]
+
+
 LOGS = [f"{SCRIPTS}/logs/dispatch.log", f"{SCRIPTS}/logs/watcher.log"]
 FLAGS = f"{SCRIPTS}/flags.json"
 BASELINE_DEFAULT = "/root/.openclaw/workspace/dispatch_state/objm_lexr6_canary_baseline.json"
@@ -113,15 +125,9 @@ def shadow_metrics(since):
     lats = []
     order_ids = set()  # distinct order_id decydowanych w oknie (legacy)
     decision_events = []  # #6a audyt: (oid|None, ts) per DECYZJA → mianownik per-decyzja G2c
-    if not os.path.exists(SHADOW):
+    if not os.path.exists(_shadow_path()):
         return None
-    for line in _rot_lines(SHADOW, since):
-        if not line.strip():
-            continue
-        try:
-            r = json.loads(line)
-        except Exception:
-            continue
+    for r in ledger_io.iter_shadow_decisions(since):
         t = _parse_iso(r.get("ts"))
         if t is None or t < since:
             continue
@@ -201,16 +207,9 @@ def compute_tod_curve(days, cutoff):
     from collections import defaultdict
     agg = defaultdict(lambda: [0, 0, 0])  # hour -> [n, koord, koord_early_bird]
     start = cutoff - timedelta(days=days)
-    if not os.path.exists(SHADOW):
+    if not os.path.exists(_shadow_path()):
         return {}, {}
-    for line in _rot_lines(SHADOW, start):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            r = json.loads(line)
-        except Exception:
-            continue
+    for r in ledger_io.iter_shadow_decisions(start):
         t = _parse_iso(r.get("ts"))
         if t is None or t < start or t >= cutoff:
             continue

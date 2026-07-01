@@ -150,6 +150,64 @@ def test_maxbytes_small_live_uses_full_path(ledger):
     assert got == ["a"]
 
 
+# ── iter_sla: rotacja + cutoff + kanonizacja (L1.2) ─────────────────────────
+def _sla(oid, ts, **extra):
+    d = {"order_id": oid, "logged_at": _iso(ts)}
+    d.update(extra)
+    return d
+
+
+def test_iter_sla_rotation_reads_all_chronological(ledger):
+    now = datetime.now(UTC)
+    _write_jsonl(ledger["sla"] + ".1", [_sla("1", now - timedelta(hours=2))])
+    _write_jsonl(ledger["sla"], [_sla("2", now - timedelta(hours=1))])
+    got = [r["order_id"] for r in lio.iter_sla(now - timedelta(hours=3))]
+    assert got == ["1", "2"]  # zrotowany .1 doczytany, kolejność chronologiczna
+
+
+def test_iter_sla_cutoff_filters_per_record_and_canonizes(ledger):
+    now = datetime.now(UTC)
+    _write_jsonl(ledger["sla"], [
+        _sla(100, now - timedelta(minutes=40)),
+        _sla(200, now - timedelta(minutes=5), picked_up_at=_iso(now - timedelta(minutes=6))),
+    ])
+    got = list(lio.iter_sla(now - timedelta(minutes=20)))
+    assert [r["order_id"] for r in got] == ["200"]  # cutoff per-rekord + oid→str
+    assert got[0]["picked_up_at"]  # pola rekordu zachowane
+
+
+def test_iter_sla_no_cutoff_reads_everything(ledger):
+    now = datetime.now(UTC)
+    _write_jsonl(ledger["sla"], [_sla("a", now - timedelta(days=30)), _sla("b", now)])
+    got = [r["order_id"] for r in lio.iter_sla(None)]
+    assert got == ["a", "b"]  # bez cutoffu nic nie odfiltrowane
+
+
+def test_parse_sla_ts_naive_is_warsaw_not_utc():
+    # Semantyka writera (sla_tracker/panel Rutcom): naive stemple = Warszawa.
+    # Lipiec = CEST (+2): "22:48" Warsaw == 20:48 UTC. Parsowanie naive jako UTC
+    # (stary odczyt pod martwy log) dawało +2h błędu joinu (near-miss L1.2).
+    dt = lio.parse_sla_ts("2026-07-01 22:48:49")
+    assert dt == datetime(2026, 7, 1, 20, 48, 49, tzinfo=UTC)
+    # zima = CET (+1)
+    dt_w = lio.parse_sla_ts("2026-01-15 10:00:00")
+    assert dt_w == datetime(2026, 1, 15, 9, 0, 0, tzinfo=UTC)
+
+
+def test_parse_sla_ts_aware_passthrough_to_utc():
+    dt = lio.parse_sla_ts("2026-06-19T21:32:22.530167+00:00")  # format martwego loga
+    assert dt == datetime(2026, 6, 19, 21, 32, 22, 530167, tzinfo=UTC)
+    dt2 = lio.parse_sla_ts("2026-07-01T12:00:00Z")
+    assert dt2 == datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
+    assert lio.parse_sla_ts(None) is None and lio.parse_sla_ts("") is None
+
+
+def test_iter_sla_points_at_live_scripts_logs_not_dead_state():
+    # WRONG-SOURCE guard (L1.2): kanon sla = ŻYWY scripts/logs/sla_log.jsonl,
+    # NIE martwy dispatch_state/sla_log.jsonl (zamrożony 2026-06-20).
+    assert lio.LEDGER["sla"] == "/root/.openclaw/workspace/scripts/logs/sla_log.jsonl"
+
+
 # ── loadery prawdy: klucz str(oid), cutoff, całościowy dwell ────────────────
 def test_load_gps_truth_keyed_str_and_cutoff(ledger):
     now = datetime.now(UTC)

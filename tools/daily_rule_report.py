@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Dzienny raport metryk reguł Ziomka (offline, READ-ONLY)."""
+"""Dzienny raport metryk reguł Ziomka (offline, READ-ONLY).
+
+L1.2 (2026-07-01): odczyt shadow/outcomes przepięty na kanon `ledger_io`
+(rotation-aware) — stary odczyt TYLKO żywych plików po rotacji (logrotate
+size 100M / daily) po cichu przycinał okno raportu (np. --tail-days 21 widział
+tylko dni od ostatniej rotacji). Metryki/format raportu BEZ ZMIAN.
+"""
 
 import argparse
 import json
@@ -12,8 +18,15 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-SHADOW = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
-OUTCOMES = "/root/.openclaw/workspace/dispatch_state/decision_outcomes.jsonl"
+try:
+    from dispatch_v2.tools import ledger_io
+except ImportError:  # uruchomienie z katalogu tools/
+    _PKG_PARENT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _PKG_PARENT not in sys.path:
+        sys.path.insert(0, _PKG_PARENT)
+    from dispatch_v2.tools import ledger_io
+
+OUTCOMES = ledger_io.LEDGER["outcomes"]
 OUT_DEFAULT = "/root/.openclaw/workspace/scripts/logs/reports/daily_rule_report.json"
 
 
@@ -47,57 +60,55 @@ def load_shadow_df(since=None, days=None):
         except Exception:
             return None
 
+    # cutoff (pruning całych plików + per-rekord w kanonie): północ `since` Warsaw.
+    # Per-rekord filtr dat Warsaw niżej zostaje autorytatywny (identyczna semantyka).
+    cutoff_dt = None
+    if since is not None:
+        try:
+            cutoff_dt = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=warsaw_tz)
+        except ValueError:
+            cutoff_dt = None
+
     records = []
-    try:
-        with open(SHADOW, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                ts_val = data.get("ts")
-                if ts_val is None:
-                    continue
-                date_w = _parse_date(ts_val)
-                if date_w is None:
-                    continue
-                # stream-filtr: stare dni odrzucamy JUZ tu (pamiec — 106 MB pliku)
-                if since is not None and date_w < since:
-                    continue
+    for data in ledger_io.iter_shadow_decisions(cutoff_dt):
+        ts_val = data.get("ts")
+        if ts_val is None:
+            continue
+        date_w = _parse_date(ts_val)
+        if date_w is None:
+            continue
+        # stream-filtr: stare dni odrzucamy JUZ tu (pamiec — 106 MB pliku)
+        if since is not None and date_w < since:
+            continue
 
-                order_id = str(data["order_id"]) if data.get("order_id") is not None else None
-                verdict = data.get("verdict")
-                latency_ms = data.get("latency_ms")
-                pool_feasible_count = data.get("pool_feasible_count")
-                pool_total_count = data.get("pool_total_count")
+        order_id = str(data["order_id"]) if data.get("order_id") is not None else None
+        verdict = data.get("verdict")
+        latency_ms = data.get("latency_ms")
+        pool_feasible_count = data.get("pool_feasible_count")
+        pool_total_count = data.get("pool_total_count")
 
-                best = data.get("best") if isinstance(data.get("best"), dict) else None
-                if best and isinstance(best, dict):
-                    best_courier_id = str(best["courier_id"]) if best.get("courier_id") is not None else None
-                    best_score = best.get("score")
-                    best_r6_pred = best.get("r6_max_bag_time_min")
-                    best_effort = bool(best.get("best_effort")) if best.get("best_effort") is not None else False
-                else:
-                    best_courier_id = best_score = best_r6_pred = None
-                    best_effort = False
+        best = data.get("best") if isinstance(data.get("best"), dict) else None
+        if best and isinstance(best, dict):
+            best_courier_id = str(best["courier_id"]) if best.get("courier_id") is not None else None
+            best_score = best.get("score")
+            best_r6_pred = best.get("r6_max_bag_time_min")
+            best_effort = bool(best.get("best_effort")) if best.get("best_effort") is not None else False
+        else:
+            best_courier_id = best_score = best_r6_pred = None
+            best_effort = False
 
-                records.append({
-                    "date": date_w,
-                    "order_id": order_id,
-                    "verdict": verdict,
-                    "latency_ms": latency_ms,
-                    "pool_feasible_count": pool_feasible_count,
-                    "pool_total_count": pool_total_count,
-                    "best_courier_id": best_courier_id,
-                    "best_score": best_score,
-                    "best_r6_pred": best_r6_pred,
-                    "best_effort": best_effort,
-                })
-    except FileNotFoundError:
-        return pd.DataFrame()
+        records.append({
+            "date": date_w,
+            "order_id": order_id,
+            "verdict": verdict,
+            "latency_ms": latency_ms,
+            "pool_feasible_count": pool_feasible_count,
+            "pool_total_count": pool_total_count,
+            "best_courier_id": best_courier_id,
+            "best_score": best_score,
+            "best_r6_pred": best_r6_pred,
+            "best_effort": best_effort,
+        })
 
     df = pd.DataFrame(records)
     if df.empty:
@@ -113,24 +124,15 @@ def load_shadow_df(since=None, days=None):
 
 
 def load_outcomes_map():
-    """Wczytaj decision_outcomes.jsonl -> {order_id: r6_actual_min}."""
+    """Wczytaj decision_outcomes (kanon ledger_io, rotation-aware)
+    -> {order_id: r6_actual_min} (ostatni rekord per oid wygrywa, jak dotąd)."""
     outcomes = {}
     if not os.path.exists(OUTCOMES):
         print("Warning: outcomes file not found", file=sys.stderr)
         return outcomes
-    with open(OUTCOMES, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            oid = data.get("order_id")
-            if oid is not None:
-                val = data.get("r6_actual_min")
-                outcomes[str(oid)] = val if isinstance(val, (int, float)) else None
+    for oid, data in ledger_io.load_outcomes(None).items():
+        val = data.get("r6_actual_min")
+        outcomes[str(oid)] = val if isinstance(val, (int, float)) else None
     return outcomes
 
 

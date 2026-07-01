@@ -24,19 +24,31 @@ vs „z centrum" nie do rozbicia po realnym dystansie. Proxy = czy realny odbió
 przekroczył fikcję. Co dologować dla pełni: restaurant lat/lng + realna pozycja.
 
 Fail-soft.
+
+L1.2 (2026-07-01): odczyt przepięty na kanon `ledger_io` — (a) shadow_decisions
+rotation-aware (stara lista [.1, live] gubiła .2.gz po rotacji), (b) sla_log =
+ŻYWY scripts/logs/sla_log.jsonl przez `iter_sla` (stary odczyt celował w MARTWY
+dispatch_state/sla_log.jsonl, zamrożony 2026-06-20 → join pusty dla świeżych dni).
+Różnice SCHEMATU żywego loga obsłużone jawnie, semantyka metryki pickup BEZ ZMIAN:
+  * stemple naive = czas WARSZAWSKI (writer sla_tracker) → `ledger_io.parse_sla_ts`
+    (parsowanie naive-jako-UTC dawało +2h błędu joinu — near-miss L1.2);
+  * żywy log NIE niesie `on_time` (ready-anchored, liczył go martwy sla_join_worker);
+    ma `sla_ok` = delivered−picked_up ≤35 (kotwica ODBIÓR). Metryka dowozu czyta
+    on_time, gdy brak → sla_ok, i JAWNIE raportuje którą kotwicę widziała.
 """
-import json
 import os
+import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-WARSAW = ZoneInfo("Europe/Warsaw")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PKG_PARENT = os.path.dirname(os.path.dirname(_HERE))  # .../scripts
+if _PKG_PARENT not in sys.path:
+    sys.path.insert(0, _PKG_PARENT)
 
-DECISION_LOGS = [
-    "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl.1",
-    "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl",
-]
-SLA_LOG = "/root/.openclaw/workspace/dispatch_state/sla_log.jsonl"
+from dispatch_v2.tools import ledger_io  # noqa: E402
+
+WARSAW = ZoneInfo("Europe/Warsaw")
 
 
 def _parse(ts):
@@ -65,25 +77,20 @@ def _pctile(sorted_vals, q):
     return sorted_vals[i]
 
 
-def _build_sla_index(path=SLA_LOG):
+def _build_sla_index(records=None):
+    """oid -> rekord z picked_up_at (kanon: ledger_io.iter_sla, ŻYWY sla_log)."""
     idx = {}
-    if not os.path.exists(path):
-        return idx
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            oid = str(d.get("order_id"))
-            if d.get("picked_up_at"):
-                idx[oid] = d
+    if records is None:
+        records = ledger_io.iter_sla(None)
+    for d in records:
+        oid = str(d.get("order_id"))
+        if d.get("picked_up_at"):
+            idx[oid] = d
     return idx
 
 
-def analyze(decision_paths=None, sla_path=SLA_LOG):
-    decision_paths = decision_paths or DECISION_LOGS
-    sla = _build_sla_index(sla_path)
+def analyze(decision_records=None, sla_records=None):
+    sla = _build_sla_index(sla_records)
     s = {
         "lines": 0, "parse_fail": 0,
         "nogps_propose": 0, "joined": 0,
@@ -92,63 +99,64 @@ def analyze(decision_paths=None, sla_path=SLA_LOG):
         "fiction_floor15": 0,         # travel_min == 15 (floor)
         "fiction_prep_driven": 0,     # travel_min > 15
         "ontime_delivered": 0, "late_delivered": 0, "no_outcome": 0,
+        "ontime_anchor_ready": 0, "ontime_anchor_pickup": 0,
         "examples": [],
     }
-    for p in decision_paths:
-        if not os.path.exists(p):
+    if decision_records is None:
+        decision_records = ledger_io.iter_shadow_decisions(None)
+    # `lines` = rekordy JSON (kanon parsuje u siebie; linie puste/nie-JSON
+    # pomijane w ledger_io → parse_fail zostaje 0). Semantyka metryk BEZ ZMIAN.
+    for d in decision_records:
+        s["lines"] += 1
+        b = d.get("best") or {}
+        if b.get("pos_source") != "no_gps":
             continue
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                s["lines"] += 1
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    d = json.loads(line)
-                except Exception:
-                    s["parse_fail"] += 1
-                    continue
-                b = d.get("best") or {}
-                if b.get("pos_source") != "no_gps":
-                    continue
-                if d.get("verdict") != "PROPOSE":
-                    continue
-                s["nogps_propose"] += 1
-                tmin = b.get("travel_min")
-                if isinstance(tmin, (int, float)):
-                    if tmin <= 15.0:
-                        s["fiction_floor15"] += 1
-                    else:
-                        s["fiction_prep_driven"] += 1
-                oid = str(d.get("order_id"))
-                rec = sla.get(oid)
-                if not rec:
-                    s["no_outcome"] += 1
-                    continue
-                pred_pickup = _parse(b.get("new_pickup_eta_iso"))
-                actual_pickup = _parse(rec.get("picked_up_at"))
-                if pred_pickup is None or actual_pickup is None:
-                    continue
-                s["joined"] += 1
-                err = (actual_pickup - pred_pickup).total_seconds() / 60.0
-                s["pickup_errors"].append(err)
-                pk = _peak(actual_pickup)
-                (s["pickup_err_peak"] if pk else s["pickup_err_off"]).append(err)
-                # delivery on-time from sla_log
-                if rec.get("on_time") is True:
-                    s["ontime_delivered"] += 1
-                elif rec.get("on_time") is False:
-                    s["late_delivered"] += 1
-                if len(s["examples"]) < 8:
-                    s["examples"].append({
-                        "oid": oid,
-                        "travel_min_fiction": tmin,
-                        "pred_pickup": b.get("new_pickup_eta_iso"),
-                        "actual_pickup": rec.get("picked_up_at"),
-                        "pickup_err_min": round(err, 1),
-                        "delivery_on_time": rec.get("on_time"),
-                        "delivery_min": rec.get("delivery_time_minutes"),
-                    })
+        if d.get("verdict") != "PROPOSE":
+            continue
+        s["nogps_propose"] += 1
+        tmin = b.get("travel_min")
+        if isinstance(tmin, (int, float)):
+            if tmin <= 15.0:
+                s["fiction_floor15"] += 1
+            else:
+                s["fiction_prep_driven"] += 1
+        oid = str(d.get("order_id"))
+        rec = sla.get(oid)
+        if not rec:
+            s["no_outcome"] += 1
+            continue
+        pred_pickup = _parse(b.get("new_pickup_eta_iso"))
+        actual_pickup = ledger_io.parse_sla_ts(rec.get("picked_up_at"))
+        if pred_pickup is None or actual_pickup is None:
+            continue
+        s["joined"] += 1
+        err = (actual_pickup - pred_pickup).total_seconds() / 60.0
+        s["pickup_errors"].append(err)
+        pk = _peak(actual_pickup)
+        (s["pickup_err_peak"] if pk else s["pickup_err_off"]).append(err)
+        # delivery on-time from sla_log: on_time (ready-anchor, martwy log) albo
+        # fallback sla_ok (pickup-anchor, żywy log) — kotwica raportowana jawnie.
+        flag = rec.get("on_time")
+        if flag is None and "sla_ok" in rec:
+            flag = rec.get("sla_ok")
+            if flag is not None:
+                s["ontime_anchor_pickup"] += 1
+        elif flag is not None:
+            s["ontime_anchor_ready"] += 1
+        if flag is True:
+            s["ontime_delivered"] += 1
+        elif flag is False:
+            s["late_delivered"] += 1
+        if len(s["examples"]) < 8:
+            s["examples"].append({
+                "oid": oid,
+                "travel_min_fiction": tmin,
+                "pred_pickup": b.get("new_pickup_eta_iso"),
+                "actual_pickup": rec.get("picked_up_at"),
+                "pickup_err_min": round(err, 1),
+                "delivery_on_time": rec.get("on_time"),
+                "delivery_min": rec.get("delivery_time_minutes"),
+            })
     return s
 
 
@@ -190,6 +198,10 @@ def main():
     print()
     print(f"DOWÓZ on-time (no_gps proposed, z sla_log): on_time={s['ontime_delivered']} "
           f"late={s['late_delivered']}")
+    if s["ontime_anchor_pickup"]:
+        print(f"    ⚠ kotwica: {s['ontime_anchor_pickup']} rekordów liczone z sla_ok "
+              f"(≤35 min od ODBIORU — żywy sla_log nie niesie ready-anchored on_time); "
+              f"ready-anchored: {s['ontime_anchor_ready']}")
     print()
     print("przykłady:")
     for e in s["examples"]:

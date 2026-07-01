@@ -16,6 +16,11 @@ TZ-bezpieczne (ten sam zegar). Mediana/trim (ciężkie ogony).
 
 Segment v2 (load > clock): luzno pool_feasible>=5 / srednio 2-4 / ciasno <=1.
 Uruchom: `python3 -m dispatch_v2.tools.pickup_slip_monitor [--days N] [--dry]`
+
+L1.2 (2026-07-01): pool_feasible czytany przez kanon `ledger_io.iter_shadow_decisions`
+(rotation-aware) — stary odczyt TYLKO żywego pliku tracił oidy sprzed rotacji
+(logrotate size 100M / daily) → ich load_bucket spadał do "unknown" i bramka
+load-aware ETA (review 04.07) dostawała dziurawy segment. Semantyka BEZ ZMIAN.
 """
 import json
 import os
@@ -24,8 +29,15 @@ from datetime import datetime, timedelta
 from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from dispatch_v2.tools import ledger_io
+except ImportError:  # uruchomienie z katalogu tools/
+    _PKG_PARENT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _PKG_PARENT not in sys.path:
+        sys.path.insert(0, _PKG_PARENT)
+    from dispatch_v2.tools import ledger_io
+
 ETA_CAL = "/root/.openclaw/workspace/dispatch_state/eta_calibration_log.jsonl"
-SHADOW = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
 OUT = "/root/.openclaw/workspace/dispatch_state/pickup_slip_monitor.jsonl"
 
 DEFAULT_DAYS = 3
@@ -47,22 +59,19 @@ def _parse_naive(s: Optional[str]) -> Optional[datetime]:
 
 
 def _load_pool_feasible() -> Dict[str, int]:
-    """oid -> pool_feasible z shadow_decisions (ostatnia wartość wygrywa)."""
+    """oid -> pool_feasible z shadow_decisions (ostatnia wartość wygrywa).
+
+    Kanon ledger_io: rotation-aware (żywy + .1/.2.gz), chronologicznie —
+    last-wins zachowane. Bez cutoffu: mapa jest lookupem, nadmiarowe stare oidy
+    nie zmieniają wyniku (okno filtruje eta_cal po delivered_at)."""
     out: Dict[str, int] = {}
-    try:
-        for line in open(SHADOW):
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            oid = d.get("order_id") or d.get("oid")
-            pf = d.get("pool_feasible_count")
-            if pf is None:
-                pf = d.get("pool_feasible")
-            if oid is not None and pf is not None:
-                out[str(oid)] = int(pf)
-    except FileNotFoundError:
-        pass
+    for d in ledger_io.iter_shadow_decisions(None):
+        oid = d.get("order_id") or d.get("oid")
+        pf = d.get("pool_feasible_count")
+        if pf is None:
+            pf = d.get("pool_feasible")
+        if oid is not None and pf is not None:
+            out[str(oid)] = int(pf)
     return out
 
 
