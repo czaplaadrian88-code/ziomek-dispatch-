@@ -845,6 +845,13 @@ def check_feasibility_v2(
     metrics["strategy"] = plan.strategy
     metrics["osrm_fallback_used"] = plan.osrm_fallback_used
     metrics["sla_violations_count"] = plan.sla_violations
+    # O2 cap-Z RESEQ (2026-07-02, ENABLE_O2_CAPZ_RESEQ): feasibility ocenia RESEQ'owaną
+    # sekwencję (plan z route_simulator już przeszedł reseq u źródła). Metryka obs decyzji
+    # reseq — auto-serializacja L1.1 (deny-lista); obecna ⇔ flaga ON (ON≠OFF). Zero wpływu
+    # OFF (plan.o2_capz=None). Trójka: route_simulator (źródło) + feasibility (ta linia) +
+    # plan_recheck (dziedziczy przez _sweep→simulate_bag_route_v2).
+    if getattr(plan, "o2_capz", None) is not None:
+        metrics["o2_capz"] = plan.o2_capz
 
     # F2 R1-WAVE-SCOPED (2026-05-24) — kierunkowość korytarza liczona TYLKO na
     # dropach współistniejących z falą nowego ordera. Root cause korpusu
@@ -1200,10 +1207,18 @@ def check_feasibility_v2(
                        getattr(C, "ENABLE_PACZKA_R6_THERMAL_EXEMPT", False))
                     and _is_paczka_sim(o)):
                 continue
+            _sla_ready_gate = C.flag("ENABLE_SLA_GATE_READY_ANCHOR",
+                                     getattr(C, "ENABLE_SLA_GATE_READY_ANCHOR", False))
             if _sla_unified:
-                # S1: kotwica NOW z jednego źródła (bliźniak z _count_sla_violations).
                 from dispatch_v2 import sla_anchor as _SA
-                pu = _SA.now_anchor(o, plan.pickup_at, now)
+                if _sla_ready_gate:
+                    # Krok 2 (2026-07-02, finding feas-r6-sla-anchor-gap): kotwica SLA
+                    # NOW→READY (od gotowości) — bliźniak z _count_sla_violations, przez
+                    # źródło sla_anchor kind='ready'. OFF = NOW-anchor (S1 bez zmian).
+                    pu = _SA.anchor(o, kind="ready", now=now, plan_pickup_at=plan.pickup_at,
+                                    is_new=(o is new_order))
+                else:
+                    pu = _SA.now_anchor(o, plan.pickup_at, now)
                 elapsed_min = _SA.elapsed_min(pred, pu)
             else:
                 if o.order_id in plan.pickup_at:
@@ -1216,7 +1231,23 @@ def check_feasibility_v2(
                 else:
                     pu = now
                 elapsed_min = (pred - pu).total_seconds() / 60.0
-            if elapsed_min > sla_minutes:
+            # Krok 2 co-design z ENABLE_ETA_QUANTILE_R6_BAGCAP (protokół „3 bliźniaki SLA-anchor
+            # RAZEM"): gdy SLA-gate ready-anchored, gold≤4 + QUANTILE ON kalibruj p80 PRZED
+            # porównaniem — inaczej naiwne ready-anchorowanie re-rejectowałoby zlecenia, które
+            # R6-gate (QUANTILE) odzyskuje (elapsed surowy ZOSTAJE w raporcie/vd; kalibrujemy
+            # sam check, jak R6 `_gate_bt`). Nie dotyczy paczek (pominięte wyżej `continue`).
+            _sla_gate_elapsed = elapsed_min
+            if (_sla_unified and _sla_ready_gate
+                    and C.flag("ENABLE_ETA_QUANTILE_R6_BAGCAP", False)
+                    and courier_tier == "gold" and (len(bag) + 1) <= 4):
+                try:
+                    from dispatch_v2.calib_maps import eta_quantile_calibrate
+                    _cc = eta_quantile_calibrate(elapsed_min, now=pu, quantile="p80")
+                    if _cc is not None:
+                        _sla_gate_elapsed = _cc
+                except Exception:
+                    pass
+            if _sla_gate_elapsed > sla_minutes:
                 vd = {
                     "order_id": o.order_id,
                     "elapsed_min": round(elapsed_min, 1),

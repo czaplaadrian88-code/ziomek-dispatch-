@@ -238,6 +238,14 @@ class RoutePlanV2:
     # (status picked_up) do twardego cap-Z. None = nieliczone (brak per_order_times).
     o2_score: Optional[float] = None
     max_carried_age: Optional[float] = None
+    # O2 cap-Z RESEQ (2026-07-02, ENABLE_O2_CAPZ_RESEQ, review 02.07): drive-only
+    # minuty (Σ leg_min bez dwell/wait) — parytet z bundle_calib `m.drive_min`
+    # (kolektor liczy detour = drive_min różnica). Liczone ZAWSZE w `_plan_from_sequence`
+    # (tanie), UŻYWANE tylko przez cap-Z reseq gdy flaga ON. `o2_capz` = metryka obs
+    # decyzji reseq (considered/applied/blocked_by_cap/detour_min/overage_saved_min),
+    # ustawiana na WYBRANYM planie w `_capz_reseq_plan`; None gdy flaga OFF / brak reseq.
+    drive_min: Optional[float] = None
+    o2_capz: Optional[dict] = None
 
 
 def simulate_bag_route_v2(
@@ -500,6 +508,17 @@ def simulate_bag_route_v2(
         )
         plan.strategy = "greedy"
 
+    # O2 cap-Z RESEQ (2026-07-02, ENABLE_O2_CAPZ_RESEQ default OFF): OBOK O2_READY_ANCHOR_SWEEP.
+    # Wołane na WYBRANYM planie KAŻDEJ strategii (ortools/greedy/bruteforce/greedy_fallback)
+    # = JEDNO źródło reguły, OBIE ścieżki selekcji pokryte (finding rst-greedy-step15-not-o2).
+    # Tylko worki (len(bag)>=1); sticky (locked saved-plan) pomijamy (unik churnu z plan_manager).
+    # OFF = plan bez zmian (early return w helperze). Konsumenci trójki (feasibility SLA/R6 gate,
+    # plan_recheck._sweep) dziedziczą reseq'owaną sekwencję przez TEN return.
+    if plan is not None and len(bag) >= 1 and getattr(plan, "strategy", "") != "sticky":
+        plan, _ = _capz_reseq_plan(
+            plan, nodes, leg_min, bag_delivery_idxs, bag_pickup_idxs_by_oid,
+            new_pickup_idx, new_delivery_idx, new_order, bag, now, sla_minutes)
+
     plan.osrm_fallback_used = fallback_used
     return plan
 
@@ -653,7 +672,16 @@ def _count_sla_violations(
             continue
         if _unified:
             from dispatch_v2 import sla_anchor as _SA
-            pu = _SA.now_anchor(o, pickup_at, now)
+            # Krok 2 (2026-07-02, ENABLE_SLA_GATE_READY_ANCHOR, finding feas-r6-sla-anchor-gap):
+            # kotwica SLA NOW→READY (od gotowości jedzenia) — WYŁĄCZNIE przez źródło sla_anchor
+            # (kind='ready'). Działa tylko na ścieżce unified (S1 ON). OFF = NOW-anchor bez zmian.
+            _ready_gate = _C_sa.flag("ENABLE_SLA_GATE_READY_ANCHOR",
+                                     getattr(_C_sa, "ENABLE_SLA_GATE_READY_ANCHOR", False))
+            if _ready_gate:
+                pu = _SA.anchor(o, kind="ready", now=now, plan_pickup_at=pickup_at,
+                                is_new=(o is new_order))
+            else:
+                pu = _SA.now_anchor(o, pickup_at, now)
             elapsed = _SA.elapsed_min(pred, pu)
         else:
             if o.order_id in pickup_at:
@@ -786,6 +814,14 @@ def _plan_from_sequence(
         per_order_times, bag, new_order,
         getattr(_C_o2, "O2_OVERAGE_CAP_MIN", 35.0))
     delivery_order = [nodes[i]["order_id"] for i in seq if nodes[i]["kind"] == "delivery"]
+    # O2 cap-Z RESEQ (2026-07-02): drive-only minuty (Σ leg_min, bez dwell/wait) —
+    # kotwica DETOURU 1:1 z bundle_calib `_walk_calib` `drive` (kolektor: detour =
+    # drive_min różnica). Tani dodatkowy przebieg; UŻYWANE tylko przez cap-Z reseq.
+    _drive_only = 0.0
+    _cur = 0
+    for _idx in seq:
+        _drive_only += leg_min(_cur, _idx)
+        _cur = _idx
     return RoutePlanV2(
         sequence=delivery_order,
         predicted_delivered_at=delivered_at,
@@ -798,15 +834,140 @@ def _plan_from_sequence(
         arrival_at=arrival_at,
         o2_score=_o2_score,
         max_carried_age=_max_carried,
+        drive_min=round(_drive_only, 2),
     )
 
 
-def _bruteforce_plan(
+def _is_paczka_ordersim(o) -> bool:
+    """Paczka-exempt dla cap-Z reseq — SPÓJNE z feasibility_v2._is_paczka_sim
+    (`common.is_paczka_order` na address_id/order_type), gated TĄ SAMĄ flagą
+    `ENABLE_PACZKA_R6_THERMAL_EXEMPT`. OrderSim bez tych atrybutów → False
+    (jedzeniówka, jak dziś). Finding feas-o2-paczka-blind: paczki bez termiki
+    → nie liczą się do świeżości/cap-Z. Jawne (nie milczące pominięcie)."""
+    from dispatch_v2 import common as _Cp
+    if not _Cp.flag("ENABLE_PACZKA_R6_THERMAL_EXEMPT",
+                    getattr(_Cp, "ENABLE_PACZKA_R6_THERMAL_EXEMPT", False)):
+        return False
+    try:
+        return bool(_Cp.is_paczka_order({
+            "address_id": getattr(o, "address_id", None),
+            "order_type": getattr(o, "order_type", None),
+        }))
+    except Exception:
+        return False
+
+
+def _capz_bag_metrics(plan, bag, new_order, cap_min):
+    """(overage_food, max_carried_food) z `plan.per_order_delivery_times` (ready-anchor,
+    już policzone), WYŁĄCZAJĄC paczki (finding feas-o2-paczka-blind). NIE dotyka
+    `_compute_o2_metrics` (istniejąca ENABLE_O2_READY_ANCHOR_SWEEP nietknięta) — osobne,
+    paczka-świadome liczenie WYŁĄCZNIE dla cap-Z reseq. Wzór 1:1 z bundle_calib._max_carried_age
+    (max wieku NIESIONYCH picked_up) + overage (Σ max(0, age−cap)). (None,None) gdy brak per_order."""
+    pt = plan.per_order_delivery_times
+    if not pt:
+        return None, None
+    paczka = {getattr(o, "order_id", None) for o in list(bag) + [new_order]
+              if _is_paczka_ordersim(o)}
+    picked = {getattr(o, "order_id", None) for o in bag
+              if getattr(o, "picked_up_at", None) is not None
+              or getattr(o, "status", None) == "picked_up"}
+    overage = 0.0
+    carried = []
+    for oid, age in pt.items():
+        if age is None or oid in paczka:
+            continue
+        overage += max(0.0, age - cap_min)
+        if oid in picked:
+            carried.append(age)
+    return round(overage, 1), (round(max(carried), 1) if carried else 0.0)
+
+
+def _capz_reseq_plan(baseline_plan, nodes, leg_min, bag_delivery_idxs,
+                     bag_pickup_idxs_by_oid, new_pickup_idx, new_delivery_idx,
+                     new_order, bag, now, sla_minutes):
+    """Krok 1 O2 cap-Z reseq (ENABLE_O2_CAPZ_RESEQ, default OFF) — OBOK istniejącej
+    ENABLE_O2_READY_ANCHOR_SWEEP (której zachowania NIE zmienia; ta = surowy sweep,
+    reseq = wąska reguła Opcji 3 Adriana). Guarded swap: preferuj przeplot zmniejszający
+    overage świeżości TYLKO gdy JEDNOCZEŚNIE:
+      (a) drive-detour vs baseline ≤ O2_CAPZ_DETOUR_MAX_MIN  (z under_z review 02.07, p90 Z=20 ≈ 7.93),
+      (b) max wiek NIESIONEJ jedzeniówki ≤ O2_CAPZ_Z_MIN (=20, rekom. review = max ochrona niesionego),
+      (c) overage niższy od baseline o ≥ O2_CAPZ_MIN_GAIN_MIN (argmin overage, materialność jak review),
+      (d) sla_violations NIE większe (SOFT nie osłabia HARD; carried-first zachowane przez lock_first
+          enumeracji + brak wzrostu breachy).
+    Brak kandydata pod capami → baseline BEZ ZMIAN. OFF = baseline byte-identyczny (early return).
+    Enumeracja `_enumerate_valid_plans` (ta sama pula co bruteforce, carried-first via lock_first)
+    → pokrywa OBIE ścieżki selekcji (greedy+ortools) bo wołane z ogona simulate_bag_route_v2 na
+    WYBRANYM planie każdej strategii (finding rst-greedy-step15-not-o2). Zwraca (plan, metric|None)."""
+    from dispatch_v2 import common as _Cz
+    if not _Cz.flag("ENABLE_O2_CAPZ_RESEQ", getattr(_Cz, "ENABLE_O2_CAPZ_RESEQ", False)):
+        return baseline_plan, None
+    metric = {"considered": 0, "applied": 0, "blocked_by_cap": 0,
+              "detour_min": 0.0, "overage_saved_min": 0.0}
+    cap_min = float(getattr(_Cz, "O2_OVERAGE_CAP_MIN", 35.0))
+    z_min = float(_Cz.flag("O2_CAPZ_Z_MIN", getattr(_Cz, "O2_CAPZ_Z_MIN", 20.0)))
+    detour_max = float(_Cz.flag("O2_CAPZ_DETOUR_MAX_MIN",
+                                getattr(_Cz, "O2_CAPZ_DETOUR_MAX_MIN", 8.0)))
+    min_gain = float(_Cz.flag("O2_CAPZ_MIN_GAIN_MIN",
+                              getattr(_Cz, "O2_CAPZ_MIN_GAIN_MIN", 2.0)))
+    max_stops = int(getattr(_Cz, "O2_CAPZ_MAX_STOPS", 8))
+    # size guard — enumeracja permutacji wykładnicza; poza limitem = kolejność BEZ ZMIAN
+    # (kolektor bundle_calib: >5 zleceń = heurystyka; silnik konserwatywnie keep = ≤ review improved).
+    n_stops = len(bag_delivery_idxs) + len(set(bag_pickup_idxs_by_oid.values())) + 1
+    if new_pickup_idx is not None:
+        n_stops += 1
+    if n_stops > max_stops:
+        baseline_plan.o2_capz = metric
+        return baseline_plan, metric
+    base_over, _base_mca = _capz_bag_metrics(baseline_plan, bag, new_order, cap_min)
+    if base_over is None:
+        baseline_plan.o2_capz = metric
+        return baseline_plan, metric
+    cands = _enumerate_valid_plans(
+        nodes, leg_min, bag_delivery_idxs, bag_pickup_idxs_by_oid,
+        new_pickup_idx, new_delivery_idx, new_order, bag, now, sla_minutes)
+    base_drive = baseline_plan.drive_min if baseline_plan.drive_min is not None else 0.0
+    best = None  # (key, plan, over, detour)
+    for p in cands:
+        over, mca = _capz_bag_metrics(p, bag, new_order, cap_min)
+        if over is None:
+            continue
+        metric["considered"] += 1
+        if (mca or 0.0) > z_min:                                 # (b) cap-Z carried
+            continue
+        detour = (p.drive_min if p.drive_min is not None else 0.0) - base_drive
+        if detour > detour_max:                                  # (a) detour ≤ limit
+            metric["blocked_by_cap"] += 1
+            continue
+        if over > base_over - min_gain:                          # (c) materialna redukcja
+            continue
+        if p.sla_violations > baseline_plan.sla_violations:      # (d) HARD nie osłabione
+            continue
+        key = (over, round(p.total_duration_min, 3), tuple(p.sequence))
+        if best is None or key < best[0]:
+            best = (key, p, over, detour)
+    if best is None:
+        baseline_plan.o2_capz = metric
+        return baseline_plan, metric
+    _key, chosen, chosen_over, chosen_detour = best
+    metric["applied"] = 1
+    metric["detour_min"] = round(chosen_detour, 2)
+    metric["overage_saved_min"] = round(base_over - chosen_over, 1)
+    chosen.o2_capz = metric
+    chosen.strategy = baseline_plan.strategy   # reseq ≠ nowa strategia (zachowaj etykietę)
+    return chosen, metric
+
+
+def _enumerate_valid_plans(
     nodes, leg_min, bag_delivery_idxs,
     bag_pickup_idxs_by_oid,
     new_pickup_idx, new_delivery_idx,
     new_order, bag, now, sla_minutes,
-) -> RoutePlanV2:
+) -> List[RoutePlanV2]:
+    """Wszystkie poprawne przeploty stopów jako plany (pickup-before-delivery per
+    para; lock_first gdy niesione; super-odbior RAZ). Wyekstrahowane z `_bruteforce_plan`
+    (byte-parytet: bruteforce = `_select_best_with_tie_breaker(_enumerate_valid_plans(...))`).
+    Reużywane przez `_capz_reseq_plan` (cap-Z reseq — potrzebuje puli kandydatów NIEZALEŻNIE
+    od strategii, w tym ORTOOLS które zwraca 1 plan)."""
     # V3.19e: to_place uwzględnia pickup-nodes dla pending bag items.
     to_place: List[int] = list(bag_delivery_idxs) + [new_delivery_idx]
     if new_pickup_idx is not None:
@@ -855,6 +1016,19 @@ def _bruteforce_plan(
             continue
         plan = _plan_from_sequence(list(perm), nodes, leg_min, new_order, bag, now, sla_minutes)
         all_valid_plans.append(plan)
+    return all_valid_plans
+
+
+def _bruteforce_plan(
+    nodes, leg_min, bag_delivery_idxs,
+    bag_pickup_idxs_by_oid,
+    new_pickup_idx, new_delivery_idx,
+    new_order, bag, now, sla_minutes,
+) -> RoutePlanV2:
+    all_valid_plans = _enumerate_valid_plans(
+        nodes, leg_min, bag_delivery_idxs, bag_pickup_idxs_by_oid,
+        new_pickup_idx, new_delivery_idx, new_order, bag, now, sla_minutes,
+    )
     return _select_best_with_tie_breaker(all_valid_plans, now, nodes=nodes)
 
 

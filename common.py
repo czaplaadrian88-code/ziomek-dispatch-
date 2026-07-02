@@ -194,6 +194,23 @@ ETAP4_DECISION_FLAGS = (
     # każdej kotwicy niezależnie WIDOCZNE). Decyzyjna, cross-proces (route_simulator biegnie
     # pod shadow/plan-recheck/czasowka). Flip = osobny ACK. NIE zmienia semantyki O2/at-202/203.
     "ENABLE_SLA_ANCHOR_UNIFIED",
+    # O2 cap-Z RESEQ (2026-07-02, sprint O2 cap-Z, review 02.07 GO): WĄSKA reguła Opcji 3
+    # Adriana OBOK surowego ENABLE_O2_READY_ANCHOR_SWEEP (nietknięta). Silnik preferuje
+    # przeplot zmniejszający overage świeżości (Σ max(0,age_ready−35)) TYLKO gdy JEDNOCZEŚNIE:
+    # detour≤O2_CAPZ_DETOUR_MAX_MIN ∧ max wiek NIESIONEJ jedzeniówki≤O2_CAPZ_Z_MIN(=20) ∧
+    # overage niższy o ≥O2_CAPZ_MIN_GAIN_MIN (argmin) ∧ sla_violations nie większe. Brak
+    # kandydata → kolejność BEZ ZMIAN. Trójka RAZEM: route_simulator_v2 (źródło, ogon
+    # simulate_bag_route_v2 = greedy+ortools) + feasibility_v2 (metryka obs) + plan_recheck
+    # (dziedziczy przez _sweep). Paczki wyłączone (ENABLE_PACZKA_R6_THERMAL_EXEMPT). Default
+    # OFF; OFF=bajt-w-bajt; flip=osobny ACK po replay. Decyzyjna, cross-proces.
+    "ENABLE_O2_CAPZ_RESEQ",
+    # SLA-GATE READY-ANCHOR (2026-07-02, finding feas-r6-sla-anchor-gap): bramka 35-min SLA
+    # (dostawy, `_count_sla_violations` + feasibility SLA-loop) przestawiona z kotwicy NOW
+    # (pickup_at) na READY (od gotowości jedzenia) — WYŁĄCZNIE przez źródło sla_anchor.py
+    # (kind='ready'), działa tylko gdy ENABLE_SLA_ANCHOR_UNIFIED ON (ścieżka unified). REALNA
+    # zmiana decyzji (inne violations/reason) → replay ON↔OFF + ACK. Co-design z QUANTILE_R6_
+    # BAGCAP + PACZKA_R6_THERMAL_EXEMPT. Default OFF; OFF=NOW-anchor (bez zmian). Cross-proces.
+    "ENABLE_SLA_GATE_READY_ANCHOR",
     # #3 top10 (2026-06-29): reserve-aware tie-break SHADOW (wolny-vs-jadący) — log-only,
     # zero zmiany decyzji; obserwuje ile razy tie-break by dołożył do jadącego (oszczędność
     # rezerwy) w tym samym tierze late-pickup. Flip AKTYWNY = osobna flaga + ACK po walidacji #1.
@@ -337,6 +354,8 @@ ENABLE_END_OF_DAY_SALVAGE = False  # 2026-06-18 (ostatnia godzina pracy firmy �
 ENABLE_FEAS_CARRY_READMIT = False  # #483000 2026-06-27 (carry-aware re-admit feasible-path, cap-40 Tier-3)
 ENABLE_O2_READY_ANCHOR_SWEEP = False  # O2 re-seq 2026-06-27 (ready-anchor + overage+λ·czas_late objektyw worka, review 02.07)
 ENABLE_SLA_ANCHOR_UNIFIED = False  # S1 2026-07-02 (35-min HARD → jedno źródło sla_anchor.py z jawną kotwicą; 3 bliźniaki RAZEM; OFF=inline bajt-w-bajt, ON=te same decyzje + metryka obs sla_anchor_source; KANON=flags.json)
+ENABLE_O2_CAPZ_RESEQ = False  # O2 cap-Z reseq 2026-07-02 (wąska reguła Opcji 3 OBOK O2_READY_ANCHOR_SWEEP: detour≤X ∧ carried≤Z=20 ∧ argmin overage ∧ sla nie gorsze; brak→bez zmian; OFF=bajt-w-bajt; flip=ACK po replay; KANON=flags.json)
+ENABLE_SLA_GATE_READY_ANCHOR = False  # SLA-gate ready-anchor 2026-07-02 (bramka 35-min SLA pickup_at→READY via sla_anchor kind='ready'; działa gdy SLA_ANCHOR_UNIFIED ON; REALNA zmiana decyzji, replay+ACK; OFF=NOW-anchor bez zmian; KANON=flags.json)
 ENABLE_RESERVE_AWARE_TIEBREAK_SHADOW = False  # #3 top10 2026-06-29: log-only tie-break wolny-vs-jadący (shadow); flip=osobna flaga+ACK
 RESERVE_TIEBREAK_MARGIN = 30.0  # #3: max Δscore (wolny−jadący) by tie-break dołożył do jadącego (silnik ~obojętny = łatwy zysk)
 ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria physical_verified delivered_at panel-vs-GPS courier_ground_truth; SHADOW, zero wpływu na decyzje/SLA; kanon=flags.json hot)
@@ -2840,6 +2859,22 @@ BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN = float(_os.environ.get("BEST_EFFORT_OBJM_NEW
 O2_LAMBDA_CZAS = float(_os.environ.get("O2_LAMBDA_CZAS", "1.5"))
 O2_OVERAGE_CAP_MIN = float(_os.environ.get("O2_OVERAGE_CAP_MIN", "35"))
 O2_CAP_Z_MIN = float(_os.environ.get("O2_CAP_Z_MIN", "35"))
+
+# O2 cap-Z RESEQ (2026-07-02, ENABLE_O2_CAPZ_RESEQ, review 02.07 Opcja 3) — progi Z/X/Y
+# WYPROWADZONE Z DANYCH `bundle_calib_review_verdict_2026-07-02.txt` (NIE z głowy):
+#  • O2_CAPZ_Z_MIN=20 = REKOMENDACJA review (najmniejszy cap dający ≥2% policy-improved =
+#    max ochrona niesionego jedzenia; Z≤20: policy-improved 7.9%, med ΔO2 10.4). Semantyka Z:
+#    max wiek NIESIONEGO (picked_up) jedzenia = delivered − ready ≤ Z (bundle_calib._max_carried_age).
+#  • O2_CAPZ_DETOUR_MAX_MIN=8 = twardy sufit detouru drive-only; review p90 detour dla Z=20 = 7.93
+#    (med 0.04) → 8.0 zaokrąglone w górę = utrzymuje ~90% improved, tnie patologiczny ogon.
+#  • O2_CAPZ_MIN_GAIN_MIN=2 = materialna redukcja overage by ADOPTOWAĆ (=review MATERIAL_O2_MIN,
+#    próg „improved"; unika churnu na trywialnych zyskach).
+#  • O2_CAPZ_MAX_STOPS=8 = sufit enumeracji permutacji (koszt wykładniczy); kolektor brute do
+#    5 zleceń — powyżej silnik konserwatywnie KEEP (→ engine improved ≤ review, kierunek bezpieczny).
+O2_CAPZ_Z_MIN = float(_os.environ.get("O2_CAPZ_Z_MIN", "20"))
+O2_CAPZ_DETOUR_MAX_MIN = float(_os.environ.get("O2_CAPZ_DETOUR_MAX_MIN", "8"))
+O2_CAPZ_MIN_GAIN_MIN = float(_os.environ.get("O2_CAPZ_MIN_GAIN_MIN", "2"))
+O2_CAPZ_MAX_STOPS = int(_os.environ.get("O2_CAPZ_MAX_STOPS", "8"))
 
 # ESKALACJA best_effort (2026-06-23, reguła Adriana 3-stopniowa): gdy 0 feasible (Tier 1
 # zawodzi), PRZED rozciąganiem worka (Tier 3) sprawdź Tier 2 = „daj pierwszemu wolnemu"

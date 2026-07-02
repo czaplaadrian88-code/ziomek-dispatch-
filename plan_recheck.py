@@ -762,6 +762,12 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
 
     # Sweep designacji new_order (route_simulator_v2 traktuje 1 order jako wstawiany)
     # → wybierz najlepszy plan deterministycznie (O2 overage+cap-Z gdy ON / sla,dur OFF).
+    # O2 cap-Z RESEQ (2026-07-02, ENABLE_O2_CAPZ_RESEQ): plan_recheck DZIEDZICZY reseq —
+    # każdy `p` z `R.simulate_bag_route_v2(...)` niżej jest już reseq'owany U ŹRÓDŁA (ogon
+    # simulate_bag_route_v2), więc `_o2_key`/`_sweep` operują na sekwencji po reseq. To trzeci
+    # bliźniak trójki (feasibility+route_simulator+plan_recheck) — N-D bezpośredni, parytet
+    # gwarantowany przez wspólne źródło (test twin-parytetu mutuje _capz_reseq_plan → zmienia
+    # OBA: feasibility i plan_recheck). OFF = bajt-w-bajt (reseq early-return).
     def _sweep():
         ordered_l = list(sims.keys())
         best = None
