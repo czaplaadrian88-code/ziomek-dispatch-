@@ -586,6 +586,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "osrm_cache_age_s": getattr(result, "osrm_cache_age_s", None),
             "osrm_degraded_since_ts": getattr(result, "osrm_degraded_since_ts", None),
         },
+        # L2.2 (2026-07-02): przyczyny fail-ów per kurier z catch-alla
+        # _v328_eval_safe ({cid: data_poison|real_bug}); None = zero fail-ów.
+        "v328_fail_causes": getattr(result, "v328_fail_causes", None),
         "best": None if best is None else {
             "courier_id": best.courier_id,
             "name": best.name,

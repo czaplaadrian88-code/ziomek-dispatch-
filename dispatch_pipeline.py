@@ -2688,6 +2688,79 @@ class Candidate:
     traffic_v2_shadow_route: Optional[Dict[str, Any]] = None
 
 
+def _v328_classify_fail_cause(exc: Exception) -> str:
+    """L2.2 (most K5): klasa przyczyny fail-u kuriera w catch-allu _v328_eval_safe.
+
+    'data_poison'  → wyjątek pochodzi z FAIL-LOUD strażnika danych coords
+                     (sentinel (0,0) / None / poza-bbox) — trucizna danych,
+                     NIE bug logiki. Sygnatury = kontrakty komunikatów strażników
+                     (osrm_client.haversine Lekcja #32/#81, OSRM coord-guard,
+                     COORD_GUARD L2.1). Anty-dryf: test woła realny strażnik
+                     i asertuje klasę (tests/test_v328_fail_cause_l22.py).
+    'real_bug'     → każdy inny nieoczekiwany wyjątek.
+    Uwaga: 'infeasible' (legalny brak kandydata) NIE jest wyjątkiem — to
+    result=None z _v327_eval_courier, nigdy nie trafia do tej klasyfikacji.
+    """
+    msg = str(exc)
+    if isinstance(exc, ValueError) and (
+        "haversine: None coords" in msg
+        or "haversine: sentinel (0,0)" in msg
+        or "coord" in msg.lower() and ("bbox" in msg.lower() or "sentinel" in msg.lower())
+    ):
+        return "data_poison"
+    return "real_bug"
+
+
+# L2.2: stan zbiorczego alertu data-poison (per-proces dispatch-shadow).
+# Wzór zbiorczości = worker-stuck (shadow_dispatcher): okno + próg + realert,
+# NIGDY per-zdarzenie. Emisja WYŁĄCZNIE za flagą ENABLE_V328_POISON_ALERT (OFF).
+_V328_POISON_ALERT_STATE: Dict[str, Any] = {"events": [], "last_sent_ts": 0.0}
+
+
+def _v328_maybe_poison_alert(order_id, poison_cids, now_ts: Optional[float] = None,
+                             _state: Optional[dict] = None) -> bool:
+    """Zbiorczy operator-alert na data-poison. Zwraca True gdy alert WYSŁANY.
+
+    Za flagą ENABLE_V328_POISON_ALERT (default OFF — kod inert). Progi
+    env-overridable: V328_POISON_ALERT_{WINDOW_MIN,MIN_EVENTS,REALERT_SEC}.
+    Fail-soft: wysyłka nie może wywalić assess_order.
+    """
+    if not poison_cids:
+        return False
+    if not C.flag("ENABLE_V328_POISON_ALERT",
+                  getattr(C, "ENABLE_V328_POISON_ALERT", False)):
+        return False
+    st = _state if _state is not None else _V328_POISON_ALERT_STATE
+    if now_ts is None:
+        import time as _pa_time
+        now_ts = _pa_time.time()
+    window_s = float(getattr(C, "V328_POISON_ALERT_WINDOW_MIN", 30.0)) * 60.0
+    st["events"] = [e for e in st["events"] if now_ts - e[0] <= window_s]
+    st["events"].append((now_ts, str(order_id), [str(c) for c in poison_cids]))
+    min_events = int(getattr(C, "V328_POISON_ALERT_MIN_EVENTS", 5))
+    realert_s = float(getattr(C, "V328_POISON_ALERT_REALERT_SEC", 1800.0))
+    if len(st["events"]) < min_events:
+        return False
+    if now_ts - st["last_sent_ts"] < realert_s:
+        return False
+    cids = sorted({c for _, _, cl in st["events"] for c in cl})
+    oids = [o for _, o, _ in st["events"]]
+    msg = (
+        f"🧪 DATA-POISON (L2.2): {len(st['events'])} zdarzeń trucizny coords w "
+        f"{window_s/60:.0f} min (próg {min_events}). Kurierzy: {cids[:8]}; "
+        f"ostatnie ordery: {oids[-5:]}. Fail-loud strażnik coords wywala ewaluację "
+        f"kuriera — sprawdź źródło sentineli (K5; shadow_decisions: v328_fail_causes)."
+    )
+    try:
+        from dispatch_v2.telegram_utils import send_admin_alert as _pa_alert
+        _pa_alert(msg, priority="low")
+    except Exception as _pa_e:  # fail-soft: alert nie może psuć decyzji
+        log.warning(f"V328_POISON_ALERT wysyłka pominięta: {_pa_e!r}")
+        return False
+    st["last_sent_ts"] = now_ts
+    return True
+
+
 @dataclass
 class PipelineResult:
     order_id: str
@@ -2732,6 +2805,10 @@ class PipelineResult:
     # flaga ENABLE_AUTO_ASSIGN). Projekt: eod_drafts/2026-06-13/AUTON01_DESIGN.md.
     would_auto_assign: Optional[bool] = None
     auto_block_reasons: Optional[List[str]] = None
+    # L2.2 (2026-07-02): przyczyny fail-ów per kurier z catch-alla _v328_eval_safe
+    # {cid: 'data_poison'|'real_bug'}. None gdy zero fail-ów (ścieżki wczesne/czysto).
+    # Read-only consumption w shadow_dispatcher._serialize_result top-level.
+    v328_fail_causes: Optional[Dict[str, str]] = None
 
 
 # ─── FAIL-04: prep-variance anomaly (A1 anomaly block, shadow-first) ───
@@ -2868,12 +2945,19 @@ def _classify_and_set_auto_route(
     fleet_snapshot: Optional[Dict[str, Any]],
     order_event: Optional[Dict[str, Any]],
     now: Optional[datetime] = None,
+    v328_fail_causes: Optional[Dict[str, str]] = None,
 ) -> None:
     """Faza 7-AUTO-PROXIMITY: populate result.auto_route + auto_route_reason.
 
     Defensive: NIGDY raise — fallback do ACK przy any exception. Czyta flagi z
     flags.json (hot-reload). Pure side-effect (mutates result).
+
+    L2.2 (2026-07-02): to jest WSPÓLNY LEJEK wszystkich post-eval returnów
+    assess_order (11 call-site'ów) → tu doczepiamy result.v328_fail_causes
+    ({cid: data_poison|real_bug} z catch-alla) do serializacji order-level.
     """
+    if v328_fail_causes:
+        result.v328_fail_causes = dict(v328_fail_causes)
     try:
         from dispatch_v2.auto_proximity_classifier import (
             classify_auto_route, build_context_for_logging,
@@ -5743,6 +5827,10 @@ def _assess_order_impl(
     # (production 470208/209/210 — Lekcja #66 amplifier). Post-fix: try/except
     # per courier, failed kurier logged + skipped, pozostali evaluated.
     _v328_failed_couriers: List[str] = []  # cid list dla telemetrii post-pool
+    # L2.2: rozróżnienie przyczyn w catch-allu (koniec "wszystko wygląda tak samo"):
+    # data_poison (fail-loud strażnik coords, most K5) vs real_bug (nieoczekiwany
+    # wyjątek). infeasible = legalny brak → result None, NIE wyjątek.
+    _v328_fail_causes: Dict[str, str] = {}
 
     def _v328_eval_safe(kv):
         """Wrap _v327_eval_courier z try/except — single courier crash NIE blokuje pool."""
@@ -5750,11 +5838,13 @@ def _assess_order_impl(
         try:
             return ('ok', cid, _v327_eval_courier(cid, cs))
         except Exception as _e:
+            _cause = _v328_classify_fail_cause(_e)
             log.error(
                 f"V328_CP_SOLVER_FAIL_PER_COURIER cid={cid} order={order_id} "
-                f"exc={type(_e).__name__}: {str(_e)[:200]}",
+                f"cause={_cause} exc={type(_e).__name__}: {str(_e)[:200]}",
                 exc_info=True,
             )
+            _v328_fail_causes[str(cid)] = _cause
             return ('fail', cid, _e)
 
     from concurrent.futures import ThreadPoolExecutor as _V327_TPE
@@ -5780,11 +5870,20 @@ def _assess_order_impl(
     _v328_fail_ratio = 0.0
     if _v328_failed_couriers:
         _v328_fail_ratio = len(_v328_failed_couriers) / max(1, len(fleet_snapshot))
+        # L2.2: rozbicie per przyczyna + zbiorczy operator-alert na data-poison
+        # (za flagą ENABLE_V328_POISON_ALERT, default OFF — inert).
+        _v328_poison_cids = [c for c, k in _v328_fail_causes.items() if k == "data_poison"]
+        _v328_bug_cids = [c for c, k in _v328_fail_causes.items() if k == "real_bug"]
         log.warning(
             f"V328_POOL_PARTIAL_FAIL order={order_id} "
             f"failed={len(_v328_failed_couriers)}/{len(fleet_snapshot)} "
-            f"({_v328_fail_ratio:.0%}) failed_cids={_v328_failed_couriers[:10]}"
+            f"({_v328_fail_ratio:.0%}) failed_cids={_v328_failed_couriers[:10]} "
+            f"data_poison={len(_v328_poison_cids)} real_bug={len(_v328_bug_cids)}"
         )
+        try:
+            _v328_maybe_poison_alert(order_id, _v328_poison_cids)
+        except Exception as _pa_exc:  # defensywnie: telemetria nie psuje decyzji
+            log.warning(f"V328_POISON_ALERT agregacja pominięta: {_pa_exc!r}")
 
     # V3.28 Fix 6 (incident 03.05.2026): mass fail fallback heuristic.
     # Gdy >=V328_MASS_FAIL_RATIO_THRESHOLD (default 0.5) kurierów crash w pool →
@@ -6483,7 +6582,7 @@ def _assess_order_impl(
                 pool_total_count=len(candidates),
                 pool_feasible_count=len(feasible),
             )
-            _classify_and_set_auto_route(_result_stale, fleet_snapshot, order_event, now=now)
+            _classify_and_set_auto_route(_result_stale, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
             return _result_stale
 
         # P3-D6 path B 2026-05-11 — geometry-blind fallback KOORD escalation.
@@ -6523,7 +6622,7 @@ def _assess_order_impl(
                     pool_total_count=len(candidates),
                     pool_feasible_count=len(feasible),
                 )
-                _classify_and_set_auto_route(_result_geo_blind, fleet_snapshot, order_event, now=now)
+                _classify_and_set_auto_route(_result_geo_blind, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
                 return _result_geo_blind
 
         # V3.28 ANCHOR FIX 2026-05-10 — Adrian doktryna: min_score_threshold dla PROPOSE.
@@ -6562,7 +6661,7 @@ def _assess_order_impl(
                 pool_total_count=len(candidates),
                 pool_feasible_count=len(feasible),
             )
-            _classify_and_set_auto_route(_result_low, fleet_snapshot, order_event, now=now)
+            _classify_and_set_auto_route(_result_low, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
             return _result_low
 
         # BUG C verdict-gate (2026-05-27): jeśli plan.pickup_at[oid] (ETA z
@@ -6643,7 +6742,7 @@ def _assess_order_impl(
                     "threshold_min": _cd_threshold,
                 }
                 _classify_and_set_auto_route(
-                    _result_cd, fleet_snapshot, order_event, now=now)
+                    _result_cd, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
                 return _result_cd
 
         # === Difficult-case KOORD redirect (2026-05-28) ===
@@ -6716,7 +6815,7 @@ def _assess_order_impl(
                     "operator_decision": None,  # async fill via reconciliation
                 })
                 _classify_and_set_auto_route(
-                    _result_diff, fleet_snapshot, order_event, now=now)
+                    _result_diff, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
                 return _result_diff
             elif _diff_should_redirect:
                 # Flag OFF — zapisuj do shadow logu (best dict) by symulacja
@@ -6766,7 +6865,7 @@ def _assess_order_impl(
         _result_pf.r6_danger_shadow = r6_danger_shadow
         # Load-aware distribution counterfactual (2026-06-07) — shadow only.
         _result_pf.loadaware_shadow = loadaware_shadow
-        _classify_and_set_auto_route(_result_pf, fleet_snapshot, order_event, now=now)
+        _classify_and_set_auto_route(_result_pf, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
         return _result_pf
 
     # R28 best_effort: NO candidates that still produced a plan (SLA-only rejections)
@@ -6943,7 +7042,7 @@ def _assess_order_impl(
                 "orders_in_breach": _be_breach_orders,
             }
             _classify_and_set_auto_route(
-                _result_be_e, fleet_snapshot, order_event, now=now)
+                _result_be_e, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
             return _result_be_e
         # Sprint OBJ F3 / BUG-4 (2026-05-18): best_effort z najlepszym kandydatem
         # łamiącym hard R6 o > próg → KOORD, nie auto-PROPOSE. Diagnoza 474297:
@@ -6972,7 +7071,7 @@ def _assess_order_impl(
                 pool_feasible_count=0,
             )
             _classify_and_set_auto_route(
-                _result_be_r6, fleet_snapshot, order_event, now=now)
+                _result_be_r6, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
             return _result_be_r6
         # P3-D3 2026-05-11 (root cause 3): MIN_PROPOSE_SCORE gate aligned z feasible
         # branch (line ~2800). Pre-fix: best_effort skip gate → score=-390 carry
@@ -6998,7 +7097,7 @@ def _assess_order_impl(
                 pool_total_count=len(candidates),
                 pool_feasible_count=0,
             )
-            _classify_and_set_auto_route(_result_be_low, fleet_snapshot, order_event, now=now)
+            _classify_and_set_auto_route(_result_be_low, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
             return _result_be_low
         _result_be = PipelineResult(
             order_id=order_id,
@@ -7012,7 +7111,7 @@ def _assess_order_impl(
             pool_total_count=len(candidates),
             pool_feasible_count=0,
         )
-        _classify_and_set_auto_route(_result_be, fleet_snapshot, order_event, now=now)
+        _classify_and_set_auto_route(_result_be, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
         return _result_be
 
     # R29 SOLO fallback: zamiast SKIP — spróbuj przydzielić SOLO (pusty bag, ignoruje R1/R5/R8)
@@ -7067,7 +7166,7 @@ def _assess_order_impl(
             pool_total_count=len(candidates),
             pool_feasible_count=0,
         )
-        _classify_and_set_auto_route(_result_solo, fleet_snapshot, order_event, now=now)
+        _classify_and_set_auto_route(_result_solo, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
         return _result_solo
 
     # R29 absolutny fallback: nikt nie przechodzi nawet solo — KOORD

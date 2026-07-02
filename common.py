@@ -254,6 +254,10 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_COURIER_LAST_KNOWN_POS",
     "ENABLE_LOAD_PLAN_PURE_READ",
     "ENABLE_PANEL_PACKS_BAG_RECONSTRUCTION",
+    # L2.2 (2026-07-02): zbiorczy operator-alert na data-poison z klasyfikacji
+    # catch-alla _v328_eval_safe (klasyfikacja/telemetria unconditional; flaga
+    # gate'uje TYLKO wysyłkę alertu). Default OFF, flip za ACK.
+    "ENABLE_V328_POISON_ALERT",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -1184,6 +1188,18 @@ ENABLE_FLEET_OVERLOAD_PENALTY = _os.environ.get("ENABLE_FLEET_OVERLOAD_PENALTY",
 # disable (mass fail wraca do silent NO_PROPOSE).
 ENABLE_V328_MASS_FAIL_FALLBACK = _os.environ.get("ENABLE_V328_MASS_FAIL_FALLBACK", "1") == "1"
 V328_MASS_FAIL_RATIO_THRESHOLD = float(_os.environ.get("V328_MASS_FAIL_RATIO_THRESHOLD", "0.5"))
+# L2.2 (2026-07-02, most K5): catch-all _v328_eval_safe ROZRÓŻNIA przyczynę
+# fail-u kuriera (data_poison = fail-loud strażnika coords [sentinel (0,0)/None/
+# bbox] vs real_bug = nieoczekiwany wyjątek; infeasible NIE jest wyjątkiem —
+# legalny brak kandydata = result None). Klasyfikacja+telemetria = unconditional
+# (czysta obserwowalność, wzór coord_poison_* L2.1). Flaga gate'uje WYŁĄCZNIE
+# zbiorczy operator-alert Telegram (nie spam per-zdarzenie: okno+próg+realert,
+# wzór worker-stuck shadow_dispatcher). Default OFF = intencja steady-state do
+# czasu flipa za ACK; KANON stanu = flags.json.
+ENABLE_V328_POISON_ALERT = False
+V328_POISON_ALERT_WINDOW_MIN = float(_os.environ.get("V328_POISON_ALERT_WINDOW_MIN", "30"))
+V328_POISON_ALERT_MIN_EVENTS = int(_os.environ.get("V328_POISON_ALERT_MIN_EVENTS", "5"))
+V328_POISON_ALERT_REALERT_SEC = float(_os.environ.get("V328_POISON_ALERT_REALERT_SEC", "1800"))
 # Z-11 (audyt 2026-06-10): heurystyka mass-fail omija CAŁĄ feasibility (jedyny
 # guard = bag-cap) — kurier PO KOŃCU ZMIANY mógł wygrać w degraded mode (łamie
 # R-SCHEDULE-AWARE / V325 PICKUP_POST_SHIFT). Guard: skip gdy
