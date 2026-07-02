@@ -304,12 +304,10 @@ _EXTERNAL_SCRIPTS = {
     "scripts/fetch_schedule.py": "/root/.openclaw/workspace/scripts/fetch_schedule.py",
     "scripts/schedule_utils.py": "/root/.openclaw/workspace/scripts/schedule_utils.py",
 }
-# ŻYWY schedule_utils.py wciąż ma fixed-offset fallback (l.24, except ImportError) —
-# staged fix (deploy_staging/scripts/schedule_utils.py) go usuwa; wpis DO ZDJĘCIA
-# po podmianie żywego pliku za ACK koordynatora (allowlista może się tylko kurczyć).
-_EXTERNAL_ALLOWLIST = {
-    "scripts/schedule_utils.py",
-}
+# 2026-07-02 ~13:35: żywy schedule_utils.py PODMIENIONY na staged (fix grafik-h,
+# GO Adriana, .bak-pre-grafik-h-2026-07-02) — fixed-offset fallback usunięty,
+# allowlista skurczona do ZERA (może tylko się kurczyć; nowy wpis = nowa bomba TZ).
+_EXTERNAL_ALLOWLIST = set()
 
 
 def test_ratchet_external_scripts_no_new_fixed_offset():

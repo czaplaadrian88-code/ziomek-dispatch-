@@ -242,79 +242,23 @@ def _unified_changes(live_path, staged_path):
     return removed, added
 
 
-# JAWNA LISTA DOZWOLONYCH HUNKÓW.
-_EXACT_REMOVED = {
-    "fetch": {
-        '        start_fmt = parse_hour(row[col_start].strip() if len(row) > col_start else "")',
-        '        end_fmt   = parse_hour(row[col_end].strip()   if len(row) > col_end   else "")',
-        '        schedule[name] = {"start": start_fmt, "end": end_fmt} if (start_fmt and end_fmt) else None',
-        '    today = datetime.now().strftime("%d-%m-%y")',
-    },
-    "utils": {
-        "try:",
-        "    from zoneinfo import ZoneInfo",
-        '    _TZ = ZoneInfo("Europe/Warsaw")',
-        "    def _now_warsaw():",
-        "        return datetime.now(_TZ).replace(tzinfo=None)",
-        "except ImportError:",
-        "    _TZ = timezone(timedelta(hours=2))",
-        '                today = datetime.now().strftime("%d-%m-%y")',
-    },
-}
-# Każdy anchor MUSI wystąpić w blokach added (fix nie zgubiony).
-_REQUIRED_ANCHORS = {
-    "fetch": [
-        "STAGING COPY",
-        "from zoneinfo import ZoneInfo",
-        '_WARSAW = ZoneInfo("Europe/Warsaw")',
-        "FLAGS_PATH =",
-        "def _flag(name, default=False):",
-        "def _today_warsaw():",
-        'salvage_on = _flag("ENABLE_GRAFIK_ENTRY_SALVAGE", False)',
-        '"parse_degraded": True',
-        "today = _today_warsaw()",
-    ],
-    "utils": [
-        "STAGING COPY",
-        "from zoneinfo import ZoneInfo",
-        '_TZ = ZoneInfo("Europe/Warsaw")',
-        'today = _now_warsaw().strftime("%d-%m-%y")',
-    ],
-}
-# Dokładne liczby zmian = tripwire na KAŻDĄ nieujętą linię (nawet generyczną).
-_EXPECTED_COUNTS = {  # (removed_nonblank, added_total)
-    "fetch": (4, 51),
-    "utils": (10, 15),
-}
+# STRAŻNIK MIRRORA (stan PO deployu 2026-07-02 ~13:35): żywy plik MUSI być
+# bajt-identyczny ze staged. Przed deployem testy pinowały dokładne hunki diffu;
+# po podmianie żywych plików (GO Adriana, .bak-pre-grafik-h-2026-07-02) diff==∅,
+# a klasą błędu do łapania jest odtąd STALE MIRROR (edycja żywego bez staged
+# lub odwrotnie — dokładnie przypadek deploy_staging/scripts/gastro_assign.py
+# z mapy L8). Rozjazd = zaktualizuj deploy_staging razem z żywym (para!) albo
+# cofnij samowolną edycję żywego pliku.
 _PATHS = {"fetch": (_LIVE_FETCH, _STAGED_FETCH), "utils": (_LIVE_UTILS, _STAGED_UTILS)}
 
 
 @pytest.mark.parametrize("key", ["fetch", "utils"])
-def test_parity_removed_lines_are_expected(key):
-    live, staged = _PATHS[key]
-    removed, _ = _unified_changes(live, staged)
-    for r in removed:
-        if r.strip():
-            assert r in _EXACT_REMOVED[key], (
-                f"[{key}] NIEOCZEKIWANA usunięta linia — żywy plik zmieniony a staged "
-                f"NIEZAKTUALIZOWANY (stale mirror)? {r!r}"
-            )
-
-
-@pytest.mark.parametrize("key", ["fetch", "utils"])
-def test_parity_required_fix_anchors_present(key):
-    live, staged = _PATHS[key]
-    _, added = _unified_changes(live, staged)
-    joined = "\n".join(added)
-    for a in _REQUIRED_ANCHORS[key]:
-        assert a in joined, f"[{key}] brak oczekiwanej zmiany (fix zgubiony?): {a!r}"
-
-
-@pytest.mark.parametrize("key", ["fetch", "utils"])
-def test_parity_change_counts_exact(key):
+def test_parity_live_equals_staged_mirror(key):
     live, staged = _PATHS[key]
     removed, added = _unified_changes(live, staged)
-    exp_rem, exp_add = _EXPECTED_COUNTS[key]
-    got_rem = len([r for r in removed if r.strip()])
-    assert got_rem == exp_rem, f"[{key}] usunięte linie {got_rem} != {exp_rem} (diff żywy↔staged się zmienił)"
-    assert len(added) == exp_add, f"[{key}] dodane linie {len(added)} != {exp_add} (diff żywy↔staged się zmienił)"
+    drift = [ln for ln in removed + added if ln.strip()]
+    assert not drift, (
+        f"[{key}] żywy plik rozjechał się ze staged mirror ({len(drift)} linii). "
+        f"Żywy i deploy_staging/scripts/ edytuj RAZEM (klasa stale-mirror z L8). "
+        f"Pierwsze rozjazdy: {drift[:4]!r}"
+    )
