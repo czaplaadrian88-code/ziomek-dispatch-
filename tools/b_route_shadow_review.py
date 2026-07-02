@@ -15,9 +15,16 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
+# L1.2 (2026-07-02): ground-truth arm przepięty z MARTWEGO dispatch_state/sla_log
+# (zamrożony 2026-06-20 → real_joined=0, werdykt VOID w rejestrze FAZA1_03) na
+# ŻYWY kanon ledger_io.iter_sla. Różnice schematu żywego loga obsłużone jawnie:
+# stemple naive=Warsaw (parse_sla_ts), brak on_time (ready-anchor) → fallback
+# sla_ok (pickup-anchor), brak is_peak → rekompute z delivered_at tą samą
+# definicją (ontime_lib.is_peak).
+from dispatch_v2.tools import ledger_io, ontime_lib  # noqa: E402
+
 STATE_DIR = "/root/.openclaw/workspace/dispatch_state"
 CORPUS = f"{STATE_DIR}/b_route_shadow.jsonl"
-SLA_LOG = f"{STATE_DIR}/sla_log.jsonl"
 MIN_DIFFERS = 20          # minimum różniących się worków na pewny werdykt
 
 
@@ -53,18 +60,27 @@ def _med(xs):
 
 
 def _sla_index():
-    """{order_id: {real_food_age_min, on_time, delivery_min, is_peak}} z sla_log (ostatni wpis/oid)."""
+    """{order_id: {real_food_age_min, on_time, delivery_min, is_peak}} z ŻYWEGO
+    sla_log (kanon ledger_io.iter_sla; ostatni wpis/oid). on_time: pole
+    ready-anchored gdy jest (martwy schemat), inaczej sla_ok (pickup-anchor)."""
     idx = {}
-    for r in _read_jsonl(SLA_LOG):
+    for r in ledger_io.iter_sla(None):
         oid = str(r.get("order_id"))
-        d = _parse(r.get("delivered_at"))
-        p = _parse(r.get("picked_up_at"))
+        d = ledger_io.parse_sla_ts(r.get("delivered_at"))
+        p = ledger_io.parse_sla_ts(r.get("picked_up_at"))
         age = (d - p).total_seconds() / 60.0 if (d and p) else None
+        if "on_time" in r:
+            on_time = str(r.get("on_time")) == "True"
+        else:  # żywy log: sla_ok (≤35 min od ODBIORU) — jawnie inna kotwica
+            on_time = r.get("sla_ok") is True
+        ip = r.get("is_peak")
+        if ip is None and d is not None:
+            ip = ontime_lib.is_peak(d)  # ta sama definicja, którą pisał martwy log
         idx[oid] = {
             "real_food_age_min": round(age, 1) if age is not None else None,
-            "on_time": str(r.get("on_time")) == "True",
+            "on_time": on_time,
             "delivery_min": float(r.get("delivery_time_minutes")) if r.get("delivery_time_minutes") not in (None, "None") else None,
-            "is_peak": str(r.get("is_peak")) == "True",
+            "is_peak": str(ip) == "True" or ip is True,
         }
     return idx
 

@@ -6,6 +6,11 @@
 
 ## PODSUMOWANIE: 24 VALIDATED · 19 VOID · 6 UNTESTED (z 49 werdyktów)
 
+> **ADENDUM L1.2 (2026-07-02, sesja tmux 8):** przepięcie READ-side na kanon `ledger_io` zmieniło stan przyczyn kilku wpisów (statusy VOID formalnie zdejmuje dopiero re-oracle C9 przy następnym użyciu przyrządu):
+> - **klasa WRONG-SOURCE (martwy dispatch_state/sla_log, zamrożony 20.06): 3→0.** `no_gps_eta_error` (join 26→390, mediana błędu 10,9 min — bez +2h TZ), `prep_bias_r6_replay` (join 1137→4075), `b_route_shadow_review` (real_joined 0→322 — usunięta PRZYCZYNA VOID z tego rejestru; werdykt B-lite wymaga re-runu na żywym joinie). Kanon zna semantykę żywego loga: `parse_sla_ts` (naive=Warsaw), on_time(ready)→sla_ok(pickup) jawnie.
+> - **klasa ROTATION-BLIND w narzędziach tools/: TIER1+TIER2 przepięte** (`pickup_slip_monitor` [karmi bramkę 04.07], `daily_rule_report` [21d: 5→14 dni widocznych], `objm_lexr6_canary_monitor` [karmi at-200; bajt-parytet bramek], 10 replayów TIER2 — dowody parytetu w scratchpad l12_parity / l12_tier2). `min_delivered_at_verdict.py` (VOID, rotation-blind) NIE przepięty — at-166 już odpalony; przepiąć przy ewentualnym re-runie.
+> - Commity: `fec417e` (TIER1) · `3ba0fdc` (TIER2) · b_route w commicie L1.2/T1b.
+
 ⚠ **CAVEAT FUNDAMENTU:** `delivered_at`/`picked_up_at` = prawda-PRZYCISKOWA, nie fizyczna (0/377 dostaw ma auto_geofence GT; odbiór panel ~192s przed GPS). Każdy `proxy-certified` = button-truth ±~3min. Jedyny GROUND-TRUTH fizyczny producent = `gps_delivery_validation` (VALIDATED). OSRM route==table na osi PEAK = certyfikowany czysty (n=2644).
 
 ## 🔴 VOID — instrument KŁAMIE lub mierzy proxy zamiast zmiennej decyzyjnej (NAPRAW POMIAR przed użyciem werdyktu) (19)
