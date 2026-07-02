@@ -29,16 +29,25 @@ from zoneinfo import ZoneInfo
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 BASE = "/root/.openclaw/workspace"
-SHADOW_LOGS = [
-    f"{BASE}/scripts/logs/shadow_decisions.jsonl",
-    f"{BASE}/scripts/logs/shadow_decisions.jsonl.1",
-]
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary hardkod [żywy, .1] gubił .2.gz po rotacji
+# (logrotate size 100M / daily + delaycompress). files_in_window daje pełny
+# łańcuch (.N.gz→.1→żywy) chronologicznie; ścieżka = ledger_io.LEDGER. Indeks
+# first jest jawnym min-ts per oid (order-irrelevant), metryki BEZ ZMIAN.
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    _sys_p = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path.insert(0, _sys_p)
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+
+SHADOW_LOGS = _rotated_logs.files_in_window(ledger_io.LEDGER["shadow"])
 
 
 def _read_jsonl(path):
     if not os.path.exists(path):
         return
-    with open(path, encoding="utf-8") as fh:
+    with _rotated_logs.open_maybe_gz(path) as fh:
         for line in fh:
             line = line.strip()
             if not line:

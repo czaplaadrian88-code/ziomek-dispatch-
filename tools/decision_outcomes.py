@@ -10,11 +10,22 @@ import sys
 from zoneinfo import ZoneInfo
 
 EVENTS_DB = "/root/.openclaw/workspace/dispatch_state/events.db"
-LEARNING_LOGS = [
-    "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl.1",
-    "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl.2.gz",
-]
+
+# L1.2 (2026-07-02): odczyt learning_log ROTATION-AWARE przez kanon
+# (_rotated_logs.files_in_window) — stary hardkod [żywy, .1, .2.gz] gubił .3.gz+
+# po dalszej rotacji (logrotate size 100M / daily + delaycompress). files_in_window
+# daje pełny łańcuch (.N.gz→.1→żywy). ⚠ TYLKO odczyt — WRITER (append_jsonl→OUT_JSONL)
+# i tick timerowy (dispatch-decision-outcomes) NIETKNIĘTE; wybór rekordu w
+# load_decisions() jest jawny (prio + max ts) = order-independent, metryki BEZ ZMIAN.
+# learning_log NIE jest w ledger_io.LEDGER — kanon na base path.
+try:
+    from dispatch_v2.tools import _rotated_logs
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs
+
+LEARNING_LOGS = _rotated_logs.files_in_window(
+    "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl")
 OUT_JSONL = "/root/.openclaw/workspace/dispatch_state/decision_outcomes.jsonl"
 
 def _parse_ts(ts: str):

@@ -31,7 +31,19 @@ import sys
 
 BASE = "/root/.openclaw/workspace"
 CLEAN = f"{BASE}/dispatch_state/calibration_set_june.jsonl"
-SHADOW_LOGS = [f"{BASE}/scripts/logs/shadow_decisions.jsonl", f"{BASE}/scripts/logs/shadow_decisions.jsonl.1"]
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary hardkod [żywy, .1] gubił .2.gz po rotacji
+# (logrotate size 100M / daily + delaycompress). files_in_window daje pełny
+# łańcuch (.N.gz→.1→żywy) chronologicznie; ścieżka = ledger_io.LEDGER. Indeks
+# decs jest first-wins per oid (0 kolizji między plikami → identycznie), metryki BEZ ZMIAN.
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+
+SHADOW_LOGS = _rotated_logs.files_in_window(ledger_io.LEDGER["shadow"])
 W_OBCIAZENIE = 0.25
 MAX_BAG_TSP = 5  # scoring.py: s_obciazenie 0 dla bag>=5
 
@@ -56,7 +68,7 @@ def new_obc(bag):
 def _read_jsonl(path):
     if not os.path.exists(path):
         return
-    for line in open(path, encoding="utf-8"):
+    for line in _rotated_logs.open_maybe_gz(path):
         line = line.strip()
         if not line:
             continue

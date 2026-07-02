@@ -42,10 +42,19 @@ LONGHAUL_KM = 4.5               # R7 long-haul threshold
 COMMITTED_LATE_MIN = 10.0       # committed pickup miss → cold food
 SINGLE_POOL = 1                 # pool_feasible_count <= 1 → flota pusta
 
-DEFAULT_LOGS = [
-    "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl",
-    "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl.1",
-]
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary hardkod [żywy, .1] gubił .2.gz po rotacji
+# (logrotate size 100M / daily + delaycompress). files_in_window daje pełny
+# łańcuch (.N.gz→.1→żywy) chronologicznie; ścieżka = ledger_io.LEDGER. Agregaty
+# są order-independent, metryki BEZ ZMIAN.
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+
+DEFAULT_LOGS = _rotated_logs.files_in_window(ledger_io.LEDGER["shadow"])
 
 # Nazwane komponenty kary (bonus_penalty_sum + v324a), do analizy „co dominuje".
 PENALTY_COMPONENTS = [
@@ -136,7 +145,7 @@ def analyze(paths=None):
     for p in paths:
         if not os.path.exists(p):
             continue
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
+        with _rotated_logs.open_maybe_gz(p) as f:
             for line in f:
                 s["lines"] += 1
                 line = line.strip()
