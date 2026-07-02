@@ -39,6 +39,7 @@
 ## Kontrakt ⑤ — PRAWDA PRZYRZĄDÓW (flip tylko na validated)
 - 🔴 **INV-TRUTH**: każdy werdykt shadow/monitor JOIN `gps_delivery_truth`/`decision_outcomes` + tripwire `delta≥0` uzbrojony (struktura niemożliwa = harness pada, nie loguje jako dane).
 - ⚠️ **VOID — do naprawy PRZED jakimkolwiek flipem na ich liczbie (oracle Fazy 1):**
+  *(STATUS 2026-07-02, L1.2: READ-side przyczyn część usunięta — WRONG-SOURCE martwy sla 3→0 [no_gps_eta_error, prep_bias_r6_replay, b_route_shadow_review real_joined 0→322] + 40 tooli rotation-aware; formalne zdjęcie VOID = re-oracle C9 przy następnym użyciu przyrządu. Szczegóły: adendum w `eod_drafts/2026-06-30/FAZA1_03_rejestr_przyrzadow.md`.)*
   - `carried_first_guard` = **VOID** (biega z pustym env → 90% rekordów fikcyjne `no_position`). ← *to unieważnia moje wcześniejsze ✅ przy INV-ORDER-CANON.*
   - `global_allocate` geometryczna jakość = **VOID** (certyfikuje liczbę, ślepy na geometrię — 35% worków spread>8km po de-pile). **MUSI blokować flip `PENDING_RESWEEP_LIVE`.**
   - serializer gubi **38 kluczy** (`eta_source`=0/2000, `r6_gold4_gate`=0/2000) → bramkuje kalibrację O2 (02.07); napraw serializer PRZED.
