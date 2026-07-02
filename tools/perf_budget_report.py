@@ -45,11 +45,11 @@ import os
 import sys
 from datetime import datetime, timezone, timedelta
 
-try:
-    from zoneinfo import ZoneInfo
-    WARSAW = ZoneInfo("Europe/Warsaw")
-except Exception:  # pragma: no cover — brak tzdata (nie powinno się zdarzyć)
-    WARSAW = timezone(timedelta(hours=1))
+# stdlib od 3.9 (venv=3.12); brak tzdata = fail-loud na imporcie. Żadnego
+# fixed-offset fallbacku — to klasa bomb TZ z audytu 2.0 (ratchet test_tz_zoneinfo).
+from zoneinfo import ZoneInfo
+
+WARSAW = ZoneInfo("Europe/Warsaw")
 
 SCRIPTS = "/root/.openclaw/workspace/scripts"
 if SCRIPTS not in sys.path:
