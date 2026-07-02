@@ -856,3 +856,14 @@ without `~` are exact; `~` marks an approximate region inside `dispatch_pipeline
 the agent citation was not line-verified.
 
 *End of reference.*
+
+### D.3 fala A/B — flagi route/kanon (KANON=flags.json od 2026-07-02, migracja z env-frozen)
+- `ENABLE_PLAN_REAL_PICKED_UP_AT` — przekazuje realny picked_up_at do symulatora (kara R6 chroni niesione).
+- `ENABLE_PLAN_SEQUENCE_LOCK` — sekwencja worka zamrożona, tick tylko re-czasuje (bez re-TSP).
+- `ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE` — natychmiastowa re-decyzja sekwencji na override/reassign (pw).
+- `ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP` — re-decyzja także po ODEBRANE (zmiana bag_signature).
+- `ENABLE_CARRIED_AGE_TZ_FIX` — poprawne parsowanie picked_up_at (naiwny Warsaw), realny wiek carried w relaxie.
+- `ENABLE_LEX_COMMITTED_WINDOW` / `ENABLE_LEX_COMMITTED_WINDOW_SHADOW` — constrained-lex okno odbioru (APPLY / SHADOW).
+- `ENABLE_RELAX_COLOC_PICKUP` — współlokalny odbiór (start==restauracja) brany od razu, nie po powrocie.
+- `ENABLE_NONCARRIED_DROPOFF_REORDER` — min-jazda reorder dropoffów w worku bez niesionych.
+- `ENABLE_V326_OR_TOOLS_TSP` / `ENABLE_V326_SAME_RESTAURANT_GROUPING` — para atomowa (OR-Tools TSP + same-restaurant grouping); rozjazd = double-insert super-pickupa (#13, check_v326_pair_coherence).
