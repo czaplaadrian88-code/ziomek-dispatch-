@@ -1,0 +1,17 @@
+# STAGING — NIE zainstalowany. Instalacja tylko przez koordynatora za ACK (patrz README).
+# Codziennie 03:00 UTC (=05:00 Warsaw latem) — off-peak, poza lunch/dinner peakiem.
+# OnCalendar (NIE OnUnitActiveSec) — świadomie: timer z samym OnUnitActiveSec bywa
+# odkotwiczany przez `daemon-reload` (patrz L13 §3b / audyt 2.0 martwe monitory).
+[Unit]
+Description=Ziomek observability log retention (candidate_decisions/fleet_filter 14d) — daily off-peak
+Documentation=file:///root/.openclaw/workspace/scripts/dispatch_v2/observability/log_rotation.py
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+AccuracySec=5min
+RandomizedDelaySec=2min
+Unit=dispatch-log-rotation.service
+
+[Install]
+WantedBy=timers.target
