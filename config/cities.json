@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "doc": "Rejestr miast (city_id 1. klasy). Szkielet RECON — NIE podpięty do kodu (zero konsumentów). Wpis 'bialystok' = REALNE wartości wyjęte z kodu produkcyjnego (dispatch_v2/common.py, osrm_client.py, courier_resolver.py, districts_data.py; nadajesz_clone/panel; courier_api; mosty). Migracja etapami: patrz eod_drafts/2026-07-02/MULTICITY_plan.md. Zasada parytetu: miasto=bialystok wczytane z tego pliku MUSI dać bajt-w-bajt dzisiejsze zachowanie (fallback na dzisiejsze stałe za flagą OFF).",
+  "default_city_id": 1,
+  "cities": {
+    "bialystok": {
+      "id": 1,
+      "slug": "bialystok",
+      "name": "Białystok",
+      "active": true,
+      "console_tenant_id": 1,
+      "timezone": "Europe/Warsaw",
+
+      "center": {
+        "lat": 53.1325,
+        "lng": 23.1688,
+        "_source": "dispatch_v2/courier_resolver.py:110 BIALYSTOK_CENTER == osrm_client.py:530 _BBOX_CENTER; centroid fikcji pozycji + placeholder table()"
+      },
+      "company_account_fallback_coords": {
+        "lat": 53.13222,
+        "lng": 23.16844,
+        "_source": "dispatch_v2/common.py:3689 FIRMOWE_KONTO_FALLBACK_COORDS (konto firmowe 161)"
+      },
+
+      "bbox_metropolia": {
+        "lat_min": 52.6,
+        "lat_max": 53.7,
+        "lon_min": 22.3,
+        "lon_max": 24.1,
+        "_role": "HARD poison-guard OSRM/GPS (±55km); coords_in_bialystok_bbox",
+        "_source": "dispatch_v2/common.py:663-664 BIALYSTOK_BBOX_LAT/LON"
+      },
+      "bbox_geocode_engine": {
+        "lat_min": 52.85,
+        "lat_max": 53.35,
+        "lon_min": 22.85,
+        "lon_max": 23.45,
+        "_role": "HARD walidator akceptacji geokodu (_in_service_bbox); env-override",
+        "_source": "dispatch_v2/common.py:1152-1156 GEOCODE_BBOX_* (env)"
+      },
+      "bbox_geocode_console": {
+        "lat_min": 53.00,
+        "lat_max": 53.25,
+        "lng_min": 23.00,
+        "lng_max": 23.40,
+        "_role": "HARD walidator Nominatim bounded=1 (konsola); WĘŻSZY niż silnik",
+        "_source": "nadajesz_clone/panel/backend/app/core/config.py:131-134 geocode_bbox_*"
+      },
+      "bbox_geocache_mutator": {
+        "lat_min": 52.85,
+        "lat_max": 53.35,
+        "lon_min": 22.85,
+        "lon_max": 23.45,
+        "_role": "HARD MUTATOR — kasuje coords POZA bbox z geocode_cache.json jako 'corrupted'",
+        "_source": "dispatch_v2/tools/invalidate_city_bugged_geocodes.py:27-28",
+        "_warn": "DESTRUKCYJNE w 2. mieście — uzna cały rynek za corrupted"
+      },
+
+      "osrm": {
+        "url_engine": "http://localhost:5001",
+        "url_console": "http://127.0.0.1:5001",
+        "url_courier_api": "http://localhost:5001",
+        "url_tools": "http://localhost:5001",
+        "_role": "infra single-extract (Podlaskie); JEDEN graf regionalny",
+        "_source": "dispatch_v2/osrm_client.py:43; nadajesz_clone/.../core/config.py:67; courier_api/config.py:204; dispatch_v2/tools/freshness_shadow_monitor.py:34",
+        "_warn": "Multi-city wymaga multi-region extract lub router-per-city po city_id"
+      },
+
+      "calibration": {
+        "haversine_road_factor": 1.37,
+        "_road_factor_sources": [
+          "dispatch_v2/common.py:637 HAVERSINE_ROAD_FACTOR_BIALYSTOK",
+          "dispatch_v2/tools/build_speed_tiers.py:64",
+          "dispatch_v2/tools/courier_speed_build.py",
+          "nadajesz_clone/panel/backend/app/services/economics.py:57 ROAD_FACTOR"
+        ],
+        "max_urban_kmh": 90.0,
+        "_max_kmh_source": "dispatch_v2/tools/build_speed_tiers.py:72; courier_speed_build.py:91",
+        "fallback_base_speeds_kmh": {
+          "weekday_rush": 20,
+          "weekday_evening": 24,
+          "lunch_midday": 28,
+          "_note": "pełna tabela w common.py:687 FALLBACK_BASE_SPEEDS_KMH (n=42494 dostaw Białystok)",
+          "_source": "dispatch_v2/common.py:687"
+        },
+        "traffic_table_ref": {
+          "symbol": "V326_OSRM_TRAFFIC_TABLE",
+          "_source": "dispatch_v2/common.py:~730-850 (weekday/saturday/sunday, TomTom Białystok)",
+          "_note": "mnożniki korka per-godzina — kalibrowane empirycznie na Białystok; multi-city = tabela per-miasto"
+        }
+      },
+
+      "peak_windows": {
+        "engine_time_buckets": {
+          "weekday_rush": [15, 19],
+          "weekday_evening": [19, 22],
+          "lunch_midday": [11, 15],
+          "weekend_evening": [17, 22],
+          "_source": "dispatch_v2/common.py:696-720 get_time_bucket (godziny lokalne Warsaw)"
+        },
+        "long_haul_peak": {
+          "start_hour": 14,
+          "end_hour": 17,
+          "_source": "dispatch_v2/common.py:955-956 LONG_HAUL_PEAK_HOURS_START/END (R7; dziś no-op bo LONG_HAUL_DISTANCE_KM=99)"
+        },
+        "console_forecast_peak_hours": {
+          "hours": [17, 18, 19],
+          "_source": "nadajesz_clone/panel/backend/app/services/forecast21.py:60 PEAK_HOURS"
+        },
+        "ops_window": {
+          "start_hour": 6,
+          "end_hour": 20,
+          "_source": "systemd dispatch-new-courier-watch.timer:5 OnCalendar 06..20 Europe/Warsaw"
+        }
+      },
+
+      "geo_scale_thresholds": {
+        "max_pickup_reach_km": 15.0,
+        "bundle_max_deliv_spread_km": 8.0,
+        "po_drodze_dist_km": 2.0,
+        "osrm_max_snap_km": 5.0,
+        "r5_detour_free_threshold_km": 0.5,
+        "_note": "część już env-param (SCALE-01): MAX_PICKUP_REACH_KM, BUNDLE_MAX_DELIV_SPREAD_KM, OSRM_MAX_SNAP_KM, R5_DETOUR_*",
+        "_source": "dispatch_v2/common.py:583,2446,2511,2862,2938-2940"
+      },
+
+      "reglas_geo_business": {
+        "breach_min": 35.0,
+        "_source": "nadajesz_clone/panel/backend/app/services/economics.py:59 BREACH_MIN (Z2)",
+        "city_home_key": "bialystok",
+        "_city_home_sources": [
+          "nadajesz_clone/panel/backend/app/services/economics.py:61 CITY_HOME",
+          "courier_api/delivery_town.py:38 _HOME_KEY",
+          "nadajesz_clone/.../core/config.py:206 ziomek_default_city='Białystok'",
+          "dispatch_v2/geocoding.py:255-256 legacy fallback city='Białystok'"
+        ]
+      },
+
+      "districts_ref": {
+        "engine_module": "dispatch_v2/districts_data.py",
+        "districts_symbol": "BIALYSTOK_DISTRICTS",
+        "outside_zones_symbol": "BIALYSTOK_OUTSIDE_CITY_ZONES",
+        "adjacency_symbol": "BIALYSTOK_DISTRICT_ADJACENCY",
+        "_adjacency_source": "dispatch_v2/common.py:1555",
+        "_note": "28 osiedli (info.bialystok.pl) + satelity (Wasilków/Choroszcz/Zabłudów...). Multi-city = plik dzielnic per-miasto; drugie miasto puste = wszystko 'cross-quadrant'"
+      },
+
+      "quadrant_score_mult": {
+        "cross": 0.1,
+        "same": 1.0,
+        "_note": "mnożniki OK (skala-agnostyczne), dane kwadrantów NIE",
+        "_source": "dispatch_v2/common.py:3243-3284 V327_BUNDLE_*_QUADRANT_SCORE_MULT"
+      },
+
+      "hosts": {
+        "panel_base_url": "https://bialystok.nadajesz.pl",
+        "gastro_base": "https://www.gastro.nadajesz.pl",
+        "_source": "nadajesz_clone/.../core/config.py:150; drtusz_bridge/config.py:17, papu_dispatch_bridge/config.py:22"
+      },
+
+      "bridge_refs": {
+        "city_map_json": [
+          "scripts/papu_dispatch_bridge/city_map.json",
+          "scripts/drtusz_bridge/city_map.json"
+        ],
+        "_note": "2 IDENTYCZNE kopie: 157 miejscowości aglomeracji białostockiej → id stref panelu (bliźniak)",
+        "companies_symbol": "drtusz_bridge/config.py:36-124 COMPANIES (11 firm, pickup_rules po ulicach Białegostoku)",
+        "nadajesz_kurier_gastro_id": 94
+      }
+    }
+  },
+
+  "_migration_notes": {
+    "twins_same_value_multiple_places": {
+      "center_53.1325_23.1688": ["courier_resolver.py:110", "osrm_client.py:530", "dispatch_pipeline.py:_BIALYSTOK_CENTER_FALLBACK", "chain_eta.py:28", "bootstrap_restaurants.py:19"],
+      "road_factor_1.37": ["common.py:637", "tools/build_speed_tiers.py:64", "tools/courier_speed_build.py", "console economics.py:57"],
+      "osrm_5001": ["osrm_client.py:43", "courier_api/config.py:204", "console config.py:67", "tools/freshness_shadow_monitor.py:34"],
+      "city_home_bialystok": ["economics.py:61", "courier_api/delivery_town.py:38", "console config.py:206", "geocoding.py:255"],
+      "geocode_bbox": ["common.py:1152 (silnik)", "console config.py:131 (INNE wartości — węższe!)", "tools/invalidate_city_bugged_geocodes.py:27 (MUTATOR)"]
+    },
+    "second_city_placeholder": "Nowy wpis (np. 'warszawa', id:2) dodać PO wybudowaniu warstwy odczytu configu z fallbackiem; przed 2. miastem NIE ma konsumenta tego pliku."
+  }
+}
