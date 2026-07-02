@@ -22,13 +22,20 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
+# L1.2 (2026-07-02, PO bramce at-168 08:00): klik-fallback przepięty z MARTWEGO
+# dispatch_state/sla_log (zamrożony 2026-06-20 → świeże dni bez klik-fallbacku,
+# tylko ~12% fizyki) na ŻYWY kanon `ledger_io.iter_sla`. Stemple żywego loga są
+# naive-Warsaw (writer sla_tracker) → `parse_sla_ts` do aware UTC (bez tego join
+# z aware-UTC korpusem miałby +2h błędu). Priorytet FIZYKI (gps_truth) i cała
+# semantyka werdyktu O2 — BEZ ZMIAN; tylko źródło odczytu klik-fallbacku.
+from dispatch_v2.tools import ledger_io  # noqa: E402
+
 STATE_DIR = "/root/.openclaw/workspace/dispatch_state"
 CORPUS = f"{STATE_DIR}/bundle_calib_shadow.jsonl"
-SLA_LOG = f"{STATE_DIR}/sla_log.jsonl"
 # #5b (top10 #1, 29.06): fizyczna prawda dostawy z GPS (arrived_at_customer) — PRIORYTET
 # nad klikiem (sla_log), bo klik ZAWYŻA wiek o medianę +2 min (kalibracja #5b). Outcome-join
 # O2 liczy realne naruszenie R6 na FIZYCZNYM przyjeździe, nie na przyciskowym delivered_at.
-GPS_TRUTH = f"{STATE_DIR}/gps_delivery_truth.jsonl"
+GPS_TRUTH = ledger_io.LEDGER["gps_truth"]  # ta sama ścieżka — single-source
 R6_MAX_MIN = 35.0
 MIN_MULTI = 20            # minimum UNIKALNYCH worków multi-order na pewny werdykt
 MATERIAL_PCT = float(os.environ.get("BUNDLE_CALIB_MATERIAL_PCT", "2.0"))  # próg % worków policy-improved = GO
@@ -157,10 +164,11 @@ def _calib_under_z(multi, differs, zkeys):
 
 
 def _sla_delivered_index():
-    """{order_id: delivered_at(datetime)} z sla_log (ostatni wpis/oid) — do outcome-join."""
+    """{order_id: delivered_at(datetime)} z ŻYWEGO sla_log (kanon ledger_io.iter_sla,
+    ostatni wpis/oid) — klik-fallback outcome-joinu (pod fizyką gps_truth)."""
     idx = {}
-    for r in _read_jsonl(SLA_LOG):
-        d = _parse(r.get("delivered_at"))
+    for r in ledger_io.iter_sla(None):
+        d = ledger_io.parse_sla_ts(r.get("delivered_at"))
         if d is not None:
             idx[str(r.get("order_id"))] = d
     return idx
