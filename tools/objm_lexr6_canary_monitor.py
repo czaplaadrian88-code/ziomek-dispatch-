@@ -23,6 +23,15 @@ L1.2 (2026-07-01): odczyt shadow_decisions przepięty na kanon
 `ledger_io.iter_shadow_decisions` (jedno źródło odczytu ledgera zamiast lokalnej
 kopii `_rot_lines`; semantyka metryk/bramek BEZ ZMIAN — per-rekord filtr ts
 zostaje tu). `_rot_lines` zostaje TYLKO dla dispatch.log/watcher.log (nie-ledger).
+
+perf-SLO (2026-07-02, finding E audytu 2.0): DODATKOWA sekcja budżetu wydajności
+za flagą `ENABLE_PERF_SLO_ALERT` (DOMYŚLNIE OFF). Progi i ewaluacja pochodzą z
+`tools/perf_budget_report.py` (JEDNO źródło SLO — brak dryfu bliźniaczych progów).
+Rozszerzenie jest CZYSTO ADDYTYWNE: przy fladze OFF wyjście na tym samym wejściu
+jest BAJT-IDENTYCZNE (blok SLO się nie wykonuje, `perf_budget_report` nie jest
+nawet importowany). Alert edge-triggered (stan: `perf_slo_state.json`), Telegram
+tylko przy --notify i tylko przy WEJŚCIU w breach. Istniejące metryki/bramki
+objm-lexr6 oraz checkpoint at-200 (03.07) — NIETKNIĘTE.
 """
 import json, os, sys, glob, gzip, argparse, re
 from datetime import datetime, timezone, timedelta
@@ -44,6 +53,15 @@ BASELINE_DEFAULT = "/root/.openclaw/workspace/dispatch_state/objm_lexr6_canary_b
 NOTIFY_STATE = "/root/.openclaw/workspace/dispatch_state/objm_lexr6_canary_notify_state.json"
 # Utrzymujący się STOP/WARN przypominaj nie częściej niż co tyle h (env-overridable). 0 = bez przypomnień.
 NOTIFY_REMIND_H = float(os.environ.get("CANARY_NOTIFY_REMIND_H", "2.0"))
+
+# ── perf-SLO (finding E audytu 2.0) — DODATEK za flagą, DOMYŚLNIE OFF ────────
+# Stan edge-triggera SLO (OSOBNY plik — nie koliduje z NOTIFY_STATE canary ani
+# niczym w dispatch_state; sprawdzone grepem). Alert tylko przy WEJŚCIU w breach.
+PERF_SLO_STATE = "/root/.openclaw/workspace/dispatch_state/perf_slo_state.json"
+# Utrzymujący się breach przypominaj nie częściej niż co tyle h (env-overridable). 0 = bez przypomnień.
+PERF_SLO_REMIND_H = float(os.environ.get("PERF_SLO_REMIND_H", "2.0"))
+# Min próba segmentu w oknie, poniżej której percentyle to szum (nie bramkuje SLO).
+PERF_SLO_MIN_N = int(os.environ.get("PERF_SLO_MIN_N", "20"))
 
 # Progi gate'ów (env-overridable; KANON = plan, Adrian potwierdza domenę)
 KOORD_STOP_PP   = float(os.environ.get("CANARY_KOORD_STOP_PP", "5.0"))
@@ -422,6 +440,130 @@ def _notify_decision(stops, warns, prev, now, remind_after):
     return send, msg, {"signature": sig, "level": level, "last_sent": new_sent}
 
 
+# ── perf-SLO: flaga, edge-trigger, stan, runner (DODATEK, gated) ────────────
+def _perf_slo_enabled():
+    """Flaga alertu SLO (DOMYŚLNIE OFF). Env `ENABLE_PERF_SLO_ALERT` (1/0)
+    nadpisuje flags.json (wzór flag_state()). Flip = rola koordynatora, nie tool."""
+    env = os.environ.get("ENABLE_PERF_SLO_ALERT")
+    if env is not None:
+        return env.strip().lower() in ("1", "true", "yes", "on")
+    try:
+        return bool(json.load(open(FLAGS)).get("ENABLE_PERF_SLO_ALERT", False))
+    except Exception:
+        return False
+
+
+def _slo_verdict_signature(breaches):
+    """(poziom, sygnatura) werdyktu SLO. Sygnatura = poziom + zbiór segment:metryka
+    → zmiana zbioru wyzwala edge-triggered alert (wzór _verdict_signature)."""
+    level = "BREACH" if breaches else "OK"
+    items = ";".join(sorted(f"{b['segment']}:{b['metric']}" for b in breaches))
+    return level, f"{level}|{items}"
+
+
+def _slo_notify_decision(breaches, prev, now, remind_after):
+    """Pure (testowalne): czy wysłać Telegram SLO (edge-triggered) + treść + stan.
+
+    Reguła jak _notify_decision:
+      - OK: alert TYLKO gdy poprzednio był BREACH (powrót w budżet), raz.
+      - BREACH: alert gdy sygnatura ≠ poprzednia (nowy segment/metryka), albo gdy
+        ten sam breach trwa dłużej niż remind_after (rzadkie przypomnienie).
+    Zwraca (send: bool, msg: str|None, new_state: dict).
+    """
+    level, sig = _slo_verdict_signature(breaches)
+    prev_sig = prev.get("signature")
+    prev_level = prev.get("level")
+    prev_sent_raw = prev.get("last_sent")
+    prev_sent = _parse_iso(prev_sent_raw) if prev_sent_raw else None
+    send, msg = False, None
+    if level == "OK":
+        if prev_level and prev_level != "OK":
+            send = True
+            msg = "🟢 PERF-SLO OK — wydajność wróciła w budżet (był breach)"
+    else:
+        detail = "; ".join(
+            f"{b['segment']} {b['metric']} {b['value']:.0f}>{b['limit']:.0f} (n={b['n']})"
+            for b in breaches
+        )
+        head = "🔴 PERF-SLO breach (budżet wydajności PERF_budget §5a)"
+        if sig != prev_sig:
+            send, msg = True, f"{head} | {detail}"
+        elif remind_after and (prev_sent is None or (now - prev_sent) >= remind_after):
+            hh = remind_after.total_seconds() / 3600.0
+            send, msg = True, f"{head} (nadal >{hh:.0f}h) | {detail}"
+    new_sent = now.isoformat() if send else prev_sent_raw
+    return send, msg, {"signature": sig, "level": level, "last_sent": new_sent}
+
+
+def _load_slo_state():
+    try:
+        with open(PERF_SLO_STATE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_slo_state(d):
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(PERF_SLO_STATE), prefix=".perf_slo_state_")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(d, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, PERF_SLO_STATE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        raise
+
+
+def _run_perf_slo(since, now, do_notify):
+    """Sekcja SLO (DODATEK, uruchamiana TYLKO gdy _perf_slo_enabled()). Liczy
+    per-segment breach na oknie [since, now], drukuje sekcję i — przy --notify —
+    wysyła edge-triggered alert. READ-only poza własnym plikiem stanu."""
+    from dispatch_v2.tools import perf_budget_report as PB
+    rows = PB.collect(since, now)
+    breaches = PB.evaluate_slo(rows, PERF_SLO_MIN_N)
+    seg_lats = PB.by_segment(rows)
+    print("")
+    print("## PERF-SLO (budżet wydajności — PERF_budget §5a; okno canary)")
+    for seg in PB.SEGMENT_ORDER:
+        cfg = PB.SLO_SEGMENTS[seg]
+        lats = seg_lats.get(seg) or []
+        if lats:
+            p50 = PB._pctile(lats, 0.50)
+            p95 = PB._pctile(lats, 0.95)
+            print(f"  {cfg['label']}: n={len(lats)} p50={p50:.0f}/{cfg['p50']:.0f} "
+                  f"p95={p95:.0f}/{cfg['p95']:.0f} (sufit {cfg['ceiling']:.0f})")
+        else:
+            print(f"  {cfg['label']}: n=0")
+    if breaches:
+        for b in breaches:
+            print(f"  🔴 {b['segment']} {b['metric']}: {b['value']:.0f} > limit {b['limit']:.0f} (n={b['n']})")
+    else:
+        print("  🟢 wszystkie segmenty w budżecie")
+
+    if do_notify:
+        prev = _load_slo_state()
+        send, msg, new_state = _slo_notify_decision(
+            breaches, prev, now, timedelta(hours=PERF_SLO_REMIND_H))
+        if send:
+            try:
+                sys.path.insert(0, SCRIPTS)
+                from dispatch_v2.telegram_utils import send_admin_alert
+                send_admin_alert(msg, priority="low")
+            except Exception as e:
+                print(f"[perf-slo notify pominięte: {e!r}]")
+                new_state["last_sent"] = prev.get("last_sent")  # nie przesuwaj zegara → retry/remind
+        try:
+            _save_slo_state(new_state)
+        except Exception as e:
+            print(f"[zapis perf-slo state pominięty: {e!r}]")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--window-min", type=int, default=120)
@@ -539,6 +681,12 @@ def main():
             _save_notify_state(new_state)
         except Exception as e:
             print(f"[zapis notify-state pominięty: {e!r}]")
+
+    # perf-SLO (finding E audytu 2.0): DODATKOWA sekcja budżetu wydajności —
+    # TYLKO gdy flaga ON. Domyślnie OFF → blok pomijany, perf_budget_report NIE
+    # importowany → wyjście na tym samym wejściu bajt-identyczne (at-200 bezpieczny).
+    if _perf_slo_enabled():
+        _run_perf_slo(since, now, a.notify)
     return 0
 
 
