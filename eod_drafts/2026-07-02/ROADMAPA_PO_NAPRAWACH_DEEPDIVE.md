@@ -1,5 +1,11 @@
 # ROADMAPA „po naprawach poaudytowych" — wdrożenie rekomendacji z analizy deep-dive
 
+> **STATUS 02.07 ~12:05 — KROK 0 WYKONANY (commit `1bf873e`, 3 narzędzia read-only + raporty KROK0A/B/C):**
+> **0a** `tools/eta_truth_map.py` — recon: logowanie WYSTARCZA (żadnych zmian silnika nie trzeba); pierwsza mapa 28.06→02.07 (n=553/nogę): **noga ODBIORU med −3,6 min optymizmu** (scarcity pool≤3: −5,1; tier new −6,4 / gold −2,3; skrajni kurierzy do −15); **noga DOSTAWY bias +1,3 ≈ 0, ale rozrzut ±17 min** → Fala A = korekta odbioru per segment + zwężanie wariancji dostawy, NIE przesuwanie średniej dostawy. Stary „−18 min" po fixach NIEAKTUALNY (słusznie nie flipowaliśmy).
+> **0b** `tools/greedy_vs_lap_replay.py` — LAP vs greedy: 42,8% okien inne optimum wg score, ale FIZYCZNIE ~0,12–0,2 min/zlecenie → **C3 (globalna selekcja) SKREŚLONE — niski ROI potwierdzony pomiarem**; strata siedzi w miękkich członach score, nie w dojeździe.
+> **0c** `tools/proposal_churn_monitor.py` — baseline churn 83,7% (7d: 81,9%); dekompozycja: **~41–43% czysty flicker** (cel histerezy B1), ~36% pool_shrank (podaż — NIE ruszać histerezą), **14,1% churn pozycyjny pos_source (gps↔interp↔last)** = osobny wątek do Fali B (styk z K5/L2). Propozycja timera w raporcie 0c — instalacja za ACK.
+> Mapę 0a odświeżyć po restartach/deployach FALA-1 na pełnym ≥7-dniowym oknie (A3 = wersja cykliczna).
+
 **Data:** 2026-07-02 · **Bazuje na:** `ANALIZA_DEEPDIVE_DOKUMENTY_REKOMENDACJE.md` (ten sam katalog) + decyzja Adriana 02.07: „czasy raz zbyt optymistyczne, raz pesymistyczne, ostatnio w miarę ok — trzeba DOKŁADNIE zmierzyć, per kurier, tier, bundle/solo".
 **Zasada nadrzędna:** NIC nie flipujemy na starych liczbach. Bias −18 min z analizy 02.07 był liczony na n=75 i oknie głównie sprzed 26.06 — a baza ETA się od tego czasu zmieniała (uplift ruchu ~23.06, fix osrm-double-traffic 28.06, rekalibracja DWELL). Pomiar z Kroku 0 jest BRAMKĄ dla całej Fali A: jeśli pokaże, że czasy są już OK, Falę A zamykamy jako „no-op, nie ruszać" — to też jest wynik.
 **Rytm każdego punktu:** protokół #0 (ETAP 0→7) + „przed każdym tematem: zweryfikuj stan → udowodnij pomiarem że warto" + prosty polski opis przed kodem + ACK na flipy.
