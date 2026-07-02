@@ -2300,6 +2300,23 @@ def _gc_courier_plans(orders_state: Dict[str, Any], now: datetime,
     return rep
 
 
+def _l3_maybe_gc(orders_state: Dict[str, Any], now: datetime,
+                 summary: Dict[str, Any]) -> None:
+    """Bramka flagi GC (wyekstrahowana z run_recheck — testowalna ON≠OFF bez
+    pełnego ticku; test_flag_effect_coverage wymaga dowodu efektu flagi).
+    OFF (`ENABLE_COURIER_PLANS_GC`) = brak GC jak dziś; fail-soft."""
+    try:
+        from dispatch_v2 import common as _C_gc
+        if _C_gc.decision_flag("ENABLE_COURIER_PLANS_GC"):
+            _gc_courier_plans(
+                orders_state, now, summary,
+                dry_run=bool(_C_gc.flag("PLAN_GC_DRY_RUN", True)),
+                max_age_h=float(_C_gc.flag("PLAN_GC_MAX_AGE_H", 48.0)),
+            )
+    except Exception as _e:
+        _log.warning(f"GC courier_plans fail: {type(_e).__name__}: {_e}")
+
+
 def run_recheck() -> Dict[str, Any]:
     """Main entry point. Returns summary dict."""
     # ETAP 4 (2026-06-10, Z-04): fingerprint flag decyzyjnych — MUSI być
@@ -2386,16 +2403,7 @@ def run_recheck() -> Dict[str, Any]:
     # L3 (F2/K2): GC courier_plans (terminal-stop prune + zombie by age/no-active).
     # PLAN_GC_DRY_RUN default True (pierwszy flip = tylko raport). Istniejące API
     # pod lockiem. OFF (ENABLE_COURIER_PLANS_GC) = brak GC jak dziś.
-    try:
-        from dispatch_v2 import common as _C_gc
-        if _C_gc.decision_flag("ENABLE_COURIER_PLANS_GC"):
-            _gc_courier_plans(
-                orders_state, now, summary,
-                dry_run=bool(_C_gc.flag("PLAN_GC_DRY_RUN", True)),
-                max_age_h=float(_C_gc.flag("PLAN_GC_MAX_AGE_H", 48.0)),
-            )
-    except Exception as _e:
-        _log.warning(f"GC courier_plans fail: {type(_e).__name__}: {_e}")
+    _l3_maybe_gc(orders_state, now, summary)
 
     # A (2026-06-24): po wszystkich zmianach planów dosyłamy świeże ETA do cache'a
     # czytanego przez konsolę+apkę (gap-fill mógł dopisać/zmienić plany → reload).

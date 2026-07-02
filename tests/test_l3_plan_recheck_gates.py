@@ -337,3 +337,38 @@ def test_mutation2_gc_without_active_guard_would_kill_live(PR, tmp_path, monkeyp
     killed.clear()
     PR._gc_courier_plans(orders, datetime.now(_UTC), {}, dry_run=False, max_age_h=48.0)
     assert "LIVE" not in killed  # prawdziwa logika chroni żywy
+
+
+# ---------------------------------------------------------------------------
+# ON≠OFF flagi ENABLE_COURIER_PLANS_GC na REALNEJ gałęzi produkcyjnej
+# (_l3_maybe_gc — ekstrakt z run_recheck; test_flag_effect_coverage wymaga
+# dowodu efektu flagi po nazwie, nie wywołania _gc_courier_plans wprost).
+# ---------------------------------------------------------------------------
+
+def _drive_maybe_gc(PR, monkeypatch, flags):
+    from dispatch_v2 import common
+    calls = []
+    monkeypatch.setattr(common, "load_flags", lambda: dict(flags))
+    monkeypatch.setattr(PR, "_gc_courier_plans",
+                        lambda os_, now_, summ_, dry_run, max_age_h:
+                        calls.append({"dry_run": dry_run, "max_age_h": max_age_h}))
+    PR._l3_maybe_gc({}, datetime(2026, 7, 2, 12, 0, tzinfo=_UTC), {})
+    return calls
+
+
+def test_gc_flag_off_no_gc(PR, monkeypatch):
+    """OFF: _gc_courier_plans NIE wywołany (zachowanie jak dziś)."""
+    assert _drive_maybe_gc(PR, monkeypatch, {"ENABLE_COURIER_PLANS_GC": False}) == []
+
+
+def test_gc_flag_on_calls_gc_dry_run_default(PR, monkeypatch):
+    """ON bez PLAN_GC_DRY_RUN: GC wywołany w trybie dry_run=True (bezpieczny default)."""
+    calls = _drive_maybe_gc(PR, monkeypatch, {"ENABLE_COURIER_PLANS_GC": True})
+    assert calls == [{"dry_run": True, "max_age_h": 48.0}]
+
+
+def test_gc_flag_on_respects_dry_run_false(PR, monkeypatch):
+    """ON + PLAN_GC_DRY_RUN=False: GC wywołany ostro (realne kasowanie za świadomym flipem)."""
+    calls = _drive_maybe_gc(PR, monkeypatch,
+                            {"ENABLE_COURIER_PLANS_GC": True, "PLAN_GC_DRY_RUN": False})
+    assert calls == [{"dry_run": False, "max_age_h": 48.0}]
