@@ -1,0 +1,146 @@
+# ZIOMEK — JEDEN REJESTR FINDINGÓW (LEDGER) · PAS 0.A audytu 2.0
+
+**Data:** 2026-07-02 · **Tryb:** READ-ONLY (zero zmian produkcji; jedyny zapis = ten plik + `AUDYT2/L01-*.md`) · **Autor:** lane L01-rejestr-findingow
+**Cel (anty-K1 dla samych audytów):** scalić findingi z 4 rejestrów w JEDEN z ujednoliconym STATUSEM + WŁAŚCICIELEM, żeby żaden nie był SIEROTĄ. Reguła trwała: **każdy przyszły audyt DOPISUJE tutaj, nie tworzy nowego rejestru.**
+
+**Źródła scalone:**
+- **(a) 27.06** — `eod_drafts/2026-06-27/ZIOMEK_DEEP_AUDIT_FINDINGS.json` (**81 findingów**: 2×P1, 31×P2, 48×P3) + `ZIOMEK_DEEP_AUDIT_REPORT.md`.
+- **(b) 30.06 Faza 1** — `FAZA1_01` (53 rooty→26 przetrwałych) + `FAZA1_02` (13 klastrów konfliktu) + `FAZA1_03` (49 przyrządów, 19 VOID) + `ZIOMEK_ROOTCAUSE_AUDIT_allocation_family` (11 rootów) + `ZIOMEK_UNIFIED_AUDIT` (K1-K7 = fundament F1-F7) + preshift-audit.
+- **(c) 05.07** — `AUDIT_2026-05-07/` (20 ryzyk R + F1-F20 + RC1-RC7 + roadmapa M1-M5).
+- **(d) memory pion-audytów** — preshift-pickup-floor + allocation-family (już scalone w K1-K7).
+
+**Legenda STATUS:** `fixed-live` (naprawione i LIVE) · `fixed-partial` (część dostarczona) · `deferred` (kod/plan gotowy, flip/wykonanie za bramką/ACK) · `open` (ma właściciela, nie wykonane) · `refuted` (adwersaryjnie obalone jako osobny otwarty root) · **`ORPHAN`** (open, właściciel = NIKT).
+**Legenda WŁAŚCICIEL:** `L0..L8` = fala Fazy 3 (roadmapa `FAZA1_05`) · `bramka DD.MM` = data-gated · `deferred #N` = zaparkowane z właścicielem (TOP-10) · `2.0 PionX` = PROPOZYCJA audytu 2.0 (nie-ACK) · **`NIKT`** = sierota.
+
+---
+
+## 1. STATYSTYKA (nagłówek — „ile findingów / ile bez właściciela")
+
+| Miara | Wartość |
+|---|---|
+| **Raw findingi skatalogowane (4 audyty, przed cross-dedup)** | **~247** = 81 (27.06) + 53 rooty + 49 przyrządów + 13 klastrów (30.06) + 40 (05.07: 20R+20F) + 11 (allocation). Unified K1-K7 i preshift = konsolidacje (nie double-count). |
+| **Distinct rooty po cross-dedup** | ~26 rootów koherencji (30.06, absorbują allocation+preshift+większość 81) + 7 RC strukturalnych (05.07; RC1≈K1 nakładka) + sieroty. |
+| **27.06 (81): rozkład właścicielstwa** | 65 owned/closed · **16 ORPHAN** (11 indywidualnych + 5 klaster postpone). |
+| **30.06 (26 przetrwałych rootów)** | 26/26 **owned** przez L0-L8 (100%). +13 refuted, +14 deferred-cap→L6.E/L7/L8, +49 przyrządów→higiena L0/L1/L6/L7/L8. |
+| **05.07 (40 findingów→7 RC)** | quick-wins F2/logrotate/MemoryMax = **partial** (OnFailure na większości, ale NIE cod-weekly); struktura RC1/RC2/RC4/RC5/RC6/SPOF/SLO/security = **open, proposed-2.0-nie-ACK** (~10 pozycji un-owned) + **1 żywa sierota: `dispatch-cod-weekly` FAILED+SILENT**. |
+| **allocation (11)** | owned (L4/L5/L6/L7) lub refuted. |
+| **⭐ OPEN BEZ WŁAŚCICIELA (sieroty) — RAZEM** | **~27**: **16 „cichych sierot" 27.06** (nikt nigdzie nie śledzi) + **1 żywa** (cod-weekly, silent) + **~10 strukturalnych 05.07** (znane-otwarte, czekają na ACK 2.0). „Cichych sierot z fix-właścicielem=NIKT" = **17**. |
+
+**Najważniejszy wniosek PAS 0.A:** rejestry NAPRAWDĘ nie były scalone. **16 findingów z 86-agentowego audytu 27.06 NIE weszło do korpusu 30.06** (grep całego korpusu = 0 trafień — patrz §4) i nie mają fix-właściciela. Flagowy przykład z designu 2.0 (`osrm-fallback-double-traffic`) POTWIERDZONY jako sierota + znaleziono 15 rodzeństwa. Dodatkowo **oś 05.07 (RC1/RC4/SPOF/SLO/security) leży 2 miesiące** i JEST żywo szkodliwa (cod-weekly failed+silent 2 dni, dowód poniżej).
+
+---
+
+## 2. MASTER-TABELA: findingi 27.06 (81) → STATUS + WŁAŚCICIEL
+
+> Owned pogrupowane po właścicielu (dla czytelności); **sieroty wyliczone indywidualnie** (§3).
+
+### 2.1 FIXED-LIVE / FIXED-PARTIAL (na dziś 01.07)
+
+| Grupa (findingi) | # | STATUS | WŁAŚCICIEL | Dowód |
+|---|---|---|---|---|
+| **Serializer/metryki**: shser-inv-feas-marker, shser-r6-tiercap, shser-eta-source, shser-effective-start-ab, shser-prefixless-families, metser-r6-hardcap-tier, metser-post-shift-overrun, metser-r1r5r8-magnitude, metser-eta-source, metser-end-of-day-salvage, metser-feasibility-batch, metser-wave-bonus | 12 | fixed-live | **L1.1** (LIVE 01.07 ~20:10) | allowlist→deny `_METRICS_EXCLUDE`, 38 kluczy/14 HARD; commit `85d92f7` |
+| **Route-order/carried/panelsync**: pr-app-panel-carried-relax, pr-app-trust-canon-masked-dead, pr-route-podjazdy-not-shared, cap-carried-relax-app-console, cap-build-view-trust-canon-dead-flag, cap-console-reimpl, cap-monitor-trust-canon-env, cap-panelsync-orphan | 8 | fixed-partial | **L6.A** (golden DONE 01.07; PoC-TARGET import wspólny = pending) | golden 13/13 parytet; panelsync usunięty `0c914c4`; fail-loud import `290dd09` |
+
+### 2.2 OPEN z właścicielem (fala L / bramka / deferred)
+
+| Grupa (findingi) | # | STATUS | WŁAŚCICIEL |
+|---|---|---|---|
+| **R6/SLA-anchor/O2/paczka**: feas-r6-sla-anchor-gap, feas-o2-paczka-blind, feas-o2-cap-not-escalation, rst-o2-overage-cap-flat-tier, rst-greedy-step15-not-o2 | 5 | open | **L6.B / bramka 02.07** (O2-review) |
+| **objm/frozen-lexqual/twin-bucket**: twin-objm-lexr6-shadow-stale, twin-fastest-pickup-key-stale, twin-pln-pure-resort, twin-post-shift-lexqual-3v4 | 4 | open | **L6.D / bramka 03.07** (objm at-200) |
+| **feas-carry/hard-split**: feas-carry-readmit-verdict-relabel, twin-feascarry-shadow-vs-readmit-cap, twin-readmit-bypasses-feasibility-first | 3 | open | **L7.4 / L7** (feas-carry OFF; re-flip za protokół) |
+| **recanon/committed-prop**: recanon-reassign-loser-gap, recanon-committed-change-no-resequence, pr-committed-prop-twin-path-gap, pis-cancel-disappeared-no-recanon | 4 | open | **L3** (plan_recheck GC + recanon-symmetry) |
+| **flagi/conftest/env-frozen**: tests-etap4-registry-drift-isolation-leak (P1), flags-repo-shadow-override-stale, flags-a4-test-flag-dead-key, flags-plan-recheck-envfrozen-dropin, tk-pending-pool-env-frozen, flags-stale-enabled-oneshot-timers | 6 | open | **L0** (1 rejestr-flag + fingerprint + conftest strip) |
+| **współbieżność pending**: tk-pending-dualwriter, dsi-pending-multiwriter-shared-tmp-no-lock, dsi-pending-no-assign-remover-ttl-only | 3 | open | **L7.5** (fcntl; gate C2 przed re-enable Telegram) |
+| **martwy kod / sprzątanie**: crg-latest-order-by-event-dead, pis-cancelled-status-deadwrite, pis-parse-guard-live-doc-drift, pr-commitment-emitter-skeleton, mlcal-validation-gate-cancelled-path, tests-dead-v328-layer4-duplicate, tests-bak-file-proliferation, rst-grouping-greedy-double-pickup(→flag-coupling C3), rst-chain-eta-feeds-eta-pickup-utc(→eta-deferred) | 9 | open | **L8** (dead-code + clutter + threshold) |
+| **kalibracja/R6-bagcap**: feas-r6-bagcap-untested-live (P1) | 1 | open | **L5** (⛔HARD ACK; = 🔥 „quantile luzuje HARD R6") |
+| **LGBM**: mlcal-lgbm-primary-flag-not-wired, mlcal-lgbm-tier-feature-name-lookup, mlcal-prepbias-r6-anchor-twin-path, mlcal-dual-prepbias-artifacts | 4 | open | **deferred #9 LGBM eval** (weak — pokrycie tematyczne, nie itemized) |
+| **testy-oracle**: tests-script-runner-xfail-masks (B19), tests-seq-replay-verdict-untested, tests-plan-recheck-tier-dwell-no-onoff | 3 | open | **L0 / B19** (oracle-erosion; xfail = F-B19-03/08) |
+
+### 2.3 REFUTED / CLOSED
+
+| Finding | STATUS | Dlaczego |
+|---|---|---|
+| p5-cancel-recanon-confirmed-fixed | refuted/closed | P-5 cancel/return recanon ZAMKNIĘTE (`0426706`); refuter potwierdził |
+| drive-min-calib-main-off-intentional | closed | drive-speed correction wycofane (temat zamknięty 29.06); „nie flipuj MAIN" = by-design |
+
+### 2.4 ⭐ ORPHAN (open, właściciel = NIKT) — §3 pełne
+
+`osrm-fallback-double-traffic` · `osrm-v2-shadow-aggregate-full-matrix` · `pipe-postshift-gate-exclusion-gap` · `tk-watchdog-keyerror-twin` · `tk-shadow-entry-msgid-null` · `crg-ranking-bundle-skew-live` · `crg-lastpos-ttl-savetime-staleness` · `crg-gpsquality-anchor-ticktime` · `pis-closed-vs-orderids-source-divergence` · `pis-closedids-raw-html-input` · `crg-dedup-byname-bag-loss` · **klaster postpone_sweeper**: `czas-postpone-cid-key-resolution-dead` · `czas-postpone-no-order-event-reemit-dead` · `czas-postpone-assign-verdict-dead-value` · `czas-postpone-pending-schema-mismatch` · `dsi-postpone-sweeper-orders-state-schema-mismatch`.
+
+---
+
+## 3. ⭐ SIEROTY — pełna lista (najważniejszy produkt PAS 0.A)
+
+**Metoda dowodowa:** dla każdego kandydata grep CAŁEGO korpusu 30.06 (`FAZA1_*` + `ZIOMEK_*` + `AUDYT_preshift*` + `backing/*`, 71+ plików) po dystynktywnym terminie. 0 trafień = nie skonsumowany = sierota (§4 pokazuje surowe liczby + kontrolę pozytywną).
+
+| id | Sev | Powierzchnia (plik:linia z 27.06) | Co to jest | Dlaczego SIEROTA (grep) | Rekomendacja |
+|---|---|---|---|---|---|
+| **osrm-fallback-double-traffic** | **P2** | `osrm_client.py` fallback path | Fallback OSRM liczy traffic DWA razy: prędkość-z-korków-bucket AND `get_traffic_multiplier` → czasy ×~1.5 → sztuczne breache R6 **dokładnie gdy OSRM już kuleje** | `traffic`(8) w korpusie = TYLKO `traffic_v2_aggregator` (live-shadow, refuted-DEAD) + one-off tools; **double-count/fallback = 0** | Pojedyncze mnożenie w fallbacku; bliźniak z traffic_v2 mult. Właściciel = **2.A game-day (OSRM-down)** lub L8; DZIŚ NIKT |
+| **crg-ranking-bundle-skew-live** | **P2** | `courier_ranking.py` (L10/PERI) | Leaderboard/tier-ranking używa **bundle-contaminated** metryki, LIVE via Telegram → tier promote/retire na skażonych danych | `leaderboard`=0, `bundle-contaminat`(2)=tylko pickup_slip de-konfundacja (inne). `courier_ranking` = tylko inwentarz PERI (A1), bug NIE śledzony | = klasa 05.07 RC4 (decyzje strategiczne na corrupt data). Odbundlować metrykę tier. NIKT |
+| **pipe-postshift-gate-exclusion-gap** | **P2** | `dispatch_pipeline.py:2307-2315,5043-5058,6325-6348` | `post_shift_overrun_penalty` obniża `final_score`, ale BRAK w `_GATE_RANKING_DELTA_EXCLUSIONS` bramki MIN_PROPOSE → może **cicho wepchnąć decyzję w KOORD-ciszę** (dokładnie luka INV-GATE-SCORE-DELTA, którą docstring nazywa naprawioną dla r1/v319h) | `gate-exclusion`=0, `GATE_RANKING`=0. Korpus ma post_shift_overrun (serializacja VALIDATED) ale NIE tę bramkę | Dodać `post_shift` do krotki wykluczeń (jak r1_progressive/v319h). NIKT |
+| **pis-closed-vs-orderids-source-divergence** | **P2** | `panel_html_parser.py` / `panel_watcher.py` | `closed_ids`(DOM marker) i `order_ids`(JS) to NIEZALEŻNE źródła; ścieżka „disappeared" pre-emptuje → cancel/return misclass | `closed_ids`(1)=tylko lag reconcile 15-90min (B18). Rozbieżność-źródeł = 0 | Jedno źródło prawdy dla stanu zlecenia w parserze. NIKT |
+| **czas-postpone (klaster ×5)** | **P2** | `postpone_sweeper.py`, `czasowka_scheduler` | postpone_sweeper: (1) czyta nieistniejący klucz `cid` (orders_state ma `courier_id`), (2) re-emit NIE zrekonstruuje `order_event` (brak `raw`), (3) sprawdza verdict `('ASSIGN','PROPOSE')` gdy jest tylko PROPOSE, (4) pending-entry bez `message_id/sent_at/expires_at`, (5) `dsi` czyta zły nesting `'orders'` — **cała ścieżka resolution-detection MARTWA** | `postpone`(7) = tylko jako 3-writer współbieżny na pending (B18) + „martwy postpone schema" jako **C2-mina** (arms-on-re-enable) — ale konkretne bugi NIE itemized, BRAK fix-właściciela | Naprawić 5 dead-paths PRZED re-enable Telegrama (gate C2 tylko OSTRZEGA, nie naprawia). NIKT (fix) |
+| **osrm-v2-shadow-aggregate-full-matrix** | P3 | `dispatch_pipeline.py:5663` traffic_v2 | Shadow-aggregate sumuje CAŁĄ macierz OSRM (NxN), nie nogi wybranego planu → telemetria traffic_v2 zawyżona | `aggregate.*matrix`=0. Korpus tylko REFUTUJE że aggregator DEAD; sumowanie-całej-macierzy nie śledzone | Sumować tylko legi planu. NIKT |
+| **tk-shadow-entry-msgid-null** | P3 | `telegram_approver` / shadow pending | Shadow-pisane pending mają `message_id=None` → reply/postpone/keyboard-strip crashuje przy re-enable | `message_id`=0 w korpusie | Guard None lub nie pisać msgid-zależnych. NIKT (arms-on-re-enable) |
+| **tk-watchdog-keyerror-twin** | P3 | `telegram_approver` watchdog expired-loop | Pętla wygasania używa `state['pending'][oid]` bez guardu (bliźniak startup MA guard) → KeyError | `watchdog`(3)=observability/systemd; expired-loop/KeyError = 0 | Symetryzować guard z bliźniakiem startup. NIKT |
+| **crg-lastpos-ttl-savetime-staleness** | P3 | `courier_resolver` last-known-pos | TTL liczony od tick save-time, nie od observation-time → uratowana pozycja przeżywa realną (stale rescue) | `savetime`/`save-time`=0 | TTL od czasu OBSERWACJI GPS. NIKT |
+| **crg-gpsquality-anchor-ticktime** | P3 | `courier_resolver` GPS-02 teleport | Kotwica teleportu bierze store SAVE-time (tick) nie GPS fix-time → próg teleportu shadow-kalibrowany źle | `teleport`(2)=inne konteksty; fix-time anchor = 0 | Kotwica z GPS fix-time. NIKT |
+| **pis-closedids-raw-html-input** | P3 | `panel_html_parser` | `closed_ids`/address skanują RAW html, `order_ids` skanuje SVG-stripped `html_clean` → asymetria wejścia parsera | jw. closed_ids nie o tym | Jedno wejście (clean) dla obu skanów. NIKT |
+| **crg-dedup-byname-bag-loss** | P3 | `courier_resolver` dedup-by-name | dedup-po-nazwisku może usunąć same-name `courier_id` NIOSĄCY aktywny bag, zostawiając pusty | `dedup-by-name`=0. **allocation R5 badał SEEDING puli (refuted 0/14 zgubionych), NIE usuwanie-z-bagiem** — inny mechanizm | dedup zachowuje wariant z bagiem. NIKT (weak — R5 dotykał sąsiedniej osi) |
+
+**Żywa sierota operacyjna (05.07 klasa F2/RC3 — POTWIERDZONA GROUND-TRUTH DZIŚ):**
+
+| id | Sev | Dowód (systemctl, 07-01) | Dlaczego SIEROTA |
+|---|---|---|---|
+| **dispatch-cod-weekly.service FAILED+SILENT** | **P2 (live)** | `is-failed`→**failed**; `Result=exit-code`, `ExecMainStatus=1`; `ExecMainExitTimestamp=Mon 2026-06-29 06:00:03 UTC` (~2 dni); **`OnFailure=` PUSTE** → **żaden alert nie poszedł** | To DOKŁADNIE klasa 05.07 F2/RC3 („overrides-reset martwy 4 dni"). Design 2.0 §0.2e nazwał; ANEKS zakładał „OnFailure jak inne 11 svc" — **grunt-prawda obala: ten svc NIE ma OnFailure**. NIKT nie naprawia; 2.B tylko PROPONUJE klasę |
+
+**Oś strukturalna 05.07 (open, właściciel = 2.0 Pion 2/3 PROPOZYCJA — nie-ACK; efektywnie un-owned 2 mies.):**
+
+| Root | Sev | STATUS / dowód ground-truth | Właściciel |
+|---|---|---|---|
+| **RC1 filesystem-as-IPC** (=K1 30.06) | P1 | open — brak Postgres/Redis dla dispatch (`systemctl` = 0 dla dispatch; papu-postgres to Papu) → M1/M2 nietknięte | 2.0 3.B (mierz KIEDY) |
+| **RC4 JSONL unbounded / state growth** | P2 | open — `dispatch_state`=**1.2G**, `logs`=**729M** (ground-truth); root `unbounded-append-only-caches` deferred-cap 30.06 | 2.0 2.D + L8 |
+| **single-server SPOF / brak HA** | P1 | open — restart telegrama traci pending in-memory; brak repliki | 2.0 2.E (DR-drill) |
+| **RC3 brak alertów DANOWYCH / SLO** | P1 | open — tylko `latency_alarm.py` (abs, nie trend); sentinel 2046+14456 zdarzeń 0 alertów; cod-weekly silent | 2.0 2.B + 3.A |
+| **RC5 state ownership emergent** (brak `state_io`) | P2 | open — każdy moduł `open(orders_state,'w')`; folklor | 2.0 (poza zakresem — mostek do M4) |
+| **RC6 replay re-runs current code** | P2 | open — `replay_failed.py` na bieżącym kodzie | 2.0 (mostek do M3 event-sourcing) |
+| **Bezpieczeństwo NIGDY nie audytowane** | P1? | open — „biały obszar" (0 pokrycia od początku); przycisk auto-assign = nowa powierzchnia | 2.0 2.F (pierwszy security lane) |
+| **systemd lifecycle / rozrost** | P2 | open — **68 svc + 61 timerów** (ground-truth) vs 05.07=16+12; brak WatchdogSec/MemoryMax/retire | 2.0 2.G |
+| **.bak proliferation** | P3 | open — **330 .bak** (ground-truth); R-16 05.07=342, tests-bak 27.06=268 → praktycznie nie ruszone | L8 / 2.0 2.D |
+
+---
+
+## 4. DOWÓD GREP (surowe liczby — kontrola pozytywna + kandydaci)
+
+Grep całego korpusu 30.06 (`FAZA1_*.md ZIOMEK_*.md AUDYT_preshift*.md backing/*.md`), ERE, case-insensitive, liczba PLIKÓW z trafieniem:
+
+```
+KONTROLA POZYTYWNA (musi >0): carried=57  sentinel=53  serializer=27  route-order=36  feas.carry=28  objm=59
+SIEROTY (0 = nie skonsumowany):
+  osrm-fallback-double-traffic  → double.*traffic=0  fallback.*traffic=0  aggregate.*matrix=0
+  pipe-postshift-gate-exclusion → gate-exclusion=0   GATE_RANKING=0
+  tk-shadow-entry-msgid-null    → message_id=0
+  crg-ranking-bundle-skew-live  → leaderboard=0  (bundle-contaminat=2 → pickup_slip, inne)
+  crg-lastpos-ttl-savetime      → save-time=0  savetime=0
+  tk-watchdog-keyerror-twin     → (watchdog=3 → observability/systemd; expired-loop/KeyError=0)
+  pis-closed-vs-orderids        → (closed_ids=1 → tylko lag reconcile B18, nie rozbieżność-źródeł)
+  crg-dedup-byname-bag-loss     → dedup-by-name=0  (dedup=65 → SLA/R6-anchor C3, inne)
+POKRYTE (>0, NIE sieroty — kontrola anty-fałszywy-alarm):
+  double-insert=9 / grouping=20 → rst-grouping-greedy-double-pickup = OWNED (I-08 flag-coupling OR_TOOLS↔GROUPING, D01-D04)
+  xfail=2 → tests-script-runner-xfail = OWNED (B19 F-B19-03/08 oracle-erosion)
+  postpone=7 → współbieżność OWNED (B18 O1/L7.5); ale dead-schema itemized = ORPHAN
+  prep.bias=18 / chain_eta=18 → tematycznie OWNED (calibration L5 / eta-deferred)
+```
+
+---
+
+## 5. NOTATKI SPÓJNOŚCI / CAVEATY (uczciwie)
+
+- **Owner=„weak"** oznacza: temat/moduł jest w korpusie 30.06 jako inwentarz lub sąsiedni root, ale KONKRETNY finding nie jest itemized ani zaplanowany do fixu. Te są „pół-sieroty" — świadomie zostawione w sekcji owned-weak, nie liczone do 16, ALE oflagowane (LGBM ×4, postpone-jako-C2-mina, tier-dwell-test).
+- **Klaster postpone**: umbrella „martwy postpone schema" JEST widziana (B18 jako C2-mina arms-on-re-enable-Telegram), więc technicznie ma „gate-właściciela" C2 — ALE gate tylko OSTRZEGA przed re-enable, nie ma fix-właściciela dla 5 dead-paths. Zliczam klaster jako 1 sierotę P2 (reprezentującą 5 findingów) — fix nikt nie posiada.
+- **Prawda przyciskowa vs fizyczna**: severity findingów z 27.06 opiera się na `delivered_at`/`picked_up_at` = prawda-PRZYCISKOWA (±~3 min, 0/377 auto_geofence GT). Materialność „ile/dzień" dla większości = NIE policzona (audyt 27.06 deklarował ISTNIENIE, nie liczbę) — oznaczam per-finding.
+- **Ground-truth (systemctl/du/find) 07-01**: cod-weekly FAILED (exit1, OnFailure puste), dispatch_state 1.2G, logs 729M, 330 .bak, 68 svc+61 timerów, brak Postgres/Redis dispatch. To PROXY chwili (dryfuje).
+- **05.07 „owner=2.0"**: 2.0 to PROJEKT do ACK — dopóki Adrian nie akceptuje Pionów 2/3, oś strukturalna jest efektywnie un-owned. Zliczona osobno od „cichych sierot 27.06" (te nie ma nawet propozycji-właściciela).
+- **Linie dryfują** (≥3 sesje/dzień). Każdy fix re-grepuje (ETAP 0).
+
+**STOP przed naprawą — to audyt (read-only).** Naprawa sierot = osobne mini-sprinty ETAP 0→7 + ACK. Rekomendacja kolejności: (1) `osrm-fallback-double-traffic` + cod-weekly (żywe, tanie), (2) klaster postpone PRZED re-enable Telegrama, (3) reszta P2 do L3/L6.B/L8, (4) oś 05.07 = decyzja o ACK 2.0.
