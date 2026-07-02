@@ -26,7 +26,20 @@ MEASURE_PATH = (
     "/root/.openclaw/workspace/scripts/dispatch_v2/"
     "eod_drafts/2026-05-30/measure_pickup_freshness_tail.py"
 )
-SHADOW = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary odczyt TYLKO żywego pliku po cichu tracił
+# okno po rotacji (logrotate size 100M / daily). Semantyka metryk BEZ ZMIAN
+# (per-rekord filtry zostają w konsumencie; iter_jsonl_lines zachowuje
+# prefiltry stringowe).
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+from contextlib import nullcontext as _nullcontext
+
+SHADOW = ledger_io.LEDGER["shadow"]
 REPORT = (
     "/root/.openclaw/workspace/scripts/dispatch_v2/"
     "eod_drafts/2026-05-30/obj_fresh_verdict.md"
@@ -56,7 +69,7 @@ def collect(M, since=None, until=None):
 
     slack, durations = [], []
     n_firm = n_noproj = 0
-    with open(SHADOW) as fh:
+    with _nullcontext(_rotated_logs.iter_jsonl_lines(SHADOW, None)) as fh:
         for line in fh:
             line = line.strip()
             if not line:

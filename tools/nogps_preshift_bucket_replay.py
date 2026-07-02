@@ -14,7 +14,20 @@ import os, sys, json
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 from dispatch_v2 import dispatch_pipeline as D
 
-LOG = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary odczyt TYLKO żywego pliku po cichu tracił
+# okno po rotacji (logrotate size 100M / daily). Semantyka metryk BEZ ZMIAN
+# (per-rekord filtry zostają w konsumencie; iter_jsonl_lines zachowuje
+# prefiltry stringowe).
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+from contextlib import nullcontext as _nullcontext
+
+LOG = ledger_io.LEDGER["shadow"]
 EQUAL_SOURCES = {"no_gps", "pre_shift"}   # Adrian 24.06: oba mają konkurować równo
 
 
@@ -66,7 +79,7 @@ def run():
     n_flip = 0                   # zwycięzca zmienia się live→equal (na korzyść no_gps/pre_shift)
     flips = []
     _diag = {"eq_outscores_informed": 0, "max_gap": 0.0, "faithful": 0, "clean_flip": 0}
-    for line in open(LOG):
+    for line in _rotated_logs.iter_jsonl_lines(LOG, None):
         try:
             r = json.loads(line)
         except Exception:

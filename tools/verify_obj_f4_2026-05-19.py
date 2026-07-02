@@ -23,7 +23,20 @@ from collections import Counter
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
-SD = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary odczyt TYLKO żywego pliku po cichu tracił
+# okno po rotacji (logrotate size 100M / daily). Semantyka metryk BEZ ZMIAN
+# (per-rekord filtry zostają w konsumencie; iter_jsonl_lines zachowuje
+# prefiltry stringowe).
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+from contextlib import nullcontext as _nullcontext
+
+SD = ledger_io.LEDGER["shadow"]
 SHLOG = "/root/.openclaw/workspace/scripts/logs/shadow.log"
 DEPLOY = "2026-05-18T21:32:00"          # restart dispatch-shadow (UTC)
 PRE_START = "2026-05-17T21:32:00"       # okno 24h sprzed deployu (baseline KOORD)
@@ -51,7 +64,7 @@ post_total = post_koord = 0
 pre_total = pre_koord = 0
 pos_src = Counter()
 try:
-    with open(SD) as f:
+    with _nullcontext(_rotated_logs.iter_jsonl_lines(SD, None)) as f:
         for line in f:
             line = line.strip()
             if not line:

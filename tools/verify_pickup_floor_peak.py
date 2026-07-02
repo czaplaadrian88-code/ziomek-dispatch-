@@ -28,7 +28,20 @@ from dispatch_v2.telegram_approver import (  # noqa: E402
     _candidate_line_v2, _cand_plan_pickup_hhmm, _format_proposal_v2)
 
 WARSAW = ZoneInfo("Europe/Warsaw")
-SHADOW = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary odczyt TYLKO żywego pliku po cichu tracił
+# okno po rotacji (logrotate size 100M / daily). Semantyka metryk BEZ ZMIAN
+# (per-rekord filtry zostają w konsumencie; iter_jsonl_lines zachowuje
+# prefiltry stringowe).
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+from contextlib import nullcontext as _nullcontext
+
+SHADOW = ledger_io.LEDGER["shadow"]
 ORDERS = "/root/.openclaw/workspace/dispatch_state/orders_state.json"
 PLANS = "/root/.openclaw/workspace/dispatch_state/courier_plans.json"
 
@@ -60,7 +73,7 @@ def verify_proposal_floor(since, until):
     examples = []
     if not os.path.exists(SHADOW):
         return {"err": "brak shadow_decisions.jsonl"}
-    with open(SHADOW) as f:
+    with _nullcontext(_rotated_logs.iter_jsonl_lines(SHADOW, None)) as f:
         for ln in f:
             if '"verdict": "PROPOSE"' not in ln:
                 continue
@@ -150,7 +163,7 @@ def verify_committed_floor(since, until):
     examples = []
     if not os.path.exists(SHADOW):
         return {"err": "brak shadow_decisions.jsonl"}
-    with open(SHADOW) as f:
+    with _nullcontext(_rotated_logs.iter_jsonl_lines(SHADOW, None)) as f:
         for ln in f:
             if '"verdict": "PROPOSE"' not in ln:
                 continue

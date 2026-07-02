@@ -22,7 +22,20 @@ Read-only. Bezpieczny do crona/timera.
 import sys, json, argparse
 from collections import defaultdict, Counter
 
-DEFAULT_LOG = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary odczyt TYLKO żywego pliku po cichu tracił
+# okno po rotacji (logrotate size 100M / daily). Semantyka metryk BEZ ZMIAN
+# (per-rekord filtry zostają w konsumencie; iter_jsonl_lines zachowuje
+# prefiltry stringowe).
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+from contextlib import nullcontext as _nullcontext
+
+DEFAULT_LOG = ledger_io.LEDGER["shadow"]
 REDIR = ["pickup_extension_redirect", "commit_divergence_redirect",
          "best_effort_r6_redirect", "difficult_case_redirect"]
 
@@ -53,7 +66,7 @@ def main():
     by_hour = Counter()
     total = 0; parsed = 0; dmin = None; dmax = None
 
-    for line in open(args.log, encoding="utf-8", errors="ignore"):
+    for line in _rotated_logs.iter_jsonl_lines(args.log, None):
         line = line.strip()
         if not line:
             continue

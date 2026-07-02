@@ -11,7 +11,20 @@ Czyta tylko shadow_decisions.jsonl. Użycie:
 import argparse, json, sys
 from datetime import datetime, timezone
 
-LOG = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary odczyt TYLKO żywego pliku po cichu tracił
+# okno po rotacji (logrotate size 100M / daily). Semantyka metryk BEZ ZMIAN
+# (per-rekord filtry zostają w konsumencie; iter_jsonl_lines zachowuje
+# prefiltry stringowe).
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+from contextlib import nullcontext as _nullcontext
+
+LOG = ledger_io.LEDGER["shadow"]
 
 def parse(iso):
     if not iso:
@@ -41,7 +54,7 @@ def main():
     by_day = {}                # data -> [propose, busy, bug, material]
     worst = []                 # największe rozjazdy do podglądu
 
-    with open(a.log, "r", encoding="utf-8", errors="replace") as fh:
+    with _nullcontext(_rotated_logs.iter_jsonl_lines(a.log, None)) as fh:
         for line in fh:
             if '"PROPOSE"' not in line:
                 continue

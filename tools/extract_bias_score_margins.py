@@ -20,7 +20,20 @@ import re
 from datetime import datetime
 
 CORPUS = "/root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-05-31/bundling_bias_seed_corpus.json"
-DECISIONS = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary odczyt TYLKO żywego pliku po cichu tracił
+# okno po rotacji (logrotate size 100M / daily). Semantyka metryk BEZ ZMIAN
+# (per-rekord filtry zostają w konsumencie; iter_jsonl_lines zachowuje
+# prefiltry stringowe).
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+from contextlib import nullcontext as _nullcontext
+
+DECISIONS = ledger_io.LEDGER["shadow"]
 
 
 def parse_ts(s):
@@ -44,7 +57,7 @@ def index_decisions(oids):
     """oid -> list of (ts_dt, record) ; tylko interesujące oid."""
     want = set(oids)
     idx = {}
-    with open(DECISIONS) as f:
+    with _nullcontext(_rotated_logs.iter_jsonl_lines(DECISIONS, None)) as f:
         for ln in f:
             # szybki pre-filtr po stringu oid
             if not any(o in ln for o in want):
