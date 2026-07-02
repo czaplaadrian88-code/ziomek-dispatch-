@@ -234,9 +234,16 @@ _FIXED_TZ = re.compile(
 # Allowlista może się TYLKO kurczyć — dodanie NOWEGO pliku = test PADA.
 _ALLOWLIST = {
     "tools/ontime_lib.py",                       # POPRAWNY wzór: para CET/CEST (warsaw_tz_for, DST-aware)
-    "tools/drive_speed_overshoot_verdict.py",    # POZA PARTYCJĄ TZ-consolidate — ta sama klasa, osobny lane (follow-up)
+    # drive_speed_overshoot_verdict.py skonwertowany na ZoneInfo (lane TZ-drobnica FALA-2) → zdjęty z allowlisty.
 }
 _SELF = "tests/test_tz_zoneinfo_consolidation.py"
+# Testy-strażnicy TZ MUSZĄ trzymać stały offset jako BAZĘ MUTACJI (podmieniają
+# ZoneInfo→+2 by udowodnić że fix ma zęby). To NIE produkcyjny fixed-offset →
+# osobna kategoria od allowlisty (która = pliki produkcyjne i tylko się kurczy).
+_GUARDIAN_TESTS = {
+    _SELF,
+    "tests/test_drive_speed_overshoot_tz.py",   # lane TZ-drobnica FALA-2
+}
 _MY_PARTITION = {
     "tools/shadow_outcome_enricher.py", "tools/freshness_shadow_monitor.py",
     "tools/reassignment_shadow.py", "tools/sequential_replay.py",
@@ -254,7 +261,7 @@ def _scan_fixed_offset():
             if not fn.endswith(".py"):
                 continue
             rel = os.path.relpath(os.path.join(dirpath, fn), _WT_ROOT)
-            if rel == _SELF:
+            if rel in _GUARDIAN_TESTS:
                 continue
             try:
                 with open(os.path.join(dirpath, fn), encoding="utf-8", errors="ignore") as fh:
