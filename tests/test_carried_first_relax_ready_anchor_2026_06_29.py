@@ -69,6 +69,14 @@ def test_r6_thermal_bag_helper_on_off():
 
 def test_relax_ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR_changes_decision(monkeypatch):
     monkeypatch.setattr(PR, "ENABLE_CARRIED_FIRST_RELAX", True)
+    # D.3 fala A (2026-07-02): CARRIED_AGE_TZ_FIX / RELAX_COLOC / LEX-okno domyślnie True
+    # po migracji do flags.json → pinujemy do pre-migracyjnego test-defaultu (False), by
+    # test izolował EFEKT samej flagi READY_ANCHOR na _relax_carried_first (bez zakłóceń
+    # innych miękkich optymalizatorów). Ich parytet mają własne testy.
+    monkeypatch.setattr(PR, "ENABLE_CARRIED_AGE_TZ_FIX", False, raising=False)
+    monkeypatch.setattr(PR, "ENABLE_RELAX_COLOC_PICKUP", False, raising=False)
+    monkeypatch.setattr(PR, "ENABLE_LEX_COMMITTED_WINDOW", False, raising=False)
+    monkeypatch.setattr(PR, "ENABLE_LEX_COMMITTED_WINDOW_SHADOW", False, raising=False)
     monkeypatch.setattr(osrm_client, "table", _fake_table)
     seq, ostate, start_pos, now = _case()
 

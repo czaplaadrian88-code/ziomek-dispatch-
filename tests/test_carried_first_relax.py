@@ -70,6 +70,13 @@ def _ids(seq):
 
 def test_flag_off_is_noop(monkeypatch):
     monkeypatch.setattr(P, "ENABLE_CARRIED_FIRST_RELAX", False)
+    # D.3 fala A (2026-07-02): pozostałe re-orderery kanonu (LEX-okno, non-carried
+    # reorder) domyślnie True po migracji do flags.json → pinujemy do pre-migracyjnego
+    # test-defaultu (False), by test izolował „carried-first bez żadnego relaxera".
+    # Parytet LEX/non-carried mają własne testy (test_lex_committed_window / route_reorder).
+    monkeypatch.setattr(P, "ENABLE_LEX_COMMITTED_WINDOW", False)
+    monkeypatch.setattr(P, "ENABLE_LEX_COMMITTED_WINDOW_SHADOW", False)
+    monkeypatch.setattr(P, "ENABLE_NONCARRIED_DROPOFF_REORDER", False)
     stops = _carried_first_stops()
     out = P._apply_canon_order_invariants([dict(s) for s in stops], SIOUX_ORDERS, POS, NOW)
     # carried-first preserved: niesione 482648 dropoff zostaje na froncie
