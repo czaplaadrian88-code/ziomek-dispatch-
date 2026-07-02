@@ -27,7 +27,7 @@
 3. **Werdykt B-lite**: b_route_shadow_review ma wreszcie żywy ground-truth join (0→322) — re-run i decyzja „budować B-lite czy zamknąć" możliwa na PRAWDZIWYCH liczbach.
 
 ## OTWARTE (przejmuje ta sesja po budziku / następna)
-- **`bundle_calib_review` = 4. WRONG-SOURCE** (martwy sla w outcome-joinie, fallback klik; gps_truth-arm żywy) — przepięcie DOPIERO PO bramce 08:00 (at-168); recepta = jak b_route_shadow_review (iter_sla + parse_sla_ts). Budzik sesji tmux 8 uzbrojony (Monitor 08:05).
+- ~~bundle_calib_review~~ ✅ **DONE `b8cdd35`** (po bramce at-168 08:00; timer review 07:00 przebiegł jeszcze na starym kodzie — spójność porannego werdyktu zachowana): klik-fallback na żywy iter_sla; join 163→1183 worków / 432→3856 zleceń; werdykt GO + liczby rekomendacji IDENTYCZNE. **Klasa WRONG-SOURCE domknięta 4/4.** Regresja po zmianie: 3781/0 (wzrost = testy fali 1 równoległej sesji; 2 dawne xpass food-age wróciły do xfail — nie-strict migotanie).
 - `min_delivered_at_verdict.py` (VOID, rotation-blind) — przepiąć przy ewentualnym re-runie (at-166 już odpalony, nie ruszane).
 - OPEN z D.3 przed falą C/D: (1) czy recanon/redecide w panel-watcher wchodzą w gałęzie COMMITTED_PROPAGATION/LIVE_ETA_REFRESH, (2) mapa wołających parse_panel_html.
 - ⚠ Uwaga porządkowa: parity-runy `obj_fresh_verdict_atrun` nadpisały durable `eod_drafts/2026-05-30/obj_fresh_verdict.md` (werdykt 06-06) — **przywrócone z gita** w tej sesji; przy przyszłych runach porównawczych tego toola pamiętać o jego side-efekcie zapisu.
