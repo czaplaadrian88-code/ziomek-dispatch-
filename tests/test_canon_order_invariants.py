@@ -4,7 +4,23 @@ Te same reguły co build_view (carried-first + odbiory wg committed), ale w
 plan_recheck → kanon poprawny i IDENTYCZNY na wszystkich powierzchniach
 (apka/panele/Telegram), niezależnie od pilności R6. Fail-safe 'dostawa po odbiorze'.
 """
+import pytest
+
 from dispatch_v2 import plan_recheck as PR
+
+
+@pytest.fixture(autouse=True)
+def _isolate_hard_invariants(monkeypatch):
+    """D.3 fala A (2026-07-02): ten plik testuje TWARDE niezmienniki F6 (carried-first
+    + odbiory wg committed) w IZOLACJI. Miękkie optymalizatory (LEX-okno, non-carried
+    reorder, relax, coloc, carried-age-tz) domyślnie True po migracji do flags.json →
+    pinujemy do pre-migracyjnego test-defaultu (False), by nie zakłócały czystej
+    asercji niezmiennika. Każdy optymalizator ma własne testy. Produkcja nietknięta."""
+    for _f in ("ENABLE_LEX_COMMITTED_WINDOW", "ENABLE_LEX_COMMITTED_WINDOW_SHADOW",
+               "ENABLE_CARRIED_FIRST_RELAX", "ENABLE_RELAX_COLOC_PICKUP",
+               "ENABLE_NONCARRIED_DROPOFF_REORDER", "ENABLE_CARRIED_AGE_TZ_FIX",
+               "ENABLE_NO_RETURN_TO_DEPARTED_PICKUP"):
+        monkeypatch.setattr(PR, _f, False, raising=False)
 
 
 def _seq(stops):

@@ -41,6 +41,12 @@ def _run(monkeypatch, orders_state, plans):
         return True  # udajemy udany zapis planu
 
     monkeypatch.setattr(pr, "_gen_one_bag_plan", fake_gen)
+    # D.3 fala A (2026-07-02): ENABLE_PLAN_SEQUENCE_LOCK domyślnie True po migracji do
+    # flags.json (steady-state). Ten plik testuje ŚCIEŻKĘ regeneracji partial-coverage
+    # (gałąź NON-sequence-lock: liczniki bag_plans_partial_regen). Pinujemy flagę do
+    # pre-migracyjnego test-defaultu (False), aby izolować testowaną gałąź (parytet
+    # sequence-lock ma osobne pokrycie). Zachowanie produkcji nietknięte.
+    monkeypatch.setattr(pr, "ENABLE_PLAN_SEQUENCE_LOCK", False)
     summary = {}
     now = datetime(2026, 6, 2, 12, 0, tzinfo=timezone.utc)
     pr._gap_fill_plans(orders_state, plans, {}, now, summary)
