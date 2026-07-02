@@ -3,7 +3,8 @@
 > 🟢 **ŻYWY TRACKER (Adrian 02.07): to jest źródło prawdy o postępie napraw obu audytów. AKTUALIZUJ PO KAŻDEJ FALI.**
 > Protokół aktualizacji (część DoD fali): po zamknięciu fali/naprawy → (1) zmień jej status w §2 (fale L) lub §3 (findingi 2.0) na ✅/🟡/🔴 + commit/flaga/data; (2) przenieś pozycję z §4 „co zostało" jeśli domknięta; (3) bumpnij `Ostatnia aktualizacja` niżej + 1-linijka „co się zmieniło"; (4) jeśli finding 2.0 zamknęła fala L (jak L1.2→rotation-aware) — odnotuj krzyżowo w §3. Nie kasuj historii — dopisuj. Sesja, która zamknęła falę ale nie ruszyła trackera = NIEZAKOŃCZONA.
 >
-> **Ostatnia aktualizacja:** 2026-07-02 ~06:45 UTC (tmux 9: **FALA-1 PARALLEL-SAFE W TOKU** — 5 lane'ów w worktree `wt-{tz,watchdog,perf,gc,cod}` branch `fix/*`: TZ-consolidate + watchdog-close + perf-SLO + gc-observability + cod-weekly-diag; baseline regresji 3709/0 zapisany; merge SERYJNY po zakończeniu agentów; NIE ruszać tych plików/worktree z innych sesji).
+> **Ostatnia aktualizacja:** 2026-07-02 ~08:15 UTC (tmux 9: **FALA-1 PARALLEL-SAFE SCALONA** — 5 lane'ów zmergowanych seryjnie do master: perf-SLO `e9551f1` → TZ `872667f` → integracja `2e68a11` → cod-weekly `46e4867` → gc `a3ecf2f` → watchdog `aab1e17` → integracja `075dfe3`; regresja finalna zielona; ratchet TZ złapał cross-lane fixed-offset w perf (naprawione u źródła); worktree'y usunięte, gałęzie `fix/*` zostają; **wykonania na żywym systemie = lista DEPLOY-ZA-ACK** w raportach `FALA1_*_raport.md`, statusy niżej w §3).
+> Poprzednia: 2026-07-02 ~06:45 UTC (tmux 9: FALA-1 PARALLEL-SAFE W TOKU — 5 lane'ów w worktree `wt-{tz,watchdog,perf,gc,cod}` branch `fix/*`: TZ-consolidate + watchdog-close + perf-SLO + gc-observability + cod-weekly-diag; baseline regresji 3709/0 zapisany; merge SERYJNY po zakończeniu agentów; NIE ruszać tych plików/worktree z innych sesji).
 > Poprzednia: 2026-07-02 ~02:30 UTC (utworzenie: stan po L1.1/L1.2/L2.1/L6.A/L0.2 LIVE; audyt 2.0 zamknięty; re-enable 3 monitorów).
 
 **Data snapshotu:** 2026-07-02 ~02:30 UTC · **Źródło stanu:** git log (ground-truth) + flags.json na żywo + master-syntezy obu audytów. ⚠ **Multi-sesja:** ≥2 sesje pchają Fazę 3 tej nocy — stan DRYFUJE, każda zmiana re-grepuje git.
@@ -53,15 +54,15 @@
 | Finding 2.0 | Sev | Właściciel / status |
 |---|---|---|
 | **Security P0** (firewall host OFF, `/stop` bez auth, CDP :9222, wyciek hasła/tokenów) | **P0** | 🆕 NOWY PION — brak właściciela; krok 0 = potwierdź Hetzner Cloud FW; remediacja = osobny sprint pod kierunkiem Adriana |
-| **Regres wydajności 2×** (p50 840ms; człony compute-zawsze) | P1 | 🆕 brak właściciela — budżet+SLO+alert (rozszerz canary) |
-| **2 bomby TZ** (`gastro_assign:11` + `shadow_outcome_enricher:45`, +klaster) | P1 (od 25.10) | 🆕 konsolidacja fixed-offset→ZoneInfo; **data twarda 25-26.10** |
+| **Regres wydajności 2×** (p50 840ms; człony compute-zawsze) | P1 | 🟡 FALA-1 02.07: POMIAR+SLO scalone (`e9551f1`: `tools/perf_budget_report.py` + sekcja SLO w canary za flagą `ENABLE_PERF_SLO_ALERT` OFF, bajt-parytet → at-200 bezpieczny; baseline 02.07: p50 852 / p95 1939 / p99 2720 ms, ogon>1500=13,1%, 8 breachy §5a). ZOSTAJE: fix compute-zawsze (osobna fala, rdzeń) + flip alertu po okresie log-only (ACK) |
+| **2 bomby TZ** (`gastro_assign:11` + `shadow_outcome_enricher:45`, +klaster) | P1 (od 25.10) | 🟡 FALA-1 02.07: 6 narzędzi repo → ZoneInfo (`872667f`, w tym 2. bliźniak w sequential_replay) + **grep-ratchet test** (od razu złapał cross-lane fallback +1 w perf → `2e68a11`); kill-test zimowy: fix 15 min vs bomba 1395 min. ZOSTAJE ZA ACK: **podmiana żywego `gastro_assign.py`** (staged `deploy_staging/scripts/`, diff = tylko l.11-12, subprocess per call → zero restartu) + `drive_speed_overshoot_verdict.py:29` (w allowliście ratcheta) — **przed 25-26.10** |
 | **Blokery autonomii** (fałszywy-sukces exit-code + 1.flip-nie-no-op) | P1 (przed ON) | 🆕 przed 1. flipem AUTON — RAZEM (F+G+TOCTOU) |
-| **Martwe monitory** (watchdog+2) | P1 | ✅ RE-ENABLE DONE (ACK); domknięcie OnCalendar+cod-weekly pending |
-| **`cod-weekly` FAILED+silent** | P2 live | 🆕 diagnoza exit1 + OnFailure + rejestr cron_health |
+| **Martwe monitory** (watchdog+2) | P1 | ✅ RE-ENABLE DONE (ACK) · 🟡 FALA-1 02.07: domknięcie PRZYGOTOWANE (`aab1e17`: rejestr progów w `cron_health.py` — cod-weekly 192h + 6 wpisów thr=None + CLI `--sync-thresholds`/`--record-success`/`--dry-run`; **10 drop-inów staged** `deploy_staging/etc/`: OnCalendar×3 [Persistent przy samym OnUnitActiveSec był NO-OPem!], OnFailure cod-weekly, ExecStartPost×3; burst-check 3→0). ZOSTAJE ZA ACK: `cp` drop-inów + `daemon-reload` + sync (sekwencja w `FALA1_watchdog_raport.md`) |
+| **`cod-weekly` FAILED+silent** | P2 live | 🟡 FALA-1 02.07: hipoteza audytu POTWIERDZONA (brak bloku tygodnia w arkuszu; pada CO pn 08/15/22/29.06) + fix u źródła scalony (`46e4867`: aktionable błąd zamiast gołego fail + auto-create za flagą `COD_WEEKLY_AUTOCREATE_BLOCK` OFF + DRY_RUN; exit≠0 zostaje pod OnFailure). **PRZEPADŁE 4 tygodnie do backfillu: 18-24.05, 01-07.06, 08-14.06, 22-28.06** (15-21.06 był wypełniony — NIE ruszać); moduł umie `--week A:B --write`. ZOSTAJE ZA ACK Adriana: backfill (pieniądze!) + ewent. flip auto-create (najpierw DRY_RUN); OnFailure = drop-in z lane watchdog |
 | **Alerty procesowe nie danowe / meta-strażnicy kłamią** | P1/P2 | częściowo → **L1.2 zamknęła część** (b_route live-sla, rotation-aware); reszta (danowe alerty) = 2.B |
 | **Readerzy niespójnie rotation-aware** (L13) | P2 | ✅ **W DUŻEJ CZĘŚCI ZAMKNIĘTE tej nocy** (L1.2 T3/T3b: 15+9 tooli) — do potwierdzenia że komplet |
 | **carried_first_guard VOID** (L09) | P2 | ✅ **ZAMKNIĘTE** (L0.2 env-parytet `131b555`) |
-| **GC observability atrapa / events.db >90d ~10.07** | P2 | 🆕 → L8 + 2.D; **data ~10.07** |
+| **GC observability atrapa / events.db >90d ~10.07** | P2 | 🟡 FALA-1 02.07: `observability/log_rotation.py` scalony (`a3ecf2f`: dry-run default, DENYLIST ledgerów wygrywa, --max-delete; dry-run na żywo: 90/120 plików = 174 MB do zwolnienia; timer staged OnCalendar 03:00). ⭐ KOREKTA L13: retencja audit_log NIE jest widmem — `dispatch-event-bus-cleanup.timer` (90d) ŻYJE; **~10.07 = weryfikacja że delete odpali, nie klif**; realne luki: brak VACUUM + fałszywy komentarz logrotate l.130. ZOSTAJE ZA ACK: install+enable timera, 1. nadzorowany `--apply`, events.db kroki A-D (`FALA1_gc_eventsdb_plan.md`) |
 | **Strażnicy feasibility cienkie/teatr** (verdict-gate polaryzacja) | P2 | 🆕 → dogęścić (L0/2.0 0.H) |
 | **Mina flagi `ENABLE_LOAD_PLAN_PURE_READ`** (default False) | P2 | 🆕 → default True u callerów (powiązane z L3) |
 | **pending 3-writer no-lock (O1) + klaster postpone** | P2 | → **L7.5** (przed re-enable Telegrama) |
@@ -74,10 +75,10 @@
 ## 4. CO ZOSTAŁO — backlog scalony (priorytet)
 
 **A. Żywe/tanie (teraz):**
-1. Security krok 0 (potwierdź Hetzner Cloud FW) → potem quick-wins (auth /stop, bind 9222/porty, .secrets→.gitignore+chmod, rotacja sekretów).
-2. Domknąć watchdog (OnCalendar) + dorejestrować cod-weekly (+ OnFailure) + diagnoza exit1.
-3. Bomby TZ → ZoneInfo (przed 25.10; jest zapas, ale data twarda).
-4. Budżet wydajności + SLO + alert (rozszerz canary).
+1. Security krok 0 (potwierdź Hetzner Cloud FW) → potem quick-wins (auth /stop, bind 9222/porty, .secrets→.gitignore+chmod, rotacja sekretów). ⬅ JEDYNA pozycja A nietknięta falą (Adrian-driven).
+2. ~~Domknąć watchdog (OnCalendar) + dorejestrować cod-weekly (+ OnFailure) + diagnoza exit1~~ → 🟡 FALA-1: kod+staging+diagnoza GOTOWE (§3); zostało wykonanie deploy-za-ACK (cp drop-inów + daemon-reload + backfill COD).
+3. ~~Bomby TZ → ZoneInfo~~ → 🟡 FALA-1: repo DONE + ratchet; zostało: podmiana żywego gastro_assign.py (ACK) + 1 plik z allowlisty — przed 25.10.
+4. ~~Budżet wydajności + SLO + alert~~ → 🟡 FALA-1: zbudowane za flagą OFF; zostało: log-only → flip alertu (ACK). Fix samego regresu (compute-zawsze) = osobna fala rdzenia.
 
 **B. Faza 3 pozostała (protokół ETAP 0→7 + ACK per fala):**
 5. L4 available_from (najgłębsze) · L3 plan_recheck · L5 ETA load-aware (bramka 04.07) · L6.B/C/D (bramki 02-03.07) · L0.1 rejestr-flag · L7 (w tym L7.5 fcntl przed Telegramem) · L8 sprzątanie · flip L2.2/L2.3.

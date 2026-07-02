@@ -144,3 +144,19 @@ POKRYTE (>0, NIE sieroty — kontrola anty-fałszywy-alarm):
 - **Linie dryfują** (≥3 sesje/dzień). Każdy fix re-grepuje (ETAP 0).
 
 **STOP przed naprawą — to audyt (read-only).** Naprawa sierot = osobne mini-sprinty ETAP 0→7 + ACK. Rekomendacja kolejności: (1) `osrm-fallback-double-traffic` + cod-weekly (żywe, tanie), (2) klaster postpone PRZED re-enable Telegrama, (3) reszta P2 do L3/L6.B/L8, (4) oś 05.07 = decyzja o ACK 2.0.
+
+---
+
+## 7. AKTUALIZACJA STATUSÓW — FALA-1 napraw (tmux 9, 2026-07-02 ~08:15 UTC; append-only)
+
+Sprint wieloagentowy C12 (5 lane'ów PARALLEL-SAFE, worktree per agent, merge seryjny, regresja po każdym; pełny stan → `ZIOMEK_STAN_AUDYTY_1i2.md`):
+
+| Finding (2.0) | Nowy STATUS | Dowód/commit |
+|---|---|---|
+| **C+D bomby TZ** (gastro_assign + shadow_outcome_enricher + klaster) | **fixed-partial** — 6 plików repo→ZoneInfo + grep-ratchet (złapał 7. przypadek cross-lane w perf_budget_report → naprawiony) | `872667f`+`2e68a11`; ZOSTAJE za ACK: podmiana żywego gastro_assign.py (staged) + drive_speed_overshoot_verdict.py:29; deadline 25-26.10 |
+| **E regres wydajności 2×** | **fixed-partial (pomiar)** — perf_budget_report + SLO w canary za flagą OFF (bajt-parytet → at-200 nietknięty); baseline: p50 852/p95 1939/p99 2720 ms, ogon 13,1% | `e9551f1`; fix compute-zawsze = OSOBNA fala (rdzeń); flip alertu po log-only (ACK) |
+| **A martwe monitory (domknięcie)** | **deferred (staged)** — rejestr progów cron_health (cod-weekly 192h + 6×thr=None) + CLI + 10 drop-inów (OnCalendar×3 [Persistent bez OnCalendar był NO-OPem], OnFailure cod-weekly, ExecStartPost×3); burst-check 3→0 | `aab1e17`; instalacja = cp+daemon-reload za ACK (`FALA1_watchdog_raport.md`) |
+| **B cod-weekly FAILED+SILENT** (⭐ była „żywa sierota") | **fixed-partial** — hipoteza potwierdzona (brak bloku tygodnia, pada co pn); aktionable błąd + auto-create za flagą OFF; **4 przepadłe tygodnie zidentyfikowane** (18-24.05/01-07.06/08-14.06/22-28.06) | `46e4867`; backfill `--week A:B --write` za ACK Adriana (pieniądze); OnFailure w stagingu watchdog |
+| **L13 GC observability atrapa** | **fixed-partial** — log_rotation.py (denylist-first, dry-run default); dry-run żywy: 90 plików/174 MB; ⭐ KOREKTA: event-bus-cleanup(90d) ŻYJE → ~10.07 = weryfikacja, nie klif | `a3ecf2f`; install timera + 1. --apply + events.db plan za ACK (`FALA1_gc_eventsdb_plan.md`) |
+
+Meta: regresja finalna kanonu zielona (baseline 3709→wszystkie testy lane'ów dołączone); 2 near-missy procesowe fali (obie klasy → protokół C12): (1) ratchet-cross-lane — kod scalany równolegle nie widzi się nawzajem w worktree, strażnik-ratchet w kanonie łapie po merge; (2) test z hardcode ścieżki worktree = bomba po `git worktree remove` (fix: samo-lokalizacja `parents[1]` + try/finally na sys.modules) — `075dfe3`.
