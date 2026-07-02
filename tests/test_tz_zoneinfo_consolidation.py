@@ -243,6 +243,9 @@ _SELF = "tests/test_tz_zoneinfo_consolidation.py"
 _GUARDIAN_TESTS = {
     _SELF,
     "tests/test_drive_speed_overshoot_tz.py",   # lane TZ-drobnica FALA-2
+    "tests/test_grafik_fetch_schedule.py",      # lane S2 grafik: trzyma literał
+                                                # fixed-offset jako NEGATYWNĄ asercję
+                                                # (H1b: musi zniknąć ze staged źródła).
 }
 _MY_PARTITION = {
     "tools/shadow_outcome_enricher.py", "tools/freshness_shadow_monitor.py",
@@ -287,3 +290,38 @@ def test_ratchet_partition_files_are_clean():
     offenders = _scan_fixed_offset()
     dirty = _MY_PARTITION & offenders
     assert not dirty, "plik partycji nadal ma fixed-offset: " + ", ".join(sorted(dirty))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# (c') GREP-RATCHET dla ŻYWYCH plików grafiku POZA repo (lane S2, finding H)
+# ══════════════════════════════════════════════════════════════════════════
+# Blind-spot ratcheta (zgłoszony w tz-drobnica_raport §Część 1): _scan_fixed_offset
+# chodzi po _WT_ROOT = repo dispatch_v2. Pliki grafiku żyją O POZIOM WYŻEJ w
+# `scripts/` (poza repo) → ratchet ICH NIE WIDZI. Skan JAWNEJ LISTY (nie rekursja
+# po scripts/, żeby nie łapać cudzych/nieznanych plików) domyka tę dziurę.
+_EXTERNAL_SCRIPTS = {
+    "scripts/gastro_assign.py":  "/root/.openclaw/workspace/scripts/gastro_assign.py",
+    "scripts/fetch_schedule.py": "/root/.openclaw/workspace/scripts/fetch_schedule.py",
+    "scripts/schedule_utils.py": "/root/.openclaw/workspace/scripts/schedule_utils.py",
+}
+# ŻYWY schedule_utils.py wciąż ma fixed-offset fallback (l.24, except ImportError) —
+# staged fix (deploy_staging/scripts/schedule_utils.py) go usuwa; wpis DO ZDJĘCIA
+# po podmianie żywego pliku za ACK koordynatora (allowlista może się tylko kurczyć).
+_EXTERNAL_ALLOWLIST = {
+    "scripts/schedule_utils.py",
+}
+
+
+def test_ratchet_external_scripts_no_new_fixed_offset():
+    offenders = set()
+    for rel, path in _EXTERNAL_SCRIPTS.items():
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            if _FIXED_TZ.search(fh.read()):
+                offenders.add(rel)
+    extra = offenders - _EXTERNAL_ALLOWLIST
+    assert not extra, (
+        "NOWY fixed-offset TZ w żywych scripts/ (skonwertuj na ZoneInfo('Europe/Warsaw')): "
+        + ", ".join(sorted(extra))
+    )
