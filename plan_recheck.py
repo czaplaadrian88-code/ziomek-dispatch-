@@ -834,6 +834,47 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         # = nieszkodliwa metadana; gdy ON = baza porównania).
         "bag_signature": _bag_signature(oids, orders_state),
     }
+    # ── L3 (F2/K2): bramka ZAPISU regenu — compare-and-keep R6 („nie-cofa") ──
+    # OFF = zapis regenu bajt-w-bajt (żadnej ścieżki poniżej). ON = świeży regen
+    # łamiący R6 (carried>35), którego OBECNY plan tego samego worka NIE łamie →
+    # NIE nadpisuj (keep existing, return False = skip). Pure-read istniejącego
+    # (D: invalidate_on_mismatch=False → brak read-side-effect). Spread=metryka.
+    try:
+        from dispatch_v2 import common as _C_l3
+        _l3_on = _C_l3.decision_flag("ENABLE_PLAN_RECHECK_GATES")
+    except Exception:
+        _l3_on = False
+    if _l3_on:
+        _fresh_breach = _l3_hard_breach(stops, orders_state, pos, anchor_departure, now)
+        _spread = _l3_bag_spread(sims)
+        _existing = None
+        try:
+            _existing = plan_manager.load_plan(cid, invalidate_on_mismatch=False)
+        except Exception as _le:
+            _log.warning(f"L3 load existing cid={cid} fail: {type(_le).__name__}: {_le}")
+        _comparable = (_existing is not None
+                       and _l3_active_dropoff_oids(_existing, orders_state)
+                       == set(map(str, oids)))
+        _exist_breach = None
+        if _comparable:
+            _exist_breach = _l3_hard_breach(_existing.get("stops") or [], orders_state,
+                                            pos, anchor_departure, now)
+        _verdict = _l3_gate_verdict(_fresh_breach, _exist_breach, _comparable)
+        _l3_bump({"REJECT": "l3_regen_rejected", "BOTH_BREACH": "l3_regen_both_breach",
+                  "PASS": "l3_regen_pass", "NO_BASELINE": "l3_regen_no_baseline"}[_verdict])
+        if _verdict == "REJECT":
+            _log.info(
+                f"L3_REGEN_REJECTED cid={cid} oids={oids} reason=r6 "
+                f"fresh_r6={_fresh_breach.get('r6_max_min')} "
+                f"exist_r6={(_exist_breach or {}).get('r6_max_min')} "
+                f"spread={_spread} — keep existing (nie-cofa)")
+            return False
+        if _verdict == "BOTH_BREACH":
+            _log.info(
+                f"L3_REGEN_BOTH_BREACH cid={cid} oids={oids} "
+                f"fresh_r6={_fresh_breach.get('r6_max_min')} "
+                f"exist_r6={(_exist_breach or {}).get('r6_max_min')} — zapisuję świeży")
+
     plan_manager.save_plan(cid, body)
     _log.info(
         f"BAG_PLAN_GENERATED cid={cid} stops={len(stops)} seq={plan.sequence} "
@@ -919,6 +960,149 @@ def _floor_pickups_to_committed(stops, orders_state, min_delta_sec: float = 60.0
             if sp is not None:
                 s2["predicted_at"] = (sp + shift).isoformat()
     return stops
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# L3 (2026-07-02, Faza 3 audytu, F2/K2): bramka ZAPISU regenu — „plan_recheck
+# przestaje cofać". Regeneracja per-tick woła simulate_bag_route_v2 (objektyw
+# O2/duration), NIE check_feasibility_v2 → nowa sekwencja może być GORSZA R6
+# (carried>35) niż istniejący plan tego samego worka (zigzag wraca). Bramka =
+# compare-and-keep: świeży regen łamiący R6, którego OBECNY zapisany plan (ten
+# sam worek) NIE łamie → NIE nadpisuj (keep existing). ŻADNEJ zmiany selekcji/
+# scoringu live — tylko bramka ZAPISU. Za flagą ENABLE_PLAN_RECHECK_GATES
+# (decision_flag, KANON=flags.json); OFF = zapis regenu bajt-w-bajt.
+#
+# Reject-dimension = R6 carried-age (jedyny sekwencyjno-czuły HARD live,
+# feasibility_v2:~1127 `_gate_bt>35`). R1/R5 spread = SOFT live (feasibility_v2:
+# ~499 „NIE hard block") → liczona TYLKO jako metryka (ETAP-2: SOFT nie osłabia
+# HARD). Floor committed = auto-egzekwowany przez _retime_stops clamp → metryka.
+# ─────────────────────────────────────────────────────────────────────────────
+_L3_GATE_STATS: Dict[str, int] = {}
+
+
+def _l3_reset_gate_stats() -> None:
+    _L3_GATE_STATS.clear()
+
+
+def _l3_bump(key: str, n: int = 1) -> None:
+    _L3_GATE_STATS[key] = _L3_GATE_STATS.get(key, 0) + n
+
+
+def _l3_bag_time_max_min(stops, orders_state) -> Optional[float]:
+    """Max R6 czas termiczny (carried-age, min) w worku dla DANEJ (już
+    re-czasowanej) kolejności stopów. Kotwica per zlecenie: picked_up_at
+    (niesione — przez _sim_picked_up_at) / czas_kuriera_warsaw (committed ready) /
+    predicted_at odbioru (fallback) — 1:1 z doktryną r6_thermal_anchor +
+    _r6_thermal_bag_min. Wszystkie aware → delty bezpieczne. None gdy brak
+    dostawy z policzalnym czasem."""
+    pickup_pred: Dict[str, datetime] = {}
+    for s in stops:
+        if s.get("type") == "pickup":
+            pp = _parse_dt(s.get("predicted_at"))
+            if pp is not None:
+                pickup_pred.setdefault(str(s.get("order_id")), pp)
+    worst: Optional[float] = None
+    for s in stops:
+        if s.get("type") != "dropoff":
+            continue
+        oid = str(s.get("order_id"))
+        drop = _parse_dt(s.get("predicted_at"))
+        if drop is None:
+            continue
+        rec = orders_state.get(oid) or {}
+        status = rec.get("status")
+        anchor = _sim_picked_up_at(rec, status)
+        if anchor is None:
+            anchor = _parse_dt(rec.get("czas_kuriera_warsaw"))
+        if anchor is None:
+            anchor = pickup_pred.get(oid)
+        if anchor is None:
+            continue
+        age = (drop - anchor).total_seconds() / 60.0
+        if worst is None or age > worst:
+            worst = age
+    return worst
+
+
+def _l3_hard_breach(stops, orders_state, pos, anchor_departure, now) -> Dict[str, Any]:
+    """Wektor złamań HARD dla DANEJ kolejności stopów, re-czasowanej pod
+    IDENTYCZNE pos/anchor/now (LIVE _retime_stops → fresh↔existing porównywalne
+    z tej samej kotwicy „stąd i teraz"). r6_hard = carried>BAG_TIME_HARD_MAX_MIN.
+    retimed_ok=False (brak coords/OSRM) → ocena NIEPEWNA: caller NIE odrzuca."""
+    out: Dict[str, Any] = {"r6_hard": False, "r6_max_min": None, "retimed_ok": False}
+    if not stops:
+        return out
+    try:
+        retimed = _retime_stops(stops, pos, anchor_departure, orders_state, now)
+    except Exception:
+        retimed = None
+    if not retimed:
+        return out
+    out["retimed_ok"] = True
+    mx = _l3_bag_time_max_min(retimed, orders_state)
+    out["r6_max_min"] = round(mx, 2) if mx is not None else None
+    try:
+        from dispatch_v2 import common as _C
+        _hard = float(getattr(_C, "BAG_TIME_HARD_MAX_MIN", 35.0))
+    except Exception:
+        _hard = 35.0
+    out["r6_hard"] = bool(mx is not None and mx > _hard)
+    return out
+
+
+def _l3_gate_verdict(fresh: Dict[str, Any], exist: Optional[Dict[str, Any]],
+                     comparable: bool) -> str:
+    """Pure. compare-and-keep na R6:
+      REJECT      — porównywalne, świeży łamie R6, istniejący NIE (nie zapisuj).
+      BOTH_BREACH — porównywalne, oba łamią (odziedziczony zły stan) → zapisz świeży.
+      PASS        — porównywalne, świeży NIE łamie → zapisz.
+      NO_BASELINE — brak porównywalnego istniejącego planu → zapisz świeży.
+    Ocena niepewna (retimed_ok=False) traktowana jak brak złamania (fail-soft:
+    bramka nigdy nie blokuje na podstawie nie-policzonego R6)."""
+    fresh_r6 = bool(fresh.get("r6_hard"))
+    # Baseline musi być WIARYGODNIE re-czasowany, żeby REJECT nie oparł się na
+    # nie-policzonym R6 istniejącego (OSRM-miss → retimed_ok=False → NO_BASELINE,
+    # zapisz świeży). Fresh nie-re-czasowany → r6_hard=False → i tak nie odrzuci.
+    if not comparable or exist is None or not exist.get("retimed_ok"):
+        return "NO_BASELINE"
+    exist_r6 = bool(exist.get("r6_hard"))
+    if fresh_r6 and not exist_r6:
+        return "REJECT"
+    if fresh_r6 and exist_r6:
+        return "BOTH_BREACH"
+    return "PASS"
+
+
+def _l3_active_dropoff_oids(plan: Dict[str, Any], orders_state: Dict[str, Any]) -> set:
+    """Zbiór oid dostaw istniejącego planu, które NADAL są aktywne w orders_state
+    (assigned/picked_up). Baza porównywalności worka fresh↔existing."""
+    out = set()
+    for s in (plan.get("stops") or []):
+        if s.get("type") != "dropoff":
+            continue
+        oid = str(s.get("order_id"))
+        rec = orders_state.get(oid)
+        if isinstance(rec, dict) and rec.get("status") in ACTIVE_STATUSES:
+            out.add(oid)
+    return out
+
+
+def _l3_bag_spread(sims: Dict[str, Any]) -> Dict[str, float]:
+    """deliv/pickup spread (km) worka — LIVE funkcje geometrii feasibility_v2
+    (import, NIE kopia). SOFT live → TYLKO obserwacja (log/metryka), NIE reject.
+    Best-effort: błąd/OSRM-miss → pusty (spread nie bramkuje)."""
+    res: Dict[str, float] = {}
+    try:
+        from dispatch_v2 import feasibility_v2 as _F
+        vals = list(sims.values())
+        if len(vals) >= 2:
+            res["deliv_spread_km"] = round(
+                _F._max_deliv_spread_km(vals[:-1], vals[-1].delivery_coords), 2)
+            res["pickup_spread_km"] = round(
+                _F._max_pickup_spread_from_bag(vals[:-1], vals[-1].pickup_coords), 2)
+    except Exception:
+        pass
+    return res
 
 
 def _repair_dropoffs_after_pickups(seq):
@@ -2039,6 +2223,83 @@ def _refresh_live_eta_from_plans(plans: Dict[str, Any], summary: Dict[str, Any])
         _log.info(f"LIVE_ETA_REFRESH couriers={refreshed}")
 
 
+def _gc_courier_plans(orders_state: Dict[str, Any], now: datetime,
+                      summary: Dict[str, Any], dry_run: bool,
+                      max_age_h: float) -> Dict[str, Any]:
+    """L3 (F2/K2) — GC courier_plans.json. WYŁĄCZNIE istniejące plan_manager API
+    pod fcntl-lockiem (remove_stops / invalidate_plan / gc_invalidated) — ZERO
+    nowej ścieżki mutacji, ZERO gołego json.dump.
+      (i)   terminal-stop prune: aktywny plan ze stopem zlecenia terminalnego/
+            brakującego w orders_state → remove_stops (safety-net gdy event-handler
+            przegapił deliver/cancel; te same statusy TERMINAL_STATUSES co live).
+      (ii-a) age-zombie: invalidated starsze niż max_age_h → gc_invalidated.
+      (ii-b) non-inval bez aktywnego zlecenia → invalidate_plan("GC_NO_ACTIVE")
+            (age-GC usunie w kolejnym cyklu — czysty lifecycle, bez raw-delete).
+    dry_run=True → TYLKO raport (0 mutacji). Liczniki → summary."""
+    rep: Dict[str, Any] = {
+        "gc_dry_run": bool(dry_run), "gc_active_kept": 0,
+        "gc_terminal_stop_prune": 0, "gc_no_active_invalidated": 0,
+        "gc_age_removed": 0,
+    }
+    try:
+        plans = plan_manager.load_plans()
+    except Exception as e:
+        _log.warning(f"GC load_plans fail: {type(e).__name__}: {e}")
+        summary.update(rep)
+        return rep
+    cutoff = now.timestamp() - float(max_age_h) * 3600.0
+    for cid, plan in list(plans.items()):
+        if not isinstance(plan, dict):
+            continue
+        if plan.get("invalidated_at") is not None:
+            inv = plan.get("invalidated_at")
+            try:
+                inv_ts = datetime.fromisoformat(
+                    str(inv).replace("Z", "+00:00")).timestamp()
+            except Exception:
+                inv_ts = None  # bad ts → gc_invalidated też pominie (parytet)
+            if inv_ts is not None and inv_ts < cutoff:
+                rep["gc_age_removed"] += 1
+                _log.info(f"GC_AGE_ZOMBIE cid={cid} created={plan.get('created_at')} "
+                          f"inv={inv} dry_run={dry_run}")
+            continue
+        active = _l3_active_dropoff_oids(plan, orders_state)
+        if not active:
+            rep["gc_no_active_invalidated"] += 1
+            _log.info(f"GC_NO_ACTIVE cid={cid} created={plan.get('created_at')} "
+                      f"stops={len(plan.get('stops') or [])} dry_run={dry_run}")
+            if not dry_run:
+                try:
+                    plan_manager.invalidate_plan(cid, "GC_NO_ACTIVE")
+                except Exception as e:
+                    _log.warning(f"GC invalidate cid={cid} fail: {type(e).__name__}: {e}")
+            continue
+        rep["gc_active_kept"] += 1
+        term_oids = set()
+        for s in (plan.get("stops") or []):
+            oid = str(s.get("order_id"))
+            rec = orders_state.get(oid)
+            if not isinstance(rec, dict) or rec.get("status") in TERMINAL_STATUSES:
+                term_oids.add(oid)
+        for oid in sorted(term_oids):
+            rep["gc_terminal_stop_prune"] += 1
+            _log.info(f"GC_TERMINAL_STOP_PRUNE cid={cid} oid={oid} dry_run={dry_run}")
+            if not dry_run:
+                try:
+                    plan_manager.remove_stops(cid, oid)
+                except Exception as e:
+                    _log.warning(f"GC remove_stops cid={cid} oid={oid} "
+                                 f"fail: {type(e).__name__}: {e}")
+    if not dry_run:
+        try:
+            rep["gc_age_removed_applied"] = plan_manager.gc_invalidated(float(max_age_h))
+        except Exception as e:
+            _log.warning(f"GC gc_invalidated fail: {type(e).__name__}: {e}")
+    summary.update(rep)
+    _log.info(f"GC_COURIER_PLANS {rep}")
+    return rep
+
+
 def run_recheck() -> Dict[str, Any]:
     """Main entry point. Returns summary dict."""
     # ETAP 4 (2026-06-10, Z-04): fingerprint flag decyzyjnych — MUSI być
@@ -2051,6 +2312,7 @@ def run_recheck() -> Dict[str, Any]:
     now = _now_utc()
     orders_state = _load_orders_state()
     plans = plan_manager.load_plans()
+    _l3_reset_gate_stats()  # L3: liczniki bramki ZAPISU regenu per-tick
 
     summary = {
         "ts": now.isoformat(),
@@ -2116,6 +2378,24 @@ def run_recheck() -> Dict[str, Any]:
     # Gap-fill: kurierzy z realnym workiem ale bez aktywnego planu → plan Ziomka.
     if ENABLE_PLAN_FOR_ACTUAL_BAG:
         _gap_fill_plans(orders_state, plans, gps_positions, now, summary)
+
+    # L3 (F2/K2): fold liczników bramki ZAPISU regenu (compare-and-keep R6) do
+    # summary (→ log PLAN_RECHECK). OFF = brak wpisów (bramka nietknięta).
+    summary.update(_L3_GATE_STATS)
+
+    # L3 (F2/K2): GC courier_plans (terminal-stop prune + zombie by age/no-active).
+    # PLAN_GC_DRY_RUN default True (pierwszy flip = tylko raport). Istniejące API
+    # pod lockiem. OFF (ENABLE_COURIER_PLANS_GC) = brak GC jak dziś.
+    try:
+        from dispatch_v2 import common as _C_gc
+        if _C_gc.decision_flag("ENABLE_COURIER_PLANS_GC"):
+            _gc_courier_plans(
+                orders_state, now, summary,
+                dry_run=bool(_C_gc.flag("PLAN_GC_DRY_RUN", True)),
+                max_age_h=float(_C_gc.flag("PLAN_GC_MAX_AGE_H", 48.0)),
+            )
+    except Exception as _e:
+        _log.warning(f"GC courier_plans fail: {type(_e).__name__}: {_e}")
 
     # A (2026-06-24): po wszystkich zmianach planów dosyłamy świeże ETA do cache'a
     # czytanego przez konsolę+apkę (gap-fill mógł dopisać/zmienić plany → reload).
