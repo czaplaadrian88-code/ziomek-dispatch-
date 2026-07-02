@@ -10,6 +10,7 @@
 - **2 xpass w regresji** = L-TEATR non-strict, które zaczęły przechodzić — przy następnym dotknięciu tych testów przełączyć na `strict=True`.
 
 ## 2. KOLEJKA ACK (dla Adriana, w kolejności)
+0. **RANO: flip `ENABLE_PERF_LAZY_MEMBERS=true` + restart shadow + `perf_budget_report` 30 min przed peakiem** (ledger §17; p50 −22% na replayu, parytet 580/580; rollback hot). Osobno: decyzje samplingowe §7 raportu perf-lazy.
 1. **Flip O2 Krok 1** `ENABLE_O2_CAPZ_RESEQ=true` — PO czystym werdykcie S1 (~04.07 po 2 dniach obs: grep `sla_anchor_source` + brak dryfu `sla_violations`), off-peak; przy flipie zmierz p95 latencji w shadow przed peakiem (reseq bounded MAX_STOPS=8). Rollback hot.
 2. **Flip O2 Krok 2** `ENABLE_SLA_GATE_READY_ANCHOR` — OSOBNO, prereq: przegląd downstream `_kind()` (48% reason-churn) + real-shadow replay. NIE bundlować z K1.
 3. **Logger bug4** (plan_recheck `_bug4_reseq_shadow`: frozen/fresh total_duration+sla) + **re-collect λ=0** (instrukcja w `o2-capz_raport.md` §5) — mały pas rdzenia, podnosi bug4+O2 na ground-truth.
@@ -31,7 +32,7 @@
 - **Fala B (histereza): po A** — baseline churn zbiera się timerem od 02.07; przy starcie uwzględnić rozkład: ~41-43% czysty flicker (cel), ~36% pool_shrank (NIE ruszać), 14,1% churn pozycyjny pos_source (osobny wątek, styk K5/L2).
 - **Fala C (delay-dispatch par): czeka na WERDYKT ZASADY od Adriana** (decyzja biznesowa, nie kod).
 - **Fala D (error-budget+dashboard): technicznie bez bramki danych** — można budować read-only/za flagą, ale formalnie roadmapa startuje PO zakończeniu napraw audytów (zostały: L5, L6.C, L0.1, L7-reszta, L8-iter2, perf compute-zawsze, security P0).
-- **Werdykt: poaudytowy upgrade JESZCZE NIE** — najbliższy realny start = Fala A po bramce ~10.07; do tego czasu priorytet = dokończyć naprawy (kolejność sugerowana: perf compute-zawsze [rdzeń wolny po o2-capz] → L0.1 → L6.C → L7-reszta → L8-iter2).
+- **Werdykt: poaudytowy upgrade JESZCZE NIE** — najbliższy realny start = Fala A po bramce ~10.07; do tego czasu priorytet = dokończyć naprawy (⭐ UPDATE 22:40: perf compute-zawsze ZROBIONE — scalone OFF, ledger §17, flip za ACK rano [flaga+restart+pomiar przed peakiem]; kolejność dalszych: L0.1 → L6.C → L7-reszta → L8-iter2).
 
 ## 5. MINY / LEKCJE DNIA (dla następnych fal wieloagentowych)
 - C12: agent o2-capz zaczął edycje w KANONIE (czytał kanon-ścieżki) — do promptów fal dodawać samokontrolę `git -C <kanon> status` w DoD agenta. Koordynator: merge ZAWSZE z kanonu (2× dziś odruch `cd worktree && git merge` = "Already up to date" bez merge!).
