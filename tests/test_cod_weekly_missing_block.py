@@ -24,19 +24,20 @@ import importlib.util
 import sys
 import types
 from datetime import date
+from pathlib import Path
 from unittest.mock import MagicMock
 
 _SCRIPTS = "/root/.openclaw/workspace/scripts"
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
-# TEN worktree (branch fix/cod-weekly-diag). Harness importuje `dispatch_v2` z
-# KANONU (scripts/dispatch_v2), więc żeby test sprawdzał KOD TEGO WORKTREE
-# ładujemy 3 zmienione pliki WPROST z niego pod nazwami dispatch_v2.cod_weekly.*,
-# a po imporcie przywracamy sys.modules do kanonu (zero wycieku do reszty
-# regresji). Pozostałe submoduły (aliases/week_calculator/panel_*) = kanon
-# (identyczne — worktree zmienia tylko config/sheet_writer/run_weekly).
-_WT = "/root/.openclaw/workspace/wt-cod"
+# Repo, w którym LEŻY ten test (kanon lub dowolny worktree — samo-lokalizacja;
+# NIGDY nie hardkoduj ścieżki worktree: po merge+`git worktree remove` martwa
+# ścieżka wywala kolekcję i zatruwa sys.modules dla starych testów cod_weekly).
+# Harness (conftest) importuje `dispatch_v2` z KANONU, więc 3 testowane pliki
+# ładujemy WPROST z tego repo pod nazwami dispatch_v2.cod_weekly.*, a po
+# imporcie przywracamy sys.modules (zero wycieku do reszty regresji).
+_WT = str(Path(__file__).resolve().parents[1])
 
 # --- Wstrzyknięcie fałszywych zależności Sheets (dispatch-venv nie ma gspread)
 _INJECTED = [
@@ -79,29 +80,33 @@ def _load_wt(qual, relpath):
     return mod
 
 
-_cfg = _load_wt("dispatch_v2.cod_weekly.config", "cod_weekly/config.py")
-sw = _load_wt("dispatch_v2.cod_weekly.sheet_writer", "cod_weekly/sheet_writer.py")
-rw = _load_wt("dispatch_v2.cod_weekly.run_weekly", "cod_weekly/run_weekly.py")
-NoTargetColumnError = sw.NoTargetColumnError
-AmbiguousTargetError = sw.AmbiguousTargetError
-col_idx_to_letter = sw.col_idx_to_letter
-
-# --- Przywróć sys.modules (kanon) + zdejmij fake gspread, by importorskip
-#     w pozostałych testach cod_weekly dalej poprawnie SKIPOWAŁ.
-for _k, _v in _SAVED_MODS.items():
-    if _v is None:
-        sys.modules.pop(_k, None)
-    else:
-        sys.modules[_k] = _v
-for _name in _INJECTED:
-    sys.modules.pop(_name, None)
-if "google.oauth2" in _INJECTED:
-    try:
-        import google as _google_pkg
-        if getattr(_google_pkg, "oauth2", None) is not None:
-            delattr(_google_pkg, "oauth2")
-    except Exception:
-        pass
+# try/finally: sprzątanie sys.modules MUSI się wykonać także gdy load padnie —
+# inaczej częściowo zarejestrowany (pusty) moduł zatruwa import dla POZOSTAŁYCH
+# testów cod_weekly w tej samej kolekcji (klasa awarii z FALA1 02.07).
+try:
+    _cfg = _load_wt("dispatch_v2.cod_weekly.config", "cod_weekly/config.py")
+    sw = _load_wt("dispatch_v2.cod_weekly.sheet_writer", "cod_weekly/sheet_writer.py")
+    rw = _load_wt("dispatch_v2.cod_weekly.run_weekly", "cod_weekly/run_weekly.py")
+    NoTargetColumnError = sw.NoTargetColumnError
+    AmbiguousTargetError = sw.AmbiguousTargetError
+    col_idx_to_letter = sw.col_idx_to_letter
+finally:
+    # --- Przywróć sys.modules (kanon) + zdejmij fake gspread, by importorskip
+    #     w pozostałych testach cod_weekly dalej poprawnie SKIPOWAŁ.
+    for _k, _v in _SAVED_MODS.items():
+        if _v is None:
+            sys.modules.pop(_k, None)
+        else:
+            sys.modules[_k] = _v
+    for _name in _INJECTED:
+        sys.modules.pop(_name, None)
+    if "google.oauth2" in _INJECTED:
+        try:
+            import google as _google_pkg
+            if getattr(_google_pkg, "oauth2", None) is not None:
+                delattr(_google_pkg, "oauth2")
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
