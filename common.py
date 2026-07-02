@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import threading
+import time
 import contextlib
 from pathlib import Path
 from datetime import datetime, timezone
@@ -20,6 +21,24 @@ _config_mtime = 0
 _flags_cache = None
 _flags_mtime = 0
 
+# ─── FALA perf-lazy (2026-07-02, finding E audytu 2.0): flag-load fast path ───
+# Problem: `flag()`/`decision_flag()` wołają `load_flags()` ~700×/decyzję, a KAŻDE
+# wywołanie robiło `FLAGS_PATH.stat()` (syscall). Przy 10 kandydatach w
+# ThreadPoolExecutor = ~740 stat/decyzję (zmierzone cProfile). Fast path (gdy
+# ENABLE_PERF_LAZY_MEMBERS ON): re-stat NAJWYŻEJ co _PERF_FLAGS_STAT_TTL_S; między
+# — zwraca cache bez stat. Bajt-parytet: w oknie TTL flagi są STAŁE (zmiana
+# flags.json podchwycona ≤TTL, mieści się w tolerancji hot-reload jak dziś).
+# OFF (default) = zachowanie 1:1 sprzed fali (stat co wywołanie). Gate po
+# EFEKTYWNEJ wartości procesu (odświeżanej przy reloadzie JSON — bez rekurencji).
+_PERF_FLAGS_STAT_TTL_S = float(os.environ.get("PERF_FLAGS_STAT_TTL_S", "0.25"))
+_flags_last_stat_mono = 0.0
+_perf_lazy_members = False  # odświeżane w load_flags przy reloadzie JSON
+
+# Stała-fallback (kanon = flags.json, hot-reload). NIE flaga decyzyjna (zmienia
+# tylko KIEDY compute, nie TREŚĆ decyzji → poza ETAP4_DECISION_FLAGS). Env override
+# wyłącznie dla wygody testów/harnessu; produkcja steruje przez flags.json.
+ENABLE_PERF_LAZY_MEMBERS = os.environ.get("ENABLE_PERF_LAZY_MEMBERS", "0") == "1"
+
 
 def load_config():
     """Hot-reload config.json jesli sie zmienil."""
@@ -33,13 +52,28 @@ def load_config():
 
 
 def load_flags():
-    """Hot-reload flags.json jesli sie zmienil."""
-    global _flags_cache, _flags_mtime
+    """Hot-reload flags.json jesli sie zmienil.
+
+    perf-lazy (ENABLE_PERF_LAZY_MEMBERS ON): pomija `stat()` w oknie TTL
+    (_PERF_FLAGS_STAT_TTL_S) gdy cache ciepły — eliminuje ~740 stat/decyzję.
+    Zwracany dict jest READ-ONLY dla callerów (`.get()`); zero mutacji = brak
+    ryzyka parytetu. OFF = stat co wywołanie (zachowanie sprzed fali)."""
+    global _flags_cache, _flags_mtime, _flags_last_stat_mono, _perf_lazy_members
+    if _perf_lazy_members and _flags_cache is not None:
+        # Fast path: w oknie TTL nie stat'ujemy — flagi stałe w tak krótkim oknie.
+        if (time.monotonic() - _flags_last_stat_mono) < _PERF_FLAGS_STAT_TTL_S:
+            return _flags_cache
     mtime = FLAGS_PATH.stat().st_mtime
+    _flags_last_stat_mono = time.monotonic()
     if _flags_cache is None or mtime > _flags_mtime:
         with open(FLAGS_PATH) as f:
             _flags_cache = json.load(f)
         _flags_mtime = mtime
+        # Odśwież EFEKTYWNY stan perf-lazy z właśnie wczytanego JSON (bez rekurencji
+        # przez flag()). Fallback do stałej modułu gdy klucza brak w flags.json.
+        _perf_lazy_members = bool(
+            _flags_cache.get("ENABLE_PERF_LAZY_MEMBERS",
+                             globals().get("ENABLE_PERF_LAZY_MEMBERS", False)))
     return _flags_cache
 
 

@@ -15,11 +15,13 @@ Pure library — no imports from dispatch_pipeline / panel_watcher (one-way).
 """
 from __future__ import annotations
 
+import copy
 import fcntl
 import json
 import logging
 import os
 import tempfile
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -110,10 +112,57 @@ def _write_raw(data: Dict[str, Any]) -> None:
     _atomic_write(PLANS_FILE, data)
 
 
+# ─── FALA perf-lazy (2026-07-02, finding E audytu 2.0): read-cache planów ───
+# Problem: load_plan czytany PER KANDYDAT (ThreadPoolExecutor) → N× pełny
+# `_read_raw` (open+json.load) POD fcntl-lockiem → wątki serializują się na
+# lockfile (kontencja rośnie w peak). Cache po (mtime_ns, size) NAD lockiem:
+# ciepły hit pomija fcntl-lock+open+json.load. Używany WYŁĄCZNIE przez ścieżki
+# READ (load_plan/load_plans), które zwracają deepcopy → caller nigdy nie mutuje
+# współdzielonego obiektu cache. WRITERS (save/invalidate/advance/insert) dalej
+# wołają surowy `_read_raw()` pod exclusive lock i mutują świeży parse — os.replace
+# bumpuje mtime → cache sam się unieważnia. Bajt-parytet: mtime-key = ta sama
+# semantyka co load_flags; deepcopy = niezależny obiekt identyczny z fresh-parse.
+# OFF (default) = ścieżka sprzed fali (fcntl-lock + _read_raw co wywołanie).
+_perf_plans_cache = {"key": None, "data": None}
+_perf_plans_lock = threading.Lock()
+
+
+def _perf_lazy_on() -> bool:
+    """EFEKTYWNY stan flagi perf-lazy (flags.json → stała common → False)."""
+    try:
+        from dispatch_v2 import common as _C
+        return bool(_C.flag("ENABLE_PERF_LAZY_MEMBERS",
+                            getattr(_C, "ENABLE_PERF_LAZY_MEMBERS", False)))
+    except Exception:
+        return False
+
+
+def _read_raw_shared() -> Dict[str, Any]:
+    """mtime-keyed cache parsowanego pliku planów (perf-lazy). Zwraca WSPÓLNY
+    obiekt — TYLKO dla ścieżek READ, które deepcopy'ują przed zwrotem. Ciepły hit
+    pomija fcntl-lock + open + json.load."""
+    try:
+        st = PLANS_FILE.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except FileNotFoundError:
+        return {}
+    with _perf_plans_lock:
+        if _perf_plans_cache["key"] == key and _perf_plans_cache["data"] is not None:
+            return _perf_plans_cache["data"]
+    with _locked(exclusive=False):
+        data = _read_raw()
+    with _perf_plans_lock:
+        _perf_plans_cache["key"] = key
+        _perf_plans_cache["data"] = data
+    return data
+
+
 # ---- public API ----
 
 def load_plans() -> Dict[str, Any]:
-    """Load all plans (read-only copy). Shared lock."""
+    """Load all plans (read-only copy). Shared lock (perf-lazy: mtime-cache)."""
+    if _perf_lazy_on():
+        return copy.deepcopy(_read_raw_shared())
     with _locked(exclusive=False):
         return _read_raw()
 
@@ -143,8 +192,12 @@ def load_plan(
     Returns None if no plan or plan invalidated.
     """
     cid = str(courier_id)
-    with _locked(exclusive=False):
-        plans = _read_raw()
+    _lazy = _perf_lazy_on()
+    if _lazy:
+        plans = _read_raw_shared()  # WSPÓLNY — tylko czytamy, zwracamy deepcopy
+    else:
+        with _locked(exclusive=False):
+            plans = _read_raw()
     plan = plans.get(cid)
     if plan is None:
         return None
@@ -157,7 +210,9 @@ def load_plan(
             if invalidate_on_mismatch:
                 invalidate_plan(cid, "ORDER_DELIVERED_ALL")
             return None
-    return plan
+    # deepcopy tylko na ścieżce współdzielonego cache — chroni cache przed
+    # ewentualną mutacją u callera (writers używają surowego _read_raw).
+    return copy.deepcopy(plan) if _lazy else plan
 
 
 def save_plan(
