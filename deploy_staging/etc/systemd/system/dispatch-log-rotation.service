@@ -1,0 +1,27 @@
+# STAGING — NIE zainstalowany. Instalacja tylko przez koordynatora za ACK (patrz README).
+# Retencja dziennych logów observability (candidate_decisions/fleet_filter, 14d).
+# Wzór: dispatch-ground-truth-gc.service (lekki GC oneshot). Audyt 2.0 pas L13.
+[Unit]
+Description=Ziomek observability log retention — kasuje candidate_decisions/fleet_filter starsze niż 14d (audyt L13)
+Documentation=file:///root/.openclaw/workspace/scripts/dispatch_v2/observability/log_rotation.py
+After=network-online.target
+# OnFailure jak we wszystkich dispatch-*.service — non-zero exit → alert Telegram.
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+Environment=PYTHONUNBUFFERED=1
+# --apply = realne kasowanie (tryb produkcyjny cronu). --max-delete = bezpiecznik.
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.observability.log_rotation --apply --retention-days 14 --max-delete 500
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=120
+
+# Profil: lekki GC (listdir + stat + unlink kilkudziesięciu plików, <2 s).
+MemoryHigh=128M
+MemoryMax=200M
+CPUQuota=50%
+TasksMax=64
+OOMScoreAdjust=100
