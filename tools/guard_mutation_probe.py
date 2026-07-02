@@ -185,20 +185,19 @@ def _probe_behavioral():
 
 # ── POLARITY (verdict-gate) ───────────────────────────────────────────────────
 def _ensure_dispatch_importable():
-    """Zapewnij, że `import dispatch_v2` działa w procesie CLI — odczytaj scripts
-    root z REPOZYTORYJNEGO conftest (`_SCRIPTS_ROOT`), nie hardcode w tym pliku."""
+    """Zapewnij, że `import dispatch_v2` działa w procesie CLI. Samo-lokalizacja:
+    scripts-root = rodzic katalogu dispatch_v2 (worktree LUB kanon), z env-override
+    ZIOMEK_SCRIPTS_ROOT (spójnie z tests/conftest.py). NIE parsujemy conftest
+    regexem — literał zniknął (S1: env-overridable), regex łamał się na refaktorze
+    semantyko-zachowawczym (klasa C13/C12(f), złapane po merge FALA-SERIAL 02.07)."""
     try:
         import dispatch_v2  # noqa: F401
         return
     except ModuleNotFoundError:
         pass
-    import re
-    conftest = (_TESTS_DIR / "conftest.py").read_text(encoding="utf-8")
-    m = re.search(r'_SCRIPTS_ROOT\s*=\s*["\']([^"\']+)["\']', conftest)
-    if m:
-        root = m.group(1)
-        if root not in sys.path:
-            sys.path.insert(0, root)
+    root = os.environ.get("ZIOMEK_SCRIPTS_ROOT", str(_DISPATCH_ROOT.parent))
+    if root not in sys.path:
+        sys.path.insert(0, root)
 
 
 def _import_verdict_helpers():

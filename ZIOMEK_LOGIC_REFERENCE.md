@@ -871,3 +871,6 @@ the agent citation was not line-verified.
 ### FALA-2 (2026-07-02) — observability
 - `ENABLE_DATA_ALERTS` — MASTER monitor DANOWY (`observability/data_alerts.py`, timer 5 min): 5 sygnałów edge-triggered (sentinel-rate / empty-pool / stale-grafik / stale-GPS / ledger-stall). OFF = oneshot no-op exit 0. ON = log `scripts/logs/data_alerts.log` + stan `dispatch_state/data_alerts_state.json`; NIE dotyka decyzji silnika (czysty odczyt).
 - `DATA_ALERTS_TELEGRAM` — druga bramka: alerty danowe idą też na Telegram (wymaga MASTER ON). Default OFF (log-only).
+
+### FALA SERIAL S1 (2026-07-02) — konsolidacja 35-min HARD
+- `ENABLE_SLA_ANCHOR_UNIFIED` — 35-min HARD (R6 carried-age ↔ SLA dostawy) liczony z JEDNEGO źródła `sla_anchor.py` z JAWNĄ kotwicą (ready vs now), w 3 bliźniakach RAZEM (`route_simulator_v2._count_sla_violations` + feasibility SLA-loop + R6 per-order; `plan_recheck._o2_key` dziedziczy przez `plan.sla_violations`). OFF (default) = inline bez zmian, bajt-w-bajt (fuzz 400/0 mismatch). ON = TE SAME decyzje (werdykt+reason+sla_violations identyczne) + metryka obs `sla_anchor_source` (de-maskowanie: naruszenie każdej kotwicy niezależnie widoczne; mutation-probe 5/5). Prerekwizyt flipu O2 (finding feas-r6-sla-anchor-gap). Flip: wpis do flags.json (hot) + restart shadow + 2 dni obserwacji; rollback hot = false.
