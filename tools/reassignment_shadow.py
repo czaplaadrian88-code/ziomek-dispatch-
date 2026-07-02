@@ -22,15 +22,24 @@ detour i okno czasowe R6. v2 (live-candidate, forward) doda route-sim + missed-o
 
 Użycie: /root/.openclaw/venvs/dispatch/bin/python tools/reassignment_shadow.py
 """
-import json, sqlite3, math, re, statistics as st
+import json, os, sqlite3, math, re, sys, statistics as st
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary hardkod [żywy, .1] gubił .2.gz po rotacji
+# (logrotate size 100M / daily + delaycompress). Indeks odel jest first-wins per
+# oid (0 kolizji między plikami w oknie → identycznie); ścieżka = ledger_io.LEDGER.
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
 
 WAR = timezone(timedelta(hours=2))
 DB = "/root/.openclaw/workspace/dispatch_state/events.db"
 GEOC = "/root/.openclaw/workspace/dispatch_state/geocode_cache.json"
-SD = ["/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl",
-      "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl.1"]
+SHADOW_DECISIONS = ledger_io.LEDGER["shadow"]
 FRESH_H = 3.0  # okno świeżości bagu (h)
 
 
@@ -64,18 +73,10 @@ def main():
             geo[k.strip().lower()] = (v["lat"], v["lon"])
     # oid -> delivery_address (z shadow)
     odel = {}
-    for f in SD:
-        try:
-            for line in open(f):
-                try:
-                    r = json.loads(line)
-                except Exception:
-                    continue
-                oid = str(r.get("order_id") or "")
-                if oid and oid not in odel:
-                    odel[oid] = r.get("delivery_address") or ""
-        except FileNotFoundError:
-            pass
+    for r in _rotated_logs.iter_jsonl_records(SHADOW_DECISIONS, None):
+        oid = str(r.get("order_id") or "")
+        if oid and oid not in odel:
+            odel[oid] = r.get("delivery_address") or ""
 
     def dcoord(oid):
         a = odel.get(oid)

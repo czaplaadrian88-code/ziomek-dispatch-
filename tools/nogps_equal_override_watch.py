@@ -16,10 +16,13 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-SHADOW = [
-    "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl",
-    "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl.1",
-]
+# L1.2 (2026-07-02): odczyt shadow_decisions ORAZ learning_log ROTATION-AWARE
+# przez kanon (_rotated_logs/ledger_io) — stary odczyt [żywy, .1] shadow gubił
+# .2.gz, a learning czytał TYLKO żywy plik (gubił cały .1). logrotate size 100M
+# / daily + delaycompress. Zbiory oid (set) są order-independent, metryki BEZ ZMIAN.
+from dispatch_v2.tools import _rotated_logs, ledger_io
+
+SHADOW_DECISIONS = ledger_io.LEDGER["shadow"]
 LEARNING = "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl"
 FLIP_TS = os.environ.get("NOGPS_WATCH_FLIP_TS", "2026-06-22T17:01:48+00:00")
 MIN_OUTCOME = int(os.environ.get("NOGPS_WATCH_MIN_OUTCOME", "15"))
@@ -36,46 +39,42 @@ def _ts(s):
 def collect():
     since = _ts(FLIP_TS)
     ng_oids = set()
-    for p in SHADOW:
-        if not os.path.exists(p):
+    for line in _rotated_logs.iter_jsonl_lines(SHADOW_DECISIONS, None):
+        if "no_gps" not in line:
             continue
-        for line in open(p, encoding="utf-8", errors="replace"):
-            if "no_gps" not in line:
-                continue
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            t = _ts(d.get("ts"))
-            if t is None or (since and t < since):
-                continue
-            if d.get("verdict") not in ("PROPOSE", "AUTO"):
-                continue
-            b = d.get("best") or {}
-            if b.get("pos_source") == "no_gps" and (b.get("r6_bag_size") or 0) == 0:
-                ng_oids.add(str(d.get("order_id")))
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        t = _ts(d.get("ts"))
+        if t is None or (since and t < since):
+            continue
+        if d.get("verdict") not in ("PROPOSE", "AUTO"):
+            continue
+        b = d.get("best") or {}
+        if b.get("pos_source") == "no_gps" and (b.get("r6_bag_size") or 0) == 0:
+            ng_oids.add(str(d.get("order_id")))
     ov = ag = 0
-    if os.path.exists(LEARNING):
-        for line in open(LEARNING, encoding="utf-8", errors="replace"):
-            if "courier_id" not in line and "action" not in line:
-                continue
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            if str(d.get("order_id")) not in ng_oids:
-                continue
-            a = d.get("action")
-            if a == "TIMEOUT_SUPERSEDED":
+    for line in _rotated_logs.iter_jsonl_lines(LEARNING, None):
+        if "courier_id" not in line and "action" not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if str(d.get("order_id")) not in ng_oids:
+            continue
+        a = d.get("action")
+        if a == "TIMEOUT_SUPERSEDED":
+            ov += 1
+        elif a == "PANEL_OVERRIDE":
+            pc, ac = d.get("proposed_courier_id"), d.get("actual_courier_id")
+            if pc is None or ac is None or str(pc) != str(ac):
                 ov += 1
-            elif a == "PANEL_OVERRIDE":
-                pc, ac = d.get("proposed_courier_id"), d.get("actual_courier_id")
-                if pc is None or ac is None or str(pc) != str(ac):
-                    ov += 1
-                else:
-                    ag += 1
-            elif a == "PANEL_AGREE":
+            else:
                 ag += 1
+        elif a == "PANEL_AGREE":
+            ag += 1
     return len(ng_oids), ov, ag
 
 

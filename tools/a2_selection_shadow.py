@@ -80,9 +80,19 @@ import tempfile
 from datetime import datetime, timezone
 
 RELIABILITY_JSON = "/root/.openclaw/workspace/dispatch_state/courier_reliability.json"
+
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary hardkod [żywy, .1] gubił .2.gz po rotacji
+# (logrotate size 100M / daily + delaycompress). Domyślny zbiór decyzji =
+# files_in_window(ledger_io.LEDGER['shadow']) (pełny łańcuch .N.gz→.1→żywy);
+# łączny limit --max-lines i re-użycie custom --decisions NIETKNIĘTE.
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
 # Live (mały) + rotowany (duży — STRUMIENIOWANY linia po linii, nie wczytywany w całości).
-DECISIONS_LIVE = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
-DECISIONS_ROTATED = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl.1"
 SHADOW_LOG = "/root/.openclaw/workspace/dispatch_state/a2_selection_shadow.jsonl"
 
 COEFF_SWEEP = [20.0, 40.0, 60.0, 100.0]
@@ -142,7 +152,7 @@ def iter_decisions(paths, max_lines):
     for path in paths:
         if not path or not os.path.exists(path):
             continue
-        with open(path, errors="replace") as f:
+        with _rotated_logs.open_maybe_gz(path) as f:
             for line in f:
                 if read >= max_lines:
                     return
@@ -428,7 +438,7 @@ def main():
                     help="ścieżka do feedu courier_reliability.json")
     ap.add_argument("--decisions", default=None,
                     help="override ścieżki decyzji (pojedynczy plik; dla testu syntetycznego). "
-                         "Domyślnie: live shadow_decisions.jsonl + rotowany .1")
+                         "Domyślnie: pełny łańcuch rotation-aware (.N.gz→.1→żywy)")
     ap.add_argument("--no-trend", action="store_true",
                     help="nie dopisuj do trend logu (dla testów)")
     args = ap.parse_args()
@@ -445,7 +455,7 @@ def main():
     if args.decisions:
         decision_paths = [args.decisions]
     else:
-        decision_paths = [DECISIONS_LIVE, DECISIONS_ROTATED]
+        decision_paths = _rotated_logs.files_in_window(ledger_io.LEDGER["shadow"])
 
     # Materializujemy decyzje raz (re-iterowalne dla sweepu COEFF). max_lines chroni RAM:
     # przy domyślnych 200k linii to akceptowalny narzut na offline tool.

@@ -25,8 +25,20 @@ import sys
 from collections import Counter
 
 BACKFILL = "/root/.openclaw/workspace/dispatch_state/backfill_decisions_outcomes_v1.jsonl"
-SHADOW_LIVE = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
-SHADOW_ROT = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl.1"
+
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary hardkod [żywy, .1] gubił .2.gz po rotacji
+# (logrotate size 100M / daily + delaycompress). files_in_window daje pełny
+# łańcuch (.N.gz→.1→żywy); ścieżka = ledger_io.LEDGER. Per-plik limit (max-lines)
+# i agregaty Counter NIETKNIĘTE, metryki BEZ ZMIAN.
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+
+SHADOW_DECISIONS = ledger_io.LEDGER["shadow"]
 RELIABILITY = "/root/.openclaw/workspace/dispatch_state/courier_reliability.json"
 OUT_JSON = "/root/.openclaw/workspace/dispatch_state/rule_deviation_report.json"
 
@@ -57,7 +69,7 @@ def _rate(num, den):
 def _stream(path, limit=None):
     if not os.path.exists(path):
         return
-    with open(path, errors="replace") as f:
+    with _rotated_logs.open_maybe_gz(path) as f:
         for i, line in enumerate(f):
             if limit and i >= limit:
                 break
@@ -106,7 +118,7 @@ def proposed_deviations(max_lines):
     dev = Counter()
     cnt = Counter()  # mianowniki per reguła
     spans = []
-    for path in (SHADOW_LIVE, SHADOW_ROT):
+    for path in _rotated_logs.files_in_window(SHADOW_DECISIONS):
         for d in _stream(path, limit=max_lines):
             if d.get("verdict") != "PROPOSE":
                 continue

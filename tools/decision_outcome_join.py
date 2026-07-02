@@ -35,10 +35,22 @@ WARSAW = ZoneInfo("Europe/Warsaw")
 BASE = "/root/.openclaw/workspace"
 ETA_CALIB = f"{BASE}/dispatch_state/eta_calibration_log.jsonl"
 SLA_LOG = f"{BASE}/scripts/logs/sla_log.jsonl"
-SHADOW_LOGS = [
-    f"{BASE}/scripts/logs/shadow_decisions.jsonl",
-    f"{BASE}/scripts/logs/shadow_decisions.jsonl.1",
-]
+
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary hardkod [żywy, .1] gubił .2.gz po rotacji
+# (logrotate size 100M / daily + delaycompress). files_in_window daje pełny
+# łańcuch (.N.gz→.1→żywy) chronologicznie; ścieżka = ledger_io.LEDGER (jedno
+# źródło). Indeks best-pred jest last-wins ("ostatni rekord") → chronologiczny
+# porządek kanonu = najświeższy wygrywa (zgodnie z docstringiem). Per-rekord
+# filtr ts konsumenta NIETKNIĘTY, metryki BEZ ZMIAN.
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+
+SHADOW_LOGS = _rotated_logs.files_in_window(ledger_io.LEDGER["shadow"])
 OUT = f"{BASE}/dispatch_state/decision_outcomes.jsonl"
 SLA_MIN = 35.0
 # Znany optymizm predykcji odbioru (poślizg ODBIORU, audyt 2026-06-22/23): real ≈ predicted + ~9 min.
@@ -48,7 +60,7 @@ PICKUP_SLIP_DEBIAS_MIN = 9.0
 def _read_jsonl(path):
     if not os.path.exists(path):
         return
-    with open(path, encoding="utf-8") as fh:
+    with _rotated_logs.open_maybe_gz(path) as fh:
         for line in fh:
             line = line.strip()
             if not line:

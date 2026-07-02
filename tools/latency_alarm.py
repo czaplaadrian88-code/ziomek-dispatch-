@@ -22,24 +22,19 @@ from zoneinfo import ZoneInfo
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 BASE = "/root/.openclaw/workspace"
-SHADOW_LOGS = [
-    f"{BASE}/scripts/logs/shadow_decisions.jsonl",
-    f"{BASE}/scripts/logs/shadow_decisions.jsonl.1",
-]
 
+# L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
+# (_rotated_logs/ledger_io) — stary hardkod [żywy, .1] gubił .2.gz po rotacji
+# (logrotate size 100M / daily + delaycompress). Ścieżka = ledger_io.LEDGER
+# (jedno źródło); per-rekord filtry konsumenta NIETKNIĘTE, metryki BEZ ZMIAN.
+try:
+    from dispatch_v2.tools import _rotated_logs, ledger_io
+except ImportError:
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    from dispatch_v2.tools import _rotated_logs, ledger_io
 
-def _read_jsonl(path):
-    if not os.path.exists(path):
-        return
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
+SHADOW_DECISIONS = ledger_io.LEDGER["shadow"]
 
 
 def _parse_dt(s):
@@ -60,17 +55,16 @@ def _pctl(v, q):
 
 def _collect(cutoff, until=None):
     out = []
-    for path in SHADOW_LOGS:
-        for r in _read_jsonl(path):
-            ts = _parse_dt(r.get("ts"))
-            lm = r.get("latency_ms")
-            if ts is None or not isinstance(lm, (int, float)):
-                continue
-            if ts < cutoff:
-                continue
-            if until is not None and ts >= until:
-                continue
-            out.append(lm)
+    for r in _rotated_logs.iter_jsonl_records(SHADOW_DECISIONS, None):
+        ts = _parse_dt(r.get("ts"))
+        lm = r.get("latency_ms")
+        if ts is None or not isinstance(lm, (int, float)):
+            continue
+        if ts < cutoff:
+            continue
+        if until is not None and ts >= until:
+            continue
+        out.append(lm)
     return out
 
 

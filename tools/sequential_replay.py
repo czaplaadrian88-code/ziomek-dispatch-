@@ -50,20 +50,20 @@ if _SCRIPTS_ROOT not in sys.path:
     sys.path.insert(0, _SCRIPTS_ROOT)
 
 EVENTS_DB = "/root/.openclaw/workspace/dispatch_state/events.db"
-# 2026-05-21 (audyt): czytaj AKTYWNY log + zrotowany `.1` (pełne pokrycie dat —
-# bieżące w aktywnym, starsze w `.1`). Wcześniej hardkod `.1` (zamrożony 2026-05-18)
-# → roster=0 dla dat po 18.05 → "BRAK danych". Env `ZIOMEK_REPLAY_LEARNING_LOG`
-# (':'-separowana lista) nadpisuje.
-_DEFAULT_LEARNING_LOGS = [
-    "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl.1",
+
+# L1.2 (2026-07-02): learning_log ROTATION-AWARE przez kanon _rotated_logs.
+# 2026-05-21 (audyt): czytaj AKTYWNY log + zrotowany `.1` (pełne pokrycie dat).
+# Stary hardkod [żywy, .1] gubił .2.gz po rotacji (logrotate size 100M / daily +
+# delaycompress). files_in_window daje pełny łańcuch (.N.gz→.1→żywy). Env
+# `ZIOMEK_REPLAY_LEARNING_LOG` (':'-separowana lista) nadal nadpisuje wprost.
+# learning_log NIE jest w ledger_io.LEDGER — iterujemy kanon na base path.
+from dispatch_v2.tools import _rotated_logs  # noqa: E402
+
+_LEARNING_BASE = "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl"
+_ENV_LEARNING_LOGS = [
+    p for p in os.environ.get("ZIOMEK_REPLAY_LEARNING_LOG", "").split(":") if p
 ]
-LEARNING_LOGS = [
-    p for p in (
-        os.environ.get("ZIOMEK_REPLAY_LEARNING_LOG", "").split(":")
-        or []
-    ) if p
-] or _DEFAULT_LEARNING_LOGS
+LEARNING_LOGS = _ENV_LEARNING_LOGS or _rotated_logs.files_in_window(_LEARNING_BASE)
 # Wstecz-kompat: część kodu odwołuje się do LEARNING_LOG (pierwszy istniejący).
 LEARNING_LOG = next((p for p in LEARNING_LOGS if os.path.exists(p)), LEARNING_LOGS[0])
 WARSAW_OFFSET = "+02:00"  # maj 2026 — CEST
@@ -188,7 +188,7 @@ def build_roster(date: str, hour_from: int, hour_to: int) -> set:
     for log_path in LEARNING_LOGS:  # aktywny + zrotowany — pełne pokrycie dat
         if not os.path.exists(log_path):
             continue
-        with open(log_path, encoding="utf-8") as f:
+        with _rotated_logs.open_maybe_gz(log_path) as f:
             for line in f:
                 if not any(h in line for h in hrs):
                     continue
