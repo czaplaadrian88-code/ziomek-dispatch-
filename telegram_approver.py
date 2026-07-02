@@ -1768,6 +1768,26 @@ def save_pending(path: str, pending: dict) -> None:
     _pps.locked_save(pending, path)
 
 
+def set_pending(path: str, oid: str, entry: dict) -> None:
+    """L7.5 delta-fix (audyt 2.0 O1): dodaj JEDEN wpis pending pod LOCK_EX na ŚWIEŻYM
+    stanie z dysku — NIE blind-overwrite z nieświeżej pamięci telegramu. Wpisy dołożone
+    współbieżnie przez shadow (`upsert_proposals`) przeżywają. Disk = źródło prawdy,
+    `state["pending"]` = cache callbacków (caller aktualizuje go osobno). Import lazy.
+    Nie trzyma żadnego innego locka gdy tu wchodzi (append_learning zwalnia swój flock
+    na learning_log PRZED tym wywołaniem) → brak zagnieżdżenia, brak deadlocka."""
+    from dispatch_v2 import pending_proposals_store as _pps
+    _pps.locked_set(oid, entry, path)
+
+
+def pop_pending(path: str, oid: str) -> None:
+    """L7.5 delta-fix: usuń JEDEN wpis pending pod LOCK_EX na świeżym stanie — NIE
+    blind-overwrite. Idempotentne. Cudze wpisy (shadow) przeżywają, w przeciwieństwie do
+    poprzedniego `state["pending"].pop(); save_pending(cały dict)`, który kasował wpisy
+    shadow dołożone po ostatnim load telegramu."""
+    from dispatch_v2 import pending_proposals_store as _pps
+    _pps.locked_pop(oid, path)
+
+
 def append_learning(path: str, record: dict) -> None:
     """MP-#11 (2026-05-08): atomic JSONL append via core helper.
 
@@ -2080,14 +2100,18 @@ async def proposal_sender(state: dict) -> None:
             _log.warning(f"sendMessage fail oid={oid}: {r.get('error') or r.get('description')}")
             continue
         message_id = r["result"]["message_id"]
-        state["pending"][oid] = {
+        entry = {
             "order_id": oid,
             "message_id": message_id,
             "sent_at": now_iso(),
             "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=PROPOSAL_TIMEOUT_SEC)).isoformat(),
             "decision_record": rec,
         }
-        save_pending(state["pending_path"], state["pending"])
+        # L7.5 delta: disk-first (źródło prawdy, tylko ten klucz — wpisy shadow przeżywają),
+        # potem cache w pamięci. Gdy crash trafi między te dwie linie, restart i tak czyta
+        # dysk (który już ma wpis) → brak zgubionego proposal-a.
+        set_pending(state["pending_path"], oid, entry)
+        state["pending"][oid] = entry
         _log.info(f"SENT oid={oid} msg={message_id}")
 
 
@@ -2931,8 +2955,8 @@ async def handle_message(state: dict, msg: dict) -> None:
                 "feedback": f"reply: {text[:80]}",
                 "decision": dr,
             })
+            pop_pending(state["pending_path"], matched_oid)  # L7.5 delta (disk-first)
             state["pending"].pop(matched_oid, None)
-            save_pending(state["pending_path"], state["pending"])
             _log.info(f"REPLY_OVERRIDE oid={matched_oid} courier={courier_name} time={time_min} ok={ok}")
             return
 
@@ -2998,8 +3022,8 @@ async def handle_message(state: dict, msg: dict) -> None:
             "feedback": f"free_text(latest): {text[:80]}",
             "decision": dr,
         })
+        pop_pending(state["pending_path"], latest_oid)  # L7.5 delta (disk-first)
         state["pending"].pop(latest_oid, None)
-        save_pending(state["pending_path"], state["pending"])
         _log.info(
             f"REPLY_OVERRIDE (free-text) oid={latest_oid} courier={courier_name} "
             f"time={time_min} ok={ok}"
@@ -4015,8 +4039,8 @@ async def handle_callback(state: dict, action: str, oid: str, cb: dict) -> None:
                 f"TG_REASON emit failed oid={oid} reason={inny_reason_code!r}: "
                 f"{type(e).__name__}: {e}"
             )
+    pop_pending(state["pending_path"], oid)  # L7.5 delta (disk-first)
     state["pending"].pop(oid, None)
-    save_pending(state["pending_path"], state["pending"])
     _log.info(f"CB {action_for_log} oid={oid} → {feedback}")
 
 
@@ -4081,8 +4105,8 @@ async def _process_expired_pending(
             "feedback": f"order już {cur_status} — silent skip",
             "decision": entry["decision_record"],
         })
+        pop_pending(state["pending_path"], oid)  # L7.5 delta (disk-first)
         state["pending"].pop(oid, None)
-        save_pending(state["pending_path"], state["pending"])
         return "SUPERSEDED"
     _log.warning(f"TIMEOUT oid={oid} → brak odpowiedzi, zlecenie pozostaje w puli")
     await asyncio.to_thread(
@@ -4100,8 +4124,8 @@ async def _process_expired_pending(
         "feedback": "brak decyzji w czasie — zlecenie pozostaje w puli",
         "decision": entry["decision_record"],
     })
+    pop_pending(state["pending_path"], oid)  # L7.5 delta (disk-first)
     state["pending"].pop(oid, None)
-    save_pending(state["pending_path"], state["pending"])
     return "TIMEOUT"
 
 
@@ -4230,16 +4254,26 @@ async def _shutdown_drain(state: dict) -> None:
     """MP-#10 (2026-05-08): final flush pending state przed exit. Idempotent.
 
     Eliminuje race window 50µs między state mutation (proposal_sender mutuje
-    `state['pending']` po sendMessage) a save_pending (atomic write na disk).
-    Bez drain SIGTERM mid-mutation = restart load_pending() zwraca state sprzed
-    mutation → user klika ASSIGN → KeyError w handle_callback. Per audit
-    TELEGRAM_APPROVER §2 P×I=8 (META audit twierdził 20, fact-checked do 8).
+    `state['pending']` po sendMessage) a zapisem na disk. Bez drain SIGTERM
+    mid-mutation = restart load_pending() zwraca state sprzed mutation → user
+    klika ASSIGN → KeyError w handle_callback. Per audit TELEGRAM_APPROVER §2
+    P×I=8 (META audit twierdził 20, fact-checked do 8).
+
+    L7.5 delta-fix (audyt 2.0 O1): NIE blind-overwrite (`save_pending` całego dicta)
+    — to kasowało wpisy shadow (`upsert_proposals`) dołożone po ostatnim load
+    telegramu. Teraz każda operacja add/pop zapisuje deltę SYNCHRONICZNIE, więc
+    pamięć telegramu jest już zflushowana; drain robi jedynie ADDITIVE reconcile
+    (`locked_merge_missing`) jako bezpiecznik — dołoży własne wpisy telegramu
+    brakujące na dysku, NIGDY nie usunie ani nie nadpisze cudzych. Nie może
+    zgubić popów: pamięć telegramu już je odzwierciedla, więc popnięte klucze
+    nie ma w `entries` i się nie odrodzą.
 
     Lekcja #32 — log success+fail context, NIGDY silent.
     """
     try:
-        save_pending(state["pending_path"], state["pending"])
-        _log.info(f"shutdown drain: pending={len(state['pending'])} flushed")
+        from dispatch_v2 import pending_proposals_store as _pps
+        _pps.locked_merge_missing(state["pending"], state["pending_path"])
+        _log.info(f"shutdown drain: pending={len(state['pending'])} reconciled (delta additive)")
     except Exception as e:
         _log.error(f"shutdown drain FAIL ({type(e).__name__}: {e})")
 

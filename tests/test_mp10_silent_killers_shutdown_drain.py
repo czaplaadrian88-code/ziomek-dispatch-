@@ -358,22 +358,27 @@ def test_shutdown_drain_happy_path_logs_info(tmp_path, caplog):
 
     asyncio.run(ta._shutdown_drain(state))
 
-    # Verify atomic save happened
+    # L7.5 delta-fix: drain robi ADDITIVE reconcile (locked_merge_missing) zamiast
+    # blind save_pending. Z pustego dysku additive dołoży wszystkie wpisy → saved==pending;
+    # log zmieniony "flushed" → "reconciled (delta additive)" (nie kasuje cudzych wpisów shadow).
     import json as _json
     with open(state["pending_path"]) as f:
         saved = _json.load(f)
     assert saved == pending
     msgs = [r.message for r in caplog.records if "shutdown drain" in r.message]
-    assert msgs and "pending=2 flushed" in msgs[0]
+    assert msgs and "pending=2 reconciled" in msgs[0]
 
 
 def test_shutdown_drain_save_fail_logs_error_does_not_raise(monkeypatch, caplog):
     caplog.set_level(logging.ERROR, logger="telegram_approver")
 
-    def _bad_save(*_a, **_kw):
+    # L7.5 delta-fix: drain woła pending_proposals_store.locked_merge_missing (nie save_pending).
+    from dispatch_v2 import pending_proposals_store as _pps
+
+    def _bad_merge(*_a, **_kw):
         raise OSError("disk full")
 
-    monkeypatch.setattr(ta, "save_pending", _bad_save)
+    monkeypatch.setattr(_pps, "locked_merge_missing", _bad_merge)
     state = {"pending_path": "/tmp/dummy", "pending": {}}
 
     # MUST NOT raise
