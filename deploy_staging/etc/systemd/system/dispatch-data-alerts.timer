@@ -1,0 +1,18 @@
+# STAGING — NIE zainstalowany. Instalacja tylko przez koordynatora za ACK (patrz README).
+# Co 5 min. OnCalendar (NIE OnUnitActiveSec) — świadomie: timer z samym
+# OnUnitActiveSec bywa odkotwiczany przez `daemon-reload` (audyt 2.0 martwe
+# monitory / L13 §3b). Edge-trigger w module dba, żeby to NIE był spam:
+# alert tylko na krawędzi + cooldown 60 min re-emisji.
+[Unit]
+Description=Ziomek monitor DANOWY — bieg co 5 min (edge-triggered, master-flag OFF do ACK)
+Documentation=file:///root/.openclaw/workspace/scripts/dispatch_v2/observability/data_alerts.py
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+AccuracySec=30s
+RandomizedDelaySec=20s
+Unit=dispatch-data-alerts.service
+
+[Install]
+WantedBy=timers.target
