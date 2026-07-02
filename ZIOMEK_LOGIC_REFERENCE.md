@@ -872,6 +872,9 @@ the agent citation was not line-verified.
 - `ENABLE_DATA_ALERTS` — MASTER monitor DANOWY (`observability/data_alerts.py`, timer 5 min): 5 sygnałów edge-triggered (sentinel-rate / empty-pool / stale-grafik / stale-GPS / ledger-stall). OFF = oneshot no-op exit 0. ON = log `scripts/logs/data_alerts.log` + stan `dispatch_state/data_alerts_state.json`; NIE dotyka decyzji silnika (czysty odczyt).
 - `DATA_ALERTS_TELEGRAM` — druga bramka: alerty danowe idą też na Telegram (wymaga MASTER ON). Default OFF (log-only).
 
+### L2.2 (2026-07-02) — alert data-poison
+- `ENABLE_V328_POISON_ALERT` — alert (Telegram admin) gdy klasyfikator `v328_fail_causes` (L2.2, LIVE od 02.07 11:45) wykryje `data_poison` w świeżych decyzjach (catch-all V328 rozróżnia zatrucie danych od real_bug). OFF = tylko serializacja przyczyn do ledgera (bez alertu). Flip 03.07 ~00:55 off-peak za GO Adriana. Rollback hot = false.
+
 ### FALA SERIAL S2 (2026-07-02) — grafik
 - `ENABLE_GRAFIK_ENTRY_SALVAGE` — czytana przez `scripts/fetch_schedule.py:_flag` (poza repo; prosty json.load flags.json, hot per bieg fetch/T3). OFF = niepełna para godzin w grafiku (np. sam start `'12'` albo sam koniec `'15'`) kasuje CAŁY wpis kuriera → `v325_NO_ACTIVE_SHIFT` na cały dzień. ON (LIVE od 02.07 ~14:15) = wpis z ≥1 poprawną godziną ZOSTAJE (`parse_degraded: true`, druga godzina None → `is_on_shift` fail-open) + WARNING z nazwą i surową komórką. Replay 42 dni: 12 utraconych kurier-dni (0,29/dz), BOTH_BAD=0. Rollback hot = false.
 
