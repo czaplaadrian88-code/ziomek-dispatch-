@@ -10,6 +10,8 @@
 
 **Data snapshotu:** 2026-07-02 ~02:30 UTC · **Źródło stanu:** git log (ground-truth) + flags.json na żywo + master-syntezy obu audytów. ⚠ **Multi-sesja:** ≥2 sesje pchają Fazę 3 tej nocy — stan DRYFUJE, każda zmiana re-grepuje git.
 
+> **📅 FLIPY L3/L4 MAJĄ KONKRETNE TERMINY (Adrian 02.07 „żeby nie czekało") — trwałe zadania `at` z BRAMKĄ (nie flipują na ślepo): tool `tools/scheduled_flip_gate.py` (flagi HOT=bez restartu; bramka=py_compile+testy+off-peak+strażnik+shadow-żywy; GC-real dodatkowo świeży dry-run zachowuje aktywne; fail→HOLD+telegram; log `dispatch_state/scheduled_flips_atjob.log`+`scheduled_flips.jsonl`). Kolejka: `at 202` So 04.07 12:35 UTC = ENABLE_PLAN_RECHECK_GATES→true + ENABLE_COURIER_PLANS_GC→true(dry) · `at 203` 04.07 12:50 = ENABLE_AVAILABLE_FROM_SINGLE_SOURCE→true · `at 204` 04.07 14:30 = verify L3+L4 · `at 205` Pn 06.07 12:40 = PLAN_GC_DRY_RUN→false (GC realny, gated) · `at 206` 06.07 14:30 = verify GC. Rollback dowolnego: flaga→poprzednia w flags.json (hot). Odwołanie terminu: `atrm <nr>`.**
+
 > 🧭 **PO ZAKOŃCZENIU WSZYSTKICH NAPRAW OBU AUDYTÓW (decyzja Adriana 02.07): następny etap pracy = FALE A–D roadmapy deep-dive → `eod_drafts/2026-07-02/ROADMAPA_PO_NAPRAWACH_DEEPDIVE.md`** (Fala A: kalibracja czasów wg mapy `tools/eta_truth_map.py` — NAJPIERW odśwież mapę na ≥7-dniowym oknie po deployach 02.07 ~11:45, czyli od ~10.07; Fala B: histereza propozycji, baseline = timer `dispatch-proposal-churn` ZAINSTALOWANY 02.07, log `scripts/logs/proposal_churn.log`; Fala C: delay-dispatch par — wymaga werdyktu zasady od Adriana; Fala D: error-budget+dashboard; C3 globalna selekcja SKREŚLONA pomiarem 0b). Sesja, która zamknie ostatnią naprawę, ma wskazać Adrianowi tę roadmapę jako następny krok.
 
 **Mapa dokumentów (co jest czym):**
