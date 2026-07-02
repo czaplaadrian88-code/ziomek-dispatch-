@@ -1,0 +1,31 @@
+# STAGING — NIE zainstalowany. Instalacja tylko przez koordynatora za ACK (patrz README).
+# Monitor DANOWY Ziomka (audyt 2.0 motyw #1, 2.B): sentinel-rate / empty-pool /
+# stale-grafik / stale-GPS / ledger-stall. Edge-triggered, flaga MASTER
+# ENABLE_DATA_ALERTS (default OFF) — dopóki OFF, ExecStart to no-op exit 0.
+# Wzór: dispatch-log-rotation.service (lekki oneshot observability, FALA-1 L13).
+[Unit]
+Description=Ziomek monitor DANOWY — sygnały danowe (sentinel/pool/grafik/GPS/stall), edge-triggered (audyt 2.0 2.B)
+Documentation=file:///root/.openclaw/workspace/scripts/dispatch_v2/observability/data_alerts.py
+After=network-online.target
+# OnFailure jak we wszystkich dispatch-*.service — non-zero exit → alert Telegram.
+# (To alert PROCESOWY o padnięciu SAMEGO monitora; alerty DANOWE idą kanałem modułu.)
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+Environment=PYTHONUNBUFFERED=1
+# --run = realny bieg (edge-trigger + log + telegram-za-flagą). Master-gate
+# ENABLE_DATA_ALERTS w flags.json rozstrzyga, czy cokolwiek robi (OFF = no-op).
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.observability.data_alerts --run
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=90
+
+# Profil: lekki odczyt (ogon ledgera + 2 małe JSON, <2 s).
+MemoryHigh=192M
+MemoryMax=300M
+CPUQuota=50%
+TasksMax=64
+OOMScoreAdjust=100
