@@ -13,7 +13,11 @@ import sys
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 from dispatch_v2.panel_client import login
-from dispatch_v2.cod_weekly.config import MAPPING_PATH
+from dispatch_v2.cod_weekly.config import (
+    MAPPING_PATH,
+    autocreate_block_enabled,
+    autocreate_block_dry_run,
+)
 from dispatch_v2.cod_weekly.week_calculator import (
     format_week_for_header,
     get_previous_closed_week,
@@ -27,6 +31,7 @@ from dispatch_v2.cod_weekly.sheet_writer import (
     find_target_column_auto,
     validate_column_empty_ratio,
     write_cod_column_skip_filled,
+    ensure_week_block,
     split_week_by_month,
     compute_payday,
     NoTargetColumnError,
@@ -596,9 +601,56 @@ def cmd_write(week_start, week_end, opener=None) -> int:
 
     try:
         targets = find_target_cod_columns_resilient(row1, row2, week_start, week_end)
-    except (NoTargetColumnError, AmbiguousTargetError, ValueError) as e:
-        log.error(f"TARGET COLUMN FAIL: {e}")
-        _try_alert(f"[COD WEEKLY ALERT] Target column fail: {e}")
+    except NoTargetColumnError as e:
+        # BRAK BLOKU tygodnia — dominująca przyczyna cotygodniowych FAILÓW
+        # (finding B audytu 2.0: dispatch-cod-weekly exit 1 co poniedziałek).
+        # Auto-create ZA FLAGĄ (default OFF); inaczej głośna, aktionable
+        # instrukcja + exit 1 (OnFailure/staleness łapie się na exit≠0).
+        if autocreate_block_enabled():
+            dry = autocreate_block_dry_run()
+            try:
+                plan = ensure_week_block(
+                    ws, row1, row2, week_start, week_end, dry_run=dry,
+                )
+            except Exception as ce:
+                log.error(f"AUTO-CREATE FAILED: {ce!r}")
+                _try_alert(_build_target_fail_alert(
+                    week_start, week_end, e, autocreate_error=ce,
+                ))
+                return 1
+            _log_autocreate_plan(plan, dry)
+            if dry:
+                _try_alert(_build_autocreate_dryrun_alert(week_start, week_end, plan))
+                log.error(
+                    "AUTO-CREATE DRY-RUN — nic nie zapisano, blok NIE utworzony "
+                    "(exit 1). Zdejmij COD_WEEKLY_AUTOCREATE_DRY_RUN aby wykonać."
+                )
+                return 1
+            # Blok utworzony → retry na ZAKTUALIZOWANYCH wierszach (in-memory,
+            # bez 2. round-tripu API — odzwierciedla właśnie zapisane komórki).
+            row1, row2 = plan["new_row1"], plan["new_row2"]
+            try:
+                targets = find_target_cod_columns_resilient(
+                    row1, row2, week_start, week_end,
+                )
+            except (NoTargetColumnError, AmbiguousTargetError, ValueError) as e2:
+                log.error(f"TARGET COLUMN FAIL po auto-create: {e2}")
+                _try_alert(_build_target_fail_alert(week_start, week_end, e2))
+                return 1
+            log.info(
+                f"AUTO-CREATE OK — utworzono {len(plan['blocks'])} blok(ów), "
+                "kontynuuję zapis COD"
+            )
+        else:
+            log.error(f"TARGET COLUMN FAIL: {e}")
+            _try_alert(_build_target_fail_alert(week_start, week_end, e))
+            return 1
+    except (AmbiguousTargetError, ValueError) as e:
+        # Struktura arkusza NIEJEDNOZNACZNA (2 kandydatów / zły format zakresu).
+        # Auto-create by tego NIE naprawił (dodałby kolejny blok) — wymaga
+        # ręcznej interwencji. Głośna instrukcja + exit 1.
+        log.error(f"TARGET COLUMN FAIL (struktura niejednoznaczna): {e}")
+        _try_alert(_build_target_fail_alert(week_start, week_end, e))
         return 1
 
     n_segments = len(targets)
@@ -833,6 +885,79 @@ def cmd_preflight(week_start, week_end) -> int:
         _try_alert(msg)
         return 1
     return 0
+
+
+def _build_target_fail_alert(week_start, week_end, error, autocreate_error=None) -> str:
+    """Głośny, AKTIONABLE alert gdy brak/niejednoznaczny blok tygodnia.
+
+    Zamiast gołego 'Target column fail: ...' — pełna instrukcja CO dodać (arkusz,
+    komórki payday/zakres, nagłówki row2) reużyta z preflight + komenda backfillu
+    przepadłego tygodnia. Exit≠0 ZOSTAJE — OnFailure/staleness ma się na nim oprzeć.
+    """
+    week_hdr = _fmt_week(week_start, week_end)
+    segments = split_week_by_month(week_start, week_end)
+    payday = compute_payday(week_start, week_end)
+    payday_str = payday.strftime("%d-%m-%Y")
+    instr = _build_preflight_instruction(
+        week_start, week_end, segments, payday_str, error,
+    )
+    lines = [
+        f"[COD WEEKLY] ❌ FAILED (brak bloku) — tydzień {week_hdr}",
+        "",
+        f"Rozliczenie COD NIE zostało wpisane. Payday: {payday_str}",
+        f"Arkusz: Wynagrodzenia Gastro",
+        f"Błąd: {type(error).__name__}: {error}",
+    ]
+    if autocreate_error is not None:
+        lines.append(f"Auto-create też padł: {autocreate_error!r}")
+    lines += [
+        "",
+        instr,
+        "",
+        "Po dodaniu bloku dolicz zaległy tydzień ręcznie:",
+        f"  python3 -m dispatch_v2.cod_weekly.run_weekly "
+        f"--week {week_start.isoformat()}:{week_end.isoformat()} --write",
+    ]
+    return "\n".join(lines)
+
+
+def _log_autocreate_plan(plan, dry) -> None:
+    """Log co auto-create utworzył / utworzyłby (audit trail przed zapisem)."""
+    verb = "utworzyłby" if dry else "tworzę"
+    log.info(
+        f"AUTO-CREATE: {verb} {len(plan['blocks'])} blok(ów) od kol "
+        f"{plan['append_at_col']}, payday={plan['payday']}"
+    )
+    for b in plan["blocks"]:
+        log.info(
+            f"  blok {b['cod_col_letter']} @ {b['range_a1']}: tydzień={b['week_range']} "
+            f"payday={b['payday']} row2={b['row2_cells']} "
+            f"row1[wypłata={b['row1_cells'][2]}, zakres={b['row1_cells'][3]}]"
+        )
+
+
+def _build_autocreate_dryrun_alert(week_start, week_end, plan) -> str:
+    """Alert trybu podglądu auto-create — pokazuje CO by utworzył, nic nie zapisano."""
+    week_hdr = _fmt_week(week_start, week_end)
+    lines = [
+        f"[COD WEEKLY] 🧪 AUTO-CREATE DRY-RUN — tydzień {week_hdr}",
+        "",
+        "NIC nie zapisano. Auto-create utworzyłby:",
+        f"Payday: {plan['payday']}",
+        "",
+    ]
+    for b in plan["blocks"]:
+        lines += [
+            f"Blok {b['cod_col_letter']} @ {b['range_a1']}:",
+            f"  Row2: {' / '.join(b['row2_cells'])}",
+            f"  Row1: Wypłata={b['row1_cells'][2]} | Zakres={b['row1_cells'][3]}",
+        ]
+    lines += [
+        "",
+        "Aby wykonać: zdejmij COD_WEEKLY_AUTOCREATE_DRY_RUN (lub =0), zostaw "
+        "COD_WEEKLY_AUTOCREATE_BLOCK=1, uruchom ponownie.",
+    ]
+    return "\n".join(lines)
 
 
 def _try_alert(text: str) -> bool:
