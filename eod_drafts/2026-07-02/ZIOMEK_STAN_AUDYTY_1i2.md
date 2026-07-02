@@ -10,6 +10,8 @@
 
 **Data snapshotu:** 2026-07-02 ~02:30 UTC · **Źródło stanu:** git log (ground-truth) + flags.json na żywo + master-syntezy obu audytów. ⚠ **Multi-sesja:** ≥2 sesje pchają Fazę 3 tej nocy — stan DRYFUJE, każda zmiana re-grepuje git.
 
+> 🧭 **PO ZAKOŃCZENIU WSZYSTKICH NAPRAW OBU AUDYTÓW (decyzja Adriana 02.07): następny etap pracy = FALE A–D roadmapy deep-dive → `eod_drafts/2026-07-02/ROADMAPA_PO_NAPRAWACH_DEEPDIVE.md`** (Fala A: kalibracja czasów wg mapy `tools/eta_truth_map.py` — NAJPIERW odśwież mapę na ≥7-dniowym oknie po deployach 02.07 ~11:45, czyli od ~10.07; Fala B: histereza propozycji, baseline = timer `dispatch-proposal-churn` ZAINSTALOWANY 02.07, log `scripts/logs/proposal_churn.log`; Fala C: delay-dispatch par — wymaga werdyktu zasady od Adriana; Fala D: error-budget+dashboard; C3 globalna selekcja SKREŚLONA pomiarem 0b). Sesja, która zamknie ostatnią naprawę, ma wskazać Adrianowi tę roadmapę jako następny krok.
+
 **Mapa dokumentów (co jest czym):**
 - **Ten plik** = „na jakim etapie jesteśmy + co zostało" (oba audyty razem).
 - `AUDYT2/MASTER_synteza.md` = szczegół audytu 2.0 (niezawodność/jakość/skala/security).
