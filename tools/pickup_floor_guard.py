@@ -82,24 +82,58 @@ def _load_plans() -> Dict[str, Any]:
         return {}
 
 
-def _load_fleet_map() -> Dict[str, Dict[str, Any]]:
-    """{cid: {shift_start, name, pos_source}} z dispatchable_fleet (offline ~0.1 s;
-    wieczorem może zwrócić 0 kurierów → wszystkie plany → shift_start_unknown).
-    Fail-soft: awaria floty → {} (plan-floor degraduje do unknown, nie crash)."""
+def _load_fleet_map(plan_cids: Optional[Iterable[str]] = None) -> Dict[str, Dict[str, Any]]:
+    """{cid: {shift_start, name, pos_source}}.
+
+    Baza = dispatchable_fleet (offline ~0.1 s). PROBLEM (L0.5 „strażnik ślepy"):
+    dispatchable_fleet POMIJA kurierów bez pozycji / po zmianie / wieczorem 0
+    kurierów → plan ich cid'ów miał shift_start=None → `shift_start_unknown_plans`
+    (dziś 4/4). L4 FIX: dla cid'ów z aktywnych planów, których dispatchable_fleet
+    NIE rozwiązał, dociągamy shift_start TYM SAMYM źródłem co silnik
+    (`courier_resolver.resolve_shift_start*`, grafik po nazwie) → strażnik przestaje
+    być ślepy. Fail-soft: awaria floty → mapa częściowa (nie crash)."""
+    out: Dict[str, Dict[str, Any]] = {}
     try:
         from dispatch_v2 import courier_resolver as CR
-        fleet = CR.dispatchable_fleet()
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"[pickup_floor_guard] WARN courier_resolver import failed "
+              f"({type(e).__name__}: {e}) — plan floor = shift_start_unknown")
+        return out
+    try:
+        for cs in CR.dispatchable_fleet() or []:
+            out[str(cs.courier_id)] = {
+                "shift_start": cs.shift_start,
+                "name": cs.name,
+                "pos_source": cs.pos_source,
+            }
     except Exception as e:  # pragma: no cover - defensive
         print(f"[pickup_floor_guard] WARN dispatchable_fleet failed "
-              f"({type(e).__name__}: {e}) — plan floor = shift_start_unknown")
-        return {}
-    out: Dict[str, Dict[str, Any]] = {}
-    for cs in fleet or []:
-        out[str(cs.courier_id)] = {
-            "shift_start": cs.shift_start,
-            "name": cs.name,
-            "pos_source": cs.pos_source,
-        }
+              f"({type(e).__name__}: {e}) — degraduję do resolve-by-cid")
+    # L4: dociągnij shift_start dla cid'ów z planów nierozwiązanych przez flotę
+    # (kanoniczny resolver — grafik/working-override po nazwie, ten sam co silnik).
+    need = [str(c) for c in (plan_cids or [])
+            if (out.get(str(c)) or {}).get("shift_start") is None]
+    if need:
+        _sched = None
+        try:
+            import sys as _sys
+            _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+            from schedule_utils import load_schedule as _ls
+            _sched = _ls()
+        except Exception:
+            _sched = None
+        for cid in need:
+            try:
+                nm = (out.get(cid) or {}).get("name")
+                ss = (CR.resolve_shift_start(nm, schedule=_sched) if nm else None)
+                if ss is None:
+                    ss = CR.resolve_shift_start_by_cid(cid, schedule=_sched)
+                ent = out.setdefault(cid, {"name": nm, "pos_source": None})
+                ent["shift_start"] = ss
+                if not ent.get("name"):
+                    ent["name"] = nm
+            except Exception:
+                continue
     return out
 
 
@@ -337,7 +371,11 @@ def evaluate(*, plans: Optional[Dict[str, Any]] = None,
     if orders_state is None:
         orders_state = PR._load_orders_state()
     if fleet_map is None:
-        fleet_map = _load_fleet_map()
+        # L4: przekaż cid aktywnych planów, by resolver dociągnął ich shift_start
+        # (dispatchable_fleet ich pomija → strażnik był ślepy: shift_start_unknown).
+        _plan_cids = [str(cid) for cid, p in (plans or {}).items()
+                      if isinstance(p, dict) and not p.get("invalidated_at")]
+        fleet_map = _load_fleet_map(_plan_cids)
 
     own_dedup = dedup_state is None
     if own_dedup:
