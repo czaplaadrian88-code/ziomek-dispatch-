@@ -1757,13 +1757,15 @@ def load_pending(path: str) -> dict:
 
 
 def save_pending(path: str, pending: dict) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(pending, f, indent=2, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    # L7.5 (audyt 2.0 O1): zapis pending przez KANON `pending_proposals_store.locked_save`
+    # — trzyma fcntl.LOCK_EX na dedykowanym lockfile, serializując zapis względem pisarzy
+    # shadow (upsert_proposals) i postpone_sweeper, oraz usuwa kolizję współdzielonego
+    # `{path}.tmp`. Format pliku niezmieniony. UWAGA: telegram trzyma pełny dict w pamięci
+    # → locked_save NIE robi merge, więc nieświeża pamięć wciąż może nadpisać cudze wpisy;
+    # pełna eliminacja lost-update dla telegramu = per-operacja `locked_mutate` (patrz raport,
+    # checklist pre-re-enable Telegrama). Import lazy — zmiana hiper-lokalna (1 ciało funkcji).
+    from dispatch_v2 import pending_proposals_store as _pps
+    _pps.locked_save(pending, path)
 
 
 def append_learning(path: str, record: dict) -> None:

@@ -20,6 +20,7 @@ from dispatch_v2 import state_machine
 from dispatch_v2 import dispatch_pipeline
 from dispatch_v2 import courier_resolver
 from dispatch_v2 import telegram_utils
+from dispatch_v2 import pending_proposals_store
 
 log = logging.getLogger(__name__)
 
@@ -147,15 +148,20 @@ def run_once(now: Optional[datetime] = None) -> Dict[str, int]:
             )
             verdict = getattr(result, "verdict", None)
             if verdict in ("ASSIGN", "PROPOSE"):
-                pending = _load_json_safe(PENDING_PROPOSALS_PATH, {})
-                pending[oid] = {
+                _entry = {
                     "decision_record": (
                         result.__dict__ if hasattr(result, "__dict__") else dict(result)
                     ),
                     "reemitted_from_postpone": True,
                     "ts": now.isoformat(),
                 }
-                _atomic_write_json(PENDING_PROPOSALS_PATH, pending)
+                # L7.5 (audyt O1): RMW pending POD LOCK_EX (kanon) — load→setitem→save
+                # w jednym locku serializuje z pisarzem shadow (upsert_proposals) i
+                # zachowuje wpisy dołożone współbieżnie (blind write nadpisywał je).
+                pending_proposals_store.locked_mutate(
+                    lambda p, _o=oid, _e=_entry: p.__setitem__(_o, _e),
+                    PENDING_PROPOSALS_PATH,
+                )
                 log.info(f"POSTPONE_REEMITTED oid={oid} verdict={verdict}")
                 stats["reemitted"] += 1
                 postponed.pop(oid, None)
