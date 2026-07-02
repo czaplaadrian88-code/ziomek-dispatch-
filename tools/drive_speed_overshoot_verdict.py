@@ -21,12 +21,16 @@ import os
 import statistics as st
 import sys
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 BASE = "/root/.openclaw/workspace"
 CALIB = f"{BASE}/dispatch_state/ziomek_pred_calibration.jsonl"
 TIERS = f"{BASE}/dispatch_state/courier_tiers.json"
 OUT = f"{BASE}/dispatch_state/drive_speed_overshoot_verdict.txt"
-WARSAW = timezone(timedelta(hours=2))
+# DST-safe CET/CEST — L2 audyt 2.0 (był fixed +2). `delivered_at` to naive Warsaw
+# wall-clock → .replace(tzinfo=WARSAW) daje poprawny offset per data (zimą +1, latem +2).
+# Żadnego fixed-offset fallbacku — to klasa bomb TZ (ratchet test_tz_zoneinfo).
+WARSAW = ZoneInfo("Europe/Warsaw")
 # Flip flagi ON (UTC). Override --flip.
 FLIP_DEFAULT = "2026-06-26T17:25:22+00:00"
 # #5 audyt 28.06: flaga ENABLE_DRIVE_SPEED_TIER_CORRECTION była ON tylko ~15 min (flip→rollback
