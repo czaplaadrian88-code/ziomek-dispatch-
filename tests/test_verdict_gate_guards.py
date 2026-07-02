@@ -78,6 +78,85 @@ def _koord_gates_from_source():
     return out
 
 
+def gate_guard_polarity(source_text):
+    """POLARYTET guardu per bramka KOORD z DOWOLNEGO tekstu źródła (reużywalne —
+    także dla mutation-probe: karmimy zmutowany string i sprawdzamy, czy checker
+    łapie inwersję). Zwraca {gate_id: 'negated'|'bare'|'absent'}:
+
+      - 'negated' = warunek bramki zawiera `not _always_propose_on()` (poprawny
+        guard bramki QUALITY — pod ALWAYS-PROPOSE przepada do PROPOSE),
+      - 'bare'    = zawiera `_always_propose_on()` BEZ `not` (INWERSJA — mutant
+        `if not X`→`if X`; bramka QUALITY zaczęłaby KOORD-ować mimo ALWAYS-PROPOSE),
+      - 'absent'  = brak helpera w warunku (poprawne dla bramki OPERATIONAL).
+
+    Kluczowa różnica vs `_koord_gates_from_source` (test_guard_helper): tamten
+    wykrywa OBECNOŚĆ tokenu (L09 teatr — mutacja `not X`→`X` przechodzi zielona),
+    ten rozróżnia POLARYTET.
+    """
+    lines = source_text.splitlines()
+    out = {}
+    for i, ln in enumerate(lines):
+        if not re.search(r'verdict\s*=\s*"KOORD"', ln):
+            continue
+        gate_id = None
+        for j in range(i, min(i + 6, len(lines))):
+            if "reason" in lines[j]:
+                m = re.search(r'reason\s*=\s*\(?\s*f?["\'](\w+)', lines[j]) \
+                    or re.search(r'f["\'](\w+)', lines[j + 1] if j + 1 < len(lines) else "")
+                if m:
+                    gate_id = m.group(1)
+                    break
+        if gate_id is None:
+            gate_id = f"__unparsed_line_{i+1}"
+        k = i
+        while k > 0 and "PipelineResult(" not in lines[k]:
+            k -= 1
+        cond_lines = []
+        m = k - 1
+        while m > 0:
+            cond_lines.append(lines[m])
+            if re.match(r'\s*if[\s(]', lines[m]):
+                break
+            m -= 1
+        cond = "\n".join(cond_lines)
+        if re.search(r'not\s+_always_propose_on\(\)', cond):
+            out[gate_id] = "negated"
+        elif "_always_propose_on()" in cond:
+            out[gate_id] = "bare"
+        else:
+            out[gate_id] = "absent"
+    return out
+
+
+def _gate_polarity_from_disk():
+    return gate_guard_polarity(_SRC_PATH.read_text(encoding="utf-8"))
+
+
+def test_quality_gates_use_negated_guard():
+    """WARIANT POLARYTETOWY (C13 anti-teatr): bramka QUALITY MUSI mieć guard w
+    postaci `not _always_propose_on()` — sama OBECNOŚĆ tokenu (stary test) NIE
+    wystarcza. Mutacja `if not _always_propose_on()`→`if _always_propose_on()`
+    zmienia polaryzację na 'bare' → ten test PADA (mutant zabity), podczas gdy
+    `test_quality_gates_are_guarded` (token-presence) przeżywa."""
+    pol = _gate_polarity_from_disk()
+    for gate, cls in EXPECTED_GATES.items():
+        if cls == "quality":
+            assert pol.get(gate) == "negated", (
+                f"bramka QUALITY '{gate}' polaryzacja={pol.get(gate)!r} (oczekiwano "
+                f"'negated'); 'bare' = inwersja `not` (mutant), 'absent' = utrata guardu")
+
+
+def test_operational_gates_have_no_propose_guard_polarity():
+    """WARIANT POLARYTETOWY: bramka OPERATIONAL nie może mieć `_always_propose_on()`
+    w warunku w ŻADNEJ polaryzacji — inaczej ALWAYS-PROPOSE stłumiłby eskalację."""
+    pol = _gate_polarity_from_disk()
+    for gate, cls in EXPECTED_GATES.items():
+        if cls == "operational":
+            assert pol.get(gate) == "absent", (
+                f"bramka OPERATIONAL '{gate}' MA guard propose (polaryzacja="
+                f"{pol.get(gate)!r}) — regresja eskalacji operacyjnej")
+
+
 def test_all_koord_gates_are_classified():
     """Każda bramka verdict=KOORD w kodzie MUSI być w rejestrze (i odwrotnie).
     Nowa bramka bez klasy / usunięta bramka / przemianowany reason → fail."""
