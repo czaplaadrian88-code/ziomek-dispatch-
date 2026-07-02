@@ -34,7 +34,11 @@ import sys
 
 import pytest
 
-_SCRIPTS_ROOT = "/root/.openclaw/workspace/scripts"
+# C12(e) self-lokalizacja: domyślnie KANON (regresja koordynatora po merge = bez zmian),
+# ale nadpisywalne ENV dla walidacji kodu z WORKTREE przed merge (symlink pkgroot/dispatch_v2
+# → worktree). Bez tego pytest z worktree importuje dispatch_v2 z KANONU (edycje silnika w
+# worktree niewidoczne dla suity). Default identyczny = zero wpływu na bieg kanoniczny.
+_SCRIPTS_ROOT = os.environ.get("ZIOMEK_SCRIPTS_ROOT", "/root/.openclaw/workspace/scripts")
 _SUBPROC_TIMEOUT = 240
 
 # Znane, udokumentowane pre-existing failури script-runnerów (P1#4 baseline, 2026-06-19).
