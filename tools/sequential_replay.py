@@ -44,6 +44,7 @@ import json
 import sqlite3
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 _SCRIPTS_ROOT = "/root/.openclaw/workspace/scripts"
 if _SCRIPTS_ROOT not in sys.path:
@@ -66,7 +67,7 @@ _ENV_LEARNING_LOGS = [
 LEARNING_LOGS = _ENV_LEARNING_LOGS or _rotated_logs.files_in_window(_LEARNING_BASE)
 # Wstecz-kompat: część kodu odwołuje się do LEARNING_LOG (pierwszy istniejący).
 LEARNING_LOG = next((p for p in LEARNING_LOGS if os.path.exists(p)), LEARNING_LOGS[0])
-WARSAW_OFFSET = "+02:00"  # maj 2026 — CEST
+WARSAW = ZoneInfo("Europe/Warsaw")  # DST-safe CET/CEST — L2 audyt 2.0 (był fixed "+02:00")
 
 # ── monkeypatch PRZED importem pipeline: ubij sieciowe side-effecty ──
 from dispatch_v2 import common as C  # noqa: E402
@@ -213,8 +214,8 @@ def build_cold_fleet(roster: set, date: str) -> dict:
     zmiana 10:00-22:00 Warsaw (pełne pokrycie okna)."""
     names = _load_courier_names()
     tiers = _load_courier_tiers()
-    shift_start = _dt(f"{date}T10:00:00{WARSAW_OFFSET}")
-    shift_end = _dt(f"{date}T22:00:00{WARSAW_OFFSET}")
+    shift_start = datetime.fromisoformat(f"{date}T10:00:00").replace(tzinfo=WARSAW)
+    shift_end = datetime.fromisoformat(f"{date}T22:00:00").replace(tzinfo=WARSAW)
     fleet = {}
     for cid in roster:
         cs = CourierState(courier_id=cid)
@@ -598,7 +599,9 @@ def _per_hour(recs: list) -> list:
     """Rozbicie best_effort per godzina Warsaw. Zwraca [(hh, n, prop, be, pct)]."""
     h = defaultdict(lambda: {"n": 0, "prop": 0, "be": 0})
     for r in recs:
-        war = int((r.get("created_at") or r["now"])[11:13]) + 2
+        _src = r.get("created_at") or r["now"]
+        _d = _dt(_src)
+        war = _d.astimezone(WARSAW).hour if _d else 0
         b = h[war]
         b["n"] += 1
         if r["verdict"] == "PROPOSE":

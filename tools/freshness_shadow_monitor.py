@@ -28,8 +28,9 @@ import sys
 import urllib.request
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+from zoneinfo import ZoneInfo
 
-WARSAW = timezone(timedelta(hours=2))
+WARSAW = ZoneInfo("Europe/Warsaw")  # DST-safe CET/CEST — L2 audyt 2.0 (był fixed +2)
 ORDERS_STATE = "/root/.openclaw/workspace/dispatch_state/orders_state.json"
 OSRM_URL = "http://localhost:5001/route/v1/driving/{},{};{},{}?overview=false"
 
