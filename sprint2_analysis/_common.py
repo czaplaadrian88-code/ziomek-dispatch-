@@ -2,6 +2,7 @@
 import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 LEARNING_LOG = Path("/root/.openclaw/workspace/dispatch_state/learning_log.jsonl")
 EVENTS_DB = Path("/root/.openclaw/workspace/dispatch_state/events.db")
@@ -9,7 +10,7 @@ EVENTS_DB = Path("/root/.openclaw/workspace/dispatch_state/events.db")
 SPRINT1_DEPLOY_UTC = datetime(2026, 4, 30, 9, 5, 0, tzinfo=timezone.utc)   # 11:05 Warsaw
 V319I_DEPLOY_UTC   = datetime(2026, 4, 30, 9, 49, 0, tzinfo=timezone.utc)  # 11:49 Warsaw
 
-WARSAW_OFFSET = timedelta(hours=2)
+WARSAW = ZoneInfo("Europe/Warsaw")  # DST-safe CET/CEST — L2 audyt 2.0 (był fixed +2)
 
 
 def parse_ts(s):
@@ -24,7 +25,7 @@ def parse_ts(s):
 def to_warsaw(dt):
     if dt is None:
         return None
-    return (dt.astimezone(timezone.utc) + WARSAW_OFFSET).replace(tzinfo=None)
+    return dt.astimezone(WARSAW).replace(tzinfo=None)
 
 
 def load_entries(since_utc=None, until_utc=None, path=LEARNING_LOG):

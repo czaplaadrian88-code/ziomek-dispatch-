@@ -31,6 +31,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 try:
     from dispatch_v2.tools._rotated_logs import iter_jsonl_records
@@ -42,7 +43,7 @@ SHADOW_LOG = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
 EVENTS_DB = "/root/.openclaw/workspace/dispatch_state/events.db"
 ENRICHED_LOG = "/root/.openclaw/workspace/dispatch_state/drive_min_enriched.jsonl"
 STATE_FILE = "/root/.openclaw/workspace/dispatch_state/shadow_enricher_state.json"
-WARSAW_OFFSET_HOURS = 2  # CEST summer (BUG-D scope: 28.05.2026 = CEST)
+WARSAW = ZoneInfo("Europe/Warsaw")  # DST-safe CET/CEST — konsolidacja fixed-offset→ZoneInfo (L2 audyt 2.0). Obecnie NIEUŻYWANE w tym pliku (deltas liczone w UTC, stemple offset-ISO); trzymane DST-safe pod ewentualne bucketowanie godzin.
 
 
 # ── State management (idempotency) ───────────────────────────────────────

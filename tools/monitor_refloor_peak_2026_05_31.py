@@ -31,6 +31,7 @@ import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
@@ -42,6 +43,7 @@ REPORT_DIR = Path("/root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026
 
 OK_TOL_SEC = 60.0       # predicted w granicy 60s poniżej obietnicy = OK
 STALE_AFTER_SAMPLES = 2  # PENDING utrzymujące się tyle sampli z rzędu = bug
+WARSAW = ZoneInfo("Europe/Warsaw")  # DST-safe CET/CEST — L2 audyt 2.0 (był inline fixed +2)
 
 
 def _send_tg(text: str) -> None:
@@ -72,7 +74,7 @@ def _parse_aware(iso):
 def _hhmm_warsaw(dt):
     if dt is None:
         return "—"
-    return dt.astimezone(timezone(timedelta(hours=2))).strftime("%H:%M")
+    return dt.astimezone(WARSAW).strftime("%H:%M")
 
 
 def _load_json(p):

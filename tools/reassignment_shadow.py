@@ -25,6 +25,7 @@ Użycie: /root/.openclaw/venvs/dispatch/bin/python tools/reassignment_shadow.py
 import json, os, sqlite3, math, re, sys, statistics as st
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+from zoneinfo import ZoneInfo
 
 # L1.2 (2026-07-02): odczyt shadow_decisions ROTATION-AWARE przez kanon
 # (_rotated_logs/ledger_io) — stary hardkod [żywy, .1] gubił .2.gz po rotacji
@@ -36,7 +37,7 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     from dispatch_v2.tools import _rotated_logs, ledger_io
 
-WAR = timezone(timedelta(hours=2))
+WAR = ZoneInfo("Europe/Warsaw")  # DST-safe CET/CEST — L2 audyt 2.0 (był fixed +2)
 DB = "/root/.openclaw/workspace/dispatch_state/events.db"
 GEOC = "/root/.openclaw/workspace/dispatch_state/geocode_cache.json"
 SHADOW_DECISIONS = ledger_io.LEDGER["shadow"]
