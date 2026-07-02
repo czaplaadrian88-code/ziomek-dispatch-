@@ -21,6 +21,8 @@ from dispatch_v2.cod_weekly.config import (
     WORKSHEET_NAME,
     ROW_START,
     SEARCH_BLOCK_START_COL,
+    BLOCK_WIDTH,
+    BLOCK_ROW2_HEADERS,
 )
 from dispatch_v2.cod_weekly.aliases import SHEET_SKIP_PREFIXES
 from dispatch_v2.cod_weekly.week_calculator import format_week_for_header
@@ -416,3 +418,118 @@ def validate_column_empty_ratio(
         "ratio": ratio,
         "filled_sample": filled_sample,
     }
+
+
+def _last_used_col(row1: list, row2: list) -> int:
+    """Najbardziej wysunięty w prawo indeks 0-based z niepustą komórką w row1/row2.
+
+    -1 gdy oba puste. Użyte do policzenia miejsca DOPISANIA nowego bloku — nowy
+    blok ląduje za CAŁĄ dotychczasową treścią, więc content-based detekcja go
+    znajdzie i nie koliduje z istniejącymi (ewentualne gapy 4/5 kolumn nieistotne).
+    """
+    last = -1
+    for row in (row1, row2):
+        for i, v in enumerate(row):
+            if (v or "").strip():
+                last = max(last, i)
+    return last
+
+
+def build_week_block_plan(
+    row1: list,
+    row2: list,
+    target_week_start: date,
+    target_week_end: date,
+) -> Dict:
+    """Policz (BEZ zapisu) strukturę bloku/bloków tygodnia do dopisania na końcu.
+
+    Zwraca plan {payday, segments, append_at_col, blocks:[...], new_row1,
+    new_row2}. `new_row1/new_row2` = kopie z wpisanymi komórkami nowego bloku
+    (dry-run → podgląd; realny zapis → retry find_target bez 2. round-tripu API).
+
+    Layout bloku (BLOCK_WIDTH=4, wzór arkusza 'Wynagrodzenia Gastro'):
+      pos+0  row2='COD - Transport'  ← kolumna wartości COD (zostaje PUSTA)
+      pos+1  row2='Korekty'
+      pos+2  row2='Wypłata'          row1=payday DD-MM-YYYY  ← klucz payday-match
+      pos+3  row2='Saldo do przen.'  row1=zakres DD-DD.MM.YYYY ← klucz range-match
+
+    Split-month → 2 bloki (ten sam payday, różne zakresy). Wołane WYŁĄCZNIE gdy
+    find_target (payday + range) już NIC nie znalazł → dopisanie kompletnego
+    bloku nie duplikuje istniejącego kompletnego bloku.
+    """
+    segments = split_week_by_month(target_week_start, target_week_end)
+    payday = compute_payday(target_week_start, target_week_end)
+    payday_str = payday.strftime("%d-%m-%Y")
+
+    append_at = max(_last_used_col(row1, row2) + 1, SEARCH_BLOCK_START_COL - 1)
+
+    max_len = max(len(row1), len(row2))
+    new_row1 = list(row1) + [""] * (max_len - len(row1))
+    new_row2 = list(row2) + [""] * (max_len - len(row2))
+
+    blocks = []
+    col = append_at
+    for seg in segments:
+        week_range = format_week_for_header(seg["start"], seg["end"])
+        row1_cells = [f"Tydzień {week_range}", "wypłata z dn.", payday_str, week_range]
+        row2_cells = list(BLOCK_ROW2_HEADERS)
+        need = col + BLOCK_WIDTH
+        if len(new_row1) < need:
+            new_row1 += [""] * (need - len(new_row1))
+        if len(new_row2) < need:
+            new_row2 += [""] * (need - len(new_row2))
+        for off in range(BLOCK_WIDTH):
+            new_row1[col + off] = row1_cells[off]
+            new_row2[col + off] = row2_cells[off]
+        cod_col_letter = col_idx_to_letter(col)
+        end_letter = col_idx_to_letter(col + BLOCK_WIDTH - 1)
+        blocks.append({
+            "segment_start": seg["start"],
+            "segment_end": seg["end"],
+            "week_range": week_range,
+            "payday": payday_str,
+            "cod_col_idx": col,
+            "cod_col_letter": cod_col_letter,
+            "range_a1": f"{cod_col_letter}1:{end_letter}2",
+            "row1_cells": row1_cells,
+            "row2_cells": row2_cells,
+        })
+        col += BLOCK_WIDTH
+
+    return {
+        "payday": payday_str,
+        "segments": [{"start": s["start"], "end": s["end"]} for s in segments],
+        "append_at_col": col_idx_to_letter(append_at),
+        "blocks": blocks,
+        "new_row1": new_row1,
+        "new_row2": new_row2,
+    }
+
+
+def ensure_week_block(
+    ws,
+    row1: list,
+    row2: list,
+    target_week_start: date,
+    target_week_end: date,
+    dry_run: bool = False,
+) -> Dict:
+    """Dopisz brakujący blok tygodnia (nagłówki row2 + payday/zakres row1).
+
+    NIE dotyka danych COD — kolumny wartości (pos+0) zostają PUSTE, więc
+    empty_check przejdzie i normalny zapis wypełni je świeżo. Zapis do arkusza
+    TYLKO gdy dry_run=False (1 batch_update, po jednym zakresie A1 na segment).
+    Zwraca ten sam plan co build_week_block_plan + {dry_run, created}.
+    """
+    plan = build_week_block_plan(row1, row2, target_week_start, target_week_end)
+    plan["dry_run"] = dry_run
+    if dry_run:
+        plan["created"] = False
+        return plan
+    updates = [
+        {"range": b["range_a1"], "values": [b["row1_cells"], b["row2_cells"]]}
+        for b in plan["blocks"]
+    ]
+    ws.batch_update(updates, value_input_option="USER_ENTERED")
+    plan["created"] = True
+    return plan
