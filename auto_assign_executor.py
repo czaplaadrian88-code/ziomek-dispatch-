@@ -48,6 +48,16 @@ STATE_PATH = "/root/.openclaw/workspace/dispatch_state/auto_assign_state.json"
 LEARNING_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl"
 LEARNING_LOG_TAIL_BYTES = 262144  # wzorzec _PANEL_AGREE_TAIL_BYTES
 
+# AUDYT 2.0 Blocker-1: executor ufa sentinelowi z gastro_assign, NIE samemu
+# exit-code (exit 0 mimo niewykonanego przypisania = cichy drop bez człowieka).
+ASSIGN_OK_SENTINEL = "ASSIGN_OK:"
+GASTRO_ASSIGN_TIMEOUT_SEC = 45  # +read-back (--verify) round-trip (było 30)
+
+# AUDYT 2.0 Blocker-2 — pokrętła operacyjne (env/flags-overridable W MODULE
+# executora; common.py poza tym pasem). Domyślne wartości = dokumentacja.
+AUTO_ASSIGN_ARM_DELAY_SEC = 45.0          # dry-first: pauza po KAŻDEJ zmianie flags.json
+AUTO_ASSIGN_IDEMPOTENCY_TTL_SEC = 900.0   # ten sam oid nie wykona się 2× w tym oknie
+
 
 def _numeric(name: str) -> float:
     """Stała: flags.json (hot) → stała modułu common (FLAGS_JSON_NUMERIC_OVERRIDES)."""
@@ -63,6 +73,22 @@ def _numeric(name: str) -> float:
 
 def _pytest_active() -> bool:
     return bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def _exec_numeric(name: str, default: float) -> float:
+    """Stała operacyjna executora (Blocker-2): flags.json (hot) → env → default.
+    Osobno od `_numeric` — te klucze NIE żyją w common.py (poza tym pasem)."""
+    try:
+        fl = C.load_flags()
+    except Exception:
+        fl = {}
+    v = fl.get(name)
+    if v is None:
+        v = os.environ.get(name)
+    try:
+        return float(v) if v is not None else float(default)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 # ---------------- stan rate-capu ----------------
@@ -147,22 +173,62 @@ def _recent_override_for_courier(
     return False
 
 
+# ---------------- dry-first + idempotencja (AUDYT 2.0 Blocker-2) ----------------
+
+def _flags_recently_changed(now_ts: float, arm_delay_sec: float) -> bool:
+    """True gdy flags.json zmieniony w ostatnich arm_delay_sec → 'dry-first':
+    pierwszy tick po flipie OFF→ON (i po każdej zmianie configu) NIE wykonuje —
+    daje nadzorującemu operatorowi beat, a decyzja z 'starego snu' sprzed flipu
+    nie odpala się natychmiast. Fail-open (brak mtime → nie blokuj) tylko gdy
+    plik nieosiągalny; ENABLE_AUTO_ASSIGN i tak żyje w tym pliku, więc przy ON
+    mtime jest dostępny. Odmawia (return False) pod pytest, chyba że jawnie
+    włączone — testy sterują deterministycznie, nie mtime współdzielonego pliku."""
+    if _pytest_active() and not os.environ.get("ALLOW_AUTO_ASSIGN_DRYFIRST_IN_TEST"):
+        return False
+    try:
+        mt = os.path.getmtime(str(C.FLAGS_PATH))
+    except Exception:
+        return False
+    return (now_ts - mt) < arm_delay_sec
+
+
+def _recent_auto_assign(state: Dict[str, Any], oid: str, now_ts: float, ttl_sec: float) -> bool:
+    """True gdy oid już auto-przypisany w ostatnich ttl_sec (idempotencja per-order:
+    reconcile-lag panelu 15-90 s + 2. event z innym event_id = podwójny assign)."""
+    ts = (state.get("assigned_orders") or {}).get(str(oid))
+    return isinstance(ts, (int, float)) and (now_ts - ts) < ttl_sec
+
+
+def _record_auto_assign(state: Dict[str, Any], oid: str, now_ts: float, ttl_sec: float) -> None:
+    """Zapisz oid+ts do idempotency-store, przycinając wygasłe wpisy."""
+    ao = {k: v for k, v in (state.get("assigned_orders") or {}).items()
+          if isinstance(v, (int, float)) and (now_ts - v) < ttl_sec}
+    ao[str(oid)] = now_ts
+    state["assigned_orders"] = ao
+
+
 # ---------------- wykonanie ----------------
 
 def _default_assign_runner(order_id: str, kurier_name: str, time_minutes: int) -> Tuple[bool, str]:
     """Subprocess gastro_assign.py — lustrzane do telegram_approver.run_gastro_assign
-    (ścieżka ASSIGN_DIRECT). Odmawia pod pytest."""
+    (ścieżka ASSIGN_DIRECT). Odmawia pod pytest.
+
+    AUDYT 2.0 Blocker-1: sukces TYLKO gdy exit 0 ORAZ jawny sentinel ASSIGN_OK:
+    w stdout (gastro drukuje go dopiero po POTWIERDZENIU). --verify wymusza po
+    stronie gastro read-back przypisania (tor autonomii = człowiek poza pętlą)."""
     if _pytest_active() and not os.environ.get("ALLOW_AUTO_ASSIGN_SUBPROCESS_IN_TEST"):
         return False, "blocked_pytest_context"
     cmd = ["python3", GASTRO_ASSIGN_PATH, "--id", str(order_id),
-           "--kurier", str(kurier_name), "--time", str(int(time_minutes))]
+           "--kurier", str(kurier_name), "--time", str(int(time_minutes)), "--verify"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if r.returncode == 0:
-            return True, (r.stdout.strip() or "ok")[-400:]
-        return False, f"exit={r.returncode} {r.stderr.strip()[-400:]}"
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=GASTRO_ASSIGN_TIMEOUT_SEC)
+        out = (r.stdout or "")
+        if r.returncode == 0 and ASSIGN_OK_SENTINEL in out:
+            return True, out.strip()[-400:]
+        err = (r.stderr or "").strip() or out.strip()
+        return False, f"exit={r.returncode} no_confirm {err[-360:]}"
     except subprocess.TimeoutExpired:
-        return False, "timeout_30s"
+        return False, f"timeout_{int(GASTRO_ASSIGN_TIMEOUT_SEC)}s"
     except Exception as e:
         return False, f"exc:{type(e).__name__}"
 
@@ -236,8 +302,24 @@ def maybe_execute(
         now = now or datetime.now(timezone.utc)
         now_ts = now.timestamp()
 
+        # 2b. DRY-FIRST (Blocker-2): pierwszy tick po flipie OFF→ON (i po każdej
+        # zmianie flags.json) = log-only handshake, ZERO wykonania. Decyzja ze
+        # „starego snu" sprzed flipu nie odpala się natychmiast.
+        arm_delay = _exec_numeric("AUTO_ASSIGN_ARM_DELAY_SEC", AUTO_ASSIGN_ARM_DELAY_SEC)
+        if _flags_recently_changed(now_ts, arm_delay):
+            log.info(f"AUTO_ASSIGN dry_first_handshake oid={oid} (flags.json <{arm_delay:.0f}s temu)")
+            return {"blocked": "dry_first_handshake", "order_id": oid}
+
         # 3. Rate-cap wykonań.
         state = _load_state(state_path)
+
+        # 3b. Idempotencja per-order (Blocker-2): reconcile-lag 15-90 s + drugi
+        # event (inny event_id, dedup event_bus nie chroni) = podwójne przypisanie.
+        idem_ttl = _exec_numeric("AUTO_ASSIGN_IDEMPOTENCY_TTL_SEC", AUTO_ASSIGN_IDEMPOTENCY_TTL_SEC)
+        if _recent_auto_assign(state, oid, now_ts, idem_ttl):
+            log.warning(f"AUTO_ASSIGN blocked idempotent oid={oid} (już auto-przypisany <{idem_ttl:.0f}s)")
+            return {"blocked": "idempotent_recent", "order_id": oid}
+
         if _rate_cap_exceeded(state, now_ts, _numeric("AUTO_ASSIGN_MAX_PER_HOUR")):
             log.warning(f"AUTO_ASSIGN blocked rate_cap oid={oid}")
             return {"blocked": "rate_cap"}
@@ -247,6 +329,12 @@ def maybe_execute(
         if _recent_override_for_courier(cid, now, cooldown):
             log.warning(f"AUTO_ASSIGN blocked override_cooldown oid={oid} cid={cid}")
             return {"blocked": "override_cooldown", "courier_id": cid}
+
+        # 4b. ATOMOWY re-check flagi TUŻ przed wykonaniem (TOCTOU: flip→OFF w
+        # trakcie I/O rate-cap/cooldown/idempotencji MUSI anulować wykonanie).
+        if not C.decision_flag("ENABLE_AUTO_ASSIGN"):
+            log.info(f"AUTO_ASSIGN aborted flag_off_at_execution oid={oid}")
+            return {"blocked": "flag_off_at_execution", "order_id": oid}
 
         # 5. Wykonanie (ścieżka ASSIGN_DIRECT — subprocess gastro_assign).
         time_minutes = _time_minutes_from_record(record, now)
@@ -263,6 +351,7 @@ def maybe_execute(
         }
         if ok:
             state.setdefault("executed", []).append(now_ts)
+            _record_auto_assign(state, oid, now_ts, idem_ttl)  # idempotencja per-order
             _save_state(state_path, state)
             _append_learning_log({
                 "ts": now.isoformat(),
