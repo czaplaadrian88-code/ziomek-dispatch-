@@ -640,21 +640,32 @@ def _count_sla_violations(
     now: datetime,
     sla_minutes: int,
 ) -> int:
+    # S1 (2026-07-02): kotwica NOW z JEDNEGO źródła (sla_anchor) za flagą
+    # ENABLE_SLA_ANCHOR_UNIFIED. OFF = inline bajt-w-bajt; ON = ta sama arytmetyka
+    # przez `sla_anchor.now_anchor` (bliźniak z feasibility SLA-loop = to samo źródło).
+    from dispatch_v2 import common as _C_sa
+    _unified = _C_sa.flag("ENABLE_SLA_ANCHOR_UNIFIED",
+                          getattr(_C_sa, "ENABLE_SLA_ANCHOR_UNIFIED", False))
     v = 0
     for o in list(bag) + [new_order]:
         pred = delivered_at.get(o.order_id)
         if pred is None:
             continue
-        if o.order_id in pickup_at:
-            pu = pickup_at[o.order_id]
-        elif o.picked_up_at is not None:
-            pu = o.picked_up_at
-            if pu.tzinfo is None:
-                pu = pu.replace(tzinfo=timezone.utc)
-            pu = pu.astimezone(timezone.utc)
+        if _unified:
+            from dispatch_v2 import sla_anchor as _SA
+            pu = _SA.now_anchor(o, pickup_at, now)
+            elapsed = _SA.elapsed_min(pred, pu)
         else:
-            pu = now
-        elapsed = (pred - pu).total_seconds() / 60.0
+            if o.order_id in pickup_at:
+                pu = pickup_at[o.order_id]
+            elif o.picked_up_at is not None:
+                pu = o.picked_up_at
+                if pu.tzinfo is None:
+                    pu = pu.replace(tzinfo=timezone.utc)
+                pu = pu.astimezone(timezone.utc)
+            else:
+                pu = now
+            elapsed = (pred - pu).total_seconds() / 60.0
         if elapsed > sla_minutes:
             v += 1
     return v

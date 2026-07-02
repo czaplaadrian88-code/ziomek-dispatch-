@@ -185,6 +185,15 @@ ETAP4_DECISION_FLAGS = (
     # czystych). Default OFF; flip po GO review 02.07 + dowód netto + cap-Z z danych.
     # Decyzyjna, cross-proces. Składa się z B2 (carry-readmit selekcji) ku correctness.
     "ENABLE_O2_READY_ANCHOR_SWEEP",
+    # SLA-ANCHOR-UNIFIED (S1, 2026-07-02, guard-teatr §4 / finding feas-r6-sla-anchor-gap):
+    # konsolidacja 35-min HARD (R6 ready-anchor ↔ SLA now-anchor) do JEDNEGO źródła
+    # (sla_anchor.py) z JAWNĄ kotwicą, w 3 bliźniakach RAZEM (_count_sla_violations +
+    # feasibility SLA-loop + R6 per-order; plan_recheck dziedziczy przez plan.sla_violations).
+    # OFF (default) = inline bez zmian, BAJT-W-BAJT (werdykt+reason+sla_violations identyczne);
+    # ON = te same DECYZJE + metryka obs `sla_anchor_source` (de-maskowanie: naruszenie
+    # każdej kotwicy niezależnie WIDOCZNE). Decyzyjna, cross-proces (route_simulator biegnie
+    # pod shadow/plan-recheck/czasowka). Flip = osobny ACK. NIE zmienia semantyki O2/at-202/203.
+    "ENABLE_SLA_ANCHOR_UNIFIED",
     # #3 top10 (2026-06-29): reserve-aware tie-break SHADOW (wolny-vs-jadący) — log-only,
     # zero zmiany decyzji; obserwuje ile razy tie-break by dołożył do jadącego (oszczędność
     # rezerwy) w tym samym tierze late-pickup. Flip AKTYWNY = osobna flaga + ACK po walidacji #1.
@@ -327,6 +336,7 @@ ENABLE_OBJ_FOOD_AGE_HARD_SLA = False  # Faza 2 2026-06-17 (food-age hard-SLA + w
 ENABLE_END_OF_DAY_SALVAGE = False  # 2026-06-18 (ostatnia godzina pracy firmy — bend reguł końca zmiany)
 ENABLE_FEAS_CARRY_READMIT = False  # #483000 2026-06-27 (carry-aware re-admit feasible-path, cap-40 Tier-3)
 ENABLE_O2_READY_ANCHOR_SWEEP = False  # O2 re-seq 2026-06-27 (ready-anchor + overage+λ·czas_late objektyw worka, review 02.07)
+ENABLE_SLA_ANCHOR_UNIFIED = False  # S1 2026-07-02 (35-min HARD → jedno źródło sla_anchor.py z jawną kotwicą; 3 bliźniaki RAZEM; OFF=inline bajt-w-bajt, ON=te same decyzje + metryka obs sla_anchor_source; KANON=flags.json)
 ENABLE_RESERVE_AWARE_TIEBREAK_SHADOW = False  # #3 top10 2026-06-29: log-only tie-break wolny-vs-jadący (shadow); flip=osobna flaga+ACK
 RESERVE_TIEBREAK_MARGIN = 30.0  # #3: max Δscore (wolny−jadący) by tie-break dołożył do jadącego (silnik ~obojętny = łatwy zysk)
 ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria physical_verified delivered_at panel-vs-GPS courier_ground_truth; SHADOW, zero wpływu na decyzje/SLA; kanon=flags.json hot)

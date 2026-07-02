@@ -4,7 +4,7 @@
   "_2026-06-29_note": "Audyt-fix sesja 29.06: +3 swiadomie baseline (BUNDLE_DELIVERY_COLOCATION z 35186f6, GLOBAL_ALLOC_WRITE+PENDING_PROPOSALS_WRITE z 4812f28 Faza C) — flagi LIVE udokumentowane w commitach/memory, dryf zlapany przez ratchet; docelowo udokumentowac w ZIOMEK_LOGIC_REFERENCE i skurczyc.",
   "_2026-06-29_note2": "Sesja #5b (top10 #1): +3 swiadomie baseline z dzisiejszych prac innych zadan, zlapane przez ratchet podczas pelnej regresji #5b (NIE z #5b — moj tool nie dodaje flagi): ENABLE_DELIVERED_RESURRECTION (75eb738 wskrzeszanie po recznym cofnieciu statusu), ENABLE_LOAD_PLAN_PURE_READ (b6caf6b fix oscylacji invalidated), ENABLE_REASSIGN_GLOBAL_SELECT (1162ec1 rozbijanie pile-on przerzutow). LIVE+udokumentowane w memory/commitach; docelowo do ZIOMEK_LOGIC_REFERENCE i skurczyc.",
   "_2026-06-29_note3": "Sesja #3 (top10 #3): +1 ENABLE_RESERVE_AWARE_TIEBREAK_SHADOW — log-only shadow-observer reserve-aware tie-break (wolny-vs-jadący, same-tier late-pickup), ZERO zmiany decyzji; flip aktywny=osobna flaga+ACK. W ETAP4_DECISION_FLAGS + stała-literał common.py; docelowo do ZIOMEK_LOGIC_REFERENCE.",
-  "_count": 79,
+  "_count": 80,
   "baseline": [
     "ENABLE_AUTO_ROUTE_WEAK_PICK_ALERT",
     "ENABLE_BAG_TIME_ALERTS",
@@ -78,6 +78,7 @@
     "ENABLE_REASSIGN_GLOBAL_SELECT",
     "ENABLE_REPO_COST_LIVE",
     "ENABLE_RESERVE_AWARE_TIEBREAK_SHADOW",
+    "ENABLE_SLA_ANCHOR_UNIFIED",
     "ENABLE_SOON_FREE_CANDIDATE",
     "ENABLE_STATE_PANEL_DIVERGENCE_ALERT",
     "ENABLE_UWAGI_ADDRESS_PARSER",
@@ -86,5 +87,6 @@
     "ENABLE_WAITING_AT_PERSIST",
     "ENABLE_ZOMBIE_PICKUP_AT_GUARD"
   ],
-  "_2026-06-30_note": "+1 swiadomie baseline: ENABLE_COORDINATOR_FORCE_TIME_RECHECK = kill-switch operacyjny przycisku konsoli Odswiez czas z rutcomu (NIE logika decyzyjna dispatchu -> nie nalezy do ZIOMEK_LOGIC_REFERENCE.md; klasa jak guard/alert)."
+  "_2026-06-30_note": "+1 swiadomie baseline: ENABLE_COORDINATOR_FORCE_TIME_RECHECK = kill-switch operacyjny przycisku konsoli Odswiez czas z rutcomu (NIE logika decyzyjna dispatchu -> nie nalezy do ZIOMEK_LOGIC_REFERENCE.md; klasa jak guard/alert).",
+  "_2026-07-02_note_S1": "+1 swiadomie baseline: ENABLE_SLA_ANCHOR_UNIFIED (S1) — konsolidacja 35-min HARD do sla_anchor.py; OFF default (shipped-dark), decyzje bajt-w-bajt, ON dodaje metryke obs. Doc w kodzie (common ETAP4 komentarz + sla_anchor.py docstring) + raporcie sla-anchor_raport.md."
 }

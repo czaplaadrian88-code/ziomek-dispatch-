@@ -329,44 +329,46 @@ def test_sla_short_route_passes(monkeypatch):
 # LUKI (xfail-ratchet) — HARD-bramki bez EGZEKWOWANIA behawioralnego u źródła.
 # Zdjęcie xfail = zadanie fali SERIAL (fix U ŹRÓDŁA). Regresja ZOSTAJE ZIELONA.
 # ══════════════════════════════════════════════════════════════════════════════
-@pytest.mark.xfail(strict=False, reason="L-TEATR-1: R6 per-order HARD reject "
-                   "(feasibility_v2 ~1234) jest MASKOWANY przez bramkę SLA "
-                   "(~1226, ten sam próg 35 min) dla klasy assigned-not-picked, "
-                   "gdzie kotwica=teraz. Mutacja wyłączająca WYŁĄCZNIE R6 przeżywa, "
-                   "bo SLA łapie te same przypadki. Wymaga fix U ŹRÓDŁA: rozdzielić "
-                   "R6-ready-anchor od SLA-now-anchor albo świadomie zdeduplikować "
-                   "(fala SERIAL). Test poniżej egzekwuje R6-specyficzny reason w "
-                   "przypadku, który OBECNIE łapie SLA.")
-def test_r6_not_masked_by_sla_when_now_anchored(monkeypatch):
-    """Assigned-not-picked, ready≈now, długie legi: bag_time≈elapsed>35. Chcemy,
-    by werdykt niósł R6 (termika), a NIE tylko SLA — dziś SLA maskuje R6."""
+# S1 (2026-07-02) ZDJĘŁO xfail L-TEATR-1/2. Konsolidacja 35-min HARD do jednego
+# źródła (sla_anchor.py) z JAWNĄ kotwicą + metryka obs `sla_anchor_source` (flaga
+# ENABLE_SLA_ANCHOR_UNIFIED). De-maskowanie robimy OBSERWABILNOŚCIĄ, NIE zmianą
+# reason: reason bramki SLA/R6 KARMI decyzję downstream (dispatch_pipeline:1247/1324
+# `r.startswith("sla_violation"/"R6_per_order")` → _feas_carry_readmit/_blind_shadow),
+# więc reorder R6↔SLA byłby zmianą DECYZJI (niedozwolone bez replayu+ACK). Zamiast
+# tego: naruszenie kotwicy READY (R6) i NOW (SLA) jest NIEZALEŻNIE widoczne w metryce
+# → każda bramka killable osobnym testem (patrz też tests/test_sla_anchor_unified.py).
+def test_r6_ready_breach_visible_under_unified_even_when_sla_masks_reason(monkeypatch):
+    """L-TEATR-1 ZDJĘTE (obserwabilność). Assigned-not-picked, ready 40 min temu,
+    długie legi: łamie OBIE kotwice. Reason zostaje SLA (nie zmieniamy decyzji), ALE
+    `sla_anchor_source.ready_breach_oids` niesie R6/ready-breach = R6 NIE zamaskowany
+    w obserwabilności. Flaga ON pinowana."""
     _mock_osrm(duration_s=600)
-    _set_flags(monkeypatch, MAX_BAG_SANITY_CAP=8)
-    new = _new_order(oid="NEW", ready=_NOW, status="assigned")
-    _, reason, _, _ = check_feasibility_v2(
+    _set_flags(monkeypatch, MAX_BAG_SANITY_CAP=8, ENABLE_SLA_ANCHOR_UNIFIED=True)
+    ready_past = _NOW - timedelta(minutes=40)
+    new = _new_order(oid="NEW", ready=ready_past, status="assigned")
+    verdict, reason, metrics, _ = check_feasibility_v2(
         courier_pos=(53.0, 23.0), bag=[], new_order=new, now=_NOW,
     )
-    assert "R6_per_order" in reason, f"R6 zamaskowany przez SLA; got {reason}"
+    assert verdict == "NO", f"{reason}"
+    src = metrics.get("sla_anchor_source")
+    assert isinstance(src, dict), "metryka sla_anchor_source pod ON obowiązkowa"
+    assert "NEW" in src["ready_breach_oids"], (
+        f"R6/ready-breach zamaskowany w obserwabilności; got {src}")
 
 
-@pytest.mark.xfail(strict=False, reason="L-TEATR-2: bramka SLA nie ma strażnika na "
-                   "PARAMETR `sla_minutes` (domyślnie DEFAULT_SLA_MINUTES=35). "
-                   "Mutacja DEFAULT_SLA_MINUTES 35→999 przeżywa większość testów "
-                   "(L09: 2 failed tylko w szerokiej rodzinie, 0 w rdzeniu). Ten "
-                   "test egzekwuje efektywny próg SLA na granicy 35 min dla "
-                   "carried-order — dziś brak izolowanego przypadku SLA-only na "
-                   "dokładnym progu (R6 współdzieli 35). Fix U ŹRÓDŁA: dedykowany "
-                   "SLA-only boundary case albo test parametryzowany progiem.")
-def test_sla_threshold_is_35_exact_boundary(monkeypatch):
-    """Carried-order z elapsed dokładnie tuż-ponad 35 min i R6 nieaktywny →
-    reason MUSI być sla_violation (nie inny). Dziś próg dzielony z R6."""
+def test_sla_only_boundary_kills_threshold_under_unified(monkeypatch):
+    """L-TEATR-2 ZDJĘTE. SLA-only: picked_up 40 min temu, R6 per-order NIE dotyczy
+    niesionego, bypass pre-existing WYŁĄCZONY → reason MUSI być czyste sla_violation.
+    To izoluje próg SLA (mutacja DEFAULT_SLA_MINUTES 35→999 → reason≠sla_violation →
+    test PADA → mutant KILLED niezależnie od R6). Flaga ON pinowana."""
     _mock_osrm(duration_s=60)
-    _set_flags(monkeypatch, MAX_BAG_SANITY_CAP=8)
-    # picked_up 36 min temu, krótkie legi → elapsed od picked_up ~36 > 35, R6 anchor
-    # (ready) nie ustawiony dla picked_up → chcemy SLA-only reason.
-    bag = [_bag_item("B1", picked_up_ago_min=36, now=_NOW)]
+    _set_flags(monkeypatch, MAX_BAG_SANITY_CAP=8, ENABLE_SLA_ANCHOR_UNIFIED=True)
+    monkeypatch.setattr(C, "ENABLE_SLA_PREEXISTING_BYPASS", False, raising=False)
+    bag = [_bag_item("B1", picked_up_ago_min=40, now=_NOW)]
     new = _new_order(oid="NEW", ready=_NOW)
-    _, reason, _, _ = check_feasibility_v2(
+    _, reason, metrics, _ = check_feasibility_v2(
         courier_pos=(53.13, 23.15), bag=bag, new_order=new, now=_NOW,
     )
     assert reason.startswith("sla_violation"), f"oczekiwano czystego SLA; got {reason}"
+    src = metrics.get("sla_anchor_source")
+    assert isinstance(src, dict) and src["now_breach_oids"], f"SLA/now-breach obs; {src}"

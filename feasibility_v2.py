@@ -1046,6 +1046,12 @@ def check_feasibility_v2(
         and _is_paczka_sim(new_order)
         and all(_is_paczka_sim(_o) for _o in bag)
     )
+    # S1 (2026-07-02): flaga JEDNEGO źródła kotwic 35-min (sla_anchor). OFF = inline
+    # bajt-w-bajt; ON = te same decyzje + metryka obs `sla_anchor_source` (naruszenie
+    # kotwicy READY [R6] i NOW [SLA] widoczne NIEZALEŻNIE → de-maskowanie L-TEATR-1/2).
+    _sla_unified = C.flag("ENABLE_SLA_ANCHOR_UNIFIED",
+                          getattr(C, "ENABLE_SLA_ANCHOR_UNIFIED", False))
+    _sla_ready_breach: List[Tuple[str, float]] = []  # ready-anchor (R6) elapsed>HARD (obs)
     r6_max_bag_time = 0.0
     r6_worst_oid: Optional[str] = None
     r6_per_order_violations: List[Tuple[str, float]] = []
@@ -1099,6 +1105,10 @@ def check_feasibility_v2(
                 log.warning("prep_bias anchor correction failed oid=%s: %s: %s",
                             o.order_id, type(_pbe).__name__, _pbe)
         bag_time_min = (pred - anchor).total_seconds() / 60.0
+        # S1 obs: surowe naruszenie kotwicy READY (>HARD dial) — widoczne niezależnie
+        # od tego, czy SLA-loop niżej zrobi return wcześniej (de-maskowanie R6↔SLA).
+        if _sla_unified and (not _o_paczka_exempt) and bag_time_min > C.BAG_TIME_HARD_MAX_MIN:
+            _sla_ready_breach.append((o.order_id, round(bag_time_min, 1)))
         if (not _o_paczka_exempt) and bag_time_min > r6_max_bag_time:
             r6_max_bag_time = bag_time_min
             r6_worst_oid = o.order_id
@@ -1137,6 +1147,21 @@ def check_feasibility_v2(
     metrics["r6_picked_up_violations"] = r6_picked_up_violations
     if r6_paczka_exempt_oids:
         metrics["r6_paczka_exempt_oids"] = r6_paczka_exempt_oids
+    # S1 (2026-07-02): metryka obserwabilności JEDNEGO źródła kotwic. Tylko ON (ON≠OFF).
+    # ready = kotwica R6 (od gotowości), now = kotwica SLA (dostawy). now_* dopełnia
+    # SLA-loop niżej (mutacja tego dictu = ta sama referencja w metrics). Auto-serializacja
+    # L1.1 (deny-lista). NIE zmienia decyzji — czysta widoczność de-maskowania.
+    if _sla_unified:
+        metrics["sla_anchor_source"] = {
+            "unified": True,
+            "hard_dial_min": round(float(C.BAG_TIME_HARD_MAX_MIN), 1),
+            "sla_minutes": sla_minutes,
+            "ready_breach_oids": [oid for oid, _bt in _sla_ready_breach],
+            "ready_breach_max_min": round(
+                max([bt for _o, bt in _sla_ready_breach], default=0.0), 1),
+            "now_breach_oids": [],
+            "now_breach_max_min": 0.0,
+        }
     # F2.2 C3 narrow (2026-04-18): R6 soft warning zone (30, 35] — metric-only.
     # R-PACZKI-FLEX: paczki-only mix bypass tej strefy (paczki bez termiki).
     # ── Z-21 (higiena 2026-06-13): RENAME r6_soft_penalty → r6_soft_penalty_c3_legacy ──
@@ -1175,16 +1200,22 @@ def check_feasibility_v2(
                        getattr(C, "ENABLE_PACZKA_R6_THERMAL_EXEMPT", False))
                     and _is_paczka_sim(o)):
                 continue
-            if o.order_id in plan.pickup_at:
-                pu = plan.pickup_at[o.order_id]
-            elif o.picked_up_at is not None:
-                pu = o.picked_up_at
-                if pu.tzinfo is None:
-                    pu = pu.replace(tzinfo=timezone.utc)
-                pu = pu.astimezone(timezone.utc)
+            if _sla_unified:
+                # S1: kotwica NOW z jednego źródła (bliźniak z _count_sla_violations).
+                from dispatch_v2 import sla_anchor as _SA
+                pu = _SA.now_anchor(o, plan.pickup_at, now)
+                elapsed_min = _SA.elapsed_min(pred, pu)
             else:
-                pu = now
-            elapsed_min = (pred - pu).total_seconds() / 60.0
+                if o.order_id in plan.pickup_at:
+                    pu = plan.pickup_at[o.order_id]
+                elif o.picked_up_at is not None:
+                    pu = o.picked_up_at
+                    if pu.tzinfo is None:
+                        pu = pu.replace(tzinfo=timezone.utc)
+                    pu = pu.astimezone(timezone.utc)
+                else:
+                    pu = now
+                elapsed_min = (pred - pu).total_seconds() / 60.0
             if elapsed_min > sla_minutes:
                 vd = {
                     "order_id": o.order_id,
@@ -1202,6 +1233,12 @@ def check_feasibility_v2(
                     if pred_utc <= new_pickup_at_utc:
                         violations_pre_existing.append(vd)
         metrics["sla_violations"] = violations_detail
+        # S1 obs: naruszenie kotwicy NOW (SLA) — niezależne od R6 ready-breach powyżej.
+        if _sla_unified and isinstance(metrics.get("sla_anchor_source"), dict):
+            metrics["sla_anchor_source"]["now_breach_oids"] = [
+                v["order_id"] for v in violations_detail]
+            metrics["sla_anchor_source"]["now_breach_max_min"] = round(
+                max([v["elapsed_min"] for v in violations_detail], default=0.0), 1)
         metrics["sla_violations_pre_existing"] = violations_pre_existing
         n_blocking = len(violations_detail) - len(violations_pre_existing)
         metrics["sla_violations_blocking_count"] = n_blocking
