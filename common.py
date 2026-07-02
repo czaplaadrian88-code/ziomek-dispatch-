@@ -272,6 +272,38 @@ ETAP4_DECISION_FLAGS = (
     # OBA OFF = bajt-w-bajt (zapis regenu i brak GC jak dziś). Flip za ACK+dry-run.
     "ENABLE_PLAN_RECHECK_GATES",
     "ENABLE_COURIER_PLANS_GC",
+    # === D.3 fala A (2026-07-02): migracja 15 flag route/kanon z env-frozen
+    # (plan_recheck.py module-consty) do flags.json = KANON. Były LIVE ON przez
+    # drop-iny systemd (Environment=…=1) — martwe po tej migracji (decision_flag
+    # NIE czyta env). Stałe-fallback common.py=True (blok „D.3 fala A fallbacki"
+    # niżej) = intencja STEADY-STATE: utrata klucza json NIE flipuje po cichu
+    # (mina COMMIT_DIVERGENCE). Rejestracja = conftest strip + flag_fingerprint +
+    # parytet cross-proces (plan-recheck/panel-watcher/carried-first-guard). Dowód
+    # reachability: pw woła tylko recanon_courier/redecide_courier; SEQUENCE_LOCK
+    # (jedyny read w _gap_fill_plans←run_recheck) NIEOSIĄGALNY z pw → migracja
+    # behawioralnie neutralna. Projekt: eod_drafts/2026-07-02/D3_RECON_migracja_env_frozen_flags.md.
+    "ENABLE_GPS_FREE_ANCHOR",
+    "ENABLE_GPS_FREE_ANCHOR_LAST_POS",
+    "ENABLE_PLAN_REAL_PICKED_UP_AT",
+    "ENABLE_PLAN_SEQUENCE_LOCK",
+    "ENABLE_PLAN_CANON_ORDER_INVARIANTS",
+    "ENABLE_NO_RETURN_TO_DEPARTED_PICKUP",
+    "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE",
+    "ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP",
+    "ENABLE_RECANON_ON_WRITE",
+    "ENABLE_CARRIED_FIRST_RELAX",
+    "ENABLE_CARRIED_AGE_TZ_FIX",
+    "ENABLE_LEX_COMMITTED_WINDOW_SHADOW",
+    "ENABLE_LEX_COMMITTED_WINDOW",
+    "ENABLE_RELAX_COLOC_PICKUP",
+    "ENABLE_NONCARRIED_DROPOFF_REORDER",
+    # === D.3 fala B (2026-07-02): para atomowa V326 (common.py, oba env-default
+    # "1" jednolicie ON, żaden drop-in nie nadpisuje → migracja neutralna).
+    # Konsument route_simulator_v2:299/438 czyta atrybut modułu (NIE zmieniany).
+    # Sprzężenie #13: GROUPING=ON przy OR_TOOLS=OFF = double-insert super-pickupa →
+    # check_v326_pair_coherence loguje ostrzeżenie (bez zmiany zachowania).
+    "ENABLE_V326_OR_TOOLS_TSP",
+    "ENABLE_V326_SAME_RESTAURANT_GROUPING",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -327,6 +359,31 @@ ENABLE_COORD_SENTINEL_INGEST_GUARD = False  # L2.1 2026-07-01 (walidator coords 
 ENABLE_AVAILABLE_FROM_SINGLE_SOURCE = False  # L4 2026-07-02 (jedno źródło available_from=max(now,shift_start) w courier_resolver; konsumenci #1/#3/#5/chokepoint dziedziczą; OFF=stare ścieżki bajt-w-bajt; KANON=flags.json)
 ENABLE_PLAN_RECHECK_GATES = False  # L3 2026-07-02 (bramka ZAPISU regenu plan_recheck: compare-and-keep R6 carried>35 — nie nadpisuj dobrego planu gorszym-sekwencyjnie; OFF=zapis regenu bajt-w-bajt; KANON=flags.json)
 ENABLE_COURIER_PLANS_GC = False  # L3 2026-07-02 (GC courier_plans: terminal-stop prune + zombie by age/no-active przez plan_manager API pod lockiem; PLAN_GC_DRY_RUN default True; OFF=brak GC jak dziś; KANON=flags.json)
+
+# === D.3 fala A fallbacki (2026-07-02): stałe dla 15 flag route/kanon =========
+# ZMIGROWANE z env-frozen (plan_recheck.py `os.environ.get(...,"0")=="1"`) do
+# flags.json (KANON). Były LIVE ON przez drop-iny systemd; po migracji env jest
+# MARTWY (decision_flag nie czyta env). Stała = intencja STEADY-STATE (ON):
+# utrata klucza json NIE flipuje zachowania po cichu (mina COMMIT_DIVERGENCE —
+# const/json o przeciwnych intencjach). KANON = flags.json (decision_flag: json
+# wygrywa nad stałą). plan_recheck.py czyta te flagi przez common.decision_flag
+# na starcie procesu (oneshot=fresh/tick) + refresh per wywołanie w długobieżnym
+# panel-watcherze (recanon/redecide) — hot-reload. Zero odczytu env.
+ENABLE_GPS_FREE_ANCHOR = True
+ENABLE_GPS_FREE_ANCHOR_LAST_POS = True
+ENABLE_PLAN_REAL_PICKED_UP_AT = True
+ENABLE_PLAN_SEQUENCE_LOCK = True
+ENABLE_PLAN_CANON_ORDER_INVARIANTS = True
+ENABLE_NO_RETURN_TO_DEPARTED_PICKUP = True
+ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE = True
+ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP = True
+ENABLE_RECANON_ON_WRITE = True
+ENABLE_CARRIED_FIRST_RELAX = True
+ENABLE_CARRIED_AGE_TZ_FIX = True
+ENABLE_LEX_COMMITTED_WINDOW_SHADOW = True
+ENABLE_LEX_COMMITTED_WINDOW = True
+ENABLE_RELAX_COLOC_PICKUP = True
+ENABLE_NONCARRIED_DROPOFF_REORDER = True
 # Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy ON → zeruje
 # karę score pre_shift (`bonus_v325_pre_shift_soft`, oba źródła: stała V325 + gradient
 # _pre_shift_gradient_penalty). „Kurier dotrze później" obsługuje LEGALNA ścieżka:
@@ -442,6 +499,30 @@ def flag_fingerprint() -> str:
     """
     names = ETAP4_DECISION_FLAGS + _FINGERPRINT_EXTRA_FLAGS
     return " ".join(f"{n}={int(decision_flag(n))}" for n in names)
+
+
+_V326_PAIR_LOG = logging.getLogger("dispatch.v326_pair")
+
+
+def check_v326_pair_coherence(or_tools=None, grouping=None) -> bool:
+    """D.3 fala B: strażnik sprzężenia pary V326 (#13). GROUPING buduje super-pickup
+    (route_simulator_v2:299), a jego dedupe robi gałąź OR-Tools (:438) — GROUPING=ON
+    przy OR_TOOLS=OFF = double-insert super-pickupa. Zwraca True gdy para NIESPÓJNA
+    (grouping AND NOT or_tools) i loguje ostrzeżenie; inaczej False. BEZ zmiany
+    zachowania (tylko log — konsument route_simulator_v2 nietknięty). Argumenty None →
+    efektywne wartości z decision_flag (flags.json→stała). Wołane raz przy imporcie
+    (startup sanity) + z testu pary."""
+    if or_tools is None:
+        or_tools = decision_flag("ENABLE_V326_OR_TOOLS_TSP")
+    if grouping is None:
+        grouping = decision_flag("ENABLE_V326_SAME_RESTAURANT_GROUPING")
+    incoherent = bool(grouping) and not bool(or_tools)
+    if incoherent:
+        _V326_PAIR_LOG.warning(
+            "V326_PAIR_INCOHERENT ENABLE_V326_SAME_RESTAURANT_GROUPING=ON przy "
+            "ENABLE_V326_OR_TOOLS_TSP=OFF → double-insert super-pickupa (#13). "
+            "Para atomowa D.3 fala B: ustaw obie flagi jednakowo w flags.json.")
+    return incoherent
 
 
 def now_utc():
@@ -2438,8 +2519,12 @@ ENABLE_V326_PO_DRODZE_STRICT = _os.environ.get(
 # constraint programming dla wszystkich bag sizes. Time-bounded search 200ms.
 # Eliminates greedy zigzag pattern dla bag>3 (#468404 case study).
 # Default False — shadow validation period przed flip True.
-ENABLE_V326_OR_TOOLS_TSP = _os.environ.get(
-    "ENABLE_V326_OR_TOOLS_TSP", "1") == "1"  # V3.27 flip 2026-04-25 wieczór: re-enabled post Bug X+Y+Z+latency fixes
+# D.3 fala B (2026-07-02): KANON=flags.json. Było env-frozen default "1" (jednolicie
+# ON, żaden drop-in nie nadpisuje) → literał True = stała-fallback steady-state +
+# źródło odczytu dla konsumenta (route_simulator_v2:438 czyta ten atrybut modułu —
+# NIE zmieniany). decision_flag("ENABLE_V326_OR_TOOLS_TSP") = flags.json→ta stała.
+# PARA ATOMOWA z ENABLE_V326_SAME_RESTAURANT_GROUPING (#13, check_v326_pair_coherence).
+ENABLE_V326_OR_TOOLS_TSP = True  # V3.27 flip 2026-04-25 wieczór: re-enabled post Bug X+Y+Z+latency fixes
 V326_OR_TOOLS_TIME_LIMIT_MS = 200  # V3.27 (2026-04-25 wieczór): RESTORED 50→200ms post parallel ThreadPoolExecutor implementation. 10 workers × 200ms = ~250-400ms wall (vs sequential 2000ms). Adrian's spec 6.5 budget. Strategic: jakość bag>=4 zamiast skróconych 50ms.
 
 # V3.27 Phase 1A+G (Adrian Option B 2026-04-25 wieczór): skip OR-Tools dla
@@ -3241,9 +3326,19 @@ V3274_RENDER_DIVERGENCE_WARN_MIN = 5.0  # warn gdy |plan_eta - commit| > 5 min
 # BIALYSTOK_DISTRICT_ADJACENCY). Eliminates dual-pickup runs dla compatible
 # orders (np. 2 ordery Mama Thai obie centrum gotowe w tym samym oknie).
 # Default False — shadow validation period przed flip True.
-ENABLE_V326_SAME_RESTAURANT_GROUPING = _os.environ.get(
-    "ENABLE_V326_SAME_RESTAURANT_GROUPING", "1") == "1"  # V3.27 flip 2026-04-25 wieczór: re-enabled post Bug X+Y+Z+latency fixes
+# D.3 fala B (2026-07-02): KANON=flags.json. Było env-frozen default "1" (jednolicie
+# ON) → literał True = stała-fallback steady-state + źródło odczytu dla konsumenta
+# (route_simulator_v2:299 getattr tego atrybutu modułu — NIE zmieniany). PARA ATOMOWA
+# z ENABLE_V326_OR_TOOLS_TSP (#13 double-insert; check_v326_pair_coherence przy migracji).
+ENABLE_V326_SAME_RESTAURANT_GROUPING = True  # V3.27 flip 2026-04-25 wieczór: re-enabled post Bug X+Y+Z+latency fixes
 V326_GROUPING_TIME_TOLERANCE_MIN = 5.0  # ±5 min czas_kuriera tolerance
+
+# D.3 fala B: startup-sanity sprzężenia pary V326 (log-only). Przy zdrowym stanie
+# (obie ON) = no-op; ostrzeże gdy ktoś w flags.json zostawi OR_TOOLS=OFF przy GROUPING=ON.
+try:
+    check_v326_pair_coherence()
+except Exception:  # pragma: no cover — startup sanity nigdy nie psuje importu
+    pass
 
 # ============================================================
 # V3.27 Bug Z fix (2026-04-25 wieczór) — bundle cross-quadrant SOFT penalty

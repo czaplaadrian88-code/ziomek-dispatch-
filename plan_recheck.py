@@ -27,6 +27,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from dispatch_v2 import plan_manager
+# D.3 fala A (2026-07-02): flagi route/kanon czytane z flags.json (KANON) przez
+# common.decision_flag zamiast env-frozen module-const. Import top-level bezpieczny
+# (common NIE importuje plan_recheck → brak cyklu; plan_manager już ściąga common).
+from dispatch_v2 import common as _CF
 
 _log = logging.getLogger("plan_recheck")
 if not _log.handlers:
@@ -344,29 +348,29 @@ def _bag_signature(oids: List[str], orders_state: Dict[str, Any]) -> str:
 # odbiorów + obserwowanych zdarzeń odbioru/doręczenia (czas + lokalizacja
 # ostatniego przystanku). Tak liczy człowiek, gdy nikt nie ma GPS.
 GPS_FRESH_MAX_MIN = float(os.environ.get("GPS_FRESH_MAX_MIN", "10"))
-ENABLE_GPS_FREE_ANCHOR = os.environ.get("ENABLE_GPS_FREE_ANCHOR", "0") == "1"
+ENABLE_GPS_FREE_ANCHOR = _CF.decision_flag("ENABLE_GPS_FREE_ANCHOR")  # D.3 fala A: KANON=flags.json (było env-frozen)
 # 2026-06-26 (case 509 „plan tkwi 52 min"): ostatnia deska kotwicy dla kuriera BEZ
 # świeżego GPS + bez kotwicy zdarzeniowej/committed → sięgnij do last-known-pos store
 # (`courier_last_pos.json`, ten sam co courier_resolver rescue 08.06: TTL 25 min + bbox).
 # Bez tego `_start_anchor`=None → `_gen_one_bag_plan` pomija CAŁEGO kuriera → plan nigdy
 # się nie regeneruje (tkwi invalidated ze starymi dowiezionymi + bez nowych aktywnych).
 # Parytet z decyzyjną ścieżką (courier_resolver JUŻ rescue'uje). Default OFF = bez zmiany.
-ENABLE_GPS_FREE_ANCHOR_LAST_POS = os.environ.get("ENABLE_GPS_FREE_ANCHOR_LAST_POS", "0") == "1"
+ENABLE_GPS_FREE_ANCHOR_LAST_POS = _CF.decision_flag("ENABLE_GPS_FREE_ANCHOR_LAST_POS")  # D.3 fala A: KANON=flags.json
 # F1 unifikacja silnika trasy: przekaż REALNY picked_up_at do symulatora (jak
 # ścieżka propozycji `_bag_dict_to_ordersim`), żeby kara R6 soft-deadline
 # (route_simulator_v2:1030) chroniła NIESIONE jedzenie. Bez tego anchor=None →
 # `continue` → carried bez deadline → solver deferuje stygnące jedzenie. Default OFF.
-ENABLE_PLAN_REAL_PICKED_UP_AT = os.environ.get("ENABLE_PLAN_REAL_PICKED_UP_AT", "0") == "1"
+ENABLE_PLAN_REAL_PICKED_UP_AT = _CF.decision_flag("ENABLE_PLAN_REAL_PICKED_UP_AT")  # D.3 fala A: KANON=flags.json
 # F2 zunifikowany silnik trasy: Ziomek decyduje SEKWENCJĘ tylko na zmianę worka
 # (bag_signature), a tick TYLKO re-czasuje wzdłuż stałej kolejności. Bez tego
 # plan_recheck re-optymalizował co tick (oscylacja carried-first↔last). Default OFF.
-ENABLE_PLAN_SEQUENCE_LOCK = os.environ.get("ENABLE_PLAN_SEQUENCE_LOCK", "0") == "1"
+ENABLE_PLAN_SEQUENCE_LOCK = _CF.decision_flag("ENABLE_PLAN_SEQUENCE_LOCK")  # D.3 fala A: KANON=flags.json (reachability: tylko _gap_fill_plans←run_recheck, nieosiągalny z pw)
 # F6: TWARDE niezmienniki kolejności W DECYZJI kanonu (carried-first + odbiory wg
 # committed) + re-czasowanie po reorderze. Te same reguły co build_view, ale w
 # kanonie → wszystkie powierzchnie (apka/panele/Telegram) widzą TĘ SAMĄ, poprawną
 # kolejność (reorder build_view staje się no-op). Niezależne od pilności R6. OFF.
-ENABLE_PLAN_CANON_ORDER_INVARIANTS = os.environ.get(
-    "ENABLE_PLAN_CANON_ORDER_INVARIANTS", "0") == "1"
+ENABLE_PLAN_CANON_ORDER_INVARIANTS = _CF.decision_flag(
+    "ENABLE_PLAN_CANON_ORDER_INVARIANTS")  # D.3 fala A: KANON=flags.json
 
 # Z-RULE (Adrian 2026-06-13, case Bartek/Raj 480295+480434): NIGDY nie wracaj do
 # restauracji, którą kurier już opuścił, niosąc/po kolejnym odbiorze. Dwa odbiory
@@ -374,8 +378,8 @@ ENABLE_PLAN_CANON_ORDER_INVARIANTS = os.environ.get(
 # committed → 2. order = czekanie pod restauracją, NIE powrót 2.5 km tam i z
 # powrotem). DETEKCJA zawsze ON (log BACK_TO_DEPARTED_RESTAURANT — sygnał nawet
 # przy fix OFF), REORDER za flagą (shadow-first, flip po ACK). Default OFF.
-ENABLE_NO_RETURN_TO_DEPARTED_PICKUP = os.environ.get(
-    "ENABLE_NO_RETURN_TO_DEPARTED_PICKUP", "0") == "1"
+ENABLE_NO_RETURN_TO_DEPARTED_PICKUP = _CF.decision_flag(
+    "ENABLE_NO_RETURN_TO_DEPARTED_PICKUP")  # D.3 fala A: KANON=flags.json
 
 # COMMITTED-PROPAGATION (Adrian 2026-06-22, case Michał K. Goodboy+Sushi 482630/482633):
 # re-sekwencer worka był ŚLEPY na punktualność committed, bo OrderSim budowany tu NIE
@@ -391,15 +395,15 @@ ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION = os.environ.get(
 # F3: natychmiastowa decyzja sekwencji NA ZMIANĘ WORKA (override/reassign) z
 # panel_watcher — Ziomek układa trasę od razu, bez czekania ≤5 min na tick. Tylko
 # gdy żaden ważny plan nie pokrywa worka (nie nadpisuje trasy z propozycji). OFF.
-ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE = os.environ.get(
-    "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE", "0") == "1"
+ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE = _CF.decision_flag(
+    "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE")  # D.3 fala A: KANON=flags.json
 # Redecide także po ODEBRANE (zmiana stanu worka = zmiana bag_signature F2):
 # bez tego kanon zdecydowany tuż PRZED wpisem statusu z panelu (reconcile lag
 # ~1 min) zostaje z odbiorami przed niesionym aż do następnego 5-min ticku
 # (case Gabriel cid=179, 11.06: pickup Mama Thai/Sushi przed dostawą 42PP,
 # złe okno 17:03→17:08). Wołane z panel_watcher._update_plan_on_picked_up. OFF.
-ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP = os.environ.get(
-    "ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP", "0") == "1"
+ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP = _CF.decision_flag(
+    "ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP")  # D.3 fala A: KANON=flags.json
 # RECANON-ON-WRITE (Adrian 2026-06-23, „od podstaw nie łatać"): niezmienniki kanonu
 # (carried-first floor + odbiory wg committed + relax „po drodze") były dotąd doklejane
 # WYŁĄCZNIE przez tick plan_recheck co 5 min. Każdy zapis ZDARZENIOWY (odbiór →
@@ -409,7 +413,7 @@ ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP = os.environ.get(
 # RE-EGZEKWUJE kanon na istniejącym planie NATYCHMIAST po każdym zdarzeniu worka (przez
 # _retime_one_bag_plan — bez re-TSP, sekwencja Ziomka zachowana). Foundational: kanon
 # staje się częścią KAŻDEGO zapisu. Default OFF. Wymaga (jak tick) CANON_INVARIANTS+RELAX.
-ENABLE_RECANON_ON_WRITE = os.environ.get("ENABLE_RECANON_ON_WRITE", "0") == "1"
+ENABLE_RECANON_ON_WRITE = _CF.decision_flag("ENABLE_RECANON_ON_WRITE")  # D.3 fala A: KANON=flags.json
 _ANCHOR_EVENT_MAX_AGE_MIN = 360.0  # zdarzenia starsze niż 6h = inna zmiana
 
 # CARRIED-FIRST RELAX (Adrian 2026-06-22, case Sioux→Wierzbowa cid=393): twarda
@@ -422,7 +426,7 @@ _ANCHOR_EVENT_MAX_AGE_MIN = 360.0  # zdarzenia starsze niż 6h = inna zmiana
 # no-op (najgorszy przypadek = obecne zachowanie). Replay 29 058 sytuacji z całej
 # historii (eod_drafts/2026-06-22): 0 szkód, mediana −3.7 min jazdy/przypadek.
 # Default OFF — flip po ACK + spójnym wdrożeniu powierzchni (apka/konsola).
-ENABLE_CARRIED_FIRST_RELAX = os.environ.get("ENABLE_CARRIED_FIRST_RELAX", "0") == "1"
+ENABLE_CARRIED_FIRST_RELAX = _CF.decision_flag("ENABLE_CARRIED_FIRST_RELAX")  # D.3 fala A: KANON=flags.json
 CARRIED_FIRST_RELAX_SOFT_MAX_MIN = float(
     os.environ.get("CARRIED_FIRST_RELAX_SOFT_MAX_MIN", "20"))
 CARRIED_FIRST_RELAX_DELAY_TOL_MIN = float(
@@ -441,7 +445,7 @@ CARRIED_FIRST_RELAX_MAX_STOPS = int(
 # (parse_panel_timestamp — jak _sim_picked_up_at / ścieżka propozycji Telegrama). Default
 # OFF — flip po replay (carried_first_replay) + ACK. ON = relax znów respektuje świeżość
 # (zostaje carried-first, gdy carried nie zdąży ≤SOFT_MAX od ODEBRANIA).
-ENABLE_CARRIED_AGE_TZ_FIX = os.environ.get("ENABLE_CARRIED_AGE_TZ_FIX", "0") == "1"
+ENABLE_CARRIED_AGE_TZ_FIX = _CF.decision_flag("ENABLE_CARRIED_AGE_TZ_FIX")  # D.3 fala A: KANON=flags.json
 
 # P-1 LEX-COMMITTED-WINDOW (handoff 2026-06-24, audyt P-1): HARD okno odbioru ±tol
 # (R-DECLARED-TIME/R27) PRZEGRYWAŁO z SOFT carried-first w kanonie (carried-first wpychał
@@ -454,8 +458,8 @@ ENABLE_CARRIED_AGE_TZ_FIX = os.environ.get("ENABLE_CARRIED_AGE_TZ_FIX", "0") == 
 # tol=5 −24% okno/+4177m jazdy, tol=10 −32%/+4368m, R6/carry/deliv harm = 0 OBA. Dwie flagi:
 #  SHADOW (oblicz + loguj rozjazd D-vs-live, ZERO zmiany decyzji) → mierz peak,
 #  APPLY (zmień decyzję) → flip po obserwacji. Default OFF.
-ENABLE_LEX_COMMITTED_WINDOW_SHADOW = os.environ.get("ENABLE_LEX_COMMITTED_WINDOW_SHADOW", "0") == "1"
-ENABLE_LEX_COMMITTED_WINDOW = os.environ.get("ENABLE_LEX_COMMITTED_WINDOW", "0") == "1"
+ENABLE_LEX_COMMITTED_WINDOW_SHADOW = _CF.decision_flag("ENABLE_LEX_COMMITTED_WINDOW_SHADOW")  # D.3 fala A: KANON=flags.json
+ENABLE_LEX_COMMITTED_WINDOW = _CF.decision_flag("ENABLE_LEX_COMMITTED_WINDOW")  # D.3 fala A: KANON=flags.json
 # Tolerancja okna: strict 5 (load-aware loose 10 @ loadgov≥4.5 = TODO wpiąć loadgov w plan_recheck;
 # na razie stała, tunable z shadow). Mirror OBJ_COMMITTED_PICKUP_TOL_STRICT_MIN.
 LEX_WINDOW_TOL_MIN = float(os.environ.get("LEX_WINDOW_TOL_MIN", "5"))
@@ -472,7 +476,7 @@ LEX_WINDOW_SHADOW_PATH = "/root/.openclaw/workspace/dispatch_state/lex_committed
 # 'opuszczona' → relax może wziąć współlokalny odbiór na początek (jedna wizyta). Świeżość
 # carried wciąż chroniona istniejącym SOFT_MAX. Replay 06-24: 15 worków, −drive, 0 regresji
 # >SOFT_MAX. Default OFF. Wymaga ENABLE_CARRIED_FIRST_RELAX (działa wewnątrz relaxu).
-ENABLE_RELAX_COLOC_PICKUP = os.environ.get("ENABLE_RELAX_COLOC_PICKUP", "0") == "1"
+ENABLE_RELAX_COLOC_PICKUP = _CF.decision_flag("ENABLE_RELAX_COLOC_PICKUP")  # D.3 fala A: KANON=flags.json
 RELAX_COLOC_PICKUP_M = float(os.environ.get("RELAX_COLOC_PICKUP_M", "180"))
 
 # FIX M — REORDER DROPOFFÓW W WORKU BEZ NIESIONYCH (Adrian 2026-06-24, case Mateusz
@@ -485,10 +489,52 @@ RELAX_COLOC_PICKUP_M = float(os.environ.get("RELAX_COLOC_PICKUP_M", "180"))
 # poprawa lub no-op. NIE oscyluje (brak carried = brak konfliktu carried-first↔last; ta
 # sama własność co relax, który już biega co tick). Replay 06-24: 18 worków, 0 pogorszeń.
 # Default OFF. Brak interakcji z relaxem (mutualnie wykluczające: relax tylko-carried).
-ENABLE_NONCARRIED_DROPOFF_REORDER = os.environ.get("ENABLE_NONCARRIED_DROPOFF_REORDER", "0") == "1"
+ENABLE_NONCARRIED_DROPOFF_REORDER = _CF.decision_flag("ENABLE_NONCARRIED_DROPOFF_REORDER")  # D.3 fala A: KANON=flags.json
 NONCARRIED_REORDER_MAX_STOPS = int(os.environ.get("NONCARRIED_REORDER_MAX_STOPS", "8"))
 NONCARRIED_REORDER_DRIVE_EPS_MIN = float(os.environ.get("NONCARRIED_REORDER_DRIVE_EPS_MIN", "0.3"))
 NONCARRIED_REORDER_DELAY_TOL_MIN = float(os.environ.get("NONCARRIED_REORDER_DELAY_TOL_MIN", "6"))
+
+# === D.3 fala A (2026-07-02): refresh flag route/kanon z flags.json (KANON) ====
+# 15 flag wyżej czytają decision_flag na starcie procesu (oneshot plan-recheck/
+# guard = fresh per tick; panel-watcher long-running = wartość z importu). Ten
+# refresh odświeża je per-przebieg (run_recheck / recanon_courier / redecide_
+# courier) → hot-reload flip też w panel-watcherze (ZYSK migracji). Nadpisuje
+# moduł-global TYLKO gdy klucz JEST w flags.json (produkcja po deployu); brak
+# klucza (worktree pre-deploy / conftest-strip w testach) → zostawia bieżącą
+# wartość, więc monkeypatch.setattr(PR,"ENABLE_X",...) w testach NIE jest kasowany.
+_D3_FALA_A_FLAGS = (
+    "ENABLE_GPS_FREE_ANCHOR",
+    "ENABLE_GPS_FREE_ANCHOR_LAST_POS",
+    "ENABLE_PLAN_REAL_PICKED_UP_AT",
+    "ENABLE_PLAN_SEQUENCE_LOCK",
+    "ENABLE_PLAN_CANON_ORDER_INVARIANTS",
+    "ENABLE_NO_RETURN_TO_DEPARTED_PICKUP",
+    "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE",
+    "ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP",
+    "ENABLE_RECANON_ON_WRITE",
+    "ENABLE_CARRIED_FIRST_RELAX",
+    "ENABLE_CARRIED_AGE_TZ_FIX",
+    "ENABLE_LEX_COMMITTED_WINDOW_SHADOW",
+    "ENABLE_LEX_COMMITTED_WINDOW",
+    "ENABLE_RELAX_COLOC_PICKUP",
+    "ENABLE_NONCARRIED_DROPOFF_REORDER",
+)
+
+
+def _refresh_d3_fala_a_flags() -> None:
+    """Odśwież flagi D.3 fala A z flags.json (KANON) do modułowych globali.
+
+    Nadpisuje TYLKO gdy klucz obecny w flags.json (produkcja) → hot-reload w
+    panel-watcherze. Brak klucza (pre-deploy / conftest-strip) → bez zmian, więc
+    testowy monkeypatch stałej modułu jest zachowany. Best-effort, nie rzuca."""
+    try:
+        fl = _CF.load_flags()
+    except Exception:
+        return
+    g = globals()
+    for _fn in _D3_FALA_A_FLAGS:
+        if _fn in fl:
+            g[_fn] = _CF.decision_flag(_fn)
 
 
 def _gps_age_min(gps: Dict[str, Any], now: datetime) -> Optional[float]:
@@ -1957,6 +2003,7 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
     Inaczej liczy kanon `_gen_one_bag_plan`. Best-effort, zawsze zwraca bool,
     nigdy nie rzuca. reason: 'override' (flaga F3) / 'pickup' (osobna flaga).
     """
+    _refresh_d3_fala_a_flags()  # D.3 fala A: hot-reload flag kanonu w pw przed bramką
     if reason == "pickup":
         if not ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP:
             return False
@@ -2019,6 +2066,7 @@ def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = No
     przydziale → pełna decyzja należy do _gen lub ticku). Best-effort, nigdy nie rzuca.
     Determinizm niezmienników (carried-first + committed) gwarantuje brak oscylacji
     między zdarzeniem a tickiem (ta sama transformacja co F6/F2)."""
+    _refresh_d3_fala_a_flags()  # D.3 fala A: hot-reload flag kanonu w pw przed bramką
     if not ENABLE_RECANON_ON_WRITE:
         return False
     try:
@@ -2309,6 +2357,7 @@ def run_recheck() -> Dict[str, Any]:
         _log.info("FLAG_FINGERPRINT proc=plan-recheck %s", _C.flag_fingerprint())
     except Exception:
         pass
+    _refresh_d3_fala_a_flags()  # D.3 fala A: spójny snapshot flag kanonu na początku ticku
     now = _now_utc()
     orders_state = _load_orders_state()
     plans = plan_manager.load_plans()
