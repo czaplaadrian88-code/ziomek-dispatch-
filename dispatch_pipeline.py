@@ -3398,6 +3398,40 @@ def _pre_shift_gradient_penalty(shift_start_min, loadgov_ewma):
     return C.PRE_SHIFT_FAR_PEN
 
 
+def _l4_floor_candidate_eta(c) -> Optional[float]:
+    """L4 (#1) — podnieś eta_pickup kandydata do available_from (metrics
+    available_from_utc, wypełniony z courier_resolver gdy flaga ON). Pure floor:
+    tylko podnosi, NIGDY nie obniża (zero regresji przez zaniżenie). Mutuje
+    c.metrics (eta_pickup_utc/eta_drive_utc/af_floor_applied_min/af_applied).
+    Zwraca minuty podniesienia (0.0 = no-op), None gdy brak available_from/parse.
+    Wydzielone z pętli assess_order → testowalne + parytet z #3/#5 (ta sama
+    wartość floora = available_from)."""
+    _af_iso = c.metrics.get("available_from_utc")
+    if not _af_iso:
+        return None
+    try:
+        _af_dt = datetime.fromisoformat(_af_iso)
+        if _af_dt.tzinfo is None:
+            _af_dt = _af_dt.replace(tzinfo=timezone.utc)
+        _eta_iso = c.metrics.get("eta_pickup_utc")
+        _cur = datetime.fromisoformat(_eta_iso) if _eta_iso else None
+        if _cur is not None and _cur.tzinfo is None:
+            _cur = _cur.replace(tzinfo=timezone.utc)
+        if _cur is not None and _af_dt > _cur:
+            raised = round((_af_dt - _cur).total_seconds() / 60.0, 1)
+            c.metrics["af_floor_applied_min"] = raised
+            c.metrics["eta_pickup_utc"] = _af_dt.isoformat()
+            c.metrics["eta_drive_utc"] = _af_dt.isoformat()
+            c.metrics["af_applied"] = True
+            return raised
+        c.metrics["af_floor_applied_min"] = 0.0
+        c.metrics["af_applied"] = False
+        return 0.0
+    except Exception:
+        c.metrics["af_applied"] = False
+        return None
+
+
 def assess_order(
     order_event: dict,
     fleet_snapshot: Dict[str, Any],
@@ -3953,6 +3987,7 @@ def _assess_order_impl(
             base_sequence=_base_sequence,
             r07_chain_eta_utc=r07_chain_eta_utc,  # V3.26 STEP 6 R-07 MANDATORY when flag=True
             pos_source=getattr(cs, "pos_source", None),  # V3.28 ETAP 2 — clamp gate
+            available_from=getattr(cs, "available_from", None),  # L4 — jedno źródło max(now,shift_start)
             courier_tier=getattr(cs, "tier_bag", None),  # 2026-05-17 tier-aware DWELL
             schedule_source_stale=getattr(cs, "schedule_source_stale", False),  # D2 (audyt 2026-05-28)
             pos_from_store=getattr(cs, "pos_from_store", False),  # Z-06 (audyt 2026-06-10) — store-rescue to nie świeży fix
@@ -5421,6 +5456,12 @@ def _assess_order_impl(
                 round(getattr(cs, "pos_age_min"), 1)
                 if getattr(cs, "pos_age_min", None) is not None else None),
             "shift_start_min": getattr(cs, "shift_start_min", None),
+            # L4 (2026-07-02, F1): available_from = max(now, shift_start) policzone RAZ
+            # w courier_resolver (None + "unset" gdy flaga OFF). Post-loop #1 clamp czyta
+            # to zamiast re-derywacji shift_start_min. Auto-serializuje do ledgera (L1.1).
+            "available_from_utc": (getattr(cs, "available_from", None).isoformat()
+                                   if getattr(cs, "available_from", None) is not None else None),
+            "af_source": getattr(cs, "available_from_source", "unset"),
             # V3.24-A: default False (in-shift kurier — naive_eta > shift_start zawsze).
             # Post-loop override ustawia True dla pos_source=pre_shift (linie ~925).
             "v324a_pickup_clamped_to_shift_start": False,
@@ -5805,6 +5846,13 @@ def _assess_order_impl(
         _v2_legs = _osrm_client_inner.stop_v2_request_tracking()
         _v2_route = _aggregate_legs(_v2_legs) if _v2_legs else None
 
+        # L4 OFF = ledger bajt-w-bajt: klucze L4 wchodzą do metrics TYLKO gdy źródło
+        # policzyło available_from (⟺ ENABLE_AVAILABLE_FROM_SINGLE_SOURCE ON w
+        # dispatchable_fleet). OFF → cs.available_from None → usuń → serializer ich
+        # nie widzi (jak sprzed L4). Post-loop #1 floor i tak nie odpali (flaga OFF).
+        if getattr(cs, "available_from", None) is None:
+            enriched_metrics.pop("available_from_utc", None)
+            enriched_metrics.pop("af_source", None)
         return Candidate(
             courier_id=str(cid),
             name=getattr(cs, "name", None),
@@ -6009,6 +6057,13 @@ def _assess_order_impl(
     no_gps_travel_min = max(15.0, prep_remaining_min)
     no_gps_eta_utc = now + timedelta(minutes=no_gps_travel_min)
 
+    # L4 (2026-07-02, F1): jedno źródło floor odbioru. OFF → stare ścieżki niżej
+    # bajt-w-bajt; ON → po per-pos blokach podnosimy eta_pickup do available_from
+    # (=max(now,shift_start) z courier_resolver): repointuje pre_shift clamp na
+    # kanoniczny available_from i DOMYKA lukę no_gps (audyt :5856 — no_gps pomijał
+    # floor; on-shift = no-op bo available_from=now).
+    _af_single_source_on = C.decision_flag("ENABLE_AVAILABLE_FROM_SINGLE_SOURCE")
+
     for c in candidates:
         ps = c.metrics.get("pos_source")
         if ps == "no_gps":
@@ -6053,6 +6108,13 @@ def _assess_order_impl(
                         f"pre_shift_too_late (start za {shift_min:.0f} min, "
                         f"odbiór za {prep_remaining_min:.0f} min)"
                     )
+
+        # L4 floor (2026-07-02): eta_pickup ≥ available_from. Pure floor — tylko
+        # podnosi, nigdy nie obniża (zero regresji przez zaniżenie). Dla pre_shift
+        # available_from≈shift_start (≈ eta powyżej → floor ~0); no_gps on-shift
+        # available_from=now (no-op); GPS/edge z przyszłym startem → realny floor.
+        if _af_single_source_on:
+            _l4_floor_candidate_eta(c)
 
     # Feasible (MAYBE) → rank by score.
     # R2 Bartek Gold Standard tie-breaker: przy równym score, preferuj
@@ -7131,6 +7193,7 @@ def _assess_order_impl(
                 now=now,
                 sla_minutes=35,
                 pos_source=getattr(cs, "pos_source", None),  # V3.28 ETAP 2 — clamp gate
+                available_from=getattr(cs, "available_from", None),  # L4 — jedno źródło max(now,shift_start)
                 courier_tier=getattr(cs, "tier_bag", None),  # 2026-05-17 tier-aware DWELL
                 schedule_source_stale=getattr(cs, "schedule_source_stale", False),  # D2 (audyt 2026-05-28)
                 pos_from_store=getattr(cs, "pos_from_store", False),  # Z-06 (audyt 2026-06-10)

@@ -14,7 +14,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from dispatch_v2.common import (
     setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag,
@@ -356,6 +356,12 @@ class CourierState:
     # FIX 2026-06-08: True gdy pozycja odtworzona z persistent last-known-pos
     # store (luka GPS). Save-block NIE re-persystuje takich (laundering guard).
     pos_from_store: bool = False
+    # L4 (2026-07-02, F1/INV-SRC-AVAILABLE-FROM): jedno źródło „najwcześniej kurier
+    # może odebrać" = max(now, shift_start). Liczone RAZ w dispatchable_fleet (gdy
+    # ENABLE_AVAILABLE_FROM_SINGLE_SOURCE ON), dziedziczone przez konsumentów zamiast
+    # re-derywacji shift_start per powierzchnia. None + "unset" gdy flaga OFF (nietknięte).
+    available_from: Optional[datetime] = None
+    available_from_source: str = "unset"   # shift_start | now_on_shift | unknown | unset(flag OFF)
 
     def to_dict(self):
         return {
@@ -368,6 +374,8 @@ class CourierState:
             "name": self.name,
             "tier_bag": self.tier_bag,
             "bag_from_panel_packs": self.bag_from_panel_packs,
+            "available_from": self.available_from.isoformat() if self.available_from else None,
+            "available_from_source": self.available_from_source,
         }
 
 
@@ -1290,6 +1298,102 @@ def _shift_start_dt(entry: Optional[dict]) -> Optional[datetime]:
         return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# L4 (2026-07-02, F1/INV-SRC-AVAILABLE-FROM) — JEDNO źródło „najwcześniej kurier
+# może odebrać". Audyt 30.06 (preshift-pickup-floor): 17 powierzchni liczyło czas
+# odbioru, tylko 4 z floorem do shift_start, ZERO strażników. Te helpery = JEDNA
+# definicja `available_from = max(now, shift_start)` importowana przez konsumentów
+# (dispatchable_fleet source, feasibility #3, plan_recheck #5, state_machine
+# chokepoint) ORAZ strażnika pickup_floor_guard — koniec re-derywacji per
+# powierzchnia. Pure/fail-soft; NIE gated (gate jest w KONSUMENTACH).
+# ─────────────────────────────────────────────────────────────────────────────
+def available_from_from_shift_start(
+    shift_start: Optional[datetime], now_utc: Optional[datetime] = None,
+) -> Tuple[datetime, str]:
+    """`available_from = max(now, shift_start)` + źródło. JEDYNA definicja floora
+    (bliźniaki #1/#3/#5 muszą dać tę samą wartość z tych samych wejść).
+
+    Zwraca (available_from_utc_aware, source):
+      - shift_start is None (puste godziny / brak wpisu / nierozwiązywalne)
+        → (now, "unknown")  — JAWNIE, nie None-cisza; floor degraduje do now.
+      - shift_start > now  → (shift_start, "shift_start")  — pre-shift / GPS-przed-zmianą.
+      - shift_start <= now → (now, "now_on_shift")         — na zmianie: no-op (max=now).
+    Wejściowy shift_start bywa Warsaw-aware (_shift_start_dt) lub naiwny; wynik
+    zawsze UTC-aware (konsumenci porównują z UTC `now`)."""
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    elif now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    if shift_start is None:
+        return now_utc, "unknown"
+    ss = shift_start.replace(tzinfo=timezone.utc) if shift_start.tzinfo is None \
+        else shift_start.astimezone(timezone.utc)
+    if ss > now_utc:
+        return ss, "shift_start"
+    return now_utc, "now_on_shift"
+
+
+def resolve_shift_start(
+    name: Optional[str], schedule: Optional[dict] = None, match_courier_fn=None,
+) -> Optional[datetime]:
+    """Kanoniczna resolucja shift_start z grafiku po NAZWIE kuriera (Warsaw-aware
+    lub None). TE SAME funkcje co dispatchable_fleet (match_courier + _shift_start_dt)
+    → parytet source↔guard↔chokepoint z konstrukcji. Fail-soft: każdy brak → None
+    (= „unknown" downstream, nie crash). None dla: brak nazwy / grafik nie ładuje /
+    brak dopasowania / brak wpisu / puste godziny (_shift_start_dt None)."""
+    if not name:
+        return None
+    try:
+        if schedule is None or match_courier_fn is None:
+            import sys as _sys
+            _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+            from schedule_utils import load_schedule as _ls, match_courier as _mc
+            if schedule is None:
+                schedule = _ls()
+            if match_courier_fn is None:
+                match_courier_fn = _mc
+        if not schedule:
+            return None
+        full_name = match_courier_fn(name, schedule)
+        if not full_name:
+            return None
+        entry = schedule.get(full_name)
+        if not entry:
+            return None
+        return _shift_start_dt(entry)
+    except Exception:
+        return None
+
+
+def resolve_shift_start_by_cid(
+    cid: Any, name: Optional[str] = None, schedule: Optional[dict] = None,
+) -> Optional[datetime]:
+    """Jak resolve_shift_start, ale po CID (name z courier_tiers gdy nie podana).
+    Dla strażnika/plan_recheck/state_machine, które mają cid nie nazwę."""
+    if not name:
+        try:
+            _t = _load_courier_tiers().get(str(cid)) or {}
+            name = _t.get("name")
+        except Exception:
+            name = None
+    return resolve_shift_start(name, schedule=schedule)
+
+
+def resolve_available_from_by_cid(
+    cid: Any, now_utc: Optional[datetime] = None, name: Optional[str] = None,
+    schedule: Optional[dict] = None,
+) -> Tuple[datetime, str]:
+    """(available_from, source) po CID — złożenie resolve_shift_start_by_cid +
+    available_from_from_shift_start. Fail-soft: (now, "unknown")."""
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    try:
+        ss = resolve_shift_start_by_cid(cid, name=name, schedule=schedule)
+    except Exception:
+        ss = None
+    return available_from_from_shift_start(ss, now_utc)
+
+
 def _shift_end_dt(entry: Optional[dict]) -> Optional[datetime]:
     """Z entry grafiku → datetime końca zmiany (Warsaw aware)."""
     end_str = (entry or {}).get("end")
@@ -1612,6 +1716,21 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         result.append(cs)
         _passed_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                 "pos_source": cs.pos_source})
+
+    # L4 (2026-07-02, F1): JEDNO źródło available_from = max(now, shift_start),
+    # policzone RAZ per kurier TU (nie re-derywowane per powierzchnia). cs.shift_start
+    # już rozwiązany wyżej (grafik / working-override) tymi samymi funkcjami co
+    # resolve_shift_start → parytet z guardem/chokepointem. Gated:
+    # OFF → pola zostają None/"unset" (konsumenci spadają na stare ścieżki bajt-w-bajt).
+    try:
+        from dispatch_v2 import common as _C_af
+        _af_single_source = _C_af.decision_flag("ENABLE_AVAILABLE_FROM_SINGLE_SOURCE")
+    except Exception:
+        _af_single_source = False
+    if _af_single_source:
+        for _cs_af in result:
+            _cs_af.available_from, _cs_af.available_from_source = \
+                available_from_from_shift_start(_cs_af.shift_start, _now_utc_fleet)
 
     # TASK 3 observability hook — NIGDY raise (flag-gated, isolated try/except)
     # A1: dawniej silent → audit trail lost cicho. Dedup-by-class.

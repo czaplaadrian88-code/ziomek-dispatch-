@@ -624,6 +624,31 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         return False  # ani (świeży) GPS, ani kotwica czasowa → nie ma od czego liczyć
     pos, anchor_departure, anchor_source = anchor
 
+    # L4 (2026-07-02, F1) — MINIMALNY floor leaku #5. plan_recheck regeneruje
+    # courier_plans.json co 5 min; bez floora anchor pre-shiftowy startuje „teraz"
+    # (anchor_departure=None dla świeżego GPS pre-shiftowca) → predicted_at odbioru
+    # WCZEŚNIEJ niż start zmiany → naprawiony plan SAM się odclampowuje co tick
+    # (najszersza dziura audytu). Tu TYLKO podnosimy anchor do available_from
+    # (=max(now,shift_start) TYM SAMYM źródłem co silnik) — pełna przebudowa (regen
+    # przez bramki feasibility/GC) = osobna fala L3. Gated; OFF = bajt-w-bajt.
+    try:
+        from dispatch_v2 import common as _C_af
+        if _C_af.decision_flag("ENABLE_AVAILABLE_FROM_SINGLE_SOURCE"):
+            from dispatch_v2 import courier_resolver as _CR_af
+            _af_dt, _af_src = _CR_af.resolve_available_from_by_cid(cid, now)
+            _base = anchor_departure if anchor_departure is not None else now
+            if _base.tzinfo is None:
+                _base = _base.replace(tzinfo=timezone.utc)
+            if _af_dt is not None and _af_dt > _base:
+                _log.info(
+                    f"L4_ANCHOR_FLOOR cid={cid} anchor {anchor_departure} → "
+                    f"available_from {_af_dt.isoformat()} (src={_af_src}, +"
+                    f"{(_af_dt - _base).total_seconds()/60.0:.1f}min) — leak #5 floor"
+                )
+                anchor_departure = _af_dt
+    except Exception as _af_e:  # fail-soft: floor best-effort, nie psuj regeneracji
+        _log.debug(f"L4 anchor floor skip cid={cid}: {_af_e}")
+
     sims: Dict[str, Any] = {}
     ck_by_oid: Dict[str, Any] = {}  # raw czas_kuriera_warsaw per oid (tie-breaker)
     for oid in oids:

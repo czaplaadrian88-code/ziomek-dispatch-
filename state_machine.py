@@ -641,6 +641,41 @@ def update_from_event(event: dict) -> Optional[dict]:
             "proposed_delivery_time": payload.get("proposed_time"),
             "bag_time_alerted": False,  # F2.1b step 5: reset on new assignment / reassignment
         }
+        # L4 (2026-07-02, F1) CHOKEPOINT: NOWE POLE effective_pickup_at =
+        # max(deklarowany czas odbioru, available_from) OBOK deklaracji. Deklaracja
+        # restauracji (czas_kuriera/pickup_at) NIETYKALNA (Q2, frozen R27 ±5) — tu
+        # tylko SURFACUJEMY realny najwcześniejszy odbiór respektujący start zmiany
+        # kuriera (available_from=max(now,shift_start) z courier_resolver). Bez
+        # konsumentów na razie (pas renderów = fala L3). Gated; OFF = pole nie powstaje.
+        if decision_flag("ENABLE_AVAILABLE_FROM_SINGLE_SOURCE"):
+            try:
+                from dispatch_v2 import courier_resolver as _CR_af
+                _now_af = now_utc()
+                _af_dt, _af_src = _CR_af.resolve_available_from_by_cid(
+                    event.get("courier_id"), _now_af)
+                _decl_raw = ck_iso or prev.get("czas_kuriera_warsaw")
+                _decl_dt = None
+                if _decl_raw:
+                    try:
+                        _decl_dt = datetime.fromisoformat(str(_decl_raw).replace("Z", "+00:00"))
+                        if _decl_dt.tzinfo is None:  # parytet PR._parse_dt: naive→UTC (real=aware +02:00)
+                            _decl_dt = _decl_dt.replace(tzinfo=timezone.utc)
+                    except Exception:
+                        _decl_dt = None
+                if _decl_dt is not None and _af_dt is not None:
+                    _eff = max(_decl_dt, _af_dt)
+                    _eff_src = "available_from" if _af_dt > _decl_dt else "declared"
+                elif _af_dt is not None:
+                    _eff, _eff_src = _af_dt, "available_from"
+                else:
+                    _eff, _eff_src = _decl_dt, "declared"
+                if _eff is not None:
+                    # NIE nadpisujemy czas_kuriera_warsaw/pickup_at — osobne pole.
+                    merged["effective_pickup_at"] = _eff.astimezone(timezone.utc).isoformat()
+                    merged["effective_pickup_source"] = _eff_src
+                    merged["effective_pickup_af_source"] = _af_src
+            except Exception as _eff_e:
+                _log.debug(f"L4 effective_pickup_at skip oid={oid}: {_eff_e}")
         if ck_iso is not None or ck_hhmm is not None:
             if _verify_czas_kuriera_consistency(ck_iso, ck_hhmm, oid):
                 # Source-block (Adrian 2026-06-24): CZASÓWKA z już ustalonym

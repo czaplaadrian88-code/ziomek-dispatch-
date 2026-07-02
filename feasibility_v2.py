@@ -437,6 +437,7 @@ def check_feasibility_v2(
     base_sequence: Optional[List[str]] = None,  # V3.19d passthrough
     r07_chain_eta_utc: Optional[datetime] = None,  # V3.26 STEP 6 (R-07 v2) — chain_eta source of truth dla R-01 MANDATORY
     pos_source: Optional[str] = None,  # V3.28 ETAP 2 — pre_shift departure clamp gate
+    available_from: Optional[datetime] = None,  # L4 2026-07-02 — jedno źródło max(now,shift_start) z courier_resolver
     courier_tier: Optional[str] = None,  # 2026-05-17 — tier-aware DWELL (tier_bag)
     schedule_source_stale: bool = False,  # D2 (audyt 2026-05-28) — grafik STALE → soft-degrade Gate 1
     pos_from_store: bool = False,  # Z-06 (audyt 2026-06-10) — pozycja odtworzona z last-known-pos store (≤25 min), NIE świeży fix tego ticku
@@ -794,8 +795,25 @@ def check_feasibility_v2(
     # kurier z shift_start > now → simulate dostaje earliest_departure=shift_start.
     # Plan timestamps shift'owane od shift_start (eliminuje fikcyjny "kurier
     # startuje teraz" dla kuriera który jeszcze nie pracuje). Flag-gated.
+    #
+    # L4 (2026-07-02, F1): gdy ENABLE_AVAILABLE_FROM_SINGLE_SOURCE ON — konsumuj
+    # available_from (=max(now,shift_start) policzone RAZ w courier_resolver)
+    # ZAMIAST re-derywacji `shift_start>now && pos_source∈{pre_shift,no_gps}`.
+    # Równoważne dla pre_shift (available_from=shift_start) i no_gps on-shift
+    # (available_from=now → no-op); domyka też GPS-przed-zmianą (floor zależy od
+    # available_from, nie etykiety pos_source). OFF → dokładnie stara ścieżka niżej.
     earliest_departure = None
-    if (C.decision_flag("ENABLE_PRE_SHIFT_DEPARTURE_CLAMP")
+    _af_single = (C.decision_flag("ENABLE_AVAILABLE_FROM_SINGLE_SOURCE")
+                  and available_from is not None)
+    if _af_single:
+        _af = (available_from.replace(tzinfo=timezone.utc)
+               if available_from.tzinfo is None else available_from)
+        if _af > now:
+            earliest_departure = _af
+            metrics["earliest_departure_utc"] = earliest_departure.isoformat()
+            metrics["pre_shift_clamp_applied"] = True
+            metrics["af_clamp_applied"] = True
+    elif (C.decision_flag("ENABLE_PRE_SHIFT_DEPARTURE_CLAMP")
             and shift_start is not None
             and pos_source in ("pre_shift", "no_gps")
             and shift_start > now):

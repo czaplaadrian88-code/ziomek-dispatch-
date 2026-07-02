@@ -258,6 +258,12 @@ ETAP4_DECISION_FLAGS = (
     # catch-alla _v328_eval_safe (klasyfikacja/telemetria unconditional; flaga
     # gate'uje TYLKO wysyłkę alertu). Default OFF, flip za ACK.
     "ENABLE_V328_POISON_ALERT",
+    # L4 (2026-07-02, Faza 3 audytu, F1/INV-SRC-AVAILABLE-FROM): jedno źródło
+    # dostępności kuriera available_from=max(now,shift_start) w courier_resolver,
+    # dziedziczone przez konsumentów (#1 candidate-eta, #3 plan departure-clamp,
+    # #5 plan_recheck floor, chokepoint effective_pickup_at). OFF = stare ścieżki
+    # bajt-w-bajt (własna re-derywacja shift_start per powierzchnia). Flip za ACK+replay.
+    "ENABLE_AVAILABLE_FROM_SINGLE_SOURCE",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -310,6 +316,7 @@ ENABLE_PANEL_PACKS_BAG_RECONSTRUCTION = True
 ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR = False  # 2026-06-29 case Rećki (ready-anchor R6 w 3 bramkach carried-first plan_recheck; OFF=legacy in-bag/byte-identyczne; KANON=flags.json)
 ENABLE_DELIVERED_RESURRECTION = False  # 2026-06-29 case Pizzeria 105 (panel_watcher wskrzesza delivered-które-wróciło-do-packs po ręcznym cofnięciu w gastro; OFF=stare ignorowanie na zawsze; KANON=flags.json)
 ENABLE_COORD_SENTINEL_INGEST_GUARD = False  # L2.1 2026-07-01 (walidator coords u ingest + guardy konsumentów geometrii; OFF=legacy (0,0)-as-data/V328-eject; KANON=flags.json)
+ENABLE_AVAILABLE_FROM_SINGLE_SOURCE = False  # L4 2026-07-02 (jedno źródło available_from=max(now,shift_start) w courier_resolver; konsumenci #1/#3/#5/chokepoint dziedziczą; OFF=stare ścieżki bajt-w-bajt; KANON=flags.json)
 # Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy ON → zeruje
 # karę score pre_shift (`bonus_v325_pre_shift_soft`, oba źródła: stała V325 + gradient
 # _pre_shift_gradient_penalty). „Kurier dotrze później" obsługuje LEGALNA ścieżka:
