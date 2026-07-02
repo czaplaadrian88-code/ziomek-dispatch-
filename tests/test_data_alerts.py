@@ -284,8 +284,11 @@ def test_run_on_vs_off_differ(tmp_path):
 
 
 def test_default_flag_is_off(monkeypatch, tmp_path):
-    # enabled=None → _flag("ENABLE_DATA_ALERTS", False); flags.json (izolowany
-    # conftestem) nie ma klucza → default False → no-op. Dowód „default OFF".
+    # enabled=None → _flag("ENABLE_DATA_ALERTS", <default-w-kodzie>). Hermetycznie:
+    # symulujemy BRAK klucza we flags.json (fake honoruje wyłącznie default) —
+    # żywy flags.json może mieć flagę ON po deployu; test pinuje DEFAULT W KODZIE
+    # (mutacja default False→True = FAIL), nie stan środowiska.
+    monkeypatch.setattr(da, "_flag", lambda name, default: default)
     res = da.run(now=_now_at(12), enabled=None,
                  state_path=tmp_path / "s.json", log_path=tmp_path / "l.log")
     assert res["enabled"] is False

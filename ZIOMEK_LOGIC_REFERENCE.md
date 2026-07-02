@@ -867,3 +867,7 @@ the agent citation was not line-verified.
 - `ENABLE_RELAX_COLOC_PICKUP` — współlokalny odbiór (start==restauracja) brany od razu, nie po powrocie.
 - `ENABLE_NONCARRIED_DROPOFF_REORDER` — min-jazda reorder dropoffów w worku bez niesionych.
 - `ENABLE_V326_OR_TOOLS_TSP` / `ENABLE_V326_SAME_RESTAURANT_GROUPING` — para atomowa (OR-Tools TSP + same-restaurant grouping); rozjazd = double-insert super-pickupa (#13, check_v326_pair_coherence).
+
+### FALA-2 (2026-07-02) — observability
+- `ENABLE_DATA_ALERTS` — MASTER monitor DANOWY (`observability/data_alerts.py`, timer 5 min): 5 sygnałów edge-triggered (sentinel-rate / empty-pool / stale-grafik / stale-GPS / ledger-stall). OFF = oneshot no-op exit 0. ON = log `scripts/logs/data_alerts.log` + stan `dispatch_state/data_alerts_state.json`; NIE dotyka decyzji silnika (czysty odczyt).
+- `DATA_ALERTS_TELEGRAM` — druga bramka: alerty danowe idą też na Telegram (wymaga MASTER ON). Default OFF (log-only).
