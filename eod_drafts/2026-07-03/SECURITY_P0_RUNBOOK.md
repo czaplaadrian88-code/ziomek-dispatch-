@@ -51,8 +51,12 @@ printf '.secrets/\n' >> .gitignore   # dziś untracked, ale 1× git add -A = wyc
 ```
 ⚠ **NIE robić ślepo `chmod 700 /root`** (rekomendacja audytu): workspace pod `/root/.openclaw` jest własnością uid 1000, a `ordering_app/.env` czyta grupa `papu-svc` — odcięcie traversalu wywali te serwisy. Jeśli domykać: `chmod 750 /root` + `setfacl -m g:papu-svc:x,u:1000:x /root` i test WSZYSTKICH serwisów non-root. Osobny mini-sprint, nie quick-win.
 
-**B4 — courier-api :8767 (kod, mini-sprint protokołem #0):**
-(a) wyłączyć dump ciała żądań przy 422 (wyciek hasła do loga); (b) `chmod 640 scripts/logs/courier_api.log` + wyczyścić linię z hasłem (backup przed edycją loga); (c) rate-limit/lockout na login admina; (d) twardy fail przy pustym `COURIER_ADMIN_PASS`; (e) auth na `GET /api/couriers` (enumeracja do brute PIN).
+**B4 — courier-api :8767 (kod, mini-sprint protokołem #0):** 🟢 **LIVE 03.07 ~17:50** (restart za ACK, regresja 141 passed, backupy `.bak-pre-*-2026-07-03`):
+- (a) ✅ dump ciała 422 zredagowany — `main.py:_redact_body` maskuje hasło/pin/token w logu I w odpowiedzi (zweryfikowane na żywo: `SEKRET_TEST_123` 0× w odpowiedzi i logu).
+- (b) ✅ `courier_api.log` → `640` (inode-preserving); 1 historyczna linia z hasłem = unieszkodliwiona rotacją hasła w C2.
+- (c) ✅ per-IP lockout logowania admina (5 prób/15 min → 429, in-memory).
+- (d) ✅ twardy fail (503) gdy `COURIER_ADMIN_PASS` pusty — koniec bypassu pustym hasłem.
+- (e) ⏸ auth na `GET /api/couriers` = **ODŁOŻONE (decyzja produktowa)** — apka woła ten endpoint PRZED logowaniem (ekran wyboru kuriera); naiwne auth urywa logowanie w apce. Alternatywy: rate-limit endpointu / minimalizacja danych / token-gate z osobnym flow. Osobny sprint z Adrianem.
 
 **B5 — higiena:** `systemctl disable --now cups` (drukarka na serwerze produkcyjnym zbędna); ustalić rolę `next-server :3001/:3987` i zbindować do 127.0.0.1.
 
