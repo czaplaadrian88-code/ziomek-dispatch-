@@ -10,6 +10,7 @@
 - **2 xpass w regresji** = L-TEATR non-strict, które zaczęły przechodzić — przy następnym dotknięciu tych testów przełączyć na `strict=True`.
 
 ## 2. KOLEJKA ACK (dla Adriana, w kolejności)
+⭐ **UPDATE noc 03.07 ~02:00 (ledger §18-19):** pakiet nocny WYKONANY — flipy PERF_LAZY+V328_POISON LIVE (pomiar perf = rano przed peakiem!) · log-rotation 174MB+timer · COD backfill=NO-OP (wypełnione ręcznie) · telegram-delta+bug4-logger(schema-2, LIVE od ticku)+L0.1(fingerprint-check, rozjazdy 6→1)+L8-iter2(−345 LOC; sprint2=STOP żywy fixture TZ) SCALONE. 🚨 **NOWY P1-LIVE: `dispatch-czasowka` INTERMITTENTNIE (~22-40% ticków) liczy defaultami common.py zamiast flags.json** — osobny pas protokół+ACK PILNY. Nowe za-ACK: migracja USE_V2_PARSER do ETAP4 · fingerprint-check jako timer-strażnik · frozen-objektyw P0 · iter3 fixture-move.
 0. **RANO: flip `ENABLE_PERF_LAZY_MEMBERS=true` + restart shadow + `perf_budget_report` 30 min przed peakiem** (ledger §17; p50 −22% na replayu, parytet 580/580; rollback hot). Osobno: decyzje samplingowe §7 raportu perf-lazy.
 1. **Flip O2 Krok 1** `ENABLE_O2_CAPZ_RESEQ=true` — PO czystym werdykcie S1 (~04.07 po 2 dniach obs: grep `sla_anchor_source` + brak dryfu `sla_violations`), off-peak; przy flipie zmierz p95 latencji w shadow przed peakiem (reseq bounded MAX_STOPS=8). Rollback hot.
 2. **Flip O2 Krok 2** `ENABLE_SLA_GATE_READY_ANCHOR` — OSOBNO, prereq: przegląd downstream `_kind()` (48% reason-churn) + real-shadow replay. NIE bundlować z K1.
