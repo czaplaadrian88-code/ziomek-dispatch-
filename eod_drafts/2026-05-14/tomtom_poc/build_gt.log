@@ -702,3 +702,67 @@ zapisano 2486 tropow -> /root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts
   peak      dwell_restauracja med=3.9min (n=62)  dwell_klient med=4.0min (n=70)
   shoulder  dwell_restauracja med=5.2min (n=189)  dwell_klient med=4.0min (n=218)
   offpeak   dwell_restauracja med=4.2min (n=15)  dwell_klient med=4.2min (n=18)
+solo tropy (non-czasowka, 5-60min): 2949
+tier-2 korekta nondrive_in_window (min) per bucket: peak=3.8, shoulder=3.5, offpeak=3.1
+pominiete (brak wsp.): {'no_restaurant_coords': 190, 'no_delivery_coords': 242}
+jakosc GPS: {'good': 309, 'sparse': 52, 'insufficient': 2156}
+zapisano 2517 tropow -> /root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-05-14/tomtom_poc/trips_realworld.jsonl
+  tier-1 (GPS pure_drive): 309   tier-2 (sla-korekta): 2208
+
+--- ground truth per bucket ---
+  peak      n= 528 (tier-1= 70)  ground_truth_drive med=8.4min
+  shoulder  n=1800 (tier-1=221)  ground_truth_drive med=9.2min
+  offpeak   n= 189 (tier-1= 18)  ground_truth_drive med=7.6min
+
+--- byproduct: dwelle z tropow tier-1 (kalibracja DWELL_*) ---
+  peak      dwell_restauracja med=3.9min (n=62)  dwell_klient med=4.0min (n=70)
+  shoulder  dwell_restauracja med=5.2min (n=192)  dwell_klient med=4.0min (n=221)
+  offpeak   dwell_restauracja med=4.2min (n=15)  dwell_klient med=4.2min (n=18)
+solo tropy (non-czasowka, 5-60min): 3017
+tier-2 korekta nondrive_in_window (min) per bucket: peak=3.8, shoulder=3.4, offpeak=3.1
+pominiete (brak wsp.): {'no_restaurant_coords': 194, 'no_delivery_coords': 250}
+jakosc GPS: {'good': 312, 'sparse': 52, 'insufficient': 2209}
+zapisano 2573 tropow -> /root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-05-14/tomtom_poc/trips_realworld.jsonl
+  tier-1 (GPS pure_drive): 312   tier-2 (sla-korekta): 2261
+
+--- ground truth per bucket ---
+  peak      n= 531 (tier-1= 70)  ground_truth_drive med=8.4min
+  shoulder  n=1848 (tier-1=224)  ground_truth_drive med=9.2min
+  offpeak   n= 194 (tier-1= 18)  ground_truth_drive med=7.6min
+
+--- byproduct: dwelle z tropow tier-1 (kalibracja DWELL_*) ---
+  peak      dwell_restauracja med=3.9min (n=62)  dwell_klient med=4.0min (n=70)
+  shoulder  dwell_restauracja med=5.2min (n=193)  dwell_klient med=4.0min (n=224)
+  offpeak   dwell_restauracja med=4.2min (n=15)  dwell_klient med=4.2min (n=18)
+solo tropy (non-czasowka, 5-60min): 3055
+tier-2 korekta nondrive_in_window (min) per bucket: peak=3.7, shoulder=3.5, offpeak=3.1
+pominiete (brak wsp.): {'no_restaurant_coords': 199, 'no_delivery_coords': 253}
+jakosc GPS: {'good': 316, 'sparse': 52, 'insufficient': 2235}
+zapisano 2603 tropow -> /root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-05-14/tomtom_poc/trips_realworld.jsonl
+  tier-1 (GPS pure_drive): 316   tier-2 (sla-korekta): 2287
+
+--- ground truth per bucket ---
+  peak      n= 539 (tier-1= 71)  ground_truth_drive med=8.6min
+  shoulder  n=1869 (tier-1=227)  ground_truth_drive med=9.2min
+  offpeak   n= 195 (tier-1= 18)  ground_truth_drive med=7.6min
+
+--- byproduct: dwelle z tropow tier-1 (kalibracja DWELL_*) ---
+  peak      dwell_restauracja med=4.0min (n=63)  dwell_klient med=4.1min (n=71)
+  shoulder  dwell_restauracja med=5.1min (n=195)  dwell_klient med=4.0min (n=227)
+  offpeak   dwell_restauracja med=4.2min (n=15)  dwell_klient med=4.2min (n=18)
+solo tropy (non-czasowka, 5-60min): 3092
+tier-2 korekta nondrive_in_window (min) per bucket: peak=3.7, shoulder=3.5, offpeak=3.1
+pominiete (brak wsp.): {'no_restaurant_coords': 200, 'no_delivery_coords': 257}
+jakosc GPS: {'good': 316, 'sparse': 52, 'insufficient': 2267}
+zapisano 2635 tropow -> /root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-05-14/tomtom_poc/trips_realworld.jsonl
+  tier-1 (GPS pure_drive): 316   tier-2 (sla-korekta): 2319
+
+--- ground truth per bucket ---
+  peak      n= 544 (tier-1= 71)  ground_truth_drive med=8.6min
+  shoulder  n=1893 (tier-1=227)  ground_truth_drive med=9.2min
+  offpeak   n= 198 (tier-1= 18)  ground_truth_drive med=7.6min
+
+--- byproduct: dwelle z tropow tier-1 (kalibracja DWELL_*) ---
+  peak      dwell_restauracja med=4.0min (n=63)  dwell_klient med=4.1min (n=71)
+  shoulder  dwell_restauracja med=5.1min (n=195)  dwell_klient med=4.0min (n=227)
+  offpeak   dwell_restauracja med=4.2min (n=15)  dwell_klient med=4.2min (n=18)

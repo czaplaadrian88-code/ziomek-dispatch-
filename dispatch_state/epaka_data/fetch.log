@@ -3,3 +3,26 @@
 [ok] przesyłki: 1706 rekordów -> /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_state/epaka_data/epaka_zamowienia_2026-05-30_2026-06-29.csv
 [ok] prowizje do wypłaty 2026-05-30..2026-06-29: do_wyplaty=5606.75 zł, 40 wpisów -> /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_state/epaka_data/epaka_prowizje_dowyplaty_2026-05-30_2026-06-29.json
 exit=0
+=== 2026-06-30T06:00:01Z epaka fetch () ===
+[..] sesja wygasła — loguję (OCR captchy)
+[ok] zalogowano (próba 3, captcha=RBC)
+[ok] przesyłki: 1706 rekordów -> /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_state/epaka_data/epaka_zamowienia_2026-05-31_2026-06-30.csv
+[ok] prowizje do wypłaty 2026-05-31..2026-06-30: do_wyplaty=5612.99 zł, 40 wpisów -> /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_state/epaka_data/epaka_prowizje_dowyplaty_2026-05-31_2026-06-30.json
+exit=0
+=== 2026-07-01T06:00:02Z epaka fetch () ===
+[..] sesja wygasła — loguję (OCR captchy)
+[ok] zalogowano (próba 13, captcha=AEH)
+[ok] przesyłki: 1799 rekordów -> /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_state/epaka_data/epaka_zamowienia_2026-06-01_2026-07-01.csv
+[ok] prowizje do wypłaty 2026-06-01..2026-07-01: do_wyplaty=5269.34 zł, 40 wpisów -> /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_state/epaka_data/epaka_prowizje_dowyplaty_2026-06-01_2026-07-01.json
+exit=0
+=== 2026-07-02T06:00:01Z epaka fetch () ===
+[..] sesja wygasła — loguję (OCR captchy)
+[ok] zalogowano (próba 1, captcha=RGN)
+[ok] przesyłki: 1774 rekordów -> /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_state/epaka_data/epaka_zamowienia_2026-06-02_2026-07-02.csv
+[ok] prowizje do wypłaty 2026-06-02..2026-07-02: do_wyplaty=5299.84 zł, 40 wpisów -> /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_state/epaka_data/epaka_prowizje_dowyplaty_2026-06-02_2026-07-02.json
+exit=0
+=== 2026-07-03T06:00:01Z epaka fetch () ===
+[ERR] LOGOWANIE NIEUDANE (OCR captchy nie trafił po wielu próbach). Re-seed sesji ręcznie albo popraw OCR.
+[..] sesja wygasła — loguję (OCR captchy)
+exit=2
+[ALERT] epaka fetch exit=2 (re-seed sesji / OCR?) 2026-07-03T06:00:42Z
