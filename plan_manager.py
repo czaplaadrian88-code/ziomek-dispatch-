@@ -110,18 +110,31 @@ def _read_raw() -> Dict[str, Any]:
 def _write_raw(data: Dict[str, Any]) -> None:
     """Write entire plans dict. Must be called under exclusive lock."""
     _atomic_write(PLANS_FILE, data)
+    # perf-lazy write-through (03.07): unieważnij read-cache W TYM procesie
+    # natychmiast po zapisie. Klucz mtime NIE wystarcza sam: dwa zapisy w tym
+    # samym ticku zegara jądra dają IDENTYCZNY st_mtime_ns (a size bywa równy)
+    # → czytelnik dostawał stan sprzed zapisu (flake test_v319c_sub_a: 4/30
+    # FAIL przy PERF_LAZY=ON / 0/30 OFF). Cross-proces domyka st_ino w kluczu
+    # (_read_raw_shared) — os.replace = nowy inode przy każdym zapisie.
+    with _perf_plans_lock:
+        _perf_plans_cache["key"] = None
+        _perf_plans_cache["data"] = None
 
 
 # ─── FALA perf-lazy (2026-07-02, finding E audytu 2.0): read-cache planów ───
 # Problem: load_plan czytany PER KANDYDAT (ThreadPoolExecutor) → N× pełny
 # `_read_raw` (open+json.load) POD fcntl-lockiem → wątki serializują się na
-# lockfile (kontencja rośnie w peak). Cache po (mtime_ns, size) NAD lockiem:
+# lockfile (kontencja rośnie w peak). Cache po (mtime_ns, size, ino) NAD lockiem:
 # ciepły hit pomija fcntl-lock+open+json.load. Używany WYŁĄCZNIE przez ścieżki
 # READ (load_plan/load_plans), które zwracają deepcopy → caller nigdy nie mutuje
 # współdzielonego obiektu cache. WRITERS (save/invalidate/advance/insert) dalej
-# wołają surowy `_read_raw()` pod exclusive lock i mutują świeży parse — os.replace
-# bumpuje mtime → cache sam się unieważnia. Bajt-parytet: mtime-key = ta sama
-# semantyka co load_flags; deepcopy = niezależny obiekt identyczny z fresh-parse.
+# wołają surowy `_read_raw()` pod exclusive lock i mutują świeży parse.
+# ⚠ KOREKTA 03.07: pierwotne założenie „os.replace bumpuje mtime → cache sam
+# się unieważnia" było FAŁSZYWE — zapisy w tym samym ticku zegara jądra dają
+# identyczny mtime_ns (flake test_v319c_sub_a 4/30 przy ON). Dlatego: (1)
+# `_write_raw` czyści cache write-through (in-process zawsze świeże), (2) klucz
+# zawiera st_ino (os.replace = nowy inode → cross-proces sam się unieważnia).
+# Bajt-parytet: deepcopy = niezależny obiekt identyczny z fresh-parse.
 # OFF (default) = ścieżka sprzed fali (fcntl-lock + _read_raw co wywołanie).
 _perf_plans_cache = {"key": None, "data": None}
 _perf_plans_lock = threading.Lock()
@@ -143,7 +156,10 @@ def _read_raw_shared() -> Dict[str, Any]:
     pomija fcntl-lock + open + json.load."""
     try:
         st = PLANS_FILE.stat()
-        key = (st.st_mtime_ns, st.st_size)
+        # st_ino w kluczu (03.07): _atomic_write robi os.replace = NOWY inode
+        # przy każdym zapisie → klucz zmienia się nawet gdy dwa zapisy trafią
+        # w ten sam tick zegara (identyczny mtime_ns) i mają równy size.
+        key = (st.st_mtime_ns, st.st_size, st.st_ino)
     except FileNotFoundError:
         return {}
     with _perf_plans_lock:

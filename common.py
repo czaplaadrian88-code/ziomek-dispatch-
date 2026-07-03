@@ -508,6 +508,12 @@ TEST_ISOLATED_INFRA_FLAGS = (
     "ENABLE_OSRM_TABLE_CELL_CACHE",
     "ENABLE_PANEL_DETAIL_PREFETCH",
     "PANEL_DETAIL_PREFETCH_WORKERS",
+    # perf-lazy (03.07): żywy flip 00:25 zmienił zachowanie script-runnerów
+    # (flake test_v319c_sub_a: 4/30 FAIL przy ON / 0/30 OFF — mtime-cache
+    # planów serwował stan sprzed zapisu przy zapisach w tym samym ticku
+    # zegara). Testy sterują flagą JAWNIE (monkeypatch stałej), nie żywym
+    # flags.json.
+    "ENABLE_PERF_LAZY_MEMBERS",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
