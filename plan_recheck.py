@@ -1971,9 +1971,19 @@ def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, no
         if fresh_drive is None or frozen_drive is None:
             return
         delta = round(frozen_drive - fresh_drive, 2)
+        # schema 2 (2026-07-02): OŚ OBJEKTYWU (total_duration + sla) — realna zmienna,
+        # którą silnik MINIMALIZUJE (jazda + POSTÓJ na jedzenie `if t<ready:t=ready` +
+        # dwell, leksykograficznie z sla), NIE czysta jazda. drive to zła oś werdyktu
+        # (audyt 02.07, oś-fix w tools/bug4_reseq_oracle). FRESH = DARMOWE: `plan_fresh`
+        # policzył je już świeży solve wyżej (attr read, ZERO dodatkowych solve/OSRM).
+        _fresh_total = (round(float(plan_fresh.total_duration_min), 3)
+                        if getattr(plan_fresh, "total_duration_min", None) is not None else None)
+        _fresh_sla = (int(plan_fresh.sla_violations)
+                      if getattr(plan_fresh, "sla_violations", None) is not None else None)
         rec_out = {
             "ts": now.isoformat(), "cid": str(cid), "bag": [str(o) for o in oids],
             "n_orders": len(oids),
+            "schema": 2,
             # REALNY sygnał: czy kolejność DOSTAW inna (plan.sequence vs frozen dropoff-y)
             "deliv_seq_differs": frozen_deliv_order != fresh_deliv_order,
             "frozen_deliv_order": frozen_deliv_order, "fresh_deliv_order": fresh_deliv_order,
@@ -1981,6 +1991,21 @@ def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, no
             "frozen_drive_min": round(frozen_drive, 2),
             "fresh_drive_min": round(fresh_drive, 2),
             "delta_min": delta,
+            # ── OŚ OBJEKTYWU (schema 2) — fresh DARMOWE z plan_fresh; frozen offline ──
+            # fresh_* = objektyw WYBRANEGO świeżego planu (co silnik faktycznie zwrócił)
+            # → oracle porównuje go z brute-force optimum = łapie SUBOPTYMALNY OR-Tools
+            # (residual, którego drive NIE wykrywał). frozen_* = null: policzenie objektywu
+            # zamrożonej sekwencji wymaga `_simulate_sequence`, który dla ODEBRANYCH pod
+            # ENABLE_PICKED_UP_DROP_FLOOR odpala `osrm_client.route(pickup,drop)` POZA legami
+            # trasy — NIE gwarantuje zero-OSRM w żywym ticku (constraint zadania). Oracle
+            # (tools/bug4_reseq_oracle, |Δ|=0 vs niezależny walk) rekonstruuje frozen brute-
+            # force offline i domyka tripwire fresh≤frozen na osi objektywu.
+            "fresh_total_duration": _fresh_total,
+            "fresh_sla": _fresh_sla,
+            "frozen_total_duration": None,
+            "frozen_sla": None,
+            "obj_axis_note": "frozen_obj=null (zero-cost tick: _simulate_sequence "
+                             "picked_up-floor osrm); oracle reconstructs frozen offline",
             # INWARIANT-TRIPWIRE (audyt C9): wierny re-solve NIE może być GORSZY od istniejącego
             # planu (frozen = feasible sekwencja, którą solver też mógł wybrać). delta<−0.5 =
             # pomiar skażony (resztkowy fikcyjny węzeł / semantyka) → suspect, NIE traktuj jak dane.

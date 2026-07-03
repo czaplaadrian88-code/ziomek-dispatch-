@@ -197,6 +197,39 @@ def independent_total_min(pos, sims, node_plan, now):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# OŚ OBJEKTYWU z ŻYWEGO logu (schema 2) — PREFERUJ pola wprost, fallback rekonstrukcja
+# ─────────────────────────────────────────────────────────────────────────────
+def read_obj(rec):
+    """Objektyw (total_duration, sla) rekordu — PREFERUJ schema-2 z żywego loga
+    (oś wprost, `fresh_*`/`frozen_*`). Zwraca (fresh_total, fresh_sla, frozen_total,
+    frozen_sla, source). Stary wpis (schema<2 / brak pól) → Nones + source='reconstruct'
+    (objektyw wymaga rekonstrukcji brute-force `score_bag`, a reverdict-z-logu nie ma
+    coords → per-rekord None; selfcheck/score_bag liczy go z geometrii)."""
+    if rec.get("schema") == 2 or "fresh_total_duration" in rec:
+        return (rec.get("fresh_total_duration"), rec.get("fresh_sla"),
+                rec.get("frozen_total_duration"), rec.get("frozen_sla"), "schema2")
+    return (None, None, None, None, "reconstruct")
+
+
+def obj_tripwire(rec):
+    """Tripwire fresh≤frozen NA OSI OBJEKTYWU (lex: sla, potem total_duration; #8).
+    True  = NARUSZONY — fresh GORSZY od frozen → wierny optymalizator NIE mógł tego
+            zwrócić (frozen to dopuszczalna sekwencja, którą też mógł wybrać) → residual
+            / SUBOPTYMALNY OR-Tools (dokładnie to, czego stary drive-log nie łapał).
+    False = OK (fresh ≤ frozen na objektywie).
+    None  = NIEOCENIALE — brak któregoś objektywu (frozen liczony offline / stary wpis).
+    Oś objektywu = realna zmienna, którą silnik minimalizuje, NIE proxy-drive."""
+    ft, fs, zt, zs, _src = read_obj(rec)
+    if ft is None or fs is None or zt is None or zs is None:
+        return None
+    if fs > zs:
+        return True
+    if fs == zs and ft > zt + _EPS:
+        return True
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # RE-WERDYKT na istniejącym jsonl (uczciwa reinterpretacja, read-only wobec starego)
 # ─────────────────────────────────────────────────────────────────────────────
 def reverdict_from_log(jsonl_path, since=None):
@@ -236,6 +269,12 @@ def reverdict_from_log(jsonl_path, since=None):
     drive_deltas.sort()
     k = len(drive_deltas)
     med = drive_deltas[k // 2] if k else 0.0
+    # OŚ OBJEKTYWU (schema 2, PREFERUJ żywy log): pokrycie + tripwire fresh≤frozen.
+    schema2 = [r for r in recs if r.get("schema") == 2 or "fresh_total_duration" in r]
+    fresh_obj = [r for r in schema2 if r.get("fresh_total_duration") is not None]
+    obj_verdicts = [obj_tripwire(r) for r in recs]
+    obj_eval = sum(1 for v in obj_verdicts if v is not None)
+    obj_viol = sum(1 for v in obj_verdicts if v is True)
     return {
         "n": n,
         "deliv_seq_differs": len(deliv_diff),
@@ -246,6 +285,12 @@ def reverdict_from_log(jsonl_path, since=None):
         "corrected_contamination_suspect": len(drive_suspect) - wrong_axis_fp,
         "drive_material_ge1_pct": round(100 * k / max(1, n), 1),
         "drive_delta_median": med,
+        # ── oś OBJEKTYWU (schema 2) ──
+        "schema2_n": len(schema2),
+        "schema2_pct": round(100 * len(schema2) / max(1, n), 1),
+        "fresh_obj_n": len(fresh_obj),
+        "obj_tripwire_evaluable": obj_eval,
+        "obj_tripwire_violations": obj_viol,
     }
 
 
@@ -268,6 +313,14 @@ def _run_reverdict(args):
         f"  POPRAWIONY suspect skażenia (na osi OBJEKTYWU): "
         f"{r['corrected_contamination_suspect']} ({corrected_susp_pct}%)",
         "",
+        "── OŚ OBJEKTYWU (schema 2 — fresh z ŻYWEGO logu, tripwire fresh≤frozen) ──",
+        f"  schema-2 pokrycie: {r['schema2_n']} ({r['schema2_pct']}%)  "
+        f"z fresh_objektywem: {r['fresh_obj_n']}",
+        f"  obj-tripwire oceniale (fresh+frozen obecne): {r['obj_tripwire_evaluable']}  "
+        f"NARUSZENIA (fresh>frozen = suboptymalny OR-Tools): {r['obj_tripwire_violations']}",
+        "  (frozen_obj=null w żywym logu [zero-cost tick] → per-rekord tripwire domyka się"
+        " gdy frozen dojdzie do logu / offline `score_bag`)",
+        "",
         "── PROXY (drive) — TYLKO diagnostyka, NIE oś werdyktu ──",
         f"  delta_drive>=1min: {r['drive_material_ge1_pct']}%  median={r['drive_delta_median']:.1f}min",
         "",
@@ -275,11 +328,18 @@ def _run_reverdict(args):
     # werdykt: materialność na REALNYM sygnale + instrument zdrowy na poprawnej osi
     healthy = corrected_susp_pct <= 10.0
     material = r["deliv_seq_differs_pct"] >= 20.0
-    if healthy and material:
+    obj_residual = r["obj_tripwire_violations"] > 0
+    if obj_residual:
+        verdict = (f"RESIDUAL — {r['obj_tripwire_violations']} obj-tripwire NARUSZEŃ "
+                   f"(fresh GORSZY od frozen na objektywie = SUBOPTYMALNY OR-Tools). "
+                   f"Zbadaj te rekordy PRZED jakimkolwiek flipem re-sekwencji.")
+    elif healthy and material:
+        _obj_cov = (f"fresh_objektyw w logu ({r['fresh_obj_n']} rek., schema 2) — "
+                    f"pełny per-rekord tripwire fresh≤frozen czeka na frozen_obj "
+                    f"(dziś null=zero-cost, offline `score_bag` domyka)")
         verdict = ("GO(proxy-certyfikowany) — instrument ZDROWY na osi objektywu "
-                   "(suspect≈0); reseq materialny (deliv_seq_differs); "
-                   "CAVEAT: benefit w minutach objektywu wymaga collect-window "
-                   "(logi nie mają total_duration) → domknięcie: dołóż obj_delta do loggera")
+                   f"(suspect≈0); reseq materialny (deliv_seq_differs); 0 obj-residual; "
+                   f"CAVEAT: {_obj_cov}")
     elif healthy and not material:
         verdict = "WAIT — instrument zdrowy, ale reseq rzadki (deliv_seq_differs<20%)"
     else:
