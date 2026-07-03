@@ -1,0 +1,101 @@
+# K2.6 — Propozycja kompaktu MEMORY.md
+
+**Stan obecny:** `223 644 B` (~218 KB) / 335 linii. Limit ładowania do kontekstu ~24 KB → do nowej sesji wchodzi tylko górna ~1/9 indeksu, **reszta pamięci NIE jest widziana**.
+**Propozycja:** **16,94 KB / 17 342 B / 69 linii** (cel `<17 KB` = 17 408 B — OK, margines 66 B). Cały indeks zmieści się w budżecie i będzie ładowany w całości.
+**Redukcja:** 223 644 B → 17 342 B = **−92,2%**.
+**⛔ NIC nie modyfikuję w `memory/`.** To tylko pliki-propozycje. Realny kompakt = osobny krok za ACK.
+
+## Zasady zastosowane
+1. Każdy wpis → JEDNA linia; markery statusu (🟢/⭐/⚠/⛔/🟡) zostają; ZERO szczegółów technicznych (flagi, commity, liczby) w indeksie — te są w pliku-temacie. (Linie zbiorcze-klastry pakują kilka linków tematycznych — jak oryginalne sekcje „Panel/Ziomek/Papu" na dole starego MEMORY.md; to świadome grupowanie historycznych wpisów, nie łamanie reguły.)
+2. Reguły nadrzędne (pogrubione) ZOSTAJĄ, każda 1 linia z linkiem do pliku.
+3. Grupowanie tematyczne: reguły nadrzędne → ZIOMEK audyty → ZIOMEK reguły/kalibracje/pomiary → ZIOMEK naprawy silnika/renderu → Panel+konsola → Apka+Paczki → Epaka/Kontroling/Autonomia/Papu/Mailek → Feedback/Infra/Meta.
+4. **Bezpiecznik „NIC NIE GINIE" = 3-warstwowy:** (a) katalog `memory/` jest pod git z auto-commitami (`git log memory/` = pełna historia treści — zweryfikowane); (b) backup `MEMORY.md.bak-pre-shrink-2026-07-03` przy realnym kompakcie (konwencja z 7 poprzednich shrinków — zweryfikowane); (c) `12a-MEMORY-PRZENIESIENIA.md` = bloki bogatsze w indeksie niż w pliku LUB o generycznym celu/zdezaktualizowane — z pełną treścią do dopisania/weryfikacji.
+5. **Pokrycie plików: 240/244 zalinkowanych wprost w nowym indeksie; 4 zwinięte (batche 13.06 autonomous-run) → wskazane do `sprint_timeline.md`, udokumentowane w 12a.** Zero utraty wiedzy (git+backup+sprint_timeline).
+6. Wpisy zdezaktualizowane (przeszłe „JUTRO RANO", zamknięte handoffy, snapshoty reconcile) — treść → 12a z linkiem do aktualnego kanonu.
+
+**Weryfikacja pokrycia (spot-check przed propozycją):** `shadow-jobs-registry.md` (51 KB, dziś) pokrywa AUDYT ANTY-KŁAMSTWO backlog + rejestr at-jobów + AUDYT AT-JOBÓW; `ziomek-change-protocol.md` (49 KB) ma sekcję „Reguły biznesowe ZAKODOWANE" + „DYSKRYMINACJA POZYCJI 8 bliźniaków". → duże bloki operacyjne z indeksu MAJĄ dom; do 12a idą tylko przyrostowe listy (16 commitów audytu 29.06, snapshot reconcile at-jobów, stałe reguły „OFF-PEAK/JUTRO RANO") do weryfikacji/dopisania.
+
+---
+
+## Proponowana pełna treść nowego MEMORY.md (do wklejenia 1:1)
+
+````markdown
+<!-- INDEKS PAMIĘCI — 1 linia/wpis, detal w pliku-temacie. Pełna historia: git log memory/ + MEMORY.md.bak-pre-shrink-2026-07-03. -->
+
+## 📜 REGUŁY NADRZĘDNE (READ FIRST przed KAŻDĄ zmianą)
+
+- **📜 KANON REGUŁ ZIOMKA** → [ZIOMEK_REGULY_KANON.md](ZIOMEK_REGULY_KANON.md) (hierarchia 0→4 + tabela konfliktów + werdykty C1-C7 + PRAWDZIWY stan flag = drop-iny NIE flags.json; prosto: [ZIOMEK_REGULY_PROSTO.md](ZIOMEK_REGULY_PROSTO.md)). ⚠ „tier"=KLASA vs ESKALACJA 1/2/3.
+- **⭐ PRZED KAŻDYM TEMATEM:** zweryfikuj stan → testy bazowe → udowodnij pomiarem WARTO i BEZ REGRESJI przed kodem. → [feedback_rules.md](feedback_rules.md).
+- **🗣️ PRZED KAŻDĄ PRACĄ:** prostym polskim CO + WPŁYW + JAK BEZPIECZNIE → czekaj na GO. → [feedback-explain-before-work-plain-language.md](feedback-explain-before-work-plain-language.md).
+- **🛠️ NIE PYTAJ „CZY WARTO":** zawsze warto; zepsute/kłamiące/martwe → NAPRAW i DOMKNIJ. ACK tylko dla flip live/restart/peak/deploy silnika. → [feedback-always-close-topics-no-ask.md](feedback-always-close-topics-no-ask.md).
+- **🌳 ZAWSZE U ŹRÓDŁA, NIGDY ŁATKI:** fix u źródła domyślnie; łatka=dług i nawrót. → [feedback-source-not-patches.md](feedback-source-not-patches.md).
+- **🛡️ ZMIANA ZIOMKA → PROTOKÓŁ** [ziomek-change-protocol.md](ziomek-change-protocol.md) — wklej PROMPT na start; mapa kompletności (bliźniaki RAZEM) + reguły biznesowe ZAKODOWANE + 8 bliźniaków dyskryminacji pozycji.
+- **🏛️ SZKIELET/ARCHITEKTURA „na lata"** → [ziomek-architecture-skeleton-2026-06-30.md](ziomek-architecture-skeleton-2026-06-30.md) (ARCHITECTURE+INVARIANTS+DoD w git; meta-reguła „entropia niżej").
+- **🎯 DO ZROBIENIA → [todo_master.md](todo_master.md)** (JEDEN punkt wejścia; aktualizuj status). **🧪 Dług → [tech_debt_checklist.md](tech_debt_checklist.md)**. Ściągawka `/root/CLAUDE.md`; overview → sekcja META niżej.
+
+## 🔴 ZIOMEK — audyt „na lata" (W TOKU) + audyty
+
+- [🧹 WIELKI AUDYT-PORZĄDKI dispatch_v2 — W TOKU 03.07](ziomek-wielki-audyt-porzadki-2026-07-03.md) (gałąź worktree wt-audyt, raporty wt-audyt/docs/audyt/).
+- **[⭐ AUDYT ZUNIFIKOWANY 30.06 — READ FIRST przy spójności/refaktorze](ziomek-unified-audit-2026-06-30.md)** — 7 korzeni K1-K7 + FUNDAMENT F1-F7. 🔁 RELAY: Faza 0-2 ✅, Faza 3 🟡. **STAN → tracker `ZIOMEK_STAN_AUDYTY_1i2.md` + `HANDOFF_po_dniu_0207_wieczor.md` READ FIRST.**
+- [Faza 1 coherence L0-L8](ziomek-coherence-audit-phase1-2026-06-30.md) · [AUDYT 2.0 wyniki (P0 SECURITY+regres 2×+TZ)](ziomek-audyt-2-wyniki-2026-07-02.md) · [2.0 design](ziomek-audyt-2-design-2026-07-01.md) · [Deep Dive→fale](deepdive-docs-recommendations-2026-07-02.md)
+- Fala 3: [L0](ziomek-fala-l0-2026-07-01.md) · [L1.1 serializer](serializer-completeness-l11-2026-07-01.md) · [L1.2+L2.2+D3](l12-l22-d3-sesja-tmux8-2026-07-02.md) · [L2.1 sentinel](l21-sentinel-ingest-2026-07-01.md) · [L6.A route-golden](route-order-golden-l6a-2026-07-01.md)
+- [„odbiór przed zmianą" NIE naprawione](preshift-pickup-floor-audit-2026-06-30.md) · [clamp-preshift FIX 🟢](clamp-preshift-pickup-eta-2026-06-30.md) · [GPS-02 WSTRZYMANY](gps-quality-filter-flip-verdict-2026-07-03.md) · [DEEP AUDIT 27/28.06](ziomek-deep-audit-2026-06-27.md) · [pełny audyt reguł](ziomek-full-rule-audit-2026-06-24.md) · [odporność](ziomek-resilience-spec-2026-06-24.md) · [roadmap-v2](ziomek-external-audit-roadmap-v2-2026-06-18.md) · [objective-foodage](ziomek-objective-foodage-backtest-2026-06-18.md) · [SaaS](ziomek-saas-strategy-audit-2026-06-18.md) · [autonomy](ziomek_autonomy_audit_2026-06-03.md)+[cascade](ziomek_autonomy_cascade_verdict.md) · [apka](audit-ziomek-apka-2026-06-16.md) · [cleanup](cleanup-audit-2026-06-15.md) · [audyt 10.06](ziomek-audit-2026-06-10.md) · [remediation](audit-remediation-todo-2026-06-11.md) · [Bartek 2.0](bartek2-strategic-audit.md)
+
+## 🟦 ZIOMEK — reguły, kalibracje, pomiary
+
+- **📐 KALIBRACJA replayem ZAMKNIĘTA** → [ziomek-calibration-2026-06-29.md](ziomek-calibration-2026-06-29.md) (optymizm=poślizg ODBIORU; wagi OK; carried-first zamknięte).
+- **🏆 TOP-10 potencjał** → [top10-progressive-potential-2026-06-29.md](top10-progressive-potential-2026-06-29.md) (waliduj fizycznie joinem GPS przed budową).
+- **🗓️ Rejestr shadow-jobów + ANTY-KŁAMSTWO (11 kłamstw)** → [shadow-jobs-registry.md](shadow-jobs-registry.md) (na starcie: `atq`+`list-timers|grep review` vs rejestr).
+- [samodoskonalenie](ziomek-self-improvement-loop-2026-06-26.md) · [objm-lexr6](objm-lexr6-validation-2026-06-24.md) · [carry-blind R6](best-effort-carry-blind-r6-2026-06-23.md) · [pending-resweep](pending-global-resweep-2026-06-24.md) · [replay harness](ziomek_replay_harness.md) · [GATE B TomTom](gate_b_tomtom_poc.md) · [niedobór](kalibracja-niedobor-przeliczniki-2026-06-17.md) · [overload](dispatch-overload-calibration-2026-06-22.md) · [konsola↔apka czasy](console-app-time-route-divergence-2026-06-23.md) · [min-delivered](min-delivered-at-shadow-2026-06-25.md) · [lex-window](lex-committed-window-p1-2026-06-24.md) · [post-shift overrun](post-shift-overrun-penalty-2026-06-24.md) · [sweep R6 anchor](sweep-r6-anchor-pickup-vs-ready-2026-06-25.md) · [bag reseq](bag-resequence-fill-deadtime-candidate-2026-06-25.md)
+- [tightening](ziomek-tightening-verdicts-2026-06-25.md) · [flag-wiring](ziomek-flag-wiring-hygiene-gaps-2026-06-25.md) · [B3 no_gps WYCOFANE](b3-no-gps-uncertainty-retired-2026-06-25.md) · [feas-carry ⛔ROLLBACK](b2-feas-carry-readmit-2026-06-27.md) · [shadow-ideas](ziomek-shadow-ideas-validation-2026-06-14.md) · [LGBM skew](lgbm-twomodel-prod-skew-2026-06-20.md) · [KOORD funnel](koord-funnel-diagnosis-2026-06-20.md) · [arbitrage](arbitrage-harness-score-misalign-2026-06-20.md) · [sprint-plan](ziomek-sprint-plan-post-audit-2026-06-14.md)
+- **⚠ dispatch-shadow zasila realne propozycje — flipy override.conf ZMIENIAJĄ live** → [ziomek-shadow-is-live-proposals.md](ziomek-shadow-is-live-proposals.md). Roadmapy: [dispatch_history](dispatch_history.md) · [lgbm_roadmap](lgbm_roadmap.md) · [economics](economics_engines_roadmap.md) · [faza7](faza7_rampup_sprints_2026-05-27.md) · [lessons #51+](lessons.md)+[arch](lessons_archive.md).
+
+## 🔧 ZIOMEK — naprawy silnika/renderu (klastry; detal w plikach)
+
+- Carried/pre-shift/oscylacja: [plan-oscylacja](plan-invalidation-oscillation-2026-06-29.md) · [r6-ready-anchor](r6-ready-anchor-carried-first-2026-06-29.md) · [no-GPS równo](no-gps-equal-treatment-sprints-2026-06-29.md) · [nogps half-impl](nogps-equal-treatment-halfimpl-2026-06-24.md) · [relax](carried-first-relax-2026-06-22.md) · [vs committed](carried-first-vs-committed-window-2026-06-24.md) · [vs coloc](carried-vs-coloc-pickup-priority-2026-06-25.md) · [bartek case](bartek-route-carried-first-case-2026-06-22.md)
+- Przerzut: [de-pile](reassign-global-select-2026-06-29.md) · [duch konsola](facet3-route-app-console-trust-canon-2026-06-28.md) · [forward-shadow v2](reassignment-forward-shadow-v2-2026-06-22.md)
+- Czas/czasówki: [closest-day](czas-kuriera-closest-day-anchor-2026-06-30.md) · [w-uwagach](czasowka-uwagi-deadline-2026-06-28.md) · [authority](czasowka-pickup-authority-2026-06-24.md) · [best_effort rzadki](czasowka-best-effort-placeholder-rare-2026-06-26.md) · [frozen ETA](frozen-pickup-eta-2026-06-19.md) · [committed-prop](committed-propagation-resequencer-2026-06-22.md)
+- ETA/trasa/render: [bug1+bug4](bug1-eta-display-bug4-reseq-2026-06-26.md) · [deliv-coloc](bundle-delivery-colocation-2026-06-26.md) · [drive-speed tier](drive-speed-tier-correction-2026-06-26.md) · [drop-geometry](console-drop-geometry-invalidated-2026-06-26.md) · [reorder M+K](route-reorder-fix-mk-2026-06-24.md) · [podjazdy](plan-aware-podjazdy-2026-06-22.md) · [live-eta](live-eta-freshness-2026-06-24.md) · [recanon](recanon-on-write-2026-06-23.md) · [dwell falsetime](dwell-driveby-falsetime-2026-06-23.md) · [deliv-eta regres](console-delivery-eta-regression-2026-06-22.md) · [bartek levers](bartek-forensics-eta-levers-2026-06-22.md) · [town enrich](delivery-town-enrichment-2026-06-22.md)
+- Floor/latencja/health/geokod: [pickup floor](pickup-display-floor-all-surfaces-2026-06-25.md) · [plan-anchor ETA](preshift-plan-anchor-console-eta-2026-06-24.md) · [latency](latency-reduction-2026-06-26.md) · [parser-health](parser-health-liveness-threshold-2026-06-25.md) · [checkpoint-TZ](checkpoint-tz-warsaw-parse-2026-06-26.md) · [nominatim](geocode-nominatim-fallback-2026-06-15.md) · [geocode M](landmine-geocode-magazynowa-malachitowa.md) · [phantom R1](courier-phantom-pickup-r1-2026-06-16.md) · [wrong-town](address-wrong-town-geocode-2026-06-26.md) · [pin memory](address-pin-memory-2026-06-29.md) · [coords mismatch](address-coords-mismatch-2026-06-29.md)
+- Powiadomienia/inne: [telegram wyciszone — NIE wskrzeszać](telegram-notifications-mute-2026-06-26.md) · [pickup-lateness](pickup-lateness-notify-2026-06-22.md) · [notify routing](notify-priority-routing.md) · [ranking throughput](courier-ranking-abc-throughput-first-2026-06-26.md) · [E7 cap](e7-retune-verdict-2026-06-17.md) · [E2-pln](e2-pln-pure-resort-bug-2026-06-17.md) · [eta-calib cron](eta-calib-cron-fix-2026-06-14.md) · [foodage](courier-routing-bug-foodage-2026-06-14.md)+[bugs](courier-routing-bugs-2026-06-13.md) · [paczka R6 exempt](paczka-r6-exempt-gps-nongps-2026-06-15.md) · [sla bypass](sla-preexisting-bypass-diagnosis-2026-06-13.md) · [srednie prune](srednie-tab-prune-undercount-2026-06-25.md) · batche 13.06 (autonomous-run/auton-batch/-batch2/sprint-a) → `sprint_timeline.md`
+
+## 🟦 PANEL nadajesz + konsola koordynatora
+
+- **✅ JEDEN PANEL = `gps.nadajesz.pl/admin`** (`/var/www/html/admin-panel`; backend `nadajesz-panel.service` :8000, DB `nadajesz_panel`@:5433) → [nadajesz-panel-dual-deploy.md](nadajesz-panel-dual-deploy.md). ⚠ repo+deploy WSPÓLNE → [feedback_multisession_shared_deploy.md](feedback_multisession_shared_deploy.md).
+- Konsola: [🎨 Monitor floty+podjazdy+carried](nadajesz_coordinator_route.md) · [WINDOW_GATE 3-kolory 🟢](assign-window-gate-2026-06-30.md) · [propozycje+duch+1-klik](nadajesz-konsola-ziomek-proposals-2026-06-19.md) · [messaging](nadajesz-coordinator-messaging.md) · [GO-LIVE](nadajesz-admin-panel-golive-2026-06-19.md) · [route unify](nadajesz-app-console-route-unification-2026-06-18.md)
+- Analizy/finanse: [ANL-09 🟢](nadajesz-analizy-branches-anl09-2026-07-01.md) · [ALR-01 🟢](nadajesz-alr01-delay-alerts.md) · [kontroling](nadajesz-kontroling-wynagrodzenia-2026-06-20.md) · [FIN-08](nadajesz_rozliczenia_fin08.md) · [FIN-01](nadajesz_fin01_rozliczenia.md) · [COD](nadajesz-cod-settlement-rebuild.md)+[neg-cod](cod-panel-ingest-negative-cod-fix-2026-06-15.md) · [SMS](nadajesz-customer-sms-tracking.md) · [/sledz](nadajesz-tracking-page-2026-06-18.md)
+- Faktury: [wFirma+KSeF](nadajesz_faktury_wfirma.md) · [KSeF KOSZTOWE 🟢](nadajesz-ksef-cost-invoices-readpath.md) · [DOC-01](nadajesz_doc01_dokumenty.md)
+- Flota/grafik: [FLT-04](nadajesz_drivers_flt04.md)+[ranking](nadajesz_drivers_ranking.md) · [FLT-05](nadajesz_vehicles_flt05.md) · [FLT-03](flt03-overflow-shadow.md) · [FLT-02](nadajesz-flt02-heatmap.md) · [SYS-01](nadajesz-sys-health-sys01.md) · [GRF-02](nadajesz-grafik-editor-grf02.md) · [FC-21](fc21-selflearning-band.md)
+- Ustawienia/historia: [ustawienia+cennik+strefy](nadajesz-settings-tiles-close.md) · [Ops14](nadajesz-history-ops14.md) · [OPS-15 klienci](nadajesz-klienci-restauracji-ops15.md) · [ingest](nadajesz-delivery-history-ingest.md) · [panel klienta](nadajesz-client-panel-2026-06-16.md) · [nowa strona](nadajesz-new-site-2026-06-15.md) · [rotation](nadajesz-operator-account-rotation.md) · [FE dedup](nadajesz-frontend-shared-dedup.md) · [P1](panel-p1-sprints-2026-06-10.md)
+- Brand/AI: [🎨 ciepły brand + „Zamów kuriera" 2.0 + PWA](nadajesz-restaurant-panel.md) · [AI-HUB](nadajesz_panel_clone.md) · [decision log](nadajesz_admin_panel_decision_log.md) · [2.0 wizja](nadajesz-2.0-product-synthesis.md) · [🤖 ASYSTENT 0-10](asystent_operacyjny.md) · [Dr Tusz 11 firm](drtusz_bridge.md) · [JustSend](justsend-sms-integration.md) · [grafik→panel](grafik_source_admin_panel.md)
+
+## 📱 APKA · 📦 PACZKI/MOSTY/TARGEO
+
+- [Apka kuriera GPS — pełen state](courier_app_gps.md) · [panel-sync→gastro](courier_panel_sync.md) · [auto-parowanie](new_courier_autopair.md) · [wolne demote 15min](feedback-bialystok-15min-idle-courier.md)
+- [Most paczki → konsola+DYSPOZYCJA+śledzenie 🟢 (READ FIRST przy paczkach)](parcel-bridge-console-2026-06-29.md) · [Targeo+licznik odbioru 🟢](targeo-oczekiwanie-odbior-2026-06-29.md) · [ordering↔panel link](bialystok-ordering-panel-link-2026-06-25.md)
+
+## 💰 EPAKA/KONTROLING · 🤖 AUTONOMIA · 🟪 PAPU · 🟩 MAILEK
+
+- **📦 EPAKA cennik + DANE DLA ZIOMKA** → [epaka-cennik-oferta-automation.md](epaka-cennik-oferta-automation.md) (runbook + reguła wag×1,05/procenty×1,10; loginy `.secrets/epaka_panel.env`).
+- **💰 KONTROLING — KANON metodyki (02.07, READ FIRST)** → [kontroling-zrodla-metodyka.md](kontroling-zrodla-metodyka.md) (MAJ zamknięty; panel=arkusz TOTAL S; paczki+gastro RAZEM; Epaka auto).
+- **🤖 AUTONOMIA auto-assign (30.06)** → [autonomy-readiness-2026-06-30.md](autonomy-readiness-2026-06-30.md) (`ENABLE_AUTO_ASSIGN` OFF; plaster ~10-15%; przycisk WŁ/WYŁ LIVE; ⚠⚠ pierwsze „Włącz" nadzorowane off-peak).
+- **🟪 PAPU/LOKALKA — READ FIRST** `ordering_app/design/CONTEXT.md` STATUS top: [pre-pilot](papu_pre_pilot_ready.md) · [MVP Plan L1-L82](ordering_app_mvp_plan.md) · [CTO 27.05](cto_audit_2026-05-27.md) · [Studio vNEXT](studio-vnext-2026-07-02.md)+[v4](studio-v4-2026-06-21.md)+[tools](lokalka-studio-next-tools-2026-06-16.md) · [Promocje](lokalka-promotions-2026-06-16.md) · [roadmap](lokalka-panel-roadmap-2026-06-26.md) · [KDS](lokalka_panel_kds_redesign.md) · [A/B](lokalka_ab_versions.md) · [AI pack](lokalka-ai-context-pack.md) · [asset](lokalka-b2c-asset-build.md) · [F2](webroot-exposure-f2-fix.md) · [P0](papu-p0-audyt-fixes-2026-06-10.md) · [P1](papu-p1-nocny-drain-2026-06-11.md)
+- **🟩 MAILEK — PEŁEN STATE** → [mailek_project.md](mailek_project.md) (16 hard rules, Reguła #11, lekcje #20+). Per sesję READ FIRST `workspace/mailek/MAILEK_HANDOVER_TIMELINE.md`.
+
+## 🛠️ FEEDBACK + INFRA + META
+
+- Reguły pracy: [weryfikuj etap](feedback_verify_work_stage.md) · [replay-gate](feedback-no-regression-replay-gate.md) · [multi-sesja deploy](feedback_multisession_shared_deploy.md) · [polski](feedback_jezyk_polski.md) · [5/35min](feedback_two_hard_rules_defer_over_extend.md) · [zawsze proponuj](feedback-always-propose-defer-pickup.md) · [prościej](feedback-explain-stepwise-nontechnical.md) · [koordynacja](feedback-session-coordination-roadmap.md) · [incydenty vs plany](feedback-panel-incidents-vs-plans-routing.md) · [alert not-noise](feedback_alert_signal_not_noise.md) · [aider](feedback_aider_access.md)+[prompts](feedback_aider_long_prompts.md) · [idle vs drive](feedback_dispatch_idle_vs_drive.md) · [tier dwell](feedback_tier_aware_dwell.md) · [Warsaw time](feedback_warsaw_time.md) · [push status](feedback_manual_push_status_check.md) · [schedule vs at](feedback_schedule_vs_at.md) · [admin visibility](lesson_admin_account_visibility.md) · [plain-polish](plain-polish-options.md)
+- Gotchas: [SQL atomicity](feedback_migration_sql_atomicity.md) · [RLS SET LOCAL](feedback_rls_set_local_commit_gotcha.md) · [asyncio dispose](feedback_pytest_asyncio_pool_dispose.md) · [ruff](feedback_papu_ci_ruff.md) · [httpx patch](feedback_pytest_httpx_monkey_patch.md) · [subset tests](feedback_subset_aware_tests.md) · [greenlet](feedback_coverage_async_greenlet.md) · [MockTransport](feedback_httpx_mocktransport_gateway.md) · [docker stdin](feedback_docker_exec_stdin.md) · [heredoc](feedback_bash_heredoc_stdin_trap.md) · [nginx query](feedback_nginx_query_string.md) · [nginx signed-URL](feedback_nginx_signed_url_proxy.md) · [host network](feedback_docker_host_network_localhost.md) · [pg readiness](feedback_systemd_docker_readiness_gate.md) · [inode](feedback_docker_bindmount_stale_inode.md) · [md→PDF](feedback_md_to_pdf_chromium.md) · [OpenRouter](feedback_openrouter_anthropic_compat.md) · [schedule_utils](schedule-utils-untracked.md)
+- Infra: [Storage Box bx11](storage_box.md) · [SSH hardening](ssh_hardening.md) · [Klucze API+salda](api_keys_inventory.md) · [server memory](server-memory-ops.md) · [OOM 115](session-115-oom-recovery-2026-06-13.md) · [firefighter](weekly-firefighter.md)+[triage W25](firefighter-triage-w25-2026-06-15.md)
+- Overview: [project_overview.md](project_overview.md) (READ FIRST Z1/Z2/Z3, peak) · [sprint_timeline.md](sprint_timeline.md) (HANDOFF top) · [tech_debt_backlog.md](tech_debt_backlog.md) · [other_projects.md](other_projects.md).
+- **Auto-memory meta:** wpis = 1 linia ≤~200 zn.; shrink = `cp MEMORY.md MEMORY.md.bak-pre-shrink-DATA` przed kondensacją (pełna treść: backup+git log+pliki). Lekcje Mailek→`mailek_project.md` (NIE lessons). Ostatni shrink **03.07 → `MEMORY.md.bak-pre-shrink-2026-07-03`**. Backup restic BX11 03:30.
+````
+
+---
+
+## Statystyka
+- **Przed:** 223 644 B / 335 linii. **Po:** 17 342 B (16,94 KB) / 69 linii. Redukcja −92,2%.
+- **Cel <17 KB (17 408 B): ✅** (margines 66 B). ⚠ margines cienki — przy realnym kompakcie: albo zaakceptować, albo dociąć jeszcze ~300 B (parentheticals reguł „PAPU/AUTONOMIA/KONTROLING" — detal jest w plikach) dla zapasu ~16,6 KB.
+- **Pokrycie plików-tematów: 240/244 zalinkowanych wprost + 4 zwinięte (batche 13.06) wskazane do `sprint_timeline.md`.** Wszystkie 4 udokumentowane w `12a-MEMORY-PRZENIESIENIA.md`.
+- Sekcje: 8 (reguły nadrzędne → ZIOMEK audyty → ZIOMEK reguły/kalibracje → ZIOMEK naprawy → Panel+konsola → Apka+Paczki → Epaka/Autonomia/Papu/Mailek → Feedback/Infra/Meta).
+- **Kroki realnego kompaktu (za ACK, poza tym zadaniem):** `cp MEMORY.md MEMORY.md.bak-pre-shrink-2026-07-03` → wklej powyższą treść → dopisz bloki z 12a do plików-tematów → `git add -A && git commit`.
