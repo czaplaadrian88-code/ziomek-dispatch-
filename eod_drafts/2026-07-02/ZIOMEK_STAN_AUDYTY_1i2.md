@@ -122,3 +122,5 @@
 
 ## 6. UWAGA MULTI-SESJA (krytyczne dla następnej sesji)
 Tej nocy ≥2 sesje pchają Fazę 3 (tmux 8 zrobił L1.2). **Przed KAŻDĄ zmianą: `git log --oneline -10` + `tmux ls` + sprawdź cudze `.bak-*`.** Część findingów 2.0 rozwiązuje się „w locie" przez fale L — przy podejmowaniu naprawy z §3-4 NAJPIERW re-grep czy już zamknięte (ETAP 0). Relay stanu: [[ziomek-audyt-2-wyniki-2026-07-02]] + [[ziomek-unified-audit-2026-06-30]] (Faza 3 relay).
+
+> **[audyt-porządki 03.07 ~13:47]** ⚠ dla lane L7.3: `test_split_layer_guard_l73::test_flag_gate_reflects_constant` PADA też w izolacji — flags.json ma `ENABLE_SPLIT_LAYER_GUARD: true`, a test (i opis commita „flaga OFF, flip za ACK") oczekuje OFF. Efektywnie guard jest ON na żywo. Wykryte finalną regresją audytu (4163/2; drugi fail = `test_flag_doc_coverage` flaky tylko w pełnym biegu). Audyt nie dotyka flag — do domknięcia w lane.
