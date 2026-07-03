@@ -31,7 +31,10 @@ sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 from dispatch_v2.tools import ledger_io  # noqa: E402
 
 STATE_DIR = "/root/.openclaw/workspace/dispatch_state"
-CORPUS = f"{STATE_DIR}/bundle_calib_shadow.jsonl"
+# Env-override (re-collect λ=0, checklist bug4-logger_raport §4): review na alternatywnym
+# korpusie, np. BUNDLE_CALIB_CORPUS=.../bundle_calib_shadow_l0.jsonl.
+CORPUS = os.environ.get(
+    "BUNDLE_CALIB_CORPUS", f"{STATE_DIR}/bundle_calib_shadow.jsonl")
 # #5b (top10 #1, 29.06): fizyczna prawda dostawy z GPS (arrived_at_customer) — PRIORYTET
 # nad klikiem (sla_log), bo klik ZAWYŻA wiek o medianę +2 min (kalibracja #5b). Outcome-join
 # O2 liczy realne naruszenie R6 na FIZYCZNYM przyjeździe, nie na przyciskowym delivered_at.
@@ -187,6 +190,13 @@ def _physical_delivered_index():
 
 def build_report():
     corpus = _read_jsonl(CORPUS)
+    # Strażnik skażenia (C9): korpus zmieszany z różnych λ = selekcja CALIB liczona
+    # różnymi objektywami → werdykt nieporównywalny. Wiersze sprzed 03.07 nie mają
+    # pola lambda_czas (legacy λ=1.5) — liczone osobno, nie mieszane z jawnymi λ.
+    lambdas = {r.get("lambda_czas") for r in corpus if r.get("lambda_czas") is not None}
+    if len(lambdas) > 1:
+        print(f"⚠ KORPUS ZMIESZANY: lambda_czas={sorted(lambdas)} w {CORPUS} — "
+              "werdykt niewiarygodny, rozdziel pliki per λ (env BUNDLE_CALIB_OUT_JSONL).")
     # UNIKALNE worki: dedup po (cid, bag_sig) — last-wins (ostatni stan worka)
     uniq = {}
     for r in corpus:

@@ -45,8 +45,12 @@ STATE_DIR = "/root/.openclaw/workspace/dispatch_state"
 ORDERS_STATE = f"{STATE_DIR}/orders_state.json"
 PLANS_LIVE = f"{STATE_DIR}/courier_plans.json"
 GPS_PATH = f"{STATE_DIR}/gps_positions_pwa.json"
-OUT_JSONL = f"{STATE_DIR}/bundle_calib_shadow.jsonl"
-STATE_PATH = f"{STATE_DIR}/bundle_calib_shadow_state.json"
+# Env-override ścieżek (re-collect λ=0, checklist bug4-logger_raport §4): osobny plik
+# outputu + osobny state trzymają korpusy λ=1.5 i λ=0 ROZŁĄCZNE (zero skażenia).
+OUT_JSONL = os.environ.get(
+    "BUNDLE_CALIB_OUT_JSONL", f"{STATE_DIR}/bundle_calib_shadow.jsonl")
+STATE_PATH = os.environ.get(
+    "BUNDLE_CALIB_STATE_PATH", f"{STATE_DIR}/bundle_calib_shadow_state.json")
 FLAG = "ENABLE_BUNDLE_CALIB_SHADOW"
 MAX_PER_RUN = int(os.environ.get("BUNDLE_CALIB_SHADOW_MAX_PER_RUN", "25"))
 # Limit brute-force: worek >5 zleceń → kandydaci heurystyczni (jak b_route_shadow).
@@ -548,6 +552,7 @@ def _build_row(cid, oids, sig, mine, pos, now, served, calib_seq, m_served,
     carried = [o for o in mine if mine[o].get("status") == "picked_up"]
     return {
         "ts": now.isoformat(),
+        "lambda_czas": LAMBDA_CZAS,
         "cid": cid,
         "bag_sig": sig,
         "order_ids": sorted(oids),

@@ -295,6 +295,49 @@ def test_overage_recompute_from_carry_ready_matches_walk():
     assert abs(recomputed - m["overage"]) <= 0.1 * len(m["carry_ready"]) + 1e-6
 
 
+# --- re-collect λ=0 (2026-07-03, checklist bug4-logger_raport §4) ---------------
+
+def test_build_row_serializes_lambda_czas(monkeypatch):
+    """Provenancja korpusu: każdy wiersz niesie λ, którą liczono selekcję CALIB —
+    strażnik skażenia przy mieszaniu plików λ=1.5 / λ=0."""
+    monkeypatch.setattr(B, "LAMBDA_CZAS", 0.0)
+    mine = {
+        "A": {"status": "assigned", "pickup_coords": [53.12, 23.14],
+              "delivery_coords": [53.11, 23.22], "czas_kuriera_warsaw": None,
+              "uwagi": ""},
+        "B": {"status": "assigned", "pickup_coords": [53.13, 23.15],
+              "delivery_coords": [53.10, 23.20], "czas_kuriera_warsaw": None,
+              "uwagi": ""},
+    }
+    seq = [{"type": "pickup", "order_id": "A"}, {"type": "dropoff", "order_id": "A"},
+           {"type": "pickup", "order_id": "B"}, {"type": "dropoff", "order_id": "B"}]
+    m = {"r6_ready": 1.0, "czas_late": 0.0, "finish_in_min": 30.0,
+         "overage": 0.0, "drive_min": 20.0}
+    now = datetime(2026, 7, 3, 8, 0, tzinfo=timezone.utc)
+    row = B._build_row("99", ["A", "B"], "sig", mine, (53.14, 23.15), now,
+                       seq, seq, dict(m), dict(m), {"A": None, "B": None},
+                       "brute", 4, {})
+    assert row["lambda_czas"] == 0.0
+
+
+def test_out_and_state_paths_env_override(monkeypatch):
+    """Re-collect λ=0 wymaga ROZŁĄCZNYCH plików (output+state) per λ — env
+    BUNDLE_CALIB_OUT_JSONL / BUNDLE_CALIB_STATE_PATH musi przekierować oba."""
+    import importlib
+    monkeypatch.setenv("BUNDLE_CALIB_OUT_JSONL", "/tmp/test_bc_l0.jsonl")
+    monkeypatch.setenv("BUNDLE_CALIB_STATE_PATH", "/tmp/test_bc_state_l0.json")
+    try:
+        importlib.reload(B)
+        assert B.OUT_JSONL == "/tmp/test_bc_l0.jsonl"
+        assert B.STATE_PATH == "/tmp/test_bc_state_l0.json"
+    finally:
+        monkeypatch.delenv("BUNDLE_CALIB_OUT_JSONL")
+        monkeypatch.delenv("BUNDLE_CALIB_STATE_PATH")
+        importlib.reload(B)
+    assert B.OUT_JSONL.endswith("/bundle_calib_shadow.jsonl")
+    assert B.STATE_PATH.endswith("/bundle_calib_shadow_state.json")
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
