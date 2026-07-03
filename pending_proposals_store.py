@@ -150,10 +150,41 @@ def locked_save(pending: Dict[str, Any], path: str = PENDING_PATH) -> None:
     """KANON blind-overwrite pod LOCK_EX (dla pisarza trzymającego pełny dict w pamięci,
     np. telegram_approver). Serializuje zapis względem innych pisarzy i eliminuje kolizję
     tmp. NIE robi merge — pisarz z nieświeżą pamięcią wciąż może nadpisać cudze wpisy;
-    pełna eliminacja lost-update dla takiego pisarza = przejście na `locked_mutate`
-    per-operację (patrz raport, checklist pre-re-enable Telegrama)."""
+    pełna eliminacja lost-update dla takiego pisarza = przejście na `locked_set`/
+    `locked_pop` per-operację (L7.5 delta-fix, checklist pre-re-enable Telegrama)."""
     with _locked(path):
         save(pending, path)
+
+
+# ---- per-operacja DELTA (L7.5 delta-fix; kanon dla telegram_approver po re-enable) ----
+# Telegram trzymał pełny dict w nieświeżej pamięci i blind-nadpisywał całość (locked_save),
+# przez co wpis dołożony współbieżnie przez shadow ginął mimo locka. Poniższe helpery
+# mutują TYLKO jeden klucz na ŚWIEŻYM stanie spod locka (RMW na `locked_mutate`) → cudze
+# wpisy przeżywają. Wszystkie na jednym LOCK_EX (leaf-lock, zwolniony przed czymkolwiek
+# innym); `mutate_fn` NIE woła żadnej `locked_*` (zagnieżdżony LOCK_EX = deadlock).
+
+def locked_set(key: Any, value: Dict[str, Any], path: str = PENDING_PATH) -> Dict[str, Any]:
+    """DELTA: ustaw JEDEN klucz pod LOCK_EX na świeżym stanie (nie blind-overwrite).
+    Wpisy innych pisarzy (shadow/postpone) NIE są dotknięte."""
+    return locked_mutate(lambda p: p.__setitem__(str(key), value), path)
+
+
+def locked_pop(key: Any, path: str = PENDING_PATH) -> Dict[str, Any]:
+    """DELTA: usuń JEDEN klucz pod LOCK_EX na świeżym stanie (nie blind-overwrite).
+    Idempotentne (brak klucza = no-op). Cudze wpisy przeżywają — kontrast do
+    blind-overwrite, który gubił wpisy shadow dołożone po ostatnim load telegramu."""
+    return locked_mutate(lambda p: p.pop(str(key), None), path)
+
+
+def locked_merge_missing(entries: Dict[str, Any], path: str = PENDING_PATH) -> Dict[str, Any]:
+    """DELTA additive: dołóż BRAKUJĄCE klucze pod LOCK_EX, NIGDY nie usuwaj ani nie
+    nadpisuj istniejących. Dla shutdown-drain telegramu: reassercja własnych wpisów bez
+    klobrowania cudzych i bez cofania popów (memory telegramu już odzwierciedla popy →
+    popnięte klucze nie są w `entries`, więc się nie odrodzą)."""
+    def _m(p: Dict[str, Any]) -> None:
+        for k, v in (entries or {}).items():
+            p.setdefault(str(k), v)
+    return locked_mutate(_m, path)
 
 
 def upsert_proposals(
