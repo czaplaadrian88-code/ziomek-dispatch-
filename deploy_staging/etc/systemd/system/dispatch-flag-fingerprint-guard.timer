@@ -1,0 +1,11 @@
+[Unit]
+Description=Ziomek STRAZNIK flag-fingerprint — co 30 min (rekoncyliacja stanu flag 4 zrodel; podsumowanie tick pisane ZAWSZE, tez przy OK). Wychwytuje rozjazd zrodel / intermittent-cold flag-load zanim zapadnie na zlych flagach.
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+Unit=dispatch-flag-fingerprint-guard.service
+
+[Install]
+WantedBy=timers.target

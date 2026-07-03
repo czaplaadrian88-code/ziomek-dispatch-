@@ -1,0 +1,6 @@
+{
+  "_comment": "Allowlista znanych/zaakceptowanych rozjazdow dla flag_fingerprint_guard. Token pasuje gdy == flaga LUB == 'KLASA:flaga' findingu (np. 'ENV-DEAD:ENABLE_FOO'). Allowlisted DRIFT/COLD -> licznik 'accepted', NIE alertuje. USE_V2_PARSER jest seedowany rowniez w kodzie (known-open, migracja ETAP4 za ACK, ledger §4 pkt 2). Ten plik jest OPCJONALNY — brak = tylko seed z kodu. Kopiowany do dispatch_state podczas deploy (nie nadpisuj istniejacego bez przejrzenia).",
+  "accepted": [
+    "USE_V2_PARSER"
+  ]
+}
