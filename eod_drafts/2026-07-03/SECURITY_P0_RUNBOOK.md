@@ -58,12 +58,16 @@ printf '.secrets/\n' >> .gitignore   # dziś untracked, ale 1× git add -A = wyc
 
 ## SEKCJA C — ROTACJE (Adrian + CC za ACK; sekrety skompromitowane przez historię git/logi)
 
-**C1 — tokeny botów Telegram (2 szt.) — priorytet, bo żyją w historii git wypchniętej na GitHub** (redakcja 03.07 objęła TYLKO treść plików .md — commit `0b01e46`; historia `85f3185`/`bb46da6`… trzyma pełne tokeny; wciąż też hardcoded w żywych `/root/dispatch_control.py:10` i `scripts/gastro_koordynator.py:34`):
-1. Adrian: @BotFather → `/mybots` → bot kontrolny (NadajeszControlBot) → **Revoke current token** → nowy token. To samo dla bota z `gastro_koordynator.py`.
-2. CC za ACK: nowe tokeny do `.secrets/telegram_control.env` (600, wzór `telegram.env`); w obu plikach `BOT_TOKEN = os.environ[...]` / load z env-file zamiast literału.
-3. Restart dotkniętych procesów — ⚠ `dispatch_control.py` to legacy PID 1006 (@reboot) — restart = kill+ręczny start albo domknięcie razem z B2/P5. **Bot = kanał Telegram → jawny ACK przed dotknięciem.**
-4. Stary token po revoke = martwy ⇒ **historia git przestaje być groźna → NIE przepisujemy historii na GitHubie** (rotacja > rewrite; C1: nie ruszamy cudzych commitów). Sprawdzić czy repo `ziomek-dispatch-` i `mailek` są PRIVATE (Adrian, 1 min, Settings → Danger Zone).
-5. Weryfikacja: `curl -s https://api.telegram.org/bot<STARY>/getMe` → 401; bot działa na nowym (testowy `/status`).
+**C1 — tokeny botów Telegram (2 szt.) — priorytet, bo żyją w historii git wypchniętej na GitHub** (redakcja 03.07 objęła TYLKO treść plików .md — commit `0b01e46`; historia `85f3185`/`bb46da6`… trzyma pełne tokeny; wciąż też hardcoded w żywych `/root/dispatch_control.py:10` i `scripts/gastro_koordynator.py:34`).
+> ✅ **CZĘŚĆ KODOWA GOTOWA (staged, 03.07):** `dispatch_state/staged_token_rotation/` (załatane kopie obu plików = env-load z `.secrets/telegram_bots.env`, ZERO tokenów w kopiach, py_compile OK, fail-loud gdy brak tokenu) + szablon `telegram_bots.env.template` + `dispatch_state/apply_token_rotation.sh` (backup→podmiana→sanity-load; NIE restartuje botów). Zbudowane bez wyświetlania tokenów, diff = tylko blok BOT_TOKEN. Klucze env: `DISPATCH_CONTROL_BOT_TOKEN`, `GASTRO_KOORDYNATOR_BOT_TOKEN` (jeden plik obsługuje oba — gastro_koordynator czyta ten sam bind-mount przez `/home/node/...`).
+
+Sekwencja wykonania:
+1. **Adrian** @BotFather → `/mybots` → NadajeszControlBot → **Revoke current token** → nowy. To samo dla bota z `gastro_koordynator.py`. (Revoke = moment zamknięcia wycieku.)
+2. **Adrian:** `cp dispatch_state/staged_token_rotation/telegram_bots.env.template /root/.openclaw/workspace/.secrets/telegram_bots.env` → wpisz oba nowe tokeny → `chmod 600`.
+3. **Adrian:** `! bash /root/.openclaw/workspace/dispatch_state/apply_token_rotation.sh` (pre-flight sprawdza że nie ma placeholdera, backup `.bak-pre-token-rotation-*`, podmiana, sanity import-test).
+4. **Restart za ACK** (bot = kanał Telegram): `dispatch_control` = kill PID + `nohup python3 … &` (komendy wypisuje apply-skrypt pkt 6); `gastro_koordynator` bierze nowy kod przy następnym wywołaniu (brak trwałego daemona).
+5. Stary token po revoke = martwy ⇒ **historia git przestaje być groźna → NIE przepisujemy historii** (rotacja > rewrite; C1: nie ruszamy cudzych commitów). Sprawdź, czy repo `ziomek-dispatch-` i `mailek` są PRIVATE (Adrian, Settings → Danger Zone).
+6. Weryfikacja: `curl -s https://api.telegram.org/bot<STARY>/getMe` → 401; bot odpowiada na `/status` (nowy token żywy).
 
 **C2 — hasło fleet-admina (:8767):** nowe silne hasło (nie wzór „słowo+rok") do drop-inu `courier-api.service.d/admin-cred.conf` → `systemctl daemon-reload && systemctl restart courier-api` (za ACK, poza peakiem) → wyczyścić wyciekłą linię z `courier_api.log` (B4b).
 
