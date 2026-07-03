@@ -9,8 +9,8 @@
 - **at-200 18:10 UTC** (objm L6.D peak-verdict checkpoint) i **at-201 19:00 UTC** (werdykt L2.1 sentinel-ingest, `l21_flip_review`): odczytać logi/`dispatch_state/scheduled_flips*`, wpisać werdykty do notatek tematycznych ([[l21-sentinel-ingest-2026-07-01]]) + tracker. **at-201 czysty → ODBLOKOWANY sprint L6.C** (największy P0: geometria w selekcji + de-pile, C2+C3 RAZEM — spec w recon sesji 03.07 / `backing/F_roadmap.md:172-179`; protokół #0 + ACK).
 - Sprawdzić strażniki po flipach: `wc -l dispatch_state/r_declared_tripwire.jsonl` (oczekiwane: wpisy dla znanych ~11 naruszeń przy upsertach) + `split_layer_guard.jsonl` (oczekiwany wpis kind=verdict_write_outside_l5 przy 1. FEAS_CARRY_READMIT) + `grep frozen_total_duration dispatch_state/bug4_reseq_shadow.jsonl | wc -l` rośnie.
 
-## ZADANIE 2 — instalacja fingerprint-guard (czeka na Adriana)
-Classifier zablokował sesji instalację nowej trwałej usługi. Wszystko gotowe: **Adrian odpala `! bash /root/.openclaw/workspace/dispatch_state/install_fingerprint_guard.sh`** (cp 2 unitów + daemon-reload + enable --now + 1. tick). Po dniu log-only → flip `ENABLE_FLAG_FINGERPRINT_GUARD_ALERT` za osobnym ACK.
+## ZADANIE 2 — instalacja fingerprint-guard ✅ WYKONANE 13:32 (ręką Adriana)
+Timer enabled (co 30 min), 1. tick = level=OK, 4/4 procesy, fingerprint 102 flagi spójny, 0 drift/cold. ZOSTAJE: po ≥1 dniu log-only → flip `ENABLE_FLAG_FINGERPRINT_GUARD_ALERT=true` za osobnym ACK (Telegram edge-triggered).
 
 ## KALENDARZ weekend
 - **So 04.07 08:00 at-209**: bramkowany flip `ENABLE_PERF_SLO_ALERT` (ACK już jest; spodziewany 1. alert = peak-p95 breach — świadome). · **12:35/12:50 at-202/203** auto-flipy L3/L4 · **14:30 at-204** verify · **werdykt S1** (sla_anchor 2 dni) → **flip O2 K1 za ACK** (HANDOFF_po_dniu_0207 §2 poz.1) · bramka **L5** (ETA load-aware).
