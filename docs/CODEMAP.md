@@ -27,9 +27,9 @@
 | `migrations/` | 2 migracje jednorazowe (05.05/05.07) | — | archiwum |
 | `dispatch_state/` | ⚠ **NIE stan silnika** — tylko dane epaki | `epaka_data/*.csv` | dane; kolizja nazw (patrz §4 pułapki) |
 | `eod_drafts/` | Dzienniki „koniec dnia" — 50 podkatalogów wg daty (raporty + skrypty + dane) | `2026-06-30/FAZA1_*`, `2026-07-02/AUDYT2/` | mieszane; ~48M, dane/jsonl churnują w git |
-| `docs/` | ⚠ md z kwietnia (przestarzałe) + `audyt/` (TEN audyt) | `audyt/00..05`, `SYSTEM_FLOW.md` (11.04) | mieszane; reszta = archiwum |
-| `AUDIT_2026-05-07/` | Audyt architektury 07.05 (10 md, Tier A/B/C, top-20 ryzyk) | — | archiwum (historyczne, wartościowe) |
-| `AUDIT_2026-06-03/` | Audyt architektury 03.06 (3 md) | `ZIOMEK_AUDYT*`, `STATUS_ROADMAP*` | archiwum |
+| `docs/` | ŻYWA nawigacja + archiwum: `ARCHITECTURE.md`, `CODEMAP.md`, `decisions/` (ADR), `audyt/` (ten audyt), `deploy/` (kit HA-lite 21.06 — źródło żywego backup-sentinel!), `archive/` (kwiecień-maj + AUDIT_* + handoffy, od 03.07) | `CODEMAP.md`, `audyt/10-PLAN.md`, `archive/README.md` | żywy |
+| `docs/archive/AUDIT_2026-05-07/` | Audyt architektury 07.05 (10 md, Tier A/B/C, top-20 ryzyk) | — | archiwum (przeniesiony z korzenia 03.07) |
+| `docs/archive/AUDIT_2026-06-03/` | Audyt architektury 03.06 (3 md) | `ZIOMEK_AUDYT*`, `STATUS_ROADMAP*` | archiwum (przeniesiony 03.07) |
 | `sprint2_analysis/` | Root-cause sprintu 2 (30.04, samodzielny) | — | ⚠ USUNIĘTY z mastera 03.07 (commit `cbe566f`, w trakcie audytu) — istnieje tylko w historii git |
 | `systemd/` | Kopia jednostek service/timer/drop-in (mirror `/etc/systemd/`) | `*.service`, `*.timer` | ⚠ 1 z 4 miejsc z systemd w repo |
 | `deploy/`, `deploy_staging/` | Jednostki „staged" (checkpoint-tz/reassignment/bundle-calib-shadow) | `README_INSTALL.md` | do weryfikacji: wdrożone czy martwe |
@@ -138,9 +138,9 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
 
 | Audyt | Gdzie | O czym |
 |---|---|---|
-| Architektura 07.05 | `AUDIT_2026-05-07/` (10 md) | mapa systemu, Tier A/B/C, top-20 ryzyk, 10 god-objects, maintainability 5/10 |
-| Architektura 03.06 | `AUDIT_2026-06-03/` (3 md) | STATUS_ROADMAP + ZIOMEK_AUDYT + extract |
-| Sprint 2 root-cause | `sprint2_analysis/` | 30.04-01.05, przestarzałe, self-contained |
+| Architektura 07.05 | `docs/archive/AUDIT_2026-05-07/` (10 md) | mapa systemu, Tier A/B/C, top-20 ryzyk, 10 god-objects, maintainability 5/10 |
+| Architektura 03.06 | `docs/archive/AUDIT_2026-06-03/` (3 md) | STATUS_ROADMAP + ZIOMEK_AUDYT + extract |
+| Sprint 2 root-cause | historia git (`cbe566f^`) | 30.04-01.05, przestarzałe, self-contained |
 | Faza 1 (spójność) | `eod_drafts/2026-06-30/FAZA1_00..06` | 26 rootów, 19/49 VOID przyrządów, roadmapa L0-L8, ledger pokrycia |
 | Audyt 2.0 (niezawodność) | `eod_drafts/2026-07-02/AUDYT2/MASTER_synteza.md` | P0 security, regres perf 2×, 2 bomby TZ, martwe monitory |
 | **TEN audyt (porządki+nawigacja)** | `docs/audyt/00-05` + `10-PLAN.md` | inwentaryzacja, zależności, dług, testy, niezgodności, inne projekty |

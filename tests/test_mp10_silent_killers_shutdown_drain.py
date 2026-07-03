@@ -1,6 +1,6 @@
 """MP-#10 silent killers + _shutdown_drain regression coverage (2026-05-08).
 
-Per audit `AUDIT_2026-05-07/TELEGRAM_APPROVER_GOD_OBJECT_ASYNC_AUDIT_2026-05-07.md`
+Per audit `docs/archive/AUDIT_2026-05-07/TELEGRAM_APPROVER_GOD_OBJECT_ASYNC_AUDIT_2026-05-07.md`
 Kategoria A — 10 silent killer except handlers + shutdown drain pattern.
 
 Cada fix wymaga test "OLD silent → NEW logged" (Lekcja #32). Dedup cap'y też testowane.

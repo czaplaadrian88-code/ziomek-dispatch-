@@ -75,7 +75,7 @@ Zawiera:
 - State: `/root/.openclaw/workspace/dispatch_state/`
 - Logs: `/root/.openclaw/workspace/scripts/logs/`
 - Health: `http://localhost:8888/health/parser`
-- **Audyt architektoniczny:** `dispatch_v2/AUDIT_2026-05-07/` — pełna analiza architektury z 07.05.2026 wieczór: mapa systemu (16 services + 12 timers + lifecycle ordera), top 20 ryzyk priorytetyzowanych P×I, lista 10 najbardziej krytycznych plików (god objects, fan-in, except count), 10 modułów do deep audit (Tier A/B/C), oceny: maintainability 5/10, scalability 3/10, production 6/10. Quick wins P0-P2 + appendix konkretnych anti-patterns z `plik:linia`. Cross-ref: TECH_DEBT.md, MEMORY/lessons.md #32/#80/#81/#82. Re-audit cadence: pre-Faza 7 100% flip / pre-multi-tenant Warsaw.
+- **Audyt architektoniczny:** `dispatch_v2/docs/archive/AUDIT_2026-05-07/` (przeniesiony 03.07, audyt-porządki) — pełna analiza architektury z 07.05.2026 wieczór: mapa systemu (16 services + 12 timers + lifecycle ordera), top 20 ryzyk priorytetyzowanych P×I, lista 10 najbardziej krytycznych plików (god objects, fan-in, except count), 10 modułów do deep audit (Tier A/B/C), oceny: maintainability 5/10, scalability 3/10, production 6/10. Quick wins P0-P2 + appendix konkretnych anti-patterns z `plik:linia`. Cross-ref: TECH_DEBT.md, MEMORY/lessons.md #32/#80/#81/#82. Re-audit cadence: pre-Faza 7 100% flip / pre-multi-tenant Warsaw.
 
 ---
 

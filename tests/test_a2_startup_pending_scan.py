@@ -1,6 +1,6 @@
 """A2 startup pending_proposals scan regression coverage (2026-05-08).
 
-Per audit `AUDIT_2026-05-07/STATE_OWNERSHIP_EVENT_FLOW_AUDIT_2026-05-07.md` F9:
+Per audit `docs/archive/AUDIT_2026-05-07/STATE_OWNERSHIP_EVENT_FLOW_AUDIT_2026-05-07.md` F9:
 sieroty pending z expires_at w przeszłości (po crash/restart) muszą zostać
 auto-processed PRZED launch workers, żeby eliminować window operatorskiej
 confusion (do ~10s watchdog sleep).

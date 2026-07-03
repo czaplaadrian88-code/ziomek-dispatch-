@@ -1,6 +1,6 @@
 """A1 silent killer fixes cross-codebase regression coverage (2026-05-08).
 
-Per audit `AUDIT_2026-05-07/ARCHITECTURE_AUDIT_2026-05-07.md` — analog MP-#10
+Per audit `docs/archive/AUDIT_2026-05-07/ARCHITECTURE_AUDIT_2026-05-07.md` — analog MP-#10
 ale poza telegram_approver. 8 fixes z `except Exception: pass` → log + dedup
 (Lekcja #32 silent killer pattern).
 
