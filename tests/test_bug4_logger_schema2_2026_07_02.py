@@ -88,16 +88,22 @@ def _setup(monkeypatch, tmp_path, fresh=25.0, frozen=30.0, plan=None):
 # ── (A) LOGGER schema-2 completeness ─────────────────────────────────────────
 def test_schema2_entry_complete(monkeypatch, tmp_path):
     p = _setup(monkeypatch, tmp_path)
+    # frozen-objektyw P0 (a-faithful, 2026-07-03): frozen liczony przez silnik na
+    # rozgrzanym cache OSRM. Deterministyczny leg (mock route) — sekwencja frozen
+    # różni się od fresh (_existing pickup-first vs _FakePlan) → scoring, NIE fast-path.
+    from dispatch_v2 import osrm_client as _osrm
+    monkeypatch.setattr(_osrm, "route",
+                        lambda a, b, **k: {"duration_min": 2.0, "duration_s": 120.0})
     PR._bug4_reseq_shadow("99", ["A", "B"], _existing(), _orders(), {}, NOW, R, {})
     rec = json.loads(p.read_text().strip())
     assert rec["schema"] == 2
     # fresh objektyw = DARMOWE z plan_fresh (co silnik faktycznie zwrócił)
     assert rec["fresh_total_duration"] == 33.75
     assert rec["fresh_sla"] == 1
-    # frozen objektyw = null (zero-cost tick) + nota
-    assert rec["frozen_total_duration"] is None
-    assert rec["frozen_sla"] is None
-    assert "frozen_obj=null" in rec["obj_axis_note"]
+    # frozen objektyw = TERAZ POLICZONY silnikiem (a-faithful), nie null
+    assert isinstance(rec["frozen_total_duration"], (int, float))
+    assert isinstance(rec["frozen_sla"], int)
+    assert "a-faithful" in rec["obj_axis_note"]
     # WSZYSTKIE stare pola (drive-oś) nietknięte
     assert _OLD_KEYS.issubset(rec.keys())
     # DOKŁADNIE dołożone klucze — nic więcej, nic mniej

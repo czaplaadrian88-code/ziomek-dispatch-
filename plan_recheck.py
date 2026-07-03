@@ -1888,6 +1888,47 @@ def _osrm_drive_min_sum(start, coords_list):
     return tot
 
 
+def _score_frozen_objective(pos, sims, existing_plan, now):
+    """frozen-objektyw P0 (wariant a-faithful): policz `total_duration_min`+`sla`
+    ZAMROŻONEJ sekwencji (`existing_plan.stops`) TYM SAMYM silnikiem co fresh
+    (`_simulate_sequence` + `_count_sla_violations`), reużywając ROZGRZANY w tym
+    samym ticku cache OSRM z fresh-solve (marginał ≈ 0 uncached route). Reużywa
+    DOSŁOWNIE pure-helpery oracle (`bug4_reseq_oracle._build_nodes`/`_leg_min_factory`/
+    `score_sequence`) — JEDNO ŹRÓDŁO scoringu, bliźniak-zero z offline `score_bag`
+    (parytet dowiedziony testem). Zwraca (frozen_total, frozen_sla, nota).
+
+    Fail-soft TWARDY: brak coords/węzła/lega, niespójny plan-worek, KAŻDY wyjątek →
+    (None, None, nota) — NIGDY nie rzuca (log-only, nie może zepsuć fresh ani retime).
+    Mapowanie stopów→węzły: type 'pickup'→węzeł pickup, 'dropoff'→węzeł delivery
+    (dla ODEBRANYCH węzła pickup nie ma → stale pickup-stop = null+nota)."""
+    try:
+        from dispatch_v2.tools import bug4_reseq_oracle as _oracle
+        nodes, pickup_idx, deliv_idx = _oracle._build_nodes(pos, sims)
+        frozen_node_seq = []
+        for s in (existing_plan.get("stops") or []):
+            _oid = str(s.get("order_id"))
+            _typ = s.get("type")
+            if _typ == "pickup":
+                _ni = pickup_idx.get(_oid)
+            elif _typ == "dropoff":
+                _ni = deliv_idx.get(_oid)
+            else:
+                return None, None, f"frozen=null (nieznany typ stopu '{_typ}')"
+            if _ni is None:
+                return None, None, ("frozen=null (stop order_id/typ nie mapuje na węzeł "
+                                    "sims — plan niespójny z workiem / odebrane z pickup-stopem)")
+            frozen_node_seq.append(_ni)
+        if not frozen_node_seq:
+            return None, None, "frozen=null (pusta sekwencja stopów planu)"
+        leg = _oracle._leg_min_factory(nodes)
+        fz_sla, fz_total, _fz_drive = _oracle.score_sequence(
+            nodes, leg, frozen_node_seq, sims, now, 35)
+        return (round(float(fz_total), 3), int(fz_sla),
+                "frozen scored via engine _simulate_sequence (a-faithful, cache-reuse)")
+    except Exception as e:
+        return None, None, f"frozen=null (scoring fail-soft: {type(e).__name__})"
+
+
 def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, now, R, summary):
     """Bug #4 SHADOW (flaga ENABLE_BUG4_RESEQ_SHADOW, log-only): przy RETIME worka
     ≥2 zleceń policz też ŚWIEŻY solve (jak _gen_one_bag_plan._sweep) i zaloguj deltę
@@ -1980,6 +2021,18 @@ def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, no
                         if getattr(plan_fresh, "total_duration_min", None) is not None else None)
         _fresh_sla = (int(plan_fresh.sla_violations)
                       if getattr(plan_fresh, "sla_violations", None) is not None else None)
+        # frozen-objektyw P0 (a-faithful, 2026-07-03): oś OBJEKTYWU zamrożonej sekwencji
+        # policzona TYM SAMYM silnikiem co fresh (reużycie rozgrzanego cache OSRM → marginał
+        # ≈ 0). fast-path: identyczna trasa węzłów (frozen_labels==fresh_labels) → frozen==fresh
+        # BEZ ŻADNEGO liczenia (54,7% rekordów, zero OSRM). Inaczej: scoring przez silnik
+        # (fail-soft null+nota, nie psuje fresh). Tripwire fresh≤frozen staje się ocenialny
+        # na żywo (obj_tripwire), łapie SUBOPTYMALNY OR-Tools = residual (drive tego nie widział).
+        if frozen_labels == fresh_labels:
+            _frozen_total, _frozen_sla = _fresh_total, _fresh_sla
+            _obj_note = "frozen==fresh (identyczna sekwencja węzłów — fast-path, zero OSRM)"
+        else:
+            _frozen_total, _frozen_sla, _obj_note = _score_frozen_objective(
+                pos, sims, existing_plan, now)
         rec_out = {
             "ts": now.isoformat(), "cid": str(cid), "bag": [str(o) for o in oids],
             "n_orders": len(oids),
@@ -1994,18 +2047,17 @@ def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, no
             # ── OŚ OBJEKTYWU (schema 2) — fresh DARMOWE z plan_fresh; frozen offline ──
             # fresh_* = objektyw WYBRANEGO świeżego planu (co silnik faktycznie zwrócił)
             # → oracle porównuje go z brute-force optimum = łapie SUBOPTYMALNY OR-Tools
-            # (residual, którego drive NIE wykrywał). frozen_* = null: policzenie objektywu
-            # zamrożonej sekwencji wymaga `_simulate_sequence`, który dla ODEBRANYCH pod
-            # ENABLE_PICKED_UP_DROP_FLOOR odpala `osrm_client.route(pickup,drop)` POZA legami
-            # trasy — NIE gwarantuje zero-OSRM w żywym ticku (constraint zadania). Oracle
-            # (tools/bug4_reseq_oracle, |Δ|=0 vs niezależny walk) rekonstruuje frozen brute-
-            # force offline i domyka tripwire fresh≤frozen na osi objektywu.
+            # (residual, którego drive NIE wykrywał). frozen_* (a-faithful, 2026-07-03) =
+            # objektyw ZAMROŻONEJ sekwencji policzony TYM SAMYM silnikiem (_simulate_sequence
+            # + _count_sla_violations, ta sama kotwica now/dwell/floor co fresh), reużywając
+            # rozgrzany cache OSRM z fresh-solve (marginał ≈ 0). Null TYLKO gdy fast-path/
+            # scoring nie ma kompletu coords/lega (fail-soft + nota). Tripwire fresh≤frozen
+            # ocenialny na żywo (obj_tripwire); parytet z offline `score_bag` w |Δ|<0.05.
             "fresh_total_duration": _fresh_total,
             "fresh_sla": _fresh_sla,
-            "frozen_total_duration": None,
-            "frozen_sla": None,
-            "obj_axis_note": "frozen_obj=null (zero-cost tick: _simulate_sequence "
-                             "picked_up-floor osrm); oracle reconstructs frozen offline",
+            "frozen_total_duration": _frozen_total,
+            "frozen_sla": _frozen_sla,
+            "obj_axis_note": _obj_note,
             # INWARIANT-TRIPWIRE (audyt C9): wierny re-solve NIE może być GORSZY od istniejącego
             # planu (frozen = feasible sekwencja, którą solver też mógł wybrać). delta<−0.5 =
             # pomiar skażony (resztkowy fikcyjny węzeł / semantyka) → suspect, NIE traktuj jak dane.
