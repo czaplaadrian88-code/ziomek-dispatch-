@@ -72,8 +72,8 @@ catch'es batch anomaly.
 
 ```bash
 # 1. Install systemd files
-sudo cp dispatch_v2/reconciliation/systemd/*.service /etc/systemd/system/
-sudo cp dispatch_v2/reconciliation/systemd/*.timer /etc/systemd/system/
+sudo cp dispatch_v2/systemd/reconciliation/*.service /etc/systemd/system/
+sudo cp dispatch_v2/systemd/reconciliation/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 
 # 2. Smoke test — manual run, dry-run mode

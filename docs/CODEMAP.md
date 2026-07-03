@@ -18,8 +18,8 @@
 | `czasowka_proactive/` | Proaktywne harmonogramowanie czasówek | `evaluator.py`, `score_selector.py`, `state.py` | żywy (submoduł) |
 | `cod_weekly/` | Tygodniowe rozliczenie COD → Google Sheets | (venv **sheets**) | żywy; ⚠ `dispatch-cod-weekly.service` pada co pon. |
 | `daily_accounting/` | Rozliczenia dzienne + wypłaty kurierów | `main.py`, `tests/` (własny runner, NIE pytest) | żywy (venv sheets) |
-| `shift_notifications/` | Worker powiadomień T-60/T-30 o zmianach + własny `systemd/` | `worker.py` | żywy |
-| `reconciliation/` | Worker rekoncyliacji stanu + własny `systemd/` | `reconcile_worker.py`, `auto_resync.py`, `phantom_detector.py` | żywy |
+| `shift_notifications/` | Worker powiadomień T-60/T-30 o zmianach (jednostki: `systemd/shift_notifications/`) | `worker.py` | żywy |
+| `reconciliation/` | Worker rekoncyliacji stanu (jednostki: `systemd/reconciliation/`) | `reconcile_worker.py`, `auto_resync.py`, `phantom_detector.py` | żywy |
 | `sms/` | Abstrakcja SMS (cykl importów ovh↔provider↔stub) | `ovh.py`, `provider.py`, `stub.py` | żywy |
 | `telegram/` | ⚠ TYLKO szablony — **NIE bot** (bot = `telegram_approver.py` w korzeniu) | `templates.py` | żywy pakiet szablonów, myląca nazwa |
 | `ml_data_prep/` | Offline pipeline LGBM two-model (arbitrage/bundle/solo/forward) | `*.pkl` (label_encoders — binaria w git) | żywy offline; „zero contact z live" |
@@ -31,7 +31,7 @@
 | `docs/archive/AUDIT_2026-05-07/` | Audyt architektury 07.05 (10 md, Tier A/B/C, top-20 ryzyk) | — | archiwum (przeniesiony z korzenia 03.07) |
 | `docs/archive/AUDIT_2026-06-03/` | Audyt architektury 03.06 (3 md) | `ZIOMEK_AUDYT*`, `STATUS_ROADMAP*` | archiwum (przeniesiony 03.07) |
 | `sprint2_analysis/` | Root-cause sprintu 2 (30.04, samodzielny) | — | ⚠ USUNIĘTY z mastera 03.07 (commit `cbe566f`, w trakcie audytu) — istnieje tylko w historii git |
-| `systemd/` | Kopia jednostek service/timer/drop-in (mirror `/etc/systemd/`) | `*.service`, `*.timer` | ⚠ 1 z 4 miejsc z systemd w repo |
+| `systemd/` | Źródła jednostek: mirror dispatch-* + `reconciliation/` + `shift_notifications/` (od 03.07) | `README.md`, `*.service`, `*.timer` | żywy; staged kity: `deploy/`, `deploy_staging/`, `docs/deploy/` |
 | `deploy/`, `deploy_staging/` | Jednostki „staged" (checkpoint-tz/reassignment/bundle-calib-shadow) | `README_INSTALL.md` | do weryfikacji: wdrożone czy martwe |
 
 Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
@@ -128,7 +128,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
 4. **`EnvironmentFile` niewidoczny w `systemctl show -p Environment`** — flagi panelu (44) siedzą w `flags.systemd.env`; sam `show` pokaże fałszywe OFF. Czytaj plik wprost.
 5. **Kanon flag = 3 światy.** Silnik = `flags.json` (po migracji D3 02.07); panel = `flags.systemd.env`+inline `.conf`+`flags.py` defaults; apka = `.conf`+`config.py`. ⚠ Zapis „drop-iny NIE flags.json" (w `/root/CLAUDE.md`/`MEMORY.md`) jest NIEAKTUALNY dla silnika.
 6. **Wiele CLAUDE.md w łańcuchu cwd.** Obowiązuje: **głowa `dispatch_v2/CLAUDE.md` (Przykazanie #0) + `/root/CLAUDE.md`**. NIEobowiązujące relikty routera aider: `workspace/CLAUDE.md`, ogon `dispatch_v2/CLAUDE.md` (~l.1624+), `/root/.claude/CLAUDE.md` (ruflo). Szczegóły: `docs/audyt/02-NIEZGODNOSCI.md §1a`.
-7. **Jednostki systemd w 4 miejscach repo** (`systemd/`, `deploy/`, `deploy_staging/`, per-moduł `reconciliation/systemd/`, `shift_notifications/systemd/`). **Wdrożone = `/etc/systemd/system/`** (część to symlinki do repo — sprawdź przed ruszaniem).
+7. **Jednostki systemd:** źródła w `systemd/` (+ podkatalogi per-moduł, patrz `systemd/README.md`); staged kity w `deploy/`, `deploy_staging/`, `docs/deploy/`. **Wdrożone = `/etc/systemd/system/`** — zawsze `systemctl cat` (bywają kopie i symlinki).
 8. **`telegram/` to szablony, nie bot.** Bot = `telegram_approver.py` w korzeniu.
 9. **Numery linii dryfują** (repo mutuje na żywo, auto-push co godzinę cronem). Zawsze **grepuj symbol**, nie ufaj `plik:linia` z docs/pamięci.
 
