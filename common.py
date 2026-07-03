@@ -422,6 +422,7 @@ ENABLE_COORD_SENTINEL_INGEST_GUARD = False  # L2.1 2026-07-01 (walidator coords 
 ENABLE_AVAILABLE_FROM_SINGLE_SOURCE = False  # L4 2026-07-02 (jedno źródło available_from=max(now,shift_start) w courier_resolver; konsumenci #1/#3/#5/chokepoint dziedziczą; OFF=stare ścieżki bajt-w-bajt; KANON=flags.json)
 ENABLE_PLAN_RECHECK_GATES = False  # L3 2026-07-02 (bramka ZAPISU regenu plan_recheck: compare-and-keep R6 carried>35 — nie nadpisuj dobrego planu gorszym-sekwencyjnie; OFF=zapis regenu bajt-w-bajt; KANON=flags.json)
 ENABLE_COURIER_PLANS_GC = False  # L3 2026-07-02 (GC courier_plans: terminal-stop prune + zombie by age/no-active przez plan_manager API pod lockiem; PLAN_GC_DRY_RUN default True; OFF=brak GC jak dziś; KANON=flags.json)
+ENABLE_SPLIT_LAYER_GUARD = False  # L7.3 2026-07-03 (R2 ROOT-9, INV-LAYER-1/2): OBSERWACYJNY strażnik warstw — re-assert _assert_feasibility_first na KAŻDYM EMIT (feasible-path) + garda zapisu feasibility_verdict poza L5 (setter). OFF=bajt-parytet (zero logu/jsonl, decyzja nietknięta); ON=tylko log WARNING + dispatch_state/split_layer_guard.jsonl. NIE-decyzyjna (poza ETAP4). KANON=flags.json
 
 # === D.3 fala A fallbacki (2026-07-02): stałe dla 15 flag route/kanon =========
 # ZMIGROWANE z env-frozen (plan_recheck.py `os.environ.get(...,"0")=="1"`) do
