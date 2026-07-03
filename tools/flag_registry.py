@@ -45,13 +45,17 @@ ENGINE_UNITS = (
 )
 
 _DEF_RE = re.compile(
-    r'^(?P<name>[A-Z][A-Z0-9_]*)\s*=\s*(?:float\(|int\()?_os\.environ\.get\(\s*'
+    r'^(?P<name>[A-Z][A-Z0-9_]*)\s*=\s*(?:float\(|int\()?(?:_os|os)\.environ\.get\(\s*'
     r'"(?P<env>[A-Z0-9_]+)"\s*,\s*"(?P<default>[^"]*)"\s*\)\s*\)?'
     r'(?P<cmp>\s*==\s*"1")?', re.M)
 
 
 def scan_common(path: str = COMMON_PY) -> dict:
-    """Definicje env-overridable z common.py: {nazwa: {default, bool}}."""
+    """Definicje env-overridable z common.py: {nazwa: {default, bool}}.
+    Łapie `(_os|os).environ.get("NAME", "default")` z opcjonalnym `int(`/`float(`
+    i sufiksem `== "1"` (boolowska). NIE łapie flag definiowanych LITERAŁEM
+    (`ENABLE_X = False`, `CAP = 6`) — te uzupełnia scan_literal_defaults dla
+    ZNANYCH flag decyzyjnych/numerycznych (inaczej wciągnęlibyśmy setki stałych)."""
     out = {}
     src = open(path, encoding="utf-8").read()
     for m in _DEF_RE.finditer(src):
@@ -65,16 +69,75 @@ def scan_common(path: str = COMMON_PY) -> dict:
     return out
 
 
+_LITERAL_DEF_RE = r"^{name}\s*=\s*(True|False|-?\d+(?:\.\d+)?)\s*(?:#.*)?$"
+
+
+def scan_literal_defaults(names, path: str = COMMON_PY) -> dict:
+    """Domyślne wartości flag definiowanych LITERAŁEM top-level w common.py
+    (`ENABLE_O2_CAPZ_RESEQ = False`, `AUTO_ASSIGN_MAX_PER_HOUR = 6`). Ograniczone
+    do PODANYCH nazw (znane flagi decyzyjne/numeryczne z ETAP4) — nie skanuje
+    dowolnych stałych. {nazwa: {default, bool}} jak scan_common."""
+    src = open(path, encoding="utf-8").read()
+    out = {}
+    for n in names:
+        m = re.search(_LITERAL_DEF_RE.format(name=re.escape(n)), src, re.M)
+        if not m:
+            continue
+        raw = m.group(1)
+        if raw in ("True", "False"):
+            out[n] = {"default": raw == "True", "bool": True}
+        else:
+            out[n] = {"default": float(raw) if "." in raw else int(raw), "bool": False}
+    return out
+
+
+def _extract_paren_body(src: str, varname: str) -> str:
+    """Zawartość krotki `varname = ( … )` przez BALANS nawiasów, ignorując
+    komentarze `#…` i literały stringów. Naiwne `\\((.*?)\\)` ucinało krotkę na
+    pierwszym `)` w komentarzu (ETAP4 ma dziesiątki komentarzy z `)`), gubiąc
+    79/102 flagi decyzyjne — patrz test_scan_decision_lists_balanced."""
+    m = re.search(varname + r"\s*=\s*\(", src)
+    if not m:
+        return ""
+    i = m.end()  # tuż po '('
+    depth = 1
+    n = len(src)
+    quote = None  # '\'' albo '"' gdy w stringu
+    start = i
+    while i < n and depth > 0:
+        c = src[i]
+        if quote:
+            if c == "\\":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+        elif c == "#":  # komentarz do końca linii
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        elif c in "'\"":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return src[start:i]
+        i += 1
+    return src[start:i]
+
+
 def scan_decision_lists(path: str = COMMON_PY) -> tuple:
     """ETAP4_DECISION_FLAGS + FLAGS_JSON_NUMERIC_OVERRIDES bez importu modułu
     (tool ma działać też na drzewie bez venv silnika)."""
     src = open(path, encoding="utf-8").read()
 
     def _tuple_items(varname):
-        m = re.search(varname + r"\s*=\s*\((.*?)\)", src, re.S)
-        if not m:
-            return ()
-        return tuple(re.findall(r'"([A-Z0-9_]+)"', m.group(1)))
+        body = _extract_paren_body(src, varname)
+        body = re.sub(r"#[^\n]*", "", body)  # usuń komentarze (bywa `== "1"`, prose)
+        # Nazwy flag: UPPER, zaczynają się literą/`_` (nie cyfrą — filtruje `"1"`).
+        return tuple(re.findall(r'"([A-Z_][A-Z0-9_]*)"', body))
 
     return (_tuple_items("ETAP4_DECISION_FLAGS")
             + _tuple_items("_FINGERPRINT_EXTRA_FLAGS"),
@@ -105,7 +168,10 @@ def scan_unit_env(unit: str) -> dict:
     return env
 
 
-def load_flags_json(path: str = FLAGS_JSON) -> dict:
+def load_flags_json(path: str | None = None) -> dict:
+    # path=None → czyta MODUŁOWY FLAGS_JSON PRZY WYWOŁANIU (nie default z def-time),
+    # by monkeypatch FLAGS_JSON działał w testach (pułapka domyślnego argumentu).
+    path = path or FLAGS_JSON
     try:
         return {k: v for k, v in json.load(open(path)).items()
                 if not k.startswith("_comment")}
@@ -124,6 +190,55 @@ INTENTIONAL_PER_PROCESS = {
     "ENABLE_LGBM_SHADOW", "ENABLE_LGBM_METRICS_READ", "ENABLE_PENDING_POOL",
     "ENABLE_OBJ_REPLAY_CAPTURE", "ENABLE_LOADAWARE_SELECTION_SHADOW",
     "PYTHONPATH",  # infra, nie flaga
+}
+
+# ── KURATOROWANA WARSTWA (L0.1, 2026-07-02) ────────────────────────────────
+# Base-metadane (źródło/default/decyzyjność) auto-skanuje build_registry; ta
+# warstwa dokłada to, czego kod nie wywnioskuje: ZASIĘG flagi + werdykt rozjazdu.
+#
+# SERVICE_SCOPED = flaga env-only, której KONSUMUJĄCA GAŁĄŹ KODU biegnie w
+# DOKŁADNIE JEDNYM serwisie silnika → env ustawiony tylko w tym unicie jest
+# POPRAWNY (nie rozjazd). owner = serwis JEDYNY wykonujący gałąź; „why" =
+# konsument zweryfikowany grepem 2026-07-02. Zmiana zasięgu (nowy konsument w
+# innym serwisie) UNIEWAŻNIA wpis — checker to wyłapie (patrz completeness).
+SERVICE_SCOPED = {
+    "CZASOWKA_MAX_EMIT_PER_TICK": (
+        "dispatch-czasowka.service",
+        "cap emisji czasówek/tick; czytany modułowo w czasowka_scheduler.py:54, "
+        "gałąź emisji biegnie WYŁĄCZNIE w ticku czasówki (żaden inny serwis nie "
+        "emituje). Tuning operacyjny, nie decyzyjny — hot-reload zbędny."),
+    "CZASOWKA_RETROACTIVE_HOURS": (
+        "dispatch-czasowka.service",
+        "okno retroaktywne triggera (czasowka_scheduler.py:53); tylko tick czasówki."),
+    "CZASOWKA_TELEGRAM_DRYRUN": (
+        "dispatch-czasowka.service",
+        "dry-run wysyłki czasówki (czasowka_scheduler.py:52, SAFE default ON=1); "
+        "tylko tick czasówki wysyła."),
+    "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION": (
+        "dispatch-plan-recheck.service",
+        "retiming committed w ticku plan-recheck (plan_recheck.py:786, moduł-level "
+        ":393); konsument decyzyjny biegnie w plan-recheck. UWAGA: roadmapa L0.1 "
+        "rekomenduje migrację do flags.json (hot-reload cross-service) — poza "
+        "partycją (common.py). Dziś NIE jest żywym rozjazdem (single-service exec)."),
+    "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH": (
+        "dispatch-plan-recheck.service",
+        "live-ETA refresh w ticku plan-recheck (plan_recheck.py:2245, moduł-level "
+        ":86); jw. — roadmapa L0.1 rekomenduje migrację, dziś single-service exec."),
+}
+
+# KNOWN_DIVERGENCES = rozjazdy PRAWDZIWE, cross-service, OTWARTE — wymagają
+# naprawy POZA tą partycją (common.py + flags.json + ACK). Śledzone jawnie,
+# NIE wyciszone (liczą się do ROZJAZDY). Wpis = diagnoza + plan domknięcia.
+KNOWN_DIVERGENCES = {
+    "USE_V2_PARSER": (
+        "GENUINE cross-service: czytany MODUŁOWO w panel_client.py:93, a "
+        "panel_client importują shadow/czasowka/state_machine/panel-watcher; "
+        "parse_panel_html (panel_client.py:425) wybiera v1/v2 wg tej flagi. "
+        "env=1 tylko w panel-watcher → inne serwisy parsują v1 gdy same wołają "
+        "parser. Domknięcie = migracja do ETAP4 hot-reload (common.py + flags.json, "
+        "POZA partycją L0.1) + ACK Adriana (parser = behavior-affecting). Do "
+        "weryfikacji: czy shadow/czasowka faktycznie re-parsują HTML czy tylko "
+        "czytają orders_state (jeśli to drugie — efektywnie martwe poza watcher)."),
 }
 
 
@@ -153,6 +268,13 @@ def scan_code_tokens(roots=(DISPATCH_V2, os.path.dirname(DISPATCH_V2))) -> set:
 def build_registry():
     defs = scan_common()
     decision, numeric = scan_decision_lists()
+    # Uzupełnij defaulty flag decyzyjnych/numerycznych definiowanych LITERAŁEM
+    # (scan_common łapie tylko env-get). scan_common wygrywa gdy oba (env-overridable
+    # to pełniejszy opis). Po tym KAŻDA flaga ETAP4 ma definicję → completeness=0
+    # jest DOWODEM pełnego skanu, nie tautologią (names NIE seedowane listą ETAP4).
+    lit = scan_literal_defaults([n for n in tuple(decision) + tuple(numeric)
+                                 if n not in defs])
+    defs = {**lit, **defs}
     fjson = load_flags_json()
     unit_env = {u: scan_unit_env(u) for u in ENGINE_UNITS}
     code_tokens = scan_code_tokens()
@@ -182,39 +304,118 @@ def build_registry():
                      "env": {u: f"{v} ({f})" for u, (v, f) in envs.items()},
                      "source": source, "effective": effective})
 
-        # Rozjazdy
+        # Rozjazdy — sklasyfikowane (L0.1): każdy z polem `klass`, `flag`,
+        # `verdict` ∈ {open, accepted-scoped, known-open, intentional}.
         intentional = n in INTENTIONAL_PER_PROCESS
-        if envs and not is_decision and set(envs) != set(ENGINE_UNITS) and not intentional:
+        scoped = n in SERVICE_SCOPED
+        known = n in KNOWN_DIVERGENCES
+        if envs and not is_decision and set(envs) != set(ENGINE_UNITS):
             only = ", ".join(sorted(envs))
-            issues.append(f"⚠ {n}: env-frozen tylko w [{only}] — pozostałe unity "
-                          f"silnika liczą defaultem ({(d or {}).get('default')!r}). "
-                          f"Zweryfikuj zamiar: domenowe per-proces OK (inwentarz "
-                          f"ETAP4), flaga SILNIKA = rozjazd klasy Z-04.")
+            base = (f"{n}: env-frozen tylko w [{only}] — pozostałe unity silnika "
+                    f"liczą defaultem ({(d or {}).get('default')!r})")
+            if intentional:
+                verdict = "intentional"
+                msg = f"✅ {base}. INTENCJONALNE per-proces (INTENTIONAL_PER_PROCESS)."
+            elif scoped:
+                verdict = "accepted-scoped"
+                owner, why = SERVICE_SCOPED[n]
+                msg = f"✅ {base}. SERVICE-SCOPED owner={owner}: {why}"
+            elif known:
+                verdict = "known-open"
+                msg = f"⛔ {base}. ZNANY OTWARTY: {KNOWN_DIVERGENCES[n]}"
+            else:
+                verdict = "open"
+                msg = (f"⚠ {base}. NIESKLASYFIKOWANY — dopisz do SERVICE_SCOPED "
+                       f"(jeśli konsument w 1 serwisie, z ownerem+why) albo "
+                       f"KNOWN_DIVERGENCES (jeśli cross-service, z planem+ACK). "
+                       f"flaga SILNIKA cross-service = rozjazd klasy Z-04.")
+            issues.append({"level": msg[0], "klass": "env-frozen-subset",
+                           "flag": n, "verdict": verdict, "msg": msg})
         if envs and is_decision and in_fjson:
-            issues.append(f"⚠ {n}: klucz flags.json PRZYKRYWA env w "
-                          f"[{', '.join(sorted(envs))}] — env martwy, usunąć z unitu.")
+            msg = (f"⚠ {n}: klucz flags.json PRZYKRYWA env w "
+                   f"[{', '.join(sorted(envs))}] — env martwy (decyzyjna=hot-reload), "
+                   f"usunąć z unitu.")
+            issues.append({"level": "⚠", "klass": "json-overrides-env",
+                           "flag": n, "verdict": "open", "msg": msg})
         if (in_fjson and n not in code_tokens
                 and not any(p.match(n) for p in DYNAMIC_KEY_FAMILIES)):
-            issues.append(f"⚠ {n}: SIEROTA — klucz w flags.json bez ŻADNEGO "
-                          f"wystąpienia w kodzie *.py (literówka albo martwy klucz; "
-                          f"klucze dynamiczne f-stringiem sprawdź ręcznie).")
-        if envs and not intentional:
+            msg = (f"⚠ {n}: SIEROTA — klucz w flags.json bez ŻADNEGO wystąpienia w "
+                   f"kodzie *.py (literówka albo martwy klucz; klucze dynamiczne "
+                   f"f-stringiem sprawdź ręcznie).")
+            issues.append({"level": "⚠", "klass": "orphan",
+                           "flag": n, "verdict": "open", "msg": msg})
+        if envs and not intentional and not scoped:
             uniq = {v for v, _f in envs.values()}
             if len(uniq) > 1:
-                issues.append(f"⛔ {n}: RÓŻNE wartości env między unitami: "
-                              + ", ".join(f"{u}={v}" for u, (v, _f) in sorted(envs.items())))
+                msg = (f"⛔ {n}: RÓŻNE wartości env między unitami: "
+                       + ", ".join(f"{u}={v}" for u, (v, _f) in sorted(envs.items())))
+                issues.append({"level": "⛔", "klass": "value-mismatch",
+                               "flag": n, "verdict": "open", "msg": msg})
     return rows, issues
 
 
+def unclassified_divergences(issues):
+    """Rozjazdy env-frozen-subset BEZ werdyktu (nie w SERVICE_SCOPED /
+    KNOWN_DIVERGENCES / INTENTIONAL_PER_PROCESS). Cel completeness = 0."""
+    return [i for i in issues
+            if i["klass"] == "env-frozen-subset" and i["verdict"] == "open"]
+
+
+def open_issues(issues):
+    """Rozjazdy liczące się do metryki #4 (ROZJAZDY): wszystko poza
+    accepted-scoped/intentional. known-open ZOSTAJE widoczne (śledzone)."""
+    return [i for i in issues if i["verdict"] in ("open", "known-open")]
+
+
+def accepted_issues(issues):
+    return [i for i in issues if i["verdict"] in ("accepted-scoped", "intentional")]
+
+
+def completeness_gaps(rows):
+    """Braki pokrycia rejestru (sanity anty-regresja skanera): każdy klucz
+    flags.json (nie-dynamiczny, nie-_comment) i każda flaga ETAP4 MUSZĄ mieć
+    wiersz w rejestrze. Zwraca listę braków (pusta = pełne pokrycie)."""
+    fjson = load_flags_json()
+    decision, numeric = scan_decision_lists()
+    covered = {r["flag"] for r in rows}
+    gaps = []
+    for k in fjson:
+        if any(p.match(k) for p in DYNAMIC_KEY_FAMILIES):
+            continue
+        if k not in covered:
+            gaps.append(("flags.json", k))
+    for k in tuple(decision) + tuple(numeric):
+        if k not in covered:
+            gaps.append(("ETAP4", k))
+    return gaps
+
+
+def _msg(i):
+    """Wstecznie kompatybilne: issue może być dict (L0.1) albo str (legacy)."""
+    return i["msg"] if isinstance(i, dict) else i
+
+
 def render(rows, issues, show_all=False):
+    opn = open_issues(issues)
+    acc = accepted_issues(issues)
+    gaps = completeness_gaps(rows)
     lines = []
     lines.append(f"FLAG REGISTRY — {len(rows)} flag "
                  f"(decyzyjne: {sum(1 for r in rows if r['decision'])}, "
                  f"w flags.json: {sum(1 for r in rows if r['flags_json'] is not None)}, "
                  f"env-frozen gdziekolwiek: {sum(1 for r in rows if r['env'])})")
     lines.append("")
-    lines.append(f"ROZJAZDY ({len(issues)}):")
-    lines.extend("  " + i for i in issues) if issues else lines.append("  (brak)")
+    # UWAGA: metryka #4 (entropy_dashboard) parsuje `ROZJAZDY (\d+)` = OTWARTE
+    # (open + known-open). accepted-scoped/intentional NIE liczą się (poprawne).
+    lines.append(f"ROZJAZDY ({len(opn)}):")
+    lines.extend("  " + _msg(i) for i in opn) if opn else lines.append("  (brak)")
+    lines.append("")
+    lines.append(f"AKCEPTOWANE service-scoped / intentional ({len(acc)}):")
+    lines.extend("  " + _msg(i) for i in acc) if acc else lines.append("  (brak)")
+    lines.append("")
+    lines.append(f"BRAKI POKRYCIA rejestru ({len(gaps)}):")
+    lines.extend(f"  ⛔ {src}:{k} bez wiersza — regresja skanera?" for src, k in gaps) \
+        if gaps else lines.append("  (brak — pełne pokrycie flags.json + ETAP4)")
     if show_all:
         lines.append("")
         for r in rows:
@@ -225,11 +426,16 @@ def render(rows, issues, show_all=False):
 
 
 def render_md(rows, issues):
+    opn, acc = open_issues(issues), accepted_issues(issues)
     out = ["# Rejestr flag (F3) — wygenerowany tools/flag_registry.py", ""]
-    out.append(f"Flag: **{len(rows)}** · rozjazdy: **{len(issues)}**")
+    out.append(f"Flag: **{len(rows)}** · rozjazdy OTWARTE: **{len(opn)}** · "
+               f"akceptowane service-scoped: **{len(acc)}**")
     out.append("")
-    out.append("## Rozjazdy")
-    out.extend(f"- {i}" for i in issues) if issues else out.append("- brak")
+    out.append("## Rozjazdy OTWARTE")
+    out.extend(f"- {_msg(i)}" for i in opn) if opn else out.append("- brak")
+    out.append("")
+    out.append("## Akceptowane service-scoped / intentional")
+    out.extend(f"- {_msg(i)}" for i in acc) if acc else out.append("- brak")
     out.append("")
     out.append("## Pełny inwentarz")
     out.append("| flaga | efektywna | źródło | default | flags.json | env |")
