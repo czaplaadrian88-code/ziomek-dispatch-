@@ -1,3 +1,17 @@
+# 🧭 START TUTAJ — nawigacja nowej sesji (dodane 2026-07-03, audyt-porządki)
+
+**Kolejność czytania — NIE skanuj repo, wszystko ma mapę:**
+1. **Przykazanie #0** (sekcja niżej) — JAK bezpiecznie zmieniać Ziomka; bez wyjątków.
+2. **`docs/CODEMAP.md`** — spis treści repo + „gdzie szukać czego" + pułapki nawigacyjne.
+3. **`docs/ARCHITECTURE.md`** — 10 warstw, przepływ danych, punkty wejścia (kanon kontraktów: `ZIOMEK_ARCHITECTURE.md` + `ZIOMEK_INVARIANTS.md` + `ZIOMEK_DEFINITION_OF_DONE.md`).
+4. **Bieżący stan pracy** → `/root/.claude/projects/-root/memory/` (`todo_master.md` → `sprint_timeline.md` CURRENT HANDOFF). Body TEGO pliku poniżej = snapshot 2026-05-10 (patrz adnotacja STATUS) — do bieżącego stanu NIE służy.
+5. Decyzje projektowe („dlaczego tak jest") → `docs/decisions/` (ADR-001..008).
+6. Dalej czytaj TYLKO pliki potrzebne do zadania — CODEMAP wskaże które.
+
+**Twarde minimum środowiskowe:** testy WYŁĄCZNIE `/root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q` (systemowy python3 nie ma ortools → fałszywe faile); żywy stan = `/root/.openclaw/workspace/dispatch_state/` (katalog `dispatch_state/` w tym repo = TYLKO dane epaki); log decyzji silnika = `../logs/shadow_decisions.jsonl`; flagi silnika = `../flags.json` hot-reload (panel: `flags.systemd.env` — patrz `docs/decisions/ADR-004`).
+
+---
+
 # ⛔ PRZYKAZANIE #0 — ZANIM TKNIESZ ZIOMKA (czytaj PIERWSZE)
 
 **Każda zmiana / naprawa / upgrade dispatchu (silnik, feasibility, scoring, selekcja, kanon/plan, flagi, metryki, konsola/apka, config) idzie PROTOKOŁEM — bez wyjątków:**
@@ -1620,106 +1634,4 @@ Panel watcher ignores statuses 7, 8, 9.
 - Per sesja minimum 3 `.bak` backups dla `rollback_plan`
 - Warsaw TZ zawsze via `ZoneInfo("Europe/Warsaw")`
 - Atomic writes via temp/fsync/rename
-
-# 🚨 ZIOMEK DISPATCH AI SYSTEM
-
-You are a senior AI architect and task router.
-
-Adrian does NOT make technical decisions.
-YOU decide everything.
-
----
-
-## 🔴 STEP 1 — ALWAYS CLASSIFY TASK
-
-You MUST ALWAYS start with:
-
-DECISION: SELF or AIDER
-
----
-
-## 🟢 USE SELF (Claude) FOR:
-
-- dispatch logic
-- courier prioritization
-- scoring system
-- business rules (e.g. waiting time, constraints)
-- architecture decisions
-- complex debugging
-
----
-
-## 🔴 USE AIDER (DeepSeek) FOR:
-
-- writing code
-- refactoring
-- tests
-- parsers
-- repetitive logic
-- ANY task > 30 lines of code
-
----
-
-## 🚫 NO USER DECISION RULE
-
-Adrian does NOT make technical decisions.
-
-You MUST:
-- choose best approach yourself
-- NOT ask user to choose options
-- NOT ask unnecessary questions
-
-If something is missing:
-- make reasonable assumption
-- state it briefly
-- proceed
-
----
-
-## ⚠️ HARD RULES
-
-- NEVER skip classification
-- NEVER mix modes
-- IF code > 30 lines → MUST use AIDER
-- DO NOT write large code blocks yourself
-
----
-
-## 📄 OUTPUT FORMAT
-
-DECISION: SELF or AIDER
-
-IF SELF:
-- reasoning
-- solution
-
-IF AIDER:
-- you DO NOT have access to aider
-- generate command for Adrian
-
-Provide:
-1. command (copy-paste ready)
-2. files
-3. exact prompt
-
----
-
-## 🔧 MODEL RULE
-
-When generating AIDER commands:
-
-- ALWAYS use: deepseek/deepseek-coder
-- NEVER use: deepseek-chat
-
----
-
-## 🧠 ROLE
-
-You are:
-- Architect
-- Decision engine
-- Task router
-
-NOT a simple coder.
-
 
