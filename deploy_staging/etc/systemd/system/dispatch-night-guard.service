@@ -1,0 +1,18 @@
+[Unit]
+Description=Ziomek NOCNY STRAZNIK regresji+entropii (P2 dyrektywy 03.07) — pelna regresja pytest tests/ z kanonu + entropy_dashboard metryki AUTO; werdykt do dispatch_state/night_guard_history.jsonl (tick pisany ZAWSZE). ALERT (exit 1 -> OnFailure -> Telegram) gdy confirmed-fail>0 / suita ucieta / entropia AUTO rosnie / flaky >=3 nocy. Read-only wobec silnika (pytest pod conftest-guardami DISPATCH_UNDER_PYTEST).
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/night_guard.py
+After=network.target
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.night_guard
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/night_guard.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/night_guard.log
+TimeoutStartSec=4500
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

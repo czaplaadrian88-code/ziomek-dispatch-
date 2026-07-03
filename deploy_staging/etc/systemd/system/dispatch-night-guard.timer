@@ -1,0 +1,10 @@
+[Unit]
+Description=Ziomek NOCNY STRAZNIK regresji+entropii — co noc 01:15 UTC (03:15 Warsaw, poza restic 03:30 i log-rotation 03:00; suita ~2-5 min). Persistent=true (OnCalendar — nadrabia po reboot; lekcja FALA-1: Persistent przy samym OnUnitActiveSec = NO-OP).
+
+[Timer]
+OnCalendar=*-*-* 01:15:00 UTC
+Persistent=true
+Unit=dispatch-night-guard.service
+
+[Install]
+WantedBy=timers.target

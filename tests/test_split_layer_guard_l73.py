@@ -181,10 +181,24 @@ def test_emit_mutation_probe(monkeypatch):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def test_flag_gate_reflects_constant(monkeypatch):
-    """`_split_layer_guard_on()` odzwierciedla stałą-fallback gdy klucz spoza flags.json."""
+    """`_split_layer_guard_on()` odzwierciedla stałą-fallback gdy klucza NIE MA w flags.json.
+
+    Hermetycznie: brak klucza symulowany przez C.flag→default, żeby test nie zależał
+    od żywego flags.json (od flipu 03.07 klucz tam JEST=true i przebijałby stałą)."""
+    monkeypatch.setattr(C, "flag", lambda name, default=None: default)
     monkeypatch.setattr(C, "ENABLE_SPLIT_LAYER_GUARD", False, raising=False)
     assert DP._split_layer_guard_on() is False
     monkeypatch.setattr(C, "ENABLE_SPLIT_LAYER_GUARD", True, raising=False)
+    assert DP._split_layer_guard_on() is True
+
+
+def test_flag_gate_flags_json_wins_over_constant(monkeypatch):
+    """KANON=flags.json: klucz OBECNY w flags.json przebija stałą-fallback
+    (dokładnie ten mechanizm zrobił flip L7.3 ON bez zmiany kodu)."""
+    monkeypatch.setattr(
+        C, "flag",
+        lambda name, default=None: True if name == "ENABLE_SPLIT_LAYER_GUARD" else default)
+    monkeypatch.setattr(C, "ENABLE_SPLIT_LAYER_GUARD", False, raising=False)
     assert DP._split_layer_guard_on() is True
 
 
