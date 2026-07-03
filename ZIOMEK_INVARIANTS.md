@@ -1,6 +1,6 @@
 # ZIOMEK — INVARIANTS (co MUSI być zawsze prawdą + strażnik, który to wymusza)
 
-> **STATUS: DRAFT do przeglądu Adriana (2026-07-01).** Kręgosłup egzekwowania (Filar F-4).
+> **STATUS: ZATWIERDZONY przez Adriana 01.07.2026** (dowód: CLAUDE.md „Kanon architektury" + MEMORY; nagłówek zaktualizowany 03.07.2026, audyt N3). Kręgosłup egzekwowania (Filar F-4).
 > **Zasada:** każdy inwariant = zdanie + strażnik, który się ŁAMIE przy złamaniu. Inwariant bez strażnika = życzenie.
 > Zrekoncyliowane z oracle Fazy 1 (`FAZA1_03_rejestr_przyrzadow.md`). Para: [[ZIOMEK_ARCHITECTURE.md]] (8 kontraktów).
 

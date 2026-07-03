@@ -586,8 +586,8 @@ STEP 5 (DECISION + margines):
 **Grupa "Grupa ziomka"** — chat_id `-5149910559`, 4 członków. Bot service: `dispatch-telegram`.
 
 **Bots:**
-- **Dispatch bot:** @NadajeszBot (token `8571778075:AAE3lidXU9ijX2FNPpJRxd5DyfIu6FTwYp0`, chat ID `8765130486`)
-- **Control bot:** @GastroBot (token `8770101598:AAF-x2srerA7ES-fzlehd7SY4kn5gUUcvsQ`) — handles `/gastrostop`, `/gastrostart`, `/dispatstat`
+- **Dispatch bot:** @NadajeszBot (token `[TOKEN-ZREDAGOWANY-2026-07-03: zywy token w .secrets/telegram.env; rotacja=AUDYT2-S5/WD-1]`, chat ID `8765130486`)
+- **Control bot:** @GastroBot (token `[TOKEN-ZREDAGOWANY-2026-07-03: zywy token w .secrets/telegram.env; rotacja=AUDYT2-S5/WD-1]`) — handles `/gastrostop`, `/gastrostart`, `/dispatstat`
 
 **Format obecny (V3.19i 2-part, LIVE od 30.04):**
 - Part 1: TRASA + score + reason summary
@@ -1254,8 +1254,8 @@ http://localhost:8888/health/parser
 | Co | Wartość |
 |---|---|
 | **Telegram grupa "Grupa ziomka"** | chat_id `-5149910559` |
-| **Dispatch bot @NadajeszBot** | token `8571778075:AAE3lidXU9ijX2FNPpJRxd5DyfIu6FTwYp0`, chat ID `8765130486` |
-| **Control bot @GastroBot** | token `8770101598:AAF-x2srerA7ES-fzlehd7SY4kn5gUUcvsQ` |
+| **Dispatch bot @NadajeszBot** | token `[TOKEN-ZREDAGOWANY-2026-07-03: zywy token w .secrets/telegram.env; rotacja=AUDYT2-S5/WD-1]`, chat ID `8765130486` |
+| **Control bot @GastroBot** | token `[TOKEN-ZREDAGOWANY-2026-07-03: zywy token w .secrets/telegram.env; rotacja=AUDYT2-S5/WD-1]` |
 | **Schedule Sheet ID** | `1Z5kSGUB0Tfl1TiUs5ho-ecMYJVz0-VuUctoq781OSK8`, gid `533254920` |
 | **APK URL** | `https://gps.nadajesz.pl/apk/courier.apk` |
 | **Admin panel** | `https://gps.nadajesz.pl/panel` (admin/nadajesz2026) |

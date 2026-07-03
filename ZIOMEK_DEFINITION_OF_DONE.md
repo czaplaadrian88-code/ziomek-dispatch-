@@ -1,13 +1,13 @@
 # ZIOMEK — DEFINITION OF DONE (jeden ekran)
 
-> **STATUS: DRAFT (2026-07-01).** Skrót #0 do sprawdzenia na KOŃCU każdej zmiany. Pełny protokół: `memory/ziomek-change-protocol.md` (ETAP 0→7, C1-C11). Kontrakty: [[ZIOMEK_ARCHITECTURE.md]] · inwarianty: [[ZIOMEK_INVARIANTS.md]].
+> **STATUS: ZATWIERDZONY 01.07.2026** (nagłówek zaktualizowany 03.07.2026, audyt N3). Skrót #0 do sprawdzenia na KOŃCU każdej zmiany. Pełny protokół: `memory/ziomek-change-protocol.md` (ETAP 0→7, C1-C11). Kontrakty: [[ZIOMEK_ARCHITECTURE.md]] · inwarianty: [[ZIOMEK_INVARIANTS.md]].
 
 ## ✅ 7 ptaszków — zmiana jest UKOŃCZONA gdy WSZYSTKIE zielone
 1. **U ŹRÓDŁA, nie na krawędzi** — fix w właściwej z 10 warstw; „to tylko display" UDOWODNIONE grepem każdego konsumenta (scoring? feasibility? committed? inny solver?).
 2. **WSZYSTKIE bliźniaki RAZEM** — sprawdziłeś rejestr bliźniaków (ARCHITECTURE §4); każda kopia dotknięta lub N-D+powód. Nic „na wszelki wypadek".
 3. **HARD ≥ SOFT** — SOFT nie osłabia HARD; P0 feasibility przed scoringiem; świadome inwersje P-1..P-7 nietknięte bez ACK.
 4. **Flaga ON≠OFF (test)** + metryka w `shadow_decisions.jsonl` (`grep -c` > 0) + parytet bliźniaków (test) + checkery flag/inwarianty zielone.
-5. **PEŁNA regresja Ziomka** (`pytest tests/` vs baseline **3611 passed / 2 failed**) + e2e przez WSZYSTKIE dotknięte warstwy (nie tylko unit klastra).
+5. **PEŁNA regresja Ziomka** (`pytest tests/` z venv `dispatch`, vs BIEŻĄCY baseline — 2026-07-03: **4109 passed / 0 failed**; liczba rośnie z nowymi testami, porównuj z ostatnim zielonym biegiem, nie z tym nagłówkiem) + e2e przez WSZYSTKIE dotknięte warstwy (nie tylko unit klastra).
 6. **DOWÓD POZYTYWNEGO wpływu** — replay ON↔OFF, metryka docelowa MIERZALNIE lepsza (≥2% netto, regresja rozliczona); refaktor bez zmiany zachowania → dowód bajt-identyczności. + okno 2 dni.
 7. **ROLLBACK gotowy** (flaga=false / .bak / git revert) PRZED ryzykiem.
 

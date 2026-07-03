@@ -1,6 +1,6 @@
 # ZIOMEK — ARCHITEKTURA (kanon „czym Ziomek JEST i jak MA być budowany")
 
-> **STATUS: DRAFT do przeglądu Adriana (2026-07-01).** Dokument KONSTRUKTYWNY obok Przykazania #0.
+> **STATUS: ZATWIERDZONY przez Adriana 01.07.2026** (dowód: CLAUDE.md „Kanon architektury… zatwierdzony 01.07" + MEMORY; nagłówek DRAFT→ZATWIERDZONY zaktualizowany 03.07.2026 w audycie-porządkach, niezgodność N3). Dokument KONSTRUKTYWNY obok Przykazania #0.
 > #0 mówi „jak bezpiecznie ZMIENIAĆ" (defensywnie). TEN dokument mówi „czym Ziomek JEST i do czego dąży" (mapa).
 > Źródła: audyt spójności Fazy 1 (`eod_drafts/2026-06-30/FAZA1_00..06`) — READ dla dowodów; tu = promocja do kanonu.
 > Para: [[ZIOMEK_INVARIANTS.md]] (co MUSI być zawsze prawdą + strażnicy) · [[ZIOMEK_DEFINITION_OF_DONE.md]] (1 ekran).
