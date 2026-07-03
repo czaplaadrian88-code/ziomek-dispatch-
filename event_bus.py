@@ -75,8 +75,8 @@ BROADCAST_EVENT_TYPES = {
 # AUDIT_EVENT_TYPES — typy zapisywane do osobnej tabeli audit_log (append-only,
 # retention 90d). Stan persistowany przez state_machine.update_from_event
 # wywoływany inline z call site (dual-write pattern). NIKT nie konsumuje queue-style.
-# Czytelnicy: learning_analyzer, parser_health_endpoint, r04_evaluator,
-# sprint2_analysis (queries WHERE event_type=...).
+# Czytelnicy: learning_analyzer, parser_health_endpoint, r04_evaluator
+# (queries WHERE event_type=...).
 AUDIT_EVENT_TYPES = {
     "COURIER_ASSIGNED",
     "CZAS_KURIERA_UPDATED",

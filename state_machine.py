@@ -21,6 +21,8 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import (
+    ENABLE_R_DECLARED_TRIPWIRE,
+    R_DECLARED_TRIPWIRE_TOLERANCE_MIN,
     coords_in_bialystok_bbox,
     decision_flag,
     flag,
@@ -29,6 +31,9 @@ from dispatch_v2.common import (
     now_utc,
     setup_logger,
 )
+from dispatch_v2.core.jsonl_appender import append_jsonl
+
+_WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
 
 class CorruptedTimestampError(ValueError):
@@ -451,6 +456,92 @@ def _sanitize_ingest_coords(order_id: str, data: dict) -> dict:
     return data
 
 
+# ── R-DECLARED tripwire (L7.1, audyt 2026-06-30 root R7-I-E) ──────────────────
+# Reguła R-DECLARED-TIME (HARD): `czas_kuriera >= czas_odbioru_timestamp` — dziś
+# NIE ma runtime-inwariantu (tylko komentarze; egzekucja pośrednia przez SOFT
+# R27 → zmiana R27 cicho ją łamie). JEDEN obserwacyjny tripwire w chokepoincie
+# zapisu (upsert_order = jedyny funnel commitowanego czas_kuriera do orders_state
+# — pokrywa NEW_ORDER / COURIER_ASSIGNED / CZAS_KURIERA_UPDATED / PICKUP_TIME_
+# UPDATED / resurrect / każdego przyszłego writera). Fail-loud LOG + append JSONL,
+# NIGDY reject/zmiana `merged` (always-propose). OFF = zero kodu ścieżki.
+#
+# Edge/throttle per-oid: ta sama para (czas_kuriera, czas_odbioru) logowana RAZ
+# (nie spamuje co tick/re-upsert). Zmiana którejkolwiek wartości = nowy stan
+# naruszenia = ponowny wpis. Pamięć throttle = module-level (proces długożyjący:
+# shadow/panel-watcher/plan-recheck); cap bezpieczeństwa vs nieograniczony wzrost.
+_R_DECLARED_LOGGED: dict = {}       # oid -> (ck_iso, pickup_iso) ostatnio zalogowane naruszenie
+_R_DECLARED_LOGGED_CAP = 10000      # audyt: żadnych nieograniczonych cache — reset przy przepełnieniu
+
+
+def _to_warsaw_axis(s: Optional[str]) -> Optional[datetime]:
+    """Parsuje ISO timestamp na WSPÓLNĄ oś porównania (aware, Europe/Warsaw).
+
+    `czas_kuriera_warsaw` = aware ISO z offsetem (+02:00). `pickup_at_warsaw`
+    (= czas_odbioru_timestamp) też aware Warsaw w praktyce, ale bywa naive w
+    historycznych/alternatywnych ścieżkach → naive traktujemy jako Warsaw-local
+    przez ZoneInfo (NIGDY fixed-offset — DST by złamał; ratchet TZ). Zwraca
+    aware datetime (porównanie instant-owe, poprawne pod DST) lub None."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_WARSAW_TZ)
+    return dt
+
+
+def _r_declared_tripwire(order_id: str, merged: dict, event: Optional[str]) -> None:
+    """L7.1: obserwacyjny strażnik R-DECLARED-TIME na zmergowanym rekordzie.
+
+    NIGDY nie modyfikuje `merged` ani nie wpływa na decyzję — tylko log + JSONL.
+    Flaga OFF = natychmiastowy return (bajt-parytet ścieżki decyzji). Defensywny:
+    żaden wyjątek stąd nie może przerwać zapisu stanu (opakowane w callerze)."""
+    if not flag("ENABLE_R_DECLARED_TRIPWIRE", ENABLE_R_DECLARED_TRIPWIRE):
+        return
+    ck = _to_warsaw_axis(merged.get("czas_kuriera_warsaw"))
+    pickup = _to_warsaw_axis(merged.get("pickup_at_warsaw"))
+    if ck is None or pickup is None:
+        return  # brak którejkolwiek deklaracji — nic do sprawdzenia
+    delta_min = (ck - pickup).total_seconds() / 60.0
+    # Reguła: czas_kuriera >= czas_odbioru. Naruszenie = ck wcześniejszy niż
+    # pickup poza tolerancją (default 0.0 = ścisła nierówność).
+    if delta_min >= -R_DECLARED_TRIPWIRE_TOLERANCE_MIN:
+        return
+    ck_iso = merged.get("czas_kuriera_warsaw")
+    pickup_iso = merged.get("pickup_at_warsaw")
+    sig = (ck_iso, pickup_iso)
+    if _R_DECLARED_LOGGED.get(order_id) == sig:
+        return  # to samo naruszenie już zalogowane — throttle (edge-triggered)
+    if len(_R_DECLARED_LOGGED) >= _R_DECLARED_LOGGED_CAP:
+        _R_DECLARED_LOGGED.clear()  # reset bezpieczeństwa (najwyżej pojedynczy re-log)
+    _R_DECLARED_LOGGED[order_id] = sig
+    record = {
+        "ts": now_iso(),
+        "oid": order_id,
+        "event": event,                       # źródło zapisu (NEW_ORDER / COURIER_ASSIGNED / ...)
+        "status": merged.get("status"),
+        "order_type": merged.get("order_type"),
+        "czas_kuriera_hhmm": merged.get("czas_kuriera_hhmm"),
+        "czas_kuriera_warsaw": ck_iso,
+        "czas_odbioru_timestamp": pickup_iso,  # = pickup_at_warsaw
+        "delta_min": round(delta_min, 2),
+        "courier_id": merged.get("courier_id"),
+    }
+    _log.warning(
+        f"R_DECLARED_VIOLATION oid={order_id} event={event} "
+        f"czas_kuriera={merged.get('czas_kuriera_hhmm')} ({ck_iso}) < "
+        f"czas_odbioru={pickup_iso} Δ={delta_min:+.1f}min "
+        f"(R-DECLARED-TIME HARD — obserwacyjny, decyzja NIEzmieniana)"
+    )
+    try:
+        log_path = os.path.join(os.path.dirname(_state_path()), "r_declared_tripwire.jsonl")
+        append_jsonl(log_path, record)
+    except Exception as _e:
+        _log.debug(f"R_DECLARED tripwire jsonl append skip oid={order_id}: {_e}")
+
+
 def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict:
     """Dodaje lub aktualizuje zlecenie. Zapisuje history entry.
     Zwraca zaktualizowany rekord."""
@@ -471,6 +562,13 @@ def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict
         state[order_id] = merged
         _guarded_write(path, state, old_count, op="upsert")
         _log.info(f"upsert {order_id} status={merged.get('status')} event={event}")
+        # L7.1 R-DECLARED tripwire — obserwacyjny, PO commicie zapisu; nigdy nie
+        # zmienia `merged` ani decyzji. Defensywnie: żaden błąd stąd nie wpływa
+        # na zwrot (already-persisted record).
+        try:
+            _r_declared_tripwire(order_id, merged, event)
+        except Exception as _tw_e:
+            _log.debug(f"R_DECLARED tripwire skip oid={order_id}: {_tw_e}")
         return merged
 
 

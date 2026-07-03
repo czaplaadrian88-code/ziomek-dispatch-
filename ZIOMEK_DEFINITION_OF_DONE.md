@@ -23,7 +23,7 @@ Zmiana, która ZWIĘKSZA którąkolwiek z 8 metryk entropii = **NIEUKOŃCZONA**,
 - nowy caller geometrii z `if coords:` (zamiast `_valid()`)
 - nową kalibrację luzującą HARD bez outcome-join
 - nowy plik multi-writer bez fcntl
-- nowy void-claim bez świeżego grepa master-ledgera
+- nowy void-claim bez świeżego grepa master-ledgera **z datą** — twierdzenie „martwe/VOID/nieużywane" wymaga timestamp + grep master-ledgera DZIŚ; **nie ufaj cudzemu (ani własnemu wczorajszemu) void-claimowi na słowo — re-grep PRZED użyciem** (stale void-claim = mina: post-shift-replay był VOID-claimed w audycie, a żył 457×; R7-I-G / INV-COH-7)
 
 ## 📏 Miernik (po każdej naprawie fundamentu)
 Re-run `tools/entropy_dashboard.py` → **liczby mają MALEĆ** (D4 strażników rośnie). Zmiana bez ruchu miernika w dobrą stronę = brak progresu.

@@ -1,0 +1,26 @@
+=== perf_budget_report — okno 2026-07-03T00:30 -> teraz (2026-07-03T09:05:00+00:00) ===
+# PERF BUDGET REPORT (READ-ONLY) — 2026-07-03T09:05:00+00:00
+okno 2026-07-03T00:30:00+00:00 .. 2026-07-03T09:05:00.038301+00:00 | min_n(segment)=20 | ogon=>1500 ms
+CAŁOŚĆ: n=19 | p50=568 p95=790 p99=1136 max=1136 | ogon>1500=0.0% | kwiecień p50=375 → dziś ×1.5
+
+## TREND DZIENNY (data Warsaw)
+  data            n    p50    p95    p99    max    ogon%
+  2026-07-03     19    568    790   1136   1136     0.0%
+
+## PER GODZINA (UTC; peak 09-12 UTC = 11-14 Warsaw)
+  hUTC      n    p50    p95    ogon%
+    5      1     72     72     0.0%
+    6      1   1136   1136     0.0%
+    7      7    551    642     0.0%
+    8      9    617    765     0.0%
+    9      1    790    790     0.0%
+
+## SEGMENTY SLO (Warsaw; limity = PERF_budget §5a)
+  peak 11-14+17-20   n=1     p50=790/700      p95=790/1500     (sufit 3000)
+  high-risk 14-17    n=0
+  off-peak           n=18    p50=568/450      p95=765/900      (sufit 2500)
+
+## WERDYKT SLO: 🟢 wszystkie segmenty w budżecie
+
+[JSON zapisany: /root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-07-03/perf_budget_report_0905utc.json]
+{"generated_at": "2026-07-03T09:05:00+00:00", "window": {"since": "2026-07-03T00:30:00+00:00", "until": "2026-07-03T09:05:00.038301+00:00"}, "min_n": 20, "tail_ms": 1500.0, "april_baseline_p50": 375.0, "overall": {"n": 19, "p50": 568.0, "p95": 789.6, "p99": 1136.3, "max": 1136.3, "tail_pct": 0.0}, "per_day": {"2026-07-03": {"n": 19, "p50": 568.0, "p95": 789.6, "p99": 1136.3, "max": 1136.3, "tail_pct": 0.0}}, "per_hour_utc": {"5": {"n": 1, "p50": 72.2, "p95": 72.2, "p99": 72.2, "max": 72.2, "tail_pct": 0.0}, "6": {"n": 1, "p50": 1136.3, "p95": 1136.3, "p99": 1136.3, "max": 1136.3, "tail_pct": 0.0}, "7": {"n": 7, "p50": 550.9, "p95": 642.2, "p99": 642.2, "max": 642.2, "tail_pct": 0.0}, "8": {"n": 9, "p50": 617.0, "p95": 765.0, "p99": 765.0, "max": 765.0, "tail_pct": 0.0}, "9": {"n": 1, "p50": 789.6, "p95": 789.6, "p99": 789.6, "max": 789.6, "tail_pct": 0.0}}, "per_segment": {"peak": {"n": 1, "p50": 789.6, "p95": 789.6, "p99": 789.6, "max": 789.6, "tail_pct": 0.0, "p50_limit": 700.0, "p95_limit": 1500.0, "ceiling": 3000.0, "p50_ok": true, "p95_ok": true}, "high_risk": {"n": 0, "p50": null, "p95": null, "p99": null, "max": null, "tail_pct": null, "p50_limit": 800.0, "p95_limit": 1800.0, "ceiling": 3000.0, "p50_ok": true, "p95_ok": true}, "offpeak": {"n": 18, "p50": 568.0, "p95": 765.0, "p99": 1136.3, "max": 1136.3, "tail_pct": 0.0, "p50_limit": 450.0, "p95_limit": 900.0, "ceiling": 2500.0, "p50_ok": true, "p95_ok": true}}, "slo_breaches": [], "slo_ok": true}

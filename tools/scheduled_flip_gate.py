@@ -49,6 +49,7 @@ PROFILE_TESTS = {
     "l3gate": ["tests/test_l3_plan_recheck_gates.py"],
     "l3gc-dry": ["tests/test_l3_plan_recheck_gates.py"],
     "l3gc-real": ["tests/test_l3_plan_recheck_gates.py"],
+    "perf-slo": ["tests/test_perf_budget_slo.py"],
 }
 
 

@@ -147,16 +147,11 @@ def test_reassignment_shadow_tw(monkeypatch):
              - datetime.fromisoformat(b.replace("Z", "+00:00")).astimezone(FIXED2))
     assert d_new == d_old == timedelta(hours=1, minutes=45)
 
-
-def test_common_to_warsaw(monkeypatch):
-    m = _load_by_path(os.path.join(_WT_ROOT, "sprint2_analysis", "_common.py"), "sprint2_common_wt")
-    assert getattr(m.WARSAW, "key", None) == "Europe/Warsaw"
-    # LETNI parytet: to_warsaw == (utc + 2h) naive
-    old_summer = (SUMMER.astimezone(timezone.utc) + timedelta(hours=2)).replace(tzinfo=None)
-    assert m.to_warsaw(SUMMER) == old_summer
-    # ZIMA poprawnie CET (+1): godzina bucketowania peak = 10, nie 11 (był bug +2)
-    assert m.to_warsaw(WINTER).hour == 10
-    assert (WINTER.astimezone(timezone.utc) + timedelta(hours=2)).replace(tzinfo=None).hour == 11
+# NB: test_common_to_warsaw usunięty (L8-iter3): jego SUBJEKT `sprint2_analysis/_common.py`
+# skasowany jako martwy kod (zero importerów/systemd/cron/at — dowód w l8-iter3_raport.md).
+# Idiom to_warsaw ZoneInfo NADAL pod strażą przez bliźniacze testy partycji plików ŻYWYCH
+# (freshness_shadow_monitor, reassignment_shadow, monitor_refloor, sequential_replay-expr,
+# enricher) + grep-ratchet niżej. Kasacja subjektu = test bezprzedmiotowy, nie luka.
 
 
 def test_monitor_refloor_hhmm(monkeypatch):
@@ -250,7 +245,9 @@ _GUARDIAN_TESTS = {
 _MY_PARTITION = {
     "tools/shadow_outcome_enricher.py", "tools/freshness_shadow_monitor.py",
     "tools/reassignment_shadow.py", "tools/sequential_replay.py",
-    "tools/monitor_refloor_peak_2026_05_31.py", "sprint2_analysis/_common.py",
+    "tools/monitor_refloor_peak_2026_05_31.py",
+    # sprint2_analysis/_common.py USUNIĘTY (L8-iter3, martwy kod). Ratchet globalny
+    # (test_ratchet_no_new_fixed_offset_tz) i tak złapie go, gdyby wrócił z fixed-offset.
 }
 
 
@@ -286,7 +283,7 @@ def test_ratchet_no_new_fixed_offset_tz():
 
 
 def test_ratchet_partition_files_are_clean():
-    # moje 6 plików partycji NIE mogą już zawierać fixed-offset (po fixie znikają)
+    # moje 5 plików partycji NIE mogą już zawierać fixed-offset (po fixie znikają)
     offenders = _scan_fixed_offset()
     dirty = _MY_PARTITION & offenders
     assert not dirty, "plik partycji nadal ma fixed-offset: " + ", ".join(sorted(dirty))

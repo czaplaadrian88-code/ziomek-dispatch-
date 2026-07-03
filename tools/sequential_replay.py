@@ -742,6 +742,14 @@ def _metrics_delta(base: dict, cand: dict) -> dict:
     return delta
 
 
+# Kierunek metryk fleet. Domyślnie (brak wpisu) = lower-is-better: mniej =
+# lepiej (sla_breaches, best_effort, zero_feasible, alerts, gini, pile_ratio,
+# max_pile, peak_bag_max). couriers_used = liczba wykorzystanych kurierów
+# (rozłożenie floty) → WIĘCEJ = mniej pile-on = LEPIEJ (higher-is-better).
+# Bez tej mapy target=couriers_used dostawał NO-GO gdy realnie się poprawiał.
+_HIGHER_IS_BETTER = frozenset({"couriers_used"})
+
+
 def _determine_verdict(
     base: dict,
     cand: dict,
@@ -772,10 +780,13 @@ def _determine_verdict(
     if blocked:
         return "NO-GO", blocked
 
-    # target improvement
+    # target improvement (kierunek zależny od metryki — patrz _HIGHER_IS_BETTER)
     if target not in cand:
         raise ValueError(f"Nieznany target '{target}'")
-    target_improved = base[target] - cand[target] > 0
+    if target in _HIGHER_IS_BETTER:
+        target_improved = cand[target] - base[target] > 0
+    else:
+        target_improved = base[target] - cand[target] > 0
     if target_improved:
         return "GO", []
     return "NO-GO", ["target_not_improved"]

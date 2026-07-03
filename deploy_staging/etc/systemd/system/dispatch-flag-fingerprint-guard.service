@@ -1,0 +1,16 @@
+[Unit]
+Description=Ziomek STRAZNIK flag-fingerprint — read-only rekoncyliacja EFEKTYWNEGO stanu flag per serwis (flags.json <-> FLAG_FINGERPRINT w logach <-> Environment= drop-inow <-> rejestr). Werdykt OK/DRIFT/COLD; COLD potwierdzany korelacja z journalem serwisu (anty-§20: cold-linie od pytest NIE licza sie jako flag-load bug). Plik+log, ZERO wplywu na decyzje. Ledger §240/242, raport l01-registry_raport.md §4.
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/flag_fingerprint_guard.py
+After=network.target
+OnFailure=dispatch-onfailure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.flag_fingerprint_guard
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/flag_fingerprint_guard.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/flag_fingerprint_guard.log
+
+[Install]
+WantedBy=multi-user.target
