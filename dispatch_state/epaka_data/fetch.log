@@ -1,5 +1,0 @@
-=== 2026-06-29T18:25:34Z epaka fetch () ===
-[ok] sesja żywa — bez logowania
-[ok] przesyłki: 1706 rekordów -> /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_state/epaka_data/epaka_zamowienia_2026-05-30_2026-06-29.csv
-[ok] prowizje do wypłaty 2026-05-30..2026-06-29: do_wyplaty=5606.75 zł, 40 wpisów -> /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_state/epaka_data/epaka_prowizje_dowyplaty_2026-05-30_2026-06-29.json
-exit=0

@@ -37,3 +37,17 @@ Thumbs.db
 .idea/
 *.swp
 .aider*
+
+# audyt-porządki 2026-07-03 (WD-7/WD-8): backupy o niestandardowych nazwach, bazy, dane eksperymentów
+*-wip-*
+*.proven-bak
+*.db
+.aider*
+eod_drafts/**/__pycache__/
+eod_drafts/**/*.jsonl
+eod_drafts/**/*.log
+eod_drafts/**/*.out
+eod_drafts/**/*.err
+eod_drafts/**/*.csv
+dispatch_state/epaka_data/*
+!dispatch_state/README.md
