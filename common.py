@@ -1358,6 +1358,25 @@ ENABLE_NO_GPS_EQUAL_TREATMENT = _os.environ.get("ENABLE_NO_GPS_EQUAL_TREATMENT",
 # (hot-reload), stała = fallback. Pomiar przed flipem: 359 flipów/tydz (tools/nogps_preshift_bucket_replay.py).
 ENABLE_EQUAL_TREATMENT_BUCKET = _os.environ.get("ENABLE_EQUAL_TREATMENT_BUCKET", "0") == "1"
 
+# R-DECLARED TRIPWIRE (L7.1, audyt 2026-06-30 root R7-I-E): reguła biznesowa
+# R-DECLARED-TIME (HARD) — `czas_kuriera >= czas_odbioru_timestamp` (deklarowany
+# przyjazd kuriera NIE wcześniej niż deklarowany czas odbioru z restauracji) —
+# dziś NIE ma żadnego runtime-inwariantu (egzekucja tylko pośrednio przez SOFT
+# R27; zmiana R27 cicho ją złamie). Ta flaga włącza JEDEN obserwacyjny tripwire
+# w chokepoincie zapisu (state_machine.upsert_order) — fail-loud LOG + append
+# JSONL, NIGDY reject/zmiana decyzji (zgodne z doktryną always-propose). OFF =
+# zero kodu ścieżki (bajt-parytet decyzji). Kanon = flags.json (hot-reload);
+# stała = env-default fallback. Flip = lekki ACK Adriana. Detal: state_machine
+# ._r_declared_tripwire + tools/entropy INV-COH-R-DECLARED.
+ENABLE_R_DECLARED_TRIPWIRE = _os.environ.get("ENABLE_R_DECLARED_TRIPWIRE", "0") == "1"
+# Tolerancja tripwire (min): |czas_kuriera - czas_odbioru| < próg → NIE naruszenie
+# (HH:MM czas_kuriera jest truncowany do minuty; gastro re-stemplowany
+# czas_odbioru_timestamp ląduje kilka-sekund/minut po deklarowanej minucie →
+# sub-progowy szum, nie realny breach reguły). Default 0.0 = ścisła nierówność
+# reguły `czas_kuriera >= czas_odbioru_timestamp`. Env-tunable bez zmiany kodu.
+R_DECLARED_TRIPWIRE_TOLERANCE_MIN = float(
+    _os.environ.get("R_DECLARED_TRIPWIRE_TOLERANCE_MIN", "0.0"))
+
 # ============================================================
 # V3.18 unified bag reality check flags (2026-04-19)
 # Master switch dla CourierBagState + FleetContext projection.
