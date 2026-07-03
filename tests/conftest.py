@@ -41,6 +41,16 @@ import pytest
 _SCRIPTS_ROOT = os.environ.get("ZIOMEK_SCRIPTS_ROOT", "/root/.openclaw/workspace/scripts")
 _SUBPROC_TIMEOUT = 240
 
+# Test-hygiene log-guard (2026-07-03): marker sesji dla common.setup_logger —
+# FileHandlery do żywych logów PROD wyciszone przez CAŁĄ sesję pytest, także
+# przy emisjach import-time (zanim pytest ustawi PYTEST_CURRENT_TEST per test).
+# Subprocesy script-runner dziedziczą przez dict(os.environ) w ScriptRunItem.
+# Incydent: testowe FLAG_FINGERPRINT (conftest-owo odarty flags.json = defaulty)
+# lądowały w logs/czasowka.log → fałszywy INTERMITTENT-COLD w
+# flag_fingerprint_check (eskalacja P1 z 02.07 — REFUTED, silnik zdrowy).
+# Opt-out per-test: monkeypatch.setenv("ALLOW_FILE_LOG_IN_TEST", "1").
+os.environ.setdefault("DISPATCH_UNDER_PYTEST", "1")
+
 # Znane, udokumentowane pre-existing failури script-runnerów (P1#4 baseline, 2026-06-19).
 # Klucz = stem modułu; wartość = powód. Niezerowy exit takiego runnera → xfail (NIE fail),
 # więc baseline jest zielony, a regresje innych testów znów widoczne. xfail (nie skip) =

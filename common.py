@@ -596,8 +596,36 @@ def now_iso():
     return now_utc().isoformat()
 
 
+def _file_log_blocked_under_test() -> bool:
+    """Test-hygiene (2026-07-03): czy FileHandlery do logów mają milczeć.
+
+    ~34 moduły silnika robią module-level `setup_logger(..., PROD path)` —
+    KAŻDY proces importujący moduł (pytest in-process i script-runner) pisał
+    do żywych logów. Skutek: testowe FLAG_FINGERPRINT z conftest-owo odartym
+    flags.json (defaulty) w logs/czasowka.log → log-based instrumenty kłamały
+    (fałszywy INTERMITTENT-COLD 22-40% w flag_fingerprint_check; korelacja z
+    journalem 03.07: 334/334 ticków serwisu warm, 0/9 klastrów cold od serwisu).
+    Markery: PYTEST_CURRENT_TEST (pytest per-test + jawnie w ScriptRunItem) lub
+    DISPATCH_UNDER_PYTEST (conftest, cała sesja wraz z import-time).
+    Opt-out dla testów weryfikujących file-log: ALLOW_FILE_LOG_IN_TEST=1
+    (wzorzec identyczny z guardem telegram_utils L1 / ALLOW_TELEGRAM_IN_TEST)."""
+    if os.environ.get("ALLOW_FILE_LOG_IN_TEST") == "1":
+        return False
+    return bool(os.environ.get("PYTEST_CURRENT_TEST")
+                or os.environ.get("DISPATCH_UNDER_PYTEST"))
+
+
+class _ProdFileLogTestFilter(logging.Filter):
+    """Filtr per-rekord (nie per-attach): pytest ustawia PYTEST_CURRENT_TEST
+    dopiero w fazie testu, PO imporcie modułu — decyzja musi zapadać przy
+    emisji, nie przy podpinaniu handlera."""
+
+    def filter(self, record):  # noqa: A003 - API logging
+        return not _file_log_blocked_under_test()
+
+
 def setup_logger(name: str, log_file: str = None):
-    """Prosty logger z file handlerem."""
+    """Prosty logger z file handlerem (pod pytestem file-handler wyciszony)."""
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
@@ -613,8 +641,11 @@ def setup_logger(name: str, log_file: str = None):
 
     if log_file:
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(log_file)
+        # delay=True: plik otwierany dopiero przy 1. przepuszczonym rekordzie —
+        # test nie tyka (nawet nie tworzy) żywego pliku loga.
+        fh = logging.FileHandler(log_file, delay=True)
         fh.setFormatter(fmt)
+        fh.addFilter(_ProdFileLogTestFilter())
         logger.addHandler(fh)
 
     return logger

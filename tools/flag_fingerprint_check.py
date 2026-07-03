@@ -269,9 +269,14 @@ def reconcile() -> dict:
                  if last_cold else COLD_DRIFT_MIN},
                 f"proc {proc}: fingerprint = common.py DEFAULTY (flags.json overrides "
                 f"NIE zaaplikowane) w {cold_recent}/{len(recent)} ostatnich emitach "
-                f"(≥{COLD_DRIFT_MIN} flag ≠ flags.json). Flag-load w tym procesie zawodzi "
-                f"part-time → decyzje na złych flagach. Naprawa = ścieżka ładowania flag "
-                f"w module procesu (POZA partycją L0.1 tools — ESKALUJ). Per-flag "
+                f"(≥{COLD_DRIFT_MIN} flag ≠ flags.json). ⚠ ZANIM uznasz za flag-load "
+                f"bug silnika: skoreluj timestampy cold-linii ze startami serwisu w "
+                f"journalu (`journalctl -u dispatch-<proc>`). Cold POZA kadencją ticków "
+                f"= OBCY proces pisał do PROD-loga (testy pytest z odartym flags.json — "
+                f"klasa kłamiącego przyrządu; eskalacja 02.07 REFUTED tak właśnie: "
+                f"334/334 ticków warm, 0/9 klastrów cold od serwisu; od 03.07 guard "
+                f"DISPATCH_UNDER_PYTEST w common.setup_logger wycisza file-logi testów). "
+                f"Cold NA tickach serwisu = realny flag-load bug → ESKALUJ. Per-flag "
                 f"JSON-DRIFT tego proc pominięty gdy last=cold.")
 
     # 2b) JSON-DRIFT: decyzyjna (hot-reload), fingerprint procesu ≠ AKTUALNY flags.json.
