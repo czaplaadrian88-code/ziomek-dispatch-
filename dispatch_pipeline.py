@@ -228,6 +228,38 @@ def _append_difficult_case_log(entry: dict) -> None:
             pass
 
 
+SPLIT_LAYER_GUARD_LOG_PATH = (
+    "/root/.openclaw/workspace/dispatch_state/split_layer_guard.jsonl")
+
+
+def _append_split_layer_guard_log(entry: dict) -> None:
+    """L7.3 (2026-07-03, R2 ROOT-9) — zapis naruszenia kontraktu warstw (INV-LAYER-1/2)
+    do dedykowanego JSONL. OBSERWACYJNY: nie wpływa na decyzję. Atomic append (tryb 'a').
+    Fail-soft: exception loguje warning, nie wywraca pętli decyzyjnej."""
+    try:
+        import json as _json
+        import os as _os
+        path = getattr(C, "SPLIT_LAYER_GUARD_LOG_PATH", SPLIT_LAYER_GUARD_LOG_PATH)
+        _os.makedirs(_os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            f.write(_json.dumps(entry, default=str, ensure_ascii=False) + "\n")
+    except Exception as _e:
+        try:
+            log.warning(f"_append_split_layer_guard_log failed: {_e}")
+        except Exception:
+            pass
+
+
+def _split_layer_guard_on() -> bool:
+    """L7.3 flaga OBSERWACYJNA (nie-decyzyjna, poza ETAP4). OFF ⇒ bajt-parytet
+    (zero logu/jsonl, zero mutacji). flags.json hot → stała-fallback OFF."""
+    try:
+        return bool(C.flag("ENABLE_SPLIT_LAYER_GUARD",
+                           getattr(C, "ENABLE_SPLIT_LAYER_GUARD", False)))
+    except Exception:
+        return False
+
+
 def _coords_pass(legacy_ok, *coords) -> bool:
     """L2.1 sentinel-ingest (2026-07-01, K5a): wspólny guard callerów geometrii.
 
@@ -2528,6 +2560,95 @@ def _assert_feasibility_first(feasible: list, order_id=None) -> None:
         pass
 
 
+def _set_feasibility_verdict(cand, verdict, *, layer, order_id=None) -> None:
+    """L7.3 (INV-LAYER-2 „NO-VERDICT-OUTSIDE-L5"): JEDEN setter atrybutu
+    `feasibility_verdict`. Werdykt feasibility należy USTAWIAĆ WYŁĄCZNIE w warstwie 5
+    (check_feasibility_v2 / feasibility loop). Zapis w innej warstwie (np. L7 selekcja —
+    FEAS_CARRY_READMIT) = naruszenie kontraktu warstw.
+
+    Setter ZAWSZE wykonuje zapis (zachowanie NIEZMIENIONE — bajt-parytet). Garda jest
+    OBSERWACYJNA: gdy ENABLE_SPLIT_LAYER_GUARD ON i layer != 'L5' → WARNING + wpis do
+    split_layer_guard.jsonl. Fail-soft (nie wywraca pętli decyzyjnej).
+
+    MAPA zapisów `feasibility_verdict` (2026-07-03, cały repo):
+      • L5 (dozwolone): dispatch_pipeline._v327_eval_courier_inner Candidate(verdict=…) [konstruktor],
+        _v328_eval_safe Candidate(verdict="MAYBE") [konstruktor], solo Candidate(verdict=sv)
+        [konstruktor], legacy F1.8e pre_shift `c.feasibility_verdict="NO"` (ten setter, layer=L5).
+      • L7 (naruszenie, kanalizowane tu): FEAS_CARRY_READMIT `_fcr_cand→"MAYBE"` (layer=L7_selekcja).
+      • Bliźniak best_effort↔objm_lexr6: NIE zapisuje verdiktu (tylko REORDER) — brak setterów.
+    """
+    try:
+        cand.feasibility_verdict = verdict
+    except Exception:
+        return
+    if layer == "L5" or not _split_layer_guard_on():
+        return
+    try:
+        _cid = getattr(cand, "courier_id", None)
+        log.warning(
+            f"SPLIT_LAYER_VERDICT_WRITE order={order_id} cid={_cid} "
+            f"verdict={verdict} layer={layer} — feasibility_verdict zapisany POZA L5 "
+            f"(INV-LAYER-2)")
+        _append_split_layer_guard_log({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "kind": "verdict_write_outside_l5",
+            "order_id": order_id,
+            "courier_id": _cid,
+            "verdict": verdict,
+            "layer": layer,
+        })
+    except Exception:
+        pass
+
+
+def _split_layer_emit_assert(result, order_id=None) -> None:
+    """L7.3 (INV-LAYER-1 „HARD-BEFORE-SOFT, pełny"): re-assert `_assert_feasibility_first`
+    na KAŻDYM EMIT (nie tylko 1× po demote). Wołane ze wspólnego lejka pre-emit
+    `_classify_and_set_auto_route` (11 call-site'ów assess_order) — więc biegnie przy każdym
+    zwrocie PipelineResult. Powód: pula `feasible` bywa MUTOWANA po pierwszym asercie
+    (FEAS_CARRY_READMIT wstawia readmitowanego na czoło), a naruszenie warstwy materializuje
+    się przy EMIT.
+
+    OBSERWACYJNY: OFF ⇒ natychmiastowy return (bajt-parytet). ON ⇒ tylko log/jsonl,
+    ZERO zmiany decyzji. best_effort/solo (0 feasible, verdict NO z KONTRAKTU R28) są
+    WYŁĄCZONE bramką `pool_feasible_count > 0` — inaczej fałszywy alarm.
+    """
+    if not _split_layer_guard_on():
+        return
+    try:
+        pfc = getattr(result, "pool_feasible_count", 0) or 0
+        if pfc <= 0:
+            return  # best_effort/solo/no_solo: brak puli feasible → kontrakt R28, wyłączone
+        pool = getattr(result, "candidates", None) or []
+        # Re-assert HARD-before-SOFT na emitowanej puli selekcji (top). _assert_… jest
+        # fail-loud (log.error + metryka na naruszającym), fail-soft. Serializowana pula
+        # = to co konsumuje downstream; po FEAS_CARRY_READMIT readmitowany jest na czole
+        # top z verdict=MAYBE (promowany), więc czysto = brak alarmu.
+        _bad = [str(getattr(c, "courier_id", "?")) for c in pool
+                if getattr(c, "feasibility_verdict", None) == "NO"]
+        _best = getattr(result, "best", None)
+        _best_no = (getattr(_best, "feasibility_verdict", None) == "NO"
+                    if _best is not None else False)
+        if _bad or _best_no:
+            _assert_feasibility_first(pool, order_id)
+            log.warning(
+                f"SPLIT_LAYER_EMIT_VIOLATION order={order_id} verdict={getattr(result,'verdict',None)} "
+                f"best_cid={getattr(_best,'courier_id',None)} best_no={_best_no} "
+                f"no_in_pool={_bad} pool_feasible={pfc} — NO-verdict w emitowanej puli feasible-path")
+            _append_split_layer_guard_log({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "kind": "no_verdict_in_emit_pool",
+                "order_id": order_id,
+                "verdict": getattr(result, "verdict", None),
+                "best_cid": getattr(_best, "courier_id", None),
+                "best_verdict_no": _best_no,
+                "no_in_pool_cids": _bad,
+                "pool_feasible_count": pfc,
+            })
+    except Exception:
+        pass
+
+
 def _demote_blind_empty(feasible: list, order_id=None) -> list:
     """V3.16 demotion: jeśli top-1 jest blind+empty AND istnieje informed alt,
     reorder — informed first (stable), other middle, blind+empty last.
@@ -3036,6 +3157,11 @@ def _classify_and_set_auto_route(
             )
         except Exception:
             pass
+    # L7.3 (2026-07-03, INV-LAYER-1): re-assert HARD-before-SOFT na EMIT. Ten helper jest
+    # WSPÓLNYM lejkiem wszystkich post-eval returnów (11 call-site'ów) → tu strażnik biegnie
+    # przy każdym zwrocie. OBSERWACYJNY (flaga OFF = no-op, bajt-parytet). Osobny try —
+    # nie może zakłócić auto_route/gate.
+    _split_layer_emit_assert(result, getattr(result, "order_id", None))
 
 
 def get_pickup_ready_at(
@@ -6103,7 +6229,9 @@ def _assess_order_impl(
                 # Bez tego scoring promuje go pomimo niedostępności (np. odbiór za 26
                 # min, kurier startuje za 46 min → nie zdąży).
                 if shift_min > prep_remaining_min + 0.01:
-                    c.feasibility_verdict = "NO"
+                    # L7.3: zapis werdyktu w L5 (feasibility) — kanonizowany przez setter
+                    # (layer=L5 ⇒ garda cicha; zachowanie NIEZMIENIONE).
+                    _set_feasibility_verdict(c, "NO", layer="L5", order_id=order_id)
                     c.feasibility_reason = (
                         f"pre_shift_too_late (start za {shift_min:.0f} min, "
                         f"odbiór za {prep_remaining_min:.0f} min)"
@@ -6492,10 +6620,13 @@ def _assess_order_impl(
                     _fcr_cand, _fcr_regret, _fcr_reason, _fcr_newbag = _fcr
                     if _fcr_cand is not None and _fcr_cand is not top[0]:
                         _prev_cid = getattr(top[0], "courier_id", None)
-                        try:
-                            _fcr_cand.feasibility_verdict = "MAYBE"
-                        except Exception:
-                            pass
+                        # L7.3 (INV-LAYER-2): promocja werdyktu odbywa się w L7 (selekcja) —
+                        # zapis POZA L5. Kanonizowany przez setter (layer=L7_selekcja): garda
+                        # loguje naruszenie warstwy gdy ENABLE_SPLIT_LAYER_GUARD ON. Zapis sam
+                        # NIEZMIENIONY (verdict→MAYBE dla spójności serializacji/inwariantu).
+                        _set_feasibility_verdict(
+                            _fcr_cand, "MAYBE", layer="L7_selekcja",
+                            order_id=new_order.order_id)
                         if isinstance(getattr(_fcr_cand, "metrics", None), dict):
                             _fcr_cand.metrics["feas_carry_readmit"] = True
                             _fcr_cand.metrics["feas_carry_regret_min"] = _fcr_regret
