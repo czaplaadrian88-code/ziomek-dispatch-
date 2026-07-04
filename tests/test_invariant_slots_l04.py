@@ -153,15 +153,10 @@ def test_inv_life_loadplan_pure_default(_isolated_pm):
 # ─────────────────────────────────────────────────────────────────────────────
 # SLOT 3 — INV-SRC-LEXQUAL (Kontrakt ①, ZIOMEK_INVARIANTS.md l.20)
 # ─────────────────────────────────────────────────────────────────────────────
-@pytest.mark.xfail(
-    strict=True,
-    reason="INV-SRC-LEXQUAL [SLOT L0.4, kontrakt ①/l.20]: 3 kopie klucza jakości NIE dają "
-    "identycznego rankingu. Kanon `objm_lexr6.lex_qual` przy ENABLE_POST_SHIFT_OVERRUN_PENALTY "
-    "prependuje WIODĄCY `post_shift_overrun_penalty` (4-krotka), a ZAMROŻONA kopia inline w "
-    "`dispatch_pipeline._objm_lexr6_shadow` (l.1135) trzyma 3-krotkę bez tego termu → wybiera "
-    "innego zwycięzcę grupy. Zdejmij xfail po unifikacji objm-lexr6 "
-    "(repięcie _objm_lexr6_shadow na objm_lexr6.lex_qual, bramka 03.07).",
-)
+# INV-SRC-LEXQUAL UZBROJONY 2026-07-04 (L6.C1): xfail zdjęty zgodnie z instrukcją
+# slotu — cień `_objm_lexr6_shadow` przepięty na kanon `objm_lexr6.lex_qual`
+# (zamrożenie at#152 wygasło: walidacja PASS, at-200 03.07 GO). Od teraz rozjazd
+# rankingu cień≠kanon = twardy FAIL (strażnik przed re-dywergencją).
 def test_inv_src_lexqual_shadow_vs_canon_ranking(monkeypatch):
     """Kontrakt ①: „3 kopie lex_qual dają identyczny ranking (parytet)".
 

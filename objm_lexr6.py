@@ -27,20 +27,53 @@ def objm(c, k):
 
 
 def lex_qual(c):
-    """Klucz jakości leksykograficznej: (R6-breach → committed-late → new-pickup-late).
-    Brak R6 → 9e9 (na koniec).
+    """Klucz jakości leksykograficznej: (R6-breach → committed-late → new-pickup-late
+    [→ geometria]). Brak R6 → 9e9 (na koniec).
 
     Parytet post-shift (Adrian 2026-06-24, „robimy 3"): gdy
     ENABLE_POST_SHIFT_OVERRUN_PENALTY → prepend WIODĄCY term `post_shift_overrun_penalty`
     (kurier kończący PO zmianie spada — spójnie z `_best_effort_objm_pick`). Selektor
     feasible widzi nadwyżkę >grace tylko w end-of-day-salvage (poza tym v324a rejectuje
     dropoff>shift_end+5). Flaga OFF → krotka BAJT-IDENTYCZNA (3-elem.) jak dawne inline
-    → zero zmian d2-picka + walidacja at#152 nietknięta. ON → 4-elem. (jednorodne w
-    obrębie jednego min(), bo flaga stała na czas selekcji)."""
+    → zero zmian d2-picka. ON → 4-elem. (jednorodne w obrębie jednego min(), bo flaga
+    stała na czas selekcji).
+
+    Człon GEOMETRII (L6.C2 2026-07-04, R2 ROOT-7; flaga ENABLE_LEXQUAL_GEOMETRY_TIEBREAK
+    default OFF = bajt-parytet): `deliv_spread_km` (JUŻ policzony w feasibility, max
+    pairwise road-km dostaw worka+nowego; empty-bag → brak klucza → 0.0) dopisany jako
+    OSTATNI element — podrzędny wobec CAŁEJ osi czasowej R6→committed→new-late (SOFT
+    tie-break wewnątrz puli, którą HARD już przepuścił; INV-LAYER-5). Leczy klasę
+    „279 propozycji spread>8km" (C10-oracle 30.06): przy równej jakości czasowej wygrywa
+    ciaśniejszy geometrycznie worek.
+
+    Kwantyzacja `LEXQUAL_TIME_QUANT_MIN` (float min, 0.0=OFF; aktywna TYLKO z geometrią
+    ON): czysty append rozstrzyga wyłącznie IDEALNE remisy floatów — pod scarcity
+    (realne breache, wartości ciągłe) mógłby nie odpalić NIGDY. Kubełkowanie termów
+    czasowych do N-min zlewa bliskie remisy → geometria je rozstrzyga. Siła pokrętła =
+    decyzja z pomiaru (replay quant=0 vs 1.0), nie zgadywana."""
     r6 = objm(c, "objm_r6_breach_max_min")
-    base = (r6 if r6 is not None else 9e9,
-            objm(c, "late_pickup_committed_max") or 0.0,
-            objm(c, "new_pickup_late_min") or 0.0)
+    t_r6 = r6 if r6 is not None else 9e9
+    t_com = objm(c, "late_pickup_committed_max") or 0.0
+    t_new = objm(c, "new_pickup_late_min") or 0.0
+    if C.decision_flag("ENABLE_LEXQUAL_GEOMETRY_TIEBREAK"):
+        q = 0.0
+        try:
+            q = float(C.flag("LEXQUAL_TIME_QUANT_MIN",
+                             getattr(C, "LEXQUAL_TIME_QUANT_MIN", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            q = 0.0
+        if q > 0.0:
+            # kubełki N-min przez FLOOR (round dzieliłby 10.2↔10.6 mimo Δ<q);
+            # 9e9 (brak R6) zostaje poza kwantyzacją (i tak sentinel)
+            import math as _math
+            if t_r6 < 9e9:
+                t_r6 = _math.floor(t_r6 / q) * q
+            t_com = _math.floor(t_com / q) * q
+            t_new = _math.floor(t_new / q) * q
+        geom = objm(c, "deliv_spread_km") or 0.0
+        base = (t_r6, t_com, t_new, geom)
+    else:
+        base = (t_r6, t_com, t_new)
     if C.decision_flag("ENABLE_POST_SHIFT_OVERRUN_PENALTY"):
         v = objm(c, "post_shift_overrun_penalty")
         return ((v if v is not None else 0.0),) + base

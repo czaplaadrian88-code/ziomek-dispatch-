@@ -351,7 +351,6 @@ def _serialize_candidate(c) -> dict:
         "r7_ride_km": m.get("r7_ride_km"),
         "r7_warsaw_hour": m.get("r7_warsaw_hour"),
         "r7_in_peak": m.get("r7_in_peak"),
-        "r7_is_longhaul": m.get("r7_is_longhaul"),
         "r7_bag_size": m.get("r7_bag_size"),
         # F2.1c step 1 R8 pickup_span metric (raw span w minutach)
         "r8_pickup_span_min": m.get("r8_pickup_span_min"),
@@ -696,7 +695,6 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r7_ride_km": best_m.get("r7_ride_km"),
             "r7_warsaw_hour": best_m.get("r7_warsaw_hour"),
             "r7_in_peak": best_m.get("r7_in_peak"),
-            "r7_is_longhaul": best_m.get("r7_is_longhaul"),
             "r7_bag_size": best_m.get("r7_bag_size"),
             # F2.1c step 1 R8 pickup_span metric (raw span w minutach)
             "r8_pickup_span_min": best_m.get("r8_pickup_span_min"),
@@ -1200,6 +1198,32 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             # dispatchu. Diagnoza orphan-drop vs visible-but-filtered.
             _probe_same_restaurant_race(oid, result, fleet, state_all)
 
+            # L6.C3 ENGINE CLAIM LEDGER (2026-07-04, R2 ROOT-8 / INV-LAYER-4):
+            # po PROPOSE dołóż zwycięzcy TO zlecenie do jego worka w snapshocie floty
+            # (wspólny claim_ledger.tentative_assign — TEN SAM mechanizm co
+            # global_allocate resweep/przerzutu, zero 2. kopii) → kolejne eventy TEGO
+            # ticku oceniają realny obraz zamiast proponować w kółko temu samemu
+            # kurierowi (pomiar: 447 proponowany 127×/32 zlecenia, g_maxpile=7).
+            # Flag OFF (default) = flota niemutowana, bajt-parytet. Fail-soft.
+            _claim_applied = False
+            if C.decision_flag("ENABLE_ENGINE_CLAIM_LEDGER"):
+                try:
+                    _cl_best = getattr(result, "best", None)
+                    if (getattr(result, "verdict", None) == "PROPOSE"
+                            and _cl_best is not None):
+                        _cl_cid = str(getattr(_cl_best, "courier_id", "") or "")
+                        if _cl_cid and _cl_cid in fleet:
+                            from dispatch_v2 import claim_ledger as _cl
+                            _cl_rec = dict(cur) if cur else dict(payload)
+                            _cl_rec.setdefault("order_id", oid)
+                            fleet = _cl.tentative_assign(fleet, _cl_cid, _cl_rec)
+                            _claim_applied = True
+                            _log.info(
+                                f"CLAIM_LEDGER order={oid} cid={_cl_cid} "
+                                f"bag_after={len(fleet[_cl_cid].bag or [])}")
+                except Exception as _cl_e:  # noqa: BLE001
+                    _log.warning(f"claim_ledger fail order={oid}: {_cl_e}")
+
             # Rolling late-binding Faza 0 (2026-05-18): zasilenie puli pending.
             # Flag-gated, defensywne — NIGDY nie wywróci shadow dispatchu.
             # Faza 0 = czysta obserwacja; pula tylko lustruje NEW_ORDERy.
@@ -1214,6 +1238,10 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
 
             latency_ms = (time.time() - t0) * 1000.0
             record = _serialize_result(result, eid, latency_ms)
+            if _claim_applied:
+                # L6.C3: marker mierzalności (ETAP 4 — grep -c claim_ledger_applied
+                # na świeżym oknie po flipie); top-level jak pickup_at_warsaw.
+                record["claim_ledger_applied"] = True
             # Propagate raw restaurant pickup time (pre-extension) — telegram_approver
             # liczy `pickup_extension_min = pickup_ready_at - pickup_at_warsaw` aby
             # pokazać "(+N min)" gdy Ziomek przedłużył deklarację restauracji.

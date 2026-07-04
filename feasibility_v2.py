@@ -87,7 +87,9 @@ def _end_of_day_salvage(now):
 
 # ===== BARTEK GOLD STANDARD thresholds (see docs/BARTEK_GOLD_STANDARD.md) =====
 # R1: max delivery spread in bag (p90 of Bartek clean sample, n=47 bundles).
-R1_MAX_DELIV_SPREAD_KM = 8.0
+# L6.C2 (2026-07-04): alias kanonu C.MAX_DELIV_SPREAD_KM (scalenie 2 literałów 8.0;
+# wartość niezmieniona = bajt-parytet; env-override przez MAX_DELIV_SPREAD_KM).
+R1_MAX_DELIV_SPREAD_KM = C.MAX_DELIV_SPREAD_KM
 # R3: dynamic cap — computed for telemetry only (F1.9b: no longer a hard block).
 # Kept in metrics so we can observe what R3 WOULD have rejected.
 R3_DYNAMIC_MAX = [(5.0, 5), (8.0, 4), (float("inf"), 3)]
@@ -469,12 +471,13 @@ def check_feasibility_v2(
     if metrics["would_hard_cap"] and C.load_flags().get("ENABLE_HARD_TIER_BAG_CAP", False):
         return ("NO", f"hard_tier_bag_cap ({courier_tier or '?'} {bag_after}>{_hard_cap})", metrics, None)
 
-    # R7 (F2.1b) — long-haul isolation w peak hours.
-    # Długa trasa (>4.5 km) NIE MOŻE być bundlowana w peak (14-17 Warsaw).
-    # Solo (bag pusty) zawsze OK — R7 dotyczy tylko bundli.
-    # Telemetry liczone ZAWSZE (nawet solo), reject warunkowy (bag+longhaul+peak).
-    # TODO C3 deferred (2026-04-18): refactor to soft penalty if LONG_HAUL_DISTANCE_KM
-    # threshold lowered from 99km. Currently dormant rule, no production impact.
+    # Telemetria trasy (dawna R7 long-haul — reguła USUNIĘTA L6.C 2026-07-04, R6-K-B:
+    # martwy REJECT za sentinelem 99 km od F2.1c, nieosiągalny w Białymstoku ~15 km).
+    # Metryki r7_* ZOSTAJĄ — są NOŚNE: r7_bag_size czyta eta_calibration_logger +
+    # tools/eta_truth_map (bramka Fali A), r7_ride_km czyta tools/fleet_t15_replay.
+    # Usunięte razem z regułą: r7_is_longhaul (konsumował tylko serializer) +
+    # LONG_HAUL_DISTANCE_KM (common). Przywrócenie reguły long-haul = NOWY sprint
+    # z realnym progiem i pomiarem, nie odkomentowanie.
     if _valid(new_order.pickup_coords) and _valid(new_order.delivery_coords):
         r7_ride_km = _road_km(new_order.pickup_coords, new_order.delivery_coords)
         r7_warsaw_hour = now.astimezone(WARSAW).hour
@@ -486,15 +489,7 @@ def check_feasibility_v2(
         metrics["r7_ride_km"] = round(r7_ride_km, 2)
         metrics["r7_warsaw_hour"] = r7_warsaw_hour
         metrics["r7_in_peak"] = r7_in_peak
-        metrics["r7_is_longhaul"] = r7_ride_km > C.LONG_HAUL_DISTANCE_KM
         metrics["r7_bag_size"] = len(bag)
-        if bag and r7_ride_km > C.LONG_HAUL_DISTANCE_KM and r7_in_peak:
-            return (
-                "NO",
-                f"R7_longhaul_peak ({r7_ride_km:.1f}km>{C.LONG_HAUL_DISTANCE_KM:.1f}, hour={r7_warsaw_hour})",
-                metrics,
-                None,
-            )
 
     # R1 spread outlier — SOFT (NIE hard block, zweryfikowane audytem 2026-05-21).
     # Tu liczymy tylko metryki do telemetrii (learning_log); reject NIE następuje.

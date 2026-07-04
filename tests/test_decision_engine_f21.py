@@ -226,13 +226,14 @@ def test_B1_R7_longhaul_peak_bundle_reject():
 
 
 def test_B2_R7_longhaul_peak_solo_accept():
-    """R7 DISABLED (F2.1c): solo + peak — r7_is_longhaul=False bo threshold=99km."""
+    """R7 USUNIĘTA (L6.C 2026-07-04): telemetria trasy zostaje, reguły/metryki
+    r7_is_longhaul nie ma (martwy REJECT za sentinelem 99 skasowany u źródła)."""
     new = mk_order(id=1, pickup=(53.132, 23.168), drop=(53.132, 23.320))
     verdict, reason, metrics, plan = check_feasibility_v2(
         courier_pos=(53.132, 23.168), bag=[], new_order=new, now=_fixed_now_peak()
     )
     assert "R7_longhaul_peak" not in reason
-    assert metrics["r7_is_longhaul"] is False  # 10km < 99km threshold
+    assert "r7_is_longhaul" not in metrics  # reguła + metryka usunięte L6.C
     assert metrics["r7_in_peak"] is True
 
 
@@ -255,7 +256,7 @@ def test_B4_R7_short_ride_peak_accept():
         courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=_fixed_now_peak()
     )
     assert "R7_longhaul_peak" not in reason
-    assert metrics["r7_is_longhaul"] is False
+    assert "r7_is_longhaul" not in metrics
 
 
 def test_B5_R6_bag_time_exceeded_reject():
@@ -566,7 +567,7 @@ def test_B13_R9_wait_no_gps_integration():
     # ─── SCHEMA ASSERT 3: all 13 F2.1b fields present ───
     required = [
         "r6_max_bag_time_min", "r6_is_solo", "r6_bag_size",
-        "r7_ride_km", "r7_in_peak", "r7_is_longhaul",
+        "r7_ride_km", "r7_in_peak",
         "bonus_r6_soft_pen", "bonus_r9_stopover",
         "bonus_r9_wait_pen", "bonus_penalty_sum",
     ]
@@ -672,7 +673,7 @@ def test_C1_two_nearby_pickups_short_spread_bundle_accept():
         courier_pos=(53.132, 23.168), bag=[o1], new_order=new, now=_fixed_now_offpeak()
     )
     assert "R5_mixed_rest_pickup" not in reason
-    assert metrics.get("pickup_spread_km", 99) < C.LONG_HAUL_DISTANCE_KM
+    assert metrics.get("pickup_spread_km", 99) < 99.0  # sanity (dawny sentinel R7 usunięty L6.C)
 
 
 def test_C2_same_restaurant_bundle_no_pickup_spread():
@@ -954,8 +955,9 @@ def test_F7_bag_time_constants_from_empirical_p95():
 
 
 def test_F8_R7_longhaul_constants():
-    """R7 DISABLED (F2.1c): threshold=99km (effectively off), peak 14-17 Warsaw."""
-    assert C.LONG_HAUL_DISTANCE_KM == 99.0
+    """R7 USUNIĘTA (L6.C 2026-07-04): stała-sentinel NIE istnieje (strażnik przed
+    cichym powrotem martwej reguły); peak hours ZOSTAJĄ (żywa telemetria r7_in_peak)."""
+    assert not hasattr(C, "LONG_HAUL_DISTANCE_KM")
     assert C.LONG_HAUL_PEAK_HOURS_START == 14
     assert C.LONG_HAUL_PEAK_HOURS_END == 17
 
@@ -988,7 +990,6 @@ def test_F10_smoke_feasibility_plan_metrics_integration():
     assert "r6_is_solo" in metrics
     assert "r7_ride_km" in metrics
     assert "r7_in_peak" in metrics
-    assert "r7_is_longhaul" in metrics
 
 
 # ═══════════════════════════════════════════════════════════════════

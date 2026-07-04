@@ -364,6 +364,11 @@ ETAP4_DECISION_FLAGS = (
     # check_v326_pair_coherence loguje ostrzeżenie (bez zmiany zachowania).
     "ENABLE_V326_OR_TOOLS_TSP",
     "ENABLE_V326_SAME_RESTAURANT_GROUPING",
+    # === L6.C (2026-07-04): geometria w selekcji + claim ledger — REALNA zmiana
+    # decyzji (tie-break lex_qual / obraz floty między eventami ticku). Default OFF;
+    # flip za ACK po replayu ON↔OFF. Stałe-fallback: LEXQUAL ~2910, CLAIM w claim_ledger.
+    "ENABLE_LEXQUAL_GEOMETRY_TIEBREAK",
+    "ENABLE_ENGINE_CLAIM_LEDGER",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -473,6 +478,8 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "GPS_AGE_DISCOUNT_CAP",
     # FRONT-B (2026-06-11):
     "PICKUP_COORDS_DRIFT_WARN_M",
+    # L6.C2 (2026-07-04): kwantyzacja termów czasowych lex_qual (patrz stała ~2910)
+    "LEXQUAL_TIME_QUANT_MIN",
     # BUNDLE-06 Faza 1 + BUNDLE-03 (2026-06-12):
     "BUNDLE_FIT_W_COS",
     "BUNDLE_FIT_THERMAL_FREE_MIN",
@@ -1049,10 +1056,9 @@ R6_SOFT_PEN_CAP_FLOOR = float(os.environ.get("R6_SOFT_PEN_CAP_FLOOR", "-2000.0")
 # (FLAGS_JSON_NUMERIC_OVERRIDES). Konsumenci czytają przez load_flags().get(...).
 MIN_PROPOSE_SCORE = float(os.environ.get("MIN_PROPOSE_SCORE", "-100.0"))
 
-# ─── R7 (H4): Long-haul isolation w peak hours ───
-# Placeholder — brak danych empirycznych na ride_distance w shadow_decisions.
-# Post-deploy monitoring: jeśli R7 trigger rate > 20% w peak 14-17, próg za niski.
-LONG_HAUL_DISTANCE_KM = 99.0  # F2.1c: R7 wyłączone — 4.5km było za agresywne dla Białystoku
+# ─── (dawna R7 long-haul: reguła USUNIĘTA L6.C 2026-07-04 — martwy REJECT za
+# sentinelem LONG_HAUL_DISTANCE_KM=99 od F2.1c; stała skasowana. PEAK_HOURS zostają:
+# karmią żywą telemetrię r7_in_peak/r7_warsaw_hour w feasibility_v2.) ───
 LONG_HAUL_PEAK_HOURS_START = 14   # inclusive
 LONG_HAUL_PEAK_HOURS_END = 17     # inclusive
 
@@ -2556,8 +2562,15 @@ ENABLE_V326_R06_BAG1_FIX = _os.environ.get(
 # >=8km bucket = 18.1% propozycji, większość PANEL_OVERRIDE. Default OFF.
 ENABLE_BUNDLE_DELIV_SPREAD_CAP = _os.environ.get(
     "ENABLE_BUNDLE_DELIV_SPREAD_CAP", "0") == "1"
-BUNDLE_MAX_DELIV_SPREAD_KM = float(_os.environ.get(
-    "BUNDLE_MAX_DELIV_SPREAD_KM", "8.0"))
+# L6.C2 (2026-07-04): JEDEN kanon progu spread dostaw (scala dawne R1_MAX_DELIV_SPREAD_KM
+# hardcode 8.0 w feasibility_v2 + BUNDLE_MAX_DELIV_SPREAD_KM env 8.0 tutaj — ta sama
+# semantyka „rozrzut dostaw worka > X km = geometrycznie zły", 2 literały → 1 źródło;
+# wartość NIEZMIENIONA = bajt-parytet). Env: MAX_DELIV_SPREAD_KM, back-compat fallback
+# na stary klucz BUNDLE_MAX_DELIV_SPREAD_KM. Aliasy niżej trzymają starych konsumentów.
+MAX_DELIV_SPREAD_KM = float(_os.environ.get(
+    "MAX_DELIV_SPREAD_KM",
+    _os.environ.get("BUNDLE_MAX_DELIV_SPREAD_KM", "8.0")))
+BUNDLE_MAX_DELIV_SPREAD_KM = MAX_DELIV_SPREAD_KM  # alias (konsumenci FIX_C/serializer)
 
 # BUNDLE-DELIVERY-COLOCATION (Adrian 2026-06-26) — forced-bundle z 2 twardych reguł.
 # Stała-fallback OFF (decision_flag: flags.json → ta stała → False). Próg = „ten sam
@@ -2906,6 +2919,32 @@ ENABLE_OBJM_LEXR6_SELECT_SHADOW = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT_SHAD
 # flip = osobny ACK po re-walidacji live. flags.json = KANON hot-reload (rollback bez restartu);
 # ta stała = fallback OFF gdy brak klucza. Konsumpcja: C.flag("ENABLE_OBJM_LEXR6_SELECT", False).
 ENABLE_OBJM_LEXR6_SELECT = _os.environ.get("ENABLE_OBJM_LEXR6_SELECT", "0") == "1"
+
+# L6.C2 GEOMETRIA W SELEKCJI (2026-07-04, R2 ROOT-7): człon `deliv_spread_km` jako OSTATNI
+# term kanonu objm_lexr6.lex_qual — SOFT tie-break podrzędny wobec całej osi czasowej
+# R6→committed→new-late (INV-LAYER-5: geometria NIE osłabia HARD; działa wewnątrz puli,
+# którą feasibility już przepuściło). Leczy klasę „279 propozycji spread>8km" (C10-oracle
+# 30.06) i jest BRAMKĄ flipu PENDING_RESWEEP_LIVE (de-pile bez geometrii = szkoda).
+# Flaga DECYZYJNA (ETAP4, cross-proces przez flags.json); default OFF = krotka bajt-
+# identyczna. Konsumenci: WSZYSTKIE ścieżki importujące kanon lex_qual (d2_pick LIVE,
+# best_effort_objm, feas_carry_readmit, cień, global_allocate przez assess_order).
+ENABLE_LEXQUAL_GEOMETRY_TIEBREAK = _os.environ.get(
+    "ENABLE_LEXQUAL_GEOMETRY_TIEBREAK", "0") == "1"
+# Kwantyzacja termów czasowych lex_qual do kubełków N-min (0.0=OFF; aktywna TYLKO gdy
+# geometria ON). Czysty append rozstrzyga wyłącznie idealne remisy floatów — pod scarcity
+# geometria mogłaby nie odpalić nigdy; kubełkowanie zlewa bliskie remisy. Wartość = decyzja
+# z pomiaru (replay quant=0 vs 1.0), nie zgadywana. Konsumpcja: C.flag(..., fallback stała).
+LEXQUAL_TIME_QUANT_MIN = float(_os.environ.get("LEXQUAL_TIME_QUANT_MIN", "0.0"))
+
+# L6.C3 ENGINE CLAIM LEDGER (2026-07-04, R2 ROOT-8): shadow_dispatcher._tick po PROPOSE
+# dla NEW_ORDER dokłada zwycięzcy zlecenie do JEGO worka w snapshocie floty (wspólny
+# claim_ledger.tentative_assign — TEN SAM mechanizm co global_allocate resweep/przerzut,
+# zero 2. kopii) → kolejne eventy TEGO SAMEGO ticku widzą obciążenie zamiast proponować
+# temu samemu kurierowi w nieskończoność (INV-LAYER-4; pomiar: 447 proponowany 127×/32
+# zlecenia, g_maxpile=7). Flaga DECYZYJNA (ETAP4); default OFF = flota niemutowana
+# (zachowanie sprzed L6.C3, bajt-parytet).
+ENABLE_ENGINE_CLAIM_LEDGER = _os.environ.get(
+    "ENABLE_ENGINE_CLAIM_LEDGER", "0") == "1"
 
 # BEST-EFFORT OBJM SHADOW (2026-06-23): ścieżka best_effort (0 feasible) sortuje
 # `_best_effort_sort_key` z PRIMARY = r6_per_order_violations (new-pickup-only) — ŚLEPYM na

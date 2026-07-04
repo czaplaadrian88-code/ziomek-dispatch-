@@ -1157,18 +1157,15 @@ def _objm_lexr6_shadow(top, feasible, order_id=None) -> None:
         # B2 FIX (audyt 2026-06-28): stale inline _bucket -> wspolny _selection_bucket
         # (parytet z LIVE objm select, ktory uzywa bucket_fn=_selection_bucket; SHADOW
         # musi miec te sama szuflade by byl wiernym cieniem live-selekcji).
-        def _objm(c, k):
-            v = (getattr(c, "metrics", None) or {}).get(k)
-            return float(v) if isinstance(v, (int, float)) else None
-
         _w_tb = (_late_pickup_tier(_w), _selection_bucket(_w))
         _grp = [c for c in feasible if (_late_pickup_tier(c), _selection_bucket(c)) == _w_tb]
 
-        def _lex_qual(c):
-            r6 = _objm(c, "objm_r6_breach_max_min")
-            return (r6 if r6 is not None else 9e9,
-                    _objm(c, "late_pickup_committed_max") or 0.0,
-                    _objm(c, "new_pickup_late_min") or 0.0)
+        # L6.C1 (2026-07-04, dokończenie objm-lexr6-unify): kopia inline przepięta na
+        # kanon. Zamrożenie pod at#152 wygasło — walidacja PASS (at-200 03.07 = GO,
+        # SELECT LIVE), a POST_SHIFT_OVERRUN OFF ⇒ kanon zwraca 3-krotkę bajt-identyczną
+        # z dawnym inline. Parytet cień↔kanon: test_objm_lexr6_unify (oba stany flagi).
+        from dispatch_v2 import objm_lexr6 as _OLS
+        _lex_qual = _OLS.lex_qual
 
         # E2↔D2 (2026-06-17, dyrektywa Adriana „brał pod uwagę też pln, nie w pierwszej
         # kolejności"): pln_v jako tie-breaker NAJNIŻSZEGO rzędu — jakość (R6→committed→
@@ -2194,7 +2191,13 @@ def _compute_repo_cost_km(bag_sim, plan, order_id, pickup_coords):
         if not _coords_pass(bool(drop_coords), drop_coords, pickup_coords):
             return None, None
         return round(haversine(tuple(drop_coords), tuple(pickup_coords)), 2), last_oid
-    except Exception:
+    except Exception as _rc_e:  # noqa: BLE001
+        # L6.C3b fail-LOUD (2026-07-04, F_target_R2:42 „sentinel-swallow→0"): kara
+        # repo-cost jest opcjonalna (None = brak kary, kandydat wygląda TAŃSZY), więc
+        # cichy except systematycznie faworyzował zepsute worki. Zostaje fail-soft
+        # (nie wywalamy oceny), ale KAŻDE połknięcie krzyczy — grep REPO_COST_SWALLOW.
+        log.warning(f"REPO_COST_SWALLOW order={order_id}: "
+                    f"{type(_rc_e).__name__}: {_rc_e}")
         return None, None
 
 

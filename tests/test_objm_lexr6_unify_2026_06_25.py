@@ -6,9 +6,9 @@ objm_lexr6.lex_qual (jedno zrodlo prawdy), nie wlasnej kopii inline. Test:
  2) term post_shift faktycznie idzie przez kanon (zmienia zwyciezce tylko przy ON);
  3) brak ponownej dywergencji: zrodlo picka nie definiuje wlasnego _lex_qual.
 
-UWAGA: _objm_lexr6_shadow (D2 shadow) jest CELOWO zamrozony pod walidacje at#152
-("walidacji NIE ruszac") i NIE jest objety tym parytetem — to swiadoma baseline,
-nie czesciowa zmiana.
+L6.C1 (2026-07-04): zamrozenie _objm_lexr6_shadow pod at#152 WYGASLO (walidacja
+PASS — at-200 03.07 GO, SELECT LIVE) → cien przepiety na kanon i OBJETY parytetem
+(test_shadow_no_inline_lexqual nizej). Koniec swiadomej baseline.
 """
 import inspect
 import sys
@@ -99,3 +99,27 @@ def test_no_inline_lexqual_redivergence():
     src = inspect.getsource(_best_effort_objm_pick)
     assert "objm_lexr6" in src, "pick musi uzywac kanonu objm_lexr6.lex_qual"
     assert "def _lex_qual" not in src, "pick nie moze trzymac inline _lex_qual (re-dywergencja!)"
+
+
+def test_shadow_no_inline_lexqual_redivergence():
+    """L6.C1 (2026-07-04): cien _objm_lexr6_shadow przepiety na kanon po wygasnieciu
+    zamrozenia at#152 — nie moze trzymac wlasnej kopii _lex_qual ani _objm."""
+    from dispatch_v2.dispatch_pipeline import _objm_lexr6_shadow
+    src = inspect.getsource(_objm_lexr6_shadow)
+    assert "objm_lexr6" in src, "cien musi uzywac kanonu objm_lexr6.lex_qual"
+    assert "def _lex_qual" not in src, "cien nie moze trzymac inline _lex_qual (re-dywergencja!)"
+    assert "def _objm(" not in src, "cien nie moze trzymac inline _objm (kanon ma objm())"
+
+
+def test_shadow_lexqual_parity_both_post_shift_states(monkeypatch):
+    """Parytet cien↔kanon przy OBU stanach POST_SHIFT (golden L6.D2-lite): krotka
+    kanonu = 3-elem. przy OFF (bajt-parytet z dawnym inline) / 4-elem. przy ON."""
+    c = _Cand("X", objm_r6=7.5, newbag=20.0, committed=1.0, new_late=2.0, post_shift=9.0)
+    # OFF (domyslnie)
+    assert objm_lexr6.lex_qual(c) == (7.5, 1.0, 2.0)
+    # ON
+    monkeypatch.setattr(
+        objm_lexr6.C, "decision_flag",
+        lambda name, default=False: name == "ENABLE_POST_SHIFT_OVERRUN_PENALTY",
+    )
+    assert objm_lexr6.lex_qual(c) == (9.0, 7.5, 1.0, 2.0)

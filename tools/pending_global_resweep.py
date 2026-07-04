@@ -34,7 +34,6 @@ import os
 import tempfile
 import logging
 import time
-import copy as _copy
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -113,25 +112,13 @@ def _cand_by_cid(res, cid: str):
     return None
 
 
-def _bag_entry_from_order(rec: dict) -> dict:
-    """Wirtualny wpis do worka kuriera (kopia rekordu zlecenia, status=assigned)."""
-    e = dict(rec)
-    e["status"] = "assigned"
-    e["commitment_level"] = "assigned"
-    return e
-
-
-def _tentative_assign(fleet: Dict[str, Any], cid: str, order_rec: dict) -> Dict[str, Any]:
-    """Płytka kopia floty z `order_rec` DOklejonym do worka kuriera `cid`
-    (kontrfaktyk 'gdyby ten kurier dostał to zlecenie'). NIE mutuje wejścia."""
-    out = dict(fleet)
-    cs = out.get(cid)
-    if cs is None:
-        return out
-    cs2 = _copy.copy(cs)
-    cs2.bag = list(cs.bag or []) + [_bag_entry_from_order(order_rec)]
-    out[cid] = cs2
-    return out
+# L6.C3 (2026-07-04): ekstrakcja do modułu SILNIKA — jedno źródło claimu dla
+# resweep/przerzutu/_tick (R2 ROOT-8 „wspólny import, nie 2. kopia"). Lokalne
+# nazwy zachowane (konsumenci w tym pliku + reassignment_global_select nietknięci).
+from dispatch_v2.claim_ledger import (  # noqa: E402
+    bag_entry_from_order as _bag_entry_from_order,
+    tentative_assign as _tentative_assign,
+)
 
 
 def _assess(order_event: dict, fleet: Dict[str, Any], now: datetime):
@@ -248,6 +235,21 @@ def global_allocate_results(hanging: List[Tuple[str, dict]], fleet0: Dict[str, A
         _log.warning(f"global_allocate_results fail: {type(e).__name__}: {e}")
         return {}
     return results
+
+
+def live_gate_open() -> bool:
+    """L6.C3c GATE (2026-07-04, bramka nieprzekraczalna C10-oracle 30.06): każde
+    przyszłe działanie LIVE de-pile'a wymaga członu geometrii w lex_qual — flip
+    PENDING_RESWEEP_LIVE bez ENABLE_LEXQUAL_GEOMETRY_TIEBREAK = 279 propozycji
+    spread>8km wypchniętych na żywo (2019 alokacji multi-drop, 35,2% łamie R1 8km).
+    Zakodowane, nie tylko w notatkach: False = HOLD + głośny warning. KAŻDY przyszły
+    konsument ścieżki LIVE MUSI wołać ten gate przed akcją."""
+    if C.decision_flag("ENABLE_LEXQUAL_GEOMETRY_TIEBREAK"):
+        return True
+    _log.warning("PENDING_RESWEEP_LIVE=ON ale ENABLE_LEXQUAL_GEOMETRY_TIEBREAK=OFF "
+                 "→ HOLD (bramka L6.C: de-pile LIVE bez geometrii w selekcji = "
+                 "279 propozycji spread>8km; flip geometrii najpierw)")
+    return False
 
 
 def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> dict:
@@ -418,7 +420,8 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
     # współdzielonego z żywym telegram_approver. Shadow: tylko log.
     live_acted = 0
     if C.flag(FLAG_LIVE, False):
-        _log.warning("PENDING_RESWEEP_LIVE=ON ale ścieżka live niewpięta — shadow-only (patrz docstring)")
+        if live_gate_open():
+            _log.warning("PENDING_RESWEEP_LIVE=ON ale ścieżka live niewpięta — shadow-only (patrz docstring)")
 
     summary = {
         "hanging": len(hanging),
