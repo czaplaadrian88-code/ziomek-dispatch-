@@ -44,14 +44,33 @@ def test_free_courier_picked_up_bag_wait_not_hard_rejected():
 
 def test_kill_switch_restores_hard_reject():
     """ENABLE_V3273_WAIT_REJECT_FREE_COURIER_SKIP=0 → stary hard-reject niezależny
-    od bagu: Piotr 470 znów verdict NO v3273_wait_courier_hard_reject."""
+    od bagu: Piotr 470 wypada z puli feasible (verdict NO).
+
+    Hermetyzacja 2026-07-04: `result.candidates` na ścieżce PROPOSE = feasible-only,
+    a feasibility DRUGIEGO kuriera (514, r6_max ~34-36 na granicy HARD 35) zależy od
+    ŻYWEGO zegara — osrm_client.route()/table() biorą get_traffic_multiplier(now())
+    (by design dla live; replay majowego fixture'a dziedziczy dzisiejszy kubełek).
+    Weekday → 514 infeasible → best-effort pakował OBU do candidates (470 z NO);
+    sobota-lunch → 514 feasible → 470 (NO) poza candidates → stara asercja padała.
+    Nowa asercja = intencja kill-switcha niezależnie od losu 514: 470 NIGDY nie jest
+    feasible/best (a jeśli w ogóle widoczny w candidates, to z NO + hard_reject reason).
+    Kontrast ON≠OFF: test 1 (skip=1) wymaga 470 MAYBE i best=470."""
     os.environ["ENABLE_V3273_WAIT_REJECT_FREE_COURIER_SKIP"] = "0"
     try:
         out = _run_replay()
+        assert out["result"]["best_cid"] != "470", (
+            "kill-switch OFF nie przywrócił hard-rejectu — 470 dalej wygrywa: "
+            f"{out['result']}")
         f470 = out["final_by_cid"].get("470")
-        assert f470 is not None, "Piotr 470 brak w result.candidates"
-        assert f470["feasibility_verdict"] == "NO", f"oczekiwano NO, jest {f470}"
-        assert "v3273_wait_courier_hard_reject" in (f470["feasibility_reason"] or ""), f470
+        if f470 is not None:
+            # ścieżka best-effort (nikt feasible) — 470 widoczny, ale z NO
+            assert f470["feasibility_verdict"] == "NO", f"oczekiwano NO, jest {f470}"
+            assert "v3273_wait_courier_hard_reject" in (f470["feasibility_reason"] or ""), f470
+        else:
+            # ścieżka PROPOSE (ktoś inny feasible) — 470 wycięty z feasible-only candidates
+            assert out["result"]["pool_feasible_count"] < out["result"]["pool_total_count"], (
+                "470 zniknął z candidates, ale pool_feasible==pool_total — "
+                f"to nie hard-reject: {out['result']}")
     finally:
         os.environ["ENABLE_V3273_WAIT_REJECT_FREE_COURIER_SKIP"] = "1"
 
