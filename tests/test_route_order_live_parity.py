@@ -28,10 +28,13 @@ TOOL = Path(__file__).resolve().parents[1] / "tools" / "route_order_live_parity_
 
 
 @pytest.mark.skipif(
-    os.environ.get("ENABLE_ROUTE_ORDER_LIVE_PARITY", "0") != "1",
-    reason="następca monitora route-order: aktywacja za ACK Adriana "
-           "(ENABLE_ROUTE_ORDER_LIVE_PARITY=1)")
+    os.environ.get("ENABLE_ROUTE_ORDER_LIVE_PARITY", "1") != "1",
+    reason="następca monitora route-order wyłączony jawnym opt-outem "
+           "(ENABLE_ROUTE_ORDER_LIVE_PARITY=0)")
 def test_live_route_order_parity_and_flag_pin():
+    # AKTYWOWANY za ACK Adriana 2026-07-05 ~18:25 UTC (default ON, opt-out =0)
+    # — od tej chwili KAŻDA pełna regresja weryfikuje żywy parytet + pin flag;
+    # monitor ziomek_time_route_monitor wygasa 10.07 bez utraty klasy Q3.
     assert PANEL_PY.exists(), f"brak venv panelu: {PANEL_PY}"
     r = subprocess.run([str(PANEL_PY), str(TOOL), "--json"],
                        capture_output=True, text=True, timeout=120)
