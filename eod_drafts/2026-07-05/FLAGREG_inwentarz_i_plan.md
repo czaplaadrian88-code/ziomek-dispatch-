@@ -172,3 +172,17 @@ Wiersz aktualizuje sesja właścicielska INVARIANTS (tmux 17) — tu tylko odnot
 | KEY | TOOLS-ONLY | — |  | NIE | tools/flag_hygiene_check.py:37 |
 | MANUAL_KONIEC_COMMAND_ENABLED | SERVICE-SCOPED(dispatch-telegram) | True |  | NIE | telegram_approver.py:3430 |
 | MANUAL_POPRAWA_COMMAND_ENABLED | SERVICE-SCOPED(dispatch-telegram) | False |  | NIE | telegram_approver.py:3696 |
+
+---
+
+## STATUS WYKONANIA (dopisane 05.07 ~19:50 UTC)
+
+**Wykonane w worktree `wt-flagreg`, branch `fix/flagreg-sprint25` (commity `f27d97f` + `a06d597`), MERGE DO MASTERA ZA ACK:**
+- Partia A' (7 flag decyzyjnych BEZ klucza w flags.json → ETAP4 + konsty-lustra) + Partia B (29 shadow-obs/alert → `_FINGERPRINT_EXTRA_FLAGS`) + 5 konst-luster + baseline effect-checkera +3.
+- **Pełna regresja przeciw worktree (fakeroot `ZIOMEK_SCRIPTS_ROOT`): 4190 passed / 1 failed** — jedyny fail = `test_flag_effect_coverage` czytający ZAHARDKODOWANĄ ścieżkę baseline z GŁÓWNEGO checkoutu (worktree ma baseline +3; zweryfikowane ręcznie: new_gap=[] przeciw worktree-baseline). Po merge test zielony. Efektywnie **4190/0**.
+- Metryka „czytane w prod poza WSZYSTKIMI rejestrami" (ETAP4∪FP_EXTRA∪NUMERIC∪INFRA): **114 → 62**.
+- Merge wstrzymany świadomie: master = żywy kod oneshot-serwisów; nowe wpisy fingerprinta = znany benign „stale-process" szum w fingerprint-check do restartów, a pn 06.07 biegną weryfikacje at-205/206 — decyzja o terminie merge u Adriana.
+
+**ZABLOKOWANE kolizją z tmux 17 (świadomie NIE zrobione):** rejestracja flag OBECNYCH w flags.json (66 szt.) do ETAP4/NUMERIC — każde skurczenie klasy survivors WYMUSZA edycję `tests/test_conftest_flag_strip_guard.py` (asercja „healed → zaktualizuj baseline W DÓŁ"), a to plik Sprintu 1 (tmux 17). Wykonać PO zamknięciu S1 jedną partią (lista = §5 wiersze z `flags.json≠—`).
+
+**Pozostałe 62 poza rejestrami =** 66 json-owych zablokowanych j.w. minus przecięcia + parametry numeryczne/service-scoped (RECONCILIATION_* 10 szt., czasówka-proactive, PLAN_GC_*, O2_CAPZ_* — te wg werdyktów service-scoped mogą świadomie zostać poza ETAP4; doc-wpisy = Partia D, nie zaczęta).
