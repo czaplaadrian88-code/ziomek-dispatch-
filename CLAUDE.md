@@ -8,7 +8,7 @@
 5. Decyzje projektowe („dlaczego tak jest") → `docs/decisions/` (ADR-001..008).
 6. Dalej czytaj TYLKO pliki potrzebne do zadania — CODEMAP wskaże które.
 
-**Twarde minimum środowiskowe:** testy WYŁĄCZNIE `/root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q` (systemowy python3 nie ma ortools → fałszywe faile); żywy stan = `/root/.openclaw/workspace/dispatch_state/` (katalog `dispatch_state/` w tym repo = TYLKO dane epaki); log decyzji silnika = `../logs/shadow_decisions.jsonl`; flagi silnika = `../flags.json` hot-reload (panel: `flags.systemd.env` — patrz `docs/decisions/ADR-004`).
+**Twarde minimum środowiskowe:** testy WYŁĄCZNIE `/root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q` (systemowy python3 nie ma ortools → fałszywe faile); żywy stan = `/root/.openclaw/workspace/dispatch_state/` (katalog `dispatch_state/` w tym repo = TYLKO dane epaki); log decyzji silnika = `../logs/shadow_decisions.jsonl`; flagi silnika = `../flags.json` hot-reload (panel: `flags.systemd.env` + drop-iny; apka kuriera: drop-iny systemd + `courier_api/config.py` — 3 światy flag opisane w `docs/decisions/ADR-004`).
 
 ---
 
