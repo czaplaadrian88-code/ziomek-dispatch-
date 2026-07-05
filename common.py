@@ -3182,13 +3182,11 @@ R5_DETOUR_FREE_THRESHOLD_KM = float(_os.environ.get(
 R5_DETOUR_EXTREME_KM = float(_os.environ.get(
     "R5_DETOUR_EXTREME_KM", "7.5"))
 
-# BUG F long-term (2026-05-26): klastry geograficzne (osiedla). Reguła Adriana:
-# „Kraszewskiego i Wąska są blisko siebie na jednym osiedlu (Case D), szybkie
-# do doręczenia, a później miałby najdalej na Jaroszówce". `districts_data.py`
-# mapuje ulice na osiedla, ale TSP go ignoruje. Faza 1 = shadow metric only
-# (zbieranie korpusu); sprint długoterminowy z osobnym planowaniem.
-ENABLE_CLUSTER_DROP_GROUPING_METRIC = _os.environ.get(
-    "ENABLE_CLUSTER_DROP_GROUPING_METRIC", "0") == "1"
+# BUG F long-term (2026-05-26): klastry geograficzne (osiedla) — flaga
+# ENABLE_CLUSTER_DROP_GROUPING_METRIC USUNIĘTA 2026-07-05 (P-FLAGREG GC za ACK:
+# dead od zadeklarowania, 0 konsumentów — sweep B06 D1-1 + re-grep 05.07).
+# Sam pomysł (districts_data.py → planowanie po osiedlach, case Kraszewskiego/
+# Wąska vs Jaroszówka) zostaje w backlogu jako sprint długoterminowy.
 
 # BUG C (2026-05-26): renderer commit-priority maskuje plan-divergence. Solver
 # OR-Tools respektuje [ck-5, ck+5] per pickup independently — może wcisnąć

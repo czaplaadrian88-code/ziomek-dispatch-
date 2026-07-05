@@ -45,7 +45,6 @@ def _covered() -> set:
 # Zamrożony stan długu 2026-07-05 (134 klucze; _comment_* pominięte — to
 # dokumentacja w pliku, nie flagi). Kierunek dozwolony: TYLKO w dół.
 _KNOWN_SURVIVORS_2026_07_05 = {
-    "A4_TEST_FLAG",
     "ALWAYS_PROPOSE_WOULD_REDIRECT_SHADOW",
     "AUTO_KOORD_ON_NEW_ORDER_ENABLED",
     "AUTO_KOORD_TELEGRAM_INFO_ENABLED",
