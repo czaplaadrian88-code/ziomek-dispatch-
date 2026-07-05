@@ -12,7 +12,13 @@ status 3 assigned od 5 picked_up — patrz panel_watcher.py).
 
 Schema wpisu (per order_id):
   {courier_id, last_status_code, last_status_label, last_status_at(epoch),
-   picked_up_at(epoch|brak), delivered_at(epoch|brak), source, updated_at(epoch)}
+   picked_up_at(epoch|brak), delivered_at(epoch|brak), source, updated_at(epoch),
+   gps_arrived_at(epoch|brak), gps_arrived_accuracy_m(|brak), gps_arrival_source(|brak)}
+
+5b (2026-07-05): `gps_arrived_at` = fizyczny PRZYJAZD pod adres DOSTAWY (geofence
+apki, dwell 30 s, earliest-wins) — writer: courier-api `write_gps_arrival`.
+UWAGA semantyka: gps_arrived_at = "kurier stoi pod budynkiem", delivered_at =
+"kurier potwierdził wręczenie suwakiem" (button-press, ±~3 min szumu).
 """
 import json
 
@@ -45,3 +51,13 @@ def gps_delivered_at(gt: dict, order_id):
     """Epoch realnego doręczenia z GPS (status 7) lub None."""
     e = get_entry(gt, order_id)
     return e.get("delivered_at") if e else None
+
+
+def gps_arrived_at(gt: dict, order_id):
+    """5b: epoch fizycznego PRZYJAZDU pod adres dostawy (geofence apki) lub None.
+
+    Preferuj nad delivered_at gdy potrzebna prawda "kiedy jedzenie dojechało"
+    (delivered_at = ręczny klik, ±~3 min; gps_arrived_at = dwell-potwierdzony GPS).
+    """
+    e = get_entry(gt, order_id)
+    return e.get("gps_arrived_at") if e else None

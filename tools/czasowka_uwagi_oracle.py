@@ -11,6 +11,9 @@ decyzję (HARD vs SOFT), zmierz na REALNYCH danych:
 ⚠ ORACLE ≠ silnik miernika (C9/C11): prawda = REALNY `delivered_at` ze stanu, nie re-symulacja.
 ⚠ delivered_at = klik w apce, NIE fizyczne przybycie (audyt 2026-06-28: 0/377 GPS-potwierdzonych,
   ~±3 min) → raportujemy on-time z tolerancją +3 min obok ściśle ≤deadline.
+✅ 5b (2026-07-05): gdy ground_truth ma `gps_arrived_at` (fizyczny przyjazd pod adres z geofence
+  apki), używamy GO jako prawdy dostawy zamiast button-press (kasuje ±3 min szumu). Pokrycie
+  raportowane w summary (`n_truth_gps_arrival`) — rośnie wraz z rolloutem apki 5b.
 ⚠ deadline ABSOLUTNY (np. 17:10), niezależny od R6-tier (35/40) — tier raportujemy informacyjnie.
 
 READ-ONLY: czyta orders_state*.json, nic nie zapisuje do stanu. Pisze raport JSONL/summary.
@@ -26,6 +29,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+from dispatch_v2 import courier_ground_truth as _cgt  # noqa: E402
 from dispatch_v2.czasowka_uwagi import parse_delivery_deadline  # noqa: E402
 
 WARSAW = ZoneInfo("Europe/Warsaw")
@@ -76,6 +80,8 @@ def _p90(xs):
 
 
 def compute(files):
+    # 5b: fizyczna prawda przyjazdu z apki (fail-soft: brak pliku → {}).
+    gtruth = _cgt.load_ground_truth()
     # dedup by order_id; preferuj rekord z delivered_at, potem najświeższy updated_at
     merged = {}
     for path in files:
@@ -102,7 +108,15 @@ def compute(files):
         # "nie wcześniej"/"nie przed" = ograniczenie NAJWCZEŚNIEJ (nie deadline) → parser świadomie
         # zwraca None; to NIE jest recall-gap, więc NIE liczymy jako parse_miss (instrument uczciwy).
         _earliest_bound = any(p in ul for p in ("nie wcze", "nie przed", "najwcze"))
-        deliv = _parse_ts(o.get("delivered_at"))
+        # 5b: prawda dostawy = fizyczny przyjazd (gps_arrived_at z ground_truth apki)
+        # GDY dostępny; inaczej button-press delivered_at (±~3 min szumu).
+        deliv, truth_source = None, None
+        ga = _cgt.gps_arrived_at(gtruth, oid)
+        if ga:
+            deliv, truth_source = datetime.fromtimestamp(int(ga), tz=timezone.utc), "gps_arrival"
+        else:
+            deliv = _parse_ts(o.get("delivered_at"))
+            truth_source = "button_press" if deliv else None
         pick = _parse_ts(o.get("picked_up_at")) or _parse_ts(o.get("pickup_at_warsaw"))
         late = round((deliv - dl).total_seconds() / 60.0, 1) if (deliv and dl) else None
         rows.append({
@@ -114,6 +128,7 @@ def compute(files):
             "deadline_hhmm": dl.astimezone(WARSAW).strftime("%H:%M") if dl else None,
             "delivered_hhmm": deliv.astimezone(WARSAW).strftime("%H:%M") if deliv else None,
             "late_min": late,
+            "truth_source": truth_source,
             "parse_miss": bool(hint and dl is None and not _earliest_bound),
             "deadline_before_pickup": bool(dl and pick and dl < pick),
         })
@@ -143,6 +158,8 @@ def compute(files):
     parse_miss = [r for r in rows if r["parse_miss"]]
     summary = {
         "n_orders": len(rows),
+        "n_truth_gps_arrival": sum(1 for r in rows if r["truth_source"] == "gps_arrival"),
+        "n_truth_button_press": sum(1 for r in rows if r["truth_source"] == "button_press"),
         "n_with_uwagi": len(with_uwagi),
         "n_parsed_deadline_raw": len(with_deadline_raw),
         "n_effective_deadline": len(with_deadline_eff),
@@ -177,7 +194,8 @@ def main():
         print(f"\n⚠ RECALL-GAP (uwagi~'czas' ale parser=None) — {len(parse_miss)}:")
         for r in parse_miss[:20]:
             print(f"   {r['order_id']} type={r['order_type']} uwagi={r['uwagi']!r}")
-    print("\n⚠ delivered_at = klik w apce ±~3 min (audyt 2026-06-28); patrz on_time_le_deadline_plus3.")
+    print("\n⚠ prawda dostawy: gps_arrival (fizyczny przyjazd, 5b) gdy jest; inaczej button-press"
+          " ±~3 min → patrz on_time_le_deadline_plus3 i n_truth_gps_arrival (pokrycie).")
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
