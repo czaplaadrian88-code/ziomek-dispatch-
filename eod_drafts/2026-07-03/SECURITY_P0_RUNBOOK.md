@@ -32,6 +32,21 @@ Utworzyć/przypiąć firewall z regułami INBOUND (reszta DROP):
 
 ⚠ **Przed zablokowaniem 8765/8766/8767 zweryfikować, czy apka kuriera bije w port bezpośrednio, czy przez nginx 443** (nginx routuje `/api/*`→:8767; ale LE-cert na nip.io:8765 sugeruje, że COŚ używało bezpośrednio). Weryfikacja serwerowa (CC za ACK): `grep -c ":876" /var/log/nginx/access.log` vs `tcpdump -c 20 -i any port 8767 and not src 127.0.0.1` w godzinach pracy floty — jeśli telefony biją wprost w 8767, port musi zostać otwarty do czasu przepięcia apki na 443.
 
+## SEKCJA-B MOST host-iptables WYKONANY 05.07 ~19:45 UTC (tmux15, ACK Adriana - do czasu Sekcji A)
+
+Zamkniete z internetu (weryfikacja z 2-3 zewn. wezlow check-host.net = blocked, lokalnie dalej 200):
+| Port | Usluga | Lancuch (wg sciezki pakietu) |
+|---|---|---|
+| 631 | CUPS | INPUT (host) |
+| 3001 | next-server/gateway UI | INPUT (host) |
+| 18789 | openclaw-gateway | DOCKER-USER (docker same-port) |
+| 5001 | OSRM | raw/PREROUTING (docker DNAT :5001->:5000 - DOCKER-USER/INPUT NIE lapia po DNAT; kluczowa lekcja) |
+| 9222 | CDP | DOCKER-USER - B1 skonsolidowany (B1 z 04.07 nigdy nie mial @reboot) |
+
+Nietkniete (potwierdzone OPEN z zewnatrz): 22 SSH, 443/80 nginx, 8767 courier-api (apka bije przez nginx /api -> 443, 9906 wywolan w access.log; 0 bezposrednich), 8766 (zostaje do weryfikacji PWA - patrz Sekcji A). Wszystkie reguly v4+v6, tylko -i eth0 (localhost/docker-internal nietkniete - OSRM lokalnie 200, dispatch-shadow 0 bledow OSRM).
+
+Trwalosc: dispatch_state/host_fw_drop_reboot.sh (idempotentny, wzorzec per-port) + wpis crontab @reboot sleep 20. Rollback: iptables -D / ip6tables -D odpowiedniej reguly (lub -t raw -D PREROUTING ... 5001) + usuniecie wpisu @reboot. To MOST - Sekcja A (Hetzner Cloud FW u dostawcy) go zastepuje docelowo; po jej zalozeniu skrypt+@reboot mozna usunac.
+
 ## SEKCJA B (CC za ACK per pozycja, serwerowe, łącznie ~1-2 h)
 
 **B1 — CDP :9222 poza internet (bez restartu przeglądarki agenta):**
