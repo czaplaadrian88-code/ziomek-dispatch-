@@ -1,0 +1,41 @@
+WALL ms n=226 p50=313.2 p95=491.9 mean=320.8
+
+=== TOP by TOTTIME (self) ===
+         150467077 function calls (109714132 primitive calls) in 72.427 seconds
+
+   Ordered by: internal time
+   List reduced from 859 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+ 53708656   20.986    0.000   20.986    0.000 {built-in method ortools.constraint_solver._pywrapcp.RoutingIndexManager_IndexToNode}
+18937259/7973413   11.835    0.000   33.397    0.000 /root/.openclaw/workspace/scripts/dispatch_v2/tsp_solver.py:171(time_cb)
+53708656/26075852    7.430    0.000   14.335    0.000 /root/.openclaw/venvs/dispatch/lib/python3.12/site-packages/ortools/constraint_solver/pywrapcp.py:4812(IndexToNode)
+7915378/5902631    5.031    0.000   21.998    0.000 /root/.openclaw/workspace/scripts/dispatch_v2/tsp_solver.py:161(dist_cb)
+  610/219    3.187    0.005   19.180    0.088 {built-in method ortools.constraint_solver._pywrapcp.RoutingModel_SolveWithParameters}
+  610/219    1.249    0.002   23.060    0.105 /root/.openclaw/venvs/dispatch/lib/python3.12/site-packages/ortools/constraint_solver/pywrapcp.py:5716(SolveWithParameters)
+1502/1487    0.986    0.001    1.575    0.001 /root/.openclaw/workspace/scripts/dispatch_v2/common.py:1813(drop_zone_from_address)
+      226    0.957    0.004    0.970    0.004 /root/.openclaw/venvs/dispatch/lib/python3.12/site-packages/lightgbm/basic.py:1286(__inner_predict_np2d)
+ 2260/388    0.732    0.000   55.797    0.144 /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_pipeline.py:3883(_v327_eval_courier_inner)
+      226    0.698    0.003    0.698    0.003 {built-in method posix.fsync}
+3866/3865    0.638    0.000    0.638    0.000 /usr/lib/python3.12/json/decoder.py:343(raw_decode)
+     1619    0.479    0.000    4.850    0.003 /usr/lib/python3.12/threading.py:637(wait)
+     3795    0.477    0.000  100.313    0.026 /usr/lib/python3.12/threading.py:323(wait)
+ 3193/862    0.449    0.000    0.080    0.000 {method 'recv_into' of '_socket.socket' objects}
+14279/12999    0.436    0.000    0.729    0.000 {built-in method posix.stat}
+21056/15685    0.384    0.000  140.888    0.009 {method 'acquire' of '_thread.lock' objects}
+   598078    0.339    0.000    0.339    0.000 {built-in method builtins.round}
+  2039750    0.326    0.000    0.326    0.000 {method 'startswith' of 'str' objects}
+5948/2964    0.290    0.000    4.441    0.001 /usr/lib/python3.12/socket.py:500(close)
+  610/219    0.274    0.000   43.990    0.201 /root/.openclaw/workspace/scripts/dispatch_v2/route_simulator_v2.py:1512(_solve)
+  1353046    0.273    0.000    0.273    0.000 {method 'get' of 'dict' objects}
+26766/7549    0.255    0.000    3.051    0.000 {method 'readline' of '_io.BufferedReader' objects}
+     2260    0.250    0.000    6.843    0.003 /usr/lib/python3.12/concurrent/futures/thread.py:164(submit)
+35700/35636    0.243    0.000    0.578    0.000 /root/.openclaw/workspace/scripts/dispatch_v2/osrm_client.py:293(_apply_traffic_multiplier)
+ 2133/508    0.241    0.000   44.259    0.087 {method 'get' of '_queue.SimpleQueue' objects}
+  610/219    0.236    0.000   24.958    0.114 /root/.openclaw/workspace/scripts/dispatch_v2/tsp_solver.py:39(solve_tsp_with_constraints)
+3593/3333    0.236    0.000    3.748    0.001 /usr/lib/python3.12/pathlib.py:837(stat)
+3390/2968    0.229    0.000   28.987    0.010 {built-in method builtins.next}
+  2720674    0.228    0.000    0.228    0.000 {built-in method builtins.len}
+1808/1681    0.225    0.000    6.873    0.004 /root/.openclaw/workspace/scripts/dispatch_v2/dispatch_pipeline.py:87(_load_rule_weights)
+
+
