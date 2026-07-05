@@ -10,7 +10,7 @@
 - **⚠️ VOID** — strażnik/przyrząd ISTNIEJE, ale oracle pokazał, że KŁAMIE. **Gorszy niż brak** — daje fałszywą pewność. Priorytet naprawy = najwyższy.
 - **🔴 SLOT** — brak strażnika. Nazwany dług, do zbudowania (fala F6/L0).
 
-**Dziś: 18 testów-strażników (głównie 🟢 TEST, dane/sentinele/stan), 1 ⚠️ VOID (carried_first_guard), klasa ALOKACJA/FEASIBILITY = 🔴 SLOT-y.** Fala F6 celuje w 🔴 klasy feasibility + naprawę ⚠️ VOID.
+**Dziś (2026-07-05, Sprint 1 Z1): ~21 testów-strażników (głównie 🟢 TEST, dane/sentinele/stan), 2 ⚠️ VOID pozostałe (carried_first_guard, global_allocate geometria — Zadanie 2 Sprintu 1), klasa ALOKACJA/FEASIBILITY = 🔴 SLOT-y.** Fala F6 celuje w 🔴 klasy feasibility + naprawę ⚠️ VOID.
 
 ---
 
@@ -34,7 +34,7 @@
 
 ## Kontrakt ④ — PRAWDA FLAG
 - 🟢/🔴 **INV-FLAG-REGISTRY**: 100% flag decyzyjnych w `ETAP4_DECISION_FLAGS`; sonda `flag_fingerprint` pokrywa wszystkie. Dziś: `flag_registry.py` istnieje, ALE **112 flag poza rejestrem + 5 dead-flag** → 🔴 do domknięcia.
-- ⚠️ **INV-FLAG-CONFTEST-STRIP**: test z OFF nie biegnie cicho ON. Claim „conftest-leak naprawiony 257d315" = **VOID** (oracle) — leak częściowo żyje w 3-warstwowym stanie flag. NAPRAW.
+- 🟢 **INV-FLAG-CONFTEST-STRIP** *(de-VOID 2026-07-05, Sprint 1 Z1)*: test z OFF nie biegnie cicho ON. Strażnik = `test_conftest_flag_strip_guard` (3 testy, mutation-probe ×2): (a) strip faktycznie usuwa WSZYSTKIE klucze z 3 list pokrycia, (b) niedecyzyjne klucze bajt-w-bajt, (c) **RATCHET** — klasa przeciekowa nie może urosnąć (baseline 134 znanych survivors z 2026-07-05, kierunek tylko w dół; nowa flaga w flags.json bez ETAP4 = czerwony test). Pełne zamknięcie (baseline→0) = INV-FLAG-REGISTRY (🔴 wyżej). Stary claim „naprawione 257d315" był VOID (łatka na 3 instancje). Dowód: `eod_drafts/2026-07-05/A1_SERIALIZER_reoracle_dowod.md`.
 
 ## Kontrakt ⑤ — PRAWDA PRZYRZĄDÓW (flip tylko na validated)
 - 🔴 **INV-TRUTH**: każdy werdykt shadow/monitor JOIN `gps_delivery_truth`/`decision_outcomes` + tripwire `delta≥0` uzbrojony (struktura niemożliwa = harness pada, nie loguje jako dane).
@@ -42,7 +42,7 @@
   *(STATUS 2026-07-02, L1.2: READ-side przyczyn część usunięta — WRONG-SOURCE martwy sla 3→0 [no_gps_eta_error, prep_bias_r6_replay, b_route_shadow_review real_joined 0→322] + 40 tooli rotation-aware; formalne zdjęcie VOID = re-oracle C9 przy następnym użyciu przyrządu. Szczegóły: adendum w `eod_drafts/2026-06-30/FAZA1_03_rejestr_przyrzadow.md`.)*
   - `carried_first_guard` = **VOID** (biega z pustym env → 90% rekordów fikcyjne `no_position`). ← *to unieważnia moje wcześniejsze ✅ przy INV-ORDER-CANON.*
   - `global_allocate` geometryczna jakość = **VOID** (certyfikuje liczbę, ślepy na geometrię — 35% worków spread>8km po de-pile). **MUSI blokować flip `PENDING_RESWEEP_LIVE`.**
-  - serializer gubi **38 kluczy** (`eta_source`=0/2000, `r6_gold4_gate`=0/2000) → bramkuje kalibrację O2 (02.07); napraw serializer PRZED.
+- 🟢 **serializer −38 kluczy — de-VOID 2026-07-05 (Sprint 1 Z1, re-oracle C9):** naprawa = L1.1 `85d92f7` (deny-lista), żywa od restartu shadow **03.07 13:18 UTC**; re-oracle na świeżym oknie n=229: `eta_source`/`c2_*`/`cs_tier_*`/`sla_minutes_used`/… = **221/229**, `sla_violations_*`=67/229, `r6_gold4_gate_recovered`=14/229; zera = klucze warunkowe (grep producentów) lub nazwy bez producenta (`eta_src`,`drive_source`). Strażnicy: `test_serializer_completeness_l11` (A) + **NOWY** `test_serializer_location_b_parity` (B funkcjonalnie na realnym `PipelineResult` + parytet zbiorów A↔B), mutation-probe ×2 zdane. ⚠ Kalibracja O2: okna ciąć od **2026-07-03T13:19Z** (starsze rekordy mają dziury). Dowód: `eod_drafts/2026-07-05/A1_SERIALIZER_reoracle_dowod.md`.
 - ✅ **Kontr-dowód (oracle potwierdził że DZIAŁAJĄ — NIE ruszać jako void):** `post_shift_overrun`=457/2000, `would_hard_cap`=438/2000 LIVE.
 
 ## Kontrakt ⑥ — BRAK DRYFU SEMANTYKI
@@ -77,12 +77,12 @@
 | ① jedno źródło | 0 | 0 | 4 |
 | ② warstwy | 2 | 0 | 5 |
 | ③ bliźniaki | 0 | 0 | 3 |
-| ④ flagi | 1 | 1 | 1 |
-| ⑤ prawda przyrządów | 2✅ | 3 | 1 |
+| ④ flagi | 2 | 0 | 1 |
+| ⑤ prawda przyrządów | 2✅+1🟢 | 2 | 1 |
 | ⑥ semantyka | 1 | 0 | 2 |
 | ⑦ cykl życia | 2 | 0 | 2 |
 | ⑧ koherencja | 1 | 0 | 2 |
 | DANE/SENTINELE | 10 | 0 (carried→⑤) | 1 |
-| **RAZEM** | **~19** | **4** | **21** |
+| **RAZEM** | **~21** | **2** | **21** |
 
-**Wniosek:** dług egzekwowania skoncentrowany w kontraktach ①②③ (alokacja/feasibility) — 12 z 21 slotów. Fala F6/L0 celuje TAM + naprawia 4 ⚠️ VOID (fałszywa pewność). Klasa DANE/STAN już gęsto obstawiona.
+**Wniosek:** dług egzekwowania skoncentrowany w kontraktach ①②③ (alokacja/feasibility) — 12 z 21 slotów. Fala F6/L0 celuje TAM + naprawia pozostałe 2 ⚠️ VOID (`carried_first_guard`, `global_allocate` geometria — Sprint 1 Z2; fałszywa pewność). Klasa DANE/STAN już gęsto obstawiona. *(2026-07-05 Z1: serializer + CONFTEST-STRIP zdjęte z VOID — dowód `eod_drafts/2026-07-05/A1_SERIALIZER_reoracle_dowod.md`.)*
