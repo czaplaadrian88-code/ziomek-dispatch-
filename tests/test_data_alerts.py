@@ -364,3 +364,87 @@ def test_mutation_ledger_stall_threshold_is_caught():
         sys.modules.pop(qual, None)
         if saved is not None:
             sys.modules[qual] = saved
+
+
+# ── 6. q1-missing-time (SPRINT0 pas Q1, ACK 05.07 — następca pionu Q1 monitora) ──
+def _q1_order(status="assigned", cid="400", assigned_min_ago=15.0, ck=None,
+              ck_warsaw=None, now=None):
+    o = {"status": status, "courier_id": cid}
+    if assigned_min_ago is not None:
+        o["assigned_at"] = (now - timedelta(minutes=assigned_min_ago)).isoformat()
+    if ck is not None:
+        o["czas_kuriera_hhmm"] = ck
+    if ck_warsaw is not None:
+        o["czas_kuriera_warsaw"] = ck_warsaw
+    return o
+
+
+def test_q1_fires_for_assigned_without_time_after_dwell():
+    now = _now_at(12)
+    orders = {"1001": _q1_order(now=now, assigned_min_ago=15.0)}
+    s = da.evaluate_q1_missing_time(orders, now)
+    assert s.firing is True
+    assert s.value == 1.0
+    assert "1001" in s.detail
+
+
+def test_q1_dwell_suppresses_fresh_assignment():
+    now = _now_at(12)
+    orders = {"1002": _q1_order(now=now, assigned_min_ago=3.0)}
+    s = da.evaluate_q1_missing_time(orders, now)
+    assert s.firing is False
+    assert s.value == 0.0
+    assert s.sample == 1  # rozważony, ale w dwellu
+
+
+def test_q1_time_present_hhmm_or_warsaw_does_not_fire():
+    now = _now_at(12)
+    orders = {
+        "1003": _q1_order(now=now, ck="12:30"),
+        "1004": _q1_order(now=now, ck_warsaw="2026-07-02T12:30:00+02:00"),
+    }
+    s = da.evaluate_q1_missing_time(orders, now)
+    assert s.firing is False
+    assert s.value == 0.0
+
+
+def test_q1_only_assigned_status_considered():
+    now = _now_at(12)
+    orders = {
+        "1005": _q1_order(now=now, status="picked_up"),
+        "1006": _q1_order(now=now, status="delivered"),
+    }
+    s = da.evaluate_q1_missing_time(orders, now)
+    assert s.sample == 0 and s.firing is False
+
+
+def test_q1_virtual_koordynator_cid26_excluded():
+    now = _now_at(12)
+    orders = {"1007": _q1_order(now=now, cid="26")}
+    s = da.evaluate_q1_missing_time(orders, now)
+    assert s.sample == 0 and s.firing is False
+
+
+def test_q1_suppressed_outside_working_hours():
+    now = _now_at(3)
+    orders = {"1008": _q1_order(now=now, assigned_min_ago=45.0)}
+    s = da.evaluate_q1_missing_time(orders, now)
+    assert s.window_open is False and s.firing is False
+    assert s.value == 1.0  # liczony, ale bramka zamknięta (obserwowalność)
+
+
+def test_q1_orders_state_wrapper_and_flat_normalization():
+    flat = {"1": {"status": "assigned"}}
+    assert da._orders_state_dict(flat) == flat
+    assert da._orders_state_dict({"orders": flat}) == flat
+    assert da._orders_state_dict(None) == {}
+    assert da._orders_state_dict([1, 2]) == {}
+
+
+def test_q1_mutation_probe_ck_flip_is_load_bearing():
+    """C13: to samo zlecenie z ck i bez ck MUSI zmieniać firing — dowód, że
+    asercje testują detekcję braku czasu, nie przechodzą pusto."""
+    now = _now_at(12)
+    bez = da.evaluate_q1_missing_time({"1": _q1_order(now=now)}, now)
+    z = da.evaluate_q1_missing_time({"1": _q1_order(now=now, ck="13:00")}, now)
+    assert bez.firing is True and z.firing is False

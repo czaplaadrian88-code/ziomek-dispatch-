@@ -30,6 +30,10 @@ spam co tick), czytających ŻYWY stan read-only:
                         jest starsza niż próg (ingest GPS degraduje). Godz. pracy.
   5. ledger-stall     — brak NOWYCH rekordów w `shadow_decisions` przez próg minut
                         w oknie PEAK (11-14 / 17-20 Warsaw) — silnik shadow martwy.
+  6. q1-missing-time  — zlecenie PRZYPISANE >= dwell min i wciąż BEZ czasu
+                        odbioru (czas_kuriera) — apka/konsola bez czasu, R27
+                        ślepe. Następca pionu Q1 wygasającego (10.07)
+                        `ziomek_time_route_monitor` (SPRINT0 pas Q1, ACK 05.07).
 
 KONSTRUKCJA (protokół #0 + C12/C13)
 -----------------------------------
@@ -89,6 +93,7 @@ DEFAULT_STATE_PATH = _STATE_DIR / "data_alerts_state.json"
 DEFAULT_LOG_PATH = _LOGS_DIR / "data_alerts.log"
 SCHEDULE_PATH = _STATE_DIR / "schedule_today.json"
 COURIER_LAST_POS_PATH = _STATE_DIR / "courier_last_pos.json"
+ORDERS_STATE_PATH = _STATE_DIR / "orders_state.json"
 
 STATE_SCHEMA_VERSION = 1
 
@@ -127,6 +132,20 @@ GPS_MIN_FLEET = _env_int("DATA_ALERTS_GPS_MIN_FLEET", 4)
 # ale niski wolumen (~230 zam./d) daje LEGALNY ogon do ~35 min w cichym peaku →
 # próg 30 min łapie martwy silnik (cisza godzinami), nie karze naturalnej ciszy.
 STALL_MIN = _env_float("DATA_ALERTS_STALL_MIN", 30.0)
+
+# 6. q1-missing-time (SPRINT0 pas Q1, 05.07 — następca pionu Q1 monitora
+# ziomek_time_route_monitor, expiry 10.07): zlecenie PRZYPISANE od >= dwell min
+# i WCIĄŻ bez czasu odbioru (czas_kuriera). Dwell odszumia świeżo-przypisane
+# (koordynator/silnik ustawia czas chwilę po przypisaniu — monitor bez dwella
+# pokazywał przejściowe 2->0 w 10 min). Delty vs monitor (świadome):
+# (a) dwell 10 min zamiast migawki, (b) tylko status=assigned (po odbiorze
+# brakujący deklarowany czas jest bezprzedmiotowy), (c) wykluczony wirtualny
+# Koordynator cid=26 (holding czasówek — nie jest realnym przypisaniem).
+Q1_DWELL_MIN = _env_float("DATA_ALERTS_Q1_DWELL_MIN", 10.0)
+Q1_MIN_COUNT = _env_int("DATA_ALERTS_Q1_MIN_COUNT", 1)
+Q1_EXCLUDED_CIDS = frozenset(
+    c.strip() for c in os.environ.get("DATA_ALERTS_Q1_EXCLUDED_CIDS", "26").split(",")
+    if c.strip())
 
 # Cooldown re-emisji tego samego wciąż-aktywnego sygnału (edge = 1. strzał zawsze).
 COOLDOWN_MIN = _env_float("DATA_ALERTS_COOLDOWN_MIN", 60.0)
@@ -323,6 +342,68 @@ def _grafik_fetched_at(schedule: Optional[dict]) -> Optional[datetime]:
     return ledger_io._parse_ts(schedule.get("fetched_at"))
 
 
+def _order_assigned_at(o: dict) -> Optional[datetime]:
+    """assigned_at zlecenia jako aware dt (ISO z offsetem; naive -> UTC)."""
+    s = o.get("assigned_at")
+    if not s or not isinstance(s, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def evaluate_q1_missing_time(orders: Dict[str, dict], now: datetime, *,
+                             dwell_min: float = Q1_DWELL_MIN,
+                             min_count: int = Q1_MIN_COUNT,
+                             excluded_cids: frozenset = Q1_EXCLUDED_CIDS) -> Signal:
+    """Sygnał 6 (Q1): przypisane >= dwell min i wciąż BEZ czasu odbioru.
+
+    Czysta funkcja (orders_state dict -> Signal). Warunek per zlecenie:
+    status == "assigned" AND assigned_at starsze niż dwell AND courier_id poza
+    excluded (wirtualny Koordynator) AND brak czas_kuriera (hhmm i warsaw).
+    Bramka: godziny pracy. Firing: count >= min_count (default 1 — po dwellu
+    każdy taki przypadek to realna anomalia: apka/konsola bez czasu, R27 slepe).
+    """
+    hits: List[str] = []
+    considered = 0
+    for oid, o in orders.items():
+        if not isinstance(o, dict) or o.get("status") != "assigned":
+            continue
+        cid = str(o.get("courier_id") or "")
+        if cid in excluded_cids:
+            continue
+        assigned = _order_assigned_at(o)
+        if assigned is None:
+            continue
+        considered += 1
+        if (now - assigned).total_seconds() / 60.0 < dwell_min:
+            continue
+        ck = o.get("czas_kuriera_hhmm") or o.get("czas_kuriera_warsaw")
+        if ck:
+            continue
+        hits.append(str(oid))
+    window_open = in_working_hours(now)
+    firing = window_open and len(hits) >= min_count
+    shown = ",".join(sorted(hits)[:5]) + ("..." if len(hits) > 5 else "")
+    detail = (f"przypisane bez czasu odbioru >= {dwell_min:.0f}min: {len(hits)} "
+              f"z {considered} assigned (oid: {shown or '-'}; prog {min_count}, "
+              f"praca={window_open})")
+    return Signal("q1_missing_time", firing, float(len(hits)), float(min_count),
+                  considered, detail, window_open=window_open)
+
+
+def _orders_state_dict(raw: Optional[Any]) -> Dict[str, dict]:
+    """orders_state.json bywa plaskim dictem {oid: {...}} lub z wrapperem
+    {"orders": {...}} (jak konsumuje generator golden) — znormalizuj."""
+    if isinstance(raw, dict):
+        inner = raw.get("orders", raw)
+        if isinstance(inner, dict):
+            return {k: v for k, v in inner.items() if isinstance(v, dict)}
+    return {}
+
+
 def collect(now: Optional[datetime] = None, *,
             window_min: int = WINDOW_MIN) -> List[Signal]:
     """Ładuje żywy stan read-only i zwraca listę wszystkich sygnałów."""
@@ -334,12 +415,15 @@ def collect(now: Optional[datetime] = None, *,
     if not isinstance(positions, dict):
         positions = {}
 
+    orders = _orders_state_dict(_load_json(ORDERS_STATE_PATH))
+
     return [
         evaluate_sentinel_rate(records),
         evaluate_empty_pool(records, now=now),
         evaluate_stale_grafik(_grafik_fetched_at(schedule), now),
         evaluate_stale_gps(positions, now),
         evaluate_ledger_stall(latest_ts, now),
+        evaluate_q1_missing_time(orders, now),
     ]
 
 
