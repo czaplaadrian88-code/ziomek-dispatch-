@@ -65,7 +65,10 @@ def test_live_off_no_mutation_byte_parity(tmp_path, monkeypatch):
 
 
 def test_live_on_gate_closed_zero_actions(tmp_path, monkeypatch):
-    """Bramka L6.C zamknięta → ZERO akcji mimo FLAG_LIVE=ON (nie do ominięcia)."""
+    """Bramka L6.C zamknięta → ZERO akcji mimo FLAG_LIVE=ON (nie do ominięcia).
+    Serializer ZAPATCHOWANY jak w happy-path — jedyną zaporą jest BRAMKA
+    (bez tego probe gate-bypass przeżywał na fail-soft serializacji — C14b)."""
+    _patch_serializer(monkeypatch)
     _, pp = _arm_live(tmp_path, monkeypatch, {"o1": "A", "o2": "A", "o3": "A"},
                       gate_open=False)
     before = _pending(pp)
