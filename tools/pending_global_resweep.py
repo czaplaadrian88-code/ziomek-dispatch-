@@ -19,7 +19,9 @@ ROZWIĄZANIE (ten plik):
 TRYB: SHADOW (default). Loguje `would_repropose` do jsonl — NIE dotyka Telegrama
   ani pending_proposals.json. Jednocześnie MIERZY ile propozycji by się odwróciło
   i ile „pile-on-jednego-kuriera" by rozbił. Flip na żywe re-proponowanie = osobna
-  flaga PENDING_RESWEEP_LIVE (default OFF) po ACK + dniu danych.
+  flaga PENDING_RESWEEP_LIVE (default OFF; K5 05.07: ścieżka live WPIĘTA — podmiana
+  decision_record w pending_proposals dla konsoli/1-klik za bramką live_gate_open;
+  flip za rekomendacją + osobnym ACK Adriana, wykonuje FLIPMASTER).
 
 Wzorzec: tools/reassignment_forward_shadow.py (read-only assess_order, jsonl, flag-gate).
 
@@ -62,7 +64,7 @@ OUT_JSONL = f"{STATE_DIR}/pending_global_resweep.jsonl"
 KURIER_IDS_PATH = f"{STATE_DIR}/kurier_ids.json"
 
 FLAG = "ENABLE_PENDING_RESWEEP"          # master on/off (shadow). default OFF = no-op.
-FLAG_LIVE = "PENDING_RESWEEP_LIVE"       # faktyczne re-proponowanie (edit msg). default OFF.
+FLAG_LIVE = "PENDING_RESWEEP_LIVE"       # K5: podmiana propozycji dla KONSOLI (pending+1-klik; decyzja Adriana 05.07 — NIE Telegram). default OFF.
 MARGIN_KEY = "PENDING_RESWEEP_MARGIN"
 DEFAULT_MARGIN = 15.0                    # pkt — jak DEFAULT_MARGIN reassignment_fwd / auto-proximity
 MAX_HANGING = 8                          # bezpiecznik: max wiszących zleceń/ tick
@@ -252,6 +254,89 @@ def live_gate_open() -> bool:
     return False
 
 
+# K5 LIVE: max akcji na tick (bezpiecznik PONAD margin/MAX_HANGING — stopniowe
+# wdrożenie; koordynator widzi zmiany przyrostowo, nie lawinę podmian).
+LIVE_MAX_ACTIONS_PER_TICK = 3
+
+
+def _live_apply(rows: List[dict], ga_results: Dict[str, Any], now: datetime) -> int:
+    """K5 (2026-07-05): AKCJA LIVE resweepa — podmiana propozycji w pending_proposals
+    dla KONSOLI (decyzja Adriana 05.07: konsola/1-klik, NIE edit Telegrama; Telegram
+    wyciszony 26.06 = nietykalny).
+
+    Dla wierszy would_repropose (margin/spread już rozstrzygnięte w run_once):
+    entry.decision_record := pełna serializacja wyniku globalnej alokacji
+    (_serialize_result — TEN SAM kształt co shadow_decisions; feed konsoli parsuje
+    identycznie, panel_watcher._save_plan_from_pending dostaje plan NOWEGO kuriera,
+    a detekcja PANEL_OVERRIDE przestaje fałszywie krzyczeć po akcepcie nowego).
+
+    Współbieżność: KANON pending_proposals_store.locked_mutate (fcntl LOCK_EX na cały
+    RMW — L7.5); TOCTOU-guard WEWNĄTRZ locka: wpis musi istnieć i wciąż wskazywać
+    kuriera, względem którego liczyliśmy różnicę (proposed_cid) — inaczej skip
+    (przypisano / inny pisarz zmienił propozycję). Fail-soft per akcja (tick nie pada).
+    Provenance: entry.resweep_live {ts, old, new, delta_vs_now, reason} + marker
+    row.live_action w jsonl. Zwraca liczbę wykonanych podmian."""
+    from dispatch_v2 import pending_proposals_store as PPS
+    from dispatch_v2 import shadow_dispatcher as _sd
+    acted = 0
+    for row in rows:
+        if not row.get("would_repropose"):
+            continue
+        if acted >= LIVE_MAX_ACTIONS_PER_TICK:
+            row["live_action"] = "skip_tick_cap"
+            continue
+        oid = str(row.get("order_id"))
+        res = ga_results.get(oid)
+        if res is None:
+            row["live_action"] = "skip_no_result"
+            continue
+        try:
+            serialized = _sd._serialize_result(res, f"resweep-live-{oid}", 0.0)
+        except Exception as e:  # noqa: BLE001 — pojedyncza akcja nie wywala ticka
+            _log.warning(f"K5 live serialize fail oid={oid}: {type(e).__name__}: {e}")
+            row["live_action"] = "skip_serialize_fail"
+            continue
+        outcome = {"v": "skip_gone"}
+        provenance = {
+            "ts": now.isoformat(), "old_cid": row.get("proposed_cid"),
+            "new_cid": row.get("new_cid"), "delta_vs_now": row.get("delta_vs_now"),
+            "reason": row.get("reason"),
+        }
+
+        def _mut(pending: Dict[str, Any]) -> None:
+            entry = pending.get(oid)
+            if not isinstance(entry, dict):
+                outcome["v"] = "skip_gone"        # przypisane/wygasłe między compute a lockiem
+                return
+            cur = (((entry.get("decision_record") or {}).get("best") or {})
+                   .get("courier_id"))
+            if str(cur) != str(row.get("proposed_cid")):
+                outcome["v"] = "skip_changed"     # inny pisarz podmienił propozycję
+                return
+            entry["decision_record"] = serialized
+            entry["resweep_live"] = provenance
+            entry["expires_at"] = PPS.build_entry(serialized, now)["expires_at"]
+            outcome["v"] = "acted"
+
+        try:
+            # ścieżka JAWNIE z modułu w czasie wywołania (NIE default argumentu —
+            # ten wiąże się przy definicji; near-miss 05.07: test z monkeypatchem
+            # PENDING_PATH pisał w ŻYWY plik przez default; TOCTOU-guard obronił)
+            PPS.locked_mutate(_mut, PPS.PENDING_PATH)
+        except Exception as e:  # noqa: BLE001
+            _log.warning(f"K5 live mutate fail oid={oid}: {type(e).__name__}: {e}")
+            row["live_action"] = "skip_io_fail"
+            continue
+        row["live_action"] = outcome["v"]
+        if outcome["v"] == "acted":
+            acted += 1
+            _log.info(
+                f"RESWEEP_LIVE_ACT oid={oid} {provenance['old_cid']}->"
+                f"{provenance['new_cid']} delta={provenance['delta_vs_now']} "
+                f"reason={provenance['reason']}")
+    return acted
+
+
 def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> dict:
     """Jeden sweep. No-op gdy flaga master OFF."""
     if not C.flag(FLAG, False):
@@ -303,7 +388,12 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
     # Faza C: gdy zapis dla konsoli ON, zbierz pełne wyniki w TYM SAMYM przebiegu
     # (global_allocate._results_out) — zero podwójnego liczenia assess_order.
     _alloc_write = C.flag("ENABLE_GLOBAL_ALLOC_WRITE", False)
-    _ga_results: Optional[Dict[str, Any]] = {} if _alloc_write else None
+    # K5 LIVE (2026-07-05, Wariant A Adriana: konsola/1-klik, NIE Telegram):
+    # bramka live_gate_open() konsultowana RAZ, WCZEŚNIE (loguje HOLD gdy geometria
+    # OFF — L6.C, nie do ominięcia); wyniki pełne (_ga_results) potrzebne też dla
+    # akcji live (serializacja decision_record dla pending/konsoli).
+    _live_armed = bool(C.flag(FLAG_LIVE, False)) and live_gate_open()
+    _ga_results: Optional[Dict[str, Any]] = {} if (_alloc_write or _live_armed) else None
     allocation = global_allocate(hanging, fleet, now, _results_out=_ga_results)
 
     # metryki rozjazdu (pile-on jednego kuriera) przed/po
@@ -392,6 +482,15 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
             "g_spread_improved": spread_improved,
         })
 
+    # K5 LIVE: akcje PRZED zapisem jsonl — wiersze dostają marker live_action
+    # (audytowalność per zlecenie: co podmieniono / czemu pominięto).
+    live_acted = 0
+    if _live_armed:
+        try:
+            live_acted = _live_apply(rows, _ga_results or {}, now)
+        except Exception as e:  # noqa: BLE001 — live nigdy nie wywala shadow-ticka
+            _log.warning(f"K5 live apply fail-soft: {type(e).__name__}: {e}")
+
     _append_jsonl(rows)
 
     # Faza C (2026-06-27): dedykowany kanał globalnej alokacji DLA KONSOLI.
@@ -415,13 +514,8 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         except Exception as _gae:
             _log.warning(f"global_alloc write fail: {_gae}")
 
-    # LIVE re-proponowanie (edit istniejącej wiadomości TG + update pending_proposals)
-    # — NIEzaimplementowane dopóki PENDING_RESWEEP_LIVE; wymaga lockowania pliku
-    # współdzielonego z żywym telegram_approver. Shadow: tylko log.
-    live_acted = 0
-    if C.flag(FLAG_LIVE, False):
-        if live_gate_open():
-            _log.warning("PENDING_RESWEEP_LIVE=ON ale ścieżka live niewpięta — shadow-only (patrz docstring)")
+    # K5 LIVE wpięte wyżej (_live_apply przed _append_jsonl); locking = kanon
+    # pending_proposals_store (L7.5). Telegram NIETYKALNY (wyciszony 26.06).
 
     summary = {
         "hanging": len(hanging),
