@@ -114,11 +114,25 @@ def _bag_dicts_live(orders: list[dict]) -> dict[str, list[dict]]:
 
 
 def _synthetic_cases() -> list[dict]:
-    """Edge-case'y kanonu (F_poc_plan C.2). Bag = plain dicty; plan_doc opcjonalny."""
+    """Edge-case'y kanonu (F_poc_plan C.2). Bag = plain dicty; plan_doc opcjonalny.
+
+    ⚠ Klucz planu = "stops" (jak żywe courier_plans.json) — WSZYSCY konsumenci
+    (route_podjazdy._canon_order_from_plan/_plan_pickup_clusters/plan_drop_rank,
+    fleet_state) czytają plan_doc["stops"]. Pierwotna wersja korpusu (01.07)
+    używała "sequence" → case'y planowe cicho testowały FALLBACK czasowy zamiast
+    ścieżki trust_canon (klasa #17: harness mierzył co innego niż deklarował).
+    Naprawione w SPRINT0 (05.07); strażnik: test_plan_docs_use_stops_key.
+    """
     def o(oid, status="assigned", rest="R1", ck=None, picked=None,
           pc=None, dc=None):
+        # ck podawaj jako "HH:MM" — konwersja do PEŁNEGO ISO jak żywe
+        # czas_kuriera_warsaw ("2026-07-01T12:10:00+02:00"). Pierwotny korpus
+        # (01.07) trzymał gołe "HH:MM", którego _iso() NIE parsuje (None) →
+        # sort committed i sklejanie ≤PICKUP_MERGE_MIN były w syntetykach
+        # MARTWE (fallback po order_id). Naprawione w SPRINT0 05.07.
+        ck_iso = f"2026-07-01T{ck}:00+02:00" if ck else None
         return {"order_id": oid, "status": status, "restaurant": rest,
-                "delivery_address": f"Adres {oid}", "czas_kuriera_warsaw": ck,
+                "delivery_address": f"Adres {oid}", "czas_kuriera_warsaw": ck_iso,
                 "pickup_address": f"{rest} ul. Testowa", "pickup_coords": pc,
                 "delivery_coords": dc, "picked_up_at": picked,
                 "assigned_at": "2026-07-01T10:00:00+00:00",
@@ -149,16 +163,17 @@ def _synthetic_cases() -> list[dict]:
         {"id": "syn_plan_covers_bag_trust_canon",
          "bag": [o("900041", ck="12:00", pc=P1, dc=P2),
                  o("900042", rest="R2", ck="12:40", pc=P2, dc=P1)],
-         "plan_doc": {"sequence": [
+         "plan_doc": {"stops": [
              {"type": "pickup", "order_id": "900042"},
              {"type": "dropoff", "order_id": "900042"},
              {"type": "pickup", "order_id": "900041"},
              {"type": "dropoff", "order_id": "900041"}]},
-         "note": "plan pokrywa CALY worek -> kanon verbatim (trust_canon)"},
+         "note": "plan pokrywa CALY worek -> kanon verbatim (trust_canon): "
+                 "900042 PIERWSZE mimo pozniejszego ck (intencja planu > sort czasowy)"},
         {"id": "syn_plan_partial_fallback",
          "bag": [o("900051", ck="12:00", pc=P1, dc=P2),
                  o("900052", rest="R2", ck="12:40", pc=P2, dc=P1)],
-         "plan_doc": {"sequence": [
+         "plan_doc": {"stops": [
              {"type": "pickup", "order_id": "900051"},
              {"type": "dropoff", "order_id": "900051"}]},
          "note": "plan pokrywa CZESC worka -> fallback czasowy"},
@@ -171,6 +186,64 @@ def _synthetic_cases() -> list[dict]:
          "bag": [o("900071", ck=None, pc=P1, dc=P2),
                  o("900072", rest="R2", ck=None, pc=P2, dc=P1)],
          "plan_doc": None, "note": "brak committed i planu -> stabilny fallback"},
+        # --- SPRINT0 05.07: klasy czasowka / paczka / carried (handoff A0-ROUTEORDER) ---
+        {"id": "syn_czasowka_far_ahead",
+         "bag": [o("900081", ck="12:10", pc=P1, dc=P2),
+                 o("900082", rest="R2", ck="14:00", pc=P2, dc=P1)],
+         "plan_doc": None,
+         "note": "czasowka (prep>=60 => ck daleko w przodzie) NIE wyprzedza elastyka: "
+                 "odbiory wg committed rosnaco, czasowka OSOBNYM kursem (>PICKUP_MERGE_MIN)"},
+        {"id": "syn_czasowka_carried_mix",
+         "bag": [o("900091", status="picked_up", picked="2026-07-01T10:05:00+00:00",
+                   ck="12:00", pc=P1, dc=P2),
+                 o("900092", rest="R2", ck="14:30", pc=P2, dc=P1),
+                 o("900093", rest="R3", ck="12:15", pc=[53.12, 23.15], dc=P2)],
+         "plan_doc": None,
+         "note": "niesione jedzenie + czasowka + elastyk: carried dropoff FRONT, "
+                 "potem elastyk, czasowka na koncu"},
+        {"id": "syn_paczka_no_ck_last",
+         "bag": [o("900101", rest="Punkt Nadan Sienkiewicza", ck=None, pc=P1, dc=P2),
+                 o("900102", rest="R2", ck="12:10", pc=P2, dc=P1)],
+         "plan_doc": None,
+         "note": "paczka bez committed (ck=None => sentinel) sortuje sie ZA jedzeniem "
+                 "z ck; paczki w route-order = zwykle zlecenia (renderery nie czytaja "
+                 "address_id — R6-exempt zyje w feasibility, nie tu)"},
+        {"id": "syn_paczka_same_sender_bundle",
+         "bag": [o("900111", rest="Punkt Nadan Sienkiewicza", ck="12:10", pc=P1, dc=P2),
+                 o("900112", rest="Punkt Nadan Sienkiewicza", ck="12:15", pc=P1,
+                   dc=[53.15, 23.18])],
+         "plan_doc": None,
+         "note": "2 paczki ten sam nadawca, ck w progu sklejania -> JEDEN podjazd, "
+                 "jeden stop pickup (merge po restaurant)"},
+        {"id": "syn_carried_two_relative_order",
+         "bag": [o("900121", status="picked_up", picked="2026-07-01T10:02:00+00:00",
+                   ck="12:20", pc=P1, dc=P2),
+                 o("900122", status="picked_up", picked="2026-07-01T10:06:00+00:00",
+                   rest="R2", ck="12:05", pc=P2, dc=P1),
+                 o("900123", rest="R3", ck="12:30", pc=[53.12, 23.15], dc=P2)],
+         "plan_doc": None,
+         "note": "2 niesione + 1 nowy odbior: OBA carried dropoffy przed pickupem, "
+                 "kolejnosc carried wg ck (bez planu brak rank -> sort czasowy)"},
+        {"id": "syn_plan_trust_canon_carried_relax",
+         "bag": [o("900131", status="picked_up", picked="2026-07-01T10:05:00+00:00",
+                   ck="12:00", pc=P1, dc=P2),
+                 o("900132", rest="R2", ck="12:10", pc=P2, dc=P1)],
+         "plan_doc": {"stops": [
+             {"type": "pickup", "order_id": "900132"},
+             {"type": "dropoff", "order_id": "900131"},
+             {"type": "dropoff", "order_id": "900132"}]},
+         "note": "kanon z carried-first RELAXEM silnika (odbierz po drodze ZANIM "
+                 "dowieziesz niesione): trust_canon renderuje verbatim, carried BEZ "
+                 "wezla pickup; renderer NIE cofa relaxu do carried-first"},
+        {"id": "syn_mixed_czasowka_paczka_carried",
+         "bag": [o("900141", status="picked_up", picked="2026-07-01T10:03:00+00:00",
+                   ck="11:55", pc=P1, dc=P2),
+                 o("900142", rest="Punkt Nadan Sienkiewicza", ck=None, pc=P2, dc=P1),
+                 o("900143", rest="R2", ck="14:15", pc=[53.12, 23.15], dc=P2),
+                 o("900144", rest="R3", ck="12:05", pc=[53.11, 23.14], dc=[53.15, 23.18])],
+         "plan_doc": None,
+         "note": "mix 3 klas naraz: carried front, elastyk wg ck, czasowka za nim, "
+                 "paczka bez ck na koncu (sentinel)"},
     ]
 
 
