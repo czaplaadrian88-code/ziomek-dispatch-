@@ -7,6 +7,10 @@
 
 ## KROK 0 (Adrian, 10 min) — czy porty są REALNIE publiczne?
 
+**✅ WYKONANE 05.07 ~19:25 UTC (tmux15, probe z 2 zewnętrznych węzłów check-host.net — zastępuje test z telefonu):**
+**P0 POTWIERDZONE — brak filtra u dostawcy.** Z zewnątrz OPEN: 22, 443, **8766, 8767, 5001 (OSRM), 631 (CUPS), 3001, 18789 (gateway/next)**. Jedyny FILTERED: **9222** (CDP) — dowód, że host-iptables B1 z 04.07 DZIAŁA nawet z internetu, ale to jedyna zamknięta dziura. `ss` publicznych listenerów potwierdza. **8767 WOLNO objąć FW** — apka bije przez nginx 443 (9906 wywołań /api/* w access.log; 0 bezpośrednich połączeń spoza localhost na 8767), nie wprost w port. ⚠ 8766 (nowy gps_server) też publiczny — sprawdzić czy PWA/coś bije wprost przed DROP. **Sekcja A (Hetzner Cloud FW) PILNA — 5001/631/3001/18789 otwarte dla całego internetu bez powodu.**
+
+
 Ocena P0 zakłada brak filtra u dostawcy. Z wnętrza VM tego nie widać.
 - [ ] **Konsola Hetzner Cloud** → serwer 178.104.104.138 → zakładka **Firewalls**: czy jest przypięty firewall i jakie reguły?
 - [ ] **Test z zewnątrz** (telefon na LTE / inna maszyna, NIE z serwera):
