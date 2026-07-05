@@ -37,6 +37,27 @@ dziś 21:00 UTC i sprawdzi arkusz przed runem.
 **Rollback:** flaga OFF (default) = brak zmiany zachowania zapisu; pełny revert `7afc431 0346a9a`
 możliwy w każdej chwili (auto-create martwy przy OFF).
 
+### ✅ FLIP AUTO-CREATE WYKONANY 05.07 ~18:15 UTC (ACK Adriana, najpierw DRY_RUN)
+- **DRY_RUN zweryfikowany na 3 tygodniach:** (a) 22-28.06 i 01-07.06 — bloki JUŻ ISTNIEJĄ (CZ, CN)
+  i są WYPEŁNIONE → empty-check poprawnie zablokował (exit 1, nic nie ruszone); (b) tydzień przyszły
+  06-12.07 (payday 15-07, bez bloku) → auto-create DRY-RUN pokazał DOKŁADNIE poprawny blok:
+  `DH @ DH1:DK2, wypłata=15-07-2026, zakres=06-12.07.2026, row2=[COD - Transport, Korekty, Wypłata,
+  Saldo do przen.]`, nic nie zapisał, exit 1. Mechanika potwierdzona.
+- **Drop-in zainstalowany:** `/etc/systemd/system/dispatch-cod-weekly.service.d/autocreate.conf`
+  (`COD_WEEKLY_AUTOCREATE_BLOCK=1`, BEZ DRY_RUN) + `daemon-reload`; env efektywny potwierdzony
+  `systemctl show`. Rollback: usunąć plik / `=0` + daemon-reload (oneshot bierze świeży env per run).
+- **⭐ BACKFILL BEZPRZEDMIOTOWY:** wszystkie 4 „przepadłe" tygodnie mają już bloki **I SĄ WYPEŁNIONE**
+  (zweryfikowane read-only: CF=18-24.05 56 wart., CN=01-07.06 64/65, CR=08-14.06 56 wart.,
+  CZ=22-28.06 64/65) — arkusz nadrobiony ręcznie po 02.07. Lista z FALA1 nieaktualna. Ewentualna
+  weryfikacja sum vs DB = opcjonalna decyzja Adriana; ZERO zapisów potrzebnych.
+- **⚠ JUTRZEJSZY RUN 06:00 UTC (tydzień 29.06-05.07, split-month, payday 08-07-2026):** w arkuszu
+  jest 1 z 2 bloków — `DD` pokrywa segment **29-30.06**; **BRAKUJE segmentu 01-05.07**. To ścieżka
+  `AmbiguousTargetError`, której auto-create ŚWIADOMIE nie dotyka (ryzyko dubla przy częściowym
+  bloku) → jeśli Rafał nie doda drugiego bloku do 06:00, run = exit 1 + aktionable alert (bez straty
+  — dopisze się później przez `--week 2026-06-29:2026-07-05 --write`). Preflight dziś 21:00 UTC
+  i last-call 05:00 UTC przypomną. Auto-create obsłuży od teraz tygodnie CAŁKIEM bez bloku
+  (jak 06-12.07 w następny poniedziałek 13.07).
+
 ## (b) Duplikat GPS legacy @reboot — ✅ WYGASZONY 05.07 ~18:00 UTC (ACK Adriana)
 
 **Wykonanie:** backup crontaba → `/root/crontab.bak-pre-gps-legacy-retire-20260705` (55 linii);
