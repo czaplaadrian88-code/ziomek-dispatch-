@@ -909,3 +909,24 @@ the agent citation was not line-verified.
   - **plans read-cache** (`plan_manager.load_plan`/`load_plans`): `load_plan` czytany PER KANDYDAT → N× pełny `_read_raw` (open+json.load) POD fcntl-lockiem → wątki serializują się (kontencja rośnie w peak). ON = cache po `(mtime_ns, size)` NAD lockiem (ciepły hit pomija fcntl+open+json.load); WYŁĄCZNIE ścieżki READ, zwrot przez `copy.deepcopy` (caller nie mutuje współdzielonego cache). WRITERS (save/invalidate/advance/insert) dalej surowy `_read_raw` pod exclusive lock; `os.replace` bumpuje mtime → cache sam się unieważnia.
 - **Bajt-parytet**: OFF vs ON = 0 mismatch na fuzzie ≥400 realnych zdarzeń (events.db, flota 0/3/5/8/10/12, werdykty PROPOSE+KOORD+best-effort), po wykluczeniu WYŁĄCZNIE pól czysto-czasowych (`latency_ms`, `r07_compute_latency_ms`, `osrm_cache_age_s`, `lgbm_*.evaluation_ts/latency_ms`, `ts`) — potwierdzone kontrolą OFF vs OFF (identyczne). OFF (default) = ścieżka bajt-w-bajt sprzed fali.
 - **Pomiar (replay, fleet=10, nice-19)**: p50 402→312 ms (**−22,4%**), mean 389→325 (−16,5%), p95 566→470 (−17%); flags-frozen −63 ms, plans-cached −47 ms (stackują). Offline single-proc = DOLNA granica (peak: kontencja fcntl-locka planów + stat spam między równoległymi decyzjami → większy zysk). Strażniki: `tests/test_perf_lazy_members.py` (7 behawioralnych + mutation ×3: const-key/no-deepcopy/TTL=0 KILL). Flip = OSOBNY ACK (wpis flags.json + restart shadow + pomiar p95 live przed peakiem); rollback hot=false.
+
+### P-FLAGREG partia D (2026-07-05) — doc-uzupełnienie flag decyzyjnych/danościeżkowych (C-FLAG-DRIFT ↓12)
+
+Flagi LIVE (wszystkie `flags.json=true`, hot-reload), dotąd nieudokumentowane w ref; shadow/alert/scalar
+świadomie ZOSTAJĄ w baseline (ref = doc logiki, nie rejestr — filozofia checkera). Inwentarz pełny:
+`eod_drafts/2026-07-05/FLAGREG_inwentarz_i_plan.md`.
+
+| flaga | warstwa (czytelnik) | co robi |
+|---|---|---|
+| `ENABLE_GEOCODE_NOMINATIM_FALLBACK` | geocoding:518 | fallback geokodera do Nominatim, gdy ścieżka podstawowa nie zwróci współrzędnych |
+| `ENABLE_GEOCODE_VERIFICATION_ENFORCE` | geocoding:577 | FAZA 2 weryfikacji geokodu (location_type+dzielnica+cross-source): werdykt „reject" ODRZUCA współrzędne → caller dostaje `no_pickup_geocode` (OFF = tylko log) |
+| `ENABLE_PICKUP_FROM_GROUND_TRUTH` | panel_watcher:2085 | domyka lukę fantomowego odbioru: gdy ground_truth (geofence) zna odbiór, a orders_state wciąż `assigned` → emit `COURIER_PICKED_UP` z czasem GT (naprawia plan/sla/gate/apkę u źródła) |
+| `ENABLE_COORDINATOR_FORCE_TIME_RECHECK` | panel_watcher:2169 | kill-switch przycisku „Odśwież czas" konsoli: drenuje kolejkę `coordinator_time_recheck` i wymusza recheck czasu BEZWARUNKOWO (obie strony, także planned-elastyki) |
+| `ENABLE_INVALIDATE_PLAN_ON_BAG_CHANGE` | panel_watcher:569 | inwalidacja zapisanego planu kuriera przy zmianie zawartości worka (anty-stale-plan) |
+| `ENABLE_WAITING_AT_PERSIST` | panel_watcher:2025 | persystencja wejścia w id_status=4 → `waiting_at` (atrybucja kurier-vs-restauracja w sla_tracker, arrival_source=status4) |
+| `ENABLE_UWAGI_ADDRESS_PARSER` | panel_watcher:1247 | parser adresu pickup z pola `uwagi` (firmowe konto Nadajesz, defense-in-depth 6 warstw 07.05) |
+| `ENABLE_PENDING_PROPOSALS_WRITE` | shadow_dispatcher:1134 | Opcja B: atomowy zapis zebranych PROPOSE → `pending_proposals.json` (źródło propozycji konsoli koordynatora) |
+| `ENABLE_PARCEL_LANE_LIVE` | parcel_lane_merge:114 | gate mergera pasa paczek do obrazu floty/konsoli (OFF = no-op mergera, reszta nietknięta) |
+| `ENABLE_ORDERS_STATE_PRUNE` | prune_orders_state:37 | oneshot prune `orders_state` do retencji ~12 h (`ORDERS_STATE_PRUNE_RETENTION_HOURS`; OFF = no-op) |
+| `ENABLE_OSRM_TABLE_CELL_CACHE` | osrm_client:466 | kill-switch hot cache'u komórkowego OSRM /table (OFF = legacy pełne wywołania; infra, Front C) |
+| `ENABLE_PANEL_DETAIL_PREFETCH` | panel_watcher:1156 | kill-switch prefetchu detali zleceń w panel_watcher (infra, Front C) |
