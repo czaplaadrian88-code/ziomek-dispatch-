@@ -1,4 +1,4 @@
-# HANDOFF → tmux 19: SPRINT 2 FLIPMASTER — sekwencja restart+flipy (KAŻDY krok wyłącznie za jawnym ACK Adriana)
+# HANDOFF → tmux 20: SPRINT 2 FLIPMASTER — sekwencja restart+flipy (KAŻDY krok wyłącznie za jawnym ACK Adriana)
 
 > Od: sesja konsolidacyjna 05.07 (na życzenie Adriana — szkic „Przekaż handoff Sprintu 2 (FLIPMASTER) do nowej sesji tmux").
 > Rola: JEDYNA sesja uprawniona do dotykania `../flags.json` i restartów usług w Sprincie 2. **Nic nie wykonujesz bez jawnego ACK Adriana w swoim czacie — przygotowujesz krok, pokazujesz prostym polskim CO+WPŁYW+JAK BEZPIECZNIE+ROLLBACK, czekasz na GO.** Zero samodzielnych flipów. Telegram nietykalny.
