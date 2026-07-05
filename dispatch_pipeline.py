@@ -19,6 +19,7 @@ from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2 import scoring
 from dispatch_v2 import common as C
 from dispatch_v2 import calib_maps  # SP-B2 (2026-06-11): mapy ETA-quantile + prep-bias (shadow)
+from dispatch_v2 import eta_load_aware  # L5.1 (2026-07-05): bufor poślizgu ODBIORU (K3, shadow)
 from dispatch_v2 import pln_objective  # SP-B2-PLN (2026-06-11): funkcja celu PLN (shadow)
 from dispatch_v2 import panel_client  # V3.27.1 sesja 2: pre-proposal recheck (Blocker 2 Opcja A)
 from dispatch_v2.common import (
@@ -4362,6 +4363,33 @@ def _assess_order_impl(
             drive_arrival_utc = eta_pickup_utc
             eta_source = "soon_free"
 
+        # L5.1 ETA LOAD-AWARE (2026-07-05, K3): silnik systematycznie OPTYMISTYCZNY
+        # na nodze ODBIORU (eta_truth_map 28.06-04.07 n=925: med −4.0, solo −6.0,
+        # std −5.4). Bufor z tabeli kalibracji (tier×solo/bundle, generator =
+        # tools/eta_load_aware_calibrate.py) dokładany do OBIETNICY odbioru.
+        # SHADOW zawsze (metryki eta_la_* → auto-serializacja L1.1); DECYZJA tylko
+        # za flagą ENABLE_ETA_LOAD_AWARE (default OFF) — przesuwa eta_pickup_utc/
+        # travel_min (wait-penalty/extension/target_pickup). NIE dotyka
+        # feasibility_v2 (HARD; GATE-STRICTER + Q2 = osobny pas za ACK). Znana
+        # granica: no_gps/pre_shift nadpisywane post-loop polityką (~6202-6219)
+        # — bufor ich nie dotyczy. Fail-soft: brak tabeli → 0.0 (zachowanie
+        # bajt-identyczne z przed-L5). Try/except: hot-path (Lekcja #32 — loguj).
+        eta_la_buffer_min = 0.0
+        try:
+            eta_la_buffer_min = eta_load_aware.pickup_buffer_min(
+                getattr(cs, "tier_bag", None), len(bag_sim))
+        except Exception as _la_e:
+            log.warning(f"L5.1 eta_load_aware fail cid={cid}: "
+                        f"{type(_la_e).__name__}: {_la_e}")
+            eta_la_buffer_min = 0.0
+        eta_pickup_load_aware_utc = (
+            eta_pickup_utc + timedelta(minutes=eta_la_buffer_min)
+            if eta_la_buffer_min > 0 else eta_pickup_utc)
+        if eta_la_buffer_min > 0 and C.decision_flag("ENABLE_ETA_LOAD_AWARE"):
+            eta_pickup_utc = eta_pickup_load_aware_utc
+            travel_min = round(travel_min + eta_la_buffer_min, 1)
+            eta_source = f"{eta_source}+load_aware"
+
         # Bundle bonus — sumowanie L1 + L2 + R4 (Bartek Gold Standard).
         # L1 = +25 (same restaurant), L2 = max(0, 20 - dist*10).
         # R4 (zastępuje L3): tier-based free-stop curve × weight 1.5.
@@ -5573,6 +5601,11 @@ def _assess_order_impl(
             "eta_pickup_utc": eta_pickup_utc.isoformat(),
             "eta_drive_utc": drive_arrival_utc.isoformat(),
             "eta_source": eta_source,
+            # L5.1 (2026-07-05): shadow load-aware — bufor [min] + skorygowana
+            # obietnica ODBIORU. Zawsze liczone (replay czyta stary vs nowy per
+            # decyzja); decyzję zmienia TYLKO ENABLE_ETA_LOAD_AWARE.
+            "eta_la_buffer_min": round(eta_la_buffer_min, 1),
+            "eta_pickup_load_aware_utc": eta_pickup_load_aware_utc.isoformat(),
             "pos_source": getattr(cs, "pos_source", None),
             # FIX 2026-06-08: True gdy pozycja odtworzona z last-known-pos store
             # (kurier bez GPS uratowany z BIALYSTOK_CENTER fiction). Obserwowalność
