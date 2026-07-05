@@ -369,6 +369,20 @@ ETAP4_DECISION_FLAGS = (
     # flip za ACK po replayu ON↔OFF. Stałe-fallback: LEXQUAL ~2910, CLAIM w claim_ledger.
     "ENABLE_LEXQUAL_GEOMETRY_TIEBREAK",
     "ENABLE_ENGINE_CLAIM_LEDGER",
+    # === P-FLAGREG partia A' (2026-07-05, Sprint 2.5-prep tmux18): flagi
+    # decyzyjne czytane w silniku BEZ klucza w flags.json → strip conftest =
+    # no-op (klucza nie ma), baseline survivors ratchetu NIETKNIĘTY, produkcja
+    # bez zmian (decision_flag: flags.json→stała). Zysk: fingerprint je widzi.
+    # Czytelnicy `flag(name, default)` ignorują stałą modułu — dla 3 flag bez
+    # stałej dodano konsty-lustra defaultów czytelników (sekcja ~l.4xx), żeby
+    # fingerprint mówił prawdę. Inwentarz: eod_drafts/2026-07-05/FLAGREG_*.md.
+    "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL",
+    "ENABLE_GEOCODE_NEGATIVE_CACHE",
+    "ENABLE_PRE_SHIFT_GRADIENT_PENALTY",
+    "ENABLE_LGBM_PRIMARY",
+    "ENABLE_GPS_ACCURACY_TELEPORT_FILTER",
+    "ENABLE_GRAFIK_FULL_NAMES_SOURCE",
+    "ENABLE_PANEL_PACKS_CID_MATCH",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -400,6 +414,19 @@ RESERVE_TIEBREAK_MARGIN = 30.0  # #3: max Δscore (wolny−jadący) by tie-break
 ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria physical_verified delivered_at panel-vs-GPS courier_ground_truth; SHADOW, zero wpływu na decyzje/SLA; kanon=flags.json hot)
 ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
 ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
+
+# === P-FLAGREG partia A'/B (2026-07-05): konsty-LUSTRA dla flag rejestrowanych
+# w ETAP4/_FINGERPRINT_EXTRA, których czytelnicy używają `flag(name, default)`
+# z defaultem INLINE (stała modułu NIE jest konsumowana przez czytelnika —
+# służy WYŁĄCZNIE prawdomówności fingerprinta i inwariantowi
+# test_all_etap4_flags_have_module_const). Wartość = dosłownie default
+# czytelnika (courier_resolver:813/466/1190, geocoding_audit:39). Gdy klucz
+# pojawi się w flags.json — i czytelnik, i fingerprint przejdą na json spójnie.
+ENABLE_GPS_ACCURACY_TELEPORT_FILTER = False  # courier_resolver:813 default=False
+ENABLE_GRAFIK_FULL_NAMES_SOURCE = True       # courier_resolver:466 default=True
+ENABLE_PANEL_PACKS_CID_MATCH = True          # courier_resolver:1190 default=True
+ENABLE_GPS_QUALITY_SHADOW = True             # courier_resolver:812 default=True (obs)
+ENABLE_GEOCODING_AUDIT_LOG = True            # geocoding_audit:39 default=True (env-first, potem flag)
 
 # === L0.1 fallbacki (2026-07-01): stałe dla 14 flag dopisanych do ETAP4 =====
 # W ODRÓŻNIENIU od bloku wyżej (era 2026-06-14, featury shipowane ciemne → OFF)
@@ -531,6 +558,42 @@ _FINGERPRINT_EXTRA_FLAGS = (
     "ENABLE_V328_HEURISTIC_SHIFT_END_GUARD",
     "ENABLE_FAIL12_STOREPOS_STRICT",
     "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP",
+    # === P-FLAGREG partia B (2026-07-05, Sprint 2.5-prep tmux18): flagi
+    # obserwacyjne (shadow-metryki) + alertowe — NIE sterują decyzją, ale ich
+    # rozjazd per-proces = ślepota metryk/alertów. FP_EXTRA NIE jest stripowane
+    # w conftest (semantyka testów bez zmian); wartości w fingerprint =
+    # decision_flag (flags.json → stała modułu). Dla 2 flag bez klucza json
+    # dodano konsty-lustra defaultów czytelników (ENABLE_GPS_QUALITY_SHADOW,
+    # ENABLE_GEOCODING_AUDIT_LOG). Inwentarz: eod_drafts/2026-07-05/FLAGREG_*.md.
+    "ENABLE_ADDRESS_COORDS_MISMATCH_SHADOW",
+    "ENABLE_ADDRESS_TOWN_MISMATCH_SHADOW",
+    "ENABLE_BEST_EFFORT_FASTEST_PICKUP_SHADOW",
+    "ENABLE_BEST_EFFORT_OBJM_SHADOW",
+    "ENABLE_BUG4_RESEQ_SHADOW",
+    "ENABLE_ETA_QUANTILE_SHADOW",
+    "ENABLE_FAIL03_K2_SHADOW",
+    "ENABLE_FEAS_CARRY_BLIND_SHADOW",
+    "ENABLE_GPS_QUALITY_SHADOW",
+    "ENABLE_GEOCODING_AUDIT_LOG",
+    "ENABLE_LGBM_TWOMODEL_SHADOW",
+    "ENABLE_MIN_DELIVERED_AT_SHADOW",
+    "ENABLE_OBJM_LEXR6_SELECT_SHADOW",
+    "ENABLE_PICKUP_DEBIAS_SHADOW",
+    "ENABLE_PLN_OBJECTIVE_SHADOW",
+    "ENABLE_PREP_BIAS_SHADOW",
+    "ENABLE_PREP_VARIANCE_ANOMALY_SHADOW",
+    "ENABLE_READY_AT_INSTRUMENTATION",
+    "ENABLE_REPO_COST_SHADOW",
+    "OBSERVABILITY_PER_CANDIDATE_ENABLED",
+    "AUTO_KOORD_TELEGRAM_INFO_ENABLED",
+    "CZASOWKA_T0_ALERT_ENABLED",
+    "ENABLE_BAG_TIME_ALERTS",
+    "ENABLE_DATA_ALERTS",
+    "ENABLE_FIRMOWE_KONTO_KOORD_ALERTS",
+    "ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS",
+    "ENABLE_NOTIFY_PRIORITY_ROUTING",
+    "ENABLE_STATE_PANEL_DIVERGENCE_ALERT",
+    "SHIFT_NOTIFY_ENABLED",
 )
 
 

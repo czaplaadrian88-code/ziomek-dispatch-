@@ -13,7 +13,7 @@ LOGS = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl*"
 
 def f(x):
     try: return float(x)
-    except: return None
+    except (TypeError, ValueError): return None
 
 def main():
     ap = argparse.ArgumentParser()
@@ -27,7 +27,7 @@ def main():
             if "best_effort_objm_esc_tier" not in line:
                 continue
             try: d = json.loads(line)
-            except: continue
+            except json.JSONDecodeError: continue
             ts = d.get("ts") or ""
             if a.since and not (ts >= a.since):
                 continue
