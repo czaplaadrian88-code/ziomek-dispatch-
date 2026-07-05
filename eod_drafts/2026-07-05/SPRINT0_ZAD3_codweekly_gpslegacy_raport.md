@@ -37,7 +37,18 @@ dziś 21:00 UTC i sprawdzi arkusz przed runem.
 **Rollback:** flaga OFF (default) = brak zmiany zachowania zapisu; pełny revert `7afc431 0346a9a`
 możliwy w każdej chwili (auto-create martwy przy OFF).
 
-## (b) Duplikat GPS legacy @reboot — PLAN WYGASZENIA (wykonanie ZA ACK)
+## (b) Duplikat GPS legacy @reboot — ✅ WYGASZONY 05.07 ~18:00 UTC (ACK Adriana)
+
+**Wykonanie:** backup crontaba → `/root/crontab.bak-pre-gps-legacy-retire-20260705` (55 linii);
+usunięte 2 linie `@reboot` (gps_server.py + dispatch_control.py; crontab 55→53, `fix_approvals.sh`
+i GC zostały); `kill 1010 1006` (SIGTERM wystarczył mimo zawieszenia). **Weryfikacja:** procesy nie
+istnieją; porty :8765/:8443 WOLNE; `dispatch-gps`/`courier-api`/`dispatch-shadow`/`dispatch-panel-watcher`
+= active, nowy gps_server żywy na :8766, journal dispatch-gps 0 błędów; skrypty ZOSTAŁY na dysku
+(zero kasowania). **Rollback:** przywrócić backup crontaba (`crontab /root/crontab.bak-...`) +
+ręczny start procesów. Hardcoded token control-bota (finding L12) przestał być procesem nasłuchującym;
+rewokacja tokena w BotFather = osobna pozycja rotacji sekretów (C1 w runbooku security).
+
+## (b-ARCHIWUM) Plan wygaszenia sprzed wykonania
 
 **Co to jest (zdiagnozowane):** dwa procesy z crontaba `@reboot` (żyją od bootu 27.05):
 - **PID 1010 `/root/gps_server.py`** — legacy ingest GPS po PIN (HTTP :8765) → pisze
