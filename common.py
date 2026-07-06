@@ -2589,35 +2589,37 @@ V326_SPEED_SCORE_FACTOR = 50.0
 # pożyczka od srednio-solo. Brak danych (pf/bag None) → 0.0 = stara obietnica
 # (fail-open). Flaga ENABLE_LOAD_AWARE_PICKUP_BUFFER (ETAP4, OFF) — flip hot za ACK.
 ENABLE_LOAD_AWARE_PICKUP_BUFFER = False
-PICKUP_BUFFER_TABLE = {  # surowe mediany (min); efektywny bufor = med − tolerancja
-    ("ciasno", "solo"): 16.0, ("ciasno", "bundle"): 11.0,
-    ("srednio", "solo"): 16.0, ("srednio", "bundle"): 12.0,
-    ("luzno", "solo"): 8.5, ("luzno", "bundle"): 7.5,
+# v4 (GO Adriana 06.07 "ab"): bufor = BAZA + korekta per-restauracja.
+# Kubelki obciazenia/worka (v2) ODRZUCONE danymi (0 zysku OOS na 51d).
+# BAZA = mediana poslizgu jedzeniowki 8.2 (matched-only, BEZ paczek/czasowek)
+# - tolerancja Adriana 5 ("lepiej spoznic sie do 5 min niz kurier czeka").
+# TABELA per-restauracja = stabilni odchylency (n>=30, |bias|>5 od globalnej):
+# notorycznie "poslizgowa" restauracja dostaje realny czas (med-5), punktualna
+# JAWNE 0.0 (zero sztucznego zapasu — kucharz nie przedluza gotowania).
+# PACZKI: guard w shadow_dispatcher (is_paczka_order) zdejmuje pola promised.
+# Klucze = nazwa restauracji jak w decision record (result.restaurant).
+PICKUP_BUFFER_BASE_MIN = 3.0
+PICKUP_BUFFER_RESTAURANT_TABLE = {
+    "Baanko": 9.0,                        # med +14.0 (n>=30)
+    "Pizzeria 105 Galeria Bia\u0142a": 8.5,  # med +13.5
+    "Hacienda Pizza": 0.0,                # med -0.1 — punktualna, bez zapasu
+    "Restauracja Kumar&#039;s": 0.0,      # med +2.4
+    "Street Mama Thai": 0.0,              # med +3.3
 }
-PICKUP_BUFFER_LATE_TOLERANCE_MIN = 5.0  # Adrian 06.07: celuj w ≤5 min spóźnienia
 PICKUP_BUFFER_MAX_MIN = 30.0
 
 
-def pickup_buffer_min(pool_feasible, bag_after):
-    """Load-aware bufor obietnicy odbioru w minutach (0.0 = bez bufora).
+def pickup_buffer_min(restaurant):
+    """Bufor obietnicy odbioru (min): korekta per-restauracja albo BAZA.
 
-    Efektywny bufor = mediana poślizgu (populacja matched-only, bez czasówek)
-    − tolerancja 5 min (floor 0). Semantyka kubełków IDENTYCZNA z
-    tools/pickup_slip_monitor (bliźniak #15): ten sam pool_feasible_count,
-    który serializer pisze do shadow_decisions.
+    Nieznana/nowa restauracja => BAZA (globalna mediana-5). Odchylency z
+    tabeli => ich wlasna wartosc (0.0 = jawnie bez zapasu). Cap 30.
     """
-    if pool_feasible is None or bag_after is None:
-        return 0.0
-    try:
-        pf = int(pool_feasible)
-        ba = int(bag_after)
-    except (TypeError, ValueError):
-        return 0.0
-    lb = "ciasno" if pf <= 1 else ("srednio" if pf <= 4 else "luzno")
-    bb = "solo" if ba == 1 else "bundle"
-    eff = (float(PICKUP_BUFFER_TABLE.get((lb, bb), 0.0))
-           - float(PICKUP_BUFFER_LATE_TOLERANCE_MIN))
-    return min(max(eff, 0.0), float(PICKUP_BUFFER_MAX_MIN))
+    if restaurant:
+        v = PICKUP_BUFFER_RESTAURANT_TABLE.get(str(restaurant))
+        if v is not None:
+            return min(max(float(v), 0.0), float(PICKUP_BUFFER_MAX_MIN))
+    return min(float(PICKUP_BUFFER_BASE_MIN), float(PICKUP_BUFFER_MAX_MIN))
 
 
 DWELL_PICKUP_FLAT_MIN = 1.0  # E1 2026-05-17 — postój pod restauracją (obsługa)

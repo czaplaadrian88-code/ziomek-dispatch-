@@ -184,10 +184,9 @@ def _promised_pickup_fields(best_m: dict, result) -> dict:
         return {}
     try:
         from datetime import timedelta
-        bag = best_m.get("r6_bag_size")
-        bag_after = (int(bag) + 1) if isinstance(bag, (int, float)) else None
-        buf = C.pickup_buffer_min(
-            getattr(result, "pool_feasible_count", None), bag_after)
+        # v4 (GO Adriana 06.07): baza + korekta per-restauracja (kubelki
+        # obciazenia/worka ODRZUCONE — 0 zysku OOS; punktualne restauracje 0).
+        buf = C.pickup_buffer_min(getattr(result, "restaurant", None))
         if buf <= 0:
             return {}
         dt = datetime.fromisoformat(eta_iso)
@@ -1355,6 +1354,13 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             except (TypeError, ValueError):
                 _aid_int = None
             record["address_id"] = _aid  # audit trail in shadow log
+            # PICKUP-BUFFER (Adrian 06.07): PACZKI (szerokie okna odbioru) NIE
+            # dostaja bufora obietnicy — kanon is_paczka_order (aid 161/232-236).
+            if (C.is_paczka_order({"address_id": _aid_int})
+                    and isinstance(record.get("best"), dict)):
+                for _pk in ("pickup_buffer_min", "eta_pickup_promised_utc",
+                            "eta_pickup_promised_hhmm"):
+                    record["best"].pop(_pk, None)
             # R-PACZKI-FLEX (2026-05-20): firmowe nadajesz.pl jako paczka =
             # Ziomek proponuje (flip suppressu). Gdy flag OFF — stara semantyka.
             _payload = ev.get("payload") or {}
