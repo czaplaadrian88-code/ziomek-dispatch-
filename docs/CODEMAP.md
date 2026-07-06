@@ -102,7 +102,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
 | Autonomia / auto-assign (OFF) | `auto_assign_gate.py` + `auto_assign_executor.py` (`ENABLE_AUTO_ASSIGN`=OFF) |
 | Event bus | `event_bus.py` + `core/jsonl_appender.py` (+`events.db`) |
 | **Nagrywanie świata decyzji (LIVE)** | `world_record.py` (+recorder OSRM w `osrm_client.py`) → `dispatch_state/world_record/world_record-YYYYMMDD.jsonl` (retencja 14 d) |
-| **Replay decyzji / bramka korpusowa** | `tools/world_replay.py` (1 decyzja, sandbox) + `tools/world_replay_gate.py` (korpus → `dispatch_state/world_replay_gate_verdict.txt`); night-guard: `systemd/dispatch-world-replay-gate.*` (instalacja za ACK) |
+| **Replay decyzji / bramka korpusowa** | `tools/world_replay.py` (1 decyzja, sandbox) + `tools/world_replay_gate.py` (korpus → `dispatch_state/world_replay_gate_verdict.txt`); **night-guard `dispatch-world-replay-gate.timer` LIVE od 06.07** (02:00 UTC, INFORMACYJNY — `ExecStart=-`, werdykt do pliku+`logs/world_replay_gate.log`, brak alertu; eskalacja na egzekwujący za ACK) |
 | Efekty uboczne PO decyzji (LIVE) | `effects_buffer.py` (divert/flush; konsumenci: dispatch_pipeline, feasibility_v2) |
 | Lint/typing ratchet (dev-only) | `tools/devlint/` (`ratchet_check.py`, venv `venvs/devlint`; polityka „nie gorzej") |
 | Program refaktoru architektury | gałąź `refaktor/architektura` → `docs/refaktor/00-07` (raport końcowy `06-raport.md`) |
