@@ -85,3 +85,16 @@ Budziki łańcuchowe w tle (limit 10 min/ogniwo). ~15:45 UTC kontrola środka pe
 - **DOWÓD ŻYWY (smoke na korpusie):** order **485907** — replay = zapis CO DO POLA: `PROPOSE / best=484 / score −113.46 / pool 5/10`, **osrm_misses=0** (mimo now=null!). Kontrakt ADR-R04 zademonstrowany w dniu budowy.
 - **Weryfikacja:** kanon **4294/0** · ratchet 608/608.
 - **Near-miss (klasa cwd-drift, do protokołu przy zamknięciu pakietu):** `git checkout -b` wykonany po `cd` do KANONU w poprzednim bloku poleceń → żywe repo na moment zeszło z mastera na gałąź (plikowo identyczne; cofnięte natychmiast `checkout master`). REGUŁA: komendy gałęziowe ZAWSZE z jawnym `cd <worktree> &&` w TYM SAMYM bloku.
+
+---
+
+## ZAMKNIĘCIE SESJI 06.07 ~14:45 UTC (Adrian: „skończmy tę sesję") — STAN PRZEKAZANIA
+**Zrobione dziś:** Fazy 0-4 programu + Faza 5: Pakiet 0 KOMPLET (K01-K04) · Pakiet 1: K05/K06a/K06-replayer/K07/K08 KOMPLET deweloperka (wszystko na masterze). **`ENABLE_WORLD_RECORD` LIVE od 14:02** (zatwierdzone przez Adriana; nagrywa; NIE wyłączać — retencja 14 d sama sprząta). **Replay 1:1 UDOWODNIONY** (order 485907: pełna zgodność, 0 missów). Kanon: **4294/0**, ratchet 608/608. Poprawki obce domknięte: dryf 5b (`abbea71`), rejestracja PLAN_GC_DRY_RUN, 2×martwy kod.
+
+**DO WYKONANIA przez następną sesję Ziomka (pre-zatwierdzone przez Adriana w tej sesji — cytaty w czacie 06.07):**
+1. **Po peaku (20:00+ PL) / rano przed peakiem:** restart `dispatch-shadow` (podnosi K06a → rekordy z `now`; wzór dzisiejszego: backup flags → py_compile → restart → journal) **+ flip `ENABLE_FLAG_SNAPSHOT: true`** (hot; ACK Adriana: „tak, włącz K05 po peaku"). Dowód po: FLAG_FINGERPRINT=1, zdrowe ticki, world_record.flags pokazuje true.
+2. **~09-10.07 bramka K06:** bieg `tools/world_replay.py` na korpusie z peakiem (rekordy z `now` ≠ null po restarcie) → raport parytetu → jeśli czysto, wpiąć do night-guard (K17 w planie).
+3. Flipy `ENABLE_PRE_RECHECK_BEFORE_POOL` (K07) i `ENABLE_EFFECTS_AFTER_DECISION` (K08) = **OSOBNE TAK Adriana** (nie objęte dzisiejszym ACK).
+4. Pakiet 2 (K09+ rdzeń-jako-moduł) po zamknięciu bramki K06.
+
+**Reguły nadrzędne z tej sesji (Adrian, obowiązują wszystkich):** ŻADNYCH automatów zmieniających flagi; FLIPMASTER nie istnieje; każdy flip/restart = jawne TAK Adriana, wykonanie ręczne z backupem i dowodem. GC-real (PLAN_GC_DRY_RUN=false) ZATWIERDZONY.
