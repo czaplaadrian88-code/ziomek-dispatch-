@@ -2991,6 +2991,18 @@ class PipelineResult:
     # {cid: 'data_poison'|'real_bug'}. None gdy zero fail-ów (ścieżki wczesne/czysto).
     # Read-only consumption w shadow_dispatcher._serialize_result top-level.
     v328_fail_causes: Optional[Dict[str, str]] = None
+    # W0.2 advisory (2026-07-06): bezpiecznik fabrykacji ETA. eta_unreliable=None gdy
+    # nie liczono (brak best/planu) lub gałąź nie doszła; True gdy pred_carry balonuje
+    # względem fizycznego robust_ref (fabrykacja route-simu). Compute-ALWAYS (shadow),
+    # niezależnie od flagi — aktywny routing (defer/uncertainty zamiast KOORD-z-fabrykatem)
+    # tylko gdy ENABLE_ETA_FABRICATION_GUARD. Read-only consumption w serializerze (B top-level;
+    # sygnały per-order w best.metrics → auto A+B). NIE wpływa na score/feasibility.
+    eta_unreliable: Optional[bool] = None
+    eta_unreliable_meta: Optional[Dict[str, Any]] = None
+    # Podpowiedź „to jest kandydat do deferu/uncertainty, nie twardy KOORD" — ustawiana
+    # TYLKO gdy flaga ON i wykryto fabrykację przy werdykcie eskalacyjnym. Konsument:
+    # telegram_approver/konsola (framing uncertainty). W1 (defer-engine) skonsumuje jako trigger.
+    eta_defer_hint: Optional[bool] = None
 
 
 # ─── FAIL-04: prep-variance anomaly (A1 anomaly block, shadow-first) ───
@@ -3619,6 +3631,95 @@ def _l4_floor_candidate_eta(c) -> Optional[float]:
         return None
 
 
+# ─── W0.2: bezpiecznik fabrykacji ETA (advisory Faza 6.2; werdykt E-1) ───
+
+def _robust_eta_ref_min(pickup_coords, delivery_coords, now) -> Optional[float]:
+    """Fizyczny robust_ref (minuty) dla pojedynczej nogi pickup→dostawa:
+    osrm freeflow drive (już z traffic-mult, Opus: freeflow·mult) + service + slack.
+    None gdy coords niewiarygodne / OSRM sentinel/fallback — bez PEWNEGO floora NIE
+    osądzamy fabrykacji (fail-safe: brak flagi, nie fałszywe stłumienie KOORD)."""
+    try:
+        if not pickup_coords or not delivery_coords:
+            return None
+        from dispatch_v2 import osrm_client as _oc
+        r = _oc.route(tuple(pickup_coords), tuple(delivery_coords))
+        if not isinstance(r, dict):
+            return None
+        dur = r.get("duration_min")
+        if dur is None or r.get("replay_miss") or r.get("coord_invalid"):
+            return None
+        # sentinel niewiarygodnej współrzędnej (duża wartość) = brak floora
+        sentinel = getattr(_oc, "OSRM_INVALID_COORD_SENTINEL_MIN", 9990.0)
+        if float(dur) >= float(sentinel) - 1.0:
+            return None
+        return float(dur) + C.ETA_ROBUST_SERVICE_MIN + C.ETA_ROBUST_SLACK_MIN
+    except Exception:
+        return None
+
+
+def _eta_fabrication_check(result: "PipelineResult", order_event: dict,
+                           now: Optional[datetime]) -> None:
+    """Shadow-first bezpiecznik fabrykacji ETA. Compute-ALWAYS (niezależnie od flagi):
+    ustawia `result.eta_unreliable`(+meta) i sygnały w `best.metrics` (→ auto serializer
+    A+B) gdy pred_carry balonuje względem fizycznego robust_ref. Aktywny routing
+    (defer/uncertainty zamiast KOORD-z-fabrykatem) TYLKO gdy ENABLE_ETA_FABRICATION_GUARD.
+
+    pred_carry = predicted_delivered_at[new] − pickup_ready_at (CARRY, nie total —
+    total zawierałby legalny WAIT early-bird → fałszywe flagowanie). Fail-soft: każdy
+    wyjątek zostawia stan bez zmian. NIE dotyka score/feasibility/kanonu."""
+    try:
+        best = result.best
+        if best is None or getattr(best, "plan", None) is None:
+            return
+        oid = str(result.order_id)
+        pda = getattr(best.plan, "predicted_delivered_at", None) or {}
+        pred_deliv = pda.get(oid)
+        ref_t = result.pickup_ready_at or now
+        if pred_deliv is None or ref_t is None:
+            return
+        if pred_deliv.tzinfo is None:
+            pred_deliv = pred_deliv.replace(tzinfo=timezone.utc)
+        if ref_t.tzinfo is None:
+            ref_t = ref_t.replace(tzinfo=timezone.utc)
+        pred_carry = (pred_deliv - ref_t).total_seconds() / 60.0
+        floor = float(C.ETA_FABRICATION_FLOOR_MIN)
+        if pred_carry <= floor:
+            result.eta_unreliable = False  # poniżej podłogi — na pewno nie fabrykacja
+            return
+        # dopiero powyżej podłogi (rzadko) licz fizyczny robust_ref (1 wywołanie OSRM)
+        robust_ref = _robust_eta_ref_min(
+            order_event.get("pickup_coords"), order_event.get("delivery_coords"), now)
+        if robust_ref is None or robust_ref <= 0:
+            result.eta_unreliable = None  # brak pewnego floora → nie osądzamy
+            return
+        ratio = pred_carry / robust_ref
+        unreliable = bool(ratio > float(C.ETA_FABRICATION_RATIO))  # ∧ pred_carry>floor (wyżej)
+        result.eta_unreliable = unreliable
+        result.eta_unreliable_meta = {
+            "pred_carry_min": round(pred_carry, 1),
+            "robust_ref_min": round(robust_ref, 1),
+            "ratio": round(ratio, 2),
+            "floor_min": floor,
+        }
+        if best.metrics is None:
+            best.metrics = {}
+        best.metrics["eta_unreliable"] = unreliable
+        best.metrics["eta_fabrication_ratio"] = round(ratio, 2)
+        best.metrics["eta_robust_ref_min"] = round(robust_ref, 1)
+        if not unreliable:
+            return
+        # AKTYWNY routing — tylko za flagą (shadow-first: OFF = czysta obserwacja)
+        if C.flag("ENABLE_ETA_FABRICATION_GUARD", False):
+            # NIGDY KOORD z fabrykatem: przy eskalacji oznacz jako defer/uncertainty
+            # (framing dla telegram/konsoli; W1 defer-engine skonsumuje jako trigger).
+            result.eta_defer_hint = True
+            if result.verdict == "KOORD":
+                result.reason = (result.reason or "") + "|eta_unreliable_defer"
+                best.metrics["eta_koord_fabrication_flagged"] = True
+    except Exception:
+        pass  # fabrication-guard NIGDY nie wywróci assess flow
+
+
 def assess_order(
     order_event: dict,
     fleet_snapshot: Dict[str, Any],
@@ -3658,6 +3759,8 @@ def assess_order(
         result.osrm_degraded_since_ts = _oc.degraded_since_ts()
     except Exception:
         pass  # MP-#13 defense-in-depth — leave defaults False/None
+    # W0.2: bezpiecznik fabrykacji ETA (shadow-first compute-always; aktywny za flagą)
+    _eta_fabrication_check(result, order_event, now)
     try:
         from dispatch_v2.observability.candidate_logger import get_logger, serialize_candidate
         logger = get_logger()

@@ -206,6 +206,8 @@ ETAP4_DECISION_FLAGS = (
     # Koordynacja: HANDOFF_eta_calib_bag3_gate.md (sesja 126 = wariant bag<=3 na tej
     # samej fladze; gold->4 juz wpiete commit 0073486 — union, nie konflikt).
     "ENABLE_ETA_QUANTILE_R6_BAGCAP",
+    # W0.2 advisory (2026-07-06): bezpiecznik fabrykacji ETA (hybryda 60′∧2,5×robust_ref).
+    "ENABLE_ETA_FABRICATION_GUARD",
     "ENABLE_R6_BREACH_SHADOW_LOG",
     # E2 (2026-06-14): 20% live A/B PLN-sort selekcji kandydatow (dispatch_pipeline).
     "ENABLE_E2_PLN_AB",
@@ -471,6 +473,18 @@ ETAP4_DECISION_FLAGS = (
 # module_const) + test-izolacja (conftest wycina klucze z tmp flags.json →
 # determinizm suity). Wzorzec jak ENABLE_AUTO_ASSIGN = False (l.691, ta sama era).
 ENABLE_ETA_QUANTILE_R6_BAGCAP = False
+# W0.2 advisory (roadmapa 08, werdykt E-1 „GO hybryda"): bezpiecznik fabrykacji ETA.
+# Wykrycie: pred_carry > ETA_FABRICATION_FLOOR_MIN ∧ pred_carry > RATIO×robust_ref,
+# gdzie robust_ref = osrm_freeflow(pickup→deliv)·traffic_mult + service + slack
+# (fizyczny floor odporny na balon route-simu; Opus formuła). UNRELIABLE → nigdy
+# KOORD z fabrykatem (defer/uncertainty). Default OFF; shadow-first (compute-always
+# obserwacja `eta_unreliable` niezależnie od flagi, aktywny routing tylko ON).
+ENABLE_ETA_FABRICATION_GUARD = False
+ETA_FABRICATION_FLOOR_MIN = 60.0     # T=60: E-1 łapie 100% fabrykacji (>90 gubi połowę)
+ETA_FABRICATION_RATIO = 2.5          # pred>2,5×robust_ref (komponent ratio Opusa vs FP kryzysu)
+ETA_ROBUST_SERVICE_MIN = 12.0        # service_time (odbiór+wydanie) w robust_ref
+ETA_ROBUST_SLACK_MIN = 5.0           # committed_slack w robust_ref
+ETA_ROBUST_URBAN_KMH = 22.0          # fallback freeflow speed gdy OSRM niedostępny (haversine)
 ENABLE_R6_BREACH_SHADOW_LOG = False
 ENABLE_E2_PLN_AB = False
 ENABLE_PLN_COURIER_PAY = False

@@ -627,6 +627,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # L2.2 (2026-07-02): przyczyny fail-ów per kurier z catch-alla
         # _v328_eval_safe ({cid: data_poison|real_bug}); None = zero fail-ów.
         "v328_fail_causes": getattr(result, "v328_fail_causes", None),
+        # W0.2 (2026-07-06): bezpiecznik fabrykacji ETA (shadow-first, LOCATION B
+        # top-level). eta_unreliable None=nie liczono/brak floora; sygnały per-order
+        # (ratio, robust_ref) w best.metrics → auto A+B. defer_hint tylko gdy flaga ON.
+        "eta_unreliable": getattr(result, "eta_unreliable", None),
+        "eta_unreliable_meta": getattr(result, "eta_unreliable_meta", None),
+        "eta_defer_hint": getattr(result, "eta_defer_hint", None),
         "best": None if best is None else {
             "courier_id": best.courier_id,
             "name": best.name,
