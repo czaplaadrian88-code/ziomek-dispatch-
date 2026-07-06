@@ -458,6 +458,7 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_PRE_RECHECK_BEFORE_POOL",  # K07: prefetch czas_kuriera przed pulą (świeżość)
     "ENABLE_EFFECTS_AFTER_DECISION",   # K08: efekty (shadow-jsonle/loadgov/alert) PO decyzji
     "ENABLE_POS_SOURCE_HIERARCHY",     # K16 (sesja B): adnotacja pos_resolution w resolverze pozycji
+    "ENABLE_SCORER_INTERFACE",         # K13: interfejs Scorer (heuristic/lgbm) w core.candidates
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -503,6 +504,7 @@ ENABLE_WORLD_RECORD = False  # K04 refaktoru: world_record.enabled() default=Fal
 ENABLE_PRE_RECHECK_BEFORE_POOL = False  # K07 refaktoru: _k07_prefetch_fresh_ck default=False; kanon=flags.json (flip za ACK)
 ENABLE_EFFECTS_AFTER_DECISION = False  # K08 refaktoru: effects_buffer.begin default=False; kanon=flags.json (flip za ACK)
 ENABLE_POS_SOURCE_HIERARCHY = False  # K16 (sesja B): courier_resolver._resolve_position adnotacja default=False; kanon=flags.json (flip za ACK); rejestracja: sesja A na prośbę B 06.07
+ENABLE_SCORER_INTERFACE = False  # K13 refaktoru (ADR-R06): core.candidates → core.scorer default=False; kanon=flags.json (flip za ACK Adriana; SCORER_IMPL='lgbm' primary = POZA zakresem programu)
 # (ENABLE_FLAG_SNAPSHOT = False — zdefiniowana wyżej w bloku K05)
 ENABLE_GRAFIK_FULL_NAMES_SOURCE = True       # courier_resolver:466 default=True
 ENABLE_PANEL_PACKS_CID_MATCH = True          # courier_resolver:1190 default=True

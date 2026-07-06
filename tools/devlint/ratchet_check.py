@@ -34,6 +34,7 @@ MYPY_MODULES = [
     "core/decide.py",       # K09 — nowe moduły core/ trzymamy mypy-czyste
     "core/world_state.py",  # K09
     "core/gates.py",        # K10
+    "core/scorer.py",       # K13
     "common.py",
     "dispatch_pipeline.py",
     "feasibility_v2.py",

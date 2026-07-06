@@ -2261,6 +2261,24 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     if getattr(cs, "available_from", None) is None:
         enriched_metrics.pop("available_from_utc", None)
         enriched_metrics.pop("af_source", None)
+
+    # K13 (ADR-R06): interfejs Scorer za flagą ENABLE_SCORER_INTERFACE (ETAP4,
+    # OFF default = zero odczytu, bajt-parytet 1:1). ON + SCORER_IMPL=heuristic
+    # (default) = tożsamość score + metryki obserwacyjne scorer_impl/scorer_fallback
+    # (auto-serializacja A+B). Wybór 'lgbm' (primary) = flip POZA zakresem programu,
+    # wyłącznie jawna decyzja Adriana.
+    if C.decision_flag("ENABLE_SCORER_INTERFACE"):
+        try:
+            from dispatch_v2.core import scorer as _scorer_mod
+            _sv = _scorer_mod.get_scorer().score_candidate(
+                final_score, candidate=None,
+                decision_ctx={"order_id": order_id, "restaurant": restaurant})
+            enriched_metrics["scorer_impl"] = _sv.source
+            enriched_metrics["scorer_fallback"] = bool(_sv.fallback)
+            final_score = _sv.score
+        except Exception:
+            pass  # fail-soft: scorer NIGDY nie psuje oceny kandydata
+
     return Candidate(
         courier_id=str(cid),
         name=getattr(cs, "name", None),
