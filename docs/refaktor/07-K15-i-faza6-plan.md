@@ -1,4 +1,4 @@
-# 07 — K15 (punkt scalenia) + Faza 6 (domknięcie programu) — plan wykonawczy koordynatora
+# 07 — K15 + Faza 6 — plan wykonawczy koordynatora — ✅ WYKONANY 06.07 (K15 na masterze `2e7d359`, kanon 4352/0, parytet n=88 DIFF PUSTY; raport końcowy = 06-raport.md)
 
 **Delegacja Adriana (06.07, czat tmux 21):** „jak będą kończyć pakiety, zrób K15 i domknij program". Wykonawca: sesja-koordynator (tmux 21). Start = wykrycie OBU markerów `=== SPRINT_A_KONIEC ===` i `=== SPRINT_B_KONIEC ===` w dziennikach sprintów (addendum wysłane do sesji 06.07 ~15:15).
 
