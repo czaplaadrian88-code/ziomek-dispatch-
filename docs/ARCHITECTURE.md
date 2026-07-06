@@ -36,6 +36,8 @@ Kanon: `../ZIOMEK_ARCHITECTURE.md §1`. Zweryfikowane vs kod 03.07 (`audyt/01 §
 
 **Pętla silnika** = `shadow_dispatcher._tick()`. **Poza tickiem:** `plan_recheck` (5 min, re-sekwencja), 4 handlery recanon w `panel_watcher`, most paczki, cross-repo konsola/apka. ⚠ Ta sama reguła często żyje w kilku warstwach naraz (feasibility↔greedy↔plan_recheck) — źródło długu K1, patrz rejestr bliźniaków `../ZIOMEK_ARCHITECTURE.md §4`.
 
+**Refaktor 06.07 (program `docs/refaktor/00-07`, raport = `06-raport.md`):** warstwy 2-8 mają fizyczny rdzeń w `core/` — wejście przez fasadę `core/decide.py` (`decide(world, order)` + `WorldState`; `dispatch_pipeline._assess_order_impl` = orkiestrator ~483 l.): bramki wejściowe `core/gates.py` (geokod-defense, early-bird), pętla per-kurier `core/candidates.py` (route-sim+feasibility per kandydat), selekcja+tiering+best_effort+bramki werdyktu `core/selection.py`, interfejs scoringu `core/scorer.py` (ADR-R06, flaga OFF), wspólna parametryzacja planowania `core/planner.py` (silnik↔plan_recheck, ADR-R03). Wejścia decyzji nagrywane: `world_record.py` (→ `dispatch_state/world_record/*.jsonl`, LIVE) + zamrożone flagi/tick (`common.flags_snapshot_*`, LIVE) + efekty uboczne po decyzji (`effects_buffer.py`, LIVE). Weryfikacja „bez zmiany zachowania" = replay: `tools/world_replay.py` (1 decyzja) + `tools/world_replay_gate.py` (korpus; night-guard w `systemd/`, instalacja za ACK).
+
 ---
 
 ## 3. Przepływ danych end-to-end

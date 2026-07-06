@@ -14,7 +14,7 @@
 | `tests/` | Główny pakiet regresji pytest (~4109 testów) | `conftest.py`, `golden/`, `fixtures/` | ⚠ **TYLKO venv dispatch** (system python: 123 fałsz. faile) |
 | `observability/` | „Oficjalne" monitory Fazy audytowej | `watchdog.py`, `data_alerts.py`, `cron_health.py` | żywy |
 | `monitoring/` | 3 detektory (starsze, pre-audyt) | `detector_419.py`, `gps_feed_health.py`, `consumer_stuck_alert.py` | żywy; tematycznie nakłada się z `observability/` |
-| `core/` | Najczystszy moduł, rola jasna | `flags_io.py`, `jsonl_appender.py`, `broadcast_handlers.py` | żywy |
+| `core/` | **Rdzeń decyzyjny silnika (refaktor 06.07)** + starsze utilsy event-busa | `decide.py` (fasada+WorldState), `gates.py`, `candidates.py` (pętla per-kurier), `selection.py`, `scorer.py` (flaga OFF), `planner.py` (wspólna parametryzacja silnik↔plan_recheck, flaga OFF) · starsze: `flags_io.py`, `jsonl_appender.py`, `broadcast_handlers.py` | żywy |
 | `czasowka_proactive/` | Proaktywne harmonogramowanie czasówek | `evaluator.py`, `score_selector.py`, `state.py` | żywy (submoduł) |
 | `cod_weekly/` | Tygodniowe rozliczenie COD → Google Sheets | (venv **sheets**) | żywy; ⚠ `dispatch-cod-weekly.service` pada co pon. |
 | `daily_accounting/` | Rozliczenia dzienne + wypłaty kurierów | `main.py`, `tests/` (własny runner, NIE pytest) | żywy (venv sheets) |
@@ -101,6 +101,11 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
 | Flagi apki | `../courier_api/config.py` defaults + drop-iny `.conf` |
 | Autonomia / auto-assign (OFF) | `auto_assign_gate.py` + `auto_assign_executor.py` (`ENABLE_AUTO_ASSIGN`=OFF) |
 | Event bus | `event_bus.py` + `core/jsonl_appender.py` (+`events.db`) |
+| **Nagrywanie świata decyzji (LIVE)** | `world_record.py` (+recorder OSRM w `osrm_client.py`) → `dispatch_state/world_record/world_record-YYYYMMDD.jsonl` (retencja 14 d) |
+| **Replay decyzji / bramka korpusowa** | `tools/world_replay.py` (1 decyzja, sandbox) + `tools/world_replay_gate.py` (korpus → `dispatch_state/world_replay_gate_verdict.txt`); night-guard: `systemd/dispatch-world-replay-gate.*` (instalacja za ACK) |
+| Efekty uboczne PO decyzji (LIVE) | `effects_buffer.py` (divert/flush; konsumenci: dispatch_pipeline, feasibility_v2) |
+| Lint/typing ratchet (dev-only) | `tools/devlint/` (`ratchet_check.py`, venv `venvs/devlint`; polityka „nie gorzej") |
+| Program refaktoru architektury | gałąź `refaktor/architektura` → `docs/refaktor/00-07` (raport końcowy `06-raport.md`) |
 | Telegram bot (⚠ OFF od 26.06) | `telegram_approver.py` + `telegram/templates.py` |
 | Testy | `tests/` — ⚠ **TYLKO** `venvs/dispatch/bin/python -m pytest` |
 | Strażniki runtime | `tools/carried_first_guard.py` + `tools/pickup_floor_guard.py` + `observability/watchdog.py` |
