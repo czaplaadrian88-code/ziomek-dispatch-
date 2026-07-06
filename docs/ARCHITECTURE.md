@@ -29,8 +29,8 @@ Kanon: `../ZIOMEK_ARCHITECTURE.md §1`. Zweryfikowane vs kod 03.07 (`audyt/01 §
 | 4 | telemetria | `courier_resolver.py` | `dispatchable_fleet()` wzbogaca snapshot floty (GPS+fallback) |
 | 5 | **check_feasibility_v2 — HARD** | `feasibility_v2.py` | R6=35/40 tier-aware, R-DECLARED-TIME, shift |
 | 6 | scoring ~19 kar (SOFT) | `scoring.py` | `score_candidate()` — term + suma kar/bonusów |
-| 7 | selekcja (SOFT) | `dispatch_pipeline.py` | `_selection_bucket` / `_best_effort_*` / lex_qual |
-| 8 | **werdykt KOORD — HARD** | `dispatch_pipeline.py` + `shadow_dispatcher.py` | quality-gate vs operational-gate (KOORD-redirect) |
+| 7 | selekcja (SOFT) | **`core/selection.py`** (refaktor 06.07; orkiestrowane z `dispatch_pipeline._assess_order_impl`) | `_selection_bucket` / `_best_effort_*` / lex_qual |
+| 8 | **werdykt KOORD — HARD** | **`core/selection.py`** + `shadow_dispatcher.py` | quality-gate vs operational-gate (KOORD-redirect) |
 | 9 | zapis + kanon | `plan_manager.py`, `plan_recheck.py` | `courier_plans.json` (atomic) + recanon kolejności |
 | 10 | powierzchnie | konsola, apka, ~~Telegram~~ | render kolejności + ETA (patrz §4: TG uśpiony) |
 
