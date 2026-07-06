@@ -21,7 +21,7 @@ import traceback
 from dispatch_v2.geocoding import geocode
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from dispatch_v2 import calib_maps  # SP-B2 (2026-06-11): prep-bias shadow w _serialize_result
 from dispatch_v2 import common as C, event_bus, pending_pool, state_machine
@@ -1690,7 +1690,15 @@ def run() -> int:
 
     while not _shutdown:
         try:
-            tick_stats = _tick(shadow_log_path, meta)
+            # K05 refaktor (ADR-R01): flagi zamrożone na CZAS TICKU — spójna
+            # decyzja (zero dryfu flag między kandydatami) + deterministyczne
+            # nagranie K04. Gate ENABLE_FLAG_SNAPSHOT żywo w begin(); OFF/brak
+            # klucza = no-op 1:1. finally → hot-reload między tickami jak dotąd.
+            C.flags_snapshot_begin()
+            try:
+                tick_stats = _tick(shadow_log_path, meta)
+            finally:
+                C.flags_snapshot_end()
             for k, v in tick_stats.items():
                 totals[k] += v
             # V3.28 Fix 3: update last_processed_ts gdy tick miał >=1 successful processing
