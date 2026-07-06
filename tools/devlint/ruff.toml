@@ -1,0 +1,29 @@
+# devlint (K01 refaktor): konfiguracja ruff dla ratchetu "nie gorzej".
+# Zakres pragmatyczny: błędy realne (pyflakes/E9/bugbear), bez stylu kosmetycznego.
+# Baseline w baseline.json — nowe naruszenia = czerwono; sprzątanie obniża baseline.
+
+target-version = "py312"
+line-length = 120
+
+exclude = [
+    "eod_drafts",
+    "docs",
+    "migrations",
+    "deploy",
+    "deploy_staging",
+    "dispatch_state",
+    "__pycache__",
+    ".git",
+    "ml_data_prep/models_twomodel",
+]
+
+[lint]
+select = [
+    "E9",   # błędy składni/parsowania
+    "F",    # pyflakes: undefined names, unused imports/vars, f-string bugs
+    "B",    # bugbear: mutable defaults, late-binding loops itp.
+    "PLE",  # pylint errors
+]
+ignore = [
+    "E501",  # długość linii — kosmetyka, poza zakresem ratchetu
+]
