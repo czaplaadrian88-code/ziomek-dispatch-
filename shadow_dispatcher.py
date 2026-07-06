@@ -1244,7 +1244,11 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
                 except Exception as _am_e:  # noqa: BLE001
                     _log.warning(f"address_mismatch shadow fail order={oid}: {_am_e}")
 
-            result = process_event(ev, fleet, meta)
+            # K06a refaktoru (2026-07-06): jawne `now` per zdarzenie — semantyka
+            # IDENTYCZNA (impl i tak wiąże jeden now na całą decyzję w swoim
+            # defaultcie), ale zegar staje się NAGRYWALNY w world_record (bez
+            # tego rekordy miały now=null → replay bit-w-bit niemożliwy).
+            result = process_event(ev, fleet, meta, now=datetime.now(timezone.utc))
 
             # SHADOW probe (2026-05-29) — race Baanko-type same-restaurant.
             # Logging-only, flag-gated, try/except wewnątrz — NIGDY nie wywróci
