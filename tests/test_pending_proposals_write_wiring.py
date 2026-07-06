@@ -16,7 +16,7 @@ def _wire(monkeypatch, flag_on, verdict="PROPOSE"):
     monkeypatch.setattr(SD.event_bus, "mark_failed", lambda *a, **k: None)
     monkeypatch.setattr(SD, "dispatchable_fleet", lambda: [])
     monkeypatch.setattr(SD.state_machine, "get_all", lambda: {})
-    monkeypatch.setattr(SD, "process_event", lambda ev, fleet, meta: types.SimpleNamespace(verdict=verdict))
+    monkeypatch.setattr(SD, "process_event", lambda ev, fleet, meta, now=None: types.SimpleNamespace(verdict=verdict))
     monkeypatch.setattr(SD, "_serialize_result",
                         lambda result, eid, lat: {"verdict": verdict, "best": {"courier_id": "A"}})
     monkeypatch.setattr(SD, "_append_decision", lambda *a, **k: None)
