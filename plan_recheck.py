@@ -730,19 +730,52 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     #    wyświetlany ETA o ~dwell_gap×stops = „czasy lecą w dół po stopie". Bramka
     #    ENABLE_PLAN_RECHECK_TIER_DWELL (OFF → default = byte-identyczny). NIE dotyka
     #    bramki R6/feasibility (osobna ścieżka, już używa dwell_for_tier). Fail-safe.
-    try:
-        from dispatch_v2 import common as _C
-        from dispatch_v2 import courier_resolver as _CR
-        _tinfo = _CR._load_courier_tiers().get(str(cid)) or {}
-        _tier = (_tinfo.get("bag") or {}).get("tier")
-        _drive_speed_mult = _C.speed_mult_for_tier(_tier)
-        if _C.flag("ENABLE_PLAN_RECHECK_TIER_DWELL", False):
-            _dwell_pickup, _dwell_dropoff = _C.dwell_for_tier(_tier)
-        else:
+    # K15 (ADR-R03): parametryzacja z JEDNEGO źródła (core.planner.tier_params;
+    # semantyka re-planera = recheck_dwell_gate=True, flaga TIER_DWELL czytana
+    # HOT). OFF = stary inline bajt-w-bajt. SHADOW (przy głównej OFF): policz
+    # parametry OBIEMA drogami i zaloguj rozjazd (PLANNER_PARAM_MISMATCH) —
+    # tani dowód parytetu na żywo bez drugiej symulacji.
+    from dispatch_v2 import common as _C_k15
+    _planner_unified = _C_k15.flag(
+        "ENABLE_PLANNER_UNIFIED", getattr(_C_k15, "ENABLE_PLANNER_UNIFIED", False))
+    _planner_mod = None
+    if _planner_unified:
+        from dispatch_v2.core import planner as _planner_mod
+        try:
+            from dispatch_v2 import courier_resolver as _CR
+            _tier = ((_CR._load_courier_tiers().get(str(cid)) or {})
+                     .get("bag") or {}).get("tier")
+        except Exception:
+            _tier = None
+        _dwell_pickup, _dwell_dropoff, _drive_speed_mult = \
+            _planner_mod.tier_params(_tier, recheck_dwell_gate=True)
+    else:
+        try:
+            from dispatch_v2 import common as _C
+            from dispatch_v2 import courier_resolver as _CR
+            _tinfo = _CR._load_courier_tiers().get(str(cid)) or {}
+            _tier = (_tinfo.get("bag") or {}).get("tier")
+            _drive_speed_mult = _C.speed_mult_for_tier(_tier)
+            if _C.flag("ENABLE_PLAN_RECHECK_TIER_DWELL", False):
+                _dwell_pickup, _dwell_dropoff = _C.dwell_for_tier(_tier)
+            else:
+                _dwell_pickup, _dwell_dropoff = R.DWELL_PICKUP_MIN, R.DWELL_DROPOFF_MIN
+        except Exception:
+            _tier = None
+            _drive_speed_mult = 1.0
             _dwell_pickup, _dwell_dropoff = R.DWELL_PICKUP_MIN, R.DWELL_DROPOFF_MIN
-    except Exception:
-        _drive_speed_mult = 1.0
-        _dwell_pickup, _dwell_dropoff = R.DWELL_PICKUP_MIN, R.DWELL_DROPOFF_MIN
+        if _C_k15.flag("ENABLE_PLANNER_UNIFIED_SHADOW",
+                       getattr(_C_k15, "ENABLE_PLANNER_UNIFIED_SHADOW", False)):
+            try:
+                from dispatch_v2.core import planner as _planner_sh
+                _sh = _planner_sh.tier_params(_tier, recheck_dwell_gate=True)
+                if _sh != (_dwell_pickup, _dwell_dropoff, _drive_speed_mult):
+                    _log.warning(
+                        f"PLANNER_PARAM_MISMATCH cid={cid} tier={_tier} "
+                        f"inline=({_dwell_pickup},{_dwell_dropoff},{_drive_speed_mult}) "
+                        f"planner={_sh}")
+            except Exception as _sh_e:
+                _log.debug(f"planner shadow skip cid={cid}: {_sh_e}")
 
     # O2 RE-SEQ (2026-06-27, ENABLE_O2_READY_ANCHOR_SWEEP): flaga + cap-Z liczone RAZ
     # (closure dla _sweep ORAZ committed-tiebreak niżej — twins spójne). OFF = byte-identyczne.
@@ -773,11 +806,21 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         best = None
         for newoid in ordered_l:
             bag = [sims[o] for o in ordered_l if o != newoid]
-            p = R.simulate_bag_route_v2(pos, bag, sims[newoid], now=now, sla_minutes=35,
-                                        earliest_departure=anchor_departure,
-                                        drive_speed_mult=_drive_speed_mult,
-                                        dwell_pickup=_dwell_pickup,
-                                        dwell_dropoff=_dwell_dropoff)
+            if _planner_unified and _planner_mod is not None:
+                # K15: wspólne wejście symulacji (simulate_fn = wstrzyknięte R
+                # — kontrakt wstrzykiwania testów zachowany 1:1)
+                p = _planner_mod.plan_bag(
+                    pos, bag, sims[newoid], now, sla_minutes=35,
+                    earliest_departure=anchor_departure,
+                    dwell_pickup=_dwell_pickup, dwell_dropoff=_dwell_dropoff,
+                    drive_speed_mult=_drive_speed_mult,
+                    simulate_fn=R.simulate_bag_route_v2)
+            else:
+                p = R.simulate_bag_route_v2(pos, bag, sims[newoid], now=now, sla_minutes=35,
+                                            earliest_departure=anchor_departure,
+                                            drive_speed_mult=_drive_speed_mult,
+                                            dwell_pickup=_dwell_pickup,
+                                            dwell_dropoff=_dwell_dropoff)
             key = _o2_key(p) + (tuple(p.sequence),)
             if best is None or key < best[0]:
                 best = (key, p)
