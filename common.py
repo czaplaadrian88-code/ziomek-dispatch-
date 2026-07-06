@@ -39,6 +39,22 @@ _perf_lazy_members = False  # odświeżane w load_flags przy reloadzie JSON
 # wyłącznie dla wygody testów/harnessu; produkcja steruje przez flags.json.
 ENABLE_PERF_LAZY_MEMBERS = os.environ.get("ENABLE_PERF_LAZY_MEMBERS", "0") == "1"
 
+# ─── K05 refaktor (2026-07-06, ADR-R01): FlagSnapshot per tick ───
+# Problem: flagi czytane z dysku w TRAKCIE decyzji (nawet z perf-lazy TTL 0,25 s
+# odświeżenie może wypaść W ŚRODKU ticku) → zmiana flags.json mid-tick daje
+# NIESPÓJNĄ decyzję między kandydatami i nieodtwarzalny replay (K04 nagrywa
+# snapshot, a silnik mógł liczyć na innym zestawie). Fix: pętla silnika
+# (shadow_dispatcher.run) woła flags_snapshot_begin() na starcie ticku i
+# flags_snapshot_end() w finally — w oknie ticku load_flags() zwraca ZAMROŻONY
+# dict. Hot-reload działa MIĘDZY tickami (własność operacyjna zachowana).
+# Inne procesy (panel-watcher/plan-recheck/czasówka) nigdy nie wołają begin()
+# → ich zachowanie bez zmian. Gate = ENABLE_FLAG_SNAPSHOT (kanon flags.json,
+# czytany ŻYWO w begin(); brak klucza/OFF = no-op = zachowanie 1:1). NIE flaga
+# decyzyjna (zmienia ŚWIEŻOŚĆ odczytu, nie treść reguł) — wzorzec jak
+# ENABLE_PERF_LAZY_MEMBERS wyżej.
+ENABLE_FLAG_SNAPSHOT = False  # stała-fallback; kanon = flags.json
+_FLAGS_SNAPSHOT_OVERRIDE = None  # aktywny snapshot ticku (None = ścieżka żywa)
+
 
 def load_config():
     """Hot-reload config.json jesli sie zmienil."""
@@ -59,6 +75,12 @@ def load_flags():
     Zwracany dict jest READ-ONLY dla callerów (`.get()`); zero mutacji = brak
     ryzyka parytetu. OFF = stat co wywołanie (zachowanie sprzed fali)."""
     global _flags_cache, _flags_mtime, _flags_last_stat_mono, _perf_lazy_members
+    # K05 (ADR-R01): aktywny snapshot ticku wygrywa nad dyskiem — decyzja widzi
+    # JEDEN spójny zestaw flag. Ustawiany wyłącznie przez flags_snapshot_begin()
+    # w pętli silnika; wszędzie indziej None → ścieżka żywa jak dotąd.
+    _snap = _FLAGS_SNAPSHOT_OVERRIDE
+    if _snap is not None:
+        return _snap
     if _perf_lazy_members and _flags_cache is not None:
         # Fast path: w oknie TTL nie stat'ujemy — flagi stałe w tak krótkim oknie.
         if (time.monotonic() - _flags_last_stat_mono) < _PERF_FLAGS_STAT_TTL_S:
@@ -80,6 +102,33 @@ def load_flags():
 def flag(name: str, default=False) -> bool:
     """Szybki odczyt flagi z hot-reload."""
     return load_flags().get(name, default)
+
+
+def flags_snapshot_begin():
+    """K05 (ADR-R01): zamroź flagi na czas TICKU silnika.
+
+    Gate ENABLE_FLAG_SNAPSHOT czytany ŻYWO (przed zamrożeniem). OFF/brak klucza
+    → None i ZERO zmiany zachowania. ON → od tego momentu load_flags() (a więc
+    flag()/decision_flag() we WSZYSTKICH modułach i wątkach puli kandydatów
+    tego procesu) zwraca zamrożony dict aż do flags_snapshot_end().
+    Wołać wyłącznie z pętli ticku; end() ZAWSZE w finally."""
+    global _FLAGS_SNAPSHOT_OVERRIDE
+    _FLAGS_SNAPSHOT_OVERRIDE = None  # gate + treść czytane z żywej ścieżki
+    try:
+        live = load_flags()
+        if not bool(live.get("ENABLE_FLAG_SNAPSHOT", ENABLE_FLAG_SNAPSHOT)):
+            return None
+        snap = dict(live)
+    except Exception:
+        return None  # fail-soft: brak snapshotu = zachowanie dotychczasowe
+    _FLAGS_SNAPSHOT_OVERRIDE = snap
+    return snap
+
+
+def flags_snapshot_end() -> None:
+    """K05: zdejmij snapshot ticku (hot-reload wraca). Idempotentne."""
+    global _FLAGS_SNAPSHOT_OVERRIDE
+    _FLAGS_SNAPSHOT_OVERRIDE = None
 
 
 # ─── ETAP 4 (2026-06-10, audyt Z-04): flagi DECYZYJNE wspólne cross-proces ───
@@ -393,6 +442,12 @@ ETAP4_DECISION_FLAGS = (
     # × solo/worek — ADDYTYWNE pola eta_pickup_promised_* w serializerze best;
     # wewnętrzne eta_pickup_utc (scoring/feasibility/R-LATE) NIETKNIĘTE.
     "ENABLE_LOAD_AWARE_PICKUP_BUFFER",
+    # REJESTRACJA 2026-07-06 (sesja refaktor, strażnik test_no_new_unstripped_flags
+    # _ratchet): klucz dopisany do flags.json przez at-205 scheduled_flip_gate
+    # (L3 GC-real, flip FLIPMASTERA 12:40) — flaga DECYZYJNA (steruje czy GC
+    # realnie kasuje plany), czytelnik plan_recheck:2444 flag(name, True).
+    # Rejestracja = tylko strip+fingerprint; kanon wartości = flags.json (false).
+    "PLAN_GC_DRY_RUN",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -433,6 +488,7 @@ ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse dead
 # czytelnika (courier_resolver:813/466/1190, geocoding_audit:39). Gdy klucz
 # pojawi się w flags.json — i czytelnik, i fingerprint przejdą na json spójnie.
 ENABLE_GPS_ACCURACY_TELEPORT_FILTER = False  # courier_resolver:813 default=False
+PLAN_GC_DRY_RUN = True  # plan_recheck:2444 default=True (dry-run bezpieczny); kanon=flags.json (at-205 06.07 flip→false); rejestracja: sesja refaktor 06.07
 ENABLE_GRAFIK_FULL_NAMES_SOURCE = True       # courier_resolver:466 default=True
 ENABLE_PANEL_PACKS_CID_MATCH = True          # courier_resolver:1190 default=True
 ENABLE_GPS_QUALITY_SHADOW = True             # courier_resolver:812 default=True (obs)
