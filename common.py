@@ -448,6 +448,14 @@ ETAP4_DECISION_FLAGS = (
     # realnie kasuje plany), czytelnik plan_recheck:2444 flag(name, True).
     # Rejestracja = tylko strip+fingerprint; kanon wartości = flags.json (false).
     "PLAN_GC_DRY_RUN",
+    # === PROGRAM REFAKTORU (2026-07-06, docs/refaktor/): rejestracja flag K04/K05/K07
+    # POD PRZYSZŁY FLIP (lekcja PLAN_GC_DRY_RUN 06.07: klucz dopisany do flags.json
+    # bez wpisu tutaj = czerwona zapadka test_no_new_unstripped_flags_ratchet dla
+    # wszystkich). Semantycznie NIE-decyzyjne (telemetria / świeżość odczytu), ale
+    # rejestracja daje strip w testach (deterministyczny OFF) + prawdomówny fingerprint.
+    "ENABLE_WORLD_RECORD",           # K04: nagrywanie wejść decyzji (telemetria)
+    "ENABLE_FLAG_SNAPSHOT",          # K05: flagi zamrożone na czas ticku (świeżość)
+    "ENABLE_PRE_RECHECK_BEFORE_POOL",  # K07: prefetch czas_kuriera przed pulą (świeżość)
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -489,6 +497,9 @@ ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse dead
 # pojawi się w flags.json — i czytelnik, i fingerprint przejdą na json spójnie.
 ENABLE_GPS_ACCURACY_TELEPORT_FILTER = False  # courier_resolver:813 default=False
 PLAN_GC_DRY_RUN = True  # plan_recheck:2444 default=True (dry-run bezpieczny); kanon=flags.json (at-205 06.07 flip→false); rejestracja: sesja refaktor 06.07
+ENABLE_WORLD_RECORD = False  # K04 refaktoru: world_record.enabled() default=False; kanon=flags.json (flip za ACK Adriana)
+ENABLE_PRE_RECHECK_BEFORE_POOL = False  # K07 refaktoru: _k07_prefetch_fresh_ck default=False; kanon=flags.json (flip za ACK)
+# (ENABLE_FLAG_SNAPSHOT = False — zdefiniowana wyżej w bloku K05)
 ENABLE_GRAFIK_FULL_NAMES_SOURCE = True       # courier_resolver:466 default=True
 ENABLE_PANEL_PACKS_CID_MATCH = True          # courier_resolver:1190 default=True
 ENABLE_GPS_QUALITY_SHADOW = True             # courier_resolver:812 default=True (obs)

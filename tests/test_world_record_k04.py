@@ -121,6 +121,39 @@ def test_wrappery_route_table_naprawde_naglywaja(monkeypatch):
     assert calls[0]["result"] == {"duration_min": 3.3}
 
 
+# ---------- toggle PRAWDZIWYM mechanizmem flagi (C-FLAG-EFFECT) ----------
+
+def test_toggle_enable_world_record_przez_flags_json(rec_dir, monkeypatch, tmp_path):
+    """ENABLE_WORLD_RECORD togglowane realną ścieżką C.flag/flags.json:
+    false → zero zapisu (delegacja 1:1); true → nagranie powstaje."""
+    import json as _json
+    import os as _os
+    import dispatch_v2.common as C
+
+    p = tmp_path / "flags.json"
+
+    def put(val, t):
+        p.write_text(_json.dumps({"ENABLE_WORLD_RECORD": val}))
+        _os.utime(p, (t, t))
+
+    monkeypatch.setattr(C, "FLAGS_PATH", p)
+    monkeypatch.setattr(C, "_flags_cache", None)
+    monkeypatch.setattr(C, "_flags_mtime", 0)
+    monkeypatch.setattr(C, "_flags_last_stat_mono", 0.0)
+    monkeypatch.setattr(C, "_perf_lazy_members", False)
+    monkeypatch.setattr(C, "_FLAGS_SNAPSHOT_OVERRIDE", None)
+
+    put(False, 1_000_000)
+    assert wr.around_assess(lambda: "OFF") == "OFF"
+    assert list(rec_dir.glob("world_record-*.jsonl")) == [], "OFF = zero nagrania"
+
+    put(True, 1_000_100)
+    assert wr.around_assess(lambda: "ON", order_event={"order_id": "1"},
+                            fleet_snapshot={}, now=None) == "ON"
+    files = list(rec_dir.glob("world_record-*.jsonl"))
+    assert len(files) == 1, "ON = nagranie powstaje (efekt flagi)"
+
+
 # ---------- retencja ----------
 
 def test_gc_kasuje_stare_pliki(rec_dir, monkeypatch):

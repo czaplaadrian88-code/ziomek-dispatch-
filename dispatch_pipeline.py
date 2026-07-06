@@ -507,6 +507,55 @@ def get_fresh_czas_kuriera_for_bag(bag_orders: List[OrderSim],
     return results
 
 
+def _k07_apply_fresh_ck(bag_sim, fresh_dict) -> None:
+    """K07 refaktor (2026-07-06): JEDNO źródło reguły nadpisania czas_kuriera
+    w bag_sim (kontrakt ① — dotąd inline w _v327_eval_courier_inner).
+    Reguła 1:1 z legacy: fresh is not None ORAZ różny od cached → override."""
+    if not bag_sim or not fresh_dict:
+        return
+    for _bo in bag_sim:
+        _fresh = fresh_dict.get(_bo.order_id)
+        if _fresh is not None and _fresh != getattr(_bo, "czas_kuriera_warsaw", None):
+            _bo.czas_kuriera_warsaw = _fresh
+
+
+def _k07_prefetch_fresh_ck(fleet_snapshot, now):
+    """K07 refaktor (2026-07-06, ADR-R02 przygotowanie): pre-proposal recheck
+    czas_kuriera wykonany RAZ na decyzję, PRZED pulą kandydatów — zamiast
+    żywego HTTP w środku oceny (dispatch_pipeline ~:3913, wątki puli).
+
+    Mechanika: unia worków CAŁEJ floty (worki są rozłączne per kurier, więc
+    zbiór zleceń = dokładnie ten, który dziś fetchują kandydaci) → JEDNO
+    wywołanie get_fresh_czas_kuriera_for_bag (ta sama funkcja: te same skip-
+    reguły age/cache, te same synth-eventy, ZERO bliźniaka). Wynik = dict
+    {oid: fresh_iso} aplikowany w pętli czysto (_k07_apply_fresh_ck) — żadnego
+    I/O w ocenie kandydata.
+
+    Gate: ENABLE_PRE_RECHECK_BEFORE_POOL (ETAP4, kanon flags.json, brak
+    klucza = OFF = None = ścieżka legacy 1:1). Fail-soft: KAŻDY błąd → None
+    → pętla używa ścieżki legacy (zachowanie dotychczasowe)."""
+    try:
+        if not C.decision_flag("ENABLE_PRE_RECHECK_BEFORE_POOL"):
+            return None
+        if not C.ENABLE_V327_PRE_PROPOSAL_RECHECK:
+            return None  # legacy short-circuit i tak zwróciłby cached — nic do prefetchu
+        seen = set()
+        union_sim = []
+        for _cs in (fleet_snapshot or {}).values():
+            for _b in (getattr(_cs, "bag", []) or []):
+                _oid = str(_b.get("order_id") or "")
+                if not _oid or _oid in seen:
+                    continue
+                seen.add(_oid)
+                union_sim.append(_bag_dict_to_ordersim(_b))
+        if not union_sim:
+            return {}
+        return get_fresh_czas_kuriera_for_bag(union_sim, now)
+    except Exception as _e:
+        log.warning(f"K07 prefetch_fresh_ck fail (fallback do ścieżki legacy): {_e}")
+        return None
+
+
 BLIND_POS_SOURCES = ("no_gps", "pre_shift", "none")
 INFORMED_POS_SOURCES = (
     "gps", "last_assigned_pickup", "last_picked_up_delivery",
@@ -3910,15 +3959,18 @@ def _assess_order_impl(
         # ZERO max bag limit (Bartek peak bag=8-11 expected). Parallel fetchy via
         # ThreadPoolExecutor, defensive fallback do cached state przy fail.
         # Side-effect: emit synth CZAS_KURIERA_UPDATED z source=pre_proposal_recheck.
-        if bag_sim and C.ENABLE_V327_PRE_PROPOSAL_RECHECK:
+        if bag_sim and _k07_prefetched_ck is not None:
+            # K07 refaktor (2026-07-06): dane odświeżone RAZ przed pulą
+            # (_k07_prefetch_fresh_ck) — tu wyłącznie CZYSTA aplikacja, zero
+            # HTTP w ocenie kandydata; wszyscy kandydaci widzą TEN SAM stan.
+            _k07_apply_fresh_ck(bag_sim, _k07_prefetched_ck)
+        elif bag_sim and C.ENABLE_V327_PRE_PROPOSAL_RECHECK:
             try:
                 _fresh_ck_dict = get_fresh_czas_kuriera_for_bag(bag_sim, now)
                 # Override OrderSim.czas_kuriera_warsaw dla orders gdzie fresh != cached.
                 # Downstream scoring/TSP/feasibility używa updated values w tym candidate run.
-                for _bo in bag_sim:
-                    _fresh = _fresh_ck_dict.get(_bo.order_id)
-                    if _fresh is not None and _fresh != getattr(_bo, "czas_kuriera_warsaw", None):
-                        _bo.czas_kuriera_warsaw = _fresh
+                # (reguła nadpisania = wspólny helper _k07_apply_fresh_ck, kontrakt ①)
+                _k07_apply_fresh_ck(bag_sim, _fresh_ck_dict)
             except Exception as _e:
                 log.warning(f"V3.27.1 pre_recheck oid_new={new_order.order_id} cid={cid} fail: {_e}")
                 # Defensive: continue z cached bag_sim values (zero behavior change)
@@ -6056,6 +6108,12 @@ def _assess_order_impl(
             )
             _v328_fail_causes[str(cid)] = _cause
             return ('fail', cid, _e)
+
+    # K07 refaktor (2026-07-06): pre-proposal recheck czas_kuriera RAZ na
+    # decyzję, PRZED pulą (unia worków floty = ten sam zbiór, który dziś
+    # fetchują kandydaci; None = flaga OFF/awaria → pętla idzie ścieżką
+    # legacy 1:1). Nazwa czytana w closure _v327_eval_courier_inner.
+    _k07_prefetched_ck = _k07_prefetch_fresh_ck(fleet_snapshot, now)
 
     from concurrent.futures import ThreadPoolExecutor as _V327_TPE
     _v327_max_workers = max(1, min(10, len(fleet_snapshot)))
