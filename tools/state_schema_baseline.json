@@ -1,6 +1,6 @@
 {
-  "_about": "READ-ONLY schema baseline for critical dispatch_state files. Consumed by tools/validate_state_schema.py to detect structural drift (missing required keys, wrong container shape). This file does NOT mutate live state; the live files are dict-of-entries (or a flat wrapper) iterated by readers, so we validate shape only. required_keys = the CORE keys readers depend on, NOT the full superset (lifecycle-only keys like delivered_at/picked_up_at are intentionally excluded to avoid false-positive drift on fresh entries).",
-  "schema_version": "20260620",
+  "_about": "READ-ONLY schema baseline for critical dispatch_state files. Consumed by tools/validate_state_schema.py to detect structural drift (missing required keys, wrong container shape). This file does NOT mutate live state; the live files are dict-of-entries (or a flat wrapper) iterated by readers, so we validate shape only. required_keys = the CORE keys readers depend on, NOT the full superset (lifecycle-only keys like delivered_at/picked_up_at are intentionally excluded to avoid false-positive drift on fresh entries). 2026-07-06: last_status_code ZDJĘTY z required dla courier_ground_truth — od 5b (geofence dostawy, vc60) wpis może się URODZIĆ z samym gps_arrived_at zanim istnieje jakikolwiek status (case 485853); pole stało się lifecycle-key, konsumenci czytają je przez .get() (courier_gps_commitment_shadow:93).",
+  "schema_version": "20260706",
   "files": {
     "orders_state.json": {
       "shape": "dict_of_entries",
@@ -18,7 +18,7 @@
       "shape": "dict_of_entries",
       "top_type": "dict",
       "entry_type": "dict",
-      "required_keys": ["courier_id", "last_status_code", "updated_at"]
+      "required_keys": ["courier_id", "updated_at"]
     },
     "panel_packs_cache.json": {
       "shape": "flat_object",

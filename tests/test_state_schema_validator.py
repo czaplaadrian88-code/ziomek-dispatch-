@@ -77,8 +77,11 @@ def test_synthetic_drift_dict_of_entries_fails(tmp_path):
 
     with open(target, "r", encoding="utf-8") as f:
         data = json.load(f)
+    # 2026-07-06: ofiara = "updated_at" (pisany przez KAŻDY writer, także
+    # geofence 5b). Poprzednia ofiara "last_status_code" wypadła z required —
+    # od 5b wpis może się urodzić bez statusu (case 485853), pole = lifecycle.
     victim_id = next(iter(data))
-    removed = "last_status_code"
+    removed = "updated_at"
     assert removed in data[victim_id]
     del data[victim_id][removed]
     with open(target, "w", encoding="utf-8") as f:
