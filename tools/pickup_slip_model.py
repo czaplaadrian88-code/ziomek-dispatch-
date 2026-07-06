@@ -70,7 +70,6 @@ def _tier_map() -> Dict[str, str]:
 
 def load_rows(days: int) -> List[dict]:
     tier_of = _tier_map()
-    cutoff = None
     rows: List[dict] = []
     try:
         lines = open(ETA_CAL).read().splitlines()
