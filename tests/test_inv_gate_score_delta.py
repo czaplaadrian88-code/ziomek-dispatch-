@@ -7,6 +7,7 @@ import inspect
 import re
 
 import dispatch_v2.dispatch_pipeline as DP
+from dispatch_v2.core import candidates as _k11c  # K11: cialo petli per-kurier (skan obu zrodel)
 
 _PAT = re.compile(
     r'if C\.decision_flag\("(\w+)"\):[ \t]*\n[ \t]*final_score = final_score \+ (\w+)')
@@ -14,7 +15,7 @@ _PAT = re.compile(
 
 def _final_score_flag_deltas():
     """Pary (flaga, zmienna) dla flag-gated single-delt dodawanych do final_score."""
-    return _PAT.findall(inspect.getsource(DP))
+    return _PAT.findall((inspect.getsource(DP) + inspect.getsource(_k11c)))
 
 
 def test_every_flag_gated_final_score_delta_is_excluded():

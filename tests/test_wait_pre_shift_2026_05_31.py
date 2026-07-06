@@ -11,6 +11,7 @@ import importlib
 import inspect
 
 from dispatch_v2 import common, dispatch_pipeline, scoring
+from dispatch_v2.core import candidates as _k11c  # K11: cialo petli per-kurier (skan obu zrodel)
 from dispatch_v2.scoring import compute_wait_courier_penalty as wcp
 from dispatch_v2.dispatch_pipeline import (
     _is_pre_shift_cand, _late_pickup_tier, _late_pickup_score_first_key,
@@ -95,7 +96,7 @@ def test_pre_shift_with_bag_now_bucket2():
 # === source-regression: legacy v3273 w cieniu + serializacja ===
 
 def test_pipeline_computes_legacy_wait():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
     assert "bonus_v3273_wait_courier_legacy" in src
     assert "per_min=getattr(C, \"V3273_WAIT_COURIER_PER_MIN_PENALTY_LEGACY\"" in src
     assert '"bonus_v3273_wait_courier_legacy":' in src  # serializowane do metrics

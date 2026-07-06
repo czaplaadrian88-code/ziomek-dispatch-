@@ -8,6 +8,7 @@ w żaden sposób nie jest po drodze" (Case C: Karczma + Skłodowskiej +1.4 km
 import inspect
 
 from dispatch_v2 import common, dispatch_pipeline
+from dispatch_v2.core import candidates as _cand_mod  # K11: cialo petli per-kurier tam mieszka
 
 
 def test_bugb_common_contract_defaults():
@@ -19,7 +20,7 @@ def test_bugb_common_contract_defaults():
 
 def test_bugb_block_present_in_source():
     """Blok BUG B obecny w _v327_eval_courier, flag-gated."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_cand_mod)  # K11: skan obu zrodel
     assert "BUG B shadow (2026-05-26)" in src
     start = src.find("BUG B shadow (2026-05-26)")
     section = src[start:start + 2200]  # E7-doklejki 3+4: blok urósł (shadow compute-always)
@@ -72,7 +73,7 @@ def test_bugb_math_zero_or_negative():
 
 def test_bugb_metrics_get_handles_missing():
     """Source: gdy metrics.get('r5_pickup_detour_total_km') == None → 0.0 default."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_cand_mod)  # K11: skan obu zrodel
     start = src.find("BUG B shadow (2026-05-26)")
     section = src[start:start + 2200]  # E7-doklejki 3+4: blok urósł (shadow compute-always)
     # Defensywne pobranie z metrics

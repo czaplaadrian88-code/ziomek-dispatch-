@@ -12,6 +12,7 @@ per-zlecenie, anchor=pickup_ready_at. Pre-fix 3 niezależne defekty pozwalały
 
 Test scope: helper `_r6_pov_count` + behavioral contract (mock pipeline call).
 """
+from dispatch_v2.core import candidates as _k11c  # K11: cialo petli per-kurier (skan obu zrodel)
 from unittest.mock import MagicMock
 
 
@@ -65,7 +66,7 @@ def test_sla_minutes_unified_to_35():
     import inspect
     from dispatch_v2 import dispatch_pipeline
 
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
     # Pre-P3-D3: `sla_minutes = 45 if bag_sim else 35`
     # Post-P3-D3: `sla_minutes = 35`
     assert "sla_minutes = 45 if bag_sim" not in src, (
@@ -79,7 +80,7 @@ def test_best_effort_min_propose_score_gate_present():
     import inspect
     from dispatch_v2 import dispatch_pipeline
 
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
     # Pre-P3-D3: best_effort skip gate
     # Post-P3-D3: best_effort_low_score reason emit
     assert "best_effort_low_score" in src, (
@@ -92,7 +93,7 @@ def test_best_effort_sort_by_r6_pov_count():
     import inspect
     from dispatch_v2 import dispatch_pipeline
 
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
     # Pre-P3-D3: with_plan.sort(key=lambda c: (c.plan.sla_violations, c.plan.total_duration_min))
     # Post-P3-D3: includes _r6_pov_count(c) as primary key
     assert "_r6_pov_count(c)" in src

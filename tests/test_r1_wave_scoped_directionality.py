@@ -132,7 +132,7 @@ def test_serializer_keys_present_both_locations():
     import pathlib
     base = pathlib.Path(__file__).resolve().parent.parent
     shadow = (base / "shadow_dispatcher.py").read_text()
-    pipe = (base / "dispatch_pipeline.py").read_text()
+    pipe = (base / "dispatch_pipeline.py").read_text() + (base / "core" / "candidates.py").read_text()  # K11
     for key in ("r1_wholebag_avg_pairwise_cosine", "r1_wholebag_new_drop_cosine",
                 "r1ws_open_drop_count"):
         assert shadow.count(key) >= 2, f"{key} musi być w LOCATION A i B shadow"

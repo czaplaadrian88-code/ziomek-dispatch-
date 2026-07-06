@@ -23,7 +23,7 @@ DISPATCH_PIPELINE = pathlib.Path(__file__).resolve().parents[1] / "dispatch_pipe
 
 def test_bug_d_anchor_override_present():
     """Verify anchor-based bundle_level2 override block w dispatch_pipeline.py."""
-    src = DISPATCH_PIPELINE.read_text()
+    src = (DISPATCH_PIPELINE.read_text() + (DISPATCH_PIPELINE.parent / "core" / "candidates.py").read_text())
     # Markers for the new block:
     markers = [
         "Bug D fix (2026-04-25)",
@@ -36,7 +36,7 @@ def test_bug_d_anchor_override_present():
 
 def test_anchor_override_clears_bundle_level2_when_far():
     """AST guard: anchor block sets bundle_level2 = None gdy distance >= 1.5."""
-    src = DISPATCH_PIPELINE.read_text()
+    src = (DISPATCH_PIPELINE.read_text() + (DISPATCH_PIPELINE.parent / "core" / "candidates.py").read_text())
     # Find the Bug D fix block
     idx = src.find("Bug D fix (2026-04-25)")
     assert idx >= 0
@@ -49,14 +49,14 @@ def test_anchor_override_clears_bundle_level2_when_far():
 
 def test_v326_anchor_used_flag_propagated():
     """v326_anchor_used MUSI być set gdy anchor flag=True i anchor exists."""
-    src = DISPATCH_PIPELINE.read_text()
+    src = (DISPATCH_PIPELINE.read_text() + (DISPATCH_PIPELINE.parent / "core" / "candidates.py").read_text())
     assert "v326_anchor_used = True" in src
     assert "v326_anchor_obj = _anchor" in src
 
 
 def test_anchor_obj_kept_for_downstream():
     """v326_anchor_obj keeps full InsertionAnchor (not just restaurant_name string)."""
-    src = DISPATCH_PIPELINE.read_text()
+    src = (DISPATCH_PIPELINE.read_text() + (DISPATCH_PIPELINE.parent / "core" / "candidates.py").read_text())
     assert "v326_anchor_obj = None" in src  # initialization
     # Used somewhere downstream (Bug D anchor block)
     assert "v326_anchor_obj" in src

@@ -14,6 +14,7 @@ import inspect
 import json
 
 from dispatch_v2 import common, dispatch_pipeline, shadow_dispatcher
+from dispatch_v2.core import candidates as _k11c  # K11: cialo petli per-kurier (skan obu zrodel)
 
 
 def test_flags_in_etap4_canon_and_fingerprint():
@@ -60,7 +61,7 @@ def test_detour_extreme_constant_default():
 
 
 def test_bug_a_shadow_computed_before_flag_gate():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
     start = src.find("BUG A shadow (2026-05-26)")
     assert start > 0
     section = src[start:start + 4000]
@@ -70,7 +71,7 @@ def test_bug_a_shadow_computed_before_flag_gate():
 
 
 def test_bug_b_shadow_computed_before_flag_gate_and_extreme_marker():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
     start = src.find("BUG B shadow (2026-05-26)")
     assert start > 0
     section = src[start:start + 3500]
@@ -82,7 +83,7 @@ def test_bug_b_shadow_computed_before_flag_gate_and_extreme_marker():
 
 
 def test_enriched_metrics_have_shadow_and_extreme_keys():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
     for key in ("bonus_bag_time_sum_shadow", "bonus_bag_time_max_shadow",
                 "bonus_fifo_violation_shadow",
                 "bonus_r5_pickup_detour_penalty_shadow", "r5_detour_extreme"):

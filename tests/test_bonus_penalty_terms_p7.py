@@ -6,6 +6,7 @@ import inspect
 import re
 
 import dispatch_v2.dispatch_pipeline as DP
+from dispatch_v2.core import candidates as _k11c  # K11: cialo petli per-kurier (skan obu zrodel)
 
 EXPECTED = {
     "r6_soft_pen", "r1_soft_pen", "r5_soft_pen", "r8_soft_pen", "r9_stopover",
@@ -17,7 +18,7 @@ EXPECTED = {
 
 
 def _dict_block():
-    src = inspect.getsource(DP)
+    src = (inspect.getsource(DP) + inspect.getsource(_k11c))
     m = re.search(r"bonus_penalty_terms\s*=\s*\{(.*?)\n\s*\}", src, re.S)
     assert m, "bonus_penalty_terms dict musi istnieć (P-7 refactor)"
     return src, m.group(1)

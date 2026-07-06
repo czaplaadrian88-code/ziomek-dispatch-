@@ -10,6 +10,7 @@ import importlib
 import inspect
 
 from dispatch_v2 import common, dispatch_pipeline, shadow_dispatcher
+from dispatch_v2.core import candidates as _k11c  # K11: cialo petli per-kurier (skan obu zrodel)
 from dispatch_v2.dispatch_pipeline import _r6_soft_penalty
 
 
@@ -86,13 +87,13 @@ def test_477285_danger_penalty_flips_winner():
 # === source-regression: inline używa helpera + legacy + shadow + serializer ===
 
 def test_inline_uses_helper_and_legacy():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
     assert "bonus_r6_soft_pen, bonus_r6_soft_pen_legacy, bonus_r6_soft_pen_raw = _r6_soft_penalty(" in src
     assert '"bonus_r6_soft_pen_legacy":' in src  # serializowane do metrics
 
 
 def test_r6_danger_shadow_computed_and_attached():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
     assert "r6_danger_shadow" in src
     assert "R6_DANGER_DIVERGENCE" in src
     assert "_legacy_r6_score" in src

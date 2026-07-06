@@ -42,7 +42,7 @@ def test_flag_default_value_post_flip():
 
 def test_strict_block_present_in_pipeline():
     """Bug C strict block w dispatch_pipeline.py."""
-    src = DISPATCH_PIPELINE.read_text()
+    src = (DISPATCH_PIPELINE.read_text() + (DISPATCH_PIPELINE.parent / "core" / "candidates.py").read_text())
     markers = [
         "Bug C strict mode (2026-04-25)",
         "ENABLE_V326_PO_DRODZE_STRICT",
@@ -56,7 +56,7 @@ def test_strict_block_present_in_pipeline():
 
 def test_dist_threshold_uses_constant():
     """Hardcoded `< 2.0` zastąpiony przez configurable PO_DRODZE_DIST_KM."""
-    src = DISPATCH_PIPELINE.read_text()
+    src = (DISPATCH_PIPELINE.read_text() + (DISPATCH_PIPELINE.parent / "core" / "candidates.py").read_text())
     assert "PO_DRODZE_DIST_KM" in src
     # Sanity: nie ma już bareface "< 2.0" w bundle_level3 context
     idx = src.find("dev = _min_dist_to_route_km")
@@ -67,7 +67,7 @@ def test_dist_threshold_uses_constant():
 
 def test_strict_clears_bundle_level3_on_fail():
     """Failed strict check → bundle_level3 = False, bundle_level3_dev = None."""
-    src = DISPATCH_PIPELINE.read_text()
+    src = (DISPATCH_PIPELINE.read_text() + (DISPATCH_PIPELINE.parent / "core" / "candidates.py").read_text())
     idx = src.find("Bug C strict mode (2026-04-25)")
     assert idx >= 0
     fragment = src[idx:idx + 4000]
