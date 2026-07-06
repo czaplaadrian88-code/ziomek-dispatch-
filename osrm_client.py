@@ -840,3 +840,61 @@ def health_check() -> dict:
         result["nearest_ok"] = True
         result["sample_nearest"] = n
     return result
+
+
+# ---------------------------------------------------------------------------
+# K04 refaktor (2026-07-06, ADR-R04): rekorder wyników route/table dla
+# world_record. Proces-globalny (NIE thread-local/contextvar — pula wątków
+# kandydatów w assess NIE dziedziczy contextvarów, a _tick ocenia decyzje
+# SEKWENCYJNIE, więc okno start→stop = dokładnie jedna decyzja). Łapie też
+# cache-hity (nagrywamy to, co decyzja SKONSUMOWAŁA). Nieaktywny = zero
+# narzutu poza jednym if. Fail-soft: błąd nagrywania nigdy nie psuje wyniku.
+# ---------------------------------------------------------------------------
+_WR_LOCK = threading.Lock()
+_WR_ACTIVE = False
+_WR_CALLS: list = []
+_WR_MAX_CALLS = 5000
+
+
+def world_record_start() -> None:
+    global _WR_ACTIVE
+    with _WR_LOCK:
+        _WR_CALLS.clear()
+        _WR_ACTIVE = True
+
+
+def world_record_stop() -> list:
+    global _WR_ACTIVE
+    with _WR_LOCK:
+        _WR_ACTIVE = False
+        out = list(_WR_CALLS)
+        _WR_CALLS.clear()
+    return out
+
+
+def _wr_log(kind: str, key, result) -> None:
+    if not _WR_ACTIVE:
+        return
+    try:
+        with _WR_LOCK:
+            if _WR_ACTIVE and len(_WR_CALLS) < _WR_MAX_CALLS:
+                _WR_CALLS.append({"kind": kind, "key": key, "result": result})
+    except Exception:
+        pass
+
+
+_route_impl_k04 = route
+_table_impl_k04 = table
+
+
+def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:  # noqa: F811 — świadome opakowanie K04
+    res = _route_impl_k04(from_ll, to_ll, use_cache=use_cache)
+    _wr_log("route", [list(from_ll or ()), list(to_ll or ())], res)
+    return res
+
+
+def table(origins: list, destinations: list) -> list:  # noqa: F811 — świadome opakowanie K04
+    res = _table_impl_k04(origins, destinations)
+    _wr_log("table", [[list(o or ()) for o in (origins or [])],
+                      [list(d or ()) for d in (destinations or [])]], res)
+    return res

@@ -933,3 +933,4 @@ Flagi LIVE (wszystkie `flags.json=true`, hot-reload), dotąd nieudokumentowane w
 | `ENABLE_ORDERS_STATE_PRUNE` | prune_orders_state:37 | oneshot prune `orders_state` do retencji ~12 h (`ORDERS_STATE_PRUNE_RETENTION_HOURS`; OFF = no-op) |
 | `ENABLE_OSRM_TABLE_CELL_CACHE` | osrm_client:466 | kill-switch hot cache'u komórkowego OSRM /table (OFF = legacy pełne wywołania; infra, Front C) |
 | `ENABLE_PANEL_DETAIL_PREFETCH` | panel_watcher:1156 | kill-switch prefetchu detali zleceń w panel_watcher (infra, Front C) |
+| `ENABLE_WORLD_RECORD` | world_record + shadow_dispatcher.process_event + osrm_client (rekorder) | K04 refaktoru (ADR-R04): nagrywanie WEJŚĆ decyzji (flagi+flota+order+OSRM+kalibracje) → `dispatch_state/world_record/*.jsonl`, golden corpus do replayu bit-w-bit; telemetria, NIE zmienia decyzji (OFF/brak klucza = delegacja 1:1); retencja 14 d |

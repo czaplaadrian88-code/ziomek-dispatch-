@@ -1080,7 +1080,20 @@ def process_event(
         "order_type": payload.get("order_type"),
         "created_at_utc": payload.get("created_at_utc") or payload.get("created_at"),
     }
-    return assess_order(order_event, fleet, meta, now=now)
+    # K04 refaktor (2026-07-06, ADR-R04): nagrywanie wejść decyzji za flagą
+    # ENABLE_WORLD_RECORD (OFF/brak klucza = czysta delegacja 1:1; wrapper jest
+    # wewnętrznie fail-soft i nigdy nie zmienia wyniku). Import lazy+fail-soft —
+    # brak modułu nie może położyć ticku.
+    try:
+        from dispatch_v2 import world_record as _wr
+    except Exception:
+        _wr = None
+    if _wr is None:
+        return assess_order(order_event, fleet, meta, now=now)
+    return _wr.around_assess(
+        lambda: assess_order(order_event, fleet, meta, now=now),
+        order_event=order_event, fleet_snapshot=fleet, now=now,
+    )
 
 
 def _sanitize_payload_coords(payload: dict, oid) -> bool:
