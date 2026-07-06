@@ -19,6 +19,7 @@ from typing import List, Tuple, Dict, Optional
 from dispatch_v2 import osrm_client
 from dispatch_v2 import common as C
 from dispatch_v2 import prep_bias_anchor
+from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: zapis shadow PO decyzji
 from dispatch_v2.common import (
     ENABLE_C2_SHADOW_LOG,
     HAVERSINE_ROAD_FACTOR_BIALYSTOK,
@@ -364,6 +365,14 @@ def _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, violations, metrics,
         except Exception as _ce:
             event["bag_time_calibrated_p80"] = None
             log.warning(f"R6 breach shadow calib failed: {type(_ce).__name__}: {_ce}")
+    # K08: sam ZAPIS diver-towany PO decyzję (event z ts zbudowany w miejscu
+    # zdarzenia — semantyka czasu bez zmian); OFF/awaria → wprost jak dotąd.
+    if not _EB.divert(_write_r6_breach_line, event):
+        _write_r6_breach_line(event)
+
+
+def _write_r6_breach_line(event) -> None:
+    """K08: wydzielony writer r6_breach (treść 1:1 z poprzednim inline)."""
     try:
         with open(R6_BREACH_SHADOW_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
@@ -405,6 +414,13 @@ def _emit_c2_shadow_diff_event(
         "bag_size_before": bag_size_before,
         "r6_max_bag_time_min": metrics.get("r6_max_bag_time_min"),
     }
+    # K08: sam ZAPIS divertowany PO decyzję (ts eventu z miejsca zdarzenia).
+    if not _EB.divert(_write_c2_shadow_line, event):
+        _write_c2_shadow_line(event)
+
+
+def _write_c2_shadow_line(event) -> None:
+    """K08: wydzielony writer c2_shadow (treść 1:1 z poprzednim inline)."""
     try:
         with open(C2_SHADOW_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")

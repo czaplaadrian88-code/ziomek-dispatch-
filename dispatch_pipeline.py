@@ -9,7 +9,6 @@ Verdicts:
     SKIP    — no candidate with any plan (fleet empty / all fast-filter rejections).
               R29 says never hang; SKIP always alerts Adrian.
 """
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple, Any
@@ -22,6 +21,7 @@ from dispatch_v2 import calib_maps  # SP-B2 (2026-06-11): mapy ETA-quantile + pr
 from dispatch_v2 import eta_load_aware  # L5.1 (2026-07-05): bufor poślizgu ODBIORU (K3, shadow)
 from dispatch_v2 import pln_objective  # SP-B2-PLN (2026-06-11): funkcja celu PLN (shadow)
 from dispatch_v2 import panel_client  # V3.27.1 sesja 2: pre-proposal recheck (Blocker 2 Opcja A)
+from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: efekty PO decyzji (ADR-R02)
 from dispatch_v2.common import (
     parse_panel_timestamp,
     WARSAW,
@@ -213,6 +213,8 @@ def _append_difficult_case_log(entry: dict) -> None:
     Atomic append: open w trybie 'a' z domyślnym buforowaniem JSONL.
     Fail-soft: exception loguje warning ale nie wpływa na pipeline.
     """
+    if _EB.divert(_append_difficult_case_log, entry):  # K08: efekt PO decyzji
+        return
     try:
         import json as _json
         import os as _os
@@ -237,6 +239,8 @@ def _append_split_layer_guard_log(entry: dict) -> None:
     """L7.3 (2026-07-03, R2 ROOT-9) — zapis naruszenia kontraktu warstw (INV-LAYER-1/2)
     do dedykowanego JSONL. OBSERWACYJNY: nie wpływa na decyzję. Atomic append (tryb 'a').
     Fail-soft: exception loguje warning, nie wywraca pętli decyzyjnej."""
+    if _EB.divert(_append_split_layer_guard_log, entry):  # K08: efekt PO decyzji
+        return
     try:
         import json as _json
         import os as _os
@@ -1294,6 +1298,8 @@ FEAS_CARRY_BLIND_SHADOW_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/fea
 
 def _emit_feas_carry_blind(event) -> None:
     """Append-only zapis dedyk. jsonl (rekord <4KB → atomowy O_APPEND, wzór _emit_r6_breach_shadow)."""
+    if _EB.divert(_emit_feas_carry_blind, event):  # K08: efekt PO decyzji
+        return
     try:
         with open(FEAS_CARRY_BLIND_SHADOW_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
@@ -2817,6 +2823,8 @@ def _earlybird_t30_shadow_enabled() -> bool:
 
 def _append_earlybird_t30_shadow(entry: dict) -> None:
     """EARLYBIRD-01 forward-shadow append (atomic 'a', fail-soft — wzór _append_difficult_case_log)."""
+    if _EB.divert(_append_earlybird_t30_shadow, entry):  # K08: efekt PO decyzji
+        return
     try:
         import json as _json
         import os as _os
@@ -3626,11 +3634,20 @@ def assess_order(
     TASK 3 (2026-05-04): per-candidate logging gdy OBSERVABILITY_PER_CANDIDATE_ENABLED.
     Defensive: hook NIGDY raises (try/except). Zero overhead gdy flag false.
     """
-    result = _assess_order_impl(
-        order_event, fleet_snapshot, restaurant_meta, now,
-        pending_queue=pending_queue, demand_context=demand_context,
-        _bypass_early_bird=_bypass_early_bird,
-    )
+    # K08 refaktoru (ADR-R02): efekty uboczne decyzji (shadow-jsonle, zapis stanu
+    # loadgov, alert Telegram) buforowane i wykonywane PO impl — flush w finally
+    # (przy wyjątku zbuforowane efekty wykonują się jak w legacy, gdzie zapis
+    # zdążył się wydarzyć przed crashem). Gate w begin(); OFF = bajt-parytet 1:1.
+    _eb_on = _EB.begin()
+    try:
+        result = _assess_order_impl(
+            order_event, fleet_snapshot, restaurant_meta, now,
+            pending_queue=pending_queue, demand_context=demand_context,
+            _bypass_early_bird=_bypass_early_bird,
+        )
+    finally:
+        if _eb_on:
+            _EB.flush()
     # MP-#13 (2026-05-08): L3 — snapshot OSRM degraded state at assess time.
     # Caller (shadow_dispatcher serializer + telegram_approver format_proposal) reads.
     # Defensive: NIGDY raise (osrm_client import-fail unlikely ale fallback safe).
@@ -3748,12 +3765,14 @@ def _assess_order_impl(
         if _lg_emit and _last_ts is not None and (now - _last_ts) < timedelta(minutes=_cooldown):
             _lg_emit = False
         if loadgov_ewma is not None and (_new_armed != _armed_disk or _lg_emit):
-            _loadgov_save_alert_state(_new_armed, now if _lg_emit else _last_ts)
+            # K08: zapis stanu alertu PO decyzji (divert); OFF/awaria → wprost jak dotąd
+            if not _EB.divert(_loadgov_save_alert_state, _new_armed, now if _lg_emit else _last_ts):
+                _loadgov_save_alert_state(_new_armed, now if _lg_emit else _last_ts)
         _LOADGOV_STATE["alert_armed"] = _new_armed  # mirror do telemetrii procesu
         if _lg_emit:
             try:
                 from dispatch_v2.telegram_utils import send_admin_alert as _lg_alert
-                _lg_alert(
+                _lg_msg = (
                     "🛑 Flota przeciążona — tryb defensywny\n"
                     f"Na każdego aktywnego kuriera przypada średnio {loadgov_ewma:.1f} "
                     f"zleceń ({loadgov_orders} aktywnych zleceń / {loadgov_couriers} kurierów).\n"
@@ -3763,6 +3782,9 @@ def _assess_order_impl(
                     "realnie zbija opóźnienia (próg alarmu: 3,5 zlec./kuriera, "
                     "odwołanie poniżej 3,0)."
                 )
+                # K08: wysyłka PO decyzji (divert); OFF/awaria bufora → wprost jak dotąd
+                if not _EB.divert(_lg_alert, _lg_msg):
+                    _lg_alert(_lg_msg)
             except Exception:
                 pass  # Telegram unreachable nie blokuje dispatchu
 
