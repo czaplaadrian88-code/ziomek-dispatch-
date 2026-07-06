@@ -69,12 +69,26 @@ def run_ruff() -> Counter:
 
 
 def run_mypy() -> int:
-    files = [str(REPO / m) for m in MYPY_MODULES if (REPO / m).exists()]
+    # cwd=REPO + ścieżki względne + explicit_package_bases (mypy.ini): nazwy modułów
+    # liczone od korzenia repo, NIE wspinaczką po __init__.py — inaczej katalog
+    # worktree z myślnikiem (wt-refaktor-arch, wt-sprintA) wywala mypy usage-errorem
+    # "not a valid Python package name", a licznik kłamał 0 (near-miss 06.07, klasa #17).
+    files = [m for m in MYPY_MODULES if (REPO / m).exists()]
     out = subprocess.run(
         [str(MYPY), "--config-file", str(HERE / "mypy.ini"), *files],
-        capture_output=True, text=True, timeout=900,
+        capture_output=True, text=True, timeout=900, cwd=str(REPO),
     )
-    return sum(1 for line in out.stdout.splitlines() if ": error:" in line)
+    errors = sum(1 for line in out.stdout.splitlines() if ": error:" in line)
+    if out.returncode not in (0, 1):
+        print(f"mypy: awaria narzędzia (rc={out.returncode}) — odmowa liczenia (0 z awarii = fałszywe ZIELONO)")
+        print((out.stdout or "")[:2000])
+        print((out.stderr or "")[:2000])
+        sys.exit(2)
+    if out.returncode == 1 and errors == 0:
+        print("mypy: rc=1 ale 0 linii ': error:' na stdout — niespójność, traktuję jako awarię narzędzia")
+        print((out.stdout or "")[:2000])
+        sys.exit(2)
+    return errors
 
 
 def main() -> int:

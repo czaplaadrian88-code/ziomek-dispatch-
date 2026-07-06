@@ -18,5 +18,5 @@
     "F821": 5,
     "F841": 58
   },
-  "mypy_errors": 0
+  "mypy_errors": 124
 }
