@@ -32,6 +32,7 @@ import dataclasses
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -174,6 +175,60 @@ def _extract(result_like) -> dict:
     }
 
 
+def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
+    """v1: serwuj ŻYWE wejścia decyzji z nagrania zamiast czytać dysk „teraz".
+
+    Zwraca (k07_dict_or_None, loadgov_tuple_or_None) do dalszego patcha.
+    Pliki (reliability/plans/eta/bias): zrzut treści do tmp + przekierowanie
+    KANONICZNYCH stałych ścieżek + reset mtime-cache (świeży proces mógł już
+    zcache'ować realny plik przy poprzednim rekordzie w pętli bramki). loadgov:
+    krotka wprost (patch _loadgov_compute niżej). k07: dict prefetchu (patch
+    get_fresh niżej). Brak `live_inputs` (rekord v0) → (None, None), stary
+    best-effort. Fail-soft per pole."""
+    li = rec.get("live_inputs")
+    if not isinstance(li, dict):
+        return None, None
+
+    def _redirect(mod, attr, content, cache_obj=None, cache_reset=None):
+        if content is None:
+            return
+        try:
+            p = os.path.join(tmpdir, f"{attr}.json")
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump(content, fh, ensure_ascii=False)
+            _patch(mod, attr, p if not isinstance(getattr(mod, attr), Path) else Path(p))
+            if cache_obj is not None and cache_reset is not None:
+                cache_obj.update(cache_reset)
+        except Exception:
+            pass
+
+    # reliability — C.A2_RELIABILITY_FEED_PATH (2 czytelników: A2 soft + RAMPA),
+    # cache dp._A2_FEED_CACHE (mtime-keyed → reset mtime=None).
+    _redirect(C, "A2_RELIABILITY_FEED_PATH", li.get("reliability"),
+              getattr(dp, "_A2_FEED_CACHE", None), {"mtime": None})
+    # plans — plan_manager.PLANS_FILE, cache _perf_plans_cache (key-keyed → reset).
+    try:
+        from dispatch_v2 import plan_manager as _pm
+        _redirect(_pm, "PLANS_FILE", li.get("plans"),
+                  getattr(_pm, "_perf_plans_cache", None), {"key": None, "data": None})
+    except Exception:
+        pass
+    # calib eta/bias — calib_maps.*_PATH, cache _eta_cache/_bias_cache (mtime=None).
+    try:
+        from dispatch_v2 import calib_maps as _cm
+        _redirect(_cm, "ETA_QUANTILE_MAP_PATH", li.get("eta_quantile"),
+                  getattr(_cm, "_eta_cache", None), {"mtime": None})
+        _redirect(_cm, "PREP_BIAS_MAP_PATH", li.get("prep_bias"),
+                  getattr(_cm, "_bias_cache", None), {"mtime": None})
+    except Exception:
+        pass
+
+    k07 = li.get("k07") if isinstance(li.get("k07"), dict) else None
+    lg = li.get("loadgov")
+    loadgov = tuple(lg) if isinstance(lg, (list, tuple)) and len(lg) == 4 else None
+    return k07, loadgov
+
+
 def replay_one(rec: dict) -> tuple[dict, int]:
     """Zwraca (extract z replayu, osrm_misses). Pełny sandbox — patrz moduł."""
     from dispatch_v2 import common as C
@@ -189,21 +244,26 @@ def replay_one(rec: dict) -> tuple[dict, int]:
     saved = {}
 
     def _patch(obj, name, val):
-        saved[(id(obj), name)] = (obj, name, getattr(obj, name))
+        if (id(obj), name) not in saved:
+            saved[(id(obj), name)] = (obj, name, getattr(obj, name))
         setattr(obj, name, val)
 
+    _tmp = tempfile.TemporaryDirectory(prefix="wr_replay_")
     try:
         _patch(C, "_FLAGS_SNAPSHOT_OVERRIDE", dict(rec.get("flags") or {}))  # K05
         _patch(osrm_client, "route", osrm.route)
         _patch(osrm_client, "table", osrm.table)
-        # K17-utwardzenie: pre-proposal recheck (K07 i legacy per-kandydat) robi
-        # ŻYWY fetch panelu → sieć w sandboxie + czas_kuriera świeższy niż w
-        # chwili nagrania (złapane bramką: 485919 pool 5→6, deterministyczne).
-        # Stub {} = zero nadpisań → decyzja liczy na ck z NAGRANEJ floty/eventu.
-        # Rezyduum wierności: żywa decyzja mogła użyć ck świeższego niż snapshot
-        # floty (okno panel_watcher→decyzja) — domknięcie = nagrywanie wyniku
-        # prefetchu w world_record (plik sesji A; zgłoszone w dzienniku B).
-        _patch(dp, "get_fresh_czas_kuriera_for_bag", lambda *a, **k: {})
+        # v1: serwuj żywe wejścia (reliability/plans/calib z nagrania; loadgov/k07 niżej).
+        _k07_rec, _loadgov_rec = _serve_live_inputs(rec, dp, C, _tmp.name, _patch)
+        # K07: gdy nagrany (wr1) → serwuj wynik prefetchu z nagrania; inaczej (wr0)
+        # utwardzenie K17 = stub {} (zero żywego fetchu HTTP w sandboxie).
+        if _k07_rec is not None:
+            _patch(dp, "get_fresh_czas_kuriera_for_bag", lambda *a, _r=_k07_rec, **k: dict(_r))
+        else:
+            _patch(dp, "get_fresh_czas_kuriera_for_bag", lambda *a, **k: {})
+        # loadgov: gdy nagrany (wr1) → krotka wprost (in-proc EWMA nieodtwarzalna).
+        if _loadgov_rec is not None:
+            _patch(dp, "_loadgov_compute", lambda *a, _t=_loadgov_rec, **k: tuple(_t))
         _patch(world_record, "enabled", lambda: False)
         _patch(telegram_utils, "send_admin_alert", lambda *a, **k: None)
         _patch(candidate_logger, "get_logger",
@@ -219,6 +279,10 @@ def replay_one(rec: dict) -> tuple[dict, int]:
         for obj, name, val in saved.values():
             setattr(obj, name, val)
         effects_buffer._ACTIVE = False
+        try:
+            _tmp.cleanup()
+        except Exception:
+            pass
 
 
 def main(argv=None) -> int:

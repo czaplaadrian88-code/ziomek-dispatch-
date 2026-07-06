@@ -67,7 +67,7 @@ def test_on_nagrywa_flagi_flote_osrm(rec_dir, monkeypatch):
     files = list(rec_dir.glob("world_record-*.jsonl"))
     assert len(files) == 1
     rec = json.loads(files[0].read_text().splitlines()[0])
-    assert rec["schema"] == "wr0"
+    assert rec["schema"] == "wr1"  # v1 (2026-07-06): +live_inputs (K07/loadgov/pliki)
     assert rec["order_id"] == "486001"
     assert rec["verdict"] == "PROPOSE"
     assert rec["flags"] == {"ENABLE_X": True, "PROG": 35} and rec["flags_sha1"]
