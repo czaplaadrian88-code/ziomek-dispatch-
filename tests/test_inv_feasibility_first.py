@@ -2,6 +2,7 @@
 P0 — żaden kandydat verdict='NO' nie może być w puli selekcji (HARD przed SOFT). Fail-loud
 (log.error + metryka), fail-soft (nie crashuje).
 """
+from dispatch_v2.core import selection as _k12s  # K12: selekcja/werdykt (skan obu zrodel)
 import logging
 
 import dispatch_v2.dispatch_pipeline as DP
@@ -40,6 +41,6 @@ def test_fail_soft_never_raises():
 def test_guard_is_wired_after_demote():
     # strażnik konformacji: wywołanie MUSI być w łańcuchu selekcji (po demote)
     import inspect
-    src = inspect.getsource(DP)
+    src = (inspect.getsource(DP) + inspect.getsource(_k12s))
     assert "_assert_feasibility_first(feasible, order_id)" in src, \
         "INV-FEASIBILITY-FIRST musi być wpięte w selekcję (po _demote_blind_empty)"

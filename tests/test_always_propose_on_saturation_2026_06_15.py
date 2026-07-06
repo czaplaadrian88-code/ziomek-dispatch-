@@ -43,7 +43,8 @@ def _gate_section(src, anchor, span=400):
 
 def test_all_four_silence_gates_have_always_propose_guard():
     """Wszystkie 4 bramki ciszy mają `not _always_propose_on()` w warunku."""
-    src = inspect.getsource(dispatch_pipeline)
+    from dispatch_v2.core import selection as _k12s  # K12: bramki werdyktu w selection
+    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s)
     # 1) feasible all_candidates_low_score
     s1 = _gate_section(src, "all_candidates_low_score (best=")
     # warunek bramki jest PRZED reason — szukamy guardu w oknie przed nią

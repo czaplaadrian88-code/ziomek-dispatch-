@@ -6,6 +6,7 @@ zwycięzcę obok live i loguje regresję floty (Pareto). ZERO zmiany decyzji.
 Pattern (jak test_best_effort_fastest_pickup_shadow): helper functional + source-regression
 (log-only, flag-guarded, serializowany) + flaga default OFF.
 """
+from dispatch_v2.core import selection as _k12s  # K12: selekcja/werdykt (skan obu zrodel)
 import inspect
 from datetime import datetime, timezone, timedelta
 
@@ -55,7 +56,7 @@ def test_helper_none_when_no_plan():
 
 def test_shadow_is_log_only_not_reassigning_winner():
     """SHADOW NIE może nadpisać live wyboru — liczy OSOBNY _mda, nie rebinduje _winner/feasible."""
-    src = inspect.getsource(dp)
+    src = (inspect.getsource(dp) + inspect.getsource(_k12s))
     i = src.find("MIN-DELIVERED-AT SHADOW (Adrian 2026-06-25)")
     assert i != -1
     section = src[i:i + 1800]
@@ -66,7 +67,7 @@ def test_shadow_is_log_only_not_reassigning_winner():
 
 
 def test_shadow_flag_guarded():
-    src = inspect.getsource(dp)
+    src = (inspect.getsource(dp) + inspect.getsource(_k12s))
     i = src.find("MIN-DELIVERED-AT SHADOW (Adrian 2026-06-25)")
     section = src[i:i + 700]
     assert 'C.flag("ENABLE_MIN_DELIVERED_AT_SHADOW"' in section

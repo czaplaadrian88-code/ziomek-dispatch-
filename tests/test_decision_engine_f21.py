@@ -29,7 +29,8 @@ from math import radians, sin, cos, asin, sqrt
 sys.path.insert(0, '/root/.openclaw/workspace/scripts')
 
 from dispatch_v2 import common as C
-from dispatch_v2.core import candidates as _k11c  # K11: cialo petli per-kurier (skan obu zrodel)
+from dispatch_v2.core import candidates as _k11c
+from dispatch_v2.core import selection as _k12s  # K11: cialo petli per-kurier (skan obu zrodel)
 from dispatch_v2 import state_machine, sla_tracker, osrm_client
 from dispatch_v2.feasibility_v2 import check_feasibility_v2
 from dispatch_v2.route_simulator_v2 import OrderSim
@@ -609,7 +610,7 @@ def test_B12_R9_wait_no_gps_courier_regression_guard():
     import re
     from dispatch_v2 import dispatch_pipeline
     import inspect
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
 
     # Layer (a): structural check — fix musi być w source
     drive_var_re = re.compile(

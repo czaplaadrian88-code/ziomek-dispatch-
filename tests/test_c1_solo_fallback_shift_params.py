@@ -14,7 +14,7 @@ DISPATCH_PIPELINE = pathlib.Path(__file__).resolve().parent.parent / "dispatch_p
 
 
 def test_solo_fallback_passes_shift_params():
-    src = (DISPATCH_PIPELINE.read_text() + (DISPATCH_PIPELINE.parent / "core" / "candidates.py").read_text())
+    src = (DISPATCH_PIPELINE.read_text() + (DISPATCH_PIPELINE.parent / "core" / "candidates.py").read_text() + (DISPATCH_PIPELINE.parent / "core" / "selection.py").read_text())
     tree = ast.parse(src)
 
     # Znajdź wszystkie Call do check_feasibility_v2

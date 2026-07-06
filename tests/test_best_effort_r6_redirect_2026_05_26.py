@@ -14,25 +14,26 @@ Pattern = source-regression (jak test_obj_f3_best_effort_r6_koord): bramki
 głęboko w assess_order — sprawdzamy obecność + pozycję + predykat + werdykt
 w źródle, plus kontrakt flagi w common.
 """
+from dispatch_v2.core import selection as _k12s  # K12: selekcja/werdykt (skan obu zrodel)
 import inspect
 
 from dispatch_v2 import common, dispatch_pipeline
 
 
 def test_buge_gate_comment_header_present():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     assert "BUG E hotfix (2026-05-26" in src
 
 
 def test_buge_flag_in_source():
     """Bramka czyta flagę ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     assert "ENABLE_BEST_EFFORT_R6_KOORD_REDIRECT" in src
 
 
 def test_buge_uses_per_order_delivery_times():
     """Bag_time liczony z plan.per_order_delivery_times (kanoniczny thermal POD)."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     start = src.find("BUG E hotfix (2026-05-26")
     assert start > 0
     section = src[start:start + 2800]
@@ -44,7 +45,7 @@ def test_buge_uses_per_order_delivery_times():
 
 def test_buge_emits_koord_verdict():
     """Bramka emituje verdict=KOORD z reason best_effort_r6_breach_v2."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     start = src.find("BUG E hotfix (2026-05-26")
     assert start > 0
     section = src[start:start + 4500]
@@ -54,7 +55,7 @@ def test_buge_emits_koord_verdict():
 
 def test_buge_positioned_before_obj_f3():
     """Nowa bramka stricter — odpala PRZED OBJ F3 (luźniejszą)."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     marker = src.find("best.best_effort = True")
     buge_gate = src.find("BUG E hotfix (2026-05-26")
     objf3_gate = src.find("Sprint OBJ F3 / BUG-4 (2026-05-18): best_effort")
@@ -65,7 +66,7 @@ def test_buge_positioned_before_obj_f3():
 
 def test_buge_surfaces_redirect_dict_for_telegram():
     """Wynik niesie dict best_effort_r6_redirect z breach_count + max + lista oid."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     start = src.find("BUG E hotfix (2026-05-26")
     section = src[start:start + 5000]
     assert "best_effort_r6_redirect" in section
@@ -76,7 +77,7 @@ def test_buge_surfaces_redirect_dict_for_telegram():
 
 def test_buge_uses_breach_count_ge_one():
     """Trigger condition: >=1 order w breach, NIE wszyscy."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     start = src.find("BUG E hotfix (2026-05-26")
     section = src[start:start + 4500]
     # min jeden order musi przekraczać 35 min

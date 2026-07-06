@@ -4,6 +4,7 @@ Selekcja „najszybszy odbiór → potem najszybszy dowóz" liczona w SHADOW obo
 wyboru (live = stary _best_effort_sort_key). ZERO zmiany zachowania do walidacji.
 Pattern: helper functional + source-regression (że shadow nie nadpisuje `best`).
 """
+from dispatch_v2.core import selection as _k12s  # K12: selekcja/werdykt (skan obu zrodel)
 import inspect
 from datetime import datetime, timezone, timedelta
 
@@ -71,7 +72,7 @@ def test_missing_plan_sorts_last(monkeypatch):
 def test_shadow_is_log_only_not_reassigning_best():
     """SHADOW NIE może nadpisać `best` — między `best = with_plan[0]` a blokiem shadow
     nie ma reassignacji best; blok pisze tylko do best.metrics[...]."""
-    src = inspect.getsource(dp)
+    src = (inspect.getsource(dp) + inspect.getsource(_k12s))
     i = src.find("FASTEST-PICKUP SHADOW (Adrian 2026-06-15)")
     assert i != -1
     section = src[i:i + 1400]
@@ -82,7 +83,7 @@ def test_shadow_is_log_only_not_reassigning_best():
 
 
 def test_shadow_flag_guarded():
-    src = inspect.getsource(dp)
+    src = (inspect.getsource(dp) + inspect.getsource(_k12s))
     i = src.find("FASTEST-PICKUP SHADOW (Adrian 2026-06-15)")
     section = src[i:i + 600]
     assert "ENABLE_BEST_EFFORT_FASTEST_PICKUP_SHADOW" in section

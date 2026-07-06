@@ -10,33 +10,34 @@ bramki głęboko w assess_order nie mają taniego fixture behawioralnego;
 weryfikujemy obecność + pozycję + predykat + werdykt w źródle, plus kontrakt
 flagi/progu w common.
 """
+from dispatch_v2.core import selection as _k12s  # K12: selekcja/werdykt (skan obu zrodel)
 import inspect
 
 from dispatch_v2 import common, dispatch_pipeline
 
 
 def test_f3_gate_comment_header_present():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     assert "Sprint OBJ F3 / BUG-4" in src
 
 
 def test_f3_flag_and_threshold_in_source():
     """Bramka czyta flagę ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD + próg const."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     assert "ENABLE_OBJ_F3_BEST_EFFORT_R6_KOORD" in src
     assert "OBJ_F3_R6_BREACH_KOORD_MIN" in src
 
 
 def test_f3_uses_objm_r6_breach_metric():
     """Magnituda przekroczenia z objm_r6_breach_max_min (route_metrics)."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     assert "_r6_breach_max" in src
     assert "objm_r6_breach_max_min" in src
 
 
 def test_f3_emits_koord_verdict():
     """Bramka emituje verdict=KOORD z reason best_effort_r6_breach."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     start = src.find("Sprint OBJ F3 / BUG-4 (2026-05-18): best_effort")
     assert start > 0
     section = src[start:start + 1400]
@@ -46,7 +47,7 @@ def test_f3_emits_koord_verdict():
 
 def test_f3_positioned_in_best_effort_after_marker_before_low_score():
     """Bramka po `best.best_effort = True`, przed `best_effort_low_score`."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     marker = src.find("best.best_effort = True")
     gate = src.find("Sprint OBJ F3 / BUG-4 (2026-05-18): best_effort")
     low_score = src.find("best_effort_low_score")
@@ -57,7 +58,7 @@ def test_f3_positioned_in_best_effort_after_marker_before_low_score():
 
 def test_f3_helper_conservative_on_missing_metric():
     """_r6_breach_max: brak objm_r6_breach_max_min → 0.0 (brak eskalacji)."""
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     h = src.find("def _r6_breach_max")
     assert h > 0
     body = src[h:h + 260]

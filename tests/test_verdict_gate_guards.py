@@ -19,13 +19,15 @@ from pathlib import Path
 
 import dispatch_v2.dispatch_pipeline as DP
 import dispatch_v2.core.gates as GATES
+import dispatch_v2.core.selection as SELECTION
 
 _SRC_PATH = Path(DP.__file__)
-# K10 refaktoru: bramki wejściowe (early_bird, geokod-defense) przeniesione do
-# core/gates.py — skaner MUSI czytać oba źródła, inaczej bramka znika z pola
-# widzenia strażnika (martwy strażnik = teatr, klasa C13). Parser jest liniowy
-# i lokalny, więc konkatenacja tekstów jest bezpieczna.
-_SRC_PATHS = [Path(DP.__file__), Path(GATES.__file__)]
+# K10/K12 refaktoru: bramki wejściowe (early_bird, geokod-defense) w core/gates.py,
+# bramki werdyktu (stale/geometry/commit-divergence/low-score/best_effort/no_solo)
+# w core/selection.py — skaner MUSI czytać wszystkie źródła, inaczej bramka znika
+# z pola widzenia strażnika (martwy strażnik = teatr, klasa C13). Parser jest
+# liniowy i lokalny, więc konkatenacja tekstów jest bezpieczna.
+_SRC_PATHS = [Path(DP.__file__), Path(GATES.__file__), Path(SELECTION.__file__)]
 
 
 def _read_all_sources() -> str:

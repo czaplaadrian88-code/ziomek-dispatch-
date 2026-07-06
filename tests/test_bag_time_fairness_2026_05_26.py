@@ -11,7 +11,8 @@ check liczników FIFO violations.
 import inspect
 
 from dispatch_v2 import common, dispatch_pipeline
-from dispatch_v2.core import candidates as _cand_mod  # K11: cialo petli per-kurier tam mieszka
+from dispatch_v2.core import candidates as _cand_mod
+from dispatch_v2.core import selection as _k12s  # K11: cialo petli per-kurier tam mieszka
 
 
 def test_buga_common_contract_defaults():
@@ -24,7 +25,7 @@ def test_buga_common_contract_defaults():
 
 def test_buga_block_present_in_source():
     """Blok BUG A obecny w _v327_eval_courier z guardem plan is not None."""
-    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_cand_mod)  # K11: skan obu zrodel
+    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_cand_mod) + inspect.getsource(_k12s)  # K11: skan obu zrodel
     assert "BUG A shadow (2026-05-26)" in src
     start = src.find("BUG A shadow (2026-05-26)")
     assert start > 0
@@ -40,7 +41,7 @@ def test_buga_block_present_in_source():
 
 def test_buga_flag_gates_bonus_only_metrics_always():
     """Metryki sum/max/fifo zbierane ZAWSZE; bonus_* tylko gdy flag ON."""
-    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_cand_mod)  # K11: skan obu zrodel
+    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_cand_mod) + inspect.getsource(_k12s)  # K11: skan obu zrodel
     start = src.find("BUG A shadow (2026-05-26)")
     section = src[start:start + 4200]  # E7-doklejki 3+4: blok urósł (shadow compute-always)
     # Bonus blok zagnieżdżony pod flag check
@@ -53,7 +54,7 @@ def test_buga_flag_gates_bonus_only_metrics_always():
 
 def test_buga_keys_in_enriched_metrics():
     """7 nowych keys w enriched_metrics dict — propagowane do candidate.metrics."""
-    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_cand_mod)  # K11: skan obu zrodel
+    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_cand_mod) + inspect.getsource(_k12s)  # K11: skan obu zrodel
     # Plik znajdzie sekcję dla enriched_metrics
     em_start = src.find('"sum_bag_time_min": round(sum_bag_time_min_v')
     assert em_start > 0
@@ -68,7 +69,7 @@ def test_buga_keys_in_enriched_metrics():
 
 def test_buga_final_score_includes_new_bonuses():
     """final_score aggregation include 4 nowe bonus_*."""
-    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_cand_mod)  # K11: skan obu zrodel
+    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_cand_mod) + inspect.getsource(_k12s)  # K11: skan obu zrodel
     fs = src.find("BUG A+B shadow (2026-05-26)")
     assert fs > 0
     section = src[fs:fs + 600]

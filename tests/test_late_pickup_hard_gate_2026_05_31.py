@@ -15,7 +15,8 @@ import importlib
 import inspect
 
 from dispatch_v2 import common, dispatch_pipeline, shadow_dispatcher, telegram_approver
-from dispatch_v2.core import candidates as _k11c  # K11: cialo petli per-kurier (skan obu zrodel)
+from dispatch_v2.core import candidates as _k11c
+from dispatch_v2.core import selection as _k12s  # K11: cialo petli per-kurier (skan obu zrodel)
 
 
 # === common contract ===
@@ -49,7 +50,7 @@ def test_threshold_override_via_env(monkeypatch):
 # === computation: committed vs new split ===
 
 def test_committed_and_new_split_computed():
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     start = src.find("R-LATE-PICKUP (2026-05-31, Adrian): max 5 min")
     assert start > 0
     section = src[start:start + 4500]
@@ -61,7 +62,7 @@ def test_committed_and_new_split_computed():
 
 
 def test_breach_and_extension_flags_only_when_enabled():
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     start = src.find("R-LATE-PICKUP (2026-05-31, Adrian): max 5 min")
     section = src[start:start + 4500]
     assert 'getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False)' in section
@@ -71,7 +72,7 @@ def test_breach_and_extension_flags_only_when_enabled():
 
 def test_no_hard_reject_verdict_flip():
     """KLUCZOWE: NIE ma już flipu MAYBE→NO na late-pickup (zastąpione tieringiem)."""
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     assert "late_pickup_hard_reject" not in src
     assert 'late_pickup_hard_reject ({late_pickup_max_min' not in src
 
@@ -79,7 +80,7 @@ def test_no_hard_reject_verdict_flip():
 # === tiering selection ===
 
 def test_tiering_reorder_present():
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     assert "R-LATE-PICKUP tiering (2026-05-31" in src
     idx = src.find("R-LATE-PICKUP tiering (2026-05-31")
     section = src[idx:idx + 2500]
@@ -94,7 +95,7 @@ def test_tiering_reorder_present():
 
 def test_tiering_after_demote_blind_empty():
     """Tiering MUSI być po _demote_blind_empty (final pass, lesson #150)."""
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     demote = src.rfind("feasible = _demote_blind_empty(feasible, order_id)")
     tier = src.find("R-LATE-PICKUP tiering (2026-05-31")
     assert demote > 0 and tier > demote
@@ -102,7 +103,7 @@ def test_tiering_after_demote_blind_empty():
 
 def test_extension_mode_picks_fastest():
     """Brak tier-0 → sort po najszybszym odbiorze nowego (new_pickup_eta_iso)."""
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     idx = src.find("R-LATE-PICKUP tiering (2026-05-31")
     section = src[idx:idx + 2500]
     assert "_has_lower" in section
@@ -113,7 +114,7 @@ def test_extension_mode_picks_fastest():
 def test_pickup_extension_redirect_payload():
     # Blok urósł (Opcja B + r6_danger shadow) → sprawdzamy w pełnym źródle (markery unikalne),
     # nie w oknie fixed-size (było brittle wobec każdej rozbudowy bloku).
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     assert "R-LATE-PICKUP tiering (2026-05-31" in src
     assert "pickup_extension_redirect = {" in src
     assert "suggested_pickup_iso" in src
@@ -122,7 +123,7 @@ def test_pickup_extension_redirect_payload():
 
 
 def test_metric_serialized_to_metrics():
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     assert '"late_pickup_committed_max"' in src
     assert '"new_pickup_late_min"' in src
     assert '"new_pickup_needs_extension"' in src
@@ -145,7 +146,7 @@ def test_telegram_renders_extension_line():
 
 
 def test_compute_fail_soft():
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     start = src.find("R-LATE-PICKUP (2026-05-31, Adrian): max 5 min")
     section = src[start:start + 4500]
     assert "except (TypeError, ValueError, AttributeError):" in section

@@ -136,7 +136,9 @@ def test_early_bird_consumer_uses_helper():
 
 
 def test_min_propose_consumers_use_helper():
+    # K12: sciezki KOORD low-score mieszkaja w core.selection (aliasy prologu _dp.*)
     import inspect
-    src = inspect.getsource(dispatch_pipeline)
+    from dispatch_v2.core import selection as _k12s
+    src = inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s)
     # 3 ścieżki KOORD low-score: ramp solo-guard + all_candidates_low + best_effort.
     assert src.count("_min_propose_score()") >= 3

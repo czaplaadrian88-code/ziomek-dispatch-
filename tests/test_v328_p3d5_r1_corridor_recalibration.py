@@ -16,7 +16,8 @@ Case 472338 replay expectation: cos=-0.326 → bucket -0.5..0 → -35 base × 1.
 spread_mult (deliv_spread=12.63) = -55.2 penalty (vs pre-fix -15). Margin to
 reverse base score.
 """
-from dispatch_v2.core import candidates as _k11c  # K11: cialo petli per-kurier (skan obu zrodel)
+from dispatch_v2.core import candidates as _k11c
+from dispatch_v2.core import selection as _k12s  # K11: cialo petli per-kurier (skan obu zrodel)
 import inspect
 
 
@@ -37,7 +38,7 @@ def test_r1_bucket_minus_0_5_to_0_tightened_to_minus_35():
 def test_r1_spread_mult_present():
     """Source regression: deliv_spread multiplier obecny dla negative bonus."""
     from dispatch_v2 import dispatch_pipeline
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     assert "r1_corridor_spread_mult" in src
     # Multiplier formula: 1.0 + (spread - 8.0) * 0.125, cap 2.0
     assert "(_r1_deliv_spread - 8.0) * 0.125" in src
@@ -47,7 +48,7 @@ def test_r1_spread_mult_present():
 def test_r1_spread_mult_skipped_for_positive_bonus():
     """Source regression: positive bonus NIE multiplied — tight corridor reward niezalezny."""
     from dispatch_v2 import dispatch_pipeline
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     # Gate: if bonus_r1_corridor < 0
     p3d5_section_start = src.find("P3-D5 2026-05-11: deliv_spread mnożnik")
     assert p3d5_section_start > 0
@@ -58,7 +59,7 @@ def test_r1_spread_mult_skipped_for_positive_bonus():
 def test_r1_corridor_spread_mult_in_observability_metrics():
     """Source regression: r1_corridor_spread_mult emitowany w enriched_metrics."""
     from dispatch_v2 import dispatch_pipeline
-    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c))
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     assert "\"r1_corridor_spread_mult\":" in src
 
 

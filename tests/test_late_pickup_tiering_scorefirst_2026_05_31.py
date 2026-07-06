@@ -8,6 +8,7 @@ gradient kara ∝ new_pickup_late_min. Stary tiering liczony równolegle w cieni
 
 Spec: eod_drafts/2026-05-31/SPEC_late_pickup_tiering_fix.md
 """
+from dispatch_v2.core import selection as _k12s  # K12: selekcja/werdykt (skan obu zrodel)
 import importlib
 import inspect
 
@@ -171,13 +172,13 @@ def test_fix5_477329_pawel_no_longer_demoted_to_other():
 # === source-regression: LIVE + shadow + serializer ===
 
 def test_optionB_block_present():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     assert "ENABLE_LATE_PICKUP_TIERING_SCORE_FIRST" in src
     assert "_late_pickup_score_first_key" in src
 
 
 def test_shadow_counterfactual_computed():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     assert "_old_winner" in src
     assert "late_pickup_shadow" in src
     assert "LATE_PICKUP_SCORE_FIRST_DIVERGENCE" in src
@@ -186,7 +187,7 @@ def test_shadow_counterfactual_computed():
 
 
 def test_shadow_attached_to_result():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     assert "_result_pf.late_pickup_shadow = late_pickup_shadow" in src
 
 
@@ -197,7 +198,7 @@ def test_shadow_serialized():
 
 
 def test_flag_off_falls_back_to_old_tiering():
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     idx = src.find("ENABLE_LATE_PICKUP_TIERING_SCORE_FIRST", src.find("_old_winner"))
     section = src[idx:idx + 800]
     # gałąź else = identyczny stary in-place sort

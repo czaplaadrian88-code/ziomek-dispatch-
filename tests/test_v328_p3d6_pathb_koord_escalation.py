@@ -13,13 +13,14 @@ Empirical baseline: case 472338 Ogniomistrz 10.05 (cos=-0.326, deliv_spread=12.6
 Per Adrian doktryna Z2 'jakość ponad szybkość': better eskalować Adriana
 (KOORD path) niż auto-propose low-quality bundle.
 """
+from dispatch_v2.core import selection as _k12s  # K12: selekcja/werdykt (skan obu zrodel)
 import inspect
 
 
 def test_pathb_gate_predicate_present():
     """Source regression: gate condition `_all_greedy_fallback AND _all_negative_cos`."""
     from dispatch_v2 import dispatch_pipeline
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     # Path B comment header
     assert "P3-D6 path B" in src
     # Gate variables
@@ -31,7 +32,7 @@ def test_pathb_strategy_check_greedy_fallback():
     """Source regression: strategy comparison value matches greedy fallback marker.
     E2 sprint 2026-05-17: enum przepięty z ortools_rejected_v3274 → greedy_fallback."""
     from dispatch_v2 import dispatch_pipeline
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     # The strategy string used dla greedy fallback w route_simulator
     assert 'strategy", "") == "greedy_fallback"' in src
 
@@ -39,7 +40,7 @@ def test_pathb_strategy_check_greedy_fallback():
 def test_pathb_cos_negative_check():
     """Source regression: cos<0 condition na r1_avg_pairwise_cosine."""
     from dispatch_v2 import dispatch_pipeline
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     # Path B section uses metrics.get("r1_avg_pairwise_cosine") < 0
     pathb_start = src.find("P3-D6 path B 2026-05-11")
     assert pathb_start > 0
@@ -51,7 +52,7 @@ def test_pathb_cos_negative_check():
 def test_pathb_pool_feasible_min_2():
     """Source regression: gate only triggers gdy len(feasible) >= 2 (>=1 single cand zostaje, no escalation)."""
     from dispatch_v2 import dispatch_pipeline
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     pathb_start = src.find("P3-D6 path B 2026-05-11")
     pathb_section = src[pathb_start:pathb_start + 2000]
     assert "if len(feasible) >= 2:" in pathb_section
@@ -60,7 +61,7 @@ def test_pathb_pool_feasible_min_2():
 def test_pathb_emits_koord_verdict():
     """Source regression: verdict='KOORD' z reason geometry_blind_fallback."""
     from dispatch_v2 import dispatch_pipeline
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     assert "geometry_blind_fallback" in src
     pathb_start = src.find("P3-D6 path B 2026-05-11")
     pathb_section = src[pathb_start:pathb_start + 2500]
@@ -70,7 +71,7 @@ def test_pathb_emits_koord_verdict():
 def test_pathb_positioned_after_stale_state_before_low_score():
     """Order matters: state_likely_stale (priority) → P3-D6 path B → all_candidates_low_score (broad)."""
     from dispatch_v2 import dispatch_pipeline
-    src = inspect.getsource(dispatch_pipeline)
+    src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k12s))
     stale_pos = src.find("state_likely_stale")
     pathb_pos = src.find("P3-D6 path B 2026-05-11")
     # `all_candidates_low_score` pojawia się też w docstringu modułu (l.~2157) PRZED

@@ -142,7 +142,7 @@ def test_reason_format_in_pipeline_consume():
     # kanonu — w biegu z worktree skaner czytalby CUDZY plik = klamiacy straznik)
     import pathlib
     _repo = pathlib.Path(__file__).resolve().parents[1]
-    src = (_repo / "dispatch_pipeline.py").read_text() + (_repo / "core" / "candidates.py").read_text()
+    src = (_repo / "dispatch_pipeline.py").read_text() + (_repo / "core" / "candidates.py").read_text() + (_repo / "core" / "selection.py").read_text()
     assert "intra_restaurant_gap_exceeded" in src
     assert "MAX_INTRA_RESTAURANT_GAP_MIN" in src
     assert "intra_rest_gap_hard_reject" in src
@@ -158,7 +158,7 @@ def test_best_effort_filter_excludes_intra_gap_reject():
     # kanonu — w biegu z worktree skaner czytalby CUDZY plik = klamiacy straznik)
     import pathlib
     _repo = pathlib.Path(__file__).resolve().parents[1]
-    src = (_repo / "dispatch_pipeline.py").read_text() + (_repo / "core" / "candidates.py").read_text()
+    src = (_repo / "dispatch_pipeline.py").read_text() + (_repo / "core" / "candidates.py").read_text() + (_repo / "core" / "selection.py").read_text()
     # Filter helper present
     assert "_intra_gap_reject" in src, "best_effort filter helper missing"
     # Filter applied to with_plan list comprehension
