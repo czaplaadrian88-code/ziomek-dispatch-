@@ -98,3 +98,8 @@ Budziki łańcuchowe w tle (limit 10 min/ogniwo). ~15:45 UTC kontrola środka pe
 4. Pakiet 2 (K09+ rdzeń-jako-moduł) po zamknięciu bramki K06.
 
 **Reguły nadrzędne z tej sesji (Adrian, obowiązują wszystkich):** ŻADNYCH automatów zmieniających flagi; FLIPMASTER nie istnieje; każdy flip/restart = jawne TAK Adriana, wykonanie ręczne z backupem i dowodem. GC-real (PLAN_GC_DRY_RUN=false) ZATWIERDZONY.
+
+### FLIPY K05+K07+K08 + drugi restart — WYKONANE 06.07 14:48 UTC (rozkazy Adriana: „rób restart teraz, k07 i k08 tak" + „k05 teraz też")
+Protokół: backup `flags.json.bak-pre-k07k08-2026-07-06` → py_compile 7 modułów → **restart dispatch-shadow 14:48:08** (graceful 9/0; start czysty: ortools 56,4 ms — podniósł K06a) → klucze hot: `ENABLE_PRE_RECHECK_BEFORE_POOL: true` + `ENABLE_EFFECTS_AFTER_DECISION: true` (14:48:30) + `ENABLE_FLAG_SNAPSHOT: true` (14:48:45).
+**DOWODY (pierwsza decyzja pod nowym reżimem, order 485914, 14:49:32):** `now` NAGRANY (K06a ✅: 14:49:31.663760Z); zamrożony snapshot decyzji zawiera wszystkie 4 flagi =true (⇒ K05 aktywne W TEJ decyzji ✅); journal 0 błędów; latencja 492,7 ms. **REPLAY 485914 = zgodność CO DO ZNAKU, w tym czasozależny reason „early_bird (101 min ahead)" — możliwy wyłącznie dzięki wiernemu zegarowi; osrm_misses=0.** Stos K04+K05+K06a+K07+K08+replayer domknięty end-to-end.
+**Stan flag programu:** WR/K05/K07/K08 = LIVE (wszystkie za jawnym TAK Adriana z czatu); rollback per klucz (hot), backupy: `bak-pre-worldrecord` + `bak-pre-k07k08`. Kolejka: obserwacja peaku 17-20 → bramka K06 na korpusie ~09-10.07 → Pakiet 2 (K09+).
