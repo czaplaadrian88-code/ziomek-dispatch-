@@ -62,3 +62,14 @@ ciasno-solo 16→**+11** (n<15, pożyczka od srednio-solo) · srednio-solo 16→
 (koszt centrowania — ale bufor to teraz maks. +11, nie +25, więc czekanie krótkie); median|err| 10.8 → 9.4.
 **Pre-flip check (nowy):** zweryfikować, że akcept czasówki w konsoli NIE bierze eta (keep-time) —
 kalibracja czasówek wykluczona z tabeli.
+
+---
+# v3 KIERUNEK (Adrian 06.07 wieczór: „znaleźć wzór spóźnień") — ANALIZA 51 DNI, n=7381
+Model kwantylowy LGBM (target=mediana err), walidacja CZASOWA (train 70% starszych dni, test 30% nowszych, n_test=1929):
+- stała mediana: MAE 11.52 · **tabela worek×pora: MAE 11.42 (ZERO zysku — tabele odpadają)** · **LGBM 8 zmiennych: MAE 9.54 (−17%)**
+- WAŻNOŚĆ: `pred_age` (wiek predykcji) ≈ `pred_min` (długość przewidywanej trasy) ≈ `r6max` (napięcie R6 worka) ≫ godzina/dzień tyg. > tier > bag ≫ weekend≈0.
+  → prawdziwy sygnał = CIĄGŁE cechy KONKRETNEJ decyzji (wszystkie znane w chwili propozycji), nie kubełki.
+- Jednowymiarowo: solo×rano/lunch med 12-13 vs solo×wieczór 4.7-6 (interakcja!); tier std/new ~+4 vs std+/gold.
+- PER-KURIER: po odjęciu modelu zostają osobowe efekty ±3-8 min (508 −8.2 szybszy; 515 +4.2, 413 +3.1 wolniejsi) → korekta per-cid ze shrinkage jako składnik v3.
+- Skrypt: scratchpad `slip_model_analysis.py` (sesja 06.07). ⚠ target = błąd DOSTAWY (proxy poślizgu odbioru per dekompozycja 29.06); w v3 przejść na bezpośredni poślizg ODBIORU (`picked_up_at` jest w logu).
+**Propozycja v3:** nightly-trenowany model medianowy (jak kalibracje ETA) → silnik liczy bufor per DECYZJA: `clamp(pred_model − 5, 0, 30)` (zasada „do 5 min" zostaje); v2-tabela = tylko fallback gdy modelu brak. Osobny sprint protokołem za GO.
