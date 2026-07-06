@@ -388,6 +388,11 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_GPS_ACCURACY_TELEPORT_FILTER",
     "ENABLE_GRAFIK_FULL_NAMES_SOURCE",
     "ENABLE_PANEL_PACKS_CID_MATCH",
+    # PICKUP-BUFFER (2026-07-06, decyzja Adriana: powierzchnia = OBIETNICA
+    # DECYZYJNA). Load-aware bufor obiecywanego ODBIORU per kubełek obciążenia
+    # × solo/worek — ADDYTYWNE pola eta_pickup_promised_* w serializerze best;
+    # wewnętrzne eta_pickup_utc (scoring/feasibility/R-LATE) NIETKNIĘTE.
+    "ENABLE_LOAD_AWARE_PICKUP_BUFFER",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -2497,6 +2502,45 @@ V326_SPEED_SCORE_FACTOR = 50.0
 # Klucze DWELL_BY_TIER = tier_bag (jak V326_SPEED_MULTIPLIER_MAP); wartości =
 # DROPOFF min. Nieznany/None tier → DWELL_DEFAULT_MIN dropoff fallback. Pętla
 # ucząca (eta_calibration_log.jsonl) dopreciezuje dropoff per tier.
+# --- PICKUP-BUFFER: load-aware bufor OBIETNICY odbioru (2026-07-06) ----------
+# Decyzja Adriana 06.07 (review pickup-slip 04.07, okno 6d n=1324): silnik przy
+# decyzji zakłada odbiór optymistycznie — realny poślizg mediana +6.8…+25.1 min
+# zależnie od obciążenia; noga jazdy ~0 (kalibracja 29.06). Powierzchnia =
+# OBIETNICA DECYZYJNA: bufor doliczany do obiecywanego czasu odbioru w polach
+# eta_pickup_promised_* (serializer best → konsola/1-klik time_arg). Kubełki
+# 1:1 z tools/pickup_slip_monitor: luzno pool_feasible>=5 / srednio 2-4 /
+# ciasno <=1; solo = bag_after 1 (r6_bag_size+1). Wartości = mediany okna 6d
+# (logs/pickup_slip_review.log 04.07). Brak danych (pf/bag None) → 0.0 =
+# stara obietnica (fail-open). Flaga ENABLE_LOAD_AWARE_PICKUP_BUFFER (ETAP4,
+# OFF) — flip hot za ACK.
+ENABLE_LOAD_AWARE_PICKUP_BUFFER = False
+PICKUP_BUFFER_TABLE = {
+    ("ciasno", "solo"): 25.0, ("ciasno", "bundle"): 13.0,
+    ("srednio", "solo"): 24.0, ("srednio", "bundle"): 12.0,
+    ("luzno", "solo"): 17.0, ("luzno", "bundle"): 7.0,
+}
+PICKUP_BUFFER_MAX_MIN = 30.0
+
+
+def pickup_buffer_min(pool_feasible, bag_after):
+    """Load-aware bufor obietnicy odbioru w minutach (0.0 = bez bufora).
+
+    Semantyka kubełków IDENTYCZNA z tools/pickup_slip_monitor (bliźniak #15):
+    ten sam pool_feasible_count, który serializer pisze do shadow_decisions.
+    """
+    if pool_feasible is None or bag_after is None:
+        return 0.0
+    try:
+        pf = int(pool_feasible)
+        ba = int(bag_after)
+    except (TypeError, ValueError):
+        return 0.0
+    lb = "ciasno" if pf <= 1 else ("srednio" if pf <= 4 else "luzno")
+    bb = "solo" if ba == 1 else "bundle"
+    return min(float(PICKUP_BUFFER_TABLE.get((lb, bb), 0.0)),
+               float(PICKUP_BUFFER_MAX_MIN))
+
+
 DWELL_PICKUP_FLAT_MIN = 1.0  # E1 2026-05-17 — postój pod restauracją (obsługa)
 DWELL_DEFAULT_MIN = 3.5  # dropoff fallback dla nieznanego tieru
 DWELL_BY_TIER = {  # wartości = DROPOFF per tier (rezyduum ETA uczony z eta_calibration_log)

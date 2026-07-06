@@ -165,6 +165,44 @@ def _eta_hhmm_warsaw(iso_utc: Optional[str]) -> Optional[str]:
         return None
 
 
+def _promised_pickup_fields(best_m: dict, result) -> dict:
+    """PICKUP-BUFFER (2026-07-06): ADDYTYWNE pola obiecywanego odbioru.
+
+    Decyzja Adriana 06.07 — powierzchnia = OBIETNICA DECYZYJNA: do obiecywanego
+    czasu odbioru doliczany load-aware bufor (C.pickup_buffer_min; kubełek
+    pool_feasible × solo/worek, semantyka 1:1 z tools/pickup_slip_monitor).
+    Wewnętrzne eta_pickup_utc NIETKNIĘTE (scoring/feasibility/R-LATE bez zmian
+    — wzorzec #8: nowe pole OBOK, nie podmiana). Konsument: panel
+    shadow_monitor.best_eta_pickup_hhmm → time_arg przy 1-klik akcepcie.
+    Flaga OFF / brak danych / błąd → {} = stara obietnica (fail-soft).
+    """
+    if not C.flag("ENABLE_LOAD_AWARE_PICKUP_BUFFER",
+                  C.ENABLE_LOAD_AWARE_PICKUP_BUFFER):
+        return {}
+    eta_iso = best_m.get("eta_pickup_utc")
+    if not eta_iso:
+        return {}
+    try:
+        from datetime import timedelta
+        bag = best_m.get("r6_bag_size")
+        bag_after = (int(bag) + 1) if isinstance(bag, (int, float)) else None
+        buf = C.pickup_buffer_min(
+            getattr(result, "pool_feasible_count", None), bag_after)
+        if buf <= 0:
+            return {}
+        dt = datetime.fromisoformat(eta_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        promised_iso = (dt + timedelta(minutes=buf)).isoformat()
+        return {
+            "pickup_buffer_min": round(float(buf), 1),
+            "eta_pickup_promised_utc": promised_iso,
+            "eta_pickup_promised_hhmm": _eta_hhmm_warsaw(promised_iso),
+        }
+    except Exception:
+        return {}
+
+
 def _serialize_dt_map(m):
     """V3.17: {oid: datetime} → {oid: ISO UTC str}. Empty/None → None (compact)."""
     if not m:
@@ -601,6 +639,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "travel_min_cal": best_m.get("travel_min_cal"),
             "drive_min": best_m.get("drive_min"),
             "eta_pickup_hhmm": _eta_hhmm_warsaw(best_m.get("eta_pickup_utc")),
+            # PICKUP-BUFFER (2026-07-06): eta_pickup_promised_{utc,hhmm} +
+            # pickup_buffer_min — obietnica z load-aware buforem (flaga OFF = pól brak).
+            **_promised_pickup_fields(best_m, result),
             "eta_drive_hhmm": _eta_hhmm_warsaw(best_m.get("eta_drive_utc")),
             "target_pickup_at": target_pickup_at_iso,
             # TIER-1 PICKUP-DEBIAS SHADOW (2026-06-22): realistyczny ck = target+bias
