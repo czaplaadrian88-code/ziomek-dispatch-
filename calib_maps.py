@@ -59,6 +59,11 @@ PREP_BIAS_MAP_PATH = os.environ.get(
     "PREP_BIAS_MAP_PATH",
     "/root/.openclaw/workspace/dispatch_state/restaurant_prep_bias.json",
 )
+# W0.5 (advisory, werdykt E-7-GO): korekta ETA per-komórka floty (slot×solo/worek).
+ETA_CELL_RESIDUAL_MAP_PATH = os.environ.get(
+    "ETA_CELL_RESIDUAL_MAP_PATH",
+    "/root/.openclaw/workspace/dispatch_state/eta_cell_residual_map.json",
+)
 
 SLOT_PEAK_LUNCH = "peak_lunch"      # 11-14 Warsaw (doktryna)
 SLOT_HIGH_RISK = "high_risk"        # 14-17 Warsaw — strefa śmierci (mining H6/H10)
@@ -68,6 +73,7 @@ SLOT_ALL = "all"                    # fallback w mapach (bez podziału)
 
 _eta_cache: Dict[str, Any] = {"mtime": None, "data": None}
 _bias_cache: Dict[str, Any] = {"mtime": None, "data": None}
+_cell_resid_cache: Dict[str, Any] = {"mtime": None, "data": None}
 
 
 def time_slot_warsaw(now: Optional[datetime] = None) -> str:
@@ -197,9 +203,47 @@ def prep_bias_for(
         return None
 
 
+def eta_cell_residual_correct(
+    pred_min: Any,
+    now: Optional[datetime] = None,
+    is_bundle: bool = False,
+) -> Optional[float]:
+    """W0.5 (werdykt E-7-GO): skorygowana predykcja ETA (min) = pred + shrunk
+    residual per komórka floty (slot Warsaw × solo/worek). Korekta ADDYTYWNA na
+    OBIETNICĘ (uczciwość); konsument NIE rusza bramki R6 (SOFT nie osłabia HARD).
+
+    None gdy: brak mapy / brak komórki dla (slot, solo|worek) / pred niefinite —
+    fail-soft, caller trzyma surowe pred. Slot = time_slot_warsaw (parytet z
+    generatorem eta_cell_residual_build)."""
+    pred = _finite(pred_min)
+    if pred is None:
+        return None
+    data = _load_cached(ETA_CELL_RESIDUAL_MAP_PATH, _cell_resid_cache)
+    if not data:
+        return None
+    try:
+        slot = time_slot_warsaw(now)
+        want_bundle = bool(is_bundle)
+        for c in data.get("cells", []):
+            if not isinstance(c, dict):
+                continue
+            if c.get("slot") == slot and bool(c.get("bundle")) == want_bundle:
+                resid = _finite(c.get("resid_min"))
+                if resid is None:
+                    return None
+                w = _finite(c.get("weight"))
+                w = 1.0 if w is None else max(0.0, min(1.0, w))
+                return round(pred + w * resid, 1)
+    except Exception:
+        return None
+    return None  # brak komórki → brak korekty (nie zgadujemy globalem)
+
+
 def reset_caches() -> None:
     """Testy: wyczyść cache map (izolacja między testami)."""
     _eta_cache["mtime"] = None
     _eta_cache["data"] = None
     _bias_cache["mtime"] = None
     _bias_cache["data"] = None
+    _cell_resid_cache["mtime"] = None
+    _cell_resid_cache["data"] = None

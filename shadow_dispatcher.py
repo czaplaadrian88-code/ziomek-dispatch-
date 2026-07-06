@@ -540,6 +540,28 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         prep_bias_min = None
         effective_ready_shadow = None
 
+    # W0.5 shadow: skorygowana obietnica ETA per-komórka floty (slot×solo/worek).
+    # Compute-always obserwacja przez PRODUKCYJNY konsument calib_maps (parytet z
+    # generatorem). Zero wpływu na verdict/R6/score. flag = stan aktywnego zastosowania.
+    _eta_cell_corrected_shadow = None
+    _eta_cell_flag = False
+    try:
+        _eta_cell_flag = bool(C.flag("ENABLE_ETA_CELL_RESIDUAL_CORRECTION", False))
+        if best is not None and getattr(best, "plan", None) is not None:
+            _oid = str(result.order_id)
+            _pd = (best.plan.predicted_delivered_at or {}).get(_oid)
+            _ready = result.pickup_ready_at
+            if _pd is not None and _ready is not None:
+                if _pd.tzinfo is None:
+                    _pd = _pd.replace(tzinfo=timezone.utc)
+                _r = _ready if _ready.tzinfo else _ready.replace(tzinfo=timezone.utc)
+                _carry = (_pd - _r).total_seconds() / 60.0
+                _is_bundle = len(best.plan.sequence or []) > 1
+                _eta_cell_corrected_shadow = calib_maps.eta_cell_residual_correct(
+                    _carry, result.pickup_ready_at, is_bundle=_is_bundle)
+    except Exception:
+        _eta_cell_corrected_shadow = None
+
     # F1.8 fix: target_pickup_at = absolutny moment kiedy kurier ma być w restauracji.
     # Liczone JEDEN raz przy tworzeniu propozycji, używane w handle_callback przy TAK
     # do świeżego (target - now) → time_param. Dzięki temu opóźnione kliknięcia TAK
@@ -627,6 +649,11 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # L2.2 (2026-07-02): przyczyny fail-ów per kurier z catch-alla
         # _v328_eval_safe ({cid: data_poison|real_bug}); None = zero fail-ów.
         "v328_fail_causes": getattr(result, "v328_fail_causes", None),
+        # W0.5 (2026-07-06): korekta ETA per-komórka floty — SHADOW (obserwacja
+        # skorygowanej obietnicy; aktywne zastosowanie do wyświetlanej obietnicy =
+        # deploy telegram/konsola za ACK). flag=stan ENABLE_ETA_CELL_RESIDUAL_CORRECTION.
+        "eta_cell_corrected_min": _eta_cell_corrected_shadow,
+        "eta_cell_correction_flag": _eta_cell_flag,
         # W0.2 (2026-07-06): bezpiecznik fabrykacji ETA (shadow-first, LOCATION B
         # top-level). eta_unreliable None=nie liczono/brak floora; sygnały per-order
         # (ratio, robust_ref) w best.metrics → auto A+B. defer_hint tylko gdy flaga ON.

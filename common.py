@@ -208,6 +208,8 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_ETA_QUANTILE_R6_BAGCAP",
     # W0.2 advisory (2026-07-06): bezpiecznik fabrykacji ETA (hybryda 60′∧2,5×robust_ref).
     "ENABLE_ETA_FABRICATION_GUARD",
+    # W0.5 advisory (2026-07-06): korekta ETA per-komórka floty (slot×solo/worek) na obietnicę.
+    "ENABLE_ETA_CELL_RESIDUAL_CORRECTION",
     "ENABLE_R6_BREACH_SHADOW_LOG",
     # E2 (2026-06-14): 20% live A/B PLN-sort selekcji kandydatow (dispatch_pipeline).
     "ENABLE_E2_PLN_AB",
@@ -480,6 +482,11 @@ ENABLE_ETA_QUANTILE_R6_BAGCAP = False
 # KOORD z fabrykatem (defer/uncertainty). Default OFF; shadow-first (compute-always
 # obserwacja `eta_unreliable` niezależnie od flagi, aktywny routing tylko ON).
 ENABLE_ETA_FABRICATION_GUARD = False
+# W0.5 (werdykt E-7-GO): korekta ETA per-komórka floty (slot×solo/worek) na predykcji
+# → OBIETNICA (uczciwość; NIE bramka R6). OOS: MAE 10,39→10,04 (+3,4%), underest −0,8pp.
+# Mapa `calib_maps.eta_cell_residual_correct` (generator tools/eta_cell_residual_build).
+# Default OFF; shadow-first (skorygowana ETA logowana jako obserwacja niezależnie od flagi).
+ENABLE_ETA_CELL_RESIDUAL_CORRECTION = False
 ETA_FABRICATION_FLOOR_MIN = 60.0     # T=60: E-1 łapie 100% fabrykacji (>90 gubi połowę)
 ETA_FABRICATION_RATIO = 2.5          # pred>2,5×robust_ref (komponent ratio Opusa vs FP kryzysu)
 ETA_ROBUST_SERVICE_MIN = 12.0        # service_time (odbiór+wydanie) w robust_ref
