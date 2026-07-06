@@ -368,7 +368,6 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
     Side-effect: event_bus.emit + state_machine.update_from_event w background.
     Event_id: {oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{epoch_ms} — unique per emit.
     """
-    from dispatch_v2.event_bus import emit as _eb_emit
     from dispatch_v2.event_bus import emit_audit as _eb_emit_audit
     from dispatch_v2.state_machine import update_from_event as _sm_apply
 
@@ -1397,7 +1396,6 @@ def _feas_carry_readmit_pick(top, feasible, candidates, new_oid, cap_min=40.0):
         if not top or not candidates:
             return None
         from dispatch_v2 import objm_lexr6 as _OL
-        import re as _re
         chosen = top[0]
         chosen_objm = _OL.objm(chosen, "objm_r6_breach_max_min")
         if chosen_objm is None or chosen_objm <= 0:
@@ -2110,7 +2108,7 @@ def _sync_spread_penalty(spread_min: float) -> float:
         return 0.0
     if s <= knots[0][0]:
         return 0.0
-    for (x0, y0), (x1, y1) in zip(knots, knots[1:]):
+    for (x0, y0), (x1, y1) in zip(knots, knots[1:], strict=False):
         if s <= x1:
             return y0 + (y1 - y0) * (s - x0) / (x1 - x0)
     return float(knots[-1][1])
