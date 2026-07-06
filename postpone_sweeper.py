@@ -100,9 +100,13 @@ def run_once(now: Optional[datetime] = None) -> Dict[str, int]:
             expired_oids.append(oid)
 
             # Check if order has been manually assigned
+            # K02 refaktor (2026-07-06, deep-audit #1.8): _read_state() zwraca
+            # PŁASKI {oid: rec}, a pole kuriera to "courier_id" — poprzedni
+            # odczyt .get("orders",{}).get(oid) + .get("cid") nigdy nie trafiał
+            # → POSTPONE_RESOLVED nieosiągalny → duplikat propozycji po re-enable.
             orders_state = state_machine._read_state()
-            current = orders_state.get("orders", {}).get(oid) or {}
-            current_cid = current.get("cid")
+            current = orders_state.get(oid) or orders_state.get(str(oid)) or {}
+            current_cid = current.get("courier_id")
             if current_cid not in (None, "", "26", 26, "None"):
                 log.info(f"POSTPONE_RESOLVED oid={oid} cid={current_cid}")
                 stats["resolved"] += 1
