@@ -59,8 +59,8 @@ Monolit decyzyjny `_assess_order_impl` zszedł z **~3800 do 483 linii (−87%)**
 | Pozycja | Dlaczego odłożone | Właściciel/wejście |
 |---|---|---|
 | **world_record v1** (prefetch ck + slice orders_state/loadgov/reliability) | luka wierności v0 zdiagnozowana bramką; pliki world_record/dispatch_pipeline | **sesja A W TOKU** (aktywacja przy najbliższym restarcie shadow ZA TAK) |
-| Flip `ENABLE_PLANNER_UNIFIED` (+_SHADOW wcześniej) | kod OFF; najpierw SHADOW-porównanie parametrów na żywych sweepach | TAK Adriana (rekomendacja: SHADOW teraz, główna po 2 dniach ciszy) |
-| Instalacja night-guard `dispatch-world-replay-gate.timer` (02:00, informacyjny) | zero samowolnych zmian w /etc | TAK Adriana; eskalacja na egzekwujący po 3 zielonych nocach i v1 |
+| Flip `ENABLE_PLANNER_UNIFIED` (główna) | **SHADOW LIVE od 06.07 ~22:20** (`ENABLE_PLANNER_UNIFIED_SHADOW=true`; 30 min → 0 `PLANNER_PARAM_MISMATCH` = parytet na żywo). Zostaje flip GŁÓWNEJ | TAK Adriana po 2 dniach ciszy shadow |
+| ~~Instalacja night-guard~~ | ✅ **ZAINSTALOWANY + WŁĄCZONY 06.07 ~22:20** (`dispatch-world-replay-gate.timer`, NEXT 02:00 UTC, informacyjny) | eskalacja na egzekwujący = TAK Adriana po 3 zielonych nocach + v1 |
 | Flipy `ENABLE_SCORER_INTERFACE` / `SCORER_IMPL=lgbm` / `POS_SOURCE_HIERARCHY` | obserwacyjne/strategiczne; LGBM primary = decyzja produktowa | TAK Adriana (poza domknięciem programu) |
 | Poison-alert → powłoka (ostatni efekt w hot-path) | mały zysk vs ryzyko dotykania alertów | następna fala |
 | Perf-profiling D6 (flamegraph assess, cel p95) | osobna dyscyplina pomiarowa; dziś sygnał zielony n=1 | P1 po programie |

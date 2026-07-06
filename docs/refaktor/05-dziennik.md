@@ -115,3 +115,10 @@ Dzienniki źródłowe (kanon repo): `eod_drafts/2026-07-06/SPRINT_A_dziennik.md`
 
 ### FAZA 6 — domknięcie programu (06.07 ~22:00 UTC)
 `06-raport.md` NAPISANY (baseline przed/po; tabela D1-D10 z dowodami: 6×ROZWIĄZANE, 2×ZŁAGODZONE, D6 sygnał zielony n=1, D8+D10 świadomie otwarte; backlog z właścicielami; rekomendacje 3-mies). Mapy kanonu na masterze zaktualizowane osobnym commitem docs (ARCHITECTURE/CODEMAP/ZIOMEK_ARCHITECTURE §4 — patrz master log). world_record v1 = sesja A W TOKU (pliki jej; aktywacja przy restarcie shadow za TAK). Program zamknięty BEZ ani jednego samowolnego flipa; komplet decyzji czekających na TAK wylistowany w raporcie §6.
+
+### ZAMKNIĘCIE SESJI — 3 zgody Adriana WYKONANE 06.07 ~22:20 UTC („123 ack")
+Protokół deploy (backup→zmiana→dowód), wszystko za jawnym TAK w czacie:
+1. **`ENABLE_PLANNER_UNIFIED_SHADOW=true`** — flip HOT (backup `flags.json.bak-pre-planner-shadow-2026-07-06`; re-planer czyta na gorąco, bez restartu). **Dowód parytetu NA ŻYWO:** 30 min pracy `dispatch-plan-recheck` → **0 ostrzeżeń `PLANNER_PARAM_MISMATCH`** = silnik i re-planer liczą parametry planowania identycznie na produkcji (nie tylko w replayu). Główna flaga `ENABLE_PLANNER_UNIFIED` zostaje OFF do werdyktu po 2 dniach ciszy shadow (za TAK).
+2. **Night-guard zainstalowany + włączony:** `cp systemd/dispatch-world-replay-gate.{service,timer} /etc/systemd/system/` → `daemon-reload` → `enable --now …timer`. NEXT = jutro **02:00 UTC** (04:00 Warsaw), tryb INFORMACYJNY (`ExecStart=-` → exit ignorowany, zero OnFailure/Telegram; werdykt do `dispatch_state/world_replay_gate_verdict.txt` + `logs/world_replay_gate.log`). Eskalacja na egzekwujący = decyzja Adriana po 3 zielonych nocach + world_record v1 (instrukcja w nagłówku `.service`).
+3. **Tag `refaktor-program-2026-07`** na `e07cfb4` (master) + wypchnięty na origin.
+**Stan końcowy zweryfikowany we WŁAŚCIWYM repo (`dispatch_v2`):** HEAD=origin/master=`e07cfb4`; tag lokalnie i na origin; silnik+re-planer `active`; kanon 4352/0. Program domknięty; jedyne otwarte: flip głównej flagi plannera (po ciszy shadow) + world_record v1 (sesja A) — oba za TAK Adriana.
