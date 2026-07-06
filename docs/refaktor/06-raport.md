@@ -42,7 +42,7 @@ Monolit decyzyjny `_assess_order_impl` zszedł z **~3800 do 483 linii (−87%)**
 
 **Pakiet 0-1 (koordynator):** K01 devlint · K02 postpone-schema · K03 write-canon · K04 world_record+recorder OSRM · K05 FlagSnapshot · K06a now-explicit · K06 world_replay · K07 pre-recheck-before-pool · K08 effects_buffer.
 **Pakiet 2 (sesja A):** K09 fasada decide+WorldState · K10 gates · K11 candidates (~2147 l. closure → moduł; aliasy prologu = kontrakty monkeypatch przeżyły) · K12 selection · K13 Scorer (ADR-R06; LGBM wrapper fail-soft, flip poza programem) + naprawa przyrządu mypy (fail-loud, uczciwy baseline).
-**Pakiet 3-4 (sesja B):** K14 werdykt „już wykonane przez L3" (C15; zero zbędnego kodu, wycofana zbędna flaga) · K16 hierarchia pozycji · K17 runner bramki + night-guard (tryb informacyjny; instalacja za TAK) + utwardzenie world_replay (stub żywego fetchu).
+**Pakiet 3-4 (sesja B):** K14 werdykt „już wykonane przez L3" (C15; zero zbędnego kodu, wycofana zbędna flaga) · K16 hierarchia pozycji · K17 runner bramki + night-guard (tryb informacyjny; **zainstalowany+włączony 06.07 ~22:20 — patrz §6**) + utwardzenie world_replay (stub żywego fetchu).
 **K15 (koordynator, punkt scalenia):** wspólny Planner — parametryzacja tier→(dwell,tempo) + wejście symulacji w `core/planner.py`; parytet różnicowy n=88 DIFF PUSTY.
 **Naprawy obce po drodze (u źródła, z atrybucją):** dryf kontraktu 5b (baseline schematu stanu), rejestracja `PLAN_GC_DRY_RUN` (flip at-205), GC-real zatwierdzony dowodem (0 kasowań), 2 kłamiące strażniki-skanery (hardkod ścieżki; klasa #17), devlint-mypy nieszczery.
 
