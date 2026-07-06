@@ -73,3 +73,10 @@ Model kwantylowy LGBM (target=mediana err), walidacja CZASOWA (train 70% starszy
 - PER-KURIER: po odjęciu modelu zostają osobowe efekty ±3-8 min (508 −8.2 szybszy; 515 +4.2, 413 +3.1 wolniejsi) → korekta per-cid ze shrinkage jako składnik v3.
 - Skrypt: scratchpad `slip_model_analysis.py` (sesja 06.07). ⚠ target = błąd DOSTAWY (proxy poślizgu odbioru per dekompozycja 29.06); w v3 przejść na bezpośredni poślizg ODBIORU (`picked_up_at` jest w logu).
 **Propozycja v3:** nightly-trenowany model medianowy (jak kalibracje ETA) → silnik liczy bufor per DECYZJA: `clamp(pred_model − 5, 0, 30)` (zasada „do 5 min" zostaje); v2-tabela = tylko fallback gdy modelu brak. Osobny sprint protokołem za GO.
+
+---
+# v3 WERDYKT KOŃCOWY (06.07 wieczór) — „wzór spóźnień" z cech DECYZJI NIE ISTNIEJE w tych danych
+- Wcześniejsze −17% MAE = ILUZJA Z PRZECIEKU: `pred_age` (wiek predykcji) znany dopiero PO fakcie; w chwili obietnicy zawsze 0. Po usunięciu: cechy decyzji (bag/hour/weekday/tier/r6max/total_dur/pred_min + offsety kurierów train-only) dają OOS **MAE 11,32 vs stała 11,52 (−1,7%)**.
+- Target ODBIÓR (join eta_pickup_hhmm↔picked_up_at, n=1263, 30d): med +8,2 (p25 +2,5 / p75 +15,5); model **GORSZY od stałej OOS (9,69 vs 9,50)**.
+- WNIOSEK: poślizg powstaje PO decyzji (dorzucone zlecenia, kolejki, prep) — z punktu propozycji jest ~szumem wokół +8 min. Różnice tier/pora (±3-4 od jednowymiarówek) NIE generalizują OOS ponad stałą.
+- REKOMENDACJE: (1) obietnica statyczna = prosty bufor wg zasady Adriana (mediana odbioru 8,2 − 5 ≈ **+3 min stałe**, ew. v2-tabela jako nieszkodliwa); (2) PRAWDZIWA poprawa = OBIETNICA DYNAMICZNA — aktualizacja umówionego czasu, gdy PO decyzji zmienia się plan kuriera (dorzucony worek/ruszył w trasę) = osobny sprint mechanizmu, nie wzoru; (3) infrastruktura v3 (`tools/pickup_slip_model.py`: nightly-trainer, LGBM kwantylowy, offsety per-kurier ze shrinkage — NOWY KURIER wchodzi automatycznie, offset uczy się sam) ZOSTAJE w repo gotowa na moment, gdy dojdą cechy z sygnałem (np. telemetria stanu kuriera przy decyzji); nocny timer ŚWIADOMIE NIE zainstalowany (nie stawiamy maszynerii dla −1,7%).
