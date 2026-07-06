@@ -43,3 +43,22 @@ R-LATE / extension_penalty bez zmian — wzorzec #8).
 ⚠ Obserwacja 1. dnia: committed `czas_kuriera` będzie późniejszy → sprzężenie z R27 ±5 (soft) — sprawdzić,
 czy TSP nie ODRACZA fizycznie możliwych odbiorów (jedzenie gotowe wcześniej); regres → rollback.
 **Rollback:** flaga false (hot) — panel fallback wraca sam (brak pola).
+
+---
+# v2 (06.07 po południu) — DWIE KOREKTY ADRIANA (obowiązujące)
+1. **„Lepiej żeby się spóźnił do 5 min, niż za ostrożnie i żeby czekał — każda minuta ważna"** →
+   efektywny bufor = mediana − `PICKUP_BUFFER_LATE_TOLERANCE_MIN=5`.
+2. **„To od wielu rzeczy zależy — punktualnemu nie doliczaj 25 min"** → tabela przeliczona TYLKO na
+   populacji `matched_courier` (jechał TEN kurier, którego dotyczyła predykcja — obietnica jedzie w
+   1-klik akcept TEGO kandydata) i **bez czasówek**. v1 była zawyżona rekordami z przydziałem INNEGO
+   kuriera (med poślizgu 17-21 vs 8.6-11 dla matched).
+
+**Tabela v2 (surowe mediany, matched-only, n=823; efektywnie po −5):**
+ciasno-solo 16→**+11** (n<15, pożyczka od srednio-solo) · srednio-solo 16→**+11** · luzno-solo 8.5→**+3.5**
+· ciasno-worek 11→**+6** · srednio-worek 12→**+7** · luzno-worek 7.5→**+2.5** (cap 30).
+
+**Dowód v2 (populacja matched bez czasówek, n=821):** mediana spóźnienia vs obietnica **+9.1 → +5.0 min**
+(dokładnie cel Adriana); spóźnieni >5 min: 64% → 50%; kurier przed obiecanym czasem: 20% → 33%
+(koszt centrowania — ale bufor to teraz maks. +11, nie +25, więc czekanie krótkie); median|err| 10.8 → 9.4.
+**Pre-flip check (nowy):** zweryfikować, że akcept czasówki w konsoli NIE bierze eta (keep-time) —
+kalibracja czasówek wykluczona z tabeli.

@@ -27,13 +27,14 @@ class _Res:
 # --------------------------------------------------------------------------- #
 
 def test_buffer_buckets_match_monitor_semantics():
-    assert C.pickup_buffer_min(1, 1) == 25.0   # ciasno solo
-    assert C.pickup_buffer_min(0, 1) == 25.0   # ciasno solo (pf=0)
-    assert C.pickup_buffer_min(1, 3) == 13.0   # ciasno bundle
-    assert C.pickup_buffer_min(2, 1) == 24.0   # srednio solo
-    assert C.pickup_buffer_min(4, 2) == 12.0   # srednio bundle
-    assert C.pickup_buffer_min(5, 1) == 17.0   # luzno solo
-    assert C.pickup_buffer_min(9, 4) == 7.0    # luzno bundle
+    # v2 (Adrian 06.07): efektywny bufor = mediana(matched-only) − tolerancja 5
+    assert C.pickup_buffer_min(1, 1) == 11.0   # ciasno solo (16−5)
+    assert C.pickup_buffer_min(0, 1) == 11.0   # ciasno solo (pf=0)
+    assert C.pickup_buffer_min(1, 3) == 6.0    # ciasno bundle (11−5)
+    assert C.pickup_buffer_min(2, 1) == 11.0   # srednio solo (16−5)
+    assert C.pickup_buffer_min(4, 2) == 7.0    # srednio bundle (12−5)
+    assert C.pickup_buffer_min(5, 1) == 3.5    # luzno solo (8.5−5)
+    assert C.pickup_buffer_min(9, 4) == 2.5    # luzno bundle (7.5−5)
 
 
 def test_buffer_fail_open_and_cap(monkeypatch):
@@ -61,10 +62,10 @@ def _set_flag(monkeypatch, value):
 def test_promised_fields_on(monkeypatch):
     _set_flag(monkeypatch, True)
     f = sd._promised_pickup_fields(dict(BEST_M), _Res(1))
-    # ciasno (pf=1) × solo (bag_after=0+1) → +25 min; 11:00 UTC = 13:00 Warsaw
-    assert f["pickup_buffer_min"] == 25.0
-    assert f["eta_pickup_promised_hhmm"] == "13:25"
-    assert f["eta_pickup_promised_utc"].startswith("2026-07-06T11:25:00")
+    # ciasno (pf=1) × solo (bag_after=0+1) → +11 min; 11:00 UTC = 13:00 Warsaw
+    assert f["pickup_buffer_min"] == 11.0
+    assert f["eta_pickup_promised_hhmm"] == "13:11"
+    assert f["eta_pickup_promised_utc"].startswith("2026-07-06T11:11:00")
 
 
 def test_promised_fields_off_flag(monkeypatch):
@@ -85,7 +86,7 @@ def test_promised_fields_fail_open(monkeypatch):
 
 def test_promised_fields_bundle_bucket(monkeypatch):
     _set_flag(monkeypatch, True)
-    m = dict(BEST_M, r6_bag_size=2)  # bag_after=3 → bundle; pf=7 → luzno → +7
+    m = dict(BEST_M, r6_bag_size=2)  # bag_after=3 → bundle; pf=7 → luzno → +2.5
     f = sd._promised_pickup_fields(m, _Res(7))
-    assert f["pickup_buffer_min"] == 7.0
-    assert f["eta_pickup_promised_hhmm"] == "13:07"
+    assert f["pickup_buffer_min"] == 2.5
+    assert f["eta_pickup_promised_hhmm"] == "13:02"
