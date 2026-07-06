@@ -127,9 +127,12 @@ def test_pickup_reach_consumer_uses_helper():
 
 
 def test_early_bird_consumer_uses_helper():
+    # K10: konsument progu przeniesiony do core.gates (woła helper przez moduł
+    # dispatch_pipeline — hot-reload flags.json bez zmian).
     import inspect
-    src = inspect.getsource(dispatch_pipeline)
-    assert "minutes_ahead >= _early_bird_threshold_min()" in src
+    from dispatch_v2.core import gates
+    src = inspect.getsource(gates)
+    assert "minutes_ahead >= _dp._early_bird_threshold_min()" in src
 
 
 def test_min_propose_consumers_use_helper():

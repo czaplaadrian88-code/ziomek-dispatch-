@@ -61,8 +61,10 @@ def test_all_four_silence_gates_have_always_propose_guard():
 
 
 def test_early_bird_NOT_guarded():
-    """early_bird ZOSTAJE KOORD (za wcześnie, wraca do puli) — NIE objęty always-propose."""
-    src = inspect.getsource(dispatch_pipeline)
+    """early_bird ZOSTAJE KOORD (za wcześnie, wraca do puli) — NIE objęty always-propose.
+    K10: bramka przeniesiona do core.gates — skanujemy jej źródło."""
+    from dispatch_v2.core import gates as _gates_mod
+    src = inspect.getsource(_gates_mod)
     i = src.find('reason=f"early_bird (')
     assert i != -1
     pre = src[max(0, i - 400):i]

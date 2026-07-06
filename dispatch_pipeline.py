@@ -22,6 +22,7 @@ from dispatch_v2 import eta_load_aware  # L5.1 (2026-07-05): bufor poślizgu ODB
 from dispatch_v2 import pln_objective  # SP-B2-PLN (2026-06-11): funkcja celu PLN (shadow)
 from dispatch_v2 import panel_client  # V3.27.1 sesja 2: pre-proposal recheck (Blocker 2 Opcja A)
 from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: efekty PO decyzji (ADR-R02)
+from dispatch_v2.core import gates as _gates  # K10 refaktoru: bramki wejściowe (geokod-defense, early-bird)
 from dispatch_v2.common import (
     parse_panel_timestamp,
     WARSAW,
@@ -3788,35 +3789,20 @@ def _assess_order_impl(
             except Exception:
                 pass  # Telegram unreachable nie blokuje dispatchu
 
-    # Defense gate (L2): brak pickup_coords = order bez geokodacji.
-    # Pre-fix scenariusz: panel_watcher dla firmowego konta (address_id=161)
-    # zostawiał pickup_coords=None → tuple() fallback (0,0) → haversine sentinel
-    # 6285km → wszyscy kurierzy pickup_too_far → BRAK KANDYDATÓW. Post-fix:
-    # parser uwag (L1) wypełnia coords gdy uwagi mają adres; gdy NIE (P3 edge,
-    # parser regression, malformed uwagi) — fail-loud SKIP zamiast śmieciowy
-    # feasibility loop. czasowka_scheduler emit'uje dedicated Telegram alert
-    # PRZED tym wywołaniem (visible operator).
-    _raw_pickup_coords = order_event.get("pickup_coords")
-    if _raw_pickup_coords is None or _raw_pickup_coords == [0.0, 0.0] or _raw_pickup_coords == (0.0, 0.0):
-        log.warning(
-            f"assess_order SKIP {order_id} aid={order_event.get('address_id')!r}: "
-            f"pickup_coords missing — defense gate (no geocode); "
-            f"uwagi_parsed={order_event.get('uwagi_pickup_parsed')!r}"
-        )
-        return PipelineResult(
-            order_id=order_id,
-            verdict="SKIP",
-            reason="no_pickup_geocode",
-            best=None,
-            candidates=[],
-            pickup_ready_at=None,
-            restaurant=restaurant,
-            delivery_address=delivery_address,
-            pool_total_count=0,
-            pool_feasible_count=0,
-        )
+    # K10 refaktoru: geokod-defense (L2) wyniesiony do core.gates.geocode_defense
+    # — treść, log i kształt SKIP-wyniku 1:1 (historia firmowego konta w docstringu
+    # bramki). czasowka_scheduler emit'uje dedicated Telegram alert PRZED tym
+    # wywołaniem (visible operator).
+    _gate_res = _gates.geocode_defense(
+        order_event, order_id=order_id, restaurant=restaurant,
+        delivery_address=delivery_address,
+    )
+    if _gate_res is not None:
+        return _gate_res
 
-    pickup_coords = tuple(_raw_pickup_coords)
+    # geocode_defense gwarantuje nie-None/nie-sentinel (mypy nie widzi narrowingu
+    # przez granicę funkcji — stąd ignore; semantyka 1:1 z wersją inline).
+    pickup_coords = tuple(order_event.get("pickup_coords"))  # type: ignore[arg-type]
     delivery_coords = tuple(order_event.get("delivery_coords") or (0.0, 0.0))
 
     # V3.19f: czas_kuriera_warsaw first-choice pod flagą (panel HH:MM commitment).
@@ -3838,64 +3824,19 @@ def _assess_order_impl(
             f"oid={order_id}"
         )
 
-    # Fix 2026-05-07: early_bird threshold patrzy na RAW pickup_at_warsaw (deklaracja
-    # restauracji), NIE extended czas_kuriera_warsaw. Bug strukturalny od V3.19f deploy:
-    # czasowka_scheduler liczy mtp z raw, assess_order early_bird patrzył na extended →
-    # czasówki przedłużone Ziomkiem o 20-30min były KOORD'owane jako pool=0 mimo że
-    # czasowka_scheduler był w T-40 trigger window. Eliminuje 49% KOORD czasówek
-    # (`zero MAYBE` 19× / 39 całych w 5-day eval_log obs).
-    pickup_at_for_early_bird_raw = order_event.get("pickup_at_warsaw") or order_event.get("pickup_at")
-    pickup_at_for_early_bird = (
-        parse_panel_timestamp(pickup_at_for_early_bird_raw)
-        if pickup_at_for_early_bird_raw else pickup_at
+    # K10 refaktoru: early-bird (+ kontrfaktyk EARLYBIRD-01, głębokość 1) wyniesiony
+    # do core.gates.early_bird — próg z RAW pickup_at_warsaw (fix 2026-05-07),
+    # treść/reason/kolejność efektów 1:1; helpery (_early_bird_threshold_min,
+    # _earlybird_t30_shadow_enabled, _append_earlybird_t30_shadow) zostają TU
+    # (konsument zewn.: shadow_dispatcher) — bramka woła je przez moduł.
+    _gate_res = _gates.early_bird(
+        order_event, fleet_snapshot, restaurant_meta, now,
+        pickup_at=pickup_at, order_id=order_id, restaurant=restaurant,
+        delivery_address=delivery_address, pending_queue=pending_queue,
+        demand_context=demand_context, bypass=_bypass_early_bird,
     )
-
-    # Early bird → KOORD
-    if pickup_at_for_early_bird is not None and not _bypass_early_bird:
-        pu = pickup_at_for_early_bird if pickup_at_for_early_bird.tzinfo else pickup_at_for_early_bird.replace(tzinfo=WARSAW)
-        minutes_ahead = (pu.astimezone(timezone.utc) - now).total_seconds() / 60.0
-        if minutes_ahead >= _early_bird_threshold_min():  # SCALE-01: flags.json hot
-            # EARLYBIRD-01 forward-shadow: kontrfaktyk „co gdyby przepuścić do feasibility
-            # teraz" (bez early_bird short-circuit). LOG-ONLY, flaga OFF default, fail-soft
-            # (defense-in-depth — błąd shadow NIGDY nie psuje live KOORD). _bypass_early_bird=True
-            # zapobiega rekurencji (max głębokość 1).
-            if _earlybird_t30_shadow_enabled():
-                try:
-                    # Kontrfaktyk woła _assess_order_impl BEZPOŚREDNIO (nie wrapper) —
-                    # inaczej observability hook podwójnie zalogowałby zlecenie do
-                    # candidate_decisions.jsonl (= strumień, który czyta pomiar EARLYBIRD).
-                    _cf = _assess_order_impl(
-                        order_event, fleet_snapshot, restaurant_meta, now,
-                        pending_queue=pending_queue, demand_context=demand_context,
-                        _bypass_early_bird=True,
-                    )
-                    _append_earlybird_t30_shadow({
-                        "ts": now.isoformat(),
-                        "order_id": order_id,
-                        "restaurant": restaurant,
-                        "minutes_ahead": round(minutes_ahead, 1),
-                        "cf_verdict": _cf.verdict,
-                        "cf_reason": _cf.reason,
-                        "cf_pool_total": _cf.pool_total_count,
-                        "cf_pool_feasible": _cf.pool_feasible_count,
-                        "cf_best_cid": (_cf.best.courier_id if _cf.best else None),
-                        "cf_best_score": (round(_cf.best.score, 2) if _cf.best else None),
-                        # would_resolve = przepuszczenie dałoby realną PROPOZYCJĘ (nie kolejny
-                        # KOORD/SKIP/NO) → kandydat do auto-resolve w T-30 zamiast eskalacji.
-                        "would_resolve": (_cf.verdict == "PROPOSE"),
-                    })
-                except Exception as _eb_e:
-                    log.warning(f"earlybird_t30_shadow failed oid={order_id}: {_eb_e}")
-            return PipelineResult(
-                order_id=order_id,
-                verdict="KOORD",
-                reason=f"early_bird ({minutes_ahead:.0f} min ahead)",
-                best=None,
-                candidates=[],
-                pickup_ready_at=None,
-                restaurant=restaurant,
-                delivery_address=delivery_address,
-            )
+    if _gate_res is not None:
+        return _gate_res
 
     pickup_ready_at = get_pickup_ready_at(restaurant, pickup_at, now, restaurant_meta)
 

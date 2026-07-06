@@ -18,8 +18,18 @@ import re
 from pathlib import Path
 
 import dispatch_v2.dispatch_pipeline as DP
+import dispatch_v2.core.gates as GATES
 
 _SRC_PATH = Path(DP.__file__)
+# K10 refaktoru: bramki wejściowe (early_bird, geokod-defense) przeniesione do
+# core/gates.py — skaner MUSI czytać oba źródła, inaczej bramka znika z pola
+# widzenia strażnika (martwy strażnik = teatr, klasa C13). Parser jest liniowy
+# i lokalny, więc konkatenacja tekstów jest bezpieczna.
+_SRC_PATHS = [Path(DP.__file__), Path(GATES.__file__)]
+
+
+def _read_all_sources() -> str:
+    return "\n".join(p.read_text(encoding="utf-8") for p in _SRC_PATHS)
 
 # ── Rejestr klasyfikacji (JEDNO źródło prawdy) ───────────────────────────────
 # quality    = bramka jakości; ALWAYS-PROPOSE ją neutralizuje → MUSI mieć guard.
@@ -47,7 +57,7 @@ def _koord_gates_from_source():
         otwarcie PipelineResult (czyli między najbliższym `if ` w górę a samym
         `PipelineResult(`).
     """
-    lines = _SRC_PATH.read_text(encoding="utf-8").splitlines()
+    lines = _read_all_sources().splitlines()
     out = {}
     for i, ln in enumerate(lines):
         if re.search(r'verdict\s*=\s*"KOORD"', ln):
@@ -129,7 +139,7 @@ def gate_guard_polarity(source_text):
 
 
 def _gate_polarity_from_disk():
-    return gate_guard_polarity(_SRC_PATH.read_text(encoding="utf-8"))
+    return gate_guard_polarity(_read_all_sources())
 
 
 def test_quality_gates_use_negated_guard():
