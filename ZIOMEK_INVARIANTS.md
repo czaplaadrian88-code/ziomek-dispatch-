@@ -15,7 +15,7 @@
 ---
 
 ## Kontrakt ① — JEDNO ŹRÓDŁO NA REGUŁĘ
-- 🔴 **INV-SRC-ROUTE-ORDER**: `proj(silnik)==proj(konsola)==proj(apka)` (równość porządku `[(typ, sorted(order_ids))]`). Strażnik = golden-fixture equivalence w CI. ⏰ **deadline 07-10** (monitor `ziomek_time_route_monitor` wygasa; dziś 44-75 rozjazdów/d).
+- 🔴 **INV-SRC-ROUTE-ORDER**: `proj(silnik)==proj(konsola)==proj(apka)` (równość porządku `[(typ, sorted(order_ids))]`). Strażnik = golden-fixture equivalence w CI. ⏰ **deadline 07-10** (monitor `ziomek_time_route_monitor` wygasa). *(KOREKTA 06.07, pomiar monitorem: mismatch=0/d od 01.07 przy 100-619 sprawdzeniach/d — flagi trust-canon wszędzie ON robią parytet; „44-75/d" NIEAKTUALNE. Problem pozostaje KONSTRUKCYJNY: 4 kopie/3 repa trzymane flagami, nie konstrukcją.)*
 - 🟢 **INV-SRC-AVAILABLE-FROM** *(slot uzbrojony 2026-07-05, Z2; źródło = L4 LIVE od 04.07)*: `available_from` liczone w 1 miejscu (`courier_resolver.resolve_available_from*`, flaga `ENABLE_AVAILABLE_FROM_SINGLE_SOURCE` ON). Strażnik = `test_l4_available_from` (25 testów: źródło+konsumenci #1/#3/#5+chokepoint, mutation ×2 przy budowie L4).
 - 🟢 **INV-SRC-LEXQUAL** *(slot uzbrojony 2026-07-05, Z2; unifikacja 25.06 + L6.C C1 04.07)*: 3 kopie `lex_qual` → kanon `objm_lexr6.lex_qual`. Strażnik = `test_objm_lexr6_unify_2026_06_25` (pick==kanon OFF+ON, anty-redywergencja inline w pick I w cieniu, parytet cienia w obu stanach POST_SHIFT).
 - 🔴 **INV-SRC-EQUAL-TREATMENT**: brak GPS / pre_shift = identyczny bucket we WSZYSTKICH 8 bliźniakach. (łatane ≥4×)
@@ -32,7 +32,7 @@
 ## Kontrakt ③ — PARYTET BLIŹNIAKÓW (z konstrukcji)
 - 🔴 **INV-TWIN-ROUTE-ORDER**: golden-fixture equivalence (w toku — Sprint 0 tmux 15, deadline 07-10.07; L6.A golden 13/13 = fundament).
 - 🟢 **INV-TWIN-LEXQUAL** *(slot uzbrojony 2026-07-05, Z2)*: wspólny moduł `objm_lexr6` + `test_objm_lexr6_unify_2026_06_25` (parytet 3 kopii z konstrukcji — patrz INV-SRC-LEXQUAL).
-- 🟢 **INV-TWIN-SLA-ANCHOR** *(slot uzbrojony 2026-07-05, Z2; fala S1 02.07)*: wspólny moduł `sla_anchor.py` (3 bliźniaki RAZEM: `_count_sla_violations` + feasibility SLA-loop + `plan_recheck._o2_key`), flaga `ENABLE_SLA_ANCHOR_UNIFIED` OFF. Strażnik = `test_sla_anchor_unified` (OFF = fuzz 400/0 bajt-parytet; ON = te same decyzje + `sla_anchor_source`). Flip = prerekwizyt O2, za ACK.
+- 🟢 **INV-TWIN-SLA-ANCHOR** *(slot uzbrojony 2026-07-05, Z2; fala S1 02.07)*: wspólny moduł `sla_anchor.py` (3 bliźniaki RAZEM: `_count_sla_violations` + feasibility SLA-loop + `plan_recheck._o2_key`), flaga `ENABLE_SLA_ANCHOR_UNIFIED` — ⚠ **LIVE=true w flags.json** (potwierdzone 06.07 odczytem żywym; kod-default False MYLI — czytaj flags.json, wzorzec #9). Obserwacja S1 zdrowa (250/258 rekordów z `sla_anchor_source`, dial=35). Strażnik = `test_sla_anchor_unified` (OFF = fuzz 400/0 bajt-parytet; ON = te same decyzje + `sla_anchor_source`).
 
 ## Kontrakt ④ — PRAWDA FLAG
 - 🟢/🔴 **INV-FLAG-REGISTRY**: 100% flag decyzyjnych w `ETAP4_DECISION_FLAGS`; sonda `flag_fingerprint` pokrywa wszystkie. Dziś: `flag_registry.py` istnieje, ALE **112 flag poza rejestrem + 5 dead-flag** → 🔴 do domknięcia.
