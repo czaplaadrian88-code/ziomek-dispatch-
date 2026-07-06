@@ -67,7 +67,18 @@ Unikalne `order_id`/dzień z `logs/shadow_decisions.jsonl` (+ rotacja `.1`):
 5. Testy: zawsze `venvs/dispatch`; baseline i regresje z kanonicznej ścieżki; testy charakteryzujące pisane PRZED zmianą modułu bez pokrycia.
 6. Rdzeń silnika (`feasibility_v2`/`dispatch_pipeline`/`plan_recheck`/`courier_resolver`/`route_simulator_v2`/scoring) = jeden właściciel/fala, seryjnie (ADR-007/ADR-008) — kroki Fazy 5 na rdzeniu nigdy równolegle z inną sesją.
 
-## 6. Pytania do Adriana (STOP Fazy 0) — odpowiedzi wpiszę tu po decyzji
+## 6. Pytania do Adriana (STOP Fazy 0) — ✅ ODPOWIEDZI 06.07
+
+> **Odpowiedzi Adriana (06.07, czat):**
+> 1. **Skala docelowa: ~400 zamówień/dzień + MULTI-TENANT**; integracje wg tego, co opisane na serwerze (= artefakty `docs/integracje/00-08+99`, model Wolt Drive, pakiet IR v1).
+> 2. Tick ~3 min **OK** — bez wymogu sekundowego.
+> 3. **TAK** — formaty JSONL/state-files traktujemy jako kontrakt publiczny.
+> 4. **TAK** — okna prac poza peakami/So-Nd; bez sztywnego deadline'u kalendarzowego.
+> 5. **OK** — shadow+replay pełni rolę stagingu; nie budujemy osobnego środowiska.
+> 6. **TAK** — ruff+mypy dev-only w OSOBNYM venv narzędziowym (venv silnika nietknięty).
+> 7. **TAK** — podział ról potwierdzony (ta sesja: fazy 0-4 tylko docs; FLIPMASTER: flipy/restarty; Faza 5 po akceptacji planu i w uzgodnieniu z FLIPMASTEREM).
+
+### Treść pytań (dla kontekstu)
 
 1. **Skala docelowa 12 mies.** (zmierzona dziś: ~240/d, flota 62): ile zamówień/dzień i ilu kurierów zakładamy? Czy dochodzi drugie miasto / multi-tenant (SaaS z audytu 18.06, integracje Wolt-Drive z 05.07)?
 2. **SLA / czas rzeczywisty:** jaki maksymalny czas od NEW_ORDER do propozycji przypisania jest akceptowalny (dziś tick ~co 3 min)? Czy w horyzoncie 12 mies. ma być „sekundowo"?
