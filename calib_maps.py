@@ -207,14 +207,17 @@ def eta_cell_residual_correct(
     pred_min: Any,
     now: Optional[datetime] = None,
     is_bundle: bool = False,
+    restaurant: Optional[str] = None,
 ) -> Optional[float]:
-    """W0.5 (werdykt E-7-GO): skorygowana predykcja ETA (min) = pred + shrunk
-    residual per komórka floty (slot Warsaw × solo/worek). Korekta ADDYTYWNA na
-    OBIETNICĘ (uczciwość); konsument NIE rusza bramki R6 (SOFT nie osłabia HARD).
+    """W0.5 (E-7-GO) + T2.2 (Tura 2): skorygowana predykcja ETA (min) = pred +
+    shrunk residual per komórka floty (slot × solo/worek) [+ opcjonalna warstwa
+    RESTAURACJI, addytywna po komórce — feature-mining: restauracja-nazwa to
+    wtórny realny czynnik residualu, +~1,5pp OOS]. Korekta ADDYTYWNA na OBIETNICĘ
+    (uczciwość); konsument NIE rusza bramki R6 (SOFT nie osłabia HARD).
 
-    None gdy: brak mapy / brak komórki dla (slot, solo|worek) / pred niefinite —
-    fail-soft, caller trzyma surowe pred. Slot = time_slot_warsaw (parytet z
-    generatorem eta_cell_residual_build)."""
+    Warstwa restauracji stosowana TYLKO gdy podano `restaurant`, mapa ma sekcję
+    `restaurants` i nazwa jest w mapie (fail-soft: nieznana restauracja = tylko
+    komórka). None gdy brak mapy/komórki/pred niefinite — caller trzyma surowe pred."""
     pred = _finite(pred_min)
     if pred is None:
         return None
@@ -224,6 +227,7 @@ def eta_cell_residual_correct(
     try:
         slot = time_slot_warsaw(now)
         want_bundle = bool(is_bundle)
+        cell_corr = None
         for c in data.get("cells", []):
             if not isinstance(c, dict):
                 continue
@@ -233,10 +237,23 @@ def eta_cell_residual_correct(
                     return None
                 w = _finite(c.get("weight"))
                 w = 1.0 if w is None else max(0.0, min(1.0, w))
-                return round(pred + w * resid, 1)
+                cell_corr = w * resid
+                break
+        if cell_corr is None:
+            return None  # brak komórki → brak korekty (nie zgadujemy globalem)
+        rest_corr = 0.0
+        if restaurant:
+            rmap = data.get("restaurants") or {}
+            rentry = rmap.get(str(restaurant))
+            if isinstance(rentry, dict):
+                rr = _finite(rentry.get("resid_min"))
+                if rr is not None:
+                    rw = _finite(rentry.get("weight"))
+                    rw = 1.0 if rw is None else max(0.0, min(1.0, rw))
+                    rest_corr = rw * rr
+        return round(pred + cell_corr + rest_corr, 1)
     except Exception:
         return None
-    return None  # brak komórki → brak korekty (nie zgadujemy globalem)
 
 
 def reset_caches() -> None:

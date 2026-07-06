@@ -60,6 +60,41 @@ def test_consumer_applies_shrunk_residual(tmp_path, monkeypatch):
     assert CM.eta_cell_residual_correct(20.0, now, is_bundle=True) == round(20 + w * -3.0, 1)
 
 
+def test_restaurant_layer_additive(tmp_path, monkeypatch):
+    """T2.2: warstwa restauracji dokłada się PO korekcie komórki (addytywnie).
+    Wolna restauracja (residual +) → korekta wyższa niż sama komórka."""
+    rows = _synthetic_log()  # peak_lunch solo resid +6, worek -3
+    # dołóż restaurację 'Wolna' z dodatkowym residualem PO komórce
+    for i in range(40):
+        rows.append({"predicted_delivery_min": 20.0, "real_delivery_min": 32.0,
+                     "hour_warsaw": 12, "is_bundle": False, "restaurant": "Wolna"})
+    p = tmp_path / "src.jsonl"
+    p.write_text("\n".join(__import__("json").dumps(r) for r in rows), encoding="utf-8")
+    m = B.build_map(source=str(p), min_n=20, shrink_k=15)
+    assert "Wolna" in m["restaurants"]
+    _install_map(tmp_path, monkeypatch, m)
+    now = datetime(2026, 7, 1, 12, 30, tzinfo=_WAW)
+    without = CM.eta_cell_residual_correct(20.0, now, is_bundle=False)
+    with_rest = CM.eta_cell_residual_correct(20.0, now, is_bundle=False, restaurant="Wolna")
+    assert with_rest > without  # restauracja-wolna dokłada dodatni residual
+    # nieznana restauracja = tylko komórka (fail-soft)
+    assert CM.eta_cell_residual_correct(20.0, now, is_bundle=False, restaurant="NieMa") == without
+
+
+def test_restaurant_bridges_excluded(tmp_path):
+    rows = []
+    for i in range(40):
+        rows.append({"predicted_delivery_min": 20.0, "real_delivery_min": 45.0,
+                     "hour_warsaw": 12, "is_bundle": False, "restaurant": "Dr Tusz"})
+        rows.append({"predicted_delivery_min": 20.0, "real_delivery_min": 26.0,
+                     "hour_warsaw": 12, "is_bundle": False, "restaurant": "Zwykla"})
+    p = tmp_path / "s.jsonl"
+    p.write_text("\n".join(__import__("json").dumps(r) for r in rows), encoding="utf-8")
+    m = B.build_map(source=str(p), min_n=20, shrink_k=15)
+    assert "Dr Tusz" not in m["restaurants"]  # most wykluczony z warstwy restauracji
+    assert "Zwykla" in m["restaurants"]
+
+
 def test_consumer_none_when_no_map(monkeypatch, tmp_path):
     monkeypatch.setattr(CM, "ETA_CELL_RESIDUAL_MAP_PATH", str(tmp_path / "nope.json"))
     CM.reset_caches()

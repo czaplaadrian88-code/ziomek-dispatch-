@@ -558,7 +558,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
                 _carry = (_pd - _r).total_seconds() / 60.0
                 _is_bundle = len(best.plan.sequence or []) > 1
                 _eta_cell_corrected_shadow = calib_maps.eta_cell_residual_correct(
-                    _carry, result.pickup_ready_at, is_bundle=_is_bundle)
+                    _carry, result.pickup_ready_at, is_bundle=_is_bundle,
+                    restaurant=result.restaurant)  # T2.2: warstwa restauracji
     except Exception:
         _eta_cell_corrected_shadow = None
 

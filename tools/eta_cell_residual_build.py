@@ -75,9 +75,27 @@ def _iter_source(source):
                     continue
 
 
+import html as _html
+
+# T2.2 (advisory Tura 2): warstwa restauracji. Feature-mining (sim/feature_mining_delivery)
+# ustalił: solo/worek = dominant residual (eta²=0,049), restauracja-NAZWA = wtórny addytywny
+# (eta²=0,023, stab 0,59, +~1,5pp OOS → total +5,1%). slot/weekend/obciążenie = szum na
+# residualu → NIE dokładamy. Mosty/test wykluczone (residual paczek ≠ jedzenie).
+_REST_EXCL = ("dr tusz", "dentomax", "nadajesz", "test", "3giga", "orthdruk",
+              "interpap", "bravilor", "street-sport", "mali wojownicy")
+_REST_MIN_N = 25
+_REST_SHRINK_K = 25
+
+
+def _rest_excluded(name):
+    n = (name or "").lower()
+    return any(s in n for s in _REST_EXCL)
+
+
 def build_map(source=None, min_n=20, shrink_k=15):
     cells = defaultdict(list)
     all_resid = []
+    recs = []  # (resid, slot, bundle, name) — 2. przebieg dla warstwy restauracji
     n_used = 0
     for r in _iter_source(source):
         p = r.get("predicted_delivery_min")
@@ -89,30 +107,46 @@ def build_map(source=None, min_n=20, shrink_k=15):
         if rl <= 0 or rl > 180 or p <= 0 or p > 300:
             continue
         resid = rl - p
-        key = (_slot(h), bool(r.get("is_bundle")))
-        cells[key].append(resid)
+        slot = _slot(h)
+        bundle = bool(r.get("is_bundle"))
+        cells[(slot, bundle)].append(resid)
         all_resid.append(resid)
+        recs.append((resid, slot, bundle, _html.unescape(r.get("restaurant") or "")))
         n_used += 1
     global_resid = round(_median(all_resid), 2) if all_resid else 0.0
     out_cells = []
+    cell_med = {}
     for (slot, bundle), vals in sorted(cells.items()):
+        m = round(_median(vals), 2)
+        cell_med[(slot, bundle)] = (m, len(vals))
         if len(vals) < min_n:
             continue
-        n = len(vals)
         out_cells.append({
-            "slot": slot,
-            "bundle": bundle,
-            "resid_min": round(_median(vals), 2),
-            "n": n,
-            "weight": round(n / (n + shrink_k), 4),  # shrinkage floty
+            "slot": slot, "bundle": bundle, "resid_min": m,
+            "n": len(vals), "weight": round(len(vals) / (len(vals) + shrink_k), 4),
         })
+    # warstwa restauracji: residual PO korekcie komórki (addytywny, zero double-count)
+    rest_bucket = defaultdict(list)
+    for resid, slot, bundle, name in recs:
+        if not name or _rest_excluded(name):
+            continue
+        cm, cn = cell_med.get((slot, bundle), (0.0, 0))
+        cw = cn / (cn + shrink_k) if cn else 0.0
+        rest_bucket[name].append(resid - cw * cm)  # to, czego komórka nie trafia
+    out_rest = {}
+    for name, vals in rest_bucket.items():
+        if len(vals) < _REST_MIN_N:
+            continue
+        out_rest[name] = {"resid_min": round(_median(vals), 2), "n": len(vals),
+                          "weight": round(len(vals) / (len(vals) + _REST_SHRINK_K), 4)}
     return {
-        "schema": "eta_cell_residual_v1",
+        "schema": "eta_cell_residual_v2",
         "min_n": min_n,
         "shrink_k": shrink_k,
         "n_records": n_used,
         "global_resid_min": global_resid,
         "cells": out_cells,
+        "restaurants": out_rest,
     }
 
 
