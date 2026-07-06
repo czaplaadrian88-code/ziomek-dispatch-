@@ -37,3 +37,20 @@ Wpisy po każdym kroku: co / dlaczego / odstępstwa od planu / dowody. Konwencja
 3. Środowisko worktree: uzupełniono pkgroot o symlinki `flags.json` i `logs/` (bez nich conftest-strip i script-runnery fałszywie czerwone w biegu z `ZIOMEK_SCRIPTS_ROOT`).
 
 **Stan po pakiecie 0:** wszystkie 4 kroki na masterze; zero restartów wykonanych; zero zmian zachowania live (K02/K03 dormant/równoważne, K04 inertne za flagą). Baseline dla pakietu 1 = 4263/0 + rozwiązany dryf 5b.
+
+---
+
+## PAKIET 1 — „Determinizm wejść" (start 06.07 po ACK; K05 ✅, K06 czeka na korpus, K07-K08 następne)
+
+### Naprawy odblokowujące (przed K05, za zgodą Adriana w czacie)
+- **Dryf 5b w ground_truth (commit `abbea71`, master):** `last_status_code` zdjęty z required w `tools/state_schema_baseline.json` (wersja 20260706) — od 5b wpis RODZI SIĘ z samym `gps_arrived_at` (case 485853), pole stało się lifecycle-key dokładnie wg filozofii zapisanej w `_about` baseline'u; konsumenci czytają przez `.get()`. Test syntetyczny przełączony na ofiarę `updated_at` (pisany każdym writerem). Walidator na żywych plikach: **exit 0**. Sesja 15 zamknięta → fix przejęty przez sesję refaktoru za zgodą Adriana. NIE dopisywaliśmy sztucznego statusu w apce — to fałszowałoby semantykę danych; zmienił się KONTRAKT, więc poprawiony kontrakt.
+- **Rejestracja `PLAN_GC_DRY_RUN` (commit `9d08d7b`):** at-205 (12:40, flip-gate FLIPMASTERA, L3 GC-real) dopisał klucz do flags.json → strażnik-zapadka `test_no_new_unstripped_flags_ratchet` słusznie czerwony dla CAŁEJ suity. Zarejestrowana w `ETAP4_DECISION_FLAGS` + stała-fallback `True` (= default czytelnika `plan_recheck:2444`), zgodnie z instrukcją strażnika. Zero zmiany runtime (kanon=flags.json, live=false). ⚠ luka procesu do zgłoszenia FLIPMASTEROWI: scheduled_flip_gate dopisujący NOWY klucz powinien wymagać wcześniejszej rejestracji ETAP4 (inaczej każdy taki flip wywala suitę wszystkim).
+
+### K05 — FlagSnapshot per tick (commity `9d08d7b`+`a26cc5c`, merge do master)
+- **Co (ADR-R01):** `common.flags_snapshot_begin()/end()` — chokepoint w `load_flags()` (aktywny snapshot wygrywa nad dyskiem); pętla `shadow_dispatcher.run` owija `_tick` w begin/try/finally-end. Gate `ENABLE_FLAG_SNAPSHOT` (kanon flags.json, czytany ŻYWO w begin; **brak klucza = OFF = 1:1**; stała-fallback False wzorcem perf-lazy; NIE-decyzyjna). Obejmuje wszystkie odczyty flag()/decision_flag() we wszystkich modułach i wątkach puli kandydatów procesu shadow; inne procesy nietknięte.
+- **Testy (6):** charakteryzujący hot-reload bez snapshotu, **ON≠OFF** (zmiana flags.json mid-tick niewidoczna pod snapshotem, widoczna po end), gate OFF/brak klucza, fail-soft na nieczytelnym flags.json, idempotencja end + wzorzec finally.
+- **KOREKTA względem diagnozy D6 (uczciwość):** perf-lazy TTL (finding E audytu 2.0) jest **JUŻ LIVE** (`ENABLE_PERF_LAZY_MEMBERS=true`) — raport perf 04.07 (SLO czerwone) mierzony był PRZY nim. K05 nie jest więc głównym lekiem na D6; jego realna wartość = **spójność flag w decyzji + determinizm replayu**. D6 (perf) → osobne profilowanie w dalszym pakiecie.
+- **Sprzątnięte przy okazji (polityka devlint):** martwy `from typing import List` w shadow_dispatcher (dryf po cudzym pickup-buffer) — ratchet 608/608.
+- **Odstępstwo C1-git:** wspólny indeks zgarnął całość zmian common.py do pierwszego z dwóch commitów — treść poprawna, opisy się nakładają; bez przepisywania historii.
+- **Flip K05 = za ACK, w oknie restartu shadow (razem z WR):** restart podnosi kod K04+K05 → klucz `ENABLE_WORLD_RECORD: true` → obserwacja → klucz `ENABLE_FLAG_SNAPSHOT: true` (oba hot).
+- **Weryfikacja:** worktree 4272/0 · kanon po merge **4272/0** · ratchet 608/608 · py_compile OK.
