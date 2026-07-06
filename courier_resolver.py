@@ -8,6 +8,7 @@ Priorytet zrodel pozycji kuriera (V3.1 P0.3):
 
 Pure dataclass-based, lazy-load GPS aby nie blokowac dispatchu gdy Traccar offline.
 """
+import fcntl
 import json
 import os
 import tempfile
@@ -174,26 +175,37 @@ def _save_last_known_pos(store: Dict[str, dict]) -> None:
     if _store_blocked_under_test():
         return
     try:
-        disk = _load_last_known_pos()
-        merged = dict(disk)
-        for cid, ent in store.items():
-            if not isinstance(ent, dict):
-                continue
-            cur = merged.get(cid)
-            # newer ts wygrywa — proces ze stałą daną nie cofnie świeższej
-            if cur is None or _lp_entry_ts(ent) >= _lp_entry_ts(cur):
-                merged[cid] = ent
-        now = datetime.now(timezone.utc)
-        for cid in list(merged.keys()):
-            if (now - _lp_entry_ts(merged[cid])).total_seconds() / 60.0 > LAST_KNOWN_POS_PRUNE_MIN:
-                del merged[cid]
+        # K03 refaktor (2026-07-06): CAŁY cykl load→merge→prune→write pod
+        # fcntl.LOCK_EX na lockfile obok store. Merge-by-ts chronił TEN SAM cid,
+        # ale równoległe procesy (shadow/plan-recheck/czasówka) mogły wzajemnie
+        # gubić wpisy RÓŻNYCH cid w oknie load↔replace (lost-update, diagnoza
+        # refaktoru raw/01d R6). Lock trzymany milisekundy; fail-soft bez zmian.
         _dir = os.path.dirname(COURIER_LAST_POS_PATH)
-        _fd, _tmp = tempfile.mkstemp(dir=_dir, suffix=".tmp")
-        with os.fdopen(_fd, "w", encoding="utf-8") as _f:
-            json.dump(merged, _f, ensure_ascii=False)
-            _f.flush()
-            os.fsync(_f.fileno())
-        os.replace(_tmp, COURIER_LAST_POS_PATH)
+        os.makedirs(_dir, exist_ok=True)
+        with open(COURIER_LAST_POS_PATH + ".lock", "w") as _lk:
+            fcntl.flock(_lk.fileno(), fcntl.LOCK_EX)
+            try:
+                disk = _load_last_known_pos()
+                merged = dict(disk)
+                for cid, ent in store.items():
+                    if not isinstance(ent, dict):
+                        continue
+                    cur = merged.get(cid)
+                    # newer ts wygrywa — proces ze stałą daną nie cofnie świeższej
+                    if cur is None or _lp_entry_ts(ent) >= _lp_entry_ts(cur):
+                        merged[cid] = ent
+                now = datetime.now(timezone.utc)
+                for cid in list(merged.keys()):
+                    if (now - _lp_entry_ts(merged[cid])).total_seconds() / 60.0 > LAST_KNOWN_POS_PRUNE_MIN:
+                        del merged[cid]
+                _fd, _tmp = tempfile.mkstemp(dir=_dir, suffix=".tmp")
+                with os.fdopen(_fd, "w", encoding="utf-8") as _f:
+                    json.dump(merged, _f, ensure_ascii=False)
+                    _f.flush()
+                    os.fsync(_f.fileno())
+                os.replace(_tmp, COURIER_LAST_POS_PATH)
+            finally:
+                fcntl.flock(_lk.fileno(), fcntl.LOCK_UN)
     except Exception as _e:
         _log.warning(f"_save_last_known_pos fail: {_e}")
 

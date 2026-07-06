@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -32,8 +33,14 @@ def write(proposals: Dict[str, Any], now: datetime, path: str = GLOBAL_ALLOC_PAT
     try:
         payload = {"written_at": now.isoformat(), "proposals": proposals or {}}
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        tmp = f"{path}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
+        # K03 refaktor (2026-07-06): unikalny mkstemp zamiast współdzielonego
+        # f"{path}.tmp" — ten sam anty-wzorzec, który naprawiono w
+        # pending_proposals_store (kolizja tmp dwóch pisarzy). Dziś single-writer
+        # (oneshot resweep) → profilaktyka, zachowanie identyczne.
+        fd, tmp = tempfile.mkstemp(
+            dir=str(Path(path).parent), prefix=Path(path).name + ".", suffix=".tmp"
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
