@@ -15,7 +15,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from dispatch_v2.common import (
     setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag,
@@ -796,6 +796,286 @@ def _reconstruct_bag_from_panel_packs(
     )
 
 
+
+# ─── K16 (2026-07-06, program refaktoru, D7/F-3): hierarchia źródeł pozycji ───
+# `_resolve_position` = JEDNO miejsce łączenia źródeł (gps → bag → recent →
+# store → no_gps) — przenosiny 1:1 z pętli build_fleet_snapshot (zero zmiany
+# zachowania; strażnik: tests/test_pos_hierarchy_k16.py część 1 + pełna suita).
+# Flaga ENABLE_POS_SOURCE_HIERARCHY bramkuje WYŁĄCZNIE addytywną adnotację
+# `pos_resolution` (Known|Unknown minimalnie — F-3): atrybut DYNAMICZNY, nie
+# pole dataclassy → OFF = bajt-parytet snapshotu, ON nie zmienia serializacji
+# world_record (dataclasses.fields) ani żadnego pos_source (klasa „równe
+# traktowanie no-GPS" — 8 bliźniaków — NIETKNIĘTA). Konsolidacja store'ów i
+# syntetyków dispatchable_fleet (pre_shift/post_shift/working_override, ustawiane
+# PO snapshocie) = poza tym krokiem (WorldState / wariant C).
+
+class PositionResolution(NamedTuple):
+    """Minimalny typ F-3: czy pozycja jest REALNĄ kotwicą (Known) czy fikcją
+    syntetyczną (Unknown, np. BIALYSTOK_CENTER); source = dotychczasowy string
+    pos_source (bez zmian), from_store = odtworzona z last-known-pos store."""
+    known: bool
+    source: Optional[str]
+    from_store: bool
+
+
+# Fikcje/syntetyki (pozycja NIE pochodzi z realnego pomiaru/zdarzenia).
+# Uwaga: pre_shift/post_shift/working_override ustawia dispatchable_fleet PO
+# snapshocie — wpisane tu, by klasyfikacja miała jedno źródło prawdy również
+# dla przyszłych konsumentów adnotacji.
+POSITION_UNKNOWN_SOURCES = frozenset({
+    "no_gps", "pre_shift", "none", "pin",
+    "post_shift_start_synthetic", "working_override_synthetic",
+})
+
+
+def is_position_known(pos_source) -> bool:
+    """JEDYNE miejsce klasyfikacji Known|Unknown źródła pozycji (F-3)."""
+    if pos_source is None:
+        return False
+    return str(pos_source) not in POSITION_UNKNOWN_SOURCES
+
+
+def _annotate_pos_resolution(cs) -> None:
+    """Addytywna adnotacja (TYLKO za ENABLE_POS_SOURCE_HIERARCHY): dynamiczny
+    atrybut — celowo NIE pole dataclassy (bajt-parytet przy OFF + brak zmiany
+    serializacji world_record, która iteruje dataclasses.fields)."""
+    if cs is None:
+        return
+    cs.pos_resolution = PositionResolution(
+        known=is_position_known(cs.pos_source),
+        source=cs.pos_source,
+        from_store=bool(getattr(cs, "pos_from_store", False)),
+    )
+
+
+def _resolve_position(kid, cs, orders, gps, now_utc, fleet,
+                      _lp_on, _last_pos_store,
+                      _gpsq_compute, _gpsq_active, _gpsq_store) -> None:
+        """K16: rezolucja pozycji kuriera — treść 1:1 z pętli
+        build_fleet_snapshot (kroki 1-4 + 4a); każda ścieżka kończy
+        `fleet[kid] = cs` jak przed przenosinami (zewnętrzne `continue`
+        pętli → `return`). Liczniki warn celowo zakotwiczone na atrybutach
+        build_fleet_snapshot (te same obiekty co przed przenosinami)."""
+        # 1. GPS fresh
+        gps_entry = gps.get(kid)
+        if gps_entry:
+            gps_ts = gps_entry.get("timestamp")
+            try:
+                gps_dt = datetime.fromisoformat(gps_ts.replace("Z", "+00:00")) if gps_ts else None
+            except Exception as _e:
+                gps_dt = None
+                # A1: GPS ts parse fail dawniej silent → kurier traktowany no_gps
+                # bez sygnału. Schema GPS sensor zmiana = mass false-no_gps.
+                seen = getattr(build_fleet_snapshot, "_warned_gps_ts", set())
+                key = (type(_e).__name__, str(gps_ts)[:40])
+                if key not in seen and len(seen) < 50:
+                    _log.warning(f"gps timestamp parse fail kid={kid} ({type(_e).__name__}: {_e}) input={gps_ts!r}")
+                    seen.add(key)
+                    build_fleet_snapshot._warned_gps_ts = seen
+            if gps_dt:
+                age_min = (now_utc - gps_dt).total_seconds() / 60.0
+                if age_min < GPS_FRESHNESS_MIN:
+                    try:
+                        _glat = float(gps_entry["lat"])
+                        _glon = float(gps_entry["lon"])
+                    except (TypeError, ValueError, KeyError):
+                        _glat = _glon = None
+                    # FAIL-05 (audyt 2026-06-03): sanity-bbox świeżego GPS PRZED zaufaniem
+                    # mu jako pos_source="gps" (najwyższy priorytet pozycji). Skażony fix
+                    # ((0,0), NaN, spike poza region) wchodził z najwyższym zaufaniem →
+                    # zatruwał fleet_avg/scoring/OSRM (Lekcja #140: OSRM snapuje (0,0) na
+                    # krawędź ekstraktu i zwraca code:Ok z ~117 min legiem → fałszywa
+                    # geometria). Poza bboxem → NIE ufaj GPS; fall-through do bag/recent/
+                    # no_gps (krok 2-4), NIGDY sentinel (0,0). Bbox HOJNY (±55km,
+                    # coords_in_bialystok_bbox) → odrzuca śmieci, NIE krawędzie miasta
+                    # (Wasilków/Supraśl/Łapy w środku). Parse-guard (try) zawsze ON —
+                    # ortogonalna ochrona przed crashem na złym lat/lon. Kill-switch bbox:
+                    # ENABLE_GPS_BBOX_GUARD=false (flags.json hot-reload).
+                    _bbox_on = flag("ENABLE_GPS_BBOX_GUARD", default=True)
+                    _gps_ok = (_glat is not None) and (
+                        not _bbox_on or coords_in_bialystok_bbox((_glat, _glon)))
+                    if _gps_ok:
+                        # GPS-02: filtr jakości (accuracy + teleport) — compute-zawsze,
+                        # efekt za flagą. Werdykt liczony PO bbox (mamy realny fix w
+                        # regionie) i logowany do shadow. Kotwica teleportu = poprzedni
+                        # fix GPS ze store. Reject TYLKO gdy filtr aktywny → fall-through
+                        # (jak GPS_BBOX_REJECT): last-known-pos store/no_gps przejmuje.
+                        _gpsq_reject = False
+                        if _gpsq_compute:
+                            try:
+                                _anchor_pos, _anchor_dt, _anchor_age = _gps_quality_anchor(
+                                    _gpsq_store.get(kid), age_min, now_utc)
+                                _gpsq_verdict = gps_quality.assess_gps_quality(
+                                    (_glat, _glon),
+                                    gps_entry.get("accuracy"),
+                                    anchor_pos=_anchor_pos,
+                                    dt_seconds=_anchor_dt,
+                                    anchor_age_min=_anchor_age,
+                                )
+                                _log_gps_quality_shadow(
+                                    kid, _gpsq_verdict, now_iso(), _gpsq_active,
+                                    (_glat, _glon), age_min)
+                                if _gpsq_active and not _gpsq_verdict.accept:
+                                    _gpsq_reject = True
+                            except Exception as _qe:
+                                # fail-soft: błąd filtra NIGDY nie blokuje floty
+                                _log.warning(f"gps_quality assess fail kid={kid}: {_qe}")
+                        if not _gpsq_reject:
+                            cs.pos = (_glat, _glon)
+                            cs.pos_source = "gps"
+                            cs.pos_age_min = age_min
+                            fleet[kid] = cs
+                            return
+                        # filtr aktywny + werdykt reject → log raz/kid, fall-through
+                        _seenq = getattr(build_fleet_snapshot, "_warned_gps_quality", set())
+                        if kid not in _seenq and len(_seenq) < 50:
+                            _log.warning(
+                                f"GPS_QUALITY_REJECT kid={kid} fix=({_glat},{_glon}) "
+                                f"age={age_min:.1f}min reasons={_gpsq_verdict.reasons} "
+                                f"→ fall-through (filtr aktywny)")
+                            _seenq.add(kid)
+                            build_fleet_snapshot._warned_gps_quality = _seenq
+                        # NIE 'continue' — pozwól na fall-through do bag/recent/store/no_gps
+                    # świeży GPS odrzucony (poza bbox / nieparsowalny) → log raz/kid,
+                    # fall-through do bag/recent/no_gps (NIGDY (0,0)).
+                    _seen = getattr(build_fleet_snapshot, "_warned_gps_bbox", set())
+                    if kid not in _seen and len(_seen) < 50:
+                        _log.warning(
+                            f"GPS_BBOX_REJECT kid={kid} fix=({_glat},{_glon}) "
+                            f"age={age_min:.1f}min → fall-through (nie ufam GPS jako pos)")
+                        _seen.add(kid)
+                        build_fleet_snapshot._warned_gps_bbox = _seen
+
+        # 2. AKTYWNY BAG priorytet (picked_up > assigned, najnowszy wygrywa)
+        #    picked_up -> F4 Krok 1: pickup_coords (kurier BYL przy restauracji
+        #      o picked_up_at — punkt realny); fail-soft delivery_coords gdy brak.
+        #      Flaga OFF -> delivery_coords (zachowanie sprzed F4).
+        #    assigned -> pickup_coords (kurier jedzie odebrac)
+        #    Iteracja malejaco: jesli najnowszy broken -> probuj kolejny
+        # FAIL-02 fix (audyt 2026-06-03): pozycja MUSI używać tego samego filtra
+        # stale co bag (linie 537-541). Bez tego porzucony kurier (picked_up
+        # >BAG_STALE_THRESHOLD_MIN, brak świeżego GPS) miał cs.bag=[] (widziany jako
+        # WOLNY) ale cs.pos = ZAMROŻONE coords porzuconego zlecenia → fałszywa
+        # bliskość → wysoki score → dostawał NOWE zlecenia (kurier-widmo).
+        # Po filtrze: brak aktywnego ordera → fall-through do no_gps fallback (krok 4,
+        # BIALYSTOK_CENTER) → _demote_blind_empty degraduje go pod aktywnych kurierów.
+        active_bag_orders = [
+            o for o in orders
+            if o.get("status") in ("picked_up", "assigned")
+            and _bag_not_stale(o, now_utc)
+        ]
+        if active_bag_orders:
+            sorted_bag = sorted(active_bag_orders, key=_bag_sort_key, reverse=True)
+            resolved = False
+            for order in sorted_bag:
+                if order.get("status") == "picked_up":
+                    # F4 Krok 2 (Opcja C): interpolacja pickup→delivery
+                    # po elapsed/eta_leg. Pierwszeństwo nad pickup_proxy;
+                    # fail-soft (None) → ścieżka Krok 1 / legacy poniżej.
+                    if _f4_flag("ENABLE_F4_COURIER_POS_INTERP"):
+                        _interp = _compute_interp_pos(order, now_utc)
+                        if _interp is not None:
+                            cs.pos, cs.pos_source = _interp
+                            resolved = True
+                            break
+                    # F4 Krok 1 (Opcja A): proxy = pickup_coords zamiast
+                    # delivery_coords — eliminuje bias frozen-window (474266).
+                    if _f4_flag("ENABLE_F4_COURIER_POS_PICKUP_PROXY") and order.get("pickup_coords"):
+                        cs.pos = tuple(order["pickup_coords"])
+                        cs.pos_source = "last_picked_up_pickup"
+                        resolved = True
+                        break
+                    if order.get("delivery_coords"):
+                        cs.pos = tuple(order["delivery_coords"])
+                        cs.pos_source = "last_picked_up_delivery"
+                        resolved = True
+                        break
+                    _log.warning(
+                        f"courier {kid} picked_up order {order.get('order_id')} "
+                        f"bez delivery_coords - data quality alert (P0.4)"
+                    )
+                else:  # assigned
+                    if order.get("pickup_coords"):
+                        cs.pos = tuple(order["pickup_coords"])
+                        cs.pos_source = "last_assigned_pickup"
+                        resolved = True
+                        break
+                    _log.warning(
+                        f"courier {kid} assigned order {order.get('order_id')} "
+                        f"bez pickup_coords - data quality alert (P0.4)"
+                    )
+            if resolved:
+                fleet[kid] = cs
+                return
+
+        # 3. Recent activity (delivered_at lub picked_up_at < 30 min temu).
+        #    Wymagamy ŚWIEŻEGO eventu — stary delivered (np. sprzed 6 dni jak
+        #    Bartek bez aktualnego GPS) NIE jest dobrym estymatem pozycji.
+        RECENT_MAX_MIN = 30
+        best_age = float("inf")
+        best_pos = None
+        best_source = None
+        for o in orders:
+            delivery_c = o.get("delivery_coords")
+            if not delivery_c:
+                continue
+            for ts_key, source_label in [
+                ("delivered_at", "last_delivered"),
+                ("picked_up_at", "last_picked_up_recent"),
+            ]:
+                ts_str = o.get(ts_key)
+                if not ts_str:
+                    continue
+                ts = _parse_checkpoint_ts(ts_str)
+                if ts is None:
+                    # A1: order ts parse fail dawniej silent → bag aggregation
+                    # może gubić ordery (Lekcja #32 + #80 tracone pole pattern).
+                    seen = getattr(build_fleet_snapshot, "_warned_order_ts", set())
+                    key = (ts_key, str(ts_str)[:40])
+                    if key not in seen and len(seen) < 50:
+                        _log.warning(f"order {ts_key} parse fail input={ts_str!r}")
+                        seen.add(key)
+                        build_fleet_snapshot._warned_order_ts = seen
+                    continue
+                age = (now_utc - ts).total_seconds() / 60.0
+                if age < 0 or age >= RECENT_MAX_MIN:
+                    continue
+                if age < best_age:
+                    best_age = age
+                    best_pos = tuple(delivery_c)
+                    best_source = source_label
+
+        if best_pos is not None:
+            cs.pos = best_pos
+            cs.pos_source = best_source
+            cs.pos_age_min = best_age
+            fleet[kid] = cs
+            return
+
+        # 4a. FIX 2026-06-08: ZANIM fikcja centrum miasta — persistent store.
+        #     Jeśli widzieliśmy tego kuriera na ŻYWEJ pozycji ≤TTL min temu
+        #     (zanim order zniknął ze stanu), odtwórz TĘ pozycję+źródło. To jest
+        #     dokładnie "Ziomek obejdzie się bez GPS, bo wie z planu/historii
+        #     gdzie kurier był". Kurier ciemny >TTL → fall-through do no_gps.
+        if _lp_on:
+            _rescued = _rescue_from_last_pos(_last_pos_store.get(kid), now_utc)
+            if _rescued is not None:
+                cs.pos, cs.pos_source, cs.pos_age_min = _rescued
+                cs.pos_from_store = True
+                fleet[kid] = cs
+                _log.info(
+                    f"LAST_KNOWN_POS_USED kid={kid} src={cs.pos_source} "
+                    f"age={cs.pos_age_min:.1f}min → uratowany z BIALYSTOK_CENTER")
+                return
+
+        # 4. no_gps fallback: kurier wolny, brak GPS i brak historii.
+        #    Dajemy syntetyczną pozycję = centrum miasta. Dispatch_pipeline
+        #    nadpisze km_to_pickup średnią floty i travel_min = max(prep, 15).
+        cs.pos = BIALYSTOK_CENTER
+        cs.pos_source = "no_gps"
+        fleet[kid] = cs
+
+
 def build_fleet_snapshot(
     include_koordynator: bool = False,
 ) -> Dict[str, CourierState]:
@@ -916,224 +1196,13 @@ def build_fleet_snapshot(
         if isinstance(name, str):
             cs.name = name
 
-        # 1. GPS fresh
-        gps_entry = gps.get(kid)
-        if gps_entry:
-            gps_ts = gps_entry.get("timestamp")
-            try:
-                gps_dt = datetime.fromisoformat(gps_ts.replace("Z", "+00:00")) if gps_ts else None
-            except Exception as _e:
-                gps_dt = None
-                # A1: GPS ts parse fail dawniej silent → kurier traktowany no_gps
-                # bez sygnału. Schema GPS sensor zmiana = mass false-no_gps.
-                seen = getattr(build_fleet_snapshot, "_warned_gps_ts", set())
-                key = (type(_e).__name__, str(gps_ts)[:40])
-                if key not in seen and len(seen) < 50:
-                    _log.warning(f"gps timestamp parse fail kid={kid} ({type(_e).__name__}: {_e}) input={gps_ts!r}")
-                    seen.add(key)
-                    build_fleet_snapshot._warned_gps_ts = seen
-            if gps_dt:
-                age_min = (now_utc - gps_dt).total_seconds() / 60.0
-                if age_min < GPS_FRESHNESS_MIN:
-                    try:
-                        _glat = float(gps_entry["lat"])
-                        _glon = float(gps_entry["lon"])
-                    except (TypeError, ValueError, KeyError):
-                        _glat = _glon = None
-                    # FAIL-05 (audyt 2026-06-03): sanity-bbox świeżego GPS PRZED zaufaniem
-                    # mu jako pos_source="gps" (najwyższy priorytet pozycji). Skażony fix
-                    # ((0,0), NaN, spike poza region) wchodził z najwyższym zaufaniem →
-                    # zatruwał fleet_avg/scoring/OSRM (Lekcja #140: OSRM snapuje (0,0) na
-                    # krawędź ekstraktu i zwraca code:Ok z ~117 min legiem → fałszywa
-                    # geometria). Poza bboxem → NIE ufaj GPS; fall-through do bag/recent/
-                    # no_gps (krok 2-4), NIGDY sentinel (0,0). Bbox HOJNY (±55km,
-                    # coords_in_bialystok_bbox) → odrzuca śmieci, NIE krawędzie miasta
-                    # (Wasilków/Supraśl/Łapy w środku). Parse-guard (try) zawsze ON —
-                    # ortogonalna ochrona przed crashem na złym lat/lon. Kill-switch bbox:
-                    # ENABLE_GPS_BBOX_GUARD=false (flags.json hot-reload).
-                    _bbox_on = flag("ENABLE_GPS_BBOX_GUARD", default=True)
-                    _gps_ok = (_glat is not None) and (
-                        not _bbox_on or coords_in_bialystok_bbox((_glat, _glon)))
-                    if _gps_ok:
-                        # GPS-02: filtr jakości (accuracy + teleport) — compute-zawsze,
-                        # efekt za flagą. Werdykt liczony PO bbox (mamy realny fix w
-                        # regionie) i logowany do shadow. Kotwica teleportu = poprzedni
-                        # fix GPS ze store. Reject TYLKO gdy filtr aktywny → fall-through
-                        # (jak GPS_BBOX_REJECT): last-known-pos store/no_gps przejmuje.
-                        _gpsq_reject = False
-                        if _gpsq_compute:
-                            try:
-                                _anchor_pos, _anchor_dt, _anchor_age = _gps_quality_anchor(
-                                    _gpsq_store.get(kid), age_min, now_utc)
-                                _gpsq_verdict = gps_quality.assess_gps_quality(
-                                    (_glat, _glon),
-                                    gps_entry.get("accuracy"),
-                                    anchor_pos=_anchor_pos,
-                                    dt_seconds=_anchor_dt,
-                                    anchor_age_min=_anchor_age,
-                                )
-                                _log_gps_quality_shadow(
-                                    kid, _gpsq_verdict, now_iso(), _gpsq_active,
-                                    (_glat, _glon), age_min)
-                                if _gpsq_active and not _gpsq_verdict.accept:
-                                    _gpsq_reject = True
-                            except Exception as _qe:
-                                # fail-soft: błąd filtra NIGDY nie blokuje floty
-                                _log.warning(f"gps_quality assess fail kid={kid}: {_qe}")
-                        if not _gpsq_reject:
-                            cs.pos = (_glat, _glon)
-                            cs.pos_source = "gps"
-                            cs.pos_age_min = age_min
-                            fleet[kid] = cs
-                            continue
-                        # filtr aktywny + werdykt reject → log raz/kid, fall-through
-                        _seenq = getattr(build_fleet_snapshot, "_warned_gps_quality", set())
-                        if kid not in _seenq and len(_seenq) < 50:
-                            _log.warning(
-                                f"GPS_QUALITY_REJECT kid={kid} fix=({_glat},{_glon}) "
-                                f"age={age_min:.1f}min reasons={_gpsq_verdict.reasons} "
-                                f"→ fall-through (filtr aktywny)")
-                            _seenq.add(kid)
-                            build_fleet_snapshot._warned_gps_quality = _seenq
-                        # NIE 'continue' — pozwól na fall-through do bag/recent/store/no_gps
-                    # świeży GPS odrzucony (poza bbox / nieparsowalny) → log raz/kid,
-                    # fall-through do bag/recent/no_gps (NIGDY (0,0)).
-                    _seen = getattr(build_fleet_snapshot, "_warned_gps_bbox", set())
-                    if kid not in _seen and len(_seen) < 50:
-                        _log.warning(
-                            f"GPS_BBOX_REJECT kid={kid} fix=({_glat},{_glon}) "
-                            f"age={age_min:.1f}min → fall-through (nie ufam GPS jako pos)")
-                        _seen.add(kid)
-                        build_fleet_snapshot._warned_gps_bbox = _seen
-
-        # 2. AKTYWNY BAG priorytet (picked_up > assigned, najnowszy wygrywa)
-        #    picked_up -> F4 Krok 1: pickup_coords (kurier BYL przy restauracji
-        #      o picked_up_at — punkt realny); fail-soft delivery_coords gdy brak.
-        #      Flaga OFF -> delivery_coords (zachowanie sprzed F4).
-        #    assigned -> pickup_coords (kurier jedzie odebrac)
-        #    Iteracja malejaco: jesli najnowszy broken -> probuj kolejny
-        # FAIL-02 fix (audyt 2026-06-03): pozycja MUSI używać tego samego filtra
-        # stale co bag (linie 537-541). Bez tego porzucony kurier (picked_up
-        # >BAG_STALE_THRESHOLD_MIN, brak świeżego GPS) miał cs.bag=[] (widziany jako
-        # WOLNY) ale cs.pos = ZAMROŻONE coords porzuconego zlecenia → fałszywa
-        # bliskość → wysoki score → dostawał NOWE zlecenia (kurier-widmo).
-        # Po filtrze: brak aktywnego ordera → fall-through do no_gps fallback (krok 4,
-        # BIALYSTOK_CENTER) → _demote_blind_empty degraduje go pod aktywnych kurierów.
-        active_bag_orders = [
-            o for o in orders
-            if o.get("status") in ("picked_up", "assigned")
-            and _bag_not_stale(o, now_utc)
-        ]
-        if active_bag_orders:
-            sorted_bag = sorted(active_bag_orders, key=_bag_sort_key, reverse=True)
-            resolved = False
-            for order in sorted_bag:
-                if order.get("status") == "picked_up":
-                    # F4 Krok 2 (Opcja C): interpolacja pickup→delivery
-                    # po elapsed/eta_leg. Pierwszeństwo nad pickup_proxy;
-                    # fail-soft (None) → ścieżka Krok 1 / legacy poniżej.
-                    if _f4_flag("ENABLE_F4_COURIER_POS_INTERP"):
-                        _interp = _compute_interp_pos(order, now_utc)
-                        if _interp is not None:
-                            cs.pos, cs.pos_source = _interp
-                            resolved = True
-                            break
-                    # F4 Krok 1 (Opcja A): proxy = pickup_coords zamiast
-                    # delivery_coords — eliminuje bias frozen-window (474266).
-                    if _f4_flag("ENABLE_F4_COURIER_POS_PICKUP_PROXY") and order.get("pickup_coords"):
-                        cs.pos = tuple(order["pickup_coords"])
-                        cs.pos_source = "last_picked_up_pickup"
-                        resolved = True
-                        break
-                    if order.get("delivery_coords"):
-                        cs.pos = tuple(order["delivery_coords"])
-                        cs.pos_source = "last_picked_up_delivery"
-                        resolved = True
-                        break
-                    _log.warning(
-                        f"courier {kid} picked_up order {order.get('order_id')} "
-                        f"bez delivery_coords - data quality alert (P0.4)"
-                    )
-                else:  # assigned
-                    if order.get("pickup_coords"):
-                        cs.pos = tuple(order["pickup_coords"])
-                        cs.pos_source = "last_assigned_pickup"
-                        resolved = True
-                        break
-                    _log.warning(
-                        f"courier {kid} assigned order {order.get('order_id')} "
-                        f"bez pickup_coords - data quality alert (P0.4)"
-                    )
-            if resolved:
-                fleet[kid] = cs
-                continue
-
-        # 3. Recent activity (delivered_at lub picked_up_at < 30 min temu).
-        #    Wymagamy ŚWIEŻEGO eventu — stary delivered (np. sprzed 6 dni jak
-        #    Bartek bez aktualnego GPS) NIE jest dobrym estymatem pozycji.
-        RECENT_MAX_MIN = 30
-        best_age = float("inf")
-        best_pos = None
-        best_source = None
-        for o in orders:
-            delivery_c = o.get("delivery_coords")
-            if not delivery_c:
-                continue
-            for ts_key, source_label in [
-                ("delivered_at", "last_delivered"),
-                ("picked_up_at", "last_picked_up_recent"),
-            ]:
-                ts_str = o.get(ts_key)
-                if not ts_str:
-                    continue
-                ts = _parse_checkpoint_ts(ts_str)
-                if ts is None:
-                    # A1: order ts parse fail dawniej silent → bag aggregation
-                    # może gubić ordery (Lekcja #32 + #80 tracone pole pattern).
-                    seen = getattr(build_fleet_snapshot, "_warned_order_ts", set())
-                    key = (ts_key, str(ts_str)[:40])
-                    if key not in seen and len(seen) < 50:
-                        _log.warning(f"order {ts_key} parse fail input={ts_str!r}")
-                        seen.add(key)
-                        build_fleet_snapshot._warned_order_ts = seen
-                    continue
-                age = (now_utc - ts).total_seconds() / 60.0
-                if age < 0 or age >= RECENT_MAX_MIN:
-                    continue
-                if age < best_age:
-                    best_age = age
-                    best_pos = tuple(delivery_c)
-                    best_source = source_label
-
-        if best_pos is not None:
-            cs.pos = best_pos
-            cs.pos_source = best_source
-            cs.pos_age_min = best_age
-            fleet[kid] = cs
-            continue
-
-        # 4a. FIX 2026-06-08: ZANIM fikcja centrum miasta — persistent store.
-        #     Jeśli widzieliśmy tego kuriera na ŻYWEJ pozycji ≤TTL min temu
-        #     (zanim order zniknął ze stanu), odtwórz TĘ pozycję+źródło. To jest
-        #     dokładnie "Ziomek obejdzie się bez GPS, bo wie z planu/historii
-        #     gdzie kurier był". Kurier ciemny >TTL → fall-through do no_gps.
-        if _lp_on:
-            _rescued = _rescue_from_last_pos(_last_pos_store.get(kid), now_utc)
-            if _rescued is not None:
-                cs.pos, cs.pos_source, cs.pos_age_min = _rescued
-                cs.pos_from_store = True
-                fleet[kid] = cs
-                _log.info(
-                    f"LAST_KNOWN_POS_USED kid={kid} src={cs.pos_source} "
-                    f"age={cs.pos_age_min:.1f}min → uratowany z BIALYSTOK_CENTER")
-                continue
-
-        # 4. no_gps fallback: kurier wolny, brak GPS i brak historii.
-        #    Dajemy syntetyczną pozycję = centrum miasta. Dispatch_pipeline
-        #    nadpisze km_to_pickup średnią floty i travel_min = max(prep, 15).
-        cs.pos = BIALYSTOK_CENTER
-        cs.pos_source = "no_gps"
-        fleet[kid] = cs
+        # K16: hierarchia źródeł pozycji wyniesiona do _resolve_position
+        # (jedno miejsce łączenia gps/pwa/last_pos; treść 1:1 — patrz docstring).
+        _resolve_position(kid, cs, orders, gps, now_utc, fleet,
+                          _lp_on, _last_pos_store,
+                          _gpsq_compute, _gpsq_active, _gpsq_store)
+        if flag("ENABLE_POS_SOURCE_HIERARCHY", default=False):
+            _annotate_pos_resolution(fleet.get(kid))
 
     # Dedup: gdy 2+ courier_id mają to samo imię (np. legacy 4657 + panel 123
     # dla "Bartek O."), zostaje wpis z lepszym pos_source.
