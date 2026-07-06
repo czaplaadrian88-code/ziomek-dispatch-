@@ -3842,6 +3842,15 @@ def _assess_order_impl(
     # (kara bag≥3 przy ewma>2,7 + alert >3,5) za 🛑 ENABLE_FLEET_LOAD_GOVERNOR.
     loadgov_now, loadgov_ewma, loadgov_orders, loadgov_couriers = (
         _loadgov_compute(fleet_snapshot, now))
+    # world_record v1: nagraj obliczoną krotkę loadgov (zależy od orders_state.json
+    # + in-proc EWMA — nieodtwarzalne w świeżym procesie replayu). Hook no-op poza
+    # oknem capture; NIGDY nie dotyka decyzji (fail-soft w note_decision_input).
+    try:
+        from dispatch_v2 import world_record as _wr_note
+        _wr_note.note_decision_input(
+            "loadgov", [loadgov_now, loadgov_ewma, loadgov_orders, loadgov_couriers])
+    except Exception:
+        pass
     # N5 krok 2 (2026-06-17): tolerancja punktualności committed load-aware →
     # route_simulator (czyta ją w _ortools_plan). loadgov_ewma ≥ próg 4,5 (niedobór,
     # dni jak 16.05) → loose 10 min; inaczej strict 5. Gated; flaga OFF → bound się
@@ -4020,6 +4029,13 @@ def _assess_order_impl(
     # fetchują kandydaci; None = flaga OFF/awaria → pętla idzie ścieżką
     # legacy 1:1). Nazwa czytana w closure _v327_eval_courier_inner.
     _k07_prefetched_ck = _k07_prefetch_fresh_ck(fleet_snapshot, now)
+    # world_record v1: nagraj wynik prefetchu czas_kuriera (żywy fetch HTTP panelu
+    # — nieodtwarzalny offline). Hook no-op poza oknem capture; fail-soft.
+    try:
+        from dispatch_v2 import world_record as _wr_note
+        _wr_note.note_decision_input("k07", _k07_prefetched_ck)
+    except Exception:
+        pass
 
     # K11 refaktoru: kontekst oceny = dokładnie wartości czytane dawniej z closure;
     # budowany tu (wartości finalne, wspólne dla całej puli). Delegacja 1:1.
