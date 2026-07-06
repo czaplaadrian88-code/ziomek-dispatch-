@@ -132,6 +132,12 @@ def patched_scan(monkeypatch, tmp_path):
     """Isolate scan_once: temp state, fake schedule/roster, capture writes+sends."""
     state_file = tmp_path / "ncp_state.json"
     monkeypatch.setattr(ncp, "STATE_PATH", str(state_file))
+    # Anty-prod (C17): self-heal + trusted-resolve nie mogą dotykać żywych plików.
+    monkeypatch.setattr(ncp, "GRAFIK_FULL_NAMES", str(tmp_path / "grafik_full_names.json"))
+    monkeypatch.setattr(ncp, "_load_kurier_ids",
+                        lambda: {"Bartek O": "123", "Bartek Ołdziej": "123"})
+    assert "/dispatch_state/" not in ncp.STATE_PATH
+    assert "/dispatch_state/" not in ncp.GRAFIK_FULL_NAMES
 
     sent = []
     monkeypatch.setattr(ncp, "_tg", lambda text, *, silent=False: sent.append(text))
@@ -242,6 +248,88 @@ def test_scan_dry_run_no_side_effects(patched_scan, monkeypatch):
     assert patched_scan["added"] == []
     assert patched_scan["sent"] == []
     assert not patched_scan["state_file"].exists()
+
+
+# --------------------------------------------------------------------------- #
+# Bare-key strict gate (2026-07-06 — oracle: realny case Gabriel Przyborowski 541
+# cicho zduszony + zatruty przez goły klucz 'Gabriel'->179 w kurier_ids)
+# --------------------------------------------------------------------------- #
+
+GABRIEL_KIDS = {
+    "Gabriel": "179",             # goły klucz-imię (Ostapczuk, label planszy gastro)
+    "Gabriel Ostapczuk": "179",
+    "Gabriel J": "503",
+    "Adrian Cit": "457",
+}
+
+
+@pytest.fixture
+def bare_key_scan(patched_scan, monkeypatch):
+    """patched_scan z REALNYM resolve_cid + kontrolowanym kurier_ids (case 541)."""
+    from dispatch_v2.shift_notifications import worker as snw
+    monkeypatch.setattr(ncp, "resolve_cid", snw.resolve_cid)
+    monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: dict(GABRIEL_KIDS))
+    # Ścieżka plain-resolve (resolve_cid bez kids) ładuje przez loader WORKERA —
+    # patch też tam, żeby test nie czytał żywego kurier_ids.json (C17 anty-prod).
+    monkeypatch.setattr(snw, "_load_kurier_ids", lambda: dict(GABRIEL_KIDS))
+    # Aktywny roster gastro jak 06.07: nowy 541 'Gabriel P' + stary 179 'Gabriel'.
+    monkeypatch.setattr(ncp.panel_roster, "fetch_active_roster",
+                        lambda force=False: {541: "Gabriel P", 179: "Gabriel"})
+    return patched_scan
+
+
+def test_bare_key_strict_pairs_new_courier(bare_key_scan, monkeypatch):
+    """ORACLE 06.07: strict ON (default) — Przyborowski NIE jest 'już zmapowany'
+    przez 'Gabriel'->179, idzie do rosteru i zostaje wpięty jako 541."""
+    _sched(monkeypatch, {"Gabriel Przyborowski": {"start": "11:00", "end": "21:00"}})
+    s = ncp.scan_once(dry_run=False)
+    assert bare_key_scan["added"] == [(541, "Gabriel Przyborowski")]
+    assert len(s["paired"]) == 1 and s["paired"][0]["cid"] == 541
+
+
+def test_bare_key_strict_off_reproduces_silent_skip(bare_key_scan, monkeypatch):
+    """Flaga OFF = stare zachowanie (ON≠OFF): cichy skip (0 wpięć, 0 pytań)
+    + self-heal utrwala ZATRUCIE Przyborowski->179 w grafik_full_names."""
+    bare_key_scan["flags"]["NEW_COURIER_AUTOPAIR_BARE_KEY_STRICT"] = False
+    _sched(monkeypatch, {"Gabriel Przyborowski": {"start": "11:00", "end": "21:00"}})
+    s = ncp.scan_once(dry_run=False)
+    assert bare_key_scan["added"] == []
+    assert s["paired"] == [] and s["asked"] == []
+    poisoned = json.load(open(ncp.GRAFIK_FULL_NAMES))
+    assert str(poisoned["Gabriel Przyborowski"]) == "179"   # udokumentowany bug
+
+
+def test_bare_key_strict_no_poison_selfheal(bare_key_scan, monkeypatch):
+    """Strict ON: po wpięciu 541 self-heal pisze PRAWDZIWE mapowanie, nie 179."""
+    _sched(monkeypatch, {"Gabriel Przyborowski": {"start": "11:00", "end": "21:00"}})
+    ncp.scan_once(dry_run=False)
+    healed = json.load(open(ncp.GRAFIK_FULL_NAMES))
+    assert str(healed["Gabriel Przyborowski"]) == "541"
+
+
+def test_bare_key_strict_exact_fullname_still_mapped(bare_key_scan, monkeypatch):
+    """Exact-klucz pełnego imienia przechodzi bez zmian (Ostapczuk nietknięty)."""
+    _sched(monkeypatch, {"Gabriel Ostapczuk": {"start": "09:00", "end": "17:00"}})
+    s = ncp.scan_once(dry_run=False)
+    assert bare_key_scan["added"] == []
+    assert s["paired"] == [] and s["asked"] == []
+
+
+def test_bare_key_strict_surname_alias_still_mapped(bare_key_scan, monkeypatch):
+    """Alias nazwiskowy ('Adrian Cit'->'Adrian Citko') dalej liczy się jako zmapowany."""
+    _sched(monkeypatch, {"Adrian Citko": {"start": "09:00", "end": "17:00"}})
+    s = ncp.scan_once(dry_run=False)
+    assert bare_key_scan["added"] == []
+    assert s["paired"] == [] and s["asked"] == []
+
+
+def test_bare_key_single_word_name_uses_plain_resolve(bare_key_scan, monkeypatch):
+    """Jednowyrazowe imię w grafiku — goły klucz to jedyne sensowne mapowanie,
+    strict go NIE odcina (fail-open do zwykłego resolve)."""
+    _sched(monkeypatch, {"Gabriel": {"start": "09:00", "end": "17:00"}})
+    s = ncp.scan_once(dry_run=False)
+    assert bare_key_scan["added"] == []
+    assert s["paired"] == [] and s["asked"] == []
 
 
 # --------------------------------------------------------------------------- #

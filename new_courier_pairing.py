@@ -27,6 +27,12 @@ Flags (flags.json, hot-reload):
   NEW_COURIER_AUTOPAIR_ENABLED   master on/off (default False until ACK'd live)
   NEW_COURIER_AUTOPAIR_AUTOWRITE True = auto-add confident matches; False =
                                  ask-only (detect + DM, never writes). Default True.
+  NEW_COURIER_AUTOPAIR_BARE_KEY_STRICT
+                                 True (default) = bramka "już zmapowany" NIE ufa
+                                 trafieniu przez goły klucz-imię w kurier_ids
+                                 ('Gabriel'->179): taki kandydat idzie normalną
+                                 ścieżką match-w-rosterze. False = stare zachowanie
+                                 (rollback hot przez flags.json).
 
 Run: ``python -m dispatch_v2.new_courier_pairing [--dry-run] [--once]``
 """
@@ -77,7 +83,7 @@ except Exception:  # pragma: no cover
 # resolve_cid + garbage filter live in the (otherwise dormant) shift_notifications
 # worker — reuse them so name->cid logic stays identical across the codebase.
 from dispatch_v2.shift_notifications.worker import (
-    resolve_cid, _is_garbage_name, _load_ignored_names,
+    resolve_cid, _is_garbage_name, _load_ignored_names, _load_kurier_ids,
 )
 from dispatch_v2.shift_notifications.telegram_send import tg_send_text_with_keyboard
 
@@ -243,6 +249,37 @@ def _has_real_shift(entry: Any) -> bool:
     return isinstance(entry, dict) and bool(entry.get("start"))
 
 
+def _resolve_cid_trusted(full_name: str) -> Optional[str]:
+    """resolve_cid dla bramki "już zmapowany" — bez zaufania do gołych kluczy-imion.
+
+    Goły klucz ('Gabriel' -> 179) wygrywa score-fallback (score=1) dla KAŻDEGO
+    nowego kuriera o tym imieniu, przez co scan uznawał go za już zmapowanego,
+    cicho pomijał parowanie, a self-heal utrwalał zatrucie w grafik_full_names
+    (case 2026-07-06: Gabriel Przyborowski 541 zduszony przez 'Gabriel'->179
+    Ostapczuk). Tu resolve dostaje kurier_ids BEZ kluczy jednowyrazowych —
+    exact match pełnego imienia i dopasowania po nazwisku ('Adrian Cit')
+    przechodzą bez zmian; pomiar 06.07 na żywym grafiku (41 nazwisk): zero
+    kurierów zależnych wyłącznie od gołego klucza.
+
+    Fail-open: flaga OFF / imię jednowyrazowe / pusty odczyt kurier_ids ->
+    zachowanie sprzed fixu (zwykłe resolve_cid). NIE zmienia semantyki
+    resolve_cid dla innych konsumentów (shift-worker, verify)."""
+    if not flag("NEW_COURIER_AUTOPAIR_BARE_KEY_STRICT", True):
+        return resolve_cid(full_name)
+    if " " not in (full_name or "").strip():
+        # Jednowyrazowe imię z grafiku — goły klucz to jedyne sensowne mapowanie.
+        return resolve_cid(full_name)
+    try:
+        kids = _load_kurier_ids()
+    except Exception as e:  # noqa: BLE001 — fail-open jak reszta scanu
+        _log.warning(f"_resolve_cid_trusted load fail {full_name!r}: {e}")
+        return resolve_cid(full_name)
+    if not kids:
+        return resolve_cid(full_name)
+    filtered = {k: v for k, v in kids.items() if " " in k.strip()}
+    return resolve_cid(full_name, filtered)
+
+
 def _auto_wire(full_name: str, cid: int) -> dict:
     """Wire one courier; return {'ok':bool, 'pin':?, 'lines':[...], 'note':?}."""
     try:
@@ -291,7 +328,7 @@ def scan_once(now: Optional[datetime] = None, *, dry_run: bool = False) -> dict:
             # Permanent-inactive / duplicate (e.g. Albert Dec retired) — never pair.
             continue
         summary["scanned"] += 1
-        _cid_existing = resolve_cid(full_name)
+        _cid_existing = _resolve_cid_trusted(full_name)
         if _cid_existing is not None:
             # #2 self-heal: already-mapped (forward resolve_cid) NIE gwarantuje
             # reverse (cid->imię w dispatchu). Upewnij się, że pełne imię grafiku
