@@ -1,0 +1,27 @@
+# K17 programu refaktoru (bramka korpusowa K06) — TRYB INFORMACYJNY.
+# ExecStart z prefiksem "-" = exit code IGNOROWANY (unit zawsze success):
+# zero OnFailure/Telegram; werdykt czytany z pliku/logu przez człowieka.
+# ESKALACJA NA EGZEKWUJĄCY (decyzja Adriana po 3 zielonych nocach):
+#   1) usuń "-" z ExecStart,
+#   2) dodaj w [Unit]: OnFailure=dispatch-onfailure-alert@%n.service,
+#   3) systemctl daemon-reload.
+# INSTALACJA (tylko za jawnym TAK Adriana):
+#   cp systemd/dispatch-world-replay-gate.{service,timer} /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now dispatch-world-replay-gate.timer
+[Unit]
+Description=Ziomek world_replay_gate — nocna bramka korpusowa (K17/K06): replay decyzji z world_record (okno 24h, tylko now!=null) vs shadow_decisions; raport {n, zgodne, roznice krytyczne/miekkie, missy} -> dispatch_state/world_replay_gate_verdict.txt. INFORMACYJNY (exit ignorowany). Read-only wobec silnika (pelny sandbox world_replay: OSRM z nagrania, efekty odrzucane, DISPATCH_UNDER_PYTEST).
+Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/world_replay_gate.py
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=-/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.world_replay_gate --hours 24
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/world_replay_gate.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/world_replay_gate.log
+TimeoutStartSec=3600
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

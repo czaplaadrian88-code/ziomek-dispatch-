@@ -196,6 +196,14 @@ def replay_one(rec: dict) -> tuple[dict, int]:
         _patch(C, "_FLAGS_SNAPSHOT_OVERRIDE", dict(rec.get("flags") or {}))  # K05
         _patch(osrm_client, "route", osrm.route)
         _patch(osrm_client, "table", osrm.table)
+        # K17-utwardzenie: pre-proposal recheck (K07 i legacy per-kandydat) robi
+        # ŻYWY fetch panelu → sieć w sandboxie + czas_kuriera świeższy niż w
+        # chwili nagrania (złapane bramką: 485919 pool 5→6, deterministyczne).
+        # Stub {} = zero nadpisań → decyzja liczy na ck z NAGRANEJ floty/eventu.
+        # Rezyduum wierności: żywa decyzja mogła użyć ck świeższego niż snapshot
+        # floty (okno panel_watcher→decyzja) — domknięcie = nagrywanie wyniku
+        # prefetchu w world_record (plik sesji A; zgłoszone w dzienniku B).
+        _patch(dp, "get_fresh_czas_kuriera_for_bag", lambda *a, **k: {})
         _patch(world_record, "enabled", lambda: False)
         _patch(telegram_utils, "send_admin_alert", lambda *a, **k: None)
         _patch(candidate_logger, "get_logger",

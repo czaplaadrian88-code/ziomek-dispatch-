@@ -1,0 +1,14 @@
+# K17 — timer nocnej bramki korpusowej. 02:00 UTC: PO night-guard (01:15,
+# suita ~2-5 min), PRZED log-rotation (03:00) i restic (03:30) — bez nakładek
+# CPU/IO. Persistent=true nadrabia po reboot (lekcja FALA-1: Persistent przy
+# samym OnUnitActiveSec = NO-OP; tu OnCalendar — działa).
+[Unit]
+Description=Ziomek world_replay_gate — co noc 02:00 UTC (04:00 Warsaw), tryb INFORMACYJNY (K17/K06)
+
+[Timer]
+OnCalendar=*-*-* 02:00:00 UTC
+Persistent=true
+Unit=dispatch-world-replay-gate.service
+
+[Install]
+WantedBy=timers.target
