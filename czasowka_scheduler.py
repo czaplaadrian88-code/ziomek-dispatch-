@@ -23,7 +23,8 @@ sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
 from dispatch_v2 import common as C
 from dispatch_v2 import courier_resolver, event_bus, state_machine
-from dispatch_v2.dispatch_pipeline import assess_order
+from dispatch_v2.core.decide import decide as _decide  # K09: fasada decyzji (delegacja 1:1)
+from dispatch_v2.core.world_state import WorldState
 from dispatch_v2.telegram_approver import tg_request
 
 WARSAW = ZoneInfo("Europe/Warsaw")
@@ -338,7 +339,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
     # shift_end=None → feasibility_v2:300 hard-rejectuje wszystkich z v325_NO_ACTIVE_SHIFT
     # → "BRAK KANDYDATÓW" alert dla każdej czasówki (incident #471036 14:24 UTC).
     fleet_snapshot = {cs.courier_id: cs for cs in courier_resolver.dispatchable_fleet()}
-    result = assess_order(order_event, fleet_snapshot, now=now_utc)
+    result = _decide(WorldState(fleet_snapshot=fleet_snapshot, now=now_utc), order_event)
 
     best = result.best
     best_maybe = best is not None and best.feasibility_verdict == "MAYBE"

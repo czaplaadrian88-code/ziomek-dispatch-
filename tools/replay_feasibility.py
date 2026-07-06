@@ -116,12 +116,10 @@ def replay(fixture_path: str) -> Dict[str, Any]:
 
     dispatch_pipeline.check_feasibility_v2 = _wrapped_cf
     try:
-        result = dispatch_pipeline.assess_order(
-            order_event=order_event,
-            fleet_snapshot=fleet,
-            restaurant_meta=None,
-            now=now,
-        )
+        # K09: fasada core.decide (delegacja 1:1 do assess_order)
+        from dispatch_v2.core.decide import decide as _decide
+        from dispatch_v2.core.world_state import WorldState
+        result = _decide(WorldState(fleet_snapshot=fleet, now=now), order_event)
     finally:
         dispatch_pipeline.check_feasibility_v2 = _orig_cf
         if recheck_was is not None:

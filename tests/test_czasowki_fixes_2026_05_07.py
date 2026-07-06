@@ -174,14 +174,14 @@ def test_fix_firmowe_czasowka_uses_fallback_coords_when_pickup_coords_none():
     fake_res.candidates = []
 
     captured_order_event = {}
-    def _capture_assess(order_event, fleet, now=None):
+    def _capture_assess(order_event, fleet, restaurant_meta=None, now=None, **kw):  # K09: fasada wola pozycyjnie + kwargs
         captured_order_event.update(order_event)
         return fake_res
 
     with mock.patch.object(C, "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", False), \
          mock.patch.object(cs.courier_resolver, "dispatchable_fleet",
                            return_value=[fake_courier]), \
-         mock.patch.object(cs, "assess_order", side_effect=_capture_assess):
+         mock.patch.object(dispatch_pipeline, "assess_order", side_effect=_capture_assess):
         result = cs.eval_czasowka("FIRMOWE_TEST", order_state, now_utc)
 
     # KEY ASSERTIONS:
@@ -202,7 +202,7 @@ def test_fix_firmowe_non_firmowe_still_koord_no_geocode():
     order_state["address_id"] = 999  # NIE firmowe
 
     with mock.patch.object(cs.courier_resolver, "dispatchable_fleet", return_value=[]), \
-         mock.patch.object(cs, "assess_order") as mock_assess:
+         mock.patch.object(dispatch_pipeline, "assess_order") as mock_assess:
         result = cs.eval_czasowka("NON_FIRMOWE_TEST", order_state, now_utc)
 
     assert result.get("decision") == "KOORD"
@@ -225,7 +225,7 @@ def test_fix_firmowe_does_not_persist_fallback_coords_to_state():
     fake_res.candidates = []
 
     with mock.patch.object(cs.courier_resolver, "dispatchable_fleet", return_value=[]), \
-         mock.patch.object(cs, "assess_order", return_value=fake_res):
+         mock.patch.object(dispatch_pipeline, "assess_order", return_value=fake_res):
         cs.eval_czasowka("FIRMOWE_TEST", original_state, now_utc)
 
     # ORIGINAL state nadal ma pickup_coords=None — NIE zostało persistowane

@@ -135,13 +135,12 @@ def replay_event(row: Dict[str, Any], offline: bool = True) -> Dict[str, Any]:
         from dispatch_v2 import courier_resolver
         fleet = {cs.courier_id: cs for cs in courier_resolver.dispatchable_fleet()}
 
-        # Process via assess_order (current code path = post-fix)
-        from dispatch_v2 import dispatch_pipeline
-        result = dispatch_pipeline.assess_order(
-            order_event=payload,
-            fleet_snapshot=fleet,
-            restaurant_meta=None,
-            now=datetime.now(timezone.utc),
+        # Process via fasada core.decide (K09; delegacja 1:1 do assess_order)
+        from dispatch_v2.core.decide import decide as _decide
+        from dispatch_v2.core.world_state import WorldState
+        result = _decide(
+            WorldState(fleet_snapshot=fleet, now=datetime.now(timezone.utc)),
+            payload,
         )
         # Convert PipelineResult dataclass do dict (best-effort)
         result_dict = {

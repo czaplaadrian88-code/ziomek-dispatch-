@@ -21,6 +21,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dispatch_v2 import czasowka_scheduler as cs
+from dispatch_v2 import dispatch_pipeline as dp_mod  # K09: cel mocka assess_order (fasada core.decide)
 from dispatch_v2.courier_resolver import CourierState
 
 
@@ -75,7 +76,7 @@ def test_eval_czasowka_uses_dispatchable_fleet_not_raw_snapshot():
                            return_value=[courier]) as mock_dispatchable, \
          mock.patch.object(cs.courier_resolver, "build_fleet_snapshot",
                            return_value={}) as mock_raw, \
-         mock.patch.object(cs, "assess_order", return_value=fake_result) as mock_assess:
+         mock.patch.object(dp_mod, "assess_order", return_value=fake_result) as mock_assess:
         cs.eval_czasowka("TEST_OID", order_state, now_utc)
 
     assert mock_dispatchable.call_count >= 1, \
@@ -98,7 +99,7 @@ def test_assess_order_receives_fleet_with_shift_end_set():
 
     captured = {}
 
-    def _capture_assess(order_event, fleet_snapshot, now=None):
+    def _capture_assess(order_event, fleet_snapshot, restaurant_meta=None, now=None, **kw):
         captured["fleet_snapshot"] = fleet_snapshot
         return _fake_assess_order_result([])
 
@@ -106,7 +107,7 @@ def test_assess_order_receives_fleet_with_shift_end_set():
 
     with mock.patch.object(cs.courier_resolver, "dispatchable_fleet",
                            return_value=[courier_with_shift]), \
-         mock.patch.object(cs, "assess_order", side_effect=_capture_assess):
+         mock.patch.object(dp_mod, "assess_order", side_effect=_capture_assess):
         cs.eval_czasowka("TEST_OID", order_state, now_utc)
 
     fs = captured.get("fleet_snapshot")
@@ -128,7 +129,7 @@ def test_dispatchable_fleet_empty_does_not_crash():
     fake_result.best = None
 
     with mock.patch.object(cs.courier_resolver, "dispatchable_fleet", return_value=[]), \
-         mock.patch.object(cs, "assess_order", return_value=fake_result):
+         mock.patch.object(dp_mod, "assess_order", return_value=fake_result):
         result = cs.eval_czasowka("TEST_OID", order_state, now_utc)
 
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"

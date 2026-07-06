@@ -42,8 +42,9 @@ from typing import Optional, Dict, Any, List, Tuple
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
 from dispatch_v2 import common as C
-from dispatch_v2 import dispatch_pipeline as DP
 from dispatch_v2 import courier_resolver as CR
+from dispatch_v2.core.decide import decide as _decide  # K09 fasada
+from dispatch_v2.core.world_state import WorldState
 
 _log = logging.getLogger("pending_global_resweep")
 
@@ -125,7 +126,7 @@ from dispatch_v2.claim_ledger import (  # noqa: E402
 
 def _assess(order_event: dict, fleet: Dict[str, Any], now: datetime):
     try:
-        return DP.assess_order(order_event, fleet, now=now, _bypass_early_bird=True)
+        return _decide(WorldState(fleet_snapshot=fleet, now=now), order_event, _bypass_early_bird=True)  # K09
     except Exception as e:  # noqa: BLE001 — pojedyncze zlecenie nie wywala sweepu
         _log.warning(f"assess_order fail oid={order_event.get('order_id')}: {type(e).__name__}: {e}")
         return None

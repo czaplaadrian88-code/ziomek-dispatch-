@@ -501,10 +501,12 @@ def test_wait_branch_returns_all_candidates():
         pickup_ready_at=None,
         restaurant=None,
     )
-    # Patch assess_order to return pr
+    # Patch assess_order to return pr — K09: czasówka woła fasadę core.decide,
+    # która robi call-time lookup dispatch_pipeline.assess_order (tam mock).
     import dispatch_v2.czasowka_scheduler as cs_mod
-    orig_assess = cs_mod.assess_order
-    cs_mod.assess_order = lambda *a, **kw: pr
+    import dispatch_v2.dispatch_pipeline as dp_mod
+    orig_assess = dp_mod.assess_order
+    dp_mod.assess_order = lambda *a, **kw: pr
     try:
         # Call _eval_czasowka_impl with a fake order_state
         order_state = {
@@ -527,7 +529,7 @@ def test_wait_branch_returns_all_candidates():
         assert len(result["all_candidates_for_proactive"]) >= 1, \
             f"expected >=1, got {len(result['all_candidates_for_proactive'])}"
     finally:
-        cs_mod.assess_order = orig_assess
+        dp_mod.assess_order = orig_assess
 
 
 t("wait_branch_returns_all_candidates", test_wait_branch_returns_all_candidates)

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
 from dispatch_v2 import common as C
+from dispatch_v2 import dispatch_pipeline as DPMOD  # K09: mock siedzi na dispatch_pipeline (fasada core.decide robi call-time lookup)
 from dispatch_v2.tools import reassignment_forward_shadow as RFS
 
 _N = datetime(2026, 6, 22, 12, 0, 0, tzinfo=timezone.utc)
@@ -70,9 +71,10 @@ def test_run_once_flag_off(monkeypatch):
 # ============================ evaluate_order ============================
 
 def _patch_assess(monkeypatch, result):
-    """Podstaw DP.assess_order w module pod stałą wartość; flaga ON na wszelki."""
+    """Podstaw dispatch_pipeline.assess_order pod stałą wartość; flaga ON na wszelki.
+    (K09: RFS woła fasadę core.decide → call-time lookup na dispatch_pipeline.)"""
     monkeypatch.setattr(C, "flag", lambda n, d=False: True)
-    monkeypatch.setattr(RFS.DP, "assess_order", lambda *a, **k: result)
+    monkeypatch.setattr(DPMOD, "assess_order", lambda *a, **k: result)
 
 
 def test_evaluate_order_reassign_when_b_beats_a_by_margin(monkeypatch):

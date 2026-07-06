@@ -17,7 +17,6 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2 import state_machine
-from dispatch_v2 import dispatch_pipeline
 from dispatch_v2 import courier_resolver
 from dispatch_v2 import telegram_utils
 from dispatch_v2 import pending_proposals_store
@@ -147,8 +146,11 @@ def run_once(now: Optional[datetime] = None) -> Dict[str, int]:
                 continue
 
             fleet_snapshot = courier_resolver.dispatchable_fleet(now)
-            result = dispatch_pipeline.assess_order(
-                order_event, fleet_snapshot, now=now
+            # K09: fasada core.decide (delegacja 1:1 do assess_order)
+            from dispatch_v2.core.decide import decide as _decide
+            from dispatch_v2.core.world_state import WorldState
+            result = _decide(
+                WorldState(fleet_snapshot=fleet_snapshot, now=now), order_event
             )
             verdict = getattr(result, "verdict", None)
             if verdict in ("ASSIGN", "PROPOSE"):

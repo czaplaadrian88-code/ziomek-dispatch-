@@ -29,7 +29,9 @@ from dispatch_v2.common import load_config, now_iso, setup_logger
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_fleet
-from dispatch_v2.dispatch_pipeline import assess_order, PipelineResult
+from dispatch_v2.dispatch_pipeline import PipelineResult
+from dispatch_v2.core.decide import decide as _decide  # K09: fasada decyzji (delegacja 1:1)
+from dispatch_v2.core.world_state import WorldState
 from dispatch_v2.monitoring.consumer_stuck_alert import (
     StuckAlertConfig,
     StuckAlertState,
@@ -1128,10 +1130,13 @@ def process_event(
         from dispatch_v2 import world_record as _wr
     except Exception:
         _wr = None
+    # K09 refaktoru: wywołanie przez fasadę core.decide (czysta delegacja 1:1 do
+    # dispatch_pipeline.assess_order — ten sam wrapper K08+observability co dotąd).
+    _world = WorldState(fleet_snapshot=fleet, restaurant_meta=meta, now=now)
     if _wr is None:
-        return assess_order(order_event, fleet, meta, now=now)
+        return _decide(_world, order_event)
     return _wr.around_assess(
-        lambda: assess_order(order_event, fleet, meta, now=now),
+        lambda: _decide(_world, order_event),
         order_event=order_event, fleet_snapshot=fleet, now=now,
     )
 

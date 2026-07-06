@@ -43,8 +43,9 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
 
 from dispatch_v2 import common as C
-from dispatch_v2 import dispatch_pipeline as DP
 from dispatch_v2 import courier_resolver as CR
+from dispatch_v2.core.decide import decide as _decide  # K09 fasada
+from dispatch_v2.core.world_state import WorldState
 
 _log = logging.getLogger("reassignment_forward_shadow")
 
@@ -334,7 +335,7 @@ def evaluate_order(rec: dict, holder_cid: str, fleet: Dict[str, Any],
     order_event = _state_to_order_event(rec)
     fleet_cf = _fleet_without_order(fleet, oid, holder_cid)
     try:
-        res = DP.assess_order(order_event, fleet_cf, now=now, _bypass_early_bird=True)
+        res = _decide(WorldState(fleet_snapshot=fleet_cf, now=now), order_event, _bypass_early_bird=True)  # K09
     except Exception as e:
         _log.warning(f"assess_order fail oid={oid}: {type(e).__name__}: {e}")
         return None

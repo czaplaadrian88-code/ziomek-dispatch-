@@ -38,7 +38,8 @@ if _ROOT not in sys.path:
 import logging
 logging.disable(logging.WARNING)
 
-from dispatch_v2 import dispatch_pipeline as DP        # noqa: E402
+from dispatch_v2.core.decide import decide as _decide  # noqa: E402  # K09 fasada
+from dispatch_v2.core.world_state import WorldState    # noqa: E402
 from dispatch_v2 import common as C                    # noqa: E402
 from dispatch_v2 import plan_manager as PM             # noqa: E402
 from dispatch_v2 import shadow_dispatcher as SD        # noqa: E402
@@ -139,13 +140,13 @@ def cmd_profile(a):
     C.ENABLE_V327_PRE_PROPOSAL_RECHECK = False
     cases = _cases(a.n, a.seed, a.fleet)
     for oe, now, _fs, fl in cases[:3]:
-        DP.assess_order(order_event=oe, fleet_snapshot=dict(fl), now=now)
+        _decide(WorldState(fleet_snapshot=dict(fl), now=now), oe)
     wall, pr = [], cProfile.Profile()
     for _ in range(a.repeats):
         for oe, now, _fs, fl in cases:
             t0 = time.perf_counter()
             pr.enable()
-            DP.assess_order(order_event=oe, fleet_snapshot=dict(fl), now=now)
+            _decide(WorldState(fleet_snapshot=dict(fl), now=now), oe)
             pr.disable()
             wall.append((time.perf_counter() - t0) * 1000)
     wall.sort()
@@ -158,12 +159,12 @@ def cmd_profile(a):
 def _measure(cases, repeats):
     C.ENABLE_V327_PRE_PROPOSAL_RECHECK = False
     for oe, now, _fs, fl in cases[:3]:
-        DP.assess_order(order_event=oe, fleet_snapshot=dict(fl), now=now)
+        _decide(WorldState(fleet_snapshot=dict(fl), now=now), oe)
     wall = []
     for _ in range(repeats):
         for oe, now, _fs, fl in cases:
             t0 = time.perf_counter()
-            DP.assess_order(order_event=oe, fleet_snapshot=dict(fl), now=now)
+            _decide(WorldState(fleet_snapshot=dict(fl), now=now), oe)
             wall.append((time.perf_counter() - t0) * 1000)
     wall.sort()
     p = lambda q: wall[min(len(wall) - 1, int(len(wall) * q))]
@@ -195,7 +196,7 @@ def cmd_parity(a):
     with open(a.out, "w") as fh:
         for i, (oe, now, fs, fl) in enumerate(cases):
             try:
-                res = DP.assess_order(order_event=oe, fleet_snapshot=fl, now=now)
+                res = _decide(WorldState(fleet_snapshot=fl, now=now), oe)
                 line = json.dumps(_strip(SD._serialize_result(res, "PARITY", 0.0)),
                                   ensure_ascii=False, sort_keys=True, default=str)
             except Exception as e:

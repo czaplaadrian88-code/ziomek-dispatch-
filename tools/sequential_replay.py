@@ -46,7 +46,10 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-_SCRIPTS_ROOT = "/root/.openclaw/workspace/scripts"
+# K09: env-first jak perf_lazy_harness — bieg z worktree (ZIOMEK_SCRIPTS_ROOT=pkgroot)
+# ma importować dispatch_v2 Z WORKTREE, nie z kanonu (inaczej subprocess-testy
+# widzą stary pakiet bez core/).
+_SCRIPTS_ROOT = os.environ.get("ZIOMEK_SCRIPTS_ROOT") or "/root/.openclaw/workspace/scripts"
 if _SCRIPTS_ROOT not in sys.path:
     sys.path.insert(0, _SCRIPTS_ROOT)
 
@@ -75,6 +78,8 @@ from dispatch_v2 import common as C  # noqa: E402
 C.ENABLE_V327_PRE_PROPOSAL_RECHECK = False  # syntetyczny bag nie ma realnego oid w panelu
 
 from dispatch_v2 import dispatch_pipeline as DP  # noqa: E402
+from dispatch_v2.core.decide import decide as _decide  # noqa: E402  # K09 fasada
+from dispatch_v2.core.world_state import WorldState  # noqa: E402
 from dispatch_v2.courier_resolver import (  # noqa: E402
     CourierState, _load_courier_names, _load_courier_tiers,
 )
@@ -328,7 +333,7 @@ def _bag_entry(ev: dict, cid: str, now: datetime, pred_delivered) -> dict:
 def _assess(ev, fleet, now):
     """1 wywołanie pipeline. Zwraca (verdict, best_cid, best_name, score,
     best_effort, auto_route, pool_feasible, pool_total, sla_violations, plan)."""
-    res = DP.assess_order(ev, fleet, None, now)
+    res = _decide(WorldState(fleet_snapshot=fleet, now=now), ev)  # K09 fasada
     best = res.best
     plan = getattr(best, "plan", None) if best else None
     return {

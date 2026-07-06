@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import dispatch_v2.postpone_sweeper as ps
+from dispatch_v2 import dispatch_pipeline as dp_mod  # K09: cel mocka assess_order (fasada core.decide)
 
 
 def _entry(now, count=0, expired_min=5, oid="484999"):
@@ -70,7 +71,7 @@ def test_przypisane_zlecenie_daje_resolved_bez_reemitu(iso, monkeypatch):
     )
     assess_called = {}
     monkeypatch.setattr(
-        ps.dispatch_pipeline, "assess_order",
+        dp_mod, "assess_order",
         lambda *a, **k: assess_called.setdefault("hit", True),
     )
     monkeypatch.setattr(ps.courier_resolver, "dispatchable_fleet", lambda *a, **k: {})
@@ -96,7 +97,7 @@ def test_koordynator_26_traktowany_jako_nieprzypisane(iso, monkeypatch):
         ps.state_machine, "_read_state",
         lambda: {"485000": {"order_id": "485000", "courier_id": "26"}},
     )
-    monkeypatch.setattr(ps.dispatch_pipeline, "assess_order", lambda *a, **k: None)
+    monkeypatch.setattr(dp_mod, "assess_order", lambda *a, **k: None)
     monkeypatch.setattr(ps.courier_resolver, "dispatchable_fleet", lambda *a, **k: {})
 
     stats = ps.run_once(now=now)

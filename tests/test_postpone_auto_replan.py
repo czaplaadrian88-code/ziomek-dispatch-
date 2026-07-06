@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dispatch_v2 import postpone_sweeper  # noqa: E402
+from dispatch_v2 import dispatch_pipeline  # noqa: E402  # K09: cel mocka assess_order
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +142,8 @@ def test_sweeper_reemits_when_unassigned_and_below_max(
         mock_sm._read_state.return_value = {"12345": {"order_id": "12345", "courier_id": None}}
         with patch.object(postpone_sweeper, "courier_resolver") as mock_cr:
             mock_cr.dispatchable_fleet.return_value = {}
-            with patch.object(postpone_sweeper, "dispatch_pipeline") as mock_dp:
-                mock_dp.assess_order.return_value = mock_result
+            # K09: sweeper wola fasade core.decide -> call-time lookup na dispatch_pipeline
+            with patch.object(dispatch_pipeline, "assess_order", return_value=mock_result):
                 stats = postpone_sweeper.run_once()
 
     assert stats["reemitted"] == 1
@@ -168,8 +169,8 @@ def test_sweeper_idempotent_on_rerun(tmp_postponed, tmp_pending):
         mock_sm._read_state.return_value = {"12345": {"order_id": "12345", "courier_id": None}}
         with patch.object(postpone_sweeper, "courier_resolver") as mock_cr:
             mock_cr.dispatchable_fleet.return_value = {}
-            with patch.object(postpone_sweeper, "dispatch_pipeline") as mock_dp:
-                mock_dp.assess_order.return_value = mock_result
+            # K09: sweeper wola fasade core.decide -> call-time lookup na dispatch_pipeline
+            with patch.object(dispatch_pipeline, "assess_order", return_value=mock_result):
                 stats1 = postpone_sweeper.run_once()
                 stats2 = postpone_sweeper.run_once()
 
@@ -208,8 +209,8 @@ def test_sweeper_keeps_entry_on_assess_order_error(
         mock_sm._read_state.return_value = {"12345": {"order_id": "12345", "courier_id": None}}
         with patch.object(postpone_sweeper, "courier_resolver") as mock_cr:
             mock_cr.dispatchable_fleet.return_value = {}
-            with patch.object(postpone_sweeper, "dispatch_pipeline") as mock_dp:
-                mock_dp.assess_order.side_effect = ValueError("test error")
+            # K09: sweeper wola fasade core.decide -> call-time lookup na dispatch_pipeline
+            with patch.object(dispatch_pipeline, "assess_order", side_effect=ValueError("test error")):
                 stats = postpone_sweeper.run_once()
 
     assert stats["errors"] == 1

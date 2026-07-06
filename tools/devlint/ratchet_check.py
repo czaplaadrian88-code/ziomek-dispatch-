@@ -31,6 +31,8 @@ MYPY = VENV / "bin" / "mypy"
 
 # Moduły rdzenia w zakresie mypy (rozszerzaj przy kolejnych krokach stranglera).
 MYPY_MODULES = [
+    "core/decide.py",       # K09 — nowe moduły core/ trzymamy mypy-czyste
+    "core/world_state.py",  # K09
     "common.py",
     "dispatch_pipeline.py",
     "feasibility_v2.py",
