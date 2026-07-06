@@ -832,16 +832,18 @@ def check_feasibility_v2(
         metrics["earliest_departure_utc"] = earliest_departure.isoformat()
         metrics["pre_shift_clamp_applied"] = True
 
-    # 2026-05-17 tier-aware DWELL: postój kuriera zależny od tier_bag
-    # (gold krócej, slow/new dłużej). Nieznany tier → DWELL_DEFAULT_MIN.
-    _dwell_pickup, _dwell_dropoff = C.dwell_for_tier(courier_tier)
+    # 2026-05-17 tier-aware DWELL + tempo → K15 (ADR-R03): parametryzacja z
+    # JEDNEGO źródła dla silnika i re-planera = core.planner.tier_params
+    # (semantyka silnika bez gate'a: dwell ZAWSZE tier-aware; wartości 1:1
+    # z dawnym inline C.dwell_for_tier + C.speed_mult_for_tier). Wywołanie
+    # simulate_bag_route_v2 niżej ZOSTAJE lokalnym symbolem feasibility_v2 —
+    # świadome N-D: kontrakt monkeypatch setek testów; to ta sama funkcja.
+    from dispatch_v2.core import planner as _k15_planner
+    _dwell_pickup, _dwell_dropoff, _drive_speed_mult = \
+        _k15_planner.tier_params(courier_tier)
     metrics["dwell_tier"] = courier_tier
     metrics["dwell_pickup_min"] = _dwell_pickup
     metrics["dwell_dropoff_min"] = _dwell_dropoff
-
-    # Sprint 3 (2026-05-17) tier-aware czas jazdy: mnożnik tempa kuriera na
-    # nogach trasy. Domyślnie 1.0 (inert) — kalibracja per tier po Sprincie 1.
-    _drive_speed_mult = C.speed_mult_for_tier(courier_tier)
     metrics["drive_speed_mult"] = _drive_speed_mult
 
     plan = simulate_bag_route_v2(

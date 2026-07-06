@@ -459,6 +459,8 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_EFFECTS_AFTER_DECISION",   # K08: efekty (shadow-jsonle/loadgov/alert) PO decyzji
     "ENABLE_POS_SOURCE_HIERARCHY",     # K16 (sesja B): adnotacja pos_resolution w resolverze pozycji
     "ENABLE_SCORER_INTERFACE",         # K13: interfejs Scorer (heuristic/lgbm) w core.candidates
+    "ENABLE_PLANNER_UNIFIED",          # K15: plan_recheck parametry+simulate przez core.planner
+    "ENABLE_PLANNER_UNIFIED_SHADOW",   # K15: porównanie parametrów inline↔planner (log-only)
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -505,6 +507,8 @@ ENABLE_PRE_RECHECK_BEFORE_POOL = False  # K07 refaktoru: _k07_prefetch_fresh_ck 
 ENABLE_EFFECTS_AFTER_DECISION = False  # K08 refaktoru: effects_buffer.begin default=False; kanon=flags.json (flip za ACK)
 ENABLE_POS_SOURCE_HIERARCHY = False  # K16 (sesja B): courier_resolver._resolve_position adnotacja default=False; kanon=flags.json (flip za ACK); rejestracja: sesja A na prośbę B 06.07
 ENABLE_SCORER_INTERFACE = False  # K13 refaktoru (ADR-R06): core.candidates → core.scorer default=False; kanon=flags.json (flip za ACK Adriana; SCORER_IMPL='lgbm' primary = POZA zakresem programu)
+ENABLE_PLANNER_UNIFIED = False  # K15 refaktoru (ADR-R03): plan_recheck._gen_one_bag_plan parametry tier+simulate przez core.planner default=False; kanon=flags.json (flip za ACK Adriana)
+ENABLE_PLANNER_UNIFIED_SHADOW = False  # K15 refaktoru: przy głównej OFF porównaj parametry inline↔core.planner, rozjazd→WARNING PLANNER_PARAM_MISMATCH (log-only, zero wpływu); kanon=flags.json (flip za ACK)
 # (ENABLE_FLAG_SNAPSHOT = False — zdefiniowana wyżej w bloku K05)
 ENABLE_GRAFIK_FULL_NAMES_SOURCE = True       # courier_resolver:466 default=True
 ENABLE_PANEL_PACKS_CID_MATCH = True          # courier_resolver:1190 default=True
