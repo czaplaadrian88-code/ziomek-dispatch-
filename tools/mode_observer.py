@@ -52,6 +52,25 @@ def _pending_count(pool):
     return 0
 
 
+def _defer_eligible(pool, now):
+    """SHADOW obserwowalność „would-defer" (lekki, uczciwy sygnał): ile wiszących
+    zleceń jest jeszcze DEFEROWALNYCH w S2 = niezamrożone ∧ now < created+90′ (horyzont
+    deferu). To NIE pełny would-defer (ten wymaga feasibility kuriera = akcja S2 w silniku),
+    tylko górna granica kandydatów do deferu. Fail-soft → 0."""
+    from datetime import timedelta
+    if not isinstance(pool, dict):
+        return 0
+    orders = pool.get("orders", pool)
+    n = 0
+    for o in orders.values() if isinstance(orders, dict) else []:
+        if not isinstance(o, dict) or o.get("frozen") or o.get("removed_reason"):
+            continue
+        ct = M._parse_iso(o.get("created_at"))
+        if ct is not None and now is not None and now < ct + timedelta(minutes=M.DEFER_HORIZON_MIN):
+            n += 1
+    return n
+
+
 def read_current_mode(fsm_state_path=FSM_STATE):
     """(mode, reason) z pliku stanu obserwatora — do STEMPLA decyzji (read-only,
     NIE krok FSM; obserwator jest jedynym, który krokuje). Fail-soft → (S1, 'no-state')
@@ -89,7 +108,8 @@ def observe_once(now=None, orders_path=ORDERS_STATE, pending_path=PENDING_POOL,
                  fsm_state_path=FSM_STATE, log_path=LOG):
     now = now or datetime.now(timezone.utc)
     orders = _load_json(orders_path, {})
-    pending = _pending_count(_load_json(pending_path, []))
+    pool = _load_json(pending_path, [])
+    pending = _pending_count(pool)
     sig = M.mode_signals_from_state(orders, now, pending_count=pending)
     state = _load_state(fsm_state_path)
     new = M.step(state, sig)
@@ -97,6 +117,7 @@ def observe_once(now=None, orders_path=ORDERS_STATE, pending_path=PENDING_POOL,
         "ts": now.isoformat(timespec="seconds"),
         "mode": new.mode, "prev_mode": state.mode, "reason": new.reason,
         "transition": new.mode != state.mode,
+        "defer_eligible": _defer_eligible(pool, now),  # would-defer (górna granica, shadow)
         "signals": {"L": sig.load_inflight_per_active, "queue": sig.queue_pending,
                     "latency_med_min": sig.assign_latency_med_min},
     }

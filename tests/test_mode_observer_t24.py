@@ -51,3 +51,17 @@ def test_observer_persists_and_logs(tmp_path):
     # log ma 2 wpisy
     lines = [json.loads(x) for x in lp.read_text(encoding="utf-8").splitlines()]
     assert len(lines) == 2
+
+
+def test_defer_eligible_count():
+    from datetime import datetime, timedelta, timezone
+    now = datetime(2026, 7, 7, 12, 0, tzinfo=timezone.utc)
+    pool = {
+        "a": {"created_at": (now - timedelta(minutes=30)).isoformat()},         # w horyzoncie
+        "b": {"created_at": (now - timedelta(minutes=120)).isoformat()},        # poza 90' → nie
+        "c": {"created_at": now.isoformat(), "frozen": True},                   # zamrożone → nie
+        "d": {"created_at": now.isoformat(), "removed_reason": "assigned"},     # usunięte → nie
+        "e": {"created_at": (now - timedelta(minutes=10)).isoformat()},         # w horyzoncie
+    }
+    assert OBS._defer_eligible(pool, now) == 2  # a + e
+    assert OBS._defer_eligible([], now) == 0
