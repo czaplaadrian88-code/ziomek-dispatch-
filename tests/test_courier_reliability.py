@@ -37,9 +37,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-REPO = Path(__file__).resolve().parents[2]            # /root/.openclaw/workspace/scripts
+# C12(e)/ADR-007 self-lokalizacja: kanonicznie plik jest w scripts/dispatch_v2/tests/
+# → parents[2] = scripts/. W worktree (.claude/worktrees/agent-X/tests/) parents[2]
+# mija scripts/ → MODULE_PATH nie istnieje → SkipTest wychodził jako FAILED.
+# Harness ustawia ZIOMEK_SCRIPTS_ROOT=pkgroot (symlink pkgroot/dispatch_v2→worktree),
+# dokładnie jak conftest._SCRIPTS_ROOT — honorujemy go, fallback = parents[2] (kanon).
+REPO = Path(os.environ.get("ZIOMEK_SCRIPTS_ROOT",
+                           str(Path(__file__).resolve().parents[2])))
+sys.path.insert(0, str(REPO))
 MODULE_PATH = REPO / "dispatch_v2" / "tools" / "courier_reliability.py"
 VENV_PY = "/root/.openclaw/venvs/dispatch/bin/python"
 

@@ -251,16 +251,20 @@ _MY_PARTITION = {
 }
 
 
-def _scan_fixed_offset():
+def _scan_fixed_offset(root=None):
+    root = root or _WT_ROOT
     offenders = set()
-    for dirpath, dirnames, filenames in os.walk(_WT_ROOT):
-        if any(seg in dirpath for seg in ("/.git", "/__pycache__", "/eod_drafts", "/fixtures")):
+    for dirpath, dirnames, filenames in os.walk(root):
+        # `.claude` = worktree'y sąsiednich sesji (ADR-007): ich kopie plików +
+        # kopia TEGO testu (fixed-offset jako baza mutacji) fałszywie zapalają
+        # ratchet. Skanujemy TYLKO ten pkg — pomijamy zagnieżdżone worktree'y.
+        if any(seg in dirpath for seg in ("/.git", "/__pycache__", "/eod_drafts", "/fixtures", "/.claude")):
             continue
-        dirnames[:] = [d for d in dirnames if d not in (".git", "__pycache__", "eod_drafts", "fixtures")]
+        dirnames[:] = [d for d in dirnames if d not in (".git", "__pycache__", "eod_drafts", "fixtures", ".claude")]
         for fn in filenames:
             if not fn.endswith(".py"):
                 continue
-            rel = os.path.relpath(os.path.join(dirpath, fn), _WT_ROOT)
+            rel = os.path.relpath(os.path.join(dirpath, fn), root)
             if rel in _GUARDIAN_TESTS:
                 continue
             try:
@@ -320,3 +324,32 @@ def test_ratchet_external_scripts_no_new_fixed_offset():
         "NOWY fixed-offset TZ w żywych scripts/ (skonwertuj na ZoneInfo('Europe/Warsaw')): "
         + ", ".join(sorted(extra))
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# (d) S28-A: ratchet ignoruje worktree sąsiedniej sesji (.claude/worktrees)
+# ══════════════════════════════════════════════════════════════════════════
+_FIXED_TZ_SAMPLE = (
+    "from datetime import timezone, timedelta\n"
+    "TZ = timezone(timedelta(hours=2))\n"
+)
+
+
+def test_scan_ignores_adjacent_claude_worktree(tmp_path):
+    """S28-A: worktree sąsiedniej sesji (`.claude/worktrees/agent-*`, ADR-007)
+    trzyma kopie plików + kopię TEGO testu (fixed-offset jako baza mutacji) →
+    fałszywie zapalały ratchet (ugryzło dziś). `_scan_fixed_offset` MUSI
+    pomijać `.claude`. Mutation-probe: fixed-offset pod NIE-wykluczoną ścieżką
+    (tools/nowy.py) NADAL łapany → ratchet nie oślepł."""
+    wt = tmp_path / ".claude/worktrees/agent-x/tools"
+    wt.mkdir(parents=True)
+    (wt / "legacy.py").write_text(_FIXED_TZ_SAMPLE, encoding="utf-8")
+    assert _scan_fixed_offset(str(tmp_path)) == set(), \
+        "ratchet wciągnął fixed-offset z worktree .claude"
+
+    # mutation-probe: nowy fixed-offset w silniku (poza .claude) → offender
+    (tmp_path / "tools").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tools" / "nowy.py").write_text(_FIXED_TZ_SAMPLE, encoding="utf-8")
+    off = _scan_fixed_offset(str(tmp_path))
+    assert "tools/nowy.py" in off, \
+        f"ratchet OŚLEPŁ — nowy fixed-offset TZ musi być offenderem: {off}"

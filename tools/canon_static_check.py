@@ -36,8 +36,11 @@ _THIS = Path(__file__).resolve()
 ROOT = _THIS.parents[1]  # …/dispatch_v2 (kanon LUB worktree — samo-lokalizacja C12e)
 
 # Katalogi/pliki poza „silnikiem" dla ratchetów (testy/narzędzia/archiwa).
+# `.claude` = worktree'y sąsiednich sesji (ADR-007, `.claude/worktrees/agent-*`):
+# ich kopie common.py/plan_recheck.py to NIE druga definicja kanonu w silniku —
+# bez tego skanu checker liczyłby je jako nielegalny bliźniak (fałszywy VETO).
 _EXCLUDE_DIRS = {"tests", "tools", "eod_drafts", "docs", "__pycache__",
-                 "dispatch_state", "venv", ".git"}
+                 "dispatch_state", "venv", ".git", ".claude"}
 
 
 # ── kanon: oczekiwane wartości ────────────────────────────────────────

@@ -86,11 +86,16 @@ _ALLOWED_ASSESS_CALLERS = {
 }
 
 
-def test_no_direct_assess_order_callsites_outside_facade():
+def _scan_direct_assess_callsites(root):
+    """Zwraca listę `rel:lineno` bezpośrednich wywołań assess_order poza
+    allowlistą, skanując `root`. Pominięte: tests/eod_drafts/docs, `.bak`
+    ORAZ `.claude/` (worktree'y sąsiednich sesji, ADR-007 — ich kopia
+    dispatch_pipeline.py woła assess_order legalnie, ale pod inną ścieżką
+    niż allowlista → fałszywy offender; skanujemy TYLKO ten pkg)."""
     offenders = []
-    for p in sorted(REPO.rglob("*.py")):
-        rel = p.relative_to(REPO).as_posix()
-        if rel.startswith(("tests/", "eod_drafts/", "docs/")) or ".bak" in rel:
+    for p in sorted(root.rglob("*.py")):
+        rel = p.relative_to(root).as_posix()
+        if rel.startswith(("tests/", "eod_drafts/", "docs/", ".claude/")) or ".bak" in rel:
             continue
         try:
             tree = ast.parse(p.read_text(encoding="utf-8"))
@@ -103,7 +108,32 @@ def test_no_direct_assess_order_callsites_outside_facade():
                     f.attr if isinstance(f, ast.Attribute) else None)
                 if name == "assess_order" and rel not in _ALLOWED_ASSESS_CALLERS:
                     offenders.append(f"{rel}:{node.lineno}")
+    return offenders
+
+
+def test_no_direct_assess_order_callsites_outside_facade():
+    offenders = _scan_direct_assess_callsites(REPO)
     assert not offenders, (
         "assess_order wołany bezpośrednio poza fasadą core.decide "
         f"(K09 — nowy call-site idzie przez decide()): {offenders}"
     )
+
+
+def test_scan_ignores_adjacent_claude_worktree(tmp_path):
+    """S28-A: worktree sąsiedniej sesji (`.claude/worktrees/agent-*`, ADR-007)
+    ma własną kopię dispatch_pipeline.py wołającą assess_order — pod inną
+    ścieżką niż allowlista → fałszywy offender (ugryzło dziś). Skan MUSI
+    pomijać `.claude`. Mutation-probe: taki sam call pod NIE-wykluczoną
+    ścieżką (nowy_moduł.py) NADAL łapany → skan nie oślepł."""
+    (tmp_path / ".claude/worktrees/agent-x").mkdir(parents=True)
+    (tmp_path / ".claude/worktrees/agent-x/dispatch_pipeline.py").write_text(
+        "def f():\n    return assess_order(1, 2)\n", encoding="utf-8")
+    assert _scan_direct_assess_callsites(tmp_path) == [], \
+        "skan wciągnął worktree z .claude jako offendera"
+
+    # mutation-probe: prawdziwy nowy call-site poza fasadą → wykryty
+    (tmp_path / "nowy_modul.py").write_text(
+        "def g():\n    return assess_order(3, 4)\n", encoding="utf-8")
+    off = _scan_direct_assess_callsites(tmp_path)
+    assert any("nowy_modul.py" in o for o in off), \
+        f"skan OŚLEPŁ — nowy bezpośredni call-site musi być offenderem: {off}"
