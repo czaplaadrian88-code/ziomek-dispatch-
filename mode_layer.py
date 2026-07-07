@@ -57,6 +57,60 @@ class ModeState:
     reason: str = "init"
 
 
+def _parse_iso(v):
+    from datetime import datetime, timezone
+    if not v or not isinstance(v, str):
+        return None
+    try:
+        d = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def mode_signals_from_state(orders: dict, now, pending_count: int = 0,
+                            latency_window_min: float = 15.0) -> ModeSignals:
+    """Wyprowadza ModeSignals z żywego `orders_state` (read-only, czysta funkcja).
+      - L = in-flight(assigned/picked_up, nie delivered) / aktywni kurierzy;
+      - kolejka = pending_count (z pending_pool) + orders bez kuriera-a-utworzone;
+      - latencja = mediana (assigned − created) [min] w oknie `latency_window_min`.
+    now_min = minuty od północy UTC (spójne z replay/testami)."""
+    import statistics
+    from datetime import timedelta
+    inflight_by_cid = {}
+    queue_unassigned = 0
+    lats = []
+    now_dt = now
+    for o in (orders or {}).values():
+        if not isinstance(o, dict):
+            continue
+        st = o.get("status")
+        cid = str(o.get("courier_id") or "")
+        if st in ("assigned", "picked_up") and cid:
+            inflight_by_cid[cid] = inflight_by_cid.get(cid, 0) + 1
+        elif st in ("new", "pending", "", None) and not cid:
+            queue_unassigned += 1
+        at = _parse_iso(o.get("assigned_at"))
+        ct = _parse_iso(o.get("created_at_utc"))
+        if at is not None and ct is not None and now_dt is not None:
+            if now_dt - timedelta(minutes=latency_window_min) <= at <= now_dt:
+                dm = (at - ct).total_seconds() / 60.0
+                if 0 <= dm < 180:
+                    lats.append(dm)
+    n_inflight = sum(inflight_by_cid.values())
+    active = len(inflight_by_cid)
+    L = n_inflight / active if active else 0.0
+    now_min = 0.0
+    if now_dt is not None:
+        now_min = now_dt.hour * 60 + now_dt.minute + now_dt.second / 60.0
+    return ModeSignals(
+        load_inflight_per_active=round(L, 2),
+        queue_pending=int(pending_count) + queue_unassigned,
+        assign_latency_med_min=round(statistics.median(lats), 1) if lats else 0.0,
+        defers_and_reassigns=99,  # brak sygnału deferów w state → NIE odpalaj capitulation
+        now_min=now_min)
+
+
 def _two_of_three(sig: ModeSignals) -> tuple[bool, list[str]]:
     hits = []
     if sig.load_inflight_per_active >= L_HI:
