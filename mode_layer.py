@@ -275,3 +275,51 @@ def priority_shed(orders_meta: list, mode: str, protect_oldest_n: int = 5) -> se
         if o.get("oid") is not None:
             prot.add(str(o["oid"]))
     return prot
+
+
+# ── PROPOZYCJA SLOTU DO PANELU RESTAURACJI (interfejs „Zamów kuriera 2.0") ──
+# Format wyjściowy S2-defer → panel restauracji. PURE (formatowanie); wpięcie do
+# żywego panelu = osobny krok (panel READ-ONLY w tej turze). slot_min/deadline_min =
+# EPOCH-minuty (konwencja silnika/obserwatora) → wall-clock Warsaw.
+try:
+    from zoneinfo import ZoneInfo as _ZI
+    _WAW = _ZI("Europe/Warsaw")
+except Exception:  # pragma: no cover
+    _WAW = None
+
+
+def _epoch_min_to_warsaw_hhmm(epoch_min: float) -> Optional[str]:
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromtimestamp(epoch_min * 60.0, tz=timezone.utc)
+        if _WAW is not None:
+            dt = dt.astimezone(_WAW)
+        return f"{dt.hour:02d}:{dt.minute:02d}"
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def format_defer_slot_proposal(proposal: "DeferProposal") -> Optional[dict]:
+    """DeferProposal → payload propozycji slotu dla panelu restauracji. None gdy
+    proposal None. Zwraca dict gotowy dla interfejsu „Zamów kuriera 2.0":
+      order_id · proposed_pickup_hhmm (Warsaw) · shift_min · deadline_hhmm ·
+      message (PL, uczciwy: proponujemy późniejszy odbiór, nie ukrywamy opóźnienia).
+    Formatowanie PURE; wysyłka do panelu = osobny krok (panel read-only)."""
+    if proposal is None:
+        return None
+    slot = _epoch_min_to_warsaw_hhmm(proposal.slot_min)
+    deadline = _epoch_min_to_warsaw_hhmm(proposal.deadline_min)
+    shift = int(round(proposal.shift_min))
+    msg = (f"Propozycja odbioru o {slot} (+{shift} min) — "
+           f"kurier będzie dostępny w tym oknie. Potwierdź slot w panelu.") if slot else \
+          "Propozycja późniejszego odbioru — potwierdź slot w panelu."
+    return {
+        "order_id": proposal.order_id,
+        "proposed_pickup_hhmm": slot,
+        "shift_min": shift,
+        "attempt": proposal.attempt,
+        "deadline_hhmm": deadline,
+        "owner_courier": proposal.owner,
+        "message": msg,
+        "source": "S2_defer",
+    }

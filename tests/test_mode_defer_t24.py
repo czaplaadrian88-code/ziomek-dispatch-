@@ -53,3 +53,22 @@ def test_completion_guard_fields_present():
     p = M.defer_search("o6", created_min=10, declared_ready_min=20, now_min=25,
                        feasible_at=lambda s: "c3")
     assert p.owner == "c3" and p.deadline_min == 100.0 and p.reason == "S2_defer"
+
+
+def test_format_defer_slot_proposal():
+    from datetime import datetime, timezone
+    # slot = 2026-07-07 12:30 Warsaw = 10:30 UTC → epoch-min
+    slot_epoch = datetime(2026, 7, 7, 10, 30, tzinfo=timezone.utc).timestamp() / 60.0
+    dl_epoch = datetime(2026, 7, 7, 11, 0, tzinfo=timezone.utc).timestamp() / 60.0
+    p = M.DeferProposal(order_id="o1", slot_min=slot_epoch, shift_min=20.0, attempt=1,
+                        owner="c5", deadline_min=dl_epoch)
+    out = M.format_defer_slot_proposal(p)
+    assert out["order_id"] == "o1"
+    assert out["proposed_pickup_hhmm"] == "12:30"   # Warsaw
+    assert out["deadline_hhmm"] == "13:00"
+    assert out["shift_min"] == 20 and out["owner_courier"] == "c5"
+    assert out["source"] == "S2_defer" and "12:30" in out["message"]
+
+
+def test_format_defer_slot_proposal_none():
+    assert M.format_defer_slot_proposal(None) is None
