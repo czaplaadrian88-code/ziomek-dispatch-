@@ -43,14 +43,27 @@ JOIN_TOLERANCE_SEC = 300.0  # ta sama tolerancja co world_replay.find_shadow
 # osobno, ale nadal nie-zielona (exit≠0) — ocena należy do Adriana.
 CORE_FIELDS = ("verdict", "best_cid", "best_score")
 
+# Rekordy sprzed schematu wr1 (v0/wr0) NIE mają nagranych `live_inputs`
+# (K07 prefetch czasu, loadgov EWMA, pliki kalibracji) — bit-w-bit replay ich
+# NIE odtwarza (world_record.py: „Bit-w-bit replay wymaga rekordu wr1"). Replay
+# liczy te wejścia od nowa w świeżym procesie → różnica jest LUKĄ NAGRYWANIA,
+# nie bugiem determinizmu (diagnoza A2_worldreplay_minus40: kara loadgov −40 na
+# rekordach wr0 = 12 fałszywych „ROZNICA-KRYTYCZNA"). Takie rekordy = POMINIĘTE
+# (nie-certyfikowalne), raportowane osobno — nie mieszają się z realnymi różnicami
+# na wr1. Zbiór NAZWANY i forward-compatible: wr2+ (gdyby powstał) przechodzi.
+_PRE_WR1_SCHEMAS = frozenset({None, "wr0"})
+
 
 def _iter_window_records(record_dir: str, since: datetime | None,
                          until: datetime | None):
     """Rekordy world_record z oknem [since, until]: tylko `now≠null` (replay
-    wierny zegarowo — K06a), dedup po (order_id, ts), posortowane po ts."""
+    wierny zegarowo — K06a) ORAZ tylko `schema=wr1` (faithfully-replayable —
+    wr0/v0 bez `live_inputs` → POMINIĘTE); dedup po (order_id, ts), sort po ts.
+    Zwraca (out, skipped_no_now, skipped_pre_wr1)."""
     seen = set()
     out = []
     skipped_no_now = 0
+    skipped_pre_wr1 = 0
     for p in sorted(str(x) for x in Path(record_dir).glob("world_record-*.jsonl")):
         for rec in WR._iter_jsonl(p):
             ts = WR._parse_dt(rec.get("ts"))
@@ -63,13 +76,16 @@ def _iter_window_records(record_dir: str, since: datetime | None,
             if not rec.get("now"):
                 skipped_no_now += 1
                 continue
+            if rec.get("schema") in _PRE_WR1_SCHEMAS:
+                skipped_pre_wr1 += 1
+                continue
             key = (str(rec.get("order_id")), rec.get("ts"))
             if key in seen:
                 continue
             seen.add(key)
             out.append(rec)
     out.sort(key=lambda r: r.get("ts") or "")
-    return out, skipped_no_now
+    return out, skipped_no_now, skipped_pre_wr1
 
 
 def _build_shadow_index(since: datetime | None):
@@ -107,7 +123,8 @@ def run_gate(since: datetime | None, until: datetime | None,
              record_dir: str = WR.RECORD_DIR, max_n: int | None = None,
              shadow_index: dict | None = None) -> dict:
     """Bieg bramki na oknie korpusu. Zwraca raport zbiorczy (dict)."""
-    records, skipped_no_now = _iter_window_records(record_dir, since, until)
+    records, skipped_no_now, skipped_pre_wr1 = _iter_window_records(
+        record_dir, since, until)
     truncated = False
     if max_n is not None and len(records) > max_n:
         records = records[:max_n]
@@ -159,6 +176,7 @@ def run_gate(since: datetime | None, until: datetime | None,
         "brak_zapisu_n": len(brak_zapisu),
         "bledy_n": len(bledy),
         "skipped_no_now": skipped_no_now,
+        "skipped_pre_wr1": skipped_pre_wr1,
         "roznice": roznice,
         "missy": missy,
         "brak_zapisu": brak_zapisu,
@@ -190,7 +208,8 @@ def render_verdict_txt(report: dict) -> str:
          f"(krytyczne={report['roznice_krytyczne_n']} "
          f"miekkie={report['roznice_miekkie_n']}) missy={report['missy_n']} "
          f"brak_zapisu={report['brak_zapisu_n']} bledy={report['bledy_n']} "
-         f"(pominiete now=null: {report['skipped_no_now']})"),
+         f"(pominiete now=null: {report['skipped_no_now']}, "
+         f"pominiete schema<wr1: {report.get('skipped_pre_wr1', 0)})"),
     ]
     for r in report["roznice"]:
         tag = "ROZNICA-KRYTYCZNA" if r["krytyczna"] else "roznica-miekka"
