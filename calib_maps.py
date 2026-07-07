@@ -39,6 +39,7 @@ restauracji) pozostaje nadrzędne dla deklaracji, bias to telemetria.
 """
 from __future__ import annotations
 
+import html
 import json
 import math
 import os
@@ -244,7 +245,15 @@ def eta_cell_residual_correct(
         rest_corr = 0.0
         if restaurant:
             rmap = data.get("restaurants") or {}
-            rentry = rmap.get(str(restaurant))
+            # Parytet z generatorem (u źródła): tools/eta_cell_residual_build buduje
+            # klucze `restaurants` przez _html.unescape(restaurant) (l.114) — nazwa
+            # restauracji z panelu jest HTML-escaped ("Sweet Fit &amp; Eat",
+            # "Restauracja Kumar&#039;s"), więc surowy rmap.get(str(restaurant))
+            # chybiał (0 trafień na 3 restauracje z encjami). Ten sam unescape co
+            # generator → klucz zgodny; czysta nazwa (bez encji) → unescape = no-op
+            # (zero regresji, mapa nie zawiera encji). Warstwa RESTAURACJI jest
+            # addytywna na OBIETNICĘ — feasibility/R6 NIETKNIĘTE.
+            rentry = rmap.get(html.unescape(str(restaurant)))
             if isinstance(rentry, dict):
                 rr = _finite(rentry.get("resid_min"))
                 if rr is not None:
