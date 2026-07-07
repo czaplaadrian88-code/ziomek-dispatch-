@@ -22,7 +22,13 @@ Efekty trybów (DEFINICJE — egzekwuje silnik w kolejnym inkremencie, NIE tu):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
+
+# ── S2-defer (akcja silnika w S2; TU pura logika przeszukiwania slotów) ──
+DEFER_STEP_MIN = 5.0          # krok pętli slotów
+DEFER_HORIZON_MIN = 90.0     # do created+90′
+DEFER_MAX_ATTEMPTS = 3       # budżet: ≤3 defery / zlecenie
+DEFER_MAX_SPAN_MIN = 90.0    # budżet: Σ przesunięcia ≤90′
 
 # ── progi (E-4; env/flags nadpisze w silniku, tu stałe-fallback) ──
 L_HI, L_LO = 6.0, 4.5          # in-flight/aktywni: wejście / wyjście (histereza)
@@ -184,3 +190,48 @@ def step(state: ModeState, sig: ModeSignals, s3_rate: float = S3_RATE_DEFAULT) -
     else:
         to(S1, "S1" + (f" (2-z-3 nieutrzymane: {','.join(hits)})" if two else ""))
     return new
+
+
+# ── S2-DEFER: akcja silnika w trybie S2 (pura logika; feasibility WSTRZYKIWANA) ──
+
+@dataclass
+class DeferProposal:
+    """Propozycja deferu (do panelu restauracji + completion-guard silnika)."""
+    order_id: str
+    slot_min: float               # proponowany moment gotowości/odbioru (min od północy)
+    shift_min: float              # o ile przesunięto vs pierwotny target
+    attempt: int                  # który raz deferujemy to zlecenie (≤DEFER_MAX_ATTEMPTS)
+    owner: Optional[str]          # kurier, który staje się feasible w slocie (completion-guard)
+    deadline_min: float           # twardy deadline domknięcia (created+horizon) — sierota zabroniona
+    reason: str = "S2_defer"
+
+
+def defer_search(order_id: str, created_min: float, declared_ready_min: float,
+                 now_min: float, feasible_at: Callable[[float], Optional[str]],
+                 prev_attempts: int = 0, prev_span_min: float = 0.0) -> Optional[DeferProposal]:
+    """Pętla slotów +5′..90′ od max(declared_ready, now): pierwszy slot, w którym
+    `feasible_at(slot)` zwraca kuriera (owner) = propozycja deferu. Budżet: ≤3 próby
+    ∧ Σ przesunięcia ≤90′. None gdy budżet wyczerpany lub żaden slot feasible w horyzoncie
+    (→ eskalacja S3/ALARM w silniku, NIGDY sierota — completion-guard trzyma deadline).
+
+    feasible_at(slot_min) → owner-cid gdy w tym slocie ≥1 kurier może wziąć zlecenie
+    bez łamania kanonu (silnik wstrzykuje realny check R6/cap/committed); None = niefeasible.
+    CZYSTA — zero importów silnika; testowalna z zaślepką feasible_at."""
+    if prev_attempts >= DEFER_MAX_ATTEMPTS:
+        return None
+    base = max(declared_ready_min, now_min)
+    deadline = created_min + DEFER_HORIZON_MIN
+    slot = base + DEFER_STEP_MIN
+    attempt = prev_attempts + 1
+    while slot <= created_min + DEFER_HORIZON_MIN:
+        shift = slot - declared_ready_min
+        # budżet Σ przesunięcia (łącznie z poprzednimi deferami)
+        if prev_span_min + max(0.0, shift) > DEFER_MAX_SPAN_MIN:
+            return None
+        owner = feasible_at(slot)
+        if owner:
+            return DeferProposal(order_id=order_id, slot_min=round(slot, 1),
+                                 shift_min=round(max(0.0, shift), 1), attempt=attempt,
+                                 owner=str(owner), deadline_min=round(deadline, 1))
+        slot += DEFER_STEP_MIN
+    return None
