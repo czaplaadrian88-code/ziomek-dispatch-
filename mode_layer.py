@@ -106,9 +106,9 @@ def mode_signals_from_state(orders: dict, now, pending_count: int = 0,
     n_inflight = sum(inflight_by_cid.values())
     active = len(inflight_by_cid)
     L = n_inflight / active if active else 0.0
-    now_min = 0.0
-    if now_dt is not None:
-        now_min = now_dt.hour * 60 + now_dt.minute + now_dt.second / 60.0
+    # now_min = MONOTONICZNE minuty epoch (NIE od-północy — inaczej wrap o północy
+    # wywala różnice sustain/dwell FSM podczas nocnego shadow-runu; bomba TZ).
+    now_min = (now_dt.timestamp() / 60.0) if now_dt is not None else 0.0
     return ModeSignals(
         load_inflight_per_active=round(L, 2),
         queue_pending=int(pending_count) + queue_unassigned,
