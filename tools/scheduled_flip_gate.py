@@ -36,6 +36,13 @@ FLAGS = os.path.join(ROOT, "flags.json")
 LOG = "/root/.openclaw/workspace/dispatch_state/scheduled_flips.jsonl"
 FLOOR_GUARD = "/root/.openclaw/workspace/dispatch_state/pickup_floor_guard.jsonl"
 PY = "/root/.openclaw/venvs/dispatch/bin/python"
+# Markery plan_recheck (L3_REGEN / L4_ANCHOR_FLOOR / GC_COURIER_PLANS) idą przez
+# StreamHandler→stderr, a systemd `dispatch-plan-recheck.service` ma
+# StandardOutput/StandardError=append:<plik> → trafiają do PLIKU, NIE do journala.
+# Dlatego `journalctl -u dispatch-plan-recheck` pokazuje 0 markerów (fałszywy
+# sygnał — ugryzło przy GC-verify at-206 06.07: „marker_hits=0" mimo 22 realnych
+# markerów w pliku). cmd_verify MUSI skanować TEN plik, nie tylko journal.
+PLAN_RECHECK_LOG = os.path.join(ROOT, "logs", "plan_recheck.log")
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -118,6 +125,71 @@ def _write_flags(d):
     os.replace(tmp, FLAGS)
 
 
+# ── Wspólne liczniki logów (BLIŹNIAK: używane i przez _gate, i przez cmd_verify —
+#    ten sam benign-filtr, żeby gate i verify nie kłamały RÓŻNIE na tym samym tle) ──
+
+# Tło DEFENSYWNE, NIE awaria silnika: COORD_GUARD (osrm_client, Lekcja #140/#81)
+# loguje na ERROR gdy POPRAWNIE odrzuci współrzędną (0,0)/None/poza-bbox →
+# sentinel infeasible (zamiast fikcyjnej trasy ~6285 km). To działająca obrona,
+# nie błąd — nie może nabijać err_burst (fałszywy HOLD/rollback na ~25 zdarzeń/2h
+# tła geokod-miss). Filtrujemy TYLKO ten jawnie znany wzorzec (realne ERROR liczą się).
+_BENIGN_ERR_PATTERNS = ("COORD_GUARD",)
+
+
+def _count_err_burst(lines):
+    """(real_errs, benign_skipped): linie ERROR/Traceback z pominięciem tła
+    defensywnego. benign zwracamy dla obserwowalności — nie gubimy sygnału."""
+    real = benign = 0
+    for ln in lines:
+        if "ERROR" in ln or "Traceback" in ln:
+            if any(p in ln for p in _BENIGN_ERR_PATTERNS):
+                benign += 1
+            else:
+                real += 1
+    return real, benign
+
+
+def _count_markers(lines, tok):
+    """Liczba linii zawierających token markera (substring — np. `L3_REGEN` łapie
+    i L3_REGEN_REJECTED, i L3_REGEN_BOTH_BREACH)."""
+    return sum(1 for ln in lines if tok in ln)
+
+
+def _parse_log_ts(line):
+    """Prefiks '%Y-%m-%d %H:%M:%S' (formatter plan_recheck; serwer=UTC) → aware
+    UTC datetime. None gdy brak parsowalnego prefiksu (linia-kontynuacja)."""
+    if len(line) < 19:
+        return None
+    try:
+        return datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _read_log_window(path, since, now=None):
+    """Linie z pliku logu z ostatnich `since` (timedelta), filtrowane po prefiksie
+    czasu. Linia bez prefiksu (kontynuacja Tracebacka) dziedziczy stan ostatniej
+    sparsowanej (multi-line nie wypada z okna). Brak pliku / błąd → []. Strumieniowo
+    (plik może mieć dziesiątki MB — nie wczytujemy całości do pamięci)."""
+    now = now or _now()
+    cutoff = now - since
+    out = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            in_window = False
+            for ln in fh:
+                ts = _parse_log_ts(ln)
+                if ts is not None:
+                    in_window = ts >= cutoff
+                if in_window:
+                    out.append(ln)
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+    return out
+
+
 def _gate(profile):
     """Zwraca (ok: bool, reasons: list[str]). Każdy fail = powód HOLD."""
     fails = []
@@ -156,11 +228,13 @@ def _gate(profile):
             fails.append(f"pickup_floor_guard: {viol} naruszeń w 2h")
     except FileNotFoundError:
         pass
-    # 6. shadow żywy (brak ERROR-burst)
+    # 6. shadow żywy (brak ERROR-burst) — pomija tło defensywne COORD_GUARD
+    #    (BLIŹNIAK licznika z cmd_verify: ten sam _count_err_burst, żeby gate
+    #    i verify nie kłamały różnie na tym samym tle geokod-miss).
     try:
         r = subprocess.run(["journalctl", "-u", "dispatch-shadow", "--since",
                             "1 hour ago", "--no-pager"], capture_output=True, text=True)
-        errs = sum(1 for ln in r.stdout.splitlines() if "ERROR" in ln or "Traceback" in ln)
+        errs, _benign = _count_err_burst(r.stdout.splitlines())
         if errs > 20:
             fails.append(f"dispatch-shadow: {errs} ERROR w godzinie (burst)")
     except Exception:
@@ -241,31 +315,50 @@ def cmd_flip(a):
 
 
 def cmd_verify(a):
-    """Behawioralna weryfikacja że flip zadziałał (markery w logu). Rollback opcjonalny."""
+    """Behawioralna weryfikacja że flip zadziałał (markery w logu). Rollback opcjonalny.
+
+    Markery plan_recheck NIE trafiają do journala (systemd redirect → plik) — więc
+    skanujemy DWIE ścieżki: (1) journal dispatch-shadow+plan-recheck dla err_burst
+    (i jako backstop markera, gdyby kiedyś wrócił do journala), (2) PLIK
+    plan_recheck.log — REALNE źródło markerów, okno 2h po prefiksie czasu. err_burst
+    pomija tło defensywne COORD_GUARD (inaczej fałszywy alarm na geokod-miss)."""
     prof = a.profile
-    markers = {
-        "l4": ("L4_ANCHOR_FLOOR", ["dispatch-plan-recheck"]),
-        "l3gate": ("L3_REGEN", ["dispatch-plan-recheck"]),
-        "l3gc-real": ("GC_COURIER_PLANS", ["dispatch-plan-recheck"]),
+    marker_tok = {
+        "l4": "L4_ANCHOR_FLOOR",
+        "l3gate": "L3_REGEN",
+        "l3gc-real": "GC_COURIER_PLANS",
     }.get(prof)
-    err_burst = 0
+
+    # (1) journal — err_burst (2h) + backstop markera
+    journal_lines = []
     try:
         r = subprocess.run(["journalctl", "-u", "dispatch-shadow", "-u",
                             "dispatch-plan-recheck", "--since", "2 hours ago",
                             "--no-pager"], capture_output=True, text=True)
-        err_burst = sum(1 for ln in r.stdout.splitlines()
-                        if "ERROR" in ln or "Traceback" in ln)
+        journal_lines = r.stdout.splitlines()
     except Exception:
         pass
+    err_burst, coord_guard = _count_err_burst(journal_lines)
+
+    # (2) PLIK plan_recheck.log — realne źródło markerów (okno 2h)
+    file_lines = _read_log_window(PLAN_RECHECK_LOG, timedelta(hours=2))
+
     hit = None
-    if markers:
-        tok, _units = markers
-        hit = sum(1 for ln in r.stdout.splitlines() if tok in ln)
-    _log({"action": "verify", "profile": prof, "marker_hits": hit, "err_burst": err_burst})
+    if marker_tok:
+        # źródła wzajemnie ROZŁĄCZNE (systemd kieruje markery do pliku, journal ma
+        # 0) → suma bez podwójnego liczenia; journal to backstop na przyszłość.
+        hit = _count_markers(file_lines, marker_tok) + _count_markers(journal_lines, marker_tok)
+
+    _log({"action": "verify", "profile": prof, "marker_hits": hit,
+          "err_burst": err_burst, "coord_guard_benign": coord_guard,
+          "marker_src": "plan_recheck.log+journal"})
     if a.rollback_on_error and err_burst > 20:
-        _telegram(f"⚠ verify {prof}: {err_burst} ERROR w 2h — ROZWAŻ rollback flagi (nie auto-cofam bez pewności)")
+        _telegram(f"⚠ verify {prof}: {err_burst} realnych ERROR w 2h "
+                  f"(pominięto {coord_guard} COORD_GUARD tła) — ROZWAŻ rollback flagi "
+                  f"(nie auto-cofam bez pewności)")
         return 3
-    _telegram(f"🔎 verify {prof}: markery={hit}, ERROR={err_burst} (2h). "
+    _telegram(f"🔎 verify {prof}: markery={hit}, ERROR={err_burst} "
+              f"(pominięto {coord_guard} COORD_GUARD tła, 2h). "
               f"{'OK — flip działa' if (hit or 0) > 0 else 'brak markerów — flip mógł nie mieć na czym zadziałać (mały ruch)'}")
     return 0
 
