@@ -81,6 +81,53 @@ def test_restaurant_layer_additive(tmp_path, monkeypatch):
     assert CM.eta_cell_residual_correct(20.0, now, is_bundle=False, restaurant="NieMa") == without
 
 
+def test_restaurant_layer_html_escaped_name(tmp_path, monkeypatch):
+    """S27-C (2026-07-07): nazwa restauracji z panelu jest HTML-escaped
+    ("Sweet Fit &amp; Eat", "Kumar&#039;s"). Generator buduje klucze mapy przez
+    `_html.unescape` (eta_cell_residual_build:114), więc konsument MUSI zrobić ten
+    sam unescape przed lookupem — inaczej warstwa restauracji chybia (znalezisko A3,
+    89/712 decyzji w oknie 07-07). Test parytetu generator↔konsument end-to-end:
+    źródło z encją → klucz odescape'owany w mapie → lookup escaped nazwą trafia.
+    PRZED fixem: with_rest == cell_only (chybienie). PO fixie: with_rest > cell_only.
+    """
+    ESC = "Sweet Fit &amp; Eat"      # jak w result.restaurant (panel HTML)
+    CLEAN = "Sweet Fit & Eat"        # jak klucz mapy (generator unescape)
+    rows = _synthetic_log()          # peak_lunch solo resid +6
+    for i in range(40):              # wolna restauracja: residual PO komórce dodatni
+        rows.append({"predicted_delivery_min": 20.0, "real_delivery_min": 34.0,
+                     "hour_warsaw": 12, "is_bundle": False, "restaurant": ESC})
+    p = tmp_path / "src.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    m = B.build_map(source=str(p), min_n=20, shrink_k=15)
+    # klucz mapy jest ODESCAPE'OWANY (dowód że asymetria realna)
+    assert CLEAN in m["restaurants"], m["restaurants"].keys()
+    assert ESC not in m["restaurants"]
+    _install_map(tmp_path, monkeypatch, m)
+    now = datetime(2026, 7, 1, 12, 30, tzinfo=_WAW)
+    cell_only = CM.eta_cell_residual_correct(20.0, now, is_bundle=False)
+    # konsument dostaje ESCAPED nazwę (jak na żywo) — po fixie unescape → trafia
+    with_rest = CM.eta_cell_residual_correct(20.0, now, is_bundle=False, restaurant=ESC)
+    assert with_rest > cell_only, (
+        f"warstwa restauracji chybiła dla escaped nazwy {ESC!r} "
+        f"(cell_only={cell_only}, with_rest={with_rest}) — brak unescape u konsumenta")
+    # apostrof-encja (&#039;) też: html.unescape, nie naiwny replace('&amp;','&')
+    rows2 = _synthetic_log()
+    for i in range(40):
+        rows2.append({"predicted_delivery_min": 20.0, "real_delivery_min": 34.0,
+                      "hour_warsaw": 12, "is_bundle": False,
+                      "restaurant": "Restauracja Kumar&#039;s"})
+    p2 = tmp_path / "src2.jsonl"
+    p2.write_text("\n".join(json.dumps(r) for r in rows2), encoding="utf-8")
+    m2 = B.build_map(source=str(p2), min_n=20, shrink_k=15)
+    assert "Restauracja Kumar's" in m2["restaurants"]
+    _install_map(tmp_path, monkeypatch, m2)
+    assert CM.eta_cell_residual_correct(
+        20.0, now, is_bundle=False, restaurant="Restauracja Kumar&#039;s") > cell_only
+    # regresja: czysta nazwa (bez encji) NADAL działa (unescape = no-op)
+    assert CM.eta_cell_residual_correct(
+        20.0, now, is_bundle=False, restaurant="NieMa") == cell_only  # nieznana = fail-soft
+
+
 def test_restaurant_bridges_excluded(tmp_path):
     rows = []
     for i in range(40):
