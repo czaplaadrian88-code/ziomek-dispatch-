@@ -87,6 +87,23 @@ def _find_defer_module():
     return None
 
 
+def test_mode_consistency_no_r6_r27_relax_outside_s3():
+    """INV-MODE-CONSISTENCY (A1): relaks R6/R27 WYŁĄCZNIE w S3; jedzenie NIGDY >40.
+    Behawioralny — woła realne mode_layer.mode_r6_cap_min/mode_r27_window_min."""
+    from dispatch_v2 import mode_layer as ML
+    base_r6, base_r27 = 35.0, 5.0
+    # poza S3: żaden relaks (cap = base)
+    for m in (ML.S1, ML.S2):
+        assert ML.mode_r6_cap_min(m, base_r6) == base_r6, f"{m} zrelaksował R6!"
+        assert ML.mode_r27_window_min(m, base_r27) == base_r27, f"{m} zrelaksował R27!"
+    # S3: relaks dozwolony ale ograniczony (R6→40, R27→10)
+    assert ML.mode_r6_cap_min(ML.S3, base_r6, 40.0) == 40.0
+    assert ML.mode_r27_window_min(ML.S3, base_r27, 10.0) == 10.0
+    # KANON jedzenie NIGDY >40 — sufit niezależny od wstrzykniętego alarmu
+    for alarm in (40.0, 45.0, 60.0, 999.0):
+        assert ML.mode_r6_cap_min(ML.S3, base_r6, alarm) <= 40.0, "jedzenie >40 w S3!"
+
+
 def test_defer_completion_guard_armed_when_defer_exists():
     """INV-DEFER-COMPLETION: każde zlecenie zdeferowane MUSI mieć finał
     (assign/deliver/koord-exception) — zero sierot. Mechanizm deferu (W1)

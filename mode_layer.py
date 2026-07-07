@@ -235,3 +235,43 @@ def defer_search(order_id: str, created_min: float, declared_ready_min: float,
                                  owner=str(owner), deadline_min=round(deadline, 1))
         slot += DEFER_STEP_MIN
     return None
+
+
+# ── EFEKTY TRYBU S3 (kanon-krytyczne; pure — kanon WSTRZYKIWANY, zero 2. kopii) ──
+FOOD_ABS_CEILING_MIN = 40.0   # jedzenie NIGDY >40 (kanon nietykalny — twardy sufit)
+
+
+def mode_r6_cap_min(mode: str, base_cap_min: float, alarm_cap_min: float = 40.0) -> float:
+    """Cap R6 [min] wg trybu: S1/S2 = base (kanon 35), S3 = alarm (40). base/alarm
+    WSTRZYKIWANE przez silnik (C.BAG_TIME_HARD_MAX_MIN i alarm) → mode_layer czysty,
+    zero duplikatu stałej kanonu. TWARDY SUFIT: wynik NIGDY >40 (jedzenie NIGDY>40 —
+    relaks R6 tylko do 40, wyłącznie w S3). Poza S3 relaks ZABRONIONY (zwraca base)."""
+    cap = alarm_cap_min if mode == S3 else base_cap_min
+    return min(float(cap), FOOD_ABS_CEILING_MIN)
+
+
+def mode_r27_window_min(mode: str, base_window_min: float, s3_window_min: float = 10.0) -> float:
+    """Okno committed pickup [±min] wg trybu: S1/S2 = base (kanon ±5), S3 = ±10.
+    base WSTRZYKIWANE (C.V3274_FROZEN_PICKUP_WINDOW_MIN). Relaks tylko w S3."""
+    return float(s3_window_min if mode == S3 else base_window_min)
+
+
+def priority_shed(orders_meta: list, mode: str, protect_oldest_n: int = 5) -> set:
+    """W S3 priority-shed: CHROŃ czasówki + `protect_oldest_n` najstarszych; reszta
+    może być zdegradowana (best-effort/defer). Poza S3 = WSZYSTKO chronione (brak shed).
+    orders_meta: list[dict] {oid, is_czasowka, age_min}. Zwraca set chronionych oid.
+    Czysta — decyzja co zrobić z niechronialnymi należy do silnika (NIGDY drop jedzenia >40)."""
+    prot = set()
+    if not orders_meta:
+        return prot
+    if mode != S3:
+        return {str(o.get("oid")) for o in orders_meta if o.get("oid") is not None}
+    czas = [o for o in orders_meta if o.get("is_czasowka")]
+    rest = [o for o in orders_meta if not o.get("is_czasowka")]
+    for o in czas:
+        if o.get("oid") is not None:
+            prot.add(str(o["oid"]))
+    for o in sorted(rest, key=lambda x: x.get("age_min", 0.0), reverse=True)[:protect_oldest_n]:
+        if o.get("oid") is not None:
+            prot.add(str(o["oid"]))
+    return prot
