@@ -3001,6 +3001,11 @@ class PipelineResult:
     # TYLKO gdy flaga ON i wykryto fabrykację przy werdykcie eskalacyjnym. Konsument:
     # telegram_approver/konsola (framing uncertainty). W1 (defer-engine) skonsumuje jako trigger.
     eta_defer_hint: Optional[bool] = None
+    # W1/T2.4 (2026-07-07): stempel would-be-mode (S1/S2/S3) + reason z obserwatora
+    # trybów (shadow; NIE krokuje FSM, tylko odczyt stanu). None gdy flaga OFF / brak
+    # stanu. Read-only w serializerze; NIE wpływa na verdict/score/feasibility.
+    mode: Optional[str] = None
+    mode_reason: Optional[str] = None
 
 
 # ─── FAIL-04: prep-variance anomaly (A1 anomaly block, shadow-first) ───
@@ -3759,6 +3764,14 @@ def assess_order(
         pass  # MP-#13 defense-in-depth — leave defaults False/None
     # W0.2: bezpiecznik fabrykacji ETA (shadow-first compute-always; aktywny za flagą)
     _eta_fabrication_check(result, order_event, now)
+    # W1/T2.4: stempel would-be-mode na rekordzie decyzji (shadow, flaga OFF default).
+    # Odczyt stanu obserwatora (mode_observer) — NIE krokuje FSM. Fail-soft.
+    if C.flag("ENABLE_MODE_LAYER_SHADOW", False):
+        try:
+            from dispatch_v2.tools.mode_observer import read_current_mode
+            result.mode, result.mode_reason = read_current_mode()
+        except Exception:
+            pass  # obserwowalność NIGDY nie wywróci assess flow
     try:
         from dispatch_v2.observability.candidate_logger import get_logger, serialize_candidate
         logger = get_logger()

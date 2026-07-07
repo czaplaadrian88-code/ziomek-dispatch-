@@ -210,6 +210,8 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_ETA_FABRICATION_GUARD",
     # W0.5 advisory (2026-07-06): korekta ETA per-komórka floty (slot×solo/worek) na obietnicę.
     "ENABLE_ETA_CELL_RESIDUAL_CORRECTION",
+    # W1/T2.4 advisory (2026-07-07): stempel would-be-mode (S1/S2/S3) na rekordzie decyzji (shadow).
+    "ENABLE_MODE_LAYER_SHADOW",
     "ENABLE_R6_BREACH_SHADOW_LOG",
     # E2 (2026-06-14): 20% live A/B PLN-sort selekcji kandydatow (dispatch_pipeline).
     "ENABLE_E2_PLN_AB",
@@ -487,6 +489,10 @@ ENABLE_ETA_FABRICATION_GUARD = False
 # Mapa `calib_maps.eta_cell_residual_correct` (generator tools/eta_cell_residual_build).
 # Default OFF; shadow-first (skorygowana ETA logowana jako obserwacja niezależnie od flagi).
 ENABLE_ETA_CELL_RESIDUAL_CORRECTION = False
+# W1/T2.4 (advisory Tura 2): stempel would-be-mode na rekordzie decyzji (czyta stan
+# obserwatora mode_observer — NIE krokuje FSM). Default OFF, czysta obserwowalność
+# (mode+mode_reason w serializerze); zero wpływu na verdict/score/feasibility.
+ENABLE_MODE_LAYER_SHADOW = False
 ETA_FABRICATION_FLOOR_MIN = 60.0     # T=60: E-1 łapie 100% fabrykacji (>90 gubi połowę)
 ETA_FABRICATION_RATIO = 2.5          # pred>2,5×robust_ref (komponent ratio Opusa vs FP kryzysu)
 ETA_ROBUST_SERVICE_MIN = 12.0        # service_time (odbiór+wydanie) w robust_ref

@@ -661,6 +661,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         "eta_unreliable": getattr(result, "eta_unreliable", None),
         "eta_unreliable_meta": getattr(result, "eta_unreliable_meta", None),
         "eta_defer_hint": getattr(result, "eta_defer_hint", None),
+        # W1/T2.4 (2026-07-07): stempel would-be-mode (shadow; None gdy flaga OFF).
+        "mode": getattr(result, "mode", None),
+        "mode_reason": getattr(result, "mode_reason", None),
         "best": None if best is None else {
             "courier_id": best.courier_id,
             "name": best.name,

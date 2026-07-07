@@ -52,6 +52,16 @@ def _pending_count(pool):
     return 0
 
 
+def read_current_mode(fsm_state_path=FSM_STATE):
+    """(mode, reason) z pliku stanu obserwatora — do STEMPLA decyzji (read-only,
+    NIE krok FSM; obserwator jest jedynym, który krokuje). Fail-soft → (S1, 'no-state')
+    gdy plik brak/uszkodzony (bezpieczny default: tryb spokojny)."""
+    d = _load_json(fsm_state_path, None)
+    if isinstance(d, dict) and d.get("mode"):
+        return str(d["mode"]), str(d.get("reason") or "")
+    return M.S1, "no-state"
+
+
 def _load_state(fsm_state_path=FSM_STATE):
     d = _load_json(fsm_state_path, None)
     if isinstance(d, dict) and "mode" in d:
