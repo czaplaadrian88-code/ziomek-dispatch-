@@ -21,8 +21,8 @@ def _write_records(dirpath: Path, recs):
     return f
 
 
-def _rec(oid, ts, now=True):
-    return {"order_id": oid, "ts": ts,
+def _rec(oid, ts, now=True, schema="wr1"):
+    return {"order_id": oid, "ts": ts, "schema": schema,
             "now": ts if now else None, "verdict": "PROPOSE"}
 
 
@@ -53,15 +53,16 @@ def _shadow_index_for(*oids):
 
 
 def test_window_filter_skips_no_now_and_dedups(corpus):
-    recs, skipped = G._iter_window_records(str(corpus), None, None)
+    recs, skipped, skipped_pre_wr1 = G._iter_window_records(str(corpus), None, None)
     assert [r["order_id"] for r in recs] == ["100", "101", "103"]
     assert skipped == 1
+    assert skipped_pre_wr1 == 0
 
 
 def test_window_since_until(corpus):
     since = G.WR._parse_dt("2026-07-06T11:00:00+00:00")
     until = G.WR._parse_dt("2026-07-06T13:30:00+00:00")
-    recs, _ = G._iter_window_records(str(corpus), since, until)
+    recs, *_ = G._iter_window_records(str(corpus), since, until)
     assert [r["order_id"] for r in recs] == ["101"]
 
 
