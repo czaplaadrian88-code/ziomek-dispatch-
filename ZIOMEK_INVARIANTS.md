@@ -10,9 +10,11 @@
 - **⚠️ VOID** — strażnik/przyrząd ISTNIEJE, ale oracle pokazał, że KŁAMIE. **Gorszy niż brak** — daje fałszywą pewność. Priorytet naprawy = najwyższy.
 - **🔴 SLOT** — brak strażnika. Nazwany dług, do zbudowania (fala F6/L0).
 
-**Dziś (2026-07-05, Sprint 1 Z1+Z2): ~27 testów-strażników, ⚠️ VOID = 0 (wszystkie 4 zlikwidowane re-oracle C9 + mutation-probes — dowody w `eod_drafts/2026-07-05/`), zostaje 16 slotów 🔴 (gros: alokacja/feasibility + route-order w toku u tmux 15).** Fala F6 celuje w pozostałe 🔴.
+**Dziś (2026-07-05, Sprint 1 Z1+Z2): ~27 testów-strażników, ⚠️ VOID = 0 (wszystkie 4 zlikwidowane re-oracle C9 + mutation-probes — dowody w `eod_drafts/2026-07-05/`), zostaje 13 slotów 🔴 (gros: alokacja/feasibility + route-order w toku u tmux 15/27; 3 STALE zreklasyfikowane S28-B).** Fala F6 celuje w pozostałe 🔴.
 
 > **Aktualizacja 2026-07-07 (B2 higiena/stabilność, +3 strażniki, +12 testów, wszystkie ZIELONE):** dozbrojono najważniejsze puste SEAMY w klasach FEASIBILITY/ALOKACJA (regression-guards istniejącego POPRAWNEGO zachowania, ZERO zmian silnika): (1) `test_inv_r6_dial_family` — rodzina termiczna 35-min = jeden dial (INV-FEAS-R6-ONE-SOURCE, część konsystencji; ⚠ referowany `test_overage_cap_equals_engine_dial` NIE ISTNIAŁ — slot był realnie pusty); (2) `test_inv_lexqual_geometry_group_subordination` — geometria K2 nie przeskakuje grupy tier×bucket w `objm_lexr6.pick()`; (3) `test_inv_carried_first_lock_first` — silnikowy `lock_first` (route_simulator) nigdy nie stawia nowego odbioru na czole niepustego worka. Każdy z mutation-probe (RED przy regresji). Raport: `eod_drafts/2026-07-07/B2_inwarianty.md`. **Ustalenie uboczne:** kilka slotów w dashboardzie jest NIEAKTUALNYCH (STALE) — armed przez L7.x/L6.C, a nadal oznaczone 🔴: INV-LAYER-HARD-BEFORE-SOFT (EMIT) i INV-LAYER-NO-VERDICT-OUTSIDE-L5 → `test_split_layer_guard_l73` (L7.3); INV-COH-R-DECLARED (chokepoint zapisu) → `test_r_declared_tripwire_l71` (L7.1). Weryfikacja/reklasyfikacja = osobny temat (nie ruszam kanonu bez ACK).
+
+> **Aktualizacja 2026-07-07 (S28-B narzędzia/higiena — ZERO zmian silnika/flag):** (1) **reklasyfikacja 3 slotów STALE 🔴→🟢** z DOWODEM (guardy istnieją, 24 testy ZIELONE, mutation-probe w każdym): INV-LAYER-HARD-BEFORE-SOFT (pełny/EMIT) + INV-LAYER-NO-VERDICT-OUTSIDE-L5 → `test_split_layer_guard_l73` (L7.3); INV-COH-R-DECLARED (chokepoint) → `test_r_declared_tripwire_l71` (L7.1) — potwierdzenie ustalenia B2. Węższe siostrzane części (re-assert po FEAS_CARRY_READMIT / `_assert_` w selekcji) POZOSTAJĄ 🔴 = xfail-RATCHET B2 (fala silnika). (2) **INV-POS-NO-PRODUCE 🔴→🟡**: NOWY ratchet entropii `test_inv_pos_no_produce_ratchet` (baseline 10 producentów, kierunek malejący; pełne 🟢 = L2.1 flip). Raport: `eod_drafts/2026-07-07/S28B_inwarianty.md`. **Ustalenie:** czyste seamy „bez silnika" niemal wyczerpane (B2+S28-B) — reszta 🔴 wymaga fali silnika (już xfail-ratchetowana) lub jest w toku u tmux 15/27 (route-order).
 
 ---
 
@@ -26,8 +28,8 @@
 ## Kontrakt ② — KONTRAKT WARSTW (HARD przed SOFT)
 - 🟢 **INV-FEAS-SHIFT-END**: heurystyka mass-fail V328 nie proponuje po końcu zmiany → `test_v328_heuristic_shift_guard`.
 - 🟢 **INV-SEL-MULT-SIGN**: mnożnik score nie odwraca na ujemnym score → `test_v327_mult_sign_guard`.
-- 🔴 **INV-LAYER-HARD-BEFORE-SOFT (pełny)**: `_assert_feasibility_first` istnieje, ale tylko na 1 call-site → re-assert na EMIT (po mutacjach `FEAS_CARRY_READMIT`, wzorzec #10). Strażnik globalny brak.
-- 🔴 **INV-LAYER-NO-VERDICT-OUTSIDE-L5**: `verdict=KOORD` tylko w warstwie 8; zakaz poza.
+- 🟢 **INV-LAYER-HARD-BEFORE-SOFT (pełny)** *(reklasyfikacja S28-B 2026-07-07 — dashboard był STALE; armed L7.3)*: `_assert_feasibility_first` re-assertowany na EMIT przez `_split_layer_emit_assert` (wspólny lejek `_classify_and_set_auto_route`). Strażnik = `test_split_layer_guard_l73` (INV-LAYER-1; flaga ON≠OFF bajt-parytet, mutation-probe: zdjęcie gardy OFF → RED). ⚠ węższa re-assert PO `FEAS_CARRY_READMIT` = xfail-RATCHET `test_invariant_slots_l04` SLOT 5 (wymaga fali silnika).
+- 🟢 **INV-LAYER-NO-VERDICT-OUTSIDE-L5** *(reklasyfikacja S28-B 2026-07-07 — dashboard był STALE; armed L7.3)*: jeden setter `_set_feasibility_verdict` z gardą warstwy; zapis werdyktu poza L5 loguje naruszenie. Strażnik = `test_split_layer_guard_l73` (INV-LAYER-2; mutation-probe zdejmujący gardę → RED).
 - 🔴 **INV-FEAS-R6-ONE-SOURCE** *(re-spec 2026-07-01 — pomiar B1 na 2718 worków OBALIŁ wersję „tier-aware 35 T1/2, 40 T3": myliła KLASĘ kuriera z POZIOMEM ESKALACJI; zgodność z KANON „35 normalnie / 40 TYLKO alarm")*: rodzina progów termicznych R6 (=35: `BAG_TIME_HARD_MAX_MIN`, `O2_OVERAGE_CAP_MIN`, bundle_calib…) → docelowo 1 źródło (L6.B2); każdy INSTRUMENT mierzy na TYM SAMYM dialu co dźwignia, którą kalibruje (bundle_calib↔`O2_OVERAGE_CAP_MIN`: 🟢 `test_overage_cap_equals_engine_dial`). Termiczna R6 jest PŁASKA (35, doktryna Adriana 2026-05-10, feasibility_v2 „35 min jedyną twardą regułą"); „40" = `BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN` — cap SELEKCJI kuriera w eskalacji-3 (ratunek przy 0 feasible), inny mechanizm niż termika. Bag-size cap per KLASĘ (`HARD_TIER_BAG_CAP` gold6/std5/slow4, flaga OFF) = jeszcze inna oś (liczba zleceń, nie minuty).
   - 🟢 **DIAL-FAMILY consistency uzbrojona 2026-07-07 (B2)**: `test_inv_r6_dial_family` pilnuje, że rodzina termiczna trzyma JEDEN dial — `BAG_TIME_HARD_MAX_MIN == DEFAULT_SLA_MINUTES == C2_PER_ORDER_THRESHOLD_MIN == O2_OVERAGE_CAP_MIN` (=35) — ORAZ że eskalacja-3 `BEST_EFFORT_OBJM_NEW_ORDER_CAP_MIN` (40) jest DISTINCT/luźniejsza, a bag-size caps to oś liczby (≠35). Łapie dial-drift „podbito jeden próg bez bliźniaków" = bramka≠scoring. ⚠ referowany wyżej `test_overage_cap_equals_engine_dial` **NIE ISTNIAŁ w repo** (slot był realnie pusty). Strukturalne 1-źródło (L6.B2, jeden `sla_anchor` na wszystkie) nadal otwarte — ten strażnik pina SPÓJNOŚĆ wartości, nie strukturalną unifikację.
 - 🟢 **INV-FEAS-PICKUP-FLOOR** *(slot uzbrojony 2026-07-05, Z2 — silnik+monitor; „0 strażników" było stale)*: `pickup_eta ≥ max(now, shift_start)` — strażnik = `test_pickup_floor_guard` + żywy monitor `tools/pickup_floor_guard` (NIE-ŚLEPY po L4: resolucja shift_start kanonem `resolve_available_from*`). Zakres: silnik + monitor; powierzchnie renderów (konsola/apka display-floor) = osobny pas route-order/L3.
@@ -66,14 +68,15 @@
 ## Kontrakt ⑧ — KOHERENCJA (precedencja)
 - 🟢 **INV-VERDICT-CLASSIFIED**: każda bramka KOORD ma klasę {quality|operational}; quality strzeżone → `test_verdict_gate_guards`.
 - 🔴 **INV-COH-CLAMP-CHOKEPOINT**: 1 punkt precedencji clampów czasu (`effective_pickup_at`); frozen R27 ↔ floor ↔ OSRM rozstrzygane w jednym miejscu (dziś 13 klastrów konfliktów).
-- 🔴 **INV-COH-R-DECLARED**: tripwire `czas_kuriera ≥ czas_odbioru_timestamp` (R-DECLARED-TIME) zawsze.
+- 🟢 **INV-COH-R-DECLARED (chokepoint zapisu)** *(reklasyfikacja S28-B 2026-07-07 — dashboard był STALE; armed L7.1)*: tripwier `czas_kuriera ≥ czas_odbioru_timestamp` (R-DECLARED-TIME) w JEDYNYM funnelu commitu (`state_machine.upsert_order`) — fail-loud LOG+JSONL, NIGDY reject. Strażnik = `test_r_declared_tripwire_l71` (naruszenie→wpis / cisza / flaga OFF bajt-parytet / TZ-naive=Warsaw / mutation-probe kierunku nierówności → RED). ⚠ siostrzany `_assert_r_declared_time` w SELEKCJI = xfail-RATCHET `test_invariant_slots_l04` SLOT 4 (wymaga fali silnika).
 
 ---
 
 ## Klaster DANE/SENTINELE (Filar F-3, most K5 — dziś najgorętszy fizycznie 🔥)
 - 🟢 **INV-POS-BBOX** (`test_bbox_guard_geocoding`) · 🟢 **INV-POS-GPS-TRUST** (`test_fail05_gps_bbox_guard`) · 🟢 **INV-POS-SENTINEL-NOPHANTOM** (`test_coord_poison_guard`) · 🟢 **INV-POS-BOOTSTRAP-PRESERVE** (`test_bootstrap_preserve_guard`) · 🟢 **INV-POS-UNIQUE-PICKUP** (`test_bug2_bootstrap_guard`).
 - 🟢 **INV-STATE-NO-SILENT-EMPTY** (`test_state_write_guard`) · 🟢 **INV-STATE-DELIVERED-NO-SINK** (`test_delivered_sink_guard`) · 🟢 **INV-STATE-NO-EMPTY-OVERWRITE** (`test_fail09_packs_empty_write_guard`) · 🟢 **INV-STATE-NO-NOWISO** (`test_payload_fallback_guards`) · 🟢 **INV-STATE-PARSE-CONTINUITY** (`test_parse_continuity_guard`).
-- 🔴 **INV-POS-NO-PRODUCE (kluczowy, F3/L2)**: ŻADNA ścieżka NIE *produkuje* (0,0)/BIALYSTOK_CENTER jako pozycji — wepnij ISTNIEJĄCY walidator `common.py:513` u INGEST (nie buduj nowego). Zweryfikowane oracle 30.06: **12 miejsc-trucizn w żywym silniku** (6 = `courier_resolver` no_gps/pre_shift, 4 = `dispatch_pipeline` defaulty, 2 = `chain_eta`), reszta z surowych 92 = fałszywki/obrona. 🔥 LIVE: 2046+14456 zdarzeń, 8 ofiar 30.06.
+- 🟡 **INV-POS-NO-PRODUCE (kluczowy, F3/L2)** *(ratchet entropii armed S28-B 2026-07-07; pełne 🟢 = flip L2.1)*: ŻADNA ścieżka NIE *produkuje* (0,0)/BIALYSTOK_CENTER jako pozycji — wepnij ISTNIEJĄCY walidator `common.py:513` u INGEST (nie buduj nowego). Zweryfikowane oracle 30.06: **12 miejsc-trucizn w żywym silniku** (6 = `courier_resolver` no_gps/pre_shift, 4 = `dispatch_pipeline` defaulty, 2 = `chain_eta`), reszta z surowych 92 = fałszywki/obrona. 🔥 LIVE: 2046+14456 zdarzeń, 8 ofiar 30.06.
+  - 🟡 **Ratchet KIERUNKU uzbrojony S28-B**: `test_inv_pos_no_produce_ratchet` — liczba producentów-placeholderów może TYLKO maleć (baseline zamrożony: 4× `or (0.0,0.0)` w `dispatch_pipeline` + 6× `.pos = BIALYSTOK_CENTER` w `courier_resolver`; NOWY producent > baseline → RED). Mutation-probe: syntetyczny producent → wykryty; guardy `!= (0.0,0.0)` NIE liczone; `.claude/worktrees` pominięte (lekcja S28-A). NIE eliminuje istniejących (to L2.1 flip), ale blokuje wzrost entropii — meta-reguła „entropia niżej". Pełne 🟢 = L2.1 (`ENABLE_COORD_SENTINEL_INGEST_GUARD`) flip + eliminacja fikcji no_gps (osobna fala, filar #3).
   - **L2.1 (2026-07-01) ZBUDOWANE, czeka na flip:** JEDEN walidator u ingest (gps_server POST / `state_machine.upsert_order` [pokrywa też parcel] / shadow-tick geocode-or-skip / read-side `_load_gps_positions`) + guardy konsumentów geometrii (`_coords_pass`: soon_free probe+serializer / wave-veto / repo-cost / bundle L2/L3 / coloc) + `_save_plan_on_assign` pisze REALNE coords z orders_state (koniec placeholderów K5b) + `feasibility._valid`→kanon. Flaga `ENABLE_COORD_SENTINEL_INGEST_GUARD` (OFF=legacy bajt-w-bajt). Strażnik: 🟢 `test_coord_sentinel_ingest_l21` (22, w tym e2e detonacji V328). Żywy łańcuch 01.07 (28 ofiar): plan-placeholder (0,0) → `_soon_free_probe` → haversine w SERIALIZERZE metryk → V328 eject. Telemetria: `coord_poison_bag_oids`/`coord_poison_new_delivery` (unconditional). PO flipie: BIALYSTOK_CENTER-fikcja (świadoma polityka no_gps) = zostaje → typ Unknown (filar #3, osobna fala); catch-all `_v328_eval_safe` rozróżnia = L2.2.
 
 ---
@@ -82,14 +85,14 @@
 | Kontrakt/klaster | ✅RT/🟢TEST | ⚠️VOID | 🔴SLOT |
 |---|---|---|---|
 | ① jedno źródło | 2 | 0 | 2 |
-| ② warstwy | 3 | 0 | 4 |
+| ② warstwy | 5 | 0 | 2 |
 | ③ bliźniaki | 2 | 0 | 1 |
 | ④ flagi | 2 | 0 | 1 |
 | ⑤ prawda przyrządów | 2✅+3🟢 | 0 | 1 |
 | ⑥ semantyka | 1 | 0 | 2 |
 | ⑦ cykl życia | 2 | 0 | 2 |
-| ⑧ koherencja | 1 | 0 | 2 |
+| ⑧ koherencja | 2 | 0 | 1 |
 | DANE/SENTINELE | 10 | 0 (carried→⑤) | 1 |
-| **RAZEM** | **~27** | **0** | **16** |
+| **RAZEM** | **~30** | **0** | **13** |
 
 **Wniosek:** ⚠️VOID = **0** (Sprint 1 Z1+Z2, 05.07: serializer + CONFTEST-STRIP + carried_first_guard + global_allocate — dowody `eod_drafts/2026-07-05/A1_{SERIALIZER_reoracle,INVARIANTS_devoid}_dowod.md`); **bramka `PENDING_RESWEEP_LIVE` ma podstawę pomiarową** (geometria w certyfikatorze + gate wpięty i testowany). Dług egzekwowania dalej w slotach ①②③ (7 z 16) — w toku: INV-SRC-ROUTE-ORDER (Sprint 0 tmux 15, deadline 07-10.07). Klasa DANE/STAN gęsto obstawiona.
