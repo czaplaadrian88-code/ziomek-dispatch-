@@ -18,6 +18,9 @@ Trzy warstwy:
 from __future__ import annotations
 
 import importlib.util
+import os
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -115,3 +118,46 @@ def test_defer_completion_guard_armed_when_defer_exists():
     raise AssertionError(
         f"moduł deferu {mod} istnieje — UZBRÓJ INV-DEFER-COMPLETION "
         "(iteracja ledgera deferów: każdy wpis ma terminalny finał, zero sierot)")
+
+
+# ── 4. izolacja worktree (S28-A): sąsiedni worktree nie fałszuje ratcheta ──
+
+def _write(root: Path, rel: str, body: str) -> None:
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body, encoding="utf-8")
+
+
+def test_ratchet_ignores_adjacent_claude_worktree(tmp_path):
+    """S28-A: gdy pod repo żyje worktree sąsiedniej sesji
+    (`.claude/worktrees/agent-*`, ADR-007), jego kopie common.py/plan_recheck.py
+    NIE mogą liczyć się jako druga definicja kanonu (fałszywy VETO —
+    ugryzło dziś). load_sources MUSI pomijać `.claude`.
+
+    Mutation-probe wbudowany: DRUGA definicja pod NIE-wykluczoną ścieżką
+    (feasibility_v2.py) NADAL zapala ratchet → dowód, że wykluczamy tylko
+    worktree'y, nie realny dryf źródła."""
+    root = tmp_path / "dispatch_v2"
+    # legalne, single-source definicje w silniku
+    _write(root, "common.py", "BAG_TIME_HARD_MAX_MIN = 35\n")
+    _write(root, "plan_recheck.py",
+           "def _apply_canon_order_invariants(x):\n    return x\n")
+    # sąsiedni worktree pod .claude — DUPLIKATY, które muszą być pominięte
+    wt = ".claude/worktrees/agent-synthetic/"
+    _write(root, wt + "common.py", "BAG_TIME_HARD_MAX_MIN = 35\n")
+    _write(root, wt + "plan_recheck.py",
+           "def _apply_canon_order_invariants(x):\n    return x\n")
+
+    sources = csc.load_sources(root)
+    # dowód pominięcia: żaden klucz źródeł nie pochodzi z `.claude`
+    assert not any(".claude" in k for k in sources), \
+        f"load_sources wciągnął worktree: {[k for k in sources if '.claude' in k]}"
+    assert csc.check_ratchets(sources) == [], \
+        "sąsiedni worktree fałszywie zapalił ratchet single-source"
+
+    # mutation-probe: druga definicja pod NIE-wykluczoną ścieżką → ratchet gryzie
+    _write(root, "feasibility_v2.py", "BAG_TIME_HARD_MAX_MIN = 35\n")
+    viol = csc.check_ratchets(csc.load_sources(root))
+    assert any("feasibility_v2.py" in v for v in viol), (
+        "ratchet OŚLEPŁ — druga definicja R6 w silniku musi być VETO "
+        f"(wykryte: {viol})")
