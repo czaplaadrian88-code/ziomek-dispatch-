@@ -31,6 +31,9 @@ from dispatch_v2 import plan_manager
 # common.decision_flag zamiast env-frozen module-const. Import top-level bezpieczny
 # (common NIE importuje plan_recheck → brak cyklu; plan_manager już ściąga common).
 from dispatch_v2 import common as _CF
+# Sprint 30 (2026-07-07): JEDNO ŹRÓDŁO kolejności/naprawy trasy. route_order = PURE
+# (stdlib), bez cyklu (nie importuje plan_recheck). route_podjazdy re-eksportuje z niego.
+from dispatch_v2 import route_order as _route_order
 
 _log = logging.getLogger("plan_recheck")
 if not _log.handlers:
@@ -1203,29 +1206,15 @@ def _l3_bag_spread(sims: Dict[str, Any]) -> Dict[str, float]:
 def _repair_dropoffs_after_pickups(seq):
     """Dostawy wyprzedzone przez sortowanie odbiorów → przenieś tuż ZA ich odbiór.
 
-    Worek PRZEPLATANY (odbiór→dostawa→odbiór): sortowanie odbiorów wg committed
-    potrafi wepchnąć dostawę przed jej własny odbiór. Stary fail-safe rezygnował
-    wtedy z CAŁEGO sortowania → inwersja odbiorów zostawała w kanonie i w apce
-    (case Mateusz O 11.06: Zapiecek 16:23 przed Kebab Król 16:21). Zamiast
-    rezygnować, każdą taką dostawę wstawiamy bezpośrednio za jej odbiór
-    (kolejność względna reszty bez zmian). Przeniesienie dostawy W PRAWO nie
-    tworzy nowych naruszeń → pętla domyka się w ≤ liczbie naruszeń; twardy limit
-    iteracji = defense-in-depth. None gdy się nie domknęła (caller zostawia
-    sekwencję bez zmian — zachowanie jak dawny fail-safe). Lustrzany helper w
-    courier_api/courier_orders.py (klucz 'kind' zamiast 'type')."""
-    out = list(seq)
-    for _ in range(len(out) * len(out) + 1):
-        pidx = {str(s.get("order_id")): i for i, s in enumerate(out)
-                if s.get("type") == "pickup"}
-        viol = next((i for i, s in enumerate(out)
-                     if s.get("type") == "dropoff"
-                     and pidx.get(str(s.get("order_id")), -1) > i), None)
-        if viol is None:
-            return out
-        pi = pidx[str(out[viol].get("order_id"))]
-        s = out.pop(viol)
-        out.insert(pi, s)   # po pop odbiór zjechał na pi-1 → insert(pi) = tuż za nim
-    return None
+    Sprint 30 (2026-07-07): scalone do JEDNEGO źródła `route_order.repair_dropoffs_
+    after_pickups` (klucz 'type'). Poprzedni bliźniak (kopia w courier_orders z
+    kluczem 'kind') = ta sama reguła; różnica była wyłącznie nazwą klucza typu i
+    str-castem order_id. Delegacja jest BAJT-IDENTYCZNA (dowód fuzz + parytet:
+    `eod_drafts/2026-07-07/S30A_routeorder_0diff.md`, test
+    `tests/test_route_order_unify_s30.py`). Semantyka bez zmian: worek przeplatany
+    (odbiór→dostawa→odbiór) — dostawę wyprzedzającą swój odbiór wstaw tuż za niego;
+    None gdy pętla się nie domknęła (caller zostawia sekwencję bez zmian)."""
+    return _route_order.repair_dropoffs_after_pickups(seq, kind_key="type")
 
 
 def _pickup_rest_key(stop, orders_state):
