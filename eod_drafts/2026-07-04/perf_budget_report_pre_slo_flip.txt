@@ -1,0 +1,42 @@
+# PERF BUDGET REPORT (READ-ONLY) — 2026-07-04T08:00:01+00:00
+okno 2026-07-03T00:30:00+00:00 .. 2026-07-04T08:00:00.056243+00:00 | min_n(segment)=20 | ogon=>1500 ms
+CAŁOŚĆ: n=226 | p50=711 p95=1613 p99=2050 max=3222 | ogon>1500=8.8% | kwiecień p50=375 → dziś ×1.9
+
+## TREND DZIENNY (data Warsaw)
+  data            n    p50    p95    p99    max    ogon%
+  2026-07-03    224    712   1613   2050   3222     8.9%
+  2026-07-04      2    225    225    225    225     0.0%
+
+## PER GODZINA (UTC; peak 09-12 UTC = 11-14 Warsaw)
+  hUTC      n    p50    p95    ogon%
+    5      1     72     72     0.0%
+    6      1   1136   1136     0.0%
+    7      9    356    642     0.0%
+    8      9    617    765     0.0%
+    9     16    791   1065     0.0%
+   10     19    632   1896    15.8%
+   11     18    746   1740    22.2%
+   12      9   1015   1906    11.1%
+   13     16    651   1214     6.2%
+   14     19    743   1238     0.0%
+   15     20    852   1953    25.0%
+   16     22    921   1431     0.0%
+   17     24    737   1359     4.2%
+   18     20    780   1511    15.0%
+   19     19    464   1504    10.5%
+   20      2    807    807     0.0%
+   21      2    365    365     0.0%
+
+## SEGMENTY SLO (Warsaw; limity = PERF_budget §5a)
+  peak 11-14+17-20   n=119   p50=🔴790/700     p95=🔴1725/1500   (sufit 3000)
+  high-risk 14-17    n=44    p50=743/800      p95=1302/1800    (sufit 3000)
+  off-peak           n=63    p50=🔴568/450     p95=🔴1507/900    (sufit 2500)
+
+## WERDYKT SLO: 🔴 naruszenia:
+  - peak p50: 790 > limit 700 (n=119)
+  - peak p95: 1725 > limit 1500 (n=119)
+  - offpeak ceiling: 1 > limit 2500 (n=63)
+  - offpeak p50: 568 > limit 450 (n=63)
+  - offpeak p95: 1507 > limit 900 (n=63)
+
+[JSON zapisany: /root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-07-04/perf_budget_report_pre_slo_flip.json]
