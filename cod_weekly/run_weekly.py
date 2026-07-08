@@ -36,6 +36,7 @@ from dispatch_v2.cod_weekly.sheet_writer import (
     compute_payday,
     NoTargetColumnError,
     AmbiguousTargetError,
+    PartialSplitBlockError,
 )
 from dispatch_v2.cod_weekly.week_calculator import format_week_for_header as _fmt_week
 
@@ -67,6 +68,25 @@ def find_target_cod_columns_resilient(row1, row2, week_start, week_end):
     """
     try:
         return find_target_cod_columns(row1, row2, week_start, week_end)
+    except PartialSplitBlockError as partial_err:
+        # Partial-split wg PAYDAY (primary): część segmentów ma blok, część nie.
+        # Zanim uznamy to za realny brak, spróbuj auto-detect po ZAKRESIE —
+        # istniejący blok BEZ ręcznej daty wypłaty (payday pusty) matchuje się
+        # zakresem, więc auto-detect potrafi w pełni rozwiązać to, co primary
+        # (payday-only) widzi jako brak. Kluczowe dla retry po auto-create, gdzie
+        # świeży blok ma payday, a istniejący (sprzed) — tylko zakres.
+        try:
+            targets = find_target_column_auto(row1, row2, week_start, week_end)
+            log.info(
+                "AUTO-DETECT (zakres) rozwiązał to, co primary widział jako "
+                "partial-split — oba segmenty odnalezione."
+            )
+            return targets
+        except (PartialSplitBlockError, NoTargetColumnError):
+            # Auto-detect też widzi brak → to REALNY partial-split. Propaguj
+            # oryginalny (payday-atrybuowany) błąd do cmd_write/preflight, które
+            # utworzą TYLKO brakujący segment / dadzą precyzyjny actionable.
+            raise partial_err
     except NoTargetColumnError as primary_err:
         log.warning(
             f"Primary find_target (payday-match) nie znalazł kolumny "
@@ -601,6 +621,67 @@ def cmd_write(week_start, week_end, opener=None) -> int:
 
     try:
         targets = find_target_cod_columns_resilient(row1, row2, week_start, week_end)
+    except PartialSplitBlockError as e:
+        # ROZBITY TYDZIEŃ, NIEPEŁNE bloki: część segmentów ma blok, część nie
+        # (root-cause cotygodniowego FAILA na tygodniach krosujących miesiąc —
+        # 06.07: segments=2, candidates=['DD'] → dawniej AmbiguousTargetError →
+        # exit 1). Jednoznacznie rozwiązywalne: auto-create TYLKO brakującego
+        # segmentu (istniejący nietknięty → zero duplikatów) LUB actionable.
+        # UWAGA: MUSI być PRZED `except NoTargetColumnError` (podklasa).
+        miss_ranges = ", ".join(
+            format_week_for_header(s["start"], s["end"]) for s in e.missing_segments
+        )
+        have_cols = ", ".join(t["col_letter"] for t in e.found) or "—"
+        log.warning(
+            f"PARTIAL SPLIT: bloki obecne={have_cols}, brakuje "
+            f"{len(e.missing_segments)}: {miss_ranges}"
+        )
+        if autocreate_block_enabled():
+            dry = autocreate_block_dry_run()
+            try:
+                plan = ensure_week_block(
+                    ws, row1, row2, week_start, week_end, dry_run=dry,
+                    segments_override=e.missing_segments,
+                )
+            except Exception as ce:
+                log.error(f"AUTO-CREATE (partial) FAILED: {ce!r}")
+                _try_alert(_build_target_fail_alert(
+                    week_start, week_end, e, autocreate_error=ce,
+                    missing_segments=e.missing_segments,
+                ))
+                return 1
+            _log_autocreate_plan(plan, dry)
+            if dry:
+                _try_alert(_build_autocreate_dryrun_alert(week_start, week_end, plan))
+                log.error(
+                    "AUTO-CREATE (partial) DRY-RUN — brakujący blok NIE utworzony "
+                    "(exit 1). Zdejmij COD_WEEKLY_AUTOCREATE_DRY_RUN aby wykonać."
+                )
+                return 1
+            # Blok(i) brakujące utworzone → retry na zaktualizowanych wierszach
+            # (in-memory). Teraz OBA segmenty mają blok → find_target zwróci 2.
+            row1, row2 = plan["new_row1"], plan["new_row2"]
+            try:
+                targets = find_target_cod_columns_resilient(
+                    row1, row2, week_start, week_end,
+                )
+            except (PartialSplitBlockError, NoTargetColumnError,
+                    AmbiguousTargetError, ValueError) as e2:
+                log.error(f"TARGET COLUMN FAIL po auto-create (partial): {e2}")
+                _try_alert(_build_target_fail_alert(week_start, week_end, e2))
+                return 1
+            log.info(
+                f"AUTO-CREATE (partial) OK — utworzono {len(plan['blocks'])} "
+                f"brakujący(ch) blok(ów), kontynuuję zapis COD"
+            )
+        else:
+            log.error(
+                f"PARTIAL SPLIT bez auto-create — brakuje bloku: {miss_ranges}"
+            )
+            _try_alert(_build_target_fail_alert(
+                week_start, week_end, e, missing_segments=e.missing_segments,
+            ))
+            return 1
     except NoTargetColumnError as e:
         # BRAK BLOKU tygodnia — dominująca przyczyna cotygodniowych FAILÓW
         # (finding B audytu 2.0: dispatch-cod-weekly exit 1 co poniedziałek).
@@ -845,6 +926,35 @@ def cmd_preflight(week_start, week_end) -> int:
 
     try:
         targets = find_target_cod_columns_resilient(row1, row2, week_start, week_end)
+    except PartialSplitBlockError as e:
+        # Rozbity tydzień z 1 z 2 bloków — instrukcja dotyczy TYLKO brakującego
+        # (istniejący już jest; auto-create go dopisze o 08:00 gdy flaga ON).
+        instr = _build_preflight_instruction(
+            week_start, week_end, e.missing_segments, payday_str, e,
+        )
+        miss_ranges = ", ".join(
+            _fmt_seg_range({"segment_start": s["start"], "segment_end": s["end"]})
+            for s in e.missing_segments
+        )
+        msg = (
+            f"[COD WEEKLY PREFLIGHT] ⚠️ Rozbity tydzień — brak bloku "
+            f"{miss_ranges} (tydzień {week_hdr})\n"
+            f"\nTermin: jutro 08:00 Warsaw odpali się auto-rozliczenie."
+            f"\nSegmenty rozbitego tygodnia: {n_expected}; brakuje: "
+            f"{len(e.missing_segments)}"
+            f"\nPayday: {payday_str}"
+            f"\nBłąd: {type(e).__name__}: {e}"
+            f"\n\n{instr}"
+            f"\n\nWeryfikacja po dodaniu:"
+            f"\n  python3 -m dispatch_v2.cod_weekly.run_weekly --preflight "
+            f"--week {week_start.isoformat()}:{week_end.isoformat()}"
+        )
+        log.warning(
+            f"PREFLIGHT SOFT-FAIL (partial split, brak {len(e.missing_segments)} "
+            f"bloków): {e} — alert wysłany, exit 0"
+        )
+        _try_alert(msg)
+        return 0
     except (NoTargetColumnError, AmbiguousTargetError, ValueError) as e:
         instr = _build_preflight_instruction(
             week_start, week_end, segments, payday_str, e,
@@ -887,19 +997,27 @@ def cmd_preflight(week_start, week_end) -> int:
     return 0
 
 
-def _build_target_fail_alert(week_start, week_end, error, autocreate_error=None) -> str:
+def _build_target_fail_alert(
+    week_start, week_end, error, autocreate_error=None, missing_segments=None,
+) -> str:
     """Głośny, AKTIONABLE alert gdy brak/niejednoznaczny blok tygodnia.
 
     Zamiast gołego 'Target column fail: ...' — pełna instrukcja CO dodać (arkusz,
     komórki payday/zakres, nagłówki row2) reużyta z preflight + komenda backfillu
     przepadłego tygodnia. Exit≠0 ZOSTAJE — OnFailure/staleness ma się na nim oprzeć.
+
+    `missing_segments` (partial-split): gdy podane, instrukcja dotyczy TYLKO
+    brakujących bloków (rozbity tydzień, gdzie część segmentów już jest) — Rafał
+    dodaje jeden brakujący, nie duplikuje istniejącego.
     """
     week_hdr = _fmt_week(week_start, week_end)
-    segments = split_week_by_month(week_start, week_end)
+    full_segments = split_week_by_month(week_start, week_end)
+    is_partial = missing_segments is not None and len(missing_segments) < len(full_segments)
+    instr_segments = missing_segments if missing_segments is not None else full_segments
     payday = compute_payday(week_start, week_end)
     payday_str = payday.strftime("%d-%m-%Y")
     instr = _build_preflight_instruction(
-        week_start, week_end, segments, payday_str, error,
+        week_start, week_end, instr_segments, payday_str, error,
     )
     lines = [
         f"[COD WEEKLY] ❌ FAILED (brak bloku) — tydzień {week_hdr}",
@@ -908,6 +1026,15 @@ def _build_target_fail_alert(week_start, week_end, error, autocreate_error=None)
         f"Arkusz: Wynagrodzenia Gastro",
         f"Błąd: {type(error).__name__}: {error}",
     ]
+    if is_partial:
+        miss_ranges = ", ".join(
+            _fmt_seg_range({"segment_start": s["start"], "segment_end": s["end"]})
+            for s in missing_segments
+        )
+        lines.append(
+            f"Rozbity tydzień — część bloków JUŻ jest; dodaj TYLKO brakujący: "
+            f"{miss_ranges} (nie duplikuj istniejących)."
+        )
     if autocreate_error is not None:
         lines.append(f"Auto-create też padł: {autocreate_error!r}")
     lines += [

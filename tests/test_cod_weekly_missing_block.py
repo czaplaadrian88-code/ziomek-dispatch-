@@ -89,6 +89,7 @@ try:
     rw = _load_wt("dispatch_v2.cod_weekly.run_weekly", "cod_weekly/run_weekly.py")
     NoTargetColumnError = sw.NoTargetColumnError
     AmbiguousTargetError = sw.AmbiguousTargetError
+    PartialSplitBlockError = sw.PartialSplitBlockError
     col_idx_to_letter = sw.col_idx_to_letter
 finally:
     # --- Przywróć sys.modules (kanon) + zdejmij fake gspread, by importorskip
@@ -389,3 +390,247 @@ def test_mutation_missing_block_detection(monkeypatch):
         "mutation-check: zmiana warunku detekcji NIE zmieniła zachowania — "
         "test byłby ślepy"
     )
+
+
+# ===========================================================================
+# PARTIAL-SPLIT (2026-07-08) — rozbity tydzień z 1 z 2 bloków.
+# Root cause cotygodniowego FAILA na tygodniach krosujących miesiąc: dawniej
+# `len(candidates)!=2` → AmbiguousTargetError → exit 1 (NIGDY nie auto-create).
+# GROUND-TRUTH 06.07: tydzień 29.06-05.07, payday 08-07-2026, w arkuszu tylko
+# blok segmentu 29-30.06 (kol DD), brak 01-05.07.
+# ===========================================================================
+# Tydzień docelowy = REALNIE przepadły 2026-06-29..07-05 (payday 08-07-2026).
+PS_START = date(2026, 6, 29)
+PS_END = date(2026, 7, 5)
+PS_PAYDAY = "08-07-2026"
+PS_SEG1_RANGE = "29-30.06.2026"   # segment czerwcowy — OBECNY w arkuszu
+PS_SEG2_RANGE = "01-05.07.2026"   # segment lipcowy — BRAKUJĄCY
+
+
+def _grid_partial_split_seg1_only(ws=None):
+    """Grid z blokiem TYLKO segmentu czerwcowego (29-30.06.2026, payday
+    08-07-2026) @ AQ (idx 42). Segment lipcowy (01-05.07.2026) BRAKUJE.
+
+    → find_target (segments=2, candidates=['AQ']) rzuca PartialSplitBlockError,
+    NIE AmbiguousTargetError.
+    """
+    n = 46
+    row1 = [""] * n
+    row2 = [""] * n
+    row2[42] = "COD - Transport"   # AQ
+    row2[43] = "Korekty"
+    row2[44] = "Wypłata"
+    row2[45] = "Saldo do przen."
+    row1[42] = "Tydzień 29-30.06.2026"
+    row1[43] = "wypłata z dn."
+    row1[44] = PS_PAYDAY             # pos+2 payday (klucz primary)
+    row1[45] = PS_SEG1_RANGE         # pos+3 zakres
+    return {
+        "ws": ws if ws is not None else MagicMock(),
+        "row1": row1,
+        "row2": row2,
+        "restaurants": [(3, "Arsenał Panteon"), (5, "Toriko")],
+    }
+
+
+# ---------------------------------------------------------------------------
+# PS1. Detekcja: find_target rzuca PartialSplitBlockError (NIE Ambiguous)
+# ---------------------------------------------------------------------------
+def test_partial_split_detected_as_partial_not_ambiguous():
+    grid = _grid_partial_split_seg1_only()
+    try:
+        sw.find_target_cod_columns(grid["row1"], grid["row2"], PS_START, PS_END)
+        assert False, "powinno rzucić PartialSplitBlockError"
+    except PartialSplitBlockError as e:
+        # znaleziony segment czerwcowy @ AQ; brakuje lipcowego
+        assert len(e.found) == 1 and e.found[0]["col_letter"] == "AQ"
+        assert len(e.missing_segments) == 1
+        m = e.missing_segments[0]
+        assert m["start"] == date(2026, 7, 1) and m["end"] == PS_END
+    except AmbiguousTargetError:
+        assert False, "REGRESJA: partial split znów leci jako Ambiguous → exit 1"
+
+
+# ---------------------------------------------------------------------------
+# PS2. Flag ON — auto-create TYLKO brakującego segmentu + zapis obu (exit 0)
+# ---------------------------------------------------------------------------
+def test_partial_split_autocreate_creates_missing_only_and_writes(monkeypatch):
+    monkeypatch.setenv("COD_WEEKLY_AUTOCREATE_BLOCK", "1")
+    monkeypatch.delenv("COD_WEEKLY_AUTOCREATE_DRY_RUN", raising=False)
+    ws = MagicMock()
+    grid = _grid_partial_split_seg1_only(ws)
+    alerts, writes = _install_write_path(monkeypatch, grid)
+
+    rc = rw.cmd_write(PS_START, PS_END)
+
+    assert rc == 0, "partial split + auto-create → blok brakujący utworzony → exit 0"
+    # ensure_week_block utworzył DOKŁADNIE 1 blok (brakujący lipcowy), NIE 2.
+    ws.batch_update.assert_called_once()
+    args, _ = ws.batch_update.call_args
+    updates = args[0]
+    assert len(updates) == 1, f"tylko 1 brakujący blok tworzony, got {len(updates)}"
+    flat = str(updates)
+    assert PS_SEG2_RANGE in flat, "utworzony blok ma zakres brakującego segmentu"
+    assert PS_SEG1_RANGE not in flat, (
+        "NIE duplikuje istniejącego segmentu czerwcowego"
+    )
+    assert PS_PAYDAY in flat
+    # nowy blok ląduje w AU (za istniejącym @AQ, 4-kol blok od idx 46)
+    assert col_idx_to_letter(46) == "AU"
+    # zapis COD idzie do OBU segmentów: AQ (istniejący) + AU (nowy)
+    cols = sorted(c for c, _ in writes)
+    assert cols == ["AQ", "AU"], f"COD zapisany do obu segmentów, got {cols}"
+
+
+# ---------------------------------------------------------------------------
+# PS3. Flag OFF — actionable nazywający TYLKO brakujący segment, exit 1, brak zapisu
+# ---------------------------------------------------------------------------
+def test_partial_split_flag_off_actionable_no_write(monkeypatch):
+    monkeypatch.delenv("COD_WEEKLY_AUTOCREATE_BLOCK", raising=False)
+    ws = MagicMock()
+    grid = _grid_partial_split_seg1_only(ws)
+    alerts, writes = _install_write_path(monkeypatch, grid)
+
+    rc = rw.cmd_write(PS_START, PS_END)
+
+    assert rc == 1, "partial split bez auto-create → exit 1 (OnFailure/staleness)"
+    assert writes == [], "brak zapisu COD gdy brakuje bloku"
+    ws.batch_update.assert_not_called()  # auto-create OFF → nic nie tworzy
+    assert alerts, "musi pójść actionable alert"
+    msg = alerts[0]
+    assert "Akcja Rafał" in msg
+    assert PS_SEG2_RANGE in msg, "actionable nazywa brakujący segment lipcowy"
+    assert PS_PAYDAY in msg
+    # actionable mówi o TYLKO brakującym bloku (nie duplikować istniejącego)
+    assert "nie duplikuj" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# PS4. Flag ON + DRY-RUN — plan brakującego bloku, NIC nie zapisano (exit 1)
+# ---------------------------------------------------------------------------
+def test_partial_split_autocreate_dry_run_no_write(monkeypatch):
+    monkeypatch.setenv("COD_WEEKLY_AUTOCREATE_BLOCK", "1")
+    monkeypatch.setenv("COD_WEEKLY_AUTOCREATE_DRY_RUN", "1")
+    ws = MagicMock()
+    grid = _grid_partial_split_seg1_only(ws)
+    alerts, writes = _install_write_path(monkeypatch, grid)
+
+    rc = rw.cmd_write(PS_START, PS_END)
+
+    assert rc == 1, "dry-run nie tworzy → exit 1"
+    ws.batch_update.assert_not_called()
+    assert writes == []
+    assert alerts and "DRY-RUN" in alerts[0]
+    assert PS_SEG2_RANGE in alerts[0], "dry-run pokazuje brakujący segment"
+
+
+# ---------------------------------------------------------------------------
+# PS5. Genuine ambiguity (2 bloki dla tego samego miesiąca) NADAL Ambiguous
+#      → exit 1, NIGDY auto-create (partial-fix nie osłabił detekcji błędu)
+# ---------------------------------------------------------------------------
+def test_partial_split_true_ambiguity_stays_ambiguous(monkeypatch):
+    monkeypatch.setenv("COD_WEEKLY_AUTOCREATE_BLOCK", "1")
+    ws = MagicMock()
+    grid = _grid_partial_split_seg1_only(ws)
+    alerts, writes = _install_write_path(monkeypatch, grid)
+
+    # find_target zwraca genuine Ambiguous (np. duplikat bloku) — cmd_write
+    # MUSI to trzymać jako błąd (exit 1, nie auto-create), nie mylić z partial.
+    def _raise_ambiguous(*a, **k):
+        raise AmbiguousTargetError("2 bloki dla miesiąca 7: DD i DH")
+
+    monkeypatch.setattr(rw, "find_target_cod_columns", _raise_ambiguous)
+    rc = rw.cmd_write(PS_START, PS_END)
+
+    assert rc == 1
+    ws.batch_update.assert_not_called()   # Ambiguous → NIGDY auto-create
+    assert writes == []
+
+
+# ---------------------------------------------------------------------------
+# PS6. MUTATION-CHECK — partial-split flaga ON faktycznie zmienia zachowanie
+#      (ON tworzy+zapisuje exit 0; OFF actionable exit 1). Dowód że test nie ślepy.
+# ---------------------------------------------------------------------------
+def test_partial_split_mutation_flag_on_vs_off(monkeypatch):
+    # OFF → exit 1, brak zapisu
+    monkeypatch.delenv("COD_WEEKLY_AUTOCREATE_BLOCK", raising=False)
+    ws_off = MagicMock()
+    grid_off = _grid_partial_split_seg1_only(ws_off)
+    alerts_off, writes_off = _install_write_path(monkeypatch, grid_off)
+    rc_off = rw.cmd_write(PS_START, PS_END)
+
+    # ON → exit 0, zapis do obu
+    monkeypatch.setenv("COD_WEEKLY_AUTOCREATE_BLOCK", "1")
+    ws_on = MagicMock()
+    grid_on = _grid_partial_split_seg1_only(ws_on)
+    alerts_on, writes_on = _install_write_path(monkeypatch, grid_on)
+    rc_on = rw.cmd_write(PS_START, PS_END)
+
+    assert rc_off == 1 and writes_off == [], "OFF: actionable exit 1"
+    assert rc_on == 0 and len(writes_on) == 2, "ON: auto-create + zapis obu, exit 0"
+    assert (rc_off, bool(writes_off)) != (rc_on, bool(writes_on)), (
+        "mutation-check: flaga partial-split ON≠OFF nie zmienia zachowania"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PS7. TWIN find_target_column_auto — partial wykryty po ZAKRESIE (payday pusty)
+#      Bliźniacza ścieżka fallback (E5): istniejący blok bez ręcznej daty wypłaty,
+#      ale z zakresem → primary NoTargetColumnError → auto-detect → partial.
+# ---------------------------------------------------------------------------
+def _grid_partial_split_seg1_range_no_payday(ws=None):
+    n = 46
+    row1 = [""] * n
+    row2 = [""] * n
+    row2[42] = "COD - Transport"
+    row2[43] = "Korekty"
+    row2[44] = "Wypłata"
+    row2[45] = "Saldo do przen."
+    row1[42] = "Tydzień 29-30.06.2026"
+    row1[43] = "wypłata z dn."
+    row1[44] = ""                    # payday PUSTY → primary nie matchuje
+    row1[45] = PS_SEG1_RANGE         # ale zakres jest → auto-detect matchuje
+    return {
+        "ws": ws if ws is not None else MagicMock(),
+        "row1": row1,
+        "row2": row2,
+        "restaurants": [(3, "Arsenał Panteon"), (5, "Toriko")],
+    }
+
+
+def test_partial_split_via_autodetect_range_match():
+    grid = _grid_partial_split_seg1_range_no_payday()
+    # primary rzuca NoTargetColumnError (brak payday-match)...
+    try:
+        sw.find_target_cod_columns(grid["row1"], grid["row2"], PS_START, PS_END)
+        assert False, "primary powinien rzucić NoTargetColumnError (payday pusty)"
+    except PartialSplitBlockError:
+        assert False, "primary NIE powinien zaatrybuować (payday pusty)"
+    except NoTargetColumnError:
+        pass
+    # ...a auto-detect (po zakresie) wykrywa partial: seg1 obecny, seg2 brak
+    try:
+        sw.find_target_column_auto(grid["row1"], grid["row2"], PS_START, PS_END)
+        assert False, "auto-detect powinien rzucić PartialSplitBlockError"
+    except PartialSplitBlockError as e:
+        assert len(e.found) == 1 and e.found[0]["col_letter"] == "AQ"
+        assert len(e.missing_segments) == 1
+        assert e.missing_segments[0]["start"] == date(2026, 7, 1)
+
+
+def test_partial_split_via_autodetect_end_to_end_autocreate(monkeypatch):
+    """cmd_write przez resilient → auto-detect → partial → auto-create seg2 → zapis."""
+    monkeypatch.setenv("COD_WEEKLY_AUTOCREATE_BLOCK", "1")
+    monkeypatch.delenv("COD_WEEKLY_AUTOCREATE_DRY_RUN", raising=False)
+    ws = MagicMock()
+    grid = _grid_partial_split_seg1_range_no_payday(ws)
+    alerts, writes = _install_write_path(monkeypatch, grid)
+
+    rc = rw.cmd_write(PS_START, PS_END)
+
+    assert rc == 0, "auto-detect partial + auto-create → exit 0"
+    ws.batch_update.assert_called_once()
+    args, _ = ws.batch_update.call_args
+    assert len(args[0]) == 1, "tylko brakujący blok (seg2) tworzony"
+    cols = sorted(c for c, _ in writes)
+    assert cols == ["AQ", "AU"], f"zapis do obu segmentów, got {cols}"

@@ -44,6 +44,42 @@ class AmbiguousTargetError(Exception):
     pass
 
 
+class PartialSplitBlockError(NoTargetColumnError):
+    """Rozbity tydzień z NIEPEŁNYM pokryciem bloków: część segmentów ma blok
+    w arkuszu, część NIE.
+
+    To NIE jest niejednoznaczność struktury (Ambiguous) — to brakujący blok
+    KONKRETNEGO segmentu, jednoznacznie rozwiązywalny: albo auto-create bloku
+    TYLKO brakującego segmentu (istniejący nietknięty → zero duplikatów), albo
+    aktionable instrukcja nazywająca dokładnie brakujący okres. Podklasa
+    NoTargetColumnError (semantycznie „brak bloku"), ale niesie dodatkowo:
+      - `found`            — lista target-dictów segmentów JUŻ obecnych w arkuszu,
+      - `missing_segments` — lista {start, end} segmentów bez bloku.
+
+    Root-cause fix 2026-07-08 (partial-split): wcześniej `len(candidates)!=2`
+    dla rozbitego tygodnia leciało AmbiguousTargetError → cmd_write traktował
+    to jako strukturę niejednoznaczną (NIGDY nie auto-create) → cotygodniowy
+    exit 1 na tygodniach krosujących miesiąc z 1 z 2 bloków (np. 06.07:
+    payday=08-07-2026, segments=2, candidates=['DD'] → „Oczekiwano 2, znaleziono 1").
+    """
+
+    def __init__(self, found, missing_segments, message=None):
+        self.found = found
+        self.missing_segments = missing_segments
+        if message is None:
+            miss = ", ".join(
+                format_week_for_header(s["start"], s["end"])
+                for s in missing_segments
+            )
+            have = ", ".join(t["col_letter"] for t in found) or "—"
+            message = (
+                f"Rozbity tydzień: {len(found)}/"
+                f"{len(found) + len(missing_segments)} segmentów ma blok "
+                f"(kolumny {have}); brakuje bloku dla: {miss}"
+            )
+        super().__init__(message)
+
+
 def col_idx_to_letter(n_zero_based: int) -> str:
     """0 → 'A', 25 → 'Z', 26 → 'AA', 54 → 'BC'."""
     n = n_zero_based + 1
@@ -145,12 +181,16 @@ def find_target_cod_columns(
             }
         ]
 
-    # 2 segmenty — rozbity tydzień
-    if len(candidates) != 2:
+    # 2 segmenty — rozbity tydzień (krosuje miesiąc).
+    # WIĘCEJ kandydatów niż segmentów = genuine ambiguity (duplikaty bloków).
+    if len(candidates) > len(segments):
         raise AmbiguousTargetError(
-            f"Oczekiwano 2 kandydatów dla rozbitego tygodnia, "
-            f"znaleziono {len(candidates)}"
+            f"{len(candidates)} kandydatów dla rozbitego tygodnia "
+            f"({len(segments)} segmenty): {[col_idx_to_letter(c) for c in candidates]}"
         )
+    # Atrybucja kandydatów do miesiąca po zakresie (pos+4). Duplikat miesiąca /
+    # niesparsowalny zakres = struktura błędna (Ambiguous / ValueError) — NIE
+    # auto-tworzymy. Braki (segment bez kandydata) = partial split, nie błąd.
     by_month = {}
     for ci in candidates:
         pos4 = row1[ci + 3] if ci + 3 < len(row1) else ""
@@ -168,14 +208,14 @@ def find_target_cod_columns(
             )
         by_month[month] = ci
 
-    result = []
+    found = []
+    missing_segments = []
     for seg in segments:
         ci = by_month.get(seg["start"].month)
         if ci is None:
-            raise NoTargetColumnError(
-                f"Brak kandydata dla miesiąca {seg['start'].month} (segment {seg['start']}..{seg['end']})"
-            )
-        result.append(
+            missing_segments.append({"start": seg["start"], "end": seg["end"]})
+            continue
+        found.append(
             {
                 "col_idx": ci,
                 "col_letter": col_idx_to_letter(ci),
@@ -184,7 +224,12 @@ def find_target_cod_columns(
                 "payday": payday,
             }
         )
-    return result
+
+    if missing_segments:
+        # Część segmentów ma blok, część nie → jednoznacznie rozwiązywalny brak
+        # (auto-create TYLKO brakującego / actionable), NIE niejednoznaczność.
+        raise PartialSplitBlockError(found, missing_segments)
+    return found
 
 
 def _parse_payday_cell(s: str):
@@ -238,6 +283,7 @@ def find_target_column_auto(
     start_col = SEARCH_BLOCK_START_COL - 1  # 0-based
 
     result = []
+    missing_segments = []
     used_cols = set()
     for seg in segments:
         expected_range = format_week_for_header(seg["start"], seg["end"])
@@ -272,11 +318,10 @@ def find_target_column_auto(
         )
 
         if not candidates:
-            raise NoTargetColumnError(
-                f"AUTO-DETECT: brak bloku z zakresem {expected_range!r} "
-                f"(payday {payday_str}) w arkuszu. Ani data wypłaty (pos+2) ani "
-                f"zakres (pos+3) nie pasują — dodaj ręcznie blok tygodnia."
-            )
+            # Brak bloku TEGO segmentu — zbieramy (partial split) zamiast raise
+            # na pierwszym braku. Decyzja (all-missing vs partial) po pętli.
+            missing_segments.append({"start": seg["start"], "end": seg["end"]})
+            continue
         if len(candidates) > 1:
             raise AmbiguousTargetError(
                 f"AUTO-DETECT: {len(candidates)} kolumn z zakresem "
@@ -293,6 +338,21 @@ def find_target_column_auto(
                 "payday": payday,
             }
         )
+
+    if missing_segments and not result:
+        # ŻADEN segment nie ma bloku → pełny brak (auto-create wszystkich).
+        miss = ", ".join(
+            format_week_for_header(s["start"], s["end"]) for s in missing_segments
+        )
+        raise NoTargetColumnError(
+            f"AUTO-DETECT: brak bloku z zakresem {miss} (payday {payday_str}) "
+            f"w arkuszu. Ani data wypłaty (pos+2) ani zakres (pos+3) nie pasują "
+            f"— dodaj ręcznie blok tygodnia."
+        )
+    if missing_segments:
+        # Część segmentów ma blok, część nie → partial split (auto-create TYLKO
+        # brakującego / actionable). NIE traktujemy jak niejednoznaczność.
+        raise PartialSplitBlockError(result, missing_segments)
 
     # Split-month sanity: 2 segmenty MUSZĄ być w 2 różnych kolumnach.
     if len({r["col_idx"] for r in result}) != len(result):
@@ -440,8 +500,14 @@ def build_week_block_plan(
     row2: list,
     target_week_start: date,
     target_week_end: date,
+    segments_override: List[Dict] = None,
 ) -> Dict:
     """Policz (BEZ zapisu) strukturę bloku/bloków tygodnia do dopisania na końcu.
+
+    `segments_override` (partial-split 2026-07-08): gdy podane, tworzymy bloki
+    TYLKO dla tych segmentów (np. brakujący 1 z 2 przy rozbitym tygodniu, gdzie
+    drugi już jest w arkuszu). Payday liczony ZAWSZE z pełnego tygodnia (wspólny
+    dla obu segmentów). Domyślnie None → wszystkie segmenty (zachowanie sprzed).
 
     Zwraca plan {payday, segments, append_at_col, blocks:[...], new_row1,
     new_row2}. `new_row1/new_row2` = kopie z wpisanymi komórkami nowego bloku
@@ -457,7 +523,11 @@ def build_week_block_plan(
     find_target (payday + range) już NIC nie znalazł → dopisanie kompletnego
     bloku nie duplikuje istniejącego kompletnego bloku.
     """
-    segments = split_week_by_month(target_week_start, target_week_end)
+    segments = (
+        segments_override
+        if segments_override is not None
+        else split_week_by_month(target_week_start, target_week_end)
+    )
     payday = compute_payday(target_week_start, target_week_end)
     payday_str = payday.strftime("%d-%m-%Y")
 
@@ -513,6 +583,7 @@ def ensure_week_block(
     target_week_start: date,
     target_week_end: date,
     dry_run: bool = False,
+    segments_override: List[Dict] = None,
 ) -> Dict:
     """Dopisz brakujący blok tygodnia (nagłówki row2 + payday/zakres row1).
 
@@ -520,8 +591,14 @@ def ensure_week_block(
     empty_check przejdzie i normalny zapis wypełni je świeżo. Zapis do arkusza
     TYLKO gdy dry_run=False (1 batch_update, po jednym zakresie A1 na segment).
     Zwraca ten sam plan co build_week_block_plan + {dry_run, created}.
+
+    `segments_override` (partial-split): tworzy TYLKO wskazane segmenty (bloki
+    brakujące), nie duplikując tych już obecnych w arkuszu.
     """
-    plan = build_week_block_plan(row1, row2, target_week_start, target_week_end)
+    plan = build_week_block_plan(
+        row1, row2, target_week_start, target_week_end,
+        segments_override=segments_override,
+    )
     plan["dry_run"] = dry_run
     if dry_run:
         plan["created"] = False
