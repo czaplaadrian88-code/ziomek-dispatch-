@@ -195,7 +195,10 @@ def main():
     not_working = [k for k, v in schedule.items() if not v]
 
     log(f"Pracuje dziś {len(working)}/{len(schedule)}:")
-    for name, hours in sorted(working, key=lambda x: x[1]['start']):
+    # None-safe: wpisy salvage (parse_degraded, np. pusta godzina startu) mają
+    # start=None → bez fallbacku sorted() rzuca TypeError i BLOKUJE zapis pliku
+    # (log wyświetlania nie może wywalić fetchu). Degraded na koniec listy.
+    for name, hours in sorted(working, key=lambda x: x[1]['start'] or "99:99"):
         log(f"  {hours['start']}–{hours['end']}  {name}")
 
     os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
