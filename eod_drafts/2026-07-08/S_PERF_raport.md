@@ -1,7 +1,7 @@
 # SPRINT A — PERF pod skalę (ogon p95 + budżet solvera OR-Tools + audyt TZ) — RAPORT KOŃCOWY
 
 **Sesja-wykonawca:** tmux 36. **Data:** 2026-07-08. **Worktree:** `/root/.openclaw/workspace/scripts/wt-perf-p95` (branch `perf/p95-ortools`).
-**Baseline:** master `6e1af23`. **Protokół #0:** przejdziony ETAP 0→7. **Flagi OFF, zero flipów/flags.json/restartów.**
+**Baseline:** master `6e1af23` na starcie → przesunął się do `8a13b77` w trakcie (rebase, §5). **Protokół #0:** przejdziony ETAP 0→7. **Flagi OFF, zero flipów/flags.json/restartów.**
 
 ---
 
@@ -64,9 +64,28 @@ Pełny raport: **`A3_tz_deploy_audit.md`** (twierdzenia zweryfikowane niezależn
 
 ---
 
-## 5. Regresja pełna (DoD #1)
+## 5. Regresja pełna (DoD #1) — vs AKTUALNY baseline (rebase)
 
-> [WYNIK REGRESJI — uzupełniony po biegu; oczekiwane: 4447+8 A2 = 4455 pass, 1 pre-existing cross-session fail, 0 nowych regresji]
+**⚠ Baseline się PRZESUNĄŁ w trakcie sprintu (ETAP 0/C15):** KANON master `6e1af23` → `8a13b77`
+(inna sesja — Sprint B „claim ledger invariant CHECK" — scommitowała+flipnęła `ENABLE_CLAIM_LEDGER_
+INVARIANT_CHECK`/`_HARD` do master + żywego flags.json ~14:15 UTC). Mój worktree bazował na starszym
+`6e1af23` → ratchet `test_conftest_flag_strip_guard` czytał NOWY współdzielony flags.json, którego
+mój (stary) ETAP4 nie pokrywał = fałszywy „mój" fail (na czystym KANONIE ten test PRZECHODZI; mój
+diff common.py jest czysto ADDYTYWNY do ETAP4 → `_covered()` to nadzbiór → nie może odkryć leaka).
+
+**Działanie (C1/C12 — nie tykać cudzej flagi):** NIE dotknąłem `ENABLE_CLAIM_LEDGER_*` (domena Sprintu B).
+Zamiast tego **rebase mojego brancha `perf/p95-ortools` na aktualny master `8a13b77`** (czysty, zero
+konfliktów — commit `5a7966e`) → mój worktree dziedziczy claim-ledger z master, mój A2 na wierzchu.
+
+**Regresja na rebased stanie (`5a7966e` = master 8a13b77 + A2):**
+> **`1 failed, 4473 passed, 27 skipped, 10 xfailed`** (129 s). Jedyny FAIL = grafik (niżej).
+> 4473 pass = baseline master 8a13b77 (route-order S30 + claim-ledger Sprintu B) **+ 8 testów A2**.
+> Strażniki flag (strip-guard / flag_effect / flag_registry / fingerprint / doc-coverage) = ZIELONE.
+
+**Klasyfikacja:** mój A2 = **0 nowych regresji**. Jedyny FAIL = `test_grafik_fetch_schedule::
+test_parity_live_equals_staged_mirror[fetch]` = pre-existing CROSS-SESJA (żywy `fetch_schedule.py`
+scripts-root DO PRZODU względem staged o fix None-sort, wniesiony DZIŚ przez sesję grafik) —
+reprodukuje się identycznie na czystym KANONIE, POZA moim zakresem (PERF/OR-Tools/TZ) i cudza domena.
 
 ---
 
@@ -79,7 +98,12 @@ Pełny raport: **`A3_tz_deploy_audit.md`** (twierdzenia zweryfikowane niezależn
 
 ## 7. Commit
 
-> [COMMIT — uzupełniony; pliki: common.py, tsp_solver.py, tools/perf_ortools_det_parity.py, tests/test_ortools_det_budget_a2.py, eod_drafts/2026-07-08/*]
+- **`482e535`** (pierwotny, na `6e1af23`) → po rebase **`5a7966e`** na `8a13b77` (branch `perf/p95-ortools`).
+- **9 plików:** `common.py` (flaga ETAP4 + stała OFF + config), `tsp_solver.py` (budżet det. gated),
+  `tools/perf_ortools_det_parity.py` (harness), `tools/flag_effect_coverage_check.py` (env-aware C12(e)),
+  `tests/test_ortools_det_budget_a2.py` (8 testów), `eod_drafts/2026-07-08/{A1,A2,A3,S_PERF}.md`.
+- **Zacommitowane PRZED końcem** (lekcja: `--force` skasował niezacommitowaną pracę). Push/merge do
+  master = **sekwencyjnie po ACK** (FLIPMASTER) — NIE ja. Backupy .bak (gitignored) zachowane.
 
 ## 8. Czeka na ACK Adriana / FLIPMASTERA
 
