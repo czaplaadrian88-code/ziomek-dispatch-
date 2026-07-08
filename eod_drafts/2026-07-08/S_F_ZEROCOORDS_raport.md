@@ -51,10 +51,13 @@
 - Flaga const OFF = domyślnie legacy; ON dopiero po dopisaniu do flags.json (flip = osobny ACK, C2).
 - Kod: `git revert <commit>` / `.bak-pre-firmowe-bag-fallback-2026-07-08` (common.py + dispatch_pipeline.py).
 
-## 6. STAN / OTWARTE (za ACK)
-- **FLIP** `ENABLE_FIRMOWE_BAG_COORD_FALLBACK=true` w flags.json = pełny deploy (C2): mierzy REALNY spadek COORD_GUARD tej klasy + brak regresji feasibility holdera; okno 2 dni; peak-only więc werdykt po ≥1 peaku. **NIE flipnięte w tej sesji.**
-- Uwaga behawioralna do zmierzenia przy flipie: ON zmienia efektywną trasę TRZYMANEGO firmowego z 9999-infeasible na centrala-based → holder przestaje być cicho wykluczany (intencja anty-pile-on L2.1, ale to zmiana → replay ON↔OFF).
-- Merge worktree→master: sekwencyjny za ACK (C12c). Po merge: re-run `test_flag_effect_coverage` z kanonu (worktree-artefakt znika).
+## 6. STAN — 🟢 LIVE (ACK Adriana „ack na 1 i 2", 08.07 ~19:13 UTC, off-peak)
+- **MERGE:** rebase na A2 `320a888` (konflikt ETAP4 = obie flagi zachowane) → FF master `d562ea1`. Canon py_compile OK. Regresja kanoniczna **4513 pass / 1 fail** = cudzy `test_flag_doc_coverage` na `ENABLE_ORTOOLS_DET_TIME_LIMIT` (dług sesji A2 — flip bez wpisu do ref/baseline; obecny PRZED moim merge, NIE mój). Moja flaga udokumentowana w `ZIOMEK_LOGIC_REFERENCE.md` → `flag_effect`+`flag_doc` dla niej zielone.
+- **FLIP:** `ENABLE_FIRMOWE_BAG_COORD_FALLBACK=true` w flags.json (atomowo, A2 ORTOOLS zachowane). **RESTART dispatch-shadow 19:13:05** (NRestarts=0, warm-up 49ms, 0 błędów; FLAG_FINGERPRINT proc=shadow=1). Oneshot-timery biorą kod same z dysku. Telegram NIETKNIĘTY.
+- **Live-smoke:** firmowe assigned+repair-fail na deployed kanonie → pickup=centrala (53.13222,23.16844), **0 hitów COORD_GUARD**.
+- **WERDYKT realny = najbliższy peak 11-14 Warsaw** (klasa peak-only): COORD_GUARD firmowe → ~0 + brak regresji feasibility holdera (ON zmienia trasę trzymanego firmowego 9999-infeasible→centrala = anty-pile-on L2.1). Obserwowalność: log `FIRMOWE_BAG_COORD_FALLBACK`.
+- **Rollback:** flaga OFF hot (`flags.json`, ~5s) / `.bak-pre-firmowe-flip-2026-07-08` / `.bak-pre-firmowe-bag-fallback-2026-07-08` / `git revert d562ea1`.
+- **Do domknięcia przez sesję A2:** `ENABLE_ORTOOLS_DET_TIME_LIMIT` niedokumentowana w ref/baseline → doc-coverage czerwone dla wszystkich (cross-sesyjne).
 
 ## Commity
-- `<HASH>` — Sprint F: firmowe bag-pickup fallback (flaga OFF) + test + rejestracja ETAP4.
+- `d562ea1` (master) — Sprint F: firmowe bag-pickup fallback + test + rejestracja ETAP4 + doc ref.
