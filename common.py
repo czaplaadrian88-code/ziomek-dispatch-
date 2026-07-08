@@ -483,6 +483,16 @@ ETAP4_DECISION_FLAGS = (
     # plan-recheck/czasowka liczą tym samym silnikiem). Flip = FLIPMASTER po dowodzie
     # parytetu ON↔OFF na replayu. Stała-fallback OFF + config solution_limit/ceiling niżej.
     "ENABLE_ORTOOLS_DET_TIME_LIMIT",
+    # Sprint F (2026-07-08, źródło (0,0)/COORD_GUARD): gdy runtime re-geokod
+    # (_repair_bag_coords) ODBIORU bag-ordera FIRMOWEGO (aid∈FIRMOWE_KONTO_ADDRESS_IDS)
+    # zawiedzie, użyj FIRMOWE_KONTO_FALLBACK_COORDS (centrala Nadajesz, w bbox)
+    # zamiast cichego (0,0). (0,0) snapowało w OSRM → COORD_GUARD sentinel 9999 →
+    # kandydat-holder cicho wykluczany (geometria-ślepy pile-on, choroba L2.1).
+    # Dotyczy WYŁĄCZNIE odbioru firmowego (pickup w uwagach = nierozwiązywalny;
+    # delivery firmowe zawsze geokodowane). OFF = legacy (0,0)→guard bajt-w-bajt.
+    # Flip za ACK+replay (peak-only klasa; guard zostaje backstopem). Konsument:
+    # dispatch_pipeline._bag_dict_to_ordersim._firmowe_bag_pickup_fallback.
+    "ENABLE_FIRMOWE_BAG_COORD_FALLBACK",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -593,6 +603,7 @@ ENABLE_PANEL_PACKS_BAG_RECONSTRUCTION = True
 ENABLE_CARRIED_FIRST_RELAX_READY_ANCHOR = False  # 2026-06-29 case Rećki (ready-anchor R6 w 3 bramkach carried-first plan_recheck; OFF=legacy in-bag/byte-identyczne; KANON=flags.json)
 ENABLE_DELIVERED_RESURRECTION = False  # 2026-06-29 case Pizzeria 105 (panel_watcher wskrzesza delivered-które-wróciło-do-packs po ręcznym cofnięciu w gastro; OFF=stare ignorowanie na zawsze; KANON=flags.json)
 ENABLE_COORD_SENTINEL_INGEST_GUARD = False  # L2.1 2026-07-01 (walidator coords u ingest + guardy konsumentów geometrii; OFF=legacy (0,0)-as-data/V328-eject; KANON=flags.json)
+ENABLE_FIRMOWE_BAG_COORD_FALLBACK = False  # Sprint F 2026-07-08 (bag-order firmowy z nierozwiązywalnym ODBIOREM → FIRMOWE_KONTO_FALLBACK_COORDS zamiast cichego (0,0)→COORD_GUARD; OFF=legacy (0,0) bajt-w-bajt; KANON=flags.json)
 ENABLE_AVAILABLE_FROM_SINGLE_SOURCE = False  # L4 2026-07-02 (jedno źródło available_from=max(now,shift_start) w courier_resolver; konsumenci #1/#3/#5/chokepoint dziedziczą; OFF=stare ścieżki bajt-w-bajt; KANON=flags.json)
 ENABLE_ETA_LOAD_AWARE = False  # L5.1 2026-07-05 (bufor optymizmu nogi ODBIORU z tabeli kalibracji eta_load_aware_calib.json; OFF=shadow-only metryki eta_la_*; ON=przesuwa eta_pickup_utc/travel_min — oś OBIETNICY, nie feasibility; KANON=flags.json)
 ENABLE_PLAN_RECHECK_GATES = False  # L3 2026-07-02 (bramka ZAPISU regenu plan_recheck: compare-and-keep R6 carried>35 — nie nadpisuj dobrego planu gorszym-sekwencyjnie; OFF=zapis regenu bajt-w-bajt; KANON=flags.json)

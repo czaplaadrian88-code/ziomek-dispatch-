@@ -3430,6 +3430,42 @@ def _repair_bag_coords(d: dict, kind: str):
     return None
 
 
+# Sprint F (2026-07-08): rate-limit logu fallbacku firmowego (klasa peak-only).
+_firmowe_bag_fallback_log_count = 0
+
+
+def _firmowe_bag_pickup_fallback(d: dict):
+    """Sprint F (2026-07-08, źródło (0,0)/COORD_GUARD): fallback ODBIORU dla
+    bag-ordera FIRMOWEGO gdy `_repair_bag_coords` zawiódł (runtime re-geokod
+    padł — sieć/TTL w peaku). Flaga ON + aid∈FIRMOWE_KONTO_ADDRESS_IDS →
+    FIRMOWE_KONTO_FALLBACK_COORDS (centrala Nadajesz, w bbox) zamiast cichego
+    (0,0). (0,0) snapował w OSRM → COORD_GUARD sentinel 9999 → holder cicho
+    wykluczany (geometria-ślepy pile-on, choroba L2.1). Flaga OFF / nie-firmowe
+    → (0.0, 0.0) = LEGACY bajt-w-bajt (guard OSRM zostaje backstopem). Dotyczy
+    WYŁĄCZNIE odbioru firmowego (pickup w uwagach = nierozwiązywalny; delivery
+    firmowe zawsze geokodowane)."""
+    global _firmowe_bag_fallback_log_count
+    if not C.decision_flag("ENABLE_FIRMOWE_BAG_COORD_FALLBACK"):
+        return (0.0, 0.0)
+    try:
+        _aid = d.get("address_id")
+        _is_firmowe = _aid is not None and int(_aid) in C.FIRMOWE_KONTO_ADDRESS_IDS
+    except (ValueError, TypeError):
+        _is_firmowe = False
+    if not _is_firmowe:
+        return (0.0, 0.0)
+    _fc = tuple(C.FIRMOWE_KONTO_FALLBACK_COORDS)
+    _firmowe_bag_fallback_log_count += 1
+    if (_firmowe_bag_fallback_log_count <= 20
+            or _firmowe_bag_fallback_log_count % 100 == 0):
+        log.warning(
+            "FIRMOWE_BAG_COORD_FALLBACK #%d oid=%s aid=%s odbiór nierozwiązywalny "
+            "→ centrala %r (zamiast (0,0)/COORD_GUARD)",
+            _firmowe_bag_fallback_log_count, d.get("order_id"),
+            d.get("address_id"), _fc)
+    return _fc
+
+
 def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     picked = parse_panel_timestamp(d.get("picked_up_at"))
     # V3.19f: czas_kuriera_warsaw first-choice dla pickup_ready_at (F2.1c R8 T_KUR).
@@ -3447,8 +3483,14 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     pickup_c = d.get("pickup_coords")
     deliv_c = d.get("delivery_coords")
     if not C.coords_in_bialystok_bbox(pickup_c):
-        pickup_c = _repair_bag_coords(d, "pickup") or pickup_c or (0.0, 0.0)
+        # Sprint F: ostatnia deska ODBIORU = fallback firmowy (centrala) za flagą
+        # ON, inaczej (0,0) legacy → guard OSRM. _firmowe_bag_pickup_fallback OFF
+        # / nie-firmowe zwraca (0.0, 0.0) → bajt-w-bajt jak dawniej.
+        pickup_c = _repair_bag_coords(d, "pickup") or pickup_c \
+            or _firmowe_bag_pickup_fallback(d)
     if not C.coords_in_bialystok_bbox(deliv_c):
+        # Delivery firmowe zawsze geokodowane; centrala jako DOSTAWA byłaby błędna
+        # → zostaje (0,0) legacy (guard backstop). Nie-firmowe też legacy.
         deliv_c = _repair_bag_coords(d, "delivery") or deliv_c or (0.0, 0.0)
     # V3.27.5 Path A (2026-04-27): defense-in-depth dla state inconsistency.
     # Pre-fix: status field jedyny signal picked_up. Path B fixes state_machine

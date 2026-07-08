@@ -477,6 +477,15 @@ the module constant. ~80+ flags exist. Notable **current** states:
   2046+14456 zdarzeń, 8-28 ofiar/dzień). Telemetria unconditional: `coord_poison_bag_oids`/
   `coord_poison_new_delivery` w shadow_decisions. Testy: `test_coord_sentinel_ingest_l21` (22, e2e V328).
   Flip = pełny deploy C2 (restart shadow+panel-watcher+gps) za ACK; potem L2.2 catch-all rozróżnia).
+  `ENABLE_FIRMOWE_BAG_COORD_FALLBACK` (Sprint F 2026-07-08, źródło (0,0)/COORD_GUARD: paczki FIRMOWE
+  `aid∈FIRMOWE_KONTO_ADDRESS_IDS` persystują `pickup_coords=None` [świadomy reject→KOORD parsera uwag];
+  przypisane→w worku jako `assigned` → `_bag_dict_to_ordersim` runtime re-geokod `_repair_bag_coords`
+  pada pod peakiem [timeout 2 s] → cichy `(0.0,0.0)` → `route_simulator.table` → COORD_GUARD sentinel
+  9999 → holder cicho wykluczany [geometria-ślepy pile-on, resztkowa choroba L2.1 — N-D #1 tamtej fali].
+  ON → odbiór firmowy nierozwiązywalny dostaje `FIRMOWE_KONTO_FALLBACK_COORDS` [centrala Nadajesz, w bbox]
+  przez `dispatch_pipeline._firmowe_bag_pickup_fallback` zamiast (0,0). WĄSKO: tylko ODBIÓR firmowy —
+  delivery/nie-firmowe/nowe zlecenia bez zmian [guard OSRM = backstop]. OFF = legacy (0,0) bajt-w-bajt.
+  Testy `test_firmowe_bag_coord_fallback_sprintf` [7]. Flip = pełny deploy C2 [restart shadow] za ACK.
 - ⚪ **OFF:** `AUTO_PROXIMITY_ENABLED`, `ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE` (cold-food divergence
   no longer →KOORD), `ENABLE_BAG_TIME_FAIRNESS_SCORING`,
   `ENABLE_DIFFICULT_CASE_KOORD_REDIRECT`, `ENABLE_CARRY_CHAIN_PENALTY`, `kill_switch_to_v1`,
