@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer: dzienny cień eta_calibration (05:20 UTC — po loggerach kalibracji Ziomka)
+Documentation=file:///root/.openclaw/workspace/scripts/dispatch_v2/docs/eta/04_wdrozenie.md
+
+[Timer]
+# 05:20 UTC = po eta_quantile_calib (04:35) / prep_bias (04:15) / retro-learning (04:30) / prep-bias-monitor (05:00)
+OnCalendar=*-*-* 05:20:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

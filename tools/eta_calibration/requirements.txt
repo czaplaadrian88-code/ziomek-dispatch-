@@ -1,0 +1,8 @@
+# eta_calibration — zależności (wszystkie już w venv dispatch)
+# Uruchamiać WYŁĄCZNIE: /root/.openclaw/venvs/dispatch/bin/python
+numpy>=2.0
+scipy>=1.13
+lightgbm>=4.0
+PyYAML>=6.0
+# stdlib: json, sqlite3, urllib, datetime, zoneinfo, hashlib, logging, argparse
+# BEZ requests/httpx (spójnie z Ziomkiem — HTTP przez urllib)

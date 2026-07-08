@@ -1,0 +1,71 @@
+# eta_calibration — konfiguracja (env override: ETA_CALIB_<KLUCZ>)
+# Wszystkie obiekty pisane z prefiksem eta_calib_*, tryb CIEŃ (zero wpięcia w żywe ETA).
+
+paths:
+  state_dir: /root/.openclaw/workspace/dispatch_state
+  logs_dir: /root/.openclaw/workspace/scripts/logs
+  sla_log: /root/.openclaw/workspace/scripts/logs/sla_log.jsonl
+  eta_calib_log: /root/.openclaw/workspace/dispatch_state/eta_calibration_log.jsonl
+  ziomek_pred: /root/.openclaw/workspace/dispatch_state/ziomek_pred_calibration.jsonl
+  rutcom_csv: /root/ziomek-advisory/data/panel_csv_oczekiwanie_mission.csv
+  geocode_cache: /root/.openclaw/workspace/dispatch_state/geocode_cache.json
+  # WYJŚCIA (własne, eta_calib_*):
+  db: /root/.openclaw/workspace/dispatch_state/eta_calib.db
+  pickup_map: /root/.openclaw/workspace/dispatch_state/eta_calib_pickup_map.json
+  delivery_map: /root/.openclaw/workspace/dispatch_state/eta_calib_delivery_map.json
+  shadow_log: /root/.openclaw/workspace/dispatch_state/eta_calib_shadow.jsonl
+  metrics_log: /root/.openclaw/workspace/dispatch_state/eta_calib_metrics.jsonl
+
+osrm:
+  base_url: http://127.0.0.1:5001
+  timeout_s: 5
+  max_calls_per_run: 40000     # kill-switch; OSRM self-host, ale limit bezpieczeństwa
+  external_budget_per_day: 100 # twardy limit zapytań ZEWNĘTRZNYCH (Nominatim) / dobę
+
+window:
+  train_days: 44          # okno treningowe (walk-forward)
+  holdout_days: 14        # holdout końcowy (B3)
+  conformal_calib_days: 7 # ostatnie N dni TRAIN jako zbiór kalibracji conformal (rozłączny z fit)
+  min_slip_abs_min: 90    # odfiltruj artefakty poślizgu > 90 min
+  max_deliver_min: 60     # dostawa realistyczna 2..60 min
+  min_deliver_min: 2
+
+model:
+  quantiles: [0.5, 0.8, 0.9]    # P50 / P80 / P90 (raportowo)
+  operational_quantile: 0.8
+  # CEL OPERACYJNY = REALNY % dotrzymanych obietnic (Adrian 2026-07-07: 20% spóźnień → 80%).
+  # Obietnica = P50 + conformal_offset(target). Bufor na drift per noga (dostawa dryfuje
+  # wolniej niż okno kalibracji → wyższy cel calib, by REALNIE trafić 80% out-of-time).
+  # Bufory zmierzone na holdoucie (najgorszy przypadek 2 tyg.); w produkcji rekalibracja
+  # dzienna + więcej danych je zmniejsza (monitorowane w eta_calib_metrics).
+  target_ontime: 0.80
+  drift_buffer_ontime:
+    pickup: 0.00                # T=0.80 → 80.9% dotrzymane na holdoucie
+    delivery: 0.04              # T=0.84 → 79.9% dotrzymane (drift dostawy)
+  cost_late_over_early: 4.0
+  conformal: true               # split-conformal (median-anchored, celowany na target_ontime)
+  # empirical (Level 1)
+  min_n_courier: 30             # próg pełnej personalizacji; niżej → shrinkage
+  shrinkage_auto_K: true        # K = within_var/between_var (empirical Bayes)
+  drift_quarantine_min: 5.0     # |offset zmiana| > 5 min ∧ n>=40 → kwarantanna
+  # lightgbm (Level 2)
+  lgbm:
+    num_leaves: 15
+    min_child_samples: 30
+    learning_rate: 0.05
+    n_estimators: 250
+    lambda_l2: 1.0
+
+acceptance:            # kryteria GO zdefiniowane Z GÓRY (B1.3 §8)
+  pickup_mae_improve_pct: 12.0
+  delivery_mae_improve_pct: 5.0
+  overall_mae_improve_pct: 15.0
+  p80_coverage_lo: 0.76
+  p80_coverage_hi: 0.84
+  p90_coverage_lo: 0.86
+  p90_coverage_hi: 0.94
+  significance_alpha: 0.05
+
+runtime:
+  champion_challenger: true     # promuj tylko gdy bije champion na holdoucie (DM p<alpha)
+  shadow_only: true             # NIGDY nie wpina w żywe ETA

@@ -1,0 +1,21 @@
+[Unit]
+Description=eta_calibration — dzienny cień kalibracji ETA per-leg/per-kurier (SHADOW, eta_calib_*)
+Documentation=file:///root/.openclaw/workspace/scripts/dispatch_v2/docs/eta/04_wdrozenie.md
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.eta_calibration.calibrate --rebuild-features
+# niski priorytet — nie przeszkadzać silnikowi (LightGBM trening)
+Nice=15
+CPUWeight=20
+IOWeight=20
+# tryb CIEŃ — pisze wyłącznie eta_calib_*; zabezpieczenia zasobów
+MemoryMax=1500M
+TimeoutStartSec=900
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/eta_calibration.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/eta_calibration.log
+
+[Install]
+WantedBy=multi-user.target
