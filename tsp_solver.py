@@ -36,6 +36,42 @@ class TspSolution:
     warnings: List[str] = field(default_factory=list)
 
 
+def _ortools_det_budget() -> Optional[Tuple[int, int]]:
+    """A2 PERF (2026-07-08): budżet solvera DETERMINISTYCZNY zamiast wall-clock.
+
+    Zwraca (solution_limit, wall_ceiling_ms) gdy flaga
+    `ENABLE_ORTOOLS_DET_TIME_LIMIT` ON — wtedy solver zatrzymuje się po stałej
+    liczbie rozwiązań GLS (powtarzalna trasa). wall_ceiling_ms>0 = jawny OVERRIDE
+    budżetu (tryb offline-replay determinism-first); wall_ceiling_ms==0 (default) =
+    ZOSTAW budżet callera time_limit_ms jako sufit → produkcyjnie ON ≤ OFF latencja
+    (wall-clock tnie identycznie jak OFF gdy solution_limit nie zdąży = bajt-w-bajt).
+    None = wall-clock jak dziś (OFF, default flagi).
+
+    Motyw tmux 31: `time_limit` (zegarek) → liczba iteracji GLS zależy od
+    obciążenia CPU → ta sama sytuacja daje inną trasę (~1,7% niedeterminizmu
+    replayu). Wzór zwalidowany w tools/sequential_replay.
+
+    Import common LAZY (tsp_solver jest czystą f-cją bez zależności od common
+    przy imporcie) + fail-soft None — brak common / błąd = zachowanie dzisiejsze.
+    Czytane decision_flag (flags.json → stała common OFF), świeżo per solve
+    (hot-reload; cross-proces shadow/plan-recheck/czasowka spójne).
+    """
+    try:
+        import dispatch_v2.common as _C
+    except Exception:
+        try:
+            import common as _C  # bieg spoza pakietu (np. harness z cwd=dispatch_v2)
+        except Exception:
+            return None
+    try:
+        if not _C.decision_flag("ENABLE_ORTOOLS_DET_TIME_LIMIT"):
+            return None
+        return (int(getattr(_C, "ORTOOLS_DET_SOLUTION_LIMIT", 120)),
+                int(getattr(_C, "ORTOOLS_DET_WALL_CEILING_MS", 30000)))
+    except Exception:
+        return None
+
+
 def solve_tsp_with_constraints(
     num_stops: int,
     pickup_drop_pairs: Sequence[Tuple[int, int]],
@@ -444,6 +480,23 @@ def solve_tsp_with_constraints(
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
     search_parameters.time_limit.FromMilliseconds(int(time_limit_ms))
+
+    # A2 PERF (2026-07-08): deterministyczny budżet solvera zamiast wall-clock.
+    # ON → `solution_limit` (stała liczba rozwiązań GLS) wiąże budżet = ta sama
+    # sytuacja daje tę samą trasę (usuwa ~1,7% niedeterminizmu replayu z cutoffu
+    # „na zegarek", tmux 31); `time_limit` podniesiony do luźnego sufitu = tylko
+    # bezpiecznik anty-zawis. OFF (default) → ten blok nie rusza params = goły
+    # time_limit powyżej, BAJT-W-BAJT z dziś. MUSI być PRZED warm-start
+    # CloseModelWithParameters/SolveWithParameters (params czytane przy zamknięciu
+    # modelu). decision_flag → flags.json→stała OFF (cross-proces).
+    _det_budget = _ortools_det_budget()
+    if _det_budget is not None:
+        search_parameters.solution_limit = _det_budget[0]
+        # sufit >0 = jawny OVERRIDE (tryb offline-replay determinism-first); 0 =
+        # ZOSTAW budżet callera z linii wyżej (produkcja: ON ≤ OFF latencja, bo
+        # wall-clock tnie identycznie jak OFF gdy solution_limit nie zdąży).
+        if _det_budget[1] > 0:
+            search_parameters.time_limit.FromMilliseconds(int(_det_budget[1]))
 
     # FOOD-AGE HARD-SLA (2026-06-17): warm-start hintem (sekwencja bazowa node-idx,
     # bez węzła startu/dummy — format jak self.sequence). Przyspiesza zbieżność pod

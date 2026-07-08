@@ -24,7 +24,11 @@ import json
 import os
 import sys
 
-SCRIPTS = "/root/.openclaw/workspace/scripts"
+# C12(e) self-lokalizacja (2026-07-08, A2): domyślnie KANON (CI/kanoniczny bieg
+# bez zmian), ale nadpisywalne ZIOMEK_SCRIPTS_ROOT dla walidacji kodu z WORKTREE
+# przed merge — inaczej checker skanuje KANON `tests/` (bez nowego testu efektu z
+# worktree) i fałszywie zgłasza nową flagę jako „bez testu". Spójne z conftest.
+SCRIPTS = os.environ.get("ZIOMEK_SCRIPTS_ROOT", "/root/.openclaw/workspace/scripts")
 TESTS = os.path.join(SCRIPTS, "dispatch_v2", "tests")
 BASELINE = os.path.join(SCRIPTS, "dispatch_v2", "tools", "flag_effect_baseline.json")
 

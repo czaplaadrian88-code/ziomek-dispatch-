@@ -473,6 +473,16 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_SCORER_INTERFACE",         # K13: interfejs Scorer (heuristic/lgbm) w core.candidates
     "ENABLE_PLANNER_UNIFIED",          # K15: plan_recheck parametry+simulate przez core.planner
     "ENABLE_PLANNER_UNIFIED_SHADOW",   # K15: porównanie parametrów inline↔planner (log-only)
+    # A2 PERF (2026-07-08, sprint p95 pod skalę): deterministyczny budżet solvera
+    # OR-Tools (solution_limit) zamiast wall-clock time_limit. Motyw tmux 31: cutoff
+    # „na zegarek" wnosi ~1,7% niedeterminizmu replayu (ta sama sytuacja → inna trasa
+    # zależnie od obciążenia CPU). ON → stała liczba rozwiązań GLS = powtarzalna
+    # trasa; sufit wall-clock (ORTOOLS_DET_WALL_CEILING_MS) zostaje jako bezpiecznik
+    # anty-zawis. OFF (default) = BAJT-W-BAJT z dziś (goły time_limit). Czytana w
+    # tsp_solver.solve_tsp_with_constraints (decision_flag, cross-proces: shadow/
+    # plan-recheck/czasowka liczą tym samym silnikiem). Flip = FLIPMASTER po dowodzie
+    # parytetu ON↔OFF na replayu. Stała-fallback OFF + config solution_limit/ceiling niżej.
+    "ENABLE_ORTOOLS_DET_TIME_LIMIT",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -525,6 +535,18 @@ RESERVE_TIEBREAK_MARGIN = 30.0  # #3: max Δscore (wolny−jadący) by tie-break
 ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria physical_verified delivered_at panel-vs-GPS courier_ground_truth; SHADOW, zero wpływu na decyzje/SLA; kanon=flags.json hot)
 ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
 ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
+# A2 PERF (2026-07-08, sprint p95): budżet solvera OR-Tools deterministyczny.
+# Stała-fallback OFF (literał, NIE env-read — unika anty-wzorca env-frozen #9);
+# decyzja czytana z flags.json przez decision_flag (KANON). OFF=bajt-w-bajt goły
+# time_limit; ON=solution_limit (powtarzalna trasa) + sufit wall-clock anty-zawis.
+ENABLE_ORTOOLS_DET_TIME_LIMIT = False  # A2 2026-07-08 (solution_limit zamiast wall-clock; usuwa ~1,7% niedeterminizmu replayu tmux31; flip=FLIPMASTER po parytecie ON↔OFF; KANON=flags.json/const)
+ORTOOLS_DET_SOLUTION_LIMIT = 120       # A2: liczba rozwiązań GLS wiążąca budżet gdy flaga ON (wzór zwalidowany tools/sequential_replay: powtarzalny strop optymalizacji); parytet z produkcyjnym 200ms zmierzony 100% (perf_ortools_det_parity)
+# A2 sufit wall-clock = OVERRIDE budżetu callera TYLKO gdy >0. 0 (default) = ZOSTAW
+# budżet time_limit_ms callera jako sufit → ON ≤ OFF latencja na KAŻDEJ ścieżce (też
+# krótki warm-start food-age 100ms) = ZERO regresji + bajt-w-bajt dla worków gdzie
+# solution_limit nie zdąży (wall-clock tnie identycznie jak OFF). >0 (np. 30000) =
+# tryb OFFLINE-REPLAY determinism-first (pełne wiązanie solution_limit; NIE dla produkcji).
+ORTOOLS_DET_WALL_CEILING_MS = 0        # A2: 0=sufit=budżet callera (produkcja, zero-regresji); >0=override offline-replay
 
 # === P-FLAGREG partia A'/B (2026-07-05): konsty-LUSTRA dla flag rejestrowanych
 # w ETAP4/_FINGERPRINT_EXTRA, których czytelnicy używają `flag(name, default)`
