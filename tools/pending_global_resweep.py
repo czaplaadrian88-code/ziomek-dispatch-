@@ -121,6 +121,7 @@ def _cand_by_cid(res, cid: str):
 from dispatch_v2.claim_ledger import (  # noqa: E402
     bag_entry_from_order as _bag_entry_from_order,
     tentative_assign as _tentative_assign,
+    check_sweep_trace as _check_claim_sweep_trace,
 )
 
 
@@ -134,7 +135,8 @@ def _assess(order_event: dict, fleet: Dict[str, Any], now: datetime):
 
 def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
                     now: datetime,
-                    _results_out: Optional[Dict[str, Any]] = None) -> Dict[str, dict]:
+                    _results_out: Optional[Dict[str, Any]] = None,
+                    _diag_out: Optional[Dict[str, Any]] = None) -> Dict[str, dict]:
     """Sekwencyjny greedy z aktualizacją stanu floty.
 
     hanging: [(oid, orders_state_rec)]. Zwraca {oid: {cid,name,score,feasibility,
@@ -146,6 +148,12 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
     (shadow_dispatcher Fazy C) zserializować te same rekordy do shadow_decisions.jsonl
     (=lustro konsoli) BEZ 2. kopii reguł — selekcja/feasible-first/best_effort dziedziczone
     z assess_order. Back-compat: gdy None, zachowanie bajt-identyczne (tylko zwrot allocation).
+
+    _diag_out (opcjonalny, Sprint B INV-FEAS-NO-DOUBLE-BOOK): gdy podany dict — wypełniany
+    {"claim_trace": [(cid,oid,bag_seen)], "claim_ledger_breaches": [...]} do pomiaru
+    spójności claim-ledger (run_once serializuje licznik do jsonl). Ślad budowany ZAWSZE
+    (tani), weryfikacja + log-loud TYLKO pod flagą ENABLE_CLAIM_LEDGER_INVARIANT_CHECK.
+    STRAŻNIK: nie zmienia allocation (flaga ON≡OFF co do zwrotu).
 
     Zasada: w każdej rundzie oceniamy WSZYSTKIE jeszcze-niealokowane zlecenia żywym
     assess_order nad BIEŻĄCĄ flotą; przypisujemy to o najwyższym best-score; doklejamy
@@ -162,6 +170,9 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
     assessed = {oid: _assess(events[oid], fleet, now) for oid in events}
     remaining = set(events.keys())
     allocation: Dict[str, dict] = {}
+    # INV-FEAS-NO-DOUBLE-BOOK: ślad claimów [(cid, oid, bag_seen)] w kolejności alokacji
+    # (bag_seen = worek kuriera, który ocena zwycięska widziała — PRZED doklejeniem).
+    _claim_trace: List[Tuple[str, str, int]] = []
 
     def _best_tuple(oid):
         res = assessed.get(oid)
@@ -213,6 +224,10 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
         }
         if _results_out is not None and res is not None:
             _results_out[oid] = res
+        # INV-FEAS-NO-DOUBLE-BOOK: zanotuj rozmiar worka, który ocena zwycięska widziała
+        # (bag PRZED doklejeniem tego zlecenia) — kolejny claim tego kuriera MUSI widzieć +1.
+        _cs_now = fleet.get(cid)
+        _claim_trace.append((cid, oid, len(getattr(_cs_now, "bag", None) or [])))
         # wirtualnie doklej zlecenie do worka kuriera → kolejne re-oceny widzą obciążenie
         fleet = _tentative_assign(fleet, cid, recs[oid])
         remaining.discard(oid)
@@ -221,6 +236,25 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
             ocid, _, _ = _best_tuple(other)
             if ocid == cid:
                 assessed[other] = _assess(events[other], fleet, now)
+
+    # INV-FEAS-NO-DOUBLE-BOOK strażnik: log-loud (flaga _CHECK) + twarda blokada (flaga
+    # _HARD, odłożona za ACK). Fail-soft — strażnik NIGDY nie wywala de-konflikcji.
+    _breaches: List[dict] = []
+    try:
+        if C.decision_flag("ENABLE_CLAIM_LEDGER_INVARIANT_CHECK"):
+            _breaches = _check_claim_sweep_trace(
+                _claim_trace, log=_log, context="global_allocate")
+            if _breaches and C.decision_flag("ENABLE_CLAIM_LEDGER_INVARIANT_HARD"):
+                raise AssertionError(
+                    f"INV-FEAS-NO-DOUBLE-BOOK: claim-ledger stale/pile-on "
+                    f"{_breaches[:4]!r}")
+    except AssertionError:
+        raise
+    except Exception as _ce:  # noqa: BLE001 — obserwator nie wywala sweepu
+        _log.warning(f"claim_ledger invariant check fail-soft: {type(_ce).__name__}: {_ce}")
+    if _diag_out is not None:
+        _diag_out["claim_trace"] = _claim_trace
+        _diag_out["claim_ledger_breaches"] = _breaches
     return allocation
 
 
@@ -395,7 +429,13 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
     # akcji live (serializacja decision_record dla pending/konsoli).
     _live_armed = bool(C.flag(FLAG_LIVE, False)) and live_gate_open()
     _ga_results: Optional[Dict[str, Any]] = {} if (_alloc_write or _live_armed) else None
-    allocation = global_allocate(hanging, fleet, now, _results_out=_ga_results)
+    # INV-FEAS-NO-DOUBLE-BOOK: zbierz diagnostykę claim-ledger tego sweepu (licznik do jsonl).
+    _ga_diag: Dict[str, Any] = {}
+    allocation = global_allocate(hanging, fleet, now,
+                                 _results_out=_ga_results, _diag_out=_ga_diag)
+    # liczba naruszeń spójności claim-ledger w tym sweepie (0 przy flagi OFF = brak weryfikacji)
+    claim_breaches = _ga_diag.get("claim_ledger_breaches") or []
+    n_claim_breaches = len(claim_breaches)
 
     # metryki rozjazdu (pile-on jednego kuriera) przed/po
     def _pile(d):
@@ -481,6 +521,9 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
             "g_maxpile_before": maxpile_before,
             "g_maxpile_after": maxpile_after,
             "g_spread_improved": spread_improved,
+            # INV-FEAS-NO-DOUBLE-BOOK: liczba naruszeń spójności claim-ledger sweepu
+            # (>0 tylko gdy ENABLE_CLAIM_LEDGER_INVARIANT_CHECK ON; 0 = brak/OK).
+            "g_claim_ledger_breaches": n_claim_breaches,
         })
 
     # K5 LIVE: akcje PRZED zapisem jsonl — wiersze dostają marker live_action
@@ -524,6 +567,7 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         "couriers_before": couriers_before, "couriers_after": couriers_after,
         "maxpile_before": maxpile_before, "maxpile_after": maxpile_after,
         "spread_improved": spread_improved,
+        "claim_ledger_breaches": n_claim_breaches,
         "live_acted": live_acted,
         "margin": margin,
         "duration_s": round(time.monotonic() - _t0, 2),

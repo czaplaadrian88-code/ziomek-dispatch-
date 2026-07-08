@@ -429,6 +429,12 @@ ETAP4_DECISION_FLAGS = (
     # flip za ACK po replayu ON↔OFF. Stałe-fallback: LEXQUAL ~2910, CLAIM w claim_ledger.
     "ENABLE_LEXQUAL_GEOMETRY_TIEBREAK",
     "ENABLE_ENGINE_CLAIM_LEDGER",
+    # === Sprint B inwarianty (2026-07-08, INV-FEAS-NO-DOUBLE-BOOK): tripwier
+    # spójności claim-ledger. _CHECK = log-loud obserwacja (NIE zmienia decyzji,
+    # strażnik nie reguła); _HARD = twarda blokada (raise) — odłożona za ACK po
+    # dowodzie ZERO fałszywek. Oba default OFF; NIE w flags.json (module-const only).
+    "ENABLE_CLAIM_LEDGER_INVARIANT_CHECK",
+    "ENABLE_CLAIM_LEDGER_INVARIANT_HARD",
     # === P-FLAGREG partia A' (2026-07-05, Sprint 2.5-prep tmux18): flagi
     # decyzyjne czytane w silniku BEZ klucza w flags.json → strip conftest =
     # no-op (klucza nie ma), baseline survivors ratchetu NIETKNIĘTY, produkcja
@@ -3176,6 +3182,18 @@ LEXQUAL_TIME_QUANT_MIN = float(_os.environ.get("LEXQUAL_TIME_QUANT_MIN", "0.0"))
 # (zachowanie sprzed L6.C3, bajt-parytet).
 ENABLE_ENGINE_CLAIM_LEDGER = _os.environ.get(
     "ENABLE_ENGINE_CLAIM_LEDGER", "0") == "1"
+
+# INV-FEAS-NO-DOUBLE-BOOK tripwier (Sprint B, 2026-07-08): strażnik spójności
+# claim-ledger. _CHECK = log-loud obserwacja (weryfikuje ślad sweepu/ticku, LOGUJE
+# naruszenia — NIE zmienia allocation, strażnik nie reguła); _HARD = twarda blokada
+# (raise przy naruszeniu) — odłożona za ACK po dowodzie ZERO fałszywek na kanonie +
+# realnym korpusie (protokół #0 §5). Oba default OFF; ŚWIADOMIE nie w flags.json
+# (wersja live-obserwacji = flip po ACK). Konsument: pending_global_resweep.global_allocate
+# + shadow_dispatcher._tick (bliźniaki claim-ledger RAZEM).
+ENABLE_CLAIM_LEDGER_INVARIANT_CHECK = _os.environ.get(
+    "ENABLE_CLAIM_LEDGER_INVARIANT_CHECK", "0") == "1"
+ENABLE_CLAIM_LEDGER_INVARIANT_HARD = _os.environ.get(
+    "ENABLE_CLAIM_LEDGER_INVARIANT_HARD", "0") == "1"
 
 # BEST-EFFORT OBJM SHADOW (2026-06-23): ścieżka best_effort (0 feasible) sortuje
 # `_best_effort_sort_key` z PRIMARY = r6_per_order_violations (new-pickup-only) — ŚLEPYM na

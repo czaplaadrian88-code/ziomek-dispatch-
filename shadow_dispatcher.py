@@ -1229,6 +1229,11 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
     _pp_write = bool(C.flag("ENABLE_PENDING_PROPOSALS_WRITE", False))
     _pp_upserts: list = []
 
+    # INV-FEAS-NO-DOUBLE-BOOK (Sprint B): ślad claimów tego ticku [(cid, oid, bag_seen)]
+    # dla bliźniaka claim-ledger _tick (parytet z global_allocate). Budowany tylko gdy
+    # ENGINE_CLAIM_LEDGER ON (inaczej flota niemutowana = brak claimów). Weryfikacja po pętli.
+    _claim_trace: list = []
+
     for ev in events:
         eid = ev["event_id"]
         oid = ev.get("order_id")
@@ -1315,6 +1320,10 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
                             from dispatch_v2 import claim_ledger as _cl
                             _cl_rec = dict(cur) if cur else dict(payload)
                             _cl_rec.setdefault("order_id", oid)
+                            # INV-FEAS-NO-DOUBLE-BOOK: worek zwycięzcy PRZED doklejeniem
+                            # (= obraz floty, który ocena tego eventu widziała).
+                            _cl_bag_seen = len(getattr(fleet.get(_cl_cid), "bag", None) or [])
+                            _claim_trace.append((_cl_cid, oid, _cl_bag_seen))
                             fleet = _cl.tentative_assign(fleet, _cl_cid, _cl_rec)
                             _claim_applied = True
                             _log.info(
@@ -1491,6 +1500,23 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             _log.info(f"PENDING_PROPOSALS_WRITE upserted={_n}")
         except Exception as _pp_e:
             _log.warning(f"pending_proposals write fail: {_pp_e}")
+
+    # INV-FEAS-NO-DOUBLE-BOOK strażnik ticku (bliźniak global_allocate): log-loud (flaga
+    # _CHECK) + twarda blokada (flaga _HARD, odłożona za ACK). Fail-soft — NIGDY nie wywala
+    # ticku. Ślad pusty gdy ENGINE_CLAIM_LEDGER OFF (brak claimów) → no-op.
+    if _claim_trace and C.decision_flag("ENABLE_CLAIM_LEDGER_INVARIANT_CHECK"):
+        try:
+            from dispatch_v2 import claim_ledger as _cl_chk
+            _tick_breaches = _cl_chk.check_sweep_trace(
+                _claim_trace, log=_log, context="shadow_tick")
+            if _tick_breaches and C.decision_flag("ENABLE_CLAIM_LEDGER_INVARIANT_HARD"):
+                raise AssertionError(
+                    f"INV-FEAS-NO-DOUBLE-BOOK: tick claim-ledger stale/pile-on "
+                    f"{_tick_breaches[:4]!r}")
+        except AssertionError:
+            raise
+        except Exception as _cti_e:  # noqa: BLE001 — obserwator nie wywala ticku
+            _log.warning(f"claim_ledger tick invariant fail-soft: {_cti_e}")
 
     # Faza C: globalna re-alokacja → konsola realizowana POZA gorącą ścieżką
     # (resweep co 1 min pisze dispatch_state/global_alloc.json, feed.py overlay).
