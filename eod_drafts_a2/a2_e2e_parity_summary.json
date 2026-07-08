@@ -1,0 +1,335 @@
+{
+  "summary": {
+    "self_check": {
+      "has_flag_attr": true,
+      "common_file": "/tmp/claude-0/-root/2912fb4d-119f-49ae-8211-48bc0ea6976c/scratchpad/a2_pkgroot/dispatch_v2/common.py",
+      "common_realpath": "/root/.openclaw/workspace/scripts/wt-perf-p95/common.py",
+      "points_to_worktree": true,
+      "flags_json_has_a2_key": false
+    },
+    "flag_wiring_probe": {
+      "off_budget": null,
+      "on_budget": [
+        120,
+        0
+      ],
+      "flag_changes_budget": true
+    },
+    "n_cases": 756,
+    "fleet_hist": {
+      "0": 126,
+      "3": 126,
+      "5": 126,
+      "8": 126,
+      "10": 126,
+      "12": 126
+    },
+    "deepcopy_ok": true,
+    "control_full_diffs_A_vs_Aprime": 512,
+    "control_material_diffs_A_vs_Aprime": 0,
+    "control_primary_diff_cases": 0,
+    "offon_full_diffs_A_vs_B": 370,
+    "offon_material_diffs_A_vs_B": 0,
+    "offon_primary_diffs_A_vs_B": 0,
+    "red_cases_n": 0,
+    "noise_cases_n": 0,
+    "material_parity_pct": 100.0,
+    "byte_parity_pct": 51.058,
+    "offon_material_field_counter": {},
+    "offon_full_field_counter": {
+      "alternatives": 370,
+      "best.loadgov_active_orders": 370,
+      "best.loadgov_load_now": 370
+    },
+    "control_full_field_counter": {
+      "alternatives": 512,
+      "best.loadgov_active_orders": 512,
+      "best.loadgov_load_now": 512
+    },
+    "a2_attributable_full_fields": [],
+    "diverted_store_write_attempts": {
+      "save_last_known_pos": 0
+    },
+    "verdict": "GREEN-Z-SZUMEM (0 różnic materialnych decyzji OFF↔ON; różnice bajtowe WYŁĄCZNIE w polach, które migoczą też w kontroli OFF↔OFF = ambient live-state/wall-clock, nie A2)"
+  },
+  "red_cases": [],
+  "noise_cases": [],
+  "material_examples": [],
+  "full_diff_examples": [
+    {
+      "idx": 5,
+      "order_id": "EV5",
+      "fleet_size": 12,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 7,
+      "order_id": "EV7",
+      "fleet_size": 3,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 8,
+      "order_id": "EV8",
+      "fleet_size": 5,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 9,
+      "order_id": "EV9",
+      "fleet_size": 8,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 10,
+      "order_id": "EV10",
+      "fleet_size": 10,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 11,
+      "order_id": "EV11",
+      "fleet_size": 12,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 13,
+      "order_id": "EV13",
+      "fleet_size": 3,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 14,
+      "order_id": "EV14",
+      "fleet_size": 5,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 15,
+      "order_id": "EV15",
+      "fleet_size": 8,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 16,
+      "order_id": "EV16",
+      "fleet_size": 10,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 17,
+      "order_id": "EV17",
+      "fleet_size": 12,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 19,
+      "order_id": "EV19",
+      "fleet_size": 3,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 20,
+      "order_id": "EV20",
+      "fleet_size": 5,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 21,
+      "order_id": "EV21",
+      "fleet_size": 8,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 22,
+      "order_id": "EV22",
+      "fleet_size": 10,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 23,
+      "order_id": "EV23",
+      "fleet_size": 12,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 25,
+      "order_id": "EV25",
+      "fleet_size": 3,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 26,
+      "order_id": "EV26",
+      "fleet_size": 5,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 27,
+      "order_id": "EV27",
+      "fleet_size": 8,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 28,
+      "order_id": "EV28",
+      "fleet_size": 10,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 29,
+      "order_id": "EV29",
+      "fleet_size": 12,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 31,
+      "order_id": "EV31",
+      "fleet_size": 3,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 33,
+      "order_id": "EV33",
+      "fleet_size": 8,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 34,
+      "order_id": "EV34",
+      "fleet_size": 10,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    },
+    {
+      "idx": 35,
+      "order_id": "EV35",
+      "fleet_size": 12,
+      "control_clean": false,
+      "diff_paths": [
+        "alternatives",
+        "best.loadgov_active_orders",
+        "best.loadgov_load_now"
+      ]
+    }
+  ]
+}
