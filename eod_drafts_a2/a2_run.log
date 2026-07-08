@@ -1,0 +1,61 @@
+[a2] self_check={'has_flag_attr': True, 'common_file': '/tmp/claude-0/-root/2912fb4d-119f-49ae-8211-48bc0ea6976c/scratchpad/a2_pkgroot/dispatch_v2/common.py', 'common_realpath': '/root/.openclaw/workspace/scripts/wt-perf-p95/common.py', 'points_to_worktree': True, 'flags_json_has_a2_key': False}
+[a2] flag_probe={'off_budget': None, 'on_budget': (120, 0), 'flag_changes_budget': True}
+[a2] n_cases=756 build_s=0.0 deepcopy_ok=True fleet_hist={0: 126, 3: 126, 5: 126, 8: 126, 10: 126, 12: 126}
+[a2] pass A (OFF) done 180.7s
+[a2] pass A' (OFF ctrl) done 178.7s
+[a2] pass B (ON) done 150.4s
+
+=== SUMMARY ===
+{
+  "self_check": {
+    "has_flag_attr": true,
+    "common_file": "/tmp/claude-0/-root/2912fb4d-119f-49ae-8211-48bc0ea6976c/scratchpad/a2_pkgroot/dispatch_v2/common.py",
+    "common_realpath": "/root/.openclaw/workspace/scripts/wt-perf-p95/common.py",
+    "points_to_worktree": true,
+    "flags_json_has_a2_key": false
+  },
+  "flag_wiring_probe": {
+    "off_budget": null,
+    "on_budget": [
+      120,
+      0
+    ],
+    "flag_changes_budget": true
+  },
+  "n_cases": 756,
+  "fleet_hist": {
+    "0": 126,
+    "3": 126,
+    "5": 126,
+    "8": 126,
+    "10": 126,
+    "12": 126
+  },
+  "deepcopy_ok": true,
+  "control_full_diffs_A_vs_Aprime": 512,
+  "control_material_diffs_A_vs_Aprime": 0,
+  "control_primary_diff_cases": 0,
+  "offon_full_diffs_A_vs_B": 370,
+  "offon_material_diffs_A_vs_B": 0,
+  "offon_primary_diffs_A_vs_B": 0,
+  "red_cases_n": 0,
+  "noise_cases_n": 0,
+  "material_parity_pct": 100.0,
+  "byte_parity_pct": 51.058,
+  "offon_material_field_counter": {},
+  "offon_full_field_counter": {
+    "alternatives": 370,
+    "best.loadgov_active_orders": 370,
+    "best.loadgov_load_now": 370
+  },
+  "control_full_field_counter": {
+    "alternatives": 512,
+    "best.loadgov_active_orders": 512,
+    "best.loadgov_load_now": 512
+  },
+  "a2_attributable_full_fields": [],
+  "diverted_store_write_attempts": {
+    "save_last_known_pos": 0
+  },
+  "verdict": "GREEN-Z-SZUMEM (0 różnic materialnych decyzji OFF↔ON; różnice bajtowe WYŁĄCZNIE w polach, które migoczą też w kontroli OFF↔OFF = ambient live-state/wall-clock, nie A2)"
+}
