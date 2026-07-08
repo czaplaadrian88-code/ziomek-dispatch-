@@ -88,15 +88,25 @@ dial-family już armed (B2); strukturalna unifikacja = L6.B2 (i R6 to termika/cz
 
 ---
 
-## 4. CO CZEKA NA ACK (ETAP 5/6 — do decyzji Adriana)
+## 3b. DEPLOY WYKONANY — merge + flip CHECK ON (ACK Adriana, 2026-07-08 ~16:15 Warsaw, off-peak)
 
-1. **Flip `ENABLE_CLAIM_LEDGER_INVARIANT_CHECK` ON** (obserwacja live) — pod `dispatch-shadow` (global_allocate/
-   Faza C) + resweep. To flip flagi decyzyjnej = pełny deploy (C2). Da 2-dniowe okno pomiaru `g_claim_ledger_breaches`
-   na żywym ruchu → potwierdzenie **ZERO fałszywek na żywo** (offline już = 0).
-2. **Dopiero po (1) + zero-FP live: flip `ENABLE_CLAIM_LEDGER_INVARIANT_HARD`** (twarda blokada — raise przy naruszeniu).
+Adrian ACK „Merge + flip CHECK ON" (twarda blokada `_HARD` NADAL odłożona). Wykonano ETAP 6:
+1. **Merge FF master → `374a092`** (master był nietknięty od baseline; Sprint A jeszcze nie scalony → byłem pierwszy). Kanoniczna regresja celowana: **59 pass** (w tym `flag_effect_coverage` = ZIELONE — artefakt pkgroot zniknął po scaleniu).
+2. **Dokumentacja flagi** w `ZIOMEK_LOGIC_REFERENCE.md` (commit `374a092`) → `flag_doc_coverage` zielone gdy flaga trafia do flags.json.
+3. **flip `flags.json`** (atomowy, backup `flags.json.bak-pre-claim-inv-check-2026-07-08`): `ENABLE_CLAIM_LEDGER_INVARIANT_CHECK: true`; `_HARD` NIEOBECNA (OFF). doc-coverage+conftest-strip re-run = zielone.
+4. **restart `dispatch-shadow`** (Type=simple daemon, off-peak, ACK; NIGDY telegram) → FLAG_FINGERPRINT proc=shadow `ENABLE_CLAIM_LEDGER_INVARIANT_CHECK=1 ENABLE_CLAIM_LEDGER_INVARIANT_HARD=0 ENABLE_ENGINE_CLAIM_LEDGER=1`; NRestarts=0, active. `dispatch-pending-resweep-shadow` = oneshot/1min → auto-podchwycił kod+flagę (exit 0).
+
+**Weryfikacja live (pierwsze ~10 min):** resweep `pending_global_resweep.jsonl` — `g_claim_ledger_breaches`=**0** we wszystkich wierszach (max 0); shadow `_tick` twin — **0** linii `CLAIM_LEDGER_INVARIANT breach`, 0 fail-soft. **Zero fałszywek na żywym ruchu** (zgodne z offline 5000-sweep). Log-loud aktywny na OBU bliźniakach.
+
+**Rollback (hot, ~5 s, bez restartu):** `ENABLE_CLAIM_LEDGER_INVARIANT_CHECK=false` w flags.json (hot-reload ≤0.25 s TTL) lub `cp flags.json.bak-pre-claim-inv-check-2026-07-08 flags.json`. Kod: `git revert 374a092..` (obie flagi OFF = bajt-parytet). 
+
+## 4. CO CZEKA NA ACK — POZOSTAŁE (merge + flip CHECK już WYKONANE, patrz §3b)
+
+1. ✅ ~~Flip CHECK ON + merge~~ — WYKONANE 08.07 (§3b). Trwa **2-dniowe okno obserwacji live** `g_claim_ledger_breaches` (do ~10.07): potwierdzić ZERO fałszywek na żywym ruchu w pełnym cyklu (peak + off-peak).
+2. **PO 2 dniach zero-FP live → osobny ACK na flip `ENABLE_CLAIM_LEDGER_INVARIANT_HARD`** (twarda blokada — raise przy naruszeniu).
    ⚠ `HARD` w `global_allocate` propaguje wyjątek; `run_once` woła bez try/except → HARD zatrzyma tick resweepu
    (celowo — naruszenie = realny bug de-konflikcji). Rozważyć czy blokada ma być raise vs. „drop feralnego claimu".
-3. **Merge `quality/invariants-alloc` → master** (seryjnie, po ACK). Po merge: `pytest tests/` na kanonie
+3. **(historyczne) Merge `quality/invariants-alloc` → master** — WYKONANE (FF `374a092`). Po merge: `pytest tests/` na kanonie
    (nie worktree) — potwierdzi zielony `flag_effect_coverage` (artefakt pkgroot znika).
 
 **Rollback:** obie flagi OFF = no-op bajt-parytet (default). `git revert fffdf69`.
