@@ -1499,6 +1499,21 @@ GEOCODE_NOMINATIM_USER_AGENT = os.environ.get(
 # dzisiejszy reject. Hot-reload via flags.json. Default OFF (replay-walidacja przed flip).
 ENABLE_GEOCODE_NOMINATIM_FALLBACK = os.environ.get("ENABLE_GEOCODE_NOMINATIM_FALLBACK", "0") == "1"
 
+# Pin-memory fallback (2026-07-09, Adrian: "zrób mechanizm który to wyłapuje i
+# naprawia" — case Składowa 12/kurier Adrian Cit, geokoder verify_reject na dobry
+# adres, mapa koordynatora "nie widziała" dostawy). `address_pin_aggregator`
+# (timer co 5 min) od dawna uczy się realnych pinezek z GPS kurierów
+# (address_pins.json/restaurant_pins.json) ale NIKT ich nie konsumował decyzyjnie.
+# Gdy oficjalny geocode() nie da rady (neg_cache/verify_reject/bbox_reject/total
+# fail) — ZANIM odda None, sprawdź czy adres ma już nauczoną pinezkę z realnych
+# dostaw i użyj jej. SHADOW_ONLY: liczy+loguje co by zwrócił (audit_log +
+# shadow_decisions-style), ale realnie oddaje coords dopiero gdy MAIN=True.
+# Ściśle addytywne: odpala się TYLKO gdy oficjalna ścieżka już zwróciłaby None →
+# najgorszy przypadek = dzisiejszy brak coords (nie może pogorszyć działającego
+# geokodu). Domyślnie OFF/shadow — flip po replay-walidacji (protokół Ziomka).
+ENABLE_GEOCODE_PIN_MEMORY_FALLBACK = os.environ.get("ENABLE_GEOCODE_PIN_MEMORY_FALLBACK", "0") == "1"
+GEOCODE_PIN_MEMORY_MIN_INLIERS = int(os.environ.get("GEOCODE_PIN_MEMORY_MIN_INLIERS", "1"))
+
 # FAZA 2 #1 — firmowe konto: reject+flag zamiast podstawiania centrali gdy
 # parser/geocode padnie (zła-ale-wiarygodna pozycja gorsza niż głośna porażka).
 # Domyślnie ON (dyrektywa Adriana 2026-06-08). ⚠ ODWRACA decyzję 07.05 (fallback

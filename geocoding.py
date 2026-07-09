@@ -304,6 +304,90 @@ def _is_pinned_entry(entry: dict) -> bool:
     return any(m in src for m in _PIN_SOURCE_MARKERS)
 
 
+# Pamięć pinezek z realnych dostaw GPS (2026-07-09) — zasilana niezależnie przez
+# `tools/address_pin_aggregator.py` (timer co 5 min), OSOBNE pliki od
+# geocode_cache.json. Dwie przestrzenie: dostawy (delivery_address) + restauracje
+# (pickup_address) — sprawdzamy OBIE, bo `geocode()` geokoduje oba rodzaje tekstu.
+_PIN_MEMORY_STORES = (
+    Path("/root/.openclaw/workspace/dispatch_state/address_pins.json"),
+    Path("/root/.openclaw/workspace/dispatch_state/restaurant_pins.json"),
+)
+
+
+def _pin_memory_lookup(address: str, city=None):
+    """Szuka nauczonej pinezki (address_pin_memory) dla `address`. Zwraca dict
+    entry (lat/lon/confidence/n_inliers/n_samples) albo None. Fail-soft — każdy
+    wyjątek (brak pliku/importu) → None, nigdy nie wywraca geocode().
+
+    Klucz w `address_pins.json` = `normalize_address(delivery_address)` — ale
+    surowy tekst `delivery_address` z panelu CZASEM zawiera miasto ("Składowa 12
+    Białystok"), CZASEM nie ("Składowa 12"), zależnie od zlecenia. Próbujemy
+    kilku wariantów (bez miasta / z miastem doklejonym) — wzorzec identyczny do
+    `courier_orders._geo_lookup` (apka też zgaduje warianty klucza)."""
+    try:
+        from dispatch_v2 import address_pin_memory as _apm
+    except Exception as e:
+        _log.warning(f"GEOCODE_PIN_MEMORY_IMPORT_FAIL: {e}")
+        return None
+    candidates = [address]
+    if city:
+        candidates.append(f"{address} {city}")
+    norms = []
+    for cand in candidates:
+        norm = _apm.normalize_address(cand)
+        if norm and norm not in norms:
+            norms.append(norm)
+    if not norms:
+        return None
+    for path in _PIN_MEMORY_STORES:
+        try:
+            store = _apm.load_store(str(path))
+        except Exception:
+            continue
+        for norm in norms:
+            entry = store.get(norm)
+            if isinstance(entry, dict) and "lat" in entry and "lon" in entry:
+                return entry
+    return None
+
+
+def _pin_memory_fallback(key: str, address: str, city, t_start: float, reason: str):
+    """Ostatnia deska ratunku (2026-07-09) — gdy oficjalny geocode() nie da rady
+    (neg_cache/verify_reject/bbox_reject/total fail), sprawdź czy adres ma już
+    nauczoną pinezkę z realnych dostaw kurierów (address_pin_memory) ZANIM oddasz
+    None. Ściśle addytywne: wołane TYLKO z miejsc, które i tak zwróciłyby None —
+    nie może pogorszyć działającego geokodu, tylko wypełnić dziurę.
+
+    SHADOW (ENABLE_GEOCODE_PIN_MEMORY_FALLBACK=False, default): liczy + loguje co
+    by zwrócił, ale realnie oddaje None (istniejące zachowanie bez zmian).
+    LIVE (flag True): zwraca (lat, lon) z pinezki, jeśli spełnia próg
+    GEOCODE_PIN_MEMORY_MIN_INLIERS (odrzuca zbyt cienkie, pojedyncze próbki)."""
+    entry = _pin_memory_lookup(address, city)
+    if entry is None:
+        return None
+    try:
+        lat, lon = float(entry["lat"]), float(entry["lon"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    confidence = entry.get("confidence", "low")
+    n_inliers = entry.get("n_inliers", entry.get("n_samples", 0)) or 0
+    min_inliers = getattr(C, "GEOCODE_PIN_MEMORY_MIN_INLIERS", 1)
+    live = C.flag("ENABLE_GEOCODE_PIN_MEMORY_FALLBACK", C.ENABLE_GEOCODE_PIN_MEMORY_FALLBACK)
+    meets_bar = n_inliers >= min_inliers
+    tag = "pin_memory" if (live and meets_bar) else "pin_memory_shadow"
+    _log.info(
+        f"GEOCODE_PIN_MEMORY_{'LIVE' if (live and meets_bar) else 'SHADOW'} "
+        f"key={key!r} reason={reason} confidence={confidence} n_inliers={n_inliers} "
+        f"-> ({lat:.6f},{lon:.6f}) live_flag={live} meets_bar={meets_bar}"
+    )
+    _audit_log("address", address, city, lat, lon, tag,
+               (time.perf_counter() - t_start) * 1000.0,
+               error=None if (live and meets_bar) else f"shadow_{reason}")
+    if live and meets_bar:
+        return (lat, lon)
+    return None
+
+
 def _districts_adjacent(d1: str, d2: str) -> bool:
     try:
         adj = C.BIALYSTOK_DISTRICT_ADJACENCY
@@ -488,6 +572,15 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
         cache = _load_cache(CACHE_PATH)
         if not streetless and key in cache:
             entry = cache[key]
+            # FAZA 2 (item 5, 2026-07-09 parytet z geocode_restaurant): pin = ręcznie
+            # zweryfikowany → ZAWSZE zwróć, nigdy nie re-geokoduj ani nie nadpisuj
+            # (TTL/drift nie ruszają pinów). Wcześniej TYLKO geocode_restaurant miał
+            # tę ochronę — adresy dostawy/odbioru jej nie miały (bliźniak niedopięty).
+            if _is_pinned_entry(entry):
+                _stats["hits"] += 1
+                _audit_log("address", address, effective_city, entry["lat"], entry["lon"],
+                           "cache_pin", (time.perf_counter() - t_start) * 1000.0)
+                return (entry["lat"], entry["lon"])
             if not ttl_on or _is_cache_entry_fresh(entry, ttl_sec):
                 _stats["hits"] += 1
                 _audit_log("address", address, effective_city, entry["lat"], entry["lon"],
@@ -507,6 +600,9 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
         _stats["neg_cache_hits"] += 1
         _audit_log("address", address, effective_city, None, None, "neg_cache",
                    (time.perf_counter() - t_start) * 1000.0, error="neg_cache_hit")
+        _pm = _pin_memory_fallback(key, address, effective_city, t_start, "neg_cache")
+        if _pm is not None:
+            return _pm
         return None
 
     _stats["misses"] += 1
@@ -529,6 +625,9 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
         _stats["failures"] += 1
         _audit_log("address", address, effective_city, None, None, "none",
                    (time.perf_counter() - t_start) * 1000.0, error="google_and_osrm_failed")
+        _pm = _pin_memory_fallback(key, address, effective_city, t_start, "google_and_osrm_failed")
+        if _pm is not None:
+            return _pm
         return None
 
     # Bbox guard: odrzuć out-of-bbox wynik PRZED cache write (geo-poison prevention,
@@ -565,6 +664,9 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
             # NIE neg-cache'ujemy bbox_reject — bywa TRANSIENTNY (poison Google z płd. Polski,
             # który Nominatim odzyskuje); blokada na TTL mogłaby zamknąć dobry adres. Neg-cache
             # tylko deterministyczny verify_reject (niżej).
+            _pm = _pin_memory_fallback(key, address, effective_city, t_start, "bbox_reject")
+            if _pm is not None:
+                return _pm
             return None
 
     # FAZA 2 — warstwa weryfikacji poprawności (location_type + dzielnica +
@@ -591,11 +693,20 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
                        error="verify_reject")
             if not streetless:
                 _neg_cache_put(key, "verify_reject")
+            _pm = _pin_memory_fallback(key, address, effective_city, t_start, "verify_reject")
+            if _pm is not None:
+                return _pm
             return None
 
     if not streetless:
         with _lock:
             cache = _load_cache(CACHE_PATH)
+            # Re-check pod lockiem (race-safe, parytet z geocode_restaurant): nie
+            # nadpisuj pinu, który mógł powstać między odczytem a tym zapisem.
+            _existing = cache.get(key)
+            if _is_pinned_entry(_existing):
+                _log.info(f"geocode: pin chroniony, NIE nadpisuję key={key!r}")
+                return (_existing["lat"], _existing["lon"])
             cache[key] = {
                 "lat": result[0],
                 "lon": result[1],
