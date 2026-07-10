@@ -1,0 +1,16 @@
+{
+  "_meta": {
+    "schema_version": "v1",
+    "generated_at": "2026-01-01T00:00:00+00:00",
+    "source": "HERMETIC FIXTURE (Z-P2-07) — dane ZMYSLONE, nie produkcja",
+    "eligibility_min_waves_for_stats": 50,
+    "tier_ground_truth_cids": {
+      "9001": "gold",
+      "9002": "std",
+      "9003": "slow"
+    }
+  },
+  "9001": {"tier": "gold", "waves": 999},
+  "9002": {"tier": "std", "waves": 500},
+  "9003": {"tier": "slow", "waves": 60}
+}
