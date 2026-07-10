@@ -9,10 +9,12 @@ Klucze architektoniczne:
 - Retencja: processed_events starsze niz 48h czyszczone w cleanup()
 """
 import json
+import logging
+import os
 import sqlite3
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, List, Optional
 from zoneinfo import ZoneInfo
@@ -95,7 +97,11 @@ AUDIT_MIRRORED_QUEUE_TYPES = frozenset({"COURIER_PICKED_UP", "COURIER_DELIVERED"
 # Konsumenci: shadow_dispatcher (NEW_ORDER) + sla_tracker (PICKED_UP, DELIVERED).
 QUEUE_EVENT_TYPES = EVENT_TYPES - AUDIT_EVENT_TYPES - BROADCAST_EVENT_TYPES
 
-_log = setup_logger("event_bus", "/root/.openclaw/workspace/scripts/logs/events.log")
+if os.environ.get("DISPATCH_UNDER_PYTEST"):
+    # Hermetyczne testy nie powinny nawet stat/mkdir produkcyjnej sciezki logow.
+    _log = logging.getLogger("event_bus")
+else:
+    _log = setup_logger("event_bus", "/root/.openclaw/workspace/scripts/logs/events.log")
 
 
 def _is_peak_window(now: Optional[datetime] = None) -> bool:
@@ -322,14 +328,48 @@ def mark_processed(event_id: str) -> bool:
 
 
 def mark_failed(event_id: str, error: str) -> bool:
-    """Oznacza event jako failed (do ponownej analizy)."""
+    """Oznacza event jako failed (do ponownej analizy).
+
+    Z-P0-05 Faza A: jesli operator JAWNIE zastosowal addytywna migracje retry,
+    zapisujemy rowniez ``attempt_count``, ``last_error`` i ``last_failed_at``.
+    Nie planujemy kolejnej proby -- automatyczny retry pozostaje OFF. Normalne
+    ``pending -> failed`` na starym schemacie zostaje bez zmian; spoznione
+    wywolanie dla ``processed``/``failed`` jest teraz bezpiecznym no-op.
+    """
     with _conn() as conn:
-        conn.execute(
-            "UPDATE events SET status = 'failed', processed_at = ? WHERE event_id = ?",
+        try:
+            from dispatch_v2 import event_retry
+
+            if event_retry.has_retry_schema(conn):
+                changed = event_retry.record_failed_attempt(
+                    conn,
+                    event_id,
+                    error,
+                    failed_at=datetime.now(timezone.utc),
+                    expected_status="pending",
+                )
+                if not changed:
+                    _log.warning(
+                        f"mark_failed stale/no-op event_id={event_id}: "
+                        "expected status=pending"
+                    )
+                _log.warning(f"FAILED {event_id}: {error}")
+                return changed
+        except Exception as metadata_exc:
+            # Metadane sa addytywne; ich awaria nie moze zmienic starego
+            # kontraktu wyjecia poison eventu z pending queue. Fallback nadal
+            # ma CAS na pending, wiec nie clobberuje processed/failed.
+            _log.error(
+                f"mark_failed retry metadata error event_id={event_id}: "
+                f"{type(metadata_exc).__name__}: {metadata_exc}"
+            )
+        cur = conn.execute(
+            """UPDATE events SET status = 'failed', processed_at = ?
+               WHERE event_id = ? AND status = 'pending'""",
             (now_iso(), event_id),
         )
         _log.warning(f"FAILED {event_id}: {error}")
-        return True
+        return cur.rowcount == 1
 
 
 def stats() -> dict:
@@ -341,12 +381,26 @@ def stats() -> dict:
         by_status = {row["status"]: row["cnt"] for row in cur.fetchall()}
         cur = conn.execute("SELECT COUNT(*) as cnt FROM processed_events")
         processed_total = cur.fetchone()["cnt"]
-        return {
+        result = {
             "pending": by_status.get("pending", 0),
             "processed": by_status.get("processed", 0),
             "failed": by_status.get("failed", 0),
+            "retry_scheduled": by_status.get("retry_scheduled", 0),
+            "dead_letter": by_status.get("dead_letter", 0),
             "processed_history": processed_total,
         }
+        # Addytywne metryki wieku sa dostepne dopiero po jawnej migracji.
+        # Brak/blad metadanych nigdy nie psuje dotychczasowego health path.
+        try:
+            from dispatch_v2 import event_retry
+
+            if event_retry.has_retry_schema(conn):
+                result["retry"] = event_retry.queue_retry_stats(
+                    conn, now=datetime.now(timezone.utc)
+                )
+        except Exception as retry_stats_exc:
+            _log.debug(f"retry stats unavailable: {retry_stats_exc}")
+        return result
 
 
 def cleanup(retention_hours: int = 48) -> int:
@@ -685,4 +739,3 @@ def poll_broadcast(
             }
             for row in cur.fetchall()
         ]
-
