@@ -81,14 +81,21 @@ def smoke_accuracy(n: int) -> dict:
 def smoke_circuit_breaker() -> dict:
     """Mechanika circuit-breakera w TYM procesie (produkcja nietknięta)."""
     res = {}
+    transitions_before = oc.telemetry_snapshot()["circuit"][
+        "circuit_open_transitions"]
     # wymuś OPEN: 3 zarejestrowane fail-e
     for _ in range(oc.CIRCUIT_BREAKER_THRESHOLD):
         oc._osrm_record_failure()
     res["circuit_open_after_failures"] = oc._osrm_is_circuit_open()
+    transitions_after = oc.telemetry_snapshot()["circuit"][
+        "circuit_open_transitions"]
+    res["circuit_open_transition_exact"] = (
+        transitions_after - transitions_before == 1)
 
     # route() pod otwartym circuitem → fallback bez HTTP
     r = oc.route((53.1300, 23.1600), (53.1400, 23.1700), use_cache=False)
     res["route_fallback_flag"] = bool(r.get("osrm_fallback"))
+    res["route_source_fallback"] = r.get("osrm_source") == "fallback"
     res["route_fallback_duration_ok"] = bool((r.get("duration_min") or 0) > 0)
 
     # table() pod otwartym circuitem → macierz fallback
@@ -96,6 +103,8 @@ def smoke_circuit_breaker() -> dict:
     m = oc.table(pts, pts)
     cells = [c for row in m for c in row]
     res["table_fallback_all_cells"] = all(c.get("osrm_fallback") for c in cells)
+    res["table_source_fallback_all_cells"] = all(
+        c.get("osrm_source") == "fallback" for c in cells)
     res["table_offdiag_durations_ok"] = all(
         (m[i][j].get("duration_min") or 0) > 0
         for i in range(3) for j in range(3) if i != j)

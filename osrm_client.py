@@ -14,11 +14,15 @@ OSRM API ma odwrotnie (lon, lat) - zamiana wewnatrz klienta.
 """
 import json
 import math
+import os
+import socket
+import sys
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from typing import Optional
 
 from datetime import datetime, timezone
@@ -39,6 +43,11 @@ from dispatch_v2.common import (
     setup_logger,
     flag as _common_flag,
 )
+
+try:
+    from dispatch_v2.observability import stage_timing as _stage_timing
+except Exception:  # standalone compatibility; timing is always fail-soft
+    _stage_timing = None
 
 OSRM_BASE = "http://localhost:5001"
 CACHE_TTL_SECONDS = 60 * 60  # V3.26 R-07: 15→60min (Adrian ACK — Białystok skończony zestaw routes, 99% hit po 1h warm-up)
@@ -128,6 +137,275 @@ _osrm_stats: dict = {
 }
 
 
+# === Z-P2-06 (2026-07-10): truthful provenance + bounded cache telemetry ===
+#
+# This telemetry is deliberately process-local, just like the in-memory caches
+# and circuit breaker it describes.  It contains no coordinates/order/courier
+# data.  `telemetry_snapshot()` adds PID/process role so hourly records emitted
+# by the several processes importing this module can be distinguished.
+_OSRM_SOURCES = ("upstream", "cache", "fallback")
+
+
+def _new_cache_telemetry() -> dict:
+    return {
+        "hits": 0,
+        "misses": 0,
+        "expired": 0,
+        "sets": 0,
+        "evictions": 0,
+        "eviction_runs": 0,
+        "eviction_ns_total": 0,
+        "eviction_ns_max": 0,
+        "lock_wait_ns_count": 0,
+        "lock_wait_ns_total": 0,
+        "lock_wait_ns_max": 0,
+        "lock_hold_ns_count": 0,
+        "lock_hold_ns_total": 0,
+        "lock_hold_ns_max": 0,
+    }
+
+
+def _new_upstream_telemetry() -> dict:
+    return {
+        "attempts": 0,
+        "successes": 0,
+        "failures": 0,
+        "timeouts": 0,
+        "rejected": 0,
+        "latency_ns_total": 0,
+        "latency_ns_max": 0,
+    }
+
+
+def _new_osrm_telemetry() -> dict:
+    return {
+        "route_cache": _new_cache_telemetry(),
+        "table_cache": _new_cache_telemetry(),
+        "sources": {
+            "route": {source: 0 for source in _OSRM_SOURCES},
+            "table_cells": {source: 0 for source in _OSRM_SOURCES},
+        },
+        "upstream": {
+            "route": _new_upstream_telemetry(),
+            "table": _new_upstream_telemetry(),
+        },
+        "probe": {
+            "runs": 0,
+            "successes": 0,
+            "failures": 0,
+            "timeouts": 0,
+            "latency_ns_total": 0,
+            "latency_ns_max": 0,
+            "last_checked_at": None,
+            "last_upstream_ok": None,
+        },
+        # Exact closed->open transitions.  The legacy `_osrm_stats` counter is
+        # intentionally left untouched even though it also counts extensions.
+        "circuit_open_transitions": 0,
+        "hour_start": time.time(),
+    }
+
+
+_osrm_telemetry: dict = _new_osrm_telemetry()
+
+
+def _record_stage_work_ns(work_kind: str, elapsed_ns: int, **tags) -> None:
+    """Fail-soft bridge into the per-decision tracer.
+
+    The tracer is a ContextVar and is deliberately absent in health/report
+    processes.  The optional module reference is resolved once at import;
+    the inactive path is then a cheap no-op.
+    """
+    try:
+        if _stage_timing is None or _stage_timing.current_trace() is None:
+            return
+        _stage_timing.record_work(
+            work_kind, max(0, int(elapsed_ns)) / 1_000_000.0, **tags)
+    except Exception:
+        # Observability can never change route/table/cache behaviour.
+        return
+
+
+def _stage_trace_active() -> bool:
+    try:
+        return _stage_timing is not None and _stage_timing.current_trace() is not None
+    except Exception:
+        return False
+
+
+@contextmanager
+def _timed_cache_lock(cache_name: str):
+    """Acquire the shared lock while measuring cache wait/hold time.
+
+    Measurements use `perf_counter_ns` and are updated while the lock is held,
+    so counters themselves need no second lock.  Only cache get/set paths use
+    this helper; circuit/stat readers keep their existing lock semantics.
+    """
+    wait_started = time.perf_counter_ns()
+    _module_lock.acquire()
+    acquired = time.perf_counter_ns()
+    metrics = _osrm_telemetry[cache_name]
+    wait_ns = max(0, acquired - wait_started)
+    metrics["lock_wait_ns_count"] += 1
+    metrics["lock_wait_ns_total"] += wait_ns
+    metrics["lock_wait_ns_max"] = max(metrics["lock_wait_ns_max"], wait_ns)
+    try:
+        yield metrics
+    finally:
+        hold_ns = max(0, time.perf_counter_ns() - acquired)
+        metrics["lock_hold_ns_count"] += 1
+        metrics["lock_hold_ns_total"] += hold_ns
+        metrics["lock_hold_ns_max"] = max(metrics["lock_hold_ns_max"], hold_ns)
+        _module_lock.release()
+        # Emit only one aggregate work sample per cache operation; never add
+        # fields to every table cell.  This reaches shadow decision telemetry
+        # when a candidate ContextVar is bound and is a no-op otherwise.
+        if _stage_trace_active():
+            _record_stage_work_ns(
+                "osrm_cache_lock_wait", wait_ns,
+                cache=cache_name.removesuffix("_cache"))
+
+
+def _mark_source(result: dict, source: str) -> dict:
+    """Add provenance without changing any numeric route/table value."""
+    if source not in _OSRM_SOURCES:
+        raise ValueError(f"unsupported OSRM source: {source!r}")
+    result["osrm_source"] = source
+    result["osrm_degraded"] = source == "fallback"
+    # Existing consumers use this boolean.  Keep it as the compatibility
+    # projection of the new source field rather than introducing split truth.
+    result["osrm_fallback"] = source == "fallback"
+    return result
+
+
+def _record_route_source(source: str) -> None:
+    with _module_lock:
+        _osrm_telemetry["sources"]["route"][source] += 1
+
+
+def _finish_route_result(result: dict, now_utc: datetime, source: str) -> dict:
+    """Single provenance/telemetry funnel for every route() return path."""
+    marked = _mark_source(result, source)
+    _record_route_source(source)
+    return _apply_traffic_multiplier(marked, now_utc)
+
+
+def _record_table_sources(matrix: list) -> None:
+    counts = {source: 0 for source in _OSRM_SOURCES}
+    for row in matrix or []:
+        for cell in row or []:
+            if not isinstance(cell, dict):
+                continue
+            source = cell.get("osrm_source")
+            if source in counts:
+                counts[source] += 1
+    with _module_lock:
+        target = _osrm_telemetry["sources"]["table_cells"]
+        for source, value in counts.items():
+            target[source] += value
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    return isinstance(exc, urllib.error.URLError) and isinstance(
+        getattr(exc, "reason", None), (TimeoutError, socket.timeout)
+    )
+
+
+def _record_upstream(kind: str, outcome: str, elapsed_ns: int) -> None:
+    """Record one real operational HTTP attempt (never cache/fallback)."""
+    with _module_lock:
+        metrics = _osrm_telemetry["upstream"][kind]
+        metrics["attempts"] += 1
+        if outcome == "success":
+            metrics["successes"] += 1
+        elif outcome == "timeout":
+            metrics["failures"] += 1
+            metrics["timeouts"] += 1
+        elif outcome == "rejected":
+            metrics["rejected"] += 1
+        else:
+            metrics["failures"] += 1
+        elapsed_ns = max(0, int(elapsed_ns))
+        metrics["latency_ns_total"] += elapsed_ns
+        metrics["latency_ns_max"] = max(metrics["latency_ns_max"], elapsed_ns)
+
+
+def _process_role() -> str:
+    return (
+        os.environ.get("SYSTEMD_UNIT")
+        or os.environ.get("ZIOMEK_PROCESS_ROLE")
+        or os.path.basename(sys.argv[0] or "")
+        or "unknown"
+    )
+
+
+def telemetry_snapshot(reset: bool = False) -> dict:
+    """Return a JSON-safe process-local telemetry snapshot.
+
+    `reset=True` resets counters only; caches and circuit state are never
+    mutated.  The public health/report paths always use the default False.
+    """
+    global _osrm_telemetry
+    with _module_lock:
+        observed_at_ts = time.time()
+        window_started_ts = _osrm_telemetry["hour_start"]
+        snap = {
+            "schema": "osrm_telemetry.v1",
+            "pid": os.getpid(),
+            "process_role": _process_role(),
+            "window_started_ts": window_started_ts,
+            "window_ended_ts": observed_at_ts,
+            "window_elapsed_s": max(0.0, observed_at_ts - window_started_ts),
+            "route_cache": dict(_osrm_telemetry["route_cache"]),
+            "table_cache": dict(_osrm_telemetry["table_cache"]),
+            "sources": {
+                name: dict(values)
+                for name, values in _osrm_telemetry["sources"].items()
+            },
+            "upstream": {
+                name: dict(values)
+                for name, values in _osrm_telemetry["upstream"].items()
+            },
+            "probe": dict(_osrm_telemetry["probe"]),
+            "circuit": {
+                "open": observed_at_ts < _osrm_circuit_open_until,
+                "open_until_ts": _osrm_circuit_open_until,
+                "consecutive_failures": _osrm_failures,
+                "circuit_open_transitions": _osrm_telemetry[
+                    "circuit_open_transitions"],
+                "degraded": _osrm_degraded_since is not None,
+                "degraded_since_ts": _osrm_degraded_since,
+                "last_upstream_success_ts": _osrm_last_success_ts,
+            },
+        }
+        snap["route_cache"].update(size=len(_route_cache), limit=CACHE_MAX_SIZE)
+        snap["table_cache"].update(
+            size=len(_table_cell_cache), limit=TABLE_CACHE_MAX_SIZE
+        )
+        if reset:
+            # Hourly counters/maxima roll over atomically.  The last direct
+            # probe observation is a gauge (current state), so preserve it.
+            previous_probe = _osrm_telemetry["probe"]
+            replacement = _new_osrm_telemetry()
+            replacement["probe"]["last_checked_at"] = previous_probe[
+                "last_checked_at"]
+            replacement["probe"]["last_upstream_ok"] = previous_probe[
+                "last_upstream_ok"]
+            _osrm_telemetry = replacement
+    return snap
+
+
+def _take_hourly_telemetry_snapshot() -> Optional[dict]:
+    """Atomically roll process-local counters; caller performs I/O later."""
+    with _module_lock:
+        if time.time() - _osrm_telemetry["hour_start"] < 3600:
+            return None
+        # Re-entrant lock keeps the elapsed check and counter swap atomic.
+        return telemetry_snapshot(reset=True)
+
+
 def _osrm_is_circuit_open() -> bool:
     # V3.27: read under RLock (consistent view z _osrm_record_failure writers).
     with _module_lock:
@@ -138,10 +416,14 @@ def _osrm_record_failure():
     global _osrm_failures, _osrm_circuit_open_until, _osrm_degraded_since, _osrm_degraded_alert_sent, _osrm_recovery_alert_sent
     fire_entry_alert = False
     with _module_lock:
+        now_ts = time.time()
+        was_open = now_ts < _osrm_circuit_open_until
         _osrm_failures += 1
         if _osrm_failures >= CIRCUIT_BREAKER_THRESHOLD:
-            _osrm_circuit_open_until = time.time() + CIRCUIT_BREAKER_COOLDOWN_S
+            _osrm_circuit_open_until = now_ts + CIRCUIT_BREAKER_COOLDOWN_S
             _osrm_stats["circuit_opens"] += 1
+            if not was_open:
+                _osrm_telemetry["circuit_open_transitions"] += 1
             _log.warning(f"OSRM circuit OPEN after {_osrm_failures} failures, cooldown {CIRCUIT_BREAKER_COOLDOWN_S}s")
             # MP-#13 L1: enter degraded state on first circuit open; preserve initial entry ts
             if _osrm_degraded_since is None:
@@ -225,6 +507,31 @@ def cache_age_s() -> Optional[float]:
 
 
 def _maybe_log_stats():
+    # Lock-free due check keeps the all-cache hot path cheap.  A stale read can
+    # only cause one extra call; both rollover helpers re-check under RLock.
+    now_ts = time.time()
+    telemetry_due = now_ts - _osrm_telemetry["hour_start"] >= 3600
+    legacy_due = now_ts - _osrm_stats["hour_start"] >= 3600
+    if not telemetry_due and not legacy_due:
+        return
+
+    # Z-P2-06: the counters describe this importing process and its actual
+    # in-memory caches.  Swap them atomically, then perform log I/O outside the
+    # shared cache/circuit lock so a slow handler cannot stall routing.
+    telemetry = _take_hourly_telemetry_snapshot() if telemetry_due else None
+    if telemetry is not None:
+        try:
+            _log.info(
+                "OSRM telemetry hourly: %s",
+                json.dumps(telemetry, sort_keys=True, separators=(",", ":")),
+            )
+        except Exception:
+            # Metrics are observational and must never break a route call.
+            pass
+
+    if not legacy_due:
+        return
+
     # V3.27 latency parallel: dict mutation + read pod RLock dla concurrent safety.
     with _module_lock:
         elapsed = time.time() - _osrm_stats["hour_start"]
@@ -385,15 +692,14 @@ def _haversine_fallback(from_ll: tuple, to_ll: tuple, now_utc: datetime) -> dict
     speed = get_fallback_speed_kmh(now_utc)
     bucket = get_time_bucket(now_utc)
     duration_s = road_km / speed * 3600
-    return {
+    return _mark_source({
         "duration_s": round(duration_s, 1),
         "distance_m": round(road_km * 1000, 0),
         "duration_min": round(duration_s / 60, 1),
         "distance_km": round(road_km, 2),
-        "osrm_fallback": True,
         "osrm_circuit_open": _osrm_is_circuit_open(),
         "time_bucket": bucket,
-    }
+    }, "fallback")
 
 
 def haversine(ll1: tuple, ll2: tuple) -> float:
@@ -435,25 +741,49 @@ def _cache_key(ll: tuple) -> str:
 def _cache_get(from_ll: tuple, to_ll: tuple) -> Optional[dict]:
     # V3.27 latency parallel: cache read+expire-delete pod RLock.
     key = (_cache_key(from_ll), _cache_key(to_ll))
-    with _module_lock:
+    with _timed_cache_lock("route_cache") as metrics:
         if key in _route_cache:
             ts, result = _route_cache[key]
             if time.time() - ts < CACHE_TTL_SECONDS:
-                return result
+                metrics["hits"] += 1
+                return _mark_source(dict(result), "cache")
+            metrics["expired"] += 1
             del _route_cache[key]
+        metrics["misses"] += 1
     return None
 
 
 def _cache_set(from_ll: tuple, to_ll: tuple, result: dict):
-    # V3.27 latency parallel: cache eviction+set pod RLock dla concurrent safety.
+    # Z-P2-06 zachowuje DOKLADNIE legacy policy: po osiagnieciu limitu usun
+    # batch 10% wpisow o najstarszym timestampie. Zmiana rozmiaru batcha albo
+    # retained-key set moglaby podczas awarii zmienic cache→fallback, a zatem
+    # wartosci trasy i decyzje biznesowa. Tu dodajemy wylacznie pomiar kosztu.
     key = (_cache_key(from_ll), _cache_key(to_ll))
-    with _module_lock:
+    eviction_elapsed_ns = None
+    evicted_count = 0
+    with _timed_cache_lock("route_cache") as metrics:
+        metrics["sets"] += 1
         if len(_route_cache) >= CACHE_MAX_SIZE:
-            # Usun najstarsze 10%
-            oldest = sorted(_route_cache.items(), key=lambda x: x[1][0])[: CACHE_MAX_SIZE // 10]
-            for k, _ in oldest:
-                del _route_cache[k]
+            evict_started = time.perf_counter_ns()
+            oldest = sorted(
+                _route_cache.items(), key=lambda item: item[1][0]
+            )[: CACHE_MAX_SIZE // 10]
+            for oldest_key, _ in oldest:
+                del _route_cache[oldest_key]
+            evicted_count = len(oldest)
+            if evicted_count:
+                metrics["evictions"] += evicted_count
+                metrics["eviction_runs"] += 1
+            elapsed = max(0, time.perf_counter_ns() - evict_started)
+            metrics["eviction_ns_total"] += elapsed
+            metrics["eviction_ns_max"] = max(metrics["eviction_ns_max"], elapsed)
+            if evicted_count:
+                eviction_elapsed_ns = elapsed
         _route_cache[key] = (time.time(), result)
+    if eviction_elapsed_ns is not None and _stage_trace_active():
+        _record_stage_work_ns(
+            "osrm_cache_eviction", eviction_elapsed_ns,
+            cache="route", evicted=evicted_count)
 
 
 # === OSRM-TABLE-03 (Front C audytu 03.06, 2026-06-12): per-cell cache table() ===
@@ -478,24 +808,45 @@ def _table_cache_enabled() -> bool:
 
 def _table_cache_get(o_ll: tuple, d_ll: tuple) -> Optional[dict]:
     key = (_cache_key(o_ll), _cache_key(d_ll))
-    with _module_lock:
+    with _timed_cache_lock("table_cache") as metrics:
         if key in _table_cell_cache:
             ts, raw = _table_cell_cache[key]
             if time.time() - ts < CACHE_TTL_SECONDS:
-                return raw
+                metrics["hits"] += 1
+                return _mark_source(dict(raw), "cache")
+            metrics["expired"] += 1
             del _table_cell_cache[key]
+        metrics["misses"] += 1
     return None
 
 
 def _table_cache_set(o_ll: tuple, d_ll: tuple, raw_cell: dict):
     key = (_cache_key(o_ll), _cache_key(d_ll))
-    with _module_lock:
+    eviction_elapsed_ns = None
+    evicted_count = 0
+    with _timed_cache_lock("table_cache") as metrics:
+        metrics["sets"] += 1
         if len(_table_cell_cache) >= TABLE_CACHE_MAX_SIZE:
-            oldest = sorted(_table_cell_cache.items(),
-                            key=lambda x: x[1][0])[: TABLE_CACHE_MAX_SIZE // 10]
-            for k, _ in oldest:
-                del _table_cell_cache[k]
+            evict_started = time.perf_counter_ns()
+            oldest = sorted(
+                _table_cell_cache.items(), key=lambda item: item[1][0]
+            )[: TABLE_CACHE_MAX_SIZE // 10]
+            for oldest_key, _ in oldest:
+                del _table_cell_cache[oldest_key]
+            evicted_count = len(oldest)
+            if evicted_count:
+                metrics["evictions"] += evicted_count
+                metrics["eviction_runs"] += 1
+            elapsed = max(0, time.perf_counter_ns() - evict_started)
+            metrics["eviction_ns_total"] += elapsed
+            metrics["eviction_ns_max"] = max(metrics["eviction_ns_max"], elapsed)
+            if evicted_count:
+                eviction_elapsed_ns = elapsed
         _table_cell_cache[key] = (time.time(), raw_cell)
+    if eviction_elapsed_ns is not None and _stage_trace_active():
+        _record_stage_work_ns(
+            "osrm_cache_eviction", eviction_elapsed_ns,
+            cache="table", evicted=evicted_count)
 
 
 def _decompose_miss_rects(miss: list, n_o: int, n_d: int) -> list:
@@ -542,14 +893,13 @@ def _coord_guard_log(msg: str):
 def _invalid_coord_result(now_utc: datetime) -> dict:
     """Wynik dla nieprawidłowej współrzędnej — jawnie infeasible, NIE realna trasa."""
     sentinel_min = OSRM_INVALID_COORD_SENTINEL_MIN
-    return {
+    return _mark_source({
         "duration_s": round(sentinel_min * 60, 1),
         "distance_m": round(sentinel_min * 1000, 0),
         "duration_min": sentinel_min,
         "distance_km": round(sentinel_min, 2),
-        "osrm_fallback": True,
         "coord_invalid": True,
-    }
+    }, "fallback")
 
 
 def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
@@ -564,6 +914,9 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
     coord_invalid sentinel, nigdy cicha phantom-trasa.
     """
     now = datetime.now(timezone.utc)
+    # Must run before cache/coord early returns: an all-cache workload still
+    # has to publish its process-local hourly counters.
+    _maybe_log_stats()
 
     # Guard wejściowy: (0,0)/None/poza bbox → sentinel (NIE wysyłaj do OSRM,
     # bo (0,0) snapuje do krawędzi i wraca jako "prawidłowa" trasa ~117 min).
@@ -572,36 +925,45 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
     ):
         _coord_guard_log(f"route invalid coord from={from_ll!r} to={to_ll!r} "
                          f"→ sentinel {OSRM_INVALID_COORD_SENTINEL_MIN}min")
-        return _apply_traffic_multiplier(_invalid_coord_result(now), now)
+        return _finish_route_result(_invalid_coord_result(now), now, "fallback")
 
     if use_cache:
         cached = _cache_get(from_ll, to_ll)
         if cached is not None:
-            return _apply_traffic_multiplier(dict(cached), now)
+            return _finish_route_result(dict(cached), now, "cache")
 
     # Cache miss — realny HTTP call (lub fallback)
     # V3.27 latency parallel: stats inkrement pod RLock.
     with _module_lock:
         _osrm_stats["calls_total"] += 1
-    _maybe_log_stats()
 
     # Circuit breaker — skip HTTP jeśli OSRM padł
     if _osrm_is_circuit_open():
         with _module_lock:
             _osrm_stats["calls_fallback"] += 1
-        return _apply_traffic_multiplier(_haversine_fallback(from_ll, to_ll, now), now)
+        return _finish_route_result(
+            _haversine_fallback(from_ll, to_ll, now), now, "fallback"
+        )
 
     # OSRM: lon,lat;lon,lat
     coords = f"{from_ll[1]},{from_ll[0]};{to_ll[1]},{to_ll[0]}"
     url = f"{OSRM_BASE}/route/v1/driving/{coords}?overview=false"
+    upstream_started = time.perf_counter_ns()
+    upstream_recorded = False
     try:
         with urllib.request.urlopen(url, timeout=3) as r:
             data = json.loads(r.read().decode())
         if data.get("code") != "Ok" or not data.get("routes"):
+            _record_upstream(
+                "route", "failure", time.perf_counter_ns() - upstream_started
+            )
+            upstream_recorded = True
             _osrm_record_failure()
             with _module_lock:
                 _osrm_stats["calls_fallback"] += 1
-            return _apply_traffic_multiplier(_haversine_fallback(from_ll, to_ll, now), now)
+            return _finish_route_result(
+                _haversine_fallback(from_ll, to_ll, now), now, "fallback"
+            )
         # Snap guard (Lekcja #140): jeśli OSRM musiał snapować waypoint > próg, to
         # punkt nie leży na mapie (np. (0,0)→6225 km) — code:Ok ale trasa fikcyjna.
         if ENABLE_OSRM_COORD_GUARD:
@@ -613,28 +975,46 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:
                 None,
             )
             if _bad_snap is not None:
+                _record_upstream(
+                    "route", "rejected", time.perf_counter_ns() - upstream_started
+                )
+                upstream_recorded = True
                 _coord_guard_log(
                     f"route snap {round(_bad_snap/1000,1)}km > {OSRM_MAX_SNAP_KM}km "
                     f"from={from_ll!r} to={to_ll!r} → sentinel")
-                return _apply_traffic_multiplier(_invalid_coord_result(now), now)
+                return _finish_route_result(
+                    _invalid_coord_result(now), now, "fallback"
+                )
         route0 = data["routes"][0]
         result = {
             "duration_s": route0["duration"],
             "distance_m": route0["distance"],
             "duration_min": round(route0["duration"] / 60, 1),
             "distance_km": round(route0["distance"] / 1000, 2),
-            "osrm_fallback": False,
         }
+        result = _mark_source(result, "upstream")
+        _record_upstream(
+            "route", "success", time.perf_counter_ns() - upstream_started
+        )
+        upstream_recorded = True
         _osrm_record_success()
         if use_cache:
             _cache_set(from_ll, to_ll, result)  # store RAW (pre-multiplier)
-        return _apply_traffic_multiplier(dict(result), now)
+        return _finish_route_result(dict(result), now, "upstream")
     except Exception as e:
+        if not upstream_recorded:
+            _record_upstream(
+                "route",
+                "timeout" if _is_timeout_error(e) else "failure",
+                time.perf_counter_ns() - upstream_started,
+            )
         _log.warning(f"OSRM route fail: {e}")
         _osrm_record_failure()
         with _module_lock:
             _osrm_stats["calls_fallback"] += 1
-        return _apply_traffic_multiplier(_haversine_fallback(from_ll, to_ll, now), now)
+        return _finish_route_result(
+            _haversine_fallback(from_ll, to_ll, now), now, "fallback"
+        )
 
 
 def table(origins: list, destinations: list) -> list:
@@ -675,6 +1055,20 @@ def table(origins: list, destinations: list) -> list:
                     row[j] = _invalid_coord_result(now)
         return matrix
 
+    def _finish_table(matrix: list) -> list:
+        """Single provenance/telemetry funnel for every table() return path."""
+        matrix = _sentinel_invalid(matrix)
+        for row in matrix or []:
+            for cell in row or []:
+                if not isinstance(cell, dict):
+                    continue
+                source = cell.get("osrm_source")
+                if source not in _OSRM_SOURCES:
+                    source = "fallback" if cell.get("osrm_fallback") else "upstream"
+                _mark_source(cell, source)
+        _record_table_sources(matrix)
+        return matrix
+
     # V3.27 latency parallel: stats inkrement pod RLock.
     with _module_lock:
         _osrm_stats["calls_total"] += 1
@@ -684,7 +1078,7 @@ def table(origins: list, destinations: list) -> list:
     if _osrm_is_circuit_open():
         with _module_lock:
             _osrm_stats["calls_fallback"] += 1
-        return _sentinel_invalid(_table_fallback(origins, destinations, now))
+        return _finish_table(_table_fallback(origins, destinations, now))
 
     # OSRM-TABLE-03: ścieżka cache (flaga OFF → dokładnie legacy full call).
     if _table_cache_enabled():
@@ -699,7 +1093,7 @@ def table(origins: list, destinations: list) -> list:
                 _osrm_stats["table_full_hits"] += 1
             matrix = [[_apply_traffic_multiplier(dict(c), now) for c in row]
                       for row in cells]
-            return _sentinel_invalid(matrix)
+            return _finish_table(matrix)
         rects = _decompose_miss_rects(miss, n_o, n_d)
         fetched_cells = sum(len(r) * len(c) for r, c in rects)
         # Dekompozycja opłacalna tylko gdy realnie tnie macierz; inaczej legacy
@@ -724,7 +1118,7 @@ def table(origins: list, destinations: list) -> list:
                     _osrm_stats["table_decomposed_calls"] += 1
                 matrix = [[_apply_traffic_multiplier(dict(c), now) for c in row]
                           for row in cells]
-                return _sentinel_invalid(matrix)
+                return _finish_table(matrix)
             # częściowy fail dekompozycji → spadnij na legacy full call niżej
             # (te same failure semantics co przed OSRM-TABLE-03)
 
@@ -732,7 +1126,7 @@ def table(origins: list, destinations: list) -> list:
     if raw is None:
         with _module_lock:
             _osrm_stats["calls_fallback"] += 1
-        return _sentinel_invalid(_table_fallback(origins, destinations, now))
+        return _finish_table(_table_fallback(origins, destinations, now))
     with _module_lock:
         _osrm_stats["table_legacy_calls"] += 1
     if _table_cache_enabled():
@@ -746,7 +1140,7 @@ def table(origins: list, destinations: list) -> list:
                     break
                 _table_cache_set(origins[i], destinations[j], cell)
     matrix = [[_apply_traffic_multiplier(dict(c), now) for c in row] for row in raw]
-    return _sentinel_invalid(matrix)
+    return _finish_table(matrix)
 
 
 def _table_http(origins: list, destinations: list) -> Optional[list]:
@@ -758,10 +1152,16 @@ def _table_http(origins: list, destinations: list) -> Optional[list]:
     sources = ";".join(str(i) for i in range(len(origins)))
     dests = ";".join(str(i) for i in range(len(origins), len(all_points)))
     url = f"{OSRM_BASE}/table/v1/driving/{coords}?sources={sources}&destinations={dests}&annotations=duration,distance"
+    upstream_started = time.perf_counter_ns()
+    upstream_recorded = False
     try:
         with urllib.request.urlopen(url, timeout=3) as r:
             data = json.loads(r.read().decode())
         if data.get("code") != "Ok":
+            _record_upstream(
+                "table", "failure", time.perf_counter_ns() - upstream_started
+            )
+            upstream_recorded = True
             _osrm_record_failure()
             return None
         durations = data.get("durations") or []
@@ -771,17 +1171,29 @@ def _table_http(origins: list, destinations: list) -> Optional[list]:
             matrix_row = []
             for j, dur in enumerate(row):
                 dist = distances[i][j] if i < len(distances) and j < len(distances[i]) else 0
-                matrix_row.append({
+                matrix_row.append(_mark_source({
                     "duration_s": dur,
                     "duration_min": round(dur / 60, 1) if dur else None,
                     "distance_m": dist,
                     "distance_km": round(dist / 1000, 2) if dist else 0,
-                    "osrm_fallback": False,
-                })
+                }, "upstream"))
             matrix.append(matrix_row)
+        _record_upstream(
+            "table",
+            "success" if _valid_table_payload(
+                data, len(origins), len(destinations)) else "rejected",
+            time.perf_counter_ns() - upstream_started,
+        )
+        upstream_recorded = True
         _osrm_record_success()
         return matrix
     except Exception as e:
+        if not upstream_recorded:
+            _record_upstream(
+                "table",
+                "timeout" if _is_timeout_error(e) else "failure",
+                time.perf_counter_ns() - upstream_started,
+            )
         _log.warning(f"OSRM table fail: {e}")
         _osrm_record_failure()
         return None
@@ -820,26 +1232,201 @@ def nearest(lat: float, lon: float) -> Optional[tuple]:
         return None
 
 
-def health_check() -> dict:
-    """Szybki test OSRM - route Rukola -> Akademicka."""
-    result = {"osrm_ok": False, "route_ok": False, "table_ok": False, "nearest_ok": False}
-    # Route
-    r = route((53.1325, 23.1688), (53.1158, 23.1611), use_cache=False)
-    if r:
-        result["osrm_ok"] = True
-        result["route_ok"] = True
-        result["sample_route"] = r
-    # Table
-    t = table([(53.1325, 23.1688), (53.1300, 23.1600)], [(53.1158, 23.1611)])
-    if t:
-        result["table_ok"] = True
-        result["sample_table_shape"] = f"{len(t)}x{len(t[0]) if t else 0}"
-    # Nearest
-    n = nearest(53.1325, 23.1688)
-    if n:
-        result["nearest_ok"] = True
-        result["sample_nearest"] = n
-    return result
+_PROBE_A = (53.1325, 23.1688)
+_PROBE_B = (53.1158, 23.1611)
+_PROBE_C = (53.1300, 23.1600)
+
+
+def _probe_error_kind(exc: BaseException) -> str:
+    if _is_timeout_error(exc):
+        return "timeout"
+    if isinstance(exc, urllib.error.HTTPError):
+        return "http_error"
+    if isinstance(exc, urllib.error.URLError):
+        return "url_error"
+    if isinstance(exc, (ValueError, json.JSONDecodeError)):
+        return "invalid_json"
+    return type(exc).__name__.lower()
+
+
+def _probe_endpoint(name: str, url: str, validator, timeout_s: float) -> dict:
+    """Direct raw HTTP probe: no cache, fallback or circuit state mutation."""
+    started = time.perf_counter_ns()
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_s) as response:
+            data = json.loads(response.read().decode())
+        ok = bool(validator(data))
+        error_kind = None if ok else "invalid_response"
+    except Exception as exc:  # health must report failure, never raise
+        ok = False
+        error_kind = _probe_error_kind(exc)
+    elapsed_ns = max(0, time.perf_counter_ns() - started)
+    return {
+        "name": name,
+        "ok": ok,
+        "latency_ms": round(elapsed_ns / 1_000_000.0, 3),
+        "error_kind": error_kind,
+    }
+
+
+def _nonnegative_finite_number(value) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+        and value >= 0
+    )
+
+
+def _valid_route_payload(data: dict) -> bool:
+    routes = data.get("routes")
+    if data.get("code") != "Ok" or not isinstance(routes, list) or not routes:
+        return False
+    route0 = routes[0]
+    return isinstance(route0, dict) and all(
+        _nonnegative_finite_number(route0.get(field))
+        for field in ("duration", "distance")
+    )
+
+
+def _valid_table_payload(data: dict, n_origins: int, n_destinations: int) -> bool:
+    if data.get("code") != "Ok":
+        return False
+    for matrix in (data.get("durations"), data.get("distances")):
+        if not isinstance(matrix, list) or len(matrix) != n_origins:
+            return False
+        if any(not isinstance(row, list) or len(row) != n_destinations
+               for row in matrix):
+            return False
+        if any(not _nonnegative_finite_number(value)
+               for row in matrix for value in row):
+            return False
+    return True
+
+
+def _valid_nearest_payload(data: dict) -> bool:
+    waypoints = data.get("waypoints")
+    if data.get("code") != "Ok" or not isinstance(waypoints, list) or not waypoints:
+        return False
+    location = waypoints[0].get("location") if isinstance(waypoints[0], dict) else None
+    if not isinstance(location, list) or len(location) != 2:
+        return False
+    lon, lat = location
+    if any(isinstance(value, bool) or not isinstance(value, (int, float))
+           or not math.isfinite(float(value)) for value in (lon, lat)):
+        return False
+    return -180 <= lon <= 180 and -90 <= lat <= 90
+
+
+def probe_upstream(timeout_s: float = 1.0) -> dict:
+    """Probe the real OSRM backend without using operational fallbacks.
+
+    Unlike `route()`/`table()`, this function deliberately bypasses both
+    caches and the circuit breaker.  It also does *not* call
+    `_osrm_record_success/failure`: an observer must never open/close the
+    decision path's circuit.  The three core endpoints are validated strictly.
+    """
+    timeout_s = max(0.05, float(timeout_s))
+    route_coords = (
+        f"{_PROBE_A[1]},{_PROBE_A[0]};{_PROBE_B[1]},{_PROBE_B[0]}"
+    )
+    table_coords = (
+        f"{_PROBE_A[1]},{_PROBE_A[0]};"
+        f"{_PROBE_C[1]},{_PROBE_C[0]};"
+        f"{_PROBE_B[1]},{_PROBE_B[0]}"
+    )
+    urls = {
+        "route": f"{OSRM_BASE}/route/v1/driving/{route_coords}?overview=false",
+        "table": (
+            f"{OSRM_BASE}/table/v1/driving/{table_coords}"
+            "?sources=0;1&destinations=2&annotations=duration,distance"
+        ),
+        "nearest": (
+            f"{OSRM_BASE}/nearest/v1/driving/{_PROBE_A[1]},{_PROBE_A[0]}"
+        ),
+    }
+    validators = {
+        "route": _valid_route_payload,
+        "table": lambda data: _valid_table_payload(data, 2, 1),
+        "nearest": _valid_nearest_payload,
+    }
+    checked_at = datetime.now(timezone.utc).isoformat()
+    endpoints = {
+        name: _probe_endpoint(name, urls[name], validators[name], timeout_s)
+        for name in ("route", "table", "nearest")
+    }
+    upstream_ok = all(endpoint["ok"] for endpoint in endpoints.values())
+    elapsed_ns = int(sum(endpoint["latency_ms"] for endpoint in endpoints.values()) * 1_000_000)
+    timeout_count = sum(
+        endpoint["error_kind"] == "timeout" for endpoint in endpoints.values()
+    )
+    with _module_lock:
+        metrics = _osrm_telemetry["probe"]
+        metrics["runs"] += 1
+        metrics["successes" if upstream_ok else "failures"] += 1
+        metrics["timeouts"] += timeout_count
+        metrics["latency_ns_total"] += elapsed_ns
+        metrics["latency_ns_max"] = max(metrics["latency_ns_max"], elapsed_ns)
+        metrics["last_checked_at"] = checked_at
+        metrics["last_upstream_ok"] = upstream_ok
+    return {
+        "schema": "osrm_upstream_probe.v1",
+        "checked_at": checked_at,
+        "upstream_ok": upstream_ok,
+        "latency_ms": round(elapsed_ns / 1_000_000.0, 3),
+        "endpoints": endpoints,
+    }
+
+
+def health_check(timeout_s: float = 1.0) -> dict:
+    """Truthful OSRM health: direct upstream truth + serving/cache state.
+
+    `osrm_ok` remains as a compatibility field, but now means a successful
+    direct upstream probe.  Cache and haversine fallback can keep routing
+    available, yet can never turn this field green.
+    """
+    probe = probe_upstream(timeout_s=timeout_s)
+    telemetry = telemetry_snapshot()
+    circuit = telemetry["circuit"]
+    serving_degraded = bool(circuit["open"] or circuit["degraded"])
+    degraded = bool(not probe["upstream_ok"] or serving_degraded)
+    endpoints = probe["endpoints"]
+    last_success_ts = circuit.get("last_upstream_success_ts")
+    last_success_age_s = (
+        None if last_success_ts is None else max(0.0, time.time() - last_success_ts)
+    )
+    return {
+        "schema": "osrm_health.v1",
+        # Direct upstream truth is backend-wide.  Cache/circuit gauges below
+        # are in-memory state of this importing PID only; they never claim to
+        # inspect another dispatch-shadow/panel process.
+        "state_scope": "process_local",
+        "pid": telemetry["pid"],
+        "process_role": telemetry["process_role"],
+        "status": "degraded" if degraded else "healthy",
+        "degraded": degraded,
+        "upstream_ok": probe["upstream_ok"],
+        "upstream_status": "healthy" if probe["upstream_ok"] else "down",
+        "serving_degraded": serving_degraded,
+        "osrm_ok": probe["upstream_ok"],
+        "route_ok": endpoints["route"]["ok"],
+        "table_ok": endpoints["table"]["ok"],
+        "nearest_ok": endpoints["nearest"]["ok"],
+        "last_upstream_success_age_s": last_success_age_s,
+        "probe": probe,
+        "circuit": circuit,
+        "cache": {
+            "route": telemetry["route_cache"],
+            "table": telemetry["table_cache"],
+        },
+        "telemetry": {
+            "pid": telemetry["pid"],
+            "process_role": telemetry["process_role"],
+            "sources": telemetry["sources"],
+            "upstream": telemetry["upstream"],
+            "probe": telemetry["probe"],
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -887,14 +1474,58 @@ _route_impl_k04 = route
 _table_impl_k04 = table
 
 
+def _table_provenance(matrix: list) -> str:
+    sources = set()
+    for row in matrix or []:
+        for cell in row or []:
+            if not isinstance(cell, dict):
+                continue
+            source = cell.get("osrm_source")
+            if source not in _OSRM_SOURCES:
+                source = "fallback" if cell.get("osrm_fallback") else "unknown"
+            sources.add(source)
+    if not sources:
+        return "empty"
+    if len(sources) == 1:
+        return next(iter(sources))
+    return "mixed"
+
+
 def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:  # noqa: F811 — świadome opakowanie K04
-    res = _route_impl_k04(from_ll, to_ll, use_cache=use_cache)
+    traced = _stage_trace_active()
+    started_ns = time.perf_counter_ns() if traced else 0
+    try:
+        res = _route_impl_k04(from_ll, to_ll, use_cache=use_cache)
+    except Exception:
+        if traced:
+            _record_stage_work_ns(
+                "osrm", time.perf_counter_ns() - started_ns,
+                source="error", operation="route")
+        raise
+    if traced:
+        source = res.get("osrm_source", "unknown") if isinstance(res, dict) else "unknown"
+        _record_stage_work_ns(
+            "osrm", time.perf_counter_ns() - started_ns,
+            source=source, operation="route")
     _wr_log("route", [list(from_ll or ()), list(to_ll or ())], res)
     return res
 
 
 def table(origins: list, destinations: list) -> list:  # noqa: F811 — świadome opakowanie K04
-    res = _table_impl_k04(origins, destinations)
+    traced = _stage_trace_active()
+    started_ns = time.perf_counter_ns() if traced else 0
+    try:
+        res = _table_impl_k04(origins, destinations)
+    except Exception:
+        if traced:
+            _record_stage_work_ns(
+                "osrm", time.perf_counter_ns() - started_ns,
+                source="error", operation="table")
+        raise
+    if traced:
+        _record_stage_work_ns(
+            "osrm", time.perf_counter_ns() - started_ns,
+            source=_table_provenance(res), operation="table")
     _wr_log("table", [[list(o or ()) for o in (origins or [])],
                       [list(d or ()) for d in (destinations or [])]], res)
     return res
