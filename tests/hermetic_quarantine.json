@@ -17,22 +17,6 @@
       "modes": ["strict"]
     },
     {
-      "match": "test_panel_packs_signal_v328.py::test_load_cache_fresh",
-      "reason": "ZNALEZIONA POLLUTION PRODUKCJI (guard ujawnil): _write_packs_cache robi tempfile.mkstemp(dir=ZYWY dispatch_state) + os.replace na ZYWY panel_packs_cache.json. PANEL_PACKS_CACHE_PATH=hardcode, ignoruje DISPATCH_STATE_DIR → test nadpisywal produkcyjny cache falszywymi danymi. A4 (grep literalny) to pominal (sciezka budowana przez dir=). FIX U ZRODLA (owner test_panel_packs_signal_v328): pisz do tmp / honoruj DISPATCH_STATE_DIR. Do fixu — kwarantanna (skip default+strict, inaczej guard=fail).",
-      "modes": ["default", "strict"]
-    },
-    {
-      "match": "test_panel_packs_signal_v328.py::test_load_cache_stale",
-      "reason": "Jak wyzej — ten sam _write_packs_cache pisze na ZYWY panel_packs_cache.json.",
-      "modes": ["default", "strict"]
-    },
-    {
-      "match": "test_panel_packs_signal_v328.py::test_cache_missing_returns_none",
-      "reason": "PROD-MUTACJA Z TESTU: os.unlink na ZYWYM panel_packs_cache.json — kasowanie stanu produkcji. Guard klasy DELETE slusznie blokuje. Do fixu przez ownera pliku (Sprint 2 obszar panel_watcher — NIE edytujemy). Kwarantanna default+strict. Trojka fresh/stale/missing = jeden root cause: PANEL_PACKS_CACHE_PATH hardcode, ignoruje DISPATCH_STATE_DIR.",
-      "modes": ["default", "strict"]
-    },
-
-    {
       "match": "test_r04_v2_evaluator",
       "reason": "LIVE READ-ONLY (STRICT read-block): caly plik (TestR04V2Evaluator setup + TestR04SchemaIntegrity, 14/14) czyta r04_schema.json spod ZYWEGO dispatch_state (SCHEMA_PATH hardcode). Przechodzi w DEFAULT (read dozwolony); w STRICT symulacja braku katalogu → FileNotFoundError. Kandydat na hermetyzacje = fixture schematu (osobne zadanie ownera).",
       "modes": ["strict"]
