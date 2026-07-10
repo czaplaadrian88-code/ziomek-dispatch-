@@ -29,6 +29,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from dispatch_v2.identity.normalize import norm
+
 from dispatch_v2.common import setup_logger
 
 LOG_DIR = "/root/.openclaw/workspace/scripts/logs/"
@@ -139,8 +141,11 @@ def fetch_active_roster(force: bool = False) -> Dict[int, str]:
 
 
 def _norm_token(tok: str) -> str:
-    """Lowercase + strip trailing punctuation (handles abbrev surnames 'Ch.')."""
-    return (tok or "").strip().rstrip(".,;:").lower()
+    """Lowercase + strip trailing punctuation (handles abbrev surnames 'Ch.').
+
+    Delegates to the single canonical contract (Z-P1-05 Faza B).
+    """
+    return norm(tok)
 
 
 @dataclass

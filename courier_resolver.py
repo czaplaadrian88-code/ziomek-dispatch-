@@ -17,6 +17,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
+from dispatch_v2.identity.normalize import norm
+
 from dispatch_v2.common import (
     setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag,
     coords_in_bialystok_bbox, decision_flag,
@@ -1256,7 +1258,7 @@ def build_fleet_snapshot(
         for _pn, _po in _pks_packs.items():
             if not isinstance(_pn, str):
                 continue
-            _key = _pn.strip().rstrip(".,;:").lower()
+            _key = norm(_pn)
             if _key:
                 _packs_normalized[_key] = _po
         # #2 (2026-06-10): po PANEL-CANON (#1) cs.name to PEŁNE imię grafiku
@@ -1282,11 +1284,11 @@ def build_fleet_snapshot(
                 for _nm, _c in _pairs:
                     if isinstance(_nm, str):
                         _nick2cid.setdefault(
-                            _nm.strip().rstrip(".,;:").lower(), str(_c))
+                            norm(_nm), str(_c))
             for _pn, _po in _pks_packs.items():
                 if not isinstance(_pn, str):
                     continue
-                _c = _nick2cid.get(_pn.strip().rstrip(".,;:").lower())
+                _c = _nick2cid.get(norm(_pn))
                 if _c:
                     _packs_by_cid[_c] = _po
         for kid, cs in fleet.items():
@@ -1298,7 +1300,7 @@ def build_fleet_snapshot(
             _candidates = _packs_by_cid.get(str(kid))
             if not _candidates and cs.name:
                 _candidates = _packs_normalized.get(
-                    cs.name.strip().rstrip(".,;:").lower())
+                    norm(cs.name))
             _candidates = _candidates or []
             if _candidates:
                 cs.panel_packs_oids_signal = [str(x) for x in _candidates]
