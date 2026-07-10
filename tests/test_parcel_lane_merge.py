@@ -109,9 +109,15 @@ def test_apply_status_inbox(monkeypatch, tmp_path):
     monkeypatch.setattr(plm.event_bus, "emit",
                         lambda et, order_id=None, courier_id=None, event_id=None:
                         emitted.append((et, event_id)) or event_id)
-    monkeypatch.setattr(plm.sm, "update_from_event", lambda ev: applied.append(ev["event_type"]))
+    monkeypatch.setattr(plm.sm, "update_from_event", lambda ev: applied.append(ev))
     assert plm._apply_status_inbox() == 2          # 5+7; 3 pominięte
-    assert applied == ["COURIER_PICKED_UP", "COURIER_DELIVERED"]
+    assert [ev["event_type"] for ev in applied] == [
+        "COURIER_PICKED_UP", "COURIER_DELIVERED"
+    ]
+    assert all(ev["payload"] == {"source": "parcel_status_inbox"} for ev in applied)
+    # Faza A tylko ujawnia brak kontraktu czasu; nie zamienia e.ts na timestamp
+    # bez decyzji o jednostce/semantyce ani nie przywraca fallbacku now().
+    assert all("timestamp" not in ev["payload"] for ev in applied)
     assert ("COURIER_PICKED_UP", "900138096_COURIER_PICKED_UP_111") in emitted
 
 

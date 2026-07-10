@@ -10,6 +10,7 @@ Kluczowe wlasciwosci:
 """
 import fcntl
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -32,6 +33,7 @@ from dispatch_v2.common import (
     setup_logger,
 )
 from dispatch_v2.core.jsonl_appender import append_jsonl
+from dispatch_v2.order_fsm import FsmOutcome, FsmVerdict, validate_order_event
 
 _WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
@@ -179,7 +181,70 @@ COMMITMENT_LEVELS = {
     "near_delivery": 3.0,
 }
 
-_log = setup_logger("state_machine", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
+if os.environ.get("DISPATCH_UNDER_PYTEST"):
+    # Hermetyczne testy obserwera nie dotykaja nawet katalogu logow runtime.
+    _log = logging.getLogger("state_machine")
+else:
+    _log = setup_logger(
+        "state_machine", "/root/.openclaw/workspace/scripts/logs/dispatch.log"
+    )
+
+
+# Z-P1-01 Phase A: the formal FSM is an observer only.  Enforcement is
+# deliberately hard-OFF (not a runtime flag) until the shadow matrix and
+# historical replay have been reviewed.  Nothing in the legacy path branches
+# on this value; changing it alone cannot enable enforcement.
+ORDER_FSM_OBSERVER_ENABLED = True
+ORDER_FSM_ENFORCEMENT_ENABLED = False
+_FSM_CURRENT_UNSET = object()
+
+
+def _observe_order_event(event, current=_FSM_CURRENT_UNSET) -> Optional[FsmVerdict]:
+    """Run the pure formal FSM validator without affecting legacy behavior.
+
+    Fail-open is intentional in Phase A: validator/read/logging failures are
+    diagnostics and must never block, mutate, or replace the existing event
+    handler.  Illegal/invalid events get one structured WARNING; explicit
+    reconcile/correction exceptions get INFO; ordinary legal events stay DEBUG.
+    """
+    if not ORDER_FSM_OBSERVER_ENABLED:
+        return None
+    try:
+        if current is _FSM_CURRENT_UNSET:
+            oid = event.get("order_id") if isinstance(event, dict) else None
+            current = get_order(str(oid)) if oid else None
+        verdict = validate_order_event(event, current=current)
+        issue_codes = ",".join(verdict.issue_codes) or "none"
+        message = (
+            "ORDER_FSM_OBSERVER mode=log_only enforcement=hard_off "
+            f"would_reject={int(verdict.would_reject)} "
+            f"oid={verdict.order_id or '-'} event={verdict.event_type} "
+            f"from={verdict.from_status} to={verdict.to_status or '-'} "
+            f"outcome={verdict.outcome.value} source={verdict.source or '-'} "
+            f"event_id={verdict.event_id or '-'} issues={issue_codes}"
+        )
+        if verdict.would_reject:
+            _log.warning(message)
+        elif verdict.outcome in {
+            FsmOutcome.RECONCILE_EXCEPTION,
+            FsmOutcome.CORRECTION_EXCEPTION,
+        }:
+            _log.info(message)
+        else:
+            _log.debug(message)
+        return verdict
+    except Exception as exc:
+        # The observer is never authoritative in Phase A.  In particular, a
+        # malformed event must retain exactly the exception/partial-write
+        # behavior of the legacy handler below.
+        try:
+            _log.warning(
+                "ORDER_FSM_OBSERVER_FAIL mode=log_only enforcement=hard_off "
+                f"error={type(exc).__name__}:{exc}"
+            )
+        except Exception:
+            pass
+        return None
 
 
 def _state_path() -> str:
@@ -592,10 +657,23 @@ def resurrect_order(order_id: str, new_status: str = "picked_up",
     wołane TYLKO gdy panel_watcher potwierdził aktywny status gastro (3-6) + zlecenie wróciło
     do packs kuriera. Czyści delivered_at/final_location. No-op gdy zlecenie nie 'delivered'."""
     prev = get_order(order_id) or {}
-    if prev.get("status") != "delivered":
-        return None
     if new_status not in ("assigned", "picked_up"):
         new_status = "picked_up"
+    # Z-P1-01 Phase A: correction is an explicit, source-tagged FSM exception.
+    # Observer only — this call cannot block either a valid correction or the
+    # legacy no-op for a non-delivered order.
+    _observe_order_event({
+        "event_type": "ORDER_RESURRECTED",
+        "order_id": order_id,
+        "courier_id": courier_id,
+        "payload": {
+            "new_status": new_status,
+            "reason": reason,
+            "source": reason,
+        },
+    }, current=prev or None)
+    if prev.get("status") != "delivered":
+        return None
     data = {
         "status": new_status,
         "commitment_level": new_status,
@@ -612,6 +690,10 @@ def resurrect_order(order_id: str, new_status: str = "picked_up",
 def update_from_event(event: dict) -> Optional[dict]:
     """Konsumuje event z event busa i aktualizuje state machine.
     Zwraca zaktualizowany rekord lub None."""
+    # Z-P1-01 Phase A: formal FSM shadow.  It is intentionally fail-open and
+    # log-only; legacy behavior below (including current fallbacks/exceptions)
+    # remains the sole writer until a separately approved enforcement phase.
+    _observe_order_event(event)
     etype = event["event_type"]
     oid = event.get("order_id")
     payload = event.get("payload", {})

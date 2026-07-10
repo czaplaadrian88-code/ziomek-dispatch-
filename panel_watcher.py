@@ -1504,7 +1504,10 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                                 "event_type": "COURIER_DELIVERED",
                                 "order_id": zid,
                                 "courier_id": _adv_cid,
-                                "payload": {"timestamp": raw.get("czas_doreczenia") or now_iso()},
+                                "payload": {
+                                    "timestamp": raw.get("czas_doreczenia") or now_iso(),
+                                    "deliv_source": "panel",
+                                },
                             })
                             _log.info(f"DELIVERED {zid}")
                             _advance_plan_on_deliver(
@@ -1530,7 +1533,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                                 "event_type": "ORDER_RETURNED_TO_POOL",
                                 "order_id": zid,
                                 "courier_id": _adv_cid,
-                                "payload": {"reason": reason},
+                                "payload": {"reason": reason, "source": "panel_diff"},
                             })
                             _log.info(f"{reason.upper()} {zid} status={status_id} (panel_diff)")
             except Exception as e:
@@ -1837,6 +1840,8 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             "timestamp": _raw_gd.get("czas_doreczenia") or now_iso(),
                             "final_location": _deliv_addr_gd,
                             "delivery_address": _deliv_addr_gd,
+                            "source": "packs_ghost_detect",
+                            "deliv_source": "packs_ghost_detect",
                         },
                     })
                     _log.info(
@@ -1985,6 +1990,8 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         "timestamp": raw.get("czas_doreczenia") or now_iso(),
                         "final_location": deliv_addr,
                         "delivery_address": deliv_addr,
+                        "source": "reconcile",
+                        "deliv_source": "reconcile",
                     },
                 })
                 _log.info(f"DELIVERED {zid} (reconcile) kurier={kid}")
@@ -2005,7 +2012,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 update_from_event({
                     "event_type": "ORDER_RETURNED_TO_POOL",
                     "order_id": zid,
-                    "payload": {"reason": reason},
+                    "payload": {"reason": reason, "source": "reconcile"},
                 })
                 _log.info(f"{reason.upper()} {zid} (reconcile)")
                 _remove_stops_on_return(
@@ -2096,6 +2103,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "payload": {
                         "timestamp": dzien_odbioru,
                         "pickup_coords": list(pu_coords) if pu_coords else None,
+                        "source": "reconcile",
                     },
                 })
                 _log.info(f"PICKED_UP {zid} (reconcile) kurier={kid} at {dzien_odbioru}")
@@ -2157,7 +2165,11 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         "event_type": "COURIER_PICKED_UP",
                         "order_id": _zid,
                         "courier_id": _kid,
-                        "payload": {"timestamp": _pu_ts, "pickup_coords": _pc},
+                        "payload": {
+                            "timestamp": _pu_ts,
+                            "pickup_coords": _pc,
+                            "source": "ground_truth_fallback",
+                        },
                     })
                     _log.info(f"PICKED_UP {_zid} (ground_truth_fallback) kurier={_kid} at {_pu_ts}")
                     _update_plan_on_picked_up(_kid, _zid, _pu_ts)
