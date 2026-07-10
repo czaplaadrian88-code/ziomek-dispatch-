@@ -936,7 +936,14 @@ the agent citation was not line-verified.
   budżetu ani backpressure i nie jest wejściem selection/feasibility/scoring.
   Stan jest snapshotowany raz na tick, więc hot reload działa między batchami,
   nie w połowie batcha. Sidecar ma pseudonimowe referencje, `0600` i osobny
-  wersjonowany logrotate `deploy/stage-timing-logrotate.conf` (30 dni/100M).
+  wersjonowany logrotate `deploy/stage-timing-logrotate.conf` (`daily`,
+  `rotate 30`, `maxsize 100M`; próg rozmiaru rotuje wcześniej i nie wyłącza
+  rotacji dziennej). `tools/paired_flag_replay.py` wstrzykuje flagę do
+  zamrożonego world record wyłącznie w pamięci; zwykła podmiana live flags nie
+  jest testem ON, bo replay odtwarza snapshot flag rekordu. Na korpusie 202
+  rekordów oba porządki OFF/ON miały zero różnic `verdict/best_cid/best_score`,
+  ale wykazały miękki scheduling drift `pool_feasible+reason`, więc nie ma
+  deklaracji pełnego byte-parity.
   Aktywacja wymaga osobnego ACK, instalacji logrotate, klucza `true` w
   `flags.json`, kontroli fingerprinta/coverage i minimum 48 h canary. Rollback
   hot = `false`; błąd odczytu flagi fail-closed do OFF.
