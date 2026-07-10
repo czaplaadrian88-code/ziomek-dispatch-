@@ -2,16 +2,16 @@
   "_meta": {
     "counts": {
       "apka": 27,
-      "engine": 391,
+      "engine": 392,
       "engine_1b_units": 12,
       "etap4": 126,
       "flags_json_keys": 242,
-      "fp_extra": 33,
+      "fp_extra": 34,
       "known_drift": 1,
       "numeric": 26,
       "panel": 86,
-      "test_isolated": 4,
-      "total": 504,
+      "test_isolated": 5,
+      "total": 505,
       "twins_concepts": 5
     },
     "generator": "tools/flag_lifecycle_seed.py",
@@ -11976,6 +11976,45 @@
       "review_date": "2026-08-10",
       "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
       "source_of_truth": "flags.json",
+      "twin_of": [],
+      "worlds": [
+        "engine"
+      ]
+    },
+    "ENABLE_STAGE_TIMING_OBSERVATION": {
+      "carriers": [
+        "common.py:_FINGERPRINT_EXTRA_FLAGS",
+        "common.py:TEST_ISOLATED_INFRA_FLAGS",
+        "dispatch_v2/common.py-const"
+      ],
+      "consumers": [
+        "dispatch_v2/common.py",
+        "dispatch_v2/dispatch_pipeline.py",
+        "dispatch_v2/observability/stage_timing.py",
+        "dispatch_v2/shadow_dispatcher.py"
+      ],
+      "current_snapshot": {
+        "default": false
+      },
+      "default": false,
+      "intentional_per_process": {
+        "reason": "",
+        "value": false
+      },
+      "known_drift": false,
+      "known_drift_note": "",
+      "lifecycle": "planned",
+      "lifecycle_seeded": true,
+      "name": "ENABLE_STAGE_TIMING_OBSERVATION",
+      "notes": "Z-P1-03 observation-only: OFF nie tworzy trace, dodatkowego depth query, pól ledgera ani sidecara; ON nie wymusza backpressure i nie konsumuje metryk decyzyjnie.",
+      "owner": {
+        "business": "Adrian",
+        "service": "dispatch-shadow.service"
+      },
+      "removal_condition": "usunąć dopiero po zatwierdzonej stałej polityce obserwowalności i zastępującym ją kontrakcie",
+      "review_date": "2026-08-10",
+      "rollback": "flags.json OFF hot-reload (bez restartu); przy błędzie odczytu fail-closed do OFF",
+      "source_of_truth": "common.py-const",
       "twin_of": [],
       "worlds": [
         "engine"

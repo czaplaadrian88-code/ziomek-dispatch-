@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, Iterator, Optional
 
 SCHEMA = "decision_timing.v1"
 SIDECAR_SCHEMA = "decision_stage_timing.v1"
+OBSERVATION_FLAG = "ENABLE_STAGE_TIMING_OBSERVATION"
 
 _TRACE: ContextVar[Optional["DecisionTrace"]] = ContextVar(
     "ziomek_stage_timing_trace", default=None)
@@ -284,6 +285,19 @@ def current_candidate_id() -> Optional[str]:
 def observation_override() -> Optional[bool]:
     """Snapshot wlasciciela scope; ``None`` oznacza samodzielny odczyt flagi."""
     return _OBSERVATION_OVERRIDE.get()
+
+
+def observation_enabled(flag_reader: Callable[[str, bool], Any],
+                        default: bool = False) -> bool:
+    """Rozwiaz kill-switch raz; scope ticka wygrywa, blad czytnika = OFF."""
+    override = observation_override()
+    if override is not None:
+        return bool(override)
+    try:
+        return bool(flag_reader(OBSERVATION_FLAG, bool(default)))
+    except Exception:
+        # Obserwowalnosc nie moze zatrzymac decyzji przy awarii flags.json.
+        return False
 
 
 @contextmanager

@@ -277,6 +277,23 @@ def test_assess_kill_switch_hot_on_to_off_is_snapshotted_per_call(monkeypatch):
     assert off.stage_timing is None
 
 
+def test_observation_kill_switch_is_registered_fingerprinted_and_fail_closed():
+    name = ST.OBSERVATION_FLAG
+    assert C.ENABLE_STAGE_TIMING_OBSERVATION is False
+    assert name in C.TEST_ISOLATED_INFRA_FLAGS
+    assert name in C._FINGERPRINT_EXTRA_FLAGS
+    assert f"{name}=" in C.flag_fingerprint()
+
+    def broken_reader(*_args, **_kwargs):
+        raise OSError("flags unavailable")
+
+    assert ST.observation_enabled(broken_reader, True) is False
+    with ST.observation_scope(True):
+        assert ST.observation_enabled(broken_reader, False) is True
+    with ST.observation_scope(False):
+        assert ST.observation_enabled(lambda *_a, **_kw: True, True) is False
+
+
 def test_real_route_simulator_records_solver_work(monkeypatch):
     def table(origins, destinations):
         return [

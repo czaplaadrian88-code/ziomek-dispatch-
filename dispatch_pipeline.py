@@ -3958,11 +3958,8 @@ def assess_order(
 
     # Z-P1-03: snapshot raz na samodzielne assess albo dziedziczony raz z ticka.
     # Default OFF oznacza brak collectora i brak wiazania workerow/OSRM/solvera.
-    _timing_override = _ST.observation_override()
-    _stage_timing_on = (
-        bool(C.flag("ENABLE_STAGE_TIMING_OBSERVATION", False))
-        if _timing_override is None else bool(_timing_override)
-    )
+    _stage_timing_on = _ST.observation_enabled(
+        C.flag, C.ENABLE_STAGE_TIMING_OBSERVATION)
     _timing = _ST.DecisionTrace() if _stage_timing_on else None
     _assess_started = _timing.now_ns() if _timing is not None else None
 
