@@ -95,7 +95,15 @@ def _apply_status_inbox() -> int:
         cid = str(e.get("cid") or "")
         eid = f"{oid}_{etype}_{e.get('ts')}"
         if event_bus.emit(etype, order_id=oid, courier_id=cid, event_id=eid):
-            sm.update_from_event({"event_type": etype, "order_id": oid, "courier_id": cid})
+            sm.update_from_event({
+                "event_type": etype,
+                "order_id": oid,
+                "courier_id": cid,
+                # Provenance only. Timestamp pozostaje celowo nieuzupelniony:
+                # jego kontrakt wymaga osobnej decyzji, a observer ma ujawnic
+                # dotychczasowy fallback legacy zamiast go maskowac.
+                "payload": {"source": "parcel_status_inbox"},
+            })
             applied += 1
             log.info("paczka %s ← %s (apka)", oid, etype)
     # Rotacja: po przetworzeniu (idempotent), gdy plik duży → archiwum .1; courier_api
