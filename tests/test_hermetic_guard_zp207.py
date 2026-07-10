@@ -119,6 +119,26 @@ def test_failsoft_writer_blocked_returns_zero():
     assert _mtime(LIVE_ALLOC) == before, "zywy global_alloc.json DOTKNIETY mimo guarda"
 
 
+# ── (7b) DELETE-guard: unlink/remove pod zywym korzeniem → RAISE, tmp → OK ──
+def test_unlink_guard_blocks_live_allows_tmp(tmp_path):
+    """Klasa DELETE: os.unlink / os.remove / Path.unlink pod zywym dispatch_state →
+    RAISE (guard bije PRZED skasowaniem, niezaleznie czy plik istnieje); w tmp dziala."""
+    probe = Path(LIVE_STATE) / "hermetic_probe_zp207_unlink.json"
+    # NEGATYW: 3 warianty kasowania zywej sciezki → HERMETIC-GUARD RuntimeError
+    with pytest.raises(RuntimeError, match="HERMETIC-GUARD"):
+        os.unlink(probe)
+    with pytest.raises(RuntimeError, match="HERMETIC-GUARD"):
+        os.remove(probe)
+    with pytest.raises(RuntimeError, match="HERMETIC-GUARD"):
+        Path(probe).unlink()  # Path.unlink → os.unlink
+    assert not probe.exists(), "sonda NIE moze istniec (guard blokuje kasowanie)"
+    # POZYTYW: kasowanie w tmp dziala normalnie
+    f = tmp_path / "x.json"
+    f.write_text("{}", encoding="utf-8")
+    os.unlink(f)
+    assert not f.exists()
+
+
 # ── (8) kwarantanna + marker ────────────────────────────────────────────────
 def test_quarantine_loader_parses_expected_entries():
     stems = {e["match"] for e in hs.load_quarantine()}

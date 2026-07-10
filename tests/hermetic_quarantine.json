@@ -23,7 +23,12 @@
     },
     {
       "match": "test_panel_packs_signal_v328.py::test_load_cache_stale",
-      "reason": "Jak wyzej — ten sam _write_packs_cache pisze na ZYWY panel_packs_cache.json. (Uwaga dla ownera: test_cache_missing_returns_none w tym samym pliku robi os.unlink na ZYWYM cache — kasowanie stanu produkcji; primityw delete NIE jest objety guardem, wiec przechodzi, ale to ta sama klasa bledu — do fixu razem.)",
+      "reason": "Jak wyzej — ten sam _write_packs_cache pisze na ZYWY panel_packs_cache.json.",
+      "modes": ["default", "strict"]
+    },
+    {
+      "match": "test_panel_packs_signal_v328.py::test_cache_missing_returns_none",
+      "reason": "PROD-MUTACJA Z TESTU: os.unlink na ZYWYM panel_packs_cache.json — kasowanie stanu produkcji. Guard klasy DELETE slusznie blokuje. Do fixu przez ownera pliku (Sprint 2 obszar panel_watcher — NIE edytujemy). Kwarantanna default+strict. Trojka fresh/stale/missing = jeden root cause: PANEL_PACKS_CACHE_PATH hardcode, ignoruje DISPATCH_STATE_DIR.",
       "modes": ["default", "strict"]
     },
 

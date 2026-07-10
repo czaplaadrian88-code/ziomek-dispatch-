@@ -20,8 +20,11 @@ default-arg sciezek, ktorych env/monkeypatch NIE pokryja jednolicie.
 Warstwa prymitywow (nie stale modulowe) bo:
   - `builtins.open` (tryb w/a/x/+)         — wiekszosc zapisow + json.dump(open(...)),
   - `os.open` (O_WRONLY/RDWR/CREAT/TRUNC/APPEND) — tempfile.mkstemp + Path.touch (low-level),
-  - `os.replace` + `os.rename` (cel=dst)   — dominujacy idiom atomic mkstemp->replace silnika.
+  - `os.replace` + `os.rename` (cel=dst)   — dominujacy idiom atomic mkstemp->replace silnika,
+  - `os.unlink` + `os.remove` (klasa DELETE) — KASOWANIE zywego stanu = mutacja produkcji
+    (Path.unlink idzie przez os.unlink); blokowane jak zapis pod zywymi korzeniami.
 `shutil.move/copyfile` swiadomie NIE patchowane: dekomponuja sie do powyzszych prymitywow.
+`os.rmdir` NIE patchowany (kasowanie katalogu = rzadkie; poza spec).
 """
 from __future__ import annotations
 
@@ -145,8 +148,8 @@ def _check(resolved, is_write) -> str:
 
 def _write_block_message(resolved: str) -> str:
     return (
-        f"HERMETIC-GUARD: zablokowano ZAPIS do zywego stanu produkcyjnego: {resolved}. "
-        f"Test nieizolowany — ryzyko nadpisania/zatrucia stanu floty/logow/flag. "
+        f"HERMETIC-GUARD: zablokowano ZAPIS/KASOWANIE zywego stanu produkcyjnego: {resolved}. "
+        f"Test nieizolowany — ryzyko nadpisania/skasowania/zatrucia stanu floty/logow/flag. "
         f"Napraw U ZRODLA: DISPATCH_STATE_DIR=<tmp> albo monkeypatch stalej sciezki "
         f"modulu na tmp_path. Swiadomy wyjatek (read-only smoke): ALLOW_PROD_STATE_IN_TEST=1."
     )
@@ -198,8 +201,17 @@ def _guarded_rename(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
     return _ORIG["rename"](src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
 
 
+def _guarded_unlink(path, *, dir_fd=None):
+    """Klasa DELETE (os.unlink/os.remove, w tym Path.unlink). KASOWANIE zywego stanu
+    = mutacja produkcji → traktowane jak zapis (BLOCK_WRITE pod zywymi korzeniami)."""
+    resolved = resolve_target(path) if dir_fd is None else None
+    if resolved is not None and _check(resolved, True) == BLOCK_WRITE:
+        raise RuntimeError(_write_block_message(resolved))
+    return _ORIG["unlink"](path, dir_fd=dir_fd)
+
+
 def install_guard(monkeypatch) -> bool:
-    """Zainstaluj write/read-guard na prymitywach FS przez przekazany MonkeyPatch.
+    """Zainstaluj write/read/delete-guard na prymitywach FS przez przekazany MonkeyPatch.
     Kolejnosc: kopiujemy oryginaly RAZ (idempotencja) → podmieniamy. Zwraca tryb STRICT."""
     global _STRICT_MODE
     _STRICT_MODE = strict_enabled()
@@ -208,10 +220,14 @@ def install_guard(monkeypatch) -> bool:
         _ORIG["os_open"] = os.open
         _ORIG["replace"] = os.replace
         _ORIG["rename"] = os.rename
+        _ORIG["unlink"] = os.unlink
     monkeypatch.setattr(builtins, "open", _guarded_open)
     monkeypatch.setattr(os, "open", _guarded_os_open)
     monkeypatch.setattr(os, "replace", _guarded_replace)
     monkeypatch.setattr(os, "rename", _guarded_rename)
+    # os.remove == os.unlink semantycznie (ten sam syscall); jeden wrapper dla obu.
+    monkeypatch.setattr(os, "unlink", _guarded_unlink)
+    monkeypatch.setattr(os, "remove", _guarded_unlink)
     return _STRICT_MODE
 
 
