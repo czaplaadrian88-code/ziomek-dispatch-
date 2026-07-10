@@ -1,40 +1,53 @@
 # Sprint 3 — prawda ETA i obserwowalność (Faza A)
 
-Status: implementacja Fazy A jest zintegrowana i zweryfikowana w izolowanym
-worktree. Nie było merge do `master`, deployu, restartu, migracji, flipu flag
+Status: implementacja Fazy A i bezpieczne przygotowanie rolloutowe są
+zintegrowane oraz zweryfikowane w izolowanym worktree. Stage timing ma pełny
+kill-switch default OFF, a repo zawiera zwalidowany artefakt retencji. Nie było
+merge do `master`, instalacji logrotate, deployu, restartu, migracji, flipu flag
 ani zapisu do stanu runtime. Pełna regresja po ostatniej zmianie jest zielona;
-commit implementacyjny został wypchnięty wyłącznie na izolowaną gałąź.
+commity są wypychane wyłącznie na izolowaną gałąź.
 
 ## Tożsamość pracy i bramki
 
 - Zakres: Z-P1-02, Z-P1-03 i Z-P2-06.
 - Base SHA bezpiecznego `master`: `c2bde5894976eea9e186336453d8bcaeec1d2489`.
+- Aktualny zintegrowany `master == origin/master`:
+  `270c21a44f339acf0b1bc72a9f9f722882a999a0`; wciągnięty merge commitem
+  `820f7f4` po zakończeniu Sprintu 4, bez konfliktu plikowego lub semantycznego.
 - Branch: `sprint3/eta-observability-osrm`.
 - Worktree: `/root/sprint3_wt/dispatch_v2`.
 - Commit implementacyjny: `e48b21e` (`feat(observability): add ETA truth and
   OSRM telemetry`), push do `origin/sprint3/eta-observability-osrm`: wykonany.
-- Handoff (`ZIOMEK_BACKLOG.md` i ten raport) jest wersjonowany w osobnym
-  commicie `docs(sprint3): record phase-a evidence and rollout gates` na tej
-  samej izolowanej gałęzi.
-- Po utworzeniu worktree `master` przesunął się do `3c43573` wyłącznie o
-  dokumentację Sprintu 2 (`CODEMAP`, `ARCHITECTURE` i raporty). Nie było
-  nakładania z write-setem Sprintu 3; zachowano jawny base zamiast wciągać
-  cudzy handoff w trakcie pracy.
+- Pierwszy handoff: `78f4960`. Przygotowanie rolloutowe: `18773e0` (default-OFF
+  gate), `086fc1c` (pełny lifecycle flagi), `25bbddc` (zachowanie oracla
+  strukturalnego `_tick`), `3cd0b6d` (rzeczywiste `daily + maxsize`) i
+  `769dbfa` (odtwarzalny paired replay bez identyfikatorów).
 - Obszary Sprintu 2 sesji 54 — event retry/DLQ, FSM/state machine,
   `panel_watcher.py`, `parcel_lane_merge.py` i courier API/auth — nie zostały
   dotknięte.
 - Produkcja pozostaje bez zmian. Dispatch, panel i courier API nie były
   restartowane ani przeładowywane; flagi i pliki runtime nie były modyfikowane.
 - Nowa obserwowalność i health nie są aktywne w produkcji; enforcement pozostaje
-  nieobecny. Nie zmieniono żadnej efektywnej wartości flagi.
+  nieobecny. `ENABLE_STAGE_TIMING_OBSERVATION` ma default OFF, nie istnieje w
+  live `flags.json`, a żadna efektywna wartość flagi nie została zmieniona.
+- Sesja 54 (Audyt 360) o 11:00 UTC nadal miała aktywny pane i proces, bez
+  finalnego raportu/commita/handoffu. To pozostaje twardą bramką przed
+  wydaniowym preflightem i jakąkolwiek operacją live Sprintu 3.
 - Zastany chroniony dirty file
   `daily_accounting/kurier_full_names.json` w głównym repo pozostał nietknięty;
-  nie stage'owano również innych zastanych/generated zmian użytkownika.
+  nie dotknięto też `eod_drafts/2026-07-10/CLAIM_LEDGER_HARD_GATE_CARD.md` ani
+  innych zastanych/generated zmian użytkownika.
 
 Kanoniczny baseline na dokładnym base SHA:
 
 ```text
 4710 passed, 24 skipped, 10 xfailed, 147 warnings in 143.19s
+```
+
+Po integracji aktualnego mastera jego osobny czysty baseline wynosi:
+
+```text
+4762 passed, 27 skipped, 10 xfailed, 147 warnings in 126.96s
 ```
 
 ## Problem i dowód przed zmianą
@@ -88,8 +101,11 @@ awarii mogłaby zmienić cache na fallback i tym samym wynik decyzji.
 
 - Powstał offline, wersjonowany bundle dataset/manifest/report dla tego samego
   okna, kohorty, anchoru predykcji i obserwowalnych zdarzeń GPS.
-- Shadow otrzymał addytywną telemetrię czasów etapów i kolejki. Nie dodano
-  limitów, sleepów, odrzucania pracy, alertów ani backpressure.
+- Shadow otrzymał addytywną telemetrię czasów etapów i kolejki za flagą
+  `ENABLE_STAGE_TIMING_OBSERVATION`, default OFF. OFF nie tworzy collectora,
+  nie pyta dodatkowo o głębokość kolejki, nie dodaje pól timingowych i nie
+  zapisuje sidecara. Nie dodano limitów, sleepów, odrzucania pracy, alertów ani
+  backpressure.
 - Każdy wynik OSRM deklaruje źródło `upstream`, `cache` albo `fallback`, bez
   zmiany wartości duration/distance i bez zmiany kompatybilnego boola
   `osrm_fallback`.
@@ -141,6 +157,8 @@ zmienione ani przepięte na nową semantykę.
 
 ### `decision_timing.v1` i `decision_stage_timing.v1`
 
+- Flaga jest rozwiązywana fail-closed i snapshotowana raz na cały tick. Zmiana
+  hot-reload w połowie batcha nie tworzy częściowo zinstrumentowanego ticka.
 - `DecisionTrace` używa `perf_counter_ns`, jest fail-soft i jest dołączany po
   podjęciu decyzji, aby selection nie mogła go konsumować.
 - Rozłączne odcinki głównego wątku obejmują assess/impl/effects/post-hooks,
@@ -171,6 +189,10 @@ zmienione ani przepięte na nową semantykę.
 - Pełny panel ingress pozostaje jawnie niedostępny jako
   `no_pre_fetch_anchor`, bo zmiana `panel_watcher.py` kolidowałaby z sesją 54.
 - Telemetria tylko obserwuje; nie wymusza budżetów ani backpressure.
+- Wersjonowany `deploy/stage-timing-logrotate.conf` obejmuje wyłącznie sidecar:
+  `daily`, `rotate 30`, `maxsize 100M`, kompresja i tryb `0600`. Debug
+  logrotate 3.21 potwierdza, że 100 MiB rotuje wcześniej, nie wyłącza rotacji
+  dziennej. Artefakt nie został zainstalowany w `/etc`.
 
 ### `osrm_health.v1` i `osrm_telemetry.v1`
 
@@ -220,6 +242,7 @@ zmienione ani przepięte na nową semantykę.
 | Miejsce | Rola | Writer / consumer | Dotknięte | Powód | Test / dowód |
 |---|---|---|---|---|---|
 | `observability/stage_timing.py` | kontrakt i agregacja | pipeline/OSRM/solver / serializer | TAK | jedno źródło matematyki | fake clock, overlap, fail-soft |
+| `common.py` + lifecycle registry | default-OFF gate/fingerprint | wszystkie szwy stage timing / checker | TAK | pełny kill-switch bez częściowego batcha | OFF/ON, fail-closed, fingerprint |
 | `shadow_dispatcher.py` | queue/fleet/write/ACK/E2E | tick / ledger+sidecar | TAK | pełny outer lifecycle | tmp E2E, open/complete, join |
 | `dispatch_pipeline.py` | impl/recheck/fan-out/selection/effects | dispatcher / trace | TAK | właściwe granice stage | partition i unattributed |
 | `core/candidates.py` | worker timing | thread pool / trace | TAK | jawne wiązanie ContextVar | isolation i parallelism |
@@ -231,6 +254,8 @@ zmienione ani przepięte na nową semantykę.
 | `event_bus` | depth i event timestamps | panel/tick / queue metrics | N-D | plik Sprintu 2; użyte istniejące API | depth source/atomic/skew |
 | `panel_watcher.py` | pre-fetch ingress | panel / event bus | N-D | jawna kolizja z sesją 54 | `no_pre_fetch_anchor` |
 | `tools/stage_timing_report.py` | reader i denominator | ledgery / offline report | TAK | realny konsument metryki | boundary grace, loss/orphan/duplicate |
+| `tools/paired_flag_replay.py` | niezależny ON/OFF oracle | frozen world record / rollout gate | TAK | live flags nie przebijają snapshotu replay | oba porządki, mutation probe |
+| `deploy/stage-timing-logrotate.conf` | retencja/limit rozmiaru | logrotate / exact sidecar | TAK, nieinstalowane | gotowy artefakt rolloutowy | parser 3.21 + exact-set test |
 | alert/backpressure | enforcement | brak | N-D | poza Fazą A i bez ACK | brak symbolu decyzyjnego |
 
 ## Mapa kompletności Z-P2-06
@@ -253,6 +278,7 @@ zmienione ani przepięte na nową semantykę.
 
 Kod produkcyjny i obserwowalność:
 
+- `common.py`
 - `core/candidates.py`
 - `dispatch_pipeline.py`
 - `observability/stage_timing.py`
@@ -265,6 +291,7 @@ Narzędzia read-only/offline:
 - `tools/eta_ground_truth.py`
 - `tools/osrm_health_report.py`
 - `tools/osrm_fallback_smoke.py`
+- `tools/paired_flag_replay.py`
 - `tools/stage_timing_report.py`
 
 Testy i dokumentacja:
@@ -273,33 +300,45 @@ Testy i dokumentacja:
 - `tests/test_osrm_health_cache_zp206.py`
 - `tests/test_stage_timing_zp103.py`
 - `tests/test_stage_timing_report_zp103.py`
+- `tests/test_stage_timing_logrotate_zp103.py`
+- `tests/test_paired_flag_replay_zp103.py`
+- `deploy/stage-timing-logrotate.conf`
 - `docs/eta/06_ground_truth_contract.md`
 - `eod_drafts/2026-07-10/SPRINT3_PHASE_A_REPORT.md`
 - `ZIOMEK_BACKLOG.md`
+- `ZIOMEK_LOGIC_REFERENCE.md`
+- `tools/flag_lifecycle_registry.json`
 
-Nie zmieniono `tools/eta_truth_map.py`, plików sesji 54, plików flag ani
-chronionych danych użytkownika.
+Nie zmieniono `tools/eta_truth_map.py`, plików sesji 54, live `flags.json`,
+plików systemd, `/etc` ani chronionych danych użytkownika.
 
 ## Testy, replay i pomiar read-only
 
 ### Testy i checkery
 
-Końcowa pełna regresja po wszystkich zmianach, w tym agregatach
-`candidate_pre_recheck`:
+Końcowa pełna regresja po integracji aktualnego mastera, kill-switchu,
+logrotate i wersjonowanego paired replayu:
 
 ```text
-4784 passed, 24 skipped, 10 xfailed, 147 warnings in 122.78s
+4851 passed, 27 skipped, 10 xfailed, 147 warnings in 123.96s
 ```
+
+To jest +89 testów względem czystego aktualnego mastera (`4762`), bez nowego
+faila, skipa lub xfaila.
 
 Skupiony klaster integracyjny oraz dokładny zestaw nowych testów:
 
 ```text
 81 passed in 5.32s
 74 passed in 3.46s
+53 passed in 3.73s  # finalny gate/flag/report/logrotate/paired replay
 ```
 
-`git diff --check` oraz `py_compile` wszystkich 14 zmienionych modułów Python
-przeszły. Entropy dashboard zachował parytet z baseline: `377`, `17`, `~13`,
+`git diff --check` oraz `py_compile` wszystkich 12 zmienionych modułów kodu
+Python przeszły. `canon_static_check` i jego selftest są zielone, wszystkie
+10 mutation probes zostało wykrytych. Checkery flag hygiene/doc/effect/lifecycle
+mają zero nowej luki; lifecycle obejmuje 505 wpisów. Entropy dashboard zachował
+parytet z aktualnym masterem: `388`, `17`, `~13`,
 `25/49`, `1`, `7`, `13`, `11+4`, `10`. Sześć z tych wartości jest oznaczonych
 przez narzędzie jako statyczny `AUDIT-BASELINE`; dynamiczne dead-flag i sentinel
 również nie wzrosły. Jest to dowód braku wykrytej regresji, nie dowód spadku
@@ -311,26 +350,44 @@ Testy uruchamiano kanonicznym interpreterem z venv, z
 wyłącznie bootstrapowi harnessu; testowy `conftest` izolował flagi i stan, a
 symlink nie jest plikiem repo ani zmianą produkcyjną.
 
+`logrotate --debug --state /dev/null` na artefakcie repo zakończył się kodem 0
+i potwierdził jeden exact sidecar, rotację po jednym dniu oraz wcześniejszą po
+100 MiB. Nie utworzył stanu i niczego nie zainstalował.
+
 ### World replay na stałym korpusie
 
 Okno: `2026-07-09T08:00Z..2026-07-10T08:00Z`, `n=202`.
 
-| Przebieg | Zgodne | Miękkie różnice | Krytyczne różnice |
-|---|---:|---:|---:|
-| exact base, run 1 | 177 | 23 | 0 |
-| exact base, run 2 | 177 | 23 | 0 |
-| po zmianie, run 1 | 177 | 23 | 0 |
-| po zmianie, run 2 | 178 | 22 | 0 |
+Kanoniczna bramka względem historycznego zapisu nie jest deterministycznym
+oracle byte-parity dla tego korpusu. Dwa przebiegi aktualnego czystego mastera
+dały odpowiednio `177 zgodnych / 23 miękkie / 0 krytycznych` i `176/24/0`.
+Cztery przebiegi finalnej gałęzi z efektywną obserwacją OFF dały trzy razy zero
+różnic krytycznych, lecz raz jedną różnicę krytyczną
+`best_cid+best_score+reason`. We wszystkich było `OSRM miss records=24`,
+`missing writes=0`, `errors=0`. To dowodzi istniejącej niedeterministyczności
+równoległego replayu; nie wolno przypisać pojedynczej różnicy nowej fladze.
 
-W każdym przebiegu było także `OSRM misses=24`, `missing writes=0`, `errors=0`.
-Oba przebiegi base były identyczne: jedna historyczna miękka różnica miała
-`pool_feasible replay=8` wobec zapisanego `7`. Po zmianie ten sam typ pola dał
-odpowiednio `6` w run 1 i `7` w run 2. Nie zmieniły się wybór, werdykt ani inne
-pola klasyfikowane przez bramkę jako krytyczne, ale nie ma byte-for-byte parity
-całego payloadu soft. Ponieważ base był w dwóch przebiegach stabilny, a wynik
-instrumentowany nie, narzut/scheduling instrumentacji jest wiarygodnym
-kandydatem przyczyny. Nie jest to dowód zmiany decyzji biznesowej, ale jest to
-jawna bramka do ograniczenia narzutu i 48-godzinnego canary przed rolloutem.
+Pierwsza próba nazwania przebiegów OFF/ON przez podmianę pliku flags była
+metodologicznie nieważna: `world_replay` słusznie odtwarza snapshot flag z
+każdego `world_record`, a wszystkie 202 rekordy powstały przed nową flagą.
+Mutation probe wykazał `flag_present=0`, więc procesowy plik flags nie mógł
+zmienić wariantu. Luka została domknięta wersjonowanym, aggregate-only
+`tools/paired_flag_replay.py`, który wstrzykuje wartość wyłącznie do kopii
+rekordu w pamięci i porównuje OFF z ON bezpośrednio.
+
+| Sparowany przebieg | Exact OFF=ON | Miękkie różnice | Krytyczne różnice | Miss mismatch |
+|---|---:|---:|---:|---:|
+| tymczasowy oracle, OFF→ON | 202/202 | 0 | 0 | 0 |
+| tymczasowy oracle, ON→OFF | 201/202 | 1 `pool_feasible+reason` | 0 | 0 |
+| wersjonowane narzędzie, OFF→ON | 201/202 | 1 `pool_feasible+reason` | 0 | 0 |
+| wersjonowane narzędzie, ON→OFF | 200/202 | 2 `pool_feasible+reason` | 0 | 0 |
+
+Łącznie 808 sparowanych porównań nie wykazało zmiany `verdict`, `best_cid` ani
+`best_score`; liczba missów w każdej parze była identyczna. Pełny payload nie
+ma jednak byte-parity: 4/808 porównań różniły się miękkim wynikiem
+`pool_feasible+reason`, zależnym od kolejności/rozgrzania równoległego przebiegu.
+Dlatego dowód neutralności decyzji krytycznej jest pozytywny, ale aktywacja ON
+nadal wymaga 48-godzinnego canary i jawnego limitu miękkiego driftu.
 
 ### ETA ground truth — live inputs, wyłącznie odczyt
 
@@ -415,20 +472,22 @@ koszt batcha w izolacji; nie zastępują pomiaru w rzeczywistym procesie.
    audytu źródła predykcji; kontrakt celowo jej nie obcina.
 6. Pełny wiek panel ingress nie jest dostępny bez wejścia w `panel_watcher.py`.
    Zamiast kolizji z sesją 54 raport emituje jawne `no_pre_fetch_anchor`.
-7. Sidecar nie ma jeszcze zatwierdzonego logrotate/retention ani kill-switcha.
-   Każdy niepusty tick wykonuje osobny append `open` i końcowy batch po ACK.
-   I/O jest fail-soft, ale koszt i wzrost pliku muszą zostać zmierzone przed
-   live activation.
+7. Kill-switch default OFF i wersjonowany logrotate są gotowe oraz przetestowane,
+   ale konfiguracja `daily/rotate 30/maxsize 100M` nie została zaakceptowana
+   jako polityka operacyjna ani zainstalowana w `/etc`. Przy ON każdy niepusty
+   tick wykonuje osobny append `open` i końcowy batch po ACK. I/O jest
+   fail-soft, lecz koszt i wzrost pliku nadal wymagają canary.
 8. CLI health pokazuje bezpośrednią prawdę upstream, lecz jego cache/CB są
    `process_local` dla świeżego PID. Prawdziwy stan daemona będzie widoczny
    dopiero z jego godzinnej telemetrii po zatwierdzonym wdrożeniu.
 9. Pełny sort ewikcji table cache pozostaje potencjalnym spike pod lockiem.
    Zmiana retained-key set może zmienić cache/fallback podczas awarii, więc
    optymalizacja wymaga osobnego projektu z równoważnym oracle lub flagą.
-10. Dwa stabilne replaye base i dwa zmienne replaye po zmianie mają zero różnic
-    krytycznych, ale wskazują timing-sensitive drift jednego pola miękkiego.
-    Pełny payload parity nie jest udowodniony; rollout wymaga canary oraz limitu
-    dopuszczalnego narzutu.
+10. Aggregate gate względem historycznego zapisu jest niedeterministyczny także
+    przy efektywnym OFF. W poprawnym paired replayu 808 porównań miało zero
+    różnic krytycznych, ale 4 miękkie różnice `pool_feasible+reason`. Pełny
+    payload parity nie jest udowodniony; rollout wymaga canary, limitu driftu i
+    pomiaru narzutu.
 11. Nie ma jeszcze pomiaru z rzeczywistego procesu po wdrożeniu ani 2-dniowego
     okna obserwacji. Faza A nie może ogłosić wpływu produkcyjnego.
 
@@ -444,40 +503,46 @@ Przed jakąkolwiek kalibracją lub promocją ETA Adrian musi zatwierdzić:
 5. KPI i progi MAE/bias/tail, minimalne `n`, sposób traktowania skrajnych
    predykcji oraz koszt uboczny na wspólnym support.
 
-Przed aktywacją obserwowalności potrzebny jest osobny ACK na deploy i restart
-oraz decyzja operacyjna o:
+Przed aktywacją obserwowalności potrzebne są zakończenie sesji 54, świeży
+preflight i osobny ACK na deploy/restart oraz decyzja operacyjna o:
 
-- retencji/logrotate sidecara i kill-switchu;
+- akceptacji proponowanego `daily/rotate 30/maxsize 100M` albo innej retencji;
 - dopuszczalnym narzucie I/O/CPU;
+- dopuszczalnym limicie miękkiego driftu `pool_feasible/reason`;
 - sposobie odczytu stanu właściwego dispatch PID;
 - ewentualnej zmianie polityki ewikcji cache. Taka zmiana nie należy do Fazy A.
 
 ## Proponowany bezpieczny etap wdrożenia
 
-1. Po wykonanej zielonej pełnej regresji, static checks, entropy i audycie
-   kolizji utrzymać commit/push wyłącznie na izolowanej gałęzi; nie merge'ować
-   go do `master` bez osobnego etapu review.
-2. Przed live activation dodać zatwierdzoną retencję/logrotate sidecara i
-   kill-switch obserwacji, a następnie powtórzyć testy oraz benchmark appendu i
-   contention. To jest osobna zmiana/ACK, nie wykonana w tej fazie.
-3. Po osobnym ACK wdrożyć wyłącznie obserwację poza peakiem, bez zmiany flag
+1. Utrzymać commit/push wyłącznie na izolowanej gałęzi; nie merge'ować do
+   `master`, gdy sesja 54 jest aktywna lub bez świeżego review jej handoffu.
+2. Po zakończeniu sesji 54 wykonać świeży collision preflight. Zatwierdzić albo
+   zmienić gotowy artefakt logrotate; kill-switch pozostawić default OFF.
+3. Po osobnym ACK najpierw zintegrować kod oraz zainstalować logrotate poza
+   peakiem z flagą nadal OFF. Sprawdzić import, health, PID, `NRestarts` i brak
+   sidecara — ten krok nie aktywuje obserwacji.
+4. Dopiero po osobnym ACK na flip ustawić ON bez zmiany flag
    decyzji, ETA, backpressure i cache policy. Wykonać jeden kontrolowany restart
    właściwego procesu i sprawdzić PID, `NRestarts`, health, ledger-sidecar join
    oraz proces-local telemetry.
-4. Obserwować minimum 48 godzin od wdrożenia. Werdukt ma obejmować coverage
+5. Obserwować minimum 48 godzin od aktywacji ON. Werdukt ma obejmować coverage
    sidecara, incomplete ticks, stage/queue percentyle, OSRM source/error/cache
-   contention oraz rozmiar i tempo wzrostu logu. Deadline będzie `T+48h` od
-   faktycznie zatwierdzonego startu; dziś nie ma daty, bo nie było deployu.
-5. ETA pozostawić offline i measurement-only aż do zatwierdzenia semantyki KPI,
+   contention, miękki drift oraz rozmiar i tempo wzrostu logu. Deadline będzie
+   `T+48h` od faktycznie zatwierdzonego startu; dziś nie ma daty, bo nie było
+   deployu.
+6. ETA pozostawić offline i measurement-only aż do zatwierdzenia semantyki KPI,
    kohorty, coverage i progów. Żadna liczba tego raportu nie jest promocją.
 
 ## Rollback
 
-- Kod: jawny `git revert e48b21e` (oraz osobny revert commita handoffu, jeśli
-  potrzebny), bez resetu i bez naruszania zmian sesji 54.
-- Runtime: po osobnym ACK wyłączyć zatwierdzonym kill-switchem obserwację albo,
-  jeśli nie zostanie dodany, wdrożyć revert i wykonać jeden kontrolowany restart
-  właściwego procesu poza peakiem.
+- Kod: przed przyszłym wydaniem utworzyć jeden jawny merge/squash commit i tag
+  rollback; powrót wykonać przez `git revert <release-commit>`, bez resetu i bez
+  naruszania zmian sesji 54. Nie revertować samego `e48b21e`, bo późniejsze
+  commity dodają obowiązkowy gate i retencję.
+- Runtime: `ENABLE_STAGE_TIMING_OBSERVATION=false` natychmiast zatrzymuje nowy
+  collector, dodatkowy depth query i sidecar dla kolejnych ticków. Gdy sam kod
+  wymaga wycofania, wykonać jawny revert wydaniowego commita i jeden kontrolowany
+  restart właściwego procesu poza peakiem.
 - Dane: brak migracji. Sidecar i offline bundle są addytywne; rollback nie
   wymaga przepisywania ledgerów ani danych biznesowych.
 - Backup: nie powstały dane runtime wymagające kopii. Dokładny base SHA,

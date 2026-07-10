@@ -73,7 +73,7 @@ przed rozpoczeciem implementacji.
 |---|---|---|---|---:|---|
 | Z-P1-01 | Formalny FSM zlecen | `state_machine` zna statusy, ale nie ma jednej mapy dozwolonych przejsc; zly pickup timestamp jest zastepowany `now()`. | Nielegalne przejscie i uszkodzony czas beda kwarantannowane zamiast po cichu zmieniac prawde SLA. | L | Kompatybilnosc replay historycznego |
 | Z-P1-02 | Kanoniczny ground truth ETA i SLA | Brak potwierdzonego fizycznego pickup/handoff; last-inside i arrival sa tylko obserwowalnymi proxy GPS. | Faza A mierzy to samo okno, kohorte i support bez zgadywania KPI; promocja ETA pozostaje zablokowana. | L | FAZA A DONE na branchu; potrzebna definicja KPI i coverage |
-| Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbijal czasu na etapy. | Faza A mierzy queue/fleet/OSRM/solver/selection/write; nie wlacza limitu kolejki, budzetu ani backpressure. | M | FAZA A DONE na branchu; rollout po retencji, kill-switchu i ACK |
+| Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbijal czasu na etapy. | Faza A mierzy queue/fleet/OSRM/solver/selection/write; nie wlacza limitu kolejki, budzetu ani backpressure. | M | FAZA A DONE na branchu; default-OFF gate i logrotate gotowe, live zablokowane przez sesje 54 |
 | Z-P1-04 | Jawny `DecisionContext` i domkniecie efektow ubocznych | Effects buffer obejmuje tylko czesc zapisow; OSRM recorder, tolerancje i bufory sa proces-globalne. | Rownolegle decyzje nie pomieszaja telemetrii ani efektow; replay stanie sie bardziej deterministyczny. | XL | Po Z-P1-03 |
 | Z-P1-05 | Kanoniczna tozsamosc kuriera | 121 aliasow mapuje sie do 65 CID; 54 CID maja wiele aliasow, 20 nie ma wpisu w `courier_names`. | Grafik, GPS, PIN, tier, plan i rozliczenia beda laczone przez CID z kontrolowanymi aliasami. | L | Migracja bez zmiany CID |
 | Z-P1-06 | Prywatnosc i retencja world records/logow | Rekordy zawieraja adresy, nazwiska i GPS, maja `0644` i rosna o setki MB dziennie. | Dane beda pseudonimizowane lub szyfrowane, `0600`, kompresowane i usuwane wedlug retencji. | M | Decyzja B-05 |
@@ -227,8 +227,12 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 - **Koniec zadania:** suma rozlacznych spanow zgadza sie z latency, raport pokazuje
   p50/p95/max per etap, a sidecar ma wiarygodny mianownik i coverage utraty.
 - **Stan Fazy A 2026-07-10:** kontrakty `decision_timing.v1` i
-  `decision_stage_timing.v1` sa gotowe na izolowanej galezi. Brak live aktywacji;
-  retencja, kill-switch i pomiar 48 h sa bramka rolloutowa.
+  `decision_stage_timing.v1` sa gotowe na izolowanej galezi. Flaga
+  `ENABLE_STAGE_TIMING_OBSERVATION` jest default OFF, a wersjonowany logrotate
+  (`daily/rotate 30/maxsize 100M`) przeszedl parser 3.21. Brak live aktywacji;
+  zakonczenie sesji 54, akceptacja polityki retencji, osobny ACK i pomiar 48 h
+  sa bramka rolloutowa. Paired replay ma zero roznic krytycznych, ale nie pelne
+  byte-parity pola `pool_feasible+reason`.
 - **Effort:** M; optymalizacje sa osobnymi zadaniami po pomiarze.
 
 ### Z-P1-04 - DecisionContext i efekty uboczne
@@ -490,7 +494,7 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 | B-05 | Jak dlugo wolno przechowywac dokladne adresy, GPS i world records? | Retencja i pseudonimizacja sa decyzja prawno-biznesowa. |
 | B-06 | Czy kurier bez GPS moze dostac propozycje z pozycji syntetycznej? | To kompromis miedzy ciagloscia operacji a ryzykiem fikcyjnego ETA. |
 | B-07 | Jakie zdarzenie jest KPI pickup/delivery i jakie sa minimalne coverage oraz progi promocji ETA? | Last-inside nie potwierdza pickup/wyjazdu, arrival nie potwierdza handoffu, a paczki i GPS maja niepelne coverage. |
-| B-08 | Jaka retencja, kill-switch i maksymalny narzut obowiazuja sidecar stage timing? | Obserwacja dodaje dwa appendy na niepusty tick i nowy log; bez tej decyzji rollout nie ma bezpiecznej granicy operacyjnej. |
+| B-08 | Czy zatwierdzamy proponowane `daily/rotate 30/maxsize 100M` i jaki maksymalny narzut/drift obowiazuje sidecar stage timing? | Kill-switch default OFF i artefakt logrotate sa gotowe, ale polityka nie jest zainstalowana ani zaakceptowana; ON dodaje dwa appendy na niepusty tick. |
 
 ## 7. Sprint 1
 
@@ -578,22 +582,29 @@ geocode/cache.
 
 ## 8. Sprint 3 - Faza A prawdy ETA i obserwowalnosci
 
-**Stan na 2026-07-10: implementacja i weryfikacja zakonczone na izolowanej
-galezi; brak operacji live.**
+**Stan na 2026-07-10: implementacja i przygotowanie rolloutowe zakonczone na
+izolowanej galezi; brak operacji live, aktywna sesja 54 blokuje preflight.**
 
 - Branch `sprint3/eta-observability-osrm`, worktree
   `/root/sprint3_wt/dispatch_v2`, base
   `c2bde5894976eea9e186336453d8bcaeec1d2489`.
 - Commit implementacyjny `e48b21e` zostal wypchniety tylko na izolowana galaz.
-  Nie wykonano merge do `master`, deployu, restartu, migracji, flipa flag ani
-  zapisu do stanu runtime.
-- Baseline: **4710 passed, 24 skipped, 10 xfailed**. Koncowa regresja:
-  **4784 passed, 24 skipped, 10 xfailed**; `git diff --check`, `py_compile` i
-  dashboard entropii bez wykrytej regresji.
-- Cztery replaye tego samego okna (`n=202`) mialy **0 roznic krytycznych**.
-  Dwa przebiegi base byly stabilne `177 zgodnych / 23 miekkie`; dwa przebiegi
-  instrumentowane daly `177/23` i `178/22`. Timing-sensitive drift jednego pola
-  miekkiego jest jawna bramka canary; byte-parity calego payloadu nie ogloszono.
+  Galaz zostala dosunieta do aktualnego mastera `270c21a` bez konfliktu. Nie
+  wykonano merge do `master`, instalacji `/etc`, deployu, restartu, migracji,
+  flipa flag ani zapisu do stanu runtime.
+- Historyczny baseline: **4710 passed, 24 skipped, 10 xfailed**; czysty aktualny
+  master: **4762 passed, 27 skipped, 10 xfailed**. Finalna regresja:
+  **4851 passed, 27 skipped, 10 xfailed** (+89 testow, bez nowego fail/skip/
+  xfail). Paired oracle jest w `769dbfa`; komplet commitow przygotowania jest
+  zapisany w raporcie Sprintu 3.
+- `ENABLE_STAGE_TIMING_OBSERVATION` ma pelny default-OFF gate; repo zawiera
+  logrotate `daily/rotate 30/maxsize 100M`, ale nie zostal on zainstalowany ani
+  uznany za zatwierdzona polityke retencji.
+- Zwykla podmiana live flags nie testuje historycznego replayu, bo world record
+  odtwarza wlasny snapshot. Wersjonowany paired replay jawnie wstrzyknal flage:
+  **808 porownan, 0 roznic krytycznych, 4 miekkie
+  `pool_feasible+reason`, 0 miss mismatch**. Byte-parity calego payloadu nie
+  ogloszono; canary pozostaje bramka.
 - Read-only ETA replay ma bazowy mianownik 188, package coverage 94,330% i
   complete-case obu nog 41,489%. KPI pozostaje zablokowany; nie ma definicji
   fizycznego pickup/handoff ani zatwierdzonych progow.
@@ -601,7 +612,8 @@ galezi; brak operacji live.**
   jest jawnie `process_local`; polityka ewikcji pozostala legacy dla parytetu.
 - Z-P1-02 Faza A, Z-P1-03 Faza A oraz health/telemetria Z-P2-06 sa gotowe do
   review. Otwarta pozostaje optymalizacja eviction oraz rollout observability:
-  retencja/logrotate, kill-switch, osobny ACK i co najmniej 48 h canary.
+  final sesji 54, akceptacja retencji/narzutu/driftu, osobny ACK i co najmniej
+  48 h canary.
 - Kompletny raport i rollback:
   `eod_drafts/2026-07-10/SPRINT3_PHASE_A_REPORT.md`.
 
@@ -610,8 +622,9 @@ galezi; brak operacji live.**
 1. Sprint 1: wdrozony; Z-P0-01 faza A pozostaje w obserwacji shadow do co najmniej
    `2026-07-12 06:10:36 UTC`.
 2. Sprint 2: Z-P0-05, Z-P0-06, Z-P1-01.
-3. Sprint 3: Faza A gotowa na izolowanej galezi; przed live wymagane B-07/B-08,
-   osobny ACK, retencja/kill-switch i canary minimum 48 h.
+3. Sprint 3: Faza A i default-OFF gate gotowe na izolowanej galezi; przed live
+   wymagane zakonczenie sesji 54, B-07/B-08, osobny ACK, instalacja logrotate i
+   canary minimum 48 h.
 4. Sprint 4: Z-P1-05, Z-P1-07, Z-P2-07.
 5. Sprint 5: Z-P1-04 i Z-P2-02 po ustabilizowaniu kontraktow.
 6. Dalej: integracje, multi-city i migracje stanu wedlug decyzji B-03/B-04.
