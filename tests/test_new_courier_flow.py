@@ -61,21 +61,27 @@ def test_add_new_courier_happy_path(tmp_path, monkeypatch):
     tiers = {"100": {"name": "Existing"}}
     full = {"Existing": "Existing Full"}
 
+    names = {"100": "Existing"}  # 5. plik transakcji od 2026-07-10 (courier_names)
+
     kids_path = tmp_path / "kurier_ids.json"
     piny_path = tmp_path / "kurier_piny.json"
     tiers_path = tmp_path / "courier_tiers.json"
+    names_path = tmp_path / "courier_names.json"
     full_path = tmp_path / "kurier_full_names.json"
 
-    for p, data in [(kids_path, kids), (piny_path, piny), (tiers_path, tiers), (full_path, full)]:
+    for p, data in [(kids_path, kids), (piny_path, piny), (tiers_path, tiers),
+                    (names_path, names), (full_path, full)]:
         with open(p, "w") as f:
             json.dump(data, f)
 
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_IDS", str(kids_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_PINY", str(piny_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.COURIER_TIERS", str(tiers_path))
+    monkeypatch.setattr("dispatch_v2.courier_admin.COURIER_NAMES", str(names_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_FULL_NAMES", str(full_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.ALL_FILES",
-                        [str(kids_path), str(piny_path), str(tiers_path), str(full_path)])
+                        [str(kids_path), str(piny_path), str(tiers_path),
+                         str(names_path), str(full_path)])
 
     result = add_new_courier(525, "Nowy Kurier")
     assert result["cid"] == 525
@@ -94,6 +100,10 @@ def test_add_new_courier_happy_path(tmp_path, monkeypatch):
     tiers2 = json.loads(tiers_path.read_text())
     assert tiers2["525"]["name"] == "Nowy Ku"
 
+    names2 = json.loads(names_path.read_text())
+    assert names2["525"] == "Nowy Ku"  # kontrakt 5-plikowy (koniec luki courier_names)
+    assert names2["100"] == "Existing"
+
     full2 = json.loads(full_path.read_text())
     assert full2["Nowy Ku"] == "Nowy Kurier"
 
@@ -107,21 +117,27 @@ def test_add_new_courier_alias_conflict_raises(tmp_path, monkeypatch):
     tiers = {"100": {"name": "Existing"}}
     full = {"Nowy Ku": "Nowy Kurier"}
 
+    names = {"100": "Existing"}  # 5. plik transakcji od 2026-07-10 (courier_names)
+
     kids_path = tmp_path / "kurier_ids.json"
     piny_path = tmp_path / "kurier_piny.json"
     tiers_path = tmp_path / "courier_tiers.json"
+    names_path = tmp_path / "courier_names.json"
     full_path = tmp_path / "kurier_full_names.json"
 
-    for p, data in [(kids_path, kids), (piny_path, piny), (tiers_path, tiers), (full_path, full)]:
+    for p, data in [(kids_path, kids), (piny_path, piny), (tiers_path, tiers),
+                    (names_path, names), (full_path, full)]:
         with open(p, "w") as f:
             json.dump(data, f)
 
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_IDS", str(kids_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_PINY", str(piny_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.COURIER_TIERS", str(tiers_path))
+    monkeypatch.setattr("dispatch_v2.courier_admin.COURIER_NAMES", str(names_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_FULL_NAMES", str(full_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.ALL_FILES",
-                        [str(kids_path), str(piny_path), str(tiers_path), str(full_path)])
+                        [str(kids_path), str(piny_path), str(tiers_path),
+                         str(names_path), str(full_path)])
 
     with pytest.raises(ValueError, match="juz przypisany"):
         add_new_courier(525, "Nowy Kurier")
@@ -136,21 +152,27 @@ def test_add_new_courier_cid_conflict_raises(tmp_path, monkeypatch):
     tiers = {"525": {"name": "Existing"}}
     full = {"Existing": "Existing Full"}
 
+    names = {"100": "Existing"}  # 5. plik transakcji od 2026-07-10 (courier_names)
+
     kids_path = tmp_path / "kurier_ids.json"
     piny_path = tmp_path / "kurier_piny.json"
     tiers_path = tmp_path / "courier_tiers.json"
+    names_path = tmp_path / "courier_names.json"
     full_path = tmp_path / "kurier_full_names.json"
 
-    for p, data in [(kids_path, kids), (piny_path, piny), (tiers_path, tiers), (full_path, full)]:
+    for p, data in [(kids_path, kids), (piny_path, piny), (tiers_path, tiers),
+                    (names_path, names), (full_path, full)]:
         with open(p, "w") as f:
             json.dump(data, f)
 
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_IDS", str(kids_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_PINY", str(piny_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.COURIER_TIERS", str(tiers_path))
+    monkeypatch.setattr("dispatch_v2.courier_admin.COURIER_NAMES", str(names_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_FULL_NAMES", str(full_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.ALL_FILES",
-                        [str(kids_path), str(piny_path), str(tiers_path), str(full_path)])
+                        [str(kids_path), str(piny_path), str(tiers_path),
+                         str(names_path), str(full_path)])
 
     with pytest.raises(ValueError, match="juz istnieje w courier_tiers"):
         add_new_courier(525, "Nowy Kurier")
@@ -165,21 +187,27 @@ def test_add_new_courier_partial_fail_rollback(tmp_path, monkeypatch):
     tiers = {"100": {"name": "Existing"}}
     full = {"Existing": "Existing Full"}
 
+    names = {"100": "Existing"}  # 5. plik transakcji od 2026-07-10 (courier_names)
+
     kids_path = tmp_path / "kurier_ids.json"
     piny_path = tmp_path / "kurier_piny.json"
     tiers_path = tmp_path / "courier_tiers.json"
+    names_path = tmp_path / "courier_names.json"
     full_path = tmp_path / "kurier_full_names.json"
 
-    for p, data in [(kids_path, kids), (piny_path, piny), (tiers_path, tiers), (full_path, full)]:
+    for p, data in [(kids_path, kids), (piny_path, piny), (tiers_path, tiers),
+                    (names_path, names), (full_path, full)]:
         with open(p, "w") as f:
             json.dump(data, f)
 
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_IDS", str(kids_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_PINY", str(piny_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.COURIER_TIERS", str(tiers_path))
+    monkeypatch.setattr("dispatch_v2.courier_admin.COURIER_NAMES", str(names_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.KURIER_FULL_NAMES", str(full_path))
     monkeypatch.setattr("dispatch_v2.courier_admin.ALL_FILES",
-                        [str(kids_path), str(piny_path), str(tiers_path), str(full_path)])
+                        [str(kids_path), str(piny_path), str(tiers_path),
+                         str(names_path), str(full_path)])
 
     # Make the last atomic write fail
     original_write = _atomic_write_json
@@ -201,6 +229,8 @@ def test_add_new_courier_partial_fail_rollback(tmp_path, monkeypatch):
     assert piny_after == piny
     tiers_after = json.loads(tiers_path.read_text())
     assert tiers_after == tiers
+    names_after = json.loads(names_path.read_text())
+    assert names_after == names
     full_after = json.loads(full_path.read_text())
     assert full_after == full
 

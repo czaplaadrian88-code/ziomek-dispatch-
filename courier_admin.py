@@ -1,9 +1,11 @@
 """Atomic roster updates dla nowych kurierow.
 
-Aktualizuje 4 pliki w jednej transakcji z rollback on partial fail:
+Aktualizuje 5 plikow w jednej transakcji z rollback on partial fail:
   - dispatch_state/kurier_ids.json
   - dispatch_state/kurier_piny.json
   - dispatch_state/courier_tiers.json
+  - dispatch_state/courier_names.json  (cid -> krotka nazwa panelowa; do 2026-07-10
+    POMIJANY przez onboarding -> 19 CID bez wpisu, luka Z-P1-05 zamknieta backfillem)
   - dispatch_v2/daily_accounting/kurier_full_names.json
 
 Hard rules:
@@ -21,9 +23,10 @@ from typing import Dict
 KURIER_IDS = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
 KURIER_PINY = "/root/.openclaw/workspace/dispatch_state/kurier_piny.json"
 COURIER_TIERS = "/root/.openclaw/workspace/dispatch_state/courier_tiers.json"
+COURIER_NAMES = "/root/.openclaw/workspace/dispatch_state/courier_names.json"
 KURIER_FULL_NAMES = "/root/.openclaw/workspace/scripts/dispatch_v2/daily_accounting/kurier_full_names.json"
 
-ALL_FILES = [KURIER_IDS, KURIER_PINY, COURIER_TIERS, KURIER_FULL_NAMES]
+ALL_FILES = [KURIER_IDS, KURIER_PINY, COURIER_TIERS, COURIER_NAMES, KURIER_FULL_NAMES]
 
 
 def derive_alias(full_name: str) -> str:
@@ -70,6 +73,7 @@ def add_new_courier(cid: int, full_name: str) -> Dict:
     kids = json.load(open(KURIER_IDS))
     piny = json.load(open(KURIER_PINY))
     tiers = json.load(open(COURIER_TIERS))
+    names = json.load(open(COURIER_NAMES))
     full = json.load(open(KURIER_FULL_NAMES))
 
     # Conflict checks
@@ -95,6 +99,7 @@ def add_new_courier(cid: int, full_name: str) -> Dict:
         kids[alias] = cid
         kids[full_name] = cid  # full alias rownolegle (matchuje grafik)
         piny[pin] = alias
+        names[str(cid)] = alias  # krotka nazwa panelowa (konwencja courier_names)
         full[alias] = full_name
         tiers[str(cid)] = {
             "name": alias,
@@ -112,6 +117,7 @@ def add_new_courier(cid: int, full_name: str) -> Dict:
         _atomic_write_json(KURIER_IDS, kids)
         _atomic_write_json(KURIER_PINY, piny)
         _atomic_write_json(COURIER_TIERS, tiers)
+        _atomic_write_json(COURIER_NAMES, names)
         _atomic_write_json(KURIER_FULL_NAMES, full)
     except Exception as e:
         # Rollback z backupow
