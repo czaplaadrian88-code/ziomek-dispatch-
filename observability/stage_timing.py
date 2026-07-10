@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from threading import RLock
 from typing import Any, Callable, Dict, Iterator, Optional
@@ -308,6 +309,23 @@ def observation_scope(enabled: bool) -> Iterator[None]:
         yield
     finally:
         _OBSERVATION_OVERRIDE.reset(token)
+
+
+def observation_gate(resolve_enabled: Callable[[], bool]):
+    """Dekorator snapshotujacy flagę raz i wstrzykujacy stan do korpusu.
+
+    ``wraps`` zachowuje ``__wrapped__``, więc structural oracle'y widzą nadal
+    właściwy korpus funkcji, a nie cienki wrapper obserwowalności.
+    """
+    def decorate(func):
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            enabled = bool(resolve_enabled())
+            with observation_scope(enabled):
+                return func(
+                    *args, **kwargs, _stage_timing_on=enabled)
+        return wrapped
+    return decorate
 
 
 @contextmanager

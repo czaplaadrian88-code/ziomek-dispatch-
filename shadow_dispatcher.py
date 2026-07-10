@@ -1262,17 +1262,10 @@ def _sanitize_payload_coords(payload: dict, oid) -> bool:
     return changed
 
 
-def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
-    """Snapshot kill-switcha raz na tick, lacznie z wywolaniami assess."""
-    _stage_timing_on = _ST.observation_enabled(
-        C.flag, C.ENABLE_STAGE_TIMING_OBSERVATION)
-    with _ST.observation_scope(_stage_timing_on):
-        return _tick_impl(
-            shadow_log_path, meta, _stage_timing_on=_stage_timing_on)
-
-
-def _tick_impl(shadow_log_path: str, meta: Optional[dict], *,
-               _stage_timing_on: bool) -> dict:
+@_ST.observation_gate(lambda: _ST.observation_enabled(
+    C.flag, C.ENABLE_STAGE_TIMING_OBSERVATION))
+def _tick(shadow_log_path: str, meta: Optional[dict], *,
+          _stage_timing_on: bool) -> dict:
     """One poll cycle. Returns {processed, failed, skipped}."""
     stats = {"processed": 0, "failed": 0, "skipped": 0}
     _poll_started_ns = (
