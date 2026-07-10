@@ -77,7 +77,12 @@ def test_structure_complete():
         assert CHK.REQUIRED_FIELDS <= set(e), f"{name}: brak pól"
         assert e["lifecycle"] in CHK.ALLOWED_LIFECYCLE
         assert e["name"] == name
-        assert e["lifecycle_seeded"] is True
+        # pre-kuracja: seeded=True; po kuracji (2026-07-10): curated_at ⇔ seeded=False
+        assert isinstance(e["lifecycle_seeded"], bool)
+        if e.get("curated_at"):
+            assert e["lifecycle_seeded"] is False, f"{name}: curated_at + seeded=True"
+        else:
+            assert e["lifecycle_seeded"] is True, f"{name}: bez kuracji a seeded=False"
 
 
 # ── 2) TWINS dwustronne (w tym para RÓŻNO-NAZWA) ────────────────────────────────
@@ -197,3 +202,59 @@ def test_known_drift_not_error(tmp_path):
 def _load_json(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+# ── 8) KURACJA (ACK Adrian 2026-07-10) ──────────────────────────────────────────
+def test_curation_complete_on_committed_registry():
+    """Rejestr po kuracji: 100% wpisów curated_at + lifecycle_seeded=False +
+    owner (service+business=Adrian) + review_date + removal_condition."""
+    reg = _registry()
+    fl = reg["flags"]
+    assert fl, "pusty rejestr"
+    missing = [n for n, e in fl.items()
+               if not e.get("curated_at")
+               or e.get("lifecycle_seeded") is not False
+               or not (e.get("owner") or {}).get("service")
+               or (e.get("owner") or {}).get("business") != "Adrian"
+               or not e.get("review_date")
+               or not e.get("removal_condition")]
+    assert not missing, f"wpisy bez pełnej kuracji: {missing[:10]} (+{max(0, len(missing)-10)})"
+
+
+def test_reseed_merge_preserves_curation_pure():
+    """RE-SEED --merge nie może zabić kuracji: pola kuracji ze STAREGO wpisu
+    (curated_at) wygrywają, pola DERYWOWANE (snapshot/default) idą ze świeżego
+    skanu; wpis bez curated_at w starym = nietknięty przez merge."""
+    fresh = {"flags": {
+        "FLAG_A": {"name": "FLAG_A", "lifecycle": "planned", "lifecycle_seeded": True,
+                   "owner": {}, "review_date": "2026-08-10", "removal_condition": "seed",
+                   "notes": "", "default": False,
+                   "current_snapshot": {"flags.json": True}},
+        "FLAG_B": {"name": "FLAG_B", "lifecycle": "planned", "lifecycle_seeded": True,
+                   "owner": {}, "review_date": "2026-08-10", "removal_condition": "seed",
+                   "notes": "", "default": False,
+                   "current_snapshot": {"flags.json": False}},
+    }}
+    old = {
+        "FLAG_A": {"name": "FLAG_A", "curated_at": "2026-07-10",
+                   "lifecycle": "live", "lifecycle_seeded": False,
+                   "owner": {"service": "dispatch-shadow.service", "business": "Adrian"},
+                   "review_date": "2026-10-10", "removal_condition": "n/d dopóki live",
+                   "notes": "kuracja-test", "default": "STARY-DERYWAT",
+                   "current_snapshot": {"flags.json": "STARY-DERYWAT"}},
+        # FLAG_B w starym BEZ kuracji → merge nie dotyka
+        "FLAG_B": {"name": "FLAG_B", "lifecycle": "planned", "lifecycle_seeded": True,
+                   "owner": {}, "notes": ""},
+    }
+    preserved = SD.merge_curation(fresh, old)
+    assert preserved == 1
+    a = fresh["flags"]["FLAG_A"]
+    # pola KURACJI ze starego:
+    assert a["curated_at"] == "2026-07-10"
+    assert a["lifecycle"] == "live" and a["lifecycle_seeded"] is False
+    assert a["owner"]["business"] == "Adrian" and a["review_date"] == "2026-10-10"
+    assert a["removal_condition"] == "n/d dopóki live" and a["notes"] == "kuracja-test"
+    # pola DERYWOWANE ze świeżego skanu (NIE ze starego):
+    assert a["default"] is False and a["current_snapshot"] == {"flags.json": True}
+    b = fresh["flags"]["FLAG_B"]
+    assert b["lifecycle_seeded"] is True and not b.get("curated_at")

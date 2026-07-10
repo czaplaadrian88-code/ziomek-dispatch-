@@ -60,6 +60,19 @@ DEF_OUT = os.path.join(_HERE, "flag_lifecycle_registry.json")
 SEED_DATE = "2026-07-10"
 REVIEW_DATE = "2026-08-10"
 
+# ── KURACJA 2026-07-10 (ACK Adrian) — polityka metadanych; ZERO zmian wartości flag.
+CURATED_AT = "2026-07-10"
+# review_date per klasa lifecycle (intentional_per_process nadpisuje → 2026-08-10).
+REVIEW_BY_CLASS = {
+    "live": "2026-10-10", "shadow": "2026-08-10", "planned": "2026-09-10",
+    "deprecated": "2026-08-10", "dead": "2026-08-10",
+}
+# Pola „własności kuracji" — chronione przy RE-SEED --merge (nie nadpisywać skanem).
+CURATION_FIELDS = ("owner", "lifecycle", "lifecycle_seeded", "curated_at",
+                   "review_date", "removal_condition", "notes")
+# Log-only / obserwacyjne (semantyka shadow poza samym „_SHADOW").
+_SHADOW_NAME_RE = re.compile(r"SHADOW|AUDIT_LOG|INSTRUMENTATION|OBSERVABILITY")
+
 # Filtr sekretów (nazwa env) + wzorce infra (nie-flagi) do świata 1b/panel/apka env.
 _SECRET_RE = re.compile(r"TOKEN|SECRET|PASS|KEY|DSN|CRED|COOKIE|AUTH", re.I)
 _INFRA_NAMES = {
@@ -354,6 +367,112 @@ def _intentional(name):
         return {"value": True,
                 "reason": f"SERVICE_SCOPED owner={owner}: {why}"}
     return {"value": False, "reason": ""}
+
+
+# ── KURACJA: lifecycle z DOWODÓW (ACK Adrian 2026-07-10) ────────────────────────
+def _is_on(v):
+    """Wartość „aktywna": bool True, liczba ≠0, string niepusty/nie-'0'."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v not in ("", "0")
+    return False
+
+
+def _evidence_lifecycle(e):
+    """Reguły Adriana: dead=orphan (zachowaj z seeda); shadow=*_SHADOW/log-only;
+    live=wartość niedefaultowa w JAKIMKOLWIEK nośniku LUB nośnik ON; planned=OFF/default
+    wszędzie. current_snapshot = źródło dowodu (per-service dla 1b)."""
+    if e.get("lifecycle") == "dead":
+        return "dead"
+    if _SHADOW_NAME_RE.search(e["name"]):
+        return "shadow"
+    snap = e.get("current_snapshot", {})
+    default = e.get("default")
+    vals = list(snap.values())
+    if any(_is_on(v) for v in vals) or any(v != default for v in vals):
+        return "live"
+    return "planned"
+
+
+def _curated_review(e):
+    if e.get("intentional_per_process", {}).get("value"):
+        return "2026-08-10"
+    return REVIEW_BY_CLASS.get(e["lifecycle"], "2026-09-10")
+
+
+def _curated_removal(e):
+    if e.get("intentional_per_process", {}).get("value"):
+        return ("kandydat migracji 1b→flags.json za ACK; retire dopiero po migracji "
+                "(dziś celowy per-proces)")
+    return {
+        "live": "n/d dopóki live",
+        "shadow": "po werdykcie flip/reject + 2 dni obserwacji",
+        "planned": "jeśli nie wpięta do 2026-12 → retire (ACK Adrian)",
+        "deprecated": "retire zaplanowany (ACK Adrian)",
+        "dead": "retire po potwierdzeniu 0 czytelników (hygiene)",
+    }[e["lifecycle"]]
+
+
+def curate_registry(reg):
+    """Nadaje metadane wg polityki ACK Adrian: owner (biznes=Adrian), lifecycle z
+    dowodów, review_date/removal per klasa, curated_at, lifecycle_seeded=False,
+    notes gdzie heurystyka zmieniła klasę / niepewna. ZERO zmian wartości flag."""
+    changed_lc, per_lc = 0, {}
+    for name, e in reg["flags"].items():
+        old_lc = e.get("lifecycle")
+        e["lifecycle"] = _evidence_lifecycle(e)
+        e.setdefault("owner", {})
+        e["owner"]["business"] = "Adrian"
+        e["owner"].setdefault("service", "dispatch-shadow.service")
+        e["review_date"] = _curated_review(e)
+        e["removal_condition"] = _curated_removal(e)
+        e["curated_at"] = CURATED_AT
+        e["lifecycle_seeded"] = False
+        marks = []
+        if e["lifecycle"] != old_lc:
+            marks.append(f"kuracja lifecycle {old_lc}→{e['lifecycle']} (dowód: "
+                         f"current_snapshot vs default)")
+            changed_lc += 1
+        if e.get("intentional_per_process", {}).get("value") \
+                and "migracji 1b" not in e.get("notes", ""):
+            marks.append("kandydat migracji 1b za ACK (celowy per-proces)")
+        # numeryk == 0 wszędzie: „planned" bywa niepewne (parametr aktywny przy 0)
+        snap_vals = list(e.get("current_snapshot", {}).values())
+        if e["lifecycle"] == "planned" and snap_vals and \
+                all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                    for v in snap_vals):
+            marks.append("heurystyka niepewna: numeryk=0 (parametr może być aktywny)")
+        if marks:
+            base = e.get("notes", "")
+            e["notes"] = (base + " | " if base else "") + "; ".join(marks)
+        per_lc[e["lifecycle"]] = per_lc.get(e["lifecycle"], 0) + 1
+    reg["_meta"]["curated_at"] = CURATED_AT
+    reg["_meta"]["note"] = (
+        "stan flag = 3 światy (ADR-004); current_snapshot z żywych źródeł " + SEED_DATE
+        + "; lifecycle SKUROWANY z dowodów (curated_at) — ACK Adrian.")
+    return reg, {"lifecycle_changed": changed_lc, "per_lifecycle": per_lc}
+
+
+def merge_curation(fresh, old_flags):
+    """RE-SEED-PRESERVE: dla wpisów z `curated_at` w starym rejestrze zachowaj POLA
+    KURACJI (owner/lifecycle/review/removal/notes/…), a pola DERYWOWANE (snapshot/
+    carriers/consumers/default) bierz ze świeżego skanu. Bez tego kuracja umiera."""
+    preserved = 0
+    for name, e in fresh["flags"].items():
+        oe = old_flags.get(name)
+        if not oe:
+            continue
+        if oe.get("curated_at"):
+            for f in CURATION_FIELDS:
+                if f in oe:
+                    e[f] = oe[f]
+            preserved += 1
+        elif oe.get("notes") and not e.get("notes"):
+            e["notes"] = oe["notes"]  # zachowanie legacy (ręczne notatki)
+    return preserved
 
 
 def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
@@ -665,6 +784,14 @@ def dumps(reg) -> str:
     return json.dumps(reg, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
 
 
+def _curated_count(path):
+    try:
+        return sum(1 for e in json.load(open(path, encoding="utf-8"))["flags"].values()
+                   if e.get("curated_at"))
+    except Exception:
+        return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=DEF_OUT)
@@ -674,19 +801,39 @@ def main() -> int:
     ap.add_argument("--courier-dir", default=DEF_COURIER_DIR)
     ap.add_argument("--panelsync-dir", default=DEF_PANELSYNC_DIR)
     ap.add_argument("--merge", action="store_true",
-                    help="zachowaj ręczne `notes` z istniejącego rejestru")
+                    help="RE-SEED: zachowaj pola kuracji (curated_at) + ręczne notes")
+    ap.add_argument("--curate", action="store_true",
+                    help="zastosuj politykę kuracji do istniejącego rejestru (bez re-skanu)")
     args = ap.parse_args()
+
+    # ── tryb KURACJI: transform metadanych na istniejącym rejestrze, ZERO re-skanu ──
+    if args.curate:
+        if not os.path.isfile(args.out):
+            print(f"BŁĄD: brak rejestru {args.out} do kuracji", file=sys.stderr)
+            return 2
+        reg = json.load(open(args.out, encoding="utf-8"))
+        reg, stats = curate_registry(reg)
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(dumps(reg))
+        print(f"KURACJA → {args.out}")
+        print(f"  wpisów: {len(reg['flags'])} (curated_at={CURATED_AT}, lifecycle_seeded=False)")
+        print(f"  lifecycle zmienione vs seed: {stats['lifecycle_changed']}")
+        print(f"  rozkład lifecycle: {stats['per_lifecycle']}")
+        return 0
+
     reg = build_registry(args.flags_json, args.systemd_dir, args.panel_dir,
                          args.courier_dir, args.panelsync_dir)
+    preserved = 0
+    curated_existing = _curated_count(args.out)
     if args.merge and os.path.isfile(args.out):
         try:
             old = json.load(open(args.out, encoding="utf-8")).get("flags", {})
-            for name, e in reg["flags"].items():
-                on = old.get(name, {})
-                if on.get("notes") and not e.get("notes"):
-                    e["notes"] = on["notes"]
-        except Exception:
-            pass
+            preserved = merge_curation(reg, old)
+        except Exception as ex:
+            print(f"  MERGE ostrzeżenie: {ex}", file=sys.stderr)
+    elif curated_existing and not args.merge:
+        print(f"⚠ UWAGA: rejestr ma {curated_existing} SKUROWANYCH wpisów; seed bez "
+              f"--merge je NADPISZE. Użyj --merge, by zachować kurację.", file=sys.stderr)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(dumps(reg))
     m = reg["_meta"]["counts"]
@@ -698,6 +845,8 @@ def main() -> int:
           f"TEST_ISO={m['test_isolated']} 1b-units={m['engine_1b_units']}")
     print(f"  twins-konceptów={m['twins_concepts']} known_drift={m['known_drift']}")
     print(f"  sekrety odrzucone: {reg['_meta']['secret_lines_rejected']}")
+    if args.merge:
+        print(f"  MERGE: zachowano pola kuracji dla {preserved} wpisów")
     return 0
 
 
