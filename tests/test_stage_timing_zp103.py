@@ -178,6 +178,11 @@ def test_assess_wrapper_attaches_timing_after_decision(monkeypatch):
         return result
 
     monkeypatch.setattr(DP, "_assess_order_impl", fake_impl)
+    monkeypatch.setattr(
+        DP.C, "flag",
+        lambda name, default=False: (
+            True if name == "ENABLE_STAGE_TIMING_OBSERVATION" else default),
+    )
     monkeypatch.setattr(DP._EB, "begin", lambda: False)
     monkeypatch.setattr(DP, "_eta_fabrication_check", lambda *_a, **_kw: None)
     monkeypatch.setattr(DP, "_attach_final_rule_verdict", lambda *_a, **_kw: None)
@@ -192,6 +197,11 @@ def test_assess_timing_attach_failure_never_changes_ready_decision(monkeypatch):
     result = _result(None, [])
     result.verdict = "SKIP"
     monkeypatch.setattr(DP, "_assess_order_impl", lambda *_a, **_kw: result)
+    monkeypatch.setattr(
+        DP.C, "flag",
+        lambda name, default=False: (
+            True if name == "ENABLE_STAGE_TIMING_OBSERVATION" else default),
+    )
     monkeypatch.setattr(DP._EB, "begin", lambda: False)
     monkeypatch.setattr(DP, "_eta_fabrication_check", lambda *_a, **_kw: None)
     monkeypatch.setattr(DP, "_attach_final_rule_verdict", lambda *_a, **_kw: None)
@@ -204,6 +214,67 @@ def test_assess_timing_attach_failure_never_changes_ready_decision(monkeypatch):
     assert out is result
     assert out.verdict == "SKIP"
     assert out.stage_timing is None
+
+
+def test_assess_kill_switch_off_has_legacy_shape_and_no_collector(monkeypatch):
+    result = _result(None, [])
+    result.verdict = "SKIP"
+    seen = {}
+
+    def fake_impl(*_args, **kwargs):
+        seen["trace"] = kwargs.get("_timing_trace")
+        return result
+
+    class ForbiddenTrace:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("OFF must not construct DecisionTrace")
+
+    monkeypatch.setattr(DP, "_assess_order_impl", fake_impl)
+    monkeypatch.setattr(DP.C, "flag", lambda *_a, **_kw: False)
+    monkeypatch.setattr(DP._EB, "begin", lambda: False)
+    monkeypatch.setattr(DP, "_eta_fabrication_check", lambda *_a, **_kw: None)
+    monkeypatch.setattr(DP, "_attach_final_rule_verdict", lambda *_a, **_kw: None)
+    monkeypatch.setattr(ST, "DecisionTrace", ForbiddenTrace)
+
+    out = DP.assess_order(
+        {"order_id": "o1"}, {}, now=datetime.now(timezone.utc))
+
+    assert out is result and out.verdict == "SKIP"
+    assert seen["trace"] is None
+    assert out.stage_timing is None
+    assert "timing" not in SD._serialize_result(out, "evt", 1.0)
+
+
+def test_assess_kill_switch_hot_on_to_off_is_snapshotted_per_call(monkeypatch):
+    enabled = iter((True, False))
+    flag_reads = []
+    traces = []
+
+    def fake_flag(name, default=False):
+        if name == "ENABLE_STAGE_TIMING_OBSERVATION":
+            flag_reads.append(name)
+            return next(enabled)
+        return default
+
+    def fake_impl(*_args, **kwargs):
+        traces.append(kwargs.get("_timing_trace"))
+        result = _result(None, [])
+        result.verdict = "SKIP"
+        return result
+
+    monkeypatch.setattr(DP.C, "flag", fake_flag)
+    monkeypatch.setattr(DP, "_assess_order_impl", fake_impl)
+    monkeypatch.setattr(DP._EB, "begin", lambda: False)
+    monkeypatch.setattr(DP, "_eta_fabrication_check", lambda *_a, **_kw: None)
+    monkeypatch.setattr(DP, "_attach_final_rule_verdict", lambda *_a, **_kw: None)
+
+    on = DP.assess_order({"order_id": "on"}, {})
+    off = DP.assess_order({"order_id": "off"}, {})
+
+    assert len(flag_reads) == 2
+    assert isinstance(traces[0], ST.DecisionTrace) and traces[1] is None
+    assert on.stage_timing["schema"] == ST.SCHEMA
+    assert off.stage_timing is None
 
 
 def test_real_route_simulator_records_solver_work(monkeypatch):
@@ -275,38 +346,60 @@ def test_sidecar_path_is_unique_for_shadow_ledger(tmp_path):
     assert ST.sidecar_path(shadow) == tmp_path / "shadow_decisions.stage_timings.jsonl"
 
 
-def _wire_tick(monkeypatch, tmp_path, *, sidecar_fail=False):
+def _wire_tick(monkeypatch, tmp_path, *, sidecar_fail=False,
+               stage_enabled=True, depth_calls=None, stage_flag_reads=None,
+               suffix=""):
     created = datetime.now(timezone.utc).isoformat()
     events = [
-        {"event_id": f"e{i}", "order_id": f"o{i}", "created_at": created,
+        {"event_id": f"e{suffix}{i}", "order_id": f"o{suffix}{i}",
+         "created_at": created,
          "payload": {"pickup_coords": [53.13, 23.16],
                      "delivery_coords": [53.14, 23.17]}}
         for i in (1, 2)
     ]
     acked = []
     monkeypatch.setattr(SD.event_bus, "get_pending", lambda **_kw: list(events))
-    monkeypatch.setattr(SD.event_bus, "get_pending_count", lambda **_kw: 7)
+    def pending_count(**_kw):
+        if depth_calls is not None:
+            depth_calls.append(True)
+        return 7
+
+    monkeypatch.setattr(SD.event_bus, "get_pending_count", pending_count)
     monkeypatch.setattr(SD.event_bus, "mark_processed",
                         lambda eid: acked.append(eid) or True)
     monkeypatch.setattr(SD, "dispatchable_fleet", lambda: [])
     monkeypatch.setattr(SD.state_machine, "get_all", lambda: {})
     monkeypatch.setattr(
         SD, "process_event",
-        lambda *_a, **_kw: types.SimpleNamespace(verdict="PROPOSE", best=None))
+        lambda *_a, **_kw: types.SimpleNamespace(
+            verdict="PROPOSE", best=None,
+            stage_timing=(
+                {"schema": ST.SCHEMA, "assess_wall_ms": 1.0}
+                if stage_enabled else None)),
+    )
     monkeypatch.setattr(SD, "_probe_same_restaurant_race", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         SD, "_serialize_result",
         lambda _result, eid, latency_ms: {
-            "event_id": eid, "verdict": "PROPOSE", "best": None,
-            "latency_ms": round(latency_ms, 1),
-            "timing": {"schema": ST.SCHEMA, "assess_wall_ms": 1.0},
+            **{"event_id": eid, "verdict": "PROPOSE", "best": None,
+               "latency_ms": round(latency_ms, 1)},
+            **({"timing": _result.stage_timing}
+               if isinstance(_result.stage_timing, dict) else {}),
         })
-    monkeypatch.setattr(SD.C, "flag", lambda *_a, **_kw: False)
+
+    def flag(name, default=False):
+        if name == "ENABLE_STAGE_TIMING_OBSERVATION":
+            if stage_flag_reads is not None:
+                stage_flag_reads.append(True)
+            return stage_enabled
+        return False
+
+    monkeypatch.setattr(SD.C, "flag", flag)
     monkeypatch.setattr(SD.C, "decision_flag", lambda *_a, **_kw: False)
     monkeypatch.setattr(SD.C, "ENABLE_PENDING_POOL", False, raising=False)
     if sidecar_fail:
         monkeypatch.setattr(SD._ST, "append_sidecar_rows", lambda *_a, **_kw: 0)
-    shadow = tmp_path / "shadow_decisions.jsonl"
+    shadow = tmp_path / f"shadow_decisions{suffix}.jsonl"
     stats = SD._tick(str(shadow), None)
     return stats, shadow, acked
 
@@ -359,6 +452,11 @@ def test_tick_open_precedes_fleet_snapshot_failure(tmp_path, monkeypatch):
     }])
     monkeypatch.setattr(SD.event_bus, "get_pending_count", lambda **_kw: 1)
     monkeypatch.setattr(
+        SD.C, "flag",
+        lambda name, default=False: (
+            True if name == "ENABLE_STAGE_TIMING_OBSERVATION" else default),
+    )
+    monkeypatch.setattr(
         SD, "dispatchable_fleet",
         lambda: (_ for _ in ()).throw(RuntimeError("fleet unavailable")))
     shadow = tmp_path / "shadow_decisions.jsonl"
@@ -379,3 +477,37 @@ def test_tick_sidecar_failure_does_not_change_decision_or_ack(tmp_path, monkeypa
     assert acked == ["e1", "e2"]
     assert len(shadow.read_text().splitlines()) == 2
     assert not ST.sidecar_path(shadow).exists()
+
+
+def test_tick_kill_switch_hot_on_to_off_has_off_parity(tmp_path, monkeypatch):
+    on_depth_calls = []
+    on_flag_reads = []
+    _, shadow_on, _ = _wire_tick(
+        monkeypatch, tmp_path, stage_enabled=True,
+        depth_calls=on_depth_calls, stage_flag_reads=on_flag_reads,
+        suffix="_on")
+    assert len(on_flag_reads) == 1
+    assert len(on_depth_calls) == 1
+    assert ST.sidecar_path(shadow_on).exists()
+    assert all(
+        "timing" in row and "event_ref" in row and "queue_timing" in row
+        for row in map(json.loads, shadow_on.read_text().splitlines())
+    )
+
+    off_depth_calls = []
+    off_flag_reads = []
+    stats, shadow_off, acked = _wire_tick(
+        monkeypatch, tmp_path, stage_enabled=False,
+        depth_calls=off_depth_calls, stage_flag_reads=off_flag_reads,
+        suffix="_off")
+    assert len(off_flag_reads) == 1
+    assert stats == {"processed": 2, "failed": 0, "skipped": 0}
+    assert acked == ["e_off1", "e_off2"]
+    assert off_depth_calls == []
+    assert not ST.sidecar_path(shadow_off).exists()
+    off_rows = [json.loads(line) for line in shadow_off.read_text().splitlines()]
+    assert all(
+        not ({"timing", "event_ref", "queue_timing", "queue_tick_timing"}
+             & row.keys())
+        for row in off_rows
+    )

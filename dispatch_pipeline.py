@@ -3956,17 +3956,22 @@ def assess_order(
     if decision_now.tzinfo is None:
         decision_now = decision_now.replace(tzinfo=timezone.utc)
 
-    # Z-P1-03: osobny monotoniczny zegar obserwacyjny. Nie zastępuje wall-clock
-    # decyzji ani legacy latency_ms w shadow_dispatcher.
-    _timing = _ST.DecisionTrace()
-    _assess_started = _timing.now_ns()
+    # Z-P1-03: snapshot raz na samodzielne assess albo dziedziczony raz z ticka.
+    # Default OFF oznacza brak collectora i brak wiazania workerow/OSRM/solvera.
+    _timing_override = _ST.observation_override()
+    _stage_timing_on = (
+        bool(C.flag("ENABLE_STAGE_TIMING_OBSERVATION", False))
+        if _timing_override is None else bool(_timing_override)
+    )
+    _timing = _ST.DecisionTrace() if _stage_timing_on else None
+    _assess_started = _timing.now_ns() if _timing is not None else None
 
     # K08 refaktoru (ADR-R02): efekty uboczne decyzji (shadow-jsonle, zapis stanu
     # loadgov, alert Telegram) buforowane i wykonywane PO impl — flush w finally
     # (przy wyjątku zbuforowane efekty wykonują się jak w legacy, gdzie zapis
     # zdążył się wydarzyć przed crashem). Gate w begin(); OFF = bajt-parytet 1:1.
     _eb_on = _EB.begin()
-    _impl_started = _timing.now_ns()
+    _impl_started = _timing.now_ns() if _timing is not None else None
     try:
         result = _assess_order_impl(
             order_event, fleet_snapshot, restaurant_meta, decision_now,
@@ -3975,14 +3980,19 @@ def assess_order(
             _timing_trace=_timing,
         )
     finally:
-        _timing.record_since("impl_wall_ms", _impl_started)
+        if _timing is not None:
+            _timing.record_since("impl_wall_ms", _impl_started)
         if _eb_on:
-            _effects_started = _timing.now_ns()
+            _effects_started = (
+                _timing.now_ns() if _timing is not None else None)
             try:
                 _EB.flush()
             finally:
-                _timing.record_since("effects_flush_wall_ms", _effects_started)
-    _post_hooks_started = _timing.now_ns()
+                if _timing is not None:
+                    _timing.record_since(
+                        "effects_flush_wall_ms", _effects_started)
+    _post_hooks_started = (
+        _timing.now_ns() if _timing is not None else None)
     # MP-#13 (2026-05-08): L3 — snapshot OSRM degraded state at assess time.
     # Caller (shadow_dispatcher serializer + telegram_approver format_proposal) reads.
     # Defensive: NIGDY raise (osrm_client import-fail unlikely ale fallback safe).
@@ -4046,21 +4056,23 @@ def assess_order(
                 result, f"OUTER_FALLBACK:{type(_fw_outer_exc).__name__}")
         except Exception:
             pass
-    _timing.record_since("post_hooks_wall_ms", _post_hooks_started)
-    _timing.record_since("assess_wall_ms", _assess_started)
+    if _timing is not None:
+        _timing.record_since("post_hooks_wall_ms", _post_hooks_started)
+        _timing.record_since("assess_wall_ms", _assess_started)
     # Attach dopiero PO wszystkich bramkach/firewallu. candidate_timing trafia do
     # metrics po selekcji, więc nie może zmienić rankingu ani werdyktu.
-    try:
-        _timing.attach(result)
-    except Exception as _timing_exc:  # obserwacja nigdy nie zmienia decyzji
+    if _timing is not None:
         try:
-            result.stage_timing = None
-        except Exception:
-            pass
-        log.warning(
-            "stage_timing attach fail-soft: %s: %s",
-            type(_timing_exc).__name__, _timing_exc,
-        )
+            _timing.attach(result)
+        except Exception as _timing_exc:  # obserwacja nigdy nie zmienia decyzji
+            try:
+                result.stage_timing = None
+            except Exception:
+                pass
+            log.warning(
+                "stage_timing attach fail-soft: %s: %s",
+                type(_timing_exc).__name__, _timing_exc,
+            )
     return result
 
 

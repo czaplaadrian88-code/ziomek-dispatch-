@@ -33,6 +33,8 @@ _TRACE: ContextVar[Optional["DecisionTrace"]] = ContextVar(
     "ziomek_stage_timing_trace", default=None)
 _CANDIDATE: ContextVar[Optional[str]] = ContextVar(
     "ziomek_stage_timing_candidate", default=None)
+_OBSERVATION_OVERRIDE: ContextVar[Optional[bool]] = ContextVar(
+    "ziomek_stage_timing_observation_override", default=None)
 
 _PIPELINE_PARTS = (
     "prepare_wall_ms",
@@ -267,11 +269,31 @@ class DecisionTrace:
 
 
 def current_trace() -> Optional[DecisionTrace]:
+    # Tick moze zamrozic kill-switch na OFF dla calego batcha. Wtedy nawet
+    # przypadkowo odziedziczony trace nie moze reaktywowac glebszych szwow
+    # OSRM/solver. Workery dostaja trace jawnie przez candidate_scope.
+    if _OBSERVATION_OVERRIDE.get() is False:
+        return None
     return _TRACE.get()
 
 
 def current_candidate_id() -> Optional[str]:
     return _CANDIDATE.get()
+
+
+def observation_override() -> Optional[bool]:
+    """Snapshot wlasciciela scope; ``None`` oznacza samodzielny odczyt flagi."""
+    return _OBSERVATION_OVERRIDE.get()
+
+
+@contextmanager
+def observation_scope(enabled: bool) -> Iterator[None]:
+    """Zamroz stan obserwacji dla calego ticka i wywolan assess w nim."""
+    token = _OBSERVATION_OVERRIDE.set(bool(enabled))
+    try:
+        yield
+    finally:
+        _OBSERVATION_OVERRIDE.reset(token)
 
 
 @contextmanager

@@ -942,9 +942,6 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             if result.pickup_ready_at else None
         ),
         "latency_ms": round(latency_ms, 1),
-        # Z-P1-03 Faza A: pelny timing assess/fanout/work. Wartosci outer
-        # serialize/write/ACK sa domykane w sidecarze po faktycznym appendzie.
-        "timing": getattr(result, "stage_timing", None),
         # Sprint-1 2026-04-30 (logging extension): pool size scalars dla
         # counterfactual pairwise analysis. pool_total = pre-feasibility,
         # pool_feasible = post-feasibility (MAYBE) candidates count.
@@ -996,6 +993,11 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         "loadaware_shadow": getattr(result, "loadaware_shadow", None),
         # r6_breach_guard_shadow RETIRED 2026-06-11 (Adrian: duplikat R6, wytnij).
     }
+    # Z-P1-03: OFF ma dokladnie legacy ksztalt rekordu (bez ``timing: null``).
+    # Gdy collector jest ON, outer serialize/write/ACK domyka prywatny sidecar.
+    _stage_timing = getattr(result, "stage_timing", None)
+    if isinstance(_stage_timing, dict):
+        out["timing"] = _stage_timing
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)
     return out
@@ -1261,78 +1263,96 @@ def _sanitize_payload_coords(payload: dict, oid) -> bool:
 
 
 def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
+    """Snapshot kill-switcha raz na tick, lacznie z wywolaniami assess."""
+    _stage_timing_on = bool(C.flag("ENABLE_STAGE_TIMING_OBSERVATION", False))
+    with _ST.observation_scope(_stage_timing_on):
+        return _tick_impl(
+            shadow_log_path, meta, _stage_timing_on=_stage_timing_on)
+
+
+def _tick_impl(shadow_log_path: str, meta: Optional[dict], *,
+               _stage_timing_on: bool) -> dict:
     """One poll cycle. Returns {processed, failed, skipped}."""
     stats = {"processed": 0, "failed": 0, "skipped": 0}
-    _poll_started_ns = time.perf_counter_ns()
+    _poll_started_ns = (
+        time.perf_counter_ns() if _stage_timing_on else None)
     events = event_bus.get_pending(limit=POLL_BATCH_SIZE, event_types=["NEW_ORDER"])
-    _poll_wall_ms = (time.perf_counter_ns() - _poll_started_ns) / 1_000_000.0
+    _poll_wall_ms = (
+        (time.perf_counter_ns() - _poll_started_ns) / 1_000_000.0
+        if _stage_timing_on else None)
     if not events:
         return stats
 
-    _tick_ref = _ST.new_tick_ref()
-    _stage_path = _ST.sidecar_path(shadow_log_path)
-    # Minimalny marker musi powstac PRZED depth/fleet/state: hang albo wyjatek
-    # w jednym z obserwowanych etapow ma zostawic jawnie niedomkniety tick.
-    # Zapis jest fail-soft i nie uczestniczy w decyzji.
-    _ST.append_sidecar_rows(_stage_path, [{
-        "schema": _ST.SIDECAR_SCHEMA,
-        "scope": "tick",
-        "phase": "open",
-        "ts": now_iso(),
-        "tick_ref": _tick_ref,
-        "queue": {
-            "batch_size": len(events),
-            "poll_wall_ms": round(_poll_wall_ms, 3),
-        },
-    }])
+    if _stage_timing_on:
+        _tick_ref = _ST.new_tick_ref()
+        _stage_path = _ST.sidecar_path(shadow_log_path)
+        # Marker przed depth/fleet/state ujawnia niedomkniety tick po awarii.
+        _ST.append_sidecar_rows(_stage_path, [{
+            "schema": _ST.SIDECAR_SCHEMA,
+            "scope": "tick",
+            "phase": "open",
+            "ts": now_iso(),
+            "tick_ref": _tick_ref,
+            "queue": {
+                "batch_size": len(events),
+                "poll_wall_ms": round(_poll_wall_ms, 3),
+            },
+        }])
 
-    # Z-P1-03: jedna probka prawdziwej kolejki na niepusty tick. Query jest
-    # osobne od get_pending, wiec jawnie nazywamy je sample (nie transakcja).
-    _queue_depth_started_ns = time.perf_counter_ns()
-    try:
-        _queue_depth_sample = event_bus.get_pending_count(event_types=["NEW_ORDER"])
-        _queue_depth_source = "query"
-    except Exception:
-        _queue_depth_sample = len(events)
-        _queue_depth_source = "batch_fallback"
-    _queue_depth_wall_ms = (
-        time.perf_counter_ns() - _queue_depth_started_ns) / 1_000_000.0
+        # Osobna probka nie jest transakcyjna wzgledem get_pending.
+        _queue_depth_started_ns = time.perf_counter_ns()
+        try:
+            _queue_depth_sample = event_bus.get_pending_count(
+                event_types=["NEW_ORDER"])
+            _queue_depth_source = "query"
+        except Exception:
+            _queue_depth_sample = len(events)
+            _queue_depth_source = "batch_fallback"
+        _queue_depth_wall_ms = (
+            time.perf_counter_ns() - _queue_depth_started_ns) / 1_000_000.0
 
-    _fleet_started_ns = time.perf_counter_ns()
+    _fleet_started_ns = (
+        time.perf_counter_ns() if _stage_timing_on else None)
     fleet = {cs.courier_id: cs for cs in dispatchable_fleet()}
-    _fleet_wall_ms = (time.perf_counter_ns() - _fleet_started_ns) / 1_000_000.0
+    _fleet_wall_ms = (
+        (time.perf_counter_ns() - _fleet_started_ns) / 1_000_000.0
+        if _stage_timing_on else None)
 
-    _state_started_ns = time.perf_counter_ns()
+    _state_started_ns = (
+        time.perf_counter_ns() if _stage_timing_on else None)
     state_all = state_machine.get_all()
-    _state_wall_ms = (time.perf_counter_ns() - _state_started_ns) / 1_000_000.0
-    _batch_ready_ns = time.perf_counter_ns()
-    _batch_wall_now = datetime.now(timezone.utc)
-    _batch_ages = [
-        _ST.event_age_ms(_ev.get("created_at"), _batch_wall_now)
-        for _ev in events
-    ]
-    _valid_batch_ages = [
-        _age for _age, _skew in _batch_ages
-        if _age is not None and not _skew
-    ]
-    _oldest_age_ms = max(_valid_batch_ages, default=None)
-    _oldest_skew = any(_skew for _age, _skew in _batch_ages if _age is not None)
-    _tick_queue = {
-        "depth_sample": _queue_depth_sample,
-        "depth_sample_source": _queue_depth_source,
-        # Osobny SELECT po get_pending nie jest atomowym dequeue.
-        "depth_sample_atomic": False,
-        "queue_depth_query_wall_ms": round(_queue_depth_wall_ms, 3),
-        "batch_size": len(events),
-        "oldest_event_age_ms": _oldest_age_ms,
-        "oldest_event_clock_skew": _oldest_skew,
-        "poll_wall_ms": round(_poll_wall_ms, 3),
-        "fleet_snapshot_ms": round(_fleet_wall_ms, 3),
-        "state_snapshot_ms": round(_state_wall_ms, 3),
-        "fleet_scope": "tick_shared",
-    }
-    _timing_rows: list[dict] = []
-    _tick_snapshot_logged = False
+    _state_wall_ms = (
+        (time.perf_counter_ns() - _state_started_ns) / 1_000_000.0
+        if _stage_timing_on else None)
+    if _stage_timing_on:
+        _batch_ready_ns = time.perf_counter_ns()
+        _batch_wall_now = datetime.now(timezone.utc)
+        _batch_ages = [
+            _ST.event_age_ms(_ev.get("created_at"), _batch_wall_now)
+            for _ev in events
+        ]
+        _valid_batch_ages = [
+            _age for _age, _skew in _batch_ages
+            if _age is not None and not _skew
+        ]
+        _oldest_age_ms = max(_valid_batch_ages, default=None)
+        _oldest_skew = any(
+            _skew for _age, _skew in _batch_ages if _age is not None)
+        _tick_queue = {
+            "depth_sample": _queue_depth_sample,
+            "depth_sample_source": _queue_depth_source,
+            "depth_sample_atomic": False,
+            "queue_depth_query_wall_ms": round(_queue_depth_wall_ms, 3),
+            "batch_size": len(events),
+            "oldest_event_age_ms": _oldest_age_ms,
+            "oldest_event_clock_skew": _oldest_skew,
+            "poll_wall_ms": round(_poll_wall_ms, 3),
+            "fleet_snapshot_ms": round(_fleet_wall_ms, 3),
+            "state_snapshot_ms": round(_state_wall_ms, 3),
+            "fleet_scope": "tick_shared",
+        }
+        _timing_rows: list[dict] = []
+        _tick_snapshot_logged = False
     TERMINAL = ("delivered", "cancelled", "returned_to_pool", "picked_up")
 
     # B2 (tekst↔pin): shadow-detektor rozjazdu napisanego adresu dostawy vs współrzędne,
@@ -1360,14 +1380,16 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
 
     for _batch_index, ev in enumerate(events):
         eid = ev["event_id"]
-        _event_ref = _ST.event_ref(eid)
+        _event_ref = _ST.event_ref(eid) if _stage_timing_on else None
         oid = ev.get("order_id")
         t0 = time.time()
-        _event_started_ns = time.perf_counter_ns()
-        _event_wall_now = datetime.now(timezone.utc)
-        _event_age_ms, _event_clock_skew = _ST.event_age_ms(
-            ev.get("created_at"), _event_wall_now)
-        _batch_wait_ms = (_event_started_ns - _batch_ready_ns) / 1_000_000.0
+        if _stage_timing_on:
+            _event_started_ns = time.perf_counter_ns()
+            _event_wall_now = datetime.now(timezone.utc)
+            _event_age_ms, _event_clock_skew = _ST.event_age_ms(
+                ev.get("created_at"), _event_wall_now)
+            _batch_wait_ms = (
+                _event_started_ns - _batch_ready_ns) / 1_000_000.0
         # Race-condition guard: order mógł zostać anulowany / dostarczony / już
         # przypisany między emit NEW_ORDER a teraz. Jeśli state_machine zna
         # aktualny stan i jest terminalny — skip bez tworzenia propozycji.
@@ -1425,11 +1447,13 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             # IDENTYCZNA (impl i tak wiąże jeden now na całą decyzję w swoim
             # defaultcie), ale zegar staje się NAGRYWALNY w world_record (bez
             # tego rekordy miały now=null → replay bit-w-bit niemożliwy).
-            _process_started_ns = time.perf_counter_ns()
+            _process_started_ns = (
+                time.perf_counter_ns() if _stage_timing_on else None)
             result = process_event(ev, fleet, meta, now=datetime.now(timezone.utc))
-            _process_ended_ns = time.perf_counter_ns()
-            _process_wall_ms = (
-                _process_ended_ns - _process_started_ns) / 1_000_000.0
+            if _stage_timing_on:
+                _process_ended_ns = time.perf_counter_ns()
+                _process_wall_ms = (
+                    _process_ended_ns - _process_started_ns) / 1_000_000.0
 
             # SHADOW probe (2026-05-29) — race Baanko-type same-restaurant.
             # Logging-only, flag-gated, try/except wewnątrz — NIGDY nie wywróci
@@ -1478,60 +1502,58 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
                 except Exception as _pp_e:
                     _log.warning(f"pending_pool upsert fail order={oid}: {_pp_e}")
 
-            _legacy_ended_ns = time.perf_counter_ns()
             latency_ms = (time.time() - t0) * 1000.0
-            _legacy_perf_ms = (
-                _legacy_ended_ns - _event_started_ns) / 1_000_000.0
-            _pre_process_ms = (
-                _process_started_ns - _event_started_ns) / 1_000_000.0
-            _post_process_ms = (
-                _legacy_ended_ns - _process_ended_ns) / 1_000_000.0
-            _record_build_started_ns = time.perf_counter_ns()
+            if _stage_timing_on:
+                _legacy_ended_ns = time.perf_counter_ns()
+                _legacy_perf_ms = (
+                    _legacy_ended_ns - _event_started_ns) / 1_000_000.0
+                _pre_process_ms = (
+                    _process_started_ns - _event_started_ns) / 1_000_000.0
+                _post_process_ms = (
+                    _legacy_ended_ns - _process_ended_ns) / 1_000_000.0
+                _record_build_started_ns = time.perf_counter_ns()
             record = _serialize_result(result, eid, latency_ms)
-            # Pseudonimowy klucz laczy glowny ledger z prywatnym sidecarem bez
-            # kopiowania surowego event/order ID do drugiego pliku.
-            record["event_ref"] = _event_ref
-            if not isinstance(record.get("timing"), dict):
-                record["timing"] = {
-                    "schema": _ST.SCHEMA, "clock": "perf_counter_ns"}
-            _decision_timing = record["timing"]
-            _legacy_parts_ms = _pre_process_ms + _process_wall_ms + _post_process_ms
-            _decision_timing.update({
-                "legacy_latency_ms": round(float(latency_ms), 3),
-                "legacy_perf_wall_ms": round(_legacy_perf_ms, 3),
-                "legacy_pre_process_ms": round(_pre_process_ms, 3),
-                "legacy_process_event_ms": round(_process_wall_ms, 3),
-                "legacy_post_process_ms": round(_post_process_ms, 3),
-                "legacy_parts_sum_ms": round(_legacy_parts_ms, 3),
-                "legacy_unattributed_ms": round(
-                    _legacy_perf_ms - _legacy_parts_ms, 3),
-            })
-            _queue_timing = {
-                "tick_ref": _tick_ref,
-                "event_age_at_start_ms": _event_age_ms,
-                "event_clock_skew": _event_clock_skew,
-                "batch_index": _batch_index,
-                "batch_wait_ms": round(_batch_wait_ms, 3),
-                # first_seen powstaje PO detail-fetch/geokodzie, wiec nie jest
-                # kotwica poczatku panel ingress. Nie fabrykujemy tego etapu;
-                # panel_watcher pozostaje N-D z powodu zakresu sesji 54.
-                "panel_ingress_ms": None,
-                "panel_ingress_missing_reason": "no_pre_fetch_anchor",
-            }
-            record["queue_timing"] = _queue_timing
-            # Kanoniczny ledger dostaje wspolna probke dokladnie RAZ na tick;
-            # kolejne decyzje lacza sie przez tick_ref, bez wazenia fleet/depth
-            # liczba zdarzen w batchu.
-            _attach_tick_snapshot = not _tick_snapshot_logged
-            if _attach_tick_snapshot:
-                record["queue_tick_timing"] = {
+            if _stage_timing_on:
+                # Pseudonimowy join, bez surowego event/order ID w sidecarze.
+                record["event_ref"] = _event_ref
+                if not isinstance(record.get("timing"), dict):
+                    record["timing"] = {
+                        "schema": _ST.SCHEMA, "clock": "perf_counter_ns"}
+                _decision_timing = record["timing"]
+                _legacy_parts_ms = (
+                    _pre_process_ms + _process_wall_ms + _post_process_ms)
+                _decision_timing.update({
+                    "legacy_latency_ms": round(float(latency_ms), 3),
+                    "legacy_perf_wall_ms": round(_legacy_perf_ms, 3),
+                    "legacy_pre_process_ms": round(_pre_process_ms, 3),
+                    "legacy_process_event_ms": round(_process_wall_ms, 3),
+                    "legacy_post_process_ms": round(_post_process_ms, 3),
+                    "legacy_parts_sum_ms": round(_legacy_parts_ms, 3),
+                    "legacy_unattributed_ms": round(
+                        _legacy_perf_ms - _legacy_parts_ms, 3),
+                })
+                _queue_timing = {
                     "tick_ref": _tick_ref,
-                    **_tick_queue,
+                    "event_age_at_start_ms": _event_age_ms,
+                    "event_clock_skew": _event_clock_skew,
+                    "batch_index": _batch_index,
+                    "batch_wait_ms": round(_batch_wait_ms, 3),
+                    "panel_ingress_ms": None,
+                    "panel_ingress_missing_reason": "no_pre_fetch_anchor",
                 }
-            _record_build_ms = (
-                time.perf_counter_ns() - _record_build_started_ns) / 1_000_000.0
-            _decision_timing["record_build_ms"] = round(_record_build_ms, 3)
-            _preledger_started_ns = time.perf_counter_ns()
+                record["queue_timing"] = _queue_timing
+                _attach_tick_snapshot = not _tick_snapshot_logged
+                if _attach_tick_snapshot:
+                    record["queue_tick_timing"] = {
+                        "tick_ref": _tick_ref,
+                        **_tick_queue,
+                    }
+                _record_build_ms = (
+                    time.perf_counter_ns() - _record_build_started_ns
+                ) / 1_000_000.0
+                _decision_timing["record_build_ms"] = round(
+                    _record_build_ms, 3)
+                _preledger_started_ns = time.perf_counter_ns()
             if _claim_applied:
                 # L6.C3: marker mierzalności (ETAP 4 — grep -c claim_ledger_applied
                 # na świeżym oknie po flipie); top-level jak pickup_at_warsaw.
@@ -1646,21 +1668,24 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             except Exception as _k2_e:
                 _log.warning(f"fail03_k2_shadow fail oid={oid}: {_k2_e}")
 
-            _preledger_ended_ns = time.perf_counter_ns()
-            _preledger_effects_ms = (
-                _preledger_ended_ns - _preledger_started_ns) / 1_000_000.0
-            _decision_timing["preledger_effects_ms"] = round(
-                _preledger_effects_ms, 3)
-            _ledger_append_started_ns = time.perf_counter_ns()
+            if _stage_timing_on:
+                _preledger_ended_ns = time.perf_counter_ns()
+                _preledger_effects_ms = (
+                    _preledger_ended_ns - _preledger_started_ns
+                ) / 1_000_000.0
+                _decision_timing["preledger_effects_ms"] = round(
+                    _preledger_effects_ms, 3)
+                _ledger_append_started_ns = time.perf_counter_ns()
             _append_decision(shadow_log_path, record)
-            if _attach_tick_snapshot:
-                _tick_snapshot_logged = True
-            _ledger_append_ended_ns = time.perf_counter_ns()
-            _ledger_append_ms = (
-                _ledger_append_ended_ns - _ledger_append_started_ns) / 1_000_000.0
-            # Czas faktycznego appendu NIE moze trafic do wlasnie zapisanej linii.
-            # Zostanie dolaczony po ACK do sidecara joinowanego przez event_ref.
-            _postledger_started_ns = _ledger_append_ended_ns
+            if _stage_timing_on:
+                if _attach_tick_snapshot:
+                    _tick_snapshot_logged = True
+                _ledger_append_ended_ns = time.perf_counter_ns()
+                _ledger_append_ms = (
+                    _ledger_append_ended_ns - _ledger_append_started_ns
+                ) / 1_000_000.0
+                # Append duration istnieje dopiero w post-append sidecarze.
+                _postledger_started_ns = _ledger_append_ended_ns
 
             # Opcja B: zbierz PROPOSE do pending_proposals (zapis po pętli, atomowo)
             if _pp_write and record.get("verdict") == "PROPOSE" and oid is not None:
@@ -1678,41 +1703,48 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
             except Exception as _aa_e:
                 _log.warning(f"auto_assign executor hook fail oid={oid}: {_aa_e}")
 
-            _postledger_ended_ns = time.perf_counter_ns()
-            _postledger_effects_ms = (
-                _postledger_ended_ns - _postledger_started_ns) / 1_000_000.0
-            _ack_started_ns = time.perf_counter_ns()
-            _ack_ok = event_bus.mark_processed(eid)
-            _ack_ended_ns = time.perf_counter_ns()
-            _ack_ms = (_ack_ended_ns - _ack_started_ns) / 1_000_000.0
-            _service_ms = (
-                _ack_ended_ns - _event_started_ns) / 1_000_000.0
-            _service_parts_ms = (
-                _legacy_perf_ms + _record_build_ms + _preledger_effects_ms
-                + _ledger_append_ms + _postledger_effects_ms + _ack_ms)
-            _event_e2e_ms = (
-                None if _event_age_ms is None or _event_clock_skew
-                else round(_event_age_ms + _service_ms, 3))
-            _timing_rows.append({
-                "schema": _ST.SIDECAR_SCHEMA,
-                "scope": "decision",
-                "ts": now_iso(),
-                "tick_ref": _tick_ref,
-                "event_ref": _event_ref,
-                "timing": dict(_decision_timing),
-                "queue": dict(_queue_timing),
-                "record_build_ms": round(_record_build_ms, 3),
-                "preledger_effects_ms": round(_preledger_effects_ms, 3),
-                "ledger_append_wall_ms": round(_ledger_append_ms, 3),
-                "postledger_effects_ms": round(_postledger_effects_ms, 3),
-                "event_ack_ms": round(_ack_ms, 3),
-                "event_ack_ok": bool(_ack_ok),
-                "service_wall_ms": round(_service_ms, 3),
-                "service_parts_sum_ms": round(_service_parts_ms, 3),
-                "service_unattributed_ms": round(
-                    _service_ms - _service_parts_ms, 3),
-                "event_e2e_ms": _event_e2e_ms,
-            })
+            if _stage_timing_on:
+                _postledger_ended_ns = time.perf_counter_ns()
+                _postledger_effects_ms = (
+                    _postledger_ended_ns - _postledger_started_ns
+                ) / 1_000_000.0
+                _ack_started_ns = time.perf_counter_ns()
+                _ack_ok = event_bus.mark_processed(eid)
+                _ack_ended_ns = time.perf_counter_ns()
+                _ack_ms = (
+                    _ack_ended_ns - _ack_started_ns) / 1_000_000.0
+                _service_ms = (
+                    _ack_ended_ns - _event_started_ns) / 1_000_000.0
+                _service_parts_ms = (
+                    _legacy_perf_ms + _record_build_ms
+                    + _preledger_effects_ms + _ledger_append_ms
+                    + _postledger_effects_ms + _ack_ms)
+                _event_e2e_ms = (
+                    None if _event_age_ms is None or _event_clock_skew
+                    else round(_event_age_ms + _service_ms, 3))
+                _timing_rows.append({
+                    "schema": _ST.SIDECAR_SCHEMA,
+                    "scope": "decision",
+                    "ts": now_iso(),
+                    "tick_ref": _tick_ref,
+                    "event_ref": _event_ref,
+                    "timing": dict(_decision_timing),
+                    "queue": dict(_queue_timing),
+                    "record_build_ms": round(_record_build_ms, 3),
+                    "preledger_effects_ms": round(_preledger_effects_ms, 3),
+                    "ledger_append_wall_ms": round(_ledger_append_ms, 3),
+                    "postledger_effects_ms": round(
+                        _postledger_effects_ms, 3),
+                    "event_ack_ms": round(_ack_ms, 3),
+                    "event_ack_ok": bool(_ack_ok),
+                    "service_wall_ms": round(_service_ms, 3),
+                    "service_parts_sum_ms": round(_service_parts_ms, 3),
+                    "service_unattributed_ms": round(
+                        _service_ms - _service_parts_ms, 3),
+                    "event_e2e_ms": _event_e2e_ms,
+                })
+            else:
+                event_bus.mark_processed(eid)
             stats["processed"] += 1
             _log.info(
                 f"SHADOW {oid} → {record.get('verdict', result.verdict)} "
@@ -1756,29 +1788,31 @@ def _tick(shadow_log_path: str, meta: Optional[dict]) -> dict:
     # (resweep co 1 min pisze dispatch_state/global_alloc.json, feed.py overlay).
     # Decyzja po audycie 27.06: NIE re-emitować do shadow_decisions.jsonl (psułoby
     # koord_cascade_monitor + bazę panelu; wieczna łatka). Patrz pending_global_resweep.
-    _decision_rows_buffered = len(_timing_rows)
-    _timing_rows.append({
-        "schema": _ST.SIDECAR_SCHEMA,
-        "scope": "tick",
-        "phase": "complete",
-        "ts": now_iso(),
-        "tick_ref": _tick_ref,
-        "queue": {
-            **_tick_queue,
-            "tick_processing_wall_ms": round(
-                (time.perf_counter_ns() - _poll_started_ns) / 1_000_000.0, 3),
-        },
-        "outcomes": {
-            **stats,
-            "attempted": len(events),
-            "decision_rows_buffered": _decision_rows_buffered,
-        },
-    })
-    _written = _ST.append_sidecar_rows(_stage_path, _timing_rows)
-    if _written != len(_timing_rows):
-        _log.warning(
-            "STAGE_TIMING_SIDECAR_LOST path=%s expected=%d written=%d",
-            _stage_path, len(_timing_rows), _written)
+    if _stage_timing_on:
+        _decision_rows_buffered = len(_timing_rows)
+        _timing_rows.append({
+            "schema": _ST.SIDECAR_SCHEMA,
+            "scope": "tick",
+            "phase": "complete",
+            "ts": now_iso(),
+            "tick_ref": _tick_ref,
+            "queue": {
+                **_tick_queue,
+                "tick_processing_wall_ms": round(
+                    (time.perf_counter_ns() - _poll_started_ns)
+                    / 1_000_000.0, 3),
+            },
+            "outcomes": {
+                **stats,
+                "attempted": len(events),
+                "decision_rows_buffered": _decision_rows_buffered,
+            },
+        })
+        _written = _ST.append_sidecar_rows(_stage_path, _timing_rows)
+        if _written != len(_timing_rows):
+            _log.warning(
+                "STAGE_TIMING_SIDECAR_LOST path=%s expected=%d written=%d",
+                _stage_path, len(_timing_rows), _written)
     return stats
 
 
