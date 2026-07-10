@@ -34,7 +34,7 @@ def test_stage_timing_sidecar_has_exact_private_rotation_block():
     assert set(lines[1:-1]) == {
         "daily",
         "rotate 30",
-        "size 100M",
+        "maxsize 100M",
         "compress",
         "delaycompress",
         "missingok",
@@ -44,6 +44,7 @@ def test_stage_timing_sidecar_has_exact_private_rotation_block():
         "create 0600 root root",
     }
     assert len(lines[1:-1]) == 10
+    assert not any(line.startswith("size ") for line in lines[1:-1])
 
 
 def test_stage_timing_rotation_never_weakens_private_file_mode():
