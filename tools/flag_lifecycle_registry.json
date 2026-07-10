@@ -1936,7 +1936,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:COURIER_PROBLEM_REPORT_ENABLED"
+        "courier_api/config.py:COURIER_PROBLEM_REPORT_ENABLED"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -2665,7 +2665,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:DELIVERED_MIN_PICKUP_TO_DELIVER_SEC"
+        "courier_api/config.py:DELIVERED_MIN_PICKUP_TO_DELIVER_SEC"
       ],
       "current_snapshot": {
         "courier-api.service": 60
@@ -3056,7 +3056,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:ALWAYS_ATTACH_COMMITTED_PICKUP"
+        "courier_api/config.py:ALWAYS_ATTACH_COMMITTED_PICKUP"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -3130,7 +3130,7 @@
         "drop-in:courier-api.service.d/podjazdy.conf"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:APP_ROUTE_FROM_CONSOLE"
+        "courier_api/config.py:APP_ROUTE_FROM_CONSOLE"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -3721,7 +3721,7 @@
         "drop-in:courier-api.service.d/build-view-trust-canon.conf"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:BUILD_VIEW_TRUST_CANON_ORDER"
+        "courier_api/config.py:BUILD_VIEW_TRUST_CANON_ORDER"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -4776,7 +4776,7 @@
         "drop-in:courier-api.service.d/deliver-guard.conf"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:ENABLE_DELIVERED_TOO_FAST_GUARD"
+        "courier_api/config.py:ENABLE_DELIVERED_TOO_FAST_GUARD"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -4811,7 +4811,7 @@
         "drop-in:courier-api.service.d/delivery-dash-no-plan.conf"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:DELIVERY_DASH_WHEN_NO_PLAN"
+        "courier_api/config.py:DELIVERY_DASH_WHEN_NO_PLAN"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -5789,7 +5789,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:FALLBACK_HONEST_OSRM_ETA"
+        "courier_api/config.py:FALLBACK_HONEST_OSRM_ETA"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -6225,7 +6225,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:FROZEN_PICKUP_ETA"
+        "courier_api/config.py:FROZEN_PICKUP_ETA"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -6764,7 +6764,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:ENABLE_GPS_ARRIVAL_INGEST"
+        "courier_api/config.py:ENABLE_GPS_ARRIVAL_INGEST"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -7679,7 +7679,7 @@
         "drop-in:courier-api.service.d/plan-aware-podjazdy.conf"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:LIVE_ETA_COURIER_GUARD"
+        "courier_api/config.py:LIVE_ETA_COURIER_GUARD"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -7715,7 +7715,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:LIVE_ETA_FRESH_OVERRIDE_ONLY"
+        "courier_api/config.py:LIVE_ETA_FRESH_OVERRIDE_ONLY"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -9516,7 +9516,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:PICKUP_READY_FLOOR"
+        "courier_api/config.py:PICKUP_READY_FLOOR"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -9656,7 +9656,7 @@
         "drop-in:courier-api.service.d/pickup-time-fallback.conf"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:PICKUP_TIME_READY_FALLBACK"
+        "courier_api/config.py:PICKUP_TIME_READY_FALLBACK"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -9764,7 +9764,7 @@
         "drop-in:courier-api.service.d/plan-aware-podjazdy.conf"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:PLAN_AWARE_PODJAZDY"
+        "courier_api/config.py:PLAN_AWARE_PODJAZDY"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -9873,7 +9873,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:PLAN_ORDER_INVARIANTS"
+        "courier_api/config.py:PLAN_ORDER_INVARIANTS"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -11471,7 +11471,7 @@
         "drop-in:courier-api.service.d/route-order-unified.conf"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:ROUTE_ORDER_UNIFIED"
+        "courier_api/config.py:ROUTE_ORDER_UNIFIED"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -11623,7 +11623,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:SAME_DEST_DROPOFF_ONE_ETA"
+        "courier_api/config.py:SAME_DEST_DROPOFF_ONE_ETA"
       ],
       "current_snapshot": {
         "courier-api.service": true
@@ -12056,7 +12056,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:STATUS3_TIME_GUARD_ENFORCE"
+        "courier_api/config.py:STATUS3_TIME_GUARD_ENFORCE"
       ],
       "current_snapshot": {
         "courier-api.service": false
@@ -14913,7 +14913,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:LIVE_ETA_MAX_AGE_MIN"
+        "courier_api/config.py:LIVE_ETA_MAX_AGE_MIN"
       ],
       "current_snapshot": {
         "courier-api.service": 8
@@ -15877,7 +15877,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api_panelsync/config.py:PANEL_SYNC_LIVE"
+        "courier_api_panelsync/config.py:PANEL_SYNC_LIVE"
       ],
       "current_snapshot": {
         "courier-api.service": false
@@ -17075,7 +17075,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:REQUIRE_COURIER_PHONE"
+        "courier_api/config.py:REQUIRE_COURIER_PHONE"
       ],
       "current_snapshot": {
         "courier-api.service": false
@@ -17558,7 +17558,7 @@
         "courier_api/config.py"
       ],
       "consumers": [
-        "../../.openclaw/workspace/scripts/courier_api/config.py:STATUS3_GUARD_EARLY_MIN"
+        "courier_api/config.py:STATUS3_GUARD_EARLY_MIN"
       ],
       "current_snapshot": {
         "courier-api.service": 5.0

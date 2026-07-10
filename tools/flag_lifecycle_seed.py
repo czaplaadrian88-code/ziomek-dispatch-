@@ -192,6 +192,22 @@ _ENVFROZEN_RE = re.compile(
     r'(?P<cmp>\s*==\s*"1")?', re.M)
 
 
+# Pakiety kodu rozpoznawane w consumers[] — path liczony OD segmentu pakietu, nie
+# od SCRIPTS_ROOT worktree (apka/panel żyją w INNYM drzewie niż worktree silnika →
+# relpath wobec SCRIPTS_ROOT dawał zniekształcone `../../.openclaw/...`). Silnik
+# (dispatch_v2) wychodzi identycznie jak dotąd („dispatch_v2/plik.py").
+_PKG_SEGMENTS = ("dispatch_v2", "courier_api_panelsync", "courier_api")
+
+
+def _pkg_relpath(p: str) -> str:
+    parts = os.path.abspath(p).split(os.sep)
+    for pkg in _PKG_SEGMENTS:
+        if pkg in parts:
+            i = len(parts) - 1 - parts[::-1].index(pkg)  # ostatnie wystąpienie
+            return "/".join(parts[i:])
+    return os.path.relpath(p, SCRIPTS_ROOT).replace(os.sep, "/")
+
+
 # Sufiksy nazw = nośnik infra (URL/ścieżka/host/user), NIE flaga-toggle.
 _INFRA_SUFFIX = ("_URL", "_BASE", "_PATH", "_DIR", "_FILE", "_HOST", "_PORT", "_USER")
 
@@ -211,7 +227,7 @@ def _scan_envfrozen(py_files, key="env", bool_only=False):
             src = open(f, encoding="utf-8", errors="replace").read()
         except OSError:
             continue
-        rel = os.path.relpath(f, SCRIPTS_ROOT)
+        rel = _pkg_relpath(f)
         for m in _ENVFROZEN_RE.finditer(src):
             const, env = m.group("const"), m.group("env")
             is_bool = bool(m.group("cmp"))
