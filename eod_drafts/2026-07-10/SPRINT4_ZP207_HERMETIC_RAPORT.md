@@ -21,9 +21,9 @@ modulowych — bo 631 hardcode + 30 zamrozonych default-arg ich nie pokryja).
   (Path.unlink idzie przez os.unlink — potwierdzone; kasowanie zywego = mutacja
   produkcji, blok jak zapis). Utwardzenie `realpath(parent)` (lapie dowiazania w
   zywy stan). Fabryka sandboxa + loader kwarantanny.
-- **`tests/hermetic_quarantine.json`** — 24 wpisy (jawne, z powodami), matchowane po
+- **`tests/hermetic_quarantine.json`** — 25 wpisow (jawne, z powodami), matchowane po
   stem/nodeid w `pytest_collection_modifyitems` (zero edycji plikow testow).
-- **`tests/test_hermetic_guard_zp207.py`** — 9 testow kontrolnych (DoD).
+- **`tests/test_hermetic_guard_zp207.py`** — 10 testow kontrolnych (DoD).
 - **`tests/fixtures/hermetic/*.json`** — 4 anonimowe fixture (dane ZMYSLONE).
 - **`docs/HERMETIC_TESTS.md`** — instrukcja trybow.
 
