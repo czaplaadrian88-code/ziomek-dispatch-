@@ -380,7 +380,10 @@ def _b_full_retsp(cid, oids, mine, pos, now):
     gps = {str(cid): {"lat": float(pos[0]), "lon": float(pos[1]), "timestamp": now.isoformat()}}
     try:
         _SHADOW_PLANS.write_text("{}")
-        ok = P._gen_one_bag_plan(str(cid), list(oids), osd, gps, now, R)
+        ok = P._gen_one_bag_plan(
+            str(cid), list(oids), osd, gps, now, R,
+            expected_version=0,
+        )
         if not ok:
             return None
         plan = PM.load_plan(str(cid))

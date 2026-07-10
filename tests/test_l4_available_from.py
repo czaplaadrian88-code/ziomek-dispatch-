@@ -294,7 +294,10 @@ def _run_gen_plan_capture(monkeypatch, now, af, orders_state, gps):
                         lambda cid, body, **kw: captured.setdefault(cid, body))
     monkeypatch.setattr(CR, "resolve_available_from_by_cid",
                         lambda cid, now_utc=None, **kw: (af, "shift_start"))
-    ok = PR._gen_one_bag_plan("T5", ["O5"], orders_state, gps, now, RS)
+    ok = PR._gen_one_bag_plan(
+        "T5", ["O5"], orders_state, gps, now, RS,
+        expected_version=0,
+    )
     return ok, captured
 
 

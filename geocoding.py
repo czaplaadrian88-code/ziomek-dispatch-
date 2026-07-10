@@ -23,8 +23,9 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from dispatch_v2 import common as C
 from dispatch_v2.common import setup_logger
@@ -61,23 +62,41 @@ def _load_key() -> Optional[str]:
     return None
 
 
-def _load_cache(path: Path) -> dict:
+def _load_cache(path: Path, *, strict: bool = False) -> dict:
+    """Load cache JSON.
+
+    Read paths remain fail-soft for availability.  A writer must pass
+    ``strict=True``: replacing a temporarily unreadable/corrupt cache with an
+    empty dict would turn one parse error into permanent data loss.
+    """
+    path = Path(path)
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"cache root must be an object: {path}")
+        return data
     except Exception:
+        if strict:
+            raise
         return {}
 
 
 def _save_cache(path: Path, data: dict):
-    """Atomic write z LOCK_EX (P0.5b Fix #3).
+    """Atomically replace ``path``. Caller must hold ``_cache_file_lock``.
 
-    mkstemp w tym samym katalogu (atomic rename dziala tylko na tym samym fs),
-    unique suffix (nie race z innym writer), LOCK_EX, fsync, rename.
-    Cleanup temp jesli exception.
+    A lock on a unique tempfile does not serialize writers, therefore locking
+    deliberately lives in ``_mutate_cache`` and covers the whole fresh
+    load -> mutate/merge -> fsync -> replace transaction.
     """
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    mode = 0o600
+    try:
+        mode = path.stat().st_mode & 0o777
+    except FileNotFoundError:
+        pass
     fd, tmp_path = tempfile.mkstemp(
         dir=str(path.parent),
         prefix=f".{path.name}.tmp-",
@@ -85,18 +104,93 @@ def _save_cache(path: Path, data: dict):
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            os.fchmod(f.fileno(), mode)
             json.dump(data, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
-    except Exception:
+        _fsync_directory(path.parent)
+    except BaseException:
         if os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
         raise
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Best-effort durability for the rename itself.
+
+    Some filesystems do not support fsync on a directory.  The file content is
+    already fsynced and atomically replaced at this point, so unsupported
+    directory fsync is logged rather than reported as an uncommitted write.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    dir_fd = None
+    try:
+        dir_fd = os.open(str(directory), flags)
+        os.fsync(dir_fd)
+    except OSError as exc:
+        _log.warning("cache directory fsync unavailable path=%s: %r", directory, exc)
+    finally:
+        if dir_fd is not None:
+            os.close(dir_fd)
+
+
+def _cache_lock_path(path: Path) -> Path:
+    """Stable lockfile shared by every process writing a given cache."""
+    path = Path(path)
+    return path.with_name(path.name + ".lock")
+
+
+@contextmanager
+def _cache_file_lock(path: Path):
+    """Hold a per-cache cross-process LOCK_EX until after ``os.replace``."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = _cache_lock_path(path)
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "r+", encoding="utf-8") as lock_f:
+        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+
+
+def _mutate_cache(path: Path, mutate_fn: Callable[[dict], bool]) -> tuple[dict, bool]:
+    """Canonical cache RMW transaction.
+
+    ``mutate_fn`` receives the latest on-disk dict while the stable per-cache
+    lock is held and returns True only when the dict should be committed.
+    Returning False avoids a needless replace (notably for protected pins).
+    """
+    path = Path(path)
+    with _cache_file_lock(path):
+        cache = _load_cache(path, strict=True)
+        changed = bool(mutate_fn(cache))
+        if changed:
+            _save_cache(path, cache)
+        return cache, changed
+
+
+def _put_cache_entry(
+    path: Path,
+    key: str,
+    entry: dict,
+    *,
+    protect_pins: bool = False,
+) -> tuple[dict, bool]:
+    """Merge one entry into a fresh snapshot, optionally preserving a pin."""
+    def _put(cache: dict) -> bool:
+        if protect_pins and _is_pinned_entry(cache.get(key)):
+            return False
+        cache[key] = entry
+        return True
+
+    cache, changed = _mutate_cache(path, _put)
+    return cache[key], changed
 
 
 # ---------------------------------------------------------------------------
@@ -182,32 +276,42 @@ def _drift_meters(old_lat: float, old_lon: float, new_lat: float, new_lon: float
 def cache_gc_stale(path: Path, ttl_sec: Optional[float] = None) -> dict:
     """A3: bulk GC offline cleanup. Returns {scanned, removed, kept_legacy}.
 
-    `kept_legacy` = entries bez `cached_at` (defensive — nie usuwamy bez sygnału).
-    Atomic save via _save_cache (LOCK_EX + tempfile + rename).
+    `kept_legacy` = entries bez liczbowego `cached_at` oraz chronione piny
+    (defensive — nie usuwamy bez sygnału).  Scan i delete są jednym RMW pod
+    stałym per-cache lockfile, więc GC nie kasuje równoległego insertu.
     """
     if ttl_sec is None:
         _, ttl_sec, _, _ = _ttl_config()
-    with _lock:
-        cache = _load_cache(path)
-        scanned = len(cache)
-        removed = 0
-        kept_legacy = 0
+    result = {"scanned": 0, "removed": 0, "kept_legacy": 0}
+
+    def _gc(cache: dict) -> bool:
+        result["scanned"] = len(cache)
         now = time.time()
         keys_to_del = []
         for key, entry in cache.items():
+            if not isinstance(entry, dict) or _is_pinned_entry(entry):
+                result["kept_legacy"] += 1
+                continue
             cached_at = entry.get("cached_at")
             if not isinstance(cached_at, (int, float)):
-                kept_legacy += 1
+                result["kept_legacy"] += 1
                 continue
             if (now - float(cached_at)) >= ttl_sec:
                 keys_to_del.append(key)
         for key in keys_to_del:
             del cache[key]
-            removed += 1
-        if removed > 0:
-            _save_cache(path, cache)
-    _log.info(f"cache_gc_stale path={path.name} scanned={scanned} removed={removed} kept_legacy={kept_legacy}")
-    return {"scanned": scanned, "removed": removed, "kept_legacy": kept_legacy}
+        result["removed"] = len(keys_to_del)
+        return bool(keys_to_del)
+
+    _mutate_cache(path, _gc)
+    _log.info(
+        "cache_gc_stale path=%s scanned=%d removed=%d kept_legacy=%d",
+        Path(path).name,
+        result["scanned"],
+        result["removed"],
+        result["kept_legacy"],
+    )
+    return result
 
 
 def _neg_cache_enabled():
@@ -236,14 +340,15 @@ def _neg_cache_check(key: str):
 
 
 def _neg_cache_put(key: str, reason: str):
-    """Zapisz deterministyczny reject do neg-cache (atomic, pod _lock). Defensywny."""
+    """Zapisz reject przez wspólną wieloprocesową transakcję cache."""
     if not _neg_cache_enabled():
         return
     try:
-        with _lock:
-            neg = _load_cache(NEG_CACHE_PATH)
-            neg[key] = {"reason": reason, "cached_at": time.time()}
-            _save_cache(NEG_CACHE_PATH, neg)
+        _put_cache_entry(
+            NEG_CACHE_PATH,
+            key,
+            {"reason": reason, "cached_at": time.time()},
+        )
     except Exception as _e:
         _log.warning(f"neg_cache_put fail key={key!r}: {_e!r}")
 
@@ -699,23 +804,35 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
             return None
 
     if not streetless:
-        with _lock:
-            cache = _load_cache(CACHE_PATH)
-            # Re-check pod lockiem (race-safe, parytet z geocode_restaurant): nie
-            # nadpisuj pinu, który mógł powstać między odczytem a tym zapisem.
-            _existing = cache.get(key)
-            if _is_pinned_entry(_existing):
+        try:
+            _stored, _changed = _put_cache_entry(
+                CACHE_PATH,
+                key,
+                {
+                    "lat": result[0],
+                    "lon": result[1],
+                    "source": source,
+                    "original": address,
+                    "city": effective_city,
+                    "cached_at": time.time(),
+                },
+                protect_pins=True,
+            )
+        except Exception as exc:
+            # Cache jest optymalizacją, nie częścią publicznego kontraktu
+            # geocode(). Strict writer nie zastąpi uszkodzonego pliku pustym
+            # snapshotem; świeży, zweryfikowany wynik nadal zwracamy callerowi.
+            _log.warning(
+                "GEOCODE_CACHE_WRITE_FAIL path=%s key=%r; zwracam fresh coords, "
+                "cache bez zmian: %r",
+                CACHE_PATH, key, exc,
+            )
+        else:
+            # Pin mógł powstać w innym procesie podczas zapytania sieciowego.
+            # Re-check odbył się na świeżym snapshotcie pod LOCK_EX.
+            if not _changed and _is_pinned_entry(_stored):
                 _log.info(f"geocode: pin chroniony, NIE nadpisuję key={key!r}")
-                return (_existing["lat"], _existing["lon"])
-            cache[key] = {
-                "lat": result[0],
-                "lon": result[1],
-                "source": source,
-                "original": address,
-                "city": effective_city,
-                "cached_at": time.time(),
-            }
-            _save_cache(CACHE_PATH, cache)
+                return (_stored["lat"], _stored["lon"])
 
     # A3: drift alert gdy stale entry był re-geocoded i nowe coords różnią się
     # >threshold od cache. Opt-in flag (default OFF) — log WARN ujawnia
@@ -804,22 +921,30 @@ def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None)
                    "google", (time.perf_counter() - t_start) * 1000.0, error="bbox_reject")
         return None
 
-    with _lock:
-        cache = _load_cache(RESTAURANT_CACHE_PATH)
-        # FAZA 2 (item 5): nie nadpisuj pinu (re-check pod lockiem — race-safe).
-        _existing = cache.get(key)
-        if _is_pinned_entry(_existing):
+    try:
+        _stored, _changed = _put_cache_entry(
+            RESTAURANT_CACHE_PATH,
+            key,
+            {
+                "lat": result[0],
+                "lon": result[1],
+                "name": name,
+                "address": address,
+                "city": effective_city,
+                "cached_at": time.time(),
+            },
+            protect_pins=True,
+        )
+    except Exception as exc:
+        _log.warning(
+            "GEOCODE_CACHE_WRITE_FAIL path=%s key=%r; zwracam fresh restaurant "
+            "coords, cache bez zmian: %r",
+            RESTAURANT_CACHE_PATH, key, exc,
+        )
+    else:
+        if not _changed and _is_pinned_entry(_stored):
             _log.info(f"geocode_restaurant: pin chroniony, NIE nadpisuję key={key!r}")
-            return (_existing["lat"], _existing["lon"])
-        cache[key] = {
-            "lat": result[0],
-            "lon": result[1],
-            "name": name,
-            "address": address,
-            "city": effective_city,
-            "cached_at": time.time(),
-        }
-        _save_cache(RESTAURANT_CACHE_PATH, cache)
+            return (_stored["lat"], _stored["lon"])
 
     # A3: drift alert dla restaurant cache (zmiana lokalizacji restauracji =
     # rzadkie ale silent jeśli się zdarzy)

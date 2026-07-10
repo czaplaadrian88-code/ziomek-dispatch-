@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
 from dispatch_v2 import common as C
+from dispatch_v2 import plan_manager
 from dispatch_v2.common import (
     FIRMOWE_KONTO_ADDRESS_IDS,
     FIRMOWE_KONTO_FALLBACK_COORDS,
@@ -465,6 +466,18 @@ def _save_plan_on_assign(order_id: str, courier_id: str) -> None:
     sequence = plan.get("sequence") or []
     if not sequence:
         return
+    # Z-P0-04: token pochodzi ze snapshotu sprzed puli kandydatow i przeszedl
+    # przez metrics -> serializer -> pending proposal. Brak tokenu (np. proposal
+    # utworzony przez starszy proces przed deployem) = bezpieczny skip, nigdy
+    # create-or-overwrite przez expected_version=None.
+    expected_version = best.get("plan_expected_version")
+    if (not isinstance(expected_version, int)
+            or isinstance(expected_version, bool)):
+        _log.warning(
+            f"PLAN_CAS_TOKEN_MISSING writer=assign cid={courier_id} "
+            f"oid={order_id} value={expected_version!r} policy=keep_current"
+        )
+        return
     predicted = plan.get("predicted_delivered_at") or {}
     pickup_at = plan.get("pickup_at") or {}
     bag_ctx = {str(b.get("order_id")): b for b in (best.get("bag_context") or [])}
@@ -541,9 +554,15 @@ def _save_plan_on_assign(order_id: str, courier_id: str) -> None:
         "optimization_method": plan.get("strategy") or "bruteforce",
     }
     try:
-        from dispatch_v2 import plan_manager
-        plan_manager.save_plan(str(courier_id), body)
+        plan_manager.save_plan(
+            str(courier_id), body, expected_version=expected_version)
         _log.info(f"V3.19b plan saved cid={courier_id} oid={order_id} stops={len(stops)}")
+    except plan_manager.ConcurrencyError as e:
+        _log.warning(
+            f"PLAN_CAS_SKIP writer=assign cid={courier_id} oid={order_id} "
+            f"expected={e.expected_version} current={e.current_version} "
+            f"policy=keep_current"
+        )
     except Exception as e:
         _log.warning(f"V3.19b save_plan fail cid={courier_id} oid={order_id}: {e}")
 
@@ -581,7 +600,19 @@ def _invalidate_plan_on_bag_change(order_id: str, courier_id: str) -> None:
         covered = {str(s.get("order_id")) for s in plan.get("stops", [])}
         if str(order_id) in covered:
             return
-        plan_manager.invalidate_plan(str(courier_id), "BAG_CHANGED")
+        try:
+            plan_manager.invalidate_plan(
+                str(courier_id),
+                "BAG_CHANGED",
+                expected_version=plan.get("plan_version", 0),
+            )
+        except plan_manager.ConcurrencyError as e:
+            _log.warning(
+                f"PLAN_CAS_SKIP writer=bag_change cid={courier_id} oid={order_id} "
+                f"expected={e.expected_version} current={e.current_version} "
+                f"policy=keep_current"
+            )
+            return
         _log.info(
             f"BUG-1 invalidate_plan_on_bag_change cid={courier_id} oid={order_id} "
             f"— order poza planem (reassign/override) → apka odświeży worek"
@@ -2445,6 +2476,7 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
     """
     global _fail_count, _last_panel_unreachable_emit, _cold_start_done
 
+    _cas_conflicts_before = plan_manager.cas_conflicts_total()
     cycle_stats = {"cycle": cycle_num, "at": now_iso()}
     cycle_parsed: Optional[dict] = None
 
@@ -2568,6 +2600,9 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
             )
             _last_panel_unreachable_emit = time.time()
 
+    cycle_stats["plan_cas_conflicts"] = (
+        plan_manager.cas_conflicts_total() - _cas_conflicts_before
+    )
     return cycle_stats, cycle_parsed
 
 

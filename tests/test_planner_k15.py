@@ -149,13 +149,18 @@ def _run_gen(monkeypatch, flag_overrides, tier_params_fn=None):
     monkeypatch.setattr(PR, "ENABLE_PICKUP_REFLOOR", False)
     saved = {}
     monkeypatch.setattr(PR.plan_manager, "save_plan",
-                        lambda cid, body: saved.update(cid=cid, body=body))
+                        lambda cid, body, **kw: saved.update(
+                            cid=cid, body=body,
+                            expected_version=kw.get("expected_version")))
     monkeypatch.setattr(PR._C_k15 if hasattr(PR, "_C_k15") else C, "flag",
                         _flag_stub(flag_overrides), raising=False)
     monkeypatch.setattr(C, "flag", _flag_stub(flag_overrides))
     if tier_params_fn is not None:
         monkeypatch.setattr(planner, "tier_params", tier_params_fn)
-    ok = PR._gen_one_bag_plan("484", ["o1"], orders_state, {}, NOW, fakeR)
+    ok = PR._gen_one_bag_plan(
+        "484", ["o1"], orders_state, {}, NOW, fakeR,
+        expected_version=0,
+    )
     return ok, captured, saved
 
 

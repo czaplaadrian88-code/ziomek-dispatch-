@@ -36,6 +36,7 @@ class SelectionContext:
     new_order: Any
     fleet_snapshot: Dict[str, Any]
     v328_fail_causes: Dict[str, str]
+    plan_versions: Optional[Dict[str, Optional[int]]] = None
 
 
 def select_and_emit(ctx: SelectionContext, candidates: list):
@@ -53,6 +54,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
     new_order = ctx.new_order
     fleet_snapshot = ctx.fleet_snapshot
     _v328_fail_causes = ctx.v328_fail_causes
+    _plan_versions = ctx.plan_versions
     # ── aliasy symboli module-level dispatch_pipeline (kontrakty monkeypatch + logi 1:1) ──
     Candidate = _dp.Candidate
     HAVERSINE_ROAD_FACTOR_BIALYSTOK = _dp.HAVERSINE_ROAD_FACTOR_BIALYSTOK
@@ -1187,7 +1189,15 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                         feasibility_verdict=sv,
                         feasibility_reason=f"solo_fallback ({sr})",
                         plan=sp,
-                        metrics={**sm, "solo_fallback": True, "pos_source": getattr(cs, "pos_source", "no_gps")},
+                        metrics={
+                            **sm,
+                            "solo_fallback": True,
+                            "pos_source": getattr(cs, "pos_source", "no_gps"),
+                            "plan_expected_version": (
+                                _plan_versions.get(str(cid), 0)
+                                if _plan_versions is not None else None
+                            ),
+                        },
                     )
         except Exception:
             pass

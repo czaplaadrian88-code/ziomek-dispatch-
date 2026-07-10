@@ -13,13 +13,12 @@ Safety:
     - Dry-run mode default (--execute wymagany do faktycznego usunięcia)
 """
 import argparse
-import fcntl
 import json
-import os
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
+
+from dispatch_v2.geocoding import _mutate_cache
 
 CACHE_PATH = Path("/root/.openclaw/workspace/dispatch_state/geocode_cache.json")
 
@@ -28,22 +27,18 @@ BBOX_LAT = (52.85, 53.35)
 BBOX_LON = (22.85, 23.45)
 
 
-def _atomic_write(path: Path, data: dict):
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.tmp-", suffix=".json")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except Exception:
-        if os.path.exists(tmp):
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-        raise
+def _bad_entries(cache: dict) -> list[tuple[str, str]]:
+    bad = []
+    for key, value in cache.items():
+        lat = value.get("lat")
+        lon = value.get("lon")
+        if lat is None or lon is None:
+            bad.append((key, "no coords"))
+            continue
+        if not (BBOX_LAT[0] <= lat <= BBOX_LAT[1]
+                and BBOX_LON[0] <= lon <= BBOX_LON[1]):
+            bad.append((key, f"out of bbox: ({lat:.4f},{lon:.4f})"))
+    return bad
 
 
 def main():
@@ -59,16 +54,9 @@ def main():
     cache = json.loads(CACHE_PATH.read_text())
     total_before = len(cache)
 
-    # Identify bad entries
-    bad = []
-    for k, v in cache.items():
-        lat = v.get("lat")
-        lon = v.get("lon")
-        if lat is None or lon is None:
-            bad.append((k, "no coords"))
-            continue
-        if not (BBOX_LAT[0] <= lat <= BBOX_LAT[1] and BBOX_LON[0] <= lon <= BBOX_LON[1]):
-            bad.append((k, f"out of bbox: ({lat:.4f},{lon:.4f})"))
+    # Identify bad entries for the dry-run/report. Execute recomputes this under
+    # the canonical cache lock so a concurrent insert cannot be overwritten.
+    bad = _bad_entries(cache)
 
     print(f"Cache: {total_before} entries")
     print(f"Corrupted (out of bbox or missing coords): {len(bad)}")
@@ -84,18 +72,36 @@ def main():
         print(f"\n[DRY-RUN] — dodaj --execute żeby faktycznie usunąć {len(bad)} entries")
         sys.exit(0)
 
-    # Backup
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = CACHE_PATH.with_name(f"{CACHE_PATH.name}.bak-city-invalidation-{ts}")
-    backup.write_text(CACHE_PATH.read_text())
-    print(f"\nBackup: {backup}")
+    outcome = {"before": total_before, "after": total_before, "backup": None}
 
-    # Delete
-    for k, _ in bad:
-        del cache[k]
+    def _delete_bad(current: dict) -> bool:
+        current_bad = _bad_entries(current)
+        outcome["before"] = len(current)
+        if not current_bad:
+            outcome["after"] = len(current)
+            return False
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = CACHE_PATH.with_name(
+            f"{CACHE_PATH.name}.bak-city-invalidation-{ts}"
+        )
+        backup.write_text(
+            CACHE_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        for key, _ in current_bad:
+            del current[key]
+        outcome.update({
+            "after": len(current),
+            "backup": backup,
+        })
+        return True
 
-    _atomic_write(CACHE_PATH, cache)
-    print(f"Zapisane: {CACHE_PATH} ({len(cache)} entries, było {total_before})")
+    _mutate_cache(CACHE_PATH, _delete_bad)
+    if outcome["backup"] is not None:
+        print(f"\nBackup: {outcome['backup']}")
+    print(
+        f"Zapisane: {CACHE_PATH} ({outcome['after']} entries, "
+        f"było {outcome['before']})"
+    )
 
 
 if __name__ == "__main__":

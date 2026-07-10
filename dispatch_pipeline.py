@@ -33,6 +33,7 @@ from dispatch_v2.osrm_client import haversine
 from dispatch_v2.bag_state import build_courier_bag_state
 from dispatch_v2.fleet_context import build_fleet_context, FleetContext
 from dispatch_v2.pipeline_geometry import _point_to_segment_km, _min_dist_to_route_km  # noqa: F401 — B6: czysta geometria; kontrakt tożsamości (test_pipeline_geometry) + _dp._min_dist_to_route_km w core.candidates (K11)
+import importlib
 import json
 import math
 import os
@@ -3006,6 +3007,10 @@ class PipelineResult:
     # stanu. Read-only w serializerze; NIE wpływa na verdict/score/feasibility.
     mode: Optional[str] = None
     mode_reason: Optional[str] = None
+    # Z-P0-01 faza A: finalny, obserwacyjny werdykt R6/R27/SLA. Ustawiany
+    # dokladnie raz w publicznym ogonie assess_order; nigdy konsumowany przez
+    # selekcje/auto-route. Any unika cyklu typow z czystym core.
+    rule_verdict: Optional[Any] = None
 
 
 # ─── FAIL-04: prep-variance anomaly (A1 anomaly block, shadow-first) ───
@@ -3765,6 +3770,165 @@ def _eta_fabrication_check(result: "PipelineResult", order_event: dict,
         pass  # fabrication-guard NIGDY nie wywróci assess flow
 
 
+def _final_rule_unknown_dict(result: "PipelineResult", reason_code: str) -> Dict[str, Any]:
+    """Ostatni, bezmodułowy fallback ``rule_verdict.v1``.
+
+    Używa wyłącznie prymitywów JSON i nie zależy od importu firewalla, flag ani
+    loggera. Dzięki temu nawet awaria samej ścieżki obserwowalności nie usuwa
+    informacji, że pokrycie reguł jest nieznane.
+    """
+    try:
+        order_id = str(getattr(result, "order_id", "") or "")
+    except Exception:
+        order_id = ""
+    try:
+        decision_verdict = str(getattr(result, "verdict", "") or "")
+    except Exception:
+        decision_verdict = ""
+    try:
+        best = getattr(result, "best", None)
+    except Exception:
+        best = None
+    try:
+        selected_courier_id = (
+            str(getattr(best, "courier_id", "") or "") if best is not None else None
+        )
+    except Exception:
+        selected_courier_id = None
+    try:
+        if best is None:
+            selection_mode = "none"
+        elif getattr(best, "plan", None) is None:
+            selection_mode = "planless"
+        elif bool(getattr(best, "best_effort", False)):
+            selection_mode = "best_effort"
+        else:
+            selection_mode = "normal"
+    except Exception:
+        selection_mode = "unknown"
+    try:
+        missing_reason = str(reason_code or "FINAL_FALLBACK:UNKNOWN")
+    except Exception:
+        missing_reason = "FINAL_FALLBACK:UNKNOWN"
+
+    def _unknown_rule(rule_id: str, policy_variant: str) -> Dict[str, Any]:
+        return {
+            "rule_id": rule_id,
+            "policy_variant": policy_variant,
+            "status": "UNKNOWN",
+            "limit": None,
+            "evaluated_count": 0,
+            "violation_count": 0,
+            "exempt_count": 0,
+            "unknown_count": 1,
+        }
+
+    return {
+        "schema": "rule_verdict.v1",
+        "phase": "A_SHADOW",
+        "status": "UNKNOWN",
+        "coverage": "NONE",
+        "enforcement": "NONE",
+        "decision_order_id": order_id,
+        "decision_verdict": decision_verdict,
+        "selected_courier_id": selected_courier_id,
+        "selection_mode": selection_mode,
+        "always_propose_enabled": None,
+        "policy_pending": ["B-01", "B-02"],
+        "rules": [
+            _unknown_rule("R6_THERMAL", "physical_thermal"),
+            _unknown_rule("R27_COMMITTED_PICKUP", "strict_5_candidate"),
+            _unknown_rule("SLA_DELIVERY", "anchor_unknown"),
+        ],
+        "violations": [],
+        "exceptions": [],
+        "missing_reasons": [missing_reason],
+    }
+
+
+def _attach_final_rule_verdict(result: "PipelineResult", order_event: dict,
+                               fleet_snapshot: Dict[str, Any],
+                               decision_now: datetime) -> None:
+    """Podłącz finalny firewall; każda awaria kończy się jawnym UNKNOWN."""
+    _ifw = None
+    _fw_policy = None
+    _fw_exc: BaseException
+    try:
+        # Import także jest częścią instrumentacji i musi być fail-open dla decyzji.
+        _ifw = importlib.import_module("dispatch_v2.core.invariant_firewall")
+        try:
+            _fw_flags = dict(C.load_flags() or {})
+        except Exception:
+            _fw_flags = {}
+
+        def _fw_flag(name, fallback=False):
+            return bool(_fw_flags.get(name, fallback))
+
+        _fw_policy = _ifw.FirewallPolicy(
+            r6_limit_min=float(C.BAG_TIME_HARD_MAX_MIN),
+            sla_limit_min=float(C.BAG_TIME_HARD_MAX_MIN),
+            r27_strict_limit_min=float(C.LATE_PICKUP_HARD_MAX_MIN),
+            r27_overload_limit_min=float(C.OBJ_COMMITTED_PICKUP_TOL_LOOSE_MIN),
+            overload_threshold=float(C.OBJ_COMMITTED_PICKUP_LOAD_THRESHOLD),
+            package_address_ids=tuple(sorted(int(x) for x in C.PACZKA_ADDRESS_IDS)),
+            package_thermal_exempt=_fw_flag(
+                "ENABLE_PACZKA_R6_THERMAL_EXEMPT",
+                getattr(C, "ENABLE_PACZKA_R6_THERMAL_EXEMPT", False)),
+            sla_anchor_kind=(
+                "ready" if (
+                    _fw_flag("ENABLE_SLA_ANCHOR_UNIFIED",
+                             getattr(C, "ENABLE_SLA_ANCHOR_UNIFIED", False))
+                    and _fw_flag("ENABLE_SLA_GATE_READY_ANCHOR",
+                                 getattr(C, "ENABLE_SLA_GATE_READY_ANCHOR", False))
+                ) else "now"
+            ),
+            always_propose_enabled=_fw_flag(
+                "ENABLE_ALWAYS_PROPOSE_ON_SATURATION",
+                getattr(C, "ENABLE_ALWAYS_PROPOSE_ON_SATURATION", False)),
+        )
+        result.rule_verdict = _ifw.evaluate_final(
+            result, order_event, fleet_snapshot, decision_now, _fw_policy)
+        return
+    except Exception as exc:
+        _fw_exc = exc
+
+    # Preferuj typowany UNKNOWN, jeśli moduł/polityka są dostępne. Ta ścieżka
+    # również jest nieufna: error_verdict i przypisanie mogą same zawieść.
+    try:
+        if _ifw is not None:
+            if _fw_policy is None:
+                _fw_policy = _ifw.FirewallPolicy(
+                    r6_limit_min=float(getattr(C, "BAG_TIME_HARD_MAX_MIN", 35.0)),
+                    sla_limit_min=float(getattr(C, "BAG_TIME_HARD_MAX_MIN", 35.0)),
+                    r27_strict_limit_min=float(getattr(C, "LATE_PICKUP_HARD_MAX_MIN", 5.0)),
+                    r27_overload_limit_min=float(
+                        getattr(C, "OBJ_COMMITTED_PICKUP_TOL_LOOSE_MIN", 10.0)),
+                    overload_threshold=float(
+                        getattr(C, "OBJ_COMMITTED_PICKUP_LOAD_THRESHOLD", 4.5)),
+                    package_address_ids=(), package_thermal_exempt=False,
+                    sla_anchor_kind="now", always_propose_enabled=False,
+                )
+            result.rule_verdict = _ifw.error_verdict(result, _fw_policy, _fw_exc)
+            typed_fallback_ok = True
+        else:
+            typed_fallback_ok = False
+    except Exception as fallback_exc:
+        _fw_exc = fallback_exc
+        typed_fallback_ok = False
+
+    try:
+        log.warning(
+            "INVARIANT_FIREWALL_UNKNOWN order=%s error=%s",
+            getattr(result, "order_id", ""), type(_fw_exc).__name__)
+    except Exception:
+        pass
+
+    if typed_fallback_ok:
+        return
+    result.rule_verdict = _final_rule_unknown_dict(
+        result, f"FINAL_FALLBACK:{type(_fw_exc).__name__}")
+
+
 def assess_order(
     order_event: dict,
     fleet_snapshot: Dict[str, Any],
@@ -3780,6 +3944,14 @@ def assess_order(
     TASK 3 (2026-05-04): per-candidate logging gdy OBSERVABILITY_PER_CANDIDATE_ENABLED.
     Defensive: hook NIGDY raises (try/except). Zero overhead gdy flag false.
     """
+    # Z-P0-01: jeden zegar dla calej decyzji ORAZ finalnego firewalla. Wczesniej
+    # impl tworzyl wlasne `now` gdy caller podal None, a hooki po impl dostawaly
+    # nadal None. Jawne zwiazanie tutaj jest semantycznie rownowazne dla impl,
+    # lecz czyni pomiar deterministycznym i replayowalnym.
+    decision_now = now if now is not None else datetime.now(timezone.utc)
+    if decision_now.tzinfo is None:
+        decision_now = decision_now.replace(tzinfo=timezone.utc)
+
     # K08 refaktoru (ADR-R02): efekty uboczne decyzji (shadow-jsonle, zapis stanu
     # loadgov, alert Telegram) buforowane i wykonywane PO impl — flush w finally
     # (przy wyjątku zbuforowane efekty wykonują się jak w legacy, gdzie zapis
@@ -3787,7 +3959,7 @@ def assess_order(
     _eb_on = _EB.begin()
     try:
         result = _assess_order_impl(
-            order_event, fleet_snapshot, restaurant_meta, now,
+            order_event, fleet_snapshot, restaurant_meta, decision_now,
             pending_queue=pending_queue, demand_context=demand_context,
             _bypass_early_bird=_bypass_early_bird,
         )
@@ -3805,7 +3977,7 @@ def assess_order(
     except Exception:
         pass  # MP-#13 defense-in-depth — leave defaults False/None
     # W0.2: bezpiecznik fabrykacji ETA (shadow-first compute-always; aktywny za flagą)
-    _eta_fabrication_check(result, order_event, now)
+    _eta_fabrication_check(result, order_event, decision_now)
     # W1/T2.4: stempel would-be-mode na rekordzie decyzji (shadow, flaga OFF default).
     # Odczyt stanu obserwatora (mode_observer) — NIE krokuje FSM. Fail-soft.
     if C.flag("ENABLE_MODE_LAYER_SHADOW", False):
@@ -3845,6 +4017,18 @@ def assess_order(
             )
     except Exception:
         pass  # Defensive — observability NIGDY nie crashes assess flow
+
+    # Z-P0-01 FAZA A -- JEDYNY finalny hook po wszystkich bramkach, rankingu,
+    # best_effort i ALWAYS_PROPOSE. Dodatkowa warstwa last-resort chroni decyzję
+    # także przed regresją samego helpera/fallbacku instrumentacji.
+    try:
+        _attach_final_rule_verdict(result, order_event, fleet_snapshot, decision_now)
+    except Exception as _fw_outer_exc:
+        try:
+            result.rule_verdict = _final_rule_unknown_dict(
+                result, f"OUTER_FALLBACK:{type(_fw_outer_exc).__name__}")
+        except Exception:
+            pass
     return result
 
 
@@ -4090,6 +4274,30 @@ def _assess_order_impl(
     except Exception:
         pass
 
+    # Z-P0-04: jeden spojny snapshot wersji PRZED uruchomieniem puli kandydatow.
+    # Token trafia przez Candidate.metrics do decision_record/pending proposal i
+    # jest warunkiem pozniejszego event-time save w panel_watcher. Rekordy
+    # invalidated tez sa istotne (save_plan moze je reaktywowac); brak wpisu=0.
+    # Awaria odczytu daje None, nigdy bezwarunkowy expected_version=None u writera.
+    _plan_versions_snapshot = None
+    try:
+        from dispatch_v2 import plan_manager as _pm_cas
+        _raw_plan_snapshot = _pm_cas.load_plans()
+        _plan_versions_snapshot = {}
+        for _cas_cid, _cas_plan in _raw_plan_snapshot.items():
+            _cas_v = (_cas_plan or {}).get("plan_version", 0) \
+                if isinstance(_cas_plan, dict) else None
+            _plan_versions_snapshot[str(_cas_cid)] = (
+                int(_cas_v)
+                if isinstance(_cas_v, int) and not isinstance(_cas_v, bool)
+                else None
+            )
+    except Exception as _cas_e:
+        log.warning(
+            "PLAN_CAS_SNAPSHOT_FAIL order=%s exc=%s: %s",
+            order_id, type(_cas_e).__name__, _cas_e,
+        )
+
     # K11 refaktoru: kontekst oceny = dokładnie wartości czytane dawniej z closure;
     # budowany tu (wartości finalne, wspólne dla całej puli). Delegacja 1:1.
     _eval_ctx = _candidates.EvalContext(
@@ -4101,6 +4309,7 @@ def _assess_order_impl(
         fleet_context=fleet_context, k07_prefetched_ck=_k07_prefetched_ck,
         loadgov_now=loadgov_now, loadgov_ewma=loadgov_ewma,
         loadgov_orders=loadgov_orders, loadgov_couriers=loadgov_couriers,
+        plan_versions=_plan_versions_snapshot,
     )
 
     def _v327_eval_courier(cid, cs):
@@ -4344,6 +4553,7 @@ def _assess_order_impl(
             delivery_coords=delivery_coords, pickup_ready_at=pickup_ready_at,
             new_order=new_order, fleet_snapshot=fleet_snapshot,
             v328_fail_causes=_v328_fail_causes,
+            plan_versions=_plan_versions_snapshot,
         ),
         candidates,
     )

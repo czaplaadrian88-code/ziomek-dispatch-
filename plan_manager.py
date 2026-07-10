@@ -33,6 +33,12 @@ PLANS_FILE = Path("/root/.openclaw/workspace/dispatch_state/courier_plans.json")
 LOCK_FILE = Path("/root/.openclaw/workspace/dispatch_state/courier_plans.lock")
 SCHEMA_VERSION = 1
 
+# Procesowy, monotoniczny licznik odrzuconych zapisow CAS. Dwa procesy
+# (panel-watcher i plan-recheck) publikuja delte we wlasnych podsumowaniach;
+# licznik w jednym miejscu obejmuje wszystkie production call-site'y save_plan.
+_cas_stats_lock = threading.Lock()
+_cas_conflicts_total = 0
+
 INVALIDATION_REASONS = frozenset({
     "ORDER_DELIVERED_ALL",
     "ORDER_CANCELLED",
@@ -224,11 +230,44 @@ def load_plan(
                      if s.get("type") == "dropoff"}
         if plan_oids and not plan_oids.issubset(active_bag_oids):
             if invalidate_on_mismatch:
-                invalidate_plan(cid, "ORDER_DELIVERED_ALL")
+                try:
+                    invalidate_plan(
+                        cid,
+                        "ORDER_DELIVERED_ALL",
+                        expected_version=plan.get("plan_version", 0),
+                    )
+                except ConcurrencyError:
+                    # Snapshot z load jest juz stary. Nowszy current zostaje;
+                    # caller nadal dostaje None dla niedopasowanego snapshotu.
+                    pass
             return None
     # deepcopy tylko na ścieżce współdzielonego cache — chroni cache przed
     # ewentualną mutacją u callera (writers używają surowego _read_raw).
     return copy.deepcopy(plan) if _lazy else plan
+
+
+def cas_conflicts_total() -> int:
+    """Procesowy licznik odrzuconych mutacji z expected_version CAS."""
+    with _cas_stats_lock:
+        return _cas_conflicts_total
+
+
+def _check_expected_version(
+    courier_id: str,
+    expected_version: Optional[int],
+    current_version: int,
+) -> None:
+    """Wspolny guard CAS dla save/invalidate; konflikt nie mutuje planu."""
+    if expected_version is None or current_version == expected_version:
+        return
+    global _cas_conflicts_total
+    with _cas_stats_lock:
+        _cas_conflicts_total += 1
+    _log.warning(
+        "PLAN_CAS_CONFLICT cid=%s expected_version=%s current_version=%s",
+        courier_id, expected_version, current_version,
+    )
+    raise ConcurrencyError(courier_id, expected_version, current_version)
 
 
 def save_plan(
@@ -250,11 +289,7 @@ def save_plan(
         plans = _read_raw()
         current = plans.get(cid)
         prev_version = (current or {}).get("plan_version", 0)
-        if expected_version is not None and prev_version != expected_version:
-            raise ConcurrencyError(
-                f"CAS fail for courier {cid}: "
-                f"expected_version={expected_version}, current={prev_version}"
-            )
+        _check_expected_version(cid, expected_version, prev_version)
         new_version = prev_version + 1
         now_iso = _now_iso()
         created_at = (current or {}).get("created_at", now_iso)
@@ -281,18 +316,30 @@ def save_plan(
         return saved
 
 
-def invalidate_plan(courier_id: str, reason: str) -> None:
-    """Mark plan invalidated. Plan stays in file for debug + GC-able."""
+def invalidate_plan(
+    courier_id: str,
+    reason: str,
+    expected_version: Optional[int] = None,
+) -> None:
+    """Mark plan invalidated. Plan stays in file for debug + GC-able.
+
+    expected_version: optimistic CAS for read-check-invalidate cycles. Mismatch
+    raises ConcurrencyError and leaves the newer current plan untouched. None
+    preserves the atomic event-mutator/manual-call contract.
+    """
     cid = str(courier_id)
     if reason not in INVALIDATION_REASONS:
         _log.warning(f"invalidate_plan: unknown reason {reason!r}, allowing")
     with _locked(exclusive=True):
         plans = _read_raw()
         plan = plans.get(cid)
+        current_version = (plan or {}).get("plan_version", 0)
+        _check_expected_version(cid, expected_version, current_version)
         if plan is None:
             return
         plan["invalidated_at"] = _now_iso()
         plan["invalidation_reason"] = reason
+        plan["plan_version"] = int(plan.get("plan_version", 0)) + 1
         plan["last_modified_at"] = plan["invalidated_at"]
         _write_raw(plans)
 
@@ -351,6 +398,7 @@ def advance_plan(
         if not new_stops:
             plan["invalidated_at"] = _now_iso()
             plan["invalidation_reason"] = "ORDER_DELIVERED_ALL"
+            plan["plan_version"] = int(plan.get("plan_version", 0)) + 1
             plan["last_modified_at"] = plan["invalidated_at"]
         else:
             plan["stops"] = new_stops
@@ -382,6 +430,7 @@ def remove_stops(courier_id: str, order_id: str) -> None:
         if not new_stops:
             plan["invalidated_at"] = _now_iso()
             plan["invalidation_reason"] = "ORDER_CANCELLED"
+            plan["plan_version"] = int(plan.get("plan_version", 0)) + 1
             plan["last_modified_at"] = plan["invalidated_at"]
         else:
             plan["stops"] = new_stops
@@ -390,9 +439,13 @@ def remove_stops(courier_id: str, order_id: str) -> None:
         _write_raw(plans)
 
 
-def mark_stale(courier_id: str, reason: str = "GPS_DRIFT") -> None:
+def mark_stale(
+    courier_id: str,
+    reason: str = "GPS_DRIFT",
+    expected_version: Optional[int] = None,
+) -> None:
     """Alias of invalidate_plan for GPS-drift scenarios."""
-    invalidate_plan(courier_id, reason)
+    invalidate_plan(courier_id, reason, expected_version=expected_version)
 
 
 def mark_picked_up(courier_id: str, order_id: str,
@@ -711,4 +764,14 @@ def _validate_plan_body(plan_body: Dict[str, Any]) -> None:
 
 
 class ConcurrencyError(RuntimeError):
-    """Raised when save_plan's expected_version CAS fails."""
+    """Raised when a plan mutation's expected_version CAS fails."""
+
+    def __init__(self, courier_id: str, expected_version: int,
+                 current_version: int):
+        self.courier_id = str(courier_id)
+        self.expected_version = expected_version
+        self.current_version = current_version
+        super().__init__(
+            f"CAS fail for courier {self.courier_id}: "
+            f"expected_version={expected_version}, current={current_version}"
+        )

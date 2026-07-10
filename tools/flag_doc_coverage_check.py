@@ -16,7 +16,8 @@ import json
 import os
 import sys
 
-SCRIPTS = "/root/.openclaw/workspace/scripts"
+SCRIPTS = os.environ.get(
+    "ZIOMEK_SCRIPTS_ROOT", "/root/.openclaw/workspace/scripts")
 FLAGS = os.path.join(SCRIPTS, "flags.json")
 REF = os.path.join(SCRIPTS, "dispatch_v2", "ZIOMEK_LOGIC_REFERENCE.md")
 BASELINE = os.path.join(SCRIPTS, "dispatch_v2", "tools", "flag_doc_baseline.json")

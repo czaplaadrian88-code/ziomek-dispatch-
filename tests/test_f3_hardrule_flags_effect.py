@@ -162,7 +162,8 @@ def _capture_dwell(monkeypatch, on):
 
     orders = {"A": {"status": "picked_up", "pickup_coords": [53.11, 23.14],
                     "delivery_coords": [53.12, 23.13], "courier_id": "99"}}
-    PR._gen_one_bag_plan("99", ["A"], orders, {}, now, R)
+    PR._gen_one_bag_plan(
+        "99", ["A"], orders, {}, now, R, expected_version=0)
     return cap
 
 

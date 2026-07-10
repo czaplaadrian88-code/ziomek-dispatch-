@@ -53,6 +53,7 @@ def _patch_overrides_file(monkeypatch, tmp_path):
 def _patch_schedule(monkeypatch, schedule, stale=False):
     monkeypatch.setattr(schedule_utils, "load_schedule", lambda: schedule)
     monkeypatch.setattr(schedule_utils, "is_schedule_stale", lambda: stale)
+    monkeypatch.setattr(mo, "get_excluded_cids", lambda: set())
 
 
 # ---------------- parse layer ----------------

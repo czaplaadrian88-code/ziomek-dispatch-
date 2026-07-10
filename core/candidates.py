@@ -56,6 +56,9 @@ class EvalContext:
     loadgov_ewma: Any
     loadgov_orders: Any
     loadgov_couriers: Any
+    # Snapshot plan_version z poczatku calej decyzji (przed pula kandydatow).
+    # None = snapshot niedostepny; panel-watcher wtedy bezpiecznie pomija zapis.
+    plan_versions: Optional[Dict[str, Optional[int]]] = None
 
 
 def eval_courier(ctx: EvalContext, cid, cs):
@@ -95,6 +98,10 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     loadgov_ewma = ctx.loadgov_ewma
     loadgov_orders = ctx.loadgov_orders
     loadgov_couriers = ctx.loadgov_couriers
+    _plan_versions = ctx.plan_versions
+    _plan_expected_version = (
+        _plan_versions.get(str(cid), 0) if _plan_versions is not None else None
+    )
     # ── aliasy symboli module-level dispatch_pipeline (kontrakty monkeypatch + logi 1:1) ──
     Candidate = _dp.Candidate
     DWELL_PICKUP_MIN = _dp.DWELL_PICKUP_MIN
@@ -1828,6 +1835,9 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
 
     enriched_metrics = {
         **metrics,
+        # Z-P0-04: optimistic-CAS token dla event-time save w panel_watcher.
+        # Powstal PRZED pula kandydatow, nie tuz przed pozniejszym zapisem.
+        "plan_expected_version": _plan_expected_version,
         "score": score_result,
         "km_to_pickup": round(km_to_pickup_haversine, 2),
         # V3.26 Bug A complete: anchor restaurant for Telegram label clarification.

@@ -16,12 +16,12 @@ Re-geokod ze stringu „original" odtwarza poprawne współrzędne (Google prima
 URUCHAMIAĆ PO restart dispatch-shadow + dispatch-panel-watcher. Domyślnie DRY-RUN.
 """
 import json
-import os
 import re
 import sys
-import tempfile
 import time
 from pathlib import Path
+
+from dispatch_v2.geocoding import _mutate_cache
 
 CACHE = Path("/root/.openclaw/workspace/dispatch_state/geocode_cache.json")
 CITY = {"białystok", "bialystok"}
@@ -52,15 +52,19 @@ def has_house_number(key: str) -> bool:
     return bool(re.search(r"\d", _POST.sub(" ", key)))
 
 
+def _bad_entries(data: dict) -> dict:
+    return {
+        k: v for k, v in data.items()
+        if has_house_number(k) and not has_street(k)
+    }
+
+
 def main(apply: bool) -> int:
     data = json.loads(CACHE.read_text())
     # Poison kolizyjny = JEST numer domu ale BRAK nazwy ulicy → „Magazynowa 3" i
     # „Malachitowa 3" zlewają się w „3". Wpisy bez numeru (sama ulica „Sienkiewicza")
     # NIE kolidują między ulicami — zostawiamy je (osobny temat: adres bez numeru).
-    bad = {
-        k: v for k, v in data.items()
-        if has_house_number(k) and not has_street(k)
-    }
+    bad = _bad_entries(data)
     print(f"cache entries total: {len(data)}")
     print(f"streetless (poisoned/garbage) keys: {len(bad)}")
     for k, v in sorted(bad.items()):
@@ -71,17 +75,34 @@ def main(apply: bool) -> int:
     if not bad:
         print("nic do usunięcia.")
         return 0
-    backup = CACHE.with_suffix(f".json.bak-pre-streetless-purge2-{int(time.time())}")
-    backup.write_text(CACHE.read_text())
-    print(f"\nbackup: {backup}")
-    cleaned = {k: v for k, v in data.items() if k not in bad}
-    fd, tmp = tempfile.mkstemp(dir=str(CACHE.parent), prefix=f".{CACHE.name}.tmp-", suffix=".json")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(cleaned, f, ensure_ascii=False, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, CACHE)
-    print(f"removed {len(bad)} keys; cache now {len(cleaned)} entries.")
+    outcome = {"removed": 0, "remaining": len(data), "backup": None}
+
+    def _purge(current: dict) -> bool:
+        current_bad = _bad_entries(current)
+        if not current_bad:
+            outcome["remaining"] = len(current)
+            return False
+        backup = CACHE.with_suffix(
+            f".json.bak-pre-streetless-purge2-{int(time.time())}"
+        )
+        # Exact pre-transaction bytes, copied while the same cache lock is held.
+        backup.write_text(CACHE.read_text(encoding="utf-8"), encoding="utf-8")
+        for key in current_bad:
+            del current[key]
+        outcome.update({
+            "removed": len(current_bad),
+            "remaining": len(current),
+            "backup": backup,
+        })
+        return True
+
+    _mutate_cache(CACHE, _purge)
+    if outcome["backup"] is not None:
+        print(f"\nbackup: {outcome['backup']}")
+    print(
+        f"removed {outcome['removed']} keys; "
+        f"cache now {outcome['remaining']} entries."
+    )
     return 0
 
 

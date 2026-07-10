@@ -936,6 +936,7 @@ Flagi LIVE (wszystkie `flags.json=true`, hot-reload), dotąd nieudokumentowane w
 |---|---|---|
 | `ENABLE_GEOCODE_NOMINATIM_FALLBACK` | geocoding:518 | fallback geokodera do Nominatim, gdy ścieżka podstawowa nie zwróci współrzędnych |
 | `ENABLE_GEOCODE_VERIFICATION_ENFORCE` | geocoding:577 | FAZA 2 weryfikacji geokodu (location_type+dzielnica+cross-source): werdykt „reject" ODRZUCA współrzędne → caller dostaje `no_pickup_geocode` (OFF = tylko log) |
+| `ENABLE_GEOCODE_PIN_MEMORY_FALLBACK` | geocoding:`_pin_memory_fallback` | po porażce oficjalnej ścieżki geocode sprawdza pinezkę nauczoną z realnego GPS; OFF = tylko shadow log/audit i nadal `None`, ON = zwrot pinezki, jeśli `n_inliers >= GEOCODE_PIN_MEMORY_MIN_INLIERS` |
 | `ENABLE_PICKUP_FROM_GROUND_TRUTH` | panel_watcher:2085 | domyka lukę fantomowego odbioru: gdy ground_truth (geofence) zna odbiór, a orders_state wciąż `assigned` → emit `COURIER_PICKED_UP` z czasem GT (naprawia plan/sla/gate/apkę u źródła) |
 | `ENABLE_COORDINATOR_FORCE_TIME_RECHECK` | panel_watcher:2169 | kill-switch przycisku „Odśwież czas" konsoli: drenuje kolejkę `coordinator_time_recheck` i wymusza recheck czasu BEZWARUNKOWO (obie strony, także planned-elastyki) |
 | `ENABLE_INVALIDATE_PLAN_ON_BAG_CHANGE` | panel_watcher:569 | inwalidacja zapisanego planu kuriera przy zmianie zawartości worka (anty-stale-plan) |

@@ -34,7 +34,8 @@ NOW = datetime(2026, 6, 7, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _plan(stops, sig="sig"):
-    return {"stops": stops, "optimization_method": "incremental", "bag_signature": sig}
+    return {"plan_version": 4, "stops": stops,
+            "optimization_method": "incremental", "bag_signature": sig}
 
 
 def _orders():
@@ -61,7 +62,10 @@ def test_retime_preserves_order_and_sets_times(monkeypatch):
     monkeypatch.setattr(PR, "_start_anchor", lambda *a, **k: ((53.1, 23.1), None, "gps_pwa"))
     _mock_osrm(monkeypatch)
     saved = {}
-    monkeypatch.setattr(PR.plan_manager, "save_plan", lambda cid, body: saved.update(body))
+    monkeypatch.setattr(
+        PR.plan_manager, "save_plan",
+        lambda cid, body, **kw: saved.update(body, _expected_version=kw.get("expected_version")),
+    )
     stops = [
         {"order_id": "o1", "type": "dropoff", "coords": {"lat": 0, "lng": 0}, "dwell_min": 3.5},
         {"order_id": "o2", "type": "pickup", "coords": {"lat": 0, "lng": 0}, "dwell_min": 1.0},
@@ -76,13 +80,17 @@ def test_retime_preserves_order_and_sets_times(monkeypatch):
     assert all(s["predicted_at"] for s in saved["stops"])
     assert saved["retimed_at"] is not None
     assert saved["bag_signature"] == "sig"  # zachowana
+    assert saved["_expected_version"] == 4
 
 
 def test_retime_clamps_committed_pickup(monkeypatch):
     monkeypatch.setattr(PR, "_start_anchor", lambda *a, **k: ((53.1, 23.1), None, "gps_pwa"))
     _mock_osrm(monkeypatch, leg_s=60.0)  # 1 min legi — bez clampu byłoby ~12:0x
     saved = {}
-    monkeypatch.setattr(PR.plan_manager, "save_plan", lambda cid, body: saved.update(body))
+    monkeypatch.setattr(
+        PR.plan_manager, "save_plan",
+        lambda cid, body, **kw: saved.update(body, _expected_version=kw.get("expected_version")),
+    )
     stops = [{"order_id": "o2", "type": "pickup", "coords": {"lat": 0, "lng": 0}, "dwell_min": 1.0}]
     PR._retime_one_bag_plan("9", _plan(stops), ["o2"], _orders(), {}, NOW)
     # committed 16:00 Warsaw = 14:00 UTC → predicted clampnięte do 14:00, nie ~12:01

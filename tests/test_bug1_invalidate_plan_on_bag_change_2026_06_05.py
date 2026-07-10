@@ -88,6 +88,7 @@ def _write_pending(order_id, cid, sequence):
         "best": {
             "courier_id": cid,
             "pos_source": "last_picked_up_delivery",
+            "plan_expected_version": 0,
             "plan": {
                 "sequence": sequence,
                 "predicted_delivered_at": {str(o): _now_iso() for o in sequence},

@@ -8,7 +8,7 @@ Usage:
 import sys, json, math, logging, argparse, time
 from pathlib import Path
 sys.path.insert(0, '/root/.openclaw/workspace/scripts')
-from dispatch_v2.geocoding import geocode  # zwraca (lat, lon) tuple, sam dokleja ", Białystok, Polska"
+from dispatch_v2.geocoding import geocode, _mutate_cache  # geocode zwraca (lat, lon) tuple
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger("bootstrap_rest")
@@ -246,6 +246,43 @@ def report(results, failed, hard, soft, outliers, low_acc):
     blocking = bool(hard_flagged) or bool(soft_flagged)
     return blocking
 
+
+_MISSING = object()
+
+
+def _three_way_merge_results(baseline, desired, current):
+    """Scal wynik bootstrapu bez kasowania zmian wykonanych w trakcie runu.
+
+    ``baseline`` to snapshot odczytany przed geokodowaniem, ``desired`` to pełny
+    wynik bootstrapu, a ``current`` to świeży stan odczytany pod wspólnym
+    lockiem. Każda zmiana/dodanie/usunięcie w ``current`` względem baseline
+    wygrywa. Dla kluczy niezmienionych zachowujemy dotychczasową semantykę
+    pełnego zastąpienia przez ``desired`` (włącznie z usunięciem).
+    """
+    merged = {}
+    keys = set(baseline) | set(desired) | set(current)
+    for key in sorted(keys, key=str):
+        before = baseline.get(key, _MISSING)
+        fresh = current.get(key, _MISSING)
+        wanted = desired.get(key, _MISSING)
+        value = fresh if fresh != before else wanted
+        if value is not _MISSING:
+            merged[key] = value
+    return merged
+
+
+def _write_results_three_way(baseline, desired):
+    """Atomowo zapisz desired, scalając zmiany powstałe od baseline."""
+    def _merge(current):
+        merged = _three_way_merge_results(baseline, desired, current)
+        if merged == current:
+            return False
+        current.clear()
+        current.update(merged)
+        return True
+
+    return _mutate_cache(OUT, _merge)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true", help="Zapisz restaurant_coords.json")
@@ -277,8 +314,10 @@ def main():
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     out = {str(aid): r for aid, r in sorted(results.items())}
-    OUT.write_text(json.dumps(out, indent=2, ensure_ascii=False))
-    log.info(f"✅ Zapisano {len(out)} restauracji → {OUT}")
+    merged, changed = _write_results_three_way(existing, out)
+    log.info(
+        f"✅ {'Zapisano' if changed else 'Bez zmian:'} {len(merged)} restauracji → {OUT}"
+    )
 
 if __name__ == "__main__":
     main()

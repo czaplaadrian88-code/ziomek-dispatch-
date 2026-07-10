@@ -21,9 +21,22 @@ class TestGeocodingAudit(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.log_path = os.path.join(self.tmpdir, "geocoding_log.jsonl")
+        self._cache_paths = (
+            geocoding.CACHE_PATH,
+            geocoding.RESTAURANT_CACHE_PATH,
+            geocoding.NEG_CACHE_PATH,
+        )
+        geocoding.CACHE_PATH = Path(self.tmpdir) / "geocode_cache.json"
+        geocoding.RESTAURANT_CACHE_PATH = Path(self.tmpdir) / "restaurant_coords.json"
+        geocoding.NEG_CACHE_PATH = Path(self.tmpdir) / "geocode_neg_cache.json"
         os.environ["ENABLE_GEOCODING_AUDIT_LOG"] = "1"
 
     def tearDown(self):
+        (
+            geocoding.CACHE_PATH,
+            geocoding.RESTAURANT_CACHE_PATH,
+            geocoding.NEG_CACHE_PATH,
+        ) = self._cache_paths
         for f in Path(self.tmpdir).glob("*"):
             f.unlink()
         os.rmdir(self.tmpdir)

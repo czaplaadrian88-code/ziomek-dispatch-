@@ -55,12 +55,14 @@ def _write_pending(order_id: str, decision_record: dict):
                                     "decision_record": decision_record}}, f)
 
 
-def _sample_dr(cid: str, sequence, predicted, pickup_at=None, bag_context=None):
+def _sample_dr(cid: str, sequence, predicted, pickup_at=None, bag_context=None,
+               expected_version=0):
     return {
         "ts": _now_iso(),
         "best": {
             "courier_id": cid,
             "pos_source": "last_picked_up_delivery",
+            "plan_expected_version": expected_version,
             "plan": {
                 "sequence": sequence,
                 "predicted_delivered_at": predicted,

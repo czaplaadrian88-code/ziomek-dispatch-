@@ -81,6 +81,12 @@ def test_unknown_keys_propagated_unless_excluded():
     assert "sequence" not in result
 
 
+def test_plan_expected_version_propagated_to_serialized_candidate():
+    cand = _MockCand(metrics={"plan_expected_version": 17})
+    result = _serialize_candidate(cand)
+    assert result["plan_expected_version"] == 17
+
+
 def test_explicit_fields_take_precedence():
     # bonus_l1 jest jawnie w dict literal `m.get("bonus_l1")`. Auto-prop
     # ma `if k in base: continue` — explicit value pozostaje, no overwrite.

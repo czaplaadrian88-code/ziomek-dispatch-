@@ -169,7 +169,8 @@ class _FakePlan:
         self.predicted_delivered_at = {o: ready + timedelta(minutes=carried_min) for o in oids}
 
 
-def _drive_gen(PR, monkeypatch, flags, carried_min, existing_carried=None):
+def _drive_gen(PR, monkeypatch, flags, carried_min, existing_carried=None,
+               cas_conflict=False):
     """Uruchom _gen_one_bag_plan z kontrolowanym fresh R6; zwróć (result, saved_calls)."""
     from dispatch_v2 import common, plan_manager, route_simulator_v2 as R
     ready = datetime(2026, 7, 2, 12, 0, tzinfo=_UTC)
@@ -200,9 +201,20 @@ def _drive_gen(PR, monkeypatch, flags, carried_min, existing_carried=None):
     else:
         monkeypatch.setattr(plan_manager, "load_plan", lambda cid, **k: None)
     saved = []
-    monkeypatch.setattr(plan_manager, "save_plan", lambda cid, body, **k: saved.append((cid, body)))
+    if cas_conflict:
+        def _conflict(cid, body, **k):
+            raise plan_manager.ConcurrencyError(
+                cid, k.get("expected_version"), 1)
+        monkeypatch.setattr(plan_manager, "save_plan", _conflict)
+    else:
+        monkeypatch.setattr(
+            plan_manager, "save_plan",
+            lambda cid, body, **k: saved.append(
+                (cid, body, k.get("expected_version"))),
+        )
     PR._l3_reset_gate_stats()
-    res = PR._gen_one_bag_plan("77", oids, orders, {}, now, R)
+    res = PR._gen_one_bag_plan(
+        "77", oids, orders, {}, now, R, expected_version=0)
     return res, saved, dict(PR._L3_GATE_STATS)
 
 
@@ -245,6 +257,15 @@ def test_gate_on_no_baseline_saves_fresh(PR, monkeypatch):
                                    {"ENABLE_PLAN_RECHECK_GATES": True},
                                    carried_min=45.0, existing_carried=None)
     assert res is True and len(saved) == 1 and stats.get("l3_regen_no_baseline") == 1
+
+
+def test_cas_conflict_keeps_current_and_does_not_retry_body(PR, monkeypatch):
+    res, saved, _stats = _drive_gen(
+        PR, monkeypatch, {"ENABLE_PLAN_RECHECK_GATES": False},
+        carried_min=20.0, cas_conflict=True,
+    )
+    assert res is False
+    assert saved == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -326,7 +347,10 @@ def test_mutation2_gc_without_active_guard_would_kill_live(PR, tmp_path, monkeyp
     from dispatch_v2 import plan_manager
     orders = _seed_plans(tmp_path, plan_manager)
     killed = []
-    monkeypatch.setattr(plan_manager, "invalidate_plan", lambda cid, reason: killed.append(cid))
+    monkeypatch.setattr(
+        plan_manager, "invalidate_plan",
+        lambda cid, reason, **kwargs: killed.append(cid),
+    )
     # symulacja mutacji: invaliduj każdy non-inval plan (BEZ guarda aktywności)
     plans = plan_manager.load_plans()
     for cid, p in plans.items():

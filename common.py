@@ -493,6 +493,10 @@ ETAP4_DECISION_FLAGS = (
     # Flip za ACK+replay (peak-only klasa; guard zostaje backstopem). Konsument:
     # dispatch_pipeline._bag_dict_to_ordersim._firmowe_bag_pickup_fallback.
     "ENABLE_FIRMOWE_BAG_COORD_FALLBACK",
+    # Pin-memory geocode fallback (2026-07-09): rejestracja jest runtime-neutralna
+    # (konsument nadal czyta kanon z flags.json przez C.flag), a zapewnia parytet
+    # fingerprintu i izolację żywej wartości w testach.
+    "ENABLE_GEOCODE_PIN_MEMORY_FALLBACK",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS

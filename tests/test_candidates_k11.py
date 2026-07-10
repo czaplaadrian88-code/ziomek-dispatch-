@@ -58,9 +58,11 @@ def test_monkeypatch_check_feasibility_obowiazuje_w_core(monkeypatch):
     order = OrderSim(order_id="K11T", pickup_coords=(53.13, 23.16),
                      delivery_coords=(53.14, 23.17), status="assigned",
                      pickup_ready_at=_NOW + timedelta(minutes=10))
-    res = cand.eval_courier_inner(_ctx(new_order=order), "900", _cs())
+    res = cand.eval_courier_inner(
+        _ctx(new_order=order, plan_versions={"900": 7}), "900", _cs())
     assert captured, "core.candidates MUSI wołać check_feasibility_v2 przez atrybut dispatch_pipeline"
     assert res is not None and res.feasibility_reason == "k11_fake_reason"
+    assert res.metrics["plan_expected_version"] == 7
 
 
 def test_tls_tracking_domkniety_takze_przy_wyjatku(monkeypatch):

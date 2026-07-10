@@ -514,6 +514,60 @@ def _serialize_candidate(c) -> dict:
     return out
 
 
+def _serialize_rule_verdict(result: PipelineResult):
+    """RuleVerdict -> JSON-safe dict; brak pola w starych fixture = None.
+
+    Dataclass musi przejsc przez jawne ``to_dict`` -- ogolny `_json_safe`
+    nie zna dataclasses i zamienilby caly werdykt w nieuzyteczny string.
+    Awaria serializacji nie moze zgubic calej decyzji; jest jawna jako UNKNOWN.
+    """
+    rv = getattr(result, "rule_verdict", None)
+    if rv is None:
+        return None
+    try:
+        raw = rv.to_dict() if hasattr(rv, "to_dict") else rv
+        return _json_safe(raw)
+    except Exception as exc:
+        best = getattr(result, "best", None)
+        selected_courier_id = (
+            str(getattr(best, "courier_id", "") or "") if best is not None else None
+        )
+
+        def _unknown_rule(rule_id, policy_variant):
+            return {
+                "rule_id": rule_id,
+                "policy_variant": policy_variant,
+                "status": "UNKNOWN",
+                "limit": None,
+                "evaluated_count": 0,
+                "violation_count": 0,
+                "exempt_count": 0,
+                "unknown_count": 1,
+            }
+
+        return {
+            "schema": "rule_verdict.v1",
+            "phase": "A_SHADOW",
+            "status": "UNKNOWN",
+            "coverage": "NONE",
+            "enforcement": "NONE",
+            "decision_order_id": str(getattr(result, "order_id", "") or ""),
+            "decision_verdict": str(getattr(result, "verdict", "") or ""),
+            "selected_courier_id": selected_courier_id,
+            "selection_mode": "unknown",
+            "always_propose_enabled": None,
+            "policy_pending": ["B-01", "B-02"],
+            "rules": [
+                _unknown_rule("R6_THERMAL", "physical_thermal"),
+                _unknown_rule("R27_COMMITTED_PICKUP", "strict_5_candidate"),
+                _unknown_rule("SLA_DELIVERY", "anchor_unknown"),
+            ],
+            "violations": [],
+            "exceptions": [],
+            "missing_reasons": [f"SERIALIZER_ERROR:{type(exc).__name__}"],
+        }
+
+
 def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) -> dict:
     from datetime import datetime, timezone, timedelta
     best = result.best
@@ -612,6 +666,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         "delivery_address": result.delivery_address,
         "verdict": result.verdict,
         "reason": result.reason,
+        # Z-P0-01 faza A: finalny R6/R27/SLA po selekcji. Pole addytywne,
+        # obserwacyjne; serializer nie wywoluje ponownie evaluatora.
+        "rule_verdict": _serialize_rule_verdict(result),
         # Faza 7-AUTO-PROXIMITY (2026-05-06) — auto-route classification + telemetry.
         # Caller (dispatch_pipeline) populated auto_route per spec
         # eod_drafts/2026-05-06/faza_7_auto_proximity_design_spec.md sekcja 3.3.

@@ -274,6 +274,7 @@ def _pending_fixture(tmp_path, cid="C515", oids=("N1",)):
             "best": {
                 "courier_id": cid,
                 "pos_source": "gps",
+                "plan_expected_version": 0,
                 "plan": {
                     "sequence": list(oids),
                     "pickup_at": {oids[0]: "2026-07-01T10:10:00+00:00"},

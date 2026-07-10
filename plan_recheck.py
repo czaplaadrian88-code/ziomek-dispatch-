@@ -660,12 +660,19 @@ def _last_known_pos_anchor(cid: str, now: datetime) -> Optional[Tuple[float, flo
 
 def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
                       gps_positions: Dict[str, Any], now: datetime,
-                      R: Any) -> bool:
+                      R: Any, *, expected_version: int) -> bool:
     """Wygeneruj+zapisz plan Ziomka dla faktycznego worka kuriera.
 
     Zwraca True gdy zapisano, False gdy skip (worek za duży / brak GPS / brak
     coords / niekompletny plan). Wyjątki propagują do callera (per-courier guard).
     """
+    if (not isinstance(expected_version, int)
+            or isinstance(expected_version, bool)):
+        _log.warning(
+            f"PLAN_CAS_TOKEN_MISSING writer=regen cid={cid} "
+            f"value={expected_version!r} policy=keep_current"
+        )
+        return False
     if len(oids) > PLAN_FOR_ACTUAL_BAG_MAX:
         return False
     anchor = _start_anchor(cid, oids, orders_state, gps_positions, now)
@@ -973,7 +980,15 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
                 f"fresh_r6={_fresh_breach.get('r6_max_min')} "
                 f"exist_r6={(_exist_breach or {}).get('r6_max_min')} — zapisuję świeży")
 
-    plan_manager.save_plan(cid, body)
+    try:
+        plan_manager.save_plan(cid, body, expected_version=expected_version)
+    except plan_manager.ConcurrencyError as e:
+        _log.warning(
+            f"PLAN_CAS_SKIP writer=regen cid={cid} "
+            f"expected={e.expected_version} current={e.current_version} "
+            f"policy=keep_current"
+        )
+        return False
     _log.info(
         f"BAG_PLAN_GENERATED cid={cid} stops={len(stops)} seq={plan.sequence} "
         f"sla={plan.sla_violations} dur={plan.total_duration_min:.1f} anchor={anchor_source}"
@@ -1859,6 +1874,14 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     (kurier jedzie / spóźnia się), NIE permutujemy. Zwraca False gdy brak
     kotwicy/coords/OSRM → caller spada do pełnej decyzji (defense-in-depth).
     """
+    expected_version = plan.get("plan_version")
+    if (not isinstance(expected_version, int)
+            or isinstance(expected_version, bool)):
+        _log.warning(
+            f"PLAN_CAS_TOKEN_MISSING writer=retime cid={cid} "
+            f"value={expected_version!r} policy=keep_current"
+        )
+        return False
     stops = plan.get("stops") or []
     if not stops:
         return False
@@ -1892,7 +1915,15 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
         "bag_signature": plan.get("bag_signature") or _bag_signature(oids, orders_state),
         "retimed_at": now.isoformat(),
     }
-    plan_manager.save_plan(cid, body)
+    try:
+        plan_manager.save_plan(cid, body, expected_version=expected_version)
+    except plan_manager.ConcurrencyError as e:
+        _log.warning(
+            f"PLAN_CAS_SKIP writer=retime cid={cid} "
+            f"expected={e.expected_version} current={e.current_version} "
+            f"policy=keep_current"
+        )
+        raise
     _log.info(f"BAG_PLAN_RETIMED cid={cid} stops={len(new_stops)} anchor={anchor_source}")
     return True
 
@@ -2145,7 +2176,19 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
         # Dla 'override' pokrycie = no-op jak dotąd (plan z propozycji NIE ma
         # własnej bag_signature — zapis dziedziczy starą — więc test sygnatury
         # nadpisywałby świeże trasy z propozycji).
-        plan = plan_manager.load_plan(cid)
+        # Jeden surowy snapshot daje jednoczesnie tresc i token CAS, takze dla
+        # wpisu invalidated (load_plan ukrywa go jako None).
+        _raw_plan = plan_manager.load_plans().get(cid)
+        expected_version = (_raw_plan or {}).get("plan_version", 0)
+        if (not isinstance(expected_version, int)
+                or isinstance(expected_version, bool)):
+            _log.warning(
+                f"PLAN_CAS_TOKEN_MISSING writer=redecide cid={cid} "
+                f"value={expected_version!r} policy=keep_current"
+            )
+            return False
+        plan = (_raw_plan if _raw_plan is not None
+                and _raw_plan.get("invalidated_at") is None else None)
         if plan and plan.get("stops"):
             covered = {str(s.get("order_id")) for s in plan.get("stops", [])}
             if set(oids) <= covered:
@@ -2157,7 +2200,10 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
             gps_positions = _load_gps_positions()
         if now is None:
             now = datetime.now(timezone.utc)
-        ok = _gen_one_bag_plan(cid, oids, orders_state, gps_positions, now, R)
+        ok = _gen_one_bag_plan(
+            cid, oids, orders_state, gps_positions, now, R,
+            expected_version=expected_version,
+        )
         if ok:
             _log.info(f"REDECIDE_ON_{reason.upper()} cid={cid} bag={len(oids)}")
         return ok
@@ -2211,6 +2257,13 @@ def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = No
         if ok:
             _log.info(f"RECANON_ON_{reason.upper()} cid={cid} bag={len(oids)}")
         return ok
+    except plan_manager.ConcurrencyError as e:
+        _log.warning(
+            f"PLAN_CAS_SKIP writer=recanon cid={courier_id} "
+            f"expected={e.expected_version} current={e.current_version} "
+            f"policy=keep_current"
+        )
+        return False
     except Exception as e:
         _log.warning(f"recanon_courier cid={courier_id} fail: {type(e).__name__}: {e}")
         return False
@@ -2288,6 +2341,15 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
 
     for cid, oids in bags.items():
         existing = plans.get(cid)
+        expected_version = (existing or {}).get("plan_version", 0)
+        if (not isinstance(expected_version, int)
+                or isinstance(expected_version, bool)):
+            summary["bag_plans_skipped"] += 1
+            _log.warning(
+                f"PLAN_CAS_TOKEN_MISSING writer=gap_fill cid={cid} "
+                f"value={expected_version!r} policy=keep_current"
+            )
+            continue
         valid = (existing is not None and existing.get("invalidated_at") is None
                  and existing.get("stops"))
 
@@ -2301,12 +2363,20 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
                         _bug4_reseq_shadow(cid, oids, existing, orders_state,
                                            gps_positions, now, R, summary)
                         continue
+                except plan_manager.ConcurrencyError:
+                    # Konflikt oznacza, ze inny writer zapisal nowszy plan.
+                    # NIE wolno spasc do full-gen na tym samym starym snapshotcie.
+                    summary["bag_plans_skipped"] += 1
+                    continue
                 except Exception as e:
                     _log.warning(f"retime cid={cid} fail: {type(e).__name__}: {e}")
                 # re-czasowanie się nie udało → spadnij do pełnej decyzji
             # Zmiana worka / brak planu / retime fail → DECYZJA sekwencji (raz).
             try:
-                ok = _gen_one_bag_plan(cid, oids, orders_state, gps_positions, now, R)
+                ok = _gen_one_bag_plan(
+                    cid, oids, orders_state, gps_positions, now, R,
+                    expected_version=expected_version,
+                )
             except Exception as e:
                 summary["bag_plans_skipped"] += 1
                 _log.warning(f"gap_fill cid={cid} fail: {type(e).__name__}: {e}")
@@ -2332,7 +2402,10 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
             else:
                 partial = True  # plan częściowy → regeneruj na pełnym worku
         try:
-            ok = _gen_one_bag_plan(cid, oids, orders_state, gps_positions, now, R)
+            ok = _gen_one_bag_plan(
+                cid, oids, orders_state, gps_positions, now, R,
+                expected_version=expected_version,
+            )
         except Exception as e:
             summary["bag_plans_skipped"] += 1
             _log.warning(f"gap_fill cid={cid} fail: {type(e).__name__}: {e}")
@@ -2433,7 +2506,17 @@ def _gc_courier_plans(orders_state: Dict[str, Any], now: datetime,
                       f"stops={len(plan.get('stops') or [])} dry_run={dry_run}")
             if not dry_run:
                 try:
-                    plan_manager.invalidate_plan(cid, "GC_NO_ACTIVE")
+                    plan_manager.invalidate_plan(
+                        cid,
+                        "GC_NO_ACTIVE",
+                        expected_version=plan.get("plan_version", 0),
+                    )
+                except plan_manager.ConcurrencyError as e:
+                    _log.warning(
+                        f"PLAN_CAS_SKIP writer=gc cid={cid} "
+                        f"expected={e.expected_version} current={e.current_version} "
+                        f"policy=keep_current"
+                    )
                 except Exception as e:
                     _log.warning(f"GC invalidate cid={cid} fail: {type(e).__name__}: {e}")
             continue
@@ -2482,6 +2565,7 @@ def _l3_maybe_gc(orders_state: Dict[str, Any], now: datetime,
 
 def run_recheck() -> Dict[str, Any]:
     """Main entry point. Returns summary dict."""
+    _cas_conflicts_before = plan_manager.cas_conflicts_total()
     # ETAP 4 (2026-06-10, Z-04): fingerprint flag decyzyjnych — MUSI być
     # identyczny z shadow/czasowka (re-plan liczy TYM SAMYM silnikiem OBJ).
     try:
@@ -2534,25 +2618,77 @@ def run_recheck() -> Dict[str, Any]:
                         f"PICKUP_REFLOOR cid={cid} oid={oid} "
                         f"shift=+{shifted_min:.1f}min floor={kur}"
                     )
+        # Refloor (lub rownolegly writer) mogl podbic plan_version i zmienic
+        # tresc. _check_plan oraz ewentualna invalidacja musza bazowac na tym
+        # samym swiezym snapshotcie; przy zniknieciu/invalidacji bezpieczny skip.
+        try:
+            refreshed_plan = plan_manager.load_plan(
+                cid, invalidate_on_mismatch=False)
+        except Exception as e:
+            _log.warning(
+                f"PLAN_RECHECK_REFRESH_FAIL cid={cid} "
+                f"exc={type(e).__name__}: {e}"
+            )
+            continue
+        if refreshed_plan is None:
+            continue
+        plan = refreshed_plan
+        expected_version = plan.get("plan_version", 0)
+        if (not isinstance(expected_version, int)
+                or isinstance(expected_version, bool)):
+            _log.warning(
+                f"PLAN_CAS_TOKEN_MISSING writer=recheck-invalidate cid={cid} "
+                f"value={expected_version!r} policy=keep_current"
+            )
+            continue
         finding = _check_plan(cid, plan, orders_state, gps_positions, now)
         if finding["issues"]:
             summary["with_issues"] += 1
             findings.append(finding)
             _log_recheck_entry(finding)
+            invalidation_conflicted = False
             if AUTO_INVALIDATE_STALE and finding.get("auto_invalidate_reason"):
-                plan_manager.invalidate_plan(cid, finding["auto_invalidate_reason"])
-                summary["auto_invalidated"] += 1
-                _log.info(
-                    f"AUTO_INVALIDATE cid={cid} reason={finding['auto_invalidate_reason']}"
-                )
+                try:
+                    plan_manager.invalidate_plan(
+                        cid,
+                        finding["auto_invalidate_reason"],
+                        expected_version=expected_version,
+                    )
+                except plan_manager.ConcurrencyError as e:
+                    invalidation_conflicted = True
+                    _log.warning(
+                        f"PLAN_CAS_SKIP writer=auto_invalidate cid={cid} "
+                        f"expected={e.expected_version} current={e.current_version} "
+                        f"policy=keep_current"
+                    )
+                else:
+                    expected_version += 1
+                    summary["auto_invalidated"] += 1
+                    _log.info(
+                        f"AUTO_INVALIDATE cid={cid} "
+                        f"reason={finding['auto_invalidate_reason']}"
+                    )
             if finding.get("gps_drift"):
                 summary["gps_drift_detected"] += 1
-                if ENABLE_GPS_DRIFT_INVALIDATION:
-                    plan_manager.mark_stale(cid, "GPS_DRIFT")
-                    summary["gps_drift_invalidated"] += 1
-                    _log.info(
-                        f"GPS_DRIFT_INVALIDATE cid={cid} drift={finding['gps_drift']['drift_m']}m"
-                    )
+                if ENABLE_GPS_DRIFT_INVALIDATION and not invalidation_conflicted:
+                    try:
+                        plan_manager.mark_stale(
+                            cid,
+                            "GPS_DRIFT",
+                            expected_version=expected_version,
+                        )
+                    except plan_manager.ConcurrencyError as e:
+                        _log.warning(
+                            f"PLAN_CAS_SKIP writer=gps_invalidate cid={cid} "
+                            f"expected={e.expected_version} current={e.current_version} "
+                            f"policy=keep_current"
+                        )
+                    else:
+                        summary["gps_drift_invalidated"] += 1
+                        _log.info(
+                            f"GPS_DRIFT_INVALIDATE cid={cid} "
+                            f"drift={finding['gps_drift']['drift_m']}m"
+                        )
         else:
             summary["healthy"] += 1
 
@@ -2577,6 +2713,9 @@ def run_recheck() -> Dict[str, Any]:
         except Exception as _e:
             _log.warning(f"live_eta_refresh fail: {type(_e).__name__}: {_e}")
 
+    summary["plan_cas_conflicts"] = (
+        plan_manager.cas_conflicts_total() - _cas_conflicts_before
+    )
     _log.info(f"PLAN_RECHECK summary={summary}")
     return summary
 
