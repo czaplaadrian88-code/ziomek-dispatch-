@@ -135,7 +135,8 @@ def build_registry(bundle: Optional[SourceBundle] = None) -> Registry:
     ignored_norm = {normalize.norm(n) for n in bundle.shift_ignored}
 
     records: Dict[str, CourierRecord] = {}
-    for cid in cids:
+    # sort the universe so records / all_records() are deterministic (stable JSON)
+    for cid in sorted(cids, key=lambda c: (0, int(c)) if c.isdigit() else (1, c)):
         rec = CourierRecord(cid=cid)
 
         # aliases by authoritative source

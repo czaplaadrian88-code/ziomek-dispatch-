@@ -45,9 +45,9 @@ panel_roster: 177/177 match, 0 mismatch
 
 ### 3) Testy hermetyczne (fixtury anonimizowane, zero odczytu dispatch_state)
 
-- `tests/test_identity_registry_zp105.py` — 17 testów: kontrakt norm (diakrytyka niezłożona), worker (exact/score/bare/tie), panel_roster, **case rozbieżności worker↔panel (×5 vs ×10, wynik różny — dowód że oba profile zachowane)**, bare_key_strict, build_registry (prowieniencja/flagi/PIN-redakcja), fail-open, sqlite-opcjonalny, parytet legacy na fixturach.
-- `tests/test_identity_collisions_zp105.py` — 9 testów: a-f + sito skrót-vs-pełne (Kuba/Jakub=konflikt, „Jakub Ol"⊆„Jakub Olchowski"=sito, diakrytyka=konflikt).
-- `tests/test_identity_onboarding_zp105.py` — 6 testów: dry-run diff 5 plików, blokady kolizji, ostrzeżenie poison, **gate `--apply` (bez env→odmowa; blocking→odmowa; z env+czysto→komponuje spy, PIN zredagowany)** — realny zapis NIGDY nie uruchomiony.
+- `tests/test_identity_registry_zp105.py` — 16 testów: kontrakt norm (diakrytyka niezłożona), worker (exact/score/bare/tie), panel_roster, **case rozbieżności worker↔panel (×5 vs ×10, wynik różny — dowód że oba profile zachowane)**, bare_key_strict, build_registry (prowieniencja/flagi/PIN-redakcja), fail-open, sqlite-opcjonalny, parytet legacy na fixturach.
+- `tests/test_identity_collisions_zp105.py` — 8 testów: a-f + sito skrót-vs-pełne (Kuba/Jakub=konflikt, „Jakub Ol"⊆„Jakub Olchowski"=sito, diakrytyka=konflikt).
+- `tests/test_identity_onboarding_zp105.py` — 8 testów: dry-run diff 5 plików, blokady kolizji, ostrzeżenie poison, **gate `--apply` (bez env→odmowa; blocking→odmowa; z env+czysto→komponuje spy, PIN zredagowany)** — realny zapis NIGDY nie uruchomiony.
 
 Fixtury reprodukują klasy: goły-klucz-poison, Kuba/Jakub (podwójny alias), diakrytyka Ś vs ascii, brak nazwy, brak tieru, duplikat/orphan PIN, `_meta`, koordynator (flaga + cid 26), para git/live.
 

@@ -64,7 +64,10 @@ def build_report(paths: Dict[str, str], *, git_compare: bool = True) -> dict:
             "cids_with_multi_alias": sum(
                 1 for r in reg.all_records() if len(r.aliases.get("ids", [])) > 1
             ),
-            "coordinator_cids": [r.cid for r in reg.all_records() if r.is_coordinator],
+            "coordinator_cids": sorted(
+                (r.cid for r in reg.all_records() if r.is_coordinator),
+                key=lambda c: int(c) if c.isdigit() else 0,
+            ),
             "excluded_cids": sorted(
                 (r.cid for r in reg.all_records() if r.excluded),
                 key=lambda c: int(c) if c.isdigit() else 0,
