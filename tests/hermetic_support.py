@@ -231,6 +231,33 @@ def install_guard(monkeypatch) -> bool:
     return _STRICT_MODE
 
 
+def install_guard_subprocess() -> bool:
+    """Instalator guarda dla SUBPROCESOW pytest (wolany z sitecustomize.py
+    generowanego przez root-conftest; katalog na poczatku PYTHONPATH sesji).
+
+    Bez MonkeyPatch i bez undo — patch na CZAS ZYCIA procesu-dziecka (umiera z nim).
+    Idempotentny. Domyka luke 'script-runnery subprocess poza in-process guardem'
+    (raport ZP207 §znane-luki #1). Aktywacja wylacznie pod DISPATCH_UNDER_PYTEST=1
+    (pilnuje sitecustomize); opt-out: HERMETIC_SUBPROCESS_GUARD=0."""
+    global _STRICT_MODE
+    _STRICT_MODE = strict_enabled()
+    if not _ORIG:
+        _ORIG["open"] = builtins.open
+        _ORIG["os_open"] = os.open
+        _ORIG["replace"] = os.replace
+        _ORIG["rename"] = os.rename
+        _ORIG["unlink"] = os.unlink
+    if builtins.open is _guarded_open:
+        return _STRICT_MODE  # juz zainstalowany (idempotencja)
+    builtins.open = _guarded_open
+    os.open = _guarded_os_open
+    os.replace = _guarded_replace
+    os.rename = _guarded_rename
+    os.unlink = _guarded_unlink
+    os.remove = _guarded_unlink
+    return _STRICT_MODE
+
+
 # ── Sandbox state-dir + kwarantanna ─────────────────────────────────────────
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "hermetic"
 _QUARANTINE_PATH = Path(__file__).resolve().parent / "hermetic_quarantine.json"

@@ -69,3 +69,12 @@ instalujacy guard przy starcie subprocesu) = OSOBNA FAZA za ACK.
 `resolve_target` realpathuje RODZICA, nie plik-lisc. Dowiazanie samego liscia wskazujace
 w zywy stan nie zostanie zlapane (egzotyczne; model zagrozen = przypadkowy zapis testu
 przez literal sciezke produkcyjna, ktora zawsze zawiera zywy prefiks).
+
+## Subprocess-guard przez sitecustomize (2026-07-10, ACK Adrian)
+Luka #1 (script-runnery subprocess poza in-process guardem) ZAMKNIĘTA: root-conftest
+generuje katalog tmp z `sitecustomize.py` i stawia go na POCZĄTKU `PYTHONPATH` sesji —
+każdy python-child (script-runner, `subprocess.run` w testach) importuje go na starcie
+i instaluje TEN SAM guard (`hermetic_support.install_guard_subprocess`, bez undo — patch
+na czas życia dziecka). Aktywny wyłącznie pod `DISPATCH_UNDER_PYTEST=1`; FAIL-OPEN;
+opt-out per-run: `HERMETIC_SUBPROCESS_GUARD=0`. Produkcja nietknięta (env+katalog żyją
+tylko w sesji pytest). Dowody: `test_subprocess_inherits_guard_blocks_live_write` (+2).

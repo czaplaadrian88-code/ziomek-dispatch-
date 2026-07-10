@@ -156,3 +156,50 @@ def test_nonhermetic_marker_registered():
 
     src = inspect.getsource(ct.pytest_configure)
     assert "nonhermetic" in src, "marker nonhermetic musi byc zarejestrowany w tests/conftest"
+
+
+# ── SUBPROCESS-GUARD przez sitecustomize (ACK Adrian 10.07, domkniecie luki #1) ──
+def test_subprocess_inherits_guard_blocks_live_write(tmp_path):
+    """Dziecko-python (jak script-runner) dziedziczy guard przez sitecustomize
+    z PYTHONPATH sesji: proba zapisu do zywego dispatch_state → RAISE, plik nie powstaje."""
+    import subprocess
+    import sys as _sys
+    probe = "/root/.openclaw/workspace/dispatch_state/hermetic_subproc_probe_zp207.tmp"
+    r = subprocess.run(
+        [_sys.executable, "-c", f"open({probe!r}, 'w')"],
+        capture_output=True, text=True, env=dict(os.environ), timeout=30,
+    )
+    assert r.returncode != 0, f"zapis do LIVE przeszedl w subprocesie! stdout={r.stdout!r}"
+    assert "HERMETIC-GUARD" in (r.stderr or ""), r.stderr
+    assert not os.path.exists(probe)
+
+
+def test_subprocess_guard_allows_tmp_write(tmp_path):
+    """Pozytyw: dziecko normalnie pisze do tmp (guard = denylist, nie kaganiec)."""
+    import subprocess
+    import sys as _sys
+    p = tmp_path / "subproc_ok.txt"
+    r = subprocess.run(
+        [_sys.executable, "-c", f"open({str(p)!r}, 'w').write('x')"],
+        capture_output=True, text=True, env=dict(os.environ), timeout=30,
+    )
+    assert r.returncode == 0, r.stderr
+    assert p.read_text() == "x"
+
+
+def test_subprocess_guard_optout_env(tmp_path, monkeypatch):
+    """Opt-out HERMETIC_SUBPROCESS_GUARD=0: dziecko bez guarda (dowod ze przelacznik
+    dziala) — ale probe celuje w TMP (nigdy nie ryzykujemy zywego stanu w tescie)."""
+    import subprocess
+    import sys as _sys
+    p = tmp_path / "optout_ok.txt"
+    env = dict(os.environ)
+    env["HERMETIC_SUBPROCESS_GUARD"] = "0"
+    code = (
+        "import builtins, sys; "
+        "sys.exit(0 if builtins.open.__name__ == 'open' else 7)"
+    )
+    r = subprocess.run([_sys.executable, "-c", code],
+                       capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0, f"opt-out nie zadzialal: rc={r.returncode} {r.stderr!r}"
+    del p  # tmp_path nieuzyty poza konwencja
