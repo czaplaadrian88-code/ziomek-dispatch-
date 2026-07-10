@@ -432,8 +432,15 @@ def parse_panel_html(html: str) -> dict:
     Primary mode (USE_V2_PARSER=1):
       - Run v2 as primary, v1 NIE wywoływane
       - Returns v2 result
+
+    Migracja 1b (ACK Adrian 2026-07-10): wybór parsera czyta flags.json-FIRST
+    (dual-carrier `flag("USE_V2_PARSER", <env-const>)` — wzorzec geocode).
+    Brak klucza w flags.json = fallback na env-frozen stałą modułu (dzisiejsza
+    per-service rzeczywistość: drop-in watcher=1, reszta default=0) → zmiana
+    INERTNA do czasu flipu (klucz w flags.json + restart demonów = pakiet flip,
+    domyka genuine-drift USE_V2_PARSER z rejestru lifecycle).
     """
-    if USE_V2_PARSER:
+    if flag("USE_V2_PARSER", USE_V2_PARSER):
         try:
             from dispatch_v2.panel_html_parser import parse_panel_html_v2
             return parse_panel_html_v2(html)
