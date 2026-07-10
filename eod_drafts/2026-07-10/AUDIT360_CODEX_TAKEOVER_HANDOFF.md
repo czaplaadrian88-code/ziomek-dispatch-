@@ -25,6 +25,8 @@ automatyczne naprawy ani operacje live.
 4. `audits/2026-07-10/full-system-360/22_RECOMMENDED_BACKLOG_DELTA.md` —
    propozycje do triage, bez automatycznej promocji.
 5. `ZIOMEK_BACKLOG.md` — kanoniczne Z-P0-03, Z-P1-11 i Z-P2-07.
+6. `eod_drafts/2026-07-10/AUDIT360_REPAIR_SPRINT_QUEUE.md` — kolejka napraw,
+   priorytety i bezkolizyjne lane'y; na branchu audytu, bez merge do master.
 
 ## Git i własność
 

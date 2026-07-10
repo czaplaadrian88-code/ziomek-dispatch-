@@ -60,12 +60,12 @@ przed rozpoczeciem implementacji.
 
 | ID | Zadanie | Dowod / problem | Co zmieni sie po wykonaniu | Effort | Bramka | Status |
 |---|---|---|---|---:|---|---|
-| Z-P0-01 | Kanon R6/R27/SLA i koncowy invariant firewall | W ok. 1,17 tys. decyzji: 60 propozycji z R6 >40 min i 43 z committed pickup >10 min. `ALWAYS_PROPOSE` omija przekierowanie R6. | Kazda propozycja bedzie miala jawny werdykt zgodnosci z zatwierdzonymi HARD. W fazie A tylko shadow; egzekucja dopiero po ACK. | L + 2 dni obserwacji | Decyzje B-01/B-02 | IN_PROGRESS - LIVE SHADOW, obserwacja do 2026-07-12 06:10:36 UTC |
+| Z-P0-01 | Kanon R6/R27/SLA i koncowy invariant firewall | Audyt 360: A360-FEAS-01 jest jedynym utrzymanym P1; A360-FEAS-02..05 ujawniaja nieustalona semantyke 35 HARD vs 40 ALARM/least-damage, `None`, per-order/suma i READY/in-bag. SPRI-04 zawyza telemetrie przez brak EXEMPT. | Najpierw D0 decision-prep, replay truth i D1 EXEMPT/VIOLATION; dopiero po ACK jedna spojna granica HARD oraz jawny ALERT always-propose. | L + 2 dni obserwacji | Decyzje B-01/B-02; bez flipa przed ACK | IN_PROGRESS - SHADOW + A360-D0/D1 PENDING |
 | Z-P0-02 | Naprawa wieloprocesowego zapisu geocode cache | `flock` jest zakladany na unikalnym tempfile, wiec nie serializuje load-merge-save miedzy procesami. | Cache adresow, restauracji i negative cache przestanie gubic poprawne wpisy przy rownoleglym geokodowaniu. | M | Bez flipa; pelna regresja geocode | DONE - LIVE |
-| Z-P0-03 | Przywrocenie zielonego baseline testow | Biezacy wynik: 5 failed. Dwa dryfty nowej flagi i trzy testy working override czytajace zywy exclusion state. | Baseline bedzie znow deterministyczny; czerwony test bedzie oznaczal nowa regresje, nie stan hosta. | S | Zero zmian produkcyjnych | DONE - LIVE |
-| Z-P0-04 | CAS i ochrona przed stale write planu | `plan_manager.save_plan()` ma `expected_version`, ale trzy produkcyjne call-site'y go nie przekazuja. | `plan_recheck` nie nadpisze planu policzonego po nowszym przypisaniu; konflikt zostanie odrzucony lub przeliczony. | L | Ustalic polityke konfliktu | DONE - LIVE; keep-current/skip |
+| Z-P0-03 | Przywrocenie zielonego baseline testow | REOPENED 10.07 po flipie parsera i Audycie 360: default 4846/1; STRICT 4792/6. TEST-11 czyta live `flags.json` i oczekuje historycznego `known-open`; TEST-12 to 5 script-tests z live reads poza aktualna kwarantanna. | Baseline bedzie deterministyczny: syntetyczne flags+systemd, naprawione testy mechanizmu, wydzielone jawne live-smoke nodeidy i STRICT 0 failed z lista skipow. | M | Zero zmian produkcyjnych; nie oslabiac HERMETIC-GUARD | REOPENED - TEST-11/12 |
+| Z-P0-04 | CAS i wspolna granica planu — REOPENED 10.07 | Dispatcherowe call-site'y CAS sa LIVE, ale Audyt 360 potwierdzil pominiety writer panelu (SPRI-02/DANE-01), odrzucanie strategii solvera, rozjazd stops i null-duration=teleport (TRAS-01/02/03) oraz false-conflict touch_plan (SPRI-03). | Jeden cross-repo owner domknie decyzja→store→panel→apka: prawidlowa kolejnosc, fail-closed czas nogi, provenance/manual marker i CAS bez lost-update/resurrect. | L/XL | Po A360-H1; jeden lane PLAN; deploy readers-first/writer-second i restart za ACK | REOPENED - A360-P0 QUEUED |
 | Z-P0-05 | Retry/DLQ dla eventow failed | Historycznie 106 `NEW_ORDER` ma status failed; brak attempt count, error i automatycznego retry. | Blad przejsciowy nie zgubi obslugi zlecenia; poison event trafi do DLQ z diagnoza i limitem prob. | L | Decyzja o retry policy | PROPOSED |
-| Z-P0-06 | Ochrona logowania kurierow przed lockoutem i enumeracja | `/api/couriers` nie wymaga sesji, a limit PIN jest tylko per CID. Ok. 300 zadan moze zablokowac proby calej floty. | Limit per IP, globalny bezpiecznik, alert i bezpieczniejsza lista wyboru ogranicza DoS i enumeracje. | M | Audyt reverse proxy; UX logowania | PROPOSED |
+| Z-P0-06 | Bezpieczenstwo courier API — auth + ownership | Faza A rate-limit per-IP jest LIVE, lecz Audyt 360 potwierdzil brak ownership-guarda dla status/arrival/ground-truth/parcel (BEZP-02) i pozostawil decyzje UX katalogu pre-login (BEZP-04). | Wspolny guard order→CID zablokuje mutacje cudzej encji bez regresji wlasciciela; katalog ujawni tylko zakres zatwierdzony biznesowo. | M | Osobny worktree courier_api; deploy/restart API i UX za ACK | PHASE A LIVE; A360-S0 QUEUED |
 
 ### P1 - stabilnosc przed autonomia
 
@@ -74,13 +74,15 @@ przed rozpoczeciem implementacji.
 | Z-P1-01 | Formalny FSM zlecen | `state_machine` zna statusy, ale nie ma jednej mapy dozwolonych przejsc; zly pickup timestamp jest zastepowany `now()`. | Nielegalne przejscie i uszkodzony czas beda kwarantannowane zamiast po cichu zmieniac prawde SLA. | L | Kompatybilnosc replay historycznego |
 | Z-P1-02 | Kanoniczny ground truth ETA i SLA | Brak potwierdzonego fizycznego pickup/handoff; last-inside i arrival sa tylko obserwowalnymi proxy GPS. | Faza A mierzy to samo okno, kohorte i support bez zgadywania KPI; promocja ETA pozostaje zablokowana. | L | FAZA A DONE; KPI nadal `unbound`, potrzebna definicja KPI i coverage |
 | Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbijal czasu na etapy. | Faza A mierzy queue/fleet/OSRM/solver/selection/write; nie wlacza limitu kolejki, budzetu ani backpressure. | M | **LIVE SHADOW CANARY ON od 2026-07-11 10:27 UTC**; at-214, werdykt po 48 h |
-| Z-P1-04 | Jawny `DecisionContext` i domkniecie efektow ubocznych | Effects buffer obejmuje tylko czesc zapisow; OSRM recorder, tolerancje i bufory sa proces-globalne. | Rownolegle decyzje nie pomieszaja telemetrii ani efektow; replay stanie sie bardziej deterministyczny. | XL | Po Z-P1-03 |
+| Z-P1-04 | Jawny `DecisionContext` i wiarygodny replay | Effects buffer obejmuje tylko czesc zapisow; Audyt 360 dodatkowo wykazal PARTIAL CORE-01, process-local rozjazdy CORE-02/03 i niekonsumowany gate TEST-03. | Pierwszy inkrement tool-only rozdzieli input-miss/OSRM-miss/soft-diff i dostanie known-answer+mutation; pozniej context usunie ukryte kanaly procesu. | XL | Po Z-P0-03 i disposition Sprintu 3; oracle osobno od silnika |
 | Z-P1-05 | Kanoniczna tozsamosc kuriera — **DONE Faza A+B 2026-07-10** (pakiet `identity/`, walidator kolizji, onboarding 5-plikowy, backfill names 19→0, kanon pisowni z grafiku; delegacja 9× norm + scoring worker/panel_roster do registry — parity 177/177, golden 21417 par = 0 roznic; ODLOZONE: unifikacja profili ×10/×5 vs ×10/×10 [pomiar+ACK], Krok 4 czytelnicy plikow→registry, konsolidacja courier_api.db) | 121 aliasow mapuje sie do 65 CID; 54 CID maja wiele aliasow, 20 nie ma wpisu w `courier_names`. | Grafik, GPS, PIN, tier, plan i rozliczenia beda laczone przez CID z kontrolowanymi aliasami. | L | Migracja bez zmiany CID |
 | Z-P1-06 | Prywatnosc i retencja world records/logow | Rekordy zawieraja adresy, nazwiska i GPS, maja `0644` i rosna o setki MB dziennie. | Dane beda pseudonimizowane lub szyfrowane, `0600`, kompresowane i usuwane wedlug retencji. | M | Decyzja B-05 |
-| Z-P1-07 | Rejestr i cykl zycia flag — **DONE Faza A + kuracja 2026-07-10** (`tools/flag_lifecycle_registry.json` 504 flagi 3 swiatow + seeder z ochrona kuracji przy re-seed + checker repo-hermetic/--live + kuracja 504/504 owner/lifecycle/review/removal; genuine-drift USE_V2_PARSER ZMIGROWANY i FLIPNIETY [flags.json kanon]; 1b intencjonalne per-process zostaja swiadomie jako kandydaci osobnej fali) | `flags.json` ma 278 kluczy; istnieja trzy swiaty flag. Nowa flaga pin-memory ominela dokumentacje i izolacje testow. | Kazda flaga dostanie wlasciciela, faze, default, date review i warunek usuniecia; dryft zatrzyma CI. | L | Bez masowego flipa |
+| Z-P1-07 | Rejestr i cykl zycia flag — **FUNDAMENT DONE; FOLLOW-UP A360-FLAG-01/04** | Rejestr 504/504 i checker sa gotowe, ale carry-chain jest kluczem-wabikiem, a czesc flag behawioralnych nadal zyje poza JSON. | Najpierw decyzja retire-vs-unify; pozostawiona flaga dostanie realny consumer, ON!=OFF, fingerprint i nadal pozostanie OFF do osobnego ACK. | M | Po Z-P0-03 i disposition Sprintu 3; bez laczenia z flipem |
 | Z-P1-08 | Reprodukowalne srodowisko zaleznosci | `requirements-dispatch-venv.txt` pinuje rdzen OR-Tools, ale nie pokrywa calego zestawu test/ML/API; API ma niepinowane wymagania. | Odtworzenie hosta i CI da te same wersje; aktualizacje beda wykonywane partiami z replayem. | M | Bez upgrade'u w tym samym kroku |
 | Z-P1-09 | Jedna polityka czasu i testy DST | W kodzie pozostaja rozne zalozenia dla naive datetime; `sla_tracker` dokumentuje uspiony naive-Warsaw-as-UTC bug. | Wszystkie granice beda przyjmowac jawny typ czasu; testy pokryja DST, polnoc i rollover dnia. | L | Bez zmiany historycznych danych |
 | Z-P1-10 | Restore game day i RTO/RPO | System jest jednowezlowy, a istnienie skryptow backupu nie dowodzi skutecznego odtworzenia. | Powstanie zmierzony, powtarzalny restore stanu, eventow i baz wraz z RTO/RPO i lista brakow. | M | Odczytowo na kopii |
+| Z-P1-11 | Triage i disposition Audytu 360 | Pakiet ma 110 wpisow: 49 CONFIRMED, 4 REFUTED, 4 PARTIAL, 1 PLAUSIBLE, 52 UNVERIFIED; severity 1 P1/47 P2/58 P3/4 NONE. | Potwierdzone naprawy sa zgrupowane bez duplikatow, PARTIAL/PLAUSIBLE maja verify-first, UNVERIFIED tylko reprodukcje. | M | Pakiet i kolejka integrowane przez A360 wave-1 close; decyzje HARD/SOFT, security i ops osobno |
+| Z-P1-12 | Flow-liveness panelu, API i decyzji | OPS-02: krytyczne uslugi moga restartowac sie, lecz nie maja bezposredniego, zweryfikowanego alert route; sam PID nie wykrywa ciszy przeplywu. | Health panel/API i brak decyzji w peak beda mialy watermark, prog, ownera, consumer i kontrolowany negative control. | M | Kod/prep bez live; instalacja/restart za osobnym ACK |
 
 ### P2 - skalowanie i granice produktu
 
@@ -103,6 +105,29 @@ przed rozpoczeciem implementacji.
 | Z-P3-02 | Konsolidacja dokumentacji | Oznaczyc archiwum, zindeksowac decyzje i usunac sprzeczne wskazniki aktualnego stanu bez kasowania historii. | M |
 | Z-P3-03 | Monitoring vs observability | Ustalic ownership i wspolne konwencje metryk, alertow i health checks. | M |
 | Z-P3-04 | Redukcja broad exceptions | Zaczac od hot path: klasy bledow, reason codes, licznik fail-soft; bez masowej mechanicznej zamiany. | L |
+
+## 4A. Audyt 360 - kolejka napraw i fale bezkolizyjne
+
+Punkt wykonawczy: `eod_drafts/2026-07-10/AUDIT360_REPAIR_SPRINT_QUEUE.md`.
+Kolejka jest zapisana na branchu `audit/ziomek-360-20260710`; do czasu osobnego
+merge nie zmienia starszych statusow na `master`.
+
+Pierwsza fala po bramce wlascicieli G0:
+
+1. `A360-T0 TEST-TRUTH` (`Z-P0-03` + `Z-P2-07`) - pierwszy merge techniczny;
+2. rownolegle `A360-S0 API-OWNERSHIP` (`Z-P0-06`) w osobnym repo/worktree;
+3. rownolegle docs-only `A360-D0 R6-DECISION` (`Z-P0-01`), bez zmiany HARD;
+4. pilne osobne okno `A360-I0 CREDENTIAL` (`INFRA-P0-01`) po jawnym ACK.
+
+Nastepnie: replay oracle (`Z-P1-04`) + poprawa telemetrii EXEMPT/VIOLATION,
+potem za decyzja i ACK najpierw jedyny P1 `A360-H1 R6-HARD`, dopiero jeden
+cross-repo plan/CAS lane (`Z-P0-04`), best-effort i flag-carrier. Flow-liveness
+(`Z-P1-12`), restore (`Z-P1-10`) i SBOM (`Z-P1-08`) maja rozdzielone tory,
+ale operacje live osobne. Plan, HARD i flag-carrier nie biegna rownolegle.
+
+52 `UNVERIFIED` nie sa zadaniami naprawczymi. Cztery `REFUTED` pozostaja
+zamkniete. Pelne disposition wszystkich CONFIRMED/PARTIAL/PLAUSIBLE, aktualne
+dirty locki, file families, testy i rollback sa w punkcie wykonawczym powyzej.
 
 ## 5. Szczegolowe karty zadan
 
@@ -148,6 +173,11 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 
 ### Z-P0-04 - CAS i stale write planow
 
+**Reopened przez Audyt 360 (10.07):** poprzedni DONE obejmowal writerow
+dispatchera, ale nie zywy writer panelu. Ten sam sprint musi objac SPRI-02/03,
+TRAS-01/02/03, BLIZ-02 i DANE-01; samo dodanie `expected_version` albo samo
+poszerzenie allow-listy strategii byloby zmiana czesciowa.
+
 - **Na czym polega:** uzycie istniejacego `expected_version` we wszystkich
   produkcyjnych cyklach odczyt-obliczenie-zapis planu.
 - **Zakres pracy:** przenoszenie wersji z `load_plan`, obsluga konfliktu w watcherze
@@ -174,6 +204,11 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 - **Effort:** L; wymaga uzgodnienia limitow i backoffu.
 
 ### Z-P0-06 - Ochrona logowania kurierow
+
+**Stan po Sprincie 2 i Audycie 360:** rate-limit per-IP jest LIVE, ale karta
+pozostaje otwarta jako `A360-S0 API-OWNERSHIP`. BEZP-02 wymaga wspolnego guarda
+order→CID dla status/arrival/ground-truth/parcel. BEZP-04 jest osobna decyzja UX
+o minimalnym katalogu przed logowaniem; nie wolno jej domknac przypadkowym 401.
 
 - **Na czym polega:** ograniczenie enumeracji floty i masowego blokowania PIN-ow.
 - **Zakres pracy:** limity per CID, per IP i globalne, poprawne zaufanie do adresu
@@ -324,6 +359,31 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 - **Koniec zadania:** zapisane RTO/RPO, udany smoke odtworzonego dispatchu i lista
   recznych krokow do usuniecia w kolejnym cwiczeniu.
 - **Effort:** M.
+
+### Z-P1-11 - Triage Audytu 360
+
+- **Na czym polega:** jeden disposition dla wszystkich 110 wpisow bez mieszania
+  `CONFIRMED` z 52 hipotezami `UNVERIFIED`.
+- **Zakres pracy:** wykonany w
+  `eod_drafts/2026-07-10/AUDIT360_REPAIR_SPRINT_QUEUE.md`: mapowanie do kart,
+  fale, collision locks, DoD i rollback.
+- **Koniec zadania planistycznego:** kazdy CONFIRMED/PARTIAL/PLAUSIBLE jest w
+  pakiecie wykonawczym albo verify-first; REFUTED zamkniete; UNVERIFIED ma tylko
+  reprodukcje. Merge planu do master pozostaje osobnym krokiem.
+
+### Z-P1-12 - Flow-liveness panelu, API i decyzji
+
+- **Na czym polega:** odroznienie `proces zyje` od `przeplyw biznesowy dziala`.
+- **Zakres pracy:** direct health panelu i courier API, watermark ostatniej
+  decyzji/zdarzenia, cisza w peak, owner, severity, runbook i realny consumer
+  alertu. Kod/prep i instalacja live sa osobnymi etapami.
+- **Co zmieni w Ziomku:** cicha awaria kanalu koordynatora, API albo produkcji
+  decyzji zostanie wykryta bez czekania na telefon od czlowieka.
+- **Czego nie zmieni:** decyzji dispatchera ani dostepnosci uslug przed osobnym
+  wdrozeniem.
+- **Koniec zadania:** kontrolowany negative control czerwieni health i dociera
+  zatwierdzonym kanalem; recovery wraca na zielono; false-positive ma pomiar.
+- **Effort:** M; instalacja i restart wymagaja osobnego ACK.
 
 ### Z-P2-01 - Sygnaly mode layer
 
