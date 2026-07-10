@@ -29,3 +29,25 @@ nie powinny dzielić release’u z silnikiem.
 
 52 odzyskane `UNVERIFIED` pozostają w indeksie hipotez. Nie trafiają automatycznie
 do backlogu wykonawczego; najpierw reprodukcja z `25_REPRODUCTION_INDEX.md`.
+
+## Disposition po poleceniu Adriana 2026-07-10
+
+Naprawy zostały zmapowane bez duplikowania istniejących kart. Szczegółowa
+kolejność, aktualne locki plików i pełne disposition potwierdzonych wpisów są w
+`../../../eod_drafts/2026-07-10/AUDIT360_REPAIR_SPRINT_QUEUE.md`.
+
+| Propozycja audytu | Karta wykonawcza |
+|---|---|
+| TEST-HYGIENE | `Z-P0-03` + `Z-P2-07` |
+| R6-D3 + BESTEFFORT | `Z-P0-01`, decision-prep przed implementacją |
+| PLANBOUNDARY + PLAN-CAS-XREPO | ponownie otwarte `Z-P0-04`, jeden cross-repo lane |
+| API-OWNERSHIP | rozszerzone `Z-P0-06` |
+| REPLAY-ORACLE | pierwszy inkrement `Z-P1-04`, po disposition Sprintu 3 |
+| FLAG-NOOP | follow-up `Z-P1-07`, najpierw retire-vs-unify |
+| FLOW-LIVE | nowe `Z-P1-12` |
+| RESTORE | istniejące `Z-P1-10` |
+| SBOM | istniejące `Z-P1-08` |
+| SSH-NET | cross-project `INFRA-P1-01` |
+
+To disposition jest planem na branchu audytu, nie merge do `master` ani ACK na
+operację live.

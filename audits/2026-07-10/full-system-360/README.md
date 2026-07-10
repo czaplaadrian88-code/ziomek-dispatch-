@@ -28,6 +28,8 @@ adresów, GPS i pełnych danych osobowych.
 8. `../../../eod_drafts/2026-07-10/AUDIT360_CODEX_TAKEOVER_HANDOFF.md` — krótki
    handoff przejęcia, commity, testy, rollback i otwarte bramki dla następnej
    sesji.
+9. `../../../eod_drafts/2026-07-10/AUDIT360_REPAIR_SPRINT_QUEUE.md` — promowane
+   naprawy, priorytety, aktualne locki oraz bezkolizyjne fale wykonawcze.
 
 ## Granice
 
