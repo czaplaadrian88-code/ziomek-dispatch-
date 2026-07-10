@@ -1,0 +1,126 @@
+{
+  "_comment": "Z-P2-07 — jawna kwarantanna testow LIVE / nonhermetycznych (zaleznych od zywego stanu hosta). DEFAULT: oznaczane markerem `nonhermetic` (biegna DALEJ — baseline bez zmian). STRICT (HERMETIC_STRICT=1): pomijane (skip) z podanym powodem. Dodawaj wpisy TYLKO z konkretnym powodem. `match` = stem pliku testu (bez .py) LUB fragment nodeid.",
+  "entries": [
+    {
+      "match": "test_v325_pin_leak_defense",
+      "reason": "LIVE read-only: waliduje cleanup PRODUKCYJNEGO courier_names.json (nazwy floty). Script-style/subprocess. Nie da sie zhermetyzowac bez zmiany celu walidacji.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_route_order_live_parity",
+      "reason": "Wymaga interpretera venv PANELU (assert PANEL_PY.exists) — parytet route-order silnik<->panel. Ortogonalne do dispatch_state; zaleznosc od zewnetrznego venva.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_working_override_2026_06_01",
+      "reason": "Zalezny od ZEGARA (pora dnia / okno pracy) — nieoznaczony dotad nonhermetic; przechodzi/pada zaleznie od czasu uruchomienia.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_panel_packs_signal_v328.py::test_load_cache_fresh",
+      "reason": "ZNALEZIONA POLLUTION PRODUKCJI (guard ujawnil): _write_packs_cache robi tempfile.mkstemp(dir=ZYWY dispatch_state) + os.replace na ZYWY panel_packs_cache.json. PANEL_PACKS_CACHE_PATH=hardcode, ignoruje DISPATCH_STATE_DIR → test nadpisywal produkcyjny cache falszywymi danymi. A4 (grep literalny) to pominal (sciezka budowana przez dir=). FIX U ZRODLA (owner test_panel_packs_signal_v328): pisz do tmp / honoruj DISPATCH_STATE_DIR. Do fixu — kwarantanna (skip default+strict, inaczej guard=fail).",
+      "modes": ["default", "strict"]
+    },
+    {
+      "match": "test_panel_packs_signal_v328.py::test_load_cache_stale",
+      "reason": "Jak wyzej — ten sam _write_packs_cache pisze na ZYWY panel_packs_cache.json. (Uwaga dla ownera: test_cache_missing_returns_none w tym samym pliku robi os.unlink na ZYWYM cache — kasowanie stanu produkcji; primityw delete NIE jest objety guardem, wiec przechodzi, ale to ta sama klasa bledu — do fixu razem.)",
+      "modes": ["default", "strict"]
+    },
+
+    {
+      "match": "test_r04_v2_evaluator",
+      "reason": "LIVE READ-ONLY (STRICT read-block): caly plik (TestR04V2Evaluator setup + TestR04SchemaIntegrity, 14/14) czyta r04_schema.json spod ZYWEGO dispatch_state (SCHEMA_PATH hardcode). Przechodzi w DEFAULT (read dozwolony); w STRICT symulacja braku katalogu → FileNotFoundError. Kandydat na hermetyzacje = fixture schematu (osobne zadanie ownera).",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_pin_gps_commands.py::TestResolveCourier::test_canonical_dotless_match",
+      "reason": "LIVE READ-ONLY (STRICT): rozwiazanie kuriera z ZYWYCH kurier_ids/courier_names (courier_resolver hardcode). Live read-only — pass w DEFAULT.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_pin_gps_commands.py::TestResolveCourier::test_dotted_legacy_query_normalizes",
+      "reason": "LIVE READ-ONLY (STRICT): jw. rozwiazanie kuriera z zywych aliasow.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_pin_gps_commands.py::TestResolveCourier::test_cid_lookup",
+      "reason": "LIVE READ-ONLY (STRICT): jw. lookup cid z zywych aliasow.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_pin_gps_commands.py::TestResolveCourier::test_ambiguous_partial",
+      "reason": "LIVE READ-ONLY (STRICT): jw. rozstrzyganie ambiguous z zywych aliasow.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_pin_gps_commands.py::TestPinCommandHandler::test_pin_with_name",
+      "reason": "LIVE READ-ONLY (STRICT): handler PIN rozwiazuje nazwe z zywych aliasow kuriera.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_pin_gps_commands.py::TestPinCommandHandler::test_pin_with_cid",
+      "reason": "LIVE READ-ONLY (STRICT): jw. handler PIN po cid z zywych aliasow.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_pin_gps_commands.py::TestPinCommandHandler::test_pin_ambiguous_lists_options",
+      "reason": "LIVE READ-ONLY (STRICT): jw. lista opcji ambiguous z zywych aliasow.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_pin_gps_commands.py::TestGpsInstructionHandler::test_with_name_personalized",
+      "reason": "LIVE READ-ONLY (STRICT): instrukcja GPS personalizuje nazwe z zywych aliasow.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_pin_gps_commands.py::TestGpsInstructionHandler::test_ambiguous_courier_returns_disambig",
+      "reason": "LIVE READ-ONLY (STRICT): jw. disambiguacja z zywych aliasow.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_state_schema_validator.py::test_live_state_passes",
+      "reason": "LIVE READ-ONLY (STRICT): waliduje ZYWY orders_state spod dispatch_state — z zalozenia live.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_state_schema_validator.py::test_live_state_no_drift_summary",
+      "reason": "LIVE READ-ONLY (STRICT): jw. drift-summary na zywym orders_state.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_state_schema_validator.py::test_synthetic_drift_dict_of_entries_fails",
+      "reason": "LIVE READ-ONLY (STRICT): laduje baseline schematu spod ZYWEGO dispatch_state przed syntetycznym driftem → read-block.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_health_all_aggregator.py::test_build_all_snapshot_healthy",
+      "reason": "LIVE READ-ONLY (STRICT): agreguje ZYWE pliki health/heartbeat workerow spod dispatch_state.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_health_all_aggregator.py::test_build_all_snapshot_no_worker_heartbeat",
+      "reason": "LIVE READ-ONLY (STRICT): jw. brak heartbeatu na zywych plikach health.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_roadfactor_gap.py::test_real_log_runs_and_drops_outliers",
+      "reason": "LIVE READ-ONLY (STRICT): test_real_log_* czyta ZYWY log/roadfactor spod dispatch_state.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_prep_variance_anomaly_fail04.py::test_real_meta_loads_and_has_high_variance",
+      "reason": "LIVE READ-ONLY (STRICT): test_real_meta_* czyta ZYWE meta prep spod dispatch_state.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_prep_bias.py::test_real_log_smoke_if_present",
+      "reason": "LIVE READ-ONLY (STRICT): smoke czyta ZYWY log prep_bias 'if present' — w STRICT symulacja braku → FileNotFound.",
+      "modes": ["strict"]
+    },
+    {
+      "match": "test_eta_residual_infer.py::test_logger_flag_on_populates_and_consistent",
+      "reason": "LIVE READ-ONLY (STRICT): logger populuje/porownuje z ZYWEGO eta store spod dispatch_state.",
+      "modes": ["strict"]
+    }
+  ]
+}
