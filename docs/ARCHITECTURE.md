@@ -1,6 +1,6 @@
 # ARCHITEKTURA ZIOMKA — mapa nawigacyjna (START TUTAJ)
 
-> **STATUS: żywy dokument nawigacyjny** · data 2026-07-03 · cel = nowa sesja orientuje się w systemie w kilka minut.
+> **STATUS: żywy dokument nawigacyjny** · data 2026-07-10 · cel = nowa sesja orientuje się w systemie w kilka minut.
 > Aktualizuj przy KAŻDEJ zmianie architektury (nowa warstwa/demon/most/repo).
 > **To jest mapa, nie kanon.** Kontrakty, inwarianty i „jak zmieniać" żyją osobno:
 > - **`../ZIOMEK_ARCHITECTURE.md`** — 10 warstw + 6 filarów + 8 kontraktów + rejestr bliźniaków (kanon, zatw. Adrian 01.07).
@@ -50,7 +50,10 @@ flowchart TD
     PP[papu backend] -->|papu_dispatch_bridge| G
   end
   PW --> SM[state_machine<br/>orders_state.json]
+  SM -.->|observer log-only| FSM[order_fsm<br/>formalny validator]
   PW -->|event NEW_ORDER| ENG
+  PW -->|event| EB[(events.db<br/>retry metadata)]
+  EB -.->|manual only| RH[event_retry / replay_dead_letter]
   PM --> SM
   subgraph ENG [SILNIK dispatch-shadow]
     T[_tick] --> DP[dispatch_pipeline] --> FE[feasibility_v2 HARD] --> SC[scoring SOFT] --> SEL[selekcja] --> VD[werdykt KOORD]
@@ -68,7 +71,7 @@ flowchart TD
   CAPI -.->|import route_podjazdy/live_eta_cache| ENG
 ```
 
-Zlecenie wchodzi przez `panel_watcher` (poll HTML gastro), ląduje w `orders_state.json` i wyzwala tick silnika, który przechodzi 10 warstw i **dopisuje decyzję do `shadow_decisions.jsonl`** (kanoniczny log) oraz zapisuje kolejność do `courier_plans.json`. **Telegram (`telegram_approver`) jest UŚPIONY od 26.06** (czysty stop, exit 0) — to była historyczna powierzchnia „człowieka", dziś **dormant do decyzji Adriana** (WD-12 w `audyt/10-PLAN.md`). **Powierzchnie ŻYWE = (a) konsola koordynatora `gps.nadajesz.pl/admin`** (przydział, monitor floty, śledzenie) **i (b) apka kuriera** (`courier_api :8767`). Klient końcowy widzi status paczki na `/sledz`. Kluczowe: konsola i apka nie tylko czytają pliki stanu — **importują `dispatch_v2` jako bibliotekę** (patrz §9).
+Zlecenie wchodzi przez `panel_watcher` (poll HTML gastro), ląduje w `orders_state.json` i wyzwala tick silnika, który przechodzi 10 warstw i **dopisuje decyzję do `shadow_decisions.jsonl`** (kanoniczny log) oraz zapisuje kolejność do `courier_plans.json`. Formalny `order_fsm` obserwuje zdarzenia legacy wyłącznie log-only; `state_machine` pozostaje jedynym writerem, a enforcement jest niewpięty. `events.db` ma metadane retry/DLQ, lecz nie ma automatycznego workera ani timera — replay DLQ jest ręcznym CLI. **Telegram (`telegram_approver`) jest UŚPIONY od 26.06** (czysty stop, exit 0) — to była historyczna powierzchnia „człowieka", dziś **dormant do decyzji Adriana** (WD-12 w `audyt/10-PLAN.md`). **Powierzchnie ŻYWE = (a) konsola koordynatora `gps.nadajesz.pl/admin`** (przydział, monitor floty, śledzenie) **i (b) apka kuriera** (`courier_api :8767`). Klient końcowy widzi status paczki na `/sledz`. Kluczowe: konsola i apka nie tylko czytają pliki stanu — **importują `dispatch_v2` jako bibliotekę** (patrz §9).
 
 ---
 
@@ -102,7 +105,7 @@ Zlecenie wchodzi przez `panel_watcher` (poll HTML gastro), ląduje w `orders_sta
 | `pending_proposals.json` | `panel_watcher`, `postpone_sweeper` | (dawniej TG), tools | propozycje w locie |
 | `learning_log.jsonl` (100 MB) | `panel_watcher`, `daily_briefing` | retro/learning | trail TAK/NIE/INNY/KOORD |
 | `live_order_eta.json` | `live_eta_cache` | konsola, apka | cache ETA |
-| `events.db` (32 MB) | event_bus / silnik | konsumenci eventów | log zdarzeń |
+| `events.db` (rozmiar zmienny) | event_bus / silnik | konsumenci eventów + ręczne narzędzia retry | log zdarzeń; addytywne metadane retry/DLQ, bez automatycznego workera |
 | `courier_api.db` (26 MB) | `courier_api` | apka | stan apki (GPS/token/plany) |
 | `courier_last_pos.json` | `courier_resolver` | silnik | last-known-pos (no-GPS) |
 | `geocode_cache.json` | `geocoding` | silnik, konsola | cache geokodu |

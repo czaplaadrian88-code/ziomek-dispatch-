@@ -1,6 +1,6 @@
 # CODEMAP — spis treści repo `dispatch_v2` (Ziomek)
 
-**STATUS:** żywy · **Data:** 2026-07-03 · **Autor:** Agent H (Faza 2 audytu, krok K2.2).
+**STATUS:** żywy · **Data:** 2026-07-10 · **Autor:** Agent H (Faza 2 audytu, krok K2.2; aktualizacja Sprint 2).
 **Cel:** mapa do szybkiego czytania — nowa sesja NIE musi skanować repo. Numery linii celowo pominięte (dryfują — **grepuj symbol**, nie linię). Ścieżki relatywne od korzenia repo `dispatch_v2/`; `../` = sąsiad w `scripts/`; stan/logi/pamięć = ścieżki absolutne (poza repo).
 **Aktualizuj** gdy dochodzi/znika katalog lub kluczowy plik korzenia (patrz stopka). Kanon zachowania silnika = `ZIOMEK_ARCHITECTURE.md`; ten plik to TYLKO nawigacja.
 
@@ -24,7 +24,7 @@
 | `telegram/` | ⚠ TYLKO szablony — **NIE bot** (bot = `telegram_approver.py` w korzeniu) | `templates.py` | żywy pakiet szablonów, myląca nazwa |
 | `ml_data_prep/` | Offline pipeline LGBM two-model (arbitrage/bundle/solo/forward) | `*.pkl` (label_encoders — binaria w git) | żywy offline; „zero contact z live" |
 | `config/` | Statyczna konfiguracja | `cities.json` | dane |
-| `migrations/` | 2 migracje jednorazowe (05.05/05.07) | — | archiwum |
+| `migrations/` | 3 migracje jednorazowe (05.05/05.07/10.07) | `event_retry_metadata.py` (inspect read-only; zapis tylko z `--apply`) | archiwum/ops |
 | `dispatch_state/` | ⚠ **NIE stan silnika** — tylko dane epaki | `epaka_data/*.csv` | dane; kolizja nazw (patrz §4 pułapki) |
 | `eod_drafts/` | Dzienniki „koniec dnia" — 50 podkatalogów wg daty (raporty + skrypty + dane) | `2026-06-30/FAZA1_*`, `2026-07-02/AUDYT2/` | mieszane; ~48M, dane/jsonl churnują w git |
 | `docs/` | ŻYWA nawigacja + archiwum: `ARCHITECTURE.md`, `CODEMAP.md`, `decisions/` (ADR), `audyt/` (ten audyt), `deploy/` (kit HA-lite 21.06 — źródło żywego backup-sentinel!), `archive/` (kwiecień-maj + AUDIT_* + handoffy, od 03.07) | `CODEMAP.md`, `audyt/10-PLAN.md`, `archive/README.md` | żywy |
@@ -50,7 +50,8 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
 - `objm_lexr6.py` — selektor lex-helperów (bliźniak best-effort, canary `ENABLE_OBJM_LEXR6_SELECT`)
 - `sla_anchor.py` — kotwica SLA (bliźniak feasibility+route_sim)
 - `shadow_dispatcher.py` — **SILNIK**: pętla `_tick`/`run` (systemd `dispatch-shadow`); serializer `_serialize_result` → shadow log
-- `state_machine.py` — jedyne źródło prawdy o stanie zlecenia (upsert `orders_state`, 26 ścieżek)
+- `state_machine.py` — jedyne źródło prawdy o stanie zlecenia (upsert `orders_state`, 26 ścieżek); observer FSM Phase A log-only
+- `order_fsm.py` — formalny validator cyklu życia + jawne wyjątki reconcile; w Phase A nie blokuje writera
 - `plan_manager.py` — zapis/odczyt `courier_plans.json` (atomic); ładowanie planu
 - `plan_recheck.py` — periodyczny re-canon kolejności (timer 5 min); `_apply_canon_order_invariants`
 - `panel_watcher.py` — ingest z panelu gastro (event-driven poll); 4 handlery recanon
@@ -61,6 +62,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
 - `chain_eta.py`, `calib_maps.py`, `live_eta_cache.py` — łańcuch ETA, mapy kalibracji, cache ETA
 - `sla_tracker.py` — tracker SLA (daemon `dispatch-sla-tracker`); alerty R6 BAG_TIME
 - `event_bus.py` — szyna zdarzeń (+`events.db`, GC `event_bus_cleanup.py`)
+- `event_retry.py` — metadane/helpery retry i logicznego DLQ, automatyczny retry hard-OFF; ręczny operator: `replay_dead_letter.py`
 - `wave_scoring.py` — scoring falowy (C5; ⚠ NIE modyfikować bez ACK)
 
 **Autonomia / auto-assign (AUTON-01, uśpiony za `ENABLE_AUTO_ASSIGN`=OFF):**
@@ -92,6 +94,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
 | Plany / kanon kolejności / re-canon | `plan_manager.py` + `plan_recheck.py` (+4 handlery w `panel_watcher.py`) |
 | Ingest z panelu gastro | `panel_watcher.py` + `panel_client.py` |
 | Stan zleceń (źródło prawdy) | `state_machine.py` → `orders_state.json` (**workspace/dispatch_state/, POZA repo**) |
+| Formalny FSM / obserwacja przejść | `order_fsm.py` + hook w `state_machine.py`; Phase A `observer=True`, `enforcement=False`, wyjątki reconcile wymagają jawnego source |
 | Pozycje kurierów / no-GPS / last-known-pos | `courier_resolver.py` → `courier_last_pos.json` (workspace) |
 | ETA / kalibracja | `chain_eta.py`, `eta_calibration_logger.py`, `calib_maps.py`, `live_eta_cache.py` |
 | Czasówki | `czasowka_scheduler.py` + `czasowka_proactive/` |
@@ -101,6 +104,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
 | Flagi apki | `../courier_api/config.py` defaults + drop-iny `.conf` |
 | Autonomia / auto-assign (OFF) | `auto_assign_gate.py` + `auto_assign_executor.py` (`ENABLE_AUTO_ASSIGN`=OFF) |
 | Event bus | `event_bus.py` + `core/jsonl_appender.py` (+`events.db`) |
+| Retry / DLQ eventów | `event_retry.py` + `migrations/event_retry_metadata.py` + ręczne CLI `replay_dead_letter.py`; brak workera/timera i auto-retry |
 | **Nagrywanie świata decyzji (LIVE)** | `world_record.py` (+recorder OSRM w `osrm_client.py`) → `dispatch_state/world_record/world_record-YYYYMMDD.jsonl` (retencja 14 d) |
 | **Replay decyzji / bramka korpusowa** | `tools/world_replay.py` (1 decyzja, sandbox) + `tools/world_replay_gate.py` (korpus → `dispatch_state/world_replay_gate_verdict.txt`); **night-guard `dispatch-world-replay-gate.timer` LIVE od 06.07** (02:00 UTC, INFORMACYJNY — `ExecStart=-`, werdykt do pliku+`logs/world_replay_gate.log`, brak alertu; eskalacja na egzekwujący za ACK) |
 | Efekty uboczne PO decyzji (LIVE) | `effects_buffer.py` (divert/flush; konsumenci: dispatch_pipeline, feasibility_v2) |
