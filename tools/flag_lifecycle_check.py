@@ -106,6 +106,33 @@ def check_structure(reg) -> list:
     return errors
 
 
+def check_curation(reg) -> list:
+    """Kuracja (Z-P1-07): owner 100% (service + business=Adrian), removal_condition
+    obecny, a jeśli wpis SKUROWANY (curated_at) → data + lifecycle_seeded=False."""
+    errors = []
+    for name, e in reg.get("flags", {}).items():
+        owner = e.get("owner") or {}
+        if not owner.get("service"):
+            errors.append(f"[OWNER] {name}: brak owner.service")
+        if owner.get("business") != "Adrian":
+            errors.append(f"[OWNER] {name}: owner.business != 'Adrian' ({owner.get('business')!r})")
+        if not e.get("removal_condition"):
+            errors.append(f"[REMOVAL] {name}: brak removal_condition")
+        ca = e.get("curated_at")
+        if ca is not None:
+            if not _DATE_RE.match(str(ca)):
+                errors.append(f"[CURATED] {name}: curated_at '{ca}' nie jest datą")
+            if e.get("lifecycle_seeded") is not False:
+                errors.append(f"[CURATED] {name}: curated_at obecny ale lifecycle_seeded != False")
+    return errors
+
+
+def curation_coverage(reg) -> tuple:
+    flags = reg.get("flags", {})
+    curated = sum(1 for e in flags.values() if e.get("curated_at"))
+    return curated, len(flags)
+
+
 # ── coverage silnika vs source-parse common.py (NIEZALEŻNE od rejestru) ─────────
 def _engine_tuples(common_py):
     src = open(common_py, encoding="utf-8").read()
@@ -264,7 +291,9 @@ def run(argv=None) -> int:
     reg = load_registry(args.registry)
     errors = []
     errors += check_structure(reg)
+    errors += check_curation(reg)
     errors += check_engine_coverage(reg, args.common_py)
+    cur_n, cur_tot = curation_coverage(reg)
 
     if not args.skip_external:
         fj = args.flags_json or (SD.DEF_FLAGS_JSON if args.live else None)
@@ -287,6 +316,7 @@ def run(argv=None) -> int:
         "registry": args.registry,
         "mode": "live" if args.live else "repo-hermetic",
         "total_flags": len(reg.get("flags", {})),
+        "curated": cur_n, "curated_total": cur_tot,
         "errors": errors,
         "skips": skips,
         "live": live_block,
@@ -296,6 +326,7 @@ def run(argv=None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(f"FLAG LIFECYCLE CHECK [{result['mode']}] — {result['total_flags']} flag")
+        print(f"  ℹ kuracja: {cur_n}/{cur_tot} wpisów (curated_at)")
         for s in skips:
             print(f"  ⏭ SKIP: {s}")
         if live_block:

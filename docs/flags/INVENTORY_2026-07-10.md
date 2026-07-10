@@ -79,3 +79,12 @@ rename) → zlinkowane `twin_of` dwustronnie:
 - `--repo-hermetic --flags-json <żywy>`: **0 błędów** (504 flag).
 - `--live --fingerprint`: **0 błędów**; FLAG_FINGERPRINT obecny w procesach
   `shadow / plan-recheck / panel-watcher / czasowka`. Seed=snapshot z dziś → 0 dryfów.
+
+## Kuracja 2026-07-10 (ACK Adrian)
+Wszystkie **504/504** wpisy skurowane (`curated_at=2026-07-10`, `lifecycle_seeded=false`):
+- **owner**: techniczny = serwis wyprowadzony z nośników (panel→`nadajesz-panel`, apka→`courier-api`, 1b→konkretny unit pinujący, np. `dispatch-b-route-shadow`; czyste flags.json→`dispatch-shadow` jako główny konsument silnika); biznesowy = **Adrian** (100%).
+- **lifecycle z DOWODÓW** (wartość niedefaultowa/ON w jakimkolwiek nośniku → live; nazwa/semantyka shadow-log → shadow; wszędzie OFF/default → planned): **live 401 / shadow 48 / planned 55 / dead 0**. Zmiany klasy vs seed odnotowane w `notes` per wpis; niepewne heurystyki (numeryk=0) oznaczone.
+- **review_date per klasa**: live→2026-10-10, shadow→2026-08-10, planned→2026-09-10, intentional_per_process→2026-08-10 (kandydaci migracji 1b za ACK).
+- **removal_condition** per klasa (live „n/d dopóki live"; shadow „po werdykcie flip/reject + 2 dni"; planned „jeśli nie wpięta do 2026-12 → retire za ACK").
+- **RE-SEED**: `flag_lifecycle_seed.py --merge --out <kanoniczny plik>` zachowuje pola kuracji W MIEJSCU (dowód: 504/504 zachowane, 0 rozjazdów; test `test_reseed_merge_preserves_curation_pure`). ⚠ `--merge` czyta stary rejestr Z `--out` — re-seed pod inną ścieżką nie ma czego zachować (wypisze „zachowano 0"). Seed bez `--merge` na skurowany plik → głośne ostrzeżenie.
+- Checker wymusza kurację (`check_curation`): brak ownera/removal/spójności curated_at↔seeded = błąd (exit 1). USE_V2_PARSER pozostaje `known_drift` (migracja = osobny ACK).

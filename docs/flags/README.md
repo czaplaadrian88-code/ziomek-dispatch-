@@ -90,3 +90,12 @@ Z-P1-07; wartości flag nietykane).
 - Świadome zawężenie: numeryczne/stringowe stałe env SILNIKA (nie-toggle, spoza
   flags.json/NUMERIC) traktujemy jako KONFIG, nie flagę lifecycle. Apka zachowuje
   numeryczne knoby zachowania (np. `LIVE_ETA_MAX_AGE_MIN`).
+
+## Kuracja metadanych (2026-07-10, ACK Adrian)
+Rejestr jest SKUROWANY: 504/504 wpisów ma ownera (serwis + biznes=Adrian), lifecycle
+z dowodów (401 live / 48 shadow / 55 planned), review_date i removal_condition per
+klasa — szczegóły w `INVENTORY_2026-07-10.md`. Checker (`check_curation`) wymusza
+kompletność kuracji. **Re-seed WYŁĄCZNIE przez `--merge` na kanonicznym pliku**
+(zachowuje pola kuracji; seed bez `--merge` ostrzega, że by je nadpisał). Wartości
+flag NIE są przez kurację dotykane; migracja 1b→flags.json (w tym USE_V2_PARSER)
+= osobne zadanie za ACK.
