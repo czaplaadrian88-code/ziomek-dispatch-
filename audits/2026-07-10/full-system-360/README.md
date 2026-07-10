@@ -25,6 +25,9 @@ adresów, GPS i pełnych danych osobowych.
    jawny mianownik, wyniki negatywne i bezpieczne reprodukcje.
 7. `28_AUDIT_TOOL_SELF_VALIDATION.md` i `29_KNOWN_ANSWER_AND_NEGATIVE_CONTROLS.md`
    — samokontrola oraz testy zdolne zaczerwienić instrumenty.
+8. `../../../eod_drafts/2026-07-10/AUDIT360_CODEX_TAKEOVER_HANDOFF.md` — krótki
+   handoff przejęcia, commity, testy, rollback i otwarte bramki dla następnej
+   sesji.
 
 ## Granice
 
