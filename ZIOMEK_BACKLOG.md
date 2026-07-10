@@ -61,7 +61,7 @@ przed rozpoczeciem implementacji.
 |---|---|---|---|---:|---|---|
 | Z-P0-01 | Kanon R6/R27/SLA i koncowy invariant firewall | W ok. 1,17 tys. decyzji: 60 propozycji z R6 >40 min i 43 z committed pickup >10 min. `ALWAYS_PROPOSE` omija przekierowanie R6. | Kazda propozycja bedzie miala jawny werdykt zgodnosci z zatwierdzonymi HARD. W fazie A tylko shadow; egzekucja dopiero po ACK. | L + 2 dni obserwacji | Decyzje B-01/B-02 | IN_PROGRESS - LIVE SHADOW, obserwacja do 2026-07-12 06:10:36 UTC |
 | Z-P0-02 | Naprawa wieloprocesowego zapisu geocode cache | `flock` jest zakladany na unikalnym tempfile, wiec nie serializuje load-merge-save miedzy procesami. | Cache adresow, restauracji i negative cache przestanie gubic poprawne wpisy przy rownoleglym geokodowaniu. | M | Bez flipa; pelna regresja geocode | DONE - LIVE |
-| Z-P0-03 | Przywrocenie zielonego baseline testow | Biezacy wynik: 5 failed. Dwa dryfty nowej flagi i trzy testy working override czytajace zywy exclusion state. | Baseline bedzie znow deterministyczny; czerwony test bedzie oznaczal nowa regresje, nie stan hosta. | S | Zero zmian produkcyjnych | DONE - LIVE |
+| Z-P0-03 | Przywrocenie zielonego baseline testow | REOPENED 10.07 po flipie parsera i Audycie 360: default 4846/1; STRICT 4792/6. TEST-11 czyta live `flags.json` i oczekuje historycznego `known-open`; TEST-12 to 5 script-tests z live reads poza aktualna kwarantanna. | Baseline bedzie deterministyczny: syntetyczne flags+systemd, naprawione testy mechanizmu, wydzielone jawne live-smoke nodeidy i STRICT 0 failed z lista skipow. | M | Zero zmian produkcyjnych; nie oslabiac HERMETIC-GUARD | REOPENED - TEST-11/12 |
 | Z-P0-04 | CAS i ochrona przed stale write planu | `plan_manager.save_plan()` ma `expected_version`, ale trzy produkcyjne call-site'y go nie przekazuja. | `plan_recheck` nie nadpisze planu policzonego po nowszym przypisaniu; konflikt zostanie odrzucony lub przeliczony. | L | Ustalic polityke konfliktu | DONE - LIVE; keep-current/skip |
 | Z-P0-05 | Retry/DLQ dla eventow failed | Historycznie 106 `NEW_ORDER` ma status failed; brak attempt count, error i automatycznego retry. | Blad przejsciowy nie zgubi obslugi zlecenia; poison event trafi do DLQ z diagnoza i limitem prob. | L | Decyzja o retry policy | PROPOSED |
 | Z-P0-06 | Ochrona logowania kurierow przed lockoutem i enumeracja | `/api/couriers` nie wymaga sesji, a limit PIN jest tylko per CID. Ok. 300 zadan moze zablokowac proby calej floty. | Limit per IP, globalny bezpiecznik, alert i bezpieczniejsza lista wyboru ogranicza DoS i enumeracje. | M | Audyt reverse proxy; UX logowania | PROPOSED |
@@ -80,6 +80,7 @@ przed rozpoczeciem implementacji.
 | Z-P1-08 | Reprodukowalne srodowisko zaleznosci | `requirements-dispatch-venv.txt` pinuje rdzen OR-Tools, ale nie pokrywa calego zestawu test/ML/API; API ma niepinowane wymagania. | Odtworzenie hosta i CI da te same wersje; aktualizacje beda wykonywane partiami z replayem. | M | Bez upgrade'u w tym samym kroku |
 | Z-P1-09 | Jedna polityka czasu i testy DST | W kodzie pozostaja rozne zalozenia dla naive datetime; `sla_tracker` dokumentuje uspiony naive-Warsaw-as-UTC bug. | Wszystkie granice beda przyjmowac jawny typ czasu; testy pokryja DST, polnoc i rollover dnia. | L | Bez zmiany historycznych danych |
 | Z-P1-10 | Restore game day i RTO/RPO | System jest jednowezlowy, a istnienie skryptow backupu nie dowodzi skutecznego odtworzenia. | Powstanie zmierzony, powtarzalny restore stanu, eventow i baz wraz z RTO/RPO i lista brakow. | M | Odczytowo na kopii |
+| Z-P1-11 | Triage i disposition Audytu 360 | Pakiet `audits/2026-07-10/full-system-360/` ma 110 wpisow (106 odzyskanych + 4 procesowe): finalnie 1 P1, 47 P2, 58 P3, 4 NONE; 52 wpisy sa UNVERIFIED. 11/12 pierwotnych P1 ponownie sprawdzono, jeden opiera sie na zatwierdzonym handoffie off-host. | Adrian zatwierdzi lub odrzuci osobne sprinty z `22_RECOMMENDED_BACKLOG_DELTA.md`; zadne UNVERIFIED nie stanie sie automatycznie bugiem ani zgoda na flip/deploy. | M | Decyzje HARD/SOFT, security i ops osobno | AUDIT COMPLETE ON BRANCH; TRIAGE PENDING |
 
 ### P2 - skalowanie i granice produktu
 
@@ -91,7 +92,7 @@ przed rozpoczeciem implementacji.
 | Z-P2-04 | Konfiguracja miasta i tenanta | BBox, centrum, dzielnice, traffic i domyslne miasto sa bialostockie w wielu modulach. | Nowe miasto nie bedzie wymagalo kopiowania silnika ani ryzyka cross-city geocode. | XL | Decyzja B-04 |
 | Z-P2-05 | Ewolucja plikow stanu do repozytorium danych | Krytyczny stan jest rozproszony po wielu JSON/JSONL; czesc plikow jest multi-writer. | Najpierw rejestr ownership/schema, potem selektywna migracja tylko plikow z realnym problemem skali lub transakcji. | XL | Bez big-bang rewrite |
 | Z-P2-06 | Wiarygodny OSRM health i polityka cache | Health uznaje wynik fallback za zdrowy OSRM; eviction sortuje duzy cache pod globalnym lockiem. | Monitoring odrozni OSRM od fallbacku, a cache nie wywola naglego piku latencji. | M | Test awarii OSRM |
-| Z-P2-07 | Hermetyczne testy i fixture danych — **DONE 2026-07-10** (root `conftest.py`: sandbox DISPATCH_STATE_DIR + write/delete-guard na prymitywach FS + tryb STRICT [suita bez dispatch_state = 0 failed] + subprocess-guard sitecustomize; kwarantanna zewnetrzna z powodami; ZNALEZISKO panel_packs [testy mutowaly ZYWY cache] naprawione u zrodla; rollback = rm conftest.py) | Czesc testow czyta zywe logi, aliasy i exclusion state hosta. | Testy beda dzialac identycznie na czystym CI i produkcyjnym hoście; realne fixture beda wersjonowane i anonimizowane. | L | Powiazane z Z-P0-03 |
+| Z-P2-07 | Hermetyczne testy i fixture danych — **FUNDAMENT DONE, DOMKNIECIE REOPENED 2026-07-10** (root `conftest.py`: sandbox, write/delete guard, subprocess guard i zewnetrzna kwarantanna pozostaja poprawne; pozniejszy STRICT ujawnil TEST-11/12: live `flags.json` + 5 script-tests czytajacych stan kurierow poza kwarantanna) | Guard chroni produkcje, ale read isolation i lista intencjonalnych live-smoke nie sa kompletne; poprzedni dowod STRICT=0 jest stale. | Testy mechanizmu dostana syntetyczne fixture, a ewentualne live smoke osobne nodeidy z konkretnym powodem; STRICT znow bedzie 0 failed bez oslabenia guarda. | M | Powiazane z Z-P0-03; kwarantanna tylko po nodeid+powod |
 | Z-P2-08 | Least privilege dla uslug | Wiele demonow dziala jako root; hardening systemd jest nierowny. | Kompromitacja jednego procesu dostanie mniejszy zakres zapisu i odczytu sekretow. | XL | Migracja sciezek i ownership |
 
 ### P3 - redukcja entropii
@@ -136,14 +137,17 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 
 ### Z-P0-03 - Zielony baseline testow
 
-- **Na czym polega:** usuniecie pieciu znanych faili bez zmiany zachowania produkcji.
-- **Zakres pracy:** wpisanie `ENABLE_GEOCODE_PIN_MEMORY_FALLBACK` do wymaganego
-  rejestru/dokumentacji oraz odizolowanie `get_excluded_cids()` w testach working.
+- **Na czym polega:** po pierwotnym domknieciu zadanie zostalo ponownie otwarte
+  przez post-flip TEST-11 i piec live-read script-tests TEST-12.
+- **Zakres pracy:** zsyntetyzowac `flags.json` i `SYSTEMD_DIR`, usunac historyczny
+  kontrakt `USE_V2_PARSER known-open` z kodu/testu/lifecycle; piec script-tests
+  rozdzielic na hermetyczne fixture i jawne live-smoke nodeidy (jesli nadal potrzebne).
 - **Co zmieni w Ziomku:** nic w runtime; zmieni wiarygodnosc CI i lokalnej regresji.
 - **Czego nie zmieni:** wartosci flag produkcyjnych ani manual overrides floty.
-- **Koniec zadania:** pelna suita ma 0 failed, a trzy testy working przechodza przy
-  dowolnej zawartosci zywego `manual_overrides.json`.
-- **Effort:** S; pierwsze zadanie Sprintu 1.
+- **Koniec zadania:** default i `HERMETIC_STRICT=1` maja 0 failed, lista skipow jest
+  jawna, a post-migration oracle klasyfikuje pozostaly env carrier parsera jako
+  `json-overrides-env/open` bez czytania live plikow przez test mechanizmu.
+- **Effort:** M; zero zmian runtime i zero oslabenia HERMETIC-GUARD.
 
 ### Z-P0-04 - CAS i stale write planow
 
