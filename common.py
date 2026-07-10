@@ -497,6 +497,11 @@ ETAP4_DECISION_FLAGS = (
     # (konsument nadal czyta kanon z flags.json przez C.flag), a zapewnia parytet
     # fingerprintu i izolację żywej wartości w testach.
     "ENABLE_GEOCODE_PIN_MEMORY_FALLBACK",
+    # Migracja 1b (ACK Adrian 2026-07-10): wybór parsera panelu v1/v2. Kanon od flipu
+    # = flags.json (read-site panel_client czyta flag("USE_V2_PARSER", <env-const>);
+    # env drop-in watchera zostaje martwym fallbackiem). Rejestracja: fingerprint
+    # parytet per-serwis + strip w testach (izolacja żywej wartości).
+    "USE_V2_PARSER",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -507,6 +512,11 @@ ETAP4_DECISION_FLAGS = (
 # module_const) + test-izolacja (conftest wycina klucze z tmp flags.json →
 # determinizm suity). Wzorzec jak ENABLE_AUTO_ASSIGN = False (l.691, ta sama era).
 ENABLE_ETA_QUANTILE_R6_BAGCAP = False
+# Migracja 1b USE_V2_PARSER (ACK Adrian 2026-07-10): stała-fallback dla inwariantu
+# ETAP4 + decision_flag/fingerprint. REALNY konsument (panel_client.parse_panel_html)
+# czyta flag("USE_V2_PARSER", <panel_client-env-const>) — ta stała NIE steruje
+# parserem; kanon po flipie = flags.json (true), rollback hot = klucz false.
+USE_V2_PARSER = False
 # W0.2 advisory (roadmapa 08, werdykt E-1 „GO hybryda"): bezpiecznik fabrykacji ETA.
 # Wykrycie: pred_carry > ETA_FABRICATION_FLOOR_MIN ∧ pred_carry > RATIO×robust_ref,
 # gdzie robust_ref = osrm_freeflow(pickup→deliv)·traffic_mult + service + slack
