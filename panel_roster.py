@@ -29,6 +29,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from dispatch_v2.identity.normalize import norm, score_panel_roster
+
 from dispatch_v2.common import setup_logger
 
 LOG_DIR = "/root/.openclaw/workspace/scripts/logs/"
@@ -139,8 +141,11 @@ def fetch_active_roster(force: bool = False) -> Dict[int, str]:
 
 
 def _norm_token(tok: str) -> str:
-    """Lowercase + strip trailing punctuation (handles abbrev surnames 'Ch.')."""
-    return (tok or "").strip().rstrip(".,;:").lower()
+    """Lowercase + strip trailing punctuation (handles abbrev surnames 'Ch.').
+
+    Delegates to the single canonical contract (Z-P1-05 Faza B).
+    """
+    return norm(tok)
 
 
 @dataclass
@@ -162,23 +167,10 @@ def _score(full_name: str, roster_name: str) -> int:
     'j'=1 → 10), disambiguating two same-first-name couriers. A roster entry with
     only a first name scores 1 (weak — last resort).
     """
-    sp = [t for t in (full_name or "").strip().split() if t]
-    rp = [t for t in (roster_name or "").strip().split() if t]
-    if not sp or not rp:
-        return 0
-    if _norm_token(sp[0]) != _norm_token(rp[0]):
-        return 0
-    s_last = _norm_token(sp[-1]) if len(sp) > 1 else ""
-    r_last = _norm_token(rp[-1]) if len(rp) > 1 else ""
-    if not r_last:
-        return 1  # roster has bare first name only
-    if not s_last:
-        return 0  # grafik has only first name, roster has a surname -> mismatch
-    if s_last.startswith(r_last):
-        return len(r_last) * 10   # roster abbrev fully contained in grafik surname
-    if r_last.startswith(s_last):
-        return len(s_last) * 10
-    return 0
+    # Delegate to the canonical ×10/×10 strategy (Z-P1-05 Faza B). Identical
+    # result — panel_roster keeps its ×10/×10 profile (distinct from the worker
+    # ×10/×5 profile, deliberately NOT unified in Faza B).
+    return score_panel_roster(full_name, roster_name)
 
 
 def match_name_to_cid(

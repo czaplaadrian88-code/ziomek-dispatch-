@@ -16,6 +16,8 @@ import json
 import os
 from typing import Dict, List, Optional, Tuple
 
+from dispatch_v2.identity.normalize import norm
+
 PINY_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny.json"
 IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
 
@@ -25,7 +27,8 @@ ADMIN_PANEL_URL = "https://gps.nadajesz.pl/panel"
 
 
 def _norm(s: str) -> str:
-    return (s or "").strip().rstrip(".,;:").lower()
+    # Delegates to the single canonical contract (Z-P1-05 Faza B).
+    return norm(s)
 
 
 def _load_json_safe(path: str) -> dict:

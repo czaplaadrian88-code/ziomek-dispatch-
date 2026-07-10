@@ -36,6 +36,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from dispatch_v2.common import setup_logger, load_flags
+from dispatch_v2.identity.normalize import score_worker_alias
 from dispatch_v2.shift_notifications import state as state_mod
 from dispatch_v2.shift_notifications import grouping as grouping_mod
 from dispatch_v2.shift_notifications import telegram_send as telegram_send_mod
@@ -158,27 +159,13 @@ def resolve_cid(full_name: str, kurier_ids: Optional[Dict[str, str]] = None) -> 
     if not parts:
         return None
     first_lc = parts[0].lower()
-    s_last_lc = parts[-1].lower() if len(parts) > 1 else ""
 
     scored: List[Tuple[int, str, str]] = []  # (score, cid, alias_key)
     for alias, cid in kurier_ids.items():
-        atokens = alias.strip().split()
-        if not atokens:
-            continue
-        if atokens[0].lower() != first_lc:
-            continue
-        if len(atokens) == 1:
-            score = 1  # bare first-name alias (e.g. "Adrian")
-        else:
-            a_last_lc = atokens[-1].lower()
-            if not s_last_lc:
-                score = 0  # schedule has only first; alias has more → mismatch
-            elif s_last_lc.startswith(a_last_lc):
-                score = len(a_last_lc) * 10
-            elif a_last_lc.startswith(s_last_lc):
-                score = len(s_last_lc) * 5
-            else:
-                score = 0
+        # Delegate the ×10/×5 scoring rule to the canonical strategy (Z-P1-05
+        # Faza B). Scores are identical; worker keeps the exact / case-insensitive
+        # match, tie detection and RESOLVE_CID_AMBIGUOUS_* debug logging below.
+        score = score_worker_alias(full_name, alias)
         if score > 0:
             scored.append((score, cid, alias))
 

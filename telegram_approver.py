@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from dispatch_v2 import manual_overrides  # V3.26 hotfix: top-level import
+from dispatch_v2.identity.normalize import norm
                                           # (memory: V3.19g1 crash z `from X import Y` w funkcji)
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
@@ -1919,7 +1920,7 @@ def _parse_courier_time(
     matched_known = False
     if known_names:
         def _norm(x: str) -> str:
-            return x.strip().rstrip(".,;:").lower()
+            return norm(x)  # canonical contract (Z-P1-05 Faza B)
         text_norm = _norm(courier_text)
         # sort desc po długości normalized — "Grzegorz W" przed "Grzegorz", "Bartek O." przed "Bartek"
         cands = sorted(
@@ -2767,11 +2768,11 @@ async def handle_message(state: dict, msg: dict) -> None:
             import json as _tjson
             with open("/root/.openclaw/workspace/dispatch_state/kurier_ids.json") as _kf:
                 _kids = _tjson.load(_kf)
-            _name_to_cid = {k.strip().rstrip(".,;:").lower(): str(v) for k, v in _kids.items()}
+            _name_to_cid = {norm(k): str(v) for k, v in _kids.items()}
             _tiers = _load_courier_tiers() or {}
             _action = _words[-1]
             _nick_raw = " ".join(text.split()[:-1])
-            _nick_norm = _nick_raw.strip().rstrip(".,;:").lower()
+            _nick_norm = norm(_nick_raw)
             _cid = _name_to_cid.get(_nick_norm)
             if _cid:
                 _tinfo = _tiers.get(_cid)
