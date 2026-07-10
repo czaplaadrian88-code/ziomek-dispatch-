@@ -1,0 +1,9 @@
+{
+  "_meta": {"note": "test fixture"},
+  "WHITELIST": [],
+  "CONDITIONAL": [
+    {"cid": 100, "name": "Adam No", "tier": "gold", "reason": "test"}
+  ],
+  "BLACKLIST": [],
+  "INSUFFICIENT_DATA": []
+}

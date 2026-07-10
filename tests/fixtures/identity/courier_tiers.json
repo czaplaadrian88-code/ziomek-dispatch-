@@ -1,0 +1,13 @@
+{
+  "_meta": {"built": "2026-01-01", "note": "test fixture — not real"},
+  "100": {"name": "Adam No", "bag": {"tier": "gold"}, "tier_label": "gold", "added_at": "2026-01-01T00:00:00Z"},
+  "110": {"name": "Marek", "tier_label": "std"},
+  "120": {"name": "Piotr", "tier_label": "std"},
+  "200": {"name": "Jakub Olchowski", "tier_label": "std"},
+  "210": {"name": "Paweł Sc", "tier_label": "std"},
+  "220": {"name": "Tomasz Zi", "tier_label": "new"},
+  "240": {"name": "Marek Wolny", "tier_label": "std"},
+  "300": {"name": "Anna Kowalska", "tier_label": "std"},
+  "301": {"name": "Anna Kotecka", "tier_label": "std"},
+  "999": {"name": "Koord Flag", "coordinator": true, "tier_label": "koord"}
+}
