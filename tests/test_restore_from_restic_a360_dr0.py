@@ -23,6 +23,7 @@ RUNBOOK = REPO_ROOT / "docs/deploy/ha-lite/HA_LITE_RUNBOOK_2026-06-21.md"
 PINNED_TEST_IMAGE = "synthetic-postgres@sha256:" + ("a" * 64)
 RUN_ID = "synthetic_0700"
 SENSITIVE_CANARY = "SENSITIVE_CANARY_MUST_NEVER_LEAK"
+CARRIER_CANARY = "synthetic-only"
 PRIVATE_CONFIG_NAME = ".en" + "v"
 EXPECTED_SNAPSHOT_HOSTNAME = "Ziomek"
 REQUIRED_SNAPSHOT_TAGS = ("daily", "scheduled")
@@ -86,7 +87,8 @@ REQUIRED_MANIFEST_PATHS = (
 # Staly syntetyczny wektor kontraktu producenta Papu:
 # gzip -n | openssl enc -e -aes-256-cbc -pbkdf2, haslo "synthetic-only".
 # Test tylko odszyfrowuje ten niezmienny ciphertext; nie generuje go tym samym
-# procesem w runtime, wiec literowka algorytmu/KDF przestaje byc self-consistent.
+# procesem w runtime; haslo jest jawnym canary fake-carriera, wiec literowka
+# algorytmu/KDF lub kontraktu carriera przestaje byc self-consistent.
 PAPU_ENCRYPTED_KNOWN_ANSWER_B64 = (
     "U2FsdGVkX19U7AT76UWlRR6ZmcjGm8KFN7vgc4ZbJNHxleCgMrXy7QNX050LGSQm"
     "fENNMP/+A9Gqy0ZqoUjc90L8o+s4/W/PPf+VG8Q/NVE="
@@ -170,6 +172,10 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
     docker_log = tmp_path / "fake_docker.jsonl"
     docker_state = tmp_path / "fake_docker_state.json"
     openssl_log = tmp_path / "fake_openssl.jsonl"
+    carrier_log = tmp_path / "fake_carrier.jsonl"
+    carrier_state = tmp_path / "fake_carrier_once.state"
+    quota_log = tmp_path / "fake_quota.jsonl"
+    app_log = tmp_path / "fake_app.jsonl"
 
     fake_restic = fake_dir / "restic"
     _write_executable(
@@ -270,6 +276,7 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         fake_openssl,
         r'''
         #!/usr/bin/env python3
+        import hashlib
         import json
         import os
         import sys
@@ -281,9 +288,124 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
             handle.write(json.dumps(args) + "\n")
         if os.environ.get("FAKE_OPENSSL_FAIL") == "1":
             raise SystemExit(51)
+        password = sys.stdin.buffer.read().rstrip(b"\r\n")
+        if hashlib.sha256(password).hexdigest() != os.environ["FAKE_CARRIER_CANARY_SHA256"]:
+            raise SystemExit(52)
         source = args[args.index("-in") + 1]
         with open(source, "rb") as handle:
             sys.stdout.buffer.write(handle.read())
+        ''',
+    )
+
+    fake_carrier = fake_dir / "carrier"
+    _write_executable(
+        fake_carrier,
+        r'''
+        #!/usr/bin/env python3
+        import json
+        import os
+        import sys
+
+        args = sys.argv[1:]
+        fd = os.open(os.environ["FAKE_CARRIER_LOG"],
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(args) + "\n")
+        if os.environ.get("FAKE_CARRIER_FAIL") == "1":
+            raise SystemExit(81)
+        expected = [
+            "issue",
+            "--contract", "a360-dr1a-one-shot-carrier-v1-20260711",
+            "--run-id", os.environ["A360_TEST_RUN_ID"],
+            "--purpose", "papu_backup_decrypt",
+        ]
+        if args != expected:
+            raise SystemExit(82)
+        state = os.environ["FAKE_CARRIER_STATE"]
+        if os.path.exists(state):
+            raise SystemExit(83)
+        fd = os.open(state, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("issued\n")
+        print(os.environ.get("FAKE_CARRIER_VALUE", ""))
+        ''',
+    )
+
+    fake_quota = fake_dir / "quota-probe"
+    _write_executable(
+        fake_quota,
+        r'''
+        #!/usr/bin/env python3
+        import json
+        import os
+        import sys
+
+        args = sys.argv[1:]
+        fd = os.open(os.environ["FAKE_QUOTA_LOG"],
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(args) + "\n")
+        if os.environ.get("FAKE_QUOTA_FAIL") == "1":
+            raise SystemExit(84)
+        expected_prefix = [
+            "attest",
+            "--contract", "a360-dr1a-scratch-quota-v1-20260711",
+            "--run-id", os.environ["A360_TEST_RUN_ID"],
+            "--scratch-root",
+        ]
+        if args[:6] != expected_prefix or len(args) != 7:
+            raise SystemExit(85)
+        payload = {
+            "contract": os.environ.get(
+                "FAKE_QUOTA_CONTRACT", "a360-dr1a-scratch-quota-v1-20260711"
+            ),
+            "run_id": os.environ.get("FAKE_QUOTA_RUN_ID", os.environ["A360_TEST_RUN_ID"]),
+            "scratch_root": os.environ.get("FAKE_QUOTA_ROOT", args[6]),
+            "enforced": os.environ.get("FAKE_QUOTA_ENFORCED", "1") == "1",
+            "limit_bytes": int(os.environ.get("FAKE_QUOTA_LIMIT_BYTES", "107374182400")),
+            "used_bytes": int(os.environ.get("FAKE_QUOTA_USED_BYTES", "0")),
+        }
+        print(json.dumps(payload))
+        ''',
+    )
+
+    fake_app = fake_dir / "app-probe"
+    _write_executable(
+        fake_app,
+        r'''
+        #!/usr/bin/env python3
+        import json
+        import os
+        import sys
+
+        args = sys.argv[1:]
+        fd = os.open(os.environ["FAKE_APP_LOG"],
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(args) + "\n")
+        if not args or args[0] != "verify":
+            raise SystemExit(86)
+        def value(name):
+            return args[args.index(name) + 1]
+        if value("--contract") != "a360-dr1a-app-smoke-v1-20260711":
+            raise SystemExit(87)
+        if value("--run-id") != os.environ["A360_TEST_RUN_ID"]:
+            raise SystemExit(88)
+        if value("--expected-start-order") != os.environ["FAKE_EXPECTED_START_ORDER"]:
+            raise SystemExit(89)
+        stage = value("--stage")
+        if stage == os.environ.get("FAKE_APP_FAIL_STAGE"):
+            if os.environ.get("FAKE_APP_FOREIGN_CONTAINER_RUN_ID") == "1":
+                state_path = os.environ["FAKE_DOCKER_STATE"]
+                with open(state_path, "r", encoding="utf-8") as handle:
+                    state = json.load(handle)
+                state["container"]["labels"]["a360.dr0.run_id"] = "foreign_run"
+                tmp = state_path + ".app.tmp"
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(state, handle)
+                os.replace(tmp, state_path)
+            raise SystemExit(90)
         ''',
     )
 
@@ -542,10 +664,6 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
     password_file = tmp_path / "synthetic_restic_credential"
     password_file.write_text("synthetic-only\n", encoding="utf-8")
     _set_private_file(password_file)
-    key_file = tmp_path / "synthetic_decrypt_credential"
-    key_file.write_text("synthetic-only\n", encoding="utf-8")
-    _set_private_file(key_file)
-
     scratch_root = tmp_path / "scratch_0700"
     docker_root = tmp_path / "docker_root"
     docker_root.mkdir(mode=0o700)
@@ -565,6 +683,9 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "A360_RESTIC_BIN": str(fake_restic),
         "A360_DOCKER_BIN": str(fake_docker),
         "A360_OPENSSL_BIN": str(fake_openssl),
+        "A360_DR1_CARRIER_BIN": str(fake_carrier),
+        "A360_DR1_QUOTA_PROBE_BIN": str(fake_quota),
+        "A360_DR1_APP_PROBE_BIN": str(fake_app),
         "A360_GZIP_BIN": shutil.which("gzip") or "/usr/bin/gzip",
         "A360_SQLITE_BIN": shutil.which("sqlite3") or "/usr/bin/sqlite3",
         "A360_PYTHON_BIN": shutil.which("python3") or "/usr/bin/python3",
@@ -582,7 +703,6 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "A360_TEST_SAME_DEVICE": "0",
         "RESTIC_PASSWORD_FILE": str(password_file),
         "RESTIC_REPOSITORY": "synthetic:repository",
-        "PAPU_BACKUP_KEY_FILE": str(key_file),
         "FAKE_SNAPSHOT_ROOT": str(fixture_root),
         "FAKE_SNAPSHOT_TIME": snapshot_time,
         "FAKE_SNAPSHOT_TAGS_JSON": json.dumps(REQUIRED_SNAPSHOT_TAGS),
@@ -597,6 +717,14 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "FAKE_DOCKER_LOG": str(docker_log),
         "FAKE_DOCKER_STATE": str(docker_state),
         "FAKE_OPENSSL_LOG": str(openssl_log),
+        "FAKE_CARRIER_LOG": str(carrier_log),
+        "FAKE_CARRIER_STATE": str(carrier_state),
+        "FAKE_CARRIER_VALUE": CARRIER_CANARY,
+        "FAKE_CARRIER_CANARY_SHA256": hashlib.sha256(CARRIER_CANARY.encode()).hexdigest(),
+        "A360_TEST_CARRIER_CANARY_SHA256": hashlib.sha256(CARRIER_CANARY.encode()).hexdigest(),
+        "FAKE_QUOTA_LOG": str(quota_log),
+        "FAKE_APP_LOG": str(app_log),
+        "FAKE_EXPECTED_START_ORDER": "postgres,panel,papu,dispatch",
         "DOCKER_HOST": "unix:///definitely-not-real-a360-dr0.sock",
     }
     for name in (
@@ -623,7 +751,10 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "docker_log": docker_log,
         "docker_state": docker_state,
         "openssl_log": openssl_log,
-        "key_file": key_file,
+        "carrier_log": carrier_log,
+        "carrier_state": carrier_state,
+        "quota_log": quota_log,
+        "app_log": app_log,
         "password_file": password_file,
         "panel_sql_sha256": hashlib.sha256(gzip.decompress(panel_dump.read_bytes())).hexdigest(),
         "papu_sql_sha256": hashlib.sha256(gzip.decompress(papu_dump.read_bytes())).hexdigest(),
@@ -729,7 +860,7 @@ def test_known_answer_fake_postgres_schema_drill_is_isolated_and_redacted(
     }
     capacity = report["capacity_preflight"]
     assert capacity["run_budget_enforced"] is True
-    assert capacity["filesystem_quota_enforced"] is False
+    assert capacity["filesystem_quota_enforced"] is True
     assert capacity["free_space_checked"] is True
     assert report["postgres"]["panel_table_count"] == 60
     assert report["postgres"]["papu_table_count"] == 65

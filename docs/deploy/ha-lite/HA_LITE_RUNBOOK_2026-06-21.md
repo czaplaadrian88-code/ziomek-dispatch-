@@ -1,7 +1,7 @@
 # HA-lite / Disaster Recovery — runbook
 
 Pierwotna data runbooka: 2026-06-21. Aktualizacja kontraktu restore: 2026-07-11
-(A360-DR0). Celem jest bezpieczna odbudowa po awarii pojedynczego hosta. Sam
+(A360-DR0 + DR1A RESTORE-PREP). Celem jest bezpieczna odbudowa po awarii pojedynczego hosta. Sam
 runbook nie zapewnia HA, automatycznego failoveru ani pełnego RTO usługi.
 
 ## 0. Stan dowodu
@@ -14,6 +14,7 @@ runbook nie zapewnia HA, automatycznego failoveru ani pełnego RTO usługi.
 | A360-DR0 real provenance + capacity verify | **HOLD / NOT RUN** | nowy kontrakt ma wyłącznie dowód fake |
 | A360-DR0 real DB drill | **HOLD** | brak zatwierdzonego bezsekretowego wejścia dla jednego z dumpów |
 | Import/health/start-order aplikacji | **HOLD / NOT PROVEN** | brak izolowanego dowodu |
+| A360-DR1A carrier/quota/app fake | PASS w ograniczonym zakresie | jednorazowy canary bez wycieku, wymuszona fake-quota i dokładna kolejność fake app-smoke; zero realnych adapterów |
 | Pełny service RTO i RPO obu baz | **HOLD / NOT PROVEN** | nie wykonano startu usług ani end-to-end health/ruchu |
 
 Wynik PASS skryptu dotyczy wyłącznie pola `evidence_scope` w raporcie. Pole
@@ -22,9 +23,9 @@ aplikacji, health, kolejności startu oraz zależności zewnętrznych.
 
 ## 1. Granica źródło / live
 
-Kanon źródłowy A360-DR0 to
+Kanon źródłowy A360-DR1A to
 `docs/deploy/ha-lite/restore_from_restic.sh` na zatwierdzonym commicie brancha
-`ops/a360-dr0-restore`. Ta wersja **nie jest zainstalowana live**. Skrypt pod
+`ops/a360-dr1a-restore-prep`. Ta wersja **nie jest zainstalowana live**. Skrypt pod
 operacyjną ścieżką workspace może mieć inne CLI i nie był zmieniany ani
 uruchamiany w tym sprincie.
 
@@ -69,8 +70,9 @@ hermetycznym profilu testowym atestowanym przez proces nadrzędny pytest.
 ## 3. Twardy preflight pojemności
 
 Wszystkie tryby, także `verify`, wymagają dodatniego, jawnego budżetu scratch w
-bajtach; `drill` wymaga również budżetu Docker root. Są to limity pojedynczego
-runu, a nie deklaracja aktywnego filesystem quota.
+bajtach; `drill` wymaga również budżetu Docker root. DR1A dodatkowo wymaga
+atestacji prawdziwej quota scratcha (`limit/used/enforced/run_id/path`) i
+powtarza probe przed mutacją. Sam budżet nie udaje już filesystem quota.
 
 Przed listą snapshotów `verify` sprawdza niski load, dostępną pamięć, brak
 aktywnego restic/pg_dump/pg_basebackup, budżet 2 GiB cache + rezerwę i wolne
@@ -87,6 +89,24 @@ Przed rozpakowaniem skrypt:
 4. gdy scratch i Docker root dzielą filesystem, wymaga sumy obu payloadów z
    jedną rezerwą;
 5. odrzuca overflow lub niewiarygodne metadane.
+
+## 3A. Carrier i app-smoke DR1A
+
+Źródło ma trzy kontrakty adapterów:
+
+1. `a360-dr1a-one-shot-carrier-v1-20260711` — carrier wydaje sekret dokładnie
+   raz dla `run_id` i celu `papu_backup_decrypt`. Skrypt przekazuje go do
+   openssl wyłącznie stdin; nie dopuszcza wartości w argv/env/pliku/raporcie.
+2. `a360-dr1a-scratch-quota-v1-20260711` — probe zwraca wyłącznie metadane
+   quota, bez danych prywatnych, i musi potwierdzić kanoniczny scratch/run_id.
+3. `a360-dr1a-app-smoke-v1-20260711` — adapter przechodzi kolejno import panelu,
+   Papu i dispatchu, health każdego komponentu oraz dokładny start-order
+   `postgres,panel,papu,dispatch`.
+
+W fazie DR1A istnieją wyłącznie syntetyczne fake'i. Stałe realne ścieżki
+`/usr/local/libexec/a360-dr1-*` celowo nie są instalowane; brak adaptera daje
+RED przed restic lub przed mutacją. Ich instalacja, secret-store i realne
+wywołanie należą do osobnej fazy DR1B z security review i ACK.
 
 Po rozpakowaniu kontroluje rzeczywisty working set scratcha. Po pełnej
 dekompresji obu dumpów ponownie wymaga budżetu i wolnego miejsca Docker na
@@ -166,16 +186,26 @@ budżetami i przypiętym obrazem. Zapisz:
 
 Nie nazywaj czasu artifact/schema smoke pełnym RTO.
 
-### DR1 HOLD przed pierwszym real drill
+### Jednoznaczna bramka DR1B przed pierwszym real drill
 
 1. Potwierdzić realnym `verify`, że bieżący snapshot spełnia provenance v1;
    historycznego PASS nie przenosić.
 2. Potwierdzić realny capacity/concurrent-backup guard bez restore.
 3. Domknąć producer gap dwóch wymaganych unitów `backup-sentinel` albo dowieść,
    że są obecne w snapshotcie.
-4. Zapewnić filesystem quota lub zaakceptować jawny brak tej warstwy.
-5. Zatwierdzić bezpieczne wejście danych prywatnych oraz osobny
-   app/import/health/start-order smoke.
+4. Zainstalować i niezależnie zreviewować realny quota adapter; brak quota nie
+   jest już akceptowany przez kontrakt DR1A.
+5. Zainstalować i zreviewować carrier zewnętrznego secret-store; dowieść, że
+   wartość nie trafia do argv/env/pliku/logu/raportu i jest wydawana raz.
+6. Zbudować realny app/import/health/start-order adapter i jego negative
+   controls na odizolowanym hoście.
+7. Wybrać okno poza sobotnim ops-blackoutem 16:00-21:00 Warszawa, potwierdzić
+   niski load, brak backupu i uzyskać osobny jawny ACK na encrypted drill.
+
+`GO` wymaga wszystkich 7 punktów, przypiętego commita, manifestu i rollbacku
+exact `run_id`. Brak choć jednego punktu oznacza `HOLD` z jego nazwą. Aktualny
+werdykt DR1A: **HOLD — realne carrier/quota/app adaptery oraz real provenance
+nie zostały wykonane ani zainstalowane; sobota nie daje zgody na drill.**
 
 Do tego czasu `artifact`, `drill`, pełny RPO i service RTO są HOLD. To nie jest
 stan DONE.
