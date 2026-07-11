@@ -544,12 +544,19 @@ def _serialize_rule_verdict(result: PipelineResult):
                 "violation_count": 0,
                 "exempt_count": 0,
                 "unknown_count": 1,
+                "physical_status": "UNKNOWN",
+                "introduced_rule_variant_row_count": 0,
+                "preexisting_rule_variant_row_count": 0,
+                "causality_unknown_rule_variant_row_count": 0,
+                "count_unit": "rule_variant_rows",
             }
 
         return {
-            "schema": "rule_verdict.v1",
+            "schema": "rule_verdict.v2",
             "phase": "A_SHADOW",
+            "evaluation_stage": "POST_SELECTION_FINAL_PLAN",
             "status": "UNKNOWN",
+            "physical_status": "UNKNOWN",
             "coverage": "NONE",
             "enforcement": "NONE",
             "decision_order_id": str(getattr(result, "order_id", "") or ""),
@@ -566,6 +573,10 @@ def _serialize_rule_verdict(result: PipelineResult):
             "violations": [],
             "exceptions": [],
             "missing_reasons": [f"SERIALIZER_ERROR:{type(exc).__name__}"],
+            "introduced_rule_variant_row_count": 0,
+            "preexisting_rule_variant_row_count": 0,
+            "causality_unknown_rule_variant_row_count": 0,
+            "count_unit": "rule_variant_rows",
         }
 
 

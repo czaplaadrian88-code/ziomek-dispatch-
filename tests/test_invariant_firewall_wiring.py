@@ -16,22 +16,33 @@ NOW_NAIVE = datetime(2026, 7, 9, 10, 0)
 NOW_UTC = NOW_NAIVE.replace(tzinfo=timezone.utc)
 
 FULL_RULE_VERDICT_KEYS = {
-    "schema", "phase", "status", "coverage", "enforcement",
+    "schema", "phase", "evaluation_stage", "status", "physical_status",
+    "coverage", "enforcement",
     "decision_order_id", "decision_verdict", "selected_courier_id",
     "selection_mode", "always_propose_enabled", "policy_pending", "rules",
     "violations", "exceptions", "missing_reasons",
+    "introduced_rule_variant_row_count", "preexisting_rule_variant_row_count",
+    "causality_unknown_rule_variant_row_count", "count_unit",
 }
 
 
 def _assert_complete_unknown_dict(rv):
     assert set(rv) == FULL_RULE_VERDICT_KEYS
-    assert rv["schema"] == "rule_verdict.v1"
+    assert rv["schema"] == "rule_verdict.v2"
+    assert rv["evaluation_stage"] == FW.FINAL_STAGE
     assert rv["status"] == FW.UNKNOWN and rv["coverage"] == FW.NONE
+    assert rv["physical_status"] == FW.UNKNOWN
+    assert rv["count_unit"] == FW.COUNT_UNIT
     assert len(rv["rules"]) == 3
     assert {row["rule_id"] for row in rv["rules"]} == {
         FW.R6_THERMAL, FW.R27_COMMITTED_PICKUP, FW.SLA_DELIVERY,
     }
     assert rv["violations"] == [] and rv["exceptions"] == []
+    assert all({
+        "physical_status", "introduced_rule_variant_row_count",
+        "preexisting_rule_variant_row_count",
+        "causality_unknown_rule_variant_row_count", "count_unit",
+    } <= set(row) for row in rv["rules"])
     json.dumps(rv)
 
 
@@ -122,7 +133,8 @@ def test_single_hook_uses_same_normalized_now_and_preserves_decision_identity(mo
     assert result.best.plan is plan_before
     assert result.best.score == score_before
     assert result.best.plan.sequence == sequence_before
-    assert result.rule_verdict.status == FW.VIOLATION
+    assert result.rule_verdict.status == FW.VIOLATION_INTRODUCED
+    assert result.rule_verdict.physical_status == FW.VIOLATION
 
 
 @pytest.mark.parametrize(
@@ -229,7 +241,7 @@ def test_shadow_serializer_emits_rule_verdict_as_dict(monkeypatch):
     record = SD._serialize_result(result, event_id="e1", latency_ms=1.0)
     rv = record["rule_verdict"]
     assert isinstance(rv, dict)
-    assert rv["schema"] == "rule_verdict.v1"
+    assert rv["schema"] == "rule_verdict.v2"
     assert rv["status"] == FW.NOT_APPLICABLE
     assert rv["violations"] == []
     assert rv["missing_reasons"] == ["NO_SELECTED_PLAN:early_bird"]

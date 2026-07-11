@@ -74,10 +74,12 @@ def test_strict_boundary_r6_and_sla_and_required_schema(elapsed, expected):
         _policy(package_thermal_exempt=False),
     )
     assert len(rv.violations) == expected
-    assert rv.status == (FW.VIOLATION if expected else FW.PASS)
+    assert rv.status == (FW.VIOLATION_INTRODUCED if expected else FW.PASS)
+    assert rv.physical_status == (FW.VIOLATION if expected else FW.PASS)
     for row in rv.to_dict()["violations"]:
         assert {
-            "order_id", "rule_id", "value", "limit", "mode", "exception_reason"
+            "order_id", "rule_id", "value", "limit", "mode", "exception_reason",
+            "status", "provenance_stage", "impact_reason", "source",
         } <= set(row)
     if expected:
         assert {v.rule_id for v in rv.violations} == {
@@ -159,10 +161,17 @@ def test_mixed_bag_package_czasowka_thermal_exempt_but_r27_applies():
         ("P", FW.R6_THERMAL, "PACZKA_THERMAL_EXEMPT"),
         ("P", FW.SLA_DELIVERY, "PACZKA_THERMAL_EXEMPT"),
     }
+    assert all(e.status == FW.EXEMPT_POLICY for e in rv.exceptions)
+    assert all(e.provenance_stage == FW.POLICY_STAGE for e in rv.exceptions)
     variants = {(r.policy_variant, r.status) for r in rv.rules
                 if r.rule_id == FW.R27_COMMITTED_PICKUP}
-    assert variants == {("strict_5_candidate", FW.VIOLATION),
+    assert variants == {("strict_5_candidate", FW.UNKNOWN),
                         ("overload_10_candidate", FW.PASS)}
+    strict = next(r for r in rv.rules
+                  if r.rule_id == FW.R27_COMMITTED_PICKUP
+                  and r.policy_variant == "strict_5_candidate")
+    assert strict.physical_status == FW.VIOLATION
+    assert strict.causality_unknown_rule_variant_row_count == 1
 
 
 @pytest.mark.parametrize("late, expected_limits", [(5.0, set()), (5.001, {5.0}), (10.0, {5.0}), (10.001, {5.0, 10.0})])
@@ -214,7 +223,7 @@ def test_r27_naive_commit_is_warsaw_and_uses_absolute_deviation():
     assert "pickup_early" in early[0].mode
 
 
-def test_pre_existing_picked_up_breach_is_visible_with_exception_reason():
+def test_pre_existing_picked_up_breach_is_exempt_but_physically_visible():
     plan = _plan(
         pod={"B": 45.0, "N": 20.0},
         predicted={"B": NOW + timedelta(minutes=5), "N": NOW + timedelta(minutes=25)},
@@ -225,10 +234,108 @@ def test_pre_existing_picked_up_breach_is_visible_with_exception_reason():
         "picked_up_at": (NOW - timedelta(minutes=40)).isoformat(),
     }])}
     rv = FW.evaluate_final(_result(plan), _event(), fleet, NOW, _policy())
+    assert rv.status == FW.EXEMPT_PREEXISTING
+    assert rv.physical_status == FW.VIOLATION
+    assert rv.introduced_rule_variant_row_count == 0
+    assert rv.preexisting_rule_variant_row_count == 2
+    assert rv.count_unit == FW.COUNT_UNIT
     for rule in (FW.R6_THERMAL, FW.SLA_DELIVERY):
         rows = _violations(rv, rule)
         assert len(rows) == 1 and rows[0].order_id == "B"
         assert rows[0].exception_reason == "PRE_EXISTING_PICKED_UP_NO_NEW_DETOUR"
+        assert rows[0].status == FW.EXEMPT_PREEXISTING
+        assert rows[0].provenance_stage == FW.PREEXISTING_STAGE
+        assert rows[0].source
+
+
+@pytest.mark.parametrize(
+    "new_pickup, expected",
+    [
+        (NOW + timedelta(minutes=5), FW.EXEMPT_PREEXISTING),
+        (NOW + timedelta(minutes=5) - timedelta(microseconds=1),
+         FW.UNKNOWN),
+    ],
+)
+def test_carried_no_detour_boundary_never_fabricates_introduced(new_pickup, expected):
+    plan = _plan(
+        pod={"B": 45.0, "N": 20.0},
+        predicted={"B": NOW + timedelta(minutes=5),
+                   "N": NOW + timedelta(minutes=25)},
+        pickup={"N": new_pickup},
+    )
+    fleet = {"c1": NS(bag=[{
+        "order_id": "B", "status": "picked_up", "address_id": 1,
+        "picked_up_at": (NOW - timedelta(minutes=40)).isoformat(),
+    }])}
+    rv = FW.evaluate_final(_result(plan), _event(), fleet, NOW, _policy())
+    assert rv.status == expected
+    assert rv.physical_status == FW.VIOLATION
+    assert {row.status for row in rv.violations} == {expected}
+    if expected == FW.UNKNOWN:
+        assert rv.causality_unknown_rule_variant_row_count == 2
+        assert "R6_COUNTERFACTUAL_BASELINE_MISSING:B" in rv.missing_reasons
+        assert "SLA_COUNTERFACTUAL_BASELINE_MISSING:B" in rv.missing_reasons
+
+
+def test_mixed_preexisting_and_introduced_prefers_introduced_without_hiding_carried():
+    plan = _plan(
+        pod={"B": 45.0, "N": 40.0},
+        predicted={"B": NOW + timedelta(minutes=5),
+                   "N": NOW + timedelta(minutes=40)},
+        pickup={"N": NOW + timedelta(minutes=10)},
+    )
+    fleet = {"c1": NS(bag=[{
+        "order_id": "B", "status": "picked_up", "address_id": 1,
+        "picked_up_at": (NOW - timedelta(minutes=40)).isoformat(),
+    }])}
+    rv = FW.evaluate_final(_result(plan), _event(), fleet, NOW, _policy())
+    assert rv.status == FW.VIOLATION_INTRODUCED
+    assert rv.physical_status == FW.VIOLATION
+    assert {row.status for row in rv.violations} == {
+        FW.EXEMPT_PREEXISTING, FW.VIOLATION_INTRODUCED,
+    }
+    assert rv.preexisting_rule_variant_row_count == 2
+    assert rv.introduced_rule_variant_row_count == 1
+
+
+def test_unpicked_carried_breach_without_causal_baseline_is_unknown_not_accusation():
+    plan = _plan(
+        pod={"B": 45.0, "N": 20.0},
+        predicted={"B": NOW + timedelta(minutes=5),
+                   "N": NOW + timedelta(minutes=25)},
+        pickup={"N": NOW + timedelta(minutes=10)},
+    )
+    fleet = {"c1": NS(bag=[{
+        "order_id": "B", "status": "assigned", "address_id": 1,
+        "pickup_ready_at": (NOW - timedelta(minutes=40)).isoformat(),
+    }])}
+    rv = FW.evaluate_final(_result(plan), _event(), fleet, NOW, _policy())
+    row = _violations(rv, FW.R6_THERMAL)[0]
+    assert rv.status == FW.UNKNOWN
+    assert rv.physical_status == FW.VIOLATION
+    assert rv.causality_unknown_rule_variant_row_count == 1
+    assert row.status == FW.UNKNOWN
+    assert row.provenance_stage == FW.UNKNOWN_CAUSALITY_STAGE
+    assert "R6_CAUSALITY_CONTEXT_MISSING:B" in rv.missing_reasons
+
+
+def test_new_order_r27_breach_is_introduced_with_rule_and_stage_provenance():
+    plan = _plan(
+        pod={"N": 20.0},
+        predicted={"N": NOW + timedelta(minutes=20)},
+        pickup={"N": NOW + timedelta(minutes=6)},
+    )
+    rv = FW.evaluate_final(
+        _result(plan, metrics={"loadgov_load_ewma": 2.0}),
+        _event(czas_kuriera_warsaw=NOW.isoformat()),
+        {"c1": NS(bag=[])}, NOW, _policy(),
+    )
+    rows = _violations(rv, FW.R27_COMMITTED_PICKUP)
+    assert len(rows) == 1
+    assert rows[0].status == FW.VIOLATION_INTRODUCED
+    assert rows[0].provenance_stage == FW.INTRODUCED_STAGE
+    assert rows[0].impact_reason == "NEW_ORDER_COMMITTED_PICKUP_BREACH"
+    assert rv.status == FW.VIOLATION_INTRODUCED
 
 
 def test_best_effort_always_propose_mode_does_not_hide_violation():
@@ -242,7 +349,8 @@ def test_best_effort_always_propose_mode_does_not_hide_violation():
     )
     assert rv.selection_mode == "best_effort"
     assert rv.always_propose_enabled is True
-    assert rv.status == FW.VIOLATION
+    assert rv.status == FW.VIOLATION_INTRODUCED
+    assert rv.physical_status == FW.VIOLATION
     assert all("selection_best_effort" in v.mode for v in rv.violations)
     assert all("always_propose_enabled" in v.mode for v in rv.violations)
 

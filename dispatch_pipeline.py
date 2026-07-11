@@ -3775,7 +3775,7 @@ def _eta_fabrication_check(result: "PipelineResult", order_event: dict,
 
 
 def _final_rule_unknown_dict(result: "PipelineResult", reason_code: str) -> Dict[str, Any]:
-    """Ostatni, bezmodułowy fallback ``rule_verdict.v1``.
+    """Ostatni, bezmodułowy fallback ``rule_verdict.v2``.
 
     Używa wyłącznie prymitywów JSON i nie zależy od importu firewalla, flag ani
     loggera. Dzięki temu nawet awaria samej ścieżki obserwowalności nie usuwa
@@ -3825,12 +3825,19 @@ def _final_rule_unknown_dict(result: "PipelineResult", reason_code: str) -> Dict
             "violation_count": 0,
             "exempt_count": 0,
             "unknown_count": 1,
+            "physical_status": "UNKNOWN",
+            "introduced_rule_variant_row_count": 0,
+            "preexisting_rule_variant_row_count": 0,
+            "causality_unknown_rule_variant_row_count": 0,
+            "count_unit": "rule_variant_rows",
         }
 
     return {
-        "schema": "rule_verdict.v1",
+        "schema": "rule_verdict.v2",
         "phase": "A_SHADOW",
+        "evaluation_stage": "POST_SELECTION_FINAL_PLAN",
         "status": "UNKNOWN",
+        "physical_status": "UNKNOWN",
         "coverage": "NONE",
         "enforcement": "NONE",
         "decision_order_id": order_id,
@@ -3847,6 +3854,10 @@ def _final_rule_unknown_dict(result: "PipelineResult", reason_code: str) -> Dict
         "violations": [],
         "exceptions": [],
         "missing_reasons": [missing_reason],
+        "introduced_rule_variant_row_count": 0,
+        "preexisting_rule_variant_row_count": 0,
+        "causality_unknown_rule_variant_row_count": 0,
+        "count_unit": "rule_variant_rows",
     }
 
 

@@ -23,8 +23,14 @@ from dispatch_v2 import sla_anchor as _sla_anchor
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 
-SCHEMA = "rule_verdict.v1"
+SCHEMA = "rule_verdict.v2"
 PHASE = "A_SHADOW"
+FINAL_STAGE = "POST_SELECTION_FINAL_PLAN"
+PREEXISTING_STAGE = "PRE_DECISION_CARRIED"
+INTRODUCED_STAGE = "CURRENT_DECISION_FINAL_PLAN"
+UNKNOWN_CAUSALITY_STAGE = "CAUSALITY_UNRESOLVED_FINAL_PLAN"
+POLICY_STAGE = "POLICY_EXEMPTION"
+COUNT_UNIT = "rule_variant_rows"
 
 R6_THERMAL = "R6_THERMAL"
 R27_COMMITTED_PICKUP = "R27_COMMITTED_PICKUP"
@@ -33,6 +39,9 @@ SLA_DELIVERY = "SLA_DELIVERY"
 PASS = "PASS"
 VIOLATION = "VIOLATION"
 EXEMPT = "EXEMPT"
+EXEMPT_POLICY = "EXEMPT_POLICY"
+EXEMPT_PREEXISTING = "EXEMPT_PREEXISTING"
+VIOLATION_INTRODUCED = "VIOLATION_INTRODUCED"
 UNKNOWN = "UNKNOWN"
 NOT_APPLICABLE = "NOT_APPLICABLE"
 
@@ -69,6 +78,9 @@ class RuleViolation:
     exception_reason: Optional[str]
     unit: str = "min"
     source: str = ""
+    status: str = VIOLATION_INTRODUCED
+    provenance_stage: str = INTRODUCED_STAGE
+    impact_reason: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -80,6 +92,9 @@ class RuleViolation:
             "exception_reason": self.exception_reason,
             "unit": self.unit,
             "source": self.source,
+            "status": self.status,
+            "provenance_stage": self.provenance_stage,
+            "impact_reason": self.impact_reason,
         }
 
 
@@ -89,6 +104,9 @@ class RuleException:
     rule_id: str
     reason: str
     mode: Tuple[str, ...]
+    status: str = EXEMPT_POLICY
+    provenance_stage: str = POLICY_STAGE
+    source: str = "policy"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -96,11 +114,16 @@ class RuleException:
             "rule_id": self.rule_id,
             "reason": self.reason,
             "mode": list(self.mode),
+            "status": self.status,
+            "provenance_stage": self.provenance_stage,
+            "source": self.source,
         }
 
 
 @dataclass(frozen=True)
 class RuleSummary:
+    """Agregat jednego rule/policy_variant; wszystkie liczniki mierza wiersze."""
+
     rule_id: str
     policy_variant: str
     status: str
@@ -109,6 +132,11 @@ class RuleSummary:
     violation_count: int
     exempt_count: int
     unknown_count: int
+    physical_status: str = NOT_APPLICABLE
+    introduced_rule_variant_row_count: int = 0
+    preexisting_rule_variant_row_count: int = 0
+    causality_unknown_rule_variant_row_count: int = 0
+    count_unit: str = COUNT_UNIT
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -120,14 +148,30 @@ class RuleSummary:
             "violation_count": self.violation_count,
             "exempt_count": self.exempt_count,
             "unknown_count": self.unknown_count,
+            "physical_status": self.physical_status,
+            "introduced_rule_variant_row_count": (
+                self.introduced_rule_variant_row_count),
+            "preexisting_rule_variant_row_count": (
+                self.preexisting_rule_variant_row_count),
+            "causality_unknown_rule_variant_row_count": (
+                self.causality_unknown_rule_variant_row_count),
+            "count_unit": self.count_unit,
         }
 
 
 @dataclass(frozen=True)
 class RuleVerdict:
+    """Finalna diagnoza; top-level count nie jest liczba unikalnych zlecen.
+
+    Jednostka to ``rule_variant_rows``: ten sam order moze dac osobny wiersz R6
+    i SLA, a R27 moze dac osobny wiersz dla kazdego policy_variant.
+    """
+
     schema: str
     phase: str
+    evaluation_stage: str
     status: str
+    physical_status: str
     coverage: str
     enforcement: str
     decision_order_id: str
@@ -140,12 +184,18 @@ class RuleVerdict:
     violations: Tuple[RuleViolation, ...]
     exceptions: Tuple[RuleException, ...]
     missing_reasons: Tuple[str, ...]
+    introduced_rule_variant_row_count: int
+    preexisting_rule_variant_row_count: int
+    causality_unknown_rule_variant_row_count: int
+    count_unit: str
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "schema": self.schema,
             "phase": self.phase,
+            "evaluation_stage": self.evaluation_stage,
             "status": self.status,
+            "physical_status": self.physical_status,
             "coverage": self.coverage,
             "enforcement": self.enforcement,
             "decision_order_id": self.decision_order_id,
@@ -158,6 +208,13 @@ class RuleVerdict:
             "violations": [v.to_dict() for v in self.violations],
             "exceptions": [e.to_dict() for e in self.exceptions],
             "missing_reasons": list(self.missing_reasons),
+            "introduced_rule_variant_row_count": (
+                self.introduced_rule_variant_row_count),
+            "preexisting_rule_variant_row_count": (
+                self.preexisting_rule_variant_row_count),
+            "causality_unknown_rule_variant_row_count": (
+                self.causality_unknown_rule_variant_row_count),
+            "count_unit": self.count_unit,
         }
 
 
@@ -384,8 +441,8 @@ def _normalized_anchor_context(ctx: _OrderContext) -> _OrderContext:
     )
 
 
-def _summary_status(evaluated: int, violations: int, exempt: int, unknown: int,
-                    applicable: bool = True) -> str:
+def _physical_summary_status(evaluated: int, violations: int, exempt: int,
+                             unknown: int, applicable: bool = True) -> str:
     if not applicable:
         return NOT_APPLICABLE
     if violations:
@@ -399,25 +456,97 @@ def _summary_status(evaluated: int, violations: int, exempt: int, unknown: int,
     return NOT_APPLICABLE
 
 
-def _pre_existing_exception(ctx: _OrderContext, predicted: Optional[datetime],
-                            new_pickup: Optional[datetime]) -> Tuple[Optional[str], Optional[str]]:
+def _impact_summary_status(evaluated: int, introduced: int, preexisting: int,
+                           causality_unknown: int, unknown: int, exempt: int,
+                           applicable: bool = True) -> str:
+    """Status odpowiedzialnosci decyzji, niezalezny od fizycznego breachu."""
+    if not applicable:
+        return NOT_APPLICABLE
+    if introduced:
+        return VIOLATION_INTRODUCED
+    if unknown or causality_unknown:
+        return UNKNOWN
+    if preexisting:
+        return EXEMPT_PREEXISTING
+    if evaluated:
+        return PASS
+    if exempt:
+        return EXEMPT_POLICY
+    return NOT_APPLICABLE
+
+
+def _breach_impact(ctx: _OrderContext, predicted: Optional[datetime],
+                   new_pickup: Optional[datetime]) -> Tuple[str, str, str, Optional[str]]:
+    """Klasyfikuj finalny breach bez zgadywania dla nieudowodnionego carried.
+
+    Dla nowego orderu finalny breach powstal w biezacej decyzji. Dla picked-up
+    carried mamy istniejacy, konstrukcyjny dowod no-new-detour tylko wtedy, gdy
+    jego dostawa jest nie pozniej niz pickup nowego zlecenia. Sam fakt, ze
+    dostawa jest pozniej, NIE dowodzi ze finalny breach zostal wprowadzony przez
+    nowa decyzje. Bez pre-decision/counterfactual baseline pozostaje UNKNOWN.
+    """
+    if ctx.is_new:
+        return (
+            VIOLATION_INTRODUCED,
+            INTRODUCED_STAGE,
+            "NEW_ORDER_FINAL_BREACH",
+            None,
+        )
     if not ctx.is_picked:
-        return None, None
+        return (
+            UNKNOWN,
+            UNKNOWN_CAUSALITY_STAGE,
+            "CARRIED_CAUSALITY_UNRESOLVED",
+            f"CAUSALITY_CONTEXT_MISSING:{ctx.order_id}",
+        )
     if predicted is None or new_pickup is None:
-        return None, f"PRE_EXISTING_CONTEXT_MISSING:{ctx.order_id}"
+        return (
+            UNKNOWN,
+            UNKNOWN_CAUSALITY_STAGE,
+            "PRE_EXISTING_CONTEXT_MISSING",
+            f"PRE_EXISTING_CONTEXT_MISSING:{ctx.order_id}",
+        )
     if predicted <= new_pickup:
-        return "PRE_EXISTING_PICKED_UP_NO_NEW_DETOUR", None
-    return None, None
+        return (
+            EXEMPT_PREEXISTING,
+            PREEXISTING_STAGE,
+            "PRE_EXISTING_PICKED_UP_NO_NEW_DETOUR",
+            None,
+        )
+    return (
+        UNKNOWN,
+        UNKNOWN_CAUSALITY_STAGE,
+        "PICKED_UP_CARRIED_CAUSALITY_UNRESOLVED_AFTER_NEW_PICKUP",
+        f"COUNTERFACTUAL_BASELINE_MISSING:{ctx.order_id}",
+    )
+
+
+def _r27_breach_impact(ctx: _OrderContext) -> Tuple[str, str, str, Optional[str]]:
+    if ctx.is_new:
+        return (
+            VIOLATION_INTRODUCED,
+            INTRODUCED_STAGE,
+            "NEW_ORDER_COMMITTED_PICKUP_BREACH",
+            None,
+        )
+    return (
+        UNKNOWN,
+        UNKNOWN_CAUSALITY_STAGE,
+        "CARRIED_COMMITTED_PICKUP_CAUSALITY_UNRESOLVED",
+        f"CAUSALITY_CONTEXT_MISSING:{ctx.order_id}",
+    )
 
 
 def _empty_rule_summaries(status: str, policy: FirewallPolicy) -> Tuple[RuleSummary, ...]:
     return (
         RuleSummary(R6_THERMAL, "physical_thermal", status, policy.r6_limit_min, 0, 0, 0,
-                    1 if status == UNKNOWN else 0),
+                    1 if status == UNKNOWN else 0, physical_status=status),
         RuleSummary(R27_COMMITTED_PICKUP, "strict_5_candidate", status,
-                    policy.r27_strict_limit_min, 0, 0, 0, 1 if status == UNKNOWN else 0),
+                    policy.r27_strict_limit_min, 0, 0, 0,
+                    1 if status == UNKNOWN else 0, physical_status=status),
         RuleSummary(SLA_DELIVERY, f"anchor_{policy.sla_anchor_kind}", status,
-                    policy.sla_limit_min, 0, 0, 0, 1 if status == UNKNOWN else 0),
+                    policy.sla_limit_min, 0, 0, 0,
+                    1 if status == UNKNOWN else 0, physical_status=status),
     )
 
 
@@ -427,7 +556,9 @@ def error_verdict(result: Any, policy: FirewallPolicy, error: BaseException) -> 
     return RuleVerdict(
         schema=SCHEMA,
         phase=PHASE,
+        evaluation_stage=FINAL_STAGE,
         status=UNKNOWN,
+        physical_status=UNKNOWN,
         coverage=NONE,
         enforcement="NONE",
         decision_order_id=str(getattr(result, "order_id", "") or ""),
@@ -440,6 +571,10 @@ def error_verdict(result: Any, policy: FirewallPolicy, error: BaseException) -> 
         violations=(),
         exceptions=(),
         missing_reasons=(f"EVALUATOR_ERROR:{type(error).__name__}",),
+        introduced_rule_variant_row_count=0,
+        preexisting_rule_variant_row_count=0,
+        causality_unknown_rule_variant_row_count=0,
+        count_unit=COUNT_UNIT,
     )
 
 
@@ -461,23 +596,26 @@ def evaluate_final(result: Any, order_event: Mapping[str, Any],
     if best is None:
         reason = str(getattr(result, "reason", "") or "unknown").split(" ", 1)[0]
         return RuleVerdict(
-            SCHEMA, PHASE, NOT_APPLICABLE, NONE, "NONE",
+            SCHEMA, PHASE, FINAL_STAGE, NOT_APPLICABLE, NOT_APPLICABLE,
+            NONE, "NONE",
             str(getattr(result, "order_id", "") or ""),
             str(getattr(result, "verdict", "") or ""), None, selection,
             policy.always_propose_enabled, policy.policy_pending,
             _empty_rule_summaries(NOT_APPLICABLE, policy), (), (),
             (f"NO_SELECTED_PLAN:{reason}",),
+            0, 0, 0, COUNT_UNIT,
         )
 
     plan = getattr(best, "plan", None)
     if plan is None:
         return RuleVerdict(
-            SCHEMA, PHASE, UNKNOWN, NONE, "NONE",
+            SCHEMA, PHASE, FINAL_STAGE, UNKNOWN, UNKNOWN, NONE, "NONE",
             str(getattr(result, "order_id", "") or ""),
             str(getattr(result, "verdict", "") or ""), selected_cid, selection,
             policy.always_propose_enabled, policy.policy_pending,
             _empty_rule_summaries(UNKNOWN, policy), (), (),
             ("SELECTED_PLAN_MISSING",),
+            0, 0, 0, COUNT_UNIT,
         )
 
     pod_raw = getattr(plan, "per_order_delivery_times", None)
@@ -500,6 +638,7 @@ def evaluate_final(result: Any, order_event: Mapping[str, Any],
 
     # R6 -- fizyczny wiek termiczny finalnego planu.
     r6_eval = r6_viol = r6_exempt = r6_unknown = 0
+    r6_introduced = r6_preexisting = r6_causality_unknown = 0
     for oid in expected_oids:
         ctx = contexts[oid]
         is_package = _package(ctx, policy)
@@ -537,18 +676,36 @@ def evaluate_final(result: Any, order_event: Mapping[str, Any],
         r6_eval += 1
         if value > policy.r6_limit_min:
             r6_viol += 1
-            exception_reason, missing_reason = _pre_existing_exception(
+            impact, impact_stage, impact_reason, missing_reason = _breach_impact(
                 ctx, pred, new_pickup)
+            if impact == VIOLATION_INTRODUCED:
+                r6_introduced += 1
+            elif impact == EXEMPT_PREEXISTING:
+                r6_preexisting += 1
+            else:
+                r6_causality_unknown += 1
             if missing_reason:
                 missing.append(f"R6_{missing_reason}")
             violations.append(RuleViolation(
                 oid, R6_THERMAL, _round_min(value), float(policy.r6_limit_min),
-                mode, exception_reason,
+                mode, impact_reason if impact == EXEMPT_PREEXISTING else None,
                 source=f"sla_anchor.ready_anchor+elapsed_min:{anchor_source};pod_present",
+                status=impact,
+                provenance_stage=impact_stage,
+                impact_reason=impact_reason,
             ))
+    r6_physical_status = _physical_summary_status(
+        r6_eval, r6_viol, r6_exempt, r6_unknown)
     rules.append(RuleSummary(
-        R6_THERMAL, "physical_thermal", _summary_status(r6_eval, r6_viol, r6_exempt, r6_unknown),
+        R6_THERMAL, "physical_thermal",
+        _impact_summary_status(
+            r6_eval, r6_introduced, r6_preexisting, r6_causality_unknown,
+            r6_unknown, r6_exempt),
         float(policy.r6_limit_min), r6_eval, r6_viol, r6_exempt, r6_unknown,
+        physical_status=r6_physical_status,
+        introduced_rule_variant_row_count=r6_introduced,
+        preexisting_rule_variant_row_count=r6_preexisting,
+        causality_unknown_rule_variant_row_count=r6_causality_unknown,
     ))
 
     # R27 -- tylko prawdziwy commit. Czasowka/paczka nie sa zwolnione z odbioru.
@@ -577,10 +734,12 @@ def evaluate_final(result: Any, order_event: Mapping[str, Any],
         rules.append(RuleSummary(
             R27_COMMITTED_PICKUP, "strict_5_candidate", NOT_APPLICABLE,
             float(policy.r27_strict_limit_min), 0, 0, 0, 0,
+            physical_status=NOT_APPLICABLE,
         ))
     else:
         for variant, limit, variant_tags in variants:
             evaluated = broken = unknown = 0
+            introduced = preexisting = causality_unknown = 0
             for ctx in active_committed:
                 oid = ctx.order_id
                 is_package = _package(ctx, policy)
@@ -599,6 +758,16 @@ def evaluate_final(result: Any, order_event: Mapping[str, Any],
                 evaluated += 1
                 if value > limit:
                     broken += 1
+                    impact, impact_stage, impact_reason, missing_reason = (
+                        _r27_breach_impact(ctx))
+                    if impact == VIOLATION_INTRODUCED:
+                        introduced += 1
+                    elif impact == EXEMPT_PREEXISTING:
+                        preexisting += 1
+                    else:
+                        causality_unknown += 1
+                    if missing_reason:
+                        missing.append(f"R27_{missing_reason}:{variant}")
                     exception_reason = (
                         "B02_OVERLOAD_VARIANT_PENDING"
                         if "load_overload" in variant_tags or "load_unknown" in variant_tags
@@ -608,15 +777,27 @@ def evaluate_final(result: Any, order_event: Mapping[str, Any],
                         oid, R27_COMMITTED_PICKUP, _round_min(value), float(limit),
                         mode, exception_reason,
                         source="abs(plan.pickup_at-czas_kuriera_warsaw)",
+                        status=impact,
+                        provenance_stage=impact_stage,
+                        impact_reason=impact_reason,
                     ))
+            physical_status = _physical_summary_status(
+                evaluated, broken, 0, unknown)
             rules.append(RuleSummary(
                 R27_COMMITTED_PICKUP, variant,
-                _summary_status(evaluated, broken, 0, unknown), float(limit),
+                _impact_summary_status(
+                    evaluated, introduced, preexisting, causality_unknown,
+                    unknown, 0), float(limit),
                 evaluated, broken, 0, unknown,
+                physical_status=physical_status,
+                introduced_rule_variant_row_count=introduced,
+                preexisting_rule_variant_row_count=preexisting,
+                causality_unknown_rule_variant_row_count=causality_unknown,
             ))
 
     # SLA -- dostawa od jawnej kotwicy NOW albo READY; osobno od R6.
     sla_eval = sla_viol = sla_exempt = sla_unknown = 0
+    sla_introduced = sla_preexisting = sla_causality_unknown = 0
     for oid in expected_oids:
         ctx = contexts[oid]
         is_package = _package(ctx, policy)
@@ -660,23 +841,47 @@ def evaluate_final(result: Any, order_event: Mapping[str, Any],
         sla_eval += 1
         if value > policy.sla_limit_min:
             sla_viol += 1
-            exception_reason, missing_reason = _pre_existing_exception(ctx, pred, new_pickup)
+            impact, impact_stage, impact_reason, missing_reason = _breach_impact(
+                ctx, pred, new_pickup)
+            if impact == VIOLATION_INTRODUCED:
+                sla_introduced += 1
+            elif impact == EXEMPT_PREEXISTING:
+                sla_preexisting += 1
+            else:
+                sla_causality_unknown += 1
             if missing_reason:
                 missing.append(f"SLA_{missing_reason}")
             violations.append(RuleViolation(
                 oid, SLA_DELIVERY, _round_min(value), float(policy.sla_limit_min),
-                mode, exception_reason, source=source,
+                mode, impact_reason if impact == EXEMPT_PREEXISTING else None,
+                source=source,
+                status=impact,
+                provenance_stage=impact_stage,
+                impact_reason=impact_reason,
             ))
+    sla_physical_status = _physical_summary_status(
+        sla_eval, sla_viol, sla_exempt, sla_unknown)
     rules.append(RuleSummary(
         SLA_DELIVERY, f"anchor_{policy.sla_anchor_kind}",
-        _summary_status(sla_eval, sla_viol, sla_exempt, sla_unknown),
+        _impact_summary_status(
+            sla_eval, sla_introduced, sla_preexisting, sla_causality_unknown,
+            sla_unknown, sla_exempt),
         float(policy.sla_limit_min), sla_eval, sla_viol, sla_exempt, sla_unknown,
+        physical_status=sla_physical_status,
+        introduced_rule_variant_row_count=sla_introduced,
+        preexisting_rule_variant_row_count=sla_preexisting,
+        causality_unknown_rule_variant_row_count=sla_causality_unknown,
     ))
 
     # Dedup powodow zachowujac kolejnosc -- stabilny JSON/replay.
     missing_unique = tuple(dict.fromkeys(missing))
-    unknown_total = sum(r.unknown_count for r in rules)
+    evaluation_unknown_total = sum(r.unknown_count for r in rules)
+    causality_unknown_total = sum(
+        r.causality_unknown_rule_variant_row_count for r in rules)
+    unknown_total = evaluation_unknown_total + causality_unknown_total
     known_total = sum(r.evaluated_count + r.exempt_count for r in rules)
+    introduced_total = sum(r.introduced_rule_variant_row_count for r in rules)
+    preexisting_total = sum(r.preexisting_rule_variant_row_count for r in rules)
     # Brak kontekstu polityki/wyjatku (np. nieznany load dla B-02) takze
     # oznacza PARTIAL, nawet gdy oba warianty arytmetyczne daly sie policzyc.
     if unknown_total or missing_unique:
@@ -684,9 +889,20 @@ def evaluate_final(result: Any, order_event: Mapping[str, Any],
     else:
         coverage = COMPLETE
     if violations:
-        status = VIOLATION
+        physical_status = VIOLATION
+    elif evaluation_unknown_total:
+        physical_status = UNKNOWN
+    elif known_total:
+        physical_status = PASS
+    else:
+        physical_status = NOT_APPLICABLE
+
+    if introduced_total:
+        status = VIOLATION_INTRODUCED
     elif unknown_total:
         status = UNKNOWN
+    elif preexisting_total:
+        status = EXEMPT_PREEXISTING
     elif known_total:
         status = PASS
     else:
@@ -695,7 +911,9 @@ def evaluate_final(result: Any, order_event: Mapping[str, Any],
     return RuleVerdict(
         schema=SCHEMA,
         phase=PHASE,
+        evaluation_stage=FINAL_STAGE,
         status=status,
+        physical_status=physical_status,
         coverage=coverage,
         enforcement="NONE",
         decision_order_id=str(getattr(result, "order_id", "") or ""),
@@ -708,11 +926,18 @@ def evaluate_final(result: Any, order_event: Mapping[str, Any],
         violations=tuple(violations),
         exceptions=tuple(exceptions),
         missing_reasons=missing_unique,
+        introduced_rule_variant_row_count=introduced_total,
+        preexisting_rule_variant_row_count=preexisting_total,
+        causality_unknown_rule_variant_row_count=causality_unknown_total,
+        count_unit=COUNT_UNIT,
     )
 
 
 __all__ = [
     "FirewallPolicy", "RuleException", "RuleSummary", "RuleVerdict", "RuleViolation",
     "evaluate_final", "error_verdict", "SCHEMA", "R6_THERMAL",
-    "R27_COMMITTED_PICKUP", "SLA_DELIVERY",
+    "R27_COMMITTED_PICKUP", "SLA_DELIVERY", "EXEMPT_PREEXISTING",
+    "EXEMPT_POLICY", "VIOLATION", "VIOLATION_INTRODUCED", "PASS", "UNKNOWN",
+    "NOT_APPLICABLE", "FINAL_STAGE", "PREEXISTING_STAGE", "INTRODUCED_STAGE",
+    "UNKNOWN_CAUSALITY_STAGE", "POLICY_STAGE", "COUNT_UNIT",
 ]
