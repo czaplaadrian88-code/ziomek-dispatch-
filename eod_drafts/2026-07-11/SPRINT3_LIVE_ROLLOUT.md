@@ -23,6 +23,7 @@ do tego czasu produkcja pozostaje bez zmian.
 - Base/rollback SHA: `70af4fa`.
 - Naprawa blokady Audit 360 TEST-TRUTH: `4e782e8`.
 - Integracja Sprintu 3: `d9a456c`.
+- Privacy-fix aggregate-only replay: `292c9cd`.
 - Tag rollback: `sprint3-rollback-prelive-20260711`.
 - Zrodlowa praca wczorajsza: `sprint3/eta-observability-osrm` @ `85b9dc7`.
 - Wszystkie pliki implementacji i testow Sprintu 3 sa identyczne ze zrodlowa
@@ -62,10 +63,10 @@ do tego czasu produkcja pozostaje bez zmian.
 ## ETAP 5 — dowod parytetu i pozytywnego wplywu
 
 - Focused cluster po scaleniu: `105 passed`.
-- Pelna regresja finalnego commita:
-  `4940 passed, 24 skipped, 10 xfailed, 147 warnings`.
+- Pelna regresja finalnego commita po privacy-fixie:
+  `4941 passed, 24 skipped, 10 xfailed, 147 warnings`.
 - Pelna regresja `HERMETIC_STRICT=1`:
-  `4890 passed, 74 skipped, 10 xfailed, 147 warnings`.
+  `4891 passed, 74 skipped, 10 xfailed, 147 warnings`.
 - Canon static: R6=35, R27=+/-5, alarm=40 — zielony.
 - Lifecycle repo i live: 505/505 skurowanych, 0 bledow.
 - Identity parity: worker i panel-roster 177/177, 0 mismatch.
