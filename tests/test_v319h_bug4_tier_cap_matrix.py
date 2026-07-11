@@ -124,6 +124,7 @@ with open(_tiers_path, "w", encoding="utf-8") as _f:
 courier_resolver.COURIER_TIERS_PATH = _tiers_path
 courier_resolver._COURIER_TIERS_CACHE = None
 courier_resolver._COURIER_TIERS_MTIME = None
+assert "/root/.openclaw/workspace/dispatch_state/" not in courier_resolver.COURIER_TIERS_PATH
 tiers = _load_courier_tiers()
 check("23. loader zwraca non-empty dict gdy courier_tiers.json exists",
       isinstance(tiers, dict) and len(tiers) >= 1)

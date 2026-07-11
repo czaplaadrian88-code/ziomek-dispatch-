@@ -9,7 +9,9 @@ import io
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SCRIPTS = os.path.abspath(os.path.join(_HERE, "..", ".."))
@@ -21,6 +23,15 @@ from dispatch_v2 import state_machine as sm
 from dispatch_v2 import panel_client as pc
 from dispatch_v2 import common as cm
 from dispatch_v2 import event_bus as eb
+from dispatch_v2 import coordinator_time_recheck as ctr
+
+# `_diff_and_emit()` zawsze drenuje kolejkę force-recheck. Bez jawnego patcha
+# ten poboczny tor próbował otwierać produkcyjny lockfile, a fail-soft w watcherze
+# ukrywał blokadę HERMETIC-GUARD. Izolujemy kolejkę na cały script-runner.
+_PROCESS_TMPDIR = tempfile.TemporaryDirectory(prefix="v320_packs_ghost_")
+ctr.QUEUE_PATH = str(Path(_PROCESS_TMPDIR.name) / "coordinator_time_recheck.json")
+ctr.LOCK_PATH = ctr.QUEUE_PATH + ".lock"
+assert "/root/.openclaw/workspace/dispatch_state/" not in ctr.QUEUE_PATH
 
 passed = 0
 failed = 0
@@ -143,6 +154,8 @@ def _fixture_open(path, *args, **kwargs):
 
 
 pw.open = _fixture_open
+assert pw.open is _fixture_open
+assert json.load(_fixture_open(_REAL_KID)) == {_TEST_NICK: _TEST_CID}
 
 
 _install_mocks()

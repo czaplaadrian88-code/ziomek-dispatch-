@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SCRIPTS = os.path.abspath(os.path.join(_HERE, "..", ".."))
@@ -21,7 +23,17 @@ if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
 from dispatch_v2.shift_notifications import worker
+from dispatch_v2.shift_notifications import state as shift_state
 from dispatch_v2.tests._shift_test_helpers import isolated_shift_state
+
+# `resolve_cid()` emituje debug także w grupach testujących sam scoring, poza
+# blokami `isolated_shift_state()`. Skieruj ten efekt uboczny do jednego
+# syntetycznego katalogu na CAŁY proces script-runnera. Bez tego wyjątek guarda
+# był łapany fail-soft w `_append_jsonl_to()` i test pozostawał pozornie zielony,
+# mimo próby zapisu do produkcyjnego courier_match_debug.jsonl.
+_PROCESS_TMPDIR = tempfile.TemporaryDirectory(prefix="resolve_cid_score_")
+shift_state.MATCH_DEBUG_LOG = Path(_PROCESS_TMPDIR.name) / "courier_match_debug.jsonl"
+assert "/root/.openclaw/workspace/dispatch_state/" not in str(shift_state.MATCH_DEBUG_LOG)
 
 passed = 0
 failed = 0
