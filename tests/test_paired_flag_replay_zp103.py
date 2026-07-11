@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import logging
+import sys
 
 import pytest
 
@@ -103,6 +105,8 @@ def test_paired_replay_classifies_core_difference():
 
 
 def test_paired_replay_redacts_exception_message():
+    logging_before = logging.root.manager.disable
+
     def replay(_record):
         raise RuntimeError("sensitive-order-and-courier-data")
 
@@ -117,3 +121,28 @@ def test_paired_replay_redacts_exception_message():
 
     assert report["errors"] == {"RuntimeError": 1}
     assert "sensitive" not in str(report)
+    assert logging.root.manager.disable == logging_before
+
+
+def test_paired_replay_suppresses_transitive_stdout_stderr_and_logs(capsys):
+    secret = "sensitive-order-and-courier-data"
+
+    def replay(_record):
+        print(secret)
+        print(secret, file=sys.stderr)
+        logging.getLogger("paired-replay-sensitive-probe").critical(secret)
+        return _result(), 0
+
+    report = PFR.run_paired(
+        flag_name=FLAG,
+        since=START,
+        until=END,
+        first="off",
+        records_override=[{"flags": {}}],
+        replay_one=replay,
+    )
+
+    captured = capsys.readouterr()
+    assert report["exact"] == 1
+    assert secret not in captured.out
+    assert secret not in captured.err

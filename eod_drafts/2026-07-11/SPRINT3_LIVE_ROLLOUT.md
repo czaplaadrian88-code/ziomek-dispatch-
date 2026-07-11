@@ -74,8 +74,14 @@ do tego czasu produkcja pozostaje bez zmian.
   cache/CB jawnie `process_local` dla PID reportera.
 - Swiezy paired replay na zamrozonym oknie: 404 porownania w obu kolejnosciach,
   403 exact, 1 miekka roznica `pool_feasible+reason` (0,25%), 0 krytycznych,
-  0 miss mismatch. Wczorajszy laczny dowod: 808, 4 miekkie (0,50%), 0
+  0 miss mismatch. Dodatkowy realny rerun po privacy-fixie: 202 porownania,
+  200 exact, 2 miekkie (0,99%), 0 krytycznych/miss; stdout zawieral wylacznie
+  jeden aggregate JSON. Wczorajszy laczny dowod: 808, 4 miekkie (0,50%), 0
   krytycznych i 0 miss mismatch.
+- Domknieto near-miss prywatnosci harnessu: finalny JSON byl aggregate-only, ale
+  transytywne loggery/printy pipeline wypisywaly identyfikatory operacyjne.
+  `paired_flag_replay` wycisza teraz stdout/stderr/logging tylko na czas
+  `replay_one`, zawsze przywraca prog logowania i ma negatywny test wycieku.
 
 ## Przyjete bramki canary (B-08)
 

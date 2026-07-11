@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
 import copy
+import io
 import json
+import logging
 import re
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -28,6 +31,30 @@ from dispatch_v2.tools import world_replay_gate as GATE
 SCHEMA = "paired_flag_replay.v1"
 _FLAG_RE = re.compile(r"^[A-Z][A-Z0-9_]+$")
 _CORE_FIELDS = frozenset(GATE.CORE_FIELDS)
+
+
+@contextlib.contextmanager
+def _suppress_transitive_output():
+    """Keep the aggregate-only contract across the whole replay call graph.
+
+    ``world_replay.replay_one`` imports the production pipeline, whose loggers
+    and legacy ``print`` calls can include operational identifiers.  Redacting
+    only this tool's final JSON is therefore insufficient.  Silence Python
+    stdout/stderr and all logging while a frozen record is evaluated, then
+    restore the caller's logging threshold even when replay raises.
+    """
+    previous_disable = logging.root.manager.disable
+    stdout_sink = io.StringIO()
+    stderr_sink = io.StringIO()
+    with (
+        contextlib.redirect_stdout(stdout_sink),
+        contextlib.redirect_stderr(stderr_sink),
+    ):
+        logging.disable(logging.CRITICAL)
+        try:
+            yield
+        finally:
+            logging.disable(previous_disable)
 
 
 def _parse_dt(value: str) -> datetime:
@@ -87,12 +114,13 @@ def run_paired(
 
     for record in records:
         try:
-            first_result, first_miss = replay_one(
-                with_flag(record, flag_name, first_enabled)
-            )
-            second_result, second_miss = replay_one(
-                with_flag(record, flag_name, not first_enabled)
-            )
+            with _suppress_transitive_output():
+                first_result, first_miss = replay_one(
+                    with_flag(record, flag_name, first_enabled)
+                )
+                second_result, second_miss = replay_one(
+                    with_flag(record, flag_name, not first_enabled)
+                )
         except Exception as exc:  # exception messages can contain identifiers
             errors[type(exc).__name__] += 1
             continue
