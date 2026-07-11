@@ -1,6 +1,6 @@
 # A360-R0 REPLAY-TRUTH — raport wykonania
 
-Status: **CODE READY, NOT MERGED, NOT DEPLOYED**
+Status: **DEVELOPMENT COMPLETE, DISPOSITION HOLD, NOT MERGED, NOT DEPLOYED**
 Data: 2026-07-11 UTC
 Branch: `evidence/a360-r0-replay-truth`
 Worktree: `/root/a360_r0_wt/dispatch_v2`
@@ -30,7 +30,7 @@ pozostaja bez zmian. Nie dodano flagi ani consumera runtime.
 
 ## 2. Root cause i naprawa
 
-Stan bazowy mial cztery problemy wiarygodnosci:
+Stan bazowy mial piec problemow wiarygodnosci:
 
 - jeden rekord mogl jednoczesnie zwiekszyc `missy` i `roznice`;
 - `wr0`, brak `now` i brak shadow znikaly z mianownika albo zyly poza wspolna
@@ -38,6 +38,12 @@ Stan bazowy mial cztery problemy wiarygodnosci:
 - CLI gate'a nie przyjmowal jawnej sciezki syntetycznego ledgera, wiec test
   pelnego toru musial mockowac reader;
 - artefakt tekstowy wypisywal identyfikatory operacyjne i wartosci diffow.
+- niezalezny odbior na `2844e43` wykazal, ze gate uznawal kazdy dict
+  `live_inputs`, takze `{}` i partial, za kompletny. `_serve_live_inputs`
+  wykonywal wtedy zero lub tylko czesc patchy i przez szerokie `except`
+  pozostawial domyslne sciezki A2, planu/locka i map kalibracji. Wczesniejsza
+  deklaracja "brak live fallbacku" obejmowala tylko brak calego `live_inputs`
+  i byla zbyt szeroka.
 
 Naprawa:
 
@@ -51,6 +57,20 @@ Naprawa:
   temp paths;
 - artefakt ma tylko pseudonimowy `record_ref` oraz nazwy pol roznic, bez ID,
   adresow, GPS, nazwisk, wartosci score i wartosci diffow.
+- wspolny `world_replay.validate_live_inputs()` jest wywolywany przez gate,
+  bezposredni `replay_one` i CLI przed shadow join, importami i replayem;
+- minimalny kontrakt wr1 wymaga `reliability`, `plans`, `eta_quantile` i
+  `prep_bias` jako dict, `loadgov` jako list/tuple dlugosci 4 oraz obecnego
+  `k07` jako dict albo `None`. Brak i zly typ maja stabilne, rozlaczne reasons
+  `missing_live_input:<key>` i `invalid_live_input:<key>`;
+- `_serve_live_inputs` waliduje dict przed pierwszym patchem i nie polyka
+  bledow przekierowania. Kompletny snapshot kieruje wszystkie pliki oraz lock
+  planu do jednego temp sandboxu; partial nie dotyka importera ani sciezki.
+
+Nie rozszerzono R0 o nowy wymog typu dla `osrm_calls` ani nowe wymagania outer
+record. Istniejace gate checks dla `now`, `schema`, `order_event`, `fleet` i
+`flags` pozostaly bez zmian; to swiadome ograniczenie zakresu, nie deklaracja
+pelnej walidacji schematu wr1.
 
 ## 3. Mapa kompletnosci
 
@@ -60,7 +80,8 @@ Naprawa:
 | `tools/world_replay_gate.py` | mianownik, agregacja, verdict | TAK | coverage/freshness/rozlaczne klasy/redakcja |
 | `tests/test_a360_world_replay_truth.py` | frozen oracle | TAK | known-answer, mutation, negative controls, determinizm |
 | `tests/fixtures/world_replay_truth_frozen.json` | golden bez PII | TAK | wszystkie piec klas |
-| stare dedykowane testy world replay | kompatybilnosc | TAK | zaktualizowany kontrakt stalego mianownika |
+| `tests/test_world_replay_k06.py` | direct replay | TAK | kompletny legalny snapshot wr1 |
+| testy gate K17/schema | kompatybilnosc | TAK | kompletny legalny snapshot, semantyka bucketow bez zmian |
 | `world_record.py` | producer | N-D | read-only zgodnie z karta |
 | `osrm_client.py` | recorder/OSRM | N-D | read-only; fallback blokowany przez sandbox |
 | `tools/paired_flag_replay.py` | consumer `at-214` | N-D | read-only; zachowany publiczny alias `CORE_FIELDS` |
@@ -87,10 +108,20 @@ sklasyfikowany jako `CRITICAL_DIFF`; pytest zakonczyl sie `rc=1`. Mutacje
 odwrocono patchem, `git diff --exit-code` byl czysty, a ten sam test wrocil na
 zielono. Nie uzyto checkout/reset do restauracji pracy.
 
+Po fixie `df4556a` wykonano druga prawdziwa mutacje: tymczasowo usunieto
+`loadgov` z `REQUIRED_LIVE_INPUT_KEYS`. Dedykowany test przeszedl
+**GREEN -> RED** (`KeyError: loadgov`, pytest `rc=1`) i po przywroceniu wpisu
+patchem wrocil **RED -> GREEN** (1 passed). Mutacja nie trafila do commita.
+
 ### Negative controls
 
-- rekord bez `live_inputs` dostaje `INPUT_MISS`; podstawiony `replay_one`, ktory
-  rzuca przy jakiejkolwiek probie sieci/live fallbacku, nie zostal wywolany;
+- brak calego `live_inputs`, pusty dict, brak kazdego z szesciu kluczy i zly
+  typ kazdego pola dostaja stabilny `INPUT_MISS`; podstawiony forbidden
+  `replay_one` ma zero wywolan;
+- bezposredni `replay_one` podnosi `IncompleteReplayInput`, a CLI zwraca rc=2
+  z reason przed replayem;
+- negative control `_serve_live_inputs` dla `{}` i partial `{"plans": {}}`
+  ma zero patchy i pozostawia sztuczna sciezke `/dispatch_state/...` bez zmian;
 - rekord, ledger i verdict w CLI sa jawnie pod `tmp_path`; test asertuje brak
   `/dispatch_state/` w kazdej efektywnej sciezce;
 - STRICT ujawnil, ze replay przekierowywal `courier_plans.json`, ale nie jego
@@ -113,7 +144,7 @@ Baseline przed edycja:
 
 - DEFAULT: **4941 passed, 24 skipped, 10 xfailed, 0 failed** w 128,28 s.
 
-Po zmianie:
+Po pierwotnej zmianie (przed odbiorem blockera):
 
 - focused world replay: **20 passed**;
 - world-record/replay `HERMETIC_STRICT=1`: **34 passed**;
@@ -124,8 +155,22 @@ Po zmianie:
 - import `world_replay`, `world_replay_gate`, `paired_flag_replay`: PASS;
 - `git diff --check`: PASS.
 
-Lista skip/xfail DEFAULT nie wzrosla wzgledem baseline. STRICT ma oczekiwana
-zewnetrzna kwarantanne live-smoke; nie dodano skipa ani wpisu kwarantanny.
+Po fix-forward walidacji `live_inputs`:
+
+- focused replay/gate/paired: **55 passed**;
+- STRICT cluster world-record/replay/gate/paired: **63 passed**;
+- DEFAULT: **4963 passed, 27 skipped, 10 xfailed, 0 failed** w 124,97 s;
+- pierwszy pelny STRICT: **1 failed, 4912 passed, 77 skipped, 10 xfailed**;
+  jedyny fail byl poza zakresem w zegarowym
+  `test_f4_k2_interp_elapsed_zero_at_pickup`;
+- izolowany rerun tego testu STRICT: **1 passed**;
+- powtorzony pelny STRICT: **4913 passed, 77 skipped, 10 xfailed, 0 failed**
+  w 107,90 s;
+- `py_compile`, import wspolnego walidatora i `git diff --check`: PASS.
+
+Nie zmieniono zadnego markera skip/xfail ani kwarantanny. Roznica +3 skip w obu
+pelnych suitach wzgledem poprzedniego biegu jest zgodna ze znana zegarowa
+wariancja suity; raport nie przypisuje jej zmianie R0 bez osobnego dowodu.
 
 Entropy dashboard przed i po: 17 / ~13 / 25/49 / 1 / 7 / 13 / 11+4 / 10.
 Zadna z osmiu metryk nie wzrosla. Dashboard ma historyczny status instrumentow,
@@ -137,11 +182,13 @@ nie edytuje wspolnego backlogu ani pamieci.
 - `e896767` — rozlaczne klasy, staly mianownik, coverage/freshness, frozen oracle;
 - `93b3619` — sprzezony sandbox pliku planu i locka;
 - `1073733` — kompatybilnosc publicznego kontraktu paired replay / `at-214`.
+- `2844e43` — usuniecie trailing whitespace z raportu integracyjnego;
+- `df4556a` — fail-closed walidacja kompletnego `live_inputs` przed replayem.
 
-Kod jest gotowy do review i pushu tylko na
-`evidence/a360-r0-replay-truth`. **Nie merge'owac do mastera przed odczytem
-`at-214`** z 13.07 lub jawnym zamrozeniem jego kodu. Nie bylo flipa, deployu,
-restartu, migracji, zapisu live state ani zmiany timera/joba.
+Development jest zakonczony na `evidence/a360-r0-replay-truth`, ale disposition
+pozostaje **HOLD**. **Nie merge'owac do mastera przed odczytem `at-214`** z
+13.07 lub jawnym zamrozeniem jego kodu. Nie bylo flipa, deployu, restartu,
+migracji, zapisu live state ani zmiany timera/joba.
 
 ## 7. Rollback
 
@@ -149,7 +196,7 @@ Przed merge: pozostawic branch bez merge albo go odrzucic. Po przyszlym merge
 rollback kodu/testow/raportu:
 
 ```bash
-git revert <commit-raportu> 1073733 93b3619 e896767
+git revert <commit-nowego-raportu> df4556a 2844e43 1073733 93b3619 e896767
 ```
 
 Kolejnosc jest newest-first. Nie ma flagi, danych, migracji, uslugi ani restartu
