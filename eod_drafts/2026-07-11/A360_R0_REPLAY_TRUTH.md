@@ -20,9 +20,9 @@ mianowniku:
 
 Precedencja jest wykonywalnym kontraktem. Brak kompletnego frozen inputu
 uniewaznia porownanie. Brak nagranego wywolania OSRM uniewaznia diff. Dopiero
-kompletny rekord i kompletny OSRM moga byc ocenione jako roznica krytyczna,
-roznica miekka albo parytet. Suma `class_counts` musi byc rowna `denominator`;
-niespelnienie tego inwariantu przerywa narzedzie.
+kompletny rekord i brak zaobserwowanego OSRM miss pozwalaja ocenic roznice
+krytyczna, roznice miekka albo parytet. Suma `class_counts` musi byc rowna
+`denominator`; niespelnienie tego inwariantu przerywa narzedzie.
 
 Zmiana nie dotyka dispatchera, `core/`, pipeline, feasibility, scoringu,
 selection ani planu. HARD/SOFT, wybor kuriera, wynik decyzji i kolejnosc trasy
@@ -30,7 +30,7 @@ pozostaja bez zmian. Nie dodano flagi ani consumera runtime.
 
 ## 2. Root cause i naprawa
 
-Stan bazowy mial piec problemow wiarygodnosci:
+Stan bazowy i kolejne niezalezne odbiory wykazaly problemy wiarygodnosci:
 
 - jeden rekord mogl jednoczesnie zwiekszyc `missy` i `roznice`;
 - `wr0`, brak `now` i brak shadow znikaly z mianownika albo zyly poza wspolna
@@ -44,6 +44,10 @@ Stan bazowy mial piec problemow wiarygodnosci:
   pozostawial domyslne sciezki A2, planu/locka i map kalibracji. Wczesniejsza
   deklaracja "brak live fallbacku" obejmowala tylko brak calego `live_inputs`
   i byla zbyt szeroka.
+- `OsrmReplayer._take` nie konsumowal ostatniego elementu kolejki i powtarzal
+  go bez konca. Jedna nagrana odpowiedz i dwa identyczne wywolania dawaly dwie
+  odpowiedzi oraz `misses=0`, wbrew known-answer Audytu 360 wymagajacemu RED
+  dla extra OSRM call.
 
 Naprawa:
 
@@ -57,8 +61,9 @@ Naprawa:
   temp paths;
 - artefakt ma tylko pseudonimowy `record_ref` oraz nazwy pol roznic, bez ID,
   adresow, GPS, nazwisk, wartosci score i wartosci diffow.
-- wspolny `world_replay.validate_live_inputs()` jest wywolywany przez gate,
-  bezposredni `replay_one` i CLI przed shadow join, importami i replayem;
+- wspolny `world_replay.validate_replay_record()` jest wywolywany przez gate,
+  bezposredni `replay_one`, CLI i paired przed shadow join, importami,
+  `with_flag` i replayem;
 - minimalny kontrakt wr1 wymaga `reliability`, `plans`, `eta_quantile` i
   `prep_bias` jako dict, `loadgov` jako list/tuple dlugosci 4 oraz obecnego
   `k07` jako dict albo `None`. Brak i zly typ maja stabilne, rozlaczne reasons
@@ -66,11 +71,21 @@ Naprawa:
 - `_serve_live_inputs` waliduje dict przed pierwszym patchem i nie polyka
   bledow przekierowania. Kompletny snapshot kieruje wszystkie pliki oraz lock
   planu do jednego temp sandboxu; partial nie dotyka importera ani sciezki.
+- outer wr1 wymaga niepustego `order_id`, parsowalnych `ts` i `now`, znanego
+  `schema=wr1`, dictow `order_event/fleet/flags` oraz `osrm_calls` jako listy;
+- kazdy **serwowany** wynik route/table jest konsumowany najwyzej raz przez
+  FIFO `pop(0)`. Extra runtime call tego samego klucza po wyczerpaniu kolejki
+  zwraca sentinel, dopisuje miss i ma klase `OSRM_MISS`, bez sieci i bez
+  fallbacku haversine.
 
-Nie rozszerzono R0 o nowy wymog typu dla `osrm_calls` ani nowe wymagania outer
-record. Istniejace gate checks dla `now`, `schema`, `order_event`, `fleet` i
-`flags` pozostaly bez zmian; to swiadome ograniczenie zakresu, nie deklaracja
-pelnej walidacji schematu wr1.
+Jawne rezyduum: niewykorzystane surplus recorded OSRM calls nie sa dzis
+flagowane. Nie blokuje to wymaganego kontraktu extra-runtime-call/reuse, ale
+instrument pozostaje **narrow/partial**; raport nie deklaruje bit-for-bit ani
+full trust.
+
+Nie walidujemy glebiej elementow `osrm_calls` ani wewnetrznych schematow
+`order_event/fleet/flags`; to swiadome ograniczenie R0, nie deklaracja pelnej
+walidacji calego wr1.
 
 ## 3. Mapa kompletnosci
 
@@ -82,9 +97,11 @@ pelnej walidacji schematu wr1.
 | `tests/fixtures/world_replay_truth_frozen.json` | golden bez PII | TAK | wszystkie piec klas |
 | `tests/test_world_replay_k06.py` | direct replay | TAK | kompletny legalny snapshot wr1 |
 | testy gate K17/schema | kompatybilnosc | TAK | kompletny legalny snapshot, semantyka bucketow bez zmian |
+| `tests/test_paired_flag_replay_zp103.py` | paired / at-214 | TAK | invalid flags callback=0; legalny parytet w obu porzadkach |
 | `world_record.py` | producer | N-D | read-only zgodnie z karta |
 | `osrm_client.py` | recorder/OSRM | N-D | read-only; fallback blokowany przez sandbox |
-| `tools/paired_flag_replay.py` | consumer `at-214` | N-D | read-only; zachowany publiczny alias `CORE_FIELDS` |
+| `tools/paired_flag_replay.py` | consumer `at-214` | TAK | waska prewalidacja przed normalizacja `with_flag`; karta rozszerzona jawnie |
+| `A360_R0_REPLAY_TRUTH_CARD.md` | kontrakt zakresu | TAK | jawne uzasadnienie rozszerzenia paired allowlisty |
 | core/pipeline/feasibility/scoring/selection/plan | decyzja | N-D | jawnie poza allowlista i bez potrzeby zmiany |
 
 ## 4. Kontrole oracle, mutacja i negatywne
@@ -113,6 +130,17 @@ Po fixie `df4556a` wykonano druga prawdziwa mutacje: tymczasowo usunieto
 **GREEN -> RED** (`KeyError: loadgov`, pytest `rc=1`) i po przywroceniu wpisu
 patchem wrocil **RED -> GREEN** (1 passed). Mutacja nie trafila do commita.
 
+Po fixie OSRM wykonano trzecia prawdziwa mutacje: `_take` przywracal reuse
+ostatniego elementu przez `seq.pop(0) if len(seq) > 1 else seq[0]`. Direct i
+actual gate negative control przeszly **2 GREEN -> 2 RED** (brak
+`replay_miss`) i po przywroceniu jednokrotnego `pop(0)` wrocily **2 GREEN**.
+
+Po outer/paired prevalidation wykonano czwarta prawdziwa mutacje: usunieto
+`flags` ze wspolnego zbioru walidowanych dictow. Przypadki missing i `flags=[]`
+weszly do forbidden callbacku (po jednym wywolaniu), dajac **2 GREEN -> 2 RED**.
+Po przywroceniu `flags` oba wrocily na GREEN. Zadna mutacja nie trafila do
+commita.
+
 ### Negative controls
 
 - brak calego `live_inputs`, pusty dict, brak kazdego z szesciu kluczy i zly
@@ -120,6 +148,18 @@ patchem wrocil **RED -> GREEN** (1 passed). Mutacja nie trafila do commita.
   `replay_one` ma zero wywolan;
 - bezposredni `replay_one` podnosi `IncompleteReplayInput`, a CLI zwraca rc=2
   z reason przed replayem;
+- outer invalid `order_id/ts/now/schema/order_event/fleet/flags/osrm_calls`
+  jest klasyfikowany wspolnym reason; gate invalid `osrm_calls` ma zero shadow
+  joinow i zero wywolan replay;
+- paired odrzuca brak `flags` i `flags=[]` przed `with_flag` z custom callback
+  count=0. Callback jest dodatkowym testem kolejnosci/API; koniecznosc fixu dla
+  domyslnego at-214 wynika z tego, ze `with_flag` normalizuje invalid/missing
+  `flags` przez `dict(record.get("flags") or {})` przed `WR.replay_one`;
+- legalny paired record zachowuje dokladny parytet oraz kolejnosc OFF->ON i
+  ON->OFF;
+- jedna nagrana odpowiedz OSRM jest zwracana raz; drugi identyczny call daje
+  sentinel i miss. Actual `replay_one` zwraca `misses=1`, a actual gate
+  klasyfikuje rekord wylacznie jako `OSRM_MISS`;
 - negative control `_serve_live_inputs` dla `{}` i partial `{"plans": {}}`
   ma zero patchy i pozostawia sztuczna sciezke `/dispatch_state/...` bez zmian;
 - rekord, ledger i verdict w CLI sa jawnie pod `tmp_path`; test asertuje brak
@@ -168,6 +208,17 @@ Po fix-forward walidacji `live_inputs`:
   w 107,90 s;
 - `py_compile`, import wspolnego walidatora i `git diff --check`: PASS.
 
+Po outer validation, braku reuse OSRM i paired prevalidation (final):
+
+- focused replay/gate/paired: **71 passed**;
+- STRICT cluster world-record/replay/gate/paired: **79 passed**;
+- DEFAULT: **4979 passed, 27 skipped, 10 xfailed, 0 failed** w 121,29 s;
+- STRICT: **4929 passed, 77 skipped, 10 xfailed, 0 failed** w 108,22 s;
+- `py_compile` trzech tools i import wspolnego validatora: PASS;
+- entropy dashboard read-only: **17 / ~13 / 25/49 / 1 / 7 / 13 / 11+4 / 10**;
+  zadna z osmiu metryk nie wzrosla;
+- finalny `git diff --check f679a88..HEAD`: wykonywany po finalnym docs commit.
+
 Nie zmieniono zadnego markera skip/xfail ani kwarantanny. Roznica +3 skip w obu
 pelnych suitach wzgledem poprzedniego biegu jest zgodna ze znana zegarowa
 wariancja suity; raport nie przypisuje jej zmianie R0 bez osobnego dowodu.
@@ -179,24 +230,42 @@ nie edytuje wspolnego backlogu ani pamieci.
 
 ## 6. Commity i wydanie
 
-- `e896767` — rozlaczne klasy, staly mianownik, coverage/freshness, frozen oracle;
-- `93b3619` — sprzezony sandbox pliku planu i locka;
-- `1073733` — kompatybilnosc publicznego kontraktu paired replay / `at-214`.
-- `2844e43` — usuniecie trailing whitespace z raportu integracyjnego;
-- `df4556a` — fail-closed walidacja kompletnego `live_inputs` przed replayem.
+- `e8967671056551c1da5a5bc62655117827775693` — rozlaczne klasy, staly
+  mianownik, coverage/freshness, frozen oracle;
+- `93b361920755722c25a573574ab2557820b85353` — sprzezony sandbox pliku planu
+  i locka;
+- `107373383b089784e383dff6e1709c07d006aa88` — kompatybilnosc publicznego
+  kontraktu paired replay / `at-214`;
+- `3e48a49199174f478a3f5d0d6be42e297de08624` — pierwotny raport replay-truth;
+- `2844e4369935fa88de27f18bea1203c950b02956` — usuniecie trailing whitespace
+  z raportu integracyjnego;
+- `df4556a3e4e86c371614800455ddf4dd4bc8240f` — fail-closed walidacja
+  kompletnego `live_inputs` przed replayem;
+- `38ae681e9633974e933b6367cd7ffbcc6f72e229` — raport dowodow fail-closed
+  `live_inputs`;
+- `6f9f06a776806235537fa6b60ceb86615e63623f` — outer validator,
+  brak reuse zaserwowanego OSRM i paired prevalidation;
+- `114be3a8788658b105df7f19c582e9d8b06b8a0b` — finalny test paired flags i
+  obu poprawnych porzadkow;
+- `HEAD` — finalny docs commit raport+karta; jego pelny SHA jest autorytatywnie
+  podany w finalnym handoffie i `git log` (commit nie moze zawierac wlasnego SHA).
 
 Development jest zakonczony na `evidence/a360-r0-replay-truth`, ale disposition
 pozostaje **HOLD**. **Nie merge'owac do mastera przed odczytem `at-214`** z
 13.07 lub jawnym zamrozeniem jego kodu. Nie bylo flipa, deployu, restartu,
 migracji, zapisu live state ani zmiany timera/joba.
 
+Integrator moze scalic/cherry-picknac do mastera wylacznie finalny docs commit
+(`HEAD`: raport+karta). Commity kodu i testow R0 pozostaja tylko na branchu do
+werdyktu `at-214`.
+
 ## 7. Rollback
 
 Przed merge: pozostawic branch bez merge albo go odrzucic. Po przyszlym merge
-rollback kodu/testow/raportu:
+rollback kodu/testow/raportu/karty:
 
 ```bash
-git revert <commit-nowego-raportu> df4556a 2844e43 1073733 93b3619 e896767
+git revert HEAD 114be3a8788658b105df7f19c582e9d8b06b8a0b 6f9f06a776806235537fa6b60ceb86615e63623f 38ae681e9633974e933b6367cd7ffbcc6f72e229 df4556a3e4e86c371614800455ddf4dd4bc8240f 2844e4369935fa88de27f18bea1203c950b02956 3e48a49199174f478a3f5d0d6be42e297de08624 107373383b089784e383dff6e1709c07d006aa88 93b361920755722c25a573574ab2557820b85353 e8967671056551c1da5a5bc62655117827775693
 ```
 
 Kolejnosc jest newest-first. Nie ma flagi, danych, migracji, uslugi ani restartu
