@@ -6,6 +6,16 @@ Branch: `ops/a360-dr1a-restore-prep`
 Base: `e0fd1e49f025a8960b2bfcd533b30a00d8abfc85`
 Status: **SOURCE/FAKE ACCEPT; DR1B HOLD; zero operacji realnych**
 
+Integration disposition: źródło zostało przyjęte do wydania master
+`a360-wave3-safe-source-integrated-20260711`, ale nie zostało zainstalowane ani
+uruchomione live. Przed integracją usunięto bloker C32: test-mode wymaga
+jednorazowej atestacji FD; źródła restore/backup wymagają root-only locka,
+który nie jest jeszcze provisioned live; sensor konfliktów używa wyłącznie
+dokładnego `comm` i cgroup. Targeted STRICT po poprawce: **177/177**.
+Operacyjny backup, pozostali producenci i runnery nie
+mają jeszcze tego kontraktu, dlatego pełne mutual exclusion, DR1B i service
+RTO/RPO pozostają HOLD.
+
 ## Problem i wynik
 
 DR0 miał fail-closed artifact/schema restore, provenance, freshness, manifest,
@@ -97,6 +107,16 @@ wylacznie `comm`, unit/status/cgroup i niewrazliwych metadata; nie wykonano
 kolejnej proby. Wspolny close zapisuje liczbe i disposition, a regula C32 w
 repo memory zakazuje ad-hoc cmdline/environ. Dedykowany, zreviewowany kolektor
 moze redukowac cmdline w pamieci tylko przy negative tescie braku emisji.
+
+### Domknięcie C32 przed integracją
+
+Release nie odziedziczył near-missu jako niedozwolonego odczytu. Źródło restore
+nie zawiera `/cmdline` ani `/environ`; raport ma stałe liczniki zero. Złośliwy
+fake proc z sekretem w obu carrierach nie jest używany ani emitowany, dokładne
+`restic`/`pg_dump`/`pg_basebackup` i cztery unity backupu są RED, a podobne
+nazwy nie dają false positive. Mutation usuwające unit dispatch-backup zmienia
+werdykt i jest wykrywane przez oracle. Jest to dowód source/fake, nie instalacji
+live ani kompletnego pokrycia dowolnego nieopakowanego runnera.
 
 ### Werdykt
 

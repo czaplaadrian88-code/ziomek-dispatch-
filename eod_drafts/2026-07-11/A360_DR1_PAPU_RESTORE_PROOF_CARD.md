@@ -1,6 +1,6 @@
 # A360-DR1A RESTORE-PREP — karta sprintu: kontrakt + wynik
 
-Status: **SOURCE/FAKE ACCEPT/PUSHED `0cfa748` (kod `b035523`); DR1B HOLD**
+Status: **SOURCE/FAKE ACCEPT; SOURCE IN MASTER w wydaniu `a360-wave3-safe-source-integrated-20260711`; NOT INSTALLED/NOT EXECUTED; DR1B HOLD**
 
 Effort: `high`.
 
@@ -14,6 +14,10 @@ clean/pushed. Final DEFAULT `5106/27/10/0`, STRICT
 `5056/77/10/0`, DR0+DR1A `157/157`, mutation `4/4`. Powstal bezsekretowy
 one-shot carrier przez stdin, enforced quota z re-probe, fake siedmiostopniowy
 app smoke i exact run-id cleanup. Realne adaptery pozostaja nieinstalowane.
+
+Integracja usunęła bloker C32 i dodała 12 testów FD/lock/comm/cgroup; targeted
+STRICT ma 177/177. Operacyjny backup i runnery nie są jeszcze przepięte na nowy
+root-only lock, więc nie zmienia to werdyktu DR1B ani stanu live.
 
 Ponizsze sekcje opisuja pierwotny kontrakt wykonawczy; wynik rzeczywisty jest
 wyzej oraz w raporcie lane'a na branchu wskazanym w close Wave 3.

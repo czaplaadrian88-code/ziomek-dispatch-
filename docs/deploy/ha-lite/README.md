@@ -1,21 +1,22 @@
 # HA-lite / Disaster Recovery — źródła i runbook
 
-Pliki w tym katalogu są wersjonowanym źródłem procedury DR. W szczególności
-wersja A360-DR1A pliku `restore_from_restic.sh` na branchu
-`ops/a360-dr1a-restore-prep` **nie została zainstalowana** pod ścieżką skryptów live.
-Nie ustalono też parytetu jej CLI z istniejącym skryptem live. Instalacja,
+Pliki w tym katalogu są wersjonowanym źródłem procedury DR. Źródło A360-DR1A
+z brancha `ops/a360-dr1a-restore-prep` zostało przyjęte do mastera w wydaniu
+`a360-wave3-safe-source-integrated-20260711`, wraz z poprawką C32. Nadal **nie zostało
+zainstalowane** pod ścieżką skryptów live. Nie ustalono też parytetu jego CLI z
+istniejącym skryptem live. Instalacja,
 wykonanie ze ścieżki live albo użycie do failoveru wymaga osobnego przeglądu i
-ACK. Ten sprint nie wykonuje deployu ani aktywacji usług.
+ACK. Wydanie source-only nie wykonuje restore ani aktywacji usług.
 
 ## Granica źródło / live
 
 | Artefakt | Status repo | Status live |
 |---|---|---|
-| `backup_restic.sh` | snapshot źródła z 2026-06-21 | osobny skrypt operacyjny i timer; niezmieniane w A360-DR0 |
+| `backup_restic.sh` | źródło ma root-only lock heavy-op wspólny z restore | osobny skrypt operacyjny i timer; **niezmienione i bez nowego locka** w wydaniu source-only |
 | `restore_from_restic.sh` | źródło DR0 rozszerzone o kontrakty DR1A, testowane wyłącznie syntetycznie | **NIEWDROŻONE; CLI i parytet niepotwierdzone** |
 | `activate_pitr.sh`, `pitr_verify.sh` | historyczne snapshoty | poza zakresem A360-DR0 |
 | `backup_sentinel.py` i unity | historyczne snapshoty | poza zakresem A360-DR0 |
-| `HA_LITE_RUNBOOK_2026-06-21.md` | runbook uaktualniony o stan A360-DR0 | kopia live nie była aktualizowana |
+| `HA_LITE_RUNBOOK_2026-06-21.md` | runbook uaktualniony o A360-DR0+DR1A+C32 | kopia live nie była aktualizowana |
 
 ## CLI źródła A360-DR1A
 
@@ -70,7 +71,19 @@ wiek snapshotu i dumpu 93 600 s, minimalna rezerwa 5 GiB, minimalna dostępna
 pamięć 3 GiB oraz co najmniej 50 tabel na rolę. Produkcyjne zmienne środowiskowe
 nie zmieniają tych pięciu progów; injection istnieje wyłącznie w hermetycznym
 `TEST_MODE` pod nazwami `A360_TEST_*`, dodatkowo atestowanym przez aktywny
-proces nadrzędny pytest i `PYTEST_CURRENT_TEST`.
+proces nadrzędny pytest, `PYTEST_CURRENT_TEST` i jednorazowy marker przekazany
+odziedziczonym deskryptorem. Same zmienne środowiskowe nie aktywują fake'ów.
+
+Guard konfliktów nie otwiera argv ani środowiska procesów. Repozytoryjne źródła
+restore i oficjalnego backupu wymagają uprzednio utworzonego locka w root-only
+`/run/lock/ziomek`; sensor uzupełniający dopasowuje wyłącznie dokładne `comm`
+oraz nazwy unitów w cgroup. Raport zapisuje `command_lines_read=0`,
+`command_lines_emitted=0` i `process_environments_read=0`. Katalog/lock nie są
+jeszcze provisioned live, a działający backup, pozostali
+producenci i wszystkie runnery nie zostały jeszcze przepięte na ten
+lock; arbitralny `python -m pytest` bez wrappera jest niewykrywalny przez
+`comm`. Dlatego mechanizm ma status SOURCE/FAKE ACCEPT, a pełne mutual exclusion
+i DR1B pozostają HOLD.
 
 Provenance ma osobny kontrakt `a360-dr0-snapshot-provenance-v1-20260711`:
 snapshot musi mieć przypięty hostname producenta, oba tagi producenta i pięć

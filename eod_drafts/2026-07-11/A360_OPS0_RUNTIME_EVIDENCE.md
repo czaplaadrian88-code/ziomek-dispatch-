@@ -2,6 +2,11 @@
 
 Status: **TECHNICZNIE GOTOWE; POMIAR OKNA = UNKNOWN / NIE-REPREZENTATYWNY**
 
+Integration disposition: narzędzie zostało przyjęte do mastera w wydaniu
+`a360-wave3-safe-source-integrated-20260711`. Pozostaje ręczne i read-only; nie ma
+timera, at-joba ani aktywnego konsumenta. Nie wykonano tuningu, `daemon-reload`
+ani restartu, a profil reprezentatywny nadal ma status **UNKNOWN**.
+
 Branch: `ops/a360-ops0-runtime-evidence`
 Zamrozona baza: `e0fd1e49f025a8960b2bfcd533b30a00d8abfc85`
 

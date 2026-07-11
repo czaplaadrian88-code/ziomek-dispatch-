@@ -23,11 +23,12 @@ aplikacji, health, kolejności startu oraz zależności zewnętrznych.
 
 ## 1. Granica źródło / live
 
-Kanon źródłowy A360-DR1A to
-`docs/deploy/ha-lite/restore_from_restic.sh` na zatwierdzonym commicie brancha
-`ops/a360-dr1a-restore-prep`. Ta wersja **nie jest zainstalowana live**. Skrypt pod
+Kanon źródłowy A360-DR1A to `docs/deploy/ha-lite/restore_from_restic.sh` w
+masterze oznaczonym wydaniem `a360-wave3-safe-source-integrated-20260711`; branch
+`ops/a360-dr1a-restore-prep` i commity `b035523`/`0cfa748` pozostają provenance
+lane'a. Ta wersja **nie jest zainstalowana live**. Skrypt pod
 operacyjną ścieżką workspace może mieć inne CLI i nie był zmieniany ani
-uruchamiany w tym sprincie.
+uruchamiany w tym wydaniu.
 
 Nie kopiuj źródła do workspace i nie wykonuj go ze ścieżki live bez osobnego
 ACK, review parytetu i planu rollbacku. Skrypt A360-DR0 nie jest narzędziem do
@@ -65,7 +66,8 @@ liczniki kontraktu, bez listy ścieżek.
 Realne progi są przypięte i `readonly`: snapshot/dumpy maks. 93 600 s, rezerwa
 min. 5 GiB, pamięć dostępna min. 3 GiB i min. 50 tabel na rolę. Produkcyjne
 zmienne środowiskowe nie mogą ich osłabić; odrębne override'y istnieją tylko w
-hermetycznym profilu testowym atestowanym przez proces nadrzędny pytest.
+hermetycznym profilu testowym atestowanym przez proces nadrzędny pytest i
+jednorazowy odziedziczony deskryptor.
 
 ## 3. Twardy preflight pojemności
 
@@ -79,6 +81,16 @@ aktywnego restic/pg_dump/pg_basebackup, budżet 2 GiB cache + rezerwę i wolne
 miejsce. Guard konkurencji jest powtarzany tuż przed `restic check`. Po checku
 rzeczywisty cache nie może przekroczyć allowance, operatorowego budżetu ani
 naruszyć rezerwy; RED usuwa efemeryczny cache.
+
+Guard C32 nie czyta `/proc/*/cmdline`, `/proc/*/environ`, `ps args` ani
+Environment*. Repozytoryjne źródła restore i oficjalnego backupu wymagają
+uprzednio utworzonego locka w root-only `/run/lock/ziomek`; sensor uzupełniający
+używa dokładnego `comm` i dokładnej nazwy unit w cgroup, bez publikacji argv/PID.
+Lock/katalog nie są jeszcze provisioned live. Operacyjny backup, pozostali
+producenci i runnery nie są jeszcze objęci tym lockiem. Nieopakowany
+`python -m pytest` jest niewidoczny dla samego `comm`, więc
+pełne mutual exclusion i realny DR1B pozostają HOLD do instalacji wrapperów i
+negatywnego testu na żywym układzie.
 
 Przed rozpakowaniem skrypt:
 

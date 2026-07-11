@@ -1,6 +1,20 @@
 # Audyt 360 — Wave 3 close — 2026-07-11
 
-Status: **trzy lane'y zakonczone, clean/pushed; zero merge kodu i zero live**.
+Status historyczny close lane'ow: **trzy lane'y zakonczone, clean/pushed; wtedy
+zero merge kodu i zero live**.
+
+## Addendum integracyjne — safe source release
+
+DR1A i OPS0 zostały następnie przyjęte do mastera jako source/tool-only w
+wydaniu `a360-wave3-safe-source-integrated-20260711`. DR1A przed integracją dostał
+fix C32: atestację FD, cooperative root-only lock oraz exact comm+cgroup, z 12
+nowymi testami. Lock/producenci nie są jeszcze provisioned live. Nie
+zainstalowano restore, adapterów, timera OPS0 ani zmian systemd; nie wykonano
+restore, tuningu, flipa, danych ani restartu. D1 i R0 pozostają poza masterem do
+ręcznego odczytu at-214.
+
+Raport integratora:
+`eod_drafts/2026-07-11/AUDIT360_WAVE3_SAFE_SOURCE_INTEGRATION.md`.
 
 ## Wyniki
 
@@ -14,7 +28,9 @@ Branche startowaly z identycznego base `e0fd1e4`, maja rozlaczne write-sety,
 sa zsynchronizowane z origin i nie maja dirty/untracked. Tmux65/66/67 sa idle;
 pozostawiono je jako audytowalne sesje, nie zamykano bez polecenia.
 
-Szczegolowe raporty pozostaja razem z kodem na branchach, nie w masterze:
+Historycznie szczegolowe raporty pozostawaly razem z kodem na branchach. Po
+addendum raporty DR1A i OPS0 są także w masterze; raport D1 nadal pozostaje na
+branchu:
 
 - D1: `engine/a360-d1-firewall-exempt-truth` →
   `eod_drafts/2026-07-11/A360_D1_FIREWALL_EXEMPT_TRUTH.md`;
@@ -23,9 +39,8 @@ Szczegolowe raporty pozostaja razem z kodem na branchach, nie w masterze:
 - OPS0: `ops/a360-ops0-runtime-evidence` →
   `eod_drafts/2026-07-11/A360_OPS0_RUNTIME_EVIDENCE.md`.
 
-Nie interpretowac braku tych trzech plikow na masterze jako braku wyniku;
-master celowo zawiera karte i zredagowany close, dopoki kod lane'a nie zostanie
-zintegrowany za jego bramkami.
+Nie interpretowac braku raportu D1 na masterze jako braku wyniku; jego merge
+jest celowo zamrożony do at-214.
 
 ## Co zmienia sie w Ziomku
 
@@ -70,8 +85,10 @@ wykonano flipa, danych, migracji, deployu, restartu, daemon-reload ani timera.
 `atq` nadal ma wyłącznie at-214 na 2026-07-13 12:15 UTC.
 
 - D1 rollback: `git revert e75c4a8`; przed merge brak runtime do cofania.
-- DR1A rollback: `git revert b035523`; brak realnych zasobow do sprzatania.
-- OPS0 rollback: `git revert 1bb4699`; brak zmian runtime.
+- DR1A rollback po integracji: revert commita dokumentacji, fixa C32 `1cdda89` oraz
+  cherry-picków `930dbea` i `309330b` w odwrotnej kolejności; brak realnych
+  zasobow do sprzatania.
+- OPS0 rollback po integracji: revert cherry-picka `daeff60`; brak zmian runtime.
 
 D1 i kod R0 pozostaja poza masterem do odczytu at-214. H1 nadal wymaga
 integracji R0+D1, decyzji B-01/B-02 i osobnego ACK. DR1B wymaga zatwierdzonego

@@ -1,6 +1,6 @@
 # A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE — karta sprintu: kontrakt + wynik
 
-Status: **TOOL ACCEPT/PUSHED `1bb4699`; reprezentatywny profil UNKNOWN**
+Status: **TOOL ACCEPT; TOOL IN MASTER w wydaniu `a360-wave3-safe-source-integrated-20260711`; MANUAL ONLY/NO TIMER; reprezentatywny profil UNKNOWN**
 
 Effort: `high`.
 

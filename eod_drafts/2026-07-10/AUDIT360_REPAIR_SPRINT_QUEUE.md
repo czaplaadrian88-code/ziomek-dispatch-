@@ -1,8 +1,9 @@
 # Audyt 360 — kolejka napraw i bezkolizyjne sprinty — 2026-07-10
 
-Status: Wave 3 code/test/read-only jest zamknieta na trzech clean/pushed
-branchach; D1 merge pozostaje HOLD do at-214, DR1B pozostaje HOLD, a OPS0 nie
-daje GO do tuningu live. S0 API-OWNERSHIP pozostaje LIVE. Nie daje to ACK na
+Status: Wave 3 jest zamknięta; DR1A i OPS0 są przyjęte source/tool-only do
+mastera w wydaniu `a360-wave3-safe-source-integrated-20260711`. D1 merge
+pozostaje HOLD do at-214, DR1B pozostaje HOLD, a OPS0 nie daje GO do tuningu
+live. S0 API-OWNERSHIP pozostaje LIVE. Nie daje to ACK na
 flage, HARD/SOFT, credential, dane, siec ani kolejne operacje live.
 
 Fala pierwsza zostala uruchomiona 2026-07-11 o 10:04 UTC w tmux 57/59/61 i
@@ -109,7 +110,7 @@ jak R0 — czeka na `at-214`, aby nie skazic paired replay Sprintu 3.
 rozstrzygniecia dopiero po ich wynikach; przedtem nie wolno uzyc starego replayu
 jako argumentu za wariantem biznesowym.
 
-### Wave 3 zamknieta na branchach — 2026-07-11
+### Wave 3 zamknieta i częściowo zintegrowana source-only — 2026-07-11
 
 1. `A360-D1 FIREWALL-EXEMPT-TRUTH` (`ultra`, tmux 65) — DONE na branchu
    `engine/a360-d1-firewall-exempt-truth` @ `e193f2a`; v2 rozdziela
@@ -122,6 +123,14 @@ jako argumentu za wariantem biznesowym.
 3. `A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE` (`high`, tmux 67) — TOOL ACCEPT na
    `ops/a360-ops0-runtime-evidence` @ `1bb4699`; mapa 10 uslug jest PROVEN,
    lecz reprezentatywny profil i bezpieczne limity pozostaja UNKNOWN.
+
+Post-close: DR1A oraz OPS0 są w masterze pod tagiem wydania powyżej. DR1A
+zawiera dodatkowy fix C32 i 12 testów. Restore i tool nie mają aktywnych
+konsumentów; zero instalacji, timera, systemd, danych, restartu i realnego
+wykonania. D1/R0 nadal są branch-only HOLD.
+
+Dowód integracji i pełnej regresji:
+`eod_drafts/2026-07-11/AUDIT360_WAVE3_SAFE_SOURCE_INTEGRATION.md`.
 
 Fazy developerskie sa plikowo rozlaczne. Ciezki real DR1B i reprezentatywne
 okno OPS0 nie moga biec jednoczesnie, bo skazilyby pomiar. H1 nadal czeka na
