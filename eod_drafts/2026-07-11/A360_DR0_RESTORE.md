@@ -1,7 +1,7 @@
 # A360-DR0 RESTORE — raport wykonania
 
-Data zamkniecia: 2026-07-11 13:36 UTC  
-Wykonawca: tmux63  
+Data zamkniecia: 2026-07-11 13:36 UTC
+Wykonawca: tmux63
 Status: **kod i faza syntetyczna PASS; pelny realny RTO NOT ACHIEVED (STOP przed DB)**
 
 ## Wynik
