@@ -169,13 +169,30 @@ def evaluate_suite_contract(
     return alerts
 
 
+def _pytest_subprocess_env(result_path: str) -> dict[str, str]:
+    """Build the child environment so the external pytest plugin is importable.
+
+    The systemd unit starts this module from the scripts directory, but
+    ``run_pytest`` deliberately changes the child cwd to the ``dispatch_v2``
+    package directory.  Pytest imports ``-p`` plugins before normal rootdir
+    discovery, so the package parent must be explicit on ``PYTHONPATH``.
+    """
+    env = dict(os.environ)
+    package_parent = str(Path(ROOT).resolve().parent)
+    inherited = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        package_parent + os.pathsep + inherited if inherited else package_parent
+    )
+    env["NIGHT_GUARD_RESULT_PATH"] = result_path
+    return env
+
+
 def run_pytest() -> tuple[dict, list[str], str | None, dict | None]:
     """Full run with an aggregate-only per-nodeid outcome report."""
     fd, result_path = tempfile.mkstemp(prefix="night-guard-", suffix=".json")
     os.close(fd)
     os.unlink(result_path)
-    env = dict(os.environ)
-    env["NIGHT_GUARD_RESULT_PATH"] = result_path
+    env = _pytest_subprocess_env(result_path)
     try:
         p = subprocess.run([VENV_PY, "-m", "pytest", "tests/", "-q", "-p",
                             "dispatch_v2.tools.night_guard_pytest_plugin"],

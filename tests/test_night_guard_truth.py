@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -109,6 +110,20 @@ def test_manifest_hash_mutation_is_rejected(tmp_path):
 def test_hard_error_summary_is_not_parseable_as_green():
     parsed = ng._parse_pytest_summary("worker died before summary")
     assert parsed["summary_line"] is None
+
+
+def test_pytest_plugin_child_env_starts_with_package_parent(tmp_path, monkeypatch):
+    root = tmp_path / "scripts" / "dispatch_v2"
+    monkeypatch.setattr(ng, "ROOT", str(root))
+    monkeypatch.setenv("PYTHONPATH", "/existing/pythonpath")
+
+    env = ng._pytest_subprocess_env(str(tmp_path / "result.json"))
+
+    assert env["PYTHONPATH"].split(os.pathsep) == [
+        str(root.parent.resolve()),
+        "/existing/pythonpath",
+    ]
+    assert env["NIGHT_GUARD_RESULT_PATH"] == str(tmp_path / "result.json")
 
 
 def test_aggregate_plugin_classifies_xfail_xpass_without_payload(tmp_path, monkeypatch):
