@@ -15,8 +15,12 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/root/.cache}"
 unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSERVICE PGSERVICEFILE PSQLRC
 
 TEST_MODE=0
-if [ "${DISPATCH_UNDER_PYTEST:-0}" = "1" ] && [ "${A360_TEST_MODE:-0}" = "1" ]; then
-  TEST_MODE=1
+if [ "${DISPATCH_UNDER_PYTEST:-0}" = "1" ] && [ "${A360_TEST_MODE:-0}" = "1" ] \
+  && [ -n "${PYTEST_CURRENT_TEST:-}" ]; then
+  PARENT_CMDLINE="$(tr '\000' ' ' <"/proc/$PPID/cmdline" 2>/dev/null || true)"
+  case "$PARENT_CMDLINE" in
+    *pytest*) TEST_MODE=1 ;;
+  esac
 fi
 
 if [ "$TEST_MODE" = "1" ]; then
@@ -51,7 +55,7 @@ usage() {
     '  --pg-image IMAGE@sha256:DIGEST       (wymagany tylko dla drill)' \
     '' \
     'Wymagane limity bajtow:' \
-    '  A360_DR0_SCRATCH_BUDGET_BYTES       (artifact i drill)' \
+    '  A360_DR0_SCRATCH_BUDGET_BYTES       (verify, artifact i drill)' \
     '  A360_DR0_DOCKER_BUDGET_BYTES        (drill)'
 }
 
@@ -61,6 +65,7 @@ FINALIZED=0
 TARGET_CREATED=0
 CONTAINER_CREATED=0
 VOLUME_CREATED=0
+DOCKER_CLEANUP_ARMED=0
 CLEANUP_OK=1
 TARGET=""
 OWNER_FILE=""
@@ -91,25 +96,66 @@ safe_remove_target() {
 }
 
 cleanup_docker() {
-  local label=""
+  local run_label="" scratch_label="" resource_name="" daemon_ok=1
   CLEANUP_OK=1
-  if [ "$CONTAINER_CREATED" = "1" ]; then
-    label="$($DOCKER_BIN inspect -f '{{ index .Config.Labels "a360.dr0.run_id" }}' "$CONTAINER_NAME" 2>/dev/null || true)"
-    if [ "$label" = "$RUN_ID" ]; then
+  [ "$DOCKER_CLEANUP_ARMED" = "1" ] || return 0
+
+  if "$DOCKER_BIN" inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+    resource_name="$($DOCKER_BIN inspect -f '{{.Name}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+    run_label="$($DOCKER_BIN inspect -f '{{ index .Config.Labels "a360.dr0.run_id" }}' "$CONTAINER_NAME" 2>/dev/null || true)"
+    scratch_label="$($DOCKER_BIN inspect -f '{{ index .Config.Labels "a360.dr0.scratch" }}' "$CONTAINER_NAME" 2>/dev/null || true)"
+    if [ "$resource_name" = "/$CONTAINER_NAME" ] \
+      && [ "$run_label" = "$RUN_ID" ] && [ "$scratch_label" = "true" ]; then
       "$DOCKER_BIN" rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || CLEANUP_OK=0
-      [ "$CLEANUP_OK" = "0" ] || CONTAINER_CREATED=0
+      if [ "$CLEANUP_OK" = "1" ]; then
+        if "$DOCKER_BIN" inspect "$CONTAINER_NAME" >/dev/null 2>&1 \
+          || ! "$DOCKER_BIN" info >/dev/null 2>&1; then
+          CLEANUP_OK=0
+        else
+          CONTAINER_CREATED=0
+        fi
+      fi
+    else
+      CLEANUP_OK=0
+    fi
+  else
+    "$DOCKER_BIN" info >/dev/null 2>&1 || daemon_ok=0
+    if [ "$daemon_ok" = "1" ] && ! "$DOCKER_BIN" inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+      CONTAINER_CREATED=0
     else
       CLEANUP_OK=0
     fi
   fi
-  if [ "$VOLUME_CREATED" = "1" ] && [ "$CONTAINER_CREATED" = "0" ]; then
-    label="$($DOCKER_BIN volume inspect -f '{{ index .Labels "a360.dr0.run_id" }}' "$VOLUME_NAME" 2>/dev/null || true)"
-    if [ "$label" = "$RUN_ID" ]; then
+
+  daemon_ok=1
+  if [ "$CLEANUP_OK" = "1" ] && "$DOCKER_BIN" volume inspect "$VOLUME_NAME" >/dev/null 2>&1; then
+    resource_name="$($DOCKER_BIN volume inspect -f '{{.Name}}' "$VOLUME_NAME" 2>/dev/null || true)"
+    run_label="$($DOCKER_BIN volume inspect -f '{{ index .Labels "a360.dr0.run_id" }}' "$VOLUME_NAME" 2>/dev/null || true)"
+    scratch_label="$($DOCKER_BIN volume inspect -f '{{ index .Labels "a360.dr0.scratch" }}' "$VOLUME_NAME" 2>/dev/null || true)"
+    if [ "$resource_name" = "$VOLUME_NAME" ] \
+      && [ "$run_label" = "$RUN_ID" ] && [ "$scratch_label" = "true" ]; then
       "$DOCKER_BIN" volume rm "$VOLUME_NAME" >/dev/null 2>&1 || CLEANUP_OK=0
-      [ "$CLEANUP_OK" = "0" ] || VOLUME_CREATED=0
+      if [ "$CLEANUP_OK" = "1" ]; then
+        if "$DOCKER_BIN" volume inspect "$VOLUME_NAME" >/dev/null 2>&1 \
+          || ! "$DOCKER_BIN" info >/dev/null 2>&1; then
+          CLEANUP_OK=0
+        else
+          VOLUME_CREATED=0
+        fi
+      fi
     else
       CLEANUP_OK=0
     fi
+  elif [ "$CLEANUP_OK" = "1" ]; then
+    "$DOCKER_BIN" info >/dev/null 2>&1 || daemon_ok=0
+    if [ "$daemon_ok" = "1" ] && ! "$DOCKER_BIN" volume inspect "$VOLUME_NAME" >/dev/null 2>&1; then
+      VOLUME_CREATED=0
+    else
+      CLEANUP_OK=0
+    fi
+  fi
+  if [ "$CLEANUP_OK" = "1" ] && [ "$CONTAINER_CREATED" = "0" ] && [ "$VOLUME_CREATED" = "0" ]; then
+    DOCKER_CLEANUP_ARMED=0
   fi
   [ "$CLEANUP_OK" = "1" ]
 }
@@ -153,11 +199,31 @@ SNAP="latest"
 PAPU_FORMAT="auto"
 PG_IMAGE=""
 SCRATCH_ROOT="${A360_DR0_SCRATCH_ROOT:-/root/a360_dr0_scratch}"
-MAX_RPO_SECONDS="${A360_DR0_MAX_SNAPSHOT_AGE_SECONDS:-93600}"
-MAX_ARTIFACT_AGE_SECONDS="${A360_DR0_MAX_ARTIFACT_AGE_SECONDS:-93600}"
-MIN_FREE_RESERVE_BYTES="${A360_DR0_MIN_FREE_RESERVE_BYTES:-5368709120}"
-MIN_MEMORY_BYTES="${A360_DR0_MIN_MEMORY_BYTES:-3221225472}"
-MIN_PG_TABLES="${A360_DR0_MIN_PG_TABLES:-50}"
+REAL_MAX_RPO_SECONDS=93600
+REAL_MAX_ARTIFACT_AGE_SECONDS=93600
+REAL_MIN_FREE_RESERVE_BYTES=5368709120
+REAL_MIN_MEMORY_BYTES=3221225472
+REAL_MIN_PG_TABLES=50
+REAL_REPOSITORY_CACHE_ALLOWANCE_BYTES=2147483648
+if [ "$TEST_MODE" = "1" ]; then
+  MAX_RPO_SECONDS="${A360_TEST_MAX_RPO_SECONDS:-$REAL_MAX_RPO_SECONDS}"
+  MAX_ARTIFACT_AGE_SECONDS="${A360_TEST_MAX_ARTIFACT_AGE_SECONDS:-$REAL_MAX_ARTIFACT_AGE_SECONDS}"
+  MIN_FREE_RESERVE_BYTES="${A360_TEST_MIN_FREE_RESERVE_BYTES:-$REAL_MIN_FREE_RESERVE_BYTES}"
+  MIN_MEMORY_BYTES="${A360_TEST_MIN_MEMORY_BYTES:-$REAL_MIN_MEMORY_BYTES}"
+  MIN_PG_TABLES="${A360_TEST_MIN_PG_TABLES:-$REAL_MIN_PG_TABLES}"
+  REPOSITORY_CACHE_ALLOWANCE_BYTES="${A360_TEST_REPOSITORY_CACHE_ALLOWANCE_BYTES:-$REAL_REPOSITORY_CACHE_ALLOWANCE_BYTES}"
+else
+  # Profil real jest source-pinned. Zmienne srodowiskowe nie moga oslabic
+  # wieku, rezerwy, pamieci ani minimalnej tozsamosci schematu.
+  MAX_RPO_SECONDS="$REAL_MAX_RPO_SECONDS"
+  MAX_ARTIFACT_AGE_SECONDS="$REAL_MAX_ARTIFACT_AGE_SECONDS"
+  MIN_FREE_RESERVE_BYTES="$REAL_MIN_FREE_RESERVE_BYTES"
+  MIN_MEMORY_BYTES="$REAL_MIN_MEMORY_BYTES"
+  MIN_PG_TABLES="$REAL_MIN_PG_TABLES"
+  REPOSITORY_CACHE_ALLOWANCE_BYTES="$REAL_REPOSITORY_CACHE_ALLOWANCE_BYTES"
+fi
+readonly MAX_RPO_SECONDS MAX_ARTIFACT_AGE_SECONDS MIN_FREE_RESERVE_BYTES
+readonly MIN_MEMORY_BYTES MIN_PG_TABLES REPOSITORY_CACHE_ALLOWANCE_BYTES
 PG_READY_TIMEOUT="${A360_DR0_PG_READY_TIMEOUT_SECONDS:-30}"
 PAPU_BACKUP_KEY_FILE="${PAPU_BACKUP_KEY_FILE:-}"
 SCRATCH_BUDGET_BYTES="${A360_DR0_SCRATCH_BUDGET_BYTES:-}"
@@ -214,6 +280,18 @@ EXPECTED_CORE_ARTIFACTS=4
 EXPECTED_PRIVATE_METADATA_ARTIFACTS=8
 EXPECTED_SYSTEMD_ARTIFACTS=19
 EXPECTED_NGINX_ARTIFACTS=3
+SNAPSHOT_PROVENANCE_CONTRACT_VERSION="a360-dr0-snapshot-provenance-v1-20260711"
+EXPECTED_SNAPSHOT_HOSTNAME="Ziomek"
+REQUIRED_SNAPSHOT_TAGS=("daily" "scheduled")
+REQUIRED_SNAPSHOT_PATHS=(
+  "/root/.openclaw/workspace/dispatch_state"
+  "/root/.openclaw/workspace/scripts/flags.json"
+  "/root/backups/papu"
+  "/root/backups/nadajesz_panel"
+  "/etc/nginx/sites-available"
+)
+EXPECTED_SNAPSHOT_TAGS=2
+EXPECTED_SNAPSHOT_PATHS=5
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -295,7 +373,7 @@ try:
 except ValueError:
     raise SystemExit(1)
 result = payload * factor + reserve
-if payload <= 0 or factor <= 0 or reserve < 0 or result > (2**63 - 1):
+if payload < 0 or factor <= 0 or reserve < 0 or result > (2**63 - 1):
     raise SystemExit(1)
 print(result)
 ' "$1" "$2" "$3" 2>/dev/null
@@ -317,14 +395,40 @@ validate_manifest_definition() {
     seen+="$relative"$'\n'
   done
 }
+validate_provenance_definition() {
+  local expected="$1" kind="$2"
+  shift 2
+  [ "$#" -eq "$expected" ] || fail "snapshot_provenance_definition_invalid" 2
+  local value="" seen=$'\n'
+  for value in "$@"; do
+    [ -n "$value" ] && [[ "$value" =~ ^[A-Za-z0-9._/-]+$ ]] \
+      || fail "snapshot_provenance_definition_invalid" 2
+    if [ "$kind" = "path" ]; then
+      case "$value" in
+        /*) ;;
+        *) fail "snapshot_provenance_definition_invalid" 2 ;;
+      esac
+      case "$value" in
+        *//*|*/../*|*/..) fail "snapshot_provenance_definition_invalid" 2 ;;
+      esac
+    fi
+    case "$seen" in
+      *$'\n'"$value"$'\n'*) fail "snapshot_provenance_definition_invalid" 2 ;;
+    esac
+    seen+="$value"$'\n'
+  done
+}
 
 validate_manifest_definition "$EXPECTED_CORE_ARTIFACTS" "${REQUIRED_CORE_RELATIVE_PATHS[@]}"
 validate_manifest_definition "$EXPECTED_PRIVATE_METADATA_ARTIFACTS" "${REQUIRED_PRIVATE_METADATA_RELATIVE_PATHS[@]}"
 validate_manifest_definition "$EXPECTED_SYSTEMD_ARTIFACTS" "${REQUIRED_SYSTEMD_RELATIVE_PATHS[@]}"
 validate_manifest_definition "$EXPECTED_NGINX_ARTIFACTS" "${REQUIRED_NGINX_RELATIVE_PATHS[@]}"
-if [ "$MODE" != "verify" ]; then
-  validate_uint63 "$SCRATCH_BUDGET_BYTES" || fail "scratch_budget_required_or_invalid" 2
-fi
+[[ "$EXPECTED_SNAPSHOT_HOSTNAME" =~ ^[A-Za-z0-9._-]+$ ]] \
+  || fail "snapshot_provenance_definition_invalid" 2
+validate_provenance_definition "$EXPECTED_SNAPSHOT_TAGS" tag "${REQUIRED_SNAPSHOT_TAGS[@]}"
+validate_provenance_definition "$EXPECTED_SNAPSHOT_PATHS" path "${REQUIRED_SNAPSHOT_PATHS[@]}"
+validate_uint63 "$SCRATCH_BUDGET_BYTES" || fail "scratch_budget_required_or_invalid" 2
+validate_uint63 "$REPOSITORY_CACHE_ALLOWANCE_BYTES" || fail "invalid_repository_cache_allowance" 2
 if [ "$MODE" = "drill" ]; then
   validate_uint63 "$DOCKER_BUDGET_BYTES" || fail "docker_budget_required_or_invalid" 2
 fi
@@ -382,12 +486,26 @@ VOLUME_NAME="a360_dr0_pgdata_${RUN_DB_TOKEN}"
 PANEL_DB="a360_dr0_panel_${RUN_DB_TOKEN}"
 PAPU_DB="a360_dr0_papu_${RUN_DB_TOKEN}"
 
+free_bytes_for_path() {
+  local path="$1" probe="${2:-initial}"
+  if [ "$TEST_MODE" = "1" ] && [ "$probe" = "repository_post" ] \
+    && [ -n "${A360_TEST_FREE_BYTES_AFTER_REPOSITORY_CHECK:-}" ]; then
+    printf '%s' "$A360_TEST_FREE_BYTES_AFTER_REPOSITORY_CHECK"
+  elif [ "$TEST_MODE" = "1" ] && [ -n "${A360_TEST_FREE_BYTES:-}" ]; then
+    printf '%s' "$A360_TEST_FREE_BYTES"
+  else
+    df -B1 --output=avail -- "$path" | awk 'NR == 2 {gsub(/ /, ""); print}'
+  fi
+}
+
 HOST_GUARD_CALLS=0
 assert_host_capacity() {
   HOST_GUARD_CALLS=$((HOST_GUARD_CALLS + 1))
   if [ "$TEST_MODE" = "1" ]; then
     TEST_CONFLICT="${A360_TEST_CONFLICT_PROCESS:-0}"
-    if [ "$HOST_GUARD_CALLS" -gt 1 ]; then
+    if [ "$HOST_GUARD_CALLS" -gt 2 ]; then
+      TEST_CONFLICT="${A360_TEST_THIRD_CONFLICT_PROCESS:-$TEST_CONFLICT}"
+    elif [ "$HOST_GUARD_CALLS" -gt 1 ]; then
       TEST_CONFLICT="${A360_TEST_SECOND_CONFLICT_PROCESS:-$TEST_CONFLICT}"
     fi
     [ "$TEST_CONFLICT" = "0" ] || fail "concurrent_heavy_job_detected"
@@ -408,12 +526,15 @@ for cmdline_path in glob.glob("/proc/[0-9]*/cmdline"):
         continue
     if comm in {b"restic", b"pg_dump", b"pg_basebackup"}:
         raise SystemExit(0)
-    if not (comm.startswith(b"python") or comm.startswith(b"pytest")):
-        continue
     try:
         with open(cmdline_path, "rb") as handle:
             argv = [part for part in handle.read().split(b"\0") if part]
     except OSError:
+        continue
+    if any(part == b"backup_restic.sh" or part.endswith(b"/backup_restic.sh")
+           for part in argv):
+        raise SystemExit(0)
+    if not (comm.startswith(b"python") or comm.startswith(b"pytest")):
         continue
     if b"tests/" in argv and (comm.startswith(b"pytest") or b"pytest" in argv):
         raise SystemExit(0)
@@ -432,9 +553,7 @@ raise SystemExit(1)
   [ "$MEM_AVAILABLE_BYTES" -ge "$MIN_MEMORY_BYTES" ] || fail "host_memory_too_low"
 }
 
-if [ "$MODE" != "verify" ]; then
-  assert_host_capacity
-fi
+assert_host_capacity
 
 [ ! -L "$SCRATCH_ROOT" ] || fail "scratch_root_symlink_rejected"
 mkdir -p -- "$SCRATCH_ROOT"
@@ -473,11 +592,24 @@ else
   export XDG_CACHE_HOME="$TARGET/.cache"
 fi
 
+REPOSITORY_CACHE_REQUIRED_BYTES="$(checked_capacity "$REPOSITORY_CACHE_ALLOWANCE_BYTES" 1 "$MIN_FREE_RESERVE_BYTES")" \
+  || fail "capacity_arithmetic_unsafe"
+[ "$REPOSITORY_CACHE_REQUIRED_BYTES" -le "$SCRATCH_BUDGET_BYTES" ] \
+  || fail "repository_cache_budget_exceeded"
+REPOSITORY_PREFLIGHT_FREE_BYTES="$(free_bytes_for_path "$SCRATCH_ROOT")" \
+  || fail "repository_cache_disk_probe_failed"
+[[ "$REPOSITORY_PREFLIGHT_FREE_BYTES" =~ ^[0-9]+$ ]] \
+  || fail "repository_cache_disk_probe_failed"
+[ "$REPOSITORY_PREFLIGHT_FREE_BYTES" -ge "$REPOSITORY_CACHE_REQUIRED_BYTES" ] \
+  || fail "repository_cache_disk_capacity_too_low"
+
 PHASE="SNAPSHOT"
 SNAP_META="$(mktemp "$SCRATCH_ROOT/.a360_snapshot.XXXXXX")"
 chmod 0600 "$SNAP_META"
 if [ "$SNAP" = "latest" ]; then
-  "$RESTIC_BIN" snapshots --json --latest 1 >"$SNAP_META" 2>/dev/null || fail "snapshot_resolution_failed"
+  # Nie uzywaj --latest przed walidacja provenance: nowszy obcy snapshot w tej
+  # samej grupie moglby ukryc najnowszy poprawny kandydat.
+  "$RESTIC_BIN" snapshots --json >"$SNAP_META" 2>/dev/null || fail "snapshot_resolution_failed"
 else
   [[ "$SNAP" =~ ^[A-Za-z0-9]{4,64}$ ]] || fail "invalid_snapshot_id"
   "$RESTIC_BIN" snapshots --json "$SNAP" >"$SNAP_META" 2>/dev/null || fail "snapshot_resolution_failed"
@@ -491,19 +623,52 @@ with open(sys.argv[1], "r", encoding="utf-8") as handle:
     rows = json.load(handle)
 if not isinstance(rows, list) or not rows:
     raise SystemExit(1)
+if sys.argv[2] == "explicit" and len(rows) != 1:
+    raise SystemExit(1)
+
+expected_hostname = sys.argv[3]
+tag_count = int(sys.argv[4])
+required_tags = set(sys.argv[5:5 + tag_count])
+path_count_index = 5 + tag_count
+path_count = int(sys.argv[path_count_index])
+required_paths = set(sys.argv[path_count_index + 1:path_count_index + 1 + path_count])
+if len(required_tags) != tag_count or len(required_paths) != path_count:
+    raise SystemExit(1)
 
 validated = []
 for row in rows:
     snapshot_id = row.get("id") if isinstance(row, dict) else None
     snapshot_time = row.get("time") if isinstance(row, dict) else None
+    hostname = row.get("hostname") if isinstance(row, dict) else None
+    tags = row.get("tags", []) if isinstance(row, dict) else None
+    paths = row.get("paths") if isinstance(row, dict) else None
     if not isinstance(snapshot_id, str) or not snapshot_id:
         raise SystemExit(1)
     if not isinstance(snapshot_time, str):
         raise SystemExit(1)
+    if not isinstance(hostname, str):
+        raise SystemExit(1)
+    if tags is None:
+        tags = []
+    if not isinstance(tags, list) or not all(isinstance(item, str) for item in tags):
+        raise SystemExit(1)
+    if not isinstance(paths, list) or not all(isinstance(item, str) for item in paths):
+        raise SystemExit(1)
+    if len(tags) != len(set(tags)) or len(paths) != len(set(paths)):
+        raise SystemExit(1)
     parsed = dt.datetime.fromisoformat(snapshot_time.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         raise SystemExit(1)
+    if hostname != expected_hostname:
+        continue
+    if not required_tags.issubset(tags):
+        continue
+    if not required_paths.issubset(paths):
+        continue
     validated.append((int(parsed.timestamp()), snapshot_id, snapshot_time))
+
+if not validated:
+    raise SystemExit(1)
 
 if sys.argv[2] == "explicit":
     if len(validated) != 1:
@@ -516,7 +681,10 @@ else:
         raise SystemExit(1)
     chosen = newest[0]
 print("{}\t{}\t{}".format(chosen[1], chosen[2], chosen[0]))
-' "$SNAP_META" "$( [ "$SNAP" = "latest" ] && printf latest || printf explicit )" 2>/dev/null)" || fail "invalid_snapshot_metadata"
+' "$SNAP_META" "$( [ "$SNAP" = "latest" ] && printf latest || printf explicit )" \
+  "$EXPECTED_SNAPSHOT_HOSTNAME" "$EXPECTED_SNAPSHOT_TAGS" "${REQUIRED_SNAPSHOT_TAGS[@]}" \
+  "$EXPECTED_SNAPSHOT_PATHS" "${REQUIRED_SNAPSHOT_PATHS[@]}" 2>/dev/null)" \
+  || fail "invalid_snapshot_metadata"
 rm -f -- "$SNAP_META"
 SNAP_META=""
 IFS=$'\t' read -r SNAPSHOT_ID SNAPSHOT_TIME SNAPSHOT_EPOCH <<< "$META_LINE"
@@ -526,11 +694,30 @@ SNAPSHOT_RPO_SECONDS=$((START_EPOCH - SNAPSHOT_EPOCH))
 [ "$SNAPSHOT_RPO_SECONDS" -le "$MAX_RPO_SECONDS" ] || fail "snapshot_stale"
 
 PHASE="REPOSITORY_CHECK"
+# Zamknij okno pomiedzy lista snapshotow a checkiem: backup mogl wystartowac
+# po pierwszym preflight.
+assert_host_capacity
 "$RESTIC_BIN" check --read-data-subset=5% >/dev/null 2>&1 || fail "repository_integrity_failed"
+REPOSITORY_CACHE_BYTES="$(du -sb -- "$XDG_CACHE_HOME" 2>/dev/null | awk '{print $1}')" \
+  || fail "repository_cache_usage_probe_failed"
+[[ "$REPOSITORY_CACHE_BYTES" =~ ^[0-9]+$ ]] \
+  || fail "repository_cache_usage_probe_failed"
+[ "$REPOSITORY_CACHE_BYTES" -le "$REPOSITORY_CACHE_ALLOWANCE_BYTES" ] \
+  || fail "repository_cache_allowance_exceeded"
+REPOSITORY_CACHE_ACTUAL_REQUIRED_BYTES="$(checked_capacity "$REPOSITORY_CACHE_BYTES" 1 "$MIN_FREE_RESERVE_BYTES")" \
+  || fail "capacity_arithmetic_unsafe"
+[ "$REPOSITORY_CACHE_ACTUAL_REQUIRED_BYTES" -le "$SCRATCH_BUDGET_BYTES" ] \
+  || fail "repository_cache_budget_exceeded_after_check"
+REPOSITORY_POSTCHECK_FREE_BYTES="$(free_bytes_for_path "$SCRATCH_ROOT" repository_post)" \
+  || fail "repository_cache_disk_probe_failed"
+[[ "$REPOSITORY_POSTCHECK_FREE_BYTES" =~ ^[0-9]+$ ]] \
+  || fail "repository_cache_disk_probe_failed"
+[ "$REPOSITORY_POSTCHECK_FREE_BYTES" -ge "$MIN_FREE_RESERVE_BYTES" ] \
+  || fail "repository_cache_reserve_eroded"
 if [ "$MODE" = "verify" ]; then
   rm -rf --one-file-system -- "$VERIFY_CACHE"
   VERIFY_CACHE=""
-  printf 'PASS scope=repository_check snapshot_age_seconds=%s\n' "$SNAPSHOT_RPO_SECONDS"
+  printf 'PASS scope=repository_check provenance=matched snapshot_age_seconds=%s\n' "$SNAPSHOT_RPO_SECONDS"
   FINALIZED=1
   exit 0
 fi
@@ -560,14 +747,6 @@ IFS=$'\t' read -r SNAPSHOT_LOGICAL_BYTES SNAPSHOT_LOGICAL_FILES <<< "$STATS_LINE
 [[ "$SNAPSHOT_LOGICAL_BYTES" =~ ^[0-9]+$ ]] || fail "invalid_snapshot_stats"
 [[ "$SNAPSHOT_LOGICAL_FILES" =~ ^[0-9]+$ ]] || fail "invalid_snapshot_stats"
 
-free_bytes_for_path() {
-  local path="$1"
-  if [ "$TEST_MODE" = "1" ] && [ -n "${A360_TEST_FREE_BYTES:-}" ]; then
-    printf '%s' "$A360_TEST_FREE_BYTES"
-  else
-    df -B1 --output=avail -- "$path" | awk 'NR == 2 {gsub(/ /, ""); print}'
-  fi
-}
 SCRATCH_FREE_BYTES="$(free_bytes_for_path "$SCRATCH_ROOT")" || fail "scratch_disk_probe_failed"
 [[ "$SCRATCH_FREE_BYTES" =~ ^[0-9]+$ ]] || fail "scratch_disk_probe_failed"
 SCRATCH_UNPACK_REQUIRED_BYTES="$(checked_capacity "$SNAPSHOT_LOGICAL_BYTES" 2 "$MIN_FREE_RESERVE_BYTES")" \
@@ -908,6 +1087,9 @@ if [ "$MODE" = "drill" ]; then
   if "$DOCKER_BIN" volume inspect "$VOLUME_NAME" >/dev/null 2>&1; then
     fail "scratch_volume_collision"
   fi
+  # Od tej chwili trap zawsze rekoncyliuje dokladne nazwy i oba labele,
+  # nawet gdy docker create/run utworzy zasob, ale zwroci non-zero.
+  DOCKER_CLEANUP_ARMED=1
   "$DOCKER_BIN" volume create \
     --label a360.dr0.scratch=true \
     --label "a360.dr0.run_id=$RUN_ID" \
@@ -1030,6 +1212,21 @@ payload = {
         "id_prefix": sys.argv[3],
         "time_utc": sys.argv[4],
         "age_seconds": int(sys.argv[5]),
+        "provenance": {
+            "contract_version": sys.argv[48],
+            "matched": True,
+            "required_tag_count": int(sys.argv[49]),
+            "required_path_count": int(sys.argv[50]),
+        },
+    },
+    "safety_profile": {
+        "real_thresholds_source_pinned": True,
+        "test_mode": bool(int(sys.argv[51])),
+        "max_snapshot_age_seconds": int(sys.argv[52]),
+        "max_artifact_age_seconds": int(sys.argv[53]),
+        "min_free_reserve_bytes": int(sys.argv[54]),
+        "min_memory_bytes": int(sys.argv[55]),
+        "min_postgres_tables": int(sys.argv[56]),
     },
     "rpo": {
         "basis": "snapshot_time_plus_dump_mtime_estimate",
@@ -1135,6 +1332,9 @@ with os.fdopen(fd, "w", encoding="utf-8") as handle:
   "$SCRATCH_BUDGET_BYTES" "$SCRATCH_UNPACK_REQUIRED_BYTES" "$SCRATCH_FREE_BYTES" \
   "${DOCKER_BUDGET_BYTES:-0}" "$DOCKER_EARLY_REQUIRED_BYTES" \
   "$DOCKER_POST_DECOMPRESS_REQUIRED_BYTES" "$DOCKER_FREE_BYTES" "$SCRATCH_DOCKER_SHARED_DEVICE" \
+  "$SNAPSHOT_PROVENANCE_CONTRACT_VERSION" "$EXPECTED_SNAPSHOT_TAGS" "$EXPECTED_SNAPSHOT_PATHS" \
+  "$TEST_MODE" "$MAX_RPO_SECONDS" "$MAX_ARTIFACT_AGE_SECONDS" "$MIN_FREE_RESERVE_BYTES" \
+  "$MIN_MEMORY_BYTES" "$MIN_PG_TABLES" \
   || fail "report_write_failed"
 chmod 0600 "$REPORT_TMP"
 mv -f -- "$REPORT_TMP" "$REPORT"

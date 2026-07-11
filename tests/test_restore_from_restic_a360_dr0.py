@@ -24,6 +24,15 @@ PINNED_TEST_IMAGE = "synthetic-postgres@sha256:" + ("a" * 64)
 RUN_ID = "synthetic_0700"
 SENSITIVE_CANARY = "SENSITIVE_CANARY_MUST_NEVER_LEAK"
 PRIVATE_CONFIG_NAME = ".en" + "v"
+EXPECTED_SNAPSHOT_HOSTNAME = "Ziomek"
+REQUIRED_SNAPSHOT_TAGS = ("daily", "scheduled")
+REQUIRED_SNAPSHOT_PATHS = (
+    "/root/.openclaw/workspace/dispatch_state",
+    "/root/.openclaw/workspace/scripts/flags.json",
+    "/root/backups/papu",
+    "/root/backups/nadajesz_panel",
+    "/etc/nginx/sites-available",
+)
 REQUIRED_CORE_PATHS = (
     "root/.openclaw/workspace/dispatch_state/orders_state.json",
     "root/.openclaw/workspace/dispatch_state/courier_plans.json",
@@ -177,7 +186,8 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         os.makedirs(cache_home, mode=0o700, exist_ok=True)
         cache_probe = os.path.join(cache_home, "synthetic_cache_probe")
         fd = os.open(cache_probe, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        os.close(fd)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(b"synthetic-cache-metadata")
         log_path = os.environ["FAKE_RESTIC_LOG"]
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as handle:
@@ -189,20 +199,44 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
             current = {
                 "id": "b" * 64,
                 "time": os.environ["FAKE_SNAPSHOT_TIME"],
-                "paths": ["/synthetic/redacted"],
+                "hostname": os.environ.get(
+                    "FAKE_SNAPSHOT_HOSTNAME", "Ziomek"
+                ),
+                "tags": json.loads(os.environ["FAKE_SNAPSHOT_TAGS_JSON"]),
+                "paths": json.loads(os.environ["FAKE_SNAPSHOT_PATHS_JSON"]),
             }
             rows = [current]
             if os.environ.get("FAKE_MULTIPLE_SNAPSHOTS") == "1":
                 rows.insert(0, {
                     "id": "a" * 64,
                     "time": os.environ["FAKE_OLDER_SNAPSHOT_TIME"],
-                    "paths": ["/synthetic/older-redacted"],
+                    "hostname": "Ziomek",
+                    "tags": json.loads(os.environ["FAKE_SNAPSHOT_TAGS_JSON"]),
+                    "paths": json.loads(os.environ["FAKE_SNAPSHOT_PATHS_JSON"]),
                 })
             if os.environ.get("FAKE_TIED_SNAPSHOTS") == "1":
                 rows.insert(0, {
                     "id": "a" * 64,
                     "time": os.environ["FAKE_SNAPSHOT_TIME"],
-                    "paths": ["/synthetic/tied-redacted"],
+                    "hostname": "Ziomek",
+                    "tags": json.loads(os.environ["FAKE_SNAPSHOT_TAGS_JSON"]),
+                    "paths": json.loads(os.environ["FAKE_SNAPSHOT_PATHS_JSON"]),
+                })
+            if os.environ.get("FAKE_FOREIGN_NEWER_SNAPSHOT") == "1":
+                rows.append({
+                    "id": "c" * 64,
+                    "time": os.environ["FAKE_FOREIGN_SNAPSHOT_TIME"],
+                    "hostname": "foreign-host",
+                    "tags": ["daily", "scheduled"],
+                    "paths": json.loads(os.environ["FAKE_SNAPSHOT_PATHS_JSON"]),
+                })
+            if os.environ.get("FAKE_AMBIGUOUS_EXPLICIT_SNAPSHOT") == "1":
+                rows.append({
+                    "id": ("b" * 63) + "c",
+                    "time": os.environ["FAKE_OLDER_SNAPSHOT_TIME"],
+                    "hostname": "Ziomek",
+                    "tags": json.loads(os.environ["FAKE_SNAPSHOT_TAGS_JSON"]),
+                    "paths": json.loads(os.environ["FAKE_SNAPSHOT_PATHS_JSON"]),
                 })
             print(json.dumps(rows))
         elif command == "check":
@@ -300,6 +334,13 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         if not args:
             raise SystemExit(61)
 
+        if args[0] == "info":
+            if os.environ.get("FAKE_DOCKER_FAIL") == "info":
+                raise SystemExit(76)
+            if "--format" in args:
+                print(os.environ["A360_TEST_DOCKER_ROOT"])
+            raise SystemExit(0)
+
         if args[:2] == ["image", "inspect"]:
             if os.environ.get("FAKE_DOCKER_FAIL") == "image":
                 raise SystemExit(62)
@@ -315,7 +356,9 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
                     raise SystemExit(1)
                 if formatted:
                     template = args[3]
-                    if '"a360.dr0.scratch"' in template:
+                    if template == "{{.Name}}":
+                        print(volume["name"])
+                    elif '"a360.dr0.scratch"' in template:
                         print(volume["labels"].get("a360.dr0.scratch", ""))
                     elif '"a360.dr0.run_id"' in template:
                         if os.environ.get("FAKE_DOCKER_FOREIGN_VOLUME_LABEL") == "1":
@@ -335,14 +378,17 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
                         labels[key] = label_value
                 state["volume"] = {"name": args[-1], "labels": labels}
                 save_state(state)
+                if os.environ.get("FAKE_DOCKER_FAIL") == "volume_create_after_create":
+                    raise SystemExit(63)
                 print(args[-1])
                 raise SystemExit(0)
             if action == "rm":
                 volume = state.get("volume")
                 if not volume or volume.get("name") != args[-1]:
                     raise SystemExit(64)
-                state["volume"] = None
-                save_state(state)
+                if os.environ.get("FAKE_DOCKER_STICKY_REMOVE") != "volume":
+                    state["volume"] = None
+                    save_state(state)
                 raise SystemExit(0)
 
         if args[0] == "run":
@@ -365,7 +411,11 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
                 "pull": args[args.index("--pull") + 1] if "--pull" in args else "missing",
                 "image": args[-1],
             }
+            if os.environ.get("FAKE_DOCKER_PARTIAL_FOREIGN_RUN_ID") == "1":
+                state["container"]["labels"]["a360.dr0.run_id"] = "foreign_run"
             save_state(state)
+            if os.environ.get("FAKE_DOCKER_FAIL") == "run_after_create":
+                raise SystemExit(65)
             print("c" * 64)
             raise SystemExit(0)
 
@@ -378,7 +428,9 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
             if not formatted:
                 raise SystemExit(0)
             template = args[2]
-            if ".State.Running" in template:
+            if template == "{{.Name}}":
+                print("/" + container["name"])
+            elif ".State.Running" in template:
                 print("true")
             elif '"a360.dr0.scratch"' in template:
                 print(container["labels"].get("a360.dr0.scratch", ""))
@@ -408,8 +460,9 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
                 raise SystemExit(67)
             if os.environ.get("FAKE_DOCKER_FAIL") == "rm_container":
                 raise SystemExit(75)
-            state["container"] = None
-            save_state(state)
+            if os.environ.get("FAKE_DOCKER_STICKY_REMOVE") != "container":
+                state["container"] = None
+                save_state(state)
             raise SystemExit(0)
 
         if args[0] == "exec":
@@ -454,10 +507,14 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
                         raise SystemExit(72)
                     state["restores"][database] = hashlib.sha256(body).hexdigest()
                     if b"synthetic_panel" in body:
-                        state["table_counts"][database] = 60
+                        state["table_counts"][database] = int(
+                            os.environ.get("FAKE_PANEL_TABLE_COUNT", "60")
+                        )
                         state["restore_roles"][database] = "panel"
                     elif b"synthetic_papu" in body:
-                        state["table_counts"][database] = 65
+                        state["table_counts"][database] = int(
+                            os.environ.get("FAKE_PAPU_TABLE_COUNT", "65")
+                        )
                         state["restore_roles"][database] = "papu"
                     else:
                         state["table_counts"][database] = 0
@@ -514,7 +571,7 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "A360_DR0_SCRATCH_ROOT": str(scratch_root),
         "A360_DR0_SCRATCH_BUDGET_BYTES": "107374182400",
         "A360_DR0_DOCKER_BUDGET_BYTES": "107374182400",
-        "A360_DR0_MAX_SNAPSHOT_AGE_SECONDS": "86400",
+        "A360_TEST_MAX_RPO_SECONDS": "86400",
         "A360_DR0_PG_READY_TIMEOUT_SECONDS": "2",
         "A360_TEST_LOAD1": "0.1",
         "A360_TEST_CPU_COUNT": "4",
@@ -528,8 +585,13 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "PAPU_BACKUP_KEY_FILE": str(key_file),
         "FAKE_SNAPSHOT_ROOT": str(fixture_root),
         "FAKE_SNAPSHOT_TIME": snapshot_time,
+        "FAKE_SNAPSHOT_TAGS_JSON": json.dumps(REQUIRED_SNAPSHOT_TAGS),
+        "FAKE_SNAPSHOT_PATHS_JSON": json.dumps(REQUIRED_SNAPSHOT_PATHS),
         "FAKE_OLDER_SNAPSHOT_TIME": (
             datetime.now(timezone.utc) - timedelta(hours=2)
+        ).isoformat(),
+        "FAKE_FOREIGN_SNAPSHOT_TIME": (
+            datetime.now(timezone.utc) - timedelta(minutes=5)
         ).isoformat(),
         "FAKE_RESTIC_LOG": str(restic_log),
         "FAKE_DOCKER_LOG": str(docker_log),
@@ -537,7 +599,12 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "FAKE_OPENSSL_LOG": str(openssl_log),
         "DOCKER_HOST": "unix:///definitely-not-real-a360-dr0.sock",
     }
-    for name in ("PYTHONPATH", "HERMETIC_STRICT", "DISPATCH_STATE_DIR"):
+    for name in (
+        "PYTHONPATH",
+        "HERMETIC_STRICT",
+        "DISPATCH_STATE_DIR",
+        "PYTEST_CURRENT_TEST",
+    ):
         if name in os.environ:
             env[name] = os.environ[name]
 
@@ -633,6 +700,14 @@ def test_known_answer_fake_postgres_schema_drill_is_isolated_and_redacted(
             "traffic_switch",
         ],
     }
+    assert report["snapshot"]["provenance"] == {
+        "contract_version": "a360-dr0-snapshot-provenance-v1-20260711",
+        "matched": True,
+        "required_tag_count": len(REQUIRED_SNAPSHOT_TAGS),
+        "required_path_count": len(REQUIRED_SNAPSHOT_PATHS),
+    }
+    assert report["safety_profile"]["real_thresholds_source_pinned"] is True
+    assert report["safety_profile"]["test_mode"] is True
     assert report["recovery_timing"]["scope"] == "artifact_and_postgres_schema_only"
     assert report["recovery_timing"]["to_postgres_schema_smoke_seconds"] >= 0
     assert report["rpo"]["proven"] is False
@@ -1118,10 +1193,29 @@ def test_host_preflight_guards_stop_before_restic(
     assert not Path(restore_harness["docker_log"]).exists()
 
 
-def test_scratch_capacity_guard_stops_before_restore(
+def test_repository_cache_capacity_guard_stops_before_snapshot_lookup(
     restore_harness: dict[str, object],
 ) -> None:
     result = _run(restore_harness, env_update={"A360_TEST_FREE_BYTES": "1"})
+
+    assert result.returncode != 0
+    assert "repository_cache_disk_capacity_too_low" in result.stderr
+    assert not Path(restore_harness["restic_log"]).exists()
+    assert not Path(restore_harness["docker_log"]).exists()
+
+
+def test_scratch_unpack_capacity_guard_stops_before_restore(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={
+            "FAKE_SNAPSHOT_TOTAL_SIZE": "1000",
+            "A360_TEST_MIN_FREE_RESERVE_BYTES": "1",
+            "A360_TEST_REPOSITORY_CACHE_ALLOWANCE_BYTES": "1000",
+            "A360_TEST_FREE_BYTES": "1500",
+        },
+    )
 
     assert result.returncode != 0
     assert "scratch_disk_capacity_too_low" in result.stderr
@@ -1138,7 +1232,8 @@ def test_snapshot_stats_underreport_cannot_bypass_post_unpack_budget(
         mode="artifact",
         env_update={
             "FAKE_SNAPSHOT_TOTAL_SIZE": "1000",
-            "A360_DR0_MIN_FREE_RESERVE_BYTES": "1",
+            "A360_TEST_MIN_FREE_RESERVE_BYTES": "1",
+            "A360_TEST_REPOSITORY_CACHE_ALLOWANCE_BYTES": "1000",
             "A360_DR0_SCRATCH_BUDGET_BYTES": "4096",
         },
     )
@@ -1191,7 +1286,15 @@ def test_capacity_budget_is_required_and_strictly_validated(
 @pytest.mark.parametrize(
     ("env_update", "reason"),
     [
-        ({"A360_DR0_SCRATCH_BUDGET_BYTES": "1"}, "scratch_budget_exceeded"),
+        (
+            {
+                "FAKE_SNAPSHOT_TOTAL_SIZE": "1000",
+                "A360_TEST_MIN_FREE_RESERVE_BYTES": "1",
+                "A360_TEST_REPOSITORY_CACHE_ALLOWANCE_BYTES": "1000",
+                "A360_DR0_SCRATCH_BUDGET_BYTES": "1500",
+            },
+            "scratch_budget_exceeded",
+        ),
         ({"A360_DR0_DOCKER_BUDGET_BYTES": "1"}, "docker_budget_exceeded_before_unpack"),
         ({"FAKE_SNAPSHOT_TOTAL_SIZE": str(2**63)}, "capacity_arithmetic_unsafe"),
     ],
@@ -1215,7 +1318,8 @@ def test_shared_device_combined_capacity_is_checked_before_unpack(
         restore_harness,
         env_update={
             "FAKE_SNAPSHOT_TOTAL_SIZE": "1000",
-            "A360_DR0_MIN_FREE_RESERVE_BYTES": "1000",
+            "A360_TEST_MIN_FREE_RESERVE_BYTES": "1000",
+            "A360_TEST_REPOSITORY_CACHE_ALLOWANCE_BYTES": "1000",
             "A360_DR0_SCRATCH_BUDGET_BYTES": "100000",
             "A360_DR0_DOCKER_BUDGET_BYTES": "100000",
             "A360_TEST_FREE_BYTES": "6000",
@@ -1244,7 +1348,8 @@ def test_decompression_expansion_must_fit_docker_budget_before_volume(
         restore_harness,
         env_update={
             "FAKE_SNAPSHOT_TOTAL_SIZE": "1000",
-            "A360_DR0_MIN_FREE_RESERVE_BYTES": "1",
+            "A360_TEST_MIN_FREE_RESERVE_BYTES": "1",
+            "A360_TEST_REPOSITORY_CACHE_ALLOWANCE_BYTES": "1000",
             "A360_DR0_SCRATCH_BUDGET_BYTES": "10000000",
             "A360_DR0_DOCKER_BUDGET_BYTES": "100000",
         },
@@ -1290,7 +1395,12 @@ def test_scratch_budget_enforcement_mutation_proves_false_success(
         restore_harness,
         mode="artifact",
         script=mutant,
-        env_update={"A360_DR0_SCRATCH_BUDGET_BYTES": "1"},
+        env_update={
+            "FAKE_SNAPSHOT_TOTAL_SIZE": "1000",
+            "A360_TEST_MIN_FREE_RESERVE_BYTES": "1",
+            "A360_TEST_REPOSITORY_CACHE_ALLOWANCE_BYTES": "1000",
+            "A360_DR0_SCRATCH_BUDGET_BYTES": "1500",
+        },
     )
 
     assert result.returncode == 0, result.stderr
@@ -1335,7 +1445,7 @@ def test_panel_papu_swap_mutation_is_rejected_by_schema_identity(
     assert not Path(restore_harness["target"]).exists()
 
 
-def test_second_host_guard_closes_race_before_docker(
+def test_second_host_guard_closes_snapshot_to_repository_check_race(
     restore_harness: dict[str, object],
 ) -> None:
     result = _run(
@@ -1345,8 +1455,23 @@ def test_second_host_guard_closes_race_before_docker(
 
     assert result.returncode != 0
     assert "concurrent_heavy_job_detected" in result.stderr
-    calls = _jsonl(Path(restore_harness["docker_log"]))
-    assert calls == []
+    restic_calls = _jsonl(Path(restore_harness["restic_log"]))
+    assert [row[0] for row in restic_calls] == ["snapshots"]
+    assert not Path(restore_harness["docker_log"]).exists()
+    assert not Path(restore_harness["target"]).exists()
+
+
+def test_third_host_guard_closes_artifact_to_docker_race(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={"A360_TEST_THIRD_CONFLICT_PROCESS": "1"},
+    )
+
+    assert result.returncode != 0
+    assert "concurrent_heavy_job_detected" in result.stderr
+    assert not Path(restore_harness["docker_log"]).exists()
     assert not Path(restore_harness["target"]).exists()
 
 
@@ -1362,6 +1487,73 @@ def test_artifact_mode_also_honors_heavy_job_guard(
     assert result.returncode != 0
     assert "concurrent_heavy_job_detected" in result.stderr
     assert not Path(restore_harness["restic_log"]).exists()
+
+
+@pytest.mark.parametrize(
+    ("env_update", "reason"),
+    [
+        ({"A360_TEST_CONFLICT_PROCESS": "1"}, "concurrent_heavy_job_detected"),
+        ({"A360_TEST_LOAD1": "3.0", "A360_TEST_CPU_COUNT": "4"}, "host_load_too_high"),
+        ({"A360_TEST_MEM_AVAILABLE_BYTES": "1024"}, "host_memory_too_low"),
+    ],
+)
+def test_verify_mode_honors_host_and_concurrent_backup_guards(
+    restore_harness: dict[str, object], env_update: dict[str, str], reason: str
+) -> None:
+    result = _run(restore_harness, mode="verify", env_update=env_update)
+
+    assert result.returncode != 0
+    assert reason in result.stderr
+    assert not Path(restore_harness["restic_log"]).exists()
+    assert not list(Path(restore_harness["scratch"]).glob(".verify_cache.*"))
+
+
+def test_verify_mode_rechecks_concurrent_backup_before_repository_check(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        mode="verify",
+        env_update={"A360_TEST_SECOND_CONFLICT_PROCESS": "1"},
+    )
+
+    assert result.returncode != 0
+    assert "concurrent_heavy_job_detected" in result.stderr
+    calls = _jsonl(Path(restore_harness["restic_log"]))
+    assert [row[0] for row in calls] == ["snapshots"]
+    assert not list(Path(restore_harness["scratch"]).glob(".verify_cache.*"))
+
+
+def test_verify_mode_detects_repository_cache_allowance_overrun(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        mode="verify",
+        env_update={"A360_TEST_REPOSITORY_CACHE_ALLOWANCE_BYTES": "1"},
+    )
+
+    assert result.returncode != 0
+    assert "repository_cache_allowance_exceeded" in result.stderr
+    calls = _jsonl(Path(restore_harness["restic_log"]))
+    assert [row[0] for row in calls] == ["snapshots", "check"]
+    assert not list(Path(restore_harness["scratch"]).glob(".verify_cache.*"))
+
+
+def test_verify_mode_detects_post_check_reserve_erosion(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        mode="verify",
+        env_update={"A360_TEST_FREE_BYTES_AFTER_REPOSITORY_CHECK": "1"},
+    )
+
+    assert result.returncode != 0
+    assert "repository_cache_reserve_eroded" in result.stderr
+    calls = _jsonl(Path(restore_harness["restic_log"]))
+    assert [row[0] for row in calls] == ["snapshots", "check"]
+    assert not list(Path(restore_harness["scratch"]).glob(".verify_cache.*"))
 
 
 def test_foreign_volume_label_is_never_mounted_or_deleted(
@@ -1394,6 +1586,92 @@ def test_cleanup_failure_is_reported_as_rollback_incomplete(
     assert "scratch_rollback_incomplete" in result.stderr
 
 
+def test_partial_docker_run_is_reconciled_by_exact_name_and_run_id(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={"FAKE_DOCKER_FAIL": "run_after_create"},
+    )
+
+    assert result.returncode == 20
+    assert "scratch_container_create_failed" in result.stderr
+    assert "scratch_rollback_incomplete" not in result.stderr
+    final_state = json.loads(
+        Path(restore_harness["docker_state"]).read_text(encoding="utf-8")
+    )
+    assert final_state["container"] is None
+    assert final_state["volume"] is None
+    argv_rows = [row["argv"] for row in _jsonl(Path(restore_harness["docker_log"]))]
+    assert any(row[0] == "rm" for row in argv_rows)
+    assert any(row[:2] == ["volume", "rm"] for row in argv_rows)
+    assert not Path(restore_harness["target"]).exists()
+
+
+def test_partial_volume_create_is_reconciled_before_container_run(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={"FAKE_DOCKER_FAIL": "volume_create_after_create"},
+    )
+
+    assert result.returncode == 20
+    assert "scratch_volume_create_failed" in result.stderr
+    assert "scratch_rollback_incomplete" not in result.stderr
+    final_state = json.loads(
+        Path(restore_harness["docker_state"]).read_text(encoding="utf-8")
+    )
+    assert final_state["container"] is None
+    assert final_state["volume"] is None
+    argv_rows = [row["argv"] for row in _jsonl(Path(restore_harness["docker_log"]))]
+    assert not any(row[0] == "run" for row in argv_rows)
+    assert any(row[:2] == ["volume", "rm"] for row in argv_rows)
+
+
+def test_partial_run_with_foreign_run_id_is_never_deleted(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={
+            "FAKE_DOCKER_FAIL": "run_after_create",
+            "FAKE_DOCKER_PARTIAL_FOREIGN_RUN_ID": "1",
+        },
+    )
+
+    assert result.returncode == 90
+    assert "scratch_rollback_incomplete" in result.stderr
+    final_state = json.loads(
+        Path(restore_harness["docker_state"]).read_text(encoding="utf-8")
+    )
+    assert final_state["container"] is not None
+    assert final_state["volume"] is not None
+    argv_rows = [row["argv"] for row in _jsonl(Path(restore_harness["docker_log"]))]
+    assert not any(row[0] == "rm" for row in argv_rows)
+    assert not any(row[:2] == ["volume", "rm"] for row in argv_rows)
+
+
+def test_sticky_container_after_successful_rm_is_cleanup_red(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={
+            "FAKE_SQL_FAIL": "panel",
+            "FAKE_DOCKER_STICKY_REMOVE": "container",
+        },
+    )
+
+    assert result.returncode == 90
+    assert "scratch_rollback_incomplete" in result.stderr
+    final_state = json.loads(
+        Path(restore_harness["docker_state"]).read_text(encoding="utf-8")
+    )
+    assert final_state["container"] is not None
+    assert final_state["volume"] is not None
+
+
 @pytest.mark.parametrize(
     ("delta", "reason"),
     [
@@ -1416,7 +1694,136 @@ def test_snapshot_time_guards_are_red(
     assert not Path(restore_harness["docker_log"]).exists()
 
 
-def test_latest_snapshot_resolves_unique_global_newest_across_groups(
+def test_production_max_rpo_env_cannot_accept_stale_snapshot(
+    restore_harness: dict[str, object],
+) -> None:
+    stale_time = (datetime.now(timezone.utc) - timedelta(hours=27)).isoformat()
+    result = _run(
+        restore_harness,
+        env_update={
+            "FAKE_SNAPSHOT_TIME": stale_time,
+            "A360_DR0_MAX_SNAPSHOT_AGE_SECONDS": str(365 * 86400),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "snapshot_stale" in result.stderr
+
+
+def test_production_max_artifact_age_env_cannot_accept_stale_dump(
+    restore_harness: dict[str, object],
+) -> None:
+    stale = int((datetime.now(timezone.utc) - timedelta(hours=27)).timestamp())
+    panel = next(Path(restore_harness["panel_dir"]).glob("*.sql.gz"))
+    os.utime(panel, (stale, stale))
+
+    result = _run(
+        restore_harness,
+        env_update={"A360_DR0_MAX_ARTIFACT_AGE_SECONDS": str(365 * 86400)},
+    )
+
+    assert result.returncode != 0
+    assert "panel_dump_stale" in result.stderr
+
+
+def test_production_min_reserve_env_cannot_weaken_repository_capacity(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        mode="verify",
+        env_update={
+            "A360_DR0_MIN_FREE_RESERVE_BYTES": "1",
+            "A360_TEST_FREE_BYTES": str(6 * 1024**3),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "repository_cache_disk_capacity_too_low" in result.stderr
+    assert not Path(restore_harness["restic_log"]).exists()
+
+
+def test_production_min_memory_env_cannot_accept_low_memory(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        mode="verify",
+        env_update={
+            "A360_DR0_MIN_MEMORY_BYTES": "1",
+            "A360_TEST_MEM_AVAILABLE_BYTES": str(2 * 1024**3),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "host_memory_too_low" in result.stderr
+    assert not Path(restore_harness["restic_log"]).exists()
+
+
+def test_production_min_pg_tables_env_cannot_accept_thin_schema(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={
+            "A360_DR0_MIN_PG_TABLES": "1",
+            "FAKE_PANEL_TABLE_COUNT": "49",
+            "FAKE_PAPU_TABLE_COUNT": "49",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "postgres_schema_below_floor" in result.stderr
+
+
+def test_pg_table_floor_is_injectable_only_through_test_namespace(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={
+            "A360_TEST_MIN_PG_TABLES": "49",
+            "FAKE_PANEL_TABLE_COUNT": "49",
+            "FAKE_PAPU_TABLE_COUNT": "49",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_production_safety_override_names_are_not_consumed_by_source() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    forbidden = (
+        "A360_DR0_MAX_SNAPSHOT_AGE_SECONDS",
+        "A360_DR0_MAX_ARTIFACT_AGE_SECONDS",
+        "A360_DR0_MIN_FREE_RESERVE_BYTES",
+        "A360_DR0_MIN_MEMORY_BYTES",
+        "A360_DR0_MIN_PG_TABLES",
+    )
+    assert all(name not in source for name in forbidden)
+
+
+def test_test_mode_cannot_be_activated_by_two_env_switches_alone(
+    restore_harness: dict[str, object],
+) -> None:
+    env = dict(restore_harness["env"])
+    env.pop("PYTEST_CURRENT_TEST", None)
+    result = subprocess.run(
+        [str(SCRIPT), "--mode", "verify"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "scratch_root_override_requires_test_mode" in result.stderr
+    assert not Path(restore_harness["restic_log"]).exists()
+    assert not Path(restore_harness["docker_log"]).exists()
+
+
+def test_latest_snapshot_resolves_unique_newest_inside_approved_provenance(
     restore_harness: dict[str, object],
 ) -> None:
     result = _run(
@@ -1427,8 +1834,122 @@ def test_latest_snapshot_resolves_unique_global_newest_across_groups(
 
     assert result.returncode == 0, result.stderr
     calls = _jsonl(Path(restore_harness["restic_log"]))
+    snapshots_call = next(row for row in calls if row[0] == "snapshots")
+    assert "--latest" not in snapshots_call
     restore_call = next(row for row in calls if row[0] == "restore")
     assert restore_call[1] == "b" * 64
+
+
+def test_newer_foreign_snapshot_cannot_hide_approved_provenance(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        mode="artifact",
+        env_update={"FAKE_FOREIGN_NEWER_SNAPSHOT": "1"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = _jsonl(Path(restore_harness["restic_log"]))
+    restore_call = next(row for row in calls if row[0] == "restore")
+    assert restore_call[1] == "b" * 64
+
+
+@pytest.mark.parametrize("hostname", ["ziomek", "foreign-host"])
+def test_snapshot_hostname_provenance_mismatch_is_red(
+    restore_harness: dict[str, object], hostname: str
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={"FAKE_SNAPSHOT_HOSTNAME": hostname},
+    )
+
+    assert result.returncode != 0
+    assert "invalid_snapshot_metadata" in result.stderr
+    calls = _jsonl(Path(restore_harness["restic_log"]))
+    assert [row[0] for row in calls] == ["snapshots"]
+
+
+@pytest.mark.parametrize("missing_tag", REQUIRED_SNAPSHOT_TAGS)
+def test_snapshot_missing_required_tag_is_red(
+    restore_harness: dict[str, object], missing_tag: str
+) -> None:
+    tags = [tag for tag in REQUIRED_SNAPSHOT_TAGS if tag != missing_tag]
+    result = _run(
+        restore_harness,
+        env_update={"FAKE_SNAPSHOT_TAGS_JSON": json.dumps(tags)},
+    )
+
+    assert result.returncode != 0
+    assert "invalid_snapshot_metadata" in result.stderr
+
+
+@pytest.mark.parametrize("missing_path", REQUIRED_SNAPSHOT_PATHS)
+def test_snapshot_missing_required_path_is_red(
+    restore_harness: dict[str, object], missing_path: str
+) -> None:
+    paths = [path for path in REQUIRED_SNAPSHOT_PATHS if path != missing_path]
+    result = _run(
+        restore_harness,
+        env_update={"FAKE_SNAPSHOT_PATHS_JSON": json.dumps(paths)},
+    )
+
+    assert result.returncode != 0
+    assert "invalid_snapshot_metadata" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "env_update",
+    [
+        {"FAKE_SNAPSHOT_TAGS_JSON": json.dumps("daily")},
+        {"FAKE_SNAPSHOT_PATHS_JSON": json.dumps({"path": "invalid"})},
+    ],
+)
+def test_snapshot_malformed_provenance_type_is_red(
+    restore_harness: dict[str, object], env_update: dict[str, str]
+) -> None:
+    result = _run(restore_harness, env_update=env_update)
+
+    assert result.returncode != 0
+    assert "invalid_snapshot_metadata" in result.stderr
+
+
+def test_explicit_ambiguous_snapshot_prefix_is_red_before_provenance_filter(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        extra_args=("--snapshot", "bbbb"),
+        env_update={"FAKE_AMBIGUOUS_EXPLICIT_SNAPSHOT": "1"},
+    )
+
+    assert result.returncode != 0
+    assert "invalid_snapshot_metadata" in result.stderr
+    assert not Path(restore_harness["docker_log"]).exists()
+
+
+def test_hostname_provenance_mutation_proves_false_selection(
+    restore_harness: dict[str, object],
+) -> None:
+    mutant = Path(restore_harness["tmp"]) / "restore_provenance_mutant.sh"
+    original = SCRIPT.read_text(encoding="utf-8")
+    mutated = original.replace(
+        "    if hostname != expected_hostname:\n        continue\n",
+        "    if False:\n        continue\n",
+        1,
+    )
+    assert mutated != original
+    mutant.write_text(mutated, encoding="utf-8")
+    mutant.chmod(0o700)
+
+    result = _run(
+        restore_harness,
+        mode="artifact",
+        script=mutant,
+        env_update={"FAKE_SNAPSHOT_HOSTNAME": "foreign-host"},
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_tied_newest_snapshots_are_ambiguous_and_red(
