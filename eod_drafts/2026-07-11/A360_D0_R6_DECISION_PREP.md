@@ -22,19 +22,23 @@ Snapshot wykonano 2026-07-11 około 10:11 UTC, bez zapisu runtime.
 
 ### Rozbieżności zapisane jawnie
 
-1. `ADR-001` i mapy nadal używają skrótu „R6=35/40 tier-aware”, natomiast
+1. Finalny ledger Audytu 360 oznacza FEAS-01 `CONFIRMED/P1`, ale kanoniczny
+   kontrakt sprintu D0 mówi `PARTIAL`. D0 przyjmuje ostrzejszą klasyfikację
+   PARTIAL: mechanizm i konflikt istnieją, lecz nie ma oracle rozstrzygającego
+   semantykę ani fizyczny skutek.
+2. `ADR-001` i mapy nadal używają skrótu „R6=35/40 tier-aware”, natomiast
    `common.BAG_TIME_HARD_MAX_MIN`, `tests/test_inv_r6_dial_family.py` i nowszy
    inwariant rozdzielają płaski HARD 35 od capu eskalacji 40.
-2. `common.BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN` ma fallback 30, lecz efektywny
+3. `common.BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN` ma fallback 30, lecz efektywny
    `flags.json` ma 90. FEAS-05 jest więc potwierdzony konfiguracyjnie na aktualnym
    runtime; jego skutek behawioralny 23/23 nadal wymaga R0.
-3. `ENABLE_ETA_QUANTILE_R6_BAGCAP` ma default/fallback OFF, ale efektywnie jest ON.
+4. `ENABLE_ETA_QUANTILE_R6_BAGCAP` ma default/fallback OFF, ale efektywnie jest ON.
    Kod `feasibility_v2.check_feasibility_v2` kalibruje `_gate_bt`, pozostawiając
    surowe `bag_time_min` w metryce. To jest aktywna różnica HARD-vs-telemetria.
-4. `FEAS-03/04` w Audycie 360 nie miały ponownej weryfikacji snapshotu. Aktualny
+5. `FEAS-03/04` w Audycie 360 nie miały ponownej weryfikacji snapshotu. Aktualny
    HEAD potwierdza symbole i testy osi, ale nie pełny skutek live; R0 pozostaje
    obowiązkowy.
-5. Panel czyta `shadow_decisions.jsonl`, lecz nie konsumuje dziś `rule_verdict`;
+6. Panel czyta `shadow_decisions.jsonl`, lecz nie konsumuje dziś `rule_verdict`;
    apka/courier-api nie ma bezpośredniego konsumenta R6/rule_verdict. Widoczność
    finalnego HARD dla człowieka i kuriera nie jest więc dowiedziona end-to-end.
 
@@ -64,9 +68,11 @@ definiuje uczciwą ekspozycję least-damage.
 
 ## 1. Problem i siła dowodu
 
-Audyt 360 utrzymał `A360-FEAS-01` jako jedyny P1 na granicy HARD R6. Finding jest
-potwierdzony na HEAD i efektywnej fladze, ale jego wejście jest predykcją, nie
-fizycznym outcome. Nie daje to prawa do samodzielnej zmiany semantyki biznesowej.
+Audyt 360 utrzymał `A360-FEAS-01` jako jedyny P1 na granicy HARD R6, ale
+kanoniczny kontrakt tego sprintu klasyfikuje wynik jako **PARTIAL**. HEAD i
+efektywna flaga potwierdzają aktywny mechanizm/konflikt, natomiast wejście jest
+predykcją, nie fizycznym outcome. Nie daje to prawa do samodzielnej zmiany
+semantyki biznesowej ani promocji wyniku do pełnego dowodu decyzji.
 `A360-FEAS-02` ma status PARTIAL/P2. `A360-FEAS-03..05` są CONFIRMED/P2 w audycie,
 ale nie zostały ponownie zweryfikowane na aktualnym snapshotcie; przed użyciem w
 decyzji wymagają R0.
