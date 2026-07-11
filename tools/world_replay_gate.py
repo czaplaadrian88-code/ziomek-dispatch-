@@ -49,15 +49,17 @@ CORE_FIELDS = tuple(sorted(WR.CRITICAL_FIELDS))
 # nie bugiem determinizmu (diagnoza A2_worldreplay_minus40: kara loadgov −40 na
 # rekordach wr0 = 12 fałszywych „ROZNICA-KRYTYCZNA"). Takie rekordy = POMINIĘTE
 # (nie-certyfikowalne), raportowane osobno — nie mieszają się z realnymi różnicami
-# na wr1. Zbiór NAZWANY i forward-compatible: wr2+ (gdyby powstał) przechodzi.
-_PRE_WR1_SCHEMAS = frozenset({None, "wr0"})
+# na wr1. Nieznany schema tag przechodzi do wspolnego walidatora jako jawny
+# INPUT_MISS `unknown_schema`; nie zakladamy kompatybilnosci wr2 w ciemno.
+_PRE_WR1_SCHEMAS = WR.PRE_WR1_SCHEMAS
 
 
 def _iter_window_records(record_dir: str, since: datetime | None,
                          until: datetime | None):
     """Rekordy world_record z oknem [since, until]: tylko `now≠null` (replay
-    wierny zegarowo — K06a) ORAZ tylko `schema=wr1` (faithfully-replayable —
-    wr0/v0 bez `live_inputs` → POMINIĘTE); dedup po (order_id, ts), sort po ts.
+    wierny zegarowo — K06a) ORAZ bez schema pre-wr1 (wr0/v0 bez `live_inputs`
+    → POMINIĘTE; inne tagi waliduje wspolny kontrakt); dedup po (order_id, ts),
+    sort po ts.
     Zwraca (out, skipped_no_now, skipped_pre_wr1)."""
     seen = set()
     out = []
@@ -136,15 +138,7 @@ def _scan_window_records(record_dir: str, since: datetime | None,
 
 def _input_miss_reason(rec: dict) -> str | None:
     """Pierwszy rozlaczny powod braku kompletnego frozen inputu."""
-    checks = (
-        (not rec.get("now") or WR._parse_dt(rec.get("now")) is None, "missing_now"),
-        (rec.get("schema") in _PRE_WR1_SCHEMAS, "schema_pre_wr1"),
-        (not isinstance(rec.get("order_event"), dict), "missing_order_event"),
-        (not isinstance(rec.get("fleet"), dict), "missing_fleet"),
-        (not isinstance(rec.get("flags"), dict), "missing_flags"),
-    )
-    outer_reason = next((reason for missing, reason in checks if missing), None)
-    return outer_reason or WR.validate_live_inputs(rec)
+    return WR.validate_replay_record(rec)
 
 
 def _record_ref(rec: dict) -> str:

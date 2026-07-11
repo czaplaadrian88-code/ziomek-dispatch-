@@ -12,6 +12,18 @@ END = datetime(2026, 7, 10, 8, tzinfo=timezone.utc)
 FLAG = "ENABLE_STAGE_TIMING_OBSERVATION"
 
 
+def _record():
+    ts = "2026-07-09T09:00:00+00:00"
+    return {
+        "order_id": "synthetic-paired", "ts": ts, "now": ts, "schema": "wr1",
+        "order_event": {"order_id": "synthetic-paired"}, "fleet": {}, "flags": {},
+        "osrm_calls": [],
+        "live_inputs": {"reliability": {}, "plans": {}, "eta_quantile": {},
+                        "prep_bias": {}, "loadgov": [None, None, None, 0],
+                        "k07": None},
+    }
+
+
 def _result(**overrides):
     value = {
         "verdict": "PROPOSE",
@@ -53,7 +65,7 @@ def test_paired_replay_proves_exact_parity_and_order(monkeypatch):
         since=START,
         until=END,
         first="off",
-        records_override=[{"flags": {}}],
+        records_override=[_record()],
         replay_one=replay,
     )
 
@@ -77,7 +89,7 @@ def test_paired_replay_classifies_soft_difference():
         since=START,
         until=END,
         first="on",
-        records_override=[{"flags": {}}],
+        records_override=[_record()],
         replay_one=replay,
     )
 
@@ -96,7 +108,7 @@ def test_paired_replay_classifies_core_difference():
         since=START,
         until=END,
         first="off",
-        records_override=[{"flags": {}}],
+        records_override=[_record()],
         replay_one=replay,
     )
 
@@ -115,7 +127,7 @@ def test_paired_replay_redacts_exception_message():
         since=START,
         until=END,
         first="off",
-        records_override=[{"flags": {}}],
+        records_override=[_record()],
         replay_one=replay,
     )
 
@@ -138,7 +150,7 @@ def test_paired_replay_suppresses_transitive_stdout_stderr_and_logs(capsys):
         since=START,
         until=END,
         first="off",
-        records_override=[{"flags": {}}],
+        records_override=[_record()],
         replay_one=replay,
     )
 
@@ -146,3 +158,20 @@ def test_paired_replay_suppresses_transitive_stdout_stderr_and_logs(capsys):
     assert report["exact"] == 1
     assert secret not in captured.out
     assert secret not in captured.err
+
+
+def test_paired_rejects_invalid_outer_before_replay():
+    record = _record()
+    record["osrm_calls"] = ()
+    calls = []
+
+    def forbidden(rec):
+        calls.append(rec)
+        raise AssertionError("paired replay called invalid record")
+
+    report = PFR.run_paired(
+        flag_name=FLAG, since=START, until=END, first="off",
+        records_override=[record], replay_one=forbidden)
+
+    assert calls == []
+    assert report["errors"] == {"IncompleteReplayInput": 1}

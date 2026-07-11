@@ -53,6 +53,8 @@ REPLAY_CLASSES = (
     "PARITY",
 )
 CRITICAL_FIELDS = frozenset({"verdict", "best_cid", "best_score"})
+KNOWN_REPLAY_SCHEMAS = frozenset({"wr1"})
+PRE_WR1_SCHEMAS = frozenset({None, "wr0"})
 REQUIRED_LIVE_INPUT_KEYS = (
     "reliability",
     "plans",
@@ -93,6 +95,32 @@ def validate_live_inputs(rec: dict) -> str | None:
     return None
 
 
+def validate_replay_record(rec: dict) -> str | None:
+    """Wspolny, stabilny kontrakt outer wr1 + zamrozonych live inputs."""
+    if not isinstance(rec, dict):
+        return "invalid_record"
+    order_id = rec.get("order_id")
+    if order_id is None or not str(order_id).strip():
+        return "missing_order_id"
+    if _parse_dt(rec.get("ts")) is None:
+        return "invalid_ts"
+    if not rec.get("now"):
+        return "missing_now"
+    if _parse_dt(rec.get("now")) is None:
+        return "invalid_now"
+    schema = rec.get("schema")
+    if schema in PRE_WR1_SCHEMAS:
+        return "schema_pre_wr1"
+    if schema not in KNOWN_REPLAY_SCHEMAS:
+        return "unknown_schema"
+    for key in ("order_event", "fleet", "flags"):
+        if not isinstance(rec.get(key), dict):
+            return f"missing_{key}"
+    if not isinstance(rec.get("osrm_calls"), list):
+        return "invalid_osrm_calls"
+    return validate_live_inputs(rec)
+
+
 def _parse_dt(v):
     if not v or not isinstance(v, str):
         return None
@@ -128,9 +156,11 @@ def rehydrate_fleet(fleet_json: dict) -> dict:
 
 
 class OsrmReplayer:
-    """Serwuje wyniki route/table z nagrania (per-klucz FIFO; wyczerpana kolejka
-    → ostatni wynik; brak klucza → miss + sentinel z fallbacku haversine NIE
-    jest wołany — zwracamy None-safe strukturę i liczymy miss)."""
+    """Serwuje nagrane route/table jednokrotnie, FIFO per klucz.
+
+    Brak klucza albo wyczerpana kolejka daje miss + sentinel; fallback
+    haversine ani siec nigdy nie sa wolane.
+    """
 
     def __init__(self, calls):
         self.q = {}
@@ -138,15 +168,12 @@ class OsrmReplayer:
         for c in calls or []:
             key = (c.get("kind"), json.dumps(c.get("key"), sort_keys=True))
             self.q.setdefault(key, []).append(c.get("result"))
-        self.last = {k: v[-1] for k, v in self.q.items()}
 
     def _take(self, kind, key_obj, empty):
         key = (kind, json.dumps(key_obj, sort_keys=True))
         seq = self.q.get(key)
         if seq:
-            return seq.pop(0) if len(seq) > 1 else seq[0]
-        if key in self.last:
-            return self.last[key]
+            return seq.pop(0)
         self.misses.append(key)
         return empty
 
@@ -311,7 +338,7 @@ def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
 
 def replay_one(rec: dict) -> tuple[dict, int]:
     """Zwraca (extract z replayu, osrm_misses). Pełny sandbox — patrz moduł."""
-    invalid_reason = validate_live_inputs(rec)
+    invalid_reason = validate_replay_record(rec)
     if invalid_reason:
         raise IncompleteReplayInput(invalid_reason)
     from dispatch_v2 import common as C
@@ -383,7 +410,7 @@ def main(argv=None) -> int:
     if not rec.get("now"):
         print("⚠ nagranie ma now=null (sprzed K06a) — replay czasu NIEwierny")
 
-    invalid_reason = validate_live_inputs(rec)
+    invalid_reason = validate_replay_record(rec)
     if invalid_reason:
         print(f"INPUT_MISS reason={invalid_reason}")
         return 2

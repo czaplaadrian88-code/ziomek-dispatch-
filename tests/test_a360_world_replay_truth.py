@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -209,6 +210,106 @@ def test_required_set_mutation_control_has_teeth():
     rec = _record("synthetic-mutation", 9)
     rec["live_inputs"].pop("loadgov")
     assert WR.validate_live_inputs(rec) == "missing_live_input:loadgov"
+
+
+@pytest.mark.parametrize(("patch", "reason"), [
+    ({"order_id": ""}, "missing_order_id"),
+    ({"ts": "not-a-timestamp"}, "invalid_ts"),
+    ({"now": None}, "missing_now"),
+    ({"now": "not-a-timestamp"}, "invalid_now"),
+    ({"schema": "wr2"}, "unknown_schema"),
+    ({"order_event": []}, "missing_order_event"),
+    ({"fleet": []}, "missing_fleet"),
+    ({"flags": []}, "missing_flags"),
+    ({"osrm_calls": ()}, "invalid_osrm_calls"),
+])
+def test_outer_record_validator_is_shared_and_fail_closed(monkeypatch, patch, reason):
+    rec = _record("synthetic-outer", 10)
+    rec.update(patch)
+    assert WR.validate_replay_record(rec) == reason
+    assert G._input_miss_reason(rec) == reason
+    with pytest.raises(WR.IncompleteReplayInput, match=reason):
+        WR.replay_one(rec)
+
+
+def test_direct_cli_rejects_invalid_outer_before_replay(tmp_path, monkeypatch, capsys):
+    rec = _record("synthetic-cli-outer", 11)
+    rec["osrm_calls"] = {}
+    record_file = tmp_path / "world_record.jsonl"
+    record_file.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(WR, "replay_one", lambda record: calls.append(record))
+    rc = WR.main(["--order-id", rec["order_id"],
+                  "--record-file", str(record_file)])
+    assert rc == 2
+    assert "INPUT_MISS reason=invalid_osrm_calls" in capsys.readouterr().out
+    assert calls == []
+
+
+def test_gate_rejects_invalid_outer_before_shadow_join_and_replay(tmp_path, monkeypatch):
+    rec = _record("synthetic-gate-outer", 11)
+    rec["osrm_calls"] = {}
+    (tmp_path / "world_record-20260711.jsonl").write_text(
+        json.dumps(rec) + "\n", encoding="utf-8")
+    joined = []
+    replayed = []
+
+    def forbidden_join(*args):
+        joined.append(args)
+        raise AssertionError("shadow join called for invalid outer record")
+
+    def forbidden_replay(record):
+        replayed.append(record)
+        raise AssertionError("replay called for invalid outer record")
+
+    monkeypatch.setattr(G, "_join_shadow", forbidden_join)
+    monkeypatch.setattr(G.WR, "replay_one", forbidden_replay)
+    report = G.run_gate(None, None, record_dir=str(tmp_path), shadow_index={})
+    assert report["input_miss_reasons"] == {"invalid_osrm_calls": 1}
+    assert report["class_counts"]["INPUT_MISS"] == 1
+    assert joined == [] and replayed == []
+
+
+def test_extra_osrm_call_actual_replay_and_gate_are_osrm_miss(tmp_path, monkeypatch):
+    from dispatch_v2 import dispatch_pipeline as dp
+    from dispatch_v2 import osrm_client
+
+    rec = _record("synthetic-extra-osrm", 12)
+    rec["osrm_calls"] = [
+        {"kind": "route", "key": [[53.1, 23.1], [53.2, 23.2]],
+         "result": {"duration_min": 5.0, "distance_km": 1.0}},
+    ]
+    (tmp_path / "world_record-20260711.jsonl").write_text(
+        json.dumps(rec) + "\n", encoding="utf-8")
+    shadow = tmp_path / "shadow.jsonl"
+    shadow.write_text(json.dumps({
+        "order_id": rec["order_id"], "ts": rec["ts"], "verdict": "PROPOSE",
+        "reason": "ok", "best": {"courier_id": "synthetic-a", "score": 1.0},
+        "pool_feasible_count": 2, "pool_total_count": 3,
+    }) + "\n", encoding="utf-8")
+
+    seen = []
+
+    def fake_assess(*_args, **_kwargs):
+        seen.append(osrm_client.route((53.1, 23.1), (53.2, 23.2)))
+        seen.append(osrm_client.route((53.1, 23.1), (53.2, 23.2)))
+        return SimpleNamespace(
+            verdict="PROPOSE", reason="ok",
+            best=SimpleNamespace(courier_id="synthetic-a", score=1.0),
+            pool_feasible_count=2, pool_total_count=3)
+
+    monkeypatch.setattr(dp, "assess_order", fake_assess)
+    replayed, misses = WR.replay_one(rec)
+    assert replayed == _extract()
+    assert seen[0]["duration_min"] == 5.0
+    assert seen[1]["replay_miss"] is True
+    assert misses == 1
+
+    seen.clear()
+    report = G.run_gate(None, None, record_dir=str(tmp_path),
+                        shadow_file=str(shadow), as_of=AS_OF)
+    assert report["class_counts"]["OSRM_MISS"] == 1
+    assert report["missy_n"] == 1
 
 
 def test_plan_snapshot_redirects_data_and_lock_together(tmp_path):
