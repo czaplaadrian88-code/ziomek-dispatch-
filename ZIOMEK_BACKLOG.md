@@ -494,7 +494,7 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 | B-05 | Jak dlugo wolno przechowywac dokladne adresy, GPS i world records? | Retencja i pseudonimizacja sa decyzja prawno-biznesowa. |
 | B-06 | Czy kurier bez GPS moze dostac propozycje z pozycji syntetycznej? | To kompromis miedzy ciagloscia operacji a ryzykiem fikcyjnego ETA. |
 | B-07 | Jakie zdarzenie jest KPI pickup/delivery i jakie sa minimalne coverage oraz progi promocji ETA? | Last-inside nie potwierdza pickup/wyjazdu, arrival nie potwierdza handoffu, a paczki i GPS maja niepelne coverage. |
-| B-08 | Czy zatwierdzamy proponowane `daily/rotate 30/maxsize 100M` i jaki maksymalny narzut/drift obowiazuje sidecar stage timing? | Kill-switch default OFF i artefakt logrotate sa gotowe, ale polityka nie jest zainstalowana ani zaakceptowana; ON dodaje dwa appendy na niepusty tick. |
+| B-08 | **ROZSTRZYGNIETE dla canary 2026-07-11:** `daily/rotate 30/maxsize 100M`; drift krytyczny=0, miss mismatch=0, miękki `pool_feasible/reason` <=1%; zero `STAGE_TIMING_SIDECAR_LOST`, p95 `service_wall_ms` <=2500 ms, p95 appendu ledgera <=5 ms, bez wzrostu `NRestarts`. | Jawne polecenie wdrozenia live jest ACK na proponowana retencje i obserwacje. Przekroczenie progu = HOLD i hot rollback flagi; nie zmienia to ETA, backpressure ani decyzji silnika. |
 
 ## 7. Sprint 1
 
@@ -582,8 +582,9 @@ geocode/cache.
 
 ## 8. Sprint 3 - Faza A prawdy ETA i obserwowalnosci
 
-**Stan na 2026-07-10: implementacja i przygotowanie rolloutowe zakonczone na
-izolowanej galezi; brak operacji live, aktywna sesja 54 blokuje preflight.**
+**Stan na 2026-07-11 przed deployem: audyt zakonczony, TEST-TRUTH domkniety,
+wydaniowy commit `d9a456c` ma zielona regresje i jawny ACK na live. Produkcja
+nie zostala jeszcze zmieniona; wykonanie czeka na wyjscie z lunch peaku.**
 
 - Branch `sprint3/eta-observability-osrm`, worktree
   `/root/sprint3_wt/dispatch_v2`, base
@@ -610,10 +611,9 @@ izolowanej galezi; brak operacji live, aktywna sesja 54 blokuje preflight.**
   fizycznego pickup/handoff ani zatwierdzonych progow.
 - Direct OSRM probe potwierdzil sukces route/table/nearest. Stan cache/CB CLI
   jest jawnie `process_local`; polityka ewikcji pozostala legacy dla parytetu.
-- Z-P1-02 Faza A, Z-P1-03 Faza A oraz health/telemetria Z-P2-06 sa gotowe do
-  review. Otwarta pozostaje optymalizacja eviction oraz rollout observability:
-  final sesji 54, akceptacja retencji/narzutu/driftu, osobny ACK i co najmniej
-  48 h canary.
+- Z-P1-02 Faza A, Z-P1-03 Faza A oraz health/telemetria Z-P2-06 przeszly review.
+  Sesja 54 i audyt sa zakonczone; ACK live oraz B-08 sa rozstrzygniete. Otwarta
+  pozostaje optymalizacja eviction i co najmniej 48 h canary observability.
 - Kompletny raport i rollback:
   `eod_drafts/2026-07-10/SPRINT3_PHASE_A_REPORT.md`.
 
