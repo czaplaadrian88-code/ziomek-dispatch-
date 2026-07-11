@@ -6,8 +6,32 @@ Tryb: offline/test-tooling; zero operacji live
 
 Branch: `review/a360-t0-test-truth`
 
-Werdykt: **CONDITIONAL ACCEPT / HOLD MERGE** — dwie udowodnione luki TEST-12
-naprawione; końcowe 0-fail wymaga disposition równoległej integracji Sprintu 3
+Werdykt: **ACCEPT / DONE** — dwie udowodnione luki TEST-12 naprawione,
+Sprint 3 zintegrowany, a świeże pełne DEFAULT i STRICT mają 0 failed.
+
+## Finalne domknięcie integratora — aktualna baza Sprintu 3
+
+Integrator przeniósł `d30b344`, `e00f0cc` i `f015c9f` na czystą bazę
+`a860c53` w branchu `integration/a360-wave1-close`. Historyczny ratchet
+`ENABLE_STAGE_TIMING_OBSERVATION` jest już pełnym carrierem Sprintu 3, więc
+zewnętrzny HOLD przestał istnieć.
+
+Dowód po integracji:
+
+- klaster T0/guard/registry/lifecycle: **52 passed**;
+- pełny DEFAULT: **4941 passed, 24 skipped, 10 xfailed, 0 failed**;
+- pełny `HERMETIC_STRICT=1`: **4891 passed, 74 skipped, 10 xfailed, 0 failed**;
+- lifecycle: **505/505**, 0 błędów;
+- Audit360 validator: **required=35, findings=110, tools=15, OK**;
+- JSON, py_compile i `diff --check`: PASS.
+
+Worktree integracyjny dostał taki sam read-only carrier symlink jak wydaniowy
+worktree Sprintu 3; pytest kopiował flagi do `tmp_path`, a HERMETIC-GUARD nadal
+blokował każdy zapis do żywego `flags.json`. Pierwszy bieg bez carriera dał
+4933/9 failed i został jawnie zachowany jako negatywna kontrola setupu.
+
+Zmiana jest wyłącznie testowo-dokumentacyjna. Nie wykonano flipa, deployu,
+restartu ani zapisu danych live. Tmux57 został zamknięty po pushu brancha.
 
 ## Zakres odbioru
 
@@ -133,7 +157,7 @@ Probe aliasów odsłonił dodatkowo próby zapisu debug-logu, a probe packs ghos
 próby zapisu lockfile'a force-recheck. Po fix-forward i odwróceniu wszystkich
 mutacji DEFAULT, STRICT oraz STRICT bez kanonicznego config/state dały **5/5**.
 
-## Zewnętrzny drift podczas odbioru
+## Historyczny zewnętrzny drift podczas odbioru — rozstrzygnięty
 
 Po fix-forward pełna suita zobaczyła nowy klucz
 `ENABLE_STAGE_TIMING_OBSERVATION` we współdzielonym `flags.json`. Klucz nie
@@ -149,10 +173,10 @@ Sprintu 3 w tmux 60. Zamrożony kod T0 nie zawiera jeszcze jego rejestracji w
   DEFAULT **4850 passed, 0 failed, 1 deselected**; STRICT **4800 passed,
   0 failed, 1 deselected**.
 
-Lane T0 nie ma prawa edytować tego testu, `common.py`, współdzielonego
-`flags.json` ani worktree Sprintu 3. Integrator musi najpierw przyjąć albo cofnąć
-carrier Sprintu 3, a następnie powtórzyć pełny DEFAULT+STRICT. Do tego czasu
-merge T0 pozostaje HOLD mimo braku drugiej regresji.
+Lane T0 nie miał prawa edytować tego testu, `common.py`, współdzielonego
+`flags.json` ani worktree Sprintu 3. Dlatego pierwotny HOLD był poprawny.
+Integrator następnie przyjął carrier Sprintu 3 na `a860c53` i powtórzył pełny
+DEFAULT+STRICT; finalny wynik 0 failed zamknął tę bramkę.
 
 ### Jawna rozbieżność korzenia worktree
 

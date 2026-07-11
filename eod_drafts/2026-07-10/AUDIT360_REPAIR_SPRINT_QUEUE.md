@@ -1,12 +1,13 @@
 # Audyt 360 — kolejka napraw i bezkolizyjne sprinty — 2026-07-10
 
-Status: plan wykonawczy zapisany na branchu `audit/ziomek-360-20260710`.
-Nie jest jeszcze scalony do `master` i nie daje ACK na flagę, HARD/SOFT,
-credential, dane, sieć, restart ani deploy.
+Status: pakiet Audytu 360 i kolejka zostaly wlaczone do integracji wave-1 close
+na aktualnej bazie Sprintu 3. Nadal nie daje to ACK na flage, HARD/SOFT,
+credential, dane, siec, restart ani deploy.
 
-Fala pierwsza zostala uruchomiona 2026-07-11 o 10:04 UTC w tmux 57/59/61.
-Dokladny G0 i granice wykonawcze sa w sekcji 2A. Sam start lane'ow nadal nie
-daje ACK na merge do `master` ani na zadna operacje live.
+Fala pierwsza zostala uruchomiona 2026-07-11 o 10:04 UTC w tmux 57/59/61 i
+zamknieta przez integratora tego samego dnia. T0 oraz D0 sa wlaczone do
+integracji dokumentacyjno-testowej, a S0 jest code-complete/pushed, lecz nie
+zostal zmergowany ani wdrozony do produkcyjnego checkoutu API.
 
 ## 1. Reguły kwalifikacji
 
@@ -55,9 +56,9 @@ integrator po odbiorze lane'a.
 
 | Lane | tmux / effort | Branch i zamrozona baza | Worktree / owner | Allowlista i granica | Status startowy |
 |---|---|---|---|---|---|
-| `A360-T0 TEST-TRUTH` | 57 / `high` | `review/a360-t0-test-truth` @ `4e782e8` | `/root/a360_t0_wt/dispatch_v2`, owner tmux57 | niezalezny odbior commita T0; testy/rejestr/kwarantanna i nowy raport, bez `core/`; integracje Sprintu 3 posiada tmux60 | RUNNING; zadnych operacji live |
-| `A360-S0 API-OWNERSHIP` | 59 / `ultra` | `security/a360-s0-api-ownership` @ `073d6a8` | `/root/a360_s0_wt/courier_api`, owner tmux59 | wspolny guard order→CID, writery status/arrival/ground-truth/parcel, syntetyczne testy; bez pre-login UX | RUNNING; bez deployu/restartu API |
-| `A360-D0 R6-DECISION-PREP` | 61 / `low` | `docs/a360-d0-r6-decision-prep` @ `0721c76` | `/root/a360_d0_wt/dispatch_v2`, owner tmux61 | jedyny output `eod_drafts/2026-07-11/A360_D0_R6_DECISION_PREP.md`; kod/testy/runtime tylko read-only | RUNNING; bez zmiany HARD/SOFT |
+| `A360-T0 TEST-TRUTH` | 57 / `high` | `review/a360-t0-test-truth` @ `f015c9f` | `/root/a360_t0_wt/dispatch_v2`, owner tmux57 | niezalezny odbior oraz fix-forward dwoch ukrytych prod-write w testach; bez `core/` | CLOSED; branch pushed, tmux57 zamkniety, integracja testowa w toku |
+| `A360-S0 API-OWNERSHIP` | 59 / `ultra` | `security/a360-s0-api-ownership` @ `320aa0e` | `/root/a360_s0_wt/courier_api`, owner tmux59 | wspolny guard order→CID, writery status/arrival/ground-truth/parcel, syntetyczne testy; bez pre-login UX | CODE COMPLETE; 185 pass/1 skip, review APPROVE, NOT MERGED/NOT DEPLOYED, tmux59 zamkniety |
+| `A360-D0 R6-DECISION-PREP` | 61 / `low` | `docs/a360-d0-r6-decision-prep` @ `c241507` | `/root/a360_d0_wt/dispatch_v2`, owner tmux61 | jedyny output `eod_drafts/2026-07-11/A360_D0_R6_DECISION_PREP.md`; kod/testy/runtime tylko read-only | CLOSED; branch pushed, whitespace gate naprawiony, tmux61 zamkniety |
 
 G0 zachowuje locki: dirty Sprint 1 nadal blokuje ENGINE/PLAN, tmux50 posiada
 panelowy WIP, a tmux60 posiada wydaniowa integracje Sprintu 3. Chroniony dirty
@@ -80,6 +81,18 @@ zmieniają kodu runtime.
 `A360-I0` ma osobnego operatora i nie dzieli release'u z żadnym sprintem kodowym.
 
 ## 4. Fala druga — dowody po odzyskaniu wiarygodnego baseline'u
+
+### Wybrane nastepne trzy sprinty po zamknieciu fali pierwszej
+
+1. `A360-R0 REPLAY-TRUTH` — pierwszy techniczny lane; development moze ruszyc,
+   ale merge czeka na odczyt at-214, poniewaz job importuje replay tools.
+2. `A360-DR0 RESTORE` — izolowany, fail-closed drill na scratchu przy niskim
+   loadzie, bez produkcyjnego przelaczenia i bez odczytu tresci sekretow.
+3. `A360-DEP0 SBOM` — read-only mapa proces→venv→manifest→runtime, bez upgrade'u.
+
+`A360-D1` pozostaje nastepny w kolejnosci ENGINE, ale nie jest w tej trojce:
+dirty Sprint 1 nadal posiada `core/invariant_firewall.py`, pipeline, shadow i
+testy firewalla. D1 rusza dopiero po formalnym zwolnieniu tego locka.
 
 | Kolejność | Sprint | Kanoniczna karta | Zależność | Koniec i rollback |
 |---:|---|---|---|---|
