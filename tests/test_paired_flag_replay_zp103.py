@@ -53,7 +53,11 @@ def test_with_flag_rejects_ambiguous_names(bad):
         PFR.with_flag({}, bad, True)
 
 
-def test_paired_replay_proves_exact_parity_and_order(monkeypatch):
+@pytest.mark.parametrize(("first", "expected_calls"), [
+    ("off", [False, True]),
+    ("on", [True, False]),
+])
+def test_paired_replay_proves_exact_parity_and_both_orders(first, expected_calls):
     calls = []
 
     def replay(record):
@@ -64,12 +68,12 @@ def test_paired_replay_proves_exact_parity_and_order(monkeypatch):
         flag_name=FLAG,
         since=START,
         until=END,
-        first="off",
+        first=first,
         records_override=[_record()],
         replay_one=replay,
     )
 
-    assert calls == [False, True]
+    assert calls == expected_calls
     assert report["exact"] == 1
     assert report["diffs"] == report["critical"] == 0
     assert report["miss_mismatch"] == 0
@@ -160,9 +164,14 @@ def test_paired_replay_suppresses_transitive_stdout_stderr_and_logs(capsys):
     assert secret not in captured.err
 
 
-def test_paired_rejects_invalid_outer_before_replay():
+@pytest.mark.parametrize("flags_value", [pytest.param(None, id="missing"),
+                                          pytest.param([], id="invalid-type")])
+def test_paired_rejects_missing_or_invalid_flags_before_replay(flags_value):
     record = _record()
-    record["osrm_calls"] = ()
+    if flags_value is None:
+        record.pop("flags")
+    else:
+        record["flags"] = flags_value
     calls = []
 
     def forbidden(rec):
