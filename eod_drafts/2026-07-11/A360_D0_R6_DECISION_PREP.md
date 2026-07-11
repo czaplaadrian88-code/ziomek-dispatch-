@@ -1,9 +1,9 @@
 # A360-D0 R6-DECISION-PREP — karta decyzji B-01/B-02
 
-**Data:** 2026-07-11  
-**Zakres:** docs-only; zero zmian zachowania silnika  
-**Worktree:** `/root/a360_d0_wt/dispatch_v2`  
-**Branch/base:** `docs/a360-d0-r6-decision-prep` / `0721c76984a4c450dbbc58c383c205f9187e21bc`  
+**Data:** 2026-07-11
+**Zakres:** docs-only; zero zmian zachowania silnika
+**Worktree:** `/root/a360_d0_wt/dispatch_v2`
+**Branch/base:** `docs/a360-d0-r6-decision-prep` / `0721c76984a4c450dbbc58c383c205f9187e21bc`
 **Status:** materiał do decyzji, **NIE rekomendacja implementacji ani flipa**
 
 ## 0. ETAP 0 — odświeżony stan read-only
