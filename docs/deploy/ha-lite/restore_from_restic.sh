@@ -359,20 +359,34 @@ import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     rows = json.load(handle)
-if not isinstance(rows, list) or len(rows) != 1:
+if not isinstance(rows, list) or not rows:
     raise SystemExit(1)
-row = rows[0]
-snapshot_id = row.get("id")
-snapshot_time = row.get("time")
-if not isinstance(snapshot_id, str) or not snapshot_id:
-    raise SystemExit(1)
-if not isinstance(snapshot_time, str):
-    raise SystemExit(1)
-parsed = dt.datetime.fromisoformat(snapshot_time.replace("Z", "+00:00"))
-if parsed.tzinfo is None:
-    raise SystemExit(1)
-print("{}\t{}\t{}".format(snapshot_id, snapshot_time, int(parsed.timestamp())))
-' "$SNAP_META" 2>/dev/null)" || fail "invalid_snapshot_metadata"
+
+validated = []
+for row in rows:
+    snapshot_id = row.get("id") if isinstance(row, dict) else None
+    snapshot_time = row.get("time") if isinstance(row, dict) else None
+    if not isinstance(snapshot_id, str) or not snapshot_id:
+        raise SystemExit(1)
+    if not isinstance(snapshot_time, str):
+        raise SystemExit(1)
+    parsed = dt.datetime.fromisoformat(snapshot_time.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise SystemExit(1)
+    validated.append((int(parsed.timestamp()), snapshot_id, snapshot_time))
+
+if sys.argv[2] == "explicit":
+    if len(validated) != 1:
+        raise SystemExit(1)
+    chosen = validated[0]
+else:
+    newest_epoch = max(item[0] for item in validated)
+    newest = [item for item in validated if item[0] == newest_epoch]
+    if len(newest) != 1:
+        raise SystemExit(1)
+    chosen = newest[0]
+print("{}\t{}\t{}".format(chosen[1], chosen[2], chosen[0]))
+' "$SNAP_META" "$( [ "$SNAP" = "latest" ] && printf latest || printf explicit )" 2>/dev/null)" || fail "invalid_snapshot_metadata"
 rm -f -- "$SNAP_META"
 SNAP_META=""
 IFS=$'\t' read -r SNAPSHOT_ID SNAPSHOT_TIME SNAPSHOT_EPOCH <<< "$META_LINE"
