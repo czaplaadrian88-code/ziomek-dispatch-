@@ -1,6 +1,6 @@
 {
-  "base_sha": "307242d44080d98dd38143d5feae9304f9198a30",
-  "manifest_version": 3,
+  "base_sha": "8fc2920b2ddf0a57e1af04ba9b5ca484da090061",
+  "manifest_version": 4,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -2712,6 +2712,7 @@
     "tests/test_night_guard_truth.py::test_hard_error_between_green_runs_does_not_become_baseline",
     "tests/test_night_guard_truth.py::test_hard_error_summary_is_not_parseable_as_green",
     "tests/test_night_guard_truth.py::test_manifest_hash_mutation_is_rejected",
+    "tests/test_night_guard_truth.py::test_pytest_plugin_child_env_starts_with_package_parent",
     "tests/test_night_guard_truth.py::test_replacement_nodeid_reports_both_missing_and_unexpected",
     "tests/test_night_guard_truth.py::test_skip_list_change_is_red_with_constant_collection",
     "tests/test_night_guard_truth.py::test_slow_shrink_stays_red_after_multiple_nights",
@@ -5173,7 +5174,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "5d14199b96f59efe18dcdfe5b158efff6098461c848c32aa7cd414a9e757310a",
+  "nodeids_sha256": "88ef28907e6547c17d6b6069f9947f5742d1dcd94d1e809afe3c37d93ddc4672",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5251,6 +5252,22 @@
       "passed",
       "skipped"
     ],
+    "tests/test_preshift_window_penalty_2026_06_24.py::test_penalty_far_zone_relaxed_under_overload": [
+      "passed",
+      "skipped"
+    ],
+    "tests/test_preshift_window_penalty_2026_06_24.py::test_penalty_far_zone_veto_without_overload": [
+      "passed",
+      "skipped"
+    ],
+    "tests/test_preshift_window_penalty_2026_06_24.py::test_penalty_near_zone_linear": [
+      "passed",
+      "skipped"
+    ],
+    "tests/test_preshift_window_penalty_2026_06_24.py::test_penalty_zero_minutes_none": [
+      "passed",
+      "skipped"
+    ],
     "tests/test_preshift_window_penalty_2026_06_24.py::test_window_cap_env_overridable": [
       "passed",
       "skipped"
@@ -5272,8 +5289,8 @@
       "skipped"
     ]
   },
-  "owner": "A360-N0",
-  "reason": "A360-N0 versioned suite truth; deterministic food-age contract; known-answer coverage; documented preshift clock self-skips; aggregate plugin privacy/classification probe",
+  "owner": "A360-N0-live-fix-forward",
+  "reason": "systemd-plugin-import-and-test-isolation",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-11T20:50:00+00:00"
+  "updated_at_utc": "2026-07-11T22:31:48+00:00"
 }

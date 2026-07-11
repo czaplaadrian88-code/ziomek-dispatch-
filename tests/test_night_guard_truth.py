@@ -127,19 +127,29 @@ def test_pytest_plugin_child_env_starts_with_package_parent(tmp_path, monkeypatc
 
 
 def test_aggregate_plugin_classifies_xfail_xpass_without_payload(tmp_path, monkeypatch):
-    plugin._OUTCOMES.clear()
-    monkeypatch.setattr(plugin, "_COLLECTED", ["tests/a.py::test_xf", "tests/a.py::test_xp"])
-    plugin.pytest_runtest_logreport(SimpleNamespace(
-        nodeid="tests/a.py::test_xf", when="call", wasxfail="owned", skipped=True,
-        passed=False, failed=False, longrepr="sensitive assertion"))
-    plugin.pytest_runtest_logreport(SimpleNamespace(
-        nodeid="tests/a.py::test_xp", when="call", wasxfail="owned", skipped=False,
-        passed=True, failed=False, longrepr="sensitive assertion"))
-    result = tmp_path / "result.json"
-    monkeypatch.setenv("NIGHT_GUARD_RESULT_PATH", str(result))
-    plugin.pytest_sessionfinish(None, 0)
-    raw = result.read_text(encoding="utf-8")
-    payload = json.loads(raw)
-    assert payload["outcomes"] == {
-        "tests/a.py::test_xf": "xfailed", "tests/a.py::test_xp": "xpassed"}
-    assert "sensitive assertion" not in raw
+    # This module is also the active outer pytest plugin in night-guard runs.
+    # Preserve its session state so this unit test cannot turn earlier tests
+    # into ``not_run`` in the aggregate report written at real sessionfinish.
+    saved_outcomes = dict(plugin._OUTCOMES)
+    saved_collected = list(plugin._COLLECTED)
+    try:
+        plugin._OUTCOMES.clear()
+        plugin._COLLECTED = ["tests/a.py::test_xf", "tests/a.py::test_xp"]
+        plugin.pytest_runtest_logreport(SimpleNamespace(
+            nodeid="tests/a.py::test_xf", when="call", wasxfail="owned", skipped=True,
+            passed=False, failed=False, longrepr="sensitive assertion"))
+        plugin.pytest_runtest_logreport(SimpleNamespace(
+            nodeid="tests/a.py::test_xp", when="call", wasxfail="owned", skipped=False,
+            passed=True, failed=False, longrepr="sensitive assertion"))
+        result = tmp_path / "result.json"
+        monkeypatch.setenv("NIGHT_GUARD_RESULT_PATH", str(result))
+        plugin.pytest_sessionfinish(None, 0)
+        raw = result.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+        assert payload["outcomes"] == {
+            "tests/a.py::test_xf": "xfailed", "tests/a.py::test_xp": "xpassed"}
+        assert "sensitive assertion" not in raw
+    finally:
+        plugin._OUTCOMES.clear()
+        plugin._OUTCOMES.update(saved_outcomes)
+        plugin._COLLECTED = saved_collected
