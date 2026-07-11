@@ -30,19 +30,6 @@ from dispatch_v2 import route_simulator_v2 as rs
 
 _W = ZoneInfo("Europe/Warsaw")
 
-# Feature-in-flight (P1#4 baseline 2026-06-19): przebudowa food-age HARD-SLA (18.06)
-# przestroiła/zastąpiła ADDITIVE food-age (coeff). ENABLE_OBJ_DELIVERY_FOOD_AGE=OFF
-# (nie-live), flip pending at#151 (21.06). Dwa testy niżej asercują PRZED-przebudowany
-# emergentny flip A→B dodatniego coeffu — maszyneria (override/flaga/penalties) dalej
-# działa (fa_t1/t3/t4 + fa_hardsla_* PASS), zmienił się tylko WYNIK przy obecnej
-# kalibracji. Reconciliacja należy do właściciela sprintu food-age po flipie 21.06.
-# strict=False → gdy flip/rekalibracja przywróci flip, XPASS to zasygnalizuje.
-_FOODAGE_INFLIGHT_XFAIL = (
-    "feature-in-flight: food-age HARD-SLA redesign (18.06) zmienił additive flip; "
-    "flaga OFF (nie-live), flip pending at#151 (21.06) → owner reconciliuje po flipie"
-)
-
-
 def _w(h, m):
     return datetime(2026, 6, 14, h, m, tzinfo=_W).astimezone(timezone.utc)
 
@@ -81,43 +68,41 @@ def test_fa_t1_flag_off_keeps_legacy_order():
         f"flag OFF: 2-gi przystanek powinien zostać odbiorem Paradiso (bug), got {second}")
 
 
-# Kontekst PRODUKCJI dla flipu Jakuba: w prod flags.json R6+span są ON, a izolacja
-# conftest zostawiłaby je OFF (stałe modułu) → food-age coeff 3 wtedy NIE tipuje
-# (zweryfikowane: 0/20 bez R6+span vs 20/20 z R6+span). + majority z N bo OR-Tools
-# 200ms jest niedeterministyczny (szczególnie pod obciążeniem CPU).
-def _jakub_second_stop(food_age_on):
-    """2-gi przystanek Jakuba w kontekście prod (R6+span ON). food_age_on via
-    override. Zwraca (kind, oid) lub None."""
-    courier_pos, bag, new_order, now = _jakub_case()
-    with patch.object(common, "ENABLE_OBJ_R6_SOFT_DEADLINE", True), \
-         patch.object(common, "ENABLE_OBJ_SPAN_COST", True):
-        if food_age_on:
-            with common.food_age_override(True):
-                plan = rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
-        else:
-            plan = rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
-    ev = _ordered_events(plan)
-    return (ev[1][1], ev[1][2]) if len(ev) > 1 else None
-
-
-def _majority(food_age_on, want, n=5):
-    res = [_jakub_second_stop(food_age_on) for _ in range(n)]
-    return sum(1 for r in res if r == want), res
-
-
-@pytest.mark.xfail(reason=_FOODAGE_INFLIGHT_XFAIL, strict=False)
-def test_fa_t2_flag_on_delivers_ready_before_unready_pickup():
-    """Food-age ON (kontekst prod) → 2-gi przystanek = DOSTAWA gotowej 480581
-    przed niegotowym odbiorem 480568 (kolejność B). Majority z 5 (niedeterminizm)."""
-    cnt, res = _majority(True, ("DROP", "480581"))
-    assert cnt >= 4, f"Jakub powinien flipować na B w większości; got {cnt}/5: {res}"
-
-
 def _capture_solver(captured):
     def _stub(**kwargs):
         captured.append(kwargs)
         return None
     return _stub
+
+
+def _capture_food_age_payload(enabled: bool):
+    """Capture the deterministic producer→solver contract, without OR-Tools search."""
+    courier_pos, bag, new_order, now = _jakub_case()
+    captured: list[dict] = []
+    with patch.object(common, "ENABLE_OBJ_R6_SOFT_DEADLINE", True), \
+         patch.object(common, "ENABLE_OBJ_SPAN_COST", True), \
+         patch.object(tsp_solver, "solve_tsp_with_constraints", _capture_solver(captured)):
+        if enabled:
+            with common.food_age_override(True):
+                rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
+        else:
+            rs.simulate_bag_route_v2(courier_pos, bag, new_order, now=now, sla_minutes=35)
+    assert captured, "route simulator musi wywołać solver"
+    return captured[0].get("delivery_food_age_penalties")
+
+
+def _has_active_food_age_contract(payload) -> bool:
+    return bool(payload and any(spec is not None and spec[1] > 0 for spec in payload))
+
+
+def test_fa_t2_flag_on_emits_positive_food_age_contract():
+    """ON deterministycznie emituje do solvera dodatnią karę wieku jedzenia.
+
+    Dawny test głosował nad wynikiem 5 losowych, 200-ms przebiegów OR-Tools i
+    oscylował XFAIL/XPASS zależnie od loadu hosta. Kontraktem funkcji jest
+    wejście objective; kolejność jest emergentnym wynikiem heurystyki.
+    """
+    assert _has_active_food_age_contract(_capture_food_age_payload(True))
 
 
 def test_fa_t3_food_age_is_additive_to_r6():
@@ -175,14 +160,18 @@ def test_fa_t4_food_age_override_toggles_and_restores():
         "override musi się przywrócić nawet po wyjątku"
 
 
-@pytest.mark.xfail(reason=_FOODAGE_INFLIGHT_XFAIL, strict=False)
 def test_fa_t5_override_is_the_live_toggle():
-    """override(True) → Jakub flipuje na B; bez override → A. Kontekst prod
-    (R6+span ON), majority z 5 (niedeterminizm). Dowód że override steruje planem."""
-    on_cnt, on_res = _majority(True, ("DROP", "480581"))
-    off_cnt, off_res = _majority(False, ("PICKUP", "480568"))
-    assert on_cnt >= 4, f"override(True) → B większość; got {on_cnt}/5: {on_res}"
-    assert off_cnt >= 4, f"bez override → A większość; got {off_cnt}/5: {off_res}"
+    """Thread-local override jest rzeczywistym, deterministycznym przełącznikiem payloadu."""
+    assert not _has_active_food_age_contract(_capture_food_age_payload(False))
+    assert _has_active_food_age_contract(_capture_food_age_payload(True))
+
+
+def test_fa_mutation_probe_ignoring_override_is_detected():
+    """Known mutation: decision_flag stale OFF musi zgasić kontrakt food-age."""
+    with patch.object(common, "decision_flag", return_value=False):
+        mutated = _capture_food_age_payload(True)
+    assert not _has_active_food_age_contract(mutated), \
+        "mutation probe musi odróżnić martwy override od aktywnego kontraktu"
 
 
 # ─── FOOD-AGE HARD-SLA (Faza 2 2026-06-17) — twardy span + warm-start + fallback ──

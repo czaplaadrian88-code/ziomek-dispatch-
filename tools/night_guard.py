@@ -9,7 +9,8 @@ Read-only wobec silnika. Co noc:
 
 ALERT (exit 1 → systemd OnFailure → dispatch-onfailure-alert@ → Telegram) gdy:
   • ≥1 test CONFIRMED-FAIL (pada w pełnym biegu ORAZ w re-runie w izolacji), lub
-  • pytest sam się wywalił / timeout / spadek liczby zebranych testów >5% (suite ucięta), lub
+  • pytest/collect sam się wywalił, timeoutował lub nie dał parsowalnego raportu, lub
+  • dokładny zbiór nodeidów albo outcome skip/xfail/xpass odbiega od wersjonowanego manifestu, lub
   • entropia [AUTO] WZROSŁA vs poprzedni nocny run, lub
   • ten sam test FLAKY (pada w pełnym biegu, przechodzi w izolacji) ≥FLAKY_ALERT_NIGHTS nocy z rzędu.
 
@@ -21,27 +22,31 @@ rozjazd między nimi = ALERT (przyrząd nie zgaduje).
 from __future__ import annotations
 
 import json
+import argparse
+import hashlib
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 WARSAW = ZoneInfo("Europe/Warsaw")
-ROOT = "/root/.openclaw/workspace/scripts/dispatch_v2"
+ROOT = os.environ.get("NIGHT_GUARD_ROOT", "/root/.openclaw/workspace/scripts/dispatch_v2")
 VENV_PY = "/root/.openclaw/venvs/dispatch/bin/python"
 HISTORY = os.environ.get(
     "NIGHT_GUARD_HISTORY",
     "/root/.openclaw/workspace/dispatch_state/night_guard_history.jsonl")
+MANIFEST = os.environ.get(
+    "NIGHT_GUARD_MANIFEST",
+    os.path.join(os.path.dirname(__file__), "night_guard_suite_manifest.json"))
 PYTEST_TIMEOUT_S = int(os.environ.get("NIGHT_GUARD_PYTEST_TIMEOUT_S", "3600"))
 ISOLATION_RERUN_CAP = int(os.environ.get("NIGHT_GUARD_ISOLATION_CAP", "10"))
 FLAKY_ALERT_NIGHTS = int(os.environ.get("NIGHT_GUARD_FLAKY_ALERT_NIGHTS", "3"))
-COLLECTED_DROP_ALERT_PCT = float(os.environ.get("NIGHT_GUARD_COLLECTED_DROP_PCT", "5.0"))
-
-_SUMMARY_RE = re.compile(
-    r"(?:(\d+) failed)?(?:, )?(?:(\d+) passed)?(?:, )?(?:(\d+) skipped)?"
-    r"(?:, )?(?:(\d+) xfailed)?(?:, )?(?:(\d+) xpassed)?(?:, )?(?:(\d+) error)?")
+_OUTCOMES = frozenset({"passed", "failed", "error", "skipped", "xfailed", "xpassed"})
+_PASS_SKIP_PREFIXES = ("tests/test_preshift_window_penalty_2026_06_24.py::",)
 
 
 def _now_iso() -> str:
@@ -76,25 +81,141 @@ def _failed_test_ids(text: str) -> list[str]:
     return sorted(set(ids))
 
 
-def run_pytest() -> tuple[dict, list[str], str | None]:
-    """Pełny bieg. Zwraca (summary, failed_ids, hard_error|None)."""
+def _nodeids_sha256(nodeids: list[str]) -> str:
+    return hashlib.sha256("\n".join(nodeids).encode("utf-8")).hexdigest()
+
+
+def collect_suite() -> tuple[list[str], str | None]:
+    """Collect the exact suite before execution; partial collection is RED."""
     try:
-        p = subprocess.run([VENV_PY, "-m", "pytest", "tests/", "-q"],
-                           cwd=ROOT, capture_output=True, text=True,
-                           timeout=PYTEST_TIMEOUT_S)
+        p = subprocess.run(
+            [VENV_PY, "-m", "pytest", "tests/", "--collect-only", "-q"],
+            cwd=ROOT, capture_output=True, text=True, timeout=600)
     except subprocess.TimeoutExpired:
-        return {}, [], f"pytest TIMEOUT po {PYTEST_TIMEOUT_S}s"
+        return [], "COLLECT_TIMEOUT"
+    nodeids = sorted({line.strip() for line in p.stdout.splitlines()
+                      if line.strip().startswith("tests/") and "::" in line})
+    if p.returncode != 0:
+        return nodeids, f"COLLECT_RC_{p.returncode}"
+    if not nodeids:
+        return [], "COLLECT_EMPTY"
+    return nodeids, None
+
+
+def _load_json(path: str) -> dict:
+    with open(path, encoding="utf-8") as f:
+        value = json.load(f)
+    if not isinstance(value, dict):
+        raise ValueError("root is not an object")
+    return value
+
+
+def load_manifest(path: str | None = None) -> tuple[dict | None, str | None]:
+    """Load and strictly validate the versioned suite contract."""
+    path = path or MANIFEST
+    try:
+        manifest = _load_json(path)
+        if manifest.get("schema_version") != 1:
+            raise ValueError("unsupported schema_version")
+        if not isinstance(manifest.get("manifest_version"), int) or manifest["manifest_version"] < 1:
+            raise ValueError("invalid manifest_version")
+        nodeids = manifest.get("nodeids")
+        if not isinstance(nodeids, list) or not nodeids or nodeids != sorted(set(nodeids)):
+            raise ValueError("nodeids must be non-empty, sorted and unique")
+        if manifest.get("nodeids_sha256") != _nodeids_sha256(nodeids):
+            raise ValueError("nodeids_sha256 mismatch")
+        contracts = manifest.get("outcome_contracts")
+        if not isinstance(contracts, dict):
+            raise ValueError("outcome_contracts is not an object")
+        for nodeid, allowed in contracts.items():
+            if nodeid not in nodeids or not isinstance(allowed, list) or not allowed:
+                raise ValueError(f"invalid outcome contract for {nodeid}")
+            if len(allowed) != len(set(allowed)) or not set(allowed) <= _OUTCOMES:
+                raise ValueError(f"invalid allowed outcomes for {nodeid}")
+        for key in ("owner", "reason", "updated_at_utc", "base_sha"):
+            if not isinstance(manifest.get(key), str) or not manifest[key].strip():
+                raise ValueError(f"missing audit field {key}")
+        return manifest, None
+    except FileNotFoundError:
+        return None, "MANIFEST_MISSING"
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return None, f"MANIFEST_INVALID:{type(exc).__name__}:{exc}"
+
+
+def evaluate_suite_contract(
+    collected: list[str], outcomes: dict[str, str] | None, manifest: dict,
+) -> list[str]:
+    """Return fail-closed contract violations, always named by exact nodeid."""
+    alerts: list[str] = []
+    expected = set(manifest["nodeids"])
+    actual = set(collected)
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+    if missing:
+        alerts.append(f"SUITE-CONTRACT-MISSING({len(missing)}): {missing}")
+    if unexpected:
+        alerts.append(f"SUITE-CONTRACT-UNEXPECTED({len(unexpected)}): {unexpected}")
+    if outcomes is not None and not missing and not unexpected:
+        contracts = manifest["outcome_contracts"]
+        mismatches = []
+        for nodeid in manifest["nodeids"]:
+            actual_outcome = outcomes.get(nodeid, "not_run")
+            allowed = contracts.get(nodeid, ["passed"])
+            if actual_outcome not in allowed:
+                mismatches.append({"nodeid": nodeid, "actual": actual_outcome,
+                                   "allowed": allowed})
+        if mismatches:
+            alerts.append(f"SUITE-OUTCOME-DRIFT({len(mismatches)}): {mismatches}")
+    return alerts
+
+
+def run_pytest() -> tuple[dict, list[str], str | None, dict | None]:
+    """Full run with an aggregate-only per-nodeid outcome report."""
+    fd, result_path = tempfile.mkstemp(prefix="night-guard-", suffix=".json")
+    os.close(fd)
+    os.unlink(result_path)
+    env = dict(os.environ)
+    env["NIGHT_GUARD_RESULT_PATH"] = result_path
+    try:
+        p = subprocess.run([VENV_PY, "-m", "pytest", "tests/", "-q", "-p",
+                            "dispatch_v2.tools.night_guard_pytest_plugin"],
+                           cwd=ROOT, capture_output=True, text=True,
+                           timeout=PYTEST_TIMEOUT_S, env=env)
+    except subprocess.TimeoutExpired:
+        try:
+            os.unlink(result_path)
+        except FileNotFoundError:
+            pass
+        return {}, [], f"PYTEST_TIMEOUT_{PYTEST_TIMEOUT_S}s", None
     text = p.stdout + "\n" + p.stderr
     summary = _parse_pytest_summary(text)
     failed = _failed_test_ids(text)
     if summary["summary_line"] is None:
-        return summary, failed, f"pytest bez linii summary (rc={p.returncode})"
+        try:
+            os.unlink(result_path)
+        except FileNotFoundError:
+            pass
+        return summary, failed, f"PYTEST_SUMMARY_MISSING_RC_{p.returncode}", None
     # anty-kłamstwo: exit-code i summary muszą się zgadzać
     saw_fail = bool(failed) or summary["failed"] > 0 or summary["errors"] > 0
     if (p.returncode == 0) == saw_fail:
-        return summary, failed, (f"rozjazd exit-code({p.returncode}) vs summary "
-                                 f"({summary['summary_line']})")
-    return summary, failed, None
+        try:
+            os.unlink(result_path)
+        except FileNotFoundError:
+            pass
+        return summary, failed, f"PYTEST_RC_SUMMARY_MISMATCH_RC_{p.returncode}", None
+    try:
+        report = _load_json(result_path)
+        if report.get("schema_version") != 1:
+            raise ValueError("bad result schema")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return summary, failed, f"PYTEST_RESULT_INVALID:{type(exc).__name__}", None
+    finally:
+        try:
+            os.unlink(result_path)
+        except FileNotFoundError:
+            pass
+    return summary, failed, None, report
 
 
 def rerun_isolated(test_ids: list[str]) -> tuple[list[str], list[str]]:
@@ -135,15 +256,22 @@ def run_entropy() -> tuple[dict, str | None]:
     return out, None
 
 
-def load_prev() -> dict | None:
+def load_history() -> tuple[list[dict], str | None]:
     try:
         with open(HISTORY, encoding="utf-8") as f:
             lines = [ln for ln in f if ln.strip()]
-        return json.loads(lines[-1]) if lines else None
+        entries = [json.loads(line) for line in lines]
+        if not all(isinstance(entry, dict) for entry in entries):
+            raise ValueError("history entry is not an object")
+        return entries, None
     except FileNotFoundError:
-        return None
-    except Exception:
-        return None  # zepsuta historia nie blokuje ticku; seedujemy od nowa
+        return [], None
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return [], f"HISTORY_INVALID:{type(exc).__name__}:{exc}"
+
+
+def _latest(entries: list[dict], predicate) -> dict | None:
+    return next((entry for entry in reversed(entries) if predicate(entry)), None)
 
 
 def append_history(entry: dict) -> None:
@@ -160,31 +288,117 @@ def append_history(entry: dict) -> None:
     os.replace(tmp, HISTORY)
 
 
+def _manifest_payload(nodeids: list[str], outcomes: dict[str, str], *, owner: str,
+                      reason: str, base_sha: str, version: int) -> dict:
+    contracts = {nodeid: [outcome] for nodeid, outcome in sorted(outcomes.items())
+                 if outcome != "passed"}
+    for nodeid in nodeids:
+        if nodeid.startswith(_PASS_SKIP_PREFIXES):
+            contracts[nodeid] = ["passed", "skipped"]
+    return {
+        "schema_version": 1,
+        "manifest_version": version,
+        "base_sha": base_sha,
+        "updated_at_utc": datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds"),
+        "owner": owner,
+        "reason": reason,
+        "nodeids_sha256": _nodeids_sha256(nodeids),
+        "nodeids": nodeids,
+        "outcome_contracts": contracts,
+    }
+
+
+def write_manifest(payload: dict, path: str | None = None) -> None:
+    path = path or MANIFEST
+    target = Path(path)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                   encoding="utf-8")
+    os.replace(tmp, target)
+
+
+def update_manifest(owner: str, reason: str, base_sha: str) -> int:
+    if not owner.strip() or not reason.strip() or not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+        print("owner, reason and full 40-char base SHA are required", file=sys.stderr)
+        return 2
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
+                          text=True, timeout=30)
+    if head.returncode != 0 or head.stdout.strip() != base_sha:
+        print("refusing manifest update: base SHA does not equal current HEAD", file=sys.stderr)
+        return 1
+    collected, collect_err = collect_suite()
+    if collect_err:
+        print(f"refusing manifest update: {collect_err}", file=sys.stderr)
+        return 1
+    summary, failed, hard_err, report = run_pytest()
+    if hard_err or failed or report is None:
+        print(f"refusing manifest update: hard={hard_err} failed={failed}", file=sys.stderr)
+        return 1
+    outcomes = report.get("outcomes")
+    if report.get("nodeids") != collected or not isinstance(outcomes, dict):
+        print("refusing manifest update: collect/run nodeids differ", file=sys.stderr)
+        return 1
+    if any(outcome in {"failed", "error", "xpassed", "not_run"}
+           for outcome in outcomes.values()):
+        print("refusing manifest update: suite has failed/error/xpassed/not_run", file=sys.stderr)
+        return 1
+    previous, previous_err = load_manifest()
+    if previous_err and previous_err != "MANIFEST_MISSING":
+        print(f"refusing manifest update: existing {previous_err}", file=sys.stderr)
+        return 1
+    version = (previous or {}).get("manifest_version", 0) + 1
+    write_manifest(_manifest_payload(collected, outcomes, owner=owner, reason=reason,
+                                     base_sha=base_sha, version=version))
+    print(f"manifest updated: version={version} nodeids={len(collected)} "
+          f"sha256={_nodeids_sha256(collected)} summary={summary['summary_line']}")
+    return 0
+
+
 def main() -> int:
     alerts: list[str] = []
     notes: list[str] = []
-    prev = load_prev()
+    history, history_err = load_history()
+    if history_err:
+        alerts.append(f"HISTORY-HARD: {history_err}")
+    prev = history[-1] if history else None
+    prev_valid_pytest = _latest(
+        history, lambda e: bool((e.get("pytest") or {}).get("baseline_eligible")))
+    prev_valid_entropy = _latest(
+        history, lambda e: bool((e.get("entropy") or {}).get("baseline_eligible")))
 
-    summary, failed_ids, hard_err = run_pytest()
-    if hard_err:
-        alerts.append(f"PYTEST-HARD: {hard_err}")
+    manifest, manifest_err = load_manifest()
+    if manifest_err:
+        alerts.append(f"SUITE-MANIFEST-HARD: {manifest_err}")
+    collected, collect_err = collect_suite()
+    if collect_err:
+        alerts.append(f"PYTEST-HARD: {collect_err}")
+    elif manifest is not None:
+        alerts.extend(evaluate_suite_contract(collected, None, manifest))
+
+    summary: dict = {}
+    failed_ids: list[str] = []
+    report: dict | None = None
+    hard_err: str | None = collect_err
+    if not collect_err:
+        summary, failed_ids, hard_err, report = run_pytest()
+        if hard_err:
+            alerts.append(f"PYTEST-HARD: {hard_err}")
+        elif manifest is not None and report is not None:
+            alerts.extend(evaluate_suite_contract(report["nodeids"], report["outcomes"], manifest))
     confirmed, flaky = ([], [])
     if failed_ids:
         confirmed, flaky = rerun_isolated(failed_ids)
     if confirmed:
         alerts.append(f"REGRESJA: {len(confirmed)} confirmed-fail: {confirmed}")
 
-    # suita ucięta = cicha ślepota strażnika
+    # Count is diagnostic only. Exact nodeids are the fail-closed denominator.
     total = sum(summary.get(k, 0) for k in
                 ("failed", "passed", "skipped", "xfailed", "xpassed", "errors"))
-    prev_total = (prev or {}).get("pytest", {}).get("total_collected")
-    if prev_total and total and total < prev_total * (1 - COLLECTED_DROP_ALERT_PCT / 100):
-        alerts.append(f"SUITE-SHRINK: zebrano {total} vs {prev_total} poprzednio (>-"
-                      f"{COLLECTED_DROP_ALERT_PCT}%)")
 
     # flaky N nocy z rzędu
-    prev_flaky_streak = (prev or {}).get("flaky_streak", {})
-    flaky_streak = {t: prev_flaky_streak.get(t, 0) + 1 for t in flaky}
+    prev_flaky_streak = (prev or prev_valid_pytest or {}).get("flaky_streak", {})
+    flaky_streak = (dict(prev_flaky_streak) if hard_err else
+                    {t: prev_flaky_streak.get(t, 0) + 1 for t in flaky})
     persistent = [t for t, n in flaky_streak.items() if n >= FLAKY_ALERT_NIGHTS]
     if persistent:
         alerts.append(f"FLAKY≥{FLAKY_ALERT_NIGHTS}nocy: {persistent}")
@@ -194,20 +408,28 @@ def main() -> int:
     entropy, ent_err = run_entropy()
     if ent_err:
         alerts.append(f"ENTROPY-TOOL: {ent_err}")
-    if prev:
+    if prev_valid_entropy:
         for key, label in (("flag_div", "#4 flag-rozjazdy"),
                            ("poison_live", "#7 sentinel-trucizna(silnik)")):
-            cur, old = entropy.get(key), (prev.get("entropy") or {}).get(key)
+            cur, old = entropy.get(key), (prev_valid_entropy.get("entropy") or {}).get(key)
             if cur is not None and old is not None and cur > old:
                 alerts.append(f"ENTROPIA ROŚNIE: {label} {old}→{cur}")
 
     entry = {
         "ts": _now_iso(),
+        "history_schema_version": 2,
+        "suite_contract": {
+            "manifest_version": (manifest or {}).get("manifest_version"),
+            "nodeids_sha256": (manifest or {}).get("nodeids_sha256"),
+            "collected_sha256": _nodeids_sha256(collected) if collected else None,
+            "contract_ok": not any(a.startswith("SUITE-") for a in alerts),
+        },
         "pytest": {**summary, "total_collected": total or None,
                    "failed_ids": failed_ids, "confirmed_failed": confirmed,
-                   "flaky": flaky},
+                   "flaky": flaky, "hard_error": hard_err,
+                   "baseline_eligible": hard_err is None and report is not None},
         "flaky_streak": flaky_streak,
-        "entropy": entropy,
+        "entropy": {**entropy, "baseline_eligible": ent_err is None},
         "alerts": alerts,
         "notes": notes,
         "verdict": "ALERT" if alerts else "OK",
@@ -224,4 +446,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--update-manifest", action="store_true")
+    parser.add_argument("--owner")
+    parser.add_argument("--reason")
+    parser.add_argument("--base-sha")
+    args = parser.parse_args()
+    if args.update_manifest:
+        sys.exit(update_manifest(args.owner or "", args.reason or "", args.base_sha or ""))
     sys.exit(main())
