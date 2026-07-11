@@ -667,6 +667,10 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
     scratch_root = tmp_path / "scratch_0700"
     docker_root = tmp_path / "docker_root"
     docker_root.mkdir(mode=0o700)
+    host_lock_dir = tmp_path / "host_lock"
+    host_lock_dir.mkdir(mode=0o700)
+    host_activity_lock = host_lock_dir / "heavy-operation.lock"
+    host_activity_lock.touch(mode=0o600)
     home = tmp_path / "home"
     home.mkdir(mode=0o700)
     snapshot_time = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
@@ -701,6 +705,7 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "A360_TEST_DOCKER_FREE_BYTES": "107374182400",
         "A360_TEST_DOCKER_ROOT": str(docker_root),
         "A360_TEST_SAME_DEVICE": "0",
+        "A360_TEST_HOST_ACTIVITY_LOCK": str(host_activity_lock),
         "RESTIC_PASSWORD_FILE": str(password_file),
         "RESTIC_REPOSITORY": "synthetic:repository",
         "FAKE_SNAPSHOT_ROOT": str(fixture_root),
@@ -776,14 +781,24 @@ def _run(
     if mode == "drill":
         command += ["--pg-image", PINNED_TEST_IMAGE]
     command += list(extra_args)
-    return subprocess.run(
-        command,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
+    attest_read_fd, attest_write_fd = os.pipe()
+    try:
+        os.write(attest_write_fd, b"a360-pytest-parent-attestation-v1\n")
+    finally:
+        os.close(attest_write_fd)
+    env["A360_TEST_ATTEST_FD"] = str(attest_read_fd)
+    try:
+        return subprocess.run(
+            command,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+            pass_fds=(attest_read_fd,),
+        )
+    finally:
+        os.close(attest_read_fd)
 
 
 def _jsonl(path: Path) -> list[object]:

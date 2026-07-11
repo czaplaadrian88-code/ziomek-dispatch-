@@ -8,6 +8,62 @@
 # Repo: sftp:bx11-storage:backups/ziomek-restic
 # Passphrase: /root/.restic_password (mode 600); MUST be saved off-machine in password manager
 set -euo pipefail
+umask 077
+
+HOST_ACTIVITY_LOCK=/run/lock/ziomek/heavy-operation.lock
+[ -e "$HOST_ACTIVITY_LOCK" ] || {
+  echo "FAIL host_activity_lock_unprovisioned" >&2
+  exit 75
+}
+[ ! -L "$HOST_ACTIVITY_LOCK" ] || {
+  echo "FAIL host_activity_lock_symlink_rejected" >&2
+  exit 75
+}
+[ -f "$HOST_ACTIVITY_LOCK" ] || {
+  echo "FAIL host_activity_lock_not_regular" >&2
+  exit 75
+}
+LOCK_PARENT=${HOST_ACTIVITY_LOCK%/*}
+[ -d "$LOCK_PARENT" ] && [ ! -L "$LOCK_PARENT" ] || {
+  echo "FAIL host_activity_lock_parent_unsafe" >&2
+  exit 75
+}
+LOCK_PARENT_META="$(stat -Lc '%u:%g|%a' -- "$LOCK_PARENT")" || {
+  echo "FAIL host_activity_lock_parent_probe_failed" >&2
+  exit 75
+}
+[ "$LOCK_PARENT_META" = "0:0|700" ] || {
+  echo "FAIL host_activity_lock_parent_unsafe" >&2
+  exit 75
+}
+LOCK_PATH_META="$(stat -Lc '%d:%i|%u:%g|%a|%h|%s' -- "$HOST_ACTIVITY_LOCK")" || {
+  echo "FAIL host_activity_lock_probe_failed" >&2
+  exit 75
+}
+case "$LOCK_PATH_META" in
+  *'|0:0|600|1|0') ;;
+  *)
+    echo "FAIL host_activity_lock_unsafe" >&2
+    exit 75
+    ;;
+esac
+exec 8>>"$HOST_ACTIVITY_LOCK"
+[ -f /proc/self/fd/8 ] || {
+  echo "FAIL host_activity_lock_not_regular" >&2
+  exit 75
+}
+LOCK_FD_META="$(stat -Lc '%d:%i|%u:%g|%a|%h|%s' -- /proc/self/fd/8)" || {
+  echo "FAIL host_activity_lock_probe_failed" >&2
+  exit 75
+}
+[ "$LOCK_FD_META" = "$LOCK_PATH_META" ] || {
+  echo "FAIL host_activity_lock_replaced" >&2
+  exit 75
+}
+flock -n 8 || {
+  echo "FAIL concurrent_heavy_job_detected" >&2
+  exit 75
+}
 
 export RESTIC_PASSWORD_FILE=/root/.restic_password
 export RESTIC_REPOSITORY="sftp:bx11-storage:backups/ziomek-restic"

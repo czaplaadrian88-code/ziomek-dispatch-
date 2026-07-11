@@ -18,10 +18,24 @@ unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSERVICE PGSERVICEFILE PSQLRC
 TEST_MODE=0
 if [ "${DISPATCH_UNDER_PYTEST:-0}" = "1" ] && [ "${A360_TEST_MODE:-0}" = "1" ] \
   && [ -n "${PYTEST_CURRENT_TEST:-}" ]; then
-  PARENT_CMDLINE="$(tr '\000' ' ' <"/proc/$PPID/cmdline" 2>/dev/null || true)"
-  case "$PARENT_CMDLINE" in
-    *pytest*) TEST_MODE=1 ;;
-  esac
+  TEST_ATTEST_FD="${A360_TEST_ATTEST_FD:-}"
+  TEST_ATTESTATION=""
+  PARENT_COMM=""
+  IFS= read -r PARENT_COMM <"/proc/$PPID/comm" 2>/dev/null || PARENT_COMM=""
+  PARENT_EXE="$(/usr/bin/readlink -f -- "/proc/$PPID/exe" 2>/dev/null || true)"
+  PARENT_EXE_NAME="${PARENT_EXE##*/}"
+  if [[ "$TEST_ATTEST_FD" =~ ^[0-9]{1,4}$ ]] && [ "$TEST_ATTEST_FD" -ge 3 ]; then
+    if IFS= read -r -t 1 -u "$TEST_ATTEST_FD" TEST_ATTESTATION 2>/dev/null; then
+      exec {TEST_ATTEST_FD}<&-
+    else
+      TEST_ATTESTATION=""
+    fi
+  fi
+  if [ "$TEST_ATTESTATION" = "a360-pytest-parent-attestation-v1" ]; then
+    case "$PARENT_COMM:$PARENT_EXE_NAME" in
+      python*:python*|pytest:python*|py.test:python*) TEST_MODE=1 ;;
+    esac
+  fi
 fi
 
 if [ "$TEST_MODE" = "1" ]; then
@@ -248,6 +262,11 @@ DR1_CARRIER_CONTRACT_VERSION="a360-dr1a-one-shot-carrier-v1-20260711"
 DR1_QUOTA_CONTRACT_VERSION="a360-dr1a-scratch-quota-v1-20260711"
 DR1_APP_PROBE_CONTRACT_VERSION="a360-dr1a-app-smoke-v1-20260711"
 DR1_EXPECTED_START_ORDER="postgres,panel,papu,dispatch"
+if [ "$TEST_MODE" = "1" ]; then
+  HOST_ACTIVITY_LOCK="${A360_TEST_HOST_ACTIVITY_LOCK:?test host activity lock is required}"
+else
+  HOST_ACTIVITY_LOCK="/run/lock/ziomek/heavy-operation.lock"
+fi
 
 # Wersjonowany minimalny kontrakt odtworzenia. Obecnosc plikow prywatnych i
 # tozsamosci jest sprawdzana wylacznie przez metadane (typ, size, link count).
@@ -627,6 +646,51 @@ free_bytes_for_path() {
 }
 
 HOST_GUARD_CALLS=0
+has_conflicting_host_process() {
+  local proc_root="$1"
+  "$PYTHON_BIN" - "$proc_root" <<'PY'
+import pathlib
+import sys
+
+proc_root = pathlib.Path(sys.argv[1])
+conflicting_comms = {b"restic", b"pg_dump", b"pg_basebackup", b"pytest", b"py.test"}
+conflicting_units = {
+    b"dispatch-restic-backup.service",
+    b"nadajesz-panel-backup.service",
+    b"papu-db-backup.service",
+    b"papu-offsite-restic.service",
+}
+
+try:
+    process_dirs = list(proc_root.iterdir())
+except OSError:
+    raise SystemExit(2)
+
+for proc_dir in process_dirs:
+    if not proc_dir.name.isdigit() or not proc_dir.is_dir():
+        continue
+    try:
+        comm = (proc_dir / "comm").read_bytes().strip()
+    except FileNotFoundError:
+        continue
+    except OSError:
+        raise SystemExit(2)
+    if comm in conflicting_comms:
+        raise SystemExit(0)
+    try:
+        cgroup = (proc_dir / "cgroup").read_bytes()
+    except FileNotFoundError:
+        continue
+    except OSError:
+        raise SystemExit(2)
+    for line in cgroup.splitlines():
+        path = line.rsplit(b":", 1)[-1]
+        if any(component in conflicting_units for component in path.split(b"/") if component):
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 assert_host_capacity() {
   HOST_GUARD_CALLS=$((HOST_GUARD_CALLS + 1))
   if [ "$TEST_MODE" = "1" ]; then
@@ -636,39 +700,25 @@ assert_host_capacity() {
     elif [ "$HOST_GUARD_CALLS" -gt 1 ]; then
       TEST_CONFLICT="${A360_TEST_SECOND_CONFLICT_PROCESS:-$TEST_CONFLICT}"
     fi
-    [ "$TEST_CONFLICT" = "0" ] || fail "concurrent_heavy_job_detected"
+    if [ -n "${A360_TEST_PROC_ROOT:-}" ]; then
+      if has_conflicting_host_process "$A360_TEST_PROC_ROOT"; then
+        fail "concurrent_heavy_job_detected"
+      else
+        probe_rc=$?
+        [ "$probe_rc" -eq 1 ] || fail "host_process_probe_failed"
+      fi
+    else
+      [ "$TEST_CONFLICT" = "0" ] || fail "concurrent_heavy_job_detected"
+    fi
     LOAD1="${A360_TEST_LOAD1:-0}"
     CPU_COUNT="${A360_TEST_CPU_COUNT:-4}"
     MEM_AVAILABLE_BYTES="${A360_TEST_MEM_AVAILABLE_BYTES:-8589934592}"
   else
-    if "$PYTHON_BIN" -c '
-import glob
-import os
-
-for cmdline_path in glob.glob("/proc/[0-9]*/cmdline"):
-    proc_dir = os.path.dirname(cmdline_path)
-    try:
-        with open(os.path.join(proc_dir, "comm"), "rb") as handle:
-            comm = handle.read().strip()
-    except OSError:
-        continue
-    if comm in {b"restic", b"pg_dump", b"pg_basebackup"}:
-        raise SystemExit(0)
-    try:
-        with open(cmdline_path, "rb") as handle:
-            argv = [part for part in handle.read().split(b"\0") if part]
-    except OSError:
-        continue
-    if any(part == b"backup_restic.sh" or part.endswith(b"/backup_restic.sh")
-           for part in argv):
-        raise SystemExit(0)
-    if not (comm.startswith(b"python") or comm.startswith(b"pytest")):
-        continue
-    if b"tests/" in argv and (comm.startswith(b"pytest") or b"pytest" in argv):
-        raise SystemExit(0)
-raise SystemExit(1)
-'; then
+    if has_conflicting_host_process /proc; then
       fail "concurrent_heavy_job_detected"
+    else
+      probe_rc=$?
+      [ "$probe_rc" -eq 1 ] || fail "host_process_probe_failed"
     fi
     LOAD1="$(awk '{print $1}' /proc/loadavg)"
     CPU_COUNT="$(nproc)"
@@ -680,6 +730,28 @@ raise SystemExit(1)
     "$LOAD1" "$CPU_COUNT" || fail "host_load_too_high"
   [ "$MEM_AVAILABLE_BYTES" -ge "$MIN_MEMORY_BYTES" ] || fail "host_memory_too_low"
 }
+
+[ -e "$HOST_ACTIVITY_LOCK" ] || fail "host_activity_lock_unprovisioned"
+[ ! -L "$HOST_ACTIVITY_LOCK" ] || fail "host_activity_lock_symlink_rejected"
+[ -f "$HOST_ACTIVITY_LOCK" ] || fail "host_activity_lock_not_regular"
+LOCK_PARENT="${HOST_ACTIVITY_LOCK%/*}"
+[ -d "$LOCK_PARENT" ] && [ ! -L "$LOCK_PARENT" ] \
+  || fail "host_activity_lock_parent_unsafe"
+LOCK_PARENT_META="$(stat -Lc '%u:%g|%a' -- "$LOCK_PARENT")" \
+  || fail "host_activity_lock_parent_probe_failed"
+[ "$LOCK_PARENT_META" = "0:0|700" ] || fail "host_activity_lock_parent_unsafe"
+LOCK_PATH_META="$(stat -Lc '%d:%i|%u:%g|%a|%h|%s' -- "$HOST_ACTIVITY_LOCK")" \
+  || fail "host_activity_lock_probe_failed"
+case "$LOCK_PATH_META" in
+  *'|0:0|600|1|0') ;;
+  *) fail "host_activity_lock_unsafe" ;;
+esac
+exec 8>>"$HOST_ACTIVITY_LOCK"
+[ -f /proc/self/fd/8 ] || fail "host_activity_lock_not_regular"
+LOCK_FD_META="$(stat -Lc '%d:%i|%u:%g|%a|%h|%s' -- /proc/self/fd/8)" \
+  || fail "host_activity_lock_probe_failed"
+[ "$LOCK_FD_META" = "$LOCK_PATH_META" ] || fail "host_activity_lock_replaced"
+flock -n 8 || fail "concurrent_heavy_job_detected"
 
 assert_host_capacity
 
@@ -1388,6 +1460,12 @@ payload = {
         "min_free_reserve_bytes": int(sys.argv[54]),
         "min_memory_bytes": int(sys.argv[55]),
         "min_postgres_tables": int(sys.argv[56]),
+    },
+    "process_guard": {
+        "strategy": "cooperative_shared_lock_plus_exact_comm_cgroup",
+        "command_lines_read": 0,
+        "command_lines_emitted": 0,
+        "process_environments_read": 0,
     },
     "dr1a_contracts": {
         "carrier": {
