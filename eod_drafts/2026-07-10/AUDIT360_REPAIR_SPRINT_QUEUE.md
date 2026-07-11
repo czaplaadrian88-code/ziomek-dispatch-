@@ -108,19 +108,27 @@ jak R0 — czeka na `at-214`, aby nie skazic paired replay Sprintu 3.
 rozstrzygniecia dopiero po ich wynikach; przedtem nie wolno uzyc starego replayu
 jako argumentu za wariantem biznesowym.
 
-### Kolejna proponowana trojka po Wave 2
+### Wave 3 uruchomiona po zamknieciu Wave 2 — 2026-07-11
 
-1. `A360-D1 FIREWALL-EXEMPT-TRUTH` (`ultra`) — development instrumentacji
-   EXEMPT/VIOLATION; zero enforcementu, merge dopiero po at-214.
-2. `A360-DR1A RESTORE-PREP` (`high`) — syntetyczny carrier/app-smoke/runbook,
-   bez sekretu, restic i Dockera; realny drill to osobna faza B `ultra` za ACK.
-3. `A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE` (`high`) — read-only RSS/cgroup/swap/
-   PSI i efektywna precedencja unitow, bez EnvironmentFile, zmian `/etc` i
+1. `A360-D1 FIREWALL-EXEMPT-TRUTH` (`ultra`, tmux 65) — development
+   instrumentacji EXEMPT/VIOLATION na branchu
+   `engine/a360-d1-firewall-exempt-truth`; zero enforcementu, merge dopiero po
+   odczycie at-214.
+2. `A360-DR1A RESTORE-PREP` (`high`, tmux 66) — syntetyczny
+   carrier/app-smoke/runbook na branchu `ops/a360-dr1a-restore-prep`, bez
+   sekretu, restic i Dockera; realny drill to osobna faza B `ultra` za ACK.
+3. `A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE` (`high`, tmux 67) — read-only
+   RSS/cgroup/swap/PSI i efektywna precedencja unitow na branchu
+   `ops/a360-ops0-runtime-evidence`, bez EnvironmentFile, zmian `/etc` i
    restartow.
 
 Fazy developerskie sa plikowo rozlaczne. Ciezki real DR1B i reprezentatywne
 okno OPS0 nie moga biec jednoczesnie, bo skazilyby pomiar. H1 nadal czeka na
 at-214, integracje R0, D1 oraz decyzje B-01/B-02 i osobny ACK.
+
+Dokladny kontrakt baz, worktree, write-setow, testow i rollbacku zapisano w
+`eod_drafts/2026-07-11/AUDIT360_WAVE3_LAUNCH.md`. W sobotnim oknie wszystkie
+trzy lane'y maja twardy zakaz operacji live.
 
 ## 5. Fala trzecia — jedyny P1 przed dlugim PLAN
 

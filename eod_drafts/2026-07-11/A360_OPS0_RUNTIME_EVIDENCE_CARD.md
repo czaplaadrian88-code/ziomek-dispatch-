@@ -1,8 +1,13 @@
 # A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE — karta proponowanego sprintu
 
-Status: **PROPOSED — trzeci, rownolegly i read-only**
+Status: **RUNNING — Wave 3, tmux 67; read-only runtime evidence**
 
 Effort: `high`.
+
+Kontrakt wykonawczy: branch `ops/a360-ops0-runtime-evidence`, worktree
+`/root/a360_ops0_wt/dispatch_v2`, base `e0fd1e4`. Wykonawca nie edytuje
+`ZIOMEK_BACKLOG.md`, kart kolejki ani repo pamieci; integrator odbiera wynik.
+Bez odczytu EnvironmentFile/environ, zmian `/etc`, deployu, restartu i testu OOM.
 
 ## Problem i dowod
 

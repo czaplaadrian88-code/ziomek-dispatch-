@@ -1,8 +1,13 @@
 # A360-DR1A RESTORE-PREP — karta proponowanego sprintu
 
-Status: **PROPOSED — drugi, rownolegly; tylko faza A code/prep**
+Status: **RUNNING — Wave 3, tmux 66; tylko faza A code/prep**
 
 Effort: `high`.
+
+Kontrakt wykonawczy: branch `ops/a360-dr1a-restore-prep`, worktree
+`/root/a360_dr1a_wt/dispatch_v2`, base `e0fd1e4`. Wykonawca nie edytuje
+`ZIOMEK_BACKLOG.md`, kart kolejki ani repo pamieci; integrator odbiera wynik.
+Bez realnego klucza, restic, decrypt, Dockera, DB, deployu i restartu.
 
 ## Problem i dowod
 

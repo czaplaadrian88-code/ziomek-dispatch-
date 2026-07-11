@@ -1,8 +1,13 @@
 # A360-D1 FIREWALL-EXEMPT-TRUTH — karta proponowanego sprintu
 
-Status: **PROPOSED — pierwszy z kolejnej trojki**
+Status: **RUNNING — Wave 3, tmux 65; merge HOLD do odczytu at-214**
 
 Effort: `ultra`.
+
+Kontrakt wykonawczy: branch `engine/a360-d1-firewall-exempt-truth`, worktree
+`/root/a360_d1_wt/dispatch_v2`, base `e0fd1e4`. Wykonawca nie edytuje
+`ZIOMEK_BACKLOG.md`, kart kolejki ani repo pamieci; integrator odbiera wynik.
+Bez flipa, enforcementu, deployu, restartu i zapisu do danych live.
 
 ## Problem i dowod
 
