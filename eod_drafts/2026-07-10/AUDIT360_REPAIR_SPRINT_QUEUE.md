@@ -1,13 +1,13 @@
 # Audyt 360 — kolejka napraw i bezkolizyjne sprinty — 2026-07-10
 
-Status: pakiet Audytu 360 i kolejka zostaly wlaczone do integracji wave-1 close
-na aktualnej bazie Sprintu 3. Nadal nie daje to ACK na flage, HARD/SOFT,
-credential, dane, siec, restart ani deploy.
+Status: Wave 2 source/docs/test jest zamknieta i zweryfikowana na aktualnej
+bazie Sprintu 3; S0 API-OWNERSHIP jest LIVE. Nie daje to ACK na flage,
+HARD/SOFT, credential, dane, siec ani kolejne operacje live.
 
 Fala pierwsza zostala uruchomiona 2026-07-11 o 10:04 UTC w tmux 57/59/61 i
-zamknieta przez integratora tego samego dnia. T0 oraz D0 sa wlaczone do
-integracji dokumentacyjno-testowej, a S0 jest code-complete/pushed, lecz nie
-zostal zmergowany ani wdrozony do produkcyjnego checkoutu API.
+zamknieta przez integratora tego samego dnia. T0 oraz D0 sa zintegrowane, a S0
+zostal zmergowany, wdrozony i zweryfikowany po jednym kontrolowanym restarcie
+`courier-api`.
 
 ## 1. Reguły kwalifikacji
 
@@ -28,7 +28,7 @@ Priorytet ma dwie osie:
 2. technicznie pierwszym mergem musi być hermetyczny baseline TEST-11/12, bo
    czerwony i live-zależny oracle unieważnia dowody kolejnych zmian.
 
-## 2. Bramka G0 — zanim ruszy kod
+## 2. Bramka G0 — stan historyczny przed uruchomieniem kodu
 
 Integrator najpierw rozstrzyga właścicieli i bazę każdej gałęzi. Stan wykryty
 10.07 około 20:17 UTC:
@@ -56,14 +56,15 @@ integrator po odbiorze lane'a.
 
 | Lane | tmux / effort | Branch i zamrozona baza | Worktree / owner | Allowlista i granica | Status startowy |
 |---|---|---|---|---|---|
-| `A360-T0 TEST-TRUTH` | 57 / `high` | `review/a360-t0-test-truth` @ `f015c9f` | `/root/a360_t0_wt/dispatch_v2`, owner tmux57 | niezalezny odbior oraz fix-forward dwoch ukrytych prod-write w testach; bez `core/` | CLOSED; branch pushed, tmux57 zamkniety, integracja testowa w toku |
-| `A360-S0 API-OWNERSHIP` | 59 / `ultra` | `security/a360-s0-api-ownership` @ `320aa0e` | `/root/a360_s0_wt/courier_api`, owner tmux59 | wspolny guard order→CID, writery status/arrival/ground-truth/parcel, syntetyczne testy; bez pre-login UX | CODE COMPLETE; 185 pass/1 skip, review APPROVE, NOT MERGED/NOT DEPLOYED, tmux59 zamkniety |
+| `A360-T0 TEST-TRUTH` | 57 / `high` | `review/a360-t0-test-truth` @ `f015c9f` | `/root/a360_t0_wt/dispatch_v2`, owner tmux57 | niezalezny odbior oraz fix-forward dwoch ukrytych prod-write w testach; bez `core/` | DONE; branch pushed, zintegrowany, tmux57 zamkniety |
+| `A360-S0 API-OWNERSHIP` | 59 / `ultra` | `security/a360-s0-api-ownership` @ `320aa0e` | `/root/a360_s0_wt/courier_api`, owner tmux59 | wspolny guard order→CID, writery status/arrival/ground-truth/parcel, syntetyczne testy; bez pre-login UX | DONE/LIVE 11.07; API master `fa249e6`, PID 925329, health PASS, tmux59 zamkniety |
 | `A360-D0 R6-DECISION-PREP` | 61 / `low` | `docs/a360-d0-r6-decision-prep` @ `c241507` | `/root/a360_d0_wt/dispatch_v2`, owner tmux61 | jedyny output `eod_drafts/2026-07-11/A360_D0_R6_DECISION_PREP.md`; kod/testy/runtime tylko read-only | CLOSED; branch pushed, whitespace gate naprawiony, tmux61 zamkniety |
 
-G0 zachowuje locki: dirty Sprint 1 nadal blokuje ENGINE/PLAN, tmux50 posiada
-panelowy WIP, a tmux60 posiada wydaniowa integracje Sprintu 3. Chroniony dirty
-`CLAIM_LEDGER_HARD_GATE_CARD.md` pozostaje poza wszystkimi trzema lane'ami.
-Wspolne backlogi i pamiec aktualizuje tylko integrator po odbiorze wynikow.
+Historyczny G0 zachowywal locki tmux50/tmux60 i dirty Sprintu 1. Biezacy audyt
+hashy zamknal ENGINE lock jako VERIFY-CLOSE: zero unikalnego WIP i zero procesu
+ownera; fizyczny worktree pozostaje nietkniety. Chroniony dirty
+`CLAIM_LEDGER_HARD_GATE_CARD.md` nadal pozostaje poza zakresem. Wspolne backlogi
+i pamiec aktualizuje tylko integrator po odbiorze wynikow.
 
 ## 3. Fala pierwsza — zacząć najpierw
 
@@ -84,26 +85,42 @@ zmieniają kodu runtime.
 
 ### Wybrane nastepne trzy sprinty po zamknieciu fali pierwszej
 
-1. `A360-R0 REPLAY-TRUTH` — RUNNING tmux62; development moze ruszyc,
-   ale merge czeka na odczyt at-214, poniewaz job importuje replay tools.
-2. `A360-DR0 RESTORE` — RUNNING tmux63; izolowany, fail-closed drill na scratchu przy niskim
-   loadzie, bez produkcyjnego przelaczenia i bez odczytu tresci sekretow.
-3. `A360-DEP0 SBOM` — RUNNING tmux64; read-only mapa proces→venv→manifest→runtime, bez upgrade'u.
+1. `A360-R0 REPLAY-TRUTH` — technicznie ACCEPT @ `1b38447`, wydaniowo HOLD;
+   do mastera weszly tylko docs, kod czeka na odczyt at-214.
+2. `A360-DR0 RESTORE` — source/fake ACCEPT @ `d873f0b`; source zintegrowany,
+   ale real verify/artifact/drill i service RTO sa DR1 HOLD / NOT DONE.
+3. `A360-DEP0 SBOM` — ACCEPT/DONE @ `53730e9`; przenosny config, 6/6 unitow,
+   deterministyczny SBOM; CVE/EOL uczciwie UNKNOWN.
 
-`A360-D1` pozostaje nastepny w kolejnosci ENGINE, ale nie jest w tej trojce:
-dirty Sprint 1 nadal posiada `core/invariant_firewall.py`, pipeline, shadow i
-testy firewalla. D1 rusza dopiero po formalnym zwolnieniu tego locka.
+ENGINE lock Sprintu 1 zamknieto jako VERIFY-CLOSE bez dotykania worktree:
+31 blobow = aktualny master, 6 = commity historyczne, 0 unikalnych WIP i 0
+procesow ownera. `A360-D1` moze ruszyc w nowym worktree, ale jego merge — tak
+jak R0 — czeka na `at-214`, aby nie skazic paired replay Sprintu 3.
 
 | Kolejność | Sprint | Kanoniczna karta | Zależność | Koniec i rollback |
 |---:|---|---|---|---|
 | 2 | `A360-R0 REPLAY-TRUTH` | pierwszy inkrement `Z-P1-04`, zależność `Z-P2-06` | po `A360-T0` i disposition Sprintu 3 | rozłączne input-miss/OSRM-miss/soft-diff, denominator+coverage+freshness, frozen known-answer, mutation tripwire i brak live fallbacku; tool-only revert |
-| 2 | `A360-D1 FIREWALL-EXEMPT-TRUTH` | instrumentacyjny krok `Z-P0-01` | po T0 i zwolnieniu dirty Sprintu 1; przed kalibracja lub enforcementem | pre-existing/carried ma `EXEMPT`, nowe naruszenie decyzji ma `VIOLATION`; golden+mutation, parity wyboru i metryka w jsonl; revert instrumentacji, zero enforcementu |
-| 2 równolegle | `A360-DR0 RESTORE` | `Z-P1-10` | izolowana kopia i niski load; bez produkcyjnego przełączenia | decrypt, strict DB restore, wymagane ścieżki, liczby rekordów, smoke, zmierzone RTO/RPO; rollback = usunięcie sandboxu |
+| 2 | `A360-D1 FIREWALL-EXEMPT-TRUTH` | instrumentacyjny krok `Z-P0-01` | T0 DONE, ENGINE lock RELEASED; development teraz, merge po at-214 | pre-existing/carried ma `EXEMPT`, nowe naruszenie decyzji ma `VIOLATION`; golden+mutation, parity wyboru i metryka w jsonl; revert instrumentacji, zero enforcementu |
+| 2 równolegle | `A360-DR0 RESTORE` | `Z-P1-10` | source/fake zintegrowany bez instalacji live | fail-closed source i 138 focused PASS; real provenance/decrypt/DB/app RTO/RPO pozostaja DR1 HOLD |
 | 2 równolegle | `A360-DEP0 SBOM` | `Z-P1-08` | inwentaryzacja read-only | SBOM/constraints per proces, `pip check`, licencje i CVE triage; bez automatycznego upgrade'u |
 
 `A360-R0` i `A360-D1` nie zmieniaja decyzji. D0 staje sie karta gotowa do
 rozstrzygniecia dopiero po ich wynikach; przedtem nie wolno uzyc starego replayu
 jako argumentu za wariantem biznesowym.
+
+### Kolejna proponowana trojka po Wave 2
+
+1. `A360-D1 FIREWALL-EXEMPT-TRUTH` (`ultra`) — development instrumentacji
+   EXEMPT/VIOLATION; zero enforcementu, merge dopiero po at-214.
+2. `A360-DR1A RESTORE-PREP` (`high`) — syntetyczny carrier/app-smoke/runbook,
+   bez sekretu, restic i Dockera; realny drill to osobna faza B `ultra` za ACK.
+3. `A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE` (`high`) — read-only RSS/cgroup/swap/
+   PSI i efektywna precedencja unitow, bez EnvironmentFile, zmian `/etc` i
+   restartow.
+
+Fazy developerskie sa plikowo rozlaczne. Ciezki real DR1B i reprezentatywne
+okno OPS0 nie moga biec jednoczesnie, bo skazilyby pomiar. H1 nadal czeka na
+at-214, integracje R0, D1 oraz decyzje B-01/B-02 i osobny ACK.
 
 ## 5. Fala trzecia — jedyny P1 przed dlugim PLAN
 

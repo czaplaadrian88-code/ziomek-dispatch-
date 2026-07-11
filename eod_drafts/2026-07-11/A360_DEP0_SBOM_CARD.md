@@ -1,6 +1,6 @@
 # A360-DEP0 SBOM — karta wykonawcza
 
-Status: RUNNING w tmux64 od 2026-07-11 12:09 UTC.
+Status: **ACCEPT / DONE jako read-only inventory @ `53730e9`; CVE/EOL pozostaja UNKNOWN.**
 
 Effort: `medium`
 
