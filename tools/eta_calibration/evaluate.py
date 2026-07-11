@@ -31,6 +31,8 @@ def load_store(db_path: str) -> List[dict]:
 def time_split(rows: List[dict], holdout_days: int):
     """Podział po czasie: holdout = ostatnie N dni wg `day`. Zwraca (train, holdout)."""
     days = sorted({r["day"] for r in rows if r.get("day")})
+    if not days:
+        return [], [], None
     if len(days) <= holdout_days:
         cut = days[len(days) // 2]
     else:
@@ -75,6 +77,8 @@ def _paired_delta_ci(err_a, err_b, n_boot=2000):
     a = np.abs(np.array(err_a, dtype=float))
     b = np.abs(np.array(err_b, dtype=float))
     n = min(len(a), len(b))
+    if n < 2:
+        return dict(delta_mae=None, ci=(None, None), wilcoxon_p=None)
     a, b = a[:n], b[:n]
     d = a - b
     rng = np.random.default_rng(777)
@@ -85,6 +89,34 @@ def _paired_delta_ci(err_a, err_b, n_boot=2000):
     except Exception:
         p = float("nan")
     return dict(delta_mae=round(float(np.mean(d)), 2), ci=(round(lo, 2), round(hi, 2)), wilcoxon_p=p)
+
+
+def fit_models(train: List[dict], leg: str, cfg: dict) -> dict:
+    """Dopasuj oba challengery wylacznie na przekazanym train."""
+    qs = cfg["model"]["quantiles"]
+    chist = M.build_courier_history(train)
+    return {
+        "L1_empirical": M.EmpiricalQuantileModel(
+            leg, qs, cfg["model"]["min_n_courier"],
+        ).fit(train),
+        "L2_lgbm": M.LGBMQuantileModel(
+            leg, qs, cfg["model"]["lgbm"],
+        ).fit(train, chist),
+    }
+
+
+def fit_model(train: List[dict], leg: str, cfg: dict, model_name: str):
+    """Dopasuj wskazany typ modelu; uzywane do exact-support promotion replay."""
+    qs = cfg["model"]["quantiles"]
+    if model_name == "L1_empirical":
+        return M.EmpiricalQuantileModel(
+            leg, qs, cfg["model"]["min_n_courier"],
+        ).fit(train)
+    if model_name == "L2_lgbm":
+        return M.LGBMQuantileModel(
+            leg, qs, cfg["model"]["lgbm"],
+        ).fit(train, M.build_courier_history(train))
+    raise ValueError(f"nieznany model challengera: {model_name!r}")
 
 
 def coverage(actual: List[float], pred_q: List[float]) -> float:
@@ -121,9 +153,9 @@ def evaluate_leg(train: List[dict], hold: List[dict], leg: str, cfg: dict) -> di
     qs = cfg["model"]["quantiles"]
     opq = cfg["model"]["operational_quantile"]
     # MODEL PUNKTOWY: pełny train (najmocniejsze MAE).
-    chist = M.build_courier_history(train)
-    l1 = M.EmpiricalQuantileModel(leg, qs, cfg["model"]["min_n_courier"]).fit(train)
-    l2 = M.LGBMQuantileModel(leg, qs, cfg["model"]["lgbm"]).fit(train, chist)
+    fitted = fit_models(train, leg, cfg)
+    l1 = fitted["L1_empirical"]
+    l2 = fitted["L2_lgbm"]
     # DELTA CONFORMAL: osobny model na train_fit, kalibrowany na rozłącznym train_calib
     # (ostatnie N dni train). Delta = systematyczna miskalibracja kwantyla → transfer na
     # model pełny (oba trenowane na ~pokrywających się danych). Split-conformal jednostronny.
@@ -251,6 +283,9 @@ def evaluate_leg(train: List[dict], hold: List[dict], leg: str, cfg: dict) -> di
     for k, v in comps.items():
         v["bonferroni_alpha"] = round(cfg["acceptance"]["significance_alpha"] / max(1, nboncomp), 4)
     res["significance"] = comps
+    # Prywatny kanal in-process: nigdy nie jest serializowany do jsonl/terminala.
+    # calibrate uzywa go do frozen-support evidence i shadow parity.
+    res["_models"] = fitted
     return res
 
 
