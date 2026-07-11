@@ -18,9 +18,62 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "docs/deploy/ha-lite/restore_from_restic.sh"
+README = REPO_ROOT / "docs/deploy/ha-lite/README.md"
+RUNBOOK = REPO_ROOT / "docs/deploy/ha-lite/HA_LITE_RUNBOOK_2026-06-21.md"
 PINNED_TEST_IMAGE = "synthetic-postgres@sha256:" + ("a" * 64)
 RUN_ID = "synthetic_0700"
 SENSITIVE_CANARY = "SENSITIVE_CANARY_MUST_NEVER_LEAK"
+PRIVATE_CONFIG_NAME = ".en" + "v"
+REQUIRED_CORE_PATHS = (
+    "root/.openclaw/workspace/dispatch_state/orders_state.json",
+    "root/.openclaw/workspace/dispatch_state/courier_plans.json",
+    "root/.openclaw/workspace/dispatch_state/events.db",
+    "root/.openclaw/workspace/scripts/flags.json",
+)
+REQUIRED_PRIVATE_METADATA_PATHS = (
+    "root/.openclaw/workspace/dispatch_state/kurier_ids.json",
+    "root/.openclaw/workspace/dispatch_state/kurier_piny.json",
+    "root/.openclaw/workspace/dispatch_state/courier_names.json",
+    "root/.openclaw/workspace/dispatch_state/courier_tiers.json",
+    "root/.openclaw/workspace/dispatch_state/grafik_full_names.json",
+    f"root/.openclaw/workspace/{PRIVATE_CONFIG_NAME}",
+    f"root/.openclaw/workspace/ordering_app/{PRIVATE_CONFIG_NAME}",
+    f"root/.openclaw/workspace/nadajesz_clone/panel/backend/{PRIVATE_CONFIG_NAME}",
+)
+REQUIRED_SYSTEMD_PATHS = tuple(
+    f"etc/systemd/system/{name}"
+    for name in (
+        "dispatch-shadow.service",
+        "dispatch-panel-watcher.service",
+        "dispatch-sla-tracker.service",
+        "dispatch-gps.service",
+        "dispatch-telegram.service",
+        "nadajesz-panel.service",
+        "nadajesz-ordering.service",
+        "courier-api.service",
+        "papu-backend.service",
+        "papu-backend-2.service",
+        "papu-notifications-worker.service",
+        "dispatch-restic-backup.service",
+        "dispatch-restic-backup.timer",
+        "nadajesz-panel-backup.service",
+        "nadajesz-panel-backup.timer",
+        "papu-db-backup.service",
+        "papu-db-backup.timer",
+        "backup-sentinel.service",
+        "backup-sentinel.timer",
+    )
+)
+REQUIRED_NGINX_PATHS = tuple(
+    f"etc/nginx/sites-available/{name}"
+    for name in ("gps-nadajesz", "lokalka", "bialystok-nadajesz")
+)
+REQUIRED_MANIFEST_PATHS = (
+    REQUIRED_CORE_PATHS
+    + REQUIRED_PRIVATE_METADATA_PATHS
+    + REQUIRED_SYSTEMD_PATHS
+    + REQUIRED_NGINX_PATHS
+)
 # Staly syntetyczny wektor kontraktu producenta Papu:
 # gzip -n | openssl enc -e -aes-256-cbc -pbkdf2, haslo "synthetic-only".
 # Test tylko odszyfrowuje ten niezmienny ciphertext; nie generuje go tym samym
@@ -86,8 +139,16 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
             f"CREATE TABLE synthetic_papu(id integer); -- {SENSITIVE_CANARY}\n".encode()
         )
     )
-    (systemd_dir / "synthetic.service").write_text("[Unit]\n", encoding="utf-8")
-    (nginx_dir / "synthetic.conf").write_text("# synthetic\n", encoding="utf-8")
+    for relative_path in REQUIRED_PRIVATE_METADATA_PATHS:
+        path = fixture_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(SENSITIVE_CANARY + "\n", encoding="utf-8")
+    for relative_path in REQUIRED_SYSTEMD_PATHS:
+        path = fixture_root / relative_path
+        path.write_text("[Unit]\nDescription=synthetic\n", encoding="utf-8")
+    for relative_path in REQUIRED_NGINX_PATHS:
+        path = fixture_root / relative_path
+        path.write_text("# synthetic vhost metadata\n", encoding="utf-8")
 
     artifact_epoch = int((datetime.now(timezone.utc) - timedelta(minutes=30)).timestamp())
     for path in fixture_root.rglob("*"):
@@ -153,6 +214,8 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
                 for name in files:
                     total_size += os.path.getsize(os.path.join(root, name))
                     total_files += 1
+            if os.environ.get("FAKE_SNAPSHOT_TOTAL_SIZE"):
+                total_size = int(os.environ["FAKE_SNAPSHOT_TOTAL_SIZE"])
             print(json.dumps({"total_size": total_size, "total_file_count": total_files}))
         elif command == "restore":
             target = args[args.index("--target") + 1]
@@ -427,6 +490,8 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
     _set_private_file(key_file)
 
     scratch_root = tmp_path / "scratch_0700"
+    docker_root = tmp_path / "docker_root"
+    docker_root.mkdir(mode=0o700)
     home = tmp_path / "home"
     home.mkdir(mode=0o700)
     snapshot_time = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
@@ -447,6 +512,8 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "A360_SQLITE_BIN": shutil.which("sqlite3") or "/usr/bin/sqlite3",
         "A360_PYTHON_BIN": shutil.which("python3") or "/usr/bin/python3",
         "A360_DR0_SCRATCH_ROOT": str(scratch_root),
+        "A360_DR0_SCRATCH_BUDGET_BYTES": "107374182400",
+        "A360_DR0_DOCKER_BUDGET_BYTES": "107374182400",
         "A360_DR0_MAX_SNAPSHOT_AGE_SECONDS": "86400",
         "A360_DR0_PG_READY_TIMEOUT_SECONDS": "2",
         "A360_TEST_LOAD1": "0.1",
@@ -454,6 +521,8 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "A360_TEST_MEM_AVAILABLE_BYTES": "8589934592",
         "A360_TEST_FREE_BYTES": "107374182400",
         "A360_TEST_DOCKER_FREE_BYTES": "107374182400",
+        "A360_TEST_DOCKER_ROOT": str(docker_root),
+        "A360_TEST_SAME_DEVICE": "0",
         "RESTIC_PASSWORD_FILE": str(password_file),
         "RESTIC_REPOSITORY": "synthetic:repository",
         "PAPU_BACKUP_KEY_FILE": str(key_file),
@@ -480,6 +549,7 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "panel_dir": panel_dir,
         "papu_dir": papu_dir,
         "scratch": scratch_root,
+        "docker_root": docker_root,
         "target": scratch_root / f"restore_{RUN_ID}",
         "env": env,
         "restic_log": restic_log,
@@ -529,13 +599,13 @@ def _report(harness: dict[str, object]) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_known_answer_full_fake_drill_is_isolated_and_redacted(
+def test_known_answer_fake_postgres_schema_drill_is_isolated_and_redacted(
     restore_harness: dict[str, object],
 ) -> None:
     result = _run(restore_harness)
 
     assert result.returncode == 0, result.stderr
-    assert "PASS scope=full_isolated_drill" in result.stdout
+    assert "PASS scope=artifact_and_postgres_schema_only" in result.stdout
     assert SENSITIVE_CANARY not in result.stdout + result.stderr
     target = Path(restore_harness["target"])
     report_path = target / "a360_dr0_restore_report.json"
@@ -548,11 +618,44 @@ def test_known_answer_full_fake_drill_is_isolated_and_redacted(
     report = json.loads(report_text)
     assert SENSITIVE_CANARY not in report_text
     assert report["status"] == "PASS"
-    assert report["rto_scope"] == "full_isolated_drill"
+    assert report["evidence_scope"] == "artifact_and_postgres_schema_only"
+    assert report["full_service_recovery_proven"] is False
+    assert report["service_rto"] == {
+        "status": "HOLD",
+        "proven": False,
+        "seconds": None,
+        "missing_evidence": [
+            "application_import",
+            "application_health",
+            "service_start_order",
+            "systemd_activation",
+            "nginx_activation",
+            "traffic_switch",
+        ],
+    }
+    assert report["recovery_timing"]["scope"] == "artifact_and_postgres_schema_only"
+    assert report["recovery_timing"]["to_postgres_schema_smoke_seconds"] >= 0
     assert report["rpo"]["proven"] is False
     assert report["rpo"]["pitr_proven"] is False
     assert report["artifacts"]["required_json_files"] == 3
     assert report["artifacts"]["sqlite_table_count"] == 3
+    contract = report["required_artifact_contract"]
+    assert contract == {
+        "version": "a360-dr0-required-artifacts-v1-20260711",
+        "core_required": len(REQUIRED_CORE_PATHS),
+        "core_satisfied": len(REQUIRED_CORE_PATHS),
+        "private_metadata_required": len(REQUIRED_PRIVATE_METADATA_PATHS),
+        "private_metadata_satisfied": len(REQUIRED_PRIVATE_METADATA_PATHS),
+        "systemd_required": len(REQUIRED_SYSTEMD_PATHS),
+        "systemd_satisfied": len(REQUIRED_SYSTEMD_PATHS),
+        "nginx_required": len(REQUIRED_NGINX_PATHS),
+        "nginx_satisfied": len(REQUIRED_NGINX_PATHS),
+        "private_file_contents_read": False,
+    }
+    capacity = report["capacity_preflight"]
+    assert capacity["run_budget_enforced"] is True
+    assert capacity["filesystem_quota_enforced"] is False
+    assert capacity["free_space_checked"] is True
     assert report["postgres"]["panel_table_count"] == 60
     assert report["postgres"]["papu_table_count"] == 65
     assert report["postgres"]["panel_schema_sentinel_count"] == 2
@@ -717,7 +820,7 @@ def test_on_error_stop_mutation_proves_false_success_without_tripwire(
     # statementu i caly drill daje falszywy PASS. Known-answer dla prawdziwego
     # skryptu wymaga dwoch rekordow strict=True, wiec taka mutacja lamie suite.
     assert result.returncode == 0, result.stderr
-    assert "PASS scope=full_isolated_drill" in result.stdout
+    assert "PASS scope=artifact_and_postgres_schema_only" in result.stdout
     docker_log = _jsonl(Path(restore_harness["docker_log"]))
     restore_rows = [row for row in docker_log if isinstance(row, dict) and "strict" in row]
     assert len(restore_rows) == 2
@@ -726,12 +829,7 @@ def test_on_error_stop_mutation_proves_false_success_without_tripwire(
 
 @pytest.mark.parametrize(
     "relative_path",
-    [
-        "root/.openclaw/workspace/dispatch_state/orders_state.json",
-        "root/.openclaw/workspace/dispatch_state/courier_plans.json",
-        "root/.openclaw/workspace/dispatch_state/events.db",
-        "root/.openclaw/workspace/scripts/flags.json",
-    ],
+    REQUIRED_MANIFEST_PATHS,
 )
 def test_missing_required_artifact_is_red(
     restore_harness: dict[str, object], relative_path: str
@@ -743,6 +841,90 @@ def test_missing_required_artifact_is_red(
     assert result.returncode != 0
     assert "required_artifact_missing_or_unsafe" in result.stderr
     assert not Path(restore_harness["docker_log"]).exists()
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "root/.openclaw/workspace/dispatch_state/kurier_ids.json",
+        f"root/.openclaw/workspace/{PRIVATE_CONFIG_NAME}",
+        "etc/systemd/system/dispatch-shadow.service",
+        "etc/nginx/sites-available/gps-nadajesz",
+    ),
+)
+def test_empty_required_metadata_artifact_is_red(
+    restore_harness: dict[str, object], relative_path: str
+) -> None:
+    (Path(restore_harness["fixture"]) / relative_path).write_bytes(b"")
+
+    result = _run(restore_harness)
+
+    assert result.returncode != 0
+    assert "required_artifact_empty" in result.stderr
+    assert not Path(restore_harness["docker_log"]).exists()
+
+
+@pytest.mark.parametrize("role", ["systemd", "nginx"])
+def test_nonempty_directory_with_only_synthetic_decoy_is_red(
+    restore_harness: dict[str, object], role: str
+) -> None:
+    fixture = Path(restore_harness["fixture"])
+    if role == "systemd":
+        directory = fixture / "etc/systemd/system"
+        for relative in REQUIRED_SYSTEMD_PATHS:
+            (fixture / relative).unlink()
+        (directory / "synthetic.service").write_text("[Unit]\n", encoding="utf-8")
+    else:
+        directory = fixture / "etc/nginx/sites-available"
+        for relative in REQUIRED_NGINX_PATHS:
+            (fixture / relative).unlink()
+        (directory / "synthetic.conf").write_text("# decoy\n", encoding="utf-8")
+
+    result = _run(restore_harness)
+
+    assert result.returncode != 0
+    assert "required_artifact_missing_or_unsafe" in result.stderr
+    assert not Path(restore_harness["docker_log"]).exists()
+
+
+def test_manifest_entry_removal_mutation_is_definition_invalid(
+    restore_harness: dict[str, object],
+) -> None:
+    mutant = Path(restore_harness["tmp"]) / "restore_manifest_removal_mutant.sh"
+    original = SCRIPT.read_text(encoding="utf-8")
+    mutated = original.replace(
+        '  "etc/systemd/system/dispatch-shadow.service"\n', "", 1
+    )
+    assert mutated != original
+    mutant.write_text(mutated, encoding="utf-8")
+    mutant.chmod(0o700)
+
+    result = _run(restore_harness, script=mutant)
+
+    assert result.returncode == 2
+    assert "required_contract_definition_invalid" in result.stderr
+    assert not Path(restore_harness["restic_log"]).exists()
+
+
+def test_manifest_duplicate_mutation_is_definition_invalid(
+    restore_harness: dict[str, object],
+) -> None:
+    mutant = Path(restore_harness["tmp"]) / "restore_manifest_duplicate_mutant.sh"
+    original = SCRIPT.read_text(encoding="utf-8")
+    mutated = original.replace(
+        '  "etc/systemd/system/dispatch-shadow.service"\n',
+        '  "etc/systemd/system/dispatch-gps.service"\n',
+        1,
+    )
+    assert mutated != original
+    mutant.write_text(mutated, encoding="utf-8")
+    mutant.chmod(0o700)
+
+    result = _run(restore_harness, script=mutant)
+
+    assert result.returncode == 2
+    assert "required_contract_definition_invalid" in result.stderr
+    assert not Path(restore_harness["restic_log"]).exists()
 
 
 def test_required_artifact_symlink_escape_is_red(
@@ -782,8 +964,6 @@ def test_required_artifact_ancestor_symlink_escape_is_red(
     [
         ("panel", "panel_dump_missing_or_ambiguous"),
         ("papu", "papu_dump_missing_or_ambiguous"),
-        ("systemd", "systemd_artifacts_missing"),
-        ("nginx", "nginx_artifacts_missing"),
     ],
 )
 def test_missing_role_artifact_is_red(
@@ -791,12 +971,8 @@ def test_missing_role_artifact_is_red(
 ) -> None:
     if role == "panel":
         next(Path(restore_harness["panel_dir"]).glob("*.sql.gz")).unlink()
-    elif role == "papu":
-        next(Path(restore_harness["papu_dir"]).glob("*.sql.gz")).unlink()
-    elif role == "systemd":
-        next((Path(restore_harness["fixture"]) / "etc/systemd/system").iterdir()).unlink()
     else:
-        next((Path(restore_harness["fixture"]) / "etc/nginx/sites-available").iterdir()).unlink()
+        next(Path(restore_harness["papu_dir"]).glob("*.sql.gz")).unlink()
 
     result = _run(restore_harness)
 
@@ -954,7 +1130,28 @@ def test_scratch_capacity_guard_stops_before_restore(
     assert not Path(restore_harness["docker_log"]).exists()
 
 
-def test_docker_capacity_guard_stops_after_artifact_integrity(
+def test_snapshot_stats_underreport_cannot_bypass_post_unpack_budget(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        mode="artifact",
+        env_update={
+            "FAKE_SNAPSHOT_TOTAL_SIZE": "1000",
+            "A360_DR0_MIN_FREE_RESERVE_BYTES": "1",
+            "A360_DR0_SCRATCH_BUDGET_BYTES": "4096",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "scratch_budget_exceeded_after_unpack" in result.stderr
+    calls = _jsonl(Path(restore_harness["restic_log"]))
+    assert [row[0] for row in calls] == ["snapshots", "check", "stats", "restore"]
+    assert not Path(restore_harness["target"]).exists()
+    assert not Path(restore_harness["docker_log"]).exists()
+
+
+def test_docker_free_space_guard_stops_before_unpack(
     restore_harness: dict[str, object],
 ) -> None:
     result = _run(
@@ -963,9 +1160,141 @@ def test_docker_capacity_guard_stops_after_artifact_integrity(
     )
 
     assert result.returncode == 20
-    assert "docker_disk_capacity_too_low" in result.stderr
+    assert "docker_disk_capacity_too_low_before_unpack" in result.stderr
     assert not Path(restore_harness["docker_log"]).exists()
     assert not Path(restore_harness["target"]).exists()
+
+
+@pytest.mark.parametrize(
+    ("mode", "env_update", "reason"),
+    [
+        ("artifact", {"A360_DR0_SCRATCH_BUDGET_BYTES": ""}, "scratch_budget_required_or_invalid"),
+        ("artifact", {"A360_DR0_SCRATCH_BUDGET_BYTES": "0"}, "scratch_budget_required_or_invalid"),
+        ("drill", {"A360_DR0_DOCKER_BUDGET_BYTES": ""}, "docker_budget_required_or_invalid"),
+        ("drill", {"A360_DR0_DOCKER_BUDGET_BYTES": "not-a-number"}, "docker_budget_required_or_invalid"),
+    ],
+)
+def test_capacity_budget_is_required_and_strictly_validated(
+    restore_harness: dict[str, object],
+    mode: str,
+    env_update: dict[str, str],
+    reason: str,
+) -> None:
+    result = _run(restore_harness, mode=mode, env_update=env_update)
+
+    assert result.returncode == 2
+    assert reason in result.stderr
+    assert not Path(restore_harness["restic_log"]).exists()
+    assert not Path(restore_harness["docker_log"]).exists()
+
+
+@pytest.mark.parametrize(
+    ("env_update", "reason"),
+    [
+        ({"A360_DR0_SCRATCH_BUDGET_BYTES": "1"}, "scratch_budget_exceeded"),
+        ({"A360_DR0_DOCKER_BUDGET_BYTES": "1"}, "docker_budget_exceeded_before_unpack"),
+        ({"FAKE_SNAPSHOT_TOTAL_SIZE": str(2**63)}, "capacity_arithmetic_unsafe"),
+    ],
+)
+def test_pre_unpack_capacity_negative_controls_are_red(
+    restore_harness: dict[str, object], env_update: dict[str, str], reason: str
+) -> None:
+    result = _run(restore_harness, env_update=env_update)
+
+    assert result.returncode != 0
+    assert reason in result.stderr
+    calls = _jsonl(Path(restore_harness["restic_log"]))
+    assert [row[0] for row in calls] == ["snapshots", "check", "stats"]
+    assert not Path(restore_harness["docker_log"]).exists()
+
+
+def test_shared_device_combined_capacity_is_checked_before_unpack(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={
+            "FAKE_SNAPSHOT_TOTAL_SIZE": "1000",
+            "A360_DR0_MIN_FREE_RESERVE_BYTES": "1000",
+            "A360_DR0_SCRATCH_BUDGET_BYTES": "100000",
+            "A360_DR0_DOCKER_BUDGET_BYTES": "100000",
+            "A360_TEST_FREE_BYTES": "6000",
+            "A360_TEST_DOCKER_FREE_BYTES": "6000",
+            "A360_TEST_SAME_DEVICE": "1",
+        },
+    )
+
+    assert result.returncode == 20
+    assert "shared_device_capacity_too_low_before_unpack" in result.stderr
+    calls = _jsonl(Path(restore_harness["restic_log"]))
+    assert [row[0] for row in calls] == ["snapshots", "check", "stats"]
+    assert not Path(restore_harness["docker_log"]).exists()
+
+
+def test_decompression_expansion_must_fit_docker_budget_before_volume(
+    restore_harness: dict[str, object],
+) -> None:
+    large_comment = b"x" * 1_000_000
+    panel = next(Path(restore_harness["panel_dir"]).glob("*.sql.gz"))
+    papu = next(Path(restore_harness["papu_dir"]).glob("*.sql.gz"))
+    panel.write_bytes(gzip.compress(b"CREATE TABLE synthetic_panel(id integer); -- " + large_comment))
+    papu.write_bytes(gzip.compress(b"CREATE TABLE synthetic_papu(id integer); -- " + large_comment))
+
+    result = _run(
+        restore_harness,
+        env_update={
+            "FAKE_SNAPSHOT_TOTAL_SIZE": "1000",
+            "A360_DR0_MIN_FREE_RESERVE_BYTES": "1",
+            "A360_DR0_SCRATCH_BUDGET_BYTES": "10000000",
+            "A360_DR0_DOCKER_BUDGET_BYTES": "100000",
+        },
+    )
+
+    assert result.returncode == 20
+    assert "docker_budget_exceeded_after_decompress" in result.stderr
+    assert not Path(restore_harness["docker_log"]).exists()
+    assert not Path(restore_harness["target"]).exists()
+
+
+def test_docker_free_space_is_rechecked_after_decompression_before_volume(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={"A360_TEST_DOCKER_FREE_BYTES_AFTER_DECOMPRESS": "1"},
+    )
+
+    assert result.returncode == 20
+    assert "docker_disk_capacity_too_low_after_decompress" in result.stderr
+    assert not Path(restore_harness["docker_log"]).exists()
+    assert not Path(restore_harness["target"]).exists()
+
+
+def test_scratch_budget_enforcement_mutation_proves_false_success(
+    restore_harness: dict[str, object],
+) -> None:
+    mutant = Path(restore_harness["tmp"]) / "restore_budget_mutant.sh"
+    original = SCRIPT.read_text(encoding="utf-8")
+    mutated = original.replace(
+        '  || fail "scratch_budget_exceeded"\n', '  || true # mutation probe\n', 1
+    ).replace(
+        '  || fail "scratch_budget_exceeded_after_unpack"\n',
+        '  || true # mutation probe\n',
+        1,
+    )
+    assert mutated != original
+    mutant.write_text(mutated, encoding="utf-8")
+    mutant.chmod(0o700)
+
+    result = _run(
+        restore_harness,
+        mode="artifact",
+        script=mutant,
+        env_update={"A360_DR0_SCRATCH_BUDGET_BYTES": "1"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "PASS scope=artifact_integrity_only" in result.stdout
 
 
 def test_network_none_mutation_is_rejected_by_stateful_fake_inspect(
@@ -1160,10 +1489,52 @@ def test_artifact_mode_reports_limited_scope_and_never_calls_docker(
 
     assert result.returncode == 0, result.stderr
     report = _report(restore_harness)
-    assert report["rto_scope"] == "artifact_only"
-    assert report["rto"]["to_smoke_seconds"] is None
+    assert report["evidence_scope"] == "artifact_integrity_only"
+    assert report["full_service_recovery_proven"] is False
+    assert report["service_rto"]["status"] == "HOLD"
+    assert report["recovery_timing"]["to_postgres_schema_smoke_seconds"] is None
     assert report["isolation"]["separate_container"] is False
     assert not Path(restore_harness["docker_log"]).exists()
+
+
+def test_service_rto_claim_mutation_is_exposed_by_known_answer(
+    restore_harness: dict[str, object],
+) -> None:
+    mutant = Path(restore_harness["tmp"]) / "restore_rto_claim_mutant.sh"
+    original = SCRIPT.read_text(encoding="utf-8")
+    mutated = original.replace(
+        '    "full_service_recovery_proven": False,\n',
+        '    "full_service_recovery_proven": True,\n',
+        1,
+    )
+    assert mutated != original
+    mutant.write_text(mutated, encoding="utf-8")
+    mutant.chmod(0o700)
+
+    result = _run(restore_harness, mode="artifact", script=mutant)
+
+    assert result.returncode == 0, result.stderr
+    # Causal mutation probe: taki raport jest technicznie zapisywalny, ale
+    # lamie known-answer prawdziwego skryptu, ktory wymaga jawnego False/HOLD.
+    assert _report(restore_harness)["full_service_recovery_proven"] is True
+
+
+def test_dr_docs_use_current_cli_and_mark_source_as_not_installed() -> None:
+    obsolete_tokens = ("--verify" + "-only", "--load" + "-db", "--for" + "ce")
+    for path in (README, RUNBOOK):
+        text = path.read_text(encoding="utf-8")
+        assert all(token not in text for token in obsolete_tokens)
+        assert "--mode verify" in text
+        assert "--mode artifact" in text
+        assert "--mode drill" in text
+        assert "NIEWDRO" in text or "nie jest zainstalowana live" in text
+        assert "service RTO" in text
+
+
+def test_source_and_report_never_claim_full_isolated_rto() -> None:
+    for path in (SCRIPT, README, RUNBOOK, REPO_ROOT / "eod_drafts/2026-07-11/A360_DR0_RESTORE.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "full_isolated_drill" not in text
 
 
 def test_verify_mode_checks_repository_without_restore_or_docker(
