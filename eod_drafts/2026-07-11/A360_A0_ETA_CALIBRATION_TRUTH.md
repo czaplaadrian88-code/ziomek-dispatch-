@@ -1,8 +1,8 @@
 # A360-A0 ETA-CALIBRATION-TRUTH
 
-**Status:** COMPLETE BRANCH-ONLY / werdykt modelu `HOLD/UNBOUND` / zero operacji live  
-**Branch:** `evidence/a360-a0-eta-calibration-truth`  
-**Zamrozona baza:** `307242d44080d98dd38143d5feae9304f9198a30`  
+**Status:** COMPLETE BRANCH-ONLY / werdykt modelu `HOLD/UNBOUND` / zero operacji live
+**Branch:** `evidence/a360-a0-eta-calibration-truth`
+**Zamrozona baza:** `307242d44080d98dd38143d5feae9304f9198a30`
 **Worktree:** `/root/a360_eta0_wt/dispatch_v2`
 
 ## 1. Zakres i stan wejsciowy
