@@ -1,8 +1,8 @@
 # Sprint 3 — rollout live obserwowalnosci
 
-Status: **PREPARED / LIVE PENDING poza peakiem**. Ten dokument jest punktem
-pre-deploy. Sekcja postflight zostanie uzupelniona po faktycznej operacji live;
-do tego czasu produkcja pozostaje bez zmian.
+Status: **LIVE SHADOW CANARY ON od 2026-07-11T10:27:12Z**. Kod, retencja i
+obserwacja sa wdrozone; ETA pozostaje offline/unbound. Werdykt canary jest
+PENDING po pelnym oknie 48 h.
 
 ## Zakres i zachowanie
 
@@ -26,9 +26,9 @@ do tego czasu produkcja pozostaje bez zmian.
 - Privacy-fix aggregate-only replay: `292c9cd`.
 - Tag rollback: `sprint3-rollback-prelive-20260711`.
 - Zrodlowa praca wczorajsza: `sprint3/eta-observability-osrm` @ `85b9dc7`.
-- Wszystkie pliki implementacji i testow Sprintu 3 sa identyczne ze zrodlowa
-  galezia; konflikty backlogu i lifecycle rozwiazano na korzysc nowszego mastera
-  z addytywnym wpisem nowej flagi.
+- Pliki implementacji Sprintu 3 sa zgodne ze zrodlowa galezia poza naprawa
+  prywatnosci aggregate-only replayu `292c9cd`; konflikty backlogu i lifecycle
+  rozwiazano na korzysc nowszego mastera z addytywnym wpisem nowej flagi.
 
 ## ETAP 0 — baseline i dowod problemu
 
@@ -124,5 +124,41 @@ do tego czasu produkcja pozostaje bez zmian.
 
 ## Postflight live
 
-PENDING — zostanie wypelnione rzeczywistymi timestampami, PID, health,
-fingerprintem, backupem, jobem T+48 h i wynikiem smoke po operacji.
+- Kanoniczna rozbieznosc okna: pierwsza interpretacja traktowala sobotni
+  scoring-peak 11-14 jako blackout deployu. Weryfikacja D2 pokazala osobne
+  kontrakty: scoring 11-14/17-20, ruch sobota 12-21, **ops-blackout sobota
+  16-21**. Deploy `12:26-12:27 Europe/Warsaw` byl poza blackoutem.
+- Preflight bez kolizji: master/origin `70af4fa`, release/origin `fa26c80`;
+  aktywne lane'y Audit 360 mialy rozlaczny zakres. Jedyny dirty plik main to
+  cudzy `eod_drafts/2026-07-10/CLAIM_LEDGER_HARD_GATE_CARD.md`; nietkniety.
+- Backup 0600/0700: `/root/ziomek_backups/sprint3_live_20260711_1026UTC/`
+  (`flags.json.pre-live`, `dispatch-code.bundle`). Rollback tag wskazuje
+  `70af4fa`.
+- Pierwsza proba fast-forward zostala bezpiecznie zatrzymana przez pusty
+  `.git/index.lock` z 10.07 18:43 UTC. `lsof`, `fuser` i lista procesow
+  potwierdzily brak wlasciciela; HEAD i `/etc` byly nietkniete. Usunieto tylko
+  stale lock i ponowiono operacje.
+- Master fast-forward `70af4fa -> fa26c80`; logrotate zainstalowany jako
+  `/etc/logrotate.d/dispatch-stage-timing` mode 0644 i `logrotate --debug` PASS.
+  Przed ON: flaga nieobecna/fingerprint 0, sidecar absent, import/canon/checkery
+  repo+live zielone.
+- Flaga ustawiona atomowo przez `flags_admin` o `10:27:12 UTC`; jeden
+  kontrolowany restart tylko `dispatch-shadow.service`. Stary PID `3659231`,
+  nowy PID `573430`, start `10:27:21 UTC`, `NRestarts=0`, active/running.
+  Telegram, panel-watcher i courier-api nie byly restartowane.
+- Efektywny fingerprint: `ENABLE_STAGE_TIMING_OBSERVATION=1`,
+  `USE_V2_PARSER=1`. Parser `healthy/v2/anomaly=false`; OSRM direct
+  route/table/nearest `upstream_ok=true`, scope reportera `process_local`.
+- Sidecar powstal jako 0600. Pierwszy raport live: decision/valid 1/1,
+  missing/orphan/duplicate/incomplete = 0; `service_wall_ms=2121,608`,
+  `ledger_append_wall_ms=0,644`; zrodla OSRM obejmuja upstream/cache/mixed.
+  `ERROR`, traceback i `STAGE_TIMING_SIDECAR_LOST` = 0. Jedyny tekst `failed`
+  byl poprawnym finalem starego PID z `failed=0`.
+- Canary start: `2026-07-11T10:27:12Z`; okno konczy sie
+  `2026-07-13T10:27:12Z`. At-job **214** wykona stage report, direct OSRM,
+  daemon telemetry i paired OFF/ON o `2026-07-13 12:15 UTC` (14:15 Warszawa,
+  po lunch blackout). Output prywatny 0600 pod prefixem
+  `dispatch_state/sprint3_canary_20260713.*`; bez auto-flipa i bez Telegrama.
+- Enforcement/backpressure/ETA promotion/cache eviction: bez zmian. Otwarta
+  decyzja B-07 pozostaje nierozstrzygnieta; tego rollout nie interpretuje jako
+  promocji ETA.

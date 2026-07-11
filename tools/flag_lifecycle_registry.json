@@ -5,7 +5,7 @@
       "engine": 392,
       "engine_1b_units": 12,
       "etap4": 127,
-      "flags_json_keys": 243,
+      "flags_json_keys": 244,
       "fp_extra": 34,
       "known_drift": 0,
       "numeric": 26,
@@ -15,7 +15,7 @@
       "twins_concepts": 5
     },
     "generator": "tools/flag_lifecycle_seed.py",
-    "note": "stan flag = 3 światy (ADR-004); wartości current_snapshot z żywych źródeł dnia 2026-07-10; lifecycle heurystyczny (lifecycle_seeded).",
+    "note": "stan flag = 3 światy (ADR-004); bazowy current_snapshot z 2026-07-10, ENABLE_STAGE_TIMING_OBSERVATION z live canary 2026-07-11; lifecycle_seeded tylko dla niekuratorowanych wpisów.",
     "review_date": "2026-08-10",
     "secret_lines_rejected": {
       "apka": 1,
@@ -12327,7 +12327,8 @@
       ],
       "curated_at": "2026-07-11",
       "current_snapshot": {
-        "default": false
+        "default": false,
+        "flags.json": true
       },
       "default": false,
       "intentional_per_process": {
@@ -12339,7 +12340,7 @@
       "lifecycle": "shadow",
       "lifecycle_seeded": false,
       "name": "ENABLE_STAGE_TIMING_OBSERVATION",
-      "notes": "Z-P1-03 observation-only: OFF nie tworzy trace, dodatkowego depth query, pól ledgera ani sidecara; ON nie wymusza backpressure i nie konsumuje metryk decyzyjnie.",
+      "notes": "Z-P1-03 observation-only: OFF nie tworzy trace, dodatkowego depth query, pól ledgera ani sidecara; ON nie wymusza backpressure i nie konsumuje metryk decyzyjnie. LIVE SHADOW CANARY od 2026-07-11T10:27:12Z; werdykt at-214 po oknie 48 h.",
       "owner": {
         "business": "Adrian",
         "service": "dispatch-shadow.service"

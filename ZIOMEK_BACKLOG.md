@@ -73,7 +73,7 @@ przed rozpoczeciem implementacji.
 |---|---|---|---|---:|---|
 | Z-P1-01 | Formalny FSM zlecen | `state_machine` zna statusy, ale nie ma jednej mapy dozwolonych przejsc; zly pickup timestamp jest zastepowany `now()`. | Nielegalne przejscie i uszkodzony czas beda kwarantannowane zamiast po cichu zmieniac prawde SLA. | L | Kompatybilnosc replay historycznego |
 | Z-P1-02 | Kanoniczny ground truth ETA i SLA | Brak potwierdzonego fizycznego pickup/handoff; last-inside i arrival sa tylko obserwowalnymi proxy GPS. | Faza A mierzy to samo okno, kohorte i support bez zgadywania KPI; promocja ETA pozostaje zablokowana. | L | FAZA A DONE; KPI nadal `unbound`, potrzebna definicja KPI i coverage |
-| Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbijal czasu na etapy. | Faza A mierzy queue/fleet/OSRM/solver/selection/write; nie wlacza limitu kolejki, budzetu ani backpressure. | M | FAZA A DONE; rollout zatwierdzony 2026-07-11, canary minimum 48 h przed werdyktem |
+| Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbijal czasu na etapy. | Faza A mierzy queue/fleet/OSRM/solver/selection/write; nie wlacza limitu kolejki, budzetu ani backpressure. | M | **LIVE SHADOW CANARY ON od 2026-07-11 10:27 UTC**; at-214, werdykt po 48 h |
 | Z-P1-04 | Jawny `DecisionContext` i domkniecie efektow ubocznych | Effects buffer obejmuje tylko czesc zapisow; OSRM recorder, tolerancje i bufory sa proces-globalne. | Rownolegle decyzje nie pomieszaja telemetrii ani efektow; replay stanie sie bardziej deterministyczny. | XL | Po Z-P1-03 |
 | Z-P1-05 | Kanoniczna tozsamosc kuriera — **DONE Faza A+B 2026-07-10** (pakiet `identity/`, walidator kolizji, onboarding 5-plikowy, backfill names 19→0, kanon pisowni z grafiku; delegacja 9× norm + scoring worker/panel_roster do registry — parity 177/177, golden 21417 par = 0 roznic; ODLOZONE: unifikacja profili ×10/×5 vs ×10/×10 [pomiar+ACK], Krok 4 czytelnicy plikow→registry, konsolidacja courier_api.db) | 121 aliasow mapuje sie do 65 CID; 54 CID maja wiele aliasow, 20 nie ma wpisu w `courier_names`. | Grafik, GPS, PIN, tier, plan i rozliczenia beda laczone przez CID z kontrolowanymi aliasami. | L | Migracja bez zmiany CID |
 | Z-P1-06 | Prywatnosc i retencja world records/logow | Rekordy zawieraja adresy, nazwiska i GPS, maja `0644` i rosna o setki MB dziennie. | Dane beda pseudonimizowane lub szyfrowane, `0600`, kompresowane i usuwane wedlug retencji. | M | Decyzja B-05 |
@@ -226,13 +226,12 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 - **Czego nie zmieni:** heurystyk ani solvera w pierwszej fazie pomiarowej.
 - **Koniec zadania:** suma rozlacznych spanow zgadza sie z latency, raport pokazuje
   p50/p95/max per etap, a sidecar ma wiarygodny mianownik i coverage utraty.
-- **Stan Fazy A 2026-07-10:** kontrakty `decision_timing.v1` i
-  `decision_stage_timing.v1` sa gotowe na izolowanej galezi. Flaga
-  `ENABLE_STAGE_TIMING_OBSERVATION` jest default OFF, a wersjonowany logrotate
-  (`daily/rotate 30/maxsize 100M`) przeszedl parser 3.21. Brak live aktywacji;
-  zakonczenie sesji 54, akceptacja polityki retencji, osobny ACK i pomiar 48 h
-  sa bramka rolloutowa. Paired replay ma zero roznic krytycznych, ale nie pelne
-  byte-parity pola `pool_feasible+reason`.
+- **Stan Fazy A 2026-07-11:** kontrakty `decision_timing.v1` i
+  `decision_stage_timing.v1` sa LIVE SHADOW za flaga obserwacyjna ON od
+  `10:27:12 UTC`. Logrotate `daily/rotate 30/maxsize 100M` jest zainstalowany,
+  sidecar ma 0600, a pierwszy join mial 1/1 coverage i zero utraty. Canary trwa
+  minimum 48 h; at-214 wykona werdykt 13.07 12:15 UTC. Paired replay ma zero
+  roznic krytycznych, ale nie pelne byte-parity pola `pool_feasible+reason`.
 - **Effort:** M; optymalizacje sa osobnymi zadaniami po pomiarze.
 
 ### Z-P1-04 - DecisionContext i efekty uboczne
@@ -582,25 +581,26 @@ geocode/cache.
 
 ## 8. Sprint 3 - Faza A prawdy ETA i obserwowalnosci
 
-**Stan na 2026-07-11 przed deployem: audyt zakonczony, TEST-TRUTH domkniety,
-wydaniowy commit `d9a456c` ma zielona regresje i jawny ACK na live. Produkcja
-nie zostala jeszcze zmieniona; wykonanie czeka na wyjscie z lunch peaku.**
+**Stan na 2026-07-11: LIVE SHADOW CANARY ON od `10:27:12 UTC`. Audyt i
+TEST-TRUTH sa domkniete, logrotate jest zainstalowany, a pierwszy E2E jest
+zielony. Werdykt po pelnym oknie 48 h wykona at-214 13.07 o 12:15 UTC.**
 
 - Branch `sprint3/eta-observability-osrm`, worktree
   `/root/sprint3_wt/dispatch_v2`, base
   `c2bde5894976eea9e186336453d8bcaeec1d2489`.
-- Commit implementacyjny `e48b21e` zostal wypchniety tylko na izolowana galaz.
-  Galaz zostala dosunieta do aktualnego mastera `270c21a` bez konfliktu. Nie
-  wykonano merge do `master`, instalacji `/etc`, deployu, restartu, migracji,
-  flipa flag ani zapisu do stanu runtime.
+- Wczorajszy commit implementacyjny `e48b21e` zostal zintegrowany przez release
+  `d9a456c`; master fast-forward do `fa26c80`, privacy-fix replayu `292c9cd`.
+  Flaga zostala ustawiona atomowo i wykonano jeden restart tylko shadow. Nie ma
+  migracji ani zmiany danych biznesowych.
 - Historyczny baseline: **4710 passed, 24 skipped, 10 xfailed**; czysty aktualny
   master: **4762 passed, 27 skipped, 10 xfailed**. Finalna regresja:
   **4851 passed, 27 skipped, 10 xfailed** (+89 testow, bez nowego fail/skip/
   xfail). Paired oracle jest w `769dbfa`; komplet commitow przygotowania jest
   zapisany w raporcie Sprintu 3.
-- `ENABLE_STAGE_TIMING_OBSERVATION` ma pelny default-OFF gate; repo zawiera
-  logrotate `daily/rotate 30/maxsize 100M`, ale nie zostal on zainstalowany ani
-  uznany za zatwierdzona polityke retencji.
+- `ENABLE_STAGE_TIMING_OBSERVATION=true` jest LIVE SHADOW; fallback pozostaje
+  OFF. Logrotate `daily/rotate 30/maxsize 100M` jest zainstalowany, sidecar 0600.
+  Pierwszy tick: 1/1 valid, missing/orphan/duplicate/incomplete = 0,
+  `service_wall_ms=2121,608`, append ledgera `0,644 ms`.
 - Zwykla podmiana live flags nie testuje historycznego replayu, bo world record
   odtwarza wlasny snapshot. Wersjonowany paired replay jawnie wstrzyknal flage:
   **808 porownan, 0 roznic krytycznych, 4 miekkie
@@ -622,8 +622,8 @@ nie zostala jeszcze zmieniona; wykonanie czeka na wyjscie z lunch peaku.**
 1. Sprint 1: wdrozony; Z-P0-01 faza A pozostaje w obserwacji shadow do co najmniej
    `2026-07-12 06:10:36 UTC`.
 2. Sprint 2: Z-P0-05, Z-P0-06, Z-P1-01.
-3. Sprint 3: Faza A i default-OFF gate gotowe; audyt zakonczony, rollout live
-   zatwierdzony 2026-07-11; instalacja logrotate i canary minimum 48 h w toku.
+3. Sprint 3: Faza A **LIVE SHADOW CANARY ON**; obserwacja od 11.07 10:27 UTC,
+   at-214 po oknie 48 h; ETA nadal offline/unbound, eviction nadal otwarta.
 4. Sprint 4: Z-P1-05, Z-P1-07, Z-P2-07 — **WYKONANY 2026-07-10** (wszystkie 3 karty DONE + follow-upy za ACK: kuracja rejestru, fix panel_packs, migracja+flip USE_V2_PARSER, identity Faza B; handoffy: `eod_drafts/2026-07-10/SPRINT4_HANDOFF.md` + `SPRINT4_SESJA_FULL_CLOSE.md`).
 5. Sprint 5: Z-P1-04 i Z-P2-02 po ustabilizowaniu kontraktow.
 6. Dalej: integracje, multi-city i migracje stanu wedlug decyzji B-03/B-04.
