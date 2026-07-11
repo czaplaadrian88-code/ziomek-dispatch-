@@ -65,6 +65,7 @@ VOLUME_NAME=""
 RUN_ID=""
 SNAP_META=""
 STATS_META=""
+VERIFY_CACHE=""
 
 fail() {
   local reason="$1"
@@ -120,6 +121,12 @@ on_exit() {
     fi
     if [ -n "$STATS_META" ] && [ -f "$STATS_META" ]; then
       rm -f -- "$STATS_META"
+    fi
+    if [ -n "$VERIFY_CACHE" ] && [ -d "$VERIFY_CACHE" ] && [ ! -L "$VERIFY_CACHE" ]; then
+      case "$VERIFY_CACHE" in
+        "$SCRATCH_ROOT"/.verify_cache.*) rm -rf --one-file-system -- "$VERIFY_CACHE" ;;
+        *) cleanup_failed=1 ;;
+      esac
     fi
     cleanup_docker >/dev/null 2>&1 || cleanup_failed=1
     safe_remove_target >/dev/null 2>&1 || cleanup_failed=1
@@ -343,6 +350,15 @@ elif [ -n "$TARGET" ]; then
   fail "target_not_valid_for_verify" 2
 fi
 
+if [ "$MODE" = "verify" ]; then
+  VERIFY_CACHE="$(mktemp -d "$SCRATCH_ROOT/.verify_cache.XXXXXX")"
+  chmod 0700 "$VERIFY_CACHE"
+  export XDG_CACHE_HOME="$VERIFY_CACHE"
+else
+  mkdir -m 0700 "$TARGET/.cache"
+  export XDG_CACHE_HOME="$TARGET/.cache"
+fi
+
 PHASE="SNAPSHOT"
 SNAP_META="$(mktemp "$SCRATCH_ROOT/.a360_snapshot.XXXXXX")"
 chmod 0600 "$SNAP_META"
@@ -398,6 +414,8 @@ SNAPSHOT_RPO_SECONDS=$((START_EPOCH - SNAPSHOT_EPOCH))
 PHASE="REPOSITORY_CHECK"
 "$RESTIC_BIN" check --read-data-subset=5% >/dev/null 2>&1 || fail "repository_integrity_failed"
 if [ "$MODE" = "verify" ]; then
+  rm -rf --one-file-system -- "$VERIFY_CACHE"
+  VERIFY_CACHE=""
   printf 'PASS scope=repository_check snapshot_age_seconds=%s\n' "$SNAPSHOT_RPO_SECONDS"
   FINALIZED=1
   exit 0
