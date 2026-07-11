@@ -4,6 +4,10 @@ Status: plan wykonawczy zapisany na branchu `audit/ziomek-360-20260710`.
 Nie jest jeszcze scalony do `master` i nie daje ACK na flagę, HARD/SOFT,
 credential, dane, sieć, restart ani deploy.
 
+Fala pierwsza zostala uruchomiona 2026-07-11 o 10:04 UTC w tmux 57/59/61.
+Dokladny G0 i granice wykonawcze sa w sekcji 2A. Sam start lane'ow nadal nie
+daje ACK na merge do `master` ani na zadna operacje live.
+
 ## 1. Reguły kwalifikacji
 
 - `CONFIRMED` trafia do naprawy albo jawnego `VERIFY-CLOSE`.
@@ -46,6 +50,19 @@ Integrator najpierw rozstrzyga właścicieli i bazę każdej gałęzi. Stan wykr
 G0 kończy się tabelą `lane -> branch -> worktree -> base SHA -> owner -> file
 allowlist`. Wykonawcy nie edytują wspólnych backlogów ani pamięci; robi to tylko
 integrator po odbiorze lane'a.
+
+## 2A. G0 wykonane — fala pierwsza 2026-07-11
+
+| Lane | tmux / effort | Branch i zamrozona baza | Worktree / owner | Allowlista i granica | Status startowy |
+|---|---|---|---|---|---|
+| `A360-T0 TEST-TRUTH` | 57 / `high` | `review/a360-t0-test-truth` @ `4e782e8` | `/root/a360_t0_wt/dispatch_v2`, owner tmux57 | niezalezny odbior commita T0; testy/rejestr/kwarantanna i nowy raport, bez `core/`; integracje Sprintu 3 posiada tmux60 | RUNNING; zadnych operacji live |
+| `A360-S0 API-OWNERSHIP` | 59 / `ultra` | `security/a360-s0-api-ownership` @ `073d6a8` | `/root/a360_s0_wt/courier_api`, owner tmux59 | wspolny guard order→CID, writery status/arrival/ground-truth/parcel, syntetyczne testy; bez pre-login UX | RUNNING; bez deployu/restartu API |
+| `A360-D0 R6-DECISION-PREP` | 61 / `low` | `docs/a360-d0-r6-decision-prep` @ `0721c76` | `/root/a360_d0_wt/dispatch_v2`, owner tmux61 | jedyny output `eod_drafts/2026-07-11/A360_D0_R6_DECISION_PREP.md`; kod/testy/runtime tylko read-only | RUNNING; bez zmiany HARD/SOFT |
+
+G0 zachowuje locki: dirty Sprint 1 nadal blokuje ENGINE/PLAN, tmux50 posiada
+panelowy WIP, a tmux60 posiada wydaniowa integracje Sprintu 3. Chroniony dirty
+`CLAIM_LEDGER_HARD_GATE_CARD.md` pozostaje poza wszystkimi trzema lane'ami.
+Wspolne backlogi i pamiec aktualizuje tylko integrator po odbiorze wynikow.
 
 ## 3. Fala pierwsza — zacząć najpierw
 
