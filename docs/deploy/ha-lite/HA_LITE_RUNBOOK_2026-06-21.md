@@ -10,7 +10,8 @@ runbook nie zapewnia HA, automatycznego failoveru ani pełnego RTO usługi.
 |---|---|---|
 | Historyczny drill 2026-06-20 | historyczny, nieporównywalny z obecnym CLI | starsza procedura odtworzyła wskazane struktury danych; nie jest dowodem obecnego full service RTO |
 | A360-DR0 synthetic | PASS w ograniczonym zakresie | artifact restore + dwa izolowane PostgreSQL schema smokes + cleanup |
-| A360-DR0 real repository check | PASS | dostęp, wybór snapshotu, wiek i częściowy check repo |
+| A360-DR0 real repository check sprzed provenance v1 | historyczny PASS | dostęp, wiek i częściowy check repo; nie dowodzi nowego hostname/tag/path contract |
+| A360-DR0 real provenance + capacity verify | **HOLD / NOT RUN** | nowy kontrakt ma wyłącznie dowód fake |
 | A360-DR0 real DB drill | **HOLD** | brak zatwierdzonego bezsekretowego wejścia dla jednego z dumpów |
 | Import/health/start-order aplikacji | **HOLD / NOT PROVEN** | brak izolowanego dowodu |
 | Pełny service RTO i RPO obu baz | **HOLD / NOT PROVEN** | nie wykonano startu usług ani end-to-end health/ruchu |
@@ -53,11 +54,29 @@ prywatnych skrypt sprawdza tylko typ, brak symlinków/hardlinków i niezerowy
 rozmiar. Nie otwiera ani nie raportuje ich treści, nazw wpisów, hashy czy
 liczników zależnych od danych.
 
+Kontrakt `a360-dr0-snapshot-provenance-v1-20260711` przypina hostname
+producenta, oba tagi `daily`/`scheduled` i pięć krytycznych ścieżek wejściowych.
+Skrypt pobiera kandydatów bez wstępnego globalnego `latest`, odrzuca obcą
+provenance, a dopiero potem wybiera jednoznacznie najnowszy pasujący snapshot.
+Jawny prefix ID musi zwrócić dokładnie jeden rekord. Raportuje wersję/status i
+liczniki kontraktu, bez listy ścieżek.
+
+Realne progi są przypięte i `readonly`: snapshot/dumpy maks. 93 600 s, rezerwa
+min. 5 GiB, pamięć dostępna min. 3 GiB i min. 50 tabel na rolę. Produkcyjne
+zmienne środowiskowe nie mogą ich osłabić; odrębne override'y istnieją tylko w
+hermetycznym profilu testowym atestowanym przez proces nadrzędny pytest.
+
 ## 3. Twardy preflight pojemności
 
-Tryby odtwarzające wymagają dodatniego, jawnego budżetu scratch w bajtach;
-`drill` wymaga również budżetu Docker root. Są to limity pojedynczego runu, a
-nie deklaracja aktywnego filesystem quota.
+Wszystkie tryby, także `verify`, wymagają dodatniego, jawnego budżetu scratch w
+bajtach; `drill` wymaga również budżetu Docker root. Są to limity pojedynczego
+runu, a nie deklaracja aktywnego filesystem quota.
+
+Przed listą snapshotów `verify` sprawdza niski load, dostępną pamięć, brak
+aktywnego restic/pg_dump/pg_basebackup, budżet 2 GiB cache + rezerwę i wolne
+miejsce. Guard konkurencji jest powtarzany tuż przed `restic check`. Po checku
+rzeczywisty cache nie może przekroczyć allowance, operatorowego budżetu ani
+naruszyć rezerwy; RED usuwa efemeryczny cache.
 
 Przed rozpakowaniem skrypt:
 
@@ -109,7 +128,10 @@ Izolowane odtworzenie artefaktów i schematów PostgreSQL:
 
 Opcjonalnie można dodać `--snapshot ID`. Obraz musi być przypięty pełnym
 digestem. Kontener nie ma sieci ani portów, montuje wyłącznie nowy volume i jest
-usuwany wraz z volume po dokładnym labelu runu. Skrypt nie przyjmuje nazw
+usuwany wraz z volume po dokładnej nazwie, labelu scratch i `run_id`. Cleanup
+jest uzbrojony przed pierwszym create, więc obejmuje też zasób utworzony przez
+komendę, która zwróciła non-zero; po remove ponownie dowodzi nieobecności.
+Skrypt nie przyjmuje nazw
 istniejących baz lub kontenerów i nie ma trybu aktywacji produkcji.
 
 ## 5. Druga instancja i failover — osobny projekt/ACK
@@ -144,10 +166,25 @@ budżetami i przypiętym obrazem. Zapisz:
 
 Nie nazywaj czasu artifact/schema smoke pełnym RTO.
 
+### DR1 HOLD przed pierwszym real drill
+
+1. Potwierdzić realnym `verify`, że bieżący snapshot spełnia provenance v1;
+   historycznego PASS nie przenosić.
+2. Potwierdzić realny capacity/concurrent-backup guard bez restore.
+3. Domknąć producer gap dwóch wymaganych unitów `backup-sentinel` albo dowieść,
+   że są obecne w snapshotcie.
+4. Zapewnić filesystem quota lub zaakceptować jawny brak tej warstwy.
+5. Zatwierdzić bezpieczne wejście danych prywatnych oraz osobny
+   app/import/health/start-order smoke.
+
+Do tego czasu `artifact`, `drill`, pełny RPO i service RTO są HOLD. To nie jest
+stan DONE.
+
 ## 7. Rollback scratcha
 
 Przy RED skrypt usuwa tylko nowy target ze zgodnym owner markerem oraz zasoby
-Docker ze zgodnym `run_id`; błąd cleanupu ma osobny kod. Nie używaj prune,
+Docker ze zgodną dokładną nazwą, labelem scratch i `run_id`; błąd cleanupu lub
+brak dowodu nieobecności ma osobny kod 90. Nie używaj prune,
 wildcard cleanup ani usuwania zasobów bez zgodnego labelu. Przy PASS target
 pozostaje do jawnego przeglądu i ręcznego usunięcia po weryfikacji owner markera.
 
