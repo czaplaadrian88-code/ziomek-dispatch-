@@ -112,6 +112,11 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         import sys
 
         args = sys.argv[1:]
+        cache_home = os.environ["XDG_CACHE_HOME"]
+        os.makedirs(cache_home, mode=0o700, exist_ok=True)
+        cache_probe = os.path.join(cache_home, "synthetic_cache_probe")
+        fd = os.open(cache_probe, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.close(fd)
         log_path = os.environ["FAKE_RESTIC_LOG"]
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as handle:
@@ -535,6 +540,8 @@ def test_known_answer_full_fake_drill_is_isolated_and_redacted(
     target = Path(restore_harness["target"])
     report_path = target / "a360_dr0_restore_report.json"
     assert stat.S_IMODE(target.stat().st_mode) == 0o700
+    assert stat.S_IMODE((target / ".cache").stat().st_mode) == 0o700
+    assert (target / ".cache/synthetic_cache_probe").is_file()
     assert stat.S_IMODE(report_path.stat().st_mode) == 0o600
 
     report_text = report_path.read_text(encoding="utf-8")
@@ -1169,6 +1176,7 @@ def test_verify_mode_checks_repository_without_restore_or_docker(
     restic_calls = _jsonl(Path(restore_harness["restic_log"]))
     assert [row[0] for row in restic_calls] == ["snapshots", "check"]
     assert not Path(restore_harness["target"]).exists()
+    assert not list(Path(restore_harness["scratch"]).glob(".verify_cache.*"))
     assert not Path(restore_harness["docker_log"]).exists()
 
 
