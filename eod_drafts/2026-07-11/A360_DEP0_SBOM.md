@@ -14,6 +14,9 @@ Powstała deterministyczna mapa sześciu faktycznie aktywnych procesów do dwóc
 interpreterów, trzech manifestów i wersji runtime. Oba środowiska przechodzą
 `pip check`, a wszystkie krytyczne importy przechodzą smoke. Nie ma brakującego
 pakietu zadeklarowanego w manifestach ani wymagania poza zadeklarowanym zakresem.
+CLI wykonuje read-only discovery aktywnych unitów i fail-closed porównuje je z
+wersjonowanym configiem: bieżący wynik to 6 expected = 6 active, missing=0,
+extra=0.
 
 To **nie jest werdykt bezpieczeństwa zależności**. Nie użyto zwalidowanego feedu
 CVE ani EOL, dlatego globalny i każdy pakietowy status to jawne `UNKNOWN`, nigdy
@@ -63,21 +66,35 @@ licencyjną. Nie należy łączyć tego z automatycznym upgrade'em.
 
 - dwa przebiegi z tym samym timestampem dały identyczny plik;
 - SHA-256 obu wyników:
-  `60ed632a93b12efc3de8b455bd21863e3840179b5adfe57e1f9618c92b2b95c9`;
+  `0522a2ee7c17bcfe73e4862eefea5a45e66353fb5e0034c0003d4711f4c83d43`;
 - schema: `a360-dependency-inventory/v1`;
-- mapowanie proces→środowisko jest fail-closed;
-- ścieżki robocze i venv są aliasowane; chronione klasy ścieżek są odrzucane;
+- mapowanie proces→środowisko oraz expected→active unit jest fail-closed;
+- ścieżki robocze i venv są aliasowane również wtedy, gdy `/root/...` jest
+  osadzone wewnątrz dłuższego komunikatu; chronione klasy ścieżek są odrzucane;
 - negatywna kontrola redakcji przechodzi;
 - klasyfikacja `direct/transitive/unmanaged` jest jawna i testowana.
 
 Artefakt maszynowy:
 `eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_SBOM.json`.
 
+Wersjonowany config bez danych uwierzytelniających:
+`eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_CONFIG.json`.
+
+Dokładna komenda regeneracji:
+
+```bash
+/root/.openclaw/venvs/dispatch/bin/python tools/dependency_inventory.py --config eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_CONFIG.json --output eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_SBOM.json --timestamp 2026-07-11T12:14:29Z
+```
+
 ## Testy
 
-- `tests/test_dependency_inventory.py`: **5 passed**;
-- pełna kanoniczna regresja `pytest tests/ -q`: **4946 passed, 24 skipped,
+- `tests/test_dependency_inventory.py`: **9 passed**;
+- testy negatywne coverage: missing unit RED, extra unit RED;
+- test osadzonej ścieżki w summary: brak `/root/` w wyniku;
+- pełna kanoniczna regresja `pytest tests/ -q`: **4947 passed, 27 skipped,
   10 xfailed, 0 failed**;
+- pełna regresja `HERMETIC_STRICT=1`: **4897 passed, 77 skipped, 10 xfailed,
+  0 failed**;
 - deterministyczny generator ×2: **byte-identical**;
 - `pip check`: dispatch PASS, courier-api PASS;
 - import smoke: dispatch 6/6, courier-api 3/3;

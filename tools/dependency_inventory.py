@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import re
@@ -35,12 +36,15 @@ def canonical_name(value: str) -> str:
 
 
 def redact_path(value: str) -> str:
+    redacted = value
     for prefix, alias in PATH_ALIASES:
-        if value == prefix or value.startswith(prefix + "/"):
-            return alias + value[len(prefix) :]
-    if value.startswith("/root/"):
-        return "$REDACTED_ROOT/" + Path(value).name
-    return value
+        redacted = redacted.replace(prefix, alias)
+
+    def replace_unknown(match: re.Match[str]) -> str:
+        path = match.group(0)
+        return "$REDACTED_ROOT/" + Path(path).name
+
+    return re.sub(r"/root/[A-Za-z0-9_./+@=-]+", replace_unknown, redacted)
 
 
 def ensure_safe_text(value: str) -> str:
@@ -138,7 +142,24 @@ def manifest_drift(runtime: dict[str, dict[str, Any]], manifests: list[dict[str,
     return sorted(findings, key=lambda row: (row["manifest"], row["name"]))
 
 
-def inventory(config: dict[str, Any], timestamp: str) -> dict[str, Any]:
+def discover_active_units(command: list[str]) -> list[str]:
+    proc = subprocess.run(command, check=True, text=True, capture_output=True, timeout=30)
+    return sorted({line.split()[0] for line in proc.stdout.splitlines() if line.split()})
+
+
+def validate_unit_coverage(config: dict[str, Any], active_units: Iterable[str]) -> dict[str, Any]:
+    expected = sorted({row["unit"] for row in config["processes"]})
+    patterns = config["discovery"]["unit_patterns"]
+    scoped_active = sorted({unit for unit in active_units if any(fnmatch.fnmatchcase(unit, pattern) for pattern in patterns)})
+    missing = sorted(set(expected) - set(scoped_active))
+    extra = sorted(set(scoped_active) - set(expected))
+    if missing or extra:
+        raise ValueError(f"unit coverage mismatch: missing={missing}, extra={extra}")
+    return {"status": "PASS", "expected_units": expected, "active_units": scoped_active, "missing": [], "extra": []}
+
+
+def inventory(config: dict[str, Any], timestamp: str, active_units: Iterable[str] | None = None) -> dict[str, Any]:
+    coverage = validate_unit_coverage(config, active_units if active_units is not None else discover_active_units(config["discovery"]["command"]))
     environments = []
     for source in sorted(config["environments"], key=lambda row: row["id"]):
         interpreter = Path(source["interpreter"])
@@ -160,7 +181,9 @@ def inventory(config: dict[str, Any], timestamp: str) -> dict[str, Any]:
         processes.append({"unit": row["unit"], "environment": row["environment"], "exec_start": ensure_safe_text(row["exec_start"])})
     result = {
         "schema": SCHEMA, "generated_at": timestamp, "generator": "tools/dependency_inventory.py", "network_cve_feed_used": False,
-        "global_cve_verdict": dict(UNKNOWN), "global_eol_verdict": dict(UNKNOWN), "environments": environments, "processes": processes,
+        "global_cve_verdict": dict(UNKNOWN), "global_eol_verdict": dict(UNKNOWN), "unit_coverage": coverage,
+        "provenance": {"config": ensure_safe_text(config["provenance"]["config"]), "regeneration_command": ensure_safe_text(config["provenance"]["regeneration_command"])},
+        "environments": environments, "processes": processes,
     }
     ensure_safe_text(json.dumps(result, sort_keys=True))
     return result
