@@ -1,7 +1,8 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
 > Status: AKTYWNY - SPRINT 1 WDROZONY, OBSERWACJA SHADOW W TOKU; AUDIT360
-> DR1A/OPS0 SOURCE-ONLY W MASTERZE, D1/R0 HOLD DO AT-214
+> DR1A/OPS0 SOURCE-ONLY W MASTERZE, D1/R0 HOLD DO AT-214; A0/I1/N0
+> RUNNING BRANCH-ONLY W TMUX 68/69/70
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -129,6 +130,24 @@ manual-only, bez timera/konsumenta, profil UNKNOWN. Zero flag, danych, systemd,
 realnego restore, tuningu i restartu. H1 nadal czeka na at-214, integracje
 R0+D1 i B-01/B-02.
 Raport: `eod_drafts/2026-07-11/AUDIT360_WAVE3_SAFE_SOURCE_INTEGRATION.md`.
+
+Start 2026-07-11 20:36 UTC: trzy najwyzej priorytetowe lane'y, ktore nie sa
+zablokowane przez at-214 ani decyzje B-01/B-02, uruchomiono rownolegle i
+branch-only:
+
+1. `A360-A0 ETA-CALIBRATION-TRUTH` (`ALGO-01/02`, tmux68, effort max) — usuwa
+   future-feature leakage i naprawia porownanie championa z challengerem na
+   wspolnym holdoucie;
+2. `A360-I1 PAPU-BRIDGE-RECOVERY` (`INTE-03`, tmux69, effort high) — domyka
+   idempotentny recovery po sukcesie submitu bez jednoznacznego read-back;
+3. `A360-N0 NIGHT-GUARD-TRUTH` (`TEST-04/05`, tmux70, effort high) — wprowadza
+   wersjonowany, fail-closed mianownik suity i rozlicza bezpanskie XPASS.
+
+Write-sety sa rozlaczne, wspolne backlogi i pamiec sa zastrzezone dla
+integratora. Lane'y nie maja zgody na merge, live state, flagi, timery, deploy
+ani restart. Kanoniczny baseline przed startem: 5126 passed, 27 skipped,
+8 xfailed, 2 xpassed, 0 failed. Karta startu i rollback:
+`eod_drafts/2026-07-11/AUDIT360_PARALLEL_SAFE_LANES_LAUNCH.md`.
 
 52 `UNVERIFIED` nie sa zadaniami naprawczymi. Cztery `REFUTED` pozostaja
 zamkniete. Pelne disposition wszystkich CONFIRMED/PARTIAL/PLAUSIBLE, aktualne
