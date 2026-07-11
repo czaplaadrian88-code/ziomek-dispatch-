@@ -115,6 +115,31 @@ def test_incomplete_record_never_uses_live_or_network_fallback(tmp_path, monkeyp
     assert report["input_miss_reasons"] == {"missing_live_inputs": 1}
 
 
+def test_plan_snapshot_redirects_data_and_lock_together(tmp_path):
+    from dispatch_v2 import common as C
+    from dispatch_v2 import dispatch_pipeline as dp
+    from dispatch_v2 import plan_manager as pm
+
+    saved = {}
+
+    def patch(obj, name, value):
+        saved.setdefault((id(obj), name), (obj, name, getattr(obj, name)))
+        setattr(obj, name, value)
+
+    sandbox = tmp_path / "serve"
+    sandbox.mkdir()
+    try:
+        WR._serve_live_inputs({"live_inputs": {"plans": {}}}, dp, C,
+                              str(sandbox), patch)
+        assert Path(pm.PLANS_FILE).parent == sandbox
+        assert Path(pm.LOCK_FILE).parent == sandbox
+        assert Path(pm.LOCK_FILE).is_file()
+        assert "/dispatch_state/" not in str(pm.LOCK_FILE)
+    finally:
+        for obj, name, value in saved.values():
+            setattr(obj, name, value)
+
+
 def test_cli_uses_only_temp_record_ledger_verdict_and_redacts_ids(tmp_path, monkeypatch):
     _, shadow = _write_corpus(tmp_path)
     monkeypatch.setattr(G.WR, "replay_one", _fake_replay)

@@ -253,6 +253,13 @@ def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
         from dispatch_v2 import plan_manager as _pm
         _redirect(_pm, "PLANS_FILE", li.get("plans"),
                   getattr(_pm, "_perf_plans_cache", None), {"key": None, "data": None})
+        if li.get("plans") is not None:
+            lock_path = os.path.join(tmpdir, "PLANS_FILE.lock")
+            with open(lock_path, "wb"):
+                pass
+            _patch(_pm, "LOCK_FILE",
+                   lock_path if not isinstance(getattr(_pm, "LOCK_FILE"), Path)
+                   else Path(lock_path))
     except Exception:
         pass
     # calib eta/bias — calib_maps.*_PATH, cache _eta_cache/_bias_cache (mtime=None).
