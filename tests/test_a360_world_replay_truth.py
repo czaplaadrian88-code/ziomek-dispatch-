@@ -72,6 +72,13 @@ def test_frozen_known_answer_all_five_classes():
     assert got == list(WR.REPLAY_CLASSES)
 
 
+def test_paired_replay_import_contract_uses_same_critical_fields():
+    from dispatch_v2.tools import paired_flag_replay as paired
+
+    assert frozenset(G.CORE_FIELDS) == WR.CRITICAL_FIELDS
+    assert paired._CORE_FIELDS == WR.CRITICAL_FIELDS
+
+
 def test_mutation_control_critical_axis_has_teeth(monkeypatch):
     case = json.loads(FIXTURE.read_text(encoding="utf-8"))[2]
     assert WR.classify_replay(case["recorded"], case["replayed"])["class"] == "CRITICAL_DIFF"

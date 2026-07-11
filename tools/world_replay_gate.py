@@ -38,6 +38,9 @@ from dispatch_v2.tools import world_replay as WR  # noqa: E402 (reużycie 1:1 �
 
 DEFAULT_OUT = "/root/.openclaw/workspace/dispatch_state/world_replay_gate_verdict.txt"
 JOIN_TOLERANCE_SEC = 300.0  # ta sama tolerancja co world_replay.find_shadow
+# Publiczny alias konsumowany przez paired_flag_replay (w tym at-214).
+# Jedno źródło semantyki pozostaje w world_replay.CRITICAL_FIELDS.
+CORE_FIELDS = tuple(sorted(WR.CRITICAL_FIELDS))
 
 # Rekordy sprzed schematu wr1 (v0/wr0) NIE mają nagranych `live_inputs`
 # (K07 prefetch czasu, loadgov EWMA, pliki kalibracji) — bit-w-bit replay ich
