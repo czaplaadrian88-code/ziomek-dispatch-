@@ -102,5 +102,18 @@ Rollback źródła: wrócić do taga
 dokumentacyjny, `1cdda89`, `daeff60`, `930dbea`, `309330b`. Runtime rollback
 jest N-D, ponieważ żaden aktywny konsument nie został zmieniony.
 
-Post-release PID/NRestarts/parser/fingerprint zostaną wpisane po fast-forward
-mastera; brak restartu jest oczekiwanym wynikiem, nie pominięciem deployu.
+Post-release 2026-07-11 19:30 UTC po fast-forward mastera do `9bb5d45`:
+
+- `master=origin/master=9bb5d45`;
+- dispatch-shadow PID `573430`, dispatch-panel-watcher PID `3659486` i
+  courier-api PID `925329`: wszystkie `active/running`, `NRestarts=0`;
+- parser v2 `healthy`, `error_count=0`, `pending_new_orders=0`, downstream `ok`;
+- live lifecycle/fingerprint checker: 505/505 curated, zero errorów i zero
+  real/known drift; shadow/plan-recheck/watcher/czasówka publikują fingerprint;
+- `flags.json` mtime nadal `2026-07-11 10:27:12 UTC`, bez flipa;
+- operacyjne skrypty restore/backup mają inne hashe niż źródła repo i mtime z
+  2026-06-21 — nie zostały skopiowane ani uruchomione;
+- `atq` nadal zawiera wyłącznie job `214` na 13.07 12:15 UTC.
+
+Brak restartu jest poprawnym wynikiem source/tool-only wydania, nie pominięciem
+deployu: aktywne procesy nie konsumują dotkniętych plików.
