@@ -2,7 +2,7 @@
 
 Data aktualizacji review: 2026-07-11
 Wykonawca: tmux63
-Status: **kod i syntetyczny artifact+PostgreSQL schema smoke PASS; realny artifact/DB drill i service RTO HOLD**
+Status: **source/fake PASS; real verify na provenance v1, artifact/DB drill i service RTO HOLD; NOT DONE**
 
 ## Wynik
 
@@ -33,17 +33,44 @@ guarda. Bezsekretowa proba `--papu-format plain` potwierdzila, ze biezacy
 snapshot nie zawiera plain dumpu Papu i zakonczyla sie RED przed Dockerem, bez
 fallbacku do encrypted.
 
+## Dodatkowy review DR0/DR1
+
+| Punkt review | Source/fake | Dowod realny | Bramka |
+|---|---|---|---|
+| progi RPO/age/reserve/memory/tables bez env weakening | CLOSED | semantyka source-pinned/readonly; real run niepotrzebny do zmiany progu | testy zatruwaja stare nazwy env i nadal dostaja RED |
+| snapshot hostname/tag/path provenance przed newest | CLOSED | **NOT RUN / NOT PROVEN** dla biezacego repo | **DR1 HOLD** przed real artifact/drill |
+| verify capacity + concurrent-backup guard | CLOSED | nowy verify **NOT RUN** | **DR1 HOLD** do bezpiecznego real verify |
+| cleanup exact-name + scratch label + run_id po partial create/run | CLOSED | stateful fake + negatywy; real failure injection **NOT RUN** | **DR1 HOLD** jako brak realnego fault injection |
+
+Realny profil ma stale `readonly`: max snapshot/dump 93 600 s, rezerwa 5 GiB,
+pamiec 3 GiB i floor 50 tabel. Nazwy produkcyjnych override'ow nie sa
+konsumowane; injection istnieje tylko jako `A360_TEST_*` w hermetycznym test mode.
+Aktywacja test mode wymaga dodatkowo `PYTEST_CURRENT_TEST` i procesu nadrzednego
+pytest; same dwie zmienne srodowiskowe nie wystarcza.
+
+Provenance v1 wymaga producenta `Ziomek`, tagow `daily` i `scheduled` oraz
+pieciu jawnych path sentinels. Skrypt pobiera kandydatow bez pre-filtra
+`--latest`, filtruje provenance, potem wybiera jednoznacznie najnowszy. Raport
+ujawnia tylko wersje i liczniki kontraktu.
+
+`verify` wykonuje guard hosta przed lista snapshotow i ponownie przed checkiem,
+rezerwuje 2 GiB cache + 5 GiB wolnego miejsca, a po checku sprawdza realny cache,
+budzet i pozostala rezerwe. Cleanup jest uzbrojony przed `volume create`; po
+non-zero sprawdza dokladna nazwe i oba labele, usuwa container przed volume i
+potwierdza ich nieobecnosc. Niepewnosc lub obcy label daje `rc=90` bez kasowania.
+
 ## Mapa kompletnosci
 
 | Miejsce | Rola | Writer/consumer | Status | Dowod |
 |---|---|---|---|---|
 | CLI/target | scratch root, jawny tryb, brak prod targetu | operator -> restore | TAK | target nowy, direct child, 0700, owner marker; prod opcje RED |
-| restic snapshot | immutable snapshot + RPO | restic -> verifier | TAK | globalnie najnowszy z wielu grup; remis RED; real bug naprawiony |
-| restic cache | izolacja cache | restic -> scratch | TAK | cache pod targetem; verify cache efemeryczny |
+| restic snapshot | provenance + immutable ID + RPO | restic -> verifier | TAK syntetycznie | hostname+2 tagi+5 paths, potem newest; remis/ambiguous prefix RED |
+| restic cache | izolacja + verify capacity | restic -> scratch | TAK syntetycznie | cache pod targetem; allowance/budget/free/reserve; efemeryczny cleanup |
 | wymagane pliki | core/private/systemd/nginx | snapshot -> verifier | TAK syntetycznie | manifest 4+8+19+3; private metadata-only; atrapy RED |
 | panel dump | plain gzip -> panel DB | backup panelu -> psql | TAK | pelna dekompresja/count, strict SQL, schema sentinels |
 | Papu dump | plain albo encrypted | backup Papu -> psql | TAK | global newest/explicit mode, brak fallbacku, fixed decrypt vector |
 | quota/free-space | scratch + Docker root | preflight -> restore | TAK syntetycznie | jawne budgety, shared-device i post-decompress guard; overflow RED |
+| real safety profile | source constants -> guards | env/operator -> verifier | TAK | readonly; produkcyjne override'y ignorowane; tylko test namespace injectable |
 | PostgreSQL | izolowany container/volume | restore -> schema smoke | TAK syntetycznie | stateful fake + strict SQL + role swap/network mutations |
 | service/app smoke | import/health/start-order | aplikacja -> operator | **HOLD** | brak kodu aplikacji w restore scope i brak izolowanego dowodu |
 | RTO/RPO | raport metadata-only | verifier -> operator | CZESCIOWO | component timing; service RTO HOLD; RPO `proven=false`, PITR `false` |
@@ -54,7 +81,7 @@ fallbacku do encrypted.
 - `bash -n docs/deploy/ha-lite/restore_from_restic.sh` — PASS.
 - `py_compile tests/test_restore_from_restic_a360_dr0.py` — PASS.
 - `HERMETIC_STRICT=1 ... pytest tests/test_restore_from_restic_a360_dr0.py -q`
-  — finalny run na commitach review: **104 passed w 60.45 s**.
+  — finalny run po dodatkowym review i dokumentacji: **138 passed w 95.11 s**.
 - Pelna regresja sprzed domkniecia review: **4991 passed, 27 skipped,
   10 xfailed, 147 warnings w 147.83 s**. Nie byla ponawiana, bo aktualne
   zlecenie wymagalo focused tests i nie zmienia silnika Ziomka.
@@ -81,6 +108,13 @@ Kluczowe tripwire'y testowe:
 - brak/tie snapshotu, dumpu, JSON, kolumn SQLite lub artefaktu manifestu daje RED;
 - leaf i ancestor symlink escape daja RED;
 - foreign volume label nie jest montowany ani usuwany;
+- partial `volume create`/`docker run` z non-zero jest rekoncyliowany po nazwie i
+  labelach; foreign run_id i sticky remove daja `rc=90` bez obcego cleanupu;
+- obcy hostname, brak kazdego tagu/path, malformed provenance, ambiguous ID i
+  remis daja RED; nowszy obcy snapshot nie zaslania poprawnego;
+- stare produkcyjne env nie oslabiaja zadnego z pieciu progow;
+- verify ma negatywy conflict/load/memory, pre/post free, cache allowance i
+  reserve erosion;
 - blad cleanupu daje osobny `rc=90 scratch_rollback_incomplete`;
 - sentinel wrazliwej tresci nie pojawia sie w stdout, stderr ani raporcie.
 
@@ -89,7 +123,8 @@ Kluczowe tripwire'y testowe:
 | Zakres | Status | RTO | RPO |
 |---|---|---:|---:|
 | Syntetyczny artifact + PostgreSQL schema smoke | PASS | component timing emitowany per run; **nie service RTO** | 1800 s (fixture) |
-| Real repository verify (dowod sprzed review) | PASS | 7.451 s czasu komendy; **nie service RTO** | snapshot age 43 475 s (~12 h 05 min) |
+| Real repository verify sprzed provenance v1 | historyczny PASS | 7.451 s czasu komendy; **nie dowodzi obecnego verify ani service RTO** | historyczny snapshot age 43 475 s |
+| Real verify z provenance v1 i nowymi guardami | **HOLD / NOT RUN** | brak | **NOT PROVEN** |
 | Real artifact + PostgreSQL schema drill na obecnym kontrakcie | **HOLD / NIE URUCHAMIANO** | brak | **NOT PROVEN** |
 | Pelny service recovery (import/health/start-order/ruch) | **HOLD / NOT PROVEN** | brak prawidlowego RTO | **NOT PROVEN** |
 
@@ -97,9 +132,9 @@ Realne RPO calego systemu pozostaje `NOT PROVEN`: wiek snapshotu jest znany,
 ale bez encrypted Papu restore nie ma dowodu RPO obu baz. PITR/WAL nie byl
 przedmiotem drill-a i pozostaje `NOT PROVEN`.
 
-Historyczne realne proby ponizej dotyczyly rewizji sprzed nowego manifestu i
-capacity contract. W ramach domkniecia review nie wykonywano restic restore,
-Docker ani DB; nie przenosze ich PASS na obecny component drill.
+Historyczne realne proby ponizej dotyczyly rewizji sprzed manifestu, provenance
+v1 i obecnego capacity contract. W ramach dodatkowego review nie wykonywano
+restic, Docker ani DB; nie przenosze ich PASS na obecny verify/component drill.
 
 ## Realne proby i bezpieczniki
 
@@ -114,8 +149,9 @@ Docker ani DB; nie przenosze ich PASS na obecny component drill.
 4. Ta proba ujawnila ok. **149 008 384 B** wzrostu wspoldzielonego cache restic.
    Nie usuwalem go, bo katalog istnial wczesniej i nie bylo bezpiecznej granicy
    ownership. Fix `ed52812` kieruje nowe cache pod target/verify scratch.
-5. Finalne real `--mode verify` po fixie: PASS, snapshot age 43 475 s,
-   efemeryczny verify cache usuniety.
+5. Historyczne real `--mode verify` po fixie cache: PASS, snapshot age 43 475 s,
+   efemeryczny cache usuniety. Ten wynik poprzedza provenance v1 i nowe guardy,
+   wiec obecny real verify pozostaje HOLD.
 
 Przed realnymi probami byly po dwie czyste probki hosta oddalone o 30 s:
 brak pytest/backup, load1 ponizej 2.0, pamiec powyzej 3 GiB, `si=so=wa=0`.
@@ -133,18 +169,19 @@ Koncowy licznik rollbacku:
 Rollback kodu (bez restartu/deployu):
 
 ```bash
-git revert 2295ac6
+git revert 98ea13b 2295ac6
 ```
 
-To cofa tylko domkniecie review (manifest, capacity guards i raport schema v2).
+To cofa source domkniec obu review (provenance/verify/cleanup oraz manifest,
+capacity guards i report schema v2).
 Pelny rollback calego zrodla A360-DR0 wymaga dodatkowo, od najnowszego:
 `ed52812`, `6faf9d9`, `38da482`. Kazdy revert pozostaje operacja source-only;
 nie wymaga restartu ani deployu.
 
 Rollback udanego przyszlego drill-a: cleanup kontenera i volume wykonuje skrypt
-po dokladnym labelu `run_id`; pozostawiony target wolno usunac tylko po zgodnym
-owner markerze. Zakazane sa prune, wildcard cleanup i operacje na zasobach bez
-zgodnego labelu.
+po dokladnej nazwie, labelu scratch i `run_id`, a potem potwierdza nieobecnosc;
+pozostawiony target wolno usunac tylko po zgodnym owner markerze. Zakazane sa
+prune, wildcard cleanup i operacje na zasobach bez zgodnych labeli.
 
 ## Git, live i otwarte ograniczenie
 
@@ -154,6 +191,7 @@ zgodnego labelu.
 - Commity przed review: `38da482`, `6faf9d9`, `ed52812`, `357b38a`, `9465d79`.
 - Kod i testy domykajace review: `2295ac6`.
 - README/runbook i glowna aktualizacja raportu: `0ca19b4`.
+- Dodatkowy source/fake gate DR0/DR1: `98ea13b`.
 - Finalny checkpoint dowodu: commit zawierajacy ten raport; SHA podany po pushu.
 - Push: `origin/ops/a360-dr0-restore`, bez force.
 - Deploy/restart/systemd/nginx/DNS/ruch/flagi/runtime DB: **nie wykonywano**.
@@ -164,9 +202,18 @@ zgodnego labelu.
   `backup-sentinel`; kontrakt wymaga ich jawnie. Do czasu poprawy producenta
   backupu albo dowodu, ze sa w realnym snapshotcie, real artifact drill ma
   pozostac RED/HOLD — nie obnizam manifestu, by ukryc luke.
+- Realne repo nie zostalo odczytane po dodaniu provenance v1; match
+  hostname/tag/path oraz nowy verify capacity/concurrency sa **NOT PROVEN**.
+- Filesystem quota nadal nie jest dostepny; per-run budget i free-space guard
+  nie sa przedstawiane jako quota enforcement.
+- Realny partial-Docker fault injection nie byl wykonywany; cleanup ma dowod
+  stateful fake, ale real drill pozostaje HOLD.
 
 Do pelnego service RTO potrzebne sa lacznie: zatwierdzony mechanizm podania
 wymaganych danych prywatnych bez ujawnienia tresci, kompletny manifest realnego
 snapshotu oraz izolowany dowod importu aplikacji, health i kolejnosci startu.
 Dopiero potem wolno zaplanowac realny `drill`. Instalacja skryptu lub jakakolwiek
 operacja live nadal wymaga osobnego ACK.
+
+**Nie oglaszam DONE. Stan koncowy tego sprintu to source/fake PASS oraz DR1 HOLD
+przed jakimkolwiek real artifact/drill.**
