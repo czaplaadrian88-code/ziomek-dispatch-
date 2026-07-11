@@ -2,7 +2,7 @@
 
 > Status: AKTYWNY - SPRINT 1 WDROZONY, OBSERWACJA SHADOW W TOKU; AUDIT360
 > DR1A/OPS0 SOURCE-ONLY W MASTERZE, D1/R0 HOLD DO AT-214; A0/I1/N0
-> RUNNING BRANCH-ONLY W TMUX 68/69/70
+> BRANCH-COMPLETE, WYDANIE/PROMOCJA HOLD
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -148,6 +148,16 @@ integratora. Lane'y nie maja zgody na merge, live state, flagi, timery, deploy
 ani restart. Kanoniczny baseline przed startem: 5126 passed, 27 skipped,
 8 xfailed, 2 xpassed, 0 failed. Karta startu i rollback:
 `eod_drafts/2026-07-11/AUDIT360_PARALLEL_SAFE_LANES_LAUNCH.md`.
+
+Odbior 2026-07-11 21:32 UTC: wszystkie trzy lane'y sa clean, push parity i
+branchowy DoD. A0 kod `2aaedcd`, finalny HEAD `a0322f8`; uczciwy replay po
+usunieciu future leakage pogorszyl MAE o ok. 2,5%, wiec model pozostaje
+`HOLD/UNBOUND` i nie ma promocji. I1 `dca2715` daje idempotentny exact-marker
+recovery bez resubmitu; deploy mostu pozostaje HOLD do osobnego ACK. N0 kod
+`f6a2e4e`, finalny HEAD `53d8446` usuwa 2 XPASS i daje fail-closed suite
+manifest; source deploy przed kolejnym nocnym biegiem pozostaje osobna bramka.
+Nie wykonano merge, flag, danych, deployu ani restartu. Raport odbioru:
+`eod_drafts/2026-07-11/AUDIT360_PARALLEL_SAFE_LANES_CLOSE.md`.
 
 52 `UNVERIFIED` nie sa zadaniami naprawczymi. Cztery `REFUTED` pozostaja
 zamkniete. Pelne disposition wszystkich CONFIRMED/PARTIAL/PLAUSIBLE, aktualne
