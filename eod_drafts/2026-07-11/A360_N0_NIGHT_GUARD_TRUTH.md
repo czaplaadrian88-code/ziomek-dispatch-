@@ -7,6 +7,9 @@ Branch: `quality/a360-n0-night-guard-truth`
 Worktree: `/root/a360_n0_wt/dispatch_v2`
 Zamrożona baza: `307242d44080d98dd38143d5feae9304f9198a30`
 
+Implementacja i ten raport: commit `f6a2e4e` (jawny 6-plikowy pathspec), push
+`origin/quality/a360-n0-night-guard-truth` potwierdzony. Bez merge do mastera.
+
 ## Werdykt
 
 Naprawa jest gotowa na branchu jako source/test/runbook, bez zmiany silnika i bez
