@@ -120,11 +120,25 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         if os.environ.get("FAKE_RESTIC_FAIL") == command:
             raise SystemExit(41)
         if command == "snapshots":
-            print(json.dumps([{
+            current = {
                 "id": "b" * 64,
                 "time": os.environ["FAKE_SNAPSHOT_TIME"],
                 "paths": ["/synthetic/redacted"],
-            }]))
+            }
+            rows = [current]
+            if os.environ.get("FAKE_MULTIPLE_SNAPSHOTS") == "1":
+                rows.insert(0, {
+                    "id": "a" * 64,
+                    "time": os.environ["FAKE_OLDER_SNAPSHOT_TIME"],
+                    "paths": ["/synthetic/older-redacted"],
+                })
+            if os.environ.get("FAKE_TIED_SNAPSHOTS") == "1":
+                rows.insert(0, {
+                    "id": "a" * 64,
+                    "time": os.environ["FAKE_SNAPSHOT_TIME"],
+                    "paths": ["/synthetic/tied-redacted"],
+                })
+            print(json.dumps(rows))
         elif command == "check":
             raise SystemExit(0)
         elif command == "stats":
@@ -440,6 +454,9 @@ def restore_harness(tmp_path: Path) -> dict[str, object]:
         "PAPU_BACKUP_KEY_FILE": str(key_file),
         "FAKE_SNAPSHOT_ROOT": str(fixture_root),
         "FAKE_SNAPSHOT_TIME": snapshot_time,
+        "FAKE_OLDER_SNAPSHOT_TIME": (
+            datetime.now(timezone.utc) - timedelta(hours=2)
+        ).isoformat(),
         "FAKE_RESTIC_LOG": str(restic_log),
         "FAKE_DOCKER_LOG": str(docker_log),
         "FAKE_DOCKER_STATE": str(docker_state),
@@ -1060,6 +1077,34 @@ def test_snapshot_time_guards_are_red(
 
     assert result.returncode != 0
     assert reason in result.stderr
+    assert not Path(restore_harness["docker_log"]).exists()
+
+
+def test_latest_snapshot_resolves_unique_global_newest_across_groups(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        mode="artifact",
+        env_update={"FAKE_MULTIPLE_SNAPSHOTS": "1"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = _jsonl(Path(restore_harness["restic_log"]))
+    restore_call = next(row for row in calls if row[0] == "restore")
+    assert restore_call[1] == "b" * 64
+
+
+def test_tied_newest_snapshots_are_ambiguous_and_red(
+    restore_harness: dict[str, object],
+) -> None:
+    result = _run(
+        restore_harness,
+        env_update={"FAKE_TIED_SNAPSHOTS": "1"},
+    )
+
+    assert result.returncode != 0
+    assert "invalid_snapshot_metadata" in result.stderr
     assert not Path(restore_harness["docker_log"]).exists()
 
 
