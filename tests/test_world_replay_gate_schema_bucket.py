@@ -28,7 +28,10 @@ def _rec(oid, ts, schema):
     return {"order_id": oid, "ts": ts, "schema": schema,
             "now": ts, "verdict": "PROPOSE",
             "order_event": {"order_id": oid}, "fleet": {}, "flags": {},
-            "live_inputs": {}, "osrm_calls": []}
+            "live_inputs": {"reliability": {}, "plans": {},
+                            "eta_quantile": {}, "prep_bias": {},
+                            "loadgov": [None, None, None, 0], "k07": None},
+            "osrm_calls": []}
 
 
 def _extract(cid="484", score=-1.0):

@@ -53,6 +53,44 @@ REPLAY_CLASSES = (
     "PARITY",
 )
 CRITICAL_FIELDS = frozenset({"verdict", "best_cid", "best_score"})
+REQUIRED_LIVE_INPUT_KEYS = (
+    "reliability",
+    "plans",
+    "eta_quantile",
+    "prep_bias",
+    "loadgov",
+    "k07",
+)
+
+
+class IncompleteReplayInput(ValueError):
+    """Frozen record nie wystarcza do replayu bez odczytu live state."""
+
+
+def validate_live_inputs(rec: dict) -> str | None:
+    """Zwraca stabilny reason INPUT_MISS albo ``None`` dla kompletnego wr1.
+
+    Kolejnosc ``REQUIRED_LIVE_INPUT_KEYS`` jest czescia kontraktu: przy wielu
+    brakach raportujemy pierwszy, wiec reason pozostaje rozlaczny i stabilny.
+    ``k07=None`` jest legalnym nagranym wynikiem fail-soft. ``loadgov`` moze
+    zawierac None, ale musi zachowac czteroelementowy ksztalt producenta.
+    """
+    live_inputs = rec.get("live_inputs")
+    if not isinstance(live_inputs, dict):
+        return "missing_live_inputs"
+    for key in REQUIRED_LIVE_INPUT_KEYS:
+        if key not in live_inputs:
+            return f"missing_live_input:{key}"
+    dict_keys = ("reliability", "plans", "eta_quantile", "prep_bias")
+    for key in dict_keys:
+        if not isinstance(live_inputs[key], dict):
+            return f"invalid_live_input:{key}"
+    loadgov = live_inputs["loadgov"]
+    if not isinstance(loadgov, (list, tuple)) or len(loadgov) != 4:
+        return "invalid_live_input:loadgov"
+    if live_inputs["k07"] is not None and not isinstance(live_inputs["k07"], dict):
+        return "invalid_live_input:k07"
+    return None
 
 
 def _parse_dt(v):
@@ -230,47 +268,40 @@ def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
     li = rec.get("live_inputs")
     if not isinstance(li, dict):
         return None, None
+    invalid_reason = validate_live_inputs(rec)
+    if invalid_reason:
+        raise IncompleteReplayInput(invalid_reason)
 
     def _redirect(mod, attr, content, cache_obj=None, cache_reset=None):
         if content is None:
             return
-        try:
-            p = os.path.join(tmpdir, f"{attr}.json")
-            with open(p, "w", encoding="utf-8") as fh:
-                json.dump(content, fh, ensure_ascii=False)
-            _patch(mod, attr, p if not isinstance(getattr(mod, attr), Path) else Path(p))
-            if cache_obj is not None and cache_reset is not None:
-                cache_obj.update(cache_reset)
-        except Exception:
-            pass
+        p = os.path.join(tmpdir, f"{attr}.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(content, fh, ensure_ascii=False)
+        _patch(mod, attr, p if not isinstance(getattr(mod, attr), Path) else Path(p))
+        if cache_obj is not None and cache_reset is not None:
+            cache_obj.update(cache_reset)
 
     # reliability — C.A2_RELIABILITY_FEED_PATH (2 czytelników: A2 soft + RAMPA),
     # cache dp._A2_FEED_CACHE (mtime-keyed → reset mtime=None).
     _redirect(C, "A2_RELIABILITY_FEED_PATH", li.get("reliability"),
               getattr(dp, "_A2_FEED_CACHE", None), {"mtime": None})
     # plans — plan_manager.PLANS_FILE, cache _perf_plans_cache (key-keyed → reset).
-    try:
-        from dispatch_v2 import plan_manager as _pm
-        _redirect(_pm, "PLANS_FILE", li.get("plans"),
-                  getattr(_pm, "_perf_plans_cache", None), {"key": None, "data": None})
-        if li.get("plans") is not None:
-            lock_path = os.path.join(tmpdir, "PLANS_FILE.lock")
-            with open(lock_path, "wb"):
-                pass
-            _patch(_pm, "LOCK_FILE",
-                   lock_path if not isinstance(getattr(_pm, "LOCK_FILE"), Path)
-                   else Path(lock_path))
-    except Exception:
+    from dispatch_v2 import plan_manager as _pm
+    _redirect(_pm, "PLANS_FILE", li["plans"],
+              getattr(_pm, "_perf_plans_cache", None), {"key": None, "data": None})
+    lock_path = os.path.join(tmpdir, "PLANS_FILE.lock")
+    with open(lock_path, "wb"):
         pass
+    _patch(_pm, "LOCK_FILE",
+           lock_path if not isinstance(getattr(_pm, "LOCK_FILE"), Path)
+           else Path(lock_path))
     # calib eta/bias — calib_maps.*_PATH, cache _eta_cache/_bias_cache (mtime=None).
-    try:
-        from dispatch_v2 import calib_maps as _cm
-        _redirect(_cm, "ETA_QUANTILE_MAP_PATH", li.get("eta_quantile"),
-                  getattr(_cm, "_eta_cache", None), {"mtime": None})
-        _redirect(_cm, "PREP_BIAS_MAP_PATH", li.get("prep_bias"),
-                  getattr(_cm, "_bias_cache", None), {"mtime": None})
-    except Exception:
-        pass
+    from dispatch_v2 import calib_maps as _cm
+    _redirect(_cm, "ETA_QUANTILE_MAP_PATH", li["eta_quantile"],
+              getattr(_cm, "_eta_cache", None), {"mtime": None})
+    _redirect(_cm, "PREP_BIAS_MAP_PATH", li["prep_bias"],
+              getattr(_cm, "_bias_cache", None), {"mtime": None})
 
     k07 = li.get("k07") if isinstance(li.get("k07"), dict) else None
     lg = li.get("loadgov")
@@ -280,6 +311,9 @@ def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
 
 def replay_one(rec: dict) -> tuple[dict, int]:
     """Zwraca (extract z replayu, osrm_misses). Pełny sandbox — patrz moduł."""
+    invalid_reason = validate_live_inputs(rec)
+    if invalid_reason:
+        raise IncompleteReplayInput(invalid_reason)
     from dispatch_v2 import common as C
     from dispatch_v2 import dispatch_pipeline as dp
     from dispatch_v2 import osrm_client, effects_buffer, world_record
@@ -348,6 +382,11 @@ def main(argv=None) -> int:
         return 2
     if not rec.get("now"):
         print("⚠ nagranie ma now=null (sprzed K06a) — replay czasu NIEwierny")
+
+    invalid_reason = validate_live_inputs(rec)
+    if invalid_reason:
+        print(f"INPUT_MISS reason={invalid_reason}")
+        return 2
 
     replayed, misses = replay_one(rec)
     shadow = find_shadow(a.order_id, rec.get("ts"), a.shadow_file)

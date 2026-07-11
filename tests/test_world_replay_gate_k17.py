@@ -25,7 +25,10 @@ def _rec(oid, ts, now=True, schema="wr1"):
     return {"order_id": oid, "ts": ts, "schema": schema,
             "now": ts if now else None, "verdict": "PROPOSE",
             "order_event": {"order_id": oid}, "fleet": {}, "flags": {},
-            "live_inputs": {}, "osrm_calls": []}
+            "live_inputs": {"reliability": {}, "plans": {},
+                            "eta_quantile": {}, "prep_bias": {},
+                            "loadgov": [None, None, None, 0], "k07": None},
+            "osrm_calls": []}
 
 
 @pytest.fixture

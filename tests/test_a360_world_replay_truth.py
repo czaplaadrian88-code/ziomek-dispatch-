@@ -5,6 +5,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from dispatch_v2.tools import world_replay as WR
 from dispatch_v2.tools import world_replay_gate as G
 
@@ -17,13 +19,18 @@ def _extract(cid="synthetic-a", pool=2):
             "best_score": 1.0, "pool_feasible": pool, "pool_total": 3}
 
 
+def _live_inputs():
+    return {"reliability": {}, "plans": {}, "eta_quantile": {},
+            "prep_bias": {}, "loadgov": [None, None, None, 0], "k07": None}
+
+
 def _record(oid, minute, schema="wr1", live_inputs=True):
     ts = f"2026-07-11T11:{minute:02d}:00+00:00"
     rec = {"order_id": oid, "ts": ts, "now": ts, "schema": schema,
            "order_event": {"order_id": oid}, "fleet": {}, "flags": {},
            "osrm_calls": []}
     if live_inputs:
-        rec["live_inputs"] = {}
+        rec["live_inputs"] = _live_inputs()
     return rec
 
 
@@ -122,6 +129,88 @@ def test_incomplete_record_never_uses_live_or_network_fallback(tmp_path, monkeyp
     assert report["input_miss_reasons"] == {"missing_live_inputs": 1}
 
 
+@pytest.mark.parametrize(("live_inputs", "reason"), [
+    ({}, "missing_live_input:reliability"),
+    *[
+        ({key: value for key, value in _live_inputs().items() if key != missing},
+         f"missing_live_input:{missing}")
+        for missing in WR.REQUIRED_LIVE_INPUT_KEYS
+    ],
+    ({**_live_inputs(), "reliability": []}, "invalid_live_input:reliability"),
+    ({**_live_inputs(), "plans": None}, "invalid_live_input:plans"),
+    ({**_live_inputs(), "eta_quantile": []}, "invalid_live_input:eta_quantile"),
+    ({**_live_inputs(), "prep_bias": "bad"}, "invalid_live_input:prep_bias"),
+    ({**_live_inputs(), "loadgov": {}}, "invalid_live_input:loadgov"),
+    ({**_live_inputs(), "loadgov": [1, 2, 3]}, "invalid_live_input:loadgov"),
+    ({**_live_inputs(), "k07": []}, "invalid_live_input:k07"),
+])
+def test_partial_or_invalid_live_inputs_stop_before_replay(
+        tmp_path, monkeypatch, live_inputs, reason):
+    rec = _record("synthetic-invalid", 7)
+    rec["live_inputs"] = live_inputs
+    (tmp_path / "world_record-20260711.jsonl").write_text(
+        json.dumps(rec) + "\n", encoding="utf-8")
+    calls = []
+
+    def forbidden(_rec):
+        calls.append(_rec)
+        raise AssertionError("replay_one/live fallback attempted")
+
+    monkeypatch.setattr(G.WR, "replay_one", forbidden)
+    report = G.run_gate(None, None, record_dir=str(tmp_path), shadow_index={})
+    assert report["class_counts"]["INPUT_MISS"] == 1
+    assert report["input_miss_reasons"] == {reason: 1}
+    assert calls == []
+
+
+def test_validator_direct_replay_and_cli_fail_closed(tmp_path, monkeypatch, capsys):
+    valid = _record("synthetic-direct", 8)
+    assert WR.validate_live_inputs(valid) is None
+    invalid = {**valid, "live_inputs": {**_live_inputs()}}
+    invalid["live_inputs"].pop("loadgov")
+    assert WR.validate_live_inputs(invalid) == "missing_live_input:loadgov"
+    with pytest.raises(WR.IncompleteReplayInput, match="missing_live_input:loadgov"):
+        WR.replay_one(invalid)
+
+    record_file = tmp_path / "world_record.jsonl"
+    record_file.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+    calls = []
+
+    def forbidden(_rec):
+        calls.append(_rec)
+        raise AssertionError("CLI called replay_one")
+
+    monkeypatch.setattr(WR, "replay_one", forbidden)
+    rc = WR.main(["--order-id", invalid["order_id"],
+                  "--record-file", str(record_file)])
+    assert rc == 2
+    assert "INPUT_MISS reason=missing_live_input:loadgov" in capsys.readouterr().out
+    assert calls == []
+
+
+@pytest.mark.parametrize("live_inputs", [{}, {"plans": {}}])
+def test_serve_partial_inputs_cannot_patch_live_paths(tmp_path, live_inputs):
+    class DummyCommon:
+        A2_RELIABILITY_FEED_PATH = "/dispatch_state/a2_reliability.json"
+
+    class DummyPipeline:
+        pass
+
+    patched = []
+    with pytest.raises(WR.IncompleteReplayInput):
+        WR._serve_live_inputs({"live_inputs": live_inputs}, DummyPipeline,
+                              DummyCommon, str(tmp_path),
+                              lambda *args: patched.append(args))
+    assert patched == []
+    assert DummyCommon.A2_RELIABILITY_FEED_PATH == "/dispatch_state/a2_reliability.json"
+
+
+def test_required_set_mutation_control_has_teeth():
+    rec = _record("synthetic-mutation", 9)
+    rec["live_inputs"].pop("loadgov")
+    assert WR.validate_live_inputs(rec) == "missing_live_input:loadgov"
+
+
 def test_plan_snapshot_redirects_data_and_lock_together(tmp_path):
     from dispatch_v2 import common as C
     from dispatch_v2 import dispatch_pipeline as dp
@@ -136,7 +225,7 @@ def test_plan_snapshot_redirects_data_and_lock_together(tmp_path):
     sandbox = tmp_path / "serve"
     sandbox.mkdir()
     try:
-        WR._serve_live_inputs({"live_inputs": {"plans": {}}}, dp, C,
+        WR._serve_live_inputs({"live_inputs": _live_inputs()}, dp, C,
                               str(sandbox), patch)
         assert Path(pm.PLANS_FILE).parent == sandbox
         assert Path(pm.LOCK_FILE).parent == sandbox

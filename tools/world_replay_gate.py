@@ -142,9 +142,9 @@ def _input_miss_reason(rec: dict) -> str | None:
         (not isinstance(rec.get("order_event"), dict), "missing_order_event"),
         (not isinstance(rec.get("fleet"), dict), "missing_fleet"),
         (not isinstance(rec.get("flags"), dict), "missing_flags"),
-        (not isinstance(rec.get("live_inputs"), dict), "missing_live_inputs"),
     )
-    return next((reason for missing, reason in checks if missing), None)
+    outer_reason = next((reason for missing, reason in checks if missing), None)
+    return outer_reason or WR.validate_live_inputs(rec)
 
 
 def _record_ref(rec: dict) -> str:
