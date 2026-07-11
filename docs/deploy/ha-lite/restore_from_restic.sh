@@ -7,6 +7,7 @@
 # w prywatnym scratchu do jawnego rollbacku operatora.
 set -Eeuo pipefail
 umask 077
+ulimit -c 0
 
 export RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-/root/.restic_password}"
 export RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-sftp:bx11-storage:backups/ziomek-restic}"
@@ -27,6 +28,9 @@ if [ "$TEST_MODE" = "1" ]; then
   RESTIC_BIN="${A360_RESTIC_BIN:?A360_RESTIC_BIN is required in test mode}"
   DOCKER_BIN="${A360_DOCKER_BIN:?A360_DOCKER_BIN is required in test mode}"
   OPENSSL_BIN="${A360_OPENSSL_BIN:?A360_OPENSSL_BIN is required in test mode}"
+  CARRIER_BIN="${A360_DR1_CARRIER_BIN:?A360_DR1_CARRIER_BIN is required in test mode}"
+  QUOTA_PROBE_BIN="${A360_DR1_QUOTA_PROBE_BIN:?A360_DR1_QUOTA_PROBE_BIN is required in test mode}"
+  APP_PROBE_BIN="${A360_DR1_APP_PROBE_BIN:?A360_DR1_APP_PROBE_BIN is required in test mode}"
   GZIP_BIN="${A360_GZIP_BIN:-gzip}"
   SQLITE_BIN="${A360_SQLITE_BIN:-sqlite3}"
   PYTHON_BIN="${A360_PYTHON_BIN:-python3}"
@@ -36,6 +40,11 @@ else
   RESTIC_BIN="restic"
   DOCKER_BIN="docker"
   OPENSSL_BIN="openssl"
+  # Te trzy adaptery nie sa instalowane przez source-only DR1A. Ich stale,
+  # root-owned sciezki sa celowo fail-closed do osobnego wydania DR1B.
+  CARRIER_BIN="/usr/local/libexec/a360-dr1-secret-carrier"
+  QUOTA_PROBE_BIN="/usr/local/libexec/a360-dr1-quota-probe"
+  APP_PROBE_BIN="/usr/local/libexec/a360-dr1-app-probe"
   GZIP_BIN="gzip"
   SQLITE_BIN="sqlite3"
   PYTHON_BIN="python3"
@@ -75,6 +84,10 @@ RUN_ID=""
 SNAP_META=""
 STATS_META=""
 VERIFY_CACHE=""
+QUOTA_META=""
+CARRIER_VALUE=""
+CARRIER_ISSUED=0
+APP_PROBE_COMPLETED=0
 
 fail() {
   local reason="$1"
@@ -172,6 +185,9 @@ on_exit() {
     if [ -n "$STATS_META" ] && [ -f "$STATS_META" ]; then
       rm -f -- "$STATS_META"
     fi
+    if [ -n "$QUOTA_META" ] && [ -f "$QUOTA_META" ]; then
+      rm -f -- "$QUOTA_META"
+    fi
     if [ -n "$VERIFY_CACHE" ] && [ -d "$VERIFY_CACHE" ] && [ ! -L "$VERIFY_CACHE" ]; then
       case "$VERIFY_CACHE" in
         "$SCRATCH_ROOT"/.verify_cache.*) rm -rf --one-file-system -- "$VERIFY_CACHE" ;;
@@ -180,6 +196,7 @@ on_exit() {
     fi
     cleanup_docker >/dev/null 2>&1 || cleanup_failed=1
     safe_remove_target >/dev/null 2>&1 || cleanup_failed=1
+    CARRIER_VALUE=""
     if [ "$rc" -ne 0 ] && [ "$FAIL_EMITTED" != "1" ]; then
       printf 'RED phase=%s reason=unexpected_failure\n' "$PHASE" >&2
     fi
@@ -225,9 +242,12 @@ fi
 readonly MAX_RPO_SECONDS MAX_ARTIFACT_AGE_SECONDS MIN_FREE_RESERVE_BYTES
 readonly MIN_MEMORY_BYTES MIN_PG_TABLES REPOSITORY_CACHE_ALLOWANCE_BYTES
 PG_READY_TIMEOUT="${A360_DR0_PG_READY_TIMEOUT_SECONDS:-30}"
-PAPU_BACKUP_KEY_FILE="${PAPU_BACKUP_KEY_FILE:-}"
 SCRATCH_BUDGET_BYTES="${A360_DR0_SCRATCH_BUDGET_BYTES:-}"
 DOCKER_BUDGET_BYTES="${A360_DR0_DOCKER_BUDGET_BYTES:-}"
+DR1_CARRIER_CONTRACT_VERSION="a360-dr1a-one-shot-carrier-v1-20260711"
+DR1_QUOTA_CONTRACT_VERSION="a360-dr1a-scratch-quota-v1-20260711"
+DR1_APP_PROBE_CONTRACT_VERSION="a360-dr1a-app-smoke-v1-20260711"
+DR1_EXPECTED_START_ORDER="postgres,panel,papu,dispatch"
 
 # Wersjonowany minimalny kontrakt odtworzenia. Obecnosc plikow prywatnych i
 # tozsamosci jest sprawdzana wylacznie przez metadane (typ, size, link count).
@@ -471,10 +491,118 @@ validate_private_input() {
   esac
 }
 
+validate_contract_executable() {
+  local path="$1" reason="$2" mode="" owner="" resolved=""
+  [[ "$path" = /* ]] || fail "$reason"
+  [ -f "$path" ] && [ ! -L "$path" ] && [ -x "$path" ] || fail "$reason"
+  resolved="$(readlink -e -- "$path" 2>/dev/null)" || fail "$reason"
+  [ "$resolved" = "$path" ] || fail "$reason"
+  owner="$(stat -c '%u' -- "$path")" || fail "$reason"
+  mode="$(stat -c '%a' -- "$path")" || fail "$reason"
+  [ "$owner" = "$(id -u)" ] || fail "$reason"
+  [ "$(stat -c '%h' -- "$path")" = "1" ] || fail "$reason"
+  case "$mode" in
+    500|700) ;;
+    *) fail "$reason" ;;
+  esac
+}
+
+issue_carrier_once() {
+  [ "$CARRIER_ISSUED" = "0" ] || fail "carrier_reuse_rejected"
+  local value="" digest=""
+  value="$($CARRIER_BIN issue \
+    --contract "$DR1_CARRIER_CONTRACT_VERSION" \
+    --run-id "$RUN_ID" \
+    --purpose papu_backup_decrypt 2>/dev/null)" \
+    || fail "carrier_issue_failed"
+  [ -n "$value" ] && [ "${#value}" -le 4096 ] || fail "carrier_value_invalid"
+  case "$value" in
+    *$'\n'*|*$'\r'*) fail "carrier_value_invalid" ;;
+  esac
+  if [ "$TEST_MODE" = "1" ]; then
+    [ -n "${A360_TEST_CARRIER_CANARY_SHA256:-}" ] \
+      || fail "carrier_test_canary_contract_missing"
+    digest="$(printf '%s' "$value" | "$PYTHON_BIN" -c \
+      'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" \
+      || fail "carrier_test_canary_invalid"
+    [ "$digest" = "$A360_TEST_CARRIER_CANARY_SHA256" ] \
+      || fail "carrier_test_canary_invalid"
+  fi
+  CARRIER_VALUE="$value"
+  CARRIER_ISSUED=1
+}
+
+decrypt_papu_stream() {
+  [ "$CARRIER_ISSUED" = "1" ] && [ -n "$CARRIER_VALUE" ] \
+    || fail "carrier_value_unavailable"
+  # Wartosci nie ma w argv, env, pliku ani raporcie. printf jest builtin,
+  # xtrace nie jest wlaczone, a stderr carriera/decryptora jest wyciszony.
+  printf '%s\n' "$CARRIER_VALUE" \
+    | "$OPENSSL_BIN" enc -d -aes-256-cbc -pbkdf2 -pass stdin -in "$PAPU_DUMP" 2>/dev/null
+}
+
+probe_scratch_quota() {
+  local probe_name="$1" line=""
+  QUOTA_META="$(mktemp "$SCRATCH_ROOT/.a360_quota.XXXXXX")"
+  chmod 0600 "$QUOTA_META"
+  "$QUOTA_PROBE_BIN" attest \
+    --contract "$DR1_QUOTA_CONTRACT_VERSION" \
+    --run-id "$RUN_ID" \
+    --scratch-root "$SCRATCH_ROOT" >"$QUOTA_META" 2>/dev/null \
+    || fail "scratch_quota_probe_failed"
+  line="$($PYTHON_BIN -c '
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+expected = {"contract", "run_id", "scratch_root", "enforced", "limit_bytes", "used_bytes"}
+if not isinstance(payload, dict) or set(payload) != expected:
+    raise SystemExit(1)
+if payload["contract"] != sys.argv[2] or payload["run_id"] != sys.argv[3]:
+    raise SystemExit(1)
+if payload["scratch_root"] != sys.argv[4] or payload["enforced"] is not True:
+    raise SystemExit(1)
+limit_bytes = payload["limit_bytes"]
+used_bytes = payload["used_bytes"]
+if type(limit_bytes) is not int or type(used_bytes) is not int:
+    raise SystemExit(1)
+if limit_bytes <= 0 or used_bytes < 0 or used_bytes > limit_bytes:
+    raise SystemExit(1)
+print(f"{limit_bytes}\t{used_bytes}\t{limit_bytes - used_bytes}")
+' "$QUOTA_META" "$DR1_QUOTA_CONTRACT_VERSION" "$RUN_ID" "$SCRATCH_ROOT" 2>/dev/null)" \
+    || fail "scratch_quota_attestation_invalid"
+  rm -f -- "$QUOTA_META"
+  QUOTA_META=""
+  IFS=$'\t' read -r QUOTA_LIMIT_BYTES QUOTA_USED_BYTES QUOTA_AVAILABLE_BYTES <<< "$line"
+  for value in "$QUOTA_LIMIT_BYTES" "$QUOTA_USED_BYTES" "$QUOTA_AVAILABLE_BYTES"; do
+    [[ "$value" =~ ^[0-9]+$ ]] || fail "scratch_quota_attestation_invalid"
+  done
+  [ "$QUOTA_AVAILABLE_BYTES" -ge "$MIN_FREE_RESERVE_BYTES" ] \
+    || fail "scratch_quota_reserve_too_low"
+  QUOTA_PROBE_LAST="$probe_name"
+}
+
+run_app_probe_stage() {
+  local stage="$1"
+  "$APP_PROBE_BIN" verify \
+    --contract "$DR1_APP_PROBE_CONTRACT_VERSION" \
+    --run-id "$RUN_ID" \
+    --target "$TARGET" \
+    --panel-db "$PANEL_DB" \
+    --papu-db "$PAPU_DB" \
+    --stage "$stage" \
+    --expected-start-order "$DR1_EXPECTED_START_ORDER" \
+    >/dev/null 2>&1 || fail "app_probe_${stage}_failed"
+}
+
 monotonic_ms() {
   "$PYTHON_BIN" -c 'import time; print(time.monotonic_ns() // 1000000)'
 }
 
+validate_contract_executable "$CARRIER_BIN" "carrier_contract_unavailable_or_unsafe"
+validate_contract_executable "$QUOTA_PROBE_BIN" "quota_probe_unavailable_or_unsafe"
+validate_contract_executable "$APP_PROBE_BIN" "app_probe_unavailable_or_unsafe"
 validate_private_input "$RESTIC_PASSWORD_FILE" "restic_credential_unavailable_or_unsafe"
 START_EPOCH="$(date +%s)"
 START_MS="$(monotonic_ms)"
@@ -564,6 +692,7 @@ SCRATCH_CANON="$(readlink -m -- "$SCRATCH_ROOT")"
 exec 9>"$SCRATCH_ROOT/.a360_dr0_restore.lock"
 chmod 0600 "$SCRATCH_ROOT/.a360_dr0_restore.lock"
 flock -n 9 || fail "concurrent_restore_rejected"
+probe_scratch_quota initial
 
 if [ "$MODE" != "verify" ]; then
   if [ -z "$TARGET" ]; then
@@ -596,6 +725,8 @@ REPOSITORY_CACHE_REQUIRED_BYTES="$(checked_capacity "$REPOSITORY_CACHE_ALLOWANCE
   || fail "capacity_arithmetic_unsafe"
 [ "$REPOSITORY_CACHE_REQUIRED_BYTES" -le "$SCRATCH_BUDGET_BYTES" ] \
   || fail "repository_cache_budget_exceeded"
+[ "$REPOSITORY_CACHE_REQUIRED_BYTES" -le "$QUOTA_AVAILABLE_BYTES" ] \
+  || fail "repository_cache_quota_exceeded"
 REPOSITORY_PREFLIGHT_FREE_BYTES="$(free_bytes_for_path "$SCRATCH_ROOT")" \
   || fail "repository_cache_disk_probe_failed"
 [[ "$REPOSITORY_PREFLIGHT_FREE_BYTES" =~ ^[0-9]+$ ]] \
@@ -753,6 +884,8 @@ SCRATCH_UNPACK_REQUIRED_BYTES="$(checked_capacity "$SNAPSHOT_LOGICAL_BYTES" 2 "$
   || fail "capacity_arithmetic_unsafe"
 [ "$SCRATCH_UNPACK_REQUIRED_BYTES" -le "$SCRATCH_BUDGET_BYTES" ] \
   || fail "scratch_budget_exceeded"
+[ "$SCRATCH_UNPACK_REQUIRED_BYTES" -le "$QUOTA_AVAILABLE_BYTES" ] \
+  || fail "scratch_quota_capacity_too_low"
 [ "$SCRATCH_FREE_BYTES" -ge "$SCRATCH_UNPACK_REQUIRED_BYTES" ] \
   || fail "scratch_disk_capacity_too_low"
 SCRATCH_DEVICE="$(stat -c '%d' -- "$SCRATCH_ROOT" 2>/dev/null)" \
@@ -818,6 +951,10 @@ TARGET_WORKING_SET_BYTES="$(du -sb -- "$TARGET" 2>/dev/null | awk '{print $1}')"
 [[ "$TARGET_WORKING_SET_BYTES" =~ ^[0-9]+$ ]] || fail "scratch_usage_probe_failed"
 [ "$TARGET_WORKING_SET_BYTES" -le "$SCRATCH_BUDGET_BYTES" ] \
   || fail "scratch_budget_exceeded_after_unpack"
+TARGET_QUOTA_REQUIRED_BYTES="$(checked_capacity "$TARGET_WORKING_SET_BYTES" 1 "$MIN_FREE_RESERVE_BYTES")" \
+  || fail "capacity_arithmetic_unsafe"
+[ "$TARGET_QUOTA_REQUIRED_BYTES" -le "$QUOTA_AVAILABLE_BYTES" ] \
+  || fail "scratch_quota_exceeded_after_unpack"
 
 STATE_ROOT="$TARGET/root/.openclaw/workspace/dispatch_state"
 SCRIPTS_ROOT="$TARGET/root/.openclaw/workspace/scripts"
@@ -934,10 +1071,9 @@ if [ "$PAPU_SELECTED_FORMAT" = "plain" ]; then
   PAPU_SQL_BYTES="$($GZIP_BIN -dc -- "$PAPU_DUMP" 2>/dev/null | wc -c)" \
     || fail "papu_dump_integrity_failed"
 else
-  [ -n "$PAPU_BACKUP_KEY_FILE" ] || fail "papu_decrypt_key_unavailable"
-  validate_private_input "$PAPU_BACKUP_KEY_FILE" "papu_decrypt_key_unavailable_or_unsafe"
   command -v "$OPENSSL_BIN" >/dev/null 2>&1 || fail "decrypt_tool_missing"
-  PAPU_SQL_BYTES="$("$OPENSSL_BIN" enc -d -aes-256-cbc -pbkdf2 -pass "file:$PAPU_BACKUP_KEY_FILE" -in "$PAPU_DUMP" 2>/dev/null \
+  issue_carrier_once
+  PAPU_SQL_BYTES="$(decrypt_papu_stream \
     | "$GZIP_BIN" -dc 2>/dev/null \
     | wc -c)" \
     || fail "papu_decrypt_or_integrity_failed"
@@ -1048,10 +1184,11 @@ restore_postgres_role() {
       | "$DOCKER_BIN" exec -i "$CONTAINER_NAME" psql -X -U postgres -d "$database" -v ON_ERROR_STOP=1 --single-transaction -q >/dev/null 2>&1 \
       || fail "${role}_strict_sql_restore_failed"
   else
-    "$OPENSSL_BIN" enc -d -aes-256-cbc -pbkdf2 -pass "file:$PAPU_BACKUP_KEY_FILE" -in "$dump" 2>/dev/null \
+    decrypt_papu_stream \
       | "$GZIP_BIN" -dc 2>/dev/null \
       | "$DOCKER_BIN" exec -i "$CONTAINER_NAME" psql -X -U postgres -d "$database" -v ON_ERROR_STOP=1 --single-transaction -q >/dev/null 2>&1 \
       || fail "${role}_strict_sql_restore_failed"
+    CARRIER_VALUE=""
   fi
 }
 
@@ -1060,6 +1197,9 @@ if [ "$MODE" = "drill" ]; then
   # Restic/dekompresja mogly trwac dlugo; zamknij race z nowa regresja lub
   # backupem, zanim powstanie jakikolwiek zasob Docker.
   assert_host_capacity
+  probe_scratch_quota pre_mutation
+  [ "$TARGET_QUOTA_REQUIRED_BYTES" -le "$QUOTA_AVAILABLE_BYTES" ] \
+    || fail "scratch_quota_changed_before_mutation" 20
   CURRENT_DOCKER_ROOT=""
   if [ "$TEST_MODE" = "1" ] && [ -n "${A360_TEST_DOCKER_FREE_BYTES:-}" ]; then
     CURRENT_DOCKER_ROOT="${A360_TEST_DOCKER_ROOT:-$DOCKER_ROOT}"
@@ -1156,11 +1296,22 @@ if [ "$MODE" = "drill" ]; then
   [ "$PANEL_SCHEMA_SENTINELS" -eq 2 ] || fail "panel_schema_identity_failed"
   [ "$PAPU_SCHEMA_SENTINELS" -eq 2 ] || fail "papu_schema_identity_failed"
   POSTGRES_SCHEMA_SMOKE_DONE_MS="$(monotonic_ms)"
+
+  PHASE="APPLICATION_SMOKE"
+  run_app_probe_stage panel_import
+  run_app_probe_stage papu_import
+  run_app_probe_stage dispatch_import
+  run_app_probe_stage panel_health
+  run_app_probe_stage papu_health
+  run_app_probe_stage dispatch_health
+  run_app_probe_stage service_start_order
+  APP_PROBE_COMPLETED=1
 fi
 
 PHASE="CLEANUP"
 cleanup_docker || fail "scratch_resource_cleanup_failed"
 [ "$CONTAINER_CREATED" = "0" ] && [ "$VOLUME_CREATED" = "0" ] || fail "scratch_resource_cleanup_incomplete"
+CARRIER_VALUE=""
 TOTAL_DONE_MS="$(monotonic_ms)"
 
 PHASE="REPORT"
@@ -1187,7 +1338,7 @@ import sys
 path = sys.argv[1]
 mode = sys.argv[2]
 payload = {
-    "schema": "a360-dr0-restore-report-v2",
+    "schema": "a360-dr1a-restore-prep-report-v1",
     "status": "PASS",
     "mode": mode,
     "evidence_scope": (
@@ -1195,6 +1346,16 @@ payload = {
         if mode == "drill" else "artifact_integrity_only"
     ),
     "full_service_recovery_proven": False,
+    "dr1b_execution_gate": {
+        "status": "HOLD",
+        "go_authorized": False,
+        "reasons": [
+            "separate_explicit_ack_required",
+            "real_snapshot_and_carrier_not_exercised_by_dr1a",
+            "real_application_start_order_not_proven",
+            "ops_blackout_or_low_load_window_must_be_rechecked",
+        ],
+    },
     "service_rto": {
         "status": "HOLD",
         "proven": False,
@@ -1227,6 +1388,27 @@ payload = {
         "min_free_reserve_bytes": int(sys.argv[54]),
         "min_memory_bytes": int(sys.argv[55]),
         "min_postgres_tables": int(sys.argv[56]),
+    },
+    "dr1a_contracts": {
+        "carrier": {
+            "contract_version": sys.argv[57],
+            "issued_once": bool(int(sys.argv[58])),
+            "value_logged": False,
+            "value_serialized": False,
+        },
+        "scratch_quota": {
+            "contract_version": sys.argv[59],
+            "enforced": True,
+            "limit_bytes": int(sys.argv[60]),
+            "available_bytes_at_last_probe": int(sys.argv[61]),
+            "last_probe": sys.argv[62],
+        },
+        "application_smoke": {
+            "contract_version": sys.argv[63],
+            "completed": bool(int(sys.argv[64])),
+            "evidence": "synthetic_only" if bool(int(sys.argv[51])) else "real_adapter",
+            "expected_start_order": sys.argv[65].split(","),
+        },
     },
     "rpo": {
         "basis": "snapshot_time_plus_dump_mtime_estimate",
@@ -1263,7 +1445,7 @@ payload = {
     },
     "capacity_preflight": {
         "run_budget_enforced": True,
-        "filesystem_quota_enforced": False,
+        "filesystem_quota_enforced": True,
         "free_space_checked": True,
         "scratch_budget_bytes": int(sys.argv[40]),
         "scratch_unpack_required_bytes": int(sys.argv[41]),
@@ -1335,6 +1517,9 @@ with os.fdopen(fd, "w", encoding="utf-8") as handle:
   "$SNAPSHOT_PROVENANCE_CONTRACT_VERSION" "$EXPECTED_SNAPSHOT_TAGS" "$EXPECTED_SNAPSHOT_PATHS" \
   "$TEST_MODE" "$MAX_RPO_SECONDS" "$MAX_ARTIFACT_AGE_SECONDS" "$MIN_FREE_RESERVE_BYTES" \
   "$MIN_MEMORY_BYTES" "$MIN_PG_TABLES" \
+  "$DR1_CARRIER_CONTRACT_VERSION" "$CARRIER_ISSUED" \
+  "$DR1_QUOTA_CONTRACT_VERSION" "$QUOTA_LIMIT_BYTES" "$QUOTA_AVAILABLE_BYTES" "$QUOTA_PROBE_LAST" \
+  "$DR1_APP_PROBE_CONTRACT_VERSION" "$APP_PROBE_COMPLETED" "$DR1_EXPECTED_START_ORDER" \
   || fail "report_write_failed"
 chmod 0600 "$REPORT_TMP"
 mv -f -- "$REPORT_TMP" "$REPORT"
