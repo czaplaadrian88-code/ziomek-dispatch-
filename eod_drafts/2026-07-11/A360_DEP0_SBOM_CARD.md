@@ -1,6 +1,6 @@
 # A360-DEP0 SBOM — karta wykonawcza
 
-Status: PREPARED, do uruchomienia w tmux64 po utworzeniu finalnego taga fali 1.
+Status: RUNNING w tmux64 od 2026-07-11 12:09 UTC.
 
 Effort: `medium`
 

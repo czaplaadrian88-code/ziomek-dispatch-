@@ -34,9 +34,13 @@ zmiany flag, danych, procesu ani restartu.
 
 ## Kolejne trzy sprinty
 
-1. `A360-R0 REPLAY-TRUTH` — naprawa prawdy replayu i rozlacznych przyczyn.
-2. `A360-DR0 RESTORE` — fail-closed odtworzenie na izolowanym scratchu.
-3. `A360-DEP0 SBOM` — read-only mapa zaleznosci faktycznych procesow.
+1. `A360-R0 REPLAY-TRUTH` — RUNNING tmux62, effort high.
+2. `A360-DR0 RESTORE` — RUNNING tmux63, effort ultra.
+3. `A360-DEP0 SBOM` — RUNNING tmux64, effort medium.
+
+Wszystkie trzy branche startuja z taga `a360-wave1-closed-20260711` @
+`f679a88`; worktree sa rozdzielone, a sesje potwierdzily bootstrap bez operacji
+live.
 
 D1 pozostaje obowiazkowy przed H1, ale dirty Sprint 1 nadal posiada jego
 powierzchnie firewalla/pipeline/shadow. R0 moze byc rozwijany, lecz jego merge

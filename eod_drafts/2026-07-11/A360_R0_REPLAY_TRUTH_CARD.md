@@ -1,6 +1,6 @@
 # A360-R0 REPLAY-TRUTH — karta wykonawcza
 
-Status: PREPARED, do uruchomienia w tmux62 po utworzeniu finalnego taga fali 1.
+Status: RUNNING w tmux62 od 2026-07-11 12:09 UTC.
 
 Effort: `high`
 

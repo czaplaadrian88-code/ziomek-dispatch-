@@ -1,6 +1,6 @@
 # A360-DR0 RESTORE — karta wykonawcza
 
-Status: PREPARED, do uruchomienia w tmux63 po utworzeniu finalnego taga fali 1.
+Status: RUNNING w tmux63 od 2026-07-11 12:09 UTC.
 
 Effort: `ultra`
 

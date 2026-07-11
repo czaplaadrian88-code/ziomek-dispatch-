@@ -84,11 +84,11 @@ zmieniają kodu runtime.
 
 ### Wybrane nastepne trzy sprinty po zamknieciu fali pierwszej
 
-1. `A360-R0 REPLAY-TRUTH` — pierwszy techniczny lane; development moze ruszyc,
+1. `A360-R0 REPLAY-TRUTH` — RUNNING tmux62; development moze ruszyc,
    ale merge czeka na odczyt at-214, poniewaz job importuje replay tools.
-2. `A360-DR0 RESTORE` — izolowany, fail-closed drill na scratchu przy niskim
+2. `A360-DR0 RESTORE` — RUNNING tmux63; izolowany, fail-closed drill na scratchu przy niskim
    loadzie, bez produkcyjnego przelaczenia i bez odczytu tresci sekretow.
-3. `A360-DEP0 SBOM` — read-only mapa proces→venv→manifest→runtime, bez upgrade'u.
+3. `A360-DEP0 SBOM` — RUNNING tmux64; read-only mapa proces→venv→manifest→runtime, bez upgrade'u.
 
 `A360-D1` pozostaje nastepny w kolejnosci ENGINE, ale nie jest w tej trojce:
 dirty Sprint 1 nadal posiada `core/invariant_firewall.py`, pipeline, shadow i
