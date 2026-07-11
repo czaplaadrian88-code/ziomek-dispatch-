@@ -1,28 +1,63 @@
-# HA-lite / Disaster Recovery — snapshoty skryptów + runbook (2026-06-21)
+# HA-lite / Disaster Recovery — źródła i runbook
 
-⚠️ **To są SNAPSHOTY skryptów operacyjnych, nie kanon wykonawczy.** Żywe wersje biegną
-spod swoich ścieżek (poniżej) i są wpięte w systemd. Edytuj ŻYWE, potem odśwież ten snapshot.
-Powód trzymania kopii tu (zgodnie z konwencją `docs/deploy/` w tym repo): off-machine
-durability procedury DR (bus factor = 1, audyt SaaS 2026-06-18).
+Pliki w tym katalogu są wersjonowanym źródłem procedury DR. W szczególności
+wersja A360-DR0 pliku `restore_from_restic.sh` na branchu
+`ops/a360-dr0-restore` **nie została zainstalowana** pod ścieżką skryptów live.
+Nie ustalono też parytetu jej CLI z istniejącym skryptem live. Instalacja,
+wykonanie ze ścieżki live albo użycie do failoveru wymaga osobnego przeglądu i
+ACK. Ten sprint nie wykonuje deployu ani aktywacji usług.
 
-## Kanon (żywe ścieżki) + wpięcie systemd
-| Plik (snapshot) | Żywa ścieżka | Wpięcie |
+## Granica źródło / live
+
+| Artefakt | Status repo | Status live |
 |---|---|---|
-| `backup_restic.sh` | `/root/.openclaw/workspace/scripts/backup_restic.sh` | `dispatch-restic-backup.timer` (03:30) — off-site Hetzner BX11 |
-| `restore_from_restic.sh` | `…/scripts/restore_from_restic.sh` | ręczny DR (`--verify-only` / `--load-db` / `--force`) |
-| `activate_pitr.sh` | `…/scripts/activate_pitr.sh` | jednorazowy `pitr-activate-oneshot.timer` (22.06 01:00 UTC) |
-| `pitr_verify.sh` | `…/scripts/pitr_verify.sh` | jednorazowy `pitr-verify-oneshot.timer` (22.06 05:00 UTC) → Telegram |
-| `backup_sentinel.py` | `…/scripts/backup_sentinel.py` | `backup-sentinel.timer` codziennie 08:00 UTC — świeżość dumpów+snapshotu + (niedz.) integralność → Telegram |
-| `backup-sentinel.{service,timer}` | `/etc/systemd/system/` | wpięcie sentinela (OnFailure backstop = `dispatch-onfailure-alert@`) |
-| `HA_LITE_RUNBOOK_2026-06-21.md` | `/root/HA_LITE_RUNBOOK_2026-06-21.md` | dokument DR (kanon roboczy w /root) |
+| `backup_restic.sh` | snapshot źródła z 2026-06-21 | osobny skrypt operacyjny i timer; niezmieniane w A360-DR0 |
+| `restore_from_restic.sh` | nowe źródło A360-DR0, testowane syntetycznie | **NIEWDROŻONE; CLI i parytet niepotwierdzone** |
+| `activate_pitr.sh`, `pitr_verify.sh` | historyczne snapshoty | poza zakresem A360-DR0 |
+| `backup_sentinel.py` i unity | historyczne snapshoty | poza zakresem A360-DR0 |
+| `HA_LITE_RUNBOOK_2026-06-21.md` | runbook uaktualniony o stan A360-DR0 | kopia live nie była aktualizowana |
 
-## Co dodano w sprincie HA-lite 2026-06-21
-- **Kompletność off-site:** `backup_restic.sh` rozszerzony o systemd `nadajesz-/papu-/courier-/mailek-*` + `nginx/sites-available` (wcześniej tylko `dispatch-*` → panel/courier/ordering/mailek były POZA backupem). `.secrets/` świadomie POZA off-site.
-- **RTO:** `restore_from_restic.sh` (bezpieczny, scratch domyślnie, `--force` do prod) — `--verify-only` przeszedł.
-- **RPO/PITR:** archive_mode + WAL archive + base backup — staged, aktywacja przez `activate_pitr.sh` w oknie nocnym (auto-rollback + Telegram OnFailure).
-- **Monitoring (21.06):** `backup_sentinel.py` + `backup-sentinel.timer` (08:00 UTC) — łapie CICHY fail backupu (timer nie odpalił / dump pusty / snapshot nieświeży >26h / repo skorumpowane), czego OnFailure nie pokrywał. Luka potwierdzona pomiarem: cron_health pusty dla restic, liveness-probe nie pokrywa backupów.
+## CLI źródła A360-DR0
 
-## ⚠️ Wymaga człowieka (poza automatem)
-1. Hasło restic `/root/.restic_password` → menedżer haseł **off-machine** (inaczej off-site nieodszyfrowywalny).
-2. Drugi serwer + DNS = prawdziwe HA (bring-up w runbooku).
-3. Decyzja czy `.secrets/` dokładać do (szyfrowanego) restic.
+Uruchamiaj wyłącznie zatwierdzoną wersję ze wskazanego commita i wyłącznie w
+nowym prywatnym scratchu. Budżety to jawne, dodatnie limity bajtów zatwierdzone
+przez operatora; nie są filesystem quota.
+
+```bash
+./docs/deploy/ha-lite/restore_from_restic.sh --mode verify [--snapshot ID]
+
+A360_DR0_SCRATCH_BUDGET_BYTES="$APPROVED_SCRATCH_BUDGET_BYTES" \
+  ./docs/deploy/ha-lite/restore_from_restic.sh \
+  --mode artifact [--snapshot ID] [--target /root/a360_dr0_scratch/restore_ID] \
+  [--papu-format auto|plain|encrypted]
+
+A360_DR0_SCRATCH_BUDGET_BYTES="$APPROVED_SCRATCH_BUDGET_BYTES" \
+A360_DR0_DOCKER_BUDGET_BYTES="$APPROVED_DOCKER_BUDGET_BYTES" \
+  ./docs/deploy/ha-lite/restore_from_restic.sh \
+  --mode drill --pg-image IMAGE@sha256:DIGEST \
+  [--snapshot ID] [--target /root/a360_dr0_scratch/restore_ID] \
+  [--papu-format auto|plain|encrypted]
+```
+
+- `verify` sprawdza dostęp, wybór snapshotu, jego wiek i część danych repo.
+  Nie odtwarza plików ani baz.
+- `artifact` odtwarza pliki do nowego scratcha i waliduje wersjonowany manifest,
+  JSON, SQLite oraz dumpy. Nie tworzy zasobów Docker.
+- `drill` dodatkowo tworzy własny kontener i volume bez sieci i portów,
+  odtwarza dwie scratch DB, sprawdza schemat i usuwa zasoby po dokładnym labelu.
+  Nie przyjmuje istniejącego kontenera ani wskazanej bazy.
+
+Stare formy CLI nie są aliasami. Skrypt odrzuca je fail-closed.
+
+## Zakres dowodu
+
+Zielony `drill` dowodzi tylko odtworzenia artefaktów i schematów PostgreSQL w
+izolacji. Nie dowodzi importu aplikacji, jej health, kolejności startu usług,
+aktywacji systemd/nginx ani przełączenia ruchu. Pełny service RTO pozostaje
+`HOLD / NOT PROVEN`. Realny drill baz także pozostaje HOLD do zatwierdzonego,
+bezpiecznego mechanizmu podania wymaganych danych prywatnych.
+
+Katalog celowy musi być nowy i mieć tryb `0700`; raport ma `0600`. Skrypt
+sprawdza jawny budżet i wolne miejsce przed rozpakowaniem, osobny budżet Docker,
+wspólny filesystem oraz ekspansję dumpów po dekompresji. Brak któregokolwiek
+dowodu kończy się RED przed utworzeniem volume.
