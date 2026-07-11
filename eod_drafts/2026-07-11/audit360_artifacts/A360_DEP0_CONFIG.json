@@ -1,0 +1,82 @@
+{
+  "discovery": {
+    "command": [
+      "systemctl",
+      "list-units",
+      "--type=service",
+      "--state=running",
+      "--no-legend",
+      "--plain"
+    ],
+    "unit_patterns": [
+      "courier-api.service",
+      "dispatch-*.service"
+    ]
+  },
+  "environments": [
+    {
+      "id": "courier-api",
+      "imports": [
+        "fastapi",
+        "pydantic",
+        "uvicorn"
+      ],
+      "interpreter": "/root/.openclaw/workspace/scripts/courier_api/.venv/bin/python",
+      "manifests": [
+        "/root/.openclaw/workspace/scripts/courier_api/requirements.txt"
+      ]
+    },
+    {
+      "id": "dispatch",
+      "imports": [
+        "lightgbm",
+        "numpy",
+        "ortools",
+        "pandas",
+        "scipy",
+        "yaml"
+      ],
+      "interpreter": "/root/.openclaw/venvs/dispatch/bin/python",
+      "manifests": [
+        "/root/a360_dep0_wt/dispatch_v2/requirements-dispatch-venv.txt",
+        "/root/a360_dep0_wt/dispatch_v2/tools/eta_calibration/requirements.txt"
+      ]
+    }
+  ],
+  "processes": [
+    {
+      "environment": "courier-api",
+      "exec_start": "/root/.openclaw/workspace/scripts/courier_api/.venv/bin/python main.py",
+      "unit": "courier-api.service"
+    },
+    {
+      "environment": "dispatch",
+      "exec_start": "/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.gps_server",
+      "unit": "dispatch-gps.service"
+    },
+    {
+      "environment": "dispatch",
+      "exec_start": "/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.monitoring.detector_419",
+      "unit": "dispatch-monitor-419.service"
+    },
+    {
+      "environment": "dispatch",
+      "exec_start": "/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.panel_watcher",
+      "unit": "dispatch-panel-watcher.service"
+    },
+    {
+      "environment": "dispatch",
+      "exec_start": "/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.shadow_dispatcher",
+      "unit": "dispatch-shadow.service"
+    },
+    {
+      "environment": "dispatch",
+      "exec_start": "/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.sla_tracker",
+      "unit": "dispatch-sla-tracker.service"
+    }
+  ],
+  "provenance": {
+    "config": "eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_CONFIG.json",
+    "regeneration_command": "/root/.openclaw/venvs/dispatch/bin/python tools/dependency_inventory.py --config eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_CONFIG.json --output eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_SBOM.json --timestamp 2026-07-11T12:14:29Z"
+  }
+}

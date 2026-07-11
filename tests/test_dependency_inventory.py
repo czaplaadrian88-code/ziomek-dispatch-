@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -42,6 +43,24 @@ def test_redaction_fails_closed():
             di.ensure_safe_text(value)
 
 
+def test_redaction_handles_embedded_root_path_in_pip_summary():
+    message = "broken package at /root/private/tree/pkg.dist-info requires x"
+    result = di.ensure_safe_text(message)
+    assert "/root/" not in result
+    assert result == "broken package at $REDACTED_ROOT/pkg.dist-info requires x"
+
+
+def test_pip_check_redacts_embedded_root_path(monkeypatch):
+    monkeypatch.setattr(
+        di.subprocess,
+        "run",
+        lambda *args, **kwargs: di.subprocess.CompletedProcess(args[0], 1, "broken at /root/private/pkg", ""),
+    )
+    result = di.pip_check(di.Path("/fake/python"))
+    assert result["status"] == "FAIL"
+    assert result["summary"] == "broken at $REDACTED_ROOT/pkg"
+
+
 def test_inventory_deterministic_and_complete(monkeypatch, tmp_path):
     manifest = tmp_path / "requirements.txt"
     manifest.write_text("alpha==1\n", encoding="utf-8")
@@ -49,17 +68,32 @@ def test_inventory_deterministic_and_complete(monkeypatch, tmp_path):
     monkeypatch.setattr(di, "pip_check", lambda _p: {"status": "PASS", "returncode": 0, "summary": "ok"})
     monkeypatch.setattr(di, "import_smoke", lambda _p, _i: {"status": "PASS", "imports": {}})
     config = {
+        "discovery": {"command": ["systemctl"], "unit_patterns": ["z.service"]},
+        "provenance": {"config": "config.json", "regeneration_command": "generate"},
         "environments": [{"id": "z", "interpreter": "/usr/bin/python3", "manifests": [str(manifest)], "imports": []}],
         "processes": [{"unit": "z.service", "environment": "z", "exec_start": "/usr/bin/python3 -m z"}],
     }
-    first = di.inventory(config, "2026-07-11T12:00:00Z")
-    second = di.inventory(config, "2026-07-11T12:00:00Z")
+    first = di.inventory(config, "2026-07-11T12:00:00Z", active_units=["z.service"])
+    second = di.inventory(config, "2026-07-11T12:00:00Z", active_units=["z.service"])
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
     assert first["global_cve_verdict"]["status"] == "UNKNOWN"
     assert first["processes"][0]["environment"] == "z"
 
 
 def test_missing_environment_fails_closed():
-    config = {"environments": [], "processes": [{"unit": "x", "environment": "missing", "exec_start": "x"}]}
+    config = {"discovery": {"command": ["systemctl"], "unit_patterns": ["x"]}, "provenance": {"config": "c", "regeneration_command": "g"}, "environments": [], "processes": [{"unit": "x", "environment": "missing", "exec_start": "x"}]}
     with pytest.raises(ValueError, match="no environment mapping"):
-        di.inventory(config, "2026-07-11T12:00:00Z")
+        di.inventory(config, "2026-07-11T12:00:00Z", active_units=["x"])
+
+
+@pytest.mark.parametrize(
+    ("active", "fragment"),
+    [(["a.service"], "missing=['b.service']"), (["a.service", "b.service", "c.service"], "extra=['c.service']")],
+)
+def test_unit_coverage_fails_closed_for_missing_or_extra(active, fragment):
+    config = {
+        "discovery": {"unit_patterns": ["*.service"]},
+        "processes": [{"unit": "a.service"}, {"unit": "b.service"}],
+    }
+    with pytest.raises(ValueError, match=re.escape(fragment)):
+        di.validate_unit_coverage(config, active)
