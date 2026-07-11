@@ -1,6 +1,7 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
-> Status: AKTYWNY - SPRINT 1 WDROZONY, OBSERWACJA SHADOW W TOKU
+> Status: AKTYWNY - SPRINT 1 WDROZONY, OBSERWACJA SHADOW W TOKU; SPRINT 3
+> FAZA A ZWERYFIKOWANA NA IZOLOWANEJ GALEZI, NIE LIVE
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -71,8 +72,8 @@ przed rozpoczeciem implementacji.
 | ID | Zadanie | Dowod / problem | Co zmieni sie po wykonaniu | Effort | Bramka |
 |---|---|---|---|---:|---|
 | Z-P1-01 | Formalny FSM zlecen | `state_machine` zna statusy, ale nie ma jednej mapy dozwolonych przejsc; zly pickup timestamp jest zastepowany `now()`. | Nielegalne przejscie i uszkodzony czas beda kwarantannowane zamiast po cichu zmieniac prawde SLA. | L | Kompatybilnosc replay historycznego |
-| Z-P1-02 | Kanoniczny ground truth ETA i SLA | Raport GPS porownuje licznik dostaw i physical truth z roznych okien; klik panelu nie jest fizycznym przyjazdem. | Promocja ETA bedzie oparta na tym samym oknie, kohorcie i zdarzeniu fizycznym dla pickup/delivery. | L | Definicja KPI biznesowych |
-| Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbija czasu na etapy. | Bedzie wiadomo, czy opoznia panel, flota, OSRM, solver, selekcja czy zapis; pojawia sie limit kolejki i budzet etapu. | M | Najpierw pomiar, potem optymalizacja |
+| Z-P1-02 | Kanoniczny ground truth ETA i SLA | Brak potwierdzonego fizycznego pickup/handoff; last-inside i arrival sa tylko obserwowalnymi proxy GPS. | Faza A mierzy to samo okno, kohorte i support bez zgadywania KPI; promocja ETA pozostaje zablokowana. | L | FAZA A DONE; KPI nadal `unbound`, potrzebna definicja KPI i coverage |
+| Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbijal czasu na etapy. | Faza A mierzy queue/fleet/OSRM/solver/selection/write; nie wlacza limitu kolejki, budzetu ani backpressure. | M | FAZA A DONE; rollout zatwierdzony 2026-07-11, canary minimum 48 h przed werdyktem |
 | Z-P1-04 | Jawny `DecisionContext` i domkniecie efektow ubocznych | Effects buffer obejmuje tylko czesc zapisow; OSRM recorder, tolerancje i bufory sa proces-globalne. | Rownolegle decyzje nie pomieszaja telemetrii ani efektow; replay stanie sie bardziej deterministyczny. | XL | Po Z-P1-03 |
 | Z-P1-05 | Kanoniczna tozsamosc kuriera — **DONE Faza A+B 2026-07-10** (pakiet `identity/`, walidator kolizji, onboarding 5-plikowy, backfill names 19→0, kanon pisowni z grafiku; delegacja 9× norm + scoring worker/panel_roster do registry — parity 177/177, golden 21417 par = 0 roznic; ODLOZONE: unifikacja profili ×10/×5 vs ×10/×10 [pomiar+ACK], Krok 4 czytelnicy plikow→registry, konsolidacja courier_api.db) | 121 aliasow mapuje sie do 65 CID; 54 CID maja wiele aliasow, 20 nie ma wpisu w `courier_names`. | Grafik, GPS, PIN, tier, plan i rozliczenia beda laczone przez CID z kontrolowanymi aliasami. | L | Migracja bez zmiany CID |
 | Z-P1-06 | Prywatnosc i retencja world records/logow | Rekordy zawieraja adresy, nazwiska i GPS, maja `0644` i rosna o setki MB dziennie. | Dane beda pseudonimizowane lub szyfrowane, `0600`, kompresowane i usuwane wedlug retencji. | M | Decyzja B-05 |
@@ -90,8 +91,8 @@ przed rozpoczeciem implementacji.
 | Z-P2-03 | Stabilny adapter panelu / API integracyjne | Krytyczny odczyt i zapis korzysta z prywatnego HTML, regexow, CSRF i subprocessu. | Awaria lub zmiana panelu bedzie izolowana w adapterze z idempotency key, read-back i typed error. | XL | Kierunek partner API |
 | Z-P2-04 | Konfiguracja miasta i tenanta | BBox, centrum, dzielnice, traffic i domyslne miasto sa bialostockie w wielu modulach. | Nowe miasto nie bedzie wymagalo kopiowania silnika ani ryzyka cross-city geocode. | XL | Decyzja B-04 |
 | Z-P2-05 | Ewolucja plikow stanu do repozytorium danych | Krytyczny stan jest rozproszony po wielu JSON/JSONL; czesc plikow jest multi-writer. | Najpierw rejestr ownership/schema, potem selektywna migracja tylko plikow z realnym problemem skali lub transakcji. | XL | Bez big-bang rewrite |
-| Z-P2-06 | Wiarygodny OSRM health i polityka cache | Health uznaje wynik fallback za zdrowy OSRM; eviction sortuje duzy cache pod globalnym lockiem. | Monitoring odrozni OSRM od fallbacku, a cache nie wywola naglego piku latencji. | M | Test awarii OSRM |
-| Z-P2-07 | Hermetyczne testy i fixture danych — **DONE 2026-07-10** (root `conftest.py`: sandbox DISPATCH_STATE_DIR + write/delete-guard na prymitywach FS + tryb STRICT [suita bez dispatch_state = 0 failed] + subprocess-guard sitecustomize; kwarantanna zewnetrzna z powodami; ZNALEZISKO panel_packs [testy mutowaly ZYWY cache] naprawione u zrodla; rollback = rm conftest.py) | Czesc testow czyta zywe logi, aliasy i exclusion state hosta. | Testy beda dzialac identycznie na czystym CI i produkcyjnym hoście; realne fixture beda wersjonowane i anonimizowane. | L | Powiazane z Z-P0-03 |
+| Z-P2-06 | Wiarygodny OSRM health i polityka cache | Health uznawal fallback za zdrowy OSRM; eviction nadal sortuje duzy cache pod globalnym lockiem. | Faza A rozdziela upstream/cache/fallback i mierzy contention/eviction; optymalizacja polityki cache pozostaje otwarta dla zachowania parytetu decyzji. | M | FAZA A health/telemetry DONE; optymalizacja eviction otwarta |
+| Z-P2-07 | Hermetyczne testy i fixture danych — **DONE 2026-07-11** (root `conftest.py`: sandbox DISPATCH_STATE_DIR + write/delete-guard na prymitywach FS + tryb STRICT [suita bez dispatch_state = 0 failed] + subprocess-guard sitecustomize; kwarantanna zewnetrzna z powodami; TEST-TRUTH audytu domkniety na syntetycznych fixture bez oslabiania guarda; rollback = revert wydaniowego commita) | Czesc testow czytala zywe logi, aliasy i exclusion state hosta. | Testy dzialaja deterministycznie bez zapisu do produkcji; jawne live-smoke pozostaja zewnetrznie skwarantannowane tylko w STRICT. | L | Powiazane z Z-P0-03 |
 | Z-P2-08 | Least privilege dla uslug | Wiele demonow dziala jako root; hardening systemd jest nierowny. | Kompromitacja jednego procesu dostanie mniejszy zakres zapisu i odczytu sekretow. | XL | Migracja sciezek i ownership |
 
 ### P3 - redukcja entropii
@@ -201,25 +202,37 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 
 - **Na czym polega:** zbudowanie jednej tabeli faktow laczacej decyzje, plan,
   fizyczny GPS arrival, klik statusu i koncowy wynik zlecenia.
-- **Zakres pracy:** wspolne okna czasowe, definicje pickup/delivery, kohorty,
-  coverage, wersja modelu i rozdzielenie click truth od physical truth.
+- **Zakres pracy:** wspolne okna czasowe, jawne obserwowalne proxy pickup/delivery,
+  kohorty, coverage, lineage i rozdzielenie click truth od sygnalow GPS.
 - **Co zmieni w Ziomku:** modele i progi beda promowane na podstawie realnego
   dojazdu, a raport nie polaczy licznikow z roznych okresow.
 - **Czego nie zmieni:** live ETA przed zatwierdzeniem nowej bramki promocji.
 - **Koniec zadania:** reprodukowalny raport z jednym mianownikiem, lineage danych,
   MAE/bias/coverage per noga i test braku leakage.
+- **Stan Fazy A 2026-07-10:** implementacja i read-only replay gotowe na
+  `sprint3/eta-observability-osrm`; KPI pozostaje `unbound`, bo repo nie ma
+  potwierdzonego fizycznego pickup/handoff, a klasyfikacja paczek ma niepelne
+  coverage.
 - **Effort:** L; wymaga biznesowej definicji KPI.
 
 ### Z-P1-03 - Stage-level tracing i backpressure
 
 - **Na czym polega:** zmierzenie czasu i kolejek kazdego etapu jednej decyzji.
 - **Zakres pracy:** span dla pre-recheck, fleet, fan-out kandydatow, OSRM, solvera,
-  selection, serializacji i efektow; histogramy oraz limit backlogu.
+  selection, serializacji i efektow; histogramy. Limit backlogu jest osobna faza
+  dopiero po pomiarze i decyzji o polityce degradacji.
 - **Co zmieni w Ziomku:** alarm wskaze konkretny etap, a naplyw zlecen nie stworzy
   nieograniczonej kolejki i coraz bardziej spoznionych decyzji.
 - **Czego nie zmieni:** heurystyk ani solvera w pierwszej fazie pomiarowej.
-- **Koniec zadania:** suma spanow zgadza sie z latency, dashboard pokazuje p50/p95/max
-  per etap, a test przeciazenia potwierdza jawna polityke degradacji.
+- **Koniec zadania:** suma rozlacznych spanow zgadza sie z latency, raport pokazuje
+  p50/p95/max per etap, a sidecar ma wiarygodny mianownik i coverage utraty.
+- **Stan Fazy A 2026-07-10:** kontrakty `decision_timing.v1` i
+  `decision_stage_timing.v1` sa gotowe na izolowanej galezi. Flaga
+  `ENABLE_STAGE_TIMING_OBSERVATION` jest default OFF, a wersjonowany logrotate
+  (`daily/rotate 30/maxsize 100M`) przeszedl parser 3.21. Brak live aktywacji;
+  zakonczenie sesji 54, akceptacja polityki retencji, osobny ACK i pomiar 48 h
+  sa bramka rolloutowa. Paired replay ma zero roznic krytycznych, ale nie pelne
+  byte-parity pola `pool_feasible+reason`.
 - **Effort:** M; optymalizacje sa osobnymi zadaniami po pomiarze.
 
 ### Z-P1-04 - DecisionContext i efekty uboczne
@@ -383,11 +396,16 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 - **Na czym polega:** odroznienie odpowiedzi OSRM od wyniku awaryjnego oraz usuniecie
   kosztownej pelnej ewikcji cache pod globalnym lockiem.
 - **Zakres pracy:** source/degraded w wyniku route/table, bezposredni probe backendu,
-  metryka circuit breakera i przyrostowa albo probabilistyczna ewikcja.
+  metryki circuit breakera, contention i ewikcji. Zmiana polityki ewikcji wymaga
+  osobnego dowodu identycznego retained-key set i zachowania podczas awarii.
 - **Co zmieni w Ziomku:** monitoring nie oglosi zdrowia podczas awarii, a duzy cache
   nie zamrozi watkow decyzji podczas sortowania 50 tys. wpisow.
 - **Czego nie zmieni:** poprawnego fallbacku haversine i traffic multiplier.
-- **Koniec zadania:** chaos test OSRM down/slow/recovery i benchmark cache przy limicie.
+- **Koniec zadania:** chaos test OSRM down/slow/recovery, benchmark cache przy
+  limicie i oddzielenie direct upstream truth od process-local cache/CB.
+- **Stan Fazy A 2026-07-10:** health/provenance/telemetria i testy awarii sa gotowe
+  na izolowanej galezi. Legacy batch-10% sort pozostaje dla parytetu decyzji;
+  optymalizacja spike'u nie jest zakonczona.
 - **Effort:** M.
 
 ### Z-P2-07 - Hermetyczne testy i fixture
@@ -475,6 +493,8 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 | B-04 | Czy celem jest drugi tenant/miasto w ciagu 12 miesiecy? | Od tego zalezy priorytet wydzielenia konfiguracji Bialegostoku. |
 | B-05 | Jak dlugo wolno przechowywac dokladne adresy, GPS i world records? | Retencja i pseudonimizacja sa decyzja prawno-biznesowa. |
 | B-06 | Czy kurier bez GPS moze dostac propozycje z pozycji syntetycznej? | To kompromis miedzy ciagloscia operacji a ryzykiem fikcyjnego ETA. |
+| B-07 | Jakie zdarzenie jest KPI pickup/delivery i jakie sa minimalne coverage oraz progi promocji ETA? | Last-inside nie potwierdza pickup/wyjazdu, arrival nie potwierdza handoffu, a paczki i GPS maja niepelne coverage. |
+| B-08 | Czy zatwierdzamy proponowane `daily/rotate 30/maxsize 100M` i jaki maksymalny narzut/drift obowiazuje sidecar stage timing? | Kill-switch default OFF i artefakt logrotate sa gotowe, ale polityka nie jest zainstalowana ani zaakceptowana; ON dodaje dwa appendy na niepusty tick. |
 
 ## 7. Sprint 1
 
@@ -560,17 +580,55 @@ geocode/cache.
 - Refaktor calego pipeline lub `DecisionContext`.
 - Mode layer, multi-city i publiczne API partnerow.
 
-## 8. Dalsza proponowana kolejnosc
+## 8. Sprint 3 - Faza A prawdy ETA i obserwowalnosci
+
+**Stan na 2026-07-10: implementacja i przygotowanie rolloutowe zakonczone na
+izolowanej galezi; brak operacji live, aktywna sesja 54 blokuje preflight.**
+
+- Branch `sprint3/eta-observability-osrm`, worktree
+  `/root/sprint3_wt/dispatch_v2`, base
+  `c2bde5894976eea9e186336453d8bcaeec1d2489`.
+- Commit implementacyjny `e48b21e` zostal wypchniety tylko na izolowana galaz.
+  Galaz zostala dosunieta do aktualnego mastera `270c21a` bez konfliktu. Nie
+  wykonano merge do `master`, instalacji `/etc`, deployu, restartu, migracji,
+  flipa flag ani zapisu do stanu runtime.
+- Historyczny baseline: **4710 passed, 24 skipped, 10 xfailed**; czysty aktualny
+  master: **4762 passed, 27 skipped, 10 xfailed**. Finalna regresja:
+  **4851 passed, 27 skipped, 10 xfailed** (+89 testow, bez nowego fail/skip/
+  xfail). Paired oracle jest w `769dbfa`; komplet commitow przygotowania jest
+  zapisany w raporcie Sprintu 3.
+- `ENABLE_STAGE_TIMING_OBSERVATION` ma pelny default-OFF gate; repo zawiera
+  logrotate `daily/rotate 30/maxsize 100M`, ale nie zostal on zainstalowany ani
+  uznany za zatwierdzona polityke retencji.
+- Zwykla podmiana live flags nie testuje historycznego replayu, bo world record
+  odtwarza wlasny snapshot. Wersjonowany paired replay jawnie wstrzyknal flage:
+  **808 porownan, 0 roznic krytycznych, 4 miekkie
+  `pool_feasible+reason`, 0 miss mismatch**. Byte-parity calego payloadu nie
+  ogloszono; canary pozostaje bramka.
+- Read-only ETA replay ma bazowy mianownik 188, package coverage 94,330% i
+  complete-case obu nog 41,489%. KPI pozostaje zablokowany; nie ma definicji
+  fizycznego pickup/handoff ani zatwierdzonych progow.
+- Direct OSRM probe potwierdzil sukces route/table/nearest. Stan cache/CB CLI
+  jest jawnie `process_local`; polityka ewikcji pozostala legacy dla parytetu.
+- Z-P1-02 Faza A, Z-P1-03 Faza A oraz health/telemetria Z-P2-06 sa gotowe do
+  review. Otwarta pozostaje optymalizacja eviction oraz rollout observability:
+  final sesji 54, akceptacja retencji/narzutu/driftu, osobny ACK i co najmniej
+  48 h canary.
+- Kompletny raport i rollback:
+  `eod_drafts/2026-07-10/SPRINT3_PHASE_A_REPORT.md`.
+
+## 9. Dalsza proponowana kolejnosc
 
 1. Sprint 1: wdrozony; Z-P0-01 faza A pozostaje w obserwacji shadow do co najmniej
    `2026-07-12 06:10:36 UTC`.
 2. Sprint 2: Z-P0-05, Z-P0-06, Z-P1-01.
-3. Sprint 3: Z-P1-02, Z-P1-03, Z-P2-06.
+3. Sprint 3: Faza A i default-OFF gate gotowe; audyt zakonczony, rollout live
+   zatwierdzony 2026-07-11; instalacja logrotate i canary minimum 48 h w toku.
 4. Sprint 4: Z-P1-05, Z-P1-07, Z-P2-07 — **WYKONANY 2026-07-10** (wszystkie 3 karty DONE + follow-upy za ACK: kuracja rejestru, fix panel_packs, migracja+flip USE_V2_PARSER, identity Faza B; handoffy: `eod_drafts/2026-07-10/SPRINT4_HANDOFF.md` + `SPRINT4_SESJA_FULL_CLOSE.md`).
 5. Sprint 5: Z-P1-04 i Z-P2-02 po ustabilizowaniu kontraktow.
 6. Dalej: integracje, multi-city i migracje stanu wedlug decyzji B-03/B-04.
 
-## 9. Zasady utrzymania backlogu
+## 10. Zasady utrzymania backlogu
 
 - Statusy: `PROPOSED`, `READY`, `IN_PROGRESS`, `BLOCKED`, `DONE`, `REJECTED`.
 - Zadanie przechodzi do `READY` dopiero po ponownej weryfikacji dowodu w kodzie.

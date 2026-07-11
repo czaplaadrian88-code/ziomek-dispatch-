@@ -22,6 +22,7 @@ from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: efekty PO decyzj
 from dispatch_v2.core import gates as _gates  # K10 refaktoru: bramki wejściowe (geokod-defense, early-bird)
 from dispatch_v2.core import candidates as _candidates  # K11 refaktoru: pętla per-kurier
 from dispatch_v2.core import selection as _selection  # K12 refaktoru: selekcja + werdykt
+from dispatch_v2.observability import stage_timing as _ST  # Z-P1-03: observation-only
 from dispatch_v2.common import (
     parse_panel_timestamp,
     WARSAW,
@@ -3011,6 +3012,9 @@ class PipelineResult:
     # dokladnie raz w publicznym ogonie assess_order; nigdy konsumowany przez
     # selekcje/auto-route. Any unika cyklu typow z czystym core.
     rule_verdict: Optional[Any] = None
+    # Z-P1-03 Faza A: addytywna telemetria czasu. Dolaczana dopiero w ogonie
+    # assess_order (po selection i firewallu), nigdy nie jest wejsciem decyzji.
+    stage_timing: Optional[Dict[str, Any]] = None
 
 
 # ─── FAIL-04: prep-variance anomaly (A1 anomaly block, shadow-first) ───
@@ -3952,20 +3956,40 @@ def assess_order(
     if decision_now.tzinfo is None:
         decision_now = decision_now.replace(tzinfo=timezone.utc)
 
+    # Z-P1-03: snapshot raz na samodzielne assess albo dziedziczony raz z ticka.
+    # Default OFF oznacza brak collectora i brak wiazania workerow/OSRM/solvera.
+    _stage_timing_on = _ST.observation_enabled(
+        C.flag, C.ENABLE_STAGE_TIMING_OBSERVATION)
+    _timing = _ST.DecisionTrace() if _stage_timing_on else None
+    _assess_started = _timing.now_ns() if _timing is not None else None
+
     # K08 refaktoru (ADR-R02): efekty uboczne decyzji (shadow-jsonle, zapis stanu
     # loadgov, alert Telegram) buforowane i wykonywane PO impl — flush w finally
     # (przy wyjątku zbuforowane efekty wykonują się jak w legacy, gdzie zapis
     # zdążył się wydarzyć przed crashem). Gate w begin(); OFF = bajt-parytet 1:1.
     _eb_on = _EB.begin()
+    _impl_started = _timing.now_ns() if _timing is not None else None
     try:
         result = _assess_order_impl(
             order_event, fleet_snapshot, restaurant_meta, decision_now,
             pending_queue=pending_queue, demand_context=demand_context,
             _bypass_early_bird=_bypass_early_bird,
+            _timing_trace=_timing,
         )
     finally:
+        if _timing is not None:
+            _timing.record_since("impl_wall_ms", _impl_started)
         if _eb_on:
-            _EB.flush()
+            _effects_started = (
+                _timing.now_ns() if _timing is not None else None)
+            try:
+                _EB.flush()
+            finally:
+                if _timing is not None:
+                    _timing.record_since(
+                        "effects_flush_wall_ms", _effects_started)
+    _post_hooks_started = (
+        _timing.now_ns() if _timing is not None else None)
     # MP-#13 (2026-05-08): L3 — snapshot OSRM degraded state at assess time.
     # Caller (shadow_dispatcher serializer + telegram_approver format_proposal) reads.
     # Defensive: NIGDY raise (osrm_client import-fail unlikely ale fallback safe).
@@ -4029,6 +4053,23 @@ def assess_order(
                 result, f"OUTER_FALLBACK:{type(_fw_outer_exc).__name__}")
         except Exception:
             pass
+    if _timing is not None:
+        _timing.record_since("post_hooks_wall_ms", _post_hooks_started)
+        _timing.record_since("assess_wall_ms", _assess_started)
+    # Attach dopiero PO wszystkich bramkach/firewallu. candidate_timing trafia do
+    # metrics po selekcji, więc nie może zmienić rankingu ani werdyktu.
+    if _timing is not None:
+        try:
+            _timing.attach(result)
+        except Exception as _timing_exc:  # obserwacja nigdy nie zmienia decyzji
+            try:
+                result.stage_timing = None
+            except Exception:
+                pass
+            log.warning(
+                "stage_timing attach fail-soft: %s: %s",
+                type(_timing_exc).__name__, _timing_exc,
+            )
     return result
 
 
@@ -4046,7 +4087,18 @@ def _assess_order_impl(
     demand_context: Optional[dict] = None,
     # EARLYBIRD-01 (2026-06-14): True → pomiń early_bird short-circuit (kontrfaktyk shadow).
     _bypass_early_bird: bool = False,
+    # Z-P1-03: wewnętrzny collector observation-only; nie jest częścią WorldState.
+    _timing_trace: Optional[_ST.DecisionTrace] = None,
 ) -> PipelineResult:
+    _prepare_started = _timing_trace.now_ns() if _timing_trace is not None else None
+    _prepare_closed = False
+
+    def _timing_close_prepare() -> None:
+        nonlocal _prepare_closed
+        if _timing_trace is not None and not _prepare_closed:
+            _timing_trace.record_since("prepare_wall_ms", _prepare_started)
+            _prepare_closed = True
+
     if now is None:
         now = datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -4146,6 +4198,7 @@ def _assess_order_impl(
         delivery_address=delivery_address,
     )
     if _gate_res is not None:
+        _timing_close_prepare()
         return _gate_res
 
     # geocode_defense gwarantuje nie-None/nie-sentinel (mypy nie widzi narrowingu
@@ -4184,6 +4237,7 @@ def _assess_order_impl(
         demand_context=demand_context, bypass=_bypass_early_bird,
     )
     if _gate_res is not None:
+        _timing_close_prepare()
         return _gate_res
 
     pickup_ready_at = get_pickup_ready_at(restaurant, pickup_at, now, restaurant_meta)
@@ -4265,7 +4319,14 @@ def _assess_order_impl(
     # decyzję, PRZED pulą (unia worków floty = ten sam zbiór, który dziś
     # fetchują kandydaci; None = flaga OFF/awaria → pętla idzie ścieżką
     # legacy 1:1). Nazwa czytana w closure _v327_eval_courier_inner.
+    _timing_close_prepare()
+    _pre_recheck_started = (
+        _timing_trace.now_ns() if _timing_trace is not None else None)
     _k07_prefetched_ck = _k07_prefetch_fresh_ck(fleet_snapshot, now)
+    if _timing_trace is not None:
+        _timing_trace.record_since("pre_recheck_wall_ms", _pre_recheck_started)
+    _fanout_setup_started = (
+        _timing_trace.now_ns() if _timing_trace is not None else None)
     # world_record v1: nagraj wynik prefetchu czas_kuriera (żywy fetch HTTP panelu
     # — nieodtwarzalny offline). Hook no-op poza oknem capture; fail-soft.
     try:
@@ -4310,6 +4371,7 @@ def _assess_order_impl(
         loadgov_now=loadgov_now, loadgov_ewma=loadgov_ewma,
         loadgov_orders=loadgov_orders, loadgov_couriers=loadgov_couriers,
         plan_versions=_plan_versions_snapshot,
+        timing_trace=_timing_trace,
     )
 
     def _v327_eval_courier(cid, cs):
@@ -4318,6 +4380,9 @@ def _assess_order_impl(
 
     from concurrent.futures import ThreadPoolExecutor as _V327_TPE
     _v327_max_workers = max(1, min(10, len(fleet_snapshot)))
+    if _timing_trace is not None:
+        _timing_trace.record_since("fanout_setup_wall_ms", _fanout_setup_started)
+    _fanout_started = _timing_trace.now_ns() if _timing_trace is not None else None
     if _v327_max_workers > 1:
         with _V327_TPE(max_workers=_v327_max_workers, thread_name_prefix="dispatch_v327") as _v327_pool:
             for _tag, _cid, _result in _v327_pool.map(_v328_eval_safe, list(fleet_snapshot.items())):
@@ -4334,6 +4399,10 @@ def _assess_order_impl(
                 continue
             if _result is not None:
                 candidates.append(_result)
+
+    if _timing_trace is not None:
+        _timing_trace.record_since("fanout_wall_ms", _fanout_started)
+    _post_pool_started = _timing_trace.now_ns() if _timing_trace is not None else None
 
     # V3.28 Fix 1 telemetria post-pool fail rate (warning gdy >=1 fail, dla audit trail)
     _v328_fail_ratio = 0.0
@@ -4546,7 +4615,10 @@ def _assess_order_impl(
     # K12 refaktoru: selekcja + tiering + best_effort + bramki werdyktu przeniesione
     # 1:1 do core/selection.py (select_and_emit; re-assert EMIT = L7.3 w lejku
     # _classify_and_set_auto_route, LIVE — werdykt C15: wymaganie planu JUZ wykonane).
-    return _selection.select_and_emit(
+    if _timing_trace is not None:
+        _timing_trace.record_since("post_pool_wall_ms", _post_pool_started)
+    _selection_started = _timing_trace.now_ns() if _timing_trace is not None else None
+    _selected = _selection.select_and_emit(
         _selection.SelectionContext(
             now=now, order_event=order_event, order_id=order_id, restaurant=restaurant,
             delivery_address=delivery_address, pickup_coords=pickup_coords,
@@ -4557,3 +4629,6 @@ def _assess_order_impl(
         ),
         candidates,
     )
+    if _timing_trace is not None:
+        _timing_trace.record_since("selection_wall_ms", _selection_started)
+    return _selected

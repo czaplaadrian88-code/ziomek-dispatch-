@@ -39,6 +39,12 @@ _perf_lazy_members = False  # odświeżane w load_flags przy reloadzie JSON
 # wyłącznie dla wygody testów/harnessu; produkcja steruje przez flags.json.
 ENABLE_PERF_LAZY_MEMBERS = os.environ.get("ENABLE_PERF_LAZY_MEMBERS", "0") == "1"
 
+# Z-P1-03 (2026-07-10): niedecyzyjny kill-switch pelnego stage timing.
+# Kanon po aktywacji = flags.json (hot-reload); brak klucza/default = OFF.
+# OFF nie tworzy DecisionTrace, nie odpytuje dodatkowo depth kolejki i nie
+# zapisuje sidecara. Nie nalezy do ETAP4_DECISION_FLAGS, bo nie zmienia wyniku.
+ENABLE_STAGE_TIMING_OBSERVATION = False
+
 # ─── K05 refaktor (2026-07-06, ADR-R01): FlagSnapshot per tick ───
 # Problem: flagi czytane z dysku w TRAKCIE decyzji (nawet z perf-lazy TTL 0,25 s
 # odświeżenie może wypaść W ŚRODKU ticku) → zmiana flags.json mid-tick daje
@@ -711,6 +717,7 @@ TEST_ISOLATED_INFRA_FLAGS = (
     "ENABLE_OSRM_TABLE_CELL_CACHE",
     "ENABLE_PANEL_DETAIL_PREFETCH",
     "PANEL_DETAIL_PREFETCH_WORKERS",
+    "ENABLE_STAGE_TIMING_OBSERVATION",
     # perf-lazy (03.07): żywy flip 00:25 zmienił zachowanie script-runnerów
     # (flake test_v319c_sub_a: 4/30 FAIL przy ON / 0/30 OFF — mtime-cache
     # planów serwował stan sprzed zapisu przy zapisach w tym samym ticku
@@ -753,6 +760,7 @@ _FINGERPRINT_EXTRA_FLAGS = (
     "ENABLE_READY_AT_INSTRUMENTATION",
     "ENABLE_REPO_COST_SHADOW",
     "OBSERVABILITY_PER_CANDIDATE_ENABLED",
+    "ENABLE_STAGE_TIMING_OBSERVATION",
     "AUTO_KOORD_TELEGRAM_INFO_ENABLED",
     "CZASOWKA_T0_ALERT_ENABLED",
     "ENABLE_BAG_TIME_ALERTS",

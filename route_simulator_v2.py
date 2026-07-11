@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from itertools import permutations
 
 from dispatch_v2 import osrm_client
+from dispatch_v2.observability import stage_timing as _ST
 from dispatch_v2.common import (
     ENABLE_DROP_TIME_CONSTRAINT,
     ENABLE_PICKED_UP_DROP_FLOOR,
@@ -458,66 +459,77 @@ def simulate_bag_route_v2(
         _n["dwell_pickup"] = dwell_pickup
         _n["dwell_dropoff"] = dwell_dropoff
 
-    if use_sticky:
-        plan = _sticky_sequence_plan(
-            nodes, leg_min, sticky_bag_idxs,
-            new_pickup_idx, new_delivery_idx,
-            new_order, bag, now, sla_minutes,
-        )
-        plan.strategy = "sticky"
-    elif use_ortools:
-        plan = _ortools_plan(
-            nodes, leg_min, bag_delivery_idxs,
-            bag_pickup_idxs_by_oid,
-            new_pickup_idx, new_delivery_idx,
-            new_order, bag, now, sla_minutes,
-        )
-        if plan is None:
-            # OR-Tools fallback: gdy INFEASIBLE → greedy safety net
-            _log.warning(
-                f"OR-Tools INFEASIBLE for bag_size={len(bag)}, "
-                f"falling back to greedy"
+    _planner_path = (
+        "sticky" if use_sticky else
+        "ortools_with_fallback" if use_ortools else
+        "bruteforce" if bag_after_add <= BRUTEFORCE_MAX_BAG_AFTER else
+        "greedy"
+    )
+    # Z-P1-03: jeden rozlaczny pomiar calego planera dla KAZDEJ strategii.
+    # Proby OR-Tools sa osobnym detalem ``solver_attempt`` i nie sa dodawane
+    # drugi raz do lacznego ``solver``.
+    with _ST.work_span("solver", planner_path=_planner_path) as _solver_tags:
+        if use_sticky:
+            plan = _sticky_sequence_plan(
+                nodes, leg_min, sticky_bag_idxs,
+                new_pickup_idx, new_delivery_idx,
+                new_order, bag, now, sla_minutes,
             )
+            plan.strategy = "sticky"
+        elif use_ortools:
+            plan = _ortools_plan(
+                nodes, leg_min, bag_delivery_idxs,
+                bag_pickup_idxs_by_oid,
+                new_pickup_idx, new_delivery_idx,
+                new_order, bag, now, sla_minutes,
+            )
+            if plan is None:
+                # OR-Tools fallback: gdy INFEASIBLE → greedy safety net
+                _log.warning(
+                    f"OR-Tools INFEASIBLE for bag_size={len(bag)}, "
+                    f"falling back to greedy"
+                )
+                plan = _greedy_plan(
+                    nodes, leg_min, bag_delivery_idxs,
+                    bag_pickup_idxs_by_oid,
+                    new_pickup_idx, new_delivery_idx,
+                    new_order, bag, now, sla_minutes,
+                )
+                plan.strategy = "greedy_fallback"
+            else:
+                # V3.27.6 FIX 2c (2026-04-28): _ortools_plan może pre-set strategy
+                # do "ortools_rejected_v3274" gdy frozen ck violation detected.
+                # Respect pre-set value, NIE override (Adrian's eyeball signal).
+                if not plan.strategy:
+                    plan.strategy = "ortools"
+        elif bag_after_add <= BRUTEFORCE_MAX_BAG_AFTER:
+            plan = _bruteforce_plan(
+                nodes, leg_min, bag_delivery_idxs,
+                bag_pickup_idxs_by_oid,
+                new_pickup_idx, new_delivery_idx,
+                new_order, bag, now, sla_minutes,
+            )
+            plan.strategy = "bruteforce"
+        else:
             plan = _greedy_plan(
                 nodes, leg_min, bag_delivery_idxs,
                 bag_pickup_idxs_by_oid,
                 new_pickup_idx, new_delivery_idx,
                 new_order, bag, now, sla_minutes,
             )
-            plan.strategy = "greedy_fallback"
-        else:
-            # V3.27.6 FIX 2c (2026-04-28): _ortools_plan może pre-set strategy
-            # do "ortools_rejected_v3274" gdy frozen ck violation detected.
-            # Respect pre-set value, NIE override (Adrian's eyeball signal).
-            if not plan.strategy:
-                plan.strategy = "ortools"
-    elif bag_after_add <= BRUTEFORCE_MAX_BAG_AFTER:
-        plan = _bruteforce_plan(
-            nodes, leg_min, bag_delivery_idxs,
-            bag_pickup_idxs_by_oid,
-            new_pickup_idx, new_delivery_idx,
-            new_order, bag, now, sla_minutes,
-        )
-        plan.strategy = "bruteforce"
-    else:
-        plan = _greedy_plan(
-            nodes, leg_min, bag_delivery_idxs,
-            bag_pickup_idxs_by_oid,
-            new_pickup_idx, new_delivery_idx,
-            new_order, bag, now, sla_minutes,
-        )
-        plan.strategy = "greedy"
+            plan.strategy = "greedy"
 
-    # O2 cap-Z RESEQ (2026-07-02, ENABLE_O2_CAPZ_RESEQ default OFF): OBOK O2_READY_ANCHOR_SWEEP.
-    # Wołane na WYBRANYM planie KAŻDEJ strategii (ortools/greedy/bruteforce/greedy_fallback)
-    # = JEDNO źródło reguły, OBIE ścieżki selekcji pokryte (finding rst-greedy-step15-not-o2).
-    # Tylko worki (len(bag)>=1); sticky (locked saved-plan) pomijamy (unik churnu z plan_manager).
-    # OFF = plan bez zmian (early return w helperze). Konsumenci trójki (feasibility SLA/R6 gate,
-    # plan_recheck._sweep) dziedziczą reseq'owaną sekwencję przez TEN return.
-    if plan is not None and len(bag) >= 1 and getattr(plan, "strategy", "") != "sticky":
-        plan, _ = _capz_reseq_plan(
-            plan, nodes, leg_min, bag_delivery_idxs, bag_pickup_idxs_by_oid,
-            new_pickup_idx, new_delivery_idx, new_order, bag, now, sla_minutes)
+        # O2 cap-Z RESEQ (2026-07-02, ENABLE_O2_CAPZ_RESEQ default OFF): OBOK O2_READY_ANCHOR_SWEEP.
+        # Wołane na WYBRANYM planie KAŻDEJ strategii (ortools/greedy/bruteforce/greedy_fallback)
+        # = JEDNO źródło reguły, OBIE ścieżki selekcji pokryte (finding rst-greedy-step15-not-o2).
+        # Tylko worki (len(bag)>=1); sticky (locked saved-plan) pomijamy (unik churnu z plan_manager).
+        # OFF = plan bez zmian (early return w helperze). Konsumenci trójki (feasibility SLA/R6 gate,
+        # plan_recheck._sweep) dziedziczą reseq'owaną sekwencję przez TEN return.
+        if plan is not None and len(bag) >= 1 and getattr(plan, "strategy", "") != "sticky":
+            plan, _ = _capz_reseq_plan(
+                plan, nodes, leg_min, bag_delivery_idxs, bag_pickup_idxs_by_oid,
+                new_pickup_idx, new_delivery_idx, new_order, bag, now, sla_minutes)
+        _solver_tags["strategy"] = getattr(plan, "strategy", "none")
 
     plan.osrm_fallback_used = fallback_used
     return plan
@@ -1513,49 +1525,51 @@ def _ortools_plan(
         """Solve + V3.27.1 BUG-2 retry bez time-windows. Hermetyzuje powtórkę.
         ot_ms: limit czasu (lewar latencji — ON warm-startowany dostaje krótszy)."""
         _ms = int(ot_ms if ot_ms is not None else _ot_ms)
-        _sol = tsp_solver.solve_tsp_with_constraints(
-            num_stops=N,
-            pickup_drop_pairs=pickup_drop_pairs,
-            distance_matrix_km=distance_matrix,
-            time_matrix_min=time_matrix,
-            time_windows=time_windows,
-            max_route_min=120.0,
-            time_limit_ms=_ms,
-            delivery_soft_deadlines=delivery_soft_deadlines,
-            pickup_freshness_penalties=pickup_freshness_penalties,
-            pickup_committed_penalties=pickup_committed_penalties,
-            pickup_committed_penalties_t2=pickup_committed_penalties_t2,
-            delivery_food_age_penalties=fa_pen,
-            span_cost_coeff=_span_cost_coeff,
-            delivery_sla_hard_span=hard_span,
-            delivery_sla_hard_bounds=hard_bounds,
-            sla_minutes_hard=float(sla_minutes),
-            warm_start_routes=warm_routes,
-        )
-        if (_sol is None or not getattr(_sol, "sequence", None)) and time_windows is not None:
-            _log.warning(
-                f"V3.27.1 OR-Tools INFEASIBLE z time windows "
-                f"(N={N}, pairs={len(pickup_drop_pairs)}), retry bez constraints"
-            )
+        with _ST.work_span("solver_attempt", attempt="primary"):
             _sol = tsp_solver.solve_tsp_with_constraints(
                 num_stops=N,
                 pickup_drop_pairs=pickup_drop_pairs,
                 distance_matrix_km=distance_matrix,
                 time_matrix_min=time_matrix,
-                time_windows=None,
+                time_windows=time_windows,
                 max_route_min=120.0,
-                time_limit_ms=int(_ot_ms),
+                time_limit_ms=_ms,
                 delivery_soft_deadlines=delivery_soft_deadlines,
                 pickup_freshness_penalties=pickup_freshness_penalties,
                 pickup_committed_penalties=pickup_committed_penalties,
-            pickup_committed_penalties_t2=pickup_committed_penalties_t2,
+                pickup_committed_penalties_t2=pickup_committed_penalties_t2,
                 delivery_food_age_penalties=fa_pen,
                 span_cost_coeff=_span_cost_coeff,
                 delivery_sla_hard_span=hard_span,
                 delivery_sla_hard_bounds=hard_bounds,
                 sla_minutes_hard=float(sla_minutes),
-                warm_start_routes=None,
+                warm_start_routes=warm_routes,
             )
+        if (_sol is None or not getattr(_sol, "sequence", None)) and time_windows is not None:
+            _log.warning(
+                f"V3.27.1 OR-Tools INFEASIBLE z time windows "
+                f"(N={N}, pairs={len(pickup_drop_pairs)}), retry bez constraints"
+            )
+            with _ST.work_span("solver_attempt", attempt="retry_without_windows"):
+                _sol = tsp_solver.solve_tsp_with_constraints(
+                    num_stops=N,
+                    pickup_drop_pairs=pickup_drop_pairs,
+                    distance_matrix_km=distance_matrix,
+                    time_matrix_min=time_matrix,
+                    time_windows=None,
+                    max_route_min=120.0,
+                    time_limit_ms=int(_ot_ms),
+                    delivery_soft_deadlines=delivery_soft_deadlines,
+                    pickup_freshness_penalties=pickup_freshness_penalties,
+                    pickup_committed_penalties=pickup_committed_penalties,
+                    pickup_committed_penalties_t2=pickup_committed_penalties_t2,
+                    delivery_food_age_penalties=fa_pen,
+                    span_cost_coeff=_span_cost_coeff,
+                    delivery_sla_hard_span=hard_span,
+                    delivery_sla_hard_bounds=hard_bounds,
+                    sla_minutes_hard=float(sla_minutes),
+                    warm_start_routes=None,
+                )
         return _sol
 
     if _hard_sla and delivery_food_age_penalties is not None:

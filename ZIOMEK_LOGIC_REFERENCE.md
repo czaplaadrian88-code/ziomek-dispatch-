@@ -927,6 +927,28 @@ the agent citation was not line-verified.
 - **Bajt-parytet**: OFF vs ON = 0 mismatch na fuzzie ≥400 realnych zdarzeń (events.db, flota 0/3/5/8/10/12, werdykty PROPOSE+KOORD+best-effort), po wykluczeniu WYŁĄCZNIE pól czysto-czasowych (`latency_ms`, `r07_compute_latency_ms`, `osrm_cache_age_s`, `lgbm_*.evaluation_ts/latency_ms`, `ts`) — potwierdzone kontrolą OFF vs OFF (identyczne). OFF (default) = ścieżka bajt-w-bajt sprzed fali.
 - **Pomiar (replay, fleet=10, nice-19)**: p50 402→312 ms (**−22,4%**), mean 389→325 (−16,5%), p95 566→470 (−17%); flags-frozen −63 ms, plans-cached −47 ms (stackują). Offline single-proc = DOLNA granica (peak: kontencja fcntl-locka planów + stat spam między równoległymi decyzjami → większy zysk). Strażniki: `tests/test_perf_lazy_members.py` (7 behawioralnych + mutation ×3: const-key/no-deepcopy/TTL=0 KILL). Flip = OSOBNY ACK (wpis flags.json + restart shadow + pomiar p95 live przed peakiem); rollback hot=false.
 
+### Sprint 3 Z-P1-03 (2026-07-10) — pełny stage timing, default OFF
+- `ENABLE_STAGE_TIMING_OBSERVATION` — **flaga INFRA/obserwacyjna, NIE decyzyjna**.
+  Brak klucza i fallback `common.ENABLE_STAGE_TIMING_OBSERVATION=False` oznacza
+  ścieżkę OFF: bez `DecisionTrace`, dodatkowego query głębokości kolejki,
+  `timing`/`queue_timing`/`event_ref` w głównym ledgerze i bez sidecara. ON
+  mierzy queue/fleet/pre-recheck/fan-out/OSRM/solver/selection/write/ACK/E2E w
+  kontraktach `decision_timing.v1` i `decision_stage_timing.v1`; nie narzuca
+  budżetu ani backpressure i nie jest wejściem selection/feasibility/scoring.
+  Stan jest snapshotowany raz na tick, więc hot reload działa między batchami,
+  nie w połowie batcha. Sidecar ma pseudonimowe referencje, `0600` i osobny
+  wersjonowany logrotate `deploy/stage-timing-logrotate.conf` (`daily`,
+  `rotate 30`, `maxsize 100M`; próg rozmiaru rotuje wcześniej i nie wyłącza
+  rotacji dziennej). `tools/paired_flag_replay.py` wstrzykuje flagę do
+  zamrożonego world record wyłącznie w pamięci; zwykła podmiana live flags nie
+  jest testem ON, bo replay odtwarza snapshot flag rekordu. Na korpusie 202
+  rekordów oba porządki OFF/ON miały zero różnic `verdict/best_cid/best_score`,
+  ale wykazały miękki scheduling drift `pool_feasible+reason`, więc nie ma
+  deklaracji pełnego byte-parity.
+  Aktywacja wymaga osobnego ACK, instalacji logrotate, klucza `true` w
+  `flags.json`, kontroli fingerprinta/coverage i minimum 48 h canary. Rollback
+  hot = `false`; błąd odczytu flagi fail-closed do OFF.
+
 ### P-FLAGREG partia D (2026-07-05) — doc-uzupełnienie flag decyzyjnych/danościeżkowych (C-FLAG-DRIFT ↓12)
 
 Flagi LIVE (wszystkie `flags.json=true`, hot-reload), dotąd nieudokumentowane w ref; shadow/alert/scalar

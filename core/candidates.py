@@ -29,6 +29,7 @@ from dispatch_v2 import scoring
 from dispatch_v2 import calib_maps
 from dispatch_v2 import eta_load_aware
 from dispatch_v2 import pln_objective
+from dispatch_v2.observability import stage_timing as _ST
 
 
 @dataclass
@@ -59,6 +60,9 @@ class EvalContext:
     # Snapshot plan_version z poczatku calej decyzji (przed pula kandydatow).
     # None = snapshot niedostepny; panel-watcher wtedy bezpiecznie pomija zapis.
     plan_versions: Optional[Dict[str, Optional[int]]] = None
+    # Z-P1-03: jawna propagacja do workera ThreadPool (ContextVar sam nie
+    # przechodzi przez executor). Pole jest wyłącznie obserwacyjne.
+    timing_trace: Any = None
 
 
 def eval_courier(ctx: EvalContext, cid, cs):
@@ -68,13 +72,14 @@ def eval_courier(ctx: EvalContext, cid, cs):
     # try/finally jest safety net dla early return None paths (cleanup TLS
     # idempotent — stop_v2_request_tracking w obu miejscach OK).
     from dispatch_v2 import osrm_client as _osrm_client
-    _osrm_client.start_v2_request_tracking()
-    try:
-        return eval_courier_inner(ctx, cid, cs)
-    finally:
-        # Idempotent cleanup — inner mogło już stop'nąć przed Candidate construction;
-        # ten call wtedy zwraca None (TLS już wyczyszczony). Defense-in-depth dla raise.
-        _osrm_client.stop_v2_request_tracking()
+    with _ST.candidate_scope(ctx.timing_trace, str(cid)):
+        _osrm_client.start_v2_request_tracking()
+        try:
+            return eval_courier_inner(ctx, cid, cs)
+        finally:
+            # Idempotent cleanup — inner mogło już stop'nąć przed Candidate construction;
+            # ten call wtedy zwraca None (TLS już wyczyszczony). Defense-in-depth dla raise.
+            _osrm_client.stop_v2_request_tracking()
 
 
 def eval_courier_inner(ctx: EvalContext, cid, cs):
@@ -167,11 +172,12 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         _k07_apply_fresh_ck(bag_sim, _k07_prefetched_ck)
     elif bag_sim and C.ENABLE_V327_PRE_PROPOSAL_RECHECK:
         try:
-            _fresh_ck_dict = get_fresh_czas_kuriera_for_bag(bag_sim, now)
-            # Override OrderSim.czas_kuriera_warsaw dla orders gdzie fresh != cached.
-            # Downstream scoring/TSP/feasibility używa updated values w tym candidate run.
-            # (reguła nadpisania = wspólny helper _k07_apply_fresh_ck, kontrakt ①)
-            _k07_apply_fresh_ck(bag_sim, _fresh_ck_dict)
+            with _ST.work_span("pre_recheck"):
+                _fresh_ck_dict = get_fresh_czas_kuriera_for_bag(bag_sim, now)
+                # Override OrderSim.czas_kuriera_warsaw dla orders gdzie fresh != cached.
+                # Downstream scoring/TSP/feasibility używa updated values w tym candidate run.
+                # (reguła nadpisania = wspólny helper _k07_apply_fresh_ck, kontrakt ①)
+                _k07_apply_fresh_ck(bag_sim, _fresh_ck_dict)
         except Exception as _e:
             log.warning(f"V3.27.1 pre_recheck oid_new={new_order.order_id} cid={cid} fail: {_e}")
             # Defensive: continue z cached bag_sim values (zero behavior change)
