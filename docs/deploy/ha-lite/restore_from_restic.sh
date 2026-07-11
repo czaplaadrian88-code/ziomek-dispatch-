@@ -48,7 +48,11 @@ usage() {
     '  --papu-format auto|plain|encrypted  (domyslnie auto: globalnie najnowszy)' \
     '  --target PATH                       (nowy leaf pod A360 scratch root)' \
     '  --snapshot ID                       (domyslnie latest, przypinany do ID)' \
-    '  --pg-image IMAGE@sha256:DIGEST       (wymagany tylko dla drill)'
+    '  --pg-image IMAGE@sha256:DIGEST       (wymagany tylko dla drill)' \
+    '' \
+    'Wymagane limity bajtow:' \
+    '  A360_DR0_SCRATCH_BUDGET_BYTES       (artifact i drill)' \
+    '  A360_DR0_DOCKER_BUDGET_BYTES        (drill)'
 }
 
 PHASE="CLI"
@@ -156,6 +160,60 @@ MIN_MEMORY_BYTES="${A360_DR0_MIN_MEMORY_BYTES:-3221225472}"
 MIN_PG_TABLES="${A360_DR0_MIN_PG_TABLES:-50}"
 PG_READY_TIMEOUT="${A360_DR0_PG_READY_TIMEOUT_SECONDS:-30}"
 PAPU_BACKUP_KEY_FILE="${PAPU_BACKUP_KEY_FILE:-}"
+SCRATCH_BUDGET_BYTES="${A360_DR0_SCRATCH_BUDGET_BYTES:-}"
+DOCKER_BUDGET_BYTES="${A360_DR0_DOCKER_BUDGET_BYTES:-}"
+
+# Wersjonowany minimalny kontrakt odtworzenia. Obecnosc plikow prywatnych i
+# tozsamosci jest sprawdzana wylacznie przez metadane (typ, size, link count).
+# Skrypt nigdy nie otwiera ich tresci i nie raportuje nazw ani wartosci.
+REQUIRED_ARTIFACT_CONTRACT_VERSION="a360-dr0-required-artifacts-v1-20260711"
+PRIVATE_CONFIG_BASENAME=".en""v"
+REQUIRED_CORE_RELATIVE_PATHS=(
+  "root/.openclaw/workspace/dispatch_state/orders_state.json"
+  "root/.openclaw/workspace/dispatch_state/courier_plans.json"
+  "root/.openclaw/workspace/dispatch_state/events.db"
+  "root/.openclaw/workspace/scripts/flags.json"
+)
+REQUIRED_PRIVATE_METADATA_RELATIVE_PATHS=(
+  "root/.openclaw/workspace/dispatch_state/kurier_ids.json"
+  "root/.openclaw/workspace/dispatch_state/kurier_piny.json"
+  "root/.openclaw/workspace/dispatch_state/courier_names.json"
+  "root/.openclaw/workspace/dispatch_state/courier_tiers.json"
+  "root/.openclaw/workspace/dispatch_state/grafik_full_names.json"
+  "root/.openclaw/workspace/$PRIVATE_CONFIG_BASENAME"
+  "root/.openclaw/workspace/ordering_app/$PRIVATE_CONFIG_BASENAME"
+  "root/.openclaw/workspace/nadajesz_clone/panel/backend/$PRIVATE_CONFIG_BASENAME"
+)
+REQUIRED_SYSTEMD_RELATIVE_PATHS=(
+  "etc/systemd/system/dispatch-shadow.service"
+  "etc/systemd/system/dispatch-panel-watcher.service"
+  "etc/systemd/system/dispatch-sla-tracker.service"
+  "etc/systemd/system/dispatch-gps.service"
+  "etc/systemd/system/dispatch-telegram.service"
+  "etc/systemd/system/nadajesz-panel.service"
+  "etc/systemd/system/nadajesz-ordering.service"
+  "etc/systemd/system/courier-api.service"
+  "etc/systemd/system/papu-backend.service"
+  "etc/systemd/system/papu-backend-2.service"
+  "etc/systemd/system/papu-notifications-worker.service"
+  "etc/systemd/system/dispatch-restic-backup.service"
+  "etc/systemd/system/dispatch-restic-backup.timer"
+  "etc/systemd/system/nadajesz-panel-backup.service"
+  "etc/systemd/system/nadajesz-panel-backup.timer"
+  "etc/systemd/system/papu-db-backup.service"
+  "etc/systemd/system/papu-db-backup.timer"
+  "etc/systemd/system/backup-sentinel.service"
+  "etc/systemd/system/backup-sentinel.timer"
+)
+REQUIRED_NGINX_RELATIVE_PATHS=(
+  "etc/nginx/sites-available/gps-nadajesz"
+  "etc/nginx/sites-available/lokalka"
+  "etc/nginx/sites-available/bialystok-nadajesz"
+)
+EXPECTED_CORE_ARTIFACTS=4
+EXPECTED_PRIVATE_METADATA_ARTIFACTS=8
+EXPECTED_SYSTEMD_ARTIFACTS=19
+EXPECTED_NGINX_ARTIFACTS=3
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -214,6 +272,62 @@ esac
 [[ "$MIN_PG_TABLES" =~ ^[0-9]+$ ]] && [ "$MIN_PG_TABLES" -gt 0 ] || fail "invalid_pg_table_floor" 2
 [[ "$PG_READY_TIMEOUT" =~ ^[0-9]+$ ]] || fail "invalid_pg_ready_timeout" 2
 [ "$PG_READY_TIMEOUT" -ge 1 ] && [ "$PG_READY_TIMEOUT" -le 60 ] || fail "invalid_pg_ready_timeout" 2
+
+validate_uint63() {
+  "$PYTHON_BIN" -c '
+import sys
+
+try:
+    value = int(sys.argv[1], 10)
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if 0 < value <= (2**63 - 1) else 1)
+' "$1" >/dev/null 2>&1
+}
+checked_capacity() {
+  "$PYTHON_BIN" -c '
+import sys
+
+try:
+    payload = int(sys.argv[1], 10)
+    factor = int(sys.argv[2], 10)
+    reserve = int(sys.argv[3], 10)
+except ValueError:
+    raise SystemExit(1)
+result = payload * factor + reserve
+if payload <= 0 or factor <= 0 or reserve < 0 or result > (2**63 - 1):
+    raise SystemExit(1)
+print(result)
+' "$1" "$2" "$3" 2>/dev/null
+}
+validate_manifest_definition() {
+  local expected="$1"
+  shift
+  [ "$#" -eq "$expected" ] || fail "required_contract_definition_invalid" 2
+  local relative="" seen=$'\n'
+  for relative in "$@"; do
+    [ -n "$relative" ] && [[ "$relative" =~ ^[A-Za-z0-9._/-]+$ ]] \
+      || fail "required_contract_definition_invalid" 2
+    case "$relative" in
+      /*|./*|../*|*/../*|*/..|*//* ) fail "required_contract_definition_invalid" 2 ;;
+    esac
+    case "$seen" in
+      *$'\n'"$relative"$'\n'*) fail "required_contract_definition_invalid" 2 ;;
+    esac
+    seen+="$relative"$'\n'
+  done
+}
+
+validate_manifest_definition "$EXPECTED_CORE_ARTIFACTS" "${REQUIRED_CORE_RELATIVE_PATHS[@]}"
+validate_manifest_definition "$EXPECTED_PRIVATE_METADATA_ARTIFACTS" "${REQUIRED_PRIVATE_METADATA_RELATIVE_PATHS[@]}"
+validate_manifest_definition "$EXPECTED_SYSTEMD_ARTIFACTS" "${REQUIRED_SYSTEMD_RELATIVE_PATHS[@]}"
+validate_manifest_definition "$EXPECTED_NGINX_ARTIFACTS" "${REQUIRED_NGINX_RELATIVE_PATHS[@]}"
+if [ "$MODE" != "verify" ]; then
+  validate_uint63 "$SCRATCH_BUDGET_BYTES" || fail "scratch_budget_required_or_invalid" 2
+fi
+if [ "$MODE" = "drill" ]; then
+  validate_uint63 "$DOCKER_BUDGET_BYTES" || fail "docker_budget_required_or_invalid" 2
+fi
 
 if [ "$TEST_MODE" != "1" ] && [ "$SCRATCH_ROOT" != "/root/a360_dr0_scratch" ]; then
   fail "scratch_root_override_requires_test_mode" 2
@@ -456,21 +570,80 @@ free_bytes_for_path() {
 }
 SCRATCH_FREE_BYTES="$(free_bytes_for_path "$SCRATCH_ROOT")" || fail "scratch_disk_probe_failed"
 [[ "$SCRATCH_FREE_BYTES" =~ ^[0-9]+$ ]] || fail "scratch_disk_probe_failed"
-REQUIRED_SCRATCH_BYTES=$((SNAPSHOT_LOGICAL_BYTES + MIN_FREE_RESERVE_BYTES))
-[ "$SCRATCH_FREE_BYTES" -ge "$REQUIRED_SCRATCH_BYTES" ] || fail "scratch_disk_capacity_too_low"
+SCRATCH_UNPACK_REQUIRED_BYTES="$(checked_capacity "$SNAPSHOT_LOGICAL_BYTES" 2 "$MIN_FREE_RESERVE_BYTES")" \
+  || fail "capacity_arithmetic_unsafe"
+[ "$SCRATCH_UNPACK_REQUIRED_BYTES" -le "$SCRATCH_BUDGET_BYTES" ] \
+  || fail "scratch_budget_exceeded"
+[ "$SCRATCH_FREE_BYTES" -ge "$SCRATCH_UNPACK_REQUIRED_BYTES" ] \
+  || fail "scratch_disk_capacity_too_low"
+SCRATCH_DEVICE="$(stat -c '%d' -- "$SCRATCH_ROOT" 2>/dev/null)" \
+  || fail "scratch_disk_probe_failed"
+[[ "$SCRATCH_DEVICE" =~ ^[0-9]+$ ]] || fail "scratch_disk_probe_failed"
+
+DOCKER_ROOT=""
+DOCKER_DEVICE=""
+DOCKER_FREE_BYTES=0
+DOCKER_EARLY_REQUIRED_BYTES=0
+DOCKER_POST_DECOMPRESS_REQUIRED_BYTES=0
+SCRATCH_DOCKER_SHARED_DEVICE=0
+if [ "$MODE" = "drill" ]; then
+  if [ "$TEST_MODE" = "1" ] && [ -n "${A360_TEST_DOCKER_ROOT:-}" ]; then
+    DOCKER_ROOT="$A360_TEST_DOCKER_ROOT"
+  else
+    DOCKER_ROOT="$($DOCKER_BIN info --format '{{.DockerRootDir}}' 2>/dev/null)" \
+      || fail "docker_root_probe_failed" 20
+  fi
+  [[ "$DOCKER_ROOT" = /* ]] && [ -d "$DOCKER_ROOT" ] && [ ! -L "$DOCKER_ROOT" ] \
+    || fail "docker_root_probe_failed" 20
+  [ "$(readlink -e -- "$DOCKER_ROOT" 2>/dev/null)" = "$DOCKER_ROOT" ] \
+    || fail "docker_root_probe_failed" 20
+  if [ "$TEST_MODE" = "1" ] && [ -n "${A360_TEST_DOCKER_FREE_BYTES:-}" ]; then
+    DOCKER_FREE_BYTES="$A360_TEST_DOCKER_FREE_BYTES"
+  else
+    DOCKER_FREE_BYTES="$(free_bytes_for_path "$DOCKER_ROOT")" \
+      || fail "docker_disk_probe_failed" 20
+  fi
+  [[ "$DOCKER_FREE_BYTES" =~ ^[0-9]+$ ]] || fail "docker_disk_probe_failed" 20
+  DOCKER_DEVICE="$(stat -c '%d' -- "$DOCKER_ROOT" 2>/dev/null)" \
+    || fail "docker_disk_probe_failed" 20
+  if [ "$TEST_MODE" = "1" ] && [ -n "${A360_TEST_SAME_DEVICE:-}" ]; then
+    case "$A360_TEST_SAME_DEVICE" in
+      0) DOCKER_DEVICE="different-device" ;;
+      1) DOCKER_DEVICE="$SCRATCH_DEVICE" ;;
+      *) fail "docker_disk_probe_failed" 20 ;;
+    esac
+  fi
+  DOCKER_EARLY_REQUIRED_BYTES="$(checked_capacity "$SNAPSHOT_LOGICAL_BYTES" 4 "$MIN_FREE_RESERVE_BYTES")" \
+    || fail "capacity_arithmetic_unsafe" 20
+  [ "$DOCKER_EARLY_REQUIRED_BYTES" -le "$DOCKER_BUDGET_BYTES" ] \
+    || fail "docker_budget_exceeded_before_unpack" 20
+  [ "$DOCKER_FREE_BYTES" -ge "$DOCKER_EARLY_REQUIRED_BYTES" ] \
+    || fail "docker_disk_capacity_too_low_before_unpack" 20
+  if [ "$DOCKER_DEVICE" = "$SCRATCH_DEVICE" ]; then
+    SCRATCH_DOCKER_SHARED_DEVICE=1
+    SHARED_DEVICE_REQUIRED_BYTES="$(checked_capacity "$SNAPSHOT_LOGICAL_BYTES" 6 "$MIN_FREE_RESERVE_BYTES")" \
+      || fail "capacity_arithmetic_unsafe" 20
+    [ "$SCRATCH_FREE_BYTES" -ge "$SHARED_DEVICE_REQUIRED_BYTES" ] \
+      && [ "$DOCKER_FREE_BYTES" -ge "$SHARED_DEVICE_REQUIRED_BYTES" ] \
+      || fail "shared_device_capacity_too_low_before_unpack" 20
+  fi
+fi
 
 PHASE="EXTRACT"
 RESTORE_START_MS="$(monotonic_ms)"
 "$RESTIC_BIN" restore "$SNAPSHOT_ID" --target "$TARGET" >/dev/null 2>&1 || fail "snapshot_restore_failed"
 chmod 0700 -- "$TARGET"
 [ "$(stat -c '%a' -- "$TARGET")" = "700" ] || fail "target_permissions_changed"
+TARGET_WORKING_SET_BYTES="$(du -sb -- "$TARGET" 2>/dev/null | awk '{print $1}')" \
+  || fail "scratch_usage_probe_failed"
+[[ "$TARGET_WORKING_SET_BYTES" =~ ^[0-9]+$ ]] || fail "scratch_usage_probe_failed"
+[ "$TARGET_WORKING_SET_BYTES" -le "$SCRATCH_BUDGET_BYTES" ] \
+  || fail "scratch_budget_exceeded_after_unpack"
 
 STATE_ROOT="$TARGET/root/.openclaw/workspace/dispatch_state"
 SCRIPTS_ROOT="$TARGET/root/.openclaw/workspace/scripts"
 PANEL_DIR="$TARGET/root/backups/nadajesz_panel"
 PAPU_DIR="$TARGET/root/backups/papu"
-SYSTEMD_DIR="$TARGET/etc/systemd/system"
-NGINX_DIR="$TARGET/etc/nginx/sites-available"
 ORDERS_JSON="$STATE_ROOT/orders_state.json"
 PLANS_JSON="$STATE_ROOT/courier_plans.json"
 FLAGS_JSON="$SCRIPTS_ROOT/flags.json"
@@ -481,6 +654,15 @@ require_regular() {
   assert_no_symlink_components "$path"
   [ -f "$path" ] && [ ! -L "$path" ] || fail "required_artifact_missing_or_unsafe"
   [ "$(stat -c '%h' -- "$path")" = "1" ] || fail "hardlinked_artifact_rejected"
+}
+require_nonempty_regular() {
+  local path="$1"
+  require_regular "$path"
+  local size=""
+  size="$(stat -c '%s' -- "$path" 2>/dev/null)" \
+    || fail "required_artifact_metadata_invalid"
+  [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -gt 0 ] \
+    || fail "required_artifact_empty"
 }
 require_directory() {
   local path="$1"
@@ -505,10 +687,19 @@ assert_no_symlink_components() {
     *) fail "artifact_outside_scratch" ;;
   esac
 }
-for required in "$ORDERS_JSON" "$PLANS_JSON" "$FLAGS_JSON" "$EVENTS_DB"; do
-  require_regular "$required"
+for required in "${REQUIRED_CORE_RELATIVE_PATHS[@]}"; do
+  require_nonempty_regular "$TARGET/$required"
 done
-for required_dir in "$PANEL_DIR" "$PAPU_DIR" "$SYSTEMD_DIR" "$NGINX_DIR"; do
+for required in "${REQUIRED_PRIVATE_METADATA_RELATIVE_PATHS[@]}"; do
+  require_nonempty_regular "$TARGET/$required"
+done
+for required in "${REQUIRED_SYSTEMD_RELATIVE_PATHS[@]}"; do
+  require_nonempty_regular "$TARGET/$required"
+done
+for required in "${REQUIRED_NGINX_RELATIVE_PATHS[@]}"; do
+  require_nonempty_regular "$TARGET/$required"
+done
+for required_dir in "$PANEL_DIR" "$PAPU_DIR"; do
   require_directory "$required_dir"
 done
 
@@ -622,10 +813,10 @@ SQLITE_AUDIT_COLUMNS="$($SQLITE_BIN -readonly "$EVENTS_DB" "SELECT count(*) FROM
   && [ "$SQLITE_AUDIT_COLUMNS" = "6" ] \
   || fail "sqlite_required_columns_missing"
 
-SYSTEMD_COUNT="$(find "$SYSTEMD_DIR" -maxdepth 1 -type f -printf x | wc -c)"
-NGINX_COUNT="$(find "$NGINX_DIR" -maxdepth 1 -type f -printf x | wc -c)"
-[ "$SYSTEMD_COUNT" -gt 0 ] || fail "systemd_artifacts_missing"
-[ "$NGINX_COUNT" -gt 0 ] || fail "nginx_artifacts_missing"
+CORE_REQUIRED_COUNT="${#REQUIRED_CORE_RELATIVE_PATHS[@]}"
+PRIVATE_METADATA_REQUIRED_COUNT="${#REQUIRED_PRIVATE_METADATA_RELATIVE_PATHS[@]}"
+SYSTEMD_COUNT="${#REQUIRED_SYSTEMD_RELATIVE_PATHS[@]}"
+NGINX_COUNT="${#REQUIRED_NGINX_RELATIVE_PATHS[@]}"
 RESTORED_FILE_COUNT="$(find "$TARGET" -type f -printf x | wc -c)"
 RESTORED_BYTES="$(du -sb -- "$TARGET" | awk '{print $1}')"
 
@@ -662,6 +853,7 @@ PAPU_SCHEMA_SENTINELS=0
 SEPARATE_CONTAINER=0
 SEPARATE_VOLUME=0
 NETWORK_NONE=0
+POSTGRES_SCHEMA_SMOKE_DONE_MS=0
 
 pg_query_scalar() {
   local database="$1" query="$2"
@@ -689,18 +881,26 @@ if [ "$MODE" = "drill" ]; then
   # Restic/dekompresja mogly trwac dlugo; zamknij race z nowa regresja lub
   # backupem, zanim powstanie jakikolwiek zasob Docker.
   assert_host_capacity
+  CURRENT_DOCKER_ROOT=""
   if [ "$TEST_MODE" = "1" ] && [ -n "${A360_TEST_DOCKER_FREE_BYTES:-}" ]; then
-    DOCKER_FREE_BYTES="$A360_TEST_DOCKER_FREE_BYTES"
+    CURRENT_DOCKER_ROOT="${A360_TEST_DOCKER_ROOT:-$DOCKER_ROOT}"
+    DOCKER_FREE_BYTES="${A360_TEST_DOCKER_FREE_BYTES_AFTER_DECOMPRESS:-$A360_TEST_DOCKER_FREE_BYTES}"
   else
-    DOCKER_ROOT="$($DOCKER_BIN info --format '{{.DockerRootDir}}' 2>/dev/null)" \
+    CURRENT_DOCKER_ROOT="$($DOCKER_BIN info --format '{{.DockerRootDir}}' 2>/dev/null)" \
       || fail "docker_root_probe_failed" 20
-    [[ "$DOCKER_ROOT" = /* ]] && [ -d "$DOCKER_ROOT" ] && [ ! -L "$DOCKER_ROOT" ] \
-      || fail "docker_root_probe_failed" 20
-    DOCKER_FREE_BYTES="$(free_bytes_for_path "$DOCKER_ROOT")" || fail "docker_disk_probe_failed" 20
+    DOCKER_FREE_BYTES="$(free_bytes_for_path "$CURRENT_DOCKER_ROOT")" \
+      || fail "docker_disk_probe_failed" 20
   fi
+  [ "$CURRENT_DOCKER_ROOT" = "$DOCKER_ROOT" ] || fail "docker_root_changed_during_preflight" 20
   [[ "$DOCKER_FREE_BYTES" =~ ^[0-9]+$ ]] || fail "docker_disk_probe_failed" 20
-  REQUIRED_DOCKER_BYTES=$((2 * (PANEL_SQL_BYTES + PAPU_SQL_BYTES) + MIN_FREE_RESERVE_BYTES))
-  [ "$DOCKER_FREE_BYTES" -ge "$REQUIRED_DOCKER_BYTES" ] || fail "docker_disk_capacity_too_low" 20
+  SQL_TOTAL_BYTES="$(checked_capacity "$PANEL_SQL_BYTES" 1 "$PAPU_SQL_BYTES")" \
+    || fail "capacity_arithmetic_unsafe" 20
+  DOCKER_POST_DECOMPRESS_REQUIRED_BYTES="$(checked_capacity "$SQL_TOTAL_BYTES" 3 "$MIN_FREE_RESERVE_BYTES")" \
+    || fail "capacity_arithmetic_unsafe" 20
+  [ "$DOCKER_POST_DECOMPRESS_REQUIRED_BYTES" -le "$DOCKER_BUDGET_BYTES" ] \
+    || fail "docker_budget_exceeded_after_decompress" 20
+  [ "$DOCKER_FREE_BYTES" -ge "$DOCKER_POST_DECOMPRESS_REQUIRED_BYTES" ] \
+    || fail "docker_disk_capacity_too_low_after_decompress" 20
   "$DOCKER_BIN" image inspect "$PG_IMAGE" >/dev/null 2>&1 || fail "pinned_pg_image_unavailable" 20
   if "$DOCKER_BIN" inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
     fail "scratch_container_collision"
@@ -773,10 +973,10 @@ if [ "$MODE" = "drill" ]; then
   [ "$PANEL_INVALID_INDEXES" -eq 0 ] && [ "$PAPU_INVALID_INDEXES" -eq 0 ] || fail "postgres_invalid_index_detected"
   [ "$PANEL_SCHEMA_SENTINELS" -eq 2 ] || fail "panel_schema_identity_failed"
   [ "$PAPU_SCHEMA_SENTINELS" -eq 2 ] || fail "papu_schema_identity_failed"
+  POSTGRES_SCHEMA_SMOKE_DONE_MS="$(monotonic_ms)"
 fi
 
 PHASE="CLEANUP"
-SMOKE_DONE_MS="$(monotonic_ms)"
 cleanup_docker || fail "scratch_resource_cleanup_failed"
 [ "$CONTAINER_CREATED" = "0" ] && [ "$VOLUME_CREATED" = "0" ] || fail "scratch_resource_cleanup_incomplete"
 TOTAL_DONE_MS="$(monotonic_ms)"
@@ -784,7 +984,10 @@ TOTAL_DONE_MS="$(monotonic_ms)"
 PHASE="REPORT"
 REPORT="$TARGET/a360_dr0_restore_report.json"
 REPORT_TMP="$TARGET/.a360_dr0_restore_report.tmp"
-RTO_TO_SMOKE_MS=$((SMOKE_DONE_MS - START_MS))
+TO_POSTGRES_SCHEMA_SMOKE_MS=0
+if [ "$MODE" = "drill" ]; then
+  TO_POSTGRES_SCHEMA_SMOKE_MS=$((POSTGRES_SCHEMA_SMOKE_DONE_MS - START_MS))
+fi
 TOTAL_RUN_MS=$((TOTAL_DONE_MS - START_MS))
 ARTIFACT_RESTORE_MS=$((ARTIFACT_DONE_MS - RESTORE_START_MS))
 SNAPSHOT_PREFIX="${SNAPSHOT_ID:0:12}"
@@ -802,10 +1005,27 @@ import sys
 path = sys.argv[1]
 mode = sys.argv[2]
 payload = {
-    "schema": "a360-dr0-restore-report-v1",
+    "schema": "a360-dr0-restore-report-v2",
     "status": "PASS",
     "mode": mode,
-    "rto_scope": "full_isolated_drill" if mode == "drill" else "artifact_only",
+    "evidence_scope": (
+        "artifact_and_postgres_schema_only"
+        if mode == "drill" else "artifact_integrity_only"
+    ),
+    "full_service_recovery_proven": False,
+    "service_rto": {
+        "status": "HOLD",
+        "proven": False,
+        "seconds": None,
+        "missing_evidence": [
+            "application_import",
+            "application_health",
+            "service_start_order",
+            "systemd_activation",
+            "nginx_activation",
+            "traffic_switch",
+        ],
+    },
     "snapshot": {
         "id_prefix": sys.argv[3],
         "time_utc": sys.argv[4],
@@ -821,10 +1041,47 @@ payload = {
         "json_worst_seconds": int(sys.argv[9]),
         "worst_case_upper_bound_seconds": int(sys.argv[10]),
     },
-    "rto": {
-        "to_smoke_seconds": round(int(sys.argv[11]) / 1000.0, 3) if mode == "drill" else None,
+    "recovery_timing": {
+        "scope": (
+            "artifact_and_postgres_schema_only"
+            if mode == "drill" else "artifact_integrity_only"
+        ),
+        "to_postgres_schema_smoke_seconds": (
+            round(int(sys.argv[11]) / 1000.0, 3) if mode == "drill" else None
+        ),
         "artifact_restore_seconds": round(int(sys.argv[12]) / 1000.0, 3),
         "total_run_seconds": round(int(sys.argv[13]) / 1000.0, 3),
+    },
+    "required_artifact_contract": {
+        "version": sys.argv[37],
+        "core_required": int(sys.argv[38]),
+        "core_satisfied": int(sys.argv[38]),
+        "private_metadata_required": int(sys.argv[39]),
+        "private_metadata_satisfied": int(sys.argv[39]),
+        "systemd_required": int(sys.argv[20]),
+        "systemd_satisfied": int(sys.argv[20]),
+        "nginx_required": int(sys.argv[21]),
+        "nginx_satisfied": int(sys.argv[21]),
+        "private_file_contents_read": False,
+    },
+    "capacity_preflight": {
+        "run_budget_enforced": True,
+        "filesystem_quota_enforced": False,
+        "free_space_checked": True,
+        "scratch_budget_bytes": int(sys.argv[40]),
+        "scratch_unpack_required_bytes": int(sys.argv[41]),
+        "scratch_free_bytes_at_preflight": int(sys.argv[42]),
+        "docker_budget_bytes": int(sys.argv[43]) if mode == "drill" else None,
+        "docker_early_required_bytes": int(sys.argv[44]) if mode == "drill" else None,
+        "docker_post_decompress_required_bytes": (
+            int(sys.argv[45]) if mode == "drill" else None
+        ),
+        "docker_free_bytes_at_last_preflight": (
+            int(sys.argv[46]) if mode == "drill" else None
+        ),
+        "scratch_and_docker_share_device": (
+            bool(int(sys.argv[47])) if mode == "drill" else None
+        ),
     },
     "artifacts": {
         "restored_file_count": int(sys.argv[14]),
@@ -838,8 +1095,8 @@ payload = {
         "plans_top_level_count": int(sys.argv[17]),
         "flags_top_level_count": int(sys.argv[18]),
         "sqlite_table_count": int(sys.argv[19]),
-        "systemd_file_count": int(sys.argv[20]),
-        "nginx_file_count": int(sys.argv[21]),
+        "systemd_required_file_count": int(sys.argv[20]),
+        "nginx_required_file_count": int(sys.argv[21]),
         "panel_dump_format": "plain",
         "papu_dump_format": sys.argv[22],
     },
@@ -868,12 +1125,16 @@ with os.fdopen(fd, "w", encoding="utf-8") as handle:
     os.fsync(handle.fileno())
 ' "$REPORT_TMP" "$MODE" "$SNAPSHOT_PREFIX" "$SNAPSHOT_TIME" "$SNAPSHOT_RPO_SECONDS" \
   "$PANEL_RPO_SECONDS" "$PAPU_RPO_SECONDS" "$SQLITE_RPO_SECONDS" "$JSON_RPO_SECONDS" "$RPO_WORST_SECONDS" \
-  "$RTO_TO_SMOKE_MS" "$ARTIFACT_RESTORE_MS" "$TOTAL_RUN_MS" "$RESTORED_FILE_COUNT" "$RESTORED_BYTES" \
+  "$TO_POSTGRES_SCHEMA_SMOKE_MS" "$ARTIFACT_RESTORE_MS" "$TOTAL_RUN_MS" "$RESTORED_FILE_COUNT" "$RESTORED_BYTES" \
   "$ORDERS_COUNT" "$PLANS_COUNT" "$FLAGS_COUNT" "$SQLITE_TABLES" "$SYSTEMD_COUNT" "$NGINX_COUNT" \
   "$PAPU_SELECTED_FORMAT" "$PANEL_TABLES" "$PAPU_TABLES" "$PANEL_INVALID_INDEXES" "$PAPU_INVALID_INDEXES" \
   "$SEPARATE_CONTAINER" "$SEPARATE_VOLUME" "$NETWORK_NONE" "$PG_IMAGE_DIGEST_PREFIX" \
   "$SNAPSHOT_LOGICAL_FILES" "$SNAPSHOT_LOGICAL_BYTES" "$PANEL_SQL_BYTES" "$PAPU_SQL_BYTES" \
   "$PANEL_SCHEMA_SENTINELS" "$PAPU_SCHEMA_SENTINELS" \
+  "$REQUIRED_ARTIFACT_CONTRACT_VERSION" "$CORE_REQUIRED_COUNT" "$PRIVATE_METADATA_REQUIRED_COUNT" \
+  "$SCRATCH_BUDGET_BYTES" "$SCRATCH_UNPACK_REQUIRED_BYTES" "$SCRATCH_FREE_BYTES" \
+  "${DOCKER_BUDGET_BYTES:-0}" "$DOCKER_EARLY_REQUIRED_BYTES" \
+  "$DOCKER_POST_DECOMPRESS_REQUIRED_BYTES" "$DOCKER_FREE_BYTES" "$SCRATCH_DOCKER_SHARED_DEVICE" \
   || fail "report_write_failed"
 chmod 0600 "$REPORT_TMP"
 mv -f -- "$REPORT_TMP" "$REPORT"
@@ -881,7 +1142,7 @@ mv -f -- "$REPORT_TMP" "$REPORT"
 [ "$(stat -c '%a' -- "$TARGET")" = "700" ] || fail "target_permissions_failed"
 
 FINALIZED=1
-printf 'PASS scope=%s rto_to_smoke_ms=%s rpo_estimated_upper_bound_seconds=%s cleanup=verified\n' \
-  "$( [ "$MODE" = "drill" ] && printf full_isolated_drill || printf artifact_only )" \
-  "$( [ "$MODE" = "drill" ] && printf '%s' "$RTO_TO_SMOKE_MS" || printf not_applicable )" \
+printf 'PASS scope=%s recovery_to_postgres_schema_smoke_ms=%s rpo_estimated_upper_bound_seconds=%s cleanup=verified\n' \
+  "$( [ "$MODE" = "drill" ] && printf artifact_and_postgres_schema_only || printf artifact_integrity_only )" \
+  "$( [ "$MODE" = "drill" ] && printf '%s' "$TO_POSTGRES_SCHEMA_SMOKE_MS" || printf not_applicable )" \
   "$RPO_WORST_SECONDS"
