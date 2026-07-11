@@ -5,11 +5,13 @@
 ziomek_pred_calibration (predykcja silnika = baseline), geocode_cache + geocoding (coords),
 restaurant_meta (prep-variance), OSRM :5001 (free-flow per noga).
 
-Kluczowe cechy (znane w momencie predykcji — bez wycieku z przyszłości):
-  - kontekst floty: OBCIĄŻENIE (rekonstruowane z interwałów picked_up..delivered per kurier)
-  - czas: godzina, slot (peak_lunch/high_risk/peak_dinner/off), weekday
-  - zlecenie: OSRM dystans/free-flow (restauracja→dostawa), restauracja (prep-variance), solo/worek
-  - kurier: courier_id (agregaty historyczne = model-side, leakage-safe w models.py)
+CECHY SERWOWANE (dostepne w chwili decyzji): courier_id, restauracja,
+was_czasowka, OSRM dystans/free-flow oraz agregaty historyczne kuriera liczone
+wylacznie z train.
+
+POLA OUTCOME-ONLY: zrekonstruowane load/is_bundle, hour/slot/weekday z
+faktycznego pickup oraz biezacy prep_var_med. Zostaja w store wylacznie do
+segmentacji/audytu po fakcie i NIE sa cechami modeli (kontrakt w models.py).
 TARGETY (rzeczywiste): odbiór (picked_up vs czas_kuriera / pred silnika), dostawa (delivered-picked_up).
 
 Pisze WYŁĄCZNIE do eta_calib.db (tabela eta_calib_features). Zero mutacji obiektów Ziomka.
@@ -40,6 +42,18 @@ except Exception:  # pragma: no cover
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 log = logging.getLogger("eta_calib.features")
+
+FEATURE_PROVENANCE = {
+    "decision_time": frozenset({
+        "courier_id", "rest_lat", "rest_lon", "osrm_deliv_km",
+        "osrm_deliv_ff_min", "was_czasowka",
+    }),
+    "train_history_only": frozenset({"pace_deliv"}),
+    "outcome_only": frozenset({
+        "actual_deliver_min", "hour", "is_bundle", "load",
+        "pickup_slip_koord_min", "prep_var_med", "slot", "weekday",
+    }),
+}
 
 # ── slot dayparts (spójne z calib_maps.time_slot_warsaw) ──
 def slot_of(hour: int) -> str:
@@ -198,7 +212,11 @@ def geocode_cached(address: str, geocache: dict, city: str = "Białystok",
 
 def reconstruct_load(sla_rows: List[dict]) -> Dict[str, int]:
     """OBCIĄŻENIE per order = ile zleceń kurier miał odebranych-ale-niedostarczonych
-    w momencie ODBIORU tego zlecenia (rekonstrukcja z interwałów picked_up..delivered)."""
+    w momencie FAKTYCZNEGO ODBIORU (rekonstrukcja z zamknietych interwalow).
+
+    To pole jest outcome-only: wolno nim segmentowac raport po fakcie, ale nie
+    wolno karmic modelu serwowanego bez osobnego decision-time snapshotu.
+    """
     by_courier: Dict[str, List[Tuple[datetime, datetime, str]]] = {}
     for r in sla_rows:
         cid = str(r.get("courier_id"))
@@ -281,7 +299,7 @@ def build(cfg: dict) -> dict:
         rutcom.setdefault(oid, ck)
     log.info("czas_kuriera: Rutcom+żywy = %d zleceń", len(rutcom))
 
-    # ── prep-variance per restauracja ──
+    # ── prep-variance per restauracja (outcome-only: snapshot nie jest as-of) ──
     prep: Dict[str, float] = {}
     try:
         rm = json.load(open(p["geocode_cache"].replace("geocode_cache.json", "restaurant_meta.json")))
@@ -292,7 +310,7 @@ def build(cfg: dict) -> dict:
     except Exception as e:
         log.warning("prep-variance load: %s", e)
 
-    # ── obciążenie ──
+    # ── obciazenie outcome-only (NIE jest cecha modelu serwowanego) ──
     load_map = reconstruct_load(sla_rows)
     log.info("obciążenie zrekonstruowane dla %d zleceń", len(load_map))
 

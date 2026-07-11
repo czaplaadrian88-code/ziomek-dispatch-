@@ -13,6 +13,10 @@ paths:
   db: /root/.openclaw/workspace/dispatch_state/eta_calib.db
   pickup_map: /root/.openclaw/workspace/dispatch_state/eta_calib_pickup_map.json
   delivery_map: /root/.openclaw/workspace/dispatch_state/eta_calib_delivery_map.json
+  # Challenger zawsze trafia tutaj. Mapa championa powyzej zmienia sie dopiero
+  # po exact-support paired gate; legacy/brak artefaktu = HOLD.
+  pickup_candidate_map: /root/.openclaw/workspace/dispatch_state/eta_calib_pickup_candidate.json
+  delivery_candidate_map: /root/.openclaw/workspace/dispatch_state/eta_calib_delivery_candidate.json
   shadow_log: /root/.openclaw/workspace/dispatch_state/eta_calib_shadow.jsonl
   metrics_log: /root/.openclaw/workspace/dispatch_state/eta_calib_metrics.jsonl
 
@@ -65,7 +69,11 @@ acceptance:            # kryteria GO zdefiniowane Z GÓRY (B1.3 §8)
   p90_coverage_lo: 0.86
   p90_coverage_hi: 0.94
   significance_alpha: 0.05
+  min_paired_records: 30
+  # Gorna granica paired CI challengera nie moze przekroczyc championa.
+  # Sam non-inferiority NIE wystarcza: nadal wymagamy materialnej poprawy i p<alpha.
+  non_inferiority_margin_pct: 0.0
 
 runtime:
-  champion_challenger: true     # promuj tylko gdy bije champion na holdoucie (DM p<alpha)
+  champion_challenger: true     # exact frozen support + paired CI/Wilcoxon + progi acceptance
   shadow_only: true             # NIGDY nie wpina w żywe ETA
