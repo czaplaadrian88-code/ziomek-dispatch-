@@ -86,8 +86,9 @@ N-D: finalny invariant dotyczy wylacznie wybranego planu LOCATION B.
 
 ### Mutation probes
 
-Kazda mutacja byla wykonana przez `apply_patch`, uruchomiona na waskim oracle i
-cofnieta w `finally`; po odtworzeniu klaster byl ponownie zielony.
+Kazda mutacja byla wykonana przez `apply_patch` i uruchomiona na waskim oracle.
+Mutacje przywracano osobnymi `apply_patch`; po odtworzeniu zweryfikowano brak
+markerow mutacji, czysty `git diff --check` i ponownie zielony klaster.
 
 1. `EXEMPT_PREEXISTING -> VIOLATION_INTRODUCED`: **RED, 2 failed / 1 passed**.
 2. Brak baseline carried: `UNKNOWN -> VIOLATION_INTRODUCED`: **RED,
@@ -126,8 +127,11 @@ DEFAULT powyzej.
 - zero zmian `flags.json`, systemd, runtime state, danych lub logow live;
 - zero deployu, restartu i enforcementu; `RuleVerdict.enforcement` pozostaje
   `NONE`, a nowa klasyfikacja nie ma konsumenta decyzyjnego;
-- efektywny fingerprint zostal sprawdzony tylko niewrazliwa droga; nie wykonano
-  odczytu pelnego environment/cmdline ani sekretow;
+- incydent bootstrapu: jednorazowo otwarto `/proc` procesu i przepuszczono
+  zawartosc przez allowlistowy filtr pieciu nazw; wynik byl pusty, bez
+  wyswietlenia sekretow ani PII. Po korekcie bezpieczenstwa wprowadzono zakaz
+  dalszych odczytow environ/cmdline; wszystkie pozniejsze potwierdzenia uzywaly
+  tylko niewrazliwego `FLAG_FINGERPRINT` i celowanych properties;
 - backup kodu = zamrozona baza `e0fd1e4` + jawny commit lane'a; danych nie
   backupowano, bo zadne dane nie sa modyfikowane;
 - rollback po commicie: `git revert e75c4a8`; nie wymaga migracji,
