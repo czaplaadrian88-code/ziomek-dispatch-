@@ -54,7 +54,7 @@ fallbacku do encrypted.
 - `bash -n docs/deploy/ha-lite/restore_from_restic.sh` — PASS.
 - `py_compile tests/test_restore_from_restic_a360_dr0.py` — PASS.
 - `HERMETIC_STRICT=1 ... pytest tests/test_restore_from_restic_a360_dr0.py -q`
-  — **104 passed w 65.23 s**.
+  — finalny run na commitach review: **104 passed w 60.45 s**.
 - Pelna regresja sprzed domkniecia review: **4991 passed, 27 skipped,
   10 xfailed, 147 warnings w 147.83 s**. Nie byla ponawiana, bo aktualne
   zlecenie wymagalo focused tests i nie zmienia silnika Ziomka.
@@ -153,8 +153,8 @@ zgodnego labelu.
 - Base: tag `a360-wave1-closed-20260711`, commit `f679a88`.
 - Commity przed review: `38da482`, `6faf9d9`, `ed52812`, `357b38a`, `9465d79`.
 - Kod i testy domykajace review: `2295ac6`.
-- README/runbook/raport: commit zawierajacy ten raport; finalny SHA podany w
-  handoffie po pushu.
+- README/runbook i glowna aktualizacja raportu: `0ca19b4`.
+- Finalny checkpoint dowodu: commit zawierajacy ten raport; SHA podany po pushu.
 - Push: `origin/ops/a360-dr0-restore`, bez force.
 - Deploy/restart/systemd/nginx/DNS/ruch/flagi/runtime DB: **nie wykonywano**.
 - Produkcyjny kontener i bazy: **nietkniete**.
