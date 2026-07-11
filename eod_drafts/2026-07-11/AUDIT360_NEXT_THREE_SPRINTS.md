@@ -1,6 +1,7 @@
 # AUDIT360 — kolejne trzy bezkolizyjne sprinty — przygotowanie 2026-07-11
 
-Status: **PREPARED, NOT STARTED**. Kolejnosc wynika z dyrektywy
+Status: **RUNNING BRANCH-ONLY od 2026-07-11 23:11 UTC** w tmux71/72/73.
+Kolejnosc wynika z dyrektywy
 stabilnosc/jakosc/skala, potwierdzonego runtime oraz aktualnych bramek. Sprinty
 maja rozlaczne rodziny plikow. Operacje live pozostaja osobnym etapem i nie sa
 autoryzowane samym przygotowaniem karty.
@@ -140,5 +141,6 @@ Kazda sesja startuje poleceniem:
 codex --sandbox danger-full-access --ask-for-approval never
 ```
 
-Karta przygotowuje prace, ale nie uruchamia nowych okien tmux i nie przenosi
-ACK z zamknietego wydania A0/I1/N0.
+Okna uruchomil integrator po zielonym baseline 5143/24/8/0fail/0XPASS. Karta
+nie przenosi ACK z zamknietego wydania A0/I1/N0: wszystkie trzy lane'y sa
+branch-only, a operacje live pozostaja osobnymi bramkami.

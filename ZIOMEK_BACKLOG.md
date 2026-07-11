@@ -2,7 +2,7 @@
 
 > Status: AKTYWNY - SPRINT 1 WDROZONY, OBSERWACJA SHADOW W TOKU; AUDIT360
 > DR1A/OPS0 SOURCE-ONLY W MASTERZE, D1/R0 HOLD DO AT-214; A0/I1/N0
-> WDROZONE I ZWERYFIKOWANE LIVE, ETA PROMOCJA HOLD; NASTEPNE 3 PREPARED
+> WDROZONE I ZWERYFIKOWANE LIVE, ETA PROMOCJA HOLD; SEC0/E0/DATA0 RUNNING
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -65,19 +65,19 @@ przed rozpoczeciem implementacji.
 | Z-P0-02 | Naprawa wieloprocesowego zapisu geocode cache | `flock` jest zakladany na unikalnym tempfile, wiec nie serializuje load-merge-save miedzy procesami. | Cache adresow, restauracji i negative cache przestanie gubic poprawne wpisy przy rownoleglym geokodowaniu. | M | Bez flipa; pelna regresja geocode | DONE - LIVE |
 | Z-P0-03 | Przywrocenie zielonego baseline testow | REOPENED 10.07 po flipie parsera i Audycie 360: default 4846/1; STRICT 4792/6. TEST-11 czytal live `flags.json`, a TEST-12 mial piec klas live reads i dwa ukryte prod-write. | Baseline jest deterministyczny: syntetyczne flags/systemd/state, dokladny live-smoke i tripwire anty-prod bez oslabenia guarda. | M | Zero zmian produkcyjnych; rollback = revert test-only fix-forward | DONE — `4e782e8` + T0 fix-forward z brancha `f015c9f`; tmux57 CLOSED |
 | Z-P0-04 | CAS i wspolna granica planu — REOPENED 10.07 | Dispatcherowe call-site'y CAS sa LIVE, ale Audyt 360 potwierdzil pominiety writer panelu (SPRI-02/DANE-01), odrzucanie strategii solvera, rozjazd stops i null-duration=teleport (TRAS-01/02/03) oraz false-conflict touch_plan (SPRI-03). | Jeden cross-repo owner domknie decyzja→store→panel→apka: prawidlowa kolejnosc, fail-closed czas nogi, provenance/manual marker i CAS bez lost-update/resurrect. | L/XL | Po A360-H1; jeden lane PLAN; deploy readers-first/writer-second i restart za ACK | REOPENED - A360-P0 QUEUED |
-| Z-P0-05 | Retry/DLQ dla eventow failed | Historycznie 106 `NEW_ORDER` ma status failed; brak attempt count, error i automatycznego retry. | Blad przejsciowy nie zgubi obslugi zlecenia; poison event trafi do DLQ z diagnoza i limitem prob. | L | Decyzja o retry policy | PREPARED jako jeden lane `A360-E0` z Z-P1-01; istniejaca Faza A `7eda1b0`/`32745f9` do semantic review, nie wdrozona |
+| Z-P0-05 | Retry/DLQ dla eventow failed | Historycznie 106 `NEW_ORDER` ma status failed; brak attempt count, error i automatycznego retry. | Blad przejsciowy nie zgubi obslugi zlecenia; poison event trafi do DLQ z diagnoza i limitem prob. | L | Decyzja o retry policy | IN_PROGRESS `A360-E0`, tmux72; jeden lane z Z-P1-01, branch-only, policy/worker/migracja live HOLD |
 | Z-P0-06 | Bezpieczenstwo courier API — auth + ownership | Rate-limit per-IP i wspolny ownership guard status/arrival/ground-truth/payment sa LIVE; BEZP-04 pozostaje osobna decyzja UX. | Foreign/missing/malformed dostaja identyczne 403 przed order-specific I/O; owner zachowuje kontrakt. | M | Wydane za ACK 11.07; rollback przywraca BEZP-02, preferowany fix-forward | DONE/LIVE `320aa0e`, API master `fa249e6`; 186/186 predeploy, 19/19 postrestart, PID 925329/NRestarts0/health PASS |
 
 ### P1 - stabilnosc przed autonomia
 
 | ID | Zadanie | Dowod / problem | Co zmieni sie po wykonaniu | Effort | Bramka |
 |---|---|---|---|---:|---|
-| Z-P1-01 | Formalny FSM zlecen | `state_machine` zna statusy, ale nie ma jednej mapy dozwolonych przejsc; zly pickup timestamp jest zastepowany `now()`. | Nielegalne przejscie i uszkodzony czas beda kwarantannowane zamiast po cichu zmieniac prawde SLA. | L | PREPARED w `A360-E0` razem z retry/DLQ; kompatybilnosc replay i retry policy pending |
+| Z-P1-01 | Formalny FSM zlecen | `state_machine` zna statusy, ale nie ma jednej mapy dozwolonych przejsc; zly pickup timestamp jest zastepowany `now()`. | Nielegalne przejscie i uszkodzony czas beda kwarantannowane zamiast po cichu zmieniac prawde SLA. | L | IN_PROGRESS `A360-E0`, tmux72; kompatybilnosc replay i retry policy pending |
 | Z-P1-02 | Kanoniczny ground truth ETA i SLA | Brak potwierdzonego fizycznego pickup/handoff; last-inside i arrival sa tylko obserwowalnymi proxy GPS. | Faza A mierzy to samo okno, kohorte i support bez zgadywania KPI; promocja ETA pozostaje zablokowana. | L | FAZA A + A360-A0 LIVE; kalibrator fail-closed `HOLD/UNBOUND`, zero promocji; potrzebna definicja KPI i champion v2 |
 | Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbijal czasu na etapy. | Faza A mierzy queue/fleet/OSRM/solver/selection/write; nie wlacza limitu kolejki, budzetu ani backpressure. | M | **LIVE SHADOW CANARY ON od 2026-07-11 10:27 UTC**; at-214, werdykt po 48 h |
 | Z-P1-04 | Jawny `DecisionContext` i wiarygodny replay | Effects buffer obejmuje tylko czesc zapisow; Audyt 360 dodatkowo wykazal PARTIAL CORE-01, process-local rozjazdy CORE-02/03 i niekonsumowany gate TEST-03. | R0 rozdziela INPUT_MISS/OSRM_MISS/CRITICAL/SOFT/PARITY, waliduje frozen input i zuzywa OSRM najwyzej raz; pozniej context usunie ukryte kanaly procesu. | XL | R0 TECH ACCEPT `1b38447`, kod NOT MERGED do at-214; narrow/partial, surplus recorded OSRM nadal rezyduum |
 | Z-P1-05 | Kanoniczna tozsamosc kuriera — **DONE Faza A+B 2026-07-10** (pakiet `identity/`, walidator kolizji, onboarding 5-plikowy, backfill names 19→0, kanon pisowni z grafiku; delegacja 9× norm + scoring worker/panel_roster do registry — parity 177/177, golden 21417 par = 0 roznic; ODLOZONE: unifikacja profili ×10/×5 vs ×10/×10 [pomiar+ACK], Krok 4 czytelnicy plikow→registry, konsolidacja courier_api.db) | 121 aliasow mapuje sie do 65 CID; 54 CID maja wiele aliasow, 20 nie ma wpisu w `courier_names`. | Grafik, GPS, PIN, tier, plan i rozliczenia beda laczone przez CID z kontrolowanymi aliasami. | L | Migracja bez zmiany CID |
-| Z-P1-06 | Prywatnosc i retencja world records/logow | Rekordy zawieraja adresy, nazwiska i GPS, maja `0644` i rosna o setki MB dziennie. | Dane beda pseudonimizowane lub szyfrowane, `0600`, kompresowane i usuwane wedlug retencji. | M | `A360-DATA0` PREPARED; branch-only do at-214, delete dopiero po B-05 |
+| Z-P1-06 | Prywatnosc i retencja world records/logow | Rekordy zawieraja adresy, nazwiska i GPS, maja `0644` i rosna o setki MB dziennie. | Dane beda pseudonimizowane lub szyfrowane, `0600`, kompresowane i usuwane wedlug retencji. | M | IN_PROGRESS `A360-DATA0`, tmux73; branch-only do at-214, delete dopiero po B-05 |
 | Z-P1-07 | Rejestr i cykl zycia flag — **FUNDAMENT DONE; FOLLOW-UP A360-FLAG-01/04** | Rejestr 505/505 i checker sa gotowe, ale carry-chain jest kluczem-wabikiem, a czesc flag behawioralnych nadal zyje poza JSON. | Najpierw decyzja retire-vs-unify; pozostawiona flaga dostanie realny consumer, ON!=OFF, fingerprint i nadal pozostanie OFF do osobnego ACK. | M | Po R0/D1; bez laczenia z flipem |
 | Z-P1-08 | Reprodukowalne srodowisko zaleznosci | `requirements-dispatch-venv.txt` pinuje rdzen OR-Tools, ale API ma 4 niepinowane wymagania; CVE/EOL nie maja zatwierdzonego feedu. | DEP0 daje przenosny config i deterministyczna mape 6/6 procesow→venv→manifest→runtime; aktualizacje osobnymi sprintami. | M | DEP0 DONE `53730e9`; pip-check/import PASS, CVE/EOL UNKNOWN; zero zmian venv/manifestow |
 | Z-P1-09 | Jedna polityka czasu i testy DST | W kodzie pozostaja rozne zalozenia dla naive datetime; `sla_tracker` dokumentuje uspiony naive-Warsaw-as-UTC bug. | Wszystkie granice beda przyjmowac jawny typ czasu; testy pokryja DST, polnoc i rollover dnia. | L | Bez zmiany historycznych danych |
@@ -171,14 +171,19 @@ jawny hold, po 3 probach zero resubmitu i zero dispatched. Flagi silnika i stale
 procesy shadow/watcher/API nie byly restartowane. Pelny dowod, backupy i
 rollback: `eod_drafts/2026-07-11/AUDIT360_A0_I1_N0_LIVE_CLOSE.md`.
 
-Kolejne trzy rozlaczne sprinty sa **PREPARED, NOT STARTED**:
+Kolejne trzy rozlaczne sprinty wystartowaly 2026-07-11 23:11 UTC jako
+**RUNNING BRANCH-ONLY, ZERO LIVE**:
 
-1. `A360-SEC0 HOST-BOUNDARY-CREDENTIAL` (`max`) — bind/firewall/rotacja;
-2. `A360-E0 EVENT-RELIABILITY-FSM` (`max`) — Retry/DLQ i FSM jako jeden owner;
-3. `A360-DATA0 PRIVATE-LEDGER-RETENTION` (`high`) — writer-aware 0600,
+1. tmux71 `A360-SEC0 HOST-BOUNDARY-CREDENTIAL` (`max`) — audit/source/runbook
+   dla bind/firewall/rotacji; zero operacji hosta bez osobnego ACK;
+2. tmux72 `A360-E0 EVENT-RELIABILITY-FSM` (`max`) — Retry/DLQ i FSM jako jeden
+   owner; zero policy/worker/migracji live;
+3. tmux73 `A360-DATA0 PRIVATE-LEDGER-RETENTION` (`high`) — writer-aware 0600,
    redakcja, rotacja i retencja bez `copytruncate`.
 
-Karta z write-setami, testami, rollbackiem i bramkami:
+Swiezy baseline `23:05:55Z..23:10:40Z`: 5143 passed, 24 skipped, 8 xfailed,
+0 failed/XPASS; trzy zegarowe preshift self-skipy przeszly do pass. Launch:
+`eod_drafts/2026-07-12/AUDIT360_SEC0_E0_DATA0_LAUNCH.md`; karta projektowa:
 `eod_drafts/2026-07-11/AUDIT360_NEXT_THREE_SPRINTS.md`. SEC0 potrzebuje ACK na
 sieci/credential/restart; DATA0 nie dotyka live corpus przed at-214 i nie usuwa
 danych przed B-05.
@@ -249,7 +254,7 @@ poszerzenie allow-listy strategii byloby zmiana czesciowa.
 
 ### Z-P0-05 - Retry i DLQ eventow
 
-**Stan 2026-07-11:** przygotowany jako wspolny lane
+**Stan 2026-07-11 23:11 UTC:** RUNNING w tmux72 jako wspolny lane
 `A360-E0 EVENT-RELIABILITY-FSM` z Z-P1-01. Istniejaca branchowa Faza A
 `7eda1b0` + `32745f9` nie jest wdrozona i musi przejsc semantic review na
 aktualnym masterze; nie wolno osobno wlaczyc retry bez grafu FSM.
@@ -285,8 +290,8 @@ o minimalnym katalogu przed logowaniem; nie wolno jej domknac przypadkowym 401.
 
 ### Z-P1-01 - Formalny FSM zlecen
 
-**Stan 2026-07-11:** PREPARED razem z Z-P0-05 w jednym lane A360-E0; branch
-jeszcze nie wystartowal. Retry policy, kompatybilnosc historycznego replayu,
+**Stan 2026-07-11 23:11 UTC:** RUNNING razem z Z-P0-05 w jednym lane A360-E0,
+tmux72, branch-only. Retry policy, kompatybilnosc historycznego replayu,
 migracja live i uruchomienie workera sa osobnymi bramkami.
 
 - **Na czym polega:** zdefiniowanie dozwolonych przejsc statusu i warunkow dla
@@ -368,8 +373,8 @@ migracja live i uruchomienie workera sa osobnymi bramkami.
 
 ### Z-P1-06 - Prywatnosc i retencja logow
 
-**Stan 2026-07-11:** sprint `A360-DATA0` jest PREPARED, NOT STARTED. Development
-branch-only ma zaczac od mapy wszystkich writerow i atomicznego 0600. Live
+**Stan 2026-07-11 23:11 UTC:** sprint `A360-DATA0` RUNNING w tmux73. Development
+branch-only zaczyna od mapy wszystkich writerow i atomicznego 0600. Live
 corpus pozostaje nietkniety do at-214; delete jest zabroniony do decyzji B-05.
 
 - **Na czym polega:** klasyfikacja danych wrazliwych i ograniczenie dostepu oraz

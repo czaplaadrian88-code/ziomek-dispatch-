@@ -161,17 +161,21 @@ Pelny odbior wynikow i incydentow bezpieczenstwa:
 - Pelny raport, backupy, interwaly host-load i rollback:
   `eod_drafts/2026-07-11/AUDIT360_A0_I1_N0_LIVE_CLOSE.md`.
 
-### Nastepne trzy — PREPARED, NOT STARTED
+### Nastepne trzy — RUNNING BRANCH-ONLY od 2026-07-11 23:11 UTC
 
-1. `A360-SEC0 HOST-BOUNDARY-CREDENTIAL` (`max`) — P0: publiczne listenery,
-   provider firewall i rotacja credentialu; operacje live tylko za swiezym ACK.
-2. `A360-E0 EVENT-RELIABILITY-FSM` (`max`) — Z-P0-05 i Z-P1-01 u jednego
-   ownera; semantic review istniejacej Fazy A, default OFF/log-only.
-3. `A360-DATA0 PRIVATE-LEDGER-RETENTION` (`high`) — Z-P1-06, writer-aware
-   permissions/redaction/rotation; branch-only do at-214, delete dopiero B-05.
+1. tmux71 `A360-SEC0 HOST-BOUNDARY-CREDENTIAL` (`max`) — P0: publiczne
+   listenery, provider firewall i rotacja credentialu; tylko audit/source/runbook,
+   operacje live za swiezym ACK.
+2. tmux72 `A360-E0 EVENT-RELIABILITY-FSM` (`max`) — Z-P0-05 i Z-P1-01 u
+   jednego ownera; semantic review istniejacej Fazy A, default OFF/log-only.
+3. tmux73 `A360-DATA0 PRIVATE-LEDGER-RETENTION` (`high`) — Z-P1-06,
+   writer-aware permissions/redaction/rotation; branch-only do at-214, delete
+   dopiero B-05.
 
 Rozlaczne write-sety, testy, rollout i rollback:
-`eod_drafts/2026-07-11/AUDIT360_NEXT_THREE_SPRINTS.md`.
+`eod_drafts/2026-07-11/AUDIT360_NEXT_THREE_SPRINTS.md`. Wspolny baseline
+przed startem: 5143 passed, 24 skipped, 8 xfailed, 0 failed/XPASS. Karta
+launchu: `eod_drafts/2026-07-12/AUDIT360_SEC0_E0_DATA0_LAUNCH.md`.
 
 ## 5. Fala 4 po zamknieciu Wave 3 — jedyny P1 przed dlugim PLAN
 
