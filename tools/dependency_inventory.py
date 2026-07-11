@@ -26,7 +26,6 @@ BLOCKED_MARKERS = (
 PATH_ALIASES = (
     ("/root/.openclaw/workspace/scripts/courier_api", "$COURIER_API_ROOT"),
     ("/root/.openclaw/workspace/scripts/dispatch_v2", "$DISPATCH_ROOT"),
-    ("/root/a360_dep0_wt/dispatch_v2", "$DISPATCH_ROOT"),
     ("/root/.openclaw/venvs", "$VENV_ROOT"),
 )
 
@@ -52,6 +51,20 @@ def ensure_safe_text(value: str) -> str:
     if any(marker.lower() in lowered for marker in BLOCKED_MARKERS):
         raise ValueError("sensitive or runtime value rejected")
     return redact_path(value)
+
+
+def resolve_locator(value: str, repo_root: Path) -> tuple[Path, str]:
+    if value.startswith("repo:"):
+        relative = value.removeprefix("repo:")
+        path = (repo_root / relative).resolve()
+        root = repo_root.resolve()
+        if path != root and root not in path.parents:
+            raise ValueError("repo locator escapes checkout root")
+        return path, "$DISPATCH_ROOT/" + relative
+    path = Path(value)
+    if not path.is_absolute():
+        raise ValueError("non-repo locator must be absolute")
+    return path, ensure_safe_text(str(path))
 
 
 def parse_requirements(path: Path) -> list[dict[str, str]]:
@@ -158,15 +171,21 @@ def validate_unit_coverage(config: dict[str, Any], active_units: Iterable[str]) 
     return {"status": "PASS", "expected_units": expected, "active_units": scoped_active, "missing": [], "extra": []}
 
 
-def inventory(config: dict[str, Any], timestamp: str, active_units: Iterable[str] | None = None) -> dict[str, Any]:
+def inventory(
+    config: dict[str, Any],
+    timestamp: str,
+    active_units: Iterable[str] | None = None,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    effective_repo_root = (repo_root or Path(__file__).resolve().parents[1]).resolve()
     coverage = validate_unit_coverage(config, active_units if active_units is not None else discover_active_units(config["discovery"]["command"]))
     environments = []
     for source in sorted(config["environments"], key=lambda row: row["id"]):
         interpreter = Path(source["interpreter"])
         manifests = []
-        for manifest_path in sorted(source["manifests"]):
-            path = Path(manifest_path)
-            manifests.append({"path": ensure_safe_text(str(path)), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "requirements": parse_requirements(path)})
+        for manifest_locator in sorted(source["manifests"]):
+            path, display_path = resolve_locator(manifest_locator, effective_repo_root)
+            manifests.append({"path": display_path, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "requirements": parse_requirements(path)})
         probe = interpreter_probe(interpreter)
         environments.append({
             "id": source["id"], "interpreter": ensure_safe_text(str(interpreter)), "python_version": probe["python_version"],
@@ -182,7 +201,12 @@ def inventory(config: dict[str, Any], timestamp: str, active_units: Iterable[str
     result = {
         "schema": SCHEMA, "generated_at": timestamp, "generator": "tools/dependency_inventory.py", "network_cve_feed_used": False,
         "global_cve_verdict": dict(UNKNOWN), "global_eol_verdict": dict(UNKNOWN), "unit_coverage": coverage,
-        "provenance": {"config": ensure_safe_text(config["provenance"]["config"]), "regeneration_command": ensure_safe_text(config["provenance"]["regeneration_command"])},
+        "provenance": {
+            "config": ensure_safe_text(config["provenance"]["config"]),
+            "regeneration_command": ensure_safe_text(config["provenance"]["regeneration_command"]),
+            "repo_root": "$DISPATCH_ROOT",
+            "repo_root_resolution": "tools/dependency_inventory.py:parents[1]",
+        },
         "environments": environments, "processes": processes,
     }
     ensure_safe_text(json.dumps(result, sort_keys=True))

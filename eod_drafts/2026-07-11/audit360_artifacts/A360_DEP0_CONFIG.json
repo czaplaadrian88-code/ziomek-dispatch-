@@ -38,8 +38,8 @@
       ],
       "interpreter": "/root/.openclaw/venvs/dispatch/bin/python",
       "manifests": [
-        "/root/a360_dep0_wt/dispatch_v2/requirements-dispatch-venv.txt",
-        "/root/a360_dep0_wt/dispatch_v2/tools/eta_calibration/requirements.txt"
+        "repo:requirements-dispatch-venv.txt",
+        "repo:tools/eta_calibration/requirements.txt"
       ]
     }
   ],

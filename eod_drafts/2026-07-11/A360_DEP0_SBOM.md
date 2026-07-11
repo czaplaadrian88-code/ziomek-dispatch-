@@ -66,7 +66,7 @@ licencyjną. Nie należy łączyć tego z automatycznym upgrade'em.
 
 - dwa przebiegi z tym samym timestampem dały identyczny plik;
 - SHA-256 obu wyników:
-  `0522a2ee7c17bcfe73e4862eefea5a45e66353fb5e0034c0003d4711f4c83d43`;
+  `68f6ad62aac10a9cc29fced7b009925aab3a7d7ddfab590a8a1003ed320b97b8`;
 - schema: `a360-dependency-inventory/v1`;
 - mapowanie proces→środowisko oraz expected→active unit jest fail-closed;
 - ścieżki robocze i venv są aliasowane również wtedy, gdy `/root/...` jest
@@ -79,6 +79,9 @@ Artefakt maszynowy:
 
 Wersjonowany config bez danych uwierzytelniających:
 `eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_CONFIG.json`.
+Manifesty z checkoutu są zapisane jako lokatory `repo:...` i rozwiązywane
+względem repo zawierającego uruchomiony generator (`tools/` → parent repo), więc
+config nie zależy od ścieżki worktree i działa po merge do kanonicznego checkoutu.
 
 Dokładna komenda regeneracji:
 
@@ -88,12 +91,14 @@ Dokładna komenda regeneracji:
 
 ## Testy
 
-- `tests/test_dependency_inventory.py`: **9 passed**;
+- `tests/test_dependency_inventory.py`: **11 passed**;
+- ten sam config uruchomiony względem dwóch różnych checkout-rootów daje
+  identyczny wynik i kanoniczne `$DISPATCH_ROOT/...` w SBOM;
 - testy negatywne coverage: missing unit RED, extra unit RED;
 - test osadzonej ścieżki w summary: brak `/root/` w wyniku;
-- pełna kanoniczna regresja `pytest tests/ -q`: **4947 passed, 27 skipped,
+- pełna kanoniczna regresja `pytest tests/ -q`: **4949 passed, 27 skipped,
   10 xfailed, 0 failed**;
-- pełna regresja `HERMETIC_STRICT=1`: **4897 passed, 77 skipped, 10 xfailed,
+- pełna regresja `HERMETIC_STRICT=1`: **4899 passed, 77 skipped, 10 xfailed,
   0 failed**;
 - deterministyczny generator ×2: **byte-identical**;
 - `pip check`: dispatch PASS, courier-api PASS;
