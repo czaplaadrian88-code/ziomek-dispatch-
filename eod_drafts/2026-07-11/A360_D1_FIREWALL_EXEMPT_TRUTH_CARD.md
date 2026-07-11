@@ -1,6 +1,6 @@
 # A360-D1 FIREWALL-EXEMPT-TRUTH — karta proponowanego sprintu
 
-Status: **RUNNING — Wave 3, tmux 65; merge HOLD do odczytu at-214**
+Status: **IMPLEMENTED/TESTED/PUSHED `e193f2a`; merge HOLD do odczytu at-214**
 
 Effort: `ultra`.
 
@@ -8,6 +8,11 @@ Kontrakt wykonawczy: branch `engine/a360-d1-firewall-exempt-truth`, worktree
 `/root/a360_d1_wt/dispatch_v2`, base `e0fd1e4`. Wykonawca nie edytuje
 `ZIOMEK_BACKLOG.md`, kart kolejki ani repo pamieci; integrator odbiera wynik.
 Bez flipa, enforcementu, deployu, restartu i zapisu do danych live.
+
+Wynik lane'a: kod/testy `e75c4a8`, raport `761d896`, korekta transcriptu
+`e193f2a`; branch clean/pushed. Final DEFAULT `5095/27/10/0`, STRICT
+`5045/77/10/0`, focused `36/36`, parity/JSONL/reader `92 passed, 1 skipped`.
+Carried bez pre-decision baseline jest `UNKNOWN`, nie false `INTRODUCED`.
 
 ## Problem i dowod
 

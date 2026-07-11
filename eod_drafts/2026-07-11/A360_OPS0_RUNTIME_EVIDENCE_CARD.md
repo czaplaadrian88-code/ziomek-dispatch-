@@ -1,6 +1,6 @@
 # A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE — karta proponowanego sprintu
 
-Status: **RUNNING — Wave 3, tmux 67; read-only runtime evidence**
+Status: **TOOL ACCEPT/PUSHED `1bb4699`; reprezentatywny profil UNKNOWN**
 
 Effort: `high`.
 
@@ -8,6 +8,11 @@ Kontrakt wykonawczy: branch `ops/a360-ops0-runtime-evidence`, worktree
 `/root/a360_ops0_wt/dispatch_v2`, base `e0fd1e4`. Wykonawca nie edytuje
 `ZIOMEK_BACKLOG.md`, kart kolejki ani repo pamieci; integrator odbiera wynik.
 Bez odczytu EnvironmentFile/environ, zmian `/etc`, deployu, restartu i testu OOM.
+
+Wynik lane'a: branch clean/pushed. Final DEFAULT `5095/27/10/0`, STRICT
+`5045/77/10/0`, targeted `8/8`. Narzedzie bezpiecznie laczy usluge z PID,
+cgroup i niewrazliwymi properties. Jedna probka byla skazona testami, druga
+byla tylko single-sample; sprint nie daje GO do tuningu limitow live.
 
 ## Problem i dowod
 

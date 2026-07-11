@@ -1,6 +1,6 @@
 # A360-DR1A RESTORE-PREP — karta proponowanego sprintu
 
-Status: **RUNNING — Wave 3, tmux 66; tylko faza A code/prep**
+Status: **SOURCE/FAKE ACCEPT/PUSHED `b035523`; DR1B HOLD**
 
 Effort: `high`.
 
@@ -8,6 +8,11 @@ Kontrakt wykonawczy: branch `ops/a360-dr1a-restore-prep`, worktree
 `/root/a360_dr1a_wt/dispatch_v2`, base `e0fd1e4`. Wykonawca nie edytuje
 `ZIOMEK_BACKLOG.md`, kart kolejki ani repo pamieci; integrator odbiera wynik.
 Bez realnego klucza, restic, decrypt, Dockera, DB, deployu i restartu.
+
+Wynik lane'a: branch clean/pushed. Final DEFAULT `5106/27/10/0`, STRICT
+`5056/77/10/0`, DR0+DR1A `157/157`, mutation `4/4`. Powstal bezsekretowy
+one-shot carrier przez stdin, enforced quota z re-probe, fake siedmiostopniowy
+app smoke i exact run-id cleanup. Realne adaptery pozostaja nieinstalowane.
 
 ## Problem i dowod
 

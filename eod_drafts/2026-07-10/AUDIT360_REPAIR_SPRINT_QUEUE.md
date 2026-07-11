@@ -1,8 +1,9 @@
 # Audyt 360 — kolejka napraw i bezkolizyjne sprinty — 2026-07-10
 
-Status: Wave 2 source/docs/test jest zamknieta i zweryfikowana na aktualnej
-bazie Sprintu 3; S0 API-OWNERSHIP jest LIVE. Nie daje to ACK na flage,
-HARD/SOFT, credential, dane, siec ani kolejne operacje live.
+Status: Wave 3 code/test/read-only jest zamknieta na trzech clean/pushed
+branchach; D1 merge pozostaje HOLD do at-214, DR1B pozostaje HOLD, a OPS0 nie
+daje GO do tuningu live. S0 API-OWNERSHIP pozostaje LIVE. Nie daje to ACK na
+flage, HARD/SOFT, credential, dane, siec ani kolejne operacje live.
 
 Fala pierwsza zostala uruchomiona 2026-07-11 o 10:04 UTC w tmux 57/59/61 i
 zamknieta przez integratora tego samego dnia. T0 oraz D0 sa zintegrowane, a S0
@@ -108,19 +109,18 @@ jak R0 — czeka na `at-214`, aby nie skazic paired replay Sprintu 3.
 rozstrzygniecia dopiero po ich wynikach; przedtem nie wolno uzyc starego replayu
 jako argumentu za wariantem biznesowym.
 
-### Wave 3 uruchomiona po zamknieciu Wave 2 — 2026-07-11
+### Wave 3 zamknieta na branchach — 2026-07-11
 
-1. `A360-D1 FIREWALL-EXEMPT-TRUTH` (`ultra`, tmux 65) — development
-   instrumentacji EXEMPT/VIOLATION na branchu
-   `engine/a360-d1-firewall-exempt-truth`; zero enforcementu, merge dopiero po
-   odczycie at-214.
-2. `A360-DR1A RESTORE-PREP` (`high`, tmux 66) — syntetyczny
-   carrier/app-smoke/runbook na branchu `ops/a360-dr1a-restore-prep`, bez
-   sekretu, restic i Dockera; realny drill to osobna faza B `ultra` za ACK.
-3. `A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE` (`high`, tmux 67) — read-only
-   RSS/cgroup/swap/PSI i efektywna precedencja unitow na branchu
-   `ops/a360-ops0-runtime-evidence`, bez EnvironmentFile, zmian `/etc` i
-   restartow.
+1. `A360-D1 FIREWALL-EXEMPT-TRUTH` (`ultra`, tmux 65) — DONE na branchu
+   `engine/a360-d1-firewall-exempt-truth` @ `e193f2a`; v2 rozdziela
+   physical breach od odpowiedzialnosci decyzji, z uczciwym `UNKNOWN` bez
+   baseline. Merge nadal HOLD do odczytu at-214; zero enforcementu.
+2. `A360-DR1A RESTORE-PREP` (`high`, tmux 66) — SOURCE/FAKE ACCEPT na
+   `ops/a360-dr1a-restore-prep` @ `b035523`; carrier/quota/app-smoke/cleanup
+   gotowe syntetycznie. Realny drill to DR1B `ultra` za osobnym ACK.
+3. `A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE` (`high`, tmux 67) — TOOL ACCEPT na
+   `ops/a360-ops0-runtime-evidence` @ `1bb4699`; mapa 10 uslug jest PROVEN,
+   lecz reprezentatywny profil i bezpieczne limity pozostaja UNKNOWN.
 
 Fazy developerskie sa plikowo rozlaczne. Ciezki real DR1B i reprezentatywne
 okno OPS0 nie moga biec jednoczesnie, bo skazilyby pomiar. H1 nadal czeka na
@@ -129,6 +129,9 @@ at-214, integracje R0, D1 oraz decyzje B-01/B-02 i osobny ACK.
 Dokladny kontrakt baz, worktree, write-setow, testow i rollbacku zapisano w
 `eod_drafts/2026-07-11/AUDIT360_WAVE3_LAUNCH.md`. W sobotnim oknie wszystkie
 trzy lane'y maja twardy zakaz operacji live.
+
+Pelny odbior wynikow i incydentow bezpieczenstwa:
+`eod_drafts/2026-07-11/AUDIT360_WAVE3_CLOSE.md`.
 
 ## 5. Fala trzecia — jedyny P1 przed dlugim PLAN
 
