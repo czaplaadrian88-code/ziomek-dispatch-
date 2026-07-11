@@ -1,10 +1,13 @@
 # Audyt 360 — kolejka napraw i bezkolizyjne sprinty — 2026-07-10
 
 Status: Wave 3 jest zamknięta; DR1A i OPS0 są przyjęte source/tool-only do
-mastera w wydaniu `a360-wave3-safe-source-integrated-20260711`. D1 merge
-pozostaje HOLD do at-214, DR1B pozostaje HOLD, a OPS0 nie daje GO do tuningu
-live. S0 API-OWNERSHIP pozostaje LIVE. Nie daje to ACK na
-flage, HARD/SOFT, credential, dane, siec ani kolejne operacje live.
+mastera w wydaniu `a360-wave3-safe-source-integrated-20260711`. A0 ETA, I1
+Papu i N0 night guard zostaly nastepnie wdrozone oraz zweryfikowane live:
+kodowy punkt dispatch `4c351d5`, Papu `b2c65b2`. ETA pozostaje `HOLD` bez
+promocji. D1/R0
+pozostaja HOLD do at-214, DR1B pozostaje HOLD, a OPS0 nie daje GO do tuningu
+live. S0 API-OWNERSHIP pozostaje LIVE. Nie daje to ACK na kolejne flagi,
+HARD/SOFT, credential, retencje, siec ani operacje live.
 
 Fala pierwsza zostala uruchomiona 2026-07-11 o 10:04 UTC w tmux 57/59/61 i
 zamknieta przez integratora tego samego dnia. T0 oraz D0 sa zintegrowane, a S0
@@ -142,6 +145,33 @@ trzy lane'y maja twardy zakaz operacji live.
 
 Pelny odbior wynikow i incydentow bezpieczenstwa:
 `eod_drafts/2026-07-11/AUDIT360_WAVE3_CLOSE.md`.
+
+### A0/I1/N0 — wydanie live zamkniete 2026-07-11
+
+- A0 i N0 maja kodowy punkt wydania dispatch `4c351d5`, tag
+  `a360-a0-n0-live-verified-20260711`. Kontrolny bieg ETA nie zmienil
+  championow i zwrocil `HOLD`; night guard zakonczyl dokladny systemd E2E
+  5140 passed / 0 failed / 0 XPASS, timer active.
+- I1 jest w Papu workspace master/origin `b2c65b2`, tag
+  `a360-papu-recovery-live-20260711`. Zastany brak markera jest fail-loud hold;
+  po 3 tickach nadal zero resubmitu i zero dispatched.
+- Dwa fix-forward N0 (`8fc2920`, `4c351d5`) naprawily rzeczywisty import pluginu
+  pod cwd systemd oraz izolacje globalnego stanu pluginu podczas generowania
+  manifestu. Fail-closed guard prawidlowo wykryl nowy nodeid przed v4.
+- Pelny raport, backupy, interwaly host-load i rollback:
+  `eod_drafts/2026-07-11/AUDIT360_A0_I1_N0_LIVE_CLOSE.md`.
+
+### Nastepne trzy — PREPARED, NOT STARTED
+
+1. `A360-SEC0 HOST-BOUNDARY-CREDENTIAL` (`max`) — P0: publiczne listenery,
+   provider firewall i rotacja credentialu; operacje live tylko za swiezym ACK.
+2. `A360-E0 EVENT-RELIABILITY-FSM` (`max`) — Z-P0-05 i Z-P1-01 u jednego
+   ownera; semantic review istniejacej Fazy A, default OFF/log-only.
+3. `A360-DATA0 PRIVATE-LEDGER-RETENTION` (`high`) — Z-P1-06, writer-aware
+   permissions/redaction/rotation; branch-only do at-214, delete dopiero B-05.
+
+Rozlaczne write-sety, testy, rollout i rollback:
+`eod_drafts/2026-07-11/AUDIT360_NEXT_THREE_SPRINTS.md`.
 
 ## 5. Fala 4 po zamknieciu Wave 3 — jedyny P1 przed dlugim PLAN
 

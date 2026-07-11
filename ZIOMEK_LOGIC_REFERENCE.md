@@ -952,6 +952,47 @@ the agent citation was not line-verified.
   wykona raport 13.07 12:15 UTC. Rollback hot = `false`; błąd odczytu flagi
   fail-closed do OFF. ETA, backpressure i cache eviction pozostaja bez zmian.
 
+### A360-A0 (2026-07-11) — prawdziwa bramka kalibracji ETA, LIVE tool/HOLD
+
+- Kalibrator nie moze budowac decision-time feature z pola outcome. Champion i
+  challenger sa porownywane na tym samym zamrozonym supporcie i paired errors;
+  promocja wymaga odtwarzalnego artifactu championa o znanym schema.
+- Brak/legacy champion, rozny support albo niespojny artifact daje fail-closed
+  `HOLD`, nie automatyczny fallback do wygladajacego lepiej agregatu.
+- Kontrolowany bieg live 11.07 zakonczyl sie `Result=success`, ale oba ramiona
+  mialy `promote=false`, powod `artifact_legacy_or_unknown_schema`.
+  Candidate zostal zapisany, champion maps pozostaly bajtowo bez zmian.
+- Source: dispatch `2595bed`, finalne wydanie `4c351d5`, tag
+  `a360-a0-n0-live-verified-20260711`. Nie istnieje flaga ani termin
+  automatycznej promocji. Rollback: zatrzymany timer + tag pre-live i spójny
+  restore SQLite/map z backupu opisany w raporcie wydania.
+
+### A360-N0 (2026-07-11) — night guard fail-closed, LIVE
+
+- Manifest v4 przypina dokladny zbior 5171 nodeidow i oczekiwane outcome.
+  Unexpected/missing/duplicate/not-run, hard-error i XPASS sa jawnym ALERT;
+  hard-error nie jest kandydatem na baseline.
+- Pytest child dostaje jawny package-parent w `PYTHONPATH`, bo plugin jest
+  importowany przed rootdir discovery przy cwd uslugi systemd. Testy pluginu
+  snapshotuja i odtwarzaja globalny collector, aby nie skazic outer-run.
+- Finalny dokladny systemd E2E: 5140 passed, 27 skipped, 8 xfailed,
+  0 failed/XPASS, `verdict=OK`, `contract_ok=true`, baseline eligible.
+  Timer jest active; najblizszy bieg 12.07 01:15 UTC.
+- Source/fix-forward: `8056319`, `8fc2920`, `4c351d5`; rollback tag
+  `a360-a0-n0-pre-live-20260711`.
+
+### A360-I1 (2026-07-11) — Papu exact-marker recovery, LIVE integration
+
+- Po submit 2xx/unknown bez `panel_zid` most zapisuje pending recovery i nie
+  wykonuje ponownego submitu. Nastepne ticki robia read-back tylko po dokladnym,
+  stabilnym markerze. Zero markerow lub wieloznacznosc daje jawny hold.
+- Zastany przypadek po 3 naturalnych probach ma reason `marker_missing`,
+  `inject_attempt_count=0` i `dispatched_count=0`. To dowod at-most-once dla
+  recovery, nie pelny kontrakt exactly-once z zewnetrznym Papu.
+- Workspace commit/tag: `b2c65b2` /
+  `a360-papu-recovery-live-20260711`; rollback wymaga zatrzymania timera i
+  przywrocenia backupu stanu 0600, nigdy ponownego wyslania niepewnego case'u.
+
 ### P-FLAGREG partia D (2026-07-05) — doc-uzupełnienie flag decyzyjnych/danościeżkowych (C-FLAG-DRIFT ↓12)
 
 Flagi LIVE (wszystkie `flags.json=true`, hot-reload), dotąd nieudokumentowane w ref; shadow/alert/scalar
