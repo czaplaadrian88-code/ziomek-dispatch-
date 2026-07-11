@@ -23,7 +23,9 @@ def _write_records(dirpath: Path, recs):
 
 def _rec(oid, ts, now=True, schema="wr1"):
     return {"order_id": oid, "ts": ts, "schema": schema,
-            "now": ts if now else None, "verdict": "PROPOSE"}
+            "now": ts if now else None, "verdict": "PROPOSE",
+            "order_event": {"order_id": oid}, "fleet": {}, "flags": {},
+            "live_inputs": {}, "osrm_calls": []}
 
 
 @pytest.fixture
@@ -70,8 +72,10 @@ def test_gate_parity_all_match(corpus, monkeypatch):
     monkeypatch.setattr(G.WR, "replay_one", lambda rec: (_extract_like(), 0))
     idx = _shadow_index_for(("100", "10"), ("101", "12"), ("103", "14"))
     rep = G.run_gate(None, None, record_dir=str(corpus), shadow_index=idx)
-    assert (rep["n"], rep["zgodne"], rep["roznice_n"]) == (3, 3, 0)
-    assert rep["verdict"] == "PARITY"
+    assert (rep["n"], rep["zgodne"], rep["roznice_n"]) == (4, 3, 0)
+    assert sum(rep["class_counts"].values()) == rep["denominator"]
+    assert rep["class_counts"]["INPUT_MISS"] == 1
+    assert rep["verdict"] == "DIFFS"
 
 
 def test_gate_detects_diff_and_miss(corpus, monkeypatch):
@@ -90,7 +94,8 @@ def test_gate_detects_diff_and_miss(corpus, monkeypatch):
     assert rep["zgodne"] == 0 and rep["roznice_n"] == 2 and rep["missy_n"] == 1
     assert rep["roznice_krytyczne_n"] == 1 and rep["roznice_miekkie_n"] == 1
     kryt = [r for r in rep["roznice"] if r["krytyczna"]]
-    assert kryt[0]["order_id"] == "101" and "best_cid" in kryt[0]["diffs"]
+    assert "best_cid" in kryt[0]["diff_fields"]
+    assert "order_id" not in kryt[0], "raport ma pseudonim, nie ID operacyjne"
 
 
 def test_gate_brak_zapisu_and_errors(corpus, monkeypatch):
@@ -99,7 +104,7 @@ def test_gate_brak_zapisu_and_errors(corpus, monkeypatch):
             raise RuntimeError("boom")
         return _extract_like(), 0
     monkeypatch.setattr(G.WR, "replay_one", fake_replay)
-    idx = _shadow_index_for(("101", "12"))  # 103 bez zapisu
+    idx = _shadow_index_for(("100", "10"), ("101", "12"))  # 103 bez zapisu
     rep = G.run_gate(None, None, record_dir=str(corpus), shadow_index=idx)
     assert rep["bledy_n"] == 1 and rep["brak_zapisu_n"] == 1 and rep["zgodne"] == 1
     assert rep["verdict"] == "DIFFS"  # błąd = nie-zielono (uczciwy werdykt)
@@ -108,7 +113,8 @@ def test_gate_brak_zapisu_and_errors(corpus, monkeypatch):
 def test_empty_window_verdict(tmp_path):
     _write_records(tmp_path, [_rec("1", "2026-07-06T10:00:00+00:00", now=False)])
     rep = G.run_gate(None, None, record_dir=str(tmp_path), shadow_index={})
-    assert rep["verdict"] == "EMPTY_WINDOW" and rep["n"] == 0
+    assert rep["verdict"] == "DIFFS" and rep["n"] == 1
+    assert rep["input_miss_reasons"] == {"missing_now": 1}
 
 
 def test_join_picks_closest_within_tolerance():
@@ -129,14 +135,16 @@ def test_main_writes_verdict_file_and_exit_codes(corpus, tmp_path, monkeypatch):
     out = tmp_path / "verdict.txt"
     # C17 anty-prod: efektywna ścieżka werdyktu z testu, nie default prod
     assert "/dispatch_state/" not in str(out) and str(tmp_path) in str(out)
-    rc = G.main(["--record-dir", str(corpus), "--out", str(out)])
+    rc = G.main(["--record-dir", str(corpus), "--out", str(out),
+                 "--since", "2026-07-06T13:30:00+00:00"])
     assert rc == 0
     txt = out.read_text(encoding="utf-8")
-    assert "WERDYKT: PARITY" in txt and "n=3 zgodne=3" in txt
+    assert "WERDYKT: PARITY" in txt and "denominator=1" in txt
 
     # różnica → exit 1
     monkeypatch.setattr(G.WR, "replay_one", lambda rec: (_extract_like(cid="X"), 0))
-    rc = G.main(["--record-dir", str(corpus), "--out", str(out)])
+    rc = G.main(["--record-dir", str(corpus), "--out", str(out),
+                 "--since", "2026-07-06T13:30:00+00:00"])
     assert rc == 1
     assert "WERDYKT: DIFFS" in out.read_text(encoding="utf-8")
 

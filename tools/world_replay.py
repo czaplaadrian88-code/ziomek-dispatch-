@@ -45,6 +45,15 @@ if SCRIPTS not in sys.path:
 RECORD_DIR = "/root/.openclaw/workspace/dispatch_state/world_record"
 SHADOW_LOG = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
 
+REPLAY_CLASSES = (
+    "INPUT_MISS",
+    "OSRM_MISS",
+    "CRITICAL_DIFF",
+    "SOFT_DIFF",
+    "PARITY",
+)
+CRITICAL_FIELDS = frozenset({"verdict", "best_cid", "best_score"})
+
 
 def _parse_dt(v):
     if not v or not isinstance(v, str):
@@ -173,6 +182,39 @@ def _extract(result_like) -> dict:
         "pool_feasible": getattr(result_like, "pool_feasible_count", None),
         "pool_total": getattr(result_like, "pool_total_count", None),
     }
+
+
+def classify_replay(recorded: dict | None, replayed: dict | None,
+                    osrm_misses: int = 0,
+                    input_miss_reason: str | None = None) -> dict:
+    """Klasyfikuje jeden frozen record do dokladnie jednej klasy replay-truth.
+
+    Precedencja jest czescia kontraktu: brak wejscia uniewaznia porownanie,
+    brak nagranego OSRM uniewaznia diff, a dopiero kompletny oracle moze byc
+    CRITICAL/SOFT/PARITY. Funkcja jest czysta, aby frozen golden i mutation
+    probe nie zależaly od pipeline ani sieci.
+    """
+    if input_miss_reason:
+        return {"class": "INPUT_MISS", "reason": input_miss_reason, "diffs": {}}
+    if recorded is None or replayed is None:
+        return {"class": "INPUT_MISS", "reason": "missing_comparison_input",
+                "diffs": {}}
+    if osrm_misses:
+        return {"class": "OSRM_MISS", "reason": "recorded_osrm_call_missing",
+                "diffs": {}}
+
+    keys = tuple(dict.fromkeys((*replayed.keys(), *recorded.keys())))
+    diffs = {
+        key: {"replay": replayed.get(key), "zapis": recorded.get(key)}
+        for key in keys if replayed.get(key) != recorded.get(key)
+    }
+    if any(key in CRITICAL_FIELDS for key in diffs):
+        cls = "CRITICAL_DIFF"
+    elif diffs:
+        cls = "SOFT_DIFF"
+    else:
+        cls = "PARITY"
+    return {"class": cls, "reason": None, "diffs": diffs}
 
 
 def _serve_live_inputs(rec, dp, C, tmpdir, _patch):

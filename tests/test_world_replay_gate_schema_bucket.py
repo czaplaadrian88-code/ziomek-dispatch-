@@ -26,7 +26,9 @@ def _write(dirpath: Path, recs):
 
 def _rec(oid, ts, schema):
     return {"order_id": oid, "ts": ts, "schema": schema,
-            "now": ts, "verdict": "PROPOSE"}
+            "now": ts, "verdict": "PROPOSE",
+            "order_event": {"order_id": oid}, "fleet": {}, "flags": {},
+            "live_inputs": {}, "osrm_calls": []}
 
 
 def _extract(cid="484", score=-1.0):
@@ -60,14 +62,14 @@ def test_wr0_skipped_wr1_diff_preserved(tmp_path, monkeypatch):
 
     rep = G.run_gate(None, None, record_dir=str(tmp_path), shadow_index=idx)
 
-    # wr0 pominięty (nie replayowany, nie liczony jako różnica)
+    # wr0 pozostaje w stałym mianowniku jako jawny INPUT_MISS, nie jako diff.
     assert rep["skipped_pre_wr1"] == 1
-    assert rep["n"] == 1                                   # tylko wr1 certyfikowany
-    assert all(r["order_id"] != "485927" for r in rep["roznice"]), \
-        "wr0 485927 nie może pojawić się jako różnica (to luka nagrywania)"
+    assert rep["n"] == 2
+    assert rep["class_counts"]["INPUT_MISS"] == 1
+    assert rep["input_miss_reasons"] == {"schema_pre_wr1": 1}
     # wr1 realna różnica ZACHOWANA
     assert rep["roznice_krytyczne_n"] == 1
-    assert any(r["order_id"] == "486006" and r["krytyczna"] for r in rep["roznice"])
+    assert rep["class_counts"]["CRITICAL_DIFF"] == 1
     assert rep["verdict"] == "DIFFS"
 
 
@@ -82,7 +84,7 @@ def test_mutation_probe_wr0_as_wr1_surfaces(tmp_path, monkeypatch):
     rep = G.run_gate(None, None, record_dir=str(tmp_path), shadow_index=idx)
     assert rep["skipped_pre_wr1"] == 0
     assert rep["roznice_krytyczne_n"] == 1
-    assert any(r["order_id"] == "485927" for r in rep["roznice"])
+    assert rep["class_counts"]["CRITICAL_DIFF"] == 1
 
 
 def test_verdict_txt_reports_skipped_pre_wr1(tmp_path, monkeypatch):
@@ -91,6 +93,6 @@ def test_verdict_txt_reports_skipped_pre_wr1(tmp_path, monkeypatch):
     idx = _shadow_idx(("486006", TS_WR1, "484"))
     rep = G.run_gate(None, None, record_dir=str(tmp_path), shadow_index=idx)
     txt = G.render_verdict_txt(rep)
-    assert "pominiete schema<wr1: 1" in txt
-    # wr1 zgodny → PARITY (wr0 nie psuje werdyktu)
-    assert rep["verdict"] == "PARITY" and rep["zgodne"] == 1
+    assert '"schema_pre_wr1": 1' in txt
+    # wr1 zgodny, lecz niekompletny wr0 uczciwie blokuje pełny PARITY.
+    assert rep["verdict"] == "DIFFS" and rep["zgodne"] == 1
