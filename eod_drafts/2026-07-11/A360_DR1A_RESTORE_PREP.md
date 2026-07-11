@@ -85,6 +85,19 @@ jawny revert commita DR1A; nie wymaga restartu ani migracji. Fake cleanup usuwa
 wyłącznie exact-name + oba labele + dokładny `run_id`; wildcard/prune nie
 istnieje.
 
+### Incydent odczytu process-list
+
+Przed przetworzeniem zakolejkowanej korekty bezpieczeństwa lane trzy razy
+uruchomił ad-hoc process-list z pełnym polem cmdline, filtrowanym pod katem klas
+procesow backup/restore. Widoczny wynik zawieral wyłącznie kanoniczny pytest;
+nie wyswietlono sekretu, tokenu, PII ani realnego procesu restic/decrypt/DB.
+Sam fakt zamowienia pelnego pola byl jednak naruszeniem granicy — filtr outputu
+nie cofa odczytu carriera. Po wymuszeniu korekty lane zobowiazal sie uzywac
+wylacznie `comm`, unit/status/cgroup i niewrazliwych metadata; nie wykonano
+kolejnej proby. Wspolny close zapisuje liczbe i disposition, a regula C32 w
+repo memory zakazuje ad-hoc cmdline/environ. Dedykowany, zreviewowany kolektor
+moze redukowac cmdline w pamieci tylko przy negative tescie braku emisji.
+
 ### Werdykt
 
 **DR1B = HOLD.** Brakuje realnego verify provenance/manifest/freshness,
