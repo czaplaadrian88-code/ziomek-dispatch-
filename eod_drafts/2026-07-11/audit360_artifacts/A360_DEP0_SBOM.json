@@ -1391,7 +1391,9 @@
   ],
   "provenance": {
     "config": "eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_CONFIG.json",
-    "regeneration_command": "$VENV_ROOT/dispatch/bin/python tools/dependency_inventory.py --config eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_CONFIG.json --output eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_SBOM.json --timestamp 2026-07-11T12:14:29Z"
+    "regeneration_command": "$VENV_ROOT/dispatch/bin/python tools/dependency_inventory.py --config eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_CONFIG.json --output eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_SBOM.json --timestamp 2026-07-11T12:14:29Z",
+    "repo_root": "$DISPATCH_ROOT",
+    "repo_root_resolution": "tools/dependency_inventory.py:parents[1]"
   },
   "schema": "a360-dependency-inventory/v1",
   "unit_coverage": {
