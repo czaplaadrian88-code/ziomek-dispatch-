@@ -7,12 +7,25 @@ Status: **trzy lane'y zakonczone, clean/pushed; zero merge kodu i zero live**.
 | Sprint | Branch / final SHA | Efekt | Finalne bramki | Werdykt |
 |---|---|---|---|---|
 | D1 FIREWALL-EXEMPT-TRUTH | `engine/a360-d1-firewall-exempt-truth` / `e193f2a` (`e75c4a8` kod) | `rule_verdict.v2`: physical breach osobno od odpowiedzialnosci decyzji; EXEMPT/INTRODUCED/UNKNOWN/PASS, provenance, mieszany v1+v2 | DEFAULT 5095/27/10/0; STRICT 5045/77/10/0; focused 36; parity/JSONL 92+1 skip; mutation RED zgodnie z oracle | TECH ACCEPT, merge HOLD do at-214 |
-| DR1A RESTORE-PREP | `ops/a360-dr1a-restore-prep` / `b035523` | one-shot carrier przez stdin, enforced quota+re-probe, fake 7-stage app smoke, exact run-id cleanup | DEFAULT 5106/27/10/0; STRICT 5056/77/10/0; DR0+DR1A 157; mutation 4/4 | SOURCE/FAKE ACCEPT; DR1B HOLD |
+| DR1A RESTORE-PREP | `ops/a360-dr1a-restore-prep` / `0cfa748` (`b035523` kod) | one-shot carrier przez stdin, enforced quota+re-probe, fake 7-stage app smoke, exact run-id cleanup | DEFAULT 5106/27/10/0; STRICT 5056/77/10/0; DR0+DR1A 157; mutation 4/4 | SOURCE/FAKE ACCEPT; DR1B HOLD |
 | OPS0 RUNTIME-EVIDENCE | `ops/a360-ops0-runtime-evidence` / `1bb4699` | read-only mapa usluga/PID/cgroup/properties, detektor skażenia testami, UNKNOWN zamiast SAFE | DEFAULT 5095/27/10/0; STRICT 5045/77/10/0; targeted 8 | TOOL ACCEPT; profil/limity UNKNOWN |
 
 Branche startowaly z identycznego base `e0fd1e4`, maja rozlaczne write-sety,
 sa zsynchronizowane z origin i nie maja dirty/untracked. Tmux65/66/67 sa idle;
 pozostawiono je jako audytowalne sesje, nie zamykano bez polecenia.
+
+Szczegolowe raporty pozostaja razem z kodem na branchach, nie w masterze:
+
+- D1: `engine/a360-d1-firewall-exempt-truth` →
+  `eod_drafts/2026-07-11/A360_D1_FIREWALL_EXEMPT_TRUTH.md`;
+- DR1A: `ops/a360-dr1a-restore-prep` →
+  `eod_drafts/2026-07-11/A360_DR1A_RESTORE_PREP.md`;
+- OPS0: `ops/a360-ops0-runtime-evidence` →
+  `eod_drafts/2026-07-11/A360_OPS0_RUNTIME_EVIDENCE.md`.
+
+Nie interpretowac braku tych trzech plikow na masterze jako braku wyniku;
+master celowo zawiera karte i zredagowany close, dopoki kod lane'a nie zostanie
+zintegrowany za jego bramkami.
 
 ## Co zmienia sie w Ziomku
 

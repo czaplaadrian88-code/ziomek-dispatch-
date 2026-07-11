@@ -1,4 +1,4 @@
-# A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE — karta proponowanego sprintu
+# A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE — karta sprintu: kontrakt + wynik
 
 Status: **TOOL ACCEPT/PUSHED `1bb4699`; reprezentatywny profil UNKNOWN**
 
@@ -13,6 +13,9 @@ Wynik lane'a: branch clean/pushed. Final DEFAULT `5095/27/10/0`, STRICT
 `5045/77/10/0`, targeted `8/8`. Narzedzie bezpiecznie laczy usluge z PID,
 cgroup i niewrazliwymi properties. Jedna probka byla skazona testami, druga
 byla tylko single-sample; sprint nie daje GO do tuningu limitow live.
+
+Ponizsze sekcje opisuja pierwotny kontrakt wykonawczy; cel godzinnego,
+reprezentatywnego okna pozostaje niezrealizowany i ma status UNKNOWN.
 
 ## Problem i dowod
 

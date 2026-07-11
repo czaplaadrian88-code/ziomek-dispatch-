@@ -1,4 +1,4 @@
-# A360-D1 FIREWALL-EXEMPT-TRUTH — karta proponowanego sprintu
+# A360-D1 FIREWALL-EXEMPT-TRUTH — karta sprintu: kontrakt + wynik
 
 Status: **IMPLEMENTED/TESTED/PUSHED `e193f2a`; merge HOLD do odczytu at-214**
 
@@ -13,6 +13,9 @@ Wynik lane'a: kod/testy `e75c4a8`, raport `761d896`, korekta transcriptu
 `e193f2a`; branch clean/pushed. Final DEFAULT `5095/27/10/0`, STRICT
 `5045/77/10/0`, focused `36/36`, parity/JSONL/reader `92 passed, 1 skipped`.
 Carried bez pre-decision baseline jest `UNKNOWN`, nie false `INTRODUCED`.
+
+Ponizsze sekcje opisuja pierwotny kontrakt wykonawczy; wynik rzeczywisty jest
+wyzej oraz w raporcie lane'a na branchu wskazanym w close Wave 3.
 
 ## Problem i dowod
 

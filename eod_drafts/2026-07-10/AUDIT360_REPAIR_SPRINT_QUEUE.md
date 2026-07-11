@@ -116,7 +116,8 @@ jako argumentu za wariantem biznesowym.
    physical breach od odpowiedzialnosci decyzji, z uczciwym `UNKNOWN` bez
    baseline. Merge nadal HOLD do odczytu at-214; zero enforcementu.
 2. `A360-DR1A RESTORE-PREP` (`high`, tmux 66) — SOURCE/FAKE ACCEPT na
-   `ops/a360-dr1a-restore-prep` @ `b035523`; carrier/quota/app-smoke/cleanup
+   `ops/a360-dr1a-restore-prep` @ `0cfa748` (kod `b035523`);
+   carrier/quota/app-smoke/cleanup
    gotowe syntetycznie. Realny drill to DR1B `ultra` za osobnym ACK.
 3. `A360-OPS0 RUNTIME-SYSTEMD-EVIDENCE` (`high`, tmux 67) — TOOL ACCEPT na
    `ops/a360-ops0-runtime-evidence` @ `1bb4699`; mapa 10 uslug jest PROVEN,
@@ -133,7 +134,7 @@ trzy lane'y maja twardy zakaz operacji live.
 Pelny odbior wynikow i incydentow bezpieczenstwa:
 `eod_drafts/2026-07-11/AUDIT360_WAVE3_CLOSE.md`.
 
-## 5. Fala trzecia — jedyny P1 przed dlugim PLAN
+## 5. Fala 4 po zamknieciu Wave 3 — jedyny P1 przed dlugim PLAN
 
 1. `A360-H1 R6-HARD`: implementacja A360-FEAS-01 dopiero po `A360-T0`,
    `A360-D0`, `A360-D1`, wiarygodnym `A360-R0` i jawnym ACK. Golden

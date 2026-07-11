@@ -1,6 +1,6 @@
-# A360-DR1A RESTORE-PREP — karta proponowanego sprintu
+# A360-DR1A RESTORE-PREP — karta sprintu: kontrakt + wynik
 
-Status: **SOURCE/FAKE ACCEPT/PUSHED `b035523`; DR1B HOLD**
+Status: **SOURCE/FAKE ACCEPT/PUSHED `0cfa748` (kod `b035523`); DR1B HOLD**
 
 Effort: `high`.
 
@@ -9,10 +9,14 @@ Kontrakt wykonawczy: branch `ops/a360-dr1a-restore-prep`, worktree
 `ZIOMEK_BACKLOG.md`, kart kolejki ani repo pamieci; integrator odbiera wynik.
 Bez realnego klucza, restic, decrypt, Dockera, DB, deployu i restartu.
 
-Wynik lane'a: branch clean/pushed. Final DEFAULT `5106/27/10/0`, STRICT
+Wynik lane'a: kod `b035523`, korekta raportu C32 `0cfa748`; branch
+clean/pushed. Final DEFAULT `5106/27/10/0`, STRICT
 `5056/77/10/0`, DR0+DR1A `157/157`, mutation `4/4`. Powstal bezsekretowy
 one-shot carrier przez stdin, enforced quota z re-probe, fake siedmiostopniowy
 app smoke i exact run-id cleanup. Realne adaptery pozostaja nieinstalowane.
+
+Ponizsze sekcje opisuja pierwotny kontrakt wykonawczy; wynik rzeczywisty jest
+wyzej oraz w raporcie lane'a na branchu wskazanym w close Wave 3.
 
 ## Problem i dowod
 
