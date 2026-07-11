@@ -1,10 +1,10 @@
 # A360-R0 REPLAY-TRUTH — raport wykonania
 
-Status: **CODE READY, NOT MERGED, NOT DEPLOYED**  
-Data: 2026-07-11 UTC  
-Branch: `evidence/a360-r0-replay-truth`  
-Worktree: `/root/a360_r0_wt/dispatch_v2`  
-Base: `a360-wave1-closed-20260711` / `f679a88`  
+Status: **CODE READY, NOT MERGED, NOT DEPLOYED**
+Data: 2026-07-11 UTC
+Branch: `evidence/a360-r0-replay-truth`
+Worktree: `/root/a360_r0_wt/dispatch_v2`
+Base: `a360-wave1-closed-20260711` / `f679a88`
 Merge gate: odczyt werdyktu `at-214` albo jawne zamrozenie kodu joba.
 
 ## 1. Wynik
