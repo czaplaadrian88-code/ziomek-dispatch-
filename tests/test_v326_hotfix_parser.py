@@ -76,6 +76,12 @@ def main():
     mo.KURIER_IDS_PATH = TMP_KURIER_IDS
     mo.COURIER_NAMES_PATH = TMP_COURIER_NAMES
     mo.GRAFIK_FULL_NAMES_PATH = TMP_GRAFIK_NAMES
+    for effective_path in (
+        mo.OVERRIDES_PATH, mo.KURIER_IDS_PATH,
+        mo.COURIER_NAMES_PATH, mo.GRAFIK_FULL_NAMES_PATH,
+    ):
+        assert str(_TMPDIR) in effective_path
+        assert "/root/.openclaw/workspace/dispatch_state/" not in effective_path
     _seed_identity()
     _reset_state()
 
