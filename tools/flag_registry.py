@@ -144,15 +144,16 @@ def scan_decision_lists(path: str = COMMON_PY) -> tuple:
             _tuple_items("FLAGS_JSON_NUMERIC_OVERRIDES"))
 
 
-def scan_unit_env(unit: str) -> dict:
+def scan_unit_env(unit: str, systemd_dir: str | None = None) -> dict:
     """Environment= z main unitu + wszystkich drop-inów *.conf (jak systemd:
     ostatnia definicja wygrywa, drop-iny po main unicie)."""
+    systemd_dir = systemd_dir or SYSTEMD_DIR
     env = {}
     files = []
-    main = os.path.join(SYSTEMD_DIR, unit)
+    main = os.path.join(systemd_dir, unit)
     if os.path.exists(main):
         files.append(main)
-    files += sorted(glob.glob(os.path.join(SYSTEMD_DIR, unit + ".d", "*.conf")))
+    files += sorted(glob.glob(os.path.join(systemd_dir, unit + ".d", "*.conf")))
     for f in files:
         try:
             for line in open(f, encoding="utf-8", errors="replace"):
@@ -229,24 +230,20 @@ SERVICE_SCOPED = {
 # KNOWN_DIVERGENCES = rozjazdy PRAWDZIWE, cross-service, OTWARTE — wymagają
 # naprawy POZA tą partycją (common.py + flags.json + ACK). Śledzone jawnie,
 # NIE wyciszone (liczą się do ROZJAZDY). Wpis = diagnoza + plan domknięcia.
-KNOWN_DIVERGENCES = {
-    "USE_V2_PARSER": (
-        "GENUINE cross-service: czytany MODUŁOWO w panel_client.py:93, a "
-        "panel_client importują shadow/czasowka/state_machine/panel-watcher; "
-        "parse_panel_html (panel_client.py:425) wybiera v1/v2 wg tej flagi. "
-        "env=1 tylko w panel-watcher → inne serwisy parsują v1 gdy same wołają "
-        "parser. Domknięcie = migracja do ETAP4 hot-reload (common.py + flags.json, "
-        "POZA partycją L0.1) + ACK Adriana (parser = behavior-affecting). Do "
-        "weryfikacji: czy shadow/czasowka faktycznie re-parsują HTML czy tylko "
-        "czytają orders_state (jeśli to drugie — efektywnie martwe poza watcher)."),
-}
+#
+# USE_V2_PARSER usunięto stąd po migracji do ETAP4 i flipie 2026-07-10. Stary
+# env-carrier nadal jest widoczny, ale flags.json jest teraz kanonem i checker
+# klasyfikuje go uczciwie jako `json-overrides-env/open` do późniejszego usunięcia.
+KNOWN_DIVERGENCES = {}
 
 
-def scan_code_tokens(roots=(DISPATCH_V2, os.path.dirname(DISPATCH_V2))) -> set:
+def scan_code_tokens(roots=None) -> set:
     """Wszystkie tokeny-identyfikatory w *.py (dispatch_v2 + cały scripts/,
     poza eod_drafts/__pycache__/.bak) — do wykrywania SIEROT w flags.json.
     Konsumpcja przez C.flag('NAZWA')/load_flags()['NAZWA'] też się łapie,
     bo nazwa występuje w źródle jako literal."""
+    if roots is None:
+        roots = (DISPATCH_V2, os.path.dirname(DISPATCH_V2))
     tokens = set()
     seen_files = set()
     for root in roots:
@@ -265,19 +262,30 @@ def scan_code_tokens(roots=(DISPATCH_V2, os.path.dirname(DISPATCH_V2))) -> set:
     return tokens
 
 
-def build_registry():
-    defs = scan_common()
-    decision, numeric = scan_decision_lists()
+def build_registry(*, common_path: str | None = None,
+                   flags_path: str | None = None,
+                   systemd_dir: str | None = None,
+                   code_roots=None):
+    """Zbuduj rejestr z jawnych wejść.
+
+    Domyślne wartości zachowują tryb operatorski na tym hoście. Testy mechanizmu
+    przekazują syntetyczne `common.py`, `flags.json`, katalog systemd i roots,
+    dzięki czemu wynik nie zależy od bieżącego flipa ani stanu usług.
+    """
+    common_path = common_path or COMMON_PY
+    systemd_dir = systemd_dir or SYSTEMD_DIR
+    defs = scan_common(common_path)
+    decision, numeric = scan_decision_lists(common_path)
     # Uzupełnij defaulty flag decyzyjnych/numerycznych definiowanych LITERAŁEM
     # (scan_common łapie tylko env-get). scan_common wygrywa gdy oba (env-overridable
     # to pełniejszy opis). Po tym KAŻDA flaga ETAP4 ma definicję → completeness=0
     # jest DOWODEM pełnego skanu, nie tautologią (names NIE seedowane listą ETAP4).
     lit = scan_literal_defaults([n for n in tuple(decision) + tuple(numeric)
-                                 if n not in defs])
+                                 if n not in defs], common_path)
     defs = {**lit, **defs}
-    fjson = load_flags_json()
-    unit_env = {u: scan_unit_env(u) for u in ENGINE_UNITS}
-    code_tokens = scan_code_tokens()
+    fjson = load_flags_json(flags_path)
+    unit_env = {u: scan_unit_env(u, systemd_dir) for u in ENGINE_UNITS}
+    code_tokens = scan_code_tokens(code_roots)
 
     names = sorted(set(defs) | set(fjson)
                    | {k for env in unit_env.values() for k in env})
@@ -371,12 +379,14 @@ def accepted_issues(issues):
     return [i for i in issues if i["verdict"] in ("accepted-scoped", "intentional")]
 
 
-def completeness_gaps(rows):
+def completeness_gaps(rows, *, common_path: str | None = None,
+                      flags_path: str | None = None):
     """Braki pokrycia rejestru (sanity anty-regresja skanera): każdy klucz
     flags.json (nie-dynamiczny, nie-_comment) i każda flaga ETAP4 MUSZĄ mieć
     wiersz w rejestrze. Zwraca listę braków (pusta = pełne pokrycie)."""
-    fjson = load_flags_json()
-    decision, numeric = scan_decision_lists()
+    common_path = common_path or COMMON_PY
+    fjson = load_flags_json(flags_path)
+    decision, numeric = scan_decision_lists(common_path)
     covered = {r["flag"] for r in rows}
     gaps = []
     for k in fjson:
@@ -395,15 +405,20 @@ def _msg(i):
     return i["msg"] if isinstance(i, dict) else i
 
 
-def render(rows, issues, show_all=False):
+def render(rows, issues, show_all=False, *, common_path: str | None = None,
+           flags_path: str | None = None, systemd_dir: str | None = None):
     opn = open_issues(issues)
     acc = accepted_issues(issues)
-    gaps = completeness_gaps(rows)
+    common_path = common_path or COMMON_PY
+    flags_path = flags_path or FLAGS_JSON
+    systemd_dir = systemd_dir or SYSTEMD_DIR
+    gaps = completeness_gaps(rows, common_path=common_path, flags_path=flags_path)
     lines = []
     lines.append(f"FLAG REGISTRY — {len(rows)} flag "
                  f"(decyzyjne: {sum(1 for r in rows if r['decision'])}, "
                  f"w flags.json: {sum(1 for r in rows if r['flags_json'] is not None)}, "
                  f"env-frozen gdziekolwiek: {sum(1 for r in rows if r['env'])})")
+    lines.append(f"WEJŚCIA: common={common_path} flags={flags_path} systemd={systemd_dir}")
     lines.append("")
     # UWAGA: metryka #4 (entropy_dashboard) parsuje `ROZJAZDY (\d+)` = OTWARTE
     # (open + known-open). accepted-scoped/intentional NIE liczą się (poprawne).
@@ -425,9 +440,14 @@ def render(rows, issues, show_all=False):
     return "\n".join(lines)
 
 
-def render_md(rows, issues):
+def render_md(rows, issues, *, common_path: str | None = None,
+              flags_path: str | None = None, systemd_dir: str | None = None):
     opn, acc = open_issues(issues), accepted_issues(issues)
     out = ["# Rejestr flag (F3) — wygenerowany tools/flag_registry.py", ""]
+    out.append(f"Wejścia: `common={common_path or COMMON_PY}` · "
+               f"`flags={flags_path or FLAGS_JSON}` · "
+               f"`systemd={systemd_dir or SYSTEMD_DIR}`")
+    out.append("")
     out.append(f"Flag: **{len(rows)}** · rozjazdy OTWARTE: **{len(opn)}** · "
                f"akceptowane service-scoped: **{len(acc)}**")
     out.append("")
@@ -451,12 +471,24 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--all", action="store_true", help="pełny inwentarz na stdout")
     ap.add_argument("--md", help="zapisz raport markdown do pliku")
+    ap.add_argument("--common-py", default=COMMON_PY,
+                    help="jawne źródło definicji flag")
+    ap.add_argument("--flags-json", default=FLAGS_JSON,
+                    help="jawny snapshot flags.json")
+    ap.add_argument("--systemd-dir", default=SYSTEMD_DIR,
+                    help="jawny katalog unitów/drop-inów")
     args = ap.parse_args()
-    rows, issues = build_registry()
-    print(render(rows, issues, show_all=args.all))
+    rows, issues = build_registry(common_path=args.common_py,
+                                  flags_path=args.flags_json,
+                                  systemd_dir=args.systemd_dir)
+    print(render(rows, issues, show_all=args.all,
+                 common_path=args.common_py, flags_path=args.flags_json,
+                 systemd_dir=args.systemd_dir))
     if args.md:
         with open(args.md, "w", encoding="utf-8") as f:
-            f.write(render_md(rows, issues) + "\n")
+            f.write(render_md(rows, issues, common_path=args.common_py,
+                              flags_path=args.flags_json,
+                              systemd_dir=args.systemd_dir) + "\n")
         print(f"\nMD: {args.md}")
     return 0
 

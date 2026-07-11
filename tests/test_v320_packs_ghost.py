@@ -5,10 +5,11 @@ emit/update_from_event. Testujemy tylko logikę filtrowania / guards
 przez bezpośrednie wywołanie helper — panel_watcher niestety nie ma
 osobnej pure func, więc monkey-patchujemy moduly i wywołujemy _diff_and_emit.
 """
+import io
+import json
 import os
 import sys
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SCRIPTS = os.path.abspath(os.path.join(_HERE, "..", ".."))
@@ -126,43 +127,22 @@ def _iso_ago(min_ago):
     return (_now_utc() - timedelta(minutes=min_ago)).isoformat()
 
 
-# Patch kurier_ids.json load path — use tmpdir
-import tempfile
-_TMPDIR = Path(tempfile.mkdtemp(prefix="v320_test_"))
-_KID_PATH = _TMPDIR / "kurier_ids.json"
+# `panel_watcher` ma legacy hardcoded read kurier_ids.json w badanej gałęzi.
+# Podstawiamy WYŁĄCZNIE ten jeden odczyt przez modułowy `open`; pozostałe pliki
+# nadal przechodzą przez oryginalny (hermetycznie guardowany) builtin.
+_REAL_KID = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
+_TEST_CID = "900"
+_TEST_NICK = "Test Kurier"
+_ORIGINAL_OPEN = open
 
 
-# Monkey-patch the json loader section to use our tmpfile.
-# Easier: replace builtins.open for panel_watcher — nope, too invasive.
-# Alternative: write kurier_ids.json to the real path but use fixture names.
-# Safer: just exercise the V3.20 section directly by calling _diff_and_emit
-# with carefully crafted parsed + state. Ensure real kurier_ids.json path
-# exists with needed nicks.
-_REAL_KID = Path("/root/.openclaw/workspace/dispatch_state/kurier_ids.json")
+def _fixture_open(path, *args, **kwargs):
+    if os.fspath(path) == _REAL_KID:
+        return io.StringIO(json.dumps({_TEST_NICK: _TEST_CID}))
+    return _ORIGINAL_OPEN(path, *args, **kwargs)
 
 
-def _load_real_kid():
-    import json
-    with open(_REAL_KID) as f:
-        return json.load(f)
-
-
-_REAL_KIDS = _load_real_kid()
-# Pick first stable cid from real file for mocking (avoid ambiguous)
-_TEST_CID = None
-_TEST_NICK = None
-_cid_seen_nicks = {}
-for _n, _c in _REAL_KIDS.items():
-    _cid_seen_nicks.setdefault(str(_c), []).append(_n)
-for _c, _ns in _cid_seen_nicks.items():
-    if len(_ns) == 1:
-        _name_counts = sum(1 for k in _REAL_KIDS if k == _ns[0])
-        _TEST_CID = _c
-        _TEST_NICK = _ns[0]
-        break
-if not _TEST_CID:
-    _TEST_CID = str(list(_REAL_KIDS.values())[0])
-    _TEST_NICK = [n for n, c in _REAL_KIDS.items() if str(c) == _TEST_CID][0]
+pw.open = _fixture_open
 
 
 _install_mocks()

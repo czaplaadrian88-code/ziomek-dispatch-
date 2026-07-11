@@ -2,6 +2,11 @@
   "_comment": "Z-P2-07 — jawna kwarantanna testow LIVE / nonhermetycznych (zaleznych od zywego stanu hosta). DEFAULT: oznaczane markerem `nonhermetic` (biegna DALEJ — baseline bez zmian). STRICT (HERMETIC_STRICT=1): pomijane (skip) z podanym powodem. Dodawaj wpisy TYLKO z konkretnym powodem. `match` = stem pliku testu (bez .py) LUB fragment nodeid.",
   "entries": [
     {
+      "match": "test_flag_registry_f3.py::test_build_registry_smoke_live",
+      "reason": "Jawny LIVE read-only smoke flag_registry: czyta aktualny flags.json i unity/drop-iny systemd. Testy semantyki rejestru używają osobnego syntetycznego snapshotu.",
+      "modes": ["strict"]
+    },
+    {
       "match": "test_v325_pin_leak_defense",
       "reason": "LIVE read-only: waliduje cleanup PRODUKCYJNEGO courier_names.json (nazwy floty). Script-style/subprocess. Nie da sie zhermetyzowac bez zmiany celu walidacji.",
       "modes": ["strict"]

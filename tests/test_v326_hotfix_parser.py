@@ -10,15 +10,47 @@ Style mirrors test_v325_step_d_r03.py (custom main, no pytest classes).
 """
 import importlib
 import json
-import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dispatch_v2 import manual_overrides as mo  # noqa: E402
 
-TMP_OVERRIDES = "/tmp/test_v326_hotfix_overrides.json"
+_TMPDIR = Path(tempfile.mkdtemp(prefix="v326_hotfix_"))
+TMP_OVERRIDES = str(_TMPDIR / "manual_overrides.json")
+TMP_KURIER_IDS = str(_TMPDIR / "kurier_ids.json")
+TMP_COURIER_NAMES = str(_TMPDIR / "courier_names.json")
+TMP_GRAFIK_NAMES = str(_TMPDIR / "grafik_full_names.json")
+
+
+def _seed_identity():
+    kids = {
+        "Adrian": 21,
+        "Adrian R": 400,
+        "Adrian Cit": 457,
+        "Bartek O.": 123,
+        "Mykyta K": 426,
+        "Szymon Sa": 522,
+    }
+    names = {str(cid): name for name, cid in kids.items()}
+    grafik = {
+        "Adrian Czapla": 21,
+        "Adrian Rogowski": 400,
+        "Adrian Citko": 457,
+        "Bartek Ołdziej": 123,
+        "Mykyta K": 426,
+        "Szymon Sa": 522,
+    }
+    for path, payload in (
+        (TMP_KURIER_IDS, kids),
+        (TMP_COURIER_NAMES, names),
+        (TMP_GRAFIK_NAMES, grafik),
+    ):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
 
 
 def _reset_state():
@@ -38,8 +70,13 @@ def main():
             results["fail"] += 1
 
     importlib.reload(mo)
-    orig = mo.OVERRIDES_PATH
+    orig = (mo.OVERRIDES_PATH, mo.KURIER_IDS_PATH,
+            mo.COURIER_NAMES_PATH, mo.GRAFIK_FULL_NAMES_PATH)
     mo.OVERRIDES_PATH = TMP_OVERRIDES
+    mo.KURIER_IDS_PATH = TMP_KURIER_IDS
+    mo.COURIER_NAMES_PATH = TMP_COURIER_NAMES
+    mo.GRAFIK_FULL_NAMES_PATH = TMP_GRAFIK_NAMES
+    _seed_identity()
     _reset_state()
 
     try:
@@ -170,11 +207,9 @@ def main():
                    parsed[1] is not None and parsed[1] > 0, f"got {parsed!r}")
 
     finally:
-        mo.OVERRIDES_PATH = orig
-        try:
-            os.unlink(TMP_OVERRIDES)
-        except OSError:
-            pass
+        (mo.OVERRIDES_PATH, mo.KURIER_IDS_PATH,
+         mo.COURIER_NAMES_PATH, mo.GRAFIK_FULL_NAMES_PATH) = orig
+        shutil.rmtree(_TMPDIR, ignore_errors=True)
 
     print(f"\n=== summary: {results['pass']} pass, {results['fail']} fail ===")
     return 0 if results["fail"] == 0 else 1

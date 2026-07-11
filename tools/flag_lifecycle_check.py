@@ -9,8 +9,9 @@ Dwa tryby:
   --live (HOST, READ-ONLY): dokłada rekoncyliację current_snapshot vs REALNE
     nośniki (żywy flags.json + /etc/systemd/*.d + opcjonalnie `--fingerprint`
     FLAG_FINGERPRINT z journalctl — wzorem flag_fingerprint_check; NIGDY
-    `systemctl show -p Environment`). known_drift (USE_V2_PARSER) = ODNOTOWANY,
-    NIE liczy się jako błąd.
+    `systemctl show -p Environment`). Historyczny known_drift USE_V2_PARSER
+    został domknięty migracją 2026-07-10; ewentualne nowe known_drift są
+    odnotowane i nie liczą się jako błąd.
 
 Wykrywa (błędy → exit≠0): flaga w źródłach bez wpisu w rejestrze; wpis-widmo
 (flaga zniknęła ze źródła); dryf default/current_snapshot vs źródło; twin bez
@@ -227,8 +228,8 @@ def check_cross_repo(reg, panel_dir, courier_dir, panelsync_dir, systemd_dir) ->
 
 # ── --live: rekoncyliacja z realnymi nośnikami hosta ────────────────────────────
 def check_live(reg, flags_json_path, systemd_dir, use_fingerprint) -> tuple:
-    """(real_drifts, known, info) — real_drifts liczą się do exit≠0; known
-    (USE_V2_PARSER etc.) i info = tylko raport."""
+    """(real_drifts, known, info) — real_drifts liczą się do exit≠0;
+    jawnie kuratorowane known_drift i info = tylko raport."""
     real_drifts, known, info = [], [], []
     flags = reg.get("flags", {})
     fjson = FR.load_flags_json(flags_json_path)

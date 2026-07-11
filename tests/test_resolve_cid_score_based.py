@@ -188,33 +188,36 @@ with isolated_shift_state() as paths:
         check("17. unambiguous_winner_no_log", cid == "123", detail=f"cid={cid}")
 
 # ============================================================
-print("\n=== #14 GRUPA 6: live kurier_ids.json regression ===")
+print("\n=== #14 GRUPA 6: hermetic kurier_ids regression fixture ===")
 # ============================================================
 
-# Test 18 — full live regression (kurier_ids.json sample)
-live_kids_path = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
-if os.path.exists(live_kids_path):
-    with open(live_kids_path) as f:
-        live_kids = {k: str(v) for k, v in json.load(f).items()}
-    expected = {
-        "Adrian Citko": "457",      # was 21 (BUG pre-#14), should be 457
-        "Adrian Czapla": "21",      # bare "Adrian" alone, score=1
-        "Adrian Rogowski": "400",   # "Adrian R" score=10
-        "Mateusz Olchowik": "413",  # "Mateusz O" score=10
-        "Michał Karpiuk": "393",    # "Michał K" score=10
-        "Bartek Ołdziej": "123",    # "Bartek O" score=10
-    }
-    all_ok = True
-    fails = []
-    for name, exp in expected.items():
-        got = worker.resolve_cid(name, live_kids)
-        if got != exp:
-            all_ok = False
-            fails.append(f"{name}: got={got} expected={exp}")
-    check("18. live_kurier_ids_regression",
-          all_ok, detail="; ".join(fails) if fails else "")
-else:
-    print("  SKIP 18. live_kurier_ids_regression (file not found)")
+# Test 18 — ten sam znany przypadek, ale bez zależności od produkcyjnego pliku.
+# Osobny live-smoke tożsamości zapewnia `python -m dispatch_v2.identity.report --parity`.
+fixture_kids = {
+    "Adrian": "21",
+    "Adrian R": "400",
+    "Adrian Cit": "457",
+    "Mateusz O": "413",
+    "Michał K": "393",
+    "Bartek O": "123",
+}
+expected = {
+    "Adrian Citko": "457",      # was 21 (BUG pre-#14), should be 457
+    "Adrian Czapla": "21",      # bare "Adrian" alone, score=1
+    "Adrian Rogowski": "400",   # "Adrian R" score=10
+    "Mateusz Olchowik": "413",  # "Mateusz O" score=10
+    "Michał Karpiuk": "393",    # "Michał K" score=10
+    "Bartek Ołdziej": "123",    # "Bartek O" score=10
+}
+all_ok = True
+fails = []
+for name, exp in expected.items():
+    got = worker.resolve_cid(name, fixture_kids)
+    if got != exp:
+        all_ok = False
+        fails.append(f"{name}: got={got} expected={exp}")
+check("18. synthetic_kurier_ids_regression",
+      all_ok, detail="; ".join(fails) if fails else "")
 
 print("\n" + "=" * 60)
 print(f"#14 RESOLVE_CID SCORE-BASED: {passed}/{passed + failed} PASS"

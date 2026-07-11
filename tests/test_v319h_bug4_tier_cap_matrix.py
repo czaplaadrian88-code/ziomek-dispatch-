@@ -110,7 +110,20 @@ print("\n=== V3.19h BUG-4: courier_tiers.json loader ===")
 # ============================================================
 
 # Smoke test: loader zwraca {} gdy plik nie istnieje, dict gdy istnieje.
-# Używamy istniejącego courier_tiers.json (właśnie wygenerowany przez build).
+# Fixture jest syntetyczna — test nie czyta produkcyjnego dispatch_state.
+_tiers_dir = tempfile.TemporaryDirectory(prefix="v319h_tiers_")
+_tiers_path = os.path.join(_tiers_dir.name, "courier_tiers.json")
+with open(_tiers_path, "w", encoding="utf-8") as _f:
+    json.dump({
+        "_meta": {"generated_at": "2026-01-01T00:00:00+00:00"},
+        "123": {"bag": {"tier": "gold"}},
+        "179": {"bag": {"tier": "gold", "cap_override": {
+            "peak": 4, "normal": 4, "off_peak": 3,
+        }}},
+    }, _f)
+courier_resolver.COURIER_TIERS_PATH = _tiers_path
+courier_resolver._COURIER_TIERS_CACHE = None
+courier_resolver._COURIER_TIERS_MTIME = None
 tiers = _load_courier_tiers()
 check("23. loader zwraca non-empty dict gdy courier_tiers.json exists",
       isinstance(tiers, dict) and len(tiers) >= 1)

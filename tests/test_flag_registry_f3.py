@@ -1,7 +1,52 @@
 """F3 (2026-06-11) — testy tools/flag_registry.py (inwentarz flag + rozjazdy)."""
+import json
 import os
 
 from dispatch_v2.tools import flag_registry as fr
+
+
+def _synthetic_registry(tmp_path, monkeypatch):
+    """Hermetyczny snapshot post-migration: flags.json wygrywa nad starym env.
+
+    Globalne ścieżki narzędzia celowo kierujemy w nieistniejące miejsca. Jeżeli
+    build_registry zignoruje jawne argumenty, test ma się wywrócić zamiast
+    przeczytać live hosta.
+    """
+    common_py = tmp_path / "common.py"
+    flags_json = tmp_path / "flags.json"
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    common_py.write_text(
+        'import os\n'
+        'ETAP4_DECISION_FLAGS = ("USE_V2_PARSER",)\n'
+        '_FINGERPRINT_EXTRA_FLAGS = ()\n'
+        'FLAGS_JSON_NUMERIC_OVERRIDES = ()\n'
+        'USE_V2_PARSER = False\n'
+        'SYNTH_SCOPED = os.environ.get("SYNTH_SCOPED", "0") == "1"\n',
+        encoding="utf-8",
+    )
+    flags_json.write_text(json.dumps({"USE_V2_PARSER": True}), encoding="utf-8")
+    (systemd_dir / "dispatch-panel-watcher.service").write_text(
+        "[Service]\nEnvironment=USE_V2_PARSER=1\n", encoding="utf-8"
+    )
+    (systemd_dir / "dispatch-plan-recheck.service").write_text(
+        "[Service]\nEnvironment=SYNTH_SCOPED=1\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(fr, "FLAGS_JSON", str(tmp_path / "DO_NOT_READ_LIVE_FLAGS"))
+    monkeypatch.setattr(fr, "SYSTEMD_DIR", str(tmp_path / "DO_NOT_READ_LIVE_SYSTEMD"))
+    monkeypatch.setattr(
+        fr,
+        "SERVICE_SCOPED",
+        {**fr.SERVICE_SCOPED,
+         "SYNTH_SCOPED": ("dispatch-plan-recheck.service", "syntetyczny owner testu")},
+    )
+    rows, issues = fr.build_registry(
+        common_path=str(common_py),
+        flags_path=str(flags_json),
+        systemd_dir=str(systemd_dir),
+        code_roots=(str(tmp_path),),
+    )
+    return rows, issues, common_py, flags_json, systemd_dir
 
 
 def test_def_re_parses_bool_and_value_flags():
@@ -105,47 +150,75 @@ def test_scan_literal_defaults_scoped_to_names():
     assert out["SOME_OTHER_CONST"]["default"] is True
 
 
-def test_completeness_no_gaps_live():
+def test_completeness_no_gaps_synthetic(tmp_path, monkeypatch):
     """STRAŻNIK REGRESJI (spec L0.1): KAŻDA flaga decyzyjna/numeryczna ETAP4 i
     KAŻDY klucz flags.json MUSI mieć wiersz. Nowa flaga bez definicji łapanej
     skanerem → gap>0 = FAIL. To dowód pełnego skanu (names NIE seedowane listą)."""
-    rows, _issues = fr.build_registry()
-    gaps = fr.completeness_gaps(rows)
+    rows, _issues, common_py, flags_json, _systemd_dir = _synthetic_registry(
+        tmp_path, monkeypatch
+    )
+    gaps = fr.completeness_gaps(
+        rows, common_path=str(common_py), flags_path=str(flags_json)
+    )
     assert gaps == [], f"BRAKI POKRYCIA rejestru (regresja skanera): {gaps}"
 
 
-def test_classification_live_no_unclassified_divergence():
+def test_classification_synthetic_no_unclassified_divergence(tmp_path, monkeypatch):
     """Każdy env-frozen-subset rozjazd MA werdykt (scoped/known/intentional) —
     zero 'open' nieklasyfikowanych. Nowa flaga env-only bez wpisu → FAIL."""
-    _rows, issues = fr.build_registry()
+    _rows, issues, *_ = _synthetic_registry(tmp_path, monkeypatch)
     unclassified = fr.unclassified_divergences(issues)
     assert unclassified == [], (
         "Nieklasyfikowany env-frozen-subset (dopisz do SERVICE_SCOPED/KNOWN_DIVERGENCES): "
         + ", ".join(i["flag"] for i in unclassified))
 
 
-def test_open_and_accepted_partition_issues():
-    """open_issues ∪ accepted_issues pokrywa wszystkie env-frozen-subset;
-    known-open liczy się do OTWARTYCH (śledzone), scoped/intentional NIE."""
-    _rows, issues = fr.build_registry()
-    frozen = [i for i in issues if i["klass"] == "env-frozen-subset"]
+def test_post_migration_json_overrides_env_is_open(tmp_path, monkeypatch):
+    """Po migracji ETAP4 pozostały env-carrier jest jawnym długiem `open`.
+
+    Historyczne `known-open` oznaczało brak kanonu cross-service. Po flipie
+    kanonem jest flags.json, więc stary carrier ma być widoczny jako
+    `json-overrides-env`, nie maskowany wpisem KNOWN_DIVERGENCES.
+    """
+    _rows, issues, common_py, flags_json, systemd_dir = _synthetic_registry(
+        tmp_path, monkeypatch
+    )
     opn = {id(i) for i in fr.open_issues(issues)}
     acc = {id(i) for i in fr.accepted_issues(issues)}
-    for i in frozen:
+    for i in issues:
         assert (id(i) in opn) ^ (id(i) in acc), f"{i['flag']} nie sklasyfikowany rozłącznie"
-    # USE_V2_PARSER = jedyny known-open (cross-service) — musi być w OTWARTYCH
     v2 = [i for i in issues if i["flag"] == "USE_V2_PARSER"]
-    if v2:
-        assert v2[0]["verdict"] == "known-open"
-        assert id(v2[0]) in opn
+    assert len(v2) == 1
+    assert v2[0]["klass"] == "json-overrides-env"
+    assert v2[0]["verdict"] == "open"
+    assert id(v2[0]) in opn
+    assert "USE_V2_PARSER" not in fr.KNOWN_DIVERGENCES
+    rendered = fr.render(
+        _rows,
+        issues,
+        common_path=str(common_py),
+        flags_path=str(flags_json),
+        systemd_dir=str(systemd_dir),
+    )
+    assert f"common={common_py}" in rendered
+    assert f"flags={flags_json}" in rendered
+    assert f"systemd={systemd_dir}" in rendered
 
 
-def test_metric4_rozjazdy_count_is_open_only():
+def test_metric4_rozjazdy_count_is_open_only(tmp_path, monkeypatch):
     """Metryka #4 entropy_dashboard parsuje `ROZJAZDY (N)` = OTWARTE (open+known),
     NIE wszystkie issues. accepted-scoped/intentional poza licznikiem."""
     import re as _re
-    _rows, issues = fr.build_registry()
-    txt = fr.render(_rows, issues)
+    _rows, issues, common_py, flags_json, systemd_dir = _synthetic_registry(
+        tmp_path, monkeypatch
+    )
+    txt = fr.render(
+        _rows,
+        issues,
+        common_path=str(common_py),
+        flags_path=str(flags_json),
+        systemd_dir=str(systemd_dir),
+    )
     m = _re.search(r"ROZJAZDY \((\d+)\)", txt)
     assert m
     assert int(m.group(1)) == len(fr.open_issues(issues))

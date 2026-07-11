@@ -192,11 +192,27 @@ def test_cross_repo_skip_safe():
     assert len(skips) >= 3, "powinny być skipy panel/apka/systemd"
 
 
-def test_known_drift_not_error(tmp_path):
-    """USE_V2_PARSER (known_drift) obecny i NIE wywala hermetycznego checkera."""
+def test_use_v2_parser_historical_drift_is_closed(tmp_path):
+    """Po flipie 10.07 USE_V2_PARSER nie może pozostać wyjątkiem known_drift."""
     reg = _registry()
-    assert reg["flags"]["USE_V2_PARSER"]["known_drift"] is True
+    entry = reg["flags"]["USE_V2_PARSER"]
+    assert entry["known_drift"] is False
+    assert "DOMKNIĘTY" in entry["known_drift_note"]
     assert _run(["--flags-json", _flags_json_from_registry(tmp_path, reg)]) == 0
+
+
+def test_generic_known_drift_is_reported_not_error(tmp_path):
+    """Sam kontrakt known_drift zostaje przetestowany na syntetycznym dryfcie."""
+    reg = _registry()
+    target = "USE_V2_PARSER"
+    reg["flags"][target]["known_drift"] = True
+    current = reg["flags"][target]["current_snapshot"]["flags.json"]
+    flags_json = _flags_json_from_registry(tmp_path, reg, flip={target: not current})
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir()
+    real, known, info = CHK.check_live(reg, flags_json, str(systemd_dir), False)
+    assert real == [] and info == []
+    assert len(known) == 1 and target in known[0]
 
 
 def _load_json(path):
