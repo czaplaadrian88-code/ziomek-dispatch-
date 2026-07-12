@@ -1,8 +1,11 @@
 # A360-V214 CANARY-DISPOSITION — preflight przed terminem joba
 
-Status: **WAIT/PENDING — TO NIE JEST DISPOSITION**  
-Preflight UTC: `2026-07-12T08:37:32Z..2026-07-12T08:39:05Z`  
-Canary: `[2026-07-11T10:27:12Z, 2026-07-13T10:27:12Z)`  
+Status: **WAIT/PENDING — TO NIE JEST DISPOSITION**
+
+Preflight UTC: `2026-07-12T08:37:32Z..2026-07-12T08:39:05Z`
+
+Canary: `[2026-07-11T10:27:12Z, 2026-07-13T10:27:12Z)`
+
 Job: `at-214`, termin `2026-07-13T12:15:00Z`
 
 ## 1. Wynik dzisiejszego odczytu
