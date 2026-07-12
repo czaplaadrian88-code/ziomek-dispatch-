@@ -223,9 +223,10 @@ kontenera ani restartu. E1 ma source `c9d02b4`+`5044911`, final branch
 recovery, reducer i dry-run
 migracji. `DURABLE_EVENT_OUTBOX_ENABLED=False`; brak workera/policy/live schema,
 a retencja nie usuwa historii `order_state` bez przyszlego checkpointu. V214
-pozostaje WAIT/PENDING do joba 214; tmux74 pozostaje otwarty. Tmux75 i tmux76
-zamknieto po clean/push/snapshot; zachowano tmux50 z cudzym WIP i tmux58 jako
-FLIPMASTER. Raport:
+pozostaje WAIT/PENDING do joba 214, ale jego branch `5375d8d` i snapshot 0600
+sa trwale zapisane, wiec tmux74 zamknieto. Tmux75 i tmux76 takze zamknieto po
+clean/push/snapshot; zachowano tylko tmux50 z cudzym WIP i tmux58 jako
+FLIPMASTER/biezacy integrator. Raport:
 `eod_drafts/2026-07-12/AUDIT360_SEC1_SOURCE_LIVE_AND_E1_BRANCH_CLOSE.md`.
 
 52 `UNVERIFIED` nie sa zadaniami naprawczymi. Cztery `REFUTED` pozostaja

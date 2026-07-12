@@ -22,8 +22,9 @@ Stan: **N0 LIVE; SEC1 SOURCE INTEGRATED / HOST HOLD; E1 SOURCE BRANCH / OFF / HO
    polityki produkcyjnej, migracji live ani deployu. Nie zmienia dziś pracy
    Ziomka.
 4. V214 ma gotowy preflight, ale prawdziwy werdykt może powstać dopiero po
-   jobie 214 dnia 2026-07-13 12:15 UTC. Sesja tmux74 pozostaje otwarta; R0, D1
-   i H1 nadal są zamrożone.
+   jobie 214 dnia 2026-07-13 12:15 UTC. Stan jest clean/pushed i ma snapshot
+   0600, więc zakończoną sesję tmux74 zamknięto; R0, D1 i H1 nadal są
+   zamrożone.
 
 ## N0 — wykonane live
 
@@ -171,19 +172,21 @@ zachowującego/reaplikującego część E0. Backup danych jest N-D, bo nie było
 
 - tmux50 — cudzy/chroniony WIP, nietknięty;
 - tmux58 — integrator i jedyny FLIPMASTER;
-- tmux74 — V214 WAIT/PENDING do joba 214, pozostaje otwarty;
+- tmux74 — V214 WAIT/PENDING zapisany na branchu `5375d8d` i w snapshotcie
+  0600; sesja zamknięta po potwierdzeniu origin parity;
 - tmux75 — SEC1 zakończony i zamknięty;
 - tmux76 — zamknięty po finalnym raporcie, push parity `66a2591` i
   snapshotcie 0600.
 
-Nieaktywne i jednoznacznie zakończone sesje zostały zamknięte. Nie zamykano
-tmux50 ani tmux74. Chroniony dirty
+Nieaktywne i jednoznacznie zakończone sesje zostały zamknięte. Zostały tylko
+tmux50 z cudzym WIP i tmux58, czyli bieżący integrator. Chroniony dirty
 `eod_drafts/2026-07-10/CLAIM_LEDGER_HARD_GATE_CARD.md` pozostał nietknięty.
 
 ## Następny odczyt
 
 Po dopisaniu wszystkich interwałów SEC1/E1 do
-`memory/shadow-jobs-registry.md` tmux74 odświeżył sensitivity i wypchnął
+`memory/shadow-jobs-registry.md` zakończona sesja tmux74 odświeżyła sensitivity
+i wypchnęła
 `5375d8d3f5a52bc35012da7677e3e20a79cd1724`: 48 surowych wpisów,
 36 przedziałów po scaleniu, unia 17 721 s = 295,35 min = 10,26% canary.
 Po 2026-07-13 12:15 UTC najpierw sprawdzić `atq` i prywatne
