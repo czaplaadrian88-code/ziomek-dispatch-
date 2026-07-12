@@ -1,10 +1,10 @@
 # A360-SEC1 HOST-REMEDIATION — raport SOURCE/PREP
 
-**Stan:** SOURCE/PREP, **NOT APPLIED / HOLD**
-**Worktree:** `/root/a360_sec1_wt/dispatch_v2`
-**Branch:** `security/a360-sec1-host-remediation`
-**Frozen base:** `0891b06e9e894d88d6bd8a8b9dd9f837cf12a1e0`
-**Integrator / FLIPMASTER:** root, tmux58
+- **Stan:** SOURCE/PREP, **NOT APPLIED / HOLD**
+- **Worktree:** `/root/a360_sec1_wt/dispatch_v2`
+- **Branch:** `security/a360-sec1-host-remediation`
+- **Frozen base:** `0891b06e9e894d88d6bd8a8b9dd9f837cf12a1e0`
+- **Integrator / FLIPMASTER:** root, tmux58
 **Wykonawca:** tmux75
 
 Ten sprint nie zmienił bindu, firewalla, routingu, provider firewall, kontenera,
