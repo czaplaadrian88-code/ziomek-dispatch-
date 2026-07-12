@@ -103,9 +103,9 @@ zakazem pracy przed terminem i w oknie odczytu.
 ## 5. Rejestr host-load do przyszłego sensitivity
 
 Poniższa konserwatywna lista scala wszystkie jawne interwały przekazane w
-registry/handoffach oraz nowy bieg N0 z frozen base. A0 `22:42:43Z..22:43:02Z`
-jest lekki, ale pozostaje w provenance i w najbardziej konserwatywnym wariancie
-`bez host-load`.
+registry/handoffach oraz pełny N0 sensitivity set z nowego reconcile
+`2026-07-12 08:35 UTC`. A0 `22:42:43Z..22:43:02Z` jest lekki, ale pozostaje w
+provenance i w najbardziej konserwatywnym wariancie `bez host-load`.
 
 | # | Interwał UTC `[start,end)` |
 |---:|---|
@@ -137,10 +137,15 @@ jest lekki, ale pozostaje w provenance i w najbardziej konserwatywnym wariancie
 | 26 | `2026-07-12T00:14:55Z..00:19:19Z` |
 | 27 | `2026-07-12T00:44:30Z..00:49:15Z` |
 | 28 | `2026-07-12T00:49:15Z..00:53:35Z` |
-| 29 | `2026-07-12T08:25:10Z..08:30:02Z` — N0 follow-up |
+| 29 | `2026-07-12T01:15:01Z..01:19:56Z` — ordinary N0; zielona suita, fail-closed na nowych nodeidach SEC0 |
+| 30 | `2026-07-12T08:06:58Z..08:12:12Z` — odrzucony updater; niepełny carrier, 9 faili harnessu, zero zmiany manifestu |
+| 31 | `2026-07-12T08:12:53Z..08:17:36Z` — poprawny updater DEFAULT |
+| 32 | `2026-07-12T08:18:54Z..08:23:18Z` — final STRICT |
+| 33 | `2026-07-12T08:25:10Z..08:30:02Z` — dokładny systemd E2E N0 follow-up |
 
-Po złączeniu nakładających się wpisów: 24 interwały, łączna unia 12 392 s =
-206,53 min = 7,17% pełnego canary. Ostatni N0 ma prywatny aggregate:
+Po złączeniu nakładających się wpisów: 28 interwałów, łączna unia 13 548 s =
+225,80 min = 7,84% pełnego canary. Odrzucony updater jest realnym obciążeniem,
+ale nie dowodem testowym i nie wolno liczyć go jako PASS. Ostatni N0 ma prywatny aggregate:
 `verdict=OK`, 5155 passed, 24 skipped, 8 xfailed, 0 failed/XPASS,
 `contract_ok=true`, manifest v5, czas pytest 277,99 s. To dowodzi natury
 obciążenia, ale nie jest wynikiem canary.
