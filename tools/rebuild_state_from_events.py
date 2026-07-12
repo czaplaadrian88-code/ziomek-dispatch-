@@ -112,10 +112,12 @@ def _replay(events, target_file):
         except (ValueError, TypeError):
             payload = {}
         event = {
+            "event_id": e.get("event_id"),
             "event_type": e["event_type"],
             "order_id": e["order_id"],
             "courier_id": e["courier_id"],
             "payload": payload,
+            "created_at": e.get("created_at"),
         }
         try:
             res = state_machine.update_from_event(event)

@@ -8,6 +8,7 @@ Mocki wzorem tests/test_assignment_lag_fix.py — pełna izolacja I/O (lekcja #1
 upsert_order patchowany capture'em, zero zapisów do żywego orders_state).
 """
 import json
+from types import SimpleNamespace
 from unittest import mock
 
 from dispatch_v2 import common, panel_watcher
@@ -77,7 +78,10 @@ def _run(state, raw_fetches, flag_overrides=None):
          mock.patch("dispatch_v2.panel_watcher.fetch_order_details", side_effect=fake_fetch), \
          mock.patch("dispatch_v2.panel_watcher.emit", return_value=True), \
          mock.patch("dispatch_v2.panel_watcher.emit_audit", return_value=True), \
-         mock.patch("dispatch_v2.panel_watcher.update_from_event"), \
+         mock.patch(
+             "dispatch_v2.panel_watcher.apply_state_event",
+             return_value=SimpleNamespace(should_run_followups=True),
+         ), \
          mock.patch("dispatch_v2.panel_watcher._check_panel_override"), \
          mock.patch("dispatch_v2.panel_watcher.geocode", return_value=None), \
          mock.patch("dispatch_v2.panel_watcher.normalize_order", return_value=None), \

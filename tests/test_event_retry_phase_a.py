@@ -1,6 +1,7 @@
 """Z-P0-05 Faza A: retry/DLQ metadata bez automatycznego retry."""
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -43,12 +44,28 @@ def _legacy_db(path) -> None:
     conn.close()
 
 
-def _insert(conn, event_id: str, *, created_at: str, status: str = "pending") -> None:
+def _insert(
+    conn,
+    event_id: str,
+    *,
+    created_at: str,
+    status: str = "pending",
+    event_type: str = "NEW_ORDER",
+    payload: dict | None = None,
+) -> None:
     conn.execute(
         "INSERT INTO events "
         "(event_id,event_type,order_id,courier_id,payload,created_at,status) "
         "VALUES (?,?,?,?,?,?,?)",
-        (event_id, "NEW_ORDER", event_id, None, "{}", created_at, status),
+        (
+            event_id,
+            event_type,
+            event_id,
+            None,
+            json.dumps(payload or {}),
+            created_at,
+            status,
+        ),
     )
     conn.commit()
 
@@ -80,6 +97,28 @@ def test_retry_policy_requires_explicit_complete_backoff():
     assert policy.next_attempt_at(attempt_count=3, failed_at=failed_at) is None
 
 
+@pytest.mark.parametrize(
+    "primary_code",
+    [sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED],
+)
+def test_classify_failure_normalizes_extended_sqlite_lock_codes(primary_code):
+    error = sqlite3.OperationalError("synthetic marker must not be inspected")
+    error.sqlite_errorcode = primary_code | (7 << 8)
+    assert event_retry.classify_failure(error) == event_retry.FailureDescriptor(
+        event_retry.FailureClass.TRANSIENT,
+        "sqlite_busy",
+    )
+
+
+def test_classify_failure_keeps_other_sqlite_operational_error_permanent():
+    error = sqlite3.OperationalError("synthetic marker must not be inspected")
+    error.sqlite_errorcode = sqlite3.SQLITE_IOERR | (3 << 8)
+    assert event_retry.classify_failure(error) == event_retry.FailureDescriptor(
+        event_retry.FailureClass.PERMANENT,
+        "unexpected_failure",
+    )
+
+
 def test_plan_failure_is_pure_and_moves_to_dlq_only_at_explicit_limit():
     policy = event_retry.RetryPolicy(2, (5.0,))
     failed_at = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
@@ -109,6 +148,245 @@ def test_migration_inspect_is_read_only_and_apply_is_idempotent(tmp_path):
     assert second["before"]["ready"] is True
     assert second["after"]["missing_columns"] == []
     assert event_retry.has_retry_schema(conn)
+    conn.close()
+
+
+def test_migration_backfills_retry_alias_and_due_event_stays_visible(tmp_path):
+    db_path = tmp_path / "legacy-retry.db"
+    _legacy_db(db_path)
+    due_at = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE events ADD COLUMN next_attempt_at TEXT")
+    _insert(
+        conn,
+        "legacy-due",
+        created_at=(due_at - timedelta(minutes=5)).isoformat(),
+        status=event_retry.RETRY_STATUS,
+    )
+    conn.execute(
+        "UPDATE events SET next_attempt_at=? WHERE event_id='legacy-due'",
+        (due_at.isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    plan = event_retry_metadata.inspect(str(db_path))
+    assert plan["next_retry_alias_backfill_count"] == 1
+    assert plan["next_retry_alias_conflict_count"] == 0
+
+    conn = sqlite3.connect(db_path, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    event_retry_metadata.apply_to_connection(conn)
+    alias_row = conn.execute(
+        "SELECT next_attempt_at,next_retry_at FROM events "
+        "WHERE event_id='legacy-due'"
+    ).fetchone()
+    assert tuple(alias_row) == (due_at.isoformat(), due_at.isoformat())
+    due = event_retry.due_retry_events(
+        conn,
+        now=due_at + timedelta(seconds=1),
+    )
+    assert [row["event_id"] for row in due] == ["legacy-due"]
+    conn.close()
+
+
+def test_migration_retry_alias_conflict_is_hold_without_partial_write(tmp_path):
+    db_path = tmp_path / "conflict.db"
+    conn = _migrated_conn(db_path)
+    at = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
+    _insert(
+        conn,
+        "conflict",
+        created_at=at.isoformat(),
+        status=event_retry.RETRY_STATUS,
+    )
+    conn.execute(
+        """UPDATE events
+           SET next_attempt_at=?, next_retry_at=?, idempotency_key=NULL
+           WHERE event_id='conflict'""",
+        (
+            (at + timedelta(seconds=5)).isoformat(),
+            (at + timedelta(seconds=10)).isoformat(),
+        ),
+    )
+    plan = event_retry_metadata.inspect_connection(conn)
+    assert plan["next_retry_alias_backfill_count"] == 0
+    assert plan["next_retry_alias_conflict_count"] == 1
+    with pytest.raises(RuntimeError, match="HOLD"):
+        event_retry_metadata.apply_to_connection(conn)
+    conflict_row = conn.execute(
+        "SELECT next_attempt_at,next_retry_at,idempotency_key "
+        "FROM events WHERE event_id='conflict'"
+    ).fetchone()
+    assert tuple(conflict_row) == (
+        (at + timedelta(seconds=5)).isoformat(),
+        (at + timedelta(seconds=10)).isoformat(),
+        None,
+    )
+    conn.close()
+
+
+def test_migration_cli_redacts_exception_text(monkeypatch, capsys):
+    marker = "SYNTHETIC-SECRET-MARKER"
+
+    def fail_inspect(_db_path):
+        raise RuntimeError(marker)
+
+    monkeypatch.setattr(event_retry_metadata, "inspect", fail_inspect)
+    assert event_retry_metadata.main(["--db", "synthetic.db"]) == 2
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result == {
+        "ok": False,
+        "error_class": "permanent",
+        "error_code": "unexpected_failure",
+    }
+    assert marker not in captured.out
+    assert marker not in captured.err
+
+
+@pytest.mark.parametrize("migrated", [False, True], ids=["legacy", "migrated"])
+@pytest.mark.parametrize("initial_status", [None, "pending", "failed", "processed"])
+def test_mark_processed_default_preserves_historical_contract(
+    tmp_path, monkeypatch, migrated, initial_status
+):
+    db_path = tmp_path / f"events-{migrated}-{initial_status}.db"
+    if migrated:
+        conn = _migrated_conn(db_path)
+    else:
+        _legacy_db(db_path)
+        conn = sqlite3.connect(db_path)
+    event_id = f"synthetic-{migrated}-{initial_status}"
+    alias_value = "2026-07-09T12:05:00+00:00"
+    if initial_status is not None:
+        _insert(
+            conn,
+            event_id,
+            created_at="2026-07-09T12:00:00+00:00",
+            status=initial_status,
+        )
+        if migrated:
+            conn.execute(
+                """UPDATE events
+                   SET next_attempt_at=?, next_retry_at=? WHERE event_id=?""",
+                (alias_value, alias_value, event_id),
+            )
+            conn.commit()
+    conn.close()
+    monkeypatch.setattr(event_bus, "_db_path", lambda: str(db_path))
+
+    assert event_bus.mark_processed(event_id) is True
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT status,processed_at FROM events WHERE event_id=?",
+        (event_id,),
+    ).fetchone()
+    if initial_status is None:
+        assert row is None
+    else:
+        assert row[0] == "processed"
+        assert row[1]
+    assert conn.execute(
+        "SELECT COUNT(*) FROM processed_events WHERE event_id=?",
+        (event_id,),
+    ).fetchone()[0] == 1
+    if migrated and initial_status is not None:
+        assert conn.execute(
+            "SELECT next_attempt_at,next_retry_at FROM events WHERE event_id=?",
+            (event_id,),
+        ).fetchone() == (alias_value, alias_value)
+    conn.close()
+
+
+def test_mark_processed_retry_consumer_opt_in_is_strict(tmp_path, monkeypatch):
+    db_path = tmp_path / "strict.db"
+    conn = _migrated_conn(db_path)
+    at = "2026-07-09T12:05:00+00:00"
+    for event_id, status in (
+        ("due", event_retry.RETRY_STATUS),
+        ("failed", "failed"),
+        ("done", "processed"),
+    ):
+        _insert(
+            conn,
+            event_id,
+            created_at="2026-07-09T12:00:00+00:00",
+            status=status,
+        )
+    conn.execute(
+        "UPDATE events SET next_attempt_at=?,next_retry_at=? WHERE event_id='due'",
+        (at, at),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(event_bus, "_db_path", lambda: str(db_path))
+
+    assert event_bus.mark_processed("due", retry_consumer_enabled=True) is True
+    assert event_bus.mark_processed("failed", retry_consumer_enabled=True) is False
+    assert event_bus.mark_processed("missing", retry_consumer_enabled=True) is False
+    assert event_bus.mark_processed("done", retry_consumer_enabled=True) is True
+
+    conn = sqlite3.connect(db_path)
+    assert conn.execute(
+        "SELECT status,next_attempt_at,next_retry_at FROM events WHERE event_id='due'"
+    ).fetchone() == ("processed", None, None)
+    assert conn.execute(
+        "SELECT status FROM events WHERE event_id='failed'"
+    ).fetchone()[0] == "failed"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM processed_events WHERE event_id IN ('due','done')"
+    ).fetchone()[0] == 2
+    conn.close()
+
+
+def test_mark_processed_retry_consumer_opt_in_requires_schema(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "legacy-strict.db"
+    _legacy_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(
+        conn,
+        "pending",
+        created_at="2026-07-09T12:00:00+00:00",
+    )
+    conn.close()
+    monkeypatch.setattr(event_bus, "_db_path", lambda: str(db_path))
+    assert event_bus.mark_processed(
+        "pending", retry_consumer_enabled=True
+    ) is False
+    conn = sqlite3.connect(db_path)
+    assert conn.execute(
+        "SELECT status FROM events WHERE event_id='pending'"
+    ).fetchone()[0] == "pending"
+    assert conn.execute("SELECT COUNT(*) FROM processed_events").fetchone()[0] == 0
+    conn.close()
+
+
+def test_mark_processed_default_does_not_call_retry_schema_helper(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "legacy-no-retry-dependency.db"
+    _legacy_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(
+        conn,
+        "pending",
+        created_at="2026-07-09T12:00:00+00:00",
+    )
+    conn.close()
+    monkeypatch.setattr(event_bus, "_db_path", lambda: str(db_path))
+
+    def forbidden_helper(_conn):
+        raise RuntimeError("retry dependency must stay outside legacy path")
+
+    monkeypatch.setattr(event_retry, "has_retry_schema", forbidden_helper)
+    assert event_bus.mark_processed("pending") is True
+    conn = sqlite3.connect(db_path)
+    assert conn.execute(
+        "SELECT status FROM events WHERE event_id='pending'"
+    ).fetchone()[0] == "processed"
     conn.close()
 
 
@@ -215,7 +493,7 @@ def test_explicit_schedule_due_order_and_metrics(tmp_path):
         assert event_retry.record_failed_attempt(
             conn,
             eid,
-            "provider timeout\nsecret-free detail",
+            TimeoutError("provider timeout"),
             failed_at=base,
         )
         assert event_retry.schedule_retry(
@@ -239,7 +517,7 @@ def test_explicit_schedule_due_order_and_metrics(tmp_path):
     conn.close()
 
 
-def test_record_failure_captures_error_but_never_schedules(tmp_path):
+def test_record_failure_off_stores_safe_code_and_keeps_legacy_failed(tmp_path):
     db_path = tmp_path / "events.db"
     conn = _migrated_conn(db_path)
     failed_at = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
@@ -248,13 +526,16 @@ def test_record_failure_captures_error_but_never_schedules(tmp_path):
         conn, "e1", "broken\nline", failed_at=failed_at
     )
     row = conn.execute(
-        "SELECT status,attempt_count,last_error,last_failed_at,next_attempt_at "
+        "SELECT status,attempt_count,last_error,failure_class,error_code,"
+        "last_failed_at,next_retry_at "
         "FROM events WHERE event_id='e1'"
     ).fetchone()
     assert tuple(row) == (
         "failed",
         1,
-        "broken line",
+        "untyped_failure",
+        "permanent",
+        "untyped_failure",
         failed_at.isoformat(),
         None,
     )
@@ -271,7 +552,7 @@ def test_atomic_failure_default_off_is_cas_and_never_clobbers(tmp_path):
     first = event_retry.record_failure(
         conn,
         "pending",
-        "timeout",
+        TimeoutError("timeout"),
         failed_at=at,
         expected_status="pending",
         expected_attempt_count=0,
@@ -279,7 +560,7 @@ def test_atomic_failure_default_off_is_cas_and_never_clobbers(tmp_path):
     stale = event_retry.record_failure(
         conn,
         "pending",
-        "same delivery observed twice",
+        TimeoutError("same delivery observed twice"),
         failed_at=at + timedelta(seconds=1),
         expected_status="pending",
         expected_attempt_count=0,
@@ -287,7 +568,7 @@ def test_atomic_failure_default_off_is_cas_and_never_clobbers(tmp_path):
     processed = event_retry.record_failure(
         conn,
         "done",
-        "stale worker",
+        TimeoutError("stale worker"),
         failed_at=at,
         expected_status="pending",
     )
@@ -300,7 +581,9 @@ def test_atomic_failure_default_off_is_cas_and_never_clobbers(tmp_path):
             expected_status="processed",
         )
 
-    assert first == event_retry.FailureTransition(True, "failed", 1, None)
+    assert first == event_retry.FailureTransition(
+        True, "failed", 1, None, "transient", "timeout"
+    )
     assert stale.changed is False
     assert stale.status == "failed"
     assert processed.changed is False
@@ -324,18 +607,28 @@ def test_atomic_failure_applies_only_explicit_policy(tmp_path):
 
     with pytest.raises(ValueError, match="RetryPolicy"):
         event_retry.record_failure(
-            conn, "e1", "timeout", failed_at=at, enabled=True
+            conn, "e1", TimeoutError("timeout"), failed_at=at, enabled=True
         )
 
     policy = event_retry.RetryPolicy(max_attempts=2, backoff_seconds=(30.0,))
+    with pytest.raises(ValueError, match="policy_id"):
+        event_retry.record_failure(
+            conn,
+            "e1",
+            TimeoutError("timeout"),
+            failed_at=at,
+            policy=policy,
+            enabled=True,
+        )
     scheduled = event_retry.record_failure(
         conn,
         "e1",
-        "timeout",
+        TimeoutError("timeout"),
         failed_at=at,
         expected_status="pending",
         expected_attempt_count=0,
         policy=policy,
+        policy_id="test-bounded-v1",
         enabled=True,
     )
     assert scheduled == event_retry.FailureTransition(
@@ -343,20 +636,28 @@ def test_atomic_failure_applies_only_explicit_policy(tmp_path):
         event_retry.RETRY_STATUS,
         1,
         (at + timedelta(seconds=30)).isoformat(),
+        "transient",
+        "timeout",
     )
 
     exhausted = event_retry.record_failure(
         conn,
         "e1",
-        "poison again",
+        TimeoutError("timeout again"),
         failed_at=at + timedelta(seconds=31),
         expected_status=event_retry.RETRY_STATUS,
         expected_attempt_count=1,
         policy=policy,
+        policy_id="test-bounded-v1",
         enabled=True,
     )
     assert exhausted == event_retry.FailureTransition(
-        True, event_retry.DEAD_LETTER_STATUS, 2, None
+        True,
+        event_retry.DEAD_LETTER_STATUS,
+        2,
+        None,
+        "transient",
+        "timeout",
     )
     row = conn.execute(
         "SELECT status,attempt_count,next_attempt_at,last_failed_at,"
@@ -380,7 +681,7 @@ def test_schedule_retry_cas_rejects_wrong_count_and_processed(tmp_path):
     _insert(conn, "failed", created_at=at.isoformat())
     _insert(conn, "done", created_at=at.isoformat(), status="processed")
     assert event_retry.record_failed_attempt(
-        conn, "failed", "timeout", failed_at=at
+        conn, "failed", TimeoutError("timeout"), failed_at=at
     )
 
     assert event_retry.schedule_retry(
@@ -424,7 +725,7 @@ def test_dead_letter_cas_preserves_real_failure_timestamp(tmp_path):
     moved_at = failed_at + timedelta(hours=2)
     _insert(conn, "poison", created_at=failed_at.isoformat())
     assert event_retry.record_failed_attempt(
-        conn, "poison", "bad payload", failed_at=failed_at
+        conn, "poison", TimeoutError("temporary"), failed_at=failed_at
     )
     assert event_retry.move_to_dead_letter(
         conn,
@@ -461,9 +762,14 @@ def test_dead_letter_and_requeue_are_explicit_and_audited(tmp_path):
     db_path = tmp_path / "events.db"
     conn = _migrated_conn(db_path)
     at = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
-    _insert(conn, "poison", created_at=at.isoformat())
+    _insert(
+        conn,
+        "poison",
+        created_at=at.isoformat(),
+        payload={"restaurant": "R", "delivery_address": "D"},
+    )
     assert event_retry.record_failed_attempt(
-        conn, "poison", "invalid payload", failed_at=at
+        conn, "poison", TimeoutError("temporary"), failed_at=at
     )
     assert event_retry.move_to_dead_letter(
         conn,
@@ -475,7 +781,7 @@ def test_dead_letter_and_requeue_are_explicit_and_audited(tmp_path):
         conn,
         "poison",
         reset_attempt_count=True,
-        reason="fixed parser in isolated branch",
+        reason="source_repaired",
         replayed_at=at + timedelta(hours=1),
     ) is False
     assert conn.execute(
@@ -486,7 +792,7 @@ def test_dead_letter_and_requeue_are_explicit_and_audited(tmp_path):
         conn,
         "poison",
         reset_attempt_count=True,
-        reason="fixed parser in isolated branch",
+        reason="source_repaired",
         replayed_at=at + timedelta(hours=1),
         enabled=True,
     )
@@ -498,10 +804,10 @@ def test_dead_letter_and_requeue_are_explicit_and_audited(tmp_path):
         "pending",
         0,
         1,
-        "invalid payload",
+        "timeout",
         at.isoformat(),
         (at + timedelta(hours=1)).isoformat(),
-        "fixed parser in isolated branch",
+        "source_repaired",
     )
     conn.close()
 
@@ -554,12 +860,12 @@ def test_mark_failed_migrated_schema_records_diagnosis_without_retry(
         "SELECT status,attempt_count,last_error,next_attempt_at "
         "FROM events WHERE event_id='migrated'"
     ).fetchone()
-    assert row == ("failed", 1, "typed provider failure", None)
+    assert row == ("failed", 1, "untyped_failure", None)
     assert event_bus.mark_failed("migrated", "stale duplicate") is False
     row = conn.execute(
         "SELECT status,attempt_count,last_error FROM events WHERE event_id='migrated'"
     ).fetchone()
-    assert row == ("failed", 1, "typed provider failure")
+    assert row == ("failed", 1, "untyped_failure")
     conn.close()
 
 
@@ -577,15 +883,20 @@ def test_mark_failed_never_clobbers_processed(tmp_path, monkeypatch):
     conn.close()
 
 
-def test_replay_tool_defaults_to_read_only_and_preserves_event_id(tmp_path):
+def test_replay_tool_defaults_to_read_only_and_redacts_event_id(tmp_path):
     db_path = tmp_path / "events.db"
     conn = _migrated_conn(db_path)
     at = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
-    _insert(conn, "dlq-1", created_at=at.isoformat())
+    _insert(
+        conn,
+        "dlq-1",
+        created_at=at.isoformat(),
+        payload={"restaurant": "R", "delivery_address": "D"},
+    )
     assert event_retry.record_failed_attempt(
         conn, "dlq-1", "poison", failed_at=at
     )
-    event_retry.move_to_dead_letter(
+    assert event_retry.move_to_dead_letter(
         conn,
         "dlq-1",
         expected_attempt_count=1,
@@ -593,11 +904,13 @@ def test_replay_tool_defaults_to_read_only_and_preserves_event_id(tmp_path):
     )
     conn.close()
     rows = replay_dead_letter.list_dead_letters(str(db_path))
-    assert [row["event_id"] for row in rows] == ["dlq-1"]
+    assert [row["event_ref"] for row in rows] == [
+        event_retry.event_reference("dlq-1")
+    ]
     assert replay_dead_letter.requeue(
         str(db_path),
         "dlq-1",
-        reason="test",
+        reason="test_only",
         reset_attempt_count=False,
     ) is False
     conn = sqlite3.connect(db_path)
@@ -609,18 +922,20 @@ def test_replay_tool_defaults_to_read_only_and_preserves_event_id(tmp_path):
     assert replay_dead_letter.requeue(
         str(db_path),
         "dlq-1",
-        reason="explicit replay",
+        reason="source_repaired",
         reset_attempt_count=False,
         confirmed=True,
         replayed_at=at + timedelta(hours=1),
+        current_state={},
     ) is True
     assert replay_dead_letter.requeue(
         str(db_path),
         "dlq-1",
-        reason="stale duplicate replay",
+        reason="source_repaired",
         reset_attempt_count=False,
         confirmed=True,
         replayed_at=at + timedelta(hours=2),
+        current_state={},
     ) is False
     conn = sqlite3.connect(db_path)
     assert conn.execute(

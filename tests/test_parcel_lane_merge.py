@@ -3,6 +3,8 @@
 Flaga ON≠OFF, create/keep/retire, oraz dowód że watcher NIE prefetchuje paczek (twin gastro
 nietknięty). Izolowane (monkeypatch state_machine/flag/snapshot), bez sieci/plików.
 """
+from types import SimpleNamespace
+
 from dispatch_v2 import panel_watcher as pw
 from dispatch_v2 import parcel_lane_merge as plm
 
@@ -107,18 +109,40 @@ def test_apply_status_inbox(monkeypatch, tmp_path):
     monkeypatch.setattr(plm.sm, "_state_path", lambda: str(tmp_path / "orders_state.json"))
     emitted, applied = [], []
     monkeypatch.setattr(plm.event_bus, "emit",
-                        lambda et, order_id=None, courier_id=None, event_id=None:
-                        emitted.append((et, event_id)) or event_id)
-    monkeypatch.setattr(plm.sm, "update_from_event", lambda ev: applied.append(ev))
+                        lambda et, order_id=None, courier_id=None, payload=None, event_id=None:
+                        emitted.append({
+                            "event_type": et,
+                            "event_id": event_id,
+                            "payload": payload,
+                        }) or event_id)
+    monkeypatch.setattr(
+        plm.event_bus,
+        "apply_state_event",
+        lambda ev, **kwargs: (
+            applied.append(ev)
+            or SimpleNamespace(should_run_followups=bool(kwargs["emitted"]))
+        ),
+    )
     assert plm._apply_status_inbox() == 2          # 5+7; 3 pominięte
     assert [ev["event_type"] for ev in applied] == [
         "COURIER_PICKED_UP", "COURIER_DELIVERED"
     ]
     assert all(ev["payload"] == {"source": "parcel_status_inbox"} for ev in applied)
-    # Faza A tylko ujawnia brak kontraktu czasu; nie zamienia e.ts na timestamp
-    # bez decyzji o jednostce/semantyce ani nie przywraca fallbacku now().
+    assert [ev["payload"] for ev in emitted] == [
+        ev["payload"] for ev in applied
+    ]
+    assert all(
+        emitted[index]["payload"] is applied[index]["payload"]
+        for index in range(len(applied))
+    )
+    # e.ts jest tylko czescia event_id; jednostka/semantyka czasu pozostaje
+    # otwarta decyzja, wiec payload nie fabrykuje pickup/delivery timestampu.
     assert all("timestamp" not in ev["payload"] for ev in applied)
-    assert ("COURIER_PICKED_UP", "900138096_COURIER_PICKED_UP_111") in emitted
+    assert {
+        "event_type": "COURIER_PICKED_UP",
+        "event_id": "900138096_COURIER_PICKED_UP_111",
+        "payload": {"source": "parcel_status_inbox"},
+    } in emitted
 
 
 def test_apply_status_inbox_idempotent(monkeypatch, tmp_path):
@@ -128,7 +152,11 @@ def test_apply_status_inbox_idempotent(monkeypatch, tmp_path):
     monkeypatch.setattr(plm.sm, "_state_path", lambda: str(tmp_path / "orders_state.json"))
     monkeypatch.setattr(plm.event_bus, "emit", lambda *a, **k: None)
     applied = []
-    monkeypatch.setattr(plm.sm, "update_from_event", lambda ev: applied.append(ev))
+    monkeypatch.setattr(
+        plm.event_bus,
+        "apply_state_event",
+        lambda ev, **kwargs: SimpleNamespace(should_run_followups=False),
+    )
     assert plm._apply_status_inbox() == 0 and applied == []
 
 
@@ -138,7 +166,11 @@ def test_apply_status_inbox_rotates_when_large(monkeypatch, tmp_path):
     inbox.write_text('{"oid":"900000005","status_code":5,"cid":61,"ts":1}\n', encoding="utf-8")
     monkeypatch.setattr(plm.sm, "_state_path", lambda: str(tmp_path / "orders_state.json"))
     monkeypatch.setattr(plm.event_bus, "emit", lambda *a, **k: "e")
-    monkeypatch.setattr(plm.sm, "update_from_event", lambda ev: None)
+    monkeypatch.setattr(
+        plm.event_bus,
+        "apply_state_event",
+        lambda *a, **k: SimpleNamespace(should_run_followups=True),
+    )
     monkeypatch.setattr(plm, "INBOX_MAX_BYTES", 0)   # wymuś rotację
     plm._apply_status_inbox()
     assert not inbox.exists()                         # zrotowany

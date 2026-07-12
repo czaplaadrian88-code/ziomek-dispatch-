@@ -16,9 +16,11 @@ import shutil
 import tempfile
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import (
@@ -33,7 +35,18 @@ from dispatch_v2.common import (
     setup_logger,
 )
 from dispatch_v2.core.jsonl_appender import append_jsonl
-from dispatch_v2.order_fsm import FsmOutcome, FsmVerdict, validate_order_event
+from dispatch_v2.order_fsm import (
+    ABSENT_STATE,
+    FORMAL_FSM_EVENT_TYPES,
+    FsmOutcome,
+    FsmVerdict,
+    NON_STATE_EVENT_TYPES,
+    ORDER_STATES,
+    TRANSITION_RULES,
+    event_idempotency_key,
+    rejection_code,
+    validate_order_event,
+)
 
 _WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
@@ -66,6 +79,86 @@ class StateReadError(RuntimeError):
     append-only → odtwarzalny) niż skasować stan całej floty.
     """
     pass
+
+
+class OrderEventRejected(ValueError):
+    """Bezpieczny sygnal quarantine; message nie zawiera payloadu ani ID."""
+
+    def __init__(self, error_code: str, event_type: str):
+        safe_code = (
+            error_code
+            if error_code in {
+                "illegal_transition",
+                "stale_event",
+                "invalid_timestamp",
+                "invalid_payload",
+            }
+            else "invalid_payload"
+        )
+        self.error_code = safe_code
+        self.event_type = event_type
+        self.failure_class = (
+            "illegal"
+            if safe_code in {"illegal_transition", "stale_event"}
+            else "permanent"
+        )
+        super().__init__(f"order event rejected: code={safe_code}")
+
+
+class ConcurrentOrderEvent(RuntimeError):
+    """Stan zmienil sie miedzy walidacja a atomowym zapisem; bez efektu."""
+
+    failure_class = "transient"
+    error_code = "concurrent_state_change"
+
+
+@dataclass(frozen=True)
+class OrderEventApplyResult:
+    record: Optional[dict]
+    verdict: FsmVerdict
+    changed: bool
+    duplicate: bool
+    enforcement_enabled: bool
+
+
+@dataclass
+class _OrderApplyContext:
+    event: dict
+    verdict: FsmVerdict
+    idempotency_key: str
+    initial_revision: tuple[Any, Any]
+    changed: bool = False
+    duplicate: bool = False
+
+
+_ORDER_APPLY_CONTEXT: ContextVar[Optional[_OrderApplyContext]] = ContextVar(
+    "order_apply_context", default=None
+)
+_FSM_RECEIPTS_FIELD = "fsm_idempotency_keys"
+_FSM_LOG_EVENT_TYPES = FORMAL_FSM_EVENT_TYPES | NON_STATE_EVENT_TYPES
+_FSM_LOG_STATUSES = ORDER_STATES | frozenset({ABSENT_STATE})
+_FSM_LOG_SOURCES = frozenset(
+    source
+    for rule in TRANSITION_RULES
+    for source in rule.sources
+)
+
+
+def _closed_log_value(value: Any, allowed: frozenset[str]) -> str:
+    text = str(value or "").strip()
+    return text if text in allowed else ("-" if not text else "unknown")
+
+
+def _closed_log_source(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "-"
+    if text in _FSM_LOG_SOURCES:
+        return text
+    for source in _FSM_LOG_SOURCES:
+        if text.startswith(source + ":"):
+            return source
+    return "unknown"
 
 
 def _verify_czas_kuriera_consistency(
@@ -199,6 +292,69 @@ ORDER_FSM_ENFORCEMENT_ENABLED = False
 _FSM_CURRENT_UNSET = object()
 
 
+def _state_revision(current: Optional[dict]) -> tuple[Any, Any]:
+    if not current:
+        return (None, None)
+    return (current.get("status"), current.get("updated_at"))
+
+
+def _event_receipts(current: Optional[dict]) -> set[str]:
+    if not current:
+        return set()
+    raw = current.get(_FSM_RECEIPTS_FIELD)
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return set()
+    return {str(value) for value in raw if value}
+
+
+def _attach_event_receipt(record: dict, ctx: _OrderApplyContext) -> None:
+    raw = record.get(_FSM_RECEIPTS_FIELD)
+    receipts = [
+        str(value)
+        for value in (raw if isinstance(raw, list) else [])
+        if value
+    ]
+    if ctx.idempotency_key not in receipts:
+        receipts.append(ctx.idempotency_key)
+    record[_FSM_RECEIPTS_FIELD] = receipts
+    record["fsm_last_event_key"] = ctx.idempotency_key
+    record["fsm_last_event_type"] = ctx.verdict.event_type
+    created_at = ctx.event.get("created_at")
+    if created_at not in (None, ""):
+        record["fsm_last_event_at"] = created_at
+
+
+def _raise_if_rejected(verdict: FsmVerdict) -> None:
+    if verdict.would_reject:
+        raise OrderEventRejected(rejection_code(verdict), verdict.event_type)
+
+
+def _record_duplicate_receipt(
+    order_id: str,
+    ctx: _OrderApplyContext,
+) -> Optional[dict]:
+    """Receipt-only atomic write; nie dodaje historii ani nie zmienia SLA."""
+    with _locked_write() as path:
+        state = _read_state_strict()
+        old_count = len(state)
+        current = state.get(order_id)
+        if current is None:
+            return None
+        if ctx.idempotency_key in _event_receipts(current):
+            ctx.duplicate = True
+            return dict(current)
+        locked_verdict = validate_order_event(ctx.event, current=current)
+        _raise_if_rejected(locked_verdict)
+        if locked_verdict.outcome is not FsmOutcome.DUPLICATE:
+            raise ConcurrentOrderEvent("state changed before duplicate receipt")
+        updated = dict(current)
+        _attach_event_receipt(updated, ctx)
+        state[order_id] = updated
+        _guarded_write(path, state, old_count, op="fsm_receipt")
+        ctx.duplicate = True
+        return updated
+
+
 def _observe_order_event(event, current=_FSM_CURRENT_UNSET) -> Optional[FsmVerdict]:
     """Run the pure formal FSM validator without affecting legacy behavior.
 
@@ -215,13 +371,20 @@ def _observe_order_event(event, current=_FSM_CURRENT_UNSET) -> Optional[FsmVerdi
             current = get_order(str(oid)) if oid else None
         verdict = validate_order_event(event, current=current)
         issue_codes = ",".join(verdict.issue_codes) or "none"
+        event_ref = event_idempotency_key(event)[:12]
+        safe_event_type = _closed_log_value(
+            verdict.event_type, _FSM_LOG_EVENT_TYPES
+        )
+        safe_from = _closed_log_value(verdict.from_status, _FSM_LOG_STATUSES)
+        safe_to = _closed_log_value(verdict.to_status, _FSM_LOG_STATUSES)
+        safe_source = _closed_log_source(verdict.source)
         message = (
             "ORDER_FSM_OBSERVER mode=log_only enforcement=hard_off "
             f"would_reject={int(verdict.would_reject)} "
-            f"oid={verdict.order_id or '-'} event={verdict.event_type} "
-            f"from={verdict.from_status} to={verdict.to_status or '-'} "
-            f"outcome={verdict.outcome.value} source={verdict.source or '-'} "
-            f"event_id={verdict.event_id or '-'} issues={issue_codes}"
+            f"event_ref={event_ref} event={safe_event_type} "
+            f"from={safe_from} to={safe_to} "
+            f"outcome={verdict.outcome.value} source={safe_source} "
+            f"issues={issue_codes}"
         )
         if verdict.would_reject:
             _log.warning(message)
@@ -240,7 +403,7 @@ def _observe_order_event(event, current=_FSM_CURRENT_UNSET) -> Optional[FsmVerdi
         try:
             _log.warning(
                 "ORDER_FSM_OBSERVER_FAIL mode=log_only enforcement=hard_off "
-                f"error={type(exc).__name__}:{exc}"
+                f"error_class={type(exc).__name__}"
             )
         except Exception:
             pass
@@ -615,6 +778,28 @@ def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict
         state = _read_state_strict()        # Faza 1: raise StateReadError zamiast cichego {}
         old_count = len(state)
         existing = state.get(order_id, {})
+        apply_ctx = _ORDER_APPLY_CONTEXT.get()
+        if apply_ctx is not None and str(apply_ctx.event.get("order_id")) == str(order_id):
+            if apply_ctx.idempotency_key in _event_receipts(existing):
+                apply_ctx.duplicate = True
+                return dict(existing)
+            locked_verdict = validate_order_event(
+                apply_ctx.event,
+                current=existing or None,
+            )
+            _raise_if_rejected(locked_verdict)
+            current_revision = _state_revision(existing or None)
+            if locked_verdict.outcome is FsmOutcome.DUPLICATE:
+                receipt_only = dict(existing)
+                _attach_event_receipt(receipt_only, apply_ctx)
+                state[order_id] = receipt_only
+                _guarded_write(path, state, old_count, op="fsm_receipt")
+                apply_ctx.duplicate = True
+                return receipt_only
+            if current_revision != apply_ctx.initial_revision:
+                raise ConcurrentOrderEvent(
+                    "state changed between validation and atomic write"
+                )
         merged = {**existing, **data, "order_id": order_id}
 
         # History
@@ -623,6 +808,9 @@ def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict
             history.append({"at": now_iso(), "event": event, "status": merged.get("status")})
         merged["history"] = history
         merged["updated_at"] = now_iso()
+        if apply_ctx is not None and str(apply_ctx.event.get("order_id")) == str(order_id):
+            _attach_event_receipt(merged, apply_ctx)
+            apply_ctx.changed = True
 
         state[order_id] = merged
         _guarded_write(path, state, old_count, op="upsert")
@@ -662,7 +850,7 @@ def resurrect_order(order_id: str, new_status: str = "picked_up",
     # Z-P1-01 Phase A: correction is an explicit, source-tagged FSM exception.
     # Observer only — this call cannot block either a valid correction or the
     # legacy no-op for a non-delivered order.
-    _observe_order_event({
+    correction_event = {
         "event_type": "ORDER_RESURRECTED",
         "order_id": order_id,
         "courier_id": courier_id,
@@ -671,7 +859,25 @@ def resurrect_order(order_id: str, new_status: str = "picked_up",
             "reason": reason,
             "source": reason,
         },
-    }, current=prev or None)
+    }
+    correction_ctx = None
+    correction_token = None
+    if ORDER_FSM_ENFORCEMENT_ENABLED:
+        correction_key = event_idempotency_key(correction_event)
+        if correction_key in _event_receipts(prev):
+            return prev
+        correction_verdict = validate_order_event(
+            correction_event, current=prev or None
+        )
+        _raise_if_rejected(correction_verdict)
+        correction_ctx = _OrderApplyContext(
+            event=correction_event,
+            verdict=correction_verdict,
+            idempotency_key=correction_key,
+            initial_revision=_state_revision(prev or None),
+        )
+    else:
+        _observe_order_event(correction_event, current=prev or None)
     if prev.get("status") != "delivered":
         return None
     data = {
@@ -684,16 +890,17 @@ def resurrect_order(order_id: str, new_status: str = "picked_up",
     if courier_id:
         data["courier_id"] = str(courier_id)
     _log.warning(f"RESURRECT {order_id} delivered→{new_status} reason={reason} cid={courier_id}")
-    return upsert_order(order_id, data, event="ORDER_RESURRECTED")
+    if correction_ctx is not None:
+        correction_token = _ORDER_APPLY_CONTEXT.set(correction_ctx)
+    try:
+        return upsert_order(order_id, data, event="ORDER_RESURRECTED")
+    finally:
+        if correction_token is not None:
+            _ORDER_APPLY_CONTEXT.reset(correction_token)
 
 
-def update_from_event(event: dict) -> Optional[dict]:
-    """Konsumuje event z event busa i aktualizuje state machine.
-    Zwraca zaktualizowany rekord lub None."""
-    # Z-P1-01 Phase A: formal FSM shadow.  It is intentionally fail-open and
-    # log-only; legacy behavior below (including current fallbacks/exceptions)
-    # remains the sole writer until a separately approved enforcement phase.
-    _observe_order_event(event)
+def _update_from_event_legacy(event: dict) -> Optional[dict]:
+    """Dotychczasowy reducer; wywolywany przez jawny wrapper OFF/ON ponizej."""
     etype = event["event_type"]
     oid = event.get("order_id")
     payload = event.get("payload", {})
@@ -1098,8 +1305,121 @@ def update_from_event(event: dict) -> Optional[dict]:
             "bag_time_alerted": False,  # F2.1b step 5: reset on rejection — next courier starts clean
         }, event="COURIER_REJECTED_PROPOSAL")
 
+    if etype == "ORDER_CANCELLED":
+        return upsert_order(oid, {
+            "status": "cancelled",
+            "commitment_level": "planned",
+            "courier_id": None,
+            "cancellation_reason": payload.get("reason"),
+            "bag_time_alerted": False,
+        }, event="ORDER_CANCELLED")
+
     # Pozostale eventy nie zmieniaja stanu zlecen
     return None
+
+
+def apply_order_event(
+    event: dict,
+    *,
+    enforce: Optional[bool] = None,
+) -> OrderEventApplyResult:
+    """Jawny OFF/ON owner walidacji, idempotencji i legacy reducera.
+
+    Default pozostaje Phase-A log-only. Tryb ON nie jest podlaczony do flag ani
+    workera; testy/integrator musza podac ``enforce=True`` albo po przyszlym ACK
+    zmienic stala. Receipt i zmiana stanu powstaja w jednym atomicznym zapisie.
+    """
+    enforcement_enabled = (
+        ORDER_FSM_ENFORCEMENT_ENABLED if enforce is None else bool(enforce)
+    )
+    oid = event.get("order_id") if isinstance(event, dict) else None
+    if enforcement_enabled:
+        current = get_order(str(oid)) if oid else None
+        verdict = validate_order_event(event, current=current)
+    else:
+        # Historyczny OFF: observer sam czyta state wewnatrz fail-open try.
+        # Blad odczytu nie moze zablokowac ponizszego legacy reducera.
+        current = None
+        verdict = _observe_order_event(event)
+        if verdict is None:
+            verdict = FsmVerdict(
+                event_type=str(event.get("event_type") or "<unknown>"),
+                order_id=(str(oid) if oid is not None else None),
+                from_status=ABSENT_STATE,
+                to_status=None,
+                source=None,
+                event_id=None,
+                outcome=FsmOutcome.NON_STATE,
+                transition_allowed=True,
+            )
+
+    if not enforcement_enabled:
+        record = _update_from_event_legacy(event)
+        return OrderEventApplyResult(
+            record=record,
+            verdict=verdict,
+            changed=record is not None,
+            duplicate=verdict.outcome is FsmOutcome.DUPLICATE,
+            enforcement_enabled=False,
+        )
+
+    key = event_idempotency_key(event)
+    if key in _event_receipts(current):
+        return OrderEventApplyResult(
+            record=current,
+            verdict=verdict,
+            changed=False,
+            duplicate=True,
+            enforcement_enabled=True,
+        )
+    _raise_if_rejected(verdict)
+    if verdict.outcome is FsmOutcome.DUPLICATE:
+        if not oid:
+            return OrderEventApplyResult(
+                record=current,
+                verdict=verdict,
+                changed=False,
+                duplicate=True,
+                enforcement_enabled=True,
+            )
+        duplicate_ctx = _OrderApplyContext(
+            event=dict(event),
+            verdict=verdict,
+            idempotency_key=key,
+            initial_revision=_state_revision(current),
+        )
+        record = _record_duplicate_receipt(str(oid), duplicate_ctx)
+        return OrderEventApplyResult(
+            record=record,
+            verdict=verdict,
+            changed=False,
+            duplicate=True,
+            enforcement_enabled=True,
+        )
+
+    ctx = _OrderApplyContext(
+        event=dict(event),
+        verdict=verdict,
+        idempotency_key=key,
+        initial_revision=_state_revision(current),
+    )
+    token = _ORDER_APPLY_CONTEXT.set(ctx)
+    try:
+        record = _update_from_event_legacy(event)
+    finally:
+        _ORDER_APPLY_CONTEXT.reset(token)
+    return OrderEventApplyResult(
+        record=record,
+        verdict=verdict,
+        changed=ctx.changed,
+        duplicate=ctx.duplicate,
+        enforcement_enabled=True,
+    )
+
+
+def update_from_event(event: dict) -> Optional[dict]:
+    """Kompatybilny reader/caller API; domyslnie Phase-A log-only."""
+    return apply_order_event(event).record
 
 
 def touch_check_cursor(order_id: str) -> bool:

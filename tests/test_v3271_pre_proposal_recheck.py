@@ -166,13 +166,13 @@ def test_recheck_force_fetch_old_emits_event():
     def _spy_emit(*args, **kwargs):
         emit_calls.append(kwargs)
     apply_calls = []
-    def _spy_apply(event):
-        apply_calls.append(event)
+    def _spy_apply(event, **kwargs):
+        apply_calls.append((event, kwargs))
 
     # MOCK panel HTTP boundary (fetch_order_details), ale REAL normalize_order
     with patch.object(panel_client, "fetch_order_details", side_effect=_spy_fetch), \
          patch("dispatch_v2.event_bus.emit_audit", side_effect=_spy_emit), \
-         patch("dispatch_v2.state_machine.update_from_event", side_effect=_spy_apply):
+         patch("dispatch_v2.event_bus.apply_state_event", side_effect=_spy_apply):
         result = dispatch_pipeline.get_fresh_czas_kuriera_for_bag(bag, now)
 
     assert fetch_count[0] == 1, f"old order MUST fetch, got {fetch_count[0]}"
@@ -188,7 +188,9 @@ def test_recheck_force_fetch_old_emits_event():
     assert payload["new_ck_hhmm"] == "17:30", \
         f"payload MUST have HH:MM new_ck_hhmm (state_machine sanity), got {payload.get('new_ck_hhmm')}"
     assert "_PRE_RECHECK_" in emit_calls[0]["event_id"]
-    assert len(apply_calls) == 1, "MUST call state_machine.update_from_event"
+    assert len(apply_calls) == 1, "MUST call event_bus.apply_state_event"
+    assert apply_calls[0][1]["emitted"] is True
+    assert apply_calls[0][1]["event_id"] == emit_calls[0]["event_id"]
 
 
 def test_recheck_parallel_no_bag_limit():
@@ -282,7 +284,7 @@ def test_recheck_no_change_no_emit():
 
     with patch.object(panel_client, "fetch_order_details", side_effect=_spy_fetch), \
          patch("dispatch_v2.event_bus.emit", side_effect=_spy_emit), \
-         patch("dispatch_v2.state_machine.update_from_event"):
+         patch("dispatch_v2.event_bus.apply_state_event"):
         result = dispatch_pipeline.get_fresh_czas_kuriera_for_bag(bag, now)
 
     assert len(emit_calls) == 0, f"no change MUST NOT emit event, got {len(emit_calls)} calls"
@@ -313,7 +315,7 @@ def test_recheck_normalize_returns_none_skip_emit():
 
     with patch.object(panel_client, "fetch_order_details", side_effect=_spy_fetch), \
          patch("dispatch_v2.event_bus.emit", side_effect=_spy_emit), \
-         patch("dispatch_v2.state_machine.update_from_event"):
+         patch("dispatch_v2.event_bus.apply_state_event"):
         result = dispatch_pipeline.get_fresh_czas_kuriera_for_bag(bag, now)
 
     # normalize_order zwraca None dla status_id=7 → helper (None, None) → skip emit

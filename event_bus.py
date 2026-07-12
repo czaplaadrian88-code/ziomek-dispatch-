@@ -14,9 +14,10 @@ import os
 import sqlite3
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import load_config, now_iso, setup_logger
@@ -43,6 +44,7 @@ EVENT_TYPES = {
     "COURIER_ASSIGNED",
     "COURIER_REJECTED_PROPOSAL",
     "ORDER_RETURNED_TO_POOL",
+    "ORDER_CANCELLED",
     "KOORDYNATOR_DEADLINE",
     "GPS_STALE",
     "PANEL_UNREACHABLE",
@@ -85,6 +87,7 @@ AUDIT_EVENT_TYPES = {
     "PICKUP_TIME_UPDATED",
     "PANEL_UNREACHABLE",
     "ORDER_RETURNED_TO_POOL",
+    "ORDER_CANCELLED",
 }
 
 # Tech debt #39 (2026-05-13): queue types that are ALSO mirrored to audit_log
@@ -201,6 +204,7 @@ def _emit_inner(
     payload_json: str,
     created_at: str,
     event_id: str,
+    idempotency_key_digest: str,
 ) -> Optional[str]:
     """Inner emit z transaction body. Wrapped przez emit() w _retry_on_locked."""
     with _conn() as conn:
@@ -215,12 +219,39 @@ def _emit_inner(
                 _log.debug(f"DUP (processed): {event_id}")
                 return None
 
-            cur = conn.execute(
-                """INSERT OR IGNORE INTO events
-                   (event_id, event_type, order_id, courier_id, payload, created_at, status)
-                   VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-                (event_id, event_type, order_id, courier_id, payload_json, created_at),
-            )
+            from dispatch_v2 import event_retry
+
+            if event_retry.has_retry_schema(conn):
+                cur = conn.execute(
+                    """INSERT OR IGNORE INTO events
+                       (event_id, event_type, order_id, courier_id, payload,
+                        created_at, status, idempotency_key)
+                       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
+                    (
+                        event_id,
+                        event_type,
+                        order_id,
+                        courier_id,
+                        payload_json,
+                        created_at,
+                        idempotency_key_digest,
+                    ),
+                )
+            else:
+                cur = conn.execute(
+                    """INSERT OR IGNORE INTO events
+                       (event_id, event_type, order_id, courier_id, payload,
+                        created_at, status)
+                       VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+                    (
+                        event_id,
+                        event_type,
+                        order_id,
+                        courier_id,
+                        payload_json,
+                        created_at,
+                    ),
+                )
             if cur.rowcount == 0:
                 conn.execute("COMMIT;")
                 _log.debug(f"DUP (pending): {event_id}")
@@ -255,6 +286,7 @@ def emit(
     courier_id: Optional[str] = None,
     payload: Optional[dict] = None,
     event_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
 ) -> Optional[str]:
     """Emituje event. Zwraca event_id lub None jesli duplikat.
 
@@ -274,11 +306,24 @@ def emit(
     if event_id is None:
         event_id = make_event_id(event_type, order_id)
 
+    from dispatch_v2 import event_retry
+
+    idempotency_key_digest = event_retry.idempotency_key(
+        idempotency_key if idempotency_key is not None else event_id
+    )
+
     payload_json = json.dumps(payload or {}, ensure_ascii=False)
     created_at = now_iso()
 
     return _retry_on_locked(
-        _emit_inner, event_type, order_id, courier_id, payload_json, created_at, event_id,
+        _emit_inner,
+        event_type,
+        order_id,
+        courier_id,
+        payload_json,
+        created_at,
+        event_id,
+        idempotency_key_digest,
     )
 
 
@@ -305,71 +350,279 @@ def get_pending(limit: int = 100, event_types: Optional[list] = None) -> list:
         return [dict(row) | {"payload": json.loads(row["payload"])} for row in cur.fetchall()]
 
 
-def mark_processed(event_id: str) -> bool:
-    """Oznacza event jako processed i przenosi do processed_events (dedup)."""
+def mark_processed(
+    event_id: str,
+    *,
+    retry_consumer_enabled: bool = False,
+) -> bool:
+    """Oznacza event jako processed; default zachowuje historyczny kontrakt.
+
+    ``retry_consumer_enabled=False`` zawsze wykonuje bezwarunkowy UPDATE po
+    ``event_id``, INSERT OR IGNORE do ``processed_events`` i zwraca ``True`` --
+    rowniez dla missing/failed. Obecnosc migracji niczego tu nie aktywuje.
+    Restrykcyjny CAS i czyszczenie obu aliasow wymagaja jawnego opt-in przyszlego
+    consumera retry.
+    """
     processed_at = now_iso()
     with _conn() as conn:
         try:
             conn.execute("BEGIN IMMEDIATE;")
-            conn.execute(
-                "UPDATE events SET status = 'processed', processed_at = ? WHERE event_id = ?",
-                (processed_at, event_id),
-            )
-            conn.execute(
-                "INSERT OR IGNORE INTO processed_events (event_id, processed_at) VALUES (?, ?)",
-                (event_id, processed_at),
-            )
+            if not retry_consumer_enabled:
+                conn.execute(
+                    """UPDATE events SET status='processed', processed_at=?
+                       WHERE event_id=?""",
+                    (processed_at, event_id),
+                )
+                conn.execute(
+                    """INSERT OR IGNORE INTO processed_events
+                       (event_id, processed_at) VALUES (?, ?)""",
+                    (event_id, processed_at),
+                )
+                result = True
+            else:
+                from dispatch_v2 import event_retry
+
+                if not event_retry.has_retry_schema(conn):
+                    raise RuntimeError(
+                        "retry consumer requires the complete retry metadata schema"
+                    )
+                cur = conn.execute(
+                    """UPDATE events
+                       SET status='processed', processed_at=?,
+                           next_attempt_at=NULL, next_retry_at=NULL
+                       WHERE event_id=?
+                         AND status IN ('pending','retry_scheduled')""",
+                    (processed_at, event_id),
+                )
+            if retry_consumer_enabled:
+                if cur.rowcount == 1:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO processed_events
+                           (event_id, processed_at) VALUES (?, ?)""",
+                        (event_id, processed_at),
+                    )
+                    result = True
+                else:
+                    row = conn.execute(
+                        "SELECT status FROM events WHERE event_id=?", (event_id,)
+                    ).fetchone()
+                    result = bool(row and row[0] == "processed")
+                    if result:
+                        conn.execute(
+                            """INSERT OR IGNORE INTO processed_events
+                               (event_id, processed_at) VALUES (?, ?)""",
+                            (event_id, processed_at),
+                        )
             conn.execute("COMMIT;")
-            return True
+            return result
         except Exception as e:
             conn.execute("ROLLBACK;")
-            _log.error(f"mark_processed() error: {e}")
+            _log.error(
+                "mark_processed() error "
+                f"error_class={type(e).__name__}"
+            )
             return False
 
 
-def mark_failed(event_id: str, error: str) -> bool:
+def mark_failed(
+    event_id: str,
+    error,
+    *,
+    enabled: bool = False,
+    policy=None,
+    policy_id: Optional[str] = None,
+) -> bool:
     """Oznacza event jako failed (do ponownej analizy).
 
     Z-P0-05 Faza A: jesli operator JAWNIE zastosowal addytywna migracje retry,
     zapisujemy rowniez ``attempt_count``, ``last_error`` i ``last_failed_at``.
-    Nie planujemy kolejnej proby -- automatyczny retry pozostaje OFF. Normalne
-    ``pending -> failed`` na starym schemacie zostaje bez zmian; spoznione
-    wywolanie dla ``processed``/``failed`` jest teraz bezpiecznym no-op.
+    Przy domyslnym ``enabled=False`` kazda klasa bledu konczy jako ``failed``
+    bez terminu retry. Retry/DLQ wymaga jednoczesnie ``enabled=True``, jawnej
+    polityki i jej wersjonowanego ``policy_id``. Normalne ``pending -> failed``
+    na starym schemacie zostaje bez zmian; spoznione wywolanie dla
+    ``processed``/``failed`` jest bezpiecznym no-op.
     """
     with _conn() as conn:
-        try:
-            from dispatch_v2 import event_retry
+        from dispatch_v2 import event_retry
 
+        descriptor = event_retry.classify_failure(error)
+        event_ref = event_retry.idempotency_key(event_id)[:12]
+        if enabled and policy is None:
+            raise ValueError("enabled retry/DLQ requires an explicit RetryPolicy")
+        if enabled and not str(policy_id or "").strip():
+            raise ValueError("enabled retry/DLQ requires an explicit policy_id")
+        try:
             if event_retry.has_retry_schema(conn):
-                changed = event_retry.record_failed_attempt(
+                transition = event_retry.record_failure(
                     conn,
                     event_id,
                     error,
                     failed_at=datetime.now(timezone.utc),
                     expected_status="pending",
+                    enabled=enabled,
+                    policy=policy,
+                    policy_id=policy_id,
                 )
-                if not changed:
+                if not transition.changed:
                     _log.warning(
-                        f"mark_failed stale/no-op event_id={event_id}: "
+                        f"mark_failed stale/no-op event_ref={event_ref}: "
                         "expected status=pending"
                     )
-                _log.warning(f"FAILED {event_id}: {error}")
-                return changed
+                _log.warning(
+                    "EVENT_FAILURE "
+                    f"event_ref={event_ref} class={descriptor.failure_class.value} "
+                    f"code={descriptor.error_code} status={transition.status}"
+                )
+                return transition.changed
+            if enabled:
+                raise RuntimeError(
+                    "enabled retry/DLQ requires the event retry metadata schema"
+                )
         except Exception as metadata_exc:
+            if enabled:
+                _log.error(
+                    f"mark_failed enforced transition error event_ref={event_ref} "
+                    f"error_class={type(metadata_exc).__name__}"
+                )
+                raise
             # Metadane sa addytywne; ich awaria nie moze zmienic starego
             # kontraktu wyjecia poison eventu z pending queue. Fallback nadal
             # ma CAS na pending, wiec nie clobberuje processed/failed.
             _log.error(
-                f"mark_failed retry metadata error event_id={event_id}: "
-                f"{type(metadata_exc).__name__}: {metadata_exc}"
+                f"mark_failed retry metadata error event_ref={event_ref} "
+                f"error_class={type(metadata_exc).__name__}"
             )
         cur = conn.execute(
             """UPDATE events SET status = 'failed', processed_at = ?
                WHERE event_id = ? AND status = 'pending'""",
             (now_iso(), event_id),
         )
-        _log.warning(f"FAILED {event_id}: {error}")
+        _log.warning(
+            "EVENT_FAILURE_LEGACY_SCHEMA "
+            f"event_ref={event_ref} class={descriptor.failure_class.value} "
+            f"code={descriptor.error_code}"
+        )
         return cur.rowcount == 1
+
+
+@dataclass(frozen=True)
+class StateEffectResult:
+    """Wynik pojedynczego publish->state effect; worker retry nadal nie istnieje."""
+
+    record: Optional[dict]
+    changed: bool
+    duplicate: bool
+    quarantined: bool
+    enforcement_enabled: bool
+    should_run_followups: bool
+    error_code: Optional[str] = None
+
+
+def apply_state_event(
+    event: dict[str, Any],
+    *,
+    event_id: Optional[str],
+    emitted: bool,
+    enforce: Optional[bool] = None,
+) -> StateEffectResult:
+    """Jeden owner aplikacji eventu do state z jawnym OFF/ON.
+
+    OFF zachowuje dotychczasowy kontrakt bajtowy call-site'ow: duplikat emit
+    nie uruchamia ponownie legacy writera. ON (wylacznie testy/source do ACK)
+    aplikuje takze zapisany-wczesniej event, a atomowy receipt w state blokuje
+    drugi efekt po crashu przed markerem ``effect_applied_at``.
+    """
+    from dispatch_v2 import state_machine
+
+    enforcement_enabled = (
+        state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+        if enforce is None
+        else bool(enforce)
+    )
+    if not emitted and not enforcement_enabled:
+        return StateEffectResult(
+            record=None,
+            changed=False,
+            duplicate=True,
+            quarantined=False,
+            enforcement_enabled=False,
+            should_run_followups=False,
+        )
+
+    state_event = dict(event)
+    state_event["payload"] = dict(event.get("payload") or {})
+    if event_id:
+        state_event["event_id"] = event_id
+        state_event["idempotency_key"] = event_id
+    try:
+        applied = state_machine.apply_order_event(
+            state_event,
+            enforce=enforcement_enabled,
+        )
+    except state_machine.OrderEventRejected as exc:
+        if event_id:
+            from dispatch_v2 import event_retry
+
+            mark_failed(
+                event_id,
+                exc,
+                enabled=True,
+                policy=event_retry.FSM_QUARANTINE_POLICY,
+                policy_id=event_retry.FSM_QUARANTINE_POLICY_ID,
+            )
+        return StateEffectResult(
+            record=None,
+            changed=False,
+            duplicate=False,
+            quarantined=True,
+            enforcement_enabled=enforcement_enabled,
+            should_run_followups=False,
+            error_code=exc.error_code,
+        )
+    except state_machine.ConcurrentOrderEvent as exc:
+        if event_id:
+            mark_failed(event_id, exc)
+        return StateEffectResult(
+            record=None,
+            changed=False,
+            duplicate=False,
+            quarantined=False,
+            enforcement_enabled=enforcement_enabled,
+            should_run_followups=False,
+            error_code=exc.error_code,
+        )
+
+    if event_id and enforcement_enabled:
+        from dispatch_v2 import event_retry
+
+        try:
+            with _conn() as conn:
+                if event_retry.has_retry_schema(conn):
+                    event_retry.mark_effect_applied(
+                        conn,
+                        event_id,
+                        applied_at=datetime.now(timezone.utc),
+                    )
+        except Exception as exc:
+            # State receipt jest autorytatywnym dedupem. Brak markera DB jest
+            # naprawialny kolejnym replayem i nie moze wywolac drugiego efektu.
+            _log.warning(
+                "STATE_EFFECT_MARKER_DEFERRED "
+                f"event_ref={event_retry.idempotency_key(event_id)[:12]} "
+                f"error_class={type(exc).__name__}"
+            )
+
+    should_run_followups = (
+        applied.changed if enforcement_enabled else bool(emitted)
+    )
+    return StateEffectResult(
+        record=applied.record,
+        changed=applied.changed,
+        duplicate=applied.duplicate,
+        quarantined=False,
+        enforcement_enabled=enforcement_enabled,
+        should_run_followups=should_run_followups,
+    )
 
 
 def stats() -> dict:

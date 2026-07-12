@@ -94,16 +94,28 @@ def _apply_status_inbox() -> int:
         oid = str(e.get("oid"))
         cid = str(e.get("cid") or "")
         eid = f"{oid}_{etype}_{e.get('ts')}"
-        if event_bus.emit(etype, order_id=oid, courier_id=cid, event_id=eid):
-            sm.update_from_event({
+        # ``e.ts`` ma niezatwierdzona jednostke/semantyke. Jest tylko czescia
+        # stabilnego event_id; NIE wolno udawac, ze to pickup/delivery time.
+        # OFF zachowuje legacy observer+fallback, ON odrzuca brak timestampu.
+        payload = {"source": "parcel_status_inbox"}
+        emitted = event_bus.emit(
+            etype,
+            order_id=oid,
+            courier_id=cid,
+            payload=payload,
+            event_id=eid,
+        )
+        effect = event_bus.apply_state_event(
+            {
                 "event_type": etype,
                 "order_id": oid,
                 "courier_id": cid,
-                # Provenance only. Timestamp pozostaje celowo nieuzupelniony:
-                # jego kontrakt wymaga osobnej decyzji, a observer ma ujawnic
-                # dotychczasowy fallback legacy zamiast go maskowac.
-                "payload": {"source": "parcel_status_inbox"},
-            })
+                "payload": payload,
+            },
+            event_id=eid,
+            emitted=bool(emitted),
+        )
+        if effect.should_run_followups:
             applied += 1
             log.info("paczka %s ← %s (apka)", oid, etype)
     # Rotacja: po przetworzeniu (idempotent), gdy plik duży → archiwum .1; courier_api
@@ -139,12 +151,39 @@ def run() -> dict:
         if oid in state:
             stats["kept"] += 1
         else:
-            sm.upsert_order(oid, entry, event="PARCEL_LANE_NEW")
+            if not sm.ORDER_FSM_ENFORCEMENT_ENABLED:
+                sm.upsert_order(oid, entry, event="PARCEL_LANE_NEW")
             stats["created"] += 1
         payload = {k: entry.get(k) for k in _NEW_ORDER_FIELDS}
-        if event_bus.emit("NEW_ORDER", order_id=str(oid), payload=payload,
-                          event_id=f"{oid}_NEW_ORDER_parcel"):
+        event_id = f"{oid}_NEW_ORDER_parcel"
+        emitted = event_bus.emit(
+            "NEW_ORDER",
+            order_id=str(oid),
+            payload=payload,
+            event_id=event_id,
+        )
+        if emitted:
             stats["emitted"] += 1
+        if sm.ORDER_FSM_ENFORCEMENT_ENABLED:
+            effect = event_bus.apply_state_event(
+                {
+                    "event_type": "NEW_ORDER",
+                    "order_id": str(oid),
+                    "payload": payload,
+                },
+                event_id=event_id,
+                emitted=bool(emitted),
+                enforce=True,
+            )
+            if effect.changed:
+                supplemental = {
+                    key: value
+                    for key, value in entry.items()
+                    if key not in {"status", "commitment_level", "history"}
+                }
+                sm.upsert_order(
+                    str(oid), supplemental, event="PARCEL_LANE_ENRICH"
+                )
 
     # 2. Sprzątanie: paczki w stanie, których już nie ma w snapshocie (anulowana/dostarczona/usunięta).
     for oid, so in list(state.items()):
@@ -152,7 +191,27 @@ def run() -> dict:
             continue
         if so.get("status") in _TERMINAL:
             continue
-        sm.set_status(oid, "cancelled", event="PARCEL_LANE_GONE")
+        if sm.ORDER_FSM_ENFORCEMENT_ENABLED:
+            event_id = f"{oid}_ORDER_CANCELLED_parcel_lane_gone"
+            payload = {"reason": "snapshot_missing", "source": "parcel_lane_gone"}
+            emitted = event_bus.emit_audit(
+                "ORDER_CANCELLED",
+                order_id=str(oid),
+                payload=payload,
+                event_id=event_id,
+            )
+            event_bus.apply_state_event(
+                {
+                    "event_type": "ORDER_CANCELLED",
+                    "order_id": str(oid),
+                    "payload": payload,
+                },
+                event_id=event_id,
+                emitted=bool(emitted),
+                enforce=True,
+            )
+        else:
+            sm.set_status(oid, "cancelled", event="PARCEL_LANE_GONE")
         stats["retired"] += 1
 
     stats["status_applied"] = status_applied

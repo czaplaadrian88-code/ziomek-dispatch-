@@ -11,11 +11,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
 
-from dispatch_v2 import common as C
+from dispatch_v2 import common as C, event_retry as _event_retry
+from dispatch_v2 import state_machine as _state_machine
 from dispatch_v2.common import now_iso, setup_logger
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
-from dispatch_v2.event_bus import get_pending, mark_processed, mark_failed, get_pending_count
+from dispatch_v2.event_bus import (
+    apply_state_event,
+    get_pending,
+    get_pending_count,
+    mark_failed,
+    mark_processed,
+)
 from dispatch_v2.monitoring.consumer_stuck_alert import (
     StuckAlertConfig,
     StuckAlertState,
@@ -174,15 +181,37 @@ def process(evt):
     payload = evt.get("payload", {})
 
     if etype == "COURIER_PICKED_UP":
-        ts = payload.get("timestamp") or now_iso()
-        upsert_order(oid, {"picked_up_at": ts}, event="SLA_PICKUP")
+        if _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED:
+            effect = apply_state_event(
+                evt,
+                event_id=evt.get("event_id"),
+                emitted=True,
+                enforce=True,
+            )
+            if effect.quarantined or effect.error_code:
+                return False
+            ts = payload.get("timestamp")
+        else:
+            ts = payload.get("timestamp") or now_iso()
+            upsert_order(oid, {"picked_up_at": ts}, event="SLA_PICKUP")
         _stats["pickup"] += 1
         _log.info(f"pickup {oid} at {ts}")
         return True
 
     if etype == "COURIER_DELIVERED":
+        if _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED:
+            effect = apply_state_event(
+                evt,
+                event_id=evt.get("event_id"),
+                emitted=True,
+                enforce=True,
+            )
+            if effect.quarantined or effect.error_code:
+                return False
         order = get_order(oid) or {}
-        delivered_ts = payload.get("timestamp") or now_iso()
+        delivered_ts = payload.get("timestamp")
+        if not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED:
+            delivered_ts = delivered_ts or now_iso()
         picked_ts = order.get("picked_up_at")
 
         dmin = None
@@ -571,17 +600,21 @@ def run():
                     mark_processed(_eid)
                     _sla_last_processed_ts = time.time()  # Sprint #37 v2: liveness signal
             except Exception as e:
-                import traceback as _tb
+                descriptor = _event_retry.classify_failure(e)
                 _log.error(
-                    f"poison_msg event_id={_eid} oid={evt.get('order_id')} "
-                    f"type={evt.get('event_type')}: {type(e).__name__}: {e}\n"
-                    f"{_tb.format_exc()}"
+                    "SLA_EVENT_FAILURE "
+                    f"type={evt.get('event_type')} "
+                    f"class={descriptor.failure_class.value} "
+                    f"code={descriptor.error_code}"
                 )
                 # mark_failed → wyjęte z get_pending, audit visibility zachowany.
                 try:
-                    mark_failed(_eid, f"{type(e).__name__}: {e}")
+                    mark_failed(_eid, e)
                 except Exception as _mf_e:
-                    _log.error(f"mark_failed fail event_id={_eid}: {_mf_e}")
+                    _log.error(
+                        "SLA_MARK_FAILED_ERROR "
+                        f"error_class={type(_mf_e).__name__}"
+                    )
 
         # F2.1b step 6: R6 BAG_TIME scan per tick (outer safety net).
         try:

@@ -31,6 +31,7 @@ def auto_resync_phantoms(
     dynamic_scaling: bool = True,
     hard_cap_max: int = 20,
     backlog_alert_threshold: int = 50,
+    apply_state_event_fn: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
     """Resync phantoms (events.db terminal events) z safety gates.
 
@@ -177,22 +178,43 @@ def auto_resync_phantoms(
             })
             continue
 
-        if not ev:
-            # Idempotent dedup — already emitted in prior run
-            actions.append({
-                **d,
-                "action": "skipped_dedup",
-            })
-            continue
-
-        # Update state machine
+        state_event = {
+            "event_type": inferred,
+            "order_id": oid,
+            "courier_id": cid,
+            "payload": payload,
+        }
         try:
-            state_update_fn({
-                "event_type": inferred,
-                "order_id": oid,
-                "courier_id": cid,
-                "payload": payload,
-            })
+            if apply_state_event_fn is not None:
+                effect = apply_state_event_fn(
+                    state_event,
+                    event_id=event_id,
+                    emitted=bool(ev),
+                )
+                if effect.quarantined or effect.error_code:
+                    actions.append({
+                        **d,
+                        "action": "state_effect_rejected",
+                        "error_code": effect.error_code,
+                    })
+                    continue
+                if not effect.should_run_followups:
+                    actions.append({
+                        **d,
+                        "action": "skipped_dedup",
+                    })
+                    continue
+            elif not ev:
+                # Legacy adapter zachowuje dotychczasowe OFF zachowanie.
+                actions.append({
+                    **d,
+                    "action": "skipped_dedup",
+                })
+                continue
+
+            # Update state machine (legacy injection only).
+            if apply_state_event_fn is None:
+                state_update_fn(state_event)
         except Exception as e:
             # Event emitted but state update failed — LOG but count as resync
             # (next reconcile cycle will see consistent state)

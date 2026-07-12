@@ -13,7 +13,7 @@ Cardinal rule 4 (evidence preservation): default --offline (read-only).
 
 Usage:
     # Single oid replay (default offline)
-    python3 -m dispatch_v2.replay_failed --oid 470208
+    python3 -m dispatch_v2.replay_failed --oid synthetic-order
 
     # Batch replay since date (offline)
     python3 -m dispatch_v2.replay_failed --status failed --since "2026-04-01"
@@ -22,19 +22,24 @@ Usage:
     python3 -m dispatch_v2.replay_failed --status failed --since "2026-04-01" --apply
 
     # JSON output
-    python3 -m dispatch_v2.replay_failed --oid 470208 --output /tmp/replay.json
+    python3 -m dispatch_v2.replay_failed --oid synthetic-order --output /tmp/replay.json
 """
 from __future__ import annotations
 
 import argparse
 import json
 import logging
+import os
+import secrets
 import sqlite3
+import stat
 import sys
-import traceback
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from dispatch_v2 import event_retry
 
 log = logging.getLogger("replay_failed")
 if not log.handlers:
@@ -45,6 +50,39 @@ if not log.handlers:
 
 
 DEFAULT_EVENTS_DB = "/root/.openclaw/workspace/dispatch_state/events.db"
+
+
+class _NonStoringTextSink:
+    """Minimalny sink kompatybilny z print; niczego nie buforuje."""
+
+    encoding = "utf-8"
+    errors = "replace"
+
+    @property
+    def buffer(self):
+        return self
+
+    def write(self, value) -> int:
+        return len(value)
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return False
+
+
+@contextmanager
+def _suppress_replay_channels():
+    """Wasko wycisza logging/stdout/stderr zaleznosci replayu i je przywraca."""
+    previous_disable = logging.root.manager.disable
+    sink = _NonStoringTextSink()
+    logging.disable(logging.CRITICAL)
+    try:
+        with redirect_stdout(sink), redirect_stderr(sink):
+            yield
+    finally:
+        logging.disable(previous_disable)
 
 
 def query_failed_events(
@@ -93,36 +131,39 @@ def replay_event(row: Dict[str, Any], offline: bool = True) -> Dict[str, Any]:
     offline=True: read-only, ZERO side effects (recommended default).
     offline=False: caller (apply_status_flip) handles atomic DB update.
 
-    Returns dict z polami:
-    - event_id, order_id, event_type, original_status
-    - verdict: 'PASS' | 'FAIL: <error_class>: <error_msg>' | 'SKIP: <reason>'
-    - result: PipelineResult dict (gdy PASS) lub None
+    Zwraca tylko zredagowany wynik: digest korelacyjny, outcome, zamknieta
+    klasa/kod bledu i agregat liczby kandydatow. Surowe identyfikatory, payload,
+    reason, exception text i traceback nigdy nie opuszczaja tej funkcji.
     """
-    eid = row.get("event_id", "?")
-    oid = row.get("order_id", "?")
-    event_type = row.get("event_type", "?")
-    original_status = row.get("status", "?")
+    del offline
+    eid = row.get("event_id", "<missing>")
+    oid = row.get("order_id")
+    event_type = row.get("event_type")
 
     out: Dict[str, Any] = {
-        "event_id": eid,
-        "order_id": oid,
-        "event_type": event_type,
-        "original_status": original_status,
-        "verdict": None,
-        "result": None,
+        "event_ref": event_retry.event_reference(eid),
+        "outcome": None,
+        "error_class": None,
+        "error_code": None,
+        "candidates_count": 0,
     }
 
     # Tylko NEW_ORDER replay supported (assess_order is the entry point)
     if event_type != "NEW_ORDER":
-        out["verdict"] = f"SKIP: unsupported_event_type={event_type}"
+        out["outcome"] = "skip"
+        out["error_code"] = "unsupported_event_type"
         return out
 
     try:
         payload_raw = row.get("payload")
         if not payload_raw:
-            out["verdict"] = "SKIP: empty_payload"
+            out["outcome"] = "skip"
+            out["error_class"] = "permanent"
+            out["error_code"] = "invalid_payload"
             return out
         payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+        if not isinstance(payload, dict):
+            raise TypeError("event payload must be a mapping")
         # Add order_id do payload (assess_order wymaga w order_event dict)
         if "order_id" not in payload:
             payload["order_id"] = oid
@@ -132,30 +173,27 @@ def replay_event(row: Dict[str, Any], offline: bool = True) -> Dict[str, Any]:
         # użyj dispatchable_fleet() — wzbogaca CourierState o shift_end z grafiku V3.24-A.
         # Raw build_fleet_snapshot() zostawia shift_end=None → feasibility_v2:300 Fail-CLOSED
         # hard-rejectuje wszystkich → debug tool kłamie pod post-mortem (artificial NO_CANDIDATE).
-        from dispatch_v2 import courier_resolver
-        fleet = {cs.courier_id: cs for cs in courier_resolver.dispatchable_fleet()}
+        with _suppress_replay_channels():
+            from dispatch_v2 import courier_resolver
+            fleet = {
+                cs.courier_id: cs
+                for cs in courier_resolver.dispatchable_fleet()
+            }
 
-        # Process via fasada core.decide (K09; delegacja 1:1 do assess_order)
-        from dispatch_v2.core.decide import decide as _decide
-        from dispatch_v2.core.world_state import WorldState
-        result = _decide(
-            WorldState(fleet_snapshot=fleet, now=datetime.now(timezone.utc)),
-            payload,
-        )
-        # Convert PipelineResult dataclass do dict (best-effort)
-        result_dict = {
-            "verdict": getattr(result, "verdict", None),
-            "reason": getattr(result, "reason", None),
-            "best_courier_id": (
-                getattr(result.best, "courier_id", None) if getattr(result, "best", None) else None
-            ),
-            "candidates_count": len(getattr(result, "candidates", []) or []),
-        }
-        out["verdict"] = "PASS"
-        out["result"] = result_dict
+            # Process via fasada core.decide (K09; delegacja 1:1 do assess_order)
+            from dispatch_v2.core.decide import decide as _decide
+            from dispatch_v2.core.world_state import WorldState
+            result = _decide(
+                WorldState(fleet_snapshot=fleet, now=datetime.now(timezone.utc)),
+                payload,
+            )
+        out["outcome"] = "pass"
+        out["candidates_count"] = len(getattr(result, "candidates", []) or [])
     except Exception as e:
-        out["verdict"] = f"FAIL: {type(e).__name__}: {str(e)[:200]}"
-        out["traceback"] = traceback.format_exc()[:1000]
+        descriptor = event_retry.classify_failure(e)
+        out["outcome"] = "fail"
+        out["error_class"] = descriptor.failure_class.value
+        out["error_code"] = descriptor.error_code
 
     return out
 
@@ -172,26 +210,16 @@ def apply_status_flip(
     if not pass_event_ids:
         return {"flipped": 0, "errors": []}
 
-    conn = sqlite3.connect(db_path, timeout=10.0, isolation_level="IMMEDIATE")
-    cur = conn.cursor()
-    flipped = 0
+    conn = sqlite3.connect(db_path, timeout=10.0, isolation_level=None)
     errors: List[str] = []
     try:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        for eid in pass_event_ids:
-            try:
-                cur.execute(
-                    "UPDATE events SET status='processed', processed_at=? "
-                    "WHERE event_id=? AND status='failed'",
-                    (now_iso, eid),
-                )
-                flipped += cur.rowcount
-            except Exception as e:
-                errors.append(f"{eid}: {type(e).__name__}: {e}")
-        conn.commit()
+        flipped = event_retry.mark_replays_processed(
+            conn,
+            pass_event_ids,
+            processed_at=datetime.now(timezone.utc),
+        )
     except Exception as e:
-        conn.rollback()
-        errors.append(f"transaction_rollback: {type(e).__name__}: {e}")
+        errors.append(f"transaction_rollback:{type(e).__name__}")
         return {"flipped": 0, "errors": errors}
     finally:
         conn.close()
@@ -222,12 +250,13 @@ def replay_batch(
     for row in rows:
         r = replay_event(row, offline=True)
         results.append(r)
-        if r["verdict"] == "PASS":
+        if r["outcome"] == "pass":
             pass_count += 1
-            pass_event_ids.append(r["event_id"])
-        elif r["verdict"].startswith("FAIL"):
+            # Raw ID pozostaje tylko w pamieci i trafia wprost do status flip.
+            pass_event_ids.append(str(row.get("event_id")))
+        elif r["outcome"] == "fail":
             fail_count += 1
-        elif r["verdict"].startswith("SKIP"):
+        elif r["outcome"] == "skip":
             skip_count += 1
 
     summary = {
@@ -249,7 +278,107 @@ def replay_batch(
     return summary
 
 
-def main() -> int:
+def _open_directory_componentwise(parent: Path) -> int:
+    """Otwiera istniejacy parent komponentami dirfd; symlink/``..`` = blad."""
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("secure output requires O_NOFOLLOW")
+    nofollow = os.O_NOFOLLOW
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow
+    parts = parent.parts
+    if parent.is_absolute():
+        current_fd = os.open("/", flags)
+        components = parts[1:]
+    else:
+        current_fd = os.open(".", flags)
+        components = parts
+    try:
+        for component in components:
+            if component in {"", "."}:
+                continue
+            if component == "..":
+                raise ValueError("output parent cannot contain '..'")
+            next_fd = os.open(component, flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+def write_secure_output(output_path: str, value: Dict[str, Any]) -> None:
+    """Tworzy nowy JSON atomowo jako 0600, bez symlinkow w calej sciezce.
+
+    Kazdy komponent parenta jest otwierany wzgledem poprzedniego ``dirfd`` z
+    ``O_NOFOLLOW`` i musi juz istniec. Existing leaf (regular/symlink/hardlink)
+    jest twardym bledem. Kompletny, fsyncowany plik tymczasowy jest publikowany
+    pojedynczym hard-linkiem, po czym temp znika i final musi miec ``nlink=1``.
+    """
+    target = Path(output_path)
+    if target.name in {"", ".", ".."}:
+        raise ValueError("output must name a new regular file")
+    parent = target.parent if str(target.parent) else Path(".")
+    nofollow = os.O_NOFOLLOW
+    directory_fd = _open_directory_componentwise(parent)
+    temporary_name = f".{target.name}.tmp-{secrets.token_hex(8)}"
+    temporary_created = False
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow
+        fd = os.open(temporary_name, flags, 0o600, dir_fd=directory_fd)
+        temporary_created = True
+        try:
+            os.fchmod(fd, 0o600)
+            encoded = json.dumps(
+                value,
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+            with os.fdopen(fd, "wb", closefd=True) as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+        os.link(
+            temporary_name,
+            target.name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except Exception:
+            try:
+                os.unlink(target.name, dir_fd=directory_fd)
+            except OSError:
+                pass
+            raise
+        temporary_created = False
+        final_stat = os.stat(
+            target.name,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        if not stat.S_ISREG(final_stat.st_mode) or final_stat.st_nlink != 1:
+            os.unlink(target.name, dir_fd=directory_fd)
+            raise RuntimeError("secure output leaf invariant failed")
+        os.fsync(directory_fd)
+    finally:
+        if temporary_created:
+            try:
+                os.unlink(temporary_name, dir_fd=directory_fd)
+            except OSError:
+                pass
+        os.close(directory_fd)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="replay_failed",
         description="V3.28 Fix 4: failed event replay tool",
@@ -263,10 +392,10 @@ def main() -> int:
     )
     ap.add_argument("--db", default=DEFAULT_EVENTS_DB, help="events.db path")
     ap.add_argument("--output", help="Write JSON summary to file")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if not Path(args.db).exists():
-        log.error(f"events.db NOT FOUND: {args.db}")
+        log.error("REPLAY_DB_NOT_FOUND")
         return 2
 
     summary = replay_batch(
@@ -286,9 +415,15 @@ def main() -> int:
         log.info(f"REPLAY_APPLIED flipped={summary['applied']['flipped']} errors={summary['applied']['errors']}")
 
     if args.output:
-        with open(args.output, "w") as f:
-            json.dump(summary, f, indent=2, default=str)
-        log.info(f"REPLAY_OUTPUT written to {args.output}")
+        try:
+            write_secure_output(args.output, summary)
+        except (OSError, ValueError, TypeError) as exc:
+            log.error(
+                "REPLAY_OUTPUT_ERROR "
+                f"error_class={type(exc).__name__}"
+            )
+            return 2
+        log.info("REPLAY_OUTPUT_WRITTEN")
     else:
         # Print summary z first 5 results (avoid spam dla batch>>1)
         print(json.dumps({

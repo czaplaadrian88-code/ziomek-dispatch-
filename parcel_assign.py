@@ -44,12 +44,30 @@ def assign_parcel(oid: str, kurier_name: str, time_arg: str | None = None) -> tu
     payload = {"source": "parcel_assign"}
     if time_arg:
         payload["time_arg"] = str(time_arg)
-    event_bus.emit("COURIER_ASSIGNED", order_id=str(oid), courier_id=str(cid),
-                   payload=payload, event_id=f"{oid}_COURIER_ASSIGNED_parcel_{cid}")
-    state_machine.update_from_event({
-        "event_type": "COURIER_ASSIGNED", "order_id": str(oid),
-        "courier_id": str(cid), "payload": payload,
-    })
+    event_id = f"{oid}_COURIER_ASSIGNED_parcel_{cid}"
+    event_bus.emit(
+        "COURIER_ASSIGNED",
+        order_id=str(oid),
+        courier_id=str(cid),
+        payload=payload,
+        event_id=event_id,
+    )
+    state_event = {
+        "event_type": "COURIER_ASSIGNED",
+        "order_id": str(oid),
+        "courier_id": str(cid),
+        "payload": payload,
+    }
+    if state_machine.ORDER_FSM_ENFORCEMENT_ENABLED:
+        event_bus.apply_state_event(
+            state_event,
+            event_id=event_id,
+            emitted=True,
+            enforce=True,
+        )
+    else:
+        # Byte-parity OFF: historyczny caller zawsze aplikowal state po emit.
+        state_machine.update_from_event(state_event)
     return True, f"PARCEL_ASSIGN_OK: {kurier_name} (cid={cid}) → paczka {oid}"
 
 

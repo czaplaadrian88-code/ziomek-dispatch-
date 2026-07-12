@@ -370,8 +370,10 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
     Side-effect: event_bus.emit + state_machine.update_from_event w background.
     Event_id: {oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{epoch_ms} — unique per emit.
     """
-    from dispatch_v2.event_bus import emit_audit as _eb_emit_audit
-    from dispatch_v2.state_machine import update_from_event as _sm_apply
+    from dispatch_v2.event_bus import (
+        apply_state_event as _eb_apply_state,
+        emit_audit as _eb_emit_audit,
+    )
 
     delta_min = _v327_compute_delta_min(old_ck_iso, new_ck_iso)
     timestamp_ms = int(now.timestamp() * 1000)
@@ -394,10 +396,15 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
         "payload": payload,
     }
     try:
-        _eb_emit_audit("CZAS_KURIERA_UPDATED",
-                 order_id=oid, courier_id=courier_id or "",
-                 payload=payload, event_id=event_id)
-        _sm_apply(event)
+        _eb_emit_audit(
+            "CZAS_KURIERA_UPDATED",
+            order_id=oid,
+            courier_id=courier_id or "",
+            payload=payload,
+            event_id=event_id,
+        )
+        # Legacy zawsze aplikowal state niezaleznie od wyniku INSERT.
+        _eb_apply_state(event, event_id=event_id, emitted=True)
         delta_str = f"Δ={delta_min:+.1f}min" if delta_min is not None else "Δ=null"
         log.info(f"V3.27.1 pre_proposal_recheck oid={oid} {old_ck_iso or 'null'}→{new_ck_iso} ({new_ck_hhmm}) {delta_str}")
     except Exception as e:
