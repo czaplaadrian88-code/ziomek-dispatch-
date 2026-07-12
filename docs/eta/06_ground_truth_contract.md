@@ -1,7 +1,8 @@
 # Z-P1-02 — kontrakt obserwowalnej prawdy ETA/SLA v1
 
-Status: Faza A, measurement-only. Ten kontrakt nie zmienia ETA live, nie ustala
-progu KPI i nie jest bramką promocji modelu.
+Status: Faza A, measurement-only. ODR-001 z 2026-07-12 rozstrzyga semantykę
+docelowych KPI, lecz ten kontrakt v1 nadal mierzy wyłącznie nazwane proxy. Nie
+zmienia ETA live, nie ustala progu KPI i nie jest bramką promocji modelu.
 
 ## Wynik audytu semantyki
 
@@ -22,6 +23,20 @@ dwa obserwowalne zdarzenia GPS:
 Dlatego schema v1 używa nazw `restaurant_last_inside_at` i
 `delivery_arrival_at`. Etykiety "physical pickup", "restaurant departure" i
 "customer handoff" byłyby mocniejsze niż dowód i są zakazane w KPI v1.
+
+## Owner Decision overlay — 2026-07-12
+
+ODR-001 (`OWNER_CONFIRMED`) ustanawia cztery rozłączne cele produktu:
+
+- operacyjny restaurant exit oraz physical possession jako dwa KPI pickup;
+- routing delivery arrival oraz customer handoff jako dwa KPI delivery;
+- R6 wyłącznie od physical possession do customer handoff;
+- osobną fail-closed bramę dla każdej komórki `event × source × cohort`.
+
+Nie oznacza to, że v1 posiada te physical eventy. `restaurant_last_inside_at`
+nie staje się exit/possession, a `delivery_arrival_at` nie staje się handoff.
+Dokładne event/source contracts pozostają `UNBOUND/HOLD`, podobnie jak liczby
+coverage/missingness/cost/promocji do czasu raportu danych.
 
 ## Artefakty i rozdzielenie legacy
 
@@ -83,8 +98,10 @@ braku GPS. Metryki v1:
 - wspólny complete-case obu nóg z osobnym support hash.
 
 Dodatni błąd oznacza obserwowalne zdarzenie późniejsze od predykcji. Nie ma
-progu PASS/FAIL, automatycznej rekomendacji ani wyboru kanonicznego KPI event.
-Manifest zapisuje `canonical_kpi_event=unbound` oraz pustą listę progów.
+progu PASS/FAIL ani automatycznej rekomendacji. Manifest v1 nadal zapisuje
+`canonical_kpi_event=unbound`, ponieważ nie ma związania physical event/source;
+to status implementacji datasetu, nie otwarta semantyka produktu. Lista progów
+pozostaje pusta zgodnie z OD-03 do czasu raportu danych.
 
 ## Lineage, prywatność i publikacja
 
@@ -126,17 +143,20 @@ Manifest zapisuje `canonical_kpi_event=unbound` oraz pustą listę progów.
 | `tools/eta_truth_map.py` | legacy click/proxy API | load-aware replay/calibrate | N-D | zachowanie bazowe wymagane przez aktywnych konsumentów | exact base diff + import smoke |
 | `eta_load_aware_*` | aktywni konsumenci legacy | offline tools | N-D | brak zgody na zmianę ich semantyki | import `build_rows/_parse_day` |
 | ETA live, flags, mapy kalibracji | decyzje biznesowe | runtime | N-D | Faza A tylko obserwuje | brak zmian w diffie |
-| dashboard/alert | konsument KPI | brak zatwierdzonego kontraktu | N-D | KPI event i próg są decyzją biznesową | `canonical_kpi_event=unbound` |
+| dashboard/alert | konsument KPI | semantyka ODR-001, brak physical binding/progów | N-D | source event i liczby nadal `UNBOUND/HOLD` | `canonical_kpi_event=unbound` w v1 |
 
-## Otwarte decyzje i bezpieczny etap następny
+## Rozstrzygnięte decyzje i bezpieczny etap następny
 
-Przed użyciem do promocji potrzebne są osobne decyzje biznesowe:
+OD-01/OD-02 rozstrzygnęły, że produkt potrzebuje obu rozłącznych eventów na
+każdej nodze, a OD-07 wiąże R6 z possession→handoff. OD-03 rozstrzyga strukturę
+bramy, lecz celowo odracza liczby do raportu danych.
 
-1. Które zdarzenie jest KPI pickup: last-inside GPS, przyszły potwierdzony exit,
-   czy inne zdarzenie operacyjne?
-2. Czy delivery KPI oznacza arrival pod adres, czy potwierdzone przekazanie?
-3. Jaki minimalny package-exclusion coverage i GPS coverage dopuszcza werdykt?
-4. Jakie progi MAE/bias/tail i koszt uboczny tworzą bramkę promocji?
+Przed promocją nadal trzeba:
+
+1. związać wersjonowane physical exit, possession i customer-handoff sources;
+2. zbudować raport supportu/missingness/bias per event/source/cohort;
+3. dopiero z raportu zaproponować minimalne coverage, funkcję kosztu i progi;
+4. uzyskać jawne zatwierdzenie liczb bez odzyskiwania progów z proxy v1.
 
 Bezpieczny kolejny etap to fixture/replay na wersjonowanym snapshotcie poza
 runtime, przegląd coverage i wspólnego supportu, a następnie minimum 2 dni

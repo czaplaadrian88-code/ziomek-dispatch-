@@ -1,18 +1,18 @@
 # ADR-003: Always-propose — Ziomek NIGDY „brak kandydatów"
 
-Status: obowiązuje (od ~V3.16/maj 2026; utrwalone po incydencie firmowego konta 07.05 „BRAK KANDYDATÓW")
+Status: obowiązuje; execution boundary doprecyzowana przez ODR-001 2026-07-12
 
 ## Kontekst
-Koordynator potrzebuje kandydata na KAŻDE aktywne zlecenie. „BRAK KANDYDATÓW" = operacyjna ślepota i utrata zaufania (LESSON-QA-9: operational awareness > scoring quality). Historyczny bug: `pickup_coords=None` → sentinel haversine ~6285 km → wszyscy `pickup_too_far` HARD REJECT → „brak" dla każdego zlecenia firmowego (~3-5/dzień). Ziomek ma zawsze coś zaproponować, nawet gdy propozycja łamie R6 — z uczciwym oznaczeniem.
+„BRAK KANDYDATÓW" przy istniejącej flocie jest operacyjną ślepotą. Ziomek ma zawsze pokazać najlepszy feasible albo jawny least-damage/`ALERT`. Widoczność problemu i kandydata nie oznacza jednak, że niedopuszczalny plan stał się feasible lub dostał prawo wykonania.
 
 ## Decyzja
-Eskalacja 3-stopniowa zamiast „brak": (1) feasible-first (przechodzi HARD); (2) najbliższy łamiący R6; (3) best-effort najszybszy wolny (`_best_effort_fastest_pickup_key`, MOŻE łamać R6, otagowany `auto_route=ALERT` / `best_effort` / `feasibility=NO`, score bywa sentinel ≈ −1e9). Werdykt KOORD (hold) TYLKO dla early-bird/czasówka ≥60 min naprzód. Jedyny legalny „brak" = 0 floty pracującej (panel zamawiania wyłączony).
+Zamiast „brak" zwracaj: (1) feasible-first albo (2) jawny `feasibility=NO` least-damage/`ALERT` z przyczyną i granicą authority. ODR-001 utrzymuje R6 `>40` i R27 `|Δ|>10` jako niedopuszczalne — taki przypadek wolno uwidocznić, lecz nie przedstawiać jako wykonywalny plan. Przerzut, plan Alarmowy i pozostały least-damage początkowo wymagają approval przed execute. Jedyny legalny brak obiektu floty to 0 floty pracującej; early-bird/czasówka może pozostać jawnym holdem.
 
 ## Konsekwencje
-- Wolno/trzeba: traktować sentinel best-effort w konsoli/Telegramie jako POPRAWNY (uczciwy framing przez `_serialize_result`) — to NIE bug.
-- Nie wolno: interpretować best-effort/`feasibility=NO`/sentinel-score jako awarię i „naprawiać" go tak, by zwracał „brak"; wysyłać kandydata bez tagu ALERT gdy łamie R6.
+- Wolno/trzeba: pokazać sentinel/best-effort jako jawny `NO/ALERT` z przyczyną; sam sentinel nie jest bugiem.
+- Nie wolno: zamienić `NO/ALERT` w „brak", ale też nie wolno utożsamić go z feasible lub execute. Auto-aktywacja Alarmu nie jest auto-wykonaniem.
 - Psuje się przy złamaniu: coords=None → fałszywy „brak" (bronione fail-loud haversine na None/(0,0) — Lekcja #81 — i fallback coords).
 - Zmiana selekcji „równego traktowania bez GPS" dotyka best-effort → tknij WSZYSTKIE bliźniaki (8), nie tylko klaster selekcji.
 
 ## Źródła
-`memory/ziomek-change-protocol.md` „Reguły biznesowe zakodowane: Always-propose" + „dyskryminacja pozycji"; `ZIOMEK_ARCHITECTURE.md` §1 (warstwa 7-8); `CLAUDE.md` sprint firmowe konto 07.05 (6-warstwowa defense, Lekcja #81); `dispatch_pipeline.py` (`_best_effort_fastest_pickup_key`).
+`ODR-001-owner-decisions-2026-07-12.md`; `memory/ZIOMEK_REGULY_KANON.md`; `memory/ziomek-change-protocol.md`; baseline implementation `core/selection.py` / `dispatch_pipeline.py`.

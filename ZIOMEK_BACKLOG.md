@@ -4,7 +4,8 @@
 > DR1A/OPS0 SOURCE-ONLY W MASTERZE, D1/R0 HOLD DO AT-214; A0/I1/N0
 > WDROZONE I ZWERYFIKOWANE LIVE, N0 FOLLOW-UP `0891b06` OK; ETA PROMOCJA
 > HOLD; SEC0+SEC1 AUDITOR SOURCE W MASTERZE, HOST NADAL HOLD; E0+E1/DATA0
-> BRANCH-COMPLETE I OFF; V214 WAIT/PENDING DO AT-214
+> BRANCH-COMPLETE I OFF; V214 WAIT/PENDING DO AT-214; OD-01..OD-07
+> OWNER_CONFIRMED 2026-07-12, IMPLEMENTACJA/KPI-NUMBERS NADAL HOLD
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -63,7 +64,7 @@ przed rozpoczeciem implementacji.
 
 | ID | Zadanie | Dowod / problem | Co zmieni sie po wykonaniu | Effort | Bramka | Status |
 |---|---|---|---|---:|---|---|
-| Z-P0-01 | Kanon R6/R27/SLA i koncowy invariant firewall | Audyt 360: A360-FEAS-01 jest jedynym utrzymanym P1; A360-FEAS-02..05 ujawniaja nieustalona semantyke 35 HARD vs 40 ALARM/least-damage, `None`, per-order/suma i READY/in-bag. SPRI-04 zawyza telemetrie przez brak EXEMPT. | Najpierw D0 decision-prep, replay truth i D1 EXEMPT/VIOLATION; dopiero po ACK jedna spojna granica HARD oraz jawny ALERT always-propose. | L + 2 dni obserwacji | Decyzje B-01/B-02; bez flipa przed ACK | D0 DONE; R0 TECH ACCEPT/HOLD at-214 `1b38447`; D1 IMPLEMENTED/TESTED/PUSHED `e193f2a`, merge HOLD do at-214; B-01/B-02 PENDING |
+| Z-P0-01 | Kanon R6/R27/SLA i koncowy invariant firewall | OD-04/OD-07 rozstrzygnely intencje: R6=`in_vehicle_age` possession→handoff 35/40 Alarm; R27 commitment immutable, `5<|Δ|<=10` jawny breach, `|Δ|>10` zakaz. Baseline ma inne anchory i niepelny Alarm/Always-propose. | Osobny sprint zwiąże physical eventy, wszystkie bliźniaki, replay i execution authority bez zmiany decyzji przez samą dokumentację. | L + 2 dni obserwacji | Semantyka OWNER_CONFIRMED; event binding, implementacja, replay, flip i live ACK nadal HOLD | OWNER DECISION DONE 12.07; R0 TECH ACCEPT/HOLD `1b38447`; D1 branch `e193f2a`; nic nie flipnięto |
 | Z-P0-02 | Naprawa wieloprocesowego zapisu geocode cache | `flock` jest zakladany na unikalnym tempfile, wiec nie serializuje load-merge-save miedzy procesami. | Cache adresow, restauracji i negative cache przestanie gubic poprawne wpisy przy rownoleglym geokodowaniu. | M | Bez flipa; pelna regresja geocode | DONE - LIVE |
 | Z-P0-03 | Przywrocenie zielonego baseline testow | REOPENED 10.07 po flipie parsera i Audycie 360: default 4846/1; STRICT 4792/6. TEST-11 czytal live `flags.json`, a TEST-12 mial piec klas live reads i dwa ukryte prod-write. | Baseline jest deterministyczny: syntetyczne flags/systemd/state, dokladny live-smoke i tripwire anty-prod bez oslabenia guarda. | M | Zero zmian produkcyjnych; rollback = revert test-only fix-forward | DONE — `4e782e8` + T0 fix-forward z brancha `f015c9f`; tmux57 CLOSED |
 | Z-P0-04 | CAS i wspolna granica planu — REOPENED 10.07 | Dispatcherowe call-site'y CAS sa LIVE, ale Audyt 360 potwierdzil pominiety writer panelu (SPRI-02/DANE-01), odrzucanie strategii solvera, rozjazd stops i null-duration=teleport (TRAS-01/02/03) oraz false-conflict touch_plan (SPRI-03). | Jeden cross-repo owner domknie decyzja→store→panel→apka: prawidlowa kolejnosc, fail-closed czas nogi, provenance/manual marker i CAS bez lost-update/resurrect. | L/XL | Po A360-H1; jeden lane PLAN; deploy readers-first/writer-second i restart za ACK | REOPENED - A360-P0 QUEUED |
@@ -75,7 +76,7 @@ przed rozpoczeciem implementacji.
 | ID | Zadanie | Dowod / problem | Co zmieni sie po wykonaniu | Effort | Bramka |
 |---|---|---|---|---:|---|
 | Z-P1-01 | Formalny FSM zlecen | `state_machine` zna statusy, ale nie ma jednej mapy dozwolonych przejsc; zly pickup timestamp jest zastepowany `now()`. | Nielegalne przejscie i uszkodzony czas beda kwarantannowane zamiast po cichu zmieniac prawde SLA. | L | SOURCE/PREP E0+E1 branch complete: formalny graf, kanoniczna koperta, failure journal, outbox i receipts per consumer sa gotowe na branchach. ON/merge nadal HOLD do policy, workera, checkpointu, migracji i osobnego ACK |
-| Z-P1-02 | Kanoniczny ground truth ETA i SLA | Brak potwierdzonego fizycznego pickup/handoff; last-inside i arrival sa tylko obserwowalnymi proxy GPS. | Faza A mierzy to samo okno, kohorte i support bez zgadywania KPI; promocja ETA pozostaje zablokowana. | L | FAZA A + A360-A0 LIVE; kalibrator fail-closed `HOLD/UNBOUND`, zero promocji; potrzebna definicja KPI i champion v2 |
+| Z-P1-02 | Kanoniczny ground truth ETA i SLA | OD-01/OD-02 rozdzielily exit/possession i arrival/handoff; OD-03 wymaga fail-closed gate per event/source/cohort. Fizyczne source/event contracts i liczby nadal nie istnieja. | Faza A raportuje tylko nazwane eventy/proxy i lokalny support; żadna komórka bez bramy nie promuje KPI/modelu. | L | Semantyka OWNER_CONFIRMED; physical bindings + raport danych + późniejsze liczby, champion v2 i promotion nadal `HOLD/UNBOUND` |
 | Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbijal czasu na etapy. | Faza A mierzy queue/fleet/OSRM/solver/selection/write; nie wlacza limitu kolejki, budzetu ani backpressure. | M | **LIVE SHADOW CANARY ON od 2026-07-11 10:27 UTC**; at-214, werdykt po 48 h |
 | Z-P1-04 | Jawny `DecisionContext` i wiarygodny replay | Effects buffer obejmuje tylko czesc zapisow; Audyt 360 dodatkowo wykazal PARTIAL CORE-01, process-local rozjazdy CORE-02/03 i niekonsumowany gate TEST-03. | R0 rozdziela INPUT_MISS/OSRM_MISS/CRITICAL/SOFT/PARITY, waliduje frozen input i zuzywa OSRM najwyzej raz; pozniej context usunie ukryte kanaly procesu. | XL | R0 TECH ACCEPT `1b38447`, kod NOT MERGED do at-214; narrow/partial, surplus recorded OSRM nadal rezyduum |
 | Z-P1-05 | Kanoniczna tozsamosc kuriera — **DONE Faza A+B 2026-07-10** (pakiet `identity/`, walidator kolizji, onboarding 5-plikowy, backfill names 19→0, kanon pisowni z grafiku; delegacja 9× norm + scoring worker/panel_roster do registry — parity 177/177, golden 21417 par = 0 roznic; ODLOZONE: unifikacja profili ×10/×5 vs ×10/×10 [pomiar+ACK], Krok 4 czytelnicy plikow→registry, konsolidacja courier_api.db) | 121 aliasow mapuje sie do 65 CID; 54 CID maja wiele aliasow, 20 nie ma wpisu w `courier_names`. | Grafik, GPS, PIN, tier, plan i rozliczenia beda laczone przez CID z kontrolowanymi aliasami. | L | Migracja bez zmiany CID |
@@ -129,8 +130,9 @@ Wave 3: D1 `e193f2a` (`ultra`, branch-only, merge HOLD do at-214). DR1A i OPS0
 zintegrowano source/tool-only do mastera w `a360-wave3-safe-source-integrated-20260711`:
 DR1A ma fix C32, ale jest NOT INSTALLED/NOT EXECUTED i DR1B HOLD; OPS0 jest
 manual-only, bez timera/konsumenta, profil UNKNOWN. Zero flag, danych, systemd,
-realnego restore, tuningu i restartu. H1 nadal czeka na at-214, integracje
-R0+D1 i B-01/B-02.
+realnego restore, tuningu i restartu. H1 nadal czeka na at-214 i integracje
+R0+D1. B-01/B-02 zostały semantycznie zamknięte 12.07 przez ODR-001, ale nie
+autoryzują merge, enforcement ani live.
 Raport: `eod_drafts/2026-07-11/AUDIT360_WAVE3_SAFE_SOURCE_INTEGRATION.md`.
 
 Start 2026-07-11 20:36 UTC: trzy najwyzej priorytetowe lane'y, ktore nie sa
@@ -256,7 +258,9 @@ Foundation audit Prompt 01/02 zamkniety trwale 2026-07-12: docs-only branche
 `codex/audit-prompt-01-20260712T140957Z` @ `14e7a5e` oraz
 `codex/audit-prompt-02-20260712T153736Z` @ `bd4a4bf` sa clean, wypchniete na
 origin z parity 0/0 i nie zostaly scalone. Prompt 03 nie wystartowal; Prompt 02
-ma status PARTIAL/READY_AFTER_OWNER_DECISIONS, a OD-01..OD-07 pozostaja otwarte.
+zachowuje historyczny status PARTIAL/READY_AFTER_OWNER_DECISIONS. Nowszy
+ODR-001 z 12.07 zamyka OD-01..OD-07 jako OWNER_CONFIRMED; forensic artefakty
+pozostają niezmienione, a Prompt 03 nadal nie wystartował.
 Zamkniecie tmux nie usuwa zachowanych worktree. Raport:
 `eod_drafts/2026-07-12/AUDIT_PROMPT01_02_SESSION_CLOSE.md`.
 
@@ -281,11 +285,13 @@ weryfikuje problem i przedstawia plan konkretnego kroku zgodnie z sekcja 2.
 - **Zakres pracy:** wspolny `RuleVerdict`, identyfikatory regul, obsluga wyjatkow
   (paczki, czasowki, przeciazenie), serializacja wyniku i replay historyczny.
 - **Co zmieni w Ziomku:** faza A tylko ujawni finalne naruszenia w kazdej decyzji.
-  Faza B, po decyzji B-01/B-02, moze zablokowac lub eskalowac niedozwolony plan.
+  Faza B może powstać dopiero po związaniu eventów OD-07, mapie wszystkich
+  bliźniaków, replay i osobnym ACK; B-01/B-02 są semantycznie zamknięte.
 - **Czego nie zmieni w fazie A:** wyboru kuriera, kolejnosci trasy i werdyktu.
 - **Koniec zadania:** komplet testow wyjatkow, replay bez roznic decyzyjnych oraz
   48 godzin danych shadow bez brakujacego lub sprzecznego werdyktu.
-- **Effort:** L plus 2 dni obserwacji; wymaga B-01 i B-02 przed egzekwowaniem.
+- **Effort:** L plus 2 dni obserwacji; semantyka jest OWNER_CONFIRMED, ale
+  event binding, implementacja i egzekwowanie nadal wymagają pełnego #0.
 
 ### Z-P0-02 - Wieloprocesowy zapis geocode cache
 
@@ -384,24 +390,26 @@ migracja live i uruchomienie workera sa osobnymi bramkami.
 
 ### Z-P1-02 - Ground truth ETA i SLA
 
-- **Na czym polega:** zbudowanie jednej tabeli faktow laczacej decyzje, plan,
-  fizyczny GPS arrival, klik statusu i koncowy wynik zlecenia.
-- **Zakres pracy:** wspolne okna czasowe, jawne obserwowalne proxy pickup/delivery,
-  kohorty, coverage, lineage i rozdzielenie click truth od sygnalow GPS.
+- **Na czym polega:** zbudowanie wersjonowanej tabeli faktów bez aliasowania
+  restaurant exit z possession ani delivery arrival z customer handoff.
+- **Zakres pracy:** wspolne okna czasowe, jawne physical events i proxy,
+  kohorty, coverage, lineage oraz osobna fail-closed brama per event/source/cohort.
 - **Co zmieni w Ziomku:** modele i progi beda promowane na podstawie realnego
   dojazdu, a raport nie polaczy licznikow z roznych okresow.
 - **Czego nie zmieni:** live ETA przed zatwierdzeniem nowej bramki promocji.
-- **Koniec zadania:** reprodukowalny raport z jednym mianownikiem, lineage danych,
-  MAE/bias/coverage per noga i test braku leakage.
+- **Koniec zadania:** reprodukowalny raport z jawnym mianownikiem każdej komórki,
+  lineage, MAE/bias/coverage per event/source/cohort i test braku leakage.
 - **Stan Fazy A 2026-07-10:** implementacja i read-only replay gotowe na
-  `sprint3/eta-observability-osrm`; KPI pozostaje `unbound`, bo repo nie ma
-  potwierdzonego fizycznego pickup/handoff, a klasyfikacja paczek ma niepelne
-  coverage.
+  `sprint3/eta-observability-osrm`; exact physical event bindings pozostają
+  `unbound`, a klasyfikacja paczek ma niepelne coverage.
+- **Owner update 2026-07-12:** OD-01/02/07 wiążą semantykę eventów, OD-03
+  strukturę bram. Progi liczbowe pozostają `UNBOUND` do raportu danych.
 - **Stan A360-A0 2026-07-11:** source jest w masterze `4c351d5`, kontrolowany
   bieg live przeszedl, lecz uczciwa bramka zwrocila `HOLD`; oba champion maps
   pozostaly bajtowo bez zmian. Kandydat nie moze zostac promowany bez artifactu
   championa v2 i zatwierdzonego KPI.
-- **Effort:** L; wymaga biznesowej definicji KPI.
+- **Effort:** L; semantyka KPI jest rozstrzygnięta, ale wymaga event binding,
+  raportu danych i późniejszego jawnego związania liczb przed promocją.
 
 ### Z-P1-03 - Stage-level tracing i backpressure
 
@@ -699,17 +707,22 @@ corpus pozostaje nietkniety do at-214; delete jest zabroniony do decyzji B-05.
   wybranym hot path i metryka kazdego fallbacku.
 - **Effort:** L na pierwsza fale; kolejne fale osobno.
 
-## 6. Decyzje biznesowe blokujace prace
+## 6. Decyzje biznesowe i ich bramki
 
-| ID | Decyzja potrzebna od Adriana | Dlaczego technika nie powinna zgadywac |
+Najświeższe rozstrzygnięcia właściciela są w
+`docs/decisions/ODR-001-owner-decisions-2026-07-12.md`. Status
+`OWNER_CONFIRMED` zamyka semantykę, ale nie zastępuje raportu danych, implementacji,
+replay ani ACK live.
+
+| ID | Decyzja / status | Granica, której technika nie może zgadywać |
 |---|---|---|
-| B-01 | Czy R6 35 min jest bezwzglednym zakazem propozycji, czy ostrzezeniem dla czlowieka? | Obecne `ALWAYS_PROPOSE` przeczy opisowi HARD, ale moze realizowac swiadoma polityke operacyjna. |
-| B-02 | Czy committed pickup ma limit 5 min zawsze, czy 10 min przy przeciazeniu? | Solver ma tryb loose 10 min, a selekcja nazywa >5 naruszeniem. |
-| B-03 | Jakie warunki musza byc spelnione przed wlaczeniem auto-assign? | Potrzebny akceptowalny poziom ryzyka, kompensacja i wlasciciel incydentu. |
+| B-01 | **ROZSTRZYGNIĘTE OD-07/OD-06:** R6 to possession→handoff, 35 normalnie / 40 tylko Alarm / >40 zakaz. Always-propose pokazuje feasible albo jawny `NO/ALERT`; widoczność nie daje feasible/execute. Trudny plan początkowo `recommend+approval`. | Do technicznego związania: physical events, pełny Alarm predicate/lifecycle, wszystkie bliźniaki i oracle. Bez tego enforcement/flip = HOLD. |
+| B-02 | **ROZSTRZYGNIĘTE OD-04:** stored commitment niezmienny; `|Δ|<=5` normalnie, `5<|Δ|<=10` tylko jawny Alarm breach/`ALERT`, `|Δ|>10` niedopuszczalne. | Kodowy tryb 5/10 nie może przepisać commitment ani nadać execute. Ewentualna renegocjacja wymaga osobnej przyszłej decyzji. |
+| B-03 | **CZĘŚCIOWO ROZSTRZYGNIĘTE OD-06:** authority jest macierzą per klasa; przerzut, Alarm-plan i least-damage startują `recommend+approval`, awansują niezależnie. | Pełna lista klas, dowód, liczby, stop-loss i kryteria awansu pozostają do kart autonomii i osobnych decyzji; żadna klasa nie została teraz awansowana. |
 | B-04 | Czy celem jest drugi tenant/miasto w ciagu 12 miesiecy? | Od tego zalezy priorytet wydzielenia konfiguracji Bialegostoku. |
 | B-05 | Jak dlugo wolno przechowywac dokladne adresy, GPS i world records? | Retencja i pseudonimizacja sa decyzja prawno-biznesowa. |
 | B-06 | Czy kurier bez GPS moze dostac propozycje z pozycji syntetycznej? | To kompromis miedzy ciagloscia operacji a ryzykiem fikcyjnego ETA. |
-| B-07 | Jakie zdarzenie jest KPI pickup/delivery i jakie sa minimalne coverage oraz progi promocji ETA? | Last-inside nie potwierdza pickup/wyjazdu, arrival nie potwierdza handoffu, a paczki i GPS maja niepelne coverage. |
+| B-07 | **SEMANTYKA ROZSTRZYGNIĘTA OD-01/02/03/07:** osobne exit+possession oraz arrival+handoff; R6 possession→handoff; gate fail-closed per event/source/cohort. **LICZBY ODŁOŻONE** do raportu danych. | Exact source/event binding, coverage/missingness/cost i progi promocji pozostają `UNBOUND/HOLD`; nie odzyskiwać liczb z historycznego proxy. |
 | B-08 | **ROZSTRZYGNIETE dla canary 2026-07-11:** `daily/rotate 30/maxsize 100M`; drift krytyczny=0, miss mismatch=0, miękki `pool_feasible/reason` <=1%; zero `STAGE_TIMING_SIDECAR_LOST`, p95 `service_wall_ms` <=2500 ms, p95 appendu ledgera <=5 ms, bez wzrostu `NRestarts`. | Jawne polecenie wdrozenia live jest ACK na proponowana retencje i obserwacje. Przekroczenie progu = HOLD i hot rollback flagi; nie zmienia to ETA, backpressure ani decyzji silnika. |
 
 ## 7. Sprint 1
@@ -747,7 +760,8 @@ shadow w toku.**
   zgodnych**, AST **11/11 OK**, `git diff --check` OK. Obie uslugi sa
   active/running bez restart-loopa, a wlasciwe timery sa active/waiting.
 - Nie wykonano flipa flag ani migracji lub zmiany danych runtime. Egzekwowanie
-  R6/R27 pozostaje wylaczone (`enforcement=NONE`); B-01/B-02 nadal sa otwarte.
+  R6/R27 pozostaje wylaczone (`enforcement=NONE`). B-01/B-02 zostały później
+  semantycznie zamknięte przez ODR-001 12.07; historyczny Sprint 1 ich nie wdrażał.
 - Rollback pozostaje dostepny w `/root/sprint1_rollback_20260709_2140`.
   Szczegoly sa w `eod_drafts/2026-07-09/SPRINT1_FUNDAMENT_SPOJNOSCI_RAPORT.md`
   oraz `SPRINT1_DEPLOY_AND_ROLLBACK_REPORT.md` w tym samym katalogu.
@@ -823,9 +837,10 @@ zielony. Werdykt po pelnym oknie 48 h wykona at-214 13.07 o 12:15 UTC.**
   **808 porownan, 0 roznic krytycznych, 4 miekkie
   `pool_feasible+reason`, 0 miss mismatch**. Byte-parity calego payloadu nie
   ogloszono; canary pozostaje bramka.
-- Read-only ETA replay ma bazowy mianownik 188, package coverage 94,330% i
-  complete-case obu nog 41,489%. KPI pozostaje zablokowany; nie ma definicji
-  fizycznego pickup/handoff ani zatwierdzonych progow.
+- Read-only ETA replay ma historyczny bazowy mianownik 188, package coverage
+  94,330% i complete-case obu nog 41,489%. OD-01/02/07 rozstrzygnęły semantykę,
+  ale exact physical event/source contracts i liczbowe bramy OD-03 nadal są
+  `UNBOUND/HOLD`; replay nie może promować KPI na starym proxy.
 - Direct OSRM probe potwierdzil sukces route/table/nearest. Stan cache/CB CLI
   jest jawnie `process_local`; polityka ewikcji pozostala legacy dla parytetu.
 - Z-P1-02 Faza A, Z-P1-03 Faza A oraz health/telemetria Z-P2-06 przeszly review.

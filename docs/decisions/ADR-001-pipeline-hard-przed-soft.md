@@ -1,9 +1,9 @@
 # ADR-001: Pipeline 10 warstw + HARD przed SOFT
 
-Status: obowiązuje (od ~początku projektu; doktryna Adriana Z2 „jakość ponad szybkość, root cause przed fix"; kanon Fazy 2 audytu zatwierdzony 2026-07-01)
+Status: obowiązuje; semantyka R6/R27 doprecyzowana przez ODR-001 2026-07-12
 
 ## Kontekst
-Zlecenie przechodzi przez 10 warstw decyzji: wejście → geokod (HARD) → early-bird/czasówka (HARD) → telemetria floty → `check_feasibility_v2` (HARD) → scoring ~19 kar (SOFT) → selekcja (SOFT) → werdykt KOORD (HARD) → zapis+kanon → powierzchnie (konsola/apka/Telegram). HARD = reguły nieprzekraczalne (R6=35/40 tier, R-DECLARED-TIME, shift, geokod ∈ bbox). SOFT = kary i ranking. Diagnoza audytu: ta sama reguła często żyje w KILKU warstwach naraz (feasibility↔greedy↔plan_recheck) — to korzeń kruchości K1 i powód, że klasa łatana ≥4× wraca (naprawa trafiała w jeden bliźniak albo w render, nie w źródło).
+Zlecenie przechodzi przez 10 warstw decyzji: wejście → geokod (HARD) → early-bird/czasówka (HARD) → telemetria floty → `check_feasibility_v2` (HARD) → scoring ~19 kar (SOFT) → selekcja (SOFT) → werdykt KOORD (HARD) → zapis+kanon → powierzchnie. HARD = reguły nieprzekraczalne. ODR-001 wiąże R6 z `in_vehicle_age` possession→customer handoff: 35 normalnie / 40 tylko Alarm / nigdy klasa kuriera; R27 ma immutable commitment, normalne `|Δ|<=5`, Alarm breach do 10 i zakaz `>10`. SOFT = kary i ranking. Ta sama reguła żyje w kilku warstwach, więc fix jednego bliźniaka nie wystarcza.
 
 ## Decyzja
 HARD jest ZAWSZE liczone przed SOFT i SOFT NIGDY nie osłabia HARD (P0). Egzekwowane runtime przez `_assert_feasibility_first` (dispatch_pipeline). Werdykt KOORD powstaje wyłącznie w warstwie 8 (`INV-LAYER-NO-VERDICT-OUTSIDE-L5`). Fix reguły idzie U ŹRÓDŁA we właściwej z 10 warstw, nie łatką na krawędzi (render/instrument).
@@ -15,4 +15,4 @@ HARD jest ZAWSZE liczone przed SOFT i SOFT NIGDY nie osłabia HARD (P0). Egzekwo
 - Złamanie = objaw wraca (klasa nawrotów ≥4×), bo naprawa trafiła w bliźniak/render zamiast w źródło reguły.
 
 ## Źródła
-`ZIOMEK_ARCHITECTURE.md` §1 (10 warstw) + §4 (bliźniaki); `ZIOMEK_INVARIANTS.md` kontrakt ② (HARD przed SOFT); `memory/ziomek-change-protocol.md` (fakty kotwiczące: `_assert_feasibility_first`; ETAP 1-2); `docs/audyt/01-ZALEZNOSCI.md` §2 (mapa warstw→symbole, zweryfikowana z kodem).
+`ODR-001-owner-decisions-2026-07-12.md`; `ZIOMEK_ARCHITECTURE.md` §1 + §4; `ZIOMEK_INVARIANTS.md` kontrakt ②; `memory/ziomek-change-protocol.md`; `docs/audyt/01-ZALEZNOSCI.md` §2.
