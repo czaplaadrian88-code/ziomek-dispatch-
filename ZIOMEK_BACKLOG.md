@@ -3,8 +3,8 @@
 > Status: AKTYWNY - SPRINT 1 WDROZONY, OBSERWACJA SHADOW W TOKU; AUDIT360
 > DR1A/OPS0 SOURCE-ONLY W MASTERZE, D1/R0 HOLD DO AT-214; A0/I1/N0
 > WDROZONE I ZWERYFIKOWANE LIVE, N0 FOLLOW-UP `0891b06` OK; ETA PROMOCJA
-> HOLD; SEC0 SOURCE W MASTERZE, E0/DATA0 BRANCH-COMPLETE I HOLD; V214/SEC1/E1
-> URUCHOMIONE W ODDZIELNYCH WORKTREE, BEZ NOWYCH OPERACJI LIVE
+> HOLD; SEC0+SEC1 AUDITOR SOURCE W MASTERZE, HOST NADAL HOLD; E0+E1/DATA0
+> BRANCH-COMPLETE I OFF; V214 WAIT/PENDING DO AT-214
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -67,14 +67,14 @@ przed rozpoczeciem implementacji.
 | Z-P0-02 | Naprawa wieloprocesowego zapisu geocode cache | `flock` jest zakladany na unikalnym tempfile, wiec nie serializuje load-merge-save miedzy procesami. | Cache adresow, restauracji i negative cache przestanie gubic poprawne wpisy przy rownoleglym geokodowaniu. | M | Bez flipa; pelna regresja geocode | DONE - LIVE |
 | Z-P0-03 | Przywrocenie zielonego baseline testow | REOPENED 10.07 po flipie parsera i Audycie 360: default 4846/1; STRICT 4792/6. TEST-11 czytal live `flags.json`, a TEST-12 mial piec klas live reads i dwa ukryte prod-write. | Baseline jest deterministyczny: syntetyczne flags/systemd/state, dokladny live-smoke i tripwire anty-prod bez oslabenia guarda. | M | Zero zmian produkcyjnych; rollback = revert test-only fix-forward | DONE — `4e782e8` + T0 fix-forward z brancha `f015c9f`; tmux57 CLOSED |
 | Z-P0-04 | CAS i wspolna granica planu — REOPENED 10.07 | Dispatcherowe call-site'y CAS sa LIVE, ale Audyt 360 potwierdzil pominiety writer panelu (SPRI-02/DANE-01), odrzucanie strategii solvera, rozjazd stops i null-duration=teleport (TRAS-01/02/03) oraz false-conflict touch_plan (SPRI-03). | Jeden cross-repo owner domknie decyzja→store→panel→apka: prawidlowa kolejnosc, fail-closed czas nogi, provenance/manual marker i CAS bez lost-update/resurrect. | L/XL | Po A360-H1; jeden lane PLAN; deploy readers-first/writer-second i restart za ACK | REOPENED - A360-P0 QUEUED |
-| Z-P0-05 | Retry/DLQ dla eventow failed | Historycznie 106 `NEW_ORDER` ma status failed; brak attempt count, error i automatycznego retry. | Blad przejsciowy nie zgubi obslugi zlecenia; poison event trafi do DLQ z diagnoza i limitem prob. | L | Decyzja o retry policy | SOURCE/PREP `A360-E0` branch complete: kod `b2a6027`, final `5dd4c80`; default OFF, merge/worker/policy/migracja HOLD; E1 durable outbox wymagany |
+| Z-P0-05 | Retry/DLQ dla eventow failed | Historycznie 106 `NEW_ORDER` ma status failed; brak attempt count, error i automatycznego retry. | Blad przejsciowy nie zgubi obslugi zlecenia; poison event trafi do DLQ z diagnoza i limitem prob. | L | Decyzja o retry policy | SOURCE/PREP E0+E1 branch complete: E0 `5dd4c80`, E1 kod `c9d02b4`+`5044911`, final branch `66a2591`; envelope/outbox/receipts/journal/recovery gotowe i default OFF. Merge/worker/policy/migracja/live HOLD; retencja `order_state` czeka na checkpoint |
 | Z-P0-06 | Bezpieczenstwo courier API — auth + ownership | Rate-limit per-IP i wspolny ownership guard status/arrival/ground-truth/payment sa LIVE; BEZP-04 pozostaje osobna decyzja UX. | Foreign/missing/malformed dostaja identyczne 403 przed order-specific I/O; owner zachowuje kontrakt. | M | Wydane za ACK 11.07; rollback przywraca BEZP-02, preferowany fix-forward | DONE/LIVE `320aa0e`, API master `fa249e6`; 186/186 predeploy, 19/19 postrestart, PID 925329/NRestarts0/health PASS |
 
 ### P1 - stabilnosc przed autonomia
 
 | ID | Zadanie | Dowod / problem | Co zmieni sie po wykonaniu | Effort | Bramka |
 |---|---|---|---|---:|---|
-| Z-P1-01 | Formalny FSM zlecen | `state_machine` zna statusy, ale nie ma jednej mapy dozwolonych przejsc; zly pickup timestamp jest zastepowany `now()`. | Nielegalne przejscie i uszkodzony czas beda kwarantannowane zamiast po cichu zmieniac prawde SLA. | L | SOURCE/PREP `A360-E0` branch complete: kod `b2a6027`, final `5dd4c80`; formalny graf gotowy, ale ON/merge HOLD do E1: envelope, failure journal, outbox i receipts per consumer |
+| Z-P1-01 | Formalny FSM zlecen | `state_machine` zna statusy, ale nie ma jednej mapy dozwolonych przejsc; zly pickup timestamp jest zastepowany `now()`. | Nielegalne przejscie i uszkodzony czas beda kwarantannowane zamiast po cichu zmieniac prawde SLA. | L | SOURCE/PREP E0+E1 branch complete: formalny graf, kanoniczna koperta, failure journal, outbox i receipts per consumer sa gotowe na branchach. ON/merge nadal HOLD do policy, workera, checkpointu, migracji i osobnego ACK |
 | Z-P1-02 | Kanoniczny ground truth ETA i SLA | Brak potwierdzonego fizycznego pickup/handoff; last-inside i arrival sa tylko obserwowalnymi proxy GPS. | Faza A mierzy to samo okno, kohorte i support bez zgadywania KPI; promocja ETA pozostaje zablokowana. | L | FAZA A + A360-A0 LIVE; kalibrator fail-closed `HOLD/UNBOUND`, zero promocji; potrzebna definicja KPI i champion v2 |
 | Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbijal czasu na etapy. | Faza A mierzy queue/fleet/OSRM/solver/selection/write; nie wlacza limitu kolejki, budzetu ani backpressure. | M | **LIVE SHADOW CANARY ON od 2026-07-11 10:27 UTC**; at-214, werdykt po 48 h |
 | Z-P1-04 | Jawny `DecisionContext` i wiarygodny replay | Effects buffer obejmuje tylko czesc zapisow; Audyt 360 dodatkowo wykazal PARTIAL CORE-01, process-local rozjazdy CORE-02/03 i niekonsumowany gate TEST-03. | R0 rozdziela INPUT_MISS/OSRM_MISS/CRITICAL/SOFT/PARITY, waliduje frozen input i zuzywa OSRM najwyzej raz; pozniej context usunie ukryte kanaly procesu. | XL | R0 TECH ACCEPT `1b38447`, kod NOT MERGED do at-214; narrow/partial, surplus recorded OSRM nadal rezyduum |
@@ -213,6 +213,18 @@ Karta zakresu, wpływu, testów i rollbacku:
 `eod_drafts/2026-07-12/AUDIT360_NEXT_THREE_AFTER_SEC0_E0_DATA0.md`.
 Launch i N0 live:
 `eod_drafts/2026-07-12/AUDIT360_N0_LIVE_AND_NEXT_LANES_LAUNCH.md`.
+
+Odbior 2026-07-12: SEC1 jest clean/pushed `44f80bc3`, a jego manualny auditor
+i evidence contracts sa w masterze `c9a946c`, tag
+`a360-sec1-source-integrated-20260712`. Finalny live audit nadal daje osiem
+findingow i `HOLD`; nie wykonano firewalla, bindu, providera, credentialu,
+kontenera ani restartu. E1 ma source `c9d02b4`+`5044911`, final branch
+`66a2591`: kanoniczna koperta, outbox↔receipts/attempts z CAS, journal,
+recovery, reducer i dry-run
+migracji. `DURABLE_EVENT_OUTBOX_ENABLED=False`; brak workera/policy/live schema,
+a retencja nie usuwa historii `order_state` bez przyszlego checkpointu. V214
+pozostaje WAIT/PENDING do joba 214; tmux74 pozostaje otwarty. Raport:
+`eod_drafts/2026-07-12/AUDIT360_SEC1_SOURCE_LIVE_AND_E1_BRANCH_CLOSE.md`.
 
 52 `UNVERIFIED` nie sa zadaniami naprawczymi. Cztery `REFUTED` pozostaja
 zamkniete. Pelne disposition wszystkich CONFIRMED/PARTIAL/PLAUSIBLE, aktualne
