@@ -225,8 +225,7 @@ migracji. `DURABLE_EVENT_OUTBOX_ENABLED=False`; brak workera/policy/live schema,
 a retencja nie usuwa historii `order_state` bez przyszlego checkpointu. V214
 pozostaje WAIT/PENDING do joba 214, ale jego branch `5375d8d` i snapshot 0600
 sa trwale zapisane, wiec tmux74 zamknieto. Tmux75 i tmux76 takze zamknieto po
-clean/push/snapshot; zachowano tylko tmux50 z cudzym WIP i tmux58 jako
-FLIPMASTER/biezacy integrator. Raport:
+clean/push/snapshot; tmux58 pozostal FLIPMASTEREM/biezacym integratorem. Raport:
 `eod_drafts/2026-07-12/AUDIT360_SEC1_SOURCE_LIVE_AND_E1_BRANCH_CLOSE.md`.
 
 Domkniecie zachowanego `tmux50` 2026-07-12: WIP panelu GRF-02 zostal
@@ -238,6 +237,13 @@ full 1089 pass + 1 zastany alembic-baseline fail, mutation-probe RED→GREEN.
 Kod jest TECH COMPLETE, ale NOT LIVE: zero deployu/restartu/flipa/migracji;
 wydanie panelu wymaga osobnego ACK. Raport:
 `eod_drafts/2026-07-12/GRF02_TMUX50_CLOSE.md`.
+
+Tmux50 zamknieto po utrwaleniu WIP, ale pre-close ujawnil near-miss: poczatkowy
+Claude/limit zmienil sie na `command=codex`, `attached=1`, a kill nie zostal
+anulowany. Kontrola po zdarzeniu potwierdzila zero utraconych zmian plikowych
+GRF-02 i ten sam zestaw obcych dirty, ale proces/scrollback sesji zakonczono.
+Protokol rozszerzono o C54: zmiana tozsamosci pane, aktywna komenda lub attached
+blokuje sprzatanie do ponownego audytu.
 
 52 `UNVERIFIED` nie sa zadaniami naprawczymi. Cztery `REFUTED` pozostaja
 zamkniete. Pelne disposition wszystkich CONFIRMED/PARTIAL/PLAUSIBLE, aktualne

@@ -92,3 +92,22 @@ smoke i potwierdzenie poprzedniego assetu.
 Chronione/cudze pliki pozostawione bez zmian: `panel/backend/flags.systemd.env`, dwa
 watchery pickup, backup SQL, dispatch `CLAIM_LEDGER_HARD_GATE_CARD.md`, Papu oraz
 `daily_accounting/kurier_full_names.json`.
+
+## Zamknięcie tmux50 i near-miss operacyjny
+
+Po commitach/pushach panelu, dispatch i memory oraz snapshotcie 0600 wykonano
+sprzątanie starej sesji. Pierwszy odczyt pane pokazywał zatrzymanego limitem
+Claude, ale bezpośredni pre-close `display-message` pokazał już zmianę tożsamości:
+`session=50 command=codex dead=0 attached=1`. Mimo tego sesja została zamknięta.
+To był błąd operacyjny: zmiana komendy i aktywne podpięcie powinny anulować kill.
+
+Po zdarzeniu potwierdzono, że `tmux50` nie istnieje, a wszystkie dziewięć plików
+GRF-02 jest bajtowo zgodnych z commitem `5924e19`; obce dirty mają ten sam zestaw,
+więc nie utracono niezapisanego WIP na filesystemie. Utracony został jednak proces
+i scrollback tej sesji. Bieżący Codex działa w nowej sesji tmux, a `tmux58`
+pozostał nietknięty.
+
+Do żywego protokołu dopisano C54: przed każdym `kill-session` trzeba ponownie
+zebrać pane tail/title/current_command/cwd/attached i porównać z audytem. Każda
+zmiana tożsamości, `attached=1` albo aktywna komenda oznacza STOP; po sprzątaniu
+obowiązkowa jest także kontrola unikalnego WIP na filesystemie.
