@@ -1,0 +1,61 @@
+{
+  "schema": "a360.sec1.host-firewall-plan.v1",
+  "status": "SOURCE_PREP_NOT_INSTALLED",
+  "idempotency": "RECONCILE_SINGLE_JUMP_AND_CHAIN",
+  "families": {
+    "ipv4": {
+      "input": {
+        "anchor_position": 1,
+        "chain_name": "A360_SEC1_INPUT",
+        "rules": [
+          "RETURN_IF_LOOPBACK",
+          "DROP_NEW_TCP_DPORTS_8767_9222",
+          "RETURN"
+        ]
+      },
+      "docker_user": {
+        "anchor_position": 1,
+        "chain_name": "A360_SEC1_DOCKER_USER",
+        "rules": [
+          "RETURN_IF_LOOPBACK",
+          "DROP_NEW_TCP_DPORT_9222",
+          "RETURN"
+        ]
+      }
+    },
+    "ipv6": {
+      "input": {
+        "anchor_position": 1,
+        "chain_name": "A360_SEC1_INPUT",
+        "rules": [
+          "RETURN_IF_LOOPBACK",
+          "DROP_NEW_TCP_DPORTS_8767_9222",
+          "RETURN"
+        ]
+      },
+      "docker_user": {
+        "anchor_position": 1,
+        "chain_name": "A360_SEC1_DOCKER_USER",
+        "rules": [
+          "RETURN_IF_LOOPBACK",
+          "DROP_NEW_TCP_DPORT_9222",
+          "RETURN"
+        ]
+      }
+    }
+  },
+  "persistent_owner": {
+    "kind": "VERSIONED_PROVISIONER",
+    "source_commit": null,
+    "artifact_sha256": null
+  },
+  "invariants": {
+    "single_jump_per_parent_chain": true,
+    "jump_before_broad_accept_or_return": true,
+    "loopback_return_before_target_deny": true,
+    "target_deny_before_final_return": true,
+    "ssh_rules_untouched": true,
+    "rollback_preserves_deny": true
+  },
+  "apply_available_in_this_artifact": false
+}
