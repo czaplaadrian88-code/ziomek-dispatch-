@@ -298,11 +298,17 @@ def append_history(entry: dict) -> None:
     if os.path.exists(HISTORY):
         with open(HISTORY, encoding="utf-8") as f:
             prev = f.read()
-    with open(tmp, "w", encoding="utf-8") as f:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(tmp, flags, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(prev + json.dumps(entry, ensure_ascii=False) + "\n")
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, HISTORY)
+    os.chmod(HISTORY, 0o600, follow_symlinks=False)
 
 
 def _manifest_payload(nodeids: list[str], outcomes: dict[str, str], *, owner: str,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,6 +53,26 @@ def test_hard_error_between_green_runs_does_not_become_baseline(tmp_path, monkey
     assert entries[-1]["pytest"]["hard_error"] == "COLLECT_RC_3"
     assert entries[-1]["flaky_streak"] == {"tests/f.py::test_f": 2}
     assert ng._latest(entries, lambda e: e["pytest"].get("baseline_eligible"))["ts"] == "green"
+
+
+def test_append_history_replaces_permissive_file_with_private_mode(tmp_path, monkeypatch):
+    history = tmp_path / "history.jsonl"
+    history.write_text('{"ts":"old"}\n', encoding="utf-8")
+    history.chmod(0o644)
+    stale_tmp = Path(str(history) + ".tmp-ng")
+    stale_tmp.write_text("stale", encoding="utf-8")
+    stale_tmp.chmod(0o644)
+    monkeypatch.setattr(ng, "HISTORY", str(history))
+
+    previous_umask = os.umask(0o022)
+    try:
+        ng.append_history({"ts": "new", "verdict": "OK"})
+    finally:
+        os.umask(previous_umask)
+
+    entries = [json.loads(line) for line in history.read_text(encoding="utf-8").splitlines()]
+    assert entries == [{"ts": "old"}, {"ts": "new", "verdict": "OK"}]
+    assert stat.S_IMODE(history.stat().st_mode) == 0o600
 
 
 def test_skip_list_change_is_red_with_constant_collection():
