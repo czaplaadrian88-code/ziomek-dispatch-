@@ -210,8 +210,16 @@ wchodzą do nowego outputu replay ani tego raportu.
   Diagnostyka całego jawnego write-setu znalazła 12 naruszeń Ruff; porównanie
   tych samych plików przez `git show` na frozen HEAD wykazało identyczne 12
   kodów i miejsc (po zmianie jedynie przesunięte linie), a nowy test ma 0.
-  Jest to zastany globalny dryf ratchet baseline poza deltą E0, nie nowa
-  regresja sprintu; baseline'u ani kodu po zaakceptowanym review nie zmieniano.
+  Integrator uruchomił następnie ten sam checker read-only na clean/pushed
+  control worktree SEC0 (`security/a360-sec0-host-boundary-truth`,
+  `c30d4edc99426fcaa46be6b7cd5d9f83f1b99314`) i dostał dokładnie ten sam
+  wynik: Ruff 661/608, mypy 116/124 oraz te same delty kategorii B007 +11,
+  B009 +1, B010 +1, B011 +5, B904 +2, B905 +2, F401 +15, F811 +15 i F841 +2.
+  Clean oraz HEAD=origin control worktree zostały dodatkowo potwierdzone
+  read-only. Jest to zatem bezpośrednio potwierdzony zastany dryf frozen-base /
+  control poza deltą E0, nie nowa regresja sprintu; baseline'u ani
+  zaakceptowanego kodu nie zmieniano. Finalne DEFAULT/STRICT pozostają ważne,
+  ponieważ od ich wykonania zmienia się wyłącznie ten raport docs-only.
 
 Środowisko wszystkich testów: `ZIOMEK_SCRIPTS_ROOT=/root/a360_e0_wt`,
 `PYTHONPATH=/root/a360_e0_wt`, `DISPATCH_UNDER_PYTEST=1`; wyłącznie venv
