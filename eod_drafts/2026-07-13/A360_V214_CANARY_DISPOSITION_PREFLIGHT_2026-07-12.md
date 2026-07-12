@@ -103,9 +103,10 @@ zakazem pracy przed terminem i w oknie odczytu.
 ## 5. Rejestr host-load do przyszłego sensitivity
 
 Poniższa konserwatywna lista scala wszystkie jawne interwały przekazane w
-registry/handoffach oraz pełny N0 sensitivity set z nowego reconcile
-`2026-07-12 08:35 UTC`. A0 `22:42:43Z..22:43:02Z` jest lekki, ale pozostaje w
-provenance i w najbardziej konserwatywnym wariancie `bez host-load`.
+registry/handoffach, pełny N0 sensitivity set z reconcile `08:35 UTC` oraz
+komplet baseline/superseded/final SEC1 i E1 z reconcile `10:50 UTC`. A0
+`22:42:43Z..22:43:02Z` jest lekki, ale pozostaje w provenance i w najbardziej
+konserwatywnym wariancie `bez host-load`.
 
 | # | Interwał UTC `[start,end)` |
 |---:|---|
@@ -142,10 +143,26 @@ provenance i w najbardziej konserwatywnym wariancie `bez host-load`.
 | 31 | `2026-07-12T08:12:53Z..08:17:36Z` — poprawny updater DEFAULT |
 | 32 | `2026-07-12T08:18:54Z..08:23:18Z` — final STRICT |
 | 33 | `2026-07-12T08:25:10Z..08:30:02Z` — dokładny systemd E2E N0 follow-up |
+| 34 | `2026-07-12T08:43:10Z..08:47:58Z` — E1 frozen-base DEFAULT |
+| 35 | `2026-07-12T08:47:58Z..08:52:20Z` — E1 frozen-base STRICT |
+| 36 | `2026-07-12T08:52:20Z..08:57:03Z` — SEC1 frozen-base DEFAULT |
+| 37 | `2026-07-12T08:57:03Z..09:01:27Z` — SEC1 frozen-base STRICT |
+| 38 | `2026-07-12T09:28:10Z..09:32:47Z` — SEC1 superseded DEFAULT |
+| 39 | `2026-07-12T09:32:47Z..09:37:10Z` — SEC1 superseded STRICT |
+| 40 | `2026-07-12T09:48:20Z..09:53:00Z` — SEC1 superseded DEFAULT |
+| 41 | `2026-07-12T09:53:00Z..09:57:23Z` — SEC1 superseded STRICT |
+| 42 | `2026-07-12T10:11:03Z..10:15:42Z` — SEC1 final DEFAULT |
+| 43 | `2026-07-12T10:15:42Z..10:20:04Z` — SEC1 final STRICT |
+| 44 | `2026-07-12T10:45:12Z..10:48:02Z` — E1 broad, później superseded przez C40 |
+| 45 | `2026-07-12T10:49:37Z..10:58:51Z` — E1 superseded full; przerwany korektą C32 i unieważniony zmianą C40 |
+| 46 | `2026-07-12T11:03:36Z..11:06:28Z` — E1 final broad po C40 |
+| 47 | `2026-07-12T11:07:51Z..11:12:38Z` — E1 final DEFAULT |
+| 48 | `2026-07-12T11:12:38Z..11:17:07Z` — E1 final STRICT |
 
-Po złączeniu nakładających się wpisów: 28 interwałów, łączna unia 13 548 s =
-225,80 min = 7,84% pełnego canary. Odrzucony updater jest realnym obciążeniem,
-ale nie dowodem testowym i nie wolno liczyć go jako PASS. Ostatni N0 ma prywatny aggregate:
+Po złączeniu nakładających się wpisów: 36 interwałów, łączna unia 17 721 s =
+295,35 min = 10,26% pełnego canary. Odrzucony updater oraz wszystkie
+superseded/przerwane biegi są realnym obciążeniem, ale nie dowodem testowym i
+nie wolno liczyć ich jako PASS. Ostatni N0 ma prywatny aggregate:
 `verdict=OK`, 5155 passed, 24 skipped, 8 xfailed, 0 failed/XPASS,
 `contract_ok=true`, manifest v5, czas pytest 277,99 s. To dowodzi natury
 obciążenia, ale nie jest wynikiem canary.
