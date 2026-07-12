@@ -167,7 +167,7 @@ Pelny odbior wynikow i incydentow bezpieczenstwa:
    read-only audytor zintegrowany do dispatch master `c47031b`; host nadal
    HOLD, bo publiczne 8767/9222 oraz provider UNKNOWN nie zostaly zmienione.
 2. `A360-E0 EVENT-RELIABILITY-FSM` (`max`) — kod `b2a6027`, finalny
-   branch/push `451f092`; retry/FSM default OFF, merge i ON HOLD do durable
+   branch/push `5dd4c80`; retry/FSM default OFF, merge i ON HOLD do durable
    envelope, failure journal, outbox i receipts per consumer.
 3. `A360-DATA0 PRIVATE-LEDGER-RETENTION` (`high`) — branch/push `a6ca337`;
    `compat` byte parity, private writer/reader 0600, rotate rename/reopen i

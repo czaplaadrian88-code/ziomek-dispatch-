@@ -41,8 +41,10 @@ rollbacku; rotacja zawsze przechodzi do nowej rewizji.
 
 - Branch: `reliability/a360-e0-event-fsm`.
 - Commit implementacyjny: `b2a602755a101a991074d06d3c4e819b09531c3e`.
-  Finalny HEAD/push z raportem: `451f092234a0e1ddccfdc87a84a82362f1e16f14`;
-  worktree clean i HEAD równy originowi.
+  Raport testów: `451f092234a0e1ddccfdc87a84a82362f1e16f14`; finalny
+  docs-only control-evidence HEAD/push:
+  `5dd4c80cc0bcae9685545b942b48f92bd40bdd4b`; worktree clean i HEAD równy
+  originowi. Ostatni commit nie zmienia kodu ani ważności pełnych testów.
 - Źródło łączy retry/DLQ i formalny FSM u jednego ownera, zachowując historyczne
   zachowanie, gdy wykonawcza polityka retry i enforcement są wyłączone.
 - Efektywne stałe source: `AUTOMATIC_RETRY_ENABLED=False`,
