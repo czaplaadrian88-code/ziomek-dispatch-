@@ -173,7 +173,8 @@ zachowującego/reaplikującego część E0. Backup danych jest N-D, bo nie było
 - tmux58 — integrator i jedyny FLIPMASTER;
 - tmux74 — V214 WAIT/PENDING do joba 214, pozostaje otwarty;
 - tmux75 — SEC1 zakończony i zamknięty;
-- tmux76 — zamknąć po finalnym raporcie, push parity i snapshotcie 0600.
+- tmux76 — zamknięty po finalnym raporcie, push parity `66a2591` i
+  snapshotcie 0600.
 
 Nieaktywne i jednoznacznie zakończone sesje zostały zamknięte. Nie zamykano
 tmux50 ani tmux74. Chroniony dirty
