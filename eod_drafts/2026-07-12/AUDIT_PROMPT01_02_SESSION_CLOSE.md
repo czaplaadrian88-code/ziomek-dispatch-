@@ -52,6 +52,14 @@ dispatch miał tylko chroniony cudzy dirty
 `eod_drafts/2026-07-10/CLAIM_LEDGER_HARD_GATE_CARD.md`; panel flags env/watchery,
 Papu i `daily_accounting/kurier_full_names.json` pozostały nietknięte.
 
-Sesje 77/78 można zamknąć po jeszcze jednym świeżym pre-kill snapshotcie. Tmux58
-jest bieżącym procesem Codex, dlatego jego kill musi nastąpić z krótkim opóźnieniem
-po wysłaniu finalnej odpowiedzi, aby potwierdzenie nie zostało odcięte.
+Postimage cleanup zmienił się podczas wykonywania C54. Tmux77 był odpięty,
+bezczynny, clean/pushed i został zamknięty. Tmux78 dostał po wcześniejszym audycie
+nowe jawne decyzje właściciela OD-01..OD-07 i rozpoczął ich zapis (`Working`,
+attached=1). Nowsza praca właściciela ma pierwszeństwo, więc tmux78 nie został
+zabity i pozostaje jedyną aktywną sesją do domknięcia tego zakresu. To pozytywny
+dowód działania C54: zmiana tail/aktywności anulowała zgodę na kill.
+
+Tmux58 jest bieżącym procesem Codex tej odpowiedzi; zgodnie z jawnym poleceniem
+Adriana jego kill nastąpi z krótkim opóźnieniem po wysłaniu finalnego
+potwierdzenia, aby odpowiedź nie została odcięta. Worktree Promptu 01 pozostaje
+na dysku mimo zamknięcia tmux77.

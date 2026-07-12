@@ -260,6 +260,11 @@ ma status PARTIAL/READY_AFTER_OWNER_DECISIONS, a OD-01..OD-07 pozostaja otwarte.
 Zamkniecie tmux nie usuwa zachowanych worktree. Raport:
 `eod_drafts/2026-07-12/AUDIT_PROMPT01_02_SESSION_CLOSE.md`.
 
+Cleanup follow-up: tmux77 zamknieto po push/parity. Tmux78 NIE zamknieto, bo
+swiezy C54 wykryl nowe zatwierdzone decyzje OD-01..OD-07 i aktywny zapis w tej
+sesji; nowsza praca ownera anulowala kill. Tmux58 ma zostac ubity dopiero po
+wyslaniu finalnego potwierdzenia z biezacej sesji.
+
 52 `UNVERIFIED` nie sa zadaniami naprawczymi. Cztery `REFUTED` pozostaja
 zamkniete. Pelne disposition wszystkich CONFIRMED/PARTIAL/PLAUSIBLE, aktualne
 dirty locki, file families, testy i rollback sa w punkcie wykonawczym powyzej.
