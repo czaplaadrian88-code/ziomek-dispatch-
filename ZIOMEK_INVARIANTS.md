@@ -3,7 +3,7 @@
 > **STATUS: ZATWIERDZONY przez Adriana 01.07.2026** (dowód: CLAUDE.md „Kanon architektury" + MEMORY; nagłówek zaktualizowany 03.07.2026, audyt N3). Kręgosłup egzekwowania (Filar F-4).
 > **Zasada:** każdy inwariant = zdanie + strażnik, który się ŁAMIE przy złamaniu. Inwariant bez strażnika = życzenie.
 > Zrekoncyliowane z oracle Fazy 1 (`FAZA1_03_rejestr_przyrzadow.md`). Para: [[ZIOMEK_ARCHITECTURE.md]] (8 kontraktów).
-> **OWNER UPDATE 2026-07-12:** ODR-001 wiąże R6 wyłącznie z `in_vehicle_age` possession→customer handoff (35 normalnie / 40 tylko Alarm), rozdziela exit/possession i arrival/handoff oraz ustanawia authority per klasa. Zielony test starego dialu/anchora dowodzi tylko implementacji, nie tej semantyki produktu.
+> **OWNER UPDATE 2026-07-12:** ODR-001 wiąże R6 wyłącznie z `in_vehicle_age` possession→customer handoff (35 normalnie / 40 tylko Alarm), rozdziela exit/possession i arrival/handoff oraz ustanawia authority per klasa. ODR-002 zastrzega zwiększenie authority wyłącznie dla właściciela i wymaga podpisanej karty sprawdzanej przed każdym wykonaniem. Zielony test starego dialu/anchora dowodzi tylko implementacji, nie semantyki produktu ani prawa execute.
 
 ## Taksonomia siły egzekwowania (KLUCZOWE — nie mieszać)
 - **✅ RT** — runtime-tripwire LIVE + oracle-validated: blokuje/alarmuje w produkcji, sprawdzony niezależną metodą.
@@ -62,7 +62,7 @@
 - 🟢 **INV-STATE-GT-RECONCILE**: status-only reassign-artefakt nie liczy się jako fakt GPS → `test_ground_truth_reconcile_guards`.
 - 🔴 **INV-SEM-ETA-SPLIT**: `eta_pickup_decision` ⊥ `eta_pickup_display` (dziś 1 pole 2 role — karmi scoring+feasibility+committed).
 - 🔴 **INV-SEM-PHYSICAL-EVENT-SPLIT (ODR-001):** restaurant exit ⊥ physical possession oraz delivery arrival ⊥ customer handoff; żaden serializer, KPI ani oracle nie może aliasować tych eventów.
-- 🔴 **INV-AUTHORITY-PER-CLASS (ODR-001):** Alarm detection ⊥ plan execution; przerzut/Alarm plan/least-damage pozostają `recommend+approval`, dopóki dokładnie ta klasa nie ma jawnego owner promotion.
+- 🔴 **INV-AUTHORITY-OWNER-CARD (ODR-001/ODR-002):** authority jest per klasa, a zwiększyć je może wyłącznie właściciel. Alarm detection ⊥ plan execution; przerzut/Alarm plan/least-damage pozostają `recommend+approval`, dopóki dokładnie ta klasa nie ma jawnej decyzji właściciela, hash-bound evidence bundle, niezależnej weryfikacji, owner-only approval/podpisu i deterministycznie zastosowanej aktualnej karty. Runtime sprawdza podpis/wersję/wymagane dane przed KAŻDYM wykonaniem; brak lub błąd → `recommend-only`/`HOLD`. Codex nie może zmienić karty, gate'a ani evala/progu i użyć tej zmiany do własnej promocji. Strażnik docelowy musi mutation-probować każdą z tych dróg; dziś karta/runtime gate nie istnieją, więc SLOT pozostaje czerwony.
 - 🔴 **INV-SEM-COUPLED-WRITE**: writer aktualizujący `delivery_coords` pisze też `address`+`city` (para) — inaczej ciche kłamstwo utrwalone (near-miss 484269).
 
 ## Kontrakt ⑦ — KOMPLETNOŚĆ CYKLU ŻYCIA

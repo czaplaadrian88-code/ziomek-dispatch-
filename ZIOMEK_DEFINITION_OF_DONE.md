@@ -25,6 +25,9 @@ Zmiana, która ZWIĘKSZA którąkolwiek z 8 metryk entropii = **NIEUKOŃCZONA**,
 - aliasowanie last-inside/click/arrival/statusu jako physical exit/possession/handoff
 - produktową regułę wypromowaną z case'u, kodu lub progu bez jawnego `OWNER_CONFIRMED`
 - prawo execute wywnioskowane z executora, flagi, `ALERT` albo auto-aktywacji Alarmu zamiast macierzy per klasa
+- wzrost execution authority bez jawnej decyzji właściciela, hash-bound evidence bundle, niezależnej weryfikacji, owner-only approval/podpisu i deterministycznego apply
+- kartę, schema/parser, runtime gate, promotion policy, eval lub próg zmieniony przez beneficjenta promocji albo użyty do zatwierdzenia tej samej promocji
+- wykonanie bez walidacji aktualnej podpisanej karty; brak/błąd karty, podpisu, wersji lub danych ma kończyć się `recommend-only`/`HOLD`
 - nowy plik multi-writer bez fcntl
 - nowy void-claim bez świeżego grepa master-ledgera **z datą** — twierdzenie „martwe/VOID/nieużywane" wymaga timestamp + grep master-ledgera DZIŚ; **nie ufaj cudzemu (ani własnemu wczorajszemu) void-claimowi na słowo — re-grep PRZED użyciem** (stale void-claim = mina: post-shift-replay był VOID-claimed w audycie, a żył 457×; R7-I-G / INV-COH-7)
 
@@ -35,6 +38,7 @@ Re-run `tools/entropy_dashboard.py` → **liczby mają MALEĆ** (D4 strażników
 - dotyka inwersji HARD↔SOFT (P-1..P-7) lub ⛔ w roadmapie
 - flip flagi / restart / deploy silnika / peak / re-enable Telegrama (C2 = pełny deploy)
 - konflikt priorytetów / niejasna precedencja (→ `memory/ZIOMEK_REGULY_KANON.md` najpierw)
+- każda promocja execution authority oraz zmiana autorytatywnej karty, jej schema/parsera, runtime gate, promotion policy lub ochrony (`R4-GOVERNANCE`)
 - masz zbudować >30 linii kodu silnika → to jest praca kodowa (nie architektura) — potwierdź zakres
 
 ## ⚙️ Mechanika deployu (ETAP 6, tylko za ACK)

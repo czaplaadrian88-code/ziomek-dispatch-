@@ -4,8 +4,9 @@
 > DR1A/OPS0 SOURCE-ONLY W MASTERZE, D1/R0 HOLD DO AT-214; A0/I1/N0
 > WDROZONE I ZWERYFIKOWANE LIVE, N0 FOLLOW-UP `0891b06` OK; ETA PROMOCJA
 > HOLD; SEC0+SEC1 AUDITOR SOURCE W MASTERZE, HOST NADAL HOLD; E0+E1/DATA0
-> BRANCH-COMPLETE I OFF; V214 WAIT/PENDING DO AT-214; OD-01..OD-07
-> OWNER_CONFIRMED 2026-07-12, IMPLEMENTACJA/KPI-NUMBERS NADAL HOLD
+> BRANCH-COMPLETE I OFF; V214 WAIT/PENDING DO AT-214; OD-01..OD-07 ORAZ
+> ODR-002 AUTHORITY OWNERSHIP OWNER_CONFIRMED 2026-07-12;
+> IMPLEMENTACJA/KPI-NUMBERS/KARTA RUNTIME NADAL HOLD
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -70,6 +71,7 @@ przed rozpoczeciem implementacji.
 | Z-P0-04 | CAS i wspolna granica planu — REOPENED 10.07 | Dispatcherowe call-site'y CAS sa LIVE, ale Audyt 360 potwierdzil pominiety writer panelu (SPRI-02/DANE-01), odrzucanie strategii solvera, rozjazd stops i null-duration=teleport (TRAS-01/02/03) oraz false-conflict touch_plan (SPRI-03). | Jeden cross-repo owner domknie decyzja→store→panel→apka: prawidlowa kolejnosc, fail-closed czas nogi, provenance/manual marker i CAS bez lost-update/resurrect. | L/XL | Po A360-H1; jeden lane PLAN; deploy readers-first/writer-second i restart za ACK | REOPENED - A360-P0 QUEUED |
 | Z-P0-05 | Retry/DLQ dla eventow failed | Historycznie 106 `NEW_ORDER` ma status failed; brak attempt count, error i automatycznego retry. | Blad przejsciowy nie zgubi obslugi zlecenia; poison event trafi do DLQ z diagnoza i limitem prob. | L | Decyzja o retry policy | SOURCE/PREP E0+E1 branch complete: E0 `5dd4c80`, E1 kod `c9d02b4`+`5044911`, final branch `66a2591`; envelope/outbox/receipts/journal/recovery gotowe i default OFF. Merge/worker/policy/migracja/live HOLD; retencja `order_state` czeka na checkpoint |
 | Z-P0-06 | Bezpieczenstwo courier API — auth + ownership | Rate-limit per-IP i wspolny ownership guard status/arrival/ground-truth/payment sa LIVE; BEZP-04 pozostaje osobna decyzja UX. | Foreign/missing/malformed dostaja identyczne 403 przed order-specific I/O; owner zachowuje kontrakt. | M | Wydane za ACK 11.07; rollback przywraca BEZP-02, preferowany fix-forward | DONE/LIVE `320aa0e`, API master `fa249e6`; 186/186 predeploy, 19/19 postrestart, PID 925329/NRestarts0/health PASS |
+| Z-P0-07 | R4-GOVERNANCE: podpisana karta execution authority i runtime gate | ODR-002 rozstrzyga owner-only promotion, zakaz samopromocji i fail-closed card check. Dzisiaj nie ma autorytatywnej podpisanej karty sprawdzanej przed każdym execution entry pointem. | Candidate może powstać izolowanie; docelowo każda egzekucja sprawdzi wersjonowaną kartę, a brak/błąd da `recommend-only`/`HOLD`; automatyczna degradacja nie umożliwi re-promocji. | XL | Każda zmiana karty/schema/parsera/gate/policy/ochrony = R4; evidence hash + niezależny review + owner-only approval/signature + deterministic apply; osobny ACK live | OWNER DECISION DONE 12.07 (`ODR-002`); implementacja/karta/runtime ZERO, HOLD. Aktywny lease `docs/chief-engineer/**` nietknięty i musi zrekoncyliować nowe źródło. |
 
 ### P1 - stabilnosc przed autonomia
 
@@ -724,6 +726,7 @@ replay ani ACK live.
 | B-06 | Czy kurier bez GPS moze dostac propozycje z pozycji syntetycznej? | To kompromis miedzy ciagloscia operacji a ryzykiem fikcyjnego ETA. |
 | B-07 | **SEMANTYKA ROZSTRZYGNIĘTA OD-01/02/03/07:** osobne exit+possession oraz arrival+handoff; R6 possession→handoff; gate fail-closed per event/source/cohort. **LICZBY ODŁOŻONE** do raportu danych. | Exact source/event binding, coverage/missingness/cost i progi promocji pozostają `UNBOUND/HOLD`; nie odzyskiwać liczb z historycznego proxy. |
 | B-08 | **ROZSTRZYGNIETE dla canary 2026-07-11:** `daily/rotate 30/maxsize 100M`; drift krytyczny=0, miss mismatch=0, miękki `pool_feasible/reason` <=1%; zero `STAGE_TIMING_SIDECAR_LOST`, p95 `service_wall_ms` <=2500 ms, p95 appendu ledgera <=5 ms, bez wzrostu `NRestarts`. | Jawne polecenie wdrozenia live jest ACK na proponowana retencje i obserwacje. Przekroczenie progu = HOLD i hot rollback flagi; nie zmienia to ETA, backpressure ani decyzji silnika. |
+| B-09 | **ROZSTRZYGNIĘTE ODR-002:** tylko właściciel zwiększa execution authority. Codex może przygotować evidence/candidate/izolowaną implementację i eval/shadow/canary w granicach bieżącej karty, ale nie może zmienić karty/gate'a/evala/progu i zatwierdzić własnej promocji. | Technicznie `UNBOUND/HOLD`: schema i położenie karty, podpis/trust root, klasy/ID, evidence bundle/hash, niezależność review, safe-state per klasa i pełny runtime entry-point inventory. Każdy z tych mechanizmów jest R4-GOVERNANCE; ODR nie jest execution authority. |
 
 ## 7. Sprint 1
 

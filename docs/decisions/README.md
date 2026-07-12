@@ -9,6 +9,7 @@ Krótkie zapisy KLUCZOWYCH decyzji projektowych, odtworzone z kodu/historii, że
 | ODR | Decyzja (w skrócie) |
 |---|---|
 | [ODR-001](ODR-001-owner-decisions-2026-07-12.md) | `OWNER_CONFIRMED` OD-01..OD-07 z 2026-07-12: rozdzielone KPI exit/possession i arrival/handoff, lokalne KPI gates, immutable R27, jawna promocja kanonu, autonomia per klasa i R6 possession→handoff. |
+| [ODR-002](ODR-002-autonomy-authority-ownership-2026-07-12.md) | `OWNER_CONFIRMED`: tylko właściciel zwiększa execution authority; promocja wymaga hash-bound evidence, niezależnej weryfikacji i owner-only approval/signature; runtime sprawdza podpisaną kartę przed każdym wykonaniem i failuje zamknięcie. |
 
 ## Architecture Decision Records
 

@@ -4,7 +4,7 @@
 > #0 mówi „jak bezpiecznie ZMIENIAĆ" (defensywnie). TEN dokument mówi „czym Ziomek JEST i do czego dąży" (mapa).
 > Źródła: audyt spójności Fazy 1 (`eod_drafts/2026-06-30/FAZA1_00..06`) — READ dla dowodów; tu = promocja do kanonu.
 > Para: [[ZIOMEK_INVARIANTS.md]] (co MUSI być zawsze prawdą + strażnicy) · [[ZIOMEK_DEFINITION_OF_DONE.md]] (1 ekran).
-> **SEMANTYKA PRODUKTU z 12.07:** ODR-001 ma pierwszeństwo nad starszym opisem R6/R27/KPI/autonomii. R6 = possession→customer handoff; exit≠possession, arrival≠handoff; execution authority = macierz per klasa.
+> **SEMANTYKA PRODUKTU z 12.07:** ODR-001 ma pierwszeństwo nad starszym opisem R6/R27/KPI/autonomii. R6 = possession→customer handoff; exit≠possession, arrival≠handoff; execution authority = macierz per klasa. **ODR-002:** tylko właściciel może zwiększyć authority; dokument, kod, flaga, eval ani agent nie są kartą wykonawczą. Runtime ma sprawdzać aktualną podpisaną kartę przed każdym wykonaniem i failować zamknięcie; brak tej ścieżki jest jawnym implementation gap, nie wyjątkiem od decyzji.
 
 ---
 
@@ -89,6 +89,7 @@ Pełne mapy: `FAZA1_01_mapa_antywzorcow.md` (rooty), `backing/A6_twin_import_gra
 - **Stan zleceń/planów:** `dispatch_state/orders_state.json`, `courier_plans.json` (atomic + fcntl).
 - **Prawda przyrządów:** `FAZA1_03_rejestr_przyrzadow.md` (validated/void/untested) — **czemu ufać przy flipie**.
 - **Prawda fizyczna (ground-truth):** od ODR-001 dokładny event musi mieć wersjonowane provenance i fail-closed gate per event/source/cohort. `last_inside`/`picked_up_at`/`delivered_at`/arrival/click są nazwanymi observable/proxy; żaden nie staje się automatycznie physical possession lub customer handoff.
+- **Execution authority:** ODR-002 jest źródłem intencji governance. Wzrost authority wymaga jawnej decyzji właściciela, evidence bundle z hashem, niezależnej weryfikacji, owner-only approval/podpisu i deterministycznego zastosowania. Runtime ma walidować bieżącą podpisaną kartę przed każdym wykonaniem; brak lub błąd karty/wersji/podpisu/danych → `recommend-only` albo `HOLD`. Do czasu wdrożenia tej ścieżki obowiązuje bardziej restrykcyjny istniejący stan per klasa; żaden dokument opisowy nie daje execute.
 
 ---
 
