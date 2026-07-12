@@ -252,6 +252,14 @@ GRF-02 i ten sam zestaw obcych dirty, ale proces/scrollback sesji zakonczono.
 Protokol rozszerzono o C54: zmiana tozsamosci pane, aktywna komenda lub attached
 blokuje sprzatanie do ponownego audytu.
 
+Foundation audit Prompt 01/02 zamkniety trwale 2026-07-12: docs-only branche
+`codex/audit-prompt-01-20260712T140957Z` @ `14e7a5e` oraz
+`codex/audit-prompt-02-20260712T153736Z` @ `bd4a4bf` sa clean, wypchniete na
+origin z parity 0/0 i nie zostaly scalone. Prompt 03 nie wystartowal; Prompt 02
+ma status PARTIAL/READY_AFTER_OWNER_DECISIONS, a OD-01..OD-07 pozostaja otwarte.
+Zamkniecie tmux nie usuwa zachowanych worktree. Raport:
+`eod_drafts/2026-07-12/AUDIT_PROMPT01_02_SESSION_CLOSE.md`.
+
 52 `UNVERIFIED` nie sa zadaniami naprawczymi. Cztery `REFUTED` pozostaja
 zamkniete. Pelne disposition wszystkich CONFIRMED/PARTIAL/PLAUSIBLE, aktualne
 dirty locki, file families, testy i rollback sa w punkcie wykonawczym powyzej.
