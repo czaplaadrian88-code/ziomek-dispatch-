@@ -234,8 +234,15 @@ zrekoncyliowany i zapisany na `nadajesz_clone/coordinator-console` jako
 ciagla zmiane o jedna godzine tylko od poczatku/konca, zachowuje auto i odrzuca
 srodek zamiast cicho tracic kilka godzin. Focused 20/20, Vite build PASS, panel
 full 1089 pass + 1 zastany alembic-baseline fail, mutation-probe RED→GREEN.
-Kod jest TECH COMPLETE, ale NOT LIVE: zero deployu/restartu/flipa/migracji;
-wydanie panelu wymaga osobnego ACK. Raport:
+Po jawnym ACK Adriana kod jest LIVE od `2026-07-12 15:14:24 UTC`: rsync świeżego
+builda `/admin/`, dokładnie jeden restart tylko `nadajesz-panel.service`, PID
+`683706`, NRestarts0, health/admin 200, nowy asset `index-CB3bgZBR.js`, endpoint
+bez tokenu 401 direct+public i zero warningów journalu. Zero flipa, migracji i
+zmian danych; tag `grf02-hour-trim-live-verified-20260712` jest na origin.
+Rollback runtime = backup
+`/var/www/html/admin-panel.bak-grf02-hourtrim-20260712T151212Z`; nie wykonywać
+wholesale `git revert 5924e19`, bo commit zawiera też wcześniej LIVE WIP z 09.07.
+Obserwacja do 14.07 15:15 UTC, bez nowego timera/at-joba. Raport:
 `eod_drafts/2026-07-12/GRF02_TMUX50_CLOSE.md`.
 
 Tmux50 zamknieto po utrwaleniu WIP, ale pre-close ujawnil near-miss: poczatkowy

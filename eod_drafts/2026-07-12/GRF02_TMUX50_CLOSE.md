@@ -73,21 +73,64 @@ Ciężkie interwały host-load do sensitivity at-214:
 - panel full `[2026-07-12T13:49:34Z,13:50:44Z]`;
 - dispatch final `[2026-07-12T13:53:34Z,13:58:19Z]` — 5152/27/8/0.
 
-## Live, bramka i rollback
+## Live, wydanie i rollback
 
-W tej sesji nie wykonano deployu, restartu, flipa, migracji ani zmiany danych live.
-`nadajesz-panel.service` pozostał na PID 2028171, `NRestarts=0`, start 09.07.
-Żywy frontend przed tym wydaniem wskazywał asset `index-DjGmO1bc.js`; nowy build
-nie został skopiowany do `/var/www/html/admin-panel`.
+Pierwsza faza tej samej sesji zakończyła się świadomie na TECH COMPLETE/NOT LIVE.
+Następnie Adrian przekazał jawny ACK: `ack deploy i restart nadajesz-panel.service`.
+Kanon D2 został rozstrzygnięty bez zgadywania: 17–20 w niedzielę jest peak scoringowy,
+ale operacyjny `blackout-ops` obowiązuje w sobotę 16–21, więc nie była potrzebna
+osobna sobotnia bramka peak.
 
-Nowa funkcja jest więc TECH COMPLETE, ale NOT LIVE. Wydanie wymaga osobnego ACK:
-backup `/var/www/html/admin-panel`, rsync builda z `--base=/admin/`, restart wyłącznie
-`nadajesz-panel.service` (backend ma nowy endpoint), a potem health/admin/HTTP 401 gate,
-PID/NRestarts i journal. Telegram i procesy dispatch pozostają nietknięte.
+Preflight live:
 
-Rollback przed deployem: brak operacji live; kod `git revert 5924e19`. Rollback po
-deployu: przywrócić backup frontu, revert commitu, jeden kontrolowany restart panelu,
-smoke i potwierdzenie poprzedniego assetu.
+- `tmux58` był bieżącym FLIPMASTEREM; `tmux77` pracował w osobnym worktree audytu,
+  bez zmian w repo panelu;
+- panel `coordinator-console=origin/coordinator-console=5924e19` (0/0), a dziewięć
+  plików zakresu miało zero diff do HEAD;
+- chroniony `flags.systemd.env` miał mtime `2026-07-09 11:01:46 UTC`, wcześniejszy
+  niż start starego procesu `12:05:49 UTC`; restart nie ładował oczekującej nowszej
+  zmiany. Treści chronionego pliku nie odczytano;
+- dwa stare nieśledzone watchery nie miały żadnego importera w `app/` ani testach;
+- stary runtime: PID `2028171`, `NRestarts=0`, health 200, asset
+  `index-DjGmO1bc.js`, zero warningów w journalu.
+
+Release preflight po ACK: py_compile/import PASS (`routes=15`, helper callable),
+focused `20 passed / 4 warnings`. Pierwsze wywołanie Vite z błędnego katalogu
+`frontend-shared` failnęło `Cannot resolve entry module index.html` i niczego nie
+wdrożyło; kanoniczne `panel/frontend` z `vite build --base=/admin/` przeszło PASS.
+Bundle zawiera endpoint oraz oba jawne opisy skracania, a `dist/index.html` wskazuje
+`/admin/assets/index-CB3bgZBR.js`.
+
+Backup 1:1 utworzono przed nadpisaniem:
+`/var/www/html/admin-panel.bak-grf02-hourtrim-20260712T151212Z` (root:root,
+katalog 0755, index 0644, `diff -qr` zero). O `2026-07-12 15:14:24 UTC`
+wykonano `rsync -a --delete dist/ /var/www/html/admin-panel/` i dokładnie jeden
+`systemctl restart nadajesz-panel.service`.
+
+Postimage LIVE:
+
+- PID `683706`, `NRestarts=0`, `SubState=running`, listener `127.0.0.1:8000`;
+- backend `/api/health` 200 i publiczne `/admin/` 200;
+- publiczny asset `index-CB3bgZBR.js`, live directory ma zero diff do `dist`;
+- `PATCH /api/schedule/builder/shift/hour` bez tokenu = 401 bezpośrednio i przez
+  `/admin/api/`, więc endpoint istnieje i auth gate działa; nie mutowano syntetycznie
+  produkcyjnego grafiku;
+- journal od restartu: zero warningów; efektywne `GRF02_CURRENT_FROM_PANEL`,
+  `DRIVERS_ADMIN`, `GRF01_SCHEDULE` pozostały `<unset>` przed i po, czyli bez flipa;
+- tag release `grf02-hour-trim-live-verified-20260712` wypchnięty na origin.
+
+Rollback runtime jest gotowy bez restartu backendu:
+`rsync -a --delete /var/www/html/admin-panel.bak-grf02-hourtrim-20260712T151212Z/ /var/www/html/admin-panel/`.
+Przywraca poprzedni asset `index-DjGmO1bc.js`, przez co addytywny backendowy endpoint
+pozostaje nieużywany. Wcześniejsze zalecenie `git revert 5924e19` zostało odwołane:
+commit obejmuje także wcześniejszy, już działający WIP GRF-02 z 09.07, więc wholesale
+revert cofnąłby za szeroki zakres. Ewentualny source rollback musi selektywnie usunąć
+tylko endpoint/helper/hook tej operacji, przejść testy i osobną bramkę restartu.
+
+Okno obserwacji trwa do `2026-07-14 15:15 UTC`. Odczyt: health i publiczny asset,
+401 gate, warning/error journal od deployu oraz potwierdzenie operatora przy pierwszym
+naturalnym użyciu. Nie utworzono timera ani at-joba i nie wykonano testowej mutacji
+danych live. Telegram i procesy dispatch pozostały nietknięte.
 
 Chronione/cudze pliki pozostawione bez zmian: `panel/backend/flags.systemd.env`, dwa
 watchery pickup, backup SQL, dispatch `CLAIM_LEDGER_HARD_GATE_CARD.md`, Papu oraz
