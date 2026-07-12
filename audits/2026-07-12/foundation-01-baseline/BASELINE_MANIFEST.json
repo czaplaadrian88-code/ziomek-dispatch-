@@ -1,0 +1,898 @@
+{
+  "schema_version": "ziomek.prompt01.baseline-manifest.v1",
+  "timestamp_utc": "2026-07-12T14:09:57Z",
+  "generated_at_utc": "2026-07-12T15:00:36Z",
+  "result": "PARTIAL",
+  "mode": "read-only-discovery",
+  "scope": {
+    "writes_limited_to_isolated_audit_worktree_and_git_metadata": true,
+    "external_network_used": false,
+    "live_business_mutations_performed": false,
+    "incidental_observability_write_from_loopback_health_get": "possible but not verified",
+    "product_files_modified": false,
+    "raw_production_records_read": false,
+    "secrets_read": false
+  },
+  "repository": {
+    "repo_root_safe": "repo:dispatch_v2",
+    "source_branch_at_freeze": "master",
+    "source_head_at_freeze": "c7de9f29127851a59507fac92d14f328336afe61",
+    "source_upstream_at_freeze": "origin/master",
+    "source_ahead_behind_at_freeze": {
+      "ahead": 0,
+      "behind": 0
+    },
+    "source_head_observed_after_freeze": "c1b576e96365fc6895c0d8b1f3d35a8185a78870",
+    "concurrent_change_classification": "parallel docs-only commit; not produced by this audit",
+    "audit_branch": "codex/audit-prompt-01-20260712T140957Z",
+    "audit_head_before_artifact_commit": "c7de9f29127851a59507fac92d14f328336afe61",
+    "artifact_commit": null,
+    "artifact_commit_note": "the final local commit is created after content freeze and is reported in the final response to avoid a self-referential commit hash",
+    "audit_worktree": "/root/codex_audit_prompt01_20260712T140957Z",
+    "audit_upstream": null,
+    "describe_at_freeze": "a360-sec1-source-integrated-20260712-4-gc7de9f2",
+    "tags_pointing_at_freeze": [],
+    "tracked_file_count": 2134,
+    "tracked_bytes": 34122583,
+    "worktree_count_after_audit_worktree_creation": 41,
+    "submodules": [],
+    "git_lfs": {
+      "available": false,
+      "tracked_gitattributes_present": false
+    },
+    "monorepo_manager": null,
+    "nested_repositories_inside_frozen_checkout": [],
+    "cross_project_repositories": [
+      "repo:courier-app",
+      "repo:courier-api",
+      "repo:nadajesz-panel",
+      "repo:openclaw-workspace",
+      "repo:project-memory"
+    ],
+    "dirty_at_freeze": {
+      "is_dirty": true,
+      "untracked_count": 0,
+      "entries": [
+        {
+          "path": "ZIOMEK_BACKLOG.md",
+          "status": " M",
+          "numstat": {
+            "added": 8,
+            "deleted": 2
+          },
+          "sha256": "6984e790c1380a8432f022d87fcb8ccbd90fc068117bc5afb74c54dd459ee4a9",
+          "mode": "0644",
+          "size_bytes": 57673,
+          "mtime_epoch": 1783865254
+        },
+        {
+          "path": "eod_drafts/2026-07-10/CLAIM_LEDGER_HARD_GATE_CARD.md",
+          "status": " M",
+          "numstat": {
+            "added": 3,
+            "deleted": 3
+          },
+          "sha256": "d418c6d6daf045d9efbab06ad014f4d8d397ddd868d96a5bf6bf4991f581a7bb",
+          "mode": "0644",
+          "size_bytes": 1153,
+          "mtime_epoch": 1783666800
+        },
+        {
+          "path": "eod_drafts/2026-07-12/GRF02_TMUX50_CLOSE.md",
+          "status": " M",
+          "numstat": {
+            "added": 19,
+            "deleted": 0
+          },
+          "sha256": "02320c912aaaea0728ee082d1011eb4e33099eeb9f84eeb7a4da22e9ffddfad7",
+          "mode": "0644",
+          "size_bytes": 6311,
+          "mtime_epoch": 1783865254
+        }
+      ]
+    },
+    "final_source_verification": {
+      "captured_at_utc": "2026-07-12T15:00:36Z",
+      "head": "c1b576e96365fc6895c0d8b1f3d35a8185a78870",
+      "status_redacted": "one original protected tracked file remains modified; zero untracked",
+      "initial_path_hashes_still_match": true,
+      "two_initially_dirty_paths_became_clean_via_parallel_docs_commit_without_content_hash_change": true,
+      "audit_caused_changes": false,
+      "concurrent_changes_observed": true
+    }
+  },
+  "worktree_inventory": {
+    "observed_count": 41,
+    "observed_at_phase": "final inventory after audit worktree creation and parallel source update",
+    "dirty_status_policy": "not probed per secondary worktree to avoid cross-session interference",
+    "owner_status": "UNKNOWN except active tmux sessions; branch names retained as safe operational metadata",
+    "entries": [
+      "source:dispatch_v2|master|c1b576e96365fc6895c0d8b1f3d35a8185a78870",
+      "scripts:wt-codweekly|fix/codweekly-split-week|ab91a70f1a62d1a94004daf4dc47e50375245404",
+      "scripts:wt-error-budget|obs/error-budget-scoreboard|8760ee65070aea2e5cd641cfd5ce6be5cf67b914",
+      "scripts:wt-grafik-fetch|fix/grafik-fetch-nonesort|f4395b91f5396f4570d3826302770dbf721d8505",
+      "scripts:wt-invariants|quality/invariants-alloc|374a092b006de7db9fa7a4208f33ca23de913a73",
+      "scripts:wt-perf-p95|perf/p95-ortools|e7a85f92d7cfe83b35adab1fa17c32d8b2fe1d1e",
+      "scripts:wt-pipeline-p95|perf/pipeline-contention-p95|eb3bb4c25a88745bcdf834e12d8f9af7551fb885",
+      "scripts:wt-refaktor-arch|refaktor/architektura|a359e909aa99e18634db97336a2c36213bdaf09b",
+      "scripts:wt-routeorder-src|quality/inv-src-route-order|62f54bd9cd4d6613da6c9e681cf8f0b0d0b33651",
+      "scripts:wt-sprintA|refaktor/worldrecord-v1|347615c3658dab97016084a58b6b45641324ac9b",
+      "scripts:wt-sprintB|refaktor/krok-16-pos-hierarchy|bab1797ddaad770d7139692cef60a8476ddeba91",
+      "scripts:wt-zero-coords|fix/zero-coords-source|d562ea18f2b30d6e5b21ba990c24f520bc3183f6",
+      "root:a360-a0-n0-live|release/a360-a0-n0-live-20260711|4c351d57b4021503fd9497554812acc0980c2582",
+      "root:a360-d0|docs/a360-d0-r6-decision-prep|c2415078b54ff94108c7167d61fbbed37c449645",
+      "root:a360-d1|engine/a360-d1-firewall-exempt-truth|e193f2a2de7a7163f53c93ed00b8352dc5e6e73d",
+      "root:a360-data0|privacy/a360-data0-ledger-retention|a6ca337b53b33cf50c41ce1eff564d1cabae9396",
+      "root:a360-dep0|supply/a360-dep0-sbom|53730e9cce6f7df5be0fab446e350ef63ce3434f",
+      "root:a360-dr0|ops/a360-dr0-restore|d873f0b0e8a4b390202c71d42f5af3f90192b29c",
+      "root:a360-dr1a|ops/a360-dr1a-restore-prep|0cfa74808ebffc99883a5da7054a73c711eb5827",
+      "root:a360-e0|reliability/a360-e0-event-fsm|5dd4c80cc0bcae9685545b942b48f92bd40bdd4b",
+      "root:a360-e1|reliability/a360-e1-durable-outbox|66a2591e061fb386017ec807bf538234067cf077",
+      "root:a360-eta0|evidence/a360-a0-eta-calibration-truth|a0322f85ae9ad0aa58f99db0b2186afb990aeb84",
+      "root:a360-n0-followup|fix/a360-n0-manifest-mode-20260712|a9e6c7cf03f8bc461e4a29d94b55e87aa554d63a",
+      "root:a360-n0|quality/a360-n0-night-guard-truth|53d8446d6c8c4dd62ce458fc0a328d4106854d65",
+      "root:a360-ops0|ops/a360-ops0-runtime-evidence|1bb4699035ffff03824084737089cabf9642f78e",
+      "root:a360-r0|evidence/a360-r0-replay-truth|1b38447fbbd2350d5481137b2b8fec243d4072cf",
+      "root:a360-sec0|security/a360-sec0-host-boundary-truth|c30d4edc99426fcaa46be6b7cd5d9f83f1b99314",
+      "root:a360-sec1|security/a360-sec1-host-remediation|44f80bc39a344f4dacb80dec1ed978618333cd3f",
+      "root:a360-t0|review/a360-t0-test-truth|f015c9fcbb71154daf9bd1a4ba11c80947d3abe5",
+      "root:a360-v214|evidence/a360-v214-canary-disposition|5375d8d3f5a52bc35012da7677e3e20a79cd1724",
+      "root:a360-wave1-close|integration/a360-wave1-close|6510e89016c2ad37a7393159ac9596527085c1df",
+      "root:a360-wave2-close|integration/a360-wave2-close|e0fd1e49f025a8960b2bfcd533b30a00d8abfc85",
+      "root:a360-wave3-launch|docs/a360-wave3-launch|308789a77abb2bec44e05b05ab7acfe15d53c134",
+      "root:a360-wave3-safe-live|release/a360-wave3-safe-source-live|307242d44080d98dd38143d5feae9304f9198a30",
+      "root:audit360|audit/ziomek-360-20260710|185d0db0b16d1f15de95f12a45802c5f62c6bdbc",
+      "root:codex-audit-prompt01|codex/audit-prompt-01-20260712T140957Z|c7de9f29127851a59507fac92d14f328336afe61",
+      "root:sprint1|DETACHED|9ab45925b447eeaccccd5bb984a05a7c4f60e011",
+      "root:sprint2|sprint2/retry-auth-fsm|32745f9b9592c98a22e150b5382fb590b7babcad",
+      "root:sprint3-release|release/sprint3-live-20260711|fa26c80a49016c805a99708918e9eb3ccc5e7498",
+      "root:sprint3|sprint3/eta-observability-osrm|85b9dc751f1f501277d333862d4c4cb6190c6d1e",
+      "tmp:claude-scratch/wt-k01check|DETACHED|bab1797ddaad770d7139692cef60a8476ddeba91"
+    ]
+  },
+  "environment": {
+    "type": "shared production-adjacent Linux host with live services",
+    "os": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.8.0-117-generic",
+    "architecture": "x86_64",
+    "timezone": "Etc/UTC",
+    "sandbox": "danger-full-access",
+    "approval_policy": "never",
+    "network_access_capability": true,
+    "network_access_used_by_audit": "loopback health GET only; no external network",
+    "active_tmux_sessions_at_preflight": 2,
+    "at_jobs_at_preflight": [
+      {
+        "job_id": 214,
+        "scheduled_utc": "2026-07-13T12:15:00Z",
+        "purpose": "registered observation verdict; command body not reproduced"
+      }
+    ]
+  },
+  "toolchain": {
+    "bash": "5.2",
+    "docker_cli": "29.3.1",
+    "git": "2.43.0",
+    "make": "4.3",
+    "node": "22.22.2",
+    "npm": "10.9.7",
+    "python_system": "3.12.3",
+    "python_dispatch": "3.12.3",
+    "pip_dispatch": "24.0",
+    "pytest_dispatch": "9.0.3",
+    "ripgrep": "15.1.0",
+    "systemd": "255"
+  },
+  "language_and_frameworks": [
+    "Python 3.12",
+    "FastAPI/uvicorn in adjacent courier API",
+    "LightGBM",
+    "NumPy/Pandas/SciPy/scikit-learn",
+    "OR-Tools",
+    "SQLite",
+    "systemd",
+    "shell",
+    "JSON/JSONL",
+    "Markdown"
+  ],
+  "manifests": [
+    {
+      "path": "requirements-dispatch-venv.txt",
+      "kind": "requirements",
+      "pin_policy": "9 exact pins",
+      "sha256": "08c78a7e16e7ce6a8c65080d8755476e318e43f5e6fe01836834a993b008524b"
+    },
+    {
+      "path": "tools/eta_calibration/requirements.txt",
+      "kind": "requirements",
+      "pin_policy": "4 lower bounds; no upper bounds",
+      "sha256": "98e6f012dfddb93b8ccb060b4c0e5483b3c8a2f4e3b81b3b84b824d4d2f84e26"
+    },
+    {
+      "path": "eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_CONFIG.json",
+      "kind": "dependency inventory config",
+      "sha256": "6f741ac3acc980936fbc424a01afed75b67970a0cd1a324bd368b81186d79e47"
+    },
+    {
+      "path": "eod_drafts/2026-07-11/audit360_artifacts/A360_DEP0_SBOM.json",
+      "kind": "partial runtime SBOM",
+      "sha256": "68f6ad62aac10a9cc29fced7b009925aab3a7d7ddfab590a8a1003ed320b97b8",
+      "coverage": "2 environments and 6 processes",
+      "known_semantic_limit": "all installed packages absent from manifests are labelled transitive"
+    }
+  ],
+  "lockfiles": [],
+  "packaging": {
+    "pyproject": false,
+    "setup_py": false,
+    "setup_cfg": false,
+    "pipfile": false,
+    "tox_or_nox": false,
+    "makefile": false
+  },
+  "runtime_packages_confirmed": {
+    "lightgbm": "4.6.0",
+    "numpy": "2.4.4",
+    "ortools": "9.15.6755",
+    "pandas": "3.0.2",
+    "pyyaml": "6.0.3",
+    "scikit_learn": "1.8.0",
+    "scipy": "1.17.1"
+  },
+  "entrypoints": [
+    {
+      "path": "shadow_dispatcher.py",
+      "role": "main dispatch loop",
+      "mutability": "production-mutating"
+    },
+    {
+      "path": "panel_watcher.py",
+      "role": "panel polling and lifecycle processing",
+      "mutability": "production-mutating"
+    },
+    {
+      "path": "gps_server.py",
+      "role": "GPS HTTP server",
+      "mutability": "production-mutating"
+    },
+    {
+      "path": "sla_tracker.py",
+      "role": "SLA loop",
+      "mutability": "production-mutating"
+    },
+    {
+      "path": "monitoring/detector_419.py",
+      "role": "operational monitor",
+      "mutability": "reads logs and may alert"
+    },
+    {
+      "path": "plan_recheck.py",
+      "role": "periodic plan recheck",
+      "mutability": "production-mutating"
+    }
+  ],
+  "processes": [
+    {
+      "unit": "courier-api.service",
+      "active": true,
+      "pid": 925329,
+      "nrestarts": 0,
+      "environment": "courier-api"
+    },
+    {
+      "unit": "dispatch-gps.service",
+      "active": true,
+      "pid": 534721,
+      "nrestarts": 0,
+      "environment": "dispatch"
+    },
+    {
+      "unit": "dispatch-monitor-419.service",
+      "active": true,
+      "pid": 534903,
+      "nrestarts": 0,
+      "environment": "dispatch",
+      "unit_file_state": "disabled"
+    },
+    {
+      "unit": "dispatch-panel-watcher.service",
+      "active": true,
+      "pid": 3659486,
+      "nrestarts": 0,
+      "environment": "dispatch"
+    },
+    {
+      "unit": "dispatch-shadow.service",
+      "active": true,
+      "pid": 573430,
+      "nrestarts": 0,
+      "environment": "dispatch"
+    },
+    {
+      "unit": "dispatch-sla-tracker.service",
+      "active": true,
+      "pid": 2998575,
+      "nrestarts": 0,
+      "environment": "dispatch"
+    },
+    {
+      "unit": "nadajesz-panel.service",
+      "active": true,
+      "pid": 2028171,
+      "nrestarts": 0,
+      "environment": "nadajesz-panel"
+    },
+    {
+      "unit": "dispatch-telegram.service",
+      "active": false,
+      "intentional_state": "disabled by business decision"
+    }
+  ],
+  "runtime_identity": {
+    "immutable_build_artifact": false,
+    "embedded_commit_or_build_id": false,
+    "execution_model": "Python modules executed directly from mutable source checkouts",
+    "exact_loaded_commit": "UNKNOWN"
+  },
+  "flags": {
+    "engine_file_key_count": 280,
+    "engine_file_mode": "0600",
+    "engine_file_sha256": "568436f3de693d048a73bf1a2ba5c23e65191a350ef2e566fa5b6f34ace848bf",
+    "fingerprint_confirmed_process_values": {
+      "ENABLE_AUTO_ASSIGN": false,
+      "ENABLE_CLAIM_LEDGER_INVARIANT_CHECK": true,
+      "ENABLE_ENGINE_CLAIM_LEDGER": true,
+      "ENABLE_STAGE_TIMING_OBSERVATION": true,
+      "USE_V2_PARSER": true
+    },
+    "file_only_values_not_attested_for_every_process": {
+      "ENABLE_ETA_LOAD_AWARE": false,
+      "ENABLE_ORTOOLS_DET_TIME_LIMIT": true
+    },
+    "worlds": [
+      "engine",
+      "nadajesz-panel",
+      "courier-api/app"
+    ],
+    "panel_environment_file_values_read": false
+  },
+  "health": {
+    "parser_endpoint": "loopback:8888/health/parser",
+    "http_success": true,
+    "status": "healthy",
+    "parser_version": "v2",
+    "anomaly": false,
+    "error_count": 0,
+    "pending": 0,
+    "interpretation": "point-in-time parser health only"
+  },
+  "ci": {
+    "repository_ci_config": [],
+    "formal_ci_present": false,
+    "host_automation": [
+      "systemd night guard",
+      "systemd timers",
+      "cron",
+      "at jobs"
+    ],
+    "host_automation_is_hermetic_ci": false,
+    "enabled_timer_count_observed": 134,
+    "enabled_timer_count_scope": "all host systemd timer unit files reported enabled, not only dispatch",
+    "active_cron_entry_count_observed": 31,
+    "active_cron_entry_count_scope": "non-comment entries visible in inspected root/user crontab scope; system cron directories not asserted complete"
+  },
+  "deploy": {
+    "sources": [
+      "deploy/",
+      "deploy_staging/",
+      "docs/deploy/",
+      "systemd/"
+    ],
+    "effective_systemd_source": "/etc/systemd/system",
+    "repo_systemd_is_complete_mirror": false,
+    "production_or_verification_tags_observed": [
+      {
+        "tag": "a360-a0-n0-live-verified-20260711",
+        "commit": "4c351d57b4021503fd9497554812acc0980c2582"
+      },
+      {
+        "tag": "a360-n0-followup-live-verified-20260712",
+        "commit": "0891b06e9e894d88d6bd8a8b9dd9f837cf12a1e0"
+      },
+      {
+        "tag": "a360-sec1-source-integrated-20260712",
+        "commit": "c9a946c43e865c9b22a2fed99cefb19e2c2b8f33"
+      },
+      {
+        "tag": "sprint3-live-20260711",
+        "commit": "a860c538126d0dcb960e17ebcbe3cf31ba77fa9d"
+      }
+    ],
+    "deployment_performed": false,
+    "restart_performed": false
+  },
+  "infrastructure": {
+    "dockerfile_present": false,
+    "docker_compose_present": false,
+    "kubernetes_present": false,
+    "terraform_present": false,
+    "mutable_container_tags_observed": true,
+    "host_default_deny_observed": false,
+    "provider_firewall_status": "UNKNOWN",
+    "all_interface_listeners_observed": true,
+    "external_port_scan_performed": false
+  },
+  "security_metadata": {
+    "secrets_directory_mode": "0755",
+    "secrets_contents_read": false,
+    "secrets_file_permissions_verified": false,
+    "interpretation": "directory metadata visibility only; no claim about secret value readability",
+    "main_services_running_as_root": true
+  },
+  "container_images_observed": [
+    {
+      "reference": "chromedp/headless-shell:latest",
+      "image_id": "sha256:54a95ab0e5364e672d36031be4dffb1ac8cb71d5a780620ae00a4b61e0765532"
+    },
+    {
+      "reference": "ghcr.io/project-osrm/osrm-backend",
+      "image_id": "sha256:729461bcc9ae9e6aafa92c0f93db9b060a32e85d5e72092c01ae4a4a9f1eb564"
+    },
+    {
+      "reference": "glitchtip/glitchtip:latest",
+      "image_id": "sha256:7e497103d3694e95fce232e83193cc2ef6865569314c66eb577b97c7c651008b"
+    },
+    {
+      "reference": "grafana/grafana:11.3.0",
+      "image_id": "sha256:a0f881232a6fb71a0554a47d0fe2203b6888fe77f4cefb7ea62bed7eb54e13c3"
+    },
+    {
+      "reference": "openclaw:local",
+      "image_id": "sha256:8d9ec6bcde87819762d63d1c916c15a1056c98d5b2d93b207a9eee88482fa8c5"
+    },
+    {
+      "reference": "pgvector/pgvector:pg16",
+      "image_id": "sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc"
+    },
+    {
+      "reference": "prom/prometheus:v2.55.1",
+      "image_id": "sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3"
+    },
+    {
+      "reference": "redis:7-alpine",
+      "image_id": "sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"
+    },
+    {
+      "reference": "studio-renderer:latest",
+      "image_id": "sha256:96c6c7d91a6ff69c39792008f68a246e31f3ec350ed81590002bb2dbff104d91"
+    }
+  ],
+  "datastores": [
+    {
+      "alias": "runtime:state/events.db",
+      "format": "SQLite WAL",
+      "mode": "0644",
+      "schema": "events, audit_log, processed_events; retry/DLQ columns and indexes present",
+      "retention": "processed events about 48h; audit about 90d; full NEW_ORDER payload about 2d",
+      "records_read": false
+    },
+    {
+      "alias": "runtime:state/eta_calib.db",
+      "format": "SQLite",
+      "schema": "features and OSRM cache",
+      "records_read": false
+    },
+    {
+      "alias": "runtime:state/fleet_analytics.db",
+      "format": "SQLite",
+      "user_version": 5,
+      "schema": "order, courier and vehicle metrics",
+      "records_read": false
+    },
+    {
+      "alias": "runtime:state/courier_api.db",
+      "format": "SQLite",
+      "mode": "0644",
+      "user_version": 7,
+      "schema": "sessions, GPS history, PIN attempts, status events and related operational tables",
+      "records_read": false
+    },
+    {
+      "alias": "runtime:state/json-jsonl",
+      "format": "JSON and JSONL",
+      "scope": "orders, plans, pending proposals, GPS, ETA, outcomes, learning and world record",
+      "records_read": false
+    }
+  ],
+  "runtime_storage_metadata": {
+    "dispatch_state": {
+      "approx_bytes": 2510000000,
+      "file_count": 470,
+      "mode_0644_count": 252,
+      "mode_0600_count": 211
+    },
+    "logs": {
+      "approx_bytes": 876000000,
+      "file_count": 195,
+      "mode_0644_count": 192
+    },
+    "world_record": {
+      "approx_bytes": 942000000,
+      "file_count": 7,
+      "mode_0644_count": 7,
+      "retention_days": 14
+    }
+  },
+  "models_prompts_rules": {
+    "models": [
+      {
+        "name": "LGBM primary v1.1",
+        "location": "external untracked workspace path",
+        "git_versioned": false,
+        "pickle_used": true,
+        "decision_influence": "primary flag not confirmed; shadow path exists",
+        "snapshot_hashes": {
+          "encoders.pkl": "c90a6352b9729d4479b5eb91ca46f6a5bc259e72491c6709321327cf98f6d1ea",
+          "feature_columns.json": "4eb63e61155ef5222c26490542ece8d7dae5b5a7721f8cc2228cbae41ebcf27f",
+          "lgbm_ranker.txt": "ef5f3f6f03b88c89259a9eb0e4ec4fb903aba74019e7e69603559cb6e070c3e7"
+        }
+      },
+      {
+        "name": "LGBM solo/bundle",
+        "location": "ml_data_prep/models_twomodel/",
+        "git_versioned": true,
+        "pickle_used": true,
+        "decision_influence": "shadow enabled; primary candidate off/not confirmed"
+      },
+      {
+        "name": "ETA residual v1/v2_drop",
+        "location": "external untracked workspace paths",
+        "git_versioned": false,
+        "decision_influence": "decision correction off/not confirmed"
+      }
+    ],
+    "prompts": [
+      {
+        "path": "tools/llm_triage.py",
+        "kind": "embedded OpenRouter triage and judge prompts",
+        "hot_path": false,
+        "scheduled": false,
+        "risk": "external egress, optional Telegram and prompt injection surface"
+      }
+    ],
+    "rules": [
+      {
+        "kind": "Python HARD/SOFT rules",
+        "git_versioned": true
+      },
+      {
+        "kind": "runtime rule_weights.json",
+        "git_versioned": false
+      },
+      {
+        "kind": "runtime flags and environment",
+        "git_versioned": "partial"
+      }
+    ]
+  },
+  "test_commands": [
+    {
+      "command": "/root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q",
+      "risk": "UNKNOWN",
+      "executed": false,
+      "reason": "default live-read quarantine, subprocess guard fail-open, no global network deny, active host-load-sensitive observation"
+    },
+    {
+      "command": "HERMETIC_STRICT=1 /root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q",
+      "risk": "UNKNOWN",
+      "executed": false,
+      "reason": "stronger FS isolation but subprocess fail-open/opt-out and network not globally denied"
+    },
+    {
+      "command": "/root/.openclaw/venvs/dispatch/bin/python -m pip check",
+      "risk": "SAFE_READ_ONLY",
+      "executed": true,
+      "exit_code": 0,
+      "result": "No broken requirements found"
+    }
+  ],
+  "inherited_test_baseline": {
+    "relationship_to_frozen_code": "code-equivalent c7de9f2 baseline",
+    "runs": [
+      {
+        "interval_utc": "2026-07-12T13:37:53Z/2026-07-12T13:42:40Z",
+        "passed": 5152,
+        "skipped": 27,
+        "xfailed": 8,
+        "failed": 0
+      },
+      {
+        "interval_utc": "2026-07-12T13:53:34Z/2026-07-12T13:58:19Z",
+        "passed": 5152,
+        "skipped": 27,
+        "xfailed": 8,
+        "failed": 0
+      }
+    ],
+    "evidence": "eod_drafts/2026-07-12/GRF02_TMUX50_CLOSE.md:64-74",
+    "executed_by_this_audit": false
+  },
+  "safe_commands_executed": [
+    {
+      "class": "SAFE_READ_ONLY",
+      "families": [
+        "git metadata/history",
+        "tracked file search and hashing",
+        "tool versions",
+        "systemctl read-only queries",
+        "tmux/atq/cron/process metadata",
+        "socket and firewall rule listing",
+        "limited docker metadata",
+        "loopback parser health GET",
+        "SQLite schema-only mode=ro",
+        "pip check"
+      ],
+      "completed_safe_command_failures": 0,
+      "guard_blocked_sensitive_path_attempts": 1,
+      "artifact_validation_shell_syntax_failures_before_successful_rerun": 2
+    },
+    {
+      "class": "SAFE_ISOLATED_WRITE",
+      "families": [
+        "audit worktree and local branch creation",
+        "audit artifact creation"
+      ],
+      "outside_audit_scope_writes": 0
+    }
+  ],
+  "knowledge_snapshots": {
+    "project_memory": {
+      "head": "ca55742b969404663dff80e4ec2aadfe3c64bdbf",
+      "status": "clean",
+      "observed_at_utc": "2026-07-12T14:45:11Z",
+      "relationship_to_code_freeze": "concurrent/post-code-freeze snapshot"
+    },
+    "handover": [
+      {
+        "path": "/root/handover/CO_TRZEBA_ZROBIC.md",
+        "size_bytes": 22935,
+        "mtime_epoch": 1783865481,
+        "mode": "0644",
+        "sha256": "e73dbbc9be43a085e1fca4f8bab17fa1c9d8b0f1293af0efe0bc5def612ab8ee"
+      },
+      {
+        "path": "/root/handover/MAPA_WIEDZY.md",
+        "size_bytes": 13699,
+        "mtime_epoch": 1783865481,
+        "mode": "0644",
+        "sha256": "be3b578a16b08aee3bd54b6c1f5f055224ec032485198bd2b8e36895cd09f282"
+      }
+    ],
+    "external_instruction_files": [
+      {
+        "path": "/root/.codex/AGENTS.md",
+        "size_bytes": 18178,
+        "mtime_epoch": 1783700758,
+        "mode": "0644",
+        "sha256": "b9e227305d9e2d59054d85f7d7fa128310b82ce9a2d8ba52a11dffc9f5e02243"
+      },
+      {
+        "path": "/root/.openclaw/workspace/AGENTS.md",
+        "size_bytes": 3316,
+        "mtime_epoch": 1774946961,
+        "mode": "0775",
+        "sha256": "997c666d39809c1f380cc4568e4ae3f872aa470adfd968c117017d87a7f96480"
+      },
+      {
+        "path": "/root/AGENTS.md",
+        "size_bytes": 479,
+        "mtime_epoch": 1783666713,
+        "mode": "0644",
+        "sha256": "c99dd0bad6964f1d4dc4066dec13a6736848006f592ce7b7fd8c1814796248ea"
+      },
+      {
+        "path": "/root/CLAUDE.md",
+        "size_bytes": 37376,
+        "mtime_epoch": 1783700495,
+        "mode": "0600",
+        "sha256": "33cfcc64e987d6f810362502d7fff063c5e376a61ab76a8e71436ab5501115bc"
+      }
+    ]
+  },
+  "knowledge_sources": [
+    {
+      "path": "/root/.codex/AGENTS.md",
+      "status": "CURRENT_CANDIDATE",
+      "trust": "highest instruction source below current explicit user request",
+      "sensitive": true
+    },
+    {
+      "path": "CLAUDE.md:1-36",
+      "status": "CURRENT_CANDIDATE",
+      "trust": "high for navigation and safety"
+    },
+    {
+      "path": "CLAUDE.md:38+",
+      "status": "HISTORICAL",
+      "trust": "low for current state"
+    },
+    {
+      "path": "docs/CODEMAP.md",
+      "status": "CURRENT_CANDIDATE",
+      "trust": "high for navigation"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "status": "CURRENT_CANDIDATE",
+      "trust": "high for structure, claims require verification"
+    },
+    {
+      "path": "ZIOMEK_ARCHITECTURE.md",
+      "status": "PARTIALLY_CURRENT",
+      "trust": "medium-high"
+    },
+    {
+      "path": "ZIOMEK_INVARIANTS.md",
+      "status": "PARTIALLY_CURRENT",
+      "trust": "high for contract names"
+    },
+    {
+      "path": "ZIOMEK_DEFINITION_OF_DONE.md",
+      "status": "CURRENT_CANDIDATE",
+      "trust": "high except numeric baselines"
+    },
+    {
+      "path": "memory:ZIOMEK_REGULY_KANON.md",
+      "status": "CURRENT_CANDIDATE",
+      "trust": "high as recorded business decisions; verify code/runtime"
+    },
+    {
+      "path": "memory:todo_master.md + sprint_timeline top + shadow-jobs-registry.md",
+      "status": "CURRENT_CANDIDATE",
+      "trust": "high when read as a composite",
+      "sensitive": true
+    },
+    {
+      "path": "ZIOMEK_BACKLOG.md",
+      "status": "CURRENT_CANDIDATE",
+      "trust": "high only with explicit commit"
+    },
+    {
+      "path": "docs/decisions/ADR-001..008",
+      "status": "PARTIALLY_CURRENT",
+      "trust": "medium; known R6 and core drift"
+    },
+    {
+      "path": "tools/flag_lifecycle_registry.json",
+      "status": "CURRENT_CANDIDATE",
+      "trust": "high for machine registry"
+    },
+    {
+      "path": "docs/eta/06_ground_truth_contract.md",
+      "status": "CURRENT_CANDIDATE",
+      "trust": "high for ETA observable truth contract",
+      "sensitive": true
+    },
+    {
+      "path": "branch:refaktor/architektura@a359e909:docs/refaktor/",
+      "status": "PARTIALLY_CURRENT",
+      "trust": "medium-high branch-scoped source; verify frozen master"
+    },
+    {
+      "path": "eod_drafts/2026-07-10/SPRINT4_*.md + sprint4_artifacts/",
+      "status": "PARTIALLY_CURRENT",
+      "trust": "high for Sprint 4 contracts, time-bound for runtime",
+      "sensitive": true
+    },
+    {
+      "path": "tools/llm_triage.py",
+      "status": "CONFLICTING",
+      "trust": "low for canon; high as side-effect evidence",
+      "sensitive": true
+    },
+    {
+      "path": "audits/2026-07-10/full-system-360/",
+      "status": "PARTIALLY_CURRENT",
+      "trust": "high for method, time-bound for findings"
+    },
+    {
+      "path": "eod_drafts/",
+      "status": "UNKNOWN",
+      "trust": "classify per artifact and commit",
+      "sensitive": true
+    },
+    {
+      "path": "docs/archive/",
+      "status": "HISTORICAL",
+      "trust": "history only",
+      "sensitive": true
+    }
+  ],
+  "scan_exclusions": [
+    {
+      "scope": "secret, env, key, certificate and git config contents",
+      "reason": "explicit safety prohibition"
+    },
+    {
+      "scope": "raw runtime state, logs, databases, GPS, addresses, names and decisions",
+      "reason": "PII and operational data; schema/metadata sufficient"
+    },
+    {
+      "scope": "binary pickle, images and PDF with Markdown equivalents",
+      "reason": "unsafe or unnecessary content"
+    },
+    {
+      "scope": "full contents of 843 eod_drafts and mass JSONL/CSV/log files",
+      "reason": "volume and sensitive-data risk; family plus significant artifacts sampled"
+    },
+    {
+      "scope": "external cloud accounts, provider firewall and external port scan",
+      "reason": "no new credentials, no external login or network operations permitted"
+    },
+    {
+      "scope": "full repository test execution",
+      "reason": "side effects not bounded and active host-load-sensitive observation"
+    }
+  ],
+  "backup_and_restore": {
+    "dispatch_restic_last_observed_result": "success",
+    "backup_sentinel_last_observed_result": "success",
+    "other_snapshot_jobs_observed": "success",
+    "live_backup_script_matches_repo_source": false,
+    "live_sentinel_matches_repo_source": true,
+    "real_restore_proof": false,
+    "rto_proven": false,
+    "rpo_proven": false,
+    "dr1b_status": "HOLD",
+    "interpretation": "backup execution is not restore proof"
+  },
+  "reproducibility": {
+    "source_checkout": "PARTIAL",
+    "dependencies": "PARTIAL",
+    "runtime_configuration": "PARTIAL",
+    "models": "PARTIAL",
+    "data_and_decision_history": "PARTIAL",
+    "systemd_and_infrastructure": "PARTIAL",
+    "backup_restore": "PARTIAL",
+    "overall": "PARTIAL"
+  },
+  "unknowns": [
+    "exact loaded commit and dirty state for every active process",
+    "complete dependency graph for all venvs, timers, containers and system packages",
+    "complete historical flag, environment, rule weight and model versions for a decision",
+    "external provider firewall effectiveness",
+    "real restore result and measured RTO/RPO",
+    "long-term decision replay beyond current retention windows",
+    "canonical physical pickup and customer handoff KPI events",
+    "safe full-suite execution with global network denial",
+    "provenance of external primary LGBM and ETA residual models",
+    "ownership and source of all manual units and drop-ins"
+  ],
+  "prompt_02_gate": {
+    "status": "READY",
+    "scope": "read-only North Star and product canon reconstruction only",
+    "not_ready_for": [
+      "implementation",
+      "feature flag changes",
+      "migration",
+      "deployment",
+      "restart"
+    ],
+    "conditions": [
+      "preserve c7de9f2 as frozen baseline and c1b576e as post-baseline documentation",
+      "use a composite evidence hierarchy rather than one document",
+      "retain resolved R6 35-normal/40-alarm semantics and resolve only alarm trigger/exit/precedence plus KPI semantics",
+      "keep sensitive and raw operational data out of artifacts"
+    ]
+  },
+  "validation": {
+    "json_parse": "PASS: manifest plus 82 unique path-level JSONL records",
+    "diff_check": "PASS: git diff --cached --check after final metadata update",
+    "sensitive_data_scan": "PASS: zero private-key, credential, JWT, email, GPS-pair, credential-URL or raw order/courier assignment patterns",
+    "path_reference_check": "PASS: required artifacts, cited frozen paths and 21 branch-scoped refactor paths; no Markdown URL links",
+    "independent_review": "PASS_AFTER_CORRECTIONS: repository/build, knowledge/history and runtime/security reviewers",
+    "source_worktree_final_compare": "PASS_WITH_CONCURRENT_CHANGE: all three initial content hashes unchanged; source master advanced independently to c1b576e",
+    "staged_scope": "PASS: exactly 8 audit files and no product/config/data paths",
+    "local_permissions": "PASS: audit directory 0700 and files 0600 before commit; Git does not preserve non-executable read-mode bits"
+  }
+}
