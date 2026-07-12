@@ -27,6 +27,9 @@ _TMP_STATE_DIR = tempfile.mkdtemp(prefix="task2a_state_")
 os.environ["DISPATCH_STATE_DIR"] = _TMP_STATE_DIR
 from dispatch_v2 import state_machine as _sm
 _sm._state_path = lambda: os.path.join(_TMP_STATE_DIR, "orders_state.json")
+from dispatch_v2 import coordinator_time_recheck as _ctr
+_ctr.QUEUE_PATH = os.path.join(_TMP_STATE_DIR, "coordinator_time_recheck.json")
+_ctr.LOCK_PATH = _ctr.QUEUE_PATH + ".lock"
 
 from dispatch_v2 import panel_watcher
 
@@ -48,6 +51,10 @@ def fake_emit(event_type, order_id=None, courier_id=None, payload=None, event_id
 def fake_update_from_event(event):
     updated.append(event)
     return {"order_id": event.get("order_id"), "status": "fake_updated"}
+def fake_apply_state_event(event, *, emitted, **_kwargs):
+    if emitted:
+        fake_update_from_event(event)
+    return type("Effect", (), {"should_run_followups": bool(emitted)})()
 def fake_fetch_order_details(zid, csrf=None):
     fetched.append(zid)
     return FAKE_DETAILS.get(zid)
@@ -58,7 +65,7 @@ panel_watcher.emit = fake_emit
 # De-erozja 2026-05-21: ORDER_RETURNED_TO_POOL emitowane przez emit_audit (R-04
 # dual-write 2026-05-13), nie emit. Ten sam fake (identyczna sygnatura) łapie oba.
 panel_watcher.emit_audit = fake_emit
-panel_watcher.update_from_event = fake_update_from_event
+panel_watcher.apply_state_event = fake_apply_state_event
 panel_watcher.fetch_order_details = fake_fetch_order_details
 panel_watcher.state_get_all = fake_state_get_all
 

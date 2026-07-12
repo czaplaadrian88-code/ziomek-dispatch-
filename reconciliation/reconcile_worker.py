@@ -309,6 +309,7 @@ def run(
         dynamic_scaling=dynamic_scaling,
         hard_cap_max=hard_cap_max,
         backlog_alert_threshold=backlog_alert_threshold,
+        apply_state_event_fn=event_bus.apply_state_event,
     )
     # F14: propagate threshold to counts dla _format_alert
     result["counts"]["backlog_alert_threshold"] = backlog_alert_threshold

@@ -17,6 +17,8 @@ contract so retry/DLQ and replay can preserve identity and ordering later.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -34,15 +36,6 @@ ORDER_STATES = frozenset({
     "returned_to_pool",
     "cancelled",
 })
-
-LIFECYCLE_EVENT_TARGETS = {
-    "NEW_ORDER": "planned",
-    "COURIER_ASSIGNED": "assigned",
-    "COURIER_REJECTED_PROPOSAL": "planned",
-    "COURIER_PICKED_UP": "picked_up",
-    "COURIER_DELIVERED": "delivered",
-    "ORDER_RETURNED_TO_POOL": "returned_to_pool",
-}
 
 DATA_ONLY_EVENT_TYPES = frozenset({
     "CZAS_KURIERA_UPDATED",
@@ -93,33 +86,111 @@ CORRECTION_SOURCES = frozenset({
     "cold_start_scan",
 })
 
-# Unambiguous, documented lifecycle graph.  Idempotent self-repetitions are
-# handled separately, because they depend on event identity/fact equality.
-CORE_TRANSITIONS = frozenset({
-    (ABSENT_STATE, "NEW_ORDER"),
-    ("planned", "COURIER_ASSIGNED"),
-    ("assigned", "COURIER_ASSIGNED"),
-    ("assigned", "COURIER_REJECTED_PROPOSAL"),
-    ("assigned", "COURIER_PICKED_UP"),
-    ("assigned", "ORDER_RETURNED_TO_POOL"),
-    ("picked_up", "COURIER_DELIVERED"),
-    ("picked_up", "ORDER_RETURNED_TO_POOL"),
-    ("returned_to_pool", "COURIER_ASSIGNED"),
-})
+PARCEL_CANCEL_SOURCES = frozenset({"parcel_lane_gone"})
 
-# Catch-up transitions are intentionally narrower than the legacy handler and
-# require an explicit source tag.  They cover known event-loss/reconcile paths
-# without making every forward jump legal.
-RECONCILE_TRANSITIONS = frozenset({
-    (ABSENT_STATE, "COURIER_ASSIGNED"),
-    (ABSENT_STATE, "COURIER_PICKED_UP"),
-    (ABSENT_STATE, "COURIER_DELIVERED"),
-    (ABSENT_STATE, "ORDER_RETURNED_TO_POOL"),
-    ("planned", "COURIER_PICKED_UP"),
-    ("planned", "COURIER_DELIVERED"),
-    ("planned", "ORDER_RETURNED_TO_POOL"),
-    ("assigned", "COURIER_DELIVERED"),
-})
+@dataclass(frozen=True)
+class TransitionRule:
+    """Jedyny kanon from + event -> to wraz z typem/proweniencja."""
+
+    from_status: str
+    event_type: str
+    to_status: str
+    kind: str = "core"  # core | reconcile | correction
+    sources: frozenset[str] = frozenset()
+
+
+# Idempotent self-repeat jest rozpoznawany po receipt/fakcie, nie jako dowolna
+# petla grafu. Wszystkie wyjatki maja jawny target i zamknieta liste source.
+TRANSITION_RULES: tuple[TransitionRule, ...] = (
+    TransitionRule(ABSENT_STATE, "NEW_ORDER", "planned"),
+    TransitionRule("planned", "COURIER_ASSIGNED", "assigned"),
+    TransitionRule("assigned", "COURIER_ASSIGNED", "assigned"),
+    TransitionRule("assigned", "COURIER_REJECTED_PROPOSAL", "planned"),
+    TransitionRule("assigned", "COURIER_PICKED_UP", "picked_up"),
+    TransitionRule("assigned", "ORDER_RETURNED_TO_POOL", "returned_to_pool"),
+    TransitionRule("picked_up", "COURIER_DELIVERED", "delivered"),
+    TransitionRule("picked_up", "ORDER_RETURNED_TO_POOL", "returned_to_pool"),
+    TransitionRule("returned_to_pool", "COURIER_ASSIGNED", "assigned"),
+    TransitionRule(
+        ABSENT_STATE, "COURIER_ASSIGNED", "assigned", "reconcile",
+        RECONCILE_SOURCES,
+    ),
+    TransitionRule(
+        ABSENT_STATE, "COURIER_PICKED_UP", "picked_up", "reconcile",
+        RECONCILE_SOURCES,
+    ),
+    TransitionRule(
+        ABSENT_STATE, "COURIER_DELIVERED", "delivered", "reconcile",
+        RECONCILE_SOURCES,
+    ),
+    TransitionRule(
+        ABSENT_STATE, "ORDER_RETURNED_TO_POOL", "returned_to_pool", "reconcile",
+        RECONCILE_SOURCES,
+    ),
+    TransitionRule(
+        "planned", "COURIER_PICKED_UP", "picked_up", "reconcile",
+        RECONCILE_SOURCES,
+    ),
+    TransitionRule(
+        "planned", "COURIER_DELIVERED", "delivered", "reconcile",
+        RECONCILE_SOURCES,
+    ),
+    TransitionRule(
+        "planned", "ORDER_RETURNED_TO_POOL", "returned_to_pool", "reconcile",
+        RECONCILE_SOURCES,
+    ),
+    TransitionRule(
+        "assigned", "COURIER_DELIVERED", "delivered", "reconcile",
+        RECONCILE_SOURCES,
+    ),
+    TransitionRule(
+        "picked_up", "COURIER_ASSIGNED", "picked_up", "correction",
+        CORRECTION_SOURCES,
+    ),
+    TransitionRule(
+        "delivered", "ORDER_RESURRECTED", "assigned", "correction",
+        CORRECTION_SOURCES,
+    ),
+    TransitionRule(
+        "delivered", "ORDER_RESURRECTED", "picked_up", "correction",
+        CORRECTION_SOURCES,
+    ),
+    TransitionRule(
+        "planned", "ORDER_CANCELLED", "cancelled", "correction",
+        PARCEL_CANCEL_SOURCES,
+    ),
+    TransitionRule(
+        "assigned", "ORDER_CANCELLED", "cancelled", "correction",
+        PARCEL_CANCEL_SOURCES,
+    ),
+    TransitionRule(
+        "picked_up", "ORDER_CANCELLED", "cancelled", "correction",
+        PARCEL_CANCEL_SOURCES,
+    ),
+)
+
+FORMAL_FSM_EVENT_TYPES = frozenset(
+    {rule.event_type for rule in TRANSITION_RULES}
+) | DATA_ONLY_EVENT_TYPES
+
+LIFECYCLE_EVENT_TARGETS = {
+    rule.event_type: rule.to_status
+    for rule in TRANSITION_RULES
+    if rule.kind == "core"
+}
+LIFECYCLE_EVENT_TARGETS["ORDER_CANCELLED"] = next(
+    rule.to_status for rule in TRANSITION_RULES if rule.event_type == "ORDER_CANCELLED"
+)
+CORE_TRANSITIONS = frozenset(
+    (rule.from_status, rule.event_type)
+    for rule in TRANSITION_RULES
+    if rule.kind == "core"
+)
+RECONCILE_TRANSITIONS = frozenset(
+    (rule.from_status, rule.event_type)
+    for rule in TRANSITION_RULES
+    if rule.kind == "reconcile"
+)
 
 _REQUIRED_FIELDS = {
     "NEW_ORDER": ("payload.restaurant", "payload.delivery_address"),
@@ -128,6 +199,7 @@ _REQUIRED_FIELDS = {
     "COURIER_PICKED_UP": ("courier_id", "payload.timestamp"),
     "COURIER_DELIVERED": ("payload.timestamp",),
     "ORDER_RETURNED_TO_POOL": ("payload.reason",),
+    "ORDER_CANCELLED": ("payload.reason",),
     "CZAS_KURIERA_UPDATED": (
         "payload.new_ck_iso",
         "payload.new_ck_hhmm",
@@ -218,6 +290,55 @@ def _is_source(source: Optional[str], allowed: frozenset[str]) -> bool:
     normalized = source.lower()
     return normalized in allowed or any(
         normalized.startswith(prefix + ":") for prefix in allowed
+    )
+
+
+def event_idempotency_key(event: Mapping[str, Any]) -> str:
+    """Digest SHA-256 jawnego klucza lub tresci; nie jest ochrona danych PII."""
+    explicit = event.get("idempotency_key") or event.get("event_id")
+    if explicit is not None:
+        raw = str(explicit)
+    else:
+        canonical = {
+            "event_type": event.get("event_type"),
+            "order_id": event.get("order_id"),
+            "courier_id": event.get("courier_id"),
+            "payload": event.get("payload"),
+            "created_at": event.get("created_at"),
+        }
+        raw = json.dumps(
+            canonical,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def rejection_code(verdict: FsmVerdict) -> str:
+    """Mapuje szczegoly walidacji na zamkniety, bezpieczny kod DLQ."""
+    codes = set(verdict.issue_codes)
+    if codes & {
+        "timestamp_unparseable",
+        "timestamp_before_pickup",
+        "timestamp_hhmm_mismatch",
+        "current_timestamp_unparseable",
+        "current_event_time_unparseable",
+    }:
+        return "invalid_timestamp"
+    if "stale_event" in codes:
+        return "stale_event"
+    if "illegal_transition" in codes:
+        return "illegal_transition"
+    return "invalid_payload"
+
+
+def _transition_rules(from_status: str, event_type: str) -> tuple[TransitionRule, ...]:
+    return tuple(
+        rule
+        for rule in TRANSITION_RULES
+        if rule.from_status == from_status and rule.event_type == event_type
     )
 
 
@@ -523,11 +644,7 @@ def validate_order_event(
             issues=tuple(issues),
         )
 
-    known_order_event = (
-        event_type in LIFECYCLE_EVENT_TARGETS
-        or event_type in DATA_ONLY_EVENT_TYPES
-        or event_type in CORRECTION_EVENT_TYPES
-    )
+    known_order_event = event_type in FORMAL_FSM_EVENT_TYPES
     if not known_order_event:
         issues.append(FsmIssue(
             "unsupported_order_event",
@@ -608,8 +725,20 @@ def validate_order_event(
             issues=tuple(issues),
         )
 
-    edge = (from_status, event_type)
-    if edge in CORE_TRANSITIONS:
+    matching_rules = _transition_rules(from_status, event_type)
+    for rule in matching_rules:
+        if rule.to_status != to_status:
+            continue
+        if rule.kind == "core":
+            outcome = FsmOutcome.LEGAL
+        elif _is_source(source, rule.sources):
+            outcome = (
+                FsmOutcome.RECONCILE_EXCEPTION
+                if rule.kind == "reconcile"
+                else FsmOutcome.CORRECTION_EXCEPTION
+            )
+        else:
+            continue
         return FsmVerdict(
             event_type=event_type,
             order_id=order_id,
@@ -617,69 +746,21 @@ def validate_order_event(
             to_status=to_status,
             source=source,
             event_id=event_id,
-            outcome=FsmOutcome.LEGAL,
+            outcome=outcome,
             transition_allowed=True,
             issues=tuple(issues),
         )
 
-    if edge in RECONCILE_TRANSITIONS and _is_source(source, RECONCILE_SOURCES):
-        return FsmVerdict(
-            event_type=event_type,
-            order_id=order_id,
-            from_status=from_status,
-            to_status=to_status,
-            source=source,
-            event_id=event_id,
-            outcome=FsmOutcome.RECONCILE_EXCEPTION,
-            transition_allowed=True,
-            issues=tuple(issues),
-        )
-
-    if (
-        event_type == "COURIER_ASSIGNED"
-        and from_status == "picked_up"
-        and _is_source(source, CORRECTION_SOURCES)
-    ):
-        return FsmVerdict(
-            event_type=event_type,
-            order_id=order_id,
-            from_status=from_status,
-            to_status=from_status,
-            source=source,
-            event_id=event_id,
-            outcome=FsmOutcome.CORRECTION_EXCEPTION,
-            transition_allowed=True,
-            issues=tuple(issues),
-        )
-
-    if (
-        event_type == "ORDER_RESURRECTED"
-        and from_status == "delivered"
-        and to_status in {"assigned", "picked_up"}
-        and _is_source(source, CORRECTION_SOURCES)
-    ):
-        return FsmVerdict(
-            event_type=event_type,
-            order_id=order_id,
-            from_status=from_status,
-            to_status=to_status,
-            source=source,
-            event_id=event_id,
-            outcome=FsmOutcome.CORRECTION_EXCEPTION,
-            transition_allowed=True,
-            issues=tuple(issues),
-        )
-
-    if edge in RECONCILE_TRANSITIONS and not source:
+    if any(rule.kind == "reconcile" for rule in matching_rules) and not source:
         issues.append(FsmIssue(
             "missing_reconcile_source",
             "catch-up transition requires an explicit reconciliation source",
             field="payload.source",
         ))
-    elif event_type == "ORDER_RESURRECTED" and not source:
+    elif any(rule.kind == "correction" for rule in matching_rules) and not source:
         issues.append(FsmIssue(
             "missing_correction_source",
-            "resurrection requires an explicit correction source",
+            "correction transition requires an explicit source",
             field="payload.source",
         ))
     issues.append(FsmIssue(
@@ -707,11 +788,17 @@ __all__ = [
     "FsmIssue",
     "FsmOutcome",
     "FsmVerdict",
+    "FORMAL_FSM_EVENT_TYPES",
     "LIFECYCLE_EVENT_TARGETS",
     "NON_STATE_EVENT_TYPES",
     "ORDER_STATES",
+    "PARCEL_CANCEL_SOURCES",
     "RECONCILE_SOURCES",
     "RECONCILE_TRANSITIONS",
+    "TRANSITION_RULES",
+    "TransitionRule",
+    "event_idempotency_key",
     "parse_order_timestamp",
+    "rejection_code",
     "validate_order_event",
 ]

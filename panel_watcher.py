@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
 from dispatch_v2 import common as C
+from dispatch_v2 import state_machine as _state_machine
 from dispatch_v2 import plan_manager
 from dispatch_v2.common import (
     FIRMOWE_KONTO_ADDRESS_IDS,
@@ -43,7 +44,7 @@ from dispatch_v2.common import (
 from dispatch_v2.osrm_client import haversine as _haversine_km
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
-from dispatch_v2.event_bus import emit, emit_audit
+from dispatch_v2.event_bus import apply_state_event, emit, emit_audit
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
 from dispatch_v2.parser_health_layer3 import install_layer3, record_tick_full
 from dispatch_v2.parser_health_endpoint import start_health_endpoint
@@ -60,7 +61,6 @@ from dispatch_v2.panel_client import (
 from dispatch_v2.state_machine import (
     get_all as state_get_all,
     get_order as state_get_order,
-    update_from_event,
     upsert_order,
     resurrect_order,
     touch_check_cursor,
@@ -1393,14 +1393,17 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             payload=ev_payload,
             event_id=event_id,
         )
-        if result:
-            stats["new"] += 1
-            # Aktualizuj state
-            update_from_event({
+        _new_effect = apply_state_event(
+            {
                 "event_type": "NEW_ORDER",
                 "order_id": zid,
                 "payload": ev_payload,
-            })
+            },
+            event_id=event_id,
+            emitted=bool(result),
+        )
+        if _new_effect.should_run_followups:
+            stats["new"] += 1
             _log.info(f"NEW {zid} {norm['order_type']} {norm['restaurant']} pickup={norm['pickup_at_warsaw']}")
 
             # TASK 4 (2026-05-04): Auto-KOORD on NEW_ORDER dla czasówek.
@@ -1438,21 +1441,26 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
                 "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
             }
+            _assigned_event_id = f"{zid}_COURIER_ASSIGNED_{courier_id}_initial"
             assigned_event = emit_audit(
                 "COURIER_ASSIGNED",
                 order_id=zid,
                 courier_id=courier_id,
                 payload=_assigned_payload,
-                event_id=f"{zid}_COURIER_ASSIGNED_{courier_id}_initial",
+                event_id=_assigned_event_id,
             )
-            if assigned_event:
-                stats["assigned"] += 1
-                update_from_event({
+            _assigned_effect = apply_state_event(
+                {
                     "event_type": "COURIER_ASSIGNED",
                     "order_id": zid,
                     "courier_id": courier_id,
                     "payload": _assigned_payload,
-                })
+                },
+                event_id=_assigned_event_id,
+                emitted=bool(assigned_event),
+            )
+            if _assigned_effect.should_run_followups:
+                stats["assigned"] += 1
                 _check_panel_agree(zid, courier_id, "panel_initial")
                 _check_panel_override(zid, courier_id, "panel_initial")
                 _save_plan_on_assign_signal(zid, courier_id)
@@ -1486,29 +1494,49 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     if status_id == 7:
                         # Doreczone (F10 2026-05-09: canonical event_id eliminuje
                         # duplicate audit_log entries vs ghost_detect/reconcile path).
+                        _delivered_event_id = f"{zid}_COURIER_DELIVERED_canonical"
+                        _declared_delivery_time = raw.get("czas_doreczenia")
+                        _emit_delivery_time = _declared_delivery_time
+                        if (
+                            not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                            and not _emit_delivery_time
+                        ):
+                            _emit_delivery_time = now_iso()
+                        _delivered_payload = {
+                            "timestamp": _emit_delivery_time,
+                            "final_location": state_order.get("delivery_address"),
+                            "deliv_source": "panel",
+                        }
                         ev = emit(
                             "COURIER_DELIVERED",
                             order_id=zid,
                             courier_id=str(raw.get("id_kurier") or ""),
-                            payload={
-                                "timestamp": raw.get("czas_doreczenia") or now_iso(),
-                                "final_location": state_order.get("delivery_address"),
-                                "deliv_source": "panel",
-                            },
-                            event_id=f"{zid}_COURIER_DELIVERED_canonical",
+                            payload=_delivered_payload,
+                            event_id=_delivered_event_id,
                         )
-                        if ev:
-                            stats["delivered"] += 1
-                            _adv_cid = str(raw.get("id_kurier") or "")
-                            update_from_event({
+                        _adv_cid = str(raw.get("id_kurier") or "")
+                        _state_delivery_time = _declared_delivery_time
+                        if (
+                            ev
+                            and not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                            and not _state_delivery_time
+                        ):
+                            _state_delivery_time = now_iso()
+                        _delivered_effect = apply_state_event(
+                            {
                                 "event_type": "COURIER_DELIVERED",
                                 "order_id": zid,
                                 "courier_id": _adv_cid,
                                 "payload": {
-                                    "timestamp": raw.get("czas_doreczenia") or now_iso(),
+                                    "timestamp": _state_delivery_time,
                                     "deliv_source": "panel",
                                 },
-                            })
+                            },
+                            event_id=_delivered_event_id,
+                            emitted=bool(ev),
+                        )
+                        if _delivered_effect.should_run_followups:
+                            stats["delivered"] += 1
                             _log.info(f"DELIVERED {zid}")
                             _advance_plan_on_deliver(
                                 _adv_cid, zid,
@@ -1521,20 +1549,26 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         # ale NIE emitował do events.db → akumulacja phantom orders.
                         reason = "undelivered" if status_id == 8 else "cancelled"
                         _adv_cid = str(raw.get("id_kurier") or "")
+                        _returned_event_id = f"{zid}_ORDER_RETURNED_{reason}_panel_diff"
+                        _returned_payload = {"reason": reason, "source": "panel_diff"}
                         ev = emit_audit(
                             "ORDER_RETURNED_TO_POOL",
                             order_id=zid,
                             courier_id=_adv_cid,
-                            payload={"reason": reason, "source": "panel_diff"},
-                            event_id=f"{zid}_ORDER_RETURNED_{reason}_panel_diff",
+                            payload=_returned_payload,
+                            event_id=_returned_event_id,
                         )
-                        if ev:
-                            update_from_event({
+                        _returned_effect = apply_state_event(
+                            {
                                 "event_type": "ORDER_RETURNED_TO_POOL",
                                 "order_id": zid,
                                 "courier_id": _adv_cid,
-                                "payload": {"reason": reason, "source": "panel_diff"},
-                            })
+                                "payload": _returned_payload,
+                            },
+                            event_id=_returned_event_id,
+                            emitted=bool(ev),
+                        )
+                        if _returned_effect.should_run_followups:
                             _log.info(f"{reason.upper()} {zid} status={status_id} (panel_diff)")
             except Exception as e:
                 _log.warning(f"details for disappeared {zid}: {e}")
@@ -1553,21 +1587,27 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 stats["fetched_details"] += 1
                 if raw and raw.get("id_kurier") and raw["id_kurier"] != KOORDYNATOR_ID:
                     courier_id = str(raw["id_kurier"])
+                    _assigned_event_id = f"{zid}_COURIER_ASSIGNED_{courier_id}_diff"
+                    _assigned_payload = {"source": "panel_diff"}
                     ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=zid,
                         courier_id=courier_id,
-                        payload={"source": "panel_diff"},
-                        event_id=f"{zid}_COURIER_ASSIGNED_{courier_id}_diff",
+                        payload=_assigned_payload,
+                        event_id=_assigned_event_id,
                     )
-                    if ev:
-                        stats["assigned"] += 1
-                        update_from_event({
+                    _assigned_effect = apply_state_event(
+                        {
                             "event_type": "COURIER_ASSIGNED",
                             "order_id": zid,
                             "courier_id": courier_id,
-                            "payload": {"source": "panel_diff"},
-                        })
+                            "payload": _assigned_payload,
+                        },
+                        event_id=_assigned_event_id,
+                        emitted=bool(ev),
+                    )
+                    if _assigned_effect.should_run_followups:
+                        stats["assigned"] += 1
                         _log.info(f"ASSIGNED {zid} -> {courier_id}")
                         _check_panel_agree(zid, courier_id, "panel_diff")
                         _check_panel_override(zid, courier_id, "panel_diff")
@@ -1585,21 +1625,27 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 reassign_checked += 1
                 panel_courier = str(raw.get("id_kurier") or "") if raw else ""
                 if panel_courier and panel_courier != state_courier and raw.get("id_kurier") != KOORDYNATOR_ID:
+                    _assigned_event_id = f"{zid}_COURIER_ASSIGNED_{panel_courier}_reassign"
+                    _assigned_payload = {"source": "panel_reassign"}
                     ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=zid,
                         courier_id=panel_courier,
-                        payload={"source": "panel_reassign"},
-                        event_id=f"{zid}_COURIER_ASSIGNED_{panel_courier}_reassign",
+                        payload=_assigned_payload,
+                        event_id=_assigned_event_id,
                     )
-                    if ev:
-                        stats["assigned"] += 1
-                        update_from_event({
+                    _assigned_effect = apply_state_event(
+                        {
                             "event_type": "COURIER_ASSIGNED",
                             "order_id": zid,
                             "courier_id": panel_courier,
-                            "payload": {"source": "panel_reassign"},
-                        })
+                            "payload": _assigned_payload,
+                        },
+                        event_id=_assigned_event_id,
+                        emitted=bool(ev),
+                    )
+                    if _assigned_effect.should_run_followups:
+                        stats["assigned"] += 1
                         _log.info(f"REASSIGNED {zid} {state_courier} -> {panel_courier}")
                         _check_panel_agree(zid, panel_courier, "panel_reassign")
                         _check_panel_override(zid, panel_courier, "panel_reassign")
@@ -1691,26 +1737,32 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
                         )
                         _target_cid = _panel_cid
+                    _packs_event_id = f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_packs"
+                    _packs_payload = {
+                        "source": "packs_fallback",
+                        "previous_cid": _state_cid or None,
+                        "nick": _nick_key,
+                    }
                     _ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=_oid_str,
                         courier_id=_target_cid,
-                        payload={
-                            "source": "packs_fallback",
-                            "previous_cid": _state_cid or None,
-                            "nick": _nick_key,
-                        },
-                        event_id=f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_packs",
+                        payload=_packs_payload,
+                        event_id=_packs_event_id,
                     )
-                    if _ev:
-                        stats["assigned"] += 1
-                        _packs_catchup += 1
-                        update_from_event({
+                    _packs_effect = apply_state_event(
+                        {
                             "event_type": "COURIER_ASSIGNED",
                             "order_id": _oid_str,
                             "courier_id": _target_cid,
-                            "payload": {"source": "packs_fallback"},
-                        })
+                            "payload": _packs_payload,
+                        },
+                        event_id=_packs_event_id,
+                        emitted=bool(_ev),
+                    )
+                    if _packs_effect.should_run_followups:
+                        stats["assigned"] += 1
+                        _packs_catchup += 1
                         _log.info(
                             f"PACKS_CATCHUP {_oid_str} → cid={_target_cid} nick={_nick_key!r} "
                             f"(was cid={_state_cid or 'None'})"
@@ -1816,34 +1868,50 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     continue  # not delivered — maybe returned/cancelled, let reconcile handle
                 _deliv_addr_gd = parsed.get("delivery_addresses", {}).get(str(_oid)) \
                     or _sorder.get("delivery_address")
+                _ghost_event_id = f"{_oid}_COURIER_DELIVERED_canonical"
+                _declared_ghost_time = _raw_gd.get("czas_doreczenia")
+                _emit_ghost_time = _declared_ghost_time
+                if (
+                    not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                    and not _emit_ghost_time
+                ):
+                    _emit_ghost_time = now_iso()
+                _ghost_payload = {
+                    "timestamp": _emit_ghost_time,
+                    "final_location": _deliv_addr_gd,
+                    "delivery_address": _deliv_addr_gd,
+                    "source": "packs_ghost_detect",
+                    "deliv_source": "packs_ghost_detect",
+                }
                 _ev_gd = emit(
                     "COURIER_DELIVERED",
                     order_id=str(_oid),
                     courier_id=_state_cid,
-                    payload={
-                        "timestamp": _raw_gd.get("czas_doreczenia") or now_iso(),
-                        "final_location": _deliv_addr_gd,
-                        "delivery_address": _deliv_addr_gd,
-                        "source": "packs_ghost_detect",
-                        "deliv_source": "packs_ghost_detect",
-                    },
-                    event_id=f"{_oid}_COURIER_DELIVERED_canonical",
+                    payload=_ghost_payload,
+                    event_id=_ghost_event_id,
                 )
-                if _ev_gd:
-                    stats["delivered"] += 1
-                    _ghost_confirmed += 1
-                    update_from_event({
+                _ghost_state_payload = dict(_ghost_payload)
+                if (
+                    _ev_gd
+                    and not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                    and not _declared_ghost_time
+                ):
+                    _ghost_state_payload["timestamp"] = now_iso()
+                elif _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED:
+                    _ghost_state_payload["timestamp"] = _declared_ghost_time
+                _ghost_effect = apply_state_event(
+                    {
                         "event_type": "COURIER_DELIVERED",
                         "order_id": str(_oid),
                         "courier_id": _state_cid,
-                        "payload": {
-                            "timestamp": _raw_gd.get("czas_doreczenia") or now_iso(),
-                            "final_location": _deliv_addr_gd,
-                            "delivery_address": _deliv_addr_gd,
-                            "source": "packs_ghost_detect",
-                            "deliv_source": "packs_ghost_detect",
-                        },
-                    })
+                        "payload": _ghost_state_payload,
+                    },
+                    event_id=_ghost_event_id,
+                    emitted=bool(_ev_gd),
+                )
+                if _ghost_effect.should_run_followups:
+                    stats["delivered"] += 1
+                    _ghost_confirmed += 1
                     _log.info(
                         f"V3.20 PACKS_GHOST oid={_oid} cid={_state_cid} "
                         f"nick={_nick_gd!r} (zniknął z packs, panel status=7)"
@@ -1967,33 +2035,49 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         kid = str(raw.get("id_kurier") or "")
         deliv_addr = parsed.get("delivery_addresses", {}).get(zid) or sorder.get("delivery_address")
         if sid == 7:
+            _delivered_event_id = f"{zid}_COURIER_DELIVERED_canonical"
+            _declared_delivery_time = raw.get("czas_doreczenia")
+            _emit_delivery_time = _declared_delivery_time
+            if (
+                not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                and not _emit_delivery_time
+            ):
+                _emit_delivery_time = now_iso()
+            _delivered_payload = {
+                "timestamp": _emit_delivery_time,
+                "final_location": deliv_addr,
+                "delivery_address": deliv_addr,
+                "source": "reconcile",
+                "deliv_source": "reconcile",
+            }
             ev = emit(
                 "COURIER_DELIVERED",
                 order_id=zid,
                 courier_id=kid,
-                payload={
-                    "timestamp": raw.get("czas_doreczenia") or now_iso(),
-                    "final_location": deliv_addr,
-                    "delivery_address": deliv_addr,
-                    "source": "reconcile",
-                    "deliv_source": "reconcile",
-                },
-                event_id=f"{zid}_COURIER_DELIVERED_canonical",
+                payload=_delivered_payload,
+                event_id=_delivered_event_id,
             )
-            if ev:
-                stats["delivered"] += 1
-                update_from_event({
+            _delivered_state_payload = dict(_delivered_payload)
+            if (
+                ev
+                and not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                and not _declared_delivery_time
+            ):
+                _delivered_state_payload["timestamp"] = now_iso()
+            elif _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED:
+                _delivered_state_payload["timestamp"] = _declared_delivery_time
+            _delivered_effect = apply_state_event(
+                {
                     "event_type": "COURIER_DELIVERED",
                     "order_id": zid,
                     "courier_id": kid,
-                    "payload": {
-                        "timestamp": raw.get("czas_doreczenia") or now_iso(),
-                        "final_location": deliv_addr,
-                        "delivery_address": deliv_addr,
-                        "source": "reconcile",
-                        "deliv_source": "reconcile",
-                    },
-                })
+                    "payload": _delivered_state_payload,
+                },
+                event_id=_delivered_event_id,
+                emitted=bool(ev),
+            )
+            if _delivered_effect.should_run_followups:
+                stats["delivered"] += 1
                 _log.info(f"DELIVERED {zid} (reconcile) kurier={kid}")
                 _advance_plan_on_deliver(
                     kid, zid,
@@ -2002,18 +2086,24 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 )
         elif sid in (8, 9):
             reason = "undelivered" if sid == 8 else "cancelled"
+            _returned_event_id = f"{zid}_ORDER_RETURNED_{reason}_reconcile"
+            _returned_payload = {"reason": reason, "source": "reconcile"}
             ev = emit_audit(
                 "ORDER_RETURNED_TO_POOL",
                 order_id=zid,
-                payload={"reason": reason, "source": "reconcile"},
-                event_id=f"{zid}_ORDER_RETURNED_{reason}_reconcile",
+                payload=_returned_payload,
+                event_id=_returned_event_id,
             )
-            if ev:
-                update_from_event({
+            _returned_effect = apply_state_event(
+                {
                     "event_type": "ORDER_RETURNED_TO_POOL",
                     "order_id": zid,
-                    "payload": {"reason": reason, "source": "reconcile"},
-                })
+                    "payload": _returned_payload,
+                },
+                event_id=_returned_event_id,
+                emitted=bool(ev),
+            )
+            if _returned_effect.should_run_followups:
                 _log.info(f"{reason.upper()} {zid} (reconcile)")
                 _remove_stops_on_return(
                     str(sorder.get("courier_id") or ""),
@@ -2083,29 +2173,31 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     pu_coords = tuple(_st_pc)
             if pu_coords is None:
                 pu_coords = _COORDS.get(aid_str) if aid_str else None
+            _pickup_event_id = f"{zid}_COURIER_PICKED_UP_reconcile"
+            _pickup_payload = {
+                "timestamp": dzien_odbioru,
+                "pickup_coords": list(pu_coords) if pu_coords else None,
+                "source": "reconcile",
+            }
             ev = emit(
                 "COURIER_PICKED_UP",
                 order_id=zid,
                 courier_id=kid,
-                payload={
-                    "timestamp": dzien_odbioru,
-                    "pickup_coords": list(pu_coords) if pu_coords else None,
-                    "source": "reconcile",
-                },
-                event_id=f"{zid}_COURIER_PICKED_UP_reconcile",
+                payload=_pickup_payload,
+                event_id=_pickup_event_id,
             )
-            if ev:
-                stats["picked_up"] += 1
-                update_from_event({
+            _pickup_effect = apply_state_event(
+                {
                     "event_type": "COURIER_PICKED_UP",
                     "order_id": zid,
                     "courier_id": kid,
-                    "payload": {
-                        "timestamp": dzien_odbioru,
-                        "pickup_coords": list(pu_coords) if pu_coords else None,
-                        "source": "reconcile",
-                    },
-                })
+                    "payload": _pickup_payload,
+                },
+                event_id=_pickup_event_id,
+                emitted=bool(ev),
+            )
+            if _pickup_effect.should_run_followups:
+                stats["picked_up"] += 1
                 _log.info(f"PICKED_UP {zid} (reconcile) kurier={kid} at {dzien_odbioru}")
                 _update_plan_on_picked_up(kid, zid, dzien_odbioru)
     # ================== END PICKED_UP RECONCILE ==================
@@ -2151,26 +2243,31 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     continue
                 _st_pc = _sorder.get("pickup_coords")
                 _pc = list(_st_pc) if (_st_pc and len(_st_pc) == 2) else None
+                _pickup_event_id = f"{_zid}_COURIER_PICKED_UP_gtfallback"
+                _pickup_payload = {
+                    "timestamp": _pu_ts,
+                    "pickup_coords": _pc,
+                    "source": "ground_truth_fallback",
+                }
                 _ev = emit(
                     "COURIER_PICKED_UP",
                     order_id=_zid,
                     courier_id=_kid,
-                    payload={"timestamp": _pu_ts, "pickup_coords": _pc,
-                             "source": "ground_truth_fallback"},
-                    event_id=f"{_zid}_COURIER_PICKED_UP_gtfallback",
+                    payload=_pickup_payload,
+                    event_id=_pickup_event_id,
                 )
-                if _ev:
-                    stats["picked_up"] += 1
-                    update_from_event({
+                _pickup_effect = apply_state_event(
+                    {
                         "event_type": "COURIER_PICKED_UP",
                         "order_id": _zid,
                         "courier_id": _kid,
-                        "payload": {
-                            "timestamp": _pu_ts,
-                            "pickup_coords": _pc,
-                            "source": "ground_truth_fallback",
-                        },
-                    })
+                        "payload": _pickup_payload,
+                    },
+                    event_id=_pickup_event_id,
+                    emitted=bool(_ev),
+                )
+                if _pickup_effect.should_run_followups:
+                    stats["picked_up"] += 1
                     _log.info(f"PICKED_UP {_zid} (ground_truth_fallback) kurier={_kid} at {_pu_ts}")
                     _update_plan_on_picked_up(_kid, _zid, _pu_ts)
         except Exception as _e:
@@ -2284,7 +2381,14 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         payload=evt["payload"],
                         event_id=event_id_str,
                     )
-                    update_from_event(evt)
+                    _ck_effect = apply_state_event(
+                        evt,
+                        event_id=event_id_str,
+                        # Legacy path stosowal state update niezaleznie od DUP.
+                        emitted=True,
+                    )
+                    if not _ck_effect.should_run_followups:
+                        continue
                     # FIX-E (B1): committed się zmienił → unieważnij plan kuriera,
                     # by apka odświeżyła /orders i pobrała świeże eta_committed.
                     _invalidate_plan_on_committed_change(
@@ -2320,7 +2424,14 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         payload=evt_p["payload"],
                         event_id=p_event_id,
                     )
-                    update_from_event(evt_p)
+                    _pickup_time_effect = apply_state_event(
+                        evt_p,
+                        event_id=p_event_id,
+                        # Legacy path stosowal state update niezaleznie od DUP.
+                        emitted=True,
+                    )
+                    if not _pickup_time_effect.should_run_followups:
+                        continue
                     # FIX-E (B1): pickup/ready (czasówka) się zmienił → ten sam refresh
                     _invalidate_plan_on_committed_change(
                         zid, state_order.get("courier_id"))
@@ -2415,23 +2526,29 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
                     f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
                 )
                 _target_cid = _panel_cid
+            _cold_event_id = f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_coldstart"
+            _cold_payload = {
+                "source": "cold_start_scan",
+                "nick": _nick_key,
+            }
             _ev = emit_audit(
                 "COURIER_ASSIGNED",
                 order_id=_oid_str,
                 courier_id=_target_cid,
-                payload={
-                    "source": "cold_start_scan",
-                    "nick": _nick_key,
-                },
-                event_id=f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_coldstart",
+                payload=_cold_payload,
+                event_id=_cold_event_id,
             )
-            if _ev:
-                update_from_event({
+            _cold_effect = apply_state_event(
+                {
                     "event_type": "COURIER_ASSIGNED",
                     "order_id": _oid_str,
                     "courier_id": _target_cid,
-                    "payload": {"source": "cold_start_scan"},
-                })
+                    "payload": _cold_payload,
+                },
+                event_id=_cold_event_id,
+                emitted=bool(_ev),
+            )
+            if _cold_effect.should_run_followups:
                 stats["cold_start_emitted"] += 1
                 _log.info(
                     f"COLD_START_CATCHUP {_oid_str} → cid={_target_cid} "

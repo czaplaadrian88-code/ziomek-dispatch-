@@ -14,6 +14,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -76,10 +77,15 @@ def _run_scan(parsed, state_orders=(), kurier_ids=None, raw_fetches=None,
         if update_captures is not None:
             update_captures.append(ev)
 
+    def fake_apply(ev, *, emitted, **_kwargs):
+        if emitted:
+            fake_update(ev)
+        return SimpleNamespace(should_run_followups=bool(emitted))
+
     with mock.patch("dispatch_v2.panel_watcher.state_get_all", return_value=state), \
          mock.patch("dispatch_v2.panel_watcher.fetch_order_details", side_effect=fake_fetch), \
          mock.patch("dispatch_v2.panel_watcher.emit_audit", side_effect=fake_emit), \
-         mock.patch("dispatch_v2.panel_watcher.update_from_event", side_effect=fake_update), \
+         mock.patch("dispatch_v2.panel_watcher.apply_state_event", side_effect=fake_apply), \
          mock.patch("dispatch_v2.panel_watcher._save_plan_on_assign"), \
          mock.patch("builtins.open", mock.mock_open(read_data=kurier_ids_json)):
         return panel_watcher._post_restart_cold_start_scan(parsed, csrf="test")

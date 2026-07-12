@@ -24,7 +24,13 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from dispatch_v2 import calib_maps  # SP-B2 (2026-06-11): prep-bias shadow w _serialize_result
-from dispatch_v2 import common as C, event_bus, pending_pool, state_machine
+from dispatch_v2 import (
+    common as C,
+    event_bus,
+    event_retry,
+    pending_pool,
+    state_machine,
+)
 from dispatch_v2.common import load_config, now_iso, setup_logger
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
@@ -1747,8 +1753,13 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
             )
         except Exception as e:
             stats["failed"] += 1
-            _log.error(f"process_event fail {eid}: {e}\n{traceback.format_exc()}")
-            event_bus.mark_failed(eid, str(e))
+            descriptor = event_retry.classify_failure(e)
+            _log.error(
+                "SHADOW_EVENT_FAILURE "
+                f"class={descriptor.failure_class.value} "
+                f"code={descriptor.error_code}"
+            )
+            event_bus.mark_failed(eid, e)
 
     # Opcja B: jeden atomowy zapis zebranych PROPOSE → pending_proposals.json.
     # Fail-soft (NIGDY nie wywala tick'a). No-op gdy flaga OFF / brak PROPOSE.
