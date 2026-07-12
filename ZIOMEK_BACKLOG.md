@@ -2,8 +2,9 @@
 
 > Status: AKTYWNY - SPRINT 1 WDROZONY, OBSERWACJA SHADOW W TOKU; AUDIT360
 > DR1A/OPS0 SOURCE-ONLY W MASTERZE, D1/R0 HOLD DO AT-214; A0/I1/N0
-> WDROZONE I ZWERYFIKOWANE LIVE, ETA PROMOCJA HOLD; SEC0 SOURCE W MASTERZE,
-> E0/DATA0 BRANCH-COMPLETE I HOLD PRZED MERGE/ON
+> WDROZONE I ZWERYFIKOWANE LIVE, N0 FOLLOW-UP `0891b06` OK; ETA PROMOCJA
+> HOLD; SEC0 SOURCE W MASTERZE, E0/DATA0 BRANCH-COMPLETE I HOLD; V214/SEC1/E1
+> URUCHOMIONE W ODDZIELNYCH WORKTREE, BEZ NOWYCH OPERACJI LIVE
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -96,7 +97,7 @@ przed rozpoczeciem implementacji.
 | Z-P2-04 | Konfiguracja miasta i tenanta | BBox, centrum, dzielnice, traffic i domyslne miasto sa bialostockie w wielu modulach. | Nowe miasto nie bedzie wymagalo kopiowania silnika ani ryzyka cross-city geocode. | XL | Decyzja B-04 |
 | Z-P2-05 | Ewolucja plikow stanu do repozytorium danych | Krytyczny stan jest rozproszony po wielu JSON/JSONL; czesc plikow jest multi-writer. | Najpierw rejestr ownership/schema, potem selektywna migracja tylko plikow z realnym problemem skali lub transakcji. | XL | Bez big-bang rewrite |
 | Z-P2-06 | Wiarygodny OSRM health i polityka cache | Health uznawal fallback za zdrowy OSRM; eviction nadal sortuje duzy cache pod globalnym lockiem. | Faza A rozdziela upstream/cache/fallback i mierzy contention/eviction; optymalizacja polityki cache pozostaje otwarta dla zachowania parytetu decyzji. | M | FAZA A health/telemetry DONE; optymalizacja eviction otwarta |
-| Z-P2-07 | Hermetyczne testy i fixture danych — **DONE/LIVE 2026-07-11** (root `conftest.py`: sandbox DISPATCH_STATE_DIR + write/delete-guard na prymitywach FS + tryb STRICT [suita bez dispatch_state = 0 failed] + subprocess-guard sitecustomize; kwarantanna zewnetrzna z powodami; N0 manifest v4 5171 nodeidow, fail-closed hard-error/denominator, finalny systemd E2E 5140/0/27/8/0XPASS) | Czesc testow czytala zywe logi, aliasy i exclusion state hosta. | Testy dzialaja deterministycznie bez zapisu do produkcji; nocny guard nie przyjmie zmiany denominatora ani hard-error jako zielonego baseline. | L | Timer active; najblizszy bieg 12.07 01:15 UTC |
+| Z-P2-07 | Hermetyczne testy i fixture danych — **DONE/LIVE + N0 FOLLOW-UP 2026-07-12** (root `conftest.py`: sandbox+write/delete/subprocess guard; STRICT; N0 manifest v5 5183 nodeidy; prywatny writer historii utrzymuje 0600; systemd E2E 5155/24/8/0XPASS/0fail, contract OK) | Czesc testow czytala zywe logi, aliasy i exclusion state hosta; pierwszy zwykly N0 poprawnie zatrzymal 11 nowych testow SEC0 poza manifestem i ujawnil replace 0644. | Testy dzialaja deterministycznie bez zapisu do produkcji; nocny guard nie przyjmie zmiany denominatora ani hard-error jako zielonego baseline, a historia pozostaje prywatna. | L | DONE/LIVE `0891b06`; timer active, next 13.07 01:15 UTC; raport `AUDIT360_N0_LIVE_AND_NEXT_LANES_LAUNCH.md` |
 | Z-P2-08 | Least privilege dla uslug | Wiele demonow dziala jako root; hardening systemd jest nierowny. | Kompromitacja jednego procesu dostanie mniejszy zakres zapisu i odczytu sekretow. | XL | Migracja sciezek i ownership |
 
 ### P3 - redukcja entropii
@@ -195,16 +196,23 @@ sieci/credential/restart; DATA0 nie dotyka live corpus przed at-214 i nie usuwa
 danych przed B-05. Odbior:
 `eod_drafts/2026-07-12/AUDIT360_SEC0_E0_DATA0_CLOSE.md`.
 
-Kolejne trzy przygotowane, ale niewystartowane lane'y:
+Kolejne trzy lane'y uruchomiono 2026-07-12 08:34 UTC na wspolnej bazie
+`0891b06`, w osobnych worktree i bez zgody na wspolne pliki lub nowe live:
 
-1. `A360-V214 CANARY-DISPOSITION` (`high`) — odczyt joba 214 i sensitivity;
-2. `A360-SEC1 HOST-REMEDIATION` (`max`) — bind/firewall/provider/credential,
-   twardo zablokowany do osobnego ACK i maintenance window;
-3. `A360-E1 DURABLE EVENT OUTBOX` (`max`) — branch-only envelope, failure
-   journal, outbox i receipts per consumer; bez worker/migracji/live.
+1. tmux74 `A360-V214 CANARY-DISPOSITION` (`high`), branch
+   `evidence/a360-v214-canary-disposition` — lekki preflight i WAIT do realnego
+   outputu joba 214; bez wczesniejszego uruchomienia lub live replayu;
+2. tmux75 `A360-SEC1 HOST-REMEDIATION` (`max`), branch
+   `security/a360-sec1-host-remediation` — SOURCE/PREP; firewall/provider/bind/
+   credential/kontener/restart live nadal twardo zablokowane do osobnego ACK;
+3. tmux76 `A360-E1 DURABLE EVENT OUTBOX` (`max`), branch
+   `reliability/a360-e1-durable-outbox` — branch-only envelope, failure journal,
+   outbox i receipts; bez worker/migracji/flagi/deployu/restartu live.
 
 Karta zakresu, wpływu, testów i rollbacku:
 `eod_drafts/2026-07-12/AUDIT360_NEXT_THREE_AFTER_SEC0_E0_DATA0.md`.
+Launch i N0 live:
+`eod_drafts/2026-07-12/AUDIT360_N0_LIVE_AND_NEXT_LANES_LAUNCH.md`.
 
 52 `UNVERIFIED` nie sa zadaniami naprawczymi. Cztery `REFUTED` pozostaja
 zamkniete. Pelne disposition wszystkich CONFIRMED/PARTIAL/PLAUSIBLE, aktualne
