@@ -74,7 +74,7 @@ def _migrated_conn(path) -> sqlite3.Connection:
     _legacy_db(path)
     conn = sqlite3.connect(path, isolation_level=None)
     conn.row_factory = sqlite3.Row
-    event_retry_metadata.apply_to_connection(conn)
+    event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     return conn
 
 
@@ -142,8 +142,12 @@ def test_migration_inspect_is_read_only_and_apply_is_idempotent(tmp_path):
     assert "attempt_count" in before["missing_columns"]
 
     conn = sqlite3.connect(db_path, isolation_level=None)
-    first = event_retry_metadata.apply_to_connection(conn)
-    second = event_retry_metadata.apply_to_connection(conn)
+    first = event_retry_metadata.apply_to_connection(
+        conn, synthetic_sandbox=True
+    )
+    second = event_retry_metadata.apply_to_connection(
+        conn, synthetic_sandbox=True
+    )
     assert first["after"]["ready"] is True
     assert second["before"]["ready"] is True
     assert second["after"]["missing_columns"] == []
@@ -176,7 +180,7 @@ def test_migration_backfills_retry_alias_and_due_event_stays_visible(tmp_path):
 
     conn = sqlite3.connect(db_path, isolation_level=None)
     conn.row_factory = sqlite3.Row
-    event_retry_metadata.apply_to_connection(conn)
+    event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     alias_row = conn.execute(
         "SELECT next_attempt_at,next_retry_at FROM events "
         "WHERE event_id='legacy-due'"
@@ -213,7 +217,7 @@ def test_migration_retry_alias_conflict_is_hold_without_partial_write(tmp_path):
     assert plan["next_retry_alias_backfill_count"] == 0
     assert plan["next_retry_alias_conflict_count"] == 1
     with pytest.raises(RuntimeError, match="HOLD"):
-        event_retry_metadata.apply_to_connection(conn)
+        event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     conflict_row = conn.execute(
         "SELECT next_attempt_at,next_retry_at,idempotency_key "
         "FROM events WHERE event_id='conflict'"
@@ -393,7 +397,7 @@ def test_mark_processed_default_does_not_call_retry_schema_helper(
 def test_migration_refuses_missing_events_table(tmp_path):
     conn = sqlite3.connect(tmp_path / "empty.db", isolation_level=None)
     with pytest.raises(RuntimeError, match="events table"):
-        event_retry_metadata.apply_to_connection(conn)
+        event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     conn.close()
 
 
@@ -403,7 +407,7 @@ def test_migration_rejects_wrong_column_without_partial_apply(tmp_path):
     conn = sqlite3.connect(db_path, isolation_level=None)
     conn.execute("ALTER TABLE events ADD COLUMN attempt_count TEXT")
     with pytest.raises(RuntimeError, match="incompatible"):
-        event_retry_metadata.apply_to_connection(conn)
+        event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     columns = {
         row[1]: row[2] for row in conn.execute("PRAGMA table_info(events)")
     }
@@ -418,7 +422,7 @@ def test_migration_rejects_wrong_index_without_partial_apply(tmp_path):
     conn = sqlite3.connect(db_path, isolation_level=None)
     conn.execute("CREATE INDEX idx_events_retry_due ON events(status)")
     with pytest.raises(RuntimeError, match="incompatible"):
-        event_retry_metadata.apply_to_connection(conn)
+        event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     assert "attempt_count" not in {
         row[1] for row in conn.execute("PRAGMA table_info(events)")
     }
@@ -437,7 +441,7 @@ def test_migration_rolls_back_all_ddl_on_precommit_failure(tmp_path, monkeypatch
     )
     monkeypatch.setattr(event_retry_metadata, "MIGRATION_INDEXES", broken)
     with pytest.raises(sqlite3.OperationalError):
-        event_retry_metadata.apply_to_connection(conn)
+        event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     assert "attempt_count" not in {
         row[1] for row in conn.execute("PRAGMA table_info(events)")
     }
@@ -449,7 +453,9 @@ def test_rw_admin_paths_never_create_missing_db(tmp_path):
     migration_typo = tmp_path / "missing migration?#.db"
     replay_typo = tmp_path / "missing replay?#.db"
     with pytest.raises(sqlite3.OperationalError):
-        event_retry_metadata.apply(str(migration_typo))
+        event_retry_metadata.apply(
+            str(migration_typo), synthetic_sandbox=True
+        )
     assert migration_typo.exists() is False
 
     with pytest.raises(sqlite3.OperationalError):

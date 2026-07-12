@@ -3,6 +3,8 @@
 Import jest czysty. CLI bez ``--apply`` otwiera jawnie wskazana baze w trybie
 read-only. Kod nie zna sciezki produkcyjnej i nie wybiera polityki retencji.
 Nie istnieje destrukcyjna migracja w dol; evidence zostaje zachowane.
+Mutujace ``--apply`` wymaga jawnego ``--synthetic-sandbox`` i celu pod ``/tmp``;
+znane live DB, hardlinki i symlinki sa odrzucane przed otwarciem SQLite.
 """
 from __future__ import annotations
 
@@ -15,6 +17,10 @@ from typing import Any, Optional
 
 from dispatch_v2 import event_retry
 from dispatch_v2.migrations import event_retry_metadata
+from dispatch_v2.migrations.synthetic_target_guard import (
+    require_synthetic_connection,
+    require_synthetic_migration_target,
+)
 
 
 MIGRATION_ID = "a360_e1_durable_event_outbox_v1"
@@ -392,8 +398,13 @@ def inspect(db_path: str) -> dict[str, Any]:
         conn.close()
 
 
-def apply_to_connection(conn: sqlite3.Connection) -> dict[str, Any]:
+def apply_to_connection(
+    conn: sqlite3.Connection,
+    *,
+    synthetic_sandbox: bool = False,
+) -> dict[str, Any]:
     """Tworzy caly schemat atomowo; nie dodaje zadnego kontraktu/policy."""
+    require_synthetic_connection(conn, synthetic_sandbox=synthetic_sandbox)
     if conn.in_transaction:
         raise RuntimeError("migration requires a connection outside a transaction")
     before = inspect_connection(conn)
@@ -437,16 +448,24 @@ def apply_to_connection(conn: sqlite3.Connection) -> dict[str, Any]:
     return {"before": before, "after": after}
 
 
-def apply(db_path: str) -> dict[str, Any]:
+def apply(
+    db_path: str,
+    *,
+    synthetic_sandbox: bool = False,
+) -> dict[str, Any]:
+    guarded_path = require_synthetic_migration_target(
+        db_path,
+        synthetic_sandbox=synthetic_sandbox,
+    )
     conn = sqlite3.connect(
-        _db_uri(db_path, mode="rw"),
+        _db_uri(str(guarded_path), mode="rw"),
         uri=True,
         timeout=10.0,
         isolation_level=None,
     )
     conn.execute("PRAGMA busy_timeout=5000")
     try:
-        return apply_to_connection(conn)
+        return apply_to_connection(conn, synthetic_sandbox=True)
     finally:
         conn.close()
 
@@ -459,9 +478,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="wykonaj addytywna migracje (default: read-only inspect)",
     )
+    parser.add_argument(
+        "--synthetic-sandbox",
+        action="store_true",
+        help="wymagane z --apply; cel musi byc kanonicznym plikiem pod /tmp",
+    )
     args = parser.parse_args(argv)
     try:
-        result = apply(args.db) if args.apply else inspect(args.db)
+        result = (
+            apply(args.db, synthetic_sandbox=args.synthetic_sandbox)
+            if args.apply
+            else inspect(args.db)
+        )
     except (OSError, sqlite3.Error, RuntimeError) as exc:
         descriptor = event_retry.classify_failure(exc)
         print(json.dumps({

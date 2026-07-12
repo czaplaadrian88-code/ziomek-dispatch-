@@ -7,7 +7,8 @@ tworzy tabel/indeksow.
 Przyklady (uruchomienie produkcyjne wymaga osobnego ACK)::
 
     python -m dispatch_v2.migrations.event_retry_metadata --db /tmp/events.db
-    python -m dispatch_v2.migrations.event_retry_metadata --db /tmp/events.db --apply
+    python -m dispatch_v2.migrations.event_retry_metadata \
+        --db /tmp/events.db --apply --synthetic-sandbox
 """
 from __future__ import annotations
 
@@ -20,6 +21,10 @@ from pathlib import Path
 from typing import Any
 
 from dispatch_v2 import event_retry
+from dispatch_v2.migrations.synthetic_target_guard import (
+    require_synthetic_connection,
+    require_synthetic_migration_target,
+)
 
 
 MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -300,8 +305,13 @@ def inspect(db_path: str) -> dict[str, Any]:
         conn.close()
 
 
-def apply_to_connection(conn: sqlite3.Connection) -> dict[str, Any]:
+def apply_to_connection(
+    conn: sqlite3.Connection,
+    *,
+    synthetic_sandbox: bool = False,
+) -> dict[str, Any]:
     """Atomowo i idempotentnie dodaje kolumny oraz indeksy do test/ACK DB."""
+    require_synthetic_connection(conn, synthetic_sandbox=synthetic_sandbox)
     before = inspect_connection(conn)
     if not before["events_table_exists"]:
         raise RuntimeError("events table does not exist")
@@ -367,16 +377,24 @@ def apply_to_connection(conn: sqlite3.Connection) -> dict[str, Any]:
     return {"before": before, "after": after}
 
 
-def apply(db_path: str) -> dict[str, Any]:
+def apply(
+    db_path: str,
+    *,
+    synthetic_sandbox: bool = False,
+) -> dict[str, Any]:
+    guarded_path = require_synthetic_migration_target(
+        db_path,
+        synthetic_sandbox=synthetic_sandbox,
+    )
     conn = sqlite3.connect(
-        _db_uri(db_path, mode="rw"),
+        _db_uri(str(guarded_path), mode="rw"),
         uri=True,
         timeout=10.0,
         isolation_level=None,
     )
     conn.execute("PRAGMA busy_timeout=5000")
     try:
-        return apply_to_connection(conn)
+        return apply_to_connection(conn, synthetic_sandbox=True)
     finally:
         conn.close()
 
@@ -389,9 +407,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="wykonaj addytywna migracje (default: read-only inspect)",
     )
+    parser.add_argument(
+        "--synthetic-sandbox",
+        action="store_true",
+        help="wymagane z --apply; cel musi byc kanonicznym plikiem pod /tmp",
+    )
     args = parser.parse_args(argv)
     try:
-        result = apply(args.db) if args.apply else inspect(args.db)
+        result = (
+            apply(args.db, synthetic_sandbox=args.synthetic_sandbox)
+            if args.apply
+            else inspect(args.db)
+        )
     except (OSError, sqlite3.Error, RuntimeError) as exc:
         descriptor = event_retry.classify_failure(exc)
         print(json.dumps({

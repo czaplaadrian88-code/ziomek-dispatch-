@@ -26,7 +26,11 @@ from dispatch_v2.event_envelope import (
     canonical_payload_json,
     event_id_after_state_revision,
 )
-from dispatch_v2.migrations import durable_event_outbox, event_retry_metadata
+from dispatch_v2.migrations import (
+    durable_event_outbox,
+    event_retry_metadata,
+    synthetic_target_guard,
+)
 from dispatch_v2.order_event_reducer import (
     ReceiptCapacityExceeded,
     ReductionRejected,
@@ -105,8 +109,8 @@ def durable_store(monkeypatch, tmp_path):
     db_path = tmp_path / "events.db"
     _legacy_db(db_path)
     conn = sqlite3.connect(db_path, isolation_level=None)
-    event_retry_metadata.apply_to_connection(conn)
-    durable_event_outbox.apply_to_connection(conn)
+    event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
+    durable_event_outbox.apply_to_connection(conn, synthetic_sandbox=True)
     contract = _contract()
     event_outbox.register_retention_contract(conn, contract)
     conn.close()
@@ -311,26 +315,185 @@ def test_migration_dry_run_apply_twice_and_conflict_rollback(tmp_path):
 
     conn = sqlite3.connect(db_path, isolation_level=None)
     with pytest.raises(RuntimeError, match="E0"):
-        durable_event_outbox.apply_to_connection(conn)
-    event_retry_metadata.apply_to_connection(conn)
-    durable_event_outbox.apply_to_connection(conn)
+        durable_event_outbox.apply_to_connection(
+            conn, synthetic_sandbox=True
+        )
+    event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
+    durable_event_outbox.apply_to_connection(conn, synthetic_sandbox=True)
     assert durable_event_outbox.inspect_connection(conn)["ready"] is True
-    second = durable_event_outbox.apply_to_connection(conn)
+    second = durable_event_outbox.apply_to_connection(
+        conn, synthetic_sandbox=True
+    )
     assert second["before"]["ready"] is True
     conn.close()
 
     conflict = tmp_path / "conflict.db"
     _legacy_db(conflict)
     conn = sqlite3.connect(conflict, isolation_level=None)
-    event_retry_metadata.apply_to_connection(conn)
+    event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     conn.execute("CREATE TABLE event_envelopes(event_id TEXT PRIMARY KEY)")
     with pytest.raises(RuntimeError, match="incompatible"):
-        durable_event_outbox.apply_to_connection(conn)
+        durable_event_outbox.apply_to_connection(
+            conn, synthetic_sandbox=True
+        )
     tables = {
         row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     assert "event_outbox" not in tables
     conn.close()
+
+
+@pytest.mark.parametrize(
+    "migration_module",
+    (event_retry_metadata, durable_event_outbox),
+    ids=("retry_metadata", "durable_outbox"),
+)
+@pytest.mark.parametrize(
+    "target_case",
+    ("known_live", "missing_opt_in", "symlink_alias"),
+)
+def test_mutating_migration_cli_refuses_unsafe_target_before_sqlite_connect(
+    tmp_path,
+    monkeypatch,
+    migration_module,
+    target_case,
+):
+    safe_target = tmp_path / "synthetic-events.db"
+    safe_target.write_bytes(b"SYNTHETIC-UNCHANGED")
+    before = safe_target.read_bytes()
+    argv = ["--apply"]
+    if target_case == "known_live":
+        target = synthetic_target_guard.KNOWN_LIVE_EVENT_DATABASES[0]
+        argv.append("--synthetic-sandbox")
+    elif target_case == "missing_opt_in":
+        target = safe_target
+    else:
+        target = tmp_path / "live-events-alias.db"
+        target.symlink_to(
+            synthetic_target_guard.KNOWN_LIVE_EVENT_DATABASES[0]
+        )
+        argv.append("--synthetic-sandbox")
+    argv[0:0] = ["--db", str(target)]
+    connect_calls = []
+
+    def forbidden_connect(*args, **kwargs):
+        connect_calls.append((args, kwargs))
+        raise AssertionError("sqlite3.connect must not run for an unsafe target")
+
+    monkeypatch.setattr(migration_module.sqlite3, "connect", forbidden_connect)
+    assert migration_module.main(argv) == 2
+    assert connect_calls == []
+    assert safe_target.read_bytes() == before
+
+
+def test_mutating_migration_cli_parity_accepts_only_explicit_tmp_sandbox(
+    tmp_path,
+):
+    db_path = tmp_path / "cli-synthetic-events.db"
+    _legacy_db(db_path)
+    args = [
+        "--db",
+        str(db_path),
+        "--apply",
+        "--synthetic-sandbox",
+    ]
+    assert event_retry_metadata.main(args) == 0
+    assert durable_event_outbox.main(args) == 0
+    conn = sqlite3.connect(db_path)
+    assert event_retry_metadata.inspect_connection(conn)["ready"] is True
+    assert durable_event_outbox.inspect_connection(conn)["ready"] is True
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    "migration_module",
+    (event_retry_metadata, durable_event_outbox),
+    ids=("retry_metadata", "durable_outbox"),
+)
+def test_mutating_migration_cli_rejects_synthetic_known_live_hardlink_before_connect(
+    tmp_path,
+    monkeypatch,
+    migration_module,
+):
+    victim = tmp_path / "synthetic-known-live.db"
+    _legacy_db(victim)
+    alias = tmp_path / "synthetic-known-live-hardlink.db"
+    os.link(victim, alias)
+    before = victim.read_bytes()
+    monkeypatch.setattr(
+        synthetic_target_guard,
+        "KNOWN_LIVE_EVENT_DATABASES",
+        (victim,),
+    )
+    connect_calls = []
+
+    def forbidden_connect(*args, **kwargs):
+        connect_calls.append((args, kwargs))
+        raise AssertionError("hardlink guard must run before sqlite3.connect")
+
+    monkeypatch.setattr(migration_module.sqlite3, "connect", forbidden_connect)
+    assert migration_module.main([
+        "--db",
+        str(alias),
+        "--apply",
+        "--synthetic-sandbox",
+    ]) == 2
+    assert connect_calls == []
+    assert victim.read_bytes() == before
+    assert alias.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "migration_module",
+    (event_retry_metadata, durable_event_outbox),
+    ids=("retry_metadata", "durable_outbox"),
+)
+@pytest.mark.parametrize("connection_target", ("exact", "hardlink"))
+def test_apply_to_connection_rejects_synthetic_known_live_before_first_write(
+    tmp_path,
+    monkeypatch,
+    migration_module,
+    connection_target,
+):
+    victim = tmp_path / "connection-known-live.db"
+    _legacy_db(victim)
+    alias = tmp_path / "connection-known-live-hardlink.db"
+    os.link(victim, alias)
+    target = victim if connection_target == "exact" else alias
+    before_bytes = victim.read_bytes()
+    monkeypatch.setattr(
+        synthetic_target_guard,
+        "KNOWN_LIVE_EVENT_DATABASES",
+        (victim,),
+    )
+    conn = sqlite3.connect(target, isolation_level=None)
+    before_schema = tuple(conn.execute(
+        """SELECT type,name,tbl_name,sql FROM sqlite_master
+           ORDER BY type,name"""
+    ).fetchall())
+    traced = []
+    conn.set_trace_callback(traced.append)
+    with pytest.raises(
+        synthetic_target_guard.SyntheticMigrationTargetRequired
+    ):
+        migration_module.apply_to_connection(
+            conn,
+            synthetic_sandbox=True,
+        )
+    assert conn.in_transaction is False
+    after_schema = tuple(conn.execute(
+        """SELECT type,name,tbl_name,sql FROM sqlite_master
+           ORDER BY type,name"""
+    ).fetchall())
+    assert after_schema == before_schema
+    forbidden_prefixes = ("begin", "alter", "create", "update", "delete", "insert")
+    assert not any(
+        sql.lstrip().lower().startswith(forbidden_prefixes)
+        for sql in traced
+    )
+    conn.close()
+    assert victim.read_bytes() == before_bytes
+    assert alias.read_bytes() == before_bytes
 
 
 @pytest.mark.parametrize(
@@ -368,7 +531,7 @@ def test_migration_rejects_same_columns_without_full_ddl_contract(
     db_path = tmp_path / f"same-columns-{contract_part}.db"
     _legacy_db(db_path)
     conn = sqlite3.connect(db_path, isolation_level=None)
-    event_retry_metadata.apply_to_connection(conn)
+    event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     statement = dict(durable_event_outbox.TABLE_STATEMENTS)[table]
     assert removed in statement
     mutated = statement.replace(removed, replacement, 1)
@@ -383,7 +546,9 @@ def test_migration_rejects_same_columns_without_full_ddl_contract(
     assert table in inspection["invalid_tables"]
     assert "expected_ddl" in inspection["invalid_tables"][table]
     with pytest.raises(RuntimeError, match="incompatible"):
-        durable_event_outbox.apply_to_connection(conn)
+        durable_event_outbox.apply_to_connection(
+            conn, synthetic_sandbox=True
+        )
     assert conn.execute(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='event_outbox'"
     ).fetchone()[0] == 0
@@ -421,7 +586,9 @@ def test_migration_rejects_same_index_columns_with_different_semantics(
     invalid = inspection["invalid_indexes"]["idx_event_dedup_expiry"]
     assert invalid["expected_ddl"] != invalid["actual_ddl"]
     with pytest.raises(RuntimeError, match="incompatible"):
-        durable_event_outbox.apply_to_connection(conn)
+        durable_event_outbox.apply_to_connection(
+            conn, synthetic_sandbox=True
+        )
     conn.close()
 
 
@@ -470,7 +637,9 @@ def test_migration_rejects_redacted_preexisting_foreign_key_orphan(
     }
     assert marker not in json.dumps(inspection)
     with pytest.raises(RuntimeError, match="foreign-key integrity"):
-        durable_event_outbox.apply_to_connection(conn)
+        durable_event_outbox.apply_to_connection(
+            conn, synthetic_sandbox=True
+        )
     conn.close()
 
 

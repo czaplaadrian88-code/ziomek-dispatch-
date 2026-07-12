@@ -68,7 +68,7 @@ def isolated_e0(monkeypatch, tmp_path):
     db_path = tmp_path / "events.db"
     _legacy_db(db_path)
     conn = sqlite3.connect(db_path, isolation_level=None)
-    event_retry_metadata.apply_to_connection(conn)
+    event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     conn.close()
     monkeypatch.setattr(event_bus, "_db_path", lambda: str(db_path))
     monkeypatch.setattr(event_bus, "_audit_log_initialized", False)
@@ -568,14 +568,16 @@ def test_migration_dry_run_is_read_only_and_apply_is_backward_compatible(tmp_pat
     assert plan["idempotency_backfill_count"] == 1
 
     conn = sqlite3.connect(db_path, isolation_level=None)
-    event_retry_metadata.apply_to_connection(conn)
+    event_retry_metadata.apply_to_connection(conn, synthetic_sandbox=True)
     assert event_retry_metadata.inspect_connection(conn)["ready"] is True
     columns = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
     assert {"next_attempt_at", "next_retry_at", "idempotency_key"} <= columns
     assert conn.execute(
         "SELECT length(idempotency_key) FROM events"
     ).fetchone()[0] == 64
-    second = event_retry_metadata.apply_to_connection(conn)
+    second = event_retry_metadata.apply_to_connection(
+        conn, synthetic_sandbox=True
+    )
     assert second["before"]["ready"] is True
     conn.close()
 
