@@ -58,23 +58,61 @@ def get_last_events_per_order(
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA busy_timeout=5000;")
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        event_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(events)")
+        }
+        legacy_filter = ""
+        if "status" in event_columns:
+            # Durable compatibility rows sa widoczne dopiero przez kanoniczna
+            # kopertę + ACK state ponizej; inaczej outbox->state lag wyglada
+            # jak PHANTOM.
+            legacy_filter = " AND COALESCE(status,'')!='durable'"
+        params: list[Any] = []
+        since_filter = ""
         if since_dt:
             since_iso = since_dt.astimezone(timezone.utc).isoformat()
-            rows = conn.execute(
-                "SELECT order_id, event_type, courier_id, created_at "
-                "FROM events WHERE created_at >= ? ORDER BY order_id, created_at",
-                (since_iso,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT order_id, event_type, courier_id, created_at "
-                "FROM events ORDER BY order_id, created_at"
+            since_filter = " AND created_at>=?"
+            params.append(since_iso)
+        rows = conn.execute(
+            "SELECT event_id,order_id,event_type,courier_id,created_at "
+            "FROM events WHERE 1=1" + legacy_filter + since_filter,
+            tuple(params),
+        ).fetchall()
+
+        durable_tables = {
+            "event_envelopes",
+            "event_consumer_receipts",
+        }
+        if durable_tables <= tables:
+            durable_params: list[Any] = []
+            durable_since = ""
+            if since_dt:
+                durable_since = " AND e.created_at>=?"
+                durable_params.append(since_iso)
+            rows += conn.execute(
+                """SELECT e.event_id,e.order_id,e.event_type,e.courier_id,
+                          e.created_at
+                   FROM event_envelopes e
+                   JOIN event_consumer_receipts r
+                     ON r.event_id=e.event_id AND r.consumer_id='order_state'
+                   WHERE r.status='acknowledged'"""
+                + durable_since,
+                tuple(durable_params),
             ).fetchall()
     finally:
         conn.close()
 
     last: Dict[str, Tuple[str, Optional[str], str]] = {}
-    for oid, et, cid, ts in rows:
+    rows.sort(key=lambda row: (str(row[1] or ""), str(row[4] or ""), str(row[0])))
+    for _event_id, oid, et, cid, ts in rows:
+        if oid is None:
+            continue
         last[oid] = (et, cid, ts)
     return last
 

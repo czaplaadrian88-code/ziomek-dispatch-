@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from dispatch_v2 import event_retry
+from dispatch_v2 import event_outbox, event_retry
 from dispatch_v2.order_fsm import (
     FORMAL_FSM_EVENT_TYPES,
     NON_STATE_EVENT_TYPES,
@@ -98,6 +98,26 @@ def list_dead_letters(
         conn.close()
 
 
+def list_durable_failures(
+    db_path: str,
+    *,
+    limit: int = 100,
+    consumer_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Read-only inspekcja E1; retry/requeue pozostaja celowo poza zakresem."""
+    conn = sqlite3.connect(
+        _db_uri(db_path, mode="ro"), uri=True, timeout=5.0
+    )
+    try:
+        return event_outbox.list_failure_journal(
+            conn,
+            limit=limit,
+            consumer_id=consumer_id,
+        )
+    finally:
+        conn.close()
+
+
 def requeue(
     db_path: str,
     event_id: str,
@@ -169,6 +189,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--event-type")
     parser.add_argument(
+        "--durable-failures",
+        action="store_true",
+        help="read-only lista durable failure journal; bez requeue",
+    )
+    parser.add_argument(
+        "--consumer-id",
+        help="opcjonalny filtr consumera dla --durable-failures",
+    )
+    parser.add_argument(
         "--state",
         help="jawny read-only orders_state snapshot wymagany dla --requeue",
     )
@@ -197,6 +226,24 @@ def main(argv: list[str] | None = None) -> int:
                 "options": event_retry.policy_options_summary(),
             }, ensure_ascii=False))
             return 0
+        if args.durable_failures:
+            if args.requeue or args.policy_options or args.event_type:
+                parser.error(
+                    "--durable-failures nie laczy sie z requeue/policy/event-type"
+                )
+            rows = list_durable_failures(
+                args.db,
+                limit=args.limit,
+                consumer_id=args.consumer_id,
+            )
+            print(json.dumps({
+                "count": len(rows),
+                "items": rows,
+                "requeue_enabled": False,
+            }, ensure_ascii=False))
+            return 0
+        if args.consumer_id:
+            parser.error("--consumer-id wymaga --durable-failures")
         if args.requeue:
             if not args.confirm_requeue:
                 parser.error("--requeue requires --confirm-requeue")

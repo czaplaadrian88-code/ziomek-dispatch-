@@ -20,7 +20,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import (
@@ -119,6 +119,18 @@ class OrderEventApplyResult:
     changed: bool
     duplicate: bool
     enforcement_enabled: bool
+
+
+@dataclass(frozen=True)
+class DurableStateEffectResult:
+    """Wynik jednego, jawnie wywolanego consumera ``order_state`` E1."""
+
+    record: Optional[dict]
+    domain_changed: bool
+    receipt_changed: bool
+    duplicate: bool
+    acknowledged: bool
+    attempt_number: int
 
 
 @dataclass
@@ -1415,6 +1427,149 @@ def apply_order_event(
         duplicate=ctx.duplicate,
         enforcement_enabled=True,
     )
+
+
+def commit_durable_state_claim(
+    conn,
+    claim,
+    *,
+    retention_contract,
+    started_at,
+    acknowledged_at,
+    after_state_hook: Optional[Callable[[], None]] = None,
+) -> DurableStateEffectResult:
+    """Aplikuje JEDEN juz-claimed state effect; to nie jest worker ani petla.
+
+    Kolejnosc crash-safe:
+
+    1. ``begin_attempt`` zapisuje EXECUTING przed efektem;
+    2. reducer + receipt trafiaja w jeden atomowy zapis ``orders_state``;
+    3. dopiero potem powstaje ACK per consumer w SQLite.
+
+    Crash po kroku 2 pozostawia EXECUTING. Recovery moze wznowic tylko ten
+    consumer, bo receipt w stanie zamienia druga redukcje w no-op. Funkcja nie
+    wykonuje planu, SLA, geokodu ani aktywacji koordynatora.
+    """
+    from dispatch_v2 import event_outbox
+    from dispatch_v2.order_event_reducer import (
+        DURABLE_RECEIPTS_FIELD,
+        ReceiptCapacityExceeded,
+        ReductionRejected,
+        reduce_order_event,
+    )
+
+    if claim.consumer_id != event_outbox.STATE_CONSUMER:
+        raise ValueError("claim does not belong to the order_state consumer")
+    if claim.effect_type != "reduce_order_state":
+        raise ValueError("claim is not a state reduction effect")
+    stored_contract = event_outbox.load_retention_contract(
+        conn,
+        retention_contract.policy_id,
+        allow_test_policy=(retention_contract.status == "test_only"),
+    )
+    if retention_contract != stored_contract:
+        raise ValueError("retention contract does not match the durable store")
+
+    attempt = event_outbox.begin_attempt(
+        conn,
+        claim,
+        started_at=started_at,
+    )
+    try:
+        oid = claim.envelope.order_id
+        if not oid:
+            raise ReductionRejected("invalid_payload")
+        with _locked_write() as path:
+            state = _read_state_strict()
+            old_count = len(state)
+            current = state.get(str(oid))
+            if current is not None:
+                prepared = dict(current)
+                raw_receipts = prepared.get(DURABLE_RECEIPTS_FIELD)
+                retained_receipts = []
+                for item in raw_receipts if isinstance(raw_receipts, list) else []:
+                    if not isinstance(item, dict) or not item.get("event_id"):
+                        continue
+                    prior_event_id = str(item["event_id"])
+                    if prior_event_id == claim.envelope.event_id:
+                        # Retry po state commit / przed SQLite ACK: ten fence
+                        # musi zostac, aby reducer rozpoznal no-op.
+                        retained_receipts.append(item)
+                        continue
+                    prior_status = conn.execute(
+                        """SELECT status FROM event_consumer_receipts
+                           WHERE event_id=? AND consumer_id=?""",
+                        (prior_event_id, event_outbox.STATE_CONSUMER),
+                    ).fetchone()
+                    if prior_status is not None:
+                        if prior_status[0] not in {"acknowledged", "quarantined"}:
+                            raise ReceiptCapacityExceeded(
+                                "prior state receipt is not terminal"
+                            )
+                        continue
+                    prior_envelope = conn.execute(
+                        "SELECT 1 FROM event_envelopes WHERE event_id=?",
+                        (prior_event_id,),
+                    ).fetchone()
+                    if prior_envelope is not None:
+                        raise ReceiptCapacityExceeded(
+                            "prior state receipt metadata is incomplete"
+                        )
+                    # Brak envelope+receipt oznacza zatwierdzona kompaktacje DB
+                    # po dedup horizon; lokalny fence mozna bezpiecznie obrocic.
+                prepared[DURABLE_RECEIPTS_FIELD] = retained_receipts
+                current = prepared
+            reduction = reduce_order_event(
+                current,
+                claim.envelope,
+                max_receipts_per_order=retention_contract.max_receipts_per_order,
+            )
+            if reduction.record is not None and (
+                reduction.domain_changed or reduction.receipt_changed
+            ):
+                state[str(oid)] = reduction.record
+                _guarded_write(path, state, old_count, op="durable_event")
+        if after_state_hook is not None:
+            after_state_hook()
+        acknowledged = event_outbox.acknowledge_effect(
+            conn,
+            claim,
+            attempt_number=attempt,
+            acknowledged_at=acknowledged_at,
+        )
+        return DurableStateEffectResult(
+            record=reduction.record,
+            domain_changed=reduction.domain_changed,
+            receipt_changed=reduction.receipt_changed,
+            duplicate=reduction.duplicate,
+            acknowledged=acknowledged,
+            attempt_number=attempt,
+        )
+    except ReductionRejected as exc:
+        event_outbox.record_failure(
+            conn,
+            claim=claim,
+            error=exc,
+            failed_at=acknowledged_at,
+            disposition="quarantined",
+            attempt_number=attempt,
+        )
+        raise
+    except ReceiptCapacityExceeded as exc:
+        event_outbox.record_failure(
+            conn,
+            claim=claim,
+            error=exc,
+            failed_at=acknowledged_at,
+            disposition="failed",
+            attempt_number=attempt,
+        )
+        raise
+    except Exception:
+        # ``after_state_hook`` sluzy fault-injection crash window. Takiego
+        # wyjatku nie zamieniamy w failure: proces mogl umrzec po commicie
+        # stanu, a recovery ma zobaczyc EXECUTING i receipt w JSON.
+        raise
 
 
 def update_from_event(event: dict) -> Optional[dict]:

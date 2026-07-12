@@ -32,6 +32,10 @@ def auto_resync_phantoms(
     hard_cap_max: int = 20,
     backlog_alert_threshold: int = 50,
     apply_state_event_fn: Optional[Callable[..., Any]] = None,
+    envelope_factory: Optional[Callable[..., Any]] = None,
+    durable_enabled: bool = False,
+    envelope_policy_version: Optional[str] = None,
+    observed_at: Any = None,
 ) -> Dict[str, Any]:
     """Resync phantoms (events.db terminal events) z safety gates.
 
@@ -140,6 +144,16 @@ def auto_resync_phantoms(
             event_id = f"{oid}_COURIER_DELIVERED_canonical"
         else:
             event_id = f"{oid}_{inferred}_phantom_resync"
+        if durable_enabled:
+            source_revision = d.get("last_event_ts")
+            if not source_revision:
+                actions.append({
+                    **d,
+                    "action": "emit_failed",
+                    "error": "EnvelopeValidationError: missing source revision",
+                })
+                continue
+            event_id = f"{event_id}:source:{source_revision}"
 
         # Build payload
         if inferred == "COURIER_DELIVERED":
@@ -147,9 +161,10 @@ def auto_resync_phantoms(
                 "timestamp": d.get("last_event_ts"),  # use last known event ts as proxy
                 "source": "reconciliation_inferred",
                 "deliv_source": "reconciliation_inferred",
-                "phantom_age_h": d.get("last_event_age_h"),
                 "inferred_reason": reason,
             }
+            if not durable_enabled:
+                payload["phantom_age_h"] = d.get("last_event_age_h")
         else:  # ORDER_RETURNED_TO_POOL
             # Map state_status → reason
             ss = d.get("state_status") or ""
@@ -159,16 +174,44 @@ def auto_resync_phantoms(
             payload = {
                 "reason": r,
                 "source": "reconciliation_inferred",
-                "phantom_age_h": d.get("last_event_age_h"),
             }
+            if not durable_enabled:
+                payload["phantom_age_h"] = d.get("last_event_age_h")
 
         try:
+            envelope = None
+            if durable_enabled:
+                if (
+                    envelope_factory is None
+                    or not envelope_policy_version
+                    or observed_at is None
+                ):
+                    raise RuntimeError(
+                        "durable reconciliation requires envelope factory, policy version "
+                        "and explicit observation time"
+                    )
+                envelope = envelope_factory(
+                    event_id=event_id,
+                    event_type=inferred,
+                    order_id=oid,
+                    courier_id=cid,
+                    payload=payload,
+                    created_at=observed_at,
+                    source="reconciliation:auto_resync",
+                    policy_version=envelope_policy_version,
+                    producer_key=event_id,
+                )
+            emit_kwargs = {
+                "event_type": inferred,
+                "order_id": oid,
+                "courier_id": cid,
+                "payload": payload,
+                "event_id": event_id,
+            }
+            if envelope is not None:
+                emit_kwargs["envelope"] = envelope
             ev = emit_fn(
-                event_type=inferred,
-                order_id=oid,
-                courier_id=cid,
-                payload=payload,
-                event_id=event_id,
+                **emit_kwargs,
             )
         except Exception as e:
             actions.append({
@@ -190,6 +233,7 @@ def auto_resync_phantoms(
                     state_event,
                     event_id=event_id,
                     emitted=bool(ev),
+                    **({"envelope": envelope} if envelope is not None else {}),
                 )
                 if effect.quarantined or effect.error_code:
                     actions.append({

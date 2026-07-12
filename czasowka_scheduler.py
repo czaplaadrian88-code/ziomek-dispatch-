@@ -459,11 +459,24 @@ def _emit_to_event_bus(oid: str, order_state: dict, result: dict, eval_count: in
         "czas_kuriera_warsaw": order_state.get("czas_kuriera_warsaw"),
         "czas_kuriera_hhmm": order_state.get("czas_kuriera_hhmm"),
     }
+    observed_at = datetime.now(timezone.utc)
+    envelope = event_bus.maybe_create_order_envelope(
+        event_id=event_id,
+        event_type="NEW_ORDER",
+        order_id=oid,
+        courier_id=None,
+        payload=payload,
+        created_at=observed_at,
+        source="czasowka_scheduler:evaluation",
+        policy_version=event_bus.ORDER_EVENT_POLICY_VERSION,
+        producer_key=event_id,
+    )
     emitted = event_bus.emit(
         "NEW_ORDER",
         order_id=oid,
         payload=payload,
         event_id=event_id,
+        **event_bus.durable_envelope_kwargs(envelope),
     )
     if emitted:
         _log.info(f"event_bus emit {event_id} decision={result['decision']}")

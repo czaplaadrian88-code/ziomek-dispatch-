@@ -21,6 +21,12 @@ from typing import Any, Callable, List, Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import load_config, now_iso, setup_logger
+from dispatch_v2.event_envelope import (
+    ENVELOPE_VERSION,
+    IDENTITY_SCHEME,
+    EventEnvelope,
+    canonical_payload_json,
+)
 
 # MP-#5 (2026-05-08): retry transient SQLite locks + peak-aware cleanup.
 # Background: emit() w hot path (panel_watcher, state_machine, telegram_approver
@@ -33,6 +39,9 @@ _PEAK_WINDOWS_WARSAW = (
     (17, 20),  # dinner peak
 )
 _WARSAW_TZ = ZoneInfo("Europe/Warsaw")
+
+# Wersja semantyki koperty, NIE wybrana polityka retry ani flaga runtime.
+ORDER_EVENT_POLICY_VERSION = "order_fsm.v1"
 
 
 # Zamkniety katalog typow eventow
@@ -89,6 +98,11 @@ AUDIT_EVENT_TYPES = {
     "ORDER_RETURNED_TO_POOL",
     "ORDER_CANCELLED",
 }
+
+# Korekty E0 sa formalnym FSM, ale historycznie nie byly publicznym eventem
+# legacy bus. E1 wlacza je tylko wewnatrz jawnej sciezki durable, aby OFF nie
+# zmienial katalogu ani zachowania dotychczasowych consumerow.
+DURABLE_ONLY_AUDIT_EVENT_TYPES = frozenset({"ORDER_RESURRECTED"})
 
 # Tech debt #39 (2026-05-13): queue types that are ALSO mirrored to audit_log
 # for 90‑day analytics retention.  The primary source for R‑04 evaluator is
@@ -197,6 +211,111 @@ def make_event_id(event_type: str, order_id: Optional[str], timestamp_ms: Option
     return f"{oid}_{event_type}_{timestamp_ms}"
 
 
+def create_order_envelope(
+    *,
+    event_id: str,
+    event_type: str,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload: dict,
+    created_at,
+    source: str,
+    policy_version: str,
+    producer_key: str,
+) -> EventEnvelope:
+    """Fabryka bez zegara/ID fallbacku; call-site przekazuje wszystkie fakty."""
+    return EventEnvelope.from_parts(
+        event_id=event_id,
+        event_type=event_type,
+        order_id=order_id,
+        courier_id=courier_id,
+        payload=payload,
+        created_at=created_at,
+        source=source,
+        envelope_version=ENVELOPE_VERSION,
+        policy_version=policy_version,
+        producer_key=producer_key,
+        identity_scheme=IDENTITY_SCHEME,
+    )
+
+
+def maybe_create_order_envelope(**kwargs) -> Optional[EventEnvelope]:
+    """Lazy boundary: OFF nie konstruuje ani nie waliduje koperty E1."""
+    from dispatch_v2 import event_outbox
+
+    if not event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+        return None
+    return create_order_envelope(**kwargs)
+
+
+def durable_envelope_kwargs(
+    envelope: Optional[EventEnvelope],
+) -> dict[str, EventEnvelope]:
+    """Przekazuje kopertę przez boundary tylko w syntetycznie wlaczonym E1.
+
+    OFF nie dodaje nowego argumentu do legacy call graphu. To utrzymuje rowniez
+    parytet boundary-mockow, ktore sa wykonywalnym kontraktem starych callerow.
+    """
+    from dispatch_v2 import event_outbox
+
+    if not event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+        return {}
+    if envelope is None:
+        raise ValueError("durable event publish requires a call-site envelope")
+    return {"envelope": envelope}
+
+
+def _validate_envelope_call(
+    envelope: EventEnvelope,
+    *,
+    event_type: str,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload: Optional[dict],
+    event_id: Optional[str],
+) -> None:
+    expected_courier = str(courier_id) if courier_id not in (None, "") else None
+    expected_order = str(order_id) if order_id is not None else None
+    if (
+        envelope.event_type != event_type
+        or envelope.order_id != expected_order
+        or envelope.courier_id != expected_courier
+        or envelope.event_id != str(event_id or "")
+        or envelope.payload_json != canonical_payload_json(payload or {})
+    ):
+        raise ValueError("durable envelope does not match emit call")
+
+
+def _durable_publish(
+    envelope: EventEnvelope,
+    *,
+    delivery_kind: str,
+    retention_policy_id: Optional[str],
+    allow_test_policy: bool,
+) -> Optional[str]:
+    from dispatch_v2 import event_outbox
+
+    policy_id = str(retention_policy_id or "").strip()
+    if not policy_id:
+        raise event_outbox.RetentionPolicyRequired(
+            "durable publish requires an explicit retention_policy_id"
+        )
+    mirror_audit = envelope.event_type in AUDIT_MIRRORED_QUEUE_TYPES
+    if delivery_kind == "audit" or mirror_audit:
+        _ensure_audit_log_initialized()
+    with _conn() as conn:
+        result = event_outbox.publish(
+            conn,
+            envelope,
+            delivery_kind=delivery_kind,
+            retention_policy_id=policy_id,
+            allow_test_policy=allow_test_policy,
+            mirror_audit=mirror_audit,
+            write_legacy_compat=True,
+        )
+    return result.event_id if result.inserted else None
+
+
 def _emit_inner(
     event_type: str,
     order_id: Optional[str],
@@ -287,6 +406,9 @@ def emit(
     payload: Optional[dict] = None,
     event_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    envelope: Optional[EventEnvelope] = None,
+    retention_policy_id: Optional[str] = None,
+    allow_test_policy: bool = False,
 ) -> Optional[str]:
     """Emituje event. Zwraca event_id lub None jesli duplikat.
 
@@ -302,6 +424,27 @@ def emit(
     """
     if event_type not in EVENT_TYPES:
         raise ValueError(f"Nieznany event_type: {event_type}. Dozwolone: {EVENT_TYPES}")
+
+    from dispatch_v2 import event_outbox
+
+    if event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+        if envelope is None:
+            raise ValueError("durable event publish requires a call-site envelope")
+        _validate_envelope_call(
+            envelope,
+            event_type=event_type,
+            order_id=order_id,
+            courier_id=courier_id,
+            payload=payload,
+            event_id=event_id,
+        )
+        return _retry_on_locked(
+            _durable_publish,
+            envelope,
+            delivery_kind="queue",
+            retention_policy_id=retention_policy_id,
+            allow_test_policy=allow_test_policy,
+        )
 
     if event_id is None:
         event_id = make_event_id(event_type, order_id)
@@ -524,15 +667,39 @@ def apply_state_event(
     event_id: Optional[str],
     emitted: bool,
     enforce: Optional[bool] = None,
+    envelope: Optional[EventEnvelope] = None,
 ) -> StateEffectResult:
     """Jeden owner aplikacji eventu do state z jawnym OFF/ON.
 
     OFF zachowuje dotychczasowy kontrakt bajtowy call-site'ow: duplikat emit
-    nie uruchamia ponownie legacy writera. ON (wylacznie testy/source do ACK)
-    aplikuje takze zapisany-wczesniej event, a atomowy receipt w state blokuje
-    drugi efekt po crashu przed markerem ``effect_applied_at``.
+    nie uruchamia ponownie legacy writera. ON jest w tym sprincie wylacznie
+    handoffem do outboxa: producer nie aplikuje stanu ani follow-upow inline.
+    Jawny prymityw consumera ``state_machine.commit_durable_state_claim`` jest
+    uruchamiany tylko przez syntetyczny golden case; worker nie istnieje.
     """
-    from dispatch_v2 import state_machine
+    from dispatch_v2 import event_outbox, state_machine
+
+    if event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+        if envelope is None:
+            raise ValueError("durable state handoff requires the canonical envelope")
+        if (
+            envelope.event_id != str(event_id or "")
+            or envelope.event_type != str(event.get("event_type") or "")
+            or envelope.order_id
+            != (str(event.get("order_id")) if event.get("order_id") is not None else None)
+        ):
+            raise ValueError("durable state handoff identity differs from envelope")
+        # Jeden owner stanu jest przyszlym consumerem outbox. Inline producer
+        # nie mutuje JSON i nie wykonuje follow-upow. Brak workera w tym sprincie
+        # oznacza swiadomy HOLD, a nie ciche przejscie sciezka E0.
+        return StateEffectResult(
+            record=None,
+            changed=False,
+            duplicate=not bool(emitted),
+            quarantined=False,
+            enforcement_enabled=True,
+            should_run_followups=False,
+        )
 
     enforcement_enabled = (
         state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
@@ -763,6 +930,9 @@ def emit_audit(
     courier_id: Optional[str] = None,
     payload: Optional[dict] = None,
     event_id: Optional[str] = None,
+    envelope: Optional[EventEnvelope] = None,
+    retention_policy_id: Optional[str] = None,
+    allow_test_policy: bool = False,
 ) -> Optional[str]:
     """Zapisuje event audit-only do tabeli audit_log (append-only).
 
@@ -777,10 +947,35 @@ def emit_audit(
 
     Zwraca event_id przy zapisie, None przy idempotent skip (duplikat).
     """
-    if event_type not in AUDIT_EVENT_TYPES:
+    from dispatch_v2 import event_outbox
+
+    durable_only = (
+        event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
+        and event_type in DURABLE_ONLY_AUDIT_EVENT_TYPES
+    )
+    if event_type not in AUDIT_EVENT_TYPES and not durable_only:
         raise ValueError(
             f"emit_audit: event_type '{event_type}' nie jest audit type. "
             f"Dozwolone: {AUDIT_EVENT_TYPES}. Użyj emit() dla queue typów."
+        )
+
+    if event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+        if envelope is None:
+            raise ValueError("durable audit publish requires a call-site envelope")
+        _validate_envelope_call(
+            envelope,
+            event_type=event_type,
+            order_id=order_id,
+            courier_id=courier_id,
+            payload=payload,
+            event_id=event_id,
+        )
+        return _retry_on_locked(
+            _durable_publish,
+            envelope,
+            delivery_kind="audit",
+            retention_policy_id=retention_policy_id,
+            allow_test_policy=allow_test_policy,
         )
 
     if event_id is None:

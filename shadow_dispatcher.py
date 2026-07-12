@@ -27,6 +27,7 @@ from dispatch_v2 import calib_maps  # SP-B2 (2026-06-11): prep-bias shadow w _se
 from dispatch_v2 import (
     common as C,
     event_bus,
+    event_outbox,
     event_retry,
     pending_pool,
     state_machine,
@@ -1273,6 +1274,10 @@ def _sanitize_payload_coords(payload: dict, oid) -> bool:
 def _tick(shadow_log_path: str, meta: Optional[dict], *,
           _stage_timing_on: bool) -> dict:
     """One poll cycle. Returns {processed, failed, skipped}."""
+    if event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+        raise RuntimeError(
+            "durable shadow dispatch requires the future per-consumer outbox worker"
+        )
     stats = {"processed": 0, "failed": 0, "skipped": 0}
     _poll_started_ns = (
         time.perf_counter_ns() if _stage_timing_on else None)

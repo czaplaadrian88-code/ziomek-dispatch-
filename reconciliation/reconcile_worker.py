@@ -37,7 +37,7 @@ from typing import Any, Dict, Optional
 
 # Module imports
 from dispatch_v2.common import flag, setup_logger
-from dispatch_v2 import event_bus, state_machine
+from dispatch_v2 import event_bus, event_outbox, state_machine
 from dispatch_v2.reconciliation import phantom_detector, auto_resync, reconcile_log
 
 # Config paths
@@ -310,6 +310,10 @@ def run(
         hard_cap_max=hard_cap_max,
         backlog_alert_threshold=backlog_alert_threshold,
         apply_state_event_fn=event_bus.apply_state_event,
+        envelope_factory=event_bus.maybe_create_order_envelope,
+        durable_enabled=event_outbox.DURABLE_EVENT_OUTBOX_ENABLED,
+        envelope_policy_version=event_bus.ORDER_EVENT_POLICY_VERSION,
+        observed_at=datetime.now(timezone.utc),
     )
     # F14: propagate threshold to counts dla _format_alert
     result["counts"]["backlog_alert_threshold"] = backlog_alert_threshold

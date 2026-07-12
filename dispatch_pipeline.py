@@ -371,7 +371,10 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
     Event_id: {oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{epoch_ms} — unique per emit.
     """
     from dispatch_v2.event_bus import (
+        ORDER_EVENT_POLICY_VERSION as _eb_policy_version,
         apply_state_event as _eb_apply_state,
+        maybe_create_order_envelope as _eb_create_envelope,
+        durable_envelope_kwargs as _eb_envelope_kwargs,
         emit_audit as _eb_emit_audit,
     )
 
@@ -395,6 +398,17 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
         "courier_id": courier_id,
         "payload": payload,
     }
+    envelope = _eb_create_envelope(
+        event_id=event_id,
+        event_type="CZAS_KURIERA_UPDATED",
+        order_id=oid,
+        courier_id=courier_id,
+        payload=payload,
+        created_at=now,
+        source="dispatch_pipeline:pre_proposal_recheck",
+        policy_version=_eb_policy_version,
+        producer_key=event_id,
+    )
     try:
         _eb_emit_audit(
             "CZAS_KURIERA_UPDATED",
@@ -402,9 +416,15 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
             courier_id=courier_id or "",
             payload=payload,
             event_id=event_id,
+            **_eb_envelope_kwargs(envelope),
         )
         # Legacy zawsze aplikowal state niezaleznie od wyniku INSERT.
-        _eb_apply_state(event, event_id=event_id, emitted=True)
+        _eb_apply_state(
+            event,
+            event_id=event_id,
+            emitted=True,
+            **_eb_envelope_kwargs(envelope),
+        )
         delta_str = f"Δ={delta_min:+.1f}min" if delta_min is not None else "Δ=null"
         log.info(f"V3.27.1 pre_proposal_recheck oid={oid} {old_ck_iso or 'null'}→{new_ck_iso} ({new_ck_hhmm}) {delta_str}")
     except Exception as e:

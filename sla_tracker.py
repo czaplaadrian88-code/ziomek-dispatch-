@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
 
-from dispatch_v2 import common as C, event_retry as _event_retry
+from dispatch_v2 import common as C, event_outbox as _event_outbox
+from dispatch_v2 import event_retry as _event_retry
 from dispatch_v2 import state_machine as _state_machine
 from dispatch_v2.common import now_iso, setup_logger
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
@@ -176,6 +177,10 @@ def _parse_aware_utc(s):
 
 
 def process(evt):
+    if _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+        raise RuntimeError(
+            "durable SLA requires the future per-consumer outbox worker"
+        )
     etype = evt["event_type"]
     oid = evt.get("order_id")
     payload = evt.get("payload", {})
@@ -529,6 +534,10 @@ def _check_restaurant_violations() -> None:
 
 
 def run():
+    if _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+        raise RuntimeError(
+            "durable SLA worker is not implemented or enabled in A360-E1"
+        )
     signal.signal(signal.SIGTERM, _handler)
     signal.signal(signal.SIGINT, _handler)
     _log.info("SLA tracker START")

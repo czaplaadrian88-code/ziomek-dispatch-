@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
 from dispatch_v2 import common as C
+from dispatch_v2 import event_outbox as _event_outbox
 from dispatch_v2 import state_machine as _state_machine
 from dispatch_v2 import plan_manager
 from dispatch_v2.common import (
@@ -44,7 +45,15 @@ from dispatch_v2.common import (
 from dispatch_v2.osrm_client import haversine as _haversine_km
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
-from dispatch_v2.event_bus import apply_state_event, emit, emit_audit
+from dispatch_v2.event_bus import (
+    ORDER_EVENT_POLICY_VERSION,
+    apply_state_event,
+    maybe_create_order_envelope,
+    durable_envelope_kwargs,
+    emit,
+    emit_audit,
+)
+from dispatch_v2.event_envelope import event_id_after_state_revision
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
 from dispatch_v2.parser_health_layer3 import install_layer3, record_tick_full
 from dispatch_v2.parser_health_endpoint import start_health_endpoint
@@ -72,6 +81,36 @@ _log = setup_logger("panel_watcher", "/root/.openclaw/workspace/scripts/logs/dis
 _running = True
 _fail_count = 0
 _last_panel_unreachable_emit = 0.0
+
+
+def _canonical_order_envelope(
+    *,
+    event_id: str,
+    event_type: str,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload: dict,
+    created_at,
+    producer: str,
+):
+    """Jedno jawne utworzenie koperty w produkcyjnym call-site watchera."""
+    return maybe_create_order_envelope(
+        event_id=event_id,
+        event_type=event_type,
+        order_id=order_id,
+        courier_id=courier_id,
+        payload=payload,
+        created_at=created_at,
+        source=f"panel_watcher:{producer}",
+        policy_version=ORDER_EVENT_POLICY_VERSION,
+        producer_key=event_id,
+    )
+
+
+def _durable_transition_id(legacy_event_id: str, current_record: dict) -> str:
+    if not _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+        return legacy_event_id
+    return event_id_after_state_revision(legacy_event_id, current_record)
 # tech-debt #24: cold-start packs scan one-shot post-restart. Eliminuje
 # MISSING_FROM_STATE phantoms gdy panel-watcher restart in-peak drops
 # COURIER_ASSIGNED dla orderów mid-way ASSIGN→PICKUP (post-restart diff
@@ -1365,7 +1404,12 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             "prep_minutes": norm["prep_minutes"],
             "order_type": norm["order_type"],
             "status_id": norm["status_id"],
-            "first_seen": now_iso(),
+            # OFF zachowuje legacy observer time. Durable zapisuje pierwszy
+            # observation time w envelope; payload nie moze zmieniac sie przy
+            # retry tego samego producer_key po niepewnym commicie.
+            "first_seen": (
+                None if _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED else now_iso()
+            ),
             "address_id": _aid_str,
             "pickup_coords": list(_pcoords) if _pcoords else None,
             "delivery_coords": list(_dcoords) if _dcoords else None,
@@ -1387,11 +1431,22 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
 
         # Deterministyczny event_id: {order_id}_NEW_ORDER_first_seen (bez timestamp - raz na zycie)
         event_id = f"{zid}_NEW_ORDER_first"
+        _new_observed_at = datetime.now(timezone.utc)
+        _new_envelope = _canonical_order_envelope(
+            event_id=event_id,
+            event_type="NEW_ORDER",
+            order_id=zid,
+            courier_id=None,
+            payload=ev_payload,
+            created_at=_new_observed_at,
+            producer="new_order",
+        )
         result = emit(
             "NEW_ORDER",
             order_id=zid,
             payload=ev_payload,
             event_id=event_id,
+            **durable_envelope_kwargs(_new_envelope),
         )
         _new_effect = apply_state_event(
             {
@@ -1401,6 +1456,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             },
             event_id=event_id,
             emitted=bool(result),
+            **durable_envelope_kwargs(_new_envelope),
         )
         if _new_effect.should_run_followups:
             stats["new"] += 1
@@ -1436,18 +1492,29 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             courier_id = str(norm["id_kurier"])
             # V3.19f: initial-assign payload z czas_kuriera (norm świeży).
             _assigned_payload = {
-                "assigned_at": now_iso(),
                 "source": "panel_initial",
                 "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
                 "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
             }
+            if not _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+                _assigned_payload["assigned_at"] = now_iso()
             _assigned_event_id = f"{zid}_COURIER_ASSIGNED_{courier_id}_initial"
+            _assigned_envelope = _canonical_order_envelope(
+                event_id=_assigned_event_id,
+                event_type="COURIER_ASSIGNED",
+                order_id=zid,
+                courier_id=courier_id,
+                payload=_assigned_payload,
+                created_at=datetime.now(timezone.utc),
+                producer="panel_initial_assignment",
+            )
             assigned_event = emit_audit(
                 "COURIER_ASSIGNED",
                 order_id=zid,
                 courier_id=courier_id,
                 payload=_assigned_payload,
                 event_id=_assigned_event_id,
+                **durable_envelope_kwargs(_assigned_envelope),
             )
             _assigned_effect = apply_state_event(
                 {
@@ -1458,6 +1525,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 },
                 event_id=_assigned_event_id,
                 emitted=bool(assigned_event),
+                **durable_envelope_kwargs(_assigned_envelope),
             )
             if _assigned_effect.should_run_followups:
                 stats["assigned"] += 1
@@ -1494,11 +1562,15 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     if status_id == 7:
                         # Doreczone (F10 2026-05-09: canonical event_id eliminuje
                         # duplicate audit_log entries vs ghost_detect/reconcile path).
-                        _delivered_event_id = f"{zid}_COURIER_DELIVERED_canonical"
+                        _delivered_event_id = _durable_transition_id(
+                            f"{zid}_COURIER_DELIVERED_canonical",
+                            state_order,
+                        )
                         _declared_delivery_time = raw.get("czas_doreczenia")
                         _emit_delivery_time = _declared_delivery_time
                         if (
                             not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                            and not _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
                             and not _emit_delivery_time
                         ):
                             _emit_delivery_time = now_iso()
@@ -1507,18 +1579,29 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             "final_location": state_order.get("delivery_address"),
                             "deliv_source": "panel",
                         }
+                        _delivered_envelope = _canonical_order_envelope(
+                            event_id=_delivered_event_id,
+                            event_type="COURIER_DELIVERED",
+                            order_id=zid,
+                            courier_id=str(raw.get("id_kurier") or ""),
+                            payload=_delivered_payload,
+                            created_at=datetime.now(timezone.utc),
+                            producer="disappeared_delivered",
+                        )
                         ev = emit(
                             "COURIER_DELIVERED",
                             order_id=zid,
                             courier_id=str(raw.get("id_kurier") or ""),
                             payload=_delivered_payload,
                             event_id=_delivered_event_id,
+                            **durable_envelope_kwargs(_delivered_envelope),
                         )
                         _adv_cid = str(raw.get("id_kurier") or "")
                         _state_delivery_time = _declared_delivery_time
                         if (
                             ev
                             and not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                            and not _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
                             and not _state_delivery_time
                         ):
                             _state_delivery_time = now_iso()
@@ -1534,6 +1617,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             },
                             event_id=_delivered_event_id,
                             emitted=bool(ev),
+                            **durable_envelope_kwargs(_delivered_envelope),
                         )
                         if _delivered_effect.should_run_followups:
                             stats["delivered"] += 1
@@ -1549,14 +1633,27 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         # ale NIE emitował do events.db → akumulacja phantom orders.
                         reason = "undelivered" if status_id == 8 else "cancelled"
                         _adv_cid = str(raw.get("id_kurier") or "")
-                        _returned_event_id = f"{zid}_ORDER_RETURNED_{reason}_panel_diff"
+                        _returned_event_id = _durable_transition_id(
+                            f"{zid}_ORDER_RETURNED_{reason}_panel_diff",
+                            state_order,
+                        )
                         _returned_payload = {"reason": reason, "source": "panel_diff"}
+                        _returned_envelope = _canonical_order_envelope(
+                            event_id=_returned_event_id,
+                            event_type="ORDER_RETURNED_TO_POOL",
+                            order_id=zid,
+                            courier_id=_adv_cid,
+                            payload=_returned_payload,
+                            created_at=datetime.now(timezone.utc),
+                            producer="disappeared_return",
+                        )
                         ev = emit_audit(
                             "ORDER_RETURNED_TO_POOL",
                             order_id=zid,
                             courier_id=_adv_cid,
                             payload=_returned_payload,
                             event_id=_returned_event_id,
+                            **durable_envelope_kwargs(_returned_envelope),
                         )
                         _returned_effect = apply_state_event(
                             {
@@ -1567,6 +1664,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             },
                             event_id=_returned_event_id,
                             emitted=bool(ev),
+                            **durable_envelope_kwargs(_returned_envelope),
                         )
                         if _returned_effect.should_run_followups:
                             _log.info(f"{reason.upper()} {zid} status={status_id} (panel_diff)")
@@ -1587,14 +1685,27 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 stats["fetched_details"] += 1
                 if raw and raw.get("id_kurier") and raw["id_kurier"] != KOORDYNATOR_ID:
                     courier_id = str(raw["id_kurier"])
-                    _assigned_event_id = f"{zid}_COURIER_ASSIGNED_{courier_id}_diff"
+                    _assigned_event_id = _durable_transition_id(
+                        f"{zid}_COURIER_ASSIGNED_{courier_id}_diff",
+                        state_order,
+                    )
                     _assigned_payload = {"source": "panel_diff"}
+                    _assigned_envelope = _canonical_order_envelope(
+                        event_id=_assigned_event_id,
+                        event_type="COURIER_ASSIGNED",
+                        order_id=zid,
+                        courier_id=courier_id,
+                        payload=_assigned_payload,
+                        created_at=datetime.now(timezone.utc),
+                        producer="panel_diff_assignment",
+                    )
                     ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=zid,
                         courier_id=courier_id,
                         payload=_assigned_payload,
                         event_id=_assigned_event_id,
+                        **durable_envelope_kwargs(_assigned_envelope),
                     )
                     _assigned_effect = apply_state_event(
                         {
@@ -1605,6 +1716,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         },
                         event_id=_assigned_event_id,
                         emitted=bool(ev),
+                        **durable_envelope_kwargs(_assigned_envelope),
                     )
                     if _assigned_effect.should_run_followups:
                         stats["assigned"] += 1
@@ -1625,14 +1737,27 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 reassign_checked += 1
                 panel_courier = str(raw.get("id_kurier") or "") if raw else ""
                 if panel_courier and panel_courier != state_courier and raw.get("id_kurier") != KOORDYNATOR_ID:
-                    _assigned_event_id = f"{zid}_COURIER_ASSIGNED_{panel_courier}_reassign"
+                    _assigned_event_id = _durable_transition_id(
+                        f"{zid}_COURIER_ASSIGNED_{panel_courier}_reassign",
+                        state_order,
+                    )
                     _assigned_payload = {"source": "panel_reassign"}
+                    _assigned_envelope = _canonical_order_envelope(
+                        event_id=_assigned_event_id,
+                        event_type="COURIER_ASSIGNED",
+                        order_id=zid,
+                        courier_id=panel_courier,
+                        payload=_assigned_payload,
+                        created_at=datetime.now(timezone.utc),
+                        producer="panel_reassignment",
+                    )
                     ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=zid,
                         courier_id=panel_courier,
                         payload=_assigned_payload,
                         event_id=_assigned_event_id,
+                        **durable_envelope_kwargs(_assigned_envelope),
                     )
                     _assigned_effect = apply_state_event(
                         {
@@ -1643,6 +1768,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         },
                         event_id=_assigned_event_id,
                         emitted=bool(ev),
+                        **durable_envelope_kwargs(_assigned_envelope),
                     )
                     if _assigned_effect.should_run_followups:
                         stats["assigned"] += 1
@@ -1737,18 +1863,31 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
                         )
                         _target_cid = _panel_cid
-                    _packs_event_id = f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_packs"
+                    _packs_event_id = _durable_transition_id(
+                        f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_packs",
+                        _sorder,
+                    )
                     _packs_payload = {
                         "source": "packs_fallback",
                         "previous_cid": _state_cid or None,
                         "nick": _nick_key,
                     }
+                    _packs_envelope = _canonical_order_envelope(
+                        event_id=_packs_event_id,
+                        event_type="COURIER_ASSIGNED",
+                        order_id=_oid_str,
+                        courier_id=_target_cid,
+                        payload=_packs_payload,
+                        created_at=datetime.now(timezone.utc),
+                        producer="packs_fallback_assignment",
+                    )
                     _ev = emit_audit(
                         "COURIER_ASSIGNED",
                         order_id=_oid_str,
                         courier_id=_target_cid,
                         payload=_packs_payload,
                         event_id=_packs_event_id,
+                        **durable_envelope_kwargs(_packs_envelope),
                     )
                     _packs_effect = apply_state_event(
                         {
@@ -1759,6 +1898,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         },
                         event_id=_packs_event_id,
                         emitted=bool(_ev),
+                        **durable_envelope_kwargs(_packs_envelope),
                     )
                     if _packs_effect.should_run_followups:
                         stats["assigned"] += 1
@@ -1868,11 +2008,15 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     continue  # not delivered — maybe returned/cancelled, let reconcile handle
                 _deliv_addr_gd = parsed.get("delivery_addresses", {}).get(str(_oid)) \
                     or _sorder.get("delivery_address")
-                _ghost_event_id = f"{_oid}_COURIER_DELIVERED_canonical"
+                _ghost_event_id = _durable_transition_id(
+                    f"{_oid}_COURIER_DELIVERED_canonical",
+                    _sorder,
+                )
                 _declared_ghost_time = _raw_gd.get("czas_doreczenia")
                 _emit_ghost_time = _declared_ghost_time
                 if (
                     not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                    and not _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
                     and not _emit_ghost_time
                 ):
                     _emit_ghost_time = now_iso()
@@ -1883,21 +2027,35 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "source": "packs_ghost_detect",
                     "deliv_source": "packs_ghost_detect",
                 }
+                _ghost_envelope = _canonical_order_envelope(
+                    event_id=_ghost_event_id,
+                    event_type="COURIER_DELIVERED",
+                    order_id=str(_oid),
+                    courier_id=_state_cid,
+                    payload=_ghost_payload,
+                    created_at=datetime.now(timezone.utc),
+                    producer="packs_ghost_delivery",
+                )
                 _ev_gd = emit(
                     "COURIER_DELIVERED",
                     order_id=str(_oid),
                     courier_id=_state_cid,
                     payload=_ghost_payload,
                     event_id=_ghost_event_id,
+                    **durable_envelope_kwargs(_ghost_envelope),
                 )
                 _ghost_state_payload = dict(_ghost_payload)
                 if (
                     _ev_gd
                     and not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                    and not _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
                     and not _declared_ghost_time
                 ):
                     _ghost_state_payload["timestamp"] = now_iso()
-                elif _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED:
+                elif (
+                    _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                    or _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
+                ):
                     _ghost_state_payload["timestamp"] = _declared_ghost_time
                 _ghost_effect = apply_state_event(
                     {
@@ -1908,6 +2066,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     },
                     event_id=_ghost_event_id,
                     emitted=bool(_ev_gd),
+                    **durable_envelope_kwargs(_ghost_envelope),
                 )
                 if _ghost_effect.should_run_followups:
                     stats["delivered"] += 1
@@ -1995,10 +2154,54 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _new_st = "picked_up" if _sid_r in (5, 6) else "assigned"
                 _ignored_ids.discard(str(_oid_r))
                 try:
-                    resurrect_order(str(_oid_r), _new_st, _cid_r, reason="panel_status_restored")
-                    _res_done += 1
-                    _log.info(f"RESURRECT {_oid_r} cid={_cid_r} sid={_sid_r}→{_new_st} "
-                              f"(wrócił do packs po ręcznym cofnięciu w gastro)")
+                    if _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+                        _res_payload = {
+                            "new_status": _new_st,
+                            "reason": "panel_status_restored",
+                            "source": "panel_status_restored",
+                        }
+                        _res_event_id = _durable_transition_id(
+                            f"{_oid_r}_ORDER_RESURRECTED_{_new_st}",
+                            _so_r,
+                        )
+                        _res_envelope = _canonical_order_envelope(
+                            event_id=_res_event_id,
+                            event_type="ORDER_RESURRECTED",
+                            order_id=str(_oid_r),
+                            courier_id=_cid_r,
+                            payload=_res_payload,
+                            created_at=datetime.now(timezone.utc),
+                            producer="panel_status_resurrection",
+                        )
+                        _res_emitted = emit_audit(
+                            "ORDER_RESURRECTED",
+                            order_id=str(_oid_r),
+                            courier_id=_cid_r,
+                            payload=_res_payload,
+                            event_id=_res_event_id,
+                            **durable_envelope_kwargs(_res_envelope),
+                        )
+                        _res_effect = apply_state_event(
+                            _res_envelope.as_event(),
+                            event_id=_res_event_id,
+                            emitted=bool(_res_emitted),
+                            enforce=True,
+                            **durable_envelope_kwargs(_res_envelope),
+                        )
+                        if _res_effect.should_run_followups:
+                            _res_done += 1
+                    else:
+                        resurrect_order(
+                            str(_oid_r),
+                            _new_st,
+                            _cid_r,
+                            reason="panel_status_restored",
+                        )
+                        _res_done += 1
+                    _log.info(
+                        f"RESURRECT {_oid_r} cid={_cid_r} sid={_sid_r}→{_new_st} "
+                        f"(wrócił do packs po ręcznym cofnięciu w gastro)"
+                    )
                 except Exception as _re_r:
                     _log.warning(f"resurrect fail {_oid_r}: {type(_re_r).__name__}: {_re_r}")
             if _res_done:
@@ -2035,11 +2238,15 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         kid = str(raw.get("id_kurier") or "")
         deliv_addr = parsed.get("delivery_addresses", {}).get(zid) or sorder.get("delivery_address")
         if sid == 7:
-            _delivered_event_id = f"{zid}_COURIER_DELIVERED_canonical"
+            _delivered_event_id = _durable_transition_id(
+                f"{zid}_COURIER_DELIVERED_canonical",
+                sorder,
+            )
             _declared_delivery_time = raw.get("czas_doreczenia")
             _emit_delivery_time = _declared_delivery_time
             if (
                 not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                and not _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
                 and not _emit_delivery_time
             ):
                 _emit_delivery_time = now_iso()
@@ -2050,21 +2257,35 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 "source": "reconcile",
                 "deliv_source": "reconcile",
             }
+            _delivered_envelope = _canonical_order_envelope(
+                event_id=_delivered_event_id,
+                event_type="COURIER_DELIVERED",
+                order_id=zid,
+                courier_id=kid,
+                payload=_delivered_payload,
+                created_at=datetime.now(timezone.utc),
+                producer="reconcile_delivery",
+            )
             ev = emit(
                 "COURIER_DELIVERED",
                 order_id=zid,
                 courier_id=kid,
                 payload=_delivered_payload,
                 event_id=_delivered_event_id,
+                **durable_envelope_kwargs(_delivered_envelope),
             )
             _delivered_state_payload = dict(_delivered_payload)
             if (
                 ev
                 and not _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                and not _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
                 and not _declared_delivery_time
             ):
                 _delivered_state_payload["timestamp"] = now_iso()
-            elif _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED:
+            elif (
+                _state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+                or _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
+            ):
                 _delivered_state_payload["timestamp"] = _declared_delivery_time
             _delivered_effect = apply_state_event(
                 {
@@ -2075,6 +2296,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 },
                 event_id=_delivered_event_id,
                 emitted=bool(ev),
+                **durable_envelope_kwargs(_delivered_envelope),
             )
             if _delivered_effect.should_run_followups:
                 stats["delivered"] += 1
@@ -2086,13 +2308,26 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 )
         elif sid in (8, 9):
             reason = "undelivered" if sid == 8 else "cancelled"
-            _returned_event_id = f"{zid}_ORDER_RETURNED_{reason}_reconcile"
+            _returned_event_id = _durable_transition_id(
+                f"{zid}_ORDER_RETURNED_{reason}_reconcile",
+                sorder,
+            )
             _returned_payload = {"reason": reason, "source": "reconcile"}
+            _returned_envelope = _canonical_order_envelope(
+                event_id=_returned_event_id,
+                event_type="ORDER_RETURNED_TO_POOL",
+                order_id=zid,
+                courier_id=None,
+                payload=_returned_payload,
+                created_at=datetime.now(timezone.utc),
+                producer="reconcile_return",
+            )
             ev = emit_audit(
                 "ORDER_RETURNED_TO_POOL",
                 order_id=zid,
                 payload=_returned_payload,
                 event_id=_returned_event_id,
+                **durable_envelope_kwargs(_returned_envelope),
             )
             _returned_effect = apply_state_event(
                 {
@@ -2102,6 +2337,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 },
                 event_id=_returned_event_id,
                 emitted=bool(ev),
+                **durable_envelope_kwargs(_returned_envelope),
             )
             if _returned_effect.should_run_followups:
                 _log.info(f"{reason.upper()} {zid} (reconcile)")
@@ -2173,18 +2409,31 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     pu_coords = tuple(_st_pc)
             if pu_coords is None:
                 pu_coords = _COORDS.get(aid_str) if aid_str else None
-            _pickup_event_id = f"{zid}_COURIER_PICKED_UP_reconcile"
+            _pickup_event_id = _durable_transition_id(
+                f"{zid}_COURIER_PICKED_UP_reconcile",
+                sorder,
+            )
             _pickup_payload = {
                 "timestamp": dzien_odbioru,
                 "pickup_coords": list(pu_coords) if pu_coords else None,
                 "source": "reconcile",
             }
+            _pickup_envelope = _canonical_order_envelope(
+                event_id=_pickup_event_id,
+                event_type="COURIER_PICKED_UP",
+                order_id=zid,
+                courier_id=kid,
+                payload=_pickup_payload,
+                created_at=datetime.now(timezone.utc),
+                producer="reconcile_pickup",
+            )
             ev = emit(
                 "COURIER_PICKED_UP",
                 order_id=zid,
                 courier_id=kid,
                 payload=_pickup_payload,
                 event_id=_pickup_event_id,
+                **durable_envelope_kwargs(_pickup_envelope),
             )
             _pickup_effect = apply_state_event(
                 {
@@ -2195,6 +2444,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 },
                 event_id=_pickup_event_id,
                 emitted=bool(ev),
+                **durable_envelope_kwargs(_pickup_envelope),
             )
             if _pickup_effect.should_run_followups:
                 stats["picked_up"] += 1
@@ -2243,18 +2493,31 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     continue
                 _st_pc = _sorder.get("pickup_coords")
                 _pc = list(_st_pc) if (_st_pc and len(_st_pc) == 2) else None
-                _pickup_event_id = f"{_zid}_COURIER_PICKED_UP_gtfallback"
+                _pickup_event_id = _durable_transition_id(
+                    f"{_zid}_COURIER_PICKED_UP_gtfallback",
+                    _sorder,
+                )
                 _pickup_payload = {
                     "timestamp": _pu_ts,
                     "pickup_coords": _pc,
                     "source": "ground_truth_fallback",
                 }
+                _pickup_envelope = _canonical_order_envelope(
+                    event_id=_pickup_event_id,
+                    event_type="COURIER_PICKED_UP",
+                    order_id=_zid,
+                    courier_id=_kid,
+                    payload=_pickup_payload,
+                    created_at=datetime.now(timezone.utc),
+                    producer="ground_truth_pickup",
+                )
                 _ev = emit(
                     "COURIER_PICKED_UP",
                     order_id=_zid,
                     courier_id=_kid,
                     payload=_pickup_payload,
                     event_id=_pickup_event_id,
+                    **durable_envelope_kwargs(_pickup_envelope),
                 )
                 _pickup_effect = apply_state_event(
                     {
@@ -2265,6 +2528,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     },
                     event_id=_pickup_event_id,
                     emitted=bool(_ev),
+                    **durable_envelope_kwargs(_pickup_envelope),
                 )
                 if _pickup_effect.should_run_followups:
                     stats["picked_up"] += 1
@@ -2374,18 +2638,36 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         event_id_str = f"{zid}_CZAS_KURIERA_UPDATED{suffix}"
                     else:
                         event_id_str = f"{zid}_CZAS_KURIERA_UPDATED_{int(evt['payload'].get('delta_min',0)*10)}"
+                    if _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+                        _ck_source_revision = evt["payload"].get("new_ck_iso")
+                        if not _ck_source_revision:
+                            raise ValueError("durable CK update lacks source revision")
+                        event_id_str = (
+                            f"{zid}_CZAS_KURIERA_UPDATED_{_ck_source_revision}"
+                        )
+                    _ck_envelope = _canonical_order_envelope(
+                        event_id=event_id_str,
+                        event_type="CZAS_KURIERA_UPDATED",
+                        order_id=zid,
+                        courier_id=str(state_order.get("courier_id") or ""),
+                        payload=evt["payload"],
+                        created_at=datetime.now(timezone.utc),
+                        producer="committed_time_update",
+                    )
                     emit_audit(
                         "CZAS_KURIERA_UPDATED",
                         order_id=zid,
                         courier_id=str(state_order.get("courier_id") or ""),
                         payload=evt["payload"],
                         event_id=event_id_str,
+                        **durable_envelope_kwargs(_ck_envelope),
                     )
                     _ck_effect = apply_state_event(
                         evt,
                         event_id=event_id_str,
                         # Legacy path stosowal state update niezaleznie od DUP.
                         emitted=True,
+                        **durable_envelope_kwargs(_ck_envelope),
                     )
                     if not _ck_effect.should_run_followups:
                         continue
@@ -2417,18 +2699,40 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         p_event_id = f"{zid}_PICKUP_TIME_UPDATED{p_suffix}"
                     else:
                         p_event_id = f"{zid}_PICKUP_TIME_UPDATED_{int(evt_p['payload'].get('delta_min',0)*10)}"
+                    if _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+                        _pickup_source_revision = evt_p["payload"].get(
+                            "new_pickup_at_warsaw"
+                        )
+                        if not _pickup_source_revision:
+                            raise ValueError(
+                                "durable pickup update lacks source revision"
+                            )
+                        p_event_id = (
+                            f"{zid}_PICKUP_TIME_UPDATED_{_pickup_source_revision}"
+                        )
+                    _pickup_time_envelope = _canonical_order_envelope(
+                        event_id=p_event_id,
+                        event_type="PICKUP_TIME_UPDATED",
+                        order_id=zid,
+                        courier_id=str(state_order.get("courier_id") or ""),
+                        payload=evt_p["payload"],
+                        created_at=datetime.now(timezone.utc),
+                        producer="pickup_time_update",
+                    )
                     emit_audit(
                         "PICKUP_TIME_UPDATED",
                         order_id=zid,
                         courier_id=str(state_order.get("courier_id") or ""),
                         payload=evt_p["payload"],
                         event_id=p_event_id,
+                        **durable_envelope_kwargs(_pickup_time_envelope),
                     )
                     _pickup_time_effect = apply_state_event(
                         evt_p,
                         event_id=p_event_id,
                         # Legacy path stosowal state update niezaleznie od DUP.
                         emitted=True,
+                        **durable_envelope_kwargs(_pickup_time_envelope),
                     )
                     if not _pickup_time_effect.should_run_followups:
                         continue
@@ -2526,17 +2830,30 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
                     f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
                 )
                 _target_cid = _panel_cid
-            _cold_event_id = f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_coldstart"
+            _cold_event_id = _durable_transition_id(
+                f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_coldstart",
+                _sorder,
+            )
             _cold_payload = {
                 "source": "cold_start_scan",
                 "nick": _nick_key,
             }
+            _cold_envelope = _canonical_order_envelope(
+                event_id=_cold_event_id,
+                event_type="COURIER_ASSIGNED",
+                order_id=_oid_str,
+                courier_id=_target_cid,
+                payload=_cold_payload,
+                created_at=datetime.now(timezone.utc),
+                producer="cold_start_assignment",
+            )
             _ev = emit_audit(
                 "COURIER_ASSIGNED",
                 order_id=_oid_str,
                 courier_id=_target_cid,
                 payload=_cold_payload,
                 event_id=_cold_event_id,
+                **durable_envelope_kwargs(_cold_envelope),
             )
             _cold_effect = apply_state_event(
                 {
@@ -2547,6 +2864,7 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
                 },
                 event_id=_cold_event_id,
                 emitted=bool(_ev),
+                **durable_envelope_kwargs(_cold_envelope),
             )
             if _cold_effect.should_run_followups:
                 stats["cold_start_emitted"] += 1
@@ -2722,10 +3040,34 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
 
         # Po 3 failach emit PANEL_UNREACHABLE (throttled: max 1/min)
         if _fail_count >= 3 and time.time() - _last_panel_unreachable_emit > 60:
+            if _event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+                # Bucket jest stabilnym source key dla retry po niepewnym
+                # commicie; zmienny tekst bledu nie moze zmieniac koperty.
+                _panel_fail_bucket = int(time.time() / 60)
+                _panel_fail_event_id = f"PANEL_UNREACHABLE_{_panel_fail_bucket}"
+                _panel_fail_payload = {"failure_bucket": _panel_fail_bucket}
+            else:
+                _panel_fail_event_id = (
+                    f"PANEL_UNREACHABLE_{int(time.time() / 60)}"
+                )
+                _panel_fail_payload = {
+                    "fail_count": _fail_count,
+                    "last_error": str(e),
+                }
+            _panel_fail_envelope = _canonical_order_envelope(
+                event_id=_panel_fail_event_id,
+                event_type="PANEL_UNREACHABLE",
+                order_id=None,
+                courier_id=None,
+                payload=_panel_fail_payload,
+                created_at=datetime.now(timezone.utc),
+                producer="panel_unreachable",
+            )
             emit_audit(
                 "PANEL_UNREACHABLE",
-                payload={"fail_count": _fail_count, "last_error": str(e)},
-                event_id=f"PANEL_UNREACHABLE_{int(time.time() / 60)}",
+                payload=_panel_fail_payload,
+                event_id=_panel_fail_event_id,
+                **durable_envelope_kwargs(_panel_fail_envelope),
             )
             _last_panel_unreachable_emit = time.time()
 

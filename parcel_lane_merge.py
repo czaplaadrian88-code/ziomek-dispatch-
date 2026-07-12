@@ -22,8 +22,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dispatch_v2 import common as C
-from dispatch_v2 import event_bus
+from dispatch_v2 import event_bus, event_outbox
 from dispatch_v2 import state_machine as sm
+from dispatch_v2.event_envelope import event_id_after_state_revision
 
 # Pola payloadu NEW_ORDER czytane przez shadow_dispatcher._event_to_pipeline.
 _NEW_ORDER_FIELDS = (
@@ -94,16 +95,37 @@ def _apply_status_inbox() -> int:
         oid = str(e.get("oid"))
         cid = str(e.get("cid") or "")
         eid = f"{oid}_{etype}_{e.get('ts')}"
-        # ``e.ts`` ma niezatwierdzona jednostke/semantyke. Jest tylko czescia
-        # stabilnego event_id; NIE wolno udawac, ze to pickup/delivery time.
-        # OFF zachowuje legacy observer+fallback, ON odrzuca brak timestampu.
+        # Boundary courier_api.main._maybe_inbox_parcel_status zapisuje tu
+        # jawny ``recorded_at`` jako Unix seconds. OFF zachowuje historyczny
+        # payload; durable przekazuje ten sam source time do koperty i reducera.
         payload = {"source": "parcel_status_inbox"}
+        envelope = None
+        try:
+            recorded_at = datetime.fromtimestamp(int(e["ts"]), timezone.utc)
+        except (KeyError, TypeError, ValueError, OSError, OverflowError):
+            if event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+                raise ValueError("parcel status lacks canonical recorded_at")
+        else:
+            if event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+                payload["timestamp"] = recorded_at.isoformat()
+            envelope = event_bus.maybe_create_order_envelope(
+                event_id=eid,
+                event_type=etype,
+                order_id=oid,
+                courier_id=cid,
+                payload=payload,
+                created_at=datetime.now(timezone.utc),
+                source="parcel_lane_merge:status_inbox",
+                policy_version=event_bus.ORDER_EVENT_POLICY_VERSION,
+                producer_key=eid,
+            )
         emitted = event_bus.emit(
             etype,
             order_id=oid,
             courier_id=cid,
             payload=payload,
             event_id=eid,
+            **event_bus.durable_envelope_kwargs(envelope),
         )
         effect = event_bus.apply_state_event(
             {
@@ -114,6 +136,7 @@ def _apply_status_inbox() -> int:
             },
             event_id=eid,
             emitted=bool(emitted),
+            **event_bus.durable_envelope_kwargs(envelope),
         )
         if effect.should_run_followups:
             applied += 1
@@ -151,20 +174,39 @@ def run() -> dict:
         if oid in state:
             stats["kept"] += 1
         else:
-            if not sm.ORDER_FSM_ENFORCEMENT_ENABLED:
+            if not (
+                sm.ORDER_FSM_ENFORCEMENT_ENABLED
+                or event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
+            ):
                 sm.upsert_order(oid, entry, event="PARCEL_LANE_NEW")
             stats["created"] += 1
         payload = {k: entry.get(k) for k in _NEW_ORDER_FIELDS}
         event_id = f"{oid}_NEW_ORDER_parcel"
+        observed_at = datetime.now(timezone.utc)
+        envelope = event_bus.maybe_create_order_envelope(
+            event_id=event_id,
+            event_type="NEW_ORDER",
+            order_id=str(oid),
+            courier_id=None,
+            payload=payload,
+            created_at=observed_at,
+            source="parcel_lane_merge:snapshot",
+            policy_version=event_bus.ORDER_EVENT_POLICY_VERSION,
+            producer_key=event_id,
+        )
         emitted = event_bus.emit(
             "NEW_ORDER",
             order_id=str(oid),
             payload=payload,
             event_id=event_id,
+            **event_bus.durable_envelope_kwargs(envelope),
         )
         if emitted:
             stats["emitted"] += 1
-        if sm.ORDER_FSM_ENFORCEMENT_ENABLED:
+        if (
+            sm.ORDER_FSM_ENFORCEMENT_ENABLED
+            or event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
+        ):
             effect = event_bus.apply_state_event(
                 {
                     "event_type": "NEW_ORDER",
@@ -174,6 +216,7 @@ def run() -> dict:
                 event_id=event_id,
                 emitted=bool(emitted),
                 enforce=True,
+                **event_bus.durable_envelope_kwargs(envelope),
             )
             if effect.changed:
                 supplemental = {
@@ -191,14 +234,32 @@ def run() -> dict:
             continue
         if so.get("status") in _TERMINAL:
             continue
-        if sm.ORDER_FSM_ENFORCEMENT_ENABLED:
+        if (
+            sm.ORDER_FSM_ENFORCEMENT_ENABLED
+            or event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
+        ):
             event_id = f"{oid}_ORDER_CANCELLED_parcel_lane_gone"
+            if event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+                event_id = event_id_after_state_revision(event_id, so)
             payload = {"reason": "snapshot_missing", "source": "parcel_lane_gone"}
+            observed_at = datetime.now(timezone.utc)
+            envelope = event_bus.maybe_create_order_envelope(
+                event_id=event_id,
+                event_type="ORDER_CANCELLED",
+                order_id=str(oid),
+                courier_id=None,
+                payload=payload,
+                created_at=observed_at,
+                source="parcel_lane_merge:snapshot_retirement",
+                policy_version=event_bus.ORDER_EVENT_POLICY_VERSION,
+                producer_key=event_id,
+            )
             emitted = event_bus.emit_audit(
                 "ORDER_CANCELLED",
                 order_id=str(oid),
                 payload=payload,
                 event_id=event_id,
+                **event_bus.durable_envelope_kwargs(envelope),
             )
             event_bus.apply_state_event(
                 {
@@ -209,6 +270,7 @@ def run() -> dict:
                 event_id=event_id,
                 emitted=bool(emitted),
                 enforce=True,
+                **event_bus.durable_envelope_kwargs(envelope),
             )
         else:
             sm.set_status(oid, "cancelled", event="PARCEL_LANE_GONE")

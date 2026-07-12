@@ -15,9 +15,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-from dispatch_v2 import event_bus, state_machine
+from dispatch_v2 import event_bus, event_outbox, state_machine
+from dispatch_v2.event_envelope import event_id_after_state_revision
 
 KURIER_IDS_FILE = Path("/root/.openclaw/workspace/dispatch_state/kurier_ids.json")
 
@@ -45,12 +47,27 @@ def assign_parcel(oid: str, kurier_name: str, time_arg: str | None = None) -> tu
     if time_arg:
         payload["time_arg"] = str(time_arg)
     event_id = f"{oid}_COURIER_ASSIGNED_parcel_{cid}"
+    if event_outbox.DURABLE_EVENT_OUTBOX_ENABLED:
+        event_id = event_id_after_state_revision(event_id, cur)
+    observed_at = datetime.now(timezone.utc)
+    envelope = event_bus.maybe_create_order_envelope(
+        event_id=event_id,
+        event_type="COURIER_ASSIGNED",
+        order_id=str(oid),
+        courier_id=str(cid),
+        payload=payload,
+        created_at=observed_at,
+        source="parcel_assign:manual_assignment",
+        policy_version=event_bus.ORDER_EVENT_POLICY_VERSION,
+        producer_key=event_id,
+    )
     event_bus.emit(
         "COURIER_ASSIGNED",
         order_id=str(oid),
         courier_id=str(cid),
         payload=payload,
         event_id=event_id,
+        **event_bus.durable_envelope_kwargs(envelope),
     )
     state_event = {
         "event_type": "COURIER_ASSIGNED",
@@ -58,12 +75,16 @@ def assign_parcel(oid: str, kurier_name: str, time_arg: str | None = None) -> tu
         "courier_id": str(cid),
         "payload": payload,
     }
-    if state_machine.ORDER_FSM_ENFORCEMENT_ENABLED:
+    if (
+        state_machine.ORDER_FSM_ENFORCEMENT_ENABLED
+        or event_outbox.DURABLE_EVENT_OUTBOX_ENABLED
+    ):
         event_bus.apply_state_event(
             state_event,
             event_id=event_id,
             emitted=True,
             enforce=True,
+            **event_bus.durable_envelope_kwargs(envelope),
         )
     else:
         # Byte-parity OFF: historyczny caller zawsze aplikowal state po emit.
