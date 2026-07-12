@@ -1,0 +1,14 @@
+[Unit]
+Description=Ziomek private ledger rotation dry-run (MANUAL HOLD, NOT INSTALLED)
+ConditionPathExists=/root/.openclaw/workspace/dispatch_state/private_ledger/shadow_decisions/shadow_decisions.jsonl
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/root/.openclaw/workspace/scripts
+Environment=PYTHONPATH=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.data_retention_rotate --path /root/.openclaw/workspace/dispatch_state/private_ledger/shadow_decisions/shadow_decisions.jsonl
+NoNewPrivileges=true
+PrivateTmp=true

@@ -115,15 +115,11 @@ class OsrmReplayer:
 
 
 def _iter_jsonl(path):
-    with open(path, encoding="utf-8") as f:
-        for ln in f:
-            ln = ln.strip()
-            if not ln:
-                continue
-            try:
-                yield json.loads(ln)
-            except json.JSONDecodeError:
-                continue
+    from dispatch_v2.privacy.private_ledger import (
+        configured_reader_key_provider, iter_ledger_records,
+    )
+    key_provider = configured_reader_key_provider()
+    yield from iter_ledger_records(path, key_provider=key_provider)
 
 
 def find_record(order_id: str, record_file: str | None):
@@ -184,12 +180,14 @@ def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
     zcache'ować realny plik przy poprzednim rekordzie w pętli bramki). loadgov:
     krotka wprost (patch _loadgov_compute niżej). k07: dict prefetchu (patch
     get_fresh niżej). Brak `live_inputs` (rekord v0) → (None, None), stary
-    best-effort. Fail-soft per pole."""
+    best-effort. Pola pomocnicze pozostają fail-soft; obecny snapshot `plans`
+    jest wyjątkiem fail-closed, bo PLANS_FILE bez sprzężonego LOCK_FILE mógłby
+    skierować izolowany replay do żywego locka."""
     li = rec.get("live_inputs")
     if not isinstance(li, dict):
         return None, None
 
-    def _redirect(mod, attr, content, cache_obj=None, cache_reset=None):
+    def _redirect(mod, attr, content, cache_obj=None, cache_reset=None, *, fail_loud=False):
         if content is None:
             return
         try:
@@ -200,19 +198,24 @@ def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
             if cache_obj is not None and cache_reset is not None:
                 cache_obj.update(cache_reset)
         except Exception:
-            pass
+            if fail_loud:
+                raise
 
     # reliability — C.A2_RELIABILITY_FEED_PATH (2 czytelników: A2 soft + RAMPA),
     # cache dp._A2_FEED_CACHE (mtime-keyed → reset mtime=None).
     _redirect(C, "A2_RELIABILITY_FEED_PATH", li.get("reliability"),
               getattr(dp, "_A2_FEED_CACHE", None), {"mtime": None})
-    # plans — plan_manager.PLANS_FILE, cache _perf_plans_cache (key-keyed → reset).
-    try:
+    # plans — PLANS_FILE and its dedicated LOCK_FILE are one coupled boundary.
+    # Redirecting only the JSON made isolated replay touch the production lock
+    # (order-dependent HERMETIC-GUARD failure).  Both paths must move together.
+    if li.get("plans") is not None:
         from dispatch_v2 import plan_manager as _pm
         _redirect(_pm, "PLANS_FILE", li.get("plans"),
-                  getattr(_pm, "_perf_plans_cache", None), {"key": None, "data": None})
-    except Exception:
-        pass
+                  getattr(_pm, "_perf_plans_cache", None), {"key": None, "data": None},
+                  fail_loud=True)
+        _lock_path = Path(tmpdir) / "PLANS_FILE.lock"
+        _lock_path.touch(mode=0o600, exist_ok=True)
+        _patch(_pm, "LOCK_FILE", _lock_path)
     # calib eta/bias — calib_maps.*_PATH, cache _eta_cache/_bias_cache (mtime=None).
     try:
         from dispatch_v2 import calib_maps as _cm

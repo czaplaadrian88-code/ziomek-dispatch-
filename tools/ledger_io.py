@@ -184,6 +184,12 @@ def _read_live_tail(path: str, cutoff_dt: Optional[datetime], max_bytes: int):
     (ts ≥ cutoff), skanonizowane rekordy. Zakłada chronologiczny append (log
     dopisywany w czasie rzeczywistym — spełnione dla shadow_decisions).
     """
+    from dispatch_v2.privacy.private_ledger import path_is_private_ledger
+    # Private files require the hardened owner/mode/link/ancestor reader.  The
+    # legacy tail fast-path uses ordinary path-based stat/open and is therefore
+    # intentionally disabled for them.
+    if path_is_private_ledger(path):
+        return None
     try:
         size = os.path.getsize(path)
     except OSError:
@@ -208,17 +214,14 @@ def _read_live_tail(path: str, cutoff_dt: Optional[datetime], max_bytes: int):
         return None
     text = chunk.decode("utf-8", errors="replace")
     # Odrzuć 1. (ułamaną) linię — cięcie prawie na pewno trafia w środek rekordu.
-    parsed = []
-    for ln in text.split("\n")[1:]:
-        ln = ln.strip()
-        if not ln:
-            continue
-        try:
-            r = json.loads(ln)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(r, dict):
-            parsed.append(r)
+    from dispatch_v2.privacy.private_ledger import (
+        configured_reader_key_provider, iter_decoded_jsonl,
+    )
+    key_provider = configured_reader_key_provider()
+    parsed = list(iter_decoded_jsonl(
+        iter(text.split("\n")[1:]), key_provider=key_provider,
+        strict_json=False,
+    ))
     if not parsed:
         return None
     if cutoff_dt is not None:
@@ -254,7 +257,25 @@ def iter_shadow_decisions(cutoff_dt: Optional[datetime], *,
         if tail is not None:
             yield from tail
             return
-    for rec in _rotated_logs.iter_jsonl_records(path, cutoff_dt):
+    from dispatch_v2.privacy.private_ledger import (
+        configured_reader_key_provider, iter_decoded_jsonl, iter_ledger_records,
+        path_is_private_ledger,
+    )
+    key_provider = configured_reader_key_provider()
+    if path_is_private_ledger(path):
+        def _private_records():
+            for private_path in _rotated_logs.files_in_window(path, cutoff_dt):
+                if os.path.exists(private_path):
+                    yield from iter_ledger_records(
+                        private_path, key_provider=key_provider, private_file=True,
+                    )
+        records = _private_records()
+    else:
+        records = iter_decoded_jsonl(
+            _rotated_logs.iter_jsonl_lines(path, cutoff_dt),
+            key_provider=key_provider, strict_json=False,
+        )
+    for rec in records:
         if cutoff_dt is not None:
             ts = _rec_ts(rec, _TS_FIELDS["shadow"])
             if ts is None or ts < cutoff_dt:

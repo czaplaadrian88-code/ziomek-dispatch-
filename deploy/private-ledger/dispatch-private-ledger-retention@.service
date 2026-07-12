@@ -1,0 +1,13 @@
+[Unit]
+Description=Ziomek private ledger metadata-only retention plan for %i days (SOURCE TEMPLATE)
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/root/.openclaw/workspace/scripts
+Environment=PYTHONPATH=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.tools.data_retention_plan --root /root/.openclaw/workspace/dispatch_state/private_ledger --retention-days %i
+NoNewPrivileges=true
+PrivateTmp=true

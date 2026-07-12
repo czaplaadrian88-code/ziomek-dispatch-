@@ -48,7 +48,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from dispatch_v2 import common as C
 from dispatch_v2 import osrm_client
-from dispatch_v2.core.jsonl_appender import append_jsonl
+from dispatch_v2.privacy.private_ledger import append_ledger_record, legacy_gc_allowed
 
 _log = C.setup_logger("world_record", "/root/.openclaw/workspace/scripts/logs/world_record.log")
 
@@ -238,9 +238,9 @@ def _capture(order_event: Optional[dict], fleet_snapshot: Any, now: Optional[dat
         "verdict": getattr(result, "verdict", None),
     }
     path = Path(RECORD_DIR) / f"world_record-{ts:%Y%m%d}.jsonl"
-    if not path.exists():
+    if not path.exists() and legacy_gc_allowed():
         _gc(ts)
-    append_jsonl(str(path), rec)
+    append_ledger_record("world_record", str(path), rec)
 
 
 def around_assess(fn: Callable[[], Any], order_event: Optional[dict] = None,

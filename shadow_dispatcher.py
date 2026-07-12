@@ -1011,8 +1011,8 @@ def _append_decision(path: str, record: dict) -> None:
     (tylko shadow_dispatcher) ale pattern unifikowany cross-codebase
     (eliminuje cargo-cult `open('a')` przy kolejnym dodaniu writer'a).
     """
-    from dispatch_v2.core.jsonl_appender import append_jsonl
-    append_jsonl(path, record)
+    from dispatch_v2.privacy.private_ledger import append_ledger_record
+    append_ledger_record("shadow_decisions", path, record)
 
 
 def _probe_age_s(iso_val, now: datetime) -> Optional[float]:
