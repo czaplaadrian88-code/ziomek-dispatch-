@@ -306,10 +306,14 @@ najnowszego:
 2. git revert c9d02b4;
 3. git revert b53430a.
 
-Revert tylko E1 pozostawia zweryfikowany source E0: 5044911, potem c9d02b4.
-Nie ma destrukcyjnej down migration i nie wolno usuwać failure journalu,
-dedup ledgeru ani state history. Restart i restore danych są N-D, ponieważ nie
-było deployu ani live write.
+Pełny rollback całej serii to kolejno 5044911, c9d02b4 i b53430a; usuwa on
+również wspólny guard C40 chroniący migracje E0 i E1. Rollback wyłącznie E1 nie
+może więc być mechanicznym revertem pary 5044911+c9d02b4. Musi być
+dedykowanym patchem, który usuwa część E1, lecz zachowuje albo ponownie
+aplikuje część E0 z 5044911; bez takiego patcha bezpiecznym wariantem jest
+pozostawienie całej serii OFF. Nie ma destrukcyjnej down migration i nie wolno
+usuwać failure journalu, dedup ledgeru ani state history. Restart i restore
+danych są N-D, ponieważ nie było deployu ani live write.
 
 ## Chronione artefakty
 
