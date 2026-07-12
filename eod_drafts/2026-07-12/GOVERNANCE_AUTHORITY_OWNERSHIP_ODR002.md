@@ -52,3 +52,35 @@ Rollback dokumentacyjny: jawny revert commitu tego sprintu. Nie ma rollbacku
 runtime, bo nie było operacji live. Aktywny `docs/chief-engineer/**` pozostaje
 obcym, nietkniętym write-setem i musi później zrekoncyliować ODR-002 jako nowe
 źródło właścicielskie przez własną governance-compatibility ścieżkę.
+
+## Final close
+
+- Branch/worktree/base: `codex/governance-authority-ownership-20260712T222000Z`,
+  `/root/dispatch_governance_authority_20260712T222000Z`, base `fd5678b`.
+- Kanoniczny commit: `9eaa0f8` (`docs(governance): record autonomy authority
+  ownership`), fast-forward do `master` i push; `master=origin/master` po
+  integracji.
+- Memory counterpart: branch o tej samej nazwie, worktree
+  `/root/memory_governance_authority_20260712T222000Z`, kanoniczny commit
+  `4f60ae6`, fast-forward/push do osobnego repo memory.
+- Walidacja: ODR 8/8 punktów, dispatch/memory changed-path allowlist PASS,
+  link/source grep PASS, `git diff --check` PASS w obu repo. Adversarial review
+  usunął stare założenie „OFF ⇒ merge bezpieczny" z ADR-002; OFF wymaga parity,
+  a merge ma osobną bramkę i nie nadaje authority.
+- Checkery live read-only: flag lifecycle 505/505 PASS. Fingerprint ma dwa
+  zastane rozjazdy niezwiązane ze zmianą: `USE_V2_PARSER` martwy env oraz
+  `ENABLE_STAGE_TIMING_OBSERVATION` brakujący w panel-watcher. Nie zmieniano ich.
+- Postimage `2026-07-12T22:28:44Z`: shadow PID 573430, panel-watcher 3659486,
+  SLA 2998575, courier-api 925329; wszystkie active/running, NRestarts0;
+  parser healthy/v2, errors0, pending0. `atq` nadal tylko 214.
+- Chroniony dirty
+  `eod_drafts/2026-07-10/CLAIM_LEDGER_HARD_GATE_CARD.md` pozostał nietknięty.
+  Aktywne `docs/chief-engineer/**` i `docs/value-moat-kpi/**` także nietknięte.
+- Pełna regresja produktu N-D: ostatni zielony niezmienionego kodu
+  5152/27/8/0; ciężki docs-only rerun skaziłby canary at-214. Zero kodu,
+  runtime, flag, karty, podpisu, gate'a, evala/progu, danych i usług.
+- Rollback: jawny `git revert 9eaa0f8` dla kanonu; osobny revert memory
+  `4f60ae6`. Brak rollbacku runtime, backupu danych i restart-order, bo nie było
+  operacji live.
+- Nowy job/monitor/termin: N-D. Istniejący at-214 13.07 12:15 UTC pozostaje
+  niezależny i bez zmian. Shadow-jobs registry nie wymaga wpisu ODR-002.
