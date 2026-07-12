@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "a360.sec1.provider-proof.v1",
+  "title": "A360 SEC1 provider firewall proof",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "change_id",
+    "provider",
+    "attachment_state",
+    "ruleset_sha256",
+    "denied_tcp_ports_ipv4",
+    "denied_tcp_ports_ipv6",
+    "captured_at_utc",
+    "valid_until_utc"
+  ],
+  "properties": {
+    "schema": {"const": "a360.sec1.provider-proof.v1"},
+    "change_id": {"type": "string", "pattern": "^A360-SEC1-[A-Z0-9][A-Z0-9._-]{2,63}$"},
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "not": {"const": "UNKNOWN"}
+    },
+    "attachment_state": {"const": "ATTACHED_TO_CURRENT_HOST"},
+    "ruleset_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "denied_tcp_ports_ipv4": {"const": [8767, 9222]},
+    "denied_tcp_ports_ipv6": {"const": [8767, 9222]},
+    "captured_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "valid_until_utc": {"type": "string", "format": "date-time", "pattern": "Z$"}
+  }
+}

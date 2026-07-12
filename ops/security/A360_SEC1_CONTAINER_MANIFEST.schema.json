@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "a360.sec1.container-manifest.v1",
+  "title": "A360 SEC1 immutable openclaw-browser source manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "container_name",
+    "source",
+    "image_reference",
+    "published_ports",
+    "volumes",
+    "networks",
+    "capabilities",
+    "no_new_privileges",
+    "read_only_rootfs",
+    "healthcheck_contract",
+    "restart_policy",
+    "raw_argv_recorded",
+    "environment_values_embedded"
+  ],
+  "properties": {
+    "schema": {"const": "a360.sec1.container-manifest.v1"},
+    "container_name": {"const": "openclaw-browser"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_id", "manifest_path", "source_commit", "manifest_sha256"],
+      "properties": {
+        "repository_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "manifest_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+        },
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "image_reference": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$"
+    },
+    "published_ports": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["host_address", "host_port", "container_port", "protocol"],
+        "properties": {
+          "host_address": {"const": "127.0.0.1"},
+          "host_port": {"const": 9222},
+          "container_port": {"const": 9222},
+          "protocol": {"const": "tcp"}
+        }
+      }
+    },
+    "volumes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["logical_source_id", "container_target", "read_only"],
+        "properties": {
+          "logical_source_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "container_target": {"type": "string", "pattern": "^/", "maxLength": 256},
+          "read_only": {"type": "boolean"}
+        }
+      }
+    },
+    "networks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1, "maxLength": 128},
+      "uniqueItems": true
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"},
+      "uniqueItems": true
+    },
+    "no_new_privileges": {"const": true},
+    "read_only_rootfs": {"type": "boolean"},
+    "healthcheck_contract": {"type": "string", "minLength": 1, "maxLength": 128},
+    "restart_policy": {"enum": ["no", "on-failure", "unless-stopped"]},
+    "raw_argv_recorded": {"const": false},
+    "environment_values_embedded": {"const": false}
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schema": "a360.sec1.provider-proof.v1",
+  "change_id": "A360-SEC1-REPLACE-ME",
+  "provider": "UNKNOWN",
+  "attachment_state": "NOT_PROVEN",
+  "ruleset_sha256": null,
+  "denied_tcp_ports_ipv4": [],
+  "denied_tcp_ports_ipv6": [],
+  "captured_at_utc": null,
+  "valid_until_utc": null
+}

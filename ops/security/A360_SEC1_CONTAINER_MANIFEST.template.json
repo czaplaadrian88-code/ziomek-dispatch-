@@ -1,0 +1,28 @@
+{
+  "schema": "a360.sec1.container-manifest.v1",
+  "container_name": "openclaw-browser",
+  "source": {
+    "repository_id": null,
+    "manifest_path": null,
+    "source_commit": null,
+    "manifest_sha256": null
+  },
+  "image_reference": null,
+  "published_ports": [
+    {
+      "host_address": "127.0.0.1",
+      "host_port": 9222,
+      "container_port": 9222,
+      "protocol": "tcp"
+    }
+  ],
+  "volumes": [],
+  "networks": [],
+  "capabilities": [],
+  "no_new_privileges": true,
+  "read_only_rootfs": false,
+  "healthcheck_contract": null,
+  "restart_policy": null,
+  "raw_argv_recorded": false,
+  "environment_values_embedded": false
+}
