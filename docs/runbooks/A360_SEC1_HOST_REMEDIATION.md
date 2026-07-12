@@ -24,7 +24,8 @@ Source/PREP nie zmienia tego stanu. Nawet kompletny template nie jest dowodem
 instalacji. Host może zostać nazwany zweryfikowanym dopiero wtedy, gdy po
 zatwierdzonym maintenance są równocześnie: bezpieczne bindy, trwałe reguły obu
 rodzin, provider proof, zgodny receipt rulesetu oraz niezależne allowed/denied
-probes. Brak trasy IPv6 nie jest dowodem deny.
+probes, exact immutable browser postimage i świeży receipt postimage Courier
+API związany z bieżącym PID/unitem. Brak trasy IPv6 nie jest dowodem deny.
 
 ## 2. Dokładny stan docelowy
 
@@ -52,14 +53,30 @@ non-loopback pozostają fail-closed.
   dedicated-chain; nie zawiera funkcji apply i nie jest zainstalowany.
 - `ops/security/A360_SEC1_PROVIDER_PROOF.schema.json` oraz template — proof
   providera z attachment state, hashem eksportu i exact denied ports v4/v6.
+- `ops/security/A360_SEC1_COURIER_API_DEPLOYMENT_RECEIPT.schema.json` oraz
+  template — provenance wersjonowanego deployera, tracked postimage i
+  allowlisted snapshot bieżącego unitu/PID.
 - `ops/security/A360_SEC1_EVIDENCE.template.json` — wspólna koperta source,
-  provider, probes, host receipt, credential receipt i rollback preconditions.
+  provider, probes, host receipt, deployment receipt Courier API, credential
+  receipt i rollback preconditions.
 - `tools/host_boundary_audit.py` — read-only audit plus walidacja koperty 0600.
 
 Template skopiowany do change record musi nazywać się dokładnie
 `A360_SEC1_EVIDENCE.json`, być regularnym plikiem root:root, mode 0400 albo 0600,
 `nlink=1` i nie może być symlinkiem. Auditor czyta go z `O_NOFOLLOW`, nie emituje
 wartości pól i przy każdym braku zwraca stabilny reason code.
+
+Koperta v2 ma jeden wspólny `observation_id` także w source contract i we
+wszystkich proof/receiptach oraz
+wersjonowaną politykę `a360.sec1.evidence-time-policy.v1`:
+
+- max age względem bieżącego `observed_at_utc`: 900 s;
+- max future skew: 30 s;
+- max wzajemny skew provider/probes/host/API deployment/credential/rollback:
+  300 s.
+
+Wartości są częścią kontraktu, nie ustawieniami operatora. Ich zwiększenie albo
+brak wspólnego observation ID jest HOLD i wymaga nowej wersji polityki/review.
 
 ## 4. Source lanes przed maintenance
 
@@ -85,7 +102,12 @@ Patch w tym przyszłym worktree ma:
    zawierać wartości ani ścieżki carriera.
 6. Mieć test pozytywny nowej rewizji i negatywny poprzedniej wyłącznie kodami
    statusu; żadnego porównywania lub logowania treści.
-7. Zapisać postimage commit i SHA-256 tracked kodu w evidence bundle.
+7. Wersjonowany deploy provisioner ma po udanym starcie utworzyć świeży receipt
+   `a360.sec1.courier-api-deployment-receipt.v1`: własny commit/hash artefaktu,
+   postimage commit oraz SHA-256 tracked `config.py`/`main.py`, a także
+   allowlisted Id/stany/MainPID odczytane po starcie. Receipt musi odpowiadać
+   policy w source contract i wspólnemu observation ID; ręcznie przepisana
+   deklaracja bez udowodnionego provisionera jest HOLD.
 
 Unit/drop-in i daemon-reload są osobną operacją live za ACK. EnvironmentFile,
 pełne Environment i `/proc/*/environ` nie są źródłami dowodowymi.
@@ -108,6 +130,12 @@ Owner ma dostarczyć manifest zgodny z
 
 Tag-only, brak wolumenu/sieci/health, source `UNKNOWN` albo próba dodania `::`,
 `0.0.0.0` czy non-loopback oznacza STOP przed recreate.
+
+Podczas `--live --evidence` auditor zachowuje pole image wyłącznie w pamięci i
+porównuje je bajt-w-bajt z `image_reference` source contract. Nazwa kontenera,
+owner `docker-proxy` i poprawny port nie wystarczają. Tag-only, inny digest pod
+tą samą nazwą albo brak pola image daje HOLD. Image, path i hash nie są
+emitowane w JSON ani w reason code.
 
 ### 4.3 Host firewall — idempotentny kontrakt
 
@@ -141,6 +169,10 @@ eksportu kontrolowanego przez ownera i zawierać:
 - exact denied ports `[8767, 9222]` osobno dla IPv4 i IPv6;
 - `captured_at_utc` i ograniczone `valid_until_utc`.
 
+`captured_at_utc` musi dodatkowo mieścić się w tej samej polityce świeżości i
+observation ID co receipt hosta, credentialu, rollback i niezależne probes.
+Samo odległe `valid_until_utc` nie odświeża starego provider proof.
+
 Nie wpisuje się publicznych adresów hosta, tokenów API, danych konta ani raw
 odpowiedzi providera do evidence bundle. Provider API pozostaje poza zakresem
 tej sesji.
@@ -155,7 +187,8 @@ Wszystkie punkty muszą być spełnione jednocześnie:
 3. Dwie działające sesje administracyjne; druga osoba potwierdza nowy login i
    utrzymuje sesję do końca smoke.
 4. Zielone source/targeted/full testy zamrożonych commitów.
-5. Courier API postimage commit/hash i zgodny patch bez process fallbacku.
+5. Courier API postimage commit/hash, zgodny patch bez process fallbacku i
+   gotowy wersjonowany producer świeżego deployment receiptu.
 6. Zgodny container manifest oraz immutable obecny i poprzedni image digest.
 7. Wersjonowany host provisioner z dry-run/check, single-jump reconciliation i
    persistence po restarcie/reboocie.
@@ -196,14 +229,19 @@ tokenów providera ani surowych danych konta.
 5. **Host deny:** po ACK zainstaluj/reconcile dedykowane chainy obu rodzin.
    Dry-run musi przed apply pokazać dokładnie jeden jump i oczekiwaną kolejność.
 6. **Courier API:** wdroż zatwierdzony commit i unit `LoadCredential`, aktywuj
-   nową rewizję, wykonaj daemon-reload i jeden kontrolowany restart.
+   nową rewizję, wykonaj daemon-reload i jeden kontrolowany restart. Dopiero po
+   starcie wersjonowany provisioner tworzy deployment receipt z aktualnym
+   PID/unitem i exact tracked postimage; receipt sprzed restartu jest nieważny.
 7. **Browser:** dopiero z zatwierdzonego manifestu i immutable digest wykonaj
    pojedyncze recreate do loopback-only publish.
 8. **Credential:** potwierdź nową rewizję pozytywnie i poprzednią negatywnie
    kodem statusu. Starej wartości nie używaj jako rollbacku.
-9. **Evidence:** zbierz host receipt, provider proof, credential receipt i probe
-   matrix. Skopiuj template jako `A360_SEC1_EVIDENCE.json`, uzupełnij bez danych
-   wrażliwych i ustaw root-only mode.
+9. **Evidence:** zbierz host receipt, provider proof, deployment receipt Courier
+   API, credential receipt i probe matrix. Skopiuj template jako
+   `A360_SEC1_EVIDENCE.json`, uzupełnij bez danych wrażliwych, nadaj source
+   contract i wszystkim sekcjom jeden observation ID oraz ustaw root-only mode.
+   Od pierwszego do ostatniego proof nie może minąć więcej niż 300 s; inaczej
+   odśwież cały zestaw, nie tylko najstarszą sekcję.
 10. **Verify:** uruchom auditor z evidence. Każdy reason code lub HOLD oznacza
     niedokończoną operację; nie ogłaszaj zabezpieczenia.
 
@@ -262,15 +300,20 @@ Klasy blokujące:
 - `PROVIDER_PROOF_*` — provider unknown, brak attachment/deny/czasu;
 - `EXTERNAL_PROBE_*` — brak niezależności, IPv4/IPv6 lub allowed path;
 - `HOST_RULE_RECEIPT_*` — brak persistence, order proof albo runtime mismatch;
+- `COURIER_API_DEPLOYMENT_RECEIPT_*` / `COURIER_API_RUNTIME_*` — brak/stary
+  receipt, niezgodny producer/postimage albo mismatch bieżącego PID/unitu;
+- `BROWSER_RUNTIME_*` — live image nie jest exact immutable postimage source
+  contract, nawet gdy nazwa/port/owner się zgadzają;
 - `CREDENTIAL_REVISION_*` / `CREDENTIAL_RECEIPT_*` — missing, symlink, owner,
   mode, nlink, empty, brak odrzucenia starej rewizji;
 - `ROLLBACK_*` — rollback mógłby otworzyć granicę lub przywrócić credential;
 - `EVIDENCE_*` — zła nazwa, owner/mode, symlink, rozmiar, JSON albo pole
-  zabronione.
+  zabronione, niewłaściwa wersja time policy, stale/future proof lub wzajemny
+  skew ponad 300 s.
 
 Auditor emituje tylko kody, klasy bindu, logicznych ownerów i agregaty. Surowe
-adresy, image tag, repo path z proof, wartości credentialu i złośliwe pola nie
-trafiają do JSON.
+adresy, PID, image reference, repo/file path, commit/hash z proof, wartości
+credentialu i złośliwe pola nie trafiają do JSON.
 
 ## 11. Komendy walidacyjne dla FLIPMASTER-a
 
@@ -284,7 +327,8 @@ Po skopiowaniu i uzupełnieniu template w root-only change record:
   --live --evidence /approved/change-record/A360_SEC1_EVIDENCE.json
 ```
 
-Pierwsza komenda dowodzi wyłącznie spójności koperty. Dopiero druga wiąże receipt
-z bieżącym rulesetem i listenerami. `PASS` bez niezależnych probe nie jest
+Pierwsza komenda dowodzi wyłącznie spójności koperty. Dopiero druga wiąże
+receipty z bieżącym rulesetem, listenerami, exact live image oraz PID/unitem API.
+`PASS` bez niezależnych probe i obu runtime postimage bindingów nie jest
 osiągalny przez kontrakt. W tej sesji żadnej z komend evidence/live-apply nie
 wykonano; aktualny host pozostaje `HOLD`.

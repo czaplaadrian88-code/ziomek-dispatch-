@@ -8,6 +8,10 @@ from tools import host_boundary_audit as audit
 
 
 _CHANGE_ID = "A360-SEC1-GOLDEN"
+_OBSERVATION_ID = "OBS-GOLDEN"
+_BROWSER_IMAGE_REFERENCE = "registry.example/openclaw-browser@sha256:" + "e" * 64
+_DEPLOY_PROVISIONER_COMMIT = "d" * 40
+_DEPLOY_PROVISIONER_HASH = "e" * 64
 _HASHES = {
     "input_v4": "1" * 64,
     "input_v6": "2" * 64,
@@ -23,11 +27,14 @@ def _snapshot(
     docker_v4: str = "TARGET_DENY_RULE_SEEN",
     docker_v6: str = "TARGET_DENY_RULE_SEEN",
     guard_fingerprints: dict[str, str] | None = None,
+    browser_image_reference: str = _BROWSER_IMAGE_REFERENCE,
+    unit: dict[str, str] | None = None,
 ) -> audit.RuntimeSnapshot:
     return audit.RuntimeSnapshot(
         observed_at_utc="2030-01-02T03:04:05Z",
         listeners=tuple(listeners),
-        unit={
+        unit=unit
+        or {
             "Id": audit.EXPECTED_UNIT,
             "LoadState": "loaded",
             "ActiveState": "active",
@@ -39,6 +46,7 @@ def _snapshot(
             audit.DockerRow(
                 name=audit.EXPECTED_CONTAINER,
                 published_ports="127.0.0.1:9222->9222/tcp",
+                image_reference=browser_image_reference,
             ),
         ),
         ufw="INACTIVE",
@@ -96,9 +104,17 @@ def _valid_bundle() -> dict[str, object]:
     return {
         "schema": audit.EVIDENCE_SCHEMA,
         "change_id": _CHANGE_ID,
+        "observation_id": _OBSERVATION_ID,
+        "time_policy": {
+            "schema": audit.TIME_POLICY_SCHEMA,
+            "max_age_seconds": audit.EVIDENCE_MAX_AGE_SECONDS,
+            "max_future_skew_seconds": audit.EVIDENCE_MAX_FUTURE_SKEW_SECONDS,
+            "max_mutual_skew_seconds": audit.EVIDENCE_MAX_MUTUAL_SKEW_SECONDS,
+        },
         "source_contract": {
             "schema": audit.SOURCE_CONTRACT_SCHEMA,
             "change_id": _CHANGE_ID,
+            "observation_id": _OBSERVATION_ID,
             "targets": {
                 "8767": {
                     "owner": audit.EXPECTED_UNIT,
@@ -118,6 +134,12 @@ def _valid_bundle() -> dict[str, object]:
                 "bind_policy": "LOOPBACK_ONLY",
                 "credential_loader": "SYSTEMD_LOAD_CREDENTIAL",
                 "process_fallback_enabled": False,
+                "deployment_receipt_policy": {
+                    "schema": audit.COURIER_DEPLOYMENT_POLICY_SCHEMA,
+                    "producer_kind": "VERSIONED_DEPLOY_PROVISIONER",
+                    "provisioner_source_commit": _DEPLOY_PROVISIONER_COMMIT,
+                    "provisioner_artifact_sha256": _DEPLOY_PROVISIONER_HASH,
+                },
             },
             "browser_container": {
                 "container_name": audit.EXPECTED_CONTAINER,
@@ -125,7 +147,7 @@ def _valid_bundle() -> dict[str, object]:
                 "manifest_path": "containers/openclaw-browser.json",
                 "source_commit": "c" * 40,
                 "manifest_sha256": "d" * 64,
-                "image_reference": "registry.example/openclaw-browser@sha256:" + "e" * 64,
+                "image_reference": _BROWSER_IMAGE_REFERENCE,
                 "publish_bind_classes": ["LOOPBACK_V4"],
             },
             "host_firewall": _firewall_plan(),
@@ -153,17 +175,19 @@ def _valid_bundle() -> dict[str, object]:
         "provider_proof": {
             "schema": audit.PROVIDER_PROOF_SCHEMA,
             "change_id": _CHANGE_ID,
+            "observation_id": _OBSERVATION_ID,
             "provider": "APPROVED_PROVIDER",
             "attachment_state": "ATTACHED_TO_CURRENT_HOST",
             "ruleset_sha256": "f" * 64,
             "denied_tcp_ports_ipv4": [8767, 9222],
             "denied_tcp_ports_ipv6": [8767, 9222],
-            "captured_at_utc": "2030-01-01T00:00:00Z",
+            "captured_at_utc": "2030-01-02T03:04:05Z",
             "valid_until_utc": "2030-02-01T00:00:00Z",
         },
         "external_probes": {
             "schema": audit.PROBE_PROOF_SCHEMA,
             "change_id": _CHANGE_ID,
+            "observation_id": _OBSERVATION_ID,
             "independent_vantage": True,
             "observed_at_utc": "2030-01-02T03:04:05Z",
             "results": {
@@ -179,6 +203,7 @@ def _valid_bundle() -> dict[str, object]:
         "host_rules_receipt": {
             "schema": audit.HOST_RECEIPT_SCHEMA,
             "change_id": _CHANGE_ID,
+            "observation_id": _OBSERVATION_ID,
             "observed_at_utc": "2030-01-02T03:04:05Z",
             "live_ruleset_sha256": dict(_HASHES),
             "ordered_checks": {key: "PASS" for key in _HASHES},
@@ -188,9 +213,33 @@ def _valid_bundle() -> dict[str, object]:
                 "artifact_sha256": "a" * 64,
             },
         },
+        "courier_api_deployment_receipt": {
+            "schema": audit.COURIER_DEPLOYMENT_RECEIPT_SCHEMA,
+            "change_id": _CHANGE_ID,
+            "observation_id": _OBSERVATION_ID,
+            "observed_at_utc": "2030-01-02T03:04:05Z",
+            "producer": {
+                "kind": "VERSIONED_DEPLOY_PROVISIONER",
+                "source_commit": _DEPLOY_PROVISIONER_COMMIT,
+                "artifact_sha256": _DEPLOY_PROVISIONER_HASH,
+            },
+            "postimage": {
+                "source_commit": "b" * 40,
+                "config_sha256": "b" * 64,
+                "main_sha256": "c" * 64,
+            },
+            "runtime": {
+                "unit_id": audit.EXPECTED_UNIT,
+                "main_pid": 41,
+                "load_state": "loaded",
+                "active_state": "active",
+                "sub_state": "running",
+            },
+        },
         "credential_receipt": {
             "schema": audit.CREDENTIAL_RECEIPT_SCHEMA,
             "change_id": _CHANGE_ID,
+            "observation_id": _OBSERVATION_ID,
             "observed_at_utc": "2030-01-02T03:04:05Z",
             "metadata": {
                 "exists": True,
@@ -210,6 +259,8 @@ def _valid_bundle() -> dict[str, object]:
         "rollback_preconditions": {
             "schema": "a360.sec1.rollback-preconditions.v1",
             "change_id": _CHANGE_ID,
+            "observation_id": _OBSERVATION_ID,
+            "observed_at_utc": "2030-01-02T03:04:05Z",
             "second_admin_session_active": True,
             "host_denies_verified": True,
             "provider_denies_verified": True,
@@ -371,9 +422,21 @@ def test_raw_malicious_fields_are_not_emitted(tmp_path: Path) -> None:
 
     malicious_bundle = _valid_bundle()
     malicious_bundle["password"] = private_marker
+    private_path_marker = "private/manifests/browser-private.json"
+    private_hash_marker = "8" * 64
+    private_image_reference = "private.example/browser@sha256:" + "6" * 64
     malicious_bundle["source_contract"]["browser_container"][
         "manifest_repository"
     ] = personal_marker
+    malicious_bundle["source_contract"]["browser_container"][
+        "manifest_path"
+    ] = private_path_marker
+    malicious_bundle["source_contract"]["browser_container"][
+        "image_reference"
+    ] = private_image_reference
+    malicious_bundle["source_contract"]["courier_api"][
+        "config_sha256"
+    ] = private_hash_marker
     evidence_rendered = audit.render(
         audit.analyze(
             _snapshot(*_safe_listeners(), guard_fingerprints=dict(_HASHES)),
@@ -382,8 +445,34 @@ def test_raw_malicious_fields_are_not_emitted(tmp_path: Path) -> None:
     )
     assert private_marker not in evidence_rendered
     assert personal_marker not in evidence_rendered
+    assert private_path_marker not in evidence_rendered
+    assert private_hash_marker not in evidence_rendered
+    assert private_image_reference not in evidence_rendered
     assert "EVIDENCE_PROHIBITED_FIELD_PRESENT" in evidence_rendered
     assert "EVIDENCE_FIELDS_INVALID" in evidence_rendered
+
+    private_pid_marker = 90909091
+    pid_bound_bundle = _valid_bundle()
+    pid_bound_bundle["courier_api_deployment_receipt"]["runtime"][
+        "main_pid"
+    ] = private_pid_marker
+    pid_bound_snapshot = _snapshot(
+        audit.Listener(8767, "LOOPBACK_V4", "python", private_pid_marker),
+        audit.Listener(9222, "LOOPBACK_V4", "docker-proxy", 52),
+        guard_fingerprints=dict(_HASHES),
+        unit={
+            "Id": audit.EXPECTED_UNIT,
+            "LoadState": "loaded",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": str(private_pid_marker),
+            "NRestarts": "0",
+        },
+    )
+    pid_bound_result = audit.analyze(pid_bound_snapshot, pid_bound_bundle)
+    pid_bound_rendered = audit.render(pid_bound_result)
+    assert pid_bound_result["verdict"] == "PASS"
+    assert str(private_pid_marker) not in pid_bound_rendered
 
     evidence_path = tmp_path / audit.EVIDENCE_FILENAME
     evidence_path.write_text(json.dumps(_valid_bundle()), encoding="utf-8")
@@ -462,17 +551,51 @@ def test_command_allowlist_has_no_broad_process_or_container_dump() -> None:
 
 
 def test_parsers_normalize_without_preserving_image_or_unknown_unit_fields() -> None:
+    private_image_marker = "private.example/browser@sha256:" + "7" * 64
     rows = audit.parse_docker_ps(
-        audit.EXPECTED_CONTAINER + "\tPRIVATE_IMAGE_MARKER\t0.0.0.0:9222->9222/tcp"
+        audit.EXPECTED_CONTAINER
+        + "\t"
+        + private_image_marker
+        + "\t0.0.0.0:9222->9222/tcp"
     )
     unit = audit.parse_unit_properties(
         "Id=courier-api.service\nMainPID=41\nUnknown=PRIVATE_UNIT_MARKER"
     )
 
     assert rows == (
-        audit.DockerRow(audit.EXPECTED_CONTAINER, "0.0.0.0:9222->9222/tcp"),
+        audit.DockerRow(
+            audit.EXPECTED_CONTAINER,
+            "0.0.0.0:9222->9222/tcp",
+            private_image_marker,
+        ),
     )
+    assert private_image_marker not in repr(rows)
     assert unit == {"Id": "courier-api.service", "MainPID": "41"}
+
+    wrong_image_runtime = audit.analyze(
+        _snapshot(
+            *_safe_listeners(),
+            guard_fingerprints=dict(_HASHES),
+            browser_image_reference="registry.example/replaced@sha256:" + "9" * 64,
+        ),
+        _valid_bundle(),
+    )
+    assert wrong_image_runtime["verdict"] == "HOLD"
+    assert "BROWSER_RUNTIME_IMAGE_MISMATCH" in wrong_image_runtime["findings"]
+    rendered_wrong_image = audit.render(wrong_image_runtime)
+    assert "registry.example/replaced" not in rendered_wrong_image
+    assert _BROWSER_IMAGE_REFERENCE not in rendered_wrong_image
+
+    mutable_live_image = audit.analyze(
+        _snapshot(
+            *_safe_listeners(),
+            guard_fingerprints=dict(_HASHES),
+            browser_image_reference="registry.example/browser:mutable",
+        ),
+        _valid_bundle(),
+    )
+    assert "BROWSER_RUNTIME_IMAGE_NOT_IMMUTABLE" in mutable_live_image["findings"]
+    assert mutable_live_image["verdict"] == "HOLD"
 
     mutable = _valid_bundle()
     mutable["source_contract"]["browser_container"]["image_reference"] = (
@@ -509,6 +632,16 @@ def test_parsers_normalize_without_preserving_image_or_unknown_unit_fields() -> 
     provider_schema = json.loads(
         (artifacts / "A360_SEC1_PROVIDER_PROOF.schema.json").read_text(encoding="utf-8")
     )
+    deployment_schema = json.loads(
+        (artifacts / "A360_SEC1_COURIER_API_DEPLOYMENT_RECEIPT.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    deployment_template = json.loads(
+        (artifacts / "A360_SEC1_COURIER_API_DEPLOYMENT_RECEIPT.template.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert container_schema["properties"]["image_reference"]["pattern"].endswith(
         "[0-9a-f]{64}$"
     )
@@ -529,6 +662,11 @@ def test_parsers_normalize_without_preserving_image_or_unknown_unit_fields() -> 
         8767,
         9222,
     ]
+    assert deployment_schema["properties"]["runtime"]["properties"]["unit_id"][
+        "const"
+    ] == audit.EXPECTED_UNIT
+    assert deployment_template["observed_at_utc"] is None
+    assert deployment_template["runtime"]["main_pid"] is None
 
 
 def test_firewall_guard_understands_default_and_explicit_denies() -> None:
@@ -568,6 +706,11 @@ def test_firewall_guard_understands_default_and_explicit_denies() -> None:
     source_template = json.loads(
         (artifacts / "A360_SEC1_EVIDENCE.template.json").read_text(encoding="utf-8")
     )
+    assert source_template["schema"] == audit.EVIDENCE_SCHEMA
+    assert source_template["source_contract"]["schema"] == audit.SOURCE_CONTRACT_SCHEMA
+    assert source_template["courier_api_deployment_receipt"]["runtime"][
+        "main_pid"
+    ] is None
     validation = audit.validate_remediation_bundle(
         source_template,
         observed_at_utc="2030-01-02T03:04:05Z",
@@ -631,6 +774,210 @@ def test_conditional_or_late_deny_rule_never_proves_effective_guard() -> None:
     )
     assert "ROLLBACK_PRECONDITION_HOST_DENIES_VERIFIED_MISSING" in validation.reason_codes
     assert "ROLLBACK_POLICY_PRESERVE_LOOPBACK_BIND_INVALID" in validation.reason_codes
+
+    missing_deployment_receipt = copy.deepcopy(_valid_bundle())
+    missing_deployment_receipt.pop("courier_api_deployment_receipt")
+    validation = audit.validate_remediation_bundle(
+        missing_deployment_receipt,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    )
+    assert "COURIER_API_DEPLOYMENT_RECEIPT_NOT_SUPPLIED" in validation.reason_codes
+    assert validation.valid is False
+    missing_result = audit.analyze(
+        _snapshot(*_safe_listeners(), guard_fingerprints=dict(_HASHES)),
+        missing_deployment_receipt,
+    )
+    assert missing_result["verdict"] == "HOLD"
+
+    for postimage_field, replacement in (
+        ("source_commit", "f" * 40),
+        ("config_sha256", "7" * 64),
+        ("main_sha256", "8" * 64),
+    ):
+        mismatched_postimage = copy.deepcopy(_valid_bundle())
+        mismatched_postimage["courier_api_deployment_receipt"]["postimage"][
+            postimage_field
+        ] = replacement
+        validation = audit.validate_remediation_bundle(
+            mismatched_postimage,
+            observed_at_utc="2030-01-02T03:04:05Z",
+        )
+        assert (
+            "COURIER_API_DEPLOYMENT_RECEIPT_"
+            + postimage_field.upper()
+            + "_MISMATCH"
+        ) in validation.reason_codes
+        assert audit.analyze(
+            _snapshot(*_safe_listeners(), guard_fingerprints=dict(_HASHES)),
+            mismatched_postimage,
+        )["verdict"] == "HOLD"
+
+    wrong_runtime_pid = copy.deepcopy(_valid_bundle())
+    wrong_runtime_pid["courier_api_deployment_receipt"]["runtime"]["main_pid"] = 42
+    runtime_result = audit.analyze(
+        _snapshot(*_safe_listeners(), guard_fingerprints=dict(_HASHES)),
+        wrong_runtime_pid,
+    )
+    assert "COURIER_API_RUNTIME_PID_MISMATCH" in runtime_result["findings"]
+    assert runtime_result["verdict"] == "HOLD"
+
+    mismatched_live_unit = {
+        "Id": "courier-api-replaced.service",
+        "LoadState": "loaded",
+        "ActiveState": "active",
+        "SubState": "running",
+        "MainPID": "41",
+        "NRestarts": "0",
+    }
+    runtime_result = audit.analyze(
+        _snapshot(
+            *_safe_listeners(),
+            guard_fingerprints=dict(_HASHES),
+            unit=mismatched_live_unit,
+        ),
+        _valid_bundle(),
+    )
+    assert "COURIER_API_RUNTIME_UNIT_MISMATCH" in runtime_result["findings"]
+    assert runtime_result["verdict"] == "HOLD"
+
+    timed_sections = (
+        ("external_probes", "EXTERNAL_PROBE"),
+        ("host_rules_receipt", "HOST_RULE_RECEIPT"),
+        (
+            "courier_api_deployment_receipt",
+            "COURIER_API_DEPLOYMENT_RECEIPT",
+        ),
+        ("credential_receipt", "CREDENTIAL_RECEIPT"),
+        ("rollback_preconditions", "ROLLBACK_PRECONDITIONS"),
+    )
+    for section, prefix in timed_sections:
+        stale = copy.deepcopy(_valid_bundle())
+        stale[section]["observed_at_utc"] = "2030-01-02T02:49:04Z"
+        validation = audit.validate_remediation_bundle(
+            stale,
+            observed_at_utc="2030-01-02T03:04:05Z",
+        )
+        assert f"{prefix}_STALE" in validation.reason_codes
+
+        future = copy.deepcopy(_valid_bundle())
+        future[section]["observed_at_utc"] = "2030-01-02T03:04:36Z"
+        validation = audit.validate_remediation_bundle(
+            future,
+            observed_at_utc="2030-01-02T03:04:05Z",
+        )
+        assert f"{prefix}_FUTURE_SKEW_EXCEEDED" in validation.reason_codes
+
+    stale_deployment = copy.deepcopy(_valid_bundle())
+    stale_deployment["courier_api_deployment_receipt"][
+        "observed_at_utc"
+    ] = "2030-01-02T02:49:04Z"
+    stale_result = audit.analyze(
+        _snapshot(*_safe_listeners(), guard_fingerprints=dict(_HASHES)),
+        stale_deployment,
+    )
+    assert stale_result["verdict"] == "HOLD"
+    assert "COURIER_API_DEPLOYMENT_RECEIPT_STALE" in stale_result["findings"]
+
+    stale_provider = copy.deepcopy(_valid_bundle())
+    stale_provider["provider_proof"]["captured_at_utc"] = "2030-01-02T02:49:04Z"
+    stale_provider["provider_proof"]["valid_until_utc"] = "2030-01-02T04:00:00Z"
+    validation = audit.validate_remediation_bundle(
+        stale_provider,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    )
+    assert "PROVIDER_PROOF_STALE" in validation.reason_codes
+
+    future_provider = copy.deepcopy(_valid_bundle())
+    future_provider["provider_proof"]["captured_at_utc"] = "2030-01-02T03:04:36Z"
+    validation = audit.validate_remediation_bundle(
+        future_provider,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    )
+    assert "PROVIDER_PROOF_FUTURE_SKEW_EXCEEDED" in validation.reason_codes
+
+    mutually_skewed = copy.deepcopy(_valid_bundle())
+    mutually_skewed["credential_receipt"]["observed_at_utc"] = "2030-01-02T02:59:04Z"
+    validation = audit.validate_remediation_bundle(
+        mutually_skewed,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    )
+    assert "EVIDENCE_MUTUAL_TIME_SKEW_EXCEEDED" in validation.reason_codes
+    assert "CREDENTIAL_RECEIPT_STALE" not in validation.reason_codes
+
+    mismatched_observation = copy.deepcopy(_valid_bundle())
+    mismatched_observation["credential_receipt"]["observation_id"] = "OBS-OTHER"
+    validation = audit.validate_remediation_bundle(
+        mismatched_observation,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    )
+    assert "CREDENTIAL_RECEIPT_OBSERVATION_ID_MISMATCH" in validation.reason_codes
+
+    mismatched_source_observation = copy.deepcopy(_valid_bundle())
+    mismatched_source_observation["source_contract"]["observation_id"] = "OBS-OTHER"
+    validation = audit.validate_remediation_bundle(
+        mismatched_source_observation,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    )
+    assert "SOURCE_CONTRACT_OBSERVATION_ID_MISMATCH" in validation.reason_codes
+
+    mismatched_deployment_observation = copy.deepcopy(_valid_bundle())
+    mismatched_deployment_observation["courier_api_deployment_receipt"][
+        "observation_id"
+    ] = "OBS-OTHER"
+    validation = audit.validate_remediation_bundle(
+        mismatched_deployment_observation,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    )
+    assert (
+        "COURIER_API_DEPLOYMENT_RECEIPT_OBSERVATION_ID_MISMATCH"
+        in validation.reason_codes
+    )
+
+    mismatched_deployment_producer = copy.deepcopy(_valid_bundle())
+    mismatched_deployment_producer["courier_api_deployment_receipt"]["producer"][
+        "source_commit"
+    ] = "e" * 40
+    validation = audit.validate_remediation_bundle(
+        mismatched_deployment_producer,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    )
+    assert (
+        "COURIER_API_DEPLOYMENT_RECEIPT_PRODUCER_COMMIT_MISMATCH"
+        in validation.reason_codes
+    )
+
+    weakened_policy = copy.deepcopy(_valid_bundle())
+    weakened_policy["time_policy"]["max_age_seconds"] = 86400
+    validation = audit.validate_remediation_bundle(
+        weakened_policy,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    )
+    assert "EVIDENCE_TIME_POLICY_MAX_AGE_INVALID" in validation.reason_codes
+
+    boundary_age = copy.deepcopy(_valid_bundle())
+    boundary_age["provider_proof"]["captured_at_utc"] = "2030-01-02T02:49:05Z"
+    for section, _prefix in timed_sections:
+        boundary_age[section]["observed_at_utc"] = "2030-01-02T02:49:05Z"
+    assert audit.validate_remediation_bundle(
+        boundary_age,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    ).valid
+
+    boundary_future = copy.deepcopy(_valid_bundle())
+    boundary_future["provider_proof"]["captured_at_utc"] = "2030-01-02T03:04:35Z"
+    for section, _prefix in timed_sections:
+        boundary_future[section]["observed_at_utc"] = "2030-01-02T03:04:35Z"
+    assert audit.validate_remediation_bundle(
+        boundary_future,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    ).valid
+
+    boundary_mutual = copy.deepcopy(_valid_bundle())
+    boundary_mutual["credential_receipt"]["observed_at_utc"] = "2030-01-02T02:59:05Z"
+    assert audit.validate_remediation_bundle(
+        boundary_mutual,
+        observed_at_utc="2030-01-02T03:04:05Z",
+    ).valid
 
     hostile_shapes = (
         None,

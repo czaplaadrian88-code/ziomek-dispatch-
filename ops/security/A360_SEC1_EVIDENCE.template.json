@@ -1,9 +1,17 @@
 {
-  "schema": "a360.sec1.evidence-bundle.v1",
+  "schema": "a360.sec1.evidence-bundle.v2",
   "change_id": "A360-SEC1-REPLACE-ME",
+  "observation_id": "OBS-REPLACE-ME",
+  "time_policy": {
+    "schema": "a360.sec1.evidence-time-policy.v1",
+    "max_age_seconds": 900,
+    "max_future_skew_seconds": 30,
+    "max_mutual_skew_seconds": 300
+  },
   "source_contract": {
-    "schema": "a360.sec1.source-contract.v1",
+    "schema": "a360.sec1.source-contract.v2",
     "change_id": "A360-SEC1-REPLACE-ME",
+    "observation_id": "OBS-REPLACE-ME",
     "targets": {
       "8767": {
         "owner": "courier-api.service",
@@ -23,7 +31,13 @@
       "unit_owner": "courier-api.service",
       "bind_policy": "LOOPBACK_ONLY",
       "credential_loader": "SYSTEMD_LOAD_CREDENTIAL",
-      "process_fallback_enabled": false
+      "process_fallback_enabled": false,
+      "deployment_receipt_policy": {
+        "schema": "a360.sec1.courier-api-deployment-policy.v1",
+        "producer_kind": "VERSIONED_DEPLOY_PROVISIONER",
+        "provisioner_source_commit": null,
+        "provisioner_artifact_sha256": null
+      }
     },
     "browser_container": {
       "container_name": "openclaw-browser",
@@ -109,6 +123,7 @@
   "provider_proof": {
     "schema": "a360.sec1.provider-proof.v1",
     "change_id": "A360-SEC1-REPLACE-ME",
+    "observation_id": "OBS-REPLACE-ME",
     "provider": "UNKNOWN",
     "attachment_state": "NOT_PROVEN",
     "ruleset_sha256": null,
@@ -120,6 +135,7 @@
   "external_probes": {
     "schema": "a360.sec1.external-probes.v1",
     "change_id": "A360-SEC1-REPLACE-ME",
+    "observation_id": "OBS-REPLACE-ME",
     "independent_vantage": false,
     "observed_at_utc": null,
     "results": {
@@ -135,6 +151,7 @@
   "host_rules_receipt": {
     "schema": "a360.sec1.host-rules-receipt.v1",
     "change_id": "A360-SEC1-REPLACE-ME",
+    "observation_id": "OBS-REPLACE-ME",
     "observed_at_utc": null,
     "live_ruleset_sha256": {},
     "ordered_checks": {},
@@ -144,9 +161,33 @@
       "artifact_sha256": null
     }
   },
+  "courier_api_deployment_receipt": {
+    "schema": "a360.sec1.courier-api-deployment-receipt.v1",
+    "change_id": "A360-SEC1-REPLACE-ME",
+    "observation_id": "OBS-REPLACE-ME",
+    "observed_at_utc": null,
+    "producer": {
+      "kind": "VERSIONED_DEPLOY_PROVISIONER",
+      "source_commit": null,
+      "artifact_sha256": null
+    },
+    "postimage": {
+      "source_commit": null,
+      "config_sha256": null,
+      "main_sha256": null
+    },
+    "runtime": {
+      "unit_id": "courier-api.service",
+      "main_pid": null,
+      "load_state": "NOT_PROVEN",
+      "active_state": "NOT_PROVEN",
+      "sub_state": "NOT_PROVEN"
+    }
+  },
   "credential_receipt": {
     "schema": "a360.sec1.credential-receipt.v1",
     "change_id": "A360-SEC1-REPLACE-ME",
+    "observation_id": "OBS-REPLACE-ME",
     "observed_at_utc": null,
     "metadata": {
       "exists": false,
@@ -166,6 +207,8 @@
   "rollback_preconditions": {
     "schema": "a360.sec1.rollback-preconditions.v1",
     "change_id": "A360-SEC1-REPLACE-ME",
+    "observation_id": "OBS-REPLACE-ME",
+    "observed_at_utc": null,
     "second_admin_session_active": false,
     "host_denies_verified": false,
     "provider_denies_verified": false,
