@@ -1,0 +1,23 @@
+{
+  "schema": "a360.sec1.courier-api-deployment-receipt.v1",
+  "change_id": "A360-SEC1-REPLACE-ME",
+  "observation_id": "OBS-REPLACE-ME",
+  "observed_at_utc": null,
+  "producer": {
+    "kind": "VERSIONED_DEPLOY_PROVISIONER",
+    "source_commit": null,
+    "artifact_sha256": null
+  },
+  "postimage": {
+    "source_commit": null,
+    "config_sha256": null,
+    "main_sha256": null
+  },
+  "runtime": {
+    "unit_id": "courier-api.service",
+    "main_pid": null,
+    "load_state": "NOT_PROVEN",
+    "active_state": "NOT_PROVEN",
+    "sub_state": "NOT_PROVEN"
+  }
+}

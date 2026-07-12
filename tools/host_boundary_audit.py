@@ -23,13 +23,19 @@ from typing import Any, Mapping, Sequence
 
 
 SCHEMA = "a360.host-boundary-audit.v1"
-EVIDENCE_SCHEMA = "a360.sec1.evidence-bundle.v1"
+EVIDENCE_SCHEMA = "a360.sec1.evidence-bundle.v2"
 EVIDENCE_VALIDATION_SCHEMA = "a360.sec1.evidence-validation.v1"
-SOURCE_CONTRACT_SCHEMA = "a360.sec1.source-contract.v1"
+SOURCE_CONTRACT_SCHEMA = "a360.sec1.source-contract.v2"
 PROVIDER_PROOF_SCHEMA = "a360.sec1.provider-proof.v1"
 PROBE_PROOF_SCHEMA = "a360.sec1.external-probes.v1"
 HOST_RECEIPT_SCHEMA = "a360.sec1.host-rules-receipt.v1"
 CREDENTIAL_RECEIPT_SCHEMA = "a360.sec1.credential-receipt.v1"
+COURIER_DEPLOYMENT_POLICY_SCHEMA = "a360.sec1.courier-api-deployment-policy.v1"
+COURIER_DEPLOYMENT_RECEIPT_SCHEMA = "a360.sec1.courier-api-deployment-receipt.v1"
+TIME_POLICY_SCHEMA = "a360.sec1.evidence-time-policy.v1"
+EVIDENCE_MAX_AGE_SECONDS = 900
+EVIDENCE_MAX_FUTURE_SKEW_SECONDS = 30
+EVIDENCE_MAX_MUTUAL_SKEW_SECONDS = 300
 TARGET_PORTS = (8767, 9222)
 EXPECTED_UNIT = "courier-api.service"
 EXPECTED_CONTAINER = "openclaw-browser"
@@ -40,6 +46,7 @@ MAX_EVIDENCE_BYTES = 128 * 1024
 _HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 _CHANGE_ID = re.compile(r"^A360-SEC1-[A-Z0-9][A-Z0-9._-]{2,63}$")
+_OBSERVATION_ID = re.compile(r"^OBS-[A-Z0-9][A-Z0-9._-]{2,63}$")
 _IMAGE_DIGEST = re.compile(r"^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$")
 
 _EXPECTED_FIREWALL_RULES: Mapping[str, tuple[str, ...]] = {
@@ -109,6 +116,7 @@ class Listener:
 class DockerRow:
     name: str
     published_ports: str
+    image_reference: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True)
@@ -134,6 +142,7 @@ class EvidenceValidation:
     external_probes_valid: bool
     host_receipt_valid: bool
     credential_receipt_valid: bool
+    courier_deployment_receipt_valid: bool
     rollback_preconditions_valid: bool
 
     @property
@@ -195,6 +204,21 @@ def _parse_utc(value: Any) -> dt.datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else None
+
+
+def _validate_evidence_time(
+    prefix: str,
+    timestamp: dt.datetime | None,
+    observed_at: dt.datetime,
+) -> set[str]:
+    if timestamp is None:
+        return {f"{prefix}_TIMESTAMP_INVALID"}
+    codes: set[str] = set()
+    if timestamp > observed_at + dt.timedelta(seconds=EVIDENCE_MAX_FUTURE_SKEW_SECONDS):
+        codes.add(f"{prefix}_FUTURE_SKEW_EXCEEDED")
+    if timestamp < observed_at - dt.timedelta(seconds=EVIDENCE_MAX_AGE_SECONDS):
+        codes.add(f"{prefix}_STALE")
+    return codes
 
 
 def _has_prohibited_evidence_key(value: Any) -> bool:
@@ -372,13 +396,16 @@ def _validate_firewall_plan(plan: Mapping[str, Any]) -> set[str]:
     return codes
 
 
-def _validate_source_contract(contract: Mapping[str, Any], change_id: str) -> set[str]:
+def _validate_source_contract(
+    contract: Mapping[str, Any], change_id: str, observation_id: str
+) -> set[str]:
     codes: set[str] = set()
     if not _fields_are_allowed(
         contract,
         {
             "schema",
             "change_id",
+            "observation_id",
             "targets",
             "courier_api",
             "browser_container",
@@ -392,6 +419,8 @@ def _validate_source_contract(contract: Mapping[str, Any], change_id: str) -> se
         codes.add("SOURCE_CONTRACT_SCHEMA_INVALID")
     if contract.get("change_id") != change_id:
         codes.add("SOURCE_CONTRACT_CHANGE_ID_MISMATCH")
+    if contract.get("observation_id") != observation_id:
+        codes.add("SOURCE_CONTRACT_OBSERVATION_ID_MISMATCH")
 
     targets = _as_mapping(contract.get("targets"))
     if set(targets) != {"8767", "9222"}:
@@ -421,6 +450,7 @@ def _validate_source_contract(contract: Mapping[str, Any], change_id: str) -> se
             "bind_policy",
             "credential_loader",
             "process_fallback_enabled",
+            "deployment_receipt_policy",
         },
         {"preimage_source_commit"},
     ):
@@ -441,6 +471,26 @@ def _validate_source_contract(contract: Mapping[str, Any], change_id: str) -> se
         codes.add("COURIER_API_CREDENTIAL_LOADER_INVALID")
     if courier.get("process_fallback_enabled") is not False:
         codes.add("COURIER_API_PROCESS_FALLBACK_NOT_DISABLED")
+
+    deployment_policy = _as_mapping(courier.get("deployment_receipt_policy"))
+    if not _fields_are_allowed(
+        deployment_policy,
+        {
+            "schema",
+            "producer_kind",
+            "provisioner_source_commit",
+            "provisioner_artifact_sha256",
+        },
+    ):
+        codes.add("COURIER_API_DEPLOYMENT_POLICY_FIELDS_INVALID")
+    if deployment_policy.get("schema") != COURIER_DEPLOYMENT_POLICY_SCHEMA:
+        codes.add("COURIER_API_DEPLOYMENT_POLICY_SCHEMA_INVALID")
+    if deployment_policy.get("producer_kind") != "VERSIONED_DEPLOY_PROVISIONER":
+        codes.add("COURIER_API_DEPLOYMENT_POLICY_PRODUCER_INVALID")
+    if not _valid_commit(deployment_policy.get("provisioner_source_commit")):
+        codes.add("COURIER_API_DEPLOYMENT_POLICY_COMMIT_INVALID")
+    if not _valid_sha256(deployment_policy.get("provisioner_artifact_sha256")):
+        codes.add("COURIER_API_DEPLOYMENT_POLICY_HASH_INVALID")
 
     browser = _as_mapping(contract.get("browser_container"))
     if not _fields_are_allowed(
@@ -517,13 +567,19 @@ def _validate_source_contract(contract: Mapping[str, Any], change_id: str) -> se
     return codes
 
 
-def _validate_provider_proof(proof: Mapping[str, Any], change_id: str, now: dt.datetime) -> set[str]:
+def _validate_provider_proof(
+    proof: Mapping[str, Any],
+    change_id: str,
+    observation_id: str,
+    observed_at: dt.datetime,
+) -> set[str]:
     codes: set[str] = set()
     if not _fields_are_allowed(
         proof,
         {
             "schema",
             "change_id",
+            "observation_id",
             "provider",
             "attachment_state",
             "ruleset_sha256",
@@ -538,6 +594,8 @@ def _validate_provider_proof(proof: Mapping[str, Any], change_id: str, now: dt.d
         codes.add("PROVIDER_PROOF_SCHEMA_INVALID")
     if proof.get("change_id") != change_id:
         codes.add("PROVIDER_PROOF_CHANGE_ID_MISMATCH")
+    if proof.get("observation_id") != observation_id:
+        codes.add("PROVIDER_PROOF_OBSERVATION_ID_MISMATCH")
     provider = proof.get("provider")
     if not isinstance(provider, str) or not provider or provider.upper() == "UNKNOWN":
         codes.add("PROVIDER_PROOF_IDENTITY_UNKNOWN")
@@ -551,26 +609,46 @@ def _validate_provider_proof(proof: Mapping[str, Any], change_id: str, now: dt.d
         codes.add("PROVIDER_PROOF_IPV6_DENY_MISSING")
     captured = _parse_utc(proof.get("captured_at_utc"))
     valid_until = _parse_utc(proof.get("valid_until_utc"))
-    if captured is None or valid_until is None or not captured <= now <= valid_until:
+    codes.update(_validate_evidence_time("PROVIDER_PROOF", captured, observed_at))
+    if (
+        captured is None
+        or valid_until is None
+        or valid_until < captured
+        or valid_until < observed_at
+    ):
         codes.add("PROVIDER_PROOF_TIME_WINDOW_INVALID")
     return codes
 
 
-def _validate_external_probes(proof: Mapping[str, Any], change_id: str) -> set[str]:
+def _validate_external_probes(
+    proof: Mapping[str, Any],
+    change_id: str,
+    observation_id: str,
+    observed_at: dt.datetime,
+) -> set[str]:
     codes: set[str] = set()
     if not _fields_are_allowed(
         proof,
-        {"schema", "change_id", "independent_vantage", "observed_at_utc", "results"},
+        {
+            "schema",
+            "change_id",
+            "observation_id",
+            "independent_vantage",
+            "observed_at_utc",
+            "results",
+        },
     ):
         codes.add("EXTERNAL_PROBE_FIELDS_INVALID")
     if proof.get("schema") != PROBE_PROOF_SCHEMA:
         codes.add("EXTERNAL_PROBE_SCHEMA_INVALID")
     if proof.get("change_id") != change_id:
         codes.add("EXTERNAL_PROBE_CHANGE_ID_MISMATCH")
+    if proof.get("observation_id") != observation_id:
+        codes.add("EXTERNAL_PROBE_OBSERVATION_ID_MISMATCH")
     if proof.get("independent_vantage") is not True:
         codes.add("EXTERNAL_PROBE_VANTAGE_NOT_INDEPENDENT")
-    if _parse_utc(proof.get("observed_at_utc")) is None:
-        codes.add("EXTERNAL_PROBE_TIMESTAMP_INVALID")
+    timestamp = _parse_utc(proof.get("observed_at_utc"))
+    codes.update(_validate_evidence_time("EXTERNAL_PROBE", timestamp, observed_at))
     expected = {
         "direct_8767_ipv4": "DENIED",
         "direct_8767_ipv6": "DENIED",
@@ -589,13 +667,19 @@ def _validate_external_probes(proof: Mapping[str, Any], change_id: str) -> set[s
     return codes
 
 
-def _validate_host_receipt(receipt: Mapping[str, Any], change_id: str) -> set[str]:
+def _validate_host_receipt(
+    receipt: Mapping[str, Any],
+    change_id: str,
+    observation_id: str,
+    observed_at: dt.datetime,
+) -> set[str]:
     codes: set[str] = set()
     if not _fields_are_allowed(
         receipt,
         {
             "schema",
             "change_id",
+            "observation_id",
             "observed_at_utc",
             "live_ruleset_sha256",
             "ordered_checks",
@@ -607,8 +691,10 @@ def _validate_host_receipt(receipt: Mapping[str, Any], change_id: str) -> set[st
         codes.add("HOST_RULE_RECEIPT_SCHEMA_INVALID")
     if receipt.get("change_id") != change_id:
         codes.add("HOST_RULE_RECEIPT_CHANGE_ID_MISMATCH")
-    if _parse_utc(receipt.get("observed_at_utc")) is None:
-        codes.add("HOST_RULE_RECEIPT_TIMESTAMP_INVALID")
+    if receipt.get("observation_id") != observation_id:
+        codes.add("HOST_RULE_RECEIPT_OBSERVATION_ID_MISMATCH")
+    timestamp = _parse_utc(receipt.get("observed_at_utc"))
+    codes.update(_validate_evidence_time("HOST_RULE_RECEIPT", timestamp, observed_at))
     hashes = _as_mapping(receipt.get("live_ruleset_sha256"))
     if set(hashes) != {"input_v4", "input_v6", "docker_user_v4", "docker_user_v6"}:
         codes.add("HOST_RULE_RECEIPT_HASH_SET_INVALID")
@@ -630,13 +716,114 @@ def _validate_host_receipt(receipt: Mapping[str, Any], change_id: str) -> set[st
     return codes
 
 
-def _validate_credential_receipt(receipt: Mapping[str, Any], change_id: str) -> set[str]:
+def _validate_courier_deployment_receipt(
+    receipt: Mapping[str, Any],
+    change_id: str,
+    observation_id: str,
+    observed_at: dt.datetime,
+    source_contract: Mapping[str, Any],
+) -> set[str]:
     codes: set[str] = set()
     if not _fields_are_allowed(
         receipt,
         {
             "schema",
             "change_id",
+            "observation_id",
+            "observed_at_utc",
+            "producer",
+            "postimage",
+            "runtime",
+        },
+    ):
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_FIELDS_INVALID")
+    if receipt.get("schema") != COURIER_DEPLOYMENT_RECEIPT_SCHEMA:
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_SCHEMA_INVALID")
+    if receipt.get("change_id") != change_id:
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_CHANGE_ID_MISMATCH")
+    if receipt.get("observation_id") != observation_id:
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_OBSERVATION_ID_MISMATCH")
+    timestamp = _parse_utc(receipt.get("observed_at_utc"))
+    codes.update(
+        _validate_evidence_time("COURIER_API_DEPLOYMENT_RECEIPT", timestamp, observed_at)
+    )
+
+    courier_contract = _as_mapping(source_contract.get("courier_api"))
+    policy = _as_mapping(courier_contract.get("deployment_receipt_policy"))
+    producer = _as_mapping(receipt.get("producer"))
+    if not _fields_are_allowed(
+        producer,
+        {"kind", "source_commit", "artifact_sha256"},
+    ):
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_PRODUCER_FIELDS_INVALID")
+    if producer.get("kind") != "VERSIONED_DEPLOY_PROVISIONER":
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_PRODUCER_INVALID")
+    if not _valid_commit(producer.get("source_commit")):
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_PRODUCER_COMMIT_INVALID")
+    if not _valid_sha256(producer.get("artifact_sha256")):
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_PRODUCER_HASH_INVALID")
+    if producer.get("source_commit") != policy.get("provisioner_source_commit"):
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_PRODUCER_COMMIT_MISMATCH")
+    if producer.get("artifact_sha256") != policy.get("provisioner_artifact_sha256"):
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_PRODUCER_HASH_MISMATCH")
+
+    postimage = _as_mapping(receipt.get("postimage"))
+    if not _fields_are_allowed(
+        postimage,
+        {"source_commit", "config_sha256", "main_sha256"},
+    ):
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_POSTIMAGE_FIELDS_INVALID")
+    for field_name, validator in (
+        ("source_commit", _valid_commit),
+        ("config_sha256", _valid_sha256),
+        ("main_sha256", _valid_sha256),
+    ):
+        if not validator(postimage.get(field_name)):
+            codes.add(
+                f"COURIER_API_DEPLOYMENT_RECEIPT_{field_name.upper()}_INVALID"
+            )
+        if postimage.get(field_name) != courier_contract.get(field_name):
+            codes.add(
+                f"COURIER_API_DEPLOYMENT_RECEIPT_{field_name.upper()}_MISMATCH"
+            )
+
+    runtime = _as_mapping(receipt.get("runtime"))
+    if not _fields_are_allowed(
+        runtime,
+        {"unit_id", "main_pid", "load_state", "active_state", "sub_state"},
+    ):
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_RUNTIME_FIELDS_INVALID")
+    if runtime.get("unit_id") != EXPECTED_UNIT:
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_UNIT_INVALID")
+    main_pid = runtime.get("main_pid")
+    if isinstance(main_pid, bool) or not isinstance(main_pid, int) or main_pid <= 0:
+        codes.add("COURIER_API_DEPLOYMENT_RECEIPT_PID_INVALID")
+    expected_states = {
+        "load_state": "loaded",
+        "active_state": "active",
+        "sub_state": "running",
+    }
+    for field_name, expected in expected_states.items():
+        if runtime.get(field_name) != expected:
+            codes.add(
+                f"COURIER_API_DEPLOYMENT_RECEIPT_{field_name.upper()}_INVALID"
+            )
+    return codes
+
+
+def _validate_credential_receipt(
+    receipt: Mapping[str, Any],
+    change_id: str,
+    observation_id: str,
+    observed_at: dt.datetime,
+) -> set[str]:
+    codes: set[str] = set()
+    if not _fields_are_allowed(
+        receipt,
+        {
+            "schema",
+            "change_id",
+            "observation_id",
             "observed_at_utc",
             "metadata",
             "new_revision_probe",
@@ -649,8 +836,10 @@ def _validate_credential_receipt(receipt: Mapping[str, Any], change_id: str) -> 
         codes.add("CREDENTIAL_RECEIPT_SCHEMA_INVALID")
     if receipt.get("change_id") != change_id:
         codes.add("CREDENTIAL_RECEIPT_CHANGE_ID_MISMATCH")
-    if _parse_utc(receipt.get("observed_at_utc")) is None:
-        codes.add("CREDENTIAL_RECEIPT_TIMESTAMP_INVALID")
+    if receipt.get("observation_id") != observation_id:
+        codes.add("CREDENTIAL_RECEIPT_OBSERVATION_ID_MISMATCH")
+    timestamp = _parse_utc(receipt.get("observed_at_utc"))
+    codes.update(_validate_evidence_time("CREDENTIAL_RECEIPT", timestamp, observed_at))
     codes.update(validate_credential_metadata(_as_mapping(receipt.get("metadata"))))
     if receipt.get("new_revision_probe") != "PASS":
         codes.add("CREDENTIAL_NEW_REVISION_PROBE_FAILED")
@@ -661,12 +850,21 @@ def _validate_credential_receipt(receipt: Mapping[str, Any], change_id: str) -> 
     return codes
 
 
-def _validate_rollback_preconditions(preconditions: Mapping[str, Any], change_id: str) -> set[str]:
+def _validate_rollback_preconditions(
+    preconditions: Mapping[str, Any],
+    change_id: str,
+    observation_id: str,
+    observed_at: dt.datetime,
+) -> set[str]:
     codes: set[str] = set()
     if preconditions.get("schema") != "a360.sec1.rollback-preconditions.v1":
         codes.add("ROLLBACK_PRECONDITIONS_SCHEMA_INVALID")
     if preconditions.get("change_id") != change_id:
         codes.add("ROLLBACK_PRECONDITIONS_CHANGE_ID_MISMATCH")
+    if preconditions.get("observation_id") != observation_id:
+        codes.add("ROLLBACK_PRECONDITIONS_OBSERVATION_ID_MISMATCH")
+    timestamp = _parse_utc(preconditions.get("observed_at_utc"))
+    codes.update(_validate_evidence_time("ROLLBACK_PRECONDITIONS", timestamp, observed_at))
     required_true = (
         "second_admin_session_active",
         "host_denies_verified",
@@ -678,7 +876,7 @@ def _validate_rollback_preconditions(preconditions: Mapping[str, Any], change_id
     )
     if not _fields_are_allowed(
         preconditions,
-        {"schema", "change_id", *required_true},
+        {"schema", "change_id", "observation_id", "observed_at_utc", *required_true},
     ):
         codes.add("ROLLBACK_PRECONDITIONS_FIELDS_INVALID")
     for key in required_true:
@@ -687,14 +885,37 @@ def _validate_rollback_preconditions(preconditions: Mapping[str, Any], change_id
     return codes
 
 
+def _validate_time_policy(policy: Mapping[str, Any]) -> set[str]:
+    codes: set[str] = set()
+    required = {
+        "schema",
+        "max_age_seconds",
+        "max_future_skew_seconds",
+        "max_mutual_skew_seconds",
+    }
+    if not _fields_are_allowed(policy, required):
+        codes.add("EVIDENCE_TIME_POLICY_FIELDS_INVALID")
+    if policy.get("schema") != TIME_POLICY_SCHEMA:
+        codes.add("EVIDENCE_TIME_POLICY_SCHEMA_INVALID")
+    if policy.get("max_age_seconds") != EVIDENCE_MAX_AGE_SECONDS:
+        codes.add("EVIDENCE_TIME_POLICY_MAX_AGE_INVALID")
+    if policy.get("max_future_skew_seconds") != EVIDENCE_MAX_FUTURE_SKEW_SECONDS:
+        codes.add("EVIDENCE_TIME_POLICY_FUTURE_SKEW_INVALID")
+    if policy.get("max_mutual_skew_seconds") != EVIDENCE_MAX_MUTUAL_SKEW_SECONDS:
+        codes.add("EVIDENCE_TIME_POLICY_MUTUAL_SKEW_INVALID")
+    return codes
+
+
 def validate_remediation_bundle(
     bundle: Mapping[str, Any] | None,
     *,
     observed_at_utc: str,
 ) -> EvidenceValidation:
-    now = _parse_utc(observed_at_utc) or _utc_now()
+    parsed_observed_at = _parse_utc(observed_at_utc)
+    observed_at = parsed_observed_at or _utc_now()
     if bundle is None:
         missing = (
+            "COURIER_API_DEPLOYMENT_RECEIPT_NOT_SUPPLIED",
             "CREDENTIAL_RECEIPT_NOT_SUPPLIED",
             "EXTERNAL_PROBE_PROOF_NOT_SUPPLIED",
             "HOST_RULE_RECEIPT_NOT_SUPPLIED",
@@ -702,7 +923,7 @@ def validate_remediation_bundle(
             "ROLLBACK_PRECONDITIONS_NOT_SUPPLIED",
             "SOURCE_CONTRACT_NOT_SUPPLIED",
         )
-        return EvidenceValidation(missing, False, False, False, False, False, False)
+        return EvidenceValidation(missing, False, False, False, False, False, False, False)
 
     base_codes: set[str] = set()
     if not _fields_are_allowed(
@@ -710,10 +931,13 @@ def validate_remediation_bundle(
         {
             "schema",
             "change_id",
+            "observation_id",
+            "time_policy",
             "source_contract",
             "provider_proof",
             "external_probes",
             "host_rules_receipt",
+            "courier_api_deployment_receipt",
             "credential_receipt",
             "rollback_preconditions",
         },
@@ -721,35 +945,87 @@ def validate_remediation_bundle(
         base_codes.add("EVIDENCE_FIELDS_INVALID")
     if bundle.get("schema") != EVIDENCE_SCHEMA:
         base_codes.add("EVIDENCE_SCHEMA_INVALID")
+    if not isinstance(bundle.get("courier_api_deployment_receipt"), Mapping):
+        base_codes.add("COURIER_API_DEPLOYMENT_RECEIPT_NOT_SUPPLIED")
+    if parsed_observed_at is None:
+        base_codes.add("EVIDENCE_RUNTIME_OBSERVATION_TIME_INVALID")
     change_id_raw = bundle.get("change_id")
     change_id = change_id_raw if isinstance(change_id_raw, str) else ""
     if not _CHANGE_ID.fullmatch(change_id):
         base_codes.add("EVIDENCE_CHANGE_ID_INVALID")
+    observation_id_raw = bundle.get("observation_id")
+    observation_id = observation_id_raw if isinstance(observation_id_raw, str) else ""
+    if not _OBSERVATION_ID.fullmatch(observation_id):
+        base_codes.add("EVIDENCE_OBSERVATION_ID_INVALID")
+    base_codes.update(_validate_time_policy(_as_mapping(bundle.get("time_policy"))))
     if _has_prohibited_evidence_key(bundle):
         base_codes.add("EVIDENCE_PROHIBITED_FIELD_PRESENT")
 
-    source_codes = _validate_source_contract(_as_mapping(bundle.get("source_contract")), change_id)
+    source_contract = _as_mapping(bundle.get("source_contract"))
+    source_codes = _validate_source_contract(source_contract, change_id, observation_id)
     provider_codes = _validate_provider_proof(
-        _as_mapping(bundle.get("provider_proof")), change_id, now
+        _as_mapping(bundle.get("provider_proof")),
+        change_id,
+        observation_id,
+        observed_at,
     )
     probe_codes = _validate_external_probes(
-        _as_mapping(bundle.get("external_probes")), change_id
+        _as_mapping(bundle.get("external_probes")),
+        change_id,
+        observation_id,
+        observed_at,
     )
     host_codes = _validate_host_receipt(
-        _as_mapping(bundle.get("host_rules_receipt")), change_id
+        _as_mapping(bundle.get("host_rules_receipt")),
+        change_id,
+        observation_id,
+        observed_at,
+    )
+    courier_deployment_codes = _validate_courier_deployment_receipt(
+        _as_mapping(bundle.get("courier_api_deployment_receipt")),
+        change_id,
+        observation_id,
+        observed_at,
+        source_contract,
     )
     credential_codes = _validate_credential_receipt(
-        _as_mapping(bundle.get("credential_receipt")), change_id
+        _as_mapping(bundle.get("credential_receipt")),
+        change_id,
+        observation_id,
+        observed_at,
     )
     rollback_codes = _validate_rollback_preconditions(
-        _as_mapping(bundle.get("rollback_preconditions")), change_id
+        _as_mapping(bundle.get("rollback_preconditions")),
+        change_id,
+        observation_id,
+        observed_at,
     )
+
+    evidence_timestamps = (
+        _parse_utc(_as_mapping(bundle.get("provider_proof")).get("captured_at_utc")),
+        _parse_utc(_as_mapping(bundle.get("external_probes")).get("observed_at_utc")),
+        _parse_utc(_as_mapping(bundle.get("host_rules_receipt")).get("observed_at_utc")),
+        _parse_utc(
+            _as_mapping(bundle.get("courier_api_deployment_receipt")).get(
+                "observed_at_utc"
+            )
+        ),
+        _parse_utc(_as_mapping(bundle.get("credential_receipt")).get("observed_at_utc")),
+        _parse_utc(_as_mapping(bundle.get("rollback_preconditions")).get("observed_at_utc")),
+    )
+    if all(timestamp is not None for timestamp in evidence_timestamps):
+        concrete_timestamps = [timestamp for timestamp in evidence_timestamps if timestamp]
+        if max(concrete_timestamps) - min(concrete_timestamps) > dt.timedelta(
+            seconds=EVIDENCE_MAX_MUTUAL_SKEW_SECONDS
+        ):
+            base_codes.add("EVIDENCE_MUTUAL_TIME_SKEW_EXCEEDED")
     all_codes = (
         base_codes
         | source_codes
         | provider_codes
         | probe_codes
         | host_codes
+        | courier_deployment_codes
         | credential_codes
         | rollback_codes
     )
@@ -761,6 +1037,7 @@ def validate_remediation_bundle(
         base_valid and not probe_codes,
         base_valid and not host_codes,
         base_valid and not credential_codes,
+        base_valid and not courier_deployment_codes,
         base_valid and not rollback_codes,
     )
 
@@ -841,8 +1118,14 @@ def parse_docker_ps(raw: str) -> tuple[DockerRow, ...]:
         parts = line.split("\t", 2)
         if len(parts) != 3:
             continue
-        name, _discarded_image, published_ports = parts
-        rows.append(DockerRow(name=name, published_ports=published_ports))
+        name, image_reference, published_ports = parts
+        rows.append(
+            DockerRow(
+                name=name,
+                published_ports=published_ports,
+                image_reference=image_reference,
+            )
+        )
     return tuple(rows)
 
 
@@ -932,6 +1215,49 @@ def _expected_owner(port: int, listeners: Sequence[Listener], snapshot: RuntimeS
     return False
 
 
+def _browser_runtime_postimage_codes(
+    snapshot: RuntimeSnapshot, source_contract: Mapping[str, Any]
+) -> set[str]:
+    codes: set[str] = set()
+    rows = [row for row in snapshot.docker_rows if row.name == EXPECTED_CONTAINER]
+    if len(rows) != 1:
+        return {"BROWSER_RUNTIME_POSTIMAGE_UNPROVEN"}
+    live_image_reference = rows[0].image_reference
+    if not isinstance(live_image_reference, str) or not _IMAGE_DIGEST.fullmatch(
+        live_image_reference
+    ):
+        codes.add("BROWSER_RUNTIME_IMAGE_NOT_IMMUTABLE")
+    expected_image_reference = _as_mapping(
+        source_contract.get("browser_container")
+    ).get("image_reference")
+    if live_image_reference != expected_image_reference:
+        codes.add("BROWSER_RUNTIME_IMAGE_MISMATCH")
+    return codes
+
+
+def _courier_runtime_postimage_codes(
+    snapshot: RuntimeSnapshot, receipt: Mapping[str, Any]
+) -> set[str]:
+    codes: set[str] = set()
+    runtime = _as_mapping(receipt.get("runtime"))
+    if snapshot.unit.get("Id") != runtime.get("unit_id"):
+        codes.add("COURIER_API_RUNTIME_UNIT_MISMATCH")
+    try:
+        current_pid = int(snapshot.unit.get("MainPID", "0"))
+    except (TypeError, ValueError):
+        current_pid = 0
+    if current_pid <= 0 or current_pid != runtime.get("main_pid"):
+        codes.add("COURIER_API_RUNTIME_PID_MISMATCH")
+    expected_states = {
+        "LoadState": runtime.get("load_state"),
+        "ActiveState": runtime.get("active_state"),
+        "SubState": runtime.get("sub_state"),
+    }
+    if any(snapshot.unit.get(key) != expected for key, expected in expected_states.items()):
+        codes.add("COURIER_API_RUNTIME_STATE_MISMATCH")
+    return codes
+
+
 def collect_live() -> RuntimeSnapshot:
     outputs: dict[tuple[str, ...], str] = {}
     errors: list[str] = []
@@ -991,6 +1317,24 @@ def analyze(
         if dict(_as_mapping(receipt_hashes)) != dict(snapshot.guard_fingerprints):
             validation_codes.add("HOST_RULE_RECEIPT_RUNTIME_MISMATCH")
             host_receipt_valid = False
+
+    source_contract = _as_mapping(_as_mapping(evidence_bundle).get("source_contract"))
+    browser_runtime_postimage_valid = validation.source_contract_valid
+    if browser_runtime_postimage_valid:
+        browser_runtime_codes = _browser_runtime_postimage_codes(snapshot, source_contract)
+        validation_codes.update(browser_runtime_codes)
+        browser_runtime_postimage_valid = not browser_runtime_codes
+
+    courier_runtime_postimage_valid = validation.courier_deployment_receipt_valid
+    if courier_runtime_postimage_valid:
+        courier_runtime_codes = _courier_runtime_postimage_codes(
+            snapshot,
+            _as_mapping(
+                _as_mapping(evidence_bundle).get("courier_api_deployment_receipt")
+            ),
+        )
+        validation_codes.update(courier_runtime_codes)
+        courier_runtime_postimage_valid = not courier_runtime_codes
 
     findings: set[str] = set(snapshot.source_errors)
     if evidence_bundle is not None or evidence_load_errors:
@@ -1052,6 +1396,8 @@ def analyze(
         validation.valid
         and not evidence_load_errors
         and host_receipt_valid
+        and browser_runtime_postimage_valid
+        and courier_runtime_postimage_valid
         and "HOST_RULE_RECEIPT_RUNTIME_MISMATCH" not in validation_codes
     )
     ordered_findings = sorted(findings)
@@ -1082,6 +1428,15 @@ def analyze(
             "provider_proof": "VALID" if validation.provider_proof_valid else "INVALID",
             "external_probes": "VALID" if validation.external_probes_valid else "INVALID",
             "host_rules_receipt": "VALID" if host_receipt_valid else "INVALID",
+            "browser_runtime_postimage": (
+                "VALID" if browser_runtime_postimage_valid else "INVALID"
+            ),
+            "courier_api_deployment_receipt": (
+                "VALID" if validation.courier_deployment_receipt_valid else "INVALID"
+            ),
+            "courier_api_runtime_postimage": (
+                "VALID" if courier_runtime_postimage_valid else "INVALID"
+            ),
             "credential_receipt": (
                 "VALID" if validation.credential_receipt_valid else "INVALID"
             ),

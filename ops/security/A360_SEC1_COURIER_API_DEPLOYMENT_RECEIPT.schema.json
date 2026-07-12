@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "a360.sec1.courier-api-deployment-receipt.v1",
+  "title": "A360 SEC1 Courier API deployment receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "change_id",
+    "observation_id",
+    "observed_at_utc",
+    "producer",
+    "postimage",
+    "runtime"
+  ],
+  "properties": {
+    "schema": {
+      "const": "a360.sec1.courier-api-deployment-receipt.v1"
+    },
+    "change_id": {
+      "type": "string",
+      "pattern": "^A360-SEC1-[A-Z0-9][A-Z0-9._-]{2,63}$"
+    },
+    "observation_id": {
+      "type": "string",
+      "pattern": "^OBS-[A-Z0-9][A-Z0-9._-]{2,63}$"
+    },
+    "observed_at_utc": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source_commit", "artifact_sha256"],
+      "properties": {
+        "kind": {
+          "const": "VERSIONED_DEPLOY_PROVISIONER"
+        },
+        "source_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "artifact_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "postimage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_commit", "config_sha256", "main_sha256"],
+      "properties": {
+        "source_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "config_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "main_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit_id", "main_pid", "load_state", "active_state", "sub_state"],
+      "properties": {
+        "unit_id": {
+          "const": "courier-api.service"
+        },
+        "main_pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "load_state": {
+          "const": "loaded"
+        },
+        "active_state": {
+          "const": "active"
+        },
+        "sub_state": {
+          "const": "running"
+        }
+      }
+    }
+  }
+}
