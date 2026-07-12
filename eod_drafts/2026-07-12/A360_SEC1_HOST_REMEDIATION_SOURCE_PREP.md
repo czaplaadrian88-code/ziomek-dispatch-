@@ -346,13 +346,17 @@ LIVE.
 ## 11. Git i przekazanie
 
 Lokalny commit initial implementation:
-`27e84800b758ad5f28d0ab6462efaf15aece8175`; powstał tuż przed review
+`763f409ae9e4e92d9990e2f0c62accb81be94090`; powstał tuż przed review
 integratora i samodzielnie zawiera oba później wykryte false-PASS; nie został
 wypchnięty oddzielnie. Oba blockery są domknięte fix-forward commitem
-`bb8bcfc3d74e6f8903ad2c1b4f7d63044b2e45e0`, utworzonym dopiero po finalnych
+`b90dbc7c00f653abd1e8538dbdd7e18834170bef`, utworzonym dopiero po finalnych
 targeted i pełnych DEFAULT/STRICT. Branch tip zawiera oba commity jako jedną
 nierozdzielną serię; initial commit nie jest kandydatem do cherry-pick bez
 fix-forward.
+Pierwotne lokalne SHA tych dwóch commitów zostały przed pierwszym pushem
+odtworzone od frozen base wyłącznie po to, by usunąć historyczny trailing
+whitespace; opublikowana historia nie została przepisana, a tree kodu i wyniki
+testów nie zmieniły się.
 Commit finalnego raportu: commit zawierający ten plik; exact SHA jest
 samorozwiązywalny przez `git log -1 --format=%H -- <ten plik>` i zostaje też
 zapisany w snapshotcie/finalnym handoffie po commicie.
