@@ -229,6 +229,16 @@ clean/push/snapshot; zachowano tylko tmux50 z cudzym WIP i tmux58 jako
 FLIPMASTER/biezacy integrator. Raport:
 `eod_drafts/2026-07-12/AUDIT360_SEC1_SOURCE_LIVE_AND_E1_BRANCH_CLOSE.md`.
 
+Domkniecie zachowanego `tmux50` 2026-07-12: WIP panelu GRF-02 zostal
+zrekoncyliowany i zapisany na `nadajesz_clone/coordinator-console` jako
+`5924e19`. Ikona przy godzinie nie usuwa juz calego dnia: backend atomowo skraca
+ciagla zmiane o jedna godzine tylko od poczatku/konca, zachowuje auto i odrzuca
+srodek zamiast cicho tracic kilka godzin. Focused 20/20, Vite build PASS, panel
+full 1089 pass + 1 zastany alembic-baseline fail, mutation-probe RED→GREEN.
+Kod jest TECH COMPLETE, ale NOT LIVE: zero deployu/restartu/flipa/migracji;
+wydanie panelu wymaga osobnego ACK. Raport:
+`eod_drafts/2026-07-12/GRF02_TMUX50_CLOSE.md`.
+
 52 `UNVERIFIED` nie sa zadaniami naprawczymi. Cztery `REFUTED` pozostaja
 zamkniete. Pelne disposition wszystkich CONFIRMED/PARTIAL/PLAUSIBLE, aktualne
 dirty locki, file families, testy i rollback sa w punkcie wykonawczym powyzej.
