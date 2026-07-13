@@ -17,6 +17,18 @@ EXCLUDED_CIDS = {
     498,  # Kamil Dr — inactive
 }
 
+# Rozliczenie dotyczy okresu historycznego. Status "inactive" w dniu uruchomienia
+# nie może usuwać kuriera, który wykonał zlecenia w tym okresie. Ta lista zawiera
+# wyłącznie trwałe konta techniczne, które nigdy nie są stroną rozliczenia.
+#
+# EXCLUDED_CIDS zostaje dla istniejących konsumentów identity; daily_accounting
+# nie może go używać jako filtra wypłat.
+NON_SETTLEMENT_CIDS = {
+    21,  # owner account
+    23,  # technical account
+    26,  # virtual coordinator holder
+}
+
 BAR_ELJOT_COMPANY_ID = 27
 
 MIN_FREE_ROWS_ALERT = 30

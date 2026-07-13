@@ -55,6 +55,29 @@ class Registry:
     def by_cid(self, cid) -> Optional[CourierRecord]:
         return self.records.get(canon_cid(cid))
 
+    def accounting_name(self, cid) -> Optional[str]:
+        """Canonical full name for a settlement row.
+
+        Grafik is the approved full-name source. The remaining sources are
+        explicit fallbacks for a courier not yet present in the grafik; this
+        prevents accounting from maintaining another alias->name resolver.
+        """
+        names = self.accounting_names(cid)
+        return names[0] if names else None
+
+    def accounting_names(self, cid) -> List[str]:
+        """All authoritative full-name variants for legacy settlement matching."""
+        rec = self.by_cid(cid)
+        if rec is None:
+            return []
+        names: List[str] = []
+        for source in ("grafik", "panel", "app", "accounting"):
+            name = rec.full_name.get(source)
+            clean = name.strip() if name else ""
+            if clean and clean not in names:
+                names.append(clean)
+        return names
+
     def all_records(self) -> List[CourierRecord]:
         return list(self.records.values())
 

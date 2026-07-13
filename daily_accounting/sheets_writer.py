@@ -1,10 +1,10 @@
 """Daily Accounting — Google Sheets R/W na arkusz 'Obliczenia'.
 
 Odpowiedzialności:
- - Read A:C dla idempotent check (existing (name, date) pairs)
+ - Read A/C/H/P/S dla rekonsyliacji istniejącego wiersza
  - Read A:B dla car_lookup source data
  - Find first empty row (skan kolumny A)
- - Batch write A/B/C/F/H/P dla nowych wierszy (jeden batchUpdate call)
+ - Batch write A/C/H/P/S dla nowych wierszy (jeden batchUpdate call)
  - Count free rows pod ostatnim filled (alert threshold)
 
 Auth: service_account.json, SCOPES spreadsheets (RW).
@@ -16,6 +16,7 @@ from datetime import date
 from typing import Dict, List, Optional, Tuple
 
 from dispatch_v2.daily_accounting.config import SHEET_NAME, SPREADSHEET_ID
+from dispatch_v2.daily_accounting.numbers import parse_zl
 
 log = logging.getLogger("daily_accounting.sheets")
 
@@ -23,6 +24,8 @@ SERVICE_ACCOUNT_PATH = "/root/.openclaw/workspace/scripts/service_account.json"
 SCOPES_RW = ["https://www.googleapis.com/auth/spreadsheets"]
 
 DATE_FMT = "%d-%m-%Y"
+SETTLEMENT_KEY_COLUMN = "S"
+SETTLEMENT_KEY_PREFIX = "daily-accounting/v1"
 
 
 def _gc():
@@ -39,20 +42,27 @@ def open_worksheet():
 
 
 def fetch_grid() -> Dict:
-    """Read columns A, B, C at once; also last-non-empty index for A.
+    """Read columns needed for reconciliation; last-non-empty index comes from A.
 
-    Returns: {'col_a': [...], 'col_b': [...], 'col_c': [...], 'last_filled': int}
+    ``S`` is the machine key; legacy rows can have it empty. We intentionally
+    read H/P too: name+date alone is not proof that a settlement is correct.
     """
     ws = open_worksheet()
     col_a = ws.col_values(1)  # stops at last non-empty
     col_b = ws.col_values(2)
     col_c = ws.col_values(3)
+    col_h = ws.col_values(8)
+    col_p = ws.col_values(16)
+    col_s = ws.col_values(19)
     last_filled = len(col_a)  # 1-based count = index of last non-empty row
     return {
         "ws": ws,
         "col_a": col_a,
         "col_b": col_b,
         "col_c": col_c,
+        "col_h": col_h,
+        "col_p": col_p,
+        "col_s": col_s,
         "last_filled": last_filled,
     }
 
@@ -73,6 +83,81 @@ def already_written(
         if a and a.strip().lower() == name_target and c == date_target:
             return True
     return False
+
+
+def settlement_key(cid: int, date_from: date, date_to: date) -> str:
+    """Stable source key, independent of alias or display-name changes."""
+    return f"{SETTLEMENT_KEY_PREFIX}:{int(cid)}:{date_from.isoformat()}:{date_to.isoformat()}"
+
+
+def _at(column: List[str], index: int) -> str:
+    return str(column[index]) if index < len(column) else ""
+
+
+def _same_number(actual: object, expected: object) -> bool:
+    try:
+        return abs(parse_zl(actual) - float(expected)) < 0.005
+    except (TypeError, ValueError):
+        return False
+
+
+def reconcile_existing_row(
+    *,
+    key: str,
+    employee_name: str,
+    legacy_names: Optional[List[str]] = None,
+    target_date: date,
+    expected_h: float,
+    expected_p: int,
+    col_a: List[str],
+    col_c: List[str],
+    col_h: List[str],
+    col_p: List[str],
+    col_s: List[str],
+) -> Dict:
+    """Classify an existing settlement without silently accepting a mismatch.
+
+    A keyed row is machine-owned. A legacy row is recognised only as a single
+    matching ``name+date`` candidate and never becomes a successful duplicate
+    when H or P differ. Ambiguity is deliberately a HOLD.
+    """
+    keyed_rows = [i for i, value in enumerate(col_s) if value.strip() == key]
+    if len(keyed_rows) > 1:
+        return {"status": "KEY_AMBIGUOUS", "rows": [i + 1 for i in keyed_rows]}
+
+    name_targets = {employee_name.strip().casefold()}
+    name_targets.update(
+        str(name).strip().casefold() for name in (legacy_names or []) if str(name).strip()
+    )
+    date_target = target_date.strftime(DATE_FMT)
+    legacy_rows = [
+        i
+        for i in range(min(len(col_a), len(col_c)))
+        if _at(col_a, i).strip().casefold() in name_targets
+        and _at(col_c, i).strip() == date_target
+    ]
+
+    if keyed_rows:
+        row = keyed_rows[0]
+        values_match = _same_number(_at(col_h, row), expected_h) and _same_number(
+            _at(col_p, row), expected_p
+        )
+        return {
+            "status": "MACHINE_MATCH" if values_match else "MACHINE_MISMATCH",
+            "row": row + 1,
+        }
+    if len(legacy_rows) > 1:
+        return {"status": "LEGACY_AMBIGUOUS", "rows": [i + 1 for i in legacy_rows]}
+    if legacy_rows:
+        row = legacy_rows[0]
+        values_match = _same_number(_at(col_h, row), expected_h) and _same_number(
+            _at(col_p, row), expected_p
+        )
+        return {
+            "status": "LEGACY_MATCH" if values_match else "LEGACY_MISMATCH",
+            "row": row + 1,
+        }
+    return {"status": "NEW"}
 
 
 def first_empty_row(col_a: List[str]) -> int:
@@ -128,9 +213,8 @@ def build_batch_data(ws, rows: List[Dict]) -> List[Dict]:
     data = []
     for r in rows:
         row_idx = r["row"]
-        # B (samochód firmowy/prywatny) i F (płatność kartą) — stop-write 2026-05-14
-        # per Adrian: liczymy tylko ogólne pobrania (kolumna H) + liczba zleceń (P).
-        for col_letter in ("A", "C", "H", "P"):
+        # S = techniczny klucz źródłowy. B/F pozostają poza zakresem od 2026-05-14.
+        for col_letter in ("A", "C", "H", "P", SETTLEMENT_KEY_COLUMN):
             val = r.get(col_letter)
             if val is None:
                 continue
@@ -141,6 +225,24 @@ def build_batch_data(ws, rows: List[Dict]) -> List[Dict]:
     return data
 
 
+def snapshot_written_cells(rows: List[Dict], columns: Dict[str, List[str]]) -> List[Dict]:
+    """Capture the in-memory preimage for exactly the cells a batch may change.
+
+    This is deliberately not persisted: settlement values are operational data.
+    The caller can use the returned rows for an immediate compensating write if
+    the API response or read-back verification fails.
+    """
+    snapshots: List[Dict] = []
+    for row in rows:
+        row_index = int(row["row"]) - 1
+        snapshot = {"row": row["row"]}
+        for field in ("A", "C", "H", "P", SETTLEMENT_KEY_COLUMN):
+            if field in row:
+                snapshot[field] = _at(columns[field], row_index)
+        snapshots.append(snapshot)
+    return snapshots
+
+
 def batch_write_rows(
     ws,
     rows: List[Dict],
@@ -148,7 +250,7 @@ def batch_write_rows(
     """Batch write wszystkich wierszy jednym values.batchUpdate call.
 
     Args:
-        rows: lista dict z kluczami 'row' (1-indexed), 'A', 'B', 'C', 'F', 'H', 'P'.
+        rows: lista dict z kluczami 'row' (1-indexed), 'A', 'C', 'H', 'P', 'S'.
               Wartości numeryczne jako raw float → USER_ENTERED lokalizuje PL przecinek.
 
     Returns: {'written': int, 'first_row': int, 'last_row': int,
@@ -164,8 +266,7 @@ def batch_write_rows(
             "api_expected_cells": 0,
         }
 
-    # Strategia: per-cell updates zebrane w batch_update. Każda komórka osobny range
-    # bo piszemy kolumny nieciągłe (A, B, C, F, H, P — G/D/E pomijamy).
+    # Strategia: per-cell updates zebrane w batch_update dla nieciągłych A/C/H/P/S.
     data = build_batch_data(ws, rows)
     expected_cells = len(data)
     log.info(
@@ -198,29 +299,40 @@ def batch_write_rows(
 
 
 def verify_writes(ws, rows: List[Dict]) -> Dict:
-    """Re-fetch col A i C; weryfikuj że każdy expected row ma expected wartości
-    A (full_name) i C (target_date).
+    """Re-read every written field: identity, amounts and machine key.
 
-    Defense-in-depth (DIFF B): nawet jeśli API zwróci api_success=True,
-    weryfikujemy fizyczną obecność danych w docelowej zakładce. Łapie cases
-    gdzie API zaakceptowało write ale fizycznie poszło nie tam (np. wrong
-    target sheet, jak DIFF C bug).
-
-    Returns: {'verified': N, 'mismatches': [...]}
+    A/C-only verification allowed an API or formula mismatch in H/P to be
+    reported as success. Fields absent from a patch row are deliberately not
+    compared, which lets explicit legacy reconciliation change only H/P/S.
     """
-    col_a = ws.col_values(1)
-    col_c = ws.col_values(3)
+    columns = {
+        "A": ws.col_values(1),
+        "C": ws.col_values(3),
+        "H": ws.col_values(8),
+        "P": ws.col_values(16),
+        SETTLEMENT_KEY_COLUMN: ws.col_values(19),
+    }
     mismatches = []
     for r in rows:
         i = r["row"] - 1  # 0-based
-        actual_a = (col_a[i] if i < len(col_a) else "").strip()
-        actual_c = (col_c[i] if i < len(col_c) else "").strip()
-        expected_a = (r.get("A") or "").strip()
-        expected_c = (r.get("C") or "").strip()
-        if actual_a != expected_a or actual_c != expected_c:
+        actual = {field: _at(column, i).strip() for field, column in columns.items()}
+        failed = []
+        for field in ("A", "C", "H", "P", SETTLEMENT_KEY_COLUMN):
+            if field not in r or r[field] is None:
+                continue
+            expected = r[field]
+            matches = (
+                _same_number(actual[field], expected)
+                if field in ("H", "P")
+                else actual[field] == str(expected).strip()
+            )
+            if not matches:
+                failed.append(field)
+        if failed:
             mismatches.append({
                 "row": r["row"],
-                "expected_A": expected_a, "actual_A": actual_a,
-                "expected_C": expected_c, "actual_C": actual_c,
+                "fields": failed,
+                "expected": {field: r[field] for field in failed},
+                "actual": {field: actual[field] for field in failed},
             })
     return {"verified": len(rows) - len(mismatches), "mismatches": mismatches}

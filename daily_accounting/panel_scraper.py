@@ -22,6 +22,7 @@ from dispatch_v2.daily_accounting.config import (
     PANEL_RETRY_ATTEMPTS,
     PANEL_RETRY_BACKOFF_SEC,
 )
+from dispatch_v2.daily_accounting.numbers import parse_zl
 
 log = logging.getLogger("daily_accounting.scraper")
 
@@ -39,22 +40,8 @@ PRZESYLKI_RE = re.compile(r"Suma doręczonych przesyłek[^:]*:\s*([\d\s,\.]+)\s*
 TIMEOUT_S = 30
 
 
-def _parse_zl(raw: str) -> float:
-    """PL/US number parsing: last separator is decimal; others are thousands."""
-    s = (raw or "").strip().replace(" ", "").replace(" ", "")
-    if not s:
-        return 0.0
-    last_dot = s.rfind(".")
-    last_comma = s.rfind(",")
-    if last_dot == -1 and last_comma == -1:
-        return float(s)
-    decimal_pos = max(last_dot, last_comma)
-    decimal_sep = s[decimal_pos]
-    other_sep = "," if decimal_sep == "." else "."
-    s = s.replace(other_sep, "")
-    if decimal_sep == ",":
-        s = s.replace(",", ".")
-    return float(s)
+# Zachowane dla istniejących importerów i testów; kanon jest w numbers.py.
+_parse_zl = parse_zl
 
 
 def _strip_html(html: str) -> str:
@@ -131,7 +118,7 @@ def parse_main_page(html: str) -> Dict[str, float]:
     karta_val = _parse_zl(karta_m.group(1)) if karta_m else 0.0
     return {
         "ilosc_zlecen": int(ilosc_m.group(1)),
-        "suma_pobran_total": _parse_zl(pobr_m.group(1)),
+        "suma_pobran_total": parse_zl(pobr_m.group(1)),
         "suma_platnosci_karta": karta_val,
     }
 
@@ -146,8 +133,8 @@ def parse_eljot_page(html: str) -> Dict[str, float]:
     pobr_m = POBRANIA_RE.search(clean)
     przes_m = PRZESYLKI_RE.search(clean)
     return {
-        "eljot_pobrania": _parse_zl(pobr_m.group(1)) if pobr_m else 0.0,
-        "eljot_cena": _parse_zl(przes_m.group(1)) if przes_m else 0.0,
+        "eljot_pobrania": parse_zl(pobr_m.group(1)) if pobr_m else 0.0,
+        "eljot_cena": parse_zl(przes_m.group(1)) if przes_m else 0.0,
     }
 
 
@@ -171,23 +158,18 @@ def scrape_courier(
     date_from: date,
     date_to: date,
 ) -> Dict[str, float]:
-    """Full scrape: 2 calls + H compute. Raises jeśli main call fail po retries.
+    """Full scrape: oba źródła H muszą być kompletne, inaczej raise.
 
-    Eljot call fail → log warning + default 0.0 (Eljot exception nie zadziała).
-
-    Returns: dict z pełnymi polami rekordu kuriera.
+    Podstawienie zer po błędzie Eljot fałszuje H, więc bieg rozliczeniowy ma
+    zatrzymać się przed zapisem zamiast publikować niepełne rozliczenie.
     """
     url_main = _build_url(date_from, date_to, cid, company=None)
     html_main = _scrape_with_retry(opener, url_main, "main", cid)
     main = parse_main_page(html_main)
 
     url_elj = _build_url(date_from, date_to, cid, company=BAR_ELJOT_COMPANY_ID)
-    try:
-        html_elj = _scrape_with_retry(opener, url_elj, "eljot", cid)
-        elj = parse_eljot_page(html_elj)
-    except Exception as e:
-        log.warning(f"eljot cid={cid} alias={alias!r} final fail: {e} — default 0.0")
-        elj = {"eljot_pobrania": 0.0, "eljot_cena": 0.0}
+    html_elj = _scrape_with_retry(opener, url_elj, "eljot", cid)
+    elj = parse_eljot_page(html_elj)
 
     h = compute_h(main["suma_pobran_total"], elj["eljot_pobrania"], elj["eljot_cena"])
 

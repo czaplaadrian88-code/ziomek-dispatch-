@@ -164,6 +164,16 @@ def test_registry_resolve_profiles():
         reg.resolve("x", "bogus_profile")
 
 
+def test_registry_accounting_name_prefers_grafik_then_fallbacks():
+    reg = registry.build_registry(_bundle())
+    assert reg.accounting_name("100") == "Adam Nowak"
+    assert reg.accounting_names("100")[0] == "Adam Nowak"
+    # cid=110 has no grafik entry in the fixture, so panel/app/accounting fallback
+    # remains available rather than forcing a second resolver in daily_accounting.
+    assert reg.accounting_name("110") is not None
+    assert reg.accounting_name("does-not-exist") is None
+
+
 def test_pin_never_plaintext_in_records():
     reg = registry.build_registry(_bundle())
     for r in reg.all_records():
