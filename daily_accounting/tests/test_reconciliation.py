@@ -100,17 +100,23 @@ def test_readback_checks_amounts_and_source_key():
 
 
 def test_snapshot_keeps_only_cells_that_this_batch_writes():
+    class FormulaSnapshotWs:
+        def __init__(self):
+            self.ranges = []
+            self.value_render_option = None
+
+        def batch_get(self, ranges, value_render_option):
+            self.ranges = ranges
+            self.value_render_option = value_render_option
+            return [[["=old-h"]], [["old-p"]], []]
+
+    ws = FormulaSnapshotWs()
     snapshots = snapshot_written_cells(
+        ws,
         [{"row": 2, "H": 120.5, "P": 55, "S": "source-key"}],
-        {
-            "A": ["unchanged", "name"],
-            "C": ["", "12-07-2026"],
-            "H": ["", "old-h"],
-            "P": ["", "old-p"],
-            "S": ["", ""],
-        },
     )
-    assert snapshots == [{"row": 2, "H": "old-h", "P": "old-p", "S": ""}]
+    assert ws.ranges == ["H2", "P2", "S2"]
+    assert snapshots == [{"row": 2, "H": "=old-h", "P": "old-p", "S": ""}]
 
 
 def test_eljot_failure_aborts_courier_record(monkeypatch=None):

@@ -351,13 +351,7 @@ def run(
 
     # Real write
     log.info(f"Writing {len(rows_to_write)} rows (real)")
-    rollback_rows = snapshot_written_cells(clean_rows, {
-        "A": col_a,
-        "C": col_c,
-        "H": col_h,
-        "P": col_p,
-        "S": col_s,
-    })
+    rollback_rows = snapshot_written_cells(ws, clean_rows)
 
     def rollback_after_failed_write(reason: str) -> bool:
         """Compensate the current batch from its in-memory preimage only."""

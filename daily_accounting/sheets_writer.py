@@ -225,21 +225,30 @@ def build_batch_data(ws, rows: List[Dict]) -> List[Dict]:
     return data
 
 
-def snapshot_written_cells(rows: List[Dict], columns: Dict[str, List[str]]) -> List[Dict]:
-    """Capture the in-memory preimage for exactly the cells a batch may change.
+def snapshot_written_cells(ws, rows: List[Dict]) -> List[Dict]:
+    """Capture the formula-preserving preimage for exactly a batch's cells.
 
     This is deliberately not persisted: settlement values are operational data.
-    The caller can use the returned rows for an immediate compensating write if
-    the API response or read-back verification fails.
+    ``FORMULA`` is essential here. H/P/S can contain a spreadsheet formula, and
+    compensating it with its rendered value would silently destroy that formula.
     """
     snapshots: List[Dict] = []
+    requested = []
     for row in rows:
-        row_index = int(row["row"]) - 1
         snapshot = {"row": row["row"]}
         for field in ("A", "C", "H", "P", SETTLEMENT_KEY_COLUMN):
             if field in row:
-                snapshot[field] = _at(columns[field], row_index)
+                requested.append((snapshot, field, f"{field}{row['row']}"))
         snapshots.append(snapshot)
+
+    if not requested:
+        return snapshots
+    value_ranges = ws.batch_get(
+        [item[2] for item in requested],
+        value_render_option="FORMULA",
+    )
+    for (snapshot, field, _), values in zip(requested, value_ranges):
+        snapshot[field] = values[0][0] if values and values[0] else ""
     return snapshots
 
 
