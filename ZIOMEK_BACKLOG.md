@@ -10,7 +10,7 @@
 > LIVE, DWUDNIOWY WERDYKT OCZEKUJE NA AT-215 (2026-07-15 09:25 UTC);
 > M-P0-02 CEIDG/PANORAMA LIVE `527fd59`, WERDYKT DWÓCH BIEGÓW AT-216
 > 15.07 08:10 UTC; M-P1-01 WSPÓLNA POLITYKA PERSONALIZACJI AUDYTU
-> CANDIDATE `b18ccbc`, LIVE HOLD DO OSOBNEGO ACK
+> LIVE `2b5a616`, NATURALNY AUDYT 0/3 FLAGGED, OBSERWACJA DO 15.07
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -95,7 +95,7 @@ przed rozpoczeciem implementacji.
 | Z-P1-10 | Restore game day i RTO/RPO | Istnienie backupu nie dowodzi odtworzenia; real provenance/decrypt obu DB/app smoke i service RTO/RPO nadal nie sa udowodnione. | DR0 daje fail-closed source/fake: strict SQL, manifest, budgety, provenance i cleanup; DR1A przygotowuje carrier/app-smoke, DR1B wykona real game-day. | M | DR0 SOURCE ACCEPT `d873f0b`; DR1A SOURCE/FAKE IN MASTER w `a360-wave3-safe-source-integrated-20260711`, C32 fixed, NOT INSTALLED/NOT EXECUTED; real verify/artifact/drill/RTO = DR1B HOLD / NOT DONE |
 | Z-P1-11 | Triage i disposition Audytu 360 | Pakiet ma 110 wpisow: 49 CONFIRMED, 4 REFUTED, 4 PARTIAL, 1 PLAUSIBLE, 52 UNVERIFIED; severity 1 P1/47 P2/58 P3/4 NONE. | Potwierdzone naprawy sa zgrupowane bez duplikatow, PARTIAL/PLAUSIBLE maja verify-first, UNVERIFIED tylko reprodukcje. | M | DONE — pakiet, walidator i kolejka zintegrowane; decyzje HARD/SOFT, security i ops osobno |
 | Z-P1-12 | Flow-liveness panelu, API i decyzji | OPS-02: krytyczne uslugi moga restartowac sie, lecz nie maja bezposredniego, zweryfikowanego alert route; sam PID nie wykrywa ciszy przeplywu. | Health panel/API i brak decyzji w peak beda mialy watermark, prog, ownera, consumer i kontrolowany negative control. | M | Kod/prep bez live; instalacja/restart za osobnym ACK |
-| M-P1-01 | Mailek: jeden kanon personalizacji Validator/Q1/audyt | 13/18 dzisiejszych auto-maili CEIDG mialo falszywy jedyny powod `notes_overlap_low=1`: audyt duplikowal tokenizacje i twardy prog 2, gdy dwa upstream gate'y kanonicznie wymagaja dla CEIDG 1. | Wspolny helper utrzymuje `CEIDG=1`, inne/brak roli=2, zero-overlap nadal fail; read-only replay daje 5/13 legacy kontra 18/0 candidate. | S + 2 dni obserwacji | CANDIDATE `b18ccbc`, branch final `2b5a616`, 227/227 + mutation PASS; live merge bez restartu i ewentualna korekta 13 rekordow wymagaja osobnych ACK |
+| M-P1-01 | Mailek: jeden kanon personalizacji Validator/Q1/audyt | 13/18 dzisiejszych auto-maili CEIDG mialo falszywy jedyny powod `notes_overlap_low=1`: audyt duplikowal tokenizacje i twardy prog 2, gdy dwa upstream gate'y kanonicznie wymagaja dla CEIDG 1. | Wspolny helper utrzymuje `CEIDG=1`, inne/brak roli=2, zero-overlap nadal fail; read-only replay daje 5/13 legacy kontra 18/0 candidate. | S + 2 dni obserwacji | LIVE code `2b5a616`, docs `5bb102a`, rollback tag na `e961291`; pre/post 227/227, naturalny run 15:00 candidates3/flagged0, bez restartu/crona/flagi/migracji. Korekta 13 starych rekordow nadal HOLD do osobnego ACK; obserwacja do 15.07 |
 
 ### P2 - skalowanie i granice produktu
 
