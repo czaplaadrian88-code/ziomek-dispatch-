@@ -7,7 +7,8 @@
 > BRANCH-COMPLETE I OFF; V214 WAIT/PENDING DO AT-214; OD-01..OD-07 ORAZ
 > ODR-002 AUTHORITY OWNERSHIP OWNER_CONFIRMED 2026-07-12;
 > IMPLEMENTACJA/KPI-NUMBERS/KARTA RUNTIME NADAL HOLD; MAILEK M-P0-01
-> LIVE, DWUDNIOWY WERDYKT OCZEKUJE NA AT-215 (2026-07-15 09:25 UTC)
+> LIVE, DWUDNIOWY WERDYKT OCZEKUJE NA AT-215 (2026-07-15 09:25 UTC);
+> MAILEK M-P1-02 CANDIDATE DEFAULT OFF, LIVE/MIGRACJA/FLIP HOLD DO AT-216+ACK
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -91,6 +92,7 @@ przed rozpoczeciem implementacji.
 | Z-P1-10 | Restore game day i RTO/RPO | Istnienie backupu nie dowodzi odtworzenia; real provenance/decrypt obu DB/app smoke i service RTO/RPO nadal nie sa udowodnione. | DR0 daje fail-closed source/fake: strict SQL, manifest, budgety, provenance i cleanup; DR1A przygotowuje carrier/app-smoke, DR1B wykona real game-day. | M | DR0 SOURCE ACCEPT `d873f0b`; DR1A SOURCE/FAKE IN MASTER w `a360-wave3-safe-source-integrated-20260711`, C32 fixed, NOT INSTALLED/NOT EXECUTED; real verify/artifact/drill/RTO = DR1B HOLD / NOT DONE |
 | Z-P1-11 | Triage i disposition Audytu 360 | Pakiet ma 110 wpisow: 49 CONFIRMED, 4 REFUTED, 4 PARTIAL, 1 PLAUSIBLE, 52 UNVERIFIED; severity 1 P1/47 P2/58 P3/4 NONE. | Potwierdzone naprawy sa zgrupowane bez duplikatow, PARTIAL/PLAUSIBLE maja verify-first, UNVERIFIED tylko reprodukcje. | M | DONE — pakiet, walidator i kolejka zintegrowane; decyzje HARD/SOFT, security i ops osobno |
 | Z-P1-12 | Flow-liveness panelu, API i decyzji | OPS-02: krytyczne uslugi moga restartowac sie, lecz nie maja bezposredniego, zweryfikowanego alert route; sam PID nie wykrywa ciszy przeplywu. | Health panel/API i brak decyzji w peak beda mialy watermark, prog, ownera, consumer i kontrolowany negative control. | M | Kod/prep bez live; instalacja/restart za osobnym ACK |
+| M-P1-02 | Mailek: source truth, runway i owner-gated pilot branzy | Panorama zmieniala segment fallbacku na ecommerce i zapisywala sie jako Apify; live runway 27 leadow = konserwatywnie 0,54 dnia; brak trwalej decyzji Telegram dla nowej branzy. | Candidate niesie kanoniczne source end-to-end, brak mapowania daje `scope_hold`, runway ma read-only licznik+outbox, a hash-bound pilot ma CAS, limit 1-10, `autonomy_eligible=0` i sender kill-switch. | L + min. 2 dni obserwacji per flip | BRANCH COMPLETE `3a3800c`+`d526d99`, 265/265 i 2 mutation probes; wszystkie flagi OFF. Live HOLD: at-216, Backup API+migracja za ACK, deploy/restart za ACK, osobne flipy za ACK. Trzeci backend/nowa branza P2 HOLD. |
 
 ### P2 - skalowanie i granice produktu
 
