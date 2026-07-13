@@ -867,7 +867,13 @@ zielony. Werdykt po pelnym oknie 48 h wykona at-214 13.07 o 12:15 UTC.**
 6. Sprint 5: Z-P1-04 i Z-P2-02 po ustabilizowaniu kontraktow.
 7. Dalej: integracje, multi-city i migracje stanu wedlug decyzji B-03/B-04.
 
-## 10. Zasady utrzymania backlogu
+## 10. Historia zamknięta
+
+| ID | Zakres | Wynik | Dowód / rollback | Status |
+|---|---|---|---|---|
+| Z-ACC-01 | Historyczne rozliczenia dzienne Google Sheets | Filtr rozliczeń wyklucza tylko trwałe konta techniczne, nazwa rozliczeniowa pochodzi z canonical `identity`, a wpis ma trwały klucz `CID+okres` w kolumnie S. Legacy duplicate jest porównywany po H/P: zgodny jest pomijany, rozbieżny zatrzymuje zapis albo wymaga jawnego trybu korekty. | `c10e1eb` + `c244d0b`; finalnie 5188 testów, 0 fail/error, 32 skip; E2E korekty 2 wierszy H/P/S potwierdzone niezależnym odczytem panel→arkusz. Rollback kodu: tag `daily-accounting-pre-c10e1eb`; danych: historia wersji arkusza sprzed 2026-07-13 10:13 UTC. | **DONE/LIVE 2026-07-13** |
+
+## 11. Zasady utrzymania backlogu
 
 - Statusy: `PROPOSED`, `READY`, `IN_PROGRESS`, `BLOCKED`, `DONE`, `REJECTED`.
 - Zadanie przechodzi do `READY` dopiero po ponownej weryfikacji dowodu w kodzie.
