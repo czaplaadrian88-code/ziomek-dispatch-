@@ -11,7 +11,9 @@
 > M-P0-02 CEIDG/PANORAMA LIVE `527fd59`, WERDYKT DWÓCH BIEGÓW AT-216
 > 15.07 08:10 UTC; M-P1-01 WSPÓLNA POLITYKA PERSONALIZACJI AUDYTU
 > LIVE `2b5a616`; KOREKTA 13 FALSZYWYCH FLAG LIVE APPLIED 15:25 UTC,
-> BACKUP+ROLLBACK READY, POSTCHECK 13/13; OBSERWACJA POLICY DO 15.07
+> BACKUP+ROLLBACK READY, POSTCHECK 13/13; OBSERWACJA POLICY DO 15.07;
+> M-P1-02 SUPPLY CONTROL PLANE READY DO IMPLEMENTACJI OFF/NO-DEPLOY:
+> PANORAMA MYLI SOURCE I ZMIENIA SEGMENT, RUNWAY OK. 1,08 DNIA
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -97,6 +99,7 @@ przed rozpoczeciem implementacji.
 | Z-P1-11 | Triage i disposition Audytu 360 | Pakiet ma 110 wpisow: 49 CONFIRMED, 4 REFUTED, 4 PARTIAL, 1 PLAUSIBLE, 52 UNVERIFIED; severity 1 P1/47 P2/58 P3/4 NONE. | Potwierdzone naprawy sa zgrupowane bez duplikatow, PARTIAL/PLAUSIBLE maja verify-first, UNVERIFIED tylko reprodukcje. | M | DONE — pakiet, walidator i kolejka zintegrowane; decyzje HARD/SOFT, security i ops osobno |
 | Z-P1-12 | Flow-liveness panelu, API i decyzji | OPS-02: krytyczne uslugi moga restartowac sie, lecz nie maja bezposredniego, zweryfikowanego alert route; sam PID nie wykrywa ciszy przeplywu. | Health panel/API i brak decyzji w peak beda mialy watermark, prog, ownera, consumer i kontrolowany negative control. | M | Kod/prep bez live; instalacja/restart za osobnym ACK |
 | M-P1-01 | Mailek: jeden kanon personalizacji Validator/Q1/audyt | 13/18 dzisiejszych auto-maili CEIDG mialo falszywy jedyny powod `notes_overlap_low=1`: audyt duplikowal tokenizacje i twardy prog 2, gdy dwa upstream gate'y kanonicznie wymagaja dla CEIDG 1. | Wspolny helper utrzymuje `CEIDG=1`, inne/brak roli=2, zero-overlap nadal fail; read-only replay daje 5/13 legacy kontra 18/0 candidate. | S + 2 dni obserwacji | LIVE policy `2b5a616`. Po jawnym ACK data apply z brancha `e34c7ac`: backup API integrity OK, CAS 13/13, flags+reasons clear, audited_at 13/13 preserved, rollback per-row READY; pre/post 240/240. Nat. audyt 15:30 candidates0, kohort nadal clean. Bez deployu/restartu/crona/flagi; obserwacja policy do 15.07 |
+| M-P1-02 | Mailek: supply control plane — source truth, runway i owner-gate branzy | Panorama zawsze laduje config `segment=ecommerce`, nawet jako fallback innego segmentu, a wspolny insert zapisuje Panorama jako `apify_firecrawl_v1`/`src_apify_`. Zapas `ready + judged` to 27, ok. 1,08 dnia przy ostatnim tempie 25/dzien; Telegram nie obsluguje decyzji o nowej branzy. | Kanoniczne source provenance i jawna macierz source x segment dadza uczciwy yield; kontroler zapasu zasygnalizuje ryzyko; wersjonowany Telegram `approve pilot/reject/blacklist` pozwoli Adrianowi zatwierdzac tylko dokladny zakres nowej branzy. | L + 2 dni obserwacji per flip | READY do implementacji branch-only, default OFF/no-deploy. Obecna sciezka LIVE bez zmian do at-216; pilot, nowy kanal, flip, restart/deploy wymagaja osobnego ACK. Ocena: Mailek `MAILEK_SUPPLY_AUTONOMY_ASSESSMENT_2026-07-13.md` commit `aa359e2` |
 
 ### P2 - skalowanie i granice produktu
 
