@@ -6,7 +6,8 @@
 > HOLD; SEC0+SEC1 AUDITOR SOURCE W MASTERZE, HOST NADAL HOLD; E0+E1/DATA0
 > BRANCH-COMPLETE I OFF; V214 WAIT/PENDING DO AT-214; OD-01..OD-07 ORAZ
 > ODR-002 AUTHORITY OWNERSHIP OWNER_CONFIRMED 2026-07-12;
-> IMPLEMENTACJA/KPI-NUMBERS/KARTA RUNTIME NADAL HOLD
+> IMPLEMENTACJA/KPI-NUMBERS/KARTA RUNTIME NADAL HOLD; MAILEK M-P0-01
+> LIVE, DWUDNIOWY WERDYKT OCZEKUJE NA AT-215 (2026-07-15 09:25 UTC)
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -72,6 +73,7 @@ przed rozpoczeciem implementacji.
 | Z-P0-05 | Retry/DLQ dla eventow failed | Historycznie 106 `NEW_ORDER` ma status failed; brak attempt count, error i automatycznego retry. | Blad przejsciowy nie zgubi obslugi zlecenia; poison event trafi do DLQ z diagnoza i limitem prob. | L | Decyzja o retry policy | SOURCE/PREP E0+E1 branch complete: E0 `5dd4c80`, E1 kod `c9d02b4`+`5044911`, final branch `66a2591`; envelope/outbox/receipts/journal/recovery gotowe i default OFF. Merge/worker/policy/migracja/live HOLD; retencja `order_state` czeka na checkpoint |
 | Z-P0-06 | Bezpieczenstwo courier API — auth + ownership | Rate-limit per-IP i wspolny ownership guard status/arrival/ground-truth/payment sa LIVE; BEZP-04 pozostaje osobna decyzja UX. | Foreign/missing/malformed dostaja identyczne 403 przed order-specific I/O; owner zachowuje kontrakt. | M | Wydane za ACK 11.07; rollback przywraca BEZP-02, preferowany fix-forward | DONE/LIVE `320aa0e`, API master `fa249e6`; 186/186 predeploy, 19/19 postrestart, PID 925329/NRestarts0/health PASS |
 | Z-P0-07 | R4-GOVERNANCE: podpisana karta execution authority i runtime gate | ODR-002 rozstrzyga owner-only promotion, zakaz samopromocji i fail-closed card check. Dzisiaj nie ma autorytatywnej podpisanej karty sprawdzanej przed każdym execution entry pointem. | Candidate może powstać izolowanie; docelowo każda egzekucja sprawdzi wersjonowaną kartę, a brak/błąd da `recommend-only`/`HOLD`; automatyczna degradacja nie umożliwi re-promocji. | XL | Każda zmiana karty/schema/parsera/gate/policy/ochrony = R4; evidence hash + niezależny review + owner-only approval/signature + deterministic apply; osobny ACK live | OWNER DECISION DONE 12.07 (`ODR-002`); implementacja/karta/runtime ZERO, HOLD. Aktywny lease `docs/chief-engineer/**` nietknięty i musi zrekoncyliować nowe źródło. |
+| M-P0-01 | Mailek: idempotentna wysyłka follow-up po granicy SQLite/SMTP | 13.07 SMTP i IMAP zakończyły się sukcesem, ale lock SQLite zostawił draft pending, więc automat mógł wysłać go drugi raz. | Schema v6 zapisuje trwały claim i Message-ID przed SMTP; niepewny skutek jest HOLD bez auto-retry, a legacy draft został zrekonsyliowany po zgodnym dowodzie SMTP+IMAP. | M + 2 runy obserwacji | LIVE `b4cdcbb`, rollback tag `mailek-pre-followup-idempotency-v6`; finalny read-only verifier at-215 15.07 09:25 UTC | LIVE; schema/integrity/cron smoke PASS, listener PID 2431013/NRestarts0; operacyjny DoD czeka na werdykt dwóch runów. |
 
 ### P1 - stabilnosc przed autonomia
 
