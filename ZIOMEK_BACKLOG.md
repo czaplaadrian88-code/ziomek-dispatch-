@@ -7,7 +7,9 @@
 > BRANCH-COMPLETE I OFF; V214 WAIT/PENDING DO AT-214; OD-01..OD-07 ORAZ
 > ODR-002 AUTHORITY OWNERSHIP OWNER_CONFIRMED 2026-07-12;
 > IMPLEMENTACJA/KPI-NUMBERS/KARTA RUNTIME NADAL HOLD; MAILEK M-P0-01
-> LIVE, DWUDNIOWY WERDYKT OCZEKUJE NA AT-215 (2026-07-15 09:25 UTC)
+> LIVE, DWUDNIOWY WERDYKT OCZEKUJE NA AT-215 (2026-07-15 09:25 UTC);
+> OPENCLAW COM-P0-CONTAIN-01 v1.1 PARTIAL/FAIL_CLOSED/HOLD_OFFLINE —
+> GATEWAY ZATRZYMANY, KANALY OFF, OOM RCA I TRWALE CONTAINMENT OTWARTE
 > Data utworzenia: 2026-07-09
 > Zakres: Ziomek Dispatcher, stan runtime, aplikacja kuriera i granice integracyjne
 > Wlasciciel biznesowy: Adrian
@@ -66,6 +68,7 @@ przed rozpoczeciem implementacji.
 
 | ID | Zadanie | Dowod / problem | Co zmieni sie po wykonaniu | Effort | Bramka | Status |
 |---|---|---|---|---:|---|---|
+| COM-P0-CONTAIN-01 | OpenClaw: trwałe containment i bezpieczne recovery po V8 OOM | Zatwierdzony recreate z loopback override wszedł w V8 heap OOM. `openclaw.service` (`Restart=always`) uruchamiał wyłącznie base Compose, odtwarzając `--bind lan` i publiczne porty. Po `HOLD_OFFLINE` stan fail-closed potwierdzono niezależnie 15.07 15:00:25 UTC: service inactive/dead, gateway+CLI exited 143, 18789/18790 absent, Telegram/WhatsApp false. | Osobna faza ustali OOM offline, zwiąże systemd z base+containment override, udowodni trwałość po reboot i dopiero potem wykona kontrolowany health start bez kanałów zewnętrznych. | M | `HOLD_OFFLINE`; bez startu/deployu/rollbacku/re-enable/NODE_OPTIONS. Nowe exact hashe, walidacja, rollback i osobny `ACK_RECOVERY`. | PARTIAL / FAIL_CLOSED; NIE DONE. `openclaw.service` nadal enabled, więc reboot/manual start może ponownie otworzyć P0. Raport: `eod_drafts/2026-07-15/COM_P0_CONTAIN_01_FINAL.md` |
 | Z-P0-01 | Kanon R6/R27/SLA i koncowy invariant firewall | OD-04/OD-07 rozstrzygnely intencje: R6=`in_vehicle_age` possession→handoff 35/40 Alarm; R27 commitment immutable, `5<|Δ|<=10` jawny breach, `|Δ|>10` zakaz. Baseline ma inne anchory i niepelny Alarm/Always-propose. | Osobny sprint zwiąże physical eventy, wszystkie bliźniaki, replay i execution authority bez zmiany decyzji przez samą dokumentację. | L + 2 dni obserwacji | Semantyka OWNER_CONFIRMED; event binding, implementacja, replay, flip i live ACK nadal HOLD | OWNER DECISION DONE 12.07; R0 TECH ACCEPT/HOLD `1b38447`; D1 branch `e193f2a`; nic nie flipnięto |
 | Z-P0-02 | Naprawa wieloprocesowego zapisu geocode cache | `flock` jest zakladany na unikalnym tempfile, wiec nie serializuje load-merge-save miedzy procesami. | Cache adresow, restauracji i negative cache przestanie gubic poprawne wpisy przy rownoleglym geokodowaniu. | M | Bez flipa; pelna regresja geocode | DONE - LIVE |
 | Z-P0-03 | Przywrocenie zielonego baseline testow | REOPENED 10.07 po flipie parsera i Audycie 360: default 4846/1; STRICT 4792/6. TEST-11 czytal live `flags.json`, a TEST-12 mial piec klas live reads i dwa ukryte prod-write. | Baseline jest deterministyczny: syntetyczne flags/systemd/state, dokladny live-smoke i tripwire anty-prod bez oslabenia guarda. | M | Zero zmian produkcyjnych; rollback = revert test-only fix-forward | DONE — `4e782e8` + T0 fix-forward z brancha `f015c9f`; tmux57 CLOSED |
