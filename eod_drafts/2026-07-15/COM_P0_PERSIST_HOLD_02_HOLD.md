@@ -71,3 +71,17 @@ autoryzować:
 
 Późniejszy rollback recovery musi odtworzyć dokładny hash i metadane unitu,
 wykonać daemon-reload i enable bez startu. Każdy start pozostaje osobną bramką.
+
+## Subsequent CTO gate — v1.1
+
+Owner przekazał exact scope v1.1/production zgodny z powyższymi ośmioma
+punktami. Niezależny syntetyczny probe potwierdził, że przygotowanie symlinka
+`/dev/null` w katalogu unitu i same-filesystem atomic rename daje stan
+`masked`, a failure-rollback przez zweryfikowany restore staging przywraca
+identyczny hash, tryb, uid/gid i `enabled`.
+
+CTO wydał `ACK_PERSIST_HOLD_V1_1` z warunkami: fresh exact preflight;
+single-executor lock; backup w prywatnym katalogu; weryfikacja symlinka przed
+rename; automatyczny pełny restore przy każdym błędzie; brak `rm`, startu,
+restartu i zmian poza exact scope. Przy wydaniu gate v1.1 była `ACK_READY`, ale
+jeszcze nie zastosowana na produkcji.
