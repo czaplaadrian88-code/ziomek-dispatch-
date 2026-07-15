@@ -95,4 +95,38 @@ CTO wydał zatem `HOLD_ROLLBACK_FAIL_OPEN`, nie ACK. Poprawiony gate wymaga
 immutable runbook/manifest SHA, rozgałęzionego rollbacku, durable backup i fsync,
 single-executor lock, expected `masked` mimo nonzero rc `is-enabled`, dokładnego
 scope gateway+CLI oraz jednego naturalnego no-op ticku watchdoga. v1.1 nie
-została zastosowana; produkcja zachowała preimage.
+powinna była zostać zastosowana.
+
+## Równoległe zastosowanie po odwołaniu ACK — HOLD_CONCURRENT_APPLY
+
+Późniejsza weryfikacja MAIN wykazała, że non-MAIN zastosował v1.1 o
+`2026-07-15T15:32:58.974Z` ze starego, skompaktowanego kontekstu, który nadal
+zawierał wcześniejszy ACK i nie zawierał już obowiązującego
+`HOLD_ROLLBACK_FAIL_OPEN`. To naruszenie bramki, nie zatwierdzony deploy.
+
+Aktualny postimage jest fail-closed i dlatego nie został cofnięty:
+
+- `/etc/systemd/system/openclaw.service` jest symlinkiem root:root do
+  `/dev/null`; wants-link jest nieobecny;
+- systemd: `masked`, `inactive/dead`, MainPID0, NRestarts17;
+- porty 18789/18790 absent; gateway+CLI exited143; Telegram/WhatsApp false;
+- naturalny watchdog tick 15:38:57Z zakończył success/no-op;
+- pięć sprawdzonych sibling services jest active/running, NRestarts0;
+- `openclaw-browser` i publiczne :9222 pozostają osobnym SEC1, N-D.
+
+Preimage zachowano w prywatnym katalogu 0700 jako regularny plik 0644
+root:root, 244 B, z oryginalnym mtime i SHA-256
+`b85e073df13ed6e00da1ea60f84ca54d2ef87100b6c7897748a27b815e307e8d`.
+Raport wykonawcy 0600:
+`/tmp/codex_handoff_2026-07-15_1534_COM-P0-PERSIST-HOLD-02_v1.1.md`, SHA-256
+`3a5b300e68170a2bd69bde8d956a0416f652c3a5f9360cd34e265ee629df7cc5`.
+Skrypt 0700 ma SHA-256
+`51dafd864bd634453d2f083882854200b01c287f976ce79afd0d756b7bc76d1e`;
+jego gałąź błędu faktycznie bezwarunkowo odtwarza prior `enabled`, czyli
+zawiera przyczynę CTO HOLD. Nie było startu/restartu ani zmiany Compose/app/
+kanałów.
+
+Formalny status to `HOLD_CONCURRENT_APPLY / NEEDS_RECONCILIATION`, nie DONE.
+Zachować maskę; bez nowej bramki nie wykonywać rollbacku, startu, restartu ani
+recovery. Następny gate musi być pobierany świeżo pod lockiem z jednego
+kanonicznego artefaktu/nonce, a nie z pamięci rozmowy lub kompakcji.
