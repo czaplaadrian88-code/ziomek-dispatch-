@@ -90,3 +90,21 @@ ale manualny start lub reboot może ponownie otworzyć P0, ponieważ
 
 Do tego czasu obowiązuje zakaz startu, deployu, rollbacku do base/LAN,
 re-enable kanałów oraz zmian `NODE_OPTIONS`/pamięci bez nowej fazy i dowodu.
+
+## Późniejsza korekta read-only — COM-P0-OOM-MASK-RECON-03 v1.0
+
+Ten wcześniejszy raport zachowuje stan z chwili finalnego handoffu. Późniejszy
+owner-approved read-only runbook SHA `160ea078…bd4a` i receipt SHA
+`fce0987a…36c3` supersedują dwie informacje operacyjne:
+
+1. service nie jest już enabled — obecny fail-closed postimage to trwała maska
+   `/dev/null`, inactive/dead i wants-link absent; maskę zachować, ale stale-ACK
+   apply pozostaje `AUTHORITY_VIOLATION_RECORDED_NOT_RATIFIED`;
+2. OOM mechanism to
+   `V8_STARTUP_HEAP_EXHAUSTION_AFTER_CONTAINER_RECREATE / TRIGGER_NOT_ISOLATED`.
+   Docker chronology dowodzi, że stary kontener przeżył restart configu, a
+   pierwszy OOM wystąpił po utworzeniu nowego kontenera. Nie był to host/cgroup
+   OOM; override nie jest wymagany do awarii ani ustalonym root cause.
+
+Recovery pozostaje `HOLD_OFFLINE`. Pełny superseding audit:
+`eod_drafts/2026-07-15/COM_P0_OOM_MASK_RECON_03.md`.

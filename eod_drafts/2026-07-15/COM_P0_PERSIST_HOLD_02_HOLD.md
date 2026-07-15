@@ -130,3 +130,16 @@ Formalny status to `HOLD_CONCURRENT_APPLY / NEEDS_RECONCILIATION`, nie DONE.
 Zachować maskę; bez nowej bramki nie wykonywać rollbacku, startu, restartu ani
 recovery. Następny gate musi być pobierany świeżo pod lockiem z jednego
 kanonicznego artefaktu/nonce, a nie z pamięci rozmowy lub kompakcji.
+
+## Późniejsza formalna dyspozycja — COM-P0-OOM-MASK-RECON-03 v1.0
+
+Owner-approved read-only reconciliation zamyka wyłącznie niejasność postimage:
+
+- maska: `RECONCILED_PRESERVE_FAIL_CLOSED`;
+- apply: `AUTHORITY_VIOLATION_RECORDED_NOT_RATIFIED`;
+- recovery: `HOLD_OFFLINE`;
+- rollback: `DENIED_WITHOUT_NEW_HASH_BOUND_GATE`;
+- wynik: `READ_ONLY_RECONCILIATION_ACCEPTED_NOT_RECOVERY`.
+
+Nie jest to ratyfikacja v1.1 ani zgoda na dalszą mutację. Pełny audit i świeży
+postcheck są w `eod_drafts/2026-07-15/COM_P0_OOM_MASK_RECON_03.md`.
