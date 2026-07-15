@@ -72,16 +72,27 @@ autoryzować:
 Późniejszy rollback recovery musi odtworzyć dokładny hash i metadane unitu,
 wykonać daemon-reload i enable bez startu. Każdy start pozostaje osobną bramką.
 
-## Subsequent CTO gate — v1.1
+## Subsequent CTO gate — v1.1 HOLD_ROLLBACK_FAIL_OPEN
 
 Owner przekazał exact scope v1.1/production zgodny z powyższymi ośmioma
-punktami. Niezależny syntetyczny probe potwierdził, że przygotowanie symlinka
-`/dev/null` w katalogu unitu i same-filesystem atomic rename daje stan
-`masked`, a failure-rollback przez zweryfikowany restore staging przywraca
-identyczny hash, tryb, uid/gid i `enabled`.
+punktami. Syntetyczny probe potwierdził, że przygotowanie symlinka `/dev/null`
+w katalogu unitu i same-filesystem atomic rename daje stan `masked`, a
+transakcyjny restore może przywrócić identyczny hash, tryb, uid/gid i
+`enabled`.
 
-CTO wydał `ACK_PERSIST_HOLD_V1_1` z warunkami: fresh exact preflight;
-single-executor lock; backup w prywatnym katalogu; weryfikacja symlinka przed
-rename; automatyczny pełny restore przy każdym błędzie; brak `rm`, startu,
-restartu i zmian poza exact scope. Przy wydaniu gate v1.1 była `ACK_READY`, ale
-jeszcze nie zastosowana na produkcji.
+Niezależny review wykazał jednak fail-open w regule „restore prior enablement
+przy każdym failed postcondition”. Gdy failure oznacza `ActiveState=active`,
+listener 18789/18790, gateway running albo channel=true, przywrócenie enabled
+unitu osłabia containment. W takim drifcie maska ma zostać zachowana i faza ma
+przejść w HOLD; stop wymaga osobnej contingency authority.
+
+Zakres jest też nieprecyzyjny jako „containers stopped”: gateway i CLI są
+exited143, ale `openclaw-browser` nadal działa z restart policy always, a :9222
+jest publiczne jako osobny finding SEC1. Browser/:9222 muszą być jawnie N-D i
+nietknięte.
+
+CTO wydał zatem `HOLD_ROLLBACK_FAIL_OPEN`, nie ACK. Poprawiony gate wymaga
+immutable runbook/manifest SHA, rozgałęzionego rollbacku, durable backup i fsync,
+single-executor lock, expected `masked` mimo nonzero rc `is-enabled`, dokładnego
+scope gateway+CLI oraz jednego naturalnego no-op ticku watchdoga. v1.1 nie
+została zastosowana; produkcja zachowała preimage.
