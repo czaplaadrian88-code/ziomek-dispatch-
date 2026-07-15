@@ -1,0 +1,18 @@
+{
+  "phase_id": "COM-P0-OOM-DISPOSABLE-REPRO-04",
+  "scope_version": "1.1-DRAFT",
+  "status": "TEMPLATE_ONLY_NOT_EXECUTION_AUTHORITY",
+  "mode": "DESIGN_ONLY",
+  "production": {"openclaw": "DENIED", "mutations": false},
+  "authority": {"cto_gate_sha256": "", "owner_ack_nonce": "", "expiry_utc": "", "consume_receipt_sha256": "", "revocation_source_sha256": "", "clock_policy": "UTC_MONOTONIC_CROSSCHECK", "atomic_consume_path": ""},
+  "host": {"nonprod_id_sha256": "", "machine_id_sha256": "", "docker_context_sha256": "", "daemon_endpoint_sha256": "", "storage_root_sha256": "", "egress_deny_receipt_sha256": ""},
+  "runtime": {"engine_version": "", "oci_runtime": "", "runtime_sha256": "", "seccomp_sha256": "", "apparmor_sha256": "", "userns": "", "cgroup_v2": true, "clean_docker_config": true, "env_allowlist_sha256": "", "proxy_absent": true, "credential_helper_absent": true},
+  "image": {"image_id": "", "repo_digest": "", "oci_manifest_digest": "", "oci_config_digest": "", "rootfs_layers_sha256": [], "pull_policy": "never", "secret_scan_receipt_sha256": ""},
+  "fixtures": {"seed": "REPRO04-SEED-0001", "manifest_sha256": "", "merkle_root_sha256": "", "consumer_paths_sha256": "", "materializer_sha256": "", "schema_class": "SYNTHETIC_ONLY"},
+  "isolation": {"network_mode": "none", "published_ports": [], "extra_hosts": [], "host_pid": false, "host_ipc": false, "host_uts": false, "privileged": false, "cap_drop": ["ALL"], "no_new_privileges": true, "read_only_rootfs": true, "writable_mounts": [], "runtime_tmpfs": [], "docker_socket": false},
+  "ovata": {"design": "FROZEN_ABA", "cells": [], "controls_before": 2, "controls_after": 2, "ready_marker_sha256": "", "classifier_goldens_sha256": "", "mutation_probe_receipt_sha256": "", "v8_baseline_sha256": ""},
+  "budget": {"max_cells": 12, "max_creates": 48, "max_retries": 12, "max_wall_seconds": 1800, "max_cpu_seconds": 3600, "memory_limit_bytes": 3221225472, "swap_policy": "EXPLICITLY_DENIED", "cleanup_reserve_seconds": 600, "max_tool_calls": 48, "budget_sha256": ""},
+  "ledger": {"schema_version": "C67-1", "path": "", "write_ahead_fsync": true, "states": ["PLANNED", "CREATED", "INSPECTED", "STARTED", "TERMINAL", "ABORTED", "ORPHANED", "RECONCILING", "CLEANED"], "run_id": "", "flock_path": "", "cleanup_triple_match": true, "executor_verifier_sha256": "", "inspect_receipt_sha256": ""},
+  "artifacts": {"runbook_sha256": "", "manifest_sha256": "", "retention_ttl_utc": "", "redaction_receipt_sha256": "", "cleanup_receipt_sha256": "", "evidence_seal_sha256": ""},
+  "gates": {"preflight": "HOLD", "independent_review_1": "PENDING", "independent_review_2": "PENDING", "cto": "PENDING", "owner": "PENDING"}
+}

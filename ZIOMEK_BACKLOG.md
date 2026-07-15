@@ -1,5 +1,11 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **CURRENT 2026-07-15 18:xx UTC:** COM-P0-OOM-DISPOSABLE-REPRO-04 v1.1
+> korekta DESIGN_ONLY po owner ACK „WYMAGA POPRAWEK”. Dodano correction note,
+> statyczny execution-manifest template i osobną provisioning proposal.
+> Host/image/container/reproduction = 0; production = FAIL_CLOSED/HOLD_OFFLINE.
+> Niezależny design-only review zlecony; execution nadal zabronione.
+
 > Status: AKTYWNY - SPRINT 1 WDROZONY, OBSERWACJA SHADOW W TOKU; AUDIT360
 > DR1A/OPS0 SOURCE-ONLY W MASTERZE, D1/R0 HOLD DO AT-214; A0/I1/N0
 > WDROZONE I ZWERYFIKOWANE LIVE, N0 FOLLOW-UP `0891b06` OK; ETA PROMOCJA
