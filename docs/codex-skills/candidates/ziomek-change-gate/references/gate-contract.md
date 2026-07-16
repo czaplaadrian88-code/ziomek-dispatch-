@@ -11,7 +11,8 @@ nie pomijaj pól na podstawie trybu.
 
 - `model` zapisuje tier, exact model, effort, powód oraz stan i dowód atestacji.
 - `role` zapisuje status, dowód i routing. Brak mechanicznej atestacji oznacza
-  `UNATTESTED_NON_MAIN`.
+  `UNATTESTED_NON_MAIN`. Status jest wyliczany wyłącznie z jednego jawnego
+  `ROLE_ATTESTATION=...` widocznego w prompt-only blind input.
 - `ack` zapisuje fakt ACK, exact scope i `requires_reask`; nie jest capability.
 - `authority` pozostaje w całości `false` niezależnie od roli, ACK i disposition.
 - `gates` opisuje następny tor, a nie pozwolenie skilla na wykonanie live.
@@ -41,18 +42,35 @@ serializer/consumer boundary.
 
 ## Relacje fail-closed
 
-- `HOLD` ma co najmniej jeden `hold_reason`; pozostałe disposition mają pustą
-  listę.
-- `READY_FOR_REVIEW` wymaga `independent_review=PENDING` i handoffu do
-  `INDEPENDENT_REVIEWER`.
-- `READY_FOR_IMPLEMENTATION` wymaga `implementation=READY`.
-- nieatestowany model, niejasne HARD/SOFT, nieznane elementy kompletności,
-  stale/unverified/missing ACK dla production albo brak rollbacku daje `HOLD`.
+- Jedna zamknięta tabela relacji wylicza `blocker_codes`. Wynik musi zawierać
+  dokładnie ten zbiór; nie wolno dopisywać ani ukrywać blockerów deklarowaną
+  dyspozycją.
+- Niepusty `blocker_codes` zawsze daje `HOLD`; pusty zbiór może dać READY tylko
+  dla jednej jawnie obsługiwanej macierzy trybu, gate'ów i targetu. Każda inna
+  kombinacja dostaje `UNHANDLED_STATE_COMBINATION` i `HOLD`.
+- Każde READY wymaga `unknown=0`, wszystkich testów `PASS`, modelu i effortu co
+  najmniej na floorze ryzyka oraz niepustych wymagań handoffu.
+- `IMPLEMENTATION_CANDIDATE` READY wymaga baseline `PASS`, mutation `KILLED`,
+  akceptowalnego oracle, rollbacku `READY` i spójnego targetu. `READY_FOR_REVIEW`
+  wymaga `independent_review=PENDING` oraz targetu `INDEPENDENT_REVIEWER`;
+  `READY_FOR_IMPLEMENTATION` wymaga `implementation=READY` i targetu
+  `LOCAL_IMPLEMENTER`.
+- `ANALYSIS_ONLY` R0 może użyć baseline/mutation/rollback `N-D` wyłącznie dla
+  kompletnej, jawnej granicy bez zapisu: testy `PASS`, brak luk i unknown,
+  production/activation `N-D` oraz wszystkie dowody N-D zapisane jawnie.
+- R4 wymaga co najmniej `sol/max`; niższa klasa może użyć równego lub
+  silniejszego tieru/effortu, nigdy słabszego niż jej floor.
+- Failed/missing/N-D test poza dozwoloną analizą, failed/missing baseline,
+  mutation `MISSING` lub `SURVIVED`, pusty handoff, nieadekwatny model/effort,
+  niespójny target oraz nieuzasadniony rollback `N-D` są blockerami.
 - `CURRENT_EXACT_ACK` ma niepusty exact scope, dowód i
   `requires_reask=false`. Nie rozszerzaj zakresu i nie traktuj `HOLD` tej bramy
   jako revoke ważnego ACK w odrębnym autoryzowanym torze.
 - `STALE_OR_REVOKED`, `UNVERIFIED` i `MISSING_REQUIRED_ACK` dla żądania
   produkcyjnego wymagają `HOLD`.
+- `CURRENT_EXACT_ACK` + `ATTESTED_ACTIVE_MAIN` + `HANDOFF_REQUIRED` kieruje do
+  `AUTHORIZED_EXECUTION_LANE`; ten sam ACK u non-MAIN kieruje wyłącznie do
+  `ACTIVE_MAIN`.
 
 ## Disposition i handoff
 

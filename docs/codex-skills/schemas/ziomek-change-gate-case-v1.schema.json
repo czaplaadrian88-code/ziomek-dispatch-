@@ -26,7 +26,8 @@
     },
     "prompt": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "^ROLE_ATTESTATION=(ATTESTED_ACTIVE_MAIN|ATTESTED_NON_MAIN|UNATTESTED_NON_MAIN)\\. "
     },
     "required_concepts": {
       "type": "array",

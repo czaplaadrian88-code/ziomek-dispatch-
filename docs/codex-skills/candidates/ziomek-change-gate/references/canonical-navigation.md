@@ -36,7 +36,7 @@
 14. CONDITIONAL | HANDOVER_MAP | [mapa wiedzy dla infra, topologii, handoffu lub cross-project](</root/handover/MAPA_WIEDZY.md>)
 15. CONDITIONAL | HANDOVER_TODO | [lista handover dla infra, topologii, handoffu lub cross-project](</root/handover/CO_TRZEBA_ZROBIC.md>)
 16. CONDITIONAL | DECISION_RECORD | [właściwy ADR lub ODR dla decyzji architektonicznej](../../../../../docs/decisions/)
-17. DYNAMIC | CODEMAP_SELECTED_TASK_FILES
+17. DYNAMIC | CODEMAP_SELECTED_TASK_FILES | CODEMAP_SELECTED_TASK_FILES
 <!-- ZCG_BOOTSTRAP_ORDER_END -->
 
 ## Precedencja sprzeczności

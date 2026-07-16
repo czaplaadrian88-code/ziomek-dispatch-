@@ -35,6 +35,7 @@
         "authority",
         "rollback",
         "handoff",
+        "blocker_codes",
         "disposition",
         "hold_reasons",
         "next_required"
@@ -633,6 +634,38 @@
             "owner_contact_allowed_by_role": {
               "type": "boolean"
             }
+          }
+        },
+        "blocker_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "COMPLETENESS_UNKNOWN",
+              "HARD_SOFT_AMBIGUOUS",
+              "MODEL_UNATTESTED",
+              "MODEL_RISK_FLOOR_NOT_MET",
+              "TEST_FAILED",
+              "TEST_MISSING",
+              "TEST_ND_NOT_ALLOWED",
+              "BASELINE_FAILED",
+              "BASELINE_MISSING",
+              "BASELINE_ND_NOT_ALLOWED",
+              "ORACLE_MISSING",
+              "ORACLE_SELF_CONFIRMING",
+              "MUTATION_MISSING",
+              "MUTATION_SURVIVED",
+              "MUTATION_ND_NOT_ALLOWED",
+              "ROLLBACK_MISSING",
+              "ROLLBACK_ND_NOT_ALLOWED",
+              "ACK_REQUIRED_MISSING",
+              "ACK_INVALID_FOR_PRODUCTION",
+              "PRODUCTION_EXTERNAL_EXECUTOR_REQUIRED",
+              "INDEPENDENT_REVIEW_FAILED",
+              "HANDOFF_REQUIREMENTS_EMPTY",
+              "GATE_TARGET_INCOHERENT",
+              "UNHANDLED_STATE_COMBINATION"
+            ]
           }
         },
         "disposition": {

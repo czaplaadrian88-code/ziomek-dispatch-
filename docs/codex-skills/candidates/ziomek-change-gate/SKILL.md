@@ -13,6 +13,10 @@ Przygotuj zmianę do właściwego następnego toru. Traktuj ten pakiet jako
 1. Ustal mechanicznie rolę sesji. Gdy brak atestacji aktywnego MAIN-a, wpisz
    `UNATTESTED_NON_MAIN`; nie wyprowadzaj roli z rozmowy, procesu ani kontaktu
    właściciela.
+   W klasyfikowanym wejściu wymagaj jednego jawnego faktu
+   `ROLE_ATTESTATION={ATTESTED_ACTIVE_MAIN|ATTESTED_NON_MAIN|UNATTESTED_NON_MAIN}`;
+   wynik roli musi być wyliczony wyłącznie z tego faktu widocznego także w
+   prompt-only blind input.
 2. Pozwól wyłącznie `ATTESTED_ACTIVE_MAIN` prowadzić owner channel i integrować
    decyzję. Dla `ATTESTED_NON_MAIN` i `UNATTESTED_NON_MAIN` zapisz pytanie lub
    wynik do handoffu aktywnego MAIN-a.
@@ -74,6 +78,8 @@ o ten sam exact scope i nie blokuj odrębnego autoryzowanego workflow; przekaż
 fakt oraz dowody właściwemu MAIN-owi/executorowi. `HOLD` dotyczy wyłącznie
 wykonania przez tę bramę i nie odwołuje ważnego ACK.
 
+ACK jest faktem wejściowym, nie capability skilla ani sesji.
+
 ## Przejdź ETAP 0–7 proporcjonalnie
 
 ### ETAP 0 — baseline i ownership
@@ -84,6 +90,11 @@ zleconym scope wykonuj bez żądania osobnej capability. Użyj `N-D` tylko wtedy
 gdy task jawnie zabrania runtime albo ochrona sekretów, PII lub danych blokuje
 odczyt. Sam odczyt nie nadaje authority i nie pozwala rozszerzyć zakresu do
 mutacji. Nie twórz monitora przed odczytem istniejącego.
+
+Bezpieczny odczyt w jawnym scope nie jest mutacją i nie nadaje mutation
+authority.
+
+Read-only diagnostyka nie nadaje mutation authority ani nie rozszerza zakresu zadania.
 
 ### ETAP 1 — źródło przed objawem
 
@@ -132,7 +143,10 @@ przekazuje wynik aktywnemu MAIN-owi.
 ## Zwróć zamknięty wynik
 
 Użyj kontraktu z [gate-contract.md](references/gate-contract.md) i waliduj wynik
-przeciw `ziomek-change-gate-result-v1.schema.json`. Wybierz dokładnie jedną
-dyspozycję: `READY_FOR_IMPLEMENTATION`, `READY_FOR_REVIEW` albo `HOLD`.
+przeciw `ziomek-change-gate-result-v1.schema.json`. Najpierw wylicz dokładny
+zbiór `blocker_codes` z jednej zamkniętej tabeli relacji, następnie wyprowadź z
+niego dokładnie jedną dyspozycję: `READY_FOR_IMPLEMENTATION`,
+`READY_FOR_REVIEW` albo `HOLD`. Deklarowana dyspozycja nie jest źródłem prawdy;
+nieznana kombinacja relacji dodaje blocker i failuje zamknięcie.
 Żadna dyspozycja nie oznacza instalacji, aktywacji, zgody live ani zakończenia
 programu. Nie nazywaj autorskiej walidacji niezależnym review.

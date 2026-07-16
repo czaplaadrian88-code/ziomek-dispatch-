@@ -29,6 +29,7 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "skill_id",
           "name",
           "version",
           "scope",
@@ -42,6 +43,7 @@
           "allowed_actions",
           "forbidden_actions",
           "authority",
+          "policy_contract",
           "owned_paths",
           "pin",
           "update",
@@ -49,6 +51,11 @@
           "threat_boundary"
         ],
         "properties": {
+          "skill_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
           "name": {
             "type": "string",
             "minLength": 1,
@@ -221,13 +228,64 @@
               }
             }
           },
+          "policy_contract": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "rules"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              },
+              "rules": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "subject",
+                    "relation",
+                    "object",
+                    "enforcement"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]*$"
+                    },
+                    "subject": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]*$"
+                    },
+                    "relation": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]*$"
+                    },
+                    "object": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]*$"
+                    },
+                    "enforcement": {
+                      "const": "FAIL_CLOSED"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "owned_paths": {
             "type": "array",
             "minItems": 1,
             "uniqueItems": true,
             "items": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
             }
           },
           "pin": {
@@ -237,7 +295,8 @@
               "policy",
               "moving_branch_allowed",
               "exact_byte_activation_required",
-              "first_canary_invocation"
+              "first_canary_invocation",
+              "candidate_artifacts"
             ],
             "properties": {
               "policy": {
@@ -251,6 +310,43 @@
               },
               "first_canary_invocation": {
                 "const": "EXPLICIT_ONLY"
+              },
+              "candidate_artifacts": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "algorithm",
+                  "files"
+                ],
+                "properties": {
+                  "algorithm": {
+                    "const": "SHA-256"
+                  },
+                  "files": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "path",
+                        "sha256"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           },
@@ -281,12 +377,18 @@
             "additionalProperties": false,
             "required": [
               "policy",
+              "anchor_tag",
               "scope",
               "live_action_required"
             ],
             "properties": {
               "policy": {
-                "const": "REVERT_EXACT_REMEDIATION_COMMIT"
+                "const": "REVERT_ANNOTATED_LOCAL_TAG_COMMIT"
+              },
+              "anchor_tag": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
               },
               "scope": {
                 "type": "array",
