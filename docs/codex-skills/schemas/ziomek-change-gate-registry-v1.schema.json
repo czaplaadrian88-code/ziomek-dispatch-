@@ -1,0 +1,345 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ziomek-change-gate-registry-v1.schema.json",
+  "title": "Ziomek Codex skills registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "registry_id",
+    "purpose",
+    "skills"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "registry_id": {
+      "const": "ziomek-codex-skills"
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1
+    },
+    "skills": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "version",
+          "scope",
+          "owner",
+          "status",
+          "staged_candidate_path",
+          "activation_target",
+          "activation_allowed",
+          "source",
+          "trigger",
+          "allowed_actions",
+          "forbidden_actions",
+          "authority",
+          "owned_paths",
+          "pin",
+          "update",
+          "rollback",
+          "threat_boundary"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "const": "STAGED_ONLY_REVIEW_REQUIRED"
+          },
+          "staged_candidate_path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^docs/codex-skills/candidates/[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "activation_target": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^\\.agents/skills/[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "activation_allowed": {
+            "const": false
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "base_commit",
+              "rejected_candidate_commit",
+              "rejected_tree",
+              "candidate_commit",
+              "candidate_tree",
+              "provenance_disposition",
+              "license_disposition"
+            ],
+            "properties": {
+              "kind": {
+                "const": "LOCAL_ZIOMEK_AUTHORED"
+              },
+              "base_commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rejected_candidate_commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rejected_tree": {
+                "type": "string",
+                "minLength": 1
+              },
+              "candidate_commit": {
+                "const": "UNPINNED_UNTIL_INDEPENDENT_REVIEW"
+              },
+              "candidate_tree": {
+                "const": "UNPINNED_UNTIL_INDEPENDENT_REVIEW"
+              },
+              "provenance_disposition": {
+                "enum": [
+                  "NEW_LOCAL_CANDIDATE",
+                  "REMEDIATION_OF_REJECTED_CANDIDATE"
+                ]
+              },
+              "license_disposition": {
+                "const": "INTERNAL_REPOSITORY_ONLY"
+              }
+            }
+          },
+          "trigger": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "summary",
+              "contexts"
+            ],
+            "properties": {
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              },
+              "contexts": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "allowed_actions": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "forbidden_actions": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "authority": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "network",
+              "production",
+              "deploy",
+              "restart",
+              "flag_mutation",
+              "data_mutation",
+              "migration",
+              "lease",
+              "tmux",
+              "owner_ack",
+              "business_semantics"
+            ],
+            "properties": {
+              "network": {
+                "const": false
+              },
+              "production": {
+                "const": false
+              },
+              "deploy": {
+                "const": false
+              },
+              "restart": {
+                "const": false
+              },
+              "flag_mutation": {
+                "const": false
+              },
+              "data_mutation": {
+                "const": false
+              },
+              "migration": {
+                "const": false
+              },
+              "lease": {
+                "const": false
+              },
+              "tmux": {
+                "const": false
+              },
+              "owner_ack": {
+                "const": false
+              },
+              "business_semantics": {
+                "const": false
+              }
+            }
+          },
+          "owned_paths": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "pin": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "policy",
+              "moving_branch_allowed",
+              "exact_byte_activation_required",
+              "first_canary_invocation"
+            ],
+            "properties": {
+              "policy": {
+                "const": "EXACT_REVIEWED_COMMIT_AND_TREE"
+              },
+              "moving_branch_allowed": {
+                "const": false
+              },
+              "exact_byte_activation_required": {
+                "const": true
+              },
+              "first_canary_invocation": {
+                "const": "EXPLICIT_ONLY"
+              }
+            }
+          },
+          "update": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "policy",
+              "requirements"
+            ],
+            "properties": {
+              "policy": {
+                "const": "NEW_STAGED_CANDIDATE_THEN_INDEPENDENT_REVIEW"
+              },
+              "requirements": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "rollback": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "policy",
+              "scope",
+              "live_action_required"
+            ],
+            "properties": {
+              "policy": {
+                "const": "REVERT_EXACT_REMEDIATION_COMMIT"
+              },
+              "scope": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "live_action_required": {
+                "const": false
+              }
+            }
+          },
+          "threat_boundary": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "staged_outside_discovery",
+              "staged_path_symlink_allowed",
+              "staged_executable_allowed",
+              "implicit_invocation_allowed",
+              "official_loader_consumer",
+              "future_move_is_activation",
+              "product_runtime_consumer"
+            ],
+            "properties": {
+              "staged_outside_discovery": {
+                "const": true
+              },
+              "staged_path_symlink_allowed": {
+                "const": false
+              },
+              "staged_executable_allowed": {
+                "const": false
+              },
+              "implicit_invocation_allowed": {
+                "const": false
+              },
+              "official_loader_consumer": {
+                "const": "CODEX_REPO_SKILL_DISCOVERY"
+              },
+              "future_move_is_activation": {
+                "const": true
+              },
+              "product_runtime_consumer": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

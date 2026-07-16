@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ziomek-change-gate-corpus-v1.schema.json",
+  "title": "Ziomek Change Gate synthetic corpus v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "corpus_id",
+    "oracle_class",
+    "data_class",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "corpus_id": {
+      "const": "ziomek-change-gate-synthetic-v1"
+    },
+    "oracle_class": {
+      "const": "AUTHOR_STATIC_ORACLE"
+    },
+    "data_class": {
+      "const": "SYNTHETIC_SANITIZED"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 12,
+      "items": {
+        "$ref": "ziomek-change-gate-case-v1.schema.json"
+      }
+    }
+  }
+}

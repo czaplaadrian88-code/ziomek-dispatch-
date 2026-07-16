@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ziomek Change Gate"
+  short_description: "Staged brama bezpiecznych zmian Ziomka"
+  default_prompt: "Użyj $ziomek-change-gate, aby przygotować fail-closed mapę i dowody zmiany Ziomka bez nadawania authority."
+policy:
+  allow_implicit_invocation: false

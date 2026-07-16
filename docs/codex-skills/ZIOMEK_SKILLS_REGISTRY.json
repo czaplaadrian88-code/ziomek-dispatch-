@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.0",
+  "registry_id": "ziomek-codex-skills",
+  "purpose": "Track exact staged Ziomek Codex skill candidates without granting discovery, activation or execution authority.",
+  "skills": [
+    {
+      "name": "ziomek-change-gate",
+      "version": "0.2.0-remediation-candidate",
+      "scope": "Fail-closed preparation gate for Ziomek analysis, local implementation candidates and role-aware production handoff facts.",
+      "owner": "ACTIVE_MAIN_GOVERNANCE_CHANNEL",
+      "status": "STAGED_ONLY_REVIEW_REQUIRED",
+      "staged_candidate_path": "docs/codex-skills/candidates/ziomek-change-gate",
+      "activation_target": ".agents/skills/ziomek-change-gate",
+      "activation_allowed": false,
+      "source": {
+        "kind": "LOCAL_ZIOMEK_AUTHORED",
+        "base_commit": "6b4b040032d54db5be7643648676d835e0db9146",
+        "rejected_candidate_commit": "f0947daff9b5544c0c5bf637a011a3cd0c128cd3",
+        "rejected_tree": "4d2c1779ea031c021b24e155b8c67c032af0b399",
+        "candidate_commit": "UNPINNED_UNTIL_INDEPENDENT_REVIEW",
+        "candidate_tree": "UNPINNED_UNTIL_INDEPENDENT_REVIEW",
+        "provenance_disposition": "REMEDIATION_OF_REJECTED_CANDIDATE",
+        "license_disposition": "INTERNAL_REPOSITORY_ONLY"
+      },
+      "trigger": {
+        "summary": "Explicitly invoke for proposed Ziomek, Nadajesz panel, courier app or shared-boundary changes and completion gates.",
+        "contexts": [
+          "analysis and diagnosis",
+          "engine feasibility scoring selection canon and plan",
+          "flags metrics configuration state and schemas",
+          "panel courier app and integration boundaries",
+          "release rollback and completion verification"
+        ]
+      },
+      "allowed_actions": [
+        "read approved canonical sources within the current task authority",
+        "prepare a local staged candidate outside Codex discovery paths",
+        "run deterministic offline author validation",
+        "record role-aware ACK facts without consuming them",
+        "create a local exact-path commit and private handoff"
+      ],
+      "forbidden_actions": [
+        "network access",
+        "production read or write",
+        "deploy restart flag or data mutation",
+        "migration lease or tmux mutation",
+        "owner ACK creation consumption or expansion",
+        "business semantics promotion",
+        "self-review self-approval install activation merge or push"
+      ],
+      "authority": {
+        "network": false,
+        "production": false,
+        "deploy": false,
+        "restart": false,
+        "flag_mutation": false,
+        "data_mutation": false,
+        "migration": false,
+        "lease": false,
+        "tmux": false,
+        "owner_ack": false,
+        "business_semantics": false
+      },
+      "owned_paths": [
+        "docs/codex-skills/candidates/ziomek-change-gate/SKILL.md",
+        "docs/codex-skills/candidates/ziomek-change-gate/agents/openai.yaml",
+        "docs/codex-skills/candidates/ziomek-change-gate/references/canonical-navigation.md",
+        "docs/codex-skills/candidates/ziomek-change-gate/references/gate-contract.md",
+        "docs/codex-skills/ZIOMEK_SKILLS_REGISTRY.json",
+        "docs/codex-skills/schemas/ziomek-change-gate-case-v1.schema.json",
+        "docs/codex-skills/schemas/ziomek-change-gate-corpus-v1.schema.json",
+        "docs/codex-skills/schemas/ziomek-change-gate-registry-v1.schema.json",
+        "docs/codex-skills/schemas/ziomek-change-gate-result-v1.schema.json",
+        "docs/codex-skills/evals/ziomek-change-gate/cases.json",
+        "docs/codex-skills/evals/ziomek-change-gate/validate.py",
+        "docs/codex-skills/reports/ZIOMEK_CHANGE_GATE_REMEDIATION_REPORT.md"
+      ],
+      "pin": {
+        "policy": "EXACT_REVIEWED_COMMIT_AND_TREE",
+        "moving_branch_allowed": false,
+        "exact_byte_activation_required": true,
+        "first_canary_invocation": "EXPLICIT_ONLY"
+      },
+      "update": {
+        "policy": "NEW_STAGED_CANDIDATE_THEN_INDEPENDENT_REVIEW",
+        "requirements": [
+          "preserve exact bootstrap and role-aware ACK semantics",
+          "repeat static author validation and the full mutation matrix",
+          "obtain fresh independent review of exact final bytes",
+          "activate only by a separate reviewed move into the activation target"
+        ]
+      },
+      "rollback": {
+        "policy": "REVERT_EXACT_REMEDIATION_COMMIT",
+        "scope": [
+          "docs/codex-skills/candidates/ziomek-change-gate",
+          "docs/codex-skills/ZIOMEK_SKILLS_REGISTRY.json",
+          "docs/codex-skills/schemas/ziomek-change-gate-*.schema.json",
+          "docs/codex-skills/evals/ziomek-change-gate",
+          "docs/codex-skills/reports/ZIOMEK_CHANGE_GATE_REMEDIATION_REPORT.md"
+        ],
+        "live_action_required": false
+      },
+      "threat_boundary": {
+        "staged_outside_discovery": true,
+        "staged_path_symlink_allowed": false,
+        "staged_executable_allowed": false,
+        "implicit_invocation_allowed": false,
+        "official_loader_consumer": "CODEX_REPO_SKILL_DISCOVERY",
+        "future_move_is_activation": true,
+        "product_runtime_consumer": false
+      }
+    }
+  ]
+}

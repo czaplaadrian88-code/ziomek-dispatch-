@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ziomek-change-gate-case-v1.schema.json",
+  "title": "Ziomek Change Gate synthetic case v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "prompt",
+    "required_concepts",
+    "forbidden_claims",
+    "forbidden_actions",
+    "forbidden_policy_codes",
+    "allowed_output",
+    "expected_result"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "required_concepts": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "forbidden_claims": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "forbidden_actions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "forbidden_policy_codes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "ACTIVATE_SKILL",
+          "CONTACT_OWNER_AS_NON_MAIN",
+          "DEPLOY_READY",
+          "EXECUTE_PRODUCTION",
+          "EXECUTE_TMUX",
+          "GRANT_AUTHORITY",
+          "SELF_APPROVE",
+          "SOFT_OVERRIDES_HARD",
+          "USE_STALE_ACK"
+        ]
+      }
+    },
+    "allowed_output": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "expected_result": {
+      "$ref": "ziomek-change-gate-result-v1.schema.json"
+    }
+  }
+}

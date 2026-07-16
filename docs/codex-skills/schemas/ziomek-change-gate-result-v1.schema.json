@@ -1,0 +1,663 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ziomek-change-gate-result-v1.schema.json",
+  "title": "Ziomek Change Gate result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ziomek_change_gate"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "ziomek_change_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "summary",
+        "mode",
+        "risk_class",
+        "model",
+        "role",
+        "root_cause",
+        "hard_soft",
+        "sprint_brief",
+        "completeness",
+        "tests",
+        "evidence",
+        "gaps",
+        "entropy",
+        "ack",
+        "gates",
+        "authority",
+        "rollback",
+        "handoff",
+        "disposition",
+        "hold_reasons",
+        "next_required"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "enum": [
+            "ANALYSIS_ONLY",
+            "IMPLEMENTATION_CANDIDATE",
+            "PRODUCTION_REQUEST"
+          ]
+        },
+        "risk_class": {
+          "enum": [
+            "R0",
+            "R1",
+            "R2",
+            "R3",
+            "R4"
+          ]
+        },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tier",
+            "exact_model",
+            "effort",
+            "reason",
+            "attestation",
+            "attestation_evidence"
+          ],
+          "properties": {
+            "tier": {
+              "enum": [
+                "luna",
+                "terra",
+                "sol"
+              ]
+            },
+            "exact_model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "effort": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "attestation": {
+              "enum": [
+                "LOCALLY_ATTESTED",
+                "UNATTESTED"
+              ]
+            },
+            "attestation_evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "role": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "evidence",
+            "routing"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "ATTESTED_ACTIVE_MAIN",
+                "ATTESTED_NON_MAIN",
+                "UNATTESTED_NON_MAIN"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            },
+            "routing": {
+              "enum": [
+                "OWNER_CHANNEL",
+                "ACTIVE_MAIN_HANDOFF",
+                "INTERNAL_HANDOFF_ONLY"
+              ]
+            }
+          }
+        },
+        "root_cause": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hard_soft": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "UNCHANGED",
+                "VERIFIED_HARD_BEFORE_SOFT",
+                "AMBIGUOUS"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "sprint_brief": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "language",
+            "delivery",
+            "problem_and_evidence",
+            "touched_surfaces",
+            "behavioral_effect",
+            "risks_tests_rollback",
+            "business_gates"
+          ],
+          "properties": {
+            "language": {
+              "const": "pl-PL"
+            },
+            "delivery": {
+              "enum": [
+                "OWNER_PRESENTED",
+                "HANDOFF_RECORDED"
+              ]
+            },
+            "problem_and_evidence": {
+              "type": "string",
+              "minLength": 1
+            },
+            "touched_surfaces": {
+              "type": "string",
+              "minLength": 1
+            },
+            "behavioral_effect": {
+              "type": "string",
+              "minLength": 1
+            },
+            "risks_tests_rollback": {
+              "type": "string",
+              "minLength": 1
+            },
+            "business_gates": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "completeness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "total",
+            "covered",
+            "not_applicable",
+            "unknown",
+            "entries"
+          ],
+          "properties": {
+            "total": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "covered": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "not_applicable": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unknown": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "entries": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "miejsce",
+                  "rola",
+                  "writer_consumer",
+                  "status",
+                  "powod",
+                  "test"
+                ],
+                "properties": {
+                  "miejsce": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "rola": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "writer_consumer": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "status": {
+                    "enum": [
+                      "TAK",
+                      "N-D",
+                      "UNKNOWN"
+                    ]
+                  },
+                  "powod": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "test": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tests": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "status",
+              "evidence"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "N-D",
+                  "MISSING"
+                ]
+              },
+              "evidence": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "baseline",
+            "oracle",
+            "mutation",
+            "parity_or_on_off",
+            "regression",
+            "replay_positive_impact",
+            "loader_discovery"
+          ],
+          "properties": {
+            "baseline": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "detail"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "PASS",
+                    "FAIL",
+                    "N-D",
+                    "MISSING"
+                  ]
+                },
+                "detail": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "oracle": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "detail"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "INDEPENDENT",
+                    "AUTHOR_STATIC_ORACLE",
+                    "SELF_CONFIRMING",
+                    "N-D",
+                    "MISSING"
+                  ]
+                },
+                "detail": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "mutation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "detail"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "KILLED",
+                    "SURVIVED",
+                    "N-D",
+                    "MISSING"
+                  ]
+                },
+                "detail": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "parity_or_on_off": {
+              "type": "string",
+              "minLength": 1
+            },
+            "regression": {
+              "type": "string",
+              "minLength": 1
+            },
+            "replay_positive_impact": {
+              "type": "string",
+              "minLength": 1
+            },
+            "loader_discovery": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "entropy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "evidence"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "NON_INCREASE",
+                "N-D"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "ack": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "exact_scope",
+            "fact_evidence",
+            "requires_reask"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "NOT_REQUIRED",
+                "CURRENT_EXACT_ACK",
+                "UNVERIFIED",
+                "STALE_OR_REVOKED",
+                "MISSING_REQUIRED_ACK"
+              ]
+            },
+            "exact_scope": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "fact_evidence": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requires_reask": {
+              "type": "boolean"
+            }
+          }
+        },
+        "gates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "independent_review",
+            "implementation",
+            "production_operation",
+            "activation",
+            "remaining"
+          ],
+          "properties": {
+            "independent_review": {
+              "enum": [
+                "NOT_REQUIRED",
+                "PENDING",
+                "PASSED",
+                "FAILED"
+              ]
+            },
+            "implementation": {
+              "enum": [
+                "READY",
+                "HOLD",
+                "N-D"
+              ]
+            },
+            "production_operation": {
+              "enum": [
+                "N-D",
+                "HANDOFF_REQUIRED",
+                "HOLD"
+              ]
+            },
+            "activation": {
+              "enum": [
+                "N-D",
+                "REVIEW_REQUIRED",
+                "HOLD"
+              ]
+            },
+            "remaining": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "network",
+            "production",
+            "deploy",
+            "restart",
+            "flag_mutation",
+            "data_mutation",
+            "migration",
+            "lease",
+            "tmux",
+            "owner_ack",
+            "business_semantics"
+          ],
+          "properties": {
+            "network": {
+              "const": false
+            },
+            "production": {
+              "const": false
+            },
+            "deploy": {
+              "const": false
+            },
+            "restart": {
+              "const": false
+            },
+            "flag_mutation": {
+              "const": false
+            },
+            "data_mutation": {
+              "const": false
+            },
+            "migration": {
+              "const": false
+            },
+            "lease": {
+              "const": false
+            },
+            "tmux": {
+              "const": false
+            },
+            "owner_ack": {
+              "const": false
+            },
+            "business_semantics": {
+              "const": false
+            }
+          }
+        },
+        "rollback": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "plan",
+            "verification"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "READY",
+                "N-D",
+                "MISSING"
+              ]
+            },
+            "plan": {
+              "type": "string",
+              "minLength": 1
+            },
+            "verification": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "handoff": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "target",
+            "requirements",
+            "owner_contact_allowed_by_role"
+          ],
+          "properties": {
+            "target": {
+              "enum": [
+                "ACTIVE_MAIN",
+                "INDEPENDENT_REVIEWER",
+                "LOCAL_IMPLEMENTER",
+                "AUTHORIZED_EXECUTION_LANE",
+                "NONE"
+              ]
+            },
+            "requirements": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "owner_contact_allowed_by_role": {
+              "type": "boolean"
+            }
+          }
+        },
+        "disposition": {
+          "enum": [
+            "READY_FOR_IMPLEMENTATION",
+            "READY_FOR_REVIEW",
+            "HOLD"
+          ]
+        },
+        "hold_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "next_required": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}
