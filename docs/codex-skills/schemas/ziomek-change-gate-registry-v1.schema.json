@@ -296,10 +296,12 @@
               "write_set_semantics",
               "root_source",
               "allowed_paths_source",
+              "artifact_root_policy",
               "shared_governance_paths_allowed",
               "cross_skill_paths_allowed",
               "path_comparison",
-              "file_type_policy"
+              "file_type_policy",
+              "file_mode_policy"
             ],
             "properties": {
               "write_set_semantics": {
@@ -310,6 +312,9 @@
               },
               "allowed_paths_source": {
                 "const": "pin.candidate_artifacts.files[].path"
+              },
+              "artifact_root_policy": {
+                "const": "ALTERNATE_ALLOWED_AFTER_COMPLETE_EXACT_PIN_VALIDATION"
               },
               "shared_governance_paths_allowed": {
                 "const": false
@@ -322,6 +327,9 @@
               },
               "file_type_policy": {
                 "const": "REGULAR_NON_SYMLINK_ONLY"
+              },
+              "file_mode_policy": {
+                "const": "EXACT_100644"
               }
             }
           },

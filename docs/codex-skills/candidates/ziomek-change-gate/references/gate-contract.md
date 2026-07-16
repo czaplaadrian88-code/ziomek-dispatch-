@@ -40,6 +40,18 @@ absolutne, backslash, puste i kropkowe segmenty, aliasy Unicode/case, sibling
 prefix oraz root innego skilla. Szerokie `owned_paths` nie są allowlistą tego
 pola: współdzielone registry, schema, eval i report pozostają poza granicą.
 
+Publiczna readiness używa jednego zweryfikowanego kontekstu. Zanim dowolna
+wartość registry wpłynie na blocker lub dyspozycję, cały obiekt przechodzi
+trusted registry schema i wszystkie relacje. Następnie dla wybranego
+`skill_id` pełny zbiór plików pakietu musi dokładnie równać się pinom w jednym
+efektywnym `artifact_root`; każda ścieżka musi być względna i komponentowo
+zawarta w staged root, regularna, bez symlinków, w trybie dokładnie `100644` i
+zgodna z SHA-256. Polityka rootu to
+`ALTERNATE_ALLOWED_AFTER_COMPLETE_EXACT_PIN_VALIDATION`: poprawny drugi skill i
+exact kopia pakietu mogą użyć alternatywnego rootu, ale błędne bajty, brak,
+symlink, plik specjalny, tryb wykonywalny lub cross-skill kończą się centralnym
+`READINESS_CONTEXT_INVALID` i wyprowadzonym `HOLD`.
+
 ## Brief i kompletność
 
 `sprint_brief` ma dokładnie pięć merytorycznych treści w prostym polskim:
@@ -71,6 +83,10 @@ serializer/consumer boundary.
 - Niepusty `blocker_codes` zawsze daje `HOLD`; pusty zbiór może dać READY tylko
   dla jednej jawnie obsługiwanej macierzy trybu, gate'ów i targetu. Każda inna
   kombinacja dostaje `UNHANDLED_STATE_COMBINATION` i `HOLD`.
+- Nieważny albo niezweryfikowany kontekst readiness zastępuje pozostałą tabelę
+  dokładnie jednym blockerem `READINESS_CONTEXT_INVALID`; caller nie może go
+  ominąć przez bezpośrednie wywołanie result relations, corpus, blockerów ani
+  dyspozycji.
 - Zamknięte dodatnie lane'y używają kolejno tuple
   `independent_review/implementation/production_operation/activation`:
   `ANALYSIS_ONLY = NOT_REQUIRED/READY/N-D/N-D`, kandydat do review =

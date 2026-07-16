@@ -39,6 +39,17 @@ runtime pakietu dokładnie tego kandydata: regularne, niesymlinkowane, pod jego
 root innego skilla są zabronione nawet wtedy, gdy etykieta powierzchni nadal
 brzmi `STAGED_ARTIFACTS`.
 
+Każde publiczne wyliczenie blockerów lub dyspozycji najpierw buduje jeden
+zweryfikowany kontekst readiness: pełny registry przechodzi trusted schema i
+relacje, a wybrany `skill_id` przechodzi kompletną kontrolę własnego pakietu.
+Alternatywny `artifact_root` jest dopuszczalny wyłącznie po zgodności pełnego
+zbioru plików z pinami, bez symlinków i plików specjalnych, z dokładnym trybem
+`100644` oraz SHA-256 każdego pliku; jest to polityka
+`ALTERNATE_ALLOWED_AFTER_COMPLETE_EXACT_PIN_VALIDATION`. Brak lub błąd tego
+kontekstu daje wyłącznie
+`READINESS_CONTEXT_INVALID` i wyprowadzony `HOLD`; wcześniejsze wywołanie
+pomocniczego walidatora nie jest precondition ani capability.
+
 Non-MAIN nie kontaktuje właściciela bezpośrednio; przekazuje pytanie lub wynik
 aktywnemu MAIN-owi.
 
