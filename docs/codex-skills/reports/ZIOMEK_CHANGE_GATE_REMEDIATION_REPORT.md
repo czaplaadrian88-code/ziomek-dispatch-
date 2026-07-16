@@ -234,9 +234,13 @@ exact source diff; nie są telemetrycznym claimem skryptu.
   `.agents/skills/ziomek-change-gate`, staged package poza discovery path i
   exact `allow_implicit_invocation: false`.
 - Sieć i operacje live: none. Nie czytano product runtime, usług, flag, logów,
-  DB, Docker ani PII. Odczytano wyłącznie bezpieczne metadata Git/tmux/procesu
-  (`comm`, state i wait channel) wymagane do ownership recon; nie czytano argv,
-  environ ani treści chronionych carrierów i nie mutowano tmuxa.
+  DB ani Docker. Jeden przedkorekcyjny output Git ujawnił metadane tożsamości;
+  fakt odczytu jest zapisany, lecz wartości nie zostały skopiowane do artefaktów
+  repo ani `/tmp`. Wszystkie późniejsze outputy Git używają wyłącznie formatów
+  hash/tree/parent/path, a raport i handoff redagują metadane tożsamości. Poza
+  tym odczytano tylko bezosobowe metadata tmux/procesu (`comm`, state i wait
+  channel) wymagane do ownership recon; nie czytano argv, environ ani treści
+  chronionych carrierów i nie mutowano tmuxa.
 
 ## Rollback i pozostałe bramy
 
