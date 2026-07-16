@@ -6,7 +6,7 @@
     {
       "skill_id": "ZIOMEK_CHANGE_GATE",
       "name": "ziomek-change-gate",
-      "version": "0.3.0-remediation2-candidate",
+      "version": "0.4.0-remediation3-candidate",
       "scope": "Fail-closed preparation gate for Ziomek analysis, local implementation candidates and role-aware production handoff facts.",
       "owner": "ACTIVE_MAIN_GOVERNANCE_CHANNEL",
       "status": "STAGED_ONLY_REVIEW_REQUIRED",
@@ -101,6 +101,34 @@
             "relation": "DOES_NOT_GRANT",
             "object": "MUTATION_AUTHORITY",
             "enforcement": "FAIL_CLOSED"
+          },
+          {
+            "code": "READY_GATE_TUPLE_EXACT",
+            "subject": "READY_LANE",
+            "relation": "REQUIRES_EXACT",
+            "object": "FOUR_GATE_TUPLE",
+            "enforcement": "FAIL_CLOSED"
+          },
+          {
+            "code": "ANALYSIS_NO_EFFECT_STRUCTURED",
+            "subject": "ANALYSIS_READY",
+            "relation": "REQUIRES_EMPTY",
+            "object": "WRITE_AND_MUTATION_SURFACE",
+            "enforcement": "FAIL_CLOSED"
+          },
+          {
+            "code": "READY_ORACLE_ALLOWLIST_CLOSED",
+            "subject": "READY_LANE",
+            "relation": "REQUIRES_ALLOWED",
+            "object": "ORACLE_STATUS",
+            "enforcement": "FAIL_CLOSED"
+          },
+          {
+            "code": "SCHEMA_NUMERIC_BOOL_FORBIDDEN",
+            "subject": "BOOLEAN",
+            "relation": "IS_NOT",
+            "object": "SCHEMA_NUMBER",
+            "enforcement": "FAIL_CLOSED"
           }
         ]
       },
@@ -128,7 +156,7 @@
           "files": [
             {
               "path": "docs/codex-skills/candidates/ziomek-change-gate/SKILL.md",
-              "sha256": "f2b0ffff4f03ffbf137edb8cab4712277ae62722c00b09d4a05b7d5846767aee"
+              "sha256": "b14b59ce16e200390e564b826f3945b201d995d633d09f31a716cabb48e5f09c"
             },
             {
               "path": "docs/codex-skills/candidates/ziomek-change-gate/agents/openai.yaml",
@@ -140,7 +168,7 @@
             },
             {
               "path": "docs/codex-skills/candidates/ziomek-change-gate/references/gate-contract.md",
-              "sha256": "7cd58ff7277b8ff845de15e569929c90f54b65273b6cad429c33c4f39a54752c"
+              "sha256": "d88d3d0cda3b19ae442510c4ad0d6f1f03606759b5d89906ec386c0c3afdb869"
             }
           ]
         }
@@ -156,7 +184,7 @@
       },
       "rollback": {
         "policy": "REVERT_ANNOTATED_LOCAL_TAG_COMMIT",
-        "anchor_tag": "ziomek-change-gate-remediation2-staged-20260716T140544Z",
+        "anchor_tag": "ziomek-change-gate-remediation3-staged-20260716T152915Z",
         "scope": [
           "docs/codex-skills/candidates/ziomek-change-gate",
           "docs/codex-skills/ZIOMEK_SKILLS_REGISTRY.json",

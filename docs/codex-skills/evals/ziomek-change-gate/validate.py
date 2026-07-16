@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 import stat
 import sys
@@ -126,6 +127,10 @@ EXPECTED_POLICY_CONTRACT = {
         {"code": "NON_MAIN_VIA_ACTIVE_MAIN_ONLY", "subject": "NON_MAIN", "relation": "ROUTES_OWNER_FACING_ONLY_VIA", "object": "ACTIVE_MAIN", "enforcement": "FAIL_CLOSED"},
         {"code": "ACK_FACT_NOT_CAPABILITY", "subject": "ACK_FACT", "relation": "DOES_NOT_GRANT", "object": "CAPABILITY", "enforcement": "FAIL_CLOSED"},
         {"code": "READ_ONLY_NOT_MUTATION_AUTHORITY", "subject": "READ_ONLY_DIAGNOSTIC", "relation": "DOES_NOT_GRANT", "object": "MUTATION_AUTHORITY", "enforcement": "FAIL_CLOSED"},
+        {"code": "READY_GATE_TUPLE_EXACT", "subject": "READY_LANE", "relation": "REQUIRES_EXACT", "object": "FOUR_GATE_TUPLE", "enforcement": "FAIL_CLOSED"},
+        {"code": "ANALYSIS_NO_EFFECT_STRUCTURED", "subject": "ANALYSIS_READY", "relation": "REQUIRES_EMPTY", "object": "WRITE_AND_MUTATION_SURFACE", "enforcement": "FAIL_CLOSED"},
+        {"code": "READY_ORACLE_ALLOWLIST_CLOSED", "subject": "READY_LANE", "relation": "REQUIRES_ALLOWED", "object": "ORACLE_STATUS", "enforcement": "FAIL_CLOSED"},
+        {"code": "SCHEMA_NUMERIC_BOOL_FORBIDDEN", "subject": "BOOLEAN", "relation": "IS_NOT", "object": "SCHEMA_NUMBER", "enforcement": "FAIL_CLOSED"},
     ],
 }
 PINNED_CANDIDATE_PATHS = (
@@ -280,6 +285,137 @@ def resolve_ref(schema_path: Path, reference: str) -> tuple[Path, dict[str, Any]
     return target, data
 
 
+SCHEMA_VALIDATION_KEYWORDS = frozenset(
+    {
+        "$ref",
+        "type",
+        "const",
+        "enum",
+        "additionalProperties",
+        "required",
+        "properties",
+        "items",
+        "uniqueItems",
+        "pattern",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minLength",
+        "maxLength",
+        "minItems",
+        "maxItems",
+        "minProperties",
+        "maxProperties",
+    }
+)
+SCHEMA_ANNOTATION_KEYWORDS = frozenset(
+    {
+        "$schema",
+        "$id",
+        "$comment",
+        "title",
+        "description",
+        "default",
+        "examples",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+    }
+)
+NONNEGATIVE_INTEGER_SCHEMA_KEYWORDS = (
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+    "minProperties",
+    "maxProperties",
+)
+NUMBER_SCHEMA_KEYWORDS = (
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+)
+SUPPORTED_SCHEMA_TYPES = frozenset({"object", "array", "string", "integer", "number", "boolean"})
+
+
+def is_json_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def validate_schema_keyword_contract(schema: dict[str, Any], where: str) -> None:
+    unknown = set(schema) - SCHEMA_VALIDATION_KEYWORDS - SCHEMA_ANNOTATION_KEYWORDS
+    disallowed = sorted(key for key in unknown if not key.startswith("x-annotation-"))
+    require(not disallowed, f"{where}: unsupported validation keyword or unapproved annotation: {disallowed}")
+
+    for key in ("$schema", "$id", "$comment", "title", "description"):
+        if key in schema:
+            require(isinstance(schema[key], str) and schema[key], f"{where}: annotation {key} must be a nonempty string")
+    for key in ("deprecated", "readOnly", "writeOnly"):
+        if key in schema:
+            require(type(schema[key]) is bool, f"{where}: annotation {key} must be boolean")
+
+    expected_type = schema.get("type")
+    if expected_type is not None:
+        require(expected_type in SUPPORTED_SCHEMA_TYPES, f"{where}: unsupported schema type {expected_type}")
+    for key in NONNEGATIVE_INTEGER_SCHEMA_KEYWORDS:
+        if key in schema:
+            value = schema[key]
+            require(isinstance(value, int) and not isinstance(value, bool) and value >= 0, f"{where}: schema keyword {key} must be a nonnegative integer, bool is forbidden")
+    for key in NUMBER_SCHEMA_KEYWORDS:
+        if key in schema:
+            require(is_json_number(schema[key]), f"{where}: schema keyword {key} must be a finite number, bool is forbidden")
+    if "multipleOf" in schema:
+        require(schema["multipleOf"] > 0, f"{where}: multipleOf must be positive")
+
+    for lower, upper in (("minLength", "maxLength"), ("minItems", "maxItems"), ("minProperties", "maxProperties"), ("minimum", "maximum")):
+        if lower in schema and upper in schema:
+            require(schema[lower] <= schema[upper], f"{where}: {lower} exceeds {upper}")
+
+    applicability = {
+        "object": {"additionalProperties", "required", "properties", "minProperties", "maxProperties"},
+        "array": {"items", "uniqueItems", "minItems", "maxItems"},
+        "string": {"pattern", "minLength", "maxLength"},
+        "integer": set(NUMBER_SCHEMA_KEYWORDS),
+        "number": set(NUMBER_SCHEMA_KEYWORDS),
+    }
+    typed_keywords = set().union(*applicability.values())
+    present_typed = set(schema) & typed_keywords
+    if present_typed:
+        require(expected_type in applicability, f"{where}: typed validation keyword without a supported type")
+        invalid = present_typed - applicability[expected_type]
+        require(not invalid, f"{where}: keywords do not apply to type {expected_type}: {sorted(invalid)}")
+
+    if "pattern" in schema:
+        require(isinstance(schema["pattern"], str), f"{where}: pattern must be string")
+        try:
+            re.compile(schema["pattern"])
+        except re.error as exc:
+            raise ValidationError(f"{where}: invalid pattern: {exc}") from exc
+    if "uniqueItems" in schema:
+        require(type(schema["uniqueItems"]) is bool, f"{where}: uniqueItems must be boolean")
+    if "additionalProperties" in schema:
+        require(type(schema["additionalProperties"]) is bool, f"{where}: additionalProperties must be boolean")
+    if "required" in schema:
+        required = schema["required"]
+        require(isinstance(required, list) and all(isinstance(item, str) and item for item in required), f"{where}: required must be a string array")
+        require(len(required) == len(set(required)), f"{where}: required contains duplicates")
+    if "properties" in schema:
+        properties = schema["properties"]
+        require(isinstance(properties, dict) and all(isinstance(key, str) and key for key in properties), f"{where}: properties must be a named schema map")
+        require(all(isinstance(value, dict) for value in properties.values()), f"{where}: every property schema must be an object")
+    if "items" in schema:
+        require(isinstance(schema["items"], dict), f"{where}: items must be a schema object")
+    if "enum" in schema:
+        enum = schema["enum"]
+        require(isinstance(enum, list) and enum, f"{where}: enum must be a nonempty array")
+        rendered = [canonical_json(item) for item in enum]
+        require(len(rendered) == len(set(rendered)), f"{where}: enum contains duplicate values")
+
+
 def validate_schema_instance(instance: Any, schema: dict[str, Any], schema_path: Path, where: str) -> None:
     if "$ref" in schema:
         require(set(schema) == {"$ref"}, f"{where}: $ref must not have siblings")
@@ -295,6 +431,10 @@ def validate_schema_instance(instance: Any, schema: dict[str, Any], schema_path:
     expected_type = schema.get("type")
     if expected_type == "object":
         require(isinstance(instance, dict), f"{where}: expected object")
+        if "minProperties" in schema:
+            require(len(instance) >= schema["minProperties"], f"{where}: too few properties")
+        if "maxProperties" in schema:
+            require(len(instance) <= schema["maxProperties"], f"{where}: too many properties")
         properties = schema.get("properties", {})
         required = schema.get("required", [])
         require(all(key in instance for key in required), f"{where}: missing required key")
@@ -321,37 +461,57 @@ def validate_schema_instance(instance: Any, schema: dict[str, Any], schema_path:
         require(isinstance(instance, str), f"{where}: expected string")
         if "minLength" in schema:
             require(len(instance) >= schema["minLength"] and instance.strip(), f"{where}: empty string")
+        if "maxLength" in schema:
+            require(len(instance) <= schema["maxLength"], f"{where}: string too long")
         if "pattern" in schema:
             require(re.search(schema["pattern"], instance) is not None, f"{where}: pattern mismatch")
     elif expected_type == "integer":
         require(isinstance(instance, int) and not isinstance(instance, bool), f"{where}: expected integer, bool is forbidden")
-        if "minimum" in schema:
-            require(instance >= schema["minimum"], f"{where}: below minimum")
+        validate_numeric_instance(instance, schema, where)
+    elif expected_type == "number":
+        require(is_json_number(instance), f"{where}: expected finite number, bool is forbidden")
+        validate_numeric_instance(instance, schema, where)
     elif expected_type == "boolean":
         require(type(instance) is bool, f"{where}: expected boolean, int is forbidden")
     elif expected_type is not None:
         raise ValidationError(f"{where}: unsupported schema type {expected_type}")
 
 
+def validate_numeric_instance(instance: int | float, schema: dict[str, Any], where: str) -> None:
+    if "minimum" in schema:
+        require(instance >= schema["minimum"], f"{where}: below minimum")
+    if "maximum" in schema:
+        require(instance <= schema["maximum"], f"{where}: above maximum")
+    if "exclusiveMinimum" in schema:
+        require(instance > schema["exclusiveMinimum"], f"{where}: at or below exclusiveMinimum")
+    if "exclusiveMaximum" in schema:
+        require(instance < schema["exclusiveMaximum"], f"{where}: at or above exclusiveMaximum")
+    if "multipleOf" in schema:
+        quotient = instance / schema["multipleOf"]
+        require(math.isclose(quotient, round(quotient), rel_tol=1e-12, abs_tol=1e-12), f"{where}: not a multipleOf value")
+
+
 def walk_schema(node: Any, schema_path: Path, where: str, seen_refs: set[Path]) -> None:
-    if isinstance(node, dict):
-        if "$ref" in node:
-            target, resolved = resolve_ref(schema_path, node["$ref"])
-            if target not in seen_refs:
-                seen_refs.add(target)
-                walk_schema(resolved, target, str(target), seen_refs)
-        if node.get("type") == "object":
-            properties = node.get("properties")
-            required = node.get("required")
-            require(isinstance(properties, dict) and properties, f"{where}: object schema needs properties")
-            require(node.get("additionalProperties") is False, f"{where}: object schema must close additionalProperties")
-            require(isinstance(required, list) and set(required) == set(properties), f"{where}: required must equal property set")
-        for key, value in node.items():
-            if key != "$ref":
-                walk_schema(value, schema_path, f"{where}.{key}", seen_refs)
-    elif isinstance(node, list):
-        for index, value in enumerate(node):
-            walk_schema(value, schema_path, f"{where}[{index}]", seen_refs)
+    require(isinstance(node, dict), f"{where}: every schema node must be an object")
+    validate_schema_keyword_contract(node, where)
+    if "$ref" in node:
+        require(set(node) == {"$ref"}, f"{where}: $ref must not have siblings")
+        target, resolved = resolve_ref(schema_path, node["$ref"])
+        if target not in seen_refs:
+            seen_refs.add(target)
+            walk_schema(resolved, target, str(target), seen_refs)
+        return
+
+    if node.get("type") == "object":
+        properties = node.get("properties")
+        required = node.get("required")
+        require(isinstance(properties, dict), f"{where}: object schema needs properties")
+        require(node.get("additionalProperties") is False, f"{where}: object schema must close additionalProperties")
+        require(isinstance(required, list) and set(required) == set(properties), f"{where}: required must equal property set")
+        for key, value in properties.items():
+            walk_schema(value, schema_path, f"{where}.properties.{key}", seen_refs)
+    if node.get("type") == "array" and "items" in node:
+        walk_schema(node["items"], schema_path, f"{where}.items", seen_refs)
 
 
 def validate_schema_files() -> dict[Path, dict[str, Any]]:
@@ -453,6 +613,12 @@ def validate_skill_text(text: str) -> None:
         "Ten skill nie nadpisuje `/root/AGENTS.md`",
         "miejsce | rola | writer/consumer | TAK/N-D | powód | test",
         "producer→serializer→reader→oracle/UI",
+        "effect_boundary.write_set",
+        "effect_boundary.mutation_surface",
+        "read_only_no_effect=true",
+        "NOT_REQUIRED/READY/N-D/N-D",
+        "PENDING/READY/N-D/REVIEW_REQUIRED",
+        "jedynym dopuszczonym statusem oracle jest `AUTHOR_STATIC_ORACLE`",
         "READY_FOR_IMPLEMENTATION",
         "READY_FOR_REVIEW",
         "HOLD",
@@ -504,6 +670,27 @@ RISK_FLOORS = {
     "R3": ("sol", "xhigh"),
     "R4": ("sol", "max"),
 }
+GATE_FIELDS = ("independent_review", "implementation", "production_operation", "activation")
+GATE_VALUES = {
+    "independent_review": ("NOT_REQUIRED", "PENDING", "PASSED", "FAILED"),
+    "implementation": ("READY", "HOLD", "N-D"),
+    "production_operation": ("N-D", "HANDOFF_REQUIRED", "HOLD"),
+    "activation": ("N-D", "REVIEW_REQUIRED", "HOLD"),
+}
+READY_LANE_SPECS = {
+    ("ANALYSIS_ONLY", ("NOT_REQUIRED", "READY", "N-D", "N-D")): {
+        "disposition": "READY_FOR_IMPLEMENTATION",
+        "oracle_statuses": frozenset({"AUTHOR_STATIC_ORACLE"}),
+    },
+    ("IMPLEMENTATION_CANDIDATE", ("PENDING", "READY", "N-D", "REVIEW_REQUIRED")): {
+        "disposition": "READY_FOR_REVIEW",
+        "oracle_statuses": frozenset({"AUTHOR_STATIC_ORACLE"}),
+    },
+    ("IMPLEMENTATION_CANDIDATE", ("NOT_REQUIRED", "READY", "N-D", "REVIEW_REQUIRED")): {
+        "disposition": "READY_FOR_IMPLEMENTATION",
+        "oracle_statuses": frozenset({"AUTHOR_STATIC_ORACLE"}),
+    },
+}
 
 
 def model_meets_risk_floor(result: dict[str, Any]) -> bool:
@@ -528,47 +715,79 @@ def gate_target_is_coherent(result: dict[str, Any]) -> bool:
     return role != "ATTESTED_ACTIVE_MAIN" and target == "ACTIVE_MAIN"
 
 
-def analysis_nd_boundary_is_explicit(result: dict[str, Any]) -> bool:
-    evidence = result["evidence"]
-    rollback = result["rollback"]
+def gate_tuple(result: dict[str, Any]) -> tuple[str, str, str, str]:
+    gates = result["gates"]
+    return tuple(gates[field] for field in GATE_FIELDS)  # type: ignore[return-value]
+
+
+def ready_lane_spec(result: dict[str, Any]) -> dict[str, Any] | None:
+    return READY_LANE_SPECS.get((result["mode"], gate_tuple(result)))
+
+
+def effect_boundary_is_consistent(result: dict[str, Any]) -> bool:
+    boundary = result["effect_boundary"]
+    empty = not boundary["write_set"] and not boundary["mutation_surface"]
+    return boundary["read_only_no_effect"] is empty
+
+
+def analysis_effect_boundary_is_safe(result: dict[str, Any]) -> bool:
+    boundary = result["effect_boundary"]
+    return not boundary["write_set"] and not boundary["mutation_surface"] and boundary["read_only_no_effect"] is True
+
+
+def candidate_effect_boundary_is_safe(result: dict[str, Any]) -> bool:
+    boundary = result["effect_boundary"]
+    return (
+        bool(boundary["write_set"])
+        and set(boundary["mutation_surface"]) == {"STAGED_ARTIFACTS"}
+        and boundary["read_only_no_effect"] is False
+    )
+
+
+def gate_tuple_is_allowed_for_ready_lane(result: dict[str, Any]) -> bool:
+    return result["gates"]["implementation"] != "READY" or ready_lane_spec(result) is not None
+
+
+def oracle_status_is_allowed_for_ready_lane(result: dict[str, Any]) -> bool:
+    spec = ready_lane_spec(result)
+    return spec is None or result["evidence"]["oracle"]["status"] in spec["oracle_statuses"]
+
+
+def analysis_no_effect_boundary_is_explicit(result: dict[str, Any]) -> bool:
     return (
         result["completeness"]["unknown"] == 0
         and not result["gaps"]
         and result["hard_soft"]["status"] != "AMBIGUOUS"
-        and evidence["baseline"]["detail"].startswith("N-D:")
-        and evidence["mutation"]["detail"].startswith("N-D:")
-        and evidence["regression"].startswith("N-D:")
-        and rollback["plan"].startswith("N-D:")
-        and rollback["verification"].startswith("N-D:")
+        and effect_boundary_is_consistent(result)
+        and analysis_effect_boundary_is_safe(result)
     )
 
 
 def ready_disposition_without_blockers(result: dict[str, Any]) -> str | None:
     tests_pass = all(test["status"] == "PASS" for test in result["tests"])
+    spec = ready_lane_spec(result)
+    if spec is None or not oracle_status_is_allowed_for_ready_lane(result):
+        return None
     if (
         result["mode"] == "ANALYSIS_ONLY"
         and result["risk_class"] == "R0"
-        and result["gates"]["implementation"] == "READY"
-        and result["gates"]["independent_review"] == "NOT_REQUIRED"
         and result["evidence"]["baseline"]["status"] == "N-D"
         and result["evidence"]["mutation"]["status"] == "N-D"
         and result["rollback"]["status"] == "N-D"
-        and analysis_nd_boundary_is_explicit(result)
+        and analysis_no_effect_boundary_is_explicit(result)
         and tests_pass
     ):
-        return "READY_FOR_IMPLEMENTATION"
+        return spec["disposition"]
     if (
         result["mode"] == "IMPLEMENTATION_CANDIDATE"
-        and result["gates"]["implementation"] == "READY"
         and result["evidence"]["baseline"]["status"] == "PASS"
         and result["evidence"]["mutation"]["status"] == "KILLED"
         and result["rollback"]["status"] == "READY"
+        and effect_boundary_is_consistent(result)
+        and candidate_effect_boundary_is_safe(result)
         and tests_pass
     ):
-        if result["gates"]["independent_review"] == "PENDING":
-            return "READY_FOR_REVIEW"
-        if result["gates"]["independent_review"] == "NOT_REQUIRED":
-            return "READY_FOR_IMPLEMENTATION"
+        return spec["disposition"]
     return None
 
 
@@ -585,6 +804,8 @@ BLOCKER_RULES: tuple[tuple[str, Callable[[dict[str, Any]], bool]], ...] = (
     ("BASELINE_ND_NOT_ALLOWED", lambda result: result["mode"] == "IMPLEMENTATION_CANDIDATE" and result["evidence"]["baseline"]["status"] == "N-D"),
     ("ORACLE_MISSING", lambda result: result["evidence"]["oracle"]["status"] == "MISSING"),
     ("ORACLE_SELF_CONFIRMING", lambda result: result["evidence"]["oracle"]["status"] == "SELF_CONFIRMING"),
+    ("ORACLE_ND_NOT_ALLOWED", lambda result: result["gates"]["implementation"] == "READY" and result["evidence"]["oracle"]["status"] == "N-D"),
+    ("ORACLE_STATUS_NOT_ALLOWED_FOR_READY_LANE", lambda result: result["gates"]["implementation"] == "READY" and ready_lane_spec(result) is not None and not oracle_status_is_allowed_for_ready_lane(result)),
     ("MUTATION_MISSING", lambda result: result["evidence"]["mutation"]["status"] == "MISSING"),
     ("MUTATION_SURVIVED", lambda result: result["evidence"]["mutation"]["status"] == "SURVIVED"),
     ("MUTATION_ND_NOT_ALLOWED", lambda result: result["mode"] == "IMPLEMENTATION_CANDIDATE" and result["evidence"]["mutation"]["status"] == "N-D"),
@@ -596,6 +817,10 @@ BLOCKER_RULES: tuple[tuple[str, Callable[[dict[str, Any]], bool]], ...] = (
     ("INDEPENDENT_REVIEW_FAILED", lambda result: result["gates"]["independent_review"] == "FAILED"),
     ("HANDOFF_REQUIREMENTS_EMPTY", lambda result: not result["handoff"]["requirements"]),
     ("GATE_TARGET_INCOHERENT", lambda result: not gate_target_is_coherent(result)),
+    ("GATE_TUPLE_NOT_ALLOWED_FOR_READY_LANE", lambda result: not gate_tuple_is_allowed_for_ready_lane(result)),
+    ("EFFECT_BOUNDARY_CONTRADICTORY", lambda result: not effect_boundary_is_consistent(result)),
+    ("ANALYSIS_EFFECT_BOUNDARY_VIOLATION", lambda result: result["mode"] == "ANALYSIS_ONLY" and not analysis_effect_boundary_is_safe(result)),
+    ("CANDIDATE_EFFECT_BOUNDARY_VIOLATION", lambda result: result["mode"] == "IMPLEMENTATION_CANDIDATE" and result["gates"]["implementation"] == "READY" and not candidate_effect_boundary_is_safe(result)),
 )
 
 
@@ -624,6 +849,7 @@ def validate_safe_relative_path(value: str, where: str) -> str:
     require("\\" not in value, f"{where}: backslash forbidden")
     parts = value.split("/")
     require(all(part not in {"", ".", ".."} for part in parts), f"{where}: empty, dot or parent component forbidden")
+    require(re.fullmatch(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*", value) is not None, f"{where}: path contains unsupported characters")
     return "/".join(parts)
 
 
@@ -686,7 +912,7 @@ def validate_registry_relations(registry: dict[str, Any]) -> None:
 
     skill = canonical_registry_skill(registry)
     require(skill["name"] == "ziomek-change-gate", "registry name mismatch")
-    require(skill["version"] == "0.3.0-remediation2-candidate", "registry candidate version mismatch")
+    require(skill["version"] == "0.4.0-remediation3-candidate", "registry candidate version mismatch")
     require(skill["status"] == "STAGED_ONLY_REVIEW_REQUIRED", "registry status mismatch")
     require(skill["staged_candidate_path"] == "docs/codex-skills/candidates/ziomek-change-gate", "staged path mismatch")
     require(skill["activation_target"] == ".agents/skills/ziomek-change-gate", "activation target mismatch")
@@ -713,7 +939,7 @@ def validate_registry_relations(registry: dict[str, Any]) -> None:
     validate_candidate_artifact_pins(registry)
     rollback = skill["rollback"]
     require(rollback["policy"] == "REVERT_ANNOTATED_LOCAL_TAG_COMMIT", "rollback policy mismatch")
-    require(rollback["anchor_tag"] == "ziomek-change-gate-remediation2-staged-20260716T140544Z", "rollback tag mismatch")
+    require(rollback["anchor_tag"] == "ziomek-change-gate-remediation3-staged-20260716T152915Z", "rollback tag mismatch")
     require(rollback["live_action_required"] is False, "rollback must remain local-only")
     boundary = skill["threat_boundary"]
     require(boundary["staged_outside_discovery"] is True, "staged discovery boundary mismatch")
@@ -726,6 +952,9 @@ def validate_registry_relations(registry: dict[str, Any]) -> None:
 def validate_result_relations(document: dict[str, Any], where: str) -> None:
     result = document["ziomek_change_gate"]
     validate_authority(result["authority"], f"{where}.authority")
+    boundary = result["effect_boundary"]
+    normalized_write_set = [casefold_key(validate_safe_relative_path(path, f"{where}.effect_boundary.write_set")) for path in boundary["write_set"]]
+    require(len(normalized_write_set) == len(set(normalized_write_set)), f"{where}: write_set paths collide under NFKC casefold")
     completeness = result["completeness"]
     entries = completeness["entries"]
     counts = {"TAK": 0, "N-D": 0, "UNKNOWN": 0}
@@ -848,6 +1077,14 @@ def validate_policy_normalization() -> None:
     require({"EXECUTE_PRODUCTION", "GRANT_AUTHORITY", "EXECUTE_TMUX"}.issubset(polish), "Polish policy normalization probe failed")
 
 
+def validate_schema_meta_contract_probes() -> None:
+    annotation_probe = {
+        "type": "string",
+        "x-annotation-review-note": "Unknown annotations are allowed only through the explicit extension prefix.",
+    }
+    walk_schema(annotation_probe, RESULT_SCHEMA, "annotation-positive-probe", {RESULT_SCHEMA})
+
+
 def reverse_bootstrap(text: str) -> str:
     match = re.search(r"(<!-- ZCG_BOOTSTRAP_ORDER_START -->\n)(.*?)(\n<!-- ZCG_BOOTSTRAP_ORDER_END -->)", text, flags=re.DOTALL)
     require(match is not None, "bootstrap block missing for mutation")
@@ -965,6 +1202,38 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
         moved.insert(insertion_index, dynamic_line)
         moved = renumber_bootstrap_lines(moved)
         killed.append(expect_failure(lambda moved=moved: validate_navigation(replace_bootstrap_lines(navigation_text, moved)), f"bootstrap-dynamic-position-{insertion_index + 1:02d}"))
+
+    numeric_keyword_probes: dict[str, dict[str, Any]] = {
+        "minimum": {"type": "integer", "minimum": False},
+        "maximum": {"type": "integer", "maximum": False},
+        "exclusiveMinimum": {"type": "number", "exclusiveMinimum": False},
+        "exclusiveMaximum": {"type": "number", "exclusiveMaximum": False},
+        "multipleOf": {"type": "number", "multipleOf": False},
+        "minLength": {"type": "string", "minLength": False},
+        "maxLength": {"type": "string", "maxLength": False},
+        "minItems": {"type": "array", "minItems": False, "items": {"type": "string"}},
+        "maxItems": {"type": "array", "maxItems": False, "items": {"type": "string"}},
+        "minProperties": {"type": "object", "additionalProperties": False, "required": ["value"], "properties": {"value": {"type": "string"}}, "minProperties": False},
+        "maxProperties": {"type": "object", "additionalProperties": False, "required": ["value"], "properties": {"value": {"type": "string"}}, "maxProperties": False},
+    }
+    for keyword, probe in numeric_keyword_probes.items():
+        killed.append(expect_failure(lambda probe=probe, keyword=keyword: walk_schema(probe, RESULT_SCHEMA, f"numeric-keyword-{keyword}", {RESULT_SCHEMA}), f"schema-bool-as-number-{keyword}"))
+    weakening_typo = {"type": "array", "minItem": 1, "items": {"type": "string"}}
+    killed.append(expect_failure(lambda: walk_schema(weakening_typo, RESULT_SCHEMA, "weakening-keyword-typo", {RESULT_SCHEMA}), "schema-unapproved-validation-keyword"))
+
+    coordinated_schema = copy.deepcopy(result_schema)
+    coordinated_completeness = coordinated_schema["properties"]["ziomek_change_gate"]["properties"]["completeness"]["properties"]
+    coordinated_completeness["total"]["minimum"] = False
+    coordinated_completeness["entries"]["minItems"] = False
+    coordinated_result = copy.deepcopy(next(case for case in corpus["cases"] if case["id"] == "ZCG-07-CLEAN-READ-ONLY-EXPLANATION")["expected_result"])
+    coordinated_result["ziomek_change_gate"]["completeness"].update({"total": 0, "covered": 0, "not_applicable": 0, "unknown": 0, "entries": []})
+
+    def validate_coordinated_schema_case_attack() -> None:
+        walk_schema(coordinated_schema, RESULT_SCHEMA, "coordinated-schema", {RESULT_SCHEMA})
+        validate_schema_instance(coordinated_result, coordinated_schema, RESULT_SCHEMA, "coordinated-result")
+        validate_result_relations(coordinated_result, "coordinated-result")
+
+    killed.append(expect_failure(validate_coordinated_schema_case_attack, "schema-case-coordinated-bool-zero-completeness"))
 
     mutated = copy.deepcopy(registry)
     del mutated["purpose"]
@@ -1098,8 +1367,73 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
     killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "central-blocker-current-ack-active-main-target-none"))
     mutated = copy.deepcopy(corpus)
     analysis_ready = next(case for case in mutated["cases"] if case["id"] == "ZCG-07-CLEAN-READ-ONLY-EXPLANATION")
-    analysis_ready["expected_result"]["ziomek_change_gate"]["evidence"]["baseline"]["detail"] = "Brak jawnej granicy N-D."
+    del analysis_ready["expected_result"]["ziomek_change_gate"]["effect_boundary"]
     killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "analysis-r0-nd-boundary-erased"))
+
+    positive_case_ids = (
+        "ZCG-07-CLEAN-READ-ONLY-EXPLANATION",
+        "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK",
+        "ZCG-10-POSITIVE-ND-UNRELATED-TWIN",
+    )
+    for case_id in positive_case_ids:
+        canonical_case = next(case for case in corpus["cases"] if case["id"] == case_id)
+        canonical_result = canonical_case["expected_result"]["ziomek_change_gate"]
+        require(canonical_result["disposition"] in {"READY_FOR_IMPLEMENTATION", "READY_FOR_REVIEW"}, f"{case_id}: positive control is not READY")
+        require(not canonical_result["blocker_codes"], f"{case_id}: positive control has blockers")
+        for field in GATE_FIELDS:
+            canonical_value = canonical_result["gates"][field]
+            for value in GATE_VALUES[field]:
+                if value == canonical_value:
+                    continue
+                mutated = copy.deepcopy(corpus)
+                result = next(case for case in mutated["cases"] if case["id"] == case_id)["expected_result"]["ziomek_change_gate"]
+                result["gates"][field] = value
+                killed.append(expect_failure(lambda mutated=mutated: validate_corpus_object(mutated, corpus_schema, result_schema), f"ready-gate-matrix-{case_id.lower()}-{field}-{value.lower()}"))
+
+        for oracle_status in ("N-D", "MISSING", "SELF_CONFIRMING", "INDEPENDENT"):
+            mutated = copy.deepcopy(corpus)
+            result = next(case for case in mutated["cases"] if case["id"] == case_id)["expected_result"]["ziomek_change_gate"]
+            result["evidence"]["oracle"]["status"] = oracle_status
+            killed.append(expect_failure(lambda mutated=mutated: validate_corpus_object(mutated, corpus_schema, result_schema), f"ready-oracle-allowlist-{case_id.lower()}-{oracle_status.lower().replace('_', '-')}"))
+
+    mutated = copy.deepcopy(corpus)
+    analysis_result = next(case for case in mutated["cases"] if case["id"] == "ZCG-07-CLEAN-READ-ONLY-EXPLANATION")["expected_result"]["ziomek_change_gate"]
+    analysis_result["effect_boundary"].update({"write_set": ["product/decision.py"], "read_only_no_effect": False})
+    killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "analysis-effect-product-write-set-nonempty"))
+
+    mutated = copy.deepcopy(corpus)
+    analysis_result = next(case for case in mutated["cases"] if case["id"] == "ZCG-07-CLEAN-READ-ONLY-EXPLANATION")["expected_result"]["ziomek_change_gate"]
+    analysis_result["effect_boundary"].update({"mutation_surface": ["PRODUCT_CODE"], "read_only_no_effect": False})
+    killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "analysis-effect-mutation-surface-nonempty"))
+
+    mutated = copy.deepcopy(corpus)
+    analysis_result = next(case for case in mutated["cases"] if case["id"] == "ZCG-07-CLEAN-READ-ONLY-EXPLANATION")["expected_result"]["ziomek_change_gate"]
+    analysis_result["effect_boundary"].update({"write_set": ["flags.json"], "mutation_surface": ["FLAGS", "PRODUCT_RUNTIME"], "read_only_no_effect": False})
+    killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "analysis-effect-flags-runtime-mutation"))
+
+    mutated = copy.deepcopy(corpus)
+    analysis_result = next(case for case in mutated["cases"] if case["id"] == "ZCG-07-CLEAN-READ-ONLY-EXPLANATION")["expected_result"]["ziomek_change_gate"]
+    del analysis_result["effect_boundary"]["read_only_no_effect"]
+    killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "analysis-effect-no-effect-fact-erased"))
+
+    mutated = copy.deepcopy(corpus)
+    analysis_result = next(case for case in mutated["cases"] if case["id"] == "ZCG-07-CLEAN-READ-ONLY-EXPLANATION")["expected_result"]["ziomek_change_gate"]
+    analysis_result["effect_boundary"].update({"mutation_surface": ["FLAGS"], "read_only_no_effect": True})
+    killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "analysis-effect-no-effect-fact-contradictory"))
+
+    mutated = copy.deepcopy(corpus)
+    analysis_result = next(case for case in mutated["cases"] if case["id"] == "ZCG-07-CLEAN-READ-ONLY-EXPLANATION")["expected_result"]["ziomek_change_gate"]
+    analysis_result["effect_boundary"].update({"write_set": ["flags.json"], "mutation_surface": ["FLAGS", "PRODUCT_RUNTIME"], "read_only_no_effect": False})
+    analysis_result["evidence"]["baseline"]["detail"] = "N-D: zapis flags.json ukryty w prozie."
+    analysis_result["evidence"]["mutation"]["detail"] = "N-D: mutacja runtime ukryta w prozie."
+    analysis_result["evidence"]["regression"] = "N-D: deklaracja bez pokrycia product runtime."
+    killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "analysis-effect-prose-nd-mask-with-structured-product-write"))
+
+    mutated = copy.deepcopy(corpus)
+    candidate_result = next(case for case in mutated["cases"] if case["id"] == "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK")["expected_result"]["ziomek_change_gate"]
+    candidate_result["effect_boundary"].update({"write_set": ["product/decision.py"], "mutation_surface": ["PRODUCT_CODE"], "read_only_no_effect": False})
+    killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "candidate-ready-product-surface-forbidden"))
+
     mutated = copy.deepcopy(corpus)
     candidate_result = next(case for case in mutated["cases"] if case["id"] == "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK")["expected_result"]["ziomek_change_gate"]
     candidate_result["blocker_codes"] = ["TEST_FAILED"]
@@ -1173,6 +1507,7 @@ def main() -> int:
         validate_skill_text(skill_text)
         validate_navigation(navigation_text)
         validate_policy_normalization()
+        validate_schema_meta_contract_probes()
         require("ziomek-change-gate-result-v1.schema.json" in contract_text, "gate contract does not route to result schema")
         require("CURRENT_EXACT_ACK" in contract_text and "AUTHOR_STATIC_ORACLE" in contract_text, "gate contract semantic pins missing")
         validate_registry_object(registry, schemas[REGISTRY_SCHEMA.resolve()])
@@ -1202,7 +1537,13 @@ def main() -> int:
                 "author_oracle_cases": len(corpus["cases"]),
                 "mutation_probes_killed_count": len(killed),
                 "mutation_probes_killed": killed,
+                "legacy_mutation_floor_preserved": len(killed) >= 104,
                 "registry_multi_entry_probe": True,
+                "schema_meta_contract_positive": True,
+                "schema_numeric_keywords_checked": list(NONNEGATIVE_INTEGER_SCHEMA_KEYWORDS + NUMBER_SCHEMA_KEYWORDS),
+                "ready_gate_tuple_matrix_complete": True,
+                "structural_effect_boundary_checked": True,
+                "ready_oracle_allowlists_closed": True,
                 "positive_ready_cases": [
                     "ZCG-07-CLEAN-READ-ONLY-EXPLANATION",
                     "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK",

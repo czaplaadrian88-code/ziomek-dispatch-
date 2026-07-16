@@ -17,6 +17,20 @@ nie pomijaj pól na podstawie trybu.
 - `authority` pozostaje w całości `false` niezależnie od roli, ACK i disposition.
 - `gates` opisuje następny tor, a nie pozwolenie skilla na wykonanie live.
 
+## Strukturalna granica efektów
+
+`effect_boundary` jest źródłem prawdy o powierzchni zmiany:
+
+- `write_set` zawiera exact ścieżki objęte kandydatem;
+- `mutation_surface` używa zamkniętych klas efektu;
+- `read_only_no_effect=true` jest dozwolone tylko przy obu pustych listach.
+
+Pozytywna analiza wymaga pustych list i `read_only_no_effect=true`. Pozytywny
+kandydat lokalny wymaga niepustego staged write-setu, dokładnie powierzchni
+`STAGED_ARTIFACTS` i `read_only_no_effect=false`. Wolna proza, w tym prefiks
+`N-D:`, nie może zastąpić tych faktów ani zamaskować produktu, runtime, flag,
+danych, usług, tmuxa, lease'u, discovery lub semantyki biznesowej.
+
 ## Brief i kompletność
 
 `sprint_brief` ma dokładnie pięć merytorycznych treści w prostym polskim:
@@ -48,6 +62,15 @@ serializer/consumer boundary.
 - Niepusty `blocker_codes` zawsze daje `HOLD`; pusty zbiór może dać READY tylko
   dla jednej jawnie obsługiwanej macierzy trybu, gate'ów i targetu. Każda inna
   kombinacja dostaje `UNHANDLED_STATE_COMBINATION` i `HOLD`.
+- Zamknięte dodatnie lane'y używają kolejno tuple
+  `independent_review/implementation/production_operation/activation`:
+  `ANALYSIS_ONLY = NOT_REQUIRED/READY/N-D/N-D`, kandydat do review =
+  `PENDING/READY/N-D/REVIEW_REQUIRED`, a lokalna implementacja staged =
+  `NOT_REQUIRED/READY/N-D/REVIEW_REQUIRED`. Drift dowolnego z czterech pól
+  blokuje READY.
+- Każda dodatnia lane dopuszcza wyłącznie `oracle=AUTHOR_STATIC_ORACLE`.
+  `INDEPENDENT` nie może być zadeklarowane przez autora i należy do osobnego
+  fresh review; `N-D`, `MISSING` i `SELF_CONFIRMING` zawsze blokują READY.
 - Każde READY wymaga `unknown=0`, wszystkich testów `PASS`, modelu i effortu co
   najmniej na floorze ryzyka oraz niepustych wymagań handoffu.
 - `IMPLEMENTATION_CANDIDATE` READY wymaga baseline `PASS`, mutation `KILLED`,

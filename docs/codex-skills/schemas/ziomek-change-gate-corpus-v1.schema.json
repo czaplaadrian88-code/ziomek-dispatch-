@@ -27,6 +27,7 @@
     "cases": {
       "type": "array",
       "minItems": 12,
+      "maxItems": 12,
       "items": {
         "$ref": "ziomek-change-gate-case-v1.schema.json"
       }

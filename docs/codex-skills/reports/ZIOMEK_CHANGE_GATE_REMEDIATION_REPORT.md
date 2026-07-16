@@ -1,177 +1,212 @@
-# Ziomek Change Gate — raport remediation cycle 2
+# Ziomek Change Gate — remediation cycle 3
 
-## Status i granica authority
+## Werdykt autora i granica authority
 
-- Rola wykonawcza: `INTERNAL_ONLY_NON_MAIN`; brak owner channel i brak kontaktu
-  z właścicielem.
-- Model runtime został jawnie atestowany przez launcher i pasek runtime jako
-  `gpt-5.6-sol`; zapis: `model_tier=sol`, `effort=max`. Wcześniejsze `xhigh`
-  było wyłącznie omyłką tekstową.
-- Pakiet pozostaje `STAGED_ONLY_REVIEW_REQUIRED`, poza wszystkimi ścieżkami
-  discovery Codex. Nie został zainstalowany ani aktywowany.
-- Network, produkcja, deploy, restart, flag/data mutation, migracja, lease,
-  tmux, owner ACK i business semantics pozostają `false`.
-- Ten raport i walidator są dowodami autora. Nie są niezależnym review,
-  behavioral PASS ani approval.
+Status autorski: `READY_FOR_FRESH_INDEPENDENT_REVIEW`.
 
-Zakres jest wyłącznie docs-only. Pełna regresja produktu, runtime, flagi i
-entropy dashboard mają uczciwe `N-D`; loader/discovery został sprawdzony i nie
-jest `N-D`.
+To jest wyłącznie `AUTHOR_ONLY_STATIC_SELF_CHECK_NON_INDEPENDENT`. Pakiet
+pozostaje `STAGED_ONLY_REVIEW_REQUIRED`, poza discovery Codex. Nie został
+zainstalowany, aktywowany, scalony ani wypchnięty. Żadna dyspozycja corpusu,
+commit ani lokalny tag nie nadaje execution authority.
 
-## Wejścia przypięte przed edycją
+- rola: `INTERNAL_ONLY REMEDIATION_AUTHOR`, `ATTESTED_NON_MAIN`;
+- owner channel: brak; routing wyłącznie do aktywnego MAIN-a/supervisora;
+- `risk_class=R4`, `model_tier=sol`, exact model `gpt-5.6-sol`, `effort=max`;
+- lokalna dostępność modelu i effort została potwierdzona w lokalnym katalogu
+  Codex; nie użyto fallbacku ani sieci;
+- network, production, deploy, restart, flags, dane, migracja, lease, tmux,
+  owner ACK i business semantics: wszystkie `false`.
 
-| Artefakt | SHA-256 / fakt |
+Product tests, runtime, flag fingerprint i entropy dashboard mają `N-D`, nie
+`PASS`: staged docs/evals/schemas nie mają product runtime consumera.
+
+## Przypięte wejście
+
+| Fakt | Wartość |
 |---|---|
-| Task cycle 2 | `7d46ff40748e7413b1e38a5a377adb814319055f8553da60e125751ff6f0bd00` |
-| Independent review | `f8beb4d9d669314c6a9977df8ee96fbcdfdeb2a820b74b784d542068437acd75` |
-| Blind forward | `0eea9098608f881f6fc922dd48f8623b7fc11f202096927cd2f3cd010e79046e` |
-| Supervisor handoff | `a05497b1d3780606ce895a7bfba7bc7e1b028291019e22b560ed214d8d873f19` |
-| Lokalny Codex manual | mode `0644`, 787455 B, SHA-256 `084f81886e62bd0d8eafdc9cbc0b297f026880dbd212bf55796759fe9115ccc9` |
-| Exact input HEAD | `c2dffdb29a1d266ff513a679a3905b31a505e5dd` |
-| Exact input tree | `e77b8217f00555c5b3a83f0c608b81b8000ca149` |
-| Oryginalny base | `6b4b040032d54db5be7643648676d835e0db9146` |
+| Task | `/tmp/ZIOMEK_SKILL_GATE_REMEDIATION3_TASK_20260716T152915Z.md` |
+| Task SHA-256 | `55f8575fe43eabbfa951dbcd482c8cf1132e58d8d5a17b44eb075aa6f127a7e3` |
+| Przeczytane linie | `300/300` |
+| Branch | `codex/ziomek-skill-gate-remediation3-20260716T152915Z` |
+| Worktree | `/root/ziomek_skill_gate_remediation3_20260716T152915Z/dispatch_v2` |
+| Input commit | `a83ba55f463f7b38c5d4643d81e875d64d9f7444` |
+| Input tree | `76b36d9c23cbefbf21e18bf81379b887d1542e58` |
+| Original base | `6b4b040032d54db5be7643648676d835e0db9146` |
+| Output commit/tree | `UNPINNED_UNTIL_FRESH_INDEPENDENT_REVIEW` |
+| Rollback tag name | `ziomek-change-gate-remediation3-staged-20260716T152915Z` |
 
-Nie użyto sieciowego fallbacku manuala.
+`candidate_commit` i `candidate_tree` pozostają celowo nieself-referential.
+Exact output commit/tree/tag object/peel należy zapisać w zapieczętowanym
+handoffie po commicie, nie w drzewie tego samego commitu.
 
-## Prawda procesowa poprzedniego cyklu
+## Dowód, że problem nadal istniał
 
-Poprzedni author/successor handoff nie powstał, ponieważ sesja została
-zatrzymana na drugim safety menu. Nie wolno odsyłać integratora do tego
-nieistniejącego artefaktu. Istnieje zweryfikowany supervisor handoff wskazany
-powyżej.
+Na niezmienionym input HEAD official quick validator i custom validator były
+zielone (`104/104 KILLED`), lecz pięć publicznych mutacji nadal przechodziło:
 
-Znany łańcuch przed cycle 2 jest dokładnie taki:
+1. `ANALYSIS_ONLY` z `production_operation=HOLD`;
+2. `ANALYSIS_ONLY` z `activation=HOLD`;
+3. pozytywna lane z `oracle=N-D`;
+4. proza `N-D:` maskująca zapis do `flags.json` i zmianę runtime;
+5. skoordynowane `minimum=false`, `minItems=false`, `total=0`, `entries=[]`.
 
-1. `7daa5e6f4c15019a113205361b5aa7b10896ded8`
-2. `6e55814fa48d43185b116415e383cd6f69c681f9`
-3. `c2dffdb29a1d266ff513a679a3905b31a505e5dd`
+To potwierdziło cztery root causes P1-A..D w relacjach walidatora. Zielony
+baseline cycle 2 był false-green, a nie dowodem braku problemu.
 
-Kolejność powyżej jest oldest-first. Rollback po integracji zawsze wylicza
-pełną listę newest-first z trwałego tagu; nie zakłada liczby commitów i nie
-pomija finalnego commitu cycle 2.
+## Root cause, naprawa i oracle
 
-## Zamknięcie ustaleń review
+| Finding | Root cause | Naprawa u źródła | Publiczny negatywny oracle | Wynik |
+|---|---|---|---|---|
+| P1-A | READY sprawdzało tylko część gates | `READY_LANE_SPECS` wiąże exact tuple wszystkich czterech gates z jedną disposition | pełna macierz każdej alternatywnej wartości gates dla ZCG-07/08/10, w tym production HOLD i activation HOLD | KILLED |
+| P1-B | `startswith("N-D:")` udawało granicę braku efektów | zamknięty `effect_boundary` z exact `write_set`, enum `mutation_surface` i boolean `read_only_no_effect`; READY analiz wymaga pustych list i `true` | product write, mutation surface, flags/runtime, erased/contradictory no-effect oraz proza N-D z prawdziwymi faktami strukturalnymi | KILLED |
+| P1-C | brak closed oracle allowlist dla dodatnich lane'ów | każda dodatnia lane dopuszcza wyłącznie `AUTHOR_STATIC_ORACLE`; independent review jest osobnym procesem | N-D, MISSING, SELF_CONFIRMING i drift do INDEPENDENT na każdej z trzech lane'ów | KILLED |
+| P1-D | Python przyjmował bool jako int w numeric schema keywords | pre-corpus meta-kontrakt typuje wszystkie wspierane keywords; bool jest wykluczony, unknown validation keyword odróżniony od jawnego `x-annotation-*` | 11 bool-as-number probes oraz skoordynowany schema+case attack | KILLED przed disposition |
 
-| Finding | Remediation i fail-closed dowód autora |
-|---|---|
-| P1-R1 | Registry zawiera zamknięty `policy_contract` z pięcioma stabilnymi kodami oraz SHA-256 czterech źródeł kandydata. Validator sprawdza dokładne bajty, nie znaczenie wywnioskowane z regexu. `allowed_output` i `required_concepts` mają dokładne mapowania per case. Osiem nowych parafraz, mutacja każdego artefaktu, dodatkowy output revoked ACK i erasure concepts są zabijane. Literalne zdania pozostają jedynie czytelnymi tripwire. |
-| P1-R2 | `DYNAMIC / CODEMAP_SELECTED_TASK_FILES` jest elementem pełnego tuple `(position, class, id, target)` na pozycji 17. Missing, extra, double, luka numeracji, zły target, reverse i wszystkie 16 alternatywnych pozycji są zabijane. |
-| P1-R3 | Jedna tabela `BLOCKER_RULES` wylicza dokładne `blocker_codes`; disposition jest wyprowadzana z tej tabeli. Siedem dokładnych false-READY review jest zabijanych, a ZCG-07, ZCG-08 i ZCG-10 pozostają pozytywne. Nieobsłużony stan daje `UNHANDLED_STATE_COMBINATION`. |
-| P2-R1 | Dodano `skill_id`. Globalna unikalność obejmuje ID, nazwę, staged target, activation target oraz owned paths pod NFKC casefold; owned paths są porównywane również prefiksowo. Absolute, `..`, backslash i alias wspólnego targetu są odrzucane. Niezależny drugi wpis przechodzi. |
-| P2-R2 | Rollback jest zakotwiczony w dokładnym lokalnym annotated tagu opisanym niżej. Raport nie próbuje self-hashować finalnego commitu. |
-| P3-R1 | Wszystkie 12 promptów zawiera dokładnie jeden jawny `ROLE_ATTESTATION=...`; wynik roli musi się z nim zgadzać. Siedem wskazanych driftów prompt/oracle oraz podwójny fact są zabijane. |
+Po naprawie niezależny od deklarowanej disposition repro pięciu wejściowych
+ataków daje dokładnie `5/5 KILLED`.
 
-## Exact write-set
+## Zamknięte dodatnie lane'y
 
-Od base do finalnego endpointu dozwolone jest dokładnie 12 istniejących ścieżek:
+Kolejność tuple:
+`independent_review/implementation/production_operation/activation`.
+
+| Case/lane | Exact tuple | Oracle | Effect boundary | Disposition |
+|---|---|---|---|---|
+| ZCG-07 analysis | `NOT_REQUIRED/READY/N-D/N-D` | `AUTHOR_STATIC_ORACLE` | empty/empty/`true` | `READY_FOR_IMPLEMENTATION` |
+| ZCG-08 author candidate | `PENDING/READY/N-D/REVIEW_REQUIRED` | `AUTHOR_STATIC_ORACLE` | staged write-set/`STAGED_ARTIFACTS`/`false` | `READY_FOR_REVIEW` |
+| ZCG-10 local staged implementation | `NOT_REQUIRED/READY/N-D/REVIEW_REQUIRED` | `AUTHOR_STATIC_ORACLE` | staged write-set/`STAGED_ARTIFACTS`/`false` | `READY_FOR_IMPLEMENTATION` |
+
+Te trzy wyniki pozostają pozytywne wyłącznie w lokalnej granicy. Wszystkie
+pola `authority` są `false`; activation i live nadal są zabronione.
+
+## Mapa kompletności
+
+| miejsce | rola | writer/consumer | dotknięte TAK/N-D | powód | test |
+|---|---|---|---|---|---|
+| result schema | kontrakt wyniku | validator + 12 wyników | TAK | zamknięte effect facts i nowe blockery | schema + relacje |
+| case/corpus schemas | kontrakt corpusu | cases + `$ref` resolver | TAK | exact jeden output i exact 12 cases | positive + mutations |
+| registry schema | kontrakt rejestru | registry validator | TAK | pełna meta-kontrola bez zmiany publicznego kształtu | schema positive/numeric attacks |
+| wszystkie 12 expected results | fixtures | central disposition | TAK | każdy ma strukturalny effect boundary | 12/12 green |
+| centralized blockers/disposition | fail-closed oracle | wszystkie lane'y | TAK | brak deklaratywnego READY | blocker mutations |
+| lane tuples | readiness classifier | ZCG-07/08/10 | TAK | exact cztery gates | pełna enum matrix |
+| structural effect boundary | no-effect/write/live facts | wszystkie wyniki | TAK | proza nie jest źródłem prawdy | write/mutation/no-effect attacks |
+| oracle allowlists | evidence classifier | trzy dodatnie lane'y | TAK | closed status per lane | cztery drifty × trzy lane'y |
+| meta-schema validator | schema trust root | cztery schemas | TAK | bool nie jest liczbą | 11 keyword attacks + coordinated attack |
+| author mutation matrix | negatywny oracle | custom validator | TAK | zachowanie 104 i nowe P1-A..D | 163/163 KILLED |
+| positive cases | positive oracle | central classifier | TAK | zachować brak false-negative | ZCG-07/08/10 PASS |
+| candidate SKILL | human routing contract | przyszły użytkownik | TAK | opis structural facts, tuples i oracle | quick validator + byte pin |
+| `openai.yaml` | explicit trigger | Codex loader | N-D | semantyka i bajty bez zmian | exact pin; implicit false raz |
+| canonical navigation | bootstrap | sesja używająca skilla | N-D | kolejność bez zmian | istniejąca pełna mutation matrix |
+| gate contract | human/machine bridge | result author + reviewer | TAK | opis exact facts i lanes | semantic pins + byte pin |
+| registry pins/rollback | staged provenance | reviewer + rollback | TAK | nowe SHA i tag cycle 3 | exact hash/tag checks |
+| report | trwały dowód autora | fresh reviewer | TAK | cycle 3 i process HOLD | diff/review |
+| discovery/Git boundary | activation i rollback | loader + Git | TAK | staged poza discovery; local tag po commit | absence, mode, peel, pathset |
+| produkt/runtime/flags | system produkcyjny | usługi Ziomka | N-D | brak importu i product consumera | exact diff bez product paths |
+
+## Exact repo pathsets
+
+Cycle 3 zmienia dziewięć ścieżek:
 
 1. `docs/codex-skills/ZIOMEK_SKILLS_REGISTRY.json`
 2. `docs/codex-skills/candidates/ziomek-change-gate/SKILL.md`
-3. `docs/codex-skills/candidates/ziomek-change-gate/agents/openai.yaml`
-4. `docs/codex-skills/candidates/ziomek-change-gate/references/canonical-navigation.md`
-5. `docs/codex-skills/candidates/ziomek-change-gate/references/gate-contract.md`
-6. `docs/codex-skills/evals/ziomek-change-gate/cases.json`
-7. `docs/codex-skills/evals/ziomek-change-gate/validate.py`
-8. `docs/codex-skills/reports/ZIOMEK_CHANGE_GATE_REMEDIATION_REPORT.md`
-9. `docs/codex-skills/schemas/ziomek-change-gate-case-v1.schema.json`
-10. `docs/codex-skills/schemas/ziomek-change-gate-corpus-v1.schema.json`
-11. `docs/codex-skills/schemas/ziomek-change-gate-registry-v1.schema.json`
-12. `docs/codex-skills/schemas/ziomek-change-gate-result-v1.schema.json`
+3. `docs/codex-skills/candidates/ziomek-change-gate/references/gate-contract.md`
+4. `docs/codex-skills/evals/ziomek-change-gate/cases.json`
+5. `docs/codex-skills/evals/ziomek-change-gate/validate.py`
+6. `docs/codex-skills/reports/ZIOMEK_CHANGE_GATE_REMEDIATION_REPORT.md`
+7. `docs/codex-skills/schemas/ziomek-change-gate-case-v1.schema.json`
+8. `docs/codex-skills/schemas/ziomek-change-gate-corpus-v1.schema.json`
+9. `docs/codex-skills/schemas/ziomek-change-gate-result-v1.schema.json`
 
-Każda jest regularnym, niesymlinkowym plikiem `0644`. Nie ma trzynastej
-ścieżki, executabla ani importu produktu.
+Original base→final tag musi pozostać dokładnie w dozwolonym 12-path scope;
+dodatkowo obejmuje niezmienione w cycle 3, ale zmienione we wcześniejszych
+commitach: `agents/openai.yaml`, `references/canonical-navigation.md` i
+`ziomek-change-gate-registry-v1.schema.json`. Każda z 12 ścieżek ma być
+regularnym niesymlinkowym plikiem `0644`; zero product paths i executables.
 
-## Piny bajtów kandydata
+## Piny źródeł policy
 
 | Źródło | SHA-256 |
 |---|---|
-| `SKILL.md` | `f2b0ffff4f03ffbf137edb8cab4712277ae62722c00b09d4a05b7d5846767aee` |
+| `SKILL.md` | `b14b59ce16e200390e564b826f3945b201d995d633d09f31a716cabb48e5f09c` |
 | `agents/openai.yaml` | `d791a50a4ffcb7d2def662405ae30fbb452682c5cd272f82081a2e1c84c5d901` |
 | `references/canonical-navigation.md` | `725d579b3a4a4614456f95db49df7adbccda5cd984ed96127ff5b1aa3bb4c5e6` |
-| `references/gate-contract.md` | `7cd58ff7277b8ff845de15e569929c90f54b65273b6cad429c33c4f39a54752c` |
+| `references/gate-contract.md` | `d88d3d0cda3b19ae442510c4ad0d6f1f03606759b5d89906ec386c0c3afdb869` |
 
-Registry nie zawiera własnego hasha.
+Zwykła mutacja treści bez aktualizacji pinu jest zabijana. Skoordynowana zmiana
+treści i pinu nie jest kryptograficznie niemożliwa: tworzy nowe bytes/tree i
+wymaga nowego fresh independent review exact commit/tree.
 
-## Walidacja autora na finalnych working bytes
+## Walidacja autora
 
 | Kontrola | Wynik |
 |---|---|
-| Official skill-creator quick validator | PASS, `Skill is valid!` |
-| Custom offline validator | PASS, 4 schemas, 6 strict JSON, 12 cases, 104/104 mutation probes KILLED |
-| Strict duplicate-key parse | PASS, 6/6 JSON, 0 duplikatów |
-| AST compile/import | PASS, wyłącznie standard library, 0 product imports |
-| Base→working inventory | PASS, dokładnie powyższe 12 ścieżek |
-| Typ/mode | PASS, 12/12 regular non-symlink `0644`, non-executable |
-| Discovery | PASS, target nie istnieje w repo/user/admin/system; implicit invocation exact `false` |
-| Registry | PASS: multi-entry positive oraz ID/name/casefold/alias/target/path/prefix/unsafe-path negatives |
-| Candidate byte pins | PASS: positive exact bytes; 4/4 single-artifact mutations KILLED |
-| Governance paraphrases | PASS: 8/8 KILLED bez dopisywania ich do regexów |
-| Dynamic sequence | PASS: 16/16 innych pozycji oraz missing/extra/double/gap/target/reverse negatives KILLED |
-| Central READY matrix | PASS: 7/7 review negatives KILLED; 3/3 READY positives PASS |
-| Corpus exact maps | PASS: extra revoked output i 12 concept erasures KILLED |
-| Prompt↔role | PASS, 12/12 zgodne; siedem review driftów i double fact KILLED |
+| Official skill-creator quick validator | rc 0, `Skill is valid!` |
+| Custom offline validator | rc 0; 4 schemas; 6 strict JSON; 12 cases |
+| Mutation matrix | `163/163 KILLED`, `0 SURVIVED`; 104/104 starych etykiet zachowane, 0 brakujących |
+| Full positive gate matrix | 3/3 canonical PASS; wszystkie alternatywne wartości KILLED |
+| Oracle allowlists | 3 positives; N-D/MISSING/SELF_CONFIRMING/INDEPENDENT drifts KILLED |
+| Schema meta-contract | 4/4 positive; 11/11 bool keyword attacks KILLED |
+| Coordinated schema+case | `minimum=false`, `minItems=false`, zero completeness KILLED przed disposition |
+| Input false-green replay | 5/5 KILLED po naprawie |
+| AST/import | PASS; standard library only; 0 product imports |
+| Strict duplicate-key JSON | PASS dla registry, cases i 4 schemas |
+| `python -m py_compile` | PASS dla validatora, bez repo `__pycache__` |
 | `git diff --check` | PASS |
+| Discovery | repo/user/admin/system/plugin cache ABSENT |
+| Implicit invocation | dokładnie jeden `allow_implicit_invocation: false` |
 
-To jest `AUTHOR_ONLY_STATIC_SELF_CHECK_NON_INDEPENDENT`. Fresh independent
-review dokładnego finalnego commitu i tree pozostaje obowiązkowe.
+Pełne finalne rc, modes, commit/tree/tag i handoff hash są zapisywane po
+commicie w prywatnym handoffie. Ten raport nie udaje finalnego Git seala.
 
-## Trwały rollback bez self-reference
+## Process HOLD poprzedniego review
 
-Dokładny endpoint ma nazwę:
+Cycle-2 candidate pozostaje odrzucony. Ustalenia review były użyte wyłącznie
+jako jawne diagnostyczne task input, nie jako pozytywne review ani immutable
+evidence. Nie modyfikowano dwóch zastanych artefaktów w `/tmp`.
 
-`ziomek-change-gate-remediation2-staged-20260716T140544Z`
+| Stan | Blind | Review |
+|---|---|---|
+| pierwotny seal | `6085518f47ba8e85b4a6fb600d14602968644148f2457259f6010667c828ab93`, 5528 B, 0600 | `bd4816e79b1acdc92259f3bdf910e8854cd3116c7388e36497dc3279e0c3a60c`, 28649 B, 0600 |
+| po naruszeniu | `cfc567f665ab7a0dffe8953a3694da9f220ade249303d3efc1fcfa5a4385d9cd` | `19f57ccf163c8dac6b6cb656ded5dd74606e1a8959898699a578e9bef151200d` |
 
-Reguła jest niezmienna: nie powstaje preimage tag. Lokalny annotated tag jest
-tworzony dopiero po zielonym finalnym commicie cycle 2 i wskazuje ten commit.
-Raport nie zapisuje nieznanego sobie hash finalnego commitu; finalny handoff
-zapisuje tag object ID, peeled commit i peeled tree.
+Procesowy status to `HOLD_REVIEW_INCOMPLETE`: zapieczętowany blind artifact
+został zmodyfikowany po queued follow-up, a drugie safety menu zakończyło
+review bez drugiego `Keep waiting`. Dlatego cycle 3 wymaga całkowicie świeżego,
+supervisor-controlled independent review exact final bytes.
 
-Read-only kontrola przed utworzeniem tagu:
+Safety-menu truth bieżącej sesji autora:
 
-```text
-git check-ref-format refs/tags/ziomek-change-gate-remediation2-staged-20260716T140544Z
-git show-ref --verify refs/tags/ziomek-change-gate-remediation2-staged-20260716T140544Z
-```
+- menu widziane/atestowane przez supervisora:
+  `PENDING_SUPERVISOR_ATTESTATION`;
+- wybory `Keep waiting` wykonane przez supervisora:
+  `PENDING_SUPERVISOR_ATTESTATION`;
+- drugie menu:
+  `PENDING_SUPERVISOR_ATTESTATION`.
 
-Druga komenda musi przed finalnym commitem potwierdzić brak refa. Po utworzeniu
-tagu wymagane są read-only kontrole:
+Autor nie zgaduje tych liczników. Ewentualne uzupełnienie należy zapisać w
+osobnym supervisor artifact, bez przepisywania seala autora lub handoffu.
 
-```text
-git rev-parse refs/tags/ziomek-change-gate-remediation2-staged-20260716T140544Z^{tag}
-git rev-parse refs/tags/ziomek-change-gate-remediation2-staged-20260716T140544Z^{commit}
-git rev-parse refs/tags/ziomek-change-gate-remediation2-staged-20260716T140544Z^{tree}
-git merge-base --is-ancestor 6b4b040032d54db5be7643648676d835e0db9146 refs/tags/ziomek-change-gate-remediation2-staged-20260716T140544Z^{commit}
-git rev-list 6b4b040032d54db5be7643648676d835e0db9146..refs/tags/ziomek-change-gate-remediation2-staged-20260716T140544Z
-git diff --name-only 6b4b040032d54db5be7643648676d835e0db9146 refs/tags/ziomek-change-gate-remediation2-staged-20260716T140544Z
-```
+## Discovery, brak live i rollback
 
-`rev-list` bez `--reverse` daje wymagany porządek newest-first. Tag musi być
-annotated: tag object ID istnieje i różni się od peeled commit. Peeled commit
-musi równać się finalnemu HEAD, a peeled tree finalnemu tree. Ref istnieje tylko
-w lokalnym namespace `refs/tags/`; sam commit, patch ani worktree nie przenosi
-tego refa. Brak network/push jest osobno zapisywany w finalnym handoffie.
+Candidate nie istnieje w `.agents/skills`, `$HOME/.agents/skills`,
+`/etc/codex/skills`, user/system bundle ani plugin cache. Candidate tree nie ma
+symlinków ani executables. `allow_implicit_invocation: false` występuje
+dokładnie raz. `candidate_commit/tree` pozostają placeholderem do fresh review.
 
-Przed integracją rollback oznacza nadzorowane usunięcie prywatnego tagu,
-brancha i worktree po potwierdzeniu, że nie zostały zintegrowane. Po integracji
-najpierw wylicz dokładną listę:
+Nie wykonano network, runtime/log access, product testów, deployu, restartu,
+flipa, migracji, zmiany danych, tmuxa, lease'u, merge ani push. Nie edytowano
+`ZIOMEK_BACKLOG.md`, repo memory, `todo_master.md`, `sprint_timeline.md` ani
+innych wspólnych handoffów.
 
-```text
-git rev-list 6b4b040032d54db5be7643648676d835e0db9146..refs/tags/ziomek-change-gate-remediation2-staged-20260716T140544Z
-```
+Rollback cycle 3:
 
-Następnie revertuj dokładnie tę newest-first listę, bez pomijania elementu:
+1. przed integracją supervisor może usunąć prywatny branch/worktree/tag po
+   potwierdzeniu braku integracji albo odtworzyć exact tag w nowym worktree;
+2. po integracji wykonać jawny `git revert` wyłącznie nowego top commitu cycle
+   3, bez cofania wcześniejszych commitów i bez live restartu;
+3. zweryfikować powrót dziewięciu cycle-3 paths do input tree, zachowanie
+   pozostałych trzech ścieżek kandydata oraz brak zmian produktu.
 
-```text
-git revert --no-commit $(git rev-list 6b4b040032d54db5be7643648676d835e0db9146..refs/tags/ziomek-change-gate-remediation2-staged-20260716T140544Z)
-```
-
-Przed commitem rollbacku zweryfikuj, że wszystkie candidate paths znikają,
-12-ścieżkowy zakres wraca do base, a product tree pozostaje niezmieniony. W tym
-cyklu nie wykonuje się revertu.
-
-## Handoff gate
-
-Finalny lokalny commit i tag nie są merge/activation approval. Następny
-dozwolony tor to supervisor-controlled fresh independent review dokładnego
-commit/tree/tag i blind prompt review. Instalacja, move do discovery, merge,
-push oraz jakakolwiek operacja live wymagają odrębnego jawnego zakresu.
+Oczekiwany newest-first łańcuch pięciu commitów ponad original base to:
+`<OUTPUT_CYCLE3> → a83ba55 → c2dffdb → 6e55814 → 7daa5e6`, z base
+`6b4b040`. Exact wartości finalne należą do handoffu i Git peela.

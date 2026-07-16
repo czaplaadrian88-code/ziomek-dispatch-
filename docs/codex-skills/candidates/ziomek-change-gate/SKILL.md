@@ -25,6 +25,12 @@ Przygotuj zmianę do właściwego następnego toru. Traktuj ten pakiet jako
 4. Zachowaj wszystkie pola `authority=false`. Skill jest bramą przygotowania,
    nie capability, executorem, lease holderem ani źródłem semantyki biznesowej.
 
+Zapisz maszynowo `effect_boundary.write_set`,
+`effect_boundary.mutation_surface` i `effect_boundary.read_only_no_effect`.
+`read_only_no_effect=true` jest spójne wyłącznie z dwiema pustymi listami.
+Pozytywny `ANALYSIS_ONLY` wymaga właśnie takiej pustej granicy; proza `N-D:`
+nie dowodzi braku zapisu, mutacji, efektu produktu ani operacji live.
+
 Non-MAIN nie kontaktuje właściciela bezpośrednio; przekazuje pytanie lub wynik
 aktywnemu MAIN-owi.
 
@@ -150,3 +156,17 @@ niego dokładnie jedną dyspozycję: `READY_FOR_IMPLEMENTATION`,
 nieznana kombinacja relacji dodaje blocker i failuje zamknięcie.
 Żadna dyspozycja nie oznacza instalacji, aktywacji, zgody live ani zakończenia
 programu. Nie nazywaj autorskiej walidacji niezależnym review.
+
+Jedynymi dodatnimi lane'ami tego kontraktu są dokładne tuple wszystkich bram:
+
+- analiza: `NOT_REQUIRED/READY/N-D/N-D` → `READY_FOR_IMPLEMENTATION`;
+- kandydat autora: `PENDING/READY/N-D/REVIEW_REQUIRED` →
+  `READY_FOR_REVIEW`;
+- lokalna implementacja staged: `NOT_REQUIRED/READY/N-D/REVIEW_REQUIRED` →
+  `READY_FOR_IMPLEMENTATION`.
+
+Kolejność tuple to `independent_review/implementation/production_operation/
+activation`. Każda inna wartość failuje zamknięcie. W tych trzech lane'ach
+jedynym dopuszczonym statusem oracle jest `AUTHOR_STATIC_ORACLE`;
+`INDEPENDENT` wymaga osobnego, świeżego review exact bytes, a `N-D`, `MISSING`
+i `SELF_CONFIRMING` nigdy nie dają READY.
