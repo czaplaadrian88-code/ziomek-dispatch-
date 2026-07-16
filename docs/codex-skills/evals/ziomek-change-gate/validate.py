@@ -9,6 +9,7 @@ import math
 import re
 import stat
 import sys
+import tempfile
 import unicodedata
 from pathlib import Path
 from typing import Any, Callable
@@ -51,6 +52,7 @@ AUTHORITY_KEYS = (
     "owner_ack",
     "business_semantics",
 )
+CANONICAL_SKILL_ID = "ZIOMEK_CHANGE_GATE"
 OWNED_PATHS = (
     "docs/codex-skills/candidates/ziomek-change-gate/SKILL.md",
     "docs/codex-skills/candidates/ziomek-change-gate/agents/openai.yaml",
@@ -131,7 +133,17 @@ EXPECTED_POLICY_CONTRACT = {
         {"code": "ANALYSIS_NO_EFFECT_STRUCTURED", "subject": "ANALYSIS_READY", "relation": "REQUIRES_EMPTY", "object": "WRITE_AND_MUTATION_SURFACE", "enforcement": "FAIL_CLOSED"},
         {"code": "READY_ORACLE_ALLOWLIST_CLOSED", "subject": "READY_LANE", "relation": "REQUIRES_ALLOWED", "object": "ORACLE_STATUS", "enforcement": "FAIL_CLOSED"},
         {"code": "SCHEMA_NUMERIC_BOOL_FORBIDDEN", "subject": "BOOLEAN", "relation": "IS_NOT", "object": "SCHEMA_NUMBER", "enforcement": "FAIL_CLOSED"},
+        {"code": "CANDIDATE_WRITE_SET_REGISTRY_BOUND", "subject": "READY_STAGED_WRITE_SET", "relation": "IS_EXACT_SUBSET_OF", "object": "SAME_SKILL_PINNED_RUNTIME_ARTIFACTS", "enforcement": "FAIL_CLOSED"},
     ],
+}
+EXPECTED_CANDIDATE_EFFECT_BOUNDARY = {
+    "write_set_semantics": "EXACT_CHANGED_CANDIDATE_RUNTIME_ARTIFACT_FILES",
+    "root_source": "staged_candidate_path",
+    "allowed_paths_source": "pin.candidate_artifacts.files[].path",
+    "shared_governance_paths_allowed": False,
+    "cross_skill_paths_allowed": False,
+    "path_comparison": "EXACT_BYTES_PLUS_NFKC_CASEFOLD_COLLISION_REJECTION",
+    "file_type_policy": "REGULAR_NON_SYMLINK_ONLY",
 }
 PINNED_CANDIDATE_PATHS = (
     "docs/codex-skills/candidates/ziomek-change-gate/SKILL.md",
@@ -184,9 +196,9 @@ EXPECTED_REQUIRED_CONCEPTS = {
     "ZCG-05-DISPLAY-UNKNOWN-CONSUMERS": ("writer and consumer search", "decision value versus display value", "coupled-field lineage"),
     "ZCG-06-HARD-SOFT-AMBIGUITY": ("HARD before SOFT", "business semantics cannot be guessed", "role-aware owner question"),
     "ZCG-07-CLEAN-READ-ONLY-EXPLANATION": ("analysis-only boundary", "no mutation", "product regression N-D with evidence"),
-    "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK": ("author evidence is not independent review", "candidate boundary", "no live authority"),
+    "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK": ("author evidence is not independent review", "registry-owned candidate artifact boundary", "no live authority"),
     "ZCG-09-CURRENT-ACK-ACTIVE-MAIN": ("CURRENT_EXACT_ACK", "active MAIN owner channel", "skill has no execution capability"),
-    "ZCG-10-POSITIVE-ND-UNRELATED-TWIN": ("positive N-D with boundary evidence", "exact write-set", "product regression N-D"),
+    "ZCG-10-POSITIVE-ND-UNRELATED-TWIN": ("positive N-D with boundary evidence", "registry-bound exact write-set", "product regression N-D"),
     "ZCG-11-CURRENT-ACK-NON-MAIN": ("CURRENT_EXACT_ACK remains valid", "non-MAIN routes to active MAIN", "requires_reask false"),
     "ZCG-12-UNATTESTED-ROLE-OWNER-QUESTION": ("UNATTESTED_NON_MAIN", "active MAIN owns owner channel", "HARD SOFT ambiguity holds"),
 }
@@ -218,6 +230,56 @@ EXPECTED_CASE_POLICY_CODES = {
     "ZCG-11-CURRENT-ACK-NON-MAIN": {"CONTACT_OWNER_AS_NON_MAIN", "EXECUTE_PRODUCTION", "GRANT_AUTHORITY"},
     "ZCG-12-UNATTESTED-ROLE-OWNER-QUESTION": {"CONTACT_OWNER_AS_NON_MAIN", "GRANT_AUTHORITY", "SOFT_OVERRIDES_HARD"},
 }
+LEGACY_MUTATION_LABELS_COUNT = 163
+LEGACY_MUTATION_LABELS_SHA256 = "0156c4559182e4186b53df92d8cd665fdb90f00769a15d2a4aaa98022cfa4a4b"
+CYCLE4_MUTATION_LABELS = frozenset(
+    {
+        "candidate-write-set-cross-skill-root",
+        "candidate-write-set-symlink-artifact",
+        "candidate-write-set-nonregular-artifact",
+        "registry-candidate-boundary-source-drift",
+        "registry-candidate-pin-sibling-prefix",
+        "prompt-role-fact-removed",
+        "prompt-role-fact-active-main-downgrade",
+        "candidate-write-set-product-selection-mislabeled-staged",
+        "candidate-write-set-flags-mislabeled-staged",
+        "candidate-write-set-sibling-prefix",
+        "candidate-write-set-case-alias",
+        "candidate-write-set-unicode-alias",
+        "candidate-write-set-absolute",
+        "candidate-write-set-traversal",
+        "candidate-write-set-backslash",
+        "candidate-write-set-empty-path",
+        "candidate-write-set-empty-component",
+        "candidate-write-set-dot-component",
+        "candidate-write-set-shared-governance",
+        "candidate-effect-relation-write-set-empty",
+        "candidate-effect-relation-mutation-surface-empty",
+        "candidate-effect-relation-mutation-surface-staged_artifacts-product_code",
+        "candidate-effect-relation-read-only-no-effect-true",
+        "hold-effect-relation-write-without-surface",
+        "hold-effect-relation-surface-with-read-only",
+        "hold-effect-relation-empty-with-effect-claim",
+        "nonfinite-json-registry",
+        "nonfinite-json-registry-infinity",
+        "nonfinite-json-registry-negative-infinity",
+        "nonfinite-json-cases",
+        "nonfinite-json-cases-infinity",
+        "nonfinite-json-cases-negative-infinity",
+        "nonfinite-json-registry-schema",
+        "nonfinite-json-registry-schema-infinity",
+        "nonfinite-json-registry-schema-negative-infinity",
+        "nonfinite-json-result-schema",
+        "nonfinite-json-result-schema-infinity",
+        "nonfinite-json-result-schema-negative-infinity",
+        "nonfinite-json-case-schema",
+        "nonfinite-json-case-schema-infinity",
+        "nonfinite-json-case-schema-negative-infinity",
+        "nonfinite-json-corpus-schema",
+        "nonfinite-json-corpus-schema-infinity",
+        "nonfinite-json-corpus-schema-negative-infinity",
+    }
+)
 POLICY_PATTERNS = {
     "ACTIVATE_SKILL": (r"\bactivate (?:the )?skill\b", r"\binstall (?:the )?skill\b", r"\baktywuj skill\b", r"\bzainstaluj skill\b"),
     "CONTACT_OWNER_AS_NON_MAIN": (r"\bcontact (?:the )?owner\b", r"\bask (?:the )?owner\b", r"\bskontaktuj sie z wlascicielem\b", r"\bzapytaj wlasciciela\b", r"\bnon-main moze skontaktowac sie z wlascicielem\b"),
@@ -249,9 +311,17 @@ def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def reject_nonfinite_constant(value: str) -> None:
+    raise ValidationError(f"non-finite JSON constant forbidden: {value}")
+
+
 def loads_strict(text: str, label: str) -> Any:
     try:
-        return json.loads(text, object_pairs_hook=reject_duplicate_keys)
+        return json.loads(
+            text,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_constant,
+        )
     except (json.JSONDecodeError, ValidationError) as exc:
         raise ValidationError(f"{label}: strict JSON parse failed: {exc}") from exc
 
@@ -616,6 +686,8 @@ def validate_skill_text(text: str) -> None:
         "effect_boundary.write_set",
         "effect_boundary.mutation_surface",
         "read_only_no_effect=true",
+        "pin.candidate_artifacts.files[].path",
+        "root innego skilla",
         "NOT_REQUIRED/READY/N-D/N-D",
         "PENDING/READY/N-D/REVIEW_REQUIRED",
         "jedynym dopuszczonym statusem oracle jest `AUTHOR_STATIC_ORACLE`",
@@ -726,8 +798,11 @@ def ready_lane_spec(result: dict[str, Any]) -> dict[str, Any] | None:
 
 def effect_boundary_is_consistent(result: dict[str, Any]) -> bool:
     boundary = result["effect_boundary"]
-    empty = not boundary["write_set"] and not boundary["mutation_surface"]
-    return boundary["read_only_no_effect"] is empty
+    write_set_present = bool(boundary["write_set"])
+    mutation_surface_present = bool(boundary["mutation_surface"])
+    if boundary["read_only_no_effect"] is True:
+        return not write_set_present and not mutation_surface_present
+    return (write_set_present or mutation_surface_present) and (not write_set_present or mutation_surface_present)
 
 
 def analysis_effect_boundary_is_safe(result: dict[str, Any]) -> bool:
@@ -735,13 +810,28 @@ def analysis_effect_boundary_is_safe(result: dict[str, Any]) -> bool:
     return not boundary["write_set"] and not boundary["mutation_surface"] and boundary["read_only_no_effect"] is True
 
 
-def candidate_effect_boundary_is_safe(result: dict[str, Any]) -> bool:
+def candidate_effect_boundary_shape_is_safe(result: dict[str, Any]) -> bool:
     boundary = result["effect_boundary"]
     return (
         bool(boundary["write_set"])
         and set(boundary["mutation_surface"]) == {"STAGED_ARTIFACTS"}
         and boundary["read_only_no_effect"] is False
     )
+
+
+def candidate_effect_boundary_is_safe(
+    result: dict[str, Any],
+    registry: dict[str, Any] | None = None,
+    skill_id: str = CANONICAL_SKILL_ID,
+    artifact_root: Path = ROOT,
+) -> bool:
+    if not candidate_effect_boundary_shape_is_safe(result):
+        return False
+    try:
+        validate_candidate_write_set(result["effect_boundary"]["write_set"], registry, skill_id, artifact_root)
+    except (KeyError, OSError, TypeError, ValidationError):
+        return False
+    return True
 
 
 def gate_tuple_is_allowed_for_ready_lane(result: dict[str, Any]) -> bool:
@@ -763,7 +853,12 @@ def analysis_no_effect_boundary_is_explicit(result: dict[str, Any]) -> bool:
     )
 
 
-def ready_disposition_without_blockers(result: dict[str, Any]) -> str | None:
+def ready_disposition_without_blockers(
+    result: dict[str, Any],
+    registry: dict[str, Any] | None = None,
+    skill_id: str = CANONICAL_SKILL_ID,
+    artifact_root: Path = ROOT,
+) -> str | None:
     tests_pass = all(test["status"] == "PASS" for test in result["tests"])
     spec = ready_lane_spec(result)
     if spec is None or not oracle_status_is_allowed_for_ready_lane(result):
@@ -784,7 +879,7 @@ def ready_disposition_without_blockers(result: dict[str, Any]) -> str | None:
         and result["evidence"]["mutation"]["status"] == "KILLED"
         and result["rollback"]["status"] == "READY"
         and effect_boundary_is_consistent(result)
-        and candidate_effect_boundary_is_safe(result)
+        and candidate_effect_boundary_is_safe(result, registry, skill_id, artifact_root)
         and tests_pass
     ):
         return spec["disposition"]
@@ -820,21 +915,39 @@ BLOCKER_RULES: tuple[tuple[str, Callable[[dict[str, Any]], bool]], ...] = (
     ("GATE_TUPLE_NOT_ALLOWED_FOR_READY_LANE", lambda result: not gate_tuple_is_allowed_for_ready_lane(result)),
     ("EFFECT_BOUNDARY_CONTRADICTORY", lambda result: not effect_boundary_is_consistent(result)),
     ("ANALYSIS_EFFECT_BOUNDARY_VIOLATION", lambda result: result["mode"] == "ANALYSIS_ONLY" and not analysis_effect_boundary_is_safe(result)),
-    ("CANDIDATE_EFFECT_BOUNDARY_VIOLATION", lambda result: result["mode"] == "IMPLEMENTATION_CANDIDATE" and result["gates"]["implementation"] == "READY" and not candidate_effect_boundary_is_safe(result)),
+    ("CANDIDATE_EFFECT_BOUNDARY_VIOLATION", lambda result: result["mode"] == "IMPLEMENTATION_CANDIDATE" and result["gates"]["implementation"] == "READY" and not candidate_effect_boundary_shape_is_safe(result)),
 )
 
 
-def derive_blocker_codes(result: dict[str, Any]) -> list[str]:
+def derive_blocker_codes(
+    result: dict[str, Any],
+    registry: dict[str, Any] | None = None,
+    skill_id: str = CANONICAL_SKILL_ID,
+    artifact_root: Path = ROOT,
+) -> list[str]:
     codes = [code for code, predicate in BLOCKER_RULES if predicate(result)]
-    if not codes and ready_disposition_without_blockers(result) is None:
+    if (
+        result["mode"] == "IMPLEMENTATION_CANDIDATE"
+        and result["gates"]["implementation"] == "READY"
+        and candidate_effect_boundary_shape_is_safe(result)
+        and not candidate_effect_boundary_is_safe(result, registry, skill_id, artifact_root)
+    ):
+        codes.append("CANDIDATE_WRITE_SET_OUTSIDE_REGISTRY_BOUNDARY")
+    if not codes and ready_disposition_without_blockers(result, registry, skill_id, artifact_root) is None:
         codes.append("UNHANDLED_STATE_COMBINATION")
     return codes
 
 
-def derive_disposition(result: dict[str, Any], blocker_codes: list[str]) -> str:
+def derive_disposition(
+    result: dict[str, Any],
+    blocker_codes: list[str],
+    registry: dict[str, Any] | None = None,
+    skill_id: str = CANONICAL_SKILL_ID,
+    artifact_root: Path = ROOT,
+) -> str:
     if blocker_codes:
         return "HOLD"
-    ready = ready_disposition_without_blockers(result)
+    ready = ready_disposition_without_blockers(result, registry, skill_id, artifact_root)
     require(ready is not None, "empty blocker set has no explicit readiness lane")
     return ready
 
@@ -859,10 +972,62 @@ def paths_overlap(left: str, right: str) -> bool:
     return left_key == right_key or left_key.startswith(right_key + "/") or right_key.startswith(left_key + "/")
 
 
-def canonical_registry_skill(registry: dict[str, Any]) -> dict[str, Any]:
-    matches = [item for item in registry["skills"] if item["skill_id"] == "ZIOMEK_CHANGE_GATE"]
-    require(len(matches) == 1, "registry must contain exactly one ZIOMEK_CHANGE_GATE entry")
+def path_is_strict_descendant(path: str, root: str) -> bool:
+    path_parts = path.split("/")
+    root_parts = root.split("/")
+    return len(path_parts) > len(root_parts) and path_parts[: len(root_parts)] == root_parts
+
+
+def registry_skill(registry: dict[str, Any], skill_id: str) -> dict[str, Any]:
+    matches = [item for item in registry["skills"] if item["skill_id"] == skill_id]
+    require(len(matches) == 1, f"registry must contain exactly one {skill_id} entry")
     return matches[0]
+
+
+def canonical_registry_skill(registry: dict[str, Any]) -> dict[str, Any]:
+    return registry_skill(registry, CANONICAL_SKILL_ID)
+
+
+def validate_regular_non_symlink_artifact(artifact_root: Path, relative: str, where: str) -> None:
+    root_stat = artifact_root.lstat()
+    require(stat.S_ISDIR(root_stat.st_mode) and not stat.S_ISLNK(root_stat.st_mode), f"{where}: artifact root must be a real directory")
+    current = artifact_root
+    parts = relative.split("/")
+    for index, part in enumerate(parts):
+        current = current / part
+        current_stat = current.lstat()
+        require(not stat.S_ISLNK(current_stat.st_mode), f"{where}: symlink component forbidden: {relative}")
+        if index < len(parts) - 1:
+            require(stat.S_ISDIR(current_stat.st_mode), f"{where}: non-directory ancestor forbidden: {relative}")
+        else:
+            require(stat.S_ISREG(current_stat.st_mode), f"{where}: non-regular artifact forbidden: {relative}")
+            require(stat.S_IMODE(current_stat.st_mode) & 0o111 == 0, f"{where}: executable artifact forbidden: {relative}")
+
+
+def validate_candidate_write_set(
+    write_set: Any,
+    registry: dict[str, Any] | None = None,
+    skill_id: str = CANONICAL_SKILL_ID,
+    artifact_root: Path = ROOT,
+) -> None:
+    registry_object = load_strict(REGISTRY_FILE) if registry is None else registry
+    skill = registry_skill(registry_object, skill_id)
+    require(skill["candidate_effect_boundary"] == EXPECTED_CANDIDATE_EFFECT_BOUNDARY, f"{skill_id}: candidate effect-boundary contract mismatch")
+    staged_root = validate_safe_relative_path(skill["staged_candidate_path"], f"{skill_id}.staged_candidate_path")
+    allowed_paths = tuple(
+        validate_safe_relative_path(item["path"], f"{skill_id}.pin.candidate_artifacts")
+        for item in skill["pin"]["candidate_artifacts"]["files"]
+    )
+    require(allowed_paths, f"{skill_id}: candidate artifact allowlist must be nonempty")
+    require(len({casefold_key(path) for path in allowed_paths}) == len(allowed_paths), f"{skill_id}: candidate artifact allowlist collides under NFKC casefold")
+    require(all(path_is_strict_descendant(path, staged_root) for path in allowed_paths), f"{skill_id}: candidate artifact outside staged root")
+    require(isinstance(write_set, list) and write_set, f"{skill_id}: candidate write_set must be a nonempty array")
+    safe_write_set = [validate_safe_relative_path(path, f"{skill_id}.effect_boundary.write_set") for path in write_set]
+    require(len({casefold_key(path) for path in safe_write_set}) == len(safe_write_set), f"{skill_id}: write_set paths collide under NFKC casefold")
+    for relative in safe_write_set:
+        require(path_is_strict_descendant(relative, staged_root), f"{skill_id}: write_set path outside exact staged root: {relative}")
+        require(relative in allowed_paths, f"{skill_id}: write_set path is not an exact pinned runtime artifact: {relative}")
+        validate_regular_non_symlink_artifact(artifact_root, relative, f"{skill_id}.effect_boundary.write_set")
 
 
 def candidate_artifact_bytes() -> dict[str, bytes]:
@@ -871,6 +1036,8 @@ def candidate_artifact_bytes() -> dict[str, bytes]:
 
 def validate_candidate_artifact_pins(registry: dict[str, Any], artifacts: dict[str, bytes] | None = None) -> None:
     skill = canonical_registry_skill(registry)
+    require(skill["candidate_effect_boundary"] == EXPECTED_CANDIDATE_EFFECT_BOUNDARY, "candidate effect-boundary contract mismatch")
+    staged_root = validate_safe_relative_path(skill["staged_candidate_path"], "candidate staged root")
     candidate_artifacts = skill["pin"]["candidate_artifacts"]
     require(candidate_artifacts["algorithm"] == "SHA-256", "candidate artifact hash algorithm mismatch")
     pins = candidate_artifacts["files"]
@@ -880,6 +1047,7 @@ def validate_candidate_artifact_pins(registry: dict[str, Any], artifacts: dict[s
     require(set(blobs) == set(PINNED_CANDIDATE_PATHS), "candidate artifact byte map mismatch")
     for item in pins:
         relative = validate_safe_relative_path(item["path"], "candidate artifact pin")
+        require(path_is_strict_descendant(relative, staged_root), f"candidate artifact pin outside staged root: {relative}")
         require(relative in skill["owned_paths"], f"candidate artifact pin is not owned: {relative}")
         digest = hashlib.sha256(blobs[relative]).hexdigest()
         require(digest == item["sha256"], f"candidate artifact SHA-256 mismatch: {relative}")
@@ -897,14 +1065,16 @@ def validate_registry_relations(registry: dict[str, Any]) -> None:
     require(len(rollback_tags) == len(set(rollback_tags)), "registry rollback anchor tags must be globally unique under NFKC casefold")
     all_owned: list[tuple[str, str]] = []
     for item in skills:
-        validate_safe_relative_path(item["staged_candidate_path"], f"{item['skill_id']}.staged_candidate_path")
+        staged_root = validate_safe_relative_path(item["staged_candidate_path"], f"{item['skill_id']}.staged_candidate_path")
         validate_safe_relative_path(item["activation_target"], f"{item['skill_id']}.activation_target")
+        require(item["candidate_effect_boundary"] == EXPECTED_CANDIDATE_EFFECT_BOUNDARY, f"{item['skill_id']}: candidate effect-boundary contract mismatch")
         for relative in item["owned_paths"]:
             all_owned.append((item["skill_id"], validate_safe_relative_path(relative, f"{item['skill_id']}.owned_paths")))
         pin_paths = [entry["path"] for entry in item["pin"]["candidate_artifacts"]["files"]]
         require(len(pin_paths) == len({casefold_key(path) for path in pin_paths}), f"{item['skill_id']}: pin paths collide under casefold")
         for relative in pin_paths:
-            validate_safe_relative_path(relative, f"{item['skill_id']}.pin.path")
+            safe_pin = validate_safe_relative_path(relative, f"{item['skill_id']}.pin.path")
+            require(path_is_strict_descendant(safe_pin, staged_root), f"{item['skill_id']}: candidate pin outside exact staged root")
         require({casefold_key(path) for path in pin_paths}.issubset({casefold_key(path) for path in item["owned_paths"]}), f"{item['skill_id']}: every candidate pin must be an owned path")
     for index, (left_owner, left_path) in enumerate(all_owned):
         for right_owner, right_path in all_owned[index + 1 :]:
@@ -912,7 +1082,7 @@ def validate_registry_relations(registry: dict[str, Any]) -> None:
 
     skill = canonical_registry_skill(registry)
     require(skill["name"] == "ziomek-change-gate", "registry name mismatch")
-    require(skill["version"] == "0.4.0-remediation3-candidate", "registry candidate version mismatch")
+    require(skill["version"] == "0.5.0-remediation4-candidate", "registry candidate version mismatch")
     require(skill["status"] == "STAGED_ONLY_REVIEW_REQUIRED", "registry status mismatch")
     require(skill["staged_candidate_path"] == "docs/codex-skills/candidates/ziomek-change-gate", "staged path mismatch")
     require(skill["activation_target"] == ".agents/skills/ziomek-change-gate", "activation target mismatch")
@@ -928,6 +1098,7 @@ def validate_registry_relations(registry: dict[str, Any]) -> None:
     require(tuple(skill["allowed_actions"]) == EXPECTED_ALLOWED_ACTIONS, "candidate allowed_actions boundary mismatch")
     require(tuple(skill["forbidden_actions"]) == EXPECTED_FORBIDDEN_ACTIONS, "candidate forbidden_actions boundary mismatch")
     require(tuple(skill["owned_paths"]) == OWNED_PATHS, "registry exact owned path list mismatch")
+    require(skill["candidate_effect_boundary"] == EXPECTED_CANDIDATE_EFFECT_BOUNDARY, "registry candidate effect-boundary mismatch")
     for relative in OWNED_PATHS:
         path = ROOT / relative
         require(path.is_file() and not path.is_symlink(), f"owned path must be a regular non-symlink file: {relative}")
@@ -939,7 +1110,7 @@ def validate_registry_relations(registry: dict[str, Any]) -> None:
     validate_candidate_artifact_pins(registry)
     rollback = skill["rollback"]
     require(rollback["policy"] == "REVERT_ANNOTATED_LOCAL_TAG_COMMIT", "rollback policy mismatch")
-    require(rollback["anchor_tag"] == "ziomek-change-gate-remediation3-staged-20260716T152915Z", "rollback tag mismatch")
+    require(rollback["anchor_tag"] == "ziomek-change-gate-remediation4-staged-20260716T173743Z", "rollback tag mismatch")
     require(rollback["live_action_required"] is False, "rollback must remain local-only")
     boundary = skill["threat_boundary"]
     require(boundary["staged_outside_discovery"] is True, "staged discovery boundary mismatch")
@@ -949,7 +1120,13 @@ def validate_registry_relations(registry: dict[str, Any]) -> None:
     require(boundary["product_runtime_consumer"] is False, "product runtime consumer must remain false")
 
 
-def validate_result_relations(document: dict[str, Any], where: str) -> None:
+def validate_result_relations(
+    document: dict[str, Any],
+    where: str,
+    registry: dict[str, Any] | None = None,
+    skill_id: str = CANONICAL_SKILL_ID,
+    artifact_root: Path = ROOT,
+) -> None:
     result = document["ziomek_change_gate"]
     validate_authority(result["authority"], f"{where}.authority")
     boundary = result["effect_boundary"]
@@ -968,9 +1145,9 @@ def validate_result_relations(document: dict[str, Any], where: str) -> None:
     require(completeness["unknown"] == counts["UNKNOWN"], f"{where}: unknown count mismatch")
     require(completeness["total"] == completeness["covered"] + completeness["not_applicable"] + completeness["unknown"], f"{where}: completeness sum mismatch")
 
-    blocker_codes = derive_blocker_codes(result)
+    blocker_codes = derive_blocker_codes(result, registry, skill_id, artifact_root)
     require(result["blocker_codes"] == blocker_codes, f"{where}: blocker_codes must exactly equal the centralized fail-closed table: expected {blocker_codes}")
-    disposition = derive_disposition(result, blocker_codes)
+    disposition = derive_disposition(result, blocker_codes, registry, skill_id, artifact_root)
     require(result["disposition"] == disposition, f"{where}: disposition must be derived from blocker_codes")
     reasons = result["hold_reasons"]
     require((disposition == "HOLD") == bool(reasons), f"{where}: HOLD and hold_reasons must be equivalent")
@@ -1007,7 +1184,13 @@ def validate_result_relations(document: dict[str, Any], where: str) -> None:
     require(result["next_required"], f"{where}: next_required must be nonempty")
 
 
-def validate_cases_relations(corpus: dict[str, Any], result_schema: dict[str, Any]) -> None:
+def validate_cases_relations(
+    corpus: dict[str, Any],
+    result_schema: dict[str, Any],
+    registry: dict[str, Any] | None = None,
+    skill_id: str = CANONICAL_SKILL_ID,
+    artifact_root: Path = ROOT,
+) -> None:
     cases = corpus["cases"]
     ids = [case["id"] for case in cases]
     require(len(ids) == len(set(ids)), "case ids must be unique")
@@ -1016,7 +1199,7 @@ def validate_cases_relations(corpus: dict[str, Any], result_schema: dict[str, An
         case_id = case["id"]
         result_doc = case["expected_result"]
         validate_schema_instance(result_doc, result_schema, RESULT_SCHEMA, f"{case_id}.expected_result")
-        validate_result_relations(result_doc, case_id)
+        validate_result_relations(result_doc, case_id, registry, skill_id, artifact_root)
         result = result_doc["ziomek_change_gate"]
         mode, role, ack = EXPECTED_CASES[case_id]
         require((result["mode"], result["role"]["status"], result["ack"]["status"]) == (mode, role, ack), f"{case_id}: literal non-disposition relation mismatch")
@@ -1142,9 +1325,89 @@ def validate_multi_entry_registry_probe(registry: dict[str, Any], schema: dict[s
     validate_registry_object(probe, schema)
 
 
-def validate_corpus_object(corpus: dict[str, Any], corpus_schema: dict[str, Any], result_schema: dict[str, Any]) -> None:
+def validate_corpus_object(
+    corpus: dict[str, Any],
+    corpus_schema: dict[str, Any],
+    result_schema: dict[str, Any],
+    registry: dict[str, Any] | None = None,
+    skill_id: str = CANONICAL_SKILL_ID,
+    artifact_root: Path = ROOT,
+) -> None:
     validate_schema_instance(corpus, corpus_schema, CORPUS_SCHEMA, "corpus")
-    validate_cases_relations(corpus, result_schema)
+    validate_cases_relations(corpus, result_schema, registry, skill_id, artifact_root)
+
+
+def run_candidate_boundary_filesystem_probes(
+    registry: dict[str, Any],
+    corpus: dict[str, Any],
+    result_schema: dict[str, Any],
+) -> list[str]:
+    killed: list[str] = []
+    canonical_result = next(
+        case for case in corpus["cases"] if case["id"] == "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK"
+    )["expected_result"]["ziomek_change_gate"]
+    validate_candidate_write_set(canonical_result["effect_boundary"]["write_set"], registry)
+
+    with tempfile.TemporaryDirectory(prefix="zcg-candidate-boundary-") as temporary:
+        artifact_root = Path(temporary)
+        probe_registry = copy.deepcopy(registry)
+        future = make_future_skill(canonical_registry_skill(probe_registry))
+        probe_registry["skills"].append(future)
+        future_path = future["pin"]["candidate_artifacts"]["files"][0]["path"]
+        future_artifact = artifact_root / future_path
+        future_artifact.parent.mkdir(parents=True)
+        future_artifact.write_text("synthetic future candidate\n", encoding="utf-8")
+        future["pin"]["candidate_artifacts"]["files"][0]["sha256"] = hashlib.sha256(future_artifact.read_bytes()).hexdigest()
+
+        future_document = copy.deepcopy(
+            next(
+                case for case in corpus["cases"] if case["id"] == "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK"
+            )["expected_result"]
+        )
+        future_document["ziomek_change_gate"]["effect_boundary"]["write_set"] = [future_path]
+        validate_schema_instance(future_document, result_schema, RESULT_SCHEMA, "future-skill-positive")
+        validate_result_relations(
+            future_document,
+            "future-skill-positive",
+            probe_registry,
+            "ZIOMEK_FUTURE_SKILL",
+            artifact_root,
+        )
+        require(future_document["ziomek_change_gate"]["disposition"] == "READY_FOR_REVIEW", "second skill positive must remain READY_FOR_REVIEW")
+        killed.append(
+            expect_failure(
+                lambda: validate_result_relations(
+                    future_document,
+                    "future-skill-cross-root",
+                    probe_registry,
+                    CANONICAL_SKILL_ID,
+                    artifact_root,
+                ),
+                "candidate-write-set-cross-skill-root",
+            )
+        )
+
+        symlink_target = artifact_root / "synthetic-target.txt"
+        symlink_target.write_text("target\n", encoding="utf-8")
+        future_artifact.unlink()
+        future_artifact.symlink_to(symlink_target)
+        killed.append(
+            expect_failure(
+                lambda: validate_candidate_write_set([future_path], probe_registry, "ZIOMEK_FUTURE_SKILL", artifact_root),
+                "candidate-write-set-symlink-artifact",
+            )
+        )
+
+        future_artifact.unlink()
+        future_artifact.mkdir()
+        killed.append(
+            expect_failure(
+                lambda: validate_candidate_write_set([future_path], probe_registry, "ZIOMEK_FUTURE_SKILL", artifact_root),
+                "candidate-write-set-nonregular-artifact",
+            )
+        )
+
+    return killed
 
 
 def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[str, Any], corpus: dict[str, Any], registry_schema: dict[str, Any], result_schema: dict[str, Any], corpus_schema: dict[str, Any]) -> list[str]:
@@ -1180,6 +1443,7 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
         blobs[relative] = blobs[relative] + b"\n"
         label = relative.rsplit("/", 1)[-1].replace(".", "-").lower()
         killed.append(expect_failure(lambda blobs=blobs: validate_candidate_artifact_pins(registry, blobs), f"candidate-artifact-byte-pin-{label}"))
+    killed.extend(run_candidate_boundary_filesystem_probes(registry, corpus, result_schema))
 
     killed.append(expect_failure(lambda: validate_navigation(reverse_bootstrap(navigation_text)), "bootstrap-reversed-all-tokens-retained"))
     broken_pointer = navigation_text.replace("(../../../../../docs/CODEMAP.md)", "(../../../../../docs/CODEMAP.broken.md)", 1) + "\n<!-- docs/CODEMAP.md -->\n"
@@ -1299,6 +1563,12 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
     mutated = copy.deepcopy(registry)
     mutated["skills"][0]["policy_contract"]["rules"][0]["relation"] = "MAY_FOLLOW"
     killed.append(expect_failure(lambda: validate_registry_object(mutated, registry_schema), "registry-structured-policy-drift"))
+    mutated = copy.deepcopy(registry)
+    mutated["skills"][0]["candidate_effect_boundary"]["allowed_paths_source"] = "owned_paths"
+    killed.append(expect_failure(lambda: validate_registry_object(mutated, registry_schema), "registry-candidate-boundary-source-drift"))
+    mutated = copy.deepcopy(registry)
+    mutated["skills"][0]["pin"]["candidate_artifacts"]["files"][0]["path"] = "docs/codex-skills/candidates/ziomek-change-gate-sibling/SKILL.md"
+    killed.append(expect_failure(lambda: validate_registry_object(mutated, registry_schema), "registry-candidate-pin-sibling-prefix"))
 
     sample_result = copy.deepcopy(corpus["cases"][7]["expected_result"])
     del sample_result["ziomek_change_gate"]["summary"]
@@ -1347,6 +1617,17 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
     mutated = copy.deepcopy(corpus)
     mutated["cases"][0]["prompt"] += " ROLE_ATTESTATION=ATTESTED_ACTIVE_MAIN"
     killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "prompt-role-fact-duplicate"))
+    mutated = copy.deepcopy(corpus)
+    mutated["cases"][0]["prompt"] = mutated["cases"][0]["prompt"].split(". ", 1)[1]
+    killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "prompt-role-fact-removed"))
+    mutated = copy.deepcopy(corpus)
+    active_main_prompt = next(case for case in mutated["cases"] if case["id"] == "ZCG-09-CURRENT-ACK-ACTIVE-MAIN")
+    active_main_prompt["prompt"] = active_main_prompt["prompt"].replace(
+        "ROLE_ATTESTATION=ATTESTED_ACTIVE_MAIN",
+        "ROLE_ATTESTATION=ATTESTED_NON_MAIN",
+        1,
+    )
+    killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "prompt-role-fact-active-main-downgrade"))
 
     blocker_mutations: tuple[tuple[str, Callable[[dict[str, Any]], None]], ...] = (
         ("test-failed", lambda result: result["tests"][0].update({"status": "FAIL"})),
@@ -1434,6 +1715,74 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
     candidate_result["effect_boundary"].update({"write_set": ["product/decision.py"], "mutation_surface": ["PRODUCT_CODE"], "read_only_no_effect": False})
     killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "candidate-ready-product-surface-forbidden"))
 
+    candidate_write_set_attacks = (
+        ("product-selection-mislabeled-staged", "dispatch_v2/core/selection.py"),
+        ("flags-mislabeled-staged", "flags.json"),
+        ("sibling-prefix", "docs/codex-skills/candidates/ziomek-change-gate-sibling/SKILL.md"),
+        ("case-alias", "docs/codex-skills/candidates/ziomek-change-gate/skill.md"),
+        ("unicode-alias", "docs/codex-skills/candidates/ziomek-change-gate/SKİLL.md"),
+        ("absolute", "/docs/codex-skills/candidates/ziomek-change-gate/SKILL.md"),
+        ("traversal", "docs/codex-skills/candidates/ziomek-change-gate/references/../SKILL.md"),
+        ("backslash", "docs\\codex-skills\\candidates\\ziomek-change-gate\\SKILL.md"),
+        ("empty-path", ""),
+        ("empty-component", "docs/codex-skills/candidates/ziomek-change-gate//SKILL.md"),
+        ("dot-component", "docs/codex-skills/candidates/ziomek-change-gate/./SKILL.md"),
+        ("shared-governance", "docs/codex-skills/ZIOMEK_SKILLS_REGISTRY.json"),
+    )
+    for label, attack_path in candidate_write_set_attacks:
+        mutated = copy.deepcopy(corpus)
+        candidate_result = next(
+            case for case in mutated["cases"] if case["id"] == "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK"
+        )["expected_result"]["ziomek_change_gate"]
+        candidate_result["effect_boundary"]["write_set"] = [attack_path]
+        killed.append(
+            expect_failure(
+                lambda mutated=mutated: validate_corpus_object(mutated, corpus_schema, result_schema, registry),
+                f"candidate-write-set-{label}",
+            )
+        )
+
+    for field, replacement in (
+        ("write_set", []),
+        ("mutation_surface", []),
+        ("mutation_surface", ["STAGED_ARTIFACTS", "PRODUCT_CODE"]),
+        ("read_only_no_effect", True),
+    ):
+        mutated = copy.deepcopy(corpus)
+        candidate_result = next(
+            case for case in mutated["cases"] if case["id"] == "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK"
+        )["expected_result"]["ziomek_change_gate"]
+        candidate_result["effect_boundary"][field] = replacement
+        label_value = canonical_json(replacement).replace('"', "").replace("[", "").replace("]", "").replace(",", "-").replace(" ", "") or "empty"
+        killed.append(
+            expect_failure(
+                lambda mutated=mutated: validate_corpus_object(mutated, corpus_schema, result_schema, registry),
+                f"candidate-effect-relation-{field.replace('_', '-')}-{label_value.lower()}",
+            )
+        )
+
+    hold_relation_attacks = (
+        ("write-without-surface", ["product/decision.py"], [], False),
+        ("surface-with-read-only", [], ["PRODUCT_CODE"], True),
+        ("empty-with-effect-claim", [], [], False),
+    )
+    for label, write_set, mutation_surface, read_only_no_effect in hold_relation_attacks:
+        mutated = copy.deepcopy(corpus)
+        hold_result = next(
+            case for case in mutated["cases"] if case["id"] == "ZCG-04-ONE-SIDED-TWIN"
+        )["expected_result"]["ziomek_change_gate"]
+        hold_result["effect_boundary"] = {
+            "write_set": write_set,
+            "mutation_surface": mutation_surface,
+            "read_only_no_effect": read_only_no_effect,
+        }
+        killed.append(
+            expect_failure(
+                lambda mutated=mutated: validate_corpus_object(mutated, corpus_schema, result_schema, registry),
+                f"hold-effect-relation-{label}",
+            )
+        )
+
     mutated = copy.deepcopy(corpus)
     candidate_result = next(case for case in mutated["cases"] if case["id"] == "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK")["expected_result"]["ziomek_change_gate"]
     candidate_result["blocker_codes"] = ["TEST_FAILED"]
@@ -1490,6 +1839,27 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
     killed.append(expect_failure(lambda: loads_strict('{"purpose":"a","purpose":"b"}', "duplicate-registry"), "duplicate-registry-key"))
     killed.append(expect_failure(lambda: loads_strict('{"schema_version":"1.0","schema_version":"2.0"}', "duplicate-result"), "duplicate-result-key"))
     killed.append(expect_failure(lambda: loads_strict('{"id":"A","id":"B"}', "duplicate-case"), "duplicate-case-key"))
+    for label in (
+        "registry",
+        "cases",
+        "registry-schema",
+        "result-schema",
+        "case-schema",
+        "corpus-schema",
+    ):
+        killed.append(
+            expect_failure(
+                lambda label=label: loads_strict('{"nonfinite":NaN}', label),
+                f"nonfinite-json-{label}",
+            )
+        )
+        for constant, suffix in (("Infinity", "infinity"), ("-Infinity", "negative-infinity")):
+            killed.append(
+                expect_failure(
+                    lambda label=label, constant=constant: loads_strict('{"nonfinite":' + constant + '}', label),
+                    f"nonfinite-json-{label}-{suffix}",
+                )
+            )
     return killed
 
 
@@ -1510,9 +1880,11 @@ def main() -> int:
         validate_schema_meta_contract_probes()
         require("ziomek-change-gate-result-v1.schema.json" in contract_text, "gate contract does not route to result schema")
         require("CURRENT_EXACT_ACK" in contract_text and "AUTHOR_STATIC_ORACLE" in contract_text, "gate contract semantic pins missing")
+        require("pin.candidate_artifacts.files[].path" in contract_text, "gate contract candidate write-set source missing")
+        require("CANDIDATE_WRITE_SET_OUTSIDE_REGISTRY_BOUNDARY" in contract_text, "gate contract candidate boundary blocker missing")
         validate_registry_object(registry, schemas[REGISTRY_SCHEMA.resolve()])
         validate_multi_entry_registry_probe(registry, schemas[REGISTRY_SCHEMA.resolve()])
-        validate_corpus_object(corpus, schemas[CORPUS_SCHEMA.resolve()], schemas[RESULT_SCHEMA.resolve()])
+        validate_corpus_object(corpus, schemas[CORPUS_SCHEMA.resolve()], schemas[RESULT_SCHEMA.resolve()], registry)
         killed = run_mutation_matrix(
             skill_text,
             navigation_text,
@@ -1523,6 +1895,13 @@ def main() -> int:
             schemas[CORPUS_SCHEMA.resolve()],
         )
         require(len(killed) == len(set(killed)), "mutation labels must be unique")
+        killed_set = set(killed)
+        require(CYCLE4_MUTATION_LABELS.issubset(killed_set), "cycle-4 mutation label inventory incomplete")
+        legacy_labels = killed_set - CYCLE4_MUTATION_LABELS
+        legacy_digest = hashlib.sha256(("\n".join(sorted(legacy_labels)) + "\n").encode("utf-8")).hexdigest()
+        require(len(legacy_labels) == LEGACY_MUTATION_LABELS_COUNT, "legacy mutation label count changed")
+        require(legacy_digest == LEGACY_MUTATION_LABELS_SHA256, "legacy mutation label identity changed")
+        require(len(killed) == LEGACY_MUTATION_LABELS_COUNT + len(CYCLE4_MUTATION_LABELS), "mutation inventory has undeclared labels")
     except (OSError, UnicodeError, ValidationError) as exc:
         print(json.dumps({"status": "validated_static_scope_error", "error": str(exc)}, ensure_ascii=False, sort_keys=True))
         return 1
@@ -1538,11 +1917,30 @@ def main() -> int:
                 "mutation_probes_killed_count": len(killed),
                 "mutation_probes_killed": killed,
                 "legacy_mutation_floor_preserved": len(killed) >= 104,
+                "legacy_mutation_labels_count": len(legacy_labels),
+                "legacy_mutation_labels_sha256": legacy_digest,
+                "cycle4_mutation_labels_count": len(CYCLE4_MUTATION_LABELS),
                 "registry_multi_entry_probe": True,
                 "schema_meta_contract_positive": True,
                 "schema_numeric_keywords_checked": list(NONNEGATIVE_INTEGER_SCHEMA_KEYWORDS + NUMBER_SCHEMA_KEYWORDS),
                 "ready_gate_tuple_matrix_complete": True,
                 "structural_effect_boundary_checked": True,
+                "candidate_write_set_semantics": "EXACT_CHANGED_CANDIDATE_RUNTIME_ARTIFACT_FILES",
+                "candidate_write_set_registry_bound": True,
+                "candidate_boundary_public_api_probes": [
+                    "canonical-own-root-positive",
+                    "product-selection-negative",
+                    "flags-negative",
+                    "sibling-prefix-negative",
+                    "unicode-case-negative",
+                    "path-syntax-negative",
+                    "shared-governance-negative",
+                    "second-skill-own-root-positive",
+                    "cross-skill-negative",
+                    "symlink-negative",
+                    "nonregular-negative",
+                    "relation-matrix",
+                ],
                 "ready_oracle_allowlists_closed": True,
                 "positive_ready_cases": [
                     "ZCG-07-CLEAN-READ-ONLY-EXPLANATION",

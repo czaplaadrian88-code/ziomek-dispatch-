@@ -6,7 +6,7 @@
     {
       "skill_id": "ZIOMEK_CHANGE_GATE",
       "name": "ziomek-change-gate",
-      "version": "0.4.0-remediation3-candidate",
+      "version": "0.5.0-remediation4-candidate",
       "scope": "Fail-closed preparation gate for Ziomek analysis, local implementation candidates and role-aware production handoff facts.",
       "owner": "ACTIVE_MAIN_GOVERNANCE_CHANNEL",
       "status": "STAGED_ONLY_REVIEW_REQUIRED",
@@ -129,6 +129,13 @@
             "relation": "IS_NOT",
             "object": "SCHEMA_NUMBER",
             "enforcement": "FAIL_CLOSED"
+          },
+          {
+            "code": "CANDIDATE_WRITE_SET_REGISTRY_BOUND",
+            "subject": "READY_STAGED_WRITE_SET",
+            "relation": "IS_EXACT_SUBSET_OF",
+            "object": "SAME_SKILL_PINNED_RUNTIME_ARTIFACTS",
+            "enforcement": "FAIL_CLOSED"
           }
         ]
       },
@@ -146,6 +153,15 @@
         "docs/codex-skills/evals/ziomek-change-gate/validate.py",
         "docs/codex-skills/reports/ZIOMEK_CHANGE_GATE_REMEDIATION_REPORT.md"
       ],
+      "candidate_effect_boundary": {
+        "write_set_semantics": "EXACT_CHANGED_CANDIDATE_RUNTIME_ARTIFACT_FILES",
+        "root_source": "staged_candidate_path",
+        "allowed_paths_source": "pin.candidate_artifacts.files[].path",
+        "shared_governance_paths_allowed": false,
+        "cross_skill_paths_allowed": false,
+        "path_comparison": "EXACT_BYTES_PLUS_NFKC_CASEFOLD_COLLISION_REJECTION",
+        "file_type_policy": "REGULAR_NON_SYMLINK_ONLY"
+      },
       "pin": {
         "policy": "EXACT_REVIEWED_COMMIT_AND_TREE",
         "moving_branch_allowed": false,
@@ -156,7 +172,7 @@
           "files": [
             {
               "path": "docs/codex-skills/candidates/ziomek-change-gate/SKILL.md",
-              "sha256": "b14b59ce16e200390e564b826f3945b201d995d633d09f31a716cabb48e5f09c"
+              "sha256": "7ac2f0502a8231926e826f27e81426a390d5fe60e53af64d0bd22e2915229991"
             },
             {
               "path": "docs/codex-skills/candidates/ziomek-change-gate/agents/openai.yaml",
@@ -168,7 +184,7 @@
             },
             {
               "path": "docs/codex-skills/candidates/ziomek-change-gate/references/gate-contract.md",
-              "sha256": "d88d3d0cda3b19ae442510c4ad0d6f1f03606759b5d89906ec386c0c3afdb869"
+              "sha256": "6ef486ad8772739ff930be12537165aa579080300babcdbe3624579507d8dda1"
             }
           ]
         }
@@ -184,7 +200,7 @@
       },
       "rollback": {
         "policy": "REVERT_ANNOTATED_LOCAL_TAG_COMMIT",
-        "anchor_tag": "ziomek-change-gate-remediation3-staged-20260716T152915Z",
+        "anchor_tag": "ziomek-change-gate-remediation4-staged-20260716T173743Z",
         "scope": [
           "docs/codex-skills/candidates/ziomek-change-gate",
           "docs/codex-skills/ZIOMEK_SKILLS_REGISTRY.json",

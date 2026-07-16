@@ -31,6 +31,15 @@ kandydat lokalny wymaga niepustego staged write-setu, dokładnie powierzchni
 `N-D:`, nie może zastąpić tych faktów ani zamaskować produktu, runtime, flag,
 danych, usług, tmuxa, lease'u, discovery lub semantyki biznesowej.
 
+Dla READY `STAGED_ARTIFACTS` `write_set` ma jedną semantykę: są to exact
+zmieniane pliki runtime pakietu dokładnie tego kandydata. Każda ścieżka musi
+być ściśle względna wobec repo, regularna, niesymlinkowana, pod exact
+`staged_candidate_path` tego samego wpisu registry i należeć bajt-w-bajt do
+`pin.candidate_artifacts.files[].path`. Porównanie odrzuca `..`, ścieżki
+absolutne, backslash, puste i kropkowe segmenty, aliasy Unicode/case, sibling
+prefix oraz root innego skilla. Szerokie `owned_paths` nie są allowlistą tego
+pola: współdzielone registry, schema, eval i report pozostają poza granicą.
+
 ## Brief i kompletność
 
 `sprint_brief` ma dokładnie pięć merytorycznych treści w prostym polskim:
@@ -78,6 +87,9 @@ serializer/consumer boundary.
   wymaga `independent_review=PENDING` oraz targetu `INDEPENDENT_REVIEWER`;
   `READY_FOR_IMPLEMENTATION` wymaga `implementation=READY` i targetu
   `LOCAL_IMPLEMENTER`.
+- READY z poprawną etykietą `STAGED_ARTIFACTS`, lecz choć jednym plikiem spoza
+  registry-bound allowlisty dokładnie tego skilla, dostaje
+  `CANDIDATE_WRITE_SET_OUTSIDE_REGISTRY_BOUNDARY` i `HOLD`.
 - `ANALYSIS_ONLY` R0 może użyć baseline/mutation/rollback `N-D` wyłącznie dla
   kompletnej, jawnej granicy bez zapisu: testy `PASS`, brak luk i unknown,
   production/activation `N-D` oraz wszystkie dowody N-D zapisane jawnie.

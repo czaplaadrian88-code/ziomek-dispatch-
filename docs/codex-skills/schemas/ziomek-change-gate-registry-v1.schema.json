@@ -45,6 +45,7 @@
           "authority",
           "policy_contract",
           "owned_paths",
+          "candidate_effect_boundary",
           "pin",
           "update",
           "rollback",
@@ -286,6 +287,42 @@
               "type": "string",
               "minLength": 1,
               "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+            }
+          },
+          "candidate_effect_boundary": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "write_set_semantics",
+              "root_source",
+              "allowed_paths_source",
+              "shared_governance_paths_allowed",
+              "cross_skill_paths_allowed",
+              "path_comparison",
+              "file_type_policy"
+            ],
+            "properties": {
+              "write_set_semantics": {
+                "const": "EXACT_CHANGED_CANDIDATE_RUNTIME_ARTIFACT_FILES"
+              },
+              "root_source": {
+                "const": "staged_candidate_path"
+              },
+              "allowed_paths_source": {
+                "const": "pin.candidate_artifacts.files[].path"
+              },
+              "shared_governance_paths_allowed": {
+                "const": false
+              },
+              "cross_skill_paths_allowed": {
+                "const": false
+              },
+              "path_comparison": {
+                "const": "EXACT_BYTES_PLUS_NFKC_CASEFOLD_COLLISION_REJECTION"
+              },
+              "file_type_policy": {
+                "const": "REGULAR_NON_SYMLINK_ONLY"
+              }
             }
           },
           "pin": {

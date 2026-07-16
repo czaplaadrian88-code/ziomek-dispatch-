@@ -31,6 +31,14 @@ Zapisz maszynowo `effect_boundary.write_set`,
 Pozytywny `ANALYSIS_ONLY` wymaga właśnie takiej pustej granicy; proza `N-D:`
 nie dowodzi braku zapisu, mutacji, efektu produktu ani operacji live.
 
+READY `STAGED_ARTIFACTS` dopuszcza w `write_set` wyłącznie zmieniane pliki
+runtime pakietu dokładnie tego kandydata: regularne, niesymlinkowane, pod jego
+`staged_candidate_path` i będące exact podzbiorem
+`pin.candidate_artifacts.files[].path` z tego samego wpisu registry. Szerokie
+`owned_paths`, współdzielone registry/schema/eval/report, ścieżki produktu i
+root innego skilla są zabronione nawet wtedy, gdy etykieta powierzchni nadal
+brzmi `STAGED_ARTIFACTS`.
+
 Non-MAIN nie kontaktuje właściciela bezpośrednio; przekazuje pytanie lub wynik
 aktywnemu MAIN-owi.
 

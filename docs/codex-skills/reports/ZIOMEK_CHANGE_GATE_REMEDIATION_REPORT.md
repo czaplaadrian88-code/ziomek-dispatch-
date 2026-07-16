@@ -1,212 +1,180 @@
-# Ziomek Change Gate — remediation cycle 3
+# Ziomek Change Gate — remediation cycle 4
 
-## Werdykt autora i granica authority
+Data autora: 2026-07-16 UTC
 
-Status autorski: `READY_FOR_FRESH_INDEPENDENT_REVIEW`.
+Status: `STAGED_ONLY_REVIEW_REQUIRED`
 
-To jest wyłącznie `AUTHOR_ONLY_STATIC_SELF_CHECK_NON_INDEPENDENT`. Pakiet
-pozostaje `STAGED_ONLY_REVIEW_REQUIRED`, poza discovery Codex. Nie został
-zainstalowany, aktywowany, scalony ani wypchnięty. Żadna dyspozycja corpusu,
-commit ani lokalny tag nie nadaje execution authority.
+Wynik autora: `READY_FOR_SUPERVISOR_FALSE_GREEN_AUDIT`
+Klasa dowodu: `AUTHOR_ONLY_STATIC_SELF_CHECK_NON_INDEPENDENT`
 
-- rola: `INTERNAL_ONLY REMEDIATION_AUTHOR`, `ATTESTED_NON_MAIN`;
-- owner channel: brak; routing wyłącznie do aktywnego MAIN-a/supervisora;
-- `risk_class=R4`, `model_tier=sol`, exact model `gpt-5.6-sol`, `effort=max`;
-- lokalna dostępność modelu i effort została potwierdzona w lokalnym katalogu
-  Codex; nie użyto fallbacku ani sieci;
-- network, production, deploy, restart, flags, dane, migracja, lease, tmux,
-  owner ACK i business semantics: wszystkie `false`.
+Ten raport nie jest niezależnym review, zgodą na aktywację ani authority live.
+Kandydat pozostaje poza ścieżką discovery, bez instalacji, merge, push, deploy,
+restartu, flipa, migracji, danych runtime, lease'u i mutacji tmux.
 
-Product tests, runtime, flag fingerprint i entropy dashboard mają `N-D`, nie
-`PASS`: staged docs/evals/schemas nie mają product runtime consumera.
+## Wejście i odrzucony baseline
 
-## Przypięte wejście
+- model tier: `sol`;
+- exact model: `gpt-5.6-sol`, lokalnie atestowany;
+- effort: `max`;
+- powód: R4 governance i false-green centralnej dyspozycji;
+- branch: `codex/ziomek-skill-gate-remediation4-20260716T173743Z`;
+- worktree: `/root/ziomek_skill_gate_remediation4_20260716T173743Z/dispatch_v2`;
+- input commit: `0bcf1b7711a1e0e5e761c77a6fab5d668e005cfa`;
+- input tree: `7f413ec1c858d8c7862aed35919e9b6f33344f68`;
+- original base: `6b4b040032d54db5be7643648676d835e0db9146`;
+- poprzedni sealed tag zachowany bez zmian:
+  `ziomek-change-gate-remediation3-staged-20260716T152915Z`.
 
-| Fakt | Wartość |
-|---|---|
-| Task | `/tmp/ZIOMEK_SKILL_GATE_REMEDIATION3_TASK_20260716T152915Z.md` |
-| Task SHA-256 | `55f8575fe43eabbfa951dbcd482c8cf1132e58d8d5a17b44eb075aa6f127a7e3` |
-| Przeczytane linie | `300/300` |
-| Branch | `codex/ziomek-skill-gate-remediation3-20260716T152915Z` |
-| Worktree | `/root/ziomek_skill_gate_remediation3_20260716T152915Z/dispatch_v2` |
-| Input commit | `a83ba55f463f7b38c5d4643d81e875d64d9f7444` |
-| Input tree | `76b36d9c23cbefbf21e18bf81379b887d1542e58` |
-| Original base | `6b4b040032d54db5be7643648676d835e0db9146` |
-| Output commit/tree | `UNPINNED_UNTIL_FRESH_INDEPENDENT_REVIEW` |
-| Rollback tag name | `ziomek-change-gate-remediation3-staged-20260716T152915Z` |
+Cycle 3 był false-green. Publiczna mutacja case
+`ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK` zachowywała
+`mutation_surface=[STAGED_ARTIFACTS]`, ale ustawiała
+`write_set=[dispatch_v2/core/selection.py]`. Baseline `validate_corpus_object()`
+zwrócił rc=0 i `SURVIVED_PRODUCT_PATH_MISLABELED_STAGED_ARTIFACTS`.
 
-`candidate_commit` i `candidate_tree` pozostają celowo nieself-referential.
-Exact output commit/tree/tag object/peel należy zapisać w zapieczętowanym
-handoffie po commicie, nie w drzewie tego samego commitu.
+Root cause był relacyjny, nie składniowy:
 
-## Dowód, że problem nadal istniał
+1. `validate_result_relations()` sprawdzał tylko bezpieczny zapis i unikalność
+   ścieżek;
+2. `candidate_effect_boundary_is_safe()` ufał etykiecie
+   `STAGED_ARTIFACTS`, niepustemu `write_set` i `read_only_no_effect=false`;
+3. validator nie wiązał każdej ścieżki z rootem oraz artefaktami dokładnie tego
+   wpisu registry;
+4. stara mutacja jednocześnie zmieniała surface na `PRODUCT_CODE`, więc nie
+   testowała kłamliwej etykiety.
 
-Na niezmienionym input HEAD official quick validator i custom validator były
-zielone (`104/104 KILLED`), lecz pięć publicznych mutacji nadal przechodziło:
+## Jedna semantyka `write_set`
 
-1. `ANALYSIS_ONLY` z `production_operation=HOLD`;
-2. `ANALYSIS_ONLY` z `activation=HOLD`;
-3. pozytywna lane z `oracle=N-D`;
-4. proza `N-D:` maskująca zapis do `flags.json` i zmianę runtime;
-5. skoordynowane `minimum=false`, `minItems=false`, `total=0`, `entries=[]`.
+Dla READY z `mutation_surface=[STAGED_ARTIFACTS]`, `write_set` oznacza wyłącznie
+exact pliki runtime pakietu skilla faktycznie objęte kandydatem. Każdy plik:
 
-To potwierdziło cztery root causes P1-A..D w relacjach walidatora. Zielony
-baseline cycle 2 był false-green, a nie dowodem braku problemu.
+- jest bezpieczną ścieżką względną bez absolutu, `..`, backslasha, pustego lub
+  kropkowego segmentu;
+- leży komponentowo pod `staged_candidate_path` tego samego wpisu registry;
+- jest exact elementem `pin.candidate_artifacts.files[].path` tego wpisu;
+- jest regularnym, niesymlinkowanym i niewykonywalnym plikiem, a każdy ancestor
+  jest realnym katalogiem;
+- jest porównywany exact, przy osobnym odrzuceniu kolizji NFKC/casefold.
 
-## Root cause, naprawa i oracle
+`owned_paths` pozostaje szerszym zakresem autorstwa governance i nie jest
+allowlistą wyniku. Dlatego wspólne registry, schema, eval i report, produkt,
+`flags.json`, sibling-prefix oraz root innego skilla są poza candidate boundary.
 
-| Finding | Root cause | Naprawa u źródła | Publiczny negatywny oracle | Wynik |
-|---|---|---|---|---|
-| P1-A | READY sprawdzało tylko część gates | `READY_LANE_SPECS` wiąże exact tuple wszystkich czterech gates z jedną disposition | pełna macierz każdej alternatywnej wartości gates dla ZCG-07/08/10, w tym production HOLD i activation HOLD | KILLED |
-| P1-B | `startswith("N-D:")` udawało granicę braku efektów | zamknięty `effect_boundary` z exact `write_set`, enum `mutation_surface` i boolean `read_only_no_effect`; READY analiz wymaga pustych list i `true` | product write, mutation surface, flags/runtime, erased/contradictory no-effect oraz proza N-D z prawdziwymi faktami strukturalnymi | KILLED |
-| P1-C | brak closed oracle allowlist dla dodatnich lane'ów | każda dodatnia lane dopuszcza wyłącznie `AUTHOR_STATIC_ORACLE`; independent review jest osobnym procesem | N-D, MISSING, SELF_CONFIRMING i drift do INDEPENDENT na każdej z trzech lane'ów | KILLED |
-| P1-D | Python przyjmował bool jako int w numeric schema keywords | pre-corpus meta-kontrakt typuje wszystkie wspierane keywords; bool jest wykluczony, unknown validation keyword odróżniony od jawnego `x-annotation-*` | 11 bool-as-number probes oraz skoordynowany schema+case attack | KILLED przed disposition |
-
-Po naprawie niezależny od deklarowanej disposition repro pięciu wejściowych
-ataków daje dokładnie `5/5 KILLED`.
-
-## Zamknięte dodatnie lane'y
-
-Kolejność tuple:
-`independent_review/implementation/production_operation/activation`.
-
-| Case/lane | Exact tuple | Oracle | Effect boundary | Disposition |
-|---|---|---|---|---|
-| ZCG-07 analysis | `NOT_REQUIRED/READY/N-D/N-D` | `AUTHOR_STATIC_ORACLE` | empty/empty/`true` | `READY_FOR_IMPLEMENTATION` |
-| ZCG-08 author candidate | `PENDING/READY/N-D/REVIEW_REQUIRED` | `AUTHOR_STATIC_ORACLE` | staged write-set/`STAGED_ARTIFACTS`/`false` | `READY_FOR_REVIEW` |
-| ZCG-10 local staged implementation | `NOT_REQUIRED/READY/N-D/REVIEW_REQUIRED` | `AUTHOR_STATIC_ORACLE` | staged write-set/`STAGED_ARTIFACTS`/`false` | `READY_FOR_IMPLEMENTATION` |
-
-Te trzy wyniki pozostają pozytywne wyłącznie w lokalnej granicy. Wszystkie
-pola `authority` są `false`; activation i live nadal są zabronione.
+Registry opisuje ten kontrakt strukturalnie przez
+`candidate_effect_boundary`, a `validate_candidate_write_set()` konsumuje root
+i exact allowlistę z tego samego wpisu. Poprawna etykieta z niedozwoloną ścieżką
+dodaje centralny blocker
+`CANDIDATE_WRITE_SET_OUTSIDE_REGISTRY_BOUNDARY`, co daje `HOLD`.
 
 ## Mapa kompletności
 
 | miejsce | rola | writer/consumer | dotknięte TAK/N-D | powód | test |
 |---|---|---|---|---|---|
-| result schema | kontrakt wyniku | validator + 12 wyników | TAK | zamknięte effect facts i nowe blockery | schema + relacje |
-| case/corpus schemas | kontrakt corpusu | cases + `$ref` resolver | TAK | exact jeden output i exact 12 cases | positive + mutations |
-| registry schema | kontrakt rejestru | registry validator | TAK | pełna meta-kontrola bez zmiany publicznego kształtu | schema positive/numeric attacks |
-| wszystkie 12 expected results | fixtures | central disposition | TAK | każdy ma strukturalny effect boundary | 12/12 green |
-| centralized blockers/disposition | fail-closed oracle | wszystkie lane'y | TAK | brak deklaratywnego READY | blocker mutations |
-| lane tuples | readiness classifier | ZCG-07/08/10 | TAK | exact cztery gates | pełna enum matrix |
-| structural effect boundary | no-effect/write/live facts | wszystkie wyniki | TAK | proza nie jest źródłem prawdy | write/mutation/no-effect attacks |
-| oracle allowlists | evidence classifier | trzy dodatnie lane'y | TAK | closed status per lane | cztery drifty × trzy lane'y |
-| meta-schema validator | schema trust root | cztery schemas | TAK | bool nie jest liczbą | 11 keyword attacks + coordinated attack |
-| author mutation matrix | negatywny oracle | custom validator | TAK | zachowanie 104 i nowe P1-A..D | 163/163 KILLED |
-| positive cases | positive oracle | central classifier | TAK | zachować brak false-negative | ZCG-07/08/10 PASS |
-| candidate SKILL | human routing contract | przyszły użytkownik | TAK | opis structural facts, tuples i oracle | quick validator + byte pin |
-| `openai.yaml` | explicit trigger | Codex loader | N-D | semantyka i bajty bez zmian | exact pin; implicit false raz |
-| canonical navigation | bootstrap | sesja używająca skilla | N-D | kolejność bez zmian | istniejąca pełna mutation matrix |
-| gate contract | human/machine bridge | result author + reviewer | TAK | opis exact facts i lanes | semantic pins + byte pin |
-| registry pins/rollback | staged provenance | reviewer + rollback | TAK | nowe SHA i tag cycle 3 | exact hash/tag checks |
-| report | trwały dowód autora | fresh reviewer | TAK | cycle 3 i process HOLD | diff/review |
-| discovery/Git boundary | activation i rollback | loader + Git | TAK | staged poza discovery; local tag po commit | absence, mode, peel, pathset |
-| produkt/runtime/flags | system produkcyjny | usługi Ziomka | N-D | brak importu i product consumera | exact diff bez product paths |
+| `ZIOMEK_SKILLS_REGISTRY.json` | kanoniczny boundary/piny | autor, validator, reviewer | TAK | nowa strukturalna semantyka i tag rollback | schema, relations, multi-entry |
+| `candidates/.../SKILL.md` | kontrakt użytkowy | jawny invoker, reviewer | TAK | jawna definicja registry-bound write-set | official quick validator, byte pin |
+| `agents/openai.yaml` | metadata UI | przyszły loader | N-D | treść i implicit=false są poprawne | hash bez zmiany, exact policy |
+| `canonical-navigation.md` | bootstrap | skill, operator | N-D | luka nie dotyczy kolejności źródeł | hash bez zmiany, ordered bootstrap |
+| `gate-contract.md` | kontrakt wyniku | skill, validator, reviewer | TAK | semantics, path defense i blocker | literal pins, mutation matrix |
+| `cases.json` | 12 golden cases | validator | TAK | doprecyzowanie ZCG-08 i ZCG-10 | schema, relations, READY controls |
+| `validate.py` | publiczny static oracle | corpus, registry, reviewer | TAK | root cause leżał w brakującej relacji | public API replays, 207 mutations |
+| raport remediation | trwały audyt | supervisor | TAK | cycle 4 musi zastąpić VOID cycle 3 | reread, diff, source facts |
+| case schema | kształt case | strict validator | N-D | brak zmiany struktury case | meta-schema |
+| corpus schema | inventory | strict validator | N-D | nadal dokładnie 12 cases | min/max 12 |
+| registry schema | kontrakt registry | registry, validator | TAK | `candidate_effect_boundary` jest wymagane i zamknięte | strict schema, multi-entry |
+| result schema | blocker enum | result, validator | TAK | nowy jawny blocker relacji | strict schema, derived disposition |
+| product/runtime/flags/live | poza zakresem | procesy Ziomka | N-D | staged governance nie ma product consumera | exact pathset i brak importów produktu |
 
-## Exact repo pathsets
+## Implementacja i obrona
 
-Cycle 3 zmienia dziewięć ścieżek:
+- komponentowe containment odrzuca sibling-prefix zamiast ufać tekstowemu
+  `startswith`;
+- exact allowlista pochodzi z przypiętych artefaktów danego skilla, nie ze
+  współdzielonego authoring scope;
+- sprawdzany jest finalny plik i każdy ancestor, więc symlink oraz non-regular
+  artifact failują przed READY;
+- synthetic drugi wpis `ZIOMEK_FUTURE_SKILL` osiąga `READY_FOR_REVIEW` wyłącznie
+  dla własnego rootu; ten sam plik przypisany do `ZIOMEK_CHANGE_GATE` failuje;
+- `effect_boundary` wymaga zgodności list z `read_only_no_effect` także w
+  mutacjach READY i HOLD;
+- strict loader odrzuca duplicate keys oraz `NaN`, `Infinity` i `-Infinity`;
+- centralne blockers/disposition, exact lane tuples, oracle allowlists,
+  role-aware ACK i wszystkie `authority=false` pozostały źródłem prawdy.
 
-1. `docs/codex-skills/ZIOMEK_SKILLS_REGISTRY.json`
-2. `docs/codex-skills/candidates/ziomek-change-gate/SKILL.md`
-3. `docs/codex-skills/candidates/ziomek-change-gate/references/gate-contract.md`
-4. `docs/codex-skills/evals/ziomek-change-gate/cases.json`
-5. `docs/codex-skills/evals/ziomek-change-gate/validate.py`
-6. `docs/codex-skills/reports/ZIOMEK_CHANGE_GATE_REMEDIATION_REPORT.md`
-7. `docs/codex-skills/schemas/ziomek-change-gate-case-v1.schema.json`
-8. `docs/codex-skills/schemas/ziomek-change-gate-corpus-v1.schema.json`
-9. `docs/codex-skills/schemas/ziomek-change-gate-result-v1.schema.json`
+## Goldeny i wyniki autora
 
-Original base→final tag musi pozostać dokładnie w dozwolonym 12-path scope;
-dodatkowo obejmuje niezmienione w cycle 3, ale zmienione we wcześniejszych
-commitach: `agents/openai.yaml`, `references/canonical-navigation.md` i
-`ziomek-change-gate-registry-v1.schema.json`. Każda z 12 ścieżek ma być
-regularnym niesymlinkowym plikiem `0644`; zero product paths i executables.
+Baseline przed fixem:
 
-## Piny źródeł policy
+- official quick validator: rc=0;
+- custom validator: rc=0, 12 cases, 163/163 mutations KILLED;
+- public `selection.py` mislabeled staged: rc=0, SURVIVED — finding potwierdzony.
 
-| Źródło | SHA-256 |
-|---|---|
-| `SKILL.md` | `b14b59ce16e200390e564b826f3945b201d995d633d09f31a716cabb48e5f09c` |
-| `agents/openai.yaml` | `d791a50a4ffcb7d2def662405ae30fbb452682c5cd272f82081a2e1c84c5d901` |
-| `references/canonical-navigation.md` | `725d579b3a4a4614456f95db49df7adbccda5cd984ed96127ff5b1aa3bb4c5e6` |
-| `references/gate-contract.md` | `d88d3d0cda3b19ae442510c4ad0d6f1f03606759b5d89906ec386c0c3afdb869` |
+Po fixie:
 
-Zwykła mutacja treści bez aktualizacji pinu jest zabijana. Skoordynowana zmiana
-treści i pinu nie jest kryptograficznie niemożliwa: tworzy nowe bytes/tree i
-wymaga nowego fresh independent review exact commit/tree.
+- official quick validator: rc=0, `Skill is valid!`;
+- custom validator: rc=0, status `validated_static_scope`;
+- strict schemas: 4; strict JSON files: 6;
+- canonical cases: 12/12;
+- mutation matrix: 207/207 KILLED, 0 SURVIVED;
+- legacy inclusion: wszystkie 163 historyczne etykiety zachowane; 44 nowe
+  etykiety dają łącznie 207;
+- exact pin posortowanej listy legacy 163:
+  `0156c4559182e4186b53df92d8cd665fdb90f00769a15d2a4aaa98022cfa4a4b`;
+- oddzielny od mutation helpera replay publicznym `validate_corpus_object()`:
+  `dispatch_v2/core/selection.py` → KILLED z
+  `CANDIDATE_WRITE_SET_OUTSIDE_REGISTRY_BOUNDARY`;
+- oddzielny od mutation helpera replay publicznym `validate_corpus_object()`:
+  `flags.json` → KILLED z tym samym blockerem;
+- poprawny root bieżącego skilla → READY;
+- drugi niezależny skill/root → READY dla własnego artefaktu, cross-skill →
+  KILLED;
+- sibling, Unicode/case, absolute, traversal, backslash, empty/dot, shared
+  governance, symlink i non-regular → KILLED;
+- prompt-visible `ROLE_ATTESTATION`: dokładnie 1 w 12/12; removal, duplication i
+  downgrade → KILLED;
+- AST/import: tylko `__future__`, `copy`, `hashlib`, `json`, `math`, `pathlib`,
+  `re`, `stat`, `sys`, `tempfile`, `typing`, `unicodedata`; product imports 0;
+- isolated `python -m py_compile`: rc=0; dedykowany temp cache usunięty;
+- product pytest: N-D — staged-only, brak product path;
+- runtime/health/PID/NRestarts/effective flags: N-D — jawnie zabronione w tym
+  cyklu.
 
-## Walidacja autora
+Pozytywne cases:
 
-| Kontrola | Wynik |
-|---|---|
-| Official skill-creator quick validator | rc 0, `Skill is valid!` |
-| Custom offline validator | rc 0; 4 schemas; 6 strict JSON; 12 cases |
-| Mutation matrix | `163/163 KILLED`, `0 SURVIVED`; 104/104 starych etykiet zachowane, 0 brakujących |
-| Full positive gate matrix | 3/3 canonical PASS; wszystkie alternatywne wartości KILLED |
-| Oracle allowlists | 3 positives; N-D/MISSING/SELF_CONFIRMING/INDEPENDENT drifts KILLED |
-| Schema meta-contract | 4/4 positive; 11/11 bool keyword attacks KILLED |
-| Coordinated schema+case | `minimum=false`, `minItems=false`, zero completeness KILLED przed disposition |
-| Input false-green replay | 5/5 KILLED po naprawie |
-| AST/import | PASS; standard library only; 0 product imports |
-| Strict duplicate-key JSON | PASS dla registry, cases i 4 schemas |
-| `python -m py_compile` | PASS dla validatora, bez repo `__pycache__` |
-| `git diff --check` | PASS |
-| Discovery | repo/user/admin/system/plugin cache ABSENT |
-| Implicit invocation | dokładnie jeden `allow_implicit_invocation: false` |
+- ZCG-07 pozostaje bez zmian semantycznych: czysta analiza R0, empty boundary,
+  `READY_FOR_IMPLEMENTATION`;
+- ZCG-08 pozostaje `READY_FOR_REVIEW`; doprecyzowano, że jego dwa pliki są exact
+  podzbiorem pinów tego samego staged rootu;
+- ZCG-10 pozostaje `READY_FOR_IMPLEMENTATION`; jego jeden dokument reference
+  jest przypiętym artefaktem tego skilla, a solver nadal ma dowodowe N-D.
 
-Pełne finalne rc, modes, commit/tree/tag i handoff hash są zapisywane po
-commicie w prywatnym handoffie. Ten raport nie udaje finalnego Git seala.
+Source pins zmieniono tylko dla zmienionych bajtów candidate package:
 
-## Process HOLD poprzedniego review
+- `SKILL.md`: `7ac2f0502a8231926e826f27e81426a390d5fe60e53af64d0bd22e2915229991`;
+- `gate-contract.md`: `6ef486ad8772739ff930be12537165aa579080300babcdbe3624579507d8dda1`;
+- `openai.yaml`: bez zmiany,
+  `d791a50a4ffcb7d2def662405ae30fbb452682c5cd272f82081a2e1c84c5d901`;
+- `canonical-navigation.md`: bez zmiany,
+  `725d579b3a4a4614456f95db49df7adbccda5cd984ed96127ff5b1aa3bb4c5e6`.
 
-Cycle-2 candidate pozostaje odrzucony. Ustalenia review były użyte wyłącznie
-jako jawne diagnostyczne task input, nie jako pozytywne review ani immutable
-evidence. Nie modyfikowano dwóch zastanych artefaktów w `/tmp`.
+## Granice wydania i rollback
 
-| Stan | Blind | Review |
-|---|---|---|
-| pierwotny seal | `6085518f47ba8e85b4a6fb600d14602968644148f2457259f6010667c828ab93`, 5528 B, 0600 | `bd4816e79b1acdc92259f3bdf910e8854cd3116c7388e36497dc3279e0c3a60c`, 28649 B, 0600 |
-| po naruszeniu | `cfc567f665ab7a0dffe8953a3694da9f220ade249303d3efc1fcfa5a4385d9cd` | `19f57ccf163c8dac6b6cb656ded5dd74606e1a8959898699a578e9bef151200d` |
+Cycle 4 zmienia wyłącznie osiem ścieżek governance w zamkniętym 12-path scope.
+`openai.yaml`, navigation, case schema i corpus schema są dowodowym N-D. Pełny
+original-base-to-target pathset pozostaje ograniczony do tych samych 12
+kanonicznych ścieżek skill gate; nie ma ścieżki produktu.
 
-Procesowy status to `HOLD_REVIEW_INCOMPLETE`: zapieczętowany blind artifact
-został zmodyfikowany po queued follow-up, a drugie safety menu zakończyło
-review bez drugiego `Keep waiting`. Dlatego cycle 3 wymaga całkowicie świeżego,
-supervisor-controlled independent review exact final bytes.
+Plan rollbacku:
 
-Safety-menu truth bieżącej sesji autora:
+1. przed integracją supervisor może odrzucić wyłącznie nowy izolowany
+   worktree/branch i tag
+   `ziomek-change-gate-remediation4-staged-20260716T173743Z`;
+2. po hipotetycznej integracji wykonać jawny revert wyłącznie jednego top
+   commita cycle 4;
+3. zweryfikować powrót registry version, blocker enum, source pins i 12-path
+   tree do exact input;
+4. nie wykonywać restartu ani żadnej operacji live — rollback jest repo-only.
 
-- menu widziane/atestowane przez supervisora:
-  `PENDING_SUPERVISOR_ATTESTATION`;
-- wybory `Keep waiting` wykonane przez supervisora:
-  `PENDING_SUPERVISOR_ATTESTATION`;
-- drugie menu:
-  `PENDING_SUPERVISOR_ATTESTATION`.
-
-Autor nie zgaduje tych liczników. Ewentualne uzupełnienie należy zapisać w
-osobnym supervisor artifact, bez przepisywania seala autora lub handoffu.
-
-## Discovery, brak live i rollback
-
-Candidate nie istnieje w `.agents/skills`, `$HOME/.agents/skills`,
-`/etc/codex/skills`, user/system bundle ani plugin cache. Candidate tree nie ma
-symlinków ani executables. `allow_implicit_invocation: false` występuje
-dokładnie raz. `candidate_commit/tree` pozostają placeholderem do fresh review.
-
-Nie wykonano network, runtime/log access, product testów, deployu, restartu,
-flipa, migracji, zmiany danych, tmuxa, lease'u, merge ani push. Nie edytowano
-`ZIOMEK_BACKLOG.md`, repo memory, `todo_master.md`, `sprint_timeline.md` ani
-innych wspólnych handoffów.
-
-Rollback cycle 3:
-
-1. przed integracją supervisor może usunąć prywatny branch/worktree/tag po
-   potwierdzeniu braku integracji albo odtworzyć exact tag w nowym worktree;
-2. po integracji wykonać jawny `git revert` wyłącznie nowego top commitu cycle
-   3, bez cofania wcześniejszych commitów i bez live restartu;
-3. zweryfikować powrót dziewięciu cycle-3 paths do input tree, zachowanie
-   pozostałych trzech ścieżek kandydata oraz brak zmian produktu.
-
-Oczekiwany newest-first łańcuch pięciu commitów ponad original base to:
-`<OUTPUT_CYCLE3> → a83ba55 → c2dffdb → 6e55814 → 7daa5e6`, z base
-`6b4b040`. Exact wartości finalne należą do handoffu i Git peela.
+`candidate_commit` i `candidate_tree` celowo pozostają
+`UNPINNED_UNTIL_INDEPENDENT_REVIEW`, aby raport autora nie tworzył
+self-referential approval. Następny krok to świeży, supervisor-controlled
+false-green audit exact commita, tree i lokalnego annotated tagu. Dopiero osobna
+decyzja może rozważyć activation; ta sesja jej nie wykonuje.
