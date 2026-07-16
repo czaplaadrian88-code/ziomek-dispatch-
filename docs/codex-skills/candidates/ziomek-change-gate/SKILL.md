@@ -21,6 +21,9 @@ Przygotuj zmianę do właściwego następnego toru. Traktuj ten pakiet jako
 4. Zachowaj wszystkie pola `authority=false`. Skill jest bramą przygotowania,
    nie capability, executorem, lease holderem ani źródłem semantyki biznesowej.
 
+Non-MAIN nie kontaktuje właściciela bezpośrednio; przekazuje pytanie lub wynik
+aktywnemu MAIN-owi.
+
 ## Zapisz pięciopunktowy brief prostym polskim
 
 Przed planem lub edycją zapisz dokładnie pięć treści:
@@ -63,6 +66,8 @@ Zapisz osobno `ack.status`, `ack.exact_scope` i `ack.requires_reask`:
   `STALE_OR_REVOKED` i `HOLD`;
 - niezweryfikowany fakt oznacz `UNVERIFIED` i `HOLD`;
 - brak ACK dla operacji, która go wymaga, oznacz `MISSING_REQUIRED_ACK`.
+
+ACK oznaczony `STALE_OR_REVOKED` nie jest ważny ani wykonywalny.
 
 Ważny `CURRENT_EXACT_ACK` nie zwiększa authority tego skilla. Nie pytaj ponownie
 o ten sam exact scope i nie blokuj odrębnego autoryzowanego workflow; przekaż

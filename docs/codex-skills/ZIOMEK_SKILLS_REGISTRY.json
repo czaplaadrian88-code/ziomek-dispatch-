@@ -34,6 +34,7 @@
       },
       "allowed_actions": [
         "read approved canonical sources within the current task authority",
+        "perform safe read-only baseline diagnostics within explicit task scope without inferring mutation authority",
         "prepare a local staged candidate outside Codex discovery paths",
         "run deterministic offline author validation",
         "record role-aware ACK facts without consuming them",
@@ -41,7 +42,8 @@
       ],
       "forbidden_actions": [
         "network access",
-        "production read or write",
+        "runtime access when the task explicitly forbids it or a data-protection boundary applies",
+        "production mutation or using any read as inferred mutation authority",
         "deploy restart flag or data mutation",
         "migration lease or tmux mutation",
         "owner ACK creation consumption or expansion",

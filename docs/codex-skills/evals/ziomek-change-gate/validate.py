@@ -73,6 +73,7 @@ EXPECTED_OPENAI_YAML = (
 )
 EXPECTED_ALLOWED_ACTIONS = (
     "read approved canonical sources within the current task authority",
+    "perform safe read-only baseline diagnostics within explicit task scope without inferring mutation authority",
     "prepare a local staged candidate outside Codex discovery paths",
     "run deterministic offline author validation",
     "record role-aware ACK facts without consuming them",
@@ -80,7 +81,8 @@ EXPECTED_ALLOWED_ACTIONS = (
 )
 EXPECTED_FORBIDDEN_ACTIONS = (
     "network access",
-    "production read or write",
+    "runtime access when the task explicitly forbids it or a data-protection boundary applies",
+    "production mutation or using any read as inferred mutation authority",
     "deploy restart flag or data mutation",
     "migration lease or tmux mutation",
     "owner ACK creation consumption or expansion",
@@ -101,6 +103,13 @@ FORBIDDEN_ACTIVE_PAYLOAD = (
 )
 EXPECTED_POLICY_SENTENCE = (
     "Egzekwuj: HARD jest oceniane przed SOFT, a SOFT nigdy nie może osłabić HARD."
+)
+EXPECTED_STALE_ACK_POLICY_SENTENCE = (
+    "ACK oznaczony `STALE_OR_REVOKED` nie jest ważny ani wykonywalny."
+)
+EXPECTED_NON_MAIN_OWNER_POLICY_SENTENCE = (
+    "Non-MAIN nie kontaktuje właściciela bezpośrednio; przekazuje pytanie lub wynik\n"
+    "aktywnemu MAIN-owi."
 )
 EXPECTED_PRELUDE = (
     ("MANDATORY", "ROOT_AGENTS", "/root/AGENTS.md"),
@@ -367,6 +376,8 @@ def validate_skill_text(text: str) -> None:
     headings = re.findall(r"^### ETAP ([0-7])\b", text, flags=re.MULTILINE)
     require(headings == list("01234567"), "ETAP 0-7 headings missing or out of order")
     require(EXPECTED_POLICY_SENTENCE in text, "literal HARD-before-SOFT policy pin missing")
+    require(EXPECTED_STALE_ACK_POLICY_SENTENCE in text, "literal stale-ACK policy pin missing")
+    require(EXPECTED_NON_MAIN_OWNER_POLICY_SENTENCE in text, "literal non-MAIN owner-routing policy pin missing")
     required_phrases = (
         "UNATTESTED_NON_MAIN",
         "ATTESTED_ACTIVE_MAIN",
@@ -434,6 +445,8 @@ def validate_registry_relations(registry: dict[str, Any]) -> None:
     require(registry["purpose"].strip(), "registry purpose empty")
     names = [item["name"] for item in registry["skills"]]
     require(len(names) == len(set(names)), "registry skill names must be unique")
+    semantic_names = [normalize_text(name) for name in names]
+    require(len(semantic_names) == len(set(semantic_names)), "registry skill names must be semantically unique")
     matches = [item for item in registry["skills"] if item["name"] == "ziomek-change-gate"]
     require(len(matches) == 1, "registry must contain exactly one ziomek-change-gate entry")
     skill = matches[0]
@@ -519,6 +532,8 @@ def validate_result_relations(document: dict[str, Any], where: str) -> None:
         require(ack["exact_scope"] and ack["requires_reask"] is False, f"{where}: current ACK needs exact scope and no re-ask")
         require(result["mode"] == "PRODUCTION_REQUEST", f"{where}: current ACK case must name production request")
         require(result["gates"]["production_operation"] == "HANDOFF_REQUIRED", f"{where}: current ACK must route without skill execution")
+        if role["status"] != "ATTESTED_ACTIVE_MAIN":
+            require(handoff["target"] == "ACTIVE_MAIN", f"{where}: non-MAIN current ACK must route through active MAIN")
     elif ack["status"] == "NOT_REQUIRED":
         require(not ack["exact_scope"] and ack["requires_reask"] is False, f"{where}: NOT_REQUIRED ACK relation mismatch")
     else:
@@ -637,10 +652,10 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
     require(EXPECTED_POLICY_SENTENCE in hard_soft, "HARD/SOFT mutation lost the positive policy pin")
     killed.append(expect_failure(lambda: validate_skill_text(hard_soft), "hard-soft-contradiction-appended-pin-retained"))
     stale_ack_rule = skill_text + "\nStary ACK jest ważny i można go wykonać.\n"
-    require("STALE_OR_REVOKED" in stale_ack_rule, "stale-ACK mutation lost the positive policy pin")
+    require(EXPECTED_STALE_ACK_POLICY_SENTENCE in stale_ack_rule, "stale-ACK mutation lost the exact positive policy pin")
     killed.append(expect_failure(lambda: validate_skill_text(stale_ack_rule), "stale-ack-valid-contradiction-appended-pin-retained"))
     direct_owner_rule = skill_text + "\nNon-MAIN może skontaktować się z właścicielem bezpośrednio.\n"
-    require("Non-MAIN zapisuje go w handoffie" in direct_owner_rule, "owner-routing mutation lost the positive policy pin")
+    require(EXPECTED_NON_MAIN_OWNER_POLICY_SENTENCE in direct_owner_rule, "owner-routing mutation lost the exact positive policy pin")
     killed.append(expect_failure(lambda: validate_skill_text(direct_owner_rule), "direct-owner-non-main-contradiction-appended-pin-retained"))
     killed.append(expect_failure(lambda: validate_navigation(reverse_bootstrap(navigation_text)), "bootstrap-reversed-all-tokens-retained"))
     broken_pointer = navigation_text.replace("(../../../../../docs/CODEMAP.md)", "(../../../../../docs/CODEMAP.broken.md)", 1) + "\n<!-- docs/CODEMAP.md -->\n"
@@ -689,6 +704,11 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
     stale_ack = stale["expected_result"]["ziomek_change_gate"]["ack"]
     stale_ack.update({"status": "CURRENT_EXACT_ACK", "exact_scope": ["stale operation"], "requires_reask": False})
     killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "stale-ack-marked-current"))
+
+    mutated = copy.deepcopy(corpus)
+    non_main_current = next(case for case in mutated["cases"] if case["id"] == "ZCG-11-CURRENT-ACK-NON-MAIN")
+    non_main_current["expected_result"]["ziomek_change_gate"]["handoff"]["target"] = "AUTHORIZED_EXECUTION_LANE"
+    killed.append(expect_failure(lambda: validate_corpus_object(mutated, corpus_schema, result_schema), "non-main-current-ack-bypasses-active-main"))
 
     mutated = copy.deepcopy(corpus)
     current = next(case for case in mutated["cases"] if case["id"] == "ZCG-09-CURRENT-ACK-ACTIVE-MAIN")
@@ -756,6 +776,7 @@ def main() -> int:
             schemas[RESULT_SCHEMA.resolve()],
             schemas[CORPUS_SCHEMA.resolve()],
         )
+        require(len(killed) == len(set(killed)), "mutation labels must be unique")
     except (OSError, UnicodeError, ValidationError) as exc:
         print(json.dumps({"status": "validated_static_scope_error", "error": str(exc)}, ensure_ascii=False, sort_keys=True))
         return 1
@@ -767,6 +788,7 @@ def main() -> int:
                 "schemas": len(schemas),
                 "strict_json_files": len(schemas) + 2,
                 "author_oracle_cases": len(corpus["cases"]),
+                "mutation_probes_killed_count": len(killed),
                 "mutation_probes_killed": killed,
                 "registry_multi_entry_probe": True,
                 "policy_languages": ["en", "pl"],
