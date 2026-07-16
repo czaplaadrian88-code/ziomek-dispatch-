@@ -1,210 +1,192 @@
-# Ziomek Change Gate — remediation cycle 6
+# Ziomek Change Gate — remediation cycle 7
 
 Data autora: 2026-07-16 UTC
 
 Status: `STAGED_ONLY_REVIEW_REQUIRED`
 
-Wynik autora: `READY_FOR_SUPERVISOR_FALSE_GREEN_AUDIT`
+Wynik autora:
+`AUTHOR_REMEDIATION7_COMPLETE_FRESH_INDEPENDENT_REVIEW_REQUIRED`
+
 Klasa dowodu: `AUTHOR_ONLY_STATIC_SELF_CHECK_NON_INDEPENDENT`
 
-Ten raport nie jest niezależnym review, zgodą na aktywację ani authority live.
-Kandydat pozostaje poza discovery. Nie wykonano instalacji, aktywacji, merge,
-rebase, cherry-pick, push, deploy, restartu, flipa, migracji, odczytu lub
-mutacji danych runtime, lease'u, routera MAIN ani tmuxa.
+Ten raport nie jest self-review, niezależnym review, authority ani zgodą na
+aktywację. Kandydat pozostaje poza discovery. Nie wykonano instalacji,
+aktywacji, merge, rebase, cherry-pick, push, deploy, restartu, flipa,
+migracji, operacji danych/runtime, lease'u, routingu MAIN ani mutacji tmuxa.
 
-## Tożsamość i wejście
+## Tożsamość i exact input
 
-- rola: `NON-MAIN/internal-only`;
+- rola: `INTERNAL_ONLY_NON_MAIN`, bez owner channel i MAIN lease;
 - model tier: `sol`;
-- exact model: `gpt-5.6-sol`, lokalnie atestowany w cache modeli;
+- exact model: `gpt-5.6-sol`, dostępny w lokalnym katalogu modeli;
 - effort: `max`;
-- uzasadnienie: R4, bo publiczna granica readiness dawała dwa niezależne
-  false READY dla niezweryfikowanych danych zaufania;
-- task SHA-256:
-  `5862863e02de9fb1f511e1906d29b2972ce797142555b4819eadaafdddd7921d`;
-- branch: `codex/ziomek-skill-gate-remediation6-20260716T200118Z`;
+- powód: R4 — publiczna granica schematów mogła wyprowadzić fałszywe READY;
+- task: regular `0600`, 14976 bytes, SHA-256
+  `d93bb47e4b362180ebc60fb93bfeaa77292a1e634263cdc87a411571e4735810`;
+- branch: `codex/ziomek-skill-gate-remediation7-20260716T214230Z`;
 - worktree:
-  `/root/ziomek_skill_gate_remediation6_20260716T200118Z/dispatch_v2`;
-- exact input commit: `2f12fd4c7c2bb3a2ce351ad4c9139ef9ef512e90`;
-- input tree: `3d7453fb6eca6bd8befd11223b84d019628fafc5`;
-- exact parent: `0bcf1b7711a1e0e5e761c77a6fab5d668e005cfa`;
+  `/root/ziomek_skill_gate_remediation7_20260716T214230Z/dispatch_v2`;
+- exact input commit: `2e0e9c79a99309004ae0161df6a7cbba751689d6`;
+- input tree: `d10b2ed1e7b9dc54b852c88fa7ee142ba87a837c`;
+- exact parent: `2f12fd4c7c2bb3a2ce351ad4c9139ef9ef512e90`;
 - original base: `6b4b040032d54db5be7643648676d835e0db9146`;
-- poprzedni tag pozostaje bez zmian:
-  `ziomek-change-gate-remediation4-staged-20260716T173743Z`.
+- odrzucony tag cycle 6 pozostał bez zmian:
+  `ziomek-change-gate-remediation6-staged-20260716T200118Z`.
 
 ## Potwierdzony false-green przed edycją
 
-Baseline na exact input był zielony: official quick validator rc=0, custom
-validator rc=0, 12 cases i dokładnie 207 unikalnych wcześniejszych mutacji.
-SHA-256 posortowanej listy 207 etykiet wynosił
-`e4962df95146acb369863a553b325de0faf56dcdcd10815d98c3aa1af022346d`.
+Literalny publiczny replay zmienił wyłącznie ZCG-08 przez dodanie
+`ziomek_change_gate.authority_granted=true`. Słaby schema miał dokładnie
+`{"type":"object"}`.
 
-Dwa niezależne replaye przeszły publicznym
-`validate_result_relations()` bez wcześniejszego helpera:
+| publiczna ścieżka | wariant | wynik przed zmianą |
+|---|---|---|
+| `validate_corpus_object` | słaby corpus, trusted result | KILLED |
+| `validate_corpus_object` | trusted corpus, słaby result | KILLED |
+| `validate_corpus_object` | oba słabe | **SURVIVED**, rc=0 |
+| `validate_cases_relations` | słaby result | **SURVIVED**, rc=0 |
+| `validate_result_relations` | brak parametru schema | **SURVIVED**, rc=0 |
+| publiczny ready helper | mutated result | **SURVIVED**, `READY_FOR_REVIEW` |
+| publiczne blockery | mutated result | **SURVIVED**, `[]` |
+| publiczna dyspozycja | mutated result | **SURVIVED**, `READY_FOR_REVIEW` |
+| publiczna granica write-setu | mutated result | **SURVIVED**, `true` |
+| `validate_registry_object` | słaby registry schema | KILLED, kontrola dodatnia |
+| generic `validate_schema_instance` | słaby schema | SURVIVED zgodnie z kontraktem low-level |
 
-1. minimalny forged registry przypisał realny `core/selection.py` do
-   podrobionego staged rootu; publiczna relacja zwróciła rc=0, exception=none,
-   `blocker_codes=[]`, `disposition=READY_FOR_REVIEW` — `SURVIVED`, podczas gdy
-   jawne `validate_registry_object()` odrzucało ten registry;
-2. kanoniczny registry oraz prywatny alternatywny `artifact_root` zawierający
-   wszystkie cztery oczekiwane ścieżki, lecz wyłącznie błędne bajty, także dały
-   rc=0, exception=none, `blocker_codes=[]`,
-   `disposition=READY_FOR_REVIEW` — `SURVIVED`.
+Decydujący both-weak replay odtworzył review finding, więc nie wystąpił
+`HOLD_INPUT_DRIFT`.
 
-Root cause: publiczny łańcuch przyjmował `registry`, `skill_id` i
-`artifact_root` jako osobne, caller-controlled fakty, ale sprawdzał głównie
-kształt `candidate_effect_boundary` i obecność plików. Schema registry, pełne
-relacje, kompletność pakietu, dokładne bajty, tryb oraz wspólna tożsamość rootu
-nie stanowiły jednej obowiązkowej precondition. Helper mógł odrzucić input, lecz
-publiczna dyspozycja nie musiała go wcześniej wywołać.
+Root cause: registry miał własny trusted binding, lecz corpus i case relations
+używały caller-controlled schema bez obowiązkowego porównania z committed
+kontraktem. Publiczne readiness helpery zakładały, że ktoś wcześniej wykonał
+schema validation. To była opcjonalna precondition, więc dodatkowe pole mogło
+dojść do relacji i wyprowadzić READY.
 
-## Jedna granica zaufania
+## Fix źródłowy
 
-Implementacja używa jednego immutable `VerifiedReadinessContext`:
+Jedyny loader `load_trusted_schema_bundle()` ładuje przy każdym publicznym
+wejściu wszystkie cztery committed schema. `TrustedSchemaBundle` jest frozen i
+przechowuje wyłącznie kanoniczne strict-JSON strings oraz digest; nie istnieje
+mutable cache. Każde wydanie dictu jest świeżym strict snapshotem.
 
-1. tworzy detached strict-JSON snapshot całego registry;
-2. sprawdza go trusted registry schema i wszystkimi relacjami;
-3. wiąże dokładnie jeden `skill_id`, identity-derived staged root i jego piny;
-4. sprawdza pełny zbiór plików pakietu, bez braków i dodatkowych plików;
-5. odrzuca unsafe path, sibling/cross-skill, symlink i plik specjalny;
-6. wymaga dokładnego trybu `100644` i SHA-256 każdego pinu;
-7. wiąże registry, root, staged root, piny i package digest własnym integrity
-   digestem oraz powtarza weryfikację przy użyciu kontekstu.
+`compatible_trusted_schema()` traktuje caller schema wyłącznie jako parametr
+kompatybilności. `None` wybiera trusted schema. Jawny schema musi:
 
-Wybrana i jedyna polityka rootu to
-`ALTERNATE_ALLOWED_AFTER_COMPLETE_EXACT_PIN_VALIDATION`. Alternatywny root jest
-dozwolony tylko po pełnej kontroli exact pakietu. Dzięki temu kanoniczny skill,
-exact kopia alternatywna i drugi niezależny poprawny skill mogą być READY, ale
-błędne bajty, brak, symlink, FIFO, executable, dodatkowy plik lub cross-skill
-zawsze failują zamknięcie.
+1. być obiektem reprezentowalnym jako strict JSON bez NaN/Infinity;
+2. po canonical snapshot być semantycznie identyczny z trusted schema;
+3. zostać odrzucony przy dowolnym osłabieniu lub rozszerzeniu;
+4. nigdy nie być użyty do walidacji danych — używane są detached trusted bytes.
 
-Każdy nieważny kontekst produkuje dokładnie jeden centralny blocker
-`READINESS_CONTEXT_INVALID`. Nie zależy on od kolejności błędów wyniku.
-`derive_disposition()` ponownie wylicza oczekiwane blockery, nie przyjmuje
-pustej listy jako side door i wyprowadza `HOLD`.
+Granica obejmuje registry, corpus, pojedynczy case, dokument wyniku,
+`validate_cases_relations`, `validate_result_relations`, wszystkie publiczne
+blocker/disposition/ready/write-set helpery oraz ich warianty `with_context`.
+Internal callers używają prywatnych funkcji z bundle/context przekazanym po
+publicznym sprawdzeniu. Generic `validate_schema_instance()` zachował swój
+niskopoziomowy kontrakt i nadal może świadomie walidować dowolny schema.
 
 ## Mapa kompletności
 
-| miejsce | rola | writer/consumer | dotknięte TAK/N-D | powód | test |
+| miejsce | rola | writer/consumer | TAK/N-D | powód | test |
 |---|---|---|---|---|---|
-| registry schema | zamknięty kontrakt registry | registry, trusted validator | TAK | root policy i mode policy są wymagane | strict schema, semantic drift |
-| registry object + relations | granica zaufania | context constructor | TAK | wszystkie caller values muszą być zweryfikowane | forged minimal, schema-valid noncanonical |
-| canonical i drugi `skill_id` | identity i multi-skill | registry resolver, readiness | TAK | brak canonical-only hardcode | canonical READY, synthetic READY, cross-skill HOLD |
-| staged roots i piny | package allowlist | registry, package verifier | TAK | exact identity-derived containment | sibling, traversal, NFKC/case, pin drift |
-| artifact-root policy | efektywny root | public readiness APIs | TAK | jawny wybór alternate-after-exact | exact alternate READY, wrong alternate HOLD |
-| pełne exact-byte package | integrity | package verifier | TAK | obecność nie dowodzi tożsamości | wrong SHA, missing, extra |
-| result schema | central blocker enum | result producer, validator | TAK | dodano `READINESS_CONTEXT_INVALID` | constructed HOLD schema pass |
-| case schema | kształt pojedynczego case | corpus validator | N-D | struktura case bez zmiany | meta-schema, strict JSON |
-| corpus schema | inventory 12 cases | corpus validator | N-D | liczba i kształt bez zmiany | 12/12, min/max |
-| `cases.json` | author golden corpus | result/corpus APIs | N-D | semantyka 12 cases pozostaje poprawna | ZCG-07/08/10 READY, role 12/12 |
-| context constructor | tworzenie trusted boundary | wszystkie publiczne wejścia | TAK | usuwa opcjonalną precondition | forged/wrong root public replays |
-| context validator | recheck immutable boundary | helpery `_with_context` | TAK | brak bocznego wejścia przez fabricated context | integrity tamper KILLED |
-| artifact-pin validator | exact package consumer | official registry, mutations | TAK | usunięto caller byte-map | 12 byte-pin probes |
-| candidate write-set validator | registry-bound subset | candidate readiness | TAK | korzysta wyłącznie z verified context | product, flags, shared governance KILLED |
-| result relations | public oracle | result producer | TAK | wspólny context przed blockerami | forged i wrong bytes KILLED |
-| corpus object | public corpus oracle | 12 cases | TAK | ta sama precondition co result | oba false-green corpus KILLED |
-| blocker derivation | central source of truth | relations, disposition | TAK | invalid context zastępuje kolejność błędów | exact singleton blocker |
-| disposition derivation | READY/HOLD | relations, caller | TAK | recompute blockerów zamyka empty-list bypass | forged/wrong/boundary HOLD |
-| READY/HOLD matrix | lane oracle | author cases | TAK | nowe context precondition bez zmiany lane tuples | ZCG-07/08/10 positive |
-| path/component checks | containment | pins i write-set | TAK | tekstowy prefix nie wystarcza | absolute, `..`, slash, Unicode, sibling |
-| file type/mode | filesystem trust | package verifier | TAK | każdy pin musi być regular 100644 | symlink, FIFO, executable, missing |
-| mutation matrix | author negative oracle | validator, supervisor | TAK | oba false-green muszą być publicznie zabite | 236/236, 0 SURVIVED |
-| `SKILL.md` | kontrakt użytkowy | jawny invoker, reviewer | TAK | dokumentuje verified context i root policy | official quick validator, byte pin |
-| `openai.yaml` | metadata i implicit policy | przyszły loader | N-D | exact bytes już poprawne | hash parity, implicit=false raz |
-| navigation | ordered bootstrap | skill, operator | N-D | luka nie dotyczy źródeł | hash parity, order mutations |
-| gate contract | kontrakt result/corpus | skill, validator, reviewer | TAK | central blocker i root policy | literal pins, byte pin |
-| source pins | exact candidate bytes | registry, context | TAK | zmienione dwa pliki pakietu | SHA-256 wszystkich 4 plików |
-| report/commit/tag/rollback | audyt i punkt cofnięcia | supervisor | TAK | cycle 6 ma być jednym lokalnym postimage | diff/pathset, annotated tag, revert plan |
-| discovery/activation | loader boundary | przyszły osobny sprint | N-D | staged path pozostaje poza discovery | target absent, implicit=false |
-| product/runtime/flags/live | system Ziomka | procesy produkcyjne | N-D | governance-only, jawny zakaz tasku | zero product paths/imports/live calls |
-| shared memory/backlog/handover | wspólny stan MAIN | aktywny MAIN | N-D | ta sesja jest internal-only | zero shared edits |
+| cztery schema path/ID | committed trust roots | loader, refs, validator | TAK | jeden exact allowlist i fresh load | schema walk + bundle digest |
+| `TrustedSchemaBundle` | immutable container | wszystkie publiczne entry pointy | TAK | canonical strings, bez mutable cache | local-dict mutation + fresh reload |
+| canonical equality | caller compatibility | registry/corpus/case/result APIs | TAK | caller bytes nie są authority | weak/close/required/enum matrix |
+| registry object | trust input | context constructor, registry API | TAK | wspólny loader zastąpił osobny tor | weak registry + multi-entry |
+| corpus object | inventory 12 cases | corpus API, author validator | TAK | trusted corpus i result przed relacjami | weak-only/both-weak |
+| pojedynczy case | direct public API | reviewer, corpus loop | TAK | brak bocznego wejścia poza corpus | 12/12 explicit i `None` |
+| result object | direct public API | relations, caller | TAK | trusted result przed candidate data | authority extra + weak result |
+| result/case relations | semantic oracle | corpus i direct callers | TAK | prywatne core po publicznym trust gate | weak result i direct attacks |
+| public readiness helpers | READY/HOLD | blockery, dyspozycja, boundary | TAK | schema nie jest opcjonalną precondition | 10 direct public probes |
+| internal callers | trusted propagation | context-aware helpers | TAK | brak ponownego caller schema | with-context attack matrix |
+| verified readiness context | registry/package boundary | wszystkie READY lanes | TAK | cycle 6 pozostaje obowiązkowy | 29/29 wcześniejszych probes |
+| artifact root i piny | package identity | context, write-set | TAK | bez zmiany semantyki root policy | exact/wrong/missing/symlink/FIFO/mode |
+| blocker/disposition | closed decision | public relations | TAK | ZCG-07/08/10 bez driftu | 12/12 + trzy positive lanes |
+| strict JSON | parser/schema boundary | loader i compatibility | TAK | duplicate/nonfinite nadal fail closed | wcześniejszy matrix KILLED |
+| source mutant | causal oracle | corpus public API | TAK | usuwa dokładnie dwa trusted bindings | both-weak wtedy przeżywa, test failuje |
+| `SKILL.md` | user contract | explicit invoker/reviewer | TAK | opisuje bundle i compatibility | quick validator + source pin |
+| gate contract | result contract | skill/reviewer | TAK | opisuje detached trusted bytes | literal pins + source pin |
+| registry version/pins | package identity | context/future promotion | TAK | version 0.7 i dwa nowe SHA | four-file byte verification |
+| result/case/corpus/registry schema files | unchanged contracts | loader | N-D | root cause był w bindingu, nie schema bytes | exact HEAD parity + schema walk |
+| `cases.json` | unchanged author corpus | corpus validator | N-D | ZCG-08 jest mutowany wyłącznie in-memory | exact HEAD parity + 12/12 |
+| `openai.yaml` | discovery metadata | future loader | N-D | implicit=false już poprawne | SHA parity, dokładnie jeden false |
+| canonical navigation | bootstrap order | skill/operator | N-D | luka nie dotyczy nawigacji | SHA parity + prior mutations |
+| install/discovery/activation | future owner lane | Codex loader | N-D | staged path i jawny zakaz tasku | activation target absent |
+| product/live/runtime/flags/data/services | Ziomek | produkcyjne procesy | N-D | governance-only i zakaz tasku | zero product paths/imports/live calls |
+| lease/route/tmux/shared memory/backlog | MAIN governance | aktywny MAIN | N-D | internal-only, brak authority | zero shared edits; raport tylko do MAIN tmuxa |
 
-## Goldeny i mutacje autora
+## Dowody przyczynowe i mutacje
 
-Po zmianie:
+Po zmianie każdy wariant słabego schema jest deterministycznie odrzucony przed
+użyciem danych kandydata. Usunięcie `additionalProperties:false`, usunięcie
+required field, poszerzenie enum oraz słabe corpus/result/case/registry schema
+są KILLED. ZCG-08 z `authority_granted=true` jest KILLED przez każdy publiczny
+entry point. Exact committed schema jawnie i przez `None` dają byte/decision
+parity. Mutacja caller dict po compatibility check nie wpływa na detached
+trusted schema.
 
-- oba wcześniejsze false READY są KILLED przez publiczne result relations,
-  corpus, blockers i disposition;
-- forged minimal i schema-valid, lecz relacyjnie błędny registry dają wyłącznie
-  `READINESS_CONTEXT_INVALID` oraz `HOLD`;
-- drift `artifact_root_policy` albo `file_mode_policy` w registry daje ten sam
-  centralny blocker i `HOLD`;
-- wrong-byte alternate root, missing, symlink, FIFO, executable i extra file
-  dają ten sam centralny blocker i `HOLD`;
-- skonstruowany wynik z centralnym blockerem oraz `HOLD` przechodzi result
-  schema i publiczne relation validation;
-- exact kanoniczny root i exact alternatywny pakiet dają
-  `READY_FOR_REVIEW`;
-- drugi niezależny `ZIOMEK_FUTURE_SKILL` daje READY tylko dla własnego exact
-  pakietu; cross-skill daje HOLD;
-- `core/selection.py` i `flags.json` zachowują
-  `CANDIDATE_WRITE_SET_OUTSIDE_REGISTRY_BOUNDARY` oraz HOLD;
-- ZCG-07 i ZCG-10 pozostają `READY_FOR_IMPLEMENTATION`, ZCG-08 pozostaje
-  `READY_FOR_REVIEW`;
-- `ROLE_ATTESTATION` występuje dokładnie raz w 12/12; removal, duplicate i
-  downgrade są KILLED;
-- duplicate keys oraz `NaN`, `Infinity`, `-Infinity` pozostają KILLED dla
-  registry, cases i wszystkich czterech schematów.
+Kontrolowany source mutant zastępuje wyłącznie dwa bindings w
+`validate_corpus_object` caller-controlled fallbackiem. Both-weak attack wtedy
+ponownie przechodzi, a niezależny literal rejection oracle failuje. Mutant jest
+więc przyczynowo związany z F-01, nie z ubocznym tokenem.
 
-Macierz mutacji:
+Tożsamości etykiet:
 
-- wcześniejszy zbiór: 207/207 KILLED, exact SHA-256 posortowanych etykiet
+- legacy: 163/163 KILLED, SHA-256
+  `0156c4559182e4186b53df92d8cd665fdb90f00769a15d2a4aaa98022cfa4a4b`;
+- prior cycle 4: 207/207 KILLED, SHA-256
   `e4962df95146acb369863a553b325de0faf56dcdcd10815d98c3aa1af022346d`;
-- nowe cycle 6: 29/29 KILLED, SHA-256
+- cycle 6: 29/29 KILLED, SHA-256
   `b91f254eee7a479ff33796ae3bd1d3432fa9fb7fb90612f11db0ed6fb63b6f81`;
-- pełny zbiór: 236/236 KILLED, 0 SURVIVED, SHA-256
+- pełny prior cycle 6: 236/236 KILLED, SHA-256
   `32f3334a6968ae063498856c31df9822a46a6a299b874d0990b8c7de875ea1fa`;
-- historyczny podzbiór 163 nadal ma SHA-256
-  `0156c4559182e4186b53df92d8cd665fdb90f00769a15d2a4aaa98022cfa4a4b`.
+- nowe cycle 7: 28/28 KILLED, SHA-256
+  `dc0b781ebc451bbd5edf55f627afb221bd6fc6b22093b1b3784474a1e443334e`;
+- pełny zbiór: 264/264 KILLED, 0 SURVIVED, SHA-256
+  `858c3419e6bda3504d1d251057e264d612e8cb10ee6056d875c64898c148532d`.
 
-## Walidacja statyczna
+Trusted bundle SHA-256:
+`cfed579f66622cf15378208f8ce8c952f90e8cf66412d6065f8e8190fc4c6e39`.
 
-- official quick validator: rc=0, `Skill is valid!`;
+## Walidacja autora
+
+- official skill quick validator: rc=0, `Skill is valid!`;
 - custom validator: rc=0, `validated_static_scope`;
-- strict schemas: 4; strict JSON files: 6; author cases: 12;
-- AST/import: wyłącznie stdlib (`__future__`, `copy`, `dataclasses`, `hashlib`,
-  `json`, `math`, `os`, `pathlib`, `re`, `stat`, `sys`, `tempfile`, `typing`,
-  `unicodedata`); product imports: 0;
-- isolated `py_compile`: rc=0; prywatny `PYTHONPYCACHEPREFIX` usunięty;
-- unconsumed top-level symbols: 0;
+- schema files: 4; strict JSON files: 6; cases: 12;
+- positive ZCG-07/ZCG-08/ZCG-10: bez zmiany decyzji;
+- literal public matrix: wszystkie ataki KILLED, generic low-level control PASS;
+- AST/import: tylko Python stdlib, dynamic import=0, product import=0;
+- isolated `py_compile`: rc=0; prywatny pycache usunięty;
 - `git diff --check`: rc=0;
-- zmienione pliki: regularne, tryb `100644`; staged candidate bez symlinków i
-  executable;
-- repo `__pycache__`: 0;
-- product pytest, runtime, flags, PID, NRestarts, health i live replay: N-D —
-  jawnie zabronione i bez product consumera.
+- wszystkie pięć owned paths: regularne `100644`;
+- product pytest, runtime, PID, NRestarts, health, flags i replay live: N-D —
+  task jawnie zabrania i kod nie ma product consumera.
 
 Source pins pakietu:
 
 - `SKILL.md`:
-  `34b95dbd2a53b3f892dc7cc56caadf6e7c94ae6a9323614e1624fed0104d3f4c`;
+  `5eb0a1d8f62db9a215746be84cb05c39fcf5e52abd79138f14d8692f2437576b`;
 - `agents/openai.yaml` bez zmiany:
   `d791a50a4ffcb7d2def662405ae30fbb452682c5cd272f82081a2e1c84c5d901`;
 - `references/canonical-navigation.md` bez zmiany:
   `725d579b3a4a4614456f95db49df7adbccda5cd984ed96127ff5b1aa3bb4c5e6`;
 - `references/gate-contract.md`:
-  `4d04002128d0ce23bbf50fce754c2634e0abc9e34e3eb41a3a05cacd6a874ff3`.
+  `a2fbf795fec079f8a0cf7d85068e65824885d9f0f9639dfddfcae257714d88d3`.
 
-## Granice wydania i rollback
+`candidate_commit` i `candidate_tree` pozostają
+`UNPINNED_UNTIL_INDEPENDENT_REVIEW`, bez self-referential approval. Exact seal
+commit/tree/tag znajduje się dopiero w prywatnym handoffie po utworzeniu
+postimage.
 
-Cycle 6 zmienia wyłącznie governance w jawnie dozwolonym 12-path scope. Exact
-cycle-6 diff nie zawiera produktu. Pełny original-base-to-target pathset ma
-pozostać tym samym zamkniętym zbiorem 12 ścieżek skill gate, wszystkie jako
-regularne `100644`, bez symlinków i executable.
+## Wydanie i rollback
 
-Plan rollbacku:
+Cycle 7 ma dokładnie pięć ścieżek i nie zawiera produktu. Nie wykonano żadnej
+operacji live ani shared-state, więc nie istnieje live rollback.
 
-1. przed integracją usunąć wyłącznie ten izolowany branch/worktree i lokalny
-   annotated tag `ziomek-change-gate-remediation6-staged-20260716T200118Z`;
-2. po hipotetycznej integracji wykonać jawny revert wyłącznie jednego commita
-   cycle 6;
-3. zweryfikować powrót registry version, root/mode policy, central blocker,
-   source pins i tree do exact input;
-4. nie restartować niczego — rollback jest repo-only i nie dotyka live.
+Rollback przed integracją: uprawniony późniejszy lane odrzuca wyłącznie nowy
+worktree/branch/tag cycle 7, zachowując wszystkie starsze refs. Po hipotetycznej
+integracji rollback to jawny revert jednego commita cycle 7, następnie kontrola
+version 0.7, dwóch source pins, bundle binding, 236 wcześniejszych etykiet oraz
+powrotu tree do exact input. Bez restartu, flipa i migracji.
 
-`candidate_commit` i `candidate_tree` celowo pozostają
-`UNPINNED_UNTIL_INDEPENDENT_REVIEW`, aby autor nie tworzył self-referential
-approval. Exact commit, tree, annotated tag object i peel są atestowane dopiero
-w prywatnym handoffie po utworzeniu lokalnego postimage. Następny krok to
-świeży supervisor-controlled false-green audit; aktywacja wymaga osobnej
-decyzji i osobnego zakresu.
+Następny krok: świeży, niezależny reviewer exact final bytes. Autor nie wydaje
+niezależnego PASS i nie promuje kandydata.

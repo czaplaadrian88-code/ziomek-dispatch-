@@ -6,7 +6,7 @@
     {
       "skill_id": "ZIOMEK_CHANGE_GATE",
       "name": "ziomek-change-gate",
-      "version": "0.6.0-remediation6-candidate",
+      "version": "0.7.0-remediation7-candidate",
       "scope": "Fail-closed preparation gate for Ziomek analysis, local implementation candidates and role-aware production handoff facts.",
       "owner": "ACTIVE_MAIN_GOVERNANCE_CHANNEL",
       "status": "STAGED_ONLY_REVIEW_REQUIRED",
@@ -174,7 +174,7 @@
           "files": [
             {
               "path": "docs/codex-skills/candidates/ziomek-change-gate/SKILL.md",
-              "sha256": "34b95dbd2a53b3f892dc7cc56caadf6e7c94ae6a9323614e1624fed0104d3f4c"
+              "sha256": "5eb0a1d8f62db9a215746be84cb05c39fcf5e52abd79138f14d8692f2437576b"
             },
             {
               "path": "docs/codex-skills/candidates/ziomek-change-gate/agents/openai.yaml",
@@ -186,7 +186,7 @@
             },
             {
               "path": "docs/codex-skills/candidates/ziomek-change-gate/references/gate-contract.md",
-              "sha256": "4d04002128d0ce23bbf50fce754c2634e0abc9e34e3eb41a3a05cacd6a874ff3"
+              "sha256": "a2fbf795fec079f8a0cf7d85068e65824885d9f0f9639dfddfcae257714d88d3"
             }
           ]
         }
@@ -202,7 +202,7 @@
       },
       "rollback": {
         "policy": "REVERT_ANNOTATED_LOCAL_TAG_COMMIT",
-        "anchor_tag": "ziomek-change-gate-remediation6-staged-20260716T200118Z",
+        "anchor_tag": "ziomek-change-gate-remediation7-staged-20260716T214230Z",
         "scope": [
           "docs/codex-skills/candidates/ziomek-change-gate",
           "docs/codex-skills/ZIOMEK_SKILLS_REGISTRY.json",

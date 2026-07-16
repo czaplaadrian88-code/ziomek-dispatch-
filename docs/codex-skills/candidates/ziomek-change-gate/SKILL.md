@@ -50,6 +50,16 @@ kontekstu daje wyłącznie
 `READINESS_CONTEXT_INVALID` i wyprowadzony `HOLD`; wcześniejsze wywołanie
 pomocniczego walidatora nie jest precondition ani capability.
 
+Każde publiczne API readiness, registry, corpusu, pojedynczego case i wyniku
+przed odczytem danych kandydata ładuje świeży, niemutowalny
+`TrustedSchemaBundle` z czterech committed schema. Nie ma mutable cache.
+Opcjonalny caller schema jest wyłącznie parametrem kompatybilności: musi być
+kanonicznym strict JSON-em semantycznie równym właściwemu trusted schema, po
+czym walidacja zawsze używa detached trusted bytes. `None` oznacza ten sam
+trusted schema, nie słabszy fallback. Ogólny niskopoziomowy validator schematu
+pozostaje narzędziem generic; nie jest publiczną granicą readiness ani sposobem
+na zastąpienie trusted binding.
+
 Non-MAIN nie kontaktuje właściciela bezpośrednio; przekazuje pytanie lub wynik
 aktywnemu MAIN-owi.
 

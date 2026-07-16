@@ -240,6 +240,8 @@ LEGACY_MUTATION_LABELS_COUNT = 163
 LEGACY_MUTATION_LABELS_SHA256 = "0156c4559182e4186b53df92d8cd665fdb90f00769a15d2a4aaa98022cfa4a4b"
 PRIOR_CYCLE4_MUTATION_LABELS_COUNT = 207
 PRIOR_CYCLE4_MUTATION_LABELS_SHA256 = "e4962df95146acb369863a553b325de0faf56dcdcd10815d98c3aa1af022346d"
+PRIOR_CYCLE6_FULL_MUTATION_LABELS_COUNT = 236
+PRIOR_CYCLE6_FULL_MUTATION_LABELS_SHA256 = "32f3334a6968ae063498856c31df9822a46a6a299b874d0990b8c7de875ea1fa"
 CYCLE4_MUTATION_LABELS = frozenset(
     {
         "candidate-write-set-cross-skill-root",
@@ -321,6 +323,42 @@ CYCLE6_MUTATION_LABELS = frozenset(
         "context-disposition-valid-boundary-empty-bypass",
     }
 )
+CYCLE6_MUTATION_LABELS_COUNT = 29
+CYCLE6_MUTATION_LABELS_SHA256 = "b91f254eee7a479ff33796ae3bd1d3432fa9fb7fb90612f11db0ed6fb63b6f81"
+CYCLE7_MUTATION_LABELS = frozenset(
+    {
+        "trusted-schema-corpus-weak-corpus-only",
+        "trusted-schema-corpus-weak-result-only",
+        "trusted-schema-corpus-both-weak",
+        "trusted-schema-cases-relations-weak-result",
+        "trusted-schema-cases-relations-with-context-weak-result",
+        "trusted-schema-case-object-weak-case",
+        "trusted-schema-case-object-weak-result",
+        "trusted-schema-case-object-both-weak",
+        "trusted-schema-result-object-weak-result",
+        "trusted-schema-registry-object-weak-registry",
+        "trusted-schema-multi-registry-weak-registry",
+        "trusted-schema-corpus-no-additional-properties",
+        "trusted-schema-result-no-additional-properties",
+        "trusted-schema-corpus-required-field-removed",
+        "trusted-schema-result-required-field-removed",
+        "trusted-schema-result-decisive-enum-widened",
+        "trusted-schema-result-relations-authority-extra",
+        "trusted-schema-ready-helper-authority-extra",
+        "trusted-schema-blockers-authority-extra",
+        "trusted-schema-disposition-authority-extra",
+        "trusted-schema-candidate-boundary-authority-extra",
+        "trusted-schema-result-relations-with-context-authority-extra",
+        "trusted-schema-ready-with-context-authority-extra",
+        "trusted-schema-blockers-with-context-authority-extra",
+        "trusted-schema-disposition-with-context-authority-extra",
+        "trusted-schema-candidate-boundary-with-context-authority-extra",
+        "trusted-schema-caller-mutation-detached",
+        "trusted-schema-source-mutant-both-weak",
+    }
+)
+CYCLE7_MUTATION_LABELS_COUNT = 28
+CYCLE7_MUTATION_LABELS_SHA256 = "dc0b781ebc451bbd5edf55f627afb221bd6fc6b22093b1b3784474a1e443334e"
 POLICY_PATTERNS = {
     "ACTIVATE_SKILL": (r"\bactivate (?:the )?skill\b", r"\binstall (?:the )?skill\b", r"\baktywuj skill\b", r"\bzainstaluj skill\b"),
     "CONTACT_OWNER_AS_NON_MAIN": (r"\bcontact (?:the )?owner\b", r"\bask (?:the )?owner\b", r"\bskontaktuj sie z wlascicielem\b", r"\bzapytaj wlasciciela\b", r"\bnon-main moze skontaktowac sie z wlascicielem\b"),
@@ -350,6 +388,17 @@ class VerifiedReadinessContext:
     pinned_files: tuple[tuple[str, str, int], ...]
     package_sha256: str
     integrity_sha256: str
+
+
+@dataclass(frozen=True)
+class TrustedSchemaBundle:
+    """Immutable canonical bytes for every committed gate schema."""
+
+    registry_json: str
+    result_json: str
+    case_json: str
+    corpus_json: str
+    bundle_sha256: str
 
 
 def require(condition: bool, message: str) -> None:
@@ -397,7 +446,87 @@ def json_equal(left: Any, right: Any) -> bool:
 
 
 def canonical_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(f"value cannot be represented as canonical strict JSON: {exc}") from exc
+
+
+def strict_json_object_snapshot(value: Any, label: str) -> tuple[dict[str, Any], str]:
+    require(isinstance(value, dict), f"{label}: expected a JSON object")
+    rendered = canonical_json(value)
+    snapshot = loads_strict(rendered, label)
+    require(isinstance(snapshot, dict), f"{label}: strict JSON snapshot must be an object")
+    require(canonical_json(snapshot) == rendered, f"{label}: strict JSON snapshot is not canonical")
+    return snapshot, rendered
+
+
+def load_trusted_schema_bundle() -> TrustedSchemaBundle:
+    """Load fresh committed schemas without retaining any mutable schema cache."""
+
+    schemas = validate_schema_files()
+    rendered = {
+        path: canonical_json(schemas[path])
+        for path in sorted(ALLOWED_SCHEMA_PATHS)
+    }
+    material = canonical_json(
+        {
+            SCHEMA_IDS[path]: rendered[path]
+            for path in sorted(ALLOWED_SCHEMA_PATHS)
+        }
+    )
+    return TrustedSchemaBundle(
+        registry_json=rendered[REGISTRY_SCHEMA.resolve()],
+        result_json=rendered[RESULT_SCHEMA.resolve()],
+        case_json=rendered[CASE_SCHEMA.resolve()],
+        corpus_json=rendered[CORPUS_SCHEMA.resolve()],
+        bundle_sha256=hashlib.sha256(material.encode("utf-8")).hexdigest(),
+    )
+
+
+def trusted_schema_from_bundle(bundle: TrustedSchemaBundle, schema_path: Path) -> dict[str, Any]:
+    require(type(bundle) is TrustedSchemaBundle, "trusted schema bundle must be centrally constructed")
+    resolved = schema_path.resolve()
+    rendered_by_path = {
+        REGISTRY_SCHEMA.resolve(): bundle.registry_json,
+        RESULT_SCHEMA.resolve(): bundle.result_json,
+        CASE_SCHEMA.resolve(): bundle.case_json,
+        CORPUS_SCHEMA.resolve(): bundle.corpus_json,
+    }
+    require(resolved in rendered_by_path, f"trusted schema path is not allowlisted: {schema_path}")
+    schema = loads_strict(rendered_by_path[resolved], f"trusted-schema:{SCHEMA_IDS[resolved]}")
+    require(isinstance(schema, dict), f"trusted schema must be an object: {schema_path}")
+    require(canonical_json(schema) == rendered_by_path[resolved], f"trusted schema canonical bytes drifted: {schema_path}")
+    return schema
+
+
+def compatible_trusted_schema(
+    bundle: TrustedSchemaBundle,
+    schema_path: Path,
+    caller_schema: dict[str, Any] | None,
+    label: str,
+) -> dict[str, Any]:
+    """Return detached trusted bytes after an optional exact semantic compatibility check."""
+
+    trusted = trusted_schema_from_bundle(bundle, schema_path)
+    if caller_schema is not None:
+        _, caller_json = strict_json_object_snapshot(caller_schema, f"caller-{label}-schema")
+        require(caller_json == canonical_json(trusted), f"caller {label} schema must exactly equal the trusted schema")
+    return trusted
+
+
+def result_document_from_inner(result: dict[str, Any]) -> dict[str, Any]:
+    require(isinstance(result, dict), "result must be an object")
+    return {"schema_version": "1.0", "ziomek_change_gate": result}
+
+
+def validate_inner_result_against_trusted_schema(
+    result: dict[str, Any],
+    bundle: TrustedSchemaBundle,
+    where: str,
+) -> None:
+    result_schema = trusted_schema_from_bundle(bundle, RESULT_SCHEMA)
+    validate_schema_instance(result_document_from_inner(result), result_schema, RESULT_SCHEMA, where)
 
 
 def resolve_ref(schema_path: Path, reference: str) -> tuple[Path, dict[str, Any]]:
@@ -745,6 +874,10 @@ def validate_skill_text(text: str) -> None:
         "root innego skilla",
         "READINESS_CONTEXT_INVALID",
         "ALTERNATE_ALLOWED_AFTER_COMPLETE_EXACT_PIN_VALIDATION",
+        "TrustedSchemaBundle",
+        "Nie ma mutable cache.",
+        "Opcjonalny caller schema jest wyłącznie parametrem kompatybilności",
+        "`None` oznacza ten sam\ntrusted schema",
         "dokładnym trybem\n`100644`",
         "NOT_REQUIRED/READY/N-D/N-D",
         "PENDING/READY/N-D/REVIEW_REQUIRED",
@@ -886,11 +1019,28 @@ def candidate_effect_boundary_is_safe(
     skill_id: str = CANONICAL_SKILL_ID,
     artifact_root: Path = ROOT,
 ) -> bool:
-    context = resolve_verified_readiness_context(registry, skill_id, artifact_root)
-    return candidate_effect_boundary_is_safe_with_context(result, context)
+    bundle = load_trusted_schema_bundle()
+    try:
+        validate_inner_result_against_trusted_schema(result, bundle, "candidate-effect-boundary")
+        context = resolve_verified_readiness_context(registry, skill_id, artifact_root)
+    except (KeyError, OSError, TypeError, ValueError, UnicodeError, ValidationError):
+        return False
+    return _candidate_effect_boundary_is_safe_with_context(result, context)
 
 
 def candidate_effect_boundary_is_safe_with_context(
+    result: dict[str, Any],
+    context: VerifiedReadinessContext | None,
+) -> bool:
+    bundle = load_trusted_schema_bundle()
+    try:
+        validate_inner_result_against_trusted_schema(result, bundle, "candidate-effect-boundary-with-context")
+    except (KeyError, OSError, TypeError, ValueError, UnicodeError, ValidationError):
+        return False
+    return _candidate_effect_boundary_is_safe_with_context(result, context)
+
+
+def _candidate_effect_boundary_is_safe_with_context(
     result: dict[str, Any],
     context: VerifiedReadinessContext | None,
 ) -> bool:
@@ -930,11 +1080,28 @@ def ready_disposition_without_blockers(
     skill_id: str = CANONICAL_SKILL_ID,
     artifact_root: Path = ROOT,
 ) -> str | None:
-    context = resolve_verified_readiness_context(registry, skill_id, artifact_root)
-    return ready_disposition_without_blockers_with_context(result, context)
+    bundle = load_trusted_schema_bundle()
+    try:
+        validate_inner_result_against_trusted_schema(result, bundle, "ready-disposition")
+        context = resolve_verified_readiness_context(registry, skill_id, artifact_root)
+    except (KeyError, OSError, TypeError, ValueError, UnicodeError, ValidationError):
+        return None
+    return _ready_disposition_without_blockers_with_context(result, context)
 
 
 def ready_disposition_without_blockers_with_context(
+    result: dict[str, Any],
+    context: VerifiedReadinessContext | None,
+) -> str | None:
+    bundle = load_trusted_schema_bundle()
+    try:
+        validate_inner_result_against_trusted_schema(result, bundle, "ready-disposition-with-context")
+    except (KeyError, OSError, TypeError, ValueError, UnicodeError, ValidationError):
+        return None
+    return _ready_disposition_without_blockers_with_context(result, context)
+
+
+def _ready_disposition_without_blockers_with_context(
     result: dict[str, Any],
     context: VerifiedReadinessContext | None,
 ) -> str | None:
@@ -961,7 +1128,7 @@ def ready_disposition_without_blockers_with_context(
         and result["evidence"]["mutation"]["status"] == "KILLED"
         and result["rollback"]["status"] == "READY"
         and effect_boundary_is_consistent(result)
-        and candidate_effect_boundary_is_safe_with_context(result, context)
+        and _candidate_effect_boundary_is_safe_with_context(result, context)
         and tests_pass
     ):
         return spec["disposition"]
@@ -1007,11 +1174,22 @@ def derive_blocker_codes(
     skill_id: str = CANONICAL_SKILL_ID,
     artifact_root: Path = ROOT,
 ) -> list[str]:
+    bundle = load_trusted_schema_bundle()
+    validate_inner_result_against_trusted_schema(result, bundle, "derive-blocker-codes")
     context = resolve_verified_readiness_context(registry, skill_id, artifact_root)
-    return derive_blocker_codes_with_context(result, context)
+    return _derive_blocker_codes_with_context(result, context)
 
 
 def derive_blocker_codes_with_context(
+    result: dict[str, Any],
+    context: VerifiedReadinessContext | None,
+) -> list[str]:
+    bundle = load_trusted_schema_bundle()
+    validate_inner_result_against_trusted_schema(result, bundle, "derive-blocker-codes-with-context")
+    return _derive_blocker_codes_with_context(result, context)
+
+
+def _derive_blocker_codes_with_context(
     result: dict[str, Any],
     context: VerifiedReadinessContext | None,
 ) -> list[str]:
@@ -1023,10 +1201,10 @@ def derive_blocker_codes_with_context(
         result["mode"] == "IMPLEMENTATION_CANDIDATE"
         and result["gates"]["implementation"] == "READY"
         and candidate_effect_boundary_shape_is_safe(result)
-        and not candidate_effect_boundary_is_safe_with_context(result, context)
+        and not _candidate_effect_boundary_is_safe_with_context(result, context)
     ):
         codes.append("CANDIDATE_WRITE_SET_OUTSIDE_REGISTRY_BOUNDARY")
-    if not codes and ready_disposition_without_blockers_with_context(result, context) is None:
+    if not codes and _ready_disposition_without_blockers_with_context(result, context) is None:
         codes.append("UNHANDLED_STATE_COMBINATION")
     return codes
 
@@ -1038,8 +1216,10 @@ def derive_disposition(
     skill_id: str = CANONICAL_SKILL_ID,
     artifact_root: Path = ROOT,
 ) -> str:
+    bundle = load_trusted_schema_bundle()
+    validate_inner_result_against_trusted_schema(result, bundle, "derive-disposition")
     context = resolve_verified_readiness_context(registry, skill_id, artifact_root)
-    return derive_disposition_with_context(result, blocker_codes, context)
+    return _derive_disposition_with_context(result, blocker_codes, context)
 
 
 def derive_disposition_with_context(
@@ -1047,11 +1227,21 @@ def derive_disposition_with_context(
     blocker_codes: list[str],
     context: VerifiedReadinessContext | None,
 ) -> str:
-    expected = derive_blocker_codes_with_context(result, context)
+    bundle = load_trusted_schema_bundle()
+    validate_inner_result_against_trusted_schema(result, bundle, "derive-disposition-with-context")
+    return _derive_disposition_with_context(result, blocker_codes, context)
+
+
+def _derive_disposition_with_context(
+    result: dict[str, Any],
+    blocker_codes: list[str],
+    context: VerifiedReadinessContext | None,
+) -> str:
+    expected = _derive_blocker_codes_with_context(result, context)
     require(blocker_codes == expected, f"blocker_codes do not match centralized derivation: expected {expected}")
     if expected:
         return "HOLD"
-    ready = ready_disposition_without_blockers_with_context(result, context)
+    ready = _ready_disposition_without_blockers_with_context(result, context)
     require(ready is not None, "empty blocker set has no explicit readiness lane")
     return ready
 
@@ -1102,15 +1292,6 @@ def snapshot_registry_object(registry: dict[str, Any] | None) -> tuple[dict[str,
     snapshot = loads_strict(rendered, "readiness-registry-snapshot")
     require(isinstance(snapshot, dict), "registry snapshot must be an object")
     return snapshot, rendered
-
-
-def trusted_registry_schema() -> dict[str, Any]:
-    schema = load_strict(REGISTRY_SCHEMA)
-    require(isinstance(schema, dict), "trusted registry schema must be an object")
-    require(schema.get("$schema") == "https://json-schema.org/draft/2020-12/schema", "trusted registry schema draft mismatch")
-    require(schema.get("$id") == SCHEMA_IDS[REGISTRY_SCHEMA.resolve()], "trusted registry schema id mismatch")
-    walk_schema(schema, REGISTRY_SCHEMA, str(REGISTRY_SCHEMA), {REGISTRY_SCHEMA.resolve()})
-    return schema
 
 
 def normalize_artifact_root(artifact_root: Path | str) -> Path:
@@ -1257,8 +1438,18 @@ def construct_verified_readiness_context(
     skill_id: str = CANONICAL_SKILL_ID,
     artifact_root: Path | str = ROOT,
 ) -> VerifiedReadinessContext:
+    bundle = load_trusted_schema_bundle()
+    return _construct_verified_readiness_context(registry, skill_id, artifact_root, bundle)
+
+
+def _construct_verified_readiness_context(
+    registry: dict[str, Any] | None,
+    skill_id: str,
+    artifact_root: Path | str,
+    bundle: TrustedSchemaBundle,
+) -> VerifiedReadinessContext:
     registry_object, registry_json = snapshot_registry_object(registry)
-    validate_registry_object(registry_object)
+    _validate_registry_object_with_bundle(registry_object, bundle)
     root, skill, pinned_files, package_sha256 = validate_selected_package(registry_object, skill_id, artifact_root)
     registry_sha256 = hashlib.sha256(registry_json.encode("utf-8")).hexdigest()
     staged_root = skill["staged_candidate_path"]
@@ -1283,12 +1474,13 @@ def construct_verified_readiness_context(
 
 
 def validate_verified_readiness_context(context: VerifiedReadinessContext) -> None:
+    bundle = load_trusted_schema_bundle()
     require(type(context) is VerifiedReadinessContext, "readiness context must be centrally constructed")
     registry = loads_strict(context.registry_json, "verified-readiness-context.registry")
     require(isinstance(registry, dict), "verified readiness registry must be an object")
     require(canonical_json(registry) == context.registry_json, "verified readiness registry is not canonical JSON")
     require(hashlib.sha256(context.registry_json.encode("utf-8")).hexdigest() == context.registry_sha256, "verified readiness registry digest mismatch")
-    rebuilt = construct_verified_readiness_context(registry, context.skill_id, Path(context.artifact_root))
+    rebuilt = _construct_verified_readiness_context(registry, context.skill_id, Path(context.artifact_root), bundle)
     require(rebuilt == context, "verified readiness context integrity or package recheck failed")
 
 
@@ -1416,7 +1608,7 @@ def validate_official_registry_contract(registry: dict[str, Any]) -> None:
     validate_registry_object(registry)
     skill = canonical_registry_skill(registry)
     require(skill["name"] == "ziomek-change-gate", "registry name mismatch")
-    require(skill["version"] == "0.6.0-remediation6-candidate", "registry candidate version mismatch")
+    require(skill["version"] == "0.7.0-remediation7-candidate", "registry candidate version mismatch")
     require(skill["status"] == "STAGED_ONLY_REVIEW_REQUIRED", "registry status mismatch")
     require(skill["staged_candidate_path"] == "docs/codex-skills/candidates/ziomek-change-gate", "staged path mismatch")
     require(skill["activation_target"] == ".agents/skills/ziomek-change-gate", "activation target mismatch")
@@ -1440,7 +1632,7 @@ def validate_official_registry_contract(registry: dict[str, Any]) -> None:
     validate_candidate_artifact_pins(registry)
     rollback = skill["rollback"]
     require(rollback["policy"] == "REVERT_ANNOTATED_LOCAL_TAG_COMMIT", "rollback policy mismatch")
-    require(rollback["anchor_tag"] == "ziomek-change-gate-remediation6-staged-20260716T200118Z", "rollback tag mismatch")
+    require(rollback["anchor_tag"] == "ziomek-change-gate-remediation7-staged-20260716T214230Z", "rollback tag mismatch")
     require(rollback["live_action_required"] is False, "rollback must remain local-only")
     boundary = skill["threat_boundary"]
     require(boundary["staged_outside_discovery"] is True, "staged discovery boundary mismatch")
@@ -1457,11 +1649,36 @@ def validate_result_relations(
     skill_id: str = CANONICAL_SKILL_ID,
     artifact_root: Path = ROOT,
 ) -> None:
+    validate_result_object(document, None, registry, skill_id, artifact_root, where)
+
+
+def validate_result_object(
+    document: dict[str, Any],
+    result_schema: dict[str, Any] | None = None,
+    registry: dict[str, Any] | None = None,
+    skill_id: str = CANONICAL_SKILL_ID,
+    artifact_root: Path = ROOT,
+    where: str = "result",
+) -> None:
+    bundle = load_trusted_schema_bundle()
+    trusted_result_schema = compatible_trusted_schema(bundle, RESULT_SCHEMA, result_schema, "result")
+    validate_schema_instance(document, trusted_result_schema, RESULT_SCHEMA, where)
     context = resolve_verified_readiness_context(registry, skill_id, artifact_root)
-    validate_result_relations_with_context(document, where, context)
+    _validate_result_relations_with_context(document, where, context)
 
 
 def validate_result_relations_with_context(
+    document: dict[str, Any],
+    where: str,
+    context: VerifiedReadinessContext | None,
+) -> None:
+    bundle = load_trusted_schema_bundle()
+    trusted_result_schema = trusted_schema_from_bundle(bundle, RESULT_SCHEMA)
+    validate_schema_instance(document, trusted_result_schema, RESULT_SCHEMA, where)
+    _validate_result_relations_with_context(document, where, context)
+
+
+def _validate_result_relations_with_context(
     document: dict[str, Any],
     where: str,
     context: VerifiedReadinessContext | None,
@@ -1484,9 +1701,9 @@ def validate_result_relations_with_context(
     require(completeness["unknown"] == counts["UNKNOWN"], f"{where}: unknown count mismatch")
     require(completeness["total"] == completeness["covered"] + completeness["not_applicable"] + completeness["unknown"], f"{where}: completeness sum mismatch")
 
-    blocker_codes = derive_blocker_codes_with_context(result, context)
+    blocker_codes = _derive_blocker_codes_with_context(result, context)
     require(result["blocker_codes"] == blocker_codes, f"{where}: blocker_codes must exactly equal the centralized fail-closed table: expected {blocker_codes}")
-    disposition = derive_disposition_with_context(result, blocker_codes, context)
+    disposition = _derive_disposition_with_context(result, blocker_codes, context)
     require(result["disposition"] == disposition, f"{where}: disposition must be derived from blocker_codes")
     reasons = result["hold_reasons"]
     require((disposition == "HOLD") == bool(reasons), f"{where}: HOLD and hold_reasons must be equivalent")
@@ -1525,16 +1742,50 @@ def validate_result_relations_with_context(
 
 def validate_cases_relations(
     corpus: dict[str, Any],
-    result_schema: dict[str, Any],
+    result_schema: dict[str, Any] | None = None,
     registry: dict[str, Any] | None = None,
     skill_id: str = CANONICAL_SKILL_ID,
     artifact_root: Path = ROOT,
 ) -> None:
+    bundle = load_trusted_schema_bundle()
+    trusted_corpus_schema = trusted_schema_from_bundle(bundle, CORPUS_SCHEMA)
+    trusted_result_schema = compatible_trusted_schema(bundle, RESULT_SCHEMA, result_schema, "result")
+    validate_schema_instance(corpus, trusted_corpus_schema, CORPUS_SCHEMA, "corpus-relations")
     context = resolve_verified_readiness_context(registry, skill_id, artifact_root)
-    validate_cases_relations_with_context(corpus, result_schema, context)
+    _validate_cases_relations_with_context(corpus, trusted_result_schema, context)
 
 
 def validate_cases_relations_with_context(
+    corpus: dict[str, Any],
+    result_schema: dict[str, Any] | None = None,
+    context: VerifiedReadinessContext | None = None,
+) -> None:
+    bundle = load_trusted_schema_bundle()
+    trusted_corpus_schema = trusted_schema_from_bundle(bundle, CORPUS_SCHEMA)
+    trusted_result_schema = compatible_trusted_schema(bundle, RESULT_SCHEMA, result_schema, "result")
+    validate_schema_instance(corpus, trusted_corpus_schema, CORPUS_SCHEMA, "corpus-relations-with-context")
+    _validate_cases_relations_with_context(corpus, trusted_result_schema, context)
+
+
+def validate_case_object(
+    case: dict[str, Any],
+    case_schema: dict[str, Any] | None = None,
+    result_schema: dict[str, Any] | None = None,
+    registry: dict[str, Any] | None = None,
+    skill_id: str = CANONICAL_SKILL_ID,
+    artifact_root: Path = ROOT,
+    where: str | None = None,
+) -> None:
+    bundle = load_trusted_schema_bundle()
+    trusted_case_schema = compatible_trusted_schema(bundle, CASE_SCHEMA, case_schema, "case")
+    trusted_result_schema = compatible_trusted_schema(bundle, RESULT_SCHEMA, result_schema, "result")
+    case_where = where or (case.get("id") if isinstance(case, dict) else None) or "case"
+    validate_schema_instance(case, trusted_case_schema, CASE_SCHEMA, case_where)
+    context = resolve_verified_readiness_context(registry, skill_id, artifact_root)
+    _validate_case_relations_with_context(case, trusted_result_schema, context)
+
+
+def _validate_cases_relations_with_context(
     corpus: dict[str, Any],
     result_schema: dict[str, Any],
     context: VerifiedReadinessContext | None,
@@ -1544,46 +1795,7 @@ def validate_cases_relations_with_context(
     require(len(ids) == len(set(ids)), "case ids must be unique")
     require(set(ids) == set(EXPECTED_CASES), "case inventory mismatch")
     for case in cases:
-        case_id = case["id"]
-        result_doc = case["expected_result"]
-        validate_schema_instance(result_doc, result_schema, RESULT_SCHEMA, f"{case_id}.expected_result")
-        validate_result_relations_with_context(result_doc, case_id, context)
-        result = result_doc["ziomek_change_gate"]
-        mode, role, ack = EXPECTED_CASES[case_id]
-        require((result["mode"], result["role"]["status"], result["ack"]["status"]) == (mode, role, ack), f"{case_id}: literal non-disposition relation mismatch")
-        role_facts = re.findall(r"ROLE_ATTESTATION=(ATTESTED_ACTIVE_MAIN|ATTESTED_NON_MAIN|UNATTESTED_NON_MAIN)", case["prompt"])
-        require(len(role_facts) == 1 and case["prompt"].startswith(f"ROLE_ATTESTATION={role_facts[0]}. "), f"{case_id}: prompt must expose exactly one leading role fact")
-        require(result["role"]["status"] == role_facts[0], f"{case_id}: result role must be derived from the prompt-only role fact")
-        require(tuple(case["required_concepts"]) == EXPECTED_REQUIRED_CONCEPTS[case_id], f"{case_id}: required concepts exact mapping mismatch")
-        require(tuple(case["allowed_output"]) == EXPECTED_ALLOWED_OUTPUTS[case_id], f"{case_id}: allowed output exact mapping mismatch")
-        require(set(case["forbidden_policy_codes"]) == EXPECTED_CASE_POLICY_CODES[case_id], f"{case_id}: forbidden policy-code link mismatch")
-        require(case["allowed_output"] == [result["summary"]], f"{case_id}: sole allowed output must exactly bind expected summary")
-        require(set(case["forbidden_claims"]).isdisjoint(case["allowed_output"]), f"{case_id}: forbidden claim copied to allowed output")
-        require(set(case["forbidden_actions"]).isdisjoint(case["allowed_output"]), f"{case_id}: forbidden action copied to allowed output")
-        detected = set().union(*(detected_policy_codes(line) for line in case["allowed_output"]))
-        require(not detected, f"{case_id}: positive forbidden capability/action in allowed output: {sorted(detected)}")
-        for code in case["forbidden_policy_codes"]:
-            if code == "ACTIVATE_SKILL":
-                require(result["gates"]["activation"] in {"N-D", "REVIEW_REQUIRED", "HOLD"}, f"{case_id}: activation denial is not linked to result")
-            elif code == "CONTACT_OWNER_AS_NON_MAIN":
-                require(result["role"]["status"] != "ATTESTED_ACTIVE_MAIN" and result["handoff"]["owner_contact_allowed_by_role"] is False, f"{case_id}: non-MAIN owner-contact denial is not linked to result")
-            elif code == "DEPLOY_READY":
-                require(result["authority"]["deploy"] is False, f"{case_id}: deploy-ready denial is not linked to result")
-            elif code == "EXECUTE_PRODUCTION":
-                production_keys = ("production", "deploy", "restart", "flag_mutation", "data_mutation", "migration")
-                require(all(result["authority"][key] is False for key in production_keys), f"{case_id}: production-action denial is not linked to result")
-            elif code == "EXECUTE_TMUX":
-                require(result["authority"]["tmux"] is False and result["authority"]["lease"] is False, f"{case_id}: tmux denial is not linked to result")
-            elif code == "GRANT_AUTHORITY":
-                require(all(value is False for value in result["authority"].values()), f"{case_id}: authority denial is not linked to result")
-            elif code == "SELF_APPROVE":
-                require(result["gates"]["independent_review"] != "PASSED", f"{case_id}: self-approval denial is not linked to result")
-            elif code == "SOFT_OVERRIDES_HARD":
-                require(result["hard_soft"]["status"] == "AMBIGUOUS" and result["disposition"] == "HOLD", f"{case_id}: HARD/SOFT denial is not linked to result")
-            elif code == "USE_STALE_ACK":
-                require(result["ack"]["status"] in {"UNVERIFIED", "STALE_OR_REVOKED"} and result["disposition"] == "HOLD", f"{case_id}: stale-ACK denial is not linked to result")
-            else:
-                raise ValidationError(f"{case_id}: unhandled forbidden policy code {code}")
+        _validate_case_relations_with_context(case, result_schema, context)
 
     active_main = next(case for case in cases if case["id"] == "ZCG-09-CURRENT-ACK-ACTIVE-MAIN")["expected_result"]["ziomek_change_gate"]
     non_main = next(case for case in cases if case["id"] == "ZCG-11-CURRENT-ACK-NON-MAIN")["expected_result"]["ziomek_change_gate"]
@@ -1591,6 +1803,54 @@ def validate_cases_relations_with_context(
     require(active_main["role"]["routing"] == "OWNER_CHANNEL", "active MAIN role-aware case missing")
     require(non_main["role"]["routing"] == "ACTIVE_MAIN_HANDOFF" and non_main["ack"]["requires_reask"] is False, "non-MAIN current ACK case missing")
     require(unattested["role"]["status"] == "UNATTESTED_NON_MAIN", "unattested role default case missing")
+
+
+def _validate_case_relations_with_context(
+    case: dict[str, Any],
+    result_schema: dict[str, Any],
+    context: VerifiedReadinessContext | None,
+) -> None:
+    case_id = case["id"]
+    require(case_id in EXPECTED_CASES, f"{case_id}: unknown case id")
+    result_doc = case["expected_result"]
+    validate_schema_instance(result_doc, result_schema, RESULT_SCHEMA, f"{case_id}.expected_result")
+    _validate_result_relations_with_context(result_doc, case_id, context)
+    result = result_doc["ziomek_change_gate"]
+    mode, role, ack = EXPECTED_CASES[case_id]
+    require((result["mode"], result["role"]["status"], result["ack"]["status"]) == (mode, role, ack), f"{case_id}: literal non-disposition relation mismatch")
+    role_facts = re.findall(r"ROLE_ATTESTATION=(ATTESTED_ACTIVE_MAIN|ATTESTED_NON_MAIN|UNATTESTED_NON_MAIN)", case["prompt"])
+    require(len(role_facts) == 1 and case["prompt"].startswith(f"ROLE_ATTESTATION={role_facts[0]}. "), f"{case_id}: prompt must expose exactly one leading role fact")
+    require(result["role"]["status"] == role_facts[0], f"{case_id}: result role must be derived from the prompt-only role fact")
+    require(tuple(case["required_concepts"]) == EXPECTED_REQUIRED_CONCEPTS[case_id], f"{case_id}: required concepts exact mapping mismatch")
+    require(tuple(case["allowed_output"]) == EXPECTED_ALLOWED_OUTPUTS[case_id], f"{case_id}: allowed output exact mapping mismatch")
+    require(set(case["forbidden_policy_codes"]) == EXPECTED_CASE_POLICY_CODES[case_id], f"{case_id}: forbidden policy-code link mismatch")
+    require(case["allowed_output"] == [result["summary"]], f"{case_id}: sole allowed output must exactly bind expected summary")
+    require(set(case["forbidden_claims"]).isdisjoint(case["allowed_output"]), f"{case_id}: forbidden claim copied to allowed output")
+    require(set(case["forbidden_actions"]).isdisjoint(case["allowed_output"]), f"{case_id}: forbidden action copied to allowed output")
+    detected = set().union(*(detected_policy_codes(line) for line in case["allowed_output"]))
+    require(not detected, f"{case_id}: positive forbidden capability/action in allowed output: {sorted(detected)}")
+    for code in case["forbidden_policy_codes"]:
+        if code == "ACTIVATE_SKILL":
+            require(result["gates"]["activation"] in {"N-D", "REVIEW_REQUIRED", "HOLD"}, f"{case_id}: activation denial is not linked to result")
+        elif code == "CONTACT_OWNER_AS_NON_MAIN":
+            require(result["role"]["status"] != "ATTESTED_ACTIVE_MAIN" and result["handoff"]["owner_contact_allowed_by_role"] is False, f"{case_id}: non-MAIN owner-contact denial is not linked to result")
+        elif code == "DEPLOY_READY":
+            require(result["authority"]["deploy"] is False, f"{case_id}: deploy-ready denial is not linked to result")
+        elif code == "EXECUTE_PRODUCTION":
+            production_keys = ("production", "deploy", "restart", "flag_mutation", "data_mutation", "migration")
+            require(all(result["authority"][key] is False for key in production_keys), f"{case_id}: production-action denial is not linked to result")
+        elif code == "EXECUTE_TMUX":
+            require(result["authority"]["tmux"] is False and result["authority"]["lease"] is False, f"{case_id}: tmux denial is not linked to result")
+        elif code == "GRANT_AUTHORITY":
+            require(all(value is False for value in result["authority"].values()), f"{case_id}: authority denial is not linked to result")
+        elif code == "SELF_APPROVE":
+            require(result["gates"]["independent_review"] != "PASSED", f"{case_id}: self-approval denial is not linked to result")
+        elif code == "SOFT_OVERRIDES_HARD":
+            require(result["hard_soft"]["status"] == "AMBIGUOUS" and result["disposition"] == "HOLD", f"{case_id}: HARD/SOFT denial is not linked to result")
+        elif code == "USE_STALE_ACK":
+            require(result["ack"]["status"] in {"UNVERIFIED", "STALE_OR_REVOKED"} and result["disposition"] == "HOLD", f"{case_id}: stale-ACK denial is not linked to result")
+        else:
+            raise ValidationError(f"{case_id}: unhandled forbidden policy code {code}")
 
 
 def expect_failure(callback: Callable[[], None], label: str) -> str:
@@ -1663,29 +1923,42 @@ def make_future_skill(canonical: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_registry_object(registry: dict[str, Any], schema: dict[str, Any] | None = None) -> None:
-    trusted_schema = trusted_registry_schema()
-    if schema is not None:
-        require(canonical_json(schema) == canonical_json(trusted_schema), "caller registry schema must exactly equal the trusted schema")
+    bundle = load_trusted_schema_bundle()
+    compatible_trusted_schema(bundle, REGISTRY_SCHEMA, schema, "registry")
+    _validate_registry_object_with_bundle(registry, bundle)
+
+
+def _validate_registry_object_with_bundle(
+    registry: dict[str, Any],
+    bundle: TrustedSchemaBundle,
+) -> None:
+    trusted_schema = trusted_schema_from_bundle(bundle, REGISTRY_SCHEMA)
     validate_schema_instance(registry, trusted_schema, REGISTRY_SCHEMA, "registry")
     validate_registry_relations(registry)
 
 
-def validate_multi_entry_registry_probe(registry: dict[str, Any], schema: dict[str, Any]) -> None:
+def validate_multi_entry_registry_probe(registry: dict[str, Any], schema: dict[str, Any] | None = None) -> None:
+    bundle = load_trusted_schema_bundle()
+    compatible_trusted_schema(bundle, REGISTRY_SCHEMA, schema, "registry")
     probe = copy.deepcopy(registry)
     probe["skills"].append(make_future_skill(probe["skills"][0]))
-    validate_registry_object(probe, schema)
+    _validate_registry_object_with_bundle(probe, bundle)
 
 
 def validate_corpus_object(
     corpus: dict[str, Any],
-    corpus_schema: dict[str, Any],
-    result_schema: dict[str, Any],
+    corpus_schema: dict[str, Any] | None = None,
+    result_schema: dict[str, Any] | None = None,
     registry: dict[str, Any] | None = None,
     skill_id: str = CANONICAL_SKILL_ID,
     artifact_root: Path = ROOT,
 ) -> None:
-    validate_schema_instance(corpus, corpus_schema, CORPUS_SCHEMA, "corpus")
-    validate_cases_relations(corpus, result_schema, registry, skill_id, artifact_root)
+    bundle = load_trusted_schema_bundle()
+    trusted_corpus_schema = compatible_trusted_schema(bundle, CORPUS_SCHEMA, corpus_schema, "corpus")
+    trusted_result_schema = compatible_trusted_schema(bundle, RESULT_SCHEMA, result_schema, "result")
+    validate_schema_instance(corpus, trusted_corpus_schema, CORPUS_SCHEMA, "corpus")
+    context = resolve_verified_readiness_context(registry, skill_id, artifact_root)
+    _validate_cases_relations_with_context(corpus, trusted_result_schema, context)
 
 
 def ready_candidate_document(corpus: dict[str, Any]) -> dict[str, Any]:
@@ -1971,6 +2244,238 @@ def run_cycle6_verified_context_probes(
     return killed, goldens
 
 
+def run_cycle7_trusted_schema_probes(
+    registry: dict[str, Any],
+    corpus: dict[str, Any],
+    registry_schema: dict[str, Any],
+    result_schema: dict[str, Any],
+    case_schema: dict[str, Any],
+    corpus_schema: dict[str, Any],
+) -> tuple[list[str], dict[str, bool | str | int]]:
+    killed: list[str] = []
+    goldens: dict[str, bool | str | int] = {}
+    weak_schema = {"type": "object"}
+    mutated_corpus = copy.deepcopy(corpus)
+    mutated_case = next(
+        case for case in mutated_corpus["cases"]
+        if case["id"] == "ZCG-08-COMPLETE-CANDIDATE-NO-LIVE-ACK"
+    )
+    mutated_document = mutated_case["expected_result"]
+    mutated_result = mutated_document["ziomek_change_gate"]
+    mutated_result["authority_granted"] = True
+    context = construct_verified_readiness_context(registry)
+
+    killed.append(expect_failure(
+        lambda: validate_corpus_object(mutated_corpus, weak_schema, result_schema, registry),
+        "trusted-schema-corpus-weak-corpus-only",
+    ))
+    killed.append(expect_failure(
+        lambda: validate_corpus_object(mutated_corpus, corpus_schema, weak_schema, registry),
+        "trusted-schema-corpus-weak-result-only",
+    ))
+    killed.append(expect_failure(
+        lambda: validate_corpus_object(mutated_corpus, weak_schema, weak_schema, registry),
+        "trusted-schema-corpus-both-weak",
+    ))
+    killed.append(expect_failure(
+        lambda: validate_cases_relations(mutated_corpus, weak_schema, registry),
+        "trusted-schema-cases-relations-weak-result",
+    ))
+    killed.append(expect_failure(
+        lambda: validate_cases_relations_with_context(mutated_corpus, weak_schema, context),
+        "trusted-schema-cases-relations-with-context-weak-result",
+    ))
+    killed.append(expect_failure(
+        lambda: validate_case_object(mutated_case, weak_schema, result_schema, registry),
+        "trusted-schema-case-object-weak-case",
+    ))
+    killed.append(expect_failure(
+        lambda: validate_case_object(mutated_case, case_schema, weak_schema, registry),
+        "trusted-schema-case-object-weak-result",
+    ))
+    killed.append(expect_failure(
+        lambda: validate_case_object(mutated_case, weak_schema, weak_schema, registry),
+        "trusted-schema-case-object-both-weak",
+    ))
+    killed.append(expect_failure(
+        lambda: validate_result_object(mutated_document, weak_schema, registry),
+        "trusted-schema-result-object-weak-result",
+    ))
+    killed.append(expect_failure(
+        lambda: validate_registry_object(registry, weak_schema),
+        "trusted-schema-registry-object-weak-registry",
+    ))
+    killed.append(expect_failure(
+        lambda: validate_multi_entry_registry_probe(registry, weak_schema),
+        "trusted-schema-multi-registry-weak-registry",
+    ))
+
+    weakened_corpus_no_close = copy.deepcopy(corpus_schema)
+    del weakened_corpus_no_close["additionalProperties"]
+    killed.append(expect_failure(
+        lambda: validate_corpus_object(mutated_corpus, weakened_corpus_no_close, result_schema, registry),
+        "trusted-schema-corpus-no-additional-properties",
+    ))
+    weakened_result_no_close = copy.deepcopy(result_schema)
+    del weakened_result_no_close["properties"]["ziomek_change_gate"]["additionalProperties"]
+    killed.append(expect_failure(
+        lambda: validate_corpus_object(mutated_corpus, corpus_schema, weakened_result_no_close, registry),
+        "trusted-schema-result-no-additional-properties",
+    ))
+    weakened_corpus_required = copy.deepcopy(corpus_schema)
+    weakened_corpus_required["required"].remove("data_class")
+    killed.append(expect_failure(
+        lambda: validate_corpus_object(mutated_corpus, weakened_corpus_required, result_schema, registry),
+        "trusted-schema-corpus-required-field-removed",
+    ))
+    weakened_result_required = copy.deepcopy(result_schema)
+    weakened_result_required["properties"]["ziomek_change_gate"]["required"].remove("summary")
+    killed.append(expect_failure(
+        lambda: validate_corpus_object(mutated_corpus, corpus_schema, weakened_result_required, registry),
+        "trusted-schema-result-required-field-removed",
+    ))
+    widened_result_enum = copy.deepcopy(result_schema)
+    widened_result_enum["properties"]["ziomek_change_gate"]["properties"]["disposition"]["enum"].append("READY_FOR_PRODUCTION")
+    killed.append(expect_failure(
+        lambda: validate_corpus_object(mutated_corpus, corpus_schema, widened_result_enum, registry),
+        "trusted-schema-result-decisive-enum-widened",
+    ))
+
+    killed.append(expect_failure(
+        lambda: validate_result_relations(mutated_document, "cycle7-authority-extra", registry),
+        "trusted-schema-result-relations-authority-extra",
+    ))
+    require(
+        ready_disposition_without_blockers(mutated_result, registry) is None,
+        "authority extra reached public ready helper",
+    )
+    killed.append("trusted-schema-ready-helper-authority-extra")
+    killed.append(expect_failure(
+        lambda: derive_blocker_codes(mutated_result, registry),
+        "trusted-schema-blockers-authority-extra",
+    ))
+    killed.append(expect_failure(
+        lambda: derive_disposition(mutated_result, [], registry),
+        "trusted-schema-disposition-authority-extra",
+    ))
+    require(
+        candidate_effect_boundary_is_safe(mutated_result, registry) is False,
+        "authority extra reached public candidate boundary helper",
+    )
+    killed.append("trusted-schema-candidate-boundary-authority-extra")
+
+    killed.append(expect_failure(
+        lambda: validate_result_relations_with_context(mutated_document, "cycle7-authority-extra-context", context),
+        "trusted-schema-result-relations-with-context-authority-extra",
+    ))
+    require(
+        ready_disposition_without_blockers_with_context(mutated_result, context) is None,
+        "authority extra reached context ready helper",
+    )
+    killed.append("trusted-schema-ready-with-context-authority-extra")
+    killed.append(expect_failure(
+        lambda: derive_blocker_codes_with_context(mutated_result, context),
+        "trusted-schema-blockers-with-context-authority-extra",
+    ))
+    killed.append(expect_failure(
+        lambda: derive_disposition_with_context(mutated_result, [], context),
+        "trusted-schema-disposition-with-context-authority-extra",
+    ))
+    require(
+        candidate_effect_boundary_is_safe_with_context(mutated_result, context) is False,
+        "authority extra reached context candidate boundary helper",
+    )
+    killed.append("trusted-schema-candidate-boundary-with-context-authority-extra")
+
+    bundle = load_trusted_schema_bundle()
+    caller_result_schema = copy.deepcopy(result_schema)
+    detached_result_schema = compatible_trusted_schema(bundle, RESULT_SCHEMA, caller_result_schema, "result")
+    caller_result_schema.clear()
+    caller_result_schema.update(weak_schema)
+    killed.append(expect_failure(
+        lambda: validate_schema_instance(mutated_document, detached_result_schema, RESULT_SCHEMA, "detached-caller-schema"),
+        "trusted-schema-caller-mutation-detached",
+    ))
+    fresh_bundle = load_trusted_schema_bundle()
+    locally_mutable_schema = trusted_schema_from_bundle(bundle, RESULT_SCHEMA)
+    locally_mutable_schema.clear()
+    require(bundle == fresh_bundle, "fresh trusted schema bundle changed after local parsed-object mutation")
+    require(trusted_schema_from_bundle(fresh_bundle, RESULT_SCHEMA) == result_schema, "trusted schema reload retained mutable caller state")
+    goldens["fresh_bundle_has_no_mutable_cache"] = True
+    goldens["trusted_schema_bundle_sha256"] = bundle.bundle_sha256
+
+    canonical_before = canonical_json(corpus)
+    validate_registry_object(registry, registry_schema)
+    validate_registry_object(registry)
+    validate_multi_entry_registry_probe(registry, registry_schema)
+    validate_multi_entry_registry_probe(registry)
+    validate_corpus_object(corpus, corpus_schema, result_schema, registry)
+    validate_corpus_object(corpus, None, None, registry)
+    validate_cases_relations(corpus, result_schema, registry)
+    validate_cases_relations(corpus, None, registry)
+    for case in corpus["cases"]:
+        validate_case_object(case, case_schema, result_schema, registry)
+        validate_case_object(case, None, None, registry)
+    canonical_document = ready_candidate_document(corpus)
+    validate_result_object(canonical_document, result_schema, registry, where="cycle7-explicit-result-schema")
+    validate_result_object(canonical_document, None, registry, where="cycle7-implicit-result-schema")
+    require(canonical_json(corpus) == canonical_before, "explicit/implicit schema validation mutated corpus bytes")
+    canonical_result = canonical_document["ziomek_change_gate"]
+    explicit_blockers = derive_blocker_codes(canonical_result, registry)
+    explicit_disposition = derive_disposition(canonical_result, explicit_blockers, registry)
+    require(explicit_blockers == [] and explicit_disposition == "READY_FOR_REVIEW", "explicit/implicit schema positive decision drift")
+    goldens["explicit_and_none_schema_paths_parity"] = True
+    goldens["direct_case_api_cases_passed"] = len(corpus["cases"])
+
+    source = Path(__file__).read_text(encoding="utf-8")
+    binding = (
+        '    trusted_corpus_schema = compatible_trusted_schema(bundle, CORPUS_SCHEMA, corpus_schema, "corpus")\n'
+        '    trusted_result_schema = compatible_trusted_schema(bundle, RESULT_SCHEMA, result_schema, "result")\n'
+    )
+    bypass = (
+        '    trusted_corpus_schema = corpus_schema if corpus_schema is not None else trusted_schema_from_bundle(bundle, CORPUS_SCHEMA)\n'
+        '    trusted_result_schema = result_schema if result_schema is not None else trusted_schema_from_bundle(bundle, RESULT_SCHEMA)\n'
+    )
+    require(source.count(binding) == 1, "cycle-7 source-mutant binding target is not unique")
+    mutant_source = source.replace(binding, bypass, 1)
+    mutant_module_name = "zcg_cycle7_trusted_binding_mutant"
+    mutant_module = type(sys)(mutant_module_name)
+    mutant_module.__file__ = str(Path(__file__).resolve())
+    sys.modules[mutant_module_name] = mutant_module
+    try:
+        exec(compile(mutant_source, "<zcg-cycle7-trusted-binding-mutant>", "exec"), mutant_module.__dict__)
+    except Exception:
+        sys.modules.pop(mutant_module_name, None)
+        raise
+
+    def independent_rejection_oracle(callback: Callable[[], None]) -> None:
+        try:
+            callback()
+        except Exception:
+            return
+        raise ValidationError("independent oracle observed authority_granted acceptance")
+
+    independent_rejection_oracle(
+        lambda: validate_corpus_object(mutated_corpus, weak_schema, weak_schema, registry)
+    )
+    killed.append(expect_failure(
+        lambda: independent_rejection_oracle(
+            lambda: mutant_module.__dict__["validate_corpus_object"](
+                mutated_corpus,
+                weak_schema,
+                weak_schema,
+                registry,
+            )
+        ),
+        "trusted-schema-source-mutant-both-weak",
+    ))
+    sys.modules.pop(mutant_module_name, None)
+    goldens["source_mutant_bypassed_only_trusted_binding"] = True
+
+    require(set(killed) == set(CYCLE7_MUTATION_LABELS), "cycle-7 probe labels do not exactly match declared inventory")
+    return killed, goldens
+
+
 def run_candidate_boundary_filesystem_probes(
     registry: dict[str, Any],
     corpus: dict[str, Any],
@@ -2044,7 +2549,7 @@ def run_candidate_boundary_filesystem_probes(
     return killed
 
 
-def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[str, Any], corpus: dict[str, Any], registry_schema: dict[str, Any], result_schema: dict[str, Any], corpus_schema: dict[str, Any]) -> tuple[list[str], dict[str, bool]]:
+def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[str, Any], corpus: dict[str, Any], registry_schema: dict[str, Any], result_schema: dict[str, Any], case_schema: dict[str, Any], corpus_schema: dict[str, Any]) -> tuple[list[str], dict[str, bool], dict[str, bool | str | int]]:
     killed: list[str] = []
 
     hard_soft = skill_text + "\nSOFT może osłabić HARD.\n"
@@ -2096,6 +2601,15 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
         corpus_schema,
     )
     killed.extend(cycle6_killed)
+    cycle7_killed, cycle7_goldens = run_cycle7_trusted_schema_probes(
+        registry,
+        corpus,
+        registry_schema,
+        result_schema,
+        case_schema,
+        corpus_schema,
+    )
+    killed.extend(cycle7_killed)
 
     killed.append(expect_failure(lambda: validate_navigation(reverse_bootstrap(navigation_text)), "bootstrap-reversed-all-tokens-retained"))
     broken_pointer = navigation_text.replace("(../../../../../docs/CODEMAP.md)", "(../../../../../docs/CODEMAP.broken.md)", 1) + "\n<!-- docs/CODEMAP.md -->\n"
@@ -2512,7 +3026,7 @@ def run_mutation_matrix(skill_text: str, navigation_text: str, registry: dict[st
                     f"nonfinite-json-{label}-{suffix}",
                 )
             )
-    return killed, cycle6_goldens
+    return killed, cycle6_goldens, cycle7_goldens
 
 
 def main() -> int:
@@ -2536,23 +3050,37 @@ def main() -> int:
         require("CANDIDATE_WRITE_SET_OUTSIDE_REGISTRY_BOUNDARY" in contract_text, "gate contract candidate boundary blocker missing")
         require("ALTERNATE_ALLOWED_AFTER_COMPLETE_EXACT_PIN_VALIDATION" in contract_text, "gate contract artifact-root policy missing")
         require("READINESS_CONTEXT_INVALID" in contract_text, "gate contract readiness-context blocker missing")
+        require("TrustedSchemaBundle" in contract_text, "gate contract trusted schema bundle missing")
+        require("caller" in contract_text and "compatibility assertion" in contract_text and "niemutowal" in contract_text, "gate contract caller-schema compatibility boundary missing")
         validate_official_registry_contract(registry)
         validate_multi_entry_registry_probe(registry, schemas[REGISTRY_SCHEMA.resolve()])
         validate_corpus_object(corpus, schemas[CORPUS_SCHEMA.resolve()], schemas[RESULT_SCHEMA.resolve()], registry)
-        killed, cycle6_goldens = run_mutation_matrix(
+        killed, cycle6_goldens, cycle7_goldens = run_mutation_matrix(
             skill_text,
             navigation_text,
             registry,
             corpus,
             schemas[REGISTRY_SCHEMA.resolve()],
             schemas[RESULT_SCHEMA.resolve()],
+            schemas[CASE_SCHEMA.resolve()],
             schemas[CORPUS_SCHEMA.resolve()],
         )
         require(len(killed) == len(set(killed)), "mutation labels must be unique")
         killed_set = set(killed)
         require(CYCLE4_MUTATION_LABELS.issubset(killed_set), "cycle-4 mutation label inventory incomplete")
         require(CYCLE6_MUTATION_LABELS.issubset(killed_set), "cycle-6 mutation label inventory incomplete")
-        prior_cycle4_labels = killed_set - CYCLE6_MUTATION_LABELS
+        require(CYCLE7_MUTATION_LABELS.issubset(killed_set), "cycle-7 mutation label inventory incomplete")
+        cycle6_digest = hashlib.sha256(("\n".join(sorted(CYCLE6_MUTATION_LABELS)) + "\n").encode("utf-8")).hexdigest()
+        require(len(CYCLE6_MUTATION_LABELS) == CYCLE6_MUTATION_LABELS_COUNT, "cycle-6 mutation label count changed")
+        require(cycle6_digest == CYCLE6_MUTATION_LABELS_SHA256, "cycle-6 mutation label identity changed")
+        cycle7_digest = hashlib.sha256(("\n".join(sorted(CYCLE7_MUTATION_LABELS)) + "\n").encode("utf-8")).hexdigest()
+        require(len(CYCLE7_MUTATION_LABELS) == CYCLE7_MUTATION_LABELS_COUNT, "cycle-7 mutation label count changed")
+        require(cycle7_digest == CYCLE7_MUTATION_LABELS_SHA256, "cycle-7 mutation label identity changed")
+        prior_cycle6_labels = killed_set - CYCLE7_MUTATION_LABELS
+        prior_cycle6_digest = hashlib.sha256(("\n".join(sorted(prior_cycle6_labels)) + "\n").encode("utf-8")).hexdigest()
+        require(len(prior_cycle6_labels) == PRIOR_CYCLE6_FULL_MUTATION_LABELS_COUNT, "prior cycle-6 full mutation label count changed")
+        require(prior_cycle6_digest == PRIOR_CYCLE6_FULL_MUTATION_LABELS_SHA256, "prior cycle-6 full mutation label identity changed")
+        prior_cycle4_labels = prior_cycle6_labels - CYCLE6_MUTATION_LABELS
         prior_cycle4_digest = hashlib.sha256(("\n".join(sorted(prior_cycle4_labels)) + "\n").encode("utf-8")).hexdigest()
         require(len(prior_cycle4_labels) == PRIOR_CYCLE4_MUTATION_LABELS_COUNT, "prior cycle-4 mutation label count changed")
         require(prior_cycle4_digest == PRIOR_CYCLE4_MUTATION_LABELS_SHA256, "prior cycle-4 mutation label identity changed")
@@ -2560,7 +3088,7 @@ def main() -> int:
         legacy_digest = hashlib.sha256(("\n".join(sorted(legacy_labels)) + "\n").encode("utf-8")).hexdigest()
         require(len(legacy_labels) == LEGACY_MUTATION_LABELS_COUNT, "legacy mutation label count changed")
         require(legacy_digest == LEGACY_MUTATION_LABELS_SHA256, "legacy mutation label identity changed")
-        require(len(killed) == PRIOR_CYCLE4_MUTATION_LABELS_COUNT + len(CYCLE6_MUTATION_LABELS), "mutation inventory has undeclared labels")
+        require(len(killed) == PRIOR_CYCLE6_FULL_MUTATION_LABELS_COUNT + CYCLE7_MUTATION_LABELS_COUNT, "mutation inventory has undeclared labels")
     except (OSError, UnicodeError, ValidationError) as exc:
         print(json.dumps({"status": "validated_static_scope_error", "error": str(exc)}, ensure_ascii=False, sort_keys=True))
         return 1
@@ -2584,8 +3112,13 @@ def main() -> int:
                 "prior_cycle4_mutation_labels_count": len(prior_cycle4_labels),
                 "prior_cycle4_mutation_labels_sha256": prior_cycle4_digest,
                 "cycle6_mutation_labels_count": len(CYCLE6_MUTATION_LABELS),
-                "cycle6_mutation_labels_sha256": hashlib.sha256(("\n".join(sorted(CYCLE6_MUTATION_LABELS)) + "\n").encode("utf-8")).hexdigest(),
+                "cycle6_mutation_labels_sha256": cycle6_digest,
                 "cycle6_verified_context_goldens": cycle6_goldens,
+                "prior_cycle6_full_mutation_labels_count": len(prior_cycle6_labels),
+                "prior_cycle6_full_mutation_labels_sha256": prior_cycle6_digest,
+                "cycle7_mutation_labels_count": len(CYCLE7_MUTATION_LABELS),
+                "cycle7_mutation_labels_sha256": cycle7_digest,
+                "cycle7_trusted_schema_goldens": cycle7_goldens,
                 "registry_multi_entry_probe": True,
                 "schema_meta_contract_positive": True,
                 "schema_numeric_keywords_checked": list(NONNEGATIVE_INTEGER_SCHEMA_KEYWORDS + NUMBER_SCHEMA_KEYWORDS),
@@ -2594,6 +3127,20 @@ def main() -> int:
                 "candidate_write_set_semantics": "EXACT_CHANGED_CANDIDATE_RUNTIME_ARTIFACT_FILES",
                 "candidate_write_set_registry_bound": True,
                 "verified_readiness_context": True,
+                "trusted_schema_bundle": True,
+                "trusted_schema_mutable_cache": False,
+                "trusted_schema_public_api_probes": [
+                    "registry-object-explicit-and-none",
+                    "multi-registry-explicit-and-none",
+                    "corpus-object-explicit-none-and-weak-matrix",
+                    "cases-relations-explicit-none-and-with-context",
+                    "case-object-12-cases-explicit-none-and-weak-matrix",
+                    "result-object-explicit-none-and-weak",
+                    "result-relations-direct-and-with-context",
+                    "ready-blockers-disposition-boundary-direct-and-with-context",
+                    "caller-schema-post-comparison-mutation",
+                    "trusted-binding-source-mutant",
+                ],
                 "invalid_context_blocker": READINESS_CONTEXT_INVALID_BLOCKER,
                 "artifact_root_policy": EXPECTED_CANDIDATE_EFFECT_BOUNDARY["artifact_root_policy"],
                 "candidate_boundary_public_api_probes": [

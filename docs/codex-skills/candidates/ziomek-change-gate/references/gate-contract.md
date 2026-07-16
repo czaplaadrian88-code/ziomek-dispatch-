@@ -52,6 +52,17 @@ exact kopia pakietu mogą użyć alternatywnego rootu, ale błędne bajty, brak,
 symlink, plik specjalny, tryb wykonywalny lub cross-skill kończą się centralnym
 `READINESS_CONTEXT_INVALID` i wyprowadzonym `HOLD`.
 
+Publiczne granice registry, corpusu, pojedynczego case, wyniku oraz helperów
+readiness najpierw tworzą świeży `TrustedSchemaBundle` z committed schema
+registry/result/case/corpus. Bundle przechowuje wyłącznie kanoniczne,
+niemutowalne strict-JSON bytes i nie używa mutable cache. Opcjonalny caller
+schema jest tylko compatibility assertion: po strict snapshot musi być
+semantycznie identyczny z odpowiednim trusted schema. Publiczna walidacja używa
+następnie detached trusted bytes; mutacja obiektu callera po porównaniu nie ma
+wpływu. `None` ładuje dokładnie ten sam trusted kontrakt. Generic validator
+pojedynczej instancji pozostaje niskopoziomowy i sam nie nadaje zaufania
+caller-controlled schema.
+
 ## Brief i kompletność
 
 `sprint_brief` ma dokładnie pięć merytorycznych treści w prostym polskim:
