@@ -1,0 +1,73 @@
+"""GOTOWY test loud-path guarda subprocesow — do dopisania do
+tests/test_hermetic_guard_zp207.py w NASTEPNYM CZYSTYM oknie re-seedu manifestu.
+
+Powod odlozenia: dodanie testu zmienia nodeidy → wymusza re-seed manifestu, a ten
+jest plikiem kontendowanym (sesja CTO zarzadzala nim v8→v9). Re-seed przy aktywnej
+drugiej sesji lamie 'jeden FLIPMASTER na okno'. Test jest tu zweryfikowany i gotowy.
+
+Weryfikuje fix `dispatch 6a27516`: gdy guard subprocesu nie zainstaluje sie, dziecko
+pisze GLOSNO marker na stderr (zamiast 'except: pass') i I TAK startuje (fail-open).
+
+Uruchomienie standalone (dowod, ze przechodzi na obecnym kodzie):
+  cd /root/.openclaw/workspace/scripts/dispatch_v2
+  DISPATCH_UNDER_PYTEST=1 /root/.openclaw/venvs/dispatch/bin/python -m pytest \
+    /tmp/.../test_hermetic_guard_loud_READY.py -q
+"""
+import ast
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+CONFTEST = Path("/root/.openclaw/workspace/scripts/dispatch_v2/conftest.py")
+SCRIPTS_ROOT = "/root/.openclaw/workspace/scripts"
+MARKER = "HERMETIC_SUBPROC_GUARD_INSTALL_FAILED"
+
+
+def _extract_site_tmpl() -> str:
+    """Wyciaga PRAWDZIWY _SITE_TMPL z conftest.py (nie kopie) — test wiaze sie z
+    rzeczywistym szablonem, wiec regresja w conftescie go zlamie."""
+    tree = ast.parse(CONFTEST.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "_SITE_TMPL" for t in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError("nie znaleziono _SITE_TMPL w conftest.py")
+
+
+def _site_dir(tmp_path) -> str:
+    d = tmp_path / "site"
+    d.mkdir()
+    (d / "sitecustomize.py").write_text(_extract_site_tmpl(), encoding="utf-8")
+    return str(d)
+
+
+def test_site_template_is_valid_python():
+    compile(_extract_site_tmpl(), "sitecustomize.py", "exec")
+
+
+def test_normal_child_is_silent_and_guard_installs(tmp_path):
+    d = _site_dir(tmp_path)
+    env = dict(os.environ, DISPATCH_UNDER_PYTEST="1", HERMETIC_SUBPROCESS_GUARD="1",
+               PYTHONPATH=d + os.pathsep + SCRIPTS_ROOT)
+    r = subprocess.run([sys.executable, "-c", "print('ok')"],
+                       capture_output=True, text=True, env=env, cwd="/tmp", timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert "ok" in r.stdout
+    assert MARKER not in r.stderr, f"normalny child nie moze krzyczec: {r.stderr!r}"
+
+
+def test_failed_install_is_loud_and_fail_open(tmp_path):
+    d = _site_dir(tmp_path)
+    # bogus scripts root + PYTHONPATH bez korzenia + cwd poza scripts → import
+    # dispatch_v2.tests.hermetic_support pada → except → marker; dziecko startuje.
+    env = {"DISPATCH_UNDER_PYTEST": "1", "HERMETIC_SUBPROCESS_GUARD": "1",
+           "ZIOMEK_SCRIPTS_ROOT": "/nonexistent-xyz", "PYTHONPATH": d,
+           "PATH": os.environ.get("PATH", "")}
+    r = subprocess.run([sys.executable, "-c", "print('child-ran')"],
+                       capture_output=True, text=True, env=env, cwd="/tmp", timeout=30)
+    assert MARKER in r.stderr, f"guard padl PO CICHU (regresja fixu 6a27516): {r.stderr!r}"
+    assert "child-ran" in r.stdout, "fail-open zlamany — dziecko NIE wystartowalo"
+    assert r.returncode == 0, f"fail-open: dziecko ma startowac, rc={r.returncode}"
