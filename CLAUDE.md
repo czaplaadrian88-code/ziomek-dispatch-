@@ -8,6 +8,17 @@
 5. Decyzje projektowe („dlaczego tak jest") → `docs/decisions/` (ADR-001..008).
 6. Dalej czytaj TYLKO pliki potrzebne do zadania — CODEMAP wskaże które.
 
+**🧰 SKILLE = DOMYŚLNE NARZĘDZIA KAŻDEJ SESJI (od 17.07). Jeżeli dla czynności istnieje skill — UŻYWASZ skilla, nie ręcznych komend** (drivery mają bramki ACK, oracle i selftesty pod nocnym strażnikiem; ręczne odtwarzanie tych czynności = dryf i pominięte bezpieczniki). Katalog + zasady: `.claude/skills/README.md`. Routing wg tego, czym się zajmujesz:
+
+| Robisz… | NAJPIERW odpal |
+|---|---|
+| start sesji / „co się dzieje" / wybór zadania | `python3 .claude/skills/ziomek-cto/driver.py brief` |
+| planujesz JAKĄKOLWIEK zmianę silnika (ETAP 3 #0 — mapa kompletności/bliźniaki) | `python3 .claude/skills/ziomek-cto/driver.py scope "<temat>"` |
+| diff gotowy, przed commitem (bramka DoD) | `python3 .claude/skills/ziomek-cto/driver.py dod <diff\|ref> --evidence <plik>` (exit 1 = STOP) |
+| koniec sesji / wpis handoff do memory | `python3 .claude/skills/ziomek-cto/driver.py handoff` |
+| diagnoza usług / werdykt strażnika / przecieki / flagi / suita | `.claude/skills/run-dispatch-v2/driver.sh health` (guard/litter/flags/collect) |
+| kandydat (skill/patch/brama) przed promocją/merge | `python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog>` → świeży subagent → `check` |
+
 **Twarde minimum środowiskowe:** testy WYŁĄCZNIE `/root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q` (systemowy python3 nie ma ortools → fałszywe faile); żywy stan = `/root/.openclaw/workspace/dispatch_state/` (katalog `dispatch_state/` w tym repo = TYLKO dane epaki); log decyzji silnika = `../logs/shadow_decisions.jsonl`; flagi silnika = `../flags.json` hot-reload (panel: `flags.systemd.env` + drop-iny; apka kuriera: drop-iny systemd + `courier_api/config.py` — 3 światy flag opisane w `docs/decisions/ADR-004`).
 
 ---
