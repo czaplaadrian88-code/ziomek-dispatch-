@@ -227,6 +227,116 @@ def _grep_files(needle: str, rel_paths: list[str]) -> bool:
     return False
 
 
+def _dod_flag_rows(
+    added_engine: list[tuple[str, str]],
+    added_tests: list[str],
+    files: dict[str, dict[str, list[str]]],
+) -> list[tuple[str, str, str]]:
+    """R1+R2: nowe/dotykane flagi decyzyjne — test ON≠OFF + obecność w rejestrze."""
+    rows: list[tuple[str, str, str]] = []
+    flags = sorted({m for _, l in added_engine for m in re.findall(r"ENABLE_[A-Z0-9_]{3,}", l)})
+    if not flags:
+        rows.append(("flaga: test ON≠OFF", "N-D", "diff nie dodaje/nie dotyka linii z ENABLE_* w silniku"))
+        rows.append(("flaga: w rejestrze decyzyjnym", "N-D", "j.w."))
+        return rows
+    for fl in flags:
+        has_test = any(fl in l for l in added_tests) or _grep_repo_tests(fl)
+        rows.append((f"flaga {fl}: test ON≠OFF", "PASS" if has_test else "FAIL",
+                     "test w diffie/istniejącej suicie" if has_test
+                     else "flaga zmienia decyzję → MUSI istnieć test ON≠OFF (ETAP 4 #0)"))
+        reg_files = ["common.py", "../flags.json", "tools/flag_lifecycle_registry.json"]
+        in_reg = (any(fl in l for p, d in files.items() if p in ("common.py", "flags.json", "tools/flag_lifecycle_registry.json") for l in d["added"])
+                  or _grep_files(fl, reg_files))
+        rows.append((f"flaga {fl}: w rejestrze (ETAP4/flags.json/lifecycle)", "PASS" if in_reg else "FAIL",
+                     "znaleziona" if in_reg else "flaga-widmo poza rejestrem = wzorzec #1/#9 i leak w conftest"))
+    return rows
+
+
+def _dod_metric_rows(
+    added_engine: list[tuple[str, str]],
+    added_tests: list[str],
+) -> list[tuple[str, str, str]]:
+    """R3: nowe metryki — liczona MUSI być serializowana (albo jawnie wykluczona)."""
+    rows: list[tuple[str, str, str]] = []
+    mkeys = sorted({m for _, l in added_engine for m in re.findall(r"metrics\[\s*[\"']([A-Za-z0-9_]+)", l)})
+    if not mkeys:
+        rows.append(("metryka: w shadow_decisions.jsonl", "N-D", "diff nie dodaje kluczy metrics[...]"))
+        return rows
+    for mk in mkeys:
+        seen = (any(mk in l for l in added_tests) or _grep_repo_tests(mk)
+                or any("_METRICS_EXCLUDE" in l and mk in l for _, l in added_engine))
+        rows.append((f"metryka {mk}: test obecności w jsonl / jawne wykluczenie", "PASS" if seen else "FAIL",
+                     "jest" if seen else "metryka liczona ≠ serializowana (wzorzec #4/#16) — test grep -c albo _METRICS_EXCLUDE z powodem"))
+    return rows
+
+
+def _dod_twin_rows(
+    reg: dict,
+    files: dict[str, dict[str, list[str]]],
+    nd_covers,
+) -> list[tuple[str, str, str]]:
+    """R4: parytet bliźniaków (tylko klasy plikowe) — wzorzec #2 (fix w 1 z N)."""
+    rows: list[tuple[str, str, str]] = []
+    changed_paths = set(files)
+    for kname, klass in reg["klasy"].items():
+        if klass.get("typ") != "blizniaki-plikowe":
+            continue
+        places = [pl for pl in klass.get("miejsca", []) if not Path(pl["plik"]).is_absolute()]
+        touched = {pl["plik"] for pl in places if pl["plik"] in changed_paths}
+        if not touched:
+            continue
+        untouched = [pl for pl in places if pl["plik"] not in changed_paths
+                     and pl["plik"] not in touched and not pl["plik"].startswith("tests/")]
+        # bliźniak może dzielić plik (np. 2 miejsca w dispatch_pipeline.py) — liczymy per plik
+        untouched_files = sorted({pl["plik"] for pl in untouched})
+        uncovered = [f for f in untouched_files if not nd_covers(f)]
+        if uncovered:
+            rows.append((f"bliźniaki [{kname}]", "FAIL",
+                         f"dotknięto {sorted(touched)}, NIE dotknięto {uncovered} bez linii 'N-D: <plik> — powód' — wzorzec #2 (fix w 1 z N)"))
+        else:
+            det = ("wszystkie miejsca klasy dotknięte" if not untouched_files
+                   else f"niedotknięte {untouched_files} objęte jawnym N-D per plik")
+            rows.append((f"bliźniaki [{kname}]", "PASS", det))
+    return rows
+
+
+def _dod_evidence_rows(
+    ev: dict[str, str],
+    engine_changed: bool,
+    py_changed: bool,
+) -> list[tuple[str, str, str]]:
+    """R5-R8: dowody z --evidence (regresja / e2e / pozytywny wpływ / rollback)."""
+    rows: list[tuple[str, str, str]] = []
+
+    def _ev_row(name: str, keys: list[str], wymagane: bool, brak_detal: str) -> None:
+        val = next((ev[k] for k in keys if k in ev and ev[k]), "")
+        if val:
+            rows.append((name, "PASS", val[:100]))
+        elif wymagane:
+            rows.append((name, "FAIL", brak_detal))
+        else:
+            rows.append((name, "N-D", "zmiana nie dotyka silnika/testów — mimo to zalecane"))
+
+    reg_val = next((ev[k] for k in ("regresja", "regression") if k in ev), "")
+    if reg_val and re.search(r"\b0 fail|failed[ =:]*0", reg_val):
+        rows.append(("pełna regresja vs baseline", "PASS", reg_val[:100]))
+    elif reg_val:
+        rows.append(("pełna regresja vs baseline", "FAIL", f"dowód nie pokazuje 0 failed: '{reg_val[:80]}'"))
+    elif py_changed:
+        rows.append(("pełna regresja vs baseline", "FAIL",
+                     "brak dowodu (evidence 'regresja: N passed, 0 failed'); pełna suita OBOWIĄZKOWA (ETAP 4 #0)"))
+    else:
+        rows.append(("pełna regresja vs baseline", "N-D", "zmiana bez .py — mimo to zalecana"))
+
+    _ev_row("e2e przez dotknięte warstwy", ["e2e"], engine_changed,
+            "brak dowodu e2e (assess_order/replay przez warstwy, nie tylko unit klastra)")
+    _ev_row("dowód POZYTYWNEGO wpływu ON↔OFF", ["pozytywny-wplyw", "replay", "bajt-identycznosc"], engine_changed,
+            "brak dowodu (replay ON↔OFF metryka lepsza / refaktor: bajt-identyczność) — ETAP 5 #0")
+    _ev_row("rollback gotowy", ["rollback"], engine_changed,
+            "brak planu rollbacku (flaga=false / .bak / git revert) — ETAP 7 #0")
+    return rows
+
+
 def cmd_dod(args: argparse.Namespace) -> int:
     reg = _load_registry()
     diff_text = _read_diff(args.cel)
@@ -260,84 +370,10 @@ def cmd_dod(args: argparse.Namespace) -> int:
         return any(base in l or path in l for l in nd_lines)
 
     rows: list[tuple[str, str, str]] = []  # (check, PASS/FAIL/N-D, detal)
-
-    # R1+R2: nowe/dotykane flagi decyzyjne
-    flags = sorted({m for _, l in added_engine for m in re.findall(r"ENABLE_[A-Z0-9_]{3,}", l)})
-    if not flags:
-        rows.append(("flaga: test ON≠OFF", "N-D", "diff nie dodaje/nie dotyka linii z ENABLE_* w silniku"))
-        rows.append(("flaga: w rejestrze decyzyjnym", "N-D", "j.w."))
-    else:
-        for fl in flags:
-            has_test = any(fl in l for l in added_tests) or _grep_repo_tests(fl)
-            rows.append((f"flaga {fl}: test ON≠OFF", "PASS" if has_test else "FAIL",
-                         "test w diffie/istniejącej suicie" if has_test
-                         else "flaga zmienia decyzję → MUSI istnieć test ON≠OFF (ETAP 4 #0)"))
-            reg_files = ["common.py", "../flags.json", "tools/flag_lifecycle_registry.json"]
-            in_reg = (any(fl in l for p, d in files.items() if p in ("common.py", "flags.json", "tools/flag_lifecycle_registry.json") for l in d["added"])
-                      or _grep_files(fl, reg_files))
-            rows.append((f"flaga {fl}: w rejestrze (ETAP4/flags.json/lifecycle)", "PASS" if in_reg else "FAIL",
-                         "znaleziona" if in_reg else "flaga-widmo poza rejestrem = wzorzec #1/#9 i leak w conftest"))
-
-    # R3: nowe metryki serializowane
-    mkeys = sorted({m for _, l in added_engine for m in re.findall(r"metrics\[\s*[\"']([A-Za-z0-9_]+)", l)})
-    if not mkeys:
-        rows.append(("metryka: w shadow_decisions.jsonl", "N-D", "diff nie dodaje kluczy metrics[...]"))
-    else:
-        for mk in mkeys:
-            seen = (any(mk in l for l in added_tests) or _grep_repo_tests(mk)
-                    or any("_METRICS_EXCLUDE" in l and mk in l for _, l in added_engine))
-            rows.append((f"metryka {mk}: test obecności w jsonl / jawne wykluczenie", "PASS" if seen else "FAIL",
-                         "jest" if seen else "metryka liczona ≠ serializowana (wzorzec #4/#16) — test grep -c albo _METRICS_EXCLUDE z powodem"))
-
-    # R4: parytet bliźniaków (tylko klasy plikowe)
-    changed_paths = set(files)
-    for kname, klass in reg["klasy"].items():
-        if klass.get("typ") != "blizniaki-plikowe":
-            continue
-        places = [pl for pl in klass.get("miejsca", []) if not Path(pl["plik"]).is_absolute()]
-        touched = {pl["plik"] for pl in places if pl["plik"] in changed_paths}
-        if not touched:
-            continue
-        untouched = [pl for pl in places if pl["plik"] not in changed_paths
-                     and pl["plik"] not in touched and not pl["plik"].startswith("tests/")]
-        # bliźniak może dzielić plik (np. 2 miejsca w dispatch_pipeline.py) — liczymy per plik
-        untouched_files = sorted({pl["plik"] for pl in untouched})
-        uncovered = [f for f in untouched_files if not _nd_covers(f)]
-        if uncovered:
-            rows.append((f"bliźniaki [{kname}]", "FAIL",
-                         f"dotknięto {sorted(touched)}, NIE dotknięto {uncovered} bez linii 'N-D: <plik> — powód' — wzorzec #2 (fix w 1 z N)"))
-        else:
-            det = ("wszystkie miejsca klasy dotknięte" if not untouched_files
-                   else f"niedotknięte {untouched_files} objęte jawnym N-D per plik")
-            rows.append((f"bliźniaki [{kname}]", "PASS", det))
-
-    # R5-R8: dowody (evidence)
-    def _ev_row(name: str, keys: list[str], wymagane: bool, brak_detal: str) -> None:
-        val = next((ev[k] for k in keys if k in ev and ev[k]), "")
-        if val:
-            rows.append((name, "PASS", val[:100]))
-        elif wymagane:
-            rows.append((name, "FAIL", brak_detal))
-        else:
-            rows.append((name, "N-D", "zmiana nie dotyka silnika/testów — mimo to zalecane"))
-
-    reg_val = next((ev[k] for k in ("regresja", "regression") if k in ev), "")
-    if reg_val and re.search(r"\b0 fail|failed[ =:]*0", reg_val):
-        rows.append(("pełna regresja vs baseline", "PASS", reg_val[:100]))
-    elif reg_val:
-        rows.append(("pełna regresja vs baseline", "FAIL", f"dowód nie pokazuje 0 failed: '{reg_val[:80]}'"))
-    elif py_changed:
-        rows.append(("pełna regresja vs baseline", "FAIL",
-                     "brak dowodu (evidence 'regresja: N passed, 0 failed'); pełna suita OBOWIĄZKOWA (ETAP 4 #0)"))
-    else:
-        rows.append(("pełna regresja vs baseline", "N-D", "zmiana bez .py — mimo to zalecana"))
-
-    _ev_row("e2e przez dotknięte warstwy", ["e2e"], engine_changed,
-            "brak dowodu e2e (assess_order/replay przez warstwy, nie tylko unit klastra)")
-    _ev_row("dowód POZYTYWNEGO wpływu ON↔OFF", ["pozytywny-wplyw", "replay", "bajt-identycznosc"], engine_changed,
-            "brak dowodu (replay ON↔OFF metryka lepsza / refaktor: bajt-identyczność) — ETAP 5 #0")
-    _ev_row("rollback gotowy", ["rollback"], engine_changed,
-            "brak planu rollbacku (flaga=false / .bak / git revert) — ETAP 7 #0")
+    rows += _dod_flag_rows(added_engine, added_tests, files)
+    rows += _dod_metric_rows(added_engine, added_tests)
+    rows += _dod_twin_rows(reg, files, _nd_covers)
+    rows += _dod_evidence_rows(ev, engine_changed, py_changed)
 
     print(f"# DoD mechaniczny — cel: {args.cel}  (plików w diffie: {len(files)}, "
           f"silnik dotknięty: {'TAK' if engine_changed else 'NIE'})")
