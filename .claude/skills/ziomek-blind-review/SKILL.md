@@ -93,6 +93,17 @@ patrz `fixtures/EVAL_RESULT.md`.
 5. **`--pin` jest opcjonalny, ale przy promocji obowiązkowy** — bez niego
    recenzujesz bajty, których nikt nie przypiął (dokładnie luka HIGH-1 z audytu).
 
+## Selftest (egzekwowany co noc)
+
+```bash
+.claude/skills/ziomek-blind-review/selftest.sh   # 8/8 PASS
+```
+Sprawdza część mechaniczną oracle: blindowanie wycina werdykty, pin jest
+fail-closed, `check` odrzuca mętne werdykty, korpus spójny. **Wpięty w nocną
+regresję** (`tests/test_skills_selftest.py`) — regresja zapali ALERT strażnika,
+nie zostanie „zademonstrowana raz i zapomniana". Część modelowa oracle (czy
+recenzent łapie wady) → `fixtures/EVAL_RESULT.md`, nie ten skrypt.
+
 ## Zakres
 
 Read-only. Zero sieci, zero prod-state, zapisy tylko do `--out` (tmp domyślnie).

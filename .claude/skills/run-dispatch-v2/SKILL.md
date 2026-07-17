@@ -130,6 +130,16 @@ Usługi chodzą same. `systemctl status dispatch-shadow` pokaże stan, ale
 | `./driver.sh litter` trwa ~70 s | grepuje repo per plik; to koszt proweniencji zamiast zgadywania po nazwie |
 | strażnik `failed`, a nie wiadomo czemu | `./driver.sh guard` (journal nie ma stderr) |
 
+## Selftest (egzekwowany co noc)
+
+```bash
+.claude/skills/run-dispatch-v2/selftest.sh   # 5/5 PASS
+```
+Sprawdza KONTRAKT BEZPIECZEŃSTWA: bramka ACK blokuje `test`/`guard-run` bez
+`ZIOMEK_DRIVER_ACK=1` (exit 2, przed jakimkolwiek zapisem). **Wpięty w nocną
+regresję** (`tests/test_skills_selftest.py`) — gdyby ktoś rozbroił bramkę,
+strażnik zapali ALERT.
+
 ## Zakres
 
 Driver **nie** restartuje usług, nie flipuje flag, nie deployuje i nie dotyka
