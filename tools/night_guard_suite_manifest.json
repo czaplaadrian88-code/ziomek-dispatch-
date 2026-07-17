@@ -1,6 +1,6 @@
 {
-  "base_sha": "16fa397aa8cd91049bcbede003fc4ab091b7092b",
-  "manifest_version": 5,
+  "base_sha": "e9416d1b576915da2e6291ef4906bf9fda2c8361",
+  "manifest_version": 6,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -2145,6 +2145,7 @@
     "tests/test_identity_registry_zp105.py::test_norm_strips_punct_ws_lower",
     "tests/test_identity_registry_zp105.py::test_panel_roster_match_none_ambiguous",
     "tests/test_identity_registry_zp105.py::test_pin_never_plaintext_in_records",
+    "tests/test_identity_registry_zp105.py::test_registry_accounting_name_prefers_grafik_then_fallbacks",
     "tests/test_identity_registry_zp105.py::test_registry_coordinator_excluded_inactive_flags",
     "tests/test_identity_registry_zp105.py::test_registry_resolve_profiles",
     "tests/test_identity_registry_zp105.py::test_schema_validation_clean_on_built_records",
@@ -5186,7 +5187,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "84107c3597f9481fbfd58171e066ca83e7e2db5b63d6c3e0e47fa447dc5a2de3",
+  "nodeids_sha256": "08e26d8d2f7df0a5253ecb6215c7098297bb6a6cc009aefff14bbb26da988172",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5301,8 +5302,8 @@
       "skipped"
     ]
   },
-  "owner": "A360-N0-followup",
-  "reason": "sec0-tests-and-private-history-mode",
+  "owner": "P0-night-guard-alert-close-2026-07-17",
+  "reason": "adopt-test_registry_accounting_name-added-in-c10e1eb-plus-selfcleaning-hermetic-probe-781de3f",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-12T08:17:36+00:00"
+  "updated_at_utc": "2026-07-17T11:52:42+00:00"
 }
