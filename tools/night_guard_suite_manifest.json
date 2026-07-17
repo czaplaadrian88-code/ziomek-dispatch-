@@ -1,6 +1,6 @@
 {
-  "base_sha": "e9416d1b576915da2e6291ef4906bf9fda2c8361",
-  "manifest_version": 6,
+  "base_sha": "521ed4e8280ae4cc0e270fd44664d93aaf164472",
+  "manifest_version": 7,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -4373,6 +4373,8 @@
     "tests/test_shift_notifications.py::test_worker_unconfirmed_default_at_t0",
     "tests/test_shift_notify_target_routing.py::script_run",
     "tests/test_shift_telegram_router.py::script_run",
+    "tests/test_skills_selftest.py::test_skill_selftest_passes[run-dispatch-v2]",
+    "tests/test_skills_selftest.py::test_skill_selftest_passes[ziomek-blind-review]",
     "tests/test_sla_anchor_unified.py::test_anchor_explicit_kind_rejects_unknown",
     "tests/test_sla_anchor_unified.py::test_exceeds_boundary_is_strict_gt",
     "tests/test_sla_anchor_unified.py::test_hard_minutes_reads_single_dial",
@@ -5187,7 +5189,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "08e26d8d2f7df0a5253ecb6215c7098297bb6a6cc009aefff14bbb26da988172",
+  "nodeids_sha256": "2478412d1c27d0e9c30e9e6966ce3f05c53838059b55079562ce5cadeb754279",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5302,8 +5304,8 @@
       "skipped"
     ]
   },
-  "owner": "P0-night-guard-alert-close-2026-07-17",
-  "reason": "adopt-test_registry_accounting_name-added-in-c10e1eb-plus-selfcleaning-hermetic-probe-781de3f",
+  "owner": "skills-selftest-wiring-2026-07-17",
+  "reason": "adopt-tests-test_skills_selftest-blind-review-and-run-dispatch-v2-harness",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-17T11:52:42+00:00"
+  "updated_at_utc": "2026-07-17T12:33:00+00:00"
 }
