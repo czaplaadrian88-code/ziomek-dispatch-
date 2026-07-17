@@ -79,6 +79,12 @@ grep -v '^regresja:' "$HERE/fixtures/fixture-evidence-complete.txt" > "$T/ev-nor
 "$PY" "$HERE/driver.py" dod "$HERE/fixtures/fixture-diff-complete.diff" --evidence "$T/ev-noreg.txt" >/dev/null 2>&1
 want_rc "mutation-probe: evidence bez regresji → exit 1 (check uzbrojony)" 1 $?
 
+# 8b. MUTATION-PROBE N-D: goły token bez nazw plików NIE wyłącza parytetu bliźniaków
+sed 's/^N-D:.*/N-D: świadomie pominięte (bez wymienienia plików)/' \
+  "$HERE/fixtures/fixture-evidence-complete.txt" > "$T/ev-barend.txt"
+"$PY" "$HERE/driver.py" dod "$HERE/fixtures/fixture-diff-complete.diff" --evidence "$T/ev-barend.txt" >/dev/null 2>&1
+want_rc "mutation-probe: gole 'N-D' bez plikow → exit 1 (N-D liczy sie per plik)" 1 $?
+
 # 9. brief DELEGUJE zdrowie do run-dispatch-v2 (mock przechwytuje wywołanie)
 cat > "$T/mock_driver.sh" <<'EOF'
 #!/bin/bash

@@ -61,8 +61,9 @@ Zweryfikowane wyjścia (2026-07-17):
 Wejście: plik unified-diff **albo** ref gitowy (diff liczony `master...ref`).
 Dowody wykonania podajesz plikiem `--evidence` (linie `klucz: wartość`):
 `regresja:` (musi zawierać „0 failed"), `e2e:`, `pozytywny-wplyw:` (lub
-`bajt-identycznosc:` dla refaktoru), `rollback:`, oraz jawne linie `N-D: <miejsce> — <powód>`
-dla świadomie niedotkniętych bliźniaków. Wzorzec: `fixtures/fixture-evidence-complete.txt`.
+`bajt-identycznosc:` dla refaktoru), `rollback:`, oraz jawne linie `N-D: <pliki> — <powód>`
+dla świadomie niedotkniętych bliźniaków (linia MUSI wymieniać pliki, których dotyczy).
+Wzorzec: `fixtures/fixture-evidence-complete.txt`.
 Każdy FAIL → exit 1 → **zmiana częściowa = NIEZAKOŃCZONA**.
 
 ## Rejestr bliźniaków = dane, nie kod
@@ -87,9 +88,10 @@ sprawdzenia", czyli kłamiący przyrząd (C9).
 4. Klasyfikacja `scope` jest keywordowa — temat-nowość może nie trafić: wtedy
    `--klasa <nazwa>` albo dopisz keywords do rejestru. Exit 3 = „sklasyfikuj ręcznie",
    celowo NIE zgaduje.
-5. Marker `N-D` honorowany z diffa i evidence łącznie — pusta wzmianka „N-D" bez
-   powodu przejdzie mechanicznie, ale nie przejdzie ślepej recenzji. Nie oszukuj bramki,
-   którą sam sobie postawiłeś.
+5. Marker `N-D` liczy się **per plik**: linia z `N-D` musi wymieniać dany plik
+   (basename wystarczy); goły token „N-D" bez plików NIE wyłącza parytetu (zacieśnione
+   po ślepej recenzji 17.07). Powód nadal oceni dopiero ślepa recenzja — nie oszukuj
+   bramki, którą sam sobie postawiłeś.
 6. `dod` na refie gitowym wymaga czystego dostępu do `git` (bez `ZIOMEK_CTO_NO_LIVE`);
    na pliku `.diff` działa hermetycznie.
 
@@ -105,7 +107,7 @@ zakresem: `flags`/diagnostyka usług (→ run-dispatch-v2), recenzja kandydata
 ## Selftest (egzekwowany co noc)
 
 ```bash
-.claude/skills/ziomek-cto/selftest.sh   # 16/16 PASS
+.claude/skills/ziomek-cto/selftest.sh   # 17/17 PASS
 ```
 
 Oracle zewnętrzny, nie autowalidacja: komplet 8 bliźniaków no-GPS **z protokołu #0**

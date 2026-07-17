@@ -249,7 +249,15 @@ def cmd_dod(args: argparse.Namespace) -> int:
     added_tests = [l for p, d in files.items() if _is_test_path(p) for l in d["added"]]
     engine_changed = any(_is_engine_path(p) for p in files)
     py_changed = any(p.endswith(".py") for p in files)
-    nd_token = bool(re.search(r"\bN-?D\b", diff_text + "\n" + evidence))
+    # N-D liczy się PER PLIK: linia z markerem N-D musi wymieniać dany plik (basename
+    # wystarczy). Goły token "N-D" bez plików NIE wyłącza parytetu bliźniaków
+    # (obserwacja ślepej recenzji 17.07: jeden token gasił wszystkie FAIL-e).
+    nd_lines = [l for l in (diff_text + "\n" + evidence).splitlines()
+                if re.search(r"\bN-?D\b", l)]
+
+    def _nd_covers(path: str) -> bool:
+        base = Path(path).name
+        return any(base in l or path in l for l in nd_lines)
 
     rows: list[tuple[str, str, str]] = []  # (check, PASS/FAIL/N-D, detal)
 
@@ -294,11 +302,13 @@ def cmd_dod(args: argparse.Namespace) -> int:
                      and pl["plik"] not in touched and not pl["plik"].startswith("tests/")]
         # bliźniak może dzielić plik (np. 2 miejsca w dispatch_pipeline.py) — liczymy per plik
         untouched_files = sorted({pl["plik"] for pl in untouched})
-        if untouched_files and not nd_token:
+        uncovered = [f for f in untouched_files if not _nd_covers(f)]
+        if uncovered:
             rows.append((f"bliźniaki [{kname}]", "FAIL",
-                         f"dotknięto {sorted(touched)}, NIE dotknięto {untouched_files} i brak jawnego N-D — wzorzec #2 (fix w 1 z N)"))
+                         f"dotknięto {sorted(touched)}, NIE dotknięto {uncovered} bez linii 'N-D: <plik> — powód' — wzorzec #2 (fix w 1 z N)"))
         else:
-            det = "wszystkie miejsca klasy dotknięte" if not untouched_files else f"niedotknięte {untouched_files} objęte jawnym N-D"
+            det = ("wszystkie miejsca klasy dotknięte" if not untouched_files
+                   else f"niedotknięte {untouched_files} objęte jawnym N-D per plik")
             rows.append((f"bliźniaki [{kname}]", "PASS", det))
 
     # R5-R8: dowody (evidence)
