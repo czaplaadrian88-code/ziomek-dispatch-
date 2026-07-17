@@ -7,7 +7,7 @@ mają 2.
 
 Warsaw TZ obowiązkowe dla snapshot_at.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Iterable, Optional
 from zoneinfo import ZoneInfo

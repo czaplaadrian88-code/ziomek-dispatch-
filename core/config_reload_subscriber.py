@@ -25,7 +25,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from dispatch_v2 import event_bus
 from dispatch_v2.common import setup_logger

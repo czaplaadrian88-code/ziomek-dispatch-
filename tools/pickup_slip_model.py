@@ -36,7 +36,7 @@ import tempfile
 from collections import defaultdict
 from datetime import datetime
 from statistics import median
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 _SCRIPTS = "/root/.openclaw/workspace/scripts"
 if _SCRIPTS not in sys.path:

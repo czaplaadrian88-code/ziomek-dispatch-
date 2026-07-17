@@ -17,7 +17,6 @@ Hard rules:
   - Alias derivation: <FirstName> <First2OfSurname> bez kropki, np. "Marcin Bystrowski" -> "Marcin By"
 """
 import json, os, fcntl, secrets, datetime, tempfile, shutil
-from pathlib import Path
 from typing import Dict
 
 KURIER_IDS = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"

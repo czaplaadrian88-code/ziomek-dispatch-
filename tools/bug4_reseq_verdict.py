@@ -4,7 +4,6 @@ RETIME seq vs fresh solve) i liczy materialność — ile worków/dzień ma seq_
 delta_min>0, median/p90 delta, suma straconych minut. Read-only.
 Użycie: bug4_reseq_verdict.py [--since YYYY-MM-DD] [--notify]"""
 import argparse, json, os
-from datetime import datetime, timezone
 
 JSONL = "/root/.openclaw/workspace/dispatch_state/bug4_reseq_shadow.jsonl"
 OUT = "/root/.openclaw/workspace/dispatch_state/bug4_reseq_verdict.txt"

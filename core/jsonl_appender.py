@@ -43,7 +43,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Iterable
 
 
 _DEFAULT_FILE_MODE = 0o644

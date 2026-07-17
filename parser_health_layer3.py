@@ -39,7 +39,7 @@ import threading
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 log = logging.getLogger(__name__)
 

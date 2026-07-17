@@ -16,7 +16,6 @@ import re
 import statistics
 import subprocess
 import sys
-from collections import defaultdict
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)                       # import siblinga rule_deviation_report

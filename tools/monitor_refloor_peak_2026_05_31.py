@@ -25,7 +25,6 @@ READ-ONLY: nie dotyka żadnych plików stanu, tylko czyta + Telegram.
 """
 import argparse
 import json
-import os
 import re
 import sys
 import time

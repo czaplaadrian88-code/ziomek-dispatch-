@@ -21,7 +21,7 @@ Efekty trybów (DEFINICJE — egzekwuje silnik w kolejnym inkremencie, NIE tu):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 # ── S2-defer (akcja silnika w S2; TU pura logika przeszukiwania slotów) ──

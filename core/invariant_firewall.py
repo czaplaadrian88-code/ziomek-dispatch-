@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import math
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from dispatch_v2 import sla_anchor as _sla_anchor

@@ -15,7 +15,6 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Callable, List, Optional
 from zoneinfo import ZoneInfo
 

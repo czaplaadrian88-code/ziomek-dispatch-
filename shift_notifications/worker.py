@@ -27,7 +27,7 @@ import sys
 import time
 from datetime import datetime, date, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 # Make scripts/ a sibling for `import schedule_utils` (auto_koord pattern)

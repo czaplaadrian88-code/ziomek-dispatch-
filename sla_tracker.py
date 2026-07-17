@@ -5,7 +5,6 @@ F2.1b step 6: R6 BAG_TIME pre-warning — scan picked_up orderów co 10s,
 alert Telegram gdy bag_time > 30 min, one-shot per order."""
 import json
 import signal
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path

@@ -32,7 +32,7 @@ import urllib.parse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 from dispatch_v2.common import coords_in_bialystok_bbox, decision_flag, setup_logger
 

@@ -18,7 +18,7 @@ Fallback: gdy solver returns None → caller decyduje (greedy fallback w
 route_simulator_v2 lub raise).
 """
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 import logging
 
 log = logging.getLogger("tsp_solver")

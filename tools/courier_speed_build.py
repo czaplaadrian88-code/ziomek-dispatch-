@@ -67,7 +67,6 @@ import json
 import math
 import os
 import statistics
-import sys
 import tempfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone

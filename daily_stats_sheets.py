@@ -31,7 +31,7 @@ import json
 import argparse
 import logging
 from collections import Counter
-from datetime import datetime, timedelta, date, timezone
+from datetime import datetime, timedelta, date
 from pathlib import Path
 from zoneinfo import ZoneInfo
 

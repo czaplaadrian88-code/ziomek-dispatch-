@@ -8,7 +8,6 @@ courier, delivery_time_minutes, sla_ok). Mierzy:
 Werdykt materiału (precyzja ratunku), nie autonomii. Telegram opcjonalny (--notify)."""
 import json
 import argparse
-from collections import Counter
 from datetime import datetime
 from zoneinfo import ZoneInfo
 

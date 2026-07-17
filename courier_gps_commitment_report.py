@@ -15,7 +15,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 # Skrypt odpalany z cwd=dispatch_v2 jako top-level (`python courier_gps_commitment_report.py`)
 # → `dispatch_v2` nie jest na sys.path, więc telegram_utils (import absolutny

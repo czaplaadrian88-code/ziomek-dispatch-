@@ -23,7 +23,6 @@ Skip: TIMEOUT_SUPERSEDED, OPERATOR_COMMENT (no lgbm data).
 Skip "valid" (NOT fallback): entries z fallback_reason != None lub != "all_bag_zero" są counted ale NOT valid dla agreement metric.
 """
 import argparse
-import json
 import sys
 from collections import Counter
 from datetime import datetime, timezone

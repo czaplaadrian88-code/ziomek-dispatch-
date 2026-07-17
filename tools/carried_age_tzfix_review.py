@@ -12,7 +12,7 @@ Kontekst: memory/console-app-time-route-divergence-2026-06-23.md. Rollback gdy N
 rm /etc/systemd/system/dispatch-{plan-recheck,panel-watcher}.service.d/carried-age-tzfix.conf
 + daemon-reload + systemctl restart dispatch-panel-watcher.
 """
-import json, os, sys, subprocess, urllib.request, urllib.parse
+import json, sys, subprocess, urllib.request, urllib.parse
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 

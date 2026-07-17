@@ -17,9 +17,8 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Dict, List, Tuple
 
 from dispatch_v2.common import WARSAW, load_config, setup_logger
 from dispatch_v2 import telegram_approver  # reuse _load_env + tg_request

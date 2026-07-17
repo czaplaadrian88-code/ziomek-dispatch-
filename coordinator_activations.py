@@ -29,7 +29,7 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, Set
 
 ACTIVATIONS_PATH = "/root/.openclaw/workspace/dispatch_state/coordinator_activations.json"
 LOCK_PATH = ACTIVATIONS_PATH + ".lock"

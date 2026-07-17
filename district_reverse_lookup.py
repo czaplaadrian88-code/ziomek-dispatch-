@@ -13,8 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 log = logging.getLogger(__name__)
 

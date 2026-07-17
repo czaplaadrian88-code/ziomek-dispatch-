@@ -28,10 +28,9 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 # Sprint 2 (2026-05-27): Kebab Król dinner carry penalty fix.

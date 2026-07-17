@@ -25,7 +25,6 @@ D2  — soft-degrade zamiast NO_ACTIVE_SHIFT gdy grafik STALE. Pole
       (no_solo_candidates / "wszyscy odrzuceni nawet solo").
 """
 import json
-import os
 import sys
 from collections import Counter
 

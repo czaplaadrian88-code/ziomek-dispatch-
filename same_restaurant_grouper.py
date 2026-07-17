@@ -17,7 +17,7 @@ apart + distant quadrants → NIE grupujemy).
 
 Pure module. Zero side effects.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Sequence, Tuple
 import logging

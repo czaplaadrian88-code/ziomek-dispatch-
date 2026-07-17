@@ -23,7 +23,6 @@ Reprodukowalne: czyta tylko logi (shadow.log + dispatch.log), zero side-effects.
 """
 import json
 import re
-import sys
 from collections import OrderedDict, Counter
 
 SHADOW = "/root/.openclaw/workspace/scripts/logs/shadow.log"

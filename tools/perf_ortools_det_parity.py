@@ -40,7 +40,7 @@ import os
 import statistics
 import sys
 import time
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 _SCRIPTS_ROOT = os.environ.get("ZIOMEK_SCRIPTS_ROOT") or "/root/.openclaw/workspace/scripts"
 if _SCRIPTS_ROOT not in sys.path:

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 from dispatch_v2 import event_bus, state_machine

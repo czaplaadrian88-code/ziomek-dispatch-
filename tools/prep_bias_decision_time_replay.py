@@ -48,7 +48,6 @@ import json
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PKG_PARENT = os.path.dirname(os.path.dirname(_HERE))  # .../scripts

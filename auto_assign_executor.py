@@ -37,7 +37,7 @@ import os
 import subprocess
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from dispatch_v2 import common as C
 

@@ -1,7 +1,7 @@
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 
 # Regex patterns compiled at module level for speed
 # Pattern to extract pickup line from uwagi text.

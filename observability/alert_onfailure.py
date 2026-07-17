@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import datetime, timezone
 
 from dispatch_v2.observability import cron_health
 

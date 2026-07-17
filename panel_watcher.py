@@ -26,7 +26,7 @@ import signal
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 from dispatch_v2 import common as C
 from dispatch_v2 import plan_manager
