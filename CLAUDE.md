@@ -19,6 +19,8 @@
 | diagnoza usług / werdykt strażnika / przecieki / flagi / suita | `.claude/skills/run-dispatch-v2/driver.sh health` (guard/litter/flags/collect) |
 | kandydat (skill/patch/brama) przed promocją/merge | `python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog>` → świeży subagent → `check` |
 
+**📜 REGUŁA DWÓCH MIEJSC (Adrian 17.07):** każda dyrektywa sesyjna (routing skilli, zasady pracy, bramki) MUSI być zapisana równolegle w DWÓCH miejscach, bo Claude czyta CLAUDE.md a **Codex czyta AGENTS.md**: repo `CLAUDE.md` ↔ `AGENTS.md` (obok) oraz globalnie `/root/CLAUDE.md` ↔ `/root/.codex/AGENTS.md`. Zmiana jednego bez drugiego = zmiana częściowa (niezakończona).
+
 **Twarde minimum środowiskowe:** testy WYŁĄCZNIE `/root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q` (systemowy python3 nie ma ortools → fałszywe faile); żywy stan = `/root/.openclaw/workspace/dispatch_state/` (katalog `dispatch_state/` w tym repo = TYLKO dane epaki); log decyzji silnika = `../logs/shadow_decisions.jsonl`; flagi silnika = `../flags.json` hot-reload (panel: `flags.systemd.env` + drop-iny; apka kuriera: drop-iny systemd + `courier_api/config.py` — 3 światy flag opisane w `docs/decisions/ADR-004`).
 
 ---
