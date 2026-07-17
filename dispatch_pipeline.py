@@ -730,6 +730,38 @@ def _new_delivered_at_dt(c, new_oid):
     return (getattr(plan, "predicted_delivered_at", {}) or {}).get(new_oid)
 
 
+def _objm_metric_min(c, k):
+    """Metryka liczbowa kandydata albo None — JEDNO ŹRÓDŁO (scalenie 2 kopii
+    zagnieżdżonego `_m` z pick/shadow, dedup 2026-07-17)."""
+    v = (getattr(c, "metrics", None) or {}).get(k)
+    return float(v) if isinstance(v, (int, float)) else None
+
+
+def _objm_newbag_min(c, new_oid):
+    """Bag-time NOWEGO zlecenia: plan per-order → fallback sum_bag_time_min —
+    JEDNO ŹRÓDŁO (scalenie 3 kopii zagnieżdżonego `_newbag` z pick/shadow/readmit,
+    dedup 2026-07-17). Tier-3 cap dotyczy NOWEGO zlecenia."""
+    pod = getattr(getattr(c, "plan", None), "per_order_delivery_times", None) or {}
+    v = pod.get(new_oid)
+    if isinstance(v, (int, float)):
+        return float(v)
+    return _objm_metric_min(c, "sum_bag_time_min")
+
+
+def _feas_carry_reject_kind(c):
+    """Klasyfikacja blocking odrzutu (sla / r6_new / r6_carry_delta / other) —
+    JEDNO ŹRÓDŁO (scalenie 2 kopii zagnieżdżonego `_kind` z blind-shadow/readmit,
+    dedup 2026-07-17)."""
+    r = getattr(c, "feasibility_reason", "") or ""
+    if r.startswith("sla_violation"):
+        return "sla"
+    if r.startswith("R6_per_order"):
+        return "r6_new"
+    if r.startswith("R6_picked_up_delta"):
+        return "r6_carry_delta"
+    return "other"
+
+
 def _best_effort_objm_pick(with_plan, new_oid, cap_min=40.0):
     """Carry-aware guarded best_effort pick (case #482817). PRIMARY = objm_r6_breach_max_min
     (carry-inclusive, przez kanon objm_lexr6.lex_qual) zamiast new-pickup-only
@@ -743,16 +775,8 @@ def _best_effort_objm_pick(with_plan, new_oid, cap_min=40.0):
         if not with_plan:
             return None
 
-        def _m(c, k):
-            v = (getattr(c, "metrics", None) or {}).get(k)
-            return float(v) if isinstance(v, (int, float)) else None
-
         def _newbag(c):
-            pod = getattr(getattr(c, "plan", None), "per_order_delivery_times", None) or {}
-            v = pod.get(new_oid)
-            if isinstance(v, (int, float)):
-                return float(v)
-            return _m(c, "sum_bag_time_min")
+            return _objm_newbag_min(c, new_oid)
 
         # JEDNO ŹRÓDŁO PRAWDY tie-breaku = kanon objm_lexr6.lex_qual (post-shift-aware przy
         # ENABLE_POST_SHIFT_OVERRUN_PENALTY: OFF → krotka 3-elem. R6-primary; ON → prepend
@@ -789,16 +813,10 @@ def _best_effort_objm_shadow(with_plan, live_best, new_oid, cap_min=40.0) -> Non
         if not isinstance(lm, dict):
             return
 
-        def _m(c, k):
-            v = (getattr(c, "metrics", None) or {}).get(k)
-            return float(v) if isinstance(v, (int, float)) else None
+        _m = _objm_metric_min
 
         def _newbag(c):
-            pod = getattr(getattr(c, "plan", None), "per_order_delivery_times", None) or {}
-            v = pod.get(new_oid)
-            if isinstance(v, (int, float)):
-                return float(v)
-            return _m(c, "sum_bag_time_min")
+            return _objm_newbag_min(c, new_oid)
 
         from dispatch_v2 import objm_lexr6 as _OL  # kanon lex_qual (unifikacja 2026-06-25)
 
@@ -1328,15 +1346,7 @@ def _feas_carry_blind_shadow(top, feasible, candidates, order_id, now=None) -> N
             return  # chosen czysty → brak asymetrii bypassu, poza zakresem warstwy B
         chosen_lex = _OL.lex_qual(chosen)
 
-        def _kind(c):
-            r = getattr(c, "feasibility_reason", "") or ""
-            if r.startswith("sla_violation"):
-                return "sla"
-            if r.startswith("R6_per_order"):
-                return "r6_new"
-            if r.startswith("R6_picked_up_delta"):
-                return "r6_carry_delta"
-            return "other"
+        _kind = _feas_carry_reject_kind
 
         def _overby(c):
             m = _re.search(r"over by ([0-9.]+)", getattr(c, "feasibility_reason", "") or "")
@@ -1404,25 +1414,10 @@ def _feas_carry_readmit_pick(top, feasible, candidates, new_oid, cap_min=40.0):
             return None  # chosen czysty → brak asymetrii bypassu, poza zakresem B2
         chosen_lex = _OL.lex_qual(chosen)
 
-        def _kind(c):
-            r = getattr(c, "feasibility_reason", "") or ""
-            if r.startswith("sla_violation"):
-                return "sla"
-            if r.startswith("R6_per_order"):
-                return "r6_new"
-            if r.startswith("R6_picked_up_delta"):
-                return "r6_carry_delta"
-            return "other"
+        _kind = _feas_carry_reject_kind
 
         def _newbag(c):
-            # Nowy order bag-time (mirror _best_effort_objm_pick._newbag): plan per-order
-            # → fallback sum_bag_time_min. Tier-3 cap dotyczy NOWEGO zlecenia.
-            pod = getattr(getattr(c, "plan", None), "per_order_delivery_times", None) or {}
-            v = pod.get(new_oid)
-            if isinstance(v, (int, float)):
-                return float(v)
-            m = (getattr(c, "metrics", None) or {}).get("sum_bag_time_min")
-            return float(m) if isinstance(m, (int, float)) else None
+            return _objm_newbag_min(c, new_oid)
 
         rejected = [c for c in candidates
                     if getattr(c, "feasibility_verdict", None) == "NO"]

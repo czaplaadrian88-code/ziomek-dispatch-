@@ -68,8 +68,26 @@ PEAK_LUNCH = {11, 12, 13}
 PEAK_DINNER = {17, 18, 19}
 
 
+class _ToDictMixin:
+    """Wspólne to_dict wyników inferencji (scalenie 2 kopii, dedup 2026-07-17)."""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+class _InfererStatsMixin:
+    """Wspólne stats() infererów shadow/dwumodel (scalenie 2 kopii, dedup 2026-07-17)."""
+
+    def stats(self) -> Dict[str, Any]:
+        return {
+            "loaded": self._loaded,
+            "predict_count": self._predict_count,
+            "fallback_counts": dict(self._fallback_count),
+        }
+
+
 @dataclass
-class ShadowResult:
+class ShadowResult(_ToDictMixin):
     enabled: bool
     fallback_reason: Optional[str]  # None | "all_bag_zero" | "lgbm_error" | "feature_compute_error" | "latency_timeout" | "model_not_loaded"
     winner_cid: Optional[str]
@@ -84,15 +102,12 @@ class ShadowResult:
     inference_ms: float = 0.0
     n_candidates_scored: int = 0
 
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
 
 # Singleton
 _inferer = None
 
 
-class LGBMShadowInferer:
+class LGBMShadowInferer(_InfererStatsMixin):
     """LGBM ranker pointwise inference w shadow mode."""
 
     def __init__(
@@ -509,13 +524,6 @@ class LGBMShadowInferer:
             log.debug(f"OSRM call fail in shadow: {e}")
         return _haversine_km(lat1, lon1, lat2, lon2) * 1.42, False
 
-    def stats(self) -> Dict[str, Any]:
-        return {
-            "loaded": self._loaded,
-            "predict_count": self._predict_count,
-            "fallback_counts": dict(self._fallback_count),
-        }
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -636,7 +644,7 @@ _TWOMODEL_BUNDLE_ONLY = (
 
 
 @dataclass
-class TwoModelResult:
+class TwoModelResult(_ToDictMixin):
     """Wynik dwumodelu (shadow). Analogiczny do ShadowResult, osobne pole serializacji."""
     enabled: bool
     fallback_reason: Optional[str]
@@ -648,11 +656,8 @@ class TwoModelResult:
     evaluation_ts: str = ""
     latency_ms: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
 
-
-class LGBMTwoModelInferer:
+class LGBMTwoModelInferer(_InfererStatsMixin):
     """Dwumodel solo/bundle. Reużywa LGBMShadowInferer do liczenia cech (delta=pool_mean,
     haversine×1.42 — identyczne z definicją treningu), enkoduje wg ARTEFAKTÓW dwumodelu
     (one-hot level oś-worka + label-encodery v2.0), routuje per-kandydat po stanie worka:
@@ -813,11 +818,6 @@ class LGBMTwoModelInferer:
             res.latency_ms = round((time.time() - t_start) * 1000, 2)
             self._fallback_count["twomodel_error"] += 1
             return res
-
-    def stats(self) -> Dict[str, Any]:
-        return {"loaded": self._loaded, "predict_count": self._predict_count,
-                "fallback_counts": dict(self._fallback_count)}
-
 
 # Singleton dwumodelu
 _twomodel_inferer = None
