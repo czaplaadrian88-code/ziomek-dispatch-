@@ -47,24 +47,29 @@ if not os.environ.get("DISPATCH_STATE_DIR"):
 # in-process guard NIE dziedziczy sie na dzieci (script-runnery, subprocess.run w testach).
 # Katalog z wygenerowanym sitecustomize.py na POCZATKU PYTHONPATH sesji → kazdy
 # python-child importuje go na starcie i instaluje TEN SAM guard (hermetic_support).
-# FAIL-OPEN (wyjatek = cicho bez guarda, start dziecka nietkniety); aktywny WYLACZNIE
-# pod DISPATCH_UNDER_PYTEST=1; opt-out per-run: HERMETIC_SUBPROCESS_GUARD=0.
-# Produkcja NIETKNIETA: env + katalog istnieja tylko w obrebie sesji pytest.
+# FAIL-OPEN, ale GLOSNO: przy bledzie dziecko startuje bez guarda (jak dotad —
+# swiadoma decyzja ACK Adrian 10.07), lecz pisze marker na stderr zamiast milczec.
+# Cichy fail-open byl root enablerem 4-nocnej slepoty (15.07: guard padl po cichu,
+# sonda wyciekla, nikt nie wiedzial). Aktywny WYLACZNIE pod DISPATCH_UNDER_PYTEST=1;
+# opt-out per-run: HERMETIC_SUBPROCESS_GUARD=0. Produkcja NIETKNIETA (env+katalog
+# tylko w obrebie sesji pytest). Marker greppowalny: HERMETIC_SUBPROC_GUARD_INSTALL_FAILED.
 _SITE_TMPL = (
     "# auto-generated (dispatch_v2/conftest.py, Z-P2-07): FS-guard w subprocesach pytest.\n"
     "import os as _os\n"
+    "import sys as _sys\n"
     "if (_os.environ.get('DISPATCH_UNDER_PYTEST') == '1'\n"
     "        and _os.environ.get('HERMETIC_SUBPROCESS_GUARD', '1') == '1'):\n"
     "    try:\n"
-    "        import sys as _sys\n"
     "        _sr = _os.environ.get('ZIOMEK_SCRIPTS_ROOT',\n"
     "                              '/root/.openclaw/workspace/scripts')\n"
     "        if _sr not in _sys.path:\n"
     "            _sys.path.insert(0, _sr)\n"
     "        from dispatch_v2.tests.hermetic_support import install_guard_subprocess\n"
     "        install_guard_subprocess()\n"
-    "    except Exception:\n"
-    "        pass  # FAIL-OPEN\n"
+    "    except Exception as _exc:\n"
+    "        _sys.stderr.write('HERMETIC_SUBPROC_GUARD_INSTALL_FAILED '\n"
+    "                          '(fail-open, dziecko startuje bez guarda): '\n"
+    "                          + repr(_exc) + '\\n')\n"
 )
 import tempfile  # noqa: E402
 
