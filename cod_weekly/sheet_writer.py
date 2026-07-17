@@ -576,6 +576,53 @@ def build_week_block_plan(
     }
 
 
+# Ile kolumn zapasu dodać ponad minimum przy rozszerzaniu siatki, żeby nie
+# resize'ować arkusza co tydzień (blok ≈ 4-5 kol → ~5 tygodni zapasu).
+GRID_COL_BUFFER = 24
+
+
+def _a1_end_col(range_a1: str) -> int:
+    """Numer (1-based) najdalszej kolumny zakresu A1: 'DL1:DO2' → 119, 'A1:D2' → 4.
+
+    Własny parser zamiast gspread.utils — w środowisku testów silnika gspread jest
+    atrapą bez `.utils`, a to jedyna potrzebna operacja.
+    """
+    end = range_a1.split(":")[-1]
+    letters = "".join(ch for ch in end if ch.isalpha()).upper()
+    num = 0
+    for ch in letters:
+        num = num * 26 + (ord(ch) - ord("A") + 1)
+    return num
+
+
+def _ensure_grid_capacity(ws, plan: Dict) -> Dict:
+    """Rozszerz siatkę arkusza, jeśli blok tygodnia wyszedłby poza jej kolumny.
+
+    Root cause FAILA 2026-07-13: blok dopisywany za ostatnią używaną kolumną
+    wychodził poza sufit siatki (Max columns: 115) → APIError 'exceeds grid
+    limits' → exit 1 w każdy poniedziałek. Blok jest pozycjonowany poprawnie —
+    brakowało tylko miejsca w siatce, więc dokładamy kolumny (puste, bez danych).
+
+    Zwraca {expanded, from_cols, to_cols, needed}. Bezpieczne dla mocków: gdy
+    ws.col_count nie jest int (test bez ustawionej siatki), NIE rusza siatki.
+    """
+    needed = 0
+    for b in plan.get("blocks", []):
+        rng = b.get("range_a1")
+        if rng:
+            needed = max(needed, _a1_end_col(rng))
+    current = getattr(ws, "col_count", None)
+    if not isinstance(current, int) or needed <= current:
+        return {"expanded": False, "from_cols": current, "to_cols": current, "needed": needed}
+    add = needed - current + GRID_COL_BUFFER
+    ws.add_cols(add)
+    log.info(
+        f"ensure_week_block: siatka {current} kol < potrzebne {needed} → "
+        f"add_cols(+{add}) → {current + add} kol (bufor {GRID_COL_BUFFER})"
+    )
+    return {"expanded": True, "from_cols": current, "to_cols": current + add, "needed": needed}
+
+
 def ensure_week_block(
     ws,
     row1: list,
@@ -607,6 +654,7 @@ def ensure_week_block(
         {"range": b["range_a1"], "values": [b["row1_cells"], b["row2_cells"]]}
         for b in plan["blocks"]
     ]
+    plan["grid_expand"] = _ensure_grid_capacity(ws, plan)
     ws.batch_update(updates, value_input_option="USER_ENTERED")
     plan["created"] = True
     return plan

@@ -634,3 +634,84 @@ def test_partial_split_via_autodetect_end_to_end_autocreate(monkeypatch):
     assert len(args[0]) == 1, "tylko brakujący blok (seg2) tworzony"
     cols = sorted(c for c, _ in writes)
     assert cols == ["AQ", "AU"], f"zapis do obu segmentów, got {cols}"
+
+
+# ---------------------------------------------------------------------------
+# GRID-EXPAND — cod-weekly dokłada kolumny, gdy blok nie mieści się w siatce.
+# Root cause FAILA 2026-07-13: nowy blok szedł na DL–DO (116–119) przy sufcie
+# 115 kolumn → APIError 'exceeds grid limits' → exit 1 co poniedziałek.
+# ---------------------------------------------------------------------------
+def test_grid_expand_when_block_exceeds_grid():
+    ws = MagicMock()
+    ws.col_count = 115
+    plan = {"blocks": [{"range_a1": "DL1:DO2"}]}  # najdalsza kol = 119
+
+    res = sw._ensure_grid_capacity(ws, plan)
+
+    assert res["expanded"] is True
+    assert res["needed"] == 119
+    assert res["to_cols"] == 115 + (119 - 115 + sw.GRID_COL_BUFFER)
+    ws.add_cols.assert_called_once_with(119 - 115 + sw.GRID_COL_BUFFER)
+
+
+def test_grid_expand_noop_when_enough_columns():
+    ws = MagicMock()
+    ws.col_count = 200
+    res = sw._ensure_grid_capacity(ws, {"blocks": [{"range_a1": "DL1:DO2"}]})
+    assert res["expanded"] is False
+    ws.add_cols.assert_not_called()
+
+
+def test_grid_expand_safe_when_col_count_not_int():
+    # MagicMock bez ustawionego col_count (jak w testach autocreate wyżej) → NIE
+    # rusza siatki i NIE rzuca TypeError. To chroni te testy przed regresją fixu.
+    ws = MagicMock()
+    res = sw._ensure_grid_capacity(ws, {"blocks": [{"range_a1": "DL1:DO2"}]})
+    assert res["expanded"] is False
+    ws.add_cols.assert_not_called()
+
+
+def test_grid_expand_rightmost_of_multi_segment():
+    ws = MagicMock()
+    ws.col_count = 100
+    plan = {"blocks": [{"range_a1": "CW1:CZ2"}, {"range_a1": "DL1:DO2"}]}
+    res = sw._ensure_grid_capacity(ws, plan)
+    assert res["needed"] == 119
+    ws.add_cols.assert_called_once_with(119 - 100 + sw.GRID_COL_BUFFER)
+
+
+def test_grid_expand_a1_end_col_parser():
+    assert sw._a1_end_col("DL1:DO2") == 119
+    assert sw._a1_end_col("A1:D2") == 4
+    assert sw._a1_end_col("AA1:AA2") == 27
+
+
+def test_ensure_week_block_expands_before_write(monkeypatch):
+    # Pełna ścieżka: add_cols MUSI iść PRZED batch_update (inaczej write i tak
+    # padnie na grid limit). Monkeypatch planu izoluje kolejność od build_plan.
+    fake = {"blocks": [{"range_a1": "DL1:DO2", "row1_cells": ["", ""],
+                        "row2_cells": ["", ""]}]}
+    monkeypatch.setattr(sw, "build_week_block_plan", lambda *a, **k: dict(fake))
+    ws = MagicMock()
+    ws.col_count = 115
+    parent = MagicMock()
+    parent.attach_mock(ws.add_cols, "add_cols")
+    parent.attach_mock(ws.batch_update, "batch_update")
+
+    plan = sw.ensure_week_block(ws, [""], [""], date(2026, 7, 6), date(2026, 7, 12),
+                                dry_run=False)
+
+    names = [c[0] for c in parent.mock_calls]
+    assert names.index("add_cols") < names.index("batch_update"), names
+    assert plan["grid_expand"]["expanded"] is True
+
+
+def test_ensure_week_block_dry_run_no_grid_touch(monkeypatch):
+    fake = {"blocks": [{"range_a1": "DL1:DO2", "row1_cells": ["", ""],
+                        "row2_cells": ["", ""]}]}
+    monkeypatch.setattr(sw, "build_week_block_plan", lambda *a, **k: dict(fake))
+    ws = MagicMock()
+    ws.col_count = 115
+    sw.ensure_week_block(ws, [""], [""], date(2026, 7, 6), date(2026, 7, 12), dry_run=True)
+    ws.add_cols.assert_not_called()
+    ws.batch_update.assert_not_called()
