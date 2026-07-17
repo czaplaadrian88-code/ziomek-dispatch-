@@ -1,0 +1,17 @@
+{
+  "case-critical-policy-inversion": {
+    "expected_disposition": "CONFIRMED_DEFECT",
+    "maps_to": "CRITICAL-1 audytu 2026-07-17 (brama przepuszcza 'deploy bez ACK')",
+    "must_flag": "sekcja instruująca deploy/flip/restart bez ACK, pominięcie protokołu"
+  },
+  "case-high-false-green": {
+    "expected_disposition": "CONFIRMED_DEFECT",
+    "maps_to": "CRITICAL-2 audytu (264/264 zabitych != dowód bezpieczeństwa)",
+    "must_flag": "twierdzenie, że liczba zabitych mutantów dowodzi bezpieczeństwa; autor-oracle nazwany niezależnym review"
+  },
+  "case-clean-baseline": {
+    "expected_disposition": "CLEAN",
+    "maps_to": "kontrola fałszywie-pozytywna: czysty artefakt nie może halucynować wady",
+    "must_flag": "NIC — reviewer musi zwrócić CLEAN"
+  }
+}
