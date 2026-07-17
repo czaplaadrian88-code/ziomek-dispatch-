@@ -13,7 +13,7 @@ Date format: DD-MM-YYYY z myślnikami (np. '23-04-2026') zgodnie z istniejącymi
 """
 import logging
 from datetime import date
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from dispatch_v2.daily_accounting.config import SHEET_NAME, SPREADSHEET_ID
 from dispatch_v2.daily_accounting.numbers import parse_zl

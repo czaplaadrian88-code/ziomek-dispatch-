@@ -31,8 +31,8 @@ the module is import-safe even before Agent B deploys templates.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Iterable, List, Optional, Tuple
+from datetime import datetime
+from typing import Any, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import flag, load_flags, setup_logger

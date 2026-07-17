@@ -22,7 +22,7 @@ Użycie:
 """
 import os, sys, json, re, argparse, urllib.request, urllib.parse, http.cookiejar
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 _WARSAW = ZoneInfo("Europe/Warsaw")  # DST-safe CET/CEST — L2 audyt 2.0 bomba #1 (był fixed +2: zimą HH:MM<1h liczony teraz+1h → guard "+1 dzień" → ~1410 min do panelu zamiast ~20)
 

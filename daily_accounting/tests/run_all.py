@@ -8,7 +8,6 @@ Usage:
     python3 -m dispatch_v2.daily_accounting.tests.run_all
 """
 import importlib
-import pkgutil
 import sys
 import traceback
 from pathlib import Path

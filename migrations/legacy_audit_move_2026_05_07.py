@@ -23,7 +23,6 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 # Path setup dla import event_bus dla AUDIT_EVENT_TYPES
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
