@@ -1,0 +1,176 @@
+{
+  "_meta": {
+    "wersja": 1,
+    "data_seed": "2026-07-17",
+    "zrodla": [
+      "ZIOMEK_ARCHITECTURE.md §4 REJESTR BLIŹNIAKÓW (kanon zatw. Adrian 01.07, korekta 06.07)",
+      "memory/ziomek-change-protocol.md — Załącznik A (klasa→miejsca) + sekcja 'DYSKRYMINACJA POZYCJI' (8 bliźniaków, Adrian 29.06) + wzorce #1-#18",
+      "weryfikacja grep na żywym HEAD a370e65 (2026-07-17): każdy symbol poniżej znaleziony w podanym pliku"
+    ],
+    "zasada": "To są MIEJSCA DO SPRAWDZENIA przy zmianie danej klasy (ETAP 3 protokołu #0), nie dowód poprawności. Cel każdej pozycji wg kanonu = 1 źródło (rejestr ma MALEĆ). Zmieniasz mapę → edytuj TEN plik (dane), driver zostaje bez zmian. Driver weryfikuje żywo: DRYF-SYMBOLU/BRAK-PLIKU = mapa się zestarzała → popraw wpis i sprawdź, czy reguła nie przeniosła się gdzie indziej.",
+    "typ_legenda": "blizniaki-plikowe = kopie tej samej reguły w plikach (dod sprawdza parytet dotknięcia); procedura = checklista miejsc/wymogów danej klasy zmiany (dod nie wymusza współ-dotknięcia)"
+  },
+  "klasy": {
+    "rowne-traktowanie-pozycji": {
+      "typ": "blizniaki-plikowe",
+      "opis": "Równe traktowanie kuriera bez GPS / pre_shift / brak pozycji (kanon C3: ZAWSZE równo — wybór i trasa; jedyne tolerowane 3-4 min niedoszacowania). Klasa łatana ≥4×, wraca — każda naprawa scalała 1 kopię, bliźniaki zostawały.",
+      "keywords": ["no-gps", "no_gps", "nogps", "bez gps", "brak gps", "brak pozycji", "pre_shift", "pre-shift", "przed zmiana", "rowne traktowanie", "rownosc pozycji", "pozycja kuriera", "blind", "pos_source", "equal treatment", "equal_treatment", "synthetic pos", "dyskryminacja pozycji"],
+      "przypomnienie": "Naprawiając COKOLWIEK pozycyjnego → tknij WSZYSTKIE 8 RAZEM albo jawne N-D+powód per miejsce (protokół #0, sekcja 'DYSKRYMINACJA POZYCJI'). Uwaga L1: dwie RÓŻNE flagi bramkują 'równo' (ENABLE_EQUAL_TREATMENT_BUCKET vs ENABLE_NO_GPS_EQUAL_TREATMENT) — zgodne tylko bo obie ON.",
+      "miejsca": [
+        {"nazwa": "F1.7 score-neutral no_gps", "plik": "dispatch_pipeline.py", "symbol": "F1.7", "uwaga": "km=śr. floty + ETA=max(15,prep) — neutralizacja score"},
+        {"nazwa": "_selection_bucket (equal-treatment-aware)", "plik": "dispatch_pipeline.py", "symbol": "def _selection_bucket", "uwaga": "wpięty w _late_pickup_score_first_key / _best_effort_sort_key / objm bucket_fn / resweep; flaga ENABLE_EQUAL_TREATMENT_BUCKET"},
+        {"nazwa": "_demote_blind_empty / _is_demotable_blind_empty", "plik": "core/selection.py", "symbol": "_demote_blind_empty", "uwaga": "demote blind+empty; flaga ENABLE_NO_GPS_EQUAL_TREATMENT (INNA niż bucket — mina L1)"},
+        {"nazwa": "_best_effort_fastest_pickup_key", "plik": "core/selection.py", "symbol": "_best_effort_fastest_pickup_key", "uwaga": "HARDCODED bucket informed0/blind2 BEZ flagi — dziś shadow/log-only, mina przy awansie"},
+        {"nazwa": "drive_min_calibration OFFSET", "plik": "drive_min_calibration.py", "symbol": "pre_shift", "uwaga": "offsety no_gps+6.5 / pre_shift+15.3 — artefakt, MAIN OFF, NIE flipować"},
+        {"nazwa": "auto_assign_gate G7 pos_not_informed", "plik": "auto_assign_gate.py", "symbol": "pos_not_informed", "uwaga": "LATENTNE (ENABLE_AUTO_ASSIGN OFF) — ugryzie przy autonomii"},
+        {"nazwa": "reassignment_forward_shadow _SYNTH_POS (duch przerzutu)", "plik": "tools/reassignment_forward_shadow.py", "symbol": "_SYNTH_POS", "uwaga": "nigdy niezrównany z silnikiem; 59% quality_reassign = fałszywy ratunek na no_gps/pre_shift (29.06)"},
+        {"nazwa": "feed.py konsola — quality_reassign bez filtra pewnej pozycji", "plik": "/root/.openclaw/workspace/nadajesz_clone/panel/backend/app/integrations/ziomek/feed.py", "symbol": "quality_reassign", "uwaga": "Telegram miał _pos_trusted, konsola nie — cross-repo (panel)"}
+      ]
+    },
+    "selekcja-tiebreak": {
+      "typ": "blizniaki-plikowe",
+      "opis": "Selekcja kuriera / tie-break / leksykografia objm-lexr6 (poziom 2 kanonu reguł).",
+      "keywords": ["selekcj", "tie-break", "tiebreak", "ranking kurier", "lex_qual", "lexr6", "best_effort", "best-effort", "objm", "wybor kuriera", "bucket"],
+      "przypomnienie": "lex_qual ZUNIFIKOWANE 06.07 (kanon objm_lexr6.lex_qual, pipeline deleguje ×6) — NIE forkuj z powrotem (anty-entropia). Cień _objm_lexr6_shadow = zamrożony baseline (3-krotka) — rozjazd przy flipie C7 (L3).",
+      "miejsca": [
+        {"nazwa": "_best_effort_objm_pick + _best_effort_sort_key", "plik": "core/selection.py", "symbol": "_best_effort_objm_pick", "uwaga": "aliasy prologu _dp.* zachowują kontrakt monkeypatch"},
+        {"nazwa": "objm_lexr6.lex_qual (KANON od 06.07)", "plik": "objm_lexr6.py", "symbol": "lex_qual", "uwaga": "jedno źródło leksykografii (R6-breach → committed-late → new-pickup-late)"},
+        {"nazwa": "_objm_lexr6_shadow (zamrożony obserwator)", "plik": "dispatch_pipeline.py", "symbol": "_objm_lexr6_shadow", "uwaga": "baseline at#152; zawsze 3-krotka — L3 rozjazd przy flipie POST_SHIFT_OVERRUN"},
+        {"nazwa": "strażnik unifikacji", "plik": "tests/test_objm_lexr6_unify_2026_06_25.py", "symbol": null, "uwaga": "INV-SRC-LEXQUAL — ma zostać zielony"}
+      ]
+    },
+    "feasibility-hard": {
+      "typ": "blizniaki-plikowe",
+      "opis": "HARD feasibility (R6/R27/R-SCHEDULE/bag-cap) — bramka przed scoringiem; bliźniaki: feasibility ↔ symulacja greedy/bruteforce ↔ re-sekwencja plan_recheck.",
+      "keywords": ["feasibility", "wykonalnosc", "hard reject", "hard-reject", "r27", "committed", "bag cap", "bag-cap", "worek cap", "koniec zmiany", "grafik hard", "schedule hard"],
+      "przypomnienie": "Gate w fazie A + brak w fazie B = wzorzec #3. Historyczna luka P-3: greedy ślepy na ck/R6. HARD-bypass PO guardzie = wzorzec #10 (mutacje za _assert_feasibility_first).",
+      "miejsca": [
+        {"nazwa": "check_feasibility_v2 (HARD, SLA-first)", "plik": "feasibility_v2.py", "symbol": "check_feasibility_v2", "uwaga": "wołane z core/candidates.py przez _dp. (monkeypatch działa)"},
+        {"nazwa": "symulacja worka greedy/bruteforce/OR-Tools", "plik": "route_simulator_v2.py", "symbol": "simulate_bag_route_v2", "uwaga": "legacy planery odsłaniane rollbackiem OR-Tools (wzorzec #13 — flip w parach z GROUPING)"},
+        {"nazwa": "re-sekwencja plan_recheck", "plik": "plan_recheck.py", "symbol": "_gen_one_bag_plan", "uwaga": "committed ±5 / pre-shift floor muszą być TAKŻE tu (wzorzec #3)"},
+        {"nazwa": "pętla per-kurier (kandydaci)", "plik": "core/candidates.py", "symbol": "eval_courier_inner", "uwaga": "EvalContext; scoring/19 kar/Candidate"}
+      ]
+    },
+    "scoring-soft": {
+      "typ": "blizniaki-plikowe",
+      "opis": "Scoring SOFT (~19 kar) + widoczność każdej metryki w serializerze A+B (SOFT nigdy nie osłabia HARD).",
+      "keywords": ["scoring", "kara", "kary", "penalty", "bonus", "score", "s_obciazenie", "term", "waga score"],
+      "przypomnienie": "Nowy term = wpis do metrics (auto-serializacja A+B po L1.1) + test obecności + materialność. Kara zmienia KTO, nie CZY proponujemy.",
+      "miejsca": [
+        {"nazwa": "score_candidate (~19 kar)", "plik": "scoring.py", "symbol": "score_candidate", "uwaga": "gradient, nie binarnie (LESSON-QA-10)"},
+        {"nazwa": "pętla kandydata / final_score", "plik": "core/candidates.py", "symbol": "eval_courier_inner", "uwaga": "agregacja bonus_penalty_sum"},
+        {"nazwa": "serializer A (kandydat)", "plik": "shadow_dispatcher.py", "symbol": "_serialize_candidate", "uwaga": "LOCATION A"},
+        {"nazwa": "serializer B (best)", "plik": "shadow_dispatcher.py", "symbol": "_serialize_result", "uwaga": "LOCATION B; deny-lista _METRICS_EXCLUDE"},
+        {"nazwa": "inwariant kompletności serializera", "plik": "tests/test_serializer_completeness_l11.py", "symbol": null, "uwaga": "L1.1: każdy klucz metrics dociera do A+B chyba że jawnie wykluczony Z POWODEM"}
+      ]
+    },
+    "kanon-plan-display": {
+      "typ": "blizniaki-plikowe",
+      "opis": "Kolejność trasy / kanon planu / render powierzchni (silnik ↔ konsola ↔ apka). Kolejność JAZDY kuriera to zmienna wykonawcza, nie kosmetyka (C8).",
+      "keywords": ["kolejnosc trasy", "route order", "route-order", "kanon", "plan kolejnosc", "podjazdy", "stop_sequence", "carried-first", "carried first", "no-return", "render trasy", "trasa w worku", "sekwencja stopow"],
+      "przypomnienie": "'To tylko display' = ZAŁOŻENIE do udowodnienia grepem KAŻDEGO konsumenta (wzorzec #8). Konsola NIE importuje dispatch_v2.route_order — ma własną kopię (C7-docstring kłamie). Twin render fixed-in-1-of-2 = wzorzec #11. Parytet konsola↔apka = LICZBA z monitora (ziomek_time_route_monitor), nie lektura kodu (C4).",
+      "miejsca": [
+        {"nazwa": "kanon inwariantów kolejności (silnik)", "plik": "plan_recheck.py", "symbol": "_apply_canon_order_invariants", "uwaga": "carried-first → no-return → relax → lex-window → noncarried (łańcuch greedy sekwencyjny, T1)"},
+        {"nazwa": "4 handlery recanon (assign/deliver/return/pickup)", "plik": "panel_watcher.py", "symbol": "recanon_courier", "uwaga": "recanon NIE potrafi prune — tranzycja kurcząca worek najpierw remove_stops/advance_plan"},
+        {"nazwa": "JEDNO źródło route-order (S30, silnik+apka)", "plik": "route_order.py", "symbol": "def order_podjazdy", "uwaga": "kanoniczny dom od 07.07; route_podjazdy.py = alias wsteczny"},
+        {"nazwa": "alias wsteczny apki", "plik": "route_podjazdy.py", "symbol": "route_order", "uwaga": "re-eksport; zero drugiej kopii — NIE dopisuj tu logiki"},
+        {"nazwa": "konsola koordynatora (OSOBNA kopia)", "plik": "/root/.openclaw/workspace/nadajesz_clone/panel/backend/app/integrations/ziomek/fleet_state.py", "symbol": "_build_route", "uwaga": "cross-repo; PANEL_FLAG_TRUST_CANON_ORDER; repo+deploy WSPÓLNE z innymi sesjami"},
+        {"nazwa": "apka kuriera Kotlin (render)", "plik": "/root/courier-app", "symbol": null, "uwaga": "cross-repo (dzielony z sesją 15); kolejność jazdy w UI kuriera — sprawdź ręcznie"}
+      ]
+    },
+    "sla-anchor": {
+      "typ": "blizniaki-plikowe",
+      "opis": "Kotwica SLA — 3 bliźniaki liczące naruszenia/porządek wg SLA (przy każdej migracji anchora RAZEM).",
+      "keywords": ["sla", "kotwica", "anchor", "sla-anchor", "naruszenia sla"],
+      "przypomnienie": "BASELINE/DRIFT: przy przyszłej migracji ODR-001 (possession→handoff) wszystkie 3 razem + sla_anchor.py. ENABLE_ETA_QUANTILE_R6_BAGCAP niezgodny z '35 normalnie / 40 tylko Alarm' — nie zachowywać jako wyjątek produktowy.",
+      "miejsca": [
+        {"nazwa": "_count_sla_violations", "plik": "route_simulator_v2.py", "symbol": "_count_sla_violations", "uwaga": ""},
+        {"nazwa": "SLA-loop w feasibility", "plik": "feasibility_v2.py", "symbol": null, "uwaga": "SLA-first pętla (grep 'sla')"},
+        {"nazwa": "_o2_key (plan_recheck)", "plik": "plan_recheck.py", "symbol": "_o2_key", "uwaga": "pod K1=ON klucz sla-free — sekwencja flipów K1→K2 to własność KODU (C16)"},
+        {"nazwa": "moduł kotwicy", "plik": "sla_anchor.py", "symbol": null, "uwaga": "bliźniak feasibility+route_sim"}
+      ]
+    },
+    "r6-progi": {
+      "typ": "procedura",
+      "opis": "Progi R6 (35/40) i ich kotwice — threshold-sprawl ~6 progów + niespójne anchory (kanon OD-07: R6 = in_vehicle_age possession→handoff; 35 normalnie / 40 TYLKO Alarm / NIGDY klasa kuriera).",
+      "keywords": ["r6", "35 min", "40 min", "bag_time", "bag time", "in_vehicle", "swiezosc", "wiezienie jedzenia", "food age", "food_ready"],
+      "przypomnienie": "Ready-anchor/picked-anchor = IMPLEMENTATION DRIFT, nie kanon (OD-07). food_ready_age = OSOBNY wymiar UNBOUND — nie implementuj jako R6. Zmiana progu → wszystkie kotwice razem + serializer + oracle.",
+      "miejsca": [
+        {"nazwa": "stała BAG_TIME_HARD_MAX_MIN", "plik": "common.py", "symbol": "BAG_TIME_HARD_MAX_MIN", "uwaga": "baseline 35"},
+        {"nazwa": "R6 w feasibility (35/40)", "plik": "feasibility_v2.py", "symbol": null, "uwaga": "R6-breach 35/40 + soft zone"},
+        {"nazwa": "R6 w symulacji trasy", "plik": "route_simulator_v2.py", "symbol": null, "uwaga": "thermal anchor — 2 ręczne kopie z plan_recheck (L4)"},
+        {"nazwa": "R6 w re-sekwencji", "plik": "plan_recheck.py", "symbol": "_r6_thermal_bag_min", "uwaga": "kopia thermal anchora (L4)"}
+      ]
+    },
+    "floor-odbioru": {
+      "typ": "blizniaki-plikowe",
+      "opis": "Floor czasu odbioru available_from = max(now, shift_start) — kanon w courier_resolver; historycznie 17 powierzchni / 4 z floorem.",
+      "keywords": ["available_from", "floor odbioru", "start zmiany", "shift_start", "clamp", "pre-shift clamp"],
+      "przypomnienie": "Nowe re-liczenie czasu-odbioru bez available_from = RED-check anty-entropii (DoD). Reszta powierzchni: grep 'available_from' przed zmianą.",
+      "miejsca": [
+        {"nazwa": "kanon available_from", "plik": "courier_resolver.py", "symbol": "available_from", "uwaga": "dispatchable_fleet wzbogaca snapshot"}
+      ]
+    },
+    "nowa-flaga": {
+      "typ": "procedura",
+      "opis": "Nowa flaga decyzyjna / zmiana flagi / flip (C2: flip = PEŁNY deploy; C3: flagi sprzężone w parach).",
+      "keywords": ["flaga", "flag", "enable_", "flip", "feature flag", "wlacz flage", "wylacz flage", "kill-switch", "kill switch"],
+      "przypomnienie": "Wymogi (Załącznik A): ETAP4_DECISION_FLAGS + stała default OFF + czytanie przez decision_flag()/flag() (NIGDY os.environ na poziomie modułu — wzorzec #9 env-frozen) + _SHADOW + serializer + 3 checkery + test ON≠OFF. Stan EFEKTYWNY = proces (FLAG_FINGERPRINT), nie flags.json/env-default. 3 światy flag: silnik=flags.json, panel=flags.systemd.env+drop-iny, apka=drop-iny+config.py (ADR-004). Flaga ON + konsument istnieje ≠ działa — udowodnij OSIĄGALNOŚĆ gałęzi (C5).",
+      "miejsca": [
+        {"nazwa": "rejestr flag decyzyjnych", "plik": "common.py", "symbol": "ETAP4_DECISION_FLAGS", "uwaga": "~106+ flag, liczba rośnie"},
+        {"nazwa": "kanon wartości silnika (hot-reload)", "plik": "../flags.json", "symbol": null, "uwaga": "default OFF przy wprowadzeniu"},
+        {"nazwa": "czytniki flag", "plik": "common.py", "symbol": "def decision_flag", "uwaga": "+ flag(); nigdy module-level os.environ"},
+        {"nazwa": "rejestr lifecycle (3 światy, kurowany)", "plik": "tools/flag_lifecycle_registry.json", "symbol": null, "uwaga": "re-seed ZAWSZE --merge"},
+        {"nazwa": "checkery flag", "plik": "tools/flag_registry.py", "symbol": null, "uwaga": "+ flag_hygiene_check.py + flag_doc_coverage_check.py + flag_lifecycle_check.py [--live]"}
+      ]
+    },
+    "nowa-metryka": {
+      "typ": "procedura",
+      "opis": "Nowa metryka / obserwowalność decyzji (metryka liczona ≠ serializowana — wzorzec #4/#16).",
+      "keywords": ["metryka", "metric", "serializ", "shadow_decisions", "obserwowaln", "jsonl log decyzji"],
+      "przypomnienie": "Od L1.1: KAŻDY klucz metrics AUTO-serializowany do LOCATION A+B przez deny-listę — ale NADAL test 'metryka w jsonl' (grep -c na świeżym oknie; klucz warunkowy → licznik >0 tylko gdy warunek zaszedł). Świadome pominięcie = wpis w _METRICS_EXCLUDE Z POWODEM, nie nowy filtr.",
+      "miejsca": [
+        {"nazwa": "deny-lista serializera", "plik": "shadow_dispatcher.py", "symbol": "_METRICS_EXCLUDE", "uwaga": "wspólny _propagate_prefixed_metrics + _json_safe"},
+        {"nazwa": "inwariant kompletności", "plik": "tests/test_serializer_completeness_l11.py", "symbol": null, "uwaga": ""}
+      ]
+    },
+    "config-systemd": {
+      "typ": "procedura",
+      "opis": "Config / stała / unit systemd / timer (wzorce #5 config-do-1-serwisu i #7 unit zadeklarowany-niezainstalowany).",
+      "keywords": ["config", "systemd", "unit", "timer", "drop-in", "dropin", "service", "srodowisko", "env var", "stala konfig"],
+      "przypomnienie": "Każdy IMPORTER configu (Lekcja #47: grep -l), każdy unit + weryfikacja że realnie w /etc/systemd (systemctl cat — bywają kopie/symlinki/drop-iny). Który SERWIS uruchamia kod: grep -rln run_X /etc/systemd. Nowy timer/mutator domyślnie dry-run bez timera (C40).",
+      "miejsca": [
+        {"nazwa": "źródła unitów w repo", "plik": "systemd", "symbol": null, "uwaga": "+ deploy/, deploy_staging/ (staged kity)"},
+        {"nazwa": "wdrożone unity", "plik": "/etc/systemd/system", "symbol": null, "uwaga": "prawda = systemctl cat <unit> (agreguje drop-iny)"}
+      ]
+    },
+    "pole-state-boundary": {
+      "typ": "procedura",
+      "opis": "Nowe/zmieniane pole stanu przekraczające granice warstw (Lekcja #80) + pola sprzężone (tekst↔pin, display↔decision).",
+      "keywords": ["pole", "field", "orders_state", "state boundary", "boundary", "schema stanu", "delivery_coords", "delivery_address", "pola sprzezone"],
+      "przypomnienie": "Tabela pole×konsument + E2E 'pole dociera do końca'. POLA SPRZĘŻONE = grep WSZYSTKICH WRITERÓW OBU pól (nie tylko konsumentów) — writer piszący jedno bez drugiego = ciche kłamstwo utrwalone (near-miss 484269). Migracja load-calla → re-waliduj KAŻDE .get() vs żywy schema (wzorzec #14).",
+      "miejsca": [
+        {"nazwa": "jedyny writer orders_state", "plik": "state_machine.py", "symbol": "upsert", "uwaga": "26 ścieżek; FSM observer log-only"}
+      ]
+    },
+    "artefakt-werdykt": {
+      "typ": "procedura",
+      "opis": "Shadow / monitor / at-job, którego produktem jest WERDYKT (flip/no-flip) = P0 mimo 'log-only' (C9: ryzyko odroczone — zła liczba każe przyszłej sesji źle flipnąć).",
+      "keywords": ["shadow", "monitor", "at-job", "werdykt", "instrument", "przyrzad", "oracle", "kalibracja przyrzadu", "replay gate", "miernik"],
+      "przypomnienie": "DoD przyrządu (C9): (a) golden/oracle case z niezależnie policzoną prawdą (DRUGĄ metodą, nie tym samym silnikiem); (b) baseline = ta sama semantyka/guardy/kotwica/coords co live (#15); (c) metryka czyta REALNĄ zmienną decyzyjną (p.sequence), nie proxy (#17); (d) inwarianty-tripwire uzbrojone (fresh≤frozen ŁAMIE harness, nie loguje się jako dane); (e) determinizm ≥2 biegi; (f) wpis statusu do shadow-jobs-registry. Liczba monitora autorytatywna TYLKO po kalibracji (C10).",
+      "miejsca": [
+        {"nazwa": "rejestr shadow-jobów + status kalibracji", "plik": "/root/.claude/projects/-root/memory/shadow-jobs-registry.md", "symbol": null, "uwaga": "rekoncyliacja atq/timery na starcie KAŻDEGO zadania"},
+        {"nazwa": "kanoniczny czytnik ledgera (rotation-aware)", "plik": "tools/ledger_io.py", "symbol": null, "uwaga": "'0 przypadków w oknie' stwierdzaj TYLKO odczytem rotation-aware (C16)"}
+      ]
+    },
+    "prog-czasowka-60": {
+      "typ": "procedura",
+      "opis": "Czasówki / próg 60 min (czasówka ⟺ prep≥60 u źródła; threshold-sprawl ~6 miejsc).",
+      "keywords": ["czasowk", "czasówk", "prog 60", "prep 60", "elastyk", "early-bird", "hold koord"],
+      "przypomnienie": "Próg 60 żyje w ~6 miejscach (threshold-sprawl, kanon §4) — grep '60' po plikach czasówek PRZED zmianą; docelowo 1 stała.",
+      "miejsca": [
+        {"nazwa": "scheduler czasówek", "plik": "czasowka_scheduler.py", "symbol": null, "uwaga": "+ czasowka_proactive/ (evaluator, score_selector)"}
+      ]
+    }
+  }
+}

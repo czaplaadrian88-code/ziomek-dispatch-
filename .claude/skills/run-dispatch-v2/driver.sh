@@ -36,6 +36,10 @@ cmd_services() {
   echo
   echo "# UWAGA: dispatch-telegram inactive = STAN ZAMIERZONY (kanal wyciszony swiadomie)."
   echo "# NIE naprawiaj tego jako awarii. Patrz memory/telegram-notifications-mute-2026-06-26."
+  echo "# UWAGA: dispatch-cod-weekly failed = stan PRZEWLEKLY (tygodnie; to on robi alarm-fatigue"
+  echo "# w 'systemctl --failed'). Zanim uznasz za NOWA awarie: journalctl -u dispatch-cod-weekly -n 30"
+  echo "# + memory/ziomek-skills-plan-2026-07-17 (17.07 wszedl fix grid-expand b9a64fa — 'failed'"
+  echo "# utrzyma sie do najblizszego udanego runu poniedzialkowego albo recznego resetu za ACK)."
 }
 
 cmd_guard() {

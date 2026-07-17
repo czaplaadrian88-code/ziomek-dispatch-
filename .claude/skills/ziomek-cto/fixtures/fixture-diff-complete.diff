@@ -1,0 +1,36 @@
+diff --git a/common.py b/common.py
+index 1111111..2222222 100644
+--- a/common.py
++++ b/common.py
+@@ -300,6 +300,7 @@ ETAP4_DECISION_FLAGS = (
+     "ENABLE_NO_GPS_EQUAL_TREATMENT",
++    "ENABLE_CTO_FIXTURE_DEMO",
+     "ENABLE_EQUAL_TREATMENT_BUCKET",
+diff --git a/core/selection.py b/core/selection.py
+index 3333333..4444444 100644
+--- a/core/selection.py
++++ b/core/selection.py
+@@ -50,6 +50,10 @@
+
++def _cto_fixture_demo_bonus(cand):
++    if _dp.C.decision_flag("ENABLE_CTO_FIXTURE_DEMO"):
++        return 1.0
++    return 0.0
+diff --git a/tests/test_cto_fixture_demo.py b/tests/test_cto_fixture_demo.py
+new file mode 100644
+index 0000000..5555555
+--- /dev/null
++++ b/tests/test_cto_fixture_demo.py
+@@ -0,0 +1,12 @@
++"""Test ON!=OFF flagi ENABLE_CTO_FIXTURE_DEMO (fixture skilla ziomek-cto)."""
++
++
++def test_cto_fixture_demo_on_neq_off(monkeypatch):
++    import core.selection as sel
++    monkeypatch.setattr(sel._dp.C, "decision_flag", lambda n: n == "ENABLE_CTO_FIXTURE_DEMO")
++    on = sel._cto_fixture_demo_bonus(object())
++    monkeypatch.setattr(sel._dp.C, "decision_flag", lambda n: False)
++    off = sel._cto_fixture_demo_bonus(object())
++    assert on != off, "flaga ENABLE_CTO_FIXTURE_DEMO musi zmieniac decyzje (ON != OFF)"
++    assert on == 1.0 and off == 0.0
++

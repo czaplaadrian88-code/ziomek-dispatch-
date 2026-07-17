@@ -8,6 +8,7 @@ Każdy ma **driver** (kod, który uruchamiasz) i **selftest** wpięty w nocną r
 |---|---|---|---|
 | **run-dispatch-v2** | uruchom/zdiagnozuj Ziomka (usługi, strażnik, przecieki, flagi) | `driver.sh health` | `selftest.sh` (5/5) |
 | **ziomek-blind-review** | niezależna ślepa recenzja kandydata przed promocją | `driver.py blind/check/eval` | `selftest.sh` (8/8) |
+| **ziomek-cto** | cykl sesji CTO: brief stanu, mapa kompletności zmiany (ETAP 3 #0), bramka DoD na diffie, szablon handoffu | `driver.py brief/scope/dod/handoff` | `selftest.sh` (16/16) |
 
 ## Zasada, z której wyrosły (audyt 2026-07-17)
 

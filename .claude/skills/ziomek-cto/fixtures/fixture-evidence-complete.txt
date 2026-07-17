@@ -1,0 +1,9 @@
+# Dowody DoD dla fixture-diff-complete.diff (przykład kontraktu evidence skilla ziomek-cto)
+# Format: "klucz: wartość" po linii; klucze rozpoznawane przez driver.py dod:
+#   regresja / e2e / pozytywny-wplyw (albo bajt-identycznosc) / rollback / N-D
+regresja: 5155 passed, 0 failed (pytest tests/ -q, venv dispatch, kanoniczna ścieżka, 2026-07-17)
+e2e: assess_order replay 3 case przez warstwę selekcji — wynik identyczny przy OFF (gałąź za flagą)
+pozytywny-wplyw: replay ON↔OFF n=88 na korpusie world_replay: metryka demo +3.1% netto, 0 regresji ukrytych
+rollback: flaga ENABLE_CTO_FIXTURE_DEMO default OFF (brak w flags.json = OFF) + git revert 1 commit
+N-D: pozostałe bliźniaki selekcji (objm_lexr6.py, dispatch_pipeline.py) — gałąź demo za flagą OFF nie zmienia rankingu; powód: fixture dydaktyczny
+N-D: bliźniaki pozycyjne (dispatch_pipeline.py, drive_min_calibration.py, auto_assign_gate.py, tools/reassignment_forward_shadow.py) — zmiana nie dotyka logiki pozycji

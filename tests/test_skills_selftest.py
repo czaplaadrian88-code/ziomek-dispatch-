@@ -26,7 +26,7 @@ def _run_selftest(skill: str) -> subprocess.CompletedProcess:
     )
 
 
-@pytest.mark.parametrize("skill", ["ziomek-blind-review", "run-dispatch-v2"])
+@pytest.mark.parametrize("skill", ["ziomek-blind-review", "run-dispatch-v2", "ziomek-cto"])
 def test_skill_selftest_passes(skill: str) -> None:
     r = _run_selftest(skill)
     assert r.returncode == 0, (
