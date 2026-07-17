@@ -1,6 +1,6 @@
 {
-  "base_sha": "521ed4e8280ae4cc0e270fd44664d93aaf164472",
-  "manifest_version": 7,
+  "base_sha": "b9a64fab3d05562f13a24e97dabf8ead8f39c962",
+  "manifest_version": 8,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -814,7 +814,14 @@
     "tests/test_cod_weekly_missing_block.py::test_ambiguous_never_autocreates_even_with_flag_on",
     "tests/test_cod_weekly_missing_block.py::test_build_week_block_plan_single",
     "tests/test_cod_weekly_missing_block.py::test_build_week_block_plan_split_month",
+    "tests/test_cod_weekly_missing_block.py::test_ensure_week_block_dry_run_no_grid_touch",
     "tests/test_cod_weekly_missing_block.py::test_ensure_week_block_dry_run_vs_real",
+    "tests/test_cod_weekly_missing_block.py::test_ensure_week_block_expands_before_write",
+    "tests/test_cod_weekly_missing_block.py::test_grid_expand_a1_end_col_parser",
+    "tests/test_cod_weekly_missing_block.py::test_grid_expand_noop_when_enough_columns",
+    "tests/test_cod_weekly_missing_block.py::test_grid_expand_rightmost_of_multi_segment",
+    "tests/test_cod_weekly_missing_block.py::test_grid_expand_safe_when_col_count_not_int",
+    "tests/test_cod_weekly_missing_block.py::test_grid_expand_when_block_exceeds_grid",
     "tests/test_cod_weekly_missing_block.py::test_missing_block_autocreate_dry_run_no_write",
     "tests/test_cod_weekly_missing_block.py::test_missing_block_autocreate_on_creates_and_writes",
     "tests/test_cod_weekly_missing_block.py::test_missing_block_flag_off_exit1_actionable",
@@ -5189,7 +5196,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "2478412d1c27d0e9c30e9e6966ce3f05c53838059b55079562ce5cadeb754279",
+  "nodeids_sha256": "ccfc6832a69b04cba703b2a0196fa6f51c473e50a8db89140013650bbbf461c7",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5304,8 +5311,8 @@
       "skipped"
     ]
   },
-  "owner": "skills-selftest-wiring-2026-07-17",
-  "reason": "adopt-tests-test_skills_selftest-blind-review-and-run-dispatch-v2-harness",
+  "owner": "cod-weekly-grid-expand-2026-07-17",
+  "reason": "adopt-7-grid-expand-tests-and-sheet_writer-ensure_grid_capacity-fix",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-17T12:33:00+00:00"
+  "updated_at_utc": "2026-07-17T13:47:24+00:00"
 }
