@@ -161,17 +161,43 @@ def test_nonhermetic_marker_registered():
 # ── SUBPROCESS-GUARD przez sitecustomize (ACK Adrian 10.07, domkniecie luki #1) ──
 def test_subprocess_inherits_guard_blocks_live_write(tmp_path):
     """Dziecko-python (jak script-runner) dziedziczy guard przez sitecustomize
-    z PYTHONPATH sesji: proba zapisu do zywego dispatch_state → RAISE, plik nie powstaje."""
+    z PYTHONPATH sesji: proba zapisu do zywego dispatch_state → RAISE, plik nie powstaje.
+
+    Nazwa sondy jest UNIKALNA per-run, a sprzatanie idzie w `finally`. Powod: guard
+    subprocesow jest FAIL-OPEN (conftest.py) — jego cicha awaria ZOSTAWIA sonde w
+    produkcji. Przy STALEJ nazwie taki smiec blokowal `assert not exists` NA ZAWSZE:
+    test nie mogl juz przejsc nawet po naprawie guarda, bo padal na pliku z poprzedniego
+    przebiegu. Tak powstal incydent 2026-07-15 13:05 → 4 noce ALERTU nocnego straznika
+    (14-17.07) przy sprawnym guardzie. Test, ktorego porazka blokuje go na zawsze, jest
+    wadliwy niezaleznie od tego, co testuje.
+    """
     import subprocess
     import sys as _sys
-    probe = "/root/.openclaw/workspace/dispatch_state/hermetic_subproc_probe_zp207.tmp"
-    r = subprocess.run(
-        [_sys.executable, "-c", f"open({probe!r}, 'w')"],
-        capture_output=True, text=True, env=dict(os.environ), timeout=30,
-    )
-    assert r.returncode != 0, f"zapis do LIVE przeszedl w subprocesie! stdout={r.stdout!r}"
-    assert "HERMETIC-GUARD" in (r.stderr or ""), r.stderr
-    assert not os.path.exists(probe)
+    import uuid
+    probe = f"{LIVE_STATE}/hermetic_subproc_probe_zp207_{uuid.uuid4().hex}.tmp"
+    try:
+        r = subprocess.run(
+            [_sys.executable, "-c", f"open({probe!r}, 'w')"],
+            capture_output=True, text=True, env=dict(os.environ), timeout=30,
+        )
+        assert r.returncode != 0, f"zapis do LIVE przeszedl w subprocesie! stdout={r.stdout!r}"
+        assert "HERMETIC-GUARD" in (r.stderr or ""), r.stderr
+        assert not os.path.exists(probe)
+    finally:
+        # Sonda powstaje TYLKO gdy guard zawiodl. Wtedy MUSI zniknac — inaczej
+        # zatruwa produkcje i blokuje kolejne przebiegi. os.unlink jest patchowany
+        # (klasa DELETE), wiec uzywamy dokumentowanego, waskiego opt-outu wylacznie
+        # do sprzatniecia WLASNEJ sondy.
+        if os.path.exists(probe):
+            _prev = os.environ.get("ALLOW_PROD_STATE_IN_TEST")
+            os.environ["ALLOW_PROD_STATE_IN_TEST"] = "1"
+            try:
+                os.unlink(probe)
+            finally:
+                if _prev is None:
+                    os.environ.pop("ALLOW_PROD_STATE_IN_TEST", None)
+                else:
+                    os.environ["ALLOW_PROD_STATE_IN_TEST"] = _prev
 
 
 def test_subprocess_guard_allows_tmp_write(tmp_path):
