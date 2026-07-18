@@ -5,7 +5,7 @@
 2. **`docs/CODEMAP.md`** — spis treści repo + „gdzie szukać czego" + pułapki nawigacyjne.
 3. **`docs/ARCHITECTURE.md`** — 10 warstw, przepływ danych, punkty wejścia (kanon kontraktów: `ZIOMEK_ARCHITECTURE.md` + `ZIOMEK_INVARIANTS.md` + `ZIOMEK_DEFINITION_OF_DONE.md`).
 4. **Bieżący stan pracy** → `/root/.claude/projects/-root/memory/` (`todo_master.md` → `sprint_timeline.md` CURRENT HANDOFF). Body TEGO pliku poniżej = snapshot 2026-05-10 (patrz adnotacja STATUS) — do bieżącego stanu NIE służy.
-5. Decyzje projektowe („dlaczego tak jest") → `docs/decisions/` (ADR-001..008).
+5. Decyzje projektowe („dlaczego tak jest") → `docs/decisions/` (ADR-001..008 **+ ODR-001/ODR-002** — decyzje właścicielskie 12.07: owner-decisions + autonomy authority).
 6. Dalej czytaj TYLKO pliki potrzebne do zadania — CODEMAP wskaże które.
 
 **🧰 SKILLE = DOMYŚLNE NARZĘDZIA KAŻDEJ SESJI (od 17.07). Jeżeli dla czynności istnieje skill — UŻYWASZ skilla, nie ręcznych komend** (drivery mają bramki ACK, oracle i selftesty pod nocnym strażnikiem; ręczne odtwarzanie tych czynności = dryf i pominięte bezpieczniki). Katalog + zasady: `.claude/skills/README.md`. Routing wg tego, czym się zajmujesz:
@@ -16,7 +16,7 @@
 | planujesz JAKĄKOLWIEK zmianę silnika (ETAP 3 #0 — mapa kompletności/bliźniaki) | `python3 .claude/skills/ziomek-cto/driver.py scope "<temat>"` |
 | diff gotowy, przed commitem (bramka DoD) | `python3 .claude/skills/ziomek-cto/driver.py dod <diff\|ref> --evidence <plik>` (exit 1 = STOP) |
 | koniec sesji / wpis handoff do memory | `python3 .claude/skills/ziomek-cto/driver.py handoff` |
-| diagnoza usług / werdykt strażnika / przecieki / flagi / suita | `.claude/skills/run-dispatch-v2/driver.sh health` (guard/litter/flags/collect) |
+| diagnoza usług / werdykt strażnika / przecieki / flagi / suita | `.claude/skills/run-dispatch-v2/driver.sh health` (= services+guard+litter; osobne subkomendy: `flags`/`collect`/`test`) |
 | kandydat (skill/patch/brama) przed promocją/merge | `python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog>` → świeży subagent → `check` |
 
 **📜 REGUŁA DWÓCH MIEJSC (Adrian 17.07):** każda dyrektywa sesyjna (routing skilli, zasady pracy, bramki) MUSI być zapisana równolegle w DWÓCH miejscach, bo Claude czyta CLAUDE.md a **Codex czyta AGENTS.md**: repo `CLAUDE.md` ↔ `AGENTS.md` (obok) oraz globalnie `/root/CLAUDE.md` ↔ `/root/.codex/AGENTS.md`. Zmiana jednego bez drugiego = zmiana częściowa (niezakończona).
@@ -43,7 +43,7 @@
 **Źródło prawdy o BIEŻĄCYM stanie = katalog `memory/`** (`/root/.claude/projects/-root/memory/`, auto-ładowany co sesję):
 - **Co robić teraz / co było zrobione** → `sprint_timeline.md` (`## CURRENT HANDOFF` na górze + bloki `ARCHIVE`)
 - **Backlog / tech-debt** → `memory/tech_debt_backlog.md` (P0-P3 priorytetyzowany; NIE `TECH_DEBT.md` w tym katalogu — też zamrożony)
-- **Lekcje** → `memory/lessons.md` (#1-#126)
+- **Lekcje** → `memory/lessons.md` (#51-#202+ bieżące; #1-#50 w `lessons_archive.md`)
 - **Live wartości flag** → `flags.json` (hot-reload) + `common.py` — **NIE** tabele „Stan flag (LIVE od…)" niżej
 
 **Co w TYM pliku DALEJ wiarygodne (evergreen):** workflow (per-step ACK, py_compile, atomic writes, NIE restartuj `dispatch-telegram` bez ACK), CRITICAL PATHS, 3 zasady kardynalne Z1/Z2/Z3, Panel API reference, infra/kontakty/porty, hard constraints. **Co jest ZAMROŻONYM snapshotem 2026-05-10 (NIE ufaj jako bieżące):** sekcje „Current state", „Stan flag (LIVE od…)", historie wersji V3.2x, nagłówki „post-sprint".

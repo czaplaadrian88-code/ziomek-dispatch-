@@ -1,6 +1,6 @@
 # CODEMAP — spis treści repo `dispatch_v2` (Ziomek)
 
-**STATUS:** żywy · **Data:** 2026-07-10 · **Autor:** Agent H (Faza 2 audytu, krok K2.2; aktualizacja Sprint 2).
+**STATUS:** żywy · **Data:** 2026-07-18 (audyt parytetu docs↔repo; poprzednio 2026-07-10) · **Autor:** Agent H (Faza 2 audytu, krok K2.2; aktualizacja Sprint 2).
 **Cel:** mapa do szybkiego czytania — nowa sesja NIE musi skanować repo. Numery linii celowo pominięte (dryfują — **grepuj symbol**, nie linię). Ścieżki relatywne od korzenia repo `dispatch_v2/`; `../` = sąsiad w `scripts/`; stan/logi/pamięć = ścieżki absolutne (poza repo).
 **Aktualizuj** gdy dochodzi/znika katalog lub kluczowy plik korzenia (patrz stopka). Kanon zachowania silnika = `ZIOMEK_ARCHITECTURE.md`; ten plik to TYLKO nawigacja.
 
@@ -10,11 +10,12 @@
 
 | Katalog | Co robi | Kluczowe pliki (max 3) | Uwaga |
 |---|---|---|---|
-| `tools/` | Grab-bag: ~159 skryptów — monitory, werdykt-toole, jednorazowe audyty fal L0-L8 | `ledger_io.py`, `entropy_dashboard.py`, `carried_first_guard.py` | żywy + jednorazowce; ~19/49 przyrządów VOID (kłamie) |
-| `tests/` | Główny pakiet regresji pytest (~4109 testów) | `conftest.py`, `golden/`, `fixtures/` | ⚠ **TYLKO venv dispatch** (system python: 123 fałsz. faile) |
+| `tools/` | Grab-bag: ~185 skryptów — monitory, werdykt-toole, jednorazowe audyty fal L0-L8 | `ledger_io.py`, `entropy_dashboard.py`, `carried_first_guard.py` | żywy + jednorazowce; ~19/49 przyrządów VOID (kłamie) |
+| `tests/` | Główny pakiet regresji pytest (~5150+ testów; baseline 18.07: 5166/0) | `conftest.py`, `golden/`, `fixtures/` | ⚠ **TYLKO venv dispatch** (system python: 123 fałsz. faile) |
 | `observability/` | „Oficjalne" monitory Fazy audytowej | `watchdog.py`, `data_alerts.py`, `cron_health.py` | żywy |
 | `monitoring/` | 3 detektory (starsze, pre-audyt) | `detector_419.py`, `gps_feed_health.py`, `consumer_stuck_alert.py` | żywy; tematycznie nakłada się z `observability/` |
-| `core/` | **Rdzeń decyzyjny silnika (refaktor 06.07)** + starsze utilsy event-busa | `decide.py` (fasada+WorldState), `gates.py`, `candidates.py` (pętla per-kurier), `selection.py`, `scorer.py` (flaga OFF), `planner.py` (wspólna parametryzacja silnik↔plan_recheck, flaga OFF) · starsze: `flags_io.py`, `jsonl_appender.py`, `broadcast_handlers.py` | żywy |
+| `core/` | **Rdzeń decyzyjny silnika (refaktor 06.07)** + starsze utilsy event-busa | `decide.py` (fasada; klasa `WorldState` w osobnym `world_state.py`), `gates.py`, `candidates.py` (pętla per-kurier), `selection.py`, `scorer.py` (flaga OFF), `planner.py` (wspólna parametryzacja silnik↔plan_recheck, flaga OFF), `invariant_firewall.py` (718 l., sweep 17.07), `config_reload_subscriber.py` · starsze: `flags_io.py`, `jsonl_appender.py`, `broadcast_handlers.py` | żywy |
+| `identity/` | **Tożsamość kuriera — rejestr kanoniczny CID (Sprint 4, 10.07)**: normalize/registry/collisions/report/onboarding; 2 legacy-resolvery odtworzone CELOWO 1:1 (unifikacja = Faza B) | `registry.py`, `report.py` (`--parity`), `onboarding.py` | żywy |
 | `czasowka_proactive/` | Proaktywne harmonogramowanie czasówek | `evaluator.py`, `score_selector.py`, `state.py` | żywy (submoduł) |
 | `cod_weekly/` | Tygodniowe rozliczenie COD → Google Sheets | (venv **sheets**) | żywy; ⚠ `dispatch-cod-weekly.service` pada co pon. |
 | `daily_accounting/` | Rozliczenia dzienne + wypłaty kurierów | `main.py`, `tests/` (własny runner, NIE pytest) | żywy (venv sheets) |
@@ -26,23 +27,24 @@
 | `config/` | Statyczna konfiguracja | `cities.json` | dane |
 | `migrations/` | 3 migracje jednorazowe (05.05/05.07/10.07) | `event_retry_metadata.py` (inspect read-only; zapis tylko z `--apply`) | archiwum/ops |
 | `dispatch_state/` | ⚠ **NIE stan silnika** — tylko dane epaki | `epaka_data/*.csv` | dane; kolizja nazw (patrz §4 pułapki) |
-| `eod_drafts/` | Dzienniki „koniec dnia" — 50 podkatalogów wg daty (raporty + skrypty + dane) | `2026-06-30/FAZA1_*`, `2026-07-02/AUDYT2/` | mieszane; ~48M, dane/jsonl churnują w git |
-| `docs/` | ŻYWA nawigacja + archiwum: `ARCHITECTURE.md`, `CODEMAP.md`, `decisions/` (ADR), `audyt/` (ten audyt), `deploy/` (kit HA-lite 21.06 — źródło żywego backup-sentinel!), `archive/` (kwiecień-maj + AUDIT_* + handoffy, od 03.07) | `CODEMAP.md`, `audyt/10-PLAN.md`, `archive/README.md` | żywy |
+| `eod_drafts/` | Dzienniki „koniec dnia" — ~62 podkatalogi wg daty (raporty + skrypty + dane) | `2026-06-30/FAZA1_*`, `2026-07-02/AUDYT2/` | mieszane; ~32M, dane/jsonl churnują w git |
+| `eod_drafts_a2/`, `audits/`, `ops/` | Dzienniki audytu A2 · artefakty audytów (`audits/2026-07-10` ≠ `docs/audyt/`) · ops/security | — | mieszane/archiwum |
+| `docs/` | ŻYWA nawigacja + archiwum: `ARCHITECTURE.md`, `CODEMAP.md`, `HERMETIC_TESTS.md`, `decisions/` (ADR-001..008 + **ODR-001/002** decyzje właścicielskie 12.07), `audyt/`, `flags/`, `eta/`, `integracje/`, `pending-tests/`, `proposals/`, `runbooks/`, `deploy/` (kit HA-lite 21.06 — źródło żywego backup-sentinel!), `archive/` (kwiecień-maj + AUDIT_* + handoffy, od 03.07) | `CODEMAP.md`, `audyt/10-PLAN.md`, `archive/README.md` | żywy |
 | `docs/archive/AUDIT_2026-05-07/` | Audyt architektury 07.05 (10 md, Tier A/B/C, top-20 ryzyk) | — | archiwum (przeniesiony z korzenia 03.07) |
 | `docs/archive/AUDIT_2026-06-03/` | Audyt architektury 03.06 (3 md) | `ZIOMEK_AUDYT*`, `STATUS_ROADMAP*` | archiwum (przeniesiony 03.07) |
-| `sprint2_analysis/` | Root-cause sprintu 2 (30.04, samodzielny) | — | ⚠ USUNIĘTY z mastera 03.07 (commit `cbe566f`, w trakcie audytu) — istnieje tylko w historii git |
+| `sprint2_analysis/` | Root-cause sprintu 2 (30.04, samodzielny) | — | ⚠ źródła USUNIĘTE z mastera 03.07 (`cbe566f`) — na dysku został pusty katalog z samym `__pycache__`; treść tylko w historii git |
 | `systemd/` | Źródła jednostek: mirror dispatch-* + `reconciliation/` + `shift_notifications/` (od 03.07) | `README.md`, `*.service`, `*.timer` | żywy; staged kity: `deploy/`, `deploy_staging/`, `docs/deploy/` |
 | `deploy/`, `deploy_staging/` | Jednostki „staged" (checkpoint-tz/reassignment/bundle-calib-shadow) | `README_INSTALL.md` | do weryfikacji: wdrożone czy martwe |
 
-Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
+Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` to NIE szum: 3 kanoniczne skille (`ziomek-cto`, `run-dispatch-v2`, `ziomek-blind-review`) = domyślne narzędzia sesji od 17.07 (routing w `CLAUDE.md` START TUTAJ).
 
 ---
 
 ## 2. Kluczowe pliki korzenia (~35, rola z docstringu)
 
 **Rdzeń silnika (pipeline `feasibility→scoring→selekcja→werdykt`):**
-- `dispatch_pipeline.py` — per-order assessment (feasibility→scoring→rank→werdykt); **największy plik repo (~7247 l.)**; selekcja `_selection_bucket`/`_best_effort_sort_key`
-- `common.py` — config/logger/paths/flagi (`C.flag()`), bbox geokodu, stałe R6; drugi największy (~3985 l., hub in-deg 85)
+- `dispatch_pipeline.py` — per-order assessment (feasibility→scoring→rank→werdykt); **największy plik repo (~4629 l. po refaktorze 06.07** — rdzeń wyniesiony do `core/candidates.py` ~2307 l. + `core/selection.py` ~1233 l.; `_assess_order_impl` = orkiestrator ~550 l.); definicje selekcji `_selection_bucket`/`_best_effort_sort_key` nadal TUTAJ (core deleguje aliasami `_dp.*`, ADR-008)
+- `common.py` — config/logger/paths/flagi (`C.flag()`), bbox geokodu, stałe R6; drugi największy (~4361 l., hub in-deg 85)
 - `feasibility_v2.py` — check_feasibility_v2 (HARD, SLA-first, R6-breach 35/40 tier)
 - `scoring.py` — score_candidate (~19 kar SOFT); `s_obciazenie`
 - `route_simulator_v2.py` — Hybrid PDP-TSP (OR-Tools), hub in-deg 51; DWELL
@@ -134,7 +136,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`, `.claude`.
 1. **`dispatch_v2/dispatch_state/` ≠ żywy stan.** Zawiera TYLKO `epaka_data/`. Prawdziwy stan (orders_state, plany, shadow, ~1,1 GB) = `/root/.openclaw/workspace/dispatch_state/` (**POZA gitem**; `common.py` hardkoduje abs. ścieżkę).
 2. **Logi rozdwojone.** `shadow_decisions.jsonl` fizycznie w `scripts/logs/`; reszta shadow-jsonl (`r6_breach`, `obj_replay`, `v319c_read`) w `workspace/dispatch_state/`.
 3. **Pytest TYLKO w venv dispatch.** `/usr/bin/python3` nie ma `ortools` → 123 fałszywe faile (`ModuleNotFoundError`). Kanon: `/root/.openclaw/venvs/dispatch/bin/python -m pytest tests/`.
-4. **`EnvironmentFile` niewidoczny w `systemctl show -p Environment`** — flagi panelu (44) siedzą w `flags.systemd.env`; sam `show` pokaże fałszywe OFF. Czytaj plik wprost.
+4. **`EnvironmentFile` niewidoczny w `systemctl show -p Environment`** — flagi panelu (68, stan 18.07) siedzą w `flags.systemd.env`; sam `show` pokaże fałszywe OFF. Czytaj plik wprost.
 5. **Kanon flag = 3 światy.** Silnik = `flags.json` (po migracji D3 02.07); panel = `flags.systemd.env`+inline `.conf`+`flags.py` defaults; apka = `.conf`+`config.py`. ⚠ Zapis „drop-iny NIE flags.json" (w `/root/CLAUDE.md`/`MEMORY.md`) jest NIEAKTUALNY dla silnika.
 6. **Wiele CLAUDE.md w łańcuchu cwd.** Obowiązuje: **głowa `dispatch_v2/CLAUDE.md` (Przykazanie #0) + `/root/CLAUDE.md`**. NIEobowiązujące relikty routera aider: `workspace/CLAUDE.md`, ogon `dispatch_v2/CLAUDE.md` (~l.1624+), `/root/.claude/CLAUDE.md` (ruflo). Szczegóły: `docs/audyt/02-NIEZGODNOSCI.md §1a`.
 7. **Jednostki systemd:** źródła w `systemd/` (+ podkatalogi per-moduł, patrz `systemd/README.md`); staged kity w `deploy/`, `deploy_staging/`, `docs/deploy/`. **Wdrożone = `/etc/systemd/system/`** — zawsze `systemctl cat` (bywają kopie i symlinki).

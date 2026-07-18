@@ -27,7 +27,7 @@ odtwarzanie = dryf i pominiete bezpieczniki). Katalog: `.claude/skills/README.md
 | planowanie KAZDEJ zmiany silnika (ETAP 3 #0) | `python3 .claude/skills/ziomek-cto/driver.py scope "<temat>"` |
 | gotowy diff przed commitem (bramka DoD) | `python3 .claude/skills/ziomek-cto/driver.py dod <diff\|ref> --evidence <plik>` (exit 1 = STOP) |
 | koniec sesji / wpis handoff do memory | `python3 .claude/skills/ziomek-cto/driver.py handoff` |
-| diagnoza uslug / straznik / przecieki / flagi / suita | `.claude/skills/run-dispatch-v2/driver.sh health` (guard/litter/flags/collect) |
+| diagnoza uslug / straznik / przecieki / flagi / suita | `.claude/skills/run-dispatch-v2/driver.sh health` (= services+guard+litter; osobne subkomendy: `flags`/`collect`/`test`) |
 | kandydat przed promocja/merge | `python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog>` → swiezy recenzent → `check` |
 
 ## REGULA DWOCH MIEJSC (Adrian 17.07)

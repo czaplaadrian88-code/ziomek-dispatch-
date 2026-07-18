@@ -1,6 +1,6 @@
 # ARCHITEKTURA ZIOMKA — mapa nawigacyjna (START TUTAJ)
 
-> **STATUS: żywy dokument nawigacyjny** · data 2026-07-10 · cel = nowa sesja orientuje się w systemie w kilka minut.
+> **STATUS: żywy dokument nawigacyjny** · data 2026-07-18 (audyt parytetu docs↔repo; poprzednio 2026-07-10) · cel = nowa sesja orientuje się w systemie w kilka minut.
 > Aktualizuj przy KAŻDEJ zmianie architektury (nowa warstwa/demon/most/repo).
 > **To jest mapa, nie kanon.** Kontrakty, inwarianty i „jak zmieniać" żyją osobno:
 > - **`../ZIOMEK_ARCHITECTURE.md`** — 10 warstw + 6 filarów + 8 kontraktów + rejestr bliźniaków (kanon, zatw. Adrian 01.07).
@@ -27,16 +27,16 @@ Kanon: `../ZIOMEK_ARCHITECTURE.md §1`. Zweryfikowane vs kod 03.07 (`audyt/01 §
 | 2 | **geokod — HARD** | `common.py`, `geocoding.py`, `osrm_client.py` | `coords ∈ bbox Białystok` lub odrzut (grep: `coords_in_bialystok_bbox`) |
 | 3 | **early-bird / czasówka — HARD** | `czasowka_scheduler.py` + `czasowka_proactive/` | ≥60 min naprzód → hold KOORD |
 | 4 | telemetria | `courier_resolver.py` | `dispatchable_fleet()` wzbogaca snapshot floty (GPS+fallback) |
-| 5 | **check_feasibility_v2 — HARD** | `feasibility_v2.py` | R6=35/40 tier-aware, R-DECLARED-TIME, shift |
+| 5 | **check_feasibility_v2 — HARD** | `feasibility_v2.py` | R6 35 normalnie / 40 TYLKO Alarm (OD-07: eskalacja, NIE klasa kuriera; baseline ma hybrydowe anchory = drift do wyprostowania), R-DECLARED-TIME, shift |
 | 6 | scoring ~19 kar (SOFT) | `scoring.py` | `score_candidate()` — term + suma kar/bonusów |
-| 7 | selekcja (SOFT) | **`core/selection.py`** (refaktor 06.07; orkiestrowane z `dispatch_pipeline._assess_order_impl`) | `_selection_bucket` / `_best_effort_*` / lex_qual |
+| 7 | selekcja (SOFT) | **`core/selection.py`** `select_and_emit()` (refaktor 06.07; orkiestrowane z `dispatch_pipeline._assess_order_impl`) | `_selection_bucket` / `_best_effort_*` — ⚠ DEFINICJE nadal w `dispatch_pipeline.py`, core deleguje aliasami `_dp.*` (ADR-008: delegacja, nie przenos) / `lex_qual` w `objm_lexr6.py` |
 | 8 | **werdykt KOORD — HARD** | **`core/selection.py`** + `shadow_dispatcher.py` | quality-gate vs operational-gate (KOORD-redirect) |
 | 9 | zapis + kanon | `plan_manager.py`, `plan_recheck.py` | `courier_plans.json` (atomic) + recanon kolejności |
 | 10 | powierzchnie | konsola, apka, ~~Telegram~~ | render kolejności + ETA (patrz §4: TG uśpiony) |
 
 **Pętla silnika** = `shadow_dispatcher._tick()`. **Poza tickiem:** `plan_recheck` (5 min, re-sekwencja), 4 handlery recanon w `panel_watcher`, most paczki, cross-repo konsola/apka. ⚠ Ta sama reguła często żyje w kilku warstwach naraz (feasibility↔greedy↔plan_recheck) — źródło długu K1, patrz rejestr bliźniaków `../ZIOMEK_ARCHITECTURE.md §4`.
 
-**Refaktor 06.07 (program `docs/refaktor/00-07`, raport = `06-raport.md`):** warstwy 2-8 mają fizyczny rdzeń w `core/` — wejście przez fasadę `core/decide.py` (`decide(world, order)` + `WorldState`; `dispatch_pipeline._assess_order_impl` = orkiestrator ~483 l.): bramki wejściowe `core/gates.py` (geokod-defense, early-bird), pętla per-kurier `core/candidates.py` (route-sim+feasibility per kandydat), selekcja+tiering+best_effort+bramki werdyktu `core/selection.py`, interfejs scoringu `core/scorer.py` (ADR-R06, flaga OFF), wspólna parametryzacja planowania `core/planner.py` (silnik↔plan_recheck, ADR-R03). Wejścia decyzji nagrywane: `world_record.py` (→ `dispatch_state/world_record/*.jsonl`, LIVE) + zamrożone flagi/tick (`common.flags_snapshot_*`, LIVE) + efekty uboczne po decyzji (`effects_buffer.py`, LIVE). Weryfikacja „bez zmiany zachowania" = replay: `tools/world_replay.py` (1 decyzja) + `tools/world_replay_gate.py` (korpus; night-guard w `systemd/`, instalacja za ACK).
+**Refaktor 06.07 (program na gałęzi `refaktor/architektura` — katalog `docs/refaktor/00-07` NIE istnieje na masterze; raport = `06-raport.md` tamże):** warstwy 2-8 mają fizyczny rdzeń w `core/` — wejście przez fasadę `core/decide.py` (`decide(world, order)`; klasa `WorldState` w osobnym `core/world_state.py`; `dispatch_pipeline._assess_order_impl` = orkiestrator ~550 l.): bramki wejściowe `core/gates.py` (geokod-defense, early-bird), pętla per-kurier `core/candidates.py` (route-sim+feasibility per kandydat), selekcja+tiering+best_effort+bramki werdyktu `core/selection.py`, interfejs scoringu `core/scorer.py` (ADR-R06, flaga OFF), wspólna parametryzacja planowania `core/planner.py` (silnik↔plan_recheck, ADR-R03), zapora inwariantów `core/invariant_firewall.py` (sweep 17.07) + `core/config_reload_subscriber.py`. Wejścia decyzji nagrywane: `world_record.py` (→ `dispatch_state/world_record/*.jsonl`, LIVE) + zamrożone flagi/tick (`common.flags_snapshot_*`, LIVE) + efekty uboczne po decyzji (`effects_buffer.py`, LIVE). Weryfikacja „bez zmiany zachowania" = replay: `tools/world_replay.py` (1 decyzja) + `tools/world_replay_gate.py` (korpus; night-guard w `systemd/`, instalacja za ACK).
 
 ---
 
@@ -87,7 +87,7 @@ Zlecenie wchodzi przez `panel_watcher` (poll HTML gastro), ląduje w `orders_sta
 | dispatch-sla-tracker | `sla_tracker` | monitor SLA/R6 |
 | dispatch-monitor-419 | `monitoring.detector_419` | detektor HTTP 419 (disabled, running) |
 
-**Timery wg kadencji** (95 unitów `dispatch-*`, ~60 enabled; `audyt/04 §1c`): **10 s** parcel-merge · **1 min** czasowka / pending-pool / pending-resweep / postpone-sweeper · **2–3 min** carried-first-guard / pickup-floor-guard / plan-recheck / reassign / fleet-position-snapshot / drtusz-bridge / papu-bridge · **5–30 min** data-alerts / eta-calibration / state-reconcile / ground-truth-gc · **dobowe** (03:00–05:00 UTC) state-snapshot / orders-state-prune / log-rotation / koord-cascade / retro-learning · **tygodniowe** cod-weekly (venv sheets) / daily-accounting.
+**Timery wg kadencji** (~149 plików unit `dispatch-*` w /etc — 78 `.service` + 71 `.timer`, kumulują też staged/legacy; **66 enabled** (stan 18.07); `audyt/04 §1c`): **10 s** parcel-merge · **1 min** czasowka / pending-pool / pending-resweep / postpone-sweeper · **2–3 min** carried-first-guard / pickup-floor-guard / plan-recheck / reassign / fleet-position-snapshot / drtusz-bridge / papu-bridge · **5–30 min** data-alerts / eta-calibration / state-reconcile / ground-truth-gc · **dobowe** (03:00–05:00 UTC) state-snapshot / orders-state-prune / log-rotation / koord-cascade / retro-learning · **tygodniowe** cod-weekly (venv sheets) / daily-accounting.
 
 **Crony** (root `crontab -l`, `audyt/01 §1c`): ⚠ **`0 * * * *` `git push origin master` — AUTO-PUSH CO GODZINĘ** (każdy merge do master trafia na GitHub w ≤1 h) · `daily_briefing` 06/20 · kalibracje nocne 04:15/35/45 · `daily_stats_sheets` 06:00 (venv sheets) · ⚠ `tomtom_poc/measure_realworld.py` co 10 min (cron biegnie ze scratchu `eod_drafts/`) · `@reboot` legacy `/root/{gps_server,dispatch_control}.py` (poza pakietem). **At-joby:** ~8 w kolejce (checkpointy werdyktów bieżących sprintów).
 
@@ -122,7 +122,7 @@ Zlecenie wchodzi przez `panel_watcher` (poll HTML gastro), ląduje w `orders_sta
 | **`venvs/sheets`** | cod-weekly, daily-accounting, daily_stats | gspread + google-auth + requests (tylko Google Sheets) |
 | **`/usr/bin/python3`** (system) | mosty drtusz-bridge, papu-bridge | systemowe; ⚠ **BRAK `ortools`** → naiwny `python3 -m pytest` = 123 fałszywe faile |
 
-**Testy:** `venvs/dispatch/bin/python -m pytest tests/ -q` (baseline **4109/0/23skip/11xfail**, ~2 min). **Porty:** `:5001` OSRM (self-hosted Docker, LIVE) · `:8767` courier-api · `:8765` legacy traccar · `:8888` health/parser (localhost).
+**Testy:** `venvs/dispatch/bin/python -m pytest tests/ -q` (baseline 18.07: **5166/0/24skip/8xfail**, ~5 min). **Porty:** `:5001` OSRM (self-hosted Docker, LIVE) · `:8767` courier-api · `:8765` legacy traccar · `:8888` health/parser (localhost).
 
 ---
 
@@ -153,7 +153,7 @@ Rejestr flag i self-test drift: `tools/flag_fingerprint_check` (CLI). Docelowo j
 ## 9. Dokąd dalej (odsyłacze)
 
 - **`CODEMAP.md`** — spis treści repo „gdzie szukać czego" + pułapki nawigacyjne + indeks historii audytów.
-- **`decisions/`** — ADR-001..008 (dlaczego 10 warstw, flagi „3 światy", shadow-first, stan poza repo, venv split, worktree, rdzeń-nie-przenoszony).
+- **`decisions/`** — ADR-001..008 (dlaczego 10 warstw, flagi „3 światy", shadow-first, stan poza repo, venv split, worktree, rdzeń-nie-przenoszony) **+ ODR-001/ODR-002** (decyzje właścicielskie 12.07: owner-decisions OD-01..07 + autonomy authority ownership).
 - **`audyt/00`–`audyt/05` + `audyt/01a`** — raporty Fazy 0 (inwentaryzacja, zależności, niezgodności, dług, testy, inne projekty).
 - **`audyt/10-PLAN.md`** — plan porządków + rejestr WD (decyzje Adriana).
 - **Kanon w repo:** `../ZIOMEK_ARCHITECTURE.md`, `../ZIOMEK_INVARIANTS.md`, `../ZIOMEK_DEFINITION_OF_DONE.md`, `../CLAUDE.md` (CRITICAL PATHS), `../TECH_DEBT.md`, `../LESSONS.md`.
