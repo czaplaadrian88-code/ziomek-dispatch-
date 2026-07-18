@@ -186,7 +186,24 @@ def _snapshot_live_files(fleet_snapshot: Any) -> Dict[str, Any]:
         out["prep_bias"] = _read_json_safe(_cm.PREP_BIAS_MAP_PATH)
     except Exception:
         pass
+    _capture_courier_last_pos(out, fleet_cids)
     return out
+
+
+def _capture_courier_last_pos(out: dict, fleet_cids) -> None:
+    """FIX 2026-07-18 (finding fali #7, klasa #15/C10): snapshot store'u
+    `courier_last_pos.json` (TTL 25 min) do rekordu — bez niego replay czytał
+    ŻYWY store → dzienny dryf pozycji kandydatów no_gps (pool_total ±1 +
+    osrm-missy; nocny „PARITY" bywał parity-bo-noc). Tylko cid z floty (wzór
+    `plans`). Fail-soft: brak store'a → pole nieobecne (rekord legacy-zgodny)."""
+    try:
+        from dispatch_v2 import courier_resolver as _cr
+        raw = _read_json_safe(_cr.COURIER_LAST_POS_PATH)
+        if isinstance(raw, dict):
+            out["courier_last_pos"] = {
+                str(k): v for k, v in raw.items() if str(k) in fleet_cids}
+    except Exception:
+        pass
 
 
 def _calib_versions() -> Dict[str, Optional[str]]:

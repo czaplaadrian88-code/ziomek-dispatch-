@@ -222,6 +222,14 @@ def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
                   getattr(_cm, "_bias_cache", None), {"mtime": None})
     except Exception:
         pass
+    # courier_last_pos — courier_resolver.COURIER_LAST_POS_PATH (loader bez cache).
+    # FIX 2026-07-18 (finding fali #7): bez tego replay czytał ŻYWY store TTL-25min
+    # → dzienny dryf pozycji no_gps. Rekordy legacy bez pola → passthrough (skip).
+    try:
+        from dispatch_v2 import courier_resolver as _crm
+        _redirect(_crm, "COURIER_LAST_POS_PATH", li.get("courier_last_pos"))
+    except Exception:
+        pass
 
     k07 = li.get("k07") if isinstance(li.get("k07"), dict) else None
     lg = li.get("loadgov")
