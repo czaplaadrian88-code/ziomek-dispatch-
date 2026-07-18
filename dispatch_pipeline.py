@@ -1616,8 +1616,11 @@ def _v328_simple_heuristic_score(cid: str, cs: Any, order_event: dict) -> float:
         order_event: dict z 'pickup_coords' = (lat, lon)
     """
     try:
-        pickup_coords = order_event.get("pickup_coords") or (0.0, 0.0)
-        if not pickup_coords or pickup_coords[0] == 0.0:
+        # Fala #7 (2026-07-18): bez tworzenia sentinela (0,0) tylko po to, by go
+        # zaraz odrzucić — parytet wyników: None/()/(0.0,y)/(None,y) → -1000 jak
+        # dotąd ((None,y) szło przez except-haversine na ten sam -1000).
+        pickup_coords = order_event.get("pickup_coords")
+        if not pickup_coords or not pickup_coords[0]:
             return -1000.0
         courier_pos = getattr(cs, "pos", None)
         if not courier_pos or courier_pos[0] is None:
@@ -3479,6 +3482,16 @@ def _firmowe_bag_pickup_fallback(d: dict):
     return _fc
 
 
+def _osrm_guard_sentinel_coords(existing=None):
+    """Fala #7 sentinel-as-data (2026-07-18): JEDYNY producent JAWNEGO sentinela
+    (0.0, 0.0) dla backstopu guardu OSRM (fail-loud haversine, Lekcja #81).
+    Rozsiane inline `or (0.0, 0.0)` skolapsowane do tego nazwanego kanału —
+    sentinel pozycji powstaje wyłącznie w funkcjach-obronach (oracle #7),
+    nigdy anonimowo w środku logiki. `existing` truthy → pass-through tuple
+    (parytet z dawnym `tuple(x or (0,0))` / `x or (0,0)` bajt-w-bajt)."""
+    return tuple(existing) if existing else (0.0, 0.0)
+
+
 def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     picked = parse_panel_timestamp(d.get("picked_up_at"))
     # V3.19f: czas_kuriera_warsaw first-choice dla pickup_ready_at (F2.1c R8 T_KUR).
@@ -3503,8 +3516,9 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
             or _firmowe_bag_pickup_fallback(d)
     if not C.coords_in_bialystok_bbox(deliv_c):
         # Delivery firmowe zawsze geokodowane; centrala jako DOSTAWA byłaby błędna
-        # → zostaje (0,0) legacy (guard backstop). Nie-firmowe też legacy.
-        deliv_c = _repair_bag_coords(d, "delivery") or deliv_c or (0.0, 0.0)
+        # → zostaje (0,0) legacy (guard backstop) — od fali #7 przez JEDYNY kanał.
+        deliv_c = (_repair_bag_coords(d, "delivery") or deliv_c
+                   or _osrm_guard_sentinel_coords())
     # V3.27.5 Path A (2026-04-27): defense-in-depth dla state inconsistency.
     # Pre-fix: status field jedyny signal picked_up. Path B fixes state_machine
     # COURIER_ASSIGNED handler (preserve terminal status), ale picked_up_at
@@ -4208,7 +4222,7 @@ def _assess_order_impl(
     # geocode_defense gwarantuje nie-None/nie-sentinel (mypy nie widzi narrowingu
     # przez granicę funkcji — stąd ignore; semantyka 1:1 z wersją inline).
     pickup_coords = tuple(order_event.get("pickup_coords"))  # type: ignore[arg-type]
-    delivery_coords = tuple(order_event.get("delivery_coords") or (0.0, 0.0))
+    delivery_coords = _osrm_guard_sentinel_coords(order_event.get("delivery_coords"))
 
     # V3.19f: czas_kuriera_warsaw first-choice pod flagą (panel HH:MM commitment).
     # Fallback do pickup_at_warsaw (pre-V3.19f behavior) gdy flaga False albo brak.

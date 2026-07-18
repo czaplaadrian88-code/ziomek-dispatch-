@@ -1,0 +1,81 @@
+world_replay_gate — bramka korpusowa (K17 / finał K06)
+generated_at: 2026-07-18T15:15:51.267618+00:00
+okno: since=2026-07-17T15:13:49.568789+00:00 until=None
+WERDYKT: DIFFS
+n=217 zgodne=178 roznice=37 (krytyczne=0 miekkie=37) missy=39 brak_zapisu=0 bledy=0 (pominiete now=null: 0, pominiete schema<wr1: 0)
+roznica-miekka order=488515 ts=2026-07-17T18:33:50.181050+00:00: {"pool_total": {"replay": 9, "zapis": 10}}
+roznica-miekka order=488514 ts=2026-07-17T18:33:51.338792+00:00: {"pool_total": {"replay": 9, "zapis": 10}}
+roznica-miekka order=488516 ts=2026-07-17T18:34:07.480606+00:00: {"pool_total": {"replay": 9, "zapis": 10}}
+roznica-miekka order=488517 ts=2026-07-17T18:41:09.627419+00:00: {"pool_total": {"replay": 9, "zapis": 10}}
+roznica-miekka order=488519 ts=2026-07-17T18:45:05.840034+00:00: {"pool_total": {"replay": 9, "zapis": 10}}
+roznica-miekka order=488518 ts=2026-07-17T18:45:06.551373+00:00: {"pool_total": {"replay": 9, "zapis": 10}}
+roznica-miekka order=488520 ts=2026-07-17T18:46:34.245641+00:00: {"pool_total": {"replay": 9, "zapis": 10}}
+roznica-miekka order=488521 ts=2026-07-17T18:51:30.528495+00:00: {"pool_total": {"replay": 9, "zapis": 10}}
+roznica-miekka order=488522 ts=2026-07-17T18:56:27.559666+00:00: {"pool_total": {"replay": 9, "zapis": 10}}
+roznica-miekka order=488523 ts=2026-07-17T18:57:08.979481+00:00: {"pool_total": {"replay": 9, "zapis": 10}}
+roznica-miekka order=488524 ts=2026-07-17T19:00:45.068057+00:00: {"pool_total": {"replay": 5, "zapis": 6}}
+roznica-miekka order=488525 ts=2026-07-17T19:04:27.220404+00:00: {"pool_total": {"replay": 5, "zapis": 6}}
+roznica-miekka order=488526 ts=2026-07-17T19:10:29.354513+00:00: {"pool_total": {"replay": 5, "zapis": 6}}
+roznica-miekka order=488527 ts=2026-07-17T19:20:46.427974+00:00: {"pool_total": {"replay": 5, "zapis": 6}}
+roznica-miekka order=488528 ts=2026-07-17T19:21:26.953875+00:00: {"pool_total": {"replay": 5, "zapis": 6}}
+roznica-miekka order=488592 ts=2026-07-18T12:36:25.911412+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488593 ts=2026-07-18T12:40:26.873520+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488594 ts=2026-07-18T12:46:08.898743+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488595 ts=2026-07-18T12:46:24.474396+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488596 ts=2026-07-18T12:48:25.479328+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488597 ts=2026-07-18T12:50:06.408018+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488598 ts=2026-07-18T12:53:48.583659+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488599 ts=2026-07-18T12:54:05.798509+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488600 ts=2026-07-18T12:55:46.700619+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488601 ts=2026-07-18T13:08:09.259282+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488602 ts=2026-07-18T13:09:45.075101+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488603 ts=2026-07-18T13:15:07.271993+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488604 ts=2026-07-18T13:18:28.934976+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488605 ts=2026-07-18T13:20:51.023485+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488606 ts=2026-07-18T13:22:26.604498+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488607 ts=2026-07-18T13:23:27.580494+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488610 ts=2026-07-18T13:30:30.518260+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488609 ts=2026-07-18T13:30:31.416035+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488611 ts=2026-07-18T13:32:27.443969+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488612 ts=2026-07-18T13:36:09.546592+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488613 ts=2026-07-18T13:36:45.143212+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+roznica-miekka order=488614 ts=2026-07-18T13:37:05.832637+00:00: {"pool_total": {"replay": 10, "zapis": 11}}
+MISS order=488515 ts=2026-07-17T18:33:50.181050+00:00 osrm_misses=1
+MISS order=488514 ts=2026-07-17T18:33:51.338792+00:00 osrm_misses=1
+MISS order=488516 ts=2026-07-17T18:34:07.480606+00:00 osrm_misses=1
+MISS order=488517 ts=2026-07-17T18:41:09.627419+00:00 osrm_misses=1
+MISS order=488519 ts=2026-07-17T18:45:05.840034+00:00 osrm_misses=1
+MISS order=488518 ts=2026-07-17T18:45:06.551373+00:00 osrm_misses=1
+MISS order=488520 ts=2026-07-17T18:46:34.245641+00:00 osrm_misses=1
+MISS order=488521 ts=2026-07-17T18:51:30.528495+00:00 osrm_misses=1
+MISS order=488522 ts=2026-07-17T18:56:27.559666+00:00 osrm_misses=1
+MISS order=488523 ts=2026-07-17T18:57:08.979481+00:00 osrm_misses=1
+MISS order=488524 ts=2026-07-17T19:00:45.068057+00:00 osrm_misses=1
+MISS order=488525 ts=2026-07-17T19:04:27.220404+00:00 osrm_misses=1
+MISS order=488526 ts=2026-07-17T19:10:29.354513+00:00 osrm_misses=1
+MISS order=488527 ts=2026-07-17T19:20:46.427974+00:00 osrm_misses=1
+MISS order=488528 ts=2026-07-17T19:21:26.953875+00:00 osrm_misses=1
+MISS order=488592 ts=2026-07-18T12:36:25.911412+00:00 osrm_misses=1
+MISS order=488593 ts=2026-07-18T12:40:26.873520+00:00 osrm_misses=1
+MISS order=488594 ts=2026-07-18T12:46:08.898743+00:00 osrm_misses=1
+MISS order=488595 ts=2026-07-18T12:46:24.474396+00:00 osrm_misses=1
+MISS order=488596 ts=2026-07-18T12:48:25.479328+00:00 osrm_misses=1
+MISS order=488597 ts=2026-07-18T12:50:06.408018+00:00 osrm_misses=1
+MISS order=488598 ts=2026-07-18T12:53:48.583659+00:00 osrm_misses=1
+MISS order=488599 ts=2026-07-18T12:54:05.798509+00:00 osrm_misses=1
+MISS order=488600 ts=2026-07-18T12:55:46.700619+00:00 osrm_misses=1
+MISS order=488601 ts=2026-07-18T13:08:09.259282+00:00 osrm_misses=1
+MISS order=488602 ts=2026-07-18T13:09:45.075101+00:00 osrm_misses=1
+MISS order=488603 ts=2026-07-18T13:15:07.271993+00:00 osrm_misses=1
+MISS order=488604 ts=2026-07-18T13:18:28.934976+00:00 osrm_misses=1
+MISS order=488605 ts=2026-07-18T13:20:51.023485+00:00 osrm_misses=1
+MISS order=488606 ts=2026-07-18T13:22:26.604498+00:00 osrm_misses=1
+MISS order=488607 ts=2026-07-18T13:23:27.580494+00:00 osrm_misses=1
+MISS order=488608 ts=2026-07-18T13:25:28.234560+00:00 osrm_misses=1
+MISS order=488610 ts=2026-07-18T13:30:30.518260+00:00 osrm_misses=1
+MISS order=488609 ts=2026-07-18T13:30:31.416035+00:00 osrm_misses=1
+MISS order=488611 ts=2026-07-18T13:32:27.443969+00:00 osrm_misses=1
+MISS order=488612 ts=2026-07-18T13:36:09.546592+00:00 osrm_misses=1
+MISS order=488613 ts=2026-07-18T13:36:45.143212+00:00 osrm_misses=1
+MISS order=488614 ts=2026-07-18T13:37:05.832637+00:00 osrm_misses=1
+MISS order=488615 ts=2026-07-18T13:37:26.731177+00:00 osrm_misses=1

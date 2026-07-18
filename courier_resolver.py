@@ -111,6 +111,22 @@ def _load_panel_packs_cache() -> Tuple[Optional[datetime], Dict[str, list], Opti
 # do średniej floty, a travel_min do max(prep, 15 min).
 BIALYSTOK_CENTER = (53.1325, 23.1688)
 
+
+def _synthetic_pos_fallback(cs, source: str, shift_start_min=None) -> None:
+    """Fala #7 sentinel-as-data (2026-07-18): JEDYNE nadanie floty pozycji
+    syntetycznej BIALYSTOK_CENTER. Wcześniej 5 rozsianych przypisań `cs.pos =
+    BIALYSTOK_CENTER` (no_gps / post_shift_start_synthetic /
+    working_override_synthetic / pre_shift ×2) — każda kopia mogła się rozjechać
+    (np. pos bez pos_source = pozycja-fikcja nieodróżnialna od GPS w konsumencie,
+    który nie patrzy na source; klasa bliźniaków ①). Ten helper WYMUSZA parę
+    pos+pos_source razem; labele i logi call-site'ów bez zmian (bajt-parytet).
+    Downstream traktuje fikcję po pos_source (F1.7 score-neutral, equal-treatment)."""
+    cs.pos = BIALYSTOK_CENTER
+    cs.pos_source = source
+    if shift_start_min is not None:
+        cs.shift_start_min = shift_start_min
+
+
 # ── Persistent last-known-position store (FIX 2026-06-08) ────────────────────
 # Problem (case Piotr Zaw 470, order 479289): kurier który chwilę wcześniej był
 # aktywny (dostawa ~10 min temu) traci pozycję do BIALYSTOK_CENTER fiction, bo
@@ -1072,8 +1088,7 @@ def _resolve_position(kid, cs, orders, gps, now_utc, fleet,
         # 4. no_gps fallback: kurier wolny, brak GPS i brak historii.
         #    Dajemy syntetyczną pozycję = centrum miasta. Dispatch_pipeline
         #    nadpisze km_to_pickup średnią floty i travel_min = max(prep, 15).
-        cs.pos = BIALYSTOK_CENTER
-        cs.pos_source = "no_gps"
+        _synthetic_pos_fallback(cs, "no_gps")
         fleet[kid] = cs
 
 
@@ -1671,8 +1686,7 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
             if _post_shift_start_synthetic_eligible(
                 cs, _now_utc_fleet, schedule, match_courier, _shift_start_dt, is_on_shift
             ):
-                cs.pos = BIALYSTOK_CENTER
-                cs.pos_source = "post_shift_start_synthetic"
+                _synthetic_pos_fallback(cs, "post_shift_start_synthetic")
                 _log.debug(f"post_shift_5min synthetic {cs.name} ({cs.courier_id})")
         # Working-override (Adrian 2026-06-01): operator wpisał "X pracuje" → cs.courier_id
         # w working set. Daj syntetyczną pozycję (BIALYSTOK_CENTER, jak pre_shift) gdy brak
@@ -1680,8 +1694,7 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         # (granted tylko gdy cs.pos is None). Flag-gated ENABLE_WORKING_OVERRIDE.
         if (_working_override_enabled and cs.pos is None and working
                 and str(cs.courier_id or "") in working):
-            cs.pos = BIALYSTOK_CENTER
-            cs.pos_source = "working_override_synthetic"
+            _synthetic_pos_fallback(cs, "working_override_synthetic")
             _log.debug(f"working_override synthetic pos {cs.name} ({cs.courier_id})")
         if cs.pos is None:
             _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
@@ -1733,9 +1746,7 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                     # MANUALNY working-override koordynatora — NIE capujemy oknem pre-shift
                     # (jawna decyzja człowieka ma pierwszeństwo, Lekcja #26). Cap 60 min
                     # dotyczy tylko automatycznego pre-shift grafikowego (V3.24-A niżej).
-                    cs.pos_source = "pre_shift"
-                    cs.pos = BIALYSTOK_CENTER
-                    cs.shift_start_min = _wo_mins
+                    _synthetic_pos_fallback(cs, "pre_shift", shift_start_min=_wo_mins)
                     _log.debug(f"working_override pre_shift {cs.name} ({cs.courier_id}): za {_wo_mins:.0f} min")
                 # else: start <= now → na zmianie teraz, proceed.
                 cs.schedule_source_stale = _sched_stale
@@ -1773,9 +1784,7 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                 from dispatch_v2 import common as C_SCHED
                 if C_SCHED.ENABLE_V324A_SCHEDULE_INTEGRATION:
                     if mins is not None and 0 < mins <= C_SCHED.PRE_SHIFT_WINDOW_MAX_MIN:
-                        cs.pos_source = "pre_shift"
-                        cs.pos = BIALYSTOK_CENTER
-                        cs.shift_start_min = mins
+                        _synthetic_pos_fallback(cs, "pre_shift", shift_start_min=mins)
                         _log.debug(f"pre_shift v324a {cs.name} ({cs.courier_id}): za {mins:.0f} min")
                     else:
                         _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason} "
@@ -1785,9 +1794,7 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                         continue
                 else:
                     if mins is not None and 0 < mins <= PRE_SHIFT_WINDOW_MIN:
-                        cs.pos_source = "pre_shift"
-                        cs.pos = BIALYSTOK_CENTER
-                        cs.shift_start_min = mins
+                        _synthetic_pos_fallback(cs, "pre_shift", shift_start_min=mins)
                         _log.debug(f"pre_shift {cs.name} ({cs.courier_id}): za {mins:.0f} min")
                     else:
                         _log.debug(f"skip {cs.name} ({cs.courier_id}): {reason}")

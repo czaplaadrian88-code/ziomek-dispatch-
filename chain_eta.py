@@ -27,6 +27,13 @@ log = logging.getLogger("chain_eta")
 
 BIALYSTOK_CENTER = (53.1325, 23.1688)
 
+
+def _center_pos_fallback():
+    """Fala #7 sentinel-as-data (2026-07-18): jedyny lokalny fallback pozycji
+    (BIALYSTOK_CENTER) dla ETA-łańcucha — nazwany kanał obrony zamiast inline
+    sentinela jako danych; wartości/warningi call-site'ów bez zmian."""
+    return BIALYSTOK_CENTER
+
 # Statuses które traktujemy jako "juz poza chain" — skip z unpicked
 _SKIP_STATUSES = frozenset({'picked_up', 'delivered', 'cancelled', 'returned_to_pool'})
 
@@ -125,7 +132,7 @@ def compute_chain_eta(
                 if getattr(o, 'status', None) not in _SKIP_STATUSES]
 
     # Naive reference
-    naive_pos = courier_pos if courier_pos is not None else BIALYSTOK_CENTER
+    naive_pos = courier_pos if courier_pos is not None else _center_pos_fallback()
     naive_drive = safe_drive(naive_pos, proposal_pickup_coords)
     naive_eta = now_utc + timedelta(minutes=naive_drive)
     naive_total_min = (naive_eta - now_utc).total_seconds() / 60.0
@@ -146,7 +153,7 @@ def compute_chain_eta(
             start_pos = courier_pos
             starting_point = 'last_known_fallback'
         else:
-            start_pos = BIALYSTOK_CENTER
+            start_pos = _center_pos_fallback()
             starting_point = 'empty_bag_center'
             warnings.append("no position data, fallback BIALYSTOK_CENTER")
         drive_to_proposal = safe_drive(start_pos, proposal_pickup_coords)
