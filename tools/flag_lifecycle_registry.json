@@ -5571,17 +5571,11 @@
     },
     "ENABLE_ETA_QUANTILE_R6_BAGCAP": {
       "carriers": [
-        "flags.json",
-        "common.py:ETAP4_DECISION_FLAGS"
+        "removed:2026-07-20 (kod galezi usuniety — marker historyczny, zadnego zywego nosnika)"
       ],
-      "consumers": [
-        "dispatch_v2/common.py",
-        "dispatch_v2/feasibility_v2.py"
-      ],
-      "curated_at": "2026-07-18",
-      "current_snapshot": {
-        "flags.json": false
-      },
+      "consumers": [],
+      "curated_at": "2026-07-20",
+      "current_snapshot": {},
       "default": false,
       "intentional_per_process": {
         "reason": "",
@@ -5589,17 +5583,17 @@
       },
       "known_drift": false,
       "known_drift_note": "",
-      "lifecycle": "deprecated",
+      "lifecycle": "dead",
       "lifecycle_seeded": false,
       "name": "ENABLE_ETA_QUANTILE_R6_BAGCAP",
-      "notes": "FLIP OFF 2026-07-18 ~13:45 UTC (GO Adriana 'Dawaj D3-gold'): wdrozenie werdyktu D3 (29.06) + OD-07 OWNER_CONFIRMED (R6 35 dla kazdego, nigdy klasa kuriera). Pomiar live: 39 odzyskow/3d, odzysk na ZWYCIEZCY 0/39 -> flip nie zmienia zadnego wyniku na korpusie. Testy galezi ON!=OFF: tests/test_d3_gold_quantile_flip.py 4/4. Okno 2d: at#217 (sekcja D3). Po oknie: USUNIECIE kodu galezi (feasibility_v2 ~:1141 + ~:1254) za ACK = retire.",
+      "notes": "FLIP OFF 2026-07-18 ~13:45 UTC (GO Adriana 'Dawaj D3-gold'): wdrozenie werdyktu D3 (29.06) + OD-07 OWNER_CONFIRMED (R6 35 dla kazdego, nigdy klasa kuriera). Pomiar live: 39 odzyskow/3d, odzysk na ZWYCIEZCY 0/39 -> flip nie zmienia zadnego wyniku na korpusie. Testy galezi ON!=OFF: tests/test_d3_gold_quantile_flip.py 4/4. Okno 2d: at#217 (sekcja D3). Po oknie: USUNIECIE kodu galezi (feasibility_v2 ~:1141 + ~:1254) za ACK = retire. || KOD GALEZI USUNIETY 2026-07-20 (gated apply po zielonym oknie at#217, pre-ACK Adriana 18.07 'Dawaj usuniecie kodu galezi po oknie'): feasibility_v2 obie galezie wyciete, wpis zdjety z ETAP4+common, klucz z flags.json; straznik post-removal: tests/test_d3_gold_quantile_flip.py (parytet klas + flaga-widmo inert).",
       "owner": {
         "business": "Adrian",
         "service": "dispatch-shadow.service"
       },
       "removal_condition": "n/d dopóki live",
       "review_date": "2026-07-20",
-      "rollback": "flags.json OFF hot-reload (bez restartu)",
+      "rollback": "git revert commitu cleanup (kod galezi usuniety; flip-era rollback juz nieaktualny)",
       "source_of_truth": "flags.json",
       "twin_of": [],
       "worlds": [

@@ -1132,29 +1132,13 @@ def check_feasibility_v2(
         if (not _o_paczka_exempt) and bag_time_min > r6_max_bag_time:
             r6_max_bag_time = bag_time_min
             r6_worst_oid = o.order_id
-        # GOLD->4 LIVE GATE (14.06, replay v3 tier-aware): dla gold worek<=4 bramkuj
-        # R6 na skalibrowanej p80 ETA (odzysk false-rejectow; CI[-0.63,+1.25], 14:1).
-        # Flaga ENABLE_ETA_QUANTILE_R6_BAGCAP default OFF; inne tiery = legacy hard-35.
-        # Surowy bag_time_min ZOSTAJE dla metryki/logu (brak podwojnej kalibracji);
-        # bramkujemy tylko sam check przez _gate_bt. Fail-soft: cal None -> surowy.
-        _gate_bt = bag_time_min
-        if (C.flag("ENABLE_ETA_QUANTILE_R6_BAGCAP", False)
-                and courier_tier == "gold" and (len(bag) + 1) <= 4):
-            try:
-                from dispatch_v2.calib_maps import eta_quantile_calibrate
-                _c = eta_quantile_calibrate(bag_time_min, now=anchor, quantile="p80")
-                if _c is not None:
-                    _gate_bt = _c
-                    if (bag_time_min > C.BAG_TIME_HARD_MAX_MIN
-                            and _c <= C.BAG_TIME_HARD_MAX_MIN):
-                        metrics["r6_gold4_gate_recovered"] = (
-                            metrics.get("r6_gold4_gate_recovered", 0) + 1)
-            except Exception:
-                pass
+        # D3-gold (Adrian 29.06 + OD-07, kod usunięty 2026-07-20): R6 = surowe 35
+        # dla KAŻDEGO — dawna bramka quantile-p80 dla gold<=4 (14.06→18.07 OFF)
+        # wycięta; historia: ZIOMEK_LOGIC_REFERENCE "Sprint D3-gold".
         # Per-order violation tracking (split picked-up vs not)
         # R-PACZKI-FLEX: skip tracking gdy paczki-only mix → hard reject linia
         # 693 nie aktywuje się (empty list). Soft zone niżej też respektuje.
-        if _gate_bt > C.BAG_TIME_HARD_MAX_MIN and not _paczki_only_mix and not _o_paczka_exempt:
+        if bag_time_min > C.BAG_TIME_HARD_MAX_MIN and not _paczki_only_mix and not _o_paczka_exempt:
             if is_picked:
                 r6_picked_up_violations.append((o.order_id, round(bag_time_min, 1)))
             else:
@@ -1244,23 +1228,10 @@ def check_feasibility_v2(
                 else:
                     pu = now
                 elapsed_min = (pred - pu).total_seconds() / 60.0
-            # Krok 2 co-design z ENABLE_ETA_QUANTILE_R6_BAGCAP (protokół „3 bliźniaki SLA-anchor
-            # RAZEM"): gdy SLA-gate ready-anchored, gold≤4 + QUANTILE ON kalibruj p80 PRZED
-            # porównaniem — inaczej naiwne ready-anchorowanie re-rejectowałoby zlecenia, które
-            # R6-gate (QUANTILE) odzyskuje (elapsed surowy ZOSTAJE w raporcie/vd; kalibrujemy
-            # sam check, jak R6 `_gate_bt`). Nie dotyczy paczek (pominięte wyżej `continue`).
-            _sla_gate_elapsed = elapsed_min
-            if (_sla_unified and _sla_ready_gate
-                    and C.flag("ENABLE_ETA_QUANTILE_R6_BAGCAP", False)
-                    and courier_tier == "gold" and (len(bag) + 1) <= 4):
-                try:
-                    from dispatch_v2.calib_maps import eta_quantile_calibrate
-                    _cc = eta_quantile_calibrate(elapsed_min, now=pu, quantile="p80")
-                    if _cc is not None:
-                        _sla_gate_elapsed = _cc
-                except Exception:
-                    pass
-            if _sla_gate_elapsed > sla_minutes:
+            # D3-gold (kod usunięty 2026-07-20): dawna kalibracja co-design gold≤4
+            # przy ready-anchored SLA-gate wycięta razem z bramką R6-quantile
+            # (OD-07: żaden wyjątek klasowy; historia w ZIOMEK_LOGIC_REFERENCE).
+            if elapsed_min > sla_minutes:
                 vd = {
                     "order_id": o.order_id,
                     "elapsed_min": round(elapsed_min, 1),

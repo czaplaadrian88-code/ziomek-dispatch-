@@ -316,11 +316,11 @@ def test_capz_off_inert_across_l3_l4(monkeypatch, l3, l4):
 
 
 def test_capz_on_composes_with_paczka_and_quantile(monkeypatch):
-    """ON + PACZKA_EXEMPT + QUANTILE_R6_BAGCAP ON — reguła nie krzyczy i respektuje capy
-    (kompozycja flag sprzężonych — protokół co-design)."""
+    """ON + PACZKA_EXEMPT — reguła nie krzyczy i respektuje capy (kompozycja flag
+    sprzężonych — protokół co-design). [D3-gold 20.07: QUANTILE_R6_BAGCAP usunięta
+    z silnika — zdjęta też stąd; parytet klas pinuje test_d3_gold_quantile_flip.]"""
     _flag_on(monkeypatch, capz=True, extra={
         "ENABLE_PACZKA_R6_THERMAL_EXEMPT": True,
-        "ENABLE_ETA_QUANTILE_R6_BAGCAP": True,
     })
     base, plan, metric = _reseq([2, 3, 4, 1])
     assert isinstance(plan.o2_capz, dict)
@@ -328,8 +328,9 @@ def test_capz_on_composes_with_paczka_and_quantile(monkeypatch):
 
 
 def test_krok2_quantile_codesign_no_crash(monkeypatch):
-    """Krok 2 co-design: ready-gate ON + QUANTILE ON dla gold — ścieżka kalibracji nie
-    wywala się i respektuje flagi (recovery zależy od danych calib_maps, tu = brak crashu)."""
+    """Krok 2: ready-gate ON dla gold — ścieżka SLA-gate nie wywala się i respektuje
+    flagi. [D3-gold 20.07: kalibracja QUANTILE usunięta z silnika — test trzyma
+    no-crash samego ready-gate; dawny co-design = historia w LOGIC_REFERENCE.]"""
     from dispatch_v2 import feasibility_v2 as F
     from dispatch_v2 import osrm_client
     import math
@@ -337,8 +338,7 @@ def test_krok2_quantile_codesign_no_crash(monkeypatch):
     osrm_client.route = lambda a, b: {"duration_s": math.hypot(a[0]-b[0], a[1]-b[1])*220*60}
     orig = C.flag
     def f(n, d=False):
-        if n in ("ENABLE_SLA_ANCHOR_UNIFIED", "ENABLE_SLA_GATE_READY_ANCHOR",
-                 "ENABLE_ETA_QUANTILE_R6_BAGCAP"):
+        if n in ("ENABLE_SLA_ANCHOR_UNIFIED", "ENABLE_SLA_GATE_READY_ANCHOR"):
             return True
         return orig(n, d)
     monkeypatch.setattr(C, "flag", f)

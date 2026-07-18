@@ -213,12 +213,9 @@ ETAP4_DECISION_FLAGS = (
     # osobna flaga przy flipie za końcowym ACK). Konsument: eta_calib_serving przez
     # lejek _classify_and_set_auto_route.
     "ENABLE_ETA_CALIB_PROMISE_SHADOW",
-    # R6-ETA-GATE (2026-06-14): kalibracja p80 R6 dla gold worek<=4 (LIVE) +
-    # shadow-log falszywych odrzutow. Test-izolacja: conftest scina z tmp flags.json,
-    # zeby gate gold->4 NIE przeciekal do testow R6/SLA (determinizm suity).
-    # Koordynacja: HANDOFF_eta_calib_bag3_gate.md (sesja 126 = wariant bag<=3 na tej
-    # samej fladze; gold->4 juz wpiete commit 0073486 — union, nie konflikt).
-    "ENABLE_ETA_QUANTILE_R6_BAGCAP",
+    # (2026-07-20) ENABLE_ETA_QUANTILE_R6_BAGCAP USUNIĘTA z rejestru — D3-gold:
+    # kod gałęzi gold<=4 wycięty (OD-07: R6 35 dla każdego, nigdy klasa kuriera);
+    # historia: ZIOMEK_LOGIC_REFERENCE "Sprint D3-gold" + lifecycle registry (dead).
     # W0.2 advisory (2026-07-06): bezpiecznik fabrykacji ETA (hybryda 60′∧2,5×robust_ref).
     "ENABLE_ETA_FABRICATION_GUARD",
     # W0.5 advisory (2026-07-06): korekta ETA per-komórka floty (slot×solo/worek) na obietnicę.
@@ -548,7 +545,6 @@ ETAP4_DECISION_FLAGS = (
 # gdy flags.json nie ma klucza, (2) inwariant ETAP4 (test_all_etap4_flags_have_
 # module_const) + test-izolacja (conftest wycina klucze z tmp flags.json →
 # determinizm suity). Wzorzec jak ENABLE_AUTO_ASSIGN = False (l.691, ta sama era).
-ENABLE_ETA_QUANTILE_R6_BAGCAP = False
 # Migracja 1b USE_V2_PARSER (ACK Adrian 2026-07-10): stała-fallback dla inwariantu
 # ETAP4 + decision_flag/fingerprint. REALNY konsument (panel_client.parse_panel_html)
 # czyta flag("USE_V2_PARSER", <panel_client-env-const>) — ta stała NIE steruje
