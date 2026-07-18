@@ -217,8 +217,13 @@ SERVICE_SCOPED = {
         "tylko tick czasówki wysyła."),
     "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH": (
         "dispatch-plan-recheck.service",
-        "live-ETA refresh w ticku plan-recheck (plan_recheck.py:2245, moduł-level "
-        ":86); jw. — roadmapa L0.1 rekomenduje migrację, dziś single-service exec."),
+        "live-ETA refresh w ticku plan-recheck (moduł-level :~89; ready ONLY w "
+        "_refresh_live_eta_from_plans — jedyny caller run_recheck:~2712 + guard "
+        ":~2710). Reachability RE-ZWERYFIKOWANA 18.07 pełnym call-grafem przy "
+        "sprincie B2 (w odróżnieniu od COMMITTED_PROPAGATION, która okazała się "
+        "multi-service): NIEOSIĄGALNA z pw (recanon/redecide nie dochodzą) → "
+        "kuracja single-service PRAWDZIWA. Migracja do flags.json = opcjonalna "
+        "higiena L0.1, bez żywego rozjazdu."),
 }
 
 # KNOWN_DIVERGENCES = rozjazdy PRAWDZIWE, cross-service, OTWARTE — wymagają
@@ -228,21 +233,13 @@ SERVICE_SCOPED = {
 # USE_V2_PARSER usunięto stąd po migracji do ETAP4 i flipie 2026-07-10. Stary
 # env-carrier nadal jest widoczny, ale flags.json jest teraz kanonem i checker
 # klasyfikuje go uczciwie jako `json-overrides-env/open` do późniejszego usunięcia.
-KNOWN_DIVERGENCES = {
-    "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION": (
-        "REKURACJA 2026-07-18 (audyt parytetu docs↔rzeczywistość): stara kuracja "
-        "SERVICE_SCOPED 'single-service exec' była BŁĘDNA od początku — "
-        "panel_watcher woła plan_recheck.redecide_courier (panel_watcher.py:694/791, "
-        "od F3 commit 0e85139 2026-06-07, czyli PRZED kuracją 02.07), a ta "
-        "_gen_one_bag_plan z gałęzią flagi (moduł-level env plan_recheck.py:396, "
-        "read :839). Nośniki env=1: plan-recheck + b-route-shadow + "
-        "carried-first-guard (drop-iny); panel-watcher BEZ env → plany generowane "
-        "eventowo (pw) liczą committed-propagation OFF, tick plan-recheck ON — "
-        "realny per-proces rozjazd (KANON §9 B2 'MRUGA', potwierdzone żywym "
-        "call-grafem 18.07). Domknięcie: migracja do decision_flag/flags.json "
-        "wzorem D3 fala A = zmiana zachowania pw OFF→ON → protokół #0 + replay "
-        "+ ACK Adriana."),
-}
+# ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION przeszla tedy 18.07 (rekuracja z
+# falszywej SERVICE_SCOPED 'single-service exec' — pw wolal redecide→_gen od
+# 07.06) i tego samego dnia zostala ZMIGROWANA do decision_flag/flags.json
+# (sprint B2 za GO Adriana, wzor D3 fala A + hot-reload w pw). Stare env-carriery
+# w drop-inach sa martwe → checker klasyfikuje je jako `json-overrides-env/open`
+# do zdjecia (jak USE_V2_PARSER po flipie 10.07).
+KNOWN_DIVERGENCES = {}
 
 
 def scan_code_tokens(roots=None) -> set:

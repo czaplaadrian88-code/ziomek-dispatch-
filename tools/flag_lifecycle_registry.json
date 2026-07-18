@@ -4,8 +4,8 @@
       "apka": 27,
       "engine": 392,
       "engine_1b_units": 12,
-      "etap4": 127,
-      "flags_json_keys": 244,
+      "etap4": 128,
+      "flags_json_keys": 245,
       "fp_extra": 34,
       "known_drift": 0,
       "numeric": 26,
@@ -15,7 +15,7 @@
       "twins_concepts": 5
     },
     "generator": "tools/flag_lifecycle_seed.py",
-    "note": "stan flag = 3 światy (ADR-004); bazowy current_snapshot z 2026-07-10, ENABLE_STAGE_TIMING_OBSERVATION z live canary 2026-07-11; lifecycle_seeded tylko dla niekuratorowanych wpisów.",
+    "note": "stan flag = 3 światy (ADR-004); wartości current_snapshot z żywych źródeł dnia 2026-07-10; lifecycle heurystyczny (lifecycle_seeded).",
     "review_date": "2026-08-10",
     "secret_lines_rejected": {
       "apka": 1,
@@ -10218,25 +10218,27 @@
     },
     "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION": {
       "carriers": [
-        "dispatch_v2/plan_recheck.py-const",
+        "flags.json",
+        "common.py:ETAP4_DECISION_FLAGS",
         "drop-in:dispatch-b-route-shadow.service.d/route-flag-parity.conf",
         "drop-in:dispatch-carried-first-guard.service.d/engine-env-parity.conf",
         "drop-in:dispatch-plan-recheck.service.d/committed-propagation.conf"
       ],
       "consumers": [
-        "dispatch_v2/plan_recheck.py",
-        "dispatch_v2/plan_recheck.py:ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION"
+        "dispatch_v2/common.py",
+        "dispatch_v2/plan_recheck.py"
       ],
       "curated_at": "2026-07-10",
       "current_snapshot": {
         "dispatch-b-route-shadow.service": true,
         "dispatch-carried-first-guard.service": true,
-        "dispatch-plan-recheck.service": true
+        "dispatch-plan-recheck.service": true,
+        "flags.json": true
       },
-      "default": false,
+      "default": true,
       "intentional_per_process": {
-        "reason": "SERVICE_SCOPED owner=dispatch-plan-recheck.service: retiming committed w ticku plan-recheck (plan_recheck.py:786, moduł-level :393); konsument decyzyjny biegnie w plan-recheck. UWAGA: roadmapa L0.1 rekomenduje migrację do flags.json (hot-reload cross-service) — poza partycją (common.py). Dziś NIE jest żywym rozjazdem (single-service exec).",
-        "value": true
+        "reason": "",
+        "value": false
       },
       "known_drift": false,
       "known_drift_note": "",
@@ -10250,8 +10252,8 @@
       },
       "removal_condition": "kandydat migracji 1b→flags.json za ACK; retire dopiero po migracji (dziś celowy per-proces)",
       "review_date": "2026-08-10",
-      "rollback": "rm drop-in dispatch-plan-recheck.service.d/committed-propagation.conf + restart dispatch-b-route-shadow.service ZA ACK",
-      "source_of_truth": "drop-in:dispatch-b-route-shadow.service",
+      "rollback": "flags.json OFF hot-reload (bez restartu)",
+      "source_of_truth": "flags.json",
       "twin_of": [],
       "worlds": [
         "engine"
@@ -10313,7 +10315,7 @@
       },
       "default": false,
       "intentional_per_process": {
-        "reason": "SERVICE_SCOPED owner=dispatch-plan-recheck.service: live-ETA refresh w ticku plan-recheck (plan_recheck.py:2245, moduł-level :86); jw. — roadmapa L0.1 rekomenduje migrację, dziś single-service exec.",
+        "reason": "SERVICE_SCOPED owner=dispatch-plan-recheck.service: live-ETA refresh w ticku plan-recheck (moduł-level :~89; ready ONLY w _refresh_live_eta_from_plans — jedyny caller run_recheck:~2712 + guard :~2710). Reachability RE-ZWERYFIKOWANA 18.07 pełnym call-grafem przy sprincie B2 (w odróżnieniu od COMMITTED_PROPAGATION, która okazała się multi-service): NIEOSIĄGALNA z pw (recanon/redecide nie dochodzą) → kuracja single-service PRAWDZIWA. Migracja do flags.json = opcjonalna higiena L0.1, bez żywego rozjazdu.",
         "value": true
       },
       "known_drift": false,
@@ -12315,9 +12317,9 @@
     },
     "ENABLE_STAGE_TIMING_OBSERVATION": {
       "carriers": [
+        "flags.json",
         "common.py:_FINGERPRINT_EXTRA_FLAGS",
-        "common.py:TEST_ISOLATED_INFRA_FLAGS",
-        "dispatch_v2/common.py-const"
+        "common.py:TEST_ISOLATED_INFRA_FLAGS"
       ],
       "consumers": [
         "dispatch_v2/common.py",
@@ -12327,7 +12329,6 @@
       ],
       "curated_at": "2026-07-11",
       "current_snapshot": {
-        "default": false,
         "flags.json": true
       },
       "default": false,
@@ -12347,7 +12348,7 @@
       },
       "removal_condition": "usunąć dopiero po zatwierdzonej stałej polityce obserwowalności i zastępującym ją kontrakcie",
       "review_date": "2026-08-10",
-      "rollback": "flags.json OFF hot-reload (bez restartu); przy błędzie odczytu fail-closed do OFF",
+      "rollback": "flags.json OFF hot-reload (bez restartu)",
       "source_of_truth": "flags.json",
       "twin_of": [],
       "worlds": [
@@ -18378,10 +18379,10 @@
       "carriers": [
         "flags.json",
         "common.py:ETAP4_DECISION_FLAGS",
-        "dispatch_v2/panel_client.py-const",
-        "drop-in:dispatch-panel-watcher.service.d/override.conf"
+        "dispatch_v2/panel_client.py-const"
       ],
       "consumers": [
+        "dispatch_v2/audits/2026-07-10/full-system-360/_build_recovered_findings.py",
         "dispatch_v2/common.py",
         "dispatch_v2/panel_client.py",
         "dispatch_v2/panel_client.py:USE_V2_PARSER",
@@ -18389,7 +18390,6 @@
       ],
       "curated_at": "2026-07-10",
       "current_snapshot": {
-        "dispatch-panel-watcher.service": true,
         "flags.json": true
       },
       "default": false,
@@ -18398,7 +18398,7 @@
         "value": false
       },
       "known_drift": false,
-      "known_drift_note": "DRIFT DOMKNIĘTY 2026-07-10: flags.json jest kanonem hot-reload dla wszystkich procesów. Pozostały env-carrier panel-watchera jest jawnym json-overrides-env/open do usunięcia, a nie wyjątkiem known-drift.",
+      "known_drift_note": "DRIFT DOMKNIĘTY 2026-07-10: flags.json jest kanonem hot-reload dla wszystkich procesów. Env-carrier panel-watchera USUNIĘTY 2026-07-18 (Adrian, backup override.conf.bak-pre-use-v2-parser-cleanup-2026-07-18) — zero nośników env. [Przywrócone 18.07 po tym, jak seeder --merge wyzerował to pole kuracji — bug seedera w backlogu.]",
       "lifecycle": "live",
       "lifecycle_seeded": false,
       "name": "USE_V2_PARSER",

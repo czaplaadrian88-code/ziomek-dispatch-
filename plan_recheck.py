@@ -393,8 +393,8 @@ ENABLE_NO_RETURN_TO_DEPARTED_PICKUP = _CF.decision_flag(
 # nie było. Fix: doklej pole tak samo (raw string). Efekt zależny od miękkiej kary
 # (ENABLE_OBJ_COMMITTED_PICKUP_PENALTY, już ON) → gated, default OFF; flip dopiero po
 # replayu na korpusie (przestawienia worków vs SLA/KOORD). Default OFF = zero zmiany.
-ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION = os.environ.get(
-    "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION", "0") == "1"
+ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION = _CF.decision_flag(
+    "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION")  # migracja B2 2026-07-18: KANON=flags.json (było env-frozen → pw OFF vs tick ON = mruganie kolejności; read :~839 w _gen_one_bag_plan ← redecide(pw) + _gap_fill(tick))
 # F3: natychmiastowa decyzja sekwencji NA ZMIANĘ WORKA (override/reassign) z
 # panel_watcher — Ziomek układa trasę od razu, bez czekania ≤5 min na tick. Tylko
 # gdy żaden ważny plan nie pokrywa worka (nie nadpisuje trasy z propozycji). OFF.
@@ -521,6 +521,7 @@ _D3_FALA_A_FLAGS = (
     "ENABLE_LEX_COMMITTED_WINDOW",
     "ENABLE_RELAX_COLOC_PICKUP",
     "ENABLE_NONCARRIED_DROPOFF_REORDER",
+    "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION",  # migracja B2 2026-07-18 (hot-reload w pw)
 )
 
 

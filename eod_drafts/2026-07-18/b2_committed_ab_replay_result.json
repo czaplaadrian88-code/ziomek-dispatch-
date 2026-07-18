@@ -1,0 +1,219 @@
+{
+ "ts": "2026-07-18T10:44:55.255069+00:00",
+ "bags_total": 5,
+ "bags_committed": 5,
+ "skipped": 0,
+ "noise_off_off2": 0,
+ "differ_off_on_seq": 0,
+ "differ_off_on_times": 0,
+ "identical": 5,
+ "detail": [
+  {
+   "cid": "484",
+   "n_oids": 1,
+   "noise": false,
+   "differ_seq": false,
+   "differ_times": false,
+   "seq_off": [
+    [
+     "488544",
+     "pickup"
+    ],
+    [
+     "488544",
+     "dropoff"
+    ]
+   ],
+   "seq_on": [
+    [
+     "488544",
+     "pickup"
+    ],
+    [
+     "488544",
+     "dropoff"
+    ]
+   ]
+  },
+  {
+   "cid": "509",
+   "n_oids": 3,
+   "noise": false,
+   "differ_seq": false,
+   "differ_times": false,
+   "seq_off": [
+    [
+     "488548",
+     "dropoff"
+    ],
+    [
+     "488551",
+     "pickup"
+    ],
+    [
+     "488552",
+     "pickup"
+    ],
+    [
+     "488551",
+     "dropoff"
+    ],
+    [
+     "488552",
+     "dropoff"
+    ]
+   ],
+   "seq_on": [
+    [
+     "488548",
+     "dropoff"
+    ],
+    [
+     "488551",
+     "pickup"
+    ],
+    [
+     "488552",
+     "pickup"
+    ],
+    [
+     "488551",
+     "dropoff"
+    ],
+    [
+     "488552",
+     "dropoff"
+    ]
+   ]
+  },
+  {
+   "cid": "531",
+   "n_oids": 2,
+   "noise": false,
+   "differ_seq": false,
+   "differ_times": false,
+   "seq_off": [
+    [
+     "488550",
+     "dropoff"
+    ],
+    [
+     "488554",
+     "pickup"
+    ],
+    [
+     "488554",
+     "dropoff"
+    ]
+   ],
+   "seq_on": [
+    [
+     "488550",
+     "dropoff"
+    ],
+    [
+     "488554",
+     "pickup"
+    ],
+    [
+     "488554",
+     "dropoff"
+    ]
+   ]
+  },
+  {
+   "cid": "540",
+   "n_oids": 2,
+   "noise": false,
+   "differ_seq": false,
+   "differ_times": false,
+   "seq_off": [
+    [
+     "488542",
+     "dropoff"
+    ],
+    [
+     "488553",
+     "pickup"
+    ],
+    [
+     "488553",
+     "dropoff"
+    ]
+   ],
+   "seq_on": [
+    [
+     "488542",
+     "dropoff"
+    ],
+    [
+     "488553",
+     "pickup"
+    ],
+    [
+     "488553",
+     "dropoff"
+    ]
+   ]
+  },
+  {
+   "cid": "541",
+   "n_oids": 3,
+   "noise": false,
+   "differ_seq": false,
+   "differ_times": false,
+   "seq_off": [
+    [
+     "488549",
+     "pickup"
+    ],
+    [
+     "488549",
+     "dropoff"
+    ],
+    [
+     "488555",
+     "pickup"
+    ],
+    [
+     "488546",
+     "pickup"
+    ],
+    [
+     "488555",
+     "dropoff"
+    ],
+    [
+     "488546",
+     "dropoff"
+    ]
+   ],
+   "seq_on": [
+    [
+     "488549",
+     "pickup"
+    ],
+    [
+     "488549",
+     "dropoff"
+    ],
+    [
+     "488555",
+     "pickup"
+    ],
+    [
+     "488546",
+     "pickup"
+    ],
+    [
+     "488555",
+     "dropoff"
+    ],
+    [
+     "488546",
+     "dropoff"
+    ]
+   ]
+  }
+ ]
+}

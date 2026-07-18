@@ -416,6 +416,12 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_NO_RETURN_TO_DEPARTED_PICKUP",
     "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE",
     "ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP",
+    # MIGRACJA B2 (2026-07-18, audyt parytetu): committed tie-break w
+    # _gen_one_bag_plan (plan_recheck :839) — było env-frozen z drop-inem tylko
+    # w plan-recheck → pw (redecide_courier) liczył OFF, tick ON = kolejność
+    # odbiorów MRUGAŁA (KANON §9 B2). Teraz KANON=flags.json, hot-reload w pw
+    # przez _refresh_d3_fala_a_flags.
+    "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION",
     "ENABLE_RECANON_ON_WRITE",
     "ENABLE_CARRIED_FIRST_RELAX",
     "ENABLE_CARRIED_AGE_TZ_FIX",
@@ -648,6 +654,8 @@ ENABLE_NO_RETURN_TO_DEPARTED_PICKUP = True
 ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE = True
 ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP = True
 ENABLE_RECANON_ON_WRITE = True
+# migracja B2 2026-07-18: const = steady-state flags.json (True) — const≠json to mina klasy L6
+ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION = True
 ENABLE_CARRIED_FIRST_RELAX = True
 ENABLE_CARRIED_AGE_TZ_FIX = True
 ENABLE_LEX_COMMITTED_WINDOW_SHADOW = True
