@@ -25,7 +25,6 @@ except ImportError:
     import os as _os, sys as _sys
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
     from dispatch_v2.tools import _rotated_logs, ledger_io
-from contextlib import nullcontext as _nullcontext
 
 LOG = ledger_io.LEDGER["shadow"]
 EQUAL_SOURCES = {"no_gps", "pre_shift"}   # Adrian 24.06: oba mają konkurować równo

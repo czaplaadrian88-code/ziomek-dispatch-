@@ -30,7 +30,6 @@ from typing import Callable, Optional
 from dispatch_v2 import common as C
 from dispatch_v2.common import setup_logger
 from dispatch_v2.geocoding_audit import log_geocode as _audit_log
-from dispatch_v2.osrm_client import nearest as osrm_nearest
 from dispatch_v2 import geocode_verify as _gv
 
 GMAPS_ENV = Path("/root/.openclaw/workspace/.secrets/gmaps.env")

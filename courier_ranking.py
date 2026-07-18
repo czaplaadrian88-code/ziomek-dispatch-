@@ -20,8 +20,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
-from dispatch_v2.common import WARSAW, load_config, setup_logger
-from dispatch_v2 import telegram_approver  # reuse _load_env + tg_request
+from dispatch_v2.common import WARSAW, setup_logger
 
 
 SLA_LOG_PATH = "/root/.openclaw/workspace/scripts/logs/sla_log.jsonl"

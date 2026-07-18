@@ -681,7 +681,6 @@ def _mp15_load_state() -> dict:
 def _mp15_save_state(state: dict) -> None:
     """Atomic write MP-#15 alert state. Fail-loud (warning) na I/O error."""
     try:
-        from dispatch_v2.core.jsonl_appender import _append_bytes  # reuse atomic primitive
         # Direct atomic write json (NIE append) — overwrite
         import tempfile
         target = Path(_MP15_STATE_PATH)

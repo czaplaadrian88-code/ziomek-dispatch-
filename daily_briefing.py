@@ -24,8 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from dispatch_v2.common import WARSAW, load_config, parse_panel_timestamp, setup_logger
-from dispatch_v2 import telegram_approver  # reuse _load_env + tg_request
+from dispatch_v2.common import WARSAW, parse_panel_timestamp, setup_logger
 from dispatch_v2.tools._rotated_logs import iter_jsonl_records  # SP-B2-LOGROT
 
 
