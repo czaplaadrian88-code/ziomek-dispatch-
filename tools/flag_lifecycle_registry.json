@@ -2,16 +2,16 @@
   "_meta": {
     "counts": {
       "apka": 27,
-      "engine": 392,
+      "engine": 393,
       "engine_1b_units": 12,
-      "etap4": 128,
-      "flags_json_keys": 245,
+      "etap4": 129,
+      "flags_json_keys": 246,
       "fp_extra": 34,
       "known_drift": 0,
       "numeric": 26,
       "panel": 86,
       "test_isolated": 5,
-      "total": 505,
+      "total": 506,
       "twins_concepts": 5
     },
     "generator": "tools/flag_lifecycle_seed.py",
@@ -5422,6 +5422,43 @@
         "engine"
       ]
     },
+    "ENABLE_ETA_CALIB_PROMISE_SHADOW": {
+      "carriers": [
+        "flags.json",
+        "common.py:ETAP4_DECISION_FLAGS"
+      ],
+      "consumers": [
+        "dispatch_v2/common.py",
+        "dispatch_v2/eta_calib_serving.py"
+      ],
+      "curated_at": "2026-07-18",
+      "current_snapshot": {
+        "flags.json": true
+      },
+      "default": false,
+      "intentional_per_process": {
+        "reason": "",
+        "value": false
+      },
+      "known_drift": false,
+      "known_drift_note": "",
+      "lifecycle": "shadow",
+      "lifecycle_seeded": false,
+      "name": "ENABLE_ETA_CALIB_PROMISE_SHADOW",
+      "notes": "D6a SHADOW (OWNER_CONFIRMED D1-D7, Adrian 2026-07-18): serving obietnic kalibratora per-kurier na zwyciezcy — NOWE metryki eta_calib_promise_* w best.metrics (auto-serializacja) do parytetu w cieniu 2 dni. Zero wplywu na feasibility/scoring/wyswietlane czasy. Flip warstwy APPLY = osobna flaga za koncowym ACK po cieniu. Rollback hot = false. Konsument: eta_calib_serving via lejek _classify_and_set_auto_route.",
+      "owner": {
+        "business": "Adrian",
+        "service": "dispatch-shadow.service"
+      },
+      "removal_condition": "po walidacji shadow: flip lub retire (ACK Adrian)",
+      "review_date": "2026-08-10",
+      "rollback": "flags.json OFF hot-reload (bez restartu)",
+      "source_of_truth": "flags.json",
+      "twin_of": [],
+      "worlds": [
+        "engine"
+      ]
+    },
     "ENABLE_ETA_CELL_RESIDUAL_CORRECTION": {
       "carriers": [
         "common.py:ETAP4_DECISION_FLAGS"
@@ -5562,7 +5599,7 @@
       },
       "removal_condition": "n/d dopóki live",
       "review_date": "2026-07-20",
-      "rollback": "flags.json true (hot-reload, bez restartu); kod galezi nietkniety",
+      "rollback": "flags.json OFF hot-reload (bez restartu)",
       "source_of_truth": "flags.json",
       "twin_of": [],
       "worlds": [
@@ -10219,10 +10256,7 @@
     "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION": {
       "carriers": [
         "flags.json",
-        "common.py:ETAP4_DECISION_FLAGS",
-        "drop-in:dispatch-b-route-shadow.service.d/route-flag-parity.conf",
-        "drop-in:dispatch-carried-first-guard.service.d/engine-env-parity.conf",
-        "drop-in:dispatch-plan-recheck.service.d/committed-propagation.conf"
+        "common.py:ETAP4_DECISION_FLAGS"
       ],
       "consumers": [
         "dispatch_v2/common.py",
@@ -10230,9 +10264,6 @@
       ],
       "curated_at": "2026-07-10",
       "current_snapshot": {
-        "dispatch-b-route-shadow.service": true,
-        "dispatch-carried-first-guard.service": true,
-        "dispatch-plan-recheck.service": true,
         "flags.json": true
       },
       "default": true,
@@ -18398,7 +18429,7 @@
         "value": false
       },
       "known_drift": false,
-      "known_drift_note": "DRIFT DOMKNIĘTY 2026-07-10: flags.json jest kanonem hot-reload dla wszystkich procesów. Env-carrier panel-watchera USUNIĘTY 2026-07-18 (Adrian, backup override.conf.bak-pre-use-v2-parser-cleanup-2026-07-18) — zero nośników env. [Przywrócone 18.07 po tym, jak seeder --merge wyzerował to pole kuracji — bug seedera w backlogu.]",
+      "known_drift_note": "DRIFT DOMKNIĘTY 2026-07-10: flags.json jest kanonem hot-reload dla wszystkich procesów. Env-carrier panel-watchera USUNIĘTY 2026-07-18 (Adrian, backup override.conf.bak-pre-use-v2-parser-cleanup-2026-07-18) — zero nośników env.",
       "lifecycle": "live",
       "lifecycle_seeded": false,
       "name": "USE_V2_PARSER",

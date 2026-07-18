@@ -472,6 +472,13 @@ def merge_curation(fresh, old_flags):
             preserved += 1
         elif oe.get("notes") and not e.get("notes"):
             e["notes"] = oe["notes"]  # zachowanie legacy (ręczne notatki)
+        # FIX 2026-07-18 (bug ugryzł 2× jednego dnia): known_drift_note to HISTORIA
+        # kuracji — świeży skan po DOMKNIĘCIU dryfu daje "" (flaga znika z
+        # KNOWN_DIVERGENCES) i wycierał notę „DOMKNIĘTY…" (case USE_V2_PARSER,
+        # złapane testem zp107 przy pełnej regresji B2). Pusta świeża nota NIGDY
+        # nie nadpisuje niepustej starej; niepusta świeża (żywy dryf) wygrywa.
+        if oe.get("known_drift_note") and not e.get("known_drift_note"):
+            e["known_drift_note"] = oe["known_drift_note"]
     return preserved
 
 

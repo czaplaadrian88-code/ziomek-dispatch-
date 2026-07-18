@@ -375,7 +375,10 @@ def test_package_exclusion_uses_canonical_address_id_classifier():
         "status": "complete",
         "source_counts": {"sla": 2, "shadow_preassignment": 0, "unknown": 0},
     }
-    assert manifest["business_kpi"]["status"] == "not_bound"
+    # 2026-07-18: KPI ZWIĄZANE decyzją właściciela (D1-D7, kpi_binding.v1) —
+    # stary pin "not_bound" unieważniony; komórki nadal bramkuje coverage-gate D4.
+    assert manifest["business_kpi"]["status"] == "bound_kpi_binding.v1"
+    assert manifest["business_kpi"]["coverage_gate"]["min_n"] == 200
 
     sla[0]["address_id"] = "corrupt"
     rows, manifest = _build(sla_records=sla)

@@ -50,6 +50,40 @@ DATASET_SCHEMA = "eta_truth.dataset.v1"
 MANIFEST_SCHEMA = "eta_truth.manifest.v1"
 REPORT_SCHEMA = "eta_truth.report.v1"
 
+# ── KPI BINDING v1 — OWNER_CONFIRMED (Adrian 2026-07-18, odpowiedź na kartę
+# eod_drafts/2026-07-18/ETA_CALIB_OWNER_DECISION_CARD.md: „D1a, D2a, D3a, D4 ok,
+# D5 ok, D6a, D7 zgoda"; rekord: memory owner-decision-eta-calib-d1-d7-2026-07-18).
+# Zastępuje dotychczasowe `canonical_kpi_event="unbound"`. Zmiana TYCH wartości =
+# nowa wersja bindingu + nowa decyzja właściciela (nigdy cicha edycja).
+KPI_BINDING_V1 = {
+    "binding_version": "kpi_binding.v1",
+    "owner_ack": "Adrian 2026-07-18 (D1a,D2a,D3a,D4,D5)",
+    "possession_event": {  # D1a
+        "field": "restaurant_last_inside_at",
+        "semantics": ("JAWNE PROXY possession (geofence GPS); klik 'odebrane' = "
+                      "fallback nizszej rangi; ZERO promocji KPI na klikach"),
+    },
+    "arrival_event": {  # D2a
+        "field": "delivery_arrival_at",
+        "semantics": "routing arrival; handoff = OSOBNY, nadal unbound KPI (OD-02)",
+    },
+    "prediction_anchor": "latest_shadow_at_or_before_operator_decision",  # D3a
+    "unknown_package_policy": "excluded_from_denominator_and_reported",   # D4
+    "coverage_gate": {  # D4
+        "min_complete_case_pct": 60.0,
+        "min_n": 200,
+        "below_gate": "HOLD_cell_fail_closed",
+    },
+    "thresholds": {  # D5
+        "pickup": {"mae_max_min": 6.0, "min_improvement_vs_engine_pct": 25.0},
+        "delivery": {"mae_max_min": 8.0, "min_improvement_vs_engine_pct": 10.0},
+        "late_band_pct": [15.0, 22.0],
+        "median_bias_abs_max_min": 1.5,
+        "p90_abs_err_max_min": 20.0,
+        "outliers": "winsorize_report_p99_keep_denominator",
+    },
+}
+
 # Tylko te akcje timerowego decision_outcomes są dowodem faktycznej decyzji
 # przypisania. TIMEOUT_SUPERSEDED/no_verdict nie mogą kotwiczyć predykcji.
 ASSIGNMENT_ACTIONS = frozenset({
@@ -986,14 +1020,20 @@ def build_dataset(*, sla_records: Iterable[Mapping], shadow_records: Iterable[Ma
             "delivery_arrival_is_customer_handoff": False,
             "button_fallback_to_physical": False,
             "error_sign": "actual_minus_predicted_positive_means_later",
-            "canonical_kpi_event": "unbound",
+            "canonical_kpi_event": {
+                "pickup": "restaurant_last_inside_at (PROXY possession — D1a)",
+                "delivery": "delivery_arrival_at (arrival, NIE handoff — D2a)",
+            },
+            "kpi_binding": KPI_BINDING_V1,
         },
         "business_kpi": {
             "status": (
                 "blocked_package_exclusion_unresolved"
-                if package_status != "complete" else "not_bound"
+                if package_status != "complete"
+                else "bound_" + KPI_BINDING_V1["binding_version"]
             ),
-            "thresholds": [],
+            "thresholds": KPI_BINDING_V1["thresholds"],
+            "coverage_gate": KPI_BINDING_V1["coverage_gate"],
         },
         "metrics": {
             "pickup_last_inside": pickup_metrics,

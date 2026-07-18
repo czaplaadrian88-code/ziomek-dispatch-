@@ -3242,6 +3242,15 @@ def _classify_and_set_auto_route(
     # przy każdym zwrocie. OBSERWACYJNY (flaga OFF = no-op, bajt-parytet). Osobny try —
     # nie może zakłócić auto_route/gate.
     _split_layer_emit_assert(result, getattr(result, "order_id", None))
+    # D6a SHADOW (2026-07-18, OWNER_CONFIRMED D1-D7): obietnice kalibratora per-kurier
+    # dla ZWYCIĘZCY — wyłącznie NOWE metryki eta_calib_promise_* na best (wzorzec #8),
+    # auto-serializowane do shadow_decisions (parytet stary-vs-nowy w cieniu 2 dni).
+    # OBSERWACYJNE: flaga OFF = no-op; fail-soft w środku; osobny try jak wyżej.
+    try:
+        from dispatch_v2 import eta_calib_serving as _ECS
+        _ECS.attach_shadow_promise_metrics(result, order_event)
+    except Exception:
+        pass
 
 
 def get_pickup_ready_at(

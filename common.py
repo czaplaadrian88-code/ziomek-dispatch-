@@ -206,6 +206,13 @@ ETAP4_DECISION_FLAGS = (
     # parser-degraded) ZAWSZE. Projekt: eod_drafts/2026-06-30/AUTON02_PLASTER_D_DESIGN.md.
     "AUTO_ASSIGN_REQUIRE_CLASSIFIER_AUTO",
     "AUTO_ASSIGN_REQUIRE_MARGIN",
+    # D6a SHADOW (2026-07-18, OWNER_CONFIRMED D1-D7 — memory owner-decision-eta-calib):
+    # serving obietnic kalibratora per-kurier NA ZWYCIĘZCY — wyłącznie nowe metryki
+    # eta_calib_promise_* w best.metrics (auto-serializacja L1.1) do parytetu w cieniu
+    # 2 dni. Zero wpływu na feasibility/scoring/wyświetlane czasy (warstwa APPLY =
+    # osobna flaga przy flipie za końcowym ACK). Konsument: eta_calib_serving przez
+    # lejek _classify_and_set_auto_route.
+    "ENABLE_ETA_CALIB_PROMISE_SHADOW",
     # R6-ETA-GATE (2026-06-14): kalibracja p80 R6 dla gold worek<=4 (LIVE) +
     # shadow-log falszywych odrzutow. Test-izolacja: conftest scina z tmp flags.json,
     # zeby gate gold->4 NIE przeciekal do testow R6/SLA (determinizm suity).
@@ -656,6 +663,9 @@ ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP = True
 ENABLE_RECANON_ON_WRITE = True
 # migracja B2 2026-07-18: const = steady-state flags.json (True) — const≠json to mina klasy L6
 ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION = True
+# D6a SHADOW 2026-07-18: const-fallback OFF (testy/strip deterministycznie bez servingu);
+# produkcja czyta flags.json=true (cień od restartu shadow po peaku 18.07)
+ENABLE_ETA_CALIB_PROMISE_SHADOW = False
 ENABLE_CARRIED_FIRST_RELAX = True
 ENABLE_CARRIED_AGE_TZ_FIX = True
 ENABLE_LEX_COMMITTED_WINDOW_SHADOW = True
