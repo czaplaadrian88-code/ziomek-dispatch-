@@ -19,7 +19,14 @@ echo ""
 echo "== re-run replay A/B (OFF vs ON na bieżących workach) =="
 cd /root/.openclaw/workspace/scripts && timeout 300 /root/.openclaw/venvs/dispatch/bin/python dispatch_v2/eod_drafts/2026-07-18/b2_committed_ab_replay.py 2>&1 | head -14
 echo ""
-echo "WERDYKT (ręcznie po odczycie): pw ADOPT >0 = fix żyje w pw; errors 0 + brak skarg = bez regresji;"
-echo "różnice OFF↔ON w replayu = ile mrugania fix eliminuje na bieżącym stanie."
+echo "== D3-GOLD (flip OFF ENABLE_ETA_QUANTILE_R6_BAGCAP 18.07 ~13:45 UTC) =="
+echo "nowe odzyski PO flipie (oczekiwane 0 = live ON!=OFF):"
+grep '"r6_gold4_gate_recovered"' /root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl | grep -cE '"ts": ?"2026-07-(18T1[4-9]|18T2|19|20)' || echo 0
+echo "sanity werdykty od flipu (KOORD/best_effort nie powinny skoczyć vs norma):"
+grep -oE '"verdict": ?"[A-Z_]+"' /root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl | sort | uniq -c | tail -6
+echo ""
+echo "WERDYKT (ręcznie po odczycie): B2: pw ADOPT >0 = fix żyje; errors 0 = bez regresji;"
+echo "różnice OFF↔ON w replayu = ile mrugania fix eliminuje. D3: 0 nowych odzysków = flip"
+echo "żyje; werdykty stabilne = brak regresji wyników (baza: odzysk na zwycięzcy 0/39)."
 } > "$OUT" 2>&1
 echo "verdict -> $OUT"

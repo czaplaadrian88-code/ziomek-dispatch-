@@ -5541,9 +5541,9 @@
         "dispatch_v2/common.py",
         "dispatch_v2/feasibility_v2.py"
       ],
-      "curated_at": "2026-07-10",
+      "curated_at": "2026-07-18",
       "current_snapshot": {
-        "flags.json": true
+        "flags.json": false
       },
       "default": false,
       "intentional_per_process": {
@@ -5552,17 +5552,17 @@
       },
       "known_drift": false,
       "known_drift_note": "",
-      "lifecycle": "live",
+      "lifecycle": "deprecated",
       "lifecycle_seeded": false,
       "name": "ENABLE_ETA_QUANTILE_R6_BAGCAP",
-      "notes": "",
+      "notes": "FLIP OFF 2026-07-18 ~13:45 UTC (GO Adriana 'Dawaj D3-gold'): wdrozenie werdyktu D3 (29.06) + OD-07 OWNER_CONFIRMED (R6 35 dla kazdego, nigdy klasa kuriera). Pomiar live: 39 odzyskow/3d, odzysk na ZWYCIEZCY 0/39 -> flip nie zmienia zadnego wyniku na korpusie. Testy galezi ON!=OFF: tests/test_d3_gold_quantile_flip.py 4/4. Okno 2d: at#217 (sekcja D3). Po oknie: USUNIECIE kodu galezi (feasibility_v2 ~:1141 + ~:1254) za ACK = retire.",
       "owner": {
         "business": "Adrian",
         "service": "dispatch-shadow.service"
       },
       "removal_condition": "n/d dopóki live",
-      "review_date": "2026-10-10",
-      "rollback": "flags.json OFF hot-reload (bez restartu)",
+      "review_date": "2026-07-20",
+      "rollback": "flags.json true (hot-reload, bez restartu); kod galezi nietkniety",
       "source_of_truth": "flags.json",
       "twin_of": [],
       "worlds": [
