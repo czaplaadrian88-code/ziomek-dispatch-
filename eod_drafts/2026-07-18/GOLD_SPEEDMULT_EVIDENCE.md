@@ -44,11 +44,13 @@ Wynik: **werdykt liczbowy NIE FLIPOWAĆ per-tier** — measure-first zadziałał
   Flip 0.78 zaniżyłby ETA gold o 22% → fałszywe „zdąży" → realne breache R6.
   Klasa „NIE wskrzeszać obalonych".
 - **Cała klasa per-tier drive-mult = zysk maks ~3% MAE (5 s)** — o rząd wielkości
-  słabszy niż CZEKAJĄCY kalibrator per-leg/per-KURIER z 07.07 na TEJ SAMEJ bazie
-  (dostawa −20%, odbiór −52%; cień biegnie od 07.07, okno 2 dni dawno minięte).
-  **Właściwa realizacja werdyktu „skalibruj ETA gold dobrze" = flip kalibratora
-  per-kurier (decyzja Adriana, wisi w todo od 07.07)** — per-kurier bije per-tier
-  granularnością (różnice wewnątrz gold > różnice między tierami; IQR ±30%).
+  słabszy niż kalibrator per-leg/per-KURIER na TEJ SAMEJ bazie. ⚠ **KOREKTA 18.07
+  (dopisana tego samego wieczora):** cytowane tu pierwotnie „−20/−52 z 07.07" są
+  WYCOFANE przez A360-A0 (leakage cech z outcome + różne holdouty); ŚWIEŻE leak-free
+  rolling (nocny gate 18.07): odbiór −54% (5,14 vs 11,21) / dostawa −17% (7,38 vs
+  8,92) vs silnik — ale instrument w fail-closed HOLD (champion legacy) i wpięcie
+  stoi za bramą właścicielską OD-01..03 → `ETA_CALIB_OWNER_DECISION_CARD.md`.
+  Per-kurier nadal bije per-tier granularnością (IQR ±30% wewnątrz tierów).
 - Werdyktowa hipoteza „gold wyrabiają bo szybcy" w danych: na JEŹDZIE tylko ~4%
   szybciej od modelu; przewaga gold siedzi w dwell (osobno tier-aware) i jakości tras.
 
