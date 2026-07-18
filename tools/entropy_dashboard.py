@@ -107,23 +107,23 @@ def main():
 
     rows = [
         # (nr, nazwa, DZIŚ, cel, tag, jak-re-measure)
-        ("1", "copy-count (reguł >1 źródło)", "17 (≈90 inst.)", "0",
-         "AUDIT-BASELINE", "kuratorowany rejestr bliźniaków (ARCHITECTURE §4); auto-licznik NIE działa (kopie semantyczne)"),
-        ("2", "twin-divergence (bliźniaki DIVERGED)", "~13 (route 44-75/d)", "0",
-         "AUDIT-BASELINE", "monitor ziomek_time_route_monitor.jsonl (⚠ wygasa 07-10) → golden-test"),
+        ("1", "copy-count (reguł >1 źródło)", "~13-14 (re-pomiar 18.07: lex_qual+planner K15+route-order zunifikowane, R6-quantile OFF→cięcie at#218)", "0",
+         "AUDIT-BASELINE", "kuratorowany rejestr bliźniaków (ARCHITECTURE §4); auto-licznik NIE działa (kopie semantyczne); ENTROPY_REMEASURE_2026-07-18"),
+        ("2", "twin-divergence (bliźniaki DIVERGED)", "route-order=0 KONSTRUKCJĄ (Sprint C 08.07); zostały: pozycje 8, floor 17/4, SLA-anchor 3 (re-pomiar 18.07)", "0",
+         "AUDIT-BASELINE", "siatka golden INV-SRC/TWIN-ROUTE-ORDER (bez daty) + test_route_order_live_parity w KAŻDEJ regresji (venv panelu); monitor jsonl wygasł 07-10 ZGODNIE Z PLANEM — NIE jest luką"),
         ("3", "void-instrument (przyrząd kłamie)",
          "19 VOID + 6 UNTESTED = 25/49 (L1.2 02.07: wrong-source 3→0, rotation-blind tools/ przepięte; re-oracle zdejmie VOID-y)", "0",
          "AUDIT-BASELINE", "lane runtime-oracle (FAZA1_03 + adendum L1.2) — odpal przyrząd vs 2. metoda"),
         ("4", "dead-flag / rozjazdy flag", f"{div if div is not None else '5 (+112 poza rej.)'}", "0",
          "AUTO" if div is not None else "AUDIT-BASELINE", "tools/flag_registry.py (rozjazdy env↔drop-in↔flags.json)"),
-        ("5", "layer-violation (HARD w złej warstwie)", "7", "0",
-         "AUDIT-BASELINE", "FAZA1_01/B05 — geometria SOFT-only, FEAS_CARRY bypass"),
-        ("6", "unresolved-conflict (precedencja)", "13 klastrów (64 par)", "0",
-         "AUDIT-BASELINE", "graf konfliktów FAZA1_02"),
+        ("5", "layer-violation (HARD w złej warstwie)", "5 (re-pomiar 18.07: −2 rooty — calibration-on-wrong-axis→D3, geometry-blind→L6.C)", "0",
+         "AUDIT-BASELINE", "FAZA1_01 klasa C; otwarte m.in.: R-DECLARED-TIME bez runtime-gate, paczka-exempt-inverted, FEAS_CARRY bypass latentny; ENTROPY_REMEASURE_2026-07-18"),
+        ("6", "unresolved-conflict (precedencja)", "7 klastrów (re-pomiar 18.07: K-C/K-H/K-I zamknięte kodem; K-A/K-B/K-E intencja OD-07/C5/C3)", "0",
+         "AUDIT-BASELINE", "graf konfliktów FAZA1_02 × KANON v1.3 §1; otwarte K-D/K-F/K-G-latentny/K-J/K-K/K-L/K-M-częściowo; ENTROPY_REMEASURE_2026-07-18"),
         ("7", "sentinel-as-data (trucizna pozycji)", f"{len(poison)} żywy silnik (+{len(instrument)} instr.)", "0 (1 walidator/ingest)",
          "AUTO-oracle", "AST tu (bool wykluczony + kontekst pozycji); 6/12=courier_resolver=most K5"),
-        ("8", "threshold-sprawl (próg w N miejscach)", "10 rodzin (≈40 sites)", "0",
-         "AUDIT-BASELINE", "R6=35/40 ×6, czasówka=60 ×6 → nazwana stała"),
+        ("8", "threshold-sprawl (próg w N miejscach)", "10 rodzin, BEZ poprawy +1 site (re-pomiar 18.07: R6=35 ×6 literałów plan_recheck; czasówka=60 6→7 — nowy `_was_czasowka` eta_calib_serving)", "0",
+         "AUDIT-BASELINE", "R6=35/40 + czasówka=60 → nazwana stała/helper; margin=15 ×5, R27=±5 ×5, R7=99km never-fires; ENTROPY_REMEASURE_2026-07-18"),
     ]
 
     print("=" * 96)
