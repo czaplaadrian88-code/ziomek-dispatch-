@@ -14,9 +14,17 @@ SCRIPTS = "/root/.openclaw/workspace/scripts"
 FLAGS = os.path.join(SCRIPTS, "flags.json")
 
 def _py_files():
+    # Scope = KANON (fix 2026-07-18, dług ze sweepu 17.07): pomijamy sąsiednie
+    # worktree `wt-*` (kopie tego samego repo — ich odczyty MASKUJĄ sieroty
+    # i zaśmiecają listę dynamicznych czytelników, np. wt-codweekly/...) oraz
+    # eod_drafts (martwe drafty to nie żywi czytelnicy) — parytet semantyki
+    # z tools/flag_registry.scan_code_tokens.
     out = []
-    for root, _, fs in os.walk(SCRIPTS):
-        if "/.git" in root or "/venv" in root or "site-packages" in root:
+    for root, dirs, fs in os.walk(SCRIPTS):
+        dirs[:] = [d for d in dirs
+                   if not d.startswith("wt-") and d != "eod_drafts"
+                   and d not in (".git", "venv", "__pycache__")]
+        if "site-packages" in root:
             continue
         for f in fs:
             if f.endswith(".py") and ".bak" not in f:

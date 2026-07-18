@@ -215,12 +215,6 @@ SERVICE_SCOPED = {
         "dispatch-czasowka.service",
         "dry-run wysyłki czasówki (czasowka_scheduler.py:52, SAFE default ON=1); "
         "tylko tick czasówki wysyła."),
-    "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION": (
-        "dispatch-plan-recheck.service",
-        "retiming committed w ticku plan-recheck (plan_recheck.py:786, moduł-level "
-        ":393); konsument decyzyjny biegnie w plan-recheck. UWAGA: roadmapa L0.1 "
-        "rekomenduje migrację do flags.json (hot-reload cross-service) — poza "
-        "partycją (common.py). Dziś NIE jest żywym rozjazdem (single-service exec)."),
     "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH": (
         "dispatch-plan-recheck.service",
         "live-ETA refresh w ticku plan-recheck (plan_recheck.py:2245, moduł-level "
@@ -234,7 +228,21 @@ SERVICE_SCOPED = {
 # USE_V2_PARSER usunięto stąd po migracji do ETAP4 i flipie 2026-07-10. Stary
 # env-carrier nadal jest widoczny, ale flags.json jest teraz kanonem i checker
 # klasyfikuje go uczciwie jako `json-overrides-env/open` do późniejszego usunięcia.
-KNOWN_DIVERGENCES = {}
+KNOWN_DIVERGENCES = {
+    "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION": (
+        "REKURACJA 2026-07-18 (audyt parytetu docs↔rzeczywistość): stara kuracja "
+        "SERVICE_SCOPED 'single-service exec' była BŁĘDNA od początku — "
+        "panel_watcher woła plan_recheck.redecide_courier (panel_watcher.py:694/791, "
+        "od F3 commit 0e85139 2026-06-07, czyli PRZED kuracją 02.07), a ta "
+        "_gen_one_bag_plan z gałęzią flagi (moduł-level env plan_recheck.py:396, "
+        "read :839). Nośniki env=1: plan-recheck + b-route-shadow + "
+        "carried-first-guard (drop-iny); panel-watcher BEZ env → plany generowane "
+        "eventowo (pw) liczą committed-propagation OFF, tick plan-recheck ON — "
+        "realny per-proces rozjazd (KANON §9 B2 'MRUGA', potwierdzone żywym "
+        "call-grafem 18.07). Domknięcie: migracja do decision_flag/flags.json "
+        "wzorem D3 fala A = zmiana zachowania pw OFF→ON → protokół #0 + replay "
+        "+ ACK Adriana."),
+}
 
 
 def scan_code_tokens(roots=None) -> set:
