@@ -2778,19 +2778,24 @@ def dwell_for_tier(tier):
 # DWELL zastosowanie jej do jazdy = podwójne liczenie. Patrz
 # eod_drafts/2026-05-17/sprint3_tier_aware_drive_design.md.
 DRIVE_SPEED_MULT_DEFAULT = 1.0
-# 2026-06-26 (Adrian): kalibracja per-tier z biasu ŻYWEGO ETA. Model zawyżał
-# czas jazdy → propozycje/R6 widziały kurierów jako "spóźnią się / przekroczą",
-# choć realnie zdążali. Dowód: dur stałego worka leci w dół po każdym ticku
-# (Bartek 123: 54→44 min/15min) + flota mediana -4.7 min dostawy vs żywy ETA
-# (n=657). <1.0 = szybciej (krótsze nogi). Krok 1 agresywny (Adrian wybór
-# 2026-06-26). slow/new = 1.0 (brak czystych danych). Pogłębienie z GPS-motion
-# (composition-clean) w następnym kroku. Bramka flagą poniżej.
+# 2026-07-18 (sprint D3-gold, TODO werdyktu): POMIAR composition-clean na
+# eta_calib.db (2953 CZYSTE bezpośrednie nogi = zero pośrednich stopów worka
+# między pickup a deliver; 2 okna 14.06-03.07 i 04.07-17.07 SPÓJNE) OBALIŁ
+# starą tabelę 0.78/0.82 z 26.06 („Krok 1 agresywny" liczony na czasie
+# SKAŻONYM stopami worka): realne mediany ratio jazdy = gold 0.96, std+ 1.06,
+# std 0.86, new 0.95. Wartości niżej = ZMIERZONE (kod nie kłamie), ALE FLIP
+# ŚWIADOMIE ZANIECHANY: zysk MAE ETA dostawy 3.01→2.92 min (~3%, gold −2%)
+# = o rząd wielkości słabszy niż czekający kalibrator per-leg/per-KURIER
+# z 07.07 (ta sama baza; dostawa −20%, odbiór −52%) — to ON jest właściwą
+# realizacją „skalibruj ETA gold dobrze" (decyzja flipu = Adrian, todo).
+# NIE WSKRZESZAĆ 0.78 (klasa: obalone pomiarem). Pomiar+MAE:
+# eod_drafts/2026-07-18/gold_speed_mult_measure.py (+ EVIDENCE md).
 DRIVE_SPEED_MULT_BY_TIER = {
-    'gold': 0.78,
-    'std+': 0.82,
-    'std':  0.82,
-    'slow': 1.0,
-    'new':  1.0,
+    'gold': 0.96,
+    'std+': 1.06,
+    'std':  0.86,
+    'slow': 1.0,   # zero aktywnych danych (0 czystych nóg w obu oknach)
+    'new':  0.95,  # n małe/niestabilne między oknami (0.95 vs 1.12) — traktuj ostrożnie
 }
 
 
