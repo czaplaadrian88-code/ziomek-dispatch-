@@ -916,6 +916,24 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         except Exception as e:
             _log.warning(f"canon_order_invariants cid={cid} fail: {type(e).__name__}: {e}")
 
+    # OPERATOR PIN (2026-07-19, ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE): koordynator
+    # narzucił kolejność podjazdów (operator_route_overrides.json) → kanon =
+    # sekwencja operatora, nadrzędna wobec soft-heurystyk kolejności (dlatego PO
+    # F6). Czasy nowej kolejności liczy ISTNIEJĄCY _retime_stops (łańcuch OSRM +
+    # clamp committed) — czas_kuriera nietykalny (R27), naruszenia okna logowane
+    # w telemetrii modułu (emit_applied po udanym zapisie). Fail-open.
+    _op_pin_ctx = None
+    try:
+        from dispatch_v2 import operator_route_override as _op_ovr
+        stops, _op_pin_ctx = _op_ovr.pin_stops(cid, stops, oids, orders_state, now)
+        if _op_pin_ctx is not None and _op_pin_ctx.get("changed"):
+            _op_re = _retime_stops(stops, pos, anchor_departure, orders_state, now)
+            if _op_re is not None:
+                stops = _op_re
+    except Exception as e:
+        _op_pin_ctx = None
+        _log.warning(f"operator_route_override(gen) cid={cid} fail: {type(e).__name__}: {e}")
+
     # Floor-at-birth: odbiór nigdy < committed czas_kuriera (≥ start zmiany dla
     # pre-shift, bo proposal ustawia czas_kuriera = shift_start + dojazd). Domyka
     # okno surowego planu między (re)generacją a następnym tickiem refloor.
@@ -990,6 +1008,11 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
             f"policy=keep_current"
         )
         return False
+    if _op_pin_ctx is not None:
+        try:
+            _op_ovr.emit_applied(cid, _op_pin_ctx, stops, orders_state, now)
+        except Exception:
+            pass
     _log.info(
         f"BAG_PLAN_GENERATED cid={cid} stops={len(stops)} seq={plan.sequence} "
         f"sla={plan.sla_violations} dur={plan.total_duration_min:.1f} anchor={anchor_source}"
@@ -1899,6 +1922,16 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
             stops = _apply_canon_order_invariants(stops, orders_state, pos, now)
         except Exception as e:
             _log.warning(f"canon_order_invariants(retime) cid={cid} fail: {type(e).__name__}: {e}")
+    # OPERATOR PIN (2026-07-19): jak w _gen_one_bag_plan — sekwencja operatora
+    # nakładana PO F6, tuż PRZED re-czasowaniem (retime niżej liczy ETA legów dla
+    # nowej kolejności tą samą maszynerią co dotąd). Fail-open, nigdy nie rzuca.
+    _op_pin_ctx = None
+    try:
+        from dispatch_v2 import operator_route_override as _op_ovr
+        stops, _op_pin_ctx = _op_ovr.pin_stops(cid, stops, oids, orders_state, now)
+    except Exception as e:
+        _op_pin_ctx = None
+        _log.warning(f"operator_route_override(retime) cid={cid} fail: {type(e).__name__}: {e}")
     new_stops = _retime_stops(stops, pos, anchor_departure, orders_state, now)
     if new_stops is None:
         return False
@@ -1925,6 +1958,11 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
             f"policy=keep_current"
         )
         raise
+    if _op_pin_ctx is not None:
+        try:
+            _op_ovr.emit_applied(cid, _op_pin_ctx, new_stops, orders_state, now)
+        except Exception:
+            pass
     _log.info(f"BAG_PLAN_RETIMED cid={cid} stops={len(new_stops)} anchor={anchor_source}")
     return True
 

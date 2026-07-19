@@ -399,6 +399,7 @@ ETAP4_DECISION_FLAGS = (
     # zombie by age/no-active) przez istniejące plan_manager API pod lockiem.
     # OBA OFF = bajt-w-bajt (zapis regenu i brak GC jak dziś). Flip za ACK+dry-run.
     "ENABLE_PLAN_RECHECK_GATES",
+    "ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE",
     "ENABLE_COURIER_PLANS_GC",
     # L5.1 (2026-07-05): ETA load-aware — bufor optymizmu nogi ODBIORU (K3).
     # OFF = shadow-only (metryki eta_la_* liczone zawsze, decyzja nietknięta).
@@ -640,6 +641,7 @@ ENABLE_FIRMOWE_BAG_COORD_FALLBACK = False  # Sprint F 2026-07-08 (bag-order firm
 ENABLE_AVAILABLE_FROM_SINGLE_SOURCE = False  # L4 2026-07-02 (jedno źródło available_from=max(now,shift_start) w courier_resolver; konsumenci #1/#3/#5/chokepoint dziedziczą; OFF=stare ścieżki bajt-w-bajt; KANON=flags.json)
 ENABLE_ETA_LOAD_AWARE = False  # L5.1 2026-07-05 (bufor optymizmu nogi ODBIORU z tabeli kalibracji eta_load_aware_calib.json; OFF=shadow-only metryki eta_la_*; ON=przesuwa eta_pickup_utc/travel_min — oś OBIETNICY, nie feasibility; KANON=flags.json)
 ENABLE_PLAN_RECHECK_GATES = False  # L3 2026-07-02 (bramka ZAPISU regenu plan_recheck: compare-and-keep R6 carried>35 — nie nadpisuj dobrego planu gorszym-sekwencyjnie; OFF=zapis regenu bajt-w-bajt; KANON=flags.json)
+ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE = False  # 2026-07-19 (pin kolejności podjazdów od koordynatora w kanonie: operator_route_overrides.json → plan_recheck _gen/_retime po F6 + retime OSRM; OFF=zachowanie dotychczasowe, telemetria wykrycia pliku działa zawsze; KANON=flags.json)
 ENABLE_COURIER_PLANS_GC = False  # L3 2026-07-02 (GC courier_plans: terminal-stop prune + zombie by age/no-active przez plan_manager API pod lockiem; PLAN_GC_DRY_RUN default True; OFF=brak GC jak dziś; KANON=flags.json)
 ENABLE_SPLIT_LAYER_GUARD = False  # L7.3 2026-07-03 (R2 ROOT-9, INV-LAYER-1/2): OBSERWACYJNY strażnik warstw — re-assert _assert_feasibility_first na KAŻDYM EMIT (feasible-path) + garda zapisu feasibility_verdict poza L5 (setter). OFF=bajt-parytet (zero logu/jsonl, decyzja nietknięta); ON=tylko log WARNING + dispatch_state/split_layer_guard.jsonl. NIE-decyzyjna (poza ETAP4). KANON=flags.json
 
