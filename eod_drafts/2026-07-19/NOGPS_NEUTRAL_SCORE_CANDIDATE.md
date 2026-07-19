@@ -120,3 +120,107 @@ at#220 + ACK ownera (C2: flip = pełny deploy). Kod z flagą OFF jest inertny
 poza dopisaniem metryk shadow. Rollback: flaga false (hot) / `git revert`
 commitu kandydata. NIE flipować `ENABLE_NO_GPS_EQUAL_TREATMENT` off — odwrotna
 nadkorekta (wraca stara kara).
+
+## v2 PO RECENZJI ADWERSARYJNEJ (2026-07-19, recenzent Sol/Codex → CTO zawęził do punktów POTWIERDZONYCH)
+
+Recenzja adwersaryjna dała REJECT z 9 punktami; CTO zweryfikował je niezależnie
+na żywym shadow (7 dni, 866 decyzji). v2 = ZMIANY tylko w punktach potwierdzonych
+(#2 donorzy mediany, #3 edge-case'y, #9 testy funkcjonalne) + rozstrzygnięcia
+projektowe pozostałych. Zero zmian post_wave/F2.1c, display F1.7, defaultów flag.
+
+### ZMIANA v2: donorzy mediany = wykonalni konkurenci (pkt #2, POTWIERDZONY)
+
+`_nogps_neutral_score_pass`, pętla `known_kms` (dispatch_pipeline.py):
+
+- STARY warunek donora: `NOT road_km_from_synthetic_pos` AND `km_to_pickup` liczbowy.
+- NOWY warunek donora: jak wyżej **AND `feasibility_verdict == "MAYBE"`**
+  (kanoniczne pole werdyktu — to samo, którym filtruje selekcja
+  `core/selection.py:98`). HARD-NO (post-shift, R-35MIN, pickup_too_far…) nie
+  konkuruje o zlecenie, więc jego km nie zniekształca neutralnego dystansu.
+- Fallback BEZ ZMIAN: 0 donorów (brak realnych kotwic ALBO wszystkie HARD-NO)
+  → 5.0 km (mirror F1.7).
+- Timing: pass biegnie PO L5 (werdykty ustawione przy budowie kandydata); jedyna
+  późniejsza mutacja werdyktu to pre_shift→NO w pętli display (F1.8e), a
+  pre_shift jako syntetyk i tak nie jest donorem.
+- CELE neutralizacji bez zmian (road syntetyczny + POSITION_UNKNOWN_SOURCES,
+  niezależnie od werdyktu — shadow/score spójny w serializacji; NO i tak
+  odfiltrowany w selekcji).
+
+### TESTY v2 (pkt #3 + #9): edge-case'y + funkcjonalne E2E
+
+Nowe w `tests/test_nogps_neutral_score_dist.py` (istniejące source-asercje
+ZOSTAJĄ — dokumentują wpięcia; nowe testy są funkcjonalne):
+
+- dokładnie 1 donor → mediana = jego km (3.7),
+- donor z werdyktem NO wykluczony → mediana z samych MAYBE ({2,4} → 3.0, nie 4.0),
+- wszyscy donorzy NO → 0 donorów → fallback 5.0 (neutralizacja dalej działa),
+- cel neutralizacji z werdyktem NO → shadow/apply liczone (spójność serializacji),
+- **E2E pass → selekcja** (`select_and_emit`, prawdziwy `dp.Candidate`, flagi jak
+  live: EQUAL_TREATMENT + EQUAL_TREATMENT_BUCKET ON): OFF → verdict=PROPOSE,
+  wygrywa no-GPS z centrum (bug zachowany bajt-w-bajt); ON → winner FLIP na
+  GPS-bliskiego; HARD-NO ze score 120 NIGDY nie wygrywa (feasible=4/5);
+  mediana w E2E = 4.0 (dowód, że HARD-NO 0.5 km nie zasilił mediany).
+
+### ROZSTRZYGNIĘCIA pozostałych punktów recenzji (bez zmian kodu — uzasadnienie)
+
+1. **post_wave (pkt #4 „krytyczna luka") = ŚWIADOMY WYJĄTEK projektowy F2.1c,
+   NIE dziura.** post_wave to celowy bonus za powrót do centrum po fali —
+   bramka F2.1c wymaga worka `len(bag_sim)>0` i WSZYSTKO picked_up (+ okno
+   ≤30 min), więc **pusty worek nie może zostać post_wave** → główny wzorzec
+   buga (blind+empty z centrum) NIE zmigruje do tej ścieżki. Empiria CTO
+   (żywy shadow 7 dni, 866 decyzji, winner pos_source): no_gps 422 (51.5%),
+   last_delivered 135, pre_shift 81, last_assigned_pickup 70, gps 47,
+   last_picked_up_interp 43, **post_wave 21 (2.6%)**; z 421 wygranych cid
+   179+413 post_wave to tylko **8**. Ewentualna neutralizacja post_wave =
+   OSOBNA decyzja ownera (zmiana świadomej reguły F2.1c, nie bugfix).
+   **Monitoring w 48h shadow: udział post_wave w zwycięzcach — wzrost po ON
+   = sygnał migracji do wyjątku → alarm i eskalacja do ownera.**
+2. **OFF-parytet (pkt #1): przy OFF zmienia się WYŁĄCZNIE telemetria shadow
+   (`bonus_nogps_neutral_*`) — ZAMIERZONE** (wzorzec compute-always-for-shadow,
+   lekcja #186: flip-walidacja ETAP-5 potrzebuje metryk PRZED flipem). Decyzja,
+   score, ranking, display = bajt-parytet (testy OFF + pełna regresja 5205
+   istniejących bez zmiany wyniku).
+3. **Tie-break przy remisach (pkt #7): pre-existing** — stabilny sort
+   `(-score, bundle_dev)` + kolejność `fleet_snapshot` istnieją sprzed
+   kandydata; neutralizacja ich nie pogarsza (ta sama mediana ≠ identyczne
+   score total — pozostałe komponenty różnicują). POZA ZAKRESEM tego
+   kandydata; follow-up = osobny temat (neutralny tie-break w selekcji).
+4. Display no_gps-z-kotwicą / pre_shift km=None (pkt #5): znana granica
+   opisana wyżej (MAPA + „Znana granica") — pre-existing zachowania F1.7,
+   świadomie nietykane w tym kandydacie.
+
+### DOWODY v2 (harness jak wyżej: pkgroot-worktree + ZIOMEK_SCRIPTS_ROOT, -p no:cacheprovider)
+
+- `tests/test_nogps_neutral_score_dist.py`: **23/23** (17 v1 + 6 nowych), w tym
+  ON≠OFF (OFF bajt-parytet + shadow, ON apply/flip) i E2E OFF/ON przez selekcję.
+- Pełna regresja: **5228 passed / 0 failed** (27 skipped, 8 xfailed, 316.8s)
+  vs baseline kandydata v1 **5222/0** (27 skipped, 8 xfailed) —
+  **DELTA = +6 (dokładnie nowe testy), 0 nowych faili, skip/xfail 1:1.**
+
+### MONITORING FLIPU: twardy gate `donor_filter_match_rate` (narzędzie pomiarowe)
+
+Narzędzie pomiaru cienia (scratchpad/nogps_measure/) po deployu przeliczy
+NIEZALEŻNIE medianę donorów z zalogowanych decyzji i porówna z
+`bonus_nogps_neutral_km`; **~100% zgodności = warunek ACK**.
+
+⚠ ROZBIEŻNOŚĆ WZORÓW do świadomego rozstrzygnięcia w narzędziu (silnik jest
+zgodny ze specyfikacją CTO — NIE zmieniać silnika pod narzędzie):
+
+- SILNIK (kanon, ten kandydat): donor ⇔ `NOT metrics.road_km_from_synthetic_pos`
+  AND `feasibility_verdict == "MAYBE"` AND km liczbowy.
+- Wzór opisany dla narzędzia: `is_position_known(pos_source)` AND MAYBE.
+  To NIE jest tożsame w 2 klasach brzegowych:
+  1. **no_gps/pre_shift Z KOTWICĄ (anchor/bag-tail)**: road realny
+     (`road_km_from_synthetic_pos=False`) → silnik: DONOR; `is_position_known
+     ("no_gps")=False` → narzędzie: NIE-donor. Dodatkowo pętla display NADPISUJE
+     ich `km_to_pickup` (no_gps→fleet_avg/mediana, pre_shift→None) PO passie —
+     serializacja nie niesie surowego km donora → niezależna rekonstrukcja
+     mediany z samego logu jest dla takich pul NIEMOŻLIWA wprost.
+  2. **post_wave po PRZEMIANOWANIU** (F2.1c renames pos_source; raw źródło było
+     Unknown, road z centrum): `road_km_from_synthetic_pos=True` → silnik:
+     NIE-donor; `is_position_known("post_wave")=True` → narzędzie: donor.
+- REKOMENDACJA dla narzędzia: liczyć donorów z serializowanego
+  `road_km_from_synthetic_pos` (klucz w metrics kandydata) + `feasibility_verdict`,
+  a pule z klasą brzegową 1 (donor bez surowego km w logu) wyłączać z gate'u
+  albo raportować osobno — inaczej match_rate <100% będzie ARTEFAKTEM wzoru,
+  nie błędem silnika. Decyzja o kształcie gate'u = team-lead/owner.

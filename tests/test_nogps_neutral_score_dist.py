@@ -17,18 +17,22 @@ Testy: funkcjonalne ON≠OFF na pass + kontrakt flagi + source-regression wpię�
 """
 import inspect
 import math
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from dispatch_v2 import common
 from dispatch_v2 import dispatch_pipeline as dp
 from dispatch_v2.core import candidates as k11c
+from dispatch_v2.core import selection as sel
 from dispatch_v2.courier_resolver import POSITION_UNKNOWN_SOURCES
 from dispatch_v2.scoring import W_DYSTANS, s_dystans
 
 
 class FakeCand:
-    def __init__(self, cid, km, pos_source, synth, sd=None, total=80.0):
+    def __init__(self, cid, km, pos_source, synth, sd=None, total=80.0,
+                 verdict="MAYBE"):
         self.courier_id = cid
-        self.feasibility_verdict = "MAYBE"
+        self.feasibility_verdict = verdict
         self.feasibility_reason = ""
         self.plan = None
         self.score = total
@@ -197,6 +201,56 @@ def test_on_empty_known_pool_fallback_5km(monkeypatch):
     assert km == 5.0 and applied == 2
 
 
+# ── v2 (recenzja adwersaryjna pkt #2+#3): donorzy mediany = tylko MAYBE ────────
+
+def test_on_single_donor_median_is_its_km(monkeypatch):
+    """Dokładnie 1 wykonalny donor → mediana = jego km (bez interpolacji/fallbacku)."""
+    _flag(monkeypatch, True)
+    pool = [FakeCand("a", 3.7, "gps", False),
+            FakeCand("n", 1.2, "no_gps", True)]
+    km, applied = dp._nogps_neutral_score_pass(pool, order_id="T")
+    assert km == 3.7 and applied == 1
+    assert pool[1].metrics["bonus_nogps_neutral_km"] == 3.7
+
+
+def test_on_donor_verdict_no_excluded_from_median(monkeypatch):
+    """Donor z feasibility_verdict=='NO' (HARD-NO: post-shift/R-35MIN) NIE zasila
+    mediany — nie jest konkurentem. Mediana z samych MAYBE: {2,4} → 3.0
+    (z NO byłoby {2,4,20} → 4.0)."""
+    _flag(monkeypatch, True)
+    pool = [FakeCand("a", 2.0, "gps", False),
+            FakeCand("b", 4.0, "gps", False),
+            FakeCand("no", 20.0, "gps", False, verdict="NO"),
+            FakeCand("n", 1.0, "no_gps", True)]
+    km, applied = dp._nogps_neutral_score_pass(pool, order_id="T")
+    assert km == 3.0 and applied == 1
+    # HARD-NO nietykany (nie jest celem neutralizacji — ma realny km)
+    assert "bonus_nogps_neutral_km" not in pool[2].metrics
+
+
+def test_on_all_donors_verdict_no_fallback_5km(monkeypatch):
+    """Realne kotwice istnieją, ale WSZYSTKIE HARD-NO → 0 donorów → fallback 5.0
+    (mirror F1.7), neutralizacja no-GPS dalej działa."""
+    _flag(monkeypatch, True)
+    pool = [FakeCand("a", 2.0, "gps", False, verdict="NO"),
+            FakeCand("b", 9.0, "gps", False, verdict="NO"),
+            FakeCand("n", 1.0, "no_gps", True)]
+    km, applied = dp._nogps_neutral_score_pass(pool, order_id="T")
+    assert km == 5.0 and applied == 1
+    assert pool[2].metrics["bonus_nogps_neutral_km"] == 5.0
+
+
+def test_on_neutralized_nogps_verdict_no_still_shadowed(monkeypatch):
+    """Cel neutralizacji z werdyktem NO: shadow/apply liczone (score spójny w
+    serializacji), ale selekcja go i tak odfiltruje (E2E niżej to domyka)."""
+    _flag(monkeypatch, True)
+    pool = [FakeCand("a", 4.0, "gps", False),
+            FakeCand("n", 1.0, "no_gps", True, verdict="NO")]
+    km, applied = dp._nogps_neutral_score_pass(pool, order_id="T")
+    assert km == 4.0 and applied == 1
+    assert pool[1].metrics["bonus_nogps_neutral_applied"] is True
+
+
 def test_on_off_delta_composes_with_equal_treatment_bucket():
     """Neutralizacja NIE dotyka pos_source/bucketów — equal-treatment składa się
     ortogonalnie (bucket z pos_source, score z pass). Kontrakt: pass nie pisze
@@ -255,3 +309,94 @@ def test_no_divergent_copy_in_plan_recheck():
     assert "s_dystans" not in src
     assert "nogps_neutral" not in src
     assert "fleet_avg_km" not in src
+
+
+# ── v2 (recenzja adwersaryjna pkt #9): E2E funkcjonalny pass → selekcja ───────
+# Sekwencja jak w _assess_order_impl: _nogps_neutral_score_pass biegnie na puli
+# PRZED select_and_emit (core/selection = prawdziwa selekcja: filtr MAYBE,
+# sort, buckety, tiering, bramki werdyktu). Zero source-asercji — sam wynik.
+
+_E2E_NOW = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+
+
+def _sel_ctx():
+    return sel.SelectionContext(
+        now=_E2E_NOW, order_event={"order_id": "E2E1"}, order_id="E2E1",
+        restaurant="Testownia", delivery_address="Testowa 1",
+        pickup_coords=(53.13, 23.16), delivery_coords=(53.14, 23.17),
+        pickup_ready_at=None, new_order=SimpleNamespace(order_id="E2E1"),
+        fleet_snapshot={}, v328_fail_causes={},
+    )
+
+
+def _real_cand(cid, km, pos_source, synth, verdict="MAYBE", sd=None, total=80.0):
+    """Prawdziwy dp.Candidate (dataclass selekcji) z metrykami jak FakeCand."""
+    f = FakeCand(cid, km, pos_source, synth, sd=sd, total=total, verdict=verdict)
+    return dp.Candidate(
+        courier_id=cid, name=f"K{cid}", score=f.score,
+        feasibility_verdict=verdict, feasibility_reason="",
+        plan=None, metrics=f.metrics,
+    )
+
+
+def _e2e_flags(monkeypatch, on: bool):
+    """Środowisko flag jak live 19.07 (flags.json): ENABLE_NO_GPS_EQUAL_TREATMENT
+    + ENABLE_EQUAL_TREATMENT_BUCKET ON → no_gps konkuruje CZYSTYM score w bucket 0
+    (dokładnie tam manifestuje się bug centrum). Reszta = default. Nasza flaga =
+    parametr `on`."""
+    monkeypatch.setattr(
+        dp.C, "decision_flag",
+        lambda f: on if f == "ENABLE_NO_GPS_NEUTRAL_SCORE_DIST" else False)
+    monkeypatch.setattr(
+        dp.C, "flag",
+        lambda name, default=False: True if name in (
+            "ENABLE_NO_GPS_EQUAL_TREATMENT",
+            "ENABLE_EQUAL_TREATMENT_BUCKET") else default)
+
+
+def _e2e_pool():
+    """Pula wzorowana na landslide 112-vs-4.1: no-GPS z centrum (1.2 km FIKCJI)
+    ma najwyższy surowy score; GPS-bliski 2.0 km drugi; GPS 4.0/9.0 wypełniają
+    rozkład; HARD-NO z absurdalnym score 120 i realnym km 0.5 — nie może ani
+    wygrać, ani zasilić mediany. Donorzy MAYBE: {2.0, 4.0, 9.0} → mediana 4.0."""
+    sd_c = round(s_dystans(1.2), 2)
+    nogps = _real_cand("179", 1.2, "no_gps", True, sd=sd_c,
+                       total=round(sd_c * W_DYSTANS + 100 * 0.7, 2))
+    gps_close = _real_cand("400", 2.0, "gps", False,
+                           total=round(s_dystans(2.0) * W_DYSTANS + 100 * 0.7, 2))
+    gps_mid = _real_cand("500", 4.0, "gps", False, total=80.0)
+    gps_far = _real_cand("509", 9.0, "gps", False, total=60.0)
+    hard_no = _real_cand("999", 0.5, "gps", False, verdict="NO", total=120.0)
+    return nogps, gps_close, [nogps, gps_close, gps_mid, gps_far, hard_no]
+
+
+def test_e2e_off_selection_keeps_bug_and_hard_no_never_wins(monkeypatch):
+    """OFF = bajt-parytet decyzji: no-GPS z centrum dalej wygrywa (bug zachowany),
+    HARD-NO odfiltrowany przez selekcję mimo najwyższego score."""
+    _e2e_flags(monkeypatch, False)
+    nogps, gps_close, pool = _e2e_pool()
+    km, applied = dp._nogps_neutral_score_pass(pool, order_id="E2E1")
+    assert applied == 0
+    res = sel.select_and_emit(_sel_ctx(), pool)
+    assert type(res).__name__ == "PipelineResult"
+    assert res.verdict == "PROPOSE" and res.pool_feasible_count == 4
+    assert res.best is nogps
+    assert res.best.feasibility_verdict == "MAYBE"
+    assert res.best.courier_id != "999"
+
+
+def test_e2e_on_pass_plus_selection_flips_winner(monkeypatch):
+    """ON: neutralizacja medianą WYKONALNYCH donorów → zwycięzcą zostaje
+    GPS-bliski (winner flip vs OFF); HARD-NO dalej nigdy nie wygrywa."""
+    _e2e_flags(monkeypatch, True)
+    nogps, gps_close, pool = _e2e_pool()
+    km, applied = dp._nogps_neutral_score_pass(pool, order_id="E2E1")
+    # Donorzy MAYBE {2,4,9} → mediana 4.0. HARD-NO (0.5 km) wykluczony —
+    # z nim mediana spadłaby do 3.0 (dowód filtra wewnątrz E2E).
+    assert km == 4.0 and applied == 1
+    res = sel.select_and_emit(_sel_ctx(), pool)
+    assert res.verdict == "PROPOSE"
+    assert res.best is gps_close
+    assert res.best is not nogps
+    assert res.best.feasibility_verdict == "MAYBE"
+    assert res.best.courier_id != "999"

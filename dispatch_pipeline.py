@@ -749,9 +749,11 @@ def _nogps_neutral_score_pass(candidates, order_id=None):
     FIX U ŹRÓDŁA: dla kandydatów, których road_km policzono z pozycji-fikcji
     (metrics.road_km_from_synthetic_pos z core.candidates — anchor/bag-tail
     ZOSTAJE realny) i pos_source ∈ POSITION_UNKNOWN_SOURCES, licz neutralny
-    dystans = MEDIANA road_km kandydatów o pozycji ZNANEJ (mediana, nie średnia —
-    rozkład prawoskośny) i PRZELICZ s_dystans/score. Jedna wartość napędza
-    i score, i display (kasuje rozjazd score↔display).
+    dystans = MEDIANA road_km kandydatów o pozycji ZNANEJ **i wykonalnych**
+    (feasibility_verdict == "MAYBE" — v2 po recenzji adwersaryjnej pkt #2:
+    HARD-NO nie jest konkurentem, jego km nie może zniekształcać mediany;
+    mediana, nie średnia — rozkład prawoskośny) i PRZELICZ s_dystans/score.
+    Jedna wartość napędza i score, i display (kasuje rozjazd score↔display).
 
     Kontrakt (compute-always-for-shadow, lekcja #186 / wzorzec #16):
       - metryki bonus_nogps_neutral_* liczone ZAWSZE (auto-serializacja L1.1
@@ -774,6 +776,15 @@ def _nogps_neutral_score_pass(candidates, order_id=None):
             continue
         if m.get("road_km_from_synthetic_pos"):
             continue
+        # v2 (recenzja adwersaryjna pkt #2): donor mediany = WYKONALNY konkurent.
+        # Kanon werdyktu = pole `feasibility_verdict` ("MAYBE"|"NO", filtr selekcji
+        # core/selection.py). HARD-NO (post-shift, R-35MIN, pickup_too_far…) nie
+        # konkuruje o zlecenie, więc jego km nie może zniekształcać neutralnego
+        # dystansu. Pass biegnie PO L5 (werdykty ustawione przy budowie kandydata);
+        # jedyna późniejsza mutacja to pre_shift→NO w pętli display (F1.8e), a
+        # pre_shift jako syntetyk i tak nie jest donorem.
+        if getattr(c, "feasibility_verdict", None) != "MAYBE":
+            continue
         km = m.get("km_to_pickup")
         if isinstance(km, (int, float)):
             known_kms.append(float(km))
@@ -784,7 +795,8 @@ def _nogps_neutral_score_pass(candidates, order_id=None):
         neutral_km = (known_kms[_mid] if _n % 2 == 1
                       else 0.5 * (known_kms[_mid - 1] + known_kms[_mid]))
     else:
-        # Brak realnych kotwic w puli → mirror F1.7 fallback (5.0 km).
+        # 0 donorów (brak realnych kotwic ALBO wszystkie HARD-NO) →
+        # mirror F1.7 fallback (5.0 km).
         neutral_km = 5.0
     apply_on = C.decision_flag("ENABLE_NO_GPS_NEUTRAL_SCORE_DIST")
     applied = 0
