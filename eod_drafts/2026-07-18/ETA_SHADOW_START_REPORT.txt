@@ -1,0 +1,8 @@
+ETA-CALIB SHADOW START — 2026-07-18T19:05:00Z
+dispatch-shadow: active
+errors w journalu (2 min): 0
+czekam na 1. rekord z eta_calib_promise_* (max 30 min; sobota ~21 = ruch jest)...
+OK: metryki cienia obecne w shadow_decisions (19:05:21Z)
+eta_calib_promise_pickup_p80_min": 9.82
+eta_calib_promise_pickup_p80_min": 7.8
+CIEN URUCHOMIONY. Werdykt parytetu: at#220 (wt 05:30 UTC) -> eta_promise_parity.py
