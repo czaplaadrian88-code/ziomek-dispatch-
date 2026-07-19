@@ -238,6 +238,25 @@ def _stable_runs(before, after):
     }
 
 
+def _artifact_matrix(root, before, after, *, overrides=None):
+    root.mkdir()
+    overrides = overrides or {}
+    artifacts = {}
+    for side, value in (("before", before), ("after", after)):
+        for order, seed in G._STABILITY_CASES:
+            name = f"{side}_{order}_seed{seed}"
+            rows = overrides.get(name, value)
+            path = root / f"{name}.jsonl"
+            lines = [json.dumps({"schema": G.WORKER_SCHEMA, "order": order})]
+            lines.extend(
+                json.dumps({**row, "key": key}, sort_keys=True, separators=(",", ":"))
+                for key, row in sorted(rows.items())
+            )
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            artifacts[name] = path
+    return artifacts
+
+
 def test_evaluator_distinguishes_parity_diff_instability_and_error():
     keys = {"sha256:k"}
     a = {"sha256:k": _row({"winner": "A"})}
@@ -262,6 +281,56 @@ def test_evaluator_distinguishes_parity_diff_instability_and_error():
 def test_evaluator_requires_the_full_stability_matrix():
     with pytest.raises(G.HarnessError, match="stability run set mismatch"):
         G.evaluate_runs(set(), {})
+
+
+def test_disk_backed_evaluator_matches_all_verdict_classes(tmp_path):
+    keys = {"sha256:k"}
+    a = {"sha256:k": _row({"winner": "A"})}
+    b = {"sha256:k": _row({"winner": "B"})}
+    miss = {"sha256:k": _row({"winner": "A"}, misses=1)}
+
+    parity = _artifact_matrix(tmp_path / "parity", a, a)
+    assert G.evaluate_artifacts(keys, parity, tmp_path / "parity.sqlite")[
+        "verdict"
+    ] == "PARITY"
+
+    changed = _artifact_matrix(tmp_path / "changed", a, b)
+    diff = G.evaluate_artifacts(keys, changed, tmp_path / "changed.sqlite")
+    assert diff["verdict"] == "DIFFS"
+    assert diff["difference_samples"][0]["paths"] == ["$.winner"]
+
+    unstable = _artifact_matrix(
+        tmp_path / "unstable",
+        a,
+        a,
+        overrides={"after_reverse_seed0": b},
+    )
+    assert G.evaluate_artifacts(keys, unstable, tmp_path / "unstable.sqlite")[
+        "verdict"
+    ] == "UNSTABLE"
+
+    errored = _artifact_matrix(
+        tmp_path / "errored",
+        a,
+        a,
+        overrides={"after_reverse_seed1": miss},
+    )
+    assert G.evaluate_artifacts(keys, errored, tmp_path / "errored.sqlite")[
+        "verdict"
+    ] == "ERROR"
+
+
+def test_diagnostic_artifact_loader_refuses_large_inputs(tmp_path):
+    artifact = tmp_path / "large-artifact.jsonl"
+    artifact.write_text(
+        json.dumps({"schema": G.WORKER_SCHEMA, "order": "forward"}) + "\n",
+        encoding="utf-8",
+    )
+    with artifact.open("ab") as handle:
+        handle.truncate(64 * 1024 * 1024 + 1)
+
+    with pytest.raises(G.HarnessError, match="disk-backed evaluation"):
+        G._load_artifact(artifact)
 
 
 def test_worker_imports_requested_tree_and_captures_full_result(tmp_path):

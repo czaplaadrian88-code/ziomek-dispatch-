@@ -51,6 +51,11 @@ revision runs the complete four-case stability matrix (eight passes total):
 The multi-gigabyte source corpus is never held as parsed Python objects. It is
 canonicalized to a temporary JSONL stream one record at a time; workers also
 decode one record at a time. The reverse pass stores only byte offsets of lines.
+Worker artifacts are streamed into a temporary SQLite evaluator: only the two
+baseline decision sets are stored as disk-backed BLOBs, while the six stability
+passes are compared one row at a time. The eight full artifacts are never held
+in Python memory together. The small diagnostic loader refuses files over
+64 MiB so it cannot accidentally become the certification path.
 For a bounded `--max-n` run, selection stops after observing the first record
 beyond the limit and reports `scan_complete=false` plus `truncated=true`.
 

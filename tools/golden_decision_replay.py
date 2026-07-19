@@ -32,6 +32,7 @@ import logging
 import math
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -436,12 +437,6 @@ def select_corpus(
         return list(_iter_jsonl(frozen)), meta
 
 
-def _write_corpus(path: Path, records: list[dict]) -> None:
-    with path.open("wb") as handle:
-        for record in records:
-            handle.write(_json_bytes(record) + b"\n")
-
-
 @contextlib.contextmanager
 def _suppress_transitive_output():
     previous_disable = logging.root.manager.disable
@@ -556,24 +551,27 @@ def _spawn_worker(
         raise HarnessError(f"worker failed with exit {completed.returncode}")
 
 
-def _load_artifact(path: Path) -> dict[str, dict[str, Any]]:
-    rows: dict[str, dict[str, Any]] = {}
+def _iter_artifact(path: Path):
+    seen: set[str] = set()
     with path.open(encoding="utf-8") as handle:
         first = handle.readline()
         try:
             header = json.loads(first)
         except json.JSONDecodeError as exc:
             raise HarnessError("invalid worker artifact header") from exc
-        if header.get("schema") != WORKER_SCHEMA:
+        if not isinstance(header, dict) or header.get("schema") != WORKER_SCHEMA:
             raise HarnessError("worker artifact schema mismatch")
         for line in handle:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise HarnessError("invalid worker artifact row") from exc
+            if not isinstance(row, dict):
+                raise HarnessError("non-object worker artifact row")
             key = row.get("key")
-            if not isinstance(key, str) or key in rows:
+            if not isinstance(key, str) or key in seen:
                 raise HarnessError("invalid or duplicate worker record key")
+            seen.add(key)
             if "decision_b64" in row:
                 try:
                     raw = base64.b64decode(row["decision_b64"], validate=True)
@@ -581,9 +579,27 @@ def _load_artifact(path: Path) -> dict[str, dict[str, Any]]:
                     raise HarnessError("invalid decision base64") from exc
                 if hashlib.sha256(raw).hexdigest() != row.get("decision_sha256"):
                     raise HarnessError("decision artifact hash mismatch")
+                misses = row.get("misses")
+                if isinstance(misses, bool) or not isinstance(misses, int):
+                    raise HarnessError("invalid decision artifact miss count")
             elif not isinstance(row.get("error_type"), str):
                 raise HarnessError("worker row has neither decision nor error")
-            rows[key] = row
+            else:
+                raw = None
+            yield key, row, raw
+
+
+def _load_artifact(path: Path) -> dict[str, dict[str, Any]]:
+    """Load a small artifact for tests/diagnostics, never certification runs."""
+
+    if path.stat().st_size > 64 * 1024 * 1024:
+        raise HarnessError(
+            "_load_artifact refuses artifacts over 64 MiB; "
+            "use disk-backed evaluation"
+    )
+    rows: dict[str, dict[str, Any]] = {}
+    for key, row, _ in _iter_artifact(path):
+        rows[key] = row
     return rows
 
 
@@ -761,6 +777,190 @@ def evaluate_runs(
     }
 
 
+def _stored_row(
+    row: dict[str, Any],
+    decision: Optional[bytes],
+) -> tuple[Optional[bytes], Optional[str], int, Optional[str]]:
+    return (
+        decision,
+        row.get("decision_sha256"),
+        int(row.get("misses") or 0),
+        row.get("error_type"),
+    )
+
+
+def _stored_row_diff(
+    left: tuple[Optional[bytes], Optional[str], int, Optional[str]],
+    right: tuple[Optional[bytes], Optional[str], int, Optional[str]],
+) -> bool:
+    if left[3] != right[3]:
+        return True
+    if left[3] is not None or right[3] is not None:
+        return False
+    return left[0] != right[0] or left[2] != right[2]
+
+
+def _sample_stored_diff(
+    key: str,
+    left: tuple[Optional[bytes], Optional[str], int, Optional[str]],
+    right: tuple[Optional[bytes], Optional[str], int, Optional[str]],
+) -> dict[str, Any]:
+    sample = {
+        "record_key": key,
+        "before_sha256": left[1],
+        "after_sha256": right[1],
+    }
+    if left[0] is not None and right[0] is not None:
+        sample["paths"] = _diff_paths(json.loads(left[0]), json.loads(right[0]))
+    else:
+        sample["paths"] = ["$worker_status"]
+    return sample
+
+
+def evaluate_artifacts(
+    expected_keys: set[str],
+    artifacts: Mapping[str, Path],
+    database: Path,
+) -> dict[str, Any]:
+    """Compare large artifacts exactly with only two baselines stored on disk."""
+
+    expected_runs = {
+        _run_name(side, order, seed)
+        for side in ("before", "after")
+        for order, seed in _STABILITY_CASES
+    }
+    if set(artifacts) != expected_runs:
+        raise HarnessError("stability artifact set mismatch")
+    if database.exists():
+        raise HarnessError("evaluation database already exists")
+
+    key_mismatches: dict[str, dict[str, int]] = {}
+    errors: dict[str, dict[str, int]] = {}
+    misses: dict[str, int] = {}
+    unstable: dict[str, set[str]] = {"before": set(), "after": set()}
+
+    def finish_run(
+        name: str,
+        seen: set[str],
+        error_counts: Counter[str],
+        miss_count: int,
+    ) -> None:
+        if seen != expected_keys:
+            key_mismatches[name] = {
+                "missing": len(expected_keys - seen),
+                "extra": len(seen - expected_keys),
+            }
+        if error_counts:
+            errors[name] = dict(sorted(error_counts.items()))
+        if miss_count:
+            misses[name] = miss_count
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA journal_mode=OFF")
+        connection.execute("PRAGMA synchronous=OFF")
+        connection.execute(
+            """
+            CREATE TABLE baselines (
+                side TEXT NOT NULL,
+                record_key TEXT NOT NULL,
+                decision BLOB,
+                decision_sha256 TEXT,
+                misses INTEGER NOT NULL,
+                error_type TEXT,
+                PRIMARY KEY (side, record_key)
+            )
+            """
+        )
+
+        for side in ("before", "after"):
+            baseline_name = _run_name(side, "forward", 0)
+            seen: set[str] = set()
+            error_counts: Counter[str] = Counter()
+            miss_count = 0
+            with connection:
+                for key, row, decision in _iter_artifact(artifacts[baseline_name]):
+                    seen.add(key)
+                    stored = _stored_row(row, decision)
+                    if stored[3] is not None:
+                        error_counts[stored[3]] += 1
+                    elif stored[2] != 0:
+                        miss_count += 1
+                    connection.execute(
+                        "INSERT INTO baselines VALUES (?, ?, ?, ?, ?, ?)",
+                        (side, key, *stored),
+                    )
+            finish_run(baseline_name, seen, error_counts, miss_count)
+
+            for order, seed in _STABILITY_CASES[1:]:
+                name = _run_name(side, order, seed)
+                seen = set()
+                error_counts = Counter()
+                miss_count = 0
+                for key, row, decision in _iter_artifact(artifacts[name]):
+                    seen.add(key)
+                    current = _stored_row(row, decision)
+                    if current[3] is not None:
+                        error_counts[current[3]] += 1
+                    elif current[2] != 0:
+                        miss_count += 1
+                    baseline = connection.execute(
+                        """
+                        SELECT decision, decision_sha256, misses, error_type
+                        FROM baselines WHERE side = ? AND record_key = ?
+                        """,
+                        (side, key),
+                    ).fetchone()
+                    if baseline is not None and _stored_row_diff(baseline, current):
+                        unstable[side].add(key)
+                finish_run(name, seen, error_counts, miss_count)
+
+        cross_diffs: list[str] = []
+        samples: list[dict[str, Any]] = []
+        for key in sorted(expected_keys):
+            before = connection.execute(
+                """
+                SELECT decision, decision_sha256, misses, error_type
+                FROM baselines WHERE side = 'before' AND record_key = ?
+                """,
+                (key,),
+            ).fetchone()
+            after = connection.execute(
+                """
+                SELECT decision, decision_sha256, misses, error_type
+                FROM baselines WHERE side = 'after' AND record_key = ?
+                """,
+                (key,),
+            ).fetchone()
+            if before is None or after is None or not _stored_row_diff(before, after):
+                continue
+            cross_diffs.append(key)
+            if len(samples) < 12:
+                samples.append(_sample_stored_diff(key, before, after))
+
+    if key_mismatches or errors or misses:
+        verdict = "ERROR"
+    elif unstable["before"] or unstable["after"]:
+        verdict = "UNSTABLE"
+    elif cross_diffs:
+        verdict = "DIFFS"
+    elif not expected_keys:
+        verdict = "EMPTY_CORPUS"
+    else:
+        verdict = "PARITY"
+
+    return {
+        "verdict": verdict,
+        "compared_n": len(expected_keys),
+        "cross_differences_n": len(cross_diffs),
+        "before_unstable_n": len(unstable["before"]),
+        "after_unstable_n": len(unstable["after"]),
+        "key_mismatches": key_mismatches,
+        "errors": errors,
+        "osrm_miss_records": misses,
+        "difference_samples": samples,
+    }
+
+
 def _git_output(repo: Path, *args: str) -> str:
     completed = subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -852,7 +1052,7 @@ def run_comparison(
             for side, tree in (("before", before_tree), ("after", after_tree))
             for order, seed in _STABILITY_CASES
         ]
-        artifacts = {}
+        artifacts: dict[str, Path] = {}
         for name, tree, order, seed in specs:
             artifact = temp / f"{name}.jsonl"
             _spawn_worker(
@@ -864,9 +1064,13 @@ def run_comparison(
                 hash_seed=seed,
                 timeout_s=worker_timeout_s,
             )
-            artifacts[name] = _load_artifact(artifact)
+            artifacts[name] = artifact
 
-        evaluation = evaluate_runs(expected_keys, artifacts)
+        evaluation = evaluate_artifacts(
+            expected_keys,
+            artifacts,
+            temp / "evaluation.sqlite3",
+        )
 
     return {
         "schema": SCHEMA,
