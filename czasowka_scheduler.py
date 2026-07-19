@@ -25,6 +25,7 @@ from dispatch_v2 import common as C
 from dispatch_v2 import courier_resolver, event_bus, state_machine
 from dispatch_v2.core.decide import decide as _decide  # K09: fasada decyzji (delegacja 1:1)
 from dispatch_v2.core.world_state import WorldState
+from dispatch_v2.identity.candidate_pool import alternative_candidates
 from dispatch_v2.telegram_approver import tg_request
 
 WARSAW = ZoneInfo("Europe/Warsaw")
@@ -354,7 +355,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
                 "minutes_to_pickup": mins,
                 "match_quality": match_q,
                 "best": best,
-                "alternatives": result.candidates[1:] if result.candidates else [],
+                "alternatives": alternative_candidates(result.candidates, best) if result.candidates else [],
                 "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
             }
         return {
@@ -363,7 +364,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "minutes_to_pickup": mins,
             "match_quality": "none",
             "best": best,
-            "alternatives": result.candidates[1:] if result.candidates else [],
+            "alternatives": alternative_candidates(result.candidates, best) if result.candidates else [],
             "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
         }
 
@@ -388,7 +389,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
                 "minutes_to_pickup": mins,
                 "match_quality": match_q,
                 "best": best,
-                "alternatives": result.candidates[1:],
+                "alternatives": alternative_candidates(result.candidates, best),
                 "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
             }
         return {
@@ -397,7 +398,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "minutes_to_pickup": mins,
             "match_quality": match_q,
             "best": best,
-            "alternatives": result.candidates[1:],
+            "alternatives": alternative_candidates(result.candidates, best),
             "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
         }
 
@@ -409,7 +410,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             "minutes_to_pickup": mins,
             "match_quality": match_q,
             "best": best,
-            "alternatives": result.candidates[1:],
+            "alternatives": alternative_candidates(result.candidates, best),
             "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
         }
     return {
@@ -418,7 +419,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
         "minutes_to_pickup": mins,
         "match_quality": match_q,
         "best": best,
-        "alternatives": result.candidates[1:],
+        "alternatives": alternative_candidates(result.candidates, best),
         "all_candidates_for_proactive": list(result.candidates) if result.candidates else [],
     }
 

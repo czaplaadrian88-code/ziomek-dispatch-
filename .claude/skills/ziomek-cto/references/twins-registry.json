@@ -134,6 +134,19 @@
         {"nazwa": "inwariant kompletności", "plik": "tests/test_serializer_completeness_l11.py", "symbol": null, "uwaga": ""}
       ]
     },
+    "alternatives-best-identity": {
+      "typ": "procedura",
+      "opis": "Ledger \"best\" + \"alternatives\" po selekcji — wykluczaj przez IDENTITY (canon_cid), nie pozycję (A8-2, 2026-07-19: candidates[1:] zakładał best==candidates[0], łamane przez OBJM/solo_fallback/no_solo).",
+      "keywords": ["alternatives", "best", "candidates[1:]", "solo_fallback", "no_solo", "objm", "ledger kandydatow", "identity dedup"],
+      "przypomnienie": "best NIE zawsze jest candidates[0] (best-effort OBJM ze środka, solo_fallback tworzy nowy obiekt zostawiając odrzuconego bliźniaka w puli, no_solo ma best=None). Producent listy \"alternatives\" MUSI wykluczać po identity.candidate_pool.candidate_identity_key (canon_cid), nie przez slice pozycyjny — inaczej ledger gubi/dubluje kandydata. Każdy nowy best+alternatives producent → użyj identity.candidate_pool.alternative_candidates, nie własną kopię.",
+      "miejsca": [
+        {"nazwa": "wspólny helper identity", "plik": "identity/candidate_pool.py", "symbol": "alternative_candidates", "uwaga": "+ candidate_identity_key; jedyna implementacja, oba konsumenci importują"},
+        {"nazwa": "shadow tick ledger", "plik": "shadow_dispatcher.py", "symbol": "_serialize_result", "uwaga": "join eta_calibration_logger; oryginalny finding A8-2"},
+        {"nazwa": "czasówka scheduler", "plik": "czasowka_scheduler.py", "symbol": "_eval_czasowka_impl", "uwaga": "6 miejsc; konsumenci _format_koord_alert (Telegram Top 3) + candidate_logger"},
+        {"nazwa": "inwariant testowy A", "plik": "tests/test_a8_alternatives_integrity_2026_07_19.py", "symbol": null, "uwaga": "shadow_dispatcher: OBJM/solo_fallback/no_solo/dup/numeric-cid/missing-cid/e2e calib"},
+        {"nazwa": "inwariant testowy B", "plik": "tests/test_a8_2_czasowka_alternatives_2026_07_19.py", "symbol": null, "uwaga": "czasówka: OBJM/solo_fallback/no_solo + KOORD-alert Top 3 no-loss/no-dup"}
+      ]
+    },
     "config-systemd": {
       "typ": "procedura",
       "opis": "Config / stała / unit systemd / timer (wzorce #5 config-do-1-serwisu i #7 unit zadeklarowany-niezainstalowany).",

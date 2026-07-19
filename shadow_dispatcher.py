@@ -32,6 +32,10 @@ from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_flee
 from dispatch_v2.dispatch_pipeline import PipelineResult
 from dispatch_v2.core.decide import decide as _decide  # K09: fasada decyzji (delegacja 1:1)
 from dispatch_v2.core.world_state import WorldState
+from dispatch_v2.identity.candidate_pool import (
+    alternative_candidates as _alternative_candidates,
+    candidate_identity_key as _candidate_identity_key,
+)
 from dispatch_v2.observability import stage_timing as _ST
 from dispatch_v2.monitoring.consumer_stuck_alert import (
     StuckAlertConfig,
@@ -569,6 +573,12 @@ def _serialize_rule_verdict(result: PipelineResult):
         }
 
 
+# _candidate_identity_key / _alternative_candidates moved to
+# identity.candidate_pool (A8-2 twin sweep, 2026-07-19) — czasowka_scheduler
+# has the same best+alternatives shape and needed the identical fix; imported
+# above under the original names so every call site here is unchanged.
+
+
 def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) -> dict:
     from datetime import datetime, timezone, timedelta
     best = result.best
@@ -934,8 +944,14 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             # NIE w best_m dict — Lekcja #80 audit. Patrz _serialize_candidate LOCATION A.
             "traffic_v2_shadow_route": getattr(best, "traffic_v2_shadow_route", None) if best else None,
         },
+        # A8-2 (audyt runtime 2026-07-19): `best` nie zawsze jest pierwszym
+        # elementem candidates. OBJM może wybrać element ze środka, solo_fallback
+        # tworzy nowy obiekt (z odrzuconym bliźniakiem tego samego kuriera w puli),
+        # a no_solo ma best=None. Ledger ma zawierać wszystkich NIEWYBRANYCH
+        # kurierów — bez założenia o pozycji i bez duplikatów kanonicznego cid.
         "alternatives": [
-            _serialize_candidate(c) for c in result.candidates[1:]
+            _serialize_candidate(c)
+            for c in _alternative_candidates(result.candidates, best)
         ],
         "pickup_ready_at": (
             result.pickup_ready_at.isoformat()
