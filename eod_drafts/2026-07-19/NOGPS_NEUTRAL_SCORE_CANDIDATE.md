@@ -139,9 +139,10 @@ projektowe pozostałych. Zero zmian post_wave/F2.1c, display F1.7, defaultów fl
   konkuruje o zlecenie, więc jego km nie zniekształca neutralnego dystansu.
 - Fallback BEZ ZMIAN: 0 donorów (brak realnych kotwic ALBO wszystkie HARD-NO)
   → 5.0 km (mirror F1.7).
-- Timing: pass biegnie PO L5 (werdykty ustawione przy budowie kandydata); jedyna
-  późniejsza mutacja werdyktu to pre_shift→NO w pętli display (F1.8e), a
-  pre_shift jako syntetyk i tak nie jest donorem.
+- Timing: ⚠ SPROSTOWANE w v3 (recenzja delty) — twierdzenie „pre_shift jako
+  syntetyk i tak nie jest donorem" było FAŁSZYWE dla pre_shift Z KOTWICĄ
+  (anchor/bag-tail ⇒ road realny ⇒ donor), a legacy F1.8e mutowało MAYBE→NO
+  dopiero PO passie. Fix = hoist werdyktu przed pass (sekcja v3 niżej).
 - CELE neutralizacji bez zmian (road syntetyczny + POSITION_UNKNOWN_SOURCES,
   niezależnie od werdyktu — shadow/score spójny w serializacji; NO i tak
   odfiltrowany w selekcji).
@@ -224,3 +225,69 @@ zgodny ze specyfikacją CTO — NIE zmieniać silnika pod narzędzie):
   a pule z klasą brzegową 1 (donor bez surowego km w logu) wyłączać z gate'u
   albo raportować osobno — inaczej match_rate <100% będzie ARTEFAKTEM wzoru,
   nie błędem silnika. Decyzja o kształcie gate'u = team-lead/owner.
+
+## v3 PO RECENZJI DELTY (2026-07-19, Sol REJECT z 1 blokerem — potwierdzony przez CTO)
+
+Delta v2 (`88acde3..15ecc79`) zrecenzowana adwersaryjnie: pkt #3/#9 uznane za
+naprawione (donor poprawny, E2E prawdziwy, scope czysty); JEDEN bloker.
+
+### BLOKER: werdykt donora czytany PRZED finalizacją (pre_shift_too_late po passie)
+
+`known_kms` filtrował po `feasibility_verdict` W CHWILI passu, a legacy F1.8e
+(pętla display F1.7, gałąź pre_shift) mutowało pre_shift MAYBE→NO
+(`_set_feasibility_verdict(c,"NO",layer="L5")`) DOPIERO PO passie. Obrona v2
+(„pre_shift = syntetyk ⇒ nie-donor") była fałszywa: `core/candidates.py`
+liczy `road_km_from_synthetic_pos = NOT is_position_known AND NOT
+(anchor/bag-tail)` — ZAKOTWICZONY pre_shift ma road realny (synth=False),
+więc przy MAYBE-w-chwili-passu BYŁ donorem → mediana mogła zawierać km
+przyszłego HARD-NO.
+
+### FIX v3: HOIST (decyzja CTO; jedno źródło predykatu)
+
+- NOWY module-level `_pre_shift_too_late_verdict_pass(candidates,
+  prep_remaining_min, order_id)` — predykat, komunikat i layer=L5 przeniesione
+  1:1 z pętli display; wołany w `_assess_order_impl` PRZED
+  `_nogps_neutral_score_pass` (razem z przeniesionym wyżej wyliczeniem
+  `prep_remaining_min` — czysta arytmetyka z `pickup_ready_at`/`now`, nic
+  między starą a nową pozycją jej nie czytało).
+- Pętla display: gałąź pre_shift zachowuje WYŁĄCZNIE display (km=None,
+  travel=shift_min, ETA=shift_start, marker v324a) — predykat USUNIĘTY
+  (zero duplikacji; test pilnuje `count("shift_min > prep_remaining_min
+  + 0.01") == 1`). Pass dalej biegnie przed pętlą display (asercja
+  i_pass<i_loop bez zmian; display podąża za `bonus_nogps_neutral_applied`).
+- Setter warstw: identyczne wywołanie (layer="L5" ⇒ garda L7.3 cicha,
+  zachowanie settera niezmienione); MAPA zapisów w docstringu settera
+  zaktualizowana o nową lokalizację.
+- INWARIANT po v3: między `_nogps_neutral_score_pass` a `select_and_emit`
+  NIE zachodzi żadna mutacja `feasibility_verdict` w `_assess_order_impl`
+  — donor filter widzi werdykty FINALNE.
+- DLACZEGO NIE „filtruj-w-passie" (przeliczanie predykatu pre_shift w donor
+  filtrze): dublowałoby predykat w drugim miejscu (dryf = nowa klasa bugów),
+  a mutacja po passie ZOSTAŁABY w kodzie — inwariant „pass widzi finalne
+  werdykty" dalej fałszywy i kruchy na kolejne po-passowe mutacje.
+
+### V3.24-A: osiągalność ścieżki mutacji w prodzie (LATENTNA)
+
+- Default kodu: `ENABLE_V324A_SCHEDULE_INTEGRATION = env("...", "1") == "1"`
+  → **ON** (common.py). Klucza NIE MA w flags.json (zweryfikowane) — to stała
+  modułowa czytana z env przy imporcie, NIE hot-reload. Env-override w systemd
+  RÓWNIEŻ zweryfikowany: `grep -r V324A /etc/systemd/system/` = brak (drop-iny
+  dispatch-shadow ustawiają 5 innych flag, nie tę) ⇒ prod = default ON.
+- Przy ON gałąź legacy F1.8e (jedyna po-passowa mutacja werdyktu) jest
+  NIEOSIĄGALNA — pre-shift hard-reject >60 min egzekwuje warstwa B5
+  feasibility PRZY BUDOWIE kandydata (werdykt finalny przed passem z natury).
+- ⇒ Bloker w prodzie DZIŚ = **LATENTNY** (aktywowałby go env-override
+  `ENABLE_V324A_SCHEDULE_INTEGRATION=0` per-service). Fix i tak obowiązkowy:
+  latentna bomba + kontrakt „pass widzi finalne werdykty" musi być prawdziwy
+  niezależnie od konfiguracji. Test kontraktowy dokumentuje default ON.
+
+### TESTY v3 (nowe, w test_nogps_neutral_score_dist.py)
+
+- kontrprzykład Sola: zakotwiczony pre_shift (synth=False) za-późny → NO przed
+  passem → NIE-donor (mediana {4,6}=5.0, nie {1,4,6}=4.0),
+- zdąży → MAYBE zostaje i JEST donorem (hoist nie nadgorliwy),
+- V3.24-A ON → hoist no-op (B5 właścicielem odrzutu),
+- spójność po odrzuceniu: zakotwiczony NIE-cel (score/metrics nietknięte),
+  syntetyczny dalej cel (shadow+apply — serializacja spójna),
+- wiring: hoist przed passem + predykat w module DOKŁADNIE RAZ,
+- kontrakt defaultu V3.24-A ON (przesłanka latentności).

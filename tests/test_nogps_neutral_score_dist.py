@@ -251,6 +251,105 @@ def test_on_neutralized_nogps_verdict_no_still_shadowed(monkeypatch):
     assert pool[1].metrics["bonus_nogps_neutral_applied"] is True
 
 
+# ── v3 (recenzja delty, BLOKER): hoist pre_shift_too_late PRZED passem ────────
+# Bloker: donor filter czyta werdykt W CHWILI passu, a legacy F1.8e mutowało
+# pre_shift MAYBE→NO dopiero w pętli display (PO passie). ZAKOTWICZONY pre_shift
+# (road realny ⇒ synth=False ⇒ donor) z przyszłym NO zasilał medianę. Fix:
+# predykat wyniesiony do _pre_shift_too_late_verdict_pass, wołany przed passem.
+
+def _v324a_off(monkeypatch):
+    """Legacy F1.8e aktywny tylko przy V3.24-A OFF (default kodu = ON)."""
+    monkeypatch.setattr(dp.C, "ENABLE_V324A_SCHEDULE_INTEGRATION", False)
+
+
+def test_v3_hoist_sol_counterexample_anchored_pre_shift_not_donor(monkeypatch):
+    """KONTRPRZYKŁAD Sola: pre_shift Z KOTWICĄ (synth=False ⇒ donor przy MAYBE)
+    + za późny start → po hoiście NO zapada PRZED passem → jego km NIE zasila
+    mediany (stary timing: {1,4,6}→4.0; po hoiście {4,6}→5.0)."""
+    _flag(monkeypatch, True)
+    _v324a_off(monkeypatch)
+    anchored_ps = FakeCand("600", 1.0, "pre_shift", False, total=88.0)
+    anchored_ps.metrics["shift_start_min"] = 30.0
+    pool = [anchored_ps,
+            FakeCand("a", 4.0, "gps", False),
+            FakeCand("b", 6.0, "gps", False),
+            FakeCand("n", 1.2, "no_gps", True)]
+    rejected = dp._pre_shift_too_late_verdict_pass(pool, 10.0, order_id="T")
+    assert rejected == 1
+    assert anchored_ps.feasibility_verdict == "NO"
+    assert "pre_shift_too_late" in anchored_ps.feasibility_reason
+    km, applied = dp._nogps_neutral_score_pass(pool, order_id="T")
+    assert km == 5.0 and applied == 1
+
+
+def test_v3_hoist_on_time_anchored_pre_shift_stays_donor(monkeypatch):
+    """Zdąży (start ≤ prep): MAYBE zostaje, zakotwiczony pre_shift dalej JEST
+    donorem (realny km w medianie) — hoist nie jest nadgorliwy."""
+    _flag(monkeypatch, True)
+    _v324a_off(monkeypatch)
+    anchored_ps = FakeCand("600", 2.0, "pre_shift", False, total=88.0)
+    anchored_ps.metrics["shift_start_min"] = 5.0
+    pool = [anchored_ps, FakeCand("a", 4.0, "gps", False),
+            FakeCand("n", 1.2, "no_gps", True)]
+    rejected = dp._pre_shift_too_late_verdict_pass(pool, 10.0, order_id="T")
+    assert rejected == 0 and anchored_ps.feasibility_verdict == "MAYBE"
+    km, _ = dp._nogps_neutral_score_pass(pool, order_id="T")
+    assert km == 3.0
+
+
+def test_v3_hoist_inactive_under_v324a(monkeypatch):
+    """V3.24-A ON (default prod): hoist no-op — hard-reject >60 min należy do
+    warstwy B5 feasibility (werdykt finalny już przy budowie kandydata)."""
+    _flag(monkeypatch, True)
+    monkeypatch.setattr(dp.C, "ENABLE_V324A_SCHEDULE_INTEGRATION", True)
+    anchored_ps = FakeCand("600", 2.0, "pre_shift", False, total=88.0)
+    anchored_ps.metrics["shift_start_min"] = 45.0
+    pool = [anchored_ps, FakeCand("a", 4.0, "gps", False)]
+    rejected = dp._pre_shift_too_late_verdict_pass(pool, 10.0, order_id="T")
+    assert rejected == 0 and anchored_ps.feasibility_verdict == "MAYBE"
+
+
+def test_v3_hoist_rejected_shadow_score_consistency(monkeypatch):
+    """Spójność po odrzuceniu: (a) ZAKOTWICZONY pre_shift-NO nie jest celem
+    neutralizacji (road realny → score/metrics nietknięte); (b) SYNTETYCZNY
+    pre_shift-NO dalej dostaje shadow+apply (serializacja spójna; selekcja
+    i tak odfiltruje)."""
+    _flag(monkeypatch, True)
+    _v324a_off(monkeypatch)
+    anchored_ps = FakeCand("600", 1.0, "pre_shift", False, total=88.0)
+    anchored_ps.metrics["shift_start_min"] = 30.0
+    synth_ps = FakeCand("601", 1.1, "pre_shift", True, total=90.0)
+    synth_ps.metrics["shift_start_min"] = 40.0
+    pool = [anchored_ps, synth_ps, FakeCand("a", 4.0, "gps", False)]
+    rejected = dp._pre_shift_too_late_verdict_pass(pool, 10.0, order_id="T")
+    assert rejected == 2
+    km, applied = dp._nogps_neutral_score_pass(pool, order_id="T")
+    assert km == 4.0 and applied == 1
+    assert anchored_ps.score == 88.0
+    assert "bonus_nogps_neutral_km" not in anchored_ps.metrics
+    assert synth_ps.metrics["bonus_nogps_neutral_applied"] is True
+    assert synth_ps.score < 90.0
+
+
+def test_v3_hoist_wired_before_pass_single_predicate_source():
+    """Wiring: hoist wołany PRZED _nogps_neutral_score_pass w _assess_order_impl;
+    predykat `shift_min > prep_remaining_min + 0.01` istnieje w module DOKŁADNIE
+    RAZ (jedno źródło — pętla display go NIE powtarza)."""
+    src = inspect.getsource(dp)
+    i_hoist = src.find(
+        "_pre_shift_too_late_verdict_pass(candidates, prep_remaining_min, order_id)")
+    i_pass = src.find("_nogps_neutral_score_pass(\n        candidates, order_id)")
+    assert i_hoist != -1 and i_pass != -1 and i_hoist < i_pass
+    assert src.count("shift_min > prep_remaining_min + 0.01") == 1
+
+
+def test_v3_v324a_default_on_in_code_mutation_path_latent():
+    """Default kodu ENABLE_V324A_SCHEDULE_INTEGRATION = ON (env "1"), klucza NIE
+    ma w flags.json (stała modułowa, nie hot-reload) ⇒ legacy F1.8e w prodzie
+    LATENTNY. Zmiana defaultu = przeczytaj evidence NOGPS_NEUTRAL sekcja v3."""
+    assert common.ENABLE_V324A_SCHEDULE_INTEGRATION is True
+
+
 def test_on_off_delta_composes_with_equal_treatment_bucket():
     """Neutralizacja NIE dotyka pos_source/bucketów — equal-treatment składa się
     ortogonalnie (bucket z pos_source, score z pass). Kontrakt: pass nie pisze
