@@ -31,6 +31,11 @@ from dispatch_v2.common import (
     ENABLE_CZAS_KURIERA_PROPAGATION,
 )
 from dispatch_v2.osrm_client import haversine
+# NOGPS-NEUTRAL-SCORE (2026-07-19): jedno źródło klasy Unknown pozycji (F-3) +
+# s_dystans do przeliczenia neutralnego komponentu dystansu. Bez cyklu:
+# courier_resolver/scoring nie importują dispatch_pipeline na module-level.
+from dispatch_v2.courier_resolver import POSITION_UNKNOWN_SOURCES
+from dispatch_v2 import scoring as _scoring_nn
 from dispatch_v2.bag_state import build_courier_bag_state
 from dispatch_v2.fleet_context import build_fleet_context, FleetContext
 from dispatch_v2.pipeline_geometry import _point_to_segment_km, _min_dist_to_route_km  # noqa: F401 — B6: czysta geometria; kontrakt tożsamości (test_pipeline_geometry) + _dp._min_dist_to_route_km w core.candidates (K11)
@@ -728,6 +733,103 @@ def _new_delivered_at_dt(c, new_oid):
     if plan is None:
         return None
     return (getattr(plan, "predicted_delivered_at", {}) or {}).get(new_oid)
+
+
+def _nogps_neutral_score_pass(candidates, order_id=None):
+    """NOGPS-NEUTRAL-SCORE (2026-07-19, memory ziomek-nogps-center-score-bug-2026-07-19).
+
+    BUG: kurier bez GPS planowany w BIALYSTOK_CENTER (courier_resolver
+    _synthetic_pos_fallback) — ta fikcja zasilała SCORE (s_dystans=100·exp(-km/5)
+    z centrum ≈ sufit przy centralnych restauracjach), a F1.7 neutralizował
+    tylko DISPLAY (km=śr. floty) PO zamrożeniu score. Efekt: no-GPS 24.8% puli
+    → 50.5% zwycięzców (regresja ENABLE_NO_GPS_EQUAL_TREATMENT: zdjęty demote,
+    został ukryty bonus centrum). Komentarz F1.7 „score z centrum ~mediana floty,
+    nie faworyzuje" był FAŁSZYWYM założeniem.
+
+    FIX U ŹRÓDŁA: dla kandydatów, których road_km policzono z pozycji-fikcji
+    (metrics.road_km_from_synthetic_pos z core.candidates — anchor/bag-tail
+    ZOSTAJE realny) i pos_source ∈ POSITION_UNKNOWN_SOURCES, licz neutralny
+    dystans = MEDIANA road_km kandydatów o pozycji ZNANEJ (mediana, nie średnia —
+    rozkład prawoskośny) i PRZELICZ s_dystans/score. Jedna wartość napędza
+    i score, i display (kasuje rozjazd score↔display).
+
+    Kontrakt (compute-always-for-shadow, lekcja #186 / wzorzec #16):
+      - metryki bonus_nogps_neutral_* liczone ZAWSZE (auto-serializacja L1.1
+        LOCATION A+B przez prefix bonus_),
+      - APLIKACJA do c.score + metrics["score"] WYŁĄCZNIE za
+        ENABLE_NO_GPS_NEUTRAL_SCORE_DIST (decision_flag, default OFF) —
+        OFF = zachowanie bajt-w-bajt jak przed zmianą.
+    KOMPONUJE z ENABLE_NO_GPS_EQUAL_TREATMENT (bucket'y bez zmian — no-GPS
+    dalej konkuruje w bucket 0, ale po UCZCIWYM score). NIE flipować
+    equal-treatment OFF (przywraca starą karę — odwrotna nadkorekta).
+    post_wave/anchor/bag-tail: road realny ⇒ nietknięte z konstrukcji.
+
+    Zwraca (neutral_km, applied_count) — dla logu/testów. Fail-soft: wyjątek
+    per-kandydat nie psuje puli (hot path, Lekcja #32 — loguj, nie milcz).
+    """
+    known_kms = []
+    for c in candidates:
+        m = getattr(c, "metrics", None)
+        if not m:
+            continue
+        if m.get("road_km_from_synthetic_pos"):
+            continue
+        km = m.get("km_to_pickup")
+        if isinstance(km, (int, float)):
+            known_kms.append(float(km))
+    if known_kms:
+        known_kms.sort()
+        _n = len(known_kms)
+        _mid = _n // 2
+        neutral_km = (known_kms[_mid] if _n % 2 == 1
+                      else 0.5 * (known_kms[_mid - 1] + known_kms[_mid]))
+    else:
+        # Brak realnych kotwic w puli → mirror F1.7 fallback (5.0 km).
+        neutral_km = 5.0
+    apply_on = C.decision_flag("ENABLE_NO_GPS_NEUTRAL_SCORE_DIST")
+    applied = 0
+    sd_new = _scoring_nn.s_dystans(float(neutral_km))
+    for c in candidates:
+        m = getattr(c, "metrics", None)
+        if not m:
+            continue
+        if not (m.get("road_km_from_synthetic_pos")
+                and m.get("pos_source") in POSITION_UNKNOWN_SOURCES):
+            continue
+        try:
+            old_km = m.get("km_to_pickup")
+            if not isinstance(old_km, (int, float)):
+                continue
+            sr = m.get("score")
+            _comp = sr.get("components") if isinstance(sr, dict) else None
+            sd_old = (_comp.get("dystans")
+                      if isinstance(_comp, dict)
+                      and isinstance(_comp.get("dystans"), (int, float))
+                      else _scoring_nn.s_dystans(float(old_km)))
+            delta = round(_scoring_nn.W_DYSTANS * (sd_new - sd_old), 2)
+            # SHADOW ZAWSZE (flip-walidacja ETAP-5 czyta z shadow_decisions):
+            m["bonus_nogps_neutral_raw_km"] = round(float(old_km), 2)
+            m["bonus_nogps_neutral_km"] = round(float(neutral_km), 2)
+            m["bonus_nogps_neutral_dist_delta"] = delta
+            m["bonus_nogps_neutral_applied"] = bool(apply_on)
+            if apply_on:
+                c.score = c.score + delta
+                if isinstance(sr, dict):
+                    if isinstance(_comp, dict) and "dystans" in _comp:
+                        _comp["dystans"] = round(sd_new, 2)
+                    if isinstance(sr.get("total"), (int, float)):
+                        sr["total"] = round(sr["total"] + delta, 2)
+                applied += 1
+        except Exception as _nn_e:
+            log.warning(
+                f"NOGPS_NEUTRAL_SCORE fail-soft order={order_id} "
+                f"cid={getattr(c, 'courier_id', '?')}: "
+                f"{type(_nn_e).__name__}: {_nn_e}")
+    if applied:
+        log.info(
+            f"NOGPS_NEUTRAL_SCORE order={order_id} applied={applied} "
+            f"neutral_km={neutral_km:.2f} (median of {len(known_kms)} known)")
+    return neutral_km, applied
 
 
 def _objm_metric_min(c, k):
@@ -4558,6 +4660,13 @@ def _assess_order_impl(
         and c.metrics.get("km_to_pickup") is not None
     ]
     fleet_avg_km = (sum(real_kms) / len(real_kms)) if real_kms else 5.0
+    # NOGPS-NEUTRAL-SCORE (2026-07-19): PRZED nadpisaniem display niżej —
+    # shadow czyta surowe km_to_pickup (road z centrum) i liczy neutralizację
+    # score z MEDIANY realnych kotwic. Apply tylko za flagą (docstring pass).
+    # Pętla display używa per-kandydat metrics["bonus_nogps_neutral_applied"]
+    # (ustawia pass) — display podąża DOKŁADNIE za tym, co dostał score.
+    _nogps_neutral_km, _nogps_neutral_applied = _nogps_neutral_score_pass(
+        candidates, order_id)
     prep_remaining_min = 0.0
     if pickup_ready_at is not None:
         ready_utc = pickup_ready_at if pickup_ready_at.tzinfo else pickup_ready_at.replace(tzinfo=timezone.utc)
@@ -4575,7 +4684,13 @@ def _assess_order_impl(
     for c in candidates:
         ps = c.metrics.get("pos_source")
         if ps == "no_gps":
-            c.metrics["km_to_pickup"] = round(fleet_avg_km, 2)
+            # NOGPS-NEUTRAL-SCORE: gdy score zneutralizowany medianą (apply ON),
+            # display km = TA SAMA mediana (koniec rozjazdu display≈peers vs
+            # score=centrum). OFF / road realny (anchor) → legacy fleet_avg.
+            if c.metrics.get("bonus_nogps_neutral_applied"):
+                c.metrics["km_to_pickup"] = round(_nogps_neutral_km, 2)
+            else:
+                c.metrics["km_to_pickup"] = round(fleet_avg_km, 2)
             c.metrics["travel_min"] = round(no_gps_travel_min, 1)
             c.metrics["drive_min"] = round(no_gps_travel_min, 1)
             c.metrics["eta_pickup_utc"] = no_gps_eta_utc.isoformat()
@@ -4618,6 +4733,15 @@ def _assess_order_impl(
                         f"pre_shift_too_late (start za {shift_min:.0f} min, "
                         f"odbiór za {prep_remaining_min:.0f} min)"
                     )
+        elif c.metrics.get("bonus_nogps_neutral_applied"):
+            # NOGPS-NEUTRAL-SCORE: pozostałe syntetyki (pin / none /
+            # post_shift_start_synthetic / working_override_synthetic) z road_km
+            # z centrum — przy ON display km podąża za zneutralizowanym score
+            # (jedna wartość; bez brancha score=mediana a display=km-z-centrum
+            # byłby NOWYM rozjazdem). pre_shift ma jawnie km=None (wyżej, bez
+            # zmian); travel_min/ETA tych syntetyków NIETYKANE (osobna oś).
+            # OFF → elif martwy (bonus_nogps_neutral_applied=False) = bajt-parytet.
+            c.metrics["km_to_pickup"] = round(_nogps_neutral_km, 2)
 
         # L4 floor (2026-07-02): eta_pickup ≥ available_from. Pure floor — tylko
         # podnosi, nigdy nie obniża (zero regresji przez zaniżenie). Dla pre_shift
