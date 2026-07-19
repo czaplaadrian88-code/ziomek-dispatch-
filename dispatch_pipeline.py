@@ -31,6 +31,11 @@ from dispatch_v2.common import (
     ENABLE_CZAS_KURIERA_PROPAGATION,
 )
 from dispatch_v2.osrm_client import haversine
+# NOGPS-NEUTRAL-SCORE (2026-07-19): jedno źródło klasy Unknown pozycji (F-3) +
+# s_dystans do przeliczenia neutralnego komponentu dystansu. Bez cyklu:
+# courier_resolver/scoring nie importują dispatch_pipeline na module-level.
+from dispatch_v2.courier_resolver import POSITION_UNKNOWN_SOURCES
+from dispatch_v2 import scoring as _scoring_nn
 from dispatch_v2.bag_state import build_courier_bag_state
 from dispatch_v2.fleet_context import build_fleet_context, FleetContext
 from dispatch_v2.pipeline_geometry import _point_to_segment_km, _min_dist_to_route_km  # noqa: F401 — B6: czysta geometria; kontrakt tożsamości (test_pipeline_geometry) + _dp._min_dist_to_route_km w core.candidates (K11)
@@ -728,6 +733,157 @@ def _new_delivered_at_dt(c, new_oid):
     if plan is None:
         return None
     return (getattr(plan, "predicted_delivered_at", {}) or {}).get(new_oid)
+
+
+def _pre_shift_too_late_verdict_pass(candidates, prep_remaining_min, order_id=None):
+    """Legacy F1.8e pre_shift_too_late — JEDNO źródło predykatu (v3 HOIST po recenzji delty).
+
+    Kurier pre_shift nie zdąży na pickup_ready (start zmiany > prep_remaining):
+    hard exclude (verdict NO). Semantyka, komunikat i layer=L5 przeniesione 1:1
+    z pętli display F1.7, skąd blok został WYNIESIONY — pętla display już NIE
+    powtarza predykatu (zero duplikacji, jedno źródło).
+
+    POWÓD HOISTA (bloker recenzji delty v2): donor filter
+    `_nogps_neutral_score_pass` czyta `feasibility_verdict` w chwili passu —
+    werdykty muszą być FINALNE przed passem. ZAKOTWICZONY pre_shift
+    (anchor/bag-tail ⇒ road_km_from_synthetic_pos=False ⇒ donor) z przyszłym
+    NO zasilałby medianę kilometrem HARD-NO. Po hoiście: między passem a
+    selekcją NIE zachodzi już ŻADNA mutacja werdyktu w _assess_order_impl.
+
+    Aktywny TYLKO przy ENABLE_V324A_SCHEDULE_INTEGRATION=False (legacy —
+    stała modułowa, default ON, brak klucza w flags.json ⇒ w prodzie ścieżka
+    LATENTNA; przy ON hard-reject >60 min deleguje warstwa B5 feasibility —
+    PRZED budową kandydatów, więc werdykt i tak finalny przed passem).
+    Idempotentny (powtórny zapis NO = ten sam stan). Zwraca liczbę odrzuconych.
+    """
+    if C.ENABLE_V324A_SCHEDULE_INTEGRATION:
+        return 0
+    rejected = 0
+    for c in candidates:
+        m = getattr(c, "metrics", None)
+        if not m or m.get("pos_source") != "pre_shift":
+            continue
+        shift_min = float(m.get("shift_start_min") or 0.0)
+        if shift_min > prep_remaining_min + 0.01:
+            # L7.3: zapis werdyktu w L5 (feasibility) — kanonizowany przez setter
+            # (layer=L5 ⇒ garda cicha; zachowanie NIEZMIENIONE).
+            _set_feasibility_verdict(c, "NO", layer="L5", order_id=order_id)
+            c.feasibility_reason = (
+                f"pre_shift_too_late (start za {shift_min:.0f} min, "
+                f"odbiór za {prep_remaining_min:.0f} min)"
+            )
+            rejected += 1
+    return rejected
+
+
+def _nogps_neutral_score_pass(candidates, order_id=None):
+    """NOGPS-NEUTRAL-SCORE (2026-07-19, memory ziomek-nogps-center-score-bug-2026-07-19).
+
+    BUG: kurier bez GPS planowany w BIALYSTOK_CENTER (courier_resolver
+    _synthetic_pos_fallback) — ta fikcja zasilała SCORE (s_dystans=100·exp(-km/5)
+    z centrum ≈ sufit przy centralnych restauracjach), a F1.7 neutralizował
+    tylko DISPLAY (km=śr. floty) PO zamrożeniu score. Efekt: no-GPS 24.8% puli
+    → 50.5% zwycięzców (regresja ENABLE_NO_GPS_EQUAL_TREATMENT: zdjęty demote,
+    został ukryty bonus centrum). Komentarz F1.7 „score z centrum ~mediana floty,
+    nie faworyzuje" był FAŁSZYWYM założeniem.
+
+    FIX U ŹRÓDŁA: dla kandydatów, których road_km policzono z pozycji-fikcji
+    (metrics.road_km_from_synthetic_pos z core.candidates — anchor/bag-tail
+    ZOSTAJE realny) i pos_source ∈ POSITION_UNKNOWN_SOURCES, licz neutralny
+    dystans = MEDIANA road_km kandydatów o pozycji ZNANEJ **i wykonalnych**
+    (feasibility_verdict == "MAYBE" — v2 po recenzji adwersaryjnej pkt #2:
+    HARD-NO nie jest konkurentem, jego km nie może zniekształcać mediany;
+    mediana, nie średnia — rozkład prawoskośny) i PRZELICZ s_dystans/score.
+    Jedna wartość napędza i score, i display (kasuje rozjazd score↔display).
+
+    Kontrakt (compute-always-for-shadow, lekcja #186 / wzorzec #16):
+      - metryki bonus_nogps_neutral_* liczone ZAWSZE (auto-serializacja L1.1
+        LOCATION A+B przez prefix bonus_),
+      - APLIKACJA do c.score + metrics["score"] WYŁĄCZNIE za
+        ENABLE_NO_GPS_NEUTRAL_SCORE_DIST (decision_flag, default OFF) —
+        OFF = zachowanie bajt-w-bajt jak przed zmianą.
+    KOMPONUJE z ENABLE_NO_GPS_EQUAL_TREATMENT (bucket'y bez zmian — no-GPS
+    dalej konkuruje w bucket 0, ale po UCZCIWYM score). NIE flipować
+    equal-treatment OFF (przywraca starą karę — odwrotna nadkorekta).
+    post_wave/anchor/bag-tail: road realny ⇒ nietknięte z konstrukcji.
+
+    Zwraca (neutral_km, applied_count) — dla logu/testów. Fail-soft: wyjątek
+    per-kandydat nie psuje puli (hot path, Lekcja #32 — loguj, nie milcz).
+    """
+    known_kms = []
+    for c in candidates:
+        m = getattr(c, "metrics", None)
+        if not m:
+            continue
+        if m.get("road_km_from_synthetic_pos"):
+            continue
+        # v2 (recenzja adwersaryjna pkt #2): donor mediany = WYKONALNY konkurent.
+        # Kanon werdyktu = pole `feasibility_verdict` ("MAYBE"|"NO", filtr selekcji
+        # core/selection.py). HARD-NO (post-shift, R-35MIN, pickup_too_far…) nie
+        # konkuruje o zlecenie, więc jego km nie może zniekształcać neutralnego
+        # dystansu. Werdykty w chwili passu są FINALNE (v3): L5 przy budowie
+        # kandydata + legacy F1.8e pre_shift_too_late WYNIESIONY przed pass
+        # (_pre_shift_too_late_verdict_pass — zakotwiczony pre_shift ma road
+        # realny ⇒ JEST donorem, jego NO musi zapaść przed medianą).
+        if getattr(c, "feasibility_verdict", None) != "MAYBE":
+            continue
+        km = m.get("km_to_pickup")
+        if isinstance(km, (int, float)):
+            known_kms.append(float(km))
+    if known_kms:
+        known_kms.sort()
+        _n = len(known_kms)
+        _mid = _n // 2
+        neutral_km = (known_kms[_mid] if _n % 2 == 1
+                      else 0.5 * (known_kms[_mid - 1] + known_kms[_mid]))
+    else:
+        # 0 donorów (brak realnych kotwic ALBO wszystkie HARD-NO) →
+        # mirror F1.7 fallback (5.0 km).
+        neutral_km = 5.0
+    apply_on = C.decision_flag("ENABLE_NO_GPS_NEUTRAL_SCORE_DIST")
+    applied = 0
+    sd_new = _scoring_nn.s_dystans(float(neutral_km))
+    for c in candidates:
+        m = getattr(c, "metrics", None)
+        if not m:
+            continue
+        if not (m.get("road_km_from_synthetic_pos")
+                and m.get("pos_source") in POSITION_UNKNOWN_SOURCES):
+            continue
+        try:
+            old_km = m.get("km_to_pickup")
+            if not isinstance(old_km, (int, float)):
+                continue
+            sr = m.get("score")
+            _comp = sr.get("components") if isinstance(sr, dict) else None
+            sd_old = (_comp.get("dystans")
+                      if isinstance(_comp, dict)
+                      and isinstance(_comp.get("dystans"), (int, float))
+                      else _scoring_nn.s_dystans(float(old_km)))
+            delta = round(_scoring_nn.W_DYSTANS * (sd_new - sd_old), 2)
+            # SHADOW ZAWSZE (flip-walidacja ETAP-5 czyta z shadow_decisions):
+            m["bonus_nogps_neutral_raw_km"] = round(float(old_km), 2)
+            m["bonus_nogps_neutral_km"] = round(float(neutral_km), 2)
+            m["bonus_nogps_neutral_dist_delta"] = delta
+            m["bonus_nogps_neutral_applied"] = bool(apply_on)
+            if apply_on:
+                c.score = c.score + delta
+                if isinstance(sr, dict):
+                    if isinstance(_comp, dict) and "dystans" in _comp:
+                        _comp["dystans"] = round(sd_new, 2)
+                    if isinstance(sr.get("total"), (int, float)):
+                        sr["total"] = round(sr["total"] + delta, 2)
+                applied += 1
+        except Exception as _nn_e:
+            log.warning(
+                f"NOGPS_NEUTRAL_SCORE fail-soft order={order_id} "
+                f"cid={getattr(c, 'courier_id', '?')}: "
+                f"{type(_nn_e).__name__}: {_nn_e}")
+    if applied:
+        log.info(
+            f"NOGPS_NEUTRAL_SCORE order={order_id} applied={applied} "
+            f"neutral_km={neutral_km:.2f} (median of {len(known_kms)} known)")
+    return neutral_km, applied
 
 
 def _objm_metric_min(c, k):
@@ -2630,7 +2786,9 @@ def _set_feasibility_verdict(cand, verdict, *, layer, order_id=None) -> None:
     MAPA zapisów `feasibility_verdict` (2026-07-03, cały repo):
       • L5 (dozwolone): dispatch_pipeline._v327_eval_courier_inner Candidate(verdict=…) [konstruktor],
         _v328_eval_safe Candidate(verdict="MAYBE") [konstruktor], solo Candidate(verdict=sv)
-        [konstruktor], legacy F1.8e pre_shift `c.feasibility_verdict="NO"` (ten setter, layer=L5).
+        [konstruktor], legacy F1.8e pre_shift `c.feasibility_verdict="NO"` (ten setter, layer=L5;
+        od v3 NOGPS-NEUTRAL w `_pre_shift_too_late_verdict_pass` — hoist PRZED
+        `_nogps_neutral_score_pass`, żeby donor filter mediany widział finalne werdykty).
       • L7 (naruszenie, kanalizowane tu): FEAS_CARRY_READMIT `_fcr_cand→"MAYBE"` (layer=L7_selekcja).
       • Bliźniak best_effort↔objm_lexr6: NIE zapisuje verdiktu (tylko REORDER) — brak setterów.
     """
@@ -4562,6 +4720,18 @@ def _assess_order_impl(
     if pickup_ready_at is not None:
         ready_utc = pickup_ready_at if pickup_ready_at.tzinfo else pickup_ready_at.replace(tzinfo=timezone.utc)
         prep_remaining_min = max(0.0, (ready_utc.astimezone(timezone.utc) - now).total_seconds() / 60.0)
+    # v3 HOIST (recenzja delty): legacy F1.8e pre_shift_too_late PRZED passem
+    # neutralizacji — donor filter mediany musi widzieć FINALNE werdykty
+    # (zakotwiczony pre_shift ma road realny ⇒ jest donorem). Predykat 1:1
+    # wyniesiony z pętli display niżej (tam już NIE powtarzany).
+    _pre_shift_too_late_verdict_pass(candidates, prep_remaining_min, order_id)
+    # NOGPS-NEUTRAL-SCORE (2026-07-19): PRZED nadpisaniem display niżej —
+    # shadow czyta surowe km_to_pickup (road z centrum) i liczy neutralizację
+    # score z MEDIANY realnych kotwic. Apply tylko za flagą (docstring pass).
+    # Pętla display używa per-kandydat metrics["bonus_nogps_neutral_applied"]
+    # (ustawia pass) — display podąża DOKŁADNIE za tym, co dostał score.
+    _nogps_neutral_km, _nogps_neutral_applied = _nogps_neutral_score_pass(
+        candidates, order_id)
     no_gps_travel_min = max(15.0, prep_remaining_min)
     no_gps_eta_utc = now + timedelta(minutes=no_gps_travel_min)
 
@@ -4575,7 +4745,13 @@ def _assess_order_impl(
     for c in candidates:
         ps = c.metrics.get("pos_source")
         if ps == "no_gps":
-            c.metrics["km_to_pickup"] = round(fleet_avg_km, 2)
+            # NOGPS-NEUTRAL-SCORE: gdy score zneutralizowany medianą (apply ON),
+            # display km = TA SAMA mediana (koniec rozjazdu display≈peers vs
+            # score=centrum). OFF / road realny (anchor) → legacy fleet_avg.
+            if c.metrics.get("bonus_nogps_neutral_applied"):
+                c.metrics["km_to_pickup"] = round(_nogps_neutral_km, 2)
+            else:
+                c.metrics["km_to_pickup"] = round(fleet_avg_km, 2)
             c.metrics["travel_min"] = round(no_gps_travel_min, 1)
             c.metrics["drive_min"] = round(no_gps_travel_min, 1)
             c.metrics["eta_pickup_utc"] = no_gps_eta_utc.isoformat()
@@ -4601,23 +4777,21 @@ def _assess_order_impl(
                 c.metrics["travel_min_cal"] = calib_maps.eta_quantile_calibrate(shift_min, now)
             # V3.24-A: eta_pickup_utc dla pre_shift = shift_start (clamp aktywny).
             c.metrics["v324a_pickup_clamped_to_shift_start"] = True
-            if C.ENABLE_V324A_SCHEDULE_INTEGRATION:
-                # V3.24-A zastępuje legacy F1.8e hard reject gradient extension_penalty
-                # (applied w scoring layer B5). Hard reject tylko gdy extension > 60 min
-                # — delegowane do feasibility layer B5. Tu pozostawiamy MAYBE.
-                pass
-            else:
-                # Legacy F1.8e: hard exclude jeśli pre_shift kurier nie zdąży na pickup_ready.
-                # Bez tego scoring promuje go pomimo niedostępności (np. odbiór za 26
-                # min, kurier startuje za 46 min → nie zdąży).
-                if shift_min > prep_remaining_min + 0.01:
-                    # L7.3: zapis werdyktu w L5 (feasibility) — kanonizowany przez setter
-                    # (layer=L5 ⇒ garda cicha; zachowanie NIEZMIENIONE).
-                    _set_feasibility_verdict(c, "NO", layer="L5", order_id=order_id)
-                    c.feasibility_reason = (
-                        f"pre_shift_too_late (start za {shift_min:.0f} min, "
-                        f"odbiór za {prep_remaining_min:.0f} min)"
-                    )
+            # Legacy F1.8e pre_shift_too_late (hard exclude gdy nie zdąży na
+            # pickup_ready; V3.24-A ON deleguje >60 min do warstwy B5) —
+            # WYNIESIONY do _pre_shift_too_late_verdict_pass (v3 hoist, wołany
+            # PRZED _nogps_neutral_score_pass): donor filter mediany musi
+            # widzieć FINALNE werdykty. Tu ZERO powtórzenia predykatu (jedno
+            # źródło prawdy); display tego brancha bez zmian.
+        elif c.metrics.get("bonus_nogps_neutral_applied"):
+            # NOGPS-NEUTRAL-SCORE: pozostałe syntetyki (pin / none /
+            # post_shift_start_synthetic / working_override_synthetic) z road_km
+            # z centrum — przy ON display km podąża za zneutralizowanym score
+            # (jedna wartość; bez brancha score=mediana a display=km-z-centrum
+            # byłby NOWYM rozjazdem). pre_shift ma jawnie km=None (wyżej, bez
+            # zmian); travel_min/ETA tych syntetyków NIETYKANE (osobna oś).
+            # OFF → elif martwy (bonus_nogps_neutral_applied=False) = bajt-parytet.
+            c.metrics["km_to_pickup"] = round(_nogps_neutral_km, 2)
 
         # L4 floor (2026-07-02): eta_pickup ≥ available_from. Pure floor — tylko
         # podnosi, nigdy nie obniża (zero regresji przez zaniżenie). Dla pre_shift

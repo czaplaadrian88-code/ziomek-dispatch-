@@ -329,6 +329,14 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_R_RETURN_TO_RESTAURANT_VETO",
     "ENABLE_PLAN_RECHECK_TIER_DWELL",
     "ENABLE_NO_GPS_EQUAL_TREATMENT",
+    # NOGPS-NEUTRAL-SCORE (2026-07-19, bug ziomek-nogps-center-score-bug):
+    # neutralizacja s_dystans/score dla kandydatów z road_km z pozycji-fikcji
+    # BIALYSTOK_CENTER (pos_source ∈ POSITION_UNKNOWN_SOURCES, bez anchor/bag-tail)
+    # medianą road_km realnych kotwic puli. Shadow (bonus_nogps_neutral_*) ZAWSZE;
+    # apply+display za flagą. Komponuje z EQUAL_TREATMENT (bucket'y nietknięte).
+    # Default OFF; flip po cieniu (winner-share no-GPS → ~pula) + ACK.
+    # Konsument: dispatch_pipeline._nogps_neutral_score_pass. Stała-fallback niżej.
+    "ENABLE_NO_GPS_NEUTRAL_SCORE_DIST",
     "ENABLE_OBJM_LEXR6_SELECT",
     # CZASÓWKA-W-UWAGACH SHADOW (2026-06-28, sesja 20, zlec. 484034 Sikorskiego):
     # parsuje deklarowany deadline DOSTAWY z free-text `uwagi` ("Czasówka na 17:10")
@@ -1636,6 +1644,15 @@ ENABLE_NO_GPS_EQUAL_TREATMENT = _os.environ.get("ENABLE_NO_GPS_EQUAL_TREATMENT",
 # także w bucketach selekcji (tiering + best_effort) i nie są demotowane. Kanon = flags.json
 # (hot-reload), stała = fallback. Pomiar przed flipem: 359 flipów/tydz (tools/nogps_preshift_bucket_replay.py).
 ENABLE_EQUAL_TREATMENT_BUCKET = _os.environ.get("ENABLE_EQUAL_TREATMENT_BUCKET", "0") == "1"
+# NOGPS-NEUTRAL-SCORE (2026-07-19): equal-treatment zdjął KARĘ (demote), ale
+# zostawił ukryty BONUS centrum — score liczony z syntetycznego BIALYSTOK_CENTER
+# (~1-3 km od centralnych restauracji → s_dystans przy suficie), a F1.7
+# neutralizował tylko DISPLAY. Dane 16-19.07: no-GPS 24.8% puli → 50.5%
+# zwycięzców, 66% wygranych w pulach mieszanych. Flaga ON → score liczony
+# z MEDIANY road_km realnych kotwic puli (jedna wartość napędza score i display).
+# NIE flipować EQUAL_TREATMENT off zamiast tego (odwrotna nadkorekta — wraca
+# stara kara). Kanon = flags.json (hot-reload), stała = fallback, default OFF.
+ENABLE_NO_GPS_NEUTRAL_SCORE_DIST = _os.environ.get("ENABLE_NO_GPS_NEUTRAL_SCORE_DIST", "0") == "1"
 
 # R-DECLARED TRIPWIRE (L7.1, audyt 2026-06-30 root R7-I-E): reguła biznesowa
 # R-DECLARED-TIME (HARD) — `czas_kuriera >= czas_odbioru_timestamp` (deklarowany

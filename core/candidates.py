@@ -29,6 +29,11 @@ from dispatch_v2 import scoring
 from dispatch_v2 import calib_maps
 from dispatch_v2 import eta_load_aware
 from dispatch_v2 import pln_objective
+# NOGPS-NEUTRAL-SCORE (2026-07-19): JEDNO źródło klasy Known|Unknown pozycji
+# (F-3, courier_resolver) — konsumowane przy klasyfikacji road_km (czy dystans
+# do odbioru policzono z pozycji-fikcji BIALYSTOK_CENTER, czy z realnej kotwicy).
+# Bez cyklu importu: courier_resolver nie importuje core.* ani dispatch_pipeline.
+from dispatch_v2.courier_resolver import is_position_known
 from dispatch_v2.observability import stage_timing as _ST
 
 
@@ -466,12 +471,17 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
                 # Anchor is drop → no clear "po odbiorze" semantyka
                 bundle_level2 = None
                 bundle_level2_dist = None
+    # NOGPS-NEUTRAL-SCORE (2026-07-19): śledzimy, czy start-pos dla road_km
+    # została nadpisana REALNĄ kotwicą (anchor / bag-tail delivery_coords) —
+    # wtedy road_km NIE pochodzi z syntetycznej pozycji kuriera.
+    _v326_bag_tail_used = False
     if not v326_anchor_used and bag_sim and plan is not None and plan.sequence:
         # Legacy fallback: chronological last drop in sequence
         _bag_by_oid = {o.order_id: o for o in bag_sim}
         _bag_in_seq = [oid for oid in plan.sequence if oid in _bag_by_oid]
         if _bag_in_seq:
             effective_start_pos = tuple(_bag_by_oid[_bag_in_seq[-1]].delivery_coords)
+            _v326_bag_tail_used = True
 
     # F1.7 fix: travel_min = plan-based (uwzględnia bag + waiting na pickup_ready),
     # używane przez compute_assign_time. Display ETA jest osobne (drive_min).
@@ -484,6 +494,18 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     # post #28 cz.1; cid=508/523 z bag=469087). Mirror _sanitize_courier_pos pattern.
     effective_start_pos = _sanitize_courier_pos(effective_start_pos) or effective_start_pos
     km_to_pickup_haversine = haversine(effective_start_pos, pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+
+    # NOGPS-NEUTRAL-SCORE (2026-07-19, bug ziomek-nogps-center-score-bug):
+    # road_km policzony z SYNTETYCZNEJ pozycji kuriera (BIALYSTOK_CENTER fiction
+    # z courier_resolver._synthetic_pos_fallback), a nie z realnej kotwicy?
+    # True ⇔ pozycja RAW kuriera jest Unknown (F-3 is_position_known — jedno
+    # źródło klasyfikacji) ORAZ start-pos NIE została nadpisana anchor/bag-tail.
+    # Konsument: dispatch_pipeline._nogps_neutral_score_pass (post-loop) —
+    # shadow zawsze, neutralizacja s_dystans/score za ENABLE_NO_GPS_NEUTRAL_SCORE_DIST.
+    road_km_from_synthetic_pos = (
+        not is_position_known(getattr(cs, "pos_source", None))
+        and not (v326_anchor_used or _v326_bag_tail_used)
+    )
 
     # V3.26 Bug C strict mode (2026-04-25): "po drodze" semantyka.
     # Pre-fix bundle_level3 fires na pure geometric (dev<2km) — Adrian's
@@ -1846,6 +1868,9 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         "plan_expected_version": _plan_expected_version,
         "score": score_result,
         "km_to_pickup": round(km_to_pickup_haversine, 2),
+        # NOGPS-NEUTRAL-SCORE (2026-07-19): road_km z pozycji-fikcji (centrum)?
+        # Konsument: _nogps_neutral_score_pass (neutralizacja score) + display.
+        "road_km_from_synthetic_pos": road_km_from_synthetic_pos,
         # V3.26 Bug A complete: anchor restaurant for Telegram label clarification.
         "v326_anchor_restaurant": v326_anchor_restaurant,
         "v326_anchor_used": v326_anchor_used,
