@@ -54,9 +54,12 @@ writerzy sekwencji kanonu przechodzą przez te dwie funkcje.
 from __future__ import annotations
 
 import json
+import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+_log = logging.getLogger("dispatch.operator_route_override")
 
 # Ścieżki jak w plan_recheck (żywy stan POZA repo). Testy monkeypatchują.
 OVERRIDES_PATH = "/root/.openclaw/workspace/dispatch_state/operator_route_overrides.json"
@@ -74,6 +77,25 @@ COMMITTED_LATE_LOG_TOL_MIN = 5.0
 # recanon per zdarzenie → bez dedupu przeterminowany wpis spamowałby jsonl).
 _EMITTED: set = set()
 _EMITTED_MAX = 512
+
+# v2 (NO-GO Sola 2026-07-19): set_at z przyszłości poza skew = invalid_set_at.
+SET_AT_FUTURE_SKEW_MIN = 2.0
+
+# Cache dokumentu po (path, mtime_ns, size): parse WYŁĄCZNIE przy zmianie pliku,
+# brak pliku = pojedynczy os.stat (koszt OFF — Sol pkt 6). Corrupt też cache'owany
+# (bez re-parse spamu aż do zmiany mtime). "parses" = licznik dowodowy do testu.
+_DOC_CACHE: Dict[str, Any] = {"path": None, "sig": None, "doc": None,
+                              "err": None, "parses": 0}
+
+
+def _r27_alert_threshold_min() -> float:
+    """Próg ALERT dla spóźnienia vs committed — wspólny z bramką BUG C
+    (COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN, default 10.0)."""
+    try:
+        from dispatch_v2 import common as C
+        return float(getattr(C, "COMMIT_DIVERGENCE_VERDICT_KOORD_MIN_MIN", 10.0))
+    except Exception:
+        return 10.0
 
 
 def _under_pytest() -> bool:
@@ -126,27 +148,46 @@ def _flag_on() -> bool:
         return False
 
 
-def _read_entry(cid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """(wpis dla cid | None, powód błędu pliku | None). Brak pliku/wpisu = cicho.
-    Uszkodzony plik = ("file_corrupt") — fail-open u callera."""
+def _load_doc() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """(doc | None, błąd pliku | None) z cache po (mtime_ns, size). Brak pliku =
+    pojedynczy stat i czysty (None, None)."""
     path = OVERRIDES_PATH
-    if _under_pytest() and path == _DEFAULT_OVERRIDES_PATH:
-        return None, None  # hermetyczność: testy nie czytają żywego stanu
     try:
-        if not os.path.exists(path):
-            return None, None
-        with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
+        st = os.stat(path)
     except FileNotFoundError:
         return None, None
     except Exception:
         return None, "file_corrupt"
-    if not isinstance(doc, dict):
-        return None, "file_corrupt"
-    co = doc.get("courier_overrides")
-    if not isinstance(co, dict):
-        return None, "file_corrupt"
-    entry = co.get(str(cid))
+    sig = (st.st_mtime_ns, st.st_size)
+    if _DOC_CACHE["path"] == path and _DOC_CACHE["sig"] == sig:
+        return _DOC_CACHE["doc"], _DOC_CACHE["err"]
+    doc: Optional[Dict[str, Any]] = None
+    err: Optional[str] = None
+    _DOC_CACHE["parses"] += 1
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        if isinstance(raw, dict) and isinstance(raw.get("courier_overrides"), dict):
+            doc = raw
+        else:
+            err = "file_corrupt"
+    except Exception:
+        err = "file_corrupt"
+    _DOC_CACHE.update({"path": path, "sig": sig, "doc": doc, "err": err})
+    return doc, err
+
+
+def _read_entry(cid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """(wpis dla cid | None, powód błędu pliku | None). Brak pliku/wpisu = cicho.
+    Uszkodzony plik = ("file_corrupt") — fail-open u callera."""
+    if _under_pytest() and OVERRIDES_PATH == _DEFAULT_OVERRIDES_PATH:
+        return None, None  # hermetyczność: testy nie czytają żywego stanu
+    doc, err = _load_doc()
+    if err is not None:
+        return None, err
+    if doc is None:
+        return None, None
+    entry = doc["courier_overrides"].get(str(cid))
     if entry is None:
         return None, None
     if not isinstance(entry, dict):
@@ -155,9 +196,10 @@ def _read_entry(cid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
 
 
 def _ttl_min(entry: Dict[str, Any]) -> float:
+    """ttl_min z wpisu; brak / śmieć / <=0 → default 120 (kontrakt v2, Sol pkt 5)."""
     try:
         v = float(entry.get("ttl_min", DEFAULT_TTL_MIN))
-        return v if v > 0 else 0.0
+        return v if v > 0 else DEFAULT_TTL_MIN
     except Exception:
         return DEFAULT_TTL_MIN
 
@@ -231,10 +273,14 @@ def pin_stops(cid: str, stops: List[dict], oids: List[str],
     if now is None:
         now = datetime.now(timezone.utc)
     try:
+        # Flaga PRZED jakimkolwiek I/O pliku (koszt OFF — Sol pkt 6; load_flags
+        # ma własny cache mtime/TTL). Odczyt pliku niżej: brak = 1 stat, obecny
+        # = parse tylko przy zmianie mtime (_load_doc). Cień would_apply przy
+        # OFF zostaje (wymóg E briefu) — kosztuje stat, nie parse.
+        flag_on = _flag_on()
         entry, err = _read_entry(cid)
         if entry is None and err is None:
-            return stops, None  # brak pliku/wpisu — zero kosztu, zero szumu
-        flag_on = _flag_on()
+            return stops, None  # brak pliku/wpisu — zero szumu, koszt 1 stat
         base = {"stops": len(stops), "flag_on": flag_on}
         if err == "file_corrupt":
             _emit("rejected", cid, now, dedup_key=("file_corrupt",),
@@ -249,6 +295,12 @@ def pin_stops(cid: str, stops: List[dict], oids: List[str],
             _emit("rejected", cid, now,
                   dedup_key=("malformed", str((entry or {}).get("set_at"))),
                   reason="malformed", **base)
+            return stops, None
+        if (set_at - now) > timedelta(minutes=SET_AT_FUTURE_SKEW_MIN):
+            # set_at z przyszłości poza skew zegarów = wpis niewiarygodny
+            _emit("rejected", cid, now,
+                  dedup_key=("invalid_set_at", entry.get("set_at")),
+                  reason="invalid_set_at", **base)
             return stops, None
         ttl = _ttl_min(entry)
         age_min = (now - set_at).total_seconds() / 60.0
@@ -297,14 +349,21 @@ def pin_stops(cid: str, stops: List[dict], oids: List[str],
 
 
 def emit_applied(cid: str, ctx: Dict[str, Any], final_stops: List[dict],
-                 orders_state: Dict[str, Any], now: Optional[datetime] = None) -> None:
+                 orders_state: Dict[str, Any], now: Optional[datetime] = None,
+                 hard_breaches: Optional[List[dict]] = None) -> None:
     """Po UDANYM zapisie planu z pinem: jedno zdarzenie applied z finalnymi
-    czasami + lista naruszeń okna committed (odbiór > czas_kuriera + tol) —
-    zobowiązanie NIE jest zmieniane, tylko jawnie logowane (R27)."""
+    czasami + naruszenia okna committed (odbiór > czas_kuriera + tol; wpis z
+    late > progu BUG C dostaje `alert` i WARNING rangi ALERT) + wynik ewaluacji
+    HARD po pinie (`hard_breaches` z plan_recheck: r6/no_return). Polityka
+    przypięta (CTO 2026-07-19): sekwencję WYKONUJEMY (koordynator nadzoruje),
+    naruszenia raportujemy GŁOŚNO — zobowiązanie czas_kuriera NIEZMIENIONE,
+    zero veta poza technicznym (retime_failed)."""
     if now is None:
         now = datetime.now(timezone.utc)
     try:
+        thr = _r27_alert_threshold_min()
         breaches = []
+        r27_alert = False
         for s in final_stops:
             if s.get("type") != "pickup":
                 continue
@@ -315,10 +374,37 @@ def emit_applied(cid: str, ctx: Dict[str, Any], final_stops: List[dict],
                 continue
             late_min = (pred - ck).total_seconds() / 60.0
             if late_min > COMMITTED_LATE_LOG_TOL_MIN:
-                breaches.append({"oid": oid, "late_min": round(late_min, 1)})
+                b = {"oid": oid, "late_min": round(late_min, 1),
+                     "alert": bool(late_min > thr)}
+                r27_alert = r27_alert or b["alert"]
+                breaches.append(b)
+        hb = list(hard_breaches or [])
+        if r27_alert:
+            _log.warning(
+                "OPERATOR-OVERRIDE R27 ALERT cid=%s late>%.0fmin breaches=%s — "
+                "zobowiązanie NIEZMIENIONE, sekwencja wykonana (koordynator "
+                "poinformowany przez badge/event)", cid, thr,
+                [b for b in breaches if b.get("alert")])
         _emit("applied", str(cid), now, stops=len(final_stops), flag_on=True,
               set_by=ctx.get("set_by"), set_at=ctx.get("set_at"),
               ttl_min=ctx.get("ttl_min"), changed=bool(ctx.get("changed")),
-              committed_breaches=breaches)
+              committed_breaches=breaches, r27_alert=r27_alert,
+              hard_breaches=hb)
+    except Exception:
+        pass
+
+
+def emit_retime_failed(cid: str, ctx: Optional[Dict[str, Any]], stops_count: int,
+                       now: Optional[datetime] = None) -> None:
+    """VETO TECHNICZNE (jedyne dozwolone politykę przypiętą): pin przestawił
+    stopy, ale czasów nowej sekwencji nie dało się przeliczyć (OSRM/coords) →
+    zapis PRZERWANY, poprzedni plan nietknięty. Bez dedupu — każda odmowa ma
+    być widoczna w cieniu (powtórki = czas trwania awarii OSRM)."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    try:
+        _emit("rejected", str(cid), now, reason="retime_failed",
+              stops=int(stops_count), flag_on=True,
+              set_by=(ctx or {}).get("set_by"), set_at=(ctx or {}).get("set_at"))
     except Exception:
         pass

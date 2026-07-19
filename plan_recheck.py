@@ -925,11 +925,27 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     _op_pin_ctx = None
     try:
         from dispatch_v2 import operator_route_override as _op_ovr
-        stops, _op_pin_ctx = _op_ovr.pin_stops(cid, stops, oids, orders_state, now)
-        if _op_pin_ctx is not None and _op_pin_ctx.get("changed"):
-            _op_re = _retime_stops(stops, pos, anchor_departure, orders_state, now)
-            if _op_re is not None:
-                stops = _op_re
+        _op_stops, _op_ctx = _op_ovr.pin_stops(cid, stops, oids, orders_state, now)
+        if _op_ctx is not None and _op_ctx.get("changed"):
+            try:
+                _op_re = _retime_stops(_op_stops, pos, anchor_departure, orders_state, now)
+            except Exception:
+                _op_re = None
+            if _op_re is None:
+                # v2 ABORT (Sol pkt 3): pin przestawił stopy, a czasów nowej
+                # sekwencji NIE umiemy policzyć → NIE zapisujemy przestawionej
+                # kolejności ze starymi czasami; poprzedni plan zostaje
+                # NIETKNIĘTY. Veto wyłącznie techniczne (polityka przypięta).
+                _op_ovr.emit_retime_failed(cid, _op_ctx, len(_op_stops), now)
+                _log.warning(
+                    f"OPERATOR-OVERRIDE RETIME FAIL cid={cid} — regen przerwany "
+                    f"(keep existing, veto techniczne)")
+                return False
+            stops, _op_pin_ctx = _op_re, _op_ctx
+        elif _op_ctx is not None:
+            stops, _op_pin_ctx = _op_stops, _op_ctx  # kolejność już operatora
+        else:
+            stops = _op_stops  # pin nieaktywny — wejście bez zmian
     except Exception as e:
         _op_pin_ctx = None
         _log.warning(f"operator_route_override(gen) cid={cid} fail: {type(e).__name__}: {e}")
@@ -1010,7 +1026,15 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         return False
     if _op_pin_ctx is not None:
         try:
-            _op_ovr.emit_applied(cid, _op_pin_ctx, stops, orders_state, now)
+            # v2: ewaluacja HARD po pinie (read-only) — wynik do eventu applied
+            # + WARNING; wykonujemy mimo naruszeń (polityka przypięta).
+            _op_hb = _operator_pin_hard_report(stops, orders_state)
+            if _op_hb:
+                _log.warning(
+                    f"OPERATOR-OVERRIDE HARD BREACH cid={cid} breaches={_op_hb} "
+                    f"(koordynator poinformowany przez badge/event)")
+            _op_ovr.emit_applied(cid, _op_pin_ctx, stops, orders_state, now,
+                                 hard_breaches=_op_hb)
         except Exception:
             pass
     _log.info(
@@ -1125,20 +1149,21 @@ def _l3_bump(key: str, n: int = 1) -> None:
     _L3_GATE_STATS[key] = _L3_GATE_STATS.get(key, 0) + n
 
 
-def _l3_bag_time_max_min(stops, orders_state) -> Optional[float]:
-    """Max R6 czas termiczny (carried-age, min) w worku dla DANEJ (już
+def _l3_bag_time_ages(stops, orders_state) -> Dict[str, float]:
+    """R6 czas termiczny (carried-age, min) PER ZLECENIE dla DANEJ (już
     re-czasowanej) kolejności stopów. Kotwica per zlecenie: picked_up_at
     (niesione — przez _sim_picked_up_at) / czas_kuriera_warsaw (committed ready) /
     predicted_at odbioru (fallback) — 1:1 z doktryną r6_thermal_anchor +
-    _r6_thermal_bag_min. Wszystkie aware → delty bezpieczne. None gdy brak
-    dostawy z policzalnym czasem."""
+    _r6_thermal_bag_min. Wszystkie aware → delty bezpieczne. JEDNO źródło dla
+    `_l3_bag_time_max_min` (max) i raportu HARD pinu operatora (per-order) —
+    świadomie delegacja zamiast drugiej kopii pętli (anty-bliźniak)."""
     pickup_pred: Dict[str, datetime] = {}
     for s in stops:
         if s.get("type") == "pickup":
             pp = _parse_dt(s.get("predicted_at"))
             if pp is not None:
                 pickup_pred.setdefault(str(s.get("order_id")), pp)
-    worst: Optional[float] = None
+    ages: Dict[str, float] = {}
     for s in stops:
         if s.get("type") != "dropoff":
             continue
@@ -1156,9 +1181,16 @@ def _l3_bag_time_max_min(stops, orders_state) -> Optional[float]:
         if anchor is None:
             continue
         age = (drop - anchor).total_seconds() / 60.0
-        if worst is None or age > worst:
-            worst = age
-    return worst
+        if oid not in ages or age > ages[oid]:
+            ages[oid] = age
+    return ages
+
+
+def _l3_bag_time_max_min(stops, orders_state) -> Optional[float]:
+    """Max z `_l3_bag_time_ages` (kompatybilność: None gdy brak dostawy z
+    policzalnym czasem)."""
+    ages = _l3_bag_time_ages(stops, orders_state)
+    return max(ages.values()) if ages else None
 
 
 def _l3_hard_breach(stops, orders_state, pos, anchor_departure, now) -> Dict[str, Any]:
@@ -1889,6 +1921,44 @@ def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None)
     return seq
 
 
+def _operator_pin_hard_report(final_stops, orders_state) -> List[Dict[str, Any]]:
+    """v2 (polityka przypięta CTO 2026-07-19 po NO-GO Sola): read-only ewaluacja
+    HARD po pinie operatora, na FINALNYCH (już re-czasowanych) stopach. Sekwencję
+    WYKONUJEMY (koordynator nadzoruje — precedens carried-first relax), naruszenia
+    raportujemy GŁOŚNO w evencie applied + WARNING. Zero veta (veto wyłącznie
+    techniczne = retime_failed).
+
+    Wymiary: r6 = carried-age per zlecenie > BAG_TIME_HARD_MAX_MIN (kotwica 1:1
+    z L3 przez `_l3_bag_time_ages`; `alarm40` = przekroczony poziom Alarmu OD-07);
+    no_return = detektor Z-RULE `_detect_departed_pickup_revisit` (ta sama
+    semantyka co F6, bez seedu carried — parytet z detekcją inwariantów).
+    Grafik: niepoliczalny osobno — retime startuje z kotwicy `_start_anchor`
+    (+floor available_from w _gen), więc czas przed startem zmiany nie może
+    powstać z pinu (N-D, patrz evidence). Fail-soft: błąd → pusta lista."""
+    breaches: List[Dict[str, Any]] = []
+    try:
+        ages = _l3_bag_time_ages(final_stops, orders_state)
+        try:
+            from dispatch_v2 import common as _C_h
+            _hard = float(getattr(_C_h, "BAG_TIME_HARD_MAX_MIN", 35.0))
+        except Exception:
+            _hard = 35.0
+        for oid in sorted(ages):
+            age = ages[oid]
+            if age > _hard:
+                breaches.append({"type": "r6", "order_id": oid,
+                                 "value": round(age, 1),
+                                 "alarm40": bool(age > 40.0)})
+        for _fi, _ri, _oids in _detect_departed_pickup_revisit(final_stops, orders_state):
+            breaches.append({"type": "no_return",
+                             "order_id": str(_oids[1]),
+                             "value": None,
+                             "first_oid": (str(_oids[0]) if _oids[0] is not None else None)})
+    except Exception as e:
+        _log.warning(f"operator_pin_hard_report fail: {type(e).__name__}: {e}")
+    return breaches
+
+
 def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
                          orders_state: Dict[str, Any],
                          gps_positions: Dict[str, Any], now: datetime) -> bool:
@@ -1934,6 +2004,16 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
         _log.warning(f"operator_route_override(retime) cid={cid} fail: {type(e).__name__}: {e}")
     new_stops = _retime_stops(stops, pos, anchor_departure, orders_state, now)
     if new_stops is None:
+        if _op_pin_ctx is not None and _op_pin_ctx.get("changed"):
+            # v2: pin przestawił stopy, retime padł → zapisu nie ma (plan
+            # nietknięty), ale odmowa MUSI być widoczna w cieniu.
+            try:
+                _op_ovr.emit_retime_failed(cid, _op_pin_ctx, len(stops), now)
+                _log.warning(
+                    f"OPERATOR-OVERRIDE RETIME FAIL cid={cid} — retime przerwany "
+                    f"(keep existing, veto techniczne)")
+            except Exception:
+                pass
         return False
 
     _gps = gps_positions.get(cid) or {}
@@ -1960,7 +2040,13 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
         raise
     if _op_pin_ctx is not None:
         try:
-            _op_ovr.emit_applied(cid, _op_pin_ctx, new_stops, orders_state, now)
+            _op_hb = _operator_pin_hard_report(new_stops, orders_state)
+            if _op_hb:
+                _log.warning(
+                    f"OPERATOR-OVERRIDE HARD BREACH cid={cid} breaches={_op_hb} "
+                    f"(koordynator poinformowany przez badge/event)")
+            _op_ovr.emit_applied(cid, _op_pin_ctx, new_stops, orders_state, now,
+                                 hard_breaches=_op_hb)
         except Exception:
             pass
     _log.info(f"BAG_PLAN_RETIMED cid={cid} stops={len(new_stops)} anchor={anchor_source}")
