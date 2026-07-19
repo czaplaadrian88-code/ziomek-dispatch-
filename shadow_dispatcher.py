@@ -32,7 +32,10 @@ from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_flee
 from dispatch_v2.dispatch_pipeline import PipelineResult
 from dispatch_v2.core.decide import decide as _decide  # K09: fasada decyzji (delegacja 1:1)
 from dispatch_v2.core.world_state import WorldState
-from dispatch_v2.identity.schema import canon_cid
+from dispatch_v2.identity.candidate_pool import (
+    alternative_candidates as _alternative_candidates,
+    candidate_identity_key as _candidate_identity_key,
+)
 from dispatch_v2.observability import stage_timing as _ST
 from dispatch_v2.monitoring.consumer_stuck_alert import (
     StuckAlertConfig,
@@ -570,30 +573,10 @@ def _serialize_rule_verdict(result: PipelineResult):
         }
 
 
-def _candidate_identity_key(candidate):
-    """Stable per-courier key; preserve distinct malformed candidates safely."""
-    cid = canon_cid(getattr(candidate, "courier_id", None))
-    if cid:
-        return "cid", cid
-    # A missing CID is invalid at the identity boundary.  Do not silently merge
-    # unrelated malformed candidates; only recognise the exact same object.
-    return "object", id(candidate)
-
-
-def _alternative_candidates(candidates, best):
-    """Return each non-selected courier once, preserving candidate order."""
-    best_key = _candidate_identity_key(best) if best is not None else None
-    seen = set()
-    alternatives = []
-    for candidate in candidates:
-        key = _candidate_identity_key(candidate)
-        if best_key is not None and key == best_key:
-            continue
-        if key in seen:
-            continue
-        seen.add(key)
-        alternatives.append(candidate)
-    return alternatives
+# _candidate_identity_key / _alternative_candidates moved to
+# identity.candidate_pool (A8-2 twin sweep, 2026-07-19) — czasowka_scheduler
+# has the same best+alternatives shape and needed the identical fix; imported
+# above under the original names so every call site here is unchanged.
 
 
 def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) -> dict:
