@@ -759,6 +759,67 @@ def _remove_stops_on_return(courier_id: str, order_id: str) -> None:
         _log.warning(f"recanon-on-return fail cid={courier_id} oid={order_id}: {e}")
 
 
+def _release_plan_on_reassign(old_courier_id: str, order_id: str) -> bool:
+    """REASSIGN-RELEASE (2026-07-20): po przerzuceniu zlecenia na INNEGO kuriera
+    zwolnij plan STAREGO — lustrzane do _remove_stops_on_return (ta sama klasa:
+    tranzycja KURCZĄCA worek → remove_stops PRZED recanon, protokół #0 „Recanon").
+
+    Bug: branch reassign (panel_reassign) i PANEL_PACKS FALLBACK sygnalizowały
+    TYLKO NOWEMU kurierowi (_save_plan_on_assign_signal) — courier_plans STAREGO
+    dalej zawierał stop, plan_version stał → apka starego pokazywała zabrane
+    zlecenie do fallbacku 180 s (PlanPoller.FULL_REFRESH_FALLBACK_MS) / 5-min
+    plan_recheck. remove_stops bumpuje plan_version → /plan-version + SSE →
+    apka starego robi pełny GET /orders natychmiast.
+
+    Zwraca True, gdy feature AKTYWNY dla tej pary (flaga ON + SAVED_PLANS +
+    niepusty cid) — caller zasila tym dedupe released_this_tick (v2, Sol review);
+    False = bramka nie przeszła (przy OFF zbiór zostaje pusty → packs bajt-w-bajt).
+
+    v3 (Sol flip-gate): idempotencja NIE tu, tylko U ŹRÓDŁA — remove_stops
+    robi no-op (zero zapisu/bumpu) WEWNĄTRZ swojego exclusive locka, gdy plan
+    nie zawiera stopa. Pre-check read-only w helperze (v2) usunięty: dwa osobne
+    locki = TOCTOU (nowszy plan mógł wejść między odczyt a zapis).
+
+    Za flagą ENABLE_REASSIGN_OLD_PLAN_RELEASE (default OFF, flip za ACK).
+    Best-effort — błąd NIGDY nie psuje diff loopu.
+    """
+    try:
+        from dispatch_v2.common import ENABLE_SAVED_PLANS, decision_flag
+        if not ENABLE_SAVED_PLANS:
+            return False
+        if not decision_flag("ENABLE_REASSIGN_OLD_PLAN_RELEASE"):
+            return False
+    except Exception:
+        return False
+    if not old_courier_id:
+        return False
+    cid = str(old_courier_id)
+    oid = str(order_id)
+    try:
+        from dispatch_v2 import plan_manager
+        plan_manager.remove_stops(cid, oid)
+        _log.info(
+            f"REASSIGN-RELEASE cid_old={cid} oid={oid} "
+            f"— plan starego zwolniony (remove_stops → bump plan_version)"
+        )
+    except Exception as e:
+        _log.warning(
+            f"REASSIGN-RELEASE remove_stops fail cid_old={cid} oid={oid}: {e}"
+        )
+    # RECANON: po zwolnieniu re-egzekwuj kanon na RESZCIE worka STAREGO natychmiast
+    # — SYMETRIA z assign/deliver/pickup/return (P-5). Self-gating na
+    # ENABLE_RECANON_ON_WRITE, no-op gdy worek pusty / brak planu → nigdy nie
+    # psuje (≤ stan sprzed fixu).
+    try:
+        from dispatch_v2 import plan_recheck
+        plan_recheck.recanon_courier(cid, reason="reassign_out")
+    except Exception as e:
+        _log.warning(
+            f"recanon-on-reassign-out fail cid_old={cid} oid={oid}: {e}"
+        )
+    return True
+
+
 def _update_plan_on_picked_up(courier_id: str, order_id: str,
                               picked_up_at: Optional[str] = None) -> None:
     """V3.19c sub A: po emit COURIER_PICKED_UP sukces. Update
@@ -1464,6 +1525,13 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     # _diff_and_emit failowało, blokując m.in. V3.15 packs fallback.
     MAX_REASSIGN_PER_CYCLE = 5
     reassign_checked = 0
+    # REASSIGN-RELEASE v2 (Sol review 50f5946): oba tory wykrycia przerzutu
+    # (branch reassign niżej + PANEL_PACKS FALLBACK) czytają TEN SAM snapshot
+    # current_state (stale po update_from_event) i mają RÓŻNE event_id → jeden
+    # realny przerzut = podwójna obsługa w jednym ticku. Zbiór (oid, stary_cid)
+    # zasilany TYLKO gdy helper realnie aktywny (flaga ON) → przy OFF pusty =
+    # packs zachowuje się bajt-w-bajt jak dziś.
+    released_this_tick = set()
     for zid, state_order in list(current_state.items()):
         # Pomijamy terminalne (delivered, cancelled) - nie obserwujemy ich dalej
         if state_order.get("status") in ("delivered", "returned_to_pool", "cancelled"):
@@ -1578,7 +1646,10 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
 
         # Reassignment: kurier zmieniony na already-assigned order (F2.1c)
         elif was_assigned and is_assigned_now and reassign_checked < MAX_REASSIGN_PER_CYCLE:
-            state_courier = state_order.get("courier_id", "")
+            # v2 (Sol review): normalizacja do str jak w twin-torze packs —
+            # int 207 w state vs "207" z panelu robił FAŁSZYWY reassign
+            # (duplikat emit; z release'em zdarłby stop AKTUALNEMU kurierowi).
+            state_courier = str(state_order.get("courier_id") or "")
             try:
                 raw = fetch_order_details(zid, csrf)
                 stats["fetched_details"] += 1
@@ -1603,6 +1674,16 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         _log.info(f"REASSIGNED {zid} {state_courier} -> {panel_courier}")
                         _check_panel_agree(zid, panel_courier, "panel_reassign")
                         _check_panel_override(zid, panel_courier, "panel_reassign")
+                        # REASSIGN-RELEASE: NAJPIERW zwolnij plan STAREGO (bump
+                        # plan_version → apka starego od razu przestaje pokazywać
+                        # zabrane zlecenie), POTEM sygnał NOWEMU — recanon/redecide
+                        # nowego bywa kosztowny (OSRM/OR-Tools) i nie może opóźniać
+                        # bumpa starego. Plany są per-cid → kolejność bez wpływu
+                        # na poprawność, tylko na latencję starego.
+                        if state_courier and state_courier != panel_courier:
+                            if _release_plan_on_reassign(state_courier, zid):
+                                # feature aktywny → packs w TYM ticku nie dubluje
+                                released_this_tick.add((zid, state_courier))
                         _save_plan_on_assign_signal(zid, panel_courier)
             except Exception as e:
                 _log.warning(f"fetch for reassign {zid}: {e}")
@@ -1668,6 +1749,12 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     _state_status = _sorder.get("status")
                     if _state_status in ("delivered", "returned_to_pool", "cancelled"):
                         continue  # terminal — nie wzbogacaj V3.14-filtered
+                    if (_oid_str, _state_cid) in released_this_tick:
+                        # v2 (Sol review): branch reassign obsłużył TEN przerzut
+                        # w TYM ticku (release+signal już poszły; snapshot state
+                        # jest stale) — nie dubluj fetch/emit/release/signal.
+                        # Zbiór niepusty TYLKO przy fladze ON → OFF bajt-w-bajt.
+                        continue
                     # Mismatch — fetch_details do weryfikacji raw id_kurier
                     try:
                         _raw = fetch_order_details(_oid_str, csrf)
@@ -1715,6 +1802,14 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             f"PACKS_CATCHUP {_oid_str} → cid={_target_cid} nick={_nick_key!r} "
                             f"(was cid={_state_cid or 'None'})"
                         )
+                        # REASSIGN-RELEASE (bliźniak brancha reassign): packs też
+                        # łapie ZMIANĘ kuriera (previous_cid) — zwolnij plan
+                        # starego przed sygnałem nowemu. Guard _state_cid !=
+                        # _target_cid liczony PO trust-raw wyżej: gdy raw
+                        # przywrócił kuriera ze state (zła mapa nicków), release
+                        # zdarłby stop z AKTUALNEGO planu — nie wolno.
+                        if _state_cid and _state_cid != _target_cid:
+                            _release_plan_on_reassign(_state_cid, _oid_str)
                         _save_plan_on_assign_signal(_oid_str, _target_cid)
             if _packs_catchup:
                 stats["packs_catchup"] = _packs_catchup

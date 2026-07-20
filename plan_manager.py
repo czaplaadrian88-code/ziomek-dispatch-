@@ -417,7 +417,15 @@ def advance_plan(
 
 def remove_stops(courier_id: str, order_id: str) -> None:
     """Remove ALL stops (pickup AND dropoff) for order_id. For ORDER_CANCELLED
-    / ORDER_RETURNED_TO_POOL path. If plan empty after removal, invalidate.
+    / ORDER_RETURNED_TO_POOL path (+ REASSIGN-RELEASE, + GC terminal-prune).
+    If plan empty after removal, invalidate.
+
+    v3 (Sol flip-gate 2026-07-20): gdy order_id NIE występuje w żadnym stopie →
+    czysty no-op BEZ zapisu i BEZ bumpu wersji. Wcześniej bump-always: zapis
+    + plan_version+1 nawet bez zmiany treści = pusty SSE-refresh apki bez
+    powodu. Decyzja zapada WEWNĄTRZ tego samego exclusive locka co zapis
+    (race-safe — pre-check poza lockiem był TOCTOU: nowszy plan bez stopa
+    mógł wejść między odczyt a wywołanie).
     """
     cid = str(courier_id)
     oid = str(order_id)
@@ -426,7 +434,10 @@ def remove_stops(courier_id: str, order_id: str) -> None:
         plan = plans.get(cid)
         if plan is None or plan.get("invalidated_at") is not None:
             return
-        new_stops = [s for s in plan.get("stops", []) if s.get("order_id") != oid]
+        stops = plan.get("stops", [])
+        new_stops = [s for s in stops if s.get("order_id") != oid]
+        if len(new_stops) == len(stops):
+            return  # oid nieobecny → no-op (zero zapisu, zero bumpu)
         if not new_stops:
             plan["invalidated_at"] = _now_iso()
             plan["invalidation_reason"] = "ORDER_CANCELLED"
