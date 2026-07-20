@@ -580,14 +580,15 @@ def test_missing_osrm_cell_vetoes_pin(env, monkeypatch):
 
 
 def test_grafik_breach_logged_in_applied(env, monkeypatch):
-    """Pin wypycha stopy za twardy koniec zmiany kuriera → breach `grafik`
-    w hard_breaches (okno z TEGO SAMEGO źródła co feasibility — delegacja
-    do courier_resolver.resolve_shift_end_by_cid), bez veta."""
+    """Pin wypycha stopy za EFEKTYWNY koniec zmiany kuriera → breach `grafik`
+    w hard_breaches (okno 1:1 z feasibility — delegacja do
+    courier_resolver.resolve_effective_shift_end_by_cid), bez veta."""
     from dispatch_v2 import courier_resolver as CR
     _flag_on(monkeypatch)
+    monkeypatch.setattr(C, "ENABLE_V324A_SCHEDULE_INTEGRATION", True, raising=False)
     _save_base()
     _write_override(env, ["B", "A"])
-    monkeypatch.setattr(CR, "resolve_shift_end_by_cid",
+    monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
                         lambda cid, **k: NOW)  # zmiana kończy się „teraz"
     assert P.recanon_courier(CID, now=NOW) is True
     applied = [e for e in _events(env)
@@ -595,7 +596,63 @@ def test_grafik_breach_logged_in_applied(env, monkeypatch):
     assert applied
     hb = applied[-1]["hard_breaches"]
     grafik = [b for b in hb if b["type"] == "grafik"]
-    assert grafik and any(b["order_id"] == "A" and b["value"] > 5 for b in grafik)
+    assert grafik and any(b["order_id"] == "A" and b["stop_type"] == "dropoff"
+                          and b["value"] > 5 for b in grafik)
+
+
+def test_grafik_pickup_no_tolerance(env, monkeypatch):
+    """Parytet V3.25: PICKUP po shift_end = breach BEZ 5-min tolerancji
+    (v3 by go przemilczał — excess < 5)."""
+    from dispatch_v2 import courier_resolver as CR
+    from datetime import timedelta
+    _flag_on(monkeypatch)
+    monkeypatch.setattr(C, "ENABLE_V325_SCHEDULE_HARDENING", True, raising=False)
+    monkeypatch.setattr(C, "ENABLE_V324A_SCHEDULE_INTEGRATION", False, raising=False)
+    _save_base()
+    _write_override(env, ["B", "A"])
+    # odbiór B po pinie ~12:13Z; koniec zmiany 12:09:30Z ⇒ excess B ~3.8 min —
+    # strefa, którą 5-min tolerancja dropoffów by przemilczała
+    monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
+                        lambda cid, **k: NOW + timedelta(minutes=9.5))
+    assert P.recanon_courier(CID, now=NOW) is True
+    hb = [e for e in _events(env)
+          if e["event"] == "operator_route_override_applied"][-1]["hard_breaches"]
+    pu = [b for b in hb if b["type"] == "grafik" and b["stop_type"] == "pickup"]
+    assert pu and any(0 < b["value"] <= 5 for b in pu)  # breach mimo excess<5
+
+
+def test_grafik_salvage_suppresses_dropoff_breach(env, monkeypatch):
+    """Parytet EOD-salvage: aktywny salvage (predykat feasibility) ⇒ dropoff po
+    końcu zmiany NIE jest raportowany jako grafik-breach (zero false-positive)."""
+    from dispatch_v2 import courier_resolver as CR
+    from dispatch_v2 import feasibility_v2 as F
+    from datetime import timedelta
+    _flag_on(monkeypatch)
+    monkeypatch.setattr(C, "ENABLE_V324A_SCHEDULE_INTEGRATION", True, raising=False)
+    monkeypatch.setattr(C, "ENABLE_V325_SCHEDULE_HARDENING", False, raising=False)
+    _save_base()
+    _write_override(env, ["B", "A"])
+    monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
+                        lambda cid, **k: NOW - timedelta(minutes=60))
+    monkeypatch.setattr(F, "_end_of_day_salvage", lambda now: (True, None))
+    assert P.recanon_courier(CID, now=NOW) is True
+    hb = [e for e in _events(env)
+          if e["event"] == "operator_route_override_applied"][-1]["hard_breaches"]
+    assert not [b for b in hb if b["type"] == "grafik"]
+
+
+def test_effective_shift_end_working_override_extends(monkeypatch):
+    """Jedno źródło okna: working-override 'pracuje' (kurier NIE na realnej
+    zmianie) wydłuża efektywny koniec ponad grafik; na realnej zmianie wygrywa
+    realny grafik — dokładnie jak cs.shift_end w dispatchable_fleet."""
+    from dispatch_v2 import courier_resolver as CR
+    wo = {"end": "23:00"}
+    grafik = {"end": "14:00"}
+    ext = CR.effective_shift_end(wo, grafik, False, False)
+    assert ext is not None and ext.hour == 23  # override wydłuża (FALLBACK)
+    real = CR.effective_shift_end(wo, grafik, True, False)
+    assert real is not None and real.hour == 14  # realna zmiana wygrywa
+    assert CR.effective_shift_end(None, grafik, False, True).hour == 14
 
 
 def test_ttl_bool_and_garbage_default_120(env, monkeypatch):
@@ -643,6 +700,71 @@ def test_set_at_without_offset_rejected(env, monkeypatch):
     rej = [e for e in _events(env)
            if e["event"] == "operator_route_override_rejected"]
     assert rej and rej[-1]["reason"] == "invalid_set_at"
+
+
+def test_f6_poisoned_times_pin_unchanged_strict_veto(env, monkeypatch):
+    """Kombinacja Sola r3: F6 reorder + legacy retime „udany" z zatrutymi
+    0-min legami (None-cell) + pin changed=False. v4: strict retime FINALNEJ
+    sekwencji biegnie ZAWSZE ⇒ None-cell ⇒ veto techniczne, plan nietknięty."""
+    _flag_on(monkeypatch)
+    monkeypatch.setattr(P, "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE", True)
+
+    def _f6_reorder(s, o, p=None, n=None):
+        key = {"B": 0, "A": 1}
+        return sorted(s, key=lambda x: (key[str(x["order_id"])],
+                                        0 if x["type"] == "pickup" else 1))
+
+    calls = []
+
+    def _spy_retime(stops, pos, anchor, ostate, now, strict_cells=False):
+        calls.append(strict_cells)
+        if not strict_cells:
+            # legacy (F6): None-cell ⇒ cichy leg 0 min — lista WRACA (zatruta)
+            out = [dict(s) for s in stops]
+            for s in out:
+                s["predicted_at"] = NOW.isoformat()
+            return out
+        return None  # strict: None-cell ⇒ veto
+
+    monkeypatch.setattr(P, "_apply_canon_order_invariants", _f6_reorder)
+    monkeypatch.setattr(P, "_retime_stops", _spy_retime)
+    _write_override(env, ["B", "A"])
+    assert P.redecide_courier(CID, now=NOW) is False
+    assert PM.load_plan(CID) is None  # zatrute czasy NIE weszły do kanonu
+    assert True in calls  # strict retime pobiegł mimo changed=False
+    rej = [e for e in _events(env)
+           if e["event"] == "operator_route_override_rejected"]
+    assert rej and rej[-1]["reason"] == "retime_failed"
+
+
+def test_retime_exception_in_recanon_emits_rejected(env, monkeypatch):
+    """Wyjątek w strict-retime (ścieżka recanon) = ten sam los co None:
+    rejected/retime_failed + plan nietknięty (deklaracja = kod)."""
+    _flag_on(monkeypatch)
+    _save_base()
+    v0 = PM.load_plan(CID)["plan_version"]
+    _write_override(env, ["B", "A"])
+
+    def _boom(*a, **k):
+        raise RuntimeError("osrm boom")
+
+    monkeypatch.setattr(P, "_retime_stops", _boom)
+    assert P.recanon_courier(CID, now=NOW) is False
+    assert PM.load_plan(CID)["plan_version"] == v0
+    rej = [e for e in _events(env)
+           if e["event"] == "operator_route_override_rejected"]
+    assert rej and rej[-1]["reason"] == "retime_failed"
+
+
+def test_ttl_strict_int_only(env):
+    """Kontrakt v4: ttl_min WYŁĄCZNIE int 1..1440 — string \"60\" i float 60.0
+    odrzucone do default 120."""
+    assert O._ttl_min({"ttl_min": "60"}) == 120.0
+    assert O._ttl_min({"ttl_min": 60.0}) == 120.0
+    assert O._ttl_min({"ttl_min": 60}) == 60.0
+    assert O._ttl_min({"ttl_min": 1441}) == 120.0
+    assert O._ttl_min({"ttl_min": 1}) == 1.0
+    assert O._ttl_min({}) == 120.0
 
 
 def test_flag_off_structure_fail_not_would_apply(env, monkeypatch):

@@ -1491,52 +1491,70 @@ def resolve_available_from_by_cid(
     return available_from_from_shift_start(ss, now_utc)
 
 
-def resolve_shift_end(
-    name: Optional[str], schedule: Optional[dict] = None, match_courier_fn=None,
-) -> Optional[datetime]:
-    """Kanoniczna resolucja shift_end z grafiku po NAZWIE kuriera — LUSTRO
-    resolve_shift_start (TE SAME funkcje co dispatchable_fleet: match_courier +
-    _shift_end_dt) → parytet source↔konsument z konstrukcji, zero kopii logiki.
-    Fail-soft: każdy brak → None. Uwaga konsumencka: to okno z GRAFIKU —
-    working-override ('pracuje') może legalnie wydłużać pracę; konsument
-    raportowy (pin operatora) traktuje wynik jako sygnał, nie veto."""
-    if not name:
-        return None
-    try:
-        if schedule is None or match_courier_fn is None:
-            import sys as _sys
-            _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
-            from schedule_utils import load_schedule as _ls, match_courier as _mc
-            if schedule is None:
-                schedule = _ls()
-            if match_courier_fn is None:
-                match_courier_fn = _mc
-        if not schedule:
-            return None
-        full_name = match_courier_fn(name, schedule)
-        if not full_name:
-            return None
-        entry = schedule.get(full_name)
-        if not entry:
-            return None
-        return _shift_end_dt(entry)
-    except Exception:
-        return None
+def effective_shift_end(wo_entry: Optional[dict], grafik_entry: Optional[dict],
+                        real_on_shift_now: bool, cap_enabled: bool) -> Optional[datetime]:
+    """JEDYNE źródło EFEKTYWNEGO końca zmiany (v4, re-review Sola): working-
+    override w gałęzi FALLBACK (kurier NIE jest na realnej zmianie teraz) →
+    `_effective_working_override_shift_end` (GRAFIK-CAP); inaczej koniec z
+    realnego grafiku (`_shift_end_dt`). Delegują tu OBA konsumenci: pętla
+    `dispatchable_fleet` (→ cs.shift_end, które dostaje feasibility) oraz
+    `resolve_effective_shift_end_by_cid` (raport HARD pinu operatora) —
+    parytet okna feasibility↔raport z konstrukcji, zero trzeciej kopii."""
+    if wo_entry is not None and not real_on_shift_now:
+        return _effective_working_override_shift_end(wo_entry, grafik_entry, cap_enabled)
+    return _shift_end_dt(grafik_entry)
 
 
-def resolve_shift_end_by_cid(
+def resolve_effective_shift_end_by_cid(
     cid: Any, name: Optional[str] = None, schedule: Optional[dict] = None,
 ) -> Optional[datetime]:
-    """Jak resolve_shift_end, ale po CID (name z courier_tiers gdy nie podana) —
-    lustro resolve_shift_start_by_cid; dla raportu HARD pinu operatora w
-    plan_recheck (breach `grafik` z TEGO SAMEGO źródła okna co feasibility)."""
-    if not name:
+    """EFEKTYWNY koniec zmiany po CID — TO SAMO okno, które feasibility dostaje
+    jako `cs.shift_end` z dispatchable_fleet (working-override 'pracuje' z
+    GRAFIK-CAP w FALLBACK, realny grafik gdy kurier na zmianie): te same wejścia
+    (courier_tiers name, schedule_utils, manual_overrides.get_working, te same
+    flagi hot) i ta sama funkcja `effective_shift_end`. Fail-soft None.
+    Konsument: `plan_recheck._operator_pin_hard_report` (breach `grafik`)."""
+    try:
+        if not name:
+            try:
+                name = ((_load_courier_tiers().get(str(cid)) or {}).get("name"))
+            except Exception:
+                name = None
+        import sys as _sys
+        _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+        from schedule_utils import load_schedule as _ls, match_courier as _mc, \
+            is_on_shift as _ios
+        if schedule is None:
+            schedule = _ls()
+        grafik_entry = None
+        real_on_shift_now = False
+        if schedule and name:
+            _fn = _mc(name, schedule)
+            if _fn is not None:
+                grafik_entry = schedule.get(_fn)
+                if grafik_entry is not None:
+                    _ros, _ = _ios(name, schedule)
+                    real_on_shift_now = bool(_ros)
         try:
-            _t = _load_courier_tiers().get(str(cid)) or {}
-            name = _t.get("name")
+            from dispatch_v2 import common as _C_ef
+            _wo_on = bool(_C_ef.flag(
+                "ENABLE_WORKING_OVERRIDE",
+                default=bool(getattr(_C_ef, "ENABLE_WORKING_OVERRIDE", True))))
+            _cap_on = bool(_C_ef.flag(
+                "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP",
+                default=bool(getattr(_C_ef, "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP", True))))
         except Exception:
-            name = None
-    return resolve_shift_end(name, schedule=schedule)
+            _wo_on, _cap_on = True, True
+        wo_entry = None
+        if _wo_on:
+            try:
+                from dispatch_v2 import manual_overrides as _MO
+                wo_entry = (_MO.get_working() or {}).get(str(cid))
+            except Exception:
+                wo_entry = None
+        return effective_shift_end(wo_entry, grafik_entry, real_on_shift_now, _cap_on)
+    except Exception:
+        return None
 
 
 def _shift_end_dt(entry: Optional[dict]) -> Optional[datetime]:
@@ -1781,8 +1799,8 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                 # GRAFIK-CAP (2026-06-07): domyślny koniec "pracuje" (24:00) wpisany w trakcie/
                 # przed realnym grafikiem NIE wskrzesza kuriera po realnym końcu zmiany —
                 # przycina shift_end do min(override_end, grafik_end). Patrz helper docstring.
-                cs.shift_end = _effective_working_override_shift_end(
-                    _wo_entry, _real_grafik_entry, _wo_grafik_cap_enabled)
+                cs.shift_end = effective_shift_end(
+                    _wo_entry, _real_grafik_entry, False, _wo_grafik_cap_enabled)
                 if cs.shift_end is not None and _now_utc_fleet >= cs.shift_end:
                     # override (po ew. cap'ie do grafiku) już minął → po zmianie, pomiń (off-shift).
                     _log.debug(f"skip {cs.name} ({cs.courier_id}): working_override po zmianie (grafik-cap)")
@@ -1820,8 +1838,9 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                 continue
             on_shift, reason = is_on_shift(cs.name, schedule)
             # Set shift_end + shift_start z grafiku (V3.25 R-01 R-NO-WASTE PRE-CHECK
-            # potrzebuje obu — dropoff vs end, pickup vs start).
-            cs.shift_end = _shift_end_dt(entry)
+            # potrzebuje obu — dropoff vs end, pickup vs start). Delegacja do
+            # effective_shift_end (wo=None ⇒ czysty grafik, bajt-identycznie).
+            cs.shift_end = effective_shift_end(None, entry, True, _wo_grafik_cap_enabled)
             cs.shift_start = _shift_start_dt(entry)
             if not on_shift:
                 # Pre-shift: kurier z dzisiejszą zmianą — dopuszczamy z synthetic

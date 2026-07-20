@@ -61,8 +61,11 @@ Hook = `operator_route_override.pin_stops(...)` wpięty **PO** `_apply_canon_ord
   nietykalne; test dowodzi bajt-identyczność orders_state przed/po); (2) clamp
   `_retime_stops` „odbiór nie wcześniej niż committed" działa na sekwencji operatora;
   (3) `_floor_pickups_to_committed` (refloor-at-birth) bez zmian; (4) bramka zapisu L3
-  (`ENABLE_PLAN_RECHECK_GATES`, compare-and-keep R6) NIE osłabiona — ocenia JUŻ
-  spiętą sekwencję (świadomie: nie zdejmujemy HARD-gate'u zapisu dla pinu; patrz Ryzyka #2).
+  (`ENABLE_PLAN_RECHECK_GATES`, compare-and-keep R6): BEZ pinu bajt-w-bajt jak dotąd;
+  przy AKTYWNYM pinie REJECT nie blokuje zapisu (polityka przypięta v3 — pin wygrywa
+  z bramką biznesową), a werdykt idzie GŁOŚNO do eventu applied (`l3_would_reject`)
+  + WARNING; dodatkowo NIEZALEŻNA od L3 ewaluacja HARD po pinie (r6/no_return/grafik)
+  raportuje każdy breach.
 - Sekwencja operatora łamiąca okno committed (odbiór > czas_kuriera + 5 min po retime)
   → wykonana + JAWNIE zalogowana w `committed_breaches` zdarzenia `applied`
   (koordynator nadzoruje = jego decyzja). Zero cichej zmiany zobowiązań.
@@ -223,10 +226,11 @@ Hermetyczność: pod pytestem moduł nie czyta/nie pisze żywych ścieżek domy�
    plan bez pinu, ale w tym samym handlerze natychmiast biegnie `recanon_courier`
    (pin). Okno = pojedynczy handler; dodatkowo zmiana worka zwykle unieważnia override
    (set_mismatch) — to zamierzona semantyka kontraktu.
-2. **L3 gate (gdy ON):** świeży REGEN ze spiętą sekwencją łamiącą R6 vs istniejący plan
-   bez łamania → keep-existing (pin nie wejdzie tym writerem; wejdzie ścieżką retime,
-   która bramki L3 nie ma). Świadomy wybór: nie osłabiamy HARD-gate'u zapisu. Jeżeli
-   CTO chce „pin przebija L3" — osobna decyzja (dziś: bezpieczniej nie).
+2. **L3 gate (LIVE):** [ZAKTUALIZOWANE v3 — decyzja CTO „pin przebija L3" WYDANA]
+   przy aktywnym pinie REJECT nie blokuje zapisu; werdykt raportowany
+   (`l3_would_reject` + WARNING + licznik `l3_regen_reject_pin_override`); bez pinu
+   L3 bajt-w-bajt. Pozostałe ryzyko: koordynator może świadomie utrwalić sekwencję
+   łamiącą R6 — widoczne w hard_breaches/alarm40 (nadzoruje człowiek).
 3. **bug4 reseq shadow:** przy aktywnym pinie „frozen" = sekwencja operatora, więc
    shadow może raportować „fresh lepszy" — OCZEKIWANE (override ≠ optimum solvera).
    Recenzent/przyszła sesja nie powinna tego „naprawiać" flipem.
@@ -306,10 +310,29 @@ na ręcznej sekwencji zapisu (identycznej z handlerem assign), nie na samym
 e2e handlera wymaga fixture gastro-eventów (poza zakresem kandydata; okno i tak
 domyka następny tick/zdarzenie, a wyjątek recanon jest logowany WARNING).
 
+## v4 — runda 3 Sola (2026-07-20) + DECYZJA UPRASZCZAJĄCA CTO
+
+Log: `scratchpad/sol_engine_v3_rereview.log`. Werdykt r3: NO-GO (węższy) —
+strict_cells omijalny po F6; raport grafik niezgodny z feasibility.
+
+| # | Bloker/uwaga r3 | Fix v4 | Dowód |
+|---|---|---|---|
+| 1 | F6-zatrute-czasy: legacy retime F6 zwraca listę z legami 0 min (None-cell) ⇒ `_f6_stale=False`, pin `changed=False` omijał strict | **DECYZJA UPRASZCZAJĄCA: pin aktywny ⇒ ZAWSZE strict retime FINALNEJ sekwencji** (usunięta ścieżka skip przy changed=False; `_f6_stale` zostaje jako telemetria INFO). Zabija całą klasę (zatrute legi, stale, półstany); piny rzadkie — koszt 1×/table pomijalny. Fail ⇒ rejected/retime_failed, plan nietknięty | `test_f6_poisoned_times_pin_unchanged_strict_veto` (spy: legacy zwraca zatrutą listę, strict=None; asercja że strict POBIEGŁ mimo changed=False ⇒ veto, plan None) |
+| 2 | Wyjątek w strict-call (recanon) nie emitował rejected | try/except wokół retime w `_retime_one_bag_plan`: przy pinie wyjątek = ten sam los co None (WARNING **przed** eventem, rejected/retime_failed, return False — plan nietknięty); bez pinu wyjątek propaguje jak legacy 1:1 | `test_retime_exception_in_recanon_emits_rejected` (RuntimeError ⇒ False, plan_version bez zmian, event) |
+| 3 | Grafik ≠ semantyka feasibility (grafik-only okno; +5 na pickupie; brak salvage) | **SEMANTYKA 1:1**: (a) okno = EFEKTYWNE `cs.shift_end` — nowe `courier_resolver.effective_shift_end` (pure) jest teraz JEDYNYM źródłem: delegują do niego OBA sity `dispatchable_fleet` (working-override FALLBACK + grafik; bajt-identycznie z konstrukcji: wo=None⇒`_shift_end_dt`, wo+nie-na-zmianie⇒`_effective_working_override_shift_end`) ORAZ nowy `resolve_effective_shift_end_by_cid` (te same wejścia: tiers-name, schedule_utils, `manual_overrides.get_working`, te same flagi hot ENABLE_WORKING_OVERRIDE(+_GRAFIK_CAP)); v3-owe grafik-only resolvery USUNIĘTE (zero martwego kodu); (b) PICKUP po shift_end = breach BEZ tolerancji, pod flagą `ENABLE_V325_SCHEDULE_HARDENING` jak feasibility; (c) DROPOFF > end + `V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN` pod `ENABLE_V324A_SCHEDULE_INTEGRATION`, wyciszany przez TEN SAM predykat `feasibility_v2._end_of_day_salvage(now)` (zero kopii) | `test_grafik_pickup_no_tolerance` (excess ~3.8<5 ⇒ breach), `test_grafik_salvage_suppresses_dropoff_breach` (salvage ⇒ zero grafik), `test_effective_shift_end_working_override_extends` (wo wydłuża w FALLBACK / realna zmiana wygrywa), zaktualizowany `test_grafik_breach_logged_in_applied` (dropoff, stop_type) |
+| 4 | TTL: "60"/60.0 akceptowane; ślad L3 mógł zginąć w fail-soft I/O | `_ttl_min` v4: WYŁĄCZNIE int 1..1440, reszta ⇒ 120 + WARNING (dedup per wartość); wszystkie WARNINGi (L3-override, retime-fail, R27, HARD) logowane PRZED zapisem eventu | `test_ttl_strict_int_only` ("60"→120, 60.0→120, 60→60, 1441→120, 1→1); kolejność WARNING→emit w kodzie obu writerów |
+
+Uwaga parytetu flag (świadoma): breach `grafik` liczony pod TYMI SAMYMI flagami
+co bramki feasibility (V325 dla pickup, V324A dla dropoff) — gdy bramka w
+silniku wyłączona, raport nie twierdzi „HARD breach" którego feasibility by nie
+egzekwowało. Refaktor delegacji w `dispatchable_fleet` (2 linie → wspólna
+funkcja) = bajt-identyczny z konstrukcji; weryfikacja pełną suitą (fleet ma
+gęste pokrycie).
+
 ## Linie DoD (bramka mechaniczna drivera ziomek-cto)
 
-regresja: DELTA vs baseline = 0 failed nowych i 0 zniknięć (pełna suita, harness pkgroot ZIOMEK_SCRIPTS_ROOT + -p no:cacheprovider; baseline czysty 7e57085 = 9 failed/5197 passed/27 skipped/7 xfailed, kandydat v3 FINALNY = 9 failed/5229 passed/24 skipped/7 xfailed = 5197 + 29 nowych + 3 warunkowe skipy przeszły; 9 faili = bajt-identyczny obustronny szum harnessu: script_run ×3, flag_doc_coverage ×3, conftest_flag_strip_guard ×3 — potwierdzony na czystym masterze)
-e2e: zapis kanonu (plan_manager CAS) → recanon_courier/redecide_courier/_gen_one_bag_plan → pin → _retime_stops (OSRM, strict dla pinu) → L3 (pin-override) → ewaluacja HARD po pinie (r6/no_return/grafik) → projekcja route_order.order_podjazdy(trust_canon) = konsument konsoli+apki; testy test_pin_transparent_for_surfaces_via_route_order + test_gen_path_pins_sequence + test_l3_reject_overridden_by_pin (realny OR-Tools) + test_recanon_after_raw_save_reapplies_pin (sekwencja handlera assign); nowe testy 29/29
+regresja: DELTA vs baseline = 0 failed nowych i 0 zniknięć (pełna suita, harness pkgroot ZIOMEK_SCRIPTS_ROOT + -p no:cacheprovider; baseline czysty 7e57085 = 9 failed/5197 passed/27 skipped/7 xfailed, kandydat v4 FINALNY = 9 failed/5235 passed/24 skipped/7 xfailed = 5197 + 35 nowych + 3 warunkowe skipy przeszły; obejmuje gęste pokrycie dispatchable_fleet po delegacji effective_shift_end — bajt-parytet potwierdzony suitą; 9 faili = bajt-identyczny obustronny szum harnessu: script_run ×3, flag_doc_coverage ×3, conftest_flag_strip_guard ×3 — potwierdzony na czystym masterze)
+e2e: zapis kanonu (plan_manager CAS) → recanon_courier/redecide_courier/_gen_one_bag_plan → pin → _retime_stops (OSRM, strict dla pinu) → L3 (pin-override) → ewaluacja HARD po pinie (r6/no_return/grafik) → projekcja route_order.order_podjazdy(trust_canon) = konsument konsoli+apki; testy test_pin_transparent_for_surfaces_via_route_order + test_gen_path_pins_sequence + test_l3_reject_overridden_by_pin (realny OR-Tools) + test_recanon_after_raw_save_reapplies_pin (sekwencja handlera assign); nowe testy 35/35
 pozytywny-wplyw: nowa zdolność ownera (kanon honoruje sekwencję operatora + przelicza ETA) — ON≠OFF udowodnione testami (pin zmienia zapisany kanon; OFF bajt-identyczny poza telemetrią wykrycia would_apply); okno cienia would_apply przed flipem, flip za ACK Adriana (ETAP 5/6 flipa poza zakresem kandydata)
 rollback: flags.json ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE=false (hot-reload, bez restartu; default OFF w common.py) / git revert jednego commita / DELETE wpisu cid w panelu (brak wpisu = własna optymalizacja)
 N-D: feasibility_v2.py — powód: pin działa w warstwie 9 (kanon worka JUŻ przypisanego kuriera) PO decyzji feasibility; HARD-checki i R6 nietknięte, żadna reguła feasibility nie zmienia się ani nie jest omijana (SOFT nie osłabia HARD)

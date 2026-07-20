@@ -55,7 +55,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -196,20 +195,26 @@ def _read_entry(cid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     return entry, None
 
 
+_TTL_WARNED: set = set()
+
+
 def _ttl_min(entry: Dict[str, Any]) -> float:
-    """ttl_min z wpisu: liczba CAŁKOWITA w zakresie 1..1440 (kontrakt v3).
-    Wszystko inne (brak / bool / NaN / Infinity / ułamek / poza zakresem /
-    śmieć) → default 120 (Sol re-review pkt 4)."""
-    v = entry.get("ttl_min", DEFAULT_TTL_MIN)
-    if isinstance(v, bool):
+    """ttl_min z wpisu: WYŁĄCZNIE int w zakresie 1..1440 (kontrakt v4 — Sol r3:
+    odrzucamy też "60" string i 60.0 float). Brak pola = default 120 (cicho);
+    każda inna wartość → default 120 + log (raz per wartość w procesie)."""
+    if "ttl_min" not in entry:
         return DEFAULT_TTL_MIN
-    try:
-        f = float(v)
-    except Exception:
-        return DEFAULT_TTL_MIN
-    if not math.isfinite(f) or f != int(f) or not (1.0 <= f <= 1440.0):
-        return DEFAULT_TTL_MIN
-    return f
+    v = entry.get("ttl_min")
+    if isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 1440:
+        return float(v)
+    key = repr(v)[:64]
+    if key not in _TTL_WARNED:
+        if len(_TTL_WARNED) > 128:
+            _TTL_WARNED.clear()
+        _TTL_WARNED.add(key)
+        _log.warning("OPERATOR-OVERRIDE ttl_min=%s odrzucone (kontrakt: int "
+                     "1..1440) → default %.0f", key, DEFAULT_TTL_MIN)
+    return DEFAULT_TTL_MIN
 
 
 def _iso_has_offset(s: Any) -> bool:
