@@ -262,9 +262,8 @@ def append_enriched(records: list[dict]) -> None:
     """Append enriched records (one JSON per line)."""
     if not records:
         return
-    with open(ENRICHED_LOG, "a", encoding="utf-8") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    from dispatch_v2.core.jsonl_appender import append_jsonl_batch
+    append_jsonl_batch(ENRICHED_LOG, records)
 
 
 def run(hours: int, dry_run: bool = False) -> dict:

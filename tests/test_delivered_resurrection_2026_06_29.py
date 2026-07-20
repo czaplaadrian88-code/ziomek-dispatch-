@@ -1,9 +1,9 @@
 """DELIVERED RESURRECTION (2026-06-29, case Pizzeria 105 cid 492).
 
-resurrect_order: cofnięcie z 'delivered' do aktywnego — koordynator RĘCZNIE przywrócił status
+ORDER_RESURRECTED: cofnięcie z 'delivered' do aktywnego — koordynator RĘCZNIE przywrócił status
 w gastro po błędnym 'doręczone' z apki (skok 6→7). Świadomie bypassuje Path-B terminal-preserve.
 Flaga ENABLE_DELIVERED_RESURRECTION gatuje DETEKCJĘ w panel_watcher (panel-integration; tu
-testujemy rdzeń = resurrect_order + rejestrację flagi).
+testujemy rdzeń eventu + rejestrację flagi).
 """
 import os
 import sys
@@ -20,6 +20,20 @@ from dispatch_v2 import state_machine  # noqa: E402
 from dispatch_v2 import common as C    # noqa: E402
 
 
+def _resurrect(order_id, new_status, courier_id):
+    return state_machine.update_from_event({
+        "event_type": "ORDER_RESURRECTED",
+        "event_id": f"{order_id}_ORDER_RESURRECTED_{new_status}_test",
+        "order_id": order_id,
+        "courier_id": courier_id,
+        "payload": {
+            "new_status": new_status,
+            "reason": "panel_status_restored",
+            "source": "panel_status_restored",
+        },
+    })
+
+
 def _reset():
     p = state_machine._state_path()
     os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -34,7 +48,7 @@ def test_resurrect_delivered_to_active():
         {"status": "delivered", "courier_id": "492",
          "delivered_at": "2026-06-29T12:13:55+00:00", "final_location": "X"},
         event="COURIER_DELIVERED")
-    out = state_machine.resurrect_order("999", "picked_up", "492")
+    out = _resurrect("999", "picked_up", "492")
     assert out is not None
     o = state_machine.get_order("999")
     assert o["status"] == "picked_up"      # wskrzeszone z delivered
@@ -49,7 +63,7 @@ def test_resurrect_noop_when_not_delivered():
     _reset()
     state_machine.upsert_order("998", {"status": "picked_up", "courier_id": "492"},
                                event="COURIER_PICKED_UP")
-    assert state_machine.resurrect_order("998", "picked_up", "492") is None  # no-op
+    assert _resurrect("998", "picked_up", "492") is None  # no-op
     assert state_machine.get_order("998")["status"] == "picked_up"
 
 

@@ -17,12 +17,16 @@ Watcher pomija source=parcel BEZWARUNKOWO (guard w panel_watcher). Flaga
 from __future__ import annotations
 
 import json
+import fcntl
 import logging
+import os
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dispatch_v2 import common as C
-from dispatch_v2 import event_bus
+from dispatch_v2 import durable_event_apply, event_bus, lifecycle_downstream
 from dispatch_v2 import state_machine as sm
 
 # Pola payloadu NEW_ORDER czytane przez shadow_dispatcher._event_to_pipeline.
@@ -41,7 +45,6 @@ _TERMINAL = ("delivered", "cancelled", "returned_to_pool")
 # Etap 3c: status apki kuriera (courier_api inbox) → orders_state. 5=odebrane, 7=doręczone.
 STATUS_INBOX_NAME = "parcel_status_inbox.jsonl"
 _STATUS_CODE_EVENT = {5: "COURIER_PICKED_UP", 7: "COURIER_DELIVERED"}
-INBOX_MAX_BYTES = 2_000_000  # po przetworzeniu: >tyle → rotacja do .1 (kosmetyka)
 
 
 def _snapshot_path() -> Path:
@@ -68,52 +71,190 @@ def _load_snapshot():
     return orders if isinstance(orders, dict) else {}
 
 
-def _apply_status_inbox() -> int:
-    """Etap 3c: zastosuj statusy paczek z inboxu (apka kuriera → courier_api) do orders_state.
-    Idempotent po event_id (event_bus). 5→picked_up, 7→delivered; 3/4 nie zmieniają statusu.
-    Fail-soft per wiersz. (v1: czyta cały inbox/tick — niska wolumetria paczek; rotacja = TODO.)"""
-    path = Path(sm._state_path()).parent / STATUS_INBOX_NAME
-    if not path.exists():
-        return 0
+def _status_inbox_archives(path: Path) -> list[Path]:
+    legacy = path.with_name(STATUS_INBOX_NAME + ".1")
+    archives = sorted(path.parent.glob(STATUS_INBOX_NAME + ".pending.*"))
+    if legacy.exists():
+        archives.insert(0, legacy)
+    return archives
+
+
+def _fsync_parent(path: Path) -> None:
+    """Persist inbox rename metadata before reporting the rotation complete."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    dir_fd = os.open(str(path.parent), flags)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
+def _status_inbox_lock_path(path: Path) -> Path:
+    """Stable namespace lock shared with courier-api's parcel producer."""
+    return path.with_name(path.name + ".lock")
+
+
+def _archive_has_open_fd(path: Path) -> bool:
+    """Fail closed while any process still references this archive inode.
+
+    A rolling-deploy marker can only attest one new process.  It says nothing
+    about an overlapping legacy writer that opened the active pathname before
+    our rename and still owns that inode.  Linux ``/proc/*/fd`` is the direct
+    oracle for the object we are about to unlink.  Transient process exits are
+    harmless; an unreadable fd namespace is treated as busy, never as proof
+    that deletion is safe.
+    """
+    try:
+        target = path.stat()
+    except OSError:
+        return True
+    target_identity = (target.st_dev, target.st_ino)
+    try:
+        processes = list(Path("/proc").iterdir())
+    except OSError:
+        return True
+    for process in processes:
+        if not process.name.isdigit():
+            continue
+        fd_dir = process / "fd"
+        try:
+            descriptors = list(fd_dir.iterdir())
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return True
+        for descriptor in descriptors:
+            try:
+                opened = descriptor.stat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return True
+            if (opened.st_dev, opened.st_ino) == target_identity:
+                return True
+    return False
+
+
+@contextmanager
+def _status_inbox_lock(path: Path):
+    lock_path = _status_inbox_lock_path(path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
+def _apply_status_file(path: Path) -> tuple[int, bool]:
+    """Apply one immutable snapshot; bool says every durable row is terminal."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return 0
+        return 0, False
     applied = 0
+    all_resolved = True
     for ln in lines:
         ln = ln.strip()
         if not ln:
             continue
         try:
             e = json.loads(ln)
-        except ValueError:
+            if not isinstance(e, dict):
+                raise TypeError("parcel status row must be a JSON object")
+            status_code = int(e.get("status_code", 0) or 0)
+        except (TypeError, ValueError):
+            # Could be a writer line observed before its final bytes. Once the
+            # active file is renamed, the full archive is retried and retained
+            # loudly if it is genuinely malformed.
+            all_resolved = False
+            log.warning("parcel status inbox malformed row retained in %s", path)
             continue
-        etype = _STATUS_CODE_EVENT.get(int(e.get("status_code", 0) or 0))
+        etype = _STATUS_CODE_EVENT.get(status_code)
         if not etype:
             continue
         oid = str(e.get("oid"))
         cid = str(e.get("cid") or "")
         eid = f"{oid}_{etype}_{e.get('ts')}"
-        if event_bus.emit(etype, order_id=oid, courier_id=cid, event_id=eid):
-            sm.update_from_event({
-                "event_type": etype,
-                "order_id": oid,
-                "courier_id": cid,
-                # Provenance only. Timestamp pozostaje celowo nieuzupelniony:
-                # jego kontrakt wymaga osobnej decyzji, a observer ma ujawnic
-                # dotychczasowy fallback legacy zamiast go maskowac.
-                "payload": {"source": "parcel_status_inbox"},
-            })
+        payload = {
+            # Provenance only. Timestamp pozostaje celowo nieuzupelniony:
+            # jego kontrakt wymaga osobnej decyzji, a observer ma ujawnic
+            # dotychczasowy fallback legacy zamiast go maskowac.
+            "source": "parcel_status_inbox",
+        }
+        outcome = durable_event_apply.emit_and_apply(
+            etype,
+            order_id=oid,
+            courier_id=cid,
+            payload=payload,
+            state_payload=None,
+            event_key=eid,
+            emit_fn=event_bus.emit,
+            state_update_fn=sm.update_from_event,
+            effect_status_fn=sm.event_effect_status,
+            get_order_fn=sm.get_order_strict,
+            downstream_fn=lifecycle_downstream.apply,
+        )
+        if outcome.state_ready and (
+            outcome.event_created or outcome.state_transitioned
+        ):
             applied += 1
             log.info("paczka %s ← %s (apka)", oid, etype)
-    # Rotacja: po przetworzeniu (idempotent), gdy plik duży → archiwum .1; courier_api
-    # utworzy świeży przy kolejnym append. Bezpieczne: event_bus dedupuje okno rotacji.
-    try:
-        if path.stat().st_size > INBOX_MAX_BYTES:
-            path.rename(path.with_name(STATUS_INBOX_NAME + ".1"))
-            log.info("parcel_status_inbox zrotowany (>2MB → .1)")
-    except OSError:
-        pass
+        if not (outcome.state_ready or outcome.superseded):
+            all_resolved = False
+            log.warning(
+                "paczka %s: durable %s pending stage=%s",
+                oid,
+                etype,
+                outcome.failure_stage,
+            )
+    return applied, all_resolved
+
+
+def _apply_status_inbox() -> int:
+    """Etap 3c: zastosuj statusy paczek z inboxu (apka kuriera → courier_api) do orders_state.
+    Idempotent po event_id (event_bus). 5→picked_up, 7→delivered; 3/4 nie zmieniają statusu.
+    Fail-soft per wiersz. (v1: czyta cały inbox/tick — niska wolumetria paczek; rotacja = TODO.)"""
+    path = Path(sm._state_path()).parent / STATUS_INBOX_NAME
+    applied = 0
+    # Immutable archives are replayed until every durable event is terminal.
+    # They never collide by name, so a failed row or a concurrent append cannot
+    # disappear behind a later ``.1`` replacement.
+    for archive in _status_inbox_archives(path):
+        count, resolved = _apply_status_file(archive)
+        applied += count
+        if resolved and not _archive_has_open_fd(archive):
+            try:
+                archive.unlink()
+                _fsync_parent(archive)
+            except OSError:
+                pass
+
+    # Snapshot the active inode under the same stable sidecar lock used by the
+    # courier-api writer. The lock is held only for rename+dir fsync, never for
+    # durable state/downstream work. Therefore no producer can retain an open
+    # fd to an archive that a later tick might unlink.
+    archive = None
+    with _status_inbox_lock(path):
+        try:
+            if path.exists() and path.stat().st_size > 0:
+                archive = path.with_name(
+                    f"{STATUS_INBOX_NAME}.pending.{time.time_ns()}.{os.getpid()}"
+                )
+                path.rename(archive)
+                _fsync_parent(archive)
+                log.info("parcel_status_inbox zrotowany do %s", archive.name)
+        except OSError:
+            archive = None
+
+    if archive is not None:
+        count, _resolved = _apply_status_file(archive)
+        applied += count
+        # Keep the fresh immutable snapshot until the next tick. This makes a
+        # crash after state apply but before its receipt a plain replay and
+        # gives a rolling deployment one full cycle to replace legacy writers.
     return applied
 
 

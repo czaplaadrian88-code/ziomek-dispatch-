@@ -141,7 +141,7 @@ def test_undelivered_8():
     rtp = [e for e in emitted if e["event_type"] == "ORDER_RETURNED_TO_POOL"]
     assert len(rtp) == 1, f"oczekiwano 1 ORDER_RETURNED_TO_POOL, dostano {len(rtp)}"
     assert rtp[0]["payload"]["reason"] == "undelivered"
-    assert "T002_ORDER_RETURNED_undelivered_reconcile" == rtp[0]["event_id"]
+    assert "T002_ORDER_RETURNED_undelivered_canonical" == rtp[0]["event_id"]
 
 def test_cancelled_9():
     parsed = build_parsed({"T003"})
@@ -284,7 +284,7 @@ def test_pu_status_5_with_dzien_odbioru():
     assert ev["order_id"] == "PU001"
     assert ev["courier_id"] == "777"
     assert ev["payload"]["timestamp"] == "2026-04-11 18:00:00"
-    assert ev["event_id"] == "PU001_COURIER_PICKED_UP_reconcile"
+    assert ev["event_id"] == "PU001_COURIER_PICKED_UP_canonical"
     assert "PU001" in touched, "cursor nie zostal przesuniety"
     assert "PU001" in fetched
 

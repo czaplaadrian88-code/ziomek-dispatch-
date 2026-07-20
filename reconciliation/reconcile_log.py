@@ -13,7 +13,10 @@ Schema per discrepancy line:
     "last_event_age_h": 540.2,
     "state_status": "delivered" | null,
     "action": "resynced" | "alert_only_young" | "alert_only_ghost" | "would_resync_dry_run" |
-              "skipped_dedup" | "alert_only_hard_cap_exceeded" | "emit_failed",
+              "skipped_dedup" | "skipped_superseded" | "state_update_failed" |
+              "resynced_downstream_pending" |
+              "resynced_downstream_already_applied" | "durable_apply_failed" |
+              "alert_only_hard_cap_exceeded" | "emit_failed",
     "inferred_terminal_event": "COURIER_DELIVERED" | "ORDER_RETURNED_TO_POOL" | null,
     "emitted_event_id": "470515_COURIER_DELIVERED_phantom_resync" | null,
     "error": null | string
@@ -239,7 +242,14 @@ def query_recent_summary(
                     none_seq += 1
                 if t == "PHANTOM":
                     phantom_oids.add(oid)
-                    if rec.get("action") == "resynced":
+                    # Durable resync ma trzy jawne warianty wyniku. Wszystkie
+                    # oznaczaja, ze state zostal naprawiony; suffix opisuje tylko
+                    # stan drugiej fazy downstream, nie zmienia klasy health.
+                    if rec.get("action") in {
+                        "resynced",
+                        "resynced_downstream_pending",
+                        "resynced_downstream_already_applied",
+                    }:
                         resync_oids.add(oid)
                     elif rec.get("action", "").startswith("alert_only"):
                         manual_alert_oids.add(oid)

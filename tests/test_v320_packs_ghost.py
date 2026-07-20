@@ -24,6 +24,7 @@ from dispatch_v2 import panel_client as pc
 from dispatch_v2 import common as cm
 from dispatch_v2 import event_bus as eb
 from dispatch_v2 import coordinator_time_recheck as ctr
+from dispatch_v2.durable_event_apply import DurableApplyOutcome
 
 # `_diff_and_emit()` zawsze drenuje kolejkę force-recheck. Bez jawnego patcha
 # ten poboczny tor próbował otwierać produkcyjny lockfile, a fail-soft w watcherze
@@ -50,6 +51,7 @@ def check(label, cond):
 # ---- mocks ----
 
 _EMIT_CALLS = []
+_SEEN_EVENT_KEYS = set()
 
 
 def _mock_emit(event_type, order_id=None, courier_id=None, payload=None, event_id=None):
@@ -66,6 +68,40 @@ def _mock_emit(event_type, order_id=None, courier_id=None, payload=None, event_i
 
 def _mock_update_from_event(ev):
     pass  # no-op for tests
+
+
+def _mock_emit_and_apply_state(
+    event_type,
+    *,
+    order_id,
+    courier_id=None,
+    payload=None,
+    state_payload=None,
+    event_id,
+    audit=False,
+):
+    event_created = event_id not in _SEEN_EVENT_KEYS
+    _SEEN_EVENT_KEYS.add(event_id)
+    rec = {
+        "event_type": event_type,
+        "order_id": order_id,
+        "courier_id": courier_id,
+        "payload": payload,
+        "event_id": event_id,
+    }
+    _EMIT_CALLS.append(rec)
+    state_event = dict(rec)
+    state_event["payload"] = payload if state_payload is None else state_payload
+    _mock_update_from_event(state_event)
+    return DurableApplyOutcome(
+        event_id=event_id,
+        event_key=event_id,
+        event_created=event_created,
+        state_ready=True,
+        state_transitioned=True,
+        downstream_executed=True,
+        state_event=state_event,
+    )
 
 
 _STATE = {}
@@ -111,6 +147,14 @@ _KID_JSON = None
 def _install_mocks():
     pw.emit = _mock_emit
     pw.update_from_event = _mock_update_from_event
+    pw._emit_and_apply_state = _mock_emit_and_apply_state
+    pw.durable_event_apply.drain_pending = lambda **_kwargs: {
+        "seen": 0,
+        "state_ready": 0,
+        "downstream": 0,
+        "superseded": 0,
+        "failed": 0,
+    }
     pw.state_get_all = _mock_state_get_all
     pw.state_get_order = _mock_state_get_order
     pw.fetch_order_details = _mock_fetch_order_details
@@ -126,6 +170,7 @@ def _install_mocks():
 def _reset():
     global _EMIT_CALLS
     _EMIT_CALLS = []
+    _SEEN_EVENT_KEYS.clear()
     _STATE.clear()
     _FETCH_DETAILS.clear()
 
@@ -187,7 +232,10 @@ _FETCH_DETAILS["GHOST1"] = {
     "czas_doreczenia": "2026-04-19 22:00:00",
 }
 parsed = {
-    "order_ids": [],
+    # Widoczny ogólnie, ale brak w packs: izoluje dokładnie ghost path. Gdyby
+    # order_ids było puste, wcześniejszy disappeared-path tworzy ten sam
+    # canonical event i poprawnie zostawia packs_ghost_detect=0 (dedup).
+    "order_ids": ["GHOST1"],
     "assigned_ids": set(),
     "closed_ids": set(),  # ghost detect runs BEFORE reconcile section
     "rest_names": {},

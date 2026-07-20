@@ -1,0 +1,27 @@
+[Unit]
+Description=Rotate Ziomek JSONL under producer namespace locks
+Documentation=man:logrotate(8)
+RequiresMountsFor=/root/.openclaw/workspace/dispatch_state /root/.openclaw/workspace/scripts/logs
+ConditionPathExists=/etc/logrotate-dispatch-v2-jsonl.conf
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.core.jsonl_rotation /etc/logrotate-dispatch-v2-jsonl.conf --state /var/lib/logrotate/dispatch-v2-jsonl.status
+Nice=19
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+LockPersonality=true
+MemoryDenyWriteExecute=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=full
+RestrictNamespaces=true
+RestrictRealtime=true

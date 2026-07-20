@@ -61,7 +61,7 @@ NON_STATE_EVENT_TYPES = frozenset({
     "CONFIG_RELOAD",
 })
 
-# Internal correction event emitted only to the observer by resurrect_order().
+# Internal correction event emitted by the durable resurrection chokepoint.
 CORRECTION_EVENT_TYPES = frozenset({"ORDER_RESURRECTED"})
 
 # Sources which are allowed to bridge an event gap discovered from a stronger

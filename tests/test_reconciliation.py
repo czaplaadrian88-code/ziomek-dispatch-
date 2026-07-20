@@ -28,11 +28,88 @@ from dispatch_v2.reconciliation import (
     reconcile_log,
     health_endpoint,
 )
+from dispatch_v2.durable_event_apply import DurableApplyOutcome
 
 
 # ---------- Test infrastructure ----------
 
 NOW_FIXED = datetime(2026, 5, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _unit_durable_apply(
+    event_type,
+    *,
+    order_id,
+    courier_id,
+    payload,
+    state_payload,
+    event_key,
+    emit_fn,
+    state_update_fn,
+    effect_status_fn,
+    get_order_fn,
+    downstream_fn,
+):
+    """Adapter jednostkowy: testuje mapowanie auto_resync, nie SQLite outbox.
+
+    Prawdziwa atomowosc, postcondition i crash recovery maja osobny golden
+    ``test_c3_durable_event_apply_2026_07_19.py``. Fake emitery tego starego
+    skryptu celowo mockuja caly chokepoint, zamiast obchodzic fail-closed outbox.
+    """
+    state_event = {
+        "event_type": event_type,
+        "order_id": str(order_id),
+        "courier_id": courier_id,
+        "payload": payload if state_payload is None else state_payload,
+        "event_id": event_key,
+    }
+    try:
+        created_id = emit_fn(
+            event_type=event_type,
+            order_id=order_id,
+            courier_id=courier_id,
+            payload=payload,
+            event_id=event_key,
+        )
+    except Exception:
+        return DurableApplyOutcome(
+            event_key, event_key, False, False, False, False,
+            failure_stage="emit", state_event=state_event,
+        )
+
+    status = effect_status_fn(state_event, get_order_fn(str(order_id)))
+    if status == "applied":
+        return DurableApplyOutcome(
+            event_key, event_key, created_id is not None, True, False, False,
+            state_event=state_event,
+        )
+    if status == "superseded":
+        return DurableApplyOutcome(
+            event_key, event_key, created_id is not None, False, False, False,
+            superseded=True, state_event=state_event,
+        )
+    try:
+        state_update_fn(state_event)
+    except Exception:
+        return DurableApplyOutcome(
+            event_key, event_key, created_id is not None, False, False, False,
+            failure_stage="state_apply", state_event=state_event,
+        )
+    if downstream_fn is not None:
+        downstream_fn(state_event)
+    return DurableApplyOutcome(
+        event_key, event_key, created_id is not None, True, True, True,
+        state_event=state_event,
+    )
+
+
+def _run_auto_resync(*args, **kwargs):
+    kwargs.setdefault("durable_apply_fn", _unit_durable_apply)
+    kwargs.setdefault("get_order_fn", lambda _oid: None)
+    kwargs.setdefault("downstream_fn", lambda _event: None)
+    if "state_is_applied_fn" not in kwargs and "effect_status_fn" not in kwargs:
+        kwargs["effect_status_fn"] = lambda _event, _current: "pending"
+    return auto_resync.auto_resync_phantoms(*args, **kwargs)
 
 
 def make_temp_events_db(rows):
@@ -139,7 +216,7 @@ def test_phantom_age_classification():
         def fake_emit(**kw): emitted.append(kw); return kw.get("event_id")
         def fake_update(_): return None
 
-        result = auto_resync.auto_resync_phantoms(
+        result = _run_auto_resync(
             discrepancies, fake_emit, fake_update,
             age_threshold_hours=4.0, hard_cap_per_run=10,
         )
@@ -186,7 +263,7 @@ def test_auto_resync_emits_correct_event():
     def fake_emit(**kw): emitted.append(kw); return kw.get("event_id")
     def fake_update(e): emitted.append({"_state_update": e}); return None
 
-    result = auto_resync.auto_resync_phantoms(
+    result = _run_auto_resync(
         discrepancies, fake_emit, fake_update,
         age_threshold_hours=4.0, hard_cap_per_run=10,
     )
@@ -224,7 +301,7 @@ def test_auto_resync_hard_cap_5():
 
     # F14 (2026-05-09): hard_cap_max=5 forces effective cap=5, 6 > 5 → safety stop.
     # Default dynamic_scaling=True ALE hard_cap_max=5 wymusza legacy semantics.
-    result = auto_resync.auto_resync_phantoms(
+    result = _run_auto_resync(
         discrepancies, fake_emit, fake_update,
         age_threshold_hours=4.0, hard_cap_per_run=5, hard_cap_max=5,
     )
@@ -252,7 +329,7 @@ def test_alert_only_below_4h():
     def fake_emit(**kw): emitted.append(kw); return kw.get("event_id")
     def fake_update(_): return None
 
-    result = auto_resync.auto_resync_phantoms(
+    result = _run_auto_resync(
         discrepancies, fake_emit, fake_update,
         age_threshold_hours=4.0, hard_cap_per_run=10,
     )
@@ -262,8 +339,8 @@ def test_alert_only_below_4h():
 t("alert_only_below_4h", test_alert_only_below_4h)
 
 
-def test_no_double_resync_idempotent():
-    """Emit returns None (dedup) → action skipped_dedup, no state update."""
+def test_dedup_retries_missing_state_apply():
+    """Emit duplicate bez postcondition musi ponowić state apply."""
     discrepancies = [{
         "order_id": "D1", "courier_id": "100",
         "last_event_type": "COURIER_ASSIGNED",
@@ -279,14 +356,206 @@ def test_no_double_resync_idempotent():
     def fake_emit(**kw): return None  # dedup
     def fake_update(e): state_updates.append(e)
 
-    result = auto_resync.auto_resync_phantoms(
+    result = _run_auto_resync(
         discrepancies, fake_emit, fake_update,
         age_threshold_hours=4.0, hard_cap_per_run=10,
+        state_is_applied_fn=lambda _event: False,
+    )
+    assert result["counts"]["auto_resyncs"] == 1
+    assert len(state_updates) == 1
+    assert result["actions"][0]["action"] == "resynced"
+    assert result["actions"][0]["event_was_new"] is False
+t("dedup retries missing state apply", test_dedup_retries_missing_state_apply)
+
+
+def test_dedup_skips_when_state_postcondition_is_present():
+    """Zwykły duplikat już zastosowanego eventu nie dopisuje historii drugi raz."""
+    discrepancies = [{
+        "order_id": "D2", "courier_id": "100",
+        "last_event_type": "COURIER_ASSIGNED",
+        "last_event_ts": "2026-05-03T00:00:00+00:00",
+        "last_event_age_h": 36.0,
+        "state_status": "delivered",
+        "classification": "PHANTOM",
+        "phantom_subtype": "STATE_TERMINAL",
+        "inferred_terminal_event": "COURIER_DELIVERED",
+        "inferred_reason": "test",
+    }]
+    state_updates = []
+
+    result = _run_auto_resync(
+        discrepancies,
+        lambda **_kw: None,
+        lambda event: state_updates.append(event),
+        age_threshold_hours=4.0,
+        hard_cap_per_run=10,
+        state_is_applied_fn=lambda _event: True,
+    )
+
+    assert result["counts"]["auto_resyncs"] == 0
+    assert state_updates == []
+    assert result["actions"][0]["action"] == "skipped_dedup"
+t("dedup skips when state postcondition exists", test_dedup_skips_when_state_postcondition_is_present)
+
+
+def test_apply_failure_is_not_counted_and_duplicate_recovers_next_run():
+    """Golden C3-01: trwały event po failu apply zostaje odzyskany z duplikatu."""
+    discrepancies = [{
+        "order_id": "D3", "courier_id": "100",
+        "last_event_type": "COURIER_ASSIGNED",
+        "last_event_ts": "2026-05-03T00:00:00+00:00",
+        "last_event_age_h": 36.0,
+        "state_status": "delivered",
+        "classification": "PHANTOM",
+        "phantom_subtype": "STATE_TERMINAL",
+        "inferred_terminal_event": "COURIER_DELIVERED",
+        "inferred_reason": "test",
+    }]
+    emitted = False
+    applied = False
+    apply_attempts = 0
+
+    def fake_emit(**kw):
+        nonlocal emitted
+        if emitted:
+            return None
+        emitted = True
+        return kw["event_id"]
+
+    def flaky_update(_event):
+        nonlocal applied, apply_attempts
+        apply_attempts += 1
+        if apply_attempts == 1:
+            raise RuntimeError("synthetic state write failure")
+        applied = True
+
+    first = _run_auto_resync(
+        discrepancies, fake_emit, flaky_update,
+        age_threshold_hours=4.0, hard_cap_per_run=10,
+        state_is_applied_fn=lambda _event: applied,
+    )
+    second = _run_auto_resync(
+        discrepancies, fake_emit, flaky_update,
+        age_threshold_hours=4.0, hard_cap_per_run=10,
+        state_is_applied_fn=lambda _event: applied,
+    )
+
+    assert first["counts"]["auto_resyncs"] == 0
+    assert first["actions"][0]["action"] == "state_update_failed"
+    assert second["counts"]["auto_resyncs"] == 1
+    assert second["actions"][0]["action"] == "resynced"
+    assert second["actions"][0]["event_was_new"] is False
+    assert apply_attempts == 2
+t("apply failure then duplicate recovery", test_apply_failure_is_not_counted_and_duplicate_recovers_next_run)
+
+
+def test_downstream_failure_is_reported_as_pending_not_dedup():
+    discrepancies = [{
+        "order_id": "D4", "courier_id": "100",
+        "last_event_type": "COURIER_ASSIGNED",
+        "last_event_ts": "2026-05-03T00:00:00+00:00",
+        "last_event_age_h": 36.0,
+        "state_status": "delivered",
+        "classification": "PHANTOM",
+        "phantom_subtype": "STATE_TERMINAL",
+        "inferred_terminal_event": "COURIER_DELIVERED",
+        "inferred_reason": "test",
+    }]
+
+    def downstream_pending(_event_type, **kw):
+        return DurableApplyOutcome(
+            event_id=kw["event_key"],
+            event_key=kw["event_key"],
+            event_created=True,
+            state_ready=True,
+            state_transitioned=True,
+            downstream_executed=False,
+            failure_stage="downstream",
+        )
+
+    result = _run_auto_resync(
+        discrepancies,
+        lambda **kw: kw.get("event_id"),
+        lambda _event: None,
+        age_threshold_hours=4.0,
+        hard_cap_per_run=10,
+        durable_apply_fn=downstream_pending,
+    )
+
+    assert result["counts"]["auto_resyncs"] == 1
+    assert result["counts"]["downstream_pending"] == 1
+    assert result["actions"][0]["action"] == "resynced_downstream_pending"
+t("downstream pending is explicit", test_downstream_failure_is_reported_as_pending_not_dedup)
+
+
+def test_concurrent_consumer_after_our_state_transition_is_not_dedup():
+    """State naprawiony w tym runie pozostaje resynciem, gdy receipt domknal peer."""
+    discrepancies = [{
+        "order_id": "D5", "courier_id": "100",
+        "last_event_type": "COURIER_ASSIGNED",
+        "last_event_ts": "2026-05-03T00:00:00+00:00",
+        "last_event_age_h": 36.0,
+        "state_status": "delivered",
+        "classification": "PHANTOM",
+        "phantom_subtype": "STATE_TERMINAL",
+        "inferred_terminal_event": "COURIER_DELIVERED",
+        "inferred_reason": "test",
+    }]
+
+    def peer_finished_downstream(_event_type, **kw):
+        return DurableApplyOutcome(
+            event_id=kw["event_key"],
+            event_key=kw["event_key"],
+            event_created=True,
+            state_ready=True,
+            state_transitioned=True,
+            downstream_executed=False,
+        )
+
+    result = _run_auto_resync(
+        discrepancies,
+        lambda **kw: kw.get("event_id"),
+        lambda _event: None,
+        age_threshold_hours=4.0,
+        hard_cap_per_run=10,
+        durable_apply_fn=peer_finished_downstream,
+    )
+
+    assert result["counts"]["auto_resyncs"] == 1
+    assert result["actions"][0]["action"] == "resynced_downstream_already_applied"
+t(
+    "concurrent downstream completion preserves resync accounting",
+    test_concurrent_consumer_after_our_state_transition_is_not_dedup,
+)
+
+
+def test_durable_apply_exception_isolated_per_order():
+    discrepancies = [{
+        "order_id": "D5", "courier_id": "100",
+        "last_event_type": "COURIER_ASSIGNED",
+        "last_event_ts": "2026-05-03T00:00:00+00:00",
+        "last_event_age_h": 36.0,
+        "state_status": "delivered",
+        "classification": "PHANTOM",
+        "phantom_subtype": "STATE_TERMINAL",
+        "inferred_terminal_event": "COURIER_DELIVERED",
+        "inferred_reason": "test",
+    }]
+
+    def crash(*_args, **_kwargs):
+        raise RuntimeError("synthetic lock/store failure")
+
+    result = _run_auto_resync(
+        discrepancies,
+        lambda **kw: kw.get("event_id"),
+        lambda _event: None,
+        age_threshold_hours=4.0,
+        hard_cap_per_run=10,
+        durable_apply_fn=crash,
     )
     assert result["counts"]["auto_resyncs"] == 0
-    assert len(state_updates) == 0  # NO state update when emit deduped
-    assert result["actions"][0]["action"] == "skipped_dedup"
-t("no_double_resync_idempotent", test_no_double_resync_idempotent)
+    assert result["actions"][0]["action"] == "durable_apply_failed"
+t("durable apply exception is isolated", test_durable_apply_exception_isolated_per_order)
 
 
 def test_dry_run_no_emit():
@@ -306,7 +575,7 @@ def test_dry_run_no_emit():
     def fake_emit(**kw): emitted.append(kw); return kw.get("event_id")
     def fake_update(_): return None
 
-    result = auto_resync.auto_resync_phantoms(
+    result = _run_auto_resync(
         discrepancies, fake_emit, fake_update,
         age_threshold_hours=4.0, hard_cap_per_run=10,
         dry_run=True,
@@ -419,6 +688,40 @@ def test_manual_alerts_six_distinct_orders_degraded():
     finally:
         os.unlink(tmpf.name)
 t("manual_alerts_six_distinct_orders_degraded", test_manual_alerts_six_distinct_orders_degraded)
+
+
+def test_health_counts_all_durable_resync_outcomes():
+    """Suffix fazy downstream nie moze wyzerowac skutecznej naprawy state."""
+    tmpf = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
+    tmpf.close()
+    log_path = Path(tmpf.name)
+    try:
+        actions = [
+            {
+                "order_id": "RS-PENDING",
+                "classification": "PHANTOM",
+                "action": "resynced_downstream_pending",
+                "state_status": "delivered",
+            },
+            {
+                "order_id": "RS-PEER",
+                "classification": "PHANTOM",
+                "action": "resynced_downstream_already_applied",
+                "state_status": "delivered",
+            },
+        ]
+        records = reconcile_log.build_records(
+            actions, "run_durable_resync", {"hard_cap_hit": False}
+        )
+        reconcile_log.append_records(records, log_path=log_path)
+        summary = reconcile_log.query_recent_summary(
+            log_path=log_path, hours=24, self_heal=False
+        )
+        assert summary["discrepancies_24h"]["phantoms"] == 2
+        assert summary["discrepancies_24h"]["auto_resyncs"] == 2
+    finally:
+        os.unlink(tmpf.name)
+t("health_counts_all_durable_resync_outcomes", test_health_counts_all_durable_resync_outcomes)
 
 
 def test_health_endpoint_response():

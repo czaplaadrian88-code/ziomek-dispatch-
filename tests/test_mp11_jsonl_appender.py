@@ -19,6 +19,9 @@ interleave on POSIX append.
 """
 from __future__ import annotations
 
+import ast
+import builtins
+import gzip
 import json
 import os
 import threading
@@ -57,6 +60,17 @@ def test_append_preserves_prior_content(tmp_path):
     assert lines == ['{"prior": true}', '{"new": 1}']
 
 
+def test_regular_append_separates_truncated_predecessor(tmp_path):
+    p = tmp_path / "out.jsonl"
+    p.write_bytes(b'{"interrupted":')
+
+    ja.append_jsonl(p, {"new": 1})
+
+    lines = p.read_bytes().splitlines()
+    assert lines[0] == b'{"interrupted":'
+    assert json.loads(lines[1]) == {"new": 1}
+
+
 def test_polish_chars_preserved(tmp_path):
     p = tmp_path / "out.jsonl"
     ja.append_jsonl(p, {"name": "Świętojańska"})
@@ -75,6 +89,229 @@ def test_list_record_supported(tmp_path):
     p = tmp_path / "out.jsonl"
     ja.append_jsonl(p, [1, 2, 3])
     assert json.loads(p.read_text(encoding="utf-8")) == [1, 2, 3]
+
+
+def test_custom_serializer_options_preserve_producer_format(tmp_path):
+    from datetime import datetime
+
+    p = tmp_path / "out.jsonl"
+    ja.append_jsonl(
+        p,
+        {"when": datetime(2026, 7, 19, 12, 30), "value": 1},
+        separators=(",", ":"),
+        default=str,
+    )
+
+    assert p.read_text(encoding="utf-8") == (
+        '{"when":"2026-07-19 12:30:00","value":1}\n'
+    )
+
+
+def test_append_once_exact_identity_is_durable_and_idempotent(tmp_path, monkeypatch):
+    p = tmp_path / "out.jsonl"
+    real_fsync = ja.os.fsync
+    fsynced = []
+
+    def spy_fsync(fd):
+        fsynced.append("dir" if os.path.isdir(f"/proc/self/fd/{fd}") else "file")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(ja.os, "fsync", spy_fsync)
+    record = {"lifecycle_event_id": "evt-1", "action": "PANEL_AGREE"}
+
+    assert ja.append_jsonl_once(
+        p,
+        record,
+        dedupe_key="lifecycle_event_id",
+        dedupe_value="evt-1",
+    ) is True
+    assert ja.append_jsonl_once(
+        p,
+        {**record, "action": "PANEL_OVERRIDE"},
+        dedupe_key="lifecycle_event_id",
+        dedupe_value="evt-1",
+    ) is False
+
+    assert [json.loads(line) for line in p.read_text().splitlines()] == [record]
+    assert "file" in fsynced
+    assert "dir" in fsynced
+
+
+def test_known_first_attempt_durable_append_does_not_scan_history(
+    tmp_path, monkeypatch
+):
+    p = tmp_path / "large-learning-log.jsonl"
+    p.write_text('{"legacy":true}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        ja,
+        "_fd_has_identity",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("first durable delivery must not scan history")
+        ),
+    )
+    record = {"lifecycle_event_id": "evt-first", "action": "PANEL_AGREE"}
+
+    ja.append_jsonl_durable(p, record)
+
+    assert json.loads(p.read_text(encoding="utf-8").splitlines()[-1]) == record
+
+
+def test_append_once_concurrent_same_identity_writes_one_line(tmp_path):
+    p = tmp_path / "once.jsonl"
+
+    def writer(_idx):
+        return ja.append_jsonl_once(
+            p,
+            {"lifecycle_event_id": "evt-concurrent", "action": "PANEL_AGREE"},
+            dedupe_key="lifecycle_event_id",
+            dedupe_value="evt-concurrent",
+        )
+
+    results = []
+    threads = [threading.Thread(target=lambda i=i: results.append(writer(i))) for i in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert sum(results) == 1
+    assert not any(thread.is_alive() for thread in threads)
+    assert len(p.read_text().splitlines()) == 1
+
+
+def test_append_once_separates_truncated_legacy_tail(tmp_path):
+    p = tmp_path / "truncated.jsonl"
+    p.write_bytes(b'{"incomplete":')
+    record = {"lifecycle_event_id": "evt-after-crash", "action": "PANEL_AGREE"}
+
+    assert ja.append_jsonl_once(
+        p,
+        record,
+        dedupe_key="lifecycle_event_id",
+        dedupe_value="evt-after-crash",
+    ) is True
+
+    lines = p.read_bytes().splitlines()
+    assert lines[0] == b'{"incomplete":'
+    assert json.loads(lines[1]) == record
+
+
+def test_append_once_retry_finds_identity_after_logrotate_copytruncate(tmp_path):
+    p = tmp_path / "learning_log.jsonl"
+    rotated = tmp_path / "learning_log.jsonl.1"
+    record = {"lifecycle_event_id": "evt-rotated", "action": "PANEL_AGREE"}
+
+    assert ja.append_jsonl_once(
+        p,
+        record,
+        dedupe_key="lifecycle_event_id",
+        dedupe_value="evt-rotated",
+    ) is True
+    rotated.write_bytes(p.read_bytes())
+    p.write_bytes(b"")
+
+    assert ja.append_jsonl_once(
+        p,
+        record,
+        dedupe_key="lifecycle_event_id",
+        dedupe_value="evt-rotated",
+        scan_rotated=True,
+    ) is False
+    assert p.read_bytes() == b""
+    assert [json.loads(line) for line in rotated.read_text().splitlines()] == [record]
+
+
+def test_append_once_retry_finds_identity_in_compressed_rotation(tmp_path):
+    p = tmp_path / "learning_log.jsonl"
+    rotated = tmp_path / "learning_log.jsonl.2.gz"
+    record = {"lifecycle_event_id": "evt-rotated-gz", "action": "PANEL_OVERRIDE"}
+    with gzip.open(rotated, "wb") as stream:
+        stream.write((json.dumps(record) + "\n").encode("utf-8"))
+
+    assert ja.append_jsonl_once(
+        p,
+        record,
+        dedupe_key="lifecycle_event_id",
+        dedupe_value="evt-rotated-gz",
+        scan_rotated=True,
+    ) is False
+    assert p.read_bytes() == b""
+
+
+def test_append_once_restarts_scan_when_rotation_moves_after_glob(
+    tmp_path, monkeypatch
+):
+    """Zmiana .1->.2 miedzy glob/open nie moze stac sie clean miss."""
+    p = tmp_path / "learning_log.jsonl"
+    rotated_1 = tmp_path / "learning_log.jsonl.1"
+    rotated_2 = tmp_path / "learning_log.jsonl.2"
+    record = {"lifecycle_event_id": "evt-moving", "action": "PANEL_AGREE"}
+    rotated_1.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    real_open = open
+    moved = False
+
+    def rotating_open(path, *args, **kwargs):
+        nonlocal moved
+        if Path(path) == rotated_1 and not moved:
+            moved = True
+            rotated_1.rename(rotated_2)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(ja, "open", rotating_open, raising=False)
+
+    assert ja.append_jsonl_once(
+        p,
+        record,
+        dedupe_key="lifecycle_event_id",
+        dedupe_value="evt-moving",
+        scan_rotated=True,
+    ) is False
+    assert moved is True
+    assert p.read_bytes() == b""
+    assert json.loads(rotated_2.read_text(encoding="utf-8")) == record
+
+
+def test_jsonl_logrotate_uses_rename_not_copytruncate():
+    """Rename keeps overlapping legacy writers linked; copytruncate can lose."""
+    deploy = Path(__file__).resolve().parents[1] / "deploy"
+    config_path = deploy / "dispatch-v2-jsonl-logrotate.conf"
+    text = config_path.read_text(encoding="utf-8")
+    blocks = []
+    prefix = []
+    body = []
+    inside = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not inside and line == "{":
+            inside = True
+            body = []
+            continue
+        if inside and line == "}":
+            blocks.append((tuple(prefix), tuple(body)))
+            prefix = []
+            body = []
+            inside = False
+            continue
+        if inside:
+            if line and not line.startswith("#"):
+                body.append(line)
+        elif line and not line.startswith("#"):
+            prefix.append(line)
+
+    jsonl_blocks = [
+        body for paths, body in blocks if any(path.endswith(".jsonl") for path in paths)
+    ]
+    assert len(jsonl_blocks) == 2
+    assert all("copytruncate" not in body for body in jsonl_blocks)
+    assert all("create 0644 root root" in body for body in jsonl_blocks)
+    assert all("daily" in body for body in jsonl_blocks)
+    assert all(any(line.startswith("maxsize ") for line in body) for body in jsonl_blocks)
+    global_config = (deploy / "dispatch-v2-logrotate.conf").read_text(
+        encoding="utf-8"
+    )
+    assert not any(
+        line.strip().endswith(".jsonl") for line in global_config.splitlines()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +385,41 @@ def test_batch_generator_input(tmp_path):
     p = tmp_path / "out.jsonl"
     n = ja.append_jsonl_batch(p, ({"i": i} for i in range(3)))
     assert n == 3
+
+
+def test_durable_batch_separates_tail_and_fsyncs_file_and_directory(
+    tmp_path, monkeypatch
+):
+    p = tmp_path / "out.jsonl"
+    p.write_bytes(b'{"interrupted":')
+    real_fsync = ja.os.fsync
+    fsynced = []
+
+    def spy_fsync(fd):
+        fsynced.append("dir" if os.path.isdir(f"/proc/self/fd/{fd}") else "file")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(ja.os, "fsync", spy_fsync)
+
+    assert ja.append_jsonl_batch_durable(p, ({"i": i} for i in range(2))) == 2
+
+    lines = p.read_bytes().splitlines()
+    assert lines[0] == b'{"interrupted":'
+    assert [json.loads(line) for line in lines[1:]] == [{"i": 0}, {"i": 1}]
+    assert "file" in fsynced
+    assert "dir" in fsynced
+
+
+def test_eta_calibration_writer_uses_durable_batch(tmp_path, monkeypatch):
+    from dispatch_v2 import eta_calibration_logger as eta
+
+    output = tmp_path / "eta_calibration_log.jsonl"
+    monkeypatch.setattr(eta, "OUT_LOG", str(output))
+    rows = [{"oid": "A", "error": 1.5}, {"oid": "B", "error": -0.5}]
+
+    eta.append_atomic(rows)
+
+    assert [json.loads(line) for line in output.read_text().splitlines()] == rows
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +539,361 @@ def test_concurrent_batch_writes_atomic(tmp_path):
                 f"batch torn at line {i + j}: batch mismatch"
             assert parsed[i + j]["seq"] == j, "sequence within batch wrong"
         i += batch_size
+
+
+def test_append_once_serializes_writers_across_active_inode_rotation(
+    tmp_path, monkeypatch
+):
+    """Two writers cannot dedupe on different active/rotated inodes."""
+    p = tmp_path / "out.jsonl"
+    p.write_text("", encoding="utf-8")
+    entered = threading.Event()
+    release = threading.Event()
+    second_done = threading.Event()
+    gate = threading.Lock()
+    paused = False
+    real_scan = ja._fd_has_identity
+
+    def pause_first_scan(fd, key, value):
+        nonlocal paused
+        with gate:
+            first = not paused
+            if first:
+                paused = True
+        result = real_scan(fd, key, value)
+        if first:
+            entered.set()
+            assert release.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(ja, "_fd_has_identity", pause_first_scan)
+    results = {}
+
+    def writer_one():
+        results["one"] = ja.append_jsonl_once(
+            p,
+            {"lifecycle_event_id": "E"},
+            dedupe_key="lifecycle_event_id",
+            dedupe_value="E",
+            scan_rotated=True,
+        )
+
+    def writer_two():
+        results["two"] = ja.append_jsonl_once(
+            p,
+            {"lifecycle_event_id": "E"},
+            dedupe_key="lifecycle_event_id",
+            dedupe_value="E",
+            scan_rotated=True,
+        )
+        second_done.set()
+
+    first = threading.Thread(target=writer_one)
+    first.start()
+    assert entered.wait(timeout=5)
+    p.rename(p.with_name("out.jsonl.1"))
+    p.write_text("", encoding="utf-8")
+    second = threading.Thread(target=writer_two)
+    second.start()
+    assert second_done.wait(timeout=0.1) is False
+    release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert results == {"one": True, "two": False}
+    records = []
+    for candidate in (p.with_name("out.jsonl.1"), p):
+        records.extend(
+            json.loads(line)
+            for line in candidate.read_text(encoding="utf-8").splitlines()
+            if line
+        )
+    assert [row["lifecycle_event_id"] for row in records] == ["E"]
+
+
+def test_rotated_scan_retries_when_numeric_path_reuses_an_inode(
+    tmp_path, monkeypatch
+):
+    p = tmp_path / "out.jsonl"
+    p.write_text("", encoding="utf-8")
+    rot1 = p.with_name("out.jsonl.1")
+    rot2 = p.with_name("out.jsonl.2.gz")
+    rot3 = p.with_name("out.jsonl.3.gz")
+    rot1.write_text('{"lifecycle_event_id":"other-1"}\n', encoding="utf-8")
+    with gzip.open(rot2, "wb") as stream:
+        stream.write(b'{"lifecycle_event_id":"E"}\n')
+    real_match = ja._line_has_identity
+    moved = False
+
+    def rotate_during_first_candidate(raw, key, value):
+        nonlocal moved
+        if not moved:
+            moved = True
+            rot2.rename(rot3)
+            with gzip.open(rot2, "wb") as stream:
+                stream.write(b'{"lifecycle_event_id":"other-2"}\n')
+        return real_match(raw, key, value)
+
+    monkeypatch.setattr(ja, "_line_has_identity", rotate_during_first_candidate)
+    appended = ja.append_jsonl_once(
+        p,
+        {"lifecycle_event_id": "E"},
+        dedupe_key="lifecycle_event_id",
+        dedupe_value="E",
+        scan_rotated=True,
+    )
+
+    assert appended is False
+    assert p.read_text(encoding="utf-8") == ""
+    with gzip.open(rot3, "rb") as stream:
+        assert json.loads(stream.read())["lifecycle_event_id"] == "E"
+
+
+def test_truncated_gzip_match_is_not_accepted_before_crc_footer(tmp_path):
+    p = tmp_path / "out.jsonl"
+    p.write_text("", encoding="utf-8")
+    rotated = p.with_name("out.jsonl.1.gz")
+    with gzip.open(rotated, "wb") as stream:
+        stream.write(b'{"lifecycle_event_id":"E"}\n')
+    payload = rotated.read_bytes()
+    rotated.write_bytes(payload[:-8])  # remove CRC32 + ISIZE trailer
+
+    with pytest.raises(OSError, match="rotated dedupe namespace"):
+        ja.append_jsonl_once(
+            p,
+            {"lifecycle_event_id": "E"},
+            dedupe_key="lifecycle_event_id",
+            dedupe_value="E",
+            scan_rotated=True,
+        )
+    assert p.read_text(encoding="utf-8") == ""
+
+
+def test_canonical_logrotate_wrapper_holds_writer_namespace_lock(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    p = tmp_path / "out.jsonl"
+    completed = threading.Event()
+
+    def writer():
+        ja.append_jsonl(p, {"event": "after-rotation-lock"})
+        completed.set()
+
+    with jr.hold_jsonl_rotation_locks((p,)):
+        thread = threading.Thread(target=writer)
+        thread.start()
+        assert completed.wait(timeout=0.2) is False
+    thread.join(timeout=5)
+
+    assert completed.is_set()
+    assert json.loads(p.read_text(encoding="utf-8"))["event"] == "after-rotation-lock"
+
+
+def test_logrotate_wrapper_defers_while_legacy_data_inode_is_open(
+    tmp_path, monkeypatch
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    p = tmp_path / "out.jsonl"
+    p.write_text('{"event":"before"}\n', encoding="utf-8")
+    called = []
+    monkeypatch.setattr(
+        jr.subprocess,
+        "run",
+        lambda *_args, **_kwargs: called.append(True),
+    )
+
+    with p.open("a", encoding="utf-8"):
+        with pytest.raises(jr.OpenJsonlInodeError, match="still open"):
+            jr.run_logrotate(
+                str(tmp_path / "logrotate.conf"),
+                paths=(p,),
+            )
+
+    assert called == []
+
+
+def test_legacy_writer_opening_after_gate_stays_linked_by_rename(
+    tmp_path, monkeypatch
+):
+    """TOCTOU after /proc scan is safe because rotation never truncates."""
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    p = tmp_path / "out.jsonl"
+    p.write_text('{"event":"before"}\n', encoding="utf-8")
+    rotated = p.with_name("out.jsonl.1")
+
+    class Completed:
+        returncode = 0
+
+    def rename_while_legacy_fd_is_open(*_args, **_kwargs):
+        with p.open("a", encoding="utf-8") as legacy:
+            p.rename(rotated)
+            p.touch()
+            legacy.write('{"event":"late-legacy"}\n')
+            legacy.flush()
+            os.fsync(legacy.fileno())
+        return Completed()
+
+    monkeypatch.setattr(jr.subprocess, "run", rename_while_legacy_fd_is_open)
+
+    assert jr.run_logrotate("unused.conf", paths=(p,)) == 0
+    assert [
+        json.loads(line)["event"]
+        for line in rotated.read_text(encoding="utf-8").splitlines()
+    ] == ["before", "late-legacy"]
+    assert p.read_text(encoding="utf-8") == ""
+
+
+def test_logrotate_wrapper_manifest_matches_every_jsonl_config_path():
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    deploy = Path(__file__).resolve().parents[1] / "deploy"
+    config_path = deploy / "dispatch-v2-jsonl-logrotate.conf"
+    configured = {
+        line.strip()
+        for line in config_path.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("/") and line.strip().endswith(".jsonl")
+    }
+    assert configured == set(jr.JSONL_PATHS)
+    service = (deploy / "dispatch-v2-jsonl-logrotate.service").read_text(
+        encoding="utf-8"
+    )
+    timer = (deploy / "dispatch-v2-jsonl-logrotate.timer").read_text(
+        encoding="utf-8"
+    )
+    assert "dispatch_v2.core.jsonl_rotation" in service
+    assert "/etc/logrotate-dispatch-v2-jsonl.conf" in service
+    assert "OnCalendar=" in timer
+
+
+def test_every_known_rotated_jsonl_writer_uses_shared_appender():
+    """Completeness gate for all producer paths behind JSONL_PATHS.
+
+    This list intentionally includes offline timers and the still-executable
+    onboarding migration: any one of them can overlap system logrotate.
+    """
+    root = Path(__file__).resolve().parents[1]
+    writers = {
+        "learning_log": (
+            "panel_watcher.py",
+            "telegram_approver.py",
+            "auto_assign_executor.py",
+            "shift_notifications/state.py",
+            "migrations/migrate_couriers_2026-05-05.py",
+        ),
+        "v319c_read_shadow": ("plan_manager.py",),
+        "shadow_decisions": ("shadow_dispatcher.py",),
+        "sla": ("sla_tracker.py",),
+        "consumer_stuck": ("monitoring/consumer_stuck_alert.py",),
+        "obj_replay": ("obj_replay_capture.py",),
+        "eta_calibration": ("eta_calibration_logger.py",),
+        "drive_min_enriched": ("tools/shadow_outcome_enricher.py",),
+        "drive_min_calibration": ("auto_proximity_classifier.py",),
+        "plan_recheck": ("plan_recheck.py",),
+        "czasowka": ("czasowka_scheduler.py",),
+        "geocoding": ("geocoding_audit.py",),
+    }
+    for group, relative_paths in writers.items():
+        for relative_path in relative_paths:
+            source = (root / relative_path).read_text(encoding="utf-8")
+            assert "append_jsonl" in source, f"{group}: {relative_path} bypasses shim"
+            tree = ast.parse(source, filename=relative_path)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if isinstance(node.func, ast.Name) and node.func.id == "open":
+                    mode_node = node.args[1] if len(node.args) > 1 else None
+                    for keyword in node.keywords:
+                        if keyword.arg == "mode":
+                            mode_node = keyword.value
+                    mode = (
+                        mode_node.value
+                        if isinstance(mode_node, ast.Constant)
+                        and isinstance(mode_node.value, str)
+                        else ""
+                    )
+                    target = ast.unparse(node.args[0]) if node.args else ""
+                    if "a" in mode and "LOCK" not in target.upper():
+                        pytest.fail(
+                            f"{group}: {relative_path}:{node.lineno} retains "
+                            f"bare append {target!r} mode={mode!r}"
+                        )
+                if (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "open"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "os"
+                    and any("O_APPEND" in ast.unparse(arg) for arg in node.args[1:])
+                ):
+                    pytest.fail(
+                        f"{group}: {relative_path}:{node.lineno} retains "
+                        "bare os.open(...O_APPEND)"
+                    )
+
+
+def test_rotated_identity_fsync_stays_bound_to_scanned_inode(
+    tmp_path, monkeypatch
+):
+    """Rename/reuse after scan must not fsync an unrelated replacement path."""
+    p = tmp_path / "out.jsonl"
+    p.write_text("", encoding="utf-8")
+    rot1 = p.with_name("out.jsonl.1")
+    rot2 = p.with_name("out.jsonl.2")
+    rot1.write_text('{"lifecycle_event_id":"E"}\n', encoding="utf-8")
+    record_inode = rot1.stat().st_ino
+    real_open = builtins.open
+    moved = False
+
+    class RotateAfterScan:
+        def __init__(self, stream):
+            self._stream = stream
+
+        def __enter__(self):
+            self._stream.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            nonlocal moved
+            result = self._stream.__exit__(exc_type, exc, tb)
+            if not moved:
+                moved = True
+                rot1.rename(rot2)
+                with real_open(rot1, "w", encoding="utf-8") as replacement:
+                    replacement.write('{"lifecycle_event_id":"other"}\n')
+            return result
+
+        def __iter__(self):
+            return iter(self._stream)
+
+        def fileno(self):
+            return self._stream.fileno()
+
+    def racing_open(path, mode="r", *args, **kwargs):
+        stream = real_open(path, mode, *args, **kwargs)
+        if Path(path) == rot1 and mode == "rb" and not moved:
+            return RotateAfterScan(stream)
+        return stream
+
+    fsynced_inodes = []
+    real_fsync = ja.os.fsync
+
+    def spy_fsync(fd):
+        fsynced_inodes.append(os.fstat(fd).st_ino)
+        return real_fsync(fd)
+
+    monkeypatch.setattr(builtins, "open", racing_open)
+    monkeypatch.setattr(ja.os, "fsync", spy_fsync)
+
+    assert ja.append_jsonl_once(
+        p,
+        {"lifecycle_event_id": "E"},
+        dedupe_key="lifecycle_event_id",
+        dedupe_value="E",
+        scan_rotated=True,
+    ) is False
+    assert record_inode in fsynced_inodes
+    assert p.read_text(encoding="utf-8") == ""
 
 
 # ---------------------------------------------------------------------------

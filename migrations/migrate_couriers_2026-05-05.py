@@ -124,8 +124,8 @@ def _atomic_write_json(path: str, data: Any) -> None:
 def _append_learning_log(event: Dict[str, Any], path: str = LEARNING_LOG_PATH) -> None:
     """Append a single JSON line to learning_log.jsonl. Best-effort, NIE krytyczny."""
     try:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(path, event)
     except OSError as e:
         log.warning(f"learning_log append failed: {e}")
 

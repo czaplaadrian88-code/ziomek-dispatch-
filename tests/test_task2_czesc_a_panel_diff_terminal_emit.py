@@ -9,7 +9,7 @@ Post-fix: panel_diff path mirroruje reconcile path L960 → emit ORDER_RETURNED_
 Tests:
   1-2: status_id 8/9 emituje ORDER_RETURNED_TO_POOL z poprawnym reason mapping
   3:   payload.source="panel_diff" (dyskryminator vs reconcile path)
-  4:   idempotent — emit dedup → update_from_event NIE wołane
+  4:   stabilny semantyczny event_key przekazany do durable recovery
   5:   state_machine.delete_order raises na non-terminal status (Z3 safety guard)
   6:   state_machine.delete_order akceptuje terminal status
   7:   panel_diff path 8/9 → reason mapping spójny z reconcile L960
@@ -29,18 +29,23 @@ from dispatch_v2 import state_machine as _sm
 _sm._state_path = lambda: os.path.join(_TMP_STATE_DIR, "orders_state.json")
 
 from dispatch_v2 import panel_watcher
+from dispatch_v2.durable_event_apply import DurableApplyOutcome
 
 FAKE_STATE = {
     "PD001": {"status": "assigned", "restaurant": "Test Resto 1", "delivery_address": "Addr 1"},
     "PD002": {"status": "assigned", "restaurant": "Test Resto 2", "delivery_address": "Addr 2"},
     "PD003": {"status": "delivered","restaurant": "Test Resto 3", "delivery_address": "Addr 3"},
+    "PD004": {"status": "assigned", "restaurant": "Test Resto 4", "delivery_address": "Addr 4"},
 }
 FAKE_DETAILS = {
     "PD001": {"id_status_zamowienia": 8, "id_kurier": 511, "czas_doreczenia": None},
     "PD002": {"id_status_zamowienia": 9, "id_kurier": 512, "czas_doreczenia": None},
+    "PD004": {"id_status_zamowienia": 7, "id_kurier": 514,
+              "czas_doreczenia": "2026-07-19 12:00:00"},
 }
 
 emitted, updated, fetched = [], [], []
+seen_event_keys = set()
 def fake_emit(event_type, order_id=None, courier_id=None, payload=None, event_id=None):
     emitted.append({"event_type": event_type, "order_id": order_id, "courier_id": courier_id,
                     "payload": payload, "event_id": event_id})
@@ -54,11 +59,60 @@ def fake_fetch_order_details(zid, csrf=None):
 def fake_state_get_all():
     return FAKE_STATE
 
+
+def fake_emit_and_apply_state(
+    event_type,
+    *,
+    order_id,
+    courier_id=None,
+    payload=None,
+    state_payload=None,
+    event_id,
+    audit=False,
+):
+    """Mock calego durable chokepoint; prawdziwy outbox ma osobny golden C3."""
+    event_created = event_id not in seen_event_keys
+    seen_event_keys.add(event_id)
+    emitted.append({
+        "event_type": event_type,
+        "order_id": order_id,
+        "courier_id": courier_id,
+        "payload": payload,
+        "event_id": event_id,
+        "event_created": event_created,
+        "audit": audit,
+    })
+    state_event = {
+        "event_type": event_type,
+        "order_id": order_id,
+        "courier_id": courier_id,
+        "payload": payload if state_payload is None else state_payload,
+        "event_id": event_id,
+    }
+    fake_update_from_event(state_event)
+    return DurableApplyOutcome(
+        event_id=event_id,
+        event_key=event_id,
+        event_created=event_created,
+        state_ready=True,
+        state_transitioned=True,
+        downstream_executed=True,
+        state_event=state_event,
+    )
+
 panel_watcher.emit = fake_emit
 # De-erozja 2026-05-21: ORDER_RETURNED_TO_POOL emitowane przez emit_audit (R-04
 # dual-write 2026-05-13), nie emit. Ten sam fake (identyczna sygnatura) łapie oba.
 panel_watcher.emit_audit = fake_emit
 panel_watcher.update_from_event = fake_update_from_event
+panel_watcher._emit_and_apply_state = fake_emit_and_apply_state
+panel_watcher.durable_event_apply.drain_pending = lambda **_kwargs: {
+    "seen": 0,
+    "state_ready": 0,
+    "downstream": 0,
+    "superseded": 0,
+    "failed": 0,
+}
 panel_watcher.fetch_order_details = fake_fetch_order_details
 panel_watcher.state_get_all = fake_state_get_all
 
@@ -81,7 +135,11 @@ def build_parsed_panel_diff(disappeared_zids):
     }
 
 
-def reset(): emitted.clear(); updated.clear(); fetched.clear()
+def reset():
+    emitted.clear()
+    updated.clear()
+    fetched.clear()
+    seen_event_keys.clear()
 
 
 passed, failed = 0, 0
@@ -112,7 +170,7 @@ def test_panel_diff_status_8_emits_returned_to_pool():
     assert rtp[0]["payload"]["reason"] == "undelivered"
     assert rtp[0]["payload"]["source"] == "panel_diff"
     assert rtp[0]["courier_id"] == "511"
-    assert "PD001_ORDER_RETURNED_undelivered_panel_diff" == rtp[0]["event_id"]
+    assert "PD001_ORDER_RETURNED_undelivered_canonical" == rtp[0]["event_id"]
     assert any(u["event_type"] == "ORDER_RETURNED_TO_POOL" and u["order_id"] == "PD001" for u in updated)
 t("panel_diff status_id=8 emits ORDER_RETURNED_TO_POOL", test_panel_diff_status_8_emits_returned_to_pool)
 
@@ -125,7 +183,7 @@ def test_panel_diff_status_9_emits_returned_to_pool():
     assert rtp[0]["order_id"] == "PD002"
     assert rtp[0]["payload"]["reason"] == "cancelled"
     assert rtp[0]["payload"]["source"] == "panel_diff"
-    assert "PD002_ORDER_RETURNED_cancelled_panel_diff" == rtp[0]["event_id"]
+    assert "PD002_ORDER_RETURNED_cancelled_canonical" == rtp[0]["event_id"]
 t("panel_diff status_id=9 emits ORDER_RETURNED_TO_POOL", test_panel_diff_status_9_emits_returned_to_pool)
 
 
@@ -134,32 +192,36 @@ def test_panel_diff_source_discriminator():
     panel_watcher._diff_and_emit(parsed, csrf="dummy")
     rtp = [e for e in emitted if e["event_type"] == "ORDER_RETURNED_TO_POOL"]
     assert rtp[0]["payload"]["source"] == "panel_diff"
-    assert "panel_diff" in rtp[0]["event_id"]
+    assert rtp[0]["event_id"] == "PD001_ORDER_RETURNED_undelivered_canonical"
 t("panel_diff source discriminator (vs reconcile)", test_panel_diff_source_discriminator)
 
 
-def test_panel_diff_no_update_when_emit_dedup():
-    # De-erozja 2026-06-13: ORDER_RETURNED_TO_POOL idzie przez emit_audit (R-04
-    # dual-write), więc to ZWROT emit_audit (None=dedup) gateuje update_from_event
-    # dla tej ścieżki — nie emit. Stary test nadpisywał tylko emit → ścieżka dalej
-    # leciała przez prawdziwy fake_emit (truthy) i update SIĘ wołał. Nadpisujemy
-    # emit_audit (i emit dla spójności), żeby zasymulować dedup całej ścieżki.
+def test_panel_diff_reuses_semantic_key_for_durable_retry():
+    # Unit call-site: ponowienie przekazuje ten sam event_key do durable helpera.
+    # Exact-payload recovery i dedup aplikacji sprawdza realny golden C3/SQLite.
     parsed = build_parsed_panel_diff(["PD001"])
-    saved_emit = panel_watcher.emit
-    saved_emit_audit = panel_watcher.emit_audit
-    def dedup_emit(*a, **kw):
-        emitted.append({"event_type": kw.get("event_type") or (a[0] if a else None), **kw})
-        return None
-    panel_watcher.emit = dedup_emit
-    panel_watcher.emit_audit = dedup_emit
-    try:
-        panel_watcher._diff_and_emit(parsed, csrf="dummy")
-        rtp_updates = [u for u in updated if u["event_type"] == "ORDER_RETURNED_TO_POOL"]
-        assert len(rtp_updates) == 0
-    finally:
-        panel_watcher.emit = saved_emit
-        panel_watcher.emit_audit = saved_emit_audit
-t("idempotent: no update when emit deduped", test_panel_diff_no_update_when_emit_dedup)
+    panel_watcher._diff_and_emit(parsed, csrf="dummy")
+    panel_watcher._diff_and_emit(parsed, csrf="dummy")
+    rtp = [e for e in emitted if e["event_type"] == "ORDER_RETURNED_TO_POOL"]
+    assert len(rtp) == 2
+    assert rtp[0]["event_id"] == rtp[1]["event_id"]
+    assert rtp[0]["event_created"] is True
+    assert rtp[1]["event_created"] is False
+t("stable event_key dla durable retry", test_panel_diff_reuses_semantic_key_for_durable_retry)
+
+
+def test_disappeared_delivered_state_payload_preserves_delivery_address():
+    parsed = build_parsed_panel_diff(["PD004"])
+    panel_watcher._diff_and_emit(parsed, csrf="dummy")
+    delivered = [e for e in updated if e["event_type"] == "COURIER_DELIVERED"]
+    assert len(delivered) == 1
+    payload = delivered[0]["payload"]
+    assert payload["final_location"] == "Addr 4"
+    assert payload["delivery_address"] == "Addr 4"
+t(
+    "disappeared->delivered zachowuje address w durable state payload",
+    test_disappeared_delivered_state_payload_preserves_delivery_address,
+)
 
 
 def test_delete_order_safety_guard():

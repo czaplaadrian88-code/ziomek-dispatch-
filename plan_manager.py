@@ -392,6 +392,10 @@ def advance_plan(
             return
         # Remove both pickup and dropoff for delivered order — once delivered,
         # pickup is definitionally in the past and shouldn't linger in the plan.
+        if not any(s.get("order_id") == doid for s in plan.get("stops", [])):
+            # At-least-once durable callback retry after a later save_plan must
+            # not overwrite that newer plan's anchor with an old delivery.
+            return
         new_stops = [
             s for s in plan.get("stops", []) if s.get("order_id") != doid
         ]
@@ -626,9 +630,8 @@ def log_read_shadow_diff(
         }
         if extra:
             entry["extra"] = extra
-        SHADOW_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(SHADOW_LOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(SHADOW_LOG_PATH, entry)
     except Exception as e:
         _log.warning(f"log_read_shadow_diff fail cid={cid}: {e}")
 

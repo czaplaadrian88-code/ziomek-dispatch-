@@ -218,9 +218,8 @@ def _now_utc() -> datetime:
 
 def _log_recheck_entry(entry: Dict[str, Any]) -> None:
     try:
-        RECHECK_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(RECHECK_LOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(RECHECK_LOG_PATH, entry)
     except Exception as e:
         _log.warning(f"recheck log write fail: {e}")
 
@@ -2355,8 +2354,8 @@ def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, no
             "invariant_violation": delta < -0.5,
             "frozen_seq": frozen_labels, "fresh_seq": fresh_labels,
         }
-        with open(_BUG4_RESEQ_SHADOW_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(rec_out, ensure_ascii=False) + "\n")
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(_BUG4_RESEQ_SHADOW_PATH, rec_out)
         summary["bug4_shadow_evals"] = summary.get("bug4_shadow_evals", 0) + 1
     except Exception as e:
         _log.warning(f"bug4_reseq_shadow cid={cid} fail: {type(e).__name__}: {e}")
@@ -2365,7 +2364,8 @@ def _bug4_reseq_shadow(cid, oids, existing_plan, orders_state, gps_positions, no
 def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = None,
                      gps_positions: Optional[Dict[str, Any]] = None,
                      now: Optional[datetime] = None,
-                     reason: str = "override") -> bool:
+                     reason: str = "override", *,
+                     _raise_on_error: bool = False) -> bool:
     """F3: natychmiastowa decyzja sekwencji dla JEDNEGO kuriera (wywoływana z
     panel_watcher na zmianę worka: override/reassign LUB odebranie zlecenia),
     bez czekania na 5-min tick.
@@ -2391,6 +2391,8 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
                 with open(ORDERS_STATE_PATH) as fh:
                     orders_state = json.load(fh)
             except Exception:
+                if _raise_on_error:
+                    raise
                 return False
         oids = [str(oid) for oid, rec in orders_state.items()
                 if isinstance(rec, dict) and str(rec.get("courier_id") or "") == cid
@@ -2437,12 +2439,15 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
         return ok
     except Exception as e:
         _log.warning(f"redecide_courier cid={courier_id} fail: {type(e).__name__}: {e}")
+        if _raise_on_error:
+            raise
         return False
 
 
 def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = None,
                     gps_positions: Optional[Dict[str, Any]] = None,
-                    now: Optional[datetime] = None, reason: str = "event") -> bool:
+                    now: Optional[datetime] = None, reason: str = "event", *,
+                    _raise_on_error: bool = False) -> bool:
     """RECANON-ON-WRITE: re-egzekwuj niezmienniki kanonu (carried-first floor +
     odbiory wg committed + relax „po drodze") na ISTNIEJĄCYM planie kuriera
     NATYCHMIAST po zdarzeniu worka (odbiór/dostawa/przydział), bez czekania ≤5 min
@@ -2465,6 +2470,8 @@ def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = No
                 with open(ORDERS_STATE_PATH) as fh:
                     orders_state = json.load(fh)
             except Exception:
+                if _raise_on_error:
+                    raise
                 return False
         oids = [str(oid) for oid, rec in orders_state.items()
                 if isinstance(rec, dict) and str(rec.get("courier_id") or "") == cid
@@ -2494,6 +2501,8 @@ def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = No
         return False
     except Exception as e:
         _log.warning(f"recanon_courier cid={courier_id} fail: {type(e).__name__}: {e}")
+        if _raise_on_error:
+            raise
         return False
 
 

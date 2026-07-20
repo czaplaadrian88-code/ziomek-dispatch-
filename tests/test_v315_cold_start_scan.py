@@ -19,6 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dispatch_v2 import panel_watcher  # noqa: E402
+from dispatch_v2.durable_event_apply import DurableApplyOutcome  # noqa: E402
 
 
 def _mock_parsed(courier_packs=None):
@@ -76,10 +77,36 @@ def _run_scan(parsed, state_orders=(), kurier_ids=None, raw_fetches=None,
         if update_captures is not None:
             update_captures.append(ev)
 
+    def fake_durable(
+        event_type, *, order_id, courier_id=None, payload=None,
+        state_payload=None, event_id, audit=False,
+    ):
+        if emit_captures is not None:
+            emit_captures.append({
+                "event_type": event_type,
+                "order_id": order_id,
+                "courier_id": courier_id,
+                "payload": payload,
+                "event_id": event_id,
+            })
+        state_event = {
+            "event_type": event_type,
+            "order_id": order_id,
+            "courier_id": courier_id,
+            "payload": payload if state_payload is None else state_payload,
+            "event_id": event_id,
+        }
+        fake_update(state_event)
+        return DurableApplyOutcome(
+            event_id, event_id, True, True, True, True,
+            state_event=state_event,
+        )
+
     with mock.patch("dispatch_v2.panel_watcher.state_get_all", return_value=state), \
          mock.patch("dispatch_v2.panel_watcher.fetch_order_details", side_effect=fake_fetch), \
          mock.patch("dispatch_v2.panel_watcher.emit_audit", side_effect=fake_emit), \
          mock.patch("dispatch_v2.panel_watcher.update_from_event", side_effect=fake_update), \
+         mock.patch("dispatch_v2.panel_watcher._emit_and_apply_state", side_effect=fake_durable), \
          mock.patch("dispatch_v2.panel_watcher._save_plan_on_assign"), \
          mock.patch("builtins.open", mock.mock_open(read_data=kurier_ids_json)):
         return panel_watcher._post_restart_cold_start_scan(parsed, csrf="test")
@@ -114,8 +141,8 @@ def main():
            and cs_emits[0].get("courier_id") == "508")
     expect("stats emitted=1", stats.get("cold_start_emitted") == 1)
     expect("stats scanned=1", stats.get("cold_start_scanned") == 1)
-    expect("event_id ma _coldstart suffix",
-           cs_emits and cs_emits[0].get("event_id", "").endswith("_coldstart"))
+    expect("event_id ma wspolny _canonical suffix",
+           cs_emits and cs_emits[0].get("event_id", "").endswith("_canonical"))
 
     # --- TEST 2: state z courier_id=None (entry exists ale ASSIGNED dropped) ---
     print("\n=== test 2: state.cid=None → emit ===")
@@ -263,7 +290,7 @@ def main():
     cs_emits = [e for e in emits if e.get("payload", {}).get("source") == "cold_start_scan"]
     expect("nick spoza mapping → skip", len(cs_emits) == 0)
 
-    # --- TEST 13: idempotent event_id (_coldstart suffix deterministic) ---
+    # --- TEST 13: idempotent event_id (wspolny canonical key) ---
     print("\n=== test 13: event_id deterministic suffix ===")
     emits = []
     _run_scan(
@@ -273,7 +300,7 @@ def main():
         raw_fetches={"467140": _raw_response("467140", 508, status_id=3)},
         emit_captures=emits,
     )
-    expected_eid = "467140_COURIER_ASSIGNED_508_coldstart"
+    expected_eid = "467140_COURIER_ASSIGNED_508_canonical"
     expect(f"event_id={expected_eid}",
            emits and emits[0].get("event_id") == expected_eid)
 

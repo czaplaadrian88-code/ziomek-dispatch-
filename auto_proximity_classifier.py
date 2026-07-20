@@ -26,7 +26,6 @@ Adrian decyzje 2026-05-06:
 """
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -253,11 +252,8 @@ def _append_drive_min_calibration_shadow(entry: Dict[str, Any]) -> None:
         DRIVE_MIN_CALIBRATION_SHADOW_LOG_PATH,
     )
     try:
-        line = json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n"
-        # Append-mode write — atomic ENOUGH dla JSONL (POSIX append <= PIPE_BUF).
-        # NIE używamy temp+rename bo to log append, nie state file.
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line)
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(path, entry, separators=(",", ":"))
     except Exception:
         # Defensive: brak directory, permission, dysk full — log fail nie blokuje routingu.
         pass

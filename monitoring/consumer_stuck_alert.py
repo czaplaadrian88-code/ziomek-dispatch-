@@ -16,7 +16,6 @@ przez `append_evaluation_log` — survivability cross-restart + future calibrati
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -253,13 +252,14 @@ def append_evaluation_log(
     now: float,
     log_path: Optional[Path] = None,
 ) -> None:
-    """Append-only audit trail. Atomic line write (append O_APPEND single-line JSON
-    = atomic na POSIX dla <PIPE_BUF). Defense-in-depth try/except — log fail NIE
-    blokuje hot path (consumer wciąż działa, tylko obs gap)."""
+    """Append-only audit trail under the shared writer/logrotate lock.
+
+    Defense-in-depth try/except — log fail NIE blokuje hot path (consumer
+    wciąż działa, tylko obs gap).
+    """
     if log_path is None:
         log_path = DEFAULT_EVALUATIONS_LOG_PATH
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "ts": now,
             "consumer_id": config.consumer_id,
@@ -271,8 +271,8 @@ def append_evaluation_log(
             "kind": kind,
             "shadow_mode_only": config.shadow_mode_only,
         }
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(log_path, record)
     except Exception:
         # Audit log fail NIE eskaluje — consumer tick must continue.
         pass

@@ -16,8 +16,6 @@ Flag ENABLE_GEOCODING_AUDIT_LOG (default True, env override) — kill switch.
 
 from __future__ import annotations
 
-import fcntl
-import json
 import logging
 import os
 import time
@@ -52,7 +50,7 @@ def log_geocode(
     error: Optional[str] = None,
     log_path: Optional[str] = None,
 ) -> None:
-    """Atomic append JSONL z fcntl.LOCK_EX. Defense-in-depth try/except."""
+    """Append JSONL under the shared writer/logrotate namespace lock."""
     if not _flag_enabled():
         return
     record = {
@@ -69,17 +67,7 @@ def log_geocode(
         record["error"] = str(error)[:500]
     path = log_path or LOG_PATH
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        line = json.dumps(record, ensure_ascii=False) + "\n"
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            os.write(fd, line.encode("utf-8"))
-        finally:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except Exception:
-                pass
-            os.close(fd)
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(path, record)
     except Exception as e:
         _log.warning(f"geocoding_audit log fail (non-fatal): {e}")

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Ziomek JSONL rotation under producer locks
+
+[Timer]
+OnCalendar=*-*-* 00:05:00 UTC
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

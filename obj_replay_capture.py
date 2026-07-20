@@ -8,15 +8,12 @@ Fail-safe: capture NIGDY nie może przerwać dispatchu — całość w try/excep
 caller dostaje ciche None. Append pod lockiem (route_simulator wywoływany z
 ThreadPoolExecutor — wiele wątków).
 """
-import json
 import logging
-import threading
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
 CAPTURE_PATH = "/root/.openclaw/workspace/dispatch_state/obj_replay_capture.jsonl"
-_lock = threading.Lock()
 
 
 def _iso(dt):
@@ -66,9 +63,7 @@ def capture(courier_pos, bag, new_order, now, dwell_pickup, dwell_dropoff,
             "bag": [_ser_order(o) for o in (bag or [])],
             "new_order": _ser_order(new_order),
         }
-        line = json.dumps(rec, ensure_ascii=False)
-        with _lock:
-            with open(path, "a") as f:
-                f.write(line + "\n")
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(path, rec)
     except Exception as e:
         log.warning(f"OBJ_REPLAY_CAPTURE_FAIL {type(e).__name__}: {e}")

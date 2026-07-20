@@ -8,7 +8,8 @@ pokazują paczkę przypisaną. Nazwę kuriera → cid rozwiązujemy z `kurier_id
 
 CLI: `parcel_assign.py --oid 900138096 --kurier "Szymon P" [--time 15]`
 Wynik: linia `PARCEL_ASSIGN_OK: ...` (rc 0) lub `PARCEL_ASSIGN_ERROR: ...` (rc 1).
-Idempotent po event_id (powtórka tego samego przydziału = brak duplikatu).
+Idempotentny durable key przydziału rozdziela retry od późniejszego cyklu
+ponownego przypisania tego samego kuriera.
 """
 from __future__ import annotations
 
@@ -16,7 +17,12 @@ import argparse
 import json
 from pathlib import Path
 
-from dispatch_v2 import event_bus, state_machine
+from dispatch_v2 import (
+    durable_event_apply,
+    event_bus,
+    lifecycle_downstream,
+    state_machine,
+)
 
 KURIER_IDS_FILE = Path("/root/.openclaw/workspace/dispatch_state/kurier_ids.json")
 
@@ -43,12 +49,26 @@ def assign_parcel(oid: str, kurier_name: str, time_arg: str | None = None) -> tu
     payload = {"source": "parcel_assign"}
     if time_arg:
         payload["time_arg"] = str(time_arg)
-    event_bus.emit("COURIER_ASSIGNED", order_id=str(oid), courier_id=str(cid),
-                   payload=payload, event_id=f"{oid}_COURIER_ASSIGNED_parcel_{cid}")
-    state_machine.update_from_event({
-        "event_type": "COURIER_ASSIGNED", "order_id": str(oid),
-        "courier_id": str(cid), "payload": payload,
-    })
+    outcome = durable_event_apply.emit_and_apply(
+        "COURIER_ASSIGNED",
+        order_id=str(oid),
+        courier_id=str(cid),
+        payload=payload,
+        state_payload=None,
+        event_key=f"{oid}_COURIER_ASSIGNED_{cid}_canonical",
+        # COURIER_ASSIGNED jest audit-only; queue emit zostawial wieczny pending.
+        emit_fn=event_bus.emit_audit,
+        state_update_fn=state_machine.update_from_event,
+        effect_status_fn=state_machine.event_effect_status,
+        get_order_fn=state_machine.get_order_strict,
+        downstream_fn=lifecycle_downstream.apply,
+    )
+    if not outcome.state_ready:
+        return (
+            False,
+            "PARCEL_ASSIGN_ERROR: przydzial utrwalony do retry, ale state nie "
+            f"jest jeszcze gotowy (stage={outcome.failure_stage or 'pending'})",
+        )
     return True, f"PARCEL_ASSIGN_OK: {kurier_name} (cid={cid}) → paczka {oid}"
 
 

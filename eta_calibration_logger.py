@@ -336,12 +336,11 @@ def extract_row(sla_rec, shadow_index):
 def append_atomic(rows):
     if not rows:
         return
-    os.makedirs(os.path.dirname(OUT_LOG), exist_ok=True)
-    with open(OUT_LOG, "a", encoding="utf-8") as fh:
-        for r in rows:
-            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    try:
+        from dispatch_v2.core.jsonl_appender import append_jsonl_batch_durable
+    except ImportError:  # script-mode ExecStart, WorkingDirectory=dispatch_v2
+        from core.jsonl_appender import append_jsonl_batch_durable
+    append_jsonl_batch_durable(OUT_LOG, rows)
 
 
 def summarize(rows):

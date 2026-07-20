@@ -511,8 +511,17 @@ def test_resurrection_is_observed_as_correction(isolated_state_machine):
          "delivered_at": "2026-07-09T11:00:00+00:00"},
         event="TEST_INIT",
     )
-    out = sm.resurrect_order("res-1", "picked_up", "c1",
-                             reason="panel_status_restored")
+    out = sm.update_from_event({
+        "event_type": "ORDER_RESURRECTED",
+        "event_id": "res-1_ORDER_RESURRECTED_picked_up_test",
+        "order_id": "res-1",
+        "courier_id": "c1",
+        "payload": {
+            "new_status": "picked_up",
+            "reason": "panel_status_restored",
+            "source": "panel_status_restored",
+        },
+    })
     assert out["status"] == "picked_up"
     assert any(
         level == "info" and "outcome=correction_exception" in message

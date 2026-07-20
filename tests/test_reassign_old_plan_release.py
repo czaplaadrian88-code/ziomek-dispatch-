@@ -19,11 +19,13 @@ Wywołane w OBU bliźniaczych torach: branch reassign + PANEL_PACKS FALLBACK
 import inspect
 import json
 import logging
+from types import SimpleNamespace
 
 from unittest import mock
 
 import dispatch_v2.panel_watcher as PW
 import dispatch_v2.common as C
+import dispatch_v2.lifecycle_downstream as LD
 import dispatch_v2.plan_manager as PM
 import dispatch_v2.plan_recheck as PR
 
@@ -253,22 +255,57 @@ def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None,
     def fake_fetch(zid, csrf, timeout=10.0):
         return raw_fetches.get(str(zid))
 
+    def fake_emit_and_apply(event_type, **kwargs):
+        """Minimalny adapter durable chokepointu z realnym downstreamem.
+
+        State store i SQLite sa testowane przez C3; ten klaster izoluje routing
+        obu torow panel_watcher -> lifecycle_downstream oraz kolejnosc efektow.
+        """
+        oid = str(kwargs.get("order_id") or "")
+        new_cid = str(kwargs.get("courier_id") or "")
+        previous_cid = str((state.get(oid) or {}).get("courier_id") or "")
+        event_id = str(kwargs.get("event_id") or f"test-{event_type}-{oid}")
+        event = {
+            "event_type": event_type,
+            "event_id": event_id,
+            "order_id": oid,
+            "courier_id": new_cid,
+            "payload": kwargs.get("payload") or {},
+        }
+        if event_type == "COURIER_ASSIGNED" and previous_cid != new_cid:
+            event["previous_courier_id"] = previous_cid
+        current = {
+            **(state.get(oid) or {}),
+            "order_id": oid,
+            "status": "assigned",
+            "courier_id": new_cid,
+            "last_lifecycle_event_id_courier_assigned": event_id,
+        }
+        with mock.patch.object(LD.state_machine, "get_order_strict", return_value=current):
+            LD.apply(event)
+        return SimpleNamespace(
+            state_ready=True,
+            event_created=True,
+            downstream_executed=True,
+        )
+
     with mock.patch("dispatch_v2.panel_watcher.state_get_all", return_value=state), \
          mock.patch("dispatch_v2.panel_watcher.fetch_order_details", side_effect=fake_fetch), \
-         mock.patch("dispatch_v2.panel_watcher.emit", return_value=True), \
-         mock.patch("dispatch_v2.panel_watcher.emit_audit",
-                    return_value=audit_emitted), \
-         mock.patch("dispatch_v2.panel_watcher.update_from_event"), \
+         mock.patch("dispatch_v2.panel_watcher._emit_and_apply_state",
+                    side_effect=fake_emit_and_apply), \
+         mock.patch("dispatch_v2.panel_watcher.durable_event_apply.drain_pending",
+                    return_value={"seen": 0, "state_ready": 0, "downstream": 0,
+                                  "superseded": 0, "failed": 0}), \
          mock.patch("dispatch_v2.panel_watcher._check_panel_agree"), \
          mock.patch("dispatch_v2.panel_watcher._check_panel_override"), \
          mock.patch("dispatch_v2.panel_watcher._release_plan_on_reassign",
-                    side_effect=lambda cid, oid: (
+                    side_effect=lambda cid, oid, **_kwargs: (
                         calls.append(("release", cid, oid)), True)[1]), \
          mock.patch("dispatch_v2.panel_watcher._remove_stops_on_return",
                     side_effect=lambda cid, oid: calls.append(
                         ("return_release", cid, oid))), \
          mock.patch("dispatch_v2.panel_watcher._save_plan_on_assign_signal",
-                    side_effect=lambda oid, cid: calls.append(("signal", oid, cid))), \
+                    side_effect=lambda oid, cid, **_kwargs: calls.append(("signal", oid, cid))), \
          mock.patch("dispatch_v2.panel_watcher.geocode", return_value=None), \
          mock.patch("dispatch_v2.panel_watcher.normalize_order", return_value=None), \
          mock.patch("dispatch_v2.panel_watcher.upsert_order"), \
@@ -443,7 +480,12 @@ def test_both_twin_paths_call_release():
     COURIER_ASSIGNED przy ZMIANIE kuriera wołają release — branch reassign
     (panel_reassign) i PANEL_PACKS FALLBACK."""
     src = inspect.getsource(PW._diff_and_emit)
-    assert "_release_plan_on_reassign(state_courier, zid)" in src, \
-        "branch reassign musi zwalniać plan starego"
-    assert "_release_plan_on_reassign(_state_cid, _oid_str)" in src, \
-        "PANEL_PACKS FALLBACK (bliźniak) musi zwalniać plan starego"
+    reassign = src[src.index("# Reassignment:"):src.index("# ================== PANEL_PACKS FALLBACK")]
+    packs = src[src.index("# ================== PANEL_PACKS FALLBACK"):src.index("# ================== V3.20 PACKS GHOST DETECT")]
+    downstream = inspect.getsource(LD.apply)
+    assert "_emit_and_apply_state(" in reassign and '"COURIER_ASSIGNED"' in reassign
+    assert "_emit_and_apply_state(" in packs and '"COURIER_ASSIGNED"' in packs
+    assert "_release_plan_on_reassign" in downstream, \
+        "oba tory musza dojsc przez durable callback do release starego planu"
+    assert "previous_courier_id" in downstream, \
+        "release musi uzywac event-local provenance, nie mutowalnego current state"

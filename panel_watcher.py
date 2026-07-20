@@ -20,6 +20,7 @@ Uzywanie:
     # lub:
     python3 /root/.openclaw/workspace/scripts/dispatch_v2/panel_watcher.py
 """
+import hashlib
 import json
 import os
 import signal
@@ -29,6 +30,8 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from dispatch_v2 import common as C
+from dispatch_v2 import durable_event_apply
+from dispatch_v2 import lifecycle_downstream
 from dispatch_v2 import plan_manager
 from dispatch_v2.common import (
     FIRMOWE_KONTO_ADDRESS_IDS,
@@ -59,11 +62,12 @@ from dispatch_v2.panel_client import (
 )
 from dispatch_v2.state_machine import (
     build_czasowka_manual_ck_pickup_event,
+    event_effect_status,
     get_all as state_get_all,
     get_order as state_get_order,
+    get_order_strict as state_get_order_strict,
     update_from_event,
     upsert_order,
-    resurrect_order,
     touch_check_cursor,
 )
 from dispatch_v2.geocoding import geocode
@@ -89,6 +93,36 @@ _COORDS_META = {}   # FRONT-B: aid → source (guard manual*/adrian_manual*, GEO
 _COORDS_MTIME = 0.0
 _COORDS_LAST_CHECK_TS = 0.0
 _COORDS_CHECK_INTERVAL_S = 15.0
+
+
+_EventApplyOutcome = durable_event_apply.DurableApplyOutcome
+
+
+def _emit_and_apply_state(
+    event_type: str,
+    *,
+    order_id: str,
+    courier_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+    state_payload: Optional[dict] = None,
+    event_id: str,
+    audit: bool = False,
+) -> _EventApplyOutcome:
+    """Atomowy event+outbox, exact-payload state apply i trwały downstream."""
+    emitter = emit_audit if audit else emit
+    return durable_event_apply.emit_and_apply(
+        event_type,
+        order_id=str(order_id),
+        courier_id=courier_id,
+        payload=payload,
+        state_payload=state_payload,
+        event_key=event_id,
+        emit_fn=emitter,
+        state_update_fn=update_from_event,
+        effect_status_fn=event_effect_status,
+        get_order_fn=state_get_order_strict,
+        downstream_fn=lifecycle_downstream.apply,
+    )
 
 
 def _load_coords():
@@ -210,14 +244,120 @@ _PENDING_PROPOSALS_PATH = "/root/.openclaw/workspace/dispatch_state/pending_prop
 _LEARNING_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl"
 
 
-def _check_panel_override(order_id: str, panel_courier_id: str, source: str) -> None:
+def _durable_downstream_attempt(
+    lifecycle_event_id: Optional[str],
+    *,
+    _raise_on_error: bool = False,
+) -> int:
+    """Numer trwalej próby callbacku; zero oznacza legacy caller."""
+    if not lifecycle_event_id:
+        return 0
+    try:
+        from dispatch_v2 import event_bus
+
+        row = event_bus.get_state_apply_outbox(str(lifecycle_event_id))
+        if row is None:
+            if _raise_on_error:
+                raise RuntimeError(
+                    f"missing durable receipt for {lifecycle_event_id}"
+                )
+            return 0
+        return int(row.get("downstream_attempts") or 0)
+    except Exception:
+        if _raise_on_error:
+            raise
+        # Brak outboxa oznacza legacy caller. Jego semantyki nie rozszerzamy o
+        # kosztowny skan 30 rotacji; durable path ma zawsze prawdziwy receipt.
+        return 0
+
+
+def _append_learning_record(
+    record: dict,
+    lifecycle_event_id: Optional[str],
+    *,
+    _raise_on_error: bool = False,
+) -> None:
+    """Materialize one SQLite-canonical learning effect into JSONL.
+
+    The per-effect receipt is separate from the composite lifecycle callback:
+    a later plan/recanon failure therefore retries only unfinished effects and
+    never depends on a finite number of logrotate archives for deduplication.
+    """
+    from dispatch_v2 import event_bus
+    from dispatch_v2.core.jsonl_appender import (
+        append_jsonl,
+        append_jsonl_durable,
+        append_jsonl_once,
+    )
+
+    if not lifecycle_event_id:
+        append_jsonl(_LEARNING_LOG_PATH, record)
+        return
+    # PANEL_AGREE and PANEL_OVERRIDE are mutually exclusive classifications of
+    # one assignment.  Use one event-level effect identity so a crash between
+    # preparing and projecting the record cannot let changed proposal files
+    # choose a different classification on retry; first committed record wins.
+    effect_name = "panel_assignment_learning"
+    projection, created = event_bus.prepare_durable_learning_projection(
+        str(lifecycle_event_id), effect_name, record
+    )
+    if projection.get("projected_at"):
+        return
+    canonical_record = projection.get("record")
+    if not isinstance(canonical_record, dict):
+        raise RuntimeError(
+            f"invalid canonical learning projection {projection.get('effect_id')}"
+        )
+    attempt = _durable_downstream_attempt(
+        lifecycle_event_id, _raise_on_error=_raise_on_error
+    )
+    if not created or attempt > 1:
+        append_jsonl_once(
+            _LEARNING_LOG_PATH,
+            canonical_record,
+            dedupe_key="lifecycle_event_id",
+            dedupe_value=str(lifecycle_event_id),
+            scan_rotated=True,
+        )
+    elif attempt == 1:
+        append_jsonl_durable(_LEARNING_LOG_PATH, canonical_record)
+    elif _raise_on_error:
+        raise RuntimeError(
+            f"durable callback has invalid attempt={attempt} "
+            f"for {lifecycle_event_id}"
+        )
+    else:
+        append_jsonl_once(
+            _LEARNING_LOG_PATH,
+            canonical_record,
+            dedupe_key="lifecycle_event_id",
+            dedupe_value=str(lifecycle_event_id),
+            scan_rotated=True,
+        )
+    if not event_bus.mark_durable_learning_projected(
+        str(projection.get("effect_id") or "")
+    ):
+        raise RuntimeError(
+            f"cannot persist learning projection receipt {projection.get('effect_id')}"
+        )
+
+
+def _check_panel_override(
+    order_id: str,
+    panel_courier_id: str,
+    source: str,
+    *,
+    lifecycle_event_id: Optional[str] = None,
+    _raise_on_error: bool = False,
+) -> None:
     """Jeśli order_id był w pending_proposals i kurier panelu różny od propozycji
     Ziomka — zapisz PANEL_OVERRIDE do learning_log.jsonl.
 
     source: 'panel_initial' | 'panel_diff' | 'panel_reassign' (telemetria).
-    Wywoływane TYLKO gdy emit COURIER_ASSIGNED faktycznie wyemitowało event
-    (non-duplicate) — per-cycle idempotent. Żadne błędy I/O nie propagują do
-    callera (panel_watcher zdrowie ma priorytet nad telemetrią).
+    Wywoływane TYLKO po skutecznym przejściu stanu (nowy event albo recovery
+    wcześniejszego lost-apply); zwykły duplikat już zastosowanego eventu jest
+    pomijany. Domyślnie best-effort; trwały downstream ustawia
+    ``_raise_on_error``, aby błąd pozostawił receipt do retry.
     """
     import json
     try:
@@ -227,6 +367,8 @@ def _check_panel_override(order_id: str, panel_courier_id: str, source: str) -> 
         return
     except Exception as e:
         _log.warning(f"PANEL_OVERRIDE read pending fail: {e}")
+        if _raise_on_error:
+            raise
         return
 
     rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
@@ -251,13 +393,20 @@ def _check_panel_override(order_id: str, panel_courier_id: str, source: str) -> 
         "panel_source": source,
         "decision": dr,
     }
+    if lifecycle_event_id:
+        override_rec["lifecycle_event_id"] = str(lifecycle_event_id)
     # MP-#11 (2026-05-08): atomic JSONL append via core helper. Eliminuje race
     # między panel_watcher i telegram_approver pisanie do TEGO SAMEGO learning_log.
     try:
-        from dispatch_v2.core.jsonl_appender import append_jsonl
-        append_jsonl(_LEARNING_LOG_PATH, override_rec)
+        _append_learning_record(
+            override_rec,
+            lifecycle_event_id,
+            _raise_on_error=_raise_on_error,
+        )
     except Exception as e:
         _log.warning(f"PANEL_OVERRIDE write learning_log fail oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
         return
 
     _log.info(
@@ -293,7 +442,11 @@ def _parse_iso_utc(ts_str) -> Optional[datetime]:
         return None
 
 
-def _find_recent_assign_direct(order_id: str) -> Optional[dict]:
+def _find_recent_assign_direct(
+    order_id: str,
+    *,
+    _raise_on_error: bool = False,
+) -> Optional[dict]:
     """ASSIGN z przycisku w Telegramie popuje pending_proposals PRZED tym, jak
     panel pokaże przypisanie — propozycji już nie ma, ale telegram_approver
     zostawił wpis ASSIGN_DIRECT (chosen_courier_id + proposed_courier_id +
@@ -311,6 +464,8 @@ def _find_recent_assign_direct(order_id: str) -> Optional[dict]:
         return None
     except Exception as e:
         _log.warning(f"PANEL_AGREE tail-scan fail oid={oid}: {e}")
+        if _raise_on_error:
+            raise
         return None
     now = datetime.now(timezone.utc)
     for ln in reversed(tail.splitlines()):
@@ -329,8 +484,18 @@ def _find_recent_assign_direct(order_id: str) -> Optional[dict]:
     return None
 
 
-def _write_panel_agree(order_id: str, proposed_cid: str, panel_courier_id: str,
-                       latency_s, dr: dict, source_kind: str, panel_source: str) -> None:
+def _write_panel_agree(
+    order_id: str,
+    proposed_cid: str,
+    panel_courier_id: str,
+    latency_s,
+    dr: dict,
+    source_kind: str,
+    panel_source: str,
+    *,
+    lifecycle_event_id: Optional[str] = None,
+    _raise_on_error: bool = False,
+) -> None:
     """Schemat zgodny z PANEL_OVERRIDE (proposed_courier_id/actual_courier_id —
     sequential_replay.build_roster łapie cidy bez zmian) + pola pod raport
     acceptance (tier/prep/verdict). Celowo BEZ pełnego `decision` — komponenty
@@ -356,13 +521,20 @@ def _write_panel_agree(order_id: str, proposed_cid: str, panel_courier_id: str,
         "source": source_kind,        # "panel" | "telegram" (edge c — bez dublu w raporcie)
         "panel_source": panel_source,  # panel_initial | panel_diff | panel_reassign
     }
+    if lifecycle_event_id:
+        agree_rec["lifecycle_event_id"] = str(lifecycle_event_id)
     # MP-#11: atomic JSONL append (flock) — ta sama dyscyplina co PANEL_OVERRIDE;
     # panel_watcher i telegram_approver piszą do TEGO SAMEGO learning_log.
     try:
-        from dispatch_v2.core.jsonl_appender import append_jsonl
-        append_jsonl(_LEARNING_LOG_PATH, agree_rec)
+        _append_learning_record(
+            agree_rec,
+            lifecycle_event_id,
+            _raise_on_error=_raise_on_error,
+        )
     except Exception as e:
         _log.warning(f"PANEL_AGREE write learning_log fail oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
         return
     _log.info(
         f"PANEL_AGREE oid={order_id} cid={panel_courier_id} "
@@ -371,12 +543,21 @@ def _write_panel_agree(order_id: str, proposed_cid: str, panel_courier_id: str,
     )
 
 
-def _check_panel_agree(order_id: str, panel_courier_id: str, source: str) -> None:
+def _check_panel_agree(
+    order_id: str,
+    panel_courier_id: str,
+    source: str,
+    *,
+    lifecycle_event_id: Optional[str] = None,
+    _raise_on_error: bool = False,
+) -> None:
     """Jeśli order_id ma świeżą (≤15 min) propozycję i kurier panelu ZGODNY z
     best — zapisz PANEL_AGREE do learning_log. Rozjazd obsługuje istniejący
-    _check_panel_override (nietknięty). Wywoływane TYLKO po non-duplicate emit
-    COURIER_ASSIGNED (te same 3 call-sites co OVERRIDE — symetria, packs_fallback
-    i coldstart celowo poza oboma). Żadne błędy nie propagują do callera."""
+    _check_panel_override (nietknięty). Wywoływane TYLKO po skutecznym przejściu
+    stanu: nowy event albo recovery lost-apply (te same 3 call-sites co OVERRIDE;
+    packs_fallback i coldstart celowo poza oboma). Zwykły duplikat już
+    zastosowanego eventu jest pomijany. Domyślnie best-effort; trwały
+    downstream może zażądać propagacji błędu do outboxa."""
     import json
     try:
         if not _panel_agree_enabled():
@@ -391,6 +572,8 @@ def _check_panel_agree(order_id: str, panel_courier_id: str, source: str) -> Non
             pending = {}
         except Exception as e:
             _log.warning(f"PANEL_AGREE read pending fail: {e}")
+            if _raise_on_error:
+                raise
             return
 
         rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
@@ -410,11 +593,15 @@ def _check_panel_agree(order_id: str, panel_courier_id: str, source: str) -> Non
                     return  # propozycja za stara — brak związku przyczynowego
                 latency_s = round(age_s, 1)
             _write_panel_agree(order_id, proposed, panel_courier_id,
-                               latency_s, dr, "panel", source)
+                               latency_s, dr, "panel", source,
+                               lifecycle_event_id=lifecycle_event_id,
+                               _raise_on_error=_raise_on_error)
             return
 
         # Brak pending → możliwy ASSIGN z Telegrama (edge c).
-        ad = _find_recent_assign_direct(order_id)
+        ad = _find_recent_assign_direct(
+            order_id, _raise_on_error=_raise_on_error
+        )
         if not ad:
             return
         chosen = str(ad.get("chosen_courier_id") or "")
@@ -430,30 +617,45 @@ def _check_panel_agree(order_id: str, panel_courier_id: str, source: str) -> Non
         if t_dec is not None and t_assign is not None:
             latency_s = round((t_assign - t_dec).total_seconds(), 1)
         _write_panel_agree(order_id, proposed, panel_courier_id,
-                           latency_s, dr, "telegram", source)
+                           latency_s, dr, "telegram", source,
+                           lifecycle_event_id=lifecycle_event_id,
+                           _raise_on_error=_raise_on_error)
     except Exception as e:
         _log.warning(f"PANEL_AGREE check fail oid={order_id}: {type(e).__name__}: {e}")
+        if _raise_on_error:
+            raise
 
 
-def _save_plan_on_assign(order_id: str, courier_id: str) -> None:
+def _save_plan_on_assign(
+    order_id: str,
+    courier_id: str,
+    *,
+    _raise_on_error: bool = False,
+) -> None:
     """V3.19b: zapisz plan z pending_proposals po emit COURIER_ASSIGNED.
 
     Odczytuje pending_proposals[oid].decision_record.best.plan i mapuje na
     plan_manager schema. Skip cicho gdy: flag off, pending brak, best courier
     ≠ assigned courier (PANEL_OVERRIDE — kurier koordynatora, nie nasz), brak
-    plan.sequence. Żadne błędy nie propagują do callera.
+    plan.sequence. Domyślnie best-effort; tryb outboxa propaguje błędy.
     """
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS
         if not ENABLE_SAVED_PLANS:
             return
     except Exception:
+        if _raise_on_error:
+            raise
         return
     try:
         import json
         with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
             pending = json.load(f)
-    except (FileNotFoundError, Exception):
+    except FileNotFoundError:
+        return
+    except Exception:
+        if _raise_on_error:
+            raise
         return
     rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
     if not rec:
@@ -566,9 +768,16 @@ def _save_plan_on_assign(order_id: str, courier_id: str) -> None:
         )
     except Exception as e:
         _log.warning(f"V3.19b save_plan fail cid={courier_id} oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
 
 
-def _invalidate_plan_on_bag_change(order_id: str, courier_id: str) -> None:
+def _invalidate_plan_on_bag_change(
+    order_id: str,
+    courier_id: str,
+    *,
+    _raise_on_error: bool = False,
+) -> None:
     """BUG-1 (2026-06-05): gdy zlecenie zostaje przypisane/przepisane kurierowi, a NIE
     jest pokryte jego zapisanym planem (typowo PANEL_OVERRIDE / reassign — koordynator
     przypisał ręcznie, nie z propozycji Ziomka, więc _save_plan_on_assign cicho pomija
@@ -580,7 +789,7 @@ def _invalidate_plan_on_bag_change(order_id: str, courier_id: str) -> None:
 
     Cicho no-op gdy: flaga off, saved-plans off, kurier bez aktywnego planu (apka i tak
     na fallbacku pełnego worka), albo order już pokryty planem (świeży save_plan ruszył
-    plan_version, sygnał jest). Błędy nie propagują do callera.
+    plan_version, sygnał jest). Domyślnie błędy nie propagują; outbox włącza strict.
     """
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS, flag
@@ -589,6 +798,8 @@ def _invalidate_plan_on_bag_change(order_id: str, courier_id: str) -> None:
         if not flag("ENABLE_INVALIDATE_PLAN_ON_BAG_CHANGE", True):
             return
     except Exception:
+        if _raise_on_error:
+            raise
         return
     if not courier_id or not order_id:
         return
@@ -622,9 +833,16 @@ def _invalidate_plan_on_bag_change(order_id: str, courier_id: str) -> None:
         _log.warning(
             f"BUG-1 invalidate_plan_on_bag_change fail cid={courier_id} oid={order_id}: {e}"
         )
+        if _raise_on_error:
+            raise
 
 
-def _invalidate_plan_on_committed_change(order_id: str, courier_id: str) -> None:
+def _invalidate_plan_on_committed_change(
+    order_id: str,
+    courier_id: str,
+    *,
+    _raise_on_error: bool = False,
+) -> None:
     """FIX-E (2026-06-13, B1): gdy zmienia się czas_kuriera/pickup (committed/ready)
     zlecenia PRZYPISANEGO kurierowi, zasygnalizuj zmianę JEGO planu (touch_plan: bump
     plan_version BEZ invalidacji) → /api/courier/plan-version się zmienia → apka robi
@@ -639,7 +857,7 @@ def _invalidate_plan_on_committed_change(order_id: str, courier_id: str) -> None
     W PRZECIWIEŃSTWIE do _invalidate_plan_on_bag_change NIE pomija gdy order jest
     POKRYTY planem — committed zmienia się właśnie dla pokrytych zleceń, a to ICH
     eta_committed w widoku jest nieaktualne. Per-cid (bumpuje tylko plan tego kuriera).
-    Best-effort (błędy nie propagują). Plan_recheck re-czasuje plan z nowym committed
+    Domyślnie best-effort; outbox włącza propagację do retry. Plan_recheck re-czasuje plan z nowym committed
     (refloor) na następnym ticku. Kill-switch: flaga ENABLE_COMMITTED_INVALIDATES_VIEW.
     """
     try:
@@ -649,6 +867,8 @@ def _invalidate_plan_on_committed_change(order_id: str, courier_id: str) -> None
         if not flag("ENABLE_COMMITTED_INVALIDATES_VIEW", True):
             return
     except Exception:
+        if _raise_on_error:
+            raise
         return
     if not courier_id or not order_id:
         return
@@ -668,44 +888,76 @@ def _invalidate_plan_on_committed_change(order_id: str, courier_id: str) -> None
         _log.warning(
             f"FIX-E committed_change fail cid={courier_id} oid={order_id}: {e}"
         )
+        if _raise_on_error:
+            raise
 
 
-def _save_plan_on_assign_signal(order_id: str, courier_id: str) -> None:
+def _save_plan_on_assign_signal(
+    order_id: str,
+    courier_id: str,
+    *,
+    _raise_on_error: bool = False,
+) -> None:
     """BUG-1 (2026-06-05): zapisz plan z propozycji (gdy to nasz kurier) ORAZ zasygnalizuj
     apce zmianę worka. _save_plan_on_assign cicho pomija zapis przy PANEL_OVERRIDE/reassign,
     więc plan_version stoi i apka nie odświeża worka aż do 5-min plan_recheck.
     _invalidate_plan_on_bag_change łapie ten przypadek (order poza planem) i unieważnia
     plan → SSE PLAN_UPDATED → natychmiastowy pełny GET. No-op gdy save pokrył order."""
-    _save_plan_on_assign(order_id, courier_id)
-    _invalidate_plan_on_bag_change(order_id, courier_id)
+    _save_plan_on_assign(
+        order_id, courier_id, _raise_on_error=_raise_on_error
+    )
+    _invalidate_plan_on_bag_change(
+        order_id, courier_id, _raise_on_error=_raise_on_error
+    )
     # RECANON: po zapisie planu z PROPOZYCJI (surowa sekwencja OR-Tools) egzekwuj
     # od razu niezmienniki kanonu (carried-first + committed + relax). No-op gdy
     # plan invalidated (override) — tym zajmuje się redecide niżej.
     try:
         from dispatch_v2 import plan_recheck
-        plan_recheck.recanon_courier(str(courier_id), reason="assign")
+        if _raise_on_error:
+            plan_recheck.recanon_courier(
+                str(courier_id), reason="assign", _raise_on_error=True
+            )
+        else:
+            plan_recheck.recanon_courier(str(courier_id), reason="assign")
     except Exception as e:
         _log.warning(f"recanon-on-assign fail cid={courier_id} oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
     # F3: po override/reassign (plan unieważniony lub brak) Ziomek decyduje trasę
     # NATYCHMIAST, nie po ≤5 min ticku plan_recheck. Samo-bramkujące (no-op gdy
     # ważny plan już pokrywa worek — nie nadpisuje propozycji). Best-effort, flaga
     # ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE (OFF) — błąd nigdy nie psuje diff loopu.
     try:
         from dispatch_v2 import plan_recheck
-        plan_recheck.redecide_courier(courier_id)
+        if _raise_on_error:
+            plan_recheck.redecide_courier(
+                courier_id, _raise_on_error=True
+            )
+        else:
+            plan_recheck.redecide_courier(courier_id)
     except Exception as e:
         _log.warning(f"F3 redecide signal fail cid={courier_id} oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
 
 
-def _advance_plan_on_deliver(courier_id: str, order_id: str,
-                             delivered_at_raw: Optional[str],
-                             delivery_coords: Optional[list]) -> None:
+def _advance_plan_on_deliver(
+    courier_id: str,
+    order_id: str,
+    delivered_at_raw: Optional[str],
+    delivery_coords: Optional[list],
+    *,
+    _raise_on_error: bool = False,
+) -> None:
     """V3.19b: advance plan po emit COURIER_DELIVERED sukces."""
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS
         if not ENABLE_SAVED_PLANS:
             return
     except Exception:
+        if _raise_on_error:
+            raise
         return
     if not courier_id:
         return
@@ -723,22 +975,38 @@ def _advance_plan_on_deliver(courier_id: str, order_id: str,
         )
     except Exception as e:
         _log.warning(f"V3.19b advance_plan fail cid={courier_id} oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
     # RECANON: po dostawie (advance_plan usunął stop) re-egzekwuj kanon na RESZCIE
     # worka natychmiast — bez czekania na 5-min tick. No-op gdy worek pusty.
     try:
         from dispatch_v2 import plan_recheck
-        plan_recheck.recanon_courier(str(courier_id), reason="deliver")
+        if _raise_on_error:
+            plan_recheck.recanon_courier(
+                str(courier_id), reason="deliver", _raise_on_error=True
+            )
+        else:
+            plan_recheck.recanon_courier(str(courier_id), reason="deliver")
     except Exception as e:
         _log.warning(f"recanon-on-deliver fail cid={courier_id} oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
 
 
-def _remove_stops_on_return(courier_id: str, order_id: str) -> None:
+def _remove_stops_on_return(
+    courier_id: str,
+    order_id: str,
+    *,
+    _raise_on_error: bool = False,
+) -> None:
     """V3.19b: remove_stops po emit ORDER_RETURNED_TO_POOL sukces."""
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS
         if not ENABLE_SAVED_PLANS:
             return
     except Exception:
+        if _raise_on_error:
+            raise
         return
     if not courier_id:
         return
@@ -747,6 +1015,8 @@ def _remove_stops_on_return(courier_id: str, order_id: str) -> None:
         plan_manager.remove_stops(str(courier_id), str(order_id))
     except Exception as e:
         _log.warning(f"V3.19b remove_stops fail cid={courier_id} oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
     # RECANON: po anulowaniu/zwrocie (remove_stops usunął stopy) re-egzekwuj kanon na
     # RESZCIE worka natychmiast — SYMETRIA z assign/deliver/pickup (P-5 audyt 2026-06-24).
     # Bez tego anulowanie zlecenia (np. między dwiema dostawami) zostawiało plan
@@ -755,12 +1025,24 @@ def _remove_stops_on_return(courier_id: str, order_id: str) -> None:
     # no-op gdy worek pusty / brak kotwicy → nigdy nie psuje (≤ stan sprzed fixu).
     try:
         from dispatch_v2 import plan_recheck
-        plan_recheck.recanon_courier(str(courier_id), reason="return")
+        if _raise_on_error:
+            plan_recheck.recanon_courier(
+                str(courier_id), reason="return", _raise_on_error=True
+            )
+        else:
+            plan_recheck.recanon_courier(str(courier_id), reason="return")
     except Exception as e:
         _log.warning(f"recanon-on-return fail cid={courier_id} oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
 
 
-def _release_plan_on_reassign(old_courier_id: str, order_id: str) -> bool:
+def _release_plan_on_reassign(
+    old_courier_id: str,
+    order_id: str,
+    *,
+    _raise_on_error: bool = False,
+) -> bool:
     """REASSIGN-RELEASE (2026-07-20): po przerzuceniu zlecenia na INNEGO kuriera
     zwolnij plan STAREGO — lustrzane do _remove_stops_on_return (ta sama klasa:
     tranzycja KURCZĄCA worek → remove_stops PRZED recanon, protokół #0 „Recanon").
@@ -773,8 +1055,8 @@ def _release_plan_on_reassign(old_courier_id: str, order_id: str) -> bool:
     apka starego robi pełny GET /orders natychmiast.
 
     Zwraca True, gdy feature AKTYWNY dla tej pary (flaga ON + SAVED_PLANS +
-    niepusty cid) — caller zasila tym dedupe released_this_tick (v2, Sol review);
-    False = bramka nie przeszła (przy OFF zbiór zostaje pusty → packs bajt-w-bajt).
+    niepusty cid). ``_raise_on_error`` jest prywatnym trybem durable-outboxa:
+    błąd zostawia receipt do retry zamiast fałszywie zamknąć downstream.
 
     v3 (Sol flip-gate): idempotencja NIE tu, tylko U ŹRÓDŁA — remove_stops
     robi no-op (zero zapisu/bumpu) WEWNĄTRZ swojego exclusive locka, gdy plan
@@ -782,7 +1064,7 @@ def _release_plan_on_reassign(old_courier_id: str, order_id: str) -> bool:
     locki = TOCTOU (nowszy plan mógł wejść między odczyt a zapis).
 
     Za flagą ENABLE_REASSIGN_OLD_PLAN_RELEASE (default OFF, flip za ACK).
-    Best-effort — błąd NIGDY nie psuje diff loopu.
+    Zwykły caller pozostaje best-effort; durable callback używa trybu strict.
     """
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS, decision_flag
@@ -791,6 +1073,8 @@ def _release_plan_on_reassign(old_courier_id: str, order_id: str) -> bool:
         if not decision_flag("ENABLE_REASSIGN_OLD_PLAN_RELEASE"):
             return False
     except Exception:
+        if _raise_on_error:
+            raise
         return False
     if not old_courier_id:
         return False
@@ -807,22 +1091,36 @@ def _release_plan_on_reassign(old_courier_id: str, order_id: str) -> bool:
         _log.warning(
             f"REASSIGN-RELEASE remove_stops fail cid_old={cid} oid={oid}: {e}"
         )
+        if _raise_on_error:
+            raise
     # RECANON: po zwolnieniu re-egzekwuj kanon na RESZCIE worka STAREGO natychmiast
     # — SYMETRIA z assign/deliver/pickup/return (P-5). Self-gating na
     # ENABLE_RECANON_ON_WRITE, no-op gdy worek pusty / brak planu → nigdy nie
     # psuje (≤ stan sprzed fixu).
     try:
         from dispatch_v2 import plan_recheck
-        plan_recheck.recanon_courier(cid, reason="reassign_out")
+        if _raise_on_error:
+            plan_recheck.recanon_courier(
+                cid, reason="reassign_out", _raise_on_error=True
+            )
+        else:
+            plan_recheck.recanon_courier(cid, reason="reassign_out")
     except Exception as e:
         _log.warning(
             f"recanon-on-reassign-out fail cid_old={cid} oid={oid}: {e}"
         )
+        if _raise_on_error:
+            raise
     return True
 
 
-def _update_plan_on_picked_up(courier_id: str, order_id: str,
-                              picked_up_at: Optional[str] = None) -> None:
+def _update_plan_on_picked_up(
+    courier_id: str,
+    order_id: str,
+    picked_up_at: Optional[str] = None,
+    *,
+    _raise_on_error: bool = False,
+) -> None:
     """V3.19c sub A: po emit COURIER_PICKED_UP sukces. Update
     stop.status_at_plan_time + prune pickup stop (jeśli był).
     """
@@ -831,6 +1129,8 @@ def _update_plan_on_picked_up(courier_id: str, order_id: str,
         if not ENABLE_SAVED_PLANS:
             return
     except Exception:
+        if _raise_on_error:
+            raise
         return
     if not courier_id:
         return
@@ -839,6 +1139,8 @@ def _update_plan_on_picked_up(courier_id: str, order_id: str,
         plan_manager.mark_picked_up(str(courier_id), str(order_id), picked_up_at)
     except Exception as e:
         _log.warning(f"V3.19c mark_picked_up fail cid={courier_id} oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
     # Redecide natychmiast po ODEBRANE (zmiana stanu worka = zmiana bag_signature
     # F2): kanon zdecydowany tuż PRZED wpisem statusu (reconcile lag ~1 min)
     # zostawał z odbiorami przed niesionym aż do następnego 5-min ticku — case
@@ -849,10 +1151,20 @@ def _update_plan_on_picked_up(courier_id: str, order_id: str,
         from dispatch_v2 import plan_recheck
         # RECANON: po ODEBRANE floor-uj świeżo-niesioną dostawę na front (+ relax)
         # natychmiast — egzekwuje carried-first zanim apka/konsola pobiorą plan.
-        plan_recheck.recanon_courier(str(courier_id), reason="pickup")
-        plan_recheck.redecide_courier(str(courier_id), reason="pickup")
+        if _raise_on_error:
+            plan_recheck.recanon_courier(
+                str(courier_id), reason="pickup", _raise_on_error=True
+            )
+            plan_recheck.redecide_courier(
+                str(courier_id), reason="pickup", _raise_on_error=True
+            )
+        else:
+            plan_recheck.recanon_courier(str(courier_id), reason="pickup")
+            plan_recheck.redecide_courier(str(courier_id), reason="pickup")
     except Exception as e:
         _log.warning(f"redecide-on-pickup fail cid={courier_id} oid={order_id}: {e}")
+        if _raise_on_error:
+            raise
 
 
 def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
@@ -1094,6 +1406,62 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
     return evt
 
 
+def _time_update_event_key(order_id: str, event: dict) -> str:
+    """Stabilny klucz intencji czasu, zwiazany z calym przejsciem.
+
+    Sama delta nie identyfikuje przejscia: 12:00->12:05 i 12:05->12:10 maja
+    identyczne ``delta_min``. Klucz zachowuje historyczny, czytelny prefiks,
+    ale jego digest obejmuje stare i docelowe pola semantyczne zapisywane przez
+    dany event. Retry tego samego przejscia pozostaje idempotentny, kolejny cel
+    lub powrot do wczesniejszego celu jest osobna trwala intencja.
+    """
+    event_type = str(event.get("event_type") or "")
+    payload = event.get("payload") or {}
+    transition_fields = {
+        "CZAS_KURIERA_UPDATED": (
+            "old_ck_iso",
+            "old_ck_hhmm",
+            "new_ck_iso",
+            "new_ck_hhmm",
+            "source",
+        ),
+        "PICKUP_TIME_UPDATED": (
+            "old_pickup_at_warsaw",
+            "new_pickup_at_warsaw",
+            "old_prep_minutes",
+            "new_prep_minutes",
+            "new_decision_deadline",
+            "new_zmiana_czasu_odbioru",
+            "source",
+        ),
+    }
+    if event_type not in transition_fields:
+        raise ValueError(f"unsupported time update event_type: {event_type!r}")
+
+    transition = {
+        field: payload.get(field) for field in transition_fields[event_type]
+    }
+    transition_json = json.dumps(
+        transition,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    transition_digest = hashlib.sha256(
+        transition_json.encode("utf-8")
+    ).hexdigest()
+
+    suffix = event.get("event_id_suffix")
+    if suffix:
+        legacy_discriminator = str(suffix)
+    else:
+        legacy_discriminator = f"_{int(float(payload.get('delta_min', 0)) * 10)}"
+    return (
+        f"{order_id}_{event_type}{legacy_discriminator}"
+        f"_to_{transition_digest}"
+    )
+
+
 def _compute_kid_diagnostic(state_order: dict, fresh_order: dict) -> dict:
     """V3.19g1 diagnostic: kid_state / kid_panel / kid_mismatch.
 
@@ -1238,6 +1606,29 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         "fetched_details": 0,
         "errors": 0,
     }
+
+    # C3-01: drain nie zalezy od ponownego wejscia w source call-site. To domyka
+    # crash po state commit, ale przed plan/recanon, oraz apply-failure po evencie.
+    try:
+        recovered = durable_event_apply.drain_pending(
+            state_update_fn=update_from_event,
+            effect_status_fn=event_effect_status,
+            get_order_fn=state_get_order_strict,
+            downstream_fn=lifecycle_downstream.apply,
+            limit=100,
+        )
+        stats["durable_apply_seen"] = recovered["seen"]
+        stats["durable_apply_recovered"] = recovered["state_ready"]
+        stats["durable_downstream_recovered"] = recovered["downstream"]
+        stats["durable_apply_superseded"] = recovered["superseded"]
+        stats["durable_apply_failed"] = recovered["failed"]
+        stats["errors"] += recovered["failed"]
+    except Exception as exc:
+        stats["durable_apply_failed"] = 1
+        stats["errors"] += 1
+        _log.error(
+            f"DURABLE_APPLY drain failed: {type(exc).__name__}: {exc}"
+        )
 
     current_state = state_get_all()
     html_order_ids = set(parsed["order_ids"])
@@ -1479,20 +1870,17 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
 
         # Deterministyczny event_id: {order_id}_NEW_ORDER_first_seen (bez timestamp - raz na zycie)
         event_id = f"{zid}_NEW_ORDER_first"
-        result = emit(
+        result = _emit_and_apply_state(
             "NEW_ORDER",
             order_id=zid,
             payload=ev_payload,
             event_id=event_id,
         )
-        if result:
+        if not result.state_ready:
+            stats["errors"] += 1
+        if result.event_created:
             stats["new"] += 1
-            # Aktualizuj state
-            update_from_event({
-                "event_type": "NEW_ORDER",
-                "order_id": zid,
-                "payload": ev_payload,
-            })
+        if result.event_created and result.state_ready:
             _log.info(f"NEW {zid} {norm['order_type']} {norm['restaurant']} pickup={norm['pickup_at_warsaw']}")
 
             # TASK 4 (2026-05-04): Auto-KOORD on NEW_ORDER dla czasówek.
@@ -1530,24 +1918,21 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
                 "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
             }
-            assigned_event = emit_audit(
+            assigned_event = _emit_and_apply_state(
                 "COURIER_ASSIGNED",
                 order_id=zid,
                 courier_id=courier_id,
                 payload=_assigned_payload,
-                event_id=f"{zid}_COURIER_ASSIGNED_{courier_id}_initial",
+                # Jedna semantyczna tozsamosc dla wszystkich writerow
+                # assignment. Source zostaje w payloadzie; powrot 100->200->100
+                # dostaje nowa generacje durable outbox pod tym samym kluczem.
+                event_id=f"{zid}_COURIER_ASSIGNED_{courier_id}_canonical",
+                audit=True,
             )
-            if assigned_event:
+            if not assigned_event.state_ready:
+                stats["errors"] += 1
+            if assigned_event.event_created:
                 stats["assigned"] += 1
-                update_from_event({
-                    "event_type": "COURIER_ASSIGNED",
-                    "order_id": zid,
-                    "courier_id": courier_id,
-                    "payload": _assigned_payload,
-                })
-                _check_panel_agree(zid, courier_id, "panel_initial")
-                _check_panel_override(zid, courier_id, "panel_initial")
-                _save_plan_on_assign_signal(zid, courier_id)
 
     # 2. ZMIANY: ID znane w state, sprawdz czy cos sie zmienilo
     # V3.15 pre-req fix: reassign_checked/MAX_REASSIGN_PER_CYCLE musi być
@@ -1585,55 +1970,47 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     if status_id == 7:
                         # Doreczone (F10 2026-05-09: canonical event_id eliminuje
                         # duplicate audit_log entries vs ghost_detect/reconcile path).
-                        ev = emit(
+                        _delivered_ts = raw.get("czas_doreczenia") or now_iso()
+                        _delivered_payload = {
+                            "timestamp": _delivered_ts,
+                            "final_location": state_order.get("delivery_address"),
+                            "delivery_address": state_order.get("delivery_address"),
+                            "deliv_source": "panel",
+                        }
+                        ev = _emit_and_apply_state(
                             "COURIER_DELIVERED",
                             order_id=zid,
                             courier_id=str(raw.get("id_kurier") or ""),
-                            payload={
-                                "timestamp": raw.get("czas_doreczenia") or now_iso(),
-                                "final_location": state_order.get("delivery_address"),
-                                "deliv_source": "panel",
-                            },
+                            payload=_delivered_payload,
                             event_id=f"{zid}_COURIER_DELIVERED_canonical",
                         )
-                        if ev:
+                        if not ev.state_ready:
+                            stats["errors"] += 1
+                        if ev.event_created:
                             stats["delivered"] += 1
-                            _adv_cid = str(raw.get("id_kurier") or "")
-                            update_from_event({
-                                "event_type": "COURIER_DELIVERED",
-                                "order_id": zid,
-                                "courier_id": _adv_cid,
-                                "payload": {
-                                    "timestamp": raw.get("czas_doreczenia") or now_iso(),
-                                    "deliv_source": "panel",
-                                },
-                            })
+                        if ev.downstream_executed:
                             _log.info(f"DELIVERED {zid}")
-                            _advance_plan_on_deliver(
-                                _adv_cid, zid,
-                                raw.get("czas_doreczenia"),
-                                state_order.get("delivery_coords"),
-                            )
                     elif status_id in (8, 9):
                         # TASK 2 Część A (2026-05-04): mirror reconcile path L960.
                         # Pre-fix: upsert_order(status='cancelled') aktualizował state
                         # ale NIE emitował do events.db → akumulacja phantom orders.
                         reason = "undelivered" if status_id == 8 else "cancelled"
                         _adv_cid = str(raw.get("id_kurier") or "")
-                        ev = emit_audit(
+                        _returned_payload = {
+                            "reason": reason,
+                            "source": "panel_diff",
+                        }
+                        ev = _emit_and_apply_state(
                             "ORDER_RETURNED_TO_POOL",
                             order_id=zid,
                             courier_id=_adv_cid,
-                            payload={"reason": reason, "source": "panel_diff"},
-                            event_id=f"{zid}_ORDER_RETURNED_{reason}_panel_diff",
+                            payload=_returned_payload,
+                            event_id=f"{zid}_ORDER_RETURNED_{reason}_canonical",
+                            audit=True,
                         )
-                        if ev:
-                            update_from_event({
-                                "event_type": "ORDER_RETURNED_TO_POOL",
-                                "order_id": zid,
-                                "courier_id": _adv_cid,
-                                "payload": {"reason": reason, "source": "panel_diff"},
-                            })
+                        if not ev.state_ready:
+                            stats["errors"] += 1
+                        if ev.downstream_executed:
                             _log.info(f"{reason.upper()} {zid} status={status_id} (panel_diff)")
                             # RETURN-RELEASE: update wyżej terminalizuje state, więc
                             # późniejszy reconcile już nie usunie stopa. Zwalniamy
@@ -1666,25 +2043,20 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 stats["fetched_details"] += 1
                 if raw and raw.get("id_kurier") and raw["id_kurier"] != KOORDYNATOR_ID:
                     courier_id = str(raw["id_kurier"])
-                    ev = emit_audit(
+                    ev = _emit_and_apply_state(
                         "COURIER_ASSIGNED",
                         order_id=zid,
                         courier_id=courier_id,
                         payload={"source": "panel_diff"},
-                        event_id=f"{zid}_COURIER_ASSIGNED_{courier_id}_diff",
+                        event_id=f"{zid}_COURIER_ASSIGNED_{courier_id}_canonical",
+                        audit=True,
                     )
-                    if ev:
+                    if not ev.state_ready:
+                        stats["errors"] += 1
+                    if ev.event_created:
                         stats["assigned"] += 1
-                        update_from_event({
-                            "event_type": "COURIER_ASSIGNED",
-                            "order_id": zid,
-                            "courier_id": courier_id,
-                            "payload": {"source": "panel_diff"},
-                        })
+                    if ev.downstream_executed:
                         _log.info(f"ASSIGNED {zid} -> {courier_id}")
-                        _check_panel_agree(zid, courier_id, "panel_diff")
-                        _check_panel_override(zid, courier_id, "panel_diff")
-                        _save_plan_on_assign_signal(zid, courier_id)
             except Exception as e:
                 _log.warning(f"fetch for assigned {zid}: {e}")
                 stats["errors"] += 1
@@ -1701,35 +2073,27 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 reassign_checked += 1
                 panel_courier = str(raw.get("id_kurier") or "") if raw else ""
                 if panel_courier and panel_courier != state_courier and raw.get("id_kurier") != KOORDYNATOR_ID:
-                    ev = emit_audit(
+                    ev = _emit_and_apply_state(
                         "COURIER_ASSIGNED",
                         order_id=zid,
                         courier_id=panel_courier,
                         payload={"source": "panel_reassign"},
-                        event_id=f"{zid}_COURIER_ASSIGNED_{panel_courier}_reassign",
+                        event_id=f"{zid}_COURIER_ASSIGNED_{panel_courier}_canonical",
+                        audit=True,
                     )
-                    if ev:
+                    if not ev.state_ready:
+                        stats["errors"] += 1
+                    if ev.event_created:
                         stats["assigned"] += 1
-                        update_from_event({
-                            "event_type": "COURIER_ASSIGNED",
-                            "order_id": zid,
-                            "courier_id": panel_courier,
-                            "payload": {"source": "panel_reassign"},
-                        })
+                    if ev.downstream_executed:
                         _log.info(f"REASSIGNED {zid} {state_courier} -> {panel_courier}")
-                        _check_panel_agree(zid, panel_courier, "panel_reassign")
-                        _check_panel_override(zid, panel_courier, "panel_reassign")
-                        # REASSIGN-RELEASE: NAJPIERW zwolnij plan STAREGO (bump
-                        # plan_version → apka starego od razu przestaje pokazywać
-                        # zabrane zlecenie), POTEM sygnał NOWEMU — recanon/redecide
-                        # nowego bywa kosztowny (OSRM/OR-Tools) i nie może opóźniać
-                        # bumpa starego. Plany są per-cid → kolejność bez wpływu
-                        # na poprawność, tylko na latencję starego.
                         if state_courier and state_courier != panel_courier:
-                            if _release_plan_on_reassign(state_courier, zid):
-                                # feature aktywny → packs w TYM ticku nie dubluje
-                                released_this_tick.add((zid, state_courier))
-                        _save_plan_on_assign_signal(zid, panel_courier)
+                            # Durable callback wykonał już event-local cleanup
+                            # starego planu (za istniejącą flagą) i sygnał nowego.
+                            # Snapshot current_state jest stale do końca ticku;
+                            # nie pozwól PANEL_PACKS ponownie fetchować tej samej
+                            # kanonicznej intencji.
+                            released_this_tick.add((zid, state_courier))
             except Exception as e:
                 _log.warning(f"fetch for reassign {zid}: {e}")
                 stats["errors"] += 1
@@ -1823,7 +2187,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
                         )
                         _target_cid = _panel_cid
-                    _ev = emit_audit(
+                    _ev = _emit_and_apply_state(
                         "COURIER_ASSIGNED",
                         order_id=_oid_str,
                         courier_id=_target_cid,
@@ -1832,30 +2196,20 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             "previous_cid": _state_cid or None,
                             "nick": _nick_key,
                         },
-                        event_id=f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_packs",
+                        state_payload={"source": "packs_fallback"},
+                        event_id=f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_canonical",
+                        audit=True,
                     )
-                    if _ev:
+                    if not _ev.state_ready:
+                        stats["errors"] += 1
+                    if _ev.event_created:
                         stats["assigned"] += 1
                         _packs_catchup += 1
-                        update_from_event({
-                            "event_type": "COURIER_ASSIGNED",
-                            "order_id": _oid_str,
-                            "courier_id": _target_cid,
-                            "payload": {"source": "packs_fallback"},
-                        })
+                    if _ev.downstream_executed:
                         _log.info(
                             f"PACKS_CATCHUP {_oid_str} → cid={_target_cid} nick={_nick_key!r} "
                             f"(was cid={_state_cid or 'None'})"
                         )
-                        # REASSIGN-RELEASE (bliźniak brancha reassign): packs też
-                        # łapie ZMIANĘ kuriera (previous_cid) — zwolnij plan
-                        # starego przed sygnałem nowemu. Guard _state_cid !=
-                        # _target_cid liczony PO trust-raw wyżej: gdy raw
-                        # przywrócił kuriera ze state (zła mapa nicków), release
-                        # zdarłby stop z AKTUALNEGO planu — nie wolno.
-                        if _state_cid and _state_cid != _target_cid:
-                            _release_plan_on_reassign(_state_cid, _oid_str)
-                        _save_plan_on_assign_signal(_oid_str, _target_cid)
             if _packs_catchup:
                 stats["packs_catchup"] = _packs_catchup
     # ================== END PANEL_PACKS FALLBACK ==================
@@ -1956,42 +2310,29 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     continue  # not delivered — maybe returned/cancelled, let reconcile handle
                 _deliv_addr_gd = parsed.get("delivery_addresses", {}).get(str(_oid)) \
                     or _sorder.get("delivery_address")
-                _ev_gd = emit(
+                _delivered_payload_gd = {
+                    "timestamp": _raw_gd.get("czas_doreczenia") or now_iso(),
+                    "final_location": _deliv_addr_gd,
+                    "delivery_address": _deliv_addr_gd,
+                    "source": "packs_ghost_detect",
+                    "deliv_source": "packs_ghost_detect",
+                }
+                _ev_gd = _emit_and_apply_state(
                     "COURIER_DELIVERED",
                     order_id=str(_oid),
                     courier_id=_state_cid,
-                    payload={
-                        "timestamp": _raw_gd.get("czas_doreczenia") or now_iso(),
-                        "final_location": _deliv_addr_gd,
-                        "delivery_address": _deliv_addr_gd,
-                        "source": "packs_ghost_detect",
-                        "deliv_source": "packs_ghost_detect",
-                    },
+                    payload=_delivered_payload_gd,
                     event_id=f"{_oid}_COURIER_DELIVERED_canonical",
                 )
-                if _ev_gd:
+                if not _ev_gd.state_ready:
+                    stats["errors"] += 1
+                if _ev_gd.event_created:
                     stats["delivered"] += 1
                     _ghost_confirmed += 1
-                    update_from_event({
-                        "event_type": "COURIER_DELIVERED",
-                        "order_id": str(_oid),
-                        "courier_id": _state_cid,
-                        "payload": {
-                            "timestamp": _raw_gd.get("czas_doreczenia") or now_iso(),
-                            "final_location": _deliv_addr_gd,
-                            "delivery_address": _deliv_addr_gd,
-                            "source": "packs_ghost_detect",
-                            "deliv_source": "packs_ghost_detect",
-                        },
-                    })
+                if _ev_gd.downstream_executed:
                     _log.info(
                         f"V3.20 PACKS_GHOST oid={_oid} cid={_state_cid} "
                         f"nick={_nick_gd!r} (zniknął z packs, panel status=7)"
-                    )
-                    _advance_plan_on_deliver(
-                        _state_cid, str(_oid),
-                        _raw_gd.get("czas_doreczenia"),
-                        _sorder.get("delivery_coords"),
                     )
             if _ghost_confirmed:
                 stats["packs_ghost_detect"] = _ghost_confirmed
@@ -2067,10 +2408,34 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 _new_st = "picked_up" if _sid_r in (5, 6) else "assigned"
                 _ignored_ids.discard(str(_oid_r))
                 try:
-                    resurrect_order(str(_oid_r), _new_st, _cid_r, reason="panel_status_restored")
-                    _res_done += 1
-                    _log.info(f"RESURRECT {_oid_r} cid={_cid_r} sid={_sid_r}→{_new_st} "
-                              f"(wrócił do packs po ręcznym cofnięciu w gastro)")
+                    _res_outcome = _emit_and_apply_state(
+                        "ORDER_RESURRECTED",
+                        order_id=str(_oid_r),
+                        courier_id=_cid_r,
+                        payload={
+                            "new_status": _new_st,
+                            "reason": "panel_status_restored",
+                            "source": "panel_status_restored",
+                        },
+                        event_id=(
+                            f"{_oid_r}_ORDER_RESURRECTED_{_new_st}_canonical"
+                        ),
+                        audit=True,
+                    )
+                    if not _res_outcome.state_ready:
+                        stats["errors"] += 1
+                        continue
+                    if _res_outcome.failure_stage is not None:
+                        # State correction is already durable, but its exact
+                        # plan repair remains visible/retryable in the outbox.
+                        stats["errors"] += 1
+                    if _res_outcome.state_transitioned:
+                        _res_done += 1
+                        _log.info(
+                            f"RESURRECT {_oid_r} cid={_cid_r} "
+                            f"sid={_sid_r}→{_new_st} "
+                            "(wrócił do packs po ręcznym cofnięciu w gastro)"
+                        )
                 except Exception as _re_r:
                     _log.warning(f"resurrect fail {_oid_r}: {type(_re_r).__name__}: {_re_r}")
             if _res_done:
@@ -2107,58 +2472,44 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         kid = str(raw.get("id_kurier") or "")
         deliv_addr = parsed.get("delivery_addresses", {}).get(zid) or sorder.get("delivery_address")
         if sid == 7:
-            ev = emit(
+            _reconcile_delivered_payload = {
+                "timestamp": raw.get("czas_doreczenia") or now_iso(),
+                "final_location": deliv_addr,
+                "delivery_address": deliv_addr,
+                "source": "reconcile",
+                "deliv_source": "reconcile",
+            }
+            ev = _emit_and_apply_state(
                 "COURIER_DELIVERED",
                 order_id=zid,
                 courier_id=kid,
-                payload={
-                    "timestamp": raw.get("czas_doreczenia") or now_iso(),
-                    "final_location": deliv_addr,
-                    "delivery_address": deliv_addr,
-                    "source": "reconcile",
-                    "deliv_source": "reconcile",
-                },
+                payload=_reconcile_delivered_payload,
                 event_id=f"{zid}_COURIER_DELIVERED_canonical",
             )
-            if ev:
+            if not ev.state_ready:
+                stats["errors"] += 1
+            if ev.event_created:
                 stats["delivered"] += 1
-                update_from_event({
-                    "event_type": "COURIER_DELIVERED",
-                    "order_id": zid,
-                    "courier_id": kid,
-                    "payload": {
-                        "timestamp": raw.get("czas_doreczenia") or now_iso(),
-                        "final_location": deliv_addr,
-                        "delivery_address": deliv_addr,
-                        "source": "reconcile",
-                        "deliv_source": "reconcile",
-                    },
-                })
+            if ev.downstream_executed:
                 _log.info(f"DELIVERED {zid} (reconcile) kurier={kid}")
-                _advance_plan_on_deliver(
-                    kid, zid,
-                    raw.get("czas_doreczenia"),
-                    sorder.get("delivery_coords"),
-                )
         elif sid in (8, 9):
             reason = "undelivered" if sid == 8 else "cancelled"
-            ev = emit_audit(
+            _reconcile_returned_payload = {
+                "reason": reason,
+                "source": "reconcile",
+            }
+            ev = _emit_and_apply_state(
                 "ORDER_RETURNED_TO_POOL",
                 order_id=zid,
-                payload={"reason": reason, "source": "reconcile"},
-                event_id=f"{zid}_ORDER_RETURNED_{reason}_reconcile",
+                courier_id=str(sorder.get("courier_id") or ""),
+                payload=_reconcile_returned_payload,
+                event_id=f"{zid}_ORDER_RETURNED_{reason}_canonical",
+                audit=True,
             )
-            if ev:
-                update_from_event({
-                    "event_type": "ORDER_RETURNED_TO_POOL",
-                    "order_id": zid,
-                    "payload": {"reason": reason, "source": "reconcile"},
-                })
+            if not ev.state_ready:
+                stats["errors"] += 1
+            if ev.downstream_executed:
                 _log.info(f"{reason.upper()} {zid} (reconcile)")
-                _remove_stops_on_return(
-                    str(sorder.get("courier_id") or ""),
-                    zid,
-                )
     # ================== END RECONCILE ==================
 
     # ================== PICKED_UP RECONCILE ==================
@@ -2223,31 +2574,24 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     pu_coords = tuple(_st_pc)
             if pu_coords is None:
                 pu_coords = _COORDS.get(aid_str) if aid_str else None
-            ev = emit(
+            _pickup_payload = {
+                "timestamp": dzien_odbioru,
+                "pickup_coords": list(pu_coords) if pu_coords else None,
+                "source": "reconcile",
+            }
+            ev = _emit_and_apply_state(
                 "COURIER_PICKED_UP",
                 order_id=zid,
                 courier_id=kid,
-                payload={
-                    "timestamp": dzien_odbioru,
-                    "pickup_coords": list(pu_coords) if pu_coords else None,
-                    "source": "reconcile",
-                },
-                event_id=f"{zid}_COURIER_PICKED_UP_reconcile",
+                payload=_pickup_payload,
+                event_id=f"{zid}_COURIER_PICKED_UP_canonical",
             )
-            if ev:
+            if not ev.state_ready:
+                stats["errors"] += 1
+            if ev.event_created:
                 stats["picked_up"] += 1
-                update_from_event({
-                    "event_type": "COURIER_PICKED_UP",
-                    "order_id": zid,
-                    "courier_id": kid,
-                    "payload": {
-                        "timestamp": dzien_odbioru,
-                        "pickup_coords": list(pu_coords) if pu_coords else None,
-                        "source": "reconcile",
-                    },
-                })
+            if ev.downstream_executed:
                 _log.info(f"PICKED_UP {zid} (reconcile) kurier={kid} at {dzien_odbioru}")
-                _update_plan_on_picked_up(kid, zid, dzien_odbioru)
     # ================== END PICKED_UP RECONCILE ==================
 
     # ============ GROUND-TRUTH PICKUP FALLBACK (R1, 2026-06-16) ============
@@ -2291,28 +2635,24 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     continue
                 _st_pc = _sorder.get("pickup_coords")
                 _pc = list(_st_pc) if (_st_pc and len(_st_pc) == 2) else None
-                _ev = emit(
+                _gt_pickup_payload = {
+                    "timestamp": _pu_ts,
+                    "pickup_coords": _pc,
+                    "source": "ground_truth_fallback",
+                }
+                _ev = _emit_and_apply_state(
                     "COURIER_PICKED_UP",
                     order_id=_zid,
                     courier_id=_kid,
-                    payload={"timestamp": _pu_ts, "pickup_coords": _pc,
-                             "source": "ground_truth_fallback"},
-                    event_id=f"{_zid}_COURIER_PICKED_UP_gtfallback",
+                    payload=_gt_pickup_payload,
+                    event_id=f"{_zid}_COURIER_PICKED_UP_canonical",
                 )
-                if _ev:
+                if not _ev.state_ready:
+                    stats["errors"] += 1
+                if _ev.event_created:
                     stats["picked_up"] += 1
-                    update_from_event({
-                        "event_type": "COURIER_PICKED_UP",
-                        "order_id": _zid,
-                        "courier_id": _kid,
-                        "payload": {
-                            "timestamp": _pu_ts,
-                            "pickup_coords": _pc,
-                            "source": "ground_truth_fallback",
-                        },
-                    })
+                if _ev.downstream_executed:
                     _log.info(f"PICKED_UP {_zid} (ground_truth_fallback) kurier={_kid} at {_pu_ts}")
-                    _update_plan_on_picked_up(_kid, _zid, _pu_ts)
         except Exception as _e:
             _log.warning(f"gt_pickup_fallback fail: {type(_e).__name__}: {_e}")
     # ============ END GROUND-TRUTH PICKUP FALLBACK ============
@@ -2418,54 +2758,48 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                                          deliberate=_force)
                 if evt is not None:
                     if evt.get("event_type") == "PICKUP_TIME_UPDATED":
-                        # Reczna korekta CK czasowki przechodzi przez kanoniczny
-                        # writer pickup -> CK. Ten sam bump plan_version wymusza
-                        # odswiezenie /orders w aplikacji kuriera.
                         p = evt["payload"]
-                        emit_audit(
+                        p_event_id = _time_update_event_key(zid, evt)
+                        pickup_outcome = _emit_and_apply_state(
                             "PICKUP_TIME_UPDATED",
                             order_id=zid,
                             courier_id=str(state_order.get("courier_id") or ""),
                             payload=p,
-                            event_id=f"{zid}_PICKUP_TIME_UPDATED_CK_MANUAL_EDIT",
+                            event_id=p_event_id,
+                            audit=True,
                         )
-                        update_from_event(evt)
-                        _invalidate_plan_on_committed_change(
-                            zid, state_order.get("courier_id")
-                        )
-                        _log.info(
-                            f"CK_MANUAL_EDIT_PASSTHROUGH oid={zid} pickup "
-                            f"{p.get('old_pickup_at_warsaw')}→"
-                            f"{p.get('new_pickup_at_warsaw')} status={_status}"
-                        )
+                        if not pickup_outcome.state_ready:
+                            stats["errors"] += 1
+                        if pickup_outcome.downstream_executed:
+                            _log.info(
+                                f"CK_MANUAL_EDIT_PASSTHROUGH oid={zid} pickup "
+                                f"{p.get('old_pickup_at_warsaw')}→"
+                                f"{p.get('new_pickup_at_warsaw')} status={_status}"
+                            )
                         continue
-                    # V3.27.1 BUG-1: event_id suffix dispatch — first_acceptance
-                    # używa _FIRST_ACK dla łatwego grep, value→value zachowuje
-                    # delta-based suffix.
-                    suffix = evt.get("event_id_suffix")
-                    if suffix:
-                        event_id_str = f"{zid}_CZAS_KURIERA_UPDATED{suffix}"
-                    else:
-                        event_id_str = f"{zid}_CZAS_KURIERA_UPDATED_{int(evt['payload'].get('delta_min',0)*10)}"
-                    emit_audit(
+                    event_id_str = _time_update_event_key(zid, evt)
+                    ck_outcome = _emit_and_apply_state(
                         "CZAS_KURIERA_UPDATED",
                         order_id=zid,
                         courier_id=str(state_order.get("courier_id") or ""),
                         payload=evt["payload"],
                         event_id=event_id_str,
+                        audit=True,
                     )
-                    update_from_event(evt)
-                    # FIX-E (B1): committed się zmienił → unieważnij plan kuriera,
-                    # by apka odświeżyła /orders i pobrała świeże eta_committed.
-                    _invalidate_plan_on_committed_change(
-                        zid, state_order.get("courier_id"))
-                    delta_val = evt["payload"].get("delta_min")
-                    delta_str = f"Δ={delta_val:+.1f}min" if delta_val is not None else "Δ=null(first_ack)"
-                    _log.info(
-                        f"V3.19g1 oid={zid} ck "
-                        f"{evt['payload'].get('old_ck_hhmm')}→{evt['payload'].get('new_ck_hhmm')} "
-                        f"{delta_str} status={_status}"
-                    )
+                    if not ck_outcome.state_ready:
+                        stats["errors"] += 1
+                    if ck_outcome.downstream_executed:
+                        delta_val = evt["payload"].get("delta_min")
+                        delta_str = (
+                            f"Δ={delta_val:+.1f}min"
+                            if delta_val is not None else "Δ=null(first_ack)"
+                        )
+                        _log.info(
+                            f"V3.19g1 oid={zid} ck "
+                            f"{evt['payload'].get('old_ck_hhmm')}→"
+                            f"{evt['payload'].get('new_ck_hhmm')} "
+                            f"{delta_str} status={_status}"
+                        )
 
             # ---- Detekcja B: pickup_at_warsaw (PICKUP_TIME_UPDATED) ----
             if ENABLE_PICKUP_TIME_DETECTION or _force:
@@ -2478,30 +2812,29 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 evt_p = _diff_pickup_time(state_order, pickup_snippet, oid=zid,
                                           deliberate=_force)
                 if evt_p is not None:
-                    p_suffix = evt_p.get("event_id_suffix")
-                    if p_suffix:
-                        p_event_id = f"{zid}_PICKUP_TIME_UPDATED{p_suffix}"
-                    else:
-                        p_event_id = f"{zid}_PICKUP_TIME_UPDATED_{int(evt_p['payload'].get('delta_min',0)*10)}"
-                    emit_audit(
+                    p_event_id = _time_update_event_key(zid, evt_p)
+                    pickup_outcome = _emit_and_apply_state(
                         "PICKUP_TIME_UPDATED",
                         order_id=zid,
                         courier_id=str(state_order.get("courier_id") or ""),
                         payload=evt_p["payload"],
                         event_id=p_event_id,
+                        audit=True,
                     )
-                    update_from_event(evt_p)
-                    # FIX-E (B1): pickup/ready (czasówka) się zmienił → ten sam refresh
-                    _invalidate_plan_on_committed_change(
-                        zid, state_order.get("courier_id"))
-                    p_delta = evt_p["payload"].get("delta_min")
-                    p_delta_str = f"Δ={p_delta:+.1f}min" if p_delta is not None else "Δ=null(late)"
-                    _log.info(
-                        f"PICKUP_TIME_UPDATED oid={zid} pickup "
-                        f"{evt_p['payload'].get('old_pickup_at_warsaw')}→"
-                        f"{evt_p['payload'].get('new_pickup_at_warsaw')} "
-                        f"{p_delta_str} status={_status}"
-                    )
+                    if not pickup_outcome.state_ready:
+                        stats["errors"] += 1
+                    if pickup_outcome.downstream_executed:
+                        p_delta = evt_p["payload"].get("delta_min")
+                        p_delta_str = (
+                            f"Δ={p_delta:+.1f}min"
+                            if p_delta is not None else "Δ=null(late)"
+                        )
+                        _log.info(
+                            f"PICKUP_TIME_UPDATED oid={zid} pickup "
+                            f"{evt_p['payload'].get('old_pickup_at_warsaw')}→"
+                            f"{evt_p['payload'].get('new_pickup_at_warsaw')} "
+                            f"{p_delta_str} status={_status}"
+                        )
     # ================== END ORDER-TIME RE-CHECK ==================
 
     return stats
@@ -2585,7 +2918,7 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
                     f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
                 )
                 _target_cid = _panel_cid
-            _ev = emit_audit(
+            _ev = _emit_and_apply_state(
                 "COURIER_ASSIGNED",
                 order_id=_oid_str,
                 courier_id=_target_cid,
@@ -2593,21 +2926,19 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
                     "source": "cold_start_scan",
                     "nick": _nick_key,
                 },
-                event_id=f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_coldstart",
+                state_payload={"source": "cold_start_scan"},
+                event_id=f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_canonical",
+                audit=True,
             )
-            if _ev:
-                update_from_event({
-                    "event_type": "COURIER_ASSIGNED",
-                    "order_id": _oid_str,
-                    "courier_id": _target_cid,
-                    "payload": {"source": "cold_start_scan"},
-                })
+            if not _ev.state_ready:
+                stats["cold_start_errors"] += 1
+            if _ev.event_created:
                 stats["cold_start_emitted"] += 1
+            if _ev.downstream_executed:
                 _log.info(
                     f"COLD_START_CATCHUP {_oid_str} → cid={_target_cid} "
                     f"nick={_nick_key!r} sid={_sid}"
                 )
-                _save_plan_on_assign_signal(_oid_str, _target_cid)
     return stats
 
 

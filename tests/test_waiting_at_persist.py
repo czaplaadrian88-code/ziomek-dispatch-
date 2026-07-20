@@ -11,6 +11,7 @@ import json
 from unittest import mock
 
 from dispatch_v2 import common, panel_watcher
+from dispatch_v2.durable_event_apply import DurableApplyOutcome
 
 
 def _parsed():
@@ -73,11 +74,26 @@ def _run(state, raw_fetches, flag_overrides=None):
         upserts.append({"oid": oid, "data": data, "event": event})
         return dict(data, order_id=oid)
 
+    def fake_durable(
+        event_type, *, order_id, courier_id=None, payload=None,
+        state_payload=None, event_id, audit=False,
+    ):
+        return DurableApplyOutcome(
+            event_id=event_id,
+            event_key=event_id,
+            event_created=True,
+            state_ready=True,
+            state_transitioned=True,
+            downstream_executed=True,
+        )
+
     with mock.patch("dispatch_v2.panel_watcher.state_get_all", return_value=state), \
          mock.patch("dispatch_v2.panel_watcher.fetch_order_details", side_effect=fake_fetch), \
          mock.patch("dispatch_v2.panel_watcher.emit", return_value=True), \
          mock.patch("dispatch_v2.panel_watcher.emit_audit", return_value=True), \
          mock.patch("dispatch_v2.panel_watcher.update_from_event"), \
+         mock.patch("dispatch_v2.panel_watcher._emit_and_apply_state", side_effect=fake_durable), \
+         mock.patch("dispatch_v2.panel_watcher.durable_event_apply.drain_pending", return_value={}), \
          mock.patch("dispatch_v2.panel_watcher._check_panel_override"), \
          mock.patch("dispatch_v2.panel_watcher.geocode", return_value=None), \
          mock.patch("dispatch_v2.panel_watcher.normalize_order", return_value=None), \

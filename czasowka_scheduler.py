@@ -425,9 +425,8 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
 
 
 def _append_eval_log(record: dict) -> None:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    from dispatch_v2.core.jsonl_appender import append_jsonl
+    append_jsonl(LOG_PATH, record, default=str)
 
 
 def _emit_to_event_bus(oid: str, order_state: dict, result: dict, eval_count: int) -> None:

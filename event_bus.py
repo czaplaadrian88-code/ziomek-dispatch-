@@ -12,10 +12,11 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import load_config, now_iso, setup_logger
@@ -42,6 +43,7 @@ EVENT_TYPES = {
     "COURIER_ASSIGNED",
     "COURIER_REJECTED_PROPOSAL",
     "ORDER_RETURNED_TO_POOL",
+    "ORDER_RESURRECTED",
     "KOORDYNATOR_DEADLINE",
     "GPS_STALE",
     "PANEL_UNREACHABLE",
@@ -84,6 +86,7 @@ AUDIT_EVENT_TYPES = {
     "PICKUP_TIME_UPDATED",
     "PANEL_UNREACHABLE",
     "ORDER_RETURNED_TO_POOL",
+    "ORDER_RESURRECTED",
 }
 
 # Tech debt #39 (2026-05-13): queue types that are ALSO mirrored to audit_log
@@ -168,6 +171,24 @@ def _emit_audit_mirror(
         )
 
 
+def _insert_audit_mirror_tx(
+    conn: sqlite3.Connection,
+    event_id: str,
+    event_type: str,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload_json: str,
+    created_at: str,
+) -> None:
+    """Mirror w transakcji callera dla durable lifecycle eventow."""
+    conn.execute(
+        """INSERT OR IGNORE INTO audit_log
+           (event_id, event_type, order_id, courier_id, payload, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (event_id, event_type, order_id, courier_id, payload_json, created_at),
+    )
+
+
 def _db_path() -> str:
     return load_config()["paths"]["events_db"]
 
@@ -185,6 +206,786 @@ def _conn():
         conn.close()
 
 
+# C3-01 (audit 2026-07-19): event i jego zlecenie aplikacji do orders_state
+# musza powstac w TEJ SAMEJ transakcji SQLite. Sam deterministyczny event_id
+# chroni tylko event log; bez trwalego receipt nie da sie odroznic lost-apply od
+# starego duplikatu. Outbox jest addytywny i nie zmienia kontraktu istniejacych
+# emit()/emit_audit() call-site'ow, dopoki nie podadza state_event.
+_state_apply_outbox_initialized = False
+_state_apply_outbox_db_path: Optional[str] = None
+_state_apply_outbox_init_lock = threading.Lock()
+
+
+def _init_state_apply_outbox_table() -> None:
+    """Utworz addytywny outbox faz state/downstream (idempotentnie)."""
+    global _state_apply_outbox_initialized, _state_apply_outbox_db_path
+    target_db_path = _db_path()
+    with _state_apply_outbox_init_lock:
+        if (
+            _state_apply_outbox_initialized
+            and _state_apply_outbox_db_path == target_db_path
+        ):
+            return
+        with _conn() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            try:
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS state_apply_outbox (
+                        event_id TEXT PRIMARY KEY,
+                        event_key TEXT NOT NULL,
+                        order_id TEXT NOT NULL,
+                        expected_state_version TEXT,
+                        expected_state_marker TEXT,
+                        expected_state_token TEXT,
+                        predecessor_event_id TEXT,
+                        state_event TEXT NOT NULL,
+                        state_status TEXT NOT NULL DEFAULT 'pending',
+                        state_applied_at TEXT,
+                        downstream_status TEXT NOT NULL DEFAULT 'pending',
+                        downstream_applied_at TEXT,
+                        downstream_attempts INTEGER NOT NULL DEFAULT 0,
+                        state_attempts INTEGER NOT NULL DEFAULT 0,
+                        last_error TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )"""
+                )
+                columns = {
+                    str(row[1])
+                    for row in conn.execute("PRAGMA table_info(state_apply_outbox)")
+                }
+                if "expected_state_marker" not in columns:
+                    conn.execute(
+                        "ALTER TABLE state_apply_outbox "
+                        "ADD COLUMN expected_state_marker TEXT"
+                    )
+                if "expected_state_token" not in columns:
+                    conn.execute(
+                        "ALTER TABLE state_apply_outbox "
+                        "ADD COLUMN expected_state_token TEXT"
+                    )
+                if "predecessor_event_id" not in columns:
+                    conn.execute(
+                        "ALTER TABLE state_apply_outbox "
+                        "ADD COLUMN predecessor_event_id TEXT"
+                    )
+                if "downstream_attempts" not in columns:
+                    # Existing rows come from a version that could execute the
+                    # callback but could not persist an attempt counter. Treat
+                    # them conservatively as indeterminate retries; new rows
+                    # explicitly insert zero below.
+                    conn.execute(
+                        "ALTER TABLE state_apply_outbox "
+                        "ADD COLUMN downstream_attempts INTEGER NOT NULL DEFAULT 1"
+                    )
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS durable_learning_projection (
+                        effect_id TEXT PRIMARY KEY,
+                        lifecycle_event_id TEXT NOT NULL,
+                        effect_name TEXT NOT NULL,
+                        record_json TEXT NOT NULL,
+                        projected_at TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )"""
+                )
+                conn.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_durable_learning_event
+                       ON durable_learning_projection(lifecycle_event_id)"""
+                )
+                conn.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_state_apply_outbox_key
+                       ON state_apply_outbox(order_id, event_key, created_at)"""
+                )
+                conn.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_state_apply_outbox_pending
+                       ON state_apply_outbox(state_status, downstream_status, created_at)"""
+                )
+                conn.execute("COMMIT;")
+            except Exception:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK;")
+                raise
+        _state_apply_outbox_initialized = True
+        _state_apply_outbox_db_path = target_db_path
+
+
+def _ensure_state_apply_outbox_initialized() -> None:
+    if (
+        not _state_apply_outbox_initialized
+        or _state_apply_outbox_db_path != _db_path()
+    ):
+        _init_state_apply_outbox_table()
+
+
+def _insert_state_apply_outbox(
+    conn: sqlite3.Connection,
+    *,
+    event_id: str,
+    event_key: str,
+    order_id: str,
+    expected_state_version: Optional[str],
+    expected_state_marker: Optional[str],
+    expected_state_token: Optional[str],
+    predecessor_event_id: Optional[str],
+    state_event_json: str,
+    created_at: str,
+) -> None:
+    """Wstaw pending receipt. Caller trzyma transakcje eventu."""
+    conn.execute(
+        """INSERT INTO state_apply_outbox
+           (event_id, event_key, order_id, expected_state_version,
+            expected_state_marker, expected_state_token, predecessor_event_id,
+            state_event,
+            state_status, downstream_status, downstream_attempts, state_attempts,
+            created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending', 0, 0, ?, ?)""",
+        (
+            event_id,
+            event_key,
+            order_id,
+            expected_state_version,
+            expected_state_marker,
+            expected_state_token,
+            predecessor_event_id,
+            state_event_json,
+            created_at,
+            created_at,
+        ),
+    )
+
+
+def _upgrade_existing_source_with_outbox_tx(
+    conn: sqlite3.Connection,
+    *,
+    source_table: str,
+    event_id: str,
+    event_type: str,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload_json: str,
+    event_key: str,
+    expected_state_version: Optional[str],
+    expected_state_marker: Optional[str],
+    expected_state_token: Optional[str],
+    predecessor_event_id: Optional[str],
+    state_event_json: str,
+    created_at: str,
+) -> bool:
+    """Atomically add the receipt omitted by an older/legacy writer.
+
+    A deterministic ID may already name a source row written before the
+    durable bridge existed.  Treating that row as a plain duplicate would
+    make ``outbox_missing`` permanent.  Upgrade only an exactly matching
+    source row; an ID collision with different source semantics fails loudly.
+    """
+    if source_table not in {"events", "audit_log"}:
+        raise ValueError(f"unsupported durable source table: {source_table}")
+    source = conn.execute(
+        f"""SELECT event_type, order_id, courier_id, payload
+            FROM {source_table} WHERE event_id = ?""",
+        (event_id,),
+    ).fetchone()
+    if source is None:
+        raise ValueError(
+            f"event_id collision: durable source row missing for {event_id}"
+        )
+    try:
+        existing_payload = json.loads(source["payload"] or "{}")
+        requested_payload = json.loads(payload_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"event_id collision: invalid source payload for {event_id}"
+        ) from exc
+    source_matches = (
+        str(source["event_type"] or "") == str(event_type or "")
+        and str(source["order_id"] or "") == str(order_id or "")
+        and str(source["courier_id"] or "") == str(courier_id or "")
+        and existing_payload == requested_payload
+    )
+    if not source_matches:
+        raise ValueError(
+            f"event_id collision: existing {source_table} row differs for {event_id}"
+        )
+    existing_receipt = conn.execute(
+        "SELECT 1 FROM state_apply_outbox WHERE event_id = ?",
+        (event_id,),
+    ).fetchone()
+    if existing_receipt is not None:
+        return False
+    _insert_state_apply_outbox(
+        conn,
+        event_id=event_id,
+        event_key=event_key,
+        order_id=str(order_id),
+        expected_state_version=expected_state_version,
+        expected_state_marker=expected_state_marker,
+        expected_state_token=expected_state_token,
+        predecessor_event_id=predecessor_event_id,
+        state_event_json=state_event_json,
+        created_at=created_at,
+    )
+    return True
+
+
+def has_matching_legacy_source_without_outbox(
+    event_id: str,
+    event_type: str,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    payload: Optional[dict],
+) -> bool:
+    """Return whether an exact pre-C3 source row should be upgraded in place.
+
+    Old lifecycle call-sites used their semantic key directly as ``event_id``.
+    The versioned bridge must discover that exact row before deriving ``K_v…``;
+    otherwise it forks a second queue/audit source instead of attaching the
+    missing receipt. Rows with different source semantics are not collapsed.
+    """
+    _ensure_state_apply_outbox_initialized()
+    requested_payload = payload or {}
+    with _conn() as conn:
+        if conn.execute(
+            "SELECT 1 FROM state_apply_outbox WHERE event_id = ?",
+            (str(event_id),),
+        ).fetchone() is not None:
+            return False
+        for table in ("events", "audit_log"):
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if exists is None:
+                continue
+            row = conn.execute(
+                f"""SELECT event_type, order_id, courier_id, payload
+                    FROM {table} WHERE event_id = ?""",
+                (str(event_id),),
+            ).fetchone()
+            if row is None:
+                continue
+            try:
+                existing_payload = json.loads(row["payload"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if (
+                str(row["event_type"] or "") == str(event_type or "")
+                and str(row["order_id"] or "") == str(order_id or "")
+                and str(row["courier_id"] or "") == str(courier_id or "")
+                and existing_payload == requested_payload
+            ):
+                return True
+    return False
+
+
+def _decode_outbox_row(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    record: Dict[str, Any] = dict(row)
+    try:
+        record["state_event"] = json.loads(record["state_event"])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        record["state_event"] = None
+    return record
+
+
+def prepare_durable_learning_projection(
+    lifecycle_event_id: str,
+    effect_name: str,
+    record: dict,
+) -> tuple[Dict[str, Any], bool]:
+    """Create one canonical learning record; first committed payload wins.
+
+    The SQLite row is the durable per-effect receipt. JSONL is only its
+    materialized projection, so a later failure in the composite lifecycle
+    callback cannot make the same learning record run again after rotations.
+    """
+    event_id = str(lifecycle_event_id or "")
+    name = str(effect_name or "")
+    if not event_id or not name or not isinstance(record, dict):
+        raise ValueError("durable learning projection requires event, effect and dict")
+    _ensure_state_apply_outbox_initialized()
+    effect_id = f"{event_id}:{name}"
+    record_json = json.dumps(
+        record,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    ts = now_iso()
+    with _conn() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO durable_learning_projection
+                   (effect_id, lifecycle_event_id, effect_name, record_json,
+                    projected_at, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, NULL, ?, ?)""",
+                (effect_id, event_id, name, record_json, ts, ts),
+            )
+            row = conn.execute(
+                "SELECT * FROM durable_learning_projection WHERE effect_id = ?",
+                (effect_id,),
+            ).fetchone()
+            conn.execute("COMMIT;")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
+            raise
+    if row is None:
+        raise RuntimeError(f"durable learning projection disappeared: {effect_id}")
+    result: Dict[str, Any] = dict(row)
+    try:
+        result["record"] = json.loads(result["record_json"])
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid durable learning record: {effect_id}") from exc
+    return result, cur.rowcount == 1
+
+
+def mark_durable_learning_projected(effect_id: str) -> bool:
+    """Persist completion of the JSONL projection after its file+dir fsync."""
+    _ensure_state_apply_outbox_initialized()
+    ts = now_iso()
+    with _conn() as conn:
+        cur = conn.execute(
+            """UPDATE durable_learning_projection
+               SET projected_at = COALESCE(projected_at, ?), updated_at = ?
+               WHERE effect_id = ?""",
+            (ts, ts, str(effect_id)),
+        )
+    return cur.rowcount == 1
+
+
+def get_durable_learning_projection(effect_id: str) -> Optional[Dict[str, Any]]:
+    _ensure_state_apply_outbox_initialized()
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM durable_learning_projection WHERE effect_id = ?",
+            (str(effect_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    result: Dict[str, Any] = dict(row)
+    result["record"] = json.loads(result["record_json"])
+    return result
+
+
+def _validate_durable_state_event(
+    event_type: str,
+    order_id: Optional[str],
+    courier_id: Optional[str],
+    event_id: str,
+    state_event: dict,
+    event_key: Optional[str],
+) -> None:
+    """Reject poison outbox rows before the source event can commit."""
+    if not isinstance(state_event, dict):
+        raise ValueError("state_event must be a dict")
+    if not event_key or not order_id:
+        raise ValueError("state_event requires non-empty order_id and event_key")
+    if state_event.get("event_type") != event_type:
+        raise ValueError("state_event.event_type does not match source event")
+    if str(state_event.get("order_id") or "") != str(order_id):
+        raise ValueError("state_event.order_id does not match source event")
+    if str(state_event.get("event_id") or "") != str(event_id):
+        raise ValueError("state_event.event_id does not match source event")
+    if not isinstance(state_event.get("payload"), dict):
+        raise ValueError("state_event.payload must be a dict")
+    if str(state_event.get("courier_id") or "") != str(courier_id or ""):
+        raise ValueError("state_event.courier_id does not match source event")
+
+
+def get_state_apply_outbox(event_id: str) -> Optional[Dict[str, Any]]:
+    _ensure_state_apply_outbox_initialized()
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM state_apply_outbox WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+    return _decode_outbox_row(row)
+
+
+def bind_state_apply_previous_courier(
+    event_id: str, previous_courier_id: str
+) -> Optional[Dict[str, Any]]:
+    """Persist event-local reassignment/return provenance before state apply.
+
+    Downstream may run much later than the state transition.  The mutable
+    current order therefore cannot be the authority for which old courier's
+    plan must be pruned.  First committed provenance wins and is written while
+    the receipt is still pending, before the JSON state mutation.
+    """
+    _ensure_state_apply_outbox_initialized()
+    previous = str(previous_courier_id or "")
+    if not previous:
+        return get_state_apply_outbox(event_id)
+    ts = now_iso()
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE;")
+        try:
+            row = conn.execute(
+                "SELECT state_event, state_status FROM state_apply_outbox "
+                "WHERE event_id = ?",
+                (str(event_id),),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT;")
+                return None
+            if str(row["state_status"] or "") == "pending":
+                try:
+                    state_event = json.loads(row["state_event"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    state_event = None
+                if isinstance(state_event, dict):
+                    bound = str(state_event.get("previous_courier_id") or "")
+                    if not bound:
+                        state_event["previous_courier_id"] = previous
+                        conn.execute(
+                            """UPDATE state_apply_outbox
+                               SET state_event = ?, updated_at = ?
+                               WHERE event_id = ? AND state_status = 'pending'""",
+                            (
+                                json.dumps(
+                                    state_event,
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                ),
+                                ts,
+                                str(event_id),
+                            ),
+                        )
+            conn.execute("COMMIT;")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
+            raise
+    return get_state_apply_outbox(event_id)
+
+
+def get_pending_state_apply_for_order(
+    order_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Najstarsza niedomknieta faza state dla zlecenia.
+
+    Serializacja nie moze byc tylko per ``event_key``. Pozniejszy event innego
+    typu moglby wtedy zmienic globalny lifecycle marker i wyprzec starsza,
+    trwale zapisana intencje, ktorej state apply jeszcze oczekuje na retry.
+    Applied/downstream-pending nie blokuje kolejnego state: globalny downstream
+    FIFO zachowuje osobno kolejnosc callbackow.
+    """
+    _ensure_state_apply_outbox_initialized()
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT * FROM state_apply_outbox
+               WHERE order_id = ?
+                 AND state_status = 'pending'
+               ORDER BY rowid ASC
+               LIMIT 1""",
+            (str(order_id),),
+        ).fetchone()
+    return _decode_outbox_row(row)
+
+
+def get_latest_pending_state_apply_for_order(
+    order_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Ostatnia trwale zapisana intencja state dla causal dependency chain."""
+    _ensure_state_apply_outbox_initialized()
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT * FROM state_apply_outbox
+               WHERE order_id = ?
+                 AND state_status = 'pending'
+               ORDER BY rowid DESC
+               LIMIT 1""",
+            (str(order_id),),
+        ).fetchone()
+    return _decode_outbox_row(row)
+
+
+def get_unresolved_state_apply(
+    event_key: str,
+    order_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Niedomknieta generacja dokladnie tego samego requestu.
+
+    Istniejacy ``state=pending`` ma pierwszenstwo przed starszym
+    ``applied/downstream=pending`` tego samego klucza. Ten drugi moze byc
+    poprzednia generacja po cyklu A->B->A; gdy successor A juz istnieje, retry
+    musi wznowic jego exact payload zamiast utworzyc trzecia generacje.
+    """
+    _ensure_state_apply_outbox_initialized()
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT * FROM state_apply_outbox
+               WHERE event_key = ? AND order_id = ?
+                 AND (state_status = 'pending'
+                      OR (state_status = 'applied' AND downstream_status = 'pending'))
+               ORDER BY CASE WHEN state_status = 'pending' THEN 0 ELSE 1 END,
+                        rowid ASC
+               LIMIT 1""",
+            (event_key, str(order_id)),
+        ).fetchone()
+    return _decode_outbox_row(row)
+
+
+def list_pending_state_applies_for_key(
+    event_key: str,
+    order_id: str,
+) -> List[Dict[str, Any]]:
+    """All pending generations for exact-intent selection by the bridge."""
+    _ensure_state_apply_outbox_initialized()
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM state_apply_outbox
+               WHERE event_key = ? AND order_id = ?
+                 AND state_status = 'pending'
+               ORDER BY rowid ASC""",
+            (str(event_key), str(order_id)),
+        ).fetchall()
+    return [
+        decoded
+        for row in rows
+        if (decoded := _decode_outbox_row(row)) is not None
+    ]
+
+
+def get_latest_state_apply(
+    event_key: str,
+    order_id: str,
+) -> Optional[Dict[str, Any]]:
+    _ensure_state_apply_outbox_initialized()
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT * FROM state_apply_outbox
+               WHERE event_key = ? AND order_id = ?
+               ORDER BY rowid DESC
+               LIMIT 1""",
+            (event_key, str(order_id)),
+        ).fetchone()
+    return _decode_outbox_row(row)
+
+
+def list_unresolved_state_applies(limit: int = 100) -> List[Dict[str, Any]]:
+    """Pending fazy state, fair po liczbie prób i kolejności insertów.
+
+    Rows z juz zastosowanym state i oczekujacym downstream maja osobny lane.
+    Mieszanie obu klas pod jednym LIMIT pozwalalo duzemu backlogowi downstream
+    trwale zaglodzic nowszy zapis orders_state.
+    """
+    _ensure_state_apply_outbox_initialized()
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM state_apply_outbox
+               WHERE state_status = 'pending'
+               ORDER BY state_attempts ASC, rowid ASC
+               LIMIT ?""",
+            (max(1, int(limit)),),
+        ).fetchall()
+    return [_decode_outbox_row(row) for row in rows if row is not None]  # type: ignore[misc]
+
+
+def get_oldest_pending_downstream() -> Optional[Dict[str, Any]]:
+    """Następny gotowy callback, fair po próbach i kolejności insertów.
+
+    ``state_status=pending`` należy do osobnego lane i nie może blokować
+    niezależnych, już zastosowanych eventów.  Rosnący ``downstream_attempts``
+    sprawia też, że trwale wadliwy callback nie jest wybierany przed B przy
+    każdym restarcie/drainie.
+    """
+    _ensure_state_apply_outbox_initialized()
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT candidate.* FROM state_apply_outbox AS candidate
+               WHERE candidate.state_status = 'applied'
+                 AND candidate.downstream_status = 'pending'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM state_apply_outbox AS older
+                     WHERE older.order_id = candidate.order_id
+                       AND older.rowid < candidate.rowid
+                       AND older.state_status = 'applied'
+                       AND older.downstream_status = 'pending'
+                 )
+               ORDER BY candidate.downstream_attempts ASC, candidate.rowid ASC
+               LIMIT 1"""
+        ).fetchone()
+    return _decode_outbox_row(row)
+
+
+def get_oldest_unfinished_apply() -> Optional[Dict[str, Any]]:
+    """Globalnie najstarszy receipt bez obu faz zakonczonych.
+
+    Downstream nie moze przeskoczyc starszego ``state_status=pending``: jego
+    JSON commit mogl juz nastapic, a proces mogl zginac przed zapisem receiptu.
+    SQLite ``rowid`` odzwierciedla serializowaną kolejność insertów/commitów i
+    nie zależy od zegara ani leksykografii event_id.
+    """
+    _ensure_state_apply_outbox_initialized()
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT * FROM state_apply_outbox
+               WHERE state_status = 'pending'
+                  OR (state_status = 'applied' AND downstream_status = 'pending')
+               ORDER BY rowid ASC
+               LIMIT 1"""
+        ).fetchone()
+    return _decode_outbox_row(row)
+
+
+def begin_state_apply_downstream(event_id: str) -> Optional[int]:
+    """Trwale zaznacz probe callbacku i zwroc jej numer (1 = pierwszy raz)."""
+    _ensure_state_apply_outbox_initialized()
+    ts = now_iso()
+    with _conn() as conn:
+        cur = conn.execute(
+            """UPDATE state_apply_outbox
+               SET downstream_attempts = downstream_attempts + 1, updated_at = ?
+               WHERE event_id = ? AND state_status = 'applied'
+                 AND downstream_status = 'pending'""",
+            (ts, event_id),
+        )
+        if cur.rowcount != 1:
+            return None
+        row = conn.execute(
+            "SELECT downstream_attempts FROM state_apply_outbox WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+    return int(row[0]) if row is not None else None
+
+
+def mark_state_apply_applied(event_id: str) -> bool:
+    _ensure_state_apply_outbox_initialized()
+    ts = now_iso()
+    with _conn() as conn:
+        cur = conn.execute(
+            """UPDATE state_apply_outbox
+               SET state_status = 'applied', state_applied_at = COALESCE(state_applied_at, ?),
+                   state_attempts = state_attempts + 1, last_error = NULL, updated_at = ?
+               WHERE event_id = ? AND state_status = 'pending'""",
+            (ts, ts, event_id),
+        )
+    return cur.rowcount == 1
+
+
+def mark_state_apply_superseded(event_id: str, reason: str) -> bool:
+    _ensure_state_apply_outbox_initialized()
+    ts = now_iso()
+    with _conn() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute(
+                """UPDATE state_apply_outbox
+                   SET state_status = 'superseded', downstream_status = 'skipped',
+                       state_attempts = state_attempts + 1, last_error = ?, updated_at = ?
+                   WHERE event_id = ? AND state_status = 'pending'""",
+                (reason[:1000], ts, event_id),
+            )
+            if cur.rowcount == 1:
+                # Durable queue event wyparte przez nowszy stan nie moze juz
+                # trafic do legacy consumera. Domknij jego queue lifecycle w
+                # tej samej transakcji co supersede receiptu. Audit-only event
+                # po prostu nie ma odpowiadajacego wiersza w ``events``.
+                queue_cur = conn.execute(
+                    """UPDATE events
+                       SET status = 'processed', processed_at = ?
+                       WHERE event_id = ? AND status = 'pending'""",
+                    (ts, event_id),
+                )
+                if queue_cur.rowcount == 1:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO processed_events
+                           (event_id, processed_at) VALUES (?, ?)""",
+                        (event_id, ts),
+                    )
+            conn.execute("COMMIT;")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
+            raise
+    return cur.rowcount == 1
+
+
+def mark_state_apply_invalid(event_id: str, reason: str) -> bool:
+    """Terminalize a permanently malformed receipt so it cannot poison FIFO.
+
+    Validation at emit time prevents new malformed rows.  This recovery path
+    is still required for corruption or rows created by an older binary: a
+    payload that cannot ever be applied must be retained with an explicit
+    error, skipped, and removed from both state and downstream work queues.
+    """
+    _ensure_state_apply_outbox_initialized()
+    ts = now_iso()
+    error = f"invalid outbox state_event: {reason}"[:1000]
+    with _conn() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute(
+                """UPDATE state_apply_outbox
+                   SET state_status = CASE
+                           WHEN state_status = 'pending' THEN 'superseded'
+                           ELSE state_status
+                       END,
+                       downstream_status = 'skipped',
+                       state_attempts = state_attempts + CASE
+                           WHEN state_status = 'pending' THEN 1 ELSE 0
+                       END,
+                       last_error = ?, updated_at = ?
+                   WHERE event_id = ?
+                     AND (state_status = 'pending'
+                          OR (state_status = 'applied'
+                              AND downstream_status = 'pending'))""",
+                (error, ts, str(event_id)),
+            )
+            if cur.rowcount == 1:
+                queue_cur = conn.execute(
+                    """UPDATE events
+                       SET status = 'processed', processed_at = ?
+                       WHERE event_id = ? AND status = 'pending'""",
+                    (ts, str(event_id)),
+                )
+                if queue_cur.rowcount == 1:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO processed_events
+                           (event_id, processed_at) VALUES (?, ?)""",
+                        (str(event_id), ts),
+                    )
+            conn.execute("COMMIT;")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
+            raise
+    return cur.rowcount == 1
+
+
+def record_state_apply_error(event_id: str, error: str) -> bool:
+    _ensure_state_apply_outbox_initialized()
+    ts = now_iso()
+    with _conn() as conn:
+        cur = conn.execute(
+            """UPDATE state_apply_outbox
+               SET state_attempts = state_attempts + 1, last_error = ?, updated_at = ?
+               WHERE event_id = ?
+                 AND (state_status = 'pending' OR downstream_status = 'pending')""",
+            (error[:1000], ts, event_id),
+        )
+    return cur.rowcount == 1
+
+
+def mark_state_apply_downstream(event_id: str) -> bool:
+    _ensure_state_apply_outbox_initialized()
+    ts = now_iso()
+    with _conn() as conn:
+        cur = conn.execute(
+            """UPDATE state_apply_outbox
+               SET downstream_status = 'applied', downstream_applied_at = ?,
+                   last_error = NULL, updated_at = ?
+               WHERE event_id = ? AND state_status = 'applied'
+                 AND downstream_status = 'pending'""",
+            (ts, ts, event_id),
+        )
+    return cur.rowcount == 1
+
+
 def make_event_id(event_type: str, order_id: Optional[str], timestamp_ms: Optional[int] = None) -> str:
     """Deterministyczne event_id. Ten sam event z tego samego momentu = ten sam ID."""
     if timestamp_ms is None:
@@ -200,8 +1001,18 @@ def _emit_inner(
     payload_json: str,
     created_at: str,
     event_id: str,
+    state_event_json: Optional[str] = None,
+    event_key: Optional[str] = None,
+    expected_state_version: Optional[str] = None,
+    expected_state_marker: Optional[str] = None,
+    expected_state_token: Optional[str] = None,
+    predecessor_event_id: Optional[str] = None,
 ) -> Optional[str]:
     """Inner emit z transaction body. Wrapped przez emit() w _retry_on_locked."""
+    atomic_audit_mirror = (
+        state_event_json is not None
+        and event_type in AUDIT_MIRRORED_QUEUE_TYPES
+    )
     with _conn() as conn:
         try:
             conn.execute("BEGIN IMMEDIATE;")
@@ -210,6 +1021,32 @@ def _emit_inner(
                 (event_id,),
             )
             if cur.fetchone():
+                if state_event_json is not None:
+                    if not order_id or not event_key:
+                        raise ValueError(
+                            "state_event wymaga niepustych order_id i event_key"
+                        )
+                    _upgrade_existing_source_with_outbox_tx(
+                        conn,
+                        source_table="events",
+                        event_id=event_id,
+                        event_type=event_type,
+                        order_id=order_id,
+                        courier_id=courier_id,
+                        payload_json=payload_json,
+                        event_key=event_key,
+                        expected_state_version=expected_state_version,
+                        expected_state_marker=expected_state_marker,
+                        expected_state_token=expected_state_token,
+                        predecessor_event_id=predecessor_event_id,
+                        state_event_json=state_event_json,
+                        created_at=created_at,
+                    )
+                if atomic_audit_mirror:
+                    _insert_audit_mirror_tx(
+                        conn, event_id, event_type, order_id, courier_id,
+                        payload_json, created_at,
+                    )
                 conn.execute("COMMIT;")
                 _log.debug(f"DUP (processed): {event_id}")
                 return None
@@ -221,23 +1058,81 @@ def _emit_inner(
                 (event_id, event_type, order_id, courier_id, payload_json, created_at),
             )
             if cur.rowcount == 0:
+                if state_event_json is not None:
+                    if not order_id or not event_key:
+                        raise ValueError(
+                            "state_event wymaga niepustych order_id i event_key"
+                        )
+                    _upgrade_existing_source_with_outbox_tx(
+                        conn,
+                        source_table="events",
+                        event_id=event_id,
+                        event_type=event_type,
+                        order_id=order_id,
+                        courier_id=courier_id,
+                        payload_json=payload_json,
+                        event_key=event_key,
+                        expected_state_version=expected_state_version,
+                        expected_state_marker=expected_state_marker,
+                        expected_state_token=expected_state_token,
+                        predecessor_event_id=predecessor_event_id,
+                        state_event_json=state_event_json,
+                        created_at=created_at,
+                    )
+                if atomic_audit_mirror:
+                    _insert_audit_mirror_tx(
+                        conn, event_id, event_type, order_id, courier_id,
+                        payload_json, created_at,
+                    )
                 conn.execute("COMMIT;")
                 _log.debug(f"DUP (pending): {event_id}")
                 return None
 
+            if state_event_json is not None:
+                if not order_id or not event_key:
+                    raise ValueError(
+                        "state_event wymaga niepustych order_id i event_key"
+                    )
+                _insert_state_apply_outbox(
+                    conn,
+                    event_id=event_id,
+                    event_key=event_key,
+                    order_id=str(order_id),
+                    expected_state_version=expected_state_version,
+                    expected_state_marker=expected_state_marker,
+                    expected_state_token=expected_state_token,
+                    predecessor_event_id=predecessor_event_id,
+                    state_event_json=state_event_json,
+                    created_at=created_at,
+                )
+
+            if atomic_audit_mirror:
+                # Queue event, durable receipt i wymagany mirror stanowia jeden
+                # commit. Legacy emit bez state_event zachowuje historyczny
+                # best-effort kontrakt ponizej.
+                _insert_audit_mirror_tx(
+                    conn, event_id, event_type, order_id, courier_id,
+                    payload_json, created_at,
+                )
+
             conn.execute("COMMIT;")
             _log.info(f"EMIT {event_type} order={order_id} courier={courier_id} id={event_id}")
         except sqlite3.OperationalError:
-            conn.execute("ROLLBACK;")
+            # A10-04: BEGIN IMMEDIATE moze polec zanim transakcja powstanie;
+            # ROLLBACK bez guardu maskowal wtedy pierwotny 'database is locked'.
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
             raise
         except Exception as e:
-            conn.execute("ROLLBACK;")
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
             _log.error(f"emit() error: {e}")
             raise
 
-    # Tech debt #39: mirror queue types that need 90-day analytics retention.
-    # Called AFTER queue conn closes — own connection, isolated failure (best-effort).
-    if event_type in AUDIT_MIRRORED_QUEUE_TYPES:
+    # Legacy call-site bez durable receipt zachowuje best-effort mirror. Dla
+    # state_event mirror byl czescia tego samego commitu powyzej, wiec nie ma
+    # crash-window event/outbox→audit ani potrzeby drugiego zapisu.
+    if event_type in AUDIT_MIRRORED_QUEUE_TYPES and state_event_json is None:
         try:
             _emit_audit_mirror(
                 event_id, event_type, order_id, courier_id,
@@ -254,6 +1149,13 @@ def emit(
     courier_id: Optional[str] = None,
     payload: Optional[dict] = None,
     event_id: Optional[str] = None,
+    *,
+    state_event: Optional[dict] = None,
+    event_key: Optional[str] = None,
+    expected_state_version: Optional[str] = None,
+    expected_state_marker: Optional[str] = None,
+    expected_state_token: Optional[str] = None,
+    predecessor_event_id: Optional[str] = None,
 ) -> Optional[str]:
     """Emituje event. Zwraca event_id lub None jesli duplikat.
 
@@ -264,8 +1166,8 @@ def emit(
 
     Tech debt #39: COURIER_PICKED_UP and COURIER_DELIVERED are automatically
     mirrored to audit_log (90‑day retention) for analytics consumers such as
-    the R‑04 evaluator.  The mirror is best‑effort and never blocks the queue
-    emit.
+    the R‑04 evaluator. Legacy emit bez ``state_event`` pozostaje best-effort;
+    durable lifecycle emit zapisuje queue+outbox+mirror w jednym commicie.
     """
     if event_type not in EVENT_TYPES:
         raise ValueError(f"Nieznany event_type: {event_type}. Dozwolone: {EVENT_TYPES}")
@@ -273,32 +1175,71 @@ def emit(
     if event_id is None:
         event_id = make_event_id(event_type, order_id)
 
+    if state_event is not None:
+        _validate_durable_state_event(
+            event_type, order_id, courier_id, event_id, state_event, event_key
+        )
+        _ensure_state_apply_outbox_initialized()
+        if event_type in AUDIT_MIRRORED_QUEUE_TYPES:
+            _ensure_audit_log_initialized()
+
     payload_json = json.dumps(payload or {}, ensure_ascii=False)
+    state_event_json = (
+        json.dumps(state_event, ensure_ascii=False, sort_keys=True)
+        if state_event is not None else None
+    )
     created_at = now_iso()
 
     return _retry_on_locked(
-        _emit_inner, event_type, order_id, courier_id, payload_json, created_at, event_id,
+        _emit_inner,
+        event_type,
+        order_id,
+        courier_id,
+        payload_json,
+        created_at,
+        event_id,
+        state_event_json,
+        event_key,
+        expected_state_version,
+        expected_state_marker,
+        expected_state_token,
+        predecessor_event_id,
     )
 
 
 def get_pending(limit: int = 100, event_types: Optional[list] = None) -> list:
-    """Zwraca liste pending events posortowanych po created_at (FIFO).
-    Opcjonalnie filtruje po event_types (lista stringow)."""
+    """Zwraca gotowe pending events posortowane po created_at (FIFO).
+
+    Legacy event bez durable receiptu jest gotowy od razu. Event zapisany z
+    ``state_apply_outbox`` staje sie widoczny dla queue consumerow dopiero po
+    ``state_status='applied'``. To egzekwuje event -> orders_state -> consumer
+    rowniez wtedy, gdy consumer nie uzywa lifecycle locka.
+    """
+    _ensure_state_apply_outbox_initialized()
     with _conn() as conn:
         if event_types:
             placeholders = ",".join("?" * len(event_types))
             params = tuple(event_types) + (limit,)
             cur = conn.execute(
-                f"""SELECT event_id, event_type, order_id, courier_id, payload, created_at
-                    FROM events WHERE status = 'pending' AND event_type IN ({placeholders})
-                    ORDER BY created_at ASC LIMIT ?""",
+                f"""SELECT e.event_id, e.event_type, e.order_id, e.courier_id,
+                           e.payload, e.created_at
+                    FROM events AS e
+                    LEFT JOIN state_apply_outbox AS s ON s.event_id = e.event_id
+                    WHERE e.status = 'pending'
+                      AND (s.event_id IS NULL OR s.state_status = 'applied')
+                      AND e.event_type IN ({placeholders})
+                    ORDER BY e.created_at ASC, e.rowid ASC LIMIT ?""",
                 params,
             )
         else:
             cur = conn.execute(
-                """SELECT event_id, event_type, order_id, courier_id, payload, created_at
-                   FROM events WHERE status = 'pending'
-                   ORDER BY created_at ASC LIMIT ?""",
+                """SELECT e.event_id, e.event_type, e.order_id, e.courier_id,
+                          e.payload, e.created_at
+                   FROM events AS e
+                   LEFT JOIN state_apply_outbox AS s ON s.event_id = e.event_id
+                   WHERE e.status = 'pending'
+                     AND (s.event_id IS NULL OR s.state_status = 'applied')
+                   ORDER BY e.created_at ASC, e.rowid ASC LIMIT ?""",
                 (limit,),
             )
         return [dict(row) | {"payload": json.loads(row["payload"])} for row in cur.fetchall()]
@@ -414,30 +1355,74 @@ def cleanup(retention_hours: int = 48) -> int:
         _log.info("cleanup: skip — peak window (Warsaw lunch/dinner)")
         return 0
 
+    _ensure_state_apply_outbox_initialized()
+    cutoff = f"-{retention_hours} hours"
     with _conn() as conn:
-        # SQLite: usun processed_events starsze niz cutoff
-        cur = conn.execute(
-            """DELETE FROM processed_events
-               WHERE processed_at < datetime('now', ?)""",
-            (f"-{retention_hours} hours",),
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            # Durable queue receipt musi zniknac atomowo z eventem i jego
+            # processed dedupe. Nierozwiazany state/downstream receipt blokuje
+            # retencje calej trojki, aby cleanup nie utworzyl orphan/collision
+            # window przy ponownej emisji tego samego deterministic event_id.
+            outbox_cur = conn.execute(
+                """DELETE FROM state_apply_outbox
+                   WHERE event_id IN (
+                       SELECT event_id FROM events
+                       WHERE status = 'processed'
+                         AND processed_at < datetime('now', ?)
+                   )
+                     AND state_status IN ('applied', 'superseded')
+                     AND downstream_status IN ('applied', 'skipped')
+                     AND NOT EXISTS (
+                         SELECT 1 FROM state_apply_outbox AS child
+                         WHERE child.predecessor_event_id = state_apply_outbox.event_id
+                           AND (
+                               child.state_status = 'pending'
+                               OR (child.state_status = 'applied'
+                                   AND child.downstream_status = 'pending')
+                           )
+                     )""",
+                (cutoff,),
+            )
+            cur = conn.execute(
+                """DELETE FROM processed_events
+                   WHERE processed_at < datetime('now', ?)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM state_apply_outbox AS s
+                         WHERE s.event_id = processed_events.event_id
+                     )""",
+                (cutoff,),
+            )
+            deleted1 = cur.rowcount
+            cur = conn.execute(
+                """DELETE FROM events
+                   WHERE status = 'processed'
+                     AND processed_at < datetime('now', ?)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM state_apply_outbox AS s
+                         WHERE s.event_id = events.event_id
+                     )""",
+                (cutoff,),
+            )
+            deleted2 = cur.rowcount
+            conn.execute("COMMIT;")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
+            raise
+        _log.info(
+            "cleanup: usunieto "
+            f"{deleted1} processed_events, {deleted2} events, "
+            f"{outbox_cur.rowcount} domknietych queue outbox"
         )
-        deleted1 = cur.rowcount
-        # Usun rowniez events z tabeli events jesli processed
-        cur = conn.execute(
-            """DELETE FROM events
-               WHERE status = 'processed' AND processed_at < datetime('now', ?)""",
-            (f"-{retention_hours} hours",),
-        )
-        deleted2 = cur.rowcount
-        _log.info(f"cleanup: usunieto {deleted1} processed_events, {deleted2} events")
         return deleted1 + deleted2
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # Opcja C (2026-05-07): audit_log table — append-only, retention 90d.
 # Rozdziela role events.db: queue (pending→processed) vs audit log (append-only).
-# Dual-write call sites (panel_watcher, dispatch_pipeline) używają emit_audit()
-# zamiast emit() dla typów w AUDIT_EVENT_TYPES.
+# Typy audit-only uzywaja emit_audit(); gdy caller podaje state_event, wpis
+# audit i durable outbox powstaja atomowo w tej samej transakcji.
 # ─────────────────────────────────────────────────────────────────────────
 
 
@@ -481,10 +1466,17 @@ def _emit_audit_inner(
     payload_json: str,
     created_at: str,
     event_id: str,
+    state_event_json: Optional[str] = None,
+    event_key: Optional[str] = None,
+    expected_state_version: Optional[str] = None,
+    expected_state_marker: Optional[str] = None,
+    expected_state_token: Optional[str] = None,
+    predecessor_event_id: Optional[str] = None,
 ) -> Optional[str]:
     """Inner emit_audit. Wrapped przez emit_audit() w _retry_on_locked."""
     with _conn() as conn:
         try:
+            conn.execute("BEGIN IMMEDIATE;")
             cur = conn.execute(
                 """INSERT OR IGNORE INTO audit_log
                    (event_id, event_type, order_id, courier_id, payload, created_at)
@@ -492,13 +1484,57 @@ def _emit_audit_inner(
                 (event_id, event_type, order_id, courier_id, payload_json, created_at),
             )
             if cur.rowcount == 0:
+                if state_event_json is not None:
+                    if not order_id or not event_key:
+                        raise ValueError(
+                            "state_event wymaga niepustych order_id i event_key"
+                        )
+                    _upgrade_existing_source_with_outbox_tx(
+                        conn,
+                        source_table="audit_log",
+                        event_id=event_id,
+                        event_type=event_type,
+                        order_id=order_id,
+                        courier_id=courier_id,
+                        payload_json=payload_json,
+                        event_key=event_key,
+                        expected_state_version=expected_state_version,
+                        expected_state_marker=expected_state_marker,
+                        expected_state_token=expected_state_token,
+                        predecessor_event_id=predecessor_event_id,
+                        state_event_json=state_event_json,
+                        created_at=created_at,
+                    )
+                conn.execute("COMMIT;")
                 _log.debug(f"AUDIT DUP: {event_id}")
                 return None
+            if state_event_json is not None:
+                if not order_id or not event_key:
+                    raise ValueError(
+                        "state_event wymaga niepustych order_id i event_key"
+                    )
+                _insert_state_apply_outbox(
+                    conn,
+                    event_id=event_id,
+                    event_key=event_key,
+                    order_id=str(order_id),
+                    expected_state_version=expected_state_version,
+                    expected_state_marker=expected_state_marker,
+                    expected_state_token=expected_state_token,
+                    predecessor_event_id=predecessor_event_id,
+                    state_event_json=state_event_json,
+                    created_at=created_at,
+                )
+            conn.execute("COMMIT;")
             _log.info(f"AUDIT {event_type} order={order_id} courier={courier_id} id={event_id}")
             return event_id
         except sqlite3.OperationalError:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
             raise
         except Exception as e:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
             _log.error(f"emit_audit() error: {e}")
             raise
 
@@ -509,6 +1545,13 @@ def emit_audit(
     courier_id: Optional[str] = None,
     payload: Optional[dict] = None,
     event_id: Optional[str] = None,
+    *,
+    state_event: Optional[dict] = None,
+    event_key: Optional[str] = None,
+    expected_state_version: Optional[str] = None,
+    expected_state_marker: Optional[str] = None,
+    expected_state_token: Optional[str] = None,
+    predecessor_event_id: Optional[str] = None,
 ) -> Optional[str]:
     """Zapisuje event audit-only do tabeli audit_log (append-only).
 
@@ -516,8 +1559,9 @@ def emit_audit(
     Dla typów z AUDIT_EVENT_TYPES (COURIER_ASSIGNED, CZAS_KURIERA_UPDATED,
     PANEL_UNREACHABLE, ORDER_RETURNED_TO_POOL).
 
-    Stan persistowany przez state_machine.update_from_event wywoływany inline
-    z call site — ta funkcja jest TYLKO audit history. Brak status/processed_at.
+    Bez ``state_event`` funkcja zapisuje tylko historię audytową (brak
+    status/processed_at). Z ``state_event`` atomowo dopisuje także durable
+    receipt; faktyczny state apply wykonuje wspólny bridge C3.
 
     MP-#5: Transient SQLite lock errors retry'owane (3x exp backoff).
 
@@ -533,11 +1577,32 @@ def emit_audit(
         event_id = make_event_id(event_type, order_id)
 
     _ensure_audit_log_initialized()
+    if state_event is not None:
+        _validate_durable_state_event(
+            event_type, order_id, courier_id, event_id, state_event, event_key
+        )
+        _ensure_state_apply_outbox_initialized()
     payload_json = json.dumps(payload or {}, ensure_ascii=False)
+    state_event_json = (
+        json.dumps(state_event, ensure_ascii=False, sort_keys=True)
+        if state_event is not None else None
+    )
     created_at = now_iso()
 
     return _retry_on_locked(
-        _emit_audit_inner, event_type, order_id, courier_id, payload_json, created_at, event_id,
+        _emit_audit_inner,
+        event_type,
+        order_id,
+        courier_id,
+        payload_json,
+        created_at,
+        event_id,
+        state_event_json,
+        event_key,
+        expected_state_version,
+        expected_state_marker,
+        expected_state_token,
+        predecessor_event_id,
     )
 
 
@@ -551,13 +1616,71 @@ def cleanup_audit_log(retention_days: int = 90) -> int:
         return 0
 
     _ensure_audit_log_initialized()
+    _ensure_state_apply_outbox_initialized()
     with _conn() as conn:
-        cur = conn.execute(
-            """DELETE FROM audit_log WHERE created_at < datetime('now', ?)""",
-            (f"-{retention_days} days",),
-        )
-        deleted = cur.rowcount
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute(
+                """DELETE FROM audit_log
+                   WHERE created_at < datetime('now', ?)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM state_apply_outbox AS receipt
+                         WHERE receipt.event_id = audit_log.event_id
+                           AND (
+                               receipt.state_status = 'pending'
+                               OR (receipt.state_status = 'applied'
+                                   AND receipt.downstream_status = 'pending')
+                               OR EXISTS (
+                                   SELECT 1 FROM state_apply_outbox AS child
+                                   WHERE child.predecessor_event_id = receipt.event_id
+                                     AND (
+                                         child.state_status = 'pending'
+                                         OR (child.state_status = 'applied'
+                                             AND child.downstream_status = 'pending')
+                                     )
+                               OR EXISTS (
+                                   SELECT 1 FROM events AS queue_event
+                                   WHERE queue_event.event_id = receipt.event_id
+                                     AND queue_event.status != 'processed'
+                               )
+                           )
+                           )
+                     )""",
+                (f"-{retention_days} days",),
+            )
+            deleted = cur.rowcount
+            outbox_cur = conn.execute(
+                """DELETE FROM state_apply_outbox
+                   WHERE state_status IN ('applied', 'superseded')
+                     AND downstream_status IN ('applied', 'skipped')
+                     AND created_at < datetime('now', ?)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM events AS queue_event
+                         WHERE queue_event.event_id = state_apply_outbox.event_id
+                           AND queue_event.status != 'processed'
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM state_apply_outbox AS child
+                         WHERE child.predecessor_event_id = state_apply_outbox.event_id
+                           AND (
+                               child.state_status = 'pending'
+                               OR (child.state_status = 'applied'
+                                   AND child.downstream_status = 'pending')
+                           )
+                     )""",
+                (f"-{retention_days} days",),
+            )
+            conn.execute("COMMIT;")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
+            raise
         _log.info(f"cleanup_audit_log: usunieto {deleted} audit_log entries (retention={retention_days}d)")
+        if outbox_cur.rowcount:
+            _log.info(
+                "cleanup_audit_log: usunieto "
+                f"{outbox_cur.rowcount} domknietych state_apply_outbox"
+            )
         return deleted
 
 
@@ -592,7 +1715,12 @@ def cleanup_broadcast(retention_days: int = 7) -> int:
 
 def get_pending_count(event_types: Optional[list] = None) -> int:
     """Zwraca liczbę pending events w tabeli events.
-    Opcjonalnie filtruje po event_types (np. tylko queue typy dla WORKER_STUCK alert)."""
+    Opcjonalnie filtruje po event_types (np. tylko queue typy dla WORKER_STUCK alert).
+
+    To celowo surowy backlog storage, nie liczba eventow gotowych z
+    ``get_pending``: durable event oczekujacy na state apply ma pozostac
+    widoczny dla alarmu stuck, mimo ze consumer nie moze go jeszcze pobrac.
+    """
     with _conn() as conn:
         if event_types:
             placeholders = ",".join("?" * len(event_types))

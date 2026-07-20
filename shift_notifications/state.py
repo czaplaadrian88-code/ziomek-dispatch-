@@ -174,9 +174,9 @@ def _append_jsonl_to(path: Path, event: dict, label: str) -> None:
     if "ts" not in rec:
         rec["ts"] = datetime.now(timezone.utc).isoformat()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+
+        append_jsonl(path, rec)
     except Exception as e:
         _log.warning(f"{label} fail: {type(e).__name__}: {e}")
 

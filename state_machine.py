@@ -9,14 +9,17 @@ Kluczowe wlasciwosci:
 - Commitment levels: planned / assigned / arrived_at_pickup / picked_up / en_route / near_delivery
 """
 import fcntl
+import hashlib
 import json
 import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -302,6 +305,100 @@ else:
 ORDER_FSM_OBSERVER_ENABLED = True
 ORDER_FSM_ENFORCEMENT_ENABLED = False
 _FSM_CURRENT_UNSET = object()
+_LIFECYCLE_APPLY_LOCAL = threading.local()
+_LIFECYCLE_APPLY_THREAD_LOCK = threading.RLock()
+_LIFECYCLE_DOWNSTREAM_LOCAL = threading.local()
+_LIFECYCLE_DOWNSTREAM_THREAD_LOCK = threading.RLock()
+
+
+@contextmanager
+def lifecycle_apply_lock():
+    """Cross-process, reentrant lock dla outbox version-check -> state apply.
+
+    Osobny sidecar zapobiega deadlockowi z ``_locked_write``. Reentrancja jest
+    potrzebna, bo kanoniczny mutator bierze ten lock ponownie. Zakres obejmuje
+    outbox precheck i zapis orders_state, ale CELOWO nie obejmuje wolnego
+    plan/recanon downstream (osobna kolejka/lock ponizej).
+    """
+    depth = int(getattr(_LIFECYCLE_APPLY_LOCAL, "depth", 0) or 0)
+    if depth:
+        _LIFECYCLE_APPLY_LOCAL.depth = depth + 1
+        try:
+            yield
+        finally:
+            _LIFECYCLE_APPLY_LOCAL.depth -= 1
+        return
+
+    # flock serializuje procesy, ale jego semantyka nie gwarantuje wzajemnego
+    # wykluczenia dwoch watkow tego samego procesu. RLock domyka ten przypadek;
+    # thread-local depth zachowuje reentrancje bez ponownego flock().
+    with _LIFECYCLE_APPLY_THREAD_LOCK:
+        lock_path = f"{_state_path()}.lifecycle_apply.lock"
+        Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
+        # os.open daje prawdziwy deskryptor także w testach, które mockują
+        # builtins.open dla plików panelu/stanu.
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        locked = False
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            locked = True
+            _LIFECYCLE_APPLY_LOCAL.depth = 1
+            _LIFECYCLE_APPLY_LOCAL.fd = lock_fd
+            yield
+        finally:
+            _LIFECYCLE_APPLY_LOCAL.depth = 0
+            _LIFECYCLE_APPLY_LOCAL.fd = None
+            try:
+                if locked:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
+
+
+@contextmanager
+def lifecycle_downstream_lock():
+    """Osobny FIFO-consumer lock; yield True tylko dla outer consumera."""
+    depth = int(getattr(_LIFECYCLE_DOWNSTREAM_LOCAL, "depth", 0) or 0)
+    if depth:
+        _LIFECYCLE_DOWNSTREAM_LOCAL.depth = depth + 1
+        try:
+            yield False
+        finally:
+            _LIFECYCLE_DOWNSTREAM_LOCAL.depth -= 1
+        return
+
+    with _LIFECYCLE_DOWNSTREAM_THREAD_LOCK:
+        lock_path = f"{_state_path()}.lifecycle_downstream.lock"
+        Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        locked = False
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            locked = True
+            _LIFECYCLE_DOWNSTREAM_LOCAL.depth = 1
+            yield True
+        finally:
+            _LIFECYCLE_DOWNSTREAM_LOCAL.depth = 0
+            try:
+                if locked:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
+
+
+def _lifecycle_state_mutation(fn):
+    """Kazdy writer orders_state uczestniczy w wersjonowanym protokole C3.
+
+    Sam ``_locked_write`` chroni atomowy RMW pliku, ale nie obejmuje odczytu
+    wersji wykonanego w durable outboxie. Ten wspolny, reentrant wrapper sprawia,
+    ze bezposredni writer nie moze wejsc pomiedzy check wersji i lifecycle apply.
+    """
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        with lifecycle_apply_lock():
+            return fn(*args, **kwargs)
+
+    return wrapped
 
 
 def _observe_order_event(event, current=_FSM_CURRENT_UNSET) -> Optional[FsmVerdict]:
@@ -420,8 +517,19 @@ def _backup_prev(path: Path) -> None:
                 pass
 
 
+def ensure_state_directory_durable(path: Optional[Path] = None) -> None:
+    """Utrwal wpis katalogowy aktualnego pliku orders_state."""
+    path = Path(_state_path()) if path is None else Path(path)
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    dir_fd = os.open(str(path.parent), dir_flags)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
 def _atomic_write(path: Path, data: dict):
-    """Zapis temp -> fsync -> replace (atomic na POSIX).
+    """Zapis temp -> fsync -> replace -> fsync katalogu (trwale na POSIX).
     Faza 1: przed nadpisaniem robi snapshot obecnej wersji → .prev."""
     tmp_fd, tmp_path = tempfile.mkstemp(
         dir=str(path.parent), prefix=".tmp_", suffix=".json"
@@ -433,6 +541,11 @@ def _atomic_write(path: Path, data: dict):
             os.fsync(f.fileno())
         _backup_prev(path)          # Faza 1: 1-deep recovery snapshot
         os.replace(tmp_path, path)
+        # Sam fsync pliku tymczasowego nie utrwala wpisu katalogowego rename.
+        # Outbox SQLite moze zostac oznaczony applied zaraz po tym zapisie, wiec
+        # awaria hosta nie moze przywrocic starego orders_state przy trwalszym
+        # receipcie. Blad fsync katalogu jest bledem zapisu, nie best-effort.
+        ensure_state_directory_durable(path)
     except Exception:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -528,6 +641,31 @@ def _read_state() -> dict:
     return {}
 
 
+def state_storage_token() -> str:
+    """Token snapshotu *treści* pliku, niezależny od zegara.
+
+    Używany wyłącznie w rzadkiej ścieżce, gdy strict JSON read zawiódł przed
+    emisją durable eventu. Hash pozwala później dowieść, że żaden writer nie
+    zmienił surowego state; mtime/updated_at nie są oracle przy korekcie zegara.
+    """
+    path = Path(_state_path())
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except FileNotFoundError:
+        return "missing:sha256"
+    return f"sha256:{digest.hexdigest()}"
+
+
 def _is_bootstrap() -> bool:
     """Faza 1: True TYLKO gdy orders_state.json nigdy nie istniał (świeża
     instalacja). Obecność backupu .prev oznacza, że plik istniał wcześniej —
@@ -583,6 +721,18 @@ def get_order(order_id: str) -> Optional[dict]:
     return _read_state().get(order_id)
 
 
+def get_order_strict(order_id: str) -> Optional[dict]:
+    """Fail-closed odczyt jednego zlecenia dla granic read→write.
+
+    Zwykli read-only konsumenci zachowuja historyczny kontrakt ``get_order``
+    (fallback do pustego stanu). Durable event bridge nie moze jednak pomylic
+    chwilowo brakujacego/uszkodzonego pliku z prawdziwym brakiem rekordu, bo
+    taki falszywy ``None`` staje sie wersja oczekiwana outboxa. Dlatego tylko
+    granica C3 uzywa strict readera wspolnego z kanonicznymi RMW writerami.
+    """
+    return _read_state_strict().get(order_id)
+
+
 def get_by_status(status: str) -> list:
     """Zwraca liste zlecen w danym statusie."""
     state = _read_state()
@@ -596,6 +746,176 @@ def get_by_courier(courier_id: str, statuses: Optional[list] = None) -> list:
     if statuses:
         result = [o for o in result if o.get("status") in statuses]
     return result
+
+
+def event_effect_status(
+    event: dict,
+    current=_FSM_CURRENT_UNSET,
+) -> str:
+    """Stan postcondition: ``applied`` / ``pending`` / ``superseded``.
+
+    Sam bool nie wystarcza: terminal nowszy od oczekującego eventu nie jest ani
+    "brakiem apply", ani dowodem, że wolno odtworzyć stary event. ``superseded``
+    zatrzymuje stale/out-of-order retry. Funkcja jest read-only; weryfikację
+    wersji ``updated_at`` robi durable outbox.
+    """
+    oid = event.get("order_id")
+    if not oid:
+        return "pending"
+    if current is _FSM_CURRENT_UNSET:
+        current = get_order(str(oid))
+    if not current:
+        return "pending"
+
+    etype = event.get("event_type")
+    payload = event.get("payload") or {}
+    status = current.get("status")
+    if etype == "NEW_ORDER":
+        # Późniejsze lifecycle states także dowodzą, że NEW_ORDER był zastosowany.
+        return "applied"
+    if etype == "COURIER_ASSIGNED":
+        # Nie odtwarzaj starego assignment po zamknięciu lub pickupie innego
+        # kuriera. Legalny nowy reassign dostaje osobną generację outbox.
+        if status in ("delivered", "returned_to_pool", "cancelled"):
+            return "superseded"
+        matches = (
+            status in ("assigned", "picked_up")
+            and str(current.get("courier_id") or "")
+            == str(event.get("courier_id") or "")
+        )
+        ck_iso = payload.get("czas_kuriera_warsaw")
+        ck_hhmm = payload.get("czas_kuriera_hhmm")
+        ck_valid = _verify_czas_kuriera_consistency(ck_iso, ck_hhmm, str(oid))
+        # Handler przy uszkodzonym CK nadal trwale stosuje SAM assignment, ale
+        # odrzuca oba pola czasu i podnosi CorruptedTimestampError. Oracle musi
+        # wtedy oceniac postcondition assignmentu bez wadliwych pol; exact marker
+        # rozstrzyga crash po tym czesciowym, swiadomym commicie.
+        if matches and ck_valid and ck_iso is not None:
+            matches = current.get("czas_kuriera_warsaw") == ck_iso
+        if matches and ck_valid and ck_hhmm is not None:
+            matches = current.get("czas_kuriera_hhmm") == ck_hhmm
+        if matches:
+            return "applied"
+        if status == "picked_up":
+            return "superseded"
+        return "pending"
+    if etype == "COURIER_PICKED_UP":
+        event_courier = str(event.get("courier_id") or "")
+        current_courier = str(current.get("courier_id") or "")
+        if event_courier and event_courier != current_courier:
+            return "superseded"
+        if status == "picked_up":
+            if (
+                payload.get("source") == "parcel_status_inbox"
+                and str(
+                    current.get("last_lifecycle_event_id_courier_picked_up") or ""
+                )
+                != str(event.get("event_id") or "")
+            ):
+                # The inbox key contains its source generation timestamp, but
+                # business state intentionally does not adopt that timestamp.
+                # Status+same courier therefore cannot prove this *new* row;
+                # only its exact durable marker can acknowledge a crash retry.
+                return "superseded"
+            return "applied"
+        if status in ("delivered", "returned_to_pool", "cancelled"):
+            return "superseded"
+        return "pending"
+    if etype == "COURIER_DELIVERED":
+        if payload.get("source") == "parcel_status_inbox":
+            event_courier = str(event.get("courier_id") or "")
+            current_courier = str(current.get("courier_id") or "")
+            if event_courier and event_courier != current_courier:
+                return "superseded"
+        if status == "delivered":
+            if (
+                payload.get("source") == "parcel_status_inbox"
+                and str(
+                    current.get("last_lifecycle_event_id_courier_delivered") or ""
+                )
+                != str(event.get("event_id") or "")
+            ):
+                return "superseded"
+            return "applied"
+        if status in ("returned_to_pool", "cancelled"):
+            return "superseded"
+        return "pending"
+    if etype == "ORDER_RESURRECTED":
+        desired = str(payload.get("new_status") or "picked_up")
+        if desired not in ("assigned", "picked_up"):
+            desired = "picked_up"
+        event_courier = str(event.get("courier_id") or "")
+        current_courier = str(current.get("courier_id") or "")
+        if event_courier and event_courier != current_courier:
+            return "superseded"
+        if status == desired:
+            return "applied"
+        if status == "delivered":
+            return "pending"
+        return "superseded"
+    if etype == "ORDER_RETURNED_TO_POOL":
+        if status == "returned_to_pool":
+            return "applied"
+        if status in ("delivered", "cancelled"):
+            return "superseded"
+        return "pending"
+    if etype == "CZAS_KURIERA_UPDATED":
+        if status in ("delivered", "returned_to_pool", "cancelled"):
+            return "superseded"
+        new_ck_iso = payload.get("new_ck_iso")
+        new_ck_hhmm = payload.get("new_ck_hhmm")
+        if not _verify_czas_kuriera_consistency(
+            new_ck_iso, new_ck_hhmm, str(oid)
+        ):
+            # Trwale wadliwy payload nie moze pozostac poison-rowem pending i
+            # blokowac causal/downstream lanes. Event jest zachowany w audycie, ale
+            # jego state/downstream zostaja terminalnie pominiete.
+            return "superseded"
+        source = payload.get("source")
+        if (
+            flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+            and _is_czasowka_order(current)
+            and source in _CK_PASSIVE_SOURCES
+        ):
+            return "superseded"
+        if (
+            flag("ENABLE_ELASTYK_CK_NO_BACKWARD", True)
+            and not _is_czasowka_order(current)
+            and source in _CK_PASSIVE_SOURCES
+            and _ck_backward_delta(
+                current.get("czas_kuriera_warsaw"), new_ck_iso
+            ) is not None
+        ):
+            return "superseded"
+        return "applied" if (
+            current.get("czas_kuriera_warsaw") == new_ck_iso
+            and current.get("czas_kuriera_hhmm") == new_ck_hhmm
+        ) else "pending"
+    if etype == "PICKUP_TIME_UPDATED":
+        if status in ("delivered", "returned_to_pool", "cancelled"):
+            return "superseded"
+        new_pickup = payload.get("new_pickup_at_warsaw")
+        try:
+            if not new_pickup:
+                raise ValueError("missing new_pickup_at_warsaw")
+            datetime.fromisoformat(str(new_pickup))
+        except (ValueError, TypeError):
+            return "superseded"
+        return (
+            "applied"
+            if current.get("pickup_at_warsaw")
+            == new_pickup
+            else "pending"
+        )
+    return "pending"
+
+
+def event_effect_is_applied(
+    event: dict,
+    current=_FSM_CURRENT_UNSET,
+) -> bool:
+    """Kompatybilny bool-oracle; stale terminal NIE jest "applied"."""
+    return event_effect_status(event, current=current) == "applied"
 
 
 def _sanitize_ingest_coords(order_id: str, data: dict) -> dict:
@@ -712,6 +1032,7 @@ def _r_declared_tripwire(order_id: str, merged: dict, event: Optional[str]) -> N
         _log.debug(f"R_DECLARED tripwire jsonl append skip oid={order_id}: {_e}")
 
 
+@_lifecycle_state_mutation
 def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict:
     """Dodaje lub aktualizuje zlecenie. Zapisuje history entry.
     Zwraca zaktualizowany rekord."""
@@ -742,6 +1063,7 @@ def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict
         return merged
 
 
+@_lifecycle_state_mutation
 def set_status(order_id: str, status: str, extra: Optional[dict] = None, event: Optional[str] = None) -> Optional[dict]:
     """Zmiana statusu + dodatkowe pola."""
     if status not in ORDER_STATUSES:
@@ -752,46 +1074,7 @@ def set_status(order_id: str, status: str, extra: Optional[dict] = None, event: 
     return upsert_order(order_id, data, event=event)
 
 
-def resurrect_order(order_id: str, new_status: str = "picked_up",
-                    courier_id: Optional[str] = None,
-                    reason: str = "panel_status_restored") -> Optional[dict]:
-    """Cofnięcie z 'delivered' do aktywnego — koordynator RĘCZNIE przywrócił status w gastro
-    (case Pizzeria 105 29.06: apka wysłała błędne 'doręczone' tuż po odbiorze, Adrian cofnął
-    w gastro → bez tego Ziomek ignorował zlecenie NA ZAWSZE [terminal + _ignored_ids], lista
-    kuriera i czasy się nie aktualizowały). ŚWIADOMIE bypassuje Path-B terminal-preserve —
-    wołane TYLKO gdy panel_watcher potwierdził aktywny status gastro (3-6) + zlecenie wróciło
-    do packs kuriera. Czyści delivered_at/final_location. No-op gdy zlecenie nie 'delivered'."""
-    prev = get_order(order_id) or {}
-    if new_status not in ("assigned", "picked_up"):
-        new_status = "picked_up"
-    # Z-P1-01 Phase A: correction is an explicit, source-tagged FSM exception.
-    # Observer only — this call cannot block either a valid correction or the
-    # legacy no-op for a non-delivered order.
-    _observe_order_event({
-        "event_type": "ORDER_RESURRECTED",
-        "order_id": order_id,
-        "courier_id": courier_id,
-        "payload": {
-            "new_status": new_status,
-            "reason": reason,
-            "source": reason,
-        },
-    }, current=prev or None)
-    if prev.get("status") != "delivered":
-        return None
-    data = {
-        "status": new_status,
-        "commitment_level": new_status,
-        "delivered_at": None,
-        "final_location": None,
-        "bag_time_alerted": False,
-    }
-    if courier_id:
-        data["courier_id"] = str(courier_id)
-    _log.warning(f"RESURRECT {order_id} delivered→{new_status} reason={reason} cid={courier_id}")
-    return upsert_order(order_id, data, event="ORDER_RESURRECTED")
-
-
+@_lifecycle_state_mutation
 def update_from_event(event: dict) -> Optional[dict]:
     """Konsumuje event z event busa i aktualizuje state machine.
     Zwraca zaktualizowany rekord lub None."""
@@ -805,6 +1088,23 @@ def update_from_event(event: dict) -> Optional[dict]:
     if not oid:
         return None
 
+    durable_event_id = event.get("event_id")
+
+    def _marked(fields: dict) -> dict:
+        """Powiaz exact outbox event z tym samym atomowym zapisem stanu."""
+        if not durable_event_id:
+            return fields
+        marked = dict(fields)
+        marked["last_lifecycle_event_id"] = str(durable_event_id)
+        marker_type = "".join(
+            ch.lower() if ch.isalnum() else "_" for ch in str(etype)
+        ).strip("_")
+        if marker_type:
+            # Marker per typ nie ginie po ortogonalnym evencie (np. ASSIGNED,
+            # potem CZAS_KURIERA_UPDATED przed receiptem outboxa).
+            marked[f"last_lifecycle_event_id_{marker_type}"] = str(durable_event_id)
+        return marked
+
     if etype == "NEW_ORDER":
         # V3.19f: sanity check czas_kuriera consistency przed persist.
         ck_iso = payload.get("czas_kuriera_warsaw")
@@ -814,7 +1114,7 @@ def update_from_event(event: dict) -> Optional[dict]:
             # Inne pola persistowane bez zmian (order dalej trafia do state).
             ck_iso = None
             ck_hhmm = None
-            _result = upsert_order(oid, {
+            _result = upsert_order(oid, _marked({
                 "status": "planned",
                 "commitment_level": "planned",
                 "restaurant": payload.get("restaurant"),
@@ -833,12 +1133,12 @@ def update_from_event(event: dict) -> Optional[dict]:
                 "decision_deadline": payload.get("decision_deadline"),
                 "zmiana_czasu_odbioru": payload.get("zmiana_czasu_odbioru"),
                 "created_at_utc": payload.get("created_at_utc"),
-            }, event="NEW_ORDER")
+            }), event="NEW_ORDER")
             raise CorruptedTimestampError(
                 f"NEW_ORDER {oid}: czas_kuriera sanity fail, "
                 f"persisted bez czas_kuriera fields"
             )
-        return upsert_order(oid, {
+        return upsert_order(oid, _marked({
             "status": "planned",
             "commitment_level": "planned",
             "restaurant": payload.get("restaurant"),
@@ -868,7 +1168,7 @@ def update_from_event(event: dict) -> Optional[dict]:
             "decision_deadline": payload.get("decision_deadline"),
             "zmiana_czasu_odbioru": payload.get("zmiana_czasu_odbioru"),
             "created_at_utc": payload.get("created_at_utc"),
-        }, event="NEW_ORDER")
+        }), event="NEW_ORDER")
 
     if etype == "COURIER_ASSIGNED":
         # V3.28 P4 — auto-activation koordynatora (Adrian doktryna 2026-05-10).
@@ -975,19 +1275,19 @@ def update_from_event(event: dict) -> Optional[dict]:
                         f"keep committed {prev.get('czas_kuriera_hhmm')} "
                         f"(ignore assign read {ck_hhmm})"
                     )
-                    return upsert_order(oid, merged, event="COURIER_ASSIGNED")
+                    return upsert_order(oid, _marked(merged), event="COURIER_ASSIGNED")
                 merged["czas_kuriera_warsaw"] = ck_iso
                 merged["czas_kuriera_hhmm"] = ck_hhmm
-                _result = upsert_order(oid, merged, event="COURIER_ASSIGNED")
+                _result = upsert_order(oid, _marked(merged), event="COURIER_ASSIGNED")
                 return _result
             else:
                 # Skip persist czas_kuriera; log ERROR done; raise after upsert.
-                _result = upsert_order(oid, merged, event="COURIER_ASSIGNED")
+                _result = upsert_order(oid, _marked(merged), event="COURIER_ASSIGNED")
                 raise CorruptedTimestampError(
                     f"COURIER_ASSIGNED {oid}: czas_kuriera sanity fail, "
                     f"persisted bez czas_kuriera update"
                 )
-        return upsert_order(oid, merged, event="COURIER_ASSIGNED")
+        return upsert_order(oid, _marked(merged), event="COURIER_ASSIGNED")
 
     if etype == "CZAS_KURIERA_UPDATED":
         # V3.19g1: panel_watcher detected czas_kuriera change (|Δt| ≥ 3min)
@@ -1061,7 +1361,9 @@ def update_from_event(event: dict) -> Optional[dict]:
             f"V3.19g1 oid={oid} ck {payload.get('old_ck_hhmm')} → {new_ck_hhmm} "
             f"{_delta_str} src={payload.get('source')}"
         )
-        return upsert_order(oid, update_fields, event="CZAS_KURIERA_UPDATED")
+        return upsert_order(
+            oid, _marked(update_fields), event="CZAS_KURIERA_UPDATED"
+        )
 
     if etype == "PICKUP_TIME_UPDATED":
         # Root cause oid 474577 (2026-05-19): pickup_at_warsaw zapisywany RAZ
@@ -1128,7 +1430,9 @@ def update_from_event(event: dict) -> Optional[dict]:
             f"{payload.get('old_pickup_at_warsaw')} → {new_pickup} "
             f"{_p_delta_str} src={payload.get('source')}"
         )
-        return upsert_order(oid, update_fields, event="PICKUP_TIME_UPDATED")
+        return upsert_order(
+            oid, _marked(update_fields), event="PICKUP_TIME_UPDATED"
+        )
 
     if etype == "COURIER_PICKED_UP":
         # F2.1b step 5: CELOWO NIE resetujemy bag_time_alerted tutaj.
@@ -1159,7 +1463,7 @@ def update_from_event(event: dict) -> Optional[dict]:
         }
         if pickup_coords:
             update_fields["pickup_coords"] = pickup_coords
-        return upsert_order(oid, update_fields, event="COURIER_PICKED_UP")
+        return upsert_order(oid, _marked(update_fields), event="COURIER_PICKED_UP")
 
     if etype == "COURIER_DELIVERED":
         deliv_addr = payload.get("delivery_address") or payload.get("final_location")
@@ -1193,32 +1497,61 @@ def update_from_event(event: dict) -> Optional[dict]:
         }
         if deliv_coords:
             delivered_update["delivery_coords"] = deliv_coords
-        return upsert_order(oid, delivered_update, event="COURIER_DELIVERED")
+        return upsert_order(
+            oid, _marked(delivered_update), event="COURIER_DELIVERED"
+        )
+
+    if etype == "ORDER_RESURRECTED":
+        existing = get_order(oid) or {}
+        if existing.get("status") != "delivered":
+            return None
+        new_status = str(payload.get("new_status") or "picked_up")
+        if new_status not in ("assigned", "picked_up"):
+            new_status = "picked_up"
+        correction = {
+            "status": new_status,
+            "commitment_level": new_status,
+            "delivered_at": None,
+            "final_location": None,
+            "bag_time_alerted": False,
+            # New correction epoch revokes a crash-pending DELIVERED marker.
+            "last_lifecycle_event_id_courier_delivered": None,
+        }
+        if event.get("courier_id"):
+            correction["courier_id"] = str(event.get("courier_id"))
+        _log.warning(
+            f"RESURRECT {oid} delivered→{new_status} "
+            f"reason={payload.get('reason')} cid={event.get('courier_id')}"
+        )
+        return upsert_order(
+            oid, _marked(correction), event="ORDER_RESURRECTED"
+        )
 
     if etype == "ORDER_RETURNED_TO_POOL":
-        return upsert_order(oid, {
+        return upsert_order(oid, _marked({
             "status": "returned_to_pool",
             "commitment_level": "planned",
             "courier_id": None,
             "return_reason": payload.get("reason"),
             "bag_time_alerted": False,  # F2.1b step 5: reset — next courier starts clean
-        }, event="ORDER_RETURNED_TO_POOL")
+        }), event="ORDER_RETURNED_TO_POOL")
 
     if etype == "COURIER_REJECTED_PROPOSAL":
         # Wraca do planned, bez kuriera
-        return upsert_order(oid, {
+        return upsert_order(oid, _marked({
             "status": "planned",
             "commitment_level": "planned",
             "courier_id": None,
             "last_rejected_by": event.get("courier_id"),
             "rejection_reason": payload.get("reason"),
             "bag_time_alerted": False,  # F2.1b step 5: reset on rejection — next courier starts clean
-        }, event="COURIER_REJECTED_PROPOSAL")
+        }), event="COURIER_REJECTED_PROPOSAL")
 
     # Pozostale eventy nie zmieniaja stanu zlecen
     return None
 
 
+@_lifecycle_state_mutation
 def touch_check_cursor(order_id: str) -> bool:
     """Cicha aktualizacja cursora round-robin dla round-robin watchera.
     Ustawia assigned_check_ts=now_iso dla ordera. Nie loguje historii.
@@ -1234,6 +1567,7 @@ def touch_check_cursor(order_id: str) -> bool:
         return True
 
 
+@_lifecycle_state_mutation
 def delete_order(order_id: str) -> bool:
     """Fizyczne usuniecie (tylko do testow lub purge).
 
@@ -1299,6 +1633,7 @@ def _parse_updated_at_utc(value) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
+@_lifecycle_state_mutation
 def prune_terminal_orders(retention_hours: float = 12.0, dry_run: bool = True) -> dict:
     """Usuwa terminalne zlecenia starsze niż retention_hours (anchor: `updated_at`).
 

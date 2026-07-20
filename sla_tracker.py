@@ -237,9 +237,8 @@ def process(evt):
             except Exception as _e:
                 _log.warning(
                     f"gps_delivery_validation skip {oid}: {type(_e).__name__}: {_e}")
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(LOG_PATH, "a") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(LOG_PATH, rec)
 
         _stats["delivered"] += 1
         if sla_ok is False:

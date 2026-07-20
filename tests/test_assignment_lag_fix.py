@@ -19,6 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dispatch_v2 import common, panel_watcher  # noqa: E402
+from dispatch_v2.durable_event_apply import DurableApplyOutcome  # noqa: E402
 
 
 def _mock_parsed(courier_packs=None, order_ids=None, assigned_ids=None, closed_ids=None):
@@ -86,12 +87,39 @@ def _run_diff(parsed, state_orders=(), kurier_ids=None, raw_fetches=None,
         if update_captures is not None:
             update_captures.append(ev)
 
+    def fake_durable(
+        event_type, *, order_id, courier_id=None, payload=None,
+        state_payload=None, event_id, audit=False,
+    ):
+        if emit_captures is not None:
+            emit_captures.append({
+                "event_type": event_type,
+                "order_id": order_id,
+                "courier_id": courier_id,
+                "payload": payload,
+                "event_id": event_id,
+            })
+        state_event = {
+            "event_type": event_type,
+            "order_id": order_id,
+            "courier_id": courier_id,
+            "payload": payload if state_payload is None else state_payload,
+            "event_id": event_id,
+        }
+        fake_update(state_event)
+        return DurableApplyOutcome(
+            event_id, event_id, True, True, True, True,
+            state_event=state_event,
+        )
+
     # Patch panel_watcher module-level imports
     with mock.patch("dispatch_v2.panel_watcher.state_get_all", return_value=state), \
          mock.patch("dispatch_v2.panel_watcher.fetch_order_details", side_effect=fake_fetch), \
          mock.patch("dispatch_v2.panel_watcher.emit", side_effect=fake_emit), \
          mock.patch("dispatch_v2.panel_watcher.emit_audit", side_effect=fake_emit), \
          mock.patch("dispatch_v2.panel_watcher.update_from_event", side_effect=fake_update), \
+         mock.patch("dispatch_v2.panel_watcher._emit_and_apply_state", side_effect=fake_durable), \
+         mock.patch("dispatch_v2.panel_watcher.durable_event_apply.drain_pending", return_value={}), \
          mock.patch("dispatch_v2.panel_watcher._check_panel_override"), \
          mock.patch("dispatch_v2.panel_watcher.geocode", return_value=None), \
          mock.patch("dispatch_v2.panel_watcher.normalize_order", return_value=None), \
@@ -335,6 +363,32 @@ def main():
     ca_oids = {e["order_id"] for e in ca_emits}
     expect("oids match {467131, 467129, 467155}",
            ca_oids == {"467131", "467129", "467155"})
+
+    # ---------- TEST 14: twin writers share one semantic durable key ----------
+    print("\n=== test 14: panel_diff + packs use one assignment key ===")
+    emits = []
+    _run_diff(
+        parsed=_mock_parsed(
+            courier_packs={"Michał Li": ["467199"]},
+            order_ids=["467199"],
+            assigned_ids={"467199"},
+        ),
+        state_orders=[("467199", None, "planned")],
+        kurier_ids={"Michał Li": 508},
+        raw_fetches={"467199": _raw_response("467199", 508, status_id=3)},
+        emit_captures=emits,
+    )
+    assignment_emits = [
+        e for e in emits
+        if e.get("event_type") == "COURIER_ASSIGNED"
+        and e.get("order_id") == "467199"
+    ]
+    expect("oba detektory wykonały próbę", len(assignment_emits) == 2)
+    expect(
+        "panel_diff i packs mają ten sam canonical event_key",
+        {e.get("event_id") for e in assignment_emits}
+        == {"467199_COURIER_ASSIGNED_508_canonical"},
+    )
 
     # ---------- FINAL ----------
     total = results["pass"] + results["fail"]
