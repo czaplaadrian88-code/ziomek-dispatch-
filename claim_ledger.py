@@ -96,13 +96,40 @@ def verify_no_stale_claim(trace):
 
 def check_sweep_trace(trace, log=None, context=""):
     """Uruchom `verify_no_stale_claim` i (przy naruszeniu) zaloguj GŁOŚNO. Zwraca listę
-    naruszeń. Log-loud: naruszenie = `log.error` z kontekstem; sam nie rzuca (twardą
-    blokadę robi caller przez osobną flagę). Fail-soft: log=None → tylko zwrot listy."""
+    naruszeń. Log-loud: naruszenie = `log.error` z kontekstem; sam nie rzuca.
+    Fail-soft: log=None → tylko zwrot listy. HARD enforcement przed przyjęciem
+    pojedynczego claimu realizuje `check_feral_claim`."""
     viol = verify_no_stale_claim(trace)
     if viol and log is not None:
         log.error(
             "CLAIM_LEDGER_INVARIANT breach [%s]: %d naruszen(ia) INV-FEAS-NO-DOUBLE-BOOK "
             "(kurier widzi worek nierosnacy o +1 miedzy claimami = pile-on/stale): %r",
             context or "?", len(viol), viol[:8],
+        )
+    return viol
+
+
+def check_feral_claim(accepted_trace, claim, log=None, context=""):
+    """Sprawdź pojedynczy nowy claim PRZED jego przyjęciem.
+
+    ``accepted_trace`` zawiera wyłącznie wcześniej zaakceptowane claimy, a
+    ``claim`` ma postać ``(cid, oid, bag_seen)``.  Zwracamy naruszenie
+    wprowadzone przez bieżący claim (pusta lista = można przyjąć).  Funkcja
+    współdzieli dokładnie ten sam oracle co ``verify_no_stale_claim`` i nie
+    rzuca wyjątku ani nie mutuje śladu — caller może więc odrzucić wyłącznie
+    feralny claim i kontynuować tick.
+    """
+    cid = claim[0]
+    previous = next(
+        (entry for entry in reversed(accepted_trace) if entry[0] == cid),
+        None,
+    )
+    viol = verify_no_stale_claim(
+        [previous, claim] if previous is not None else [claim])
+    if viol and log is not None:
+        log.error(
+            "CLAIM_LEDGER_INVARIANT DROP_FERAL_CLAIM [%s]: "
+            "odrzucono claim, tick kontynuuje; naruszenie=%r",
+            context or "?", viol[0],
         )
     return viol

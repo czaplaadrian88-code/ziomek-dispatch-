@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "wersja": 1,
+    "wersja": 2,
     "data_seed": "2026-07-17",
     "zrodla": [
       "ZIOMEK_ARCHITECTURE.md §4 REJESTR BLIŹNIAKÓW (kanon zatw. Adrian 01.07, korekta 06.07)",
@@ -49,6 +49,18 @@
         {"nazwa": "symulacja worka greedy/bruteforce/OR-Tools", "plik": "route_simulator_v2.py", "symbol": "simulate_bag_route_v2", "uwaga": "legacy planery odsłaniane rollbackiem OR-Tools (wzorzec #13 — flip w parach z GROUPING)"},
         {"nazwa": "re-sekwencja plan_recheck", "plik": "plan_recheck.py", "symbol": "_gen_one_bag_plan", "uwaga": "committed ±5 / pre-shift floor muszą być TAKŻE tu (wzorzec #3)"},
         {"nazwa": "pętla per-kurier (kandydaci)", "plik": "core/candidates.py", "symbol": "eval_courier_inner", "uwaga": "EvalContext; scoring/19 kar/Candidate"}
+      ]
+    },
+    "claim-ledger-hard": {
+      "typ": "blizniaki-plikowe",
+      "opis": "HARD inwariant claim-ledger INV-FEAS-NO-DOUBLE-BOOK: jeden wspólny oracle oraz identyczna semantyka DROP-FERAL-CLAIM w resweep i gorącym ticku.",
+      "keywords": ["claim-ledger", "claim ledger", "feral claim", "feralny claim", "drop-feral-claim", "no-double-book", "double-book", "stale claim", "claim_ledger_invariant"],
+      "przypomnienie": "Zmiana weryfikatora/HARD/dropu MUSI objąć claim_ledger.py + OBA konsumujące bliźniaki global_allocate i shadow_dispatcher._tick RAZEM. HARD OFF zachowuje bajt-parytet; HARD ON dropi tylko feralny claim, loguje i kontynuuje tick.",
+      "miejsca": [
+        {"nazwa": "wspólny oracle + per-claim drop gate", "plik": "claim_ledger.py", "symbol": "check_feral_claim", "uwaga": "moduł-liść; zero importów silnika, zero raise"},
+        {"nazwa": "resweep globalnej alokacji", "plik": "tools/pending_global_resweep.py", "symbol": "global_allocate", "uwaga": "drop przed results_out/flotą/live; jsonl+summary"},
+        {"nazwa": "gorący tick shadow", "plik": "shadow_dispatcher.py", "symbol": "def _tick", "uwaga": "drop przed pending/live ETA/auto-assign; tick kontynuuje"},
+        {"nazwa": "inwariant + parytet + mutation-probe", "plik": "tests/test_claim_ledger_no_double_book_inv.py", "symbol": null, "uwaga": "HARD ON≠OFF, metryka, obaj bliźniacy"}
       ]
     },
     "scoring-soft": {

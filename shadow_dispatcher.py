@@ -1427,8 +1427,12 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
 
     # INV-FEAS-NO-DOUBLE-BOOK (Sprint B): ślad claimów tego ticku [(cid, oid, bag_seen)]
     # dla bliźniaka claim-ledger _tick (parytet z global_allocate). Budowany tylko gdy
-    # ENGINE_CLAIM_LEDGER ON (inaczej flota niemutowana = brak claimów). Weryfikacja po pętli.
+    # ENGINE_CLAIM_LEDGER ON (inaczej flota niemutowana = brak claimów).
     _claim_trace: list = []
+    _accepted_claim_trace: list = []
+    _tick_breaches: list = []
+    _tick_feral_drops: list = []
+    _claim_hard_seen = False
 
     for _batch_index, ev in enumerate(events):
         eid = ev["event_id"]
@@ -1520,6 +1524,9 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
             # kurierowi (pomiar: 447 proponowany 127×/32 zlecenia, g_maxpile=7).
             # Flag OFF (default) = flota niemutowana, bajt-parytet. Fail-soft.
             _claim_applied = False
+            _claim_dropped = False
+            _claim_drop_viol: list = []
+            _claim_hard_for_event = False
             if C.decision_flag("ENABLE_ENGINE_CLAIM_LEDGER"):
                 try:
                     _cl_best = getattr(result, "best", None)
@@ -1533,12 +1540,42 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                             # INV-FEAS-NO-DOUBLE-BOOK: worek zwycięzcy PRZED doklejeniem
                             # (= obraz floty, który ocena tego eventu widziała).
                             _cl_bag_seen = len(getattr(fleet.get(_cl_cid), "bag", None) or [])
-                            _claim_trace.append((_cl_cid, oid, _cl_bag_seen))
-                            fleet = _cl.tentative_assign(fleet, _cl_cid, _cl_rec)
-                            _claim_applied = True
-                            _log.info(
-                                f"CLAIM_LEDGER order={oid} cid={_cl_cid} "
-                                f"bag_after={len(fleet[_cl_cid].bag or [])}")
+                            _cl_claim = (_cl_cid, oid, _cl_bag_seen)
+                            _claim_trace.append(_cl_claim)
+                            _claim_hard_for_event = (
+                                C.decision_flag(
+                                    "ENABLE_CLAIM_LEDGER_INVARIANT_CHECK")
+                                and C.decision_flag(
+                                    "ENABLE_CLAIM_LEDGER_INVARIANT_HARD")
+                            )
+                            if _claim_hard_for_event:
+                                _claim_hard_seen = True
+                                try:
+                                    _claim_drop_viol = _cl.check_feral_claim(
+                                        _accepted_claim_trace, _cl_claim,
+                                        log=_log, context="shadow_tick")
+                                except Exception as _cl_check_e:  # noqa: BLE001
+                                    _log.warning(
+                                        "claim_ledger HARD checker fail-soft "
+                                        f"order={oid}: {_cl_check_e}")
+                                    _claim_drop_viol = []
+
+                            if _claim_drop_viol:
+                                _claim_dropped = True
+                                _tick_breaches.extend(_claim_drop_viol)
+                                _tick_feral_drops.append({
+                                    "cid": _cl_cid,
+                                    "oid": oid,
+                                    "violations": _claim_drop_viol,
+                                })
+                            else:
+                                _accepted_claim_trace.append(_cl_claim)
+                                fleet = _cl.tentative_assign(
+                                    fleet, _cl_cid, _cl_rec)
+                                _claim_applied = True
+                                _log.info(
+                                    f"CLAIM_LEDGER order={oid} cid={_cl_cid} "
+                                    f"bag_after={len(fleet[_cl_cid].bag or [])}")
                 except Exception as _cl_e:  # noqa: BLE001
                     _log.warning(f"claim_ledger fail order={oid}: {_cl_e}")
 
@@ -1610,6 +1647,16 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                 # L6.C3: marker mierzalności (ETAP 4 — grep -c claim_ledger_applied
                 # na świeżym oknie po flipie); top-level jak pickup_at_warsaw.
                 record["claim_ledger_applied"] = True
+            if _claim_hard_for_event:
+                # DROP-FERAL-CLAIM jest werdyktem przed wszystkimi ścieżkami
+                # proposal/live. Rekord zostaje w jsonl jako log-loud evidence.
+                record["g_claim_ledger_feral_drops"] = int(_claim_dropped)
+                record["g_claim_ledger_breaches"] = len(_claim_drop_viol)
+            if _claim_dropped:
+                record["verdict"] = "DROP_FERAL_CLAIM"
+                record["reason"] = (
+                    "INV-FEAS-NO-DOUBLE-BOOK | drop_feral_claim")
+                record["claim_ledger_feral_drop"] = True
             # Propagate raw restaurant pickup time (pre-extension) — telegram_approver
             # liczy `pickup_extension_min = pickup_ready_at - pickup_at_warsaw` aby
             # pokazać "(+N min)" gdy Ziomek przedłużył deklarację restauracji.
@@ -1645,7 +1692,9 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
             # = nowe czasy starych zleceń". Additywne, fail-soft, ZERO wpływu na
             # decyzję/score/feasibility (tylko emit pliku obok shadow logu).
             try:
-                _le_plan = (record.get("best") or {}).get("plan") or {}
+                _le_plan = (
+                    {} if _claim_dropped
+                    else (record.get("best") or {}).get("plan") or {})
                 _le_pda = _le_plan.get("predicted_delivered_at") or {}
                 if _le_pda:
                     from dispatch_v2 import live_eta_cache as _live_eta_cache
@@ -1749,7 +1798,10 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
             # wykonują przypisań. Fail-safe: wyjątek nie zakłóca pętli shadow.
             try:
                 from dispatch_v2 import auto_assign_executor
-                _aa_out = auto_assign_executor.maybe_execute(record, result, payload)
+                _aa_out = (
+                    None if _claim_dropped
+                    else auto_assign_executor.maybe_execute(
+                        record, result, payload))
                 if _aa_out is not None:
                     _log.info(f"AUTO_ASSIGN oid={oid} outcome={_aa_out}")
             except Exception as _aa_e:
@@ -1819,22 +1871,20 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
         except Exception as _pp_e:
             _log.warning(f"pending_proposals write fail: {_pp_e}")
 
-    # INV-FEAS-NO-DOUBLE-BOOK strażnik ticku (bliźniak global_allocate): log-loud (flaga
-    # _CHECK) + twarda blokada (flaga _HARD, odłożona za ACK). Fail-soft — NIGDY nie wywala
-    # ticku. Ślad pusty gdy ENGINE_CLAIM_LEDGER OFF (brak claimów) → no-op.
+    # INV-FEAS-NO-DOUBLE-BOOK bliźniak global_allocate. CHECK-only pozostaje
+    # obserwatorem post-tick; HARD sprawdzał każdy claim przed przyjęciem i dropił
+    # wyłącznie feralne wejście. Żadna ścieżka produkcyjna nie rzuca z tego guarda.
     if _claim_trace and C.decision_flag("ENABLE_CLAIM_LEDGER_INVARIANT_CHECK"):
         try:
-            from dispatch_v2 import claim_ledger as _cl_chk
-            _tick_breaches = _cl_chk.check_sweep_trace(
-                _claim_trace, log=_log, context="shadow_tick")
-            if _tick_breaches and C.decision_flag("ENABLE_CLAIM_LEDGER_INVARIANT_HARD"):
-                raise AssertionError(
-                    f"INV-FEAS-NO-DOUBLE-BOOK: tick claim-ledger stale/pile-on "
-                    f"{_tick_breaches[:4]!r}")
-        except AssertionError:
-            raise
+            if not _claim_hard_seen:
+                from dispatch_v2 import claim_ledger as _cl_chk
+                _tick_breaches = _cl_chk.check_sweep_trace(
+                    _claim_trace, log=_log, context="shadow_tick")
         except Exception as _cti_e:  # noqa: BLE001 — obserwator nie wywala ticku
             _log.warning(f"claim_ledger tick invariant fail-soft: {_cti_e}")
+    if _claim_hard_seen:
+        stats["claim_ledger_breaches"] = len(_tick_breaches)
+        stats["claim_ledger_feral_drops"] = len(_tick_feral_drops)
 
     # Faza C: globalna re-alokacja → konsola realizowana POZA gorącą ścieżką
     # (resweep co 1 min pisze dispatch_state/global_alloc.json, feed.py overlay).
@@ -2007,6 +2057,17 @@ def _v328_should_emit_stuck_alert(
     return (False, None, alert_sent, new_streak, last_alert_ts)
 
 
+def _accumulate_tick_stats(totals: dict, tick_stats: dict) -> None:
+    """Dodaj summary ticku bez założenia zamkniętego zbioru liczników.
+
+    HARD claim-ledger dokłada warunkowe metryki tylko po aktywacji. Standardowe
+    processed/failed/skipped zachowują dotychczasowy wynik, a nowe liczniki nie
+    mogą wywrócić pętli workera przez ``KeyError``.
+    """
+    for key, value in tick_stats.items():
+        totals[key] = totals.get(key, 0) + value
+
+
 def run() -> int:
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
@@ -2120,8 +2181,7 @@ def run() -> int:
                 tick_stats = _tick(shadow_log_path, meta)
             finally:
                 C.flags_snapshot_end()
-            for k, v in tick_stats.items():
-                totals[k] += v
+            _accumulate_tick_stats(totals, tick_stats)
             # V3.28 Fix 3: update last_processed_ts gdy tick miał >=1 successful processing
             if tick_stats.get("processed", 0) > 0:
                 last_processed_ts = time.time()

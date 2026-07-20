@@ -1,5 +1,10 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **KANDYDAT 2026-07-20 — OD-A1b DROP-FERAL-CLAIM:** semantyka
+> `ENABLE_CLAIM_LEDGER_INVARIANT_HARD` zmieniona source-only z zatrzymującego tick
+> `raise` na odrzucenie wyłącznie feralnego claimu w obu bliźniakach. Flaga nadal
+> default OFF; merge, pełna suita, flip, deploy i restart pozostają po stronie CTO.
+
 > **CURRENT 2026-07-15 18:xx UTC:** COM-P0-OOM-DISPOSABLE-REPRO-04 v1.1
 > korekta DESIGN_ONLY po owner ACK „WYMAGA POPRAWEK”. Dodano correction note,
 > statyczny execution-manifest template i osobną provisioning proposal.
