@@ -58,6 +58,7 @@ from dispatch_v2.panel_client import (
     KOORDYNATOR_ID,
 )
 from dispatch_v2.state_machine import (
+    build_czasowka_manual_ck_pickup_event,
     get_all as state_get_all,
     get_order as state_get_order,
     update_from_event,
@@ -943,6 +944,36 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
         # mirroruje na czas_kuriera). Bypass tu pociągnąłby śmieciowy czas_kuriera.
         _guard = _flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True) if _flag else True
         if _guard:
+            # Incydent #489052: gastro wystawia marker recznej zmiany czasu.
+            # Wspolny, fail-closed classifier ze state_machine dopuszcza tylko
+            # krawedz False->True przy stabilnym pickup/statusie i zwraca
+            # kanoniczny PICKUP_TIME_UPDATED (nie bezposredni writer CK).
+            _manual_payload = {
+                "oid": oid,
+                "courier_id": old_state.get("courier_id"),
+                "old_ck_iso": old_ck_iso,
+                "old_ck_hhmm": old_ck_hhmm,
+                "new_ck_iso": new_ck_iso,
+                "new_ck_hhmm": new_ck_hhmm,
+                "delta_min": round(delta_min, 2),
+                "source": "coordinator_force" if deliberate else "panel_re_check",
+                "new_zmiana_czasu_odbioru": fresh_response.get(
+                    "zmiana_czasu_odbioru"
+                ),
+                "observed_pickup_at_warsaw": fresh_response.get(
+                    "pickup_at_warsaw"
+                ),
+                "observed_status_id": fresh_response.get("status_id"),
+                "observed_prep_minutes": fresh_response.get("prep_minutes"),
+                "observed_decision_deadline": fresh_response.get(
+                    "decision_deadline"
+                ),
+            }
+            _manual_evt = build_czasowka_manual_ck_pickup_event(
+                old_state, _manual_payload
+            )
+            if _manual_evt is not None:
+                return _manual_evt
             _log.info(
                 f"CK_PASSIVE_SUPPRESSED oid={oid} czasówka ck "
                 f"{old_ck_hhmm}→{new_ck_hhmm} Δ={delta_min:+.1f}min "
@@ -2360,10 +2391,40 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                     "czas_kuriera_warsaw": norm_ck.get("czas_kuriera_warsaw"),
                     "czas_kuriera_hhmm": norm_ck.get("czas_kuriera_hhmm"),
                     "id_kurier": raw_ck.get("id_kurier"),
+                    # CK-MANUAL-EDIT: pola juz obecne w tym samym response gastro.
+                    # OFF sa tylko nieuzywanym snippetem; emit/persist pozostaje
+                    # identyczny. Marker ma jawny bool z normalize_order.
+                    "zmiana_czasu_odbioru": norm_ck.get("zmiana_czasu_odbioru"),
+                    "pickup_at_warsaw": norm_ck.get("pickup_at_warsaw"),
+                    "status_id": norm_ck.get("status_id"),
+                    "prep_minutes": norm_ck.get("prep_minutes"),
+                    "decision_deadline": norm_ck.get("decision_deadline"),
                 }
                 evt = _diff_czas_kuriera(state_order, fresh_snippet, oid=zid,
                                          deliberate=_force)
                 if evt is not None:
+                    if evt.get("event_type") == "PICKUP_TIME_UPDATED":
+                        # Reczna korekta CK czasowki przechodzi przez kanoniczny
+                        # writer pickup -> CK. Ten sam bump plan_version wymusza
+                        # odswiezenie /orders w aplikacji kuriera.
+                        p = evt["payload"]
+                        emit_audit(
+                            "PICKUP_TIME_UPDATED",
+                            order_id=zid,
+                            courier_id=str(state_order.get("courier_id") or ""),
+                            payload=p,
+                            event_id=f"{zid}_PICKUP_TIME_UPDATED_CK_MANUAL_EDIT",
+                        )
+                        update_from_event(evt)
+                        _invalidate_plan_on_committed_change(
+                            zid, state_order.get("courier_id")
+                        )
+                        _log.info(
+                            f"CK_MANUAL_EDIT_PASSTHROUGH oid={zid} pickup "
+                            f"{p.get('old_pickup_at_warsaw')}→"
+                            f"{p.get('new_pickup_at_warsaw')} status={_status}"
+                        )
+                        continue
                     # V3.27.1 BUG-1: event_id suffix dispatch — first_acceptance
                     # używa _FIRST_ACK dla łatwego grep, value→value zachowuje
                     # delta-based suffix.

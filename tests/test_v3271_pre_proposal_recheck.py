@@ -59,7 +59,8 @@ def _make_order_sim(oid, assigned_min_ago=20, ck_warsaw="2026-04-26T17:00:00+02:
 
 
 def _make_real_raw_response(oid, czas_kuriera_hhmm="17:30",
-                              status_id=3, czas_odbioru_timestamp="2026-04-26 16:30:00"):
+                              status_id=3, czas_odbioru_timestamp="2026-04-26 16:30:00",
+                              zmiana_czasu_odbioru=False):
     """V3.27.1 sesja 3: REAL panel API schema (NIE fake `czas_kuriera_warsaw` klucz).
 
     Lekcja #28: real raw response używa `czas_kuriera` (HH:MM string).
@@ -70,6 +71,7 @@ def _make_real_raw_response(oid, czas_kuriera_hhmm="17:30",
         "id_status_zamowienia": status_id,
         "czas_kuriera": czas_kuriera_hhmm,
         "czas_odbioru_timestamp": czas_odbioru_timestamp,
+        "zmiana_czasu_odbioru": zmiana_czasu_odbioru,
     }
 
 
@@ -323,6 +325,27 @@ def test_recheck_normalize_returns_none_skip_emit():
         f"defensive: zachowuje cached value gdy normalize None, got {result}"
 
 
+def test_recheck_single_snapshot_carries_manual_edit_evidence():
+    """Marker/pickup/status pochodza z jednego response gastro (bez race)."""
+    raw = _make_real_raw_response(
+        "489052",
+        czas_kuriera_hhmm="11:41",
+        czas_odbioru_timestamp="2026-07-20 12:00:09",
+        status_id=3,
+        zmiana_czasu_odbioru=True,
+    )
+    with patch.object(panel_client, "fetch_order_details", return_value=raw), \
+         patch.object(common, "decision_flag", return_value=True):
+        got = dispatch_pipeline._v327_safe_fetch_czas_kuriera(
+            "489052", timeout=2
+        )
+    assert tuple(got) == ("2026-07-20T11:41:00+02:00", "11:41")
+    snapshot = got.fresh_time
+    assert snapshot["pickup_at_warsaw"] == "2026-07-20T12:00:09+02:00"
+    assert snapshot["status_id"] == 3
+    assert snapshot["zmiana_czasu_odbioru"] is True
+
+
 def main():
     _orig_flag = common.ENABLE_V327_PRE_PROPOSAL_RECHECK
     tests = [
@@ -336,6 +359,8 @@ def main():
         ('recheck_timeout_2s', test_recheck_timeout_2s),
         ('recheck_no_change_no_emit', test_recheck_no_change_no_emit),
         ('recheck_normalize_returns_none_skip_emit', test_recheck_normalize_returns_none_skip_emit),
+        ('recheck_single_snapshot_carries_manual_edit_evidence',
+         test_recheck_single_snapshot_carries_manual_edit_evidence),
     ]
     print('=' * 60)
     print('V3.27.1 sesja 2 + sesja 3 fix Bug 1 — Pre-proposal recheck tests')

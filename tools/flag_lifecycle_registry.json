@@ -4463,6 +4463,42 @@
         "engine"
       ]
     },
+    "ENABLE_COMMITTED_INVALIDATES_VIEW": {
+      "carriers": [
+        "dispatch_v2/panel_watcher.py:flag-default-True"
+      ],
+      "consumers": [
+        "dispatch_v2/dispatch_pipeline.py",
+        "dispatch_v2/panel_watcher.py"
+      ],
+      "curated_at": "2026-07-20",
+      "current_snapshot": {
+        "default": true
+      },
+      "default": true,
+      "intentional_per_process": {
+        "reason": "",
+        "value": false
+      },
+      "known_drift": false,
+      "known_drift_note": "",
+      "lifecycle": "live",
+      "lifecycle_seeded": false,
+      "name": "ENABLE_COMMITTED_INVALIDATES_VIEW",
+      "notes": "Istniejacy FIX-E kill-switch: po zmianie committed czasu bump plan_version, aby aplikacja pobrala swieze /orders. CK manual pre-recheck uzywa tego samego kontraktu.",
+      "owner": {
+        "business": "Adrian",
+        "service": "dispatch-panel-watcher.service + dispatch-shadow.service"
+      },
+      "removal_condition": "n/d dopoki aplikacja odswieza /orders po plan_version",
+      "review_date": "2026-10-20",
+      "rollback": "flags.json: klucz false (hot-reload, bez restartu)",
+      "source_of_truth": "code-default + flags.json override",
+      "twin_of": [],
+      "worlds": [
+        "engine"
+      ]
+    },
     "ENABLE_COORDINATOR_FORCE_TIME_RECHECK": {
       "carriers": [
         "flags.json"
@@ -4711,6 +4747,44 @@
       "removal_condition": "n/d dopóki live",
       "review_date": "2026-10-10",
       "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
+      "source_of_truth": "flags.json",
+      "twin_of": [],
+      "worlds": [
+        "engine"
+      ]
+    },
+    "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH": {
+      "carriers": [
+        "common.py:ETAP4_DECISION_FLAGS"
+      ],
+      "consumers": [
+        "dispatch_v2/common.py",
+        "dispatch_v2/dispatch_pipeline.py",
+        "dispatch_v2/panel_watcher.py",
+        "dispatch_v2/state_machine.py"
+      ],
+      "curated_at": "2026-07-20",
+      "current_snapshot": {
+        "default": false
+      },
+      "default": false,
+      "intentional_per_process": {
+        "reason": "",
+        "value": false
+      },
+      "known_drift": false,
+      "known_drift_note": "",
+      "lifecycle": "planned",
+      "lifecycle_seeded": false,
+      "name": "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH",
+      "notes": "Incydent #489052: tylko krawedz zmiana_czasu_odbioru False->True przy stabilnym pickup/statusie tlumaczy pasywny CK na PICKUP_TIME_UPDATED; re-stamp bez markera nadal blokowany. Shipped dark, flip tylko za ACK.",
+      "owner": {
+        "business": "Adrian",
+        "service": "dispatch-panel-watcher.service + dispatch-shadow.service"
+      },
+      "removal_condition": "po walidacji markerow gastro i stabilnym oknie obserwacji albo retire do 2026-10",
+      "review_date": "2026-08-20",
+      "rollback": "flags.json: klucz false lub brak klucza (hot-reload, bez restartu)",
       "source_of_truth": "flags.json",
       "twin_of": [],
       "worlds": [

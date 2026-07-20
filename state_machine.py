@@ -126,6 +126,15 @@ def _verify_czas_kuriera_consistency(
 # (np. ziomek_late_extension). Źródła pasywne (re-odczyt gastro) → blok.
 _CK_PASSIVE_SOURCES = frozenset({"panel_re_check", "pre_proposal_recheck"})
 
+_CZASOWKA_CK_MANUAL_EDIT_FLAG = (
+    "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH"
+)
+_PANEL_STATUS_IDS_BY_STATE = {
+    "planned": frozenset({2}),
+    "assigned": frozenset({3, 4, 6}),
+    "picked_up": frozenset({5}),
+}
+
 
 def _is_czasowka_order(o: Optional[dict]) -> bool:
     """Czasówka = order_type=='czasowka' LUB prep_minutes >= 60 (≥60 = twarda
@@ -135,6 +144,102 @@ def _is_czasowka_order(o: Optional[dict]) -> bool:
         return False
     return (o.get("order_type") == "czasowka"
             or (o.get("prep_minutes") or 0) >= 60)
+
+
+def build_czasowka_manual_ck_pickup_event(
+    existing: Optional[dict],
+    ck_payload: Optional[dict],
+) -> Optional[dict]:
+    """Zamien potwierdzona reczna korekte CK na kanoniczny pickup event.
+
+    Gastro nie daje autora ani timestampu edycji. Daje natomiast boolean
+    ``zmiana_czasu_odbioru``. Dopuszczenie jest celowo fail-closed i wymaga
+    jednoczesnie:
+
+    * nowej flagi decyzyjnej ON oraz aktywnego passive guarda,
+    * czasowki i pasywnego zrodla panel/pre-proposal,
+    * krawedzi markera False -> True (nie stalego True),
+    * niezmienionego ``pickup_at_warsaw`` w tym samym odczycie,
+    * panelowego statusu zgodnego z biezaca klasa stanu.
+
+    Ostatnie dwa warunki odcinaja znane re-stampy przy zmianie statusu. Gdy
+    gastro zmienia rowniez pickup, zwykly ``_diff_pickup_time`` pozostaje
+    jedynym writerem. Zwracany PICKUP_TIME_UPDATED utrzymuje jeden kanoniczny
+    zapis pickup -> czas_kuriera dla czasowek i tym samym pole czytane przez
+    aplikacje kuriera.
+    """
+    existing = existing or {}
+    ck_payload = ck_payload or {}
+
+    if not decision_flag(_CZASOWKA_CK_MANUAL_EDIT_FLAG):
+        return None
+    if not flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True):
+        return None
+    if not _is_czasowka_order(existing):
+        return None
+    source = ck_payload.get("source")
+    if source not in _CK_PASSIVE_SOURCES:
+        return None
+
+    # None/legacy nie jest dowodem False: fail-closed zamiast uznania braku
+    # baseline za reczna edycje. NEW_ORDER od 07.05 persistuje jawny bool.
+    if existing.get("zmiana_czasu_odbioru") is not False:
+        return None
+    if ck_payload.get("new_zmiana_czasu_odbioru") is not True:
+        return None
+
+    old_pickup = existing.get("pickup_at_warsaw")
+    observed_pickup = ck_payload.get("observed_pickup_at_warsaw")
+    new_ck_iso = ck_payload.get("new_ck_iso")
+    new_ck_hhmm = ck_payload.get("new_ck_hhmm")
+    if not old_pickup or not observed_pickup or not new_ck_iso or not new_ck_hhmm:
+        return None
+    try:
+        old_pickup_dt = datetime.fromisoformat(old_pickup)
+        observed_pickup_dt = datetime.fromisoformat(observed_pickup)
+        new_ck_dt = datetime.fromisoformat(new_ck_iso)
+    except (TypeError, ValueError):
+        return None
+    if old_pickup_dt != observed_pickup_dt:
+        return None
+    if new_ck_dt.strftime("%H:%M") != new_ck_hhmm:
+        return None
+    if new_ck_dt == old_pickup_dt:
+        return None
+
+    allowed_status_ids = _PANEL_STATUS_IDS_BY_STATE.get(existing.get("status"))
+    try:
+        observed_status_id = int(ck_payload.get("observed_status_id"))
+    except (TypeError, ValueError):
+        return None
+    if not allowed_status_ids or observed_status_id not in allowed_status_ids:
+        return None
+
+    delta_min = round(
+        (new_ck_dt - old_pickup_dt).total_seconds() / 60.0, 2
+    )
+    oid = str(ck_payload.get("oid") or existing.get("order_id") or "")
+    if not oid:
+        return None
+    return {
+        "event_type": "PICKUP_TIME_UPDATED",
+        "order_id": oid,
+        "courier_id": ck_payload.get("courier_id") or existing.get("courier_id"),
+        "payload": {
+            "oid": oid,
+            "courier_id": ck_payload.get("courier_id") or existing.get("courier_id"),
+            "old_pickup_at_warsaw": old_pickup,
+            "new_pickup_at_warsaw": new_ck_iso,
+            "old_prep_minutes": existing.get("prep_minutes"),
+            "new_prep_minutes": ck_payload.get("observed_prep_minutes"),
+            "new_decision_deadline": ck_payload.get("observed_decision_deadline"),
+            "new_zmiana_czasu_odbioru": True,
+            "delta_min": delta_min,
+            "source": f"{source}_manual_ck_edit",
+            "manual_ck_edit_passthrough": True,
+        },
+        "event_id_suffix": "_CK_MANUAL_EDIT",
+    }
 
 
 def _ck_backward_delta(
@@ -907,6 +1012,18 @@ def update_from_event(event: dict) -> Optional[dict]:
         # kierunek). first_acceptance + kanały deliberatne (np. ziomek_late_
         # extension/coordinator_edit) NIE są w _CK_PASSIVE_SOURCES → przechodzą.
         _src = payload.get("source")
+        # Incydent #489052: pasywny producer moze niesc pozytywny sygnal
+        # recznej korekty gastro. Nie omijamy kanonu bezposrednim zapisem CK:
+        # tlumaczymy go na PICKUP_TIME_UPDATED, czyli writer, ktory atomowo
+        # aktualizuje pickup_at i pole czasu czytane przez aplikacje kuriera.
+        _manual_pickup_evt = build_czasowka_manual_ck_pickup_event(existing, payload)
+        if _manual_pickup_evt is not None:
+            _log.info(
+                f"CK_MANUAL_EDIT_PASSTHROUGH oid={oid} czasówka ck "
+                f"{existing.get('czas_kuriera_hhmm')}→{new_ck_hhmm} src={_src} "
+                f"→ PICKUP_TIME_UPDATED"
+            )
+            return update_from_event(_manual_pickup_evt)
         if (flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
                 and _is_czasowka_order(existing)
                 and _src in _CK_PASSIVE_SOURCES):

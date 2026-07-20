@@ -314,38 +314,84 @@ def _v327_evict_old_pre_recheck_entries(now: datetime) -> int:
     return len(keys_to_remove)
 
 
-def _v327_safe_fetch_czas_kuriera(oid: str, timeout: float = None) -> Tuple[Optional[str], Optional[str]]:
-    """V3.27.1 sesja 3 fix Bug 1 — schema-correct via panel_client.normalize_order.
+class _V327FreshCzasKuriera(tuple):
+    """2-tuple kompatybilny z V3.27.1 + nieiterowany snapshot korelacyjny."""
+
+    def __new__(cls, iso, hhmm, fresh_time):
+        obj = super().__new__(cls, (iso, hhmm))
+        obj.fresh_time = fresh_time
+        return obj
+
+
+def _v327_safe_fetch_order_time(oid: str, timeout: float = None) -> Optional[dict]:
+    """Fetch jednego, spojnego snapshotu pol czasu z gastro.
+
+    Rozszerza V3.27.1 o istniejacy sygnal recznej korekty
+    ``zmiana_czasu_odbioru`` oraz korelaty pickup/status z TEGO SAMEGO response.
+    To wazne: osobny fetch otwieralby race z re-stampem statusowym.
 
     Pre-fix (sesja 2 broken): zwracało raw HH:MM gdy `czas_kuriera_warsaw` klucz
     nie istniał w surowym response. State_machine sanity check FAIL bo hhmm=None.
 
     Post-fix: call `normalize_order(raw)` żeby dostać OBA pola (ISO Warsaw + HH:MM).
 
-    Returns (czas_kuriera_warsaw_iso, czas_kuriera_hhmm) tuple. (None, None) gdy:
+    Returns dict albo None gdy:
     - Fetch fail (timeout, connection, exception)
     - normalize_order returns None (status_id ∈ {7,8,9} delivered/cancelled/declined
       — order zmienił status w trakcie cycle, skip emit)
     - Order ma czas_kuriera missing/invalid (norm fields = None, propagate up)
 
-    Caller (get_fresh_czas_kuriera_for_bag) skip emit gdy iso=None (zachowuje cached).
+    Caller skip emit przy None (zachowuje cached).
     """
     if timeout is None:
         timeout = C.V327_PRE_PROPOSAL_RECHECK_FETCH_TIMEOUT_SEC
     try:
         fresh = panel_client.fetch_order_details(oid, timeout=int(timeout))
         if fresh is None:
-            return (None, None)
+            return None
         # KEY FIX V3.27.1 sesja 3: normalize_order konwertuje raw HH:MM → ISO Warsaw
         # plus filtruje IGNORED_STATUSES (7=delivered, 8=cancelled, 9=declined).
         norm = panel_client.normalize_order(fresh)
         if norm is None:
             # Status ignored = order delivered/cancelled w trakcie cycle, skip
-            return (None, None)
-        return (norm.get("czas_kuriera_warsaw"), norm.get("czas_kuriera_hhmm"))
+            return None
+        return {
+            "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
+            "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
+            "pickup_at_warsaw": norm.get("pickup_at_warsaw"),
+            "status_id": norm.get("status_id"),
+            "prep_minutes": norm.get("prep_minutes"),
+            "decision_deadline": norm.get("decision_deadline"),
+            "zmiana_czasu_odbioru": norm.get("zmiana_czasu_odbioru"),
+        }
     except Exception as e:
+        # Zachowaj dotychczasowy marker logu (OFF parity + istniejące alerty).
         log.warning(f"V3.27.1 _v327_safe_fetch_czas_kuriera oid={oid} fail: {e}")
+        return None
+
+
+def _v327_safe_fetch_czas_kuriera(
+    oid: str, timeout: float = None
+) -> Tuple[Optional[str], Optional[str]]:
+    """API V3.27.1: OFF zwraca dokladnie legacy 2-tuple.
+
+    Dopiero nowa flaga ON dokleja nieiterowany snapshot do kompatybilnego
+    tuple-subclass. Dzięki temu ciemny deploy nie zmienia nawet typu wyniku.
+    """
+    snapshot = _v327_safe_fetch_order_time(oid, timeout=timeout)
+    if snapshot is None:
         return (None, None)
+    legacy = (
+        snapshot.get("czas_kuriera_warsaw"),
+        snapshot.get("czas_kuriera_hhmm"),
+    )
+    if not C.decision_flag("ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH"):
+        return legacy
+    return _V327FreshCzasKuriera(
+        legacy[0],
+        legacy[1],
+        snapshot,
+    )
 
 
 def _v327_compute_delta_min(old_iso: Optional[str], new_iso: Optional[str]) -> Optional[float]:
@@ -363,7 +409,8 @@ def _v327_compute_delta_min(old_iso: Optional[str], new_iso: Optional[str]) -> O
 def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
                                    old_ck_iso: Optional[str], new_ck_iso: str,
                                    new_ck_hhmm: Optional[str],
-                                   now: datetime) -> None:
+                                   now: datetime,
+                                   fresh_time: Optional[dict] = None) -> None:
     """V3.27.1 sesja 3 fix Bug 1 — emit synth CZAS_KURIERA_UPDATED z OBIEMA polami.
 
     Pre-fix (sesja 2): payload `new_ck_hhmm=None` → state_machine sanity FAIL
@@ -376,7 +423,11 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
     Event_id: {oid}_CZAS_KURIERA_UPDATED_PRE_RECHECK_{epoch_ms} — unique per emit.
     """
     from dispatch_v2.event_bus import emit_audit as _eb_emit_audit
-    from dispatch_v2.state_machine import update_from_event as _sm_apply
+    from dispatch_v2.state_machine import (
+        build_czasowka_manual_ck_pickup_event as _manual_pickup_event,
+        get_order as _sm_get_order,
+        update_from_event as _sm_apply,
+    )
 
     delta_min = _v327_compute_delta_min(old_ck_iso, new_ck_iso)
     timestamp_ms = int(now.timestamp() * 1000)
@@ -392,6 +443,22 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
         "delta_min": delta_min,
         "source": "pre_proposal_recheck",
     }
+    # OFF = payload/event identyczny jak przed zmiana. Dopiero ON dopina
+    # snapshot korelacyjny z tego samego response gastro.
+    manual_passthrough_enabled = C.decision_flag(
+        "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH"
+    )
+    if manual_passthrough_enabled:
+        fresh_time = fresh_time or {}
+        payload.update({
+            "new_zmiana_czasu_odbioru": fresh_time.get(
+                "zmiana_czasu_odbioru"
+            ),
+            "observed_pickup_at_warsaw": fresh_time.get("pickup_at_warsaw"),
+            "observed_status_id": fresh_time.get("status_id"),
+            "observed_prep_minutes": fresh_time.get("prep_minutes"),
+            "observed_decision_deadline": fresh_time.get("decision_deadline"),
+        })
     event = {
         "event_type": "CZAS_KURIERA_UPDATED",
         "order_id": oid,
@@ -399,14 +466,57 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
         "payload": payload,
     }
     try:
-        _eb_emit_audit("CZAS_KURIERA_UPDATED",
+        # Ten sam classifier co panel_watcher i defense-in-depth state_machine.
+        # Pozytywny sygnal nie zapisuje CK bokiem: przechodzi kanonicznym
+        # PICKUP_TIME_UPDATED, ktory mirroruje czas do aplikacji.
+        manual_event = None
+        if manual_passthrough_enabled:
+            manual_event = _manual_pickup_event(_sm_get_order(oid), payload)
+        if manual_event is not None:
+            event = manual_event
+            event_id = f"{oid}_PICKUP_TIME_UPDATED_PRE_RECHECK_CK_MANUAL_{timestamp_ms}"
+        _eb_emit_audit(event["event_type"],
                  order_id=oid, courier_id=courier_id or "",
-                 payload=payload, event_id=event_id)
-        _sm_apply(event)
+                 payload=event["payload"], event_id=event_id)
+        applied = _sm_apply(event)
+        if manual_event is not None and applied is not None:
+            _v327_touch_committed_view(oid, courier_id)
         delta_str = f"Δ={delta_min:+.1f}min" if delta_min is not None else "Δ=null"
-        log.info(f"V3.27.1 pre_proposal_recheck oid={oid} {old_ck_iso or 'null'}→{new_ck_iso} ({new_ck_hhmm}) {delta_str}")
+        if manual_event is not None:
+            log.info(
+                f"V3.27.1 pre_proposal_recheck oid={oid} "
+                f"{old_ck_iso or 'null'}→{new_ck_iso} ({new_ck_hhmm}) "
+                f"{delta_str} event=PICKUP_TIME_UPDATED"
+            )
+        else:
+            # OFF/niepotwierdzony sygnal: dotychczasowy log bajt-w-bajt.
+            log.info(f"V3.27.1 pre_proposal_recheck oid={oid} {old_ck_iso or 'null'}→{new_ck_iso} ({new_ck_hhmm}) {delta_str}")
     except Exception as e:
         log.warning(f"V3.27.1 _v327_emit_pre_recheck_event oid={oid} fail: {e}")
+
+
+def _v327_touch_committed_view(oid: str, courier_id: Optional[str]) -> None:
+    """Pre-recheck twin FIX-E: bump plan_version po legalnej korekcie czasu.
+
+    Panel watcher robi to samo przez `_invalidate_plan_on_committed_change`.
+    Bez tego pre-proposal moglby zapisac korekte jako pierwszy, a watcher nie
+    zobaczylby juz delty i aplikacja kuriera zachowalaby stary snapshot /orders.
+    """
+    if not courier_id or not C.ENABLE_SAVED_PLANS:
+        return
+    if not C.flag("ENABLE_COMMITTED_INVALIDATES_VIEW", True):
+        return
+    try:
+        from dispatch_v2 import plan_manager
+        if plan_manager.touch_plan(str(courier_id), "COMMITTED_TIME_CHANGED"):
+            log.info(
+                f"CK_MANUAL_EDIT_VIEW_REFRESH cid={courier_id} oid={oid} "
+                f"— aplikacja odswiezy /orders"
+            )
+    except Exception as e:
+        log.warning(
+            f"CK_MANUAL_EDIT_VIEW_REFRESH fail cid={courier_id} oid={oid}: {e}"
+        )
 
 
 def get_fresh_czas_kuriera_for_bag(bag_orders: List[OrderSim],
@@ -489,10 +599,15 @@ def get_fresh_czas_kuriera_for_bag(bag_orders: List[OrderSim],
             for future in as_completed(future_to_oid):
                 oid = future_to_oid[future]
                 try:
-                    # V3.27.1 sesja 3 fix Bug 1: helper teraz returns Tuple (iso, hhmm)
-                    fresh_iso, fresh_hhmm = future.result()
+                    # API nadal rozpakowuje sie jak legacy 2-tuple. Runtime helper
+                    # dokleja nieiterowany snapshot; mocki zwracajace zwykly tuple
+                    # zachowuja sie identycznie i po prostu nie maja evidence.
+                    fresh_result = future.result()
+                    fresh_iso, fresh_hhmm = fresh_result
+                    fresh_time = getattr(fresh_result, "fresh_time", None)
                 except Exception as e:
                     log.warning(f"V3.27.1 pre_recheck future oid={oid} exc: {e}")
+                    fresh_time = None
                     fresh_iso, fresh_hhmm = (None, None)
 
                 # Update cache timestamp regardless of result (avoid retry storms)
@@ -511,7 +626,8 @@ def get_fresh_czas_kuriera_for_bag(bag_orders: List[OrderSim],
                     # Detected change — emit synth event z OBIEMA polami (iso + hhmm)
                     courier_id = str(getattr(bag_o, "courier_id", "") or "") if bag_o else ""
                     _v327_emit_pre_recheck_event(oid, courier_id, cached_ck,
-                                                   fresh_iso, fresh_hhmm, now)
+                                                   fresh_iso, fresh_hhmm, now,
+                                                   fresh_time=fresh_time)
                     results[oid] = fresh_iso
 
     return results

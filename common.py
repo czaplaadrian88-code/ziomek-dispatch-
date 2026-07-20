@@ -536,6 +536,13 @@ ETAP4_DECISION_FLAGS = (
     # do nowego (_save_plan_on_assign_signal). Konsument:
     # panel_watcher._release_plan_on_reassign (decision_flag). Default OFF; flip za ACK.
     "ENABLE_REASSIGN_OLD_PLAN_RELEASE",
+    # CK-MANUAL-EDIT (2026-07-20, incydent #489052): pasywny re-check
+    # czas_kuriera czasowki moze przejsc TYLKO z dodatnim sygnalem recznej
+    # korekty gastro (krawedz zmiana_czasu_odbioru False->True, stabilny
+    # pickup/status). State machine przeklada wtedy CK na kanoniczny kanal
+    # PICKUP_TIME_UPDATED, ktory atomowo lustrzy czas do aplikacji kuriera.
+    # Default OFF = dotychczasowy CK_PASSIVE_SUPPRESSED bajt-w-bajt.
+    "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -555,6 +562,9 @@ USE_V2_PARSER = False
 # fallback). Default OFF (deploy ciemny); kanon=flags.json (flip za ACK ownera),
 # rollback hot = klucz false / brak klucza.
 ENABLE_REASSIGN_OLD_PLAN_RELEASE = False
+# CK-MANUAL-EDIT: bezpieczny fallback OFF; kanon po ewentualnym flipie =
+# flags.json/decision_flag. Rollback hot: klucz false albo brak klucza.
+ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH = False
 # W0.2 advisory (roadmapa 08, werdykt E-1 „GO hybryda"): bezpiecznik fabrykacji ETA.
 # Wykrycie: pred_carry > ETA_FABRICATION_FLOOR_MIN ∧ pred_carry > RATIO×robust_ref,
 # gdzie robust_ref = osrm_freeflow(pickup→deliv)·traffic_mult + service + slack
