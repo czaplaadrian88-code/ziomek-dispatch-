@@ -263,6 +263,15 @@ def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None,
         """
         oid = str(kwargs.get("order_id") or "")
         new_cid = str(kwargs.get("courier_id") or "")
+        # RETURN (8/9): ten klaster izoluje routing, nie stan — nie wolno karmic
+        # LD.apply stanem 'assigned' (krzaczy sie i produkcyjny try polyka branch).
+        # Honorujemy pokretlo audit_emitted (dedupe => zero downstream => zero release).
+        if event_type == "ORDER_RETURNED_TO_POOL":
+            return SimpleNamespace(
+                state_ready=True,
+                event_created=bool(audit_emitted),
+                downstream_executed=bool(audit_emitted),
+            )
         previous_cid = str((state.get(oid) or {}).get("courier_id") or "")
         event_id = str(kwargs.get("event_id") or f"test-{event_type}-{oid}")
         event = {
