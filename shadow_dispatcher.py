@@ -18,7 +18,7 @@ import signal
 import sys
 import time
 import traceback
-from dispatch_v2.geocoding import geocode
+from dispatch_v2.geocoding import geocode, is_street_only_approx
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
@@ -1056,6 +1056,10 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     _stage_timing = getattr(result, "stage_timing", None)
     if isinstance(_stage_timing, dict):
         out["timing"] = _stage_timing
+    if getattr(result, "geocode_street_only_approx", False) is True:
+        # Top-level dla konsoli/apki; A (alternatives) i B (best) dostają ten
+        # sam marker przez istniejącą propagację Candidate.metrics poniżej.
+        out["geocode_street_only_approx"] = True
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)
     return out
@@ -1280,6 +1284,8 @@ def process_event(
         "order_type": payload.get("order_type"),
         "created_at_utc": payload.get("created_at_utc") or payload.get("created_at"),
     }
+    if payload.get("geocode_street_only_approx") is True:
+        order_event["geocode_street_only_approx"] = True
     # K04 refaktor (2026-07-06, ADR-R04): nagrywanie wejść decyzji za flagą
     # ENABLE_WORLD_RECORD (OFF/brak klucza = czysta delegacja 1:1; wrapper jest
     # wewnętrznie fail-soft i nigdy nie zmienia wyniku). Import lazy+fail-soft —
@@ -1462,6 +1468,8 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                 p_city = payload.get("pickup_city")
                 coords = geocode(addr, city=p_city) if addr else None
                 if coords:
+                    if is_street_only_approx(coords):
+                        payload["geocode_street_only_approx"] = True
                     payload["pickup_coords"] = list(coords)
                     ev["payload"] = payload
                     _log.info(f"geocoded pickup {oid}: {addr} / city={p_city} -> {coords}")
@@ -1475,6 +1483,8 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                 d_city = payload.get("delivery_city")
                 coords = geocode(addr, city=d_city) if addr else None
                 if coords:
+                    if is_street_only_approx(coords):
+                        payload["geocode_street_only_approx"] = True
                     payload["delivery_coords"] = list(coords)
                     ev["payload"] = payload
                     _log.info(f"geocoded delivery {oid}: {addr} / city={d_city} -> {coords}")

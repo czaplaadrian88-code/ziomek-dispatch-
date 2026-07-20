@@ -70,7 +70,7 @@ from dispatch_v2.state_machine import (
     upsert_order,
     touch_check_cursor,
 )
-from dispatch_v2.geocoding import geocode
+from dispatch_v2.geocoding import geocode, is_street_only_approx
 
 _log = setup_logger("panel_watcher", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
 
@@ -195,7 +195,8 @@ def _resolve_pickup_coords(aid_str, street, city, zid=None):
         f"FRONT_B resolve zid={zid} aid={aid_str} cache={bool(cached)} "
         f"live={bool(live)} drift_m={drift_m}")
     if decision_flag("ENABLE_PICKUP_COORDS_FROM_PANEL") and live:
-        return tuple(live), "panel_live", drift_m
+        # Nie spłaszczaj podklasy tuple: niesie addytywny marker approximate.
+        return live, "panel_live", drift_m
     if cached:
         return tuple(cached), "cache", drift_m
     return None, "miss", drift_m
@@ -1867,6 +1868,11 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
             "zmiana_czasu_odbioru": norm.get("zmiana_czasu_odbioru"),
             "created_at_utc": norm.get("created_at_utc"),
         }
+        if (is_street_only_approx(_pcoords)
+                or is_street_only_approx(_dcoords)):
+            # Marker genericzny na poziomie ordera: konsola/apka mogą oznaczyć
+            # prezentowany adres „~”; współrzędne nadal są zwykłą listą [lat, lon].
+            ev_payload["geocode_street_only_approx"] = True
 
         # Deterministyczny event_id: {order_id}_NEW_ORDER_first_seen (bez timestamp - raz na zycie)
         event_id = f"{zid}_NEW_ORDER_first"

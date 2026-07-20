@@ -3399,6 +3399,10 @@ class PipelineResult:
     # Z-P1-03 Faza A: addytywna telemetria czasu. Dolaczana dopiero w ogonie
     # assess_order (po selection i firewallu), nigdy nie jest wejsciem decyzji.
     stage_timing: Optional[Dict[str, Any]] = None
+    # STREET-ONLY-APPROX (2026-07-20): addytywny marker jakości wejściowego
+    # geokodu. Ustawiany dopiero po decyzji i kopiowany do Candidate.metrics,
+    # więc nie może wpływać na feasibility, score, ranking ani werdykt.
+    geocode_street_only_approx: bool = False
 
 
 # ─── FAIL-04: prep-variance anomaly (A1 anomaly block, shadow-first) ───
@@ -4178,6 +4182,31 @@ def _eta_fabrication_check(result: "PipelineResult", order_event: dict,
         pass  # fabrication-guard NIGDY nie wywróci assess flow
 
 
+def _attach_geocode_street_only_approx(
+    result: "PipelineResult", order_event: dict
+) -> None:
+    """Propaguj marker do result + obu lokalizacji serializera A/B.
+
+    Hook działa po `_assess_order_impl`, zatem metryka nie bierze udziału w
+    decyzji. Brak/False zachowuje stary kształt `Candidate.metrics`.
+    """
+    if order_event.get("geocode_street_only_approx") is not True:
+        return
+    result.geocode_street_only_approx = True
+    candidates = list(result.candidates or [])
+    if result.best is not None:
+        candidates.append(result.best)
+    seen = set()
+    for candidate in candidates:
+        marker = id(candidate)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if candidate.metrics is None:
+            candidate.metrics = {}
+        candidate.metrics["geocode_street_only_approx"] = True
+
+
 def _final_rule_unknown_dict(result: "PipelineResult", reason_code: str) -> Dict[str, Any]:
     """Ostatni, bezmodułowy fallback ``rule_verdict.v1``.
 
@@ -4406,6 +4435,9 @@ def assess_order(
         pass  # MP-#13 defense-in-depth — leave defaults False/None
     # W0.2: bezpiecznik fabrykacji ETA (shadow-first compute-always; aktywny za flagą)
     _eta_fabrication_check(result, order_event, decision_now)
+    # STREET-ONLY-APPROX: wyłącznie telemetryczny post-hook po decyzji. Marker
+    # trafia do obu lokalizacji serializera przez istniejącą propagację metrics.
+    _attach_geocode_street_only_approx(result, order_event)
     # W1/T2.4: stempel would-be-mode na rekordzie decyzji (shadow, flaga OFF default).
     # Odczyt stanu obserwatora (mode_observer) — NIE krokuje FSM. Fail-soft.
     if C.flag("ENABLE_MODE_LAYER_SHADOW", False):

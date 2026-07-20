@@ -1133,6 +1133,8 @@ def update_from_event(event: dict) -> Optional[dict]:
                 "decision_deadline": payload.get("decision_deadline"),
                 "zmiana_czasu_odbioru": payload.get("zmiana_czasu_odbioru"),
                 "created_at_utc": payload.get("created_at_utc"),
+                **({"geocode_street_only_approx": True}
+                   if payload.get("geocode_street_only_approx") is True else {}),
             }), event="NEW_ORDER")
             raise CorruptedTimestampError(
                 f"NEW_ORDER {oid}: czas_kuriera sanity fail, "
@@ -1168,6 +1170,8 @@ def update_from_event(event: dict) -> Optional[dict]:
             "decision_deadline": payload.get("decision_deadline"),
             "zmiana_czasu_odbioru": payload.get("zmiana_czasu_odbioru"),
             "created_at_utc": payload.get("created_at_utc"),
+                **({"geocode_street_only_approx": True}
+                   if payload.get("geocode_street_only_approx") is True else {}),
         }), event="NEW_ORDER")
 
     if etype == "COURIER_ASSIGNED":
@@ -1469,12 +1473,14 @@ def update_from_event(event: dict) -> Optional[dict]:
         deliv_addr = payload.get("delivery_address") or payload.get("final_location")
         deliv_city = payload.get("delivery_city")
         deliv_coords = None
+        deliv_street_only_approx = False
         if deliv_addr:
             try:
-                from dispatch_v2.geocoding import geocode
+                from dispatch_v2.geocoding import geocode, is_street_only_approx
                 r = geocode(deliv_addr, city=deliv_city)
                 if r:
                     deliv_coords = [round(float(r[0]), 6), round(float(r[1]), 6)]
+                    deliv_street_only_approx = is_street_only_approx(r)
             except Exception as _e:
                 pass  # geocode fail nie blokuje zapisu delivered
         # FIX 2026-06-13 (sink guard, B3/B5): dwa defekty u ujścia.
@@ -1516,6 +1522,8 @@ def update_from_event(event: dict) -> Optional[dict]:
             "bag_time_alerted": False,
             # New correction epoch revokes a crash-pending DELIVERED marker.
             "last_lifecycle_event_id_courier_delivered": None,
+                **({"geocode_street_only_approx": True}
+                   if payload.get("geocode_street_only_approx") is True else {}),
         }
         if event.get("courier_id"):
             correction["courier_id"] = str(event.get("courier_id"))

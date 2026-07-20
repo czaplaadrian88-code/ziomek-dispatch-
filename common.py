@@ -523,6 +523,13 @@ ETAP4_DECISION_FLAGS = (
     # (konsument nadal czyta kanon z flags.json przez C.flag), a zapewnia parytet
     # fingerprintu i izolację żywej wartości w testach.
     "ENABLE_GEOCODE_PIN_MEMORY_FALLBACK",
+    # STREET-ONLY-APPROX (decyzja Adrian 2026-07-20): wyjątek od fail-closed
+    # weryfikacji WYŁĄCZNIE dla adresu bez cyfry/numeru, Google
+    # GEOMETRIC_CENTER i zgodnego dystryktu (albo przyległego przy cross-source
+    # <800 m). >1500 m / nieprzyległy / numer domu zachowują stary reject.
+    # Konsument: geocoding._run_verification; marker idzie przez stan/pipeline/
+    # serializery. Default OFF, flip wyłącznie osobnym ACK.
+    "ENABLE_GEOCODE_STREET_ONLY_APPROX",
     # Migracja 1b (ACK Adrian 2026-07-10): wybór parsera panelu v1/v2. Kanon od flipu
     # = flags.json (read-site panel_client czyta flag("USE_V2_PARSER", <env-const>);
     # env drop-in watchera zostaje martwym fallbackiem). Rejestracja: fingerprint
@@ -1553,6 +1560,12 @@ GEOCODE_BBOX_LON_MAX = float(os.environ.get("GEOCODE_BBOX_LON_MAX", "23.45"))
 # ============================================================
 ENABLE_GEOCODE_VERIFICATION = os.environ.get("ENABLE_GEOCODE_VERIFICATION", "1") == "1"          # compute + log
 ENABLE_GEOCODE_VERIFICATION_ENFORCE = os.environ.get("ENABLE_GEOCODE_VERIFICATION_ENFORCE", "0") == "1"  # reject low-conf
+# Adres bez numeru jako punkt ulicy. Kanon runtime = flags.json przez
+# decision_flag(); stała jest bezpiecznym fallbackiem OFF. Progi to kontrakt
+# ownera, nie parametry scoringu: przyległa <800 m, twardy reject >1500 m.
+ENABLE_GEOCODE_STREET_ONLY_APPROX = False
+GEOCODE_STREET_ONLY_APPROX_ADJACENT_MAX_M = 800.0
+GEOCODE_STREET_ONLY_APPROX_HARD_MAX_M = 1500.0
 # (2) location_type, które uznajemy za niepewne (środek geometryczny / przybliżenie)
 GEOCODE_LOW_CONFIDENCE_LOCATION_TYPES = frozenset({"APPROXIMATE", "GEOMETRIC_CENTER"})
 # (3) próg niezgodności dzielnicy: wynik w innej, NIE-sąsiedniej dzielnicy = mismatch

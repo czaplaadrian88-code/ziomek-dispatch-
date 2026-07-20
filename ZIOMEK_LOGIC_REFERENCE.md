@@ -1011,6 +1011,21 @@ the agent citation was not line-verified.
   `a360-papu-recovery-live-20260711`; rollback wymaga zatrzymania timera i
   przywrocenia backupu stanu 0600, nigdy ponownego wyslania niepewnego case'u.
 
+### STREET-ONLY-APPROX (2026-07-20, default OFF)
+
+- `ENABLE_GEOCODE_STREET_ONLY_APPROX` — czytana hot przez
+  `geocoding._run_verification` przez `decision_flag`. OFF = dotychczasowy
+  fail-closed i approximate cache jest ignorowany. ON = adres, którego
+  znormalizowana część uliczna nie zawiera żadnej cyfry, może przejść jako
+  przybliżony wyłącznie przy `location_type=GEOMETRIC_CENTER` oraz zgodnym
+  dystrykcie; dystrykt przyległy wymaga cross-source `<800 m`. Nieprzyległa
+  dzielnica, cross-source `>1500 m` lub obecny numer domu zachowują stary reject.
+  Akceptacja niesie `geocode_street_only_approx=true` przez cache, event/state,
+  `PipelineResult`, `Candidate.metrics` i serializer A+B/top-level, aby
+  konsola/apka mogły wyświetlić `~`. Marker jest dopinany po decyzji i nie
+  wpływa na HARD/SOFT, feasibility, scoring ani selekcję. Rollback hot:
+  `false`/brak klucza; historyczny neg-cache znów działa bez restartu.
+
 ### P-FLAGREG partia D (2026-07-05) — doc-uzupełnienie flag decyzyjnych/danościeżkowych (C-FLAG-DRIFT ↓12)
 
 Flagi LIVE (wszystkie `flags.json=true`, hot-reload), dotąd nieudokumentowane w ref; shadow/alert/scalar

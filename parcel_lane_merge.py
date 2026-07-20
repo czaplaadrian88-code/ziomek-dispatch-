@@ -33,7 +33,7 @@ from dispatch_v2 import state_machine as sm
 _NEW_ORDER_FIELDS = (
     "restaurant", "delivery_address", "pickup_coords", "delivery_coords",
     "pickup_at_warsaw", "czas_kuriera_warsaw", "czas_kuriera_hhmm",
-    "address_id", "order_type", "created_at_utc",
+    "address_id", "order_type", "created_at_utc", "geocode_street_only_approx",
 )
 
 log = logging.getLogger("parcel_lane_merge")
