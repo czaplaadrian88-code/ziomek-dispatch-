@@ -1000,17 +1000,6 @@ def _remove_stops_on_return(
     _raise_on_error: bool = False,
 ) -> None:
     """V3.19b: remove_stops po emit ORDER_RETURNED_TO_POOL sukces."""
-        # AUDYT SOLA 20.07 (werdykt A): durable downstream woła tę funkcję WPROST —
-    # bez wewnętrznej bramki flaga była obchodzona (zdejmowanie stopu "zawsze ON").
-    # Lustrzane do _release_plan_on_reassign: wyłącznik sprawdzany TUTAJ.
-    try:
-        from dispatch_v2.common import decision_flag as _df
-        if not _df("ENABLE_REASSIGN_OLD_PLAN_RELEASE"):
-            return False
-    except Exception:
-        if _raise_on_error:
-            raise
-        return False
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS
         if not ENABLE_SAVED_PLANS:
