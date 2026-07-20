@@ -334,8 +334,6 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
         "uwagi": order_state.get("uwagi"),
         "uwagi_pickup_parsed": order_state.get("uwagi_pickup_parsed"),
     }
-    if order_state.get("geocode_street_only_approx") is True:
-        order_event["geocode_street_only_approx"] = True
 
     # Fix 2026-05-06: użyj dispatchable_fleet() (jak shadow_dispatcher:521) — wzbogaca
     # CourierState o shift_end z grafiku V3.24-A. Raw build_fleet_snapshot() zostawia
@@ -461,8 +459,6 @@ def _emit_to_event_bus(oid: str, order_state: dict, result: dict, eval_count: in
         "czas_kuriera_warsaw": order_state.get("czas_kuriera_warsaw"),
         "czas_kuriera_hhmm": order_state.get("czas_kuriera_hhmm"),
     }
-    if order_state.get("geocode_street_only_approx") is True:
-        payload["geocode_street_only_approx"] = True
     emitted = event_bus.emit(
         "NEW_ORDER",
         order_id=oid,

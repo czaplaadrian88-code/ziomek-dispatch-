@@ -46,34 +46,6 @@ _stats = {"hits": 0, "misses": 0, "google": 0, "osrm_fallback": 0, "failures": 0
 _gmaps_key = None
 
 
-class GeocodeCoordinates(tuple):
-    """Wstecznie zgodny 2-tuple z addytywnym markerem jakości geokodu."""
-
-    def __new__(cls, lat, lon, *, geocode_street_only_approx=False):
-        obj = super().__new__(cls, (lat, lon))
-        obj.geocode_street_only_approx = bool(geocode_street_only_approx)
-        return obj
-
-
-def _coordinates(lat, lon, *, street_only_approx=False):
-    if street_only_approx:
-        return GeocodeCoordinates(
-            lat, lon, geocode_street_only_approx=True)
-    return (lat, lon)
-
-
-def is_street_only_approx(coords) -> bool:
-    """Publiczny, fail-soft odczyt markera bez zmiany kontraktu ``(lat, lon)``."""
-    return bool(getattr(coords, "geocode_street_only_approx", False))
-
-
-def _street_only_approx_enabled() -> bool:
-    try:
-        return bool(C.decision_flag("ENABLE_GEOCODE_STREET_ONLY_APPROX"))
-    except Exception:
-        return False
-
-
 def _load_key() -> Optional[str]:
     global _gmaps_key
     if _gmaps_key:
@@ -538,15 +510,7 @@ def _districts_adjacent(d1: str, d2: str) -> bool:
     return (d2 in adj.get(d1, set())) or (d1 in adj.get(d2, set()))
 
 
-def _run_verification(
-    address: str,
-    city,
-    lat: float,
-    lon: float,
-    meta: dict,
-    *,
-    street_only_approx_enabled: Optional[bool] = None,
-):
+def _run_verification(address: str, city, lat: float, lon: float, meta: dict):
     """FAZA 2 — warstwa weryfikacji (items 2+3+4). Zwraca verdict dict lub None.
 
     Nominatim (drugie źródło) wołane TYLKO gdy items 2+3 już coś podejrzewają —
@@ -565,10 +529,6 @@ def _run_verification(
             from dispatch_v2.district_reverse_lookup import get_district_lookup
             return get_district_lookup().lookup(la, lo)
 
-        if street_only_approx_enabled is None:
-            street_only_approx_enabled = _street_only_approx_enabled()
-        cross_source_enabled = bool(
-            getattr(C, "ENABLE_GEOCODE_CROSS_SOURCE", False))
         kw = dict(
             location_type=meta.get("location_type"),
             partial_match=meta.get("partial_match", False),
@@ -580,16 +540,10 @@ def _run_verification(
             districts_adjacent_fn=_districts_adjacent,
             cross_source_max_disagree_m=getattr(
                 C, "GEOCODE_CROSS_SOURCE_MAX_DISAGREE_M", 400.0),
-            street_only_approx_enabled=bool(street_only_approx_enabled),
-            street_only_approx_adjacent_max_m=getattr(
-                C, "GEOCODE_STREET_ONLY_APPROX_ADJACENT_MAX_M", 800.0),
-            street_only_approx_hard_max_m=getattr(
-                C, "GEOCODE_STREET_ONLY_APPROX_HARD_MAX_M", 1500.0),
         )
         pre = _gv.verify(address, city, lat, lon,
-                         cross_source=False, cross_source_coords=None,
-                         street_only_approx_final=not cross_source_enabled, **kw)
-        if pre["confidence"] == "ok" or not cross_source_enabled:
+                         cross_source=False, cross_source_coords=None, **kw)
+        if pre["confidence"] == "ok" or not getattr(C, "ENABLE_GEOCODE_CROSS_SOURCE", False):
             return pre
         # escalate to second source only when suspicious
         nom = _gv.nominatim_geocode(
@@ -597,8 +551,7 @@ def _run_verification(
             timeout=getattr(C, "GEOCODE_NOMINATIM_TIMEOUT_S", 3.0),
             user_agent=getattr(C, "GEOCODE_NOMINATIM_USER_AGENT", "ziomek-dispatch/1.0"))
         return _gv.verify(address, city, lat, lon,
-                          cross_source=True, cross_source_coords=nom,
-                          street_only_approx_final=True, **kw)
+                          cross_source=True, cross_source_coords=nom, **kw)
     except Exception as e:
         _log.warning(f"GEOCODE_VERIFY_ERROR address={address!r}: {e}")
         return None
@@ -715,16 +668,6 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
         return None
 
     canonical_address = C.canonicalize_geocode_address(address)
-    street_only_approx_flag = _street_only_approx_enabled()
-    street_only_no_number = _gv.is_street_only_without_house_number(
-        canonical_address)
-    # Stary negative/legacy-positive cache wolno ominąć tylko gdy cała warstwa
-    # weryfikacji jest aktywna; bez niej nie umiemy potwierdzić warunków wyjątku.
-    street_only_exception_active = bool(
-        street_only_approx_flag
-        and street_only_no_number
-        and getattr(C, "ENABLE_GEOCODE_VERIFICATION", False)
-    )
     # Alias is part of cache identity.  This intentionally bypasses historical
     # prefix-less negative entries (the rejected Jana Pawła II case).  Positive
     # legacy entries, especially manual pins, remain readable below.
@@ -765,47 +708,21 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
                 _audit_log("address", address, effective_city, entry["lat"], entry["lon"],
                            "cache_pin", (time.perf_counter() - t_start) * 1000.0)
                 return (entry["lat"], entry["lon"])
-            entry_is_street_only_approx = bool(
-                entry.get("geocode_street_only_approx"))
-            legacy_street_only_needs_verify = bool(
-                street_only_exception_active
-                and not entry_is_street_only_approx
-                and not entry.get("geocode_street_only_verified"))
-            if entry_is_street_only_approx and not street_only_approx_flag:
-                # Rollback-safe: wynik zapisany wyłącznie dzięki nowemu wyjątkowi
-                # nie może przeżyć flipu OFF przez pozytywny cache.
-                _log.info(
-                    f"GEOCODE_STREET_ONLY_APPROX_CACHE_BYPASS_OFF key={key!r}")
-            elif legacy_street_only_needs_verify:
-                # Stary wpis nie niesie meta Google, więc nie da się uczciwie
-                # oznaczyć go jako approximate bez jednorazowej re-weryfikacji.
-                _log.info(
-                    f"GEOCODE_STREET_ONLY_LEGACY_CACHE_REVERIFY key={key!r}")
-            elif not ttl_on or _is_cache_entry_fresh(entry, ttl_sec):
+            if not ttl_on or _is_cache_entry_fresh(entry, ttl_sec):
                 _stats["hits"] += 1
                 _audit_log("address", address, effective_city, entry["lat"], entry["lon"],
                            "cache", (time.perf_counter() - t_start) * 1000.0)
-                return _coordinates(
-                    entry["lat"], entry["lon"],
-                    street_only_approx=entry_is_street_only_approx)
-            else:
-                # Stale: zachowaj old coords dla drift alert post re-geocode
-                stale_old_coords = (entry["lat"], entry["lon"])
-                _stats.setdefault("stale_invalidated", 0)
-                _stats["stale_invalidated"] += 1
-                _log.info(f"cache TTL invalidate key={key!r} age_d={((time.time() - entry.get('cached_at', 0)) / 86400.0):.1f}")
+                return (entry["lat"], entry["lon"])
+            # Stale: zachowaj old coords dla drift alert post re-geocode
+            stale_old_coords = (entry["lat"], entry["lon"])
+            _stats.setdefault("stale_invalidated", 0)
+            _stats["stale_invalidated"] += 1
+            _log.info(f"cache TTL invalidate key={key!r} age_d={((time.time() - entry.get('cached_at', 0)) / 86400.0):.1f}")
 
     # NEGATYWNY cache (2026-06-26): adres wcześniej DETERMINISTYCZNIE odrzucony
     # (verify/bbox) → zwróć None bez sieci. Oszczędza zapytanie Google + weryfikację
     # i ucisza spam logów (był ~460 GEOCODE_VERIFY_REJECT/3h na tych samych adresach).
-    neg_cache_hit = bool(not streetless and _neg_cache_check(key))
-    if neg_cache_hit and street_only_exception_active:
-        # Żywy case Wasilkowska ma historyczny verify_reject. ON musi wymusić
-        # świeżą ocenę; wpis pozostaje na dysku i znów działa natychmiast po OFF.
-        _stats.setdefault("street_only_neg_cache_bypassed", 0)
-        _stats["street_only_neg_cache_bypassed"] += 1
-        _log.info(f"GEOCODE_STREET_ONLY_NEG_CACHE_BYPASS key={key!r}")
-    elif neg_cache_hit:
+    if not streetless and _neg_cache_check(key):
         _stats.setdefault("neg_cache_hits", 0)
         _stats["neg_cache_hits"] += 1
         _audit_log("address", address, effective_city, None, None, "neg_cache",
@@ -885,18 +802,7 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
     # (jak bbox, caller dostaje no_pickup_geocode). „low" zawsze tylko log.
     _verdict = _run_verification(
         canonical_address, effective_city, result[0], result[1],
-        result[2] if len(result) > 2 else {},
-        street_only_approx_enabled=street_only_approx_flag)
-    street_only_approx = bool(
-        _verdict and _verdict.get("geocode_street_only_approx") is True)
-    if street_only_approx:
-        _stats.setdefault("street_only_approx_accepted", 0)
-        _stats["street_only_approx_accepted"] += 1
-        _log.warning(
-            f"GEOCODE_STREET_ONLY_APPROX_ACCEPT address={address!r} "
-            f"city={effective_city!r} coords=({result[0]:.5f},{result[1]:.5f}) "
-            f"reasons={_verdict['reasons']} checks={_verdict['checks']}"
-        )
+        result[2] if len(result) > 2 else {})
     if _verdict is not None and _verdict["confidence"] in ("reject", "low"):
         _enforce = C.flag("ENABLE_GEOCODE_VERIFICATION_ENFORCE",
                           C.ENABLE_GEOCODE_VERIFICATION_ENFORCE)  # hot-reload via flags.json
@@ -921,23 +827,18 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
             return None
 
     if not streetless:
-        cache_entry = {
-            "lat": result[0],
-            "lon": result[1],
-            "source": source,
-            "original": address,
-            "city": effective_city,
-            "cached_at": time.time(),
-        }
-        if street_only_exception_active and _verdict is not None:
-            cache_entry["geocode_street_only_verified"] = True
-        if street_only_approx:
-            cache_entry["geocode_street_only_approx"] = True
         try:
             _stored, _changed = _put_cache_entry(
                 CACHE_PATH,
                 key,
-                cache_entry,
+                {
+                    "lat": result[0],
+                    "lon": result[1],
+                    "source": source,
+                    "original": address,
+                    "city": effective_city,
+                    "cached_at": time.time(),
+                },
                 protect_pins=True,
             )
         except Exception as exc:
@@ -974,10 +875,9 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
                source, (time.perf_counter() - t_start) * 1000.0)
     _log.info(f"Geocoded: {address} / city={effective_city} -> "
               f"({result[0]:.6f},{result[1]:.6f}) ({source})")
-    # ZAWSZE 2-tuple (lat, lon) — dla approximate jest to podklasa tuple z
-    # addytywnym atrybutem jakości; unpack/list/equality pozostają identyczne.
-    return _coordinates(
-        result[0], result[1], street_only_approx=street_only_approx)
+    # ZAWSZE 2-tuple (lat, lon) — meta (result[2]) jest wewnętrzna (weryfikacja),
+    # callerzy oczekują (lat, lon). Cache-hit też zwraca 2-tuple → spójny typ.
+    return (result[0], result[1])
 
 
 def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None) -> Optional[tuple]:

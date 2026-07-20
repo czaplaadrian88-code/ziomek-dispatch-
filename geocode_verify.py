@@ -25,18 +25,6 @@ import urllib.request
 from typing import Callable, Optional, Tuple
 
 
-def is_street_only_without_house_number(address: str) -> bool:
-    """Czy znormalizowana część uliczna nie zawiera numeru domu.
-
-    Geocoder dostaje czasem ``"ulica, miasto"``; miasto nie jest częścią uliczną,
-    dlatego sprawdzamy tekst przed pierwszym przecinkiem.  Reguła jest celowo
-    konserwatywna i zgodna z kontraktem ownera: jakakolwiek cyfra wyłącza wyjątek
-    approximate (także dla nietypowej nazwy ulicy zawierającej cyfrę).
-    """
-    street_part = " ".join(str(address or "").split()).split(",", 1)[0].strip()
-    return bool(street_part) and not any(ch.isdigit() for ch in street_part)
-
-
 def haversine_m(a: Tuple[float, float], b: Tuple[float, float]) -> float:
     R = 6371000.0
     la1, lo1 = math.radians(a[0]), math.radians(a[1])
@@ -95,10 +83,6 @@ def verify(
     cross_source: bool = True,
     cross_source_coords: Optional[Tuple[float, float]] = None,
     cross_source_max_disagree_m: float = 400.0,
-    street_only_approx_enabled: bool = False,
-    street_only_approx_final: bool = False,
-    street_only_approx_adjacent_max_m: float = 800.0,
-    street_only_approx_hard_max_m: float = 1500.0,
 ) -> dict:
     """Zwraca {confidence: ok|low|reject, reasons:[...], checks:{...}}.
 
@@ -120,9 +104,6 @@ def verify(
 
     # (3) zgodność dzielnicy
     exp = act = None
-    district_known = False
-    districts_same = False
-    districts_adjacent = False
     if district_check and expected_district_fn and actual_district_fn:
         try:
             exp = expected_district_fn(address, city)
@@ -134,28 +115,26 @@ def verify(
             act = None
         checks["expected_district"] = exp
         checks["actual_district"] = act
-        district_known = bool(
-            exp and act and exp not in ("Unknown", "") and act not in ("Unknown", ""))
-        districts_same = bool(district_known and exp == act)
-        if district_known and not districts_same:
+        known = exp and act and exp not in ("Unknown", "") and act not in ("Unknown", "")
+        if known and exp != act:
+            adjacent = False
             if districts_adjacent_fn:
                 try:
-                    districts_adjacent = bool(districts_adjacent_fn(exp, act))
+                    adjacent = bool(districts_adjacent_fn(exp, act))
                 except Exception:
-                    districts_adjacent = False
-            checks["districts_adjacent"] = districts_adjacent
-            if not districts_adjacent:
+                    adjacent = False
+            checks["districts_adjacent"] = adjacent
+            if not adjacent:
                 wrong_signals.append(f"district {exp}!={act}")
             else:
                 soft_signals.append(f"district_adjacent {exp}~{act}")
 
     # (4) cross-source
-    cross_source_dist_m = None
     if cross_source and cross_source_coords is not None:
-        cross_source_dist_m = haversine_m((lat, lon), cross_source_coords)
-        checks["cross_source_disagree_m"] = round(cross_source_dist_m, 1)
-        if cross_source_dist_m > cross_source_max_disagree_m:
-            wrong_signals.append(f"cross_source {int(cross_source_dist_m)}m")
+        dist_m = haversine_m((lat, lon), cross_source_coords)
+        checks["cross_source_disagree_m"] = round(dist_m, 1)
+        if dist_m > cross_source_max_disagree_m:
+            wrong_signals.append(f"cross_source {int(dist_m)}m")
 
     # werdykt: ≥2 mocne sygnały, LUB 1 mocny + 1 słaby → reject; 1 sygnał → low
     n_wrong = len(wrong_signals)
@@ -167,33 +146,8 @@ def verify(
     else:
         confidence = "ok"
 
-    # Decyzja ownera 2026-07-20: sama ulica ma pozostać wykonalna jako punkt
-    # przybliżony. Wyjątek oceniamy dopiero w FINALNYM przebiegu (po próbie
-    # cross-source), żeby rozjazd >1500 m nie uciekł przez pierwszy pre-check.
-    # Numer domu, inny nieprzyległy dystrykt i każdy location_type inny niż
-    # GEOMETRIC_CENTER zachowują stare reguły bajt-w-bajt.
-    if (street_only_approx_enabled
-            and street_only_approx_final
-            and is_street_only_without_house_number(address)
-            and lt == "GEOMETRIC_CENTER"
-            and district_known):
-        within_hard_cap = (
-            cross_source_dist_m is None
-            or cross_source_dist_m <= float(street_only_approx_hard_max_m))
-        district_allowed = districts_same or (
-            districts_adjacent
-            and cross_source_dist_m is not None
-            and cross_source_dist_m < float(street_only_approx_adjacent_max_m)
-        )
-        if within_hard_cap and district_allowed:
-            confidence = "ok"
-            checks["geocode_street_only_approx"] = True
-
-    result = {
+    return {
         "confidence": confidence,
         "reasons": wrong_signals + soft_signals,
         "checks": checks,
     }
-    if checks.get("geocode_street_only_approx") is True:
-        result["geocode_street_only_approx"] = True
-    return result

@@ -152,18 +152,6 @@ def regeocode_and_update(order_id, full_address, city_name, display_address=None
         print(f"REGEOCODE_SKIP: brak koordów dla {full_address!r}, {city_name!r}")
         return None
     upsert = {"delivery_coords": list(coords)}
-    coords_approx = geocoding.is_street_only_approx(coords)
-    if coords_approx:
-        upsert["geocode_street_only_approx"] = True
-    else:
-        # Nie dokładamy pola False do każdego legacy edit (OFF ma stary kształt),
-        # ale sprzężony writer musi wyczyścić istniejący marker po dokładnym pinie.
-        try:
-            existing = state_machine.get_order(str(order_id)) or {}
-            if existing.get("geocode_street_only_approx") is True:
-                upsert["geocode_street_only_approx"] = False
-        except Exception:  # noqa: BLE001 — marker nie może blokować korekty coords
-            pass
     sync_text = False
     try:
         if C.flag("ENABLE_REGEOCODE_SYNC_TEXT", False) and (display_address or "").strip():

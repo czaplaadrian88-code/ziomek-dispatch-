@@ -2,16 +2,16 @@
   "_meta": {
     "counts": {
       "apka": 27,
-      "engine": 395,
+      "engine": 394,
       "engine_1b_units": 12,
-      "etap4": 131,
+      "etap4": 130,
       "flags_json_keys": 246,
       "fp_extra": 34,
       "known_drift": 0,
       "numeric": 26,
       "panel": 86,
       "test_isolated": 5,
-      "total": 508,
+      "total": 507,
       "twins_concepts": 5
     },
     "generator": "tools/flag_lifecycle_seed.py",
@@ -6828,50 +6828,6 @@
       "removal_condition": "n/d dopóki live",
       "review_date": "2026-10-10",
       "rollback": "flags.json OFF hot-reload (bez restartu)",
-      "source_of_truth": "flags.json",
-      "twin_of": [],
-      "worlds": [
-        "engine"
-      ]
-    },
-    "ENABLE_GEOCODE_STREET_ONLY_APPROX": {
-      "carriers": [
-        "flags.json",
-        "common.py:ETAP4_DECISION_FLAGS",
-        "dispatch_v2/common.py-const"
-      ],
-      "consumers": [
-        "dispatch_v2/common.py",
-        "dispatch_v2/geocoding.py:_run_verification",
-        "dispatch_v2/panel_watcher.py",
-        "dispatch_v2/shadow_dispatcher.py",
-        "dispatch_v2/dispatch_pipeline.py",
-        "dispatch_v2/state_machine.py",
-        "dispatch_v2/czasowka_scheduler.py",
-        "dispatch_v2/gastro_edit.py"
-      ],
-      "curated_at": "2026-07-20",
-      "current_snapshot": {
-        "default": false
-      },
-      "default": false,
-      "intentional_per_process": {
-        "reason": "",
-        "value": false
-      },
-      "known_drift": false,
-      "known_drift_note": "",
-      "lifecycle": "planned",
-      "lifecycle_seeded": false,
-      "name": "ENABLE_GEOCODE_STREET_ONLY_APPROX",
-      "notes": "Przed flipem klucz celowo nie jest dodawany do żywego flags.json: decision_flag używa fallbacku OFF. ON akceptuje tylko adres bez cyfry, GEOMETRIC_CENTER i zgodny dystrykt (lub przyległy przy cross-source <800 m), z twardym reject >1500 m; marker jest addytywny i nie wpływa na scoring.",
-      "owner": {
-        "business": "Adrian",
-        "service": "dispatch-panel-watcher.service"
-      },
-      "removal_condition": "jeśli nieprzydatna po oknie obserwacji — usunąć po ACK Adriana",
-      "review_date": "2026-08-20",
-      "rollback": "flags.json OFF/usunięcie klucza hot-reload (bez restartu); cache approximate jest ignorowany przy OFF",
       "source_of_truth": "flags.json",
       "twin_of": [],
       "worlds": [
