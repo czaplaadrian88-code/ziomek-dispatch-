@@ -521,6 +521,15 @@ ETAP4_DECISION_FLAGS = (
     # env drop-in watchera zostaje martwym fallbackiem). Rejestracja: fingerprint
     # parytet per-serwis + strip w testach (izolacja żywej wartości).
     "USE_V2_PARSER",
+    # REASSIGN-RELEASE (2026-07-20): po przerzuceniu zlecenia na innego kuriera
+    # (branch panel_reassign ORAZ bliźniak PANEL_PACKS FALLBACK z previous_cid)
+    # zwolnij plan STAREGO kuriera — plan_manager.remove_stops (bump plan_version
+    # → apka starego natychmiast przestaje pokazywać zabrane zlecenie) + recanon
+    # reszty worka (reason=reassign_out). Bez tego stary kurier widział zlecenie
+    # do fallbacku 180 s (PlanPoller) / 5-min plan_recheck — sygnał szedł TYLKO
+    # do nowego (_save_plan_on_assign_signal). Konsument:
+    # panel_watcher._release_plan_on_reassign (decision_flag). Default OFF; flip za ACK.
+    "ENABLE_REASSIGN_OLD_PLAN_RELEASE",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -536,6 +545,11 @@ ENABLE_ETA_QUANTILE_R6_BAGCAP = False
 # czyta flag("USE_V2_PARSER", <panel_client-env-const>) — ta stała NIE steruje
 # parserem; kanon po flipie = flags.json (true), rollback hot = klucz false.
 USE_V2_PARSER = False
+# REASSIGN-RELEASE (2026-07-20): zwolnienie planu STAREGO kuriera po przerzuceniu
+# zlecenia (panel_watcher._release_plan_on_reassign — branch reassign + packs
+# fallback). Default OFF (deploy ciemny); kanon=flags.json (flip za ACK ownera),
+# rollback hot = klucz false / brak klucza.
+ENABLE_REASSIGN_OLD_PLAN_RELEASE = False
 # W0.2 advisory (roadmapa 08, werdykt E-1 „GO hybryda"): bezpiecznik fabrykacji ETA.
 # Wykrycie: pred_carry > ETA_FABRICATION_FLOOR_MIN ∧ pred_carry > RATIO×robust_ref,
 # gdzie robust_ref = osrm_freeflow(pickup→deliv)·traffic_mult + service + slack
