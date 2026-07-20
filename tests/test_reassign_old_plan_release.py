@@ -72,7 +72,7 @@ def test_release_removes_stop_and_bumps_version(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(PR, "recanon_courier",
                         lambda cid, **kw: recanons.append((cid, kw.get("reason"))) or True)
     with caplog.at_level(logging.INFO):
-        PW._release_plan_on_reassign("207", "999001")
+        assert PW._release_plan_on_reassign("207", "999001") is True
     after = json.loads(pf.read_text(encoding="utf-8"))
     assert [s["order_id"] for s in after["207"]["stops"]] == ["999002"], \
         "stop przerzuconego zlecenia MUSI zniknąć z planu starego"
@@ -94,7 +94,8 @@ def test_flag_off_plan_untouched(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", False)
     recanons = []
     monkeypatch.setattr(PR, "recanon_courier", lambda cid, **kw: recanons.append(cid))
-    PW._release_plan_on_reassign("207", "999001")
+    assert PW._release_plan_on_reassign("207", "999001") is False, \
+        "OFF → False (dedupe released_this_tick zostaje pusty → packs bajt-w-bajt)"
     assert json.loads(pf.read_text(encoding="utf-8")) == seeded, \
         "flaga OFF → zachowanie sprzed fixu (plan starego stoi)"
     assert recanons == []
@@ -114,7 +115,7 @@ def test_saved_plans_off_noop(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", True)
     recanons = []
     monkeypatch.setattr(PR, "recanon_courier", lambda cid, **kw: recanons.append(cid))
-    PW._release_plan_on_reassign("207", "999001")
+    assert PW._release_plan_on_reassign("207", "999001") is False
     assert json.loads(pf.read_text(encoding="utf-8")) == seeded
     assert recanons == []
 
@@ -129,9 +130,11 @@ def test_empty_old_cid_noop(monkeypatch):
     assert removed == [] and recanons == []
 
 
-def test_remove_stops_failure_swallowed_recanon_still_runs(monkeypatch):
+def test_remove_stops_failure_swallowed_recanon_still_runs(tmp_path, monkeypatch):
     """remove_stops rzuca → warning, helper NIE propaguje (diff loop żyje),
-    recanon dalej próbowany (osobne try/except — lustrzane do sąsiadów)."""
+    recanon dalej próbowany (osobne try/except — lustrzane do sąsiadów).
+    Store zasiany, żeby pre-check v2 (stop istnieje) dopuścił do remove_stops."""
+    _seed_store(tmp_path, monkeypatch)
     _flags_on(monkeypatch)
 
     def _boom(cid, oid):
@@ -139,19 +142,39 @@ def test_remove_stops_failure_swallowed_recanon_still_runs(monkeypatch):
     monkeypatch.setattr(PM, "remove_stops", _boom)
     recanons = []
     monkeypatch.setattr(PR, "recanon_courier", lambda cid, **kw: recanons.append(cid))
-    PW._release_plan_on_reassign("207", "999001")            # nie rzuca
+    assert PW._release_plan_on_reassign("207", "999001") is True   # nie rzuca
     assert recanons == ["207"]
 
 
-def test_recanon_failure_swallowed(monkeypatch):
-    """recanon best-effort — wyjątek nie może wywrócić handlera (≤ stan sprzed fixu)."""
+def test_recanon_failure_swallowed(tmp_path, monkeypatch):
+    """recanon best-effort — wyjątek nie może wywrócić handlera (≤ stan sprzed fixu).
+    Store zasiany, żeby przepływ realnie DOSZEDŁ do recanon (pre-check v2)."""
+    _seed_store(tmp_path, monkeypatch)
     _flags_on(monkeypatch)
     monkeypatch.setattr(PM, "remove_stops", lambda cid, oid: None)
 
     def _boom(cid, **kw):
         raise RuntimeError("gps missing")
     monkeypatch.setattr(PR, "recanon_courier", _boom)
-    PW._release_plan_on_reassign("207", "999001")            # nie rzuca
+    assert PW._release_plan_on_reassign("207", "999001") is True   # nie rzuca
+
+
+def test_release_double_call_second_noop_version_stable(tmp_path, monkeypatch):
+    """v2 (Sol pkt 3): remove_stops jest bump-always (plan_manager.py:437 bumpuje
+    nawet gdy nic nie usunął → pusty SSE-refresh). Pre-check read-only w helperze:
+    DRUGIE wywołanie dla tej samej pary = no-op bez zapisu, wersja STOI, recanon
+    tylko raz."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    recanons = []
+    monkeypatch.setattr(PR, "recanon_courier", lambda cid, **kw: recanons.append(cid) or True)
+    assert PW._release_plan_on_reassign("207", "999001") is True
+    after1 = json.loads(pf.read_text(encoding="utf-8"))
+    assert after1["207"]["plan_version"] == 4
+    assert PW._release_plan_on_reassign("207", "999001") is True   # no-op
+    after2 = json.loads(pf.read_text(encoding="utf-8"))
+    assert after2 == after1, "drugie wywołanie NIE pisze do store (zero bumpa)"
+    assert recanons == ["207"], "recanon tylko przy realnym zwolnieniu"
 
 
 # ------------------------------------------------- branch-level (diff loop) ---
@@ -204,7 +227,8 @@ def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None):
          mock.patch("dispatch_v2.panel_watcher._check_panel_agree"), \
          mock.patch("dispatch_v2.panel_watcher._check_panel_override"), \
          mock.patch("dispatch_v2.panel_watcher._release_plan_on_reassign",
-                    side_effect=lambda cid, oid: calls.append(("release", cid, oid))), \
+                    side_effect=lambda cid, oid: (
+                        calls.append(("release", cid, oid)), True)[1]), \
          mock.patch("dispatch_v2.panel_watcher._save_plan_on_assign_signal",
                     side_effect=lambda oid, cid: calls.append(("signal", oid, cid))), \
          mock.patch("dispatch_v2.panel_watcher.geocode", return_value=None), \
@@ -241,6 +265,52 @@ def test_reassign_branch_same_courier_no_release():
         raw_fetches={"467501": _raw_response("467501", 207)},
     )
     assert calls == []
+
+
+def test_reassign_branch_int_state_cid_no_false_release():
+    """v2 (Sol pkt 1): INT 207 w state vs \"207\" z panelu — bez normalizacji
+    robił FAŁSZYWY reassign (a z fixem release zdarłby stop AKTUALNEMU
+    kurierowi). Po normalizacji: ten sam kurier → ZERO emit/release/signal."""
+    state = {"467502": {"order_id": "467502", "courier_id": 207,   # INT!
+                        "status": "assigned", "delivery_address": "X"}}
+    calls, stats = _run_diff_with_recorders(
+        parsed=_mock_parsed(order_ids=["467502"], assigned_ids={"467502"}),
+        state=state,
+        raw_fetches={"467502": _raw_response("467502", 207)},
+    )
+    assert calls == [], "int state-cid == panel-cid → ŻADNEGO fałszywego release"
+    assert stats["assigned"] == 0
+
+
+def test_reassign_branch_int_state_cid_real_reassign_uses_str():
+    """v2: realny przerzut przy INT cid w state — helper dostaje STR starego."""
+    state = {"467503": {"order_id": "467503", "courier_id": 207,   # INT!
+                        "status": "assigned", "delivery_address": "X"}}
+    calls, _ = _run_diff_with_recorders(
+        parsed=_mock_parsed(order_ids=["467503"], assigned_ids={"467503"}),
+        state=state,
+        raw_fetches={"467503": _raw_response("467503", 310)},
+    )
+    assert calls == [("release", "207", "467503"), ("signal", "467503", "310")]
+
+
+def test_one_tick_both_paths_single_release_single_signal():
+    """v2 (Sol pkt 2): oba tory widzą TEN SAM stale snapshot state — jeden realny
+    przerzut łapany przez branch reassign ORAZ packs w JEDNYM ticku dawał
+    2× release + 2× signal. Dedupe released_this_tick: dokładnie 1 release,
+    1 signal (packs skip; zbiór zasilany tylko przy fladze ON)."""
+    state = {"467800": {"order_id": "467800", "courier_id": "207",
+                        "status": "assigned", "delivery_address": "X"}}
+    calls, stats = _run_diff_with_recorders(
+        parsed=_mock_parsed(order_ids=["467800"], assigned_ids={"467800"},
+                            courier_packs={"Nowy K": ["467800"]}),
+        state=state,
+        raw_fetches={"467800": _raw_response("467800", 310)},
+        kurier_ids={"Nowy K": 310},
+    )
+    assert calls == [("release", "207", "467800"), ("signal", "467800", "310")], \
+        "jeden przerzut = DOKŁADNIE jeden release i jeden signal w ticku"
+    assert stats["assigned"] == 1
 
 
 def test_packs_fallback_release_previous_courier():

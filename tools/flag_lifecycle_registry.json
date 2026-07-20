@@ -11513,15 +11513,15 @@
       "lifecycle": "planned",
       "lifecycle_seeded": false,
       "name": "ENABLE_REASSIGN_OLD_PLAN_RELEASE",
-      "notes": "KURACJA 2026-07-19: seeder klasyfikuje po nazwie (regex LEGACY|_OLD|DEPREC) -> falszywy trafien: _OLD_ znaczy tu PLAN STAREGO kuriera (reassign-loser), nie legacy. Flaga NOWA (planned, shipped dark): panel_watcher._release_plan_on_reassign - remove_stops+recanon planu starego kuriera po przerzuceniu (branch panel_reassign + PANEL_PACKS FALLBACK). Default OFF; flip za ACK.",
+      "notes": "KURACJA 2026-07-19 (+v2 2026-07-20 po review Sola): seeder klasyfikuje po nazwie (regex LEGACY|_OLD|DEPREC) -> falszywy trafien: _OLD_ znaczy tu PLAN STAREGO kuriera (reassign-loser), nie legacy. Flaga NOWA (planned, shipped dark): panel_watcher._release_plan_on_reassign - remove_stops+recanon planu starego kuriera po przerzuceniu (branch panel_reassign + PANEL_PACKS FALLBACK, dedupe per-tick). Default OFF; flip za ACK. RUNBOOK KANONICZNY (source_of_truth/rollback sa polami derived - seeder je odswieza, po flipie sam wyprowadzi flags.json/hot): ZRODLO=flags.json (hot-reload per-call, klucz nieobecny=const OFF); KONSUMENT=dispatch-panel-watcher.service; ROLLBACK hot=klucz false/brak klucza BEZ restartu; pelny=git revert + restart dispatch-panel-watcher.service ZA ACK.",
       "owner": {
         "business": "Adrian",
         "service": "dispatch-panel-watcher.service"
       },
       "removal_condition": "flip flags.json=true za ACK ownera (fix reassign-lag apki starego kuriera) lub retire, jeśli nie wpięta do 2026-10",
       "review_date": "2026-08-10",
-      "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
-      "source_of_truth": "common.py-const",
+      "rollback": "flip ENABLE_REASSIGN_OLD_PLAN_RELEASE=false w flags.json (decision_flag hot-reload per-call, BEZ restartu); pelny = git revert + restart dispatch-panel-watcher.service ZA ACK",
+      "source_of_truth": "flags.json",
       "twin_of": [],
       "worlds": [
         "engine"

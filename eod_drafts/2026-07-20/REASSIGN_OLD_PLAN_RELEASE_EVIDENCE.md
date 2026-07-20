@@ -1,5 +1,50 @@
 # REASSIGN-RELEASE — zwolnienie planu STAREGO kuriera po przerzuceniu (evidence, 2026-07-20)
 
+## 0. v2 PO REVIEW SOLA (GO-WITH-CARE 50f5946: flip ON był NO-GO do poprawek)
+
+Werdykt Sola: `scratchpad/sol_reassign_review.log`. Każda teza ZWERYFIKOWANA
+niezależnie w kodzie przed implementacją (zasada „nie ufaj recenzji na słowo"):
+
+1. **NORMALIZACJA CID (bloker flipa) — potwierdzona i naprawiona.** Branch reassign
+   brał `state_order.get("courier_id", "")` BEZ str() → INT 207 w state vs "207"
+   z panelu = fałszywy reassign (duplikat emit; z release'em zdarłby stop
+   AKTUALNEMU kurierowi). v2: normalizacja do str jak w twin-torze packs — w
+   PORÓWNANIU i w wywołaniu helpera. Uwaga zakresowa: normalizacja porównania
+   domyka też PRE-ISTNIEJĄCY fałszywy duplikat emit (ścieżka nieoflagowana) —
+   zmiana ściśle ZAWĘŻAJĄCA (tłumi fałszywe re-emity), lustrzana z packs.
+2. **DEDUPE PER-TICK (bloker flipa) — potwierdzony (reprodukcja Sola) i naprawiony.**
+   Oba tory czytają TEN SAM snapshot `current_state` (stale po update_from_event),
+   event_id różne (`_reassign`/`_packs`) → jeden przerzut = 2× release + 2× signal.
+   v2: `released_this_tick: set[(oid, old_cid)]` w scope ticku — zasilany TYLKO gdy
+   helper zwróci True (flaga ON) → packs `continue` (skip też oszczędza budżet
+   fetch); przy OFF zbiór pusty = packs bajt-w-bajt jak dziś.
+3. **remove_stops bump-always — potwierdzony (plan_manager.py:437 bumpuje nawet gdy
+   nic nie usunął → pusty SSE-refresh).** v2: pre-check READ-ONLY w helperze — plan
+   starego nie zawiera stopa → no-op bez zapisu/bumpa/recanon. ⚠ KOREKTA vs
+   instrukcja: `load_plan` ma domyślnie WRITE side-effect (`invalidate_on_mismatch=True`
+   persystuje unieważnienie) — pre-check używa **`load_plans()`** (dokumentowane
+   read-only). plan_manager globalnie NIETKNIĘTY (poza zakresem). Mylący reason
+   `ORDER_CANCELLED` przy zwolnieniu OSTATNIEGO stopa = PRE-ISTNIEJĄCE w
+   plan_manager.remove_stops (dotyczy też cancel/return dziś) — poza zakresem,
+   odnotowane.
+4. **Rejestr/rollback — poprawione.** `source_of_truth=flags.json`, rollback=flip
+   w flags.json (hot, bez restartu) / pełny = revert + restart
+   **dispatch-panel-watcher** (nie shadow). Pola te są DERIVED (seeder je odświeża;
+   po flipie derywacja sama wyprowadzi „flags.json OFF hot-reload") — kanoniczny
+   runbook zapisany też w kuratowanym `notes` (przeżywa re-seed). SERVICE_SCOPED
+   odrzucone świadomie: to rejestr flag env-only, moja flaga jest flags.json.
+5. **Testy Sola dodane:** oba tory w 1 ticku (dokładnie 1 release + 1 signal),
+   podwójny release no-op (wersja stoi), int-CID ×2 (fałszywy reassign zablokowany;
+   realny przekazuje str). Plik: 17 testów. **Kontrola negatywna v2: na kodzie v1
+   (stash panel_watcher.py) 9/17 FAILED** — wszystkie zachowania v2 wykrywane.
+
+Znany szum środowiska przy `flag_lifecycle_check` w tej sesji: 2 błędy
+COVERAGE-PANEL (`DISPATCH_PUSH_STRICT`, `ROUTE_REORDER`) pochodzą z ŻYWEGO
+working-tree panel-backendu (równoległe zadania — ich flagi nie są w tym diffie;
+grep panelu potwierdza pochodzenie; zero błędów dotyczy ENABLE_REASSIGN_OLD_PLAN_RELEASE,
+a check był 0-błędów zanim tamte zmiany weszły do żywego drzewa panelu). Wpisy
+zasieją właściciele tamtych gałęzi przy swoim merge.
+
 **Branch:** `fix/reassign-old-plan-release` (baza `master@7e57085` = baseline zadania).
 **Zgłoszenie ownera:** „u kurierów są po przerzuceniu opóźnienia w pokazywaniu".
 **Deploy:** CIEMNY — flaga `ENABLE_REASSIGN_OLD_PLAN_RELEASE` default OFF (const common.py,
@@ -96,8 +141,15 @@ planu kuriera**. Guard `_state_cid != _target_cid` liczony PO trust-raw to bloku
 
 ## 4. Dowody (ETAP 4)
 
+- **v2 (po review Sola): plik testów = 17/17 passed** (13 z v1 + 4 Sola: one-tick
+  dedupe, double-call version-stable, int-CID fałszywy/realny). **Kontrola
+  negatywna v2: stash `panel_watcher.py` do v1 → 9/17 FAILED** (dedupe, int-CID ×2,
+  version-stable, kontrakt zwrotu w 5 testach v1) → pop, working tree wrócił.
+  py_compile v2 (common/panel_watcher/testy) OK. **Pełna regresja v2 (kanoniczny
+  harness pkgroot): 5225 passed / 0 failed / 24 skipped / 8 xfailed, EXIT=0 =
+  baseline-master 5208 + dokładnie 17 nowych testów. Zbiór FAILED pusty.**
 - **py_compile:** common.py + panel_watcher.py OK (cfile→tmp, zero .pyc w worktree).
-- **Nowy plik `tests/test_reassign_old_plan_release.py`: 13/13 passed** (harness pkgroot):
+- **Nowy plik `tests/test_reassign_old_plan_release.py` (v1): 13/13 passed** (harness pkgroot):
   - helper: real store (fake courier_plans 2 kurierów) → stop znika TYLKO u starego,
     `plan_version` 3→4, cudzy plan bajt-w-bajt, recanon `("207","reassign_out")`,
     telemetria w caplog;
