@@ -769,7 +769,13 @@ def _validate_plan_body(plan_body: Dict[str, Any]) -> None:
     for k in ("lat", "lng", "source"):
         if k not in sp:
             raise ValueError(f"start_pos missing {k}")
-    if plan_body["optimization_method"] not in {"bruteforce", "greedy", "incremental"}:
+    # 20.07: whitelist wyrównana do REALNYCH strategii route_simulator_v2 (ortools od
+    # V3.26 był odrzucany → 1701 cichych save_plan fail od 22.06; C3 zrobił to głośnym).
+    # Test anty-dryf: test_plan_manager_method_whitelist_covers_simulator.
+    if plan_body["optimization_method"] not in {
+        "bruteforce", "greedy", "incremental", "ortools",
+        "ortools_rejected_v3274", "greedy_fallback", "sticky", "none",
+    }:
         raise ValueError(
             f"invalid optimization_method: {plan_body['optimization_method']!r}"
         )
