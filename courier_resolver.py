@@ -1516,18 +1516,26 @@ def resolve_effective_shift_end_by_cid(
     Konsument: `plan_recheck._operator_pin_hard_report` (breach `grafik`)."""
     try:
         if not name:
-            # v5 (r4 Sola): TEN SAM łańcuch cid→nazwa co cs.name we flocie
-            # (build_fleet_snapshot: _load_courier_names = merge kurier_ids +
-            # courier_names, + normalizacja zer wiodących) — NIE courier_tiers
-            # (bywa stale ⇒ brak matchu grafiku ⇒ wo bez GRAFIK-CAP = złe okno).
+            # v5/v6 (r4+r5 Sola): TEN SAM łańcuch cid→nazwa co cs.name we flocie
+            # (build_fleet_snapshot ~:1203): _load_courier_names (merge kurier_ids
+            # + courier_names) → normalizacja zer wiodących → legacy-fallback
+            # _load_kurier_piny (str-klucz, potem int-klucz po isdigit; tylko
+            # wynik str). NIE courier_tiers (bywa stale ⇒ brak matchu grafiku).
             try:
                 _names = _load_courier_names()
-                name = _names.get(str(cid))
+                _kid = str(cid)
+                name = _names.get(_kid)
+                if name is None and _kid.isdigit():
+                    name = _names.get(str(int(_kid)))
                 if name is None:
-                    try:
-                        name = _names.get(str(int(str(cid))))
-                    except Exception:
-                        name = None
+                    _piny = _load_kurier_piny()
+                    _pin_name = _piny.get(_kid)
+                    if _pin_name is None and _kid.isdigit():
+                        _pin_name = _piny.get(int(_kid))
+                    if isinstance(_pin_name, str):
+                        name = _pin_name
+                if not isinstance(name, str):
+                    name = None
             except Exception:
                 name = None
         import sys as _sys

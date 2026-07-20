@@ -622,19 +622,23 @@ def test_grafik_pickup_no_tolerance(env, monkeypatch):
 
 
 def test_grafik_salvage_suppresses_dropoff_breach(env, monkeypatch):
-    """Parytet EOD-salvage: aktywny salvage (predykat feasibility) ⇒ dropoff po
-    końcu zmiany NIE jest raportowany jako grafik-breach (zero false-positive)."""
+    """Parytet EOD-salvage (REALNY predykat feasibility: flaga ON + realne
+    company_close): aktywny salvage ⇒ dropoff po końcu zmiany NIE jest
+    raportowany jako grafik-breach (dropoff bez granicy close — jak V3.24-A)."""
     from dispatch_v2 import courier_resolver as CR
     from dispatch_v2 import feasibility_v2 as F
     from datetime import timedelta
     _flag_on(monkeypatch)
     monkeypatch.setattr(C, "ENABLE_V324A_SCHEDULE_INTEGRATION", True, raising=False)
     monkeypatch.setattr(C, "ENABLE_V325_SCHEDULE_HARDENING", False, raising=False)
+    monkeypatch.setattr(C, "ENABLE_END_OF_DAY_SALVAGE", True, raising=False)
+    monkeypatch.setattr(F, "_company_close_utc",
+                        lambda now: NOW + timedelta(minutes=30))  # okno aktywne
+    assert F._end_of_day_salvage(NOW) == (True, NOW + timedelta(minutes=30))
     _save_base()
     _write_override(env, ["B", "A"])
     monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
                         lambda cid, **k: NOW - timedelta(minutes=60))
-    monkeypatch.setattr(F, "_end_of_day_salvage", lambda now: (True, None))
     assert P.recanon_courier(CID, now=NOW) is True
     hb = [e for e in _events(env)
           if e["event"] == "operator_route_override_applied"][-1]["hard_breaches"]
@@ -669,23 +673,73 @@ def test_name_chain_parity_sol_counterexample(monkeypatch):
 
 
 def test_grafik_pickup_salvage_suppressed(env, monkeypatch):
-    """v5 parytet feasibility:743 — pickup po shift_end w oknie EOD-salvage
-    jest legalny ⇒ zero breachu grafik (ten sam predykat co dropoff)."""
+    """v6 PEŁNA semantyka feasibility:743 (REALNY predykat): pickup po
+    shift_end, ale PRZED company_close, w aktywnym oknie salvage ⇒ zero
+    breachu grafik."""
     from dispatch_v2 import courier_resolver as CR
     from dispatch_v2 import feasibility_v2 as F
     from datetime import timedelta
     _flag_on(monkeypatch)
     monkeypatch.setattr(C, "ENABLE_V325_SCHEDULE_HARDENING", True, raising=False)
     monkeypatch.setattr(C, "ENABLE_V324A_SCHEDULE_INTEGRATION", False, raising=False)
+    monkeypatch.setattr(C, "ENABLE_END_OF_DAY_SALVAGE", True, raising=False)
+    monkeypatch.setattr(F, "_company_close_utc",
+                        lambda now: NOW + timedelta(minutes=45))
+    assert F._end_of_day_salvage(NOW)[0] is True  # realny helper, okno aktywne
     _save_base()
     _write_override(env, ["B", "A"])
     monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
                         lambda cid, **k: NOW + timedelta(minutes=4))
-    monkeypatch.setattr(F, "_end_of_day_salvage", lambda now: (True, None))
     assert P.recanon_courier(CID, now=NOW) is True
     hb = [e for e in _events(env)
           if e["event"] == "operator_route_override_applied"][-1]["hard_breaches"]
     assert not [b for b in hb if b["type"] == "grafik"]
+    # odbiory po pinie (~12:13 i ~12:31Z) ≤ close 12:45Z ⇒ salvage pokrywa — parytet 743
+
+
+def test_grafik_pickup_after_close_breaches_despite_salvage(env, monkeypatch):
+    """v6 granica CLOSE: salvage aktywny, ale pickup PO company_close ⇒ breach
+    mimo salvage (feasibility:743 salvaguje tylko pickup ≤ close)."""
+    from dispatch_v2 import courier_resolver as CR
+    from dispatch_v2 import feasibility_v2 as F
+    from datetime import timedelta
+    _flag_on(monkeypatch)
+    monkeypatch.setattr(C, "ENABLE_V325_SCHEDULE_HARDENING", True, raising=False)
+    monkeypatch.setattr(C, "ENABLE_V324A_SCHEDULE_INTEGRATION", False, raising=False)
+    monkeypatch.setattr(C, "ENABLE_END_OF_DAY_SALVAGE", True, raising=False)
+    monkeypatch.setattr(F, "_company_close_utc",
+                        lambda now: NOW + timedelta(minutes=2))
+    assert F._end_of_day_salvage(NOW)[0] is True  # okno aktywne (close-60 ≤ now < close)
+    _save_base()
+    _write_override(env, ["B", "A"])
+    monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
+                        lambda cid, **k: NOW)  # koniec zmiany „teraz"
+    assert P.recanon_courier(CID, now=NOW) is True
+    hb = [e for e in _events(env)
+          if e["event"] == "operator_route_override_applied"][-1]["hard_breaches"]
+    pu = [b for b in hb if b["type"] == "grafik" and b["stop_type"] == "pickup"]
+    assert pu  # odbiory ~12:05+/12:10+ > close 12:02 ⇒ breach mimo salvage
+
+
+def test_name_chain_piny_fallback_parity(monkeypatch):
+    """v6 (r5 Sola): cid obecny TYLKO w kurier_piny — resolver używa TEGO
+    SAMEGO legacy-fallbacku co flota ⇒ nazwa znaleziona ⇒ okno z grafiku
+    (zamiast None jak w v5)."""
+    import schedule_utils
+    from dispatch_v2 import courier_resolver as CR
+    from dispatch_v2 import manual_overrides as MO
+    schedule = {"Jan Kowalski": {"start": "10:00", "end": "14:00"}}
+    monkeypatch.setattr(CR, "_load_courier_names", lambda: {})
+    monkeypatch.setattr(CR, "_load_kurier_piny",
+                        lambda: {"7777": "Jan Kowalski"})
+    monkeypatch.setattr(schedule_utils, "load_schedule", lambda: schedule)
+    monkeypatch.setattr(schedule_utils, "match_courier",
+                        lambda name, sched: name if name in sched else None)
+    monkeypatch.setattr(schedule_utils, "is_on_shift",
+                        lambda name, sched: (False, "po zmianie"))
+    monkeypatch.setattr(MO, "get_working", lambda: {})
+    end = CR.resolve_effective_shift_end_by_cid("7777")
+    assert end is not None and end.hour == 14  # jak cs.name/cs.shift_end floty
 
 
 def test_veto_scope_status_writes_persist(env, monkeypatch):

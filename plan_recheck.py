@@ -2011,11 +2011,12 @@ def _operator_pin_hard_report(cid, final_stops, orders_state,
             _tol_drop = float(getattr(_C_h, "V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN",
                                       5.0)) if _C_h else 5.0
             _salv = False
+            _close = None
             try:
                 from dispatch_v2 import feasibility_v2 as _F_g
-                _salv, _ = _F_g._end_of_day_salvage(now)
+                _salv, _close = _F_g._end_of_day_salvage(now)
             except Exception:
-                _salv = False
+                _salv, _close = False, None
             for s in final_stops:
                 _pred = _parse_dt(s.get("predicted_at"))
                 if _pred is None:
@@ -2023,11 +2024,16 @@ def _operator_pin_hard_report(cid, final_stops, orders_state,
                 _exc = (_pred - _sh_end).total_seconds() / 60.0
                 _is_pu = s.get("type") == "pickup"
                 if _is_pu:
-                    # pickup po shift_end: BEZ tolerancji; v5 — EOD-salvage
-                    # wycisza jak w feasibility (pickup po zmianie legalny w
-                    # ostatniej godzinie pracy firmy, ten sam predykat)
-                    _hit = _v325 and not _salv and _exc > 0.0
+                    # pickup po shift_end: BEZ tolerancji; v6 — salvage wycisza
+                    # WYŁĄCZNIE gdy pickup ≤ company_close (PEŁNA semantyka
+                    # feasibility:743: `_salv and _close and pickup_ref <= _close`);
+                    # pickup po zamknięciu firmy = breach mimo salvage
+                    _salvaged_pu = bool(_salv and _close is not None
+                                        and _pred <= _close)
+                    _hit = _v325 and _exc > 0.0 and not _salvaged_pu
                 else:
+                    # dropoff: salvage bez granicy close (feasibility V3.24-A
+                    # pomija reject dropoff-after-shift samym `_salv_do`)
                     _hit = _v324a and not _salv and _exc > _tol_drop
                 if _hit:
                     breaches.append({"type": "grafik",
