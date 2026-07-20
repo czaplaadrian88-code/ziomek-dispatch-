@@ -756,6 +756,9 @@ def test_internal_plan_error_keeps_downstream_receipt_pending(
     from dispatch_v2 import plan_recheck
 
     _events_db, state_path = isolated_stores
+    # Bramka A (audyt Sola 20.07): usuwanie stopu jest za flagą także w torze durable.
+    # Ten test bada strict-error POD włączoną funkcją — włącz ją jawnie.
+    monkeypatch.setattr(common, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", True)
     monkeypatch.setattr(common, "ENABLE_SAVED_PLANS", True)
     monkeypatch.setattr(
         plan_manager,
