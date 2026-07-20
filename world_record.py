@@ -17,6 +17,11 @@ Zakres v0: proces dispatch-shadow (hook w shadow_dispatcher.process_event).
 czasowka_scheduler = osobny proces, świadomie N-D w v0 (dołączy przy wspólnym
 WorldState, pakiet 2) — odnotowane w docs/refaktor/05-dziennik.md.
 
+Capture OSRM jest fail-closed dla certyfikacji: recorder nadal nigdy nie zmienia
+decyzji, ale wykryty wyjątek, limit albo błąd recordera zapisuje
+`capture_status=INPUT_MISSING`. Taki rekord pozostaje w korpusie i nie może być
+uznany za diff decyzji.
+
 Anty-prod guard (C17): pod pytestem z DOMYŚLNYM RECORD_DIR zapis jest
 blokowany — testy muszą jawnie spatchować RECORD_DIR na tmp.
 
@@ -234,13 +239,17 @@ def _gc(now_utc: datetime) -> None:
 
 def _capture(order_event: Optional[dict], fleet_snapshot: Any, now: Optional[datetime],
              flags_snap: Optional[dict], osrm_calls: List[dict], result: Any,
-             live_inputs: Optional[dict] = None) -> None:
+             live_inputs: Optional[dict] = None,
+             input_missing_reasons: Optional[List[str]] = None) -> None:
     if _blocked_under_test():
         return
     ts = datetime.now(timezone.utc)
     flags_blob = json.dumps(flags_snap or {}, sort_keys=True, ensure_ascii=False)
+    missing_reasons = sorted({str(reason) for reason in (input_missing_reasons or [])})
     rec = {
         "schema": SCHEMA,
+        "capture_status": "INPUT_MISSING" if missing_reasons else "COMPLETE",
+        "input_missing_reasons": missing_reasons,
         "ts": ts.isoformat(),
         "order_id": str((order_event or {}).get("order_id") or ""),
         "now": _json_safe(now),
@@ -271,6 +280,7 @@ def around_assess(fn: Callable[[], Any], order_event: Optional[dict] = None,
     started = False
     live_files: Dict[str, Any] = {}
     capturing = False
+    input_missing_reasons: List[str] = []
     try:
         flags_snap = dict(C.load_flags() or {})
         osrm_client.world_record_start()
@@ -279,7 +289,13 @@ def around_assess(fn: Callable[[], Any], order_event: Optional[dict] = None,
         capturing = True
         live_files = _snapshot_live_files(fleet_snapshot)  # v1: snapshot plików NA WEJŚCIU
     except Exception:
-        started = False
+        input_missing_reasons.append("capture_setup_failed")
+        if started:
+            try:
+                osrm_client.world_record_stop_with_status()
+            except Exception:
+                pass
+            started = False
     try:
         result = fn()
     except Exception:
@@ -292,13 +308,22 @@ def around_assess(fn: Callable[[], Any], order_event: Optional[dict] = None,
             _cap_end()
         raise
     try:
-        calls = osrm_client.world_record_stop() if started else []
+        if started:
+            try:
+                calls, osrm_missing = osrm_client.world_record_stop_with_status()
+                input_missing_reasons.extend(osrm_missing)
+            except Exception:
+                calls = []
+                input_missing_reasons.append("osrm_recorder_stop_failed")
+        else:
+            calls = []
         notes = _cap_end() if capturing else {}
         live_inputs = dict(live_files)
         if notes:
             live_inputs.update(notes)  # k07, loadgov
         _capture(order_event, fleet_snapshot, now, flags_snap, calls, result,
-                 live_inputs=live_inputs)
+                 live_inputs=live_inputs,
+                 input_missing_reasons=input_missing_reasons)
     except Exception as e:
         try:
             _log.warning(f"world_record capture fail (decyzja NIEDOTKNIĘTA): {e}")

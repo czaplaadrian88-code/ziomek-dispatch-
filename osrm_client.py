@@ -1440,6 +1440,7 @@ def health_check(timeout_s: float = 1.0) -> dict:
 _WR_LOCK = threading.Lock()
 _WR_ACTIVE = False
 _WR_CALLS: list = []
+_WR_INPUT_MISSING_REASONS: set[str] = set()
 _WR_MAX_CALLS = 5000
 
 
@@ -1447,16 +1448,43 @@ def world_record_start() -> None:
     global _WR_ACTIVE
     with _WR_LOCK:
         _WR_CALLS.clear()
+        _WR_INPUT_MISSING_REASONS.clear()
         _WR_ACTIVE = True
 
 
-def world_record_stop() -> list:
+def world_record_stop_with_status() -> tuple[list, list[str]]:
+    """Zamknij okno i atomowo zwroc wywolania oraz luki capture.
+
+    Rekorder pozostaje fail-soft dla decyzji, lecz nigdy juz fail-silent dla
+    replayu: wyjatek wrappera, przepelnienie albo wewnetrzny blad zapisu
+    oznaczaja niecertyfikowalny rekord ``INPUT_MISSING``.
+    """
     global _WR_ACTIVE
     with _WR_LOCK:
         _WR_ACTIVE = False
         out = list(_WR_CALLS)
+        missing = sorted(_WR_INPUT_MISSING_REASONS)
         _WR_CALLS.clear()
+        _WR_INPUT_MISSING_REASONS.clear()
+    return out, missing
+
+
+def world_record_stop() -> list:
+    """Wstecznie zgodny kontrakt K04: zwraca tylko nagrane wywolania."""
+    out, _missing = world_record_stop_with_status()
     return out
+
+
+def _wr_mark_input_missing(reason: str) -> None:
+    """Oznacz utrate wejscia bez wplywu na produkcyjna decyzje."""
+    if not _WR_ACTIVE:
+        return
+    try:
+        with _WR_LOCK:
+            if _WR_ACTIVE:
+                _WR_INPUT_MISSING_REASONS.add(str(reason))
+    except Exception:
+        pass
 
 
 def _wr_log(kind: str, key, result) -> None:
@@ -1464,10 +1492,14 @@ def _wr_log(kind: str, key, result) -> None:
         return
     try:
         with _WR_LOCK:
-            if _WR_ACTIVE and len(_WR_CALLS) < _WR_MAX_CALLS:
-                _WR_CALLS.append({"kind": kind, "key": key, "result": result})
+            if not _WR_ACTIVE:
+                return
+            if len(_WR_CALLS) >= _WR_MAX_CALLS:
+                _WR_INPUT_MISSING_REASONS.add("osrm_call_limit")
+                return
+            _WR_CALLS.append({"kind": kind, "key": key, "result": result})
     except Exception:
-        pass
+        _wr_mark_input_missing("osrm_recorder_error")
 
 
 _route_impl_k04 = route
@@ -1497,6 +1529,7 @@ def route(from_ll: tuple, to_ll: tuple, use_cache: bool = True) -> dict:  # noqa
     try:
         res = _route_impl_k04(from_ll, to_ll, use_cache=use_cache)
     except Exception:
+        _wr_mark_input_missing("osrm_route_exception")
         if traced:
             _record_stage_work_ns(
                 "osrm", time.perf_counter_ns() - started_ns,
@@ -1517,6 +1550,7 @@ def table(origins: list, destinations: list) -> list:  # noqa: F811 — świadom
     try:
         res = _table_impl_k04(origins, destinations)
     except Exception:
+        _wr_mark_input_missing("osrm_table_exception")
         if traced:
             _record_stage_work_ns(
                 "osrm", time.perf_counter_ns() - started_ns,

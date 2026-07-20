@@ -230,6 +230,15 @@ def _row(value, *, misses=0, error=None):
     }
 
 
+def _input_missing_row(*, misses=1):
+    return {
+        "key": "unused",
+        "status": G.INPUT_MISSING,
+        "input_reason": "osrm_replay_miss",
+        "misses": misses,
+    }
+
+
 def _stable_runs(before, after):
     return {
         f"{side}_{order}_seed{seed}": value
@@ -275,7 +284,19 @@ def test_evaluator_distinguishes_parity_diff_instability_and_error():
 
     errored = _stable_runs(a, a)
     errored["after_reverse_seed1"] = miss
-    assert G.evaluate_runs(keys, errored)["verdict"] == "ERROR"
+    missing = G.evaluate_runs(keys, errored)
+    assert missing["verdict"] == "INPUT_MISSING"
+    assert missing["cross_differences_n"] == 0
+    assert missing["difference_samples"] == []
+
+    explicitly_missing = G.evaluate_runs(
+        keys, _stable_runs(a, {"sha256:k": _input_missing_row(misses=0)}))
+    assert explicitly_missing["verdict"] == "INPUT_MISSING"
+    assert explicitly_missing["cross_differences_n"] == 0
+
+    worker_error = G.evaluate_runs(
+        keys, _stable_runs(a, {"sha256:k": _row(None, error="RuntimeError")}))
+    assert worker_error["verdict"] == "ERROR"
 
 
 def test_evaluator_requires_the_full_stability_matrix():
@@ -315,9 +336,28 @@ def test_disk_backed_evaluator_matches_all_verdict_classes(tmp_path):
         a,
         overrides={"after_reverse_seed1": miss},
     )
-    assert G.evaluate_artifacts(keys, errored, tmp_path / "errored.sqlite")[
-        "verdict"
-    ] == "ERROR"
+    missing = G.evaluate_artifacts(keys, errored, tmp_path / "errored.sqlite")
+    assert missing["verdict"] == "INPUT_MISSING"
+    assert missing["cross_differences_n"] == 0
+    assert missing["difference_samples"] == []
+
+    explicit = _artifact_matrix(
+        tmp_path / "input-missing",
+        a,
+        {"sha256:k": _input_missing_row(misses=0)},
+    )
+    explicit_report = G.evaluate_artifacts(
+        keys, explicit, tmp_path / "input-missing.sqlite")
+    assert explicit_report["verdict"] == "INPUT_MISSING"
+    assert explicit_report["cross_differences_n"] == 0
+
+    worker_error = _artifact_matrix(
+        tmp_path / "worker-error",
+        a,
+        {"sha256:k": _row(None, error="RuntimeError")},
+    )
+    assert G.evaluate_artifacts(
+        keys, worker_error, tmp_path / "worker-error.sqlite")["verdict"] == "ERROR"
 
 
 def test_diagnostic_artifact_loader_refuses_large_inputs(tmp_path):
@@ -349,8 +389,14 @@ def test_worker_imports_requested_tree_and_captures_full_result(tmp_path):
         encoding="utf-8",
     )
     corpus = tmp_path / "corpus.jsonl"
+    complete = _record("private-order-a", "2026-07-19T10:00:00+00:00") | {"winner": "7"}
+    osrm_missing = _record("private-order-b", "2026-07-19T10:01:00+00:00") | {
+        "winner": "8", "misses": 1}
+    capture_missing = _record("private-order-c", "2026-07-19T10:02:00+00:00") | {
+        "winner": "9", "capture_status": "INPUT_MISSING"}
     corpus.write_text(
-        json.dumps(_record("private-order", "2026-07-19T10:00:00+00:00") | {"winner": "7"}) + "\n",
+        "\n".join(json.dumps(row) for row in (
+            complete, osrm_missing, capture_missing)) + "\n",
         encoding="utf-8",
     )
     artifact = tmp_path / "artifact.jsonl"
@@ -366,14 +412,21 @@ def test_worker_imports_requested_tree_and_captures_full_result(tmp_path):
     )
     rows = G._load_artifact(artifact)
 
-    assert len(rows) == 1
-    row = next(iter(rows.values()))
+    assert len(rows) == 3
+    decision_rows = [row for row in rows.values() if "decision_b64" in row]
+    assert len(decision_rows) == 1
+    row = decision_rows[0]
     snapshot = json.loads(base64.b64decode(row["decision_b64"]))
     result = snapshot["$object"]
     best = result["best"]["$object"]
     assert best["plan"]["$object"]["sequence"] == ["A", "B"]
     assert best["score"] == 1.25
     assert "private-order" not in json.dumps({"keys": list(rows)})
+    input_rows = [row for row in rows.values() if row.get("status") == "INPUT_MISSING"]
+    assert len(input_rows) == 2
+    assert {row["input_reason"] for row in input_rows} == {
+        "osrm_replay_miss", "capture_marked_incomplete"}
+    assert all("decision_b64" not in row for row in input_rows)
 
 
 def _git(repo: Path, *args: str) -> str:

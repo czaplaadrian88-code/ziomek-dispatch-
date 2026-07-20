@@ -7,8 +7,13 @@ efekty K08 połknięte-nie-flushowane, world_record wyłączony, restauracja
 patchy po wyjściu). Prawdziwy replay end-to-end = bieg na korpusie (bramka
 ~09-10.07), nie unit.
 """
+import concurrent.futures as futures
+import json
+import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
+
+import pytest
 
 import dispatch_v2.common as C
 import dispatch_v2.dispatch_pipeline as dp
@@ -77,10 +82,26 @@ def _rec(flags=None):
 def test_replay_one_sandbox_i_restauracja(monkeypatch, tmp_path):
     rec = _rec()
     widziane = {}
+    original_executor = futures.ThreadPoolExecutor
+    original_ceiling = C.ORTOOLS_DET_WALL_CEILING_MS
+    main_thread = threading.get_ident()
+    thread_ids = []
+    assess_calls = []
 
     def fake_assess(order_event, fleet, meta, now):
+        from dispatch_v2 import tsp_solver
+
+        assess_calls.append(order_event["order_id"])
+        with futures.ThreadPoolExecutor(max_workers=8) as pool:
+            evaluated = list(pool.map(lambda cid: (cid, threading.get_ident()),
+                                      ["3", "1", "2"]))
+        thread_ids.extend(tid for _cid, tid in evaluated)
         widziane["flags_override"] = dict(C._FLAGS_SNAPSHOT_OVERRIDE or {})
         widziane["flag_przez_C"] = C.flag("ENABLE_X_TESTOWA", False)
+        widziane["det_flag"] = C.decision_flag("ENABLE_ORTOOLS_DET_TIME_LIMIT")
+        widziane["det_ceiling"] = C.ORTOOLS_DET_WALL_CEILING_MS
+        widziane["det_budget"] = tsp_solver._ortools_det_budget()
+        widziane["executor"] = futures.ThreadPoolExecutor
         widziane["osrm"] = osrm.route((53.13, 23.16), (53.11, 23.15))
         widziane["now"] = now
         widziane["fleet_cid"] = next(iter(fleet)); widziane["pos"] = fleet["123"].pos
@@ -96,9 +117,20 @@ def test_replay_one_sandbox_i_restauracja(monkeypatch, tmp_path):
     monkeypatch.setattr(dp.C, "DIFFICULT_CASE_LOG_PATH", str(p), raising=False)
 
     out, misses = wrep.replay_one(rec)
+    out_again, misses_again = wrep.replay_one(rec)
 
-    assert widziane["flags_override"] == {"ENABLE_X_TESTOWA": True}, "K05: flagi z nagrania"
+    assert widziane["flags_override"] == {
+        "ENABLE_X_TESTOWA": True,
+        "ENABLE_ORTOOLS_DET_TIME_LIMIT": True,
+    }, "K05: flagi z nagrania + wymuszony tryb deterministyczny replay"
     assert widziane["flag_przez_C"] is True, "C.flag czyta zamrożone nagranie"
+    assert widziane["det_flag"] is True
+    assert widziane["det_ceiling"] == wrep.REPLAY_ORTOOLS_DET_WALL_CEILING_MS
+    assert widziane["det_budget"] == (
+        C.ORTOOLS_DET_SOLUTION_LIMIT,
+        wrep.REPLAY_ORTOOLS_DET_WALL_CEILING_MS,
+    )
+    assert widziane["executor"] is wrep._SequentialExecutor
     assert widziane["osrm"] == {"duration_min": 7.0}, "OSRM z nagrania, zero sieci"
     assert widziane["now"] == datetime(2026, 7, 6, 15, 0, tzinfo=timezone.utc)
     assert widziane["pos"] == (53.13, 23.16)
@@ -107,17 +139,53 @@ def test_replay_one_sandbox_i_restauracja(monkeypatch, tmp_path):
     assert misses == 0
     assert out == {"verdict": "PROPOSE", "reason": "ok", "best_cid": "123",
                    "best_score": 42.0, "pool_feasible": 1, "pool_total": 1}
+    assert json.dumps(out, sort_keys=True, separators=(",", ":")).encode() == \
+        json.dumps(out_again, sort_keys=True, separators=(",", ":")).encode()
+    assert misses_again == 0
+    assert thread_ids and set(thread_ids) == {main_thread}, "solve'y muszą być sekwencyjne"
 
     # restauracja świata po replayu
     assert C._FLAGS_SNAPSHOT_OVERRIDE is None
+    assert C.ORTOOLS_DET_WALL_CEILING_MS == original_ceiling
+    assert futures.ThreadPoolExecutor is original_executor
     assert eb._ACTIVE is False and eb._Q == []
     assert osrm.route is not None and osrm.route.__name__ == "route", "oryginalny route przywrócony"
 
+    incomplete = {**_rec(), "capture_status": "INPUT_MISSING"}
+    assert wrep.validate_replay_record(incomplete) == "capture_input_missing"
+    with pytest.raises(wrep.IncompleteReplayInput, match="capture_input_missing"):
+        wrep.replay_one(incomplete)
+    assert assess_calls == ["486200", "486200"], "INPUT_MISSING nie może wejść do pipeline"
 
-def test_extract_z_zapisu_shadow():
+
+def test_extract_z_zapisu_shadow(tmp_path, monkeypatch, capsys):
     shadow = {"verdict": "PROPOSE", "reason": "ok",
               "best": {"courier_id": "123", "score": 42.0004},
               "pool_feasible_count": 3, "pool_total_count": 9}
     assert wrep._extract(shadow) == {"verdict": "PROPOSE", "reason": "ok",
                                      "best_cid": "123", "best_score": 42.0,
                                      "pool_feasible": 3, "pool_total": 9}
+
+    # OSRM miss zostaje w mianowniku jako INPUT_MISSING, bez sentinel-diffu.
+    record_file = tmp_path / "world.jsonl"
+    record_file.write_text(json.dumps(_rec()) + "\n", encoding="utf-8")
+    shadow_file = tmp_path / "shadow.jsonl"
+    shadow_file.write_text(json.dumps({
+        "order_id": "486200", "ts": "2026-07-06T15:00:05+00:00",
+        "verdict": "PROPOSE", "reason": "recorded",
+        "best": {"courier_id": "123", "score": 42.0},
+        "pool_feasible_count": 1, "pool_total_count": 1,
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setattr(wrep, "replay_one", lambda rec: ({
+        "verdict": "KOORD", "reason": "sentinel", "best_cid": None,
+        "best_score": None, "pool_feasible": 0, "pool_total": 1,
+    }, 1))
+
+    rc = wrep.main([
+        "--order-id", "486200", "--record-file", str(record_file),
+        "--shadow-file", str(shadow_file), "--json",
+    ])
+    report = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert report["status"] == "INPUT_MISSING"
+    assert report["roznice"] == {}

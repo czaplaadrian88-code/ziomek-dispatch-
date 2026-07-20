@@ -68,6 +68,8 @@ def test_on_nagrywa_flagi_flote_osrm(rec_dir, monkeypatch):
     assert len(files) == 1
     rec = json.loads(files[0].read_text().splitlines()[0])
     assert rec["schema"] == "wr1"  # v1 (2026-07-06): +live_inputs (K07/loadgov/pliki)
+    assert rec["capture_status"] == "COMPLETE"
+    assert rec["input_missing_reasons"] == []
     assert rec["order_id"] == "486001"
     assert rec["verdict"] == "PROPOSE"
     assert rec["flags"] == {"ENABLE_X": True, "PROG": 35} and rec["flags_sha1"]
@@ -95,10 +97,28 @@ def test_wyjatek_decyzji_propaguje_a_rekorder_sie_zamyka(rec_dir, monkeypatch):
     # rekorder nie może zostać aktywny po wyjątku
     assert osrm._WR_ACTIVE is False
 
+    # Wyjątek OSRM złapany przez silnik nie może udawać kompletnego capture.
+    monkeypatch.setattr(osrm, "_route_impl_k04",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("osrm down")))
+
+    def caught_osrm_failure():
+        try:
+            osrm.route((53.13, 23.16), (53.11, 23.15))
+        except OSError:
+            pass
+        return type("Result", (), {"verdict": "PROPOSE"})()
+
+    wr.around_assess(caught_osrm_failure, order_event={"order_id": "486002"},
+                     fleet_snapshot={}, now=datetime.now(timezone.utc))
+    record = json.loads(next(rec_dir.glob("world_record-*.jsonl")).read_text())
+    assert record["capture_status"] == "INPUT_MISSING"
+    assert record["input_missing_reasons"] == ["osrm_route_exception"]
+    assert record["osrm_calls"] == []
+
 
 # ---------- rekorder osrm: aktywacja/dezaktywacja ----------
 
-def test_rekorder_nieaktywny_nie_zbiera():
+def test_rekorder_nieaktywny_nie_zbiera(monkeypatch):
     osrm.world_record_stop()  # upewnij stan wyjściowy
     osrm._wr_log("route", ["x"], {"d": 1})
     assert osrm.world_record_stop() == []
@@ -106,6 +126,15 @@ def test_rekorder_nieaktywny_nie_zbiera():
     osrm._wr_log("route", ["x"], {"d": 1})
     calls = osrm.world_record_stop()
     assert len(calls) == 1 and calls[0]["kind"] == "route"
+
+    # Przepelnienie nie ucina capture po cichu.
+    monkeypatch.setattr(osrm, "_WR_MAX_CALLS", 1)
+    osrm.world_record_start()
+    osrm._wr_log("route", ["first"], {"duration_min": 1})
+    osrm._wr_log("route", ["lost"], {"duration_min": 2})
+    calls, reasons = osrm.world_record_stop_with_status()
+    assert len(calls) == 1
+    assert reasons == ["osrm_call_limit"]
 
 
 def test_wrappery_route_table_naprawde_naglywaja(monkeypatch):

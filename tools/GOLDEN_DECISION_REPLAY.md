@@ -48,6 +48,11 @@ revision runs the complete four-case stability matrix (eight passes total):
 3. chronological order, `PYTHONHASHSEED=1`;
 4. reverse order, `PYTHONHASHSEED=1`.
 
+Inside every record replay, `world_replay` additionally forces the existing
+OR-Tools deterministic solution budget, a 30 s offline wall-clock ceiling, and
+sequential candidate evaluation. These overrides live only in the replay
+process and are restored after the record.
+
 The multi-gigabyte source corpus is never held as parsed Python objects. It is
 canonicalized to a temporary JSONL stream one record at a time; workers also
 decode one record at a time. The reverse pass stores only byte offsets of lines.
@@ -67,8 +72,12 @@ other self-instability. The verdict is:
   identical;
 - `DIFFS`: both revisions are stable, but at least one decision differs;
 - `UNSTABLE`: at least one revision does not reproduce itself;
-- `ERROR`: worker/import/artifact error, replay exception, OSRM miss, or record
-  set mismatch;
+- `INPUT_MISSING`: capture was marked incomplete or replay requested an OSRM
+  call absent from the recording. The record stays in the denominator, but its
+  sentinel result is never compared as a decision and therefore cannot create
+  a false diff;
+- `ERROR`: worker/import/artifact error, other replay exception, or record set
+  mismatch;
 - `EMPTY_CORPUS`: no certifiable record.
 
 Only `PARITY` exits with code `0`. No command can bless a changed baseline.
@@ -118,6 +127,7 @@ cross_differences_n=0
 before_unstable_n=0
 after_unstable_n=0
 errors={}
+input_missing_records={}
 osrm_miss_records={}
 ```
 

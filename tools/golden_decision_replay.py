@@ -9,8 +9,9 @@ in an isolated child process, and compares canonical UTF-8 decision bytes.
 
 Each side is evaluated over the full forward/reverse x hash-seed 0/1 matrix.  A
 side which changes with record order/hash seed is ``UNSTABLE`` and cannot
-certify a refactor.  Empty or corrupt corpora, replay exceptions, OSRM misses,
-unsupported values, corrupt artifacts, and unequal record sets fail closed.
+certify a refactor.  OSRM/capture gaps become ``INPUT_MISSING`` and are never
+compared as decisions; empty or corrupt corpora, replay exceptions, unsupported
+values, corrupt artifacts, and unequal record sets also fail closed.
 The final report is aggregate-only; raw order/courier identifiers and decision
 values remain in ephemeral artifacts and are never printed.
 
@@ -45,8 +46,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-SCHEMA = "golden_decision_replay.v1"
-WORKER_SCHEMA = "golden_decision_replay.worker.v1"
+SCHEMA = "golden_decision_replay.v2"
+WORKER_SCHEMA = "golden_decision_replay.worker.v2"
+INPUT_MISSING = "INPUT_MISSING"
 DEFAULT_RECORD_DIR = "/root/.openclaw/workspace/dispatch_state/world_record"
 _WR_SCHEMA_RE = re.compile(r"^wr([1-9][0-9]*)$")
 
@@ -488,17 +490,44 @@ def _worker_run(code_tree: str, corpus_file: str, artifact: str, order: str) -> 
                 with _suppress_transitive_output():
                     for record in _iter_worker_records(Path(corpus_file), order):
                         key = record_key(record)
-                        try:
-                            snapshot, misses = replay.replay_one(record)
-                            decision = _json_bytes(snapshot)
+                        if record.get("capture_status") == INPUT_MISSING:
                             row = {
                                 "key": key,
-                                "decision_b64": base64.b64encode(decision).decode("ascii"),
-                                "decision_sha256": hashlib.sha256(decision).hexdigest(),
-                                "misses": int(misses),
+                                "status": INPUT_MISSING,
+                                "input_reason": "capture_marked_incomplete",
+                                "misses": 0,
                             }
+                            handle.write(json.dumps(
+                                row, sort_keys=True, separators=(",", ":")) + "\n")
+                            continue
+                        try:
+                            snapshot, misses = replay.replay_one(record)
+                            if misses:
+                                row = {
+                                    "key": key,
+                                    "status": INPUT_MISSING,
+                                    "input_reason": "osrm_replay_miss",
+                                    "misses": int(misses),
+                                }
+                            else:
+                                decision = _json_bytes(snapshot)
+                                row = {
+                                    "key": key,
+                                    "decision_b64": base64.b64encode(decision).decode("ascii"),
+                                    "decision_sha256": hashlib.sha256(decision).hexdigest(),
+                                    "misses": 0,
+                                }
                         except Exception as exc:  # no message: it may contain identifiers
-                            row = {"key": key, "error_type": type(exc).__name__}
+                            incomplete_type = getattr(replay, "IncompleteReplayInput", None)
+                            if incomplete_type is not None and isinstance(exc, incomplete_type):
+                                row = {
+                                    "key": key,
+                                    "status": INPUT_MISSING,
+                                    "input_reason": "replay_input_incomplete",
+                                    "misses": 0,
+                                }
+                            else:
+                                row = {"key": key, "error_type": type(exc).__name__}
                         handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -572,7 +601,18 @@ def _iter_artifact(path: Path):
             if not isinstance(key, str) or key in seen:
                 raise HarnessError("invalid or duplicate worker record key")
             seen.add(key)
-            if "decision_b64" in row:
+            if row.get("status") == INPUT_MISSING:
+                if "decision_b64" in row or "error_type" in row:
+                    raise HarnessError("ambiguous input-missing worker row")
+                misses = row.get("misses", 0)
+                if isinstance(misses, bool) or not isinstance(misses, int) or misses < 0:
+                    raise HarnessError("invalid input-missing miss count")
+                if not isinstance(row.get("input_reason"), str):
+                    raise HarnessError("invalid input-missing reason")
+                raw = None
+            elif "status" in row:
+                raise HarnessError("unknown worker row status")
+            elif "decision_b64" in row:
                 try:
                     raw = base64.b64decode(row["decision_b64"], validate=True)
                 except Exception as exc:
@@ -604,6 +644,8 @@ def _load_artifact(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _row_diff(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if _row_input_missing(left) or _row_input_missing(right):
+        return False
     if left.get("error_type") != right.get("error_type"):
         return True
     if "error_type" in left or "error_type" in right:
@@ -612,6 +654,11 @@ def _row_diff(left: dict[str, Any], right: dict[str, Any]) -> bool:
         left.get("decision_b64") != right.get("decision_b64")
         or left.get("misses") != right.get("misses")
     )
+
+
+def _row_input_missing(row: dict[str, Any]) -> bool:
+    """Nowy status oraz legacy misses są jednym fail-closed kontraktem."""
+    return row.get("status") == INPUT_MISSING or int(row.get("misses") or 0) != 0
 
 
 def _diff_paths(left: Any, right: Any, path: str = "$", limit: int = 24) -> list[str]:
@@ -724,11 +771,16 @@ def evaluate_runs(
         for name, rows in runs.items()
     }
     errors = {name: value for name, value in errors.items() if value}
-    misses = {
+    input_missing = {
+        name: sum(1 for row in rows.values() if _row_input_missing(row))
+        for name, rows in runs.items()
+    }
+    input_missing = {name: value for name, value in input_missing.items() if value}
+    osrm_misses = {
         name: sum(1 for row in rows.values() if int(row.get("misses") or 0) != 0)
         for name, rows in runs.items()
     }
-    misses = {name: value for name, value in misses.items() if value}
+    osrm_misses = {name: value for name, value in osrm_misses.items() if value}
 
     def changed_keys(left: dict[str, dict[str, Any]], right: dict[str, dict[str, Any]]) -> list[str]:
         return sorted(
@@ -749,8 +801,10 @@ def evaluate_runs(
     after_baseline = runs[_run_name("after", "forward", 0)]
     cross_diffs = changed_keys(before_baseline, after_baseline)
 
-    if key_mismatches or errors or misses:
+    if key_mismatches or errors:
         verdict = "ERROR"
+    elif input_missing:
+        verdict = INPUT_MISSING
     elif before_unstable or after_unstable:
         verdict = "UNSTABLE"
     elif cross_diffs:
@@ -772,7 +826,8 @@ def evaluate_runs(
         "after_unstable_n": len(after_unstable),
         "key_mismatches": key_mismatches,
         "errors": errors,
-        "osrm_miss_records": misses,
+        "input_missing_records": input_missing,
+        "osrm_miss_records": osrm_misses,
         "difference_samples": samples,
     }
 
@@ -780,19 +835,22 @@ def evaluate_runs(
 def _stored_row(
     row: dict[str, Any],
     decision: Optional[bytes],
-) -> tuple[Optional[bytes], Optional[str], int, Optional[str]]:
+) -> tuple[Optional[bytes], Optional[str], int, Optional[str], Optional[str]]:
     return (
         decision,
         row.get("decision_sha256"),
         int(row.get("misses") or 0),
         row.get("error_type"),
+        row.get("status"),
     )
 
 
 def _stored_row_diff(
-    left: tuple[Optional[bytes], Optional[str], int, Optional[str]],
-    right: tuple[Optional[bytes], Optional[str], int, Optional[str]],
+    left: tuple[Optional[bytes], Optional[str], int, Optional[str], Optional[str]],
+    right: tuple[Optional[bytes], Optional[str], int, Optional[str], Optional[str]],
 ) -> bool:
+    if _stored_row_input_missing(left) or _stored_row_input_missing(right):
+        return False
     if left[3] != right[3]:
         return True
     if left[3] is not None or right[3] is not None:
@@ -800,10 +858,16 @@ def _stored_row_diff(
     return left[0] != right[0] or left[2] != right[2]
 
 
+def _stored_row_input_missing(
+    row: tuple[Optional[bytes], Optional[str], int, Optional[str], Optional[str]],
+) -> bool:
+    return row[4] == INPUT_MISSING or row[2] != 0
+
+
 def _sample_stored_diff(
     key: str,
-    left: tuple[Optional[bytes], Optional[str], int, Optional[str]],
-    right: tuple[Optional[bytes], Optional[str], int, Optional[str]],
+    left: tuple[Optional[bytes], Optional[str], int, Optional[str], Optional[str]],
+    right: tuple[Optional[bytes], Optional[str], int, Optional[str], Optional[str]],
 ) -> dict[str, Any]:
     sample = {
         "record_key": key,
@@ -836,14 +900,16 @@ def evaluate_artifacts(
 
     key_mismatches: dict[str, dict[str, int]] = {}
     errors: dict[str, dict[str, int]] = {}
-    misses: dict[str, int] = {}
+    input_missing: dict[str, int] = {}
+    osrm_misses: dict[str, int] = {}
     unstable: dict[str, set[str]] = {"before": set(), "after": set()}
 
     def finish_run(
         name: str,
         seen: set[str],
         error_counts: Counter[str],
-        miss_count: int,
+        input_missing_count: int,
+        osrm_miss_count: int,
     ) -> None:
         if seen != expected_keys:
             key_mismatches[name] = {
@@ -852,8 +918,10 @@ def evaluate_artifacts(
             }
         if error_counts:
             errors[name] = dict(sorted(error_counts.items()))
-        if miss_count:
-            misses[name] = miss_count
+        if input_missing_count:
+            input_missing[name] = input_missing_count
+        if osrm_miss_count:
+            osrm_misses[name] = osrm_miss_count
 
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA journal_mode=OFF")
@@ -867,6 +935,7 @@ def evaluate_artifacts(
                 decision_sha256 TEXT,
                 misses INTEGER NOT NULL,
                 error_type TEXT,
+                status TEXT,
                 PRIMARY KEY (side, record_key)
             )
             """
@@ -876,57 +945,65 @@ def evaluate_artifacts(
             baseline_name = _run_name(side, "forward", 0)
             seen: set[str] = set()
             error_counts: Counter[str] = Counter()
-            miss_count = 0
+            input_missing_count = 0
+            osrm_miss_count = 0
             with connection:
                 for key, row, decision in _iter_artifact(artifacts[baseline_name]):
                     seen.add(key)
                     stored = _stored_row(row, decision)
-                    if stored[3] is not None:
+                    if _stored_row_input_missing(stored):
+                        input_missing_count += 1
+                        if stored[2] != 0:
+                            osrm_miss_count += 1
+                    elif stored[3] is not None:
                         error_counts[stored[3]] += 1
-                    elif stored[2] != 0:
-                        miss_count += 1
                     connection.execute(
-                        "INSERT INTO baselines VALUES (?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO baselines VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (side, key, *stored),
                     )
-            finish_run(baseline_name, seen, error_counts, miss_count)
+            finish_run(baseline_name, seen, error_counts,
+                       input_missing_count, osrm_miss_count)
 
             for order, seed in _STABILITY_CASES[1:]:
                 name = _run_name(side, order, seed)
                 seen = set()
                 error_counts = Counter()
-                miss_count = 0
+                input_missing_count = 0
+                osrm_miss_count = 0
                 for key, row, decision in _iter_artifact(artifacts[name]):
                     seen.add(key)
                     current = _stored_row(row, decision)
-                    if current[3] is not None:
+                    if _stored_row_input_missing(current):
+                        input_missing_count += 1
+                        if current[2] != 0:
+                            osrm_miss_count += 1
+                    elif current[3] is not None:
                         error_counts[current[3]] += 1
-                    elif current[2] != 0:
-                        miss_count += 1
                     baseline = connection.execute(
                         """
-                        SELECT decision, decision_sha256, misses, error_type
+                        SELECT decision, decision_sha256, misses, error_type, status
                         FROM baselines WHERE side = ? AND record_key = ?
                         """,
                         (side, key),
                     ).fetchone()
                     if baseline is not None and _stored_row_diff(baseline, current):
                         unstable[side].add(key)
-                finish_run(name, seen, error_counts, miss_count)
+                finish_run(name, seen, error_counts,
+                           input_missing_count, osrm_miss_count)
 
         cross_diffs: list[str] = []
         samples: list[dict[str, Any]] = []
         for key in sorted(expected_keys):
             before = connection.execute(
                 """
-                SELECT decision, decision_sha256, misses, error_type
+                SELECT decision, decision_sha256, misses, error_type, status
                 FROM baselines WHERE side = 'before' AND record_key = ?
                 """,
                 (key,),
             ).fetchone()
             after = connection.execute(
                 """
-                SELECT decision, decision_sha256, misses, error_type
+                SELECT decision, decision_sha256, misses, error_type, status
                 FROM baselines WHERE side = 'after' AND record_key = ?
                 """,
                 (key,),
@@ -937,8 +1014,10 @@ def evaluate_artifacts(
             if len(samples) < 12:
                 samples.append(_sample_stored_diff(key, before, after))
 
-    if key_mismatches or errors or misses:
+    if key_mismatches or errors:
         verdict = "ERROR"
+    elif input_missing:
+        verdict = INPUT_MISSING
     elif unstable["before"] or unstable["after"]:
         verdict = "UNSTABLE"
     elif cross_diffs:
@@ -956,7 +1035,8 @@ def evaluate_artifacts(
         "after_unstable_n": len(unstable["after"]),
         "key_mismatches": key_mismatches,
         "errors": errors,
-        "osrm_miss_records": misses,
+        "input_missing_records": input_missing,
+        "osrm_miss_records": osrm_misses,
         "difference_samples": samples,
     }
 

@@ -28,17 +28,19 @@ Exit 0 = pełna zgodność; 1 = różnice; 2 = błąd/brak danych/missy OSRM.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as _cf
 import dataclasses
 import json
 import os
 import sys
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 
 os.environ.setdefault("DISPATCH_UNDER_PYTEST", "1")  # wyciszenie file-logów silnika
 
-SCRIPTS = "/root/.openclaw/workspace/scripts"
+SCRIPTS = os.environ.get("ZIOMEK_SCRIPTS_ROOT") or "/root/.openclaw/workspace/scripts"
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
@@ -64,6 +66,36 @@ REQUIRED_LIVE_INPUT_KEYS = (
     "k07",
     "courier_last_pos",
 )
+INPUT_MISSING = "INPUT_MISSING"
+REPLAY_ORTOOLS_DET_WALL_CEILING_MS = 30_000
+_REPLAY_MODE_LOCK = threading.RLock()
+
+
+class _SequentialExecutor:
+    """Minimalny drop-in ThreadPoolExecutor dla deterministycznego replayu."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def map(self, fn, *iterables, timeout=None, chunksize=1):
+        return map(fn, *iterables)
+
+    def submit(self, fn, *args, **kwargs):
+        future = _cf.Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except BaseException as exc:
+            future.set_exception(exc)
+        return future
+
+    def shutdown(self, wait=True, *, cancel_futures=False):
+        pass
 
 
 class IncompleteReplayInput(ValueError):
@@ -101,6 +133,11 @@ def validate_replay_record(rec: dict) -> str | None:
     """Wspolny, stabilny kontrakt outer wr1 + zamrozonych live inputs."""
     if not isinstance(rec, dict):
         return "invalid_record"
+    capture_status = rec.get("capture_status")
+    if capture_status == INPUT_MISSING:
+        return "capture_input_missing"
+    if capture_status not in (None, "COMPLETE"):
+        return "invalid_capture_status"
     order_id = rec.get("order_id")
     if order_id is None or not str(order_id).strip():
         return "missing_order_id"
@@ -344,7 +381,7 @@ def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
     return k07, loadgov
 
 
-def replay_one(rec: dict) -> tuple[dict, int]:
+def _replay_one_locked(rec: dict) -> tuple[dict, int]:
     """Zwraca (extract z replayu, osrm_misses). Pełny sandbox — patrz moduł."""
     invalid_reason = validate_replay_record(rec)
     if invalid_reason:
@@ -368,7 +405,18 @@ def replay_one(rec: dict) -> tuple[dict, int]:
 
     _tmp = tempfile.TemporaryDirectory(prefix="wr_replay_")
     try:
-        _patch(C, "_FLAGS_SNAPSHOT_OVERRIDE", dict(rec.get("flags") or {}))  # K05
+        replay_flags = dict(rec.get("flags") or {})
+        # REPLAY jest determinism-first: istniejący solverowy kontrakt ustawia
+        # stały solution_limit, a luźny wall ceiling pozostaje wyłącznie
+        # bezpiecznikiem. Snapshot wejściowy nie może tego trybu wyłączyć.
+        replay_flags["ENABLE_ORTOOLS_DET_TIME_LIMIT"] = True
+        _patch(C, "_FLAGS_SNAPSHOT_OVERRIDE", replay_flags)  # K05 + replay override
+        _patch(C, "ORTOOLS_DET_WALL_CEILING_MS",
+               REPLAY_ORTOOLS_DET_WALL_CEILING_MS)
+        # OR-Tools dzieli stan procesowy między solve'ami. Każde użycie puli
+        # wewnątrz assess_order wykonujemy synchronicznie i restaurujemy po
+        # rekordzie; lock chroni globalny patch przy równoległych callerach API.
+        _patch(_cf, "ThreadPoolExecutor", _SequentialExecutor)
         _patch(osrm_client, "route", osrm.route)
         _patch(osrm_client, "table", osrm.table)
         # v1: serwuj żywe wejścia (reliability/plans/calib z nagrania; loadgov/k07 niżej).
@@ -403,6 +451,12 @@ def replay_one(rec: dict) -> tuple[dict, int]:
             pass
 
 
+def replay_one(rec: dict) -> tuple[dict, int]:
+    """Odtwórz rekord w procesowo izolowanym, deterministycznym trybie REPLAY."""
+    with _REPLAY_MODE_LOCK:
+        return _replay_one_locked(rec)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--order-id", required=True)
@@ -420,7 +474,8 @@ def main(argv=None) -> int:
 
     invalid_reason = validate_replay_record(rec)
     if invalid_reason:
-        print(f"INPUT_MISS reason={invalid_reason}")
+        label = INPUT_MISSING if invalid_reason == "capture_input_missing" else "INPUT_MISS"
+        print(f"{label} reason={invalid_reason}")
         return 2
 
     replayed, misses = replay_one(rec)
@@ -428,22 +483,29 @@ def main(argv=None) -> int:
     recorded = _extract(shadow) if shadow else None
 
     diffs = {}
-    if recorded:
+    if recorded and not misses:
         diffs = {k: {"replay": replayed[k], "zapis": recorded[k]}
                  for k in replayed if replayed[k] != recorded[k]}
 
-    out = {"order_id": a.order_id, "osrm_misses": misses,
+    out = {"order_id": a.order_id,
+           "status": INPUT_MISSING if misses else "COMPLETE",
+           "osrm_misses": misses,
            "replay": replayed, "zapis": recorded, "roznice": diffs,
            "verdict_rec": rec.get("verdict")}
     if a.json:
         print(json.dumps(out, ensure_ascii=False, indent=1, default=str))
     else:
-        print(f"order {a.order_id}: osrm_misses={misses}")
+        status = INPUT_MISSING if misses else "COMPLETE"
+        print(f"order {a.order_id}: status={status} osrm_misses={misses}")
         print(f"  replay: {replayed}")
         print(f"  zapis : {recorded}")
         if diffs:
             print(f"  RÓŻNICE: {diffs}")
-    if recorded is None or misses:
+    if misses:
+        if not a.json:
+            print("INPUT_MISSING reason=recorded_osrm_call_missing")
+        return 2
+    if recorded is None:
         return 2
     return 0 if not diffs else 1
 
