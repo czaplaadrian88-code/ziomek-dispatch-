@@ -77,6 +77,14 @@ def test_parity_a_b_same_key_set():
     serializery daje ten sam podzbiór kluczy metrics (poza deny-listą)."""
     metrics = dict(_AUDIT_VANISHED_KEYS)
     metrics["parity_probe_key"] = 1.23
+    # ROUTE-ORDER would-apply: producent dopina te pola po selekcji; wspólny
+    # deny-list helper musi dostarczyć je zarówno w alternatives (A), jak i best (B).
+    metrics.update({
+        "route_order_would_apply": True,
+        "route_order_manual_seq": "B>A",
+        "route_order_engine_seq": "A>B",
+        "route_order_divergence": True,
+    })
     out_a = SD._serialize_candidate(_MockCand(metrics=dict(metrics)))
     out_b = SD._serialize_result(_result_with_best(metrics), "evt-par", 1.0)["best"]
     expected = set(metrics) - set(SD._METRICS_EXCLUDE)
@@ -84,6 +92,12 @@ def test_parity_a_b_same_key_set():
     missing_b = sorted(expected - set(out_b))
     assert not missing_a and not missing_b, (
         f"parytet A↔B złamany — brak w A: {missing_a}, brak w B: {missing_b}")
+    for key in (
+        "route_order_would_apply", "route_order_manual_seq",
+        "route_order_engine_seq", "route_order_divergence",
+    ):
+        assert out_a[key] == metrics[key]
+        assert out_b[key] == metrics[key]
 
 
 def test_full_record_location_b_json_safe():

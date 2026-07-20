@@ -87,6 +87,26 @@ SET_AT_FUTURE_SKEW_MIN = 2.0
 _DOC_CACHE: Dict[str, Any] = {"path": None, "sig": None, "doc": None,
                               "err": None, "parses": 0}
 
+# Ledger `shadow_decisions.jsonl` ma pozostać lekki: sekwencje są potrzebne do
+# audytu kierunku rozbieżności, ale nie jako drugi pełny payload planu. Pełne id
+# nadal służą do porównania; skrót dotyczy wyłącznie wartości telemetrycznej.
+_SHADOW_SEQ_MAX_ITEMS = 12
+_SHADOW_SEQ_ID_MAX_CHARS = 16
+
+
+def _short_seq(order_ids: List[str]) -> str:
+    """Kompaktowy, deterministyczny zapis kolejności do ledgera.
+
+    Worki są dziś mniejsze niż limit, cap chroni jednak przyszły schema drift.
+    `route_order_divergence` jest liczone na PEŁNYCH listach, nie na tym skrócie.
+    """
+    seq = [str(x) for x in order_ids]
+    shown = [x[:_SHADOW_SEQ_ID_MAX_CHARS]
+             for x in seq[:_SHADOW_SEQ_MAX_ITEMS]]
+    if len(seq) > _SHADOW_SEQ_MAX_ITEMS:
+        shown.append(f"+{len(seq) - _SHADOW_SEQ_MAX_ITEMS}")
+    return ">".join(shown)
+
 
 def _r27_alert_threshold_min() -> float:
     """Próg ALERT dla spóźnienia vs committed — wspólny z bramką BUG C
@@ -285,7 +305,9 @@ def _build_pinned(stops: List[dict], order_ids: List[str],
 
 def pin_stops(cid: str, stops: List[dict], oids: List[str],
               orders_state: Dict[str, Any],
-              now: Optional[datetime] = None
+              now: Optional[datetime] = None, *,
+              shadow_metrics: Optional[Dict[str, Any]] = None,
+              emit_events: bool = True,
               ) -> Tuple[List[dict], Optional[Dict[str, Any]]]:
     """Nałóż (gdy flaga ON i override ważny) sekwencję operatora na stops.
 
@@ -296,6 +318,12 @@ def pin_stops(cid: str, stops: List[dict], oids: List[str],
     cid = str(cid)
     if now is None:
         now = datetime.now(timezone.utc)
+
+    def _emit_here(kind: str, *, dedup_key: Optional[tuple] = None,
+                   **fields: Any) -> None:
+        if emit_events:
+            _emit(kind, cid, now, dedup_key=dedup_key, **fields)
+
     try:
         # Flaga PRZED jakimkolwiek I/O pliku (koszt OFF — Sol pkt 6; load_flags
         # ma własny cache mtime/TTL). Odczyt pliku niżej: brak = 1 stat, obecny
@@ -307,8 +335,8 @@ def pin_stops(cid: str, stops: List[dict], oids: List[str],
             return stops, None  # brak pliku/wpisu — zero szumu, koszt 1 stat
         base = {"stops": len(stops), "flag_on": flag_on}
         if err == "file_corrupt":
-            _emit("rejected", cid, now, dedup_key=("file_corrupt",),
-                  reason="file_corrupt", **base)
+            _emit_here("rejected", dedup_key=("file_corrupt",),
+                       reason="file_corrupt", **base)
             return stops, None
         set_at = _parse_iso((entry or {}).get("set_at"))
         set_by = (entry or {}).get("set_by")
@@ -316,60 +344,75 @@ def pin_stops(cid: str, stops: List[dict], oids: List[str],
         order_ids = (entry or {}).get("order_ids")
         if err == "malformed" or set_at is None or not isinstance(order_ids, list) \
                 or not all(isinstance(x, str) and x for x in order_ids):
-            _emit("rejected", cid, now,
-                  dedup_key=("malformed", str((entry or {}).get("set_at"))),
-                  reason="malformed", **base)
+            _emit_here("rejected",
+                       dedup_key=("malformed", str((entry or {}).get("set_at"))),
+                       reason="malformed", **base)
             return stops, None
         if not _iso_has_offset((entry or {}).get("set_at")):
             # kontrakt: ISO z jawnym offsetem — naiwny czas = nie zgadujemy strefy
-            _emit("rejected", cid, now,
-                  dedup_key=("invalid_set_at_naive", entry.get("set_at")),
-                  reason="invalid_set_at", **base)
+            _emit_here("rejected",
+                       dedup_key=("invalid_set_at_naive", entry.get("set_at")),
+                       reason="invalid_set_at", **base)
             return stops, None
         if (set_at - now) > timedelta(minutes=SET_AT_FUTURE_SKEW_MIN):
             # set_at z przyszłości poza skew zegarów = wpis niewiarygodny
-            _emit("rejected", cid, now,
-                  dedup_key=("invalid_set_at", entry.get("set_at")),
-                  reason="invalid_set_at", **base)
+            _emit_here("rejected",
+                       dedup_key=("invalid_set_at", entry.get("set_at")),
+                       reason="invalid_set_at", **base)
             return stops, None
         ttl = _ttl_min(entry)
         age_min = (now - set_at).total_seconds() / 60.0
         if age_min > ttl:
-            _emit("expired", cid, now, dedup_key=("expired", entry.get("set_at")),
-                  ttl_min=ttl, age_min=round(age_min, 1), **base)
+            _emit_here("expired", dedup_key=("expired", entry.get("set_at")),
+                       ttl_min=ttl, age_min=round(age_min, 1), **base)
             return stops, None
         order_ids = [str(x) for x in order_ids]
         if len(set(order_ids)) != len(order_ids):
-            _emit("rejected", cid, now,
-                  dedup_key=("duplicate_ids", entry.get("set_at")),
-                  reason="duplicate_ids", **base)
+            _emit_here("rejected",
+                       dedup_key=("duplicate_ids", entry.get("set_at")),
+                       reason="duplicate_ids", **base)
             return stops, None
         if set(order_ids) != {str(o) for o in oids}:
-            _emit("rejected", cid, now,
-                  dedup_key=("set_mismatch", entry.get("set_at"),
-                             tuple(sorted(str(o) for o in oids))),
-                  reason="set_mismatch",
-                  override_ids=sorted(order_ids),
-                  active_ids=sorted(str(o) for o in oids), **base)
+            _emit_here("rejected",
+                       dedup_key=("set_mismatch", entry.get("set_at"),
+                                  tuple(sorted(str(o) for o in oids))),
+                       reason="set_mismatch",
+                       override_ids=sorted(order_ids),
+                       active_ids=sorted(str(o) for o in oids), **base)
             return stops, None
         stop_oids = {str(s.get("order_id")) for s in stops}
         if not stop_oids <= set(order_ids):
-            _emit("rejected", cid, now,
-                  dedup_key=("foreign_stops", entry.get("set_at")),
-                  reason="foreign_stops", **base)
+            _emit_here("rejected",
+                       dedup_key=("foreign_stops", entry.get("set_at")),
+                       reason="foreign_stops", **base)
             return stops, None
         # v3: dry-run KONSTRUKCJI przed werdyktem flagi — strukturalnie
         # niemożliwy override nie może fałszywie przejść cienia would_apply.
         pinned = _build_pinned(stops, order_ids, orders_state)
         if pinned is None:
-            _emit("rejected", cid, now,
-                  dedup_key=("structure_fail", entry.get("set_at")),
-                  reason="structure_fail", **base)
+            _emit_here("rejected",
+                       dedup_key=("structure_fail", entry.get("set_at")),
+                       reason="structure_fail", **base)
             return stops, None
+
+        # Compute-always shadow dla KANONICZNEGO ledgera decyzji. Caller silnika
+        # przekazuje dict tylko w ścieżce obserwacyjnej; plan_recheck używa tego
+        # samego walidatora/konstruktora bez zmiany starego kontraktu zwrotnego.
+        if shadow_metrics is not None:
+            engine_order_ids = [
+                str(s.get("order_id")) for s in stops
+                if s.get("type") == "dropoff"
+            ]
+            shadow_metrics.update({
+                "route_order_would_apply": True,
+                "route_order_manual_seq": _short_seq(order_ids),
+                "route_order_engine_seq": _short_seq(engine_order_ids),
+                "route_order_divergence": engine_order_ids != order_ids,
+            })
         if not flag_on:
             # Cień PRZED flipem: wpis przeszedł PEŁNĄ walidację + konstrukcję.
-            _emit("rejected", cid, now, dedup_key=("flag_off", entry.get("set_at")),
-                  reason="flag_off", would_apply=True, **base)
+            _emit_here("rejected", dedup_key=("flag_off", entry.get("set_at")),
+                       reason="flag_off", would_apply=True, **base)
             return stops, None
         changed = ([(s.get("type"), str(s.get("order_id"))) for s in pinned]
                    != [(s.get("type"), str(s.get("order_id"))) for s in stops])
@@ -378,6 +421,34 @@ def pin_stops(cid: str, stops: List[dict], oids: List[str],
         return pinned, ctx
     except Exception:
         return stops, None  # fail-open zawsze
+
+
+def shadow_metrics_for_route(cid: str, active_order_ids: List[str],
+                             engine_order_ids: List[str],
+                             now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Policz route-order would-apply bez zmiany planu i bez osobnego eventu.
+
+    Syntetyczne dropoff-only stopy zachowują dokładnie order-level sekwencję
+    kandydata. `pin_stops` wykonuje TEN SAM odczyt, TTL, set/permutation i
+    structural dry-run co writerzy plan_recheck. Zwracamy pusty dict przy braku
+    wpisu albo dowolnym odrzuceniu — ledger nie dostaje mylących pół-danych.
+    """
+    try:
+        active = [str(x) for x in active_order_ids]
+        engine = [str(x) for x in engine_order_ids]
+        if not active or len(engine) != len(active) or set(engine) != set(active):
+            return {}
+        probe_stops = [
+            {"order_id": oid, "type": "dropoff"} for oid in engine
+        ]
+        metrics: Dict[str, Any] = {}
+        pin_stops(
+            str(cid), probe_stops, active, {}, now,
+            shadow_metrics=metrics, emit_events=False,
+        )
+        return metrics
+    except Exception:
+        return {}
 
 
 def emit_applied(cid: str, ctx: Dict[str, Any], final_stops: List[dict],

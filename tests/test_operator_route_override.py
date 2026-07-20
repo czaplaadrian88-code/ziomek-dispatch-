@@ -11,10 +11,12 @@ Harness jak test_recanon_on_write: OSRM zamockowany (haversine ~30 km/h),
 ścieżki plików izolowane do tmp — zero żywego stanu.
 """
 import json
+import inspect
 import math
 import os
 import pathlib
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +26,8 @@ from dispatch_v2 import operator_route_override as O
 from dispatch_v2 import osrm_client
 from dispatch_v2 import route_order
 from dispatch_v2 import common as C
+from dispatch_v2 import dispatch_pipeline as D
+from dispatch_v2 import shadow_dispatcher as SD
 
 
 def _hav_m(a, b):
@@ -121,6 +125,29 @@ def _events(tmp_path):
     return [json.loads(ln) for ln in p.read_text().splitlines() if ln.strip()]
 
 
+def _shadow_candidate(engine_sequence=("A", "B", "NEW")):
+    """Minimalny kandydat: plan zawiera też NOWE zlecenie, manual dotyczy worka A+B."""
+    return SimpleNamespace(
+        courier_id=CID,
+        score=91.25,
+        feasibility_verdict="MAYBE",
+        feasibility_reason="ok",
+        plan=SimpleNamespace(
+            sequence=list(engine_sequence),
+            total_duration_min=12.0,
+            strategy="test",
+            sla_violations=0,
+            osrm_fallback_used=False,
+            per_order_delivery_times={},
+            predicted_delivered_at={},
+            pickup_at={},
+        ),
+        metrics={"bag_context": [{"order_id": "A"}, {"order_id": "B"}]},
+        name="Test",
+        best_effort=False,
+    )
+
+
 # ── pin kolejności: kanon = sekwencja operatora ──────────────────────────────
 
 def test_pin_applies_operator_sequence(env, monkeypatch):
@@ -165,6 +192,43 @@ def test_pin_on_vs_off_differs(env, monkeypatch):
     evs = _events(env)
     rej = [e for e in evs if e["event"] == "operator_route_override_rejected"]
     assert rej and rej[-1]["reason"] == "flag_off" and rej[-1]["would_apply"] is True
+
+    # Kanoniczny cień decyzji: manual B>A vs engine A>B, ale pass jest wołany
+    # dopiero PO selekcji i zmienia wyłącznie metrics (score/verdict/plan 1:1).
+    cand = _shadow_candidate()
+    decision_before = (
+        cand.score, cand.feasibility_verdict, cand.feasibility_reason,
+        list(cand.plan.sequence),
+    )
+    assert D._route_order_override_shadow_pass([cand], NOW) == 1
+    assert cand.metrics["route_order_would_apply"] is True
+    assert cand.metrics["route_order_manual_seq"] == "B>A"
+    assert cand.metrics["route_order_engine_seq"] == "A>B"
+    assert cand.metrics["route_order_divergence"] is True
+    assert (
+        cand.score, cand.feasibility_verdict, cand.feasibility_reason,
+        list(cand.plan.sequence),
+    ) == decision_before
+    # E2E instrumentu: ten sam realny output producenta płynie przez oba
+    # serializery do kształtu jednego rekordu shadow_decisions.
+    serialized_a = SD._serialize_candidate(cand)
+    serialized_b = SD._serialize_result(
+        D.PipelineResult(
+            order_id="NEW", verdict="PROPOSE", reason="test", best=cand,
+            candidates=[cand], pickup_ready_at=None, restaurant="Test",
+        ),
+        event_id="route-shadow-test", latency_ms=1.0,
+    )["best"]
+    for key in (
+        "route_order_would_apply", "route_order_manual_seq",
+        "route_order_engine_seq", "route_order_divergence",
+    ):
+        assert serialized_a[key] == cand.metrics[key]
+        assert serialized_b[key] == cand.metrics[key]
+    assess_src = inspect.getsource(D.assess_order)
+    assert assess_src.index("_attach_final_rule_verdict(") < \
+        assess_src.index("_route_order_override_shadow_pass(")
+
     # ta sama sytuacja z flagą ON → sekwencja operatora
     _flag_on(monkeypatch)
     O._EMITTED.clear()
@@ -181,6 +245,11 @@ def test_pin_idempotent(env, monkeypatch):
     first = _order()
     P.recanon_courier(CID, now=NOW)
     assert _order() == first  # brak oscylacji F6↔pin
+    # Po zastosowaniu engine i manual są zgodne: nadal would_apply, divergence=False.
+    cand = _shadow_candidate(("B", "A", "NEW"))
+    assert D._route_order_override_shadow_pass([cand], NOW) == 1
+    assert cand.metrics["route_order_would_apply"] is True
+    assert cand.metrics["route_order_divergence"] is False
 
 
 def test_same_restaurant_adjacent_grouped_one_podjazd(env, monkeypatch):
@@ -269,6 +338,9 @@ def test_set_mismatch_ignored(env, monkeypatch):
     rej = [e for e in evs if e["event"] == "operator_route_override_rejected"]
     assert rej and rej[-1]["reason"] == "set_mismatch"
     assert rej[-1]["active_ids"] == ["A", "B"]
+    cand = _shadow_candidate()
+    assert D._route_order_override_shadow_pass([cand], NOW) == 0
+    assert not any(k.startswith("route_order_") for k in cand.metrics)
 
 
 def test_duplicate_ids_ignored(env, monkeypatch):
@@ -308,6 +380,11 @@ def test_missing_file_zero_events(env, monkeypatch):
     _save_base()
     assert P.recanon_courier(CID, now=NOW) is True
     assert _events(env) == []  # brak pliku = zero szumu
+    cand = _shadow_candidate()
+    before = dict(cand.metrics)
+    assert D._route_order_override_shadow_pass([cand], NOW) == 0
+    assert cand.metrics == before
+    assert not any(k.startswith("route_order_") for k in cand.metrics)
 
 
 # ── czas_kuriera NIETYKALNY (R27) + naruszenie logowane ─────────────────────

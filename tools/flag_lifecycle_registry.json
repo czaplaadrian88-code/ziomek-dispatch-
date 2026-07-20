@@ -9089,7 +9089,7 @@
       "lifecycle": "planned",
       "lifecycle_seeded": false,
       "name": "ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE",
-      "notes": "Kandydat 2026-07-19 (branch feat/operator-route-order): pin kolejnosci podjazdow od koordynatora w kanonie courier_plans (operator_route_overrides.json, silnik TYLKO czyta); hooki plan_recheck._gen/_retime po F6 + retime OSRM; telemetria zawsze (tez OFF) do operator_route_override_events.jsonl; evidence eod_drafts/2026-07-20/",
+      "notes": "Kandydat 2026-07-19/20: pin kolejnosci podjazdow od koordynatora w kanonie courier_plans (operator_route_overrides.json, silnik TYLKO czyta); hooki plan_recheck._gen/_retime po F6 + retime OSRM; telemetria dedykowana zawsze do operator_route_override_events.jsonl, a would-apply compute-always po finalnym firewallu do Candidate.metrics i shadow_decisions.jsonl A+B; evidence eod_drafts/2026-07-20/",
       "owner": {
         "business": "Adrian",
         "service": "dispatch-plan-recheck.service + dispatch-panel-watcher.service"

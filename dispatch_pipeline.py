@@ -892,6 +892,61 @@ def _pre_shift_too_late_verdict_pass(candidates, prep_remaining_min, order_id=No
     return rejected
 
 
+def _route_order_override_shadow_pass(candidates, now=None):
+    """Dopnij would-apply route-order do metrics PO zakończonej selekcji.
+
+    Manual-seq dotyczy AKTYWNEGO worka, podczas gdy plan kandydata zawiera też
+    nowe rozważane zlecenie. Dlatego engine-seq to projekcja `plan.sequence` na
+    id z `bag_context`. Wspólny walidator `operator_route_override.pin_stops`
+    sprawdza wpis, TTL, pełną permutację i konstrukcję tak samo jak oba writery
+    plan_recheck. Brak wpisu/ważnego planu = brak pól (zero szumu).
+
+    Caller uruchamia pass dopiero PO `_selection.select_and_emit` i finalnym
+    firewallu: funkcja może zmienić wyłącznie `Candidate.metrics`, nigdy
+    score/verdict/plan/winner.
+    Metryki płyną automatycznie do LOCATION A+B przez deny-list serializer.
+    """
+    produced = 0
+    try:
+        from dispatch_v2 import operator_route_override as _route_override
+    except Exception:
+        return produced
+
+    for candidate in candidates or []:
+        try:
+            metrics = getattr(candidate, "metrics", None)
+            plan = getattr(candidate, "plan", None)
+            sequence = getattr(plan, "sequence", None) if plan is not None else None
+            bag_context = metrics.get("bag_context") if isinstance(metrics, dict) else None
+            if not isinstance(bag_context, list) or not sequence:
+                continue
+            active_ids = [
+                str(item.get("order_id"))
+                for item in bag_context
+                if isinstance(item, dict) and item.get("order_id")
+            ]
+            if not active_ids or len(set(active_ids)) != len(active_ids):
+                continue
+            active_set = set(active_ids)
+            engine_ids = [str(oid) for oid in sequence if str(oid) in active_set]
+            shadow = _route_override.shadow_metrics_for_route(
+                str(candidate.courier_id), active_ids, engine_ids, now,
+            )
+            if shadow:
+                metrics["route_order_would_apply"] = shadow["route_order_would_apply"]
+                metrics["route_order_manual_seq"] = shadow["route_order_manual_seq"]
+                metrics["route_order_engine_seq"] = shadow["route_order_engine_seq"]
+                metrics["route_order_divergence"] = shadow["route_order_divergence"]
+                produced += 1
+        except Exception as exc:
+            log.warning(
+                "ROUTE_ORDER_SHADOW fail-soft cid=%s: %s: %s",
+                getattr(candidate, "courier_id", "?"),
+                type(exc).__name__, str(exc)[:160],
+            )
+    return produced
+
+
 def _nogps_neutral_score_pass(candidates, order_id=None):
     """NOGPS-NEUTRAL-SCORE (2026-07-19, memory ziomek-nogps-center-score-bug-2026-07-19).
 
@@ -4345,6 +4400,21 @@ def assess_order(
                 result, f"OUTER_FALLBACK:{type(_fw_outer_exc).__name__}")
         except Exception:
             pass
+    # ROUTE-ORDER WOULD-APPLY (2026-07-20): dopiero PO finalnym firewallu —
+    # telemetry-only byte-parity decyzji przy OFF. Manual sequence jest czytana
+    # przez wspólny walidator plan_recheck; auto-serializer dostarcza pola A+B
+    # do kanonicznego logs/shadow_decisions.jsonl.
+    try:
+        _route_shadow_candidates = list(result.candidates or [])
+        if result.best is not None and not any(
+                c is result.best for c in _route_shadow_candidates):
+            _route_shadow_candidates.append(result.best)
+        _route_order_override_shadow_pass(_route_shadow_candidates, decision_now)
+    except Exception as _route_shadow_exc:
+        log.warning(
+            "ROUTE_ORDER_SHADOW outer fail-soft: %s: %s",
+            type(_route_shadow_exc).__name__, str(_route_shadow_exc)[:160],
+        )
     if _timing is not None:
         _timing.record_since("post_hooks_wall_ms", _post_hooks_started)
         _timing.record_since("assess_wall_ms", _assess_started)
