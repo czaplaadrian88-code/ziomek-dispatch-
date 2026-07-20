@@ -1,5 +1,37 @@
 # REASSIGN-RELEASE — zwolnienie planu STAREGO kuriera po przerzuceniu (evidence, 2026-07-20)
 
+## 00. v3 PO FLIP-GATE SOLA NA v2 (NO-GO na 1 punkcie: TOCTOU pre-checku)
+
+Werdykt Sola na `84e5aef` (`scratchpad/sol_reassign_v2.log`): CID ✓, dedupe ✓,
+runbook ✓, OFF ✓; **NO-GO**: pre-check v2 (`load_plans()` w helperze) i
+`remove_stops` działały pod DWOMA osobnymi lockami — nowszy plan bez stopa mógł
+wejść między odczyt a zapis i bump-always dalej strzelał pustym SSE-refreshem.
+Teza zweryfikowana niezależnie: zgadza się (check-then-act przez dwa locki =
+klasyczny TOCTOU). **Lead JAWNIE zmienił decyzję zakresu: plan_manager wolno dotknąć.**
+
+v3 (fix U ŹRÓDŁA):
+- **`plan_manager.remove_stops`**: emptiness-check WEWNĄTRZ exclusive locka —
+  `order_id` nieobecny w stops → early-return BEZ zapisu i BEZ bumpu (czysty
+  no-op). Zmiana GLOBALNA, semantycznie ściśle lepsza (bump-bez-zmiany tylko
+  budził apki bez powodu). **Mapa kompletności callerów remove_stops (grep, 3):**
+  (1) `panel_watcher._remove_stops_on_return` (cancel/return) — zyskuje ten sam
+  race-safe no-op; (2) helper REASSIGN-RELEASE (ten fix); (3) `plan_recheck`
+  GC `GC_TERMINAL_STOP_PRUNE` (~:2536, za ENABLE_COURIER_PLANS_GC/DRY_RUN) —
+  oid brany z tego samego odczytu planu, na bump-on-absent NIE polega, no-op
+  eliminuje mu spurious bump przy własnym TOCTOU. Testy V3.19b remove_stops
+  (purge A / keep B) nie asertują bumpa-przy-braku — bez zmian.
+- **Helper**: pre-check v2 USUNIĘTY (idempotencja u źródła, jeden lock);
+  kontrakt zwrotu bool (dedupe) bez zmian; recanon best-effort przy każdym
+  wywołaniu (samo-bramkujący, tani no-op).
+- **Testy: 19** (17 v2 + 2): `test_plan_manager_remove_stops_absent_oid_pure_noop`
+  (poziom plan_manager: store bajt-w-bajt) + `test_release_race_newer_plan_without_stop_no_bump`
+  (wyścig symulowany sekwencyjnie: nowszy plan bez stopa → zero zapisu/bumpu);
+  `test_release_double_call_...` zaktualizowany do semantyki v3 (recanon przy obu
+  wywołaniach — uzasadnienie: idempotencję gwarantuje plan_manager, recanon jest
+  samo-bramkujący). **Kontrola negatywna v3: stash `plan_manager.py` do v2 →
+  DOKŁADNIE 3 testy semantyki v3 FAILED (bump-always wykrywany), 16 passed.**
+  19/19 na v3. Pełna regresja v3: liczby w §4.
+
 ## 0. v2 PO REVIEW SOLA (GO-WITH-CARE 50f5946: flip ON był NO-GO do poprawek)
 
 Werdykt Sola: `scratchpad/sol_reassign_review.log`. Każda teza ZWERYFIKOWANA

@@ -775,12 +775,10 @@ def _release_plan_on_reassign(old_courier_id: str, order_id: str) -> bool:
     niepusty cid) — caller zasila tym dedupe released_this_tick (v2, Sol review);
     False = bramka nie przeszła (przy OFF zbiór zostaje pusty → packs bajt-w-bajt).
 
-    v2: pre-check READ-ONLY przez plan_manager.load_plans() — gdy plan starego
-    NIE zawiera stopa tego zlecenia (już zwolniony / brak planu / invalidated),
-    NIE wołamy remove_stops: jest bump-always (plan_manager.py:437 bumpuje wersję
-    nawet gdy nic nie usunął → pusty SSE-refresh apki). ŚWIADOMIE load_plans(),
-    NIE load_plan(): load_plan ma domyślnie WRITE side-effect
-    (invalidate_on_mismatch=True — persystuje unieważnienie przy bag-mismatch).
+    v3 (Sol flip-gate): idempotencja NIE tu, tylko U ŹRÓDŁA — remove_stops
+    robi no-op (zero zapisu/bumpu) WEWNĄTRZ swojego exclusive locka, gdy plan
+    nie zawiera stopa. Pre-check read-only w helperze (v2) usunięty: dwa osobne
+    locki = TOCTOU (nowszy plan mógł wejść między odczyt a zapis).
 
     Za flagą ENABLE_REASSIGN_OLD_PLAN_RELEASE (default OFF, flip za ACK).
     Best-effort — błąd NIGDY nie psuje diff loopu.
@@ -799,11 +797,6 @@ def _release_plan_on_reassign(old_courier_id: str, order_id: str) -> bool:
     oid = str(order_id)
     try:
         from dispatch_v2 import plan_manager
-        plan = (plan_manager.load_plans() or {}).get(cid)
-        if plan is None or plan.get("invalidated_at") is not None \
-                or not any(s.get("order_id") == oid for s in plan.get("stops", [])):
-            # nic do zwolnienia — bez zapisu, bez bumpa, bez recanon (no-op)
-            return True
         plan_manager.remove_stops(cid, oid)
         _log.info(
             f"REASSIGN-RELEASE cid_old={cid} oid={oid} "

@@ -160,10 +160,11 @@ def test_recanon_failure_swallowed(tmp_path, monkeypatch):
 
 
 def test_release_double_call_second_noop_version_stable(tmp_path, monkeypatch):
-    """v2 (Sol pkt 3): remove_stops jest bump-always (plan_manager.py:437 bumpuje
-    nawet gdy nic nie usunął → pusty SSE-refresh). Pre-check read-only w helperze:
-    DRUGIE wywołanie dla tej samej pary = no-op bez zapisu, wersja STOI, recanon
-    tylko raz."""
+    """v3 (Sol flip-gate): idempotencja U ŹRÓDŁA — remove_stops robi no-op
+    (zero zapisu/bumpu) WEWNĄTRZ swojego exclusive locka, gdy stopa nie ma.
+    DRUGIE wywołanie helpera dla tej samej pary → store bajt-w-bajt, wersja
+    STOI. Recanon (best-effort, samo-bramkujący) idzie przy obu wywołaniach —
+    pre-check w helperze usunięty (dwa locki = TOCTOU)."""
     pf, _ = _seed_store(tmp_path, monkeypatch)
     _flags_on(monkeypatch)
     recanons = []
@@ -171,10 +172,41 @@ def test_release_double_call_second_noop_version_stable(tmp_path, monkeypatch):
     assert PW._release_plan_on_reassign("207", "999001") is True
     after1 = json.loads(pf.read_text(encoding="utf-8"))
     assert after1["207"]["plan_version"] == 4
-    assert PW._release_plan_on_reassign("207", "999001") is True   # no-op
+    assert PW._release_plan_on_reassign("207", "999001") is True   # no-op w PM
     after2 = json.loads(pf.read_text(encoding="utf-8"))
     assert after2 == after1, "drugie wywołanie NIE pisze do store (zero bumpa)"
-    assert recanons == ["207"], "recanon tylko przy realnym zwolnieniu"
+    assert recanons == ["207", "207"], \
+        "recanon best-effort przy obu (idempotencję gwarantuje plan_manager)"
+
+
+def test_plan_manager_remove_stops_absent_oid_pure_noop(tmp_path, monkeypatch):
+    """v3 (Sol flip-gate, poziom plan_manager): oid nieobecny w planie →
+    czysty no-op WEWNĄTRZ exclusive locka — zero zapisu, wersja bez zmiany.
+    (Poprzednio bump-always: zapis + plan_version+1 mimo braku zmiany treści
+    = pusty SSE-refresh apki.)"""
+    pf, seeded = _seed_store(tmp_path, monkeypatch)
+    PM.remove_stops("207", "404404")            # oid spoza planu
+    assert json.loads(pf.read_text(encoding="utf-8")) == seeded, \
+        "brak stopa → remove_stops NIE pisze i NIE bumpuje (czysty no-op)"
+
+
+def test_release_race_newer_plan_without_stop_no_bump(tmp_path, monkeypatch):
+    """v3 (Sol flip-gate, wyścig symulowany sekwencyjnie): NOWSZY plan starego
+    kuriera BEZ stopa (np. regen ticku wszedł między dowolny odczyt a wywołanie)
+    → release NIE bumpuje wersji (decyzja wewnątrz locka remove_stops, nie w
+    osobnym pre-checku)."""
+    pf, seeded = _seed_store(tmp_path, monkeypatch)
+    # symulacja: przerzucane zlecenie NIE występuje już w planie starego
+    plans = json.loads(pf.read_text(encoding="utf-8"))
+    plans["207"]["stops"] = [{"order_id": "999002", "type": "dropoff"}]
+    pf.write_text(json.dumps(plans), encoding="utf-8")
+    _flags_on(monkeypatch)
+    recanons = []
+    monkeypatch.setattr(PR, "recanon_courier", lambda cid, **kw: recanons.append(cid) or True)
+    assert PW._release_plan_on_reassign("207", "999001") is True
+    after = json.loads(pf.read_text(encoding="utf-8"))
+    assert after == plans, "nowszy plan bez stopa → zero zapisu/bumpu"
+    assert after["207"]["plan_version"] == 3
 
 
 # ------------------------------------------------- branch-level (diff loop) ---
