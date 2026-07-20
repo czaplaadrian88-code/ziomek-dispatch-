@@ -1516,8 +1516,18 @@ def resolve_effective_shift_end_by_cid(
     Konsument: `plan_recheck._operator_pin_hard_report` (breach `grafik`)."""
     try:
         if not name:
+            # v5 (r4 Sola): TEN SAM łańcuch cid→nazwa co cs.name we flocie
+            # (build_fleet_snapshot: _load_courier_names = merge kurier_ids +
+            # courier_names, + normalizacja zer wiodących) — NIE courier_tiers
+            # (bywa stale ⇒ brak matchu grafiku ⇒ wo bez GRAFIK-CAP = złe okno).
             try:
-                name = ((_load_courier_tiers().get(str(cid)) or {}).get("name"))
+                _names = _load_courier_names()
+                name = _names.get(str(cid))
+                if name is None:
+                    try:
+                        name = _names.get(str(int(str(cid))))
+                    except Exception:
+                        name = None
             except Exception:
                 name = None
         import sys as _sys

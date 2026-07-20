@@ -329,10 +329,28 @@ egzekwowało. Refaktor delegacji w `dispatchable_fleet` (2 linie → wspólna
 funkcja) = bajt-identyczny z konstrukcji; weryfikacja pełną suitą (fleet ma
 gęste pokrycie).
 
+## v5 — runda 4 Sola (2026-07-20; rdzeń PASS, wąskie domknięcia)
+
+Log: `scratchpad/sol_engine_v4_final.log`. Sol r4: delegacja `dispatchable_fleet`
+= równoważna bez kontrprzykładu; strict-retime w obu writerach OK.
+
+| # | Punkt r4 | Fix v5 | Dowód |
+|---|---|---|---|
+| 1 | NAZWA-ŹRÓDŁO: raport rozwiązywał kuriera z `courier_tiers`, flota z `_load_courier_names` (merge kurier_ids+courier_names) — stale tier-alias ⇒ brak matchu grafiku ⇒ wo 23:00 bez GRAFIK-CAP zamiast 14:00 | `resolve_effective_shift_end_by_cid` używa TEGO SAMEGO łańcucha co `cs.name` floty: `_load_courier_names()` + normalizacja zer wiodących (identycznie jak `build_fleet_snapshot`); courier_tiers WYPIĘTE z łańcucha | `test_name_chain_parity_sol_counterexample` (stale tiers-alias ignorowany ⇒ grafik zmatchowany ⇒ cap 14:00, nie 23:00) |
+| 2 | Spójność odczytu / snapshot | Rozwiązanie okna = RAZ per wywołanie raportu (nie per stop — tak było od v3); loadery i semantyka „24:00"/północy w 100% delegowane (`_shift_end_dt`, `_effective_working_override_shift_end`, `schedule_utils`, `manual_overrides.get_working`, te same flagi hot). **Resztkowy race:** flip flagi/pliku MIĘDZY odczytem okna a odczytem salvage/flag w tym samym wywołaniu = inherentny dla telemetrii read-only (raport NIE egzekwuje — jedyny efekt to ewentualny pojedynczy wpis breach mniej/więcej); świadomie akceptowane | ta notatka (bez zmiany kodu poza pkt 1/3) |
+| 3 | SALVAGE dla PICKUP: feasibility:743 dopuszcza odbiór po shift_end w oknie EOD-salvage | pickup-breach wyciszany TYM SAMYM predykatem `feasibility_v2._end_of_day_salvage(now)` co dropoff (zero kopii): `_hit(pickup) = V325 AND not salvage AND exc>0` | `test_grafik_pickup_salvage_suppressed` (pickup po końcu zmiany + salvage ⇒ zero grafik) |
+| 4 | ZAKRES VETA (doprecyzowanie, pre-existing `mark_picked_up` pisze plan PRZED recanonem) | **Claim doprecyzowany:** przy strict-fail „plan nietknięty" znaczy: PIN NIE ZOSTAŁ ZASTOSOWANY — kolejność sprzed pinu zachowana, plan_version bez zmiany od próby pinu; LEGALNE zapisy statusowe (prune węzła odbioru po picked_up, status_at_plan_time) sprzed recanonu ZOSTAJĄ (to nie jest rollback stanu świata, tylko odmowa zapisu SEKWENCJI operatora) | `test_veto_scope_status_writes_persist` (mark_picked_up → strict-fail ⇒ kolejność post-status/pre-pin, status zachowany, plan_version bez zmian, event rejected) |
+
+Obserwacja poza zakresem (kandydat do osobnej fali #0, NIE dotknięte):
+pre-existing `resolve_shift_start_by_cid` (konsument: L4 anchor-floor) rozwiązuje
+nazwę z courier_tiers — ten sam wzorzec rozjazdu nazw co pkt 1; nie ruszony tutaj
+(konsument skalibrowany na obecnym zachowaniu; zmiana wymaga własnej mapy
+kompletności i regresji).
+
 ## Linie DoD (bramka mechaniczna drivera ziomek-cto)
 
-regresja: DELTA vs baseline = 0 failed nowych i 0 zniknięć (pełna suita, harness pkgroot ZIOMEK_SCRIPTS_ROOT + -p no:cacheprovider; baseline czysty 7e57085 = 9 failed/5197 passed/27 skipped/7 xfailed, kandydat v4 FINALNY = 9 failed/5235 passed/24 skipped/7 xfailed = 5197 + 35 nowych + 3 warunkowe skipy przeszły; obejmuje gęste pokrycie dispatchable_fleet po delegacji effective_shift_end — bajt-parytet potwierdzony suitą; 9 faili = bajt-identyczny obustronny szum harnessu: script_run ×3, flag_doc_coverage ×3, conftest_flag_strip_guard ×3 — potwierdzony na czystym masterze)
-e2e: zapis kanonu (plan_manager CAS) → recanon_courier/redecide_courier/_gen_one_bag_plan → pin → _retime_stops (OSRM, strict dla pinu) → L3 (pin-override) → ewaluacja HARD po pinie (r6/no_return/grafik) → projekcja route_order.order_podjazdy(trust_canon) = konsument konsoli+apki; testy test_pin_transparent_for_surfaces_via_route_order + test_gen_path_pins_sequence + test_l3_reject_overridden_by_pin (realny OR-Tools) + test_recanon_after_raw_save_reapplies_pin (sekwencja handlera assign); nowe testy 35/35
+regresja: DELTA vs baseline = 0 failed nowych i 0 zniknięć (pełna suita, harness pkgroot ZIOMEK_SCRIPTS_ROOT + -p no:cacheprovider; baseline czysty 7e57085 = 9 failed/5197 passed/27 skipped/7 xfailed, kandydat v5 FINALNY = 9 failed/5238 passed/24 skipped/7 xfailed = 5197 + 38 nowych + 3 warunkowe skipy przeszły; obejmuje gęste pokrycie dispatchable_fleet po delegacji effective_shift_end — bajt-parytet potwierdzony suitą; 9 faili = bajt-identyczny obustronny szum harnessu: script_run ×3, flag_doc_coverage ×3, conftest_flag_strip_guard ×3 — potwierdzony na czystym masterze)
+e2e: zapis kanonu (plan_manager CAS) → recanon_courier/redecide_courier/_gen_one_bag_plan → pin → _retime_stops (OSRM, strict dla pinu) → L3 (pin-override) → ewaluacja HARD po pinie (r6/no_return/grafik) → projekcja route_order.order_podjazdy(trust_canon) = konsument konsoli+apki; testy test_pin_transparent_for_surfaces_via_route_order + test_gen_path_pins_sequence + test_l3_reject_overridden_by_pin (realny OR-Tools) + test_recanon_after_raw_save_reapplies_pin (sekwencja handlera assign); nowe testy 38/38
 pozytywny-wplyw: nowa zdolność ownera (kanon honoruje sekwencję operatora + przelicza ETA) — ON≠OFF udowodnione testami (pin zmienia zapisany kanon; OFF bajt-identyczny poza telemetrią wykrycia would_apply); okno cienia would_apply przed flipem, flip za ACK Adriana (ETAP 5/6 flipa poza zakresem kandydata)
 rollback: flags.json ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE=false (hot-reload, bez restartu; default OFF w common.py) / git revert jednego commita / DELETE wpisu cid w panelu (brak wpisu = własna optymalizacja)
 N-D: feasibility_v2.py — powód: pin działa w warstwie 9 (kanon worka JUŻ przypisanego kuriera) PO decyzji feasibility; HARD-checki i R6 nietknięte, żadna reguła feasibility nie zmienia się ani nie jest omijana (SOFT nie osłabia HARD)

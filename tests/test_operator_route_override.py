@@ -641,6 +641,80 @@ def test_grafik_salvage_suppresses_dropoff_breach(env, monkeypatch):
     assert not [b for b in hb if b["type"] == "grafik"]
 
 
+def test_name_chain_parity_sol_counterexample(monkeypatch):
+    """Kontrprzykład Sola r4: grafik 14:00, courier_tiers ma STALE alias,
+    working-override 23:00. Resolver MUSI rozwiązywać nazwę TYM SAMYM łańcuchem
+    co cs.name floty (_load_courier_names) ⇒ grafik zmatchowany ⇒ GRAFIK-CAP
+    przycina wo do 14:00 (nie 23:00/None)."""
+    import schedule_utils
+    from dispatch_v2 import courier_resolver as CR
+    from dispatch_v2 import manual_overrides as MO
+    schedule = {"Jan Kowalski": {"start": "10:00", "end": "14:00"}}
+    monkeypatch.setattr(CR, "_load_courier_tiers",
+                        lambda: {"7777": {"name": "ZLY-STALE-ALIAS"}})
+    monkeypatch.setattr(CR, "_load_courier_names",
+                        lambda: {"7777": "Jan Kowalski"})
+    monkeypatch.setattr(schedule_utils, "load_schedule", lambda: schedule)
+    monkeypatch.setattr(schedule_utils, "match_courier",
+                        lambda name, sched: name if name in sched else None)
+    monkeypatch.setattr(schedule_utils, "is_on_shift",
+                        lambda name, sched: (False, "po zmianie"))
+    monkeypatch.setattr(MO, "get_working",
+                        lambda: {"7777": {"end": "23:00",
+                                          "added_at": "2026-07-19T09:00:00+00:00"}})
+    monkeypatch.setattr(C, "ENABLE_WORKING_OVERRIDE", True, raising=False)
+    monkeypatch.setattr(C, "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP", True, raising=False)
+    end = CR.resolve_effective_shift_end_by_cid("7777")
+    assert end is not None and end.hour == 14  # cap do grafiku, nie 23:00
+
+
+def test_grafik_pickup_salvage_suppressed(env, monkeypatch):
+    """v5 parytet feasibility:743 — pickup po shift_end w oknie EOD-salvage
+    jest legalny ⇒ zero breachu grafik (ten sam predykat co dropoff)."""
+    from dispatch_v2 import courier_resolver as CR
+    from dispatch_v2 import feasibility_v2 as F
+    from datetime import timedelta
+    _flag_on(monkeypatch)
+    monkeypatch.setattr(C, "ENABLE_V325_SCHEDULE_HARDENING", True, raising=False)
+    monkeypatch.setattr(C, "ENABLE_V324A_SCHEDULE_INTEGRATION", False, raising=False)
+    _save_base()
+    _write_override(env, ["B", "A"])
+    monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
+                        lambda cid, **k: NOW + timedelta(minutes=4))
+    monkeypatch.setattr(F, "_end_of_day_salvage", lambda now: (True, None))
+    assert P.recanon_courier(CID, now=NOW) is True
+    hb = [e for e in _events(env)
+          if e["event"] == "operator_route_override_applied"][-1]["hard_breaches"]
+    assert not [b for b in hb if b["type"] == "grafik"]
+
+
+def test_veto_scope_status_writes_persist(env, monkeypatch):
+    """Zakres veta technicznego (doprecyzowanie v5): „plan nietknięty" =
+    PIN NIE ZOSTAŁ ZASTOSOWANY (kolejność sprzed pinu), ale legalne zapisy
+    statusowe (mark_picked_up sprzed recanonu — pre-existing) ZOSTAJĄ."""
+    _flag_on(monkeypatch)
+    _save_base()
+    # legalny zapis statusowy jak w handlerze pickup: prune węzła odbioru A
+    PM.mark_picked_up(CID, "A", picked_up_at="2026-07-19 13:55:00")
+    orders = json.loads((env / "orders_state.json").read_text())
+    orders["A"]["status"] = "picked_up"
+    orders["A"]["picked_up_at"] = "2026-07-19 13:55:00"
+    (env / "orders_state.json").write_text(json.dumps(orders))
+    v_after_status = PM.load_plan(CID)["plan_version"]
+    order_after_status = _order()
+    assert ("pickup", "A") not in order_after_status  # prune wszedł
+    _write_override(env, ["B", "A"])
+    monkeypatch.setattr(osrm_client, "table", lambda a, b: None)  # strict fail
+    assert P.recanon_courier(CID, now=NOW) is False
+    assert PM.load_plan(CID)["plan_version"] == v_after_status  # zero zapisu pinu
+    assert _order() == order_after_status  # kolejność sprzed pinu zachowana
+    st = [s for s in PM.load_plan(CID)["stops"] if s["order_id"] == "A"]
+    assert st and all(s.get("status_at_plan_time") == "picked_up" for s in st)
+    rej = [e for e in _events(env)
+           if e["event"] == "operator_route_override_rejected"]
+    assert rej and rej[-1]["reason"] == "retime_failed"
+
+
 def test_effective_shift_end_working_override_extends(monkeypatch):
     """Jedno źródło okna: working-override 'pracuje' (kurier NIE na realnej
     zmianie) wydłuża efektywny koniec ponad grafik; na realnej zmianie wygrywa

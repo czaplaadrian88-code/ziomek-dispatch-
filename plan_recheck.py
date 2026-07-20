@@ -2023,7 +2023,10 @@ def _operator_pin_hard_report(cid, final_stops, orders_state,
                 _exc = (_pred - _sh_end).total_seconds() / 60.0
                 _is_pu = s.get("type") == "pickup"
                 if _is_pu:
-                    _hit = _v325 and _exc > 0.0  # pickup po shift_end: BEZ tolerancji
+                    # pickup po shift_end: BEZ tolerancji; v5 — EOD-salvage
+                    # wycisza jak w feasibility (pickup po zmianie legalny w
+                    # ostatniej godzinie pracy firmy, ten sam predykat)
+                    _hit = _v325 and not _salv and _exc > 0.0
                 else:
                     _hit = _v324a and not _salv and _exc > _tol_drop
                 if _hit:
