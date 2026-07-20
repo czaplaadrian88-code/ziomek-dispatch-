@@ -561,6 +561,18 @@ def _serialize_candidate(c) -> dict:
     return out
 
 
+def _a360_d1_od07_firewall_enabled() -> bool:
+    """Ten sam fail-closed odczyt co finalny hook dispatch_pipeline."""
+    try:
+        return bool(C.flag(
+            "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH",
+            getattr(C, "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH", False),
+        ))
+    except Exception:
+        return bool(getattr(
+            C, "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH", False))
+
+
 def _serialize_rule_verdict(result: PipelineResult):
     """RuleVerdict -> JSON-safe dict; brak pola w starych fixture = None.
 
@@ -592,10 +604,58 @@ def _serialize_rule_verdict(result: PipelineResult):
                 "unknown_count": 1,
             }
 
+        if not _a360_d1_od07_firewall_enabled():
+            return {
+                "schema": "rule_verdict.v1",
+                "phase": "A_SHADOW",
+                "status": "UNKNOWN",
+                "coverage": "NONE",
+                "enforcement": "NONE",
+                "decision_order_id": str(getattr(result, "order_id", "") or ""),
+                "decision_verdict": str(getattr(result, "verdict", "") or ""),
+                "selected_courier_id": selected_courier_id,
+                "selection_mode": "unknown",
+                "always_propose_enabled": None,
+                "policy_pending": ["B-01", "B-02"],
+                "rules": [
+                    _unknown_rule("R6_THERMAL", "physical_thermal"),
+                    _unknown_rule("R27_COMMITTED_PICKUP", "strict_5_candidate"),
+                    _unknown_rule("SLA_DELIVERY", "anchor_unknown"),
+                ],
+                "violations": [],
+                "exceptions": [],
+                "missing_reasons": [f"SERIALIZER_ERROR:{type(exc).__name__}"],
+            }
+
+        r6_unknown = {
+            "rule_id": "R6_THERMAL",
+            "policy_variant": "in_vehicle_age_od07",
+            "status": "HOLD",
+            "limit": 35.0,
+            "evaluated_count": 0,
+            "violation_count": 0,
+            "exempt_count": 0,
+            "unknown_count": 1,
+            "physical_status": "UNBOUND",
+            "interval": "physical_possession_to_customer_handoff",
+            "normal_limit_min": 35.0,
+            "alarm_limit_min": 40.0,
+            "alarm_count": 0,
+            "prohibited_count": 0,
+            "introduced_order_count": 0,
+            "preexisting_order_count": 0,
+            "causality_unbound_order_count": 1,
+            "evidence_lineage": [],
+            "food_ready_age_status": "SEPARATE_UNBOUND",
+            "food_ready_age_threshold_min": None,
+            "count_unit": "orders",
+        }
         return {
-            "schema": "rule_verdict.v1",
+            "schema": "rule_verdict.v3",
             "phase": "A_SHADOW",
-            "status": "UNKNOWN",
+            "evaluation_stage": "POST_SELECTION_OD07_PHYSICAL_INTERVAL",
+            "status": "HOLD",
+            "physical_status": "UNBOUND",
             "coverage": "NONE",
             "enforcement": "NONE",
             "decision_order_id": str(getattr(result, "order_id", "") or ""),
@@ -603,15 +663,25 @@ def _serialize_rule_verdict(result: PipelineResult):
             "selected_courier_id": selected_courier_id,
             "selection_mode": "unknown",
             "always_propose_enabled": None,
-            "policy_pending": ["B-01", "B-02"],
+            "policy_pending": [
+                "R6_PHYSICAL_POSSESSION_EVENT_SOURCE",
+                "R6_CUSTOMER_HANDOFF_EVENT_SOURCE",
+                "R6_AUTOMATIC_ALARM_PREDICATE",
+                "R6_PREDECISION_COUNTERFACTUAL",
+            ],
             "rules": [
-                _unknown_rule("R6_THERMAL", "physical_thermal"),
+                r6_unknown,
                 _unknown_rule("R27_COMMITTED_PICKUP", "strict_5_candidate"),
                 _unknown_rule("SLA_DELIVERY", "anchor_unknown"),
             ],
             "violations": [],
             "exceptions": [],
             "missing_reasons": [f"SERIALIZER_ERROR:{type(exc).__name__}"],
+            "introduced_order_count": 0,
+            "preexisting_order_count": 0,
+            "causality_unbound_order_count": 1,
+            "count_unit": "orders",
+            "r6_event_binding": "UNBOUND",
         }
 
 

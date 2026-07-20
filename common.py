@@ -675,6 +675,13 @@ ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE = False  # 2026-07-19 (pin kolejności podj
 ENABLE_COURIER_PLANS_GC = False  # L3 2026-07-02 (GC courier_plans: terminal-stop prune + zombie by age/no-active przez plan_manager API pod lockiem; PLAN_GC_DRY_RUN default True; OFF=brak GC jak dziś; KANON=flags.json)
 ENABLE_SPLIT_LAYER_GUARD = False  # L7.3 2026-07-03 (R2 ROOT-9, INV-LAYER-1/2): OBSERWACYJNY strażnik warstw — re-assert _assert_feasibility_first na KAŻDYM EMIT (feasible-path) + garda zapisu feasibility_verdict poza L5 (setter). OFF=bajt-parytet (zero logu/jsonl, decyzja nietknięta); ON=tylko log WARNING + dispatch_state/split_layer_guard.jsonl. NIE-decyzyjna (poza ETAP4). KANON=flags.json
 
+# A360 H1-D1 / OD-07 (2026-07-20): wyłącznie obserwacyjny rewrite firewalla.
+# OFF zachowuje rule_verdict.v1 bajt-w-bajt. ON nie zmienia planu ani decyzji;
+# emituje v3 i failuje R6 do UNBOUND/HOLD, dopóki osobne, zatwierdzone adaptery
+# nie zwiążą physical possession, customer handoff i Alarm. Hot-reload przez
+# flags.json; stała jest bezpiecznym fallbackiem OFF.
+ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH = False
+
 # === D.3 fala A fallbacki (2026-07-02): stałe dla 15 flag route/kanon =========
 # ZMIGROWANE z env-frozen (plan_recheck.py `os.environ.get(...,"0")=="1"`) do
 # flags.json (KANON). Były LIVE ON przez drop-iny systemd; po migracji env jest
@@ -768,6 +775,10 @@ TEST_ISOLATED_INFRA_FLAGS = (
     "ENABLE_PANEL_DETAIL_PREFETCH",
     "PANEL_DETAIL_PREFETCH_WORKERS",
     "ENABLE_STAGE_TIMING_OBSERVATION",
+    # A360 H1-D1: wersjonowany, obserwacyjny RuleVerdict OD-07. Test nie moze
+    # odziedziczyc flipa z zewnetrznego flags.json, bo OFF jest oraclem parytetu
+    # z rule_verdict.v1 na masterze.
+    "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH",
     # perf-lazy (03.07): żywy flip 00:25 zmienił zachowanie script-runnerów
     # (flake test_v319c_sub_a: 4/30 FAIL przy ON / 0/30 OFF — mtime-cache
     # planów serwował stan sprzed zapisu przy zapisach w tym samym ticku
@@ -811,6 +822,7 @@ _FINGERPRINT_EXTRA_FLAGS = (
     "ENABLE_REPO_COST_SHADOW",
     "OBSERVABILITY_PER_CANDIDATE_ENABLED",
     "ENABLE_STAGE_TIMING_OBSERVATION",
+    "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH",
     "AUTO_KOORD_TELEGRAM_INFO_ENABLED",
     "CZASOWKA_T0_ALERT_ENABLED",
     "ENABLE_BAG_TIME_ALERTS",

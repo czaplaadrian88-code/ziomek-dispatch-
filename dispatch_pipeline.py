@@ -4178,11 +4178,23 @@ def _eta_fabrication_check(result: "PipelineResult", order_event: dict,
         pass  # fabrication-guard NIGDY nie wywróci assess flow
 
 
-def _final_rule_unknown_dict(result: "PipelineResult", reason_code: str) -> Dict[str, Any]:
-    """Ostatni, bezmodułowy fallback ``rule_verdict.v1``.
+def _a360_d1_od07_firewall_enabled() -> bool:
+    """Fail-closed odczyt flagi obserwacyjnej; brak nośnika oznacza OFF."""
+    try:
+        return bool(C.flag(
+            "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH",
+            getattr(C, "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH", False),
+        ))
+    except Exception:
+        return bool(getattr(
+            C, "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH", False))
 
-    Używa wyłącznie prymitywów JSON i nie zależy od importu firewalla, flag ani
-    loggera. Dzięki temu nawet awaria samej ścieżki obserwowalności nie usuwa
+
+def _final_rule_unknown_dict(result: "PipelineResult", reason_code: str) -> Dict[str, Any]:
+    """Ostatni, bezmodułowy fallback v1 albo flagowany OD-07 v3.
+
+    Używa wyłącznie prymitywów JSON i nie zależy od importu firewalla ani
+    loggera; odczyt flagi sam ma fallback OFF. Dzięki temu awaria instrumentu nie usuwa
     informacji, że pokrycie reguł jest nieznane.
     """
     try:
@@ -4231,10 +4243,58 @@ def _final_rule_unknown_dict(result: "PipelineResult", reason_code: str) -> Dict
             "unknown_count": 1,
         }
 
+    if not _a360_d1_od07_firewall_enabled():
+        return {
+            "schema": "rule_verdict.v1",
+            "phase": "A_SHADOW",
+            "status": "UNKNOWN",
+            "coverage": "NONE",
+            "enforcement": "NONE",
+            "decision_order_id": order_id,
+            "decision_verdict": decision_verdict,
+            "selected_courier_id": selected_courier_id,
+            "selection_mode": selection_mode,
+            "always_propose_enabled": None,
+            "policy_pending": ["B-01", "B-02"],
+            "rules": [
+                _unknown_rule("R6_THERMAL", "physical_thermal"),
+                _unknown_rule("R27_COMMITTED_PICKUP", "strict_5_candidate"),
+                _unknown_rule("SLA_DELIVERY", "anchor_unknown"),
+            ],
+            "violations": [],
+            "exceptions": [],
+            "missing_reasons": [missing_reason],
+        }
+
+    r6_unknown = {
+        "rule_id": "R6_THERMAL",
+        "policy_variant": "in_vehicle_age_od07",
+        "status": "HOLD",
+        "limit": 35.0,
+        "evaluated_count": 0,
+        "violation_count": 0,
+        "exempt_count": 0,
+        "unknown_count": 1,
+        "physical_status": "UNBOUND",
+        "interval": "physical_possession_to_customer_handoff",
+        "normal_limit_min": 35.0,
+        "alarm_limit_min": 40.0,
+        "alarm_count": 0,
+        "prohibited_count": 0,
+        "introduced_order_count": 0,
+        "preexisting_order_count": 0,
+        "causality_unbound_order_count": 1,
+        "evidence_lineage": [],
+        "food_ready_age_status": "SEPARATE_UNBOUND",
+        "food_ready_age_threshold_min": None,
+        "count_unit": "orders",
+    }
     return {
-        "schema": "rule_verdict.v1",
+        "schema": "rule_verdict.v3",
         "phase": "A_SHADOW",
-        "status": "UNKNOWN",
+        "evaluation_stage": "POST_SELECTION_OD07_PHYSICAL_INTERVAL",
+        "status": "HOLD",
+        "physical_status": "UNBOUND",
         "coverage": "NONE",
         "enforcement": "NONE",
         "decision_order_id": order_id,
@@ -4242,15 +4302,25 @@ def _final_rule_unknown_dict(result: "PipelineResult", reason_code: str) -> Dict
         "selected_courier_id": selected_courier_id,
         "selection_mode": selection_mode,
         "always_propose_enabled": None,
-        "policy_pending": ["B-01", "B-02"],
+        "policy_pending": [
+            "R6_PHYSICAL_POSSESSION_EVENT_SOURCE",
+            "R6_CUSTOMER_HANDOFF_EVENT_SOURCE",
+            "R6_AUTOMATIC_ALARM_PREDICATE",
+            "R6_PREDECISION_COUNTERFACTUAL",
+        ],
         "rules": [
-            _unknown_rule("R6_THERMAL", "physical_thermal"),
+            r6_unknown,
             _unknown_rule("R27_COMMITTED_PICKUP", "strict_5_candidate"),
             _unknown_rule("SLA_DELIVERY", "anchor_unknown"),
         ],
         "violations": [],
         "exceptions": [],
         "missing_reasons": [missing_reason],
+        "introduced_order_count": 0,
+        "preexisting_order_count": 0,
+        "causality_unbound_order_count": 1,
+        "count_unit": "orders",
+        "r6_event_binding": "UNBOUND",
     }
 
 
@@ -4293,6 +4363,10 @@ def _attach_final_rule_verdict(result: "PipelineResult", order_event: dict,
             always_propose_enabled=_fw_flag(
                 "ENABLE_ALWAYS_PROPOSE_ON_SATURATION",
                 getattr(C, "ENABLE_ALWAYS_PROPOSE_ON_SATURATION", False)),
+            od07_firewall_exempt_truth_enabled=_fw_flag(
+                "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH",
+                getattr(
+                    C, "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH", False)),
         )
         result.rule_verdict = _ifw.evaluate_final(
             result, order_event, fleet_snapshot, decision_now, _fw_policy)
@@ -4315,6 +4389,8 @@ def _attach_final_rule_verdict(result: "PipelineResult", order_event: dict,
                         getattr(C, "OBJ_COMMITTED_PICKUP_LOAD_THRESHOLD", 4.5)),
                     package_address_ids=(), package_thermal_exempt=False,
                     sla_anchor_kind="now", always_propose_enabled=False,
+                    od07_firewall_exempt_truth_enabled=(
+                        _a360_d1_od07_firewall_enabled()),
                 )
             result.rule_verdict = _ifw.error_verdict(result, _fw_policy, _fw_exc)
             typed_fallback_ok = True
