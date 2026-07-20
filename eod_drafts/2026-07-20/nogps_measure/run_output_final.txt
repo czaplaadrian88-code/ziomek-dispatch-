@@ -1,0 +1,91 @@
+
+==============================================================================
+OKNO: [-inf .. +inf)
+==============================================================================
+  linie total=870 parsed=870 parse_error=0 w_oknie=870
+  rekordy total=870  decyzje-z-best=870
+  serializacja alternatives obcieta wzgledem pool_feasible_count: 0.0% (870 rekordow sprawdzonych) -> pool-share ponizej jest PRZYBLIZENIEM z serializowanej czesci puli
+
+-- WINNER-SHARE vs POOL-SHARE (grupa: pozycja NIEZNANA, kanon F-3 POSITION_UNKNOWN_SOURCES) --
+  pool-share (unknown w puli kandydatow): 31.5% (1509/4787)
+  winner-share (unknown jako #1):         63.7% (554/870)
+  GAP (winner-share - pool-share): +32.2pp (>0 = grupa unknown wygrywa NIEPROPORCJONALNIE do udzialu w puli)
+
+-- waski widok 'no_gps only' (dla porownania z liczbami z memory bug-notu: 24.8% puli / 50.5% zwyciezcow) --
+  pool-share no_gps:   24.1%
+  winner-share no_gps: 48.5%
+
+-- MIXED-POOL head-to-head (pula ma jednoczesnie known i unknown) --
+  mixed pools: 635
+  unknown wygrywa w mixed pool: 74.0% (50% = neutralnie, wiecej = przewaga)
+
+-- KONCENTRACJA zwyciezcow --
+  top-2 cid: 48.4%
+  target cids ['179', '413']: winner-share=48.4% vs pool-share=23.5%
+    cid=   179: winners= 233 (26.8%)  pool_slots= 554 (11.6%)
+    cid=   413: winners= 188 (21.6%)  pool_slots= 570 (11.9%)
+  top-12 wszystkich zwyciezcow: [('179', 233), ('413', 188), ('123', 78), ('543', 55), ('447', 43), ('441', 40), ('503', 27), ('509', 26), ('376', 24), ('515', 23), ('470', 22), ('484', 12)]
+
+-- POST_WAVE residual (znany wyjatek F2.1c, NIE neutralizowany przez ten fix - dziala poza POSITION_UNKNOWN_SOURCES z konstrukcji; wymaga NIEPUSTEGO bagu, wiec strukturalnie nie moze wchlonac glownego wzorca no_gps+pusty-worek. Obserwacja NIEZALEZNA od telemetrii kandydata - dziala na dzisiejszych danych, bo pos_source='post_wave' juz istnieje) --
+  post_wave zwyciezcy (wszyscy): 21 = 2.4% wszystkich decyzji
+  post_wave zwyciezcy w target cids ['179', '413']: 8 = 1.9% ich 421 zwyciestw
+  post_wave / (post_wave+no_gps) w target cids: 2.7% (alternatywny mianownik - tylko sciezki potencjalnie syntetyczne)
+
+-- km_to_pickup DISPLAY (UWAGA: dla no_gps to fleet_avg PO nadpisaniu F1.7, NIE km ktore realnie zasililo score przed fixem - dlatego wyglada 'niewinnie'; prawdziwe road_km z centrum widoczne dopiero w bonus_nogps_neutral_raw_km po deployu kandydata) --
+  unknown-pool: n=1153 min=0.79 p50=3.55 mean=3.7 p90=5.42 max=9.89 stdev=1.302
+  known-pool:   n=3270 min=0.0 p50=3.45 mean=3.805 p90=7.14 max=18.08 stdev=2.574
+  winner (all): n=730 min=0.0 p50=3.575 mean=3.871 p90=6.65 max=16.04 stdev=2.036
+
+-- SCORE MARGIN best vs #2 (proxy sily przewagi; near-ceiling = landslide zgodny z dowodem 112-vs-4.1 w kodzie) --
+  n=766 min=-906.768 p50=5.58 mean=133.549 p90=200.193 max=10371.843 stdev=924.984  (pominieto 5 par z hard-cap sentinel score |score|>=1000000)
+
+-- REGRESJA-GUARDY (do porownania PRZED/PO w oknie B) --
+  KOORD-rate:          5.9% (51/870)
+  'cisza' rate (best_effort_low_score i pokrewne prefiksy z _AP_KOORD_SILENCE_PREFIXES): 0.5% (4/870)
+  best_effort rate (zwyciezca best_effort=True): 4.9%
+
+-- TELEMETRIA KANDYDATA bonus_nogps_neutral_* --
+  telemetria kandydata (bonus_nogps_neutral_*) NIEOBECNA w tym oknie - dane sprzed deployu kandydata 88acde3 (kod jeszcze w worktree, nie zmergowany). Kontrfaktyczny ON/OFF niepoliczalny z tych danych.
+
+------------------------------------------------------------------------------
+WARIANCJA HISTORYCZNA ([-inf .. +inf), bucket=6.0h, min_bucket_n=20)
+------------------------------------------------------------------------------
+  2026-07-16T07:05:38.623804+00:00  n=  64  winner_share_unknown=  87.5%  target_winner_share=  54.7%  koord= 10.9%  best_effort=  0.0%  km_winner_p50=2.82
+  2026-07-16T12:00:30.390008+00:00  n=  89  winner_share_unknown=  34.8%  target_winner_share=  29.2%  koord=  3.4%  best_effort=  0.0%  km_winner_p50=4.3
+  2026-07-17T07:05:06.046756+00:00  n=  50  winner_share_unknown=  82.0%  target_winner_share=  50.0%  koord= 12.0%  best_effort=  0.0%  km_winner_p50=2.535
+  2026-07-17T12:02:30.829955+00:00  n= 108  winner_share_unknown=  89.8%  target_winner_share=  83.3%  koord=  6.5%  best_effort=  0.0%  km_winner_p50=3.67
+  2026-07-17T18:00:48.845465+00:00  n=  33  winner_share_unknown=  57.6%  target_winner_share=  18.2%  koord=  0.0%  best_effort=  3.0%  km_winner_p50=3.45
+  2026-07-18T06:25:50.973678+00:00  n=  41  winner_share_unknown=  92.7%  target_winner_share=  63.4%  koord=  7.3%  best_effort=  0.0%  km_winner_p50=2.55
+  2026-07-18T12:03:23.360861+00:00  n= 135  winner_share_unknown=  65.9%  target_winner_share=  45.9%  koord=  3.7%  best_effort=  0.0%  km_winner_p50=3.945
+  2026-07-18T18:01:41.955385+00:00  n=  27  winner_share_unknown=  14.8%  target_winner_share=  14.8%  koord=  0.0%  best_effort=  0.0%  km_winner_p50=3.61
+  2026-07-19T07:35:46.950472+00:00  n=  56  winner_share_unknown=  87.5%  target_winner_share=  28.6%  koord=  8.9%  best_effort=  0.0%  km_winner_p50=3.32
+  2026-07-19T12:03:13.757334+00:00  n= 190  winner_share_unknown=  61.6%  target_winner_share=  65.3%  koord=  4.7%  best_effort=  4.7%  km_winner_p50=3.6
+  2026-07-19T18:02:10.058426+00:00  n=  59  winner_share_unknown=   8.5%  target_winner_share=   1.7%  koord=  8.5%  best_effort= 55.9%  km_winner_p50=2.25
+
+  winner_share_unknown       n_bucket=11 mean=   62.1% stdev=   29.05pp range=[8.5%, 92.7%]
+  target_cids_winner_share   n_bucket=11 mean=   41.4% stdev=   23.78pp range=[1.7%, 83.3%]
+  koord_rate                 n_bucket=11 mean=    6.0% stdev=    3.85pp range=[0.0%, 12.0%]
+  silence_rate               n_bucket=11 mean=    0.6% stdev=    1.95pp range=[0.0%, 6.8%]
+  best_effort_rate           n_bucket=11 mean=    5.8% stdev=   15.93pp range=[0.0%, 55.9%]
+  km_winner_p50              n_bucket=11 mean=  3.28km stdev=   0.621km range=[2.25, 4.30]km
+  mixed_pool_unknown_win_rate n_bucket=10 mean=   73.7% stdev=   16.13pp range=[43.8%, 94.4%]
+  gap_unknown (winner-pool share) n_bucket=11 mean=   29.9% stdev=   15.10pp range=[2.9%, 52.5%]
+
+------------------------------------------------------------------------------
+WARIANCJA HISTORYCZNA ([-inf .. +inf), bucket=24.0h, min_bucket_n=20)
+------------------------------------------------------------------------------
+  2026-07-16T07:05:38.623804+00:00  n= 171  winner_share_unknown=  55.6%  target_winner_share=  39.2%  koord=  6.4%  best_effort=  0.0%  km_winner_p50=3.89
+  2026-07-17T07:05:06.046756+00:00  n= 191  winner_share_unknown=  82.2%  target_winner_share=  63.3%  koord=  6.8%  best_effort=  0.5%  km_winner_p50=3.38
+  2026-07-18T06:25:50.973678+00:00  n= 203  winner_share_unknown=  64.5%  target_winner_share=  45.3%  koord=  3.9%  best_effort=  0.0%  km_winner_p50=3.61
+  2026-07-19T07:35:46.950472+00:00  n= 305  winner_share_unknown=  56.1%  target_winner_share=  46.2%  koord=  6.2%  best_effort= 13.8%  km_winner_p50=3.465
+
+  winner_share_unknown       n_bucket=4 mean=   64.6% stdev=   10.77pp range=[55.6%, 82.2%]
+  target_cids_winner_share   n_bucket=4 mean=   48.5% stdev=    8.98pp range=[39.2%, 63.3%]
+  koord_rate                 n_bucket=4 mean=    5.9% stdev=    1.12pp range=[3.9%, 6.8%]
+  silence_rate               n_bucket=4 mean=    0.3% stdev=    0.57pp range=[0.0%, 1.3%]
+  best_effort_rate           n_bucket=4 mean=    3.6% stdev=    5.89pp range=[0.0%, 13.8%]
+  km_winner_p50              n_bucket=4 mean=  3.59km stdev=   0.194km range=[3.38, 3.89]km
+  mixed_pool_unknown_win_rate n_bucket=4 mean=   73.3% stdev=    9.12pp range=[60.2%, 82.9%]
+  gap_unknown (winner-pool share) n_bucket=4 mean=   33.1% stdev=    6.95pp range=[25.0%, 43.9%]
+
+[JSON zapisany: report_final.json]

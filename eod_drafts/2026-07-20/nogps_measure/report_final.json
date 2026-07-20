@@ -1,0 +1,561 @@
+{
+  "input": [
+    "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+  ],
+  "target_cids": [
+    "179",
+    "413"
+  ],
+  "mode": "single",
+  "window": {
+    "label": "[-inf .. +inf)",
+    "counters": {
+      "lines_total": 870,
+      "lines_parsed": 870,
+      "lines_in_window": 870
+    },
+    "metrics": {
+      "n_total_records": 870,
+      "n_decisions_with_best": 870,
+      "pool_serialization_truncated_rate": 0.0,
+      "pool_serialization_checked_n": 870,
+      "pool_share_unknown": 0.3152,
+      "winner_share_unknown": 0.6368,
+      "total_pool_slots": 4787,
+      "unknown_pool_slots": 1509,
+      "unknown_winners": 554,
+      "pool_share_nogps_only": 0.2409,
+      "winner_share_nogps_only": 0.4851,
+      "mixed_pools_n": 635,
+      "mixed_pool_unknown_win_rate": 0.7402,
+      "winner_counter_top12": [
+        [
+          "179",
+          233
+        ],
+        [
+          "413",
+          188
+        ],
+        [
+          "123",
+          78
+        ],
+        [
+          "543",
+          55
+        ],
+        [
+          "447",
+          43
+        ],
+        [
+          "441",
+          40
+        ],
+        [
+          "503",
+          27
+        ],
+        [
+          "509",
+          26
+        ],
+        [
+          "376",
+          24
+        ],
+        [
+          "515",
+          23
+        ],
+        [
+          "470",
+          22
+        ],
+        [
+          "484",
+          12
+        ]
+      ],
+      "top2_concentration": 0.4839,
+      "target_cids": [
+        "179",
+        "413"
+      ],
+      "target_cids_winners_n": 421,
+      "target_cids_winner_share": 0.4839,
+      "target_cids_pool_share": 0.2348,
+      "per_cid_winner_pool": {
+        "179": {
+          "winners": 233,
+          "winner_share": 0.2678,
+          "pool_slots": 554,
+          "pool_share": 0.1157
+        },
+        "413": {
+          "winners": 188,
+          "winner_share": 0.2161,
+          "pool_slots": 570,
+          "pool_share": 0.1191
+        }
+      },
+      "post_wave_winners_all": 21,
+      "post_wave_winners_all_share": 0.0241,
+      "post_wave_winners_target_cids": 8,
+      "post_wave_share_of_target_wins": 0.019,
+      "post_wave_share_of_target_plus_nogps_wins": 0.0267,
+      "km_display_unknown_pool": {
+        "n": 1153,
+        "min": 0.79,
+        "p50": 3.55,
+        "mean": 3.7,
+        "p90": 5.42,
+        "max": 9.89,
+        "stdev": 1.302
+      },
+      "km_display_known_pool": {
+        "n": 3270,
+        "min": 0.0,
+        "p50": 3.45,
+        "mean": 3.805,
+        "p90": 7.14,
+        "max": 18.08,
+        "stdev": 2.574
+      },
+      "km_display_winner_all": {
+        "n": 730,
+        "min": 0.0,
+        "p50": 3.575,
+        "mean": 3.871,
+        "p90": 6.65,
+        "max": 16.04,
+        "stdev": 2.036
+      },
+      "score_margin_best_vs_alt0": {
+        "n": 766,
+        "min": -906.768,
+        "p50": 5.58,
+        "mean": 133.549,
+        "p90": 200.193,
+        "max": 10371.843,
+        "stdev": 924.984
+      },
+      "score_margin_sentinel_skipped": 5,
+      "koord_rate": 0.0586,
+      "koord_n": 51,
+      "silence_rate": 0.0046,
+      "silence_n": 4,
+      "best_effort_rate": 0.0494,
+      "telemetry_present": false,
+      "telemetry_candidate_n": 0,
+      "telemetry_note": "telemetria kandydata (bonus_nogps_neutral_*) NIEOBECNA w tym oknie - dane sprzed deployu kandydata 88acde3 (kod jeszcze w worktree, nie zmergowany). Kontrfaktyczny ON/OFF niepoliczalny z tych danych."
+    },
+    "variance_fine": {
+      "bucket_hours": 6.0,
+      "min_bucket_n": 20,
+      "rows": [
+        {
+          "bucket_start": "2026-07-16T07:05:38.623804+00:00",
+          "n": 64,
+          "winner_share_unknown": 0.875,
+          "winner_share_nogps_only": 0.4375,
+          "pool_share_unknown": 0.4659,
+          "pool_share_nogps_only": 0.1888,
+          "gap_unknown": 0.4091,
+          "target_cids_winner_share": 0.5469,
+          "koord_rate": 0.1094,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0,
+          "km_winner_p50": 2.82,
+          "mixed_pool_n": 52,
+          "mixed_pool_unknown_win_rate": 0.8654
+        },
+        {
+          "bucket_start": "2026-07-16T12:00:30.390008+00:00",
+          "n": 89,
+          "winner_share_unknown": 0.3483,
+          "winner_share_nogps_only": 0.2472,
+          "pool_share_unknown": 0.1749,
+          "pool_share_nogps_only": 0.1373,
+          "gap_unknown": 0.1735,
+          "target_cids_winner_share": 0.2921,
+          "koord_rate": 0.0337,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0,
+          "km_winner_p50": 4.3,
+          "mixed_pool_n": 64,
+          "mixed_pool_unknown_win_rate": 0.4375
+        },
+        {
+          "bucket_start": "2026-07-17T07:05:06.046756+00:00",
+          "n": 50,
+          "winner_share_unknown": 0.82,
+          "winner_share_nogps_only": 0.36,
+          "pool_share_unknown": 0.5309,
+          "pool_share_nogps_only": 0.1959,
+          "gap_unknown": 0.2891,
+          "target_cids_winner_share": 0.5,
+          "koord_rate": 0.12,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0,
+          "km_winner_p50": 2.535,
+          "mixed_pool_n": 33,
+          "mixed_pool_unknown_win_rate": 0.7879
+        },
+        {
+          "bucket_start": "2026-07-17T12:02:30.829955+00:00",
+          "n": 108,
+          "winner_share_unknown": 0.8981,
+          "winner_share_nogps_only": 0.7778,
+          "pool_share_unknown": 0.3732,
+          "pool_share_nogps_only": 0.336,
+          "gap_unknown": 0.525,
+          "target_cids_winner_share": 0.8333,
+          "koord_rate": 0.0648,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0,
+          "km_winner_p50": 3.67,
+          "mixed_pool_n": 97,
+          "mixed_pool_unknown_win_rate": 0.8866
+        },
+        {
+          "bucket_start": "2026-07-17T18:00:48.845465+00:00",
+          "n": 33,
+          "winner_share_unknown": 0.5758,
+          "winner_share_nogps_only": 0.5758,
+          "pool_share_unknown": 0.2468,
+          "pool_share_nogps_only": 0.2468,
+          "gap_unknown": 0.3289,
+          "target_cids_winner_share": 0.1818,
+          "koord_rate": 0.0,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0303,
+          "km_winner_p50": 3.45,
+          "mixed_pool_n": 28,
+          "mixed_pool_unknown_win_rate": 0.6786
+        },
+        {
+          "bucket_start": "2026-07-18T06:25:50.973678+00:00",
+          "n": 41,
+          "winner_share_unknown": 0.9268,
+          "winner_share_nogps_only": 0.4634,
+          "pool_share_unknown": 0.4573,
+          "pool_share_nogps_only": 0.2692,
+          "gap_unknown": 0.4696,
+          "target_cids_winner_share": 0.6341,
+          "koord_rate": 0.0732,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0,
+          "km_winner_p50": 2.55,
+          "mixed_pool_n": 36,
+          "mixed_pool_unknown_win_rate": 0.9444
+        },
+        {
+          "bucket_start": "2026-07-18T12:03:23.360861+00:00",
+          "n": 135,
+          "winner_share_unknown": 0.6593,
+          "winner_share_nogps_only": 0.6074,
+          "pool_share_unknown": 0.295,
+          "pool_share_nogps_only": 0.2566,
+          "gap_unknown": 0.3643,
+          "target_cids_winner_share": 0.4593,
+          "koord_rate": 0.037,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0,
+          "km_winner_p50": 3.945,
+          "mixed_pool_n": 120,
+          "mixed_pool_unknown_win_rate": 0.6333
+        },
+        {
+          "bucket_start": "2026-07-18T18:01:41.955385+00:00",
+          "n": 27,
+          "winner_share_unknown": 0.1481,
+          "winner_share_nogps_only": 0.1481,
+          "pool_share_unknown": 0.1194,
+          "pool_share_nogps_only": 0.1194,
+          "gap_unknown": 0.0287,
+          "target_cids_winner_share": 0.1481,
+          "koord_rate": 0.0,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0,
+          "km_winner_p50": 3.61,
+          "mixed_pool_n": 8,
+          "mixed_pool_unknown_win_rate": 0.5
+        },
+        {
+          "bucket_start": "2026-07-19T07:35:46.950472+00:00",
+          "n": 56,
+          "winner_share_unknown": 0.875,
+          "winner_share_nogps_only": 0.5536,
+          "pool_share_unknown": 0.5706,
+          "pool_share_nogps_only": 0.3353,
+          "gap_unknown": 0.3044,
+          "target_cids_winner_share": 0.2857,
+          "koord_rate": 0.0893,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0,
+          "km_winner_p50": 3.32,
+          "mixed_pool_n": 47,
+          "mixed_pool_unknown_win_rate": 0.8511
+        },
+        {
+          "bucket_start": "2026-07-19T12:03:13.757334+00:00",
+          "n": 190,
+          "winner_share_unknown": 0.6158,
+          "winner_share_nogps_only": 0.5684,
+          "pool_share_unknown": 0.265,
+          "pool_share_nogps_only": 0.2564,
+          "gap_unknown": 0.3508,
+          "target_cids_winner_share": 0.6526,
+          "koord_rate": 0.0474,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0474,
+          "km_winner_p50": 3.6,
+          "mixed_pool_n": 133,
+          "mixed_pool_unknown_win_rate": 0.7895
+        },
+        {
+          "bucket_start": "2026-07-19T18:02:10.058426+00:00",
+          "n": 59,
+          "winner_share_unknown": 0.0847,
+          "winner_share_nogps_only": 0.0,
+          "pool_share_unknown": 0.034,
+          "pool_share_nogps_only": 0.0,
+          "gap_unknown": 0.0507,
+          "target_cids_winner_share": 0.0169,
+          "koord_rate": 0.0847,
+          "silence_rate": 0.0678,
+          "best_effort_rate": 0.5593,
+          "km_winner_p50": 2.25,
+          "mixed_pool_n": 0,
+          "mixed_pool_unknown_win_rate": null
+        }
+      ],
+      "winner_share_unknown_variance": {
+        "n_buckets": 11,
+        "mean": 0.6206,
+        "stdev": 0.2905,
+        "min": 0.0847,
+        "max": 0.9268
+      },
+      "target_cids_winner_share_variance": {
+        "n_buckets": 11,
+        "mean": 0.4137,
+        "stdev": 0.2378,
+        "min": 0.0169,
+        "max": 0.8333
+      },
+      "koord_rate_variance": {
+        "n_buckets": 11,
+        "mean": 0.06,
+        "stdev": 0.0385,
+        "min": 0.0,
+        "max": 0.12
+      },
+      "silence_rate_variance": {
+        "n_buckets": 11,
+        "mean": 0.0062,
+        "stdev": 0.0195,
+        "min": 0.0,
+        "max": 0.0678
+      },
+      "best_effort_rate_variance": {
+        "n_buckets": 11,
+        "mean": 0.0579,
+        "stdev": 0.1593,
+        "min": 0.0,
+        "max": 0.5593
+      },
+      "km_winner_p50_variance": {
+        "n_buckets": 11,
+        "mean": 3.2773,
+        "stdev": 0.6206,
+        "min": 2.25,
+        "max": 4.3
+      },
+      "mixed_pool_unknown_win_rate_variance": {
+        "n_buckets": 10,
+        "mean": 0.7374,
+        "stdev": 0.1613,
+        "min": 0.4375,
+        "max": 0.9444
+      },
+      "winner_share_nogps_only_variance": {
+        "n_buckets": 11,
+        "mean": 0.4308,
+        "stdev": 0.2157,
+        "min": 0.0,
+        "max": 0.7778
+      },
+      "pool_share_unknown_variance": {
+        "n_buckets": 11,
+        "mean": 0.3212,
+        "stdev": 0.1658,
+        "min": 0.034,
+        "max": 0.5706
+      },
+      "pool_share_nogps_only_variance": {
+        "n_buckets": 11,
+        "mean": 0.2129,
+        "stdev": 0.0948,
+        "min": 0.0,
+        "max": 0.336
+      },
+      "gap_unknown_variance": {
+        "n_buckets": 11,
+        "mean": 0.2995,
+        "stdev": 0.151,
+        "min": 0.0287,
+        "max": 0.525
+      }
+    },
+    "variance_coarse": {
+      "bucket_hours": 24.0,
+      "min_bucket_n": 20,
+      "rows": [
+        {
+          "bucket_start": "2026-07-16T07:05:38.623804+00:00",
+          "n": 171,
+          "winner_share_unknown": 0.5556,
+          "winner_share_nogps_only": 0.3333,
+          "pool_share_unknown": 0.2574,
+          "pool_share_nogps_only": 0.1631,
+          "gap_unknown": 0.2982,
+          "target_cids_winner_share": 0.3918,
+          "koord_rate": 0.0643,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0,
+          "km_winner_p50": 3.89,
+          "mixed_pool_n": 133,
+          "mixed_pool_unknown_win_rate": 0.6015
+        },
+        {
+          "bucket_start": "2026-07-17T07:05:06.046756+00:00",
+          "n": 191,
+          "winner_share_unknown": 0.822,
+          "winner_share_nogps_only": 0.6335,
+          "pool_share_unknown": 0.3828,
+          "pool_share_nogps_only": 0.2986,
+          "gap_unknown": 0.4392,
+          "target_cids_winner_share": 0.6335,
+          "koord_rate": 0.0681,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0052,
+          "km_winner_p50": 3.38,
+          "mixed_pool_n": 158,
+          "mixed_pool_unknown_win_rate": 0.8291
+        },
+        {
+          "bucket_start": "2026-07-18T06:25:50.973678+00:00",
+          "n": 203,
+          "winner_share_unknown": 0.6453,
+          "winner_share_nogps_only": 0.5172,
+          "pool_share_unknown": 0.3078,
+          "pool_share_nogps_only": 0.2429,
+          "gap_unknown": 0.3375,
+          "target_cids_winner_share": 0.4532,
+          "koord_rate": 0.0394,
+          "silence_rate": 0.0,
+          "best_effort_rate": 0.0,
+          "km_winner_p50": 3.61,
+          "mixed_pool_n": 164,
+          "mixed_pool_unknown_win_rate": 0.6951
+        },
+        {
+          "bucket_start": "2026-07-19T07:35:46.950472+00:00",
+          "n": 305,
+          "winner_share_unknown": 0.5607,
+          "winner_share_nogps_only": 0.4557,
+          "pool_share_unknown": 0.3104,
+          "pool_share_nogps_only": 0.2494,
+          "gap_unknown": 0.2503,
+          "target_cids_winner_share": 0.4623,
+          "koord_rate": 0.0623,
+          "silence_rate": 0.0131,
+          "best_effort_rate": 0.1377,
+          "km_winner_p50": 3.465,
+          "mixed_pool_n": 180,
+          "mixed_pool_unknown_win_rate": 0.8056
+        }
+      ],
+      "winner_share_unknown_variance": {
+        "n_buckets": 4,
+        "mean": 0.6459,
+        "stdev": 0.1077,
+        "min": 0.5556,
+        "max": 0.822
+      },
+      "target_cids_winner_share_variance": {
+        "n_buckets": 4,
+        "mean": 0.4852,
+        "stdev": 0.0898,
+        "min": 0.3918,
+        "max": 0.6335
+      },
+      "koord_rate_variance": {
+        "n_buckets": 4,
+        "mean": 0.0585,
+        "stdev": 0.0112,
+        "min": 0.0394,
+        "max": 0.0681
+      },
+      "silence_rate_variance": {
+        "n_buckets": 4,
+        "mean": 0.0033,
+        "stdev": 0.0057,
+        "min": 0.0,
+        "max": 0.0131
+      },
+      "best_effort_rate_variance": {
+        "n_buckets": 4,
+        "mean": 0.0357,
+        "stdev": 0.0589,
+        "min": 0.0,
+        "max": 0.1377
+      },
+      "km_winner_p50_variance": {
+        "n_buckets": 4,
+        "mean": 3.5862,
+        "stdev": 0.1937,
+        "min": 3.38,
+        "max": 3.89
+      },
+      "mixed_pool_unknown_win_rate_variance": {
+        "n_buckets": 4,
+        "mean": 0.7328,
+        "stdev": 0.0912,
+        "min": 0.6015,
+        "max": 0.8291
+      },
+      "winner_share_nogps_only_variance": {
+        "n_buckets": 4,
+        "mean": 0.4849,
+        "stdev": 0.1084,
+        "min": 0.3333,
+        "max": 0.6335
+      },
+      "pool_share_unknown_variance": {
+        "n_buckets": 4,
+        "mean": 0.3146,
+        "stdev": 0.0447,
+        "min": 0.2574,
+        "max": 0.3828
+      },
+      "pool_share_nogps_only_variance": {
+        "n_buckets": 4,
+        "mean": 0.2385,
+        "stdev": 0.0486,
+        "min": 0.1631,
+        "max": 0.2986
+      },
+      "gap_unknown_variance": {
+        "n_buckets": 4,
+        "mean": 0.3313,
+        "stdev": 0.0695,
+        "min": 0.2503,
+        "max": 0.4392
+      }
+    }
+  }
+}
