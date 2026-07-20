@@ -12,6 +12,18 @@ END = datetime(2026, 7, 10, 8, tzinfo=timezone.utc)
 FLAG = "ENABLE_STAGE_TIMING_OBSERVATION"
 
 
+def _record():
+    ts = "2026-07-09T09:00:00+00:00"
+    return {
+        "order_id": "synthetic-paired", "ts": ts, "now": ts, "schema": "wr1",
+        "order_event": {"order_id": "synthetic-paired"}, "fleet": {}, "flags": {},
+        "osrm_calls": [],
+        "live_inputs": {"reliability": {}, "plans": {}, "eta_quantile": {},
+                        "prep_bias": {}, "loadgov": [None, None, None, 0],
+                        "k07": None, "courier_last_pos": {}},
+    }
+
+
 def _result(**overrides):
     value = {
         "verdict": "PROPOSE",
@@ -41,7 +53,11 @@ def test_with_flag_rejects_ambiguous_names(bad):
         PFR.with_flag({}, bad, True)
 
 
-def test_paired_replay_proves_exact_parity_and_order(monkeypatch):
+@pytest.mark.parametrize(("first", "expected_calls"), [
+    ("off", [False, True]),
+    ("on", [True, False]),
+])
+def test_paired_replay_proves_exact_parity_and_both_orders(first, expected_calls):
     calls = []
 
     def replay(record):
@@ -52,12 +68,12 @@ def test_paired_replay_proves_exact_parity_and_order(monkeypatch):
         flag_name=FLAG,
         since=START,
         until=END,
-        first="off",
-        records_override=[{"flags": {}}],
+        first=first,
+        records_override=[_record()],
         replay_one=replay,
     )
 
-    assert calls == [False, True]
+    assert calls == expected_calls
     assert report["exact"] == 1
     assert report["diffs"] == report["critical"] == 0
     assert report["miss_mismatch"] == 0
@@ -77,7 +93,7 @@ def test_paired_replay_classifies_soft_difference():
         since=START,
         until=END,
         first="on",
-        records_override=[{"flags": {}}],
+        records_override=[_record()],
         replay_one=replay,
     )
 
@@ -96,7 +112,7 @@ def test_paired_replay_classifies_core_difference():
         since=START,
         until=END,
         first="off",
-        records_override=[{"flags": {}}],
+        records_override=[_record()],
         replay_one=replay,
     )
 
@@ -115,7 +131,7 @@ def test_paired_replay_redacts_exception_message():
         since=START,
         until=END,
         first="off",
-        records_override=[{"flags": {}}],
+        records_override=[_record()],
         replay_one=replay,
     )
 
@@ -138,7 +154,7 @@ def test_paired_replay_suppresses_transitive_stdout_stderr_and_logs(capsys):
         since=START,
         until=END,
         first="off",
-        records_override=[{"flags": {}}],
+        records_override=[_record()],
         replay_one=replay,
     )
 
@@ -146,3 +162,25 @@ def test_paired_replay_suppresses_transitive_stdout_stderr_and_logs(capsys):
     assert report["exact"] == 1
     assert secret not in captured.out
     assert secret not in captured.err
+
+
+@pytest.mark.parametrize("flags_value", [pytest.param(None, id="missing"),
+                                          pytest.param([], id="invalid-type")])
+def test_paired_rejects_missing_or_invalid_flags_before_replay(flags_value):
+    record = _record()
+    if flags_value is None:
+        record.pop("flags")
+    else:
+        record["flags"] = flags_value
+    calls = []
+
+    def forbidden(rec):
+        calls.append(rec)
+        raise AssertionError("paired replay called invalid record")
+
+    report = PFR.run_paired(
+        flag_name=FLAG, since=START, until=END, first="off",
+        records_override=[record], replay_one=forbidden)
+
+    assert calls == []
+    assert report["errors"] == {"IncompleteReplayInput": 1}

@@ -6,13 +6,15 @@ koniec dziennego dryfu replayu na kandydatach no_gps (store TTL 25 min; nocny
 
 Pinuje: (1) capture zapisuje zawartość store'a przefiltrowaną do floty;
 (2) fail-soft przy braku store'a (pole nieobecne = rekord legacy-zgodny);
-(3) redirect w replayu → loader czyta NAGRANE, nie żywe; (4) rekord legacy
-(brak pola) → ścieżka nietknięta (passthrough do żywego, jak przed fixem).
+(3) redirect w replayu → loader czyta NAGRANE, nie żywe; (4) wr1 bez pola
+jest INPUT_MISS fail-closed i nie przechodzi do żywego store'u.
 """
 import json
-import types
+import pytest
 
+from dispatch_v2 import common as C
 from dispatch_v2 import courier_resolver as CR
+from dispatch_v2 import dispatch_pipeline as DP
 from dispatch_v2 import world_record as WR
 from dispatch_v2.tools import world_replay as WRP
 
@@ -38,16 +40,25 @@ def test_capture_fail_soft_missing_store(tmp_path, monkeypatch):
     assert "courier_last_pos" not in out  # legacy-zgodny rekord
 
 
-def _serve(li, tmp_path):
-    rec = {"live_inputs": li}
-    patches = []
+def _serve(li, tmp_path, monkeypatch):
+    from dispatch_v2 import calib_maps as CM
+    from dispatch_v2 import plan_manager as PM
+
+    complete = {
+        "reliability": {}, "plans": {}, "eta_quantile": {}, "prep_bias": {},
+        "loadgov": [None, None, None, 0], "k07": None,
+    }
+    complete.update(li)
+    rec = {"live_inputs": complete}
+    monkeypatch.setattr(DP, "_A2_FEED_CACHE", dict(DP._A2_FEED_CACHE))
+    monkeypatch.setattr(PM, "_perf_plans_cache", dict(PM._perf_plans_cache))
+    monkeypatch.setattr(CM, "_eta_cache", dict(CM._eta_cache))
+    monkeypatch.setattr(CM, "_bias_cache", dict(CM._bias_cache))
 
     def _patch(mod, attr, val):
-        patches.append((mod, attr, getattr(mod, attr)))
-        setattr(mod, attr, val)
-    WRP._serve_live_inputs(rec, dp=None, C=types.SimpleNamespace(), tmpdir=str(tmp_path),
+        monkeypatch.setattr(mod, attr, val)
+    WRP._serve_live_inputs(rec, dp=DP, C=C, tmpdir=str(tmp_path),
                            _patch=_patch)
-    return patches
 
 
 def test_replay_redirect_reads_recorded_not_live(tmp_path, monkeypatch):
@@ -55,15 +66,17 @@ def test_replay_redirect_reads_recorded_not_live(tmp_path, monkeypatch):
     live.write_text(json.dumps({"999": {"lat": 1.0, "lon": 1.0}}), encoding="utf-8")
     monkeypatch.setattr(CR, "COURIER_LAST_POS_PATH", str(live))
     recorded = {"457": _SAMPLE["457"]}
-    _serve({"courier_last_pos": recorded}, tmp_path)
+    _serve({"courier_last_pos": recorded}, tmp_path, monkeypatch)
     assert CR.COURIER_LAST_POS_PATH != str(live)  # przekierowane na tmp-snapshot
     assert CR._load_last_known_pos() == recorded  # nagrane, nie „żywe"
 
 
-def test_replay_legacy_record_passthrough(tmp_path, monkeypatch):
+def test_replay_wr1_missing_snapshot_fails_closed(tmp_path, monkeypatch):
     live = tmp_path / "live.json"
     live.write_text(json.dumps({"457": _SAMPLE["457"]}), encoding="utf-8")
     monkeypatch.setattr(CR, "COURIER_LAST_POS_PATH", str(live))
-    _serve({}, tmp_path)  # legacy: brak pola
-    assert CR.COURIER_LAST_POS_PATH == str(live)  # nietknięte
+    with pytest.raises(WRP.IncompleteReplayInput,
+                       match="missing_live_input:courier_last_pos"):
+        _serve({}, tmp_path, monkeypatch)
+    assert CR.COURIER_LAST_POS_PATH == str(live)  # brak redirectu do żywego
     assert CR._load_last_known_pos() == {"457": _SAMPLE["457"]}

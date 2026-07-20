@@ -1,7 +1,7 @@
 """K06 (refaktor, 2026-07-06) — world_replay: plumbing sandboxu replayu.
 
 Testujemy INFRASTRUKTURĘ (nie decyzję): rehydracja floty (iso→datetime,
-list→tuple), OsrmReplayer (FIFO per klucz, ostatni-wynik po wyczerpaniu,
+list→tuple), OsrmReplayer (FIFO per klucz, jednokrotne zuzycie wyniku,
 licznik missów), replay_one (zamrożenie flag K05 z nagrania, OSRM z nagrania,
 efekty K08 połknięte-nie-flushowane, world_record wyłączony, restauracja
 patchy po wyjściu). Prawdziwy replay end-to-end = bieg na korpusie (bramka
@@ -39,19 +39,35 @@ def test_osrm_replayer_fifo_i_missy():
     r = wrep.OsrmReplayer(calls)
     assert r.route((1.0, 2.0), (3.0, 4.0))["duration_min"] == 5.0, "FIFO: 1. wynik"
     assert r.route((1.0, 2.0), (3.0, 4.0))["duration_min"] == 6.0, "FIFO: 2. wynik"
-    assert r.route((1.0, 2.0), (3.0, 4.0))["duration_min"] == 6.0, "wyczerpane → ostatni"
-    assert r.misses == []
+    exhausted = r.route((1.0, 2.0), (3.0, 4.0))
+    assert exhausted.get("replay_miss") is True, "wyczerpane → sentinel, nie reuse"
+    assert len(r.misses) == 1
     out = r.route((9.0, 9.0), (8.0, 8.0))
-    assert out.get("replay_miss") is True and len(r.misses) == 1, "nieznany klucz = miss"
+    assert out.get("replay_miss") is True and len(r.misses) == 2, "nieznany klucz = miss"
+
+
+def test_osrm_single_recorded_result_is_consumed_exactly_once():
+    r = wrep.OsrmReplayer([
+        {"kind": "route", "key": [[1.0, 2.0], [3.0, 4.0]],
+         "result": {"duration_min": 5.0}},
+    ])
+    assert r.route((1.0, 2.0), (3.0, 4.0)) == {"duration_min": 5.0}
+    extra = r.route((1.0, 2.0), (3.0, 4.0))
+    assert extra["replay_miss"] is True
+    assert len(r.misses) == 1
 
 
 def _rec(flags=None):
     return {
         "order_id": "486200", "ts": "2026-07-06T15:00:05+00:00",
         "now": "2026-07-06T15:00:00+00:00",
+        "schema": "wr1",
         "flags": flags or {"ENABLE_X_TESTOWA": True},
         "order_event": {"order_id": "486200"},
         "fleet": {"123": {"courier_id": "123", "pos": [53.13, 23.16]}},
+        "live_inputs": {"reliability": {}, "plans": {}, "eta_quantile": {},
+                        "prep_bias": {}, "loadgov": [None, None, None, 0],
+                        "k07": None, "courier_last_pos": {}},
         "osrm_calls": [{"kind": "route", "key": [[53.13, 23.16], [53.11, 23.15]],
                         "result": {"duration_min": 7.0}}],
         "verdict": "PROPOSE",

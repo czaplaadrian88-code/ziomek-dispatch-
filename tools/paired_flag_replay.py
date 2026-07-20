@@ -114,6 +114,9 @@ def run_paired(
 
     for record in records:
         try:
+            invalid_reason = WR.validate_replay_record(record)
+            if invalid_reason:
+                raise WR.IncompleteReplayInput(invalid_reason)
             with _suppress_transitive_output():
                 first_result, first_miss = replay_one(
                     with_flag(record, flag_name, first_enabled)

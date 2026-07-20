@@ -1,0 +1,42 @@
+[
+  {
+    "name": "input-miss",
+    "input_miss_reason": "missing_live_inputs",
+    "osrm_misses": 0,
+    "recorded": null,
+    "replayed": null,
+    "expected": "INPUT_MISS"
+  },
+  {
+    "name": "osrm-miss-beats-diff",
+    "input_miss_reason": null,
+    "osrm_misses": 1,
+    "recorded": {"verdict": "PROPOSE", "best_cid": "synthetic-a", "best_score": 1.0, "reason": "ok", "pool_feasible": 2, "pool_total": 3},
+    "replayed": {"verdict": "KOORD", "best_cid": "synthetic-b", "best_score": 2.0, "reason": "changed", "pool_feasible": 1, "pool_total": 3},
+    "expected": "OSRM_MISS"
+  },
+  {
+    "name": "critical-diff",
+    "input_miss_reason": null,
+    "osrm_misses": 0,
+    "recorded": {"verdict": "PROPOSE", "best_cid": "synthetic-a", "best_score": 1.0, "reason": "ok", "pool_feasible": 2, "pool_total": 3},
+    "replayed": {"verdict": "PROPOSE", "best_cid": "synthetic-b", "best_score": 1.0, "reason": "ok", "pool_feasible": 2, "pool_total": 3},
+    "expected": "CRITICAL_DIFF"
+  },
+  {
+    "name": "soft-diff",
+    "input_miss_reason": null,
+    "osrm_misses": 0,
+    "recorded": {"verdict": "PROPOSE", "best_cid": "synthetic-a", "best_score": 1.0, "reason": "ok", "pool_feasible": 2, "pool_total": 3},
+    "replayed": {"verdict": "PROPOSE", "best_cid": "synthetic-a", "best_score": 1.0, "reason": "ok", "pool_feasible": 1, "pool_total": 3},
+    "expected": "SOFT_DIFF"
+  },
+  {
+    "name": "parity",
+    "input_miss_reason": null,
+    "osrm_misses": 0,
+    "recorded": {"verdict": "PROPOSE", "best_cid": "synthetic-a", "best_score": 1.0, "reason": "ok", "pool_feasible": 2, "pool_total": 3},
+    "replayed": {"verdict": "PROPOSE", "best_cid": "synthetic-a", "best_score": 1.0, "reason": "ok", "pool_feasible": 2, "pool_total": 3},
+    "expected": "PARITY"
+  }
+]

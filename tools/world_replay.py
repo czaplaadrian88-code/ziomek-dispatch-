@@ -45,6 +45,83 @@ if SCRIPTS not in sys.path:
 RECORD_DIR = "/root/.openclaw/workspace/dispatch_state/world_record"
 SHADOW_LOG = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
 
+REPLAY_CLASSES = (
+    "INPUT_MISS",
+    "OSRM_MISS",
+    "CRITICAL_DIFF",
+    "SOFT_DIFF",
+    "PARITY",
+)
+CRITICAL_FIELDS = frozenset({"verdict", "best_cid", "best_score"})
+KNOWN_REPLAY_SCHEMAS = frozenset({"wr1"})
+PRE_WR1_SCHEMAS = frozenset({None, "wr0"})
+REQUIRED_LIVE_INPUT_KEYS = (
+    "reliability",
+    "plans",
+    "eta_quantile",
+    "prep_bias",
+    "loadgov",
+    "k07",
+    "courier_last_pos",
+)
+
+
+class IncompleteReplayInput(ValueError):
+    """Frozen record nie wystarcza do replayu bez odczytu live state."""
+
+
+def validate_live_inputs(rec: dict) -> str | None:
+    """Zwraca stabilny reason INPUT_MISS albo ``None`` dla kompletnego wr1.
+
+    Kolejnosc ``REQUIRED_LIVE_INPUT_KEYS`` jest czescia kontraktu: przy wielu
+    brakach raportujemy pierwszy, wiec reason pozostaje rozlaczny i stabilny.
+    ``k07=None`` jest legalnym nagranym wynikiem fail-soft. ``loadgov`` moze
+    zawierac None, ale musi zachowac czteroelementowy ksztalt producenta.
+    """
+    live_inputs = rec.get("live_inputs")
+    if not isinstance(live_inputs, dict):
+        return "missing_live_inputs"
+    for key in REQUIRED_LIVE_INPUT_KEYS:
+        if key not in live_inputs:
+            return f"missing_live_input:{key}"
+    dict_keys = ("reliability", "plans", "eta_quantile", "prep_bias",
+                 "courier_last_pos")
+    for key in dict_keys:
+        if not isinstance(live_inputs[key], dict):
+            return f"invalid_live_input:{key}"
+    loadgov = live_inputs["loadgov"]
+    if not isinstance(loadgov, (list, tuple)) or len(loadgov) != 4:
+        return "invalid_live_input:loadgov"
+    if live_inputs["k07"] is not None and not isinstance(live_inputs["k07"], dict):
+        return "invalid_live_input:k07"
+    return None
+
+
+def validate_replay_record(rec: dict) -> str | None:
+    """Wspolny, stabilny kontrakt outer wr1 + zamrozonych live inputs."""
+    if not isinstance(rec, dict):
+        return "invalid_record"
+    order_id = rec.get("order_id")
+    if order_id is None or not str(order_id).strip():
+        return "missing_order_id"
+    if _parse_dt(rec.get("ts")) is None:
+        return "invalid_ts"
+    if not rec.get("now"):
+        return "missing_now"
+    if _parse_dt(rec.get("now")) is None:
+        return "invalid_now"
+    schema = rec.get("schema")
+    if schema in PRE_WR1_SCHEMAS:
+        return "schema_pre_wr1"
+    if schema not in KNOWN_REPLAY_SCHEMAS:
+        return "unknown_schema"
+    for key in ("order_event", "fleet", "flags"):
+        if not isinstance(rec.get(key), dict):
+            return f"missing_{key}"
+    if not isinstance(rec.get("osrm_calls"), list):
+        return "invalid_osrm_calls"
+    return validate_live_inputs(rec)
+
 
 def _parse_dt(v):
     if not v or not isinstance(v, str):
@@ -81,9 +158,11 @@ def rehydrate_fleet(fleet_json: dict) -> dict:
 
 
 class OsrmReplayer:
-    """Serwuje wyniki route/table z nagrania (per-klucz FIFO; wyczerpana kolejka
-    → ostatni wynik; brak klucza → miss + sentinel z fallbacku haversine NIE
-    jest wołany — zwracamy None-safe strukturę i liczymy miss)."""
+    """Serwuje nagrane route/table jednokrotnie, FIFO per klucz.
+
+    Brak klucza albo wyczerpana kolejka daje miss + sentinel; fallback
+    haversine ani siec nigdy nie sa wolane.
+    """
 
     def __init__(self, calls):
         self.q = {}
@@ -91,15 +170,12 @@ class OsrmReplayer:
         for c in calls or []:
             key = (c.get("kind"), json.dumps(c.get("key"), sort_keys=True))
             self.q.setdefault(key, []).append(c.get("result"))
-        self.last = {k: v[-1] for k, v in self.q.items()}
 
     def _take(self, kind, key_obj, empty):
         key = (kind, json.dumps(key_obj, sort_keys=True))
         seq = self.q.get(key)
         if seq:
-            return seq.pop(0) if len(seq) > 1 else seq[0]
-        if key in self.last:
-            return self.last[key]
+            return seq.pop(0)
         self.misses.append(key)
         return empty
 
@@ -175,70 +251,104 @@ def _extract(result_like) -> dict:
     }
 
 
+def classify_replay(recorded: dict | None, replayed: dict | None,
+                    osrm_misses: int = 0,
+                    input_miss_reason: str | None = None) -> dict:
+    """Klasyfikuje jeden frozen record do dokladnie jednej klasy replay-truth.
+
+    Precedencja jest czescia kontraktu: brak wejscia uniewaznia porownanie,
+    brak nagranego OSRM uniewaznia diff, a dopiero kompletny oracle moze byc
+    CRITICAL/SOFT/PARITY. Funkcja jest czysta, aby frozen golden i mutation
+    probe nie zależaly od pipeline ani sieci.
+    """
+    if input_miss_reason:
+        return {"class": "INPUT_MISS", "reason": input_miss_reason, "diffs": {}}
+    if recorded is None or replayed is None:
+        return {"class": "INPUT_MISS", "reason": "missing_comparison_input",
+                "diffs": {}}
+    if osrm_misses:
+        return {"class": "OSRM_MISS", "reason": "recorded_osrm_call_missing",
+                "diffs": {}}
+
+    keys = tuple(dict.fromkeys((*replayed.keys(), *recorded.keys())))
+    diffs = {
+        key: {"replay": replayed.get(key), "zapis": recorded.get(key)}
+        for key in keys if replayed.get(key) != recorded.get(key)
+    }
+    if any(key in CRITICAL_FIELDS for key in diffs):
+        cls = "CRITICAL_DIFF"
+    elif diffs:
+        cls = "SOFT_DIFF"
+    else:
+        cls = "PARITY"
+    return {"class": cls, "reason": None, "diffs": diffs}
+
+
 def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
     """v1: serwuj ŻYWE wejścia decyzji z nagrania zamiast czytać dysk „teraz".
 
     Zwraca (k07_dict_or_None, loadgov_tuple_or_None) do dalszego patcha.
-    Pliki (reliability/plans/eta/bias): zrzut treści do tmp + przekierowanie
+    Pliki (reliability/plans/eta/bias/courier_last_pos): zrzut treści do tmp
+    + przekierowanie
     KANONICZNYCH stałych ścieżek + reset mtime-cache (świeży proces mógł już
     zcache'ować realny plik przy poprzednim rekordzie w pętli bramki). loadgov:
     krotka wprost (patch _loadgov_compute niżej). k07: dict prefetchu (patch
-    get_fresh niżej). Brak `live_inputs` (rekord v0) → (None, None), stary
-    best-effort. Fail-soft per pole."""
+    get_fresh niżej). `replay_one` dopuszcza tylko kompletny wr1; brak dowolnego
+    snapshotu kończy się INPUT_MISS przed odczytem żywego stanu."""
     li = rec.get("live_inputs")
     if not isinstance(li, dict):
         return None, None
+    invalid_reason = validate_live_inputs(rec)
+    if invalid_reason:
+        raise IncompleteReplayInput(invalid_reason)
 
     def _redirect(mod, attr, content, cache_obj=None, cache_reset=None):
         if content is None:
             return
-        try:
-            p = os.path.join(tmpdir, f"{attr}.json")
-            with open(p, "w", encoding="utf-8") as fh:
-                json.dump(content, fh, ensure_ascii=False)
-            _patch(mod, attr, p if not isinstance(getattr(mod, attr), Path) else Path(p))
-            if cache_obj is not None and cache_reset is not None:
-                cache_obj.update(cache_reset)
-        except Exception:
-            pass
+        p = os.path.join(tmpdir, f"{attr}.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(content, fh, ensure_ascii=False)
+        _patch(mod, attr, p if not isinstance(getattr(mod, attr), Path) else Path(p))
+        if cache_obj is not None and cache_reset is not None:
+            cache_obj.update(cache_reset)
 
     # reliability — C.A2_RELIABILITY_FEED_PATH (2 czytelników: A2 soft + RAMPA),
     # cache dp._A2_FEED_CACHE (mtime-keyed → reset mtime=None).
-    _redirect(C, "A2_RELIABILITY_FEED_PATH", li.get("reliability"),
+    _redirect(C, "A2_RELIABILITY_FEED_PATH", li["reliability"],
               getattr(dp, "_A2_FEED_CACHE", None), {"mtime": None})
     # plans — plan_manager.PLANS_FILE, cache _perf_plans_cache (key-keyed → reset).
-    try:
-        from dispatch_v2 import plan_manager as _pm
-        _redirect(_pm, "PLANS_FILE", li.get("plans"),
-                  getattr(_pm, "_perf_plans_cache", None), {"key": None, "data": None})
-    except Exception:
+    from dispatch_v2 import plan_manager as _pm
+    _redirect(_pm, "PLANS_FILE", li["plans"],
+              getattr(_pm, "_perf_plans_cache", None), {"key": None, "data": None})
+    lock_path = os.path.join(tmpdir, "PLANS_FILE.lock")
+    with open(lock_path, "wb"):
         pass
+    _patch(_pm, "LOCK_FILE",
+           lock_path if not isinstance(getattr(_pm, "LOCK_FILE"), Path)
+           else Path(lock_path))
     # calib eta/bias — calib_maps.*_PATH, cache _eta_cache/_bias_cache (mtime=None).
-    try:
-        from dispatch_v2 import calib_maps as _cm
-        _redirect(_cm, "ETA_QUANTILE_MAP_PATH", li.get("eta_quantile"),
-                  getattr(_cm, "_eta_cache", None), {"mtime": None})
-        _redirect(_cm, "PREP_BIAS_MAP_PATH", li.get("prep_bias"),
-                  getattr(_cm, "_bias_cache", None), {"mtime": None})
-    except Exception:
-        pass
-    # courier_last_pos — courier_resolver.COURIER_LAST_POS_PATH (loader bez cache).
-    # FIX 2026-07-18 (finding fali #7): bez tego replay czytał ŻYWY store TTL-25min
-    # → dzienny dryf pozycji no_gps. Rekordy legacy bez pola → passthrough (skip).
-    try:
-        from dispatch_v2 import courier_resolver as _crm
-        _redirect(_crm, "COURIER_LAST_POS_PATH", li.get("courier_last_pos"))
-    except Exception:
-        pass
+    from dispatch_v2 import calib_maps as _cm
+    _redirect(_cm, "ETA_QUANTILE_MAP_PATH", li["eta_quantile"],
+              getattr(_cm, "_eta_cache", None), {"mtime": None})
+    _redirect(_cm, "PREP_BIAS_MAP_PATH", li["prep_bias"],
+              getattr(_cm, "_bias_cache", None), {"mtime": None})
+    # last-known position — master dodał ten redirect po fali #7; R0 wymaga
+    # teraz snapshotu jako siódmego wejścia, więc nie wolno użyć ``.get`` ani
+    # zachować legacy passthrough do żywego store'u.
+    from dispatch_v2 import courier_resolver as _crm
+    _redirect(_crm, "COURIER_LAST_POS_PATH", li["courier_last_pos"])
 
     k07 = li.get("k07") if isinstance(li.get("k07"), dict) else None
-    lg = li.get("loadgov")
+    lg = li["loadgov"]
     loadgov = tuple(lg) if isinstance(lg, (list, tuple)) and len(lg) == 4 else None
     return k07, loadgov
 
 
 def replay_one(rec: dict) -> tuple[dict, int]:
     """Zwraca (extract z replayu, osrm_misses). Pełny sandbox — patrz moduł."""
+    invalid_reason = validate_replay_record(rec)
+    if invalid_reason:
+        raise IncompleteReplayInput(invalid_reason)
     from dispatch_v2 import common as C
     from dispatch_v2 import dispatch_pipeline as dp
     from dispatch_v2 import osrm_client, effects_buffer, world_record
@@ -307,6 +417,11 @@ def main(argv=None) -> int:
         return 2
     if not rec.get("now"):
         print("⚠ nagranie ma now=null (sprzed K06a) — replay czasu NIEwierny")
+
+    invalid_reason = validate_replay_record(rec)
+    if invalid_reason:
+        print(f"INPUT_MISS reason={invalid_reason}")
+        return 2
 
     replayed, misses = replay_one(rec)
     shadow = find_shadow(a.order_id, rec.get("ts"), a.shadow_file)
