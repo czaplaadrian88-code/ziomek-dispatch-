@@ -1,6 +1,6 @@
 {
-  "base_sha": "2d2ea190968d4e778d01e635f9016cf27e649947",
-  "manifest_version": 18,
+  "base_sha": "1fc31d8d0b7d4bc50261528c41f17545b862aea7",
+  "manifest_version": 19,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -2118,6 +2118,21 @@
     "tests/test_geocode_pin_memory_fallback_2026_07_09.py::test_verify_reject_live_mode_below_confidence_bar_returns_none",
     "tests/test_geocode_pin_memory_fallback_2026_07_09.py::test_verify_reject_live_mode_uses_pin_memory",
     "tests/test_geocode_pin_memory_fallback_2026_07_09.py::test_verify_reject_shadow_mode_still_returns_none",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_district_and_distance_boundaries[Bagn\\xf3wka-True-799.0-True]",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_district_and_distance_boundaries[Bagn\\xf3wka-True-800.1-False]",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_district_and_distance_boundaries[Centrum-False-503.0-False]",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_district_and_distance_boundaries[Jarosz\\xf3wka-False-1500.0-True]",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_district_and_distance_boundaries[Jarosz\\xf3wka-False-1500.1-False]",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_flag_default_registry_and_reference_contract",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_geocode_bypasses_old_negative_cache_and_cache_is_rollback_safe",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_house_number_detection_uses_normalized_street_part",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_jp2_47_pre_fix_reject_stays_reject_when_flag_on",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_new_order_state_persists_marker_without_changing_off_shape",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_run_verification_waits_for_cross_source_before_accept",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_street_only_4km_cross_source_stays_reject_when_flag_on",
+    "tests/test_geocode_street_only_approx_2026_07_20.py::test_wasilkowska_503m_on_accepts_and_off_rejects",
+    "tests/test_geocode_street_only_approx_propagation_2026_07_20.py::test_marker_absent_keeps_legacy_metrics_shape",
+    "tests/test_geocode_street_only_approx_propagation_2026_07_20.py::test_marker_reaches_result_best_alternative_and_top_level",
     "tests/test_geocode_verify_phase2_2026_06_08.py::test_adjacent_districts_not_a_hard_signal",
     "tests/test_geocode_verify_phase2_2026_06_08.py::test_clean_result_ok",
     "tests/test_geocode_verify_phase2_2026_06_08.py::test_cross_source_agreement_keeps_ok",
@@ -5547,7 +5562,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "105408f7baf31d6ee7d0640d278397e4859dc4f9d51fdea114d13acaface9aac",
+  "nodeids_sha256": "7b3b7ea579afbd01daecf81c0ae7740eb61732ea06ecd5f7ec7deea9bb360dd9",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5662,8 +5677,8 @@
       "skipped"
     ]
   },
-  "owner": "CTO (C3-01+nocne3)",
-  "reason": "C3-01 durable-apply + 3 nocne fixy (identity/recanon/reason)",
+  "owner": "CTO (street-only)",
+  "reason": "geokod street-only approx za flaga OFF",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-20T18:04:06+00:00"
+  "updated_at_utc": "2026-07-20T18:56:00+00:00"
 }
