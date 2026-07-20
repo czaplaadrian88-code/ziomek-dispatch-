@@ -436,6 +436,32 @@ def evaluate_courier_tier(
                 "days_since_first": metrics.days_since_first_delivery,
                 "peak_deliveries": metrics.peak_deliveries_30d,
                 "peak_active_days": metrics.peak_active_days_30d,
+                # Telemetry only: expose the exact literals evaluated above.
+                # The decision still uses the pre-existing days_ok/deliv_ok/
+                # days_active_ok booleans; these details cannot alter it.
+                "rules": [
+                    {
+                        "metric": "days_since_first_delivery",
+                        "op": ">=",
+                        "threshold": 14,
+                        "value": metrics.days_since_first_delivery,
+                        "passed": days_ok,
+                    },
+                    {
+                        "metric": "peak_deliveries_30d",
+                        "op": ">=",
+                        "threshold": 50,
+                        "value": metrics.peak_deliveries_30d,
+                        "passed": deliv_ok,
+                    },
+                    {
+                        "metric": "peak_active_days_30d",
+                        "op": ">=",
+                        "threshold": 5,
+                        "value": metrics.peak_active_days_30d,
+                        "passed": days_active_ok,
+                    },
+                ],
                 "qualifies_for_standard": days_ok and deliv_ok and days_active_ok,
             }
             if days_ok and deliv_ok and days_active_ok:

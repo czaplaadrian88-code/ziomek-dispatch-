@@ -129,18 +129,59 @@ def _load_r04_suggestions() -> Dict[str, dict]:
 
 
 def _r04_field_for_cid(cid: Optional[str]) -> Optional[dict]:
-    """Returns compact r04 field dla decision_record. None gdy brak suggestion albo flag OFF."""
+    """Return auditable R-04 graduation telemetry for one candidate.
+
+    ``tier_suggestions.json`` already contains the evaluator outcome, gate
+    thresholds and input metrics.  The old serializer discarded most of that
+    evidence, so a non-null ``r04`` still could not explain the evaluation.
+    ``None`` keeps its established meaning: no suggestion was available (or
+    shadow evaluation was disabled).  This helper is read-only and cannot
+    affect candidate scoring, feasibility or selection.
+    """
     if not cid:
         return None
     s = _load_r04_suggestions().get(str(cid))
-    if not s:
+    if not isinstance(s, dict) or not s:
         return None
+
+    raw_metrics = s.get("metrics")
+    metrics = (
+        {k: v for k, v in raw_metrics.items() if k not in {"cid", "name"}}
+        if isinstance(raw_metrics, dict)
+        else raw_metrics
+    )
+
+    if s.get("insufficient_data"):
+        outcome = "insufficient_data"
+    elif s.get("promotion_eligible"):
+        outcome = "promotion_suggested"
+    elif s.get("demotion_required"):
+        outcome = "demotion_suggested"
+    elif s.get("tier_match"):
+        outcome = "tier_maintained"
+    else:
+        outcome = "tier_change_suggested"
+
     return {
+        "courier_id": str(cid),
+        "evaluation_ran": True,
+        "evaluated_in_decision": False,
+        "decision_effect": "telemetry_only",
+        "source": "tier_suggestions",
+        "outcome": outcome,
         "current_tier": s.get("current_tier"),
         "suggested_tier": s.get("suggested_tier"),
         "tier_match": s.get("tier_match"),
         "gold_candidate": s.get("gold_candidate"),
+        "promotion_eligible": s.get("promotion_eligible"),
+        "demotion_required": s.get("demotion_required"),
         "insufficient_data": s.get("insufficient_data"),
+        "insufficient_data_reason": s.get("insufficient_data_reason"),
+        "gates_evaluated": _json_safe(s.get("gates_evaluated")),
+        # Identity is carried once above; omit duplicated cid/name from the
+        # evaluator metrics while preserving every quantitative input.
+        "metrics": _json_safe(metrics),
+        "reasoning": s.get("reasoning"),
         "evaluated_at": s.get("evaluated_at"),
         "schema_version": s.get("schema_version"),
     }
@@ -468,8 +509,9 @@ def _serialize_candidate(c) -> dict:
         "fix_c_cap_km": m.get("fix_c_cap_km"),
         # BUNDLE-03 (2026-06-12): addytywna kara FIX_C (shadow, flaga OFF)
         "fix_c_additive_pen_shadow": m.get("fix_c_additive_pen_shadow"),
-        # V3.28 R-04 v2.0: tier suggestion (LOCATION A) — Phase 1 SHADOW only.
-        "r04": _r04_field_for_cid(str(m.get("courier_id") or "")),
+        # R-04 graduation telemetry (LOCATION A). Candidate identity lives on
+        # the dataclass, never in metrics; the old metrics lookup yielded null.
+        "r04": _r04_field_for_cid(str(c.courier_id or "")),
         # V3.28 Faza 6 LGBM shadow (LOCATION A) — parallel BC ranker prediction.
         "lgbm_shadow": m.get("lgbm_shadow"),
         # A2 dwumodel shadow (2026-06-20): ranking solo/bundle + agreement_with_primary
@@ -901,8 +943,8 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "fix_c_cap_km": best_m.get("fix_c_cap_km"),
             # BUNDLE-03 (2026-06-12): addytywna kara FIX_C (shadow, flaga OFF)
             "fix_c_additive_pen_shadow": best_m.get("fix_c_additive_pen_shadow"),
-            # V3.28 R-04 v2.0: tier suggestion (LOCATION B) — Phase 1 SHADOW only.
-            "r04": _r04_field_for_cid(str(best_m.get("courier_id") or "")),
+            # R-04 graduation telemetry (LOCATION B) — twin of LOCATION A.
+            "r04": _r04_field_for_cid(str(best.courier_id or "")),
             # V3.28 Faza 6 LGBM shadow (LOCATION B) — best courier z metrics.
             "lgbm_shadow": best_m.get("lgbm_shadow"),
             # A2 dwumodel shadow (2026-06-20, LOCATION B) — solo/bundle ranking + agreement.
