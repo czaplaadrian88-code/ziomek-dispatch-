@@ -1058,8 +1058,11 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
                     f"(koordynator poinformowany przez badge/event)")
             _op_ovr.emit_applied(cid, _op_pin_ctx, stops, orders_state, now,
                                  hard_breaches=_op_hb, l3=_op_l3)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning(
+                f"operator_route_override(regen) post_save_telemetry fail "
+                f"cid={cid} oids={oids!r} error={type(e).__name__}: {e!r}"
+            )
     _log.info(
         f"BAG_PLAN_GENERATED cid={cid} stops={len(stops)} seq={plan.sequence} "
         f"sla={plan.sla_violations} dur={plan.total_duration_min:.1f} anchor={anchor_source}"
@@ -2101,8 +2104,12 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
                 f"{type(_rt_e).__name__} (keep existing, veto techniczne)")
             try:
                 _op_ovr.emit_retime_failed(cid, _op_pin_ctx, len(stops), now)
-            except Exception:
-                pass
+            except Exception as e:
+                _log.warning(
+                    f"operator_route_override(recanon) emit_retime_failed fail "
+                    f"phase=strict_exception cid={cid} oids={oids!r} "
+                    f"error={type(e).__name__}: {e!r}"
+                )
             return False
         raise
     if new_stops is None:
@@ -2114,8 +2121,12 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
                 f"(keep existing, veto techniczne)")
             try:
                 _op_ovr.emit_retime_failed(cid, _op_pin_ctx, len(stops), now)
-            except Exception:
-                pass
+            except Exception as e:
+                _log.warning(
+                    f"operator_route_override(recanon) emit_retime_failed fail "
+                    f"phase=retime_none cid={cid} oids={oids!r} "
+                    f"error={type(e).__name__}: {e!r}"
+                )
         return False
 
     _gps = gps_positions.get(cid) or {}
@@ -2149,8 +2160,11 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
                     f"(koordynator poinformowany przez badge/event)")
             _op_ovr.emit_applied(cid, _op_pin_ctx, new_stops, orders_state, now,
                                  hard_breaches=_op_hb)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning(
+                f"operator_route_override(recanon) post_save_telemetry fail "
+                f"cid={cid} oids={oids!r} error={type(e).__name__}: {e!r}"
+            )
     _log.info(f"BAG_PLAN_RETIMED cid={cid} stops={len(new_stops)} anchor={anchor_source}")
     return True
 

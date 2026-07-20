@@ -104,10 +104,29 @@ def _match_exact(name, sched):
     return name if name in sched else None
 
 
-def test_B_resolve_normal_entry():
+def test_B_resolve_normal_entry(monkeypatch):
     sched = {"Jan Kowalski": {"start": "11:00", "end": "21:00"}}
     ss = CR.resolve_shift_start("Jan Kowalski", schedule=sched, match_courier_fn=_match_exact)
     assert ss is not None and ss.hour == 11 and ss.minute == 0
+
+    # CID-resolver używa tego samego łańcucha identity co flota/end-resolver,
+    # więc stale alias z courier_tiers nie może przesłonić courier_names.
+    resolved_names = []
+    monkeypatch.setattr(CR, "_load_courier_tiers",
+                        lambda: {"0007": {"name": "STALE ALIAS"}})
+    monkeypatch.setattr(CR, "_load_courier_names", lambda: {"7": "Jan Kowalski"})
+    monkeypatch.setattr(CR, "_load_kurier_piny", lambda: {})
+    monkeypatch.setattr(
+        CR, "resolve_shift_start",
+        lambda name, schedule=None: resolved_names.append(name) or name,
+    )
+    assert CR.resolve_shift_start_by_cid("0007", schedule=sched) == "Jan Kowalski"
+    assert resolved_names == ["Jan Kowalski"]
+
+    # Legacy PIN pozostaje ostatnim fallbackiem, identycznie jak w bliźniaku.
+    monkeypatch.setattr(CR, "_load_courier_names", lambda: {})
+    monkeypatch.setattr(CR, "_load_kurier_piny", lambda: {7: "Jan Kowalski"})
+    assert CR.resolve_shift_start_by_cid("0007", schedule=sched) == "Jan Kowalski"
 
 
 def test_B_resolve_empty_hours_failopen_none():

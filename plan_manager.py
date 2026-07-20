@@ -42,6 +42,7 @@ _cas_conflicts_total = 0
 INVALIDATION_REASONS = frozenset({
     "ORDER_DELIVERED_ALL",
     "ORDER_CANCELLED",
+    "NO_STOPS_REMAINING",
     "GPS_DRIFT",
     "SHIFT_END",
     "MANUAL",
@@ -420,9 +421,11 @@ def advance_plan(
 
 
 def remove_stops(courier_id: str, order_id: str) -> None:
-    """Remove ALL stops (pickup AND dropoff) for order_id. For ORDER_CANCELLED
-    / ORDER_RETURNED_TO_POOL path (+ REASSIGN-RELEASE, + GC terminal-prune).
-    If plan empty after removal, invalidate.
+    """Remove ALL stops (pickup AND dropoff) for order_id.
+
+    Used by cancel/return, REASSIGN-RELEASE and GC terminal-prune. If no stops
+    remain after removal, invalidate with the event-neutral state reason
+    ``NO_STOPS_REMAINING``.
 
     v3 (Sol flip-gate 2026-07-20): gdy order_id NIE występuje w żadnym stopie →
     czysty no-op BEZ zapisu i BEZ bumpu wersji. Wcześniej bump-always: zapis
@@ -444,7 +447,7 @@ def remove_stops(courier_id: str, order_id: str) -> None:
             return  # oid nieobecny → no-op (zero zapisu, zero bumpu)
         if not new_stops:
             plan["invalidated_at"] = _now_iso()
-            plan["invalidation_reason"] = "ORDER_CANCELLED"
+            plan["invalidation_reason"] = "NO_STOPS_REMAINING"
             plan["plan_version"] = int(plan.get("plan_version", 0)) + 1
             plan["last_modified_at"] = plan["invalidated_at"]
         else:

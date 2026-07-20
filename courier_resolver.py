@@ -1465,12 +1465,27 @@ def resolve_shift_start(
 def resolve_shift_start_by_cid(
     cid: Any, name: Optional[str] = None, schedule: Optional[dict] = None,
 ) -> Optional[datetime]:
-    """Jak resolve_shift_start, ale po CID (name z courier_tiers gdy nie podana).
+    """Jak resolve_shift_start, ale po CID (nazwa z kanonicznego łańcucha identity).
     Dla strażnika/plan_recheck/state_machine, które mają cid nie nazwę."""
     if not name:
         try:
-            _t = _load_courier_tiers().get(str(cid)) or {}
-            name = _t.get("name")
+            # Ten sam łańcuch cid→nazwa co build_fleet_snapshot oraz naprawiony
+            # resolve_effective_shift_end_by_cid: merge nazw, normalizacja zer,
+            # potem legacy PIN fallback. courier_tiers może zawierać stale alias.
+            _names = _load_courier_names()
+            _kid = str(cid)
+            name = _names.get(_kid)
+            if name is None and _kid.isdigit():
+                name = _names.get(str(int(_kid)))
+            if name is None:
+                _piny = _load_kurier_piny()
+                _pin_name = _piny.get(_kid)
+                if _pin_name is None and _kid.isdigit():
+                    _pin_name = _piny.get(int(_kid))
+                if isinstance(_pin_name, str):
+                    name = _pin_name
+            if not isinstance(name, str):
+                name = None
         except Exception:
             name = None
     return resolve_shift_start(name, schedule=schedule)

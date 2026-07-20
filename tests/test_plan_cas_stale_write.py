@@ -233,6 +233,9 @@ def test_every_terminal_invalidation_bumps_version_and_blocks_stale_save(
     invalidated = PM.load_plans()["11"]
     assert invalidated["invalidated_at"] is not None
     assert invalidated["plan_version"] == stale_version + 1
+    if mutation == "remove_last":
+        assert invalidated["invalidation_reason"] == "NO_STOPS_REMAINING"
+        assert invalidated["invalidation_reason"] in PM.INVALIDATION_REASONS
 
     with pytest.raises(PM.ConcurrencyError):
         PM.save_plan(

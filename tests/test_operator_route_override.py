@@ -12,6 +12,7 @@ Harness jak test_recanon_on_write: OSRM zamockowany (haversine ~30 km/h),
 """
 import json
 import inspect
+import logging
 import math
 import os
 import pathlib
@@ -150,7 +151,7 @@ def _shadow_candidate(engine_sequence=("A", "B", "NEW")):
 
 # ── pin kolejności: kanon = sekwencja operatora ──────────────────────────────
 
-def test_pin_applies_operator_sequence(env, monkeypatch):
+def test_pin_applies_operator_sequence(env, monkeypatch, caplog):
     _flag_on(monkeypatch)
     _save_base()
     _write_override(env, ["B", "A"])
@@ -161,6 +162,18 @@ def test_pin_applies_operator_sequence(env, monkeypatch):
     applied = [e for e in evs if e["event"] == "operator_route_override_applied"]
     assert applied and applied[-1]["cid"] == CID and applied[-1]["changed"] is True
     assert applied[-1]["stops"] == 4
+
+    # Event jest best-effort, ale jego awaria po zapisie planu nie może zniknąć.
+    def _event_boom(*args, **kwargs):
+        raise OSError("event sink down")
+
+    monkeypatch.setattr(O, "emit_applied", _event_boom)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert P.recanon_courier(CID, now=NOW, reason="assign") is True
+    assert "operator_route_override(recanon) post_save_telemetry fail" in caplog.text
+    assert "cid=7777" in caplog.text
+    assert "error=OSError: OSError('event sink down')" in caplog.text
 
 
 def test_pin_transparent_for_surfaces_via_route_order(env, monkeypatch):
@@ -942,7 +955,7 @@ def test_f6_poisoned_times_pin_unchanged_strict_veto(env, monkeypatch):
     assert rej and rej[-1]["reason"] == "retime_failed"
 
 
-def test_retime_exception_in_recanon_emits_rejected(env, monkeypatch):
+def test_retime_exception_in_recanon_emits_rejected(env, monkeypatch, caplog):
     """Wyjątek w strict-retime (ścieżka recanon) = ten sam los co None:
     rejected/retime_failed + plan nietknięty (deklaracja = kod)."""
     _flag_on(monkeypatch)
@@ -959,6 +972,19 @@ def test_retime_exception_in_recanon_emits_rejected(env, monkeypatch):
     rej = [e for e in _events(env)
            if e["event"] == "operator_route_override_rejected"]
     assert rej and rej[-1]["reason"] == "retime_failed"
+
+    # Także awaria samego emitera rejection pozostaje fail-open, ale fail-loud.
+    def _emit_boom(*args, **kwargs):
+        raise OSError("event sink down")
+
+    monkeypatch.setattr(O, "emit_retime_failed", _emit_boom)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert P.recanon_courier(CID, now=NOW) is False
+    assert "operator_route_override(recanon) emit_retime_failed fail" in caplog.text
+    assert "phase=strict_exception" in caplog.text
+    assert "cid=7777" in caplog.text
+    assert "error=OSError: OSError('event sink down')" in caplog.text
 
 
 def test_ttl_strict_int_only(env):
