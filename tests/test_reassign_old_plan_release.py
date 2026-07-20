@@ -243,9 +243,11 @@ def _raw_response(oid, cid, status_id=3):
     }
 
 
-def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None):
+def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None,
+                             audit_emitted=True):
     """_diff_and_emit z pełnym mockowaniem; zwraca (calls, stats) gdzie calls
-    = chronologia ('release', cid, oid) / ('signal', oid, cid)."""
+    = chronologia ('release', cid, oid) / ('return_release', cid, oid) /
+    ('signal', oid, cid)."""
     calls = []
 
     def fake_fetch(zid, csrf, timeout=10.0):
@@ -254,13 +256,17 @@ def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None):
     with mock.patch("dispatch_v2.panel_watcher.state_get_all", return_value=state), \
          mock.patch("dispatch_v2.panel_watcher.fetch_order_details", side_effect=fake_fetch), \
          mock.patch("dispatch_v2.panel_watcher.emit", return_value=True), \
-         mock.patch("dispatch_v2.panel_watcher.emit_audit", return_value=True), \
+         mock.patch("dispatch_v2.panel_watcher.emit_audit",
+                    return_value=audit_emitted), \
          mock.patch("dispatch_v2.panel_watcher.update_from_event"), \
          mock.patch("dispatch_v2.panel_watcher._check_panel_agree"), \
          mock.patch("dispatch_v2.panel_watcher._check_panel_override"), \
          mock.patch("dispatch_v2.panel_watcher._release_plan_on_reassign",
                     side_effect=lambda cid, oid: (
                         calls.append(("release", cid, oid)), True)[1]), \
+         mock.patch("dispatch_v2.panel_watcher._remove_stops_on_return",
+                    side_effect=lambda cid, oid: calls.append(
+                        ("return_release", cid, oid))), \
          mock.patch("dispatch_v2.panel_watcher._save_plan_on_assign_signal",
                     side_effect=lambda oid, cid: calls.append(("signal", oid, cid))), \
          mock.patch("dispatch_v2.panel_watcher.geocode", return_value=None), \
@@ -271,6 +277,52 @@ def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None):
                     mock.mock_open(read_data=json.dumps(kurier_ids or {}))):
         stats = PW._diff_and_emit(parsed, csrf="test")
     return calls, stats
+
+
+def test_disappeared_return_flag_on_releases_plan_of_state_courier(monkeypatch):
+    """RETURN 8/9 po zniknięciu z HTML: przy ON zwalnia STARY plan ze state,
+    nigdy kuriera z surowej odpowiedzi (ten może być już inny albo pusty)."""
+    monkeypatch.setattr(C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", True)
+    for oid, status_id, raw_cid in (
+            ("467490", 8, 310),
+            ("467491", 9, None)):
+        state = {oid: {"order_id": oid, "courier_id": "207",
+                       "status": "assigned", "delivery_address": "X"}}
+        calls, _ = _run_diff_with_recorders(
+            parsed=_mock_parsed(),
+            state=state,
+            raw_fetches={oid: _raw_response(oid, raw_cid, status_id)},
+        )
+        assert calls == [("return_release", "207", oid)]
+
+
+def test_disappeared_return_flag_off_keeps_old_plan(monkeypatch):
+    """OFF zachowuje dotychczasową ścieżkę RETURN: event/state bez release planu."""
+    monkeypatch.setattr(C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", False)
+    oid = "467492"
+    state = {oid: {"order_id": oid, "courier_id": "207",
+                   "status": "assigned", "delivery_address": "X"}}
+    calls, _ = _run_diff_with_recorders(
+        parsed=_mock_parsed(),
+        state=state,
+        raw_fetches={oid: _raw_response(oid, None, 8)},
+    )
+    assert calls == []
+
+
+def test_disappeared_return_deduped_event_does_not_release(monkeypatch):
+    """Brak nowego eventu (dedupe) = brak transition state i brak release planu."""
+    monkeypatch.setattr(C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", True)
+    oid = "467493"
+    state = {oid: {"order_id": oid, "courier_id": "207",
+                   "status": "assigned", "delivery_address": "X"}}
+    calls, _ = _run_diff_with_recorders(
+        parsed=_mock_parsed(),
+        state=state,
+        raw_fetches={oid: _raw_response(oid, None, 9)},
+        audit_emitted=False,
+    )
+    assert calls == []
 
 
 def test_reassign_branch_release_old_then_signal_new():

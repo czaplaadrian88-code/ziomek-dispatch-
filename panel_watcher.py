@@ -1635,6 +1635,20 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                                 "payload": {"reason": reason, "source": "panel_diff"},
                             })
                             _log.info(f"{reason.upper()} {zid} status={status_id} (panel_diff)")
+                            # RETURN-RELEASE: update wyżej terminalizuje state, więc
+                            # późniejszy reconcile już nie usunie stopa. Zwalniamy
+                            # plan STAREGO kuriera ze snapshotu (raw cid bywa pusty
+                            # albo już inny), tą samą flagą co REASSIGN-RELEASE.
+                            try:
+                                _return_release_on = decision_flag(
+                                    "ENABLE_REASSIGN_OLD_PLAN_RELEASE"
+                                )
+                            except Exception:
+                                _return_release_on = False
+                            if _return_release_on:
+                                _remove_stops_on_return(
+                                    str(state_order.get("courier_id") or ""), zid
+                                )
             except Exception as e:
                 _log.warning(f"details for disappeared {zid}: {e}")
                 stats["errors"] += 1

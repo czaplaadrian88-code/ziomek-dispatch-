@@ -535,7 +535,8 @@ ETAP4_DECISION_FLAGS = (
     # reszty worka (reason=reassign_out). Bez tego stary kurier widział zlecenie
     # do fallbacku 180 s (PlanPoller) / 5-min plan_recheck — sygnał szedł TYLKO
     # do nowego (_save_plan_on_assign_signal). Konsument:
-    # panel_watcher._release_plan_on_reassign (decision_flag). Default OFF; flip za ACK.
+    # panel_watcher: _release_plan_on_reassign + disappeared RETURN release
+    # (decision_flag). Default OFF; flip za ACK.
     "ENABLE_REASSIGN_OLD_PLAN_RELEASE",
     # CK-MANUAL-EDIT (2026-07-20, incydent #489052): pasywny re-check
     # czas_kuriera czasowki moze przejsc TYLKO z dodatnim sygnalem recznej
@@ -559,8 +560,8 @@ ETAP4_DECISION_FLAGS = (
 # parserem; kanon po flipie = flags.json (true), rollback hot = klucz false.
 USE_V2_PARSER = False
 # REASSIGN-RELEASE (2026-07-20): zwolnienie planu STAREGO kuriera po przerzuceniu
-# zlecenia (panel_watcher._release_plan_on_reassign — branch reassign + packs
-# fallback). Default OFF (deploy ciemny); kanon=flags.json (flip za ACK ownera),
+# zlecenia (panel_watcher: branch reassign + packs fallback + disappeared
+# RETURN starego kuriera). Default OFF (deploy ciemny); kanon=flags.json (flip za ACK ownera),
 # rollback hot = klucz false / brak klucza.
 ENABLE_REASSIGN_OLD_PLAN_RELEASE = False
 # CK-MANUAL-EDIT: bezpieczny fallback OFF; kanon po ewentualnym flipie =

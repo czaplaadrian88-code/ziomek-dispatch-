@@ -276,3 +276,41 @@ reassign), PRE-ISTNIEJĄCA (nie wprowadzona tym fixem) i wymagająca własnej de
 (nowy call-site zmieniałby zachowanie live BEZ flagi). Werdykt: zgłoszone do MAIN
 jako kandydat naprawy, świadomie N-D w tym branchu (scope przypięty przez CTO =
 reassign; dyscyplina dark-deploy tej sesji).
+
+## 9. RETURN closure — kandydat 2026-07-20 (`/root/cx-rt`, HEAD `c7bc8cd`)
+
+Finding z §8 potwierdzony w aktualnym kodzie. Po przyjętym evencie
+`disappeared → ORDER_RETURNED_TO_POOL` watcher teraz, wyłącznie gdy
+`ENABLE_REASSIGN_OLD_PLAN_RELEASE=ON`, woła istniejący `_remove_stops_on_return`
+z CID starego `state_order` (nie z raw, który bywa pusty/inny). OFF pozostawia
+dotychczasowy event/state bez release. Dedupe (`emit_audit=False`) nie zwalnia
+planu. `plan_manager.remove_stops` bez zmian: decyzja „stop nieobecny → zero
+zapisu/bumpu” pozostaje wewnątrz `LOCK_EX`.
+
+Dowody lokalne, hermetyczny pkgroot (`/root/cx-rt` + zależności/stan w `/tmp`):
+
+- mutation probe przed fixem: ON **FAILED**, OFF passed (`F.`);
+- `test_reassign_old_plan_release.py`: **22 passed**; klaster RETURN/REASSIGN +
+  recanon: **26 passed**; stary runner terminal emit: **7/7 passed**;
+- checkery flag pytest: **42 passed**; lifecycle: **0 błędów / 511 flag**;
+- `py_compile` 3/3, import z symlinkowanego checkoutu, JSON i `git diff --check`: OK;
+- pełna regresja: **HOLD**. Oracle przekazany w zadaniu = **5385/0**, ale dwa
+  lokalne przebiegi nie zakończyły się w oknie sesji (legacy runnery zależne od
+  niedostępnych usług/live; zatrzymane bez końcowego summary). Nie są dowodem
+  regresji ani zielonej bramki. Z tego powodu kandydat pozostaje **bez commita**.
+
+regresja: HOLD — brak zakończonego pełnego `pytest tests/`; wymagany rerun w kanonicznym środowisku względem 5385/0 (oczekiwane +3 testy)
+e2e: disappeared status 8/9 → przyjęty audit/state → release starego CID; OFF i dedupe → brak release; 22/22 + 7/7
+pozytywny-wplyw: ON usuwa zwrócone zlecenie z planu starego kuriera natychmiast; OFF zachowuje poprzednią ścieżkę
+rollback: hot `ENABLE_REASSIGN_OLD_PLAN_RELEASE=false`; kod `git restore`/revert jawnych plików; bez migracji
+N-D: `plan_manager.py` — race-safe no-op już jest wewnątrz exclusive locka i ma test wersji/store
+N-D: reconcile RETURN — już woła `_remove_stops_on_return`; brak luki
+N-D: state_machine/feasibility/scoring/serializery — event i semantyka HARD/SOFT bez zmian
+N-D: plan_recheck.py — istniejący `_remove_stops_on_return` już wywołuje recanon reason=return; kontrakt bez zmiany
+N-D: route_order.py — czyta zapisany plan po bumpie wersji; brak własnego writera RETURN
+N-D: route_podjazdy.py — projekcja istniejącego planu; brak własnego writera RETURN
+N-D: nowa flaga — reużyta istniejąca; registry/common tylko opis rozszerzonego consumera
+
+Nie wykonano deployu, restartu, flipa ani zapisu live. Rollback kodu przed
+commitem: odrzucić wyłącznie sześć jawnych plików tego diffu; po commicie:
+`git revert <commit>`. Flaga OFF jest kill-switchem bez restartu.
