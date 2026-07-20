@@ -1,6 +1,6 @@
 {
-  "base_sha": "6d983696777475b1d4a537ab9ef7ccedcdc0536e",
-  "manifest_version": 13,
+  "base_sha": "0abcd1749550849983e8073779c690a3e356b9c4",
+  "manifest_version": 14,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -1214,10 +1214,10 @@
     "tests/test_d3_flag_migration.py::test_pair_b_warning_emitted",
     "tests/test_d3_flag_migration.py::test_refresh_flagsjson_drives_module_global",
     "tests/test_d3_flag_migration.py::test_refresh_no_key_preserves_monkeypatch",
-    "tests/test_d3_gold_quantile_flip.py::test_const_matches_post_flip_state",
-    "tests/test_d3_gold_quantile_flip.py::test_off_raw_gate_35_for_everyone",
-    "tests/test_d3_gold_quantile_flip.py::test_on_never_recovers_non_gold",
-    "tests/test_d3_gold_quantile_flip.py::test_on_recovers_gold_bag_le4",
+    "tests/test_d3_gold_quantile_flip.py::test_flag_fully_deregistered",
+    "tests/test_d3_gold_quantile_flip.py::test_ghost_flag_in_flags_json_is_inert",
+    "tests/test_d3_gold_quantile_flip.py::test_gold_raw_gate_35_no_recovery",
+    "tests/test_d3_gold_quantile_flip.py::test_std_identical_to_gold",
     "tests/test_daily_briefing_acceptance.py::test_acceptance_line_basic",
     "tests/test_daily_briefing_acceptance.py::test_acceptance_line_none_when_empty",
     "tests/test_daily_briefing_acceptance.py::test_breakdown_empty_when_no_records",
@@ -5339,7 +5339,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "3fbe1d586f198c25b2fac79928f5faeca0455cb72f4517b0d617ac1ca45c3bfd",
+  "nodeids_sha256": "666fb7d034bde09090d3d4211504b80e541e49468198252eb346db232761acb2",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5454,8 +5454,8 @@
       "skipped"
     ]
   },
-  "owner": "CTO-main",
-  "reason": "manifest po merge REASSIGN-RELEASE v3 + operator-route-order v6 (PKG-2, standing ACK)",
+  "owner": "CTO (d3-gold cleanup apply v2, poprawka cwd)",
+  "reason": "cleanup D3-gold: 4 nodeidy test_d3_gold_quantile_flip przepisane na post-removal",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-20T06:31:28+00:00"
+  "updated_at_utc": "2026-07-20T11:05:25+00:00"
 }
