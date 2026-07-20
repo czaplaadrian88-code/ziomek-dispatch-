@@ -1,6 +1,6 @@
 {
-  "base_sha": "b7564e4249afb12f91adea75f8d97fe233bbea42",
-  "manifest_version": 21,
+  "base_sha": "3a8d25f47bcabd8516a470f918318dca86a970d1",
+  "manifest_version": 22,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -41,6 +41,25 @@
     "tests/test_a2_startup_pending_scan.py::test_process_expired_pending_superseded",
     "tests/test_a2_startup_pending_scan.py::test_process_expired_pending_timeout",
     "tests/test_a2_startup_pending_scan.py::test_state_machine_load_fail_treats_as_timeout",
+    "tests/test_a360_d1_firewall_truth.py::test_alarm_window_without_bound_alarm_predicate_is_hold_not_normal_or_alarm",
+    "tests/test_a360_d1_firewall_truth.py::test_carried_breach_without_counterfactual_is_hold_not_exempt",
+    "tests/test_a360_d1_firewall_truth.py::test_flag_off_is_byte_identical_and_ignores_new_evidence_seam",
+    "tests/test_a360_d1_firewall_truth.py::test_food_ready_age_and_courier_class_do_not_change_bound_r6",
+    "tests/test_a360_d1_firewall_truth.py::test_mutation_probe_preexisting_direction_and_worsening_are_not_symmetric",
+    "tests/test_a360_d1_firewall_truth.py::test_named_proxy_cannot_be_attested_as_physical_event[customer_handoff_source-courier_handoff_click]",
+    "tests/test_a360_d1_firewall_truth.py::test_named_proxy_cannot_be_attested_as_physical_event[customer_handoff_source-routing.delivery_arrival]",
+    "tests/test_a360_d1_firewall_truth.py::test_named_proxy_cannot_be_attested_as_physical_event[physical_possession_source-panel.picked_up_at]",
+    "tests/test_a360_d1_firewall_truth.py::test_named_proxy_cannot_be_attested_as_physical_event[physical_possession_source-restaurant_exit_click]",
+    "tests/test_a360_d1_firewall_truth.py::test_od07_boundaries_are_35_normal_40_alarm_only_for_every_class[35.0-NORMAL-PASS-PASS]",
+    "tests/test_a360_d1_firewall_truth.py::test_od07_boundaries_are_35_normal_40_alarm_only_for_every_class[35.001-NORMAL-VIOLATION-VIOLATION_INTRODUCED]",
+    "tests/test_a360_d1_firewall_truth.py::test_od07_boundaries_are_35_normal_40_alarm_only_for_every_class[40.0-ALARM-ALARM-ALARM]",
+    "tests/test_a360_d1_firewall_truth.py::test_od07_boundaries_are_35_normal_40_alarm_only_for_every_class[40.0-NORMAL-VIOLATION-VIOLATION_INTRODUCED]",
+    "tests/test_a360_d1_firewall_truth.py::test_od07_boundaries_are_35_normal_40_alarm_only_for_every_class[40.001-ALARM-PROHIBITED-VIOLATION_INTRODUCED]",
+    "tests/test_a360_d1_firewall_truth.py::test_on_without_bound_events_is_hold_and_never_uses_named_proxies",
+    "tests/test_a360_d1_firewall_truth.py::test_pipeline_and_shadow_last_resort_v3_fallbacks_stay_twin",
+    "tests/test_a360_d1_firewall_truth.py::test_pipeline_and_shadow_wiring_emit_one_v3_without_mutating_decision",
+    "tests/test_a360_d1_firewall_truth.py::test_untyped_or_string_event_contract_is_rejected_to_unbound[bad_evidence0]",
+    "tests/test_a360_d1_firewall_truth.py::test_untyped_or_string_event_contract_is_rejected_to_unbound[bad_evidence1]",
     "tests/test_a360_world_replay_truth.py::test_cli_uses_only_temp_record_ledger_verdict_and_redacts_ids",
     "tests/test_a360_world_replay_truth.py::test_direct_cli_rejects_invalid_outer_before_replay",
     "tests/test_a360_world_replay_truth.py::test_extra_osrm_call_actual_replay_and_gate_are_osrm_miss",
@@ -935,16 +954,22 @@
     "tests/test_checkpoint_ts_warsaw_parse_2026_06_26.py::test_s3_zombie_guard_staleness_flips",
     "tests/test_checkpoint_ts_warsaw_parse_2026_06_26.py::test_s4_perstatus_staleness_flips_zombie_off",
     "tests/test_city_aware_geocoding.py::script_run",
+    "tests/test_claim_ledger_no_double_book_inv.py::test_check_feral_claim_uses_same_oracle_and_logs_drop",
     "tests/test_claim_ledger_no_double_book_inv.py::test_check_sweep_trace_logs_only_on_violation",
     "tests/test_claim_ledger_no_double_book_inv.py::test_flags_registered_in_etap4",
     "tests/test_claim_ledger_no_double_book_inv.py::test_global_allocate_check_off_no_raise_even_on_regress",
     "tests/test_claim_ledger_no_double_book_inv.py::test_global_allocate_clean_bundle_zero_fp",
+    "tests/test_claim_ledger_no_double_book_inv.py::test_global_allocate_drop_mutation_probe_turns_oracle_red",
     "tests/test_claim_ledger_no_double_book_inv.py::test_global_allocate_flag_off_equals_on_allocation",
-    "tests/test_claim_ledger_no_double_book_inv.py::test_global_allocate_hard_block_raises",
+    "tests/test_claim_ledger_no_double_book_inv.py::test_global_allocate_hard_drops_feral_and_continues",
     "tests/test_claim_ledger_no_double_book_inv.py::test_global_allocate_mutation_probe_pileon",
     "tests/test_claim_ledger_no_double_book_inv.py::test_run_once_emits_breach_metric_clean",
     "tests/test_claim_ledger_no_double_book_inv.py::test_run_once_emits_breach_metric_on_pileon",
+    "tests/test_claim_ledger_no_double_book_inv.py::test_run_once_hard_drop_metric_reaches_jsonl_and_summary",
+    "tests/test_claim_ledger_no_double_book_inv.py::test_run_once_hard_off_has_byte_compatible_metric_shape",
     "tests/test_claim_ledger_no_double_book_inv.py::test_run_once_metric_present_when_flag_off",
+    "tests/test_claim_ledger_no_double_book_inv.py::test_shadow_tick_hard_drops_feral_and_continues",
+    "tests/test_claim_ledger_no_double_book_inv.py::test_shadow_tick_hard_off_is_byte_compatible",
     "tests/test_claim_ledger_no_double_book_inv.py::test_twin_both_call_invariant_checker",
     "tests/test_claim_ledger_no_double_book_inv.py::test_twin_single_source_claim_ledger",
     "tests/test_claim_ledger_no_double_book_inv.py::test_verify_correct_growth_clean",
@@ -5555,7 +5580,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "4901154dd5b73128795abca78706871f3b5c7eb31d1056affc6c49dd4ab178ef",
+  "nodeids_sha256": "b3da93133716f0e0bb95926763260b682ee7febf56f3f483646b383a6ab0024a",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5671,7 +5696,7 @@
     ]
   },
   "owner": "Adrian",
-  "reason": "test szwu RETURN (Sol A3, seamF): +6 przypadkow, zero zmian produkcyjnych",
+  "reason": "Nocna kolejka 21.07: OD-A1b drop-feral-claim (d55ddb23) + H1-D1 rewrite pod OD-07 (3a8d25f4), obie flagi OFF, suita 5549/0",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-20T20:50:16+00:00"
+  "updated_at_utc": "2026-07-20T23:26:10+00:00"
 }
