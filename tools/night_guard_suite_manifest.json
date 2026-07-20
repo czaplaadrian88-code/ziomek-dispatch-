@@ -1,6 +1,6 @@
 {
-  "base_sha": "a8329db7fe24c2eb7b3c1f9b35d7bedd1f8d8b91",
-  "manifest_version": 20,
+  "base_sha": "b7564e4249afb12f91adea75f8d97fe233bbea42",
+  "manifest_version": 21,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -4505,6 +4505,12 @@
     "tests/test_restore_from_restic_a360_dr1a.py::test_shared_host_activity_lock_fails_closed_before_restic",
     "tests/test_restore_from_restic_a360_dr1a.py::test_wrong_carrier_canary_is_red_before_decrypt_or_docker",
     "tests/test_restore_from_restic_a360_dr1a.py::test_wrong_inherited_attestation_fd_cannot_enable_test_mode",
+    "tests/test_return_seam_matrix_2026_07_20.py::test_return_seam_matrix[flag_off_raw_diff]",
+    "tests/test_return_seam_matrix_2026_07_20.py::test_return_seam_matrix[flag_on_raw_diff]",
+    "tests/test_return_seam_matrix_2026_07_20.py::test_return_seam_matrix[flag_on_raw_empty]",
+    "tests/test_return_seam_matrix_2026_07_20.py::test_return_seam_matrix[flag_on_raw_same]",
+    "tests/test_return_seam_matrix_2026_07_20.py::test_return_seam_matrix[pending_retry_closed_duplicate]",
+    "tests/test_return_seam_matrix_2026_07_20.py::test_return_seam_matrix[snapshot_cleanup_gap]",
     "tests/test_return_to_restaurant_f5.py::test_already_picked_up_forbidden",
     "tests/test_return_to_restaurant_f5.py::test_b_delivered_before_return_ok",
     "tests/test_return_to_restaurant_f5.py::test_case_b_forbidden_return",
@@ -5549,7 +5555,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "1adbdaedcf026dcfe3b5a9b1516fdb2e70e33ac4a3eaae564303b0ba243efbeb",
+  "nodeids_sha256": "4901154dd5b73128795abca78706871f3b5c7eb31d1056affc6c49dd4ab178ef",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5665,7 +5671,7 @@
     ]
   },
   "owner": "Adrian",
-  "reason": "fala Sol-audyt: revert street-only (werdykt C) + revert błędnej bramki A; suita 5515/0",
+  "reason": "test szwu RETURN (Sol A3, seamF): +6 przypadkow, zero zmian produkcyjnych",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-20T19:41:21+00:00"
+  "updated_at_utc": "2026-07-20T20:50:16+00:00"
 }
