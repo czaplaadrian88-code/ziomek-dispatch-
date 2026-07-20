@@ -1491,6 +1491,54 @@ def resolve_available_from_by_cid(
     return available_from_from_shift_start(ss, now_utc)
 
 
+def resolve_shift_end(
+    name: Optional[str], schedule: Optional[dict] = None, match_courier_fn=None,
+) -> Optional[datetime]:
+    """Kanoniczna resolucja shift_end z grafiku po NAZWIE kuriera — LUSTRO
+    resolve_shift_start (TE SAME funkcje co dispatchable_fleet: match_courier +
+    _shift_end_dt) → parytet source↔konsument z konstrukcji, zero kopii logiki.
+    Fail-soft: każdy brak → None. Uwaga konsumencka: to okno z GRAFIKU —
+    working-override ('pracuje') może legalnie wydłużać pracę; konsument
+    raportowy (pin operatora) traktuje wynik jako sygnał, nie veto."""
+    if not name:
+        return None
+    try:
+        if schedule is None or match_courier_fn is None:
+            import sys as _sys
+            _sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+            from schedule_utils import load_schedule as _ls, match_courier as _mc
+            if schedule is None:
+                schedule = _ls()
+            if match_courier_fn is None:
+                match_courier_fn = _mc
+        if not schedule:
+            return None
+        full_name = match_courier_fn(name, schedule)
+        if not full_name:
+            return None
+        entry = schedule.get(full_name)
+        if not entry:
+            return None
+        return _shift_end_dt(entry)
+    except Exception:
+        return None
+
+
+def resolve_shift_end_by_cid(
+    cid: Any, name: Optional[str] = None, schedule: Optional[dict] = None,
+) -> Optional[datetime]:
+    """Jak resolve_shift_end, ale po CID (name z courier_tiers gdy nie podana) —
+    lustro resolve_shift_start_by_cid; dla raportu HARD pinu operatora w
+    plan_recheck (breach `grafik` z TEGO SAMEGO źródła okna co feasibility)."""
+    if not name:
+        try:
+            _t = _load_courier_tiers().get(str(cid)) or {}
+            name = _t.get("name")
+        except Exception:
+            name = None
+    return resolve_shift_end(name, schedule=schedule)
+
+
 def _shift_end_dt(entry: Optional[dict]) -> Optional[datetime]:
     """Z entry grafiku → datetime końca zmiany (Warsaw aware)."""
     end_str = (entry or {}).get("end")

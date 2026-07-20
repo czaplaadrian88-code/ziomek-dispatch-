@@ -906,12 +906,15 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     # wszystkich powierzchniach (reorder build_view staje się no-op). Best-effort:
     # gdy re-czasowanie się nie uda, zostaje surowa kolejność z reorderu (ETA z
     # symulatora) — nadal lepsza kolejność niż bez F6.
+    _f6_stale = False  # v3: F6 przestawił, ale czasy NIE zostały przeliczone
     if ENABLE_PLAN_CANON_ORDER_INVARIANTS:
         try:
             reordered = _apply_canon_order_invariants(stops, orders_state, pos, now)
             if [s["order_id"] for s in reordered] != [s["order_id"] for s in stops] or \
                [s["type"] for s in reordered] != [s["type"] for s in stops]:
                 retimed = _retime_stops(reordered, pos, anchor_departure, orders_state, now)
+                if retimed is None:
+                    _f6_stale = True  # pre-existing fallback; pin niżej NIE może na nim budować
                 stops = retimed if retimed is not None else reordered
         except Exception as e:
             _log.warning(f"canon_order_invariants cid={cid} fail: {type(e).__name__}: {e}")
@@ -926,24 +929,27 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     try:
         from dispatch_v2 import operator_route_override as _op_ovr
         _op_stops, _op_ctx = _op_ovr.pin_stops(cid, stops, oids, orders_state, now)
-        if _op_ctx is not None and _op_ctx.get("changed"):
-            try:
-                _op_re = _retime_stops(_op_stops, pos, anchor_departure, orders_state, now)
-            except Exception:
-                _op_re = None
-            if _op_re is None:
-                # v2 ABORT (Sol pkt 3): pin przestawił stopy, a czasów nowej
-                # sekwencji NIE umiemy policzyć → NIE zapisujemy przestawionej
-                # kolejności ze starymi czasami; poprzedni plan zostaje
-                # NIETKNIĘTY. Veto wyłącznie techniczne (polityka przypięta).
-                _op_ovr.emit_retime_failed(cid, _op_ctx, len(_op_stops), now)
-                _log.warning(
-                    f"OPERATOR-OVERRIDE RETIME FAIL cid={cid} — regen przerwany "
-                    f"(keep existing, veto techniczne)")
-                return False
-            stops, _op_pin_ctx = _op_re, _op_ctx
-        elif _op_ctx is not None:
-            stops, _op_pin_ctx = _op_stops, _op_ctx  # kolejność już operatora
+        if _op_ctx is not None:
+            # v3 (Sol re-review): przy AKTYWNYM pinie zapis WYŁĄCZNIE z czasami
+            # przeliczonymi dla FINALNEJ sekwencji. Retime konieczny gdy pin
+            # przestawił stopy ALBO F6 zostawił stale czasy (_f6_stale) — wtedy
+            # strict_cells (brak komórki OSRM = veto, nie 0 min). Fail →
+            # techniczne veto: rejected/retime_failed, poprzedni plan NIETKNIĘTY.
+            if _op_ctx.get("changed") or _f6_stale:
+                try:
+                    _op_re = _retime_stops(_op_stops, pos, anchor_departure,
+                                           orders_state, now, strict_cells=True)
+                except Exception:
+                    _op_re = None
+                if _op_re is None:
+                    _op_ovr.emit_retime_failed(cid, _op_ctx, len(_op_stops), now)
+                    _log.warning(
+                        f"OPERATOR-OVERRIDE RETIME FAIL cid={cid} — regen przerwany "
+                        f"(keep existing, veto techniczne)")
+                    return False
+                stops, _op_pin_ctx = _op_re, _op_ctx
+            else:
+                stops, _op_pin_ctx = _op_stops, _op_ctx  # czasy świeże z symulatora
         else:
             stops = _op_stops  # pin nieaktywny — wejście bez zmian
     except Exception as e:
@@ -979,6 +985,8 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     # łamiący R6 (carried>35), którego OBECNY plan tego samego worka NIE łamie →
     # NIE nadpisuj (keep existing, return False = skip). Pure-read istniejącego
     # (D: invalidate_on_mismatch=False → brak read-side-effect). Spread=metryka.
+    # v3: przy aktywnym pinie operatora REJECT nie blokuje (patrz gałąź niżej).
+    _op_l3 = None
     try:
         from dispatch_v2 import common as _C_l3
         _l3_on = _C_l3.decision_flag("ENABLE_PLAN_RECHECK_GATES")
@@ -1003,12 +1011,27 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         _l3_bump({"REJECT": "l3_regen_rejected", "BOTH_BREACH": "l3_regen_both_breach",
                   "PASS": "l3_regen_pass", "NO_BASELINE": "l3_regen_no_baseline"}[_verdict])
         if _verdict == "REJECT":
-            _log.info(
-                f"L3_REGEN_REJECTED cid={cid} oids={oids} reason=r6 "
-                f"fresh_r6={_fresh_breach.get('r6_max_min')} "
-                f"exist_r6={(_exist_breach or {}).get('r6_max_min')} "
-                f"spread={_spread} — keep existing (nie-cofa)")
-            return False
+            if _op_pin_ctx is not None:
+                # v3 (polityka przypięta CTO 19.07): pin operatora WYGRYWA z
+                # bramką biznesową compare-and-keep — zapis następuje, a werdykt
+                # L3 idzie GŁOŚNO do eventu applied (l3_would_reject) + WARNING.
+                # Veto zostaje wyłącznie techniczne (retime_failed).
+                _l3_bump("l3_regen_reject_pin_override")
+                _op_l3 = {"l3_would_reject": True, "reason": "r6",
+                          "fresh_r6": _fresh_breach.get("r6_max_min"),
+                          "exist_r6": (_exist_breach or {}).get("r6_max_min")}
+                _log.warning(
+                    f"OPERATOR-OVERRIDE L3-REJECT OVERRIDDEN cid={cid} "
+                    f"fresh_r6={_fresh_breach.get('r6_max_min')} "
+                    f"exist_r6={(_exist_breach or {}).get('r6_max_min')} — pin "
+                    f"operatora wygrywa z bramką biznesową (zapisuję + raportuję)")
+            else:
+                _log.info(
+                    f"L3_REGEN_REJECTED cid={cid} oids={oids} reason=r6 "
+                    f"fresh_r6={_fresh_breach.get('r6_max_min')} "
+                    f"exist_r6={(_exist_breach or {}).get('r6_max_min')} "
+                    f"spread={_spread} — keep existing (nie-cofa)")
+                return False
         if _verdict == "BOTH_BREACH":
             _log.info(
                 f"L3_REGEN_BOTH_BREACH cid={cid} oids={oids} "
@@ -1026,15 +1049,15 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         return False
     if _op_pin_ctx is not None:
         try:
-            # v2: ewaluacja HARD po pinie (read-only) — wynik do eventu applied
-            # + WARNING; wykonujemy mimo naruszeń (polityka przypięta).
-            _op_hb = _operator_pin_hard_report(stops, orders_state)
+            # v2/v3: ewaluacja HARD po pinie (read-only) — wynik do eventu
+            # applied + WARNING; wykonujemy mimo naruszeń (polityka przypięta).
+            _op_hb = _operator_pin_hard_report(cid, stops, orders_state)
             if _op_hb:
                 _log.warning(
                     f"OPERATOR-OVERRIDE HARD BREACH cid={cid} breaches={_op_hb} "
                     f"(koordynator poinformowany przez badge/event)")
             _op_ovr.emit_applied(cid, _op_pin_ctx, stops, orders_state, now,
-                                 hard_breaches=_op_hb)
+                                 hard_breaches=_op_hb, l3=_op_l3)
         except Exception:
             pass
     _log.info(
@@ -1044,11 +1067,16 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     return True
 
 
-def _retime_stops(stops, pos, anchor_departure, orders_state, now):
+def _retime_stops(stops, pos, anchor_departure, orders_state, now,
+                  strict_cells: bool = False):
     """Przelicz predicted_at wzdłuż DANEJ kolejności stopów: łańcuch OSRM od `pos`
     + clamp committed na odbiorach + dwell. Coords z orders_state (autorytatywne —
     plany z propozycji mają 0,0). KOLEJNOŚCI NIE ZMIENIA. None gdy brak coords/OSRM.
-    Używane przez F2 (re-czasowanie) i F6 (po reorderze niezmienników)."""
+    Używane przez F2 (re-czasowanie) i F6 (po reorderze niezmienników).
+
+    strict_cells (v3, pin operatora): brakująca/nieprawidłowa komórka macierzy
+    OSRM → None (techniczne veto) zamiast cichego lega 0 min — czasy sekwencji
+    operatora muszą być PRAWDZIWE albo żadne. Default False = legacy 1:1."""
     if not stops:
         return None
     coords = []
@@ -1071,8 +1099,11 @@ def _retime_stops(stops, pos, anchor_departure, orders_state, now):
     out = []
     for i, s in enumerate(stops):
         cell = matrix[i][i + 1] if (i + 1) < len(matrix[i]) else None
-        leg_min = (cell or {}).get("duration_s")
-        leg_min = (leg_min / 60.0) if (leg_min is not None and leg_min < 9e8) else 0.0
+        raw = (cell or {}).get("duration_s")
+        cell_ok = raw is not None and raw < 9e8
+        if strict_cells and not cell_ok:
+            return None  # v3: pin wymaga prawdziwych czasów każdego lega
+        leg_min = (raw / 60.0) if cell_ok else 0.0
         t = t + timedelta(minutes=leg_min)
         if s.get("type") == "pickup":
             ck = _parse_dt((orders_state.get(str(s.get("order_id"))) or {}).get("czas_kuriera_warsaw"))
@@ -1921,28 +1952,33 @@ def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None)
     return seq
 
 
-def _operator_pin_hard_report(final_stops, orders_state) -> List[Dict[str, Any]]:
-    """v2 (polityka przypięta CTO 2026-07-19 po NO-GO Sola): read-only ewaluacja
-    HARD po pinie operatora, na FINALNYCH (już re-czasowanych) stopach. Sekwencję
-    WYKONUJEMY (koordynator nadzoruje — precedens carried-first relax), naruszenia
-    raportujemy GŁOŚNO w evencie applied + WARNING. Zero veta (veto wyłącznie
-    techniczne = retime_failed).
+def _operator_pin_hard_report(cid, final_stops, orders_state) -> List[Dict[str, Any]]:
+    """v2/v3 (polityka przypięta CTO 2026-07-19 po NO-GO Sola): read-only
+    ewaluacja HARD po pinie operatora, na FINALNYCH (już re-czasowanych) stopach.
+    Sekwencję WYKONUJEMY (koordynator nadzoruje — precedens carried-first relax),
+    naruszenia raportujemy GŁOŚNO w evencie applied + WARNING. Zero veta (veto
+    wyłącznie techniczne = retime_failed).
 
     Wymiary: r6 = carried-age per zlecenie > BAG_TIME_HARD_MAX_MIN (kotwica 1:1
     z L3 przez `_l3_bag_time_ages`; `alarm40` = przekroczony poziom Alarmu OD-07);
     no_return = detektor Z-RULE `_detect_departed_pickup_revisit` (ta sama
-    semantyka co F6, bez seedu carried — parytet z detekcją inwariantów).
-    Grafik: niepoliczalny osobno — retime startuje z kotwicy `_start_anchor`
-    (+floor available_from w _gen), więc czas przed startem zmiany nie może
-    powstać z pinu (N-D, patrz evidence). Fail-soft: błąd → pusta lista."""
+    semantyka co F6, bez seedu carried — parytet z detekcją inwariantów);
+    grafik (v3) = stop przewidziany za twardym końcem zmiany kuriera — okno z
+    TEGO SAMEGO źródła co feasibility (`courier_resolver.resolve_shift_end_by_cid`
+    = match_courier + `_shift_end_dt`, lustro resolve_shift_start_by_cid; zero
+    kopii), tolerancja = V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN (parytet
+    V3.24-A). Working-override 'pracuje' może legalnie wydłużać pracę → wpis
+    jest sygnałem raportowym, nie vetem. Start zmiany: N-D — retime startuje z
+    kotwicy `_start_anchor` (+floor available_from w _gen), czas przed zmianą
+    nie może powstać z pinu. Fail-soft: błąd → pomiń wymiar."""
     breaches: List[Dict[str, Any]] = []
     try:
         ages = _l3_bag_time_ages(final_stops, orders_state)
         try:
             from dispatch_v2 import common as _C_h
-            _hard = float(getattr(_C_h, "BAG_TIME_HARD_MAX_MIN", 35.0))
         except Exception:
-            _hard = 35.0
+            _C_h = None
+        _hard = float(getattr(_C_h, "BAG_TIME_HARD_MAX_MIN", 35.0)) if _C_h else 35.0
         for oid in sorted(ages):
             age = ages[oid]
             if age > _hard:
@@ -1954,6 +1990,24 @@ def _operator_pin_hard_report(final_stops, orders_state) -> List[Dict[str, Any]]
                              "order_id": str(_oids[1]),
                              "value": None,
                              "first_oid": (str(_oids[0]) if _oids[0] is not None else None)})
+        try:
+            from dispatch_v2 import courier_resolver as _CR_g
+            _sh_end = _CR_g.resolve_shift_end_by_cid(cid)
+        except Exception:
+            _sh_end = None
+        if _sh_end is not None:
+            _tol = float(getattr(_C_h, "V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN",
+                                 5.0)) if _C_h else 5.0
+            for s in final_stops:
+                _pred = _parse_dt(s.get("predicted_at"))
+                if _pred is None:
+                    continue
+                _exc = (_pred - _sh_end).total_seconds() / 60.0
+                if _exc > _tol:
+                    breaches.append({"type": "grafik",
+                                     "order_id": str(s.get("order_id")),
+                                     "value": round(_exc, 1),
+                                     "stop_type": s.get("type")})
     except Exception as e:
         _log.warning(f"operator_pin_hard_report fail: {type(e).__name__}: {e}")
     return breaches
@@ -2002,11 +2056,14 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     except Exception as e:
         _op_pin_ctx = None
         _log.warning(f"operator_route_override(retime) cid={cid} fail: {type(e).__name__}: {e}")
-    new_stops = _retime_stops(stops, pos, anchor_departure, orders_state, now)
+    # v3: przy aktywnym pinie czasy sekwencji operatora muszą być PRAWDZIWE —
+    # brakująca komórka OSRM = veto techniczne (strict), nie cichy leg 0 min.
+    new_stops = _retime_stops(stops, pos, anchor_departure, orders_state, now,
+                              strict_cells=(_op_pin_ctx is not None))
     if new_stops is None:
-        if _op_pin_ctx is not None and _op_pin_ctx.get("changed"):
-            # v2: pin przestawił stopy, retime padł → zapisu nie ma (plan
-            # nietknięty), ale odmowa MUSI być widoczna w cieniu.
+        if _op_pin_ctx is not None:
+            # pin aktywny, retime padł → zapisu nie ma (plan nietknięty),
+            # a odmowa MUSI być widoczna w cieniu.
             try:
                 _op_ovr.emit_retime_failed(cid, _op_pin_ctx, len(stops), now)
                 _log.warning(
@@ -2040,7 +2097,7 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
         raise
     if _op_pin_ctx is not None:
         try:
-            _op_hb = _operator_pin_hard_report(new_stops, orders_state)
+            _op_hb = _operator_pin_hard_report(cid, new_stops, orders_state)
             if _op_hb:
                 _log.warning(
                     f"OPERATOR-OVERRIDE HARD BREACH cid={cid} breaches={_op_hb} "

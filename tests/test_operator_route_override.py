@@ -224,7 +224,7 @@ def test_carried_position_honored_with_hard_breach_logged(env, monkeypatch):
     orders = {
         "A": dict(ORDERS["A"]),
         "K": {"courier_id": CID, "status": "picked_up",
-              "picked_up_at": "2026-07-19 11:05:00",  # 55 min przed NOW
+              "picked_up_at": "2026-07-19 13:05:00",  # naive=WARSAW → 11:05Z, 55 min przed NOW
               "czas_kuriera_warsaw": "2026-07-19T13:00:00+02:00",
               "pickup_coords": [53.125, 23.120], "delivery_coords": [53.126, 23.125],
               "restaurant": "Karma"},
@@ -490,3 +490,177 @@ def test_recanon_after_raw_save_reapplies_pin(env, monkeypatch):
     assert _order()[0] == ("pickup", "A")
     assert P.recanon_courier(CID, now=NOW, reason="assign") is True
     assert _order()[0] == ("pickup", "B")  # chokepoint re-nakłada pin
+
+
+# ── v3 (re-review Sola 20.07): L3-override, stale-ETA, grafik, walidacje ─────
+
+def test_l3_reject_overridden_by_pin(env, monkeypatch):
+    """L3 compare-and-keep (LIVE) daje REJECT dla spiętej sekwencji — przy
+    AKTYWNYM pinie zapis NASTĘPUJE (pin wygrywa z bramką biznesową), a werdykt
+    idzie do eventu applied jako l3_would_reject + detal."""
+    from dispatch_v2 import route_simulator_v2 as R
+    orders = {
+        "A": dict(ORDERS["A"]),
+        "K": {"courier_id": CID, "status": "picked_up",
+              "picked_up_at": "2026-07-19 13:40:00",  # naive=WARSAW → 11:40Z, 20 min przed NOW
+              "czas_kuriera_warsaw": "2026-07-19T13:30:00+02:00",
+              "pickup_coords": [53.125, 23.120], "delivery_coords": [53.126, 23.125],
+              "restaurant": "Karma"},
+    }
+    (env / "orders_state.json").write_text(json.dumps(orders))
+    # Istniejący plan: K dowożone OD RAZU (age ~22 min < 35 — L3 baseline czysty)
+    PM.save_plan(CID, {"start_pos": {"lat": 53.128, "lng": 23.130, "source": "x"},
+                       "start_ts": NOW.isoformat(),
+                       "stops": [
+                           {"order_id": "K", "type": "dropoff",
+                            "coords": {"lat": 53.126, "lng": 23.125},
+                            "predicted_at": "2026-07-19T12:02:00+00:00",
+                            "dwell_min": 3.5, "status_at_plan_time": "picked_up"},
+                           {"order_id": "A", "type": "pickup",
+                            "coords": {"lat": 53.130, "lng": 23.100},
+                            "predicted_at": "2026-07-19T12:08:00+00:00",
+                            "dwell_min": 1.0, "status_at_plan_time": "assigned"},
+                           {"order_id": "A", "type": "dropoff",
+                            "coords": {"lat": 53.140, "lng": 23.110},
+                            "predicted_at": "2026-07-19T12:15:00+00:00",
+                            "dwell_min": 3.5, "status_at_plan_time": "assigned"}],
+                       "optimization_method": "incremental",
+                       "bag_signature": "A:0|K:1"})
+    v0 = PM.load_plan(CID)["plan_version"]
+    _flag_on(monkeypatch)
+    monkeypatch.setattr(C, "ENABLE_PLAN_RECHECK_GATES", True, raising=False)
+    _write_override(env, ["A", "K"])  # K odsunięte za A → fresh łamie R6, existing NIE
+    ok = P._gen_one_bag_plan(CID, ["A", "K"], orders, {}, NOW, R,
+                             expected_version=v0)
+    assert ok is True  # zapis NASTĄPIŁ mimo L3 REJECT
+    assert _order() == [("pickup", "A"), ("dropoff", "A"), ("dropoff", "K")]
+    applied = [e for e in _events(env)
+               if e["event"] == "operator_route_override_applied"]
+    assert applied and applied[-1]["l3_would_reject"] is True
+    assert applied[-1]["l3_detail"]["fresh_r6"] > 35
+
+
+def test_gen_f6_stale_with_pin_unchanged_aborts(env, monkeypatch):
+    """Ścieżka Sola: F6 przestawił stopy, retime F6 padł (stale czasy), pin
+    zgodny z tą kolejnością (changed=False) → v3 wymusza retime finalnej
+    sekwencji; fail ⇒ veto techniczne, plan nietknięty."""
+    _flag_on(monkeypatch)
+    monkeypatch.setattr(P, "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE", True)
+
+    def _f6_reorder(s, o, p=None, n=None):
+        # deterministycznie ustaw kolejność = przyszły pin (B przed A)
+        key = {"B": 0, "A": 1}
+        return sorted(s, key=lambda x: (key[str(x["order_id"])],
+                                        0 if x["type"] == "pickup" else 1))
+
+    monkeypatch.setattr(P, "_apply_canon_order_invariants", _f6_reorder)
+    monkeypatch.setattr(P, "_retime_stops", lambda *a, **k: None)
+    _write_override(env, ["B", "A"])
+    assert P.redecide_courier(CID, now=NOW) is False
+    assert PM.load_plan(CID) is None  # żadnego zapisu ze stalymi czasami
+    rej = [e for e in _events(env)
+           if e["event"] == "operator_route_override_rejected"]
+    assert rej and rej[-1]["reason"] == "retime_failed"
+
+
+def test_missing_osrm_cell_vetoes_pin(env, monkeypatch):
+    """Brakująca komórka macierzy OSRM przy aktywnym pinie = veto techniczne
+    (żadnego cichego lega 0 min), plan nietknięty."""
+    _flag_on(monkeypatch)
+    _save_base()
+    v0 = PM.load_plan(CID)["plan_version"]
+    _write_override(env, ["B", "A"])
+    monkeypatch.setattr(osrm_client, "table",
+                        lambda a, b: [[{"duration_s": None} for _ in b] for _ in a])
+    assert P.recanon_courier(CID, now=NOW) is False
+    assert PM.load_plan(CID)["plan_version"] == v0
+    rej = [e for e in _events(env)
+           if e["event"] == "operator_route_override_rejected"]
+    assert rej and rej[-1]["reason"] == "retime_failed"
+
+
+def test_grafik_breach_logged_in_applied(env, monkeypatch):
+    """Pin wypycha stopy za twardy koniec zmiany kuriera → breach `grafik`
+    w hard_breaches (okno z TEGO SAMEGO źródła co feasibility — delegacja
+    do courier_resolver.resolve_shift_end_by_cid), bez veta."""
+    from dispatch_v2 import courier_resolver as CR
+    _flag_on(monkeypatch)
+    _save_base()
+    _write_override(env, ["B", "A"])
+    monkeypatch.setattr(CR, "resolve_shift_end_by_cid",
+                        lambda cid, **k: NOW)  # zmiana kończy się „teraz"
+    assert P.recanon_courier(CID, now=NOW) is True
+    applied = [e for e in _events(env)
+               if e["event"] == "operator_route_override_applied"]
+    assert applied
+    hb = applied[-1]["hard_breaches"]
+    grafik = [b for b in hb if b["type"] == "grafik"]
+    assert grafik and any(b["order_id"] == "A" and b["value"] > 5 for b in grafik)
+
+
+def test_ttl_bool_and_garbage_default_120(env, monkeypatch):
+    """bool jako ttl (json true) NIE jest liczbą → default 120: wpis sprzed
+    60 min DZIAŁA (float(True)=1.0 by go wygasił). Wartości NaN/Inf/ułamek/
+    poza zakresem → też 120 (asercje jednostkowe na _ttl_min)."""
+    _flag_on(monkeypatch)
+    _save_base()
+    _write_override(env, ["B", "A"],
+                    set_at="2026-07-19T11:00:00+00:00", ttl_min=True)  # 60 min temu
+    assert P.recanon_courier(CID, now=NOW) is True
+    assert _order()[0] == ("pickup", "B")  # zadziałał (120), nie wygasł (1.0)
+    assert not [e for e in _events(env)
+                if e["event"] == "operator_route_override_expired"]
+    assert O._ttl_min({"ttl_min": float("inf")}) == 120.0
+    assert O._ttl_min({"ttl_min": float("nan")}) == 120.0
+    assert O._ttl_min({"ttl_min": 120.5}) == 120.0
+    assert O._ttl_min({"ttl_min": 99999}) == 120.0
+    assert O._ttl_min({"ttl_min": 60}) == 60.0
+
+
+def test_ttl_infinity_in_file_expires_old_entry(env, monkeypatch):
+    """Infinity w pliku (json.load je akceptuje) nie może unieśmiertelnić
+    wpisu: default 120 ⇒ wpis sprzed 200 min WYGASA."""
+    _flag_on(monkeypatch)
+    _save_base()
+    _write_override(env, ["B", "A"],
+                    set_at="2026-07-19T08:40:00+00:00",  # 200 min temu
+                    ttl_min=float("inf"))
+    assert P.recanon_courier(CID, now=NOW) is True
+    assert _order()[0] == ("pickup", "A")  # nie spinowany
+    exp = [e for e in _events(env)
+           if e["event"] == "operator_route_override_expired"]
+    assert exp and exp[-1]["ttl_min"] == 120
+
+
+def test_set_at_without_offset_rejected(env, monkeypatch):
+    """Kontrakt: set_at = ISO z jawnym offsetem; naiwny czas → invalid_set_at
+    (nie zgadujemy strefy)."""
+    _flag_on(monkeypatch)
+    _save_base()
+    _write_override(env, ["B", "A"], set_at="2026-07-19T11:50:00")  # bez offsetu
+    assert P.recanon_courier(CID, now=NOW) is True
+    assert _order()[0] == ("pickup", "A")
+    rej = [e for e in _events(env)
+           if e["event"] == "operator_route_override_rejected"]
+    assert rej and rej[-1]["reason"] == "invalid_set_at"
+
+
+def test_flag_off_structure_fail_not_would_apply(env, monkeypatch):
+    """Cień would_apply dopiero PO udanym dry-run konstrukcji: strukturalnie
+    niemożliwy override (duplikat węzła) przy OFF = structure_fail, nigdy
+    fałszywe would_apply."""
+    stops = [dict(s) for s in BASE_STOPS] + [
+        {"order_id": "A", "type": "pickup",  # DUPLIKAT węzła odbioru A
+         "coords": {"lat": 53.130, "lng": 23.100},
+         "predicted_at": "2026-07-19T12:06:00+00:00", "dwell_min": 1.0,
+         "status_at_plan_time": "assigned"}]
+    PM.save_plan(CID, {"start_pos": {"lat": 53.128, "lng": 23.130, "source": "x"},
+                       "start_ts": NOW.isoformat(), "stops": stops,
+                       "optimization_method": "incremental",
+                       "bag_signature": "A:0|B:0"})
+    _write_override(env, ["B", "A"])  # flaga OFF (default)
+    assert P.recanon_courier(CID, now=NOW) is True
+    evs = _events(env)
+    rej = [e for e in evs if e["event"] == "operator_route_override_rejected"]
+    assert rej and rej[-1]["reason"] == "structure_fail"
+    assert not any(e.get("would_apply") for e in evs)

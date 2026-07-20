@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -196,12 +197,30 @@ def _read_entry(cid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
 
 
 def _ttl_min(entry: Dict[str, Any]) -> float:
-    """ttl_min z wpisu; brak / śmieć / <=0 → default 120 (kontrakt v2, Sol pkt 5)."""
+    """ttl_min z wpisu: liczba CAŁKOWITA w zakresie 1..1440 (kontrakt v3).
+    Wszystko inne (brak / bool / NaN / Infinity / ułamek / poza zakresem /
+    śmieć) → default 120 (Sol re-review pkt 4)."""
+    v = entry.get("ttl_min", DEFAULT_TTL_MIN)
+    if isinstance(v, bool):
+        return DEFAULT_TTL_MIN
     try:
-        v = float(entry.get("ttl_min", DEFAULT_TTL_MIN))
-        return v if v > 0 else DEFAULT_TTL_MIN
+        f = float(v)
     except Exception:
         return DEFAULT_TTL_MIN
+    if not math.isfinite(f) or f != int(f) or not (1.0 <= f <= 1440.0):
+        return DEFAULT_TTL_MIN
+    return f
+
+
+def _iso_has_offset(s: Any) -> bool:
+    """True gdy string ISO ma jawny offset ('Z' lub ±HH:MM) — kontrakt v3:
+    set_at bez offsetu = invalid (nie zgadujemy strefy)."""
+    if not isinstance(s, str) or not s:
+        return False
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).tzinfo is not None
+    except Exception:
+        return False
 
 
 def _group_key(oid: str, orders_state: Dict[str, Any],
@@ -296,6 +315,12 @@ def pin_stops(cid: str, stops: List[dict], oids: List[str],
                   dedup_key=("malformed", str((entry or {}).get("set_at"))),
                   reason="malformed", **base)
             return stops, None
+        if not _iso_has_offset((entry or {}).get("set_at")):
+            # kontrakt: ISO z jawnym offsetem — naiwny czas = nie zgadujemy strefy
+            _emit("rejected", cid, now,
+                  dedup_key=("invalid_set_at_naive", entry.get("set_at")),
+                  reason="invalid_set_at", **base)
+            return stops, None
         if (set_at - now) > timedelta(minutes=SET_AT_FUTURE_SKEW_MIN):
             # set_at z przyszłości poza skew zegarów = wpis niewiarygodny
             _emit("rejected", cid, now,
@@ -328,16 +353,18 @@ def pin_stops(cid: str, stops: List[dict], oids: List[str],
                   dedup_key=("foreign_stops", entry.get("set_at")),
                   reason="foreign_stops", **base)
             return stops, None
-        if not flag_on:
-            # Cień PRZED flipem: wpis przeszedł pełną walidację, zadziałałby.
-            _emit("rejected", cid, now, dedup_key=("flag_off", entry.get("set_at")),
-                  reason="flag_off", would_apply=True, **base)
-            return stops, None
+        # v3: dry-run KONSTRUKCJI przed werdyktem flagi — strukturalnie
+        # niemożliwy override nie może fałszywie przejść cienia would_apply.
         pinned = _build_pinned(stops, order_ids, orders_state)
         if pinned is None:
             _emit("rejected", cid, now,
                   dedup_key=("structure_fail", entry.get("set_at")),
                   reason="structure_fail", **base)
+            return stops, None
+        if not flag_on:
+            # Cień PRZED flipem: wpis przeszedł PEŁNĄ walidację + konstrukcję.
+            _emit("rejected", cid, now, dedup_key=("flag_off", entry.get("set_at")),
+                  reason="flag_off", would_apply=True, **base)
             return stops, None
         changed = ([(s.get("type"), str(s.get("order_id"))) for s in pinned]
                    != [(s.get("type"), str(s.get("order_id"))) for s in stops])
@@ -350,7 +377,8 @@ def pin_stops(cid: str, stops: List[dict], oids: List[str],
 
 def emit_applied(cid: str, ctx: Dict[str, Any], final_stops: List[dict],
                  orders_state: Dict[str, Any], now: Optional[datetime] = None,
-                 hard_breaches: Optional[List[dict]] = None) -> None:
+                 hard_breaches: Optional[List[dict]] = None,
+                 l3: Optional[Dict[str, Any]] = None) -> None:
     """Po UDANYM zapisie planu z pinem: jedno zdarzenie applied z finalnymi
     czasami + naruszenia okna committed (odbiór > czas_kuriera + tol; wpis z
     late > progu BUG C dostaje `alert` i WARNING rangi ALERT) + wynik ewaluacji
@@ -389,7 +417,9 @@ def emit_applied(cid: str, ctx: Dict[str, Any], final_stops: List[dict],
               set_by=ctx.get("set_by"), set_at=ctx.get("set_at"),
               ttl_min=ctx.get("ttl_min"), changed=bool(ctx.get("changed")),
               committed_breaches=breaches, r27_alert=r27_alert,
-              hard_breaches=hb)
+              hard_breaches=hb,
+              l3_would_reject=bool(l3 and l3.get("l3_would_reject")),
+              l3_detail=(l3 or None))
     except Exception:
         pass
 
