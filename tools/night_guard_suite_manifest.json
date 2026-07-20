@@ -1,6 +1,6 @@
 {
-  "base_sha": "188db47c00b8d1828b15e8797c255e686ced0e2f",
-  "manifest_version": 15,
+  "base_sha": "a5bc9601e053178121cb5061a64ccbc6eef656c5",
+  "manifest_version": 16,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -5455,8 +5455,8 @@
       "skipped"
     ]
   },
-  "owner": "CTO (apply ck-manual-edit passthrough)",
-  "reason": "nowe testy test_czasowka_pickup_authority + zmiana pre_proposal_recheck (fix czasu odbioru, flaga OFF)",
+  "owner": "CTO (rt-shadow apply)",
+  "reason": "rt-shadow would_apply compute-always + doc ck-flag",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-20T11:43:43+00:00"
+  "updated_at_utc": "2026-07-20T13:01:51+00:00"
 }
