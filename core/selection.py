@@ -87,6 +87,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
     _sanitize_courier_pos = _dp._sanitize_courier_pos
     _set_feasibility_verdict = _dp._set_feasibility_verdict
     _v325_new_courier_penalty = _dp._v325_new_courier_penalty
+    _v325_score_blocked = _dp._v325_score_blocked
     _v326_build_rationale = _dp._v326_build_rationale
     _v326_fleet_load_balance = _dp._v326_fleet_load_balance
     _v326_multistop_trajectory = _dp._v326_multistop_trajectory
@@ -243,7 +244,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         # WOLNY kurier (bag 0), a w TYM SAMYM tierze late-pickup jest FEASIBLE kandydat JUŻ
         # W TRASIE (bag>=1) w wąskim marginesie score → tie-break dołożyłby do jadącego
         # (oszczędza rezerwę). ZERO zmiany decyzji (feasible/_winner NIETKNIĘTE). same-tier =
-        # brak inwersji committed-odbioru; wyklucz sentinel/best_effort + R6>40 (świeżość).
+        # brak inwersji committed-odbioru; wyklucz jawny V325 score-block + R6>40 (świeżość).
         # Pomiar dokładny 29.06: ~3-9/d czystych. Flip AKTYWNY = osobna flaga + ACK (po
         # walidacji fizycznej #1, że bundle nie psuje świeżości). Gated OFF, try/except.
         if C.flag("ENABLE_RESERVE_AWARE_TIEBREAK_SHADOW",
@@ -680,17 +681,25 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         # wpychać decyzji w ciszę. Serializowany score zostaje z deltami
         # (uczciwa wartość rankingowa).
         _best_score = getattr(top[0], "score", None)
+        _best_score_blocked = _v325_score_blocked(top[0])
         _best_score_gate = _gate_score_excluding_ranking_deltas(top[0])
         _min_prop_gate = _min_propose_score()  # SCALE-01: flags.json hot → common
-        if isinstance(_best_score, (int, float)) and _best_score_gate is not None \
-                and _best_score_gate < _min_prop_gate \
+        if isinstance(_best_score, (int, float)) \
+                and (_best_score_blocked or (
+                    _best_score_gate is not None
+                    and _best_score_gate < _min_prop_gate
+                )) \
                 and not _always_propose_on():  # ALWAYS-PROPOSE: nie milcz, proponuj feasible best
+            _best_quality = {
+                True: f"score_blocked=1 score={_best_score:.1f}",
+                False: f"score={_best_score:.1f}<{_min_prop_gate:.0f}",
+            }[_best_score_blocked]
             _result_low = PipelineResult(
                 order_id=order_id,
                 verdict="KOORD",
                 reason=(
                     f"all_candidates_low_score (best={top[0].courier_id} "
-                    f"score={_best_score:.1f}<{_min_prop_gate:.0f}; "
+                    f"{_best_quality}; "
                     f"feasible={len(feasible)})"
                 ),
                 best=top[0],
@@ -796,16 +805,22 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         try:
             _diff_floor = float(getattr(C, "DIFFICULT_CASE_SCORE_FLOOR", -30.0))
             _diff_top_score = float(getattr(top[0], "score", 0.0) or 0.0)
+            _diff_top_blocked = _v325_score_blocked(top[0])
             _diff_above = sum(
-                1 for _c in top if float(getattr(_c, "score", 0.0) or 0.0) >= _diff_floor
+                1 for _c in top
+                if not _v325_score_blocked(_c)
+                and float(getattr(_c, "score", 0.0) or 0.0) >= _diff_floor
             )
             # Detect — zawsze (shadow); apply — tylko gdy flag ON.
-            _diff_should_redirect = (top and _diff_top_score < _diff_floor)
+            _diff_should_redirect = (
+                top and (_diff_top_blocked or _diff_top_score < _diff_floor)
+            )
             if _diff_should_redirect and C.decision_flag(
                     "ENABLE_DIFFICULT_CASE_KOORD_REDIRECT"):
                 _diff_best_metrics = getattr(top[0], "metrics", {}) or {}
                 _diff_payload = {
                     "max_score": round(_diff_top_score, 2),
+                    "score_blocked": _diff_top_blocked,
                     "floor": _diff_floor,
                     "n_candidates_above_floor": _diff_above,
                     "best_candidate_id": getattr(top[0], "courier_id", None),
@@ -818,7 +833,9 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                     verdict="KOORD",
                     reason=(
                         f"difficult_geometry_redirect (best={top[0].courier_id} "
-                        f"max_score={_diff_top_score:.1f} < floor={_diff_floor:.0f}; "
+                        f"max_score={_diff_top_score:.1f}; "
+                        f"score_blocked={int(_diff_top_blocked)}; "
+                        f"floor={_diff_floor:.0f}; "
                         f"n_above_floor={_diff_above}; geometryczny eskalator KOORD)"
                     ),
                     best=top[0],
@@ -863,6 +880,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                 # difficult_case_redirect_shadow w serializer.
                 top[0].metrics["difficult_case_redirect_shadow"] = {
                     "max_score": round(_diff_top_score, 2),
+                    "score_blocked": _diff_top_blocked,
                     "floor": _diff_floor,
                     "n_candidates_above_floor": _diff_above,
                 }

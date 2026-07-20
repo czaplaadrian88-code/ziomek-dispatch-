@@ -2696,7 +2696,8 @@ ENABLE_PRE_SHIFT_DEPARTURE_CLAMP = _os.environ.get(
 # Default False — flip po shadow ~30 min observation + Adrian ACK.
 ENABLE_V325_NEW_COURIER_CAP = _os.environ.get(
     "ENABLE_V325_NEW_COURIER_CAP", "1") == "1"
-# Bag cap: nowy + bag >= V325_NEW_COURIER_BAG_HARD_SKIP_AT → HARD SKIP (efektywny -inf score)
+# Bag cap: nowy + bag >= próg → jawny V325 score-block (kandydat zostaje w puli,
+# ale zwykłe sorty odkładają go na koniec; score pozostaje liczbą domenową).
 V325_NEW_COURIER_BAG_HARD_SKIP_AT = 2
 # Gradient bins (advantage = candidate.score - max(non-new alt scores))
 V325_NEW_COURIER_PENALTY_HIGH_ADVANTAGE = -10  # advantage >= 50 (objectively much better)
@@ -2709,15 +2710,16 @@ V325_NEW_COURIER_MED_ADV_THRESHOLD = 20.0
 # Rampa nowych kurierów zamiast niewidzialności: przez pierwsze
 # NEW_COURIER_RAMP_DELIVERIES dostaw kandydat tier='new' wchodzi do selekcji
 # TYLKO na krótkie, proste kursy (dist ≤ MAX_KM, pusta torba, poza strefą
-# śmierci 14-17) ze stałym malusem RAMP_MALUS zamiast gradientu/-1e9; kursy
-# poza profilem → sentinel -1e9 (sort na koniec — kandydat ZOSTAJE w puli,
-# ALWAYS-PROPOSE zachowane). Po rampie → normalne reguły R-04 (gradient wyżej).
+# śmierci 14-17) ze stałym malusem RAMP_MALUS zamiast gradientu; kursy poza
+# profilem → metrics.v325_score_blocked=True (sort na koniec — kandydat ZOSTAJE
+# w puli, ALWAYS-PROPOSE zachowane, bez magicznej wartości w score). Po rampie
+# → normalne reguły R-04 (gradient wyżej).
 # Licznik dostaw: courier_reliability.json (regen daily 04:30; brak wpisu = 0).
 # Flaga: ENABLE_NEW_COURIER_RAMP w flags.json (hot-reload, default ON).
 NEW_COURIER_RAMP_DELIVERIES = int(_os.environ.get("NEW_COURIER_RAMP_DELIVERIES", "30"))
 NEW_COURIER_RAMP_MAX_KM = float(_os.environ.get("NEW_COURIER_RAMP_MAX_KM", "2.5"))
 NEW_COURIER_RAMP_MALUS = float(_os.environ.get("NEW_COURIER_RAMP_MALUS", "-20.0"))
-# Solo-guard (replay 11.06: rozszerzony sentinel dawał 6-7 NOWYCH eskalacji
+# Solo-guard (replay 11.06: rozszerzona blokada dawała 6-7 NOWYCH eskalacji
 # PROPOSE→KOORD/tydz. gdy zablokowany nowy był jedyną opcją — łamało
 # ALWAYS-PROPOSE). Gdy po blokadach CAŁA pula < MIN_PROPOSE_SCORE: najlepszy
 # zablokowany wraca na pre_block + SOLO_MALUS (mocno zdemotowany, proposable).

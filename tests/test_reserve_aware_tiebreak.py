@@ -1,7 +1,7 @@
 """#3 top10 (2026-06-29): test reserve-aware tie-break SHADOW eval (log-only).
 
 Pokrywa would_fire + WSZYSTKIE bramki: winner wolny vs zajęty, same-tier (brak
-inwersji committed), margin score, R6>40 wykluczone, sentinel/best_effort wykluczone.
+inwersji committed), margin score, R6>40 i jawny V325 score-block wykluczone.
 Pure helper _reserve_aware_tiebreak_eval — ZERO mutacji, log-only obserwator.
 """
 import sys
@@ -11,10 +11,14 @@ from dispatch_v2.dispatch_pipeline import _reserve_aware_tiebreak_eval  # noqa: 
 
 
 class _Cand:
-    def __init__(self, cid, score, bag, r6max=15.0):
+    def __init__(self, cid, score, bag, r6max=15.0, score_blocked=False):
         self.courier_id = cid
         self.score = score
-        self.metrics = {"bag_size_before": bag, "max_bag_time_min": r6max}
+        self.metrics = {
+            "bag_size_before": bag,
+            "max_bag_time_min": r6max,
+            "v325_score_blocked": score_blocked,
+        }
 
 
 # tier 0 dla wszystkich (brak inwersji late-pickup), chyba że test zmienia
@@ -65,9 +69,9 @@ def test_no_fire_r6_over_cap():
     assert out["would_fire"] is False
 
 
-def test_no_fire_sentinel_score():
+def test_no_fire_explicit_v325_score_block():
     winner = _Cand("400", 100.0, 0)
-    carry = _Cand("509", -1e9, 2)          # sentinel/best_effort → wyklucz
+    carry = _Cand("509", 120.0, 2, score_blocked=True)
     out = _reserve_aware_tiebreak_eval(winner, [winner, carry], 0, _tier0, 30.0)
     assert out["would_fire"] is False
 

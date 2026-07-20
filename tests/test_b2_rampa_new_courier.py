@@ -1,8 +1,9 @@
 """SP-B2-RAMPA (2026-06-11, roadmapa BARTEK 2.0) — testy rampy nowych kurierów.
 
-Zamiast niewidzialności (sentinel -1e9 / gradient -50): przez pierwsze 30
+Zamiast niewidzialności przez magiczny score: przez pierwsze 30
 dostaw nowy kurier dostaje krótkie kursy (km≤2,5 ∧ bag==0 ∧ slot≠14-17)
-z malusem -20; kursy poza profilem → -1e9 (zostaje w puli — ALWAYS-PROPOSE).
+z malusem -20; kursy poza profilem → jawny score-block (zostaje w puli —
+ALWAYS-PROPOSE, a realny score nie jest zatruwany sentinelem).
 Po 30 dostawach → normalne reguły R-04 (gradient V325).
 """
 import json
@@ -22,9 +23,6 @@ from dispatch_v2 import shadow_dispatcher
 T_LUNCH = datetime(2026, 6, 11, 10, 0, tzinfo=timezone.utc)      # 12:00 Warsaw
 T_HIGH_RISK = datetime(2026, 6, 11, 13, 0, tzinfo=timezone.utc)  # 15:00 Warsaw
 
-NEG_INF = -1e9
-
-
 class _Cand:
     def __init__(self, cid, score, tier="new", bag=0, km=1.5):
         self.courier_id = cid
@@ -36,6 +34,13 @@ class _Cand:
             "km_to_pickup": km,
             "bundle_level3_dev": None,
         }
+
+
+def _assert_blocked(cand, score):
+    assert cand.score == score
+    assert cand.score > -1e6
+    assert cand.metrics["v325_score_blocked"] is True
+    assert cand.metrics["v325_blocked_rank_delta"] == 0.0
 
 
 @pytest.fixture(autouse=True)
@@ -86,7 +91,7 @@ def test_ramp_blocks_long_distance():
     new = _Cand("555", 60.0, km=4.2)
     alt = _Cand("123", 30.0, tier="gold")
     dp._v325_new_courier_penalty([new, alt], order_id="t2", now=T_LUNCH)
-    assert new.score == NEG_INF
+    _assert_blocked(new, 60.0)
     ramp = new.metrics["new_courier_ramp"]
     assert ramp["eligible"] is False and ramp["reason"].startswith("dystans")
 
@@ -95,7 +100,7 @@ def test_ramp_blocks_missing_km():
     new = _Cand("555", 60.0, km=None)
     alt = _Cand("123", 30.0, tier="gold")
     dp._v325_new_courier_penalty([new, alt], order_id="t2b", now=T_LUNCH)
-    assert new.score == NEG_INF
+    _assert_blocked(new, 60.0)
     assert new.metrics["new_courier_ramp"]["reason"] == "dystans_brakkm"
 
 
@@ -104,7 +109,7 @@ def test_ramp_blocks_nonempty_bag():
     new = _Cand("555", 60.0, bag=1, km=1.0)
     alt = _Cand("123", 30.0, tier="gold")
     dp._v325_new_courier_penalty([new, alt], order_id="t3", now=T_LUNCH)
-    assert new.score == NEG_INF
+    _assert_blocked(new, 60.0)
     assert new.metrics["new_courier_ramp"]["reason"] == "bag_niepusty"
 
 
@@ -112,7 +117,7 @@ def test_ramp_blocks_high_risk_slot():
     new = _Cand("555", 60.0, km=1.0)
     alt = _Cand("123", 30.0, tier="gold")
     dp._v325_new_courier_penalty([new, alt], order_id="t4", now=T_HIGH_RISK)
-    assert new.score == NEG_INF
+    _assert_blocked(new, 60.0)
     ramp = new.metrics["new_courier_ramp"]
     assert ramp["reason"] == "slot_14_17" and ramp["slot"] == "high_risk"
 
@@ -125,6 +130,16 @@ def test_post_ramp_falls_back_to_gradient():
     assert new.score == 10.0, new.score  # 60 + (-50)
     assert new.metrics["new_courier_ramp"] == {"active": False, "deliveries": 45}
     assert new.metrics["v325_new_courier_penalty"] == C.V325_NEW_COURIER_PENALTY_LOW_ADVANTAGE
+
+
+def test_post_ramp_bag_hard_skip_is_boolean_not_score_sentinel():
+    """Tor incydentu 489107: po rampie + bag>=2 pozostaje w puli bez -1e9."""
+    new = _Cand("900", 73.0, bag=2, km=1.0)
+    alt = _Cand("123", 30.0, tier="gold")
+    out = dp._v325_new_courier_penalty([new, alt], order_id="489107", now=T_LUNCH)
+    _assert_blocked(new, 73.0)
+    assert out == [alt, new]
+    assert new.metrics["v325_skipped_reason"] == "new_courier_bag_hard_skip:bag=2"
 
 
 def test_ramp_counter_from_file_below_threshold():
@@ -152,8 +167,8 @@ def test_non_new_tier_untouched():
 
 
 def test_always_propose_sole_blocked_gets_solo_rescue():
-    """SOLO-GUARD (replay 11.06): jedyny kandydat poza rampą NIE spada na
-    -1e9 (KOORD all_candidates_low_score) — wraca na pre_block -60,
+    """SOLO-GUARD (replay 11.06): jedyny kandydat poza rampą wraca na
+    pre_block -60 zamiast wywołać KOORD all_candidates_low_score,
     proposable (> MIN_PROPOSE_SCORE), z flagą solo_rescue."""
     new = _Cand("555", 60.0, km=7.0)
     out = dp._v325_new_courier_penalty([new], order_id="t9", now=T_LUNCH)
@@ -162,15 +177,17 @@ def test_always_propose_sole_blocked_gets_solo_rescue():
     assert new.score >= C.MIN_PROPOSE_SCORE
     ramp = new.metrics["new_courier_ramp"]
     assert ramp["eligible"] is False and ramp.get("solo_rescue") is True
+    assert "v325_score_blocked" not in new.metrics
+    assert "v325_blocked_rank_delta" not in new.metrics
     assert "jedyna opcja" in new.metrics["v325_new_courier_flag"]
 
 
 def test_solo_guard_inactive_when_proposable_alternative_exists():
-    """Zdrowa alternatywa w puli → sentinel zostaje (brak rescue)."""
+    """Zdrowa alternatywa w puli → jawna blokada zostaje (brak rescue)."""
     new = _Cand("555", 60.0, km=7.0)
     alt = _Cand("123", 30.0, tier="gold")
     dp._v325_new_courier_penalty([new, alt], order_id="t9b", now=T_LUNCH)
-    assert new.score == NEG_INF
+    _assert_blocked(new, 60.0)
     assert new.metrics["new_courier_ramp"].get("solo_rescue") is None
     assert alt.score == 30.0
 
@@ -180,12 +197,14 @@ def test_solo_guard_rescues_best_of_two_blocked():
     n1 = _Cand("555", 60.0, km=7.0)
     n2 = _Cand("556", 40.0, km=9.0)
     out = dp._v325_new_courier_penalty([n1, n2], order_id="t9c", now=T_LUNCH)
-    assert n1.score == 0.0 and n2.score == NEG_INF
+    assert n1.score == 0.0
+    assert "v325_score_blocked" not in n1.metrics
+    _assert_blocked(n2, 40.0)
     assert out[0] is n1
 
 
 def test_ramp_eligible_sorts_above_blocked():
-    """Dwóch nowych: rampowy (-20) sortuje się nad zablokowanym (-1e9)."""
+    """Dwóch nowych: rampowy (-20) sortuje się nad zablokowanym booleanem."""
     ok = _Cand("555", 50.0, km=1.0)
     blocked = _Cand("556", 90.0, km=8.0)
     out = dp._v325_new_courier_penalty([blocked, ok], order_id="t10", now=T_LUNCH)

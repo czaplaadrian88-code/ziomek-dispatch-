@@ -150,6 +150,17 @@ def test_informed_before_other_before_blind():
     assert [c.courier_id for c in out] == ["1", "2", "3"]
 
 
+def test_v325_score_block_stays_last_without_poisoning_score():
+    """Boolean V325 zachowuje dawny demote -1e9 także w Opcji B."""
+    blocked = FakeCand("1", "new", 120.0, "gps")
+    blocked.metrics["v325_score_blocked"] = True
+    blocked.metrics["v325_blocked_rank_delta"] = -10.0
+    allowed = FakeCand("2", "allowed", -80.0, "gps")
+    out = _sort_optionB([blocked, allowed])
+    assert out == [allowed, blocked]
+    assert blocked.score == 120.0 and blocked.score > -1e6
+
+
 # === Fix #5 (2026-05-31): last_picked_up_pickup = INFORMED ===
 
 def test_fix5_last_picked_up_pickup_is_informed():

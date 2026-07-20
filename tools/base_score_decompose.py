@@ -10,12 +10,12 @@ Mechanika score (z kodu dispatch_pipeline.py:4441/4484):
               + wave_bonus + bonus_penalty_sum + bonus_bug2_continuation
               + v324a_extension_penalty + (flag-gated deltas)
   bonus_penalty_sum = suma kar miękkich R6/R5/R1/R8/R9/wait/v324a/... (l.4441)
-  sentinel -1e9 = v325_new_courier_penalty (kurs nowego kuriera POZA profilem,
-    dispatch_pipeline.py:1532 NEG_INF) → kandydat fizycznie nie powinien jechać.
+  v325_score_blocked = jawny stan kursu nowego kuriera POZA profilem / z pełną
+    torbą; historyczne rekordy sprzed 20.07 mogą jeszcze nieść score <= -1e8.
 
 KLASYFIKACJA każdego KOORD na:
   STRUKTURA (brak realnie wykonalnego kuriera) — gdy CHOĆ JEDEN:
-    - sentinel: score <= -1e8 (v325 nowy kurier poza profilem)
+    - jawny v325_score_blocked (oraz legacy score <= -1e8 dla starych logów)
     - pool_feasible_count <= 1 (cała "pula" = 1 kandydat — flota pusta)
     - R6 dominuje: |bonus_r6_soft_pen| jest największą karą I R6 realnie łamany
       (objm_r6_breach_count>0 lub r6_max_bag_time_min > 35) — 35-min SLA fizyczny
@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 MIN_PROPOSE = -100.0
-SENTINEL_CUTOFF = -1e8          # v325 new-courier NEG_INF (-1e9) leaks here
+SENTINEL_CUTOFF = -1e8          # wyłącznie kompatybilność starych logów V325
 R6_HARD_MAX_MIN = 35.0          # R-35MIN-MAX (common.py BAG_TIME_HARD_MAX)
 LONGHAUL_KM = 4.5               # R7 long-haul threshold
 COMMITTED_LATE_MIN = 10.0       # committed pickup miss → cold food
@@ -113,8 +113,10 @@ def _classify(best, pool_feasible):
     """STRUKTURA vs ALGORYTM + lista powodów strukturalnych (dla audytu)."""
     reasons = []
     sc = _num(best, "score")
-    if sc is not None and sc <= SENTINEL_CUTOFF:
-        reasons.append("sentinel_new_courier")
+    if best.get("v325_score_blocked") is True:
+        reasons.append("v325_score_blocked")
+    elif sc is not None and sc <= SENTINEL_CUTOFF:
+        reasons.append("sentinel_new_courier_legacy")
     if pool_feasible is not None and pool_feasible <= SINGLE_POOL:
         reasons.append("pool<=1")
     # R6 dominuje I realnie łamany

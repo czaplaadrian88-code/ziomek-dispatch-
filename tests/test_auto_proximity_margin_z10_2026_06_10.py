@@ -81,6 +81,17 @@ def test_best_not_score_top_returns_ack_with_reason():
     assert reason == "best_not_score_top", reason
 
 
+def test_v325_score_block_is_human_gate_with_finite_score():
+    """Po usunięciu -1e9 wysoki realny score nie może otworzyć AUTO."""
+    best = _cand("c1", 120.0)
+    best.metrics["v325_score_blocked"] = True
+    best.metrics["v325_blocked_rank_delta"] = -10.0
+    res = _result(best, [best, _cand("c2", 60.0), _cand("c3", 40.0)])
+    route, reason = classify_auto_route(res, _fleet(best), flags=dict(_FLAGS_BASE))
+    assert route == ROUTE_ACK
+    assert reason == "v325_score_blocked"
+
+
 def test_margin_measured_from_best_not_top2():
     """Margin = score(best) − max(pozostali): 80 vs 70 = 10 < 15 (T1) → ACK C2.
 

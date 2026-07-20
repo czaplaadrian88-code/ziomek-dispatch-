@@ -209,6 +209,19 @@ def test_new_courier_ramp_blocks():
     assert "new_courier_ramp" in blocks
 
 
+def test_explicit_v325_score_block_blocks_even_if_tier_context_drifted():
+    best = _candidate(metrics={"pos_source": "gps", "v325_score_blocked": True})
+    ctx = {
+        "auto_route_pool_feasible": 4,
+        "auto_route_tier_best": "std",
+        "auto_route_pos_source_best": "gps",
+        "auto_route_czasowka": False,
+    }
+    would, blocks = evaluate_auto_assign(_result(best=best, ctx=ctx), _ev(), INFORMED)
+    assert would is False
+    assert "new_courier_ramp" in blocks
+
+
 # ---------------- G7 pozycja ----------------
 
 @pytest.mark.parametrize("src", ["no_gps", "pre_shift", "none", None])

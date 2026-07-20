@@ -143,7 +143,7 @@ def evaluate_auto_assign(
         blocks.append("paczka_firmowe")
 
     # G6: kurier w RAMPIE nowych (tier z kontekstu klasyfikatora).
-    if ctx.get("auto_route_tier_best") == "new":
+    if ctx.get("auto_route_tier_best") == "new" or m.get("v325_score_blocked"):
         blocks.append("new_courier_ramp")
 
     # G13 (AUTON-02): kurier KOŃCZY ZMIANĘ (shift_end_edge) — klasyfikator

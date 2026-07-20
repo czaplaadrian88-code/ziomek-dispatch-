@@ -741,6 +741,83 @@ def _late_pickup_soft_penalty(c, free_min: float, coeff: float, cap: float) -> f
     return min(cap, coeff * (lm - free_min))
 
 
+_V325_SCORE_BLOCKED_KEY = "v325_score_blocked"
+_V325_BLOCKED_RANK_DELTA_KEY = "v325_blocked_rank_delta"
+
+
+def _v325_score_blocked(c) -> bool:
+    """Jawny stan selekcyjny V325; nigdy nie jest kodowany magicznym score.
+
+    V325 zostawia kandydata w puli (ALWAYS-PROPOSE), ale dla zwykłych sortów
+    score ma on pozostać za kandydatami dopuszczonymi przez profil nowego
+    kuriera. Do 20.07.2026 stan ten był kodowany przez ``score=-1e9``.
+    """
+    m = getattr(c, "metrics", None) or {}
+    return bool(m.get(_V325_SCORE_BLOCKED_KEY))
+
+
+def _v325_rank_score(c, score: Optional[float] = None) -> float:
+    """Liczbowa oś wewnątrz tej samej klasy blocked/unblocked.
+
+    Dla niezablokowanego kandydata jest to zwykły score. Dla zablokowanego
+    przechowujemy wyłącznie realne delty dopisane po V325 (V326/A2/GPS), aby
+    zachować dawną kolejność ``-1e9 + delta`` bez sentinela w Candidate.score.
+    ``score`` służy shadowowi legacy-R6 i wnosi tylko różnicę względem score.
+    """
+    actual = getattr(c, "score", 0.0)
+    actual = float(actual) if isinstance(actual, (int, float)) else 0.0
+    if not _v325_score_blocked(c):
+        value = actual if score is None else score
+        return float(value) if isinstance(value, (int, float)) else 0.0
+    m = getattr(c, "metrics", None) or {}
+    delta = m.get(_V325_BLOCKED_RANK_DELTA_KEY, 0.0)
+    delta = float(delta) if isinstance(delta, (int, float)) else 0.0
+    if score is not None and isinstance(score, (int, float)):
+        delta += float(score) - actual
+    return delta
+
+
+def _v325_mark_score_blocked(c) -> None:
+    """Oznacz blokadę V325 bez mutowania domenowej wartości ``c.score``."""
+    m = getattr(c, "metrics", None)
+    if isinstance(m, dict):
+        m[_V325_SCORE_BLOCKED_KEY] = True
+        m[_V325_BLOCKED_RANK_DELTA_KEY] = 0.0
+
+
+def _v325_clear_score_blocked(c) -> None:
+    """Zdejmij blokadę (solo-rescue / legalna ścieżka V325)."""
+    m = getattr(c, "metrics", None)
+    if isinstance(m, dict):
+        m.pop(_V325_SCORE_BLOCKED_KEY, None)
+        m.pop(_V325_BLOCKED_RANK_DELTA_KEY, None)
+
+
+def _v325_add_score_delta(c, delta: float) -> None:
+    """Dodaj realną deltę i zachowaj dawny rank zablokowanych kandydatów."""
+    current = getattr(c, "score", 0.0)
+    current = float(current) if isinstance(current, (int, float)) else 0.0
+    c.score = current + float(delta)
+    if _v325_score_blocked(c):
+        m = getattr(c, "metrics", None)
+        if isinstance(m, dict):
+            old = m.get(_V325_BLOCKED_RANK_DELTA_KEY, 0.0)
+            old = float(old) if isinstance(old, (int, float)) else 0.0
+            m[_V325_BLOCKED_RANK_DELTA_KEY] = old + float(delta)
+
+
+def _v325_score_rank_key(c):
+    """Sort score-desc z jawną osią blocked-last; bez zmiany tie-breaków."""
+    return (1 if _v325_score_blocked(c) else 0, -_v325_rank_score(c))
+
+
+def _v325_score_corridor_key(c):
+    """Wariant dotychczasowych sortów score + corridor deviation."""
+    m = getattr(c, "metrics", None) or {}
+    dev = m.get("bundle_level3_dev")
+    return (*_v325_score_rank_key(c), dev if dev is not None else 999.0)
+
+
 def _is_pre_shift_cand(c) -> bool:
     """Fix #7 477271 (2026-05-31): kurier pre_shift = zmiana jeszcze nie zaczęła →
     nie pracuje, syntetyczna pozycja (clamp do shift_start) → ZAWYŻONY score (Grzegorz
@@ -765,9 +842,15 @@ def _late_pickup_score_first_key(c, tier: int, orig_rank: int,
     przeliczenia rankingu pod legacy (liniową) karą R6 bez mutacji kandydata.
     """
     bucket = _selection_bucket(c)   # equal-treatment-aware (no_gps/pre_shift po score gdy ON)
-    _s = (getattr(c, "score", 0.0) or 0.0) if score is None else score
+    _s = _v325_rank_score(c, score=score)
     adj = _s - _late_pickup_soft_penalty(c, free_min, coeff, cap)
-    return (1 if tier == 2 else 0, bucket, -adj, orig_rank)
+    return (
+        1 if tier == 2 else 0,
+        bucket,
+        1 if _v325_score_blocked(c) else 0,
+        -adj,
+        orig_rank,
+    )
 
 
 def _post_shift_overrun_penalty_of(c):
@@ -1388,7 +1471,7 @@ def _v326_multistop_trajectory(feasible: list, new_order, order_id=None) -> list
             last_drop_district, new_pickup_district, BIALYSTOK_DISTRICT_ADJACENCY
         )
         bonus = bonus_map.get(relation, 0.0)
-        cand.score = cand.score + bonus
+        _v325_add_score_delta(cand, bonus)
         m["v326_r06_relation"] = relation
         m["v326_r06_bonus"] = bonus
         m["v326_r06_drop_district"] = last_drop_district
@@ -1399,14 +1482,7 @@ def _v326_multistop_trajectory(feasible: list, new_order, order_id=None) -> list
                 f"V326_R06 order={order_id} cid={cand.courier_id} "
                 f"{relation} ({detail}) → {bonus:+.0f}"
             )
-    feasible.sort(
-        key=lambda c: (
-            -c.score,
-            c.metrics.get("bundle_level3_dev")
-            if c.metrics.get("bundle_level3_dev") is not None
-            else 999.0,
-        )
-    )
+    feasible.sort(key=_v325_score_corridor_key)
     return feasible
 
 
@@ -1819,11 +1895,11 @@ def _a2_reliability_soft_score(feasible, order_id=None):
     for c in feasible:
         d = _a2_reliability_delta(getattr(c, "courier_id", None), breach, conf, fm, coeff, min_gap)
         if d:
-            c.score = (c.score or 0.0) + d
+            _v325_add_score_delta(c, d)
             m = getattr(c, "metrics", None)
             if isinstance(m, dict):
                 m["a2_reliability_delta"] = round(d, 2)
-    feasible.sort(key=lambda c: -(c.score or 0.0))
+    feasible.sort(key=_v325_score_rank_key)
     return feasible
 
 
@@ -1856,11 +1932,11 @@ def _gps_age_discount(feasible, order_id=None):
         m["bonus_gps_age_discount_shadow"] = round(delta, 2)
         m["bonus_gps_age_discount"] = 0.0
         if apply_live and delta:
-            c.score = (c.score or 0.0) + delta
+            _v325_add_score_delta(c, delta)
             m["bonus_gps_age_discount"] = round(delta, 2)
             applied_any = True
     if applied_any:
-        feasible.sort(key=lambda c: -(c.score or 0.0))
+        feasible.sort(key=_v325_score_rank_key)
     return feasible
 
 
@@ -1910,18 +1986,11 @@ def _v326_fleet_load_balance(feasible: list, candidates: list, order_id=None) ->
         else:
             adj = 0.0
         if adj != 0.0:
-            cand.score = cand.score + adj
+            _v325_add_score_delta(cand, adj)
         m["v326_fleet_bag_avg"] = round(fleet_bag_avg, 2)
         m["v326_fleet_load_delta"] = round(delta, 2)
         m["v326_fleet_load_adjustment"] = round(adj, 2)
-    feasible.sort(
-        key=lambda c: (
-            -c.score,
-            c.metrics.get("bundle_level3_dev")
-            if c.metrics.get("bundle_level3_dev") is not None
-            else 999.0,
-        )
-    )
+    feasible.sort(key=_v325_score_corridor_key)
     return feasible
 
 
@@ -2054,7 +2123,7 @@ def _v326_speed_multiplier_adjust(feasible: list, order_id=None) -> list:
             tier_used = tier
             mult = float(mult_map[tier])
         adjustment = (1.0 - mult) * factor
-        cand.score = cand.score + adjustment
+        _v325_add_score_delta(cand, adjustment)
         m["v326_speed_tier_used"] = tier_used
         m["v326_speed_multiplier"] = mult
         m["v326_speed_score_adjustment"] = round(adjustment, 2)
@@ -2074,14 +2143,7 @@ def _v326_speed_multiplier_adjust(feasible: list, order_id=None) -> list:
         except Exception:
             pass
     # Re-sort feasible by score desc (tie-break corridor dev — pattern z _v325)
-    feasible.sort(
-        key=lambda c: (
-            -c.score,
-            c.metrics.get("bundle_level3_dev")
-            if c.metrics.get("bundle_level3_dev") is not None
-            else 999.0,
-        )
-    )
+    feasible.sort(key=_v325_score_corridor_key)
     return feasible
 
 
@@ -2239,12 +2301,13 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
     - kurs "rampowy" (km_to_pickup ≤ 2,5 ∧ bag==0 ∧ slot ≠ high_risk 14-17)
       → stały malus NEW_COURIER_RAMP_MALUS (-20) zamiast gradientu — nowy
       STAJE SIĘ widzialny dla krótkich kursów (Z-18: człowiek tak robi, B6);
-    - kurs poza profilem → sentinel -1e9 (sort na koniec, kandydat zostaje
-      w puli — ALWAYS-PROPOSE; mining H13: dni 0-7 = 16,8% breach).
+    - kurs poza profilem → jawny ``v325_score_blocked`` (sort na koniec,
+      kandydat zostaje w puli — ALWAYS-PROPOSE; mining H13: dni 0-7 = 16,8%
+      breach). Score pozostaje realną sumą komponentów, bez magicznej liczby.
     Po rampie (≥30 dostaw) lub flaga OFF → dotychczasowa logika niżej.
 
     Logic per candidate gdzie metrics.cs_tier_label == 'new' (post-rampa):
-    - bag_size_before >= 2 → HARD SKIP (effective -inf score, sort to end)
+    - bag_size_before >= 2 → HARD SKIP (jawny blocked-state, sort to end)
     - else: compute advantage = candidate.score - max(non-new alt scores)
       - advantage >= 50 → penalty -10 (objectively significantly better)
       - advantage 20-50 → penalty -30
@@ -2273,7 +2336,6 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
     ramp_malus = float(getattr(C, "NEW_COURIER_RAMP_MALUS", -20.0))
     _ramp_blocked = []  # [(cand, pre_block_score)] — do solo-guard niżej
 
-    NEG_INF = -1e9
     for cand in feasible:
         m = getattr(cand, "metrics", {}) or {}
         if m.get("cs_tier_label") != "new":
@@ -2294,6 +2356,7 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
                 elif _slot == "high_risk":
                     _block = "slot_14_17"
                 if _block is None:
+                    _v325_clear_score_blocked(cand)
                     cand.score = cand.score + ramp_malus
                     m["v325_new_courier_penalty"] = ramp_malus
                     m["new_courier_ramp"] = {
@@ -2310,14 +2373,10 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
                     )
                 else:
                     _ramp_blocked.append((cand, float(cand.score)))
-                    cand.score = NEG_INF
-                    # Z-18 (higiena 2026-06-13): score=NEG_INF zostaje (sort/decyzja
-                    # bez zmian), ale NIE wpisujemy magic-number do pola analitycznego
-                    # v325_new_courier_penalty — sentinel -1e9 przeciekał do shadow
-                    # (analityka) + reason breakdown (l.1119 "V3.25_new -1000000000").
-                    # Powód hard-skipu = jawna etykieta v325_skipped_reason (auto-
-                    # serializowana przez prefix "v325_"). penalty=None → reason
-                    # breakdown `or 0` → 0 → odfiltrowany; decyzja identyczna.
+                    _v325_mark_score_blocked(cand)
+                    # Powód hard-skipu i stan selekcyjny są jawne. penalty=None →
+                    # reason breakdown `or 0` → 0 → odfiltrowany. Candidate.score
+                    # pozostaje realną sumą komponentów i może być serializowany.
                     m["v325_new_courier_penalty"] = None
                     m["v325_skipped_reason"] = f"new_courier_ramp_off_profile:{_block}"
                     m["new_courier_ramp"] = {
@@ -2337,9 +2396,9 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
             m["new_courier_ramp"] = {"active": False, "deliveries": _deliv}
 
         if bag_before >= C.V325_NEW_COURIER_BAG_HARD_SKIP_AT:
-            cand.score = NEG_INF
-            # Z-18 (higiena 2026-06-13): patrz blok ramp-block wyżej — score=NEG_INF
-            # decyduje, ale powód idzie jako jawna etykieta, nie -1e9 w polu penalty.
+            _v325_mark_score_blocked(cand)
+            # Jak w ramp-block: jawny boolean niesie stan selekcyjny, a score
+            # pozostaje liczbą domenową zamiast sentinela udającego komponent.
             m["v325_new_courier_penalty"] = None
             m["v325_skipped_reason"] = f"new_courier_bag_hard_skip:bag={bag_before}"
             m["v325_new_courier_flag"] = (
@@ -2362,6 +2421,7 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
                 penalty = C.V325_NEW_COURIER_PENALTY_MED_ADVANTAGE
             else:
                 penalty = C.V325_NEW_COURIER_PENALTY_LOW_ADVANTAGE
+        _v325_clear_score_blocked(cand)
         cand.score = cand.score + penalty
         m["v325_new_courier_penalty"] = penalty
         m["v325_new_courier_advantage"] = (
@@ -2374,8 +2434,8 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
             f"adv={advantage} penalty={penalty} new_score={cand.score:.2f}"
         )
 
-    # SP-B2-RAMPA SOLO-GUARD (replay 11.06, ALWAYS-PROPOSE): sentinel -1e9 nie
-    # może wepchnąć decyzji w KOORD "wszyscy poniżej progu propozycji", gdy
+    # SP-B2-RAMPA SOLO-GUARD (replay 11.06, ALWAYS-PROPOSE): blokada nie może
+    # wepchnąć decyzji w KOORD "wszyscy poniżej progu propozycji", gdy
     # zablokowany nowy był jedyną realną opcją (6-7 eskalacji/tydz. w replayu).
     # Gdy po blokadach ŻADEN feasible nie ma score >= MIN_PROPOSE_SCORE:
     # najlepszy zablokowany wraca na pre_block + SOLO_MALUS — mocno
@@ -2383,13 +2443,16 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
     if _ramp_blocked:
         _min_prop = _min_propose_score()  # SCALE-01: flags.json (hot) → common (=-100)
         _all_below = all(
-            (not isinstance(c.score, (int, float))) or c.score < _min_prop
+            _v325_score_blocked(c)
+            or (not isinstance(c.score, (int, float)))
+            or c.score < _min_prop
             for c in feasible
         )
         if _all_below:
             _best_blocked, _pre = max(_ramp_blocked, key=lambda t: t[1])
             _solo = float(getattr(C, "NEW_COURIER_RAMP_SOLO_MALUS", -60.0))
             _best_blocked.score = _pre + _solo
+            _v325_clear_score_blocked(_best_blocked)
             _bm = getattr(_best_blocked, "metrics", {}) or {}
             if isinstance(_bm.get("new_courier_ramp"), dict):
                 _bm["new_courier_ramp"]["solo_rescue"] = True
@@ -2408,15 +2471,8 @@ def _v325_new_courier_penalty(feasible: list, order_id=None, now=None) -> list:
                 f"score={_best_blocked.score:.1f}"
             )
 
-    # Re-sort feasible po score (descending) + tie-break corridor deviation
-    feasible.sort(
-        key=lambda c: (
-            -c.score,
-            c.metrics.get("bundle_level3_dev")
-            if c.metrics.get("bundle_level3_dev") is not None
-            else 999.0,
-        )
-    )
+    # Re-sort: dopuszczeni przed blocked; wewnątrz klas dawny score/corridor.
+    feasible.sort(key=_v325_score_corridor_key)
     return feasible
 
 
@@ -3071,8 +3127,9 @@ def _reserve_aware_tiebreak_eval(winner, feasible, wtier, lp_tier_fn, margin):
     WOLNY kurier (bag 0), a w TYM SAMYM tierze late-pickup jest FEASIBLE kandydat JUŻ W
     TRASIE (bag≥1) w marginesie score (silnik ~obojętny) → tie-break dołożyłby do jadącego
     (oszczędza rezerwę). PURE, ZERO mutacji feasible/winner. Zwraca dict (would_fire+detal).
-    same-tier = brak inwersji committed-odbioru; wyklucz sentinel/best_effort (|score|≥1e6)
-    + R6>40 (bundle nie może psuć świeżości). Margin = RESERVE_TIEBREAK_MARGIN."""
+    same-tier = brak inwersji committed-odbioru; wyklucz jawnie zablokowanych
+    przez V325 + R6>40 (bundle nie może psuć świeżości). Margin =
+    RESERVE_TIEBREAK_MARGIN."""
     def _bag_before(c):
         m = c.metrics or {}
         b = m.get("bag_size_before")
@@ -3087,8 +3144,8 @@ def _reserve_aware_tiebreak_eval(winner, feasible, wtier, lp_tier_fn, margin):
         if _bag_before(c) < 1:
             continue  # musi już wieźć (jadący)
         cs = c.score
-        if cs is None or abs(cs) >= 1e6:
-            continue  # sentinel/best_effort
+        if cs is None or _v325_score_blocked(c):
+            continue  # jawny V325 hard-skip; score nie koduje już stanu
         m = c.metrics or {}
         mb = m.get("max_bag_time_min")
         mb = mb if mb is not None else m.get("r6_max_bag_time_min")

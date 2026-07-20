@@ -4,7 +4,8 @@ De-erozja 2026-06-13 (auton/legacy-test-fixes): test miesza czystą logikę grad
 (mock candidate) z asercjami przypiętymi do KONKRETNYCH cid z ŻYWEGO courier_tiers.json
 + stanu RAMPY (cid=522 Szymon Sa, cid=500 Grzegorz R jako tier='new' z rampą 0/30).
 Od 21.04 ci kurierzy przeszli przez rampę / zmienili tier → penalty-path dla 522
-zwraca dziś -1e9 ("kurs poza rampą") zamiast soft -10/-30/-50, a 500 nie jest już
+zwraca dziś jawny score-block ("kurs poza rampą") zamiast soft -10/-30/-50,
+a 500 nie jest już
 'new'. To dryf DANYCH rostera/rampy, NIE regresja kodu (mechanizm działa: T5 bag=2
 HARD SKIP i re-sort dalej przechodzą). 9/20 asercji rozjechało się z roster state.
 Test nie izoluje też stanu (_state_path guard).
@@ -142,13 +143,15 @@ def main():
     ]
     out = dispatch_pipeline._v325_new_courier_penalty(feasible, order_id="t5")
     new_cand = next(c for c in out if c.courier_id == "522")
-    expect("522 (bag=2 new) → score = -1e9 (HARD SKIP)",
-           new_cand.score == -1e9, f"got {new_cand.score}")
+    expect("522 (bag=2 new) → jawny score-block (HARD SKIP)",
+           new_cand.score == 200.0
+           and new_cand.metrics.get("v325_score_blocked") is True,
+           f"got score={new_cand.score} metrics={new_cand.metrics}")
     expect("522 flag mentions HARD SKIP",
            "HARD SKIP" in (new_cand.metrics.get("v325_new_courier_flag") or ""),
            f"got {new_cand.metrics.get('v325_new_courier_flag')!r}")
     # Re-sort: 370 powinien być first (522 sortuje na końcu)
-    expect("re-sort: 370 first (522 demoted via -1e9)",
+    expect("re-sort: 370 first (522 demoted via score-block)",
            out[0].courier_id == "370")
 
     # ---------- T6: tier=std+ → no change ----------

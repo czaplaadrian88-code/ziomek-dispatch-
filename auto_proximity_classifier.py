@@ -489,6 +489,13 @@ def _detect_edge_routing(
         return ROUTE_ALERT, "frozen_window_violation"
     if ctx.best_effort or ctx.best_plan_violations > 0:
         return ROUTE_ALERT, f"best_effort_no_feasible (sla_viol={ctx.best_plan_violations})"
+    if ctx.best_metrics.get("v325_score_blocked"):
+        # V325 zostawia kandydata w puli dla ALWAYS-PROPOSE, lecz jego score jest
+        # od 20.07.2026 realną wartością (bez -1e9). Jawny stan zachowuje dawną
+        # bramkę człowieka zamiast przypadkiem otworzyć AUTO na wysokim raw-score.
+        if weak_pick_floor is not None:
+            return ROUTE_ALERT, "weak_pick_v325_score_blocked"
+        return ROUTE_ACK, "v325_score_blocked"
     if (weak_pick_floor is not None and not ctx.czasowka
             and ctx.best_score < weak_pick_floor):
         return ROUTE_ALERT, f"weak_pick_score={ctx.best_score:.1f}<{weak_pick_floor:g}"

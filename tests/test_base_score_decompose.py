@@ -2,7 +2,8 @@
 dominujący komponent kary, na syntetycznych rekordach.
 
 Przypadki:
-  - sentinel (v325 new courier -1e9) → STRUKTURA / sentinel_new_courier
+  - jawny v325 score-block → STRUKTURA / v325_score_blocked
+  - legacy sentinel ze starego logu pozostaje rozpoznawalny
   - pool_feasible_count<=1 → STRUKTURA / pool<=1
   - R6 dominuje + realnie łamany (r6_max_bag_time_min>35) → STRUKTURA / r6_hard_breach
   - km_to_pickup>4.5 → STRUKTURA / longhaul_pickup
@@ -43,11 +44,18 @@ def _run(records):
         os.unlink(p)
 
 
-def test_sentinel_is_struktura():
+def test_legacy_sentinel_is_struktura():
     s = _run([_rec(score=-1000000034.0, bonus_r_return_rest=-100.0)])
     assert s["struktura"] == 1 and s["algorytm"] == 0
-    assert s["struct_reason_counts"]["sentinel_new_courier"] == 1
+    assert s["struct_reason_counts"]["sentinel_new_courier_legacy"] == 1
     assert s["score_hist"]["sentinel(<=-1e8)"] == 1
+
+
+def test_explicit_v325_score_block_is_struktura_with_finite_score():
+    s = _run([_rec(score=68.5, v325_score_blocked=True)])
+    assert s["struktura"] == 1 and s["algorytm"] == 0
+    assert s["struct_reason_counts"]["v325_score_blocked"] == 1
+    assert s["score_hist"][">=-100"] == 1
 
 
 def test_single_pool_is_struktura():
