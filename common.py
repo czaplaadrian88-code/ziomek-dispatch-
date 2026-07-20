@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import re
 import threading
 import time
 import contextlib
@@ -1979,6 +1980,8 @@ def bug4_soft_penalty(violation):
 from dispatch_v2.districts_data import (
     BIALYSTOK_DISTRICTS,
     BIALYSTOK_OUTSIDE_CITY_ZONES,
+    BIALYSTOK_PREFIXED_STREET_DISTRICTS,
+    BIALYSTOK_STREET_NUMBER_RANGES,
 )
 
 # Final adjacency per ACK właściciela 2026-04-21 (post-review).
@@ -2054,8 +2057,10 @@ ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR = _os.environ.get(
 # Real-world adresy mają różne formy tej samej ulicy:
 #   "M. Curie-Skłodowskiej", "Marii Curie-Skłodowskiej", "Skłodowskiej",
 #   "Curie-Skłodowskiej" — wszystkie → canonical "skłodowskiej-curie marii"
-# (canonical form matches BIALYSTOK_DISTRICTS street keys).
-# Aliases applied AFTER prefix stripping (ul./al./gen.) + lower-cased.
+# (canonical form matches BIALYSTOK_DISTRICTS or its qualified supplements).
+# Aliases are normally applied after non-identity prefix stripping
+# (ul./al./gen.) + lower-casing.  Identity-bearing prefixes such as ``plac``
+# may remain in both the alias key and canonical value.
 # Format: {input_lc (street_part_only, no number) → canonical_lc}.
 # Extend incrementally w V3.28 ticket per discovery z shadow log.
 V327_STREET_ALIASES = {
@@ -2075,6 +2080,14 @@ V327_STREET_ALIASES = {
     "filipowicza": "feliksa filipowicza",
     "f. filipowicza": "feliksa filipowicza",
     "feliksa filipowicza": "feliksa filipowicza",  # identity
+    # Aleja Jana Pawła II: panel/parser sometimes omits the official prefix.
+    # Keep the prefix in the canonical form: without it Nominatim resolves a
+    # different object, while district data used to conflate the avenue with
+    # Plac Jana Pawła II.
+    "jana pawła ii": "aleja jana pawła ii",
+    "aleja jana pawła ii": "aleja jana pawła ii",  # identity
+    "pl. jana pawła ii": "plac jana pawła ii",
+    "plac jana pawła ii": "plac jana pawła ii",  # distinct from the avenue
 }
 
 
@@ -2121,6 +2134,75 @@ def _v327_normalize_street_for_matching(addr_lc):
     return addr_lc
 
 
+def canonicalize_geocode_address(address):
+    """Return one street spelling for cache, geocoders and verification.
+
+    The alias table remains the single source of canonical street names.  A
+    caller may provide a bare street (``Jana Pawła II 47``) or a conventional
+    ``ul./al./aleja`` prefix; aliases are applied to the street part and the
+    house/local suffix is preserved.  ``plac`` is intentionally not stripped:
+    Plac Jana Pawła II and Aleja Jana Pawła II are distinct objects.
+
+    Unrecognised addresses keep their spelling (apart from whitespace), which
+    limits the behavioural change to registered V3.27 aliases.
+    """
+    if not address or not isinstance(address, str):
+        return address
+    cleaned = " ".join(address.strip().split())
+    lowered = cleaned.lower()
+
+    # First try the complete street spelling, then only prefixes which do not
+    # carry identity.  ``plac``/``pl.`` are identity-bearing and stay intact.
+    candidates = [lowered]
+    for prefix in ('ul. ', 'ul ', 'ulica ', 'al. ', 'al ', 'aleja '):
+        if lowered.startswith(prefix):
+            candidates.append(lowered[len(prefix):])
+            break
+
+    for candidate in candidates:
+        normalized = _v327_normalize_street_for_matching(candidate)
+        # Identity aliases need membership detection because value == input.
+        digit_idx = next((i for i, ch in enumerate(candidate) if ch.isdigit()), None)
+        if digit_idx is None:
+            pure = candidate.strip().rstrip(",.")
+        else:
+            space_idx = candidate.rfind(" ", 0, digit_idx)
+            pure = candidate[:space_idx if space_idx >= 0 else digit_idx].strip().rstrip(",.")
+        if pure in V327_STREET_ALIASES:
+            return normalized
+    return cleaned
+
+
+def _district_from_qualified_street(addr_lc):
+    """Resolve prefix/house-number-sensitive district data.
+
+    ``None`` means this is not a qualified street and the legacy matcher may
+    continue.  ``Unknown`` means the street is known but its number is outside
+    official building ranges; guessing by dict order would be false evidence.
+    """
+    for street, district in BIALYSTOK_PREFIXED_STREET_DISTRICTS.items():
+        if (addr_lc == street
+                or addr_lc.startswith(street + ' ')
+                or addr_lc.startswith(street + ',')):
+            return district
+
+    for street, rules in BIALYSTOK_STREET_NUMBER_RANGES.items():
+        if not (addr_lc == street
+                or addr_lc.startswith(street + ' ')
+                or addr_lc.startswith(street + ',')):
+            continue
+        match = re.match(rf"^{re.escape(street)}(?:\s+|,\s*)(\d+)", addr_lc)
+        if not match:
+            return 'Unknown'
+        number = int(match.group(1))
+        parity = 'even' if number % 2 == 0 else 'odd'
+        for district, required_parity, first_number, last_number in rules:
+            if parity == required_parity and first_number <= number <= last_number:
+                return district
+        return 'Unknown'
+    return None
+
+
 def drop_zone_from_address(addr, city=None):
     """V3.19h BUG-1: address + city → district name.
 
@@ -2128,7 +2210,8 @@ def drop_zone_from_address(addr, city=None):
     Białystok: match po ulicy w BIALYSTOK_DISTRICTS (prefix/substring match).
     Fallback: 'Unknown' gdy brak confident match.
 
-    V3.27 Bug Z Step D: street aliases applied post prefix-strip.
+    V3.27 aliases are applied at the canonical geocode boundary, with the
+    legacy post-prefix pass retained for unqualified district data.
     """
     if city and isinstance(city, str):
         city_norm = city.strip()
@@ -2142,7 +2225,10 @@ def drop_zone_from_address(addr, city=None):
     # Białystok (or empty city) — match po ulicy
     if not addr or not isinstance(addr, str):
         return 'Unknown'
-    addr_lc = addr.lower().strip()
+    addr_lc = canonicalize_geocode_address(addr).lower().strip()
+    qualified_zone = _district_from_qualified_street(addr_lc)
+    if qualified_zone is not None:
+        return qualified_zone
     # Strip leading prefix (ul./al./pl./gen./św./ks./ulica/aleja).
     # V3.26 R-06 completion: extended list dla Polish name convention variants.
     for prefix in (
@@ -2198,7 +2284,8 @@ def drop_zone_from_address(addr, city=None):
                 matched = True
             # 2) Token-prefix: district street zaczyna się od addr_first_token
             #    (np. street "waszyngtona jerzego", addr token "waszyngtona")
-            elif addr_first_token and street.startswith(addr_first_token + ' '):
+            elif (addr_first_token and len(addr_content_tokens) == 1
+                  and street.startswith(addr_first_token + ' ')):
                 # Only accept gdy addr_first_token jest sensowny (≥4 znaki)
                 if len(addr_first_token) >= 4:
                     matched = True

@@ -1,10 +1,13 @@
 """V3.19h BUG-1: BIALYSTOK_DISTRICTS data — 28 official osiedli z info.bialystok.pl.
 
 Source: http://www.info.bialystok.pl/osiedla/{1..28}/obiekt.php (2026-04-21 fetched).
-Normalized: strip "-parzyste/nieparzyste N-M" suffixes, lowercase.
+Legacy ``streets``: strip "-parzyste/nieparzyste N-M" suffixes, lowercase.
+Prefix- and number-sensitive supplements below retain qualifiers whose removal
+would merge distinct streets or make a multi-district street ambiguous.
 Regenerate: python3 -m dispatch_v2.build_v319h_districts_data (or tmp generator).
 
-NIE edit manually — regen z oficjalnego źródła per process.
+NIE edit manually legacy ``streets`` bez regeneracji ze źródła.  Supplementy
+prefix/range wymagają jawnego źródła urzędowego i testu zakresów.
 """
 
 # frozenset for fast "in" lookup per district
@@ -1282,6 +1285,32 @@ BIALYSTOK_DISTRICTS = {
             'zielonogórska',
         }),
     },
+}
+
+
+# Prefix-sensitive names lost by the legacy generator must be resolved before
+# generic prefix stripping.  In particular, Plac Jana Pawła II (Centrum) is not
+# Aleja Jana Pawła II (the west/north-west arterial).
+BIALYSTOK_PREFIXED_STREET_DISTRICTS = {
+    'plac jana pawła ii': 'Centrum',
+}
+
+
+# Official house-number ranges for streets crossing district boundaries.
+# Schema per rule: (district, parity, first_number, last_number), inclusive.
+# Source checked 2026-07-20:
+# https://cas.bialystok.pl/pl/budzetobywatelski/budzetobywatelski2019/
+# pomocnik/mapa-osiedli.html ("Podział Miasta na osiedla").
+#
+# A missing range is deliberately Unknown instead of an insertion-order guess.
+BIALYSTOK_STREET_NUMBER_RANGES = {
+    'aleja jana pawła ii': (
+        ('Młodych', 'odd', 35, 47),
+        ('Antoniuk', 'even', 52, 56),
+        ('Leśna Dolina', 'odd', 57, 91),
+        ('Wysoki Stoczek', 'even', 58, 78),
+        ('Bacieczki', 'even', 92, 100),
+    ),
 }
 
 # Lista outside-city zones wykrywanych przez miejscowość field w CSV/state.

@@ -352,14 +352,8 @@ def _neg_cache_put(key: str, reason: str):
         _log.warning(f"neg_cache_put fail key={key!r}: {_e!r}")
 
 
-def _normalize(address: str, city: str) -> str:
-    """Znormalizuj adres do klucza cache - lowercase, no extra spaces, usun lok/m/pietro.
-
-    Key format: "<street>, <city>". city wymagany — callerzy `geocode()`
-    rozwiązują to (city z panelu lub legacy "Białystok" gdy flag False).
-    Stare entries z kluczem "street, białystok" pozostają kompatybilne —
-    `geocode(addr, city="Białystok")` trafia w nie bez miss.
-    """
+def _normalize_key_text(address: str, city: str) -> str:
+    """Mechanical cache-key cleanup; caller decides street canonicalization."""
     s = address.strip().lower()
     s = re.sub(r"\s+", " ", s)
     # Marker lokalu/mieszkania MUSI być zakończony numerem (lokal=zawsze cyfra).
@@ -374,6 +368,22 @@ def _normalize(address: str, city: str) -> str:
     if c and c not in s:
         s = f"{s}, {c}"
     return s
+
+
+def _normalize(address: str, city: str) -> str:
+    """Canonical cache key: aliases + lowercase/spacing + no flat/floor suffix.
+
+    Key format: "<street>, <city>". city wymagany — callerzy `geocode()`
+    rozwiązują to (city z panelu lub legacy "Białystok" gdy flag False).
+    ``geocode()`` additionally reads a pre-alias positive key for migration
+    compatibility, but negative-cache lookup deliberately uses only this key.
+    """
+    return _normalize_key_text(C.canonicalize_geocode_address(address), city)
+
+
+def _normalize_legacy_positive_key(address: str, city: str) -> str:
+    """Pre-alias key used only to preserve existing positive cache/pins."""
+    return _normalize_key_text(address, city)
 
 
 def _is_streetless_key(key: str, city: Optional[str]) -> bool:
@@ -509,6 +519,7 @@ def _run_verification(address: str, city, lat: float, lon: float, meta: dict):
     if not getattr(C, "ENABLE_GEOCODE_VERIFICATION", False):
         return None
     try:
+        address = C.canonicalize_geocode_address(address)
         meta = meta or {}
 
         def _expected(addr, cty):
@@ -599,6 +610,7 @@ def _nominatim_fallback(address: str, city: Optional[str], timeout: float) -> Op
     (gating w geocode()). Google nie ma w indeksie części białostockich ulic
     (np. „Proroka Eliasza", „Poniatowskiego" w Pieczurkach) → Nominatim trafia.
     Zwraca (lat, lon) lub None. Wynik i tak przechodzi przez bbox-guard callera."""
+    address = C.canonicalize_geocode_address(address)
     # Guard: pusty/śmieciowy adres („—", sam numer, telefon) degeneruje query do
     # samego miasta → Nominatim zwróciłby centroid Białegostoku (fałszywy odzysk
     # → ciche mis-route). Wymagaj realnego tokenu ulicy (≥1 ciąg liter len≥3).
@@ -655,7 +667,12 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
                    (time.perf_counter() - t_start) * 1000.0, error="no_city")
         return None
 
-    key = _normalize(address, effective_city)
+    canonical_address = C.canonicalize_geocode_address(address)
+    # Alias is part of cache identity.  This intentionally bypasses historical
+    # prefix-less negative entries (the rejected Jana Pawła II case).  Positive
+    # legacy entries, especially manual pins, remain readable below.
+    key = _normalize(canonical_address, effective_city)
+    legacy_positive_key = _normalize_legacy_positive_key(address, effective_city)
 
     # Geo-poison guard (2026-06-08): klucz bez ulicy = sam numer domu → koliduje
     # między ulicami. NIE czytamy/piszemy cache dla takiego klucza — zawsze świeży
@@ -674,8 +691,14 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
 
     with _lock:
         cache = _load_cache(CACHE_PATH)
-        if not streetless and key in cache:
-            entry = cache[key]
+        cache_key = None
+        if not streetless:
+            if key in cache:
+                cache_key = key
+            elif legacy_positive_key != key and legacy_positive_key in cache:
+                cache_key = legacy_positive_key
+        if cache_key is not None:
+            entry = cache[cache_key]
             # FAZA 2 (item 5, 2026-07-09 parytet z geocode_restaurant): pin = ręcznie
             # zweryfikowany → ZAWSZE zwróć, nigdy nie re-geokoduj ani nie nadpisuj
             # (TTL/drift nie ruszają pinów). Wcześniej TYLKO geocode_restaurant miał
@@ -712,11 +735,12 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
     _stats["misses"] += 1
 
     # Google primary — explicit city w query
-    result = _google_geocode(f"{address}, {effective_city}, Polska", timeout=timeout)
+    result = _google_geocode(
+        f"{canonical_address}, {effective_city}, Polska", timeout=timeout)
     source = "google" if result is not None else None
     if result is None:
         if C.flag("ENABLE_GEOCODE_NOMINATIM_FALLBACK", C.ENABLE_GEOCODE_NOMINATIM_FALLBACK):
-            _nom = _nominatim_fallback(address, effective_city, timeout)
+            _nom = _nominatim_fallback(canonical_address, effective_city, timeout)
             if _nom is not None:
                 result = _nom
                 source = "nominatim_fallback"
@@ -743,7 +767,7 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
         _nom = None
         if source == "google" and C.flag(
                 "ENABLE_GEOCODE_NOMINATIM_FALLBACK", C.ENABLE_GEOCODE_NOMINATIM_FALLBACK):
-            _nom = _nominatim_fallback(address, effective_city, timeout)
+            _nom = _nominatim_fallback(canonical_address, effective_city, timeout)
         if _nom is not None and _in_service_bbox(_nom[0], _nom[1]):
             _log.info(
                 f"GEOCODE_NOMINATIM_RECOVERED address={address!r} city={effective_city!r} "
@@ -777,7 +801,7 @@ def geocode(address: str, city: Optional[str] = None, timeout: float = 5.0) -> O
     # cross-source). Shadow: liczy+loguje; ENFORCE: odrzuca „reject" → None
     # (jak bbox, caller dostaje no_pickup_geocode). „low" zawsze tylko log.
     _verdict = _run_verification(
-        address, effective_city, result[0], result[1],
+        canonical_address, effective_city, result[0], result[1],
         result[2] if len(result) > 2 else {})
     if _verdict is not None and _verdict["confidence"] in ("reject", "low"):
         _enforce = C.flag("ENABLE_GEOCODE_VERIFICATION_ENFORCE",
@@ -901,7 +925,9 @@ def geocode_restaurant(name: str, address: str = "", city: Optional[str] = None)
                    (time.perf_counter() - t_start) * 1000.0, error="no_city")
         return None
 
-    query = f"{name}, {address}, {effective_city}" if address else f"{name}, {effective_city}, Polska"
+    canonical_address = C.canonicalize_geocode_address(address) if address else ""
+    query = (f"{name}, {canonical_address}, {effective_city}"
+             if canonical_address else f"{name}, {effective_city}, Polska")
     result = _google_geocode(query)
     if result is None:
         _audit_log("restaurant", name, effective_city, None, None, "none",
