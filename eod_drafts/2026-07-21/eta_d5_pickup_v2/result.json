@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-07-21T15:05:32.384461+00:00",
+  "target": "GPS restaurant_last_inside_at (KPI_BINDING_V1 possession_event, high-confidence)",
+  "thresholds": {
+    "mae_max_min": 6.0,
+    "min_improvement_vs_engine_pct": 25.0,
+    "late_band_pct": [
+      15.0,
+      22.0
+    ],
+    "median_bias_abs_max_min": 1.5,
+    "p90_abs_err_max_min": 20.0,
+    "coverage_min_n": 200
+  },
+  "coverage": {
+    "dwell_total": 2764,
+    "highconf": 2562,
+    "strict_cid_match": 1778,
+    "no_cid": 341,
+    "mismatch_excluded": 0
+  },
+  "gps_target_metrics": {
+    "n_cal": 1734,
+    "mae": 5.13,
+    "mae_winz_p99": 5.02,
+    "bias_median": 0.22,
+    "p90_abs_err": 10.34,
+    "n_common_engine": 1527,
+    "cal_mae_common": 5.06,
+    "eng_mae_common": 9.8,
+    "improvement_pct": 48.4,
+    "late_band_pct": 19.4
+  },
+  "gps_verdict_checks": {
+    "mae": true,
+    "improvement": true,
+    "late_band": true,
+    "bias": true,
+    "p90": true,
+    "coverage": true
+  },
+  "gps_verdict": "GO",
+  "klik_control_same_orders": {
+    "n_cal": 1734,
+    "mae": 5.16,
+    "mae_winz_p99": 5.07,
+    "bias_median": 1.19,
+    "p90_abs_err": 10.73,
+    "n_common_engine": 1527,
+    "cal_mae_common": 5.09,
+    "eng_mae_common": 9.31,
+    "improvement_pct": 45.3,
+    "late_band_pct": 15.8
+  },
+  "gps_minus_klik_shift_median_min": 0.85,
+  "note": "real w eta_calib_shadow == pickup_slip_koord_min (klik) — kalibrator uczony/oceniany na kliku; tu przemierzony na GPS. Kalibrator pred_p50=punkt centralny (MAE/bias), pred_op=obietnica P80 (late-band). Silnik=eng_pickup_slip_min."
+}

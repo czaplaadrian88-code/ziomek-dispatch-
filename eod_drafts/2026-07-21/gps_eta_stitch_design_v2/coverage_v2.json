@@ -1,0 +1,74 @@
+{
+  "schema": "gps_eta_stitch.coverage.v2",
+  "status": "PARTIAL_HOLD_MISSING_TRAINER_AND_PICKUP_SNAPSHOT",
+  "snapshot_at": "2026-07-21T07:51:16Z",
+  "scope": {
+    "writes_to_runtime": false,
+    "contains_raw_ids_or_pii": false,
+    "trainer_snapshot_contract": "consistent SQLite backup opened mode=ro&immutable=1; never point the harness at a live mutable DB",
+    "partial_audit_command": "python3 measure_coverage_v2.py --gps-audit-only --gps-delivery SNAPSHOT/gps_delivery_truth.jsonl --outcomes SNAPSHOT/decision_outcomes.jsonl --snapshot-at 2026-07-21T07:51:16Z",
+    "full_measurement_command": "python3 measure_coverage_v2.py --trainer-db SNAPSHOT/eta_calib.db --gps-delivery SNAPSHOT/gps_delivery_truth.jsonl --restaurant-dwell SNAPSHOT/restaurant_dwell.json --courier-ground-truth SNAPSHOT/courier_ground_truth.json --as-of SNAPSHOT_TIME"
+  },
+  "available_snapshot": {
+    "gps": {
+      "sha256": "62f8b0ee9653d3fa3ee1aeea70298324b98fdd3751d791aadebd96a226edd359",
+      "records": 2399,
+      "unique_orders": 2399,
+      "confidence": {
+        "high": 2047,
+        "low": 352
+      },
+      "missing_courier": 0
+    },
+    "decision_outcomes_sanity_source": {
+      "sha256": "b77d315cdb289b19ef603a241f89b270b994a05c15fd5132e65c7ccb8b6d9120",
+      "records": 6209,
+      "warning": "used only to demonstrate material courier mismatch; not the trainer denominator"
+    },
+    "click_minus_delivery_arrival_high_same_population": {
+      "n": 2047,
+      "median_min": 2.35,
+      "mean_min": 2.622,
+      "pct_click_late": 95.213,
+      "pct_abs_ge5": 9.868
+    }
+  },
+  "courier_filter_sanity_only": {
+    "warning": "decision_outcomes is not the eta_calib trainer denominator; these counts must not adjust 1805",
+    "high_confidence_with_assignment_action": 1312,
+    "courier_match": 1241,
+    "courier_mismatch": 71,
+    "courier_missing_side": 0,
+    "mismatch_pct_on_this_support": 5.412
+  },
+  "reclassified_legacy_measurement": {
+    "source": "gps_eta_stitch_design/coverage.json at 2026-07-21T09:37:38Z",
+    "trainer_rows": 9464,
+    "order_id_only_any_confidence_presence": 2109,
+    "order_id_only_high_confidence_presence": 1805,
+    "verdict": "UPPER_BOUND_ONLY",
+    "reason": "no trainer-courier equality check; 2109 and 1805 are different populations"
+  },
+  "corrected_trainer_coverage": {
+    "status": "UNMEASURED",
+    "n": null,
+    "pct": null,
+    "required_predicate": "same order_id AND canonical-normalized trainer courier_id == source courier_id AND high confidence AND valid timestamp/as_of",
+    "missing_inputs_in_sandbox": [
+      "eta_calib.db",
+      "restaurant_dwell.json",
+      "courier_ground_truth.json"
+    ]
+  },
+  "pickup_proxy_coverage": {
+    "status": "UNMEASURED",
+    "field": "restaurant_last_inside_at",
+    "required_source": "restaurant_dwell.json",
+    "required_predicate": "same courier, _source=gps_geofence, n_in>=2, inside radius, last_inside<=as_of"
+  },
+  "model_effect": {
+    "status": "UNMEASURED_FULL_REFIT_REQUIRED",
+    "withdrawn_claim": "MAE ceiling 1.3%",
+    "reason": "target replacement changes empirical and LGBM fits, courier pace history, conformal offsets and predictions outside replaced rows; coverage is not a quality ceiling"
+  }
+}

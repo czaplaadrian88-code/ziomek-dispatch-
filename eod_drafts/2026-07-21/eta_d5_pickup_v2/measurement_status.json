@@ -1,0 +1,45 @@
+{
+  "schema": "eta_d5_pickup_gps_card.v2",
+  "observed_at": "2026-07-21T14:55:09Z",
+  "code_head": "323034299fbba20a2fb33a45819e26c91f10a27a",
+  "target": {
+    "field": "restaurant_last_inside_at",
+    "source": "gps_geofence",
+    "confidence": "high",
+    "courier_match_required": true,
+    "prediction_anchor": "latest_shadow_at_or_before_operator_decision"
+  },
+  "thresholds": {
+    "mae_max_min": 6.0,
+    "min_improvement_vs_engine_pct": 25.0,
+    "late_band_pct": [15.0, 22.0],
+    "median_bias_abs_max_min": 1.5,
+    "p90_abs_err_max_min": 20.0,
+    "coverage_min_pct": 60.0,
+    "coverage_min_n": 200,
+    "outliers": "winsorize_report_p99_keep_denominator"
+  },
+  "measurement": {
+    "status": "UNMEASURED",
+    "mae_calibrator_min": null,
+    "mae_engine_min": null,
+    "improvement_vs_engine_pct": null,
+    "median_bias_min": null,
+    "p90_abs_error_min": null,
+    "late_pct": null,
+    "coverage_pct": null,
+    "n_complete": null,
+    "denominator": null
+  },
+  "verdict": "WAIT",
+  "verdict_class": "FAIL_CLOSED_MISSING_CANONICAL_EVIDENCE",
+  "blocking_reason": "Current sandbox cannot read eta_calib.db or the canonical eta_ground_truth runtime inputs, and no equivalent hash-bound snapshot exists in the workspace or /tmp.",
+  "legacy_click_result": {
+    "status": "REJECTED_FOR_D5_PICKUP",
+    "mae_min": 5.4,
+    "improvement_vs_engine_pct": 51.6,
+    "reason": "pickup_slip_koord_min is based on picked_up_at click, not restaurant_last_inside_at GPS proxy"
+  },
+  "runtime_mutated": false,
+  "flip_authorized": false
+}

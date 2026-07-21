@@ -1,0 +1,5 @@
+# Evidence for ziomek-cto dod; design/read-only harness only, no engine diff.
+regresja: GPS-ETA v2 targeted validation 7 checks, 0 failed; full engine pytest N-D (no engine implementation, canonical venv inaccessible in sandbox)
+e2e: raw immutable snapshot -> courier-filtered aggregate PASS; missing full inputs -> HOLD_MISSING_INPUTS rc=2 PASS
+pozytywny-wplyw: N-D — design withdraws the unsupported 1.3% claim; impact requires the specified full refit
+rollback: docs/read-only harness only; git revert this commit, no runtime/config/data rollback and no restart
