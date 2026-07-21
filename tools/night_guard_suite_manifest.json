@@ -1,6 +1,6 @@
 {
-  "base_sha": "c82a48819f4b488070da3ecbaba92c130fbd4230",
-  "manifest_version": 25,
+  "base_sha": "952c6994dc5c6521d3a4179708c4b977865fad39",
+  "manifest_version": 26,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -5841,7 +5841,7 @@
     ]
   },
   "owner": "Adrian",
-  "reason": "Partia wieczorna 21.07: D1 ekstraktor + parser-fix koperta + dobre-ETA trust + choice-set/join + weryfikator R-04 + evidence H1-R0 + karty/cert golden; suita 5694/0",
+  "reason": "Partia 2 21.07: resweep guards (recheck status + proposed_km) + docs gps-eta v2/D5-GPS; suita 5691/0",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-21T10:41:26+00:00"
+  "updated_at_utc": "2026-07-21T16:26:39+00:00"
 }
