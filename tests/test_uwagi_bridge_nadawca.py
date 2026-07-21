@@ -6,9 +6,15 @@ rid=161). Kontrakt: NADAWCA = punkt odbioru; `oryg. adres` = doręczenie (NIE od
 pickup_rules mostu ustawiają tylko CZAS. Flaga ENABLE_UWAGI_BRIDGE_NADAWCA podawana
 parametrem `bridge_format` (parser pure) — OFF = bajt-parytet z legacy.
 """
+import logging
+from types import SimpleNamespace
+
 import pytest
 
-from dispatch_v2.uwagi_address_parser import parse_pickup_from_uwagi
+from dispatch_v2.uwagi_address_parser import (
+    inspect_bridge_nadawca,
+    parse_pickup_from_uwagi,
+)
 
 # --- realne fixture z produkcji (skrócone pola nieistotne dla parsera) ---------
 STREET_SPORT = (
@@ -16,47 +22,51 @@ STREET_SPORT = (
     "FLM PAWEŁ POTOCZEK TOMASZ POTOCZEK SP.K., NIP 5423039093, Boruty 17, "
     "15-157 Białystok, sklep@street-sport.pl | Odbiorca: FLM SP.K. | 7Kicks | "
     "oryg. adres: Kijowska 12 lok. U2 | Okno odbioru: 11:00 - 14:00 | "
-    "Okno doreczenia: 12:00 - 15:00 | Paczek: 1"
+    "Okno doreczenia: 12:00 - 15:00 | Paczek: 1 | SRC:EPAKA_BRIDGE:v1"
 )
 CHWIESKO = (
     "Adam Chwiesko #45508 | NADAWCA: Adam Chwieśko tel 607169514 | "
     "Endogastrodent sp. z o.o., NIP 9662201067, Gajowa 29, 15-794 Białystok, "
     "patolog@adamchwiesko.com | Odbiorca: Pani w Punkcie przyjęć | "
     "Akademicki Ośrodek Diagnostyki Patomorfologicznej | oryg. adres: Waszyngtona 13 | "
-    "Okno odbioru: 008:00 - 11:00 (następny dzień roboczy)) | Paczek: 1"
+    "Okno odbioru: 008:00 - 11:00 (następny dzień roboczy)) | Paczek: 1 | "
+    "SRC:EPAKA_BRIDGE:v1"
 )
 BRAVILOR = (
     "Bravilor Bonamat #45430 | NADAWCA: Krzysztof Jakoniuk tel 507602506 | "
     "Bravilor Bonamat Sp. z o.o., NIP 5342506604, Jacka Kuronia 2, 15-569 Białystok, "
     "accountspayable-pl@bravilor.com | Odbiorca: Jowita Kruk | FBR Mazur i Partnerzy | "
-    "oryg. adres: Bagienna 1 | Okno odbioru: 10:00 - 13:00 | Paczek: 1"
+    "oryg. adres: Bagienna 1 | Okno odbioru: 10:00 - 13:00 | Paczek: 1 | "
+    "SRC:EPAKA_BRIDGE:v1"
 )
 WOJOWNICY_50_TO_43 = (
     "Mali Wojownicy #45272 | NADAWCA: KUCHNIA KUCHNIA tel 000000000 | "
     "Przedszkole Niepubliczne Dzielne Zuchy, Mickiewicza 50, 15-000 Białystok, "
     "mali.wojownicy@nadajesz.pl | Odbiorca: MALI WOJOWNICY MALI WOJOWNICY | "
     "MALI WOJOWNICY | oryg. adres: ul. Mickiewicza 43 budynek C | "
-    "Okno odbioru: 10:00 - 11:00 | Okno doreczenia: Natychmiast - | Paczek: 1"
+    "Okno odbioru: 10:00 - 11:00 | Okno doreczenia: Natychmiast - | Paczek: 1 | "
+    "SRC:EPAKA_BRIDGE:v1"
 )
 WOJOWNICY_43_TO_50 = (
     "Mali Wojownicy #45273 | NADAWCA: MALI WOJOWNICY MALI WOJOWNICY tel 000000000 | "
     "MALI WOJOWNICY, ul. Mickiewicza 43 budynek C, 15-000 Białystok, "
     "mali.wojownicy@nadajesz.pl | Odbiorca: KUCHNIA KUCHNIA | "
     "Przedszkole Niepubliczne Dzielne Zuchy | oryg. adres: Mickiewicza 50 | "
-    "Okno odbioru: 10:00 - 11:00 | Paczek: 1"
+    "Okno odbioru: 10:00 - 11:00 | Paczek: 1 | SRC:EPAKA_BRIDGE:v1"
 )
 MATKA_POLKA = (
     "Matka Polka Hybrydowa #45313 | NADAWCA: Paweł Paśnikowski tel +48504153737 | "
     "UPMAKE Paweł Paśnikowski, NIP 5422934638, Ul. Gen. Gustawa Orlicz-Dreszera 3 "
     "Lokal 1, 15-979 Białystok, biuro@matkapolkahybrydowa.com | Odbiorca: SYLWIA GIBA | "
     "LABORATORIUM URODY SYLWIA GIBA | oryg. adres: Kardynała Stefana Wyszyńskiego 2/50 | "
-    "Okno odbioru: 11:00 - 14:00 | Paczek: 1"
+    "Okno odbioru: 11:00 - 14:00 | Paczek: 1 | SRC:EPAKA_BRIDGE:v1"
 )
 NADZWYCZAJNIE = (
     "Nadzwyczajnie #45285 | NADAWCA: Nadzwyczajnie .pl tel 609345380 | "
     "Nadzwyczajnie, NIP 5423474966, Komunalna 5, 15-197 Białystok, "
     "biuro@nadzwyczajnie.pl | Odbiorca: jolanta jankowska | oryg. adres: "
-    "Jarzębinowa 12/45 | Okno odbioru: 11:00 - 14:00 | Paczek: 1"
+    "Jarzębinowa 12/45 | Okno odbioru: 11:00 - 14:00 | Paczek: 1 | "
+    "SRC:EPAKA_BRIDGE:v1"
 )
 
 BRIDGE_CASES = [
@@ -64,8 +74,8 @@ BRIDGE_CASES = [
     (CHWIESKO, "Gajowa", "29"),
     (BRAVILOR, "Jacka Kuronia", "2"),
     (WOJOWNICY_50_TO_43, "Mickiewicza", "50"),
-    (WOJOWNICY_43_TO_50, "Mickiewicza", "43"),
-    (MATKA_POLKA, "Gen. Gustawa Orlicz-Dreszera", "3"),
+    (WOJOWNICY_43_TO_50, "Mickiewicza", "43 budynek C"),
+    (MATKA_POLKA, "Gen. Gustawa Orlicz-Dreszera", "3 Lokal 1"),
     (NADZWYCZAJNIE, "Komunalna", "5"),
 ]
 
@@ -127,6 +137,284 @@ def test_stoplist_blocks_street_named_like_company():
     NIE przechodzi (plauzybilność ulicy dalej obowiązuje w gałęzi bridge)."""
     poisoned = (
         "X #1 | NADAWCA: A tel 1 | Firma, NIP 123, Mali Wojownicy 7, "
-        "15-000 Białystok, a@b.c | Odbiorca: B | oryg. adres: C 1 | Paczek: 1"
+        "15-000 Białystok, a@b.c | Odbiorca: B | oryg. adres: C 1 | Paczek: 1 | "
+        "SRC:EPAKA_BRIDGE:v1"
     )
     assert parse_pickup_from_uwagi(poisoned, bridge_format=True) is None
+
+
+def _bridge_text(address, *, city="Białystok"):
+    return (
+        "Test #1 | NADAWCA: Jan Kowalski tel 500500500 | "
+        f"Firma Testowa, {address}, 15-001 {city}, test@example.invalid | "
+        "Odbiorca: Anna Nowak | oryg. adres: Inna 99 | Paczek: 1 | "
+        "SRC:EPAKA_BRIDGE:v1"
+    )
+
+
+def test_manual_fake_marker_without_complete_envelope_stays_none():
+    text = "Ręczna uwaga 161: Boruty 17 | SRC:EPAKA_BRIDGE:v1"
+    assert parse_pickup_from_uwagi(text, bridge_format=True) is None
+
+
+def test_missing_odbiorca_boundary_fails_closed():
+    text = STREET_SPORT.replace("| Odbiorca:", "| Klient:", 1)
+    assert parse_pickup_from_uwagi(text, bridge_format=True) is None
+
+
+def test_duplicate_nadawca_segment_fails_closed():
+    text = STREET_SPORT.replace(
+        "| Odbiorca:", "| NADAWCA: duplikat | Odbiorca:", 1
+    )
+    assert parse_pickup_from_uwagi(text, bridge_format=True) is None
+
+
+def test_nadawca_label_without_leading_pipe_is_not_an_envelope_segment():
+    text = _bridge_text("Boruty 17").removeprefix("Test #1 | ")
+    assert text.startswith("NADAWCA:")
+    assert parse_pickup_from_uwagi(text, bridge_format=True) is None
+
+
+def test_duplicate_odbiorca_boundary_fails_closed():
+    text = STREET_SPORT.replace(
+        "| Odbiorca:", "| Odbiorca: pierwszy | Odbiorca:", 1
+    )
+    assert parse_pickup_from_uwagi(text, bridge_format=True) is None
+
+
+def test_two_postal_anchors_fail_closed_instead_of_first_wins():
+    text = STREET_SPORT.replace(
+        "| Odbiorca:", ", Druga 2, 16-001 Kleosin | Odbiorca:", 1
+    )
+    assert parse_pickup_from_uwagi(text, bridge_format=True) is None
+
+
+@pytest.mark.parametrize(
+    "address, expected_number",
+    [
+        ("Boruty 17 budynek C", "17 budynek C"),
+        ("Boruty 17 Lokal 1", "17 Lokal 1"),
+        ("Boruty 17 lok. U2", "17 lok. U2"),
+        ("Boruty 17 m. 12", "17 m. 12"),
+    ],
+)
+def test_recognized_local_qualifier_is_preserved_in_number(address, expected_number):
+    parsed = parse_pickup_from_uwagi(_bridge_text(address), bridge_format=True)
+    assert parsed is not None
+    assert parsed.number == expected_number
+
+
+def test_unknown_address_extra_with_second_number_fails_closed():
+    assert (
+        parse_pickup_from_uwagi(
+            _bridge_text("Pierwsza 1 Druga 2"), bridge_format=True
+        )
+        is None
+    )
+
+
+def test_two_word_city_is_preserved():
+    parsed = parse_pickup_from_uwagi(
+        _bridge_text("Brzeska 7", city="Biała Podlaska"), bridge_format=True
+    )
+    assert parsed is not None
+    assert parsed.city == "Biała Podlaska"
+
+
+def test_exact_epaka_marker_spelling_is_required():
+    typo = STREET_SPORT.replace("SRC:EPAKA_BRIDGE:v1", "SRC:EPAKI_BRIDGE:v1")
+    assert parse_pickup_from_uwagi(typo, bridge_format=True) is None
+
+
+def test_unknown_bridge_version_is_none_with_distinguishable_reason():
+    future = STREET_SPORT.replace("SRC:EPAKA_BRIDGE:v1", "SRC:EPAKA_BRIDGE:v2")
+    attempt = inspect_bridge_nadawca(future)
+    assert attempt.pickup is None
+    assert attempt.reason == "unsupported_source_version:v2"
+    assert parse_pickup_from_uwagi(future, bridge_format=True) is None
+    legacy_collision = (
+        "Odbiór: Lepsza 9 | NADAWCA: A | Firma, Boruty 17, "
+        "15-157 Białystok | Odbiorca: B | SRC:EPAKA_BRIDGE:v2"
+    )
+    assert parse_pickup_from_uwagi(legacy_collision, bridge_format=True) is None
+
+
+def test_duplicate_source_marker_fails_closed():
+    duplicate = STREET_SPORT + " | SRC:EPAKA_BRIDGE:v1"
+    assert parse_pickup_from_uwagi(duplicate, bridge_format=True) is None
+
+
+def test_marker_must_be_the_terminal_nonempty_segment():
+    assert (
+        parse_pickup_from_uwagi(
+            STREET_SPORT + " | nieznany segment", bridge_format=True
+        )
+        is None
+    )
+
+
+def test_loose_nadawca_without_marker_uses_unchanged_legacy_path():
+    text = (
+        "Odbiór: Lepsza 9 | NADAWCA: A | Firma, Boruty 17, "
+        "15-157 Białystok | Odbiorca: B"
+    )
+    assert parse_pickup_from_uwagi(text, bridge_format=True) == (
+        parse_pickup_from_uwagi(text, bridge_format=False)
+    )
+
+
+def test_mutation_probe_swapped_nadawca_and_odbiorca_is_rejected():
+    swapped = (
+        STREET_SPORT.replace("NADAWCA:", "__SENDER__:", 1)
+        .replace("Odbiorca:", "NADAWCA:", 1)
+        .replace("__SENDER__:", "Odbiorca:", 1)
+    )
+    assert parse_pickup_from_uwagi(swapped, bridge_format=True) is None
+
+
+def _run_panel_callsite(monkeypatch, *, reject_on, uwagi=STREET_SPORT):
+    from dispatch_v2 import panel_detail_prefetch
+    from dispatch_v2 import panel_watcher as watcher
+    from dispatch_v2 import parse_continuity_guard
+
+    order_id = "900001"
+    parsed_panel = {
+        "order_ids": [order_id],
+        "assigned_ids": set(),
+        "unassigned_ids": [order_id],
+        "rest_names": {order_id: "Firmowe"},
+        "courier_packs": {},
+        "courier_load": {},
+        "html_times": {},
+        "closed_ids": set(),
+        "pickup_addresses": {},
+        "delivery_addresses": {},
+    }
+    normalized = {
+        "address_id": 161,
+        "uwagi": uwagi,
+        "pickup_address": "Adres konta firmowego",
+        "pickup_city": "Białystok",
+        "delivery_address": None,
+        "delivery_city": "Białystok",
+        "restaurant": "Firmowe",
+        "pickup_at_warsaw": "2026-07-21T12:00:00+02:00",
+        "prep_minutes": 30,
+        "order_type": "elastic",
+        "status_id": 2,
+        "id_kurier": None,
+        "is_koordynator": True,
+        "czas_kuriera_warsaw": None,
+        "czas_kuriera_hhmm": None,
+        "decision_deadline": None,
+        "zmiana_czasu_odbioru": None,
+        "created_at_utc": "2026-07-21T09:45:00Z",
+    }
+    flag_values = {
+        "ENABLE_UWAGI_ADDRESS_PARSER": True,
+        "ENABLE_UWAGI_BRIDGE_NADAWCA": True,
+        "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL": reject_on,
+        "ENABLE_COORDINATOR_FORCE_TIME_RECHECK": False,
+    }
+    emitted = []
+    geocode_calls = []
+
+    monkeypatch.setattr(watcher, "state_get_all", lambda: {})
+    monkeypatch.setattr(watcher, "_ignored_ids", set())
+    monkeypatch.setattr(watcher, "_COORDS", {})
+    monkeypatch.setattr(watcher, "FIRMOWE_KONTO_ADDRESS_IDS", frozenset({161}))
+    monkeypatch.setattr(watcher, "fetch_order_details", lambda *_args: {"id": order_id})
+    monkeypatch.setattr(watcher, "normalize_order", lambda *_args: normalized)
+    monkeypatch.setattr(watcher, "_build_prefetch_candidates", lambda *_args: [])
+    monkeypatch.setattr(
+        panel_detail_prefetch,
+        "prefetch_details",
+        lambda *_args, **_kwargs: ({}, {"prefetch_enabled": False}),
+    )
+    monkeypatch.setattr(
+        parse_continuity_guard,
+        "evaluate",
+        lambda *_args, **_kwargs: {"freeze_new": False, "suspicious": False},
+    )
+    def fake_flag(name, default=False):
+        return flag_values.get(name, default)
+
+    monkeypatch.setattr(watcher, "flag", fake_flag)
+    monkeypatch.setattr(watcher.C, "flag", fake_flag)
+    monkeypatch.setattr(watcher, "decision_flag", lambda *_args, **_kwargs: False)
+
+    def fake_geocode(address, *, city, timeout):
+        geocode_calls.append((address, city, timeout))
+        return None
+
+    def fake_emit(event_type, **kwargs):
+        emitted.append((event_type, kwargs))
+        return SimpleNamespace(state_ready=True, event_created=False)
+
+    monkeypatch.setattr(watcher, "geocode", fake_geocode)
+    monkeypatch.setattr(watcher, "_emit_and_apply_state", fake_emit)
+
+    watcher._diff_and_emit(
+        parsed_panel,
+        csrf="test",
+        _state_outbox_sweeper_on=True,
+    )
+    new_payload = next(kwargs["payload"] for kind, kwargs in emitted if kind == "NEW_ORDER")
+    return new_payload, geocode_calls
+
+
+def test_callsite_bridge_geocode_fail_never_uses_central_fallback(monkeypatch):
+    from dispatch_v2.common import FIRMOWE_KONTO_FALLBACK_COORDS
+    from dispatch_v2.dispatch_pipeline import assess_order
+
+    payload, geocode_calls = _run_panel_callsite(monkeypatch, reject_on=True)
+
+    assert geocode_calls == [("Boruty 17", "Białystok", 2.0)]
+    assert payload["pickup_coords"] is None
+    assert payload["pickup_coords"] != list(FIRMOWE_KONTO_FALLBACK_COORDS)
+    assert payload["pickup_address"] == "Boruty 17"
+    assert payload["uwagi_pickup_parsed"]["street"] == "Boruty"
+    assert "fallback_coords_used" not in payload["uwagi_pickup_parsed"]
+    decision = assess_order(
+        {
+            **payload,
+            "order_id": "900001",
+            "delivery_coords": [53.13, 23.16],
+        },
+        fleet_snapshot={},
+    )
+    assert decision.verdict == "SKIP"
+    assert decision.reason == "no_pickup_geocode"
+
+
+def test_callsite_disables_bridge_and_warns_when_reject_flag_is_off(
+    monkeypatch, caplog
+):
+    with caplog.at_level(logging.WARNING, logger="panel_watcher"):
+        payload, geocode_calls = _run_panel_callsite(monkeypatch, reject_on=False)
+
+    assert geocode_calls == []
+    assert payload["uwagi_pickup_parsed"]["fallback_coords_used"] is True
+    assert any(
+        "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL=OFF" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_callsite_logs_distinguishable_unknown_bridge_version(
+    monkeypatch, caplog
+):
+    future = STREET_SPORT.replace("SRC:EPAKA_BRIDGE:v1", "SRC:EPAKA_BRIDGE:v2")
+    with caplog.at_level(logging.ERROR, logger="panel_watcher"):
+        payload, geocode_calls = _run_panel_callsite(
+            monkeypatch,
+            reject_on=True,
+            uwagi=future,
+        )
+
+    assert geocode_calls == []
+    assert payload["pickup_coords"] is None
+    assert any(
+        "bridge_reason='unsupported_source_version:v2'" in record.getMessage()
+        for record in caplog.records
+    )

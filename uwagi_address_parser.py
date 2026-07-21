@@ -69,62 +69,162 @@ class ParsedPickup:
     city: Optional[str] = None  # bridge-NADAWCA: miasto z kodu pocztowego (np. "Białystok")
 
 
+@dataclass(frozen=True)
+class BridgeNadawcaAttempt:
+    """Czysty wynik walidacji koperty mostu, także dla odrzuceń."""
+
+    pickup: Optional[ParsedPickup]
+    reason: str
+
+
 # --- Format mostu epaki (verbose_uwagi, drtusz_bridge/bridge.py) -----------------
 # `<Firma> #<id> | NADAWCA: <imię> tel <tel> | <firma>, [NIP x,] <ulica nr>,
 #  <kod miasto>, [<email>] | Odbiorca: ... | oryg. adres: <ADRES DORĘCZENIA> | ...`
 # Punkt ODBIORU = adres NADAWCY (segment NADAWCA); pickup_rules mostu ustawiają
 # tylko CZAS (czasówka pushowana przy tworzeniu). "oryg. adres" = doręczenie,
-# NIE odbiór. Kotwica ekstrakcji: token przecinkowy tuż przed kodem `dd-ddd`.
-_BRIDGE_MARKER_PATTERN = re.compile(r"\|\s*NADAWCA:\s*", re.IGNORECASE)
+# NIE odbiór. Proweniencja = osobny, ostatni segment SRC:EPAKA_BRIDGE:v1.
+_BRIDGE_SOURCE_MARKER_PATTERN = re.compile(
+    r"SRC:EPAKA_BRIDGE:v(?P<version>\d+)"
+)
+_BRIDGE_NADAWCA_SEGMENT_PATTERN = re.compile(r"^NADAWCA:\s*")
+_BRIDGE_ODBIORCA_SEGMENT_PATTERN = re.compile(r"^Odbiorca:\s*")
+_BRIDGE_POSTAL_TOKEN_PATTERN = re.compile(r"(?<!\d)\d{2}-\d{3}(?!\d)")
 _BRIDGE_ADDR_ANCHOR_PATTERN = re.compile(
     r"(?P<addr>[^,|]+),\s*(?P<zip>\d{2}-\d{3})\s+(?P<city>[^,|]+?)\s*(?:,|\|)"
 )
 _BRIDGE_STREET_NUMBER_PATTERN = re.compile(
     r"^(?P<street>.+?)\s+(?P<number>\d+[a-zA-Z]?(?:/\d+\w*)?)(?:\s+(?P<extra>.+))?$"
 )
+_BRIDGE_ADDRESS_EXTRA_PATTERN = re.compile(
+    r"(?:"
+    r"(?:lok\.?|lokal)\s+\S+"
+    r"|bud(?:ynek)?\.?\s+\S+"
+    r"|m\.?\s*\d+"
+    r")",
+    re.IGNORECASE,
+)
 
 
-def _try_bridge_nadawca(text: str, stoplist: frozenset) -> Optional["ParsedPickup"]:
-    """P0 bridge-NADAWCA: adres nadawcy z verbose_uwagi mostu epaki.
+def _load_company_stoplist() -> frozenset:
+    """Załaduj kanoniczną stoplistę bez I/O i zachowaj testowy fallback."""
+    try:
+        from dispatch_v2.common import UWAGI_PARSER_COMPANY_STOPLIST
+        return UWAGI_PARSER_COMPANY_STOPLIST
+    except ImportError:
+        return _DEFAULT_STOPLIST
 
-    Zwraca None gdy brak markera `| NADAWCA:` albo kotwica pocztowa nie
-    znaleziona w segmencie nadawcy — wtedy legacy P1/P2 próbują jak dotąd.
+
+def _try_bridge_nadawca(text: str, stoplist: frozenset) -> BridgeNadawcaAttempt:
+    """P0 bridge-NADAWCA: waliduj kopertę, potem adres nadawcy.
+
+    Każda niejednoznaczność odrzuca całą próbę P0. ``reason`` jest stabilnym,
+    czystym diagnostykiem; wywołujący może odróżnić przyszłą wersję formatu od
+    braku proweniencji bez logowania ani I/O w parserze.
     """
-    m = _BRIDGE_MARKER_PATTERN.search(text)
-    if not m:
-        return None
-    seg_start = m.end()
-    odb = re.search(r"\|\s*Odbiorca:", text[seg_start:], re.IGNORECASE)
-    segment = text[seg_start:seg_start + odb.start()] if odb else text[seg_start:]
-    # domknij segment separatorem, żeby kotwica `...,<zip> <city>,` złapała
-    # także wariant bez emaila na końcu
-    am = _BRIDGE_ADDR_ANCHOR_PATTERN.search(segment + "|")
-    if not am:
-        return None
+    segments = text.split("|")
+    source_markers = []
+    for index, segment in enumerate(segments):
+        marker = _BRIDGE_SOURCE_MARKER_PATTERN.fullmatch(segment.strip())
+        if marker:
+            source_markers.append((index, marker.group("version")))
+    if len(source_markers) != 1:
+        return BridgeNadawcaAttempt(
+            None, f"source_marker_count:{len(source_markers)}"
+        )
+
+    marker_index, version = source_markers[0]
+    if version != "1":
+        return BridgeNadawcaAttempt(
+            None, f"unsupported_source_version:v{version}"
+        )
+    nonempty_indices = [
+        index for index, segment in enumerate(segments) if segment.strip()
+    ]
+    if marker_index == 0 or marker_index != nonempty_indices[-1]:
+        return BridgeNadawcaAttempt(None, "source_marker_not_terminal")
+
+    nadawca_indices = [
+        index
+        for index, segment in enumerate(segments)
+        if _BRIDGE_NADAWCA_SEGMENT_PATTERN.match(segment.strip())
+    ]
+    if len(nadawca_indices) != 1:
+        return BridgeNadawcaAttempt(
+            None, f"nadawca_segment_count:{len(nadawca_indices)}"
+        )
+    odbiorca_indices = [
+        index
+        for index, segment in enumerate(segments)
+        if _BRIDGE_ODBIORCA_SEGMENT_PATTERN.match(segment.strip())
+    ]
+    if len(odbiorca_indices) != 1:
+        return BridgeNadawcaAttempt(
+            None, f"odbiorca_boundary_count:{len(odbiorca_indices)}"
+        )
+
+    nadawca_index = nadawca_indices[0]
+    odbiorca_index = odbiorca_indices[0]
+    if nadawca_index == 0:
+        return BridgeNadawcaAttempt(None, "nadawca_segment_not_delimited")
+    if not nadawca_index < odbiorca_index < marker_index:
+        return BridgeNadawcaAttempt(None, "odbiorca_boundary_order")
+
+    sender_parts = segments[nadawca_index:odbiorca_index]
+    sender_parts[0] = _BRIDGE_NADAWCA_SEGMENT_PATTERN.sub(
+        "", sender_parts[0].strip(), count=1
+    )
+    sender_segment = "|".join(sender_parts)
+    postal_tokens = list(_BRIDGE_POSTAL_TOKEN_PATTERN.finditer(sender_segment))
+    anchors = list(
+        _BRIDGE_ADDR_ANCHOR_PATTERN.finditer(sender_segment + "|")
+    )
+    if len(postal_tokens) != 1 or len(anchors) != 1:
+        return BridgeNadawcaAttempt(
+            None,
+            f"postal_anchor_count:{max(len(postal_tokens), len(anchors))}",
+        )
+
+    am = anchors[0]
     addr = _normalize(am.group("addr"))
     city = _normalize(am.group("city"))
-    sn = _BRIDGE_STREET_NUMBER_PATTERN.match(addr)
+    sn = _BRIDGE_STREET_NUMBER_PATTERN.fullmatch(addr)
     if not sn:
-        return None
+        return BridgeNadawcaAttempt(None, "address_shape")
     street = _canonicalize_street(sn.group("street"))
     if not _is_plausible_street(street, stoplist):
-        return None
+        return BridgeNadawcaAttempt(None, "street_not_plausible")
     number = sn.group("number")
+    extra = sn.group("extra")
+    if extra:
+        extra = " ".join(_normalize(extra).split())
+        if not _BRIDGE_ADDRESS_EXTRA_PATTERN.fullmatch(extra):
+            return BridgeNadawcaAttempt(None, "unsupported_address_extra")
+        number = f"{number} {extra}"
     # firma nadawcy: pierwszy token przecinkowy segmentu meta (po `| `),
     # tylko display — bez walidacji plauzybilności firmy
     company = None
-    meta = segment.split("|")[-1] if "|" in segment else segment
+    meta = sender_segment.split("|")[-1]
     first_tok = _normalize(meta.split(",")[0])
     if first_tok and not first_tok.lower().startswith("nip "):
         company = first_tok
-    return ParsedPickup(
-        street=street,
-        number=number,
-        company=company,
-        raw_pickup_line=f"{addr}, {am.group('zip')} {city}",
-        confidence=0.95,
-        city=city or None,
+    return BridgeNadawcaAttempt(
+        ParsedPickup(
+            street=street,
+            number=number,
+            company=company,
+            raw_pickup_line=f"{addr}, {am.group('zip')} {city}",
+            confidence=0.95,
+            city=city or None,
+        ),
+        "parsed_v1",
     )
+
+
+def inspect_bridge_nadawca(text: Optional[str]) -> BridgeNadawcaAttempt:
+    """Publiczna, czysta diagnostyka koperty bridge-NADAWCA."""
+    if not text or not text.strip():
+        return BridgeNadawcaAttempt(None, "empty_text")
+    return _try_bridge_nadawca(text, _load_company_stoplist())
 
 
 def _normalize(text: str) -> str:
@@ -303,17 +403,15 @@ def parse_pickup_from_uwagi(text: Optional[str],
     if not text or not text.strip():
         return None
 
-    # Lazy import stoplist to allow test override
-    try:
-        from dispatch_v2.common import UWAGI_PARSER_COMPANY_STOPLIST
-        stoplist = UWAGI_PARSER_COMPANY_STOPLIST
-    except ImportError:
-        stoplist = _DEFAULT_STOPLIST
+    # Lazy import stoplist to allow test override.
+    stoplist = _load_company_stoplist()
 
     if bridge_format:
-        result = _try_bridge_nadawca(text, stoplist)
-        if result is not None:
-            return result
+        attempt = _try_bridge_nadawca(text, stoplist)
+        if attempt.pickup is not None:
+            return attempt.pickup
+        if attempt.reason.startswith("unsupported_source_version:"):
+            return None
 
     pickup_line = _extract_pickup_line(text)
     if not pickup_line:

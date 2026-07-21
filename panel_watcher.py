@@ -51,7 +51,10 @@ from dispatch_v2.event_bus import emit, emit_audit
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
 from dispatch_v2.parser_health_layer3 import install_layer3, record_tick_full
 from dispatch_v2.parser_health_endpoint import start_health_endpoint
-from dispatch_v2.uwagi_address_parser import parse_pickup_from_uwagi
+from dispatch_v2.uwagi_address_parser import (
+    inspect_bridge_nadawca,
+    parse_pickup_from_uwagi,
+)
 from dispatch_v2.panel_client import (
     fetch_panel_html,
     parse_panel_html,
@@ -2298,11 +2301,10 @@ def _diff_and_emit(
         # Firmowe konto path: address_id ∈ FIRMOWE_KONTO_ADDRESS_IDS znaczy
         # adres pickup'u jest w polu uwagi (free-text), nie w panel address.
         # Parser PRIMARY: parsuj uwagi → geocode → real coords (Mickiewicza 50,
-        # Wyszyńskiego 2/75, etc.). FALLBACK: gdy parser zwróci None (P3 edge)
-        # ALBO geocode fail → użyj FIRMOWE_KONTO_FALLBACK_COORDS (centrala
-        # Nadajesz.pl, Adrian decision 2026-05-07). Defense gate L2 w
-        # dispatch_pipeline + L4 czasowka_scheduler obsługują gdy nawet fallback
-        # coords nie zostały wpisane (np. inne firmowe konta bez fallback config).
+        # Wyszyńskiego 2/75, etc.). Legacy fallback do centrali obowiązuje tylko
+        # przy efektywnym ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL=OFF. P0 bridge
+        # wolno uruchomić wyłącznie razem z reject=ON, więc bridge-geocode FAIL
+        # zawsze zostawia None → jawny KOORD, nigdy wiarygodnie-złą centralę.
         _uwagi_pickup_parsed = None
         _pickup_address_override = None
         _restaurant_override = None
@@ -2310,16 +2312,35 @@ def _diff_and_emit(
                 and _is_firmowe_konto
                 and flag("ENABLE_UWAGI_ADDRESS_PARSER", True)):
             _uwagi_text = norm.get("uwagi")
+            _bridge_requested = flag("ENABLE_UWAGI_BRIDGE_NADAWCA", False)
+            _reject_on_geocode_fail = flag(
+                "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", True
+            )
+            _bridge_format = bool(
+                _bridge_requested and _reject_on_geocode_fail
+            )
+            if _bridge_requested and not _reject_on_geocode_fail:
+                _log.warning(
+                    f"NEW_ORDER {zid} firmowe-konto aid={_aid}: "
+                    "ENABLE_UWAGI_BRIDGE_NADAWCA=ON, ale efektywne "
+                    "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL=OFF; "
+                    "bridge_format=False (sprzężenie fail-closed)"
+                )
             _parsed = parse_pickup_from_uwagi(
                 _uwagi_text,
-                bridge_format=flag("ENABLE_UWAGI_BRIDGE_NADAWCA", False))
+                bridge_format=_bridge_format)
+            _bridge_rejection_reason = None
+            if _parsed is None and _bridge_format:
+                _bridge_rejection_reason = inspect_bridge_nadawca(
+                    _uwagi_text
+                ).reason
             if _parsed is not None:
                 _pickup_address_override = f"{_parsed.street} {_parsed.number}"
                 _pcoords = geocode(_pickup_address_override,
                                    city=(getattr(_parsed, "city", None) or "Białystok"),
                                    timeout=2.0)
                 if _pcoords is None:
-                    if flag("ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", True):
+                    if _reject_on_geocode_fail:
                         # FAZA 2 #1: reject+flag — znamy adres, geocode padł →
                         # NIE udawaj że to centrala. None → no_pickup_geocode → KOORD.
                         _log.error(
@@ -2355,11 +2376,13 @@ def _diff_and_emit(
                 # P3 edge: parser nie wyciągnął adresu (np. uwagi=company-only
                 # "MALI WOJOWNICY"). FAZA 2 #1: reject+flag — bez adresu NIE
                 # zgadujemy centrali; koordynator ustala adres (None → KOORD).
-                if flag("ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", True):
+                if _reject_on_geocode_fail:
                     _log.error(
                         f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
                         f"None (P3 edge) — REJECT+FLAG (→ no_pickup_geocode/KOORD), "
-                        f"NIE podstawiam centrali. Uwagi: {_uwagi_text!r}"
+                        f"NIE podstawiam centrali; "
+                        f"bridge_reason={_bridge_rejection_reason!r}. "
+                        f"Uwagi: {_uwagi_text!r}"
                     )
                     _pcoords = None
                     _uwagi_pickup_parsed = {
