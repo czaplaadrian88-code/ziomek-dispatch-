@@ -1,0 +1,62 @@
+
+===== POST-A8 (>= 2026-07-19T23:39:21) [plik biezacy] =====
+decyzji ogolem w oknie: 209
+  z polem reserve_tiebreak_shadow (flaga ON): 182
+  winner_free=True (zwyciezca WOLNY, bag 0): 98
+  would_fire=True (tie-break wskazalby JADACEGO): 10  = 5.5% pola / 10.2% winner_free
+  fired per godzina (Warsaw): 11h=6, 16h=1, 17h=3
+  fired winner_cid (wolny) top: [('179', 3), ('370', 3), ('503', 2), ('484', 1), ('538', 1)]
+  fired carry_cid (jadacy) top: [('400', 2), ('531', 2), ('284', 2), ('541', 2), ('447', 1), ('370', 1)]
+  dscore_free_minus_carry: n=10 min=-868.7 max=27.5 avg=-484.8
+  n_carrier_candidates rozklad: {1: 8, 2: 2}
+  carry_r6_max_bag_time_min: n=10 min=7.8 max=28.9 avg=18.1  (None=0)
+    strefa <=35 (norma): 10 | 35-40 (ALARM): 0 | >40 (wykluczone przez cap): 0
+  >>> DEFEKT Sola (carry R6 w 35-40, strefa alarmowa): 0 przyp.
+
+===== PRE-A8 [plik biezacy, tylko diagnostycznie] =====
+decyzji ogolem w oknie: 870
+  z polem reserve_tiebreak_shadow (flaga ON): 768
+  winner_free=True (zwyciezca WOLNY, bag 0): 694
+  would_fire=True (tie-break wskazalby JADACEGO): 31  = 4.0% pola / 4.5% winner_free
+  fired per godzina (Warsaw): 11h=1, 12h=4, 13h=3, 14h=2, 15h=5, 16h=5, 17h=7, 18h=3, 20h=1
+  fired winner_cid (wolny) top: [('413', 10), ('179', 9), ('543', 5), ('376', 2), ('470', 1), ('503', 1), ('509', 1), ('441', 1)]
+  fired carry_cid (jadacy) top: [('447', 4), ('441', 4), ('376', 3), ('503', 3), ('413', 3), ('179', 2), ('400', 2), ('509', 2)]
+  dscore_free_minus_carry: n=31 min=-906.8 max=29.4 avg=-93.0
+  n_carrier_candidates rozklad: {2: 2, 1: 29}
+  carry_r6_max_bag_time_min: n=31 min=5.7 max=29.8 avg=16.7  (None=0)
+    strefa <=35 (norma): 31 | 35-40 (ALARM): 0 | >40 (wykluczone przez cap): 0
+  >>> DEFEKT Sola (carry R6 w 35-40, strefa alarmowa): 0 przyp.
+
+===== ROTATED .jsonl.1 [pre-A8 archiwum, diagnostycznie] =====
+decyzji ogolem w oknie: 1161
+  z polem reserve_tiebreak_shadow (flaga ON): 1067
+  winner_free=True (zwyciezca WOLNY, bag 0): 940
+  would_fire=True (tie-break wskazalby JADACEGO): 55  = 5.2% pola / 5.9% winner_free
+  fired per godzina (Warsaw): 10h=2, 11h=3, 12h=6, 13h=3, 14h=7, 15h=6, 16h=4, 17h=10, 18h=5, 19h=3, 20h=5, 21h=1
+  fired winner_cid (wolny) top: [('413', 15), ('123', 9), ('543', 4), ('484', 4), ('179', 3), ('500', 3), ('447', 3), ('441', 2)]
+  fired carry_cid (jadacy) top: [('447', 7), ('284', 6), ('179', 6), ('470', 6), ('370', 5), ('400', 4), ('509', 3), ('413', 3)]
+  dscore_free_minus_carry: n=55 min=-999999942.6 max=28.8 avg=-18181957.0
+  n_carrier_candidates rozklad: {2: 5, 3: 2, 5: 2, 1: 45, 4: 1}
+  carry_r6_max_bag_time_min: n=55 min=6.4 max=29.5 avg=18.0  (None=0)
+    strefa <=35 (norma): 55 | 35-40 (ALARM): 0 | >40 (wykluczone przez cap): 0
+  >>> DEFEKT Sola (carry R6 w 35-40, strefa alarmowa): 0 przyp.
+
+===== JOIN z learning_log (nadpisania ownera) =====
+  fired decyzji: 10
+  z nich PANEL_OVERRIDE (czlowiek nadpisal): 8
+  z nich PANEL_AGREE (czlowiek zgodzil sie z best): 1
+  fired bez sladu w learning_log: 1
+  --- w nadpisaniach (n=8): ---
+    owner wybral JADACEGO (= tie-break rezerwy): 3
+    owner wybral WOLNEGO (= best silnika):       0
+    owner wybral kogos INNEGO:                   5
+      order=489059 wolny=179 jadacy=400 owner_wybral=538  OWNER->INNY
+      order=489060 wolny=179 jadacy=531 owner_wybral=531  OWNER->JADACY(=tie-break)
+      order=489061 wolny=179 jadacy=447 owner_wybral=531  OWNER->INNY
+      order=489143 wolny=484 jadacy=284 owner_wybral=531  OWNER->INNY
+      order=489153 wolny=503 jadacy=284 owner_wybral=284  OWNER->JADACY(=tie-break)
+      order=489161 wolny=538 jadacy=400 owner_wybral=400  OWNER->JADACY(=tie-break)
+      order=489257 wolny=370 jadacy=531 owner_wybral=541  OWNER->INNY
+      order=489258 wolny=370 jadacy=541 owner_wybral=531  OWNER->INNY
+
+learning_log zakres ts: 2026-07-17T07:06:02.157217+00:00 -> 2026-07-21T09:27:56.471305+00:00 (n=893)

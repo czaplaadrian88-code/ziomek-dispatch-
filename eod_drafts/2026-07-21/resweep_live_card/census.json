@@ -1,0 +1,484 @@
+{
+ "source": "/root/.openclaw/workspace/dispatch_state/pending_global_resweep.jsonl",
+ "total_rows": 12329,
+ "bad_lines": 0,
+ "n_ticks": 8105,
+ "date_range": [
+  "2026-06-24T19:58:06.476329+00:00",
+  "2026-07-21T09:34:47.293426+00:00"
+ ],
+ "reasons": {
+  "bez_zmian": 8529,
+  "lepszy_kurier": 821,
+  "rozjazd_kierunkow": 1263,
+  "proponowany_wypadl": 1166,
+  "zmiana_marginalna": 550
+ },
+ "n_changed_rows": 3800,
+ "n_would_repropose": 3250,
+ "would_repropose_pct_of_rows": 26.36,
+ "delta_vs_now_would": {
+  "n": 2084,
+  "p50": 92.8,
+  "p80": 345.6,
+  "p95": 999999846.3,
+  "min": -1000000163.6,
+  "max": 1000000101.3
+ },
+ "delta_vs_now_changed": {
+  "n": 2634,
+  "p50": 48.2,
+  "p80": 246.1,
+  "p95": 999999644.1
+ },
+ "per_day": {
+  "2026-06-24": {
+   "rows": 3,
+   "ticks": 3
+  },
+  "2026-06-25": {
+   "rows": 513,
+   "would": 109,
+   "changed": 122,
+   "lepszy": 29,
+   "rozjazd": 49,
+   "wypadl": 31,
+   "ticks": 342
+  },
+  "2026-06-26": {
+   "rows": 482,
+   "changed": 146,
+   "would": 129,
+   "wypadl": 54,
+   "rozjazd": 43,
+   "lepszy": 32,
+   "ticks": 327
+  },
+  "2026-06-27": {
+   "rows": 208,
+   "would": 39,
+   "changed": 44,
+   "lepszy": 20,
+   "rozjazd": 8,
+   "wypadl": 11,
+   "ticks": 162
+  },
+  "2026-06-28": {
+   "rows": 419,
+   "would": 92,
+   "changed": 113,
+   "lepszy": 37,
+   "rozjazd": 37,
+   "wypadl": 18,
+   "ticks": 291
+  },
+  "2026-06-29": {
+   "rows": 726,
+   "would": 217,
+   "changed": 235,
+   "rozjazd": 93,
+   "wypadl": 77,
+   "lepszy": 47,
+   "ticks": 401
+  },
+  "2026-06-30": {
+   "rows": 758,
+   "changed": 321,
+   "would": 250,
+   "lepszy": 43,
+   "wypadl": 115,
+   "rozjazd": 92,
+   "ticks": 384
+  },
+  "2026-07-01": {
+   "rows": 863,
+   "would": 356,
+   "changed": 376,
+   "rozjazd": 111,
+   "wypadl": 177,
+   "lepszy": 68,
+   "ticks": 454
+  },
+  "2026-07-02": {
+   "rows": 516,
+   "would": 138,
+   "changed": 150,
+   "lepszy": 64,
+   "rozjazd": 60,
+   "wypadl": 14,
+   "ticks": 372
+  },
+  "2026-07-03": {
+   "rows": 494,
+   "would": 109,
+   "changed": 132,
+   "lepszy": 34,
+   "rozjazd": 49,
+   "wypadl": 26,
+   "ticks": 351
+  },
+  "2026-07-04": {
+   "rows": 457,
+   "would": 119,
+   "changed": 131,
+   "rozjazd": 54,
+   "wypadl": 32,
+   "lepszy": 33,
+   "ticks": 332
+  },
+  "2026-07-05": {
+   "rows": 516,
+   "would": 138,
+   "changed": 145,
+   "wypadl": 35,
+   "rozjazd": 71,
+   "lepszy": 32,
+   "ticks": 346
+  },
+  "2026-07-06": {
+   "rows": 456,
+   "would": 123,
+   "changed": 134,
+   "rozjazd": 51,
+   "lepszy": 32,
+   "wypadl": 40,
+   "ticks": 309
+  },
+  "2026-07-07": {
+   "rows": 575,
+   "would": 165,
+   "changed": 169,
+   "lepszy": 23,
+   "wypadl": 66,
+   "rozjazd": 76,
+   "ticks": 319
+  },
+  "2026-07-08": {
+   "rows": 592,
+   "would": 180,
+   "changed": 222,
+   "lepszy": 56,
+   "wypadl": 95,
+   "rozjazd": 29,
+   "ticks": 349
+  },
+  "2026-07-09": {
+   "rows": 440,
+   "changed": 103,
+   "would": 90,
+   "wypadl": 31,
+   "rozjazd": 24,
+   "lepszy": 35,
+   "ticks": 317
+  },
+  "2026-07-10": {
+   "rows": 519,
+   "changed": 175,
+   "would": 144,
+   "lepszy": 44,
+   "rozjazd": 39,
+   "wypadl": 61,
+   "ticks": 339
+  },
+  "2026-07-11": {
+   "rows": 415,
+   "changed": 103,
+   "would": 76,
+   "lepszy": 18,
+   "rozjazd": 27,
+   "wypadl": 31,
+   "ticks": 287
+  },
+  "2026-07-12": {
+   "rows": 476,
+   "would": 90,
+   "changed": 104,
+   "rozjazd": 63,
+   "lepszy": 8,
+   "wypadl": 19,
+   "ticks": 319
+  },
+  "2026-07-13": {
+   "rows": 266,
+   "would": 53,
+   "changed": 54,
+   "wypadl": 12,
+   "rozjazd": 19,
+   "lepszy": 22,
+   "ticks": 209
+  },
+  "2026-07-14": {
+   "rows": 378,
+   "would": 108,
+   "changed": 114,
+   "rozjazd": 57,
+   "lepszy": 21,
+   "wypadl": 30,
+   "ticks": 270
+  },
+  "2026-07-15": {
+   "rows": 488,
+   "would": 114,
+   "changed": 140,
+   "lepszy": 48,
+   "wypadl": 50,
+   "rozjazd": 16,
+   "ticks": 359
+  },
+  "2026-07-16": {
+   "rows": 223,
+   "changed": 46,
+   "would": 21,
+   "lepszy": 3,
+   "rozjazd": 17,
+   "wypadl": 1,
+   "ticks": 186
+  },
+  "2026-07-17": {
+   "rows": 310,
+   "changed": 62,
+   "would": 46,
+   "lepszy": 7,
+   "rozjazd": 37,
+   "wypadl": 2,
+   "ticks": 235
+  },
+  "2026-07-18": {
+   "rows": 401,
+   "would": 85,
+   "changed": 107,
+   "rozjazd": 51,
+   "lepszy": 15,
+   "wypadl": 19,
+   "ticks": 282
+  },
+  "2026-07-19": {
+   "rows": 510,
+   "changed": 261,
+   "would": 177,
+   "wypadl": 81,
+   "rozjazd": 70,
+   "lepszy": 26,
+   "ticks": 316
+  },
+  "2026-07-20": {
+   "rows": 261,
+   "would": 67,
+   "changed": 74,
+   "rozjazd": 16,
+   "wypadl": 28,
+   "lepszy": 23,
+   "ticks": 195
+  },
+  "2026-07-21": {
+   "rows": 64,
+   "changed": 17,
+   "would": 15,
+   "rozjazd": 4,
+   "wypadl": 10,
+   "lepszy": 1,
+   "ticks": 49
+  }
+ },
+ "top_unloaded_cid": [
+  [
+   "413",
+   "Mateusz Ostapczuk",
+   563
+  ],
+  [
+   "179",
+   "Gabriel Ostapczuk",
+   439
+  ],
+  [
+   "515",
+   "Szymon Parys",
+   218
+  ],
+  [
+   "447",
+   "Dawid Kalinowski",
+   202
+  ],
+  [
+   "531",
+   "Piotr Kulaszewski",
+   173
+  ],
+  [
+   "370",
+   "Kuba Olchowik",
+   158
+  ],
+  [
+   "500",
+   "Grzegorz Rogowski",
+   146
+  ],
+  [
+   "492",
+   "Jakub Wysocki",
+   144
+  ],
+  [
+   "123",
+   "Bartek Ołdziej",
+   136
+  ],
+  [
+   "484",
+   "Andrei Kotsia",
+   105
+  ]
+ ],
+ "top_loaded_cid": [
+  [
+   "413",
+   "Mateusz Ostapczuk",
+   353
+  ],
+  [
+   "179",
+   "Gabriel Ostapczuk",
+   319
+  ],
+  [
+   "447",
+   "Dawid Kalinowski",
+   294
+  ],
+  [
+   "531",
+   "Piotr Kulaszewski",
+   253
+  ],
+  [
+   "484",
+   "Andrei Kotsia",
+   206
+  ],
+  [
+   "492",
+   "Jakub Wysocki",
+   199
+  ],
+  [
+   "370",
+   "Kuba Olchowik",
+   176
+  ],
+  [
+   "515",
+   "Szymon Parys",
+   156
+  ],
+  [
+   "123",
+   "Bartek Ołdziej",
+   137
+  ],
+  [
+   "470",
+   "Piotr Zawadzki",
+   102
+  ]
+ ],
+ "owner_problem": {
+  "n_ticks_multi_hanging(>=2 orders)": 2766,
+  "n_ticks_pileon(>=2 orders same proposed_cid)": 1989,
+  "pileon_maxconcentration_dist": {
+   "2": 1428,
+   "3": 380,
+   "4": 144,
+   "5": 22,
+   "7": 6,
+   "6": 9
+  },
+  "pileon_pct_of_multihanging": 71.9,
+  "engine_metric_n_ticks_maxpile_before>=2": 1989,
+  "engine_metric_n_ticks_spread_improved": 1350,
+  "engine_metric_pileon_resolved_by_resweep": 1350,
+  "engine_pileon_resolve_rate_pct": 67.9
+ },
+ "hanging_per_tick_dist": {
+  "1": 5339,
+  "2": 1828,
+  "3": 605,
+  "4": 218,
+  "5": 72,
+  "6": 22,
+  "7": 13,
+  "8": 8
+ },
+ "claim_ledger": {
+  "n_rows_with_breach": 0,
+  "n_rows_with_feral_drop": 0,
+  "feral_field_present_rows": 18
+ },
+ "churn_pingpong": {
+  "n_would_orders_distinct": 1330,
+  "n_orders_pingpong(>=2 distinct targets)": 228,
+  "total_target_flip_events": 398,
+  "persistent_reproposal_dist(ticks_per_order)": {
+   "1": 710,
+   "2": 266,
+   "3": 131,
+   "4": 83,
+   "5": 40,
+   "6": 27,
+   "7": 12,
+   "8": 11,
+   "9": 15,
+   "10": 3,
+   "11": 3,
+   "12": 7,
+   "13": 2,
+   "14": 2,
+   "15": 2,
+   "16": 1,
+   "17": 2,
+   "18": 3,
+   "19": 1,
+   "21": 1,
+   "22": 1,
+   "25": 1,
+   "27": 1,
+   "28": 1,
+   "29": 1,
+   "36": 3
+  }
+ },
+ "delta_vs_now_would_CLEAN(excl_sentinel_1e6)": {
+  "n": 1876,
+  "p50": 84.7,
+  "p80": 241.4,
+  "p90": 468.7,
+  "p95": 826.2,
+  "p99": 2659.7
+ },
+ "sentinel_contamination": {
+  "rows_delta_gt_1e6": 258,
+  "prop_now_sentinel": 417,
+  "new_score_sentinel": 518,
+  "note": "score -1e9 = twardy odrzut proponowanego kuriera; realny sygnal proponowany_wypadl/lepszy_kurier, ale zaburza surowe percentyle"
+ },
+ "direction_proxy": {
+  "pileon_groups(ts,proposed_cid)>=2ord": 2033,
+  "with_distinct_delivery_addr": 2033,
+  "pct": 100.0,
+  "note": "KAZDA grupa pile-on ma rozne adresy docelowe = potwierdza problem ownera (rozne kierunki na jednego kuriera); brak wspolrzednych w rekordzie -> proxy adresowy, nie kat geograficzny"
+ },
+ "churn_per_hour": {
+  "active_would_hours": 279,
+  "would_rows_per_active_hour_p50": 8,
+  "p80": 17.0,
+  "p95": 34.1,
+  "max": 85,
+  "avg_actions_per_hanging_hour": 9.03,
+  "ticks_hitting_LIVE_cap3": 57,
+  "total_would_ticks": 2445,
+  "max_would_single_tick": 6
+ },
+ "note_source_cause": "cid 179 (Gabriel Ostapczuk) i 413 (Mateusz Ostapczuk) = TOP over-proposed tu ORAZ w bugu no-GPS center-score (memory ziomek-nogps-center-score-bug). Pile-on jest w duzej czesci SKUTKIEM tego, ze kurierzy bez GPS ladowani sa w BIALYSTOK_CENTER (blisko wszystkiego) -> resweep laata skutek scoringu."
+}

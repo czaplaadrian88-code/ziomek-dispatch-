@@ -1,0 +1,126 @@
+{
+  "generated_at": "2026-07-21T09:37:38.884233+00:00",
+  "sources": {
+    "trainer_db": "/root/.openclaw/workspace/dispatch_state/eta_calib.db",
+    "gps_truth": "/root/.openclaw/workspace/dispatch_state/gps_delivery_truth.jsonl",
+    "sla_log": "/root/.openclaw/workspace/scripts/logs/sla_log.jsonl"
+  },
+  "trainer_corpus": {
+    "n_rows": 9464,
+    "day_range": [
+      "2026-05-08",
+      "2026-07-20"
+    ],
+    "n_days": 42
+  },
+  "gps_truth": {
+    "n_records": 2404,
+    "n_unique_orders": 2404,
+    "day_range": [
+      "2026-06-10",
+      "2026-07-21"
+    ],
+    "n_days": 41,
+    "confidence_breakdown": {
+      "low": 353,
+      "high": 2051
+    },
+    "n_high_conf_unique": 2051,
+    "latest_physical_delivered_at": "2026-07-21T09:15:35+00:00",
+    "freshness_minutes_ago": 22.1
+  },
+  "coverage_vs_sla": {
+    "n_sla_orders": 17500,
+    "gps_any_pct": 13.7,
+    "gps_high_pct": 11.7
+  },
+  "coverage_vs_trainer": {
+    "note": "Ile wierszy trenera (delivery leg) moze dostac GPS-target JUZ TERAZ.",
+    "n_trainer_rows": 9464,
+    "n_join_any_conf": 2109,
+    "pct_join_any_conf": 22.3,
+    "n_join_high_conf": 1805,
+    "pct_join_high_conf": 19.1,
+    "zero_gps_trainer_days": [
+      "2026-05-08",
+      "2026-05-09",
+      "2026-05-10",
+      "2026-05-15",
+      "2026-05-16",
+      "2026-05-17",
+      "2026-07-02"
+    ],
+    "n_zero_gps_trainer_days": 7
+  },
+  "click_vs_gps_delivery": {
+    "note": "delta_button_minus_physical_min (klik pozniej niz fizyczny), high-conf, join z trenerem.",
+    "n": 1805,
+    "median_min": 2.35,
+    "mean_min": 2.648,
+    "pct_click_late": 95.2,
+    "pct_abs_ge5": 10.5
+  },
+  "delivery_target_shift": {
+    "note": "actual_deliver_min(klik-klik) - gps_corrected(physical - klik_pickup). Dodatni = target skroci sie po GPS.",
+    "n": 2109,
+    "median_min": 2.183,
+    "mean_min": 2.421
+  },
+  "per_courier_high_conf_join": {
+    "n_couriers_ge15_pairs": 20,
+    "top": [
+      [
+        "400",
+        251
+      ],
+      [
+        "123",
+        180
+      ],
+      [
+        "484",
+        166
+      ],
+      [
+        "370",
+        145
+      ],
+      [
+        "393",
+        134
+      ],
+      [
+        "541",
+        110
+      ],
+      [
+        "471",
+        98
+      ],
+      [
+        "492",
+        89
+      ],
+      [
+        "447",
+        88
+      ],
+      [
+        "441",
+        74
+      ],
+      [
+        "413",
+        73
+      ],
+      [
+        "179",
+        66
+      ]
+    ]
+  },
+  "pickup_leg": {
+    "physical_pickup_truth_available": false,
+    "note": "gps_delivery_truth = DELIVERY only. Pickup leg (pickup_slip_koord_min) NIE ma fizycznej prawdy dzis. Poza zakresem GPS-stitch tej fazy."
+  }
+}

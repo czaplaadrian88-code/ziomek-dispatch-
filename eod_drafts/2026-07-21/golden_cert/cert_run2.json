@@ -1,0 +1,67 @@
+{
+  "after": {
+    "commit": "00be30ba4114bd031b50ef9c0a5a6482e7a0025f",
+    "ref": "HEAD"
+  },
+  "after_unstable_n": 0,
+  "before": {
+    "commit": "00be30ba4114bd031b50ef9c0a5a6482e7a0025f",
+    "ref": "HEAD"
+  },
+  "before_unstable_n": 0,
+  "compared_n": 10,
+  "contract": {
+    "bytes": "canonical-json-utf8-exact",
+    "metric_exclusions": [
+      "candidate_timing",
+      "r07_compute_latency_ms"
+    ],
+    "model_telemetry_exclusions": [
+      "evaluation_ts",
+      "feature_compute_ms",
+      "inference_ms",
+      "latency_ms"
+    ],
+    "result_exclusions": [
+      "osrm_cache_age_s",
+      "osrm_degraded_since_ts",
+      "stage_timing"
+    ],
+    "stability_passes": [
+      {
+        "order": "forward",
+        "pythonhashseed": 0
+      },
+      {
+        "order": "reverse",
+        "pythonhashseed": 0
+      },
+      {
+        "order": "forward",
+        "pythonhashseed": 1
+      },
+      {
+        "order": "reverse",
+        "pythonhashseed": 1
+      }
+    ]
+  },
+  "corpus": {
+    "eligible_n": 10,
+    "eligible_n_lower_bound": 10,
+    "n": 10,
+    "scan_complete": true,
+    "selection": "sorted_file_then_line",
+    "sha256": "9d8780870a56c6e5bbd7eb317662da27555625aa0691f209fa49811c5654a727",
+    "truncated": false
+  },
+  "cross_differences_n": 0,
+  "difference_samples": [],
+  "errors": {},
+  "generated_at": "2026-07-21T09:54:34.145872+00:00",
+  "input_missing_records": {},
+  "key_mismatches": {},
+  "osrm_miss_records": {},
+  "schema": "golden_decision_replay.v2",
+  "verdict": "PARITY"
+}

@@ -1,0 +1,10 @@
+PARYTET CIENIA D6a — decyzje od 2026-07-18T19:05:00+00:00: 508
+pokrycie: pickup 0/508 (0.0%) | delivery 0/508 (0.0%) | srv_skip 0
+calib pickup P80 [min]:  brak
+calib delivery P80 [min]: brak
+delta pickup (calib − silnik) [min]: brak
+
+INTERPRETACJA: pokrycie ≥95% i sensowne zakresy (pickup ~1-40, delivery ~2-60)
+= cień zdrowy; delta pickup pokazuje, o ile kalibrator różni się od obietnic
+silnika na żywo. Werdykt flipu APPLY = progi D5 na PRAWDZIE (eta_calib.db)
++ ta zgodność — decyzja za końcowym ACK Adriana.
