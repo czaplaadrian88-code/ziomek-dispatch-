@@ -25,11 +25,12 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
+from dispatch_v2.common import CZASOWKA_PREP_MIN
+
 
 # --- Constants ---
 GASTRO_ASSIGN_PATH = "/root/.openclaw/workspace/scripts/gastro_assign.py"
 KOORDYNATOR_CID = 26
-CZASOWKA_THRESHOLD_MIN = 60  # czas_odbioru >= 60 = czasówka
 
 # Retry parameters
 RETRY_BACKOFF_SEC = (5, 15, 45)  # 3 attempts
@@ -46,7 +47,7 @@ def is_czasowka(prep_minutes: Optional[int]) -> bool:
     if prep_minutes is None:
         return False
     try:
-        return int(prep_minutes) >= CZASOWKA_THRESHOLD_MIN
+        return int(prep_minutes) >= CZASOWKA_PREP_MIN
     except (ValueError, TypeError):
         return False
 

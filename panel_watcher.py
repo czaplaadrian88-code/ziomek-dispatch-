@@ -1796,10 +1796,7 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
     # NIE emituj (żeby nie odpalić FIX-E „apka odświeży widok" + audit na bzdurze).
     # Autorytatywny bliźniak: state_machine CZAS_KURIERA_UPDATED (_CK_PASSIVE_SOURCES).
     # Zmiana umówionego czasu czasówki idzie kanałem pickup_at (PICKUP_TIME_UPDATED).
-    _is_czas = (
-        (old_state.get("order_type") == "czasowka")
-        or (old_state.get("prep_minutes") or 0) >= 60
-    )
+    _is_czas = C.is_czasowka_order(old_state)
     try:
         from dispatch_v2.common import flag as _flag
     except Exception:
@@ -1835,6 +1832,10 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
                 "observed_decision_deadline": fresh_response.get(
                     "decision_deadline"
                 ),
+                "assignment_event_id_at_observation": old_state.get(
+                    "assignment_event_id"
+                ),
+                "courier_id_at_observation": old_state.get("courier_id"),
             }
             _manual_evt = build_czasowka_manual_ck_pickup_event(
                 old_state, _manual_payload
@@ -1949,6 +1950,12 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
         "new_zmiana_czasu_odbioru": fresh_response.get("zmiana_czasu_odbioru"),
         "delta_min": round(delta_min, 2) if delta_min is not None else None,
         "source": "coordinator_force" if deliberate else "panel_re_check",
+        # Causal snapshot: durable payload dowodzi, ze ten time-event powstal
+        # w tej samej generacji assignmentu i przy tym samym kurierze.
+        "assignment_event_id_at_observation": old_state.get(
+            "assignment_event_id"
+        ),
+        "courier_id_at_observation": old_state.get("courier_id"),
     }
     evt = {
         "event_type": "PICKUP_TIME_UPDATED",
@@ -1988,6 +1995,8 @@ def _time_update_event_key(order_id: str, event: dict) -> str:
             "new_decision_deadline",
             "new_zmiana_czasu_odbioru",
             "source",
+            "assignment_event_id_at_observation",
+            "courier_id_at_observation",
         ),
     }
     if event_type not in transition_fields:
@@ -2142,8 +2151,7 @@ def _build_prefetch_candidates(parsed: dict, current_state: dict, ignored_ids,
         if status != "assigned" and zid in assigned_in_panel:
             out.append(zid)
         if ck_detection_on or pickup_time_detection_on:
-            is_czasowka = (so.get("order_type") == "czasowka"
-                           or (so.get("prep_minutes") or 0) >= 60)
+            is_czasowka = C.is_czasowka_order(so)
             if status in ("assigned", "picked_up") or (status == "planned" and is_czasowka):
                 out.append(zid)
     return list(dict.fromkeys(out))
@@ -3371,10 +3379,7 @@ def _diff_and_emit(
         for zid, state_order in list(current_state.items()):
             _force = zid in _force_ids
             _status = state_order.get("status")
-            _is_czasowka = (
-                state_order.get("order_type") == "czasowka"
-                or (state_order.get("prep_minutes") or 0) >= 60
-            )
+            _is_czasowka = C.is_czasowka_order(state_order)
             in_scope = (
                 _status in ("assigned", "picked_up")
                 or (_status == "planned" and _is_czasowka)
