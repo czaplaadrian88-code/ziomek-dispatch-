@@ -1,5 +1,10 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **KANDYDAT 2026-07-21 — RESWEEP LIVE HARDENING:** source-only recheck
+> `status==planned` pod lockami lifecycle→pending oraz `proposed_km` w shadow JSONL.
+> `PENDING_RESWEEP_LIVE` nietknięta; merge/48h G5/flip/deploy/restart nadal HOLD.
+> Dowód: `eod_drafts/2026-07-21/resweep_live_card/HARDENING_REPORT.md`.
+
 > **KANDYDAT 2026-07-20 — OD-A1b DROP-FERAL-CLAIM:** semantyka
 > `ENABLE_CLAIM_LEDGER_INVARIANT_HARD` zmieniona source-only z zatrzymującego tick
 > `raise` na odrzucenie wyłącznie feralnego claimu w obu bliźniakach. Flaga nadal

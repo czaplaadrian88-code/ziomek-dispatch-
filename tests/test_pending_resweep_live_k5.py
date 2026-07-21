@@ -6,7 +6,7 @@ fake'ów) + izolowany pending store (locked_mutate na tmp — kanon L7.5).
 
 Osie: ON≠OFF · bramka geometrii nie do ominięcia · podmiana decision_record
 z provenance (stary/nowy kurier, margines) i zachowaniem message_id ·
-TOCTOU-guardy wewnątrz locka (gone/changed) · cap per tick · fail-soft IO.
+TOCTOU-guardy pod lockami (gone/changed/status planned) · cap per tick · fail-soft IO.
 """
 import json
 import sys
@@ -122,13 +122,18 @@ def test_toctou_gone_entry_skipped_inside_lock(tmp_path, monkeypatch):
 
 
 def test_toctou_changed_proposal_skipped(tmp_path, monkeypatch):
-    """Inny pisarz podmienił propozycję (best≠proposed_cid z compute) → skip_changed."""
+    """Dwa wyścigi pod lockiem: zmieniona propozycja i status planned→assigned."""
     _patch_serializer(monkeypatch)
     out, pp = _arm_live(tmp_path, monkeypatch, {"o1": "A", "o2": "A", "o3": "A"})
+    before_o2 = _pending(pp)["o2"]["decision_record"]
     real_mutate = PPS.locked_mutate
 
     def _racing_mutate(fn, path=PPS.PENDING_PATH):
         def _wrapped(pending):
+            orders_path = tmp_path / "orders.json"
+            orders = json.loads(orders_path.read_text())
+            orders["o2"]["status"] = "assigned"  # snapshot był planned
+            orders_path.write_text(json.dumps(orders))
             if "o3" in pending:
                 pending["o3"]["decision_record"]["best"]["courier_id"] = "ZZZ"
             fn(pending)
@@ -139,6 +144,8 @@ def test_toctou_changed_proposal_skipped(tmp_path, monkeypatch):
     rows = {r["order_id"]: r for r in
             (json.loads(l) for l in out.read_text().splitlines())}
     assert rows["o3"]["live_action"] == "skip_changed", rows["o3"]
+    assert rows["o2"]["live_action"] == "skip_status_changed", rows["o2"]
+    assert _pending(pp)["o2"]["decision_record"] == before_o2
 
 
 def test_tick_cap_limits_actions(tmp_path, monkeypatch):

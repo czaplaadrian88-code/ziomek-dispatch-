@@ -347,14 +347,16 @@ def _live_apply(rows: List[dict], ga_results: Dict[str, Any], now: datetime) -> 
     identycznie, panel_watcher._save_plan_from_pending dostaje plan NOWEGO kuriera,
     a detekcja PANEL_OVERRIDE przestaje fałszywie krzyczeć po akcepcie nowego).
 
-    Współbieżność: KANON pending_proposals_store.locked_mutate (fcntl LOCK_EX na cały
-    RMW — L7.5); TOCTOU-guard WEWNĄTRZ locka: wpis musi istnieć i wciąż wskazywać
-    kuriera, względem którego liczyliśmy różnicę (proposed_cid) — inaczej skip
-    (przypisano / inny pisarz zmienił propozycję). Fail-soft per akcja (tick nie pada).
+    Współbieżność: kanoniczny state_machine.lifecycle_apply_lock serializuje recheck
+    statusu z writerami orders_state, a wewnętrzny pending_proposals_store.locked_mutate
+    trzyma fcntl LOCK_EX na cały RMW (kolejność locków: lifecycle → pending). Guardy
+    tuż przed podmianą wymagają: wpis istnieje, nadal wskazuje proposed_cid i bieżący
+    status zlecenia == planned — inaczej skip. Fail-soft per akcja (tick nie pada).
     Provenance: entry.resweep_live {ts, old, new, delta_vs_now, reason} + marker
     row.live_action w jsonl. Zwraca liczbę wykonanych podmian."""
     from dispatch_v2 import pending_proposals_store as PPS
     from dispatch_v2 import shadow_dispatcher as _sd
+    from dispatch_v2 import state_machine as _sm
     acted = 0
     for row in rows:
         if not row.get("would_repropose"):
@@ -390,6 +392,18 @@ def _live_apply(rows: List[dict], ga_results: Dict[str, Any], now: datetime) -> 
             if str(cur) != str(row.get("proposed_cid")):
                 outcome["v"] = "skip_changed"     # inny pisarz podmienił propozycję
                 return
+            # Ostatni recheck pod OBU lockami. Snapshot z run_once może być już
+            # nieaktualny, jeśli panel przypisał zlecenie podczas liczenia sweepu.
+            try:
+                with open(ORDERS_STATE, encoding="utf-8") as f:
+                    orders_now = json.load(f)
+            except (OSError, ValueError, TypeError):
+                outcome["v"] = "skip_state_read_fail"  # fail-closed: bez podmiany
+                return
+            order_now = orders_now.get(oid) if isinstance(orders_now, dict) else None
+            if not isinstance(order_now, dict) or order_now.get("status") != "planned":
+                outcome["v"] = "skip_status_changed"
+                return
             entry["decision_record"] = serialized
             entry["resweep_live"] = provenance
             entry["expires_at"] = PPS.build_entry(serialized, now)["expires_at"]
@@ -399,7 +413,10 @@ def _live_apply(rows: List[dict], ga_results: Dict[str, Any], now: datetime) -> 
             # ścieżka JAWNIE z modułu w czasie wywołania (NIE default argumentu —
             # ten wiąże się przy definicji; near-miss 05.07: test z monkeypatchem
             # PENDING_PATH pisał w ŻYWY plik przez default; TOCTOU-guard obronił)
-            PPS.locked_mutate(_mut, PPS.PENDING_PATH)
+            # Każdy kanoniczny writer orders_state bierze lifecycle_apply_lock;
+            # utrzymanie go do końca pending-RMW zamyka okno assigned-after-recheck.
+            with _sm.lifecycle_apply_lock():
+                PPS.locked_mutate(_mut, PPS.PENDING_PATH)
         except Exception as e:  # noqa: BLE001
             _log.warning(f"K5 live mutate fail oid={oid}: {type(e).__name__}: {e}")
             row["live_action"] = "skip_io_fail"
@@ -467,10 +484,11 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
     _alloc_write = C.flag("ENABLE_GLOBAL_ALLOC_WRITE", False)
     # K5 LIVE (2026-07-05, Wariant A Adriana: konsola/1-klik, NIE Telegram):
     # bramka live_gate_open() konsultowana RAZ, WCZEŚNIE (loguje HOLD gdy geometria
-    # OFF — L6.C, nie do ominięcia); wyniki pełne (_ga_results) potrzebne też dla
-    # akcji live (serializacja decision_record dla pending/konsoli).
+    # OFF — L6.C, nie do ominięcia). Wyniki pełne (_ga_results) są również źródłem
+    # proposed_km w telemetrii shadow oraz serializacji akcji live; samo ich zachowanie
+    # nie uruchamia żadnej dodatkowej oceny ani akcji.
     _live_armed = bool(C.flag(FLAG_LIVE, False)) and live_gate_open()
-    _ga_results: Optional[Dict[str, Any]] = {} if (_alloc_write or _live_armed) else None
+    _ga_results: Dict[str, Any] = {}
     # INV-FEAS-NO-DOUBLE-BOOK: zbierz diagnostykę claim-ledger tego sweepu (licznik do jsonl).
     _ga_diag: Dict[str, Any] = {}
     allocation = global_allocate(hanging, fleet, now,
@@ -508,6 +526,9 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         prop = proposed[oid]
         prop_cid = prop["cid"]
         new_cid = a["cid"]
+        prop_cand = _cand_by_cid(_ga_results.get(oid), prop_cid)
+        prop_metrics = getattr(prop_cand, "metrics", None) or {}
+        prop_km = prop_metrics.get("km_to_pickup")
         prop_orig_score = prop["score"]            # score z chwili propozycji (info)
         new_score = a["score"]
         cand_scores = a.get("cand_scores") or {}
@@ -561,6 +582,7 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
             "would_repropose": would,
             "reason": reason,
             "no_courier": a.get("no_courier", False),
+            "proposed_km": round(float(prop_km), 2) if prop_km is not None else None,
             "new_km_to_pickup": round(a["km"], 2) if a.get("km") is not None else None,
             "new_r6_min": round(a["r6"], 1) if a.get("r6") is not None else None,
             "new_deliv_spread_km": round(a["spread"], 1) if a.get("spread") is not None else None,

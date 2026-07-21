@@ -120,7 +120,16 @@ def test_run_once_flag_off_noop(monkeypatch):
 
 def test_run_once_spread_fix(tmp_path, monkeypatch):
     # Ziomek (greedy) zaproponował A do WSZYSTKICH trzech — pile-on jednego kuriera
+    km_by_cid = {"A": 9.5, "B": 1.25, "C": 2.5}
+
+    def _assess_with_distinct_km(order_event, fleet, now):
+        result = _fake_assess(order_event, fleet, now)
+        for cand in result.candidates:
+            cand.metrics["km_to_pickup"] = km_by_cid[cand.courier_id]
+        return result
+
     out = _setup(tmp_path, monkeypatch, {"o1": "A", "o2": "A", "o3": "A"})
+    monkeypatch.setattr(PGR, "_assess", _assess_with_distinct_km)
     s = PGR.run_once(now=_N)
     assert s["hanging"] == 3
     assert s["maxpile_before"] == 3 and s["maxpile_after"] == 1
@@ -131,6 +140,10 @@ def test_run_once_spread_fix(tmp_path, monkeypatch):
     assert by["o1"]["would_repropose"] is False and by["o1"]["reason"] == "bez_zmian"
     assert by["o2"]["new_cid"] == "B" and by["o2"]["reason"] == "rozjazd_kierunkow"
     assert by["o3"]["new_cid"] == "C" and by["o3"]["would_repropose"] is True
+    # G5: dystans starego i nowego kuriera pochodzi z tej samej oceny; wartości
+    # są różne, więc test nie przejdzie po omyłkowym skopiowaniu new_km.
+    assert by["o2"]["proposed_km"] == km_by_cid["A"]
+    assert by["o2"]["new_km_to_pickup"] == km_by_cid["B"]
 
 
 def test_run_once_single_rerank_better_courier(tmp_path, monkeypatch):
