@@ -406,6 +406,13 @@ extension hard reject >60 min, graduated penalties 0/−10/−50/−100/−200 (
 **J. New-courier ramp** — `RAMP_DELIVERIES 30`, `RAMP_MAX_KM 2.5`, `RAMP_MALUS −20`,
 `SOLO_MALUS −60`; tiered new-courier advantage penalties −10/−30/−50 (`common.py:1788-1812`).
 
+**K. R-04 graduation telemetry** — `r04_evaluator` wylicza z 30-dniowych danych
+`tier_suggestions[courier_id]`; dla tieru `new` graduation wymaga jednocześnie ≥14 dni,
+≥50 peak deliveries i ≥5 peak active days. `shadow_dispatcher` serializuje ten wynik jako
+`r04` w obu bliźniakach (A: kandydat/alternatywa, B: best), zawsze po
+`Candidate.courier_id`. Pole ma `decision_effect=telemetry_only`; scoring/feasibility i
+osobny, bramkowany `r04_apply` pozostają poza tą ścieżką.
+
 ---
 
 ## 8. Business rules → code mapping
