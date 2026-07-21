@@ -1,6 +1,6 @@
 {
-  "base_sha": "cbc5bd77adea4855aad2513856b527a09ba56d04",
-  "manifest_version": 23,
+  "base_sha": "f3c880b30d712dab6d357bcfaae4f3d7e1a035a0",
+  "manifest_version": 24,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -5065,6 +5065,28 @@
     "tests/test_uwagi_address_parser.py::test_titlecase_uppercase_street",
     "tests/test_uwagi_address_parser.py::test_too_short_street_rejected",
     "tests/test_uwagi_address_parser.py::test_whitespace_only",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_off_byte_parity_with_legacy[Adam Chwiesko #45508 | NADAWCA: Adam Chwie\\u015bko tel 607169514 | Endogastrodent sp. z o.o., NIP 9662201067, Gajowa 29, 15-794 Bia\\u0142ystok, patolog@adamchwiesko.com | Odbiorca: Pani w Punkcie przyj\\u0119\\u0107 | Akademicki O\\u015brodek Diagnostyki Patomorfologicznej | oryg. adres: Waszyngtona 13 | Okno odbioru: 008:00 - 11:00 (nast\\u0119pny dzie\\u0144 roboczy)) | Paczek: 1-Gajowa-29]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_off_byte_parity_with_legacy[Bravilor Bonamat #45430 | NADAWCA: Krzysztof Jakoniuk tel 507602506 | Bravilor Bonamat Sp. z o.o., NIP 5342506604, Jacka Kuronia 2, 15-569 Bia\\u0142ystok, accountspayable-pl@bravilor.com | Odbiorca: Jowita Kruk | FBR Mazur i Partnerzy | oryg. adres: Bagienna 1 | Okno odbioru: 10:00 - 13:00 | Paczek: 1-Jacka Kuronia-2]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_off_byte_parity_with_legacy[Mali Wojownicy #45272 | NADAWCA: KUCHNIA KUCHNIA tel 000000000 | Przedszkole Niepubliczne Dzielne Zuchy, Mickiewicza 50, 15-000 Bia\\u0142ystok, mali.wojownicy@nadajesz.pl | Odbiorca: MALI WOJOWNICY MALI WOJOWNICY | MALI WOJOWNICY | oryg. adres: ul. Mickiewicza 43 budynek C | Okno odbioru: 10:00 - 11:00 | Okno doreczenia: Natychmiast - | Paczek: 1-Mickiewicza-50]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_off_byte_parity_with_legacy[Mali Wojownicy #45273 | NADAWCA: MALI WOJOWNICY MALI WOJOWNICY tel 000000000 | MALI WOJOWNICY, ul. Mickiewicza 43 budynek C, 15-000 Bia\\u0142ystok, mali.wojownicy@nadajesz.pl | Odbiorca: KUCHNIA KUCHNIA | Przedszkole Niepubliczne Dzielne Zuchy | oryg. adres: Mickiewicza 50 | Okno odbioru: 10:00 - 11:00 | Paczek: 1-Mickiewicza-43]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_off_byte_parity_with_legacy[Matka Polka Hybrydowa #45313 | NADAWCA: Pawe\\u0142 Pa\\u015bnikowski tel +48504153737 | UPMAKE Pawe\\u0142 Pa\\u015bnikowski, NIP 5422934638, Ul. Gen. Gustawa Orlicz-Dreszera 3 Lokal 1, 15-979 Bia\\u0142ystok, biuro@matkapolkahybrydowa.com | Odbiorca: SYLWIA GIBA | LABORATORIUM URODY SYLWIA GIBA | oryg. adres: Kardyna\\u0142a Stefana Wyszy\\u0144skiego 2/50 | Okno odbioru: 11:00 - 14:00 | Paczek: 1-Gen. Gustawa Orlicz-Dreszera-3]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_off_byte_parity_with_legacy[Nadzwyczajnie #45285 | NADAWCA: Nadzwyczajnie .pl tel 609345380 | Nadzwyczajnie, NIP 5423474966, Komunalna 5, 15-197 Bia\\u0142ystok, biuro@nadzwyczajnie.pl | Odbiorca: jolanta jankowska | oryg. adres: Jarz\\u0119binowa 12/45 | Okno odbioru: 11:00 - 14:00 | Paczek: 1-Komunalna-5]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_off_byte_parity_with_legacy[Street-Sport #45520 | NADAWCA: FLM SP.K tel 604 593 684 | FLM PAWE\\u0141 POTOCZEK TOMASZ POTOCZEK SP.K., NIP 5423039093, Boruty 17, 15-157 Bia\\u0142ystok, sklep@street-sport.pl | Odbiorca: FLM SP.K. | 7Kicks | oryg. adres: Kijowska 12 lok. U2 | Okno odbioru: 11:00 - 14:00 | Okno doreczenia: 12:00 - 15:00 | Paczek: 1-Boruty-17]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_on_parses_sender_address[Adam Chwiesko #45508 | NADAWCA: Adam Chwie\\u015bko tel 607169514 | Endogastrodent sp. z o.o., NIP 9662201067, Gajowa 29, 15-794 Bia\\u0142ystok, patolog@adamchwiesko.com | Odbiorca: Pani w Punkcie przyj\\u0119\\u0107 | Akademicki O\\u015brodek Diagnostyki Patomorfologicznej | oryg. adres: Waszyngtona 13 | Okno odbioru: 008:00 - 11:00 (nast\\u0119pny dzie\\u0144 roboczy)) | Paczek: 1-Gajowa-29]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_on_parses_sender_address[Bravilor Bonamat #45430 | NADAWCA: Krzysztof Jakoniuk tel 507602506 | Bravilor Bonamat Sp. z o.o., NIP 5342506604, Jacka Kuronia 2, 15-569 Bia\\u0142ystok, accountspayable-pl@bravilor.com | Odbiorca: Jowita Kruk | FBR Mazur i Partnerzy | oryg. adres: Bagienna 1 | Okno odbioru: 10:00 - 13:00 | Paczek: 1-Jacka Kuronia-2]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_on_parses_sender_address[Mali Wojownicy #45272 | NADAWCA: KUCHNIA KUCHNIA tel 000000000 | Przedszkole Niepubliczne Dzielne Zuchy, Mickiewicza 50, 15-000 Bia\\u0142ystok, mali.wojownicy@nadajesz.pl | Odbiorca: MALI WOJOWNICY MALI WOJOWNICY | MALI WOJOWNICY | oryg. adres: ul. Mickiewicza 43 budynek C | Okno odbioru: 10:00 - 11:00 | Okno doreczenia: Natychmiast - | Paczek: 1-Mickiewicza-50]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_on_parses_sender_address[Mali Wojownicy #45273 | NADAWCA: MALI WOJOWNICY MALI WOJOWNICY tel 000000000 | MALI WOJOWNICY, ul. Mickiewicza 43 budynek C, 15-000 Bia\\u0142ystok, mali.wojownicy@nadajesz.pl | Odbiorca: KUCHNIA KUCHNIA | Przedszkole Niepubliczne Dzielne Zuchy | oryg. adres: Mickiewicza 50 | Okno odbioru: 10:00 - 11:00 | Paczek: 1-Mickiewicza-43]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_on_parses_sender_address[Matka Polka Hybrydowa #45313 | NADAWCA: Pawe\\u0142 Pa\\u015bnikowski tel +48504153737 | UPMAKE Pawe\\u0142 Pa\\u015bnikowski, NIP 5422934638, Ul. Gen. Gustawa Orlicz-Dreszera 3 Lokal 1, 15-979 Bia\\u0142ystok, biuro@matkapolkahybrydowa.com | Odbiorca: SYLWIA GIBA | LABORATORIUM URODY SYLWIA GIBA | oryg. adres: Kardyna\\u0142a Stefana Wyszy\\u0144skiego 2/50 | Okno odbioru: 11:00 - 14:00 | Paczek: 1-Gen. Gustawa Orlicz-Dreszera-3]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_on_parses_sender_address[Nadzwyczajnie #45285 | NADAWCA: Nadzwyczajnie .pl tel 609345380 | Nadzwyczajnie, NIP 5423474966, Komunalna 5, 15-197 Bia\\u0142ystok, biuro@nadzwyczajnie.pl | Odbiorca: jolanta jankowska | oryg. adres: Jarz\\u0119binowa 12/45 | Okno odbioru: 11:00 - 14:00 | Paczek: 1-Komunalna-5]",
+    "tests/test_uwagi_bridge_nadawca.py::test_bridge_on_parses_sender_address[Street-Sport #45520 | NADAWCA: FLM SP.K tel 604 593 684 | FLM PAWE\\u0141 POTOCZEK TOMASZ POTOCZEK SP.K., NIP 5423039093, Boruty 17, 15-157 Bia\\u0142ystok, sklep@street-sport.pl | Odbiorca: FLM SP.K. | 7Kicks | oryg. adres: Kijowska 12 lok. U2 | Okno odbioru: 11:00 - 14:00 | Okno doreczenia: 12:00 - 15:00 | Paczek: 1-Boruty-17]",
+    "tests/test_uwagi_bridge_nadawca.py::test_company_extracted_for_display",
+    "tests/test_uwagi_bridge_nadawca.py::test_legacy_format_unaffected_by_flag_on",
+    "tests/test_uwagi_bridge_nadawca.py::test_non_bridge_p3_stays_none_with_flag_on[DOSTAWA DO 13: BIO ZDROWIE SP.Z.O.O.]",
+    "tests/test_uwagi_bridge_nadawca.py::test_non_bridge_p3_stays_none_with_flag_on[DOSTAWA: USK, Blok E, 1 pi\\u0119tro]",
+    "tests/test_uwagi_bridge_nadawca.py::test_non_bridge_p3_stays_none_with_flag_on[Dostawa 12-14, Uniwersytecki Dzieci\\u0119cy Szpital Kliniczny, 6 pi\\u0119tro, sekretariat]",
+    "tests/test_uwagi_bridge_nadawca.py::test_non_bridge_p3_stays_none_with_flag_on[Jedziesz do Galerii Jurowieckiej, pobierasz platnosc kart\\u0105 od klienta z rossmana.]",
+    "tests/test_uwagi_bridge_nadawca.py::test_oryg_adres_is_delivery_not_pickup",
+    "tests/test_uwagi_bridge_nadawca.py::test_stoplist_blocks_street_named_like_company",
     "tests/test_uwagi_defense_gates.py::test_assess_order_normal_flow_when_pickup_coords_valid",
     "tests/test_uwagi_defense_gates.py::test_assess_order_normal_flow_with_fallback_coords",
     "tests/test_uwagi_defense_gates.py::test_assess_order_skip_when_pickup_coords_none",
@@ -5653,7 +5675,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "e040bda3549ffda53d7ad2889ae45019f90fe75caee0d94e67e8c733e9f14cf7",
+  "nodeids_sha256": "672acb777f39084399a63c949474cd3f08f4f5627794907a119eeaaca4f835e8",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5769,7 +5791,7 @@
     ]
   },
   "owner": "Adrian",
-  "reason": "Nocna kolejka 21.07 cz.2: E1 outbox-sweeper OFF + RETURN/ASSIGNED cleanup pod receipt (9473d74d) + 3 fixy odbiorcze, suita 5622/0",
+  "reason": "P0 bridge-NADAWCA (uwagi mostu epaki) flaga OFF + 22 testy; suita 5644/0 (f3c880b3)",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-21T05:01:15+00:00"
+  "updated_at_utc": "2026-07-21T09:07:43+00:00"
 }
