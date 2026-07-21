@@ -69,6 +69,7 @@ def fake_emit_and_apply_state(
     state_payload=None,
     event_id,
     audit=False,
+    old_plan_release_authorized=None,
 ):
     """Mock calego durable chokepoint; prawdziwy outbox ma osobny golden C3."""
     event_created = event_id not in seen_event_keys
@@ -81,6 +82,7 @@ def fake_emit_and_apply_state(
         "event_id": event_id,
         "event_created": event_created,
         "audit": audit,
+        "old_plan_release_authorized": old_plan_release_authorized,
     })
     state_event = {
         "event_type": event_type,
