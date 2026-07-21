@@ -1,6 +1,6 @@
 # CODEMAP — spis treści repo `dispatch_v2` (Ziomek)
 
-**STATUS:** żywy · **Data:** 2026-07-18 (audyt parytetu docs↔repo; poprzednio 2026-07-10) · **Autor:** Agent H (Faza 2 audytu, krok K2.2; aktualizacja Sprint 2).
+**STATUS:** żywy · **Data:** 2026-07-21 (decision-time ETA log; audyt parytetu docs↔repo 2026-07-18) · **Autor:** Agent H + Codex.
 **Cel:** mapa do szybkiego czytania — nowa sesja NIE musi skanować repo. Numery linii celowo pominięte (dryfują — **grepuj symbol**, nie linię). Ścieżki relatywne od korzenia repo `dispatch_v2/`; `../` = sąsiad w `scripts/`; stan/logi/pamięć = ścieżki absolutne (poza repo).
 **Aktualizuj** gdy dochodzi/znika katalog lub kluczowy plik korzenia (patrz stopka). Kanon zachowania silnika = `ZIOMEK_ARCHITECTURE.md`; ten plik to TYLKO nawigacja.
 
@@ -52,6 +52,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 - `objm_lexr6.py` — selektor lex-helperów (bliźniak best-effort, canary `ENABLE_OBJM_LEXR6_SELECT`)
 - `sla_anchor.py` — kotwica SLA (bliźniak feasibility+route_sim)
 - `shadow_dispatcher.py` — **SILNIK**: pętla `_tick`/`run` (systemd `dispatch-shadow`); serializer `_serialize_result` → shadow log
+- `decision_eta_log.py` — wspólny, fail-safe writer snapshotów ETA dokładnie w chwili finalnej decyzji/commitu planu; flaga `ENABLE_DECISION_ETA_LOG` default OFF
 - `state_machine.py` — jedyne źródło prawdy o stanie zlecenia (upsert `orders_state`, 26 ścieżek); observer FSM Phase A log-only
 - `order_fsm.py` — formalny validator cyklu życia + jawne wyjątki reconcile; w Phase A nie blokuje writera
 - `plan_manager.py` — zapis/odczyt `courier_plans.json` (atomic); ładowanie planu
@@ -99,6 +100,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 | Formalny FSM / obserwacja przejść | `order_fsm.py` + hook w `state_machine.py`; Phase A `observer=True`, `enforcement=False`, wyjątki reconcile wymagają jawnego source |
 | Pozycje kurierów / no-GPS / last-known-pos | `courier_resolver.py` → `courier_last_pos.json` (workspace) |
 | ETA / kalibracja | `chain_eta.py`, `eta_calibration_logger.py`, `calib_maps.py`, `live_eta_cache.py` |
+| Decision-time ETA / dzienna coverage | `decision_eta_log.py` → `dispatch_state/decision_eta_log.jsonl`; bramka `tools/decision_eta_coverage.py` |
 | Czasówki | `czasowka_scheduler.py` + `czasowka_proactive/` |
 | Paczki (parcel lane) | `parcel_assign.py` + `parcel_lane_merge.py` |
 | **Flagi silnika** | `flags.json` (`/root/.openclaw/workspace/scripts/flags.json`, hot-reload) + `common.flag()` |

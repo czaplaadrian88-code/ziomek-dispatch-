@@ -1,0 +1,18 @@
+miejsce	rola	writer/consumer	dotknięte	powód	test/dowód
+dispatch_pipeline/core.candidates	producent pełnej ocenionej puli	writer PipelineResult.full_pool_candidates	TAK pośrednio	logger konsumuje pulę sprzed top-N	test_flag_off_is_inert_and_on_writes_full_pool
+core/selection.py	kanon best_effort i selekcji	writer PipelineResult.best	N-D	wynik zawsze przechodzi przez finalne call-site'y; drugi writer dublowałby rekord	test_contract_registry_rotation_and_source_hooks
+objm_lexr6.py	bliźniak selekcji	consumer/selector	N-D	wybór materializuje się w tym samym PipelineResult co best_effort	cluster selekcji przez istniejące regresje
+shadow_dispatcher._tick	finalna decyzja głównego dispatchu	writer decision_eta_log	TAK	po finalnym PipelineResult i claim disposition; event_id daje join	coverage reader + source-hook test
+czasowka_scheduler.eval_czasowka	finalny werdykt czasówki	writer decision_eta_log	TAK	po FORCE/WAIT/KOORD; zapisuje istniejącą pulę proaktywną bez zmiany kontraktu selektora	testy czasówki + source-hook
+tools/reassignment_forward_shadow.evaluate_order	finalny werdykt przerzutu	writer decision_eta_log	TAK	loguje KEEP/REASSIGN i faktycznie wybrany CID	testy reassignment + source-hook
+tools/pending_global_resweep.run_once	finalna globalna alokacja	writer decision_eta_log	TAK	wyłącznie _ga_results po ostatniej rundzie; nie kontrfakty pośrednie	testy resweep + source-hook
+plan_manager.save_plan	commit-point planu	writer decision_eta_log	TAK	po udanym atomic write/CAS, poza lockiem; per order pickup+delivery ETA	test_plan_commit_writes_one_snapshot_per_order
+panel_watcher._save_plan_on_assign	plan po przypisaniu	consumer plan_manager	TAK pośrednio	każdy udany zapis przechodzi przez save_plan	source-hook plan_manager
+plan_recheck recanon/retime	zmiana planu	consumer plan_manager	TAK pośrednio	każdy udany zapis przechodzi przez save_plan	source-hook plan_manager
+panel manual override bez planu	zewnętrzny wybór człowieka	brak predykcyjnego writera	N-D	nie powstaje ETA/pula modelu; wcześniejsza propozycja ma własny snapshot shadow	jawna luka semantyczna, nie wolno fabrykować ETA
+parcel_assign.py	ręczny przydział paczki	writer lifecycle	N-D	przyjmuje CID od operatora i nie liczy ETA ani puli; ewentualny późniejszy plan pokrywa save_plan	inspekcja source
+pre-geocode/early skip	brak wykonalnej decyzji predykcyjnej	brak PipelineResult	N-D	brak ocenionej puli/per-leg ETA; coverage shadow ujawni każdy kanoniczny event bez snapshotu	coverage denominator=shadow ledger
+decision_eta_log.py	kanoniczny writer	append-only producer	TAK	flag gate przed budową; fail-safe counter; brak PII/GPS coords	testy ON!=OFF, error swallowed, privacy
+tools/decision_eta_coverage.py	dzienna bramka	reader/validator	TAK	unikalny event_id shadow jest denominatorem; n=0 => HOLD	test_daily_coverage_uses_unique_shadow_decisions_as_denominator
+core/jsonl_rotation.py + logrotate	retencja/rozmiar	consumer namespace	TAK	daily, rotate 30, maxsize 100M; wspólny append-lock	test_contract_registry_rotation_and_source_hooks
+common.py + lifecycle registry	flaga i fingerprint	writer/consumer	TAK	ETAP4, literal default False, brak zmiany flags.json	flag_lifecycle_check + test registry

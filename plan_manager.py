@@ -343,7 +343,15 @@ def save_plan(
         }
         plans[cid] = saved
         _write_raw(plans)
-        return saved
+    # Commit-point telemetry stays outside the plan lock. The write is already
+    # durable/visible; logger failure must never turn a successful CAS into an
+    # apparent plan failure or lengthen the critical section.
+    try:
+        from dispatch_v2 import decision_eta_log as _dtlog
+        _dtlog.record_plan_commit(cid, saved)
+    except Exception as exc:  # defense-in-depth: log-only path
+        _log.warning("decision ETA plan hook fail-safe cid=%s: %s", cid, exc)
+    return saved
 
 
 def invalidate_plan(

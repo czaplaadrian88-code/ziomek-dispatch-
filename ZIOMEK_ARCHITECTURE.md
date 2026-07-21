@@ -31,6 +31,14 @@ Zlecenie przechodzi przez 10 warstw. HARD (nieprzekraczalne) przed SOFT (kary), 
 **Poza tickiem:** `plan_recheck` (timer 5min, re-sekwencja), `panel_watcher`/recanon (4 handlery assign/deliver/pickup/cancel), most paczki, cross-repo `nadajesz_clone/panel` + `courier_api` + `courier-app`.
 ⚠ **Reguła żyje CZĘSTO w kilku z tych warstw naraz** (feasibility↔greedy↔plan_recheck; silnik↔konsola↔apka). To jest źródło K1 — patrz §4 rejestr bliźniaków.
 
+**Decision-time ETA (SOURCE-ONLY 21.07):** `decision_eta_log.py` jest wyłącznie
+powłoką efektu po finalnym `PipelineResult` albo udanym CAS `save_plan`. Przy
+fladze default OFF nie buduje rekordu ani nie wykonuje I/O; przy ON zapisuje
+append-only snapshot wybranego CID i ocenionej puli do
+`dispatch_state/decision_eta_log.jsonl`. Nie jest wejściem feasibility, scoringu,
+selekcji ani renderu. Coverage względem kanonicznego ledgeru mierzy
+`tools/decision_eta_coverage.py`; flip wymaga osobnego ACK ownera.
+
 ---
 
 ## 2. 6 FILARÓW stanu docelowego (jak MA być zbudowany — wzorzec dojrzałych dispatcherów)
@@ -87,6 +95,10 @@ Pełne mapy: `FAZA1_01_mapa_antywzorcow.md` (rooty), `backing/A6_twin_import_gra
 - **Intencja/reguły biznesowe:** najnowszy Owner Decision Record + `memory/ZIOMEK_REGULY_KANON.md`. `common.py`, `feasibility_v2.py`, scoring i pipeline są dowodem implementacji na konkretnym SHA, nie źródłem intencji.
 - **Stan flag EFEKTYWNY:** NIE flags.json ani env-default — `flag_registry.py` (3 warstwy: common.py default ↔ systemd drop-iny ↔ flags.json hot-reload). Serwisy różne = env różny (`dispatch-shadow` ≠ `dispatch-plan-recheck` ≠ `dispatch-panel-watcher`).
 - **Stan zleceń/planów:** `dispatch_state/orders_state.json`, `courier_plans.json` (atomic + fcntl).
+- **Snapshot predykcji as-of decyzja:** `dispatch_state/decision_eta_log.jsonl`
+  przez jeden writer `decision_eta_log.py`; źródła finalne: shadow selection,
+  czasówka, reassignment, global resweep i commit planu. Brak rekordu = brak
+  dowodu, nigdy zgoda na użycie późniejszej predykcji.
 - **Prawda przyrządów:** `FAZA1_03_rejestr_przyrzadow.md` (validated/void/untested) — **czemu ufać przy flipie**.
 - **Prawda fizyczna (ground-truth):** od ODR-001 dokładny event musi mieć wersjonowane provenance i fail-closed gate per event/source/cohort. `last_inside`/`picked_up_at`/`delivered_at`/arrival/click są nazwanymi observable/proxy; żaden nie staje się automatycznie physical possession lub customer handoff.
 - **Execution authority:** ODR-002 jest źródłem intencji governance. Wzrost authority wymaga jawnej decyzji właściciela, evidence bundle z hashem, niezależnej weryfikacji, owner-only approval/podpisu i deterministycznego zastosowania. Runtime ma walidować bieżącą podpisaną kartę przed każdym wykonaniem; brak lub błąd karty/wersji/podpisu/danych → `recommend-only` albo `HOLD`. Do czasu wdrożenia tej ścieżki obowiązuje bardziej restrykcyjny istniejący stan per klasa; żaden dokument opisowy nie daje execute.

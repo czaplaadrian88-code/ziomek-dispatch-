@@ -1,5 +1,11 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **KANDYDAT 2026-07-21 — DECISION-TIME ETA LOG:** source-only, flaga
+> `ENABLE_DECISION_ETA_LOG` default OFF. Wspólny fail-safe writer pokrywa finalną
+> selekcję shadow (best_effort/objm), czasówki, reassignment, global resweep oraz
+> udany commit planu; reader liczy dzienną coverage względem ledgeru decyzji.
+> Produkcyjny klucz/flip, deploy i restart nadal HOLD do osobnego ACK ownera.
+
 > **KANDYDAT 2026-07-21 — RESWEEP LIVE HARDENING:** source-only recheck
 > `status==planned` pod lockami lifecycle→pending oraz `proposed_km` w shadow JSONL.
 > `PENDING_RESWEEP_LIVE` nietknięta; merge/48h G5/flip/deploy/restart nadal HOLD.

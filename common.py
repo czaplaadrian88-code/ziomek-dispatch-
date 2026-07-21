@@ -230,6 +230,10 @@ ETAP4_DECISION_FLAGS = (
     # CHOICE-SET (2026-07-21): pełna oceniona pula w shadow_decisions jako
     # sześciopolowy full_pool_compact. Wyłącznie obserwacja; default OFF.
     "ENABLE_FULL_CHOICE_SET_LOG",
+    # DECISION-TIME ETA (2026-07-21): osobny append-only log snapshotów ETA
+    # wybranego kuriera i puli w chwili decyzji/commitu planu. Log-only,
+    # wszystkie wyjątki fail-safe; brak klucza flags.json = OFF.
+    "ENABLE_DECISION_ETA_LOG",
     # JOIN-HARDENING (2026-07-21): PANEL_AGREE/OVERRIDE wiąże learning_log
     # z event_id źródłowej decyzji shadow. Osobna flaga, bo świeży E1 używał
     # tej samej nazwy pola dla ID późniejszego COURIER_ASSIGNED.
@@ -606,6 +610,7 @@ ENABLE_MODE_LAYER_SHADOW = False
 # CHOICE-SET/JOIN-HARDENING: bezpieczne fallbacki OFF. Kanon po ewentualnym
 # flipie = flags.json przez decision_flag(); brak module-level odczytu env.
 ENABLE_FULL_CHOICE_SET_LOG = False
+ENABLE_DECISION_ETA_LOG = False
 ENABLE_LEARNING_LOG_DECISION_JOIN = False
 ETA_FABRICATION_FLOOR_MIN = 60.0     # T=60: E-1 łapie 100% fabrykacji (>90 gubi połowę)
 ETA_FABRICATION_RATIO = 2.5          # pred>2,5×robust_ref (komponent ratio Opusa vs FP kryzysu)

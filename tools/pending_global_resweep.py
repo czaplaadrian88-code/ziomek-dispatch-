@@ -621,6 +621,34 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         except Exception as e:  # noqa: BLE001 — live nigdy nie wywala shadow-ticka
             _log.warning(f"K5 live apply fail-soft: {type(e).__name__}: {e}")
 
+    # Final allocation results only (not intermediate counterfactual rounds).
+    # This keeps one decision-time ETA snapshot per order in the sweep.
+    if _ga_results:
+        _rows_by_oid = {str(row.get("order_id")): row for row in rows}
+        try:
+            from dispatch_v2 import decision_eta_log as _dtlog
+            for _oid, _res in _ga_results.items():
+                _row = _rows_by_oid.get(str(_oid), {})
+                _live_action = _row.get("live_action")
+                _dtlog.record_pipeline_decision(
+                    _res,
+                    decision_id=f"pending_global_resweep:{_oid}:{now.isoformat()}",
+                    decision_ts=now,
+                    decision_kind="global_resweep_allocation",
+                    source="pending_global_resweep",
+                    outcome=(
+                        str(_live_action)
+                        if _live_action else "SHADOW_ALLOCATION"
+                    ),
+                    selected_cid=(
+                        str(_row.get("new_cid"))
+                        if _row.get("new_cid") not in (None, "") else None
+                    ),
+                    context={"live_armed": bool(_live_armed)},
+                )
+        except Exception as exc:  # defense-in-depth: log-only path
+            _log.warning("decision ETA resweep hook fail-safe: %s", exc)
+
     _append_jsonl(rows)
 
     # Faza C (2026-06-27): dedykowany kanał globalnej alokacji DLA KONSOLI.

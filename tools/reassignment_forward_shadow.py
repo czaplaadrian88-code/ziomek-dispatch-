@@ -398,6 +398,23 @@ def evaluate_order(rec: dict, holder_cid: str, fleet: Dict[str, Any],
             getattr(cs_b, "pos_source", None) if cs_b is not None else None,
             holder_cid, b_cid, b_bag=b_bag,
             a_in_fleet=(cs_a is not None)))
+    try:
+        from dispatch_v2 import decision_eta_log as _dtlog
+        _dtlog.record_pipeline_decision(
+            res,
+            decision_id=f"reassignment_forward:{oid}:{now.isoformat()}",
+            decision_ts=now,
+            decision_kind="reassignment_evaluation",
+            source="reassignment_forward_shadow",
+            outcome="REASSIGN" if would else "KEEP_HOLDER",
+            selected_cid=b_cid if would else str(holder_cid),
+            context={
+                "holder_cid": str(holder_cid),
+                "score_margin": round(delta, 2) if delta is not None else None,
+            },
+        )
+    except Exception as exc:  # defense-in-depth: log-only path
+        _log.warning("decision ETA reassignment hook fail-safe oid=%s: %s", oid, exc)
     return rec_out
 
 
