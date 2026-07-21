@@ -11,10 +11,14 @@
   konfliktów jest pusta.
 - Semantyka obu stron pozostała obecna: upstreamowe guardy resweep
   (`status == planned` sprawdzany pod lockiem oraz telemetria
-  `proposed_km/r6/spread`) i manifest v26 są zachowane, a komplet 23 ścieżek
+  `proposed_km/r6/spread`) i manifest v26 są zachowane, a komplet 24 ścieżek
   reclaimu znajduje się w wyniku scalenia.
-- Pełna suita, wynik samo-recenzji i finalny SHA/bundle są dopisywane po
-  zamrożeniu wyniku integracji.
+- Konflikt semantyczny wykryty przez pełną suitę, choć nie przez Git:
+  `test_event_bus_audit_log` miał dokładny, stary allowlist typów audit-only.
+  Dopisano `ORDER_RECLAIMED_TO_CZASOWKA`; komentarz event bus skorygowano tak,
+  by nie zaprzeczał istnieniu uśpionego state-handlera. Klaster po poprawce:
+  `53 passed`.
+- Po tej korekcie wynik integracji obejmuje 24 zmienione ścieżki.
 
 ## Zakres i decyzja
 
@@ -45,9 +49,11 @@
    brak heurystyki autora.
 5. Osobny JSONL zawiera oid/cid, old/new/delta, oba progi, komplet guardów,
    rejection reason, firmowe/paczkę i pełną przyszłą akcję. Reader/CLI agreguje
-   `would_reclaim` idempotentnie per `(oid,generacja)`. Stub LIVE ma stabilne
-   ID tej samej intencji; state event atomowo zapisuje `planned`, `26`, previous
-   CID, generation, reclaimed_at i reason. Brak producenta/callera LIVE.
+   `would_reclaim` idempotentnie per `(oid,generacja)`. Kontrakt LIVE ma stabilne
+   ID tej samej intencji; uśpiony state-handler atomowo zapisuje `planned`, `26`,
+   previous CID, generation, reclaimed_at i reason. Brak producenta/callera
+   LIVE oraz wymaganych writerów gastro/planu — sam handler nie jest kompletnym
+   wdrożeniem.
    `LIVE_DOWNSTREAM_REQUIREMENTS` projektuje: lock+CAS, staged/live gastro z
    zachowaniem pickup, read-back przed retry, plan release+plan_version CAS,
    pending `locked_pop`, rekey legacy+proactive, limit/circuit breaker.
@@ -68,7 +74,7 @@
 | `state_machine` NEW/ASSIGNED | granica pól | writer | TAK | default exemption; assignment generation+pickup snapshot | assignment test |
 | `lifecycle_downstream` | efekt po state | consumer | TAK | wyłącznie idempotentny SHADOW JSONL | wiring test |
 | `czasowka_reclaim.py` + report | oracle/metryka | consumer+writer | TAK | pełne guardy, JSONL, distinct generation | 21 testów |
-| `event_bus`/`order_fsm`/`event_effect_status`/handler | stub eventu LIVE | twins | TAK | allowlist + legal edge + CAS/no-op OFF | dormant event test |
+| `event_bus`/`order_fsm`/`event_effect_status`/handler | uśpiony event LIVE | twins | TAK | allowlist + legal edge + CAS/no-op OFF; handler zapisuje state po autoryzacji | dormant event test |
 | JSONL appender/rotation/logrotate | trwałość logu | boundary | TAK | append-once + rotacje/reporter | MP11 cluster |
 | firmowe i paczki | decyzja scope | consumers | TAK | wykluczone z future LIVE, osobne liczniki | metric test |
 | `plan_recheck` | active bag/R6 | consumer stanu | N-D | SHADOW nie zmienia state; LIVE CAS/release w osobnej karcie | kod: ACTIVE assigned/picked |
@@ -93,9 +99,11 @@ centralizacją stałej albo źródłem eventu; SHADOW nie zmienia decyzji/planu)
 
 ## ETAP 0–7 i testy
 
-- E0: clone był czysty; base/branch/worktree sprawdzone. Host runtime i kanoniczny
-  venv są niedostępne w sandboxie. Baseline hermetyczny: `121 passed`; osobny
-  runner authority: `24 passed`.
+- E0: clone był czysty; base/branch/worktree sprawdzone. Master live odczytano
+  bez mutacji jako `95fff2e4`, a baseline ownera to `5691/0`, manifest v26.
+  Kanoniczny venv jest niedostępny w sandboxie (`Permission denied`), dlatego
+  pełną listę testów uruchomiono na identycznym zastępczym runnerze dla base i
+  merge; ten runner nie jest oracle surowej zieloności.
 - E1–E2: root cause = brak reakcji durable po legalnej zmianie pickup; HARD
   state/causality poprzedza eligibility i metrykę.
 - E3: mapa powyżej. Nie zmieniono sygnatur publicznych; grep fake'ów N-D.
@@ -108,35 +116,72 @@ centralizacją stałej albo źródłem eventu; SHADOW nie zmienia decyzji/planu)
   generacji nie zwiększa `would_reclaim`. To pozytywny efekt celu SHADOW;
   decyzja/state pozostają identyczne. Flaga pozostaje OFF; wymagane okno
   obserwacji po ewentualnym flipie SHADOW: >=2 dni, potem karta częstości/FP.
-- E6: brak merge/deploy/restart/flag flip; pełna suita i operacje live należą
-  do CTO zgodnie ze zleceniem.
+- E6: brak merge do live/deploy/restart/flag flip. Branch integracyjny powstał
+  tylko w temp-git klonu. Manifestu nie re-seedowano ręcznie: v26 ma dokładnie
+  21 unexpected nodeidów i bez zielonego kanonicznego runu bezpieczny driver
+  słusznie nie może utworzyć v27.
 - E7: rollback: oba klucze `false`/brak; następnie `git revert <commit>` z
   bundle i ponowny test klastra. Brak migracji danych, restartu ani rollbacku
   danych.
 
-Wyniki po zmianie (system Python + hermetyczny PYTHONPATH, bez OR-Tools):
+## Pełna suita i delta względem v26
 
-- reclaim + FSM + return seam: `142 passed`;
-- durable C3: `143 passed`;
-- JSONL: `39 passed, 1 skipped`;
-- scheduler/classifier/gates: `83 passed, 1 deselected`; wyłączony test
-  subprocessu potwierdzony ręcznie `False|24|10` (sandbox blokuje jego
-  hard-coded `/root/.openclaw/.../logs`);
-- pickup detection: `14/14`; reclaim: `21/21`;
-- flag checker `ok=true`, 0 errors. Temp re-seed `--merge` przerwano bez zmian
-  po długim skanie; rejestr zwalidował checker.
+Oba przebiegi: pełne `tests/`, ten sam symlink-pkgroot/sitecustomize,
+`HERMETIC_STRICT=1`, ten sam zastępczy interpreter i zależności:
 
-Regresja klastra: `475 passed, 0 failed, 1 skipped` (+1 test subprocessu
-sprawdzony równoważnym hermetycznym importem; w pliku pytest deselected).
-To nie jest pełna suita: kanoniczny venv jest niedostępny w sandboxie, a pełną
-suitę owner jawnie przydzielił CTO przed merge.
+- czysty `95fff2e4`: `5339 passed, 225 failed, 114 skipped, 9 xfailed,
+  39 errors`; collect `5722`;
+- merge po korekcie: `5360 passed, 225 failed, 114 skipped, 9 xfailed,
+  39 errors`; collect `5743`;
+- delta: **+21 passed, +0 failed, +0 errors, +0 skip/xfail**;
+- porównanie JUnit: oba mają ten sam dokładny zbiór 264 nodeidów fail/error;
+  `new_bad=[]`, `resolved_bad=[]`. Wszystkie 21 nowych nodeidów są zielone.
 
-Linie wejściowe mechanicznej bramki (zakres pozostaje jawnie klastrowy):
+Surowe 225/39 po obu stronach wynika z ograniczonego runnera (m.in. OR-Tools,
+hard-coded host paths i parser live) i nie obala ani nie zastępuje właścicielskiego
+baseline `5691/0`. Kanoniczny zielony run oraz bezpieczny re-seed manifestu v27
+pozostają obowiązkową bramką CTO. Dodatkowo: event bus + reclaim + oba resweepy
+`53/0`; append-once/dedupe/rotacja `5/0`; flag lifecycle `0` błędów.
+Mechaniczny `ziomek-cto dod` potwierdził flagi, bliźniaki, E2E, wpływ i rollback,
+ale zakończył się `FAIL` na bramce pełnej regresji, ponieważ dostępny przebieg
+nie ma surowego `0 failed`. Nie jest to zamieniane po cichu w PASS na podstawie
+samej delty.
 
-regresja: klaster 475 passed, 0 failed, 1 skipped; pełna suita = CTO przed merge
+## Adwersaryjna samo-recenzja
+
+- **Wyścigi/resweep:** SHADOW ocenia aktualny stan po durable state apply i
+  fail-closed sprawdza status, CID, assignment generation, pickup oraz picked-up.
+  `_live_apply` resweepa trzyma ten sam lifecycle lock i pod lockiem wymaga
+  `status == planned`; z SHADOW (`assigned`) nie ma wspólnego writera. Nie udało
+  się obalić ochrony tego wyścigu.
+- **Podwójne odzyskanie:** dokładny lifecycle event deduplikuje flockowany
+  `append_jsonl_once`, a agregat deduplikuje po `(oid, assignment_event_id)`;
+  równoległość i rotacje przeszły probe `5/0`. Nie znaleziono double-countu.
+- **BLOCKER — izolacja awarii:** kontrolowany `OSError` zapisu SHADOW propaguje
+  z `lifecycle_downstream.apply`; istniejąca invalidacja planu nie wykonuje się
+  (`plan_invalidations=0`), a receipt/FIFO zostaje pending. Flaga SHADOW ON może
+  więc zmienić zachowanie produkcyjne podczas awarii dysku/logu.
+- **BLOCKER — obserwowalność:** rekord trafia wyłącznie do osobnego
+  `czasowka_reclaim_shadow.jsonl`. Brak wpisu/joinu w `shadow_decisions.jsonl`,
+  dashboardu, alertu i korelacji z wynikiem decyzji; sam licznik nie domyka
+  łańcucha metryki.
+- **BLOCKER — hold:** `reclaim_exempt` jest persistowany, ale grep nie wykazał
+  żadnego produkcyjnego writera ustawiającego manual hold. Guard jest obecnie
+  interfejsem bez źródła i nie chroni realnych korekt operatora.
+- **Ograniczenie carried/committed:** rekord chroni bieżący picked-up/status i
+  committed pickup samego zlecenia, lecz nie rejestruje worka/planu kuriera ani
+  wpływu odebrania pickup stopu na carried oraz inne committed pickupy. Metryka
+  `would_reclaim` nie jest sama dowodem bezpieczeństwa LIVE.
+- **LIVE:** brak producenta/callera, ale autoryzowany event uruchamia realny
+  state-writer `assigned -> planned/CID26`; opisy „brak konsumenta write” były
+  fałszywe i zostały skorygowane. Brak gastro/plan cleanup nadal blokuje LIVE.
+
+Werdykt niezależny: **HOLD dla merge as-is i HOLD dla flipu SHADOW**. Przed
+decyzją CTO/ownera wymagane są: zielony kanoniczny run + manifest v27, izolacja
+awarii metryki od lifecycle FIFO, rzeczywisty writer hold oraz domknięta
+obserwowalność/join. LIVE pozostaje osobnym etapem wymagającym karty i ACK.
+
+regresja: pełna delta vs identyczny v26 = +21 passed, 0 nowych failed/error/skip/xfail; kanoniczny zielony run niedostępny
 e2e: durable PICKUP_TIME_UPDATED -> state -> crash downstream -> recovery tylko unresolved -> receipt applied
-pozytywny-wplyw: ON zapisuje deduplikowany would_reclaim, OFF ma zero I/O i oba tryby nie zmieniają decyzji/state
-rollback: flagi=false/brak kluczy, git revert commitu z bundle; brak migracji danych i restartu
-
-Pełna suita, merge, ewentualny flip SHADOW i restart: CTO. LIVE pozostaje
-oddzielnym etapem wymagającym karty i ACK ownera.
+pozytywny-wplyw: ON zapisuje deduplikowany would_reclaim, OFF ma zero I/O; samo-recenzja wykryła blokujące skutki awarii ON
+rollback: flagi=false/brak kluczy, git revert finalnego commitu z bundle; brak migracji danych, deployu i restartu

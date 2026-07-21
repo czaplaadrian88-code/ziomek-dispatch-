@@ -45,7 +45,7 @@ EVENT_TYPES = {
     "ORDER_RETURNED_TO_POOL",
     "ORDER_RESURRECTED",
     # Czasowka reclaim: w etapie 21.07 tylko ciemny kontrakt eventu. Brak
-    # producenta/konsumenta LIVE; state handler wymaga osobnej flagi OFF.
+    # producenta LIVE; bezposredni state handler wymaga osobnej flagi OFF.
     "ORDER_RECLAIMED_TO_CZASOWKA",
     "KOORDYNATOR_DEADLINE",
     "GPS_STALE",

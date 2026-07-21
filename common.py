@@ -562,8 +562,8 @@ ETAP4_DECISION_FLAGS = (
     # Default OFF = dotychczasowy CK_PASSIVE_SUPPRESSED bajt-w-bajt.
     "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH",
     # CZASOWKA-RECLAIM (owner 2026-07-21): dwa rozdzielne etapy. SHADOW
-    # wyłącznie mierzy durable PICKUP_TIME_UPDATED po zapisie state; LIVE jest
-    # ciemnym kontraktem eventu i nie ma uzbrojonego call-site'u ani writera.
+    # wyłącznie mierzy durable PICKUP_TIME_UPDATED po zapisie state; LIVE ma
+    # uśpiony state-handler, ale nie ma uzbrojonego producenta ani call-site'u.
     "ENABLE_CZASOWKA_RECLAIM_SHADOW",
     "ENABLE_CZASOWKA_RECLAIM_LIVE",
 )
@@ -593,7 +593,8 @@ STATE_OUTBOX_SWEEPER_MIN_AGE_S = 30.0
 # flags.json/decision_flag. Rollback hot: klucz false albo brak klucza.
 ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH = False
 # CZASOWKA-RECLAIM: oba fallbacki OFF. Shadow nie zmienia state/planu/gastro;
-# LIVE pozostaje nieuzbrojonym stubem do osobnej karty i ACK ownera.
+# LIVE pozostaje nieuzbrojony (brak producenta/call-site'u); jego state-handler
+# nie jest kompletnym downstreamem i wymaga osobnej karty oraz ACK ownera.
 ENABLE_CZASOWKA_RECLAIM_SHADOW = False
 ENABLE_CZASOWKA_RECLAIM_LIVE = False
 # W0.2 advisory (roadmapa 08, werdykt E-1 „GO hybryda"): bezpiecznik fabrykacji ETA.

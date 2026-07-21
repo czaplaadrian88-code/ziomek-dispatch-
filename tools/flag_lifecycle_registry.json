@@ -4896,7 +4896,7 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "ENABLE_CZASOWKA_RECLAIM_LIVE",
-   "notes": "Nieuzbrojony kontrakt eventu ORDER_RECLAIMED_TO_CZASOWKA. Brak producenta/callera i brak write do gastro; aktywacja wymaga osobnej karty oraz ACK ownera.",
+   "notes": "Nieuzbrojony kontrakt eventu ORDER_RECLAIMED_TO_CZASOWKA. Istnieje uśpiony state-handler, ale brak producenta/callera oraz writerów gastro/planu; aktywacja wymaga osobnej karty oraz ACK ownera.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-panel-watcher.service + dispatch-shadow.service"
