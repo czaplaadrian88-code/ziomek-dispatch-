@@ -3596,6 +3596,46 @@
     "engine"
    ]
   },
+  "ENABLE_BEST_EFFORT_ESC_TRUSTED_ETA": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/eta_trust.py",
+    "dispatch_v2/shadow_dispatcher.py",
+    "dispatch_v2/tools/best_effort_escalation_report.py"
+   ],
+   "curated_at": "2026-07-21",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_BEST_EFFORT_ESC_TRUSTED_ETA",
+   "notes": "OWNER 19.07 + GO 21.07: LOG-ONLY Tier 2 ma 90 min tylko dla znanej niesyntetycznej pozycji, pokrycia eta_calib per kurier i swiezego bledu delivery <=8 min; brak dowodu fail-closed do 30 min. OFF zachowuje bezwarunkowy prog BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN. Zalezy od ENABLE_BEST_EFFORT_OBJM_SHADOW.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po minimum 2 dniach cienia: flip/retire za ACK ownera",
+   "review_date": "2026-08-21",
+   "rollback": "flags.json: klucz false lub brak klucza (hot-reload, bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_BEST_EFFORT_FASTEST_PICKUP_SHADOW": {
    "carriers": [
     "flags.json",

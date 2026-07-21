@@ -35,6 +35,7 @@ from dispatch_v2.osrm_client import haversine
 # s_dystans do przeliczenia neutralnego komponentu dystansu. Bez cyklu:
 # courier_resolver/scoring nie importują dispatch_pipeline na module-level.
 from dispatch_v2.courier_resolver import POSITION_UNKNOWN_SOURCES
+from dispatch_v2 import eta_trust as _eta_trust
 from dispatch_v2 import scoring as _scoring_nn
 from dispatch_v2.bag_state import build_courier_bag_state
 from dispatch_v2.fleet_context import build_fleet_context, FleetContext
@@ -1203,13 +1204,16 @@ def _best_effort_objm_pick(with_plan, new_oid, cap_min=40.0):
         return None
 
 
-def _best_effort_objm_shadow(with_plan, live_best, new_oid, cap_min=40.0) -> None:
+def _best_effort_objm_shadow(
+    with_plan, live_best, new_oid, cap_min=40.0, now=None,
+) -> None:
     """SHADOW (2026-06-23): co BY wybrała selekcja best_effort, gdyby PRIMARY był carry-inclusive
     objm_r6_breach_max_min (mirror _objm_lexr6_shadow._lex_qual) zamiast new-pickup-only
     r6_per_order_violations (ślepego na carry-ordery — case #482817). LOG-ONLY: pisze TYLKO
-    live_best.metrics['best_effort_objm_*'] (prefix auto-serializowany w shadow_dispatcher),
-    NIGDY nie mutuje with_plan/best/werdyktu. Faithful (sticky-aware) — liczy na DOKŁADNIE tych
-    planach co realna selekcja. Defensywny (Lekcja #83: try/except, fail-open, zero raise).
+    live_best.metrics['best_effort_objm_*'] oraz — wyłącznie za osobną flagą — addytywne
+    ``eta_trust_*`` każdego kandydata (auto-serializacja A+B w shadow_dispatcher). NIGDY nie
+    mutuje planu/score/feasibility/best/werdyktu. Faithful (sticky-aware) — liczy na DOKŁADNIE
+    tych planach co realna selekcja. Defensywny (Lekcja #83: try/except, zero raise).
 
     BEZPIECZNIK nowego zlecenia (cap_min, 2026-06-23): rekomendacja (pola bez sufiksu raw) =
     carry-min ALE tylko wśród kandydatów z new-order bag <= cap_min (max ~5 min ponad R6=35);
@@ -1259,8 +1263,33 @@ def _best_effort_objm_shadow(with_plan, live_best, new_oid, cap_min=40.0) -> Non
             return float(v) if isinstance(v, (int, float)) else None
         _t2 = min(with_plan, key=lambda c: (_free_at(c) if _free_at(c) is not None else 9e9))
         _t2_free = _free_at(_t2)
+        _trust_on = C.decision_flag("ENABLE_BEST_EFFORT_ESC_TRUSTED_ETA")
+        if _trust_on:
+            try:
+                _trust_evidence = _eta_trust.load_eta_trust_evidence()
+            except Exception as _trust_load_err:  # fail-closed: 30, nigdy 90
+                _trust_evidence = _eta_trust.unavailable_evidence(
+                    "loader_error:" + type(_trust_load_err).__name__
+                )
+            _trust_now = now or datetime.now(timezone.utc)
+            for _trust_c in with_plan:
+                _trust_m = getattr(_trust_c, "metrics", None)
+                if not isinstance(_trust_m, dict):
+                    continue
+                _trust_m.update(_eta_trust.eta_trust_metrics(
+                    getattr(_trust_c, "courier_id", None),
+                    _trust_m,
+                    _trust_evidence,
+                    _trust_now,
+                ))
+                _trust_m["eta_trust_t2_candidate"] = _trust_c is _t2
         _esc_max = C.flag("BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN",
                           getattr(C, "BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN", 30.0))
+        if _trust_on:
+            _esc_max = _eta_trust.trusted_tier2_max_free_min(
+                _esc_max,
+                bool((getattr(_t2, "metrics", None) or {}).get("eta_trust_ok")),
+            )
         if _t2_free is not None and _t2_free <= _esc_max:
             _esc_tier, _esc_cid = 2, _cid(_t2)
         else:

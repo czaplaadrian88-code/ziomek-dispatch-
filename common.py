@@ -214,6 +214,10 @@ ETAP4_DECISION_FLAGS = (
     # osobna flaga przy flipie za końcowym ACK). Konsument: eta_calib_serving przez
     # lejek _classify_and_set_auto_route.
     "ENABLE_ETA_CALIB_PROMISE_SHADOW",
+    # BEST-EFFORT ESC ETA (owner 2026-07-19/GO 2026-07-21): wyłącznie
+    # warunkuje LOG-ONLY próg Tier 2. ON: 90/configured tylko dla zaufanego
+    # free_at, inaczej 30; OFF: dotychczasowy odczyt progu bajt-w-bajt.
+    "ENABLE_BEST_EFFORT_ESC_TRUSTED_ETA",
     # (2026-07-20) ENABLE_ETA_QUANTILE_R6_BAGCAP USUNIĘTA z rejestru — D3-gold:
     # kod gałęzi gold<=4 wycięty (OD-07: R6 35 dla każdego, nigdy klasa kuriera);
     # historia: ZIOMEK_LOGIC_REFERENCE "Sprint D3-gold" + lifecycle registry (dead).
@@ -715,6 +719,9 @@ ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION = True
 # D6a SHADOW 2026-07-18: const-fallback OFF (testy/strip deterministycznie bez servingu);
 # produkcja czyta flags.json=true (cień od restartu shadow po peaku 18.07)
 ENABLE_ETA_CALIB_PROMISE_SHADOW = False
+# BEST-EFFORT ESC ETA: dark/shadow; brak klucza zachowuje dotychczasowy
+# bezwarunkowy BEST_EFFORT_ESC_TIER2_MAX_FREE_MIN.
+ENABLE_BEST_EFFORT_ESC_TRUSTED_ETA = False
 ENABLE_CARRIED_FIRST_RELAX = True
 ENABLE_CARRIED_AGE_TZ_FIX = True
 ENABLE_LEX_COMMITTED_WINDOW_SHADOW = True
