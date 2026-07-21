@@ -66,6 +66,65 @@ class ParsedPickup:
     company: Optional[str]    # if extractable, e.g. "Drtusz"
     raw_pickup_line: str  # for audit trail
     confidence: float     # 0.0-1.0
+    city: Optional[str] = None  # bridge-NADAWCA: miasto z kodu pocztowego (np. "Białystok")
+
+
+# --- Format mostu epaki (verbose_uwagi, drtusz_bridge/bridge.py) -----------------
+# `<Firma> #<id> | NADAWCA: <imię> tel <tel> | <firma>, [NIP x,] <ulica nr>,
+#  <kod miasto>, [<email>] | Odbiorca: ... | oryg. adres: <ADRES DORĘCZENIA> | ...`
+# Punkt ODBIORU = adres NADAWCY (segment NADAWCA); pickup_rules mostu ustawiają
+# tylko CZAS (czasówka pushowana przy tworzeniu). "oryg. adres" = doręczenie,
+# NIE odbiór. Kotwica ekstrakcji: token przecinkowy tuż przed kodem `dd-ddd`.
+_BRIDGE_MARKER_PATTERN = re.compile(r"\|\s*NADAWCA:\s*", re.IGNORECASE)
+_BRIDGE_ADDR_ANCHOR_PATTERN = re.compile(
+    r"(?P<addr>[^,|]+),\s*(?P<zip>\d{2}-\d{3})\s+(?P<city>[^,|]+?)\s*(?:,|\|)"
+)
+_BRIDGE_STREET_NUMBER_PATTERN = re.compile(
+    r"^(?P<street>.+?)\s+(?P<number>\d+[a-zA-Z]?(?:/\d+\w*)?)(?:\s+(?P<extra>.+))?$"
+)
+
+
+def _try_bridge_nadawca(text: str, stoplist: frozenset) -> Optional["ParsedPickup"]:
+    """P0 bridge-NADAWCA: adres nadawcy z verbose_uwagi mostu epaki.
+
+    Zwraca None gdy brak markera `| NADAWCA:` albo kotwica pocztowa nie
+    znaleziona w segmencie nadawcy — wtedy legacy P1/P2 próbują jak dotąd.
+    """
+    m = _BRIDGE_MARKER_PATTERN.search(text)
+    if not m:
+        return None
+    seg_start = m.end()
+    odb = re.search(r"\|\s*Odbiorca:", text[seg_start:], re.IGNORECASE)
+    segment = text[seg_start:seg_start + odb.start()] if odb else text[seg_start:]
+    # domknij segment separatorem, żeby kotwica `...,<zip> <city>,` złapała
+    # także wariant bez emaila na końcu
+    am = _BRIDGE_ADDR_ANCHOR_PATTERN.search(segment + "|")
+    if not am:
+        return None
+    addr = _normalize(am.group("addr"))
+    city = _normalize(am.group("city"))
+    sn = _BRIDGE_STREET_NUMBER_PATTERN.match(addr)
+    if not sn:
+        return None
+    street = _canonicalize_street(sn.group("street"))
+    if not _is_plausible_street(street, stoplist):
+        return None
+    number = sn.group("number")
+    # firma nadawcy: pierwszy token przecinkowy segmentu meta (po `| `),
+    # tylko display — bez walidacji plauzybilności firmy
+    company = None
+    meta = segment.split("|")[-1] if "|" in segment else segment
+    first_tok = _normalize(meta.split(",")[0])
+    if first_tok and not first_tok.lower().startswith("nip "):
+        company = first_tok
+    return ParsedPickup(
+        street=street,
+        number=number,
+        company=company,
+        raw_pickup_line=f"{addr}, {am.group('zip')} {city}",
+        confidence=0.95,
+        city=city or None,
+    )
 
 
 def _normalize(text: str) -> str:
@@ -217,7 +276,8 @@ def _try_p2(pickup_line: str, stoplist: frozenset) -> Optional[ParsedPickup]:
     )
 
 
-def parse_pickup_from_uwagi(text: Optional[str]) -> Optional[ParsedPickup]:
+def parse_pickup_from_uwagi(text: Optional[str],
+                            bridge_format: bool = False) -> Optional[ParsedPickup]:
     """
     Pure function. No I/O. Deterministic.
 
@@ -231,9 +291,14 @@ def parse_pickup_from_uwagi(text: Optional[str]) -> Optional[ParsedPickup]:
 
     Confidence:
     - 1.0: P1 structured, time prefix + clear "STREET NUM, COMPANY"
+    - 0.95: P0 bridge-NADAWCA (verbose_uwagi mostu epaki; bridge_format=True)
     - 0.8: P1 structured without company OR ambiguous order
     - 0.5: P2 narrative regex extraction
     - 0.0: fail (returns None)
+
+    bridge_format: gałąź P0 dla verbose_uwagi mostu epaki (flaga
+    ENABLE_UWAGI_BRIDGE_NADAWCA podawana z call-site'u — parser zostaje pure).
+    False = zachowanie bajt-identyczne z dotychczasowym.
     """
     if not text or not text.strip():
         return None
@@ -244,6 +309,11 @@ def parse_pickup_from_uwagi(text: Optional[str]) -> Optional[ParsedPickup]:
         stoplist = UWAGI_PARSER_COMPANY_STOPLIST
     except ImportError:
         stoplist = _DEFAULT_STOPLIST
+
+    if bridge_format:
+        result = _try_bridge_nadawca(text, stoplist)
+        if result is not None:
+            return result
 
     pickup_line = _extract_pickup_line(text)
     if not pickup_line:

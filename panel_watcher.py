@@ -2310,10 +2310,14 @@ def _diff_and_emit(
                 and _is_firmowe_konto
                 and flag("ENABLE_UWAGI_ADDRESS_PARSER", True)):
             _uwagi_text = norm.get("uwagi")
-            _parsed = parse_pickup_from_uwagi(_uwagi_text)
+            _parsed = parse_pickup_from_uwagi(
+                _uwagi_text,
+                bridge_format=flag("ENABLE_UWAGI_BRIDGE_NADAWCA", False))
             if _parsed is not None:
                 _pickup_address_override = f"{_parsed.street} {_parsed.number}"
-                _pcoords = geocode(_pickup_address_override, city="Białystok", timeout=2.0)
+                _pcoords = geocode(_pickup_address_override,
+                                   city=(getattr(_parsed, "city", None) or "Białystok"),
+                                   timeout=2.0)
                 if _pcoords is None:
                     if flag("ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", True):
                         # FAZA 2 #1: reject+flag — znamy adres, geocode padł →

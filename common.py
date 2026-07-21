@@ -344,6 +344,7 @@ ETAP4_DECISION_FLAGS = (
     # OFF → pole nie powstaje (bajt-identyczny ingest). W rejestrze: izolacja conftest
     # (test mający OFF nie dziedziczy żywego flags.json) + parytet fingerprint cross-proces.
     "ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW",
+    "ENABLE_UWAGI_BRIDGE_NADAWCA",
     # CARRIED-FIRST RELAX READY-ANCHOR (2026-06-29, case Rećki cid 492): 3 bramki
     # carried-first w plan_recheck (_relax_carried_first / _reorder_noncarried_min_drive /
     # _lex_committed_window_reorder) liczyły R6 czas-w-torbie PŁASKO od TSP-pickup → carried-first
@@ -617,6 +618,7 @@ RESERVE_TIEBREAK_MARGIN = 30.0  # #3: max Δscore (wolny−jadący) by tie-break
 ENABLE_GPS_DELIVERY_VALIDATION = False  # #5 2026-06-28 (sla_tracker: telemetria physical_verified delivered_at panel-vs-GPS courier_ground_truth; SHADOW, zero wpływu na decyzje/SLA; kanon=flags.json hot)
 ENABLE_PLAN_RECHECK_TIER_DWELL = False  # F3 2026-06-28 (dwell tier-aware w plan_recheck; stała-fallback brakowała — dodana przy rejestracji ETAP4. KANON=flags.json (LIVE True))
 ENABLE_CZASOWKA_UWAGI_DEADLINE_SHADOW = False  # 2026-06-28 sesja 20 (parse deadline DOSTAWY z `uwagi`→delivery_deadline_uwagi; observability-only, additywne, brak konsumenta decyzyjnego; KANON=flags.json default OFF)
+ENABLE_UWAGI_BRIDGE_NADAWCA = False  # 2026-07-21: P0 bridge-NADAWCA — adres ODBIORU paczek mostu epaki z uwag (verbose_uwagi, catch-all rid=161); KANON=flags.json, default OFF, flip za ACK Adriana
 # A2 PERF (2026-07-08, sprint p95): budżet solvera OR-Tools deterministyczny.
 # Stała-fallback OFF (literał, NIE env-read — unika anty-wzorca env-frozen #9);
 # decyzja czytana z flags.json przez decision_flag (KANON). OFF=bajt-w-bajt goły
