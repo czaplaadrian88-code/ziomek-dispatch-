@@ -41,7 +41,10 @@ def main():
         if ts is None or ts < since:
             continue
         b = d.get("best") or {}
-        m = b.get("metrics") or {}
+        # FIX 21.07: serializer spłaszcza best.metrics do top-level kluczy best
+        # (catch-all w _serialize_candidate) — sub-dict "metrics" nie istnieje
+        # w jsonl. Czytaj top-level z fallbackiem na ewentualny sub-dict.
+        m = b.get("metrics") if isinstance(b.get("metrics"), dict) else b
         n_all += 1
         cp = m.get("eta_calib_promise_pickup_p80_min")
         cd = m.get("eta_calib_promise_delivery_p80_min")
