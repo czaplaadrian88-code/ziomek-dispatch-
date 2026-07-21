@@ -30,6 +30,7 @@ from dispatch_v2.common import (
     coords_in_bialystok_bbox,
     decision_flag,
     flag,
+    is_czasowka_order as _common_is_czasowka_order,
     load_config,
     now_iso,
     now_utc,
@@ -140,13 +141,15 @@ _PANEL_STATUS_IDS_BY_STATE = {
 
 
 def _is_czasowka_order(o: Optional[dict]) -> bool:
-    """Czasówka = order_type=='czasowka' LUB prep_minutes >= 60 (≥60 = twarda
-    deklaracja restauracji, trzymana w buckecie Koordynatora). Lustrzane do
-    panel_watcher._diff_and_emit scope-check."""
-    if not o:
-        return False
-    return (o.get("order_type") == "czasowka"
-            or (o.get("prep_minutes") or 0) >= 60)
+    """Delegacja do jednego kanonicznego klasyfikatora common.py."""
+    return _common_is_czasowka_order(o)
+
+
+def _czasowka_reclaim_live_authorized(event: dict) -> bool:
+    """Receipt-bound marker wygrywa; bez niego wymagaj biezacej flagi LIVE."""
+    if "czasowka_reclaim_live_authorized" in event:
+        return event.get("czasowka_reclaim_live_authorized") is True
+    return decision_flag("ENABLE_CZASOWKA_RECLAIM_LIVE")
 
 
 def build_czasowka_manual_ck_pickup_event(
@@ -240,6 +243,14 @@ def build_czasowka_manual_ck_pickup_event(
             "delta_min": delta_min,
             "source": f"{source}_manual_ck_edit",
             "manual_ck_edit_passthrough": True,
+            "assignment_event_id_at_observation": (
+                ck_payload.get("assignment_event_id_at_observation")
+                or existing.get("assignment_event_id")
+            ),
+            "courier_id_at_observation": (
+                ck_payload.get("courier_id_at_observation")
+                or existing.get("courier_id")
+            ),
         },
         "event_id_suffix": "_CK_MANUAL_EDIT",
     }
@@ -912,6 +923,41 @@ def event_effect_status(
             == new_pickup
             else "pending"
         )
+    if etype == "ORDER_RECLAIMED_TO_CZASOWKA":
+        if not _czasowka_reclaim_live_authorized(event):
+            return "superseded"
+        previous_cid = str(payload.get("previous_courier_id") or "")
+        generation = str(payload.get("reclaim_generation") or "")
+        expected_assignment = str(
+            payload.get("expected_assignment_event_id") or generation
+        )
+        expected_pickup = payload.get("expected_pickup_at_warsaw")
+        if (
+            status == "planned"
+            and str(current.get("courier_id") or "") == "26"
+            and str(current.get("previous_courier_id") or "") == previous_cid
+            and str(current.get("reclaim_generation") or "") == generation
+            and current.get("reclaimed_at") == payload.get("reclaimed_at")
+            and current.get("reason") == payload.get("reason")
+        ):
+            return "applied"
+        if status in ("picked_up", "delivered", "returned_to_pool", "cancelled"):
+            return "superseded"
+        if status != "assigned" or current.get("picked_up_at") is not None:
+            return "superseded"
+        if not previous_cid or previous_cid == "26":
+            return "superseded"
+        if str(current.get("courier_id") or "") != previous_cid:
+            return "superseded"
+        if (
+            not expected_assignment
+            or str(current.get("assignment_event_id") or "")
+            != expected_assignment
+        ):
+            return "superseded"
+        if expected_pickup and current.get("pickup_at_warsaw") != expected_pickup:
+            return "superseded"
+        return "pending"
     return "pending"
 
 
@@ -1138,6 +1184,8 @@ def update_from_event(event: dict) -> Optional[dict]:
                 "decision_deadline": payload.get("decision_deadline"),
                 "zmiana_czasu_odbioru": payload.get("zmiana_czasu_odbioru"),
                 "created_at_utc": payload.get("created_at_utc"),
+                "reclaim_exempt": payload.get("reclaim_exempt") is True,
+                "reclaim_exempt_reason": payload.get("reclaim_exempt_reason"),
             }), event="NEW_ORDER")
             raise CorruptedTimestampError(
                 f"NEW_ORDER {oid}: czas_kuriera sanity fail, "
@@ -1173,6 +1221,8 @@ def update_from_event(event: dict) -> Optional[dict]:
             "decision_deadline": payload.get("decision_deadline"),
             "zmiana_czasu_odbioru": payload.get("zmiana_czasu_odbioru"),
             "created_at_utc": payload.get("created_at_utc"),
+            "reclaim_exempt": payload.get("reclaim_exempt") is True,
+            "reclaim_exempt_reason": payload.get("reclaim_exempt_reason"),
         }), event="NEW_ORDER")
 
     if etype == "COURIER_ASSIGNED":
@@ -1231,6 +1281,19 @@ def update_from_event(event: dict) -> Optional[dict]:
             "proposed_delivery_time": payload.get("proposed_time"),
             "bag_time_alerted": False,  # F2.1b step 5: reset on new assignment / reassignment
         }
+        # CZASOWKA-RECLAIM: causality boundary. Durable event_id jest
+        # generacja assignmentu; pickup snapshot dowodzi, ze pozniejszy event
+        # czasu powstal PO przypisaniu, nie odwrotnie. Legacy inline assignment
+        # bez event_id pozostaje fail-closed dla reclaimu.
+        if durable_event_id:
+            merged["assignment_event_id"] = str(durable_event_id)
+            merged["pickup_at_at_assignment"] = prev.get("pickup_at_warsaw")
+        # Jawny wyjatek operatora; brak klucza zachowuje poprzednia wartosc.
+        if "reclaim_exempt" in payload:
+            merged["reclaim_exempt"] = payload.get("reclaim_exempt") is True
+            merged["reclaim_exempt_reason"] = payload.get(
+                "reclaim_exempt_reason"
+            )
         # L4 (2026-07-02, F1) CHOKEPOINT: NOWE POLE effective_pickup_at =
         # max(deklarowany czas odbioru, available_from) OBOK deklaracji. Deklaracja
         # restauracji (czas_kuriera/pickup_at) NIETYKALNA (Q2, frozen R27 ±5) — tu
@@ -1437,6 +1500,52 @@ def update_from_event(event: dict) -> Optional[dict]:
         )
         return upsert_order(
             oid, _marked(update_fields), event="PICKUP_TIME_UPDATED"
+        )
+
+    if etype == "ORDER_RECLAIMED_TO_CZASOWKA":
+        # Uspiony kontrakt etapu LIVE. W tym sprincie nie istnieje caller ani
+        # downstream wywolujacy ten event; flaga default OFF daje twarde no-op.
+        if not _czasowka_reclaim_live_authorized(event):
+            return None
+        existing = get_order(oid)
+        if not isinstance(existing, dict):
+            return None
+        previous_cid = str(payload.get("previous_courier_id") or "")
+        generation = str(payload.get("reclaim_generation") or "")
+        expected_assignment = str(
+            payload.get("expected_assignment_event_id") or generation
+        )
+        expected_pickup = payload.get("expected_pickup_at_warsaw")
+        if (
+            existing.get("status") != "assigned"
+            or existing.get("picked_up_at") is not None
+            or not previous_cid
+            or previous_cid == "26"
+            or str(existing.get("courier_id") or "") != previous_cid
+            or not expected_assignment
+            or str(existing.get("assignment_event_id") or "")
+            != expected_assignment
+            or (expected_pickup and existing.get("pickup_at_warsaw") != expected_pickup)
+        ):
+            return None
+        reclaimed_at = payload.get("reclaimed_at")
+        reason = payload.get("reason")
+        if not generation or not reclaimed_at or not reason:
+            return None
+        return upsert_order(
+            oid,
+            _marked({
+                "status": "planned",
+                "commitment_level": "planned",
+                "courier_id": "26",
+                "previous_courier_id": previous_cid,
+                "reclaim_generation": generation,
+                "reclaimed_at": reclaimed_at,
+                "reason": reason,
+                "reclaim_reason": reason,
+                "bag_time_alerted": False,
+            }),
+            event="ORDER_RECLAIMED_TO_CZASOWKA",
         )
 
     if etype == "COURIER_PICKED_UP":

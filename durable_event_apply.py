@@ -977,7 +977,21 @@ def _finish_downstream(
                     attempt_no = event_bus.begin_state_apply_downstream(oldest_id)
                     if attempt_no is None:
                         raise RuntimeError("downstream attempt compare-and-set failed")
-                    downstream_fn(oldest_event)
+                    callback_event = oldest_event
+                    if (
+                        isinstance(oldest_event, dict)
+                        and oldest_event.get("event_type") == "PICKUP_TIME_UPDATED"
+                    ):
+                        # ``created_at`` receiptu jest trwalym observed_at
+                        # pierwszej detekcji. Nie wkladamy zegara call-site'u do
+                        # payloadu (retry tego samego przejscia musi zachowac
+                        # identyczna intencje/hash), ale downstream zawsze
+                        # dostaje ten sam receipt-bound timestamp, takze po crashu.
+                        callback_event = dict(oldest_event)
+                        callback_event["durable_observed_at"] = oldest.get(
+                            "created_at"
+                        )
+                    downstream_fn(callback_event)
                 marked = event_bus.mark_state_apply_downstream(oldest_id)
             except Exception as exc:
                 error = f"downstream:{type(exc).__name__}: {exc}"
@@ -1172,6 +1186,25 @@ def _emit_and_apply_state_phase(
                 requested_event[
                     "committed_invalidates_view_authorized"
                 ] = flag("ENABLE_COMMITTED_INVALIDATES_VIEW", True)
+            except Exception:
+                pass
+
+        if event_type == "PICKUP_TIME_UPDATED":
+            # Shadow reclaim jest wlasnoscia TEJ durable intencji. Flip po
+            # enqueue nie moze dopisac starego eventu ani przerwac rozpoczetego
+            # callbacku. LIVE marker tez jest utrwalony, lecz w tym etapie nie
+            # ma zadnego konsumenta emitujacego write/event reclaim.
+            requested_event["czasowka_reclaim_shadow_authorized"] = False
+            requested_event["czasowka_reclaim_live_authorized"] = False
+            try:
+                from dispatch_v2.common import decision_flag
+
+                requested_event["czasowka_reclaim_shadow_authorized"] = (
+                    decision_flag("ENABLE_CZASOWKA_RECLAIM_SHADOW")
+                )
+                requested_event["czasowka_reclaim_live_authorized"] = (
+                    decision_flag("ENABLE_CZASOWKA_RECLAIM_LIVE")
+                )
             except Exception:
                 pass
 

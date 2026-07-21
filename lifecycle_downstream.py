@@ -158,7 +158,10 @@ def apply(event: dict) -> None:
     # Natywny tor paczek historycznie nie mutowal courier_plans w tych
     # call-site'ach. C3 atomizuje event->state, ale nie rozszerza przy okazji
     # semantyki biznesowej planu; plan_recheck zachowuje dotychczasowy routing.
-    if payload.get("source") in {"parcel_assign", "parcel_status_inbox"}:
+    if (
+        payload.get("source") in {"parcel_assign", "parcel_status_inbox"}
+        and etype != "PICKUP_TIME_UPDATED"
+    ):
         return
     # Durable callback nie moze pomylic uszkodzonego/brakujacego pliku z
     # prawdziwym brakiem zlecenia. Wyjatek zostawia receipt do retry.
@@ -200,6 +203,23 @@ def apply(event: dict) -> None:
         panel_learning_context = event.get("panel_learning_context")
         if not isinstance(panel_learning_context, dict):
             raise RuntimeError("durable panel learning context is not an object")
+
+    if etype == "PICKUP_TIME_UPDATED":
+        # Osobny, retryable efekt receipt-bound PO zapisie czasu do state.
+        # Funkcja tylko loguje shadow; nie buduje ani nie emituje eventu LIVE.
+        from dispatch_v2.czasowka_reclaim import record_pickup_time_shadow
+
+        record_pickup_time_shadow(
+            event,
+            current,
+            enabled_by_receipt=(
+                bool(event.get("czasowka_reclaim_shadow_authorized"))
+                if "czasowka_reclaim_shadow_authorized" in event
+                else None
+            ),
+        )
+        if payload.get("source") in {"parcel_assign", "parcel_status_inbox"}:
+            return
 
     if etype == "COURIER_ASSIGNED":
         # Cleanup provenance belongs to this exact durable event.  Current

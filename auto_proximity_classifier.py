@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from dispatch_v2.common import CZASOWKA_PREP_MIN
+
 # Sprint 2 (2026-05-27): Kebab Król dinner carry penalty fix.
 # Forensic agent D (`/tmp/kebab_krol_diagnostic.md`): R6 breach 22.5% w dinner
 # peak (17-21 Warsaw) vs 7-8% baseline. Root cause = carry/bag-stack penalty —
@@ -97,9 +99,6 @@ HIGH_RISK_START_HOUR_WARSAW = 14   # inclusive
 HIGH_RISK_END_HOUR_WARSAW = 17     # exclusive
 HIGH_RISK_MARGIN_BUMP = 5.0
 HIGH_RISK_TIERS = ("gold", "std+")
-
-# Czasówka detection (aligns with czasowka_scheduler._is_czasowka — czas_odbioru >= 60)
-CZASOWKA_PREP_MIN = 60
 
 # Mass-fail threshold: only triggers ALERT when pool is meaningful (>=4 candidates)
 MASS_FAIL_MIN_POOL = 4

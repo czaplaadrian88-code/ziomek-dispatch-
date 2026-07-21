@@ -125,7 +125,7 @@ def evaluate_auto_assign(
     # G4: czasówka — pas i szelki do edge'a klasyfikatora (czas_odbioru >= 60).
     prep = ev.get("prep_minutes") or ev.get("czas_odbioru") or 0
     try:
-        is_czasowka = float(prep) >= 60.0
+        is_czasowka = float(prep) >= float(C.CZASOWKA_PREP_MIN)
     except (TypeError, ValueError):
         is_czasowka = False
     if is_czasowka or ctx.get("auto_route_czasowka"):

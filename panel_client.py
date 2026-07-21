@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from dispatch_v2.common import setup_logger, flag
+from dispatch_v2.common import CZASOWKA_PREP_MIN, setup_logger, flag
 from dispatch_v2.czasowka_uwagi import parse_delivery_deadline
 
 BASE_URL = "https://www.gastro.nadajesz.pl"
@@ -50,7 +50,6 @@ STATUS_MAP = {
 }
 IGNORED_STATUSES = {7, 8, 9}
 KOORDYNATOR_ID = 26
-CZASOWKA_THRESHOLD_MIN = 60
 
 _log = setup_logger("panel_client", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
 
@@ -696,7 +695,7 @@ def normalize_order(
     except (ValueError, TypeError):
         prep_minutes = 0
 
-    order_type = "czasowka" if prep_minutes >= CZASOWKA_THRESHOLD_MIN else "elastic"
+    order_type = "czasowka" if prep_minutes >= CZASOWKA_PREP_MIN else "elastic"
 
     # Adres dostawy (konkatenacja)
     adres_parts = [raw.get("street") or "", raw.get("nr_domu") or ""]

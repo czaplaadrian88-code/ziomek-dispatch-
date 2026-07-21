@@ -42,6 +42,7 @@ LIFECYCLE_EVENT_TARGETS = {
     "COURIER_PICKED_UP": "picked_up",
     "COURIER_DELIVERED": "delivered",
     "ORDER_RETURNED_TO_POOL": "returned_to_pool",
+    "ORDER_RECLAIMED_TO_CZASOWKA": "planned",
 }
 
 DATA_ONLY_EVENT_TYPES = frozenset({
@@ -102,6 +103,7 @@ CORE_TRANSITIONS = frozenset({
     ("assigned", "COURIER_REJECTED_PROPOSAL"),
     ("assigned", "COURIER_PICKED_UP"),
     ("assigned", "ORDER_RETURNED_TO_POOL"),
+    ("assigned", "ORDER_RECLAIMED_TO_CZASOWKA"),
     ("picked_up", "COURIER_DELIVERED"),
     ("picked_up", "ORDER_RETURNED_TO_POOL"),
     ("returned_to_pool", "COURIER_ASSIGNED"),
@@ -128,6 +130,14 @@ _REQUIRED_FIELDS = {
     "COURIER_PICKED_UP": ("courier_id", "payload.timestamp"),
     "COURIER_DELIVERED": ("payload.timestamp",),
     "ORDER_RETURNED_TO_POOL": ("payload.reason",),
+    "ORDER_RECLAIMED_TO_CZASOWKA": (
+        "payload.previous_courier_id",
+        "payload.reclaim_generation",
+        "payload.reclaimed_at",
+        "payload.reason",
+        "payload.expected_assignment_event_id",
+        "payload.expected_pickup_at_warsaw",
+    ),
     "CZAS_KURIERA_UPDATED": (
         "payload.new_ck_iso",
         "payload.new_ck_hhmm",
@@ -317,6 +327,8 @@ def _validate_timestamps(
         paths = ("payload.new_ck_iso",)
     elif event_type == "PICKUP_TIME_UPDATED":
         paths = ("payload.new_pickup_at_warsaw",)
+    elif event_type == "ORDER_RECLAIMED_TO_CZASOWKA":
+        paths = ("payload.reclaimed_at", "payload.expected_pickup_at_warsaw")
 
     parsed: dict[str, datetime] = {}
     for path in paths:
@@ -446,6 +458,13 @@ def _semantic_duplicate(
         )
     if event_type == "PICKUP_TIME_UPDATED":
         return payload.get("new_pickup_at_warsaw") == current.get("pickup_at_warsaw")
+    if event_type == "ORDER_RECLAIMED_TO_CZASOWKA":
+        return (
+            status == "planned"
+            and _clean_text(current.get("courier_id")) == "26"
+            and _clean_text(current.get("reclaim_generation"))
+            == _clean_text(payload.get("reclaim_generation"))
+        )
     return False
 
 
